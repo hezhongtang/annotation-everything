@@ -1,0 +1,14 @@
+# eval 运行产物
+skill/*-workspace/
+# 审阅产物（可能含被审阅材料的内容）
+notes.json
+notes.jsonl
+server.log
+.annotation-server.json
+.notes.lock
+__pycache__/
+*.pyc
+.DS_Store
+# eval 用例的合成输入要入库
+!skill/annotation-everything/evals/*/files/**/notes.json
+!skill/annotation-everything/evals/*/files/**/notes.jsonl

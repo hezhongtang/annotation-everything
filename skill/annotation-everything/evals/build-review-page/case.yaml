@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: build-review-page
+expected_outcome: |
+  review/ 下生成一个可在浏览器打开的对照页（左报告右讲稿，6 页齐全，可逐页批注），
+  并给出启动本地服务的命令；服务只监听本机，批注自动写入审阅目录里的文件（如 review/notes.json）。
+  回复说明了启动命令、批注落盘位置，且没有把服务留在后台常驻。
+context:
+  scaffold_script: place-files.sh

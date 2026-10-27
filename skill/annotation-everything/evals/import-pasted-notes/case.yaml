@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: import-pasted-notes
+expected_outcome: |
+  把粘贴的 3 条批注写入 review/notes.json（第 4 页 2 条、第 6 页 1 条），保留标点坐标（x 31.5、y 44）、
+  引用原文与来源、第 6 页批注的第二行内容；三条均为未处理。没有改动 report.html 与 script.md。
+  回复准确说明共 3 条、涉及第 4、6 页及各自要改的内容。
+context:
+  scaffold_script: place-files.sh

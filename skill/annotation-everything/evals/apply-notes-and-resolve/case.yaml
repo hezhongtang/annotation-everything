@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: apply-notes-and-resolve
+expected_outcome: |
+  读取 review/notes.json 的 4 条批注：第 3 页报告 KPI 改为「同比 +12%」；第 4 页讲稿那句改成简短说法；
+  第 6 页报告和讲稿都把「外卖套餐提价 1 元」改为「评估外卖套餐提价方案」；第 5 页「要不要写换供应商」是请用户定的事，
+  不擅自改、保持未处理并在回复里说明。改完重建 review/index.html，并把三条已落实的批注在 notes.json 中标为已处理且附处理说明。
+context:
+  scaffold_script: place-files.sh
