@@ -35,6 +35,7 @@ import os
 import re
 import secrets
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
@@ -167,8 +168,14 @@ def find_pages(doc: str) -> list[dict]:
         seen.add(n)
         key = a.get("data-key") or a.get("id", "").removeprefix("page-") or f"p{n}"
         hm = re.search(r"<h[1-3][^>]*>(.*?)</h[1-3]>", p["html"], re.S)
-        out.append({"n": n, "key": key, "html": p["html"], "title": strip_tags(hm.group(1)) if hm else key})
+        out.append({"n": n, "key": key, "stable": stable_key(key, bool(a.get("data-key"))), "html": p["html"],
+                    "title": strip_tags(hm.group(1)) if hm else key})
     return out
+
+
+def stable_key(key: str, explicit: bool = True) -> bool:
+    """页面键能不能用来在重排页序后找回原页：由页码生成的（p3、page-3、3）不算。"""
+    return explicit and not re.fullmatch(r"(?:p|page)?[-_]?\d+", str(key), re.I)
 
 
 def infer_sections(doc: str, sects: list[dict]) -> list[list]:
@@ -212,13 +219,29 @@ def parse_sections_arg(arg: str) -> list[list]:
 
 
 # ---------- 资源内联 ----------
-class Assets:
-    """把本地相对路径资源换成 data URI；外链与找不到的文件记警告。"""
+ASSET_TYPES = ("image/", "font/", "audio/", "video/")
 
-    def __init__(self) -> None:
+
+class Assets:
+    """把本地相对路径资源换成 data URI；外链、找不到、超出允许目录或类型不对的文件记警告后跳过。
+
+    只内联 root（默认报告所在目录）之内的图片、字体、音视频；样式表另行处理。
+    这样报告里写错的路径（例如 ../../.ssh/id_rsa）不会被悄悄塞进要分享出去的单文件页面。
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root.resolve()
         self.cache: dict[Path, str] = {}
         self.warnings: list[str] = []
         self.total = 0
+
+    def local(self, ref: str, base: Path) -> Path | None:
+        """解析本地引用；超出允许目录时记警告并返回 None。"""
+        path = (base / unquote(ref.split("#", 1)[0].split("?", 1)[0])).resolve()
+        if not path.is_relative_to(self.root):
+            self.warn(f"引用了允许目录之外的文件，未内联：{ref[:120]}（允许目录 {self.root}，可用 --asset-root 放宽）")
+            return None
+        return path
 
     def uri(self, ref: str, base: Path) -> str | None:
         r = ref.strip()
@@ -228,17 +251,22 @@ class Assets:
         if low.startswith(("http:", "https:", "//")):
             self.warn(f"外链资源不会加载（对照页禁止联网）：{r[:120]}")
             return None
-        path = (base / unquote(r.split("#", 1)[0].split("?", 1)[0])).resolve()
+        path = self.local(r, base)
+        if path is None:
+            return None
         if path in self.cache:
             return self.cache[path]
         if not path.is_file():
             self.warn(f"找不到本地资源：{r[:120]}（相对 {base}）")
             return None
+        mime = EXTRA_MIME.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        if not mime.startswith(ASSET_TYPES):
+            self.warn(f"只内联图片、字体、音视频，跳过 {mime} 类型的文件：{r[:120]}")
+            return None
         size = path.stat().st_size
         if size > MAX_ASSET:
             self.warn(f"资源超过 {MAX_ASSET // 1024 // 1024} MB，未内联：{path}")
             return None
-        mime = EXTRA_MIME.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         data = f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode()
         self.cache[path] = data
         self.total += size
@@ -311,13 +339,39 @@ def _block_end(css: str, i: int) -> int:
     return len(css)
 
 
+SEL_MASK = re.compile(r"""\\.|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\[[^\]]*\]|::(?:part|slotted)\([^)]*\)""")
+
+
 def _rewrite_selector(prelude: str) -> str:
-    def rep(m: re.Match) -> str:
-        tag, suf = m.group(1), m.group(2)
-        if tag == "body":
-            return "#stage" + suf
-        return f":host({suf})" if suf else ":host"
-    return SEL_ROOT.sub(rep, prelude)
+    """只改写真正的 html / body / :root 选择器：引号、属性选择器、转义字符、::part() 里的同名文字不动。"""
+    masked = SEL_MASK.sub(lambda m: m.group(0)[0] + "_" * (len(m.group(0)) - 1), prelude)
+    out, last = [], 0
+    for m in SEL_ROOT.finditer(masked):
+        tag, suf = m.group(1), prelude[m.start(2):m.end(2)]
+        out.append(prelude[last:m.start()])
+        out.append("#ae-stage" + suf if tag == "body" else (f":host({suf})" if suf else ":host"))
+        last = m.end()
+    out.append(prelude[last:])
+    return "".join(out)
+
+
+ROOT_FS = re.compile(r"(?:^|[};])\s*((?:html|:root)\s*(?:,[^{};]*)?)\{([^}]*)\}")
+SAFE_FS = re.compile(r"^\d+(?:\.\d+)?(?:px|%|pt|em|rem)$")
+
+
+def root_font_size(css: str) -> str | None:
+    """报告在 html / :root 上设的字号。Shadow DOM 里 rem 按外层文档的根字号算，生成时把它搬到外层。"""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    found = None
+    for m in ROOT_FS.finditer(css):
+        sel = [x.strip() for x in m.group(1).split(",")]
+        if not any(x in ("html", ":root") for x in sel):
+            continue
+        for d in re.finditer(r"font-size\s*:\s*([^;!}]+)", m.group(2)):
+            v = d.group(1).strip()
+            if SAFE_FS.match(v):
+                found = v
+    return found
 
 
 def shadow_css(css: str) -> str:
@@ -355,7 +409,12 @@ def report_parts(doc: str, report: Path, assets: Assets) -> tuple[str, str, list
     base = report.resolve().parent
     title_m = re.search(r"<title>(.*?)</title>", doc, re.S | re.I)
     css_parts = []
-    for m in re.finditer(r"<link\b[^>]*>", doc, re.I):
+    # 去掉注释与脚本后，按出现顺序收集 <link rel=stylesheet> 与 <style>（保持原来的层叠顺序）
+    visible = MASKED.sub(lambda m: m.group(0) if m.group(0).lower().startswith("<style") else " " * len(m.group(0)), doc)
+    for m in re.finditer(r"<link\b[^>]*>|<style\b[^>]*>(.*?)</style\s*>", visible, re.S | re.I):
+        if m.group(0).lower().startswith("<style"):
+            css_parts.append(assets.css(m.group(1), base))
+            continue
         a = attrs_of(m.group(0))
         if "stylesheet" not in a.get("rel", "").lower().split() or not a.get("href"):
             continue
@@ -363,17 +422,19 @@ def report_parts(doc: str, report: Path, assets: Assets) -> tuple[str, str, list
         if href.lower().startswith(("http:", "https:", "//")):
             assets.warn(f"外链样式表不会加载（对照页禁止联网）：{href[:120]}")
             continue
-        f = (base / unquote(href.split("?", 1)[0])).resolve()
+        f = assets.local(href, base)
+        if f is None:
+            continue
         if f.is_file():
             css_parts.append(assets.css(f.read_text(encoding="utf-8", errors="replace"), f.parent))
         else:
             assets.warn(f"找不到样式表：{href}")
-    head = MASKED.sub(lambda m: m.group(0) if m.group(0).lower().startswith("<style") else "", doc)
-    css_parts += [assets.css(c, base) for c in re.findall(r"<style[^>]*>(.*?)</style\s*>", head, re.S | re.I)]
     sects = find_pages(doc)
     for s in sects:
         s["html"] = assets.html(s["html"], base)
-    return (strip_tags(title_m.group(1)) if title_m else ""), shadow_css("\n".join(css_parts)), sects
+    raw_css = "\n".join(css_parts)
+    assets.root_fs = root_font_size(raw_css)
+    return (strip_tags(title_m.group(1)) if title_m else ""), shadow_css(raw_css), sects
 
 
 # ---------- 输出 ----------
@@ -392,10 +453,26 @@ def page_csp(page_html: str) -> str:
 
 
 def write_private(path: Path, text: str) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(text)
-    os.chmod(path, 0o600)
+    """原子写入（临时文件 + os.replace），权限 0600：服务读到的不会是写了一半的文件。"""
+    fd, tmp = tempfile.mkstemp(prefix="." + path.name + "-", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def read_skills(review_dir: Path) -> list[dict]:
+    """审阅目录里代理写入的技能目录（skills.json），嵌进页面供「技能」输入栏做候选（本地文件模式也能用）。"""
+    try:
+        doc = json.loads((review_dir / "skills.json").read_text(encoding="utf-8"))
+        return [{"name": str(x.get("name", ""))[:64], "desc": str(x.get("desc", ""))[:120]}
+                for x in doc.get("skills", []) if isinstance(x, dict) and str(x.get("name", "")).strip()][:200]
+    except (OSError, ValueError, AttributeError):
+        return []
 
 
 def read_manifest(review_dir: Path) -> dict:
@@ -427,9 +504,11 @@ def resolve_sources(review_dir: Path, manifest: dict | None = None) -> dict[str,
 
 
 def build(report: Path, script: Path | None, out: Path, title: str | None = None,
-          sections_arg: str | None = None, no_sections: bool = False, lenient: bool = False) -> dict:
+          sections_arg: str | None = None, no_sections: bool = False, lenient: bool = False,
+          asset_root: Path | None = None) -> dict:
     doc = report.read_text(encoding="utf-8")
-    assets = Assets()
+    assets = Assets(asset_root or report.resolve().parent)
+    assets.root_fs = None
     rtitle, rcss, sects = report_parts(doc, report, assets)
     if not sects:
         raise SystemExit(f"{report} 里没找到 <section class=\"page\" data-page=\"N\"> 逐页结构")
@@ -455,7 +534,7 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     pages = []
     for s in sects:
         p = by_n.get(s["n"]) or {"n": s["n"], "title": esc(s["title"]), "dur": "", "sec": 0, "talk": "", "next": "", "qa": []}
-        pages.append({**p, "key": s["key"]})
+        pages.append({**p, "key": s["key"], "stable": s["stable"]})
     if no_sections:
         sections: list[list] = []
     elif sections_arg:
@@ -467,33 +546,65 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         intro = f"<h2>{esc(final_title)}</h2><p>左侧报告、右侧讲稿与批注。选中文字可作为引用，点「在报告上标点」可标位置。</p>"
     out.mkdir(parents=True, exist_ok=True)
     old = read_manifest(out)
-    # 审阅标识：页面据此确认连上的是这份审阅的服务；重建时沿用
-    rid = old.get("reviewId") if re.fullmatch(r"[0-9a-f]{16}", str(old.get("reviewId", ""))) else secrets.token_hex(8)
+    old_keys = {int(pg["n"]): str(pg["key"]) for pg in old.get("pages", [])
+                if isinstance(pg, dict) and "n" in pg and pg.get("key") and pg.get("stable", stable_key(pg["key"]))}
+    # 审阅标识：页面据此确认连上的是这份审阅的服务；重建时沿用。目录是从别处复制来的，就换一个新的
+    rid = old.get("reviewId") if re.fullmatch(r"[0-9a-f]{16}", str(old.get("reviewId", ""))) else None
+    orig = Path(old["reviewDir"]) if old.get("reviewDir") else None
+    # 原目录还在、且标识相同才算复制；整个目录被移走（原目录已不在）则沿用标识，浏览器里的暂存不丢
+    copied = bool(rid and orig and orig != out.resolve() and read_manifest(orig).get("reviewId") == rid)
+    if copied:
+        assets.warn(f"审阅目录是从 {old['reviewDir']} 复制来的，已换新的审阅标识（原目录的浏览器暂存不会带过来）")
+    if rid is None or copied:
+        rid = secrets.token_hex(8)
     ns = re.sub(r"[^\w.-]+", "_", out.resolve().name)
     values = {"TITLE": html.escape(final_title), "INTRO": intro, "PAGES": _js(pages), "SECTIONS": _js(sections),
-              "NS": _js(ns), "RID": _js(rid), "RCSS": _js(rcss), "SECT": _js([s["html"] for s in sects])}
+              "NS": _js(ns), "RID": _js(rid), "RCSS": _js(rcss), "SECT": _js([s["html"] for s in sects]),
+              "ROOTFS": assets.root_fs or "100%", "SKILLS": _js(read_skills(out))}
     # 一次性替换，避免内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
-    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|RID|RCSS|SECT)__", lambda m: values[m.group(1)],
+    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|RID|RCSS|SECT|ROOTFS|SKILLS)__", lambda m: values[m.group(1)],
                        TEMPLATE.read_text(encoding="utf-8"))
     page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
     write_private(out / "index.html", page_html)
     rr, rs = report.resolve(), (script.resolve() if script else None)
     manifest = {
-        "app": APP, "kind": "deck", "reviewId": rid, "title": final_title, "namespace": ns,
+        "app": APP, "kind": "deck", "reviewId": rid, "reviewDir": str(out.resolve()), "title": final_title, "namespace": ns,
         "builtAt": datetime.now().astimezone().isoformat(timespec="seconds"),
         # 相对审阅目录的路径优先：整棵目录树被移动或复制后仍指向同一处的源文件
         "sources": {"report": os.path.relpath(rr, out.resolve()), "script": os.path.relpath(rs, out.resolve()) if rs else None},
         "sourcesAbs": {"report": str(rr), "script": str(rs) if rs else None},
-        "build": {"title": title, "sections": sections_arg, "noSections": no_sections, "lenient": lenient},
+        "build": {"title": title, "sections": sections_arg, "noSections": no_sections, "lenient": lenient,
+                  "assetRoot": str(asset_root.resolve()) if asset_root else None},
         "sections": sections,
-        "pages": [{"n": p["n"], "key": p["key"], "title": html.unescape(p["title"]),
+        "pages": [{"n": p["n"], "key": p["key"], "stable": p["stable"], "title": html.unescape(p["title"]),
                    "section": next((s[0] for s in sections if s[1] <= p["n"] <= s[2]), "")} for p in pages],
     }
     write_private(out / "review.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+    # 已有批注：按页面键校正页码（重排、增删页之后批注跟着原来的页走）
+    key_count: dict[str, int] = {}
+    for pg in pages:
+        key_count[pg["key"]] = key_count.get(pg["key"], 0) + 1
+    dup = {k for k, c in key_count.items() if c > 1}
+    if dup:
+        assets.warn(f"报告里有重复的页面键 {sorted(dup)[:5]}，这些页上的批注无法按键校正页码")
+    unstable = [pg["n"] for pg in pages if not pg["stable"]]
+    if unstable:
+        assets.warn(f"有 {len(unstable)} 页没有稳定的 data-key（键由页码生成，如第 {unstable[:5]} 页），"
+                    "重排页序后这些页上的批注不会自动跟着走")
+    remap = {"moved": [], "orphans": [], "keyed": 0}
+    if (out / "notes.json").exists():
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import notes_store
+        remap = notes_store.remap_pages(out, old_keys, {pg["key"]: pg["n"] for pg in pages if pg["stable"]},
+                                        {pg["n"]: html.unescape(pg["title"]) for pg in pages}, dup)
+        for mv in remap["moved"]:
+            assets.warn(f"批注 {mv['id']} 随页面「{mv['key']}」从第 {mv['from']} 页移到第 {mv['to']} 页")
+        for o in remap["orphans"]:
+            assets.warn(f"批注 {o['id']}（原第 {o['page']} 页，键 {o['key']}）对应的页面在新版报告里找不到，已标出待确认")
     if assets.total > 40 * 1024 * 1024:
         assets.warn(f"内联资源共 {assets.total // 1024 // 1024} MB，页面较大，打开可能偏慢")
     return {"pages": len(pages), "sections": len(sections), "seconds": sum(p["sec"] for p in pages),
-            "title": final_title, "warnings": assets.warnings, "reviewId": rid}
+            "title": final_title, "warnings": assets.warnings, "reviewId": rid, "remap": remap}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -506,6 +617,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--sections", help='板块导航，如 "开篇:1-6,主线一:7-21"；默认从报告目录推断')
     ap.add_argument("--no-sections", action="store_true", help="不显示板块导航")
     ap.add_argument("--lenient", action="store_true", help="讲稿与报告页码不一致时只警告，以报告页序为准")
+    ap.add_argument("--asset-root", type=Path, help="允许内联本地资源的目录（默认报告所在目录）")
     a = ap.parse_args(argv)
     if a.rebuild:
         m = read_manifest(a.rebuild)
@@ -517,9 +629,10 @@ def main(argv: list[str] | None = None) -> int:
         a.sections = a.sections or opt.get("sections")
         a.no_sections = a.no_sections or bool(opt.get("noSections"))
         a.lenient = a.lenient or bool(opt.get("lenient"))
+        a.asset_root = a.asset_root or (Path(opt["assetRoot"]) if opt.get("assetRoot") else None)
     elif not (a.report and a.out):
         ap.error("需要 --report 与 --out（或用 --rebuild 审阅目录）")
-    r = build(a.report, a.script, a.out, a.title, a.sections, a.no_sections, a.lenient)
+    r = build(a.report, a.script, a.out, a.title, a.sections, a.no_sections, a.lenient, a.asset_root)
     for w in r["warnings"]:
         print("警告：" + w, file=sys.stderr)
     mins = r["seconds"] // 60

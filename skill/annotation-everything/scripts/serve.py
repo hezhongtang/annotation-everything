@@ -4,6 +4,7 @@
 用法：
   python3 serve.py <审阅目录>                 # 启动（默认端口 8765），自动打开浏览器，Ctrl+C 停止
   python3 serve.py <审阅目录> --port 9000 --no-open --debug
+  python3 serve.py <审阅目录> --on-handoff "命令 参数"   # 可选：用户点「交给 Agent」时运行这条命令
   python3 serve.py status <审阅目录>          # 查看服务是否在跑、实际端口、拒绝/错误计数（给 Claude 排障用）
   python3 serve.py check                      # 自检：回环绑定、伪造 Host/Origin 被拒、落盘与重启恢复
 
@@ -15,6 +16,10 @@
 - 页面 CSP 只放行页面自身那段脚本（按 sha256），注入的脚本和内联事件不会执行；
 - 只提供 index.html 与 /api/*，其他路径一律 404；
 - 日志里来自请求的字段（路径、Host、Origin）只保留安全字符并截断；`status` 只汇总计数，不回显请求内容。
+
+「交给 Agent」：页面 POST /api/handoff 记一次提交（handoff.json）。代理用 notes.py wait 等待或轮询该文件；
+可选的 --on-handoff 钩子在每次提交时运行一条命令（不经 shell），提交内容以 JSON 从标准输入传入，
+另有环境变量 AE_EVENT / AE_REVIEW_DIR / AE_HANDOFF_SEQ / AE_URL；命令输出丢弃，退出码记入 server.log。
 
 端口回退：默认端口被占用时，若占用者正是本服务且托管同一目录，直接复用并打开浏览器；
 否则顺延尝试后续端口（最多 20 个），实际端口写进审阅目录的 .annotation-server.json。
@@ -28,9 +33,11 @@ import http.client
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -45,7 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import notes_store as store  # noqa: E402
 
 APP = "annotation-everything"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DEFAULT_PORT = 8765
 PORT_TRIES = 20
 STATUS_FILE = ".annotation-server.json"
@@ -86,9 +93,15 @@ class Reject(Exception):
 class ReviewServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, review_dir: Path, port: int, debug: bool = False, log_to_file: bool = True):
+    def __init__(self, review_dir: Path, port: int, debug: bool = False, log_to_file: bool = True,
+                 on_handoff: list[str] | None = None, hook_cwd: str | None = None):
         self.review_dir = review_dir
         self.debug = debug
+        self.on_handoff = on_handoff
+        self.hook_cwd = hook_cwd or os.getcwd()
+        self._hook_lock = threading.Lock()
+        self._hook_running = False
+        self._hook_next: dict[str, Any] | None = None
         self.log_to_file = log_to_file
         self._log_lock = threading.Lock()
         self._cache: dict[str, tuple[float, Any]] = {}
@@ -119,6 +132,48 @@ class ReviewServer(ThreadingHTTPServer):
         val = build(f)
         self._cache[name] = (mtime, val)
         return val
+
+    def run_hook(self, item: dict[str, Any], merged: bool) -> None:
+        """「交给 Agent」钩子：后台运行用户配置的命令，提交内容经标准输入传 JSON，不经 shell。
+
+        只在新的提交时触发（合并进还没被接收的提交不再触发）；同一时间只跑一个，运行中又来新提交就等它结束后补跑一次。
+        """
+        if not self.on_handoff or merged:
+            return
+        event = "handoff"
+        url = f"http://127.0.0.1:{self.port}/"
+        payload = {"event": event, "app": APP, "reviewId": self.review_id(), "reviewDir": str(self.review_dir),
+                   "url": url, "seq": item.get("seq"), "message": item.get("message", ""),
+                   "openCount": item.get("openCount"), "pages": item.get("pages"),
+                   "notesFile": str(self.review_dir / store.NOTES_FILE),
+                   "handoffFile": str(self.review_dir / store.HANDOFF_FILE),
+                   "notesCli": str(Path(__file__).resolve().with_name("notes.py"))}
+        env = {**os.environ, "AE_EVENT": event, "AE_REVIEW_DIR": str(self.review_dir),
+               "AE_HANDOFF_SEQ": str(item.get("seq")), "AE_URL": url}
+        job = {"payload": payload, "env": env, "seq": item.get("seq")}
+        with self._hook_lock:
+            if self._hook_running:
+                self._hook_next = job   # 正在跑：只记最新的一次，结束后补跑
+                return
+            self._hook_running = True
+        threading.Thread(target=self._hook_worker, args=(job,), daemon=True).start()
+
+    def _hook_worker(self, job: dict[str, Any]) -> None:
+        while job is not None:
+            try:
+                proc = subprocess.Popen(list(self.on_handoff), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL, cwd=self.hook_cwd, env=job["env"], start_new_session=True)
+                proc.communicate(json.dumps(job["payload"], ensure_ascii=False).encode("utf-8"))
+                if proc.returncode == 0:
+                    self.log("info", f"hook seq={job['seq']} exit=0")
+                else:
+                    self.log("error", f"code=hook-failed seq={job['seq']} exit={proc.returncode}")
+            except OSError as e:
+                self.log("error", f"code=hook-failed seq={job['seq']} {type(e).__name__}: {e}")
+            with self._hook_lock:
+                job, self._hook_next = self._hook_next, None
+                if job is None:
+                    self._hook_running = False
 
     def review_id(self) -> str | None:
         def read(f: Path | None) -> str | None:
@@ -172,7 +227,7 @@ class Handler(BaseHTTPRequestHandler):
                                   f"path={clean(self.path)} host={clean(self.headers.get('Host'))} "
                                   f"origin={clean(self.headers.get('Origin'))} site={clean(self.headers.get('Sec-Fetch-Site'), 20)}")
         self.close_connection = True
-        self._json(e.status, {"error": e.msg, "code": e.code})
+        self._json(e.status, {"error": e.msg, "code": e.code, "app": APP})
 
     def _check_host(self) -> None:
         host = (self.headers.get("Host") or "").strip().lower()
@@ -224,15 +279,16 @@ class Handler(BaseHTTPRequestHandler):
                 raise Reject(404, "not-found", "没有这个路径")
         except Reject as e:
             self._reject(e)
-        except store.NoteError as e:
-            self._json(400, {"error": str(e), "code": "bad-note"})
+        except (store.NoteError, UnicodeEncodeError) as e:  # 由请求内容引起的错误一律 4xx，页面不会反复重试
+            self._json(400, {"error": str(e) if isinstance(e, store.NoteError) else "内容含无法保存的字符",
+                             "code": "bad-note", "app": APP})
         except store.NotFound:
-            self._json(404, {"error": "批注不存在（可能已被删除）", "code": "no-note"})
+            self._json(404, {"error": "批注不存在（可能已被删除）", "code": "no-note", "app": APP})
         except Exception as e:  # 服务端错误也写日志，方便排障
             self.server.log("error", f"code=server-error method={clean(self.command, 12)} path={clean(self.path)} "
                                      f"{type(e).__name__}: {e}")
             self._json(500, {"error": f"服务端写入失败（{type(e).__name__}），批注暂存浏览器，稍后自动重试",
-                             "code": "server-error"})
+                             "code": "server-error", "app": APP})
 
     do_GET = do_HEAD = do_POST = do_PATCH = do_DELETE = do_PUT = _dispatch
 
@@ -258,14 +314,32 @@ class Handler(BaseHTTPRequestHandler):
     def _api(self, path: str) -> None:
         d, m = self.server.review_dir, NOTE_PATH.match(path)
         cmd = "GET" if self.command == "HEAD" else self.command
+        # 页面带上自己的审阅标识：端口上换成了另一份审阅的服务时，先拒绝，绝不写进别人的 notes.json
+        claimed = self.headers.get("X-AE-Review")
+        if claimed is not None and path != "/api/health":
+            rid = self.server.review_id()
+            if not rid or claimed != rid:
+                raise Reject(409, "review-mismatch", "页面属于另一份审阅（审阅标识不一致）")
         if path == "/api/health" and cmd == "GET":
             self._json(200, {**self._ident(), "version": VERSION, "dir": str(d), "pid": os.getpid(),
-                             "port": self.server.port})
+                             "port": self.server.port, "features": ["notes", "handoff"],
+                             "hook": bool(self.server.on_handoff)})
         elif path == "/api/notes" and cmd == "GET":
             doc = store.load(d)
             idx = d / "index.html"
             doc["indexMtime"] = idx.stat().st_mtime if idx.exists() else None  # 页面据此提示「已重建，请刷新」
+            doc["handoff"] = store.handoff_state(d)
+            doc["skillCatalog"] = store.skills_catalog(d)
             self._json(200, {**doc, **self._ident()})
+        elif path == "/api/handoff" and cmd == "GET":
+            self._json(200, {**store.handoff_state(d), **self._ident()})
+        elif path == "/api/handoff" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            _h, item, merged = store.handoff_submit(d, str(body.get("message") or ""), by="page")
+            self.server.log("info", f"handoff seq={item['seq']} open={item['openCount']} merged={merged}")
+            self.server.run_hook(item, merged)
+            self._json(200, {"doc": {**store.load(d), **self._ident()}, "handoff": store.handoff_state(d),
+                             "merged": merged, "seq": item["seq"]})
         elif path == "/api/notes" and cmd == "POST":
             doc, note = store.add(d, self._expect_obj(self._body()), by="page")
             self.server.log("info", f"add {note['id']} page={note['page']}")
@@ -361,7 +435,8 @@ def same_dir(found: dict[str, Any], review_dir: Path) -> bool:
         return False
 
 
-def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES) -> tuple[ReviewServer | None, str | None, list[str]]:
+def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
+         on_handoff: list[str] | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
     """返回 (服务, 已在运行的 URL, 过程记录)。"""
     notes: list[str] = []
     info = read_status(review_dir)
@@ -380,13 +455,30 @@ def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES) -> t
             notes.append(f"端口 {p} 被{who}占用，顺延")
             continue
         try:
-            return ReviewServer(review_dir, p, debug=debug), None, notes
+            return ReviewServer(review_dir, p, debug=debug, on_handoff=on_handoff), None, notes
         except OSError as e:
             notes.append(f"端口 {p} 绑定失败（{e.strerror or e}），顺延")
     return None, None, notes
 
 
-def serve(review_dir: Path, port: int, open_browser: bool, debug: bool) -> int:
+def parse_hook(cmd: str | None) -> list[str] | None:
+    """--on-handoff 的命令按 shell 规则拆分但不经 shell 执行；找不到可执行文件就报错。"""
+    if not cmd:
+        return None
+    try:
+        argv = shlex.split(cmd)
+    except ValueError as e:
+        raise SystemExit(f"错误：--on-handoff 的命令写法不对（{e}），检查引号是否配对") from None
+    if not argv:
+        return None
+    exe = argv[0]
+    full = os.path.abspath(exe) if os.sep in exe else shutil.which(exe)
+    if not full or not os.access(full, os.X_OK):
+        raise SystemExit(f"错误：--on-handoff 的命令找不到或不可执行：{exe}")
+    return [full, *argv[1:]]   # 钩子在启动 serve.py 的目录下运行，参数里的相对路径按这个目录解析
+
+
+def serve(review_dir: Path, port: int, open_browser: bool, debug: bool, on_handoff: list[str] | None = None) -> int:
     review_dir = review_dir.resolve()
     if not (review_dir / "index.html").is_file():
         print(f"错误：{review_dir} 下没有 index.html。先用 build_viewer.py 生成对照页。", file=sys.stderr)
@@ -396,11 +488,22 @@ def serve(review_dir: Path, port: int, open_browser: bool, debug: bool) -> int:
     except ValueError as e:
         print(f"错误：notes.json 无法读取（{e}）。请先修复或改名备份后再启动，服务不会覆盖它。", file=sys.stderr)
         return 2
-    server, running_url, trail = bind(review_dir, port, debug)
+    try:
+        m = json.loads((review_dir / MANIFEST).read_text(encoding="utf-8"))
+        orig = Path(m["reviewDir"]) if m.get("reviewDir") else None
+        if orig and orig != review_dir and (orig / MANIFEST).exists():
+            om = json.loads((orig / MANIFEST).read_text(encoding="utf-8"))
+            if om.get("reviewId") == m.get("reviewId"):
+                print(f"提示：这个审阅目录是从 {orig} 复制来的，与原目录共用审阅标识。"
+                      f"建议先运行 build_viewer.py --rebuild {review_dir}，让它换一个新标识。", file=sys.stderr)
+    except (OSError, ValueError, AttributeError):
+        pass
+    server, running_url, trail = bind(review_dir, port, debug, on_handoff=on_handoff)
     for t in trail:
         print(f"[端口] {t}", file=sys.stderr)
     if running_url:
-        print(f"已在运行：{running_url}")
+        print(f"已在运行：{running_url}" + ("（注意：沿用已在运行的服务，本次的 --on-handoff 不生效；要换钩子先停掉它）"
+                                          if on_handoff else ""))
         if open_browser:
             webbrowser.open(running_url)
         return 0
@@ -413,7 +516,9 @@ def serve(review_dir: Path, port: int, open_browser: bool, debug: bool) -> int:
         print(f"[端口] 首选端口 {port} 不可用，改用 {server.port}。", file=sys.stderr)
     write_status(server)
     server.log("info", f"启动 {APP} {VERSION}：{url} 托管 {review_dir}（pid {os.getpid()}）")
-    print(f"对照页：{url}\n批注落盘：{review_dir / store.NOTES_FILE}\n按 Ctrl+C 停止。", flush=True)
+    print(f"对照页：{url}\n批注落盘：{review_dir / store.NOTES_FILE}"
+          + (f"\n「交给 Agent」时运行：{shlex.join(on_handoff)}" if on_handoff else "")
+          + "\n按 Ctrl+C 停止。", flush=True)
 
     def _term(*_a: Any) -> None:
         raise KeyboardInterrupt
@@ -448,6 +553,10 @@ def status(review_dir: Path) -> int:
                         "resolved": sum(n.get("status") == "resolved" for n in notes)}
     except ValueError as e:
         out["notes"] = {"error": f"notes.json 无法解析：{type(e).__name__}"}
+    hs = store.handoff_state(review_dir)
+    latest = hs.get("latest") or {}
+    out["handoff"] = {"pending": hs.get("pending"), "claimed": hs.get("claimed"),
+                      "latest": {k: latest.get(k) for k in ("seq", "status", "at", "claimedAt", "doneAt")} if latest else None}
     code = 3
     info = read_status(review_dir)
     if info is not None:
@@ -592,6 +701,23 @@ def check() -> int:
            and oct((tmp / store.LOG_FILE).stat().st_mode & 0o777) == "0o600", "批注文件只有本用户可读写（0600）")
         s, _, _ = _req(port, "PATCH", f"/api/notes/{nid}", same, {"status": "resolved", "resolution": "已改"})
         ok(s == 200, f"标记已处理（{s}）")
+        hook_out = tmp / "hook.json"
+        srv.on_handoff = [sys.executable, "-c", "import sys,pathlib;pathlib.Path(sys.argv[1]).write_text(sys.stdin.read())",
+                          str(hook_out)]
+        s, _, _ = _req(port, "POST", "/api/handoff", {**same, "Origin": "http://evil.example"}, {"message": "x"})
+        ok(s == 403, f"跨源「交给 Agent」被拒（{s}）")
+        s, _, b = _req(port, "POST", "/api/handoff", same, {"message": "请处理"})
+        h = json.loads(b) if s == 200 else {}
+        ok(s == 200 and (h.get("handoff") or {}).get("pending") == 1, f"同源「交给 Agent」记下一次提交（{s}）")
+        for _ in range(50):
+            if hook_out.exists() and hook_out.stat().st_size:
+                break
+            time.sleep(0.1)
+        payload = json.loads(hook_out.read_text(encoding="utf-8")) if hook_out.exists() and hook_out.stat().st_size else {}
+        ok(payload.get("seq") == 1 and payload.get("reviewId") == "checkreview" and payload.get("message") == "请处理",
+           "提交时运行 --on-handoff 钩子，提交内容经标准输入传入")
+        s, _, b = _req(port, "POST", "/api/handoff", same, {"message": "补充"})
+        ok(s == 200 and json.loads(b).get("merged") and json.loads(b).get("seq") == 1, "未被接收的提交再次提交时合并，不重复排队")
         srv.shutdown()
         srv.server_close()
         srv2 = ReviewServer(tmp, 0, log_to_file=True)
@@ -603,7 +729,7 @@ def check() -> int:
         srv2.shutdown()
         srv2.server_close()
         log_text = (tmp / LOG_FILE).read_text(encoding="utf-8")
-        ok(log_text.count("[reject]") >= 9, f"拒绝原因写入 server.log（{log_text.count('[reject]')} 条）")
+        ok(log_text.count("[reject]") >= 10, f"拒绝原因写入 server.log（{log_text.count('[reject]')} 条）")
         ok("evil.example" in log_text and "<" not in log_text, "日志里的请求字段已过滤特殊字符")
     except Exception as e:  # 自检本身出错也要清楚报告
         results.append((False, f"自检异常：{type(e).__name__}: {e}"))
@@ -631,8 +757,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"首选端口，默认 {DEFAULT_PORT}；被占用时顺延")
     ap.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
     ap.add_argument("--debug", action="store_true", help="记录每个请求（默认只记录拒绝、错误与批注改动）")
+    ap.add_argument("--on-handoff", metavar="命令", help="可选：用户点「交给 Agent」时运行的命令（不经 shell；"
+                                                      "提交内容以 JSON 从标准输入传入）")
     a = ap.parse_args(argv)
-    return serve(a.dir, a.port, not a.no_open, a.debug)
+    return serve(a.dir, a.port, not a.no_open, a.debug, parse_hook(a.on_handoff))
 
 
 if __name__ == "__main__":

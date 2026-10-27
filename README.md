@@ -4,6 +4,8 @@ Claude Code skill：把材料变成本地审阅页，用户在浏览器里逐页
 
 当前支持的材料类型：**汇报材料（逐页 HTML 报告）+ 讲稿（Markdown）**。名字留了余地：以后可以扩展到文字稿等其他材料。
 
+页面上能做的：选中文字直接删除 / 改写或引用写批注（另一侧同一页有对应句时提示「同时改」）、在报告上标点（可拖动）、风格优化（整页 / 框选区域 / 标点处）、给批注指定技能、「交给 Agent」并看到处理进度、重新打开时提示上次批注到哪页。代理侧用 `notes.py wait` 等待用户提交，处理后 `resolve` / `done` 回写状态。
+
 ## 目录
 
 ```
@@ -13,7 +15,8 @@ skill/annotation-everything/   ← skill 本体（安装时整体拷贝）
   scripts/build_viewer.py      ← 生成对照页 index.html + review.json
   scripts/viewer_template.html ← 对照页模板（服务模式 / 本地文件模式）
   scripts/serve.py             ← 本地服务（serve / status / check）
-  scripts/notes.py             ← 批注命令行（show / resolve / reopen / import）
+  scripts/notes.py             ← 批注命令行（show / resolve / reopen / import / wait / done / skills）
+  scripts/match.py             ← 报告 ↔ 讲稿对应句查找
   scripts/notes_store.py       ← 批注存储（原子写、文件锁、操作日志）
   evals/                       ← skill-creator 测试用例
 fixtures/sample/               ← 合成样例（虚构数据）

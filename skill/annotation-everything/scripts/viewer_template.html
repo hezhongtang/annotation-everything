@@ -6,6 +6,7 @@
 <style>
 :root{--ae-bg:#f4f5f7;--ae-panel:#fff;--ae-ink:#1d2330;--ae-mut:#6b7280;--ae-line:#e3e6eb;--ae-navy:#1f3a5f;--ae-accent:#2a78d6;--ae-qa:#f6f8fb;--ae-warm:#fdf6e3;--ae-red:#d94a38;--ae-green:#16794d}
 *{box-sizing:border-box} html,body{height:100%;margin:0}
+html{font-size:__ROOTFS__}
 body{font-family:"PingFang SC","Noto Sans CJK SC",system-ui,sans-serif;background:var(--ae-bg);color:var(--ae-ink);display:flex;flex-direction:column}
 header{display:flex;align-items:center;gap:12px;padding:10px 18px;background:var(--ae-navy);color:#fff;flex-wrap:wrap}
 header h1{font-size:15px;font-weight:600;margin:0;flex:1 1 260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -16,6 +17,15 @@ header select option{color:#111}
 #mode.server{background:#1d6b47}#mode.offline{background:#8a5a12}#mode.mismatch{background:#9b2c1f}#mode.file{background:rgba(255,255,255,.12)}
 #legacyBtn{display:none;background:#8a5a12}
 #reloadBtn{display:none;background:#2a78d6;border-color:#2a78d6}
+header #handBtn{background:var(--ae-red);border-color:var(--ae-red)}
+#handState{display:none;font-size:12px;border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:pointer;border:1px solid rgba(255,255,255,.3)}
+#handState.pending{display:inline-block;background:#8a5a12}#handState.claimed{display:inline-block;background:#2a78d6}
+#handState.done{display:inline-block;background:#1d6b47}#handState.queued{display:inline-block;background:#6b7280}
+.resume{display:none;align-items:center;gap:10px;flex-wrap:wrap;padding:7px 18px;background:#fff8e6;border-bottom:1px solid #f0dfb0;font-size:13px;color:#5c4a12}
+.resume.on{display:flex}
+.resume #resumeText{flex:1 1 auto}
+.resume button{font:inherit;font-size:12.5px;border:1px solid #e4cf94;background:#fff;border-radius:6px;padding:3px 10px;cursor:pointer;color:#5c4a12}
+.resume .ok{color:var(--ae-green);font-weight:600}
 nav{display:flex;gap:6px;padding:8px 18px;background:var(--ae-panel);border-bottom:1px solid var(--ae-line);overflow-x:auto}
 nav:empty{display:none}
 nav button{font:inherit;font-size:12.5px;white-space:nowrap;border:1px solid var(--ae-line);background:#fff;color:var(--ae-ink);border-radius:999px;padding:4px 12px;cursor:pointer}
@@ -55,7 +65,9 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,1fr
 .note textarea{width:100%;font:inherit;font-size:14px;min-height:60px;border:1px solid var(--ae-line);border-radius:6px;padding:6px 8px}
 .chip{display:inline-block;font-size:11px;border-radius:4px;padding:0 5px;margin-left:6px;background:#d8eee1;color:var(--ae-green)}
 .form{display:flex;flex-direction:column;gap:6px;margin-top:8px}
-.form textarea{font:inherit;font-size:14px;min-height:64px;border:1px solid var(--ae-line);border-radius:6px;padding:6px 8px;resize:vertical}
+#nform{position:sticky;bottom:-28px;z-index:3;margin:14px -24px -28px;padding:10px 24px 14px;background:var(--ae-panel);border-top:1px solid var(--ae-line);box-shadow:0 -8px 14px -10px rgba(0,0,0,.25)}
+#nform .grow{flex:1}
+.form textarea{font:inherit;font-size:14px;min-height:46px;max-height:40vh;border:1px solid var(--ae-line);border-radius:6px;padding:6px 8px;resize:none;overflow-y:auto}
 .form .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:13px}
 .form select,.form button{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:4px 10px;background:#fff;cursor:pointer}
 .form button.primary{background:var(--ae-red);border-color:var(--ae-red);color:#fff}
@@ -73,43 +85,115 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,1fr
 .dlg textarea{width:100%;min-height:160px;font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:8px}
 .dlg .found{border:1px solid var(--ae-line);border-radius:8px;padding:8px 10px;margin:6px 0;display:flex;justify-content:space-between;gap:8px;align-items:center}
 .hint{font-size:12.5px;color:var(--ae-mut)}
+kbd{font:600 10.5px/1 ui-monospace,SFMono-Regular,Menlo,monospace;padding:2px 4px;border-radius:4px;border:1px solid rgba(0,0,0,.18);background:rgba(0,0,0,.05);margin-left:5px;vertical-align:1px;color:inherit}
+header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
+#selbar{position:fixed;display:none;z-index:8;background:#fff;border:1px solid var(--ae-line);border-radius:8px;box-shadow:0 4px 18px rgba(0,0,0,.2);padding:4px;gap:4px;flex-direction:column;max-width:min(460px,92vw)}
+#selbar.on{display:flex}
+#selbar .sbtns{display:flex;gap:2px}
+#pairRow{display:none;align-items:flex-start;gap:6px;font-size:12.5px;line-height:1.5;color:#5c4a12;background:#fff8e6;border:1px solid #f0dfb0;border-radius:6px;padding:5px 8px;cursor:pointer}
+#pairRow.on{display:flex}
+#pairRow input{margin-top:3px}
+.form .sk{display:flex;align-items:center;gap:4px;flex:1 1 160px;min-width:140px}
+.form .sk input,.note .eskills{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:4px 8px;flex:1;min-width:80px;width:100%}
+.note .skills{margin-top:4px;display:flex;gap:4px;flex-wrap:wrap}
+.note .skill{font-size:12px;background:#eef2f7;color:var(--ae-navy);border-radius:4px;padding:1px 6px}
+.note .eskills{margin-top:4px}
+#stylemenu{position:fixed;display:none;z-index:8;background:#fff;border:1px solid var(--ae-line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.22);padding:6px;flex-direction:column;gap:2px;min-width:210px}
+#stylemenu.on{display:flex}
+#stylemenu button{font:inherit;font-size:13px;border:none;background:none;text-align:left;padding:6px 10px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;gap:12px}
+#stylemenu button:hover{background:#f1f3f6}
+#stylemenu .hint{padding:2px 10px 4px}
+#styleChip{display:none;align-self:flex-start;font-size:12.5px;background:#e8f0fb;color:#1f4f8f;border:1px solid #c5d8f2;border-radius:999px;padding:2px 4px 2px 10px}
+#styleChip.on{display:inline-flex;align-items:center;gap:6px}
+#styleChip button{border:none;background:none;cursor:pointer;color:#1f4f8f;font-size:14px;line-height:1;padding:0 4px}
+.note .anchor{font-size:12px;color:var(--ae-mut);margin-top:3px}
+#pinpop{position:fixed;display:none;z-index:8;width:min(340px,90vw);background:#fff;border:1px solid var(--ae-line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.22);padding:10px 12px;font-size:13.5px;line-height:1.6}
+#pinpop.on{display:block}
+#pinpop .pp-m{font-size:12px;color:#a2412f}
+#pinpop .pp-t{margin:2px 0 8px;white-space:pre-wrap;word-break:break-word}
+#pinpop .pp-a{display:flex;gap:6px;flex-wrap:wrap}
+#pinpop button{font:inherit;font-size:12.5px;border:1px solid var(--ae-line);border-radius:6px;padding:3px 9px;background:#fff;cursor:pointer}
+#pinpop button[data-pp="del"]{color:#a2412f}
+.note.hl{outline:2px solid #e8b4aa;outline-offset:1px}
+.note.flash{animation:aeflash 1.2s ease}
+@keyframes aeflash{0%,100%{box-shadow:none}30%{box-shadow:0 0 0 4px rgba(217,74,56,.35)}}
+.note .pair{font-size:12.5px;color:#5c4a12;background:#fff8e6;border-radius:5px;padding:3px 8px;margin-top:4px}
+#selbar button{font:inherit;font-size:13px;border:none;background:none;padding:5px 10px;border-radius:6px;cursor:pointer;color:var(--ae-ink);white-space:nowrap}
+#selbar button:hover{background:#f1f3f6}
+#selbar button[data-sel="delete"]{color:#a2412f}
+#repbox{position:fixed;display:none;z-index:8;width:min(460px,90vw);background:#fff;border:1px solid var(--ae-line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.22);padding:10px 12px}
+#repbox.on{display:block}
+#repbox .hint{margin:0 0 6px}
+#repbox textarea{width:100%;min-height:72px;font:inherit;font-size:14px;border:1px solid var(--ae-line);border-radius:6px;padding:6px 8px;resize:vertical}
+#repbox .row{display:flex;gap:6px;justify-content:flex-end;margin-top:6px}
+#repbox button{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:4px 10px;background:#fff;cursor:pointer}
+#repbox button.primary{background:var(--ae-navy);border-color:var(--ae-navy);color:#fff}
+.note del{color:#a2412f;background:#fde7e3;text-decoration:line-through}
+.note ins{color:#16794d;background:#e3f4ea;text-decoration:none}
+.note .op{font-size:12px;color:#a2412f;margin-right:6px}
+.note.done .body del,.note.done .body ins{background:none}
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1d2330;color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;display:none;z-index:10;max-width:80vw}
 @media (max-width:900px){main{grid-template-columns:1fr;grid-template-rows:auto 1fr;padding:12px 16px}.slide{aspect-ratio:16/9}.script{min-height:50vh}}
 </style></head><body>
 <header>
   <h1>__TITLE__</h1>
   <span id="mode" class="file"></span>
+  <span id="handState"></span>
   <span class="stat" id="stat"></span>
-  <button id="prev" title="上一页（←）">← 上一页</button>
+  <button id="prev" title="上一页（←）">上一页<kbd>←</kbd></button>
   <select id="jump" aria-label="跳到页"></select>
-  <button id="next" title="下一页（→）">下一页 →</button>
-  <button id="helpBtn" title="使用说明（H）">说明</button>
-  <button id="reloadBtn" title="Claude 已按批注重建对照页">对照页已更新，点此刷新</button>
+  <button id="next" title="下一页（→）">下一页<kbd>→</kbd></button>
+  <button id="helpBtn" title="使用说明与快捷键（H）">说明<kbd>H</kbd></button>
+  <button id="reloadBtn" title="Agent 已按批注重建对照页">对照页已更新，点此刷新</button>
   <button id="legacyBtn" title="浏览器里发现这份稿件之前版本的批注">导入旧批注</button>
-  <button id="notesBtn" title="查看、导出、导入全部批注（N）">批注<span class="badge" id="ncount">0</span></button>
+  <button id="handBtn" title="这一批批注写好了，交给代理处理（A）">交给 Agent<kbd>A</kbd></button>
+  <button id="notesBtn" title="查看、导出、导入全部批注（N）">批注<span class="badge" id="ncount">0</span><kbd>N</kbd></button>
 </header>
+<div class="resume" id="resume" role="status"><span id="resumeText"></span><button id="resumeGo" style="display:none"></button><button id="resumeClose" title="关闭提示">×</button></div>
 <nav id="secs"></nav>
 <main>
   <div class="slide" id="slide"><div id="host"></div></div>
   <div class="script" id="script"><div id="pageScript"></div>
-    <div class="notes"><div id="nlist"></div>
-      <div class="form" id="nform"><div class="quote" id="qbox"></div>
-        <textarea id="ntext" placeholder="写修改意见。可先在左侧报告或上方讲稿里选中一段文字，会作为引用带上；或点「在报告上标点」再点左侧报告。"></textarea>
-        <div class="row">对象 <select id="ntarget"><option>报告</option><option>讲稿</option><option>报告和讲稿</option></select>
-          <button data-act="pin" id="pinBtn">在报告上标点</button>
-          <button class="primary" data-act="add">添加批注</button></div></div></div></div>
+    <div class="notes"><div id="nlist"></div></div>
+    <!-- 输入框停靠在面板底部：讲稿再长也不用往下翻找；翻到底时回到批注列表下方的原位 -->
+    <div class="form" id="nform"><div class="quote" id="qbox"></div><span id="styleChip"></span>
+      <textarea id="ntext" rows="2" placeholder="写修改意见（C）。可先选中报告或讲稿里的文字：直接删除（D）、改为（R），或作为引用写批注；也可以先「在报告上标点」。"></textarea>
+      <div class="row">对象 <select id="ntarget"><option>报告</option><option>讲稿</option><option>报告和讲稿</option></select>
+        <label class="sk" title="处理这条批注时让 Agent 调用的技能（skill），多个用逗号分隔（K）">技能<kbd>K</kbd><input id="nskills" list="skillList" autocomplete="off" placeholder="可选，如 humanizer-zh"></label>
+        <button data-act="pin" id="pinBtn" title="在报告上标点（P）">在报告上标点<kbd>P</kbd></button>
+        <button data-act="style" id="styleBtn" title="风格优化：整页 / 框选区域 / 标点处（S）">风格优化<kbd>S</kbd></button>
+        <button data-act="seelist" id="seeList" title="看本页已有的批注">本页批注 <span id="nhere">0</span> ↑</button>
+        <datalist id="skillList"></datalist>
+        <span class="grow"></span>
+        <button class="primary" data-act="add" title="添加批注">添加批注<kbd><span class="kmod">⌘</span>↵</kbd></button></div></div></div>
+<div id="selbar"><div class="sbtns"><button data-sel="delete" title="删除选中的文字（D）">删除<kbd>D</kbd></button><button data-sel="replace" title="把选中的文字改为…（R）">改为…<kbd>R</kbd></button><button data-sel="comment" title="以选中文字为引用写批注（C）">批注<kbd>C</kbd></button></div>
+<label id="pairRow" title="另一侧同一页有相同或相近的句子：勾选后这条批注同时要求改两侧（B 切换）"><input type="checkbox" id="pairOn"><span id="pairText"></span><kbd>B</kbd></label></div>
+<div id="pinpop" role="dialog"></div>
+<div id="stylemenu" role="menu"><p class="hint">风格优化的范围：</p>
+<button data-sm="page">整页（当前这一页）<kbd>1</kbd></button><button data-sm="region">在报告上框选区域…<kbd>2</kbd></button><button data-sm="pin">标点处（放一个标点）<kbd>3</kbd></button></div>
+<div id="repbox"><p class="hint">把选中的文字改为：</p><textarea id="repText"></textarea>
+<div class="row"><button id="repCancel">取消<kbd>Esc</kbd></button><button class="primary" id="repOk">确定<kbd>↵</kbd></button></div></div>
 </main>
 <div class="modal" id="allnotes"><div class="dlg"><div class="bar"><h2>全部批注</h2>
-<button class="primary" id="copyAll">复制全部（粘贴给 Claude）</button><button id="dlAll">下载 Markdown</button><button id="dlJson">下载 JSON</button><button id="openImp">导入…</button><button id="clearAll">清空</button><button data-close>关闭</button></div>
+<button class="primary" id="copyAll">复制全部（粘贴给 Agent）</button><button id="dlAll">下载 Markdown</button><button id="dlJson">下载 JSON</button><button id="openImp">导入…</button><button id="dlFailed" style="display:none" title="多次保存失败、没有写进 notes.json 的改动">下载未能保存的改动</button><button id="clearAll">清空</button><button data-close>关闭</button></div>
+<div class="pad" id="orphanBox" style="display:none;border-bottom:1px solid var(--ae-line)"></div>
 <pre id="allText"></pre></div></div>
 <div class="modal" id="imp"><div class="dlg"><div class="bar"><h2>导入批注</h2><button class="primary" id="doImp">导入</button><button data-close>关闭</button></div>
 <div class="pad"><div id="found"></div>
 <p class="hint">粘贴之前「复制全部」的文字，或「下载 JSON / Markdown」得到的文件内容。同一条批注（同 id，或页码、对象、内容、引用、标点都相同）不会重复导入；同 id 而导入方更新得更晚的，会更新为导入方的内容和状态。</p>
 <textarea id="impText" placeholder="在这里粘贴批注文字或 JSON"></textarea>
 <p><input type="file" id="impFile" accept=".json,.md,.txt"></p></div></div></div>
+<div class="modal" id="hand"><div class="dlg"><div class="bar"><h2>交给 Agent</h2><button class="primary" id="doHand">交给 Agent<kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close>取消<kbd>Esc</kbd></button></div>
+<div class="pad"><p id="handInfo"></p><p class="hint" id="handLast"></p>
+<textarea id="handMsg" placeholder="给 Agent 的附言（可选）：例如「先改第 7–12 页，口径问题先别动」"></textarea>
+<p class="hint">提交后，正在等待的代理会收到这批未处理批注，右上角显示「等待接收 → 处理中 → 已处理」。代理还没接收时再提交一次，会合并成同一次（附言以最新为准）。</p></div></div></div>
 <div id="toast"></div>
-<div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys">快捷键：← → 翻页，Home / End 首末页，H 说明，N 全部批注，Esc 关闭；写批注时 ⌘/Ctrl + Enter 添加。<br>
-批注保存：用本地服务打开（地址是 http://127.0.0.1:端口）时，每次改动自动写入审阅目录的 notes.json，Claude 可直接读取；直接双击打开 HTML 时批注只存在本浏览器，用「复制全部」或「下载」交给 Claude。</div></div></div></div>
+<div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，P 在报告上标点，C 写批注，K 填技能；Esc 关闭或取消。<br>
+标点：点「在报告上标点」（P）再点报告放一个；标点可以直接拖动；点标点弹出这条批注的编辑、标为已处理、去掉标点、删除；鼠标移到右侧批注上，对应标点会高亮。<br>
+风格优化（S）：选范围——1 整页、2 在报告上框选区域（像截图那样拖一个框）、3 标点处；可写想要的方向（不写也行），再添加批注。框选的区域可以拖动，点击可编辑或删除。<br>
+「技能」：某条批注需要特定技能（skill）才能改好时填上，多个用逗号分隔；Agent 处理这条前会先调用它们。候选来自 Agent 写进审阅目录的技能目录和用过的技能。<br>
+选中报告或讲稿里的文字后：D 删除这段（再按一次 D 或 ↵ 确认，防止打字时误触），R 改为…（在弹出的框里改好按 ↵），C 以它为引用写批注；另一侧同一页有相同或相近的句子时会提示「同时改」（默认勾选，B 切换）。写批注时 ⌘/Ctrl + ↵ 添加。<br>
+批注保存：用本地服务打开（地址是 http://127.0.0.1:端口）时，每次改动自动写入审阅目录的 notes.json，Agent 可直接读取；直接双击打开 HTML 时批注只存在本浏览器，用「复制全部」或「下载」交给 Agent。</div></div></div></div>
 <script>
 "use strict";
 const P=__PAGES__, S=__SECTIONS__, NS=__NS__, RID=__RID__, N=P.length;
@@ -119,15 +203,25 @@ const $=id=>document.getElementById(id);
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},
   set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}},
   del(k){try{localStorage.removeItem(k)}catch(e){}}};
-const K={notes:`ae.${RID}.notes`,meta:`ae.${RID}.meta`,page:`ae.${RID}.page`,pending:`ae.${RID}.pending`,hide:"ae.hideResolved"};
-// 待补传队列每次都从浏览器存储读写，多个标签页不会互相覆盖
-const pend={get(){const v=LS.get(K.pending,[]);return Array.isArray(v)?v:[]},set(v){LS.set(K.pending,v)},
-  push(op){const v=pend.get();v.push(op);pend.set(v)},shift(){const v=pend.get();v.shift();pend.set(v)}};
+const K={notes:`ae.${RID}.notes`,meta:`ae.${RID}.meta`,page:`ae.${RID}.page`,pending:`ae.${RID}.queue`,legacyPending:`ae.${RID}.pending`,failed:`ae.${RID}.failed`,drafts:`ae.${RID}.drafts`,hide:"ae.hideResolved"};
+const SS={get(k,d){try{const v=sessionStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{sessionStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 let i=0;{const s=+LS.get(K.page,0);if(s>0&&s<=N)i=s-1}
 let notes=FILE?LS.get(K.notes,[]):[]; if(!Array.isArray(notes))notes=[];
 let mode=FILE?"file":"offline", rev=null, idx0=null, busy=0, editingId=null, composing=false, listStale=false, hideDone=!!LS.get(K.hide,false);
 let pinMode=false, pendingPin=null, quote="", quoteFrom="";
-const drafts={};
+const drafts=SS.get(K.drafts,{})||{};   // 各页没写完的批注；存在本标签页的会话存储里，刷新不丢
+const editBuf={};                        // 正在改的已有批注的内容（列表重绘、翻页时不丢）
+const DEL_TEXT="删除引用的这段文字", REP_PREFIX="改为：";   // 快捷修改的固定说法（导出/导入据此还原）
+const MOD=/Mac|iPhone|iPad/.test(navigator.platform||navigator.userAgent)?"⌘":"Ctrl";
+document.querySelectorAll(".kmod").forEach(e=>e.textContent=MOD);
+let sel=null;   // 当前选中的文字：{text, from:报告/讲稿, x, y, pair}
+let delArmed=false;   // 键盘 D 先进入「待确认」，再按 D 或回车才记下删除（防止打拼音时误触）
+let quotePair=null;   // 写批注时引用的另一侧对应句（勾选「同时改」时）
+let regionMode=false, rdraw=null, pendingRegion=null, styleScope=null;   // 风格优化：框选中的区域、当前写的批注是否是风格优化及范围
+const STYLE_ZH={page:"整页",region:"选中区域",pin:"标点处"};
+let skillCatalog=__SKILLS__;   // 代理写进审阅目录的技能目录（skills.json），作为「技能」输入栏的候选
+const parseSkills=v=>[...new Set(String(v||"").split(/[,，、;；\n]+/).map(x=>x.trim().slice(0,64)).filter(Boolean))].slice(0,10);
+let hand=null, handQueued=false;   // 「交给 Agent」：服务端的提交状态；连不上服务时提交暂存待补传
 const cum=[];P.reduce((a,p,k)=>(cum[k]=a+(p.sec||0),cum[k]),0);
 const total=cum[N-1]||0;
 const mmss=s=>`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
@@ -146,25 +240,57 @@ S.forEach(s=>{const b=document.createElement("button");b.textContent=s[0];b.oncl
 const sr=$("host").attachShadow({mode:"open"});
 sr.innerHTML=`<style>:host{all:initial;display:block}
 ${RCSS}
-.frame{position:relative;overflow:hidden;box-shadow:0 2px 14px rgba(0,0,0,.35);background:#fff}
-#stage{position:relative;width:1280px;height:720px;transform-origin:0 0}
-#stage.pinmode,#stage.pinmode *{cursor:crosshair}
-#stage a{cursor:pointer}
-.ae-pin{position:absolute;transform:translate(-50%,-50%);width:26px;height:26px;border-radius:50%;background:#d94a38;color:#fff;font:700 13px/22px sans-serif;text-align:center;box-shadow:0 1px 6px rgba(0,0,0,.4);border:2px solid #fff;pointer-events:none;z-index:5}
+/* 报告的 html / body 规则被改写到 :host / #ae-stage 上：只保留文字、颜色、背景这类效果，布局属性一律复位，免得幻灯片被挤偏、裁掉 */
+:host{margin:0!important;padding:0!important;border:0!important;width:auto!important;height:auto!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;position:static!important;inset:auto!important;transform:none!important;zoom:1!important;overflow:visible!important}
+#ae-stage{margin:0!important;padding:0!important;border:0!important;display:block!important;position:relative!important;inset:auto!important;width:1280px!important;height:720px!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;overflow:visible!important;float:none!important;columns:auto!important;zoom:1!important;box-sizing:content-box!important;transform-origin:0 0!important}
+.ae-frame{position:relative;overflow:hidden;box-shadow:0 2px 14px rgba(0,0,0,.35);background:#fff}
+#ae-stage.pinmode,#ae-stage.pinmode *{cursor:crosshair}
+#ae-stage a{cursor:pointer}
+.ae-pin{position:absolute;transform:translate(-50%,-50%);width:var(--ae-pin,26px);height:var(--ae-pin,26px);border-radius:50%;background:#d94a38;color:#fff;font:700 calc(var(--ae-pin,26px)*.5)/1 sans-serif;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 6px rgba(0,0,0,.4);border:calc(var(--ae-pin,26px)*.08) solid #fff;z-index:5;cursor:grab;user-select:none;box-sizing:border-box}
 .ae-pin.done{background:#8a9a90}
-</style><div class="frame" id="frame"><div id="stage"></div></div>`;
-const stage=sr.getElementById("stage"), frame=sr.getElementById("frame");
+.ae-pin.pending{background:#2a78d6}
+.ae-pin.drag{cursor:grabbing;opacity:.85}
+.ae-pin.hl{box-shadow:0 0 0 calc(var(--ae-pin,26px)*.2) rgba(217,74,56,.35),0 1px 6px rgba(0,0,0,.4)}
+.ae-pin.flash{animation:aepin 1.2s ease}
+@keyframes aepin{30%{transform:translate(-50%,-50%) scale(1.4)}}
+#ae-stage.pinmode .ae-pin{pointer-events:none}
+.ae-region{position:absolute;border:calc(var(--ae-pin,26px)*.09) dashed #2a78d6;background:rgba(42,120,214,.08);z-index:4;cursor:move;box-sizing:border-box}
+.ae-region .lbl{position:absolute;left:0;top:0;transform:translateY(-100%);background:#2a78d6;color:#fff;font:700 calc(var(--ae-pin,26px)*.42)/1.5 sans-serif;padding:0 calc(var(--ae-pin,26px)*.25);border-radius:3px 3px 0 0;white-space:nowrap}
+.ae-region.done{border-color:#8a9a90;background:rgba(138,154,144,.08)}.ae-region.done .lbl{background:#8a9a90}
+.ae-region.pending{border-style:solid}
+.ae-region.hl{box-shadow:0 0 0 calc(var(--ae-pin,26px)*.2) rgba(42,120,214,.3)}
+.ae-region.flash{animation:aereg 1.2s ease}
+@keyframes aereg{30%{background:rgba(42,120,214,.3)}}
+#ae-stage.regionmode,#ae-stage.regionmode *{cursor:crosshair}
+#ae-stage.regionmode .ae-pin,#ae-stage.regionmode .ae-region{pointer-events:none}
+</style><div class="ae-frame" id="ae-frame"><div id="ae-stage"></div></div>`;
+const stage=sr.getElementById("ae-stage"), frame=sr.getElementById("ae-frame");
 function fit(){const b=$("slide").getBoundingClientRect();const k=Math.max(.1,Math.min((b.width-24)/1280,(b.height-24)/720));
-  frame.style.width=1280*k+"px";frame.style.height=720*k+"px";stage.style.transform=`scale(${k})`}
+  frame.style.width=1280*k+"px";frame.style.height=720*k+"px";stage.style.transform=`scale(${k})`;
+  stage.style.setProperty("--ae-pin",(24/k).toFixed(1)+"px")}   // 标点在屏幕上始终约 24px，缩小了也好点、好拖
 
 // ---------- 存储：本地服务优先，退回浏览器 ----------
+// 每次改动先记进「待补传」队列再发送（页面中途关闭也不丢），发送时带审阅标识，服务端认错就拒绝写入。
+const REQ_TIMEOUT=8000, MAX_FAILS=3;
+const clip=(s,n)=>Array.from(String(s)).slice(0,n).join("");            // 按字符截断，不切开 emoji
+function wellFormed(v){if(typeof v==="string")return v.toWellFormed?v.toWellFormed():v;
+  if(Array.isArray(v))return v.map(wellFormed);
+  if(v&&typeof v==="object"){const o={};for(const k of Object.keys(v))o[k]=wellFormed(v[k]);return o}return v}
 async function api(method,path,body){
-  const opt={method,cache:"no-store",headers:{}};
-  if(body!==undefined){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(body)}
-  let r;try{r=await fetch(path,opt)}catch(e){throw Object.assign(new Error("连不上本地服务"),{status:0})}
-  let j;try{j=await r.json()}catch(e){j=null}
-  if(!r.ok)throw Object.assign(new Error((j&&j.error)||("HTTP "+r.status)),{status:r.status});
-  if(j===null||typeof j!=="object")throw Object.assign(new Error("应答不是本服务的格式"),{status:0,mismatch:true});
+  const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),REQ_TIMEOUT);
+  const opt={method,cache:"no-store",headers:{"X-AE-Review":RID},signal:ctl.signal};
+  if(body!==undefined){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(wellFormed(body))}
+  let r;
+  try{r=await fetch(path,opt)}
+  catch(e){throw Object.assign(new Error(e&&e.name==="AbortError"?"本地服务没有应答（超时）":"连不上本地服务"),{status:0})}
+  finally{clearTimeout(timer)}
+  let j=null;try{j=await r.json()}catch(e){}
+  const ours=!!j&&typeof j==="object"&&(j.app===APP||(j.doc&&j.doc.app===APP));   // 只认带本服务标记的应答
+  if(!r.ok){
+    // 不是本服务格式的错误（端口上是别的程序），或本服务明确说审阅不匹配：按「服务不匹配」处理，改动留在队列
+    if(!ours||j.code==="review-mismatch")throw Object.assign(new Error("这个地址上的服务不是这份审阅的"),{status:0,mismatch:true});
+    throw Object.assign(new Error(j.error||("HTTP "+r.status)),{status:r.status,code:j.code})}
+  if(!ours)throw Object.assign(new Error("应答不是本服务的格式"),{status:0,mismatch:true});
   return j}
 // 只认同一份审阅的服务：端口被别的审阅目录或别的程序占用时，不读它、不往里写
 const sameReview=d=>!!d&&d.app===APP&&d.reviewId===RID&&Array.isArray(d.notes);
@@ -174,12 +300,21 @@ function mirror(){if(!FILE)return;if(!LS.set(K.notes,notes))toast("浏览器未�
 function setDoc(d){notes=d.notes;rev=d.rev}
 function stamp(x){return Math.max(0,...["updatedAt","resolvedAt","at"].map(k=>Date.parse(x[k]||"")||0))}
 function pinKey(p){return p&&p.x!=null?`${(+p.x).toFixed(1)},${(+p.y).toFixed(1)}`:""}
-function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin)].join("\u0001")}
+function styleKey(st){if(!st||!st.scope)return"";const r=st.region||{};return [st.scope,...["x","y","w","h"].map(k=>(+r[k]||0).toFixed(1))].join(",")}
+function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),styleKey(x.style)].join("\u0001")}
 function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:String(x.title||""),target:String(x.target||""),text:String(x.text||""),
     quote:String(x.quote||""),quoteFrom:String(x.quoteFrom||""),pin:x.pin&&x.pin.x!=null?{x:+x.pin.x,y:+x.pin.y}:null,
     status:x.status==="resolved"?"resolved":"open",at:typeof x.at==="string"?x.at:nowIso()};
   if(n.status==="resolved"){if(x.resolution)n.resolution=String(x.resolution);if(x.resolvedAt)n.resolvedAt=String(x.resolvedAt);if(x.resolvedBy)n.resolvedBy=String(x.resolvedBy)}
-  if(typeof x.updatedAt==="string")n.updatedAt=x.updatedAt;return n}
+  if(typeof x.updatedAt==="string")n.updatedAt=x.updatedAt;
+  const st=x.style;if(st&&["page","region","pin"].includes(st.scope)){if(st.scope!=="region")n.style={scope:st.scope};
+    else if(st.region&&[st.region.x,st.region.y,st.region.w,st.region.h].every(v=>isFinite(+v)))n.style={scope:"region",region:{x:+st.region.x,y:+st.region.y,w:+st.region.w,h:+st.region.h}}}
+  if(typeof x.anchor==="string"&&x.anchor)n.anchor=clip(x.anchor,300);
+  if(typeof x.key==="string"&&x.key)n.key=clip(x.key,120);
+  if(Array.isArray(x.skills)||typeof x.skills==="string"){const sk=parseSkills(Array.isArray(x.skills)?x.skills.join(","):x.skills);if(sk.length)n.skills=sk}
+  const pr=x.pair;if(pr&&(pr.side==="报告"||pr.side==="讲稿")&&String(pr.text||"").trim())n.pair={side:pr.side,text:String(pr.text),match:pr.match==="exact"?"exact":"similar"};
+  const e=x.edit;if(e&&(e.op==="delete"||e.op==="replace")&&String(e.from||"").trim())n.edit=e.op==="delete"?{op:"delete",from:String(e.from)}:{op:"replace",from:String(e.from),to:String(e.to??"")};
+  return n}
 function mergeLocal(items){const byId=new Map(notes.map(x=>[x.id,x])),keys=new Set(notes.map(dedupKey));let added=0,skipped=0,updated=0;
   items.forEach(raw=>{const x=cleanItem(raw);const cur=byId.get(x.id);
     if(cur){if(stamp(x)>stamp(cur)){Object.keys(cur).forEach(k=>delete cur[k]);Object.assign(cur,x);updated++}else skipped++;return}
@@ -187,62 +322,98 @@ function mergeLocal(items){const byId=new Map(notes.map(x=>[x.id,x])),keys=new S
     notes.push(x);byId.set(x.id,x);keys.add(dedupKey(x));added++});
   return{added,skipped,updated}}
 function applyLocal(op){
-  if(op.kind==="add")notes.push(op.note);
+  if(op.kind==="add"){if(!notes.some(x=>x.id===op.note.id))notes.push(op.note)}
   else if(op.kind==="del")notes=notes.filter(x=>x.id!==op.id);
   else if(op.kind==="patch"){const x=notes.find(x=>x.id===op.id);if(x){Object.assign(x,op.body);x.updatedAt=nowIso();
     if(op.body.status==="open"){delete x.resolvedAt;delete x.resolvedBy;delete x.resolution}
     if(op.body.status==="resolved"){x.resolvedAt=nowIso();x.resolvedBy="page"}}}
-  else if(op.kind==="import")return mergeLocal(op.notes)}
+  else if(op.kind==="import")return mergeLocal(op.notes);
+  else if(op.kind==="handoff"){handQueued=true;renderHand()}}
 function send(op){
   if(op.kind==="add")return api("POST","/api/notes",op.note);      // 同 id 重复提交，服务端按已存在处理
   if(op.kind==="patch")return api("PATCH","/api/notes/"+encodeURIComponent(op.id),op.body);
   if(op.kind==="del")return api("DELETE","/api/notes/"+encodeURIComponent(op.id));
-  if(op.kind==="import")return api("POST","/api/notes/import",{notes:op.notes})}
+  if(op.kind==="import")return api("POST","/api/notes/import",{notes:op.notes});
+  if(op.kind==="handoff")return api("POST","/api/handoff",{message:op.message})}
+const pend={get(){const v=LS.get(K.pending,[]);return Array.isArray(v)?v:[]},
+  set(v){if(!LS.set(K.pending,v))toast("浏览器存储已满：这次改动没能暂存，请尽快在「批注」里下载 JSON",6000)},
+  push(op){const v=pend.get();v.push(op);pend.set(v)},remove(id){if(!id)return;pend.set(pend.get().filter(o=>o.opId!==id))}};
+// 0.2 版页面用旧键名暂存改动、且没有操作 id：挪到新队列并补上 id（初始化和每次轮询都检查，旧标签页还开着也不丢）
+function migrateLegacyQueue(){const old=LS.get(K.legacyPending,null);if(!Array.isArray(old)||!old.length)return;
+  const q=pend.get();old.forEach(o=>{if(o&&o.kind){if(!o.opId)o.opId=newId();q.push(o)}});LS.del(K.legacyPending);pend.set(q)}
+const failed={get(){const v=LS.get(K.failed,[]);return Array.isArray(v)?v:[]},
+  push(op,why){const v=failed.get();v.push({op,why,at:nowIso()});LS.set(K.failed,v)},clear(){LS.del(K.failed)}};
 async function mutate(op){
-  const res=applyLocal(op);mirror();refreshList();
-  if(mode==="file")return res;
-  // 未连上，或还有没补传完的改动：排在队尾，保证按顺序到达服务端（例如先新增、后编辑同一条）
-  if(mode!=="server"||pend.get().length){pend.push(op);updateMode();if(mode==="server")setTimeout(poll,50);return res}
+  op.opId=newId();
+  if(FILE){const cur=LS.get(K.notes,[]);notes=Array.isArray(cur)?cur:[];   // 先读最新再改：多个标签页不互相覆盖
+    const res=applyLocal(op);mirror();refreshList();return res}
+  const res=applyLocal(op);refreshList();
+  pend.push(op);updateMode();
+  if(mode==="server")flush();
+  else if(op.kind==="handoff")toast(mode==="mismatch"?"这个地址上的服务不是这份审阅的：提交先暂存":"服务未连接：连上后自动交给 Agent",4000);
+  return res}
+function onSent(op,r){
+  if(op.kind==="handoff"){if(!pend.get().some(o=>o.kind==="handoff"))handQueued=false;setHand(r.handoff);
+    toast(r.merged?"已更新这次提交（Agent 还没接收）":"已交给 Agent，等待接收",3500)}
+  else if(op.kind==="import")toast(`导入完成：新增 ${r.added} 条，更新 ${r.updated||0} 条，跳过重复 ${r.skipped} 条`,3500)}
+function onRejected(op,e){   // 服务明确不接受（4xx）：不重试
+  if(op.kind==="handoff"){handQueued=pend.get().some(o=>o.kind==="handoff");renderHand();
+    toast(e.status===404||e.status===405?"本地服务是旧版本，不支持「交给 Agent」：停掉旧服务后重新运行 serve.py":"没能交给 Agent："+e.message,6000);return}
+  toast("服务未接受这次改动："+e.message,6000);
+  if(op.kind==="add"&&!editOf(op.note)&&op.note.page===P[i].n&&!$("ntext").value.trim()){   // 把内容放回输入框
+    $("ntext").value=op.note.text;quote=op.note.quote||"";quoteFrom=op.note.quoteFrom||"";pendingPin=op.note.pin||null;quotePair=op.note.pair||null;showQuote();drawPins()}}
+const fails={};let flushing=null;
+function flush(){if(FILE)return Promise.resolve();
+  if(!flushing)flushing=(navigator.locks?navigator.locks.request(`ae-flush-${RID}`,doFlush):doFlush()).finally(()=>{flushing=null});
+  return flushing}
+async function doFlush(){   // 按顺序补传；多个标签页之间用浏览器锁排队，按操作 id 移除
   busy++;
-  try{const r=await send(op);
-    if(!sameReview(r.doc))throw Object.assign(new Error("不是这份审阅的服务"),{status:0,mismatch:true});
-    setDoc(r.doc);refreshList();return op.kind==="import"?{added:r.added,skipped:r.skipped,updated:r.updated}:res}
-  catch(e){
-    if(e.status>=400&&e.status<500){   // 服务明确不接受：不重试；新增的批注把内容放回输入框
-      toast("服务未接受这次改动："+e.message,5000);
-      if(op.kind==="add"&&op.note.page===P[i].n&&!$("ntext").value.trim())$("ntext").value=op.note.text;
-      await resync()}
-    else{pend.push(op);
-      if(e.mismatch)mode="mismatch";else if(!e.status)mode="offline";
-      toast(e.status>=500?e.message:(e.mismatch?"这个地址上的服务不是这份审阅的，改动暂存浏览器":"本地服务断开：改动暂存浏览器，恢复后自动补传"),5000)}
-    return res}
+  try{for(;;){   // 补完一轮再对一次服务端；这期间又有新改动进队列就接着补
+    for(let q=pend.get();q.length;q=pend.get()){const op=q[0];
+      if(!op.opId){op.opId=newId();pend.set(q)}   // 兜底：没有操作 id 的条目先补上再发，免得移除时误删别的
+      try{const r=await send(op);
+        if(r&&r.doc&&!sameReview(r.doc))throw Object.assign(new Error("不是这份审阅的服务"),{status:0,mismatch:true});
+        pend.remove(op.opId);delete fails[op.opId];onSent(op,r||{})}
+      catch(e){
+        if(e.mismatch){mode="mismatch";return}
+        if(!e.status){if(mode==="server")toast("本地服务断开：改动暂存浏览器，恢复后自动补传",3500);mode="offline";return}
+        if(e.status>=500){fails[op.opId]=(fails[op.opId]||0)+1;
+          if(fails[op.opId]<MAX_FAILS){toast(e.message,4000);return}
+          failed.push(op,e.message);pend.remove(op.opId);   // 同一条连续失败：移到「未能保存」，不再堵住后面的改动
+          toast("有一项改动多次保存失败，已移到「批注 → 未能保存」，可下载后再导入",6000);continue}
+        pend.remove(op.opId);onRejected(op,e)}}
+    mode="server";await resync();if(!pend.get().length)break}}
   finally{busy--;updateMode()}}
-async function resync(){try{setDoc(await getNotes());refreshList()}catch(e){}}
-async function flush(){
-  let rejected=0;
-  for(let q=pend.get();q.length;q=pend.get()){
-    try{await send(q[0])}
-    catch(e){if(!e.status||e.status>=500)throw e;rejected++}   // 断网或服务端出错：保留，下次再补；4xx：丢弃并提示
-    pend.shift()}
-  if(rejected)toast(`有 ${rejected} 项暂存改动被服务拒绝（批注可能已被删除），已跳过`,5000)}
+async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 function applyServer(d){
+  if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
+  if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
+  if(d.handoff)setHand(d.handoff);else renderHand();
   if(idx0==null)idx0=d.indexMtime;else if(d.indexMtime&&d.indexMtime!==idx0)$("reloadBtn").style.display="inline-block";
-  if(d.rev!==rev){setDoc(d);refreshList()}}
+  if(d.rev!==rev){setDoc(d);pend.get().forEach(op=>{if(op.kind!=="handoff")applyLocal(op)});refreshList()}
+  if(!resumeReady){resumeReady=true;renderResume()}}
 async function poll(){
   if(FILE||document.hidden||busy)return;
-  busy++;
-  try{let d=await getNotes();const was=mode;mode="server";
-    if(pend.get().length){try{await flush()}catch(e){if(!e.status)mode="offline";return}
-      d=await getNotes();toast("已补传暂存的改动")}
-    else if(was==="offline"&&rev!=null)toast("已重新连上本地服务");
-    applyServer(d)}
-  catch(e){if(e.mismatch)mode="mismatch";else if(!e.status){if(mode==="server")toast("本地服务断开：新改动暂存浏览器",3000);mode="offline"}}
-  finally{busy--;updateMode()}}
-function updateMode(){const m=$("mode"),q=pend.get().length;m.className=mode;
-  if(mode==="server"){m.textContent=q?`● 已连接（待补传 ${q}）`:"● 已连接本地服务";m.title="每次改动自动写入审阅目录的 notes.json，Claude 可直接读取"}
-  else if(mode==="offline"){m.textContent=`● 服务未连接${q?`（待补传 ${q}）`:""}`;m.title="新改动暂存在本浏览器；重新运行 serve.py 后会自动补传"}
-  else if(mode==="mismatch"){m.textContent=`● 服务不匹配${q?`（待补传 ${q}）`:""}`;m.title="这个地址上运行的不是这份审阅的服务（端口被别的审阅目录或程序占用）。改动暂存浏览器，用本审阅目录启动 serve.py 后会自动补传"}
-  else{m.textContent="○ 本地文件模式";m.title="批注只存在本浏览器。用「批注 → 复制全部 / 下载」交给 Claude；或运行 serve.py 让批注自动落盘"}}
+  migrateLegacyQueue();
+  let d;busy++;
+  try{d=await getNotes()}
+  catch(e){if(e.mismatch)mode="mismatch";else if(!e.status){if(mode==="server")toast("本地服务断开：新改动暂存浏览器",3000);mode="offline"}
+    updateMode();return}
+  finally{busy--}
+  const was=mode;mode="server";
+  if(pend.get().length){const before=pend.get().length;await flush();if(mode==="server"&&!pend.get().length&&before)toast("已补传暂存的改动");return}
+  if(was==="offline"&&rev!=null)toast("已重新连上本地服务");
+  applyServer(d);updateMode()}
+const MISMATCH_HELP="这个地址上运行的不是这份审阅的服务（端口被别的审阅目录或程序占用），改动先暂存在本页。办法：先停掉占用这个端口的服务，再用本审阅目录启动 serve.py（会回到这个端口）；或在「批注」里下载 JSON，到新地址打开对照页后导入。";
+function updateMode(){const m=$("mode"),q=pend.get().length,f=failed.get().length,extra=(q?`（待补传 ${q}）`:"")+(f?`（未能保存 ${f}）`:"");m.className=mode;
+  if(mode==="server"){m.textContent=extra?`● 已连接${extra}`:"● 已连接本地服务";m.title="每次改动自动写入审阅目录的 notes.json，Agent 可直接读取"}
+  else if(mode==="offline"){m.textContent=`● 服务未连接${extra}`;m.title="新改动暂存在本浏览器；重新运行 serve.py 后会自动补传"}
+  else if(mode==="mismatch"){m.textContent=`● 服务不匹配${extra}`;m.title=MISMATCH_HELP}
+  else{m.textContent="○ 本地文件模式";m.title="批注只存在本浏览器。用「批注 → 复制全部 / 下载」交给 Agent；或运行 serve.py 让批注自动落盘"}
+  const fb=$("dlFailed");if(fb)fb.style.display=f?"":"none"}
+addEventListener("storage",e=>{
+  if(FILE&&e.key===K.notes){const v=LS.get(K.notes,[]);notes=Array.isArray(v)?v:[];refreshList()}   // 别的标签页改了：跟上
+  else if(e.key===K.pending||e.key===K.failed)updateMode()});
 
 // ---------- 旧批注发现（同一浏览器来源下的其他版本；导入需用户确认） ----------
 function foundSets(){const out=[];try{for(let k=0;k<localStorage.length;k++){const key=localStorage.key(k);
@@ -260,58 +431,311 @@ function updateLegacy(){const n=foundSets().filter(s=>s.same).reduce((a,s)=>a+s.
 // ---------- 批注区：列表与输入框分开，刷新列表不碰正在写的内容 ----------
 function pinNo(n,id){return notes.filter(x=>x.page===n&&x.pin).findIndex(x=>x.id===id)+1}
 function drawPins(){stage.querySelectorAll(".ae-pin").forEach(e=>e.remove());
-  const put=(x,y,txt,cls)=>{const d=document.createElement("div");d.className="ae-pin"+(cls?" "+cls:"");d.textContent=txt;d.style.left=x+"%";d.style.top=y+"%";stage.appendChild(d)};
-  notes.filter(x=>x.page===P[i].n&&x.pin).forEach((x,k)=>{if(!(hideDone&&isDone(x)))put(x.pin.x,x.pin.y,k+1,isDone(x)?"done":"")});
-  if(pendingPin)put(pendingPin.x,pendingPin.y,"+","")}
+  const put=(x,y,txt,cls,id,tip)=>{const d=document.createElement("div");d.className="ae-pin"+(cls?" "+cls:"");d.textContent=txt;d.style.left=x+"%";d.style.top=y+"%";
+    d.dataset.id=id||"";d.title=tip||"";stage.appendChild(d)};
+  notes.filter(x=>x.page===P[i].n&&x.pin).forEach((x,k)=>{if(!(hideDone&&isDone(x)))put(x.pin.x,x.pin.y,k+1,isDone(x)?"done":"",x.id,clip(noteSummary(x),80)+"（拖动可移动，点击可编辑）")});
+  if(pendingPin)put(pendingPin.x,pendingPin.y,"+","pending","","新标点：写好意见后点「添加批注」；可拖动，点击可移除");
+  stage.querySelectorAll(".ae-region").forEach(e=>e.remove());
+  const box=(rg,cls,id,label,tip)=>{const d=document.createElement("div");d.className="ae-region"+(cls?" "+cls:"");
+    Object.assign(d.style,{left:rg.x+"%",top:rg.y+"%",width:rg.w+"%",height:rg.h+"%"});d.dataset.id=id||"";d.title=tip||"";
+    const l=document.createElement("span");l.className="lbl";l.textContent=label;d.appendChild(l);stage.appendChild(d)};
+  notes.filter(x=>x.page===P[i].n&&x.style&&x.style.scope==="region"&&x.style.region).forEach((x,k)=>{if(!(hideDone&&isDone(x)))
+    box(x.style.region,isDone(x)?"done":"",x.id,`风格 ${k+1}`,clip(String(x.text||""),80)+"（拖动可移动，点击可编辑）")});
+  if(pendingRegion)box(pendingRegion,"pending","","新区域","新框选的区域：写好风格要求后点「添加批注」；可拖动，点击可移除")}
+function noteSummary(x){const qe=editOf(x);return qe?(qe.op==="delete"?`删除「${qe.from}」`:`「${qe.from}」改为「${qe.to}」`):String(x.text||"")}
+function editOf(x){const e=x.edit;return e&&typeof e==="object"&&(e.op==="delete"||e.op==="replace")?e:null}
 function noteHtml(x){
-  const done=isDone(x), ed=editingId===x.id, id=escH(x.id);
-  const acts=ed?`<button data-act="save" data-id="${id}">保存</button><button data-act="cancel">取消</button>`
+  const done=isDone(x), ed=editingId===x.id, id=escH(x.id), qe=editOf(x);
+  const acts=ed?`<button data-act="save" data-id="${id}">保存</button>${x.pin?`<button data-act="unpin" data-id="${id}">去掉标点</button>`:""}<button data-act="cancel">取消</button>`
     :`<button data-act="edit" data-id="${id}">编辑</button><button data-act="${done?"reopen":"resolve"}" data-id="${id}">${done?"重新打开":"标为已处理"}</button><button data-act="del" data-id="${id}">删除</button>`;
-  return `<div class="note${done?" done":""}" data-note="${id}"><div class="meta"><span>${escH(x.target||"未指定")}${x.pin?` · 标点 ${pinNo(x.page,x.id)}`:""}${done?`<span class="chip">已处理${x.resolvedBy==="claude"?" · Claude":""}</span>`:""}</span><span class="acts">${acts}</span></div>`
-   +(x.quote?`<blockquote>${x.quoteFrom?escH(x.quoteFrom)+"：":""}${escH(x.quote)}</blockquote>`:"")
-   +(ed?`<textarea id="etext">${escH(x.text)}</textarea>`:`<div class="body">${escH(x.text).replace(/\n/g,"<br>")}</div>`)
+  const sk=Array.isArray(x.skills)?x.skills:[];
+  const body=ed?(qe&&qe.op==="delete"?`<div class="body"><span class="op">删除</span><del>${escH(qe.from)}</del></div>`:`<textarea id="etext">${escH(editBuf[x.id]??(qe?qe.to:x.text))}</textarea>`)
+      +`<input class="eskills" id="eskills" list="skillList" autocomplete="off" placeholder="技能（可选，逗号分隔）" value="${escH(editBuf["sk:"+x.id]??sk.join(", "))}">`
+    :qe?(qe.op==="delete"?`<div class="body"><span class="op">删除</span><del>${escH(qe.from)}</del></div>`
+        :`<div class="body"><del>${escH(qe.from)}</del> → <ins>${escH(qe.to)}</ins></div>`)
+    :`<div class="body">${escH(x.text).replace(/\n/g,"<br>")}</div>`;
+  return `<div class="note${done?" done":""}" data-note="${id}"><div class="meta"><span>${escH(x.target||"未指定")}${qe?(qe.op==="delete"?" · 删除":" · 改写"):""}${x.style&&x.style.scope?" · 风格优化·"+escH(STYLE_ZH[x.style.scope]||""):""}${x.pin?` · 标点 ${pinNo(x.page,x.id)}`:""}${done?`<span class="chip">已处理${x.resolvedBy&&x.resolvedBy!=="page"?" · "+escH(x.resolvedBy==="claude"?"Claude":x.resolvedBy):""}</span>`:""}</span><span class="acts">${acts}</span></div>`
+   +(x.quote&&!qe?`<blockquote>${x.quoteFrom?escH(x.quoteFrom)+"：":""}${escH(x.quote)}</blockquote>`:"")
+   +body
+   +(x.orphan?`<div class="anchor" style="color:#a2412f">⚠ 原来所在的页面在新版报告里找不到，页码可能不对：点「编辑」挪到正确的页</div>`:"")
+   +(ed?`<div class="anchor">移到 <select id="epage">${P.map(q=>`<option value="${q.n}"${q.n===x.page?" selected":""}>第 ${q.n} 页</option>`).join("")}</select></div>`:"")
+   +(!ed&&x.anchor?`<div class="anchor">位置：${escH(clip(x.anchor,140))}</div>`:"")
+   +(!ed&&sk.length?`<div class="skills">${sk.map(n=>`<span class="skill" title="处理这条批注时调用的技能">⚙ ${escH(n)}</span>`).join("")}</div>`:"")
+   +(x.pair&&x.pair.text?`<div class="pair">↔ ${escH(x.pair.side)}${x.pair.match==="exact"?"（同一句）":"（相近）"}也要改：${escH(clip(x.pair.text,120))}</div>`:"")
    +(done&&x.resolution?`<div class="res">处理说明：${escH(x.resolution).replace(/\n/g,"<br>")}</div>`:"")+`</div>`}
+// 把正在编辑的那张卡片的内容按它自己的 id 存起来（不能按 editingId：切换编辑对象时它已经变了）
+function stashEdit(){const et=$("etext"),es=$("eskills"),card=(et||es)&&(et||es).closest("[data-note]");if(!card)return;
+  const id=card.dataset.note;if(et)editBuf[id]=et.value;if(es)editBuf["sk:"+id]=es.value}
 function refreshList(force){
   if(!force&&(editingId||composing)){listStale=true;updateCounts();return}   // 正在改某条或正在输入法组字：先不重绘
   listStale=false;
+  stashEdit();
   const mine=notes.filter(x=>x.page===P[i].n), nDone=mine.filter(isDone).length, shown=mine.filter(x=>!(hideDone&&isDone(x)));
-  $("nlist").innerHTML=`<div class="lab"><span>本页批注</span>${nDone?`<button data-act="hide">${hideDone?`显示已处理（${nDone}）`:`隐藏已处理（${nDone}）`}</button>`:""}</div>`
+  $("nhere").textContent=mine.length;
+  $("nlist").innerHTML=`<div class="lab"><span>本页批注${mine.length&&mine.every(isDone)?" · 全部已处理 ✓":""}</span>${nDone?`<button data-act="hide">${hideDone?`显示已处理（${nDone}）`:`隐藏已处理（${nDone}）`}</button>`:""}</div>`
     +(shown.map(noteHtml).join("")||'<p class="empty">暂无批注。</p>');
   drawPins();updateCounts()}
 function updateCounts(){const open=notes.filter(x=>!isDone(x)).length;$("ncount").textContent=open;$("ncount").title=`未处理 ${open} / 共 ${notes.length}`;
-  [...$("jump").options].forEach((o,k)=>{const c=notes.filter(x=>x.page===P[k].n&&!isDone(x)).length;o.textContent=`第 ${P[k].n} 页${c?`（批注 ${c}）`:""}`});updateLegacy()}
-function setPinMode(on){pinMode=on;stage.classList.toggle("pinmode",on);const b=$("pinBtn");b.classList.toggle("on",on);b.textContent=on?"点左侧报告放置标点…":"在报告上标点"}
-function showQuote(){const q=$("qbox");q.style.display=quote?"block":"none";q.innerHTML=quote?`引用（${escH(quoteFrom)}）：${escH(quote)} <a href="#" id="qx">取消</a>`:"";if(quote)$("qx").onclick=e=>{e.preventDefault();quote="";showQuote()}}
-function setQuote(t,from){quote=t.replace(/\s+/g," ").slice(0,300);quoteFrom=from;showQuote();$("ntarget").value=from}
+  [...$("jump").options].forEach((o,k)=>{const mine=notes.filter(x=>x.page===P[k].n),c=mine.filter(x=>!isDone(x)).length;
+    o.textContent=`第 ${P[k].n} 页${c?`（批注 ${c}）`:mine.length?" ✓":""}`});
+  updateLegacy();renderResume()}
+function setPinMode(on){pinMode=on;stage.classList.toggle("pinmode",on);const b=$("pinBtn");b.classList.toggle("on",on);b.innerHTML=(on?"点左侧报告放置标点…":"在报告上标点")+"<kbd>P</kbd>"}
+function showQuote(){const q=$("qbox");q.style.display=quote?"block":"none";
+  q.innerHTML=quote?`引用（${escH(quoteFrom)}）：${escH(quote)}${quotePair?`<br>↔ ${escH(quotePair.side)}对应：${escH(clip(quotePair.text,80))}（同时改）`:""} <a href="#" id="qx">取消</a>`:"";
+  if(quote)$("qx").onclick=e=>{e.preventDefault();quote="";quotePair=null;showQuote()}}
+function setQuote(t,from){quote=clip(t.replace(/\s+/g," "),300);quoteFrom=from;showQuote();$("ntarget").value=from}
 document.addEventListener("compositionstart",()=>{composing=true},true);
 document.addEventListener("compositionend",()=>{composing=false;if(listStale&&!editingId)refreshList()},true);
+// ---------- 选中文字：引用、快捷删除 / 改为 ----------
+function selectedText(e){
+  if(sr.getSelection){const rs=sr.getSelection();if(rs&&rs.anchorNode&&sr.contains(rs.anchorNode)){const t=rs.toString().trim();if(t)return{text:t,from:"报告"}}}
+  else if($("slide").contains(e.target)){const s=getSelection();const t=s?s.toString().trim():"";if(t)return{text:t,from:"报告"}}   // 非 Chromium 浏览器的退路
+  const ws=window.getSelection();const t=ws?ws.toString().trim():"";
+  if(t&&$("pageScript").contains(ws.anchorNode))return{text:t,from:"讲稿"};
+  return null}
+function place(el,x,y){el.style.left="0px";el.style.top="0px";const r=el.getBoundingClientRect();
+  el.style.left=Math.max(8,Math.min(innerWidth-r.width-8,x-r.width/2))+"px";
+  el.style.top=(y+14+r.height>innerHeight-8?Math.max(8,y-r.height-14):y+14)+"px"}
+function showSelbar(){const b=$("selbar");armDelete(false);b.classList.add("on");place(b,sel.x,sel.y)}
+function hideSelbar(){$("selbar").classList.remove("on");$("repbox").classList.remove("on");armDelete(false)}
+function armDelete(on){delArmed=on;const b=$("selbar").querySelector('[data-sel="delete"]');
+  b.innerHTML=on?"确认删除？再按 D 或 ↵":"删除<kbd>D</kbd>";b.style.background=on?"#fde7e3":""}
+function clearSelection(){try{getSelection().removeAllRanges();if(sr.getSelection)sr.getSelection().removeAllRanges()}catch(e){}}
+document.addEventListener("mousedown",e=>{if(!$("selbar").contains(e.target)&&!$("repbox").contains(e.target))hideSelbar();
+  if(!$("pinpop").contains(e.target))closePinPop();
+  if(!$("stylemenu").contains(e.target)&&e.target.id!=="styleBtn"&&!e.target.closest("#styleBtn"))closeStyleMenu()});
 document.addEventListener("mouseup",e=>{
-  let rt="";
-  if(sr.getSelection){const rs=sr.getSelection();if(rs&&rs.anchorNode&&sr.contains(rs.anchorNode))rt=rs.toString().trim()}
-  else if($("slide").contains(e.target)){const s=getSelection();rt=s?s.toString().trim():""}   // 非 Chromium 浏览器的退路
-  if(rt){setQuote(rt,"报告");return}
-  const sel=window.getSelection();const t=sel?sel.toString().trim():"";
-  if(t&&$("pageScript").contains(sel.anchorNode))setQuote(t,"讲稿")});
+  if($("selbar").contains(e.target)||$("repbox").contains(e.target)||pinMode)return;
+  const got=selectedText(e);if(!got)return;
+  setQuote(got.text,got.from);
+  sel={text:got.text.replace(/\s+/g," "),from:got.from,x:e.clientX,y:e.clientY};
+  sel.pair=findCounterpart(sel.text,sel.from);
+  const pr=$("pairRow");pr.classList.toggle("on",!!sel.pair);
+  if(sel.pair){$("pairOn").checked=true;   // 默认同时改：专注一侧时最容易忘的就是另一侧
+    $("pairText").textContent=`${sel.pair.side}这页也有${sel.pair.match==="exact"?"同一句":"相近的句子"}：「${clip(sel.pair.text,46)}${Array.from(sel.pair.text).length>46?"…":""}」同时改`}
+  syncPair();showSelbar()});
+// 报告 ↔ 讲稿对应句：在同一页另一侧找相同或相近的句子（与 scripts/match.py 同一算法）
+const PUNCT={"，":",","。":".","．":".","：":":","；":";","（":"(","）":")","“":'"',"”":'"',"「":'"',"」":'"',"『":'"',"』":'"',"‘":"'","’":"'","％":"%","！":"!","？":"?"};
+const mnorm=s=>String(s).replace(/\s+/g,"").replace(/[，。．：；（）“”「」『』‘’％！？]/g,c=>PUNCT[c]).toLowerCase();
+const mnums=s=>mnorm(s).match(/\d+(?:\.\d+)?(?:%|个百分点|百分点|元|万|亿|倍|家|人|分钟|秒|页|个)?/g)||[];
+function mgrams(s){const t=mnorm(s).replace(/[^\p{L}\p{N}_%.]/gu,"");const o=new Set();for(let k=0;k<t.length-1;k++)o.add(t.slice(k,k+2));return o}
+function sideText(side){return side==="报告"?(stage.innerText||""):($("pageScript").innerText||"")}
+function findCounterpart(text,from){const other=from==="报告"?"讲稿":"报告",hay=sideText(other);if(!text||!hay.trim())return null;
+  const nt=mnorm(text);if(nt.length>=4&&mnorm(hay).includes(nt))return{side:other,text,match:"exact"};
+  const A=mgrams(text),na=mnums(text);if(A.size<2)return null;let best=null;
+  hay.split(/(?<=[。！？!?；;\n])/).map(x=>x.trim()).filter(x=>x.length>=2).forEach(x=>{const B=mgrams(x);let inter=0;A.forEach(g=>{if(B.has(g))inter++});
+    const jac=inter/((A.size+B.size-inter)||1),cover=inter/A.size,sn=mnums(x),shared=na.filter(v=>sn.includes(v)).length;
+    const score=Math.max(jac,cover*.8)+(shared?.15*Math.min(shared,2):0);if(!best||score>best.score)best={score,x}});
+  return best&&best.score>=.45?{side:other,text:clip(best.x,300),match:"similar"}:null}
+function syncPair(){const on=!!(sel&&sel.pair&&$("pairOn").checked);quotePair=on?sel.pair:null;
+  if(sel)$("ntarget").value=on?"报告和讲稿":sel.from;showQuote()}
+$("pairOn").addEventListener("change",syncPair);
+function addEdit(op,to){if(!sel)return;const p=P[i];
+  const edit=op==="delete"?{op,from:sel.text}:{op,from:sel.text,to};
+  const both=!!(sel.pair&&$("pairOn").checked);
+  const note={id:newId(),page:p.n,key:p.stable?p.key:undefined,title:unH(p.title),target:both?"报告和讲稿":sel.from,text:op==="delete"?DEL_TEXT:REP_PREFIX+to,
+    quote:sel.text,quoteFrom:sel.from,pin:null,edit,status:"open",at:nowIso()};
+  if(both)note.pair={side:sel.pair.side,text:sel.pair.text,match:sel.pair.match};
+  hideSelbar();clearSelection();quote="";quotePair=null;showQuote();sel=null;
+  mutate({kind:"add",note});toast(op==="delete"?"已记下：删除这段":"已记下：改写这段")}
+function selAction(a){if(!sel)return;
+  if(a==="delete")addEdit("delete");
+  else if(a==="replace"){const r=$("repbox"),t=$("repText");$("selbar").classList.remove("on");r.classList.add("on");place(r,sel.x,sel.y);
+    t.value=sel.text;t.focus();t.select()}
+  else{hideSelbar();clearSelection();$("ntext").focus()}}
+$("selbar").addEventListener("click",e=>{const b=e.target.closest("[data-sel]");if(b)selAction(b.dataset.sel)});
+function repOk(){const to=$("repText").value.trim();if(!sel)return hideSelbar();
+  if(to===sel.text.trim()){toast("没有改动");return}addEdit("replace",to)}
+$("repOk").onclick=repOk;$("repCancel").onclick=()=>{hideSelbar();sel=null};
+$("repText").addEventListener("keydown",e=>{e.stopPropagation();if(e.isComposing||e.keyCode===229)return;
+  if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();repOk()}else if(e.key==="Escape"){hideSelbar();sel=null}});
 stage.addEventListener("click",e=>{
   const a=e.target.closest("a");if(a&&!pinMode){e.preventDefault();const h=(a.getAttribute("href")||"").replace(/^#/,"");const k=SECT_KEYS.indexOf(h);if(k>=0)go(k);return}
   if(!pinMode)return;e.preventDefault();const r=stage.getBoundingClientRect();
   pendingPin={x:+((e.clientX-r.left)/r.width*100).toFixed(1),y:+((e.clientY-r.top)/r.height*100).toFixed(1)};
   setPinMode(false);drawPins();$("ntext").focus();toast("已放置标点，写完意见点「添加批注」")});
-function addNote(){const text=$("ntext").value.trim();if(!text){toast("先写修改意见");return}
-  const p=P[i];const note={id:newId(),page:p.n,title:unH(p.title),target:$("ntarget").value,text,quote,quoteFrom:quote?quoteFrom:"",pin:pendingPin,status:"open",at:nowIso()};
-  quote="";pendingPin=null;$("ntext").value="";showQuote();delete drafts[p.n];mutate({kind:"add",note});toast("已添加")}
+function addNote(){let text=$("ntext").value.trim();
+  if(styleScope==="pin"&&!pendingPin){toast("先在报告上放一个标点");setPinMode(true);return}
+  if(styleScope==="region"&&!pendingRegion){toast("先在报告上框选区域");setRegionMode(true);return}
+  if(!text&&!styleScope){toast("先写修改意见");return}
+  if(!text)text="风格优化："+STYLE_ZH[styleScope];
+  const p=P[i];const note={id:newId(),page:p.n,key:p.stable?p.key:undefined,title:unH(p.title),target:styleScope?"报告":$("ntarget").value,text,quote,quoteFrom:quote?quoteFrom:"",pin:pendingPin,status:"open",at:nowIso()};
+  if(styleScope)note.style=styleScope==="region"?{scope:"region",region:pendingRegion}:{scope:styleScope};
+  const anc=styleScope==="region"?regionAnchor(pendingRegion):pendingPin?pointAnchor(pendingPin):styleScope==="page"?`第 ${p.n} 页「${unH(p.title)}」整页`:"";
+  if(anc)note.anchor=anc;
+  styleScope=null;pendingRegion=null;updateStyleChip();
+  if(quote&&quotePair)note.pair={side:quotePair.side,text:quotePair.text,match:quotePair.match};
+  const sk=parseSkills($("nskills").value);if(sk.length)note.skills=sk;$("nskills").value="";
+  quote="";quotePair=null;pendingPin=null;$("ntext").value="";autoGrow();showQuote();delete drafts[p.n];SS.set(K.drafts,drafts);mutate({kind:"add",note});toast("已添加")}
 $("script").addEventListener("click",e=>{const b=e.target.closest("[data-act]");if(!b)return;const id=b.dataset.id;
   switch(b.dataset.act){
     case "add":addNote();break;
+    case "seelist":$("nlist").scrollIntoView({block:"start",behavior:"smooth"});break;
     case "pin":setPinMode(!pinMode);break;
+    case "style":openStyleMenu();break;
     case "del":if(confirm("删除这条批注？"))mutate({kind:"del",id});break;
-    case "edit":editingId=id;refreshList(true);$("etext").focus();break;
-    case "cancel":editingId=null;refreshList(true);break;
-    case "save":{const t=$("etext").value.trim();if(!t){toast("批注内容不能为空");return}editingId=null;mutate({kind:"patch",id,body:{text:t}});break}
+    case "edit":{stashEdit();editingId=id;refreshList(true);($("etext")||$("eskills")).focus();break}
+    case "cancel":delete editBuf[editingId];delete editBuf["sk:"+editingId];editingId=null;refreshList(true);break;
+    case "save":{const x=notes.find(n=>n.id===id);if(!x){toast("这条批注已被删除，改动没有保存",4000);editingId=null;refreshList(true);break}
+      const qe=editOf(x),et=$("etext"),t=et?et.value.trim():"",skills=parseSkills($("eskills").value);
+      if(et&&!t&&!qe){toast("批注内容不能为空");return}delete editBuf[id];delete editBuf["sk:"+id];editingId=null;
+      const body=qe&&qe.op==="delete"?{skills}:qe?{edit:{...qe,to:t},text:REP_PREFIX+t,skills}:{text:t,skills};
+      const np=+(($("epage")||{}).value||x.page),pg=P.find(q=>q.n===np);
+      if(pg&&(np!==x.page||x.orphan))Object.assign(body,{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false});   // 挪到别的页（或确认原页）
+      mutate({kind:"patch",id,body});if(body.page&&body.page!==P[i].n)toast(`已移到第 ${body.page} 页`);break}
+    case "unpin":delete editBuf[id];delete editBuf["sk:"+id];editingId=null;mutate({kind:"patch",id,body:{pin:null}});break;
     case "resolve":mutate({kind:"patch",id,body:{status:"resolved"}});break;
     case "reopen":mutate({kind:"patch",id,body:{status:"open"}});break;
     case "hide":hideDone=!hideDone;LS.set(K.hide,hideDone);refreshList(true);break}});
-$("ntext").addEventListener("keydown",e=>{if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)&&!e.isComposing)addNote()});
+function autoGrow(){const t=$("ntext");t.style.height="auto";t.style.height=Math.min(t.scrollHeight+2,innerHeight*.4)+"px"}
+$("ntext").addEventListener("input",()=>{autoGrow();clearTimeout(saveDraft.h);saveDraft.h=setTimeout(saveDraft,400)});
+addEventListener("pagehide",saveDraft);
+$("ntext").addEventListener("keydown",e=>{if(e.isComposing||e.keyCode===229)return;if(e.key==="Enter"&&(e.metaKey||e.ctrlKey))addNote();else if(e.key==="Escape")e.target.blur()});
+$("script").addEventListener("keydown",e=>{if(e.target.id!=="etext"||e.isComposing)return;
+  if(e.key==="Enter"&&(e.metaKey||e.ctrlKey))e.target.closest(".note").querySelector('[data-act="save"]').click();
+  else if(e.key==="Escape")e.target.closest(".note").querySelector('[data-act="cancel"]').click()});
+
+// ---------- 标点：拖动移动、点击弹出操作、与右侧批注互相高亮 ----------
+let drag=null;
+function pinEl(id){return [...stage.querySelectorAll(".ae-pin,.ae-region")].find(p=>p.dataset.id===id)}
+function highlightPin(id){stage.querySelectorAll(".ae-pin,.ae-region").forEach(p=>p.classList.toggle("hl",!!id&&p.dataset.id===id))}
+function flash(el){if(!el)return;el.classList.remove("flash");void el.offsetWidth;el.classList.add("flash")}
+function flashCard(id){const c=$("nlist").querySelector(`[data-note="${CSS.escape(id)}"]`);if(c){c.scrollIntoView({block:"nearest",behavior:"smooth"});flash(c)}}
+function closePinPop(){$("pinpop").classList.remove("on")}
+function openPinPop(id,el){const pop=$("pinpop"),r=el.getBoundingClientRect();
+  if(!id)pop.innerHTML=el.classList.contains("ae-region")
+    ?`<div class="pp-t">新框选的区域：写好风格要求后点「添加批注」。拖动可调整位置。</div><div class="pp-a"><button data-pp="unregion">移除区域</button></div>`
+    :`<div class="pp-t">新标点：写好意见后点「添加批注」。拖动可调整位置。</div><div class="pp-a"><button data-pp="unpend">移除标点</button></div>`;
+  else{const x=notes.find(n=>n.id===id);if(!x)return;const eid=escH(id);
+    pop.innerHTML=`<div class="pp-m">${escH(x.target||"未指定")}${isDone(x)?" · 已处理":""}</div><div class="pp-t">${escH(clip(noteSummary(x),200))}</div>`
+      +`<div class="pp-a"><button data-pp="edit" data-id="${eid}">编辑</button><button data-pp="${isDone(x)?"reopen":"resolve"}" data-id="${eid}">${isDone(x)?"重新打开":"标为已处理"}</button>`
+      +`${x.pin?`<button data-pp="unpin" data-id="${eid}">去掉标点</button>`:""}<button data-pp="del" data-id="${eid}">删除</button><button data-pp="close">关闭</button></div>`;
+    flashCard(id)}
+  pop.classList.add("on");place(pop,r.left+r.width/2,r.top+r.height/2)}
+$("pinpop").addEventListener("click",e=>{const b=e.target.closest("[data-pp]");if(!b)return;const id=b.dataset.id,a=b.dataset.pp;closePinPop();
+  if(a==="unpend"){pendingPin=null;drawPins();saveDraft()}
+  else if(a==="unregion"){pendingRegion=null;if(styleScope==="region")styleScope=null;updateStyleChip();drawPins();saveDraft()}
+  else if(a==="edit"){stashEdit();editingId=id;refreshList(true);flashCard(id);($("etext")||$("eskills")).focus()}
+  else if(a==="resolve"||a==="reopen")mutate({kind:"patch",id,body:{status:a==="resolve"?"resolved":"open"}});
+  else if(a==="unpin")mutate({kind:"patch",id,body:{pin:null}});
+  else if(a==="del"){if(confirm("删除这条批注？"))mutate({kind:"del",id})}});
+function pct(e){const r=stage.getBoundingClientRect();return{x:Math.max(0,Math.min(100,(e.clientX-r.left)/r.width*100)),y:Math.max(0,Math.min(100,(e.clientY-r.top)/r.height*100))}}
+stage.addEventListener("mousedown",e=>{const pin=e.target.closest&&e.target.closest(".ae-pin,.ae-region");if(!pin||pinMode||regionMode||e.button!==0)return;
+  e.preventDefault();e.stopPropagation();closePinPop();
+  const isReg=pin.classList.contains("ae-region"),c=pct(e),rg=isReg?{x:parseFloat(pin.style.left),y:parseFloat(pin.style.top),w:parseFloat(pin.style.width),h:parseFloat(pin.style.height)}:null;
+  drag={id:pin.dataset.id||"",pin,isReg,rg,off:rg?{x:c.x-rg.x,y:c.y-rg.y}:null,x0:e.clientX,y0:e.clientY,moved:false,pos:null};pin.classList.add("drag")});
+addEventListener("mousemove",e=>{
+  if(rdraw){const c=pct(e),x=Math.min(c.x,rdraw.x0),y=Math.min(c.y,rdraw.y0),w=Math.abs(c.x-rdraw.x0),h=Math.abs(c.y-rdraw.y0);
+    Object.assign(rdraw.box.style,{left:x+"%",top:y+"%",width:w+"%",height:h+"%"});rdraw.rg={x:+x.toFixed(1),y:+y.toFixed(1),w:+w.toFixed(1),h:+h.toFixed(1)};return}
+  if(!drag)return;if(Math.abs(e.clientX-drag.x0)+Math.abs(e.clientY-drag.y0)>3)drag.moved=true;if(!drag.moved)return;
+  const c=pct(e);
+  if(drag.isReg){const x=Math.max(0,Math.min(100-drag.rg.w,c.x-drag.off.x)),y=Math.max(0,Math.min(100-drag.rg.h,c.y-drag.off.y));
+    drag.pin.style.left=x+"%";drag.pin.style.top=y+"%";drag.pos={x:+x.toFixed(1),y:+y.toFixed(1),w:drag.rg.w,h:drag.rg.h};return}
+  drag.pin.style.left=c.x+"%";drag.pin.style.top=c.y+"%";drag.pos={x:+c.x.toFixed(1),y:+c.y.toFixed(1)}});
+// 框选区域：在报告上按下拖出一个框
+stage.addEventListener("mousedown",e=>{if(!regionMode||e.button!==0)return;e.preventDefault();e.stopPropagation();
+  const c=pct(e),d=document.createElement("div");d.className="ae-region pending";Object.assign(d.style,{left:c.x+"%",top:c.y+"%",width:"0%",height:"0%"});
+  stage.appendChild(d);rdraw={x0:c.x,y0:c.y,box:d,rg:null}});
+addEventListener("mouseup",e=>{if(!rdraw)return;e.stopPropagation();const d=rdraw;rdraw=null;d.box.remove();setRegionMode(false);
+  if(!d.rg||d.rg.w<1||d.rg.h<1){toast("框太小了，再拖一次（S → 2）");return}
+  pendingRegion=d.rg;styleScope="region";updateStyleChip();drawPins();saveDraft();$("ntext").focus();toast("已框选区域：写下想要的风格（可不写），再添加批注")},true);
+addEventListener("mouseup",e=>{if(!drag)return;e.stopPropagation();   // 不让「选中文字」的处理把旧选区又弹出来
+  const d=drag;drag=null;d.pin.classList.remove("drag");
+  if(d.moved&&d.pos){
+    if(d.isReg){if(d.id){mutate({kind:"patch",id:d.id,body:{style:{scope:"region",region:d.pos}}});toast("区域已移动")}else{pendingRegion=d.pos;saveDraft()}}
+    else if(d.id){mutate({kind:"patch",id:d.id,body:{pin:d.pos}});toast("标点已移动")}else{pendingPin=d.pos;saveDraft()}}
+  else openPinPop(d.id,d.pin)},true);
+stage.addEventListener("mouseover",e=>{const pin=e.target.closest&&e.target.closest(".ae-pin,.ae-region");
+  $("nlist").querySelectorAll(".note.hl").forEach(c=>c.classList.remove("hl"));
+  if(pin&&pin.dataset.id){const c=$("nlist").querySelector(`[data-note="${CSS.escape(pin.dataset.id)}"]`);if(c)c.classList.add("hl")}});
+$("nlist").addEventListener("mouseover",e=>{const c=e.target.closest("[data-note]");highlightPin(c?c.dataset.note:null)});
+$("nlist").addEventListener("mouseleave",()=>highlightPin(null));
+$("nlist").addEventListener("click",e=>{if(e.target.closest("button,textarea,input,a"))return;const c=e.target.closest("[data-note]");if(c)flash(pinEl(c.dataset.note))});
+
+// ---------- 风格优化：范围菜单、框选模式、位置线索 ----------
+function setRegionMode(on){regionMode=on;stage.classList.toggle("regionmode",on);if(on){setPinMode(false);toast("在左侧报告上拖出一个框（Esc 取消）",3000)}}
+function openStyleMenu(){const m=$("stylemenu"),b=$("styleBtn").getBoundingClientRect();m.classList.add("on");place(m,b.left+b.width/2,b.top-m.getBoundingClientRect().height-30)}
+function closeStyleMenu(){$("stylemenu").classList.remove("on")}
+function chooseStyle(scope){closeStyleMenu();
+  if(scope==="region"){setRegionMode(true);return}
+  styleScope=scope;if(scope==="page")pendingRegion=null;
+  if(scope==="pin"&&!pendingPin){setPinMode(true);toast("点左侧报告放一个标点",2500)}
+  updateStyleChip();drawPins();saveDraft();$("ntext").focus()}
+$("stylemenu").addEventListener("click",e=>{const b=e.target.closest("[data-sm]");if(b)chooseStyle(b.dataset.sm)});
+function updateStyleChip(){const c=$("styleChip");
+  if(!styleScope){c.classList.remove("on");c.innerHTML="";$("ntext").placeholder=$("ntext").dataset.ph||$("ntext").placeholder;return}
+  if(!$("ntext").dataset.ph)$("ntext").dataset.ph=$("ntext").placeholder;
+  c.innerHTML=`风格优化 · ${escH(STYLE_ZH[styleScope])}<button title="取消风格优化" aria-label="取消">×</button>`;c.classList.add("on");
+  c.querySelector("button").onclick=()=>{styleScope=null;pendingRegion=null;updateStyleChip();drawPins();saveDraft()};
+  $("ntext").placeholder="想要的风格方向（可不写）：例如更简洁、对齐、配色统一、突出重点……"}
+function describe(el){const tag=el.tagName.toLowerCase(),cls=String(el.getAttribute("class")||"").trim().split(/\s+/)[0];
+  const t=clip(String(el.innerText||el.textContent||"").replace(/\s+/g," ").trim(),40);return `${tag}${cls?"."+cls:""}${t?`「${t}」`:""}`}
+function stageRect(el){const s=stage.getBoundingClientRect(),r=el.getBoundingClientRect();return{x:(r.left-s.left)/s.width*100,y:(r.top-s.top)/s.height*100,w:r.width/s.width*100,h:r.height/s.height*100}}
+function pointAnchor(pt){const s=stage.getBoundingClientRect(),cx=s.left+s.width*pt.x/100,cy=s.top+s.height*pt.y/100;
+  const els=(sr.elementsFromPoint?sr.elementsFromPoint(cx,cy):[]).filter(e=>stage.contains(e)&&e!==stage&&!e.closest(".ae-pin,.ae-region")&&!e.matches("section.page"));
+  return els.length?describe(els[0]):""}
+function regionAnchor(rg){const sec=stage.querySelector("section.page");if(!sec||!rg)return"";const picked=[];
+  sec.querySelectorAll("*").forEach(el=>{if(picked.some(p=>p.contains(el)))return;const r=stageRect(el);if(r.w<=0||r.h<=0)return;
+    const ix=Math.max(0,Math.min(r.x+r.w,rg.x+rg.w)-Math.max(r.x,rg.x)),iy=Math.max(0,Math.min(r.y+r.h,rg.y+rg.h)-Math.max(r.y,rg.y));
+    if(ix*iy>=.6*r.w*r.h)picked.push(el)});
+  const out=picked.filter(el=>String(el.innerText||"").trim()||/^(img|svg|canvas|table|video|picture)$/i.test(el.tagName)).slice(0,6).map(describe);
+  return out.join("；")||pointAnchor({x:rg.x+rg.w/2,y:rg.y+rg.h/2})}
+
+// ---------- 技能输入栏：候选按「最后一个逗号之后」的那一项来给 ----------
+function renderSkillList(){const inp=document.activeElement&&(document.activeElement.id==="eskills"||document.activeElement.id==="nskills")?document.activeElement:$("nskills");
+  const parts=String(inp.value).split(/[,，、;；]/),head=parts.slice(0,-1).map(x=>x.trim()).filter(Boolean),prefix=head.length?head.join(", ")+", ":"";
+  const used=[];notes.forEach(x=>(Array.isArray(x.skills)?x.skills:[]).forEach(n=>{if(!used.includes(n))used.push(n)}));
+  const all=[...skillCatalog.map(c=>({name:c.name,desc:c.desc||""})),...used.filter(n=>!skillCatalog.some(c=>c.name===n)).map(n=>({name:n,desc:"用过"}))];
+  $("skillList").innerHTML=all.filter(c=>!head.includes(c.name)).map(c=>`<option value="${escH(prefix+c.name)}" label="${escH(c.desc)}"></option>`).join("")}
+document.addEventListener("input",e=>{if(e.target.id==="nskills"||e.target.id==="eskills")renderSkillList()});
+document.addEventListener("focusin",e=>{if(e.target.id==="nskills"||e.target.id==="eskills")renderSkillList()});
+$("nskills").addEventListener("keydown",e=>{if(e.isComposing)return;if(e.key==="Enter"&&(e.metaKey||e.ctrlKey))addNote();else if(e.key==="Escape")e.target.blur()});
+
+// ---------- 回到上次：上次批注到哪一页、Agent 处理到哪 ----------
+let resumeOff=false, resumeReady=FILE;   // 服务模式等第一次拿到服务端数据再显示
+// 只看用户自己写、改批注的时间（不算 Agent 标已处理的时间）
+function lastNote(){let best=null;notes.forEach(x=>{const t=Math.max(Date.parse(x.at||"")||0,Date.parse(x.updatedAt||"")||0);if(!best||t>best.t)best={t,x}});return best}
+function fmtTime(t){return t?new Date(t).toLocaleString("zh-CN",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}):""}
+function renderResume(){const el=$("resume");if(resumeOff||!resumeReady){if(el.classList.contains("on")){el.classList.remove("on");fit()}return}
+  const parts=[],ln=lastNote();let go=null;const lost=lostNotes().length;
+  if(lost)parts.push(`⚠ ${lost} 条批注的原页面在新版报告里找不到（在「批注」里挪到正确的页）`);
+  if(ln){parts.push(`上次批注到第 ${ln.x.page} 页（${fmtTime(ln.t)}）`);if(ln.x.page!==P[i].n)go=ln.x.page}
+  if(!FILE){const L=hand&&hand.latest,open=notes.filter(x=>!isDone(x)).length;
+    if(!L){if(notes.length)parts.push(`还没交给 Agent（未处理 ${open} 条）`)}
+    else if(L.status==="pending")parts.push(`第 ${L.seq} 次提交等待 Agent 接收`);
+    else if(L.status==="claimed")parts.push(`Agent 正在处理第 ${L.seq} 次提交（${fmtTime(Date.parse(L.claimedAt||L.at))} 接收）`);
+    else parts.push(`<span class="ok">✓ Agent 已处理完第 ${+L.seq||0} 次提交</span>（${fmtTime(Date.parse(L.doneAt||L.at))}）${L.summary?"："+escH(clip(L.summary,80)):""}；现在未处理 ${open} 条`)}
+  const had=el.classList.contains("on");
+  if(!parts.length){if(had){el.classList.remove("on");fit()}return}
+  $("resumeText").innerHTML=parts.map(t=>t.startsWith("<span")?t:escH(t)).join(" · ");
+  const g=$("resumeGo");g.style.display=go?"":"none";if(go){g.innerHTML=`跳到第 ${+go} 页<kbd>L</kbd>`;g.dataset.page=go}
+  el.classList.add("on");if(!had)fit()}
+function goLast(){const ln=lastNote();if(!ln){toast("还没有批注");return}const k=P.findIndex(p=>p.n===ln.x.page);if(k>=0)go(k)}
+$("resumeGo").onclick=goLast;$("resumeClose").onclick=()=>{resumeOff=true;renderResume()};
+
+// ---------- 交给 Agent ----------
+const HAND_ZH={pending:"等待接收",claimed:"处理中",done:"已处理"};
+function setHand(h){if(!h||h.error)return;const L=h.latest,prev=hand&&hand.latest;
+  if(L&&prev&&prev.seq===L.seq&&prev.status!==L.status){
+    if(L.status==="claimed")toast("Agent 已接收，正在处理",3000);
+    if(L.status==="done")toast(`Agent 已处理完第 ${L.seq} 次提交${L.summary?"："+String(L.summary).slice(0,80):""}`,7000)}
+  hand=h;renderHand();renderResume()}
+function renderHand(){const el=$("handState"),L=hand&&hand.latest;
+  if(handQueued){el.className="queued";el.textContent="交给 Agent（待补传）";el.title="服务连上后自动提交";return}
+  if(!L){el.className="";el.textContent="";el.title="";return}
+  el.className=L.status||"";
+  el.textContent=L.status==="pending"?"已交给 Agent · 等待接收":L.status==="claimed"?`Agent 处理中（第 ${L.seq} 次）`:`Agent 已处理（第 ${L.seq} 次）`;
+  el.title=L.status==="done"?`处理结果：${L.summary||"（未写）"}`:(L.message?`附言：${L.message}`:"")}
+function openHand(){
+  if(FILE){copyAll("本地文件模式连不到 Agent：已复制全部批注，粘贴到对话里交给 Agent");return}
+  const open=notes.filter(x=>!isDone(x)),pages=[...new Set(open.map(x=>x.page))].sort((a,b)=>a-b);
+  $("handInfo").textContent=open.length?`未处理批注 ${open.length} 条，涉及第 ${pages.join("、")} 页。`:"目前没有未处理的批注（也可以只带附言交给 Agent）。";
+  const L=hand&&hand.latest;
+  $("handLast").textContent=L?`上一次：第 ${L.seq} 次提交，${HAND_ZH[L.status]||L.status}${L.status==="done"&&L.summary?"。处理结果："+L.summary:""}`:"";
+  $("hand").classList.add("on");$("handMsg").focus()}
+$("handBtn").onclick=openHand;$("handState").onclick=openHand;
+$("handMsg").addEventListener("keydown",e=>{if(!e.isComposing&&e.key==="Enter"&&(e.metaKey||e.ctrlKey))$("doHand").click();else if(e.key==="Escape")$("hand").classList.remove("on")});
+$("doHand").onclick=()=>{const message=$("handMsg").value.trim();$("hand").classList.remove("on");$("handMsg").value="";mutate({kind:"handoff",message})};
 
 // ---------- 导出 / 导入 ----------
 function exportText(){
@@ -321,7 +745,11 @@ function exportText(){
   pages.forEach(n=>{const t=P.find(p=>p.n===n);o+=`\n## 第 ${n} 页｜${unH(t?t.title:by[n][0].title||"")}\n`;
     by[n].forEach((x,k)=>{o+=`${k+1}. 【${x.target||"未指定"}${x.pin?`·标点 ${pinNo(n,x.id)}（x ${x.pin.x}%，y ${x.pin.y}%）`:""}】${isDone(x)?"【已处理】":""}${String(x.text).replace(/\n/g,"\n   ")}\n`;
       if(x.quote)o+=`   > 引用${x.quoteFrom?`（${x.quoteFrom}）`:""}：${String(x.quote).replace(/\n/g," ")}\n`;
-      if(isDone(x)&&x.resolution)o+=`   处理说明：${String(x.resolution).replace(/\n/g," ")}\n`})});
+      if(isDone(x)&&x.resolution)o+=`   处理说明：${String(x.resolution).replace(/\n/g," ")}\n`;
+      if(x.style&&x.style.scope)o+=`   风格优化：${x.style.scope==="region"&&x.style.region?`区域（x ${x.style.region.x}%，y ${x.style.region.y}%，宽 ${x.style.region.w}%，高 ${x.style.region.h}%）`:x.style.scope==="pin"?"标点处":"整页"}\n`;
+      if(x.anchor)o+=`   位置线索：${String(x.anchor).replace(/\n/g," ")}\n`;
+      if(Array.isArray(x.skills)&&x.skills.length)o+=`   技能：${x.skills.join("、")}\n`;
+      if(x.pair&&x.pair.text)o+=`   ↔ 另一侧（${x.pair.side}·${x.pair.match==="exact"?"相同":"相近"}）：${String(x.pair.text).replace(/\n/g," ")}\n`})});
   return o}
 function parseMd(text){const items=[];let page=null,title="",cur=null;
   text.split(/\r?\n/).forEach(line=>{let m;
@@ -331,8 +759,15 @@ function parseMd(text){const items=[];let page=null,title="",cur=null;
       if(t.startsWith("【已处理】")){st="resolved";t=t.slice(5)}
       cur={page,title,target:m[1],text:t,status:st,pin:m[2]?{x:+m[2],y:+m[3]}:null};items.push(cur);return}
     if(!cur)return;
-    if((m=line.match(/^\s+> 引用(?:（([^）]*)）)?：(.*)$/))){cur.quoteFrom=m[1]||"";cur.quote=m[2];return}
+    if((m=line.match(/^\s+> 引用(?:（([^）]*)）)?：(.*)$/))){cur.quoteFrom=m[1]||"";cur.quote=m[2];
+      if(cur.text===DEL_TEXT)cur.edit={op:"delete",from:cur.quote};
+      else if(cur.text.startsWith(REP_PREFIX))cur.edit={op:"replace",from:cur.quote,to:cur.text.slice(REP_PREFIX.length)};return}
     if((m=line.match(/^\s+处理说明：(.*)$/))){cur.resolution=m[1];return}
+    if((m=line.match(/^\s+技能：(.*)$/))){cur.skills=parseSkills(m[1]);return}
+    if((m=line.match(/^\s+风格优化：(整页|标点处|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$/))){
+      cur.style=m[2]?{scope:"region",region:{x:+m[2],y:+m[3],w:+m[4],h:+m[5]}}:{scope:m[1]==="整页"?"page":"pin"};return}
+    if((m=line.match(/^\s+位置线索：(.*)$/))){cur.anchor=m[1];return}
+    if((m=line.match(/^\s+↔ 另一侧（(报告|讲稿)(?:·(相同|相近))?）：(.*)$/))){cur.pair={side:m[1],match:m[2]==="相同"?"exact":"similar",text:m[3]};return}
     if(line.startsWith("   ")&&line.trim())cur.text+="\n"+line.slice(3)});
   return items}
 function parseImport(text){const s=text.trim();if(!s)return[];
@@ -342,7 +777,8 @@ async function runImport(items,label){
   items=items.filter(x=>x&&+x.page>0&&String(x.text||"").trim()).map(cleanItem);   // 先定好 id，离线补传后与服务端一致
   if(!items.length){toast("没有可导入的批注");return}
   const r=await mutate({kind:"import",notes:items})||{};
-  toast(`${label}：新增 ${r.added??"?"} 条，更新 ${r.updated??0} 条，跳过重复 ${r.skipped??"?"} 条`,3500);
+  if(FILE)toast(`${label}：新增 ${r.added} 条，更新 ${r.updated} 条，跳过重复 ${r.skipped} 条`,3500);
+  else toast(mode==="server"?"正在导入…":"服务未连接：导入先暂存，连上后自动补传",3000);
   updateLegacy();renderFound()}
 function renderFound(){const f=foundSets();
   $("found").innerHTML=f.length?`<p><b>本浏览器里发现以下批注</b>（其他版本或其他稿件，确认是这份稿件的再导入）：</p>`+f.map((s,k)=>`<div class="found"><span>${escH(s.title||"（未记录稿件名）")} · <code>${escH(s.key)}</code> · 新批注 ${s.items.length} 条</span><button data-found="${k}">导入这些</button></div>`).join(""):"";
@@ -354,21 +790,36 @@ $("doImp").onclick=async()=>{let items;try{items=parseImport($("impText").value)
 $("impFile").onchange=async e=>{const f=e.target.files[0];if(!f)return;let items;
   try{items=parseImport(await f.text())}catch(err){toast("无法解析文件："+err.message,3500);return}
   await runImport(items,`已导入 ${f.name}`);e.target.value=""};
-function openAll(){$("allText").textContent=notes.length?exportText():"还没有批注。";$("clearAll").style.display=FILE?"":"none";$("allnotes").classList.add("on")}
-async function copyAll(){const t=exportText();try{await navigator.clipboard.writeText(t)}catch(e){const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove()}toast("已复制，粘贴到对话里发给 Claude")}
+// 原页面已不在新版报告里的批注（重建后标 orphan，或页码已不存在）：在这里挪到正确的页
+function lostNotes(){return notes.filter(x=>x.orphan||!P.some(q=>q.n===x.page))}
+function renderOrphans(){const box=$("orphanBox"),lost=lostNotes();box.style.display=lost.length?"":"none";if(!lost.length){box.innerHTML="";return}
+  const opts=P.map(q=>`<option value="${+q.n}">第 ${+q.n} 页｜${escH(clip(unH(q.title),24))}</option>`).join("");
+  box.innerHTML=`<p><b>${lost.length} 条批注原来所在的页面在新版报告里找不到</b>，请挪到正确的页：</p>`+lost.map(x=>
+    `<div class="found"><span>原第 ${+x.page||"?"} 页${x.key?`（键 ${escH(x.key)}）`:""}：${escH(clip(noteSummary(x),60))}</span><span><select data-mv="${escH(x.id)}">${opts}</select> <button data-mvgo="${escH(x.id)}">挪过去</button></span></div>`).join("");
+  box.querySelectorAll("[data-mvgo]").forEach(b=>b.onclick=()=>{const id=b.dataset.mvgo,sel=box.querySelector(`select[data-mv="${CSS.escape(id)}"]`),pg=P.find(q=>q.n===+sel.value);
+    if(pg){mutate({kind:"patch",id,body:{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false}});toast(`已挪到第 ${pg.n} 页`);setTimeout(renderOrphans,300)}})}
+function openAll(){renderOrphans();$("allText").textContent=notes.length?exportText():"还没有批注。";$("clearAll").style.display=FILE?"":"none";$("allnotes").classList.add("on")}
+async function copyAll(msg){const t=exportText();try{await navigator.clipboard.writeText(t)}catch(e){const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove()}toast(msg||"已复制，粘贴到对话里交给 Agent",msg?5000:2200)}
 function download(name,text,type){const b=new Blob([text],{type});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 const stamp12=()=>new Date().toISOString().slice(0,16).replace(/[-:T]/g,"");
-$("notesBtn").onclick=openAll;$("copyAll").onclick=copyAll;
+$("notesBtn").onclick=openAll;$("copyAll").onclick=()=>copyAll();
 $("dlAll").onclick=()=>download(`批注_${NS}_${stamp12()}.md`,exportText(),"text/markdown;charset=utf-8");
 $("dlJson").onclick=()=>download(`批注_${NS}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:RID,namespace:NS,notes},null,2),"application/json");
+$("dlFailed").onclick=()=>{const f=failed.get();if(!f.length)return;
+  const items=[];f.forEach(x=>{const op=x.op;if(op.kind==="add")items.push(op.note);else if(op.kind==="import")items.push(...op.notes);
+    else if(op.kind==="patch"){const n=notes.find(y=>y.id===op.id);if(n)items.push({...n,...op.body,updatedAt:nowIso()})}});   // 编辑、标已处理：导入时按「更新得更晚」覆盖
+  download(`未能保存_${NS}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:RID,notes:items,ops:f},null,2),"application/json");
+  if(confirm("已下载。要清除这些「未能保存」的记录吗？（下载的文件可在「导入…」里重新导入）")){failed.clear();updateMode()}};
 $("clearAll").onclick=()=>{if(notes.length&&confirm(`清空全部 ${notes.length} 条批注？建议先复制或下载。`)){notes=[];mirror();refreshList(true);openAll()}};
 document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{if(e.target===m||e.target.hasAttribute("data-close"))m.classList.remove("on")}));
 
 // ---------- 翻页（每页的草稿、引用、标点各自保留） ----------
 function saveDraft(){const n=P[i].n,t=$("ntext").value;
-  if(t.trim()||quote||pendingPin)drafts[n]={text:t,target:$("ntarget").value,quote,quoteFrom,pin:pendingPin};else delete drafts[n]}
+  const skv=$("nskills").value;
+  if(t.trim()||quote||pendingPin||skv.trim()||styleScope)drafts[n]={text:t,target:$("ntarget").value,quote,quoteFrom,pin:pendingPin,pair:quotePair,skills:skv,style:styleScope,region:pendingRegion};else delete drafts[n];
+  SS.set(K.drafts,drafts)}
 function loadDraft(){const d=drafts[P[i].n]||{};$("ntext").value=d.text||"";$("ntarget").value=d.target||"报告";
-  quote=d.quote||"";quoteFrom=d.quoteFrom||"";pendingPin=d.pin||null;showQuote()}
+  quote=d.quote||"";quoteFrom=d.quoteFrom||"";pendingPin=d.pin||null;quotePair=d.pair||null;$("nskills").value=d.skills||"";styleScope=d.style||null;pendingRegion=d.region||null;updateStyleChip();showQuote();autoGrow()}
 function render(){
   const p=P[i], s=secOf(p.n);
   stage.innerHTML=SECT[i]; fit();
@@ -380,29 +831,48 @@ function render(){
     <h2>${p.title}</h2>${p.dur?`<span class="dur">${p.dur}</span>`:""}
     ${p.talk?`<div class="lab">讲法</div><div class="talk">${p.talk}</div>`:'<p class="empty">（本页无讲稿）</p>'}
     ${p.next?`<div class="lab">过渡</div><div class="next">${p.next}</div>`:""}${qa}`;
-  editingId=null;setPinMode(false);loadDraft();refreshList(true);$("script").scrollTop=0;
+  stashEdit();
+  editingId=null;setPinMode(false);setRegionMode(false);closeStyleMenu();hideSelbar();closePinPop();sel=null;loadDraft();refreshList(true);$("script").scrollTop=0;
   LS.set(K.page,i+1)}
 function go(k){k=Math.max(0,Math.min(N-1,k));if(k===i)return;saveDraft();i=k;render()}
 $("prev").onclick=()=>go(i-1);$("next").onclick=()=>go(i+1);addEventListener("resize",fit);
 $("jump").onchange=e=>go(+e.target.value);
 $("helpBtn").onclick=()=>$("help").classList.toggle("on");
 document.addEventListener("keydown",e=>{
-  if(["SELECT","TEXTAREA","INPUT"].includes(e.target.tagName)||e.isComposing)return;
+  if(["SELECT","TEXTAREA","INPUT"].includes(e.target.tagName)||e.isComposing||e.metaKey||e.ctrlKey||e.altKey)return;
+  const k=e.key.toLowerCase();
+  if($("stylemenu").classList.contains("on")){   // 风格优化范围：1 整页、2 框选区域、3 标点处
+    if(k==="1"||k==="2"||k==="3"){e.preventDefault();chooseStyle(k==="1"?"page":k==="2"?"region":"pin");return}
+    if(e.key==="Escape"){closeStyleMenu();return}}
+  if($("selbar").classList.contains("on")){   // 刚选中文字：D 删除、R 改为、C 批注
+    if(k==="d"||(delArmed&&e.key==="Enter")){e.preventDefault();if(delArmed)selAction("delete");else armDelete(true);return}
+    if(k==="r"||k==="c"){e.preventDefault();selAction(k==="r"?"replace":"comment");return}
+    if(delArmed&&k.length===1){armDelete(false)}   // 按了别的字母：取消待确认
+    if(k==="b"&&sel&&sel.pair){e.preventDefault();$("pairOn").checked=!$("pairOn").checked;syncPair();return}
+    if(e.key==="Escape"){hideSelbar();sel=null;return}}
+  if(document.querySelector(".modal.on")&&e.key!=="Escape")return;
+  if(k==="a"){e.preventDefault();openHand();return}
+  if(k==="p"){e.preventDefault();setPinMode(!pinMode);return}
+  if(k==="l"){e.preventDefault();goLast();return}
+  if(k==="k"){e.preventDefault();$("nskills").focus();return}
+  if(k==="s"){e.preventDefault();openStyleMenu();return}
+  if(k==="c"){e.preventDefault();$("ntext").focus();return}
   if(e.key==="n"||e.key==="N"){openAll();return}
   if(e.key==="ArrowRight"||e.key==="PageDown"){go(i+1);e.preventDefault()}
   else if(e.key==="ArrowLeft"||e.key==="PageUp"){go(i-1);e.preventDefault()}
   else if(e.key==="Home")go(0);else if(e.key==="End")go(N-1);
   else if(e.key==="h"||e.key==="H")$("help").classList.toggle("on");
-  else if(e.key==="Escape")document.querySelectorAll(".modal").forEach(m=>m.classList.remove("on"))});
+  else if(e.key==="Escape"){document.querySelectorAll(".modal").forEach(m=>m.classList.remove("on"));if(pinMode)setPinMode(false);if(regionMode)setRegionMode(false);closePinPop();closeStyleMenu()}});
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE)poll()});
 
 (async function init(){
   if(FILE){mirror();updateMode();render();return}
   LS.del(K.notes);                      // 服务模式不在浏览器里留整份批注副本
+  migrateLegacyQueue();
   pend.get().forEach(op=>applyLocal(op)); // 先显示还没补传的改动
   updateMode();render();
   await poll();
   if(mode==="offline")toast("没连上本地服务：新批注暂存浏览器。确认 serve.py 在运行",4000);
-  if(mode==="mismatch")toast("这个地址上的服务不是这份审阅的，批注不会写过去。请用本审阅目录启动 serve.py",6000);
+  if(mode==="mismatch")toast(MISMATCH_HELP,9000);
   setInterval(poll,4000)})();
 </script></body></html>
