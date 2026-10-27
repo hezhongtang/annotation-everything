@@ -30,7 +30,21 @@ LOCK_FILE = ".notes.lock"
 SCHEMA_VERSION = 1
 STATUSES = ("open", "resolved")
 # 页面可写的字段；id / at / status 相关字段由存储层或专门操作维护
-EDITABLE = ("page", "title", "target", "text", "quote", "quoteFrom", "pin")
+EDITABLE = ("page", "title", "target", "text", "quote", "quoteFrom", "pin", "edit", "pair", "skills", "style", "anchor",
+            "key", "orphan")
+# key：页面键（报告 section 的 data-key），重排页序后据此把批注挪回正确的页；orphan：重建后原页面已不存在
+# 风格优化：整页 / 框选区域 / 标点处；区域为相对页面的百分比 {x, y, w, h}
+STYLE_SCOPES = ("page", "region", "pin")
+# 处理这条批注时需要调用的技能（skill / 工具名），由用户在页面上指定，代理处理前先调用
+MAX_SKILLS = 10
+SKILLS_FILE = "skills.json"
+# 另一侧的对应句：用户在一侧选中文字时，页面在同一页另一侧找到的相同 / 相近句子，并勾选了「同时改」
+PAIR_SIDES = ("报告", "讲稿")
+PAIR_MATCH = ("exact", "similar")
+# 快捷修改：用户选中原文后直接给出的精确改动（删除 / 改为）。text 里另有一句人能读的说明，旧工具照样能看懂
+EDIT_OPS = ("delete", "replace")
+DELETE_TEXT = "删除引用的这段文字"
+REPLACE_PREFIX = "改为："
 MAX_TEXT = 20_000
 MAX_SHORT = 200
 # id 会进入页面的 HTML 属性和 URL 路径，只允许这几类字符，其余一律重新生成
@@ -122,6 +136,12 @@ def _append_log(review_dir: Path, entry: dict[str, Any]) -> None:
     append_private(review_dir / LOG_FILE, _dumps(entry))
 
 
+def fix_text(v: Any) -> str:
+    """转成字符串并修掉孤立的 UTF-16 代理（半个 emoji 等），否则写盘时会抛 UnicodeEncodeError。"""
+    s = "" if v is None else str(v)
+    return s.encode("utf-8", "surrogatepass").decode("utf-8", "replace") if any("\ud800" <= c <= "\udfff" for c in s) else s
+
+
 def _clean_pin(pin: Any) -> dict[str, float] | None:
     if pin in (None, "", {}):
         return None
@@ -134,6 +154,83 @@ def _clean_pin(pin: Any) -> dict[str, float] | None:
     if not (math.isfinite(x) and math.isfinite(y) and 0 <= x <= 100 and 0 <= y <= 100):
         raise NoteError("pin 坐标须在 0–100 之间")
     return {"x": round(x, 1), "y": round(y, 1)}
+
+
+def _clean_edit(v: Any) -> dict[str, str] | None:
+    if v in (None, "", {}):
+        return None
+    if not isinstance(v, dict) or v.get("op") not in EDIT_OPS:
+        raise NoteError(f"edit.op 须为 {EDIT_OPS} 之一")
+    src = fix_text(v.get("from"))
+    if not src.strip() or len(src) > MAX_TEXT:
+        raise NoteError("edit.from 须为选中的原文（非空）")
+    out = {"op": v["op"], "from": src}
+    if v["op"] == "replace":
+        to = fix_text(v.get("to"))
+        if len(to) > MAX_TEXT:
+            raise NoteError("edit.to 过长")
+        out["to"] = to
+    return out
+
+
+def _clean_pair(v: Any) -> dict[str, str] | None:
+    if v in (None, "", {}):
+        return None
+    if not isinstance(v, dict) or v.get("side") not in PAIR_SIDES:
+        raise NoteError(f"pair.side 须为 {PAIR_SIDES} 之一")
+    text = fix_text(v.get("text"))
+    if not text.strip() or len(text) > MAX_TEXT:
+        raise NoteError("pair.text 须为另一侧的对应文字（非空）")
+    return {"side": v["side"], "text": text, "match": v.get("match") if v.get("match") in PAIR_MATCH else "similar"}
+
+
+def clean_skill_names(v: Any) -> list[str]:
+    """技能名单：接受列表或逗号 / 顿号分隔的字符串；去空白、去重，最多 10 个，每个最长 64 字。"""
+    if v in (None, "", []):
+        return []
+    items = v if isinstance(v, list) else re.split(r"[,，、;；\n]+", str(v))
+    out: list[str] = []
+    for x in items:
+        name = re.sub(r"\s+", " ", fix_text(x)).strip()[:64]
+        if name and name not in out:
+            out.append(name)
+    return out[:MAX_SKILLS]
+
+
+def skills_catalog(review_dir: Path) -> list[dict[str, str]]:
+    """审阅目录里的技能目录（代理写入的可用技能，页面据此给出候选）。读不到就返回空。"""
+    try:
+        doc = json.loads((review_dir / SKILLS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    out = []
+    for it in doc.get("skills", []) if isinstance(doc, dict) else []:
+        if isinstance(it, dict) and str(it.get("name", "")).strip():
+            out.append({"name": fix_text(it["name"]).strip()[:64], "desc": fix_text(it.get("desc", "")).strip()[:120]})
+    return out[:200]
+
+
+def skills_save(review_dir: Path, items: list[dict[str, str]]) -> None:
+    _require_dir(review_dir)
+    _atomic_write(review_dir / SKILLS_FILE, _dumps({"version": 1, "skills": items[:200]}, indent=2) + "\n")
+
+
+def _clean_style(v: Any) -> dict[str, Any] | None:
+    if v in (None, "", {}):
+        return None
+    if not isinstance(v, dict) or v.get("scope") not in STYLE_SCOPES:
+        raise NoteError(f"style.scope 须为 {STYLE_SCOPES} 之一")
+    out: dict[str, Any] = {"scope": v["scope"]}
+    if v["scope"] == "region":
+        r = v.get("region")
+        try:
+            x, y, w, h = (float(r[k]) for k in ("x", "y", "w", "h"))
+        except (TypeError, KeyError, ValueError) as e:
+            raise NoteError("style.region 须含数值 x、y、w、h（百分比）") from e
+        if not all(math.isfinite(t) for t in (x, y, w, h)) or not (0 <= x <= 100 and 0 <= y <= 100 and 0 < w <= 100 and 0 < h <= 100):
+            raise NoteError("style.region 超出页面范围")
+        out["region"] = {"x": round(x, 1), "y": round(y, 1), "w": round(min(w, 100 - x), 1), "h": round(min(h, 100 - y), 1)}
+    return out
 
 
 def _clean_time(v: Any) -> str | None:
@@ -159,11 +256,27 @@ def _clean_fields(data: dict[str, Any], *, partial: bool) -> dict[str, Any]:
                 raise NoteError("page 超出范围")
         elif k == "pin":
             v = _clean_pin(v)
+        elif k == "edit":
+            v = _clean_edit(v)
+        elif k == "pair":
+            v = _clean_pair(v)
+        elif k == "skills":
+            v = clean_skill_names(v)
+        elif k == "style":
+            v = _clean_style(v)
+        elif k == "anchor":
+            v = fix_text(v)[:300]
+        elif k == "key":
+            v = fix_text(v).strip()[:120]
+        elif k == "orphan":
+            v = bool(v)
         else:
-            v = "" if v is None else str(v)
-            limit = MAX_TEXT if k in ("text", "quote") else MAX_SHORT
-            if len(v) > limit:
-                raise NoteError(f"{k} 过长（上限 {limit} 字）")
+            v = fix_text(v)
+            if k in ("text", "quote"):
+                if len(v) > MAX_TEXT:
+                    raise NoteError(f"{k} 过长（上限 {MAX_TEXT} 字）")
+            else:  # 标题、对象等短字段：超长就截断，不拒绝（否则这一页永远加不上批注）
+                v = v[:MAX_SHORT]
         out[k] = v
     if not partial:
         if "page" not in out:
@@ -226,7 +339,15 @@ def update(review_dir: Path, note_id: str, data: dict[str, Any], *, by: str = "p
     with locked(review_dir):
         doc = load(review_dir)
         note = _find(doc, note_id)
+        ed = note.get("edit") if isinstance(note.get("edit"), dict) else None
+        if ed and "text" in fields and "edit" not in fields:   # 旧版页面只改 text：同步到快捷修改的结构上
+            if ed.get("op") == "replace" and fields["text"].startswith(REPLACE_PREFIX):
+                fields["edit"] = {**ed, "to": fields["text"][len(REPLACE_PREFIX):]}
+            elif fields["text"] not in (DELETE_TEXT,) and not fields["text"].startswith(REPLACE_PREFIX):
+                fields["edit"] = None   # 改成了普通意见
         note.update(fields)
+        if note.get("edit") is None:
+            note.pop("edit", None)
         note["updatedAt"] = now_iso()
         return _commit(review_dir, doc, {"op": "update", "by": by, "id": note_id, "fields": fields}), note
 
@@ -242,7 +363,7 @@ def set_status(review_dir: Path, note_id: str, status: str, *, resolution: str =
             note["resolvedAt"] = now_iso()
             note["resolvedBy"] = by
             if resolution:
-                note["resolution"] = resolution[:MAX_TEXT]
+                note["resolution"] = fix_text(resolution)[:MAX_TEXT]
         else:
             for k in ("resolvedAt", "resolvedBy", "resolution"):
                 note.pop(k, None)
@@ -262,8 +383,11 @@ def dedup_key(n: dict[str, Any]) -> tuple:
     """内容相同的判定：页码、对象、正文、引用、标点都相同。同一页不同位置写同样的话不算重复。"""
     pin = n.get("pin") or None
     pin_t = (round(float(pin["x"]), 1), round(float(pin["y"]), 1)) if isinstance(pin, dict) and "x" in pin else None
+    st = n.get("style") if isinstance(n.get("style"), dict) else {}
+    rg = st.get("region") if isinstance(st.get("region"), dict) else {}
+    st_t = (st.get("scope"), *(round(float(rg.get(k, 0) or 0), 1) for k in ("x", "y", "w", "h"))) if st else None
     return (int(n.get("page", 0)), str(n.get("target", "")).strip(), str(n.get("text", "")).strip(),
-            str(n.get("quote", "")).strip(), pin_t)
+            str(n.get("quote", "")).strip(), pin_t, st_t)
 
 
 def _stamp(n: dict[str, Any]) -> float:
@@ -322,3 +446,145 @@ def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "im
         if added or updated:
             doc = _commit(review_dir, doc, {"op": "import", "by": by, "added": added, "updated": updated, "skipped": skipped})
         return doc, added, skipped, updated
+
+
+# ---------- 交给 Agent：提交记录 ----------
+# 批注是具体修改意见（随写随存）；「提交」是用户表示「这一批好了，交给代理处理」的信号。
+# 提交存 handoff.json，状态 pending（等待接收）→ claimed（代理已接收、处理中）→ done（已处理）。
+# 任何代理都可以：跑 notes.py wait 阻塞等待，或自己轮询 handoff.json。
+HANDOFF_FILE = "handoff.json"
+HANDOFF_KEEP = 50
+MAX_MSG = 4000
+
+
+def handoff_load(review_dir: Path) -> dict[str, Any]:
+    path = review_dir / HANDOFF_FILE
+    if not path.exists():
+        return {"version": 1, "seq": 0, "items": []}
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(doc, dict) or not isinstance(doc.get("items"), list):
+        raise ValueError(f"{path} 结构不对：缺少 items 列表")
+    doc.setdefault("seq", max((int(i.get("seq", 0)) for i in doc["items"]), default=0))
+    return doc
+
+
+def _handoff_commit(review_dir: Path, doc: dict[str, Any], log: dict[str, Any]) -> dict[str, Any]:
+    doc["version"] = 1
+    doc["updatedAt"] = now_iso()
+    doc["items"] = doc["items"][-HANDOFF_KEEP:]
+    _atomic_write(review_dir / HANDOFF_FILE, _dumps(doc, indent=2) + "\n")
+    _append_log(review_dir, {"ts": doc["updatedAt"], **log})
+    return doc
+
+
+def handoff_state(review_dir: Path) -> dict[str, Any]:
+    """给页面和 status 用的摘要：最近一次提交（不含批注 id 清单）与各状态计数。"""
+    try:
+        doc = handoff_load(review_dir)
+    except ValueError:
+        return {"error": "handoff.json 无法解析"}
+    items = doc["items"]
+    latest = dict(items[-1]) if items else None
+    if latest:
+        latest.pop("openIds", None)
+    return {"latest": latest, "pending": sum(i.get("status") == "pending" for i in items),
+            "claimed": sum(i.get("status") == "claimed" for i in items)}
+
+
+def handoff_submit(review_dir: Path, message: str = "", *, by: str = "page") -> tuple[dict[str, Any], dict[str, Any], bool]:
+    """记一次提交，快照当时的未处理批注。上一次提交还没被代理接收时合并进去（刷新快照与附言），不重复排队。"""
+    message = fix_text(message)[:MAX_MSG]
+    with locked(review_dir):
+        notes = [n for n in load(review_dir)["notes"] if n.get("status") != "resolved"]
+        doc = handoff_load(review_dir)
+        snap = {"at": now_iso(), "by": by, "message": message, "openCount": len(notes),
+                "openIds": [n.get("id") for n in notes],
+                "pages": sorted({int(n.get("page", 0) or 0) for n in notes})}
+        latest = doc["items"][-1] if doc["items"] else None
+        if latest and latest.get("status") == "pending":
+            latest.update(snap)
+            latest["updates"] = int(latest.get("updates", 0)) + 1
+            item, merged = latest, True
+        else:
+            doc["seq"] = int(doc.get("seq", 0)) + 1
+            item, merged = {"seq": doc["seq"], "status": "pending", **snap}, False
+            doc["items"].append(item)
+        _handoff_commit(review_dir, doc, {"op": "handoff-update" if merged else "handoff", "by": by,
+                                          "seq": item["seq"], "openCount": item["openCount"]})
+        return doc, item, merged
+
+
+def handoff_claim(review_dir: Path, *, by: str = "agent") -> dict[str, Any] | None:
+    """代理接收最早一个等待中的提交（状态改为处理中）；没有则返回 None。"""
+    with locked(review_dir):
+        doc = handoff_load(review_dir)
+        item = next((i for i in doc["items"] if i.get("status") == "pending"), None)
+        if item is None:
+            return None
+        item.update({"status": "claimed", "claimedAt": now_iso(), "claimedBy": by})
+        _handoff_commit(review_dir, doc, {"op": "handoff-claim", "by": by, "seq": item["seq"]})
+        return item
+
+
+def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "", by: str = "agent") -> dict[str, Any]:
+    """标记提交已处理。不给 seq 时取最近一个处理中的，没有就取最近一个等待中的。"""
+    with locked(review_dir):
+        doc = handoff_load(review_dir)
+        items = doc["items"]
+        if seq is not None:
+            item = next((i for i in items if int(i.get("seq", 0)) == seq), None)
+        else:
+            item = next((i for i in reversed(items) if i.get("status") == "claimed"), None) or \
+                   next((i for i in reversed(items) if i.get("status") == "pending"), None)
+        if item is None:
+            raise NotFound(f"handoff#{seq}" if seq is not None else "没有待处理的提交")
+        item.update({"status": "done", "doneAt": now_iso(), "doneBy": by, "summary": fix_text(summary)[:MAX_MSG]})
+        _handoff_commit(review_dir, doc, {"op": "handoff-done", "by": by, "seq": item["seq"]})
+        return item
+
+
+# ---------- 重排页序后按页面键校正页码 ----------
+def remap_pages(review_dir: Path, old_keys: dict[int, str], new_pages: dict[str, int], new_titles: dict[int, str],
+                ambiguous: set[str] | None = None) -> dict[str, Any]:
+    """生成对照页时调用：old_keys 是上一版 review.json 的「页码 → 键」，new_pages 是新版的「键 → 页码」。
+
+    - 没有 key 的旧批注，按上一版的页码补上 key（批注是对着上一版写的）；
+    - 有 key 且新版里还在：页码改成新页码；
+    - key 在新版里找不到：标 orphan，页码不动，等用户或代理确认。
+    返回 {"moved": [...], "orphans": [...], "keyed": n}。
+    """
+    ambiguous = ambiguous or set()
+    result: dict[str, Any] = {"moved": [], "orphans": [], "keyed": 0}
+    if not (review_dir / NOTES_FILE).exists():
+        return result
+    with locked(review_dir):
+        doc = load(review_dir)
+        changed = False
+        for n in doc["notes"]:
+            page = int(n.get("page", 0) or 0)
+            if not n.get("key") and page in old_keys:
+                n["key"] = old_keys[page]
+                result["keyed"] += 1
+                changed = True
+            key = n.get("key")
+            # 重复的键、由页码生成的键（p3、page-3）都不能用来找回原页：保持不动
+            if not key or key in ambiguous or re.fullmatch(r"(?:p|page)?[-_]?\d+", str(key), re.I):
+                continue
+            if key in new_pages:
+                if new_pages[key] != page:
+                    result["moved"].append({"id": n.get("id"), "from": page, "to": new_pages[key], "key": key})
+                    n["page"] = new_pages[key]
+                    n["title"] = new_titles.get(new_pages[key], n.get("title", ""))
+                    changed = True
+                if n.pop("orphan", None):
+                    changed = True
+            elif not n.get("orphan"):
+                n["orphan"] = True
+                result["orphans"].append({"id": n.get("id"), "page": page, "key": key})
+                changed = True
+            else:
+                result["orphans"].append({"id": n.get("id"), "page": page, "key": key})
+        if changed:
+            _commit(review_dir, doc, {"op": "remap", "by": "build", "moved": len(result["moved"]),
+                                      "orphans": len(result["orphans"]), "keyed": result["keyed"]})
+    return result
