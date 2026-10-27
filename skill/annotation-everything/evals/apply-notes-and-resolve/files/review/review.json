@@ -1,0 +1,67 @@
+{
+  "app": "annotation-everything",
+  "kind": "deck",
+  "reviewId": "a7ae86f390df8d82",
+  "title": "示例咖啡 2030 年三季度经营回顾",
+  "namespace": "review",
+  "sources": {
+    "report": "../report.html",
+    "script": "../script.md"
+  },
+  "build": {
+    "title": null,
+    "sections": null,
+    "noSections": false,
+    "lenient": false
+  },
+  "sections": [
+    [
+      "开篇 结论与收入",
+      3,
+      4
+    ],
+    [
+      "主线 成本与下一步",
+      5,
+      6
+    ]
+  ],
+  "pages": [
+    {
+      "n": 1,
+      "key": "cover",
+      "title": "封面",
+      "section": ""
+    },
+    {
+      "n": 2,
+      "key": "toc",
+      "title": "目录",
+      "section": ""
+    },
+    {
+      "n": 3,
+      "key": "sum",
+      "title": "结论：三季度收入同比增长 12%",
+      "section": "开篇 结论与收入"
+    },
+    {
+      "n": 4,
+      "key": "rev",
+      "title": "收入结构：外卖占比升至 38%",
+      "section": "开篇 结论与收入"
+    },
+    {
+      "n": 5,
+      "key": "cost",
+      "title": "成本：咖啡豆采购价上涨 9%",
+      "section": "主线 成本与下一步"
+    },
+    {
+      "n": 6,
+      "key": "next",
+      "title": "下一步：四季度三件事",
+      "section": "主线 成本与下一步"
+    }
+  ]
+}
