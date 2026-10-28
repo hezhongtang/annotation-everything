@@ -319,6 +319,335 @@ class BatchTests(unittest.TestCase):
         self.assertIn("处理记录：共 2 批", run("show", str(self.d)).stdout)
 
 
+class TwoStageTests(unittest.TestCase):
+    """先改后审：一批分初改、复核两段；批注有「已初改·待复核」状态与只追加的处理痕迹。"""
+
+    def setUp(self):
+        self.d = tmpdir()
+        build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", self.d)
+        self.ids = [store.add(self.d, {"page": k, "target": "报告", "text": f"第 {k} 页意见"})[1]["id"] for k in (2, 3, 4)]
+
+    def note(self, nid):
+        return next(n for n in store.load(self.d)["notes"] if n["id"] == nid)
+
+    def test_stop_at_draft_then_review_with_three_verdicts(self):
+        a, b, c = self.ids
+        _h, item, _m = store.handoff_submit(self.d, "先改", target="review")
+        self.assertEqual(set(store.handoff_state(self.d, full=False)["inFlightIds"]), set(self.ids), "交给 Agent 后都算处理中")
+        self.assertEqual(store.handoff_claim(self.d, by="sonnet-初改")["stage"], "draft")
+        store.set_status(self.d, a, "resolved", resolution="标题改短", by="sonnet-初改")
+        store.set_status(self.d, b, "resolved", resolution="数字改了", by="sonnet-初改")
+        na = self.note(a)
+        self.assertEqual((na["status"], na["draftBatch"], na["resolution"], na["trail"][-1]["action"]), ("drafted", 1, "标题改短", "drafted"))
+        with self.assertRaises(store.NoteError):
+            store.handoff_done(self.d, mode="final", by="sonnet-初改")   # 用户要求停在待复核
+        done = store.handoff_done(self.d, summary="初改 2 条", by="sonnet-初改")
+        self.assertEqual((done["status"], done["draftedCount"]), ("drafted", 2))
+        self.assertEqual(store.handoff_state(self.d, full=False)["inFlightIds"], [], "停在待复核：不再算处理中")
+        self.assertIsNone(store.handoff_claim(self.d, stage="review"), "用户没请求复核前，复核者接不到")
+        store.handoff_request_review(self.d, 1, "重点看第 3 页")
+        got = store.handoff_claim(self.d, by="opus-复核", stage="review")
+        self.assertEqual((got["stage"], got["status"], got["reviewMessage"]), ("review", "reviewing", "重点看第 3 页"))
+        store.review(self.d, a, "ok", by="opus-复核")
+        with self.assertRaises(store.NoteError):
+            store.review(self.d, b, "revise", by="opus-复核")          # 再改要写理由
+        with self.assertRaises(store.Unreviewed):
+            store.handoff_done(self.d, by="opus-复核")                # b 还没给结论
+        store.review(self.d, b, "return", note="口径二选一，需要用户定", by="opus-复核")
+        with self.assertRaises(store.NoteError):
+            store.review(self.d, c, "ok", by="opus-复核")             # c 初改没动，没有可复核的
+        store.set_status(self.d, c, "resolved", resolution="复核者接手处理", by="opus-复核")
+        fin = store.handoff_done(self.d, summary="通过 1、退回 1、新处理 1", by="opus-复核")
+        self.assertEqual(fin["status"], "done")
+        rv = [e for e in fin["stages"] if e["stage"] == "review"][0]
+        self.assertEqual((rv["approved"], rv["returned"], rv["resolved"], rv["by"]), (1, 1, 1, "opus-复核"))
+        self.assertEqual(sorted(fin["resolvedIds"]), sorted([a, c]))
+        nb = self.note(b)
+        self.assertEqual((nb["status"], [e["action"] for e in nb["trail"]]), ("open", ["drafted", "returned"]))
+        self.assertNotIn("draftBatch", nb)
+        self.assertEqual([e["action"] for e in self.note(a)["trail"]], ["drafted", "approved"])
+        self.assertEqual(self.note(a)["resolution"], "标题改短", "复核通过保留初改说明")
+
+    def test_user_finalizes_draft_and_page_accepts(self):
+        a, b, _c = self.ids
+        store.handoff_submit(self.d, "", target="review")
+        store.handoff_claim(self.d, by="claude")
+        store.set_status(self.d, a, "resolved", by="claude")
+        store.set_status(self.d, b, "resolved", by="claude")
+        store.handoff_done(self.d, by="claude")
+        store.set_status(self.d, b, "resolved", by="page")             # 页面上单条「定稿」
+        self.assertEqual(self.note(b)["trail"][-1]["action"], "accepted")
+        item = store.handoff_finalize(self.d, 1)
+        self.assertEqual((item["status"], item["stages"][-1]["stage"], item["stages"][-1]["count"]), ("done", "accept", 1))
+        self.assertEqual((self.note(a)["status"], self.note(a)["trail"][-1]["action"]), ("resolved", "accepted"))
+        with self.assertRaises(store.NoteError):
+            store.handoff_finalize(self.d, 1)
+
+    def test_subagent_relay_and_single_stage_rules(self):
+        a, b, _c = self.ids
+        store.handoff_submit(self.d, "", target="final", allow_subagents=False)
+        store.handoff_claim(self.d)
+        store.set_status(self.d, a, "resolved", by="claude")
+        self.assertEqual(self.note(a)["status"], "resolved", "单段流程：直接已处理（和以前一样）")
+        with self.assertRaises(store.NoteError):
+            store.handoff_done(self.d, mode="draft")                   # 没允许子代理，不能转给复核
+        store.handoff_done(self.d)
+        # 允许子代理、做到定稿：初改记为待复核，done --draft 进入等待复核，复核后定稿
+        store.handoff_submit(self.d, "", target="final", allow_subagents=True)
+        store.handoff_claim(self.d, by="claude")
+        store.set_status(self.d, b, "resolved", by="sonnet-初改")
+        self.assertEqual(self.note(b)["status"], "drafted")
+        self.assertEqual(store.handoff_done(self.d, mode="draft", by="claude")["status"], "review", "直接进入等待复核")
+        store.handoff_claim(self.d, by="opus-复核", stage="review")
+        store.review(self.d, b, "revise", note="再收短", by="opus-复核")
+        self.assertEqual(store.handoff_done(self.d, by="claude")["status"], "done")
+        self.assertEqual((self.note(b)["resolution"], self.note(b)["resolvedBy"]), ("再收短", "opus-复核"))
+        # 允许子代理但主代理自己做完：done 默认定稿，初改转已处理并记「定稿」
+        _c2 = store.add(self.d, {"page": 5, "text": "再来一条"})[1]["id"]
+        store.handoff_submit(self.d, "", allow_subagents=True)
+        store.handoff_claim(self.d)
+        store.set_status(self.d, _c2, "resolved", by="claude")
+        store.handoff_done(self.d)
+        self.assertEqual((self.note(_c2)["status"], self.note(_c2)["trail"][-1]["action"]), ("resolved", "finalized"))
+
+    def test_cli_wait_snapshot_diff_review_show(self):
+        a, b, _c = self.ids
+        run = lambda *x: subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *x], capture_output=True, text=True,
+                                        env={**os.environ, "CLAUDECODE": ""}, timeout=30)
+        store.handoff_submit(self.d, "先改第 3 页", target="review")
+        out = run("wait", str(self.d), "--timeout", "5").stdout
+        self.assertIn("要求：做到「已初改·待复核」后停下等用户；不允许派发子代理", out)
+        self.assertIn("允许派发子代理：否——由你（当前会话的主代理）亲自处理", out)
+        base = self.d / ".snapshots" / "batch-1" / "base"
+        self.assertTrue((base / "report").is_file() and (base / "script").is_file(), "接收初改时存了源文件快照")
+        self.assertEqual((base / "report").stat().st_mode & 0o777, 0o600)
+        self.assertEqual(base.stat().st_mode & 0o777, 0o700)
+        src = FIXTURE / "report.html"
+        work = Path(json.loads((self.d / "review.json").read_text())["sourcesAbs"]["report"])
+        self.assertEqual(work, src.resolve())   # 夹具源文件：改它会污染仓库，改用临时副本
+        tmp_src = tmpdir() / "r.html"
+        tmp_src.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        man = json.loads((self.d / "review.json").read_text())
+        man["sources"]["report"], man["sourcesAbs"]["report"] = str(tmp_src), str(tmp_src)
+        (self.d / "review.json").write_text(json.dumps(man), encoding="utf-8")
+        run("claim", str(self.d))   # 已接收，无事发生
+        before = (base / "report").read_text(encoding="utf-8")
+        tmp_src.write_text(before.replace("外卖占比升至 38%", "外卖占比升到 38%"), encoding="utf-8")
+        self.assertIn("→ 已初改·待复核", run("resolve", str(self.d), b, "--note", "措辞").stdout)
+        r = run("done", str(self.d), "--summary", "初改 1 条")
+        self.assertIn("按用户要求停在这里", r.stdout)
+        self.assertTrue((self.d / ".snapshots" / "batch-1" / "draft" / "report").is_file())
+        dout = run("diff", str(self.d)).stdout
+        self.assertIn("## 报告 · 第 4 页（键 rev）", dout)
+        self.assertIn("+", dout)
+        self.assertIn("升到 38%", dout)
+        self.assertNotIn("第 2 页", dout, "只列有改动的页")
+        show = run("show", str(self.d), "--batch", "1").stdout
+        self.assertIn("【已初改·待复核】", show)
+        self.assertIn("初改说明：措辞", show)
+        self.assertIn("痕迹：初改（agent·第 1 批）：措辞", show)
+        store.handoff_request_review(self.d, 1, "看看措辞")
+        out = run("wait", str(self.d), "--timeout", "5", "--stage", "review", "--by", "opus").stdout
+        self.assertIn("# 收到复核请求：第 1 批", out)
+        self.assertIn("用户附言（请求复核时）：看看措辞", out)
+        self.assertIn("notes.py review", out)
+        r = run("review", str(self.d), b, "--return", "--note", "要你定")
+        self.assertIn("退回给用户", r.stdout)
+        self.assertEqual(run("review", str(self.d), a, "--revise").returncode, 1, "未处理过的批注没有可复核的改动：拒绝")
+        bt = run("batches", str(self.d)).stdout
+        self.assertIn("复核：opus 接收", bt)
+        self.assertIn("初改：agent 接收", bt)
+
+    def test_server_endpoints(self):
+        srv = serve.ReviewServer(self.d, 0, log_to_file=False)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        h = {"Host": f"127.0.0.1:{srv.port}", "Origin": f"http://127.0.0.1:{srv.port}", "Content-Type": "application/json"}
+        try:
+            s, _, b = serve._req(srv.port, "POST", "/api/handoff", h, {"message": "x", "target": "review", "allowSubagents": True})
+            item = json.loads((self.d / store.HANDOFF_FILE).read_text())["items"][-1]
+            self.assertEqual((s, item["target"], item["allowSubagents"]), (200, "review", True))
+            self.assertEqual(sorted(json.loads(b)["handoff"]["inFlightIds"]), sorted(self.ids))
+            s, _, _ = serve._req(srv.port, "POST", "/api/handoff", h, {"target": "everything"})
+            self.assertEqual(s, 400)
+            store.handoff_claim(self.d)
+            store.set_status(self.d, self.ids[0], "resolved", by="claude")
+            store.handoff_done(self.d)
+            s, _, _ = serve._req(srv.port, "POST", "/api/handoff/review", h, {"seq": "1"})
+            self.assertEqual(s, 400, "seq 须为整数")
+            s, _, _ = serve._req(srv.port, "POST", "/api/handoff/review", {**h, "Origin": "http://evil.example"}, {"seq": 1})
+            self.assertEqual(s, 403)
+            s, _, b = serve._req(srv.port, "POST", "/api/handoff/review", h, {"seq": 1, "message": "复核吧"})
+            self.assertEqual((s, json.loads(b)["status"]), (200, "review"))
+            s, _, b = serve._req(srv.port, "POST", "/api/handoff/finalize", h, {"seq": 1})
+            self.assertEqual((s, json.loads(b)["status"]), (200, "done"))
+            s, _, _ = serve._req(srv.port, "POST", "/api/handoff/finalize", h, {"seq": 1})
+            self.assertEqual(s, 400, "已定稿的批次不能再定稿")
+            s, _, _ = serve._req(srv.port, "POST", "/api/handoff/finalize", h, {"seq": 99})
+            self.assertEqual(s, 404)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+
+class MultiBatchTests(unittest.TestCase):
+    """独立审查（v0.5）发现的问题：多批在途时按批注归属记账、停点不被绕过、复核范围、导入保留初改。"""
+
+    def setUp(self):
+        self.d = tmpdir()
+        build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", self.d)
+
+    def add(self, k):
+        return store.add(self.d, {"page": k, "target": "报告", "text": f"第 {k} 页"})[1]["id"]
+
+    def note(self, nid):
+        return next(n for n in store.load(self.d)["notes"] if n["id"] == nid)
+
+    def test_parallel_batches_attribute_by_note(self):
+        a, b = self.add(2), self.add(3)
+        store.handoff_submit(self.d, "", target="review")                     # 第 1 批：a、b
+        store.handoff_claim(self.d, by="A")
+        store.set_status(self.d, a, "resolved", by="A")
+        store.handoff_done(self.d, by="A")                                   # a 已初改，b 没动
+        store.handoff_request_review(self.d, 1)
+        c = self.add(4)
+        store.handoff_submit(self.d, "")                                     # 第 2 批：b、c
+        self.assertEqual(store.handoff_claim(self.d, by="A2", stage="draft")["seq"], 2)
+        self.assertEqual(store.handoff_claim(self.d, by="B", stage="review")["seq"], 1)
+        store.review(self.d, a, "ok", by="B")
+        store.set_status(self.d, b, "resolved", by="B")                      # b 在两批里：复核中的第 1 批优先
+        nb = self.note(b)
+        self.assertEqual((nb["status"], nb["resolvedBatch"], nb["trail"][-1]["stage"]), ("resolved", 1, "review"))
+        store.set_status(self.d, c, "resolved", by="A2")
+        self.assertEqual(self.note(c)["resolvedBatch"], 2)
+        with self.assertRaises(store.NoteError) as cm:
+            store.handoff_done(self.d, by="B")                               # 两批都在处理：不许猜
+        self.assertIn("--seq", str(cm.exception))
+        self.assertEqual(store.handoff_done(self.d, seq=1, by="B")["resolvedIds"], [a, b])
+        self.assertEqual(store.handoff_done(self.d, seq=2, by="A2")["resolvedIds"], [c])
+
+    def test_relay_with_seq_and_unreviewed_names_batch(self):
+        a, b = self.add(2), self.add(3)
+        store.handoff_submit(self.d, "", target="review")
+        store.handoff_claim(self.d)
+        store.set_status(self.d, a, "resolved", by="A")
+        store.handoff_done(self.d)
+        store.handoff_request_review(self.d, 1)                              # 第 1 批等复核
+        store.handoff_submit(self.d, "", allow_subagents=True)               # 第 2 批：b
+        store.handoff_claim(self.d, stage="draft")
+        store.set_status(self.d, b, "resolved", by="sonnet", seq=2)
+        store.handoff_done(self.d, seq=2, mode="draft")
+        got = store.handoff_claim(self.d, stage="review", seq=2, by="opus")
+        self.assertEqual(got["seq"], 2, "--seq 接到指定的那一批，而不是最早等复核的第 1 批")
+        with self.assertRaises(store.NoteError):
+            store.review(self.d, a, "ok", by="opus")                         # a 属于还没被接收复核的第 1 批
+        with self.assertRaises(store.Unreviewed) as cm:
+            store.handoff_done(self.d, seq=2)
+        self.assertIn("第 2 批", str(cm.exception))
+        store.review(self.d, b, "ok", by="opus", seq=2)
+        self.assertEqual(store.handoff_done(self.d, seq=2)["status"], "done")
+        self.assertEqual(self.note(a)["status"], "drafted", "第 1 批的初改没被别批的收尾带走")
+
+    def test_unclaimed_review_batch_still_stops_at_draft(self):
+        a = self.add(2)
+        store.handoff_submit(self.d, "只要初改", target="review")              # 代理没先 claim
+        store.set_status(self.d, a, "resolved", by="claude")
+        self.assertEqual((self.note(a)["status"], self.note(a)["draftBatch"]), ("drafted", 1))
+        st = store.handoff_state(self.d, full=False)
+        self.assertEqual(st["open"][0]["target"], "review")
+        txt = notes_cli.to_markdown(store.load(self.d), {}, include_resolved=False, page=None, handoff=st)
+        self.assertIn("第 1 批（等待接收）要求：做到「已初改·待复核」后停下等用户", txt)
+        self.assertIn("先 notes.py claim 接收再处理", txt)
+
+    def test_review_scope_and_counts(self):
+        a, b, e = self.add(2), self.add(3), self.add(4)
+        store.handoff_submit(self.d, "")
+        store.handoff_claim(self.d)
+        store.set_status(self.d, e, "resolved", by="claude")
+        store.handoff_done(self.d)                                           # 第 1 批定稿了 e
+        store.handoff_submit(self.d, "", target="review")
+        store.handoff_claim(self.d, by="A")
+        with self.assertRaises(store.NoteError):
+            store.review(self.d, a, "ok", by="A")                            # 初改阶段不能自己「复核通过」
+        store.set_status(self.d, a, "resolved", by="A")
+        store.set_status(self.d, b, "resolved", by="A")
+        store.handoff_done(self.d)
+        store.handoff_request_review(self.d, 2)
+        store.handoff_claim(self.d, stage="review", by="B")
+        with self.assertRaises(store.NoteError):
+            store.review(self.d, e, "ok", by="B")                            # 别的批次早已定稿的
+        store.review(self.d, a, "ok", by="B")
+        store.review(self.d, a, "revise", note="还是再改一下", by="B")         # 改主意：只算最后一次
+        store.review(self.d, b, "return", note="要你定", by="B")
+        fin = store.handoff_done(self.d)
+        rv = fin["stages"][-1]
+        self.assertEqual((rv["approved"], rv["revised"], rv["returned"]), (0, 1, 1))
+        self.assertNotIn(b, store.handoff_state(self.d, full=False)["inFlightIds"])
+
+    def test_cross_batch_draft_is_off_limits_and_listed(self):
+        x = self.add(2)
+        store.handoff_submit(self.d, "", target="review")
+        store.handoff_claim(self.d)
+        store.set_status(self.d, x, "resolved", by="A")
+        store.handoff_done(self.d)                                           # 第 1 批停在待复核
+        store.handoff_submit(self.d, "第二批")                                 # 第 2 批快照里没有 x（已不是未处理）
+        it = store.handoff_load(self.d)["items"][-1]
+        self.assertNotIn(x, it["openIds"])
+        store.handoff_claim(self.d)
+        with self.assertRaises(store.NoteError):
+            store.set_status(self.d, x, "resolved", by="claude", seq=2)
+
+    def test_import_keeps_draft_and_merges_trail(self):
+        a = self.add(2)
+        store.handoff_submit(self.d, "", target="review")
+        store.handoff_claim(self.d)
+        _d, n = store.set_status(self.d, a, "resolved", resolution="初改", by="A")
+        older = {k: v for k, v in n.items() if k not in ("trail", "draftedAt", "draftBatch")}
+        older.update(status="open", updatedAt="2000-01-01T00:00:00Z")
+        store.import_notes(self.d, [older])
+        self.assertEqual((self.note(a)["status"], self.note(a)["draftBatch"]), ("drafted", 1), "较早的导出不覆盖较新的初改")
+        newer = {**n, "updatedAt": "2099-01-01T00:00:00+00:00", "trail": []}
+        store.import_notes(self.d, [newer])
+        m = self.note(a)
+        self.assertEqual((m["status"], m["draftBatch"], len(m["trail"])), ("drafted", 1, 1), "保留初改批次，痕迹合并不清空")
+        with self.assertRaises(store.NoteError):
+            store.set_status(self.d, a, "drafted", by="page")                # 页面不能直接标待复核
+
+    def test_snapshot_failure_warns_and_single_stage_skips(self):
+        run = lambda *x: subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *x], capture_output=True, text=True,
+                                        env={**os.environ, "CLAUDECODE": ""}, timeout=30)
+        self.add(2)
+        store.handoff_submit(self.d, "")
+        self.assertEqual(run("claim", str(self.d)).returncode, 0)
+        self.assertFalse((self.d / ".snapshots").exists(), "单段流程不存快照")
+        run("done", str(self.d))
+        self.add(3)
+        bad = tmpdir() / "r.html"
+        bad.write_bytes(b"\xff\xfe not utf-8")
+        man = json.loads((self.d / "review.json").read_text())
+        man["sources"]["report"] = man["sourcesAbs"]["report"] = str(bad)
+        (self.d / "review.json").write_text(json.dumps(man), encoding="utf-8")
+        store.handoff_submit(self.d, "", target="review")
+        r = run("wait", str(self.d), "--timeout", "5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("快照没存成", r.stderr)
+        (self.d / ".snapshots").mkdir(exist_ok=True)
+        os.symlink(tmpdir(), self.d / ".snapshots" / "batch-9")
+        r = run("done", str(self.d), "--seq", "2")
+        self.assertEqual(r.returncode, 0)
+
+    def test_hook_queue_keeps_both_events(self):
+        srv = serve.ReviewServer(self.d, 0, log_to_file=False)
+        srv.on_handoff = ["/usr/bin/true"]
+        seen = []
+        srv._hook_worker = lambda job: seen.append(job["event"])   # 不真的起线程
+        srv._hook_running = True                                    # 模拟：钩子正在跑
+        srv.run_hook({"seq": 3}, False, event="handoff")
+        srv.run_hook({"seq": 1}, False, event="review")
+        srv.run_hook({"seq": 3}, False, event="handoff")            # 同一批同一事件只留最新
+        self.assertEqual([(j["event"], j["seq"]) for j in srv._hook_queue], [("review", 1), ("handoff", 3)])
+        srv.server_close()
+
+
 class HandoffTests(unittest.TestCase):
     def setUp(self):
         self.d = tmpdir()

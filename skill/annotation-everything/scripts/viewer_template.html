@@ -20,7 +20,7 @@ header select option{color:#111}
 header #handBtn{background:var(--ae-red);border-color:var(--ae-red)}
 #handState{display:none;font-size:12px;border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:pointer;border:1px solid rgba(255,255,255,.3)}
 #handState.pending{display:inline-block;background:#8a5a12}#handState.claimed{display:inline-block;background:#2a78d6}
-#handState.done{display:inline-block;background:#1d6b47}#handState.queued{display:inline-block;background:#6b7280}
+#handState.done{display:inline-block;background:#1d6b47}#handState.drafted,#handState.review{display:inline-block;background:#b7791f}#handState.reviewing{display:inline-block;background:#2a78d6}#handState.queued{display:inline-block;background:#6b7280}
 .resume{display:none;align-items:center;gap:10px;flex-wrap:wrap;padding:7px 18px;background:#fff8e6;border-bottom:1px solid #f0dfb0;font-size:13px;color:#5c4a12}
 .resume.on{display:flex}
 .resume #resumeText{flex:1 1 auto}
@@ -64,6 +64,9 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,1fr
 .note .res{font-size:13px;color:var(--ae-green);margin-top:4px}
 .note textarea{width:100%;font:inherit;font-size:14px;min-height:60px;border:1px solid var(--ae-line);border-radius:6px;padding:6px 8px}
 .chip{display:inline-block;font-size:11px;border-radius:4px;padding:0 5px;margin-left:6px;background:#d8eee1;color:var(--ae-green)}
+.chip.dr{background:#fdf0d5;color:#8a5a12}.chip.fl{background:#dbe9fb;color:#1f5fa8}
+.note.drafted{border-color:#e9c98a}.note .trail{font-size:12px;color:var(--ae-mut);margin-top:3px}
+.note .trail b{font-weight:600;color:#8a5a12}
 .form{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 #nform{position:sticky;bottom:-28px;z-index:3;margin:14px -24px -28px;padding:10px 24px 14px;background:var(--ae-panel);border-top:1px solid var(--ae-line);box-shadow:0 -8px 14px -10px rgba(0,0,0,.25)}
 #nform .grow{flex:1}
@@ -74,8 +77,16 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,1fr
 .form button.on{background:#fde7e3;border-color:var(--ae-red);color:#a2412f}
 .quote{font-size:12.5px;color:#555;background:#f6f6f6;border-radius:5px;padding:4px 8px;display:none}
 .badge{display:inline-block;min-width:18px;padding:0 6px;border-radius:9px;background:var(--ae-red);color:#fff;font-size:12px;margin-left:4px}
+.badge:empty{display:none}.badge.zero{background:#6b7280}.badge.fl{background:#2a78d6}.badge.dr{background:#b7791f}
 .dlg{background:#fff;border-radius:12px;max-width:900px;width:100%;max-height:88vh;display:flex;flex-direction:column}
 #help .dlg{max-width:980px}
+#hand .hopts{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font-size:13.5px;margin:4px 0 10px}
+#hand .hopts label{display:inline-flex;gap:5px;align-items:center;cursor:pointer}
+#handDrafts .hd{background:#fdf6e3;border:1px solid #ecd9a8;border-radius:8px;padding:6px 10px;margin:0 0 8px;font-size:13.5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#handDrafts .hd span{flex:1}
+.batch.drafted,.batch.review{border-left-color:#b7791f}.batch.reviewing{border-left-color:var(--ae-accent)}
+.batch .bst{font-size:12.5px;color:var(--ae-ink);padding-left:.6em;border-left:2px solid var(--ae-line);margin:3px 0}
+.batch .bact{display:flex;gap:8px;margin-top:6px}
 #batches .bar .hint{font-size:12.5px;color:var(--ae-mut);margin:0}
 .batch{border:1px solid var(--ae-line);border-left:4px solid var(--ae-mut);border-radius:8px;padding:8px 12px;margin:0 0 10px}
 .batch.done{border-left-color:var(--ae-green)}.batch.claimed{border-left-color:var(--ae-accent)}.batch.pending{border-left-color:#b7791f}
@@ -155,7 +166,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
   <button id="reloadBtn" title="Agent 已按批注重建对照页">对照页已更新，点此刷新</button>
   <button id="legacyBtn" title="浏览器里发现这份稿件之前版本的批注">导入旧批注</button>
   <button id="handBtn" title="这一批批注写好了，交给代理处理（A）">交给 Agent<kbd>A</kbd></button>
-  <button id="notesBtn" title="查看、导出、导入全部批注（N）">批注<span class="badge" id="ncount">0</span><kbd>N</kbd></button>
+  <button id="notesBtn" title="查看、导出、导入全部批注（N）">批注<span class="badge" id="ncount">0</span><span class="badge fl" id="nflight"></span><span class="badge dr" id="ndraft"></span><kbd>N</kbd></button>
 </header>
 <div class="resume" id="resume" role="status"><span id="resumeText"></span><button id="resumeGo" style="display:none"></button><button id="resumeClose" title="关闭提示">×</button></div>
 <nav id="secs"></nav>
@@ -191,14 +202,18 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <p class="hint">粘贴之前「复制全部」的文字，或「下载 JSON / Markdown」得到的文件内容。同一条批注（同 id，或页码、对象、内容、引用、标注都相同）不会重复导入；同 id 而导入方更新得更晚的，会更新为导入方的内容和状态。</p>
 <textarea id="impText" placeholder="在这里粘贴批注文字或 JSON"></textarea>
 <p><input type="file" id="impFile" accept=".json,.md,.txt"></p></div></div></div>
-<div class="modal" id="hand"><div class="dlg"><div class="bar"><h2>交给 Agent</h2><button class="primary" id="doHand">交给 Agent<kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close>取消<kbd>Esc</kbd></button></div>
-<div class="pad"><p id="handInfo"></p><p class="hint"><span id="handLast"></span> <button id="handHist" title="每次交给 Agent 一批：解决了几条、处理摘要（J）">处理记录<kbd>J</kbd></button></p>
+<div class="modal" id="hand"><div class="dlg"><div class="bar"><h2 id="handTitle">交给 Agent</h2><button class="primary" id="doHand">交给 Agent<kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close>取消<kbd>Esc</kbd></button></div>
+<div class="pad"><div id="handDrafts"></div><p id="handInfo"></p>
+<div class="hopts"><span id="hTargetRow"><span>这批做到：</span><label title="Agent 改完即定为已处理"><input type="radio" name="htarget" value="final" checked>定稿</label>
+<label title="Agent 改完先标「已初改·待复核」，你看过后再请求复核或直接定稿"><input type="radio" name="htarget" value="review">已初改·待复核</label></span>
+<label id="hSubRow" title="不勾选时由当前会话的主代理亲自处理；勾选后它可以派子代理（例如便宜模型初改、强模型复核）"><input type="checkbox" id="hSub">允许派发子代理</label>
+<span class="hint" id="hOld" style="display:none">背后的本地服务是旧版本，不支持「做到哪一步 / 子代理 / 复核」：停掉旧服务后重新运行 serve.py 再刷新</span></div><p class="hint"><span id="handLast"></span> <button id="handHist" title="每次交给 Agent 一批：解决了几条、处理摘要（J）">处理记录<kbd>J</kbd></button></p>
 <textarea id="handMsg" placeholder="给 Agent 的附言（可选）：例如「先改第 7–12 页，口径问题先别动」"></textarea>
-<p class="hint">提交后，正在等待的代理会收到这批未处理批注，右上角显示「等待接收 → 处理中 → 已处理」。代理还没接收时再提交一次，会合并成同一次（附言以最新为准）。</p></div></div></div>
+<p class="hint" id="handHelp">提交后，正在等待的代理会收到这批未处理批注，右上角显示「等待接收 → 处理中 → 已处理」（选「已初改·待复核」则停在待复核，由你决定请求复核或直接定稿）。代理还没接收时再提交一次，会合并成同一次（附言、选项以最新为准）。</p></div></div></div>
 <div class="modal" id="batches"><div class="dlg"><div class="bar"><h2>处理记录</h2><span class="hint" id="batchSum"></span><button data-close>关闭<kbd>Esc</kbd></button></div>
 <div class="pad" id="batchList"></div></div></div>
 <div id="toast"></div>
-<div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要），P 在报告上标注，C 写批注，K 填技能；Esc 关闭或取消。<br>
+<div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要；先改后审的批次分初改、复核两段，可在这里请求复核或直接定稿），P 在报告上标注，C 写批注，K 填技能；Esc 关闭或取消。<br>
 在报告上标注（P）：进入标注后，在左侧报告上<b>单击</b>放一个点，或<b>按住拖动</b>框选一块区域（像截图那样），再写意见。点和框都可以直接拖动，框拖右下角可调大小；点一下弹出这条批注的编辑、标为已处理、去掉标注、删除；鼠标移到右侧批注上，对应标注会高亮。已有的批注在「编辑」里可以补标注或重新标注。<br>
 风格优化（S）：选范围——1 整页、2 标注处（用刚放的点或框；还没有就进入标注）；可写想要的方向（不写也行），再添加批注。<br>
 「技能」：某条批注需要特定技能（skill）才能改好时填上，多个用逗号分隔；Agent 处理这条前会先调用它们。候选来自 Agent 写进审阅目录的技能目录和用过的技能。<br>
@@ -254,6 +269,13 @@ const unH=t=>{const d=document.createElement("textarea");d.innerHTML=t;return d.
 const newId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const okId=x=>typeof x==="string"&&/^[A-Za-z0-9_-]{1,64}$/.test(x);
 const isDone=x=>x.status==="resolved";
+const isDraft=x=>x.status==="drafted";   // 两段流程：初改完成、等复核或用户定稿
+let flight=new Set();                    // 已交给 Agent、还在路上（等待接收 / 处理中 / 等待复核 / 复核中）的批注
+const inFlight=x=>!isDone(x)&&!isDraft(x)&&flight.has(x.id);
+const ACT_ZH={drafted:"初改",resolved:"处理",finalized:"定稿",approved:"复核通过",revised:"复核再改",returned:"退回给你",reopened:"重新打开",accepted:"你定稿"};
+function trailText(x,last){const t=Array.isArray(x.trail)?x.trail.slice(-(last||4)):[];
+  return t.filter(e=>e&&typeof e==="object").map(e=>{const who=e.by==="page"?"你":e.by==="claude"?"Claude":String(e.by||"");
+    const lab=escH(ACT_ZH[e.action]||e.action||"");return `${e.action==="returned"?`<b>${lab}</b>`:lab}（${escH(who)}${e.batch?` · 第 ${+e.batch} 批`:""}）${e.note?"："+escH(clip(String(e.note),90)):""}`}).join(" → ")}
 const nowIso=()=>new Date().toISOString();
 function toast(t,ms){const e=$("toast");e.textContent=t;e.style.display="block";clearTimeout(toast.h);toast.h=setTimeout(()=>e.style.display="none",ms||2200)}
 P.forEach((p,k)=>{const o=document.createElement("option");o.value=k;o.textContent=`第 ${p.n} 页`;$("jump").appendChild(o)});
@@ -321,15 +343,19 @@ async function getNotes(){const d=await api("GET","/api/notes");
   if(!sameReview(d))throw Object.assign(new Error("不是这份审阅的服务"),{status:0,mismatch:true});return d}
 function mirror(){if(!FILE)return;if(!LS.set(K.notes,notes))toast("浏览器未能保存批注，请及时导出");LS.set(K.meta,{title:unH(document.title),ns:NS})}
 function setDoc(d){notes=d.notes;rev=d.rev}
-function stamp(x){return Math.max(0,...["updatedAt","resolvedAt","at"].map(k=>Date.parse(x[k]||"")||0))}
+function stamp(x){const t=Array.isArray(x.trail)&&x.trail.length?x.trail[x.trail.length-1]:null;
+  return Math.max(0,...["updatedAt","resolvedAt","draftedAt","at"].map(k=>Date.parse(x[k]||"")||0),Date.parse((t&&t.at)||"")||0)}
 function pinKey(p){return p&&p.x!=null?`${(+p.x).toFixed(1)},${(+p.y).toFixed(1)}`:""}
 function rgKey(r){return r?["x","y","w","h"].map(k=>(+r[k]||0).toFixed(1)).join(","):""}
 function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),rgKey(regionOf(x)),x.style&&x.style.scope?"s":""].join("\u0001")}
 const okRegion=r=>r&&typeof r==="object"&&["x","y","w","h"].every(k=>r[k]!=null&&r[k]!==""&&isFinite(+r[k]))&&+r.w>0&&+r.h>0?{x:+r.x,y:+r.y,w:+r.w,h:+r.h}:null;
 function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:String(x.title||""),target:String(x.target||""),text:String(x.text||""),
     quote:String(x.quote||""),quoteFrom:String(x.quoteFrom||""),pin:x.pin&&x.pin.x!=null?{x:+x.pin.x,y:+x.pin.y}:null,
-    status:x.status==="resolved"?"resolved":"open",at:typeof x.at==="string"?x.at:nowIso()};
-  if(n.status==="resolved"){if(x.resolution)n.resolution=String(x.resolution);if(x.resolvedAt)n.resolvedAt=String(x.resolvedAt);if(x.resolvedBy)n.resolvedBy=String(x.resolvedBy)}
+    status:x.status==="resolved"||x.status==="drafted"?x.status:"open",at:typeof x.at==="string"?x.at:nowIso()};
+  if(Array.isArray(x.trail))n.trail=x.trail.filter(e=>e&&typeof e==="object"&&typeof e.action==="string").slice(-50);
+  [["draftBatch","drafted"],["resolvedBatch","resolved"]].forEach(([k,st])=>{if(n.status===st&&Number.isInteger(x[k])&&x[k]>0)n[k]=x[k]});
+  ["draftedAt","draftedBy"].forEach(k=>{if(n.status==="drafted"&&typeof x[k]==="string")n[k]=x[k]});
+  if(n.status!=="open"){if(x.resolution)n.resolution=String(x.resolution);if(x.resolvedAt)n.resolvedAt=String(x.resolvedAt);if(x.resolvedBy)n.resolvedBy=String(x.resolvedBy)}
   if(typeof x.updatedAt==="string")n.updatedAt=x.updatedAt;
   const rg=okRegion(x.region)||okRegion(x.style&&x.style.region);if(rg)n.region=rg;
   if(x.style&&["page","region","pin"].includes(x.style.scope))n.style={scope:x.style.scope};
@@ -350,7 +376,7 @@ function applyLocal(op){
   if(op.kind==="add"){if(!notes.some(x=>x.id===op.note.id))notes.push(op.note)}
   else if(op.kind==="del")notes=notes.filter(x=>x.id!==op.id);
   else if(op.kind==="patch"){const x=notes.find(x=>x.id===op.id);if(x){Object.assign(x,op.body);settleMarks(x,op.body);x.updatedAt=nowIso();
-    if(op.body.status==="open"){delete x.resolvedAt;delete x.resolvedBy;delete x.resolution;delete x.resolvedBatch}
+    if(op.body.status==="open"){["resolvedAt","resolvedBy","resolution","resolvedBatch","draftedAt","draftedBy","draftBatch"].forEach(k=>delete x[k])}
     if(op.body.status==="resolved"){x.resolvedAt=nowIso();x.resolvedBy="page"}}}
   else if(op.kind==="import")return mergeLocal(op.notes);
   else if(op.kind==="handoff"){handQueued=true;renderHand()}}
@@ -359,7 +385,7 @@ function send(op){
   if(op.kind==="patch")return api("PATCH","/api/notes/"+encodeURIComponent(op.id),op.body);
   if(op.kind==="del")return api("DELETE","/api/notes/"+encodeURIComponent(op.id));
   if(op.kind==="import")return api("POST","/api/notes/import",{notes:op.notes});
-  if(op.kind==="handoff")return api("POST","/api/handoff",{message:op.message})}
+  if(op.kind==="handoff")return api("POST","/api/handoff",{message:op.message,target:op.target||"final",allowSubagents:!!op.allowSubagents})}
 const pend={get(){const v=LS.get(K.pending,[]);return Array.isArray(v)?v:[]},
   set(v){if(!LS.set(K.pending,v))toast("浏览器存储已满：这次改动没能暂存，请尽快在「批注」里下载 JSON",6000)},
   push(op){const v=pend.get();v.push(op);pend.set(v)},remove(id){if(!id)return;pend.set(pend.get().filter(o=>o.opId!==id))}};
@@ -411,7 +437,8 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
   finally{busy--;updateMode()}}
 async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 function applyServer(d){
-  const old=!(Array.isArray(d.features)&&d.features.includes("marks"));if(old&&!srvOld)toast(OLD_SERVER_HELP,9000);srvOld=old;updateMode();
+  const old=!(Array.isArray(d.features)&&d.features.includes("marks"));if(old&&!srvOld)toast(OLD_SERVER_HELP,9000);srvOld=old;
+  srvNoStages=!(Array.isArray(d.features)&&d.features.includes("stages"));updateMode();
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
   if(d.handoff)setHand(d.handoff);else renderHand();
@@ -432,7 +459,7 @@ async function poll(){
   applyServer(d);updateMode()}
 const MISMATCH_HELP="这个地址上运行的不是这份审阅的服务（端口被别的审阅目录或程序占用），改动先暂存在本页。办法：先停掉占用这个端口的服务，再用本审阅目录启动 serve.py（会回到这个端口）；或在「批注」里下载 JSON，到新地址打开对照页后导入。";
 const OLD_SERVER_HELP="背后的本地服务是旧版本，不认识框选、重新标注等新功能（这些改动会被丢掉）。请停掉旧服务（它的终端按 Ctrl+C），再运行新版 serve.py，然后刷新本页。";
-let srvOld=false;   // 背后是不认识新字段的旧版服务：框选、重新标注、拖框先不让做
+let srvOld=false, srvNoStages=false;   // 后者：服务不支持「做到哪一步 / 子代理 / 复核」（0.4 及更早）   // 背后是不认识新字段的旧版服务：框选、重新标注、拖框先不让做
 function oldGuard(){if(mode==="server"&&srvOld){toast(OLD_SERVER_HELP,8000);return true}return false}
 function updateMode(){const m=$("mode"),q=pend.get().length,f=failed.get().length,extra=(q?`（待补传 ${q}）`:"")+(f?`（未能保存 ${f}）`:"");m.className=mode;
   if(mode==="server"&&srvOld){m.classList.add("old");m.textContent=`● 旧版服务${extra}`;m.title=OLD_SERVER_HELP}
@@ -476,16 +503,18 @@ function drawPins(){stage.querySelectorAll(".ae-pin,.ae-region").forEach(e=>{if(
 function noteSummary(x){const qe=editOf(x);return qe?(qe.op==="delete"?`删除「${qe.from}」`:`「${qe.from}」改为「${qe.to}」`):String(x.text||"")}
 function editOf(x){const e=x.edit;return e&&typeof e==="object"&&(e.op==="delete"||e.op==="replace")?e:null}
 function noteHtml(x){
-  const done=isDone(x), ed=editingId===x.id, id=escH(x.id), qe=editOf(x);
+  const done=isDone(x), dr=isDraft(x), fl=inFlight(x), ed=editingId===x.id, id=escH(x.id), qe=editOf(x);
   const acts=ed?`<button data-act="save" data-id="${id}">保存</button><button data-act="remark" data-id="${id}" title="在左侧报告上单击放点或拖动框选，替换这条批注的标注">${hasMark(x)?"重新标注":"在报告上标注"}</button>${hasMark(x)?`<button data-act="unpin" data-id="${id}">去掉标注</button>`:""}<button data-act="cancel">取消</button>`
-    :`<button data-act="edit" data-id="${id}">编辑</button><button data-act="${done?"reopen":"resolve"}" data-id="${id}">${done?"重新打开":"标为已处理"}</button><button data-act="del" data-id="${id}">删除</button>`;
+    :`<button data-act="edit" data-id="${id}">编辑</button>${dr?`<button data-act="resolve" data-id="${id}" title="看过初改，认可：定为已处理">定稿</button><button data-act="reopen" data-id="${id}">退回重改</button>`
+      :`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${done?"重新打开":"标为已处理"}</button>`}<button data-act="del" data-id="${id}">删除</button>`;
   const sk=Array.isArray(x.skills)?x.skills:[];
   const body=ed?(qe&&qe.op==="delete"?`<div class="body"><span class="op">删除</span><del>${escH(qe.from)}</del></div>`:`<textarea id="etext">${escH(editBuf[x.id]??(qe?qe.to:x.text))}</textarea>`)
       +`<input class="eskills" id="eskills" list="skillList" autocomplete="off" placeholder="技能（可选，逗号分隔）" value="${escH(editBuf["sk:"+x.id]??sk.join(", "))}">`
     :qe?(qe.op==="delete"?`<div class="body"><span class="op">删除</span><del>${escH(qe.from)}</del></div>`
         :`<div class="body"><del>${escH(qe.from)}</del> → <ins>${escH(qe.to)}</ins></div>`)
     :`<div class="body">${escH(x.text).replace(/\n/g,"<br>")}</div>`;
-  return `<div class="note${done?" done":""}" data-note="${id}"><div class="meta"><span>${escH(x.target||"未指定")}${qe?(qe.op==="delete"?" · 删除":" · 改写"):""}${x.style&&x.style.scope?" · 风格优化"+(hasMark(x)?"":"·整页"):""}${hasMark(x)?` · ${regionOf(x)?"框选":"标点"} ${markNo(x.page,x.id)}`:""}${done?`<span class="chip">已处理${x.resolvedBy&&x.resolvedBy!=="page"?" · "+escH(x.resolvedBy==="claude"?"Claude":x.resolvedBy):""}</span>`:""}</span><span class="acts">${acts}</span></div>`
+  const who=w=>escH(w==="claude"?"Claude":w);
+  return `<div class="note${done?" done":""}${dr?" drafted":""}" data-note="${id}"><div class="meta"><span>${escH(x.target||"未指定")}${qe?(qe.op==="delete"?" · 删除":" · 改写"):""}${x.style&&x.style.scope?" · 风格优化"+(hasMark(x)?"":"·整页"):""}${hasMark(x)?` · ${regionOf(x)?"框选":"标点"} ${markNo(x.page,x.id)}`:""}${done?`<span class="chip">已处理${x.resolvedBy&&x.resolvedBy!=="page"?" · "+who(x.resolvedBy):""}</span>`:""}${dr?`<span class="chip dr">已初改·待复核${x.draftedBy?" · "+who(x.draftedBy):""}</span>`:""}${fl?`<span class="chip fl" title="已交给 Agent，正在处理">处理中</span>`:""}</span><span class="acts">${acts}</span></div>`
    +(x.quote&&!qe?`<blockquote>${x.quoteFrom?escH(x.quoteFrom)+"：":""}${escH(x.quote)}</blockquote>`:"")
    +body
    +(x.orphan?`<div class="anchor" style="color:#a2412f">⚠ 原来所在的页面在新版报告里找不到，页码可能不对：点「编辑」挪到正确的页</div>`:"")
@@ -493,7 +522,8 @@ function noteHtml(x){
    +(!ed&&x.anchor?`<div class="anchor">位置：${escH(clip(x.anchor,140))}</div>`:"")
    +(!ed&&sk.length?`<div class="skills">${sk.map(n=>`<span class="skill" title="处理这条批注时调用的技能">⚙ ${escH(n)}</span>`).join("")}</div>`:"")
    +(x.pair&&x.pair.text?`<div class="pair">↔ ${escH(x.pair.side)}${x.pair.match==="exact"?"（同一句）":"（相近）"}也要改：${escH(clip(x.pair.text,120))}</div>`:"")
-   +(done&&x.resolution?`<div class="res">处理说明：${escH(x.resolution).replace(/\n/g,"<br>")}</div>`:"")+`</div>`}
+   +((done||dr)&&x.resolution?`<div class="res">${dr?"初改说明":"处理说明"}：${escH(x.resolution).replace(/\n/g,"<br>")}</div>`:"")
+   +(!ed&&Array.isArray(x.trail)&&x.trail.length?`<div class="trail">痕迹：${trailText(x)}</div>`:"")+`</div>`}
 // 把正在编辑的那张卡片的内容按它自己的 id 存起来（不能按 editingId：切换编辑对象时它已经变了）
 function stashEdit(){const et=$("etext"),es=$("eskills"),card=(et||es)&&(et||es).closest("[data-note]");if(!card)return;
   const id=card.dataset.note;if(et)editBuf[id]=et.value;if(es)editBuf["sk:"+id]=es.value}
@@ -501,14 +531,20 @@ function refreshList(force){
   if(!force&&(editingId||composing)){listStale=true;updateCounts();return}   // 正在改某条或正在输入法组字：先不重绘
   listStale=false;
   stashEdit();
-  const mine=notes.filter(x=>x.page===P[i].n), nDone=mine.filter(isDone).length, shown=mine.filter(x=>!(hideDone&&isDone(x)));
+  const mine=notes.filter(x=>x.page===P[i].n), nDone=mine.filter(isDone).length, shown=mine.filter(x=>!(hideDone&&isDone(x)));   // 待复核的不算已处理，不隐藏
   $("nhere").textContent=mine.length;
   $("nlist").innerHTML=`<div class="lab"><span>本页批注${mine.length&&mine.every(isDone)?" · 全部已处理 ✓":""}</span>${nDone?`<button data-act="hide">${hideDone?`显示已处理（${nDone}）`:`隐藏已处理（${nDone}）`}</button>`:""}</div>`
     +(shown.map(noteHtml).join("")||'<p class="empty">暂无批注。</p>');
   drawPins();updateCounts()}
-function updateCounts(){const open=notes.filter(x=>!isDone(x)).length;$("ncount").textContent=open;$("ncount").title=`未处理 ${open} / 共 ${notes.length}`;
-  [...$("jump").options].forEach((o,k)=>{const mine=notes.filter(x=>x.page===P[k].n),c=mine.filter(x=>!isDone(x)).length;
-    o.textContent=`第 ${P[k].n} 页${c?`（批注 ${c}）`:mine.length?" ✓":""}`});
+// 「批注」按钮：红 = 还没交给 Agent 的未处理，蓝 = 处理中（已交给 Agent），琥珀 = 已初改·待复核
+function counts(list){let o=0,f=0,d=0;list.forEach(x=>{if(isDraft(x))d++;else if(inFlight(x))f++;else if(!isDone(x))o++});return{o,f,d}}
+function updateCounts(){const c=counts(notes),b=$("ncount");
+  b.textContent=c.o||(c.f||c.d?"":"0");b.classList.toggle("zero",!c.o);b.title=`未处理（还没交给 Agent）${c.o} 条 / 共 ${notes.length} 条`;
+  $("nflight").textContent=c.f?`处理中 ${c.f}`:"";$("nflight").title="已交给 Agent、正在处理的批注";
+  $("ndraft").textContent=c.d?`待复核 ${c.d}`:"";$("ndraft").title="已初改、等你看过后请求复核或定稿的批注";
+  [...$("jump").options].forEach((o,k)=>{const mine=notes.filter(x=>x.page===P[k].n),q=counts(mine),parts=[];
+    if(q.o)parts.push(`批注 ${q.o}`);if(q.f)parts.push(`处理中 ${q.f}`);if(q.d)parts.push(`待复核 ${q.d}`);
+    o.textContent=`第 ${P[k].n} 页${parts.length?`（${parts.join("，")}）`:mine.length?" ✓":""}`});
   updateLegacy();renderResume()}
 function setMarkMode(on){markMode=on;stage.classList.toggle("markmode",on);const b=$("pinBtn");b.classList.toggle("on",on);
   const rn=on&&remarkId?notes.find(n=>n.id===remarkId):null;
@@ -757,10 +793,13 @@ function renderResume(){const el=$("resume");if(resumeOff||!resumeReady){if(el.c
   const parts=[],ln=lastNote();let go=null;const lost=lostNotes().length;
   if(lost)parts.push(`⚠ ${lost} 条批注的原页面在新版报告里找不到（在「批注」里挪到正确的页）`);
   if(ln){parts.push(`上次批注到第 ${ln.x.page} 页（${fmtTime(ln.t)}）`);if(ln.x.page!==P[i].n)go=ln.x.page}
-  if(!FILE){const L=hand&&hand.latest,open=notes.filter(x=>!isDone(x)).length;
+  if(!FILE){const L=hand&&hand.latest,cc=counts(notes),open=cc.o;
     if(!L){if(notes.length)parts.push(`还没交给 Agent（未处理 ${open} 条）`)}
     else if(L.status==="pending")parts.push(`第 ${L.seq} 批等待 Agent 接收`);
     else if(L.status==="claimed")parts.push(`Agent 正在处理第 ${L.seq} 批（${fmtTime(Date.parse(L.claimedAt||L.at))} 接收）`);
+    else if(L.status==="drafted")parts.push(`第 ${L.seq} 批已初改，${cc.d} 条待复核：看过后在「交给 Agent」里请求复核或直接定稿`);
+    else if(L.status==="review")parts.push(`第 ${L.seq} 批等待复核`);
+    else if(L.status==="reviewing")parts.push(`Agent 正在复核第 ${L.seq} 批`);
     else parts.push(`<span class="ok">✓ Agent 已处理完第 ${+L.seq||0} 批${"resolvedCount" in L?`（解决 ${+L.resolvedCount} 条）`:""}</span>（${fmtTime(Date.parse(L.doneAt||L.at))}）${L.summary?"："+escH(clip(L.summary,80)):""}；现在未处理 ${open} 条`)}
   const had=el.classList.contains("on");
   if(!parts.length){if(had){el.classList.remove("on");fit()}return}
@@ -771,31 +810,69 @@ function goLast(){const ln=lastNote();if(!ln){toast("还没有批注");return}co
 $("resumeGo").onclick=goLast;$("resumeClose").onclick=()=>{resumeOff=true;renderResume()};
 
 // ---------- 交给 Agent ----------
-const HAND_ZH={pending:"等待接收",claimed:"处理中",done:"已处理"};
+const HAND_ZH={pending:"等待接收",claimed:"处理中",drafted:"已初改·待复核",review:"等待复核",reviewing:"复核中",done:"已处理"};
 function setHand(h){if(!h||h.error)return;const L=h.latest,prev=hand&&hand.latest;
   if(L&&prev&&prev.seq===L.seq&&prev.status!==L.status){
     if(L.status==="claimed")toast("Agent 已接收，正在处理",3000);
+    if(L.status==="drafted")toast(`第 ${L.seq} 批初改完成：${+L.draftedCount||0} 条待你复核。看过后在「交给 Agent」里请求复核或直接定稿`,8000);
+    if(L.status==="reviewing")toast("Agent 已开始复核",3000);
     if(L.status==="done")toast(`Agent 已处理完第 ${L.seq} 批（解决 ${+L.resolvedCount||0} 条）${L.summary?"："+String(L.summary).slice(0,80):""}`,7000)}
   const sig=L?[L.seq,L.status,L.resolvedCount,h.total].join("/"):"";
-  hand={...h,history:hand&&hand.history};renderHand();renderResume();
+  hand={...h,history:sig===handSig?hand&&hand.history:undefined};   // 状态变了：旧的完整历史作废，需要时再取
+  const fl=Array.isArray(h.inFlightIds)?h.inFlightIds:[],fsig=fl.join(",");
+  renderHand();renderResume();
+  if(fsig!==flightSig){flightSig=fsig;flight=new Set(fl);refreshList()}   // 「处理中」的批注变了才重绘列表
   if($("batches").classList.contains("on")&&sig!==handSig)loadBatches();handSig=sig}
-let handSig="", batchOpen=null;   // 处理记录弹窗：上次的状态签名、用户展开的批次
+let handSig="", flightSig="", batchOpen=null;   // 处理记录弹窗：上次的状态签名、用户展开的批次
 function renderHand(){const el=$("handState"),L=hand&&hand.latest;
   if(handQueued){el.className="queued";el.textContent="交给 Agent（待补传）";el.title="服务连上后自动提交";return}
   if(!L){el.className="";el.textContent="";el.title="";return}
   el.className=L.status||"";
   const n="resolvedCount" in L?+L.resolvedCount:null;
-  el.textContent=L.status==="pending"?`已交给 Agent · 第 ${L.seq} 批等待接收`:L.status==="claimed"?`Agent 处理中 · 第 ${L.seq} 批${n?`（已解决 ${n} 条）`:""}`:`Agent 已处理 · 第 ${L.seq} 批${n!=null?`（解决 ${n} 条）`:""}`;
+  const dn=+L.draftedCount||0;
+  el.textContent={pending:`已交给 Agent · 第 ${L.seq} 批等待接收`,claimed:`Agent 处理中 · 第 ${L.seq} 批${n?`（已解决 ${n} 条）`:dn?`（已初改 ${dn} 条）`:""}`,
+    drafted:`第 ${L.seq} 批已初改 · 待复核（${dn} 条）`,review:`第 ${L.seq} 批等待复核`,reviewing:`Agent 复核中 · 第 ${L.seq} 批`}[L.status]
+    ||`Agent 已处理 · 第 ${L.seq} 批${n!=null?`（解决 ${n} 条）`:""}`;
   el.title=(L.status==="done"?`处理摘要：${L.summary||"（未写）"}`:(L.message?`附言：${L.message}`:""))+"\n点击查看处理记录（J）"}
-function openHand(){
+let handMode=null;   // null = 交一批新的；{seq} = 请求复核这一批
+const HOPT=`ae.${RID}.handOpts`;   // 「这批做到 / 允许派发子代理」按审阅分别记住
+function draftedBatches(){const L=hand&&hand.latest,H=(hand&&hand.history)||[];
+  return [...(L?[L]:[]),...H.filter(h=>h&&(!L||h.seq!==L.seq))].filter(h=>h&&(h.status==="drafted"||h.status==="review"))}
+function renderHandDrafts(){const ds=handMode?[]:draftedBatches();
+  $("handDrafts").innerHTML=ds.map(h=>h.status==="review"
+    ?`<div class="hd"><span>第 ${+h.seq} 批等待复核（还没有 Agent 接收，${+h.draftedCount||0} 条初改）</span><button data-hfinal="${+h.seq}">直接定稿</button></div>`
+    :`<div class="hd"><span>第 ${+h.seq} 批已初改 · 待复核（${+h.draftedCount||0} 条）</span><button data-hreview="${+h.seq}">请 Agent 复核</button><button data-hfinal="${+h.seq}">直接定稿</button></div>`).join("")}
+function openHand(review){
   if(FILE){copyAll("本地文件模式连不到 Agent：已复制全部批注，粘贴到对话里交给 Agent");return}
-  const open=notes.filter(x=>!isDone(x)),pages=[...new Set(open.map(x=>x.page))].sort((a,b)=>a-b);
-  $("handInfo").textContent=open.length?`未处理批注 ${open.length} 条，涉及第 ${pages.join("、")} 页。`:"目前没有未处理的批注（也可以只带附言交给 Agent）。";
+  handMode=review&&review.seq?{seq:+review.seq}:null;
+  const o=LS.get(HOPT,{})||{};document.querySelectorAll('input[name="htarget"]').forEach(r=>r.checked=r.value===(o.target==="review"?"review":"final"));
+  $("hSub").checked=!!o.sub;
+  $("handTitle").textContent=handMode?`请 Agent 复核第 ${handMode.seq} 批`:"交给 Agent";
+  $("doHand").innerHTML=(handMode?"请求复核":"交给 Agent")+`<kbd><span class="kmod">${MOD}</span>↵</kbd>`;
+  $("hTargetRow").style.display=handMode||srvNoStages?"none":"";$("hSubRow").style.display=srvNoStages?"none":"";
+  $("hOld").style.display=srvNoStages&&mode==="server"?"":"none";
+  renderHandDrafts();
+  if(!handMode&&mode==="server")api("GET","/api/handoff").then(d=>{if(d&&Array.isArray(d.history)){hand={...hand,...d};if($("hand").classList.contains("on"))renderHandDrafts()}}).catch(()=>{});   // 更早的待复核批次
+  const open=notes.filter(x=>x.status==="open"&&!flight.has(x.id)),pages=[...new Set(open.map(x=>x.page))].sort((a,b)=>a-b);
+  if(handMode){const dn=notes.filter(x=>isDraft(x)&&x.draftBatch===handMode.seq).length;
+    $("handInfo").textContent=`第 ${handMode.seq} 批有 ${dn} 条已初改·待复核。复核者会逐条看初改（通过 / 再改 / 退回给你），也会接手初改没动的批注。`}
+  else $("handInfo").textContent=open.length?`未处理批注 ${open.length} 条，涉及第 ${pages.join("、")} 页。`:"目前没有未处理的批注（也可以只带附言交给 Agent）。";
   const L=hand&&hand.latest;
   $("handLast").textContent=L?`上一次：第 ${L.seq} 批，${HAND_ZH[L.status]||L.status}${"resolvedCount" in L?`，解决 ${+L.resolvedCount} 条`:""}${L.status==="done"&&L.summary?"。处理摘要："+L.summary:""}`:"";
   $("handHist").style.display=L?"":"none";
+  $("handMsg").placeholder=handMode?"给复核者的附言（可选）：例如「重点看第 7 页的口径」":"给 Agent 的附言（可选）：例如「先改第 7–12 页，口径问题先别动」";
   $("hand").classList.add("on");$("handMsg").focus()}
-$("handBtn").onclick=openHand;$("handState").onclick=()=>hand&&hand.latest?openBatches():openHand();
+$("handDrafts").addEventListener("click",e=>{const r=e.target.closest("[data-hreview]"),f=e.target.closest("[data-hfinal]");
+  if(r)openHand({seq:+r.dataset.hreview});else if(f){$("hand").classList.remove("on");finalizeBatch(+f.dataset.hfinal)}});
+async function batchAction(path,body,okMsg){
+  if(mode!=="server"){toast("要连着本地服务才能操作批次（现在："+$("mode").textContent.replace("● ","")+"）",4000);return}
+  try{const r=await api("POST",path,body);if(r&&r.handoff)setHand(r.handoff);await resync();if($("batches").classList.contains("on"))loadBatches();toast(okMsg,3500)}
+  catch(e){toast(e.code==="no-api"?"本地服务是旧版本，不支持复核：停掉旧服务后重新运行 serve.py":"没能完成："+e.message,6000)}}
+function requestReview(seq,message,sub){return batchAction("/api/handoff/review",{seq,message,allowSubagents:sub},`已请求复核第 ${seq} 批，等待 Agent 接收`)}
+function finalizeBatch(seq){const dn=notes.filter(x=>isDraft(x)&&x.draftBatch===seq).length;
+  if(!confirm(`跳过复核，把第 ${seq} 批的 ${dn} 条初改直接定为已处理？`))return;
+  return batchAction("/api/handoff/finalize",{seq},`第 ${seq} 批已定稿`)}
+$("handBtn").onclick=()=>openHand();$("handState").onclick=()=>hand&&hand.latest?openBatches():openHand();
 $("handHist").onclick=()=>{$("hand").classList.remove("on");openBatches()};
 // 处理记录：每次「交给 Agent」算一批——提交、接收、收尾，这批解决了哪些批注，处理摘要
 const fmtIso=v=>fmtTime(Date.parse(v||"")||0);
@@ -806,25 +883,47 @@ async function loadBatches(){   // 全量处理记录只在弹窗打开时取（
   renderBatches()}
 function renderBatches(){
   if(!hand||!Array.isArray(hand.history)){$("batchList").innerHTML='<p class="empty">正在读取处理记录…</p>';$("batchSum").textContent="";return}
-  const H=hand.history,byId=new Map(notes.map(x=>[x.id,x])),who=w=>w==="claude"?"Claude":w;
-  $("batchSum").textContent=H.length?`共 ${H.length} 批 · 已处理 ${+hand.done||0}，处理中 ${+hand.claimed||0}，等待接收 ${+hand.pending||0}`:"";
+  const H=hand.history,byId=new Map(notes.map(x=>[x.id,x])),who=w=>w==="claude"?"Claude":w==="page"?"你":w;
+  $("batchSum").textContent=H.length?`共 ${H.length} 批 · 已处理 ${+hand.done||0}，处理中 ${+hand.claimed||0}，等待接收 ${+hand.pending||0}`
+    +[["drafted","待复核"],["review","等待复核"],["reviewing","复核中"]].map(([k,z])=>hand[k]?`，${z} ${+hand[k]}`:"").join(""):"";
+  const STG={draft:"初改",review:"复核"};
   const box=$("batchList");if(box.querySelector("details"))batchOpen=new Set([...box.querySelectorAll("details[data-seq]")].filter(e=>e.open).map(e=>e.dataset.seq));
   box.innerHTML=H.length?H.map(h=>{const ids=Array.isArray(h.resolvedIds)?h.resolvedIds:[],by=h.doneBy||h.claimedBy||"";
     return `<div class="batch ${escH(h.status)}"><div class="bh"><b>第 ${+h.seq} 批</b><span class="bs">${escH(HAND_ZH[h.status]||h.status)}${by?" · "+escH(who(by)):""}</span>`
       +("resolvedCount" in h?`<span class="bn">解决 ${+h.resolvedCount} 条${h.leftOpen?`，提交时的批注还剩 ${+h.leftOpen} 条`:""}${h.live?"（进行中）":h.estimated?"（按时间推算）":""}</span>`:"")+`</div>`
       +`<div class="bt">提交 ${escH(fmtIso(h.at))}，当时未处理 ${+h.openCount||0} 条${Array.isArray(h.pages)&&h.pages.length?`（第 ${h.pages.map(Number).join("、")} 页）`:""}${h.claimedAt?` · 接收 ${escH(fmtIso(h.claimedAt))}`:""}${h.doneAt?` · 收尾 ${escH(fmtIso(h.doneAt))}`:""}</div>`
       +(h.message?`<div class="bm">附言：${escH(h.message)}</div>`:"")
+      +("target" in h?`<div class="bt">要求：${h.target==="review"?"做到已初改·待复核":"做到定稿"}${h.allowSubagents?"，允许派发子代理":"，由主代理亲自处理"}</div>`:"")
+      +(Array.isArray(h.stages)?h.stages.filter(e=>e&&typeof e==="object").map(e=>{const two=h.target==="review"||!!h.allowSubagents,nm=e.stage==="draft"&&!two?"处理":(STG[e.stage]||e.stage);return e.stage==="accept"
+          ?`<div class="bst">你直接定稿 ${+e.count||0} 条（${escH(fmtIso(e.at))}）</div>`
+          :`<div class="bst">${escH(nm)} · ${escH(who(e.by||""))}：接收 ${escH(fmtIso(e.claimedAt))}${e.doneAt?`，收尾 ${escH(fmtIso(e.doneAt))}`:"（进行中）"}`
+            +(two&&e.stage==="draft"&&e.doneAt&&Array.isArray(e.draftedIds)?`，初改 ${e.draftedIds.length} 条`:"")
+            +(e.stage==="review"&&e.doneAt?`，通过 ${+e.approved||0}、再改 ${+e.revised||0}、退回 ${+e.returned||0}、新处理 ${+e.resolved||0}`:"")
+            +(e.summary&&e.summary!==h.summary?`<br>${escH(nm)}摘要：${escH(e.summary)}`:"")+`</div>`}).join(""):"")
+      +(h.reviewMessage?`<div class="bm">请求复核的附言：${escH(h.reviewMessage)}</div>`:"")
       +(h.summary?`<div class="bsum">处理摘要：${escH(h.summary)}</div>`:h.status==="done"?`<div class="bt">（Agent 没写处理摘要）</div>`:"")
+      +(h.status==="drafted"?`<div class="bact"><button data-breview="${+h.seq}">请 Agent 复核</button><button data-bfinal="${+h.seq}">直接定稿</button></div>`
+        :h.status==="review"?`<div class="bact"><button data-bfinal="${+h.seq}" title="还没有 Agent 接收复核：不等了，直接定稿">直接定稿</button></div>`:"")
+      +(Array.isArray(h.draftedIds)&&h.draftedIds.length?`<details data-seq="d${+h.seq}"${(batchOpen?batchOpen.has("d"+(+h.seq)):h.status==="drafted")?" open":""}><summary>已初改·待复核的 ${h.draftedIds.length} 条</summary>${h.draftedIds.map(id=>{const x=byId.get(id);
+        return x?`<div class="bi" data-goto="${escH(id)}">第 ${+x.page} 页 · ${escH(clip(noteSummary(x),70))}${x.resolution?`<span class="br">初改说明：${escH(clip(x.resolution,100))}</span>`:""}</div>`:""}).join("")}</details>`:"")
       +(ids.length?`<details data-seq="${+h.seq}"${(batchOpen?batchOpen.has(String(+h.seq)):h===H[0])?" open":""}><summary>这批解决的 ${ids.length} 条（点一条跳到那一页）</summary>${ids.map(id=>{const x=byId.get(id);
         return x?`<div class="bi" data-goto="${escH(id)}">第 ${+x.page} 页 · ${escH(clip(noteSummary(x),70))}${isDone(x)?(x.resolution?`<span class="br">处理说明：${escH(clip(x.resolution,100))}</span>`:""):"（之后被重新打开）"}</div>`
           :`<div class="bi">（这条批注已删除）</div>`}).join("")}</details>`:"")+`</div>`}).join(""):'<p class="empty">还没有交给 Agent 的记录。</p>'}
 function openBatches(){if(FILE){toast("处理记录要用本地服务打开对照页才能看到");return}batchOpen=null;$("batchList").innerHTML="";renderBatches();$("batches").classList.add("on");loadBatches()}
-$("batchList").addEventListener("click",e=>{const b=e.target.closest("[data-goto]");if(!b)return;const x=notes.find(n=>n.id===b.dataset.goto);if(!x)return;
+$("batchList").addEventListener("click",e=>{
+  const rv=e.target.closest("[data-breview]"),fn=e.target.closest("[data-bfinal]");
+  if(rv){$("batches").classList.remove("on");openHand({seq:+rv.dataset.breview});return}
+  if(fn){finalizeBatch(+fn.dataset.bfinal);return}
+  const b=e.target.closest("[data-goto]");if(!b)return;const x=notes.find(n=>n.id===b.dataset.goto);if(!x)return;
   $("batches").classList.remove("on");const k=P.findIndex(p=>p.n===x.page);if(k<0)return;
   if(isDone(x)&&hideDone){hideDone=false;LS.set(K.hide,false)}
   if(k!==i)go(k);else refreshList(true);setTimeout(()=>{flashCard(x.id);flash(pinEl(x.id))},80)});
 $("handMsg").addEventListener("keydown",e=>{if(!e.isComposing&&e.key==="Enter"&&(e.metaKey||e.ctrlKey))$("doHand").click();else if(e.key==="Escape")$("hand").classList.remove("on")});
-$("doHand").onclick=()=>{const message=$("handMsg").value.trim();$("hand").classList.remove("on");$("handMsg").value="";mutate({kind:"handoff",message})};
+$("doHand").onclick=()=>{const message=$("handMsg").value.trim(),sub=$("hSub").checked,
+    target=(document.querySelector('input[name="htarget"]:checked')||{}).value==="review"?"review":"final";
+  LS.set(HOPT,{target,sub});$("hand").classList.remove("on");$("handMsg").value="";
+  if(handMode){requestReview(handMode.seq,message,sub);return}
+  mutate({kind:"handoff",message,target,allowSubagents:sub})};
 
 // ---------- 导出 / 导入 ----------
 function exportText(){
@@ -832,9 +931,9 @@ function exportText(){
   const pages=Object.keys(by).map(Number).sort((a,b)=>a-b), open=notes.filter(x=>!isDone(x)).length;
   let o=`# 批注 · ${unH(document.title)}\n导出时间：${new Date().toLocaleString("zh-CN")}；共 ${notes.length} 条（未处理 ${open}），涉及 ${pages.length} 页\n报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。\n`;
   pages.forEach(n=>{const t=P.find(p=>p.n===n);o+=`\n## 第 ${n} 页｜${unH(t?t.title:by[n][0].title||"")}\n`;
-    by[n].forEach((x,k)=>{o+=`${k+1}. 【${x.target||"未指定"}${x.pin?`·标点 ${markNo(n,x.id)}（x ${x.pin.x}%，y ${x.pin.y}%）`:""}${(r=>r?`·框选 ${markNo(n,x.id)}（x ${r.x}%，y ${r.y}%，宽 ${r.w}%，高 ${r.h}%）`:"")(regionOf(x))}】${isDone(x)?"【已处理】":""}${String(x.text).replace(/\n/g,"\n   ")}\n`;
+    by[n].forEach((x,k)=>{o+=`${k+1}. 【${x.target||"未指定"}${x.pin?`·标点 ${markNo(n,x.id)}（x ${x.pin.x}%，y ${x.pin.y}%）`:""}${(r=>r?`·框选 ${markNo(n,x.id)}（x ${r.x}%，y ${r.y}%，宽 ${r.w}%，高 ${r.h}%）`:"")(regionOf(x))}】${isDone(x)?"【已处理】":isDraft(x)?"【已初改·待复核】":""}${String(x.text).replace(/\n/g,"\n   ")}\n`;
       if(x.quote)o+=`   > 引用${x.quoteFrom?`（${x.quoteFrom}）`:""}：${String(x.quote).replace(/\n/g," ")}\n`;
-      if(isDone(x)&&x.resolution)o+=`   处理说明：${String(x.resolution).replace(/\n/g," ")}\n`;
+      if((isDone(x)||isDraft(x))&&x.resolution)o+=`   ${isDraft(x)?"初改说明":"处理说明"}：${String(x.resolution).replace(/\n/g," ")}\n`;
       if(x.style&&x.style.scope)o+=`   风格优化：${STYLE_ZH[x.style.scope]||"整页"}\n`;
       if(x.anchor)o+=`   位置线索：${String(x.anchor).replace(/\n/g," ")}\n`;
       if(Array.isArray(x.skills)&&x.skills.length)o+=`   技能：${x.skills.join("、")}\n`;
@@ -845,13 +944,13 @@ function parseMd(text){const items=[];let page=null,title="",cur=null;
     if((m=line.match(/^## 第 (\d+) 页｜(.*)$/))){page=+m[1];title=m[2].trim();cur=null;return}
     if(page===null)return;
     if((m=line.match(/^\d+\. 【([^】·]*)(?:·标点 \d+（x ([\d.]+)%，y ([\d.]+)%）)?(?:·框选 \d+（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)?】(.*)$/))){let t=m[8],st="open";
-      if(t.startsWith("【已处理】")){st="resolved";t=t.slice(5)}
+      if(t.startsWith("【已处理】")){st="resolved";t=t.slice(5)}else if(t.startsWith("【已初改·待复核】")){st="drafted";t=t.slice(9)}
       cur={page,title,target:m[1],text:t,status:st,pin:m[2]?{x:+m[2],y:+m[3]}:null};if(m[4])cur.region={x:+m[4],y:+m[5],w:+m[6],h:+m[7]};items.push(cur);return}
     if(!cur)return;
     if((m=line.match(/^\s+> 引用(?:（([^）]*)）)?：(.*)$/))){cur.quoteFrom=m[1]||"";cur.quote=m[2];
       if(cur.text===DEL_TEXT)cur.edit={op:"delete",from:cur.quote};
       else if(cur.text.startsWith(REP_PREFIX))cur.edit={op:"replace",from:cur.quote,to:cur.text.slice(REP_PREFIX.length)};return}
-    if((m=line.match(/^\s+处理说明：(.*)$/))){cur.resolution=m[1];return}
+    if((m=line.match(/^\s+(?:处理|初改)说明：(.*)$/))){cur.resolution=m[1];return}
     if((m=line.match(/^\s+技能：(.*)$/))){cur.skills=parseSkills(m[1]);return}
     if((m=line.match(/^\s+风格优化：(整页|标点处|框选处|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$/))){
       if(m[2])cur.region={x:+m[2],y:+m[3],w:+m[4],h:+m[5]};   // 0.3 导出：框写在风格优化这一行
@@ -901,7 +1000,7 @@ $("dlFailed").onclick=()=>{const f=failed.get();if(!f.length)return;
   download(`未能保存_${NS}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:RID,notes:items,ops:f},null,2),"application/json");
   if(confirm("已下载。要清除这些「未能保存」的记录吗？（下载的文件可在「导入…」里重新导入）")){failed.clear();updateMode()}};
 $("clearAll").onclick=()=>{if(notes.length&&confirm(`清空全部 ${notes.length} 条批注？建议先复制或下载。`)){notes=[];mirror();refreshList(true);openAll()}};
-document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{if(e.target===m||e.target.hasAttribute("data-close"))m.classList.remove("on")}));
+document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{if(e.target===m||e.target.closest("[data-close]"))m.classList.remove("on")}));
 
 // ---------- 翻页（每页的草稿、引用、标点各自保留） ----------
 function saveDraft(){const n=P[i].n,t=$("ntext").value;
@@ -941,7 +1040,7 @@ document.addEventListener("keydown",e=>{
     if(k==="b"&&sel&&sel.pair){e.preventDefault();$("pairOn").checked=!$("pairOn").checked;syncPair();return}
     if(e.key==="Escape"){hideSelbar();sel=null;return}}
   if(document.querySelector(".modal.on")&&e.key!=="Escape")return;
-  if(k==="a"){e.preventDefault();openHand();return}
+  if(k==="a"){e.preventDefault();openHand();return}   // 交给 Agent（有待复核的批次时，弹窗顶部可请求复核或定稿）
   if(k==="j"){e.preventDefault();openBatches();return}
   if(k==="p"){e.preventDefault();remarkId=null;setMarkMode(!markMode);return}
   if(k==="l"){e.preventDefault();goLast();return}
