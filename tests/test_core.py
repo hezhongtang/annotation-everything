@@ -21,10 +21,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 FIXTURE = ROOT / "fixtures" / "sample"
 sys.path.insert(0, str(SCRIPTS))
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
 
 import build_viewer  # noqa: E402
 import notes as notes_cli  # noqa: E402
 import notes_store as store  # noqa: E402
+import ledger  # noqa: E402
 import serve  # noqa: E402
 
 
@@ -187,7 +189,9 @@ class CliTests(unittest.TestCase):
         store.add(copy / "review", {"page": 1, "text": "x"})
         _c, out = self.run_cli("show", str(copy / "review"))
         self.assertIn(str((copy / "report.html").resolve()), out, "复制后的目录树应指向副本里的源文件")
-        self.assertNotIn(str(tree), out)
+        src_line = next(ln for ln in out.splitlines() if ln.startswith("源文件"))
+        self.assertNotIn(str(tree), src_line)
+        self.assertIn("复制来的", out, "副本还没换标识：不顶替原审阅的台账条目，并提示 --rebuild")
 
     def test_import_legacy_markdown(self):
         md = ("# 批注 · 汇报稿对照 viewer_r2\n导出时间：x\n\n## 第 7 页｜提前确认收入\n"
@@ -1233,11 +1237,13 @@ class BuildTests(unittest.TestCase):
         m = json.loads((self.out / "review.json").read_text())
         self.assertEqual(m["sections"], [["开篇 结论与收入", 3, 4], ["主线 成本与下一步", 5, 6]])
         self.assertEqual(m["title"], "示例咖啡 2030 年三季度经营回顾")
-        self.assertEqual(m["namespace"], "review_v1")
+        self.assertEqual(m["name"], m["title"], "审阅名默认取标题")
+        self.assertEqual(m["namespace"], f"示例咖啡_2030_年三季度经营回顾_{m['reviewId'][:4]}", "导出标签：审阅名 + 标识前 4 位")
         self.assertRegex(m["reviewId"], r"^[0-9a-f]{16}$")
         self.assertFalse(os.path.isabs(m["sources"]["report"]))
         html = (self.out / "index.html").read_text()
-        self.assertNotRegex(html, r"__(TITLE|INTRO|PAGES|SECTIONS|NS|RID|RCSS|SECT|CSP)__")
+        self.assertNotRegex(html, r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|CSP)__")
+        self.assertNotIn(str(self.out.resolve()), html, "对照页里不写本机路径")
         self.assertIn("外卖套餐提价 1 元", html)
         self.assertEqual(r["seconds"], 20 + 30 + 90 + 120 + 120 + 90)
         self.assertEqual((self.out / "index.html").stat().st_mode & 0o777, 0o600)
@@ -1534,6 +1540,295 @@ class ServerTests(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+
+class LedgerTests(unittest.TestCase):
+    """审阅台账、审阅名、专属端口。每个用例用自己的台账目录。"""
+
+    def setUp(self):
+        self._home = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+
+    def tearDown(self):
+        os.environ["AE_HOME"] = self._home
+
+    def build(self, out: Path, **kw) -> dict:
+        with redirect_stderr(io.StringIO()):
+            return build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", out, **kw)
+
+    def test_build_registers_and_name_persists_across_rebuild(self):
+        d = tmpdir() / "workbench"
+        r = self.build(d, name="V7 汇报稿")
+        e = ledger.get(r["reviewId"])
+        self.assertEqual((e["dir"], e["port"]), (str(d.resolve()), None), "生成时登记，端口要到第一次启动才分")
+        self.assertEqual(json.loads((d / "review.json").read_text())["name"], "V7 汇报稿")
+        with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+            build_viewer.main(["--rebuild", str(d)])
+        m = json.loads((d / "review.json").read_text())
+        self.assertEqual((m["name"], m["namespace"]), ("V7 汇报稿", f"V7_汇报稿_{r['reviewId'][:4]}"), "重建沿用 --name")
+        self.assertIn("审阅名：V7 汇报稿", out.getvalue())
+        self.assertIn('NAME="V7 汇报稿"'.replace('"', ""), (d / "index.html").read_text().replace('"', ""))
+
+    def test_same_dir_name_gets_distinct_labels_and_duplicate_name_warns(self):
+        a, b = tmpdir() / "workbench", tmpdir() / "workbench"
+        ra = self.build(a)
+        rb = self.build(b)
+        self.assertNotEqual(json.loads((a / "review.json").read_text())["namespace"],
+                            json.loads((b / "review.json").read_text())["namespace"], "目录同名，导出标签也分得开")
+        self.assertTrue(any("同名审阅" in w and ra["reviewId"][:8] in w for w in rb["warnings"]), rb["warnings"])
+        rc = self.build(tmpdir() / "c", name="另一个名字")
+        self.assertFalse(any("同名审阅" in w for w in rc["warnings"]))
+
+    def test_moved_dir_updates_path_and_copy_gets_new_entry(self):
+        tree = tmpdir()
+        r = self.build(tree / "v1")
+        (tree / "v1").rename(tree / "moved")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            build_viewer.main(["--rebuild", str(tree / "moved")])
+        self.assertEqual(ledger.get(r["reviewId"])["dir"], str((tree / "moved").resolve()), "搬家：按标识更新路径")
+        self.assertEqual(len(ledger.entries()), 1)
+
+    def test_port_assignment_is_owned_and_stable(self):
+        busy = {8765}
+        a, b, c = (tmpdir() for _ in range(3))
+        ra, rb, rc = "a" * 16, "b" * 16, "c" * 16
+        pa = ledger.assign_port(ra, a, is_free=lambda p: p not in busy)
+        self.assertEqual(pa, 8766, "此刻被占用的端口不分")
+        pb = ledger.assign_port(rb, b, is_free=lambda p: True)
+        self.assertEqual(pb, 8765, "没人认领的最小端口")
+        self.assertEqual(ledger.assign_port(ra, a), 8766, "已有专属端口：不变（服务停了也一样）")
+        self.assertEqual(ledger.assign_port(rc, c, prefer=8766), 8767, "想认领的端口归别人时不给")
+        self.assertEqual(ledger.assign_port("d" * 16, tmpdir(), prefer=9100), 9100, "已在运行的认领当前端口")
+        with self.assertRaises(ledger.LedgerError):
+            ledger.claim_port(rc, c, 8765)
+        ledger.claim_port(rc, c, 9200)
+        self.assertEqual(ledger.get(rc)["port"], 9200)
+        rid, e = ledger.forget("bbbb")
+        self.assertEqual((rid, e["port"]), (rb, 8765))
+        self.assertEqual(ledger.assign_port("e" * 16, tmpdir()), 8765, "forget 之后端口才释放")
+        self.assertEqual(oct(Path(os.environ["AE_HOME"], ledger.LEDGER_FILE).stat().st_mode & 0o777), "0o600")
+
+    def test_resolve_dir_by_prefix(self):
+        d = tmpdir() / "r"
+        r = self.build(d)
+        self.assertEqual(ledger.resolve_dir(r["reviewId"][:6]), d.resolve())
+        self.assertEqual(ledger.resolve_dir(str(d)), d, "已存在的路径原样用")
+        ledger.register(r["reviewId"][:6] + "0" * 10, tmpdir())
+        ledger.register(r["reviewId"][:6] + "1" * 10, tmpdir())
+        with self.assertRaises(ledger.LedgerError) as cm:
+            ledger.resolve_dir(r["reviewId"][:6])
+        self.assertIn("多份审阅", str(cm.exception))
+        with self.assertRaises(ledger.LedgerError):
+            ledger.resolve_dir("ffff")
+
+    def test_corrupt_ledger_is_not_overwritten_and_does_not_block_build(self):
+        f = Path(os.environ["AE_HOME"]) / ledger.LEDGER_FILE
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("{坏的", encoding="utf-8")
+        r = self.build(tmpdir() / "r")
+        self.assertTrue(any("审阅台账" in w for w in r["warnings"]), r["warnings"])
+        self.assertEqual(f.read_text(encoding="utf-8"), "{坏的")
+
+    def test_import_refuses_other_review_unless_forced(self):
+        a, b = tmpdir() / "a", tmpdir() / "b"
+        ra, _ = self.build(a), self.build(b)
+        f = tmpdir() / "x.json"
+        f.write_text(json.dumps({"version": 1, "reviewId": ra["reviewId"], "notes": [{"page": 1, "text": "救回来的"}]}),
+                     encoding="utf-8")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(notes_cli.main(["import", str(b), str(f)]), 2)
+        self.assertIn("另一份审阅", err.getvalue())
+        self.assertIn(str(a.resolve()), err.getvalue(), "指出它在台账里的位置")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(notes_cli.main(["import", ra["reviewId"][:8], str(f)]), 0, "按标识导回原审阅")
+            self.assertEqual(notes_cli.main(["import", str(b), str(f), "--force"]), 0)
+        self.assertEqual(len(store.load(a)["notes"]), 1)
+        self.assertEqual(len(store.load(b)["notes"]), 1)
+
+    def test_list_shows_unattended_handoff_and_waiting_agent(self):
+        d = tmpdir() / "r"
+        r = self.build(d, name="HA-379 票面")
+        store.add(d, {"page": 1, "text": "改"})
+        store.handoff_submit(d, "", by="page")
+        with redirect_stdout(io.StringIO()) as out:
+            serve.list_reviews(None, True)
+        row = json.loads(out.getvalue())["reviews"][0]
+        self.assertEqual((row["name"], row["state"], row["pending"], row["unattended"]), ("HA-379 票面", "已停", 1, True))
+        ledger.wait_file(d, os.getpid()).write_text(json.dumps({"pid": os.getpid(), "stage": "any"}))
+        with redirect_stdout(io.StringIO()) as out:
+            serve.list_reviews(None, False)
+        self.assertIn("代理在等", out.getvalue())
+        self.assertNotIn("⚠", out.getvalue())
+        ledger.wait_file(d, os.getpid()).unlink()
+        ledger.wait_file(d, 999999).write_text(json.dumps({"pid": 999999, "stage": "any"}))
+        with redirect_stdout(io.StringIO()) as out:
+            serve.list_reviews(d.parent, False)
+        self.assertIn("⚠ 有提交在等接收", out.getvalue(), "进程已退出的标记不算")
+        with redirect_stdout(io.StringIO()) as out:
+            serve.list_reviews(tmpdir(), True)
+        self.assertEqual(json.loads(out.getvalue())["reviews"], [], "--under 只列那个目录之下的")
+        import shutil
+        shutil.rmtree(d)
+        with redirect_stdout(io.StringIO()) as out:
+            serve.list_reviews(None, False)
+        self.assertIn("目录不在", out.getvalue())
+        self.assertIsNotNone(ledger.get(r["reviewId"]), "失效条目不自动删")
+
+    def test_wait_leaves_and_removes_marker(self):
+        d = tmpdir() / "r"
+        self.build(d)
+        seen = []
+        real = time.sleep
+
+        def spy(x):
+            seen.append(ledger.wait_file(d, os.getpid()).exists())
+            real(0.01)
+        time.sleep = spy
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(notes_cli.main(["wait", str(d), "--timeout", "0.3", "--interval", "0.2"]), 3)
+        finally:
+            time.sleep = real
+        self.assertTrue(seen and all(seen), "等待期间留着标记")
+        self.assertFalse(ledger.wait_file(d, os.getpid()).exists(), "结束后删掉")
+
+    def test_health_reports_review_name(self):
+        d = tmpdir() / "r"
+        self.build(d, name="V7 汇报稿")
+        srv = serve.ReviewServer(d, 0, log_to_file=False)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            s, _, b = serve._req(srv.port, "GET", "/api/health", {"Host": f"127.0.0.1:{srv.port}"})
+            self.assertEqual((s, json.loads(b)["name"]), (200, "V7 汇报稿"))
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_serve_uses_owned_port_and_falls_back_temporarily(self):
+        d = tmpdir() / "r"
+        r = self.build(d)
+        port = free_port()
+        env = {**os.environ}
+
+        def start(*extra):
+            p = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), r["reviewId"][:8], "--no-open", *extra],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+            sf = d / serve.STATUS_FILE
+            for _ in range(80):
+                if sf.exists() and json.loads(sf.read_text()).get("pid") == p.pid:
+                    return p, json.loads(sf.read_text())["port"]
+                if p.poll() is not None:
+                    break
+                time.sleep(0.1)
+            p.terminate()
+            raise AssertionError("服务没起来：" + p.communicate()[1])
+
+        def stop(p):
+            p.terminate()
+            return p.communicate(timeout=10)[1]
+
+        p, got = start("--claim-port", str(port))
+        stop(p)
+        self.assertEqual((got, ledger.get(r["reviewId"])["port"]), (port, port), "按标识启动，用专属端口")
+        p, got = start()
+        stop(p)
+        self.assertEqual(got, port, "再启动：回到专属端口")
+        blocker = socket.socket()
+        blocker.bind(("127.0.0.1", port))
+        blocker.listen()
+        try:
+            p, got = start()
+            err = stop(p)
+        finally:
+            blocker.close()
+        self.assertNotEqual(got, port)
+        self.assertIn(f"专属端口仍是 {port}", err)
+        self.assertEqual(ledger.get(r["reviewId"])["port"], port, "临时顺延不改专属端口")
+
+    def test_claim_refused_does_not_start(self):
+        d, other = tmpdir() / "r", tmpdir() / "o"
+        self.build(d)
+        ledger.register("f" * 16, other)
+        ledger.claim_port("f" * 16, other, 9411)
+        for bad in (9411, 80):
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(serve.serve(d, None, False, False, claim=bad), 2)
+            self.assertIn("服务没有启动", err.getvalue())
+            self.assertFalse((d / serve.STATUS_FILE).exists())
+        self.assertEqual(ledger.get("f" * 16)["port"], 9411)
+
+    def test_copied_dir_does_not_take_over_entry_or_port(self):
+        tree = tmpdir()
+        r = self.build(tree / "a")
+        ledger.claim_port(r["reviewId"], tree / "a", 9411)
+        subprocess.run(["cp", "-R", str(tree / "a"), str(tree / "a_copy")], check=True)
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+            notes_cli.main(["show", str(tree / "a_copy")])
+        self.assertIn("复制来的", err.getvalue())
+        self.assertEqual(ledger.get(r["reviewId"])["dir"], str((tree / "a").resolve()), "台账仍指向原目录")
+        with redirect_stderr(io.StringIO()):
+            first, owned, avoid = serve.plan_port((tree / "a_copy").resolve(), r["reviewId"], None, None)
+        self.assertEqual((owned, avoid.get(9411)), (None, r["reviewId"]), "副本不用、并避开原审阅的专属端口")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            build_viewer.main(["--rebuild", str(tree / "a_copy")])
+        with redirect_stdout(io.StringIO()) as out:
+            serve.list_reviews(None, True)
+        rows = {x["reviewId"]: x for x in json.loads(out.getvalue())["reviews"]}
+        self.assertEqual(rows[r["reviewId"]]["state"], "已停", "换了标识以后原审阅照常在列，没被标成失效")
+        self.assertEqual(len(rows), 2)
+
+    def test_bind_skips_other_reviews_ports(self):
+        d = tmpdir() / "r"
+        self.build(d)
+        p = free_port()
+        srv, url, trail = serve.bind(d, p, False, tries=3, avoid={p: "f" * 16})
+        try:
+            self.assertIsNone(url)
+            self.assertNotEqual(srv.port, p)
+            self.assertTrue(any("跳过" in t for t in trail))
+        finally:
+            srv.server_close()
+
+    def test_path_like_args_are_never_taken_as_ids(self):
+        d = tmpdir() / "r"
+        r = self.build(d)
+        pre = r["reviewId"][:6]
+        for arg in (f"./{pre}", f"{pre}/", f"~/{pre}"):
+            self.assertNotEqual(ledger.resolve_dir(arg), d.resolve(), arg)
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(notes_cli.main(["show", f"./{pre}"]), 2, "打错的相对路径报「不是审阅目录」，不换成别的审阅")
+
+    def test_wait_marker_removed_after_handoff_and_stage_aware_unattended(self):
+        d = tmpdir() / "r"
+        self.build(d)
+        store.add(d, {"page": 1, "text": "改"})
+        store.handoff_submit(d, "", by="page")
+        ledger.wait_file(d, os.getpid()).write_text(json.dumps({"pid": os.getpid(), "stage": "review"}))
+        with redirect_stdout(io.StringIO()) as out:
+            serve.list_reviews(None, True)
+        self.assertTrue(json.loads(out.getvalue())["reviews"][0]["unattended"], "只等复核的代理接不了初改的提交")
+        ledger.wait_file(d, os.getpid()).unlink()
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(notes_cli.main(["wait", str(d), "--timeout", "5"]), 0)
+        self.assertEqual(list(d.glob(ledger.WAIT_PREFIX + "*")), [], "收到提交后删掉标记")
+
+    def test_plan_port_claims_running_port_and_skips_others(self):
+        d = tmpdir() / "r"
+        r = self.build(d)
+        other = tmpdir() / "o"
+        ledger.register("f" * 16, other)
+        ledger.claim_port("f" * 16, other, 8765)
+        real = serve.probe
+        serve.probe = lambda p, timeout=1.0: None
+        try:
+            with redirect_stderr(io.StringIO()):
+                first, owned, avoid = serve.plan_port(d, r["reviewId"], None, None)
+        finally:
+            serve.probe = real
+        self.assertEqual((first, owned, avoid), (8766, 8766, {8765: "f" * 16}))
+        with redirect_stderr(io.StringIO()):
+            first, owned, _ = serve.plan_port(d, r["reviewId"], 9300, None)
+        self.assertEqual((first, owned), (9300, 8766), "--port 只是本次临时用")
 
 
 if __name__ == "__main__":

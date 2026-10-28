@@ -5,7 +5,8 @@
   python3 notes.py show <审阅目录> [--all] [--page 7] [--json]   # 默认只列未处理，按页分组的 Markdown
   python3 notes.py resolve <审阅目录> <id> [<id> ...] --note "改了什么"
   python3 notes.py reopen <审阅目录> <id> [<id> ...]
-  python3 notes.py import <审阅目录> <文件>   # 页面导出的 JSON，或旧版对照页「复制全部 / 下载」的 Markdown
+  python3 notes.py import <审阅目录> <文件> [--force]   # 页面导出的 JSON（含别处救回的未保存改动），或旧版 Markdown；
+                                                       # JSON 带的审阅标识与目录不同时拒绝，确认要导就加 --force
   python3 notes.py wait <审阅目录> [--timeout 秒]   # 阻塞到用户点「交给 Agent」，输出提交内容与未处理批注
   python3 notes.py claim <审阅目录>   # 不等待：有等待接收的提交就接收（输出 JSON，退出码 0），没有返回 3
   python3 notes.py done <审阅目录> --summary "处理摘要"   # 收尾这一批：记下解决了哪些、页面显示摘要
@@ -17,21 +18,26 @@
                                                    # 常驻技能：每条批注（按范围：全部/报告/讲稿/风格优化）都先调用
                                                    # 维护技能目录：页面「技能」输入栏的候选
 
+<审阅目录> 处也可以写审阅标识（或至少 4 位前缀），从本机审阅台账查目录。
+
 退出码：0 成功（wait：收到提交）；1 部分 id 不存在；2 参数或目录不对；3 wait 超时。
 处理人默认记为 claude（在 Claude Code 里运行时）或 agent，可用 --by 指定。
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
+import signal
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
 from build_viewer import find_pages, resolve_sources, strip_tags, write_private, PAGE_HEAD  # noqa: E402
 import difflib  # noqa: E402
@@ -39,11 +45,7 @@ import match  # noqa: E402
 
 
 def load_manifest(review_dir: Path) -> dict[str, Any]:
-    f = review_dir / "review.json"
-    try:
-        return json.loads(f.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    return ledger.read_manifest(review_dir)   # 读不了或不是 JSON 对象都返回 {}
 
 
 def default_agent() -> str:
@@ -382,45 +384,49 @@ def parse_always_header(text: str) -> list[dict[str, str]] | None:
     return out
 
 
-def read_import(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]] | None]:
-    """返回 (批注, 常驻技能)；常驻技能只有导出里带了才不是 None（本地文件模式设的常驻技能随之带过来）。"""
+def read_import(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]] | None, str | None]:
+    """返回 (批注, 常驻技能, 来源审阅标识)。常驻技能只有导出里带了才不是 None（本地文件模式设的常驻技能随之带过来）；
+    来源审阅标识取自页面导出的 JSON（reviewId），用来防止导进别的审阅。"""
     text = path.read_text(encoding="utf-8")
     stripped = text.lstrip()
     if stripped.startswith("{") or stripped.startswith("["):
         data = json.loads(text)
         if isinstance(data, dict):
             al = data.get("alwaysSkills")
-            return data.get("notes", []), (al if isinstance(al, list) else None)
-        return data, None
+            rid = data.get("reviewId")
+            return (data.get("notes", []), (al if isinstance(al, list) else None),
+                    rid if isinstance(rid, str) and ledger.RID.fullmatch(rid) else None)
+        return data, None, None
     items = parse_legacy_markdown(text)
     if not items:
         raise SystemExit(f"{path} 里没找到批注：既不是 JSON，也不是对照页导出的 Markdown 格式")
-    return items, parse_always_header(text)
+    return items, parse_always_header(text), None
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="notes.py", description="读写审阅目录里的批注")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("show", help="列出批注（默认只列未处理）")
-    s.add_argument("dir", type=Path)
+    s.add_argument("dir", type=str, help="审阅目录或审阅标识")
     s.add_argument("--all", action="store_true", help="包含已处理")
     s.add_argument("--page", type=int)
     s.add_argument("--json", action="store_true", help="输出原始 JSON")
     s.add_argument("--batch", type=int, help="只看第 N 批涉及的批注（提交时未处理的、这批初改或处理过的）")
     r = sub.add_parser("resolve", help="标记为已处理（两段流程的初改阶段记为「已初改·待复核」）")
-    r.add_argument("dir", type=Path)
+    r.add_argument("dir", type=str, help="审阅目录或审阅标识")
     r.add_argument("ids", nargs="+")
     r.add_argument("--note", default="", help="处理说明：改了哪里、怎么改的（页面上会显示）")
     r.add_argument("--by", default=default_agent(), help="处理人，页面上显示为「已处理 · 处理人」")
     r.add_argument("--seq", type=int, help="记在第几批名下；默认按批注归属自动找（同时有几批在处理时建议写明）")
     o = sub.add_parser("reopen", help="重新打开")
-    o.add_argument("dir", type=Path)
+    o.add_argument("dir", type=str, help="审阅目录或审阅标识")
     o.add_argument("ids", nargs="+")
     i = sub.add_parser("import", help="导入页面导出的 JSON 或旧版 Markdown")
-    i.add_argument("dir", type=Path)
+    i.add_argument("dir", type=str, help="审阅目录或审阅标识")
     i.add_argument("file", type=Path)
+    i.add_argument("--force", action="store_true", help="文件属于另一份审阅（审阅标识不同）时也导入")
     w = sub.add_parser("wait", help="等待用户点「交给 Agent」：收到提交后标为处理中，输出提交内容与未处理批注")
-    w.add_argument("dir", type=Path)
+    w.add_argument("dir", type=str, help="审阅目录或审阅标识")
     w.add_argument("--timeout", type=float, default=0, help="最多等多少秒，0 表示一直等（默认）")
     w.add_argument("--interval", type=float, default=1.0, help="检查间隔秒数，默认 1")
     w.add_argument("--no-claim", action="store_true", help="只看不接收（不改状态）")
@@ -428,7 +434,7 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--stage", choices=("any", "draft", "review"), default="any",
                    help="等哪种：draft 新提交（初改）、review 请求复核的、any 都等（默认）")
     sk = sub.add_parser("skills", help="查看或设置技能目录（页面「技能」输入栏的候选）与常驻技能（每条批注按范围先调用）")
-    sk.add_argument("dir", type=Path)
+    sk.add_argument("dir", type=str, help="审阅目录或审阅标识")
     sk.add_argument("--set", nargs="*", metavar="名称=说明", help="整体替换为这些技能")
     sk.add_argument("--add", nargs="*", metavar="名称=说明", help="追加或更新这些技能")
     sk.add_argument("--remove", nargs="*", metavar="名称", help="移除这些技能")
@@ -439,12 +445,12 @@ def main(argv: list[str] | None = None) -> int:
     sk.add_argument("--always-remove", nargs="*", metavar="名称", help="去掉这些常驻技能（所有范围）")
     sk.add_argument("--always-clear", action="store_true", help="清空常驻技能")
     cl = sub.add_parser("claim", help="不等待：接收最早一个等待中的提交（给自己轮询的代理用，别直接改 handoff.json）")
-    cl.add_argument("dir", type=Path)
+    cl.add_argument("dir", type=str, help="审阅目录或审阅标识")
     cl.add_argument("--by", default=default_agent())
     cl.add_argument("--stage", choices=("any", "draft", "review"), default="any")
     cl.add_argument("--seq", type=int, help="只接这一批")
     dn = sub.add_parser("done", help="收尾当前阶段：初改（按用户要求停在待复核或定稿）或复核（定稿）")
-    dn.add_argument("dir", type=Path)
+    dn.add_argument("dir", type=str, help="审阅目录或审阅标识")
     dn.add_argument("--summary", default="", help="处理结果：改了几条、哪些留给用户定")
     dn.add_argument("--seq", type=int, help="提交序号；默认最近一个处理中的提交")
     dn.add_argument("--by", default=default_agent())
@@ -453,7 +459,7 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--final", action="store_true", help="初改阶段直接定稿（用户要求停在待复核时不允许）")
     dn.add_argument("--accept-rest", action="store_true", help="复核收尾时，没给结论的初改一并通过")
     rv = sub.add_parser("review", help="复核结论：--ok 通过 / --revise 复核者再改 / --return 退回给用户拍板")
-    rv.add_argument("dir", type=Path)
+    rv.add_argument("dir", type=str, help="审阅目录或审阅标识")
     rv.add_argument("ids", nargs="+")
     vg = rv.add_mutually_exclusive_group(required=True)
     vg.add_argument("--ok", action="store_const", const="ok", dest="verdict")
@@ -463,21 +469,28 @@ def main(argv: list[str] | None = None) -> int:
     rv.add_argument("--by", default=default_agent())
     rv.add_argument("--seq", type=int, help="复核的批次；默认按批注的初改批次")
     df = sub.add_parser("diff", help="看初改动了源文件的哪些地方（按页列出）")
-    df.add_argument("dir", type=Path)
+    df.add_argument("dir", type=str, help="审阅目录或审阅标识")
     df.add_argument("--batch", type=int, help="第几批；默认最近一个有快照的批次")
     df.add_argument("--to", choices=("draft", "current"), default="draft",
                     help="对比到：draft 初改收尾时（默认，没有就到当前）/ current 当前文件")
     df.add_argument("--page", type=int, help="只看第 N 页")
     bt = sub.add_parser("batches", help="处理记录：每次「交给 Agent」一批，各批解决了哪些批注、处理摘要")
-    bt.add_argument("dir", type=Path)
+    bt.add_argument("dir", type=str, help="审阅目录或审阅标识")
     bt.add_argument("--last", type=int, help="只看最近几批")
     bt.add_argument("--json", action="store_true", help="输出原始 JSON")
     a = ap.parse_args(argv)
-    d = a.dir.resolve()
+    try:
+        d = ledger.resolve_dir(a.dir).resolve()   # 也接受审阅标识（或至少 4 位前缀）：从台账查目录
+    except (ledger.LedgerError, OSError) as e:
+        print(f"错误：{e}", file=sys.stderr)
+        return 2
     # 打错目录时不要悄悄新建一个空审阅目录
     if not d.is_dir() or not any((d / f).exists() for f in ("review.json", "index.html", store.NOTES_FILE)):
         print(f"错误：{d} 不是审阅目录（里面没有 review.json / index.html / notes.json）。", file=sys.stderr)
         return 2
+    warn = ledger.try_register(load_manifest(d).get("reviewId"), d)   # 顺带登记到审阅台账（目录搬家后更新路径）
+    if warn:
+        print(f"警告：{warn}", file=sys.stderr)
 
     if a.cmd == "show":
         doc = store.load(d)
@@ -513,7 +526,18 @@ def main(argv: list[str] | None = None) -> int:
                 bad += 1
         return 1 if bad else 0
     if a.cmd == "import":
-        items, always = read_import(a.file)
+        items, always, src_rid = read_import(a.file)
+        mine = load_manifest(d).get("reviewId")
+        if src_rid and mine and src_rid != mine and not a.force:
+            other = ""
+            try:
+                e = ledger.get(src_rid)
+                other = f"；台账里它在 {e['dir']}" if e else ""
+            except (ledger.LedgerError, OSError):
+                pass
+            print(f"错误：这个文件属于另一份审阅（标识 {src_rid}），不是 {d}（标识 {mine}）{other}。"
+                  "请导入到它自己的审阅目录；确认就要导进这里，加 --force。", file=sys.stderr)
+            return 2
         _doc, added, skipped, updated = store.import_notes(d, items, by="cli-import")
         print(f"导入完成：新增 {added} 条，更新 {updated} 条，跳过重复 {skipped} 条 → {d / store.NOTES_FILE}")
         if always is not None:
@@ -766,6 +790,13 @@ def diff_cmd(d: Path, seq: int | None, to: str, page: int | None) -> int:
     return 0
 
 
+def _drop_wait_mark(mark: Path | None) -> None:
+    """删掉自己留下的标记（文件名带本进程 pid，不会删到别的 wait 的）。"""
+    if mark is not None:
+        with contextlib.suppress(OSError):
+            mark.unlink()
+
+
 def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stage: str = "any") -> int:
     """阻塞等待「交给 Agent」提交。已经在等待中的提交（之前没人接收）会立即返回。"""
     state = store.handoff_state(d, full=False)
@@ -774,6 +805,18 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
               "也可能是另一个会话在处理）。确认是自己的再处理：notes.py show 查看，处理完 notes.py done --seq N。", file=sys.stderr)
     want = {"draft": ("pending",), "review": ("review",), "any": ("pending", "review")}[stage]
     deadline = time.monotonic() + timeout if timeout > 0 else None
+    mark: Path | None = ledger.wait_file(d, os.getpid())   # 让 serve.py list 看得出「有代理在等这份审阅」
+    try:
+        write_private(mark, json.dumps({"pid": os.getpid(), "stage": stage, "since": store.now_iso()}) + "\n")
+    except OSError:
+        mark = None
+
+    def _stop(*_a: Any) -> None:   # 后台任务被杀（SIGTERM / SIGHUP）也要走 finally 删标记
+        raise KeyboardInterrupt
+    old_handlers = {}
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        with contextlib.suppress(ValueError, OSError):   # 不在主线程时设不了，靠 pid 存活判断兜底
+            old_handlers[sig] = signal.signal(sig, _stop)
     try:
         while True:
             try:
@@ -794,6 +837,11 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
             time.sleep(max(0.2, interval))
     except KeyboardInterrupt:
         return 130
+    finally:
+        _drop_wait_mark(mark)
+        for sig, h in old_handlers.items():
+            with contextlib.suppress(ValueError, OSError):
+                signal.signal(sig, h)
     manifest = load_manifest(d)
     try:
         sources = resolve_sources(d, manifest) if manifest else None
