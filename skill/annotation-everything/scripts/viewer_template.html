@@ -14,7 +14,7 @@ header .stat{font-size:13px;opacity:.9;white-space:nowrap}
 header button,header select{font:inherit;font-size:13px;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.1);color:#fff;border-radius:6px;padding:5px 10px;cursor:pointer}
 header select option{color:#111}
 #mode{font-size:12px;border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:help;border:1px solid rgba(255,255,255,.3)}
-#mode.server{background:#1d6b47}#mode.offline{background:#8a5a12}#mode.mismatch{background:#9b2c1f}#mode.file{background:rgba(255,255,255,.12)}
+#mode.server{background:#1d6b47}#mode.server.old{background:#9b2c1f}#mode.offline{background:#8a5a12}#mode.mismatch{background:#9b2c1f}#mode.file{background:rgba(255,255,255,.12)}
 #legacyBtn{display:none;background:#8a5a12}
 #reloadBtn{display:none;background:#2a78d6;border-color:#2a78d6}
 header #handBtn{background:var(--ae-red);border-color:var(--ae-red)}
@@ -76,6 +76,14 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,1fr
 .badge{display:inline-block;min-width:18px;padding:0 6px;border-radius:9px;background:var(--ae-red);color:#fff;font-size:12px;margin-left:4px}
 .dlg{background:#fff;border-radius:12px;max-width:900px;width:100%;max-height:88vh;display:flex;flex-direction:column}
 #help .dlg{max-width:980px}
+#batches .bar .hint{font-size:12.5px;color:var(--ae-mut);margin:0}
+.batch{border:1px solid var(--ae-line);border-left:4px solid var(--ae-mut);border-radius:8px;padding:8px 12px;margin:0 0 10px}
+.batch.done{border-left-color:var(--ae-green)}.batch.claimed{border-left-color:var(--ae-accent)}.batch.pending{border-left-color:#b7791f}
+.batch .bh{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.batch .bh b{color:var(--ae-navy)}
+.batch .bs{font-size:12.5px;color:var(--ae-mut)}.batch .bn{font-size:13px;font-weight:600;color:var(--ae-green);margin-left:auto}
+.batch .bt{font-size:12.5px;color:var(--ae-mut)}.batch .bm{font-size:13px}.batch .bsum{font-size:13.5px;background:var(--ae-qa);border-radius:6px;padding:4px 8px;margin:4px 0;white-space:pre-wrap}
+.batch details{margin-top:4px;font-size:13px}.batch summary{cursor:pointer;color:var(--ae-accent)}
+.batch .bi{padding:3px 6px;border-radius:4px;cursor:pointer}.batch .bi:hover{background:var(--ae-qa)}.batch .br{display:block;color:var(--ae-mut);font-size:12px;padding-left:1em}
 .dlg .bar{display:flex;gap:8px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--ae-line);flex-wrap:wrap}
 .dlg .bar h2{font-size:17px;margin:0;color:var(--ae-navy);flex:1}
 .dlg button{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:5px 12px;background:#fff;cursor:pointer}
@@ -157,11 +165,11 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
     <div class="notes"><div id="nlist"></div></div>
     <!-- 输入框停靠在面板底部：讲稿再长也不用往下翻找；翻到底时回到批注列表下方的原位 -->
     <div class="form" id="nform"><div class="quote" id="qbox"></div><span id="styleChip"></span>
-      <textarea id="ntext" rows="2" placeholder="写修改意见（C）。可先选中报告或讲稿里的文字：直接删除（D）、改为（R），或作为引用写批注；也可以先「在报告上标点」。"></textarea>
+      <textarea id="ntext" rows="2" placeholder="写修改意见（C）。可先选中报告或讲稿里的文字：直接删除（D）、改为（R），或作为引用写批注；也可以先「在报告上标注」（单击放点、拖动框选）。"></textarea>
       <div class="row">对象 <select id="ntarget"><option>报告</option><option>讲稿</option><option>报告和讲稿</option></select>
         <label class="sk" title="处理这条批注时让 Agent 调用的技能（skill），多个用逗号分隔（K）">技能<kbd>K</kbd><input id="nskills" list="skillList" autocomplete="off" placeholder="可选，如 humanizer-zh"></label>
-        <button data-act="pin" id="pinBtn" title="在报告上标点（P）">在报告上标点<kbd>P</kbd></button>
-        <button data-act="style" id="styleBtn" title="风格优化：整页 / 框选区域 / 标点处（S）">风格优化<kbd>S</kbd></button>
+        <button data-act="pin" id="pinBtn" title="在报告上标注：单击放一个点，拖动框选一块区域（P）">在报告上标注<kbd>P</kbd></button>
+        <button data-act="style" id="styleBtn" title="风格优化：整页 / 标注处（S）">风格优化<kbd>S</kbd></button>
         <button data-act="seelist" id="seeList" title="看本页已有的批注">本页批注 <span id="nhere">0</span> ↑</button>
         <datalist id="skillList"></datalist>
         <span class="grow"></span>
@@ -170,7 +178,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <label id="pairRow" title="另一侧同一页有相同或相近的句子：勾选后这条批注同时要求改两侧（B 切换）"><input type="checkbox" id="pairOn"><span id="pairText"></span><kbd>B</kbd></label></div>
 <div id="pinpop" role="dialog"></div>
 <div id="stylemenu" role="menu"><p class="hint">风格优化的范围：</p>
-<button data-sm="page">整页（当前这一页）<kbd>1</kbd></button><button data-sm="region">在报告上框选区域…<kbd>2</kbd></button><button data-sm="pin">标点处（放一个标点）<kbd>3</kbd></button></div>
+<button data-sm="page">整页（当前这一页）<kbd>1</kbd></button><button data-sm="mark">标注处（单击放点或拖动框选）<kbd>2</kbd></button></div>
 <div id="repbox"><p class="hint">把选中的文字改为：</p><textarea id="repText"></textarea>
 <div class="row"><button id="repCancel">取消<kbd>Esc</kbd></button><button class="primary" id="repOk">确定<kbd>↵</kbd></button></div></div>
 </main>
@@ -180,17 +188,19 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <pre id="allText"></pre></div></div>
 <div class="modal" id="imp"><div class="dlg"><div class="bar"><h2>导入批注</h2><button class="primary" id="doImp">导入</button><button data-close>关闭</button></div>
 <div class="pad"><div id="found"></div>
-<p class="hint">粘贴之前「复制全部」的文字，或「下载 JSON / Markdown」得到的文件内容。同一条批注（同 id，或页码、对象、内容、引用、标点都相同）不会重复导入；同 id 而导入方更新得更晚的，会更新为导入方的内容和状态。</p>
+<p class="hint">粘贴之前「复制全部」的文字，或「下载 JSON / Markdown」得到的文件内容。同一条批注（同 id，或页码、对象、内容、引用、标注都相同）不会重复导入；同 id 而导入方更新得更晚的，会更新为导入方的内容和状态。</p>
 <textarea id="impText" placeholder="在这里粘贴批注文字或 JSON"></textarea>
 <p><input type="file" id="impFile" accept=".json,.md,.txt"></p></div></div></div>
 <div class="modal" id="hand"><div class="dlg"><div class="bar"><h2>交给 Agent</h2><button class="primary" id="doHand">交给 Agent<kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close>取消<kbd>Esc</kbd></button></div>
-<div class="pad"><p id="handInfo"></p><p class="hint" id="handLast"></p>
+<div class="pad"><p id="handInfo"></p><p class="hint"><span id="handLast"></span> <button id="handHist" title="每次交给 Agent 一批：解决了几条、处理摘要（J）">处理记录<kbd>J</kbd></button></p>
 <textarea id="handMsg" placeholder="给 Agent 的附言（可选）：例如「先改第 7–12 页，口径问题先别动」"></textarea>
 <p class="hint">提交后，正在等待的代理会收到这批未处理批注，右上角显示「等待接收 → 处理中 → 已处理」。代理还没接收时再提交一次，会合并成同一次（附言以最新为准）。</p></div></div></div>
+<div class="modal" id="batches"><div class="dlg"><div class="bar"><h2>处理记录</h2><span class="hint" id="batchSum"></span><button data-close>关闭<kbd>Esc</kbd></button></div>
+<div class="pad" id="batchList"></div></div></div>
 <div id="toast"></div>
-<div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，P 在报告上标点，C 写批注，K 填技能；Esc 关闭或取消。<br>
-标点：点「在报告上标点」（P）再点报告放一个；标点可以直接拖动；点标点弹出这条批注的编辑、标为已处理、去掉标点、删除；鼠标移到右侧批注上，对应标点会高亮。<br>
-风格优化（S）：选范围——1 整页、2 在报告上框选区域（像截图那样拖一个框）、3 标点处；可写想要的方向（不写也行），再添加批注。框选的区域可以拖动，点击可编辑或删除。<br>
+<div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要），P 在报告上标注，C 写批注，K 填技能；Esc 关闭或取消。<br>
+在报告上标注（P）：进入标注后，在左侧报告上<b>单击</b>放一个点，或<b>按住拖动</b>框选一块区域（像截图那样），再写意见。点和框都可以直接拖动，框拖右下角可调大小；点一下弹出这条批注的编辑、标为已处理、去掉标注、删除；鼠标移到右侧批注上，对应标注会高亮。已有的批注在「编辑」里可以补标注或重新标注。<br>
+风格优化（S）：选范围——1 整页、2 标注处（用刚放的点或框；还没有就进入标注）；可写想要的方向（不写也行），再添加批注。<br>
 「技能」：某条批注需要特定技能（skill）才能改好时填上，多个用逗号分隔；Agent 处理这条前会先调用它们。候选来自 Agent 写进审阅目录的技能目录和用过的技能。<br>
 选中报告或讲稿里的文字后：D 删除这段（再按一次 D 或 ↵ 确认，防止打字时误触），R 改为…（在弹出的框里改好按 ↵），C 以它为引用写批注；另一侧同一页有相同或相近的句子时会提示「同时改」（默认勾选，B 切换）。写批注时 ⌘/Ctrl + ↵ 添加。<br>
 批注保存：用本地服务打开（地址是 http://127.0.0.1:端口）时，每次改动自动写入审阅目录的 notes.json，Agent 可直接读取；直接双击打开 HTML 时批注只存在本浏览器，用「复制全部」或「下载」交给 Agent。</div></div></div></div>
@@ -208,7 +218,7 @@ const SS={get(k,d){try{const v=sessionStorage.getItem(k);return v==null?d:JSON.p
 let i=0;{const s=+LS.get(K.page,0);if(s>0&&s<=N)i=s-1}
 let notes=FILE?LS.get(K.notes,[]):[]; if(!Array.isArray(notes))notes=[];
 let mode=FILE?"file":"offline", rev=null, idx0=null, busy=0, editingId=null, composing=false, listStale=false, hideDone=!!LS.get(K.hide,false);
-let pinMode=false, pendingPin=null, quote="", quoteFrom="";
+let markMode=false, pendingPin=null, quote="", quoteFrom="";   // 标注模式；还没添加的新标注（点）
 const drafts=SS.get(K.drafts,{})||{};   // 各页没写完的批注；存在本标签页的会话存储里，刷新不丢
 const editBuf={};                        // 正在改的已有批注的内容（列表重绘、翻页时不丢）
 const DEL_TEXT="删除引用的这段文字", REP_PREFIX="改为：";   // 快捷修改的固定说法（导出/导入据此还原）
@@ -217,8 +227,21 @@ document.querySelectorAll(".kmod").forEach(e=>e.textContent=MOD);
 let sel=null;   // 当前选中的文字：{text, from:报告/讲稿, x, y, pair}
 let delArmed=false;   // 键盘 D 先进入「待确认」，再按 D 或回车才记下删除（防止打拼音时误触）
 let quotePair=null;   // 写批注时引用的另一侧对应句（勾选「同时改」时）
-let regionMode=false, rdraw=null, pendingRegion=null, styleScope=null;   // 风格优化：框选中的区域、当前写的批注是否是风格优化及范围
-const STYLE_ZH={page:"整页",region:"选中区域",pin:"标点处"};
+let rdraw=null, pendingRegion=null, styleOn=false, remarkId=null, swallowClick=false;   // 正在画的框、还没添加的新标注（框）、当前写的是否风格优化、正在给哪条已有批注重新标注
+const STYLE_ZH={page:"整页",region:"框选处",pin:"标点处"};
+// 报告上的标注：点 pin {x,y} 或框 region {x,y,w,h}（相对页面的百分比），一条批注一个；0.3 的框存在 style.region 里
+const regionOf=x=>x.region||(x.style&&x.style.region)||null;
+const hasMark=x=>!!(x.pin||regionOf(x));
+const curScope=()=>pendingRegion?"region":pendingPin?"pin":"page";   // 风格优化的范围跟着标注走
+// 与 notes_store._settle_marks 一致：旧框挪到顶层（不改范围、不删点）；改动动了标注时风格范围跟着走（只拖动的整页保持整页）
+function settleMarks(x,body){
+  if(body&&body.style&&body.style.region&&!("region" in body))x.region=body.style.region;   // 0.3 页面的拖框改动
+  let st=x.style;
+  if(st&&st.region){if(!x.region)x.region=st.region;st=x.style=Object.fromEntries(Object.entries(st).filter(([k])=>k!=="region"))}
+  if(!x.region)delete x.region;
+  if(body&&st&&st.scope&&("pin" in body||"region" in body)&&(("pin" in body&&"region" in body)||st.scope!=="page"))
+    x.style={scope:x.region?"region":x.pin?"pin":"page"};
+  return x}
 let skillCatalog=__SKILLS__;   // 代理写进审阅目录的技能目录（skills.json），作为「技能」输入栏的候选
 const parseSkills=v=>[...new Set(String(v||"").split(/[,，、;；\n]+/).map(x=>x.trim().slice(0,64)).filter(Boolean))].slice(0,10);
 let hand=null, handQueued=false;   // 「交给 Agent」：服务端的提交状态；连不上服务时提交暂存待补传
@@ -244,7 +267,7 @@ ${RCSS}
 :host{margin:0!important;padding:0!important;border:0!important;width:auto!important;height:auto!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;position:static!important;inset:auto!important;transform:none!important;zoom:1!important;overflow:visible!important}
 #ae-stage{margin:0!important;padding:0!important;border:0!important;display:block!important;position:relative!important;inset:auto!important;width:1280px!important;height:720px!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;overflow:visible!important;float:none!important;columns:auto!important;zoom:1!important;box-sizing:content-box!important;transform-origin:0 0!important}
 .ae-frame{position:relative;overflow:hidden;box-shadow:0 2px 14px rgba(0,0,0,.35);background:#fff}
-#ae-stage.pinmode,#ae-stage.pinmode *{cursor:crosshair}
+#ae-stage.markmode,#ae-stage.markmode *{cursor:crosshair}
 #ae-stage a{cursor:pointer}
 .ae-pin{position:absolute;transform:translate(-50%,-50%);width:var(--ae-pin,26px);height:var(--ae-pin,26px);border-radius:50%;background:#d94a38;color:#fff;font:700 calc(var(--ae-pin,26px)*.5)/1 sans-serif;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 6px rgba(0,0,0,.4);border:calc(var(--ae-pin,26px)*.08) solid #fff;z-index:5;cursor:grab;user-select:none;box-sizing:border-box}
 .ae-pin.done{background:#8a9a90}
@@ -253,16 +276,16 @@ ${RCSS}
 .ae-pin.hl{box-shadow:0 0 0 calc(var(--ae-pin,26px)*.2) rgba(217,74,56,.35),0 1px 6px rgba(0,0,0,.4)}
 .ae-pin.flash{animation:aepin 1.2s ease}
 @keyframes aepin{30%{transform:translate(-50%,-50%) scale(1.4)}}
-#ae-stage.pinmode .ae-pin{pointer-events:none}
-.ae-region{position:absolute;border:calc(var(--ae-pin,26px)*.09) dashed #2a78d6;background:rgba(42,120,214,.08);z-index:4;cursor:move;box-sizing:border-box}
-.ae-region .lbl{position:absolute;left:0;top:0;transform:translateY(-100%);background:#2a78d6;color:#fff;font:700 calc(var(--ae-pin,26px)*.42)/1.5 sans-serif;padding:0 calc(var(--ae-pin,26px)*.25);border-radius:3px 3px 0 0;white-space:nowrap}
-.ae-region.done{border-color:#8a9a90;background:rgba(138,154,144,.08)}.ae-region.done .lbl{background:#8a9a90}
-.ae-region.pending{border-style:solid}
-.ae-region.hl{box-shadow:0 0 0 calc(var(--ae-pin,26px)*.2) rgba(42,120,214,.3)}
+.ae-region{position:absolute;border:calc(var(--ae-pin,26px)*.09) dashed #d94a38;background:rgba(217,74,56,.06);z-index:4;cursor:move;box-sizing:border-box}
+.ae-region .lbl{position:absolute;left:0;top:0;transform:translateY(-100%);background:#d94a38;color:#fff;font:700 calc(var(--ae-pin,26px)*.42)/1.5 sans-serif;padding:0 calc(var(--ae-pin,26px)*.25);border-radius:3px 3px 0 0;white-space:nowrap}
+.ae-region .rz{position:absolute;right:calc(var(--ae-pin,26px)*-.28);bottom:calc(var(--ae-pin,26px)*-.28);width:calc(var(--ae-pin,26px)*.5);height:calc(var(--ae-pin,26px)*.5);background:#fff;border:calc(var(--ae-pin,26px)*.08) solid #d94a38;border-radius:2px;cursor:nwse-resize;box-sizing:border-box}
+.ae-region.sty{border-color:#7a4fc4;background:rgba(122,79,196,.07)}.ae-region.sty .lbl{background:#7a4fc4}.ae-region.sty .rz{border-color:#7a4fc4}
+.ae-region.pending{border-style:solid;border-color:#2a78d6;background:rgba(42,120,214,.08)}.ae-region.pending .lbl{background:#2a78d6}.ae-region.pending .rz{border-color:#2a78d6}
+.ae-region.done{border-color:#8a9a90;background:rgba(138,154,144,.08)}.ae-region.done .lbl{background:#8a9a90}.ae-region.done .rz{border-color:#8a9a90}
+.ae-region.hl{box-shadow:0 0 0 calc(var(--ae-pin,26px)*.2) rgba(217,74,56,.3)}
 .ae-region.flash{animation:aereg 1.2s ease}
 @keyframes aereg{30%{background:rgba(42,120,214,.3)}}
-#ae-stage.regionmode,#ae-stage.regionmode *{cursor:crosshair}
-#ae-stage.regionmode .ae-pin,#ae-stage.regionmode .ae-region{pointer-events:none}
+#ae-stage.markmode .ae-pin,#ae-stage.markmode .ae-region{pointer-events:none}
 </style><div class="ae-frame" id="ae-frame"><div id="ae-stage"></div></div>`;
 const stage=sr.getElementById("ae-stage"), frame=sr.getElementById("ae-frame");
 function fit(){const b=$("slide").getBoundingClientRect();const k=Math.max(.1,Math.min((b.width-24)/1280,(b.height-24)/720));
@@ -300,15 +323,17 @@ function mirror(){if(!FILE)return;if(!LS.set(K.notes,notes))toast("浏览器未�
 function setDoc(d){notes=d.notes;rev=d.rev}
 function stamp(x){return Math.max(0,...["updatedAt","resolvedAt","at"].map(k=>Date.parse(x[k]||"")||0))}
 function pinKey(p){return p&&p.x!=null?`${(+p.x).toFixed(1)},${(+p.y).toFixed(1)}`:""}
-function styleKey(st){if(!st||!st.scope)return"";const r=st.region||{};return [st.scope,...["x","y","w","h"].map(k=>(+r[k]||0).toFixed(1))].join(",")}
-function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),styleKey(x.style)].join("\u0001")}
+function rgKey(r){return r?["x","y","w","h"].map(k=>(+r[k]||0).toFixed(1)).join(","):""}
+function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),rgKey(regionOf(x)),x.style&&x.style.scope?"s":""].join("\u0001")}
+const okRegion=r=>r&&typeof r==="object"&&["x","y","w","h"].every(k=>r[k]!=null&&r[k]!==""&&isFinite(+r[k]))&&+r.w>0&&+r.h>0?{x:+r.x,y:+r.y,w:+r.w,h:+r.h}:null;
 function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:String(x.title||""),target:String(x.target||""),text:String(x.text||""),
     quote:String(x.quote||""),quoteFrom:String(x.quoteFrom||""),pin:x.pin&&x.pin.x!=null?{x:+x.pin.x,y:+x.pin.y}:null,
     status:x.status==="resolved"?"resolved":"open",at:typeof x.at==="string"?x.at:nowIso()};
   if(n.status==="resolved"){if(x.resolution)n.resolution=String(x.resolution);if(x.resolvedAt)n.resolvedAt=String(x.resolvedAt);if(x.resolvedBy)n.resolvedBy=String(x.resolvedBy)}
   if(typeof x.updatedAt==="string")n.updatedAt=x.updatedAt;
-  const st=x.style;if(st&&["page","region","pin"].includes(st.scope)){if(st.scope!=="region")n.style={scope:st.scope};
-    else if(st.region&&[st.region.x,st.region.y,st.region.w,st.region.h].every(v=>isFinite(+v)))n.style={scope:"region",region:{x:+st.region.x,y:+st.region.y,w:+st.region.w,h:+st.region.h}}}
+  const rg=okRegion(x.region)||okRegion(x.style&&x.style.region);if(rg)n.region=rg;
+  if(x.style&&["page","region","pin"].includes(x.style.scope))n.style={scope:x.style.scope};
+  settleMarks(n);
   if(typeof x.anchor==="string"&&x.anchor)n.anchor=clip(x.anchor,300);
   if(typeof x.key==="string"&&x.key)n.key=clip(x.key,120);
   if(Array.isArray(x.skills)||typeof x.skills==="string"){const sk=parseSkills(Array.isArray(x.skills)?x.skills.join(","):x.skills);if(sk.length)n.skills=sk}
@@ -324,8 +349,8 @@ function mergeLocal(items){const byId=new Map(notes.map(x=>[x.id,x])),keys=new S
 function applyLocal(op){
   if(op.kind==="add"){if(!notes.some(x=>x.id===op.note.id))notes.push(op.note)}
   else if(op.kind==="del")notes=notes.filter(x=>x.id!==op.id);
-  else if(op.kind==="patch"){const x=notes.find(x=>x.id===op.id);if(x){Object.assign(x,op.body);x.updatedAt=nowIso();
-    if(op.body.status==="open"){delete x.resolvedAt;delete x.resolvedBy;delete x.resolution}
+  else if(op.kind==="patch"){const x=notes.find(x=>x.id===op.id);if(x){Object.assign(x,op.body);settleMarks(x,op.body);x.updatedAt=nowIso();
+    if(op.body.status==="open"){delete x.resolvedAt;delete x.resolvedBy;delete x.resolution;delete x.resolvedBatch}
     if(op.body.status==="resolved"){x.resolvedAt=nowIso();x.resolvedBy="page"}}}
   else if(op.kind==="import")return mergeLocal(op.notes);
   else if(op.kind==="handoff"){handQueued=true;renderHand()}}
@@ -361,7 +386,7 @@ function onRejected(op,e){   // 服务明确不接受（4xx）：不重试
     toast(e.status===404||e.status===405?"本地服务是旧版本，不支持「交给 Agent」：停掉旧服务后重新运行 serve.py":"没能交给 Agent："+e.message,6000);return}
   toast("服务未接受这次改动："+e.message,6000);
   if(op.kind==="add"&&!editOf(op.note)&&op.note.page===P[i].n&&!$("ntext").value.trim()){   // 把内容放回输入框
-    $("ntext").value=op.note.text;quote=op.note.quote||"";quoteFrom=op.note.quoteFrom||"";pendingPin=op.note.pin||null;quotePair=op.note.pair||null;showQuote();drawPins()}}
+    $("ntext").value=op.note.text;quote=op.note.quote||"";quoteFrom=op.note.quoteFrom||"";pendingPin=op.note.pin||null;pendingRegion=op.note.region||null;styleOn=!!op.note.style;quotePair=op.note.pair||null;showQuote();updateStyleChip();drawPins()}}
 const fails={};let flushing=null;
 function flush(){if(FILE)return Promise.resolve();
   if(!flushing)flushing=(navigator.locks?navigator.locks.request(`ae-flush-${RID}`,doFlush):doFlush()).finally(()=>{flushing=null});
@@ -386,6 +411,7 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
   finally{busy--;updateMode()}}
 async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 function applyServer(d){
+  const old=!(Array.isArray(d.features)&&d.features.includes("marks"));if(old&&!srvOld)toast(OLD_SERVER_HELP,9000);srvOld=old;updateMode();
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
   if(d.handoff)setHand(d.handoff);else renderHand();
@@ -405,8 +431,12 @@ async function poll(){
   if(was==="offline"&&rev!=null)toast("已重新连上本地服务");
   applyServer(d);updateMode()}
 const MISMATCH_HELP="这个地址上运行的不是这份审阅的服务（端口被别的审阅目录或程序占用），改动先暂存在本页。办法：先停掉占用这个端口的服务，再用本审阅目录启动 serve.py（会回到这个端口）；或在「批注」里下载 JSON，到新地址打开对照页后导入。";
+const OLD_SERVER_HELP="背后的本地服务是旧版本，不认识框选、重新标注等新功能（这些改动会被丢掉）。请停掉旧服务（它的终端按 Ctrl+C），再运行新版 serve.py，然后刷新本页。";
+let srvOld=false;   // 背后是不认识新字段的旧版服务：框选、重新标注、拖框先不让做
+function oldGuard(){if(mode==="server"&&srvOld){toast(OLD_SERVER_HELP,8000);return true}return false}
 function updateMode(){const m=$("mode"),q=pend.get().length,f=failed.get().length,extra=(q?`（待补传 ${q}）`:"")+(f?`（未能保存 ${f}）`:"");m.className=mode;
-  if(mode==="server"){m.textContent=extra?`● 已连接${extra}`:"● 已连接本地服务";m.title="每次改动自动写入审阅目录的 notes.json，Agent 可直接读取"}
+  if(mode==="server"&&srvOld){m.classList.add("old");m.textContent=`● 旧版服务${extra}`;m.title=OLD_SERVER_HELP}
+  else if(mode==="server"){m.textContent=extra?`● 已连接${extra}`:"● 已连接本地服务";m.title="每次改动自动写入审阅目录的 notes.json，Agent 可直接读取"}
   else if(mode==="offline"){m.textContent=`● 服务未连接${extra}`;m.title="新改动暂存在本浏览器；重新运行 serve.py 后会自动补传"}
   else if(mode==="mismatch"){m.textContent=`● 服务不匹配${extra}`;m.title=MISMATCH_HELP}
   else{m.textContent="○ 本地文件模式";m.title="批注只存在本浏览器。用「批注 → 复制全部 / 下载」交给 Agent；或运行 serve.py 让批注自动落盘"}
@@ -429,24 +459,25 @@ function updateLegacy(){const n=foundSets().filter(s=>s.same).reduce((a,s)=>a+s.
   b.style.display=n?"inline-block":"none";b.textContent=`导入旧批注（${n}）`}
 
 // ---------- 批注区：列表与输入框分开，刷新列表不碰正在写的内容 ----------
-function pinNo(n,id){return notes.filter(x=>x.page===n&&x.pin).findIndex(x=>x.id===id)+1}
-function drawPins(){stage.querySelectorAll(".ae-pin").forEach(e=>e.remove());
+function markNo(n,id){return notes.filter(x=>x.page===n&&hasMark(x)).findIndex(x=>x.id===id)+1}   // 同一页的点和框统一编号
+function drawPins(){stage.querySelectorAll(".ae-pin,.ae-region").forEach(e=>{if(!rdraw||e!==rdraw.box)e.remove()});   // 正在画的框不动
   const put=(x,y,txt,cls,id,tip)=>{const d=document.createElement("div");d.className="ae-pin"+(cls?" "+cls:"");d.textContent=txt;d.style.left=x+"%";d.style.top=y+"%";
     d.dataset.id=id||"";d.title=tip||"";stage.appendChild(d)};
-  notes.filter(x=>x.page===P[i].n&&x.pin).forEach((x,k)=>{if(!(hideDone&&isDone(x)))put(x.pin.x,x.pin.y,k+1,isDone(x)?"done":"",x.id,clip(noteSummary(x),80)+"（拖动可移动，点击可编辑）")});
-  if(pendingPin)put(pendingPin.x,pendingPin.y,"+","pending","","新标点：写好意见后点「添加批注」；可拖动，点击可移除");
-  stage.querySelectorAll(".ae-region").forEach(e=>e.remove());
   const box=(rg,cls,id,label,tip)=>{const d=document.createElement("div");d.className="ae-region"+(cls?" "+cls:"");
     Object.assign(d.style,{left:rg.x+"%",top:rg.y+"%",width:rg.w+"%",height:rg.h+"%"});d.dataset.id=id||"";d.title=tip||"";
-    const l=document.createElement("span");l.className="lbl";l.textContent=label;d.appendChild(l);stage.appendChild(d)};
-  notes.filter(x=>x.page===P[i].n&&x.style&&x.style.scope==="region"&&x.style.region).forEach((x,k)=>{if(!(hideDone&&isDone(x)))
-    box(x.style.region,isDone(x)?"done":"",x.id,`风格 ${k+1}`,clip(String(x.text||""),80)+"（拖动可移动，点击可编辑）")});
-  if(pendingRegion)box(pendingRegion,"pending","","新区域","新框选的区域：写好风格要求后点「添加批注」；可拖动，点击可移除")}
+    const l=document.createElement("span");l.className="lbl";l.textContent=label;d.appendChild(l);
+    const z=document.createElement("span");z.className="rz";z.title="拖动调整大小";d.appendChild(z);stage.appendChild(d)};
+  notes.filter(x=>x.page===P[i].n&&hasMark(x)).forEach((x,k)=>{if(hideDone&&isDone(x))return;
+    const cls=[isDone(x)?"done":"",x.style&&x.style.scope?"sty":""].filter(Boolean).join(" "),sum=clip(noteSummary(x),80),rg=regionOf(x);
+    if(rg)box(rg,cls,x.id,`${k+1}${x.style&&x.style.scope?" 风格":""}`,sum+"（拖动可移动，拖右下角调大小，点击可编辑）");
+    if(x.pin)put(x.pin.x,x.pin.y,k+1,isDone(x)?"done":"",x.id,sum+"（拖动可移动，点击可编辑）")});
+  if(pendingPin)put(pendingPin.x,pendingPin.y,"+","pending","","新标点：写好意见后点「添加批注」；可拖动，点击可移除");
+  if(pendingRegion)box(pendingRegion,"pending","","新框","新框选的区域：写好意见后点「添加批注」；可拖动、拖右下角调大小，点击可移除")}
 function noteSummary(x){const qe=editOf(x);return qe?(qe.op==="delete"?`删除「${qe.from}」`:`「${qe.from}」改为「${qe.to}」`):String(x.text||"")}
 function editOf(x){const e=x.edit;return e&&typeof e==="object"&&(e.op==="delete"||e.op==="replace")?e:null}
 function noteHtml(x){
   const done=isDone(x), ed=editingId===x.id, id=escH(x.id), qe=editOf(x);
-  const acts=ed?`<button data-act="save" data-id="${id}">保存</button>${x.pin?`<button data-act="unpin" data-id="${id}">去掉标点</button>`:""}<button data-act="cancel">取消</button>`
+  const acts=ed?`<button data-act="save" data-id="${id}">保存</button><button data-act="remark" data-id="${id}" title="在左侧报告上单击放点或拖动框选，替换这条批注的标注">${hasMark(x)?"重新标注":"在报告上标注"}</button>${hasMark(x)?`<button data-act="unpin" data-id="${id}">去掉标注</button>`:""}<button data-act="cancel">取消</button>`
     :`<button data-act="edit" data-id="${id}">编辑</button><button data-act="${done?"reopen":"resolve"}" data-id="${id}">${done?"重新打开":"标为已处理"}</button><button data-act="del" data-id="${id}">删除</button>`;
   const sk=Array.isArray(x.skills)?x.skills:[];
   const body=ed?(qe&&qe.op==="delete"?`<div class="body"><span class="op">删除</span><del>${escH(qe.from)}</del></div>`:`<textarea id="etext">${escH(editBuf[x.id]??(qe?qe.to:x.text))}</textarea>`)
@@ -454,7 +485,7 @@ function noteHtml(x){
     :qe?(qe.op==="delete"?`<div class="body"><span class="op">删除</span><del>${escH(qe.from)}</del></div>`
         :`<div class="body"><del>${escH(qe.from)}</del> → <ins>${escH(qe.to)}</ins></div>`)
     :`<div class="body">${escH(x.text).replace(/\n/g,"<br>")}</div>`;
-  return `<div class="note${done?" done":""}" data-note="${id}"><div class="meta"><span>${escH(x.target||"未指定")}${qe?(qe.op==="delete"?" · 删除":" · 改写"):""}${x.style&&x.style.scope?" · 风格优化·"+escH(STYLE_ZH[x.style.scope]||""):""}${x.pin?` · 标点 ${pinNo(x.page,x.id)}`:""}${done?`<span class="chip">已处理${x.resolvedBy&&x.resolvedBy!=="page"?" · "+escH(x.resolvedBy==="claude"?"Claude":x.resolvedBy):""}</span>`:""}</span><span class="acts">${acts}</span></div>`
+  return `<div class="note${done?" done":""}" data-note="${id}"><div class="meta"><span>${escH(x.target||"未指定")}${qe?(qe.op==="delete"?" · 删除":" · 改写"):""}${x.style&&x.style.scope?" · 风格优化"+(hasMark(x)?"":"·整页"):""}${hasMark(x)?` · ${regionOf(x)?"框选":"标点"} ${markNo(x.page,x.id)}`:""}${done?`<span class="chip">已处理${x.resolvedBy&&x.resolvedBy!=="page"?" · "+escH(x.resolvedBy==="claude"?"Claude":x.resolvedBy):""}</span>`:""}</span><span class="acts">${acts}</span></div>`
    +(x.quote&&!qe?`<blockquote>${x.quoteFrom?escH(x.quoteFrom)+"：":""}${escH(x.quote)}</blockquote>`:"")
    +body
    +(x.orphan?`<div class="anchor" style="color:#a2412f">⚠ 原来所在的页面在新版报告里找不到，页码可能不对：点「编辑」挪到正确的页</div>`:"")
@@ -479,7 +510,11 @@ function updateCounts(){const open=notes.filter(x=>!isDone(x)).length;$("ncount"
   [...$("jump").options].forEach((o,k)=>{const mine=notes.filter(x=>x.page===P[k].n),c=mine.filter(x=>!isDone(x)).length;
     o.textContent=`第 ${P[k].n} 页${c?`（批注 ${c}）`:mine.length?" ✓":""}`});
   updateLegacy();renderResume()}
-function setPinMode(on){pinMode=on;stage.classList.toggle("pinmode",on);const b=$("pinBtn");b.classList.toggle("on",on);b.innerHTML=(on?"点左侧报告放置标点…":"在报告上标点")+"<kbd>P</kbd>"}
+function setMarkMode(on){markMode=on;stage.classList.toggle("markmode",on);const b=$("pinBtn");b.classList.toggle("on",on);
+  const rn=on&&remarkId?notes.find(n=>n.id===remarkId):null;
+  b.innerHTML=(on?(rn?`给「${escH(clip(noteSummary(rn),12))}」重新标注…`:"单击放点，拖动框选…"):"在报告上标注")+"<kbd>P</kbd>";
+  if(on)toast(remarkId?"给这条批注标注：在左侧报告上单击放点，或拖动框选（Esc 取消）":"在左侧报告上单击放一个点，或按住拖动框选一块区域（Esc 取消）",3000);
+  else{remarkId=null;if(rdraw){if(rdraw.box)rdraw.box.remove();rdraw=null}}}
 function showQuote(){const q=$("qbox");q.style.display=quote?"block":"none";
   q.innerHTML=quote?`引用（${escH(quoteFrom)}）：${escH(quote)}${quotePair?`<br>↔ ${escH(quotePair.side)}对应：${escH(clip(quotePair.text,80))}（同时改）`:""} <a href="#" id="qx">取消</a>`:"";
   if(quote)$("qx").onclick=e=>{e.preventDefault();quote="";quotePair=null;showQuote()}}
@@ -505,7 +540,7 @@ document.addEventListener("mousedown",e=>{if(!$("selbar").contains(e.target)&&!$
   if(!$("pinpop").contains(e.target))closePinPop();
   if(!$("stylemenu").contains(e.target)&&e.target.id!=="styleBtn"&&!e.target.closest("#styleBtn"))closeStyleMenu()});
 document.addEventListener("mouseup",e=>{
-  if($("selbar").contains(e.target)||$("repbox").contains(e.target)||pinMode)return;
+  if($("selbar").contains(e.target)||$("repbox").contains(e.target)||markMode)return;
   const got=selectedText(e);if(!got)return;
   setQuote(got.text,got.from);
   sel={text:got.text.replace(/\s+/g," "),from:got.from,x:e.clientX,y:e.clientY};
@@ -550,20 +585,32 @@ $("repOk").onclick=repOk;$("repCancel").onclick=()=>{hideSelbar();sel=null};
 $("repText").addEventListener("keydown",e=>{e.stopPropagation();if(e.isComposing||e.keyCode===229)return;
   if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();repOk()}else if(e.key==="Escape"){hideSelbar();sel=null}});
 stage.addEventListener("click",e=>{
-  const a=e.target.closest("a");if(a&&!pinMode){e.preventDefault();const h=(a.getAttribute("href")||"").replace(/^#/,"");const k=SECT_KEYS.indexOf(h);if(k>=0)go(k);return}
-  if(!pinMode)return;e.preventDefault();const r=stage.getBoundingClientRect();
-  pendingPin={x:+((e.clientX-r.left)/r.width*100).toFixed(1),y:+((e.clientY-r.top)/r.height*100).toFixed(1)};
-  setPinMode(false);drawPins();$("ntext").focus();toast("已放置标点，写完意见点「添加批注」")});
+  if(swallowClick){swallowClick=false;e.preventDefault();return}   // 刚放完标注：这次点击不再当成点链接
+  const a=e.target.closest("a");if(a&&!markMode){e.preventDefault();const h=(a.getAttribute("href")||"").replace(/^#/,"");const k=SECT_KEYS.indexOf(h);if(k>=0)go(k);return}
+  if(markMode)e.preventDefault()});
+const markAnchor=mk=>mk.region?regionAnchor(mk.region):mk.pin?pointAnchor(mk.pin):"";
+// 放好一个标注：给正在写的新批注，或替换某条已有批注的标注
+function endRemark(){if(remarkId)setMarkMode(false)}   // 离开「重新标注」：取消、保存、换一条编辑、改风格时都要退出，免得下一次点击改错批注
+function placeMark(mk,rid){
+  if(rid){if(!notes.some(n=>n.id===rid)){toast("这条批注已被删除",3000);return}
+    if(oldGuard())return;
+    stashEdit();mutate({kind:"patch",id:rid,body:{pin:mk.pin||null,region:mk.region||null,anchor:markAnchor(mk)}});
+    if(editingId===rid)refreshList(true);else drawPins();   // 编辑中的卡片按钮（重新标注 / 去掉标注）跟着变
+    toast(mk.region?"已给这条批注框选区域":"已给这条批注放置标点");return}
+  pendingPin=mk.pin||null;pendingRegion=mk.region||null;
+  if($("ntarget").value==="讲稿")$("ntarget").value="报告";   // 标注在报告上
+  updateStyleChip();drawPins();saveDraft();$("ntext").focus();
+  toast(mk.region?"已框选区域，写完意见点「添加批注」":"已放置标点，写完意见点「添加批注」")}
 function addNote(){let text=$("ntext").value.trim();
-  if(styleScope==="pin"&&!pendingPin){toast("先在报告上放一个标点");setPinMode(true);return}
-  if(styleScope==="region"&&!pendingRegion){toast("先在报告上框选区域");setRegionMode(true);return}
-  if(!text&&!styleScope){toast("先写修改意见");return}
-  if(!text)text="风格优化："+STYLE_ZH[styleScope];
-  const p=P[i];const note={id:newId(),page:p.n,key:p.stable?p.key:undefined,title:unH(p.title),target:styleScope?"报告":$("ntarget").value,text,quote,quoteFrom:quote?quoteFrom:"",pin:pendingPin,status:"open",at:nowIso()};
-  if(styleScope)note.style=styleScope==="region"?{scope:"region",region:pendingRegion}:{scope:styleScope};
-  const anc=styleScope==="region"?regionAnchor(pendingRegion):pendingPin?pointAnchor(pendingPin):styleScope==="page"?`第 ${p.n} 页「${unH(p.title)}」整页`:"";
+  if(!text&&!styleOn){toast("先写修改意见");return}
+  const scope=curScope();
+  if(!text)text="风格优化："+STYLE_ZH[scope];
+  const p=P[i];const note={id:newId(),page:p.n,key:p.stable?p.key:undefined,title:unH(p.title),target:styleOn?"报告":$("ntarget").value,text,quote,quoteFrom:quote?quoteFrom:"",pin:pendingRegion?null:pendingPin,status:"open",at:nowIso()};
+  if(pendingRegion)note.region=pendingRegion;
+  if(styleOn)note.style={scope};
+  const anc=pendingRegion?regionAnchor(pendingRegion):pendingPin?pointAnchor(pendingPin):styleOn?`第 ${p.n} 页「${unH(p.title)}」整页`:"";
   if(anc)note.anchor=anc;
-  styleScope=null;pendingRegion=null;updateStyleChip();
+  styleOn=false;pendingRegion=null;updateStyleChip();
   if(quote&&quotePair)note.pair={side:quotePair.side,text:quotePair.text,match:quotePair.match};
   const sk=parseSkills($("nskills").value);if(sk.length)note.skills=sk;$("nskills").value="";
   quote="";quotePair=null;pendingPin=null;$("ntext").value="";autoGrow();showQuote();delete drafts[p.n];SS.set(K.drafts,drafts);mutate({kind:"add",note});toast("已添加")}
@@ -571,19 +618,20 @@ $("script").addEventListener("click",e=>{const b=e.target.closest("[data-act]");
   switch(b.dataset.act){
     case "add":addNote();break;
     case "seelist":$("nlist").scrollIntoView({block:"start",behavior:"smooth"});break;
-    case "pin":setPinMode(!pinMode);break;
+    case "pin":remarkId=null;setMarkMode(!markMode);break;
+    case "remark":if(oldGuard())break;stashEdit();remarkId=id;setMarkMode(true);break;
     case "style":openStyleMenu();break;
     case "del":if(confirm("删除这条批注？"))mutate({kind:"del",id});break;
-    case "edit":{stashEdit();editingId=id;refreshList(true);($("etext")||$("eskills")).focus();break}
-    case "cancel":delete editBuf[editingId];delete editBuf["sk:"+editingId];editingId=null;refreshList(true);break;
-    case "save":{const x=notes.find(n=>n.id===id);if(!x){toast("这条批注已被删除，改动没有保存",4000);editingId=null;refreshList(true);break}
+    case "edit":{endRemark();stashEdit();editingId=id;refreshList(true);($("etext")||$("eskills")).focus();break}
+    case "cancel":endRemark();delete editBuf[editingId];delete editBuf["sk:"+editingId];editingId=null;refreshList(true);break;
+    case "save":{endRemark();const x=notes.find(n=>n.id===id);if(!x){toast("这条批注已被删除，改动没有保存",4000);editingId=null;refreshList(true);break}
       const qe=editOf(x),et=$("etext"),t=et?et.value.trim():"",skills=parseSkills($("eskills").value);
       if(et&&!t&&!qe){toast("批注内容不能为空");return}delete editBuf[id];delete editBuf["sk:"+id];editingId=null;
       const body=qe&&qe.op==="delete"?{skills}:qe?{edit:{...qe,to:t},text:REP_PREFIX+t,skills}:{text:t,skills};
       const np=+(($("epage")||{}).value||x.page),pg=P.find(q=>q.n===np);
       if(pg&&(np!==x.page||x.orphan))Object.assign(body,{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false});   // 挪到别的页（或确认原页）
       mutate({kind:"patch",id,body});if(body.page&&body.page!==P[i].n)toast(`已移到第 ${body.page} 页`);break}
-    case "unpin":delete editBuf[id];delete editBuf["sk:"+id];editingId=null;mutate({kind:"patch",id,body:{pin:null}});break;
+    case "unpin":stashEdit();mutate({kind:"patch",id,body:{pin:null,region:null}});drawPins();refreshList(true);break;
     case "resolve":mutate({kind:"patch",id,body:{status:"resolved"}});break;
     case "reopen":mutate({kind:"patch",id,body:{status:"open"}});break;
     case "hide":hideDone=!hideDone;LS.set(K.hide,hideDone);refreshList(true);break}});
@@ -604,46 +652,57 @@ function flashCard(id){const c=$("nlist").querySelector(`[data-note="${CSS.escap
 function closePinPop(){$("pinpop").classList.remove("on")}
 function openPinPop(id,el){const pop=$("pinpop"),r=el.getBoundingClientRect();
   if(!id)pop.innerHTML=el.classList.contains("ae-region")
-    ?`<div class="pp-t">新框选的区域：写好风格要求后点「添加批注」。拖动可调整位置。</div><div class="pp-a"><button data-pp="unregion">移除区域</button></div>`
+    ?`<div class="pp-t">新框选的区域：写好意见后点「添加批注」。拖动可移动，拖右下角可调大小。</div><div class="pp-a"><button data-pp="unregion">移除这个框</button></div>`
     :`<div class="pp-t">新标点：写好意见后点「添加批注」。拖动可调整位置。</div><div class="pp-a"><button data-pp="unpend">移除标点</button></div>`;
   else{const x=notes.find(n=>n.id===id);if(!x)return;const eid=escH(id);
     pop.innerHTML=`<div class="pp-m">${escH(x.target||"未指定")}${isDone(x)?" · 已处理":""}</div><div class="pp-t">${escH(clip(noteSummary(x),200))}</div>`
       +`<div class="pp-a"><button data-pp="edit" data-id="${eid}">编辑</button><button data-pp="${isDone(x)?"reopen":"resolve"}" data-id="${eid}">${isDone(x)?"重新打开":"标为已处理"}</button>`
-      +`${x.pin?`<button data-pp="unpin" data-id="${eid}">去掉标点</button>`:""}<button data-pp="del" data-id="${eid}">删除</button><button data-pp="close">关闭</button></div>`;
+      +`${hasMark(x)?`<button data-pp="unpin" data-id="${eid}">去掉标注</button>`:""}<button data-pp="del" data-id="${eid}">删除</button><button data-pp="close">关闭</button></div>`;
     flashCard(id)}
   pop.classList.add("on");place(pop,r.left+r.width/2,r.top+r.height/2)}
 $("pinpop").addEventListener("click",e=>{const b=e.target.closest("[data-pp]");if(!b)return;const id=b.dataset.id,a=b.dataset.pp;closePinPop();
-  if(a==="unpend"){pendingPin=null;drawPins();saveDraft()}
-  else if(a==="unregion"){pendingRegion=null;if(styleScope==="region")styleScope=null;updateStyleChip();drawPins();saveDraft()}
-  else if(a==="edit"){stashEdit();editingId=id;refreshList(true);flashCard(id);($("etext")||$("eskills")).focus()}
+  if(a==="unpend"){pendingPin=null;updateStyleChip();drawPins();saveDraft()}
+  else if(a==="unregion"){pendingRegion=null;updateStyleChip();drawPins();saveDraft()}
+  else if(a==="edit"){endRemark();stashEdit();editingId=id;refreshList(true);flashCard(id);($("etext")||$("eskills")).focus()}
   else if(a==="resolve"||a==="reopen")mutate({kind:"patch",id,body:{status:a==="resolve"?"resolved":"open"}});
-  else if(a==="unpin")mutate({kind:"patch",id,body:{pin:null}});
+  else if(a==="unpin"){mutate({kind:"patch",id,body:{pin:null,region:null}});drawPins()}
   else if(a==="del"){if(confirm("删除这条批注？"))mutate({kind:"del",id})}});
 function pct(e){const r=stage.getBoundingClientRect();return{x:Math.max(0,Math.min(100,(e.clientX-r.left)/r.width*100)),y:Math.max(0,Math.min(100,(e.clientY-r.top)/r.height*100))}}
-stage.addEventListener("mousedown",e=>{const pin=e.target.closest&&e.target.closest(".ae-pin,.ae-region");if(!pin||pinMode||regionMode||e.button!==0)return;
+stage.addEventListener("mousedown",e=>{const pin=e.target.closest&&e.target.closest(".ae-pin,.ae-region");if(!pin||markMode||e.button!==0)return;
   e.preventDefault();e.stopPropagation();closePinPop();
   const isReg=pin.classList.contains("ae-region"),c=pct(e),rg=isReg?{x:parseFloat(pin.style.left),y:parseFloat(pin.style.top),w:parseFloat(pin.style.width),h:parseFloat(pin.style.height)}:null;
-  drag={id:pin.dataset.id||"",pin,isReg,rg,off:rg?{x:c.x-rg.x,y:c.y-rg.y}:null,x0:e.clientX,y0:e.clientY,moved:false,pos:null};pin.classList.add("drag")});
+  const rz=isReg&&!!e.target.closest(".rz");   // 拖框的右下角 = 调大小
+  drag={id:pin.dataset.id||"",pin,isReg,rz,rg,off:rg?{x:c.x-rg.x,y:c.y-rg.y}:null,x0:e.clientX,y0:e.clientY,moved:false,pos:null};pin.classList.add("drag")});
 addEventListener("mousemove",e=>{
-  if(rdraw){const c=pct(e),x=Math.min(c.x,rdraw.x0),y=Math.min(c.y,rdraw.y0),w=Math.abs(c.x-rdraw.x0),h=Math.abs(c.y-rdraw.y0);
+  if(rdraw){if(!rdraw.box){if(Math.abs(e.clientX-rdraw.cx)+Math.abs(e.clientY-rdraw.cy)<6)return;   // 拖出一点距离才算框选，否则松开就是放点
+      rdraw.box=document.createElement("div");rdraw.box.className="ae-region pending";stage.appendChild(rdraw.box)}
+    const c=pct(e),x=Math.min(c.x,rdraw.x0),y=Math.min(c.y,rdraw.y0),w=Math.abs(c.x-rdraw.x0),h=Math.abs(c.y-rdraw.y0);
     Object.assign(rdraw.box.style,{left:x+"%",top:y+"%",width:w+"%",height:h+"%"});rdraw.rg={x:+x.toFixed(1),y:+y.toFixed(1),w:+w.toFixed(1),h:+h.toFixed(1)};return}
   if(!drag)return;if(Math.abs(e.clientX-drag.x0)+Math.abs(e.clientY-drag.y0)>3)drag.moved=true;if(!drag.moved)return;
   const c=pct(e);
+  if(drag.rz){const w=Math.max(1,Math.min(100-drag.rg.x,c.x-drag.rg.x)),h=Math.max(1,Math.min(100-drag.rg.y,c.y-drag.rg.y));
+    drag.pin.style.width=w+"%";drag.pin.style.height=h+"%";drag.pos={x:drag.rg.x,y:drag.rg.y,w:+w.toFixed(1),h:+h.toFixed(1)};return}
   if(drag.isReg){const x=Math.max(0,Math.min(100-drag.rg.w,c.x-drag.off.x)),y=Math.max(0,Math.min(100-drag.rg.h,c.y-drag.off.y));
     drag.pin.style.left=x+"%";drag.pin.style.top=y+"%";drag.pos={x:+x.toFixed(1),y:+y.toFixed(1),w:drag.rg.w,h:drag.rg.h};return}
   drag.pin.style.left=c.x+"%";drag.pin.style.top=c.y+"%";drag.pos={x:+c.x.toFixed(1),y:+c.y.toFixed(1)}});
-// 框选区域：在报告上按下拖出一个框
-stage.addEventListener("mousedown",e=>{if(!regionMode||e.button!==0)return;e.preventDefault();e.stopPropagation();
-  const c=pct(e),d=document.createElement("div");d.className="ae-region pending";Object.assign(d.style,{left:c.x+"%",top:c.y+"%",width:"0%",height:"0%"});
-  stage.appendChild(d);rdraw={x0:c.x,y0:c.y,box:d,rg:null}});
-addEventListener("mouseup",e=>{if(!rdraw)return;e.stopPropagation();const d=rdraw;rdraw=null;d.box.remove();setRegionMode(false);
-  if(!d.rg||d.rg.w<1||d.rg.h<1){toast("框太小了，再拖一次（S → 2）");return}
-  pendingRegion=d.rg;styleScope="region";updateStyleChip();drawPins();saveDraft();$("ntext").focus();toast("已框选区域：写下想要的风格（可不写），再添加批注")},true);
+// 标注：按下后不拖动就松开 = 放一个点；按住拖动 = 框选一块区域
+stage.addEventListener("mousedown",e=>{if(!markMode||e.button!==0)return;e.preventDefault();e.stopPropagation();
+  if(rdraw&&rdraw.box)rdraw.box.remove();   // 上一次没收到松开（鼠标在窗口外松开等）
+  const c=pct(e);rdraw={x0:c.x,y0:c.y,cx:e.clientX,cy:e.clientY,box:null,rg:null}});
+addEventListener("mouseup",e=>{if(!rdraw)return;e.stopPropagation();const d=rdraw;rdraw=null;if(d.box)d.box.remove();
+  swallowClick=true;setTimeout(()=>{swallowClick=false},0);
+  const rid=remarkId;setMarkMode(false);
+  if(!d.box){placeMark({pin:{x:+d.x0.toFixed(1),y:+d.y0.toFixed(1)}},rid);return}
+  if(!d.rg||d.rg.w<1||d.rg.h<1){const r=d.rg||{x:d.x0,y:d.y0,w:0,h:0};   // 框太小：当成在中间放一个点
+    placeMark({pin:{x:+(r.x+r.w/2).toFixed(1),y:+(r.y+r.h/2).toFixed(1)}},rid);return}
+  if(oldGuard())return;
+  placeMark({region:d.rg},rid)},true);
 addEventListener("mouseup",e=>{if(!drag)return;e.stopPropagation();   // 不让「选中文字」的处理把旧选区又弹出来
   const d=drag;drag=null;d.pin.classList.remove("drag");
   if(d.moved&&d.pos){
-    if(d.isReg){if(d.id){mutate({kind:"patch",id:d.id,body:{style:{scope:"region",region:d.pos}}});toast("区域已移动")}else{pendingRegion=d.pos;saveDraft()}}
-    else if(d.id){mutate({kind:"patch",id:d.id,body:{pin:d.pos}});toast("标点已移动")}else{pendingPin=d.pos;saveDraft()}}
+    if(d.isReg&&d.id&&oldGuard()){drawPins();return}
+    if(d.isReg){if(d.id){mutate({kind:"patch",id:d.id,body:{region:d.pos,anchor:regionAnchor(d.pos)}});drawPins();toast(d.rz?"区域大小已调整":"区域已移动")}else{pendingRegion=d.pos;saveDraft()}}
+    else if(d.id){mutate({kind:"patch",id:d.id,body:{pin:d.pos,anchor:pointAnchor(d.pos)}});drawPins();toast("标点已移动")}else{pendingPin=d.pos;saveDraft()}}
   else openPinPop(d.id,d.pin)},true);
 stage.addEventListener("mouseover",e=>{const pin=e.target.closest&&e.target.closest(".ae-pin,.ae-region");
   $("nlist").querySelectorAll(".note.hl").forEach(c=>c.classList.remove("hl"));
@@ -653,20 +712,18 @@ $("nlist").addEventListener("mouseleave",()=>highlightPin(null));
 $("nlist").addEventListener("click",e=>{if(e.target.closest("button,textarea,input,a"))return;const c=e.target.closest("[data-note]");if(c)flash(pinEl(c.dataset.note))});
 
 // ---------- 风格优化：范围菜单、框选模式、位置线索 ----------
-function setRegionMode(on){regionMode=on;stage.classList.toggle("regionmode",on);if(on){setPinMode(false);toast("在左侧报告上拖出一个框（Esc 取消）",3000)}}
 function openStyleMenu(){const m=$("stylemenu"),b=$("styleBtn").getBoundingClientRect();m.classList.add("on");place(m,b.left+b.width/2,b.top-m.getBoundingClientRect().height-30)}
 function closeStyleMenu(){$("stylemenu").classList.remove("on")}
-function chooseStyle(scope){closeStyleMenu();
-  if(scope==="region"){setRegionMode(true);return}
-  styleScope=scope;if(scope==="page")pendingRegion=null;
-  if(scope==="pin"&&!pendingPin){setPinMode(true);toast("点左侧报告放一个标点",2500)}
-  updateStyleChip();drawPins();saveDraft();$("ntext").focus()}
+function chooseStyle(scope){closeStyleMenu();endRemark();styleOn=true;
+  if(scope==="page"){if(pendingPin||pendingRegion)toast("整页风格优化：已去掉刚放的标注");pendingPin=null;pendingRegion=null}
+  updateStyleChip();drawPins();saveDraft();$("ntext").focus();
+  if(scope!=="page"&&!pendingPin&&!pendingRegion){remarkId=null;setMarkMode(true)}}
 $("stylemenu").addEventListener("click",e=>{const b=e.target.closest("[data-sm]");if(b)chooseStyle(b.dataset.sm)});
 function updateStyleChip(){const c=$("styleChip");
-  if(!styleScope){c.classList.remove("on");c.innerHTML="";$("ntext").placeholder=$("ntext").dataset.ph||$("ntext").placeholder;return}
+  if(!styleOn){c.classList.remove("on");c.innerHTML="";$("ntext").placeholder=$("ntext").dataset.ph||$("ntext").placeholder;return}
   if(!$("ntext").dataset.ph)$("ntext").dataset.ph=$("ntext").placeholder;
-  c.innerHTML=`风格优化 · ${escH(STYLE_ZH[styleScope])}<button title="取消风格优化" aria-label="取消">×</button>`;c.classList.add("on");
-  c.querySelector("button").onclick=()=>{styleScope=null;pendingRegion=null;updateStyleChip();drawPins();saveDraft()};
+  c.innerHTML=`风格优化 · ${escH(STYLE_ZH[curScope()])}<button title="取消风格优化（标注保留）" aria-label="取消">×</button>`;c.classList.add("on");
+  c.querySelector("button").onclick=()=>{styleOn=false;updateStyleChip();saveDraft()};
   $("ntext").placeholder="想要的风格方向（可不写）：例如更简洁、对齐、配色统一、突出重点……"}
 function describe(el){const tag=el.tagName.toLowerCase(),cls=String(el.getAttribute("class")||"").trim().split(/\s+/)[0];
   const t=clip(String(el.innerText||el.textContent||"").replace(/\s+/g," ").trim(),40);return `${tag}${cls?"."+cls:""}${t?`「${t}」`:""}`}
@@ -702,9 +759,9 @@ function renderResume(){const el=$("resume");if(resumeOff||!resumeReady){if(el.c
   if(ln){parts.push(`上次批注到第 ${ln.x.page} 页（${fmtTime(ln.t)}）`);if(ln.x.page!==P[i].n)go=ln.x.page}
   if(!FILE){const L=hand&&hand.latest,open=notes.filter(x=>!isDone(x)).length;
     if(!L){if(notes.length)parts.push(`还没交给 Agent（未处理 ${open} 条）`)}
-    else if(L.status==="pending")parts.push(`第 ${L.seq} 次提交等待 Agent 接收`);
-    else if(L.status==="claimed")parts.push(`Agent 正在处理第 ${L.seq} 次提交（${fmtTime(Date.parse(L.claimedAt||L.at))} 接收）`);
-    else parts.push(`<span class="ok">✓ Agent 已处理完第 ${+L.seq||0} 次提交</span>（${fmtTime(Date.parse(L.doneAt||L.at))}）${L.summary?"："+escH(clip(L.summary,80)):""}；现在未处理 ${open} 条`)}
+    else if(L.status==="pending")parts.push(`第 ${L.seq} 批等待 Agent 接收`);
+    else if(L.status==="claimed")parts.push(`Agent 正在处理第 ${L.seq} 批（${fmtTime(Date.parse(L.claimedAt||L.at))} 接收）`);
+    else parts.push(`<span class="ok">✓ Agent 已处理完第 ${+L.seq||0} 批${"resolvedCount" in L?`（解决 ${+L.resolvedCount} 条）`:""}</span>（${fmtTime(Date.parse(L.doneAt||L.at))}）${L.summary?"："+escH(clip(L.summary,80)):""}；现在未处理 ${open} 条`)}
   const had=el.classList.contains("on");
   if(!parts.length){if(had){el.classList.remove("on");fit()}return}
   $("resumeText").innerHTML=parts.map(t=>t.startsWith("<span")?t:escH(t)).join(" · ");
@@ -718,22 +775,54 @@ const HAND_ZH={pending:"等待接收",claimed:"处理中",done:"已处理"};
 function setHand(h){if(!h||h.error)return;const L=h.latest,prev=hand&&hand.latest;
   if(L&&prev&&prev.seq===L.seq&&prev.status!==L.status){
     if(L.status==="claimed")toast("Agent 已接收，正在处理",3000);
-    if(L.status==="done")toast(`Agent 已处理完第 ${L.seq} 次提交${L.summary?"："+String(L.summary).slice(0,80):""}`,7000)}
-  hand=h;renderHand();renderResume()}
+    if(L.status==="done")toast(`Agent 已处理完第 ${L.seq} 批（解决 ${+L.resolvedCount||0} 条）${L.summary?"："+String(L.summary).slice(0,80):""}`,7000)}
+  const sig=L?[L.seq,L.status,L.resolvedCount,h.total].join("/"):"";
+  hand={...h,history:hand&&hand.history};renderHand();renderResume();
+  if($("batches").classList.contains("on")&&sig!==handSig)loadBatches();handSig=sig}
+let handSig="", batchOpen=null;   // 处理记录弹窗：上次的状态签名、用户展开的批次
 function renderHand(){const el=$("handState"),L=hand&&hand.latest;
   if(handQueued){el.className="queued";el.textContent="交给 Agent（待补传）";el.title="服务连上后自动提交";return}
   if(!L){el.className="";el.textContent="";el.title="";return}
   el.className=L.status||"";
-  el.textContent=L.status==="pending"?"已交给 Agent · 等待接收":L.status==="claimed"?`Agent 处理中（第 ${L.seq} 次）`:`Agent 已处理（第 ${L.seq} 次）`;
-  el.title=L.status==="done"?`处理结果：${L.summary||"（未写）"}`:(L.message?`附言：${L.message}`:"")}
+  const n="resolvedCount" in L?+L.resolvedCount:null;
+  el.textContent=L.status==="pending"?`已交给 Agent · 第 ${L.seq} 批等待接收`:L.status==="claimed"?`Agent 处理中 · 第 ${L.seq} 批${n?`（已解决 ${n} 条）`:""}`:`Agent 已处理 · 第 ${L.seq} 批${n!=null?`（解决 ${n} 条）`:""}`;
+  el.title=(L.status==="done"?`处理摘要：${L.summary||"（未写）"}`:(L.message?`附言：${L.message}`:""))+"\n点击查看处理记录（J）"}
 function openHand(){
   if(FILE){copyAll("本地文件模式连不到 Agent：已复制全部批注，粘贴到对话里交给 Agent");return}
   const open=notes.filter(x=>!isDone(x)),pages=[...new Set(open.map(x=>x.page))].sort((a,b)=>a-b);
   $("handInfo").textContent=open.length?`未处理批注 ${open.length} 条，涉及第 ${pages.join("、")} 页。`:"目前没有未处理的批注（也可以只带附言交给 Agent）。";
   const L=hand&&hand.latest;
-  $("handLast").textContent=L?`上一次：第 ${L.seq} 次提交，${HAND_ZH[L.status]||L.status}${L.status==="done"&&L.summary?"。处理结果："+L.summary:""}`:"";
+  $("handLast").textContent=L?`上一次：第 ${L.seq} 批，${HAND_ZH[L.status]||L.status}${"resolvedCount" in L?`，解决 ${+L.resolvedCount} 条`:""}${L.status==="done"&&L.summary?"。处理摘要："+L.summary:""}`:"";
+  $("handHist").style.display=L?"":"none";
   $("hand").classList.add("on");$("handMsg").focus()}
-$("handBtn").onclick=openHand;$("handState").onclick=openHand;
+$("handBtn").onclick=openHand;$("handState").onclick=()=>hand&&hand.latest?openBatches():openHand();
+$("handHist").onclick=()=>{$("hand").classList.remove("on");openBatches()};
+// 处理记录：每次「交给 Agent」算一批——提交、接收、收尾，这批解决了哪些批注，处理摘要
+const fmtIso=v=>fmtTime(Date.parse(v||"")||0);
+async function loadBatches(){   // 全量处理记录只在弹窗打开时取（轮询只带最新一批）
+  let d=null;try{d=await api("GET","/api/handoff")}catch(e){}
+  if(d&&Array.isArray(d.history))hand={...hand,...d};
+  else hand={...(hand||{}),history:hand&&hand.latest?[hand.latest]:[]};   // 旧版服务没有历史：至少显示最近一批
+  renderBatches()}
+function renderBatches(){
+  if(!hand||!Array.isArray(hand.history)){$("batchList").innerHTML='<p class="empty">正在读取处理记录…</p>';$("batchSum").textContent="";return}
+  const H=hand.history,byId=new Map(notes.map(x=>[x.id,x])),who=w=>w==="claude"?"Claude":w;
+  $("batchSum").textContent=H.length?`共 ${H.length} 批 · 已处理 ${+hand.done||0}，处理中 ${+hand.claimed||0}，等待接收 ${+hand.pending||0}`:"";
+  const box=$("batchList");if(box.querySelector("details"))batchOpen=new Set([...box.querySelectorAll("details[data-seq]")].filter(e=>e.open).map(e=>e.dataset.seq));
+  box.innerHTML=H.length?H.map(h=>{const ids=Array.isArray(h.resolvedIds)?h.resolvedIds:[],by=h.doneBy||h.claimedBy||"";
+    return `<div class="batch ${escH(h.status)}"><div class="bh"><b>第 ${+h.seq} 批</b><span class="bs">${escH(HAND_ZH[h.status]||h.status)}${by?" · "+escH(who(by)):""}</span>`
+      +("resolvedCount" in h?`<span class="bn">解决 ${+h.resolvedCount} 条${h.leftOpen?`，提交时的批注还剩 ${+h.leftOpen} 条`:""}${h.live?"（进行中）":h.estimated?"（按时间推算）":""}</span>`:"")+`</div>`
+      +`<div class="bt">提交 ${escH(fmtIso(h.at))}，当时未处理 ${+h.openCount||0} 条${Array.isArray(h.pages)&&h.pages.length?`（第 ${h.pages.map(Number).join("、")} 页）`:""}${h.claimedAt?` · 接收 ${escH(fmtIso(h.claimedAt))}`:""}${h.doneAt?` · 收尾 ${escH(fmtIso(h.doneAt))}`:""}</div>`
+      +(h.message?`<div class="bm">附言：${escH(h.message)}</div>`:"")
+      +(h.summary?`<div class="bsum">处理摘要：${escH(h.summary)}</div>`:h.status==="done"?`<div class="bt">（Agent 没写处理摘要）</div>`:"")
+      +(ids.length?`<details data-seq="${+h.seq}"${(batchOpen?batchOpen.has(String(+h.seq)):h===H[0])?" open":""}><summary>这批解决的 ${ids.length} 条（点一条跳到那一页）</summary>${ids.map(id=>{const x=byId.get(id);
+        return x?`<div class="bi" data-goto="${escH(id)}">第 ${+x.page} 页 · ${escH(clip(noteSummary(x),70))}${isDone(x)?(x.resolution?`<span class="br">处理说明：${escH(clip(x.resolution,100))}</span>`:""):"（之后被重新打开）"}</div>`
+          :`<div class="bi">（这条批注已删除）</div>`}).join("")}</details>`:"")+`</div>`}).join(""):'<p class="empty">还没有交给 Agent 的记录。</p>'}
+function openBatches(){if(FILE){toast("处理记录要用本地服务打开对照页才能看到");return}batchOpen=null;$("batchList").innerHTML="";renderBatches();$("batches").classList.add("on");loadBatches()}
+$("batchList").addEventListener("click",e=>{const b=e.target.closest("[data-goto]");if(!b)return;const x=notes.find(n=>n.id===b.dataset.goto);if(!x)return;
+  $("batches").classList.remove("on");const k=P.findIndex(p=>p.n===x.page);if(k<0)return;
+  if(isDone(x)&&hideDone){hideDone=false;LS.set(K.hide,false)}
+  if(k!==i)go(k);else refreshList(true);setTimeout(()=>{flashCard(x.id);flash(pinEl(x.id))},80)});
 $("handMsg").addEventListener("keydown",e=>{if(!e.isComposing&&e.key==="Enter"&&(e.metaKey||e.ctrlKey))$("doHand").click();else if(e.key==="Escape")$("hand").classList.remove("on")});
 $("doHand").onclick=()=>{const message=$("handMsg").value.trim();$("hand").classList.remove("on");$("handMsg").value="";mutate({kind:"handoff",message})};
 
@@ -741,12 +830,12 @@ $("doHand").onclick=()=>{const message=$("handMsg").value.trim();$("hand").class
 function exportText(){
   const by={};notes.slice().sort((a,b)=>a.page-b.page||String(a.at).localeCompare(String(b.at))).forEach(x=>(by[x.page]=by[x.page]||[]).push(x));
   const pages=Object.keys(by).map(Number).sort((a,b)=>a-b), open=notes.filter(x=>!isDone(x)).length;
-  let o=`# 批注 · ${unH(document.title)}\n导出时间：${new Date().toLocaleString("zh-CN")}；共 ${notes.length} 条（未处理 ${open}），涉及 ${pages.length} 页\n标点坐标为相对页面左上角的百分比（横向 x、纵向 y）。\n`;
+  let o=`# 批注 · ${unH(document.title)}\n导出时间：${new Date().toLocaleString("zh-CN")}；共 ${notes.length} 条（未处理 ${open}），涉及 ${pages.length} 页\n报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。\n`;
   pages.forEach(n=>{const t=P.find(p=>p.n===n);o+=`\n## 第 ${n} 页｜${unH(t?t.title:by[n][0].title||"")}\n`;
-    by[n].forEach((x,k)=>{o+=`${k+1}. 【${x.target||"未指定"}${x.pin?`·标点 ${pinNo(n,x.id)}（x ${x.pin.x}%，y ${x.pin.y}%）`:""}】${isDone(x)?"【已处理】":""}${String(x.text).replace(/\n/g,"\n   ")}\n`;
+    by[n].forEach((x,k)=>{o+=`${k+1}. 【${x.target||"未指定"}${x.pin?`·标点 ${markNo(n,x.id)}（x ${x.pin.x}%，y ${x.pin.y}%）`:""}${(r=>r?`·框选 ${markNo(n,x.id)}（x ${r.x}%，y ${r.y}%，宽 ${r.w}%，高 ${r.h}%）`:"")(regionOf(x))}】${isDone(x)?"【已处理】":""}${String(x.text).replace(/\n/g,"\n   ")}\n`;
       if(x.quote)o+=`   > 引用${x.quoteFrom?`（${x.quoteFrom}）`:""}：${String(x.quote).replace(/\n/g," ")}\n`;
       if(isDone(x)&&x.resolution)o+=`   处理说明：${String(x.resolution).replace(/\n/g," ")}\n`;
-      if(x.style&&x.style.scope)o+=`   风格优化：${x.style.scope==="region"&&x.style.region?`区域（x ${x.style.region.x}%，y ${x.style.region.y}%，宽 ${x.style.region.w}%，高 ${x.style.region.h}%）`:x.style.scope==="pin"?"标点处":"整页"}\n`;
+      if(x.style&&x.style.scope)o+=`   风格优化：${STYLE_ZH[x.style.scope]||"整页"}\n`;
       if(x.anchor)o+=`   位置线索：${String(x.anchor).replace(/\n/g," ")}\n`;
       if(Array.isArray(x.skills)&&x.skills.length)o+=`   技能：${x.skills.join("、")}\n`;
       if(x.pair&&x.pair.text)o+=`   ↔ 另一侧（${x.pair.side}·${x.pair.match==="exact"?"相同":"相近"}）：${String(x.pair.text).replace(/\n/g," ")}\n`})});
@@ -755,17 +844,18 @@ function parseMd(text){const items=[];let page=null,title="",cur=null;
   text.split(/\r?\n/).forEach(line=>{let m;
     if((m=line.match(/^## 第 (\d+) 页｜(.*)$/))){page=+m[1];title=m[2].trim();cur=null;return}
     if(page===null)return;
-    if((m=line.match(/^\d+\. 【([^】·]*)(?:·标点 \d+（x ([\d.]+)%，y ([\d.]+)%）)?】(.*)$/))){let t=m[4],st="open";
+    if((m=line.match(/^\d+\. 【([^】·]*)(?:·标点 \d+（x ([\d.]+)%，y ([\d.]+)%）)?(?:·框选 \d+（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)?】(.*)$/))){let t=m[8],st="open";
       if(t.startsWith("【已处理】")){st="resolved";t=t.slice(5)}
-      cur={page,title,target:m[1],text:t,status:st,pin:m[2]?{x:+m[2],y:+m[3]}:null};items.push(cur);return}
+      cur={page,title,target:m[1],text:t,status:st,pin:m[2]?{x:+m[2],y:+m[3]}:null};if(m[4])cur.region={x:+m[4],y:+m[5],w:+m[6],h:+m[7]};items.push(cur);return}
     if(!cur)return;
     if((m=line.match(/^\s+> 引用(?:（([^）]*)）)?：(.*)$/))){cur.quoteFrom=m[1]||"";cur.quote=m[2];
       if(cur.text===DEL_TEXT)cur.edit={op:"delete",from:cur.quote};
       else if(cur.text.startsWith(REP_PREFIX))cur.edit={op:"replace",from:cur.quote,to:cur.text.slice(REP_PREFIX.length)};return}
     if((m=line.match(/^\s+处理说明：(.*)$/))){cur.resolution=m[1];return}
     if((m=line.match(/^\s+技能：(.*)$/))){cur.skills=parseSkills(m[1]);return}
-    if((m=line.match(/^\s+风格优化：(整页|标点处|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$/))){
-      cur.style=m[2]?{scope:"region",region:{x:+m[2],y:+m[3],w:+m[4],h:+m[5]}}:{scope:m[1]==="整页"?"page":"pin"};return}
+    if((m=line.match(/^\s+风格优化：(整页|标点处|框选处|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$/))){
+      if(m[2])cur.region={x:+m[2],y:+m[3],w:+m[4],h:+m[5]};   // 0.3 导出：框写在风格优化这一行
+      cur.style={scope:m[1]==="整页"?"page":m[1]==="标点处"?"pin":"region"};return}
     if((m=line.match(/^\s+位置线索：(.*)$/))){cur.anchor=m[1];return}
     if((m=line.match(/^\s+↔ 另一侧（(报告|讲稿)(?:·(相同|相近))?）：(.*)$/))){cur.pair={side:m[1],match:m[2]==="相同"?"exact":"similar",text:m[3]};return}
     if(line.startsWith("   ")&&line.trim())cur.text+="\n"+line.slice(3)});
@@ -816,10 +906,10 @@ document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{if
 // ---------- 翻页（每页的草稿、引用、标点各自保留） ----------
 function saveDraft(){const n=P[i].n,t=$("ntext").value;
   const skv=$("nskills").value;
-  if(t.trim()||quote||pendingPin||skv.trim()||styleScope)drafts[n]={text:t,target:$("ntarget").value,quote,quoteFrom,pin:pendingPin,pair:quotePair,skills:skv,style:styleScope,region:pendingRegion};else delete drafts[n];
+  if(t.trim()||quote||pendingPin||pendingRegion||skv.trim()||styleOn)drafts[n]={text:t,target:$("ntarget").value,quote,quoteFrom,pin:pendingPin,pair:quotePair,skills:skv,style:styleOn,region:pendingRegion};else delete drafts[n];
   SS.set(K.drafts,drafts)}
 function loadDraft(){const d=drafts[P[i].n]||{};$("ntext").value=d.text||"";$("ntarget").value=d.target||"报告";
-  quote=d.quote||"";quoteFrom=d.quoteFrom||"";pendingPin=d.pin||null;quotePair=d.pair||null;$("nskills").value=d.skills||"";styleScope=d.style||null;pendingRegion=d.region||null;updateStyleChip();showQuote();autoGrow()}
+  quote=d.quote||"";quoteFrom=d.quoteFrom||"";pendingPin=d.pin||null;quotePair=d.pair||null;$("nskills").value=d.skills||"";styleOn=!!d.style;pendingRegion=d.region||null;updateStyleChip();showQuote();autoGrow()}
 function render(){
   const p=P[i], s=secOf(p.n);
   stage.innerHTML=SECT[i]; fit();
@@ -832,7 +922,7 @@ function render(){
     ${p.talk?`<div class="lab">讲法</div><div class="talk">${p.talk}</div>`:'<p class="empty">（本页无讲稿）</p>'}
     ${p.next?`<div class="lab">过渡</div><div class="next">${p.next}</div>`:""}${qa}`;
   stashEdit();
-  editingId=null;setPinMode(false);setRegionMode(false);closeStyleMenu();hideSelbar();closePinPop();sel=null;loadDraft();refreshList(true);$("script").scrollTop=0;
+  editingId=null;if(markMode)setMarkMode(false);closeStyleMenu();hideSelbar();closePinPop();sel=null;loadDraft();refreshList(true);$("script").scrollTop=0;
   LS.set(K.page,i+1)}
 function go(k){k=Math.max(0,Math.min(N-1,k));if(k===i)return;saveDraft();i=k;render()}
 $("prev").onclick=()=>go(i-1);$("next").onclick=()=>go(i+1);addEventListener("resize",fit);
@@ -841,8 +931,8 @@ $("helpBtn").onclick=()=>$("help").classList.toggle("on");
 document.addEventListener("keydown",e=>{
   if(["SELECT","TEXTAREA","INPUT"].includes(e.target.tagName)||e.isComposing||e.metaKey||e.ctrlKey||e.altKey)return;
   const k=e.key.toLowerCase();
-  if($("stylemenu").classList.contains("on")){   // 风格优化范围：1 整页、2 框选区域、3 标点处
-    if(k==="1"||k==="2"||k==="3"){e.preventDefault();chooseStyle(k==="1"?"page":k==="2"?"region":"pin");return}
+  if($("stylemenu").classList.contains("on")){   // 风格优化范围：1 整页、2 标注处（3 是旧版的「标点处」，同 2）
+    if(k==="1"||k==="2"||k==="3"){e.preventDefault();chooseStyle(k==="1"?"page":"mark");return}
     if(e.key==="Escape"){closeStyleMenu();return}}
   if($("selbar").classList.contains("on")){   // 刚选中文字：D 删除、R 改为、C 批注
     if(k==="d"||(delArmed&&e.key==="Enter")){e.preventDefault();if(delArmed)selAction("delete");else armDelete(true);return}
@@ -852,7 +942,8 @@ document.addEventListener("keydown",e=>{
     if(e.key==="Escape"){hideSelbar();sel=null;return}}
   if(document.querySelector(".modal.on")&&e.key!=="Escape")return;
   if(k==="a"){e.preventDefault();openHand();return}
-  if(k==="p"){e.preventDefault();setPinMode(!pinMode);return}
+  if(k==="j"){e.preventDefault();openBatches();return}
+  if(k==="p"){e.preventDefault();remarkId=null;setMarkMode(!markMode);return}
   if(k==="l"){e.preventDefault();goLast();return}
   if(k==="k"){e.preventDefault();$("nskills").focus();return}
   if(k==="s"){e.preventDefault();openStyleMenu();return}
@@ -862,7 +953,7 @@ document.addEventListener("keydown",e=>{
   else if(e.key==="ArrowLeft"||e.key==="PageUp"){go(i-1);e.preventDefault()}
   else if(e.key==="Home")go(0);else if(e.key==="End")go(N-1);
   else if(e.key==="h"||e.key==="H")$("help").classList.toggle("on");
-  else if(e.key==="Escape"){document.querySelectorAll(".modal").forEach(m=>m.classList.remove("on"));if(pinMode)setPinMode(false);if(regionMode)setRegionMode(false);closePinPop();closeStyleMenu()}});
+  else if(e.key==="Escape"){document.querySelectorAll(".modal").forEach(m=>m.classList.remove("on"));if(markMode)setMarkMode(false);closePinPop();closeStyleMenu()}});
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE)poll()});
 
 (async function init(){

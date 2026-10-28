@@ -543,7 +543,7 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         sections = infer_sections(doc, sects)
     final_title = title or rtitle or h1 or report.stem
     if not intro:
-        intro = f"<h2>{esc(final_title)}</h2><p>左侧报告、右侧讲稿与批注。选中文字可作为引用，点「在报告上标点」可标位置。</p>"
+        intro = f"<h2>{esc(final_title)}</h2><p>左侧报告、右侧讲稿与批注。选中文字可作为引用，点「在报告上标注」可单击放点或拖动框选。</p>"
     out.mkdir(parents=True, exist_ok=True)
     old = read_manifest(out)
     old_keys = {int(pg["n"]): str(pg["key"]) for pg in old.get("pages", [])

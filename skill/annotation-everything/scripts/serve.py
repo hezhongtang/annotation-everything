@@ -52,7 +52,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import notes_store as store  # noqa: E402
 
 APP = "annotation-everything"
-VERSION = "0.3.0"
+VERSION = "0.4.0"
+# 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
+FEATURES = ["notes", "handoff", "marks", "batches"]
+
+
+class StaleServer(Exception):
+    """本目录已有旧版本的服务在跑：复用它会让新页面的改动被静默丢掉。"""
 DEFAULT_PORT = 8765
 PORT_TRIES = 20
 STATUS_FILE = ".annotation-server.json"
@@ -309,7 +315,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- API ----------
     def _ident(self) -> dict[str, Any]:
-        return {"app": APP, "reviewId": self.server.review_id()}
+        return {"app": APP, "reviewId": self.server.review_id(), "version": VERSION, "features": FEATURES}
 
     def _api(self, path: str) -> None:
         d, m = self.server.review_dir, NOTE_PATH.match(path)
@@ -321,14 +327,13 @@ class Handler(BaseHTTPRequestHandler):
             if not rid or claimed != rid:
                 raise Reject(409, "review-mismatch", "页面属于另一份审阅（审阅标识不一致）")
         if path == "/api/health" and cmd == "GET":
-            self._json(200, {**self._ident(), "version": VERSION, "dir": str(d), "pid": os.getpid(),
-                             "port": self.server.port, "features": ["notes", "handoff"],
-                             "hook": bool(self.server.on_handoff)})
+            self._json(200, {**self._ident(), "dir": str(d), "pid": os.getpid(),
+                             "port": self.server.port, "hook": bool(self.server.on_handoff)})
         elif path == "/api/notes" and cmd == "GET":
             doc = store.load(d)
             idx = d / "index.html"
             doc["indexMtime"] = idx.stat().st_mtime if idx.exists() else None  # 页面据此提示「已重建，请刷新」
-            doc["handoff"] = store.handoff_state(d)
+            doc["handoff"] = store.handoff_state(d, full=False)   # 轮询只带最新一批；处理记录全量走 GET /api/handoff
             doc["skillCatalog"] = store.skills_catalog(d)
             self._json(200, {**doc, **self._ident()})
         elif path == "/api/handoff" and cmd == "GET":
@@ -338,7 +343,7 @@ class Handler(BaseHTTPRequestHandler):
             _h, item, merged = store.handoff_submit(d, str(body.get("message") or ""), by="page")
             self.server.log("info", f"handoff seq={item['seq']} open={item['openCount']} merged={merged}")
             self.server.run_hook(item, merged)
-            self._json(200, {"doc": {**store.load(d), **self._ident()}, "handoff": store.handoff_state(d),
+            self._json(200, {"doc": {**store.load(d), **self._ident()}, "handoff": store.handoff_state(d, full=False),
                              "merged": merged, "seq": item["seq"]})
         elif path == "/api/notes" and cmd == "POST":
             doc, note = store.add(d, self._expect_obj(self._body()), by="page")
@@ -437,18 +442,27 @@ def same_dir(found: dict[str, Any], review_dir: Path) -> bool:
 
 def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
          on_handoff: list[str] | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
-    """返回 (服务, 已在运行的 URL, 过程记录)。"""
+    """返回 (服务, 已在运行的 URL, 过程记录)。本目录已有旧版本服务在跑时抛 StaleServer（不静默复用）。"""
     notes: list[str] = []
+
+    def check_version(found: dict[str, Any], p: int) -> None:
+        if found.get("version") != VERSION:
+            raise StaleServer(f"本目录已有 {found.get('version') or '旧'} 版的服务在端口 {p} 运行（pid {found.get('pid')}），"
+                              f"当前是 {VERSION}。旧服务不认识新版页面的字段（框选、重新标注等会被静默丢掉），"
+                              f"请先停掉它（在它的终端按 Ctrl+C，或 kill {found.get('pid')}），再重新运行本命令。")
+
     info = read_status(review_dir)
     if info and pid_alive(int(info.get("pid") or 0)) and info.get("port"):
         found = probe(int(info["port"]))
         if found and same_dir(found, review_dir):
+            check_version(found, int(info["port"]))
             notes.append(f"本目录的服务已在端口 {info['port']} 运行（pid {info.get('pid')}），直接复用")
             return None, f"http://127.0.0.1:{info['port']}/", notes
     for p in range(port, port + tries):
         found = probe(p)
         if found is not None:
             if same_dir(found, review_dir):
+                check_version(found, p)
                 notes.append(f"端口 {p}：本服务已在托管此目录（pid {found.get('pid')}），直接复用")
                 return None, f"http://127.0.0.1:{p}/", notes
             who = "另一个审阅目录的本服务" if found.get("app") == APP else "其他程序"
@@ -498,7 +512,11 @@ def serve(review_dir: Path, port: int, open_browser: bool, debug: bool, on_hando
                       f"建议先运行 build_viewer.py --rebuild {review_dir}，让它换一个新标识。", file=sys.stderr)
     except (OSError, ValueError, AttributeError):
         pass
-    server, running_url, trail = bind(review_dir, port, debug, on_handoff=on_handoff)
+    try:
+        server, running_url, trail = bind(review_dir, port, debug, on_handoff=on_handoff)
+    except StaleServer as e:
+        print(f"错误：{e}", file=sys.stderr)
+        return 6
     for t in trail:
         print(f"[端口] {t}", file=sys.stderr)
     if running_url:
@@ -553,7 +571,7 @@ def status(review_dir: Path) -> int:
                         "resolved": sum(n.get("status") == "resolved" for n in notes)}
     except ValueError as e:
         out["notes"] = {"error": f"notes.json 无法解析：{type(e).__name__}"}
-    hs = store.handoff_state(review_dir)
+    hs = store.handoff_state(review_dir, full=False)
     latest = hs.get("latest") or {}
     out["handoff"] = {"pending": hs.get("pending"), "claimed": hs.get("claimed"),
                       "latest": {k: latest.get(k) for k in ("seq", "status", "at", "claimedAt", "doneAt")} if latest else None}
