@@ -18,7 +18,7 @@
   （「可能被问」逐行写「问：……答：……」）。首个「### 第」之前的内容作为「说明」浮层。
 
 用法：
-  python3 build_viewer.py --report 报告.html [--script 讲稿.md] --out 审阅目录 [--title 标题] [--sections ...]
+  python3 build_viewer.py --report 报告.html [--script 讲稿.md] --out 审阅目录 [--title 标题] [--name 审阅名] [--sections ...]
   python3 build_viewer.py --rebuild 审阅目录          # 按 review.json 记录的源文件与参数重建
 输出 <out>/index.html 与 <out>/review.json（审阅标识、页码、标题、源文件路径）；不会动已有的 notes.json。
 只用 Python 标准库。
@@ -510,9 +510,15 @@ def resolve_sources(review_dir: Path, manifest: dict | None = None) -> dict[str,
     return out
 
 
+def file_label(name: str, rid: str) -> str:
+    """导出文件名里的审阅标签：审阅名（只留文件名安全的字符，最多 40 字）+ 标识前 4 位，两份审阅同名也分得开。"""
+    slug = re.sub(r"[^\w.-]+", "_", name).strip("._")[:40] or "审阅"
+    return f"{slug}_{rid[:4]}"
+
+
 def build(report: Path, script: Path | None, out: Path, title: str | None = None,
           sections_arg: str | None = None, no_sections: bool = False, lenient: bool = False,
-          asset_root: Path | None = None) -> dict:
+          asset_root: Path | None = None, name: str | None = None) -> dict:
     doc = report.read_text(encoding="utf-8")
     assets = Assets(asset_root or report.resolve().parent)
     assets.root_fs = None
@@ -564,23 +570,26 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         assets.warn(f"审阅目录是从 {old['reviewDir']} 复制来的，已换新的审阅标识（原目录的浏览器暂存不会带过来）")
     if rid is None or copied:
         rid = secrets.token_hex(8)
-    ns = re.sub(r"[^\w.-]+", "_", out.resolve().name)
+    # 审阅名：给人看的名字（导出文件名、台账列表都用它），默认取标题；不要求唯一
+    review_name = (name or "").strip() or final_title
+    ns = file_label(review_name, rid)
     values = {"TITLE": html.escape(final_title), "INTRO": intro, "PAGES": _js(pages), "SECTIONS": _js(sections),
-              "NS": _js(ns), "RID": _js(rid), "RCSS": _js(rcss), "SECT": _js([s["html"] for s in sects]),
+              "NS": _js(ns), "NAME": _js(review_name), "RID": _js(rid), "RCSS": _js(rcss), "SECT": _js([s["html"] for s in sects]),
               "ROOTFS": assets.root_fs or "100%", "SKILLS": _js(read_skills(out)), "ALWAYS": _js(read_always(out))}
     # 一次性替换，避免内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
-    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS)__", lambda m: values[m.group(1)],
+    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS)__", lambda m: values[m.group(1)],
                        TEMPLATE.read_text(encoding="utf-8"))
     page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
     write_private(out / "index.html", page_html)
     rr, rs = report.resolve(), (script.resolve() if script else None)
     manifest = {
-        "app": APP, "kind": "deck", "reviewId": rid, "reviewDir": str(out.resolve()), "title": final_title, "namespace": ns,
+        "app": APP, "kind": "deck", "reviewId": rid, "reviewDir": str(out.resolve()), "title": final_title, "name": review_name,
+        "namespace": ns,
         "builtAt": datetime.now().astimezone().isoformat(timespec="seconds"),
         # 相对审阅目录的路径优先：整棵目录树被移动或复制后仍指向同一处的源文件
         "sources": {"report": os.path.relpath(rr, out.resolve()), "script": os.path.relpath(rs, out.resolve()) if rs else None},
         "sourcesAbs": {"report": str(rr), "script": str(rs) if rs else None},
-        "build": {"title": title, "sections": sections_arg, "noSections": no_sections, "lenient": lenient,
+        "build": {"title": title, "name": (name or "").strip() or None, "sections": sections_arg, "noSections": no_sections, "lenient": lenient,
                   "assetRoot": str(asset_root.resolve()) if asset_root else None},
         "sections": sections,
         "pages": [{"n": p["n"], "key": p["key"], "stable": p["stable"], "title": html.unescape(p["title"]),
@@ -608,10 +617,36 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
             assets.warn(f"批注 {mv['id']} 随页面「{mv['key']}」从第 {mv['from']} 页移到第 {mv['to']} 页")
         for o in remap["orphans"]:
             assets.warn(f"批注 {o['id']}（原第 {o['page']} 页，键 {o['key']}）对应的页面在新版报告里找不到，已标出待确认")
+    register_review(rid, out, review_name, assets)
     if assets.total > 40 * 1024 * 1024:
         assets.warn(f"内联资源共 {assets.total // 1024 // 1024} MB，页面较大，打开可能偏慢")
     return {"pages": len(pages), "sections": len(sections), "seconds": sum(p["sec"] for p in pages),
-            "title": final_title, "warnings": assets.warnings, "reviewId": rid, "remap": remap}
+            "title": final_title, "name": review_name, "warnings": assets.warnings, "reviewId": rid, "remap": remap}
+
+
+def register_review(rid: str, out: Path, review_name: str, assets: Assets) -> None:
+    """登记到本机审阅台账；第一次登记时台账里已有同名的别的审阅就提醒（不拦）。台账出错只警告。"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import ledger
+    try:
+        known = ledger.get(rid) is not None
+    except (ledger.LedgerError, OSError):
+        known = True
+    warn = ledger.try_register(rid, out)
+    if warn:
+        assets.warn(warn)
+        return
+    if known:   # 重名只在第一次登记时提醒，之后每次重建不再刷屏
+        return
+    try:
+        same = [(k, e["dir"]) for k, e in ledger.entries().items()
+                if k != rid and ledger.entry_state(k, e) == "ok"
+                and ledger.review_name(ledger.read_manifest(Path(e["dir"]))) == review_name]
+    except (ledger.LedgerError, OSError):
+        return
+    for k, d in same[:3]:
+        assets.warn(f"本机已有同名审阅「{review_name}」（标识 {k[:8]}，{d}）；导出文件名靠标识前 4 位区分。"
+                    "想让人一眼分清，可用 --name 换个审阅名")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -621,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--script", type=Path, help="讲稿 Markdown（可选）")
     ap.add_argument("--out", type=Path, help="审阅目录：写 index.html 与 review.json，批注也存这里")
     ap.add_argument("--title", help="页面标题；默认取报告 <title>，其次讲稿一级标题")
+    ap.add_argument("--name", help="审阅名：给人看的名字，用在导出文件名和 serve.py list 里；默认取页面标题")
     ap.add_argument("--sections", help='板块导航，如 "开篇:1-6,主线一:7-21"；默认从报告目录推断')
     ap.add_argument("--no-sections", action="store_true", help="不显示板块导航")
     ap.add_argument("--lenient", action="store_true", help="讲稿与报告页码不一致时只警告，以报告页序为准")
@@ -633,18 +669,20 @@ def main(argv: list[str] | None = None) -> int:
         src, opt = resolve_sources(a.rebuild, m), m.get("build") or {}
         a.out, a.report, a.script = a.rebuild, src["report"], src["script"]
         a.title = a.title or opt.get("title")
+        a.name = a.name or opt.get("name")
         a.sections = a.sections or opt.get("sections")
         a.no_sections = a.no_sections or bool(opt.get("noSections"))
         a.lenient = a.lenient or bool(opt.get("lenient"))
         a.asset_root = a.asset_root or (Path(opt["assetRoot"]) if opt.get("assetRoot") else None)
     elif not (a.report and a.out):
         ap.error("需要 --report 与 --out（或用 --rebuild 审阅目录）")
-    r = build(a.report, a.script, a.out, a.title, a.sections, a.no_sections, a.lenient, a.asset_root)
+    r = build(a.report, a.script, a.out, a.title, a.sections, a.no_sections, a.lenient, a.asset_root, name=a.name)
     for w in r["warnings"]:
         print("警告：" + w, file=sys.stderr)
     mins = r["seconds"] // 60
     print(f"wrote {a.out / 'index.html'}：{r['pages']} 页，板块 {r['sections']} 个"
-          + (f"，讲稿合计约 {mins} 分钟" if r["seconds"] else ""))
+          + (f"，讲稿合计约 {mins} 分钟" if r["seconds"] else "")
+          + f"\n审阅名：{r['name']}（标识 {r['reviewId']}）")
     return 0
 
 

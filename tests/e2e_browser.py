@@ -34,6 +34,7 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 FIXTURE = ROOT / "fixtures" / "sample"
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-e2e-home-")   # 测试不碰用户真实的审阅台账；子进程继承
 RESULTS: list[tuple[bool, str]] = []
 STAGE = "document.getElementById('host').shadowRoot.getElementById('ae-stage')"
 
@@ -49,10 +50,13 @@ def free_port():
         return s.getsockname()[1]
 
 
-def build(out: Path, report: Path = FIXTURE / "report.html", script: Path | None = FIXTURE / "script.md"):
+def build(out: Path, report: Path = FIXTURE / "report.html", script: Path | None = FIXTURE / "script.md",
+          name: str | None = None):
     cmd = [sys.executable, str(SCRIPTS / "build_viewer.py"), "--report", str(report), "--out", str(out)]
     if script:
         cmd += ["--script", str(script)]
+    if name:
+        cmd += ["--name", name]
     subprocess.run(cmd, check=True, capture_output=True)
 
 
@@ -91,6 +95,15 @@ def add_note(page, text, pin=None):
     page.fill("#ntext", text)
     page.click('[data-act="add"]')
     page.wait_for_timeout(400)
+
+
+def wait_until(cond, page, seconds: float) -> bool:
+    end = time.time() + seconds
+    while time.time() < end:
+        if cond():
+            return True
+        page.wait_for_timeout(200)
+    return cond()
 
 
 def go_page(page, n):
@@ -689,13 +702,40 @@ def main() -> int:
 
         # ---------- 7. 同一端口换成另一份审阅 ----------
         other = tmp / "other_review"
-        build(other)
+        build(other, name="B 稿票面")
         stop(srv)
         srv_b = start_server(other, port)
         add_note(page, "切换后立刻写的 A 稿意见")   # 页面还以为连着 A
         page.wait_for_timeout(1500)
         ok(not any("A 稿" in n["text"] for n in disk_notes(other)), "服务刚切换就写，也不会写进 B 稿的 notes.json")
+        # A 停掉的空档里若刚好轮询过，页面先是「服务未连接」，下一次轮询（4 秒内）才认出端口上换成了 B
+        # （对照页的 CSP 不放行 eval，wait_for_function 用不了，在这边轮询）
+        wait_until(lambda: "服务不匹配" in page.inner_text("#mode"), page, 8)
         ok("服务不匹配" in page.inner_text("#mode") and "待补传" in page.inner_text("#mode"), "页面显示「服务不匹配」，改动留在待补传")
+        rid_a = json.loads((sdir / "review.json").read_text())["reviewId"]
+        wait_until(lambda: "《B 稿票面》" in page.inner_text("#srvText"), page, 5)   # 提示条先显示，再异步问端口上是谁
+        bar = page.inner_text("#srvBar")
+        ok("《B 稿票面》" in bar and f"serve.py {rid_a}" in bar and str(sdir) not in bar,
+           "不匹配提示说出端口上现在是哪份审阅，给出按标识启动的命令，不含本机路径")
+        # 同一地址打开 B 稿的页面：发现 A 稿旧标签页留下的未补传改动，只能下载导回 A 稿
+        pb = ctx.new_page()
+        pb.goto(f"http://127.0.0.1:{port}/")
+        pb.wait_for_selector("#strayBtn", state="visible", timeout=8000)
+        ok("其他审阅的未保存改动" in pb.inner_text("#strayBtn"), "B 稿页面提示这个地址下有别的审阅的未保存改动")
+        pb.click("#strayBtn")
+        ok("另一个名字" not in pb.inner_text("#strays") and rid_a[:8] in pb.inner_text("#strays"), "列出 A 稿（按标识）")
+        with pb.expect_download() as dl:
+            pb.click("#strays [data-sdl]")
+        rescued = json.loads(Path(dl.value.path()).read_text(encoding="utf-8"))
+        ok(rescued["reviewId"] == rid_a and any(n["text"] == "切换后立刻写的 A 稿意见" for n in rescued["notes"]),
+           "下载的 JSON 带 A 稿标识和那条未补传的批注")
+        rf = tmp / "rescued.json"
+        rf.write_text(json.dumps(rescued, ensure_ascii=False), encoding="utf-8")
+        wrong = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "import", str(other), str(rf)],
+                               capture_output=True, text=True)
+        ok(wrong.returncode == 2 and "另一份审阅" in wrong.stderr, "导进 B 稿被拒绝")
+        ok(not any("A 稿" in n["text"] for n in disk_notes(other)), "B 稿的 notes.json 始终没有 A 稿的批注")
+        pb.close()
         stop(srv_b)
         srv = start_server(sdir, port)
         page.wait_for_timeout(5500)

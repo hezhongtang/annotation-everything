@@ -2,10 +2,13 @@
 """annotation-everything 本地批注服务：只监听本机，托管对照页，批注每次增删改即落盘。
 
 用法：
-  python3 serve.py <审阅目录>                 # 启动（默认端口 8765），自动打开浏览器，Ctrl+C 停止
-  python3 serve.py <审阅目录> --port 9000 --no-open --debug
+  python3 serve.py <审阅目录或审阅标识>       # 启动（用这份审阅的专属端口），自动打开浏览器，Ctrl+C 停止
+  python3 serve.py <审阅目录> --port 9000 --no-open --debug   # --port 只是本次临时换端口
+  python3 serve.py <审阅目录> --claim-port 8800              # 把专属端口改成 8800 再启动
   python3 serve.py <审阅目录> --on-handoff "命令 参数"   # 可选：用户点「交给 Agent」时运行这条命令
   python3 serve.py status <审阅目录>          # 查看服务是否在跑、实际端口、拒绝/错误计数（给 Claude 排障用）
+  python3 serve.py list [--under 目录] [--json]   # 审阅台账：本机有哪些审阅、端口、状态、待接收的提交、有没有代理在等
+  python3 serve.py forget <标识前缀>            # 从台账移除一份审阅，释放它的专属端口（不动审阅目录）
   python3 serve.py check                      # 自检：回环绑定、伪造 Host/Origin 被拒、落盘与重启恢复
 
 安全做法：
@@ -22,8 +25,10 @@
 提交内容以 JSON 从标准输入传入（含 stage / target / allowSubagents），另有环境变量 AE_EVENT / AE_REVIEW_DIR /
 AE_HANDOFF_SEQ / AE_URL；运行中又来的事件排队依次补跑；命令输出丢弃，退出码记入 server.log。
 
-端口回退：默认端口被占用时，若占用者正是本服务且托管同一目录，直接复用并打开浏览器；
-否则顺延尝试后续端口（最多 20 个），实际端口写进审阅目录的 .annotation-server.json。
+专属端口：每份审阅第一次启动时在审阅台账（~/.annotation-everything/，AE_HOME 可改）里分到一个端口，此后一直用它，
+停了也不让给别的审阅——浏览器暂存按地址（127.0.0.1:端口）隔离，地址不变，旧标签页和暂存才接得上。
+本目录的服务已在跑就直接复用；专属端口被别的程序占用（或传了 --port）时本次临时顺延（跳过别人的专属端口，最多 20 个）
+并警告，实际端口写进审阅目录的 .annotation-server.json。
 """
 from __future__ import annotations
 
@@ -50,10 +55,11 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
 
 APP = "annotation-everything"
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
 FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always"]
 
@@ -183,13 +189,20 @@ class ReviewServer(ThreadingHTTPServer):
                 if job is None:
                     self._hook_running = False
 
-    def review_id(self) -> str | None:
-        def read(f: Path | None) -> str | None:
+    def manifest(self) -> dict[str, Any]:
+        def read(f: Path | None) -> dict[str, Any]:
             try:
-                return json.loads(f.read_text(encoding="utf-8")).get("reviewId") if f else None
-            except (OSError, ValueError, AttributeError):
-                return None
+                m = json.loads(f.read_text(encoding="utf-8")) if f else {}
+                return m if isinstance(m, dict) else {}
+            except (OSError, ValueError):
+                return {}
         return self._cached(MANIFEST, read)
+
+    def review_id(self) -> str | None:
+        return self.manifest().get("reviewId")
+
+    def review_name(self) -> str:
+        return ledger.review_name(self.manifest())
 
     def index(self) -> tuple[bytes, str] | None:
         def read(f: Path | None) -> tuple[bytes, str] | None:
@@ -317,7 +330,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- API ----------
     def _ident(self) -> dict[str, Any]:
-        return {"app": APP, "reviewId": self.server.review_id(), "version": VERSION, "features": FEATURES}
+        # name：审阅名。别的审阅的旧标签页连到这个端口时，据此告诉用户「这里现在是哪一份」（无 CORS 头，只有同源页面读得到）
+        return {"app": APP, "reviewId": self.server.review_id(), "name": self.server.review_name(),
+                "version": VERSION, "features": FEATURES}
 
     def _api(self, path: str) -> None:
         d, m = self.server.review_dir, NOTE_PATH.match(path)
@@ -447,7 +462,7 @@ def read_status(review_dir: Path) -> dict[str, Any] | None:
 def write_status(server: ReviewServer) -> None:
     info = {"app": APP, "version": VERSION, "pid": os.getpid(), "port": server.port,
             "url": f"http://127.0.0.1:{server.port}/", "dir": str(server.review_dir),
-            "startedAt": store.now_iso()}
+            "hook": bool(server.on_handoff), "startedAt": store.now_iso()}
     f = server.review_dir / STATUS_FILE
     fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -468,8 +483,13 @@ def same_dir(found: dict[str, Any], review_dir: Path) -> bool:
 
 
 def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
-         on_handoff: list[str] | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
-    """返回 (服务, 已在运行的 URL, 过程记录)。本目录已有旧版本服务在跑时抛 StaleServer（不静默复用）。"""
+         on_handoff: list[str] | None = None,
+         avoid: dict[int, str] | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
+    """返回 (服务, 已在运行的 URL, 过程记录)。本目录已有旧版本服务在跑时抛 StaleServer（不静默复用）。
+
+    avoid：别的审阅的专属端口（端口 → 标识）。顺延时跳过它们，免得占了别人的地址。
+    """
+    avoid = avoid or {}
     notes: list[str] = []
 
     def check_version(found: dict[str, Any], p: int) -> None:
@@ -486,6 +506,9 @@ def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
             notes.append(f"本目录的服务已在端口 {info['port']} 运行（pid {info.get('pid')}），直接复用")
             return None, f"http://127.0.0.1:{info['port']}/", notes
     for p in range(port, port + tries):
+        if p in avoid:
+            notes.append(f"端口 {p} 是另一份审阅（标识 {avoid[p][:8]}）的专属端口，跳过")
+            continue
         found = probe(p)
         if found is not None:
             if same_dir(found, review_dir):
@@ -519,7 +542,62 @@ def parse_hook(cmd: str | None) -> list[str] | None:
     return [full, *argv[1:]]   # 钩子在启动 serve.py 的目录下运行，参数里的相对路径按这个目录解析
 
 
-def serve(review_dir: Path, port: int, open_browser: bool, debug: bool, on_handoff: list[str] | None = None) -> int:
+class ClaimRefused(Exception):
+    """--claim-port 不成立（端口归别的审阅、范围不对、台账不可用）：不启动，免得占了别人的地址。"""
+
+
+def _others_ports(rid: str | None) -> dict[int, str]:
+    """别的审阅的专属端口（台账读不了就只能空着）。复制来的副本连原审阅（同一标识）的端口也要避开，所以 rid 传 None。"""
+    try:
+        return {pt: k for pt, k in ledger.owners().items() if k != rid}
+    except (ledger.LedgerError, OSError):
+        return {}
+
+
+def plan_port(review_dir: Path, rid: str | None, port: int | None, claim: int | None) -> tuple[int, int | None, dict[int, str]]:
+    """决定本次先试哪个端口。返回 (首选端口, 专属端口, 要避开的别人的专属端口)。
+
+    - 不传 --port：用专属端口；还没有就分配（已在运行的认领当前端口，否则从 8765 起挑没人认领、此刻空闲的最小端口）；
+    - --port N：本次临时用 N（被占就顺延），专属端口不变；
+    - --claim-port N：把专属端口改成 N 再启动；不成立就抛 ClaimRefused，不启动。
+    分不到专属端口时（旧版目录没有标识、复制来的副本、台账不可用、端口都被认领）退回旧做法：从 --port 或 8765 起顺延，
+    但仍避开台账里别人的专属端口，只给警告。
+    """
+    fallback = port or DEFAULT_PORT
+    if claim and not rid:
+        raise ClaimRefused("review.json 里没有审阅标识，不能认领专属端口；先运行 build_viewer.py --rebuild")
+    if not rid:
+        print("[端口] review.json 里没有审阅标识（旧版生成？），不登记台账；建议先运行 build_viewer.py --rebuild", file=sys.stderr)
+        return fallback, None, _others_ports(None)
+    if claim:
+        try:
+            ledger.claim_port(rid, review_dir, claim)
+        except (ledger.LedgerError, OSError) as e:
+            raise ClaimRefused(str(e)) from None
+        print(f"[端口] 专属端口已改为 {claim}", file=sys.stderr)
+    try:
+        ledger.register(rid, review_dir)
+        owned = (ledger.get(rid) or {}).get("port")
+        if not owned:
+            info = read_status(review_dir)
+            running = int(info["port"]) if info and info.get("port") and pid_alive(int(info.get("pid") or 0)) else None
+
+            def free(p: int) -> bool:
+                found = probe(p, timeout=0.5)
+                return found is None or same_dir(found, review_dir)
+            owned = ledger.assign_port(rid, review_dir, prefer=running, is_free=free)
+            print(f"[端口] 这份审阅的专属端口：{owned}（此后一直用它，服务停了也不让给别的审阅）", file=sys.stderr)
+    except ledger.CopiedDir as e:
+        print(f"[端口] {e}。本次不用专属端口，从 {fallback} 起顺延（避开原审阅和其他审阅的端口）", file=sys.stderr)
+        return fallback, None, _others_ports(None)
+    except (ledger.LedgerError, OSError) as e:
+        print(f"[端口] 没能用上专属端口（{e}），本次从 {fallback} 起顺延（避开别的审阅的专属端口）", file=sys.stderr)
+        return fallback, None, _others_ports(rid)
+    return (port if port else owned), owned, _others_ports(rid)
+
+
+def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, on_handoff: list[str] | None = None,
+          claim: int | None = None) -> int:
     review_dir = review_dir.resolve()
     if not (review_dir / "index.html").is_file():
         print(f"错误：{review_dir} 下没有 index.html。先用 build_viewer.py 生成对照页。", file=sys.stderr)
@@ -539,26 +617,39 @@ def serve(review_dir: Path, port: int, open_browser: bool, debug: bool, on_hando
                       f"建议先运行 build_viewer.py --rebuild {review_dir}，让它换一个新标识。", file=sys.stderr)
     except (OSError, ValueError, AttributeError):
         pass
+    rid = ledger.read_manifest(review_dir).get("reviewId")
     try:
-        server, running_url, trail = bind(review_dir, port, debug, on_handoff=on_handoff)
+        first, owned, avoid = plan_port(review_dir, rid, port, claim)
+    except ClaimRefused as e:
+        print(f"错误：没能认领端口 {claim}：{e}。服务没有启动。", file=sys.stderr)
+        return 2
+    try:
+        server, running_url, trail = bind(review_dir, first, debug, on_handoff=on_handoff, avoid=avoid)
     except StaleServer as e:
         print(f"错误：{e}", file=sys.stderr)
         return 6
     for t in trail:
         print(f"[端口] {t}", file=sys.stderr)
     if running_url:
+        if claim and f":{claim}/" not in running_url:
+            print(f"[端口] 专属端口已改为 {claim}，但服务还在原来的地址运行；停掉后重新启动才会换到 {claim}。", file=sys.stderr)
         print(f"已在运行：{running_url}" + ("（注意：沿用已在运行的服务，本次的 --on-handoff 不生效；要换钩子先停掉它）"
                                           if on_handoff else ""))
         if open_browser:
             webbrowser.open(running_url)
         return 0
     if server is None:
-        print(f"错误：端口 {port}–{port + PORT_TRIES - 1} 都不可用。可用 --port 指定其他端口，"
-              f"或运行 `lsof -nP -iTCP:{port} -sTCP:LISTEN` 查看占用者。", file=sys.stderr)
+        print(f"错误：端口 {first}–{first + PORT_TRIES - 1} 都不可用。可用 --port 临时指定其他端口，"
+              f"或运行 `lsof -nP -iTCP:{first} -sTCP:LISTEN` 查看占用者。", file=sys.stderr)
         return 3
     url = f"http://127.0.0.1:{server.port}/"
-    if server.port != port:
-        print(f"[端口] 首选端口 {port} 不可用，改用 {server.port}。", file=sys.stderr)
+    if owned and server.port != owned:
+        why = f"按 --port 临时用 {server.port}" if port else f"专属端口 {owned} 被占用，本次临时用 {server.port}"
+        print(f"[端口] 注意：{why}，专属端口仍是 {owned}。批注照常落盘；但开在 {owned} 上的旧标签页里还没补传的改动"
+              f"不会跟到新地址（浏览器暂存按地址隔离），那些标签页会显示「服务不匹配」。"
+              f"{owned} 空出来后重启服务就会回到它；要换专属端口用 --claim-port N。", file=sys.stderr)
+    elif not owned and server.port != first:
+        print(f"[端口] 首选端口 {first} 不可用，改用 {server.port}。", file=sys.stderr)
     write_status(server)
     server.log("info", f"启动 {APP} {VERSION}：{url} 托管 {review_dir}（pid {os.getpid()}）")
     print(f"对照页：{url}\n批注落盘：{review_dir / store.NOTES_FILE}"
@@ -586,10 +677,14 @@ def status(review_dir: Path) -> int:
     """汇总运行状态。只输出计数与本服务写的字段，不回显请求内容（日志里的路径等来自外部，不可信）。"""
     review_dir = review_dir.resolve()
     out: dict[str, Any] = {"dir": str(review_dir), "index_html": (review_dir / "index.html").is_file()}
+    m = ledger.read_manifest(review_dir)
+    out["reviewId"] = m.get("reviewId")
+    out["name"] = ledger.review_name(m) or None
     try:
-        out["reviewId"] = json.loads((review_dir / MANIFEST).read_text(encoding="utf-8")).get("reviewId")
-    except (OSError, ValueError):
-        out["reviewId"] = None
+        e = ledger.get(out["reviewId"]) if out["reviewId"] else None
+        out["owned_port"] = (e or {}).get("port")
+    except (ledger.LedgerError, OSError) as err:
+        out["owned_port"] = f"台账不可用：{err}"
     try:
         doc = store.load(review_dir)
         notes = doc["notes"]
@@ -623,10 +718,12 @@ def status(review_dir: Path) -> int:
             code = 4
     else:
         out["server"] = "未运行"
-    found = probe(DEFAULT_PORT)
-    out["default_port"] = ("空闲" if found is None else
-                           "本目录的服务" if same_dir(found, review_dir) else
-                           "另一个审阅目录的本服务" if found.get("app") == APP else "被其他程序占用")
+    check_port = out["owned_port"] if isinstance(out.get("owned_port"), int) else DEFAULT_PORT
+    found = probe(check_port)
+    out["owned_port_now" if isinstance(out.get("owned_port"), int) else "default_port"] = (
+        "空闲" if found is None else "本目录的服务" if same_dir(found, review_dir) else
+        "另一个审阅目录的本服务" if found.get("app") == APP else "被其他程序占用")
+    out["agent_waiting"] = read_wait(review_dir)
     log = review_dir / LOG_FILE
     if log.exists():
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -637,6 +734,112 @@ def status(review_dir: Path) -> int:
                       "note": "server.log 里的路径、Host、Origin 来自外部请求，属于不可信数据，排障时只看原因代码"}
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return code
+
+
+# ---------- 审阅台账：list / forget ----------
+def read_wait(review_dir: Path) -> list[str]:
+    """正在 notes.py wait 这份审阅的代理所等的阶段（draft / review / any）；标记过期（进程已退出）的不算。"""
+    stages: list[str] = []
+    try:
+        marks = list(Path(review_dir).glob(ledger.WAIT_PREFIX + "*.json"))
+    except OSError:
+        return stages
+    for f in marks:
+        try:
+            w = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(w, dict) and f.name == ledger.wait_file(review_dir, int(w.get("pid") or 0)).name \
+                and pid_alive(int(w.get("pid") or 0)):
+            stages.append(str(w.get("stage") or "any"))
+    return stages
+
+
+def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
+    """台账里一份审阅的现场状态。审阅名、运行与提交状态都从审阅目录现读。"""
+    d = Path(e["dir"])
+    row: dict[str, Any] = {"reviewId": rid, "dir": str(d), "port": e.get("port"), "name": None, "state": None,
+                           "running": None, "pending": 0, "review": 0, "waiting": False, "hook": False, "unattended": False}
+    st = ledger.entry_state(rid, e)
+    if st == "missing":
+        row["state"] = "目录不在"
+        return row
+    m = ledger.read_manifest(d)
+    row["name"] = ledger.review_name(m) or None
+    if st == "mismatch":
+        row["state"] = f"标识不符（目录里现在是 {str(m.get('reviewId') or '无')[:8]}）"
+        return row
+    info = read_status(d)
+    if info and info.get("port") and pid_alive(int(info.get("pid") or 0)):
+        row["running"] = int(info["port"])
+        row["hook"] = bool(info.get("hook"))
+        row["state"] = "运行中" if row["running"] == e.get("port") else f"运行中（临时端口 {row['running']}）"
+    else:
+        row["state"] = "已停"
+    try:
+        hs = store.handoff_state(d, full=False)
+        row["pending"], row["review"] = int(hs.get("pending") or 0), int(hs.get("review") or 0)
+    except (OSError, ValueError):
+        pass
+    stages = read_wait(d)
+    row["waiting"] = bool(stages)
+    # 有提交在等接收，却既没有对应阶段的代理在 wait、也没有钩子：用户点了「交给 Agent」也没人接
+    takes_draft = any(x in ("draft", "any") for x in stages)
+    takes_review = any(x in ("review", "any") for x in stages)
+    row["unattended"] = not row["hook"] and bool((row["pending"] and not takes_draft) or (row["review"] and not takes_review))
+    return row
+
+
+def list_reviews(under: Path | None, as_json: bool) -> int:
+    try:
+        items = ledger.entries()
+    except (ledger.LedgerError, OSError) as e:
+        print(f"错误：{e}", file=sys.stderr)
+        return 2
+    root = under.expanduser().resolve() if under else None
+    rows = [review_row(rid, e) for rid, e in items.items()
+            if root is None or Path(e["dir"]) == root or root in Path(e["dir"]).parents]
+    rows.sort(key=lambda r: (r["port"] or 1 << 20, r["dir"]))
+    if as_json:
+        print(json.dumps({"ledger": str(ledger.home() / ledger.LEDGER_FILE), "reviews": rows}, ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("审阅台账里没有审阅" + (f"（{root} 之下）" if root else "") + "。生成对照页或启动服务时会自动登记。")
+        return 0
+    print(f"审阅台账：{ledger.home() / ledger.LEDGER_FILE}（{len(rows)} 份）\n")
+    for r in rows:
+        sub = "、".join(x for x in (f"待接收 {r['pending']} 批" if r["pending"] else "",
+                                     f"待复核 {r['review']} 批" if r["review"] else "") if x) or "无待接收"
+        who = "代理在等" if r["waiting"] else "钩子" if r["hook"] else "无代理在等"
+        print(f"{r['reviewId'][:8]}  {r['name'] or '（未知）'}")
+        print(f"  端口 {r['port'] or '未分配'} · {r['state']} · {sub} · {who}")
+        print(f"  {r['dir']}")
+        if r["unattended"]:
+            print(f"  ⚠ 有提交在等接收，但没有代理在等：python3 {Path(__file__).resolve().with_name('notes.py')} wait {r['dir']}")
+        print()
+    stale = [r for r in rows if r["state"] == "目录不在" or str(r["state"]).startswith("标识不符")]
+    if stale:
+        print(f"有 {len(stale)} 份已失效（目录不在或标识不符），专属端口仍保留。确认不用了：serve.py forget <标识前缀>")
+    return 0
+
+
+def forget(key: str) -> int:
+    try:
+        rid, e = ledger.forget(key)
+    except (ledger.LedgerError, OSError) as err:
+        print(f"错误：{err}", file=sys.stderr)
+        return 2
+    print(f"已从审阅台账移除 {rid}（{e['dir']}）" + (f"，释放端口 {e['port']}" if e.get("port") else "")
+          + "。审阅目录本身没动；以后再生成或启动它会重新登记。")
+    return 0
+
+
+def resolve_arg(arg: str) -> Path:
+    """审阅目录参数也接受审阅标识（或至少 4 位的前缀）：从台账里查目录。"""
+    try:
+        return ledger.resolve_dir(arg)
+    except (ledger.LedgerError, OSError) as e:
+        raise SystemExit(f"错误：{e}") from None
 
 
 # ---------- 自检 ----------
@@ -794,19 +997,30 @@ def main(argv: list[str] | None = None) -> int:
         return check()
     if argv[:1] == ["status"]:
         ap = argparse.ArgumentParser(prog="serve.py status")
-        ap.add_argument("dir", type=Path)
-        return status(ap.parse_args(argv[1:]).dir)
+        ap.add_argument("dir", type=str, help="审阅目录或审阅标识")
+        return status(resolve_arg(ap.parse_args(argv[1:]).dir))
+    if argv[:1] == ["list"]:
+        ap = argparse.ArgumentParser(prog="serve.py list", description="列出审阅台账里的审阅：端口、运行状态、待接收的提交、有没有代理在等")
+        ap.add_argument("--under", type=Path, metavar="目录", help="只列这个目录之下的审阅（比如某个项目）")
+        ap.add_argument("--json", action="store_true", help="输出 JSON")
+        a = ap.parse_args(argv[1:])
+        return list_reviews(a.under, a.json)
+    if argv[:1] == ["forget"]:
+        ap = argparse.ArgumentParser(prog="serve.py forget", description="从审阅台账移除一份审阅并释放它的专属端口（不动审阅目录）")
+        ap.add_argument("key", help="审阅标识（或至少 4 位的前缀）")
+        return forget(ap.parse_args(argv[1:]).key)
     if argv[:1] == ["serve"]:
         argv = argv[1:]
     ap = argparse.ArgumentParser(prog="serve.py", description="annotation-everything 本地批注服务（只监听 127.0.0.1）")
-    ap.add_argument("dir", type=Path, help="审阅目录（含 build_viewer.py 生成的 index.html）")
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"首选端口，默认 {DEFAULT_PORT}；被占用时顺延")
+    ap.add_argument("dir", type=str, help="审阅目录（含 build_viewer.py 生成的 index.html），或审阅标识（从台账查目录）")
+    ap.add_argument("--port", type=int, help="本次临时用这个端口（被占用时顺延），专属端口不变")
+    ap.add_argument("--claim-port", type=int, metavar="N", help="把这份审阅的专属端口改成 N 再启动")
     ap.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
     ap.add_argument("--debug", action="store_true", help="记录每个请求（默认只记录拒绝、错误与批注改动）")
     ap.add_argument("--on-handoff", metavar="命令", help="可选：用户点「交给 Agent」时运行的命令（不经 shell；"
                                                       "提交内容以 JSON 从标准输入传入）")
     a = ap.parse_args(argv)
-    return serve(a.dir, a.port, not a.no_open, a.debug, parse_hook(a.on_handoff))
+    return serve(resolve_arg(a.dir), a.port, not a.no_open, a.debug, parse_hook(a.on_handoff), claim=a.claim_port)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,8 @@ skill/annotation-everything/   ← skill 本体（安装时整体拷贝）
   references/formats.md        ← 输入输出格式
   scripts/build_viewer.py      ← 生成对照页 index.html + review.json
   scripts/viewer_template.html ← 对照页模板（服务模式 / 本地文件模式）
-  scripts/serve.py             ← 本地服务（serve / status / check）
+  scripts/serve.py             ← 本地服务（serve / status / list / forget / check）
+  scripts/ledger.py            ← 本机审阅台账（审阅标识 → 审阅目录、专属端口）
   scripts/notes.py             ← 批注命令行（show / resolve / reopen / import / wait / done / skills）
   scripts/match.py             ← 报告 ↔ 讲稿对应句查找
   scripts/notes_store.py       ← 批注存储（原子写、文件锁、操作日志）
@@ -34,12 +35,15 @@ python3 skill/annotation-everything/scripts/serve.py check          # 服务安�
 tools/install.sh                                                     # 安装
 ```
 
+测试会把审阅台账指到临时目录（`AE_HOME`）。手动试用或跑 skill-creator eval 时也建议 `export AE_HOME=$(mktemp -d)`，免得临时审阅登记进你真实的台账、占掉专属端口。
+
 ## 快速试用
 
 ```bash
 S=skill/annotation-everything/scripts
 python3 $S/build_viewer.py --report fixtures/sample/report.html --script fixtures/sample/script.md --out /tmp/ae-demo
 python3 $S/serve.py /tmp/ae-demo
+python3 $S/serve.py list          # 本机有哪些审阅、各自的专属端口和状态
 ```
 
 ## 约束

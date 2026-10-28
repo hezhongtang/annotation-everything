@@ -145,14 +145,32 @@
 | 文件 | 谁写 | 用途 |
 |---|---|---|
 | `index.html` | build_viewer.py | 对照页 |
-| `review.json` | build_viewer.py | 审阅标识 `reviewId`（页面据此认服务，重建不变；目录被复制后重建会换新）、`reviewDir`、页码/键/标题、源文件路径（`sources` 相对审阅目录，`sourcesAbs` 绝对路径兜底）、构建参数（`--rebuild` 用） |
+| `review.json` | build_viewer.py | 审阅标识 `reviewId`（页面据此认服务，重建不变；目录被复制后重建会换新）、审阅名 `name`（`--name`，默认取标题）、导出标签 `namespace`（审阅名 + 标识前 4 位）、`reviewDir`、页码/键/标题、源文件路径（`sources` 相对审阅目录，`sourcesAbs` 绝对路径兜底）、构建参数（`--rebuild` 用） |
 | `notes.json` | 服务 / notes.py | 批注当前状态（以它为准） |
 | `notes.jsonl` | 服务 / notes.py | 操作日志 |
 | `handoff.json` | 服务 / notes.py | 「交给 Agent」的提交与处理状态 |
 | `skills.json` | 服务 / notes.py | 技能目录与常驻技能（可选） |
 | `.snapshots/batch-N/{base,draft}/` | notes.py | 初改前后的源文件快照，`notes.py diff` 用（含源文件内容，按经营数据对待） |
 | `server.log` | 服务 | 启停、改动、拒绝原因代码、错误（请求字段已过滤，但仍属不可信数据） |
-| `.annotation-server.json` | 服务 | 运行中的 pid、端口、地址；停止时删除 |
+| `.annotation-server.json` | 服务 | 运行中的 pid、端口、地址、是否配了钩子；停止时删除 |
+| `.annotation-wait.<pid>.json` | notes.py wait | 有代理在等这份审阅（pid、阶段 draft / review / any），每个 `wait` 进程一个；结束（含 Ctrl+C、SIGTERM）时删除，进程已退出的视为没有 |
 | `.notes.lock` | 服务 / notes.py | 文件锁 |
 
 这些文件都可能含被审阅材料的内容，跟材料一样对待：不进 git、不外发。工具新建的文件权限为 0600。
+
+## 审阅台账（审阅目录之外）
+
+`~/.annotation-everything/reviews.json`（环境变量 `AE_HOME` 可改目录；目录 0700、文件 0600），按审阅标识记录：
+
+```json
+{"version": 1, "reviews": {"acd0afb38465ebe1": {"dir": "/…/v7-review", "port": 8765}}}
+```
+
+- 只存标识、审阅目录绝对路径、专属端口（`null` 表示还没启动过）。审阅名、运行与提交状态由 `serve.py list` 现场从审阅目录读。
+- 生成对照页、启动服务、运行 notes.py 时登记；目录搬家后按标识更新路径。专属端口第一次 `serve` 时分配，只有 `serve.py forget` 才释放。
+- 写入在 `~/.annotation-everything/.reviews.lock` 文件锁下读改写，原子替换；读不加锁。文件损坏时不会被覆盖，相关命令只警告、照常干活。**不要手改**，用 `list` / `forget` / `--claim-port`。
+- 复制出来的审阅目录（原目录还在、标识相同）不会顶替原条目，`--rebuild` 换了新标识后才登记。
+
+## 导出与救回的 JSON
+
+页面「下载 JSON」：`{"version": 1, "reviewId": …, "name": 审阅名, "namespace": 导出标签, "notes": [...], "alwaysSkills": [...]}`。「未能保存」与「其他审阅的未保存改动」的下载另带 `ops`（原始改动队列，供核对）。`reviewId` 与目标审阅不同时，`notes.py import` 拒绝（`--force` 强制），页面「导入…」先确认。

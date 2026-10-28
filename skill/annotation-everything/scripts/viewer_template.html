@@ -15,7 +15,7 @@ header button,header select{font:inherit;font-size:13px;border:1px solid rgba(25
 header select option{color:#111}
 #mode{font-size:12px;border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:help;border:1px solid rgba(255,255,255,.3)}
 #mode.server{background:#1d6b47}#mode.server.old{background:#9b2c1f}#mode.offline{background:#8a5a12}#mode.mismatch{background:#9b2c1f}#mode.file{background:rgba(255,255,255,.12)}
-#legacyBtn{display:none;background:#8a5a12}
+#legacyBtn,#strayBtn{display:none;background:#8a5a12}
 #reloadBtn{display:none;background:#2a78d6;border-color:#2a78d6}
 header #handBtn{background:var(--ae-red);border-color:var(--ae-red)}
 #handState{display:none;font-size:12px;border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:pointer;border:1px solid rgba(255,255,255,.3)}
@@ -26,6 +26,11 @@ header #handBtn{background:var(--ae-red);border-color:var(--ae-red)}
 .resume #resumeText{flex:1 1 auto}
 .resume button{font:inherit;font-size:12.5px;border:1px solid #e4cf94;background:#fff;border-radius:6px;padding:3px 10px;cursor:pointer;color:#5c4a12}
 .resume .ok{color:var(--ae-green);font-weight:600}
+#srvBar{background:#fdecea;border-bottom-color:#f1c4bd;color:#7a2318}
+#srvBar code{font-size:12px;background:#fff;border:1px solid #f1c4bd;border-radius:5px;padding:2px 6px;user-select:all;word-break:break-all}
+#srvBar button{border-color:#f1c4bd;color:#7a2318}
+.stray{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px dashed #e8dcc0}
+.stray span{flex:1 1 auto}
 nav{display:flex;gap:6px;padding:8px 18px;background:var(--ae-panel);border-bottom:1px solid var(--ae-line);overflow-x:auto}
 nav:empty{display:none}
 nav button{font:inherit;font-size:12.5px;white-space:nowrap;border:1px solid var(--ae-line);background:#fff;color:var(--ae-ink);border-radius:999px;padding:4px 12px;cursor:pointer}
@@ -169,9 +174,11 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
   <button id="helpBtn" title="使用说明与快捷键（H）">说明<kbd>H</kbd></button>
   <button id="reloadBtn" title="Agent 已按批注重建对照页">对照页已更新，点此刷新</button>
   <button id="legacyBtn" title="浏览器里发现这份稿件之前版本的批注">导入旧批注</button>
+  <button id="strayBtn" title="这个地址下还暂存着别的审阅没保存的改动（旧标签页留下的），可下载后导回那份审阅">其他审阅的未保存改动</button>
   <button id="handBtn" title="这一批批注写好了，交给代理处理（A）">交给 Agent<kbd>A</kbd></button>
   <button id="notesBtn" title="查看、导出、导入全部批注（N）">批注<span class="badge" id="ncount">0</span><span class="badge fl" id="nflight"></span><span class="badge dr" id="ndraft"></span><kbd>N</kbd></button>
 </header>
+<div class="resume" id="srvBar" role="alert"><span id="srvText"></span><code id="srvCmd"></code><button id="srvCopy">复制命令</button><button id="srvClose" title="关闭提示">×</button></div>
 <div class="resume" id="resume" role="status"><span id="resumeText"></span><button id="resumeGo" style="display:none"></button><button id="resumeClose" title="关闭提示">×</button></div>
 <nav id="secs"></nav>
 <main>
@@ -203,7 +210,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <div class="pad" id="orphanBox" style="display:none;border-bottom:1px solid var(--ae-line)"></div>
 <pre id="allText"></pre></div></div>
 <div class="modal" id="imp"><div class="dlg"><div class="bar"><h2>导入批注</h2><button class="primary" id="doImp">导入</button><button data-close>关闭</button></div>
-<div class="pad"><div id="found"></div>
+<div class="pad"><div id="strays"></div><div id="found"></div>
 <p class="hint">粘贴之前「复制全部」的文字，或「下载 JSON / Markdown」得到的文件内容。同一条批注（同 id，或页码、对象、内容、引用、标注都相同）不会重复导入；同 id 而导入方更新得更晚的，会更新为导入方的内容和状态。</p>
 <textarea id="impText" placeholder="在这里粘贴批注文字或 JSON"></textarea>
 <p><input type="file" id="impFile" accept=".json,.md,.txt"></p></div></div></div>
@@ -229,7 +236,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 批注保存：用本地服务打开（地址是 http://127.0.0.1:端口）时，每次改动自动写入审阅目录的 notes.json，Agent 可直接读取；直接双击打开 HTML 时批注只存在本浏览器，用「复制全部」或「下载」交给 Agent。</div></div></div></div>
 <script>
 "use strict";
-const P=__PAGES__, S=__SECTIONS__, NS=__NS__, RID=__RID__, N=P.length;
+const P=__PAGES__, S=__SECTIONS__, NS=__NS__, NAME=__NAME__, RID=__RID__, N=P.length;
 const SECT=__SECT__, RCSS=__RCSS__, SECT_KEYS=P.map(p=>"page-"+p.key);
 const APP="annotation-everything", FILE=location.protocol==="file:";
 const $=id=>document.getElementById(id);
@@ -354,7 +361,7 @@ async function api(method,path,body){
 const sameReview=d=>!!d&&d.app===APP&&d.reviewId===RID&&Array.isArray(d.notes);
 async function getNotes(){const d=await api("GET","/api/notes");
   if(!sameReview(d))throw Object.assign(new Error("不是这份审阅的服务"),{status:0,mismatch:true});return d}
-function mirror(){if(!FILE)return;if(!LS.set(K.notes,notes))toast("浏览器未能保存批注，请及时导出");LS.set(K.meta,{title:unH(document.title),ns:NS})}
+function mirror(){if(!FILE)return;if(!LS.set(K.notes,notes))toast("浏览器未能保存批注，请及时导出");LS.set(K.meta,{title:unH(document.title),name:NAME,ns:NS})}
 function setDoc(d){notes=d.notes;rev=d.rev}
 function stamp(x){const t=Array.isArray(x.trail)&&x.trail.length?x.trail[x.trail.length-1]:null;
   return Math.max(0,...["updatedAt","resolvedAt","draftedAt","at"].map(k=>Date.parse(x[k]||"")||0),Date.parse((t&&t.at)||"")||0)}
@@ -471,7 +478,34 @@ async function poll(){
   if(pend.get().length){const before=pend.get().length;await flush();if(mode==="server"&&!pend.get().length&&before)toast("已补传暂存的改动");return}
   if(was==="offline"&&rev!=null)toast("已重新连上本地服务");
   applyServer(d);updateMode()}
-const MISMATCH_HELP="这个地址上运行的不是这份审阅的服务（端口被别的审阅目录或程序占用），改动先暂存在本页。办法：先停掉占用这个端口的服务，再用本审阅目录启动 serve.py（会回到这个端口）；或在「批注」里下载 JSON，到新地址打开对照页后导入。";
+const MISMATCH_HELP="这个地址上运行的不是这份审阅的服务（端口被别的审阅或程序占用），改动先暂存在本页、不会写进别人的审阅。页面顶部的红色提示里有本审阅的启动命令；服务回到这个端口后自动补传。也可以在「批注」里下载 JSON，到本审阅的新地址导入。";
+// ---------- 服务不在时：说清这个端口上现在是谁，给出本审阅的启动命令（按审阅标识，页面里不写本机路径） ----------
+const SERVE_CMD=`python3 ~/.claude/skills/annotation-everything/scripts/serve.py ${RID}`;
+let occupant=null, barShownFor="", barClosedFor="", probedAt=0, firstPolled=false;   // 首次轮询前不显示（打开页面时不闪红条）
+async function whoIsHere(){   // 读 /api/health：任何本服务都会应答，不带审阅标识
+  const ctl=new AbortController(),t=setTimeout(()=>ctl.abort(),3000);
+  try{const r=await fetch("/api/health",{cache:"no-store",signal:ctl.signal});let j=null;try{j=await r.json()}catch(e){}
+    occupant=j&&j.app===APP?{rid:String(j.reviewId||""),name:String(j.name||"")}:{other:true}}
+  catch(e){occupant=null}   // 连不上：端口上没有服务
+  finally{clearTimeout(t);probedAt=Date.now()}
+  renderSrvBar()}
+function renderSrvBar(){const bar=$("srvBar");
+  if(FILE||!firstPolled||(mode!=="mismatch"&&mode!=="offline")||barClosedFor===mode){bar.classList.remove("on");return}
+  const port=location.port||"80",q=pend.get().length,o=occupant;
+  const head=mode==="mismatch"
+    ?(o&&o.rid&&o.rid!==RID?`${port} 端口上现在是另一份审阅《${o.name||o.rid.slice(0,8)}》。`:`${port} 端口上是别的程序，不是本审阅的服务。`)
+    :`${port} 端口上没有服务在运行。`;
+  $("srvText").textContent=head+`本审阅《${NAME}》的服务没在这里，在终端运行（或让 Agent「启动审阅 ${RID.slice(0,8)}」）：`
+    +(q?` 本页暂存的 ${q} 项改动会在本审阅的服务出现在这个地址（${port} 端口）后自动补传；服务若开在别的端口，先在「批注」里下载 JSON 再到那边导入。`:"");
+  $("srvCmd").textContent=SERVE_CMD;bar.classList.add("on")}
+function syncSrvBar(){   // 模式变了才重新探一次端口上是谁
+  if(mode==="server"||FILE){barShownFor="";barClosedFor="";$("srvBar").classList.remove("on");return}
+  if(barShownFor!==mode){barShownFor=mode;occupant=null;renderSrvBar();whoIsHere()}
+  else if(firstPolled&&Date.now()-probedAt>20000){probedAt=Date.now();whoIsHere()}   // 端口上又换了一份审阅时，名字也跟着更新
+  else renderSrvBar()}
+async function copyText(t){try{await navigator.clipboard.writeText(t)}catch(e){const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove()}}
+$("srvCopy").onclick=async()=>{await copyText(SERVE_CMD);toast("已复制启动命令，到终端粘贴运行",3000)};
+$("srvClose").onclick=()=>{barClosedFor=mode;$("srvBar").classList.remove("on")};
 const OLD_SERVER_HELP="背后的本地服务是旧版本，不认识框选、重新标注等新功能（这些改动会被丢掉）。请停掉旧服务（它的终端按 Ctrl+C），再运行新版 serve.py，然后刷新本页。";
 let srvOld=false, srvNoStages=false;   // 后者：服务不支持「做到哪一步 / 子代理 / 复核」（0.4 及更早）   // 背后是不认识新字段的旧版服务：框选、重新标注、拖框先不让做
 function oldGuard(){if(mode==="server"&&srvOld){toast(OLD_SERVER_HELP,8000);return true}return false}
@@ -481,10 +515,12 @@ function updateMode(){const m=$("mode"),q=pend.get().length,f=failed.get().lengt
   else if(mode==="offline"){m.textContent=`● 服务未连接${extra}`;m.title="新改动暂存在本浏览器；重新运行 serve.py 后会自动补传"}
   else if(mode==="mismatch"){m.textContent=`● 服务不匹配${extra}`;m.title=MISMATCH_HELP}
   else{m.textContent="○ 本地文件模式";m.title="批注只存在本浏览器。用「批注 → 复制全部 / 下载」交给 Agent；或运行 serve.py 让批注自动落盘"}
-  const fb=$("dlFailed");if(fb)fb.style.display=f?"":"none"}
+  const fb=$("dlFailed");if(fb)fb.style.display=f?"":"none";
+  syncSrvBar()}
 addEventListener("storage",e=>{
   if(FILE&&e.key===K.notes){const v=LS.get(K.notes,[]);notes=Array.isArray(v)?v:[];refreshList()}   // 别的标签页改了：跟上
-  else if(e.key===K.pending||e.key===K.failed)updateMode()});
+  else if(e.key===K.pending||e.key===K.failed)updateMode();
+  else if(e.key&&/^ae\.[0-9a-f]{16}\.(queue|pending|failed)$/.test(e.key))updateStray()});
 
 // ---------- 旧批注发现（同一浏览器来源下的其他版本；导入需用户确认） ----------
 function foundSets(){const out=[];try{for(let k=0;k<localStorage.length;k++){const key=localStorage.key(k);
@@ -496,6 +532,41 @@ function foundSets(){const out=[];try{for(let k=0;k<localStorage.length;k++){con
   const have=new Set(notes.map(x=>x.id)),keys=new Set(notes.map(dedupKey));
   const fresh=arr.filter(x=>x&&x.page&&x.text&&!have.has(x.id)&&!keys.has(dedupKey(x)));
   if(fresh.length)out.push({key,items:fresh,title:meta&&meta.title||"",same:legacy||(meta&&meta.title===unH(document.title))})}}catch(e){}return out}
+// ---------- 别的审阅留在这个地址下、还没补传的改动（旧标签页留下的）：只能下载后导回那份审阅，不写进本审阅 ----------
+function strays(){const by={};try{for(let k=0;k<localStorage.length;k++){const key=localStorage.key(k);
+    const m=key&&key.match(/^ae\.([0-9a-f]{16})\.(queue|pending|failed)$/);if(!m||m[1]===RID)continue;
+    let v=[];try{v=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){}
+    if(!Array.isArray(v))continue;const ops=m[2]==="failed"?v.map(x=>x&&x.op).filter(o=>o&&o.kind):v.filter(o=>o&&o.kind);
+    if(!ops.length)continue;const s=by[m[1]]||(by[m[1]]={rid:m[1],keys:[],ops:[]});s.keys.push(key);s.ops.push(...ops)}}catch(e){}
+  return Object.values(by).map(s=>{const meta=LS.get(`ae.${s.rid}.meta`,null)||{};
+    // 按顺序回放：新增 / 导入收进来，之后对它们的修改合并进去、删除就移除；对不上的修改、删除、提交只留在 ops 里
+    const m=new Map();let other=0;
+    s.ops.forEach(op=>{
+      if(op.kind==="add"&&op.note&&op.note.id)m.set(op.note.id,{...op.note});
+      else if(op.kind==="import"&&Array.isArray(op.notes))op.notes.forEach(x=>{if(x&&x.id)m.set(x.id,{...x})});
+      else if(op.kind==="patch"&&m.has(op.id)){const x=m.get(op.id);Object.assign(x,op.body||{});x.updatedAt=op.at||nowIso()}
+      else if(op.kind==="del"&&m.has(op.id))m.delete(op.id);
+      else other++});
+    return{...s,items:[...m.values()],other,name:String(meta.name||meta.title||"")}})}
+const fileSlug=t=>String(t||"").replace(/[^\p{L}\p{N}_.-]+/gu,"_").replace(/^[._]+|[._]+$/g,"").slice(0,40)||"审阅";
+function updateStray(){const n=strays().reduce((a,s)=>a+s.ops.length,0),b=$("strayBtn");
+  b.style.display=n?"inline-block":"none";b.textContent=`其他审阅的未保存改动（${n}）`}
+function renderStrays(){const list=strays(),box=$("strays");
+  box.innerHTML=list.length?`<p><b>这个地址下还暂存着别的审阅没保存的改动</b>（多半是这个端口以前属于那份审阅时、旧标签页留下的）。它们不能导入到本审阅：下载后在终端运行 <code>notes.py import &lt;那份审阅的标识&gt; 下载的文件</code> 导回原审阅，确认导好了再清除。</p>`
+    +list.map((s,k)=>`<div class="stray"><span>《${escH(s.name||"未记录名称")}》 · 标识 <code>${s.rid.slice(0,8)}</code> · 未保存改动 ${s.ops.length} 项（其中新批注 ${s.items.length} 条${s.other?`，修改 / 删除 / 提交 ${s.other} 项只保留在文件的 ops 里供核对`:""}）</span><button data-sdl="${k}">下载 JSON</button><button data-sclr="${k}">已导入，清除</button></div>`).join(""):"";
+  box.querySelectorAll("[data-sdl]").forEach(b=>b.onclick=()=>{const s=list[+b.dataset.sdl];
+    download(`未保存_${fileSlug(s.name)}_${s.rid.slice(0,4)}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:s.rid,name:s.name,notes:s.items,ops:s.ops,rescuedFrom:location.origin,at:nowIso()},null,2),"application/json");
+    toast(`已下载。到终端运行：notes.py import ${s.rid} 下载的文件`,6000)});
+  box.querySelectorAll("[data-sclr]").forEach(b=>b.onclick=()=>{const s=list[+b.dataset.sclr];
+    if(!confirm(`确认已把《${s.name||s.rid.slice(0,8)}》的这 ${s.ops.length} 项改动导回它自己的审阅了吗？清除后这个浏览器里就没有了。`))return;
+    // 只删列表打开时看到的那些改动（按操作 id）：那份审阅的旧标签页之后又暂存的，留着
+    const opKey=o=>o.opId||JSON.stringify(o);   // 0.2 版的旧队列没有操作 id：按内容比对
+    const seen=new Set(s.ops.map(opKey));let kept=0;
+    s.keys.forEach(k=>{const v=LS.get(k,[]);if(!Array.isArray(v))return;
+      const rest=v.filter(x=>{const op=/\.failed$/.test(k)?x&&x.op:x;return !(op&&seen.has(opKey(op)))});
+      kept+=rest.length;if(rest.length)LS.set(k,rest);else LS.del(k)});
+    renderStrays();updateStray();
+    if(kept)toast(`还有 ${kept} 项是刚才之后才暂存的，没有清除：请重新下载`,6000)})}
 function updateLegacy(){const n=foundSets().filter(s=>s.same).reduce((a,s)=>a+s.items.length,0);const b=$("legacyBtn");
   b.style.display=n?"inline-block":"none";b.textContent=`导入旧批注（${n}）`}
 
@@ -1027,6 +1098,10 @@ function parseMd(text){const items=[];let page=null,title="",cur=null;
     if((m=line.match(/^\s+↔ 另一侧（(报告|讲稿)(?:·(相同|相近))?）：(.*)$/))){cur.pair={side:m[1],match:m[2]==="相同"?"exact":"similar",text:m[3]};return}
     if(line.startsWith("   ")&&line.trim())cur.text+="\n"+line.slice(3)});
   return items}
+function importRid(text){try{const s=String(text||"").trim();if(s[0]!=="{")return null;const d=JSON.parse(s);
+  return typeof d.reviewId==="string"&&d.reviewId?{rid:d.reviewId,name:String(d.name||"")}:null}catch(e){return null}}
+function okToImport(text){const f=importRid(text);if(!f||f.rid===RID)return true;   // 导出文件带审阅标识：不是本审阅的先问
+  return confirm(`这个文件属于另一份审阅${f.name?`《${f.name}》`:""}（标识 ${f.rid.slice(0,8)}），不是本审阅《${NAME}》。\n通常应该导入到它自己的审阅里。仍要导入到这里吗？`)}
 function parseImport(text){const s=text.trim();if(!s)return[];
   if(s[0]==="{"||s[0]==="["){const d=JSON.parse(s);return Array.isArray(d)?d:(d.notes||[])}
   return parseMd(s)}
@@ -1040,12 +1115,14 @@ async function runImport(items,label){
 function renderFound(){const f=foundSets();
   $("found").innerHTML=f.length?`<p><b>本浏览器里发现以下批注</b>（其他版本或其他稿件，确认是这份稿件的再导入）：</p>`+f.map((s,k)=>`<div class="found"><span>${escH(s.title||"（未记录稿件名）")} · <code>${escH(s.key)}</code> · 新批注 ${s.items.length} 条</span><button data-found="${k}">导入这些</button></div>`).join(""):"";
   $("found").querySelectorAll("[data-found]").forEach(b=>b.onclick=()=>runImport(f[+b.dataset.found].items,"已导入"))}
-function openImp(){renderFound();$("imp").classList.add("on")}
-$("openImp").onclick=openImp;$("legacyBtn").onclick=openImp;$("reloadBtn").onclick=()=>location.reload();
+function openImp(){renderStrays();renderFound();$("imp").classList.add("on")}
+$("openImp").onclick=openImp;$("legacyBtn").onclick=openImp;$("strayBtn").onclick=openImp;$("reloadBtn").onclick=()=>location.reload();
 $("doImp").onclick=async()=>{let items;try{items=parseImport($("impText").value)}catch(e){toast("无法解析："+e.message,3500);return}
+  if(!okToImport($("impText").value))return;
   const al=importAlways($("impText").value);await runImport(items,"已导入");$("impText").value="";await offerAlways(al)};
 $("impFile").onchange=async e=>{const f=e.target.files[0];if(!f)return;let items;
   let txt="";try{txt=await f.text();items=parseImport(txt)}catch(err){toast("无法解析文件："+err.message,3500);return}
+  if(!okToImport(txt)){e.target.value="";return}
   await runImport(items,`已导入 ${f.name}`);e.target.value="";await offerAlways(importAlways(txt))};
 // 原页面已不在新版报告里的批注（重建后标 orphan，或页码已不存在）：在这里挪到正确的页
 function lostNotes(){return notes.filter(x=>x.orphan||!P.some(q=>q.n===x.page))}
@@ -1061,11 +1138,11 @@ function download(name,text,type){const b=new Blob([text],{type});const a=docume
 const stamp12=()=>new Date().toISOString().slice(0,16).replace(/[-:T]/g,"");
 $("notesBtn").onclick=openAll;$("copyAll").onclick=()=>copyAll();
 $("dlAll").onclick=()=>download(`批注_${NS}_${stamp12()}.md`,exportText(),"text/markdown;charset=utf-8");
-$("dlJson").onclick=()=>download(`批注_${NS}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:RID,namespace:NS,notes,alwaysSkills:alwaysSkills||[]},null,2),"application/json");
+$("dlJson").onclick=()=>download(`批注_${NS}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:RID,name:NAME,namespace:NS,notes,alwaysSkills:alwaysSkills||[]},null,2),"application/json");
 $("dlFailed").onclick=()=>{const f=failed.get();if(!f.length)return;
   const items=[];f.forEach(x=>{const op=x.op;if(op.kind==="add")items.push(op.note);else if(op.kind==="import")items.push(...op.notes);
     else if(op.kind==="patch"){const n=notes.find(y=>y.id===op.id);if(n)items.push({...n,...op.body,updatedAt:nowIso()})}});   // 编辑、标已处理：导入时按「更新得更晚」覆盖
-  download(`未能保存_${NS}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:RID,notes:items,ops:f},null,2),"application/json");
+  download(`未能保存_${NS}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:RID,name:NAME,notes:items,ops:f},null,2),"application/json");
   if(confirm("已下载。要清除这些「未能保存」的记录吗？（下载的文件可在「导入…」里重新导入）")){failed.clear();updateMode()}};
 $("clearAll").onclick=()=>{if(notes.length&&confirm(`清空全部 ${notes.length} 条批注？建议先复制或下载。`)){notes=[];mirror();refreshList(true);openAll()}};
 document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{if(e.target===m||e.target.closest("[data-close]"))m.classList.remove("on")}));
@@ -1127,11 +1204,14 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE)pol
 (async function init(){
   if(FILE){mirror();updateMode();render();return}
   LS.del(K.notes);                      // 服务模式不在浏览器里留整份批注副本
+  LS.set(K.meta,{title:unH(document.title),name:NAME,ns:NS});   // 只记名称：这个地址以后换给别的审阅时，那边的页面能说出暂存属于谁
   migrateLegacyQueue();
   pend.get().forEach(op=>applyLocal(op)); // 先显示还没补传的改动
   updateMode();render();
   await poll();
+  firstPolled=true;updateMode();
   if(mode==="offline")toast("没连上本地服务：新批注暂存浏览器。确认 serve.py 在运行",4000);
   if(mode==="mismatch")toast(MISMATCH_HELP,9000);
+  updateStray();
   setInterval(poll,4000)})();
 </script></body></html>
