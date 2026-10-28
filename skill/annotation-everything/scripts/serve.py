@@ -53,9 +53,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import notes_store as store  # noqa: E402
 
 APP = "annotation-everything"
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
-FEATURES = ["notes", "handoff", "marks", "batches", "stages"]
+FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always"]
 
 
 class StaleServer(Exception):
@@ -337,6 +337,7 @@ class Handler(BaseHTTPRequestHandler):
             doc["indexMtime"] = idx.stat().st_mtime if idx.exists() else None  # 页面据此提示「已重建，请刷新」
             doc["handoff"] = store.handoff_state(d, full=False)   # 轮询只带最新一批；处理记录全量走 GET /api/handoff
             doc["skillCatalog"] = store.skills_catalog(d)
+            doc["alwaysSkills"] = store.always_skills(d)
             self._json(200, {**doc, **self._ident()})
         elif path == "/api/handoff" and cmd == "GET":
             self._json(200, {**store.handoff_state(d), **self._ident()})
@@ -349,6 +350,13 @@ class Handler(BaseHTTPRequestHandler):
             self.server.run_hook(item, merged)
             self._json(200, {"doc": {**store.load(d), **self._ident()}, "handoff": store.handoff_state(d, full=False),
                              "merged": merged, "seq": item["seq"]})
+        elif path == "/api/skills/always" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            if "always" not in body:
+                raise Reject(400, "bad-request", "缺少 always（要清空请传空列表）")
+            items = store.always_save(d, body.get("always"))
+            self.server.log("info", f"always-skills count={len(items)}")
+            self._json(200, {"alwaysSkills": items, **self._ident()})
         elif path in ("/api/handoff/review", "/api/handoff/finalize") and cmd == "POST":
             body = self._expect_obj(self._body())
             seq = body.get("seq")

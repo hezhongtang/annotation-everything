@@ -648,6 +648,117 @@ class MultiBatchTests(unittest.TestCase):
         srv.server_close()
 
 
+class AlwaysSkillsTests(unittest.TestCase):
+    """常驻技能：这份审阅里每条批注（按范围）都要先调用的技能。"""
+
+    def setUp(self):
+        self.d = tmpdir()
+        build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", self.d)
+
+    def run_cli(self, *x):
+        return subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *x], capture_output=True, text=True,
+                              env={**os.environ, "CLAUDECODE": ""}, timeout=30)
+
+    def test_cli_set_scopes_and_show(self):
+        r = self.run_cli("skills", str(self.d), "--always", "humanizer-zh=讲稿", "frontend-design=风格优化", "checker")
+        self.assertIn("常驻技能（每条批注按范围先调用）：humanizer-zh（讲稿）、frontend-design（风格优化）、checker（全部批注）", r.stdout)
+        self.run_cli("skills", str(self.d), "--set", "dataviz=图表")                       # 改技能目录不动常驻
+        self.assertEqual(len(store.always_skills(self.d)), 3)
+        self.assertEqual(store.skills_catalog(self.d)[0]["name"], "dataviz")
+        self.run_cli("skills", str(self.d), "--always-remove", "checker")
+        self.run_cli("skills", str(self.d), "--always-add", "checker=报告")
+        self.assertEqual(store.always_skills(self.d)[-1], {"name": "checker", "scope": "报告"})
+        self.assertNotEqual(self.run_cli("skills", str(self.d), "--always-add", "x=哪里").returncode, 0, "不认识的范围报错")
+        store.add(self.d, {"page": 2, "target": "讲稿", "text": "讲法太绕", "skills": ["humanizer-zh", "dataviz"]})
+        store.add(self.d, {"page": 3, "target": "报告", "text": "数字对不上"})
+        store.add(self.d, {"page": 4, "target": "报告", "text": "风格优化：整页", "style": {"scope": "page"}})
+        store.add(self.d, {"page": 5, "target": "报告和讲稿", "text": "两侧都改"})
+        out = self.run_cli("show", str(self.d)).stdout
+        self.assertIn("常驻技能（用户要求：每条批注处理前都按范围先调用", out)
+        self.assertIn("技能：humanizer-zh（常驻·讲稿）、dataviz（这条指定）——", out, "同名只列一次，常驻在前")
+        self.assertIn("【报告】数字对不上\n  技能：checker（常驻·报告）——", out)
+        self.assertIn("技能：frontend-design（常驻·风格优化）、checker（常驻·报告）——", out)
+        self.assertIn("【报告和讲稿】两侧都改\n  技能：humanizer-zh（常驻·讲稿）、checker（常驻·报告）——", out)
+        items = notes_cli.parse_legacy_markdown("## 第 2 页｜x\n1. 【讲稿】讲法太绕\n   技能：humanizer-zh（常驻·讲稿）、dataviz（这条指定）——处理这条前先调用这些技能\n")
+        self.assertEqual(items[0]["skills"], ["dataviz"], "导入时常驻技能不写进单条")
+        store.handoff_submit(self.d, "")
+        self.assertEqual(len(store.handoff_load(self.d)["items"][-1]["alwaysSkills"]), 3, "提交时记下当时的常驻技能")
+        w = self.run_cli("wait", str(self.d), "--timeout", "5").stdout
+        self.assertIn("常驻技能（用户要求长期遵守）：humanizer-zh（讲稿）", w)
+        self.assertIn("常驻技能（提交时）：humanizer-zh（讲稿）", self.run_cli("batches", str(self.d)).stdout)
+
+    def test_lenient_read_strict_write(self):
+        sj = self.d / "skills.json"
+        sj.write_text(json.dumps({"skills": None, "always": ["humanizer-zh", {"name": "dataviz", "scope": "报告"}, 3, {"x": 1}]}),
+                      encoding="utf-8")
+        self.assertEqual(store.always_skills(self.d), [{"name": "humanizer-zh", "scope": "all"}, {"name": "dataviz", "scope": "报告"}],
+                         "坏项跳过、好项保留，字符串当全部批注")
+        self.assertEqual(self.run_cli("skills", str(self.d), "--set", "x=y").returncode, 0, "坏项不让 --set 崩溃")
+        sj.write_text(json.dumps({"always": None, "skills": None}), encoding="utf-8")
+        with redirect_stdout(io.StringIO()):
+            build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", self.d)   # 不崩
+        with self.assertRaises(store.NoteError):
+            store.always_save(self.d, ["humanizer-zh"])                                  # 写入严格
+        with self.assertRaises(store.NoteError):
+            store.always_save(self.d, [{"name": f"s{k}"} for k in range(21)])
+        got = store.always_save(self.d, [{"name": "humanizer-zh、dataviz", "scope": "讲稿"}])
+        self.assertEqual([x["name"] for x in got], ["humanizer-zh", "dataviz"], "一行写几个名字会拆开")
+
+    def test_cli_remove_then_add_and_errors(self):
+        self.run_cli("skills", str(self.d), "--always", "checker=讲稿")
+        r = self.run_cli("skills", str(self.d), "--always-remove", "checker", "--always-add", "checker=报告")
+        self.assertEqual((r.returncode, store.always_skills(self.d)), (0, [{"name": "checker", "scope": "报告"}]), "先删后加 = 改范围")
+        r = self.run_cli("skills", str(self.d), "--set", "a=b", "--always-add", "x=哪里")
+        self.assertEqual(r.returncode, 2, "参数错误返回 2")
+        self.assertEqual(store.skills_catalog(self.d), [], "出错时什么都不写（--set 也没生效）")
+        self.run_cli("skills", str(self.d), "--always", *[f"s{k}" for k in range(12)])
+        self.run_cli("skills", str(self.d), "--always-remove", *[f"s{k}" for k in range(12)])
+        self.assertEqual(store.always_skills(self.d), [], "--always-remove 不只认前 10 个")
+        many = [f"t{k}" for k in range(20)]
+        self.run_cli("skills", str(self.d), "--always", *many)
+        r = self.run_cli("skills", str(self.d), "--always-add", "one-more")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("最多 20 个", r.stderr)
+
+    def test_import_carries_always_from_export(self):
+        md = ("# 批注 · 示例\n常驻技能（每条批注按范围处理前都先调用）：humanizer-zh（讲稿）、checker（全部批注）\n"
+              "\n## 第 2 页｜概览\n1. 【讲稿】口气太硬\n   技能：润色（中文）；dataviz\n")
+        f = tmpdir() / "x.md"
+        f.write_text(md, encoding="utf-8")
+        r = self.run_cli("import", str(self.d), str(f))
+        self.assertIn("已写入 skills.json", r.stdout)
+        self.assertEqual(store.always_skills(self.d), [{"name": "humanizer-zh", "scope": "讲稿"}, {"name": "checker", "scope": "all"}])
+        n = store.load(self.d)["notes"][0]
+        self.assertEqual(n["skills"], ["润色（中文）", "dataviz"], "单条技能名里的括号、分号分隔都保留")
+        f2 = tmpdir() / "y.json"
+        f2.write_text(json.dumps({"notes": [], "alwaysSkills": [{"name": "other", "scope": "all"}]}), encoding="utf-8")
+        r = self.run_cli("import", str(self.d), str(f2))
+        self.assertIn("未自动覆盖", r.stderr)
+        self.assertEqual(store.always_skills(self.d)[0]["name"], "humanizer-zh")
+
+    def test_server_and_build_embed(self):
+        srv = serve.ReviewServer(self.d, 0, log_to_file=False)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        h = {"Host": f"127.0.0.1:{srv.port}", "Origin": f"http://127.0.0.1:{srv.port}", "Content-Type": "application/json"}
+        try:
+            s, _, b = serve._req(srv.port, "POST", "/api/skills/always", h,
+                                 {"always": [{"name": "humanizer-zh", "scope": "讲稿"}, {"name": "  ", "scope": "all"},
+                                             {"name": "x", "scope": "奇怪"}]})
+            self.assertEqual((s, json.loads(b)["alwaysSkills"]), (200, [{"name": "humanizer-zh", "scope": "讲稿"}, {"name": "x", "scope": "all"}]))
+            s, _, _ = serve._req(srv.port, "POST", "/api/skills/always", h, {"always": "humanizer-zh"})
+            self.assertEqual(s, 400)
+            s, _, _ = serve._req(srv.port, "POST", "/api/skills/always", {**h, "Origin": "http://evil.example"}, {"always": []})
+            self.assertEqual(s, 403)
+            s, _, b = serve._req(srv.port, "GET", "/api/notes", {"Host": h["Host"]})
+            self.assertEqual(json.loads(b)["alwaysSkills"][0]["name"], "humanizer-zh")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", self.d)
+        html = (self.d / "index.html").read_text()
+        self.assertIn('alwaysSkills=[{"name":"humanizer-zh","scope":"讲稿"}', html.replace(" ", ""), "生成页面时嵌入常驻技能（本地文件模式可见）")
+
+
 class HandoffTests(unittest.TestCase):
     def setUp(self):
         self.d = tmpdir()
@@ -801,7 +912,7 @@ class SkillTests(unittest.TestCase):
         buf = io.StringIO()
         with redirect_stdout(buf):
             notes_cli.main(["show", str(d)])
-        self.assertIn("技能：humanizer-zh（处理这条前先调用这些技能）", buf.getvalue())
+        self.assertIn("技能：humanizer-zh（这条指定）——处理这条前先调用这些技能", buf.getvalue())
 
     def test_catalog_embedded_and_served(self):
         out = tmpdir() / "rv"

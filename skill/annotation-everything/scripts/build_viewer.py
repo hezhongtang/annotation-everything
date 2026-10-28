@@ -469,10 +469,17 @@ def read_skills(review_dir: Path) -> list[dict]:
     """审阅目录里代理写入的技能目录（skills.json），嵌进页面供「技能」输入栏做候选（本地文件模式也能用）。"""
     try:
         doc = json.loads((review_dir / "skills.json").read_text(encoding="utf-8"))
+        items = doc.get("skills") if isinstance(doc, dict) else None
         return [{"name": str(x.get("name", ""))[:64], "desc": str(x.get("desc", ""))[:120]}
-                for x in doc.get("skills", []) if isinstance(x, dict) and str(x.get("name", "")).strip()][:200]
+                for x in items if isinstance(x, dict) and str(x.get("name", "")).strip()][:200] if isinstance(items, list) else []
     except (OSError, ValueError, AttributeError):
         return []
+
+
+def read_always(review_dir: Path) -> list[dict]:
+    """常驻技能（skills.json 的 always），嵌进页面：本地文件模式没有服务时也能看到、导出。"""
+    import notes_store   # 与服务、命令行同一套宽松读取：坏项跳过、好项保留
+    return notes_store.always_skills(review_dir)
 
 
 def read_manifest(review_dir: Path) -> dict:
@@ -560,9 +567,9 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     ns = re.sub(r"[^\w.-]+", "_", out.resolve().name)
     values = {"TITLE": html.escape(final_title), "INTRO": intro, "PAGES": _js(pages), "SECTIONS": _js(sections),
               "NS": _js(ns), "RID": _js(rid), "RCSS": _js(rcss), "SECT": _js([s["html"] for s in sects]),
-              "ROOTFS": assets.root_fs or "100%", "SKILLS": _js(read_skills(out))}
+              "ROOTFS": assets.root_fs or "100%", "SKILLS": _js(read_skills(out)), "ALWAYS": _js(read_always(out))}
     # 一次性替换，避免内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
-    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|RID|RCSS|SECT|ROOTFS|SKILLS)__", lambda m: values[m.group(1)],
+    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS)__", lambda m: values[m.group(1)],
                        TEMPLATE.read_text(encoding="utf-8"))
     page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
     write_private(out / "index.html", page_html)

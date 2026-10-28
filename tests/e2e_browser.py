@@ -267,7 +267,24 @@ def main() -> int:
         ok(sk and sk[0].get("skills") == ["humanizer-zh", "dataviz"] and "⚙ humanizer-zh" in page.inner_text("#nlist"),
            "批注带上指定技能并显示")
         shown = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "show", str(sdir)], capture_output=True, text=True).stdout
-        ok("技能：humanizer-zh、dataviz（处理这条前先调用这些技能）" in shown, "notes.py show 列出这条批注要调用的技能")
+        ok("技能：humanizer-zh（这条指定）、dataviz（这条指定）——处理这条前先调用这些技能" in shown, "notes.py show 列出这条批注要调用的技能")
+        # 常驻技能：G 打开，按范围设置，保存后每条批注卡片都标出、notes.py show 每条都列出
+        page.keyboard.press("Escape")
+        page.keyboard.press("g")
+        ok(page.is_visible("#always"), "按 G 打开常驻技能设置")
+        page.fill("#alwaysRows .arow:last-child .aname", "checker-x")
+        page.click("#alwaysAdd")
+        page.fill("#alwaysRows .arow:last-child .aname", "humanizer-zh")
+        page.select_option("#alwaysRows .arow:last-child .ascope", "讲稿")
+        page.click("#alwaysSave")
+        page.wait_for_timeout(500)
+        sj = json.loads((sdir / "skills.json").read_text())
+        ok(sj.get("always") == [{"name": "checker-x", "scope": "all"}, {"name": "humanizer-zh", "scope": "讲稿"}]
+           and sj.get("skills"), "常驻技能存进审阅目录的 skills.json，技能目录不受影响")
+        ok("常驻 checker-x" in page.inner_text("#nlist") and page.inner_text("#alwaysN") == "2",
+           "保存后：批注卡片标出适用的常驻技能，按钮显示个数")
+        shown = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "show", str(sdir)], capture_output=True, text=True).stdout
+        ok("checker-x（常驻·全部批注）" in shown and "常驻技能（用户要求" in shown, "notes.py show 每条批注都列出常驻技能")
         # 快捷修改：选中报告文字 → D 删除；选中讲稿文字 → R 改为
         go_page(page, 4)
         drag_select(page, page.locator("#host section.page p").first)
