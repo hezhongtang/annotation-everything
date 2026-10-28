@@ -116,6 +116,10 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 .form .sk input,.note .eskills{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:4px 8px;flex:1;min-width:80px;width:100%}
 .note .skills{margin-top:4px;display:flex;gap:4px;flex-wrap:wrap}
 .note .skill{font-size:12px;background:#eef2f7;color:var(--ae-navy);border-radius:4px;padding:1px 6px}
+.note .skill.al{background:#f3ecfb;color:#5b3a99}
+#alwaysN:not(:empty){display:inline-block;min-width:16px;margin-left:4px;padding:0 5px;border-radius:8px;background:#5b3a99;color:#fff;font-size:11px}
+#always .arow{display:flex;gap:8px;align-items:center;margin:0 0 8px}#always .arow input{flex:1;font:inherit;font-size:13.5px;border:1px solid var(--ae-line);border-radius:6px;padding:5px 8px}
+#always .arow select{font:inherit;font-size:13.5px}
 .note .eskills{margin-top:4px}
 #stylemenu{position:fixed;display:none;z-index:8;background:#fff;border:1px solid var(--ae-line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.22);padding:6px;flex-direction:column;gap:2px;min-width:210px}
 #stylemenu.on{display:flex}
@@ -179,6 +183,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
       <textarea id="ntext" rows="2" placeholder="写修改意见（C）。可先选中报告或讲稿里的文字：直接删除（D）、改为（R），或作为引用写批注；也可以先「在报告上标注」（单击放点、拖动框选）。"></textarea>
       <div class="row">对象 <select id="ntarget"><option>报告</option><option>讲稿</option><option>报告和讲稿</option></select>
         <label class="sk" title="处理这条批注时让 Agent 调用的技能（skill），多个用逗号分隔（K）">技能<kbd>K</kbd><input id="nskills" list="skillList" autocomplete="off" placeholder="可选，如 humanizer-zh"></label>
+        <button data-act="always" id="alwaysBtn" title="常驻技能：这份审阅里每条批注（按范围）都让 Agent 先调用，适合需要长期约束的 Agent（G）">常驻技能<span id="alwaysN"></span><kbd>G</kbd></button>
         <button data-act="pin" id="pinBtn" title="在报告上标注：单击放一个点，拖动框选一块区域（P）">在报告上标注<kbd>P</kbd></button>
         <button data-act="style" id="styleBtn" title="风格优化：整页 / 标注处（S）">风格优化<kbd>S</kbd></button>
         <button data-act="seelist" id="seeList" title="看本页已有的批注">本页批注 <span id="nhere">0</span> ↑</button>
@@ -210,10 +215,13 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <span class="hint" id="hOld" style="display:none">背后的本地服务是旧版本，不支持「做到哪一步 / 子代理 / 复核」：停掉旧服务后重新运行 serve.py 再刷新</span></div><p class="hint"><span id="handLast"></span> <button id="handHist" title="每次交给 Agent 一批：解决了几条、处理摘要（J）">处理记录<kbd>J</kbd></button></p>
 <textarea id="handMsg" placeholder="给 Agent 的附言（可选）：例如「先改第 7–12 页，口径问题先别动」"></textarea>
 <p class="hint" id="handHelp">提交后，正在等待的代理会收到这批未处理批注，右上角显示「等待接收 → 处理中 → 已处理」（选「已初改·待复核」则停在待复核，由你决定请求复核或直接定稿）。代理还没接收时再提交一次，会合并成同一次（附言、选项以最新为准）。</p></div></div></div>
+<div class="modal" id="always"><div class="dlg"><div class="bar"><h2>常驻技能</h2><button class="primary" id="alwaysSave">保存<kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close>取消<kbd>Esc</kbd></button></div>
+<div class="pad"><p class="hint">这份审阅里，范围内的每一条批注都会要求 Agent 处理前先调用这些技能——适合需要长期约束、不会主动想到用技能的 Agent。只对当前这份审阅生效；单条批注的「技能」照常可加。</p>
+<div id="alwaysRows"></div><p><button id="alwaysAdd">添加一个</button></p></div></div></div>
 <div class="modal" id="batches"><div class="dlg"><div class="bar"><h2>处理记录</h2><span class="hint" id="batchSum"></span><button data-close>关闭<kbd>Esc</kbd></button></div>
 <div class="pad" id="batchList"></div></div></div>
 <div id="toast"></div>
-<div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要；先改后审的批次分初改、复核两段，可在这里请求复核或直接定稿），P 在报告上标注，C 写批注，K 填技能；Esc 关闭或取消。<br>
+<div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要；先改后审的批次分初改、复核两段，可在这里请求复核或直接定稿），P 在报告上标注，C 写批注，K 填技能，G 常驻技能（每条批注按范围都让 Agent 先调用）；Esc 关闭或取消。<br>
 在报告上标注（P）：进入标注后，在左侧报告上<b>单击</b>放一个点，或<b>按住拖动</b>框选一块区域（像截图那样），再写意见。点和框都可以直接拖动，框拖右下角可调大小；点一下弹出这条批注的编辑、标为已处理、去掉标注、删除；鼠标移到右侧批注上，对应标注会高亮。已有的批注在「编辑」里可以补标注或重新标注。<br>
 风格优化（S）：选范围——1 整页、2 标注处（用刚放的点或框；还没有就进入标注）；可写想要的方向（不写也行），再添加批注。<br>
 「技能」：某条批注需要特定技能（skill）才能改好时填上，多个用逗号分隔；Agent 处理这条前会先调用它们。候选来自 Agent 写进审阅目录的技能目录和用过的技能。<br>
@@ -257,7 +265,12 @@ function settleMarks(x,body){
   if(body&&st&&st.scope&&("pin" in body||"region" in body)&&(("pin" in body&&"region" in body)||st.scope!=="page"))
     x.style={scope:x.region?"region":x.pin?"pin":"page"};
   return x}
-let skillCatalog=__SKILLS__;   // 代理写进审阅目录的技能目录（skills.json），作为「技能」输入栏的候选
+let skillCatalog=__SKILLS__;
+// 常驻技能：[{name, scope: all|报告|讲稿|style}]；服务模式以服务端为准，本地文件模式存本浏览器
+const ALWAYS_ZH={all:"全部批注",报告:"报告",讲稿:"讲稿",style:"风格优化"};
+let alwaysSkills=__ALWAYS__, alwaysSig="";
+const alwaysFor=x=>{const t=String(x.target||""),st=!!(x.style&&x.style.scope);
+  return (alwaysSkills||[]).filter(a=>a.scope==="all"||(a.scope==="报告"&&t.includes("报告"))||(a.scope==="讲稿"&&t.includes("讲稿"))||(a.scope==="style"&&st))};   // 代理写进审阅目录的技能目录（skills.json），作为「技能」输入栏的候选
 const parseSkills=v=>[...new Set(String(v||"").split(/[,，、;；\n]+/).map(x=>x.trim().slice(0,64)).filter(Boolean))].slice(0,10);
 let hand=null, handQueued=false;   // 「交给 Agent」：服务端的提交状态；连不上服务时提交暂存待补传
 const cum=[];P.reduce((a,p,k)=>(cum[k]=a+(p.sec||0),cum[k]),0);
@@ -440,6 +453,7 @@ function applyServer(d){
   const old=!(Array.isArray(d.features)&&d.features.includes("marks"));if(old&&!srvOld)toast(OLD_SERVER_HELP,9000);srvOld=old;
   srvNoStages=!(Array.isArray(d.features)&&d.features.includes("stages"));updateMode();
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
+  if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
   if(d.handoff)setHand(d.handoff);else renderHand();
   if(idx0==null)idx0=d.indexMtime;else if(d.indexMtime&&d.indexMtime!==idx0)$("reloadBtn").style.display="inline-block";
@@ -520,7 +534,8 @@ function noteHtml(x){
    +(x.orphan?`<div class="anchor" style="color:#a2412f">⚠ 原来所在的页面在新版报告里找不到，页码可能不对：点「编辑」挪到正确的页</div>`:"")
    +(ed?`<div class="anchor">移到 <select id="epage">${P.map(q=>`<option value="${q.n}"${q.n===x.page?" selected":""}>第 ${q.n} 页</option>`).join("")}</select></div>`:"")
    +(!ed&&x.anchor?`<div class="anchor">位置：${escH(clip(x.anchor,140))}</div>`:"")
-   +(!ed&&sk.length?`<div class="skills">${sk.map(n=>`<span class="skill" title="处理这条批注时调用的技能">⚙ ${escH(n)}</span>`).join("")}</div>`:"")
+   +(()=>{if(ed)return"";const al=done?[]:alwaysFor(x).filter((a,k,arr)=>!sk.includes(a.name)&&arr.findIndex(b=>b.name===a.name)===k);
+      return sk.length||al.length?`<div class="skills">${al.map(a=>`<span class="skill al" title="常驻技能（${escH(ALWAYS_ZH[a.scope]||"")}）：处理这条前 Agent 会先调用">常驻 ${escH(a.name)}</span>`).join("")}${sk.map(n=>`<span class="skill" title="处理这条批注时调用的技能">⚙ ${escH(n)}</span>`).join("")}</div>`:""})()
    +(x.pair&&x.pair.text?`<div class="pair">↔ ${escH(x.pair.side)}${x.pair.match==="exact"?"（同一句）":"（相近）"}也要改：${escH(clip(x.pair.text,120))}</div>`:"")
    +((done||dr)&&x.resolution?`<div class="res">${dr?"初改说明":"处理说明"}：${escH(x.resolution).replace(/\n/g,"<br>")}</div>`:"")
    +(!ed&&Array.isArray(x.trail)&&x.trail.length?`<div class="trail">痕迹：${trailText(x)}</div>`:"")+`</div>`}
@@ -653,6 +668,7 @@ function addNote(){let text=$("ntext").value.trim();
 $("script").addEventListener("click",e=>{const b=e.target.closest("[data-act]");if(!b)return;const id=b.dataset.id;
   switch(b.dataset.act){
     case "add":addNote();break;
+    case "always":openAlways();break;
     case "seelist":$("nlist").scrollIntoView({block:"start",behavior:"smooth"});break;
     case "pin":remarkId=null;setMarkMode(!markMode);break;
     case "remark":if(oldGuard())break;stashEdit();remarkId=id;setMarkMode(true);break;
@@ -775,13 +791,63 @@ function regionAnchor(rg){const sec=stage.querySelector("section.page");if(!sec|
   return out.join("；")||pointAnchor({x:rg.x+rg.w/2,y:rg.y+rg.h/2})}
 
 // ---------- 技能输入栏：候选按「最后一个逗号之后」的那一项来给 ----------
-function renderSkillList(){const inp=document.activeElement&&(document.activeElement.id==="eskills"||document.activeElement.id==="nskills")?document.activeElement:$("nskills");
-  const parts=String(inp.value).split(/[,，、;；]/),head=parts.slice(0,-1).map(x=>x.trim()).filter(Boolean),prefix=head.length?head.join(", ")+", ":"";
+function renderSkillList(){const ae=document.activeElement,single=!!(ae&&ae.classList&&ae.classList.contains("aname"));   // 常驻技能每行只填一个名字
+  const inp=ae&&(ae.id==="eskills"||ae.id==="nskills")?ae:$("nskills");
+  const parts=single?[""]:String(inp.value).split(/[,，、;；]/),head=parts.slice(0,-1).map(x=>x.trim()).filter(Boolean),prefix=head.length?head.join(", ")+", ":"";
   const used=[];notes.forEach(x=>(Array.isArray(x.skills)?x.skills:[]).forEach(n=>{if(!used.includes(n))used.push(n)}));
   const all=[...skillCatalog.map(c=>({name:c.name,desc:c.desc||""})),...used.filter(n=>!skillCatalog.some(c=>c.name===n)).map(n=>({name:n,desc:"用过"}))];
   $("skillList").innerHTML=all.filter(c=>!head.includes(c.name)).map(c=>`<option value="${escH(prefix+c.name)}" label="${escH(c.desc)}"></option>`).join("")}
 document.addEventListener("input",e=>{if(e.target.id==="nskills"||e.target.id==="eskills")renderSkillList()});
-document.addEventListener("focusin",e=>{if(e.target.id==="nskills"||e.target.id==="eskills")renderSkillList()});
+document.addEventListener("focusin",e=>{if(e.target.id==="nskills"||e.target.id==="eskills"||e.target.classList.contains("aname"))renderSkillList()});
+// ---------- 常驻技能 ----------
+const K_ALWAYS=`ae.${RID}.always`;
+const ALWAYS_EMBED=JSON.stringify(alwaysSkills||[]);
+// 本地文件模式：浏览器里存 {items, base}，base 是保存时页面嵌入的名单；Agent 之后改了名单并重建（嵌入的变了），以新嵌入的为准
+if(FILE){const v=LS.get(K_ALWAYS,null);
+  if(v&&Array.isArray(v.items)&&v.base===ALWAYS_EMBED)alwaysSkills=v.items;
+  else if(Array.isArray(v)&&!(alwaysSkills||[]).length)alwaysSkills=v}
+function updateAlwaysBtn(){const n=(alwaysSkills||[]).length;$("alwaysN").textContent=n||"";
+  $("alwaysBtn").title=(n?"常驻技能："+alwaysSkills.map(a=>`${a.name}（${ALWAYS_ZH[a.scope]||""}）`).join("、")+"。":"")+"每条批注（按范围）都让 Agent 先调用（G）"}
+updateAlwaysBtn();
+function alwaysRow(a){const d=document.createElement("div");d.className="arow";
+  d.innerHTML=`<input class="aname" list="skillList" autocomplete="off" placeholder="技能名，如 humanizer-zh" value="${escH(a.name||"")}">`
+    +`<select class="ascope">${Object.entries(ALWAYS_ZH).map(([k,v])=>`<option value="${escH(k)}"${a.scope===k?" selected":""}>${escH(v)}</option>`).join("")}</select>`
+    +`<button class="adel" title="去掉这一个" aria-label="去掉">×</button>`;
+  d.querySelector(".adel").onclick=()=>d.remove();return d}
+let alwaysOpenSig="";
+function openAlways(){const box=$("alwaysRows");box.innerHTML="";alwaysOpenSig=JSON.stringify(alwaysSkills||[]);(alwaysSkills||[]).forEach(a=>box.appendChild(alwaysRow(a)));
+  if(!box.children.length)box.appendChild(alwaysRow({scope:"all"}));
+  $("always").classList.add("on");const f=box.querySelector(".aname");if(f)f.focus()}
+$("alwaysAdd").onclick=()=>{const r=alwaysRow({scope:"all"});$("alwaysRows").appendChild(r);r.querySelector(".aname").focus()};
+const SKILL_SEP=/[,，、;；\n]+/;
+function splitAlways(list){const out=[];(list||[]).forEach(a=>String(a.name||"").split(SKILL_SEP).forEach(n=>{n=n.trim().slice(0,64);
+  const e={name:n,scope:ALWAYS_ZH[a.scope]?a.scope:"all"};if(n&&!out.some(o=>o.name===e.name&&o.scope===e.scope))out.push(e)}));return out}
+async function setAlways(items){   // 保存常驻技能；返回实际保存的名单，失败返回 null
+  items=splitAlways(items);
+  if(items.length>20){toast(`常驻技能最多 20 个（现在 ${items.length} 个）`,4000);return null}
+  if(FILE){alwaysSkills=items;LS.set(K_ALWAYS,{items,base:ALWAYS_EMBED});return items}
+  if(mode!=="server"){toast("服务没连上：常驻技能暂时保存不了，连上后再试",4000);return null}
+  try{const r=await api("POST","/api/skills/always",{always:items});alwaysSkills=Array.isArray(r.alwaysSkills)?r.alwaysSkills:items;alwaysSig=JSON.stringify(alwaysSkills);return alwaysSkills}
+  catch(e){toast(e.code==="no-api"?"本地服务是旧版本，不支持常驻技能：停掉旧服务后重新运行 serve.py":"没能保存常驻技能："+(e.status?e.message:"本地服务没有应答，请稍后再试"),6000);return null}}
+async function saveAlways(){
+  const items=[...$("alwaysRows").querySelectorAll(".arow")].map(r=>({name:r.querySelector(".aname").value,scope:r.querySelector(".ascope").value}));
+  if(JSON.stringify(alwaysSkills||[])!==alwaysOpenSig&&!confirm("你打开设置之后，常驻技能被改过（可能是 Agent 改的）。仍用你这份覆盖？"))return;
+  const saved=await setAlways(items);if(!saved)return;
+  $("always").classList.remove("on");updateAlwaysBtn();refreshList(true);
+  toast(saved.length?`已保存 ${saved.length} 个常驻技能：之后每条批注（按范围）都会让 Agent 先调用`:"已清空常驻技能",3500)}
+// 导入的内容里带了常驻技能（本地文件模式导出的）：和当前不同就问要不要采用
+function importAlways(text){const t=String(text||"").trim();let list=null;
+  try{if(t[0]==="{"){const d=JSON.parse(t);if(Array.isArray(d.alwaysSkills))list=d.alwaysSkills}
+    else{const m=t.match(/^常驻技能（[^）]*）：(.+)$/m);if(m){const rev={全部批注:"all",全部:"all",报告:"报告",讲稿:"讲稿",风格优化:"style"};
+      list=m[1].split("、").map(p=>p.trim().match(/^(.+?)（(全部批注|全部|报告|讲稿|风格优化)）$/)).filter(Boolean).map(mm=>({name:mm[1],scope:rev[mm[2]]}))}}}catch(e){}
+  return list}
+async function offerAlways(list){if(!list)return;const items=splitAlways(list);
+  if(JSON.stringify(items)===JSON.stringify(alwaysSkills||[]))return;
+  if(!confirm(`导入的内容里带了常驻技能：${items.map(a=>`${a.name}（${ALWAYS_ZH[a.scope]}）`).join("、")||"（无）"}。设为这份审阅的常驻技能？`))return;
+  const saved=await setAlways(items);if(saved){updateAlwaysBtn();refreshList(true);toast("已采用导入的常驻技能",3000)}}
+$("alwaysSave").onclick=saveAlways;
+$("always").addEventListener("keydown",e=>{e.stopPropagation();if(e.isComposing||e.keyCode===229)return;
+  if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){e.preventDefault();saveAlways()}else if(e.key==="Escape")$("always").classList.remove("on")});
 $("nskills").addEventListener("keydown",e=>{if(e.isComposing)return;if(e.key==="Enter"&&(e.metaKey||e.ctrlKey))addNote();else if(e.key==="Escape")e.target.blur()});
 
 // ---------- 回到上次：上次批注到哪一页、Agent 处理到哪 ----------
@@ -857,6 +923,7 @@ function openHand(review){
   if(handMode){const dn=notes.filter(x=>isDraft(x)&&x.draftBatch===handMode.seq).length;
     $("handInfo").textContent=`第 ${handMode.seq} 批有 ${dn} 条已初改·待复核。复核者会逐条看初改（通过 / 再改 / 退回给你），也会接手初改没动的批注。`}
   else $("handInfo").textContent=open.length?`未处理批注 ${open.length} 条，涉及第 ${pages.join("、")} 页。`:"目前没有未处理的批注（也可以只带附言交给 Agent）。";
+  if((alwaysSkills||[]).length)$("handInfo").textContent+=` 常驻技能：${alwaysSkills.map(a=>`${a.name}（${ALWAYS_ZH[a.scope]||""}）`).join("、")}，范围内的每条都会让 Agent 先调用。`;
   const L=hand&&hand.latest;
   $("handLast").textContent=L?`上一次：第 ${L.seq} 批，${HAND_ZH[L.status]||L.status}${"resolvedCount" in L?`，解决 ${+L.resolvedCount} 条`:""}${L.status==="done"&&L.summary?"。处理摘要："+L.summary:""}`:"";
   $("handHist").style.display=L?"":"none";
@@ -929,7 +996,8 @@ $("doHand").onclick=()=>{const message=$("handMsg").value.trim(),sub=$("hSub").c
 function exportText(){
   const by={};notes.slice().sort((a,b)=>a.page-b.page||String(a.at).localeCompare(String(b.at))).forEach(x=>(by[x.page]=by[x.page]||[]).push(x));
   const pages=Object.keys(by).map(Number).sort((a,b)=>a-b), open=notes.filter(x=>!isDone(x)).length;
-  let o=`# 批注 · ${unH(document.title)}\n导出时间：${new Date().toLocaleString("zh-CN")}；共 ${notes.length} 条（未处理 ${open}），涉及 ${pages.length} 页\n报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。\n`;
+  let o=`# 批注 · ${unH(document.title)}\n导出时间：${new Date().toLocaleString("zh-CN")}；共 ${notes.length} 条（未处理 ${open}），涉及 ${pages.length} 页\n报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。\n`
+    +((alwaysSkills||[]).length?`常驻技能（每条批注按范围处理前都先调用）：${alwaysSkills.map(a=>`${a.name}（${ALWAYS_ZH[a.scope]||"全部批注"}）`).join("、")}\n`:"");
   pages.forEach(n=>{const t=P.find(p=>p.n===n);o+=`\n## 第 ${n} 页｜${unH(t?t.title:by[n][0].title||"")}\n`;
     by[n].forEach((x,k)=>{o+=`${k+1}. 【${x.target||"未指定"}${x.pin?`·标点 ${markNo(n,x.id)}（x ${x.pin.x}%，y ${x.pin.y}%）`:""}${(r=>r?`·框选 ${markNo(n,x.id)}（x ${r.x}%，y ${r.y}%，宽 ${r.w}%，高 ${r.h}%）`:"")(regionOf(x))}】${isDone(x)?"【已处理】":isDraft(x)?"【已初改·待复核】":""}${String(x.text).replace(/\n/g,"\n   ")}\n`;
       if(x.quote)o+=`   > 引用${x.quoteFrom?`（${x.quoteFrom}）`:""}：${String(x.quote).replace(/\n/g," ")}\n`;
@@ -975,10 +1043,10 @@ function renderFound(){const f=foundSets();
 function openImp(){renderFound();$("imp").classList.add("on")}
 $("openImp").onclick=openImp;$("legacyBtn").onclick=openImp;$("reloadBtn").onclick=()=>location.reload();
 $("doImp").onclick=async()=>{let items;try{items=parseImport($("impText").value)}catch(e){toast("无法解析："+e.message,3500);return}
-  await runImport(items,"已导入");$("impText").value=""};
+  const al=importAlways($("impText").value);await runImport(items,"已导入");$("impText").value="";await offerAlways(al)};
 $("impFile").onchange=async e=>{const f=e.target.files[0];if(!f)return;let items;
-  try{items=parseImport(await f.text())}catch(err){toast("无法解析文件："+err.message,3500);return}
-  await runImport(items,`已导入 ${f.name}`);e.target.value=""};
+  let txt="";try{txt=await f.text();items=parseImport(txt)}catch(err){toast("无法解析文件："+err.message,3500);return}
+  await runImport(items,`已导入 ${f.name}`);e.target.value="";await offerAlways(importAlways(txt))};
 // 原页面已不在新版报告里的批注（重建后标 orphan，或页码已不存在）：在这里挪到正确的页
 function lostNotes(){return notes.filter(x=>x.orphan||!P.some(q=>q.n===x.page))}
 function renderOrphans(){const box=$("orphanBox"),lost=lostNotes();box.style.display=lost.length?"":"none";if(!lost.length){box.innerHTML="";return}
@@ -993,7 +1061,7 @@ function download(name,text,type){const b=new Blob([text],{type});const a=docume
 const stamp12=()=>new Date().toISOString().slice(0,16).replace(/[-:T]/g,"");
 $("notesBtn").onclick=openAll;$("copyAll").onclick=()=>copyAll();
 $("dlAll").onclick=()=>download(`批注_${NS}_${stamp12()}.md`,exportText(),"text/markdown;charset=utf-8");
-$("dlJson").onclick=()=>download(`批注_${NS}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:RID,namespace:NS,notes},null,2),"application/json");
+$("dlJson").onclick=()=>download(`批注_${NS}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:RID,namespace:NS,notes,alwaysSkills:alwaysSkills||[]},null,2),"application/json");
 $("dlFailed").onclick=()=>{const f=failed.get();if(!f.length)return;
   const items=[];f.forEach(x=>{const op=x.op;if(op.kind==="add")items.push(op.note);else if(op.kind==="import")items.push(...op.notes);
     else if(op.kind==="patch"){const n=notes.find(y=>y.id===op.id);if(n)items.push({...n,...op.body,updatedAt:nowIso()})}});   // 编辑、标已处理：导入时按「更新得更晚」覆盖
@@ -1042,6 +1110,7 @@ document.addEventListener("keydown",e=>{
   if(document.querySelector(".modal.on")&&e.key!=="Escape")return;
   if(k==="a"){e.preventDefault();openHand();return}   // 交给 Agent（有待复核的批次时，弹窗顶部可请求复核或定稿）
   if(k==="j"){e.preventDefault();openBatches();return}
+  if(k==="g"){e.preventDefault();openAlways();return}
   if(k==="p"){e.preventDefault();remarkId=null;setMarkMode(!markMode);return}
   if(k==="l"){e.preventDefault();goLast();return}
   if(k==="k"){e.preventDefault();$("nskills").focus();return}

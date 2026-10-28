@@ -117,7 +117,8 @@
        {"stage": "draft", "by": "sonnet-初改", "claimedAt": "…", "doneAt": "…", "doneBy": "…", "summary": "…", "draftedIds": ["…"]},
        {"stage": "review", "by": "opus-复核", "claimedAt": "…", "doneAt": "…", "summary": "…",
         "approved": 5, "revised": 2, "returned": 1, "resolved": 1}],
-     "reviewRequestedAt": "…", "reviewMessage": "重点看第 7 页"}
+     "reviewRequestedAt": "…", "reviewMessage": "重点看第 7 页",
+     "alwaysSkills": [{"name": "humanizer-zh", "scope": "讲稿"}]}   // 提交时的常驻技能
   ]
 }
 ```
@@ -132,7 +133,12 @@
 
 ## skills.json（技能目录，可选）
 
-`{"version": 1, "skills": [{"name": "humanizer-zh", "desc": "中文润色"}]}`。由代理用 `notes.py skills` 维护，页面「技能」输入栏把它和用过的技能列为候选；生成对照页时也会嵌进页面，本地文件模式同样可用。
+`{"version": 1, "skills": [{"name": "humanizer-zh", "desc": "中文润色"}], "always": [{"name": "humanizer-zh", "scope": "讲稿"}]}`。
+
+- `skills`：技能目录。由代理用 `notes.py skills` 维护，页面「技能」输入栏把它和用过的技能列为候选。
+- `always`：常驻技能，范围内的每条批注处理前都要先调用；`scope` 为 `all`（全部批注）/ `报告` / `讲稿`（对象含该侧，「报告和讲稿」两侧都算）/ `style`（风格优化），最多 20 个。页面「常驻技能」（`POST /api/skills/always`）或 `notes.py skills --always …` 设置；`show` / `wait` 把适用的常驻技能列进每条批注的「技能」；每批提交时把当时的名单记进 handoff 的 `alwaysSkills`。
+- 两者都在生成对照页时嵌进页面，本地文件模式同样可见。文件模式下改常驻技能只存本浏览器（之后 Agent 改了名单并重建，以新名单为准）；「复制全部 / 下载 Markdown」的开头一行、「下载 JSON」的 `alwaysSkills` 都会带上，`notes.py import` 或页面「导入…」时随之写入（审阅目录里已有不同的名单时，命令行只提示、页面先询问）。
+- 读 skills.json 时坏项跳过、好项保留（字符串项当「全部批注」）；页面和命令行写入时严格校验：一项里写了几个名字会拆开，超过 20 个报错。命令行同一条命令里先删（`--always-remove`）后加（`--always-add`），改范围就是删了再加。
 
 ## 审阅目录里的文件
 
@@ -143,7 +149,7 @@
 | `notes.json` | 服务 / notes.py | 批注当前状态（以它为准） |
 | `notes.jsonl` | 服务 / notes.py | 操作日志 |
 | `handoff.json` | 服务 / notes.py | 「交给 Agent」的提交与处理状态 |
-| `skills.json` | notes.py | 技能目录（可选） |
+| `skills.json` | 服务 / notes.py | 技能目录与常驻技能（可选） |
 | `.snapshots/batch-N/{base,draft}/` | notes.py | 初改前后的源文件快照，`notes.py diff` 用（含源文件内容，按经营数据对待） |
 | `server.log` | 服务 | 启停、改动、拒绝原因代码、错误（请求字段已过滤，但仍属不可信数据） |
 | `.annotation-server.json` | 服务 | 运行中的 pid、端口、地址；停止时删除 |

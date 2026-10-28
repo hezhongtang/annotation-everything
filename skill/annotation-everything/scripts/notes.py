@@ -13,6 +13,8 @@
   python3 notes.py review <审阅目录> <id> ... --ok | --revise | --return [--note "理由"]   # 复核结论
   python3 notes.py diff <审阅目录> [--batch N] [--to current] [--page 7]   # 看初改动了源文件的哪些地方
   python3 notes.py skills <审阅目录> [--set "名称=说明" ...] [--add ...] [--remove ...] [--clear]
+                    [--always "名称=范围" ...] [--always-add ...] [--always-remove 名称 ...] [--always-clear]
+                                                   # 常驻技能：每条批注（按范围：全部/报告/讲稿/风格优化）都先调用
                                                    # 维护技能目录：页面「技能」输入栏的候选
 
 退出码：0 成功（wait：收到提交）；1 部分 id 不存在；2 参数或目录不对；3 wait 超时。
@@ -128,6 +130,9 @@ def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: i
             out.append(f"用户附言：{h['message']}")
         if "target" in h:
             out.append(f"要求：{target_text(h)}")
+        if h.get("alwaysSkills"):
+            out.append("常驻技能（提交时）：" + "、".join(f"{x.get('name')}（{store.ALWAYS_ZH.get(x.get('scope'), '全部批注')}）"
+                                                for x in h["alwaysSkills"] if isinstance(x, dict)))
         stages = [e for e in h.get("stages") or [] if isinstance(e, dict)]
         if not stages and h.get("claimedAt"):
             out.append(f"接收：{h['claimedAt']}" + (f"　收尾：{h['doneAt']}" if h.get("doneAt") else ""))
@@ -234,7 +239,7 @@ def pair_lines(n: dict[str, Any], texts: dict[str, dict[int, str]]) -> list[str]
 
 def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolved: bool, page: int | None,
                 sources: dict[str, Path | None] | None = None, handoff: dict[str, Any] | None = None,
-                only: set[str] | None = None) -> str:
+                only: set[str] | None = None, always: list[dict[str, str]] | None = None) -> str:
     texts = side_texts(sources)
     all_notes = doc["notes"]
     marks = mark_numbers(all_notes)
@@ -253,6 +258,9 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
     if sources:  # 已按 review.json 解析成实际路径（相对审阅目录优先），改稿就改这里列出的文件
         head.append("源文件（改稿改这里）：" + "；".join(f"{'报告' if k == 'report' else '讲稿'} = {v}"
                                                    for k, v in sources.items() if v))
+    if always:
+        head.append("常驻技能（用户要求：每条批注处理前都按范围先调用，下面每条的「技能」里已列出）："
+                    + "、".join(f"{a['name']}（{store.ALWAYS_ZH[a['scope']]}）" for a in always))
     head += handoff_lines(handoff)
     out = ["\n".join(head)]
     last = None
@@ -288,8 +296,9 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
             line += f"\n  ⚠ 批注记的页面键 {n['key']} 与第 {n['page']} 页（{keys[n['page']]}）不一致，重建对照页可自动校正"
         if n.get("anchor"):
             line += f"\n  位置线索：{n['anchor']}"
-        if n.get("skills"):
-            line += f"\n  技能：{'、'.join(n['skills'])}（处理这条前先调用这些技能）"
+        sk = store.skills_for(n, always or []) if n.get("status") != "resolved" else [(x, "这条指定") for x in n.get("skills") or []]
+        if sk:
+            line += "\n  技能：" + "、".join(f"{nm}（{src}）" for nm, src in sk) + "——处理这条前先调用这些技能"
         for extra in pair_lines(n, texts):
             line += "\n" + extra
         out.append(line)
@@ -347,7 +356,9 @@ def parse_legacy_markdown(text: str) -> list[dict[str, Any]]:
         elif cur is not None and (m := re.match(r"^\s+位置线索：(.*)$", line)):
             cur["anchor"] = m.group(1)
         elif cur is not None and (m := re.match(r"^\s+技能：(.*)$", line)):
-            cur["skills"] = store.clean_skill_names(m.group(1))
+            body = re.sub(r"(——处理这条前先调用这些技能|（处理这条前先调用这些技能）)$", "", m.group(1).strip())
+            own = [x for x in re.split(r"[,，、;；]+", body) if not re.search(r"（常驻·[^）]*）$", x.strip())]
+            cur["skills"] = store.clean_skill_names([re.sub(r"（这条指定）$", "", x.strip()) for x in own])
         elif cur is not None and (m := re.match(r"^\s+↔ 另一侧（(报告|讲稿)(?:·(相同|相近))?）：(.*)$", line)):
             cur["pair"] = {"side": m.group(1), "match": "exact" if m.group(2) == "相同" else "similar", "text": m.group(3)}
         elif cur is not None and line.startswith("   ") and line.strip():
@@ -355,16 +366,36 @@ def parse_legacy_markdown(text: str) -> list[dict[str, Any]]:
     return items
 
 
-def read_import(path: Path) -> list[dict[str, Any]]:
+ALWAYS_ZH_REV = {"全部批注": "all", "全部": "all", "报告": "报告", "讲稿": "讲稿", "风格优化": "style"}
+
+
+def parse_always_header(text: str) -> list[dict[str, str]] | None:
+    """页面导出的文字开头「常驻技能（…）：a（讲稿）、b（全部批注）」；没有这行返回 None。"""
+    m = re.search(r"^常驻技能（[^）]*）：(.+)$", text, re.M)
+    if not m:
+        return None
+    out = []
+    for part in re.split(r"、", m.group(1)):
+        mm = re.match(r"^(.+?)（(全部批注|全部|报告|讲稿|风格优化)）$", part.strip())
+        if mm:
+            out.append({"name": mm.group(1), "scope": ALWAYS_ZH_REV[mm.group(2)]})
+    return out
+
+
+def read_import(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]] | None]:
+    """返回 (批注, 常驻技能)；常驻技能只有导出里带了才不是 None（本地文件模式设的常驻技能随之带过来）。"""
     text = path.read_text(encoding="utf-8")
     stripped = text.lstrip()
     if stripped.startswith("{") or stripped.startswith("["):
         data = json.loads(text)
-        return data.get("notes", []) if isinstance(data, dict) else data
+        if isinstance(data, dict):
+            al = data.get("alwaysSkills")
+            return data.get("notes", []), (al if isinstance(al, list) else None)
+        return data, None
     items = parse_legacy_markdown(text)
     if not items:
         raise SystemExit(f"{path} 里没找到批注：既不是 JSON，也不是对照页导出的 Markdown 格式")
-    return items
+    return items, parse_always_header(text)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -396,12 +427,17 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--by", default=default_agent(), help="接收人，页面上显示")
     w.add_argument("--stage", choices=("any", "draft", "review"), default="any",
                    help="等哪种：draft 新提交（初改）、review 请求复核的、any 都等（默认）")
-    sk = sub.add_parser("skills", help="查看或设置技能目录（页面「技能」输入栏的候选）")
+    sk = sub.add_parser("skills", help="查看或设置技能目录（页面「技能」输入栏的候选）与常驻技能（每条批注按范围先调用）")
     sk.add_argument("dir", type=Path)
     sk.add_argument("--set", nargs="*", metavar="名称=说明", help="整体替换为这些技能")
     sk.add_argument("--add", nargs="*", metavar="名称=说明", help="追加或更新这些技能")
     sk.add_argument("--remove", nargs="*", metavar="名称", help="移除这些技能")
     sk.add_argument("--clear", action="store_true", help="清空目录")
+    sk.add_argument("--always", nargs="*", metavar="名称=范围",
+                    help="整体设置常驻技能；范围：全部（默认）/ 报告 / 讲稿 / 风格优化")
+    sk.add_argument("--always-add", nargs="*", metavar="名称=范围", help="追加常驻技能")
+    sk.add_argument("--always-remove", nargs="*", metavar="名称", help="去掉这些常驻技能（所有范围）")
+    sk.add_argument("--always-clear", action="store_true", help="清空常驻技能")
     cl = sub.add_parser("claim", help="不等待：接收最早一个等待中的提交（给自己轮询的代理用，别直接改 handoff.json）")
     cl.add_argument("dir", type=Path)
     cl.add_argument("--by", default=default_agent())
@@ -449,7 +485,8 @@ def main(argv: list[str] | None = None) -> int:
         if a.json:
             notes = [n for n in doc["notes"] if (a.all or n.get("status") != "resolved")
                      and (a.page is None or n.get("page") == a.page) and (only is None or n.get("id") in only)]
-            print(json.dumps({**doc, "notes": notes, "handoff": store.handoff_state(d)}, ensure_ascii=False, indent=2))
+            print(json.dumps({**doc, "notes": notes, "handoff": store.handoff_state(d), "alwaysSkills": store.always_skills(d)},
+                             ensure_ascii=False, indent=2))
         else:
             manifest = load_manifest(d)
             try:
@@ -458,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"警告：{e}", file=sys.stderr)
                 sources = None
             print(to_markdown(doc, manifest, include_resolved=a.all or bool(a.batch), page=a.page, sources=sources,
-                              handoff=store.handoff_state(d, full=False), only=only), end="")
+                              handoff=store.handoff_state(d, full=False), only=only, always=store.always_skills(d)), end="")
         return 0
     if a.cmd in ("resolve", "reopen"):
         status = "resolved" if a.cmd == "resolve" else "open"
@@ -476,8 +513,23 @@ def main(argv: list[str] | None = None) -> int:
                 bad += 1
         return 1 if bad else 0
     if a.cmd == "import":
-        _doc, added, skipped, updated = store.import_notes(d, read_import(a.file), by="cli-import")
+        items, always = read_import(a.file)
+        _doc, added, skipped, updated = store.import_notes(d, items, by="cli-import")
         print(f"导入完成：新增 {added} 条，更新 {updated} 条，跳过重复 {skipped} 条 → {d / store.NOTES_FILE}")
+        if always is not None:
+            try:
+                new = store.clean_always(always)
+            except store.NoteError as e:
+                print(f"导出里的常驻技能没能读懂（{e}），请按导出开头那行用 notes.py skills --always 设置", file=sys.stderr)
+                return 0
+            cur = store.always_skills(d)
+            if not cur or cur == new:
+                store.always_save(d, new)
+                print("常驻技能（随导出带来，已写入 skills.json）：" + ("、".join(f"{x['name']}（{store.ALWAYS_ZH[x['scope']]}）" for x in new) or "（无）"))
+            else:
+                print("注意：导出里的常驻技能与审阅目录里的不同，未自动覆盖。导出里是："
+                      + "、".join(f"{x['name']}（{store.ALWAYS_ZH[x['scope']]}）" for x in new)
+                      + "。确认以导出为准就运行 notes.py skills 审阅目录 --always \"名称=范围\" …", file=sys.stderr)
         return 0
     if a.cmd == "wait":
         return wait(d, a.timeout, a.interval, claim=not a.no_claim, by=a.by, stage=a.stage)
@@ -490,6 +542,22 @@ def main(argv: list[str] | None = None) -> int:
                 if name:
                     out.append({"name": name[0], "desc": desc.strip()[:120]})
             return out
+        scope_of = {"全部": "all", "全部批注": "all", "all": "all", "报告": "报告", "讲稿": "讲稿", "风格优化": "style", "style": "style"}
+
+        def parse_always(items: list[str] | None) -> list[dict[str, str]]:
+            out = []
+            for it in items or []:
+                name, _, sc = it.partition("=")
+                if sc.strip() and sc.strip() not in scope_of:
+                    raise ValueError(f"常驻技能范围「{sc}」不认识，可选：全部 / 报告 / 讲稿 / 风格优化")
+                out.append({"name": name, "scope": scope_of[sc.strip() or "全部"]})
+            return out
+        try:   # 先把参数全部解析、校验完，再写盘：出错时什么都不改
+            set_al, add_al = (parse_always(a.always) if a.always is not None else None), parse_always(a.always_add)
+            store.clean_always((set_al or []) + add_al)
+        except (ValueError, store.NoteError) as e:
+            print(f"错误：{e}", file=sys.stderr)
+            return 2
         cat = [] if (a.clear or a.set is not None) else store.skills_catalog(d)
         for it in parse(a.set) + parse(a.add):
             cat = [c for c in cat if c["name"] != it["name"]] + [it]
@@ -497,11 +565,19 @@ def main(argv: list[str] | None = None) -> int:
         cat = [c for c in cat if c["name"] not in drop]
         if a.clear or a.set is not None or a.add or a.remove:
             store.skills_save(d, cat)
+        if set_al is not None or add_al or a.always_remove or a.always_clear:
+            try:
+                store.always_update(d, set_to=set_al, add=add_al, remove=a.always_remove, clear=a.always_clear)
+            except store.NoteError as e:
+                print(f"错误：{e}", file=sys.stderr)
+                return 2
         used = sorted({x for n in store.load(d)["notes"] for x in (n.get("skills") or [])})
         print("技能目录（页面「技能」输入栏的候选）：" + ("；".join(f"{c['name']}" + (f"（{c['desc']}）" if c["desc"] else "")
                                                      for c in cat) or "（空）"))
         if used:
             print("批注里用到的技能：" + "、".join(used))
+        alw = store.always_skills(d)
+        print("常驻技能（每条批注按范围先调用）：" + ("、".join(f"{x['name']}（{store.ALWAYS_ZH[x['scope']]}）" for x in alw) or "（无）"))
         return 0
     if a.cmd == "claim":
         item = store.handoff_claim(d, by=a.by, stage=a.stage, seq=a.seq)
@@ -744,7 +820,7 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
               f"notes.py done {d} --seq {item['seq']} --summary \"…\" 定稿。\n")
         doc = store.load(d)
         print(to_markdown(doc, manifest, include_resolved=False, page=None, sources=sources,
-                          only=batch_note_ids(d, doc["notes"], item["seq"])), end="")
+                          only=batch_note_ids(d, doc["notes"], item["seq"]), always=store.always_skills(d)), end="")
         return 0
     pages = "、".join(str(p) for p in item.get("pages") or []) or "无"
     print(f"# 收到「交给 Agent」第 {item['seq']} 批（{item.get('at')}）")
@@ -752,9 +828,13 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
         print(f"用户附言：{item['message']}")
     print(f"要求：{target_text(item)}")
     print(sub_line)
+    alw = store.always_skills(d)
+    if alw:
+        print("常驻技能（用户要求长期遵守）：" + "、".join(f"{x['name']}（{store.ALWAYS_ZH[x['scope']]}）" for x in alw)
+              + "——范围内的每条批注处理前都要先调用；下面每条的「技能」已列全")
     need = sorted({x for n in store.load(d)["notes"] if n.get("status", "open") == "open" for x in (n.get("skills") or [])})
     if need:
-        print(f"这批批注指定了技能：{'、'.join(need)}（处理对应批注前先调用）")
+        print(f"这批批注另外指定了技能：{'、'.join(need)}（处理对应批注前先调用）")
     print(f"提交时未处理批注 {item.get('openCount')} 条，涉及第 {pages} 页。"
           + ("已标为「处理中」，页面同步显示。" if claim else "（--no-claim：未改状态）"))
     end_hint = ("页面上这些批注会显示「已初改·待复核」，用户看过后再请求复核或直接定稿" if item.get("target") == "review"
@@ -766,7 +846,7 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     others = [n for n in doc["notes"] if n.get("id") in set(item.get("openIds") or []) and n.get("status") == "drafted"]
     if others:   # 提交后被别的批次初改了的：等那一批复核，不要动
         print("这些批注已在别的批次初改、等待复核，本批不要处理：" + "、".join(f"`{n['id']}`（第 {n.get('draftBatch')} 批）" for n in others) + "\n")
-    print(to_markdown(doc, manifest, include_resolved=False, page=None, sources=sources, only=mine), end="")
+    print(to_markdown(doc, manifest, include_resolved=False, page=None, sources=sources, only=mine, always=alw), end="")
     return 0
 
 

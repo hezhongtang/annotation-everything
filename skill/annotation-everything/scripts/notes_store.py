@@ -258,9 +258,117 @@ def skills_catalog(review_dir: Path) -> list[dict[str, str]]:
     return out[:200]
 
 
-def skills_save(review_dir: Path, items: list[dict[str, str]]) -> None:
+# 常驻技能：对这份审阅的每条批注（按范围）都要先调用的技能，给需要长期约束的代理用。范围：
+# all 全部批注 / 报告 / 讲稿（对象含该侧，「报告和讲稿」两侧都算）/ style 风格优化。存在 skills.json 的 always 里。
+ALWAYS_SCOPES = ("all", "报告", "讲稿", "style")
+ALWAYS_ZH = {"all": "全部批注", "报告": "报告", "讲稿": "讲稿", "style": "风格优化"}
+MAX_ALWAYS = 20
+
+
+def _skills_doc(review_dir: Path) -> dict[str, Any]:
+    try:
+        doc = json.loads((review_dir / SKILLS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+_SKILL_SEP = r"[,，、;；\n]+"
+
+
+def _always_items(v: Any, *, strict: bool) -> list[dict[str, str]]:
+    """把常驻技能名单整理成 [{name, scope}]：一项里写了几个名字（逗号、顿号等分隔）就拆成几项同范围的；
+    同名同范围去重。strict（页面 / 命令行的输入）遇到坏项报错、超过上限报错；
+    非 strict（读文件）跳过坏项、字符串项当「全部批注」，保证一个坏项不让整份名单失效。"""
+    if v in (None, "", []):
+        return []
+    if not isinstance(v, list):
+        if strict:
+            raise NoteError("常驻技能须为列表")
+        return []
+    out: list[dict[str, str]] = []
+    for it in v:
+        if isinstance(it, str) and not strict:
+            it = {"name": it, "scope": "all"}
+        if not isinstance(it, dict) or not isinstance(it.get("name"), str):
+            if strict:
+                raise NoteError("常驻技能的每一项须为 {name, scope}")
+            continue
+        sc = it.get("scope") if it.get("scope") in ALWAYS_SCOPES else "all"
+        for nm in re.split(_SKILL_SEP, it["name"]):
+            name = re.sub(r"\s+", " ", fix_text(nm)).strip()[:64]
+            e = {"name": name, "scope": sc}
+            if name and e not in out:
+                out.append(e)
+    if len(out) > MAX_ALWAYS:
+        if strict:
+            raise NoteError(f"常驻技能最多 {MAX_ALWAYS} 个（现在 {len(out)} 个）")
+        out = out[:MAX_ALWAYS]
+    return out
+
+
+def clean_always(v: Any) -> list[dict[str, str]]:
+    """页面 / 命令行给的常驻技能（严格校验）。"""
+    return _always_items(v, strict=True)
+
+
+def always_skills(review_dir: Path) -> list[dict[str, str]]:
+    return _always_items(_skills_doc(review_dir).get("always"), strict=False)
+
+
+def _write_skills_doc(review_dir: Path, *, skills: list[dict[str, str]] | None = None,
+                      always: Any = None, update: Any = None) -> list[dict[str, str]]:
+    """在文件锁内读改写 skills.json，技能目录与常驻技能互不覆盖。update(当前常驻) → 新常驻。"""
     _require_dir(review_dir)
-    _atomic_write(review_dir / SKILLS_FILE, _dumps({"version": 1, "skills": items[:200]}, indent=2) + "\n")
+    with locked(review_dir):
+        doc = _skills_doc(review_dir)
+        cur = _always_items(doc.get("always"), strict=False)
+        new = update(cur) if update else (always if always is not None else cur)
+        cat = skills if skills is not None else [x for x in doc.get("skills", []) if isinstance(x, dict)] \
+            if isinstance(doc.get("skills"), list) else []
+        _atomic_write(review_dir / SKILLS_FILE, _dumps({"version": 1, "skills": cat[:200], "always": new}, indent=2) + "\n")
+        return new
+
+
+def skills_save(review_dir: Path, items: list[dict[str, str]]) -> None:
+    _write_skills_doc(review_dir, skills=items)
+
+
+def always_save(review_dir: Path, items: Any) -> list[dict[str, str]]:
+    return _write_skills_doc(review_dir, always=clean_always(items))
+
+
+def always_update(review_dir: Path, *, set_to: Any = None, add: Any = None, remove: list[str] | None = None,
+                  clear: bool = False) -> list[dict[str, str]]:
+    """命令行增删常驻技能：在锁内读最新名单，先删（按名字，所有范围）后加，避免和页面同时保存时丢更新。"""
+    add_items, base_items = clean_always(add or []), clean_always(set_to) if set_to is not None else None
+    gone = {re.sub(r"\s+", " ", fix_text(x)).strip()[:64] for r in remove or [] for x in re.split(_SKILL_SEP, r)} - {""}
+
+    def apply(cur: list[dict[str, str]]) -> list[dict[str, str]]:
+        out = [] if clear else (base_items if base_items is not None else cur)
+        out = [x for x in out if x["name"] not in gone]
+        return clean_always(out + [x for x in add_items if x not in out])
+    return _write_skills_doc(review_dir, update=apply)
+
+
+def always_for(note: dict[str, Any], always: list[dict[str, str]]) -> list[dict[str, str]]:
+    """这条批注适用的常驻技能。"""
+    tgt = str(note.get("target") or "")
+    is_style = isinstance(note.get("style"), dict) and bool(note["style"].get("scope"))
+    hit = {"all": True, "报告": "报告" in tgt, "讲稿": "讲稿" in tgt, "style": is_style}
+    return [a for a in always if hit.get(a["scope"])]
+
+
+def skills_for(note: dict[str, Any], always: list[dict[str, str]]) -> list[tuple[str, str]]:
+    """这条批注处理前要调用的全部技能：[(名称, 来源)]，来源为「常驻·范围」或「这条指定」；同名只列一次。"""
+    out: list[tuple[str, str]] = []
+    for a in always_for(note, always):
+        if all(a["name"] != n for n, _ in out):
+            out.append((a["name"], f"常驻·{ALWAYS_ZH[a['scope']]}"))
+    for nm in note.get("skills") or []:
+        if all(nm != n for n, _ in out):
+            out.append((nm, "这条指定"))
+    return out
 
 
 def _clean_style(v: Any) -> dict[str, Any] | None:
@@ -819,7 +927,7 @@ def handoff_submit(review_dir: Path, message: str = "", *, target: str = "final"
         notes = load(review_dir)["notes"]
         doc = handoff_load(review_dir)
         snap = {"at": now_iso(), "by": by, "message": message, "target": target, "allowSubagents": bool(allow_subagents),
-                **_open_snapshot(notes)}
+                "alwaysSkills": always_skills(review_dir), **_open_snapshot(notes)}
         latest = doc["items"][-1] if doc["items"] else None
         if latest and latest.get("status") == "pending":
             latest.update(snap)
