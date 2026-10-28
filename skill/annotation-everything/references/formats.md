@@ -65,11 +65,16 @@
       "quoteFrom": "报告",                  // 引用来自哪一侧
       "pin": {"x": 38.8, "y": 59.8},        // 报告上的标注之一：点（百分比），可为 null
       "region": {"x": 5, "y": 22, "w": 40, "h": 25},  // 报告上的标注之二：框（左上角 + 宽高，百分比）；一条批注只有点或框之一
-      "status": "resolved",                 // open / resolved
+      "status": "resolved",                 // open 未处理 / drafted 已初改·待复核（两段流程）/ resolved 已处理
       "at": "2026-10-27T10:19:14.129Z",
       "updatedAt": "…",                     // 编辑过才有
       "resolvedAt": "…", "resolvedBy": "claude", "resolution": "标题与 KPI 已改",
-      "resolvedBatch": 3,                   // 代理标已处理时正在处理的批次（handoff 的 seq），处理记录据此统计
+      "resolvedBatch": 3,                   // 定为已处理时所在的批次（handoff 的 seq），处理记录据此统计
+      "draftedAt": "…", "draftedBy": "sonnet-初改", "draftBatch": 3,   // 两段流程的初改（drafted 时 resolution 是初改说明）
+      "trail": [                            // 处理痕迹：只追加（最多 50 条），谁、哪个阶段、第几批、做了什么、理由
+        {"at": "…", "by": "sonnet-初改", "stage": "draft", "batch": 3, "action": "drafted", "note": "标题改短"},
+        {"at": "…", "by": "opus-复核", "stage": "review", "batch": 3, "action": "revised", "note": "再收短，讲稿同步"}
+      ],   // action：drafted 初改 / resolved 处理 / finalized 定稿 / approved 复核通过 / revised 复核再改 / returned 退回给用户 / reopened / accepted 用户定稿
       // 以下字段都可选
       "edit": {"op": "replace", "from": "+12%", "to": "同比 +12%"},   // 快捷修改：delete（无 to）/ replace
       "pair": {"side": "讲稿", "text": "收入同比增长 12%", "match": "similar"},  // 另一侧对应句，用户勾选了同时改；match: exact / similar
@@ -87,10 +92,11 @@
 - 生成对照页时若审阅目录里已有批注：没有 `key` 的按上一版 review.json 的页码补上，再按 `key` 把 `page` 改成新版的页码；`key` 在新版里找不到的标 `orphan`。所以 `data-key` 要稳定、唯一（重复的键不做校正）。
 - 风格优化的 `target` 固定为报告；`text` 是用户写的方向，没写时为「风格优化：整页 / 框选处 / 标点处」。
 - 0.3 及更早只有风格优化能框选，框存在 `style.region` 里；读入时自动挪到顶层 `region`（下次写盘落成新格式），原来的风格范围和点都保留——所以旧批注可能点和框并存、或「整页」风格优化带一个点。0.3 页面发来的 `{style:{region}}` 改动按顶层 `region` 处理。
+- 批注归哪一批：`resolve` / `review` 不带 `--seq` 时按批注归属找（待复核的初改 → 它的初改批次；提交时包含它的在途批次，复核中优先、同级取最早），不再取「最新一批」；同时有几批处理中时 `done` 必须带 `--seq`。别的批次还在等复核的初改，不能在另一批里处理。
 - 页面新建和「重新标注」时 `pin`、`region` 一起发（另一个为 `null`），所以新批注只有一种标注；拖动只发被拖的那一个，另一个不动。改动动了标注时，风格范围跟着标注走（只拖动、原范围是整页的保持整页）。
 - 页面轮询的 `GET /api/notes` 只带最新一批（`handoff.latest`、计数、`total`）；完整处理记录 `history` 由 `GET /api/handoff` 和 `notes.py batches` 提供。服务响应里带 `version` 与 `features`（含 `marks`、`batches`），页面据此识别旧版服务。
 
-`notes.jsonl` 每行一条操作：`{"ts","rev","op":"add|update|resolve|reopen|delete|import|handoff|handoff-update|handoff-claim|handoff-done","by":…,"id"|"seq",…}`。
+`notes.jsonl` 每行一条操作：`{"ts","rev","op":"add|update|resolve|draft|reopen|review|finalize|delete|import|handoff|handoff-update|handoff-claim|handoff-done|handoff-review|handoff-finalize","by":…,"id"|"seq",…}`。
 
 ## handoff.json（「交给 Agent」的提交）
 
@@ -98,17 +104,29 @@
 {
   "version": 1, "seq": 3, "updatedAt": "…",
   "items": [
-    {"seq": 3, "status": "pending",            // pending 等待接收 → claimed 处理中 → done 已处理
+    {"seq": 3, "status": "pending",            // pending 等待接收 → claimed 处理中 →〔drafted 已初改·待复核 → review 等待复核 → reviewing 复核中〕→ done 已处理
+     "target": "final",                       // 用户要求做到：final 定稿 / review 已初改·待复核
+     "allowSubagents": false,                 // 用户是否允许代理派发子代理（不允许时由主代理亲自处理）
      "at": "…", "by": "page", "message": "先改第 7–12 页",
      "openCount": 5, "openIds": ["…"], "pages": [7, 9, 12], "updates": 1,
      "claimedAt": "…", "claimedBy": "claude", "doneAt": "…", "doneBy": "claude", "summary": "改了 4 条，1 条等你定",
      // 以下由 done 记下（处理记录）：这批里代理标为已处理的批注、涉及页、提交时的批注还剩几条未处理
-     "resolvedIds": ["…"], "resolvedCount": 4, "resolvedPages": [7, 9], "leftOpen": 1}
+     "resolvedIds": ["…"], "resolvedCount": 4, "resolvedPages": [7, 9], "leftOpen": 1,
+     "draftedIds": ["…"], "draftedCount": 2,  // 已初改·待复核的批注
+     "stages": [                              // 各阶段：draft 初改 / review 复核 / accept 用户直接定稿
+       {"stage": "draft", "by": "sonnet-初改", "claimedAt": "…", "doneAt": "…", "doneBy": "…", "summary": "…", "draftedIds": ["…"]},
+       {"stage": "review", "by": "opus-复核", "claimedAt": "…", "doneAt": "…", "summary": "…",
+        "approved": 5, "revised": 2, "returned": 1, "resolved": 1}],
+     "reviewRequestedAt": "…", "reviewMessage": "重点看第 7 页"}
   ]
 }
 ```
 
 不用 `notes.py wait` 的代理：定时运行 `notes.py claim 审阅目录`（有等待中的提交就接收并输出 JSON，退出码 0；没有返回 3），处理完用 `notes.py done` 收尾。可以读这个文件看状态，但**不要直接改它**：写入要经过 notes.py / 服务的文件锁，否则可能覆盖用户刚合并进来的附言。保留最近 200 批。
+
+页面接口：`POST /api/handoff` `{message, target, allowSubagents}` 提交一批；`POST /api/handoff/review` `{seq, message, allowSubagents}` 请求复核；`POST /api/handoff/finalize` `{seq}` 直接定稿。轮询状态里的 `inFlightIds` 是已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」）。
+
+源文件快照：代理接收初改时把 review.json 里的报告与讲稿源文件存到审阅目录 `.snapshots/batch-N/base/`，初改收尾时存 `draft/`（目录 0700、文件 0600，只留最近 30 批），`notes.py diff` 据此按页对比。审阅目录含经营数据时，快照同样不要外传。
 
 处理记录（页面「处理记录」/ `notes.py batches`）：每次提交算一批。服务返回的状态里 `history` 是全部批次（新的在前，不含 `openIds`）；处理中的批次按当前进度实时统计（`live`），0.3 留下没记 `resolvedIds` 的旧批次按「接收到收尾之间代理标的」推算（`estimated`）。
 
@@ -126,6 +144,7 @@
 | `notes.jsonl` | 服务 / notes.py | 操作日志 |
 | `handoff.json` | 服务 / notes.py | 「交给 Agent」的提交与处理状态 |
 | `skills.json` | notes.py | 技能目录（可选） |
+| `.snapshots/batch-N/{base,draft}/` | notes.py | 初改前后的源文件快照，`notes.py diff` 用（含源文件内容，按经营数据对待） |
 | `server.log` | 服务 | 启停、改动、拒绝原因代码、错误（请求字段已过滤，但仍属不可信数据） |
 | `.annotation-server.json` | 服务 | 运行中的 pid、端口、地址；停止时删除 |
 | `.notes.lock` | 服务 / notes.py | 文件锁 |

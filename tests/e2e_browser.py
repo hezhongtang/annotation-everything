@@ -563,6 +563,79 @@ def main() -> int:
         ok(old.locator("#host .ae-region.pending").count() == 0 and "旧版本" in old.inner_text("#toast"),
            "旧版服务时拖框被拦下并提示停掉旧服务")
         old.close()
+        # ---------- 先改后审：停在待复核 → 请求复核 → 复核者退回；再一批直接定稿 ----------
+        def cli(*args):
+            return subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *args], capture_output=True, text=True, check=True)
+        def last_batch():
+            return json.loads((sdir / "handoff.json").read_text())["items"][-1]
+        cli("done", str(sdir), "--summary", "收尾上一批")
+        page.keyboard.press("j")
+        page.wait_for_timeout(400)
+        page.click("#batches [data-close] kbd")
+        ok(not page.is_visible("#batches"), "点关闭按钮上的「Esc」标签也能关掉处理记录")
+        page.keyboard.press("a")
+        page.check('input[name="htarget"][value="review"]')
+        page.uncheck("#hSub")
+        page.fill("#handMsg", "先初改，我看过再复核")
+        page.click("#doHand")
+        page.wait_for_timeout(4800)
+        lb = last_batch()
+        ok(lb["target"] == "review" and lb["allowSubagents"] is False and lb["status"] == "pending",
+           "交给 Agent 时选「已初改·待复核」、不允许子代理，选项随提交落盘")
+        ok(page.inner_text("#nflight").startswith("处理中") and page.inner_text("#ncount") == "",
+           f"交给 Agent 后，「批注」按钮显示「处理中 N」而不是未处理红点（{page.inner_text('#notesBtn')!r}）")
+        cli("claim", str(sdir), "--by", "sonnet-初改")
+        target = [n for n in disk_notes(sdir) if n["id"] in lb["openIds"]][0]
+        cli("resolve", str(sdir), target["id"], "--note", "标题改短", "--by", "sonnet-初改")
+        cli("done", str(sdir), "--summary", "初改 1 条", "--by", "sonnet-初改")
+        go_page(page, target["page"])
+        page.wait_for_timeout(4800)
+        card = page.inner_text(f'#nlist [data-note="{target["id"]}"]')
+        ok("已初改 · 待复核" in page.inner_text("#handState") and page.inner_text("#ndraft") == "待复核 1",
+           f"初改收尾后：状态显示「已初改 · 待复核」，「批注」按钮显示「待复核 1」（{page.inner_text('#handState')!r} / {page.inner_text('#notesBtn')!r}）")
+        ok("已初改·待复核" in card and "初改说明：标题改短" in card and "痕迹：初改（sonnet-初改 · 第" in card,
+           "待复核的批注卡片显示状态、初改说明与处理痕迹")
+        page.keyboard.press("j")
+        page.wait_for_timeout(600)
+        bl = page.inner_text("#batchList")
+        ok("要求：做到已初改·待复核" in bl and "初改 · sonnet-初改" in bl and "已初改·待复核的 1 条" in bl,
+           "处理记录显示要求、初改阶段与待复核的批注")
+        page.click(f'#batchList [data-breview="{lb["seq"]}"]')
+        ok(page.is_visible("#hand") and f"请 Agent 复核第 {lb['seq']} 批" in page.inner_text("#handTitle")
+           and not page.is_visible("#hTargetRow"), "点「请 Agent 复核」打开复核请求（不再问做到哪一步）")
+        page.fill("#handMsg", "重点看标题")
+        page.click("#doHand")
+        page.wait_for_timeout(600)
+        lb = last_batch()
+        ok(lb["status"] == "review" and lb["reviewMessage"] == "重点看标题", "请求复核落盘：等待复核接收")
+        wout = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "wait", str(sdir), "--timeout", "5", "--stage", "review",
+                               "--by", "opus-复核"], capture_output=True, text=True).stdout
+        ok("收到复核请求" in wout and "重点看标题" in wout and target["id"] in wout, "复核者 wait --stage review 收到复核请求与待复核批注")
+        cli("review", str(sdir), target["id"], "--return", "--note", "口径要你定", "--by", "opus-复核")
+        cli("done", str(sdir), "--summary", "退回 1 条", "--by", "opus-复核")
+        page.wait_for_timeout(4800)
+        card = page.inner_text(f'#nlist [data-note="{target["id"]}"]')
+        ok("退回给你" in card and "口径要你定" in card and "已初改" not in card.split("痕迹")[0],
+           "复核者退回：批注回到未处理，痕迹里写明退回原因")
+        page.keyboard.press("Escape")
+        page.keyboard.press("a")
+        page.check('input[name="htarget"][value="review"]')
+        page.click("#doHand")
+        page.wait_for_timeout(400)
+        cli("claim", str(sdir), "--by", "claude")
+        cli("resolve", str(sdir), target["id"], "--note", "按你上次说的口径改", "--by", "claude")
+        cli("done", str(sdir), "--by", "claude")
+        page.wait_for_timeout(4800)
+        page.keyboard.press("a")
+        page.wait_for_timeout(200)
+        seq2 = last_batch()["seq"]
+        page.click(f'#handDrafts [data-hfinal="{seq2}"]')
+        page.wait_for_timeout(800)
+        lb = last_batch()
+        fin = [n for n in disk_notes(sdir) if n["id"] == target["id"]][0]
+        ok(lb["status"] == "done" and fin["status"] == "resolved" and fin["trail"][-1]["action"] == "accepted",
+           "「交给 Agent」弹窗顶部的「直接定稿」：跳过复核，批注定为已处理并记为你定稿")
+        page.keyboard.press("Escape")
 
         # ---------- 5. 写入失败与坏字符 ----------
         os.chmod(sdir, 0o500)

@@ -12,3 +12,6 @@ __pycache__/
 # eval 用例的合成输入要入库
 !skill/annotation-everything/evals/*/files/**/notes.json
 !skill/annotation-everything/evals/*/files/**/notes.jsonl
+
+# 初改前后的源文件快照（含报告内容，不进 git）
+.snapshots/

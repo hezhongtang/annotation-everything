@@ -10,6 +10,8 @@
   python3 notes.py claim <审阅目录>   # 不等待：有等待接收的提交就接收（输出 JSON，退出码 0），没有返回 3
   python3 notes.py done <审阅目录> --summary "处理摘要"   # 收尾这一批：记下解决了哪些、页面显示摘要
   python3 notes.py batches <审阅目录> [--last 3] [--json]   # 处理记录：每批解决了几条、处理摘要
+  python3 notes.py review <审阅目录> <id> ... --ok | --revise | --return [--note "理由"]   # 复核结论
+  python3 notes.py diff <审阅目录> [--batch N] [--to current] [--page 7]   # 看初改动了源文件的哪些地方
   python3 notes.py skills <审阅目录> [--set "名称=说明" ...] [--add ...] [--remove ...] [--clear]
                                                    # 维护技能目录：页面「技能」输入栏的候选
 
@@ -29,7 +31,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import notes_store as store  # noqa: E402
-from build_viewer import find_pages, resolve_sources, strip_tags, PAGE_HEAD  # noqa: E402
+from build_viewer import find_pages, resolve_sources, strip_tags, write_private, PAGE_HEAD  # noqa: E402
+import difflib  # noqa: E402
 import match  # noqa: E402
 
 
@@ -45,7 +48,31 @@ def default_agent() -> str:
     return "claude" if os.environ.get("CLAUDECODE") else "agent"
 
 
-STATUS_ZH = {"pending": "等待接收", "claimed": "处理中", "done": "已处理"}
+STATUS_ZH = {"pending": "等待接收", "claimed": "处理中", "drafted": "已初改·待复核", "review": "等待复核",
+             "reviewing": "复核中", "done": "已处理"}
+NOTE_STATUS_ZH = {"open": "未处理", "drafted": "已初改·待复核", "resolved": "已处理"}
+ACTION_ZH = {"drafted": "初改", "resolved": "处理", "finalized": "定稿", "approved": "复核通过", "revised": "复核再改",
+             "returned": "退回给用户", "reopened": "重新打开", "accepted": "用户定稿"}
+STAGE_ZH = {"draft": "初改", "review": "复核", "page": "页面"}
+
+
+def trail_text(n: dict[str, Any], last: int = 4) -> str:
+    """处理痕迹（最近几步）：谁、哪个阶段、做了什么、理由。"""
+    parts = []
+    for e in (n.get("trail") or [])[-last:]:
+        if not isinstance(e, dict):
+            continue
+        who = "用户" if e.get("by") == "page" else str(e.get("by") or "")
+        t = f"{ACTION_ZH.get(e.get('action'), e.get('action'))}（{who}" + (f"·第 {e['batch']} 批" if e.get("batch") else "") + "）"
+        if e.get("note"):
+            t += f"：{str(e['note'])[:80]}"
+        parts.append(t)
+    return " → ".join(parts)
+
+
+def target_text(h: dict[str, Any]) -> str:
+    return ("做到「已初改·待复核」后停下等用户" if h.get("target") == "review" else "做到定稿") + \
+           ("；允许派发子代理" if h.get("allowSubagents") else "；不允许派发子代理（由当前会话的主代理亲自处理）")
 
 
 def handoff_lines(state: dict[str, Any] | None) -> list[str]:
@@ -62,9 +89,14 @@ def handoff_lines(state: dict[str, Any] | None) -> list[str]:
         out.append(f"这批解决 {h.get('resolvedCount', 0)} 条" + (f"；处理摘要：{h['summary']}" if h.get("summary") else ""))
     if state.get("total"):
         out.append(f"处理记录：共 {state['total']} 批（notes.py batches 查看每批解决了哪些）")
-    if state.get("pending") or state.get("claimed"):
-        out.append(f"待接收 {state.get('pending', 0)} 次、处理中 {state.get('claimed', 0)} 次"
-                   "（处理中却没有代理在跑，多半是上次处理中断：处理完用 notes.py done 收尾）")
+    if state.get("pending") or state.get("claimed") or state.get("review") or state.get("reviewing"):
+        out.append(f"待接收 {state.get('pending', 0)} 批、处理中 {state.get('claimed', 0)} 批、等待复核 {state.get('review', 0)} 批、"
+                   f"复核中 {state.get('reviewing', 0)} 批（处理中 / 复核中却没有代理在跑，多半是上次中断：处理完用 notes.py done 收尾）")
+    if state.get("drafted"):
+        out.append(f"已初改·待复核 {state['drafted']} 批：等用户在页面上请求复核或直接定稿")
+    for b in state.get("open") or []:
+        out.append(f"第 {b['seq']} 批（{STATUS_ZH.get(b.get('status'), b.get('status'))}）要求：{target_text(b)}"
+                   + ("。还没被接收：先 notes.py claim 接收再处理" if b.get("status") in ("pending", "review") else ""))
     return out
 
 
@@ -84,7 +116,8 @@ def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: i
     hist = state.get("history") or []
     by_id = {n.get("id"): n for n in notes}
     out = [f"# 处理记录 · 共 {len(hist)} 批（已处理 {state.get('done', 0)}，处理中 {state.get('claimed', 0)}，"
-           f"等待接收 {state.get('pending', 0)}）"]
+           f"等待接收 {state.get('pending', 0)}"
+           + "".join(f"，{STATUS_ZH[k]} {state[k]}" for k in ("drafted", "review", "reviewing") if state.get(k)) + "）"]
     for h in hist[:limit] if limit else hist:
         who = h.get("doneBy") or h.get("claimedBy") or ""
         out.append(f"\n## 第 {h.get('seq')} 批 · {STATUS_ZH.get(h.get('status'), h.get('status'))}" + (f"（{who}）" if who else ""))
@@ -93,8 +126,28 @@ def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: i
                    + (f"（等待接收期间又提交 {h['updates']} 次，已合并）" if h.get("updates") else ""))
         if h.get("message"):
             out.append(f"用户附言：{h['message']}")
-        if h.get("claimedAt"):
+        if "target" in h:
+            out.append(f"要求：{target_text(h)}")
+        stages = [e for e in h.get("stages") or [] if isinstance(e, dict)]
+        if not stages and h.get("claimedAt"):
             out.append(f"接收：{h['claimedAt']}" + (f"　收尾：{h['doneAt']}" if h.get("doneAt") else ""))
+        two = store.two_stage(h)
+        for e in stages:
+            if e.get("stage") == "accept":
+                out.append(f"用户直接定稿：{e.get('count', 0)} 条初改定为已处理（{e.get('at')}）")
+                continue
+            name = STAGE_ZH.get(e.get("stage"), e.get("stage")) if two or e.get("stage") != "draft" else "处理"   # 单段流程不叫「初改」
+            line = f"{name}：{e.get('by') or ''} 接收 {e.get('claimedAt') or '—'}"
+            line += f"，收尾 {e['doneAt']}" if e.get("doneAt") else "（进行中）"
+            if two and e.get("stage") == "draft" and "draftedIds" in e and e.get("doneAt"):
+                line += f"；初改 {len(e['draftedIds'])} 条"
+            if e.get("stage") == "review" and e.get("doneAt"):
+                line += f"；通过 {e.get('approved', 0)}、再改 {e.get('revised', 0)}、退回 {e.get('returned', 0)}、新处理 {e.get('resolved', 0)}"
+            out.append(line)
+            if e.get("summary") and e["summary"] != h.get("summary"):
+                out.append(f"  {name}摘要：{e['summary']}")
+        if h.get("reviewMessage"):
+            out.append(f"请求复核时的附言：{h['reviewMessage']}")
         if "resolvedCount" in h:
             pages = "、".join(map(str, h.get("resolvedPages") or []))
             note = "（处理中，实时统计）" if h.get("live") else "（旧批次，按处理时间推算）" if h.get("estimated") else ""
@@ -102,6 +155,8 @@ def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: i
                        + (f"；提交时的批注还剩 {h['leftOpen']} 条未处理" if h.get("leftOpen") else "") + note)
         if h.get("summary"):
             out.append(f"处理摘要：{h['summary']}")
+        if h.get("draftedCount"):
+            out.append(f"已初改·待复核 {h['draftedCount']} 条：" + "、".join(f"`{x}`" for x in h.get("draftedIds") or []))
         for nid in h.get("resolvedIds") or []:
             n = by_id.get(nid)
             if not n:
@@ -113,6 +168,8 @@ def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: i
                 line += "（之后被重新打开）"
             elif n.get("resolution"):
                 line += f"\n  处理说明：{n['resolution']}"
+            if n.get("trail"):
+                line += f"\n  痕迹：{trail_text(n)}"
             out.append(line)
     if not hist:
         out.append("\n（还没有「交给 Agent」的记录）")
@@ -176,18 +233,21 @@ def pair_lines(n: dict[str, Any], texts: dict[str, dict[int, str]]) -> list[str]
 
 
 def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolved: bool, page: int | None,
-                sources: dict[str, Path | None] | None = None, handoff: dict[str, Any] | None = None) -> str:
+                sources: dict[str, Path | None] | None = None, handoff: dict[str, Any] | None = None,
+                only: set[str] | None = None) -> str:
     texts = side_texts(sources)
     all_notes = doc["notes"]
     marks = mark_numbers(all_notes)
     titles = {p["n"]: p.get("title", "") for p in manifest.get("pages", [])}
     keys = {p["n"]: p.get("key", "") for p in manifest.get("pages", [])}
     notes = [n for n in all_notes if (include_resolved or n.get("status") != "resolved")
-             and (page is None or n.get("page") == page)]
+             and (page is None or n.get("page") == page) and (only is None or n.get("id") in only)]
     notes.sort(key=lambda n: (int(n.get("page", 0) or 0), str(n.get("at", ""))))
-    n_open = sum(n.get("status") != "resolved" for n in all_notes)
+    n_open = sum(n.get("status", "open") == "open" for n in all_notes)
+    n_draft = sum(n.get("status") == "drafted" for n in all_notes)
     head = [f"# 批注 · {manifest.get('title') or '对照页'}",
-            f"共 {len(all_notes)} 条（未处理 {n_open}，已处理 {len(all_notes) - n_open}）；"
+            f"共 {len(all_notes)} 条（未处理 {n_open}，" + (f"已初改·待复核 {n_draft}，" if n_draft else "")
+            + f"已处理 {len(all_notes) - n_open - n_draft}）；"
             f"以下列出 {'全部' if include_resolved else '未处理'} {len(notes)} 条。rev {doc.get('rev')}",
             "报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。"]
     if sources:  # 已按 review.json 解析成实际路径（相对审阅目录优先），改稿就改这里列出的文件
@@ -202,7 +262,7 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
             out.append(f"\n## 第 {last} 页｜{titles.get(last) or n.get('title', '')}" + (f"（键 {keys[last]}）" if keys.get(last) else ""))
         tag = n.get("target") or "未指定"
         tag += mark_tag(n, marks.get(n["id"]))
-        state = "【已处理】" if n.get("status") == "resolved" else ""
+        state = {"resolved": "【已处理】", "drafted": "【已初改·待复核】"}.get(n.get("status"), "")
         ed = n.get("edit") if isinstance(n.get("edit"), dict) else None
         if ed and ed.get("op") == "delete":
             body = f"删除「{ed.get('from', '')}」"
@@ -218,8 +278,10 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
         line = f"- `{n['id']}` {state}【{tag}】" + body.replace("\n", "\n  ")
         if n.get("quote") and not ed:
             line += f"\n  > 引用{('（' + n['quoteFrom'] + '）') if n.get('quoteFrom') else ''}：{n['quote']}"
-        if n.get("status") == "resolved" and n.get("resolution"):
-            line += f"\n  处理说明：{n['resolution']}"
+        if n.get("status") in ("resolved", "drafted") and n.get("resolution"):
+            line += f"\n  {'初改说明' if n.get('status') == 'drafted' else '处理说明'}：{n['resolution']}"
+        if n.get("trail"):
+            line += f"\n  痕迹：{trail_text(n)}"
         if n.get("orphan"):
             line += f"\n  ⚠ 这条批注原来所在的页面（键 {n.get('key')}）在新版报告里找不到，页码可能不对：先确认它对应哪一页"
         elif n.get("key") and keys.get(n.get("page")) and n["key"] != keys[n["page"]]:
@@ -262,6 +324,8 @@ def parse_legacy_markdown(text: str) -> list[dict[str, Any]]:
             text, status = m.group(8), "open"
             if text.startswith("【已处理】"):
                 text, status = text[len("【已处理】"):], "resolved"
+            elif text.startswith("【已初改·待复核】"):
+                text, status = text[len("【已初改·待复核】"):], "drafted"
             cur = {"page": page, "title": title, "target": m.group(1), "text": text, "status": status,
                    "pin": {"x": float(m.group(2)), "y": float(m.group(3))} if m.group(2) else None}
             if m.group(4):
@@ -274,7 +338,7 @@ def parse_legacy_markdown(text: str) -> list[dict[str, Any]]:
                 cur["edit"] = {"op": "delete", "from": cur["quote"]}
             elif cur["text"].startswith(REPLACE_PREFIX):
                 cur["edit"] = {"op": "replace", "from": cur["quote"], "to": cur["text"][len(REPLACE_PREFIX):]}
-        elif cur is not None and (m := re.match(r"^\s+处理说明：(.*)$", line)):
+        elif cur is not None and (m := re.match(r"^\s+(?:处理|初改)说明：(.*)$", line)):
             cur["resolution"] = m.group(1)
         elif cur is not None and (m := re.match(r"^\s+风格优化：(整页|标点处|框选处|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$", line)):
             if m.group(2):   # 0.3 导出的格式：框写在风格优化这一行
@@ -311,11 +375,13 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--all", action="store_true", help="包含已处理")
     s.add_argument("--page", type=int)
     s.add_argument("--json", action="store_true", help="输出原始 JSON")
-    r = sub.add_parser("resolve", help="标记为已处理")
+    s.add_argument("--batch", type=int, help="只看第 N 批涉及的批注（提交时未处理的、这批初改或处理过的）")
+    r = sub.add_parser("resolve", help="标记为已处理（两段流程的初改阶段记为「已初改·待复核」）")
     r.add_argument("dir", type=Path)
     r.add_argument("ids", nargs="+")
     r.add_argument("--note", default="", help="处理说明：改了哪里、怎么改的（页面上会显示）")
     r.add_argument("--by", default=default_agent(), help="处理人，页面上显示为「已处理 · 处理人」")
+    r.add_argument("--seq", type=int, help="记在第几批名下；默认按批注归属自动找（同时有几批在处理时建议写明）")
     o = sub.add_parser("reopen", help="重新打开")
     o.add_argument("dir", type=Path)
     o.add_argument("ids", nargs="+")
@@ -328,6 +394,8 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--interval", type=float, default=1.0, help="检查间隔秒数，默认 1")
     w.add_argument("--no-claim", action="store_true", help="只看不接收（不改状态）")
     w.add_argument("--by", default=default_agent(), help="接收人，页面上显示")
+    w.add_argument("--stage", choices=("any", "draft", "review"), default="any",
+                   help="等哪种：draft 新提交（初改）、review 请求复核的、any 都等（默认）")
     sk = sub.add_parser("skills", help="查看或设置技能目录（页面「技能」输入栏的候选）")
     sk.add_argument("dir", type=Path)
     sk.add_argument("--set", nargs="*", metavar="名称=说明", help="整体替换为这些技能")
@@ -337,11 +405,33 @@ def main(argv: list[str] | None = None) -> int:
     cl = sub.add_parser("claim", help="不等待：接收最早一个等待中的提交（给自己轮询的代理用，别直接改 handoff.json）")
     cl.add_argument("dir", type=Path)
     cl.add_argument("--by", default=default_agent())
-    dn = sub.add_parser("done", help="把提交标为已处理，页面会显示处理结果")
+    cl.add_argument("--stage", choices=("any", "draft", "review"), default="any")
+    cl.add_argument("--seq", type=int, help="只接这一批")
+    dn = sub.add_parser("done", help="收尾当前阶段：初改（按用户要求停在待复核或定稿）或复核（定稿）")
     dn.add_argument("dir", type=Path)
     dn.add_argument("--summary", default="", help="处理结果：改了几条、哪些留给用户定")
     dn.add_argument("--seq", type=int, help="提交序号；默认最近一个处理中的提交")
     dn.add_argument("--by", default=default_agent())
+    g = dn.add_mutually_exclusive_group()
+    g.add_argument("--draft", action="store_true", help="初改完成、交给复核（仅当用户允许派发子代理，由复核者接力时用）")
+    g.add_argument("--final", action="store_true", help="初改阶段直接定稿（用户要求停在待复核时不允许）")
+    dn.add_argument("--accept-rest", action="store_true", help="复核收尾时，没给结论的初改一并通过")
+    rv = sub.add_parser("review", help="复核结论：--ok 通过 / --revise 复核者再改 / --return 退回给用户拍板")
+    rv.add_argument("dir", type=Path)
+    rv.add_argument("ids", nargs="+")
+    vg = rv.add_mutually_exclusive_group(required=True)
+    vg.add_argument("--ok", action="store_const", const="ok", dest="verdict")
+    vg.add_argument("--revise", action="store_const", const="revise", dest="verdict")
+    vg.add_argument("--return", action="store_const", const="return", dest="verdict")
+    rv.add_argument("--note", default="", help="理由：再改了什么 / 为什么要用户拍板（再改、退回必填）")
+    rv.add_argument("--by", default=default_agent())
+    rv.add_argument("--seq", type=int, help="复核的批次；默认按批注的初改批次")
+    df = sub.add_parser("diff", help="看初改动了源文件的哪些地方（按页列出）")
+    df.add_argument("dir", type=Path)
+    df.add_argument("--batch", type=int, help="第几批；默认最近一个有快照的批次")
+    df.add_argument("--to", choices=("draft", "current"), default="draft",
+                    help="对比到：draft 初改收尾时（默认，没有就到当前）/ current 当前文件")
+    df.add_argument("--page", type=int, help="只看第 N 页")
     bt = sub.add_parser("batches", help="处理记录：每次「交给 Agent」一批，各批解决了哪些批注、处理摘要")
     bt.add_argument("dir", type=Path)
     bt.add_argument("--last", type=int, help="只看最近几批")
@@ -355,9 +445,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd == "show":
         doc = store.load(d)
+        only = batch_note_ids(d, doc["notes"], a.batch) if a.batch else None
         if a.json:
             notes = [n for n in doc["notes"] if (a.all or n.get("status") != "resolved")
-                     and (a.page is None or n.get("page") == a.page)]
+                     and (a.page is None or n.get("page") == a.page) and (only is None or n.get("id") in only)]
             print(json.dumps({**doc, "notes": notes, "handoff": store.handoff_state(d)}, ensure_ascii=False, indent=2))
         else:
             manifest = load_manifest(d)
@@ -366,18 +457,22 @@ def main(argv: list[str] | None = None) -> int:
             except SystemExit as e:
                 print(f"警告：{e}", file=sys.stderr)
                 sources = None
-            print(to_markdown(doc, manifest, include_resolved=a.all, page=a.page, sources=sources,
-                              handoff=store.handoff_state(d, full=False)), end="")
+            print(to_markdown(doc, manifest, include_resolved=a.all or bool(a.batch), page=a.page, sources=sources,
+                              handoff=store.handoff_state(d, full=False), only=only), end="")
         return 0
     if a.cmd in ("resolve", "reopen"):
         status = "resolved" if a.cmd == "resolve" else "open"
         bad = 0
         for nid in a.ids:
             try:
-                store.set_status(d, nid, status, resolution=getattr(a, "note", ""), by=getattr(a, "by", default_agent()))
-                print(f"{nid} → {'已处理' if status == 'resolved' else '未处理'}")
-            except store.NotFound:
-                print(f"{nid}：没有这条批注", file=sys.stderr)
+                _doc, n = store.set_status(d, nid, status, resolution=getattr(a, "note", ""), by=getattr(a, "by", default_agent()),
+                                           seq=getattr(a, "seq", None))
+                print(f"{nid} → {NOTE_STATUS_ZH.get(n.get('status'), n.get('status'))}")
+            except store.NotFound as e:
+                print(f"{nid}：{'没有这条批注' if str(e).strip(chr(39)) == nid else f'没有这一批（{e}）'}", file=sys.stderr)
+                bad += 1
+            except store.NoteError as e:
+                print(f"{nid}：{e}", file=sys.stderr)
                 bad += 1
         return 1 if bad else 0
     if a.cmd == "import":
@@ -385,7 +480,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"导入完成：新增 {added} 条，更新 {updated} 条，跳过重复 {skipped} 条 → {d / store.NOTES_FILE}")
         return 0
     if a.cmd == "wait":
-        return wait(d, a.timeout, a.interval, claim=not a.no_claim, by=a.by)
+        return wait(d, a.timeout, a.interval, claim=not a.no_claim, by=a.by, stage=a.stage)
     if a.cmd == "skills":
         def parse(items: list[str] | None) -> list[dict[str, str]]:
             out = []
@@ -409,24 +504,52 @@ def main(argv: list[str] | None = None) -> int:
             print("批注里用到的技能：" + "、".join(used))
         return 0
     if a.cmd == "claim":
-        item = store.handoff_claim(d, by=a.by)
+        item = store.handoff_claim(d, by=a.by, stage=a.stage, seq=a.seq)
         if item is None:
             print(json.dumps({"claimed": False}, ensure_ascii=False))
             return 3
+        if item["stage"] == "draft":
+            snapshot(d, item, "base")
         print(json.dumps({"claimed": True, **{k: v for k, v in item.items() if k != "openIds"}}, ensure_ascii=False))
         return 0
     if a.cmd == "done":
         try:
-            item = store.handoff_done(d, seq=a.seq, summary=a.summary, by=a.by)
+            item = store.handoff_done(d, seq=a.seq, summary=a.summary, by=a.by,
+                                      mode="draft" if a.draft else "final" if a.final else None, accept_rest=a.accept_rest)
         except store.NotFound:
             print("没有待处理或处理中的提交（用户还没点「交给 Agent」，或已全部标为已处理）。", file=sys.stderr)
             return 1
+        except store.NoteError as e:
+            print(f"没有收尾：{e}", file=sys.stderr)
+            return 1
+        if item["status"] in ("drafted", "review"):
+            snapshot(d, item, "draft")
+            print(f"第 {item['seq']} 批 → 初改完成：{item.get('draftedCount', 0)} 条已初改·待复核。"
+                  + ("按用户要求停在这里：用户会在页面上看初改，再请求复核或直接定稿。" if item["status"] == "drafted"
+                     else f"已进入「等待复核」：由复核者 notes.py claim {d} --stage review 接手。"))
+            return 0
         print(f"第 {item['seq']} 批 → 已处理：这批解决 {item.get('resolvedCount', 0)} 条"
               + (f"，提交时的批注还剩 {item['leftOpen']} 条未处理" if item.get("leftOpen") else "")
               + "。页面的处理记录里会显示这批和处理摘要。")
         if not item.get("resolvedCount"):
             print("提示：这批没有统计到已处理的批注——改完的批注要用 notes.py resolve 逐条标记，处理记录才数得到。", file=sys.stderr)
         return 0
+    if a.cmd == "review":
+        bad = 0
+        for nid in a.ids:
+            try:
+                _doc, n = store.review(d, nid, a.verdict, note=a.note, by=a.by, seq=a.seq)
+                print(f"{nid} → {ACTION_ZH[{'ok': 'approved', 'revise': 'revised', 'return': 'returned'}[a.verdict]]}"
+                      f"（{NOTE_STATUS_ZH.get(n.get('status'), n.get('status'))}）")
+            except store.NotFound:
+                print(f"{nid}：没有这条批注", file=sys.stderr)
+                bad += 1
+            except store.NoteError as e:
+                print(f"{nid}：{e}", file=sys.stderr)
+                bad += 1
+        return 1 if bad else 0
+    if a.cmd == "diff":
+        return diff_cmd(d, a.batch, a.to, a.page)
     if a.cmd == "batches":
         state = store.handoff_state(d)
         if state.get("error"):
@@ -440,12 +563,140 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
-def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str) -> int:
+def batch_note_ids(d: Path, notes: list[dict[str, Any]], seq: int) -> set[str]:
+    """第 N 批涉及的批注：提交时未处理的，加上这批初改或处理过的。"""
+    try:
+        item = next((i for i in store.handoff_load(d)["items"] if int(i.get("seq", 0)) == seq), {})
+    except (OSError, ValueError):
+        item = {}
+    ids = set(item.get("openIds") or [])
+    for n in notes:
+        if seq in (n.get("draftBatch"), n.get("resolvedBatch")) or any(
+                isinstance(e, dict) and e.get("batch") == seq for e in n.get("trail") or []):
+            ids.add(n.get("id"))
+    return ids
+
+
+# ---------- 源文件快照：初改接收时存一份（base），初改收尾时再存一份（draft），复核者据此只看改动 ----------
+SNAP_DIR = ".snapshots"
+SNAP_KEEP = 30
+
+
+def _sources(d: Path) -> dict[str, Path | None] | None:
+    manifest = load_manifest(d)
+    try:
+        return resolve_sources(d, manifest) if manifest else None
+    except SystemExit:
+        return None
+
+
+SNAP_MAX = 50 * 1024 * 1024
+
+
+def snapshot(d: Path, item: dict[str, Any], label: str) -> Path | None:
+    """两段批次：把报告与讲稿源文件存进审阅目录 .snapshots/batch-N/<label>/（仅本机、目录 0700、文件 0600）。
+    单段批次不存。读不到源文件、遇到符号链接或其他错误只警告，不影响批次状态（批次已经接收 / 收尾了）。"""
+    if not store.two_stage(item):
+        return None
+    try:
+        return _snapshot(d, int(item["seq"]), label)
+    except (OSError, ValueError) as e:
+        print(f"警告：源文件快照没存成（{type(e).__name__}: {e}）；notes.py diff 将看不到这批的改动，其他不受影响。", file=sys.stderr)
+        return None
+
+
+def _snapshot(d: Path, seq: int, label: str) -> Path | None:
+    sources = _sources(d)
+    if not sources:
+        return None
+    root = d / SNAP_DIR
+    out = root / f"batch-{seq}" / label
+    for p in (root, root / f"batch-{seq}", out):
+        if p.is_symlink():
+            raise ValueError(f"{p} 是符号链接，拒绝写入")
+        p.mkdir(exist_ok=True)
+        os.chmod(p, 0o700)
+    for kind, src in sources.items():
+        if src and src.is_file():
+            if src.stat().st_size > SNAP_MAX:
+                raise ValueError(f"{src} 超过 {SNAP_MAX // 1024 // 1024} MB")
+            write_private(out / kind, src.read_text(encoding="utf-8"))
+    olds = sorted((p for p in root.glob("batch-*") if p.name[6:].isdigit()), key=lambda p: int(p.name[6:]))
+    for p in olds[:-SNAP_KEEP]:   # 只留最近几十批
+        for f in sorted(p.rglob("*"), reverse=True):
+            f.unlink() if f.is_file() else f.rmdir()
+        p.rmdir()
+    return out
+
+
+def _parts(kind: str, text: str) -> list[tuple[str, int, str]]:
+    """把源文件按页切开：[(匹配键, 页码, 内容)]。报告按 data-key（没有就页码），讲稿按页码；切不开就整份。"""
+    try:
+        if kind == "report":
+            return [(f"k:{p['key']}" if p.get("key") else f"n:{p['n']}", int(p["n"]), p["html"]) for p in find_pages(text)]
+        heads = list(PAGE_HEAD.finditer(text))
+        if heads:
+            return [(f"n:{h.group(1)}", int(h.group(1)), text[h.start(): heads[k + 1].start() if k + 1 < len(heads) else len(text)])
+                    for k, h in enumerate(heads)]
+    except (SystemExit, ValueError):
+        pass
+    return [("all", 0, text)]
+
+
+def diff_cmd(d: Path, seq: int | None, to: str, page: int | None) -> int:
+    root = d / SNAP_DIR
+    if seq is None:   # 最近一个有接收时快照的批次
+        have = sorted((int(p.name[6:]) for p in root.glob("batch-*") if p.name[6:].isdigit() and (p / "base").is_dir()), reverse=True)
+        if not have:
+            print("还没有源文件快照：代理接收「交给 Agent」的新提交时才会存（notes.py wait / claim）。", file=sys.stderr)
+            return 1
+        seq = have[0]
+    base = root / f"batch-{seq}" / "base"
+    if not base.is_dir():
+        print(f"第 {seq} 批没有源文件快照。", file=sys.stderr)
+        return 1
+    after_dir = root / f"batch-{seq}" / "draft"
+    use_current = to == "current" or not after_dir.is_dir()
+    sources = _sources(d) or {}
+    zh = {"report": "报告", "script": "讲稿"}
+    print(f"# 第 {seq} 批：源文件改动（{'接收时 → 当前文件' if use_current else '接收时 → 初改收尾时'}）")
+    any_change = False
+    for kind in ("report", "script"):
+        if not (base / kind).is_file():
+            continue
+        before = (base / kind).read_text(encoding="utf-8")
+        src = sources.get(kind) if use_current else after_dir / kind
+        if not src or not Path(src).is_file():
+            print(f"\n（{zh[kind]}：找不到对比用的文件）")
+            continue
+        after = Path(src).read_text(encoding="utf-8")
+        if before == after:
+            continue
+        old = {k: (n, t) for k, n, t in _parts(kind, before)}
+        for key, n, text in _parts(kind, after):
+            if page is not None and n != page:
+                continue
+            prev = old.pop(key, (n, ""))[1]
+            if prev != text:
+                any_change = True
+                print(f"\n## {zh[kind]} · 第 {n} 页" + (f"（键 {key[2:]}）" if key.startswith("k:") else ""))
+                print("\n".join(difflib.unified_diff(prev.splitlines(), text.splitlines(), "改前", "改后", lineterm="", n=2)))
+        for key, (n, text) in old.items():
+            if page is None or n == page:
+                any_change = True
+                print(f"\n## {zh[kind]} · 第 {n} 页（这一页被删掉了）")
+    if not any_change:
+        print("\n（没有改动）")
+    return 0
+
+
+def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stage: str = "any") -> int:
     """阻塞等待「交给 Agent」提交。已经在等待中的提交（之前没人接收）会立即返回。"""
-    state = store.handoff_state(d)
-    if state.get("claimed"):
-        print(f"提示：有 {state['claimed']} 次提交处于「处理中」却没有收尾（可能上次处理中断）。"
-              "用 notes.py show 查看，处理完运行 notes.py done。", file=sys.stderr)
+    state = store.handoff_state(d, full=False)
+    if state.get("claimed") or state.get("reviewing"):
+        print(f"提示：有 {state.get('claimed', 0) + state.get('reviewing', 0)} 批处于「处理中 / 复核中」却没有收尾（可能上次中断，"
+              "也可能是另一个会话在处理）。确认是自己的再处理：notes.py show 查看，处理完 notes.py done --seq N。", file=sys.stderr)
+    want = {"draft": ("pending",), "review": ("review",), "any": ("pending", "review")}[stage]
     deadline = time.monotonic() + timeout if timeout > 0 else None
     try:
         while True:
@@ -453,9 +704,12 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str) -> i
                 doc = store.handoff_load(d)
             except (OSError, ValueError):
                 doc = {"items": []}
-            if any(i.get("status") == "pending" for i in doc["items"]):
-                item = store.handoff_claim(d, by=by) if claim else \
-                    next(i for i in doc["items"] if i.get("status") == "pending")
+            if any(i.get("status") in want for i in doc["items"]):
+                if claim:
+                    item = store.handoff_claim(d, by=by, stage=stage)
+                else:
+                    item = next(i for i in doc["items"] if i.get("status") in want)
+                    item = {**item, "stage": "review" if item.get("status") == "review" else "draft"}
                 if item is not None:
                     break
             if deadline is not None and time.monotonic() >= deadline:
@@ -470,17 +724,49 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str) -> i
     except SystemExit as e:
         print(f"警告：{e}", file=sys.stderr)
         sources = None
+    if claim and item["stage"] == "draft":
+        snapshot(d, item, "base")
+    sub_line = ("允许派发子代理：是——可以派便宜模型的子代理初改、强模型的子代理复核（见 SKILL.md「先改后审」）"
+                if item.get("allowSubagents") else
+                "允许派发子代理：否——由你（当前会话的主代理）亲自处理，不要派发子代理")
+    if item["stage"] == "review":
+        print(f"# 收到复核请求：第 {item['seq']} 批（初改由 {item.get('claimedBy') or '代理'} 完成）")
+        if item.get("reviewMessage"):
+            print(f"用户附言（请求复核时）：{item['reviewMessage']}")
+        if item.get("message"):
+            print(f"用户附言（提交时）：{item['message']}")
+        if item.get("summary"):
+            print(f"初改摘要：{item['summary']}")
+        print(sub_line)
+        print("你是复核者：逐条看初改（notes.py diff 看源文件改了哪里），给结论——"
+              f"notes.py review {d} <id> --ok / --revise --note \"再改了什么\" / --return --note \"要用户拍板的原因\"；"
+              f"提交时未处理、初改没动的批注也由你处理（notes.py resolve --seq {item['seq']}）。重建对照页，最后 "
+              f"notes.py done {d} --seq {item['seq']} --summary \"…\" 定稿。\n")
+        doc = store.load(d)
+        print(to_markdown(doc, manifest, include_resolved=False, page=None, sources=sources,
+                          only=batch_note_ids(d, doc["notes"], item["seq"])), end="")
+        return 0
     pages = "、".join(str(p) for p in item.get("pages") or []) or "无"
     print(f"# 收到「交给 Agent」第 {item['seq']} 批（{item.get('at')}）")
     if item.get("message"):
         print(f"用户附言：{item['message']}")
-    need = sorted({x for n in store.load(d)["notes"] if n.get("status") != "resolved" for x in (n.get("skills") or [])})
+    print(f"要求：{target_text(item)}")
+    print(sub_line)
+    need = sorted({x for n in store.load(d)["notes"] if n.get("status", "open") == "open" for x in (n.get("skills") or [])})
     if need:
         print(f"这批批注指定了技能：{'、'.join(need)}（处理对应批注前先调用）")
     print(f"提交时未处理批注 {item.get('openCount')} 条，涉及第 {pages} 页。"
           + ("已标为「处理中」，页面同步显示。" if claim else "（--no-claim：未改状态）"))
-    print(f"处理完：逐条 notes.py resolve {d} <id> --note \"…\"，重建对照页，最后 notes.py done {d} --summary \"…\"\n")
-    print(to_markdown(store.load(d), manifest, include_resolved=False, page=None, sources=sources), end="")
+    end_hint = ("页面上这些批注会显示「已初改·待复核」，用户看过后再请求复核或直接定稿" if item.get("target") == "review"
+                else "批注随即定为已处理")
+    print(f"处理完：逐条 notes.py resolve {d} <id> --seq {item['seq']} --note \"…\"，重建对照页，"
+          f"最后 notes.py done {d} --seq {item['seq']} --summary \"…\"（{end_hint}）\n")
+    doc = store.load(d)
+    mine = {n["id"] for n in doc["notes"] if n.get("id") in set(item.get("openIds") or []) and n.get("status", "open") == "open"}
+    others = [n for n in doc["notes"] if n.get("id") in set(item.get("openIds") or []) and n.get("status") == "drafted"]
+    if others:   # 提交后被别的批次初改了的：等那一批复核，不要动
+        print("这些批注已在别的批次初改、等待复核，本批不要处理：" + "、".join(f"`{n['id']}`（第 {n.get('draftBatch')} 批）" for n in others) + "\n")
+    print(to_markdown(doc, manifest, include_resolved=False, page=None, sources=sources, only=mine), end="")
     return 0
 
 

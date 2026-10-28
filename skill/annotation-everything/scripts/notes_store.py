@@ -28,7 +28,9 @@ NOTES_FILE = "notes.json"
 LOG_FILE = "notes.jsonl"
 LOCK_FILE = ".notes.lock"
 SCHEMA_VERSION = 1
-STATUSES = ("open", "resolved")
+STATUSES = ("open", "drafted", "resolved")
+# drafted：两段流程（先初改、后复核）里初改已完成、等待复核或用户定稿；页面显示「已初改·待复核」
+TRAIL_KEEP = 50   # 每条批注保留的处理痕迹条数（谁、哪个阶段、做了什么、理由）
 # 页面可写的字段；id / at / status 相关字段由存储层或专门操作维护
 EDITABLE = ("page", "title", "target", "text", "quote", "quoteFrom", "pin", "region", "edit", "pair", "skills", "style",
             "anchor", "key", "orphan")
@@ -272,6 +274,35 @@ def _clean_style(v: Any) -> dict[str, Any] | None:
     return out
 
 
+def _clean_trail(v: Any) -> list[dict[str, Any]]:
+    """处理痕迹（导入时带过来的）：只留认得的字段，最多 TRAIL_KEEP 条。"""
+    out = []
+    for e in v if isinstance(v, list) else []:
+        if isinstance(e, dict) and isinstance(e.get("action"), str):
+            out.append({k: (fix_text(e[k])[:MAX_TEXT] if isinstance(e[k], str) else e[k])
+                        for k in ("at", "by", "stage", "batch", "action", "note") if e.get(k) not in (None, "")
+                        and isinstance(e[k], (str, int))})
+    return out[-TRAIL_KEEP:]
+
+
+def _merge_trails(a: Any, b: Any) -> list[dict[str, Any]]:
+    seen, out = set(), []
+    for e in _clean_trail(a) + _clean_trail(b):
+        k = (e.get("at"), e.get("action"), e.get("by"), e.get("batch"))
+        if k not in seen:
+            seen.add(k)
+            out.append(e)
+    out.sort(key=lambda e: _ts(e.get("at")))
+    return out[-TRAIL_KEEP:]
+
+
+def _trail(target: dict[str, Any], /, **entry: Any) -> None:
+    """在批注的处理痕迹里追加一条（谁、哪个阶段、第几批、做了什么、理由）。"""
+    t = target.get("trail") if isinstance(target.get("trail"), list) else []
+    t.append({"at": now_iso(), **{k: v for k, v in entry.items() if v not in (None, "")}})
+    target["trail"] = t[-TRAIL_KEEP:]
+
+
 def _clean_time(v: Any) -> str | None:
     if isinstance(v, str) and 0 < len(v) <= 64:
         return v
@@ -351,10 +382,17 @@ def _new_note(raw: dict[str, Any], fields: dict[str, Any], nid: str) -> dict[str
     note = {"id": nid, "title": "", "target": "", "quote": "", "quoteFrom": "", "pin": None, **fields,
             "status": raw.get("status") if raw.get("status") in STATUSES else "open",
             "at": _clean_time(raw.get("at")) or now_iso()}
-    if note["status"] == "resolved":
-        for k in ("resolution", "resolvedAt", "resolvedBy"):
+    if note["status"] in ("resolved", "drafted"):
+        for k in ("resolution", "resolvedAt", "resolvedBy", "draftedAt", "draftedBy"):
             if raw.get(k) not in (None, ""):
                 note[k] = str(raw[k])[:MAX_TEXT]
+    for k, st in (("draftBatch", "drafted"), ("resolvedBatch", "resolved")):
+        v = raw.get(k)
+        if note["status"] == st and isinstance(v, int) and not isinstance(v, bool) and v > 0:
+            note[k] = v
+    trail = _clean_trail(raw.get("trail"))
+    if trail:
+        note["trail"] = trail
     if _clean_time(raw.get("updatedAt")):
         note["updatedAt"] = raw["updatedAt"]
     _settle_marks(note)
@@ -399,31 +437,149 @@ def update(review_dir: Path, note_id: str, data: dict[str, Any], *, by: str = "p
         return _commit(review_dir, doc, {"op": "update", "by": by, "id": note_id, "fields": fields}), note
 
 
-def set_status(review_dir: Path, note_id: str, status: str, *, resolution: str = "", by: str = "page") -> tuple[dict[str, Any], dict[str, Any]]:
+RESOLVE_FIELDS = ("resolvedAt", "resolvedBy", "resolution", "resolvedBatch")
+DRAFT_FIELDS = ("draftedAt", "draftedBy", "draftBatch")
+
+
+IN_FLIGHT = ("pending", "claimed", "review", "reviewing")   # 已交给 Agent、还没停下或定稿的批次
+
+
+def _items(review_dir: Path) -> list[dict[str, Any]]:
+    try:
+        return handoff_load(review_dir)["items"]
+    except (OSError, ValueError):
+        return []
+
+
+def _batch_for(items: list[dict[str, Any]], note: dict[str, Any], seq: int | None = None) -> dict[str, Any] | None:
+    """这条批注此刻归哪一批处理。指定 seq 就用那一批（须在途）；否则按批注的归属找，而不是猜「最新一批」：
+    待复核的初改 → 它的初改批次；提交时包含它的在途批次（复核中 > 处理中 > 等待复核 > 等待接收，同级取最早）；
+    都没有、且恰好只有一批在处理中 / 复核中 → 那一批。"""
+    if seq is not None:
+        it = next((i for i in items if int(i.get("seq", 0)) == seq), None)
+        if it is None:
+            raise NotFound(f"handoff#{seq}")
+        if it.get("status") not in IN_FLIGHT:
+            raise NoteError(f"第 {seq} 批不在处理中（{it.get('status')}）")
+        return it
+    db = note.get("draftBatch")
+    if note.get("status") == "drafted" and db is not None:
+        it = next((i for i in items if int(i.get("seq", 0)) == db and i.get("status") in IN_FLIGHT), None)
+        if it:
+            return it
+    order = {"reviewing": 0, "claimed": 1, "review": 2, "pending": 3}
+    cands = [i for i in items if i.get("status") in order and note.get("id") in (i.get("openIds") or [])]
+    if cands:
+        return min(cands, key=lambda i: (order[i["status"]], int(i.get("seq", 0))))
+    active = [i for i in items if i.get("status") in ("claimed", "reviewing")]
+    return active[0] if len(active) == 1 else None
+
+
+def two_stage(item: dict[str, Any] | None) -> bool:
+    """这批是否走两段（先初改、后复核）：用户要求停在待复核，或允许派发子代理（可能由子代理接力初改与复核）。"""
+    return bool(item) and (item.get("target") == "review" or bool(item.get("allowSubagents")))
+
+
+def _stage_of(item: dict[str, Any] | None) -> str | None:
+    if not item:
+        return None
+    return "review" if item.get("status") in ("review", "reviewing") else "draft"
+
+
+def _mark_resolved(note: dict[str, Any], *, by: str, resolution: str = "", batch: int | None = None) -> None:
+    for k in DRAFT_FIELDS[:2]:
+        note.pop(k, None)
+    note.pop("resolvedBatch", None)
+    note.update(status="resolved", resolvedAt=now_iso(), resolvedBy=by)
+    if resolution:
+        note["resolution"] = fix_text(resolution)[:MAX_TEXT]
+    if batch is not None:
+        note["resolvedBatch"] = int(batch)
+
+
+def _mark_open(note: dict[str, Any]) -> None:
+    note["status"] = "open"
+    for k in RESOLVE_FIELDS + DRAFT_FIELDS:
+        note.pop(k, None)
+
+
+def set_status(review_dir: Path, note_id: str, status: str, *, resolution: str = "", by: str = "page",
+               seq: int | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """标已处理 / 重新打开。代理在两段流程的初改阶段标已处理时，记为「已初改·待复核」（drafted），
+    复核通过或用户定稿后才算已处理。每次都在批注的处理痕迹里追加一条。"""
     if status not in STATUSES:
         raise NoteError(f"status 须为 {STATUSES} 之一")
+    if status == "drafted" and by == "page":
+        raise NoteError("「已初改·待复核」只能由代理在初改时标记")
     with locked(review_dir):
         doc = load(review_dir)
         note = _find(doc, note_id)
-        note["status"] = status
-        if status == "resolved":
-            note["resolvedAt"] = now_iso()
-            note["resolvedBy"] = by
+        prev = note.get("status", "open")
+        items = _items(review_dir) if by != "page" else []
+        cur = _batch_for(items, note, seq) if by != "page" else None
+        db = note.get("draftBatch")
+        if cur and prev == "drafted" and db is not None and db != int(cur.get("seq", 0)) and any(
+                int(i.get("seq", 0)) == db and i.get("status") != "done" for i in items):
+            raise NoteError(f"{note_id} 是第 {db} 批的初改，在等复核或用户定稿：不要在第 {cur['seq']} 批里处理它")
+        stage, seq = _stage_of(cur), (int(cur.get("seq", 0)) if cur else None)
+        if status == "resolved" and stage == "draft" and two_stage(cur):
+            status = "drafted"
+        if status == "drafted":
+            for k in RESOLVE_FIELDS:
+                note.pop(k, None)
+            note.update(status="drafted", draftedAt=now_iso(), draftedBy=by)
             if resolution:
                 note["resolution"] = fix_text(resolution)[:MAX_TEXT]
-            note.pop("resolvedBatch", None)
-            if by != "page":   # 代理标的：记下当时处理中的批次，处理记录据此统计每批解决了哪些
-                try:
-                    cur = next((i for i in reversed(handoff_load(review_dir)["items"]) if i.get("status") == "claimed"), None)
-                except (OSError, ValueError):
-                    cur = None
-                if cur:
-                    note["resolvedBatch"] = int(cur.get("seq", 0))
+            if seq is not None:
+                note["draftBatch"] = seq
+            action = "drafted"
+        elif status == "resolved":
+            _mark_resolved(note, by=by, resolution=resolution, batch=seq)
+            action = "accepted" if (by == "page" and prev == "drafted") else "resolved"
         else:
-            for k in ("resolvedAt", "resolvedBy", "resolution", "resolvedBatch"):
-                note.pop(k, None)
-        op = "resolve" if status == "resolved" else "reopen"
+            _mark_open(note)
+            action = "reopened"
+        _trail(note, by=by, stage=stage or ("page" if by == "page" else None), batch=seq, action=action,
+               note=fix_text(resolution)[:MAX_TEXT] if resolution else None)
+        op = {"resolved": "resolve", "drafted": "draft"}.get(status, "reopen")
         return _commit(review_dir, doc, {"op": op, "by": by, "id": note_id, "resolution": resolution}), note
+
+
+REVIEW_VERDICTS = ("ok", "revise", "return")
+
+
+def review(review_dir: Path, note_id: str, verdict: str, *, note: str = "", by: str = "agent",
+           seq: int | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """复核结论：ok 通过（定为已处理）、revise 复核者直接再改（写明改了什么）、return 退回给用户拍板（重新打开，写明原因）。"""
+    if verdict not in REVIEW_VERDICTS:
+        raise NoteError(f"复核结论须为 {REVIEW_VERDICTS} 之一")
+    text = fix_text(note).strip()[:MAX_TEXT]
+    if verdict != "ok" and not text:
+        raise NoteError("再改 / 退回要写明理由")
+    with locked(review_dir):
+        doc = load(review_dir)
+        n = _find(doc, note_id)
+        if n.get("status", "open") == "open":
+            raise NoteError(f"{note_id} 还没有被处理过（未处理），没有可复核的改动：直接改完用 notes.py resolve")
+        items = _items(review_dir)
+        if seq is None:   # 按批注归属找复核批次：初改 → 它的初改批次；已定的 → 本批复核时定的那一批
+            seq = n.get("draftBatch") if n.get("status") == "drafted" else n.get("resolvedBatch")
+        cur = next((i for i in items if seq is not None and int(i.get("seq", 0)) == seq), None)
+        if not cur or cur.get("status") != "reviewing":
+            raise NoteError(f"{note_id} 不在正在复核的批次里" + (f"（第 {seq} 批现在是「{cur.get('status')}」）" if cur else "")
+                            + "：先 notes.py claim --stage review 接收复核，复核只针对那一批的初改")
+        if not ((n.get("status") == "drafted" and n.get("draftBatch") == seq) or
+                (n.get("status") == "resolved" and n.get("resolvedBatch") == seq)):
+            raise NoteError(f"{note_id} 不属于第 {seq} 批的复核范围")
+        if verdict == "return":
+            _mark_open(n)
+        else:
+            _mark_resolved(n, by=by, resolution=text if verdict == "revise" else "", batch=seq)
+            if verdict == "ok" and not n.get("resolution"):
+                n.pop("resolution", None)
+        _trail(n, by=by, stage="review", batch=seq, action={"ok": "approved", "revise": "revised", "return": "returned"}[verdict],
+               note=text or None)
+        return _commit(review_dir, doc, {"op": "review", "by": by, "id": note_id, "verdict": verdict, "note": text}), n
 
 
 def delete(review_dir: Path, note_id: str, *, by: str = "page") -> dict[str, Any]:
@@ -446,10 +602,11 @@ def dedup_key(n: dict[str, Any]) -> tuple:
 
 
 def _stamp(n: dict[str, Any]) -> float:
-    """批注最后一次变化的时间（取 updatedAt / resolvedAt / at 中最晚的），解析失败当作 0。"""
+    """批注最后一次变化的时间（updatedAt / resolvedAt / draftedAt / at / 最后一条痕迹中最晚的），解析失败当作 0。"""
     best = 0.0
-    for k in ("updatedAt", "resolvedAt", "at"):
-        v = n.get(k)
+    trail = n.get("trail") if isinstance(n.get("trail"), list) else []
+    last_t = trail[-1].get("at") if trail and isinstance(trail[-1], dict) else None
+    for k, v in [(k, n.get(k)) for k in ("updatedAt", "resolvedAt", "draftedAt", "at")] + [("trail", last_t)]:
         if not isinstance(v, str):
             continue
         try:
@@ -484,6 +641,9 @@ def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "im
                 if _stamp(raw) > _stamp(cur):
                     fresh = _new_note(raw, fields, nid)
                     fresh["at"] = cur.get("at", fresh["at"])
+                    merged_trail = _merge_trails(cur.get("trail"), fresh.get("trail"))   # 痕迹只追加：合并去重
+                    if merged_trail:
+                        fresh["trail"] = merged_trail
                     if fresh["status"] == "resolved" and cur.get("resolvedBatch") is not None \
                             and fresh.get("resolvedAt") == cur.get("resolvedAt"):
                         fresh["resolvedBatch"] = cur["resolvedBatch"]   # 同一次处理：保留批次号
@@ -575,8 +735,11 @@ def _next_start(items: list[dict[str, Any]], item: dict[str, Any]) -> str | None
 def _batch_stats(notes: list[dict[str, Any]], item: dict[str, Any], end: str | None,
                  next_start: str | None = None) -> dict[str, Any]:
     got = batch_resolved(notes, item, end, next_start)
-    open_now = {n.get("id") for n in notes if n.get("status") != "resolved"}
+    open_now = {n.get("id") for n in notes if n.get("status", "open") == "open"}
+    seq = int(item.get("seq", 0) or 0)
+    drafted = [n.get("id") for n in notes if n.get("status") == "drafted" and n.get("draftBatch") == seq]
     return {"resolvedIds": [n.get("id") for n in got], "resolvedCount": len(got),
+            "draftedIds": drafted, "draftedCount": len(drafted),
             "resolvedPages": sorted({int(n.get("page", 0) or 0) for n in got}),
             "leftOpen": sum(1 for x in item.get("openIds") or [] if x in open_now)}
 
@@ -600,29 +763,63 @@ def handoff_state(review_dir: Path, *, full: bool = True) -> dict[str, Any]:
     history = []
     for it in reversed(items if full else items[-1:]):
         h = {k: v for k, v in it.items() if k != "openIds"}
-        if it.get("status") == "claimed":
+        if it.get("status") in ("claimed", "drafted", "review", "reviewing"):
             h.update(_batch_stats(notes, it, None, _next_start(items, it)), live=True)
         elif it.get("status") == "done" and "resolvedIds" not in it:
             h.update(_batch_stats(notes, it, it.get("doneAt"), _next_start(items, it)), estimated=True)
         history.append(h)
+    flight = [i for i in items if i.get("status") in IN_FLIGHT]
+    by_id = {n.get("id"): n for n in notes}
+
+    def returned(nid: str, seq: int) -> bool:   # 复核时退回给用户的：不再算「处理中」
+        t = [e for e in (by_id.get(nid) or {}).get("trail") or [] if isinstance(e, dict)]
+        return bool(t) and t[-1].get("action") == "returned" and t[-1].get("batch") == seq
     out = {"latest": history[0] if history else None, "total": len(items),
-           "pending": sum(i.get("status") == "pending" for i in items),
-           "claimed": sum(i.get("status") == "claimed" for i in items),
-           "done": sum(i.get("status") == "done" for i in items)}
+           # 已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」而不是「未处理」）
+           "inFlightIds": sorted({x for i in flight for x in (i.get("openIds") or []) if not returned(x, int(i.get("seq", 0)))}),
+           # 在途与停在待复核的批次及用户要求（show / 接手中断的代理据此知道要做到哪一步、能不能派子代理）
+           "open": [{k: i.get(k) for k in ("seq", "status", "target", "allowSubagents", "message")}
+                    for i in items if i.get("status") in IN_FLIGHT + ("drafted",)],
+           **{st: sum(i.get("status") == st for i in items) for st in BATCH_STATUSES}}
     if full:
         out["history"] = history
     return out
 
 
-def handoff_submit(review_dir: Path, message: str = "", *, by: str = "page") -> tuple[dict[str, Any], dict[str, Any], bool]:
-    """记一次提交，快照当时的未处理批注。上一次提交还没被代理接收时合并进去（刷新快照与附言），不重复排队。"""
+TARGETS = ("final", "review")   # 这批做到哪一步：定稿 / 已初改·待复核（由用户在「交给 Agent」时选）
+BATCH_STATUSES = ("pending", "claimed", "drafted", "review", "reviewing", "done")
+# pending 等待接收 → claimed 初改中（或单段流程的处理中）→ drafted 已初改·待复核（停下等用户）
+#   → review 等待复核接收 → reviewing 复核中 → done 已定稿；drafted / review 也可由用户直接定稿
+
+
+class Unreviewed(NoteError):
+    """复核收尾时还有没给结论的初改批注。"""
+
+    def __init__(self, ids: list[str], seq: int):
+        super().__init__(f"第 {seq} 批还有 {len(ids)} 条初改没给复核结论：{'、'.join(ids)}。"
+                         f"逐条 notes.py review，或确认都可以后加 --accept-rest 一并通过")
+        self.ids, self.seq = ids, seq
+
+
+def _open_snapshot(notes: list[dict[str, Any]]) -> dict[str, Any]:
+    open_notes = [n for n in notes if n.get("status", "open") == "open"]
+    return {"openCount": len(open_notes), "openIds": [n.get("id") for n in open_notes],
+            "pages": sorted({int(n.get("page", 0) or 0) for n in open_notes})}
+
+
+def handoff_submit(review_dir: Path, message: str = "", *, target: str = "final", allow_subagents: bool = False,
+                   by: str = "page") -> tuple[dict[str, Any], dict[str, Any], bool]:
+    """记一次提交（一批），快照当时的未处理批注。上一次提交还没被代理接收时合并进去（刷新快照、附言与选项），不重复排队。
+
+    target：final 做到定稿 / review 做到「已初改·待复核」后停下；allow_subagents：是否允许代理派发子代理。"""
     message = fix_text(message)[:MAX_MSG]
+    if target not in TARGETS:
+        raise NoteError(f"target 须为 {TARGETS} 之一")
     with locked(review_dir):
-        notes = [n for n in load(review_dir)["notes"] if n.get("status") != "resolved"]
+        notes = load(review_dir)["notes"]
         doc = handoff_load(review_dir)
-        snap = {"at": now_iso(), "by": by, "message": message, "openCount": len(notes),
-                "openIds": [n.get("id") for n in notes],
-                "pages": sorted({int(n.get("page", 0) or 0) for n in notes})}
+        snap = {"at": now_iso(), "by": by, "message": message, "target": target, "allowSubagents": bool(allow_subagents),
+                **_open_snapshot(notes)}
         latest = doc["items"][-1] if doc["items"] else None
         if latest and latest.get("status") == "pending":
             latest.update(snap)
@@ -633,41 +830,192 @@ def handoff_submit(review_dir: Path, message: str = "", *, by: str = "page") -> 
             item, merged = {"seq": doc["seq"], "status": "pending", **snap}, False
             doc["items"].append(item)
         _handoff_commit(review_dir, doc, {"op": "handoff-update" if merged else "handoff", "by": by,
-                                          "seq": item["seq"], "openCount": item["openCount"]})
+                                          "seq": item["seq"], "openCount": item["openCount"], "target": target})
         return doc, item, merged
 
 
-def handoff_claim(review_dir: Path, *, by: str = "agent") -> dict[str, Any] | None:
-    """代理接收最早一个等待中的提交（状态改为处理中）；没有则返回 None。"""
+def _find_batch(items: list[dict[str, Any]], seq: int) -> dict[str, Any]:
+    item = next((i for i in items if int(i.get("seq", 0)) == seq), None)
+    if item is None:
+        raise NotFound(f"handoff#{seq}")
+    return item
+
+
+def _stage_entry(item: dict[str, Any], stage: str) -> dict[str, Any]:
+    """这批某个阶段的记录（没有就补一个：代理没先接收就收尾、或 0.4 以前的批次）。"""
+    stages = item.setdefault("stages", [])
+    for e in reversed(stages):
+        if e.get("stage") == stage:
+            return e
+    e = {"stage": stage}
+    if stage == "draft" and item.get("claimedAt"):
+        e.update(by=item.get("claimedBy"), claimedAt=item.get("claimedAt"))
+    stages.append(e)
+    return e
+
+
+def handoff_claim(review_dir: Path, *, by: str = "agent", stage: str = "any", seq: int | None = None) -> dict[str, Any] | None:
+    """接收最早一个等着的批次：stage=draft 只接新提交（→ 初改中），review 只接请求复核的（→ 复核中），any 都接。
+    返回的批次带 stage 字段说明是哪个阶段；没有则 None。"""
+    want = {"draft": ("pending",), "review": ("review",), "any": ("pending", "review")}.get(stage)
+    if want is None:
+        raise NoteError("stage 须为 draft / review / any")
     with locked(review_dir):
         doc = handoff_load(review_dir)
-        item = next((i for i in doc["items"] if i.get("status") == "pending"), None)
+        item = next((i for i in doc["items"] if i.get("status") in want and (seq is None or int(i.get("seq", 0)) == seq)), None)
         if item is None:
             return None
-        item.update({"status": "claimed", "claimedAt": now_iso(), "claimedBy": by})
-        _handoff_commit(review_dir, doc, {"op": "handoff-claim", "by": by, "seq": item["seq"]})
-        return item
+        now = now_iso()
+        if item["status"] == "pending":
+            item.update({"status": "claimed", "claimedAt": now, "claimedBy": by})
+            item.setdefault("stages", []).append({"stage": "draft", "by": by, "claimedAt": now})
+            st = "draft"
+        else:
+            item["status"] = "reviewing"
+            item.setdefault("stages", []).append({"stage": "review", "by": by, "claimedAt": now})
+            st = "review"
+        _handoff_commit(review_dir, doc, {"op": "handoff-claim", "by": by, "seq": item["seq"], "stage": st})
+        return {**item, "stage": st}
 
 
-def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "", by: str = "agent") -> dict[str, Any]:
-    """标记提交已处理。不给 seq 时取最近一个处理中的，没有就取最近一个等待中的。"""
+def _finish(item: dict[str, Any], notes: list[dict[str, Any]] | None, items: list[dict[str, Any]], by: str, summary: str) -> None:
+    item.update({"status": "done", "doneAt": now_iso(), "doneBy": by})
+    if summary:
+        item["summary"] = summary
+    if notes is not None:
+        item.update(_batch_stats(notes, item, item["doneAt"], _next_start(items, item)))
+
+
+def _load_notes_or_none(review_dir: Path) -> dict[str, Any] | None:
+    try:
+        return load(review_dir)
+    except (OSError, ValueError):
+        return None
+
+
+def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "", by: str = "agent",
+                 mode: str | None = None, accept_rest: bool = False) -> dict[str, Any]:
+    """收尾当前阶段。不给 seq 时取最近一个处理中（初改中 / 复核中）的，没有就取最近一个等待接收的。
+
+    初改阶段：用户选了「待复核」（target=review）→ 停在 drafted 等用户；选了定稿 → 直接定稿（done）；
+    允许派发子代理且 mode=draft → 进入「等待复核」（review），由复核者接收。复核阶段：给完结论后定稿。"""
+    summary = fix_text(summary)[:MAX_MSG]
+    if mode not in (None, "draft", "final"):
+        raise NoteError("mode 须为 draft / final")
     with locked(review_dir):
         doc = handoff_load(review_dir)
         items = doc["items"]
         if seq is not None:
-            item = next((i for i in items if int(i.get("seq", 0)) == seq), None)
+            item = _find_batch(items, seq)
         else:
-            item = next((i for i in reversed(items) if i.get("status") == "claimed"), None) or \
-                   next((i for i in reversed(items) if i.get("status") == "pending"), None)
-        if item is None:
-            raise NotFound(f"handoff#{seq}" if seq is not None else "没有待处理的提交")
-        item.update({"status": "done", "doneAt": now_iso(), "doneBy": by, "summary": fix_text(summary)[:MAX_MSG]})
-        try:   # 处理记录：这批解决了哪些批注（notes.json 读不了也照样收尾，只是不记统计）
-            item.update(_batch_stats(load(review_dir)["notes"], item, item["doneAt"], _next_start(items, item)))
-        except (OSError, ValueError):
-            pass
-        _handoff_commit(review_dir, doc, {"op": "handoff-done", "by": by, "seq": item["seq"],
+            active = [i for i in items if i.get("status") in ("claimed", "reviewing")]
+            if len(active) > 1:
+                raise NoteError("同时有 " + "、".join(f"第 {i['seq']} 批（{'复核中' if i['status'] == 'reviewing' else '处理中'}）"
+                                                  for i in active) + "：用 --seq 指定收尾哪一批")
+            item = active[0] if active else next((i for i in reversed(items) if i.get("status") == "pending"), None)
+            if item is None:
+                raise NotFound("没有待处理的提交")
+        status = item.get("status")
+        ndoc = _load_notes_or_none(review_dir)
+        notes = ndoc["notes"] if ndoc else None
+        n_seq = int(item["seq"])
+        mine = [n for n in notes or [] if n.get("status") == "drafted" and n.get("draftBatch") == n_seq]
+        changed = False
+        if status in ("pending", "claimed"):
+            target = item.get("target", "final")
+            if target == "review":
+                if mode == "final":
+                    raise NoteError(f"用户要求第 {n_seq} 批做到「已初改·待复核」为止：不能直接定稿（用户可在页面上定稿）")
+                to = "drafted"
+            elif mode == "draft":
+                if not item.get("allowSubagents"):
+                    raise NoteError(f"第 {n_seq} 批由你直接处理到定稿（用户没有允许派发子代理）：直接 notes.py done")
+                to = "review"
+            else:
+                to = "done"
+            e = _stage_entry(item, "draft")
+            e.update(doneAt=now_iso(), doneBy=by, draftedIds=[n["id"] for n in mine])
+            if summary:
+                e["summary"] = summary
+            if to == "done":
+                for n in mine:   # 单段流程（或允许子代理但直接定稿）：初改即定稿
+                    _mark_resolved(n, by=by, resolution=n.get("resolution", ""), batch=n_seq)
+                    _trail(n, by=by, stage="draft", batch=n_seq, action="finalized")
+                    changed = True
+                _finish(item, notes, items, by, summary)
+            else:
+                item["status"] = to
+                item["draftedCount"] = len(mine)
+                if summary:
+                    item["summary"] = summary
+        elif status == "reviewing":
+            if mine and not accept_rest:
+                raise Unreviewed([n["id"] for n in mine], n_seq)
+            for n in mine:
+                _mark_resolved(n, by=by, resolution=n.get("resolution", ""), batch=n_seq)
+                _trail(n, by=by, stage="review", batch=n_seq, action="approved", note="复核收尾时一并通过")
+                changed = True
+            e = _stage_entry(item, "review")
+            e.update(doneAt=now_iso(), doneBy=by, **_review_counts(notes or [], n_seq))
+            if summary:
+                e["summary"] = summary
+            _finish(item, notes, items, by, summary)
+        elif status in ("drafted", "review"):
+            raise NoteError(f"第 {n_seq} 批在等复核：要复核先 notes.py claim --stage review（或用户在页面请求复核）；"
+                            "要直接定稿由用户在页面上点「直接定稿」")
+        else:
+            raise NoteError(f"第 {n_seq} 批已经定稿了")
+        if changed:
+            _commit(review_dir, ndoc, {"op": "finalize", "by": by, "seq": n_seq, "ids": [n["id"] for n in mine]})
+        _handoff_commit(review_dir, doc, {"op": "handoff-done", "by": by, "seq": n_seq, "status": item["status"],
                                           "resolvedCount": item.get("resolvedCount"), "leftOpen": item.get("leftOpen")})
+        return item
+
+
+def _review_counts(notes: list[dict[str, Any]], seq: int) -> dict[str, int]:
+    """复核阶段的结论计数：从批注痕迹里数这批复核阶段的 approved / revised / returned / resolved。"""
+    c = {"approved": 0, "revised": 0, "returned": 0, "resolved": 0}
+    for n in notes:   # 每条只算这批复核阶段的最后一个动作（改过主意的不重复计）
+        last = None
+        for e in n.get("trail") or []:
+            if isinstance(e, dict) and e.get("stage") == "review" and e.get("batch") == seq and e.get("action") in c:
+                last = e["action"]
+        if last:
+            c[last] += 1
+    return c
+
+
+def handoff_request_review(review_dir: Path, seq: int, message: str = "", *, allow_subagents: bool = False,
+                           by: str = "page") -> dict[str, Any]:
+    """用户看过初改，请代理复核：drafted → review（等待复核接收）。"""
+    with locked(review_dir):
+        doc = handoff_load(review_dir)
+        item = _find_batch(doc["items"], seq)
+        if item.get("status") not in ("drafted", "review"):
+            raise NoteError(f"第 {seq} 批不在「已初改·待复核」状态")
+        item.update({"status": "review", "reviewRequestedAt": now_iso(), "reviewRequestedBy": by,
+                     "reviewMessage": fix_text(message)[:MAX_MSG], "allowSubagents": bool(allow_subagents)})
+        _handoff_commit(review_dir, doc, {"op": "handoff-review", "by": by, "seq": seq})
+        return item
+
+
+def handoff_finalize(review_dir: Path, seq: int, *, by: str = "page") -> dict[str, Any]:
+    """用户看过初改觉得可以，跳过复核直接定稿：这批的初改批注全部定为已处理。"""
+    with locked(review_dir):
+        doc = handoff_load(review_dir)
+        item = _find_batch(doc["items"], seq)
+        if item.get("status") not in ("drafted", "review"):
+            raise NoteError(f"第 {seq} 批不在「已初改·待复核」状态")
+        ndoc = load(review_dir)
+        mine = [n for n in ndoc["notes"] if n.get("status") == "drafted" and n.get("draftBatch") == seq]
+        for n in mine:
+            _mark_resolved(n, by=by, resolution=n.get("resolution", ""), batch=seq)
+            _trail(n, by=by, stage="page", batch=seq, action="accepted")
+        if mine:
+            _commit(review_dir, ndoc, {"op": "finalize", "by": by, "seq": seq, "ids": [n["id"] for n in mine]})
+        item.setdefault("stages", []).append({"stage": "accept", "by": by, "at": now_iso(), "count": len(mine)})
+        _finish(item, ndoc["notes"], doc["items"], by, "")
+        _handoff_commit(review_dir, doc, {"op": "handoff-finalize", "by": by, "seq": seq, "count": len(mine)})
         return item
 
 

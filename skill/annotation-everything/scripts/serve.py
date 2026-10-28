@@ -18,8 +18,9 @@
 - 日志里来自请求的字段（路径、Host、Origin）只保留安全字符并截断；`status` 只汇总计数，不回显请求内容。
 
 「交给 Agent」：页面 POST /api/handoff 记一次提交（handoff.json）。代理用 notes.py wait 等待或轮询该文件；
-可选的 --on-handoff 钩子在每次提交时运行一条命令（不经 shell），提交内容以 JSON 从标准输入传入，
-另有环境变量 AE_EVENT / AE_REVIEW_DIR / AE_HANDOFF_SEQ / AE_URL；命令输出丢弃，退出码记入 server.log。
+可选的 --on-handoff 钩子在每次新提交（AE_EVENT=handoff）和请求复核（AE_EVENT=review）时运行一条命令（不经 shell），
+提交内容以 JSON 从标准输入传入（含 stage / target / allowSubagents），另有环境变量 AE_EVENT / AE_REVIEW_DIR /
+AE_HANDOFF_SEQ / AE_URL；运行中又来的事件排队依次补跑；命令输出丢弃，退出码记入 server.log。
 
 端口回退：默认端口被占用时，若占用者正是本服务且托管同一目录，直接复用并打开浏览器；
 否则顺延尝试后续端口（最多 20 个），实际端口写进审阅目录的 .annotation-server.json。
@@ -52,9 +53,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import notes_store as store  # noqa: E402
 
 APP = "annotation-everything"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
-FEATURES = ["notes", "handoff", "marks", "batches"]
+FEATURES = ["notes", "handoff", "marks", "batches", "stages"]
 
 
 class StaleServer(Exception):
@@ -107,7 +108,7 @@ class ReviewServer(ThreadingHTTPServer):
         self.hook_cwd = hook_cwd or os.getcwd()
         self._hook_lock = threading.Lock()
         self._hook_running = False
-        self._hook_next: dict[str, Any] | None = None
+        self._hook_queue: list[dict[str, Any]] = []   # 钩子运行中又来的事件：按到达顺序排队，同一批同一事件只留最新
         self.log_to_file = log_to_file
         self._log_lock = threading.Lock()
         self._cache: dict[str, tuple[float, Any]] = {}
@@ -139,27 +140,28 @@ class ReviewServer(ThreadingHTTPServer):
         self._cache[name] = (mtime, val)
         return val
 
-    def run_hook(self, item: dict[str, Any], merged: bool) -> None:
+    def run_hook(self, item: dict[str, Any], merged: bool, event: str = "handoff") -> None:
         """「交给 Agent」钩子：后台运行用户配置的命令，提交内容经标准输入传 JSON，不经 shell。
 
         只在新的提交时触发（合并进还没被接收的提交不再触发）；同一时间只跑一个，运行中又来新提交就等它结束后补跑一次。
         """
         if not self.on_handoff or merged:
             return
-        event = "handoff"
         url = f"http://127.0.0.1:{self.port}/"
         payload = {"event": event, "app": APP, "reviewId": self.review_id(), "reviewDir": str(self.review_dir),
                    "url": url, "seq": item.get("seq"), "message": item.get("message", ""),
+                   "stage": "review" if event == "review" else "draft", "target": item.get("target", "final"),
+                   "allowSubagents": bool(item.get("allowSubagents")), "reviewMessage": item.get("reviewMessage", ""),
                    "openCount": item.get("openCount"), "pages": item.get("pages"),
                    "notesFile": str(self.review_dir / store.NOTES_FILE),
                    "handoffFile": str(self.review_dir / store.HANDOFF_FILE),
                    "notesCli": str(Path(__file__).resolve().with_name("notes.py"))}
         env = {**os.environ, "AE_EVENT": event, "AE_REVIEW_DIR": str(self.review_dir),
                "AE_HANDOFF_SEQ": str(item.get("seq")), "AE_URL": url}
-        job = {"payload": payload, "env": env, "seq": item.get("seq")}
+        job = {"payload": payload, "env": env, "seq": item.get("seq"), "event": event}
         with self._hook_lock:
             if self._hook_running:
-                self._hook_next = job   # 正在跑：只记最新的一次，结束后补跑
+                self._hook_queue = [j for j in self._hook_queue if (j["event"], j["seq"]) != (job["event"], job["seq"])] + [job]
                 return
             self._hook_running = True
         threading.Thread(target=self._hook_worker, args=(job,), daemon=True).start()
@@ -177,7 +179,7 @@ class ReviewServer(ThreadingHTTPServer):
             except OSError as e:
                 self.log("error", f"code=hook-failed seq={job['seq']} {type(e).__name__}: {e}")
             with self._hook_lock:
-                job, self._hook_next = self._hook_next, None
+                job = self._hook_queue.pop(0) if self._hook_queue else None
                 if job is None:
                     self._hook_running = False
 
@@ -340,11 +342,28 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {**store.handoff_state(d), **self._ident()})
         elif path == "/api/handoff" and cmd == "POST":
             body = self._expect_obj(self._body())
-            _h, item, merged = store.handoff_submit(d, str(body.get("message") or ""), by="page")
-            self.server.log("info", f"handoff seq={item['seq']} open={item['openCount']} merged={merged}")
+            _h, item, merged = store.handoff_submit(d, str(body.get("message") or ""), by="page",
+                                                    target=str(body.get("target") or "final"),
+                                                    allow_subagents=body.get("allowSubagents") is True)
+            self.server.log("info", f"handoff seq={item['seq']} open={item['openCount']} merged={merged} target={item['target']}")
             self.server.run_hook(item, merged)
             self._json(200, {"doc": {**store.load(d), **self._ident()}, "handoff": store.handoff_state(d, full=False),
                              "merged": merged, "seq": item["seq"]})
+        elif path in ("/api/handoff/review", "/api/handoff/finalize") and cmd == "POST":
+            body = self._expect_obj(self._body())
+            seq = body.get("seq")
+            if not isinstance(seq, int) or isinstance(seq, bool):
+                raise Reject(400, "bad-request", "缺少批次序号 seq")
+            if path.endswith("review"):
+                item = store.handoff_request_review(d, seq, str(body.get("message") or ""),
+                                                    allow_subagents=body.get("allowSubagents") is True, by="page")
+                self.server.log("info", f"handoff-review seq={seq}")
+                self.server.run_hook(item, False, event="review")
+            else:
+                item = store.handoff_finalize(d, seq, by="page")
+                self.server.log("info", f"handoff-finalize seq={seq}")
+            self._json(200, {"doc": {**store.load(d), **self._ident()}, "handoff": store.handoff_state(d, full=False),
+                             "seq": seq, "status": item["status"]})
         elif path == "/api/notes" and cmd == "POST":
             doc, note = store.add(d, self._expect_obj(self._body()), by="page")
             self.server.log("info", f"add {note['id']} page={note['page']}")
@@ -567,13 +586,14 @@ def status(review_dir: Path) -> int:
         doc = store.load(review_dir)
         notes = doc["notes"]
         out["notes"] = {"rev": doc.get("rev"), "total": len(notes),
-                        "open": sum(n.get("status") != "resolved" for n in notes),
+                        "open": sum(n.get("status", "open") == "open" for n in notes),
+                        "drafted": sum(n.get("status") == "drafted" for n in notes),
                         "resolved": sum(n.get("status") == "resolved" for n in notes)}
     except ValueError as e:
         out["notes"] = {"error": f"notes.json 无法解析：{type(e).__name__}"}
     hs = store.handoff_state(review_dir, full=False)
     latest = hs.get("latest") or {}
-    out["handoff"] = {"pending": hs.get("pending"), "claimed": hs.get("claimed"),
+    out["handoff"] = {k: hs.get(k) for k in ("pending", "claimed", "drafted", "review", "reviewing")} | {
                       "latest": {k: latest.get(k) for k in ("seq", "status", "at", "claimedAt", "doneAt")} if latest else None}
     code = 3
     info = read_status(review_dir)
