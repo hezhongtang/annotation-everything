@@ -8,7 +8,8 @@
   python3 notes.py import <审阅目录> <文件>   # 页面导出的 JSON，或旧版对照页「复制全部 / 下载」的 Markdown
   python3 notes.py wait <审阅目录> [--timeout 秒]   # 阻塞到用户点「交给 Agent」，输出提交内容与未处理批注
   python3 notes.py claim <审阅目录>   # 不等待：有等待接收的提交就接收（输出 JSON，退出码 0），没有返回 3
-  python3 notes.py done <审阅目录> --summary "处理结果"   # 告诉页面这次提交已处理完
+  python3 notes.py done <审阅目录> --summary "处理摘要"   # 收尾这一批：记下解决了哪些、页面显示摘要
+  python3 notes.py batches <审阅目录> [--last 3] [--json]   # 处理记录：每批解决了几条、处理摘要
   python3 notes.py skills <审阅目录> [--set "名称=说明" ...] [--add ...] [--remove ...] [--clear]
                                                    # 维护技能目录：页面「技能」输入栏的候选
 
@@ -52,28 +53,70 @@ def handoff_lines(state: dict[str, Any] | None) -> list[str]:
     if not state or not state.get("latest"):
         return []
     h = state["latest"]
-    line = (f"交给 Agent：最近一次是第 {h['seq']} 次提交，{STATUS_ZH.get(h.get('status'), h.get('status'))}"
+    line = (f"交给 Agent：最近一次是第 {h['seq']} 批，{STATUS_ZH.get(h.get('status'), h.get('status'))}"
             f"（提交于 {h.get('at')}，当时未处理 {h.get('openCount')} 条）")
     out = [line]
     if h.get("message"):
         out.append(f"用户附言：{h['message']}")
-    if h.get("status") == "done" and h.get("summary"):
-        out.append(f"处理结果：{h['summary']}")
+    if h.get("status") == "done":
+        out.append(f"这批解决 {h.get('resolvedCount', 0)} 条" + (f"；处理摘要：{h['summary']}" if h.get("summary") else ""))
+    if state.get("total"):
+        out.append(f"处理记录：共 {state['total']} 批（notes.py batches 查看每批解决了哪些）")
     if state.get("pending") or state.get("claimed"):
         out.append(f"待接收 {state.get('pending', 0)} 次、处理中 {state.get('claimed', 0)} 次"
                    "（处理中却没有代理在跑，多半是上次处理中断：处理完用 notes.py done 收尾）")
     return out
 
 
-def pin_numbers(notes: list[dict[str, Any]]) -> dict[str, int]:
-    """与页面一致：同一页带标点的批注按出现顺序编号 1、2、3…"""
+def mark_numbers(notes: list[dict[str, Any]]) -> dict[str, int]:
+    """与页面一致：同一页带标注（点或框）的批注按出现顺序编号 1、2、3…"""
     out: dict[str, int] = {}
     count: dict[int, int] = {}
     for n in notes:
-        if n.get("pin"):
+        if n.get("pin") or store.region_of(n):
             count[n["page"]] = count.get(n["page"], 0) + 1
             out[n["id"]] = count[n["page"]]
     return out
+
+
+def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: int | None = None) -> str:
+    """处理记录：每次「交给 Agent」算一批，列出提交、接收、收尾、这批解决了哪些批注和处理摘要（新的在前）。"""
+    hist = state.get("history") or []
+    by_id = {n.get("id"): n for n in notes}
+    out = [f"# 处理记录 · 共 {len(hist)} 批（已处理 {state.get('done', 0)}，处理中 {state.get('claimed', 0)}，"
+           f"等待接收 {state.get('pending', 0)}）"]
+    for h in hist[:limit] if limit else hist:
+        who = h.get("doneBy") or h.get("claimedBy") or ""
+        out.append(f"\n## 第 {h.get('seq')} 批 · {STATUS_ZH.get(h.get('status'), h.get('status'))}" + (f"（{who}）" if who else ""))
+        out.append(f"提交：{h.get('at')}，当时未处理 {h.get('openCount')} 条"
+                   + (f"，涉及第 {'、'.join(map(str, h.get('pages') or []))} 页" if h.get("pages") else "")
+                   + (f"（等待接收期间又提交 {h['updates']} 次，已合并）" if h.get("updates") else ""))
+        if h.get("message"):
+            out.append(f"用户附言：{h['message']}")
+        if h.get("claimedAt"):
+            out.append(f"接收：{h['claimedAt']}" + (f"　收尾：{h['doneAt']}" if h.get("doneAt") else ""))
+        if "resolvedCount" in h:
+            pages = "、".join(map(str, h.get("resolvedPages") or []))
+            note = "（处理中，实时统计）" if h.get("live") else "（旧批次，按处理时间推算）" if h.get("estimated") else ""
+            out.append(f"解决 {h['resolvedCount']} 条" + (f"（第 {pages} 页）" if pages else "")
+                       + (f"；提交时的批注还剩 {h['leftOpen']} 条未处理" if h.get("leftOpen") else "") + note)
+        if h.get("summary"):
+            out.append(f"处理摘要：{h['summary']}")
+        for nid in h.get("resolvedIds") or []:
+            n = by_id.get(nid)
+            if not n:
+                out.append(f"- `{nid}`（这条批注已删除）")
+                continue
+            body = str(n.get("text", "")).replace("\n", " ")
+            line = f"- `{nid}` 第 {n.get('page')} 页【{n.get('target') or '未指定'}】{body[:60]}{'…' if len(body) > 60 else ''}"
+            if n.get("status") != "resolved":
+                line += "（之后被重新打开）"
+            elif n.get("resolution"):
+                line += f"\n  处理说明：{n['resolution']}"
+            out.append(line)
+    if not hist:
+        out.append("\n（还没有「交给 Agent」的记录）")
+    return "\n".join(out) + "\n"
 
 
 def side_texts(sources: dict[str, Path | None] | None) -> dict[str, dict[int, str]]:
@@ -100,11 +143,18 @@ def side_texts(sources: dict[str, Path | None] | None) -> dict[str, dict[int, st
 MATCH_ZH = {"exact": "相同", "similar": "相近"}
 
 
-def style_scope_zh(st: dict[str, Any]) -> str:
-    if st.get("scope") == "region" and isinstance(st.get("region"), dict):
-        r = st["region"]
-        return f"区域（x {r.get('x')}%，y {r.get('y')}%，宽 {r.get('w')}%，高 {r.get('h')}%）"
-    return {"page": "整页", "pin": "标点处"}.get(st.get("scope"), "整页")
+STYLE_ZH = {"page": "整页", "pin": "标点处", "region": "框选处"}
+
+
+def mark_tag(n: dict[str, Any], no: int | None) -> str:
+    """报告上的标注：点写坐标，框写左上角坐标与宽高（都是相对页面的百分比）。"""
+    out = ""   # 0.3 留下的批注可能点和框都有：两个都列出
+    if n.get("pin"):
+        out += f"·标点 {no}（x {n['pin']['x']}%，y {n['pin']['y']}%）"
+    rg = store.region_of(n)
+    if rg:
+        out += f"·框选 {no}（x {rg.get('x')}%，y {rg.get('y')}%，宽 {rg.get('w')}%，高 {rg.get('h')}%）"
+    return out
 
 
 def pair_lines(n: dict[str, Any], texts: dict[str, dict[int, str]]) -> list[str]:
@@ -129,7 +179,7 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
                 sources: dict[str, Path | None] | None = None, handoff: dict[str, Any] | None = None) -> str:
     texts = side_texts(sources)
     all_notes = doc["notes"]
-    pins = pin_numbers(all_notes)
+    marks = mark_numbers(all_notes)
     titles = {p["n"]: p.get("title", "") for p in manifest.get("pages", [])}
     keys = {p["n"]: p.get("key", "") for p in manifest.get("pages", [])}
     notes = [n for n in all_notes if (include_resolved or n.get("status") != "resolved")
@@ -139,7 +189,7 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
     head = [f"# 批注 · {manifest.get('title') or '对照页'}",
             f"共 {len(all_notes)} 条（未处理 {n_open}，已处理 {len(all_notes) - n_open}）；"
             f"以下列出 {'全部' if include_resolved else '未处理'} {len(notes)} 条。rev {doc.get('rev')}",
-            "标点坐标为相对页面左上角的百分比（横向 x、纵向 y）。"]
+            "报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。"]
     if sources:  # 已按 review.json 解析成实际路径（相对审阅目录优先），改稿就改这里列出的文件
         head.append("源文件（改稿改这里）：" + "；".join(f"{'报告' if k == 'report' else '讲稿'} = {v}"
                                                    for k, v in sources.items() if v))
@@ -151,8 +201,7 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
             last = n["page"]
             out.append(f"\n## 第 {last} 页｜{titles.get(last) or n.get('title', '')}" + (f"（键 {keys[last]}）" if keys.get(last) else ""))
         tag = n.get("target") or "未指定"
-        if n.get("pin"):
-            tag += f"·标点 {pins.get(n['id'])}（x {n['pin']['x']}%，y {n['pin']['y']}%）"
+        tag += mark_tag(n, marks.get(n["id"]))
         state = "【已处理】" if n.get("status") == "resolved" else ""
         ed = n.get("edit") if isinstance(n.get("edit"), dict) else None
         if ed and ed.get("op") == "delete":
@@ -165,7 +214,7 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
             tag += "·" + ("删除" if ed.get("op") == "delete" else "改写")
         st = n.get("style") if isinstance(n.get("style"), dict) else None
         if st:
-            tag += "·风格优化·" + style_scope_zh(st)
+            tag += "·风格优化·" + STYLE_ZH.get(st.get("scope"), "整页")
         line = f"- `{n['id']}` {state}【{tag}】" + body.replace("\n", "\n  ")
         if n.get("quote") and not ed:
             line += f"\n  > 引用{('（' + n['quoteFrom'] + '）') if n.get('quoteFrom') else ''}：{n['quote']}"
@@ -190,11 +239,13 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
 # 旧版对照页导出的 Markdown：
 # ## 第 7 页｜标题
 # 1. 【报告·标点 1（x 12.3%，y 45.6%）】意见……
+# 2. 【报告·框选 2（x 10%，y 20%，宽 30%，高 15%）】意见……
 #    > 引用（报告）：……
 DELETE_TEXT = store.DELETE_TEXT
 REPLACE_PREFIX = store.REPLACE_PREFIX
 LEGACY_PAGE = re.compile(r"^## 第 (\d+) 页｜(.*)$")
-LEGACY_ITEM = re.compile(r"^\d+\. 【([^】·]*)(?:·标点 \d+（x ([\d.]+)%，y ([\d.]+)%）)?】(.*)$")
+LEGACY_ITEM = re.compile(r"^\d+\. 【([^】·]*)(?:·标点 \d+（x ([\d.]+)%，y ([\d.]+)%）)?"
+                         r"(?:·框选 \d+（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)?】(.*)$")
 LEGACY_QUOTE = re.compile(r"^\s+> 引用(?:（([^）]*)）)?：(.*)$")
 
 
@@ -208,11 +259,13 @@ def parse_legacy_markdown(text: str) -> list[dict[str, Any]]:
         if page is None:
             continue
         if m := LEGACY_ITEM.match(line):
-            text, status = m.group(4), "open"
+            text, status = m.group(8), "open"
             if text.startswith("【已处理】"):
                 text, status = text[len("【已处理】"):], "resolved"
             cur = {"page": page, "title": title, "target": m.group(1), "text": text, "status": status,
                    "pin": {"x": float(m.group(2)), "y": float(m.group(3))} if m.group(2) else None}
+            if m.group(4):
+                cur["region"] = {k: float(m.group(g)) for k, g in zip(("x", "y", "w", "h"), (4, 5, 6, 7))}
             items.append(cur)
         elif cur is not None and (m := LEGACY_QUOTE.match(line)):
             cur["quoteFrom"], cur["quote"] = m.group(1) or "", m.group(2)
@@ -223,12 +276,10 @@ def parse_legacy_markdown(text: str) -> list[dict[str, Any]]:
                 cur["edit"] = {"op": "replace", "from": cur["quote"], "to": cur["text"][len(REPLACE_PREFIX):]}
         elif cur is not None and (m := re.match(r"^\s+处理说明：(.*)$", line)):
             cur["resolution"] = m.group(1)
-        elif cur is not None and (m := re.match(r"^\s+风格优化：(整页|标点处|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$", line)):
-            if m.group(2):
-                cur["style"] = {"scope": "region", "region": {"x": float(m.group(2)), "y": float(m.group(3)),
-                                                             "w": float(m.group(4)), "h": float(m.group(5))}}
-            else:
-                cur["style"] = {"scope": "page" if m.group(1) == "整页" else "pin"}
+        elif cur is not None and (m := re.match(r"^\s+风格优化：(整页|标点处|框选处|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$", line)):
+            if m.group(2):   # 0.3 导出的格式：框写在风格优化这一行
+                cur["region"] = {"x": float(m.group(2)), "y": float(m.group(3)), "w": float(m.group(4)), "h": float(m.group(5))}
+            cur["style"] = {"scope": {"整页": "page", "标点处": "pin"}.get(m.group(1), "region")}
         elif cur is not None and (m := re.match(r"^\s+位置线索：(.*)$", line)):
             cur["anchor"] = m.group(1)
         elif cur is not None and (m := re.match(r"^\s+技能：(.*)$", line)):
@@ -291,6 +342,10 @@ def main(argv: list[str] | None = None) -> int:
     dn.add_argument("--summary", default="", help="处理结果：改了几条、哪些留给用户定")
     dn.add_argument("--seq", type=int, help="提交序号；默认最近一个处理中的提交")
     dn.add_argument("--by", default=default_agent())
+    bt = sub.add_parser("batches", help="处理记录：每次「交给 Agent」一批，各批解决了哪些批注、处理摘要")
+    bt.add_argument("dir", type=Path)
+    bt.add_argument("--last", type=int, help="只看最近几批")
+    bt.add_argument("--json", action="store_true", help="输出原始 JSON")
     a = ap.parse_args(argv)
     d = a.dir.resolve()
     # 打错目录时不要悄悄新建一个空审阅目录
@@ -312,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"警告：{e}", file=sys.stderr)
                 sources = None
             print(to_markdown(doc, manifest, include_resolved=a.all, page=a.page, sources=sources,
-                              handoff=store.handoff_state(d)), end="")
+                              handoff=store.handoff_state(d, full=False)), end="")
         return 0
     if a.cmd in ("resolve", "reopen"):
         status = "resolved" if a.cmd == "resolve" else "open"
@@ -366,7 +421,21 @@ def main(argv: list[str] | None = None) -> int:
         except store.NotFound:
             print("没有待处理或处理中的提交（用户还没点「交给 Agent」，或已全部标为已处理）。", file=sys.stderr)
             return 1
-        print(f"第 {item['seq']} 次提交 → 已处理。页面会显示处理结果。")
+        print(f"第 {item['seq']} 批 → 已处理：这批解决 {item.get('resolvedCount', 0)} 条"
+              + (f"，提交时的批注还剩 {item['leftOpen']} 条未处理" if item.get("leftOpen") else "")
+              + "。页面的处理记录里会显示这批和处理摘要。")
+        if not item.get("resolvedCount"):
+            print("提示：这批没有统计到已处理的批注——改完的批注要用 notes.py resolve 逐条标记，处理记录才数得到。", file=sys.stderr)
+        return 0
+    if a.cmd == "batches":
+        state = store.handoff_state(d)
+        if state.get("error"):
+            print(f"错误：{state['error']}", file=sys.stderr)
+            return 1
+        if a.json:
+            print(json.dumps(state, ensure_ascii=False, indent=2))
+        else:
+            print(batches_text(state, store.load(d)["notes"], limit=a.last), end="")
         return 0
     return 2
 
@@ -402,7 +471,7 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str) -> i
         print(f"警告：{e}", file=sys.stderr)
         sources = None
     pages = "、".join(str(p) for p in item.get("pages") or []) or "无"
-    print(f"# 收到「交给 Agent」第 {item['seq']} 次提交（{item.get('at')}）")
+    print(f"# 收到「交给 Agent」第 {item['seq']} 批（{item.get('at')}）")
     if item.get("message"):
         print(f"用户附言：{item['message']}")
     need = sorted({x for n in store.load(d)["notes"] if n.get("status") != "resolved" for x in (n.get("skills") or [])})

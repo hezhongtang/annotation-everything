@@ -30,10 +30,13 @@ LOCK_FILE = ".notes.lock"
 SCHEMA_VERSION = 1
 STATUSES = ("open", "resolved")
 # 页面可写的字段；id / at / status 相关字段由存储层或专门操作维护
-EDITABLE = ("page", "title", "target", "text", "quote", "quoteFrom", "pin", "edit", "pair", "skills", "style", "anchor",
-            "key", "orphan")
+EDITABLE = ("page", "title", "target", "text", "quote", "quoteFrom", "pin", "region", "edit", "pair", "skills", "style",
+            "anchor", "key", "orphan")
 # key：页面键（报告 section 的 data-key），重排页序后据此把批注挪回正确的页；orphan：重建后原页面已不存在
-# 风格优化：整页 / 框选区域 / 标点处；区域为相对页面的百分比 {x, y, w, h}
+# 报告上的标注：pin = 点 {x, y}，region = 框 {x, y, w, h}，都是相对页面的百分比。页面新写的批注只带其中一种
+# （新建、重新标注时两个字段一起发，另一种为 null）；拖动只改被拖的那一种。
+# 风格优化的范围跟着标注走：有框 = region（框选处），有点 = pin（标点处），都没有 = page（整页）。
+# 0.3 及更早只有风格优化能框选，框存在 style.region 里；读入时挪到顶层 region，不改原来的范围、不删点。
 STYLE_SCOPES = ("page", "region", "pin")
 # 处理这条批注时需要调用的技能（skill / 工具名），由用户在页面上指定，代理处理前先调用
 MAX_SKILLS = 10
@@ -104,6 +107,8 @@ def load(review_dir: Path) -> dict[str, Any]:
     doc.setdefault("version", SCHEMA_VERSION)
     for n in doc["notes"]:
         n.setdefault("status", "open")
+        if isinstance(n, dict):
+            _settle_marks(n)   # 0.3 旧数据：框从 style.region 挪到顶层 region（下次写盘时落盘）
     return doc
 
 
@@ -154,6 +159,47 @@ def _clean_pin(pin: Any) -> dict[str, float] | None:
     if not (math.isfinite(x) and math.isfinite(y) and 0 <= x <= 100 and 0 <= y <= 100):
         raise NoteError("pin 坐标须在 0–100 之间")
     return {"x": round(x, 1), "y": round(y, 1)}
+
+
+def _clean_region(v: Any, name: str = "region") -> dict[str, float] | None:
+    if v in (None, "", {}):
+        return None
+    if not isinstance(v, dict):
+        raise NoteError(f"{name} 须为 {{x, y, w, h}} 或 null")
+    try:
+        x, y, w, h = (float(v[k]) for k in ("x", "y", "w", "h"))
+    except (TypeError, KeyError, ValueError) as e:
+        raise NoteError(f"{name} 须含数值 x、y、w、h（百分比）") from e
+    if not all(math.isfinite(t) for t in (x, y, w, h)) or not (0 <= x <= 100 and 0 <= y <= 100 and 0 < w <= 100 and 0 < h <= 100):
+        raise NoteError(f"{name} 超出页面范围")
+    return {"x": round(x, 1), "y": round(y, 1), "w": round(min(w, 100 - x), 1), "h": round(min(h, 100 - y), 1)}
+
+
+def region_of(n: dict[str, Any]) -> dict[str, Any] | None:
+    """批注在报告上框选的范围；兼容 0.3 存在 style.region 里的旧数据。"""
+    r = n.get("region")
+    if isinstance(r, dict):
+        return r
+    st = n.get("style")
+    return st["region"] if isinstance(st, dict) and isinstance(st.get("region"), dict) else None
+
+
+def _settle_marks(note: dict[str, Any], fields: dict[str, Any] | None = None) -> None:
+    """整理标注。
+
+    - 0.3 旧数据的框（style.region）挪到顶层 region；原来的风格范围、点都原样保留（不丢用户当时的选择）。
+    - 这次改动动了标注时，风格优化的范围跟着标注走；只有「整页」且这次没有同时给出点和框（只是拖动）时保持整页。
+    """
+    st = note.get("style")
+    if isinstance(st, dict) and isinstance(st.get("region"), dict):
+        if not note.get("region"):
+            note["region"] = st["region"]
+        note["style"] = st = {k: v for k, v in st.items() if k != "region"}
+    if not note.get("region"):
+        note.pop("region", None)
+    if fields and isinstance(st, dict) and st.get("scope") and ("pin" in fields or "region" in fields):
+        if ("pin" in fields and "region" in fields) or st["scope"] != "page":
+            note["style"] = {"scope": "region" if note.get("region") else "pin" if note.get("pin") else "page"}
 
 
 def _clean_edit(v: Any) -> dict[str, str] | None:
@@ -221,15 +267,8 @@ def _clean_style(v: Any) -> dict[str, Any] | None:
     if not isinstance(v, dict) or v.get("scope") not in STYLE_SCOPES:
         raise NoteError(f"style.scope 须为 {STYLE_SCOPES} 之一")
     out: dict[str, Any] = {"scope": v["scope"]}
-    if v["scope"] == "region":
-        r = v.get("region")
-        try:
-            x, y, w, h = (float(r[k]) for k in ("x", "y", "w", "h"))
-        except (TypeError, KeyError, ValueError) as e:
-            raise NoteError("style.region 须含数值 x、y、w、h（百分比）") from e
-        if not all(math.isfinite(t) for t in (x, y, w, h)) or not (0 <= x <= 100 and 0 <= y <= 100 and 0 < w <= 100 and 0 < h <= 100):
-            raise NoteError("style.region 超出页面范围")
-        out["region"] = {"x": round(x, 1), "y": round(y, 1), "w": round(min(w, 100 - x), 1), "h": round(min(h, 100 - y), 1)}
+    if v.get("region") not in (None, "", {}):   # 0.3 旧格式：框存在 style.region 里；由 _settle_marks 挪到顶层
+        out["region"] = _clean_region(v["region"], "style.region")
     return out
 
 
@@ -256,6 +295,8 @@ def _clean_fields(data: dict[str, Any], *, partial: bool) -> dict[str, Any]:
                 raise NoteError("page 超出范围")
         elif k == "pin":
             v = _clean_pin(v)
+        elif k == "region":
+            v = _clean_region(v)
         elif k == "edit":
             v = _clean_edit(v)
         elif k == "pair":
@@ -278,6 +319,10 @@ def _clean_fields(data: dict[str, Any], *, partial: bool) -> dict[str, Any]:
             else:  # 标题、对象等短字段：超长就截断，不拒绝（否则这一页永远加不上批注）
                 v = v[:MAX_SHORT]
         out[k] = v
+    st = out.get("style")
+    if isinstance(st, dict) and "region" in st:   # 0.3 页面的改动（含离线队列补传）：框写在 style.region 里
+        reg = st.pop("region")
+        out.setdefault("region", reg)
     if not partial:
         if "page" not in out:
             raise NoteError("缺少 page")
@@ -312,6 +357,7 @@ def _new_note(raw: dict[str, Any], fields: dict[str, Any], nid: str) -> dict[str
                 note[k] = str(raw[k])[:MAX_TEXT]
     if _clean_time(raw.get("updatedAt")):
         note["updatedAt"] = raw["updatedAt"]
+    _settle_marks(note)
     return note
 
 
@@ -346,6 +392,7 @@ def update(review_dir: Path, note_id: str, data: dict[str, Any], *, by: str = "p
             elif fields["text"] not in (DELETE_TEXT,) and not fields["text"].startswith(REPLACE_PREFIX):
                 fields["edit"] = None   # 改成了普通意见
         note.update(fields)
+        _settle_marks(note, fields)
         if note.get("edit") is None:
             note.pop("edit", None)
         note["updatedAt"] = now_iso()
@@ -364,8 +411,16 @@ def set_status(review_dir: Path, note_id: str, status: str, *, resolution: str =
             note["resolvedBy"] = by
             if resolution:
                 note["resolution"] = fix_text(resolution)[:MAX_TEXT]
+            note.pop("resolvedBatch", None)
+            if by != "page":   # 代理标的：记下当时处理中的批次，处理记录据此统计每批解决了哪些
+                try:
+                    cur = next((i for i in reversed(handoff_load(review_dir)["items"]) if i.get("status") == "claimed"), None)
+                except (OSError, ValueError):
+                    cur = None
+                if cur:
+                    note["resolvedBatch"] = int(cur.get("seq", 0))
         else:
-            for k in ("resolvedAt", "resolvedBy", "resolution"):
+            for k in ("resolvedAt", "resolvedBy", "resolution", "resolvedBatch"):
                 note.pop(k, None)
         op = "resolve" if status == "resolved" else "reopen"
         return _commit(review_dir, doc, {"op": op, "by": by, "id": note_id, "resolution": resolution}), note
@@ -380,14 +435,14 @@ def delete(review_dir: Path, note_id: str, *, by: str = "page") -> dict[str, Any
 
 
 def dedup_key(n: dict[str, Any]) -> tuple:
-    """内容相同的判定：页码、对象、正文、引用、标点都相同。同一页不同位置写同样的话不算重复。"""
+    """内容相同的判定：页码、对象、正文、引用、标注（点 / 框）、是否风格优化都相同。同一页不同位置写同样的话不算重复。"""
     pin = n.get("pin") or None
     pin_t = (round(float(pin["x"]), 1), round(float(pin["y"]), 1)) if isinstance(pin, dict) and "x" in pin else None
-    st = n.get("style") if isinstance(n.get("style"), dict) else {}
-    rg = st.get("region") if isinstance(st.get("region"), dict) else {}
-    st_t = (st.get("scope"), *(round(float(rg.get(k, 0) or 0), 1) for k in ("x", "y", "w", "h"))) if st else None
+    rg = region_of(n)
+    rg_t = tuple(round(float(rg.get(k, 0) or 0), 1) for k in ("x", "y", "w", "h")) if rg else None
+    st_t = bool(isinstance(n.get("style"), dict) and n["style"].get("scope"))
     return (int(n.get("page", 0)), str(n.get("target", "")).strip(), str(n.get("text", "")).strip(),
-            str(n.get("quote", "")).strip(), pin_t, st_t)
+            str(n.get("quote", "")).strip(), pin_t, rg_t, st_t)
 
 
 def _stamp(n: dict[str, Any]) -> float:
@@ -429,6 +484,9 @@ def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "im
                 if _stamp(raw) > _stamp(cur):
                     fresh = _new_note(raw, fields, nid)
                     fresh["at"] = cur.get("at", fresh["at"])
+                    if fresh["status"] == "resolved" and cur.get("resolvedBatch") is not None \
+                            and fresh.get("resolvedAt") == cur.get("resolvedAt"):
+                        fresh["resolvedBatch"] = cur["resolvedBatch"]   # 同一次处理：保留批次号
                     cur.clear()
                     cur.update(fresh)
                     updated += 1
@@ -453,7 +511,7 @@ def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "im
 # 提交存 handoff.json，状态 pending（等待接收）→ claimed（代理已接收、处理中）→ done（已处理）。
 # 任何代理都可以：跑 notes.py wait 阻塞等待，或自己轮询 handoff.json。
 HANDOFF_FILE = "handoff.json"
-HANDOFF_KEEP = 50
+HANDOFF_KEEP = 200   # 处理记录（批次）保留条数
 MAX_MSG = 4000
 
 
@@ -477,18 +535,83 @@ def _handoff_commit(review_dir: Path, doc: dict[str, Any], log: dict[str, Any]) 
     return doc
 
 
-def handoff_state(review_dir: Path) -> dict[str, Any]:
-    """给页面和 status 用的摘要：最近一次提交（不含批注 id 清单）与各状态计数。"""
+def batch_resolved(notes: list[dict[str, Any]], item: dict[str, Any], end: str | None = None,
+                   next_start: str | None = None) -> list[dict[str, Any]]:
+    """这一批里被代理标为已处理的批注。标的时候记了批次号（resolvedBatch）就按批次号；
+    没记的（0.3 旧数据、代理没先接收）按时间窗：从接收（没接收就从提交）起，到收尾、且早于下一批被接收，
+    由页面以外（代理）标的。下一批的接收时间是开区间上界，相邻两批不会重复计数。"""
+    seq = int(item.get("seq", 0) or 0)
+    start, stop = _ts(item.get("claimedAt") or item.get("at")), _ts(end) if end else None
+    nxt = _ts(next_start) if next_start else None
+    out = []
+    for n in notes:
+        if n.get("status") != "resolved":
+            continue
+        if n.get("resolvedBatch") is not None:
+            if n["resolvedBatch"] == seq:
+                out.append(n)
+            continue
+        t = _ts(n.get("resolvedAt"))
+        if n.get("resolvedBy") not in (None, "", "page") and t and t >= start \
+                and (stop is None or t <= stop) and (nxt is None or t < nxt):
+            out.append(n)
+    return out
+
+
+def _ts(v: Any) -> float:
+    """ISO 时间转时间戳（兼容 Z 结尾与带时区偏移的写法）；解析不了返回 0。"""
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _next_start(items: list[dict[str, Any]], item: dict[str, Any]) -> str | None:
+    """下一批被接收的时间（时间窗推算的上界）；下一批还没被接收则没有上界。"""
+    k = next((j for j, it in enumerate(items) if it is item), -1)
+    return items[k + 1].get("claimedAt") if 0 <= k < len(items) - 1 else None
+
+
+def _batch_stats(notes: list[dict[str, Any]], item: dict[str, Any], end: str | None,
+                 next_start: str | None = None) -> dict[str, Any]:
+    got = batch_resolved(notes, item, end, next_start)
+    open_now = {n.get("id") for n in notes if n.get("status") != "resolved"}
+    return {"resolvedIds": [n.get("id") for n in got], "resolvedCount": len(got),
+            "resolvedPages": sorted({int(n.get("page", 0) or 0) for n in got}),
+            "leftOpen": sum(1 for x in item.get("openIds") or [] if x in open_now)}
+
+
+def handoff_state(review_dir: Path, *, full: bool = True) -> dict[str, Any]:
+    """给页面和 status 用的摘要：最近一批、各状态计数，以及（full 时）全部批次 history（处理记录，新的在前，
+    不含提交时的批注 id 清单）。页面轮询用 full=False，打开处理记录时再取全量。
+
+    已处理的批次带收尾时记下的「这批解决了哪些批注」；0.3 留下的旧批次没有记，按时间窗补算并标 estimated；
+    处理中的批次按当前进度实时算（live）。
+    """
     try:
         doc = handoff_load(review_dir)
     except ValueError:
         return {"error": "handoff.json 无法解析"}
     items = doc["items"]
-    latest = dict(items[-1]) if items else None
-    if latest:
-        latest.pop("openIds", None)
-    return {"latest": latest, "pending": sum(i.get("status") == "pending" for i in items),
-            "claimed": sum(i.get("status") == "claimed" for i in items)}
+    try:
+        notes = load(review_dir)["notes"]
+    except (OSError, ValueError):
+        notes = []
+    history = []
+    for it in reversed(items if full else items[-1:]):
+        h = {k: v for k, v in it.items() if k != "openIds"}
+        if it.get("status") == "claimed":
+            h.update(_batch_stats(notes, it, None, _next_start(items, it)), live=True)
+        elif it.get("status") == "done" and "resolvedIds" not in it:
+            h.update(_batch_stats(notes, it, it.get("doneAt"), _next_start(items, it)), estimated=True)
+        history.append(h)
+    out = {"latest": history[0] if history else None, "total": len(items),
+           "pending": sum(i.get("status") == "pending" for i in items),
+           "claimed": sum(i.get("status") == "claimed" for i in items),
+           "done": sum(i.get("status") == "done" for i in items)}
+    if full:
+        out["history"] = history
+    return out
 
 
 def handoff_submit(review_dir: Path, message: str = "", *, by: str = "page") -> tuple[dict[str, Any], dict[str, Any], bool]:
@@ -539,7 +662,12 @@ def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "",
         if item is None:
             raise NotFound(f"handoff#{seq}" if seq is not None else "没有待处理的提交")
         item.update({"status": "done", "doneAt": now_iso(), "doneBy": by, "summary": fix_text(summary)[:MAX_MSG]})
-        _handoff_commit(review_dir, doc, {"op": "handoff-done", "by": by, "seq": item["seq"]})
+        try:   # 处理记录：这批解决了哪些批注（notes.json 读不了也照样收尾，只是不记统计）
+            item.update(_batch_stats(load(review_dir)["notes"], item, item["doneAt"], _next_start(items, item)))
+        except (OSError, ValueError):
+            pass
+        _handoff_commit(review_dir, doc, {"op": "handoff-done", "by": by, "seq": item["seq"],
+                                          "resolvedCount": item.get("resolvedCount"), "leftOpen": item.get("leftOpen")})
         return item
 
 

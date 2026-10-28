@@ -247,7 +247,8 @@ def main() -> int:
         page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
         page.click('#pinpop [data-pp="unpin"]')
         page.wait_for_timeout(600)
-        ok([n for n in disk_notes(sdir) if n["id"] == tid][0]["pin"] is None, "在标点弹窗里「去掉标点」")
+        tn = [n for n in disk_notes(sdir) if n["id"] == tid][0]
+        ok(tn["pin"] is None and not tn.get("region"), "在标注弹窗里「去掉标注」")
         page.click(f'#nlist [data-note="{tid}"] [data-act="del"]')
         page.wait_for_timeout(600)
         ok(not any(n["id"] == tid for n in disk_notes(sdir)), "删除批注（确认后）")
@@ -313,12 +314,12 @@ def main() -> int:
         page.mouse.move(tb["x"] + tb["width"] + 4, tb["y"] + tb["height"] + 4, steps=8)
         page.mouse.up()
         page.wait_for_timeout(200)
-        ok("风格优化 · 选中区域" in page.inner_text("#styleChip"), "框选后输入框标明「风格优化 · 选中区域」")
+        ok("风格优化 · 框选处" in page.inner_text("#styleChip"), "S → 2 后拖动框选，输入框标明「风格优化 · 框选处」")
         page.fill("#ntext", "表格太挤，加大行距并对齐")
         page.click('[data-act="add"]')
         page.wait_for_timeout(600)
         rg = [n for n in disk_notes(sdir) if n["text"] == "表格太挤，加大行距并对齐"]
-        ok(rg and rg[0]["style"]["scope"] == "region" and rg[0]["style"]["region"]["w"] > 5 and "table" in (rg[0].get("anchor") or ""),
+        ok(rg and rg[0]["style"] == {"scope": "region"} and rg[0]["region"]["w"] > 5 and "table" in (rg[0].get("anchor") or ""),
            f"框选区域的风格优化落盘，附位置线索（{(rg[0].get('anchor') or '')[:40] if rg else ''}）")
         reg = page.locator(f'#host .ae-region[data-id="{rg[0]["id"]}"]')
         bb = reg.bounding_box()
@@ -327,8 +328,10 @@ def main() -> int:
         page.mouse.move(bb["x"] + bb["width"] / 2 + 40, bb["y"] + bb["height"] / 2 + 30, steps=6)
         page.mouse.up()
         page.wait_for_timeout(600)
-        moved = [n for n in disk_notes(sdir) if n["id"] == rg[0]["id"]][0]["style"]["region"]
-        ok(moved["x"] > rg[0]["style"]["region"]["x"] and moved["w"] == rg[0]["style"]["region"]["w"], "拖动区域：新位置落盘，大小不变")
+        moved_n = [n for n in disk_notes(sdir) if n["id"] == rg[0]["id"]][0]
+        moved = moved_n["region"]
+        ok(moved["x"] > rg[0]["region"]["x"] and moved["w"] == rg[0]["region"]["w"] and moved_n["style"] == {"scope": "region"},
+           "拖动区域：新位置落盘，大小不变")
         bb = reg.bounding_box()
         page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
         ok(page.is_visible("#pinpop") and "表格太挤" in page.inner_text("#pinpop"), "点击区域弹出这条批注")
@@ -342,7 +345,55 @@ def main() -> int:
         ok(whole and whole[0]["text"] == "风格优化：整页" and whole[0]["target"] == "报告" and "整页" in whole[0].get("anchor", ""),
            "整页风格优化：不写方向也能添加")
         shown = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "show", str(sdir)], capture_output=True, text=True).stdout
-        ok("·风格优化·区域（x " in shown and "位置线索：table" in shown and "·风格优化·整页】" in shown, "notes.py show 写明风格优化的范围与位置线索")
+        ok("·风格优化·框选处】" in shown and "·框选 " in shown and "位置线索：" in shown and "·风格优化·整页】" in shown,
+           "notes.py show 写明风格优化的范围、框的坐标与位置线索")
+        # 通用标注：P 之后拖动 = 框选（普通批注也能框）；框拖右下角调大小；已有批注可重新标注（单击 = 点）、去掉标注
+        page.keyboard.press("Escape")
+        page.keyboard.press("p")
+        sec = page.locator("#host section.page").bounding_box()
+        page.mouse.move(sec["x"] + sec["width"] * .1, sec["y"] + sec["height"] * .15)
+        page.mouse.down()
+        page.mouse.move(sec["x"] + sec["width"] * .35, sec["y"] + sec["height"] * .35, steps=8)
+        page.mouse.up()
+        page.wait_for_timeout(200)
+        ok(page.locator("#host .ae-region.pending").count() == 1 and page.locator("#host .ae-pin.pending").count() == 0
+           and "on" not in (page.get_attribute("#pinBtn", "class") or ""), "标注模式下拖动 = 框选一块区域（不是放点），放好后退出标注模式")
+        ok(not page.is_visible("#styleChip"), "普通框选不会变成风格优化")
+        page.fill("#ntext", "这块口径要和讲稿一致")
+        page.click('[data-act="add"]')
+        page.wait_for_timeout(600)
+        bx = [n for n in disk_notes(sdir) if n["text"] == "这块口径要和讲稿一致"]
+        ok(bx and bx[0].get("region") and abs(bx[0]["region"]["w"] - 25) < 2 and not bx[0].get("style") and not bx[0].get("pin")
+           and bx[0]["target"] == "报告" and bx[0].get("anchor"), f"普通批注框选：区域与位置线索落盘（{bx[0].get('region') if bx else ''}）")
+        bid, r1 = bx[0]["id"], bx[0]["region"]
+        ok("框选 " in page.inner_text(f'#nlist [data-note="{bid}"] .meta'), "批注卡片标明「框选 n」")
+        rz = page.locator(f'#host .ae-region[data-id="{bid}"] .rz').bounding_box()
+        page.mouse.move(rz["x"] + rz["width"] / 2, rz["y"] + rz["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(rz["x"] + 70, rz["y"] + 45, steps=6)
+        page.mouse.up()
+        page.wait_for_timeout(600)
+        r2 = [n for n in disk_notes(sdir) if n["id"] == bid][0]["region"]
+        ok(r2["w"] > r1["w"] and r2["h"] > r1["h"] and r2["x"] == r1["x"] and r2["y"] == r1["y"], f"拖框的右下角调大小：落盘，位置不变（{r1} → {r2}）")
+        page.click(f'#nlist [data-note="{bid}"] [data-act="edit"]')
+        page.click(f'#nlist [data-note="{bid}"] [data-act="remark"]')
+        ok("on" in (page.get_attribute("#pinBtn", "class") or ""), "编辑里点「重新标注」进入标注模式")
+        page.mouse.click(sec["x"] + sec["width"] * .8, sec["y"] + sec["height"] * .8)
+        page.wait_for_timeout(600)
+        rn = [n for n in disk_notes(sdir) if n["id"] == bid][0]
+        ok(rn.get("pin") and not rn.get("region") and page.locator(f'#host .ae-pin[data-id="{bid}"]').count() == 1,
+           "重新标注时单击 = 放点，原来的框被替换")
+        page.click(f'#nlist [data-note="{bid}"] [data-act="unpin"]')
+        page.wait_for_timeout(600)
+        rn = [n for n in disk_notes(sdir) if n["id"] == bid][0]
+        ok(not rn.get("pin") and not rn.get("region") and page.locator(f'#host [data-id="{bid}"]').count() == 0, "编辑里「去掉标注」")
+        page.click(f'#nlist [data-note="{bid}"] [data-act="remark"]')
+        page.click(f'#nlist [data-note="{bid}"] [data-act="cancel"]')
+        page.mouse.click(sec["x"] + sec["width"] * .5, sec["y"] + sec["height"] * .9)
+        page.wait_for_timeout(500)
+        rn = [n for n in disk_notes(sdir) if n["id"] == bid][0]
+        ok("on" not in (page.get_attribute("#pinBtn", "class") or "") and not rn.get("pin"),
+           "点了「重新标注」又取消：退出标注模式，之后随手点报告不会改这条批注")
         # 从一条的编辑直接切到另一条：草稿各归各的
         cur = {n["id"]: n for n in disk_notes(sdir)}
         cards = page.locator("#nlist [data-note]")
@@ -372,7 +423,7 @@ def main() -> int:
         page.keyboard.press("Escape")
         # 快捷键
         page.keyboard.press("p")
-        ok("on" in (page.get_attribute("#pinBtn", "class") or ""), "按 P 进入标点模式")
+        ok("on" in (page.get_attribute("#pinBtn", "class") or ""), "按 P 进入标注模式")
         page.keyboard.press("Escape")
         page.keyboard.press("c")
         ok(page.evaluate("document.activeElement.id") == "ntext", "按 C 聚焦输入框")
@@ -421,20 +472,36 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             waiter.kill()
             wout = ""
-        ok(waiter.returncode == 0 and "第 1 次提交" in wout and "先改第 3 页" in wout and "指定了技能：dataviz、humanizer-zh" in wout,
+        ok(waiter.returncode == 0 and "第 1 批" in wout and "先改第 3 页" in wout and "指定了技能：dataviz、humanizer-zh" in wout,
            "后台等待的 notes.py wait 随即退出，输出提交、附言与要用的技能")
         page.wait_for_timeout(4800)
         ok("Agent 处理中" in page.inner_text("#handState"), "代理接收后页面显示「Agent 处理中」")
+        fixed = [n for n in disk_notes(sdir) if n["status"] == "open"][0]
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "resolve", str(sdir), fixed["id"], "--note", "标题缩短了", "--by", "claude"],
+                       check=True, capture_output=True)
         subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "done", str(sdir), "--summary", "第 3 页已改"],
                        check=True, capture_output=True)
         page.wait_for_timeout(4800)
-        ok("Agent 已处理" in page.inner_text("#handState") and "第 3 页已改" in (page.get_attribute("#handState", "title") or ""),
-           "代理收尾后页面显示「Agent 已处理」与处理结果")
+        hs = page.inner_text("#handState")
+        ok("Agent 已处理 · 第 1 批（解决 1 条）" in hs and "第 3 页已改" in (page.get_attribute("#handState", "title") or ""),
+           f"代理收尾后页面显示「Agent 已处理 · 第 1 批（解决 1 条）」与处理摘要（{hs}）")
+        page.click("#handState")
+        page.wait_for_timeout(200)
+        bl = page.inner_text("#batchList") if page.is_visible("#batches") else ""
+        ok("第 1 批" in bl and "解决 1 条" in bl and "处理摘要：第 3 页已改" in bl and "处理说明：标题缩短了" in bl and "附言：先改第 3 页" in bl,
+           "点 Agent 状态打开处理记录：批次、解决几条、处理摘要、每条的处理说明")
+        page.click(f'#batchList [data-goto="{fixed["id"]}"]')
+        page.wait_for_timeout(300)
+        ok(not page.is_visible("#batches") and page.input_value("#jump") == str(fixed["page"] - 1),
+           "在处理记录里点一条批注：跳到它所在的页")
+        page.keyboard.press("j")
+        ok(page.is_visible("#batches"), "按 J 打开处理记录")
+        page.keyboard.press("Escape")
         go_page(page, 1)
         page.reload()
         page.wait_for_timeout(900)
         rs = page.inner_text("#resume")
-        ok("上次批注到第" in rs and "Agent 已处理完第 1 次提交" in rs, f"重新打开时提示上次批注到哪页、Agent 是否处理完（{rs[:60]}…）")
+        ok("上次批注到第" in rs and "Agent 已处理完第 1 批（解决 1 条）" in rs, f"重新打开时提示上次批注到哪页、Agent 是否处理完（{rs[:60]}…）")
         page.keyboard.press("l")
         page.wait_for_timeout(200)
         from datetime import datetime
@@ -465,6 +532,37 @@ def main() -> int:
         last = json.loads((sdir / "handoff.json").read_text())["items"][-1]
         ok(last["seq"] == 2 and last["status"] == "pending" and {n["id"] for n in dels} <= set(last["openIds"]),
            "暂存的「交给 Agent」在批注补传之后才提交（提交快照里包含这两条）")
+        # 处理记录：用户展开的批次在状态变化重绘后仍展开
+        page.keyboard.press("Escape")
+        page.keyboard.press("j")
+        page.wait_for_timeout(500)
+        page.click('#batchList details[data-seq="1"] summary')
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "claim", str(sdir)], check=True, capture_output=True)
+        page.wait_for_timeout(4800)
+        ok("处理中" in page.inner_text("#batchList") and page.evaluate(
+            "document.querySelector('#batchList details[data-seq=\"1\"]').open"), f"处理记录随状态刷新，用户展开的批次保持展开（{page.inner_text('#batchList')[:120]!r}）")
+        page.keyboard.press("Escape")
+        # 背后是旧版服务（没有 marks 功能）：提示并拦住框选，不让改动被静默丢掉
+        old = ctx.new_page()
+        def strip_features(route):
+            r = route.fetch()
+            body = r.json()
+            body.pop("features", None)
+            route.fulfill(response=r, json=body)
+        old.route("**/api/notes", strip_features)
+        old.goto(f"http://127.0.0.1:{port}/")
+        old.wait_for_timeout(1200)
+        ok("旧版服务" in old.inner_text("#mode"), "背后是旧版服务：状态处显示「旧版服务」")
+        old.keyboard.press("p")
+        ob = old.locator("#host section.page").bounding_box()
+        old.mouse.move(ob["x"] + 40, ob["y"] + 40)
+        old.mouse.down()
+        old.mouse.move(ob["x"] + 240, ob["y"] + 160, steps=6)
+        old.mouse.up()
+        old.wait_for_timeout(200)
+        ok(old.locator("#host .ae-region.pending").count() == 0 and "旧版本" in old.inner_text("#toast"),
+           "旧版服务时拖框被拦下并提示停掉旧服务")
+        old.close()
 
         # ---------- 5. 写入失败与坏字符 ----------
         os.chmod(sdir, 0o500)

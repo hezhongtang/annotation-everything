@@ -207,6 +207,118 @@ class CliTests(unittest.TestCase):
         self.assertEqual(len(store.load(self.d)["notes"]), 3)
 
 
+class BatchTests(unittest.TestCase):
+    """处理记录：每次「交给 Agent」算一批，记下这批解决了哪些批注与处理摘要。"""
+
+    def setUp(self):
+        self.d = tmpdir()
+        (self.d / "index.html").write_text("x")
+
+    def test_batches_count_what_each_batch_resolved(self):
+        a = store.add(self.d, {"page": 2, "text": "第一批 A"})[1]["id"]
+        b = store.add(self.d, {"page": 3, "text": "第一批 B"})[1]["id"]
+        c = store.add(self.d, {"page": 3, "text": "留给用户定"})[1]["id"]
+        store.set_status(self.d, c, "resolved")                       # 用户自己在页面上标的：不算代理这批
+        store.set_status(self.d, c, "open")
+        store.handoff_submit(self.d, "先改 2、3 页")
+        store.handoff_claim(self.d, by="claude")
+        store.set_status(self.d, a, "resolved", resolution="改了标题", by="claude")
+        live = store.handoff_state(self.d)["latest"]
+        self.assertEqual((live["status"], live["resolvedCount"], live.get("live")), ("claimed", 1, True), "处理中实时统计")
+        store.set_status(self.d, b, "resolved", by="claude")
+        done = store.handoff_done(self.d, summary="改了 2 条，口径那条留给你", by="claude")
+        self.assertEqual((done["resolvedIds"], done["resolvedCount"], done["resolvedPages"], done["leftOpen"]),
+                         ([a, b], 2, [2, 3], 1))
+        # 第二批：只解决 c
+        store.handoff_submit(self.d, "")
+        store.handoff_claim(self.d, by="claude")
+        store.set_status(self.d, c, "resolved", by="claude")
+        done2 = store.handoff_done(self.d, summary="收尾", by="claude")
+        self.assertEqual((done2["seq"], done2["resolvedIds"], done2["leftOpen"]), (2, [c], 0))
+        notes = {n["id"]: n for n in store.load(self.d)["notes"]}
+        self.assertEqual((notes[a]["resolvedBatch"], notes[c]["resolvedBatch"]), (1, 2))
+        st = store.handoff_state(self.d)
+        self.assertEqual(([h["seq"] for h in st["history"]], st["done"]), ([2, 1], 2), "处理记录新的在前")
+        self.assertTrue(all("openIds" not in h for h in st["history"]))
+        store.set_status(self.d, a, "open")                           # 之后重新打开：批次号去掉
+        self.assertNotIn("resolvedBatch", [n for n in store.load(self.d)["notes"] if n["id"] == a][0])
+        txt = notes_cli.batches_text(store.handoff_state(self.d), store.load(self.d)["notes"])
+        self.assertIn("# 处理记录 · 共 2 批（已处理 2，处理中 0，等待接收 0）", txt)
+        self.assertIn("## 第 1 批 · 已处理（claude）", txt)
+        self.assertIn("解决 2 条（第 2、3 页）；提交时的批注还剩 1 条未处理", txt)
+        self.assertIn("处理摘要：改了 2 条，口径那条留给你", txt)
+        self.assertIn(f"- `{a}` 第 2 页【未指定】第一批 A（之后被重新打开）", txt)
+
+    def test_legacy_batch_estimated_by_time(self):
+        a = store.add(self.d, {"page": 1, "text": "旧批次里改的"})[1]["id"]
+        store.add(self.d, {"page": 1, "text": "没改的"})
+        legacy = {"version": 1, "seq": 1, "items": [{"seq": 1, "status": "done", "at": "2026-10-27T10:00:00+08:00",
+                                                       "claimedAt": "2026-10-27T10:01:00+08:00", "doneAt": "2099-01-01T00:00:00+08:00",
+                                                       "openCount": 2, "openIds": [], "pages": [1], "summary": "旧版收尾"}]}
+        (self.d / store.HANDOFF_FILE).write_text(json.dumps(legacy), encoding="utf-8")
+        doc = store.load(self.d)
+        for n in doc["notes"]:
+            if n["id"] == a:
+                n.update(status="resolved", resolvedBy="claude", resolvedAt="2026-10-27T03:00:00Z")   # = 11:00 +08:00
+        (self.d / "notes.json").write_text(json.dumps(doc), encoding="utf-8")
+        h = store.handoff_state(self.d)["history"][0]
+        self.assertEqual((h["resolvedIds"], h.get("estimated")), ([a], True), "0.3 旧批次按处理时间推算（跨时区写法也能比）")
+
+    def test_legacy_interrupted_batch_not_double_counted(self):
+        ids = [store.add(self.d, {"page": 1, "text": f"n{k}"})[1]["id"] for k in range(4)]
+        legacy = {"version": 1, "seq": 3, "items": [
+            {"seq": 1, "status": "claimed", "at": "2026-10-27T10:00:00+08:00", "claimedAt": "2026-10-27T10:01:00+08:00", "openIds": []},
+            {"seq": 2, "status": "done", "at": "2026-10-27T11:00:00+08:00", "claimedAt": "2026-10-27T11:01:00+08:00",
+             "doneAt": "2026-10-27T11:30:00+08:00", "openIds": []},
+            {"seq": 3, "status": "done", "at": "2026-10-27T12:00:00+08:00", "claimedAt": "2026-10-27T12:01:00+08:00",
+             "doneAt": "2026-10-27T12:30:00+08:00", "openIds": []}]}
+        (self.d / store.HANDOFF_FILE).write_text(json.dumps(legacy), encoding="utf-8")
+        doc = store.load(self.d)
+        times = ["2026-10-27T10:05:00+08:00", "2026-10-27T11:05:00+08:00", "2026-10-27T12:01:00+08:00", "2026-10-27T12:05:00+08:00"]
+        for n, t in zip(doc["notes"], times):
+            n.update(status="resolved", resolvedBy="claude", resolvedAt=t)
+        (self.d / "notes.json").write_text(json.dumps(doc), encoding="utf-8")
+        hist = {h["seq"]: h["resolvedIds"] for h in store.handoff_state(self.d)["history"]}
+        self.assertEqual(hist, {1: [ids[0]], 2: [ids[1]], 3: [ids[2], ids[3]]}, "按下一批接收时间切开，同一秒算后一批，不重复")
+        done = store.handoff_done(self.d, seq=1, summary="补收尾")
+        self.assertEqual(done["resolvedIds"], [ids[0]], "补收尾中断的旧批次：不把后面几批的批注写进来")
+
+    def test_import_keeps_batch_and_done_survives_bad_notes(self):
+        a = store.add(self.d, {"page": 1, "text": "x"})[1]["id"]
+        store.handoff_submit(self.d, "")
+        store.handoff_claim(self.d)
+        _d, n = store.set_status(self.d, a, "resolved", resolution="改了", by="claude")
+        later = {**n, "resolution": "改了（补充说明）", "updatedAt": "2099-01-01T00:00:00+00:00"}
+        store.import_notes(self.d, [later])
+        n2 = store.load(self.d)["notes"][0]
+        self.assertEqual((n2["resolution"], n2.get("resolvedBatch")), ("改了（补充说明）", 1), "导入覆盖同一次处理：批次号保留")
+        (self.d / "notes.json").write_text("{坏掉的", encoding="utf-8")
+        item = store.handoff_done(self.d, summary="收尾")
+        self.assertEqual((item["status"], "resolvedCount" in item), ("done", False), "notes.json 坏了也能收尾，只是不记统计")
+
+    def test_cli_batches_and_done_message(self):
+        a = store.add(self.d, {"page": 4, "text": "要改"})[1]["id"]
+        store.handoff_submit(self.d, "改一下")
+        run = lambda *x: subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *x], capture_output=True, text=True,
+                                        env={**os.environ, "CLAUDECODE": ""})
+        run("claim", str(self.d))
+        r = run("done", str(self.d), "--summary", "什么也没标")
+        self.assertIn("这批解决 0 条", r.stdout)
+        self.assertIn("notes.py resolve 逐条标记", r.stderr, "没标已处理就收尾：提醒处理记录数不到")
+        store.handoff_submit(self.d, "再来")
+        run("claim", str(self.d))
+        run("resolve", str(self.d), a, "--note", "已改")
+        r = run("done", str(self.d), "--summary", "改了 1 条")
+        self.assertIn("第 2 批 → 已处理：这批解决 1 条", r.stdout)
+        r = run("batches", str(self.d), "--last", "1")
+        self.assertIn("## 第 2 批 · 已处理（agent）", r.stdout)
+        self.assertNotIn("## 第 1 批", r.stdout)
+        self.assertIn("处理说明：已改", r.stdout)
+        js = json.loads(run("batches", str(self.d), "--json").stdout)
+        self.assertEqual([h["resolvedCount"] for h in js["history"]], [1, 0])
+        self.assertIn("处理记录：共 2 批", run("show", str(self.d)).stdout)
+
+
 class HandoffTests(unittest.TestCase):
     def setUp(self):
         self.d = tmpdir()
@@ -247,7 +359,7 @@ class HandoffTests(unittest.TestCase):
         store.handoff_submit(self.d, "请处理第 4 页")
         out, _err = proc.communicate(timeout=15)
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("第 1 次提交", out)
+        self.assertIn("第 1 批", out)
         self.assertIn("用户附言：请处理第 4 页", out)
         self.assertIn("表格加一列", out)
         self.assertEqual(store.handoff_state(self.d)["latest"]["status"], "claimed")
@@ -265,8 +377,8 @@ class HandoffTests(unittest.TestCase):
         r = self.cli("done", str(self.d))
         self.assertEqual(r.returncode, 1)
         r = self.cli("show", str(self.d))
-        self.assertIn("交给 Agent：最近一次是第 1 次提交，已处理", r.stdout)
-        self.assertIn("处理结果：都改完了", r.stdout)
+        self.assertIn("交给 Agent：最近一次是第 1 批，已处理", r.stdout)
+        self.assertIn("这批解决 0 条；处理摘要：都改完了", r.stdout)
 
     def test_resolve_by_defaults(self):
         _d, n = store.add(self.d, {"page": 1, "text": "x"})
@@ -382,9 +494,11 @@ class StyleTests(unittest.TestCase):
     def test_style_validation_and_show(self):
         d = tmpdir()
         (d / "index.html").write_text("x")
+        # 0.3 旧格式（框在 style.region 里）：挪到顶层 region，宽度裁到页面内
         _d, n = store.add(d, {"page": 2, "target": "报告", "text": "风格优化：选中区域", "anchor": "table「渠道」",
                               "style": {"scope": "region", "region": {"x": 90, "y": 10, "w": 30, "h": 20}}})
-        self.assertEqual(n["style"]["region"]["w"], 10.0, "区域宽度裁到页面内")
+        self.assertEqual(n["region"], {"x": 90.0, "y": 10.0, "w": 10.0, "h": 20.0}, "区域宽度裁到页面内")
+        self.assertEqual(n["style"], {"scope": "region"})
         with self.assertRaises(store.NoteError):
             store.add(d, {"page": 1, "text": "x", "style": {"scope": "region", "region": {"x": 1}}})
         with self.assertRaises(store.NoteError):
@@ -393,16 +507,155 @@ class StyleTests(unittest.TestCase):
         with redirect_stdout(buf):
             notes_cli.main(["show", str(d)])
         out = buf.getvalue()
-        self.assertIn("【报告·风格优化·区域（x 90.0%，y 10.0%，宽 10.0%，高 20.0%）】风格优化：选中区域", out)
+        self.assertIn("【报告·框选 1（x 90.0%，y 10.0%，宽 10.0%，高 20.0%）·风格优化·框选处】风格优化：选中区域", out)
         self.assertIn("位置线索：table「渠道」", out)
 
     def test_markdown_roundtrip_style(self):
         md = ("## 第 4 页｜收入\n1. 【报告】表格太挤\n   风格优化：区域（x 5%，y 20%，宽 60%，高 30%）\n   位置线索：table\n"
-              "2. 【报告】风格优化：整页\n   风格优化：整页\n")
+              "2. 【报告】风格优化：整页\n   风格优化：整页\n"
+              "3. 【报告·框选 3（x 1%，y 2%，宽 3%，高 4%）】图例太小\n   风格优化：框选处\n")
         items = notes_cli.parse_legacy_markdown(md)
-        self.assertEqual(items[0]["style"], {"scope": "region", "region": {"x": 5.0, "y": 20.0, "w": 60.0, "h": 30.0}})
+        self.assertEqual(items[0]["region"], {"x": 5.0, "y": 20.0, "w": 60.0, "h": 30.0})
+        self.assertEqual(items[0]["style"], {"scope": "region"})
         self.assertEqual(items[0]["anchor"], "table")
         self.assertEqual(items[1]["style"], {"scope": "page"})
+        self.assertEqual(items[2]["region"], {"x": 1.0, "y": 2.0, "w": 3.0, "h": 4.0})
+        self.assertEqual((items[2]["text"], items[2]["style"]), ("图例太小", {"scope": "region"}))
+
+
+class MarkTests(unittest.TestCase):
+    """报告上的标注：任何批注都可以带一个点（pin）或一个框（region）。"""
+
+    def setUp(self):
+        self.d = tmpdir()
+        (self.d / "index.html").write_text("x")
+
+    def test_box_on_plain_note_and_show(self):
+        _d, n = store.add(self.d, {"page": 3, "target": "报告", "text": "这块数字和讲稿对不上",
+                                   "region": {"x": 10, "y": 20, "w": 30, "h": 15}, "anchor": "table「收入」"})
+        self.assertEqual(n["region"], {"x": 10.0, "y": 20.0, "w": 30.0, "h": 15.0})
+        self.assertNotIn("style", n, "普通批注带框不是风格优化")
+        store.add(self.d, {"page": 3, "target": "报告", "text": "标点批注", "pin": {"x": 50, "y": 50}})
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            notes_cli.main(["show", str(self.d)])
+        out = buf.getvalue()
+        self.assertIn("【报告·框选 1（x 10.0%，y 20.0%，宽 30.0%，高 15.0%）】这块数字和讲稿对不上", out)
+        self.assertIn("【报告·标点 2（x 50.0%，y 50.0%）】标点批注", out, "点和框同页统一编号")
+        for bad in ({"x": 1}, {"x": 1, "y": 1, "w": 0, "h": 5}, {"x": 101, "y": 1, "w": 5, "h": 5}, [1, 2, 3, 4], "x"):
+            with self.assertRaises(store.NoteError, msg=bad):
+                store.add(self.d, {"page": 1, "text": "x", "region": bad})
+
+    def test_remark_replaces_and_drag_only_touches_its_own_kind(self):
+        _d, n = store.add(self.d, {"page": 1, "text": "先放点", "pin": {"x": 5, "y": 5}})
+        # 重新标注：页面同时发两个字段
+        _d, n = store.update(self.d, n["id"], {"pin": None, "region": {"x": 1, "y": 1, "w": 9, "h": 9}})
+        self.assertEqual((n["pin"], n["region"]["w"]), (None, 9.0), "重新标注成框：点被替换")
+        _d, n = store.update(self.d, n["id"], {"pin": {"x": 7, "y": 7}, "region": None})
+        self.assertNotIn("region", n, "重新标注成点：框被替换")
+        _d, n = store.update(self.d, n["id"], {"pin": None, "region": None})
+        self.assertIsNone(n["pin"])
+        self.assertNotIn("region", n)
+        # 0.3 留下的点 + 框：拖动其中一个，另一个保留
+        _d, m = store.add(self.d, {"page": 1, "text": "两个都有", "pin": {"x": 5, "y": 5}, "region": {"x": 20, "y": 20, "w": 9, "h": 9}})
+        _d, m = store.update(self.d, m["id"], {"pin": {"x": 6, "y": 6}})
+        self.assertEqual((m["pin"]["x"], m["region"]["x"]), (6.0, 20.0), "拖点不删框")
+        _d, m = store.update(self.d, m["id"], {"region": {"x": 30, "y": 20, "w": 9, "h": 9}})
+        self.assertEqual((m["pin"]["x"], m["region"]["x"]), (6.0, 30.0), "拖框不删点")
+
+    def test_style_scope_follows_mark(self):
+        _d, n = store.add(self.d, {"page": 1, "text": "风格", "style": {"scope": "region"}, "region": {"x": 1, "y": 1, "w": 5, "h": 5}})
+        _d, n = store.update(self.d, n["id"], {"pin": {"x": 3, "y": 3}, "region": None})
+        self.assertEqual(n["style"], {"scope": "pin"}, "重新标注成点 = 标点处")
+        _d, n = store.update(self.d, n["id"], {"pin": None, "region": None})
+        self.assertEqual(n["style"], {"scope": "page"}, "去掉标注 = 整页")
+        _d, n = store.update(self.d, n["id"], {"pin": None, "region": {"x": 1, "y": 1, "w": 5, "h": 5}})
+        self.assertEqual(n["style"], {"scope": "region"}, "整页的风格优化重新标注成框 = 框选处")
+
+    def test_legacy_combinations_keep_their_meaning(self):
+        legacy = {"version": 1, "rev": 3, "notes": [
+            # 0.3：先放点，再选「整页」
+            {"id": "a", "page": 2, "text": "整页风格", "target": "报告", "pin": {"x": 4, "y": 5}, "status": "open",
+             "at": "2026-10-27T01:00:00Z", "style": {"scope": "page"}},
+            # 0.3：先放点，再框选区域做风格优化（点和框并存）
+            {"id": "b", "page": 2, "text": "区域风格", "target": "报告", "pin": {"x": 50, "y": 50}, "status": "open",
+             "at": "2026-10-27T01:01:00Z", "style": {"scope": "region", "region": {"x": 10, "y": 10, "w": 20, "h": 20}}}]}
+        (self.d / "notes.json").write_text(json.dumps(legacy), encoding="utf-8")
+        notes = {n["id"]: n for n in store.load(self.d)["notes"]}
+        self.assertEqual((notes["a"]["style"], notes["a"]["pin"]), ({"scope": "page"}, {"x": 4, "y": 5}), "整页 + 点：仍是整页")
+        self.assertEqual((notes["b"]["pin"], notes["b"]["region"]["w"], notes["b"]["style"]), ({"x": 50, "y": 50}, 20, {"scope": "region"}))
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            notes_cli.main(["show", str(self.d)])
+        out = buf.getvalue()
+        self.assertIn("【报告·标点 1（x 4%，y 5%）·风格优化·整页】", out)
+        self.assertIn("【报告·标点 2（x 50%，y 50%）·框选 2（x 10%，y 10%，宽 20%，高 20%）·风格优化·框选处】", out, "点和框都列出")
+        items = notes_cli.parse_legacy_markdown("## 第 2 页｜x\n1. 【报告·标点 2（x 50%，y 50%）·框选 2（x 10%，y 10%，宽 20%，高 20%）】区域风格\n")
+        self.assertEqual((items[0]["pin"], items[0]["region"]["w"], items[0]["text"]), ({"x": 50.0, "y": 50.0}, 20.0, "区域风格"))
+        _d, a = store.update(self.d, "a", {"pin": {"x": 8, "y": 9}})
+        self.assertEqual(a["style"], {"scope": "page"}, "拖动整页风格优化上的点：范围仍是整页")
+        # 0.3 页面离线队列里的拖框改动：{style:{scope:region, region:新位置}} 补传到新服务
+        _d, b = store.update(self.d, "b", {"style": {"scope": "region", "region": {"x": 60, "y": 10, "w": 20, "h": 20}}})
+        self.assertEqual((b["region"]["x"], b["style"], b["pin"]), (60.0, {"scope": "region"}, {"x": 50, "y": 50}), "旧页面拖框不丢")
+
+    def test_legacy_style_region_migrates_on_read(self):
+        legacy = {"version": 1, "rev": 3, "notes": [
+            {"id": "old1", "page": 2, "text": "旧框", "target": "报告", "pin": None, "status": "open", "at": "2026-10-27T01:00:00Z",
+             "style": {"scope": "region", "region": {"x": 4, "y": 5, "w": 6, "h": 7}}}]}
+        (self.d / "notes.json").write_text(json.dumps(legacy), encoding="utf-8")
+        n = store.load(self.d)["notes"][0]
+        self.assertEqual((n["region"], n["style"]), ({"x": 4, "y": 5, "w": 6, "h": 7}, {"scope": "region"}))
+        # 旧框拖动后（页面只发 region）：落盘为新格式
+        _d, n = store.update(self.d, "old1", {"region": {"x": 10, "y": 5, "w": 6, "h": 7}})
+        disk = json.loads((self.d / "notes.json").read_text())["notes"][0]
+        self.assertEqual(disk["region"]["x"], 10.0)
+        self.assertEqual(disk["style"], {"scope": "region"})
+
+    def test_dedup_distinguishes_boxes(self):
+        base = {"page": 1, "target": "报告", "text": "同一句"}
+        _doc, added, skipped, _u = store.import_notes(self.d, [
+            {**base, "region": {"x": 1, "y": 1, "w": 5, "h": 5}},
+            {**base, "region": {"x": 50, "y": 1, "w": 5, "h": 5}},
+            {**base, "style": {"scope": "region", "region": {"x": 1, "y": 1, "w": 5, "h": 5}}},
+            {**base, "region": {"x": 1, "y": 1, "w": 5, "h": 5}}])
+        self.assertEqual((added, skipped), (3, 1), "不同框各算一条；同框同文重复跳过；风格优化与普通批注不算重复")
+        self.assertTrue(all("region" not in (n.get("style") or {}) for n in store.load(self.d)["notes"]), "导入的旧格式落成顶层 region")
+
+    def test_markdown_box_roundtrip_via_import(self):
+        md = "## 第 2 页｜概览\n1. 【报告·框选 1（x 10%，y 20%，宽 30%，高 40%）】【已处理】数字放大\n   位置线索：div.kpi\n"
+        f = self.d / "paste.md"
+        f.write_text(md, encoding="utf-8")
+        with redirect_stdout(io.StringIO()):
+            notes_cli.main(["import", str(self.d), str(f)])
+        n = store.load(self.d)["notes"][0]
+        self.assertEqual((n["region"], n["status"], n["text"], n["anchor"]),
+                         ({"x": 10.0, "y": 20.0, "w": 30.0, "h": 40.0}, "resolved", "数字放大", "div.kpi"))
+
+
+class StaleServerTests(unittest.TestCase):
+    def test_bind_refuses_older_server_for_same_dir(self):
+        d = tmpdir()
+        build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", d)
+        srv = serve.ReviewServer(d, 0, log_to_file=False)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            s, _, b = serve._req(srv.port, "GET", "/api/notes", {"Host": f"127.0.0.1:{srv.port}"})
+            body = json.loads(b)
+            self.assertEqual((body["version"], "marks" in body["features"], "history" in body["handoff"]),
+                             (serve.VERSION, True, False), "轮询接口带版本与功能，不带全量处理记录")
+            _srv, url, _t = serve.bind(d, srv.port, False, tries=1)
+            self.assertIn(str(srv.port), url, "同版本：复用")
+            real = serve.probe
+            serve.probe = lambda p: {**(real(p) or {}), "version": "0.3.0"}   # 模拟：装了新版，旧版服务还在跑
+            try:
+                with self.assertRaises(serve.StaleServer) as cm:
+                    serve.bind(d, srv.port, False, tries=1)
+                self.assertIn("先停掉它", str(cm.exception))
+            finally:
+                serve.probe = real
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
 
 class RemapTests(unittest.TestCase):
