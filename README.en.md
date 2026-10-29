@@ -222,7 +222,7 @@ See [references/formats.md](skill/annotation-everything/references/formats.md) f
 
 | Command | What it does |
 |---|---|
-| `ae.py install` / `doctor` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--link codex,agents,zcode` symlinks it into other agents' skill directories); check the installation (`--json` for structured output) |
+| `ae.py install` / `doctor` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--link codex,agents,zcode` symlinks it into other agents' skill directories); check the installation (`--json` for structured output); uninstall removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first) |
 | `build_viewer.py --report … --script … --out <review-dir>` | Build the review page; `--rebuild <review-dir>` rebuilds it with the recorded options |
 | `serve.py <review-dir>` | Start the local server; each review keeps its own dedicated port |
 | `serve.py list` / `status` / `forget` | List every review on this machine, show one review's status, remove a ledger entry you no longer need |
@@ -266,7 +266,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── skill_sources.py           discovers skill directories on this machine
 │   └── check_pptx_fonts.py        PPTX and PDF font check
 └── evals/                         skill evaluation cases (used with skill-creator)
-ae.py                             unified management command: install the skill copy, doctor checks it
+ae.py                             unified management command: install the skill copy, doctor checks it, uninstall removes it
 fixtures/sample/                   synthetic sample (fictional data)
 tests/                             unit tests and end-to-end browser tests
 tools/
