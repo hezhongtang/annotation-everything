@@ -49,6 +49,7 @@ class AeCliTests(unittest.TestCase):
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
         self.env = {**os.environ, "HOME": str(self.home), "CLAUDE_SKILLS_DIR": str(self.skills),
+                    "AE_HOME": str(self.root / "ledger"),     # 运行状态检查读台账：指向临时目录，不碰真实台账
                     "PYTHONDONTWRITEBYTECODE": "1"}
 
     def run_ae(self, *args: str):
@@ -113,16 +114,16 @@ class AeCliTests(unittest.TestCase):
     def test_doctor_passes_after_install(self):
         self.assertEqual(self.run_ae("install").returncode, 0)
         p, doc = self.doctor_json()
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertEqual(doc["summary"], {"pass": 4, "warn": 0, "fail": 0})
-        self.assertTrue(all(r["category"] == "安装状态" for r in doc["results"]))
+        install = [r for r in doc["results"] if r["category"] == "安装状态"]
+        self.assertTrue(install and all(r["level"] == "通过" for r in install), doc["results"])
+        self.assertTrue(any(r["category"] == "运行状态" for r in doc["results"]), "体检包含运行状态检查")
+        # 退出码还取决于本机真实运行状态（可能有残留服务），这里只断言安装状态全部通过
 
     def test_doctor_fails_when_copy_missing(self):
         p, doc = self.doctor_json()
         self.assertEqual(p.returncode, 1)
-        self.assertEqual(doc["summary"]["fail"], 1)
-        failing = [r for r in doc["results"] if r["level"] == "失败"]
-        self.assertEqual(failing[0]["code"], "skill-copy-present")
+        failing = [r for r in doc["results"] if r["level"] == "失败" and r["category"] == "安装状态"]
+        self.assertEqual([r["code"] for r in failing], ["skill-copy-present"])
         self.assertIn("ae.py install", failing[0]["fix_command"])
 
     def test_doctor_fails_when_copy_modified(self):
@@ -142,14 +143,15 @@ class AeCliTests(unittest.TestCase):
         record_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
         p, doc = self.doctor_json()
         self.assertEqual(p.returncode, 1)
-        failing = {r["code"]: r for r in doc["results"] if r["level"] == "失败"}
+        failing = {r["code"]: r for r in doc["results"]
+                   if r["level"] == "失败" and r["category"] == "安装状态"}
         self.assertEqual(list(failing), ["skill-copy-version"])
         self.assertIn("ae.py install", failing["skill-copy-version"]["fix_command"])
 
     def test_doctor_json_structure(self):
         self.assertEqual(self.run_ae("install").returncode, 0)
         p, doc = self.doctor_json()
-        self.assertEqual(p.returncode, 0)
+        self.assertIn(p.returncode, (0, 1))     # 退出码取决于本机真实运行状态，结构则恒定
         for r in doc["results"]:
             self.assertEqual(set(r), {"code", "category", "level", "message", "fix_command"})
         self.assertEqual(set(doc["summary"]), {"pass", "warn", "fail"})
@@ -157,8 +159,9 @@ class AeCliTests(unittest.TestCase):
     def test_doctor_text_output_groups_by_category(self):
         self.assertEqual(self.run_ae("install").returncode, 0)
         p = self.run_ae("doctor")
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(p.returncode, (0, 1))     # 退出码取决于本机真实运行状态
         self.assertIn("安装状态", p.stdout)
+        self.assertIn("运行状态", p.stdout)
         self.assertIn("汇总", p.stdout)
 
 
