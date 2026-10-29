@@ -1,17 +1,21 @@
 # eval 运行产物
 skill/*-workspace/
-# 审阅产物（可能含被审阅材料的内容）
+# 审阅产物（可能含被审阅材料的内容，清单见 references/formats.md「审阅目录里的文件」）
 notes.json
 notes.jsonl
+handoff.json
+skills.json
+.annotation-wait.*.json
 server.log
 .annotation-server.json
 .notes.lock
 __pycache__/
 *.pyc
 .DS_Store
-# eval 用例的合成输入要入库
+# eval 用例的合成输入要入库（文件名撞上面的忽略规则，显式放行）
 !skill/annotation-everything/evals/*/files/**/notes.json
 !skill/annotation-everything/evals/*/files/**/notes.jsonl
+# 对照页 index.html 与 review.json 名字太通用，不全局忽略；审阅目录本就不该建在仓库里
 
 # 初改前后的源文件快照（含报告内容，不进 git）
 .snapshots/
