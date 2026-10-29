@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -22,6 +23,9 @@ SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 FIXTURE = ROOT / "fixtures" / "sample"
 sys.path.insert(0, str(SCRIPTS))
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-test-user-")      # 技能扫描只使用合成目录
+os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
+os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")
 
 import build_viewer  # noqa: E402
 import notes as notes_cli  # noqa: E402
@@ -930,6 +934,34 @@ class SkillTests(unittest.TestCase):
             s, _, b = serve._req(srv.port, "GET", "/api/notes", {"Host": f"127.0.0.1:{srv.port}"})
             self.assertEqual(json.loads(b)["skillCatalog"][0]["name"], "humanizer-zh")
         finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_large_catalog_is_served_and_survives_always_update(self):
+        out = tmpdir() / "rv"
+        out.mkdir()
+        (out / "index.html").write_text("x", encoding="utf-8")
+        names = [f"skill-{n:03d}=合成说明" for n in range(205)]
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(notes_cli.main(["skills", str(out), "--set", *names]), 0)
+        build_viewer.build(FIXTURE / "report.html", None, out, no_scan_skills=True)
+        srv = serve.ReviewServer(out, 0, log_to_file=False)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=5)
+        try:
+            host = f"127.0.0.1:{srv.port}"
+            conn.request("GET", "/api/notes", headers={"Host": host})
+            response = conn.getresponse()
+            self.assertEqual(len(json.loads(response.read())["skillCatalog"]), 205)
+            conn.request("POST", "/api/skills/always", body=json.dumps({"always": [{"name": "skill-204"}]}),
+                         headers={"Host": host, "Origin": f"http://{host}", "Content-Type": "application/json"})
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200, response.read())
+            conn.request("GET", "/api/notes", headers={"Host": host})
+            response = conn.getresponse()
+            self.assertEqual(len(json.loads(response.read())["skillCatalog"]), 205)
+        finally:
+            conn.close()
             srv.shutdown()
             srv.server_close()
 

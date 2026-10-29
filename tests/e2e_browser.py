@@ -35,6 +35,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 FIXTURE = ROOT / "fixtures" / "sample"
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-e2e-home-")   # 测试不碰用户真实的审阅台账；子进程继承
+os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-e2e-user-")       # 技能扫描只使用合成目录
+os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
+os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")
 RESULTS: list[tuple[bool, str]] = []
 STAGE = "document.getElementById('host').shadowRoot.getElementById('ae-stage')"
 

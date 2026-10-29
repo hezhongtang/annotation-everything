@@ -564,7 +564,7 @@ def main(argv: list[str] | None = None) -> int:
                 name, _, desc = it.partition("=")
                 name = store.clean_skill_names(name)
                 if name:
-                    out.append({"name": name[0], "desc": desc.strip()[:120]})
+                    out.append({"name": name[0], "desc": desc.strip()})
             return out
         scope_of = {"全部": "all", "全部批注": "all", "all": "all", "报告": "报告", "讲稿": "讲稿", "风格优化": "style", "style": "style"}
 
@@ -582,14 +582,19 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, store.NoteError) as e:
             print(f"错误：{e}", file=sys.stderr)
             return 2
-        cat = [] if (a.clear or a.set is not None) else store.skills_catalog(d)
-        for it in parse(a.set) + parse(a.add):
-            cat = [c for c in cat if c["name"] != it["name"]] + [it]
-        drop = set(store.clean_skill_names(a.remove or []))
-        cat = [c for c in cat if c["name"] not in drop]
-        if a.clear or a.set is not None or a.add or a.remove:
-            store.skills_save(d, cat)
-        if set_al is not None or add_al or a.always_remove or a.always_clear:
+        catalog_change = bool(a.clear or a.set is not None or a.add or a.remove)
+        always_change = bool(set_al is not None or add_al or a.always_remove or a.always_clear)
+        if catalog_change:
+            try:
+                cat = store.skills_update(d, set_to=parse(a.set) if a.set is not None else None,
+                                          add=parse(a.add), remove=a.remove, clear=a.clear, always_set=set_al,
+                                          always_add=add_al, always_remove=a.always_remove, always_clear=a.always_clear)
+            except (OSError, store.NoteError) as e:
+                print(f"错误：{e}", file=sys.stderr)
+                return 2
+        else:
+            cat = store.skills_catalog(d)
+        if always_change and not catalog_change:
             try:
                 store.always_update(d, set_to=set_al, add=add_al, remove=a.always_remove, clear=a.always_clear)
             except store.NoteError as e:
