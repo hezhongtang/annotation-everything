@@ -1040,7 +1040,7 @@ def handoff_state(review_dir: Path, *, full: bool = True) -> dict[str, Any]:
            # 已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」而不是「未处理」）
            "inFlightIds": sorted({x for i in flight for x in (i.get("openIds") or []) if not returned(x, int(i.get("seq", 0)))}),
            # 在途与停在待复核的批次及用户要求（show / 接手中断的代理据此知道要做到哪一步、能不能派子代理）
-           "open": [{k: i.get(k) for k in ("seq", "status", "target", "allowSubagents", "message")}
+           "open": [{k: i.get(k) for k in ("seq", "status", "target", "allowSubagents", "fullCheck", "message")}
                     for i in items if i.get("status") in IN_FLIGHT + ("drafted",)],
            **{st: sum(i.get("status") == st for i in items) for st in BATCH_STATUSES}}
     if full:
@@ -1070,10 +1070,11 @@ def _open_snapshot(notes: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def handoff_submit(review_dir: Path, message: str = "", *, target: str = "final", allow_subagents: bool = False,
-                   by: str = "page") -> tuple[dict[str, Any], dict[str, Any], bool]:
+                   full_check: bool = False, by: str = "page") -> tuple[dict[str, Any], dict[str, Any], bool]:
     """记一次提交（一批），快照当时的未处理批注。上一次提交还没被代理接收时合并进去（刷新快照、附言与选项），不重复排队。
 
-    target：final 做到定稿 / review 做到「已初改·待复核」后停下；allow_subagents：是否允许代理派发子代理。"""
+    target：final 做到定稿 / review 做到「已初改·待复核」后停下；allow_subagents：是否允许代理派发子代理；
+    full_check：处理后是否检查整份材料的前后一致性。"""
     message = fix_text(message)[:MAX_MSG]
     if target not in TARGETS:
         raise NoteError(f"target 须为 {TARGETS} 之一")
@@ -1081,7 +1082,7 @@ def handoff_submit(review_dir: Path, message: str = "", *, target: str = "final"
         notes = load(review_dir)["notes"]
         doc = handoff_load(review_dir)
         snap = {"at": now_iso(), "by": by, "message": message, "target": target, "allowSubagents": bool(allow_subagents),
-                "alwaysSkills": always_skills(review_dir), **_open_snapshot(notes)}
+                "fullCheck": bool(full_check), "alwaysSkills": always_skills(review_dir), **_open_snapshot(notes)}
         latest = doc["items"][-1] if doc["items"] else None
         if latest and latest.get("status") == "pending":
             latest.update(snap)

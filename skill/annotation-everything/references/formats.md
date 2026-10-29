@@ -109,6 +109,7 @@ PPTX 转图前，运行 `python3 $S/check_pptx_fonts.py 原始.pptx`。检查器
     {"seq": 3, "status": "pending",            // pending 等待接收 → claimed 处理中 →〔drafted 已初改·待复核 → review 等待复核 → reviewing 复核中〕→ done 已处理
      "target": "final",                       // 用户要求做到：final 定稿 / review 已初改·待复核
      "allowSubagents": false,                 // 用户是否允许代理派发子代理（不允许时由主代理亲自处理）
+     "fullCheck": true,                       // 本批处理后是否全量勾稽报告和讲稿；旧批次缺省为 false
      "at": "…", "by": "page", "message": "先改第 7–12 页",
      "openCount": 5, "openIds": ["…"], "pages": [7, 9, 12], "updates": 1,
      "claimedAt": "…", "claimedBy": "claude", "doneAt": "…", "doneBy": "claude", "summary": "改了 4 条，1 条等你定",
@@ -127,7 +128,7 @@ PPTX 转图前，运行 `python3 $S/check_pptx_fonts.py 原始.pptx`。检查器
 
 不用 `notes.py wait` 的代理：定时运行 `notes.py claim 审阅目录`（有等待中的提交就接收并输出 JSON，退出码 0；没有返回 3），处理完用 `notes.py done` 收尾。可以读这个文件看状态，但**不要直接改它**：写入要经过 notes.py / 服务的文件锁，否则可能覆盖用户刚合并进来的附言。保留最近 200 批。
 
-页面接口：`POST /api/handoff` `{message, target, allowSubagents}` 提交一批；`POST /api/handoff/review` `{seq, message, allowSubagents}` 请求复核；`POST /api/handoff/finalize` `{seq}` 直接定稿。轮询状态里的 `inFlightIds` 是已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」）。
+页面接口：`POST /api/handoff` `{message, target, allowSubagents, fullCheck}` 提交一批；`fullCheck` 缺省为 false，待接收时合并提交以最新选项为准，请求复核时保留原批次的要求。`POST /api/handoff/review` `{seq, message, allowSubagents}` 请求复核；`POST /api/handoff/finalize` `{seq}` 直接定稿。轮询状态里的 `inFlightIds` 是已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」）。服务功能列表中的 `full-check` 表示支持这个选项；新版页面不会把勾选了全量勾稽的待补传提交发给不支持的旧服务。
 
 源文件快照：代理接收初改时把 review.json 里的报告与讲稿源文件存到审阅目录 `.snapshots/batch-N/base/`，初改收尾时存 `draft/`（目录 0700、文件 0600，只留最近 30 批），`notes.py diff` 据此按页对比。审阅目录含经营数据时，快照同样不要外传。
 

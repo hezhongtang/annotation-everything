@@ -289,10 +289,102 @@ def skill_recommendation_checks(browser, tmp: Path):
     ctx.close()
 
 
+def full_check_checks(browser, tmp: Path):
+    """真实页面提交全量勾稽，并检查 Agent 接收和处理记录。"""
+    d = tmp / "full_check"
+    build(d)
+    port = free_port()
+    server = start_server(d, port)
+    ctx = browser.new_context()
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        page.click("#handBtn")
+        checkbox = page.locator("#hFullCheck")
+        if not checkbox.count():
+            ok(False, "交给 Agent 时可选择全量勾稽")
+            return
+        ok(not checkbox.is_checked(), "全量勾稽默认不勾选")
+        checkbox.check()
+        page.click("#doHand")
+        saved = wait_until(lambda: (d / "handoff.json").exists(), page, 5)
+        item = json.loads((d / "handoff.json").read_text())["items"][-1] if saved else {}
+        ok(item.get("fullCheck") is True, "勾选全量勾稽后，该要求随提交保存")
+        received = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "wait", str(d), "--timeout", "5"],
+                                  capture_output=True, text=True, timeout=15)
+        ok(received.returncode == 0 and "全量勾稽" in received.stdout, "等待中的 Agent 收到全量勾稽要求")
+        page.keyboard.press("j")
+        page.wait_for_timeout(500)
+        ok("全量勾稽" in page.inner_text("#batchList"), "处理记录显示全量勾稽要求")
+        page.keyboard.press("Escape")
+        page.click("#handBtn")
+        ok(page.is_checked("#hFullCheck"), "再次提交时记住这份审阅的勾选状态")
+
+        ctx.set_offline(True)
+        page.click("#doHand")
+        rid = json.loads((d / "review.json").read_text())["reviewId"]
+        key = f"ae.{rid}.queue"
+        queued = wait_until(lambda: page.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]').length", key) > 0, page, 5)
+        ok(queued, "断线提交时全量勾稽要求留在待补传队列")
+        page.close()
+        ctx.set_offline(False)
+        old = ctx.new_page()
+
+        def no_full_check(route):
+            response = route.fetch()
+            body = response.json()
+            body["features"] = [feature for feature in body.get("features", []) if feature != "full-check"]
+            route.fulfill(response=response, json=body)
+
+        old.route("**/api/notes", no_full_check)
+        old.goto(f"http://127.0.0.1:{port}/")
+        old.wait_for_timeout(1200)
+        items = json.loads((d / "handoff.json").read_text())["items"]
+        remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
+        ok(len(items) == 1 and remaining and remaining[0].get("fullCheck") is True,
+           "旧服务不能静默丢弃暂存的全量勾稽要求")
+        old.click("#handBtn")
+        old.click("#doHand")
+        ok(old.is_visible("#hFullOld") and old.is_visible("#hand"), "旧服务拒绝新提交的全量勾稽并提示升级")
+        old.keyboard.press("Escape")
+        old.unroute("**/api/notes", no_full_check)
+        flushed = wait_until(lambda: len(json.loads((d / "handoff.json").read_text())["items"]) == 2, old, 7)
+        items = json.loads((d / "handoff.json").read_text())["items"]
+        ok(flushed and items[-1].get("fullCheck") is True, "新版服务恢复后，暂存的全量勾稽提交自动补传")
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "claim", str(d)], capture_output=True, text=True, check=True)
+        old.click("#handBtn")
+        old.uncheck("#hFullCheck")
+        old.click("#doHand")
+        saved = wait_until(lambda: len(json.loads((d / "handoff.json").read_text())["items"]) == 3, old, 5)
+        items = json.loads((d / "handoff.json").read_text())["items"]
+        ok(saved and items[-1].get("fullCheck") is False, "取消勾选后下一批不要求全量勾稽")
+
+        old.click("#handBtn")
+        old.check("#hFullCheck")
+        old.route("**/api/notes", no_full_check)
+        old.click("#doHand")
+        old.wait_for_timeout(800)
+        items = json.loads((d / "handoff.json").read_text())["items"]
+        remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
+        ok(items[-1].get("fullCheck") is False and remaining and remaining[0].get("fullCheck") is True,
+           "服务换成旧版后立即提交，也不会丢掉全量勾稽要求")
+        old.unroute("**/api/notes", no_full_check)
+        flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is True, old, 7)
+        ok(flushed, "重新连接新版服务后合并更新暂存的全量勾稽要求")
+    finally:
+        ctx.close()
+        stop(server)
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="ae-e2e-"))
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="chrome", headless=True)
+        if "--full-check-only" in sys.argv:
+            full_check_checks(browser, tmp)
+            browser.close()
+            return 1 if any(not p for p, _ in RESULTS) else 0
         skill_search_checks(browser, tmp)
         skill_recommendation_checks(browser, tmp)
         if "--skills-only" in sys.argv:
@@ -300,6 +392,7 @@ def main() -> int:
             failed = sum(not p for p, _ in RESULTS)
             print(f"\n{len(RESULTS) - failed}/{len(RESULTS)} 通过")
             return 1 if failed else 0
+        full_check_checks(browser, tmp)
 
         # ---------- 1. file:// 退回模式 ----------
         fdir = tmp / "file_mode"

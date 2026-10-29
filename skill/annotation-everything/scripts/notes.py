@@ -74,9 +74,13 @@ def trail_text(n: dict[str, Any], last: int = 4) -> str:
     return " → ".join(parts)
 
 
+FULL_CHECK_TEXT = "全量勾稽：逐页检查整份报告和讲稿的口径、数据及前后引用；有依据的同步修正，不确定或未检查的部分要说明"
+
+
 def target_text(h: dict[str, Any]) -> str:
     return ("做到「已初改·待复核」后停下等用户" if h.get("target") == "review" else "做到定稿") + \
-           ("；允许派发子代理" if h.get("allowSubagents") else "；不允许派发子代理（由当前会话的主代理亲自处理）")
+           ("；允许派发子代理" if h.get("allowSubagents") else "；不允许派发子代理（由当前会话的主代理亲自处理）") + \
+           ("；" + FULL_CHECK_TEXT if h.get("fullCheck") else "")
 
 
 def handoff_lines(state: dict[str, Any] | None) -> list[str]:
@@ -867,6 +871,8 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
         if item.get("summary"):
             print(f"初改摘要：{item['summary']}")
         print(sub_line)
+        if item.get("fullCheck"):
+            print(FULL_CHECK_TEXT)
         print("你是复核者：逐条看初改（notes.py diff 看源文件改了哪里），给结论——"
               f"notes.py review {d} <id> --ok / --revise --note \"再改了什么\" / --return --note \"要用户拍板的原因\"；"
               f"提交时未处理、初改没动的批注也由你处理（notes.py resolve --seq {item['seq']}）。重建对照页，最后 "
