@@ -114,8 +114,9 @@ class AeCliTests(unittest.TestCase):
         self.assertEqual(self.run_ae("install").returncode, 0)
         p, doc = self.doctor_json()
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertEqual(doc["summary"], {"pass": 4, "warn": 0, "fail": 0})
-        self.assertTrue(all(r["category"] == "安装状态" for r in doc["results"]))
+        self.assertEqual(doc["summary"]["fail"], 0)
+        install = [r["level"] for r in doc["results"] if r["category"] == "安装状态"]
+        self.assertEqual(install, ["通过"] * len(install), "安装状态类检查全部通过")
 
     def test_doctor_fails_when_copy_missing(self):
         p, doc = self.doctor_json()

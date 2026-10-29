@@ -24,7 +24,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 APP = "annotation-everything"
 SKILL_NAME = "annotation-everything"
@@ -39,6 +39,8 @@ EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 # 体检的级别与类别（文字即对用户的输出，勿改为英文）
 LEVEL_PASS, LEVEL_WARN, LEVEL_FAIL = "通过", "警告", "失败"
 CATEGORY_INSTALL = "安装状态"
+CATEGORY_TOOLS = "可选工具"
+CATEGORY_DEV = "开发环境"
 MIN_PYTHON = (3, 9)
 
 
@@ -58,6 +60,8 @@ class DoctorContext:
     skill_copy: Path            # 技能副本目录
     repo: Optional[Path]        # 来源仓库根目录；找不到时为 None
     record: Optional[dict]      # 安装记录；读不到时为 None
+    # Chrome 探测函数（返回可执行文件路径或 None）；测试注入用，None 时用默认探测 find_chrome
+    chrome_probe: Optional[Callable[[], Optional[str]]] = None
 
 
 def skill_copy_dir() -> Path:
@@ -226,12 +230,101 @@ def check_copy_version(ctx: DoctorContext) -> CheckResult:
                        install_fix(ctx.repo))
 
 
+# ── 可选工具（缺失只警告，不影响退出码） ────────────────────────
+
+
+def tool_fix(package: str) -> str:
+    """可选工具缺失时的安装提示：按平台给出包管理器命令。"""
+    if sys.platform == "darwin":
+        return f"brew install {package}"
+    return f"sudo apt install {package}"
+
+
+def check_fc_list(ctx: DoctorContext) -> CheckResult:
+    if shutil.which("fc-list"):
+        return CheckResult("fc-list", CATEGORY_TOOLS, LEVEL_PASS, "fc-list 可用，字体核查可枚举本机字体")
+    return CheckResult("fc-list", CATEGORY_TOOLS, LEVEL_WARN,
+                       "缺少 fc-list，字体核查无法枚举本机字体", tool_fix("fontconfig"))
+
+
+def check_pdffonts(ctx: DoctorContext) -> CheckResult:
+    if shutil.which("pdffonts"):
+        return CheckResult("pdffonts", CATEGORY_TOOLS, LEVEL_PASS, "pdffonts 可用，可列出 PDF 字体证据")
+    package = "poppler" if sys.platform == "darwin" else "poppler-utils"
+    return CheckResult("pdffonts", CATEGORY_TOOLS, LEVEL_WARN,
+                       "缺少 pdffonts，字体核查无法检查 PDF 字体", tool_fix(package))
+
+
+# ── 开发环境（仅在仓库内运行时执行，见 REPO_CHECKS） ─────────────
+
+
+def git_config(repo: Path, key: str) -> Optional[str]:
+    """读仓库的 git 配置；git 不可用或未设置时返回 None。"""
+    try:
+        done = subprocess.run(["git", "-C", str(repo), "config", "--get", key],
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    value = done.stdout.strip() if done.returncode == 0 else ""
+    return value or None
+
+
+def check_git_hooks(ctx: DoctorContext) -> CheckResult:
+    expected = ctx.repo / "tools" / "git-hooks"
+    configured = git_config(ctx.repo, "core.hooksPath")
+    if configured is not None:
+        hooks = Path(configured).expanduser()
+        if not hooks.is_absolute():
+            hooks = ctx.repo / hooks
+        if Path(os.path.normpath(hooks)) == Path(os.path.normpath(expected)) and expected.is_dir():
+            return CheckResult("git-hooks", CATEGORY_DEV, LEVEL_PASS, "git 钩子已启用（tools/git-hooks）")
+    return CheckResult("git-hooks", CATEGORY_DEV, LEVEL_WARN,
+                       "git 钩子未启用，main 保护（拒绝在 main 上提交/推送/删除）不生效",
+                       f"sh {ctx.repo / 'tools' / 'setup-dev.sh'}")
+
+
+def find_chrome() -> Optional[str]:
+    """定位端到端测试用的 Chrome：与 tests/e2e_browser.py 的 playwright channel="chrome" 同一目标。"""
+    if sys.platform == "darwin":
+        candidates = (
+            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            Path.home() / "Applications" / "Google Chrome.app" / "Contents" / "MacOS" / "Google Chrome",
+        )
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
+        return None
+    if sys.platform.startswith("linux"):
+        for name in ("google-chrome", "google-chrome-stable"):
+            found = shutil.which(name)
+            if found:
+                return found
+        chrome = Path("/opt/google/chrome/chrome")
+        return str(chrome) if chrome.is_file() else None
+    return None
+
+
+def check_chrome(ctx: DoctorContext) -> CheckResult:
+    probe = ctx.chrome_probe if ctx.chrome_probe is not None else find_chrome
+    found = probe()
+    if found:
+        return CheckResult("e2e-chrome", CATEGORY_DEV, LEVEL_PASS, f"端到端测试可用的 Chrome：{found}")
+    return CheckResult("e2e-chrome", CATEGORY_DEV, LEVEL_WARN,
+                       "未找到端到端测试需要的 Chrome（tests/e2e_browser.py 按 channel=chrome 启动），"
+                       "请安装 Google Chrome")
+
+
 # 全部检查项：doctor 按此顺序执行；后续工单在元组里追加新检查项函数
-CHECKS = (check_python, check_copy_present, check_copy_sync, check_copy_version)
+CHECKS = (check_python, check_copy_present, check_copy_sync, check_copy_version,
+          check_fc_list, check_pdffonts)
+
+# 仅在仓库内运行（ctx.repo 非 None）的检查项：仓库外 doctor 的输出与 --json 都不出现「开发环境」类别
+REPO_CHECKS = (check_git_hooks, check_chrome)
 
 
 def run_doctor(ctx: DoctorContext):
-    return [check(ctx) for check in CHECKS]
+    checks = CHECKS + REPO_CHECKS if ctx.repo is not None else CHECKS
+    return [check(ctx) for check in checks]
 
 
 def summarize(results):
