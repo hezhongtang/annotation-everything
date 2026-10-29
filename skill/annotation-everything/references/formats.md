@@ -110,7 +110,8 @@ PPTX 转图前，运行 `python3 $S/check_pptx_fonts.py 原始.pptx`。检查器
      "target": "final",                       // 用户要求做到：final 定稿 / review 已初改·待复核
      "allowSubagents": false,                 // 用户是否允许代理派发子代理（不允许时由主代理亲自处理）
      "fullCheck": true,                       // 本批处理后是否全量勾稽报告和讲稿；旧批次缺省为 false
-     "at": "…", "by": "page", "message": "先改第 7–12 页",
+     "at": "…", "by": "page", "userMessage": "先改第 7–12 页",  // 用户原始附言
+     "message": "先改第 7–12 页\n\n【本批提交选项】全量勾稽：…",  // 兼容旧版 wait；勾选时附加勾稽要求
      "openCount": 5, "openIds": ["…"], "pages": [7, 9, 12], "updates": 1,
      "claimedAt": "…", "claimedBy": "claude", "doneAt": "…", "doneBy": "claude", "summary": "改了 4 条，1 条等你定",
      // 以下由 done 记下（处理记录）：这批里代理标为已处理的批注、涉及页、提交时的批注还剩几条未处理
@@ -126,9 +127,9 @@ PPTX 转图前，运行 `python3 $S/check_pptx_fonts.py 原始.pptx`。检查器
 }
 ```
 
-不用 `notes.py wait` 的代理：定时运行 `notes.py claim 审阅目录`（有等待中的提交就接收并输出 JSON，退出码 0；没有返回 3），处理完用 `notes.py done` 收尾。可以读这个文件看状态，但**不要直接改它**：写入要经过 notes.py / 服务的文件锁，否则可能覆盖用户刚合并进来的附言。保留最近 200 批。
+不用 `notes.py wait` 的代理：定时运行 `notes.py claim 审阅目录`（有等待中的提交就接收并输出 JSON，退出码 0；没有返回 3），处理完用 `notes.py done` 收尾。勾选全量勾稽时，`message` 附加该要求，确保仍在等待的旧版 Agent 也能读到；`userMessage` 保留用户输入的原文，旧批次没有此字段。可以读这个文件看状态，但**不要直接改它**：写入要经过 notes.py / 服务的文件锁，否则可能覆盖用户刚合并进来的附言。保留最近 200 批。
 
-页面接口：`POST /api/handoff` `{message, target, allowSubagents, fullCheck}` 提交一批；`fullCheck` 缺省为 false，待接收时合并提交以最新选项为准，请求复核时保留原批次的要求。`POST /api/handoff/review` `{seq, message, allowSubagents}` 请求复核；`POST /api/handoff/finalize` `{seq}` 直接定稿。轮询状态里的 `inFlightIds` 是已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」）。服务功能列表中的 `full-check` 表示支持这个选项；新版页面不会把勾选了全量勾稽的待补传提交发给不支持的旧服务。
+页面接口：`POST /api/handoff` `{message, target, allowSubagents, fullCheck}` 提交一批；新批次的 `fullCheck` 缺省为 false，合并待接收的批次时缺省表示保留原值，显式传入布尔值才更新；请求复核时保留原批次的要求。响应中的 `acceptedFullCheck` 确认该批次实际保存的选项。`POST /api/handoff/review` `{seq, message, allowSubagents}` 请求复核；`POST /api/handoff/finalize` `{seq}` 直接定稿。轮询状态里的 `inFlightIds` 是已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」）。服务功能列表中的 `full-check` 表示支持这个选项；页面发送前检查功能，服务未确认保存时保留待补传提交并提醒核对批次状态。
 
 源文件快照：代理接收初改时把 review.json 里的报告与讲稿源文件存到审阅目录 `.snapshots/batch-N/base/`，初改收尾时存 `draft/`（目录 0700、文件 0600，只留最近 30 批），`notes.py diff` 据此按页对比。审阅目录含经营数据时，快照同样不要外传。
 

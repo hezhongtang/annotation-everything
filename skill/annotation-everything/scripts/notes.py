@@ -74,13 +74,10 @@ def trail_text(n: dict[str, Any], last: int = 4) -> str:
     return " → ".join(parts)
 
 
-FULL_CHECK_TEXT = "全量勾稽：逐页检查整份报告和讲稿的口径、数据及前后引用；有依据的同步修正，不确定或未检查的部分要说明"
-
-
 def target_text(h: dict[str, Any]) -> str:
     return ("做到「已初改·待复核」后停下等用户" if h.get("target") == "review" else "做到定稿") + \
            ("；允许派发子代理" if h.get("allowSubagents") else "；不允许派发子代理（由当前会话的主代理亲自处理）") + \
-           ("；" + FULL_CHECK_TEXT if h.get("fullCheck") else "")
+           ("；" + store.FULL_CHECK_TEXT if h.get("fullCheck") else "")
 
 
 def handoff_lines(state: dict[str, Any] | None) -> list[str]:
@@ -91,8 +88,8 @@ def handoff_lines(state: dict[str, Any] | None) -> list[str]:
     line = (f"交给 Agent：最近一次是第 {h['seq']} 批，{STATUS_ZH.get(h.get('status'), h.get('status'))}"
             f"（提交于 {h.get('at')}，当时未处理 {h.get('openCount')} 条）")
     out = [line]
-    if h.get("message"):
-        out.append(f"用户附言：{h['message']}")
+    if message := store.handoff_user_message(h):
+        out.append(f"用户附言：{message}")
     if h.get("status") == "done":
         out.append(f"这批解决 {h.get('resolvedCount', 0)} 条" + (f"；处理摘要：{h['summary']}" if h.get("summary") else ""))
     if state.get("total"):
@@ -132,8 +129,8 @@ def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: i
         out.append(f"提交：{h.get('at')}，当时未处理 {h.get('openCount')} 条"
                    + (f"，涉及第 {'、'.join(map(str, h.get('pages') or []))} 页" if h.get("pages") else "")
                    + (f"（等待接收期间又提交 {h['updates']} 次，已合并）" if h.get("updates") else ""))
-        if h.get("message"):
-            out.append(f"用户附言：{h['message']}")
+        if message := store.handoff_user_message(h):
+            out.append(f"用户附言：{message}")
         if "target" in h:
             out.append(f"要求：{target_text(h)}")
         if h.get("alwaysSkills"):
@@ -866,13 +863,13 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
         print(f"# 收到复核请求：第 {item['seq']} 批（初改由 {item.get('claimedBy') or '代理'} 完成）")
         if item.get("reviewMessage"):
             print(f"用户附言（请求复核时）：{item['reviewMessage']}")
-        if item.get("message"):
-            print(f"用户附言（提交时）：{item['message']}")
+        if message := store.handoff_user_message(item):
+            print(f"用户附言（提交时）：{message}")
         if item.get("summary"):
             print(f"初改摘要：{item['summary']}")
         print(sub_line)
         if item.get("fullCheck"):
-            print(FULL_CHECK_TEXT)
+            print(store.FULL_CHECK_TEXT)
         print("你是复核者：逐条看初改（notes.py diff 看源文件改了哪里），给结论——"
               f"notes.py review {d} <id> --ok / --revise --note \"再改了什么\" / --return --note \"要用户拍板的原因\"；"
               f"提交时未处理、初改没动的批注也由你处理（notes.py resolve --seq {item['seq']}）。重建对照页，最后 "
@@ -883,8 +880,8 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
         return 0
     pages = "、".join(str(p) for p in item.get("pages") or []) or "无"
     print(f"# 收到「交给 Agent」第 {item['seq']} 批（{item.get('at')}）")
-    if item.get("message"):
-        print(f"用户附言：{item['message']}")
+    if message := store.handoff_user_message(item):
+        print(f"用户附言：{message}")
     print(f"要求：{target_text(item)}")
     print(sub_line)
     alw = store.always_skills(d)

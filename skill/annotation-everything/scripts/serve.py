@@ -155,7 +155,7 @@ class ReviewServer(ThreadingHTTPServer):
             return
         url = f"http://127.0.0.1:{self.port}/"
         payload = {"event": event, "app": APP, "reviewId": self.review_id(), "reviewDir": str(self.review_dir),
-                   "url": url, "seq": item.get("seq"), "message": item.get("message", ""),
+                   "url": url, "seq": item.get("seq"), "message": store.handoff_user_message(item),
                    "stage": "review" if event == "review" else "draft", "target": item.get("target", "final"),
                    "allowSubagents": bool(item.get("allowSubagents")), "fullCheck": bool(item.get("fullCheck")),
                    "reviewMessage": item.get("reviewMessage", ""),
@@ -359,14 +359,16 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {**store.handoff_state(d), **self._ident()})
         elif path == "/api/handoff" and cmd == "POST":
             body = self._expect_obj(self._body())
+            if "fullCheck" in body and not isinstance(body["fullCheck"], bool):
+                raise Reject(400, "bad-request", "fullCheck 须为布尔值")
             _h, item, merged = store.handoff_submit(d, str(body.get("message") or ""), by="page",
                                                     target=str(body.get("target") or "final"),
                                                     allow_subagents=body.get("allowSubagents") is True,
-                                                    full_check=body.get("fullCheck") is True)
+                                                    full_check=body.get("fullCheck"))
             self.server.log("info", f"handoff seq={item['seq']} open={item['openCount']} merged={merged} target={item['target']}")
             self.server.run_hook(item, merged)
             self._json(200, {"doc": {**store.load(d), **self._ident()}, "handoff": store.handoff_state(d, full=False),
-                             "merged": merged, "seq": item["seq"]})
+                             "merged": merged, "seq": item["seq"], "acceptedFullCheck": item["fullCheck"]})
         elif path == "/api/skills/always" and cmd == "POST":
             body = self._expect_obj(self._body())
             if "always" not in body:

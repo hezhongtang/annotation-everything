@@ -372,6 +372,43 @@ def full_check_checks(browser, tmp: Path):
         old.unroute("**/api/notes", no_full_check)
         flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is True, old, 7)
         ok(flushed, "重新连接新版服务后合并更新暂存的全量勾稽要求")
+
+        old.evaluate("""key => localStorage.setItem(key, JSON.stringify([
+            {kind:'handoff', message:'旧队列补充', target:'final', allowSubagents:false}
+        ]))""", key)
+        old.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        merged = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("userMessage") == "旧队列补充", old, 7)
+        item = json.loads((d / "handoff.json").read_text())["items"][-1]
+        ok(merged and item.get("fullCheck") is True, "旧版暂存队列没有该字段时保留原有勾选")
+
+        old.click("#handBtn")
+        old.uncheck("#hFullCheck")
+        old.click("#doHand")
+        wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is False, old, 5)
+        old.click("#handBtn")
+        old.check("#hFullCheck")
+
+        def legacy_post(route):
+            if route.request.method != "POST":
+                route.continue_()
+                return
+            payload = route.request.post_data_json
+            payload.pop("fullCheck", None)
+            response = route.fetch(post_data=json.dumps(payload, ensure_ascii=False))
+            body = response.json()
+            body.pop("acceptedFullCheck", None)
+            route.fulfill(response=response, json=body)
+
+        old.route("**/api/handoff", legacy_post)
+        old.click("#doHand")
+        old.wait_for_timeout(800)
+        item = json.loads((d / "handoff.json").read_text())["items"][-1]
+        remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
+        ok(item.get("fullCheck") is False and remaining and remaining[0].get("fullCheck") is True,
+           "提交时旧服务未确认勾选：保留待补传要求")
+        old.unroute("**/api/handoff", legacy_post)
+        flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is True, old, 7)
+        ok(flushed, "新版服务确认后才清除待补传的勾选要求")
     finally:
         ctx.close()
         stop(server)

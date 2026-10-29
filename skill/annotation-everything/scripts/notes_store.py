@@ -935,6 +935,13 @@ def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "im
 HANDOFF_FILE = "handoff.json"
 HANDOFF_KEEP = 200   # 处理记录（批次）保留条数
 MAX_MSG = 4000
+FULL_CHECK_TEXT = "全量勾稽：逐页检查整份报告和讲稿的口径、数据及前后引用；有依据的同步修正，不确定或未检查的部分要说明"
+
+
+def handoff_user_message(item: dict[str, Any]) -> str:
+    """新版保留原始附言；旧批次只有 message。"""
+    text = item.get("userMessage")
+    return text if isinstance(text, str) else str(item.get("message") or "")
 
 
 def handoff_load(review_dir: Path) -> dict[str, Any]:
@@ -1040,7 +1047,7 @@ def handoff_state(review_dir: Path, *, full: bool = True) -> dict[str, Any]:
            # 已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」而不是「未处理」）
            "inFlightIds": sorted({x for i in flight for x in (i.get("openIds") or []) if not returned(x, int(i.get("seq", 0)))}),
            # 在途与停在待复核的批次及用户要求（show / 接手中断的代理据此知道要做到哪一步、能不能派子代理）
-           "open": [{k: i.get(k) for k in ("seq", "status", "target", "allowSubagents", "fullCheck", "message")}
+           "open": [{k: i.get(k) for k in ("seq", "status", "target", "allowSubagents", "fullCheck", "message", "userMessage")}
                     for i in items if i.get("status") in IN_FLIGHT + ("drafted",)],
            **{st: sum(i.get("status") == st for i in items) for st in BATCH_STATUSES}}
     if full:
@@ -1070,20 +1077,25 @@ def _open_snapshot(notes: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def handoff_submit(review_dir: Path, message: str = "", *, target: str = "final", allow_subagents: bool = False,
-                   full_check: bool = False, by: str = "page") -> tuple[dict[str, Any], dict[str, Any], bool]:
+                   full_check: bool | None = None, by: str = "page") -> tuple[dict[str, Any], dict[str, Any], bool]:
     """记一次提交（一批），快照当时的未处理批注。上一次提交还没被代理接收时合并进去（刷新快照、附言与选项），不重复排队。
 
     target：final 做到定稿 / review 做到「已初改·待复核」后停下；allow_subagents：是否允许代理派发子代理；
-    full_check：处理后是否检查整份材料的前后一致性。"""
+    full_check：处理后是否检查整份材料的前后一致性；缺省时保留待接收批次的原选项。"""
     message = fix_text(message)[:MAX_MSG]
     if target not in TARGETS:
         raise NoteError(f"target 须为 {TARGETS} 之一")
     with locked(review_dir):
         notes = load(review_dir)["notes"]
         doc = handoff_load(review_dir)
-        snap = {"at": now_iso(), "by": by, "message": message, "target": target, "allowSubagents": bool(allow_subagents),
-                "fullCheck": bool(full_check), "alwaysSkills": always_skills(review_dir), **_open_snapshot(notes)}
         latest = doc["items"][-1] if doc["items"] else None
+        full_check_value = (latest.get("fullCheck") is True if latest and latest.get("status") == "pending" and full_check is None
+                            else full_check is True)
+        # 旧版 wait 只输出 message；把勾选要求也放进去，避免仍在等待的旧进程漏掉。
+        legacy_message = (message + ("\n\n" if message else "") + "【本批提交选项】" + FULL_CHECK_TEXT) if full_check_value else message
+        snap = {"at": now_iso(), "by": by, "message": legacy_message, "userMessage": message,
+                "target": target, "allowSubagents": bool(allow_subagents),
+                "fullCheck": full_check_value, "alwaysSkills": always_skills(review_dir), **_open_snapshot(notes)}
         if latest and latest.get("status") == "pending":
             latest.update(snap)
             latest["updates"] = int(latest.get("updates", 0)) + 1

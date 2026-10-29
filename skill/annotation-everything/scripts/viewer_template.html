@@ -368,6 +368,7 @@ async function api(method,path,body){
 const sameReview=d=>!!d&&d.app===APP&&d.reviewId===RID&&Array.isArray(d.notes);
 async function getNotes(){const d=await api("GET","/api/notes");
   if(!sameReview(d))throw Object.assign(new Error("不是这份审阅的服务"),{status:0,mismatch:true});return d}
+const hasFeature=(d,name)=>Array.isArray(d.features)&&d.features.includes(name);
 function mirror(){if(!FILE)return;if(!LS.set(K.notes,notes))toast("浏览器未能保存批注，请及时导出");LS.set(K.meta,{title:unH(document.title),name:NAME,ns:NS})}
 function setDoc(d){notes=d.notes;rev=d.rev}
 function stamp(x){const t=Array.isArray(x.trail)&&x.trail.length?x.trail[x.trail.length-1]:null;
@@ -412,7 +413,8 @@ function send(op){
   if(op.kind==="patch")return api("PATCH","/api/notes/"+encodeURIComponent(op.id),op.body);
   if(op.kind==="del")return api("DELETE","/api/notes/"+encodeURIComponent(op.id));
   if(op.kind==="import")return api("POST","/api/notes/import",{notes:op.notes});
-  if(op.kind==="handoff")return api("POST","/api/handoff",{message:op.message,target:op.target||"final",allowSubagents:!!op.allowSubagents,fullCheck:!!op.fullCheck})}
+  if(op.kind==="handoff"){const body={message:op.message,target:op.target||"final",allowSubagents:!!op.allowSubagents};
+    if("fullCheck" in op)body.fullCheck=!!op.fullCheck;return api("POST","/api/handoff",body)}}
 const pend={get(){const v=LS.get(K.pending,[]);return Array.isArray(v)?v:[]},
   set(v){if(!LS.set(K.pending,v))toast("浏览器存储已满：这次改动没能暂存，请尽快在「批注」里下载 JSON",6000)},
   push(op){const v=pend.get();v.push(op);pend.set(v)},remove(id){if(!id)return;pend.set(pend.get().filter(o=>o.opId!==id))}};
@@ -451,10 +453,12 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
       if(!op.opId){op.opId=newId();pend.set(q)}   // 兜底：没有操作 id 的条目先补上再发，免得移除时误删别的
       try{
         if(op.kind==="handoff"&&op.fullCheck){const d=await getNotes();
-          srvNoFullCheck=!(Array.isArray(d.features)&&d.features.includes("full-check"));
+          srvNoFullCheck=!hasFeature(d,"full-check");
           if(srvNoFullCheck){toast("本地服务不支持全量勾稽：提交仍在本页暂存，请启动新版服务",6000);return}}
         const r=await send(op);
         if(r&&r.doc&&!sameReview(r.doc))throw Object.assign(new Error("不是这份审阅的服务"),{status:0,mismatch:true});
+        if(op.kind==="handoff"&&op.fullCheck&&(!r||r.acceptedFullCheck!==true)){
+          srvNoFullCheck=true;toast("服务未确认全量勾稽：提交仍在本页暂存，请确认批次状态并启动新版服务",8000);return}
         pend.remove(op.opId);delete fails[op.opId];onSent(op,r||{})}
       catch(e){
         if(e.mismatch){mode="mismatch";return}
@@ -468,9 +472,9 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
   finally{busy--;updateMode()}}
 async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 function applyServer(d){
-  const old=!(Array.isArray(d.features)&&d.features.includes("marks"));if(old&&!srvOld)toast(OLD_SERVER_HELP,9000);srvOld=old;
-  srvNoStages=!(Array.isArray(d.features)&&d.features.includes("stages"));
-  srvNoFullCheck=!(Array.isArray(d.features)&&d.features.includes("full-check"));updateMode();
+  const old=!hasFeature(d,"marks");if(old&&!srvOld)toast(OLD_SERVER_HELP,9000);srvOld=old;
+  srvNoStages=!hasFeature(d,"stages");
+  srvNoFullCheck=!hasFeature(d,"full-check");updateMode();
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
   if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
@@ -1014,6 +1018,7 @@ $("resumeGo").onclick=goLast;$("resumeClose").onclick=()=>{resumeOff=true;render
 
 // ---------- 交给 Agent ----------
 const HAND_ZH={pending:"等待接收",claimed:"处理中",drafted:"已初改·待复核",review:"等待复核",reviewing:"复核中",done:"已处理"};
+const handUserMessage=h=>h.userMessage??h.message??"";
 function setHand(h){if(!h||h.error)return;const L=h.latest,prev=hand&&hand.latest;
   if(L&&prev&&prev.seq===L.seq&&prev.status!==L.status){
     if(L.status==="claimed")toast("Agent 已接收，正在处理",3000);
@@ -1036,7 +1041,7 @@ function renderHand(){const el=$("handState"),L=hand&&hand.latest;
   el.textContent={pending:`已交给 Agent · 第 ${L.seq} 批等待接收`,claimed:`Agent 处理中 · 第 ${L.seq} 批${n?`（已解决 ${n} 条）`:dn?`（已初改 ${dn} 条）`:""}`,
     drafted:`第 ${L.seq} 批已初改 · 待复核（${dn} 条）`,review:`第 ${L.seq} 批等待复核`,reviewing:`Agent 复核中 · 第 ${L.seq} 批`}[L.status]
     ||`Agent 已处理 · 第 ${L.seq} 批${n!=null?`（解决 ${n} 条）`:""}`;
-  el.title=(L.status==="done"?`处理摘要：${L.summary||"（未写）"}`:(L.message?`附言：${L.message}`:""))+"\n点击查看处理记录（J）"}
+  el.title=(L.status==="done"?`处理摘要：${L.summary||"（未写）"}`:(handUserMessage(L)?`附言：${handUserMessage(L)}`:""))+"\n点击查看处理记录（J）"}
 let handMode=null;   // null = 交一批新的；{seq} = 请求复核这一批
 const HOPT=`ae.${RID}.handOpts`;   // 提交选项按审阅分别记住
 function draftedBatches(){const L=hand&&hand.latest,H=(hand&&hand.history)||[];
@@ -1099,7 +1104,7 @@ function renderBatches(){
     return `<div class="batch ${escH(h.status)}"><div class="bh"><b>第 ${+h.seq} 批</b><span class="bs">${escH(HAND_ZH[h.status]||h.status)}${by?" · "+escH(who(by)):""}</span>`
       +("resolvedCount" in h?`<span class="bn">解决 ${+h.resolvedCount} 条${h.leftOpen?`，提交时的批注还剩 ${+h.leftOpen} 条`:""}${h.live?"（进行中）":h.estimated?"（按时间推算）":""}</span>`:"")+`</div>`
       +`<div class="bt">提交 ${escH(fmtIso(h.at))}，当时未处理 ${+h.openCount||0} 条${Array.isArray(h.pages)&&h.pages.length?`（第 ${h.pages.map(Number).join("、")} 页）`:""}${h.claimedAt?` · 接收 ${escH(fmtIso(h.claimedAt))}`:""}${h.doneAt?` · 收尾 ${escH(fmtIso(h.doneAt))}`:""}</div>`
-      +(h.message?`<div class="bm">附言：${escH(h.message)}</div>`:"")
+      +(handUserMessage(h)?`<div class="bm">附言：${escH(handUserMessage(h))}</div>`:"")
       +("target" in h?`<div class="bt">要求：${h.target==="review"?"做到已初改·待复核":"做到定稿"}${h.allowSubagents?"，允许派发子代理":"，由主代理亲自处理"}${h.fullCheck?"，全量勾稽":""}</div>`:"")
       +(Array.isArray(h.stages)?h.stages.filter(e=>e&&typeof e==="object").map(e=>{const two=h.target==="review"||!!h.allowSubagents,nm=e.stage==="draft"&&!two?"处理":(STG[e.stage]||e.stage);return e.stage==="accept"
           ?`<div class="bst">你直接定稿 ${+e.count||0} 条（${escH(fmtIso(e.at))}）</div>`

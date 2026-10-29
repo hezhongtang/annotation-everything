@@ -861,7 +861,11 @@ class HandoffTests(unittest.TestCase):
             status, _, body = serve._req(srv.port, "POST", "/api/handoff", headers,
                                          {"message": "核对整份材料", "fullCheck": True})
             self.assertEqual(status, 200)
-            self.assertTrue(json.loads(body)["handoff"]["latest"]["fullCheck"])
+            submitted = json.loads(body)
+            self.assertTrue(submitted["acceptedFullCheck"])
+            self.assertTrue(submitted["handoff"]["latest"]["fullCheck"])
+            self.assertEqual(submitted["handoff"]["latest"]["userMessage"], "核对整份材料")
+            self.assertIn("全量勾稽", submitted["handoff"]["latest"]["message"], "旧版 Agent 也要收到检查要求")
 
             result = self.cli("wait", str(self.d), "--timeout", "5")
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -907,6 +911,34 @@ class HandoffTests(unittest.TestCase):
             self.assertIn("不确定", review.stdout)
             self.assertEqual(self.cli("done", str(self.d), "--summary", "复核完成").returncode, 0)
             self.assertIn("全量勾稽", self.cli("batches", str(self.d)).stdout)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_legacy_submit_preserves_full_check_without_overriding_explicit_choice(self):
+        srv = serve.ReviewServer(self.d, 0, log_to_file=False)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            headers = {"Host": f"127.0.0.1:{srv.port}", "Origin": f"http://127.0.0.1:{srv.port}", "Content-Type": "application/json"}
+
+            def submit(payload):
+                status, _, body = serve._req(srv.port, "POST", "/api/handoff", headers, payload)
+                return status, json.loads(body)
+
+            self.assertTrue(submit({"fullCheck": True})[1]["handoff"]["latest"]["fullCheck"])
+            status, legacy = submit({"message": "旧页面补充"})
+            self.assertEqual(status, 200)
+            self.assertTrue(legacy["merged"])
+            self.assertTrue(legacy["handoff"]["latest"]["fullCheck"])
+            self.assertEqual(legacy["handoff"]["latest"]["userMessage"], "旧页面补充")
+            self.assertIn("全量勾稽", legacy["handoff"]["latest"]["message"])
+            self.assertFalse(submit({"fullCheck": False})[1]["handoff"]["latest"]["fullCheck"])
+            unselected = submit({"message": "再补充"})[1]["handoff"]["latest"]
+            self.assertFalse(unselected["fullCheck"])
+            self.assertEqual(unselected["message"], "再补充")
+            status, _ = submit({"fullCheck": "false"})
+            self.assertEqual(status, 400)
+            self.assertFalse(json.loads(self.cli("show", str(self.d), "--json").stdout)["handoff"]["latest"]["fullCheck"])
         finally:
             srv.shutdown()
             srv.server_close()
