@@ -887,7 +887,7 @@ const SKILL_HINTS=[
   [/表格|图表|数据|spreadsheet|chart/i,/data|chart|excel|spreadsheet|xlsx|表格|图表|数据/i]
 ];
 function skillScore(c){const target=String(c.name+" "+c.desc).toLocaleLowerCase();
-  const note=($("etext")&&$("etext").value)||$("ntext").value||"";
+  const note=skillInput&&skillInput.id==="eskills"&&$("etext")?$("etext").value:$("ntext").value;
   const context=[{text:note,weight:8},{text:unH(P[i].title||""),weight:4},
     {text:[NAME,SKILL_CONTEXT.report,SKILL_CONTEXT.script,SKILL_CONTEXT.kind].join(" "),weight:2}];
   let score=0;context.forEach(({text,weight})=>{const value=String(text||"").toLocaleLowerCase();
