@@ -222,7 +222,7 @@ See [references/formats.md](skill/annotation-everything/references/formats.md) f
 
 | Command | What it does |
 |---|---|
-| `ae.py install` / `doctor` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/`; check the installation (`--json` for structured output) |
+| `ae.py install` / `doctor` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--link codex,agents,zcode` symlinks it into other agents' skill directories); check the installation (`--json` for structured output) |
 | `build_viewer.py --report … --script … --out <review-dir>` | Build the review page; `--rebuild <review-dir>` rebuilds it with the recorded options |
 | `serve.py <review-dir>` | Start the local server; each review keeps its own dedicated port |
 | `serve.py list` / `status` / `forget` | List every review on this machine, show one review's status, remove a ledger entry you no longer need |
