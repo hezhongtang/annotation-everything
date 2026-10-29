@@ -9,6 +9,7 @@ import subprocess
 import sys
 import unicodedata
 import xml.etree.ElementTree as ET
+import zlib
 import zipfile
 
 PART = re.compile(r"^ppt/(?:slides/slide\d+|slideMasters/slideMaster\d+|slideLayouts/slideLayout\d+|theme/theme\d+)\.xml$")
@@ -57,7 +58,7 @@ def declared_fonts(path: Path) -> tuple[list[str], list[str]]:
                                       if child.tag.rsplit("}", 1)[-1] == "rPr"), None)
                         if props is None or not any((child.attrib.get("typeface") or "").strip() for child in props.iter()):
                             unresolved.add("部分文本的字体继承未解析")
-    except (OSError, zipfile.BadZipFile, RuntimeError, zipfile.LargeZipFile) as e:
+    except (OSError, zipfile.BadZipFile, RuntimeError, zipfile.LargeZipFile, NotImplementedError, EOFError, zlib.error) as e:
         raise CheckError(f"无法读取 PPTX：{e}") from e
     return sorted(declared, key=str.casefold), sorted(unresolved, key=str.casefold)
 
@@ -66,7 +67,7 @@ def normal(name: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", name).casefold().split())
 
 
-def installed_fonts() -> set[str]:
+def installed_fonts() -> tuple[set[str], bool]:
     try:
         result = subprocess.run(["fc-list", "--format=%{family}\\n"], capture_output=True, text=True,
                                 errors="replace", timeout=TOOL_TIMEOUT, check=False)
@@ -79,12 +80,80 @@ def installed_fonts() -> set[str]:
     fonts = {normal(name) for line in result.stdout.splitlines() for name in line.split(",") if name.strip()}
     if not fonts:
         raise CheckError("fc-list 字体枚举为空，无法确认本机字体")
-    return fonts
+    return fonts, bool(result.stderr.strip())
+
+
+def pdf_fonts(path: Path) -> tuple[list[dict[str, str]], bool]:
+    if not path.is_file():
+        raise CheckError("PDF 文件不存在或无法读取")
+    try:
+        result = subprocess.run(["pdffonts", str(path.resolve())], capture_output=True, text=True,
+                                errors="replace", timeout=TOOL_TIMEOUT, check=False)
+    except FileNotFoundError as e:
+        raise CheckError("找不到 pdffonts，无法检查 PDF 字体；请安装 poppler 后重试") from e
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise CheckError(f"PDF 字体检查失败或超时：{e}") from e
+    if result.returncode != 0:
+        raise CheckError("pdffonts 无法读取 PDF，请检查文件和工具")
+    lines = result.stdout.splitlines()
+    if len(lines) < 2 or not lines[0].lstrip().startswith("name"):
+        raise CheckError("无法识别 pdffonts 的输出，请手工核查")
+    cols = list(re.finditer(r"-+", lines[1]))
+    if len(cols) < 4:
+        raise CheckError("无法识别 pdffonts 的表头，请手工核查")
+    rows = []
+    for raw in lines[2:]:
+        raw = "".join(ch if ch == "\t" or ord(ch) >= 32 and ord(ch) != 127 else " " for ch in raw)
+        if not raw.strip():
+            continue
+        status = re.search(r"\s+(yes|no)\s+(yes|no)\s+(yes|no)\s+\d+\s+\d+\s*$", raw, re.I)
+        name_end, type_start, type_end, enc_start, enc_end = cols[0].end(), cols[1].start(), cols[1].end(), cols[2].start(), cols[2].end()
+        if (not status or len(raw) <= type_start or raw[name_end:type_start].strip()
+                or raw[type_end:enc_start].strip() or raw[enc_end:cols[3].start()].strip()):
+            rows.append({"raw": raw.strip()})
+            continue
+        rows.append({"name": raw[:name_end].strip(), "type": raw[type_start:type_end].strip(),
+                     "encoding": raw[enc_start:enc_end].strip(), "emb": status.group(1).lower(),
+                     "sub": status.group(2).lower(), "uni": status.group(3).lower()})
+    return rows, bool(result.stderr.strip())
+
+
+def report_pdf(rows: list[dict[str, str]], declared: list[str]) -> bool:
+    """输出 PDF 证据；返回是否需要人工核查。"""
+    print("PDF 字体证据（pdffonts）：")
+    if not rows:
+        print("- 无可枚举字体资源；可能是图片或轮廓化文字，待人工核查。")
+        return True
+    declared_by_name = {normal(name): name for name in declared}
+    matched: set[str] = set()
+    review = False
+    for row in rows:
+        if "raw" in row:
+            print(f"- {row['raw']}：输出列无法确认，待人工核查")
+            review = True
+            continue
+        name = row["name"]
+        base = re.sub(r"^[A-Z]{6}\+", "", name) if row["sub"] == "yes" else name
+        key = normal(base)
+        known = key in declared_by_name
+        if known:
+            matched.add(key)
+        if not known or row["emb"] != "yes":
+            review = True
+        verdict = "按名称对应声明" if known and row["emb"] == "yes" else "待人工核查"
+        print(f"- {name} | type={row['type']} | encoding={row['encoding']} | emb={row['emb']} | sub={row['sub']} | uni={row['uni']} | {verdict}")
+    unmatched = [name for name in declared if normal(name) not in matched]
+    if unmatched:
+        print("未按名称对应的 PPTX 声明：" + "、".join(unmatched) + "；可能未使用、名称不同或被替换，待人工核查。")
+        review = True
+    print("名称一致也不能证明所有字形未被替换；别名、样式、轮廓化和图片内容都需要人工核查。")
+    return review
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="检查 PPTX 声明字体与本机字体枚举")
     ap.add_argument("pptx", type=Path, help="待转换的 PPTX 文件")
+    ap.add_argument("--pdf", type=Path, help="可选：转换后的 PDF，使用 pdffonts 列出字体证据")
     args = ap.parse_args(argv)
     try:
         fonts, unresolved = declared_fonts(args.pptx)
@@ -92,8 +161,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"错误：{e}", file=sys.stderr)
         return 2
     error = None
+    font_warning = False
     try:
-        installed = installed_fonts()
+        installed, font_warning = installed_fonts()
     except CheckError as e:
         installed, error = None, e
     print("PPTX 字体声明：")
@@ -110,10 +180,26 @@ def main(argv: list[str] | None = None) -> int:
         print("未发现显式字体声明，继承的字体无法确认。")
     print("本机字体枚举不能证明 LibreOffice 实际使用了这些字体；未使用的主题声明不代表页面缺字。")
     print("转换前核查未检出或未知项；补齐字体后重新转换，并逐页检查换行、间距和遮挡。")
+    pdf_review = False
+    pdf_error = None
+    pdf_warning = False
+    if args.pdf:
+        try:
+            rows, pdf_warning = pdf_fonts(args.pdf)
+            pdf_review = report_pdf(rows, fonts)
+        except CheckError as e:
+            pdf_error = e
+    if font_warning:
+        print("警告：字体枚举工具输出警告，结果可能不完整，待人工核查。", file=sys.stderr)
+    if pdf_warning:
+        print("警告：PDF 字体工具输出警告，结果可能不完整，待人工核查。", file=sys.stderr)
     if error:
         print(f"错误：{error}", file=sys.stderr)
+    if pdf_error:
+        print(f"错误：{pdf_error}", file=sys.stderr)
+    if error or pdf_error:
         return 2
-    return 1 if missing or unresolved or not fonts else 0
+    return 1 if missing or unresolved or not fonts or pdf_review or font_warning or pdf_warning else 0
 
 
 if __name__ == "__main__":

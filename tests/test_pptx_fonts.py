@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -107,6 +108,147 @@ class FontCheckTests(unittest.TestCase):
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn("Synthetic Sans：无法确认", p.stdout)
         self.assertIn("找不到 fc-list", p.stderr)
+
+    def test_pdf_font_evidence_shows_subset_embedding_and_uncertainty(self):
+        self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
+        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
+        pdf = self.root / "synthetic.pdf"
+        pdf.write_bytes(b"%PDF synthetic")
+        self.tool("pdffonts", "cat <<'EOF'\n"
+                  "name                                 type              encoding         emb sub uni object ID\n"
+                  "------------------------------------ ----------------- ---------------- --- --- --- ---------\n"
+                  "ABCDEF+SyntheticSans                 TrueType          WinAnsi          yes yes yes      1  0\n"
+                  "MysteryFallback                      TrueType          WinAnsi          no  no  yes      2  0\nEOF")
+        p = self.run_check("--pdf", pdf)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("ABCDEF+SyntheticSans", p.stdout)
+        self.assertIn("emb=yes", p.stdout)
+        self.assertIn("sub=yes", p.stdout)
+        self.assertIn("MysteryFallback", p.stdout)
+        self.assertIn("emb=no", p.stdout)
+        self.assertIn("待人工核查", p.stdout)
+        self.assertIn("不能证明", p.stdout)
+
+    @unittest.skipUnless(shutil.which("pdffonts"), "未安装 pdffonts")
+    def test_real_pdffonts_reads_a_synthetic_pdf(self):
+        self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="Helvetica"/></p:sld>'})
+        self.tool("fc-list", "printf '%s\\n' 'Helvetica'")
+        stream = b"BT /F1 12 Tf 72 720 Td (Synthetic) Tj ET\n"
+        objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                   b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+                   b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+                   b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"endstream"]
+        raw = bytearray(b"%PDF-1.4\n")
+        offsets = [0]
+        for number, obj in enumerate(objects, 1):
+            offsets.append(len(raw))
+            raw.extend(f"{number} 0 obj\n".encode() + obj + b"\nendobj\n")
+        xref = len(raw)
+        raw.extend(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode())
+        raw.extend(b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets[1:]))
+        raw.extend(f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+        pdf = self.root / "synthetic-real.pdf"
+        pdf.write_bytes(raw)
+        self.env["PATH"] = str(self.bin) + os.pathsep + str(Path(shutil.which("pdffonts")).parent) + os.pathsep + os.defpath
+        p = self.run_check("--pdf", pdf)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("Helvetica", p.stdout)
+        self.assertIn("emb=no", p.stdout)
+        self.assertIn("待人工核查", p.stdout)
+
+    def test_pdf_without_font_resources_requires_manual_review(self):
+        self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
+        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
+        self.tool("pdffonts", "printf '%s\\n' 'name                                 type              encoding         emb sub uni object ID' '------------------------------------ ----------------- ---------------- --- --- --- ---------'")
+        pdf = self.root / "synthetic.pdf"
+        pdf.write_bytes(b"%PDF synthetic")
+        p = self.run_check("--pdf", pdf)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("无可枚举字体资源", p.stdout)
+        self.assertIn("轮廓化", p.stdout)
+        self.assertIn("待人工核查", p.stdout)
+
+    def test_missing_pdf_tool_returns_error_after_font_enumeration(self):
+        self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
+        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
+        self.env["PATH"] = str(self.bin)
+        pdf = self.root / "synthetic.pdf"
+        pdf.write_bytes(b"%PDF synthetic")
+        p = self.run_check("--pdf", pdf)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("SyntheticSans：本次枚举找到", p.stdout)
+        self.assertIn("找不到 pdffonts", p.stderr)
+
+    def test_style_name_difference_is_not_claimed_as_an_exact_match(self):
+        self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
+        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
+        self.tool("pdffonts", "cat <<'EOF'\n"
+                  "name                                 type              encoding         emb sub uni object ID\n"
+                  "------------------------------------ ----------------- ---------------- --- --- --- ---------\n"
+                  "ABCDEF+SyntheticSans-Bold            TrueType          WinAnsi          yes yes yes      1  0\nEOF")
+        pdf = self.root / "synthetic.pdf"
+        pdf.write_bytes(b"%PDF synthetic")
+        p = self.run_check("--pdf", pdf)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("SyntheticSans-Bold", p.stdout)
+        self.assertIn("待人工核查", p.stdout)
+        self.assertNotIn("按名称对应声明", p.stdout)
+
+    def test_pdf_tool_timeout_is_reported(self):
+        self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
+        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
+        self.tool("pdffonts", "exec sleep 2")
+        pdf = self.root / "synthetic.pdf"
+        pdf.write_bytes(b"%PDF synthetic")
+        run = '''
+import sys
+sys.path.insert(0, sys.argv[1])
+import check_pptx_fonts
+check_pptx_fonts.TOOL_TIMEOUT = 0.5
+sys.exit(check_pptx_fonts.main([sys.argv[2], "--pdf", sys.argv[3]]))
+'''
+        p = subprocess.run([sys.executable, "-c", run, str(CHECKER.parent), str(self.pptx), str(pdf)],
+                           env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("SyntheticSans：本次枚举找到", p.stdout)
+        self.assertIn("PDF 字体检查失败或超时", p.stderr)
+
+    def test_subset_prefix_is_not_removed_when_subsetting_is_not_confirmed(self):
+        self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
+        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
+        self.tool("pdffonts", "cat <<'EOF'\n"
+                  "name                                 type              encoding         emb sub uni object ID\n"
+                  "------------------------------------ ----------------- ---------------- --- --- --- ---------\n"
+                  "ABCDEF+SyntheticSans                 TrueType          WinAnsi          yes no  yes      1  0\nEOF")
+        pdf = self.root / "synthetic.pdf"
+        pdf.write_bytes(b"%PDF synthetic")
+        p = self.run_check("--pdf", pdf)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("待人工核查", p.stdout)
+        self.assertNotIn("按名称对应声明", p.stdout)
+
+    def test_pdf_tool_warning_prevents_a_clean_result(self):
+        self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
+        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
+        self.tool("pdffonts", "cat <<'EOF'\n"
+                  "name                                 type              encoding         emb sub uni object ID\n"
+                  "------------------------------------ ----------------- ---------------- --- --- --- ---------\n"
+                  "ABCDEF+SyntheticSans                 TrueType          WinAnsi          yes yes yes      1  0\nEOF\n"
+                  "printf '%s\\n' 'synthetic warning' >&2")
+        pdf = self.root / "synthetic.pdf"
+        pdf.write_bytes(b"%PDF synthetic")
+        p = self.run_check("--pdf", pdf)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("警告", p.stderr)
+        self.assertIn("待人工核查", p.stderr)
+
+    def test_font_enumeration_warning_prevents_a_clean_result(self):
+        self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
+        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'; printf '%s\\n' 'synthetic warning' >&2")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("警告", p.stderr)
+        self.assertIn("待人工核查", p.stderr)
 
 
 if __name__ == "__main__":
