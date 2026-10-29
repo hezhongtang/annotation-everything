@@ -1,22 +1,81 @@
-# eval 运行产物
-skill/*-workspace/
-# 审阅产物（可能含被审阅材料的内容，清单见 references/formats.md「审阅目录里的文件」）
+# ── 真实材料防护 ───────────────────────────────────────────────
+# 仓库只放合成数据（见 AGENTS.md）。汇报材料常见的办公文档格式一律不入库，
+# 防止把真实报告、讲稿或转换产物误提交；合成样例使用 HTML / Markdown。
+*.pptx
+*.ppt
+*.pptm
+*.potx
+*.key
+*.pdf
+*.docx
+*.doc
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.numbers
+*.pages
+
+# ── 审阅产物 ───────────────────────────────────────────────────
+# 可能含被审阅材料的内容，清单见 references/formats.md「审阅目录里的文件」。
+# 对照页 index.html 与 review.json 名字太通用，不全局忽略；审阅目录本就不该建在仓库里。
 notes.json
 notes.jsonl
 handoff.json
 skills.json
 .skill-sources.json
 .annotation-wait.*.json
-server.log
 .annotation-server.json
 .notes.lock
-__pycache__/
-*.pyc
-.DS_Store
-# eval 用例的合成输入要入库（文件名撞上面的忽略规则，显式放行）
+server.log
+# 初改前后的源文件快照（含报告内容）
+.snapshots/
+# eval 用例的合成输入要入库（文件名撞上面的规则，显式放行）
 !skill/annotation-everything/evals/*/files/**/notes.json
 !skill/annotation-everything/evals/*/files/**/notes.jsonl
-# 对照页 index.html 与 review.json 名字太通用，不全局忽略；审阅目录本就不该建在仓库里
 
-# 初改前后的源文件快照（含报告内容，不进 git）
-.snapshots/
+# ── eval 与测试产物 ────────────────────────────────────────────
+skill/*-workspace/
+test-results/
+playwright-report/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# ── 密钥与本地配置 ─────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+
+# ── 编辑器、系统与 Agent 本地状态 ──────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+.claude/settings.local.json
+.worktrees/
+# CodeGraph 索引由 .codegraph/.gitignore 自行忽略
+
+# ── 临时文件与日志 ─────────────────────────────────────────────
+tmp/
+*.tmp
+*.log
