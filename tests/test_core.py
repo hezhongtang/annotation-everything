@@ -943,6 +943,20 @@ class HandoffTests(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
 
+    def test_legacy_service_message_update_remains_visible(self):
+        store.handoff_submit(self.d, "新版附言", full_check=True)
+        path = self.d / store.HANDOFF_FILE
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        doc["items"][0]["message"] = "旧服务的新附言"  # 旧服务更新 message，不认识 userMessage
+        path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+        shown = self.cli("show", str(self.d))
+        self.assertEqual(shown.returncode, 0)
+        self.assertIn("用户附言：旧服务的新附言", shown.stdout)
+        self.assertNotIn("用户附言：新版附言", shown.stdout)
+        history = json.loads(self.cli("batches", str(self.d), "--json").stdout)["history"]
+        self.assertEqual(history[0]["userMessage"], "旧服务的新附言")
+        self.assertEqual(store.handoff_state(self.d)["open"][0]["userMessage"], "旧服务的新附言")
+
     def test_bad_hook_command_rejected(self):
         with self.assertRaises(SystemExit):
             serve.parse_hook("definitely-not-a-command-xyz --flag")
@@ -1313,7 +1327,10 @@ class ReviewRound3Tests(unittest.TestCase):
             srv.server_close()
         runs = [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
         self.assertEqual(len(runs), 1, "合并进同一次提交的重复点击不再触发钩子")
-        self.assertIs(json.loads(runs[0])["fullCheck"], True, "钩子收到触发时的全量勾稽要求")
+        payload = json.loads(runs[0])
+        self.assertIs(payload["fullCheck"], True, "钩子收到触发时的全量勾稽要求")
+        self.assertEqual(payload["userMessage"], "m0")
+        self.assertIn("全量勾稽", payload["message"], "旧版钩子只读 message 时也能看到勾稽要求")
 
     def test_numeric_keys_not_remapped_and_move_keeps_id(self):
         tree = tmpdir()

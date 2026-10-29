@@ -408,13 +408,15 @@ function applyLocal(op){
     if(op.body.status==="resolved"){x.resolvedAt=nowIso();x.resolvedBy="page"}}}
   else if(op.kind==="import")return mergeLocal(op.notes);
   else if(op.kind==="handoff"){handQueued=true;renderHand()}}
-function send(op){
+const FULL_CHECK_COMPAT=__FULL_CHECK_COMPAT__;
+function send(op,fullCheckSupported=true){
   if(op.kind==="add")return api("POST","/api/notes",op.note);      // 同 id 重复提交，服务端按已存在处理
   if(op.kind==="patch")return api("PATCH","/api/notes/"+encodeURIComponent(op.id),op.body);
   if(op.kind==="del")return api("DELETE","/api/notes/"+encodeURIComponent(op.id));
   if(op.kind==="import")return api("POST","/api/notes/import",{notes:op.notes});
-  if(op.kind==="handoff"){const body={message:op.message,target:op.target||"final",allowSubagents:!!op.allowSubagents};
-    if("fullCheck" in op)body.fullCheck=!!op.fullCheck;return api("POST","/api/handoff",body)}}
+  if(op.kind==="handoff"){const message=op.message||"",body={message,target:op.target||"final",allowSubagents:!!op.allowSubagents};
+    if(op.fullCheck===true){body.userMessage=message;body.message=message+(message?"\n\n":"")+FULL_CHECK_COMPAT}
+    if("fullCheck" in op&&fullCheckSupported)body.fullCheck=op.fullCheck===true;return api("POST","/api/handoff",body)}}
 const pend={get(){const v=LS.get(K.pending,[]);return Array.isArray(v)?v:[]},
   set(v){if(!LS.set(K.pending,v))toast("浏览器存储已满：这次改动没能暂存，请尽快在「批注」里下载 JSON",6000)},
   push(op){const v=pend.get();v.push(op);pend.set(v)},remove(id){if(!id)return;pend.set(pend.get().filter(o=>o.opId!==id))}};
@@ -452,13 +454,17 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
     for(let q=pend.get();q.length;q=pend.get()){const op=q[0];
       if(!op.opId){op.opId=newId();pend.set(q)}   // 兜底：没有操作 id 的条目先补上再发，免得移除时误删别的
       try{
-        if(op.kind==="handoff"&&op.fullCheck){const d=await getNotes();
-          srvNoFullCheck=!hasFeature(d,"full-check");
-          if(srvNoFullCheck){toast("本地服务不支持全量勾稽：提交仍在本页暂存，请启动新版服务",6000);return}}
-        const r=await send(op);
+        const hasFullCheck=op.kind==="handoff"&&"fullCheck" in op;let fullCheckSupported=true;
+        if(hasFullCheck){const d=await getNotes();fullCheckSupported=hasFeature(d,"full-check");srvNoFullCheck=!fullCheckSupported;
+          const latest=d.handoff&&d.handoff.latest,pendingCheck=latest&&latest.status==="pending"&&latest.fullCheck===true;
+          if(!fullCheckSupported&&(op.fullCheck===true||pendingCheck)){
+            toast("本地服务不支持修改全量勾稽：提交仍在本页暂存，请启动新版服务",6000);return}}
+        const r=await send(op,fullCheckSupported);
         if(r&&r.doc&&!sameReview(r.doc))throw Object.assign(new Error("不是这份审阅的服务"),{status:0,mismatch:true});
-        if(op.kind==="handoff"&&op.fullCheck&&(!r||r.acceptedFullCheck!==true)){
-          srvNoFullCheck=true;toast("服务未确认全量勾稽：提交仍在本页暂存，请确认批次状态并启动新版服务",8000);return}
+        if(hasFullCheck){const latest=r&&r.handoff&&r.handoff.latest,requested=op.fullCheck===true;
+          const legacyOff=!requested&&r&&!("acceptedFullCheck" in r)&&latest&&latest.seq===r.seq&&latest.fullCheck!==true;
+          if(!r||(r.acceptedFullCheck!==requested&&!legacyOff)){
+            srvNoFullCheck=true;toast("服务未确认全量勾稽选项：提交仍在本页暂存，请确认批次状态并启动新版服务",8000);return}}
         pend.remove(op.opId);delete fails[op.opId];onSent(op,r||{})}
       catch(e){
         if(e.mismatch){mode="mismatch";return}

@@ -307,10 +307,12 @@ def full_check_checks(browser, tmp: Path):
             return
         ok(not checkbox.is_checked(), "全量勾稽默认不勾选")
         checkbox.check()
+        page.fill("#handMsg", "请核对整份材料")
         page.click("#doHand")
         saved = wait_until(lambda: (d / "handoff.json").exists(), page, 5)
         item = json.loads((d / "handoff.json").read_text())["items"][-1] if saved else {}
-        ok(item.get("fullCheck") is True, "勾选全量勾稽后，该要求随提交保存")
+        ok(item.get("fullCheck") is True and item.get("userMessage") == "请核对整份材料"
+           and item.get("message", "").count("全量勾稽") == 1, "勾选全量勾稽后保存要求和原始附言")
         received = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "wait", str(d), "--timeout", "5"],
                                   capture_output=True, text=True, timeout=15)
         ok(received.returncode == 0 and "全量勾稽" in received.stdout, "等待中的 Agent 收到全量勾稽要求")
@@ -394,6 +396,7 @@ def full_check_checks(browser, tmp: Path):
                 return
             payload = route.request.post_data_json
             payload.pop("fullCheck", None)
+            payload.pop("userMessage", None)
             response = route.fetch(post_data=json.dumps(payload, ensure_ascii=False))
             body = response.json()
             body.pop("acceptedFullCheck", None)
@@ -404,11 +407,25 @@ def full_check_checks(browser, tmp: Path):
         old.wait_for_timeout(800)
         item = json.loads((d / "handoff.json").read_text())["items"][-1]
         remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
-        ok(item.get("fullCheck") is False and remaining and remaining[0].get("fullCheck") is True,
+        ok(item.get("fullCheck") is False and all(word in item.get("message", "") for word in ("全量勾稽", "报告和讲稿", "有依据", "不确定"))
+           and remaining and remaining[0].get("fullCheck") is True,
            "提交时旧服务未确认勾选：保留待补传要求")
         old.unroute("**/api/handoff", legacy_post)
         flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is True, old, 7)
         ok(flushed, "新版服务确认后才清除待补传的勾选要求")
+
+        old.click("#handBtn")
+        old.uncheck("#hFullCheck")
+        old.route("**/api/handoff", legacy_post)
+        old.click("#doHand")
+        old.wait_for_timeout(800)
+        item = json.loads((d / "handoff.json").read_text())["items"][-1]
+        remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
+        ok(item.get("fullCheck") is True and remaining and remaining[0].get("fullCheck") is False,
+           "旧服务未确认取消勾选：保留待补传要求")
+        old.unroute("**/api/handoff", legacy_post)
+        flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is False, old, 7)
+        ok(flushed, "新版服务确认后才清除待补传的取消勾选要求")
     finally:
         ctx.close()
         stop(server)

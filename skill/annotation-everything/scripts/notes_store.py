@@ -938,10 +938,16 @@ MAX_MSG = 4000
 FULL_CHECK_TEXT = "全量勾稽：逐页检查整份报告和讲稿的口径、数据及前后引用；有依据的同步修正，不确定或未检查的部分要说明"
 
 
+def full_check_message(message: str) -> str:
+    return message + ("\n\n" if message else "") + "【本批提交选项】" + FULL_CHECK_TEXT
+
+
 def handoff_user_message(item: dict[str, Any]) -> str:
-    """新版保留原始附言；旧批次只有 message。"""
+    """新版保留原始附言；旧服务若更新了 message，以最新的 message 为准。"""
     text = item.get("userMessage")
-    return text if isinstance(text, str) else str(item.get("message") or "")
+    message = str(item.get("message") or "")
+    expected = full_check_message(text) if isinstance(text, str) and item.get("fullCheck") is True else text
+    return text if isinstance(text, str) and message == expected else message
 
 
 def handoff_load(review_dir: Path) -> dict[str, Any]:
@@ -1032,6 +1038,7 @@ def handoff_state(review_dir: Path, *, full: bool = True) -> dict[str, Any]:
     history = []
     for it in reversed(items if full else items[-1:]):
         h = {k: v for k, v in it.items() if k != "openIds"}
+        h["userMessage"] = handoff_user_message(it)
         if it.get("status") in ("claimed", "drafted", "review", "reviewing"):
             h.update(_batch_stats(notes, it, None, _next_start(items, it)), live=True)
         elif it.get("status") == "done" and "resolvedIds" not in it:
@@ -1047,7 +1054,8 @@ def handoff_state(review_dir: Path, *, full: bool = True) -> dict[str, Any]:
            # 已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」而不是「未处理」）
            "inFlightIds": sorted({x for i in flight for x in (i.get("openIds") or []) if not returned(x, int(i.get("seq", 0)))}),
            # 在途与停在待复核的批次及用户要求（show / 接手中断的代理据此知道要做到哪一步、能不能派子代理）
-           "open": [{k: i.get(k) for k in ("seq", "status", "target", "allowSubagents", "fullCheck", "message", "userMessage")}
+           "open": [{**{k: i.get(k) for k in ("seq", "status", "target", "allowSubagents", "fullCheck", "message")},
+                     "userMessage": handoff_user_message(i)}
                     for i in items if i.get("status") in IN_FLIGHT + ("drafted",)],
            **{st: sum(i.get("status") == st for i in items) for st in BATCH_STATUSES}}
     if full:
@@ -1092,7 +1100,7 @@ def handoff_submit(review_dir: Path, message: str = "", *, target: str = "final"
         full_check_value = (latest.get("fullCheck") is True if latest and latest.get("status") == "pending" and full_check is None
                             else full_check is True)
         # 旧版 wait 只输出 message；把勾选要求也放进去，避免仍在等待的旧进程漏掉。
-        legacy_message = (message + ("\n\n" if message else "") + "【本批提交选项】" + FULL_CHECK_TEXT) if full_check_value else message
+        legacy_message = full_check_message(message) if full_check_value else message
         snap = {"at": now_iso(), "by": by, "message": legacy_message, "userMessage": message,
                 "target": target, "allowSubagents": bool(allow_subagents),
                 "fullCheck": full_check_value, "alwaysSkills": always_skills(review_dir), **_open_snapshot(notes)}
@@ -1150,7 +1158,7 @@ def handoff_claim(review_dir: Path, *, by: str = "agent", stage: str = "any", se
             item.setdefault("stages", []).append({"stage": "review", "by": by, "claimedAt": now})
             st = "review"
         _handoff_commit(review_dir, doc, {"op": "handoff-claim", "by": by, "seq": item["seq"], "stage": st})
-        return {**item, "stage": st}
+        return {**item, "userMessage": handoff_user_message(item), "stage": st}
 
 
 def _finish(item: dict[str, Any], notes: list[dict[str, Any]] | None, items: list[dict[str, Any]], by: str, summary: str) -> None:

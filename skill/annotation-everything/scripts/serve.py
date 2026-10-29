@@ -22,7 +22,7 @@
 
 「交给 Agent」：页面 POST /api/handoff 记一次提交（handoff.json）。代理用 notes.py wait 等待或轮询该文件；
 可选的 --on-handoff 钩子在每次新提交（AE_EVENT=handoff）和请求复核（AE_EVENT=review）时运行一条命令（不经 shell），
-提交内容以 JSON 从标准输入传入（含 stage / target / allowSubagents / fullCheck），另有环境变量 AE_EVENT / AE_REVIEW_DIR /
+提交内容以 JSON 从标准输入传入（含 stage / target / allowSubagents / fullCheck / userMessage），另有环境变量 AE_EVENT / AE_REVIEW_DIR /
 AE_HANDOFF_SEQ / AE_URL；运行中又来的事件排队依次补跑；命令输出丢弃，退出码记入 server.log。
 
 专属端口：每份审阅第一次启动时在审阅台账（~/.annotation-everything/，AE_HOME 可改）里分到一个端口，此后一直用它，
@@ -154,8 +154,10 @@ class ReviewServer(ThreadingHTTPServer):
         if not self.on_handoff or merged:
             return
         url = f"http://127.0.0.1:{self.port}/"
+        user_message = store.handoff_user_message(item)
+        message = store.full_check_message(user_message) if item.get("fullCheck") is True else user_message
         payload = {"event": event, "app": APP, "reviewId": self.review_id(), "reviewDir": str(self.review_dir),
-                   "url": url, "seq": item.get("seq"), "message": store.handoff_user_message(item),
+                   "url": url, "seq": item.get("seq"), "message": message, "userMessage": user_message,
                    "stage": "review" if event == "review" else "draft", "target": item.get("target", "final"),
                    "allowSubagents": bool(item.get("allowSubagents")), "fullCheck": bool(item.get("fullCheck")),
                    "reviewMessage": item.get("reviewMessage", ""),
@@ -361,7 +363,10 @@ class Handler(BaseHTTPRequestHandler):
             body = self._expect_obj(self._body())
             if "fullCheck" in body and not isinstance(body["fullCheck"], bool):
                 raise Reject(400, "bad-request", "fullCheck 须为布尔值")
-            _h, item, merged = store.handoff_submit(d, str(body.get("message") or ""), by="page",
+            if "userMessage" in body and not isinstance(body["userMessage"], str):
+                raise Reject(400, "bad-request", "userMessage 须为字符串")
+            message = body["userMessage"] if body.get("fullCheck") is True and "userMessage" in body else str(body.get("message") or "")
+            _h, item, merged = store.handoff_submit(d, message, by="page",
                                                     target=str(body.get("target") or "final"),
                                                     allow_subagents=body.get("allowSubagents") is True,
                                                     full_check=body.get("fullCheck"))

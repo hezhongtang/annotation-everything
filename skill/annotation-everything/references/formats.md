@@ -129,7 +129,7 @@ PPTX 转图前，运行 `python3 $S/check_pptx_fonts.py 原始.pptx`。检查器
 
 不用 `notes.py wait` 的代理：定时运行 `notes.py claim 审阅目录`（有等待中的提交就接收并输出 JSON，退出码 0；没有返回 3），处理完用 `notes.py done` 收尾。勾选全量勾稽时，`message` 附加该要求，确保仍在等待的旧版 Agent 也能读到；`userMessage` 保留用户输入的原文，旧批次没有此字段。可以读这个文件看状态，但**不要直接改它**：写入要经过 notes.py / 服务的文件锁，否则可能覆盖用户刚合并进来的附言。保留最近 200 批。
 
-页面接口：`POST /api/handoff` `{message, target, allowSubagents, fullCheck}` 提交一批；新批次的 `fullCheck` 缺省为 false，合并待接收的批次时缺省表示保留原值，显式传入布尔值才更新；请求复核时保留原批次的要求。响应中的 `acceptedFullCheck` 确认该批次实际保存的选项。`POST /api/handoff/review` `{seq, message, allowSubagents}` 请求复核；`POST /api/handoff/finalize` `{seq}` 直接定稿。轮询状态里的 `inFlightIds` 是已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」）。服务功能列表中的 `full-check` 表示支持这个选项；页面发送前检查功能，服务未确认保存时保留待补传提交并提醒核对批次状态。
+页面接口：`POST /api/handoff` `{message, target, allowSubagents, fullCheck, userMessage}` 提交一批；新批次的 `fullCheck` 缺省为 false，合并待接收的批次时缺省表示保留原值，显式传入布尔值才更新；请求复核时保留原批次的要求。勾选时页面在 `message` 附加勾稽要求，并用 `userMessage` 传原始附言；新服务保存原文并生成兼容旧 Agent 的 `message`。响应中的 `acceptedFullCheck` 确认该批次实际保存的选项。`POST /api/handoff/review` `{seq, message, allowSubagents}` 请求复核；`POST /api/handoff/finalize` `{seq}` 直接定稿。轮询状态里的 `inFlightIds` 是已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」）。服务功能列表中的 `full-check` 表示支持这个选项；页面发送前检查功能，服务未确认保存时保留待补传提交并提醒核对批次状态。若服务在检查后切换到旧版，旧服务可能已经接收提交，重试可能形成另一批；旧服务和旧页面共同更新待接收批次时也可能覆盖兼容提示，使用新选项前应升级服务并刷新页面。
 
 源文件快照：代理接收初改时把 review.json 里的报告与讲稿源文件存到审阅目录 `.snapshots/batch-N/base/`，初改收尾时存 `draft/`（目录 0700、文件 0600，只留最近 30 批），`notes.py diff` 据此按页对比。审阅目录含经营数据时，快照同样不要外传。
 
