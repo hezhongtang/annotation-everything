@@ -1,0 +1,40 @@
+name: 缺陷
+description: 现有功能的行为与预期不符。
+title: "<简述现象>"
+labels: ["needs-triage", "bug"]
+body:
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 现象
+      description: 发生了什么，影响是什么。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 尽量使用 fixtures/sample/ 的合成样例复现；不要贴真实材料或批注。
+      placeholder: "1. 用 fixtures/sample/ 生成对照页……"
+
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: serve.py 启动日志或 skill/annotation-everything/scripts/serve.py 中的 VERSION。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志或报错
+      description: 可选。贴出前删除路径中的敏感信息。
+      render: text

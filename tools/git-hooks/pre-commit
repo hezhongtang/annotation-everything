@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# 拒绝在 main 上提交：main 只通过 PR 的 squash 合并更新（见 AGENTS.md「分支、issue 与 PR」）。
+set -euo pipefail
+branch="$(git symbolic-ref --short -q HEAD || true)"
+if [ "$branch" = "main" ]; then
+  cat >&2 <<'MSG'
+已拒绝：不能在 main 上直接提交。
+请先从 issue 开分支再提交，例如：
+  gh issue develop <编号> --name feat/<编号>-<简述> --base main --checkout
+没有 issue 的小改动：git switch -c <type>/<简述>
+MSG
+  exit 1
+fi

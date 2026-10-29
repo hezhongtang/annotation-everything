@@ -267,12 +267,18 @@ skill/annotation-everything/       技能本体，安装时整体复制
 └── evals/                         技能评测用例（供 skill-creator 使用）
 fixtures/sample/                   合成样例（虚构数据）
 tests/                             单元测试和浏览器端到端测试
-tools/install.sh                   安装到 ~/.claude/skills/
+tools/
+├── install.sh                     安装到 ~/.claude/skills/
+├── setup-dev.sh                   启用仓库自带的 git 钩子
+└── git-hooks/                     拒绝在 main 上提交、推送到 main、删除 main
+.github/                           CI、issue 模板和 PR 模板
 docs/                              架构决策记录（ADR）、Agent 协作约定、README 配图
 GLOSSARY.md                        术语表
 ```
 
 ## 开发
+
+克隆后先运行一次 `tools/setup-dev.sh` 启用 git 钩子。
 
 ```bash
 python3 -m unittest discover tests                                   # 单元测试（只用标准库）
@@ -282,5 +288,6 @@ tools/install.sh                                                     # 同步到
 ```
 
 - 测试会把审阅台账放到临时目录（环境变量 `AE_HOME`）。手动试用或运行技能评测时，也建议先执行 `export AE_HOME=$(mktemp -d)`，避免临时审阅登记进本机真实的台账，或占用真实审阅的专属端口。
+- `main` 只通过 PR 的 squash 合并更新：从 issue 开分支，PR 正文写 `Closes #编号`，CI 通过后合并，issue 随合并自动关闭。完整流程见 [AGENTS.md](AGENTS.md)「分支、issue 与 PR」。
 - 仓库中只放合成样例。真实材料、批注和审阅目录一律不放进仓库，也不放进技能目录。
 - 术语以 [GLOSSARY.md](GLOSSARY.md) 为准；架构决策记录见 [docs/adr/](docs/adr/)；协作约定见 [AGENTS.md](AGENTS.md)。
