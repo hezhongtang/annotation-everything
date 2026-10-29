@@ -85,6 +85,72 @@ class FontCheckTests(unittest.TestCase):
         self.assertIn("Synthetic Sans：本次枚举找到", p.stdout)
         self.assertIn("不能证明", p.stdout)
 
+    THEME_WITH_SCRIPT_FALLBACKS = '''<a:theme xmlns:a="urn:a"><a:themeElements><a:fontScheme name="合成">
+      <a:majorFont><a:latin typeface="Synthetic Sans"/><a:ea typeface=""/><a:cs typeface=""/>
+        <a:font script="Jpan" typeface="Synthetic Jpan Fallback"/><a:font script="Arab" typeface="Synthetic Arab Fallback"/>
+      </a:majorFont>
+      <a:minorFont><a:latin typeface="Synthetic Sans"/><a:ea typeface=""/><a:cs typeface=""/>
+        <a:font script="Hans" typeface="Synthetic Hans Fallback"/>
+      </a:minorFont>
+    </a:fontScheme></a:themeElements></a:theme>'''
+
+    def test_theme_script_fallbacks_are_listed_without_counting_as_missing(self):
+        self.pptx_with({"ppt/theme/theme1.xml": self.THEME_WITH_SCRIPT_FALLBACKS,
+                        "ppt/slides/slide1.xml": '''<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
+          <a:r><a:rPr><a:latin typeface="Synthetic Sans"/><a:ea typeface="Synthetic Sans"/></a:rPr><a:t>合成文本</a:t></a:r></p:sld>'''})
+        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans' 'Synthetic Hans Fallback'")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("Synthetic Sans：本次枚举找到", p.stdout)
+        self.assertNotIn("Synthetic Jpan Fallback：", p.stdout)
+        self.assertIn("主题按文字脚本的备选字体 3 项", p.stdout)
+        self.assertIn("本次枚举未检出 2 项：Synthetic Arab Fallback、Synthetic Jpan Fallback", p.stdout)
+
+    def test_theme_script_fallback_in_pdf_matches_by_name_without_being_required(self):
+        self.pptx_with({"ppt/theme/theme1.xml": self.THEME_WITH_SCRIPT_FALLBACKS,
+                        "ppt/slides/slide1.xml": '''<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
+          <a:r><a:rPr><a:latin typeface="Synthetic Sans"/><a:ea typeface="Synthetic Sans"/></a:rPr><a:t>合成文本</a:t></a:r></p:sld>'''})
+        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans' 'Synthetic Hans Fallback'")
+        pdf = self.root / "synthetic.pdf"
+        pdf.write_bytes(b"%PDF synthetic")
+        self.tool("pdffonts", "cat <<'EOF'\n"
+                  "name                                 type              encoding         emb sub uni object ID\n"
+                  "------------------------------------ ----------------- ---------------- --- --- --- ---------\n"
+                  "ABCDEF+Synthetic Sans                TrueType          WinAnsi          yes yes yes      1  0\n"
+                  "GHIJKL+Synthetic Hans Fallback       TrueType          Identity-H       yes yes yes      2  0\nEOF")
+        p = self.run_check("--pdf", pdf)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("GHIJKL+Synthetic Hans Fallback", p.stdout)
+        self.assertNotIn("未按名称对应的 PPTX 声明", p.stdout)
+
+    def test_non_latin_text_without_explicit_east_asian_font_remains_unknown(self):
+        self.pptx_with({"ppt/theme/theme1.xml": self.THEME_WITH_SCRIPT_FALLBACKS,
+                        "ppt/slides/slide1.xml": '''<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
+          <a:r><a:rPr><a:latin typeface="Synthetic Sans"/></a:rPr><a:t>Synthetic 合成文本</a:t></a:r>
+          <a:r><a:rPr><a:latin typeface="Synthetic Sans"/></a:rPr><a:t>Latin only – “quoted”</a:t></a:r></p:sld>'''})
+        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("部分非拉丁文字依赖主题的东亚或复杂文种字体", p.stdout)
+
+    def test_each_script_needs_its_own_explicit_slot(self):
+        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        for props, text in (('<a:ea typeface="Synthetic Sans"/>', "مرحبا"), ('<a:cs typeface="Synthetic Sans"/>', "合成")):
+            self.pptx_with({"ppt/theme/theme1.xml": self.THEME_WITH_SCRIPT_FALLBACKS,
+                            "ppt/slides/slide1.xml": f'''<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
+              <a:r><a:rPr><a:latin typeface="Synthetic Sans"/>{props}</a:rPr><a:t>{text}</a:t></a:r></p:sld>'''})
+            p = self.run_check()
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+            self.assertIn("部分非拉丁文字依赖主题的东亚或复杂文种字体", p.stdout)
+
+    def test_emoji_and_private_use_symbols_do_not_need_theme_script_fonts(self):
+        self.pptx_with({"ppt/theme/theme1.xml": self.THEME_WITH_SCRIPT_FALLBACKS,
+                        "ppt/slides/slide1.xml": '''<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
+          <a:r><a:rPr><a:latin typeface="Synthetic Sans"/></a:rPr><a:t>Launch \U0001F680 \uF0A7 ✓</a:t></a:r></p:sld>'''})
+        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        p = self.run_check()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
     def test_oversized_or_unsafe_xml_is_rejected(self):
         self.pptx_with({"ppt/slides/slide1.xml": "<slide>" + " " * (8 * 1024 * 1024) + "</slide>"})
         self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")

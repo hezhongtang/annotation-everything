@@ -23,9 +23,32 @@ class CheckError(Exception):
     pass
 
 
-def declared_fonts(path: Path) -> tuple[list[str], list[str]]:
+def _local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+# 复杂文种（cs 槽）：希伯来、阿拉伯、叙利亚、南亚、东南亚文字及阿拉伯/希伯来表现形式
+_CS_RANGES = ((0x0590, 0x10FF), (0x1780, 0x18AF), (0xFB1D, 0xFDFF), (0xFE70, 0xFEFF))
+# 不占东亚/复杂文种槽：拉丁扩展与通用标点符号、私用区（常配 <a:sym>）、变体选择符、emoji
+_NO_SLOT_RANGES = ((0x1D00, 0x2E7F), (0xE000, 0xF8FF), (0xFE00, 0xFE0F), (0x1F000, 0x1FAFF), (0xF0000, 0x10FFFF))
+
+
+def _theme_slots(text: str) -> set[str]:
+    """返回文本会用到的主题字体槽：ea（东亚）或 cs（复杂文种）；拉丁、希腊、西里尔不计。"""
+    slots = set()
+    for ch in text:
+        o = ord(ch)
+        if o < 0x0590 or any(lo <= o <= hi for lo, hi in _NO_SLOT_RANGES):
+            continue
+        slots.add("cs" if any(lo <= o <= hi for lo, hi in _CS_RANGES) else "ea")
+    return slots
+
+
+def declared_fonts(path: Path) -> tuple[list[str], list[str], list[str]]:
+    """返回（显式声明字体, 无法解析项, 主题按文字脚本的备选字体）。"""
     declared: set[str] = set()
     unresolved: set[str] = set()
+    fallbacks: set[str] = set()
     try:
         with zipfile.ZipFile(path) as archive:
             parts = [info for info in archive.infolist() if PART.fullmatch(info.filename)]
@@ -50,17 +73,25 @@ def declared_fonts(path: Path) -> tuple[list[str], list[str]]:
                     face = (element.attrib.get("typeface") or "").strip()
                     if face.startswith("+"):
                         unresolved.add(face)
+                    elif face and _local(element.tag) == "font" and element.attrib.get("script"):
+                        # 主题字体方案里的 <a:font script=…>：只在对应文字出现且未另行指定时才用
+                        fallbacks.add(face)
                     elif face:
                         declared.add(face)
-                    if element.tag.rsplit("}", 1)[-1] == "t" and (element.text or "").strip():
+                    if _local(element.tag) == "t" and (element.text or "").strip():
                         run = parents.get(element)
                         props = next((child for child in (list(run) if run is not None else [])
-                                      if child.tag.rsplit("}", 1)[-1] == "rPr"), None)
-                        if props is None or not any((child.attrib.get("typeface") or "").strip() for child in props.iter()):
+                                      if _local(child.tag) == "rPr"), None)
+                        faces = {_local(child.tag): (child.attrib.get("typeface") or "").strip()
+                                 for child in (props.iter() if props is not None else ())}
+                        if not any(faces.values()):
                             unresolved.add("部分文本的字体继承未解析")
+                        elif any(not faces.get(slot) for slot in _theme_slots(element.text)):
+                            unresolved.add("部分非拉丁文字依赖主题的东亚或复杂文种字体")
     except (OSError, zipfile.BadZipFile, RuntimeError, zipfile.LargeZipFile, NotImplementedError, EOFError, zlib.error) as e:
         raise CheckError(f"无法读取 PPTX：{e}") from e
-    return sorted(declared, key=str.casefold), sorted(unresolved, key=str.casefold)
+    by_name = lambda names: sorted(names, key=str.casefold)  # noqa: E731
+    return by_name(declared), by_name(unresolved), by_name(fallbacks - declared)
 
 
 def normal(name: str) -> str:
@@ -118,13 +149,13 @@ def pdf_fonts(path: Path) -> tuple[list[dict[str, str]], bool]:
     return rows, bool(result.stderr.strip())
 
 
-def report_pdf(rows: list[dict[str, str]], declared: list[str]) -> bool:
-    """输出 PDF 证据；返回是否需要人工核查。"""
+def report_pdf(rows: list[dict[str, str]], declared: list[str], fallbacks: list[str] = ()) -> bool:
+    """输出 PDF 证据；返回是否需要人工核查。主题备选字体可用于对应名称，但不要求出现。"""
     print("PDF 字体证据（pdffonts）：")
     if not rows:
         print("- 无可枚举字体资源；可能是图片或轮廓化文字，待人工核查。")
         return True
-    declared_by_name = {normal(name): name for name in declared}
+    declared_by_name = {normal(name): name for name in [*declared, *fallbacks]}
     matched: set[str] = set()
     review = False
     for row in rows:
@@ -156,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pdf", type=Path, help="可选：转换后的 PDF，使用 pdffonts 列出字体证据")
     args = ap.parse_args(argv)
     try:
-        fonts, unresolved = declared_fonts(args.pptx)
+        fonts, unresolved, fallbacks = declared_fonts(args.pptx)
     except CheckError as e:
         print(f"错误：{e}", file=sys.stderr)
         return 2
@@ -174,6 +205,13 @@ def main(argv: list[str] | None = None) -> int:
             missing.append(font)
         result = "无法确认" if installed is None else ("本次枚举找到" if found else "本次枚举未检出（可能未使用）")
         print(f"- {font}：{result}")
+    if fallbacks:
+        head = f"主题按文字脚本的备选字体 {len(fallbacks)} 项（仅在对应文字出现且未另行指定字体时使用，不计入未检出）："
+        if installed is None:
+            print(head + "无法确认")
+        else:
+            absent = [font for font in fallbacks if normal(font) not in installed]
+            print(head + (f"本次枚举未检出 {len(absent)} 项：" + "、".join(absent) if absent else "本次枚举全部找到"))
     if unresolved:
         print("无法解析的字体引用或继承：" + "、".join(unresolved))
     if not fonts and not unresolved:
@@ -186,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.pdf:
         try:
             rows, pdf_warning = pdf_fonts(args.pdf)
-            pdf_review = report_pdf(rows, fonts)
+            pdf_review = report_pdf(rows, fonts, fallbacks)
         except CheckError as e:
             pdf_error = e
     if font_warning:
