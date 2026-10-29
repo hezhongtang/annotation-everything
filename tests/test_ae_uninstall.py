@@ -1,8 +1,9 @@
 """ae.py uninstall 的测试；均为合成数据与临时目录，绝不触碰真实家目录。
 
-进程检测的隔离：CLI 用例在 PATH 最前面放一个假的 `ps`，全表查询（-axo）输出测试
+进程检测的隔离：CLI 用例在 PATH 最前面放一个假的 `ps`，全表查询（-eo）输出测试
 指定的进程表，其余查询（-p）转交真 ps——这样本机遗留的 serve.py 不会影响用例，
 也不可能在测试里误杀真实进程；「拒绝卸载」用例则用真 ps 验证真实进程表可用。
+进程枚举与 serve.py 识别复用运行状态体检（#20）的 list_processes / serve_script_index。
 """
 from __future__ import annotations
 
@@ -52,7 +53,7 @@ class UninstallCliTests(unittest.TestCase):
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
         self.ae_home = self.root / "ledger"
-        # 假 ps：-axo 查询输出测试指定的进程表；其余转交真 ps
+        # 假 ps：-eo 全表查询输出测试指定的进程表；其余转交真 ps
         real_ps = shutil.which("ps") or "/bin/ps"
         self.bin = self.root / "bin"
         self.bin.mkdir()
@@ -60,7 +61,7 @@ class UninstallCliTests(unittest.TestCase):
         self.ps_table.write_text("", encoding="utf-8")
         shim = self.bin / "ps"
         shim.write_text(
-            f'#!/bin/sh\nif [ "$1" = "-axo" ]; then\n  cat "{self.ps_table}"\nelse\n  exec "{real_ps}" "$@"\nfi\n',
+            f'#!/bin/sh\nif [ "$1" = "-eo" ]; then\n  cat "{self.ps_table}"\nelse\n  exec "{real_ps}" "$@"\nfi\n',
             encoding="utf-8")
         shim.chmod(0o755)
         self.env = {**os.environ, "HOME": str(self.home),
@@ -307,15 +308,6 @@ class RemoveLinksTests(unittest.TestCase):
 
 class RunningServersTests(unittest.TestCase):
     """running_servers 与 stop_servers 的单元行为：注入列举器，不依赖真实进程表。"""
-
-    def test_parse_ps_extracts_pid_and_full_command(self):
-        out = ("  123 /usr/bin/python3 /a/serve.py /r --port 1\n"
-               "456 vim notes.txt\n"
-               "not-a-pid something\n"
-               "\n")
-        self.assertEqual(ae._parse_ps(out),
-                         [(123, "/usr/bin/python3 /a/serve.py /r --port 1"),
-                          (456, "vim notes.txt")])
 
     def test_running_servers_matches_any_serve_py_script_path(self):
         fake = [(1, "python3 /a/skill/scripts/serve.py /r"),

@@ -264,6 +264,12 @@ class DoctorCliTests(unittest.TestCase):
         p = self.run_ae(script, "doctor", "--json", path=path)
         return p, json.loads(p.stdout)
 
+    def fails_outside_runtime(self, doc):
+        """运行状态类以外的失败类别集合。CLI 子进程没法注入进程视图，本机真实残留服务
+        会让运行状态类失败、退出码变 1，因此全局退出码与 fail 数不可断言；
+        断言「失败只出现在运行状态类」在有无真实残留的机器上都成立。"""
+        return {r["category"] for r in doc["results"] if r["level"] == "失败"} - {"运行状态"}
+
     def rewrite_record_repo(self, repo: str):
         record_path = self.copy_dir / RECORD_NAME
         record = json.loads(record_path.read_text(encoding="utf-8"))
@@ -275,13 +281,12 @@ class DoctorCliTests(unittest.TestCase):
         empty_bin = self.root / "empty-bin"
         empty_bin.mkdir()
         p, doc = self.doctor_json(path=str(empty_bin))
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         by_code = {r["code"]: r for r in doc["results"]}
         self.assertEqual(by_code["fc-list"]["level"], "警告")
         self.assertEqual(by_code["pdffonts"]["level"], "警告")
         self.assertIn("fontconfig", by_code["fc-list"]["fix_command"])
         self.assertIn("poppler", by_code["pdffonts"]["fix_command"])
-        self.assertEqual(doc["summary"]["fail"], 0)
+        self.assertEqual(self.fails_outside_runtime(doc), set(), "可选工具缺失只警告，不造成失败")
 
     def test_dev_environment_present_with_warns_inside_repo(self):
         self.install()
@@ -289,12 +294,11 @@ class DoctorCliTests(unittest.TestCase):
         shutil.copytree(SKILL_SRC, repo / "skill" / "annotation-everything")
         self.rewrite_record_repo(str(repo))
         p, doc = self.doctor_json()
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("开发环境", {r["category"] for r in doc["results"]})
         by_code = {r["code"]: r for r in doc["results"]}
         self.assertEqual(by_code["git-hooks"]["level"], "警告", "合成仓库不是 git 仓库")
         self.assertIn(by_code["e2e-chrome"]["level"], ("通过", "警告"))
-        self.assertEqual(doc["summary"]["fail"], 0)
+        self.assertEqual(self.fails_outside_runtime(doc), set(), "开发环境的警告不造成失败")
 
     def test_dev_environment_absent_outside_repo(self):
         outside = self.root / "outside"
@@ -303,7 +307,6 @@ class DoctorCliTests(unittest.TestCase):
         self.install()
         self.rewrite_record_repo(str(self.root / "gone"))
         p, doc = self.doctor_json(script=outside / "ae.py")
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         categories = {r["category"] for r in doc["results"]}
         codes = {r["code"] for r in doc["results"]}
         self.assertNotIn("开发环境", categories)
