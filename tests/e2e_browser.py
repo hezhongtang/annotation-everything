@@ -411,7 +411,7 @@ def full_check_checks(browser, tmp: Path):
         item = json.loads((d / "handoff.json").read_text())["items"][-1]
         remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
         ok(item.get("fullCheck") is False and all(word in item.get("message", "") for word in ("全量勾稽", "报告和讲稿", "有依据", "不确定"))
-           and remaining and remaining[0].get("fullCheck") is True,
+           and remaining and remaining[0].get("fullCheck") is True and "截短附言" in old.inner_text("#toast"),
            "提交时旧服务未确认勾选：保留待补传要求")
         old.unroute("**/api/handoff", legacy_post)
         flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is True, old, 7)

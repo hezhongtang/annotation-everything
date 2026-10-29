@@ -464,7 +464,7 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
         if(hasFullCheck){const latest=r&&r.handoff&&r.handoff.latest,requested=op.fullCheck===true;
           const legacyOff=!requested&&r&&!("acceptedFullCheck" in r)&&latest&&latest.seq===r.seq&&latest.fullCheck!==true;
           if(!r||(r.acceptedFullCheck!==requested&&!legacyOff)){
-            srvNoFullCheck=true;toast("服务未确认全量勾稽选项：提交仍在本页暂存，请确认批次状态并启动新版服务",8000);return}}
+            srvNoFullCheck=true;toast("服务未确认全量勾稽选项：提交仍在本页暂存。旧服务可能已接收并截短附言，请核对批次状态后启动新版服务",9000);return}}
         pend.remove(op.opId);delete fails[op.opId];onSent(op,r||{})}
       catch(e){
         if(e.mismatch){mode="mismatch";return}
