@@ -18,11 +18,13 @@ import argparse
 import dataclasses
 import datetime
 import hashlib
+import http.client
 import json
 import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -45,6 +47,7 @@ LEVEL_PASS, LEVEL_WARN, LEVEL_FAIL = "通过", "警告", "失败"
 CATEGORY_INSTALL = "安装状态"
 CATEGORY_TOOLS = "可选工具"
 CATEGORY_DEV = "开发环境"
+CATEGORY_RUNTIME = "运行状态"
 MIN_PYTHON = (3, 9)
 
 
@@ -66,6 +69,10 @@ class DoctorContext:
     record: Optional[dict]      # 安装记录；读不到时为 None
     # Chrome 探测函数（返回可执行文件路径或 None）；测试注入用，None 时用默认探测 find_chrome
     chrome_probe: Optional[Callable[[], Optional[str]]] = None
+    # 运行状态检查的可注入点（默认 None = 本机真实来源；测试用来把范围限定在自建的台账、进程与端口）
+    ledger_home: Optional[Path] = None             # 台账目录；默认 AE_HOME 或 ~/.annotation-everything
+    process_lister: Optional[Callable[[], list]] = None   # () -> [(pid, 命令行)]；默认 ps 全机枚举
+    port_probe: Optional[Callable[[int], Optional[dict]]] = None  # 端口探测；默认 probe_port
 
 
 def skill_copy_dir() -> Path:
@@ -375,6 +382,241 @@ def check_links(ctx: DoctorContext) -> CheckResult:
                        install_link_fix(ctx.repo, agents))
 
 
+# ── 体检：运行状态（审阅台账、专属端口、残留服务） ──────────────────
+# 只读台账与进程/系统元数据：台账本身、审阅目录里的 review.json（只取审阅标识）与
+# .annotation-server.json（pid/port/dir），绝不读批注或材料内容。
+
+STATUS_FILE = ".annotation-server.json"   # 与技能本体 serve.py 的运行状态文件同名，只含 pid/port/dir 等元数据
+HOST = "127.0.0.1"
+# serve.py 的这些命令行选项各带一个值，解析目录参数时要连值一起跳过
+SERVE_OPTIONS_WITH_VALUE = ("--port", "--claim-port", "--on-handoff")
+
+_skill_ledger = None
+
+
+def skill_ledger_module():
+    """加载技能本体的 ledger.py：台账格式、专属端口池与失效判定的单一事实来源。"""
+    global _skill_ledger
+    if _skill_ledger is None:
+        scripts = Path(__file__).resolve().parent / SKILL_SRC / "scripts"
+        sys.path.insert(0, str(scripts))
+        import ledger
+        _skill_ledger = ledger
+    return _skill_ledger
+
+
+def load_ledger(ctx: DoctorContext):
+    """读台账，返回 (entries, error)：error 为 None 即可读（文件不存在视为空台账）。"""
+    try:
+        mod = skill_ledger_module()
+    except ImportError:
+        return None, f"技能本体不完整（找不到 {SKILL_SRC / 'scripts' / 'ledger.py'}），读不了审阅台账"
+    home = Path(ctx.ledger_home) if ctx.ledger_home is not None else mod.home()
+    path = home / mod.LEDGER_FILE
+    if not path.exists():
+        return {}, None
+    try:
+        # 复用 ledger.py 的读取、非法条目过滤与报错语义，保证与 serve.py 看到的一致
+        return mod._read(path)["reviews"], None
+    except mod.LedgerError as e:
+        return None, str(e)
+
+
+def repair_fix(repo: Optional[Path], *flags: str) -> str:
+    target = repo / "ae.py" if repo else Path("ae.py")
+    return f"python3 {target} repair " + " ".join(flags)
+
+
+def probe_port(port: int, timeout: float = 1.0):
+    """探测端口上的进程是不是本工具的服务；返回 None 表示端口空闲。
+
+    与技能本体 serve.py 的 probe() 行为一致：请求必须带 Host: 127.0.0.1:<端口> 头，
+    否则本工具的正常服务也会按 Host 校验返回 421，被误判成外部占用。
+    """
+    try:
+        with socket.create_connection((HOST, port), timeout=timeout):
+            pass
+    except OSError:
+        return None
+    try:
+        conn = http.client.HTTPConnection(HOST, port, timeout=timeout)
+        conn.request("GET", "/api/health", headers={"Host": f"{HOST}:{port}"})
+        response = conn.getresponse()
+        data = json.loads(response.read() or b"{}") if response.status == 200 else {}
+        conn.close()
+        return data if isinstance(data, dict) and data.get("app") == APP else {"app": "other"}
+    except (OSError, ValueError, http.client.HTTPException):
+        return {"app": "other"}
+
+
+def list_processes():
+    """本机全部进程的 (pid, 命令行)；ps 不可用时返回空列表（检查项按「未发现」处理）。"""
+    try:
+        done = subprocess.run(["ps", "-eo", "pid=,command="],   # macOS/Linux 都只认合并成一个参数的格式
+                              capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    procs = []
+    for line in done.stdout.splitlines():
+        head = line.strip().split(None, 1)
+        if len(head) == 2 and head[0].isdigit():
+            procs.append((int(head[0]), head[1]))
+    return procs
+
+
+def serve_dir_argument(cmdline: str) -> Optional[str]:
+    """serve.py 进程托管的审阅目录参数：命令行的脚本路径以 serve.py 结尾时，其后的第一个非选项参数。
+
+    不是 serve.py 进程、或没有目录参数时返回 None。
+    """
+    tokens = cmdline.split()
+    index = next((i for i, t in enumerate(tokens) if os.path.basename(t) == "serve.py"), None)
+    if index is None:
+        return None
+    i = index + 1
+    while i < len(tokens):
+        token = tokens[i]
+        if token in SERVE_OPTIONS_WITH_VALUE:
+            i += 2
+        elif token.startswith("-"):
+            i += 1
+        else:
+            return token
+    return None
+
+
+def process_cwd(pid: int) -> Optional[str]:
+    """进程的当前目录（解析相对的目录参数用）；拿不到返回 None。"""
+    if sys.platform == "darwin":
+        try:
+            done = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                                  capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        for line in done.stdout.splitlines():
+            if line.startswith("n"):
+                return line[1:]
+        return None
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        return None
+
+
+def server_port_of(pid: int, review_dir: Path) -> Optional[int]:
+    """从审阅目录的运行状态文件读这个进程占用的端口；文件缺失或 pid 对不上（过期）时返回 None。"""
+    try:
+        info = json.loads((Path(review_dir) / STATUS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    port = info.get("port") if isinstance(info, dict) else None
+    if isinstance(info, dict) and info.get("pid") == pid and isinstance(port, int) and not isinstance(port, bool):
+        return port
+    return None
+
+
+def _resolve_dir_argument(arg: str, entries: dict) -> Optional[Path]:
+    """把 serve.py 命令行里的目录参数解析为审阅目录：审阅标识（前缀）从台账查；
+    查不到或有歧义返回 None（按「不在台账里」处理）。路径参数按原样返回（相对路径由调用方结合进程 cwd）。"""
+    raw = arg.strip()
+    if raw.startswith((".", "~")) or "/" in raw or os.sep in raw:
+        return Path(raw).expanduser()
+    key = raw.lower()
+    if not skill_ledger_module().RID_PREFIX.fullmatch(key):
+        return Path(raw).expanduser()
+    hits = [rid for rid in entries if rid.startswith(key)]
+    if len(hits) != 1:
+        return None
+    return Path(entries[hits[0]]["dir"])
+
+
+def _same_dir(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return a == b
+
+
+def check_ledger_readable(ctx: DoctorContext) -> CheckResult:
+    entries, error = load_ledger(ctx)
+    if error is not None:
+        return CheckResult("ledger-readable", CATEGORY_RUNTIME, LEVEL_FAIL, error)
+    return CheckResult("ledger-readable", CATEGORY_RUNTIME, LEVEL_PASS,
+                       f"审阅台账可读（{len(entries)} 份审阅）")
+
+
+def find_stale_entries(entries: dict) -> list:
+    """台账里的失效记录 [(审阅标识, 端口)]：目录不在（missing）或标识对不上（mismatch）。"""
+    mod = skill_ledger_module()
+    return [(rid, e.get("port")) for rid, e in entries.items() if mod.entry_state(rid, e) != "ok"]
+
+
+def check_ledger_stale(ctx: DoctorContext) -> CheckResult:
+    entries, error = load_ledger(ctx)
+    if error is not None:
+        return CheckResult("ledger-stale", CATEGORY_RUNTIME, LEVEL_PASS, "台账不可读，未检查失效记录")
+    stale = find_stale_entries(entries)
+    if not stale:
+        return CheckResult("ledger-stale", CATEGORY_RUNTIME, LEVEL_PASS, "台账里没有失效记录")
+    detail = "、".join(f"{rid[:8]}（端口 {port if port else '未分配'}）" for rid, port in stale)
+    return CheckResult("ledger-stale", CATEGORY_RUNTIME, LEVEL_WARN,
+                       f"台账里有 {len(stale)} 条失效记录：{detail}",
+                       repair_fix(ctx.repo, "--forget-stale"))
+
+
+def check_port_pool(ctx: DoctorContext) -> CheckResult:
+    try:
+        mod = skill_ledger_module()
+    except ImportError:
+        return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS, "技能本体不完整，未检查专属端口")
+    first, last = mod.BASE_PORT, mod.BASE_PORT + mod.MAX_SCAN - 1
+    probe = ctx.port_probe if ctx.port_probe is not None else probe_port
+    foreign = [port for port in range(first, last + 1)
+               if (found := probe(port)) is not None and found.get("app") != APP]
+    if foreign:
+        ports = "、".join(str(port) for port in foreign)
+        return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_FAIL,
+                           f"专属端口 {first}–{last} 里被其他进程占用：{ports}")
+    return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS,
+                       f"专属端口 {first}–{last} 未被其他进程占用")
+
+
+def find_orphan_servers(entries: dict, lister) -> list:
+    """枚举残留服务，返回 [(pid, 端口, 审阅目录)]：运行中的 serve.py，托管的审阅目录
+    不在台账里或已不存在。端口/目录定位不到时为 None（如目录已删、标识查不到）。"""
+    orphans = []
+    for pid, cmdline in lister():
+        arg = serve_dir_argument(cmdline)
+        if arg is None:
+            continue
+        review_dir = _resolve_dir_argument(arg, entries)
+        if review_dir is not None and not review_dir.is_absolute():
+            cwd = process_cwd(pid)
+            review_dir = Path(cwd) / review_dir if cwd else review_dir
+        if review_dir is None or not review_dir.is_dir() \
+                or not any(_same_dir(review_dir, Path(e["dir"])) for e in entries.values()):
+            port = server_port_of(pid, review_dir) if review_dir is not None else None
+            orphans.append((pid, port, review_dir))
+    return orphans
+
+
+def check_orphan_servers(ctx: DoctorContext) -> CheckResult:
+    """残留服务：运行中的 serve.py，托管的审阅目录不在台账里或已不存在。"""
+    entries, error = load_ledger(ctx)
+    if error is not None:
+        return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_PASS, "台账不可读，未检查残留服务")
+    lister = ctx.process_lister if ctx.process_lister is not None else list_processes
+    orphans = find_orphan_servers(entries, lister)
+    if orphans:
+        detail = "；".join(f"pid {pid}" + (f"（端口 {port}）" if port else "") for pid, port, _ in orphans)
+        return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_FAIL,
+                           f"发现 {len(orphans)} 个残留服务（托管的审阅不在台账里或目录已不存在）：{detail}",
+                           repair_fix(ctx.repo, "--stop-orphans"))
+    running = sum(1 for _, cmdline in lister() if serve_dir_argument(cmdline) is not None)
+    suffix = f"（{running} 个 serve.py 进程均在台账内）" if running else ""
+    return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_PASS, f"未发现残留服务{suffix}")
+
+
 # ── 可选工具（缺失只警告，不影响退出码） ────────────────────────
 
 
@@ -461,6 +703,7 @@ def check_chrome(ctx: DoctorContext) -> CheckResult:
 
 # 全部检查项：doctor 按此顺序执行；后续工单在元组里追加新检查项函数
 CHECKS = (check_python, check_copy_present, check_copy_sync, check_copy_version, check_links,
+          check_ledger_readable, check_ledger_stale, check_port_pool, check_orphan_servers,
           check_fc_list, check_pdffonts)
 
 # 仅在仓库内运行（ctx.repo 非 None）的检查项：仓库外 doctor 的输出与 --json 都不出现「开发环境」类别
