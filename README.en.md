@@ -183,15 +183,50 @@ flowchart LR
     RV -->|"Return to the reviewer"| U["Flags the annotations that need the reviewer's decision, with reasons"]
 ```
 
+## Installation and maintenance
+
+The management command is `ae.py` at the repository root (Python standard library only), with four subcommands: `install`, `doctor`, `repair`, `uninstall`.
+
+### For people
+
+Prerequisites: Python 3.9 or later, macOS or Linux.
+
+```bash
+python3 ae.py install                            # install: copy the skill into ~/.claude/skills/ (the skill copy)
+python3 ae.py install --link codex,agents,zcode  # optional: also symlink the copy into these agents' skill directories
+python3 ae.py doctor                             # check: installation, runtime, optional tools, dev environment
+python3 ae.py repair                             # repair: prints a plan first, fixes the safe items automatically
+python3 ae.py uninstall                          # uninstall: remove the skill copy and links, keep the review ledger by default
+```
+
+- Each check reports pass / warning / failure; failures include a repair or diagnostic command. Exit code 0 means all passed or only warnings, 1 means there are failures, and 2 means the command itself failed (`doctor --json` outputs `error`). Development checks appear only when the current working directory is inside the source repository.
+- In `repair`, deleting stale ledger entries (`--forget-stale`) and stopping orphaned servers (`--stop-orphans`) are destructive and need their explicit flags; `--dry-run` only prints the plan.
+- `uninstall` never touches review directories; `--purge` also deletes the review ledger; a running `serve.py` blocks it unless `--stop-servers` stops it first.
+- Before stopping a server, the command verifies that Python is executing the script from this repository or the current skill copy, then checks the process identity again before sending a signal; it refuses to stop an unverified process. `--purge` removes only known ledger files and refuses to proceed if the ledger is corrupt or its directory contains other files or unregistered review directories.
+
+Once installed, tell Claude Code "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow.
+
+### For agents
+
+Send the following to your agent, replacing `<repo-path>` with the absolute path of this repository:
+
+> Install and check the annotation-everything skill in `<repo-path>`. Follow the numbered steps, confirming the success signal before moving on:
+>
+> 1. Run `python3 <repo-path>/ae.py doctor --json`. On exit code 2, inspect the JSON `error` and resolve it; a corrupt installation record can be rebuilt by reinstalling in step 2. In normal output, if no item in `results` has `category` `安装状态` (installation) with `level` `失败` (fail), the skill is already installed — skip to step 4.
+> 2. Pick the link flag by which agent you are: Claude Code needs no `--link`; Codex uses `--link codex`; agents under `~/.agents` use `--link agents`; zcode uses `--link zcode`. Run `python3 <repo-path>/ae.py install` (adding the `--link` you need). Success: exit code 0.
+> 3. Run `python3 <repo-path>/ae.py doctor --json` again and judge by the JSON: no failures in the `安装状态` (installation) category means success. Failures in the `运行状态` (runtime) category, such as orphan servers or an owned port held by another process, do not affect the install; note them for the report in step 5. Warnings in `summary.warn` (such as missing optional tools `fc-list`/`pdffonts`) do not block use. If installation failures remain, apply that item's `fix_command` and repeat this step; if a `fix_command` contains a destructive flag listed in step 4, ask the user for consent before running it.
+> 4. When repairs are needed, run `python3 <repo-path>/ae.py repair` (`--dry-run` shows the plan first). **`--purge`, `--forget-stale`, `--stop-orphans`, `--stop-servers` are all destructive — ask the user for consent before adding any of them.**
+> 5. Report back to the user: whether the install succeeded, the check results, and any warnings still unresolved.
+
 ## Quick start
 
 **1. Install the skill**
 
 ```bash
-tools/install.sh
+python3 ae.py install
 ```
 
-The skill is copied to `~/.claude/skills/annotation-everything`. After that, tell Claude Code something like "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow.
+The skill is copied to `~/.claude/skills/annotation-everything` (that copy is the *skill copy*). See **Installation and maintenance** above for the full install, check, repair and uninstall instructions.
 
 **2. Try it on the bundled sample**
 
@@ -222,6 +257,7 @@ See [references/formats.md](skill/annotation-everything/references/formats.md) f
 
 | Command | What it does |
 |---|---|
+| `ae.py install` / `doctor` / `repair` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--link codex,agents,zcode` symlinks it into other agents' skill directories); check installation, runtime, optional tools and dev environment (`--json` for structured output); repair what the checks find (prints a plan first, fixes safe items automatically, `--forget-stale`/`--stop-orphans` run the destructive ones explicitly, `--dry-run` only prints); uninstall removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first) |
 | `build_viewer.py --report … --script … --out <review-dir>` | Build the review page; `--rebuild <review-dir>` rebuilds it with the recorded options |
 | `serve.py <review-dir>` | Start the local server; each review keeps its own dedicated port |
 | `serve.py list` / `status` / `forget` | List every review on this machine, show one review's status, remove a ledger entry you no longer need |
@@ -265,10 +301,10 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── skill_sources.py           discovers skill directories on this machine
 │   └── check_pptx_fonts.py        PPTX and PDF font check
 └── evals/                         skill evaluation cases (used with skill-creator)
+ae.py                             unified management command: install the skill copy, doctor checks it, repair fixes it, uninstall removes it
 fixtures/sample/                   synthetic sample (fictional data)
 tests/                             unit tests and end-to-end browser tests
 tools/
-├── install.sh                     installs into ~/.claude/skills/
 ├── setup-dev.sh                   enables the repository's git hooks
 └── git-hooks/                     refuse commits on main, pushes to main and deleting main
 .github/                           CI, issue templates and the pull request template
@@ -284,7 +320,7 @@ After cloning, run `tools/setup-dev.sh` once to enable the git hooks.
 python3 -m unittest discover tests                                   # unit tests (standard library only)
 uv run --no-project --with playwright python tests/e2e_browser.py   # end-to-end browser tests (uses your local Google Chrome)
 python3 skill/annotation-everything/scripts/serve.py check          # server security self-check
-tools/install.sh                                                     # sync to ~/.claude/skills/
+python3 ae.py install                                               # sync to ~/.claude/skills/
 ```
 
 - Tests put the review ledger in a temporary directory (the `AE_HOME` environment variable). When trying things by hand or running skill evaluations, run `export AE_HOME=$(mktemp -d)` first, so throwaway reviews are not registered in your real ledger and do not take ports that belong to real reviews.

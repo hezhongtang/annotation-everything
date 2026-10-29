@@ -183,15 +183,50 @@ flowchart LR
     RV -->|"退回给审阅人决定"| U["标出待审阅人决定的批注和原因"]
 ```
 
+## 安装与维护
+
+管理命令是仓库根目录的 `ae.py`（只用 Python 标准库），四个子命令：`install` 安装、`doctor` 体检、`repair` 修复、`uninstall` 卸载。
+
+### 给人看
+
+前提：Python 3.9 及以上，macOS 或 Linux。
+
+```bash
+python3 ae.py install                            # 安装：把技能复制为技能副本到 ~/.claude/skills/
+python3 ae.py install --link codex,agents,zcode  # 可选：同时为这些 Agent 建指向副本的软链接
+python3 ae.py doctor                             # 体检：安装状态、运行状态、可选工具、开发环境
+python3 ae.py repair                             # 修复：先列计划，安全项自动修
+python3 ae.py uninstall                          # 卸载：删除技能副本和链接，默认保留审阅台账
+```
+
+- 体检逐项给出「通过 / 警告 / 失败」；失败项附修复或排障命令。退出码 0 表示全部通过或只有警告，1 表示有失败项，2 表示命令自身出错（`doctor --json` 输出 `error`）。开发环境类别仅在当前工作目录位于来源仓库内时出现。
+- `repair` 里删除台账失效记录（`--forget-stale`）、结束残留服务（`--stop-orphans`）是破坏性操作，要显式加参数；`--dry-run` 只看计划不动手。
+- `uninstall` 任何情况下都不动审阅目录；`--purge` 才一并删除审阅台账；有 `serve.py` 在运行时会拒绝，`--stop-servers` 先停止再卸。
+- 停止服务前会核实正在执行的是本仓库或当前技能副本的脚本，并在发信号前复核进程身份；无法核实时拒绝停止。`--purge` 仅删除已知台账文件；台账损坏、目录内有其他文件或未登记的审阅目录时拒绝清除。
+
+装好后在 Claude Code 中说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」，Claude Code 就会按这套流程工作。
+
+### 给 Agent 看
+
+把下面这段发给你的 Agent，并把 `<仓库路径>` 换成本仓库的绝对路径：
+
+> 在 `<仓库路径>` 安装并体检 annotation-everything 技能，按编号步骤执行，每步先确认成功标志再往下：
+>
+> 1. 运行 `python3 <仓库路径>/ae.py doctor --json`。退出码 2 时先查看 JSON 的 `error` 并排障；若提示安装记录损坏，可按第 2 步重新安装。正常输出中，若 `results` 里没有 `category` 为「安装状态」且 `level` 为「失败」的项，说明已装好，跳到第 4 步。
+> 2. 按你是哪种 Agent 决定链接参数：Claude Code 不需要 `--link`；Codex 用 `--link codex`；`~/.agents` 下的 Agent 用 `--link agents`；zcode 用 `--link zcode`。运行 `python3 <仓库路径>/ae.py install`（需要链接时加上对应 `--link`）。成功标志：退出码 0。
+> 3. 再次运行 `python3 <仓库路径>/ae.py doctor --json`，以 JSON 判定成败：「安装状态」类没有失败项即安装成功。「运行状态」类的失败（如残留服务、专属端口被占用）不影响安装，记下来在第 5 步报告；`summary.warn` 里的警告（如缺少可选工具 `fc-list`/`pdffonts`）不阻塞使用。「安装状态」类仍有失败时，按该项的 `fix_command` 修复后重跑本步；`fix_command` 含第 4 步列出的破坏性参数时，先征得用户同意再执行。
+> 4. 需要修复时运行 `python3 <仓库路径>/ae.py repair`（`--dry-run` 先看计划）。**`--purge`、`--forget-stale`、`--stop-orphans`、`--stop-servers` 都是破坏性操作，必须先征得用户同意再加。**
+> 5. 完成后向用户报告：安装是否成功、各项体检结果，以及尚未解决的警告。
+
 ## 快速开始
 
 **1. 安装技能**
 
 ```bash
-tools/install.sh
+python3 ae.py install
 ```
 
-技能会被复制到 `~/.claude/skills/annotation-everything`。之后在 Claude Code 中说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」，Claude Code 就会按这套流程工作。
+技能会被复制到 `~/.claude/skills/annotation-everything`（这份复制称为「技能副本」）。安装、体检、修复、卸载的完整说明见上面「安装与维护」。
 
 **2. 用合成样例试用**
 
@@ -222,6 +257,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 | 命令 | 作用 |
 |---|---|
+| `ae.py install` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--link codex,agents,zcode` 为其他 Agent 建指向副本的软链接）；体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果）；修复体检发现的问题（先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止） |
 | `build_viewer.py --report … --script … --out 审阅目录` | 生成对照页；`--rebuild 审阅目录` 按上次记录的参数重新生成 |
 | `serve.py 审阅目录` | 启动本机服务；每份审阅都有固定的专属端口 |
 | `serve.py list` / `status` / `forget` | 列出本机所有审阅、查看某份审阅的状态、删除不再使用的台账记录 |
@@ -265,10 +301,10 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── skill_sources.py           发现本机的技能目录
 │   └── check_pptx_fonts.py        PPTX 与 PDF 字体核查
 └── evals/                         技能评测用例（供 skill-creator 使用）
+ae.py                             统一管理命令：install 安装技能副本，doctor 体检，repair 修复，uninstall 卸载
 fixtures/sample/                   合成样例（虚构数据）
 tests/                             单元测试和浏览器端到端测试
 tools/
-├── install.sh                     安装到 ~/.claude/skills/
 ├── setup-dev.sh                   启用仓库自带的 git 钩子
 └── git-hooks/                     拒绝在 main 上提交、推送到 main、删除 main
 .github/                           CI、issue 模板和 PR 模板
@@ -284,7 +320,7 @@ GLOSSARY.md                        术语表
 python3 -m unittest discover tests                                   # 单元测试（只用标准库）
 uv run --no-project --with playwright python tests/e2e_browser.py   # 浏览器端到端测试（使用本机的 Google Chrome）
 python3 skill/annotation-everything/scripts/serve.py check          # 服务安全自检
-tools/install.sh                                                     # 同步到 ~/.claude/skills/
+python3 ae.py install                                               # 同步到 ~/.claude/skills/
 ```
 
 - 测试会把审阅台账放到临时目录（环境变量 `AE_HOME`）。手动试用或运行技能评测时，也建议先执行 `export AE_HOME=$(mktemp -d)`，避免临时审阅登记进本机真实的台账，或占用真实审阅的专属端口。

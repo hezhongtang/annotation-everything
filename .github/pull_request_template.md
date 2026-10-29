@@ -17,7 +17,7 @@ Closes #
 - [ ] `python3 -m unittest discover tests`
 - [ ] 改了页面模板或服务：`uv run --no-project --with playwright python tests/e2e_browser.py`
 - [ ] 改了服务：`python3 skill/annotation-everything/scripts/serve.py check`
-- [ ] 改了 skill：已运行 `tools/install.sh`
+- [ ] 改了 skill：已运行 `python3 ae.py install`
 - [ ] 按 AGENTS.md「README 维护」检查过中英两份 README
 
 ## 兼容性
