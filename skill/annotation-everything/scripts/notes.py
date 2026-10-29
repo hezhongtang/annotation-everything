@@ -76,7 +76,8 @@ def trail_text(n: dict[str, Any], last: int = 4) -> str:
 
 def target_text(h: dict[str, Any]) -> str:
     return ("做到「已初改·待复核」后停下等用户" if h.get("target") == "review" else "做到定稿") + \
-           ("；允许派发子代理" if h.get("allowSubagents") else "；不允许派发子代理（由当前会话的主代理亲自处理）")
+           ("；允许派发子代理" if h.get("allowSubagents") else "；不允许派发子代理（由当前会话的主代理亲自处理）") + \
+           ("；" + store.FULL_CHECK_TEXT if h.get("fullCheck") else "")
 
 
 def handoff_lines(state: dict[str, Any] | None) -> list[str]:
@@ -87,8 +88,8 @@ def handoff_lines(state: dict[str, Any] | None) -> list[str]:
     line = (f"交给 Agent：最近一次是第 {h['seq']} 批，{STATUS_ZH.get(h.get('status'), h.get('status'))}"
             f"（提交于 {h.get('at')}，当时未处理 {h.get('openCount')} 条）")
     out = [line]
-    if h.get("message"):
-        out.append(f"用户附言：{h['message']}")
+    if message := store.handoff_user_message(h):
+        out.append(f"用户附言：{message}")
     if h.get("status") == "done":
         out.append(f"这批解决 {h.get('resolvedCount', 0)} 条" + (f"；处理摘要：{h['summary']}" if h.get("summary") else ""))
     if state.get("total"):
@@ -128,8 +129,8 @@ def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: i
         out.append(f"提交：{h.get('at')}，当时未处理 {h.get('openCount')} 条"
                    + (f"，涉及第 {'、'.join(map(str, h.get('pages') or []))} 页" if h.get("pages") else "")
                    + (f"（等待接收期间又提交 {h['updates']} 次，已合并）" if h.get("updates") else ""))
-        if h.get("message"):
-            out.append(f"用户附言：{h['message']}")
+        if message := store.handoff_user_message(h):
+            out.append(f"用户附言：{message}")
         if "target" in h:
             out.append(f"要求：{target_text(h)}")
         if h.get("alwaysSkills"):
@@ -564,7 +565,7 @@ def main(argv: list[str] | None = None) -> int:
                 name, _, desc = it.partition("=")
                 name = store.clean_skill_names(name)
                 if name:
-                    out.append({"name": name[0], "desc": desc.strip()[:120]})
+                    out.append({"name": name[0], "desc": desc.strip()})
             return out
         scope_of = {"全部": "all", "全部批注": "all", "all": "all", "报告": "报告", "讲稿": "讲稿", "风格优化": "style", "style": "style"}
 
@@ -582,14 +583,19 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, store.NoteError) as e:
             print(f"错误：{e}", file=sys.stderr)
             return 2
-        cat = [] if (a.clear or a.set is not None) else store.skills_catalog(d)
-        for it in parse(a.set) + parse(a.add):
-            cat = [c for c in cat if c["name"] != it["name"]] + [it]
-        drop = set(store.clean_skill_names(a.remove or []))
-        cat = [c for c in cat if c["name"] not in drop]
-        if a.clear or a.set is not None or a.add or a.remove:
-            store.skills_save(d, cat)
-        if set_al is not None or add_al or a.always_remove or a.always_clear:
+        catalog_change = bool(a.clear or a.set is not None or a.add or a.remove)
+        always_change = bool(set_al is not None or add_al or a.always_remove or a.always_clear)
+        if catalog_change:
+            try:
+                cat = store.skills_update(d, set_to=parse(a.set) if a.set is not None else None,
+                                          add=parse(a.add), remove=a.remove, clear=a.clear, always_set=set_al,
+                                          always_add=add_al, always_remove=a.always_remove, always_clear=a.always_clear)
+            except (OSError, store.NoteError) as e:
+                print(f"错误：{e}", file=sys.stderr)
+                return 2
+        else:
+            cat = store.skills_catalog(d)
+        if always_change and not catalog_change:
             try:
                 store.always_update(d, set_to=set_al, add=add_al, remove=a.always_remove, clear=a.always_clear)
             except store.NoteError as e:
@@ -857,11 +863,13 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
         print(f"# 收到复核请求：第 {item['seq']} 批（初改由 {item.get('claimedBy') or '代理'} 完成）")
         if item.get("reviewMessage"):
             print(f"用户附言（请求复核时）：{item['reviewMessage']}")
-        if item.get("message"):
-            print(f"用户附言（提交时）：{item['message']}")
+        if message := store.handoff_user_message(item):
+            print(f"用户附言（提交时）：{message}")
         if item.get("summary"):
             print(f"初改摘要：{item['summary']}")
         print(sub_line)
+        if item.get("fullCheck"):
+            print(store.FULL_CHECK_TEXT)
         print("你是复核者：逐条看初改（notes.py diff 看源文件改了哪里），给结论——"
               f"notes.py review {d} <id> --ok / --revise --note \"再改了什么\" / --return --note \"要用户拍板的原因\"；"
               f"提交时未处理、初改没动的批注也由你处理（notes.py resolve --seq {item['seq']}）。重建对照页，最后 "
@@ -872,8 +880,8 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
         return 0
     pages = "、".join(str(p) for p in item.get("pages") or []) or "无"
     print(f"# 收到「交给 Agent」第 {item['seq']} 批（{item.get('at')}）")
-    if item.get("message"):
-        print(f"用户附言：{item['message']}")
+    if message := store.handoff_user_message(item):
+        print(f"用户附言：{message}")
     print(f"要求：{target_text(item)}")
     print(sub_line)
     alw = store.always_skills(d)

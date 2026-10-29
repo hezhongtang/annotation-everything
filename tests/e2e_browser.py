@@ -35,6 +35,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 FIXTURE = ROOT / "fixtures" / "sample"
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-e2e-home-")   # 测试不碰用户真实的审阅台账；子进程继承
+os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-e2e-user-")       # 技能扫描只使用合成目录
+os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
+os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")
 RESULTS: list[tuple[bool, str]] = []
 STAGE = "document.getElementById('host').shadowRoot.getElementById('ae-stage')"
 
@@ -122,10 +125,332 @@ def drag_select(page, locator):
     page.wait_for_timeout(200)
 
 
+def skill_search_checks(browser, tmp: Path):
+    """通过真实浏览器验证技能输入；目录内容均为合成数据。"""
+    d = tmp / "skill_search"
+    d.mkdir()
+    (d / "skills.json").write_text(json.dumps({"version": 1, "skills": [
+        {"name": "unsafe-name", "desc": '恶意 <img src=x onerror="window.__skill_xss=1">'},
+        {"name": "writer", "desc": "文字和字体校对"},
+        {"name": "chart", "desc": "图表设计"},
+    ], "always": []}, ensure_ascii=False), encoding="utf-8")
+    build(d)
+    def exercise(page, mode):
+        def check(value, label):
+            ok(value, f"{mode}：{label}")
+        page.fill("#nskills", "")
+        options = page.locator('[role="listbox"] [role="option"]')
+        check(options.locator(".skill-rec").count() == 0, "没有相关信号时不标记建议")
+        page.keyboard.press("ArrowUp")
+        page.keyboard.press("Enter")
+        check(page.input_value("#nskills") == "chart", "向上键从最后一个候选开始")
+        page.fill("#nskills", "字体")
+        check(options.filter(has_text="writer").count() == 1, "按技能说明中的部分文字显示候选")
+        page.keyboard.press("ArrowDown")
+        if mode == "服务模式":
+            page.wait_for_timeout(4500)  # 跨过一次服务轮询，选择不能丢失
+        page.keyboard.press("Enter")
+        check(page.input_value("#nskills") == "writer", "方向键和回车选择候选")
+        page.fill("#nskills", "chart, 字体, custom")
+        page.locator("#nskills").evaluate("el => { el.setSelectionRange(9, 9); el.dispatchEvent(new MouseEvent('click', {bubbles:true})); }")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        check(page.input_value("#nskills") == "chart, writer, custom", "替换光标所在技能并保留前后项")
+        page.fill("#nskills", "CHa")
+        check(options.filter(has_text="chart").count() == 1, "技能名称搜索不区分大小写")
+        page.fill("#nskills", "恶意")
+        check(options.filter(has_text="unsafe-name").count() == 1 and options.locator("img").count() == 0,
+              "技能说明按文本展示，不注入 HTML")
+        page.fill("#nskills", "字体")
+        page.keyboard.press("ArrowDown")
+        page.dispatch_event("#nskills", "keydown", {"key": "Enter", "isComposing": True, "keyCode": 229})
+        check(page.input_value("#nskills") == "字体", "输入法组合时回车不选择候选")
+        page.fill("#ntext", "合成搜索批注")
+        page.fill("#nskills", "custom-skill")
+        check(options.count() == 0, "无匹配时不强制选择")
+        page.click('[data-act="add"]')
+        check("custom-skill" in page.inner_text("#nlist"), "无匹配的手工技能可随批注保存")
+        page.locator('#nlist [data-act="edit"]').first.click()
+        page.fill("#eskills", "字体")
+        check(options.filter(has_text="writer").count() == 1, "编辑批注时也可按说明搜索")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        page.locator('#nlist [data-act="save"]').first.click()
+        check("⚙ writer" in page.inner_text("#nlist"), "编辑批注可保存选择的技能")
+        page.click("#alwaysBtn")
+        page.fill("#alwaysRows .aname", "图表")
+        check(options.filter(has_text="chart").count() == 1, "常驻技能按说明搜索")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        rows = page.locator("#alwaysRows .arow")
+        check(rows.count() == 1 and rows.first.locator(".aname").input_value() == "chart",
+              "选择高亮候选时回车不新增行")
+        rows.first.locator(".ascope").select_option("讲稿")
+        rows.first.locator(".aname").focus()
+        page.keyboard.press("Enter")
+        check(rows.count() == 2 and rows.first.locator(".ascope").input_value() == "讲稿",
+              "未选择候选时回车新增行并保留原范围")
+        last = rows.last.locator(".aname")
+        check(last.evaluate("el => document.activeElement === el"), "新行自动获得焦点")
+        last.fill("writer")
+        last.dispatch_event("keydown", {"key": "Enter", "isComposing": True, "keyCode": 229})
+        check(rows.count() == 2, "输入法组合时回车不新增行")
+        page.keyboard.press("Control+Enter")
+        check(wait_until(lambda: page.inner_text("#alwaysN") == "2", page, 5), "Ctrl+Enter 保存常驻技能")
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.goto((d / "index.html").as_uri())
+    exercise(page, "文件模式")
+    ctx.close()
+    port = free_port()
+    server = start_server(d, port)
+    try:
+        ctx = browser.new_context()
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        exercise(page, "服务模式")
+        ctx.close()
+    finally:
+        stop(server)
+def skill_recommendation_checks(browser, tmp: Path):
+    d = tmp / "skill_recommendations"
+    d.mkdir()
+    report = tmp / "合成PPT报告.html"
+    report.write_text((FIXTURE / "report.html").read_text(encoding="utf-8"), encoding="utf-8")
+    skills = [{"name": "plain", "desc": "一般帮助"},
+              {"name": "typography", "desc": "字体字号与专业排版"},
+              {"name": "humanizer-zh", "desc": "中文写作与措辞润色"},
+              {"name": "slides-format-check", "desc": "PPT 幻灯片格式检查"}]
+    skills += [{"name": f"extra-{n:02d}", "desc": "其他技能"} for n in range(12)]
+    (d / "skills.json").write_text(json.dumps({"version": 1, "skills": skills, "always": []}, ensure_ascii=False), encoding="utf-8")
+    build(d, report=report, script=None)
+    ok(str(tmp) not in (d / "index.html").read_text(encoding="utf-8"), "推荐上下文不暴露本机路径")
+    def exercise(page, mode):
+        def check(value, label):
+            ok(value, f"{mode}：{label}")
+        options = page.locator('[role="listbox"] [role="option"]')
+        page.fill("#ntext", "请调整字体和对齐")
+        page.click("#nskills")
+        check(options.count() > 0 and "typography" in options.first.inner_text() and "建议" in options.first.inner_text(),
+              "根据字体批注优先推荐相关技能")
+        page.fill("#ntext", "请修正错别字并润色措辞")
+        page.click("#nskills")
+        check(options.count() > 0 and "humanizer-zh" in options.first.inner_text(), "批注变化后更新推荐")
+        page.fill("#ntext", "")
+        page.click("#nskills")
+        check(options.count() > 0 and "slides-format-check" in options.first.inner_text(), "材料文件名可影响推荐")
+        check(options.count() <= 8, "空输入只显示少量候选")
+        more = page.get_by_role("button", name="查看全部技能")
+        if more.count():
+            more.click()
+        check(options.count() == len(skills), "可浏览完整技能目录")
+        page.fill("#nskills", "extra-11")
+        check(options.filter(has_text="extra-11").count() == 1, "可搜索首屏之外的技能")
+        page.fill("#nskills", "")
+        page.fill("#ntext", "合成批注")
+        page.click('[data-act="add"]')
+        page.locator('#nlist [data-act="edit"]').first.click()
+        page.fill("#etext", "修改错别字和措辞")
+        page.click("#eskills")
+        check(options.count() > 0 and "humanizer-zh" in options.first.inner_text(), "编辑批注时按当前内容推荐")
+        page.fill("#ntext", "调整字体层级")
+        page.click("#nskills")
+        check(options.count() > 0 and "typography" in options.first.inner_text(), "新批注推荐不受另一个编辑草稿干扰")
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.goto((d / "index.html").as_uri())
+    exercise(page, "文件模式")
+    ctx.close()
+    port = free_port()
+    server = start_server(d, port)
+    try:
+        ctx = browser.new_context()
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        exercise(page, "服务模式")
+        ctx.close()
+    finally:
+        stop(server)
+    title_report = tmp / "neutral.html"
+    title_report.write_text('<!doctype html><title>合成材料</title><section class="page" data-page="1" data-key="one"><h1>字体层级</h1></section>', encoding="utf-8")
+    title_review = tmp / "title_recommendations"
+    title_review.mkdir()
+    (title_review / "skills.json").write_text(json.dumps({"version": 1, "skills": skills, "always": []}, ensure_ascii=False), encoding="utf-8")
+    build(title_review, report=title_report, script=None)
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.goto((title_review / "index.html").as_uri())
+    page.click("#nskills")
+    options = page.locator('[role="listbox"] [role="option"]')
+    ok(options.count() > 0 and "typography" in options.first.inner_text(), "当前页面标题可影响技能推荐")
+    ctx.close()
+
+
+def full_check_checks(browser, tmp: Path):
+    """真实页面提交全量勾稽，并检查 Agent 接收和处理记录。"""
+    d = tmp / "full_check"
+    build(d)
+    port = free_port()
+    server = start_server(d, port)
+    ctx = browser.new_context()
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        page.click("#handBtn")
+        checkbox = page.locator("#hFullCheck")
+        if not checkbox.count():
+            ok(False, "交给 Agent 时可选择全量勾稽")
+            return
+        ok(not checkbox.is_checked(), "全量勾稽默认不勾选")
+        checkbox.check()
+        page.fill("#handMsg", "请核对整份材料")
+        page.click("#doHand")
+        saved = wait_until(lambda: (d / "handoff.json").exists(), page, 5)
+        item = json.loads((d / "handoff.json").read_text())["items"][-1] if saved else {}
+        ok(item.get("fullCheck") is True and item.get("userMessage") == "请核对整份材料"
+           and item.get("message", "").count("全量勾稽") == 1, "勾选全量勾稽后保存要求和原始附言")
+        received = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "wait", str(d), "--timeout", "5"],
+                                  capture_output=True, text=True, timeout=15)
+        ok(received.returncode == 0 and "全量勾稽" in received.stdout, "等待中的 Agent 收到全量勾稽要求")
+        page.keyboard.press("j")
+        page.wait_for_timeout(500)
+        ok("全量勾稽" in page.inner_text("#batchList"), "处理记录显示全量勾稽要求")
+        page.keyboard.press("Escape")
+        page.click("#handBtn")
+        ok(page.is_checked("#hFullCheck"), "再次提交时记住这份审阅的勾选状态")
+
+        ctx.set_offline(True)
+        page.click("#doHand")
+        rid = json.loads((d / "review.json").read_text())["reviewId"]
+        key = f"ae.{rid}.queue"
+        queued = wait_until(lambda: page.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]').length", key) > 0, page, 5)
+        ok(queued, "断线提交时全量勾稽要求留在待补传队列")
+        page.close()
+        ctx.set_offline(False)
+        old = ctx.new_page()
+
+        def no_full_check(route):
+            response = route.fetch()
+            body = response.json()
+            body["features"] = [feature for feature in body.get("features", []) if feature != "full-check"]
+            route.fulfill(response=response, json=body)
+
+        old.route("**/api/notes", no_full_check)
+        old.goto(f"http://127.0.0.1:{port}/")
+        old.wait_for_timeout(1200)
+        items = json.loads((d / "handoff.json").read_text())["items"]
+        remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
+        ok(len(items) == 1 and remaining and remaining[0].get("fullCheck") is True,
+           "旧服务不能静默丢弃暂存的全量勾稽要求")
+        old.click("#handBtn")
+        old.click("#doHand")
+        ok(old.is_visible("#hFullOld") and old.is_visible("#hand"), "旧服务拒绝新提交的全量勾稽并提示升级")
+        old.keyboard.press("Escape")
+        old.unroute("**/api/notes", no_full_check)
+        flushed = wait_until(lambda: len(json.loads((d / "handoff.json").read_text())["items"]) == 2, old, 7)
+        items = json.loads((d / "handoff.json").read_text())["items"]
+        ok(flushed and items[-1].get("fullCheck") is True, "新版服务恢复后，暂存的全量勾稽提交自动补传")
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "claim", str(d)], capture_output=True, text=True, check=True)
+        old.click("#handBtn")
+        old.uncheck("#hFullCheck")
+        old.click("#doHand")
+        saved = wait_until(lambda: len(json.loads((d / "handoff.json").read_text())["items"]) == 3, old, 5)
+        items = json.loads((d / "handoff.json").read_text())["items"]
+        ok(saved and items[-1].get("fullCheck") is False, "取消勾选后下一批不要求全量勾稽")
+
+        old.click("#handBtn")
+        old.check("#hFullCheck")
+        old.route("**/api/notes", no_full_check)
+        old.click("#doHand")
+        old.wait_for_timeout(800)
+        items = json.loads((d / "handoff.json").read_text())["items"]
+        remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
+        ok(items[-1].get("fullCheck") is False and remaining and remaining[0].get("fullCheck") is True,
+           "服务换成旧版后立即提交，也不会丢掉全量勾稽要求")
+        old.unroute("**/api/notes", no_full_check)
+        flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is True, old, 7)
+        ok(flushed, "重新连接新版服务后合并更新暂存的全量勾稽要求")
+
+        old.evaluate("""key => localStorage.setItem(key, JSON.stringify([
+            {kind:'handoff', message:'旧队列补充', target:'final', allowSubagents:false}
+        ]))""", key)
+        old.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        merged = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("userMessage") == "旧队列补充", old, 7)
+        item = json.loads((d / "handoff.json").read_text())["items"][-1]
+        ok(merged and item.get("fullCheck") is True, "旧版暂存队列没有该字段时保留原有勾选")
+
+        old.click("#handBtn")
+        old.uncheck("#hFullCheck")
+        old.click("#doHand")
+        wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is False, old, 5)
+        old.click("#handBtn")
+        old.check("#hFullCheck")
+        long_message = "补" * 4000
+        old.fill("#handMsg", long_message)
+
+        def legacy_post(route):
+            if route.request.method != "POST":
+                route.continue_()
+                return
+            payload = route.request.post_data_json
+            payload.pop("fullCheck", None)
+            payload.pop("userMessage", None)
+            payload["message"] = payload.get("message", "")[:4000]  # 旧服务的附言长度上限
+            response = route.fetch(post_data=json.dumps(payload, ensure_ascii=False))
+            body = response.json()
+            body.pop("acceptedFullCheck", None)
+            route.fulfill(response=response, json=body)
+
+        old.route("**/api/handoff", legacy_post)
+        old.click("#doHand")
+        old.wait_for_timeout(800)
+        item = json.loads((d / "handoff.json").read_text())["items"][-1]
+        remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
+        ok(item.get("fullCheck") is False and all(word in item.get("message", "") for word in ("全量勾稽", "报告和讲稿", "有依据", "不确定"))
+           and remaining and remaining[0].get("fullCheck") is True and "截短附言" in old.inner_text("#toast"),
+           "提交时旧服务未确认勾选：保留待补传要求")
+        old.unroute("**/api/handoff", legacy_post)
+        flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is True, old, 7)
+        item = json.loads((d / "handoff.json").read_text())["items"][-1]
+        ok(flushed and item.get("userMessage") == long_message, "新版服务确认后才清除待补传要求，完整保留长附言")
+
+        old.click("#handBtn")
+        old.uncheck("#hFullCheck")
+        old.route("**/api/handoff", legacy_post)
+        old.click("#doHand")
+        old.wait_for_timeout(800)
+        item = json.loads((d / "handoff.json").read_text())["items"][-1]
+        remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
+        ok(item.get("fullCheck") is True and remaining and remaining[0].get("fullCheck") is False,
+           "旧服务未确认取消勾选：保留待补传要求")
+        old.unroute("**/api/handoff", legacy_post)
+        flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is False, old, 7)
+        ok(flushed, "新版服务确认后才清除待补传的取消勾选要求")
+    finally:
+        ctx.close()
+        stop(server)
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="ae-e2e-"))
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="chrome", headless=True)
+        if "--full-check-only" in sys.argv:
+            full_check_checks(browser, tmp)
+            browser.close()
+            return 1 if any(not p for p, _ in RESULTS) else 0
+        skill_search_checks(browser, tmp)
+        skill_recommendation_checks(browser, tmp)
+        if "--skills-only" in sys.argv:
+            browser.close()
+            failed = sum(not p for p, _ in RESULTS)
+            print(f"\n{len(RESULTS) - failed}/{len(RESULTS)} 通过")
+            return 1 if failed else 0
+        full_check_checks(browser, tmp)
 
         # ---------- 1. file:// 退回模式 ----------
         fdir = tmp / "file_mode"
@@ -270,7 +595,7 @@ def main() -> int:
                        check=True, capture_output=True)
         page.wait_for_timeout(4600)
         page.click("#nskills")
-        ok(page.locator('#skillList option[value="humanizer-zh"]').count() == 1, "技能目录出现在「技能」输入栏的候选里")
+        ok(page.locator('#skillList [role="option"]').filter(has_text="humanizer-zh").count() == 1, "技能目录出现在「技能」输入栏的候选里")
         go_page(page, 2)   # 放在第 2 页，不影响第 3 页「全部已处理」的检查
         page.fill("#ntext", "这段口气太硬，润色一下")
         page.fill("#nskills", "humanizer-zh, dataviz")

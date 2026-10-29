@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -22,6 +23,9 @@ SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 FIXTURE = ROOT / "fixtures" / "sample"
 sys.path.insert(0, str(SCRIPTS))
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-test-user-")      # 技能扫描只使用合成目录
+os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
+os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")
 
 import build_viewer  # noqa: E402
 import notes as notes_cli  # noqa: E402
@@ -849,6 +853,110 @@ class HandoffTests(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
 
+    def test_full_check_reaches_agent_and_batch_history(self):
+        srv = serve.ReviewServer(self.d, 0, log_to_file=False)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            headers = {"Host": f"127.0.0.1:{srv.port}", "Origin": f"http://127.0.0.1:{srv.port}", "Content-Type": "application/json"}
+            status, _, body = serve._req(srv.port, "POST", "/api/handoff", headers,
+                                         {"message": "核对整份材料", "fullCheck": True})
+            self.assertEqual(status, 200)
+            submitted = json.loads(body)
+            self.assertTrue(submitted["acceptedFullCheck"])
+            self.assertTrue(submitted["handoff"]["latest"]["fullCheck"])
+            self.assertEqual(submitted["handoff"]["latest"]["userMessage"], "核对整份材料")
+            self.assertIn("全量勾稽", submitted["handoff"]["latest"]["message"], "旧版 Agent 也要收到检查要求")
+
+            result = self.cli("wait", str(self.d), "--timeout", "5")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("全量勾稽", result.stdout)
+            self.assertIn("报告和讲稿", result.stdout)
+            self.assertIn("有依据", result.stdout)
+            self.assertIn("不确定", result.stdout)
+
+            status, _, body = serve._req(srv.port, "GET", "/api/handoff", {"Host": headers["Host"]})
+            self.assertEqual(status, 200)
+            self.assertTrue(json.loads(body)["history"][0]["fullCheck"])
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_full_check_tracks_latest_choice_and_survives_review(self):
+        srv = serve.ReviewServer(self.d, 0, log_to_file=False)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            headers = {"Host": f"127.0.0.1:{srv.port}", "Origin": f"http://127.0.0.1:{srv.port}", "Content-Type": "application/json"}
+
+            def submit(**payload):
+                status, _, body = serve._req(srv.port, "POST", "/api/handoff", headers, payload)
+                self.assertEqual(status, 200)
+                return json.loads(body)
+
+            self.assertFalse(submit(target="review")["handoff"]["latest"]["fullCheck"])
+            self.assertTrue(submit(target="review", fullCheck=True)["handoff"]["latest"]["fullCheck"])
+            self.assertFalse(submit(target="review", fullCheck=False)["handoff"]["latest"]["fullCheck"])
+            self.assertTrue(submit(target="review", fullCheck=True)["merged"])
+            self.assertIn("全量勾稽", self.cli("show", str(self.d)).stdout)
+
+            draft = self.cli("wait", str(self.d), "--timeout", "5")
+            self.assertEqual(draft.returncode, 0, draft.stderr)
+            self.assertIn("全量勾稽", draft.stdout)
+            self.assertEqual(self.cli("done", str(self.d), "--summary", "初改完成").returncode, 0)
+            status, _, _ = serve._req(srv.port, "POST", "/api/handoff/review", headers, {"seq": 1})
+            self.assertEqual(status, 200)
+            review = self.cli("wait", str(self.d), "--timeout", "5", "--stage", "review")
+            self.assertEqual(review.returncode, 0, review.stderr)
+            self.assertIn("全量勾稽", review.stdout)
+            self.assertIn("有依据", review.stdout)
+            self.assertIn("不确定", review.stdout)
+            self.assertEqual(self.cli("done", str(self.d), "--summary", "复核完成").returncode, 0)
+            self.assertIn("全量勾稽", self.cli("batches", str(self.d)).stdout)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_legacy_submit_preserves_full_check_without_overriding_explicit_choice(self):
+        srv = serve.ReviewServer(self.d, 0, log_to_file=False)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            headers = {"Host": f"127.0.0.1:{srv.port}", "Origin": f"http://127.0.0.1:{srv.port}", "Content-Type": "application/json"}
+
+            def submit(payload):
+                status, _, body = serve._req(srv.port, "POST", "/api/handoff", headers, payload)
+                return status, json.loads(body)
+
+            self.assertTrue(submit({"fullCheck": True})[1]["handoff"]["latest"]["fullCheck"])
+            status, legacy = submit({"message": "旧页面补充"})
+            self.assertEqual(status, 200)
+            self.assertTrue(legacy["merged"])
+            self.assertTrue(legacy["handoff"]["latest"]["fullCheck"])
+            self.assertEqual(legacy["handoff"]["latest"]["userMessage"], "旧页面补充")
+            self.assertIn("全量勾稽", legacy["handoff"]["latest"]["message"])
+            self.assertFalse(submit({"fullCheck": False})[1]["handoff"]["latest"]["fullCheck"])
+            unselected = submit({"message": "再补充"})[1]["handoff"]["latest"]
+            self.assertFalse(unselected["fullCheck"])
+            self.assertEqual(unselected["message"], "再补充")
+            status, _ = submit({"fullCheck": "false"})
+            self.assertEqual(status, 400)
+            self.assertFalse(json.loads(self.cli("show", str(self.d), "--json").stdout)["handoff"]["latest"]["fullCheck"])
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_legacy_service_message_update_remains_visible(self):
+        store.handoff_submit(self.d, "新版附言", full_check=True)
+        path = self.d / store.HANDOFF_FILE
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        doc["items"][0]["message"] = "旧服务的新附言"  # 旧服务更新 message，不认识 userMessage
+        path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+        shown = self.cli("show", str(self.d))
+        self.assertEqual(shown.returncode, 0)
+        self.assertIn("用户附言：旧服务的新附言", shown.stdout)
+        self.assertNotIn("用户附言：新版附言", shown.stdout)
+        history = json.loads(self.cli("batches", str(self.d), "--json").stdout)["history"]
+        self.assertEqual(history[0]["userMessage"], "旧服务的新附言")
+        self.assertEqual(store.handoff_state(self.d)["open"][0]["userMessage"], "旧服务的新附言")
+
     def test_bad_hook_command_rejected(self):
         with self.assertRaises(SystemExit):
             serve.parse_hook("definitely-not-a-command-xyz --flag")
@@ -930,6 +1038,34 @@ class SkillTests(unittest.TestCase):
             s, _, b = serve._req(srv.port, "GET", "/api/notes", {"Host": f"127.0.0.1:{srv.port}"})
             self.assertEqual(json.loads(b)["skillCatalog"][0]["name"], "humanizer-zh")
         finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_large_catalog_is_served_and_survives_always_update(self):
+        out = tmpdir() / "rv"
+        out.mkdir()
+        (out / "index.html").write_text("x", encoding="utf-8")
+        names = [f"skill-{n:03d}=合成说明" for n in range(205)]
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(notes_cli.main(["skills", str(out), "--set", *names]), 0)
+        build_viewer.build(FIXTURE / "report.html", None, out, no_scan_skills=True)
+        srv = serve.ReviewServer(out, 0, log_to_file=False)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=5)
+        try:
+            host = f"127.0.0.1:{srv.port}"
+            conn.request("GET", "/api/notes", headers={"Host": host})
+            response = conn.getresponse()
+            self.assertEqual(len(json.loads(response.read())["skillCatalog"]), 205)
+            conn.request("POST", "/api/skills/always", body=json.dumps({"always": [{"name": "skill-204"}]}),
+                         headers={"Host": host, "Origin": f"http://{host}", "Content-Type": "application/json"})
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200, response.read())
+            conn.request("GET", "/api/notes", headers={"Host": host})
+            response = conn.getresponse()
+            self.assertEqual(len(json.loads(response.read())["skillCatalog"]), 205)
+        finally:
+            conn.close()
             srv.shutdown()
             srv.server_close()
 
@@ -1184,13 +1320,17 @@ class ReviewRound3Tests(unittest.TestCase):
         try:
             h = {"Host": f"127.0.0.1:{srv.port}", "Origin": f"http://127.0.0.1:{srv.port}", "Content-Type": "application/json"}
             for k in range(4):
-                serve._req(srv.port, "POST", "/api/handoff", h, {"message": f"m{k}"})
+                serve._req(srv.port, "POST", "/api/handoff", h, {"message": f"m{k}", "fullCheck": k == 0})
             time.sleep(1.0)
         finally:
             srv.shutdown()
             srv.server_close()
         runs = [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
         self.assertEqual(len(runs), 1, "合并进同一次提交的重复点击不再触发钩子")
+        payload = json.loads(runs[0])
+        self.assertIs(payload["fullCheck"], True, "钩子收到触发时的全量勾稽要求")
+        self.assertEqual(payload["userMessage"], "m0")
+        self.assertIn("全量勾稽", payload["message"], "旧版钩子只读 message 时也能看到勾稽要求")
 
     def test_numeric_keys_not_remapped_and_move_keeps_id(self):
         tree = tmpdir()

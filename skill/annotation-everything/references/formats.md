@@ -26,6 +26,8 @@
 
 不是这种结构的材料（PPT、PDF、普通网页）：先转成逐页 section 结构再用本 skill（例如每页一张图片放进 section，也能在上面标注）。
 
+PPTX 转图前，运行 `python3 $S/check_pptx_fonts.py 原始.pptx`。检查器读取幻灯片、母版、布局和主题中的字体声明，并用本机 `fc-list` 枚举字体；不会解压或修改原文件。转出 PDF 后，运行 `python3 $S/check_pptx_fonts.py 原始.pptx --pdf 转换后.pdf`，用 `pdffonts` 列出字体名称及 `emb`（是否嵌入）、`sub`（是否子集）等证据。退出码 0 表示本次检查没有发现差异，1 表示有待核查或未知项，2 表示输入或所需工具出错。未检出仅表示这次枚举没找到，主题字体可能未被使用；主题里按文字脚本列出的备选字体（`<a:font script=…>`）单独汇总，不计入未检出，中日韩文字或阿拉伯、希伯来、南亚等文字没有显式指定对应的东亚或复杂文种字体时记为未知；别名、样式名、混合回退、轮廓化文字或图片可能无法按名称对应，名称一致也不能证明逐字形渲染正确。没有 `fc-list` 或 `pdffonts` 时分别安装 fontconfig 或 poppler，或人工核对，不要把未知当成通过。补齐字体并重新转换后，逐页检查换行、间距和遮挡。
+
 ## 讲稿 Markdown
 
 ```markdown
@@ -107,7 +109,9 @@
     {"seq": 3, "status": "pending",            // pending 等待接收 → claimed 处理中 →〔drafted 已初改·待复核 → review 等待复核 → reviewing 复核中〕→ done 已处理
      "target": "final",                       // 用户要求做到：final 定稿 / review 已初改·待复核
      "allowSubagents": false,                 // 用户是否允许代理派发子代理（不允许时由主代理亲自处理）
-     "at": "…", "by": "page", "message": "先改第 7–12 页",
+     "fullCheck": true,                       // 本批处理后是否全量勾稽报告和讲稿；旧批次缺省为 false
+     "at": "…", "by": "page", "userMessage": "先改第 7–12 页",  // 用户原始附言
+     "message": "先改第 7–12 页\n\n【本批提交选项】全量勾稽：…",  // 兼容旧版 wait；勾选时附加勾稽要求
      "openCount": 5, "openIds": ["…"], "pages": [7, 9, 12], "updates": 1,
      "claimedAt": "…", "claimedBy": "claude", "doneAt": "…", "doneBy": "claude", "summary": "改了 4 条，1 条等你定",
      // 以下由 done 记下（处理记录）：这批里代理标为已处理的批注、涉及页、提交时的批注还剩几条未处理
@@ -123,9 +127,9 @@
 }
 ```
 
-不用 `notes.py wait` 的代理：定时运行 `notes.py claim 审阅目录`（有等待中的提交就接收并输出 JSON，退出码 0；没有返回 3），处理完用 `notes.py done` 收尾。可以读这个文件看状态，但**不要直接改它**：写入要经过 notes.py / 服务的文件锁，否则可能覆盖用户刚合并进来的附言。保留最近 200 批。
+不用 `notes.py wait` 的代理：定时运行 `notes.py claim 审阅目录`（有等待中的提交就接收并输出 JSON，退出码 0；没有返回 3），处理完用 `notes.py done` 收尾。勾选全量勾稽时，`message` 附加该要求，确保仍在等待的旧版 Agent 也能读到；`userMessage` 保留用户输入的原文，旧批次没有此字段。可以读这个文件看状态，但**不要直接改它**：写入要经过 notes.py / 服务的文件锁，否则可能覆盖用户刚合并进来的附言。保留最近 200 批。
 
-页面接口：`POST /api/handoff` `{message, target, allowSubagents}` 提交一批；`POST /api/handoff/review` `{seq, message, allowSubagents}` 请求复核；`POST /api/handoff/finalize` `{seq}` 直接定稿。轮询状态里的 `inFlightIds` 是已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」）。
+页面接口：`POST /api/handoff` `{message, target, allowSubagents, fullCheck, userMessage}` 提交一批；新批次的 `fullCheck` 缺省为 false，合并待接收的批次时缺省表示保留原值，显式传入布尔值才更新；请求复核时保留原批次的要求。勾选时页面在 `message` 开头放勾稽要求，并用 `userMessage` 传原始附言；新服务保存原文并生成兼容旧 Agent 的 `message`。响应中的 `acceptedFullCheck` 确认该批次实际保存的选项。`POST /api/handoff/review` `{seq, message, allowSubagents}` 请求复核；`POST /api/handoff/finalize` `{seq}` 直接定稿。轮询状态里的 `inFlightIds` 是已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」）。服务功能列表中的 `full-check` 表示支持这个选项；页面发送前检查功能，服务未确认保存时保留待补传提交并提醒核对批次状态。若服务在检查后切换到旧版，旧服务可能已经接收提交；其 4,000 字上限包含兼容提示，因此可能截短旧 Agent 首次收到的附言，恢复新版后重试会携带完整原文，也可能形成另一批。旧服务和旧页面共同更新待接收批次时也可能覆盖兼容提示，使用新选项前应升级服务并刷新页面。
 
 源文件快照：代理接收初改时把 review.json 里的报告与讲稿源文件存到审阅目录 `.snapshots/batch-N/base/`，初改收尾时存 `draft/`（目录 0700、文件 0600，只留最近 30 批），`notes.py diff` 据此按页对比。审阅目录含经营数据时，快照同样不要外传。
 
@@ -135,7 +139,8 @@
 
 `{"version": 1, "skills": [{"name": "humanizer-zh", "desc": "中文润色"}], "always": [{"name": "humanizer-zh", "scope": "讲稿"}]}`。
 
-- `skills`：技能目录。由代理用 `notes.py skills` 维护，页面「技能」输入栏把它和用过的技能列为候选。
+- `skills`：技能目录。生成和重建时从常见技能目录及插件缓存读取名称、说明；插件技能使用 `插件:技能` 调用名，插件缓存不代表当前已启用。可用 `--skills-from` 指定来源或 `--no-scan-skills` 禁用扫描，也可用 `notes.py skills` 手工维护。页面「技能」输入栏把目录和用过的技能列为候选。
+- `.skill-sources.json`：私有来源记录，保存扫描结果、手工覆盖和排除项；来源路径只保存哈希。目录更新与常驻技能使用同一把锁。手工移除不会在重建时恢复；扫描不完整时保留该来源旧记录并警告。`skills.json` 结构不变，但旧版 `notes.py` 写回超过 200 项的目录可能截断，应先升级。
 - `always`：常驻技能，范围内的每条批注处理前都要先调用；`scope` 为 `all`（全部批注）/ `报告` / `讲稿`（对象含该侧，「报告和讲稿」两侧都算）/ `style`（风格优化），最多 20 个。页面「常驻技能」（`POST /api/skills/always`）或 `notes.py skills --always …` 设置；`show` / `wait` 把适用的常驻技能列进每条批注的「技能」；每批提交时把当时的名单记进 handoff 的 `alwaysSkills`。
 - 两者都在生成对照页时嵌进页面，本地文件模式同样可见。文件模式下改常驻技能只存本浏览器（之后 Agent 改了名单并重建，以新名单为准）；「复制全部 / 下载 Markdown」的开头一行、「下载 JSON」的 `alwaysSkills` 都会带上，`notes.py import` 或页面「导入…」时随之写入（审阅目录里已有不同的名单时，命令行只提示、页面先询问）。
 - 读 skills.json 时坏项跳过、好项保留（字符串项当「全部批注」）；页面和命令行写入时严格校验：一项里写了几个名字会拆开，超过 20 个报错。命令行同一条命令里先删（`--always-remove`）后加（`--always-add`），改范围就是删了再加。
@@ -149,7 +154,8 @@
 | `notes.json` | 服务 / notes.py | 批注当前状态（以它为准） |
 | `notes.jsonl` | 服务 / notes.py | 操作日志 |
 | `handoff.json` | 服务 / notes.py | 「交给 Agent」的提交与处理状态 |
-| `skills.json` | 服务 / notes.py | 技能目录与常驻技能（可选） |
+| `skills.json` | 生成器 / 服务 / notes.py | 技能目录与常驻技能（可选） |
+| `.skill-sources.json` | 生成器 / notes.py | 技能扫描来源、手工覆盖与排除项（可选） |
 | `.snapshots/batch-N/{base,draft}/` | notes.py | 初改前后的源文件快照，`notes.py diff` 用（含源文件内容，按经营数据对待） |
 | `server.log` | 服务 | 启停、改动、拒绝原因代码、错误（请求字段已过滤，但仍属不可信数据） |
 | `.annotation-server.json` | 服务 | 运行中的 pid、端口、地址、是否配了钩子；停止时删除 |
