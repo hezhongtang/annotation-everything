@@ -16,7 +16,8 @@ concurrency:
 jobs:
   test:
     name: 单元测试与服务安全自检（Python ${{ matrix.python-version }}）
-    runs-on: ubuntu-latest
+    # Python 3.9 的官方构建支持 Ubuntu 22.04；避免 latest 升级后无法安装解释器。
+    runs-on: ubuntu-22.04
     timeout-minutes: 15
     strategy:
       fail-fast: false

@@ -29,6 +29,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -81,6 +82,11 @@ class DoctorContext:
     ledger_home: Optional[Path] = None             # 台账目录；默认 AE_HOME 或 ~/.annotation-everything
     process_lister: Optional[Callable[[], list]] = None   # () -> [(pid, 命令行)]；默认 ps 全机枚举
     port_probe: Optional[Callable[[int], Optional[dict]]] = None  # 端口探测；默认 probe_port
+    cwd: Optional[Path] = None  # 运行位置；默认 Path.cwd()，与来源仓库是否可用无关
+
+
+class CommandError(Exception):
+    """命令的输入或本机元数据损坏；由统一入口报告并返回 2。"""
 
 
 def skill_copy_dir() -> Path:
@@ -222,7 +228,11 @@ def cmd_install(args) -> int:
             print(f"{agent} 的技能目录里已有同名非链接内容，未覆盖：{target}", file=sys.stderr)
             return 2
     dst = skill_copy_dir()
-    previous = read_record(dst)  # 在清掉旧副本前读出已记录的链接
+    try:
+        previous = read_record(dst)  # 在清掉旧副本前读出已记录的链接
+    except CommandError:
+        # 重装可以修复损坏记录；已知位置的链接仍通过扫描保留。
+        previous = {"links": scan_links(dst)}
     copy_skill(src, dst)
     created = [create_link(agent, dst) for agent in agents]
     links = merged_links(previous, dst, created)
@@ -237,11 +247,25 @@ def cmd_install(args) -> int:
 
 
 def read_record(skill_copy: Path) -> Optional[dict]:
-    """读技能副本里的安装记录；缺失或损坏返回 None。"""
+    """读安装记录：缺失时回退扫描，存在但不可读或结构损坏时报告命令错误。"""
+    path = skill_copy / RECORD_NAME
     try:
-        return json.loads((skill_copy / RECORD_NAME).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return None
+    except (OSError, ValueError) as exc:
+        raise CommandError(f"安装记录 {path} 读不了（{exc}），可运行 ae.py install 重建") from None
+    valid = isinstance(record, dict)
+    if valid:
+        valid = all(isinstance(record[key], str)
+                    for key in ("repo", "commit", "version", "installed_at") if key in record)
+        links = record.get("links", [])
+        valid = valid and isinstance(links, list) and all(
+            isinstance(entry, dict) and isinstance(entry.get("path"), str) and entry["path"]
+            and isinstance(entry.get("agent", ""), str) for entry in links)
+    if not valid:
+        raise CommandError(f"安装记录 {path} 结构不对，可运行 ae.py install 重建")
+    return record
 
 
 def resolve_repo(record: Optional[dict]) -> Optional[Path]:
@@ -284,7 +308,8 @@ def check_python(ctx: DoctorContext) -> CheckResult:
     version = platform.python_version()
     if sys.version_info[:3] < MIN_PYTHON:
         return CheckResult("python-version", CATEGORY_INSTALL, LEVEL_FAIL,
-                           f"Python {version} 低于 3.9，技能无法运行")
+                           f"Python {version} 低于 3.9，技能无法运行",
+                           tool_fix("python@3.12" if sys.platform == "darwin" else "python3.12"))
     return CheckResult("python-version", CATEGORY_INSTALL, LEVEL_PASS, f"Python {version}")
 
 
@@ -472,24 +497,58 @@ def list_processes():
     return procs
 
 
-def serve_script_index(cmdline: str) -> Optional[int]:
-    """命令行里 serve.py 脚本的位置：任一参数的文件名是 serve.py；不是 serve.py 进程返回 None。
-
-    serve.py 没有专属的进程标记，这是唯一识别特征；运行状态体检与卸载共用。
-    """
-    tokens = cmdline.split()
-    return next((i for i, t in enumerate(tokens) if os.path.basename(t) == "serve.py"), None)
+def command_tokens(cmdline: str) -> list:
+    try:
+        return shlex.split(cmdline)
+    except ValueError:
+        return []
 
 
-def serve_dir_argument(cmdline: str) -> Optional[str]:
-    """serve.py 进程托管的审阅目录参数：命令行的脚本路径以 serve.py 结尾时，其后的第一个非选项参数。
+def serve_script_index(cmdline: str, pid: Optional[int] = None) -> Optional[int]:
+    """只识别 Python 实际执行的本仓库或技能副本脚本；不匹配参数中的脚本名。"""
+    tokens = command_tokens(cmdline)
+    if not tokens or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?|pypy\d*",
+                                      Path(tokens[0]).name.lower()):
+        return None
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token.startswith(("-c", "-m")) or token == "-":
+            return None
+        if token == "--":
+            index += 1
+            break
+        if token in ("-W", "-X"):
+            index += 2
+        elif token.startswith("-"):
+            index += 1
+        else:
+            break
+    if index >= len(tokens):
+        return None
+    script = Path(tokens[index])
+    if not script.is_absolute():
+        cwd = process_cwd(pid) if pid is not None else str(Path.cwd())
+        if cwd is None:
+            return None
+        script = Path(cwd) / script
+    trusted = (Path(__file__).resolve().parent / SERVE_PY,
+               skill_copy_dir() / "scripts" / "serve.py")
+    try:
+        return index if any(script.resolve() == path.resolve() for path in trusted) else None
+    except (OSError, ValueError):
+        return None
+
+
+def serve_dir_argument(cmdline: str, pid: Optional[int] = None) -> Optional[str]:
+    """已核实脚本的审阅目录参数；排除维护子命令。
 
     不是 serve.py 进程、或没有目录参数时返回 None。
     """
-    index = serve_script_index(cmdline)
+    index = serve_script_index(cmdline, pid)
     if index is None:
         return None
-    tokens = cmdline.split()
+    tokens = command_tokens(cmdline)
     i = index + 1
     while i < len(tokens):
         token = tokens[i]
@@ -498,7 +557,7 @@ def serve_dir_argument(cmdline: str) -> Optional[str]:
         elif token.startswith("-"):
             i += 1
         else:
-            return token
+            return None if token in ("check", "list", "inspect", "forget", "prune") else token
     return None
 
 
@@ -520,15 +579,51 @@ def process_cwd(pid: int) -> Optional[str]:
         return None
 
 
-def server_port_of(pid: int, review_dir: Path) -> Optional[int]:
-    """从审阅目录的运行状态文件读这个进程占用的端口；文件缺失或 pid 对不上（过期）时返回 None。"""
+def listening_port_of(pid: int) -> Optional[int]:
+    """只读进程的 TCP 监听元数据，目录已删时仍可获得实际端口。"""
+    if sys.platform.startswith("linux"):
+        try:
+            inodes = {os.readlink(fd)[8:-1] for fd in Path(f"/proc/{pid}/fd").iterdir()
+                      if os.readlink(fd).startswith("socket:[")}
+            for family in ("tcp", "tcp6"):
+                for line in Path(f"/proc/{pid}/net/{family}").read_text().splitlines()[1:]:
+                    fields = line.split()
+                    if len(fields) > 9 and fields[3] == "0A" and fields[9] in inodes:
+                        return int(fields[1].rsplit(":", 1)[1], 16)
+        except (OSError, ValueError):
+            pass
     try:
-        info = json.loads((Path(review_dir) / STATUS_FILE).read_text(encoding="utf-8"))
+        done = subprocess.run(["lsof", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"],
+                              capture_output=True, text=True, timeout=10)
+        for line in done.stdout.splitlines():
+            if line.startswith("n") and ":" in line:
+                port = int(line.rsplit(":", 1)[1])
+                if 1 <= port <= 65535:
+                    return port
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def server_port_of(pid: int, review_dir: Optional[Path], cmdline: str = "") -> Optional[int]:
+    """状态文件优先，其次实际监听端口，最后保留显式请求端口作为排障证据。"""
+    try:
+        info = json.loads((review_dir / STATUS_FILE).read_text(encoding="utf-8")) if review_dir else {}
     except (OSError, ValueError):
-        return None
+        info = {}
     port = info.get("port") if isinstance(info, dict) else None
-    if isinstance(info, dict) and info.get("pid") == pid and isinstance(port, int) and not isinstance(port, bool):
+    if isinstance(info, dict) and info.get("pid") == pid and isinstance(port, int) \
+            and not isinstance(port, bool) and 1 <= port <= 65535:
         return port
+    port = listening_port_of(pid)
+    if port is not None:
+        return port
+    tokens = command_tokens(cmdline)
+    for index, token in enumerate(tokens):
+        raw = token.partition("=")[2] if token.startswith("--port=") else (
+            tokens[index + 1] if token == "--port" and index + 1 < len(tokens) else "")
+        if raw.isdigit() and 1 <= int(raw) <= 65535:
+            return int(raw)
     return None
 
 
@@ -557,7 +652,9 @@ def _same_dir(a: Path, b: Path) -> bool:
 def check_ledger_readable(ctx: DoctorContext) -> CheckResult:
     entries, error = load_ledger(ctx)
     if error is not None:
-        return CheckResult("ledger-readable", CATEGORY_RUNTIME, LEVEL_FAIL, error)
+        home = Path(ctx.ledger_home) if ctx.ledger_home is not None else ledger_home()
+        return CheckResult("ledger-readable", CATEGORY_RUNTIME, LEVEL_FAIL, error,
+                           f"python3 -m json.tool {shlex.quote(str(home / 'reviews.json'))}")
     return CheckResult("ledger-readable", CATEGORY_RUNTIME, LEVEL_PASS,
                        f"审阅台账可读（{len(entries)} 份审阅）")
 
@@ -593,7 +690,8 @@ def check_port_pool(ctx: DoctorContext) -> CheckResult:
     if foreign:
         ports = "、".join(str(port) for port in foreign)
         return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_FAIL,
-                           f"专属端口 {first}–{last} 里被其他进程占用：{ports}")
+                           f"专属端口 {first}–{last} 里被其他进程占用：{ports}",
+                           "lsof -nP -iTCP:" + ",".join(map(str, foreign)) + " -sTCP:LISTEN")
     return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS,
                        f"专属端口 {first}–{last} 未被其他进程占用")
 
@@ -603,7 +701,7 @@ def find_orphan_servers(entries: dict, lister) -> list:
     不在台账里或已不存在。端口/目录定位不到时为 None（如目录已删、标识查不到）。"""
     orphans = []
     for pid, cmdline in lister():
-        arg = serve_dir_argument(cmdline)
+        arg = serve_dir_argument(cmdline, pid)
         if arg is None:
             continue
         review_dir = _resolve_dir_argument(arg, entries)
@@ -612,7 +710,7 @@ def find_orphan_servers(entries: dict, lister) -> list:
             review_dir = Path(cwd) / review_dir if cwd else review_dir
         if review_dir is None or not review_dir.is_dir() \
                 or not any(_same_dir(review_dir, Path(e["dir"])) for e in entries.values()):
-            port = server_port_of(pid, review_dir) if review_dir is not None else None
+            port = server_port_of(pid, review_dir, cmdline)
             orphans.append((pid, port, review_dir))
     return orphans
 
@@ -625,11 +723,11 @@ def check_orphan_servers(ctx: DoctorContext) -> CheckResult:
     lister = ctx.process_lister if ctx.process_lister is not None else list_processes
     orphans = find_orphan_servers(entries, lister)
     if orphans:
-        detail = "；".join(f"pid {pid}" + (f"（端口 {port}）" if port else "") for pid, port, _ in orphans)
+        detail = "；".join(f"pid {pid}（端口 {port if port else '未知'}）" for pid, port, _ in orphans)
         return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_FAIL,
                            f"发现 {len(orphans)} 个残留服务（托管的审阅不在台账里或目录已不存在）：{detail}",
                            repair_fix(ctx.repo, "--stop-orphans"))
-    running = sum(1 for _, cmdline in lister() if serve_dir_argument(cmdline) is not None)
+    running = sum(1 for pid, cmdline in lister() if serve_dir_argument(cmdline, pid) is not None)
     suffix = f"（{running} 个 serve.py 进程均在台账内）" if running else ""
     return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_PASS, f"未发现残留服务{suffix}")
 
@@ -723,12 +821,15 @@ CHECKS = (check_python, check_copy_present, check_copy_sync, check_copy_version,
           check_ledger_readable, check_ledger_stale, check_port_pool, check_orphan_servers,
           check_fc_list, check_pdffonts)
 
-# 仅在仓库内运行（ctx.repo 非 None）的检查项：仓库外 doctor 的输出与 --json 都不出现「开发环境」类别
+# 仅在当前工作目录位于来源仓库内时运行；能定位来源仓库不等于正在仓库内运行。
 REPO_CHECKS = (check_git_hooks, check_chrome)
 
 
 def run_doctor(ctx: DoctorContext):
-    checks = CHECKS + REPO_CHECKS if ctx.repo is not None else CHECKS
+    cwd = (ctx.cwd or Path.cwd()).resolve()
+    repo = ctx.repo.resolve() if ctx.repo is not None else None
+    inside_repo = repo is not None and (cwd == repo or repo in cwd.parents)
+    checks = CHECKS + REPO_CHECKS if inside_repo else CHECKS
     return [check(ctx) for check in checks]
 
 
@@ -878,11 +979,13 @@ def forget_stale_entries(entries: dict) -> list:
 def stop_orphan_servers(entries: dict, lister) -> list:
     """结束残留服务：先按残留定义筛选，再用共享 stop_servers（SIGTERM 优雅停止，等不到 SIGKILL）。
     返回 [(pid, 端口, 说明)]，说明为 None 表示已停止。"""
-    orphans = find_orphan_servers(entries, lister)
+    processes = lister()
+    orphans = find_orphan_servers(entries, lambda: processes)
     if not orphans:
         return []
-    stuck = {pid for pid, _command in stop_servers([(pid, "serve.py") for pid, _, _ in orphans])}
-    return [(pid, port, None if pid not in stuck else "未能确认停止（已尝试 SIGKILL）")
+    pids = {pid for pid, _, _ in orphans}
+    stuck = {pid for pid, _command in stop_servers([(pid, command) for pid, command in processes if pid in pids])}
+    return [(pid, port, None if pid not in stuck else "未能确认服务身份或停止状态，未强行结束")
             for pid, port, _dir in orphans]
 
 
@@ -1021,27 +1124,53 @@ def cmd_repair(args) -> int:
 def running_servers(lister: Optional[Callable[[], list]] = None) -> list:
     """正在运行的 serve.py 进程：[(pid, 命令行), ...]，与台账比对无关。
 
-    识别特征只有命令行里出现以 serve.py 结尾的脚本路径（serve_script_index），
-    因此宁可多报不漏报，卸载与 --stop-servers 都偏保守。
+    只接受 Python 正在执行的本仓库或技能副本脚本，排除提及脚本名的其他程序。
     lister 返回 [(pid, 命令行), ...]，测试可注入；默认用 list_processes 枚举。
     """
     if lister is None:
         lister = list_processes
     return [(pid, command) for pid, command in lister()
-            if serve_script_index(command) is not None]
+            if serve_dir_argument(command, pid) is not None]
 
 
 def _process_stopped(pid: int) -> bool:
-    """进程是否已停止（查不到，或只剩僵尸）；ps 不可用时只能假设已停止。"""
+    """进程是否已停止（查不到，或只剩僵尸）；无法查询时不宣称已停止。"""
     try:
         done = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],
                               capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
-        return True
+        return False
     if done.returncode != 0:
         return True
     state = done.stdout.strip().upper()
     return not state or state.startswith("Z")
+
+
+def server_identity(pid: int, command: str) -> Optional[tuple]:
+    index = serve_script_index(command, pid)
+    if index is None or serve_dir_argument(command, pid) is None:
+        return None
+    tokens = command_tokens(command)
+    script = Path(tokens[index])
+    if not script.is_absolute():
+        cwd = process_cwd(pid)
+        if cwd is None:
+            return None
+        script = Path(cwd) / script
+    return (str(script.resolve()), *tokens[index + 1:])
+
+
+def same_server_process(pid: int, command: str) -> bool:
+    """每次发信号前重新读命令行，拒绝已换身份或无法核实的 PID。"""
+    expected = server_identity(pid, command)
+    if expected is None or pid <= 0 or pid == os.getpid():
+        return False
+    try:
+        current = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                                 capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return current.returncode == 0 and server_identity(pid, current.stdout.strip()) == expected
 
 
 def stop_servers(servers: list, wait_seconds: float = 5.0) -> list:
@@ -1049,17 +1178,27 @@ def stop_servers(servers: list, wait_seconds: float = 5.0) -> list:
 
     返回未能确认停止的 [(pid, 命令行), ...]。
     """
-    remaining = list(servers)
-    for pid, _command in remaining:
+    remaining, refused = [], []
+    for pid, command in servers:
+        if _process_stopped(pid):
+            continue
+        if not same_server_process(pid, command):
+            refused.append((pid, command))
+            continue
         try:
             os.kill(pid, signal.SIGTERM)
+            remaining.append((pid, command))
         except OSError:
-            pass  # 已退出，或不是自己的进程
+            if not _process_stopped(pid):
+                refused.append((pid, command))
     deadline = time.monotonic() + wait_seconds
     while remaining and time.monotonic() < deadline:
         time.sleep(0.1)
         remaining = [(pid, command) for pid, command in remaining if not _process_stopped(pid)]
-    for pid, _command in remaining:  # 等了还活着：强杀
+    for pid, command in remaining:  # 等了还活着：再次核实身份，才可强杀
+        if not same_server_process(pid, command):
+            refused.append((pid, command))
+            continue
         try:
             os.kill(pid, signal.SIGKILL)
         except OSError:
@@ -1067,7 +1206,7 @@ def stop_servers(servers: list, wait_seconds: float = 5.0) -> list:
     if remaining:
         time.sleep(0.2)
         remaining = [(pid, command) for pid, command in remaining if not _process_stopped(pid)]
-    return remaining
+    return list(dict.fromkeys(refused + remaining))
 
 
 # ── 卸载 ───────────────────────────────────────────────────────
@@ -1080,17 +1219,21 @@ def ledger_home() -> Path:
 
 
 def ledger_review_dirs(home_dir: Path) -> list:
-    """读台账里登记的审阅目录路径；台账缺失或读不了时返回空列表。"""
+    """purge 前严格读取所有目录证据；损坏条目不能按空台账处理。"""
     try:
         doc = json.loads((home_dir / "reviews.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return []
+    except (OSError, ValueError) as exc:
+        raise CommandError(f"台账读不了，拒绝删除：{exc}") from None
     reviews = doc.get("reviews") if isinstance(doc, dict) else None
+    if not isinstance(reviews, dict):
+        raise CommandError("台账结构不对，拒绝删除")
     dirs = []
-    if isinstance(reviews, dict):
-        for entry in reviews.values():
-            if isinstance(entry, dict) and isinstance(entry.get("dir"), str) and entry["dir"]:
-                dirs.append(entry["dir"])
+    for entry in reviews.values():
+        if not isinstance(entry, dict) or not isinstance(entry.get("dir"), str) or not entry["dir"]:
+            raise CommandError("台账目录记录不完整，拒绝删除")
+        dirs.append(entry["dir"])
     return dirs
 
 
@@ -1101,15 +1244,30 @@ def purge_guard(home_dir: Path) -> Optional[str]:
     resolved = home_dir.resolve()
     if resolved == Path.home().resolve() or resolved == Path(resolved.root):
         return f"台账目录异常（{home_dir}），拒绝删除"
-    for review_dir in ledger_review_dirs(home_dir):
+    try:
+        review_dirs = ledger_review_dirs(home_dir)
+    except CommandError as exc:
+        return str(exc)
+    for review_dir in review_dirs:
         try:
             entry = Path(review_dir).expanduser().resolve()
-        except OSError:
-            continue
-        if entry == resolved or resolved in entry.parents:
+        except (OSError, ValueError):
+            return "审阅目录无法解析，拒绝删除"
+        if entry == resolved or resolved in entry.parents or entry in resolved.parents:
             return (f"审阅目录 {review_dir} 在台账目录里，拒绝删除"
                     "（卸载任何情况下不动审阅目录）")
+    allowed = {"reviews.json", ".reviews.lock"}
+    for child in home_dir.iterdir():
+        if child.name not in allowed or child.is_symlink() or not child.is_file():
+            return f"台账目录包含非台账内容 {child.name}，拒绝删除（可能是未登记的审阅目录）"
     return None
+
+
+def purge_ledger(home_dir: Path) -> None:
+    """只删除已知台账文件；新出现的目录或未知文件由 rmdir 拒绝，绝不递归删除。"""
+    for name in ("reviews.json", ".reviews.lock"):
+        (home_dir / name).unlink(missing_ok=True)
+    home_dir.rmdir()
 
 
 def remove_links(entries: list, skill_copy: Path) -> list:
@@ -1181,7 +1339,7 @@ def cmd_uninstall(args) -> int:
     if args.purge:
         home_dir = ledger_home()
         if home_dir.exists():
-            shutil.rmtree(home_dir)
+            purge_ledger(home_dir)
             print(f"已删除台账目录：{home_dir}")
         else:
             print(f"台账目录不存在，无需删除：{home_dir}")
@@ -1223,7 +1381,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.handler(args)
+    try:
+        return args.handler(args)
+    except Exception as exc:
+        message = f"命令执行失败（{type(exc).__name__}）：{exc}"
+        if getattr(args, "as_json", False):
+            print(json.dumps({"error": message}, ensure_ascii=False))
+        print(message, file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

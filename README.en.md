@@ -199,9 +199,10 @@ python3 ae.py repair                             # repair: prints a plan first, 
 python3 ae.py uninstall                          # uninstall: remove the skill copy and links, keep the review ledger by default
 ```
 
-- Each check reports pass / warning / failure plus a fix command; exit code 0 means all passed or only warnings, 1 means there are failures.
+- Each check reports pass / warning / failure; failures include a repair or diagnostic command. Exit code 0 means all passed or only warnings, 1 means there are failures, and 2 means the command itself failed (`doctor --json` outputs `error`). Development checks appear only when the current working directory is inside the source repository.
 - In `repair`, deleting stale ledger entries (`--forget-stale`) and stopping orphaned servers (`--stop-orphans`) are destructive and need their explicit flags; `--dry-run` only prints the plan.
 - `uninstall` never touches review directories; `--purge` also deletes the review ledger; a running `serve.py` blocks it unless `--stop-servers` stops it first.
+- Before stopping a server, the command verifies that Python is executing the script from this repository or the current skill copy, then checks the process identity again before sending a signal; it refuses to stop an unverified process. `--purge` removes only known ledger files and refuses to proceed if the ledger is corrupt or its directory contains other files or unregistered review directories.
 
 Once installed, tell Claude Code "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow.
 
@@ -211,7 +212,7 @@ Send the following to your agent, replacing `<repo-path>` with the absolute path
 
 > Install and check the annotation-everything skill in `<repo-path>`. Follow the numbered steps, confirming the success signal before moving on:
 >
-> 1. Run `python3 <repo-path>/ae.py doctor --json`. Success: the command runs and prints JSON. Parse it; if `summary.fail` is 0 and there are no installation-category failures, the skill is already installed — skip to step 4.
+> 1. Run `python3 <repo-path>/ae.py doctor --json`. On exit code 2, inspect the JSON `error` and resolve it; a corrupt installation record can be rebuilt by reinstalling in step 2. In normal output, if `summary.fail` is 0 and there are no installation-category failures, the skill is already installed — skip to step 4.
 > 2. Pick the link flag by which agent you are: Claude Code needs no `--link`; Codex uses `--link codex`; agents under `~/.agents` use `--link agents`; zcode uses `--link zcode`. Run `python3 <repo-path>/ae.py install` (adding the `--link` you need). Success: exit code 0.
 > 3. Run `python3 <repo-path>/ae.py doctor --json` again and judge by the JSON: `summary.fail` of 0 means success; warnings in `summary.warn` (such as missing optional tools `fc-list`/`pdffonts`) do not block use. If failures remain, apply each item's `fix_command` and repeat this step.
 > 4. When repairs are needed, run `python3 <repo-path>/ae.py repair` (`--dry-run` shows the plan first). **`--purge`, `--forget-stale`, `--stop-orphans`, `--stop-servers` are all destructive — ask the user for consent before adding any of them.**

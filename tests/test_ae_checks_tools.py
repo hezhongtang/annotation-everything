@@ -196,7 +196,7 @@ class ChromeCheckTests(unittest.TestCase):
 
 
 class DoctorScopeTests(unittest.TestCase):
-    """开发环境类检查只在仓库内（ctx.repo 非 None）出现；可选工具始终检查。"""
+    """开发环境类检查按当前运行位置判断；可选工具始终检查。"""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ae-scope-test-")
@@ -223,7 +223,7 @@ class DoctorScopeTests(unittest.TestCase):
 
     def test_dev_checks_present_inside_repo(self):
         ctx = ae.DoctorContext(skill_copy=self.root / "skills" / "annotation-everything",
-                               repo=self.repo, record=None)
+                               repo=self.repo, record=None, cwd=self.repo)
         results = ae.run_doctor(ctx)
         categories = {r.category for r in results}
         codes = {r.code for r in results}
@@ -249,19 +249,19 @@ class DoctorCliTests(unittest.TestCase):
     def copy_dir(self) -> Path:
         return self.skills / "annotation-everything"
 
-    def run_ae(self, script: Path, *args: str, path=None):
+    def run_ae(self, script: Path, *args: str, path=None, cwd=None):
         env = dict(self.env)
         if path is not None:
             env["PATH"] = path
         return subprocess.run([sys.executable, str(script), *args],
-                              env=env, capture_output=True, text=True, timeout=60)
+                              cwd=cwd, env=env, capture_output=True, text=True, timeout=60)
 
     def install(self):
         p = self.run_ae(AE, "install")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
-    def doctor_json(self, script: Path = AE, path=None):
-        p = self.run_ae(script, "doctor", "--json", path=path)
+    def doctor_json(self, script: Path = AE, path=None, cwd=None):
+        p = self.run_ae(script, "doctor", "--json", path=path, cwd=cwd)
         return p, json.loads(p.stdout)
 
     def fails_outside_runtime(self, doc):
@@ -293,7 +293,7 @@ class DoctorCliTests(unittest.TestCase):
         repo = self.root / "synthetic-repo"
         shutil.copytree(SKILL_SRC, repo / "skill" / "annotation-everything")
         self.rewrite_record_repo(str(repo))
-        p, doc = self.doctor_json()
+        p, doc = self.doctor_json(cwd=repo)
         self.assertIn("开发环境", {r["category"] for r in doc["results"]})
         by_code = {r["code"]: r for r in doc["results"]}
         self.assertEqual(by_code["git-hooks"]["level"], "警告", "合成仓库不是 git 仓库")

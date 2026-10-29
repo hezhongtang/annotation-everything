@@ -199,9 +199,10 @@ python3 ae.py repair                             # 修复：先列计划，安�
 python3 ae.py uninstall                          # 卸载：删除技能副本和链接，默认保留审阅台账
 ```
 
-- 体检逐项给出「通过 / 警告 / 失败」和修复命令；退出码 0 表示全部通过或只有警告，1 表示有失败项。
+- 体检逐项给出「通过 / 警告 / 失败」；失败项附修复或排障命令。退出码 0 表示全部通过或只有警告，1 表示有失败项，2 表示命令自身出错（`doctor --json` 输出 `error`）。开发环境类别仅在当前工作目录位于来源仓库内时出现。
 - `repair` 里删除台账失效记录（`--forget-stale`）、结束残留服务（`--stop-orphans`）是破坏性操作，要显式加参数；`--dry-run` 只看计划不动手。
 - `uninstall` 任何情况下都不动审阅目录；`--purge` 才一并删除审阅台账；有 `serve.py` 在运行时会拒绝，`--stop-servers` 先停止再卸。
+- 停止服务前会核实正在执行的是本仓库或当前技能副本的脚本，并在发信号前复核进程身份；无法核实时拒绝停止。`--purge` 仅删除已知台账文件；台账损坏、目录内有其他文件或未登记的审阅目录时拒绝清除。
 
 装好后在 Claude Code 中说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」，Claude Code 就会按这套流程工作。
 
@@ -211,7 +212,7 @@ python3 ae.py uninstall                          # 卸载：删除技能副本�
 
 > 在 `<仓库路径>` 安装并体检 annotation-everything 技能，按编号步骤执行，每步先确认成功标志再往下：
 >
-> 1. 运行 `python3 <仓库路径>/ae.py doctor --json`。成功标志：命令能执行并输出 JSON。解析结果，若 `summary.fail` 为 0 且没有安装状态类的失败项，说明已装好，跳到第 4 步。
+> 1. 运行 `python3 <仓库路径>/ae.py doctor --json`。退出码 2 时先查看 JSON 的 `error` 并排障；若提示安装记录损坏，可按第 2 步重新安装。正常输出中，若 `summary.fail` 为 0 且没有安装状态类的失败项，说明已装好，跳到第 4 步。
 > 2. 按你是哪种 Agent 决定链接参数：Claude Code 不需要 `--link`；Codex 用 `--link codex`；`~/.agents` 下的 Agent 用 `--link agents`；zcode 用 `--link zcode`。运行 `python3 <仓库路径>/ae.py install`（需要链接时加上对应 `--link`）。成功标志：退出码 0。
 > 3. 再次运行 `python3 <仓库路径>/ae.py doctor --json`，以 JSON 判定成败：`summary.fail` 为 0 即安装成功；`summary.warn` 里的警告（如缺少可选工具 `fc-list`/`pdffonts`）不阻塞使用。若仍有失败项，按每项的 `fix_command` 修复后重跑本步。
 > 4. 需要修复时运行 `python3 <仓库路径>/ae.py repair`（`--dry-run` 先看计划）。**`--purge`、`--forget-stale`、`--stop-orphans`、`--stop-servers` 都是破坏性操作，必须先征得用户同意再加。**

@@ -309,24 +309,24 @@ class RemoveLinksTests(unittest.TestCase):
 class RunningServersTests(unittest.TestCase):
     """running_servers 与 stop_servers 的单元行为：注入列举器，不依赖真实进程表。"""
 
-    def test_running_servers_matches_any_serve_py_script_path(self):
-        fake = [(1, "python3 /a/skill/scripts/serve.py /r"),
+    def test_running_servers_only_matches_own_serve_script(self):
+        fake = [(1, f"python3 {SERVE} /r"),
                 (2, "/usr/bin/python3 /b/serve.py --port 9"),
                 (3, "python3 /c/other.py x"),
                 (4, "grep serve.py notes.txt")]
         found = ae.running_servers(lister=lambda: fake)
-        self.assertEqual([pid for pid, _command in found], [1, 2, 4],
-                         "识别特征只有以 serve.py 结尾的参数，宁可多报不漏报")
+        self.assertEqual([pid for pid, _command in found], [1],
+                         "只识别本项目脚本，不匹配其他项目或 grep 参数")
 
     def test_running_servers_empty_when_no_processes(self):
         self.assertEqual(ae.running_servers(lister=lambda: []), [])
 
-    def test_stop_servers_stops_a_real_process(self):
+    def test_stop_servers_refuses_unrelated_real_process(self):
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         self.addCleanup(self.stop, proc)
         stuck = ae.stop_servers([(proc.pid, "python3 -c import time")])
-        self.assertEqual(stuck, [], "应确认进程已停止")
-        self.assertIsNotNone(proc.poll(), "进程应已退出")
+        self.assertEqual([pid for pid, _ in stuck], [proc.pid], "无关进程应拒绝停止")
+        self.assertIsNone(proc.poll(), "无关进程应保持运行")
 
     def stop(self, proc) -> None:
         if proc.poll() is None:
@@ -369,10 +369,10 @@ class PurgeGuardTests(unittest.TestCase):
         self.assertIsNotNone(reason)
         self.assertIn("审阅目录", reason)
 
-    def test_tolerates_unreadable_ledger(self):
+    def test_rejects_unreadable_ledger(self):
         self.ledger_home.mkdir(parents=True)
         (self.ledger_home / "reviews.json").write_text("不是 JSON", encoding="utf-8")
-        self.assertIsNone(ae.purge_guard(self.ledger_home))
+        self.assertIsNotNone(ae.purge_guard(self.ledger_home))
 
 
 if __name__ == "__main__":

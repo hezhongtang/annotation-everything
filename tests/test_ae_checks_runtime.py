@@ -187,6 +187,7 @@ class LedgerReadableTests(TempRootTestCase):
         self.assertEqual(result.level, FAIL)
         self.assertEqual(result.code, "ledger-readable")
         self.assertEqual(result.category, "运行状态")
+        self.assertTrue(result.fix_command.strip())
 
     def test_fails_when_ledger_structure_is_wrong(self):
         self.ledger_home.mkdir(parents=True)
@@ -250,7 +251,8 @@ class PortPoolTests(TempRootTestCase):
         result = ae.check_port_pool(self.ctx(port_probe=probe))
         self.assertEqual(result.level, FAIL)
         self.assertIn(str(port), result.message)
-        self.assertEqual(result.fix_command, "")
+        self.assertIn(str(port), result.fix_command)
+        self.assertIn("lsof", result.fix_command)
 
     def test_passes_when_pool_port_used_by_own_serve(self):
         d = make_review_dir(self.root, self.rid)
@@ -293,6 +295,7 @@ class OrphanServerTests(TempRootTestCase):
         result = ae.check_orphan_servers(self.ctx(process_lister=lambda: [(server.proc.pid, server.cmdline)]))
         self.assertEqual(result.level, FAIL)
         self.assertIn(str(server.proc.pid), result.message)
+        self.assertIn(str(server.port), result.message)
         self.assertTrue(result.fix_command.rstrip().endswith(FIX_STOP_ORPHANS), result.fix_command)
 
     def test_passes_when_serving_ledgered_review(self):

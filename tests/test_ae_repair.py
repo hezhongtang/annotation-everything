@@ -315,9 +315,9 @@ class RepairCliTests(unittest.TestCase):
                     "CODEX_HOME": str(self.home / ".codex"), "AE_HOME": str(self.root / "ledger"),
                     "PYTHONDONTWRITEBYTECODE": "1"}
 
-    def run_ae(self, *args):
+    def run_ae(self, *args, cwd=None):
         return subprocess.run([sys.executable, str(AE), *args],
-                              env=self.env, capture_output=True, text=True, timeout=180)
+                              cwd=cwd, env=self.env, capture_output=True, text=True, timeout=180)
 
     @property
     def copy_dir(self) -> Path:
@@ -332,8 +332,8 @@ class RepairCliTests(unittest.TestCase):
         p = self.run_ae(*args)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
-    def doctor_levels(self) -> dict:
-        p = self.run_ae("doctor", "--json")
+    def doctor_levels(self, cwd=None) -> dict:
+        p = self.run_ae("doctor", "--json", cwd=cwd)
         return {r["code"]: r["level"] for r in json.loads(p.stdout)["results"]}
 
     def break_install_state(self):
@@ -392,10 +392,10 @@ class RepairCliTests(unittest.TestCase):
         record = json.loads(record_path.read_text(encoding="utf-8"))
         record["repo"] = str(repo)
         record_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
-        self.assertEqual(self.doctor_levels()["git-hooks"], "警告")
-        p = self.run_ae("repair")
+        self.assertEqual(self.doctor_levels(cwd=repo)["git-hooks"], "警告")
+        p = self.run_ae("repair", cwd=repo)
         self.assertIn(p.returncode, (0, 1))
-        self.assertEqual(self.doctor_levels()["git-hooks"], "通过", "git 钩子应被启用")
+        self.assertEqual(self.doctor_levels(cwd=repo)["git-hooks"], "通过", "git 钩子应被启用")
 
     def write_stale_ledger(self):
         valid_dir = make_review_dir(self.root, RID_VALID)
