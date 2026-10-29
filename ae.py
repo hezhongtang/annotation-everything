@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""annotation-everything 统一管理命令：安装技能副本、体检安装状态。
+"""annotation-everything 统一管理命令：安装技能副本、体检、修复。
 
 用法：
   python3 ae.py install            # 把技能本体复制为技能副本（Claude 技能目录，CLAUDE_SKILLS_DIR 可覆盖）
   python3 ae.py install --link codex,agents,zcode
                                     # 同时在这些 Agent 的技能目录里建指向技能副本的软链接
   python3 ae.py doctor [--json]    # 体检：逐项检查并给出级别与修复命令
+  python3 ae.py repair [--dry-run] [--forget-stale] [--stop-orphans]
+                                    # 修复体检发现的问题：先打印计划；安全项自动修，
+                                    # 删除台账失效记录与结束残留服务需显式参数
 
 约定：
 - 只用 Python 标准库，语法兼容 Python 3.9；
@@ -24,9 +27,11 @@ import os
 import platform
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -751,6 +756,278 @@ def cmd_doctor(args) -> int:
     return 1 if any(r.level == LEVEL_FAIL for r in results) else 0
 
 
+# ── 修复 ───────────────────────────────────────────────────────
+# 修复计划由体检结果（同一组检查项）生成，执行前先打印；安全项自动修（重新同步技能副本、
+# 修复悬空链接、启用 git 钩子）；删除台账失效记录与结束残留服务是破坏性操作，必须加显式参数。
+
+# 三个「技能副本」检查项合并为一个重新同步动作
+REPAIR_COPY_CODES = ("skill-copy-present", "skill-copy-sync", "skill-copy-version")
+# 计划项类别 → 覆盖的检查项编号（用于计算「不能自动修复」的剩余问题）
+REPAIR_KIND_CODES = {
+    "resync-copy": REPAIR_COPY_CODES,
+    "fix-links": ("skill-links",),
+    "git-hooks": ("git-hooks",),
+    "forget-stale": ("ledger-stale",),
+    "stop-orphans": ("orphan-servers",),
+}
+
+
+@dataclasses.dataclass
+class PlanItem:
+    """修复计划里的一项；flag 非空表示破坏性操作，需要对应显式参数才执行。"""
+    kind: str        # 动作类别：resync-copy / fix-links / git-hooks / forget-stale / stop-orphans
+    problem: str     # 问题描述（取体检项的说明）
+    action: str      # 修复动作（给用户看）
+    flag: str = ""   # 需要的显式参数；空 = 安全项，自动执行
+
+
+def plan_from_results(results) -> list:
+    """由体检结果生成修复计划：只收 ae.py 能修的项，其余问题见体检输出。"""
+    by_code = {r.code: r for r in results}
+    plan = []
+    copy_broken = next((by_code[code] for code in REPAIR_COPY_CODES
+                        if code in by_code and by_code[code].level == LEVEL_FAIL), None)
+    if copy_broken is not None:
+        plan.append(PlanItem("resync-copy", copy_broken.message,
+                             "重新同步技能副本（覆盖副本内的手工改动，语义同 install）"))
+    r = by_code.get("skill-links")
+    if r is not None and r.level == LEVEL_FAIL:
+        plan.append(PlanItem("fix-links", r.message, "修复指向技能副本的链接"))
+    r = by_code.get("git-hooks")
+    if r is not None and r.level in (LEVEL_WARN, LEVEL_FAIL):
+        plan.append(PlanItem("git-hooks", r.message, "启用 git 钩子"))
+    r = by_code.get("ledger-stale")
+    if r is not None and r.level in (LEVEL_WARN, LEVEL_FAIL):
+        plan.append(PlanItem("forget-stale", r.message, "删除台账失效记录并释放专属端口",
+                             "--forget-stale"))
+    r = by_code.get("orphan-servers")
+    if r is not None and r.level == LEVEL_FAIL:
+        plan.append(PlanItem("stop-orphans", r.message, "结束残留服务（SIGTERM 优雅停止）",
+                             "--stop-orphans"))
+    return plan
+
+
+def recreate_link(link: Path, copy_dir: Path) -> None:
+    """把链接位置重建为指向技能副本的软链接（悬空、指向别处、已删除统一走这里）。"""
+    if link.is_symlink():
+        link.unlink()
+    link.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(str(copy_dir.resolve()), str(link))
+
+
+def repair_links(ctx: DoctorContext) -> tuple:
+    """修复指向技能副本的链接；返回（已重建的链接条目, 无法修复的说明）。"""
+    if not ctx.skill_copy.is_dir():
+        return [], [f"技能副本缺失（{ctx.skill_copy}），先重新同步技能副本再修链接"]
+    created, stuck = [], []
+    for entry in known_links(ctx):
+        if not (isinstance(entry, dict) and isinstance(entry.get("path"), str)):
+            continue
+        link = Path(entry["path"])
+        if _link_status(link, ctx.skill_copy) == "正常":
+            continue
+        if link.exists() and not link.is_symlink():
+            # 位置被非链接内容占用：与 install 同样不覆盖，留给用户手工处理
+            stuck.append(f"{entry.get('agent') or '未知'}（{entry['path']}）：位置已是普通文件或目录，请手工处理")
+            continue
+        recreate_link(link, ctx.skill_copy)
+        created.append({"agent": entry.get("agent", ""), "path": entry["path"]})
+    return created, stuck
+
+
+def forget_stale_entries(entries: dict) -> list:
+    """删除台账里的失效记录并释放专属端口（用技能本体 ledger.py 的 forget 官方 API）。
+
+    动手前按当前台账复核：条目已不在、或已恢复有效（如外接盘重新挂上）时跳过，不误删。
+    返回 [(审阅标识, 端口, 说明)]，说明为 None 表示已删除。
+    """
+    mod = skill_ledger_module()
+    done = []
+    for rid, port in find_stale_entries(entries):
+        try:
+            current = mod.entries()
+        except (mod.LedgerError, OSError) as e:
+            done.append((rid, port, f"台账读不了，未删除（{e}）"))
+            continue
+        entry = current.get(rid)
+        if entry is None:
+            done.append((rid, port, "已不在台账里，无需删除"))
+        elif mod.entry_state(rid, entry) == "ok":
+            done.append((rid, port, "已恢复有效，跳过"))
+        else:
+            try:
+                mod.forget(rid)
+                done.append((rid, port, None))
+            except (mod.LedgerError, OSError) as e:
+                done.append((rid, port, f"未删除（{e}）"))
+    return done
+
+
+def _process_gone(pid: int) -> bool:
+    """进程是否已退出；僵尸（已退出待父进程回收）也算已退出。ps 拿不到就当还在。"""
+    try:
+        done = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                              capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    state = done.stdout.strip()
+    return not state or state.startswith("Z")
+
+
+def stop_orphan_servers(entries: dict, lister, timeout: float = 10.0) -> list:
+    """结束残留服务：SIGTERM 优雅停止并等待退出，不强制杀。返回 [(pid, 端口, 说明)]，
+    说明为 None 表示已停止。"""
+    stopped = []
+    for pid, port, _dir in find_orphan_servers(entries, lister):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            stopped.append((pid, port, "已不在，无需结束"))
+            continue
+        except OSError as e:
+            stopped.append((pid, port, f"无法结束（{e}）"))
+            continue
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not _process_gone(pid):
+            time.sleep(0.1)
+        if _process_gone(pid):
+            stopped.append((pid, port, None))
+        else:
+            stopped.append((pid, port, f"SIGTERM 后 {timeout:.0f} 秒内未退出，未强制结束"))
+    return stopped
+
+
+def execute_plan(plan: list, ctx: DoctorContext,
+                 forget_stale: bool = False, stop_orphans: bool = False) -> tuple:
+    """执行修复计划：破坏性项必须给出对应参数才动手。返回（报告行列表, 是否执行了动作）。"""
+    lines, acted = [], False
+    flag_given = {"--forget-stale": forget_stale, "--stop-orphans": stop_orphans}
+    resynced = False
+    for item in plan:
+        if item.flag and not flag_given.get(item.flag):
+            continue
+        acted = True
+        if item.kind == "resync-copy":
+            src = ctx.repo / SKILL_SRC if ctx.repo is not None else None
+            if src is None or not src.is_dir():
+                lines.append(f"未重新同步技能副本：找不到技能本体（{src or '未定位到来源仓库'}）")
+                continue
+            copy_skill(src, ctx.skill_copy)
+            resynced = True
+            lines.append(f"已重新同步技能副本到 {ctx.skill_copy}")
+            # 副本回来了：悬空链接多半自愈，其余重建；随后按 install 的合并语义补写安装记录
+            created, stuck = repair_links(ctx)
+            previous = ctx.record if isinstance(ctx.record, dict) \
+                else {"links": scan_links(ctx.skill_copy)}
+            write_record(ctx.skill_copy, ctx.repo, merged_links(previous, ctx.skill_copy, created))
+            lines.extend(_link_report(created, stuck))
+        elif item.kind == "fix-links":
+            if resynced:
+                continue                    # 重新同步时已一并修过链接
+            created, stuck = repair_links(ctx)
+            lines.extend(_link_report(created, stuck))
+        elif item.kind == "git-hooks":
+            lines.extend(_enable_git_hooks(ctx.repo))
+        elif item.kind == "forget-stale":
+            entries, error = load_ledger(ctx)
+            if error is not None:
+                lines.append(f"未删除台账失效记录：{error}")
+                continue
+            for rid, port, note in forget_stale_entries(entries):
+                lines.append(f"台账失效记录 {rid[:8]}（{_port_text(port)}）：{note}"
+                             if note is not None
+                             else f"已删除台账失效记录 {rid[:8]}（{_port_text(port)}，已释放）")
+        elif item.kind == "stop-orphans":
+            entries, error = load_ledger(ctx)
+            if error is not None:
+                lines.append(f"未结束残留服务：{error}")
+                continue
+            lister = ctx.process_lister if ctx.process_lister is not None else list_processes
+            for pid, port, note in stop_orphan_servers(entries, lister):
+                detail = f"，端口 {port}" if port else ""
+                lines.append(f"已结束残留服务 pid {pid}{detail}" if note is None
+                             else f"残留服务 pid {pid}{detail}：{note}")
+    return lines, acted
+
+
+def _port_text(port) -> str:
+    return f"端口 {port}" if port else "未分配端口"
+
+
+def _link_report(created: list, stuck: list) -> list:
+    lines = [f"已重建链接：{entry.get('agent') or entry['path']}（{entry['path']}）"
+             for entry in created]
+    lines.extend(f"无法修复链接 {note}" for note in stuck)
+    return lines
+
+
+def _enable_git_hooks(repo: Optional[Path]) -> list:
+    """启用 git 钩子：执行仓库自带的 tools/setup-dev.sh（与其修复命令同一脚本）。"""
+    script = repo / "tools" / "setup-dev.sh" if repo is not None else None
+    if script is None or not script.is_file():
+        return [f"未启用 git 钩子：找不到 {script}"]
+    try:
+        # 脚本带 bash 语法（set -o pipefail），显式用 bash 执行
+        done = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return [f"启用 git 钩子失败：{e}"]
+    if done.returncode == 0:
+        return ["已启用 git 钩子（core.hooksPath = tools/git-hooks）"]
+    return [f"启用 git 钩子失败：{(done.stderr or done.stdout).strip()}"]
+
+
+def print_plan(plan: list, forget_stale: bool = False, stop_orphans: bool = False,
+               dry_run: bool = False) -> None:
+    print("修复计划：")
+    if not plan:
+        print("  没有发现可修复的问题")
+        return
+    given = {"--forget-stale": forget_stale, "--stop-orphans": stop_orphans}
+    for index, item in enumerate(plan, 1):
+        if item.flag and not given.get(item.flag):
+            note = f"（破坏性操作，需要参数 {item.flag}；本次未执行）"
+        elif dry_run:
+            note = "（--dry-run，只打印不执行）"
+        else:
+            note = ""
+        print(f"  {index}. {item.problem}")
+        print(f"     → {item.action}{note}")
+
+
+def _print_unrepairable(results, plan) -> None:
+    covered = {code for item in plan for code in REPAIR_KIND_CODES.get(item.kind, ())}
+    rest = [r.code for r in results if r.level != LEVEL_PASS and r.code not in covered]
+    if rest:
+        print(f"  （另有 {len(rest)} 项不能自动修复：{'、'.join(rest)}，见体检输出）")
+
+
+def _fresh_context() -> DoctorContext:
+    skill_copy = skill_copy_dir()
+    record = read_record(skill_copy)
+    return DoctorContext(skill_copy=skill_copy, repo=resolve_repo(record), record=record)
+
+
+def cmd_repair(args) -> int:
+    ctx = _fresh_context()
+    results = run_doctor(ctx)
+    plan = plan_from_results(results)
+    print_plan(plan, forget_stale=args.forget_stale, stop_orphans=args.stop_orphans,
+               dry_run=args.dry_run)
+    _print_unrepairable(results, plan)
+    if args.dry_run:
+        return 1 if any(r.level == LEVEL_FAIL for r in results) else 0
+    lines, acted = execute_plan(plan, ctx, forget_stale=args.forget_stale,
+                                stop_orphans=args.stop_orphans)
+    if lines:
+        print("\n执行修复：")
+        for line in lines:
+            print(f"  - {line}")
+    after = run_doctor(_fresh_context()) if acted else results
+    print("\n修复后体检：")
+    print_doctor(after)
+    return 1 if any(r.level == LEVEL_FAIL for r in after) else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ae.py", description=f"{APP} 统一管理命令")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -762,6 +1039,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--json", action="store_true", dest="as_json",
                           help="输出结构化的体检结果（JSON）")
     p_doctor.set_defaults(handler=cmd_doctor)
+    p_repair = sub.add_parser(
+        "repair", help="修复体检发现的问题：先打印计划，安全项自动执行，破坏性操作需显式参数")
+    p_repair.add_argument("--dry-run", action="store_true", dest="dry_run",
+                          help="只打印修复计划，不执行、不改动任何状态")
+    p_repair.add_argument("--forget-stale", action="store_true", dest="forget_stale",
+                          help="删除台账失效记录并释放专属端口（破坏性操作）")
+    p_repair.add_argument("--stop-orphans", action="store_true", dest="stop_orphans",
+                          help="结束残留服务（破坏性操作）")
+    p_repair.set_defaults(handler=cmd_repair)
     return parser
 
 
