@@ -222,7 +222,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 | 命令 | 作用 |
 |---|---|
-| `ae.py install` / `doctor` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`；体检安装状态（`--json` 输出结构化结果） |
+| `ae.py install` / `doctor` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--link codex,agents,zcode` 为其他 Agent 建指向副本的软链接）；体检安装状态（`--json` 输出结构化结果） |
 | `build_viewer.py --report … --script … --out 审阅目录` | 生成对照页；`--rebuild 审阅目录` 按上次记录的参数重新生成 |
 | `serve.py 审阅目录` | 启动本机服务；每份审阅都有固定的专属端口 |
 | `serve.py list` / `status` / `forget` | 列出本机所有审阅、查看某份审阅的状态、删除不再使用的台账记录 |

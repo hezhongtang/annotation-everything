@@ -3,6 +3,8 @@
 
 用法：
   python3 ae.py install            # 把技能本体复制为技能副本（Claude 技能目录，CLAUDE_SKILLS_DIR 可覆盖）
+  python3 ae.py install --link codex,agents,zcode
+                                    # 同时在这些 Agent 的技能目录里建指向技能副本的软链接
   python3 ae.py doctor [--json]    # 体检：逐项检查并给出级别与修复命令
 
 约定：
@@ -31,6 +33,8 @@ SKILL_NAME = "annotation-everything"
 SKILL_SRC = Path("skill") / SKILL_NAME
 RECORD_NAME = ".install-record.json"
 SERVE_PY = SKILL_SRC / "scripts" / "serve.py"
+# --link 接受的 Agent 名称；目录约定与 skill_sources.default_roots 一致
+LINK_AGENTS = ("codex", "agents", "zcode")
 # 复制与比对都忽略的缓存文件：字节码、系统杂项
 EXCLUDED_DIRS = {"__pycache__"}
 EXCLUDED_NAMES = {".DS_Store"}
@@ -64,6 +68,34 @@ def skill_copy_dir() -> Path:
     """技能副本的位置：CLAUDE_SKILLS_DIR 可覆盖，默认 ~/.claude/skills。"""
     skills_root = os.environ.get("CLAUDE_SKILLS_DIR") or Path.home() / ".claude" / "skills"
     return Path(skills_root).expanduser() / SKILL_NAME
+
+
+def link_target_dir(agent: str) -> Optional[Path]:
+    """Agent 的技能目录；未知名称返回 None。目录约定与 skill_sources 一致。"""
+    home = Path.home()
+    if agent == "codex":
+        return Path(os.environ.get("CODEX_HOME") or home / ".codex").expanduser() / "skills"
+    if agent == "agents":
+        return home / ".agents" / "skills"
+    if agent == "zcode":
+        return home / ".zcode" / "skills"
+    return None
+
+
+def link_path(agent: str) -> Optional[Path]:
+    """Agent 技能目录里软链接的位置。"""
+    target_dir = link_target_dir(agent)
+    return target_dir / SKILL_NAME if target_dir else None
+
+
+def parse_link_agents(spec: str) -> list:
+    """解析 --link 的逗号分隔名称：去空白、去重，保留出现顺序。"""
+    agents = []
+    for part in (spec or "").split(","):
+        name = part.strip()
+        if name and name not in agents:
+            agents.append(name)
+    return agents
 
 
 def read_version(repo: Path) -> Optional[str]:
@@ -107,18 +139,49 @@ def copy_skill(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst, ignore=ignore)
 
 
-def write_record(dst: Path, repo: Path) -> Path:
+def write_record(dst: Path, repo: Path, links: Optional[list] = None) -> Path:
     """在技能副本根目录写安装记录；返回记录文件路径。"""
     record = {
         "repo": str(repo.resolve()),
         "commit": read_commit(repo),
         "version": read_version(repo) or "",
         "installed_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
-        "links": [],
+        "links": list(links or []),
     }
     path = dst / RECORD_NAME
     path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
+
+
+def create_link(agent: str, copy_dir: Path) -> dict:
+    """在 Agent 技能目录里建指向技能副本的软链接；返回写入安装记录的条目。
+
+    位置上已有的链接（含悬空的、指向别处的）一律重建；非链接内容由调用方先拦截。
+    """
+    link = link_path(agent)
+    if link.is_symlink():
+        link.unlink()
+    link.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(str(copy_dir.resolve()), str(link))
+    return {"agent": agent, "path": str(link)}
+
+
+def merged_links(previous: Optional[dict], copy_dir: Path, created: list) -> list:
+    """合并历史记录与本次新建的链接：只保留仍是链接且指向技能副本的条目，按路径去重。"""
+    target = os.path.realpath(str(copy_dir))
+    entries = []
+    if isinstance(previous, dict) and isinstance(previous.get("links"), list):
+        entries.extend(entry for entry in previous["links"] if isinstance(entry, dict))
+    entries.extend(created)
+    merged, seen = [], set()
+    for entry in entries:
+        path = entry.get("path")
+        if not isinstance(path, str) or path in seen:
+            continue
+        if Path(path).is_symlink() and os.path.realpath(path) == target:
+            merged.append({"agent": entry.get("agent", ""), "path": path})
+            seen.add(path)
+    return merged
 
 
 def cmd_install(args) -> int:
@@ -127,10 +190,27 @@ def cmd_install(args) -> int:
     if not src.is_dir():
         print(f"找不到技能本体：{src}", file=sys.stderr)
         return 2
+    agents = parse_link_agents(getattr(args, "link", "") or "")
+    unknown = [agent for agent in agents if link_target_dir(agent) is None]
+    if unknown:
+        print(f"未知的 Agent 名称：{'、'.join(unknown)}（可选：{'、'.join(LINK_AGENTS)}）",
+              file=sys.stderr)
+        return 2
+    # 先拦下所有冲突，再动手：目标位置已有同名非链接内容时不覆盖、不复制
+    for agent in agents:
+        target = link_path(agent)
+        if target.exists() and not target.is_symlink():
+            print(f"{agent} 的技能目录里已有同名非链接内容，未覆盖：{target}", file=sys.stderr)
+            return 2
     dst = skill_copy_dir()
+    previous = read_record(dst)  # 在清掉旧副本前读出已记录的链接
     copy_skill(src, dst)
-    write_record(dst, repo)
+    created = [create_link(agent, dst) for agent in agents]
+    links = merged_links(previous, dst, created)
+    write_record(dst, repo, links)
     print(f"已安装技能副本到 {dst}")
+    if created:
+        print("已建立链接：" + "、".join(f"{entry['agent']}（{entry['path']}）" for entry in created))
     return 0
 
 
@@ -226,8 +306,73 @@ def check_copy_version(ctx: DoctorContext) -> CheckResult:
                        install_fix(ctx.repo))
 
 
+# ── 链接体检 ───────────────────────────────────────────────────
+
+
+def scan_links(skill_copy: Path) -> list:
+    """回退扫描：在三个已知 Agent 技能目录里找指向技能副本的链接（含悬空的）。
+
+    返回条目与安装记录 links 同构：{"agent": 名称, "path": 链接绝对路径}。
+    """
+    target = os.path.realpath(str(skill_copy))
+    found = []
+    for agent in LINK_AGENTS:
+        link = link_path(agent)
+        if not link.is_symlink():
+            continue
+        if os.path.realpath(str(link)) == target or os.readlink(str(link)) == target:
+            found.append({"agent": agent, "path": str(link)})
+    return found
+
+
+def _link_status(link: Path, skill_copy: Path) -> str:
+    """单个链接的状态：正常 / 悬空 / 指向别处 / 已不是链接 / 已删除。"""
+    if link.is_symlink():
+        if not link.exists():
+            return "悬空"
+        if os.path.realpath(str(link)) != os.path.realpath(str(skill_copy)):
+            return "指向别处"
+        return "正常"
+    if link.exists():
+        return "已不是链接"
+    return "已删除"
+
+
+def install_link_fix(repo: Optional[Path], agents: list) -> str:
+    target = repo / "ae.py" if repo else Path("ae.py")
+    return f"python3 {target} install --link {','.join(agents)}"
+
+
+def known_links(ctx: DoctorContext) -> list:
+    """已知链接：优先取安装记录；记录缺失时回退扫描三个已知 Agent 目录。"""
+    links = ctx.record.get("links") if isinstance(ctx.record, dict) else None
+    if isinstance(links, list):
+        return links
+    return scan_links(ctx.skill_copy)
+
+
+def check_links(ctx: DoctorContext) -> CheckResult:
+    entries = [entry for entry in known_links(ctx)
+               if isinstance(entry, dict) and isinstance(entry.get("path"), str)]
+    if not entries:
+        return CheckResult("skill-links", CATEGORY_INSTALL, LEVEL_PASS, "未发现指向技能副本的链接")
+    ok, broken = [], []
+    for entry in entries:
+        status = _link_status(Path(entry["path"]), ctx.skill_copy)
+        report = f"{entry.get('agent') or '未知'}（{entry['path']}）：{status}"
+        (ok if status == "正常" else broken).append(report)
+    if not broken:
+        return CheckResult("skill-links", CATEGORY_INSTALL, LEVEL_PASS,
+                           f"{len(ok)} 个链接正常：{'；'.join(ok)}")
+    agents = sorted({str(entry.get("agent") or "") for entry in entries
+                     if _link_status(Path(entry["path"]), ctx.skill_copy) != "正常"})
+    summary = f"{len(broken)} 个链接异常：{'；'.join(broken + ok)}"
+    return CheckResult("skill-links", CATEGORY_INSTALL, LEVEL_FAIL, summary,
+                       install_link_fix(ctx.repo, agents))
+
+
 # 全部检查项：doctor 按此顺序执行；后续工单在元组里追加新检查项函数
-CHECKS = (check_python, check_copy_present, check_copy_sync, check_copy_version)
+CHECKS = (check_python, check_copy_present, check_copy_sync, check_copy_version, check_links)
 
 
 def run_doctor(ctx: DoctorContext):
@@ -274,6 +419,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ae.py", description=f"{APP} 统一管理命令")
     sub = parser.add_subparsers(dest="command", required=True)
     p_install = sub.add_parser("install", help="把技能本体复制为技能副本")
+    p_install.add_argument("--link", default="", metavar="AGENTS",
+                           help="为其他 Agent 建指向技能副本的软链接，逗号分隔：codex,agents,zcode")
     p_install.set_defaults(handler=cmd_install)
     p_doctor = sub.add_parser("doctor", help="体检：检查安装状态，给出级别与修复命令")
     p_doctor.add_argument("--json", action="store_true", dest="as_json",
