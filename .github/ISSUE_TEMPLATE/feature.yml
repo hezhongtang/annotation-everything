@@ -1,0 +1,45 @@
+name: 需求
+description: 新功能或改进。写清验收标准和兼容性要求后才能开始开发。
+title: "<简述要做的事>"
+labels: ["needs-triage", "enhancement"]
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景
+      description: 现在的问题是什么，谁会受影响。
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 要做什么
+      description: 描述期望的行为，不必给出实现方式。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 每条都应能被测试或检查验证，写成「- [ ] 条目」的勾选列表。PR 合并前逐条核对。
+      placeholder: "- [ ] 生成对照页时……"
+
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: 兼容性与迁移
+      description: 是否影响已有审阅目录、旧版服务或旧数据格式；不影响也请写明。
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 不做什么
+      description: 可选。明确排除在外的内容，避免范围蔓延。
+  - type: input
+    id: parent
+    attributes:
+      label: 父 issue / 依赖
+      description: 可选。例如「父 issue #1；依赖 #7」。

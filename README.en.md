@@ -267,12 +267,18 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 └── evals/                         skill evaluation cases (used with skill-creator)
 fixtures/sample/                   synthetic sample (fictional data)
 tests/                             unit tests and end-to-end browser tests
-tools/install.sh                   installs into ~/.claude/skills/
+tools/
+├── install.sh                     installs into ~/.claude/skills/
+├── setup-dev.sh                   enables the repository's git hooks
+└── git-hooks/                     refuse commits on main, pushes to main and deleting main
+.github/                           CI, issue templates and the pull request template
 docs/                              architecture decision records (ADRs), agent conventions, README images
 GLOSSARY.md                        glossary
 ```
 
 ## Development
+
+After cloning, run `tools/setup-dev.sh` once to enable the git hooks.
 
 ```bash
 python3 -m unittest discover tests                                   # unit tests (standard library only)
@@ -282,5 +288,6 @@ tools/install.sh                                                     # sync to ~
 ```
 
 - Tests put the review ledger in a temporary directory (the `AE_HOME` environment variable). When trying things by hand or running skill evaluations, run `export AE_HOME=$(mktemp -d)` first, so throwaway reviews are not registered in your real ledger and do not take ports that belong to real reviews.
+- `main` is updated only by squash-merging pull requests: branch from an issue, put `Closes #<number>` in the pull request body, and merge once CI passes; the issue closes automatically on merge. See "分支、issue 与 PR" (branches, issues and pull requests) in [AGENTS.md](AGENTS.md) for the full workflow.
 - The repository holds synthetic samples only. Real material, annotations and review directories never go into the repository or the skill directory.
 - [GLOSSARY.md](GLOSSARY.md) defines the terms, [docs/adr/](docs/adr/) holds the architecture decision records, and [AGENTS.md](AGENTS.md) describes the collaboration conventions. All three are in Chinese.

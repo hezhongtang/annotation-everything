@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # 只取消同一 PR 上过时的运行；推送到 main 的每次运行都保留
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: 单元测试与服务安全自检
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 单元测试
+        run: python3 -m unittest discover tests -v
+      - name: 服务安全自检
+        run: |
+          export AE_HOME="$(mktemp -d)"
+          python3 skill/annotation-everything/scripts/serve.py check

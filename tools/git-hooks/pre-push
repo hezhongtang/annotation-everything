@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# 拒绝推送到 main 或删除 main：main 只通过 PR 的 squash 合并更新（见 AGENTS.md「分支、issue 与 PR」）。
+# 标准输入每行：<本地 ref> <本地 sha> <远端 ref> <远端 sha>
+set -euo pipefail
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+      echo "已拒绝：不能删除远端 main。" >&2
+    else
+      echo "已拒绝：不能直接推送到 main。请推送功能分支并开 PR，合并时用 squash。" >&2
+    fi
+    status=1
+  fi
+done
+exit "$status"
