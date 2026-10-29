@@ -181,8 +181,21 @@ def skill_search_checks(browser, tmp: Path):
         check(options.filter(has_text="chart").count() == 1, "常驻技能按说明搜索")
         page.keyboard.press("ArrowDown")
         page.keyboard.press("Enter")
-        page.click("#alwaysSave")
-        check(wait_until(lambda: page.inner_text("#alwaysN") == "1", page, 5), "常驻技能可保存搜索结果")
+        rows = page.locator("#alwaysRows .arow")
+        check(rows.count() == 1 and rows.first.locator(".aname").input_value() == "chart",
+              "选择高亮候选时回车不新增行")
+        rows.first.locator(".ascope").select_option("讲稿")
+        rows.first.locator(".aname").focus()
+        page.keyboard.press("Enter")
+        check(rows.count() == 2 and rows.first.locator(".ascope").input_value() == "讲稿",
+              "未选择候选时回车新增行并保留原范围")
+        last = rows.last.locator(".aname")
+        check(last.evaluate("el => document.activeElement === el"), "新行自动获得焦点")
+        last.fill("writer")
+        last.dispatch_event("keydown", {"key": "Enter", "isComposing": True, "keyCode": 229})
+        check(rows.count() == 2, "输入法组合时回车不新增行")
+        page.keyboard.press("Control+Enter")
+        check(wait_until(lambda: page.inner_text("#alwaysN") == "2", page, 5), "Ctrl+Enter 保存常驻技能")
 
     ctx = browser.new_context()
     page = ctx.new_page()

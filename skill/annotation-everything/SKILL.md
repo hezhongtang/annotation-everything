@@ -45,7 +45,7 @@ python3 $S/build_viewer.py --report 报告.html --script 讲稿.md --out 审阅�
 - 技能目录超过 200 项时，使用当前版本的生成器、服务和 `notes.py`；旧版工具写回目录可能截断候选。
 - 常驻技能：用户希望长期约束每条批注时（页面「常驻技能」，快捷键 G），或让你代设：
   `python3 $S/notes.py skills 审阅目录 --always "humanizer-zh=讲稿" "frontend-design=风格优化" "某技能"`
-  范围：全部（默认）/ 报告 / 讲稿 / 风格优化；`--always-add`、`--always-remove 名称`、`--always-clear` 增删。只对这份审阅生效。
+  范围：全部（默认）/ 报告 / 讲稿 / 风格优化；`--always-add`、`--always-remove 名称`、`--always-clear` 增删。只对这份审阅生效。页面中按 Enter 添加下一项（有高亮候选时先选中候选），按 Ctrl/Cmd+Enter 保存。
 
 ## 2. 启动服务并挂起等待
 

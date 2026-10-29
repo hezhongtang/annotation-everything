@@ -226,8 +226,8 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <textarea id="handMsg" placeholder="给 Agent 的附言（可选）：例如「先改第 7–12 页，口径问题先别动」"></textarea>
 <p class="hint" id="handHelp">提交后，正在等待的代理会收到这批未处理批注，右上角显示「等待接收 → 处理中 → 已处理」（选「已初改·待复核」则停在待复核，由你决定请求复核或直接定稿）。代理还没接收时再提交一次，会合并成同一次（附言、选项以最新为准）。</p></div></div></div>
 <div class="modal" id="always"><div class="dlg"><div class="bar"><h2>常驻技能</h2><button class="primary" id="alwaysSave">保存<kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close>取消<kbd>Esc</kbd></button></div>
-<div class="pad"><p class="hint">这份审阅里，范围内的每一条批注都会要求 Agent 处理前先调用这些技能——适合需要长期约束、不会主动想到用技能的 Agent。只对当前这份审阅生效；单条批注的「技能」照常可加。</p>
-<div id="alwaysRows"></div><p><button id="alwaysAdd">添加一个</button></p></div></div></div>
+<div class="pad"><p class="hint">这份审阅里，范围内的每一条批注都会要求 Agent 处理前先调用这些技能——适合需要长期约束、不会主动想到用技能的 Agent。只对当前这份审阅生效；单条批注的「技能」照常可加。名称框按 Enter 添加下一项（有高亮候选时先选择），按 Ctrl/Cmd+Enter 保存。</p>
+<div id="alwaysRows"></div><p><button id="alwaysAdd" title="添加一个常驻技能（在名称输入框按回车）">添加一个<kbd>↵</kbd></button></p></div></div></div>
 <div class="modal" id="batches"><div class="dlg"><div class="bar"><h2>处理记录</h2><span class="hint" id="batchSum"></span><button data-close>关闭<kbd>Esc</kbd></button></div>
 <div class="pad" id="batchList"></div></div></div>
 <div id="toast"></div>
@@ -953,7 +953,9 @@ async function offerAlways(list){if(!list)return;const items=splitAlways(list);
   const saved=await setAlways(items);if(saved){updateAlwaysBtn();refreshList(true);toast("已采用导入的常驻技能",3000)}}
 $("alwaysSave").onclick=saveAlways;
 $("always").addEventListener("keydown",e=>{e.stopPropagation();if(e.isComposing||e.keyCode===229)return;
-  if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){e.preventDefault();saveAlways()}else if(e.key==="Escape")$("always").classList.remove("on")});
+  if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){e.preventDefault();saveAlways()}
+  else if(e.key==="Enter"&&e.target.classList.contains("aname")){e.preventDefault();$("alwaysAdd").click()}
+  else if(e.key==="Escape")$("always").classList.remove("on")});
 $("nskills").addEventListener("keydown",e=>{if(e.isComposing)return;if(e.key==="Enter"&&(e.metaKey||e.ctrlKey))addNote();else if(e.key==="Escape")e.target.blur()});
 
 // ---------- 回到上次：上次批注到哪一页、Agent 处理到哪 ----------
