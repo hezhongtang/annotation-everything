@@ -40,7 +40,9 @@ def _metadata(path: Path) -> tuple[dict[str, str] | None, str | None]:
         if line == "---":
             name, desc = data.get("name", "").strip(), data.get("description", "").strip()
             if name and desc:
-                return {"name": name[:64], "desc": desc}, None
+                if len(name) > 64:
+                    return None, "技能名称超过 64 个字符"
+                return {"name": name, "desc": desc}, None
             return None, "缺少名称或说明"
         key, sep, value = line.partition(":")
         if sep and key in ("name", "description"):
@@ -110,6 +112,14 @@ def scan(roots: list[Path]) -> tuple[list[tuple[str, list[dict[str, str]] | None
                         continue
                     seen.add(resolved)
                     item, error = _metadata(path)
+                    if item and root.name == "cache" and root.parent.name == "plugins":
+                        parts = path.relative_to(root).parts
+                        if len(parts) >= 6 and parts[3] == "skills" and ":" not in item["name"]:
+                            qualified = f"{parts[1]}:{item['name']}"
+                            if len(qualified) > 64:
+                                item, error = None, "带插件命名空间的技能名称超过 64 个字符"
+                            else:
+                                item["name"] = qualified
                 except (OSError, RuntimeError) as e:
                     item, error = None, f"无法读取：{type(e).__name__}"
                 if error:

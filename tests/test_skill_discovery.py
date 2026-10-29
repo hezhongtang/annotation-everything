@@ -174,14 +174,14 @@ class SkillDiscoveryTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertNotIn("writer", [item["name"] for item in self.catalog()])
 
-    def test_plugin_cache_uses_newest_version_and_prefers_direct_skills(self):
+    def test_plugin_cache_uses_newest_version_and_keeps_qualified_names(self):
         for version, desc in [("1.9", "旧版"), ("1.10", "新版")]:
             d = self.home / ".codex" / "plugins" / "cache" / "market" / "sample" / version / "skills" / "sample"
             d.mkdir(parents=True)
             (d / "SKILL.md").write_text(f"---\nname: sample\ndescription: {desc}\n---\n", encoding="utf-8")
         p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn({"name": "sample", "desc": "新版"}, self.catalog())
+        self.assertIn({"name": "sample:sample", "desc": "新版"}, self.catalog())
         direct = self.home / ".agents" / "skills" / "sample"
         direct.mkdir(parents=True)
         (direct / "SKILL.md").write_text("---\nname: sample\ndescription: 直接安装\n---\n", encoding="utf-8")
@@ -189,6 +189,7 @@ class SkillDiscoveryTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual([x for x in self.catalog() if x["name"] == "sample"],
                          [{"name": "sample", "desc": "直接安装"}])
+        self.assertIn({"name": "sample:sample", "desc": "新版"}, self.catalog())
 
     def test_bad_skill_file_preserves_previous_entries_and_imports_good_ones(self):
         self.skill("writer", "writer", "文字校对")
