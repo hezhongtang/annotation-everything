@@ -222,7 +222,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 | 命令 | 作用 |
 |---|---|
-| `ae.py install` / `doctor` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--link codex,agents,zcode` 为其他 Agent 建指向副本的软链接）；体检安装状态（`--json` 输出结构化结果） |
+| `ae.py install` / `doctor` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--link codex,agents,zcode` 为其他 Agent 建指向副本的软链接）；体检安装状态（`--json` 输出结构化结果）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止） |
 | `build_viewer.py --report … --script … --out 审阅目录` | 生成对照页；`--rebuild 审阅目录` 按上次记录的参数重新生成 |
 | `serve.py 审阅目录` | 启动本机服务；每份审阅都有固定的专属端口 |
 | `serve.py list` / `status` / `forget` | 列出本机所有审阅、查看某份审阅的状态、删除不再使用的台账记录 |
@@ -266,7 +266,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── skill_sources.py           发现本机的技能目录
 │   └── check_pptx_fonts.py        PPTX 与 PDF 字体核查
 └── evals/                         技能评测用例（供 skill-creator 使用）
-ae.py                             统一管理命令：install 安装技能副本，doctor 体检
+ae.py                             统一管理命令：install 安装技能副本，doctor 体检，uninstall 卸载
 fixtures/sample/                   合成样例（虚构数据）
 tests/                             单元测试和浏览器端到端测试
 tools/

@@ -6,6 +6,9 @@
   python3 ae.py install --link codex,agents,zcode
                                     # 同时在这些 Agent 的技能目录里建指向技能副本的软链接
   python3 ae.py doctor [--json]    # 体检：逐项检查并给出级别与修复命令
+  python3 ae.py uninstall [--purge] [--stop-servers]
+                                    # 删除技能副本与指向它的链接；默认保留审阅台账（--purge 一并删除），
+                                    # 任何情况下不动审阅目录；检测到 serve.py 在运行会拒绝（--stop-servers 先结束）
 
 约定：
 - 只用 Python 标准库，语法兼容 Python 3.9；
@@ -23,8 +26,10 @@ import os
 import platform
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -508,6 +513,205 @@ def cmd_doctor(args) -> int:
     return 1 if any(r.level == LEVEL_FAIL for r in results) else 0
 
 
+# ── 运行中的服务（卸载用；运行状态体检复用时统一走这里） ────────
+
+
+def _parse_ps(stdout: str) -> list:
+    """解析 `ps -axo pid=,command=` 的输出：[(pid, 完整命令行), ...]。"""
+    processes = []
+    for line in stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            processes.append((int(parts[0]), parts[1].strip()))
+    return processes
+
+
+def _ps_processes() -> list:
+    """列出本机全部进程；ps 不可用或失败时返回空列表（宁可漏报不误伤）。"""
+    try:
+        done = subprocess.run(["ps", "-axo", "pid=,command="],
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return _parse_ps(done.stdout) if done.returncode == 0 else []
+
+
+def running_servers(lister: Optional[Callable[[], list]] = None) -> list:
+    """正在运行的 serve.py 进程：[(pid, 命令行), ...]，与台账比对无关。
+
+    serve.py 没有专属的进程标记，识别特征只有命令行里出现以 serve.py 结尾的
+    脚本路径；因此宁可多报不漏报，卸载与 --stop-servers 都偏保守。
+    lister 返回 [(pid, 命令行), ...]，测试可注入；默认用 ps 列举。
+    """
+    if lister is None:
+        lister = _ps_processes
+    found = []
+    for pid, command in lister():
+        args = command.split()
+        if any(os.path.basename(part) == "serve.py" for part in args[1:]):
+            found.append((pid, command))
+    return found
+
+
+def _process_stopped(pid: int) -> bool:
+    """进程是否已停止（查不到，或只剩僵尸）；ps 不可用时只能假设已停止。"""
+    try:
+        done = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return True
+    if done.returncode != 0:
+        return True
+    state = done.stdout.strip().upper()
+    return not state or state.startswith("Z")
+
+
+def stop_servers(servers: list, wait_seconds: float = 5.0) -> list:
+    """结束 serve.py 进程：先 SIGTERM（serve.py 收到后优雅退出），等不到再 SIGKILL。
+
+    返回未能确认停止的 [(pid, 命令行), ...]。
+    """
+    remaining = list(servers)
+    for pid, _command in remaining:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass  # 已退出，或不是自己的进程
+    deadline = time.monotonic() + wait_seconds
+    while remaining and time.monotonic() < deadline:
+        time.sleep(0.1)
+        remaining = [(pid, command) for pid, command in remaining if not _process_stopped(pid)]
+    for pid, _command in remaining:  # 等了还活着：强杀
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    if remaining:
+        time.sleep(0.2)
+        remaining = [(pid, command) for pid, command in remaining if not _process_stopped(pid)]
+    return remaining
+
+
+# ── 卸载 ───────────────────────────────────────────────────────
+
+
+def ledger_home() -> Path:
+    """审阅台账目录：与 skill/annotation-everything/scripts/ledger.py 的 home() 同一约定。"""
+    env = os.environ.get("AE_HOME")
+    return Path(env).expanduser().resolve() if env else Path.home() / ".annotation-everything"
+
+
+def ledger_review_dirs(home_dir: Path) -> list:
+    """读台账里登记的审阅目录路径；台账缺失或读不了时返回空列表。"""
+    try:
+        doc = json.loads((home_dir / "reviews.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    reviews = doc.get("reviews") if isinstance(doc, dict) else None
+    dirs = []
+    if isinstance(reviews, dict):
+        for entry in reviews.values():
+            if isinstance(entry, dict) and isinstance(entry.get("dir"), str) and entry["dir"]:
+                dirs.append(entry["dir"])
+    return dirs
+
+
+def purge_guard(home_dir: Path) -> Optional[str]:
+    """--purge 的安全检查：返回拒绝原因字符串，None 表示可以删除。"""
+    if not home_dir.exists():
+        return None
+    resolved = home_dir.resolve()
+    if resolved == Path.home().resolve() or resolved == Path(resolved.root):
+        return f"台账目录异常（{home_dir}），拒绝删除"
+    for review_dir in ledger_review_dirs(home_dir):
+        try:
+            entry = Path(review_dir).expanduser().resolve()
+        except OSError:
+            continue
+        if entry == resolved or resolved in entry.parents:
+            return (f"审阅目录 {review_dir} 在台账目录里，拒绝删除"
+                    "（卸载任何情况下不动审阅目录）")
+    return None
+
+
+def remove_links(entries: list, skill_copy: Path) -> list:
+    """删除安装记录列出（或扫描发现）的、指向技能副本的链接。
+
+    只删软链接：指向别处的不动，已变成普通文件/目录或已消失的不动。
+    返回 [(路径, 处理说明), ...] 供输出。
+    """
+    target = os.path.realpath(str(skill_copy))
+    report = []
+    for entry in entries:
+        link = Path(entry["path"])
+        if link.is_symlink():
+            if os.path.realpath(str(link)) == target or os.readlink(str(link)) == target:
+                link.unlink()
+                report.append((str(link), "已删除链接"))
+            else:
+                report.append((str(link), "指向别处，未删除"))
+        else:
+            report.append((str(link), "已不是链接，未删除"))
+    return report
+
+
+def remove_skill_copy(skill_copy: Path) -> str:
+    """删除技能副本；返回给用户看的说明。"""
+    if skill_copy.is_symlink():
+        skill_copy.unlink()
+        return f"已删除技能副本（本身是软链接）：{skill_copy}"
+    if skill_copy.exists():
+        shutil.rmtree(skill_copy)
+        return f"已删除技能副本：{skill_copy}"
+    return f"技能副本不存在：{skill_copy}"
+
+
+def cmd_uninstall(args) -> int:
+    skill_copy = skill_copy_dir()
+    record = read_record(skill_copy)
+    # 已知链接：记录优先，缺失时回退扫描三个已知 Agent 目录（含悬空链接）
+    links = [entry for entry in known_links(DoctorContext(skill_copy=skill_copy, repo=None, record=record))
+             if isinstance(entry, dict) and isinstance(entry.get("path"), str)]
+    installed = skill_copy.is_symlink() or skill_copy.exists()
+    if not installed and not links:
+        print(f"技能未安装：未找到技能副本（{skill_copy}），也未发现指向它的链接，无需卸载")
+        if not args.purge:
+            return 0
+    servers = running_servers()
+    if servers:
+        print("检测到正在运行的 serve.py：")
+        for pid, command in servers:
+            print(f"  pid {pid}：{command}")
+        if not args.stop_servers:
+            print("请先停止服务，或加 --stop-servers 由本命令结束它们；已拒绝卸载", file=sys.stderr)
+            return 1
+        stuck = stop_servers(servers)
+        if stuck:
+            print(f"有 {len(stuck)} 个 serve.py 未能结束，已拒绝卸载：", file=sys.stderr)
+            for pid, command in stuck:
+                print(f"  pid {pid}：{command}", file=sys.stderr)
+            return 1
+        print("已结束全部 serve.py")
+    if args.purge:  # 先做安全检查再删任何东西
+        problem = purge_guard(ledger_home())
+        if problem:
+            print(problem, file=sys.stderr)
+            return 2
+    for path, action in remove_links(links, skill_copy):
+        print(f"{action}：{path}")
+    print(remove_skill_copy(skill_copy))
+    if args.purge:
+        home_dir = ledger_home()
+        if home_dir.exists():
+            shutil.rmtree(home_dir)
+            print(f"已删除台账目录：{home_dir}")
+        else:
+            print(f"台账目录不存在，无需删除：{home_dir}")
+    else:
+        print(f"已保留审阅台账：{ledger_home()}（--purge 可一并删除；审阅目录任何情况下都不动）")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ae.py", description=f"{APP} 统一管理命令")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -519,6 +723,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--json", action="store_true", dest="as_json",
                           help="输出结构化的体检结果（JSON）")
     p_doctor.set_defaults(handler=cmd_doctor)
+    p_uninstall = sub.add_parser("uninstall", help="删除技能副本与指向它的链接，默认保留审阅台账")
+    p_uninstall.add_argument("--purge", action="store_true",
+                             help="同时删除台账目录（AE_HOME，默认 ~/.annotation-everything）；"
+                                  "审阅目录任何情况下都不动")
+    p_uninstall.add_argument("--stop-servers", action="store_true",
+                             help="先结束正在运行的 serve.py 再卸载（默认检测到就拒绝卸载）")
+    p_uninstall.set_defaults(handler=cmd_uninstall)
     return parser
 
 
