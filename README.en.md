@@ -183,6 +183,40 @@ flowchart LR
     RV -->|"Return to the reviewer"| U["Flags the annotations that need the reviewer's decision, with reasons"]
 ```
 
+## Installation and maintenance
+
+The management command is `ae.py` at the repository root (Python standard library only), with four subcommands: `install`, `doctor`, `repair`, `uninstall`.
+
+### For people
+
+Prerequisites: Python 3.9 or later, macOS or Linux.
+
+```bash
+python3 ae.py install                            # install: copy the skill into ~/.claude/skills/ (the skill copy)
+python3 ae.py install --link codex,agents,zcode  # optional: also symlink the copy into these agents' skill directories
+python3 ae.py doctor                             # check: installation, runtime, optional tools, dev environment
+python3 ae.py repair                             # repair: prints a plan first, fixes the safe items automatically
+python3 ae.py uninstall                          # uninstall: remove the skill copy and links, keep the review ledger by default
+```
+
+- Each check reports pass / warning / failure plus a fix command; exit code 0 means all passed or only warnings, 1 means there are failures.
+- In `repair`, deleting stale ledger entries (`--forget-stale`) and stopping orphaned servers (`--stop-orphans`) are destructive and need their explicit flags; `--dry-run` only prints the plan.
+- `uninstall` never touches review directories; `--purge` also deletes the review ledger; a running `serve.py` blocks it unless `--stop-servers` stops it first.
+
+Once installed, tell Claude Code "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow.
+
+### For agents
+
+Send the following to your agent, replacing `<repo-path>` with the absolute path of this repository:
+
+> Install and check the annotation-everything skill in `<repo-path>`. Follow the numbered steps, confirming the success signal before moving on:
+>
+> 1. Run `python3 <repo-path>/ae.py doctor --json`. Success: the command runs and prints JSON. Parse it; if `summary.fail` is 0 and there are no installation-category failures, the skill is already installed — skip to step 4.
+> 2. Pick the link flag by which agent you are: Claude Code needs no `--link`; Codex uses `--link codex`; agents under `~/.agents` use `--link agents`; zcode uses `--link zcode`. Run `python3 <repo-path>/ae.py install` (adding the `--link` you need). Success: exit code 0.
+> 3. Run `python3 <repo-path>/ae.py doctor --json` again and judge by the JSON: `summary.fail` of 0 means success; warnings in `summary.warn` (such as missing optional tools `fc-list`/`pdffonts`) do not block use. If failures remain, apply each item's `fix_command` and repeat this step.
+> 4. When repairs are needed, run `python3 <repo-path>/ae.py repair` (`--dry-run` shows the plan first). **`--purge`, `--forget-stale`, `--stop-orphans`, `--stop-servers` are all destructive — ask the user for consent before adding any of them.**
+> 5. Report back to the user: whether the install succeeded, the check results, and any warnings still unresolved.
+
 ## Quick start
 
 **1. Install the skill**
@@ -191,7 +225,7 @@ flowchart LR
 python3 ae.py install
 ```
 
-The skill is copied to `~/.claude/skills/annotation-everything` (that copy is the *skill copy*). After that, tell Claude Code something like "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow. Run `python3 ae.py doctor` afterwards to check the installation.
+The skill is copied to `~/.claude/skills/annotation-everything` (that copy is the *skill copy*). See **Installation and maintenance** above for the full install, check, repair and uninstall instructions.
 
 **2. Try it on the bundled sample**
 
@@ -222,7 +256,7 @@ See [references/formats.md](skill/annotation-everything/references/formats.md) f
 
 | Command | What it does |
 |---|---|
-| `ae.py install` / `doctor` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--link codex,agents,zcode` symlinks it into other agents' skill directories); check the installation (`--json` for structured output); uninstall removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first) |
+| `ae.py install` / `doctor` / `repair` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--link codex,agents,zcode` symlinks it into other agents' skill directories); check installation, runtime, optional tools and dev environment (`--json` for structured output); repair what the checks find (prints a plan first, fixes safe items automatically, `--forget-stale`/`--stop-orphans` run the destructive ones explicitly, `--dry-run` only prints); uninstall removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first) |
 | `build_viewer.py --report … --script … --out <review-dir>` | Build the review page; `--rebuild <review-dir>` rebuilds it with the recorded options |
 | `serve.py <review-dir>` | Start the local server; each review keeps its own dedicated port |
 | `serve.py list` / `status` / `forget` | List every review on this machine, show one review's status, remove a ledger entry you no longer need |
@@ -266,7 +300,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── skill_sources.py           discovers skill directories on this machine
 │   └── check_pptx_fonts.py        PPTX and PDF font check
 └── evals/                         skill evaluation cases (used with skill-creator)
-ae.py                             unified management command: install the skill copy, doctor checks it, uninstall removes it
+ae.py                             unified management command: install the skill copy, doctor checks it, repair fixes it, uninstall removes it
 fixtures/sample/                   synthetic sample (fictional data)
 tests/                             unit tests and end-to-end browser tests
 tools/
