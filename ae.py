@@ -143,8 +143,41 @@ def read_commit(repo: Path) -> str:
     return done.stdout.strip() if done.returncode == 0 else ""
 
 
+def _file_identity(path: Path):
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _lineage_identities(path: Path) -> set:
+    """路径自身与各级父目录中已存在者的 (设备, inode)；字面父链与解析软链接后的父链都算。"""
+    found = set()
+    for chain in (Path(os.path.abspath(path)), path.resolve()):
+        found.update(_file_identity(p) for p in (chain, *chain.parents))
+    found.discard(None)
+    return found
+
+
+def paths_overlap(a: Path, b: Path) -> bool:
+    """两个路径指向同一目录或互为父子目录。
+
+    按 (设备, inode) 比较而不比较路径字符串：不区分大小写的文件系统和软链接都绕不过去。
+    """
+    ia, ib = _file_identity(a), _file_identity(b)
+    return (ia is not None and ia in _lineage_identities(b)) or \
+        (ib is not None and ib in _lineage_identities(a))
+
+
 def copy_skill(src: Path, dst: Path) -> None:
-    """把技能本体复制为技能副本：先清掉旧副本，保证重复运行结果一致。"""
+    """把技能本体复制为技能副本：先清掉旧副本，保证重复运行结果一致。
+
+    副本位置与本体重叠（如 CLAUDE_SKILLS_DIR 指进了仓库）时拒绝，避免清掉本体。
+    """
+    if paths_overlap(src, dst):
+        raise CommandError(f"技能副本位置 {dst} 与技能本体 {src} 重叠，拒绝覆盖；"
+                           "请检查 CLAUDE_SKILLS_DIR")
 
     def ignore(directory, names):
         kept = []
@@ -423,6 +456,7 @@ STATUS_FILE = ".annotation-server.json"   # 与技能本体 serve.py 的运行�
 HOST = "127.0.0.1"
 # serve.py 的这些命令行选项各带一个值，解析目录参数时要连值一起跳过
 SERVE_OPTIONS_WITH_VALUE = ("--port", "--claim-port", "--on-handoff")
+SERVE_MAINTENANCE_COMMANDS = ("check", "status", "list", "forget")   # 不起服务的 serve.py 子命令
 
 _skill_ledger = None
 
@@ -485,7 +519,7 @@ def probe_port(port: int, timeout: float = 1.0):
 def list_processes():
     """本机全部进程的 (pid, 命令行)；ps 不可用时返回空列表（检查项按「未发现」处理）。"""
     try:
-        done = subprocess.run(["ps", "-eo", "pid=,command="],   # macOS/Linux 都只认合并成一个参数的格式
+        done = subprocess.run(["ps", "-ww", "-eo", "pid=,command="],   # -ww 不按终端宽度截断；格式须合并成一个参数
                               capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -543,21 +577,26 @@ def serve_script_index(cmdline: str, pid: Optional[int] = None) -> Optional[int]
 def serve_dir_argument(cmdline: str, pid: Optional[int] = None) -> Optional[str]:
     """已核实脚本的审阅目录参数；排除维护子命令。
 
+    子命令识别与 serve.py main() 一致：只看脚本后的第一个参数；`serve` 后面才是目录。
     不是 serve.py 进程、或没有目录参数时返回 None。
     """
     index = serve_script_index(cmdline, pid)
     if index is None:
         return None
-    tokens = command_tokens(cmdline)
-    i = index + 1
-    while i < len(tokens):
-        token = tokens[i]
+    args = command_tokens(cmdline)[index + 1:]
+    if args[:1] and args[0] in SERVE_MAINTENANCE_COMMANDS:
+        return None
+    if args[:1] == ["serve"]:
+        args = args[1:]
+    i = 0
+    while i < len(args):
+        token = args[i]
         if token in SERVE_OPTIONS_WITH_VALUE:
             i += 2
         elif token.startswith("-"):
             i += 1
         else:
-            return None if token in ("check", "list", "inspect", "forget", "prune") else token
+            return token
     return None
 
 
@@ -593,7 +632,7 @@ def listening_port_of(pid: int) -> Optional[int]:
         except (OSError, ValueError):
             pass
     try:
-        done = subprocess.run(["lsof", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"],
+        done = subprocess.run(["lsof", "-a", "-P", "-n", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"],
                               capture_output=True, text=True, timeout=10)
         for line in done.stdout.splitlines():
             if line.startswith("n") and ":" in line:
@@ -627,15 +666,18 @@ def server_port_of(pid: int, review_dir: Optional[Path], cmdline: str = "") -> O
     return None
 
 
-def _resolve_dir_argument(arg: str, entries: dict) -> Optional[Path]:
-    """把 serve.py 命令行里的目录参数解析为审阅目录：审阅标识（前缀）从台账查；
-    查不到或有歧义返回 None（按「不在台账里」处理）。路径参数按原样返回（相对路径由调用方结合进程 cwd）。"""
-    raw = arg.strip()
-    if raw.startswith((".", "~")) or "/" in raw or os.sep in raw:
-        return Path(raw).expanduser()
-    key = raw.lower()
-    if not skill_ledger_module().RID_PREFIX.fullmatch(key):
-        return Path(raw).expanduser()
+def _resolve_dir_argument(arg: str, entries: dict, cwd: Optional[str]) -> Optional[Path]:
+    """把 serve.py 命令行里的目录参数解析为审阅目录，顺序与 ledger.resolve_dir 一致：
+    按进程 cwd 已存在的路径直接用；带路径分隔符、以 . 或 ~ 开头、不像审阅标识的按路径处理；
+    其余当审阅标识（前缀）从台账查，查不到或有歧义返回 None（按「不在台账里」处理）。
+    进程 cwd 未知（None）时相对路径原样返回。"""
+    path = Path(arg).expanduser()
+    if not path.is_absolute() and cwd:
+        path = Path(cwd) / path
+    key = arg.strip().lower()
+    if (path.is_absolute() and path.exists()) or "/" in arg or os.sep in arg \
+            or arg.startswith((".", "~")) or not skill_ledger_module().RID_PREFIX.fullmatch(key):
+        return path
     hits = [rid for rid in entries if rid.startswith(key)]
     if len(hits) != 1:
         return None
@@ -679,35 +721,53 @@ def check_ledger_stale(ctx: DoctorContext) -> CheckResult:
 
 
 def check_port_pool(ctx: DoctorContext) -> CheckResult:
-    try:
-        mod = skill_ledger_module()
-    except ImportError:
-        return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS, "技能本体不完整，未检查专属端口")
-    first, last = mod.BASE_PORT, mod.BASE_PORT + mod.MAX_SCAN - 1
+    """只探测台账里已分配给审阅的专属端口；池里未分配的端口被占用无害（分配时会跳过）。"""
+    entries, error = load_ledger(ctx)
+    if error is not None:
+        return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS, "台账不可读，未检查专属端口")
+    assigned = sorted({e["port"] for e in entries.values()
+                       if isinstance(e.get("port"), int) and not isinstance(e.get("port"), bool)
+                       and 1 <= e["port"] <= 65535})
+    if not assigned:
+        return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS, "台账里没有已分配的专属端口")
     probe = ctx.port_probe if ctx.port_probe is not None else probe_port
-    foreign = [port for port in range(first, last + 1)
+    foreign = [port for port in assigned
                if (found := probe(port)) is not None and found.get("app") != APP]
     if foreign:
         ports = "、".join(str(port) for port in foreign)
         return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_FAIL,
-                           f"专属端口 {first}–{last} 里被其他进程占用：{ports}",
+                           f"专属端口被其他进程占用：{ports}",
                            "lsof -nP -iTCP:" + ",".join(map(str, foreign)) + " -sTCP:LISTEN")
     return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS,
-                       f"专属端口 {first}–{last} 未被其他进程占用")
+                       f"{len(assigned)} 个专属端口未被其他进程占用")
 
 
-def find_orphan_servers(entries: dict, lister) -> list:
+def served_review_dir(pid: int, probe) -> Optional[Path]:
+    """服务自报的审阅目录：经进程的监听端口请求 /api/health，pid 对得上才采信。
+
+    ps 输出不保留引号，含空格或缩写选项的命令行解析不可靠；能问到服务本身时以它为准。
+    """
+    port = listening_port_of(pid)
+    info = probe(port) if port is not None else None
+    if isinstance(info, dict) and info.get("app") == APP and info.get("pid") == pid \
+            and isinstance(info.get("dir"), str) and info["dir"]:
+        return Path(info["dir"])
+    return None
+
+
+def find_orphan_servers(entries: dict, lister, probe=None) -> list:
     """枚举残留服务，返回 [(pid, 端口, 审阅目录)]：运行中的 serve.py，托管的审阅目录
     不在台账里或已不存在。端口/目录定位不到时为 None（如目录已删、标识查不到）。"""
+    probe = probe if probe is not None else probe_port
     orphans = []
     for pid, cmdline in lister():
         arg = serve_dir_argument(cmdline, pid)
         if arg is None:
             continue
-        review_dir = _resolve_dir_argument(arg, entries)
-        if review_dir is not None and not review_dir.is_absolute():
-            cwd = process_cwd(pid)
-            review_dir = Path(cwd) / review_dir if cwd else review_dir
+        review_dir = served_review_dir(pid, probe)
+        if review_dir is None:
+            cwd = None if Path(arg).expanduser().is_absolute() else process_cwd(pid)
+            review_dir = _resolve_dir_argument(arg, entries, cwd)
         if review_dir is None or not review_dir.is_dir() \
                 or not any(_same_dir(review_dir, Path(e["dir"])) for e in entries.values()):
             port = server_port_of(pid, review_dir, cmdline)
@@ -721,7 +781,7 @@ def check_orphan_servers(ctx: DoctorContext) -> CheckResult:
     if error is not None:
         return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_PASS, "台账不可读，未检查残留服务")
     lister = ctx.process_lister if ctx.process_lister is not None else list_processes
-    orphans = find_orphan_servers(entries, lister)
+    orphans = find_orphan_servers(entries, lister, ctx.port_probe)
     if orphans:
         detail = "；".join(f"pid {pid}（端口 {port if port else '未知'}）" for pid, port, _ in orphans)
         return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_FAIL,
@@ -1166,7 +1226,7 @@ def same_server_process(pid: int, command: str) -> bool:
     if expected is None or pid <= 0 or pid == os.getpid():
         return False
     try:
-        current = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+        current = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "command="],
                                  capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -1256,17 +1316,23 @@ def purge_guard(home_dir: Path) -> Optional[str]:
         if entry == resolved or resolved in entry.parents or entry in resolved.parents:
             return (f"审阅目录 {review_dir} 在台账目录里，拒绝删除"
                     "（卸载任何情况下不动审阅目录）")
-    allowed = {"reviews.json", ".reviews.lock"}
     for child in home_dir.iterdir():
-        if child.name not in allowed or child.is_symlink() or not child.is_file():
+        if not is_ledger_file(child.name) or child.is_symlink() or not child.is_file():
             return f"台账目录包含非台账内容 {child.name}，拒绝删除（可能是未登记的审阅目录）"
     return None
 
 
+def is_ledger_file(name: str) -> bool:
+    """台账目录里的已知文件：台账、锁，以及写入中断时留下的临时文件（ledger.py 的 mkstemp）。"""
+    return name in ("reviews.json", ".reviews.lock") or \
+        (name.startswith(".reviews-") and name.endswith(".tmp"))
+
+
 def purge_ledger(home_dir: Path) -> None:
     """只删除已知台账文件；新出现的目录或未知文件由 rmdir 拒绝，绝不递归删除。"""
-    for name in ("reviews.json", ".reviews.lock"):
-        (home_dir / name).unlink(missing_ok=True)
+    for child in home_dir.iterdir():
+        if is_ledger_file(child.name) and child.is_file() and not child.is_symlink():
+            child.unlink()
     home_dir.rmdir()
 
 
@@ -1291,12 +1357,21 @@ def remove_links(entries: list, skill_copy: Path) -> list:
     return report
 
 
+def ensure_not_skill_source(skill_copy: Path) -> None:
+    """技能副本（非软链接）与本仓库的技能本体重叠时拒绝删除。"""
+    source = Path(__file__).resolve().parent / SKILL_SRC
+    if not skill_copy.is_symlink() and skill_copy.exists() and paths_overlap(source, skill_copy):
+        raise CommandError(f"技能副本位置 {skill_copy} 与技能本体 {source} 重叠，拒绝删除；"
+                           "请检查 CLAUDE_SKILLS_DIR")
+
+
 def remove_skill_copy(skill_copy: Path) -> str:
     """删除技能副本；返回给用户看的说明。"""
     if skill_copy.is_symlink():
         skill_copy.unlink()
         return f"已删除技能副本（本身是软链接）：{skill_copy}"
     if skill_copy.exists():
+        ensure_not_skill_source(skill_copy)
         shutil.rmtree(skill_copy)
         return f"已删除技能副本：{skill_copy}"
     return f"技能副本不存在：{skill_copy}"
@@ -1308,11 +1383,17 @@ def cmd_uninstall(args) -> int:
     # 已知链接：记录优先，缺失时回退扫描三个已知 Agent 目录（含悬空链接）
     links = [entry for entry in known_links(DoctorContext(skill_copy=skill_copy, repo=None, record=record))
              if isinstance(entry, dict) and isinstance(entry.get("path"), str)]
+    ensure_not_skill_source(skill_copy)   # 动手前拦下，避免删了链接才报错
     installed = skill_copy.is_symlink() or skill_copy.exists()
     if not installed and not links:
         print(f"技能未安装：未找到技能副本（{skill_copy}），也未发现指向它的链接，无需卸载")
         if not args.purge:
             return 0
+    if args.purge:  # 先做安全检查，再停服务、删任何东西
+        problem = purge_guard(ledger_home())
+        if problem:
+            print(problem, file=sys.stderr)
+            return 2
     servers = running_servers()
     if servers:
         print("检测到正在运行的 serve.py：")
@@ -1328,11 +1409,6 @@ def cmd_uninstall(args) -> int:
                 print(f"  pid {pid}：{command}", file=sys.stderr)
             return 1
         print("已结束全部 serve.py")
-    if args.purge:  # 先做安全检查再删任何东西
-        problem = purge_guard(ledger_home())
-        if problem:
-            print(problem, file=sys.stderr)
-            return 2
     for path, action in remove_links(links, skill_copy):
         print(f"{action}：{path}")
     print(remove_skill_copy(skill_copy))

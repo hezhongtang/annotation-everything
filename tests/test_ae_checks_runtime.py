@@ -247,6 +247,7 @@ class PortPoolTests(TempRootTestCase):
         port = free_pool_port()
         foreign = ForeignListener(port)
         self.addCleanup(foreign.close)
+        write_ledger(self.ledger_home, {self.rid: {"dir": str(self.root / "review"), "port": port}})
         probe = lambda p: ae.probe_port(p) if p == port else None     # 只探测测试自建的端口
         result = ae.check_port_pool(self.ctx(port_probe=probe))
         self.assertEqual(result.level, FAIL)

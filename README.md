@@ -212,9 +212,9 @@ python3 ae.py uninstall                          # 卸载：删除技能副本�
 
 > 在 `<仓库路径>` 安装并体检 annotation-everything 技能，按编号步骤执行，每步先确认成功标志再往下：
 >
-> 1. 运行 `python3 <仓库路径>/ae.py doctor --json`。退出码 2 时先查看 JSON 的 `error` 并排障；若提示安装记录损坏，可按第 2 步重新安装。正常输出中，若 `summary.fail` 为 0 且没有安装状态类的失败项，说明已装好，跳到第 4 步。
+> 1. 运行 `python3 <仓库路径>/ae.py doctor --json`。退出码 2 时先查看 JSON 的 `error` 并排障；若提示安装记录损坏，可按第 2 步重新安装。正常输出中，若 `results` 里没有 `category` 为「安装状态」且 `level` 为「失败」的项，说明已装好，跳到第 4 步。
 > 2. 按你是哪种 Agent 决定链接参数：Claude Code 不需要 `--link`；Codex 用 `--link codex`；`~/.agents` 下的 Agent 用 `--link agents`；zcode 用 `--link zcode`。运行 `python3 <仓库路径>/ae.py install`（需要链接时加上对应 `--link`）。成功标志：退出码 0。
-> 3. 再次运行 `python3 <仓库路径>/ae.py doctor --json`，以 JSON 判定成败：`summary.fail` 为 0 即安装成功；`summary.warn` 里的警告（如缺少可选工具 `fc-list`/`pdffonts`）不阻塞使用。若仍有失败项，按每项的 `fix_command` 修复后重跑本步。
+> 3. 再次运行 `python3 <仓库路径>/ae.py doctor --json`，以 JSON 判定成败：「安装状态」类没有失败项即安装成功。「运行状态」类的失败（如残留服务、专属端口被占用）不影响安装，记下来在第 5 步报告；`summary.warn` 里的警告（如缺少可选工具 `fc-list`/`pdffonts`）不阻塞使用。「安装状态」类仍有失败时，按该项的 `fix_command` 修复后重跑本步；`fix_command` 含第 4 步列出的破坏性参数时，先征得用户同意再执行。
 > 4. 需要修复时运行 `python3 <仓库路径>/ae.py repair`（`--dry-run` 先看计划）。**`--purge`、`--forget-stale`、`--stop-orphans`、`--stop-servers` 都是破坏性操作，必须先征得用户同意再加。**
 > 5. 完成后向用户报告：安装是否成功、各项体检结果，以及尚未解决的警告。
 
