@@ -106,6 +106,62 @@ class AeCliTests(unittest.TestCase):
         p = self.run_ae("no-such-subcommand")
         self.assertEqual(p.returncode, 2)
 
+    def doctor_json(self, *extra):
+        p = self.run_ae("doctor", "--json", *extra)
+        return p, json.loads(p.stdout)
+
+    def test_doctor_passes_after_install(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        p, doc = self.doctor_json()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(doc["summary"], {"pass": 4, "warn": 0, "fail": 0})
+        self.assertTrue(all(r["category"] == "安装状态" for r in doc["results"]))
+
+    def test_doctor_fails_when_copy_missing(self):
+        p, doc = self.doctor_json()
+        self.assertEqual(p.returncode, 1)
+        self.assertEqual(doc["summary"]["fail"], 1)
+        failing = [r for r in doc["results"] if r["level"] == "失败"]
+        self.assertEqual(failing[0]["code"], "skill-copy-present")
+        self.assertIn("ae.py install", failing[0]["fix_command"])
+
+    def test_doctor_fails_when_copy_modified(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        (self.copy_dir / "手工改动.txt").write_text("多余文件", encoding="utf-8")
+        p, doc = self.doctor_json()
+        self.assertEqual(p.returncode, 1)
+        failing = {r["code"]: r for r in doc["results"] if r["level"] == "失败"}
+        self.assertIn("skill-copy-sync", failing)
+        self.assertIn("ae.py install", failing["skill-copy-sync"]["fix_command"])
+
+    def test_doctor_fails_when_record_version_differs_from_repo(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        record_path = self.copy_dir / RECORD_NAME
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["version"] = "0.0.1"
+        record_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        p, doc = self.doctor_json()
+        self.assertEqual(p.returncode, 1)
+        failing = {r["code"]: r for r in doc["results"] if r["level"] == "失败"}
+        self.assertEqual(list(failing), ["skill-copy-version"])
+        self.assertIn("ae.py install", failing["skill-copy-version"]["fix_command"])
+
+    def test_doctor_json_structure(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        p, doc = self.doctor_json()
+        self.assertEqual(p.returncode, 0)
+        for r in doc["results"]:
+            self.assertEqual(set(r), {"code", "category", "level", "message", "fix_command"})
+        self.assertEqual(set(doc["summary"]), {"pass", "warn", "fail"})
+
+    def test_doctor_text_output_groups_by_category(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        p = self.run_ae("doctor")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("安装状态", p.stdout)
+        self.assertIn("汇总", p.stdout)
+
+
 
 def _rmtree(path: Path):
     import shutil
