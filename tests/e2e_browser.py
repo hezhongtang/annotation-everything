@@ -125,10 +125,93 @@ def drag_select(page, locator):
     page.wait_for_timeout(200)
 
 
+def skill_search_checks(browser, tmp: Path):
+    """通过真实浏览器验证技能输入；目录内容均为合成数据。"""
+    d = tmp / "skill_search"
+    d.mkdir()
+    (d / "skills.json").write_text(json.dumps({"version": 1, "skills": [
+        {"name": "unsafe-name", "desc": '恶意 <img src=x onerror="window.__skill_xss=1">'},
+        {"name": "writer", "desc": "文字和字体校对"},
+        {"name": "chart", "desc": "图表设计"},
+    ], "always": []}, ensure_ascii=False), encoding="utf-8")
+    build(d)
+    def exercise(page, mode):
+        def check(value, label):
+            ok(value, f"{mode}：{label}")
+        page.fill("#nskills", "")
+        page.keyboard.press("ArrowUp")
+        page.keyboard.press("Enter")
+        check(page.input_value("#nskills") == "chart", "向上键从最后一个候选开始")
+        page.fill("#nskills", "字体")
+        options = page.locator('[role="listbox"] [role="option"]')
+        check(options.filter(has_text="writer").count() == 1, "按技能说明中的部分文字显示候选")
+        page.keyboard.press("ArrowDown")
+        if mode == "服务模式":
+            page.wait_for_timeout(4500)  # 跨过一次服务轮询，选择不能丢失
+        page.keyboard.press("Enter")
+        check(page.input_value("#nskills") == "writer", "方向键和回车选择候选")
+        page.fill("#nskills", "chart, 字体, custom")
+        page.locator("#nskills").evaluate("el => { el.setSelectionRange(9, 9); el.dispatchEvent(new MouseEvent('click', {bubbles:true})); }")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        check(page.input_value("#nskills") == "chart, writer, custom", "替换光标所在技能并保留前后项")
+        page.fill("#nskills", "CHa")
+        check(options.filter(has_text="chart").count() == 1, "技能名称搜索不区分大小写")
+        page.fill("#nskills", "恶意")
+        check(options.filter(has_text="unsafe-name").count() == 1 and options.locator("img").count() == 0,
+              "技能说明按文本展示，不注入 HTML")
+        page.fill("#nskills", "字体")
+        page.keyboard.press("ArrowDown")
+        page.dispatch_event("#nskills", "keydown", {"key": "Enter", "isComposing": True, "keyCode": 229})
+        check(page.input_value("#nskills") == "字体", "输入法组合时回车不选择候选")
+        page.fill("#ntext", "合成搜索批注")
+        page.fill("#nskills", "custom-skill")
+        check(options.count() == 0, "无匹配时不强制选择")
+        page.click('[data-act="add"]')
+        check("custom-skill" in page.inner_text("#nlist"), "无匹配的手工技能可随批注保存")
+        page.locator('#nlist [data-act="edit"]').first.click()
+        page.fill("#eskills", "字体")
+        check(options.filter(has_text="writer").count() == 1, "编辑批注时也可按说明搜索")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        page.locator('#nlist [data-act="save"]').first.click()
+        check("⚙ writer" in page.inner_text("#nlist"), "编辑批注可保存选择的技能")
+        page.click("#alwaysBtn")
+        page.fill("#alwaysRows .aname", "图表")
+        check(options.filter(has_text="chart").count() == 1, "常驻技能按说明搜索")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        page.click("#alwaysSave")
+        check(wait_until(lambda: page.inner_text("#alwaysN") == "1", page, 5), "常驻技能可保存搜索结果")
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.goto((d / "index.html").as_uri())
+    exercise(page, "文件模式")
+    ctx.close()
+    port = free_port()
+    server = start_server(d, port)
+    try:
+        ctx = browser.new_context()
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        exercise(page, "服务模式")
+        ctx.close()
+    finally:
+        stop(server)
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="ae-e2e-"))
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="chrome", headless=True)
+        skill_search_checks(browser, tmp)
+        if "--skills-only" in sys.argv:
+            browser.close()
+            failed = sum(not p for p, _ in RESULTS)
+            print(f"\n{len(RESULTS) - failed}/{len(RESULTS)} 通过")
+            return 1 if failed else 0
 
         # ---------- 1. file:// 退回模式 ----------
         fdir = tmp / "file_mode"
@@ -273,7 +356,7 @@ def main() -> int:
                        check=True, capture_output=True)
         page.wait_for_timeout(4600)
         page.click("#nskills")
-        ok(page.locator('#skillList option[value="humanizer-zh"]').count() == 1, "技能目录出现在「技能」输入栏的候选里")
+        ok(page.locator('#skillList [role="option"]').filter(has_text="humanizer-zh").count() == 1, "技能目录出现在「技能」输入栏的候选里")
         go_page(page, 2)   # 放在第 2 页，不影响第 3 页「全部已处理」的检查
         page.fill("#ntext", "这段口气太硬，润色一下")
         page.fill("#nskills", "humanizer-zh, dataviz")

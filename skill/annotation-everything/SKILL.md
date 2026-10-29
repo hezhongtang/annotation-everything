@@ -41,6 +41,7 @@ python3 $S/build_viewer.py --report 报告.html --script 讲稿.md --out 审阅�
 - 生成或重建时会扫描常见代理的本机技能目录和插件缓存，读取技能名称与说明作为页面候选；缓存不保证插件当前已启用。手工登记、覆盖和移除的选择会保留，扫描失败时看生成器警告。可用 `--skills-from 目录` 指定来源（可重复），或用 `--no-scan-skills` 禁用扫描；重建沿用这些选择。
 - 可选：手工设置技能目录，页面「技能」输入栏会把它们列为候选：
   `python3 $S/notes.py skills 审阅目录 --set "humanizer-zh=中文润色" "frontend-design=页面设计"`
+- 页面可按技能名称或说明搜索，用方向键和回车选择；多个技能用逗号分隔，也可直接填写未列出的名称。
 - 技能目录超过 200 项时，使用当前版本的生成器、服务和 `notes.py`；旧版工具写回目录可能截断候选。
 - 常驻技能：用户希望长期约束每条批注时（页面「常驻技能」，快捷键 G），或让你代设：
   `python3 $S/notes.py skills 审阅目录 --always "humanizer-zh=讲稿" "frontend-design=风格优化" "某技能"`
