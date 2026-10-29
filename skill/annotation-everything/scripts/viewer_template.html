@@ -129,6 +129,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 #skillList{display:none;position:fixed;z-index:20;min-width:240px;max-width:90vw;max-height:240px;overflow:auto;background:#fff;border:1px solid var(--ae-line);border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.2);padding:4px}
 #skillList.on{display:block}#skillList [role=option]{padding:7px 9px;border-radius:5px;cursor:pointer;font-size:13px}
 #skillList [role=option]:hover,#skillList [aria-selected=true]{background:#eef4fc}#skillList .skill-desc{display:block;color:var(--ae-mut);font-size:12px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+#skillList .skill-rec{margin-left:6px;color:var(--ae-accent);font-size:11px}#skillList .skill-more{display:block;width:100%;padding:7px 9px;text-align:left;border:0;background:#f6f8fb;color:var(--ae-accent);border-radius:5px;cursor:pointer;font:inherit;font-size:12px}
 #stylemenu{position:fixed;display:none;z-index:8;background:#fff;border:1px solid var(--ae-line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.22);padding:6px;flex-direction:column;gap:2px;min-width:210px}
 #stylemenu.on{display:flex}
 #stylemenu button{font:inherit;font-size:13px;border:none;background:none;text-align:left;padding:6px 10px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;gap:12px}
@@ -234,12 +235,13 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要；先改后审的批次分初改、复核两段，可在这里请求复核或直接定稿），P 在报告上标注，C 写批注，K 填技能，G 常驻技能（每条批注按范围都让 Agent 先调用）；Esc 关闭或取消。<br>
 在报告上标注（P）：进入标注后，在左侧报告上<b>单击</b>放一个点，或<b>按住拖动</b>框选一块区域（像截图那样），再写意见。点和框都可以直接拖动，框拖右下角可调大小；点一下弹出这条批注的编辑、标为已处理、去掉标注、删除；鼠标移到右侧批注上，对应标注会高亮。已有的批注在「编辑」里可以补标注或重新标注。<br>
 风格优化（S）：选范围——1 整页、2 标注处（用刚放的点或框；还没有就进入标注）；可写想要的方向（不写也行），再添加批注。<br>
-「技能」：某条批注需要特定技能（skill）才能改好时填上，多个用逗号分隔；Agent 处理这条前会先调用它们。候选来自技能目录和用过的技能，可按名称或说明搜索，用上下方向键和回车选择。<br>
+「技能」：某条批注需要特定技能（skill）才能改好时填上，多个用逗号分隔；Agent 处理这条前会先调用它们。候选来自技能目录和用过的技能，会参考当前审阅和批注给出建议；可查看全部，或按名称、说明搜索，用上下方向键和回车选择。<br>
 选中报告或讲稿里的文字后：D 删除这段（再按一次 D 或 ↵ 确认，防止打字时误触），R 改为…（在弹出的框里改好按 ↵），C 以它为引用写批注；另一侧同一页有相同或相近的句子时会提示「同时改」（默认勾选，B 切换）。写批注时 ⌘/Ctrl + ↵ 添加。<br>
 批注保存：用本地服务打开（地址是 http://127.0.0.1:端口）时，每次改动自动写入审阅目录的 notes.json，Agent 可直接读取；直接双击打开 HTML 时批注只存在本浏览器，用「复制全部」或「下载」交给 Agent。</div></div></div></div>
 <script>
 "use strict";
 const P=__PAGES__, S=__SECTIONS__, NS=__NS__, NAME=__NAME__, RID=__RID__, N=P.length;
+const SKILL_CONTEXT=__SKILL_CONTEXT__;
 const SECT=__SECT__, RCSS=__RCSS__, SECT_KEYS=P.map(p=>"page-"+p.key);
 const APP="annotation-everything", FILE=location.protocol==="file:";
 const $=id=>document.getElementById(id);
@@ -865,26 +867,44 @@ function regionAnchor(rg){const sec=stage.querySelector("section.page");if(!sec|
   return out.join("；")||pointAnchor({x:rg.x+rg.w/2,y:rg.y+rg.h/2})}
 
 // ---------- 技能输入栏：按光标所在项搜索名称和说明 ----------
-let skillInput=null, skillChoices=[], skillIndex=-1;
+let skillInput=null, skillChoices=[], skillIndex=-1, skillShowAll=false;
 function isSkillInput(el){return !!(el&&(el.id==="nskills"||el.id==="eskills"||el.classList.contains("aname")))}
 function skillPart(el){const value=String(el.value||"");if(el.classList.contains("aname"))return{start:0,end:value.length,query:value.trim(),others:[]};
   const cursor=el.selectionStart==null?value.length:el.selectionStart,sep=/[,，、;；\n]/;
   let start=cursor,end=cursor;while(start>0&&!sep.test(value[start-1]))start--;while(end<value.length&&!sep.test(value[end]))end++;
   const others=(value.slice(0,start)+value.slice(end)).split(sep).map(x=>x.trim()).filter(Boolean);
   return{start,end,query:value.slice(start,end).trim(),others}}
-function hideSkillList(){const box=$("skillList");box.classList.remove("on");if(skillInput){skillInput.setAttribute("aria-expanded","false");skillInput.removeAttribute("aria-activedescendant")}skillInput=null;skillChoices=[];skillIndex=-1}
+function hideSkillList(){const box=$("skillList");box.classList.remove("on");if(skillInput){skillInput.setAttribute("aria-expanded","false");skillInput.removeAttribute("aria-activedescendant")}skillInput=null;skillChoices=[];skillIndex=-1;skillShowAll=false}
 function positionSkillList(){if(!skillInput||!$("skillList").classList.contains("on"))return;
   const box=$("skillList"),r=skillInput.getBoundingClientRect(),w=Math.min(Math.max(r.width,240),innerWidth-24);
   box.style.width=w+"px";box.style.left=Math.max(12,Math.min(r.left,innerWidth-w-12))+"px";
   const h=Math.min(box.scrollHeight,240);box.style.top=Math.max(8,r.bottom+h+8<=innerHeight?r.bottom+4:r.top-h-4)+"px"}
+const SKILL_HINTS=[
+  [/字体|字号|font|typography/i,/typography|font|字体|字号/i],
+  [/对齐|留白|间距|排版|布局|版式|align|layout|spacing/i,/typography|layout|design|slide|排版|版式|设计|字体/i],
+  [/措辞|口径|错别字|润色|语气|文案|文字|校对|proofread|copy/i,/humaniz|copy|edit|proof|writ|中文|润色|校对|文案/i],
+  [/pptx?|幻灯|演示|powerpoint|slides?/i,/slide|ppt|powerpoint|presentation|幻灯|演示/i],
+  [/表格|图表|数据|spreadsheet|chart/i,/data|chart|excel|spreadsheet|xlsx|表格|图表|数据/i]
+];
+function skillScore(c){const target=String(c.name+" "+c.desc).toLocaleLowerCase();
+  const note=($("etext")&&$("etext").value)||$("ntext").value||"";
+  const context=[{text:note,weight:8},{text:unH(P[i].title||""),weight:4},
+    {text:[NAME,SKILL_CONTEXT.report,SKILL_CONTEXT.script,SKILL_CONTEXT.kind].join(" "),weight:2}];
+  let score=0;context.forEach(({text,weight})=>{const value=String(text||"").toLocaleLowerCase();
+    SKILL_HINTS.forEach(([trigger,match])=>{if(trigger.test(value)&&match.test(target))score+=weight});
+    const tokens=value.match(/[a-z][a-z0-9-]{2,}|[\u4e00-\u9fff]{2,}/g)||[];
+    score+=Math.min(3,tokens.filter(t=>target.includes(t)).length)*weight});return score}
 function renderSkillList(){const el=document.activeElement;if(!isSkillInput(el)){hideSkillList();return}
   const selected=skillInput===el&&skillIndex>=0&&skillChoices[skillIndex]?skillChoices[skillIndex].name:null;
   if(skillInput&&skillInput!==el)hideSkillList();skillInput=el;const part=skillPart(el),q=part.query.toLocaleLowerCase();
   const used=[];notes.forEach(x=>(Array.isArray(x.skills)?x.skills:[]).forEach(n=>{if(!used.includes(n))used.push(n)}));
   const all=[...skillCatalog.map(c=>({name:c.name,desc:c.desc||""})),...used.filter(n=>!skillCatalog.some(c=>c.name===n)).map(n=>({name:n,desc:"用过"}))];
-  const seen=new Set();skillChoices=all.filter(c=>c.name&&!seen.has(c.name)&&!part.others.includes(c.name)&&
+  const seen=new Set();const matching=all.filter(c=>c.name&&!seen.has(c.name)&&!part.others.includes(c.name)&&
     (String(c.name).toLocaleLowerCase().includes(q)||String(c.desc).toLocaleLowerCase().includes(q))&&(seen.add(c.name),true));
-  skillIndex=selected?skillChoices.findIndex(c=>c.name===selected):-1;const box=$("skillList");box.innerHTML=skillChoices.map((c,k)=>`<div role="option" id="skill-option-${k}" aria-selected="${k===skillIndex}" data-skill="${k}"><b>${escH(c.name)}</b>${c.desc?`<span class="skill-desc">${escH(c.desc)}</span>`:""}</div>`).join("");
+  const ranked=matching.map((c,k)=>({...c,score:skillScore(c),order:k})).sort((a,b)=>b.score-a.score||a.order-b.order);
+  skillChoices=!q&&!skillShowAll?ranked.slice(0,8):ranked;
+  skillIndex=selected?skillChoices.findIndex(c=>c.name===selected):-1;const box=$("skillList");box.innerHTML=skillChoices.map((c,k)=>`<div role="option" id="skill-option-${k}" aria-selected="${k===skillIndex}" data-skill="${k}"><b>${escH(c.name)}</b>${c.score?'<span class="skill-rec">建议</span>':""}${c.desc?`<span class="skill-desc">${escH(c.desc)}</span>`:""}</div>`).join("")+
+    (!q&&!skillShowAll&&ranked.length>skillChoices.length?`<button class="skill-more" data-skill-more aria-label="查看全部技能">查看全部技能（${ranked.length}）</button>`:"");
   el.setAttribute("role","combobox");el.setAttribute("aria-controls","skillList");el.setAttribute("aria-expanded",skillChoices.length?"true":"false");
   if(skillIndex>=0)el.setAttribute("aria-activedescendant",`skill-option-${skillIndex}`);else el.removeAttribute("aria-activedescendant");
   box.classList.toggle("on",!!skillChoices.length);positionSkillList()}
@@ -892,7 +912,8 @@ function chooseSkill(k){const el=skillInput,c=skillChoices[k];if(!el||!c)return;
   el.value=v.slice(0,p.start)+lead+c.name+tail+v.slice(p.end);const pos=p.start+lead.length+c.name.length;el.setSelectionRange(pos,pos);
   el.dispatchEvent(new Event("input",{bubbles:true}));hideSkillList()}
 $("skillList").addEventListener("mousedown",e=>e.preventDefault());
-$("skillList").addEventListener("click",e=>{const option=e.target.closest("[data-skill]");if(option)chooseSkill(+option.dataset.skill)});
+$("skillList").addEventListener("click",e=>{const more=e.target.closest("[data-skill-more]");if(more){skillShowAll=true;if(skillInput)skillInput.focus();renderSkillList();return}
+  const option=e.target.closest("[data-skill]");if(option)chooseSkill(+option.dataset.skill)});
 document.addEventListener("input",e=>{if(isSkillInput(e.target))renderSkillList()});
 document.addEventListener("focusin",e=>{if(isSkillInput(e.target))renderSkillList();else if(!$("skillList").contains(e.target))hideSkillList()});
 document.addEventListener("click",e=>{if(isSkillInput(e.target))renderSkillList()});

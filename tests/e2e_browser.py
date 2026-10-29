@@ -139,11 +139,12 @@ def skill_search_checks(browser, tmp: Path):
         def check(value, label):
             ok(value, f"{mode}：{label}")
         page.fill("#nskills", "")
+        options = page.locator('[role="listbox"] [role="option"]')
+        check(options.locator(".skill-rec").count() == 0, "没有相关信号时不标记建议")
         page.keyboard.press("ArrowUp")
         page.keyboard.press("Enter")
         check(page.input_value("#nskills") == "chart", "向上键从最后一个候选开始")
         page.fill("#nskills", "字体")
-        options = page.locator('[role="listbox"] [role="option"]')
         check(options.filter(has_text="writer").count() == 1, "按技能说明中的部分文字显示候选")
         page.keyboard.press("ArrowDown")
         if mode == "服务模式":
@@ -213,6 +214,76 @@ def skill_search_checks(browser, tmp: Path):
         ctx.close()
     finally:
         stop(server)
+def skill_recommendation_checks(browser, tmp: Path):
+    d = tmp / "skill_recommendations"
+    d.mkdir()
+    report = tmp / "合成PPT报告.html"
+    report.write_text((FIXTURE / "report.html").read_text(encoding="utf-8"), encoding="utf-8")
+    skills = [{"name": "plain", "desc": "一般帮助"},
+              {"name": "typography", "desc": "字体字号与专业排版"},
+              {"name": "humanizer-zh", "desc": "中文写作与措辞润色"},
+              {"name": "slides-format-check", "desc": "PPT 幻灯片格式检查"}]
+    skills += [{"name": f"extra-{n:02d}", "desc": "其他技能"} for n in range(12)]
+    (d / "skills.json").write_text(json.dumps({"version": 1, "skills": skills, "always": []}, ensure_ascii=False), encoding="utf-8")
+    build(d, report=report, script=None)
+    ok(str(tmp) not in (d / "index.html").read_text(encoding="utf-8"), "推荐上下文不暴露本机路径")
+    def exercise(page, mode):
+        def check(value, label):
+            ok(value, f"{mode}：{label}")
+        options = page.locator('[role="listbox"] [role="option"]')
+        page.fill("#ntext", "请调整字体和对齐")
+        page.click("#nskills")
+        check(options.count() > 0 and "typography" in options.first.inner_text() and "建议" in options.first.inner_text(),
+              "根据字体批注优先推荐相关技能")
+        page.fill("#ntext", "请修正错别字并润色措辞")
+        page.click("#nskills")
+        check(options.count() > 0 and "humanizer-zh" in options.first.inner_text(), "批注变化后更新推荐")
+        page.fill("#ntext", "")
+        page.click("#nskills")
+        check(options.count() > 0 and "slides-format-check" in options.first.inner_text(), "材料文件名可影响推荐")
+        check(options.count() <= 8, "空输入只显示少量候选")
+        more = page.get_by_role("button", name="查看全部技能")
+        if more.count():
+            more.click()
+        check(options.count() == len(skills), "可浏览完整技能目录")
+        page.fill("#nskills", "extra-11")
+        check(options.filter(has_text="extra-11").count() == 1, "可搜索首屏之外的技能")
+        page.fill("#nskills", "")
+        page.fill("#ntext", "合成批注")
+        page.click('[data-act="add"]')
+        page.locator('#nlist [data-act="edit"]').first.click()
+        page.fill("#etext", "修改错别字和措辞")
+        page.click("#eskills")
+        check(options.count() > 0 and "humanizer-zh" in options.first.inner_text(), "编辑批注时按当前内容推荐")
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.goto((d / "index.html").as_uri())
+    exercise(page, "文件模式")
+    ctx.close()
+    port = free_port()
+    server = start_server(d, port)
+    try:
+        ctx = browser.new_context()
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        exercise(page, "服务模式")
+        ctx.close()
+    finally:
+        stop(server)
+    title_report = tmp / "neutral.html"
+    title_report.write_text('<!doctype html><title>合成材料</title><section class="page" data-page="1" data-key="one"><h1>字体层级</h1></section>', encoding="utf-8")
+    title_review = tmp / "title_recommendations"
+    title_review.mkdir()
+    (title_review / "skills.json").write_text(json.dumps({"version": 1, "skills": skills, "always": []}, ensure_ascii=False), encoding="utf-8")
+    build(title_review, report=title_report, script=None)
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.goto((title_review / "index.html").as_uri())
+    page.click("#nskills")
+    options = page.locator('[role="listbox"] [role="option"]')
+    ok(options.count() > 0 and "typography" in options.first.inner_text(), "当前页面标题可影响技能推荐")
+    ctx.close()
 
 
 def main() -> int:
@@ -220,6 +291,7 @@ def main() -> int:
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="chrome", headless=True)
         skill_search_checks(browser, tmp)
+        skill_recommendation_checks(browser, tmp)
         if "--skills-only" in sys.argv:
             browser.close()
             failed = sum(not p for p, _ in RESULTS)
