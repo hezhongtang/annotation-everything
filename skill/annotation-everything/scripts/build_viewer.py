@@ -467,13 +467,8 @@ def write_private(path: Path, text: str) -> None:
 
 def read_skills(review_dir: Path) -> list[dict]:
     """审阅目录里代理写入的技能目录（skills.json），嵌进页面供「技能」输入栏做候选（本地文件模式也能用）。"""
-    try:
-        doc = json.loads((review_dir / "skills.json").read_text(encoding="utf-8"))
-        items = doc.get("skills") if isinstance(doc, dict) else None
-        return [{"name": str(x.get("name", ""))[:64], "desc": str(x.get("desc", ""))[:120]}
-                for x in items if isinstance(x, dict) and str(x.get("name", "")).strip()][:200] if isinstance(items, list) else []
-    except (OSError, ValueError, AttributeError):
-        return []
+    import notes_store
+    return notes_store.skills_catalog(review_dir)
 
 
 def read_always(review_dir: Path) -> list[dict]:
@@ -518,7 +513,8 @@ def file_label(name: str, rid: str) -> str:
 
 def build(report: Path, script: Path | None, out: Path, title: str | None = None,
           sections_arg: str | None = None, no_sections: bool = False, lenient: bool = False,
-          asset_root: Path | None = None, name: str | None = None) -> dict:
+          asset_root: Path | None = None, name: str | None = None,
+          skills_from: list[Path] | None = None, no_scan_skills: bool = False) -> dict:
     doc = report.read_text(encoding="utf-8")
     assets = Assets(asset_root or report.resolve().parent)
     assets.root_fs = None
@@ -558,6 +554,21 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     if not intro:
         intro = f"<h2>{esc(final_title)}</h2><p>左侧报告、右侧讲稿与批注。选中文字可作为引用，点「在报告上标注」可单击放点或拖动框选。</p>"
     out.mkdir(parents=True, exist_ok=True)
+    if not no_scan_skills:
+        import notes_store
+        import skill_sources
+        try:
+            results, skill_warnings = skill_sources.scan(skills_from if skills_from is not None else skill_sources.default_roots())
+            for warning in skill_warnings:
+                assets.warn(warning)
+            if skills_from is not None and any(items is None for _key, items, _complete in results):
+                assets.warn("有技能来源不可访问，保留此前该来源的记录")
+            if any(items is not None for _key, items, _complete in results) or (out / notes_store.SKILL_SOURCES_FILE).exists():
+                _catalog, retained = notes_store.skills_merge_scan(out, results)
+                if retained and skills_from is None:
+                    assets.warn("有技能来源不可访问，保留此前该来源的记录")
+        except (OSError, notes_store.NoteError) as e:
+            assets.warn(str(e))
     old = read_manifest(out)
     old_keys = {int(pg["n"]): str(pg["key"]) for pg in old.get("pages", [])
                 if isinstance(pg, dict) and "n" in pg and pg.get("key") and pg.get("stable", stable_key(pg["key"]))}
@@ -573,11 +584,16 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     # 审阅名：给人看的名字（导出文件名、台账列表都用它），默认取标题；不要求唯一
     review_name = (name or "").strip() or final_title
     ns = file_label(review_name, rid)
+    image_pages = sum(bool(re.search(r"<img\b", s["html"], re.I)) for s in sects)
+    skill_context = {"report": report.name, "script": script.name if script else "",
+                     "kind": "图片 幻灯片" if image_pages >= (len(sects) + 1) // 2 else "HTML 报告"}
+    import notes_store
     values = {"TITLE": html.escape(final_title), "INTRO": intro, "PAGES": _js(pages), "SECTIONS": _js(sections),
               "NS": _js(ns), "NAME": _js(review_name), "RID": _js(rid), "RCSS": _js(rcss), "SECT": _js([s["html"] for s in sects]),
-              "ROOTFS": assets.root_fs or "100%", "SKILLS": _js(read_skills(out)), "ALWAYS": _js(read_always(out))}
+              "ROOTFS": assets.root_fs or "100%", "SKILLS": _js(read_skills(out)), "ALWAYS": _js(read_always(out)),
+              "SKILL_CONTEXT": _js(skill_context), "FULL_CHECK_COMPAT": _js("【本批提交选项】" + notes_store.FULL_CHECK_TEXT)}
     # 一次性替换，避免内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
-    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS)__", lambda m: values[m.group(1)],
+    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT)__", lambda m: values[m.group(1)],
                        TEMPLATE.read_text(encoding="utf-8"))
     page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
     write_private(out / "index.html", page_html)
@@ -590,7 +606,9 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         "sources": {"report": os.path.relpath(rr, out.resolve()), "script": os.path.relpath(rs, out.resolve()) if rs else None},
         "sourcesAbs": {"report": str(rr), "script": str(rs) if rs else None},
         "build": {"title": title, "name": (name or "").strip() or None, "sections": sections_arg, "noSections": no_sections, "lenient": lenient,
-                  "assetRoot": str(asset_root.resolve()) if asset_root else None},
+                  "assetRoot": str(asset_root.resolve()) if asset_root else None,
+                  "skillsFrom": [str(x.expanduser().absolute()) for x in skills_from] if skills_from is not None else None,
+                  "noScanSkills": no_scan_skills},
         "sections": sections,
         "pages": [{"n": p["n"], "key": p["key"], "stable": p["stable"], "title": html.unescape(p["title"]),
                    "section": next((s[0] for s in sections if s[1] <= p["n"] <= s[2]), "")} for p in pages],
@@ -661,6 +679,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-sections", action="store_true", help="不显示板块导航")
     ap.add_argument("--lenient", action="store_true", help="讲稿与报告页码不一致时只警告，以报告页序为准")
     ap.add_argument("--asset-root", type=Path, help="允许内联本地资源的目录（默认报告所在目录）")
+    ap.add_argument("--skills-from", action="extend", nargs="+", type=Path, metavar="目录", help="从指定目录读取技能元数据，可重复")
+    ap.add_argument("--no-scan-skills", action="store_true", help="不扫描技能目录")
     a = ap.parse_args(argv)
     if a.rebuild:
         m = read_manifest(a.rebuild)
@@ -674,9 +694,15 @@ def main(argv: list[str] | None = None) -> int:
         a.no_sections = a.no_sections or bool(opt.get("noSections"))
         a.lenient = a.lenient or bool(opt.get("lenient"))
         a.asset_root = a.asset_root or (Path(opt["assetRoot"]) if opt.get("assetRoot") else None)
+        explicit_sources = a.skills_from is not None
+        if not explicit_sources and opt.get("skillsFrom") is not None:
+            a.skills_from = [Path(x) for x in opt["skillsFrom"]]
+        if not explicit_sources:
+            a.no_scan_skills = a.no_scan_skills or bool(opt.get("noScanSkills"))
     elif not (a.report and a.out):
         ap.error("需要 --report 与 --out（或用 --rebuild 审阅目录）")
-    r = build(a.report, a.script, a.out, a.title, a.sections, a.no_sections, a.lenient, a.asset_root, name=a.name)
+    r = build(a.report, a.script, a.out, a.title, a.sections, a.no_sections, a.lenient, a.asset_root,
+              name=a.name, skills_from=a.skills_from, no_scan_skills=a.no_scan_skills)
     for w in r["warnings"]:
         print("警告：" + w, file=sys.stderr)
     mins = r["seconds"] // 60

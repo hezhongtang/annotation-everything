@@ -5,6 +5,7 @@ notes.json
 notes.jsonl
 handoff.json
 skills.json
+.skill-sources.json
 .annotation-wait.*.json
 server.log
 .annotation-server.json

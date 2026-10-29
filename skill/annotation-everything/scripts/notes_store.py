@@ -43,6 +43,7 @@ STYLE_SCOPES = ("page", "region", "pin")
 # 处理这条批注时需要调用的技能（skill / 工具名），由用户在页面上指定，代理处理前先调用
 MAX_SKILLS = 10
 SKILLS_FILE = "skills.json"
+SKILL_SOURCES_FILE = ".skill-sources.json"
 # 另一侧的对应句：用户在一侧选中文字时，页面在同一页另一侧找到的相同 / 相近句子，并勾选了「同时改」
 PAIR_SIDES = ("报告", "讲稿")
 PAIR_MATCH = ("exact", "similar")
@@ -251,11 +252,7 @@ def skills_catalog(review_dir: Path) -> list[dict[str, str]]:
         doc = json.loads((review_dir / SKILLS_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
-    out = []
-    for it in doc.get("skills", []) if isinstance(doc, dict) else []:
-        if isinstance(it, dict) and str(it.get("name", "")).strip():
-            out.append({"name": fix_text(it["name"]).strip()[:64], "desc": fix_text(it.get("desc", "")).strip()[:120]})
-    return out[:200]
+    return _catalog_items(doc.get("skills")) if isinstance(doc, dict) else []
 
 
 # 常驻技能：对这份审阅的每条批注（按范围）都要先调用的技能，给需要长期约束的代理用。范围：
@@ -271,6 +268,158 @@ def _skills_doc(review_dir: Path) -> dict[str, Any]:
     except (OSError, ValueError):
         return {}
     return doc if isinstance(doc, dict) else {}
+
+
+def _skills_doc_for_write(review_dir: Path) -> dict[str, Any]:
+    path = review_dir / SKILLS_FILE
+    if not path.exists():
+        return {}
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise NoteError(f"技能目录无法读取，未覆盖：{e}") from e
+    if not isinstance(doc, dict) or (doc.get("skills") is not None and not isinstance(doc.get("skills"), list)):
+        raise NoteError("技能目录结构不正确，未覆盖")
+    return doc
+
+
+def _catalog_items(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    return [{"name": fix_text(x["name"]).strip()[:64], "desc": fix_text(x.get("desc", "")).strip()}
+            for x in value if isinstance(x, dict) and isinstance(x.get("name"), str) and x["name"].strip()]
+
+
+def _skill_sources_state(review_dir: Path, current: list[dict[str, str]]) -> dict[str, Any]:
+    path = review_dir / SKILL_SOURCES_FILE
+    if not path.exists():
+        return {"version": 1, "manual": current, "excluded": [], "sources": {}, "generated": current}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise NoteError(f"技能来源记录无法读取，未覆盖：{e}") from e
+    def valid_items(items: Any) -> bool:
+        return isinstance(items, list) and all(isinstance(x, dict) and isinstance(x.get("name"), str)
+                                               and isinstance(x.get("desc"), str) for x in items)
+
+    if (not isinstance(state, dict) or state.get("version") != 1 or not valid_items(state.get("manual"))
+            or not isinstance(state.get("excluded"), list) or not all(isinstance(x, str) for x in state["excluded"])
+            or not isinstance(state.get("sources"), dict) or not all(isinstance(k, str) and valid_items(v)
+                                                                      for k, v in state["sources"].items())
+            or not valid_items(state.get("generated"))):
+        raise NoteError("技能来源记录结构不正确，未覆盖")
+    return state
+
+
+def _reconcile_skill_edits(state: dict[str, Any], current: list[dict[str, str]]) -> None:
+    """保留直接编辑 skills.json 或旧工具写回的改动。"""
+    expected = {x["name"]: x["desc"] for x in _catalog_items(state["generated"])}
+    actual = {x["name"]: x["desc"] for x in current}
+    manual = {x["name"]: x for x in _catalog_items(state["manual"])}
+    excluded = {str(x) for x in state["excluded"]}
+    for item in current:
+        if item["name"] not in expected or expected[item["name"]] != item["desc"]:
+            manual[item["name"]] = item
+            excluded.discard(item["name"])
+    for name in expected.keys() - actual.keys():
+        manual.pop(name, None)
+        excluded.add(name)
+    state["manual"], state["excluded"] = list(manual.values()), sorted(excluded)
+
+
+def _save_catalog_state(review_dir: Path, doc: dict[str, Any], state: dict[str, Any],
+                        catalog: list[dict[str, str]]) -> None:
+    state["generated"] = catalog
+    state_path = review_dir / SKILL_SOURCES_FILE
+    try:
+        previous = state_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        previous = None
+    _atomic_write(state_path, _dumps(state, indent=2) + "\n")
+    try:
+        _atomic_write(review_dir / SKILLS_FILE,
+                      _dumps({"version": 1, "skills": catalog, "always": _always_items(doc.get("always"), strict=False)}, indent=2) + "\n")
+    except BaseException as error:
+        try:
+            if previous is None:
+                state_path.unlink(missing_ok=True)
+            else:
+                _atomic_write(state_path, previous)
+        except OSError as restore_error:
+            raise NoteError(f"技能目录写入失败，来源记录也无法恢复：{restore_error}") from error
+        raise
+
+
+def skills_merge_scan(review_dir: Path, results: list[tuple[str, list[dict[str, str]] | None, bool]]) -> tuple[list[dict[str, str]], bool]:
+    """在锁内合并扫描与最新的手工目录；失败来源沿用上次结果。"""
+    with locked(review_dir):
+        doc = _skills_doc_for_write(review_dir)
+        current = _catalog_items(doc.get("skills"))
+        state = _skill_sources_state(review_dir, current)
+        _reconcile_skill_edits(state, current)
+        previous = state["sources"]
+        retained = any(items is None and bool(_catalog_items(previous.get(key))) for key, items, _complete in results)
+        sources = {}
+        for key, items, complete in results:
+            if items is None:
+                sources[key] = _catalog_items(previous.get(key))
+            elif complete:
+                sources[key] = _catalog_items(items)
+            else:
+                merged = {x["name"]: x for x in _catalog_items(previous.get(key))}
+                merged.update({x["name"]: x for x in _catalog_items(items)})
+                sources[key] = list(merged.values())
+        state["sources"] = sources
+        excluded = set(state["excluded"])
+        catalog = _catalog_items(state["manual"])
+        seen = {x["name"] for x in catalog}
+        for key, _items, _complete in results:
+            for item in state["sources"][key]:
+                if item["name"] not in excluded and item["name"] not in seen:
+                    catalog.append(item)
+                    seen.add(item["name"])
+        _save_catalog_state(review_dir, doc, state, catalog)
+        return catalog, retained
+
+
+def skills_update(review_dir: Path, *, set_to: list[dict[str, str]] | None = None,
+                  add: list[dict[str, str]] | None = None, remove: list[str] | None = None,
+                  clear: bool = False, always_set: Any = None, always_add: Any = None,
+                  always_remove: list[str] | None = None, always_clear: bool = False) -> list[dict[str, str]]:
+    """在锁内修改技能目录并记录手工覆盖及移除。"""
+    with locked(review_dir):
+        doc = _skills_doc_for_write(review_dir)
+        current = _catalog_items(doc.get("skills"))
+        state = _skill_sources_state(review_dir, current)
+        _reconcile_skill_edits(state, current)
+        manual = {x["name"]: x for x in _catalog_items(state["manual"])}
+        excluded = {str(x) for x in state["excluded"]}
+        if clear or set_to is not None:
+            chosen: list[dict[str, str]] = []
+            for item in _catalog_items(set_to or []):
+                chosen = [x for x in chosen if x["name"] != item["name"]] + [item]
+            kept = {x["name"] for x in chosen}
+            excluded.update(x["name"] for x in current if x["name"] not in kept)
+            manual = {x["name"]: x for x in chosen}
+            catalog = chosen
+        else:
+            catalog = current
+        for item in _catalog_items(add or []):
+            catalog = [x for x in catalog if x["name"] != item["name"]] + [item]
+            manual[item["name"]] = item
+            excluded.discard(item["name"])
+        gone = {re.sub(r"\s+", " ", fix_text(x)).strip()[:64] for x in remove or [] if fix_text(x).strip()}
+        catalog = [x for x in catalog if x["name"] not in gone]
+        for name in gone:
+            manual.pop(name, None)
+        excluded.update(gone)
+        excluded.difference_update(x["name"] for x in manual.values())
+        state["manual"], state["excluded"] = list(manual.values()), sorted(excluded)
+        if always_set is not None or always_add or always_remove or always_clear:
+            doc["always"] = _updated_always(_always_items(doc.get("always"), strict=False), set_to=always_set,
+                                            add=always_add, remove=always_remove, clear=always_clear)
+        _save_catalog_state(review_dir, doc, state, catalog)
+        return catalog
 
 
 _SKILL_SEP = r"[,，、;；\n]+"
@@ -312,6 +461,16 @@ def clean_always(v: Any) -> list[dict[str, str]]:
     return _always_items(v, strict=True)
 
 
+def _updated_always(cur: list[dict[str, str]], *, set_to: Any = None, add: Any = None,
+                    remove: list[str] | None = None, clear: bool = False) -> list[dict[str, str]]:
+    add_items = clean_always(add or [])
+    base_items = clean_always(set_to) if set_to is not None else None
+    gone = {re.sub(r"\s+", " ", fix_text(x)).strip()[:64] for r in remove or [] for x in re.split(_SKILL_SEP, r)} - {""}
+    out = [] if clear else (base_items if base_items is not None else cur)
+    out = [x for x in out if x["name"] not in gone]
+    return clean_always(out + [x for x in add_items if x not in out])
+
+
 def always_skills(review_dir: Path) -> list[dict[str, str]]:
     return _always_items(_skills_doc(review_dir).get("always"), strict=False)
 
@@ -321,17 +480,17 @@ def _write_skills_doc(review_dir: Path, *, skills: list[dict[str, str]] | None =
     """在文件锁内读改写 skills.json，技能目录与常驻技能互不覆盖。update(当前常驻) → 新常驻。"""
     _require_dir(review_dir)
     with locked(review_dir):
-        doc = _skills_doc(review_dir)
+        doc = _skills_doc_for_write(review_dir)
         cur = _always_items(doc.get("always"), strict=False)
         new = update(cur) if update else (always if always is not None else cur)
         cat = skills if skills is not None else [x for x in doc.get("skills", []) if isinstance(x, dict)] \
             if isinstance(doc.get("skills"), list) else []
-        _atomic_write(review_dir / SKILLS_FILE, _dumps({"version": 1, "skills": cat[:200], "always": new}, indent=2) + "\n")
+        _atomic_write(review_dir / SKILLS_FILE, _dumps({"version": 1, "skills": cat, "always": new}, indent=2) + "\n")
         return new
 
 
 def skills_save(review_dir: Path, items: list[dict[str, str]]) -> None:
-    _write_skills_doc(review_dir, skills=items)
+    skills_update(review_dir, set_to=items)
 
 
 def always_save(review_dir: Path, items: Any) -> list[dict[str, str]]:
@@ -341,13 +500,8 @@ def always_save(review_dir: Path, items: Any) -> list[dict[str, str]]:
 def always_update(review_dir: Path, *, set_to: Any = None, add: Any = None, remove: list[str] | None = None,
                   clear: bool = False) -> list[dict[str, str]]:
     """命令行增删常驻技能：在锁内读最新名单，先删（按名字，所有范围）后加，避免和页面同时保存时丢更新。"""
-    add_items, base_items = clean_always(add or []), clean_always(set_to) if set_to is not None else None
-    gone = {re.sub(r"\s+", " ", fix_text(x)).strip()[:64] for r in remove or [] for x in re.split(_SKILL_SEP, r)} - {""}
-
     def apply(cur: list[dict[str, str]]) -> list[dict[str, str]]:
-        out = [] if clear else (base_items if base_items is not None else cur)
-        out = [x for x in out if x["name"] not in gone]
-        return clean_always(out + [x for x in add_items if x not in out])
+        return _updated_always(cur, set_to=set_to, add=add, remove=remove, clear=clear)
     return _write_skills_doc(review_dir, update=apply)
 
 
@@ -781,6 +935,19 @@ def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "im
 HANDOFF_FILE = "handoff.json"
 HANDOFF_KEEP = 200   # 处理记录（批次）保留条数
 MAX_MSG = 4000
+FULL_CHECK_TEXT = "全量勾稽：逐页检查整份报告和讲稿的口径、数据及前后引用；有依据的同步修正，不确定或未检查的部分要说明"
+
+
+def full_check_message(message: str) -> str:
+    return message + ("\n\n" if message else "") + "【本批提交选项】" + FULL_CHECK_TEXT
+
+
+def handoff_user_message(item: dict[str, Any]) -> str:
+    """新版保留原始附言；旧服务若更新了 message，以最新的 message 为准。"""
+    text = item.get("userMessage")
+    message = str(item.get("message") or "")
+    expected = full_check_message(text) if isinstance(text, str) and item.get("fullCheck") is True else text
+    return text if isinstance(text, str) and message == expected else message
 
 
 def handoff_load(review_dir: Path) -> dict[str, Any]:
@@ -871,6 +1038,7 @@ def handoff_state(review_dir: Path, *, full: bool = True) -> dict[str, Any]:
     history = []
     for it in reversed(items if full else items[-1:]):
         h = {k: v for k, v in it.items() if k != "openIds"}
+        h["userMessage"] = handoff_user_message(it)
         if it.get("status") in ("claimed", "drafted", "review", "reviewing"):
             h.update(_batch_stats(notes, it, None, _next_start(items, it)), live=True)
         elif it.get("status") == "done" and "resolvedIds" not in it:
@@ -886,7 +1054,8 @@ def handoff_state(review_dir: Path, *, full: bool = True) -> dict[str, Any]:
            # 已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」而不是「未处理」）
            "inFlightIds": sorted({x for i in flight for x in (i.get("openIds") or []) if not returned(x, int(i.get("seq", 0)))}),
            # 在途与停在待复核的批次及用户要求（show / 接手中断的代理据此知道要做到哪一步、能不能派子代理）
-           "open": [{k: i.get(k) for k in ("seq", "status", "target", "allowSubagents", "message")}
+           "open": [{**{k: i.get(k) for k in ("seq", "status", "target", "allowSubagents", "fullCheck", "message")},
+                     "userMessage": handoff_user_message(i)}
                     for i in items if i.get("status") in IN_FLIGHT + ("drafted",)],
            **{st: sum(i.get("status") == st for i in items) for st in BATCH_STATUSES}}
     if full:
@@ -916,19 +1085,25 @@ def _open_snapshot(notes: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def handoff_submit(review_dir: Path, message: str = "", *, target: str = "final", allow_subagents: bool = False,
-                   by: str = "page") -> tuple[dict[str, Any], dict[str, Any], bool]:
+                   full_check: bool | None = None, by: str = "page") -> tuple[dict[str, Any], dict[str, Any], bool]:
     """记一次提交（一批），快照当时的未处理批注。上一次提交还没被代理接收时合并进去（刷新快照、附言与选项），不重复排队。
 
-    target：final 做到定稿 / review 做到「已初改·待复核」后停下；allow_subagents：是否允许代理派发子代理。"""
+    target：final 做到定稿 / review 做到「已初改·待复核」后停下；allow_subagents：是否允许代理派发子代理；
+    full_check：处理后是否检查整份材料的前后一致性；缺省时保留待接收批次的原选项。"""
     message = fix_text(message)[:MAX_MSG]
     if target not in TARGETS:
         raise NoteError(f"target 须为 {TARGETS} 之一")
     with locked(review_dir):
         notes = load(review_dir)["notes"]
         doc = handoff_load(review_dir)
-        snap = {"at": now_iso(), "by": by, "message": message, "target": target, "allowSubagents": bool(allow_subagents),
-                "alwaysSkills": always_skills(review_dir), **_open_snapshot(notes)}
         latest = doc["items"][-1] if doc["items"] else None
+        full_check_value = (latest.get("fullCheck") is True if latest and latest.get("status") == "pending" and full_check is None
+                            else full_check is True)
+        # 旧版 wait 只输出 message；把勾选要求也放进去，避免仍在等待的旧进程漏掉。
+        legacy_message = full_check_message(message) if full_check_value else message
+        snap = {"at": now_iso(), "by": by, "message": legacy_message, "userMessage": message,
+                "target": target, "allowSubagents": bool(allow_subagents),
+                "fullCheck": full_check_value, "alwaysSkills": always_skills(review_dir), **_open_snapshot(notes)}
         if latest and latest.get("status") == "pending":
             latest.update(snap)
             latest["updates"] = int(latest.get("updates", 0)) + 1
@@ -983,7 +1158,7 @@ def handoff_claim(review_dir: Path, *, by: str = "agent", stage: str = "any", se
             item.setdefault("stages", []).append({"stage": "review", "by": by, "claimedAt": now})
             st = "review"
         _handoff_commit(review_dir, doc, {"op": "handoff-claim", "by": by, "seq": item["seq"], "stage": st})
-        return {**item, "stage": st}
+        return {**item, "userMessage": handoff_user_message(item), "stage": st}
 
 
 def _finish(item: dict[str, Any], notes: list[dict[str, Any]] | None, items: list[dict[str, Any]], by: str, summary: str) -> None:
