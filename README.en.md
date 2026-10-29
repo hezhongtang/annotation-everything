@@ -188,10 +188,10 @@ flowchart LR
 **1. Install the skill**
 
 ```bash
-tools/install.sh
+python3 ae.py install
 ```
 
-The skill is copied to `~/.claude/skills/annotation-everything`. After that, tell Claude Code something like "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow.
+The skill is copied to `~/.claude/skills/annotation-everything` (that copy is the *skill copy*). After that, tell Claude Code something like "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow. Run `python3 ae.py doctor` afterwards to check the installation.
 
 **2. Try it on the bundled sample**
 
@@ -222,6 +222,7 @@ See [references/formats.md](skill/annotation-everything/references/formats.md) f
 
 | Command | What it does |
 |---|---|
+| `ae.py install` / `doctor` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/`; check the installation (`--json` for structured output) |
 | `build_viewer.py --report … --script … --out <review-dir>` | Build the review page; `--rebuild <review-dir>` rebuilds it with the recorded options |
 | `serve.py <review-dir>` | Start the local server; each review keeps its own dedicated port |
 | `serve.py list` / `status` / `forget` | List every review on this machine, show one review's status, remove a ledger entry you no longer need |
@@ -265,10 +266,10 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── skill_sources.py           discovers skill directories on this machine
 │   └── check_pptx_fonts.py        PPTX and PDF font check
 └── evals/                         skill evaluation cases (used with skill-creator)
+ae.py                             unified management command: install the skill copy, doctor checks it
 fixtures/sample/                   synthetic sample (fictional data)
 tests/                             unit tests and end-to-end browser tests
 tools/
-├── install.sh                     installs into ~/.claude/skills/
 ├── setup-dev.sh                   enables the repository's git hooks
 └── git-hooks/                     refuse commits on main, pushes to main and deleting main
 .github/                           CI, issue templates and the pull request template
@@ -284,7 +285,7 @@ After cloning, run `tools/setup-dev.sh` once to enable the git hooks.
 python3 -m unittest discover tests                                   # unit tests (standard library only)
 uv run --no-project --with playwright python tests/e2e_browser.py   # end-to-end browser tests (uses your local Google Chrome)
 python3 skill/annotation-everything/scripts/serve.py check          # server security self-check
-tools/install.sh                                                     # sync to ~/.claude/skills/
+python3 ae.py install                                               # sync to ~/.claude/skills/
 ```
 
 - Tests put the review ledger in a temporary directory (the `AE_HOME` environment variable). When trying things by hand or running skill evaluations, run `export AE_HOME=$(mktemp -d)` first, so throwaway reviews are not registered in your real ledger and do not take ports that belong to real reviews.

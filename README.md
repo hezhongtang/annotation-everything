@@ -188,10 +188,10 @@ flowchart LR
 **1. 安装技能**
 
 ```bash
-tools/install.sh
+python3 ae.py install
 ```
 
-技能会被复制到 `~/.claude/skills/annotation-everything`。之后在 Claude Code 中说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」，Claude Code 就会按这套流程工作。
+技能会被复制到 `~/.claude/skills/annotation-everything`（这份复制称为「技能副本」）。之后在 Claude Code 中说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」，Claude Code 就会按这套流程工作。装完可以运行 `python3 ae.py doctor` 体检安装状态。
 
 **2. 用合成样例试用**
 
@@ -222,6 +222,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 | 命令 | 作用 |
 |---|---|
+| `ae.py install` / `doctor` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`；体检安装状态（`--json` 输出结构化结果） |
 | `build_viewer.py --report … --script … --out 审阅目录` | 生成对照页；`--rebuild 审阅目录` 按上次记录的参数重新生成 |
 | `serve.py 审阅目录` | 启动本机服务；每份审阅都有固定的专属端口 |
 | `serve.py list` / `status` / `forget` | 列出本机所有审阅、查看某份审阅的状态、删除不再使用的台账记录 |
@@ -265,10 +266,10 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── skill_sources.py           发现本机的技能目录
 │   └── check_pptx_fonts.py        PPTX 与 PDF 字体核查
 └── evals/                         技能评测用例（供 skill-creator 使用）
+ae.py                             统一管理命令：install 安装技能副本，doctor 体检
 fixtures/sample/                   合成样例（虚构数据）
 tests/                             单元测试和浏览器端到端测试
 tools/
-├── install.sh                     安装到 ~/.claude/skills/
 ├── setup-dev.sh                   启用仓库自带的 git 钩子
 └── git-hooks/                     拒绝在 main 上提交、推送到 main、删除 main
 .github/                           CI、issue 模板和 PR 模板
@@ -284,7 +285,7 @@ GLOSSARY.md                        术语表
 python3 -m unittest discover tests                                   # 单元测试（只用标准库）
 uv run --no-project --with playwright python tests/e2e_browser.py   # 浏览器端到端测试（使用本机的 Google Chrome）
 python3 skill/annotation-everything/scripts/serve.py check          # 服务安全自检
-tools/install.sh                                                     # 同步到 ~/.claude/skills/
+python3 ae.py install                                               # 同步到 ~/.claude/skills/
 ```
 
 - 测试会把审阅台账放到临时目录（环境变量 `AE_HOME`）。手动试用或运行技能评测时，也建议先执行 `export AE_HOME=$(mktemp -d)`，避免临时审阅登记进本机真实的台账，或占用真实审阅的专属端口。
