@@ -415,7 +415,7 @@ function send(op,fullCheckSupported=true){
   if(op.kind==="del")return api("DELETE","/api/notes/"+encodeURIComponent(op.id));
   if(op.kind==="import")return api("POST","/api/notes/import",{notes:op.notes});
   if(op.kind==="handoff"){const message=op.message||"",body={message,target:op.target||"final",allowSubagents:!!op.allowSubagents};
-    if(op.fullCheck===true){body.userMessage=message;body.message=message+(message?"\n\n":"")+FULL_CHECK_COMPAT}
+    if(op.fullCheck===true){body.userMessage=message;body.message=FULL_CHECK_COMPAT+(message?"\n\n"+message:"")}
     if("fullCheck" in op&&fullCheckSupported)body.fullCheck=op.fullCheck===true;return api("POST","/api/handoff",body)}}
 const pend={get(){const v=LS.get(K.pending,[]);return Array.isArray(v)?v:[]},
   set(v){if(!LS.set(K.pending,v))toast("浏览器存储已满：这次改动没能暂存，请尽快在「批注」里下载 JSON",6000)},

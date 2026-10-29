@@ -389,6 +389,8 @@ def full_check_checks(browser, tmp: Path):
         wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is False, old, 5)
         old.click("#handBtn")
         old.check("#hFullCheck")
+        long_message = "补" * 4000
+        old.fill("#handMsg", long_message)
 
         def legacy_post(route):
             if route.request.method != "POST":
@@ -397,6 +399,7 @@ def full_check_checks(browser, tmp: Path):
             payload = route.request.post_data_json
             payload.pop("fullCheck", None)
             payload.pop("userMessage", None)
+            payload["message"] = payload.get("message", "")[:4000]  # 旧服务的附言长度上限
             response = route.fetch(post_data=json.dumps(payload, ensure_ascii=False))
             body = response.json()
             body.pop("acceptedFullCheck", None)
@@ -412,7 +415,8 @@ def full_check_checks(browser, tmp: Path):
            "提交时旧服务未确认勾选：保留待补传要求")
         old.unroute("**/api/handoff", legacy_post)
         flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is True, old, 7)
-        ok(flushed, "新版服务确认后才清除待补传的勾选要求")
+        item = json.loads((d / "handoff.json").read_text())["items"][-1]
+        ok(flushed and item.get("userMessage") == long_message, "新版服务确认后才清除待补传要求，完整保留长附言")
 
         old.click("#handBtn")
         old.uncheck("#hFullCheck")
