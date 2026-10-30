@@ -83,15 +83,15 @@ def _signals_deferred(signals=BLOCKED_SIGNALS):
             signal.signal(sig, handler)
 
 
-def reap(proc: subprocess.Popen) -> None:
-    """结束一个子进程并排空它的管道；不响应 SIGTERM 的升级到 SIGKILL。"""
+def reap(proc: subprocess.Popen) -> tuple[str | None, str | None]:
+    """结束子进程并返回管道输出；不响应 SIGTERM 的升级到 SIGKILL。"""
     if proc.poll() is None:
         proc.terminate()
     try:
-        proc.communicate(timeout=TERMINATE_TIMEOUT)
+        return proc.communicate(timeout=TERMINATE_TIMEOUT)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.communicate()
+        return proc.communicate()
 
 
 CLEANUP = TestCleanup()
@@ -137,9 +137,9 @@ def start_server(d: Path, port: int, cleanup: TestCleanup = CLEANUP) -> subproce
         if info.exists() and json.loads(info.read_text()).get("port") == port:
             return p
         time.sleep(0.1)
-    cleanup.discard(p)
-    p.terminate()
-    raise RuntimeError("server did not start on the expected port: " + p.communicate()[1])
+    _, stderr = reap(p)
+    cleanup.discard(p)   # 启动失败也先完成回收，中断时仍由退出清理接手
+    raise RuntimeError("server did not start on the expected port: " + (stderr or ""))
 
 
 def stop(p: subprocess.Popen, cleanup: TestCleanup = CLEANUP) -> None:

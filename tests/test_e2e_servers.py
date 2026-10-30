@@ -271,6 +271,74 @@ class AbnormalExitTests(unittest.TestCase):
         self.assert_cleaned_up("e2e_servers.stop(grandchild)", expect_failure=True,
                                extra=self.second_signal("SIGINT"), ignore_sigterm=True)
 
+    def assert_start_timeout_cleans_up(self, interrupt=False):
+        probe = self.root / "startup-pid"
+        terminating = self.root / "terminating"
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        (scripts / "serve.py").write_text(textwrap.dedent(f"""
+            import os
+            import signal
+            import sys
+            import time
+            from pathlib import Path
+
+            def ignore_termination(signum, frame):
+                Path({str(terminating)!r}).write_text('terminating')
+            signal.signal(signal.SIGTERM, ignore_termination)
+            Path({str(probe)!r}).write_text(str(os.getpid()))
+            print('startup stalled', file=sys.stderr, flush=True)
+            time.sleep(120)
+        """), encoding="utf-8")
+        d = self.root / "review"
+        d.mkdir()
+
+        def cleanup_service():
+            if probe.exists():
+                self.kill_pid(int(probe.read_text()))
+        self.addCleanup(cleanup_service)
+
+        code = textwrap.dedent(f"""
+            import os
+            import signal
+            import sys
+            import threading
+            import time
+            from pathlib import Path
+
+            sys.path.insert(0, {str(TESTS)!r})
+            import e2e_servers
+            e2e_servers.SCRIPTS = Path({str(scripts)!r})
+            e2e_servers.READY_TIMEOUT = 3.0
+            e2e_servers.TERMINATE_TIMEOUT = 1.0
+            e2e_servers.install()
+            e2e_servers.CLEANUP.add_dir(Path({str(d)!r}))
+            def interrupt_cleanup():
+                while not Path({str(terminating)!r}).exists():
+                    time.sleep(0.01)
+                os.kill(os.getpid(), signal.SIGINT)
+            if {interrupt!r}:
+                threading.Thread(target=interrupt_cleanup, daemon=True).start()
+            e2e_servers.start_server(Path({str(d)!r}), 12345)
+        """)
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                              text=True, timeout=30)
+        self.assertTrue(probe.exists(), f"服务未启动：{proc.stderr}")
+        self.assertTrue(terminating.exists(), "未进入忽略 SIGTERM 的失败回收路径")
+        self.assertNotEqual(proc.returncode, 0, "未就绪的服务不应启动成功")
+        if interrupt:
+            self.assertIn("KeyboardInterrupt", proc.stderr)
+        else:
+            self.assertIn("server did not start on the expected port: startup stalled", proc.stderr)
+        self.assertTrue(wait_dead(int(probe.read_text())), "启动失败后留下残留服务")
+        self.assertFalse(d.exists(), "启动失败后临时目录未清理")
+
+    def test_start_timeout_escalates_when_the_service_ignores_sigterm(self):
+        self.assert_start_timeout_cleans_up()
+
+    def test_ctrl_c_during_start_timeout_does_not_leave_services_behind(self):
+        self.assert_start_timeout_cleans_up(interrupt=True)
+
     def test_uncaught_exception_still_cleans_up(self):
         self.assert_cleaned_up("raise RuntimeError('boom')", expect_failure=True)
 
