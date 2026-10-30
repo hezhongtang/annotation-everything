@@ -459,6 +459,185 @@ def locale_edit_checks(page, mode, read_notes):
     card.locator('[data-act="cancel"]').click()
 
 
+def locale_editing_checks(page, mode, read_notes):
+    """#30：中英文下完成编辑、标注与风格优化的常用操作，存储值与协议说法不变。"""
+    def texts(sel):
+        return [x.strip() for x in page.locator(sel).all_inner_texts()]
+
+    def has(sel, want):
+        return any(want in x for x in texts(sel))
+
+    def visible(sel):
+        try:
+            page.wait_for_selector(sel, timeout=3000)
+            return page.locator(sel).first.is_visible()
+        except Exception:
+            return False
+
+    dialogs: list[str] = []
+    answer = ["dismiss"]
+
+    def on_dialog(dlg):
+        dialogs.append(dlg.message)
+        (dlg.accept() if answer[0] == "accept" else dlg.dismiss())
+
+    page.on("dialog", on_dialog)
+
+    # ---- 英文：卡片动作与删除确认 ----
+    page.select_option("#localePick", "en")
+    notes = read_notes()
+    nid = notes[0]["id"]
+    card = page.locator(f'#nlist [data-note="{nid}"]')
+    ok(has(f'#nlist [data-note="{nid}"] .acts button', "Edit"), f"{mode}：英文卡片有编辑按钮")
+    ok(has(f'#nlist [data-note="{nid}"] .acts button', "Delete"), f"{mode}：英文卡片有删除按钮")
+    dialogs.clear()
+    card.locator('[data-act="del"]').click()
+    ok(wait_until(lambda: bool(dialogs), page, 5), f"{mode}：删除时弹出确认框")
+    ok("Delete this annotation?" in (dialogs[0] if dialogs else ""),
+       f"{mode}：英文删除确认用当前语言（实际 {dialogs[:1]}）")
+    ok(len(read_notes()) == len(notes), f"{mode}：取消删除不改批注")
+
+    # ---- 英文：选中文字后的操作条与双侧同步 ----
+    close_overlays(page)
+    go_page(page, 1)
+    drag_select(page, page.locator("#pageScript .talk, #slide p, #slide li").first)
+    ok(visible("#selbar.on"), f"{mode}：选中文字弹出操作条")
+    ok(has("#selbar .sbtns button", "Delete") and has("#selbar .sbtns button", "Replace")
+       and has("#selbar .sbtns button", "Annotate"),
+       f"{mode}：英文操作条是删除/改为/批注（实际 {texts('#selbar .sbtns button')}）")
+    for sel, attr, want in (("#selbar [data-sel='delete']", "title", "Delete the selected text (D)"),
+                            ("#selbar [data-sel='replace']", "title", "Replace the selected text with… (R)"),
+                            ("#selbar [data-sel='comment']", "title", "Annotate using the selected text as a quote (C)"),
+                            ("#pairRow", "title", "(B toggles)"),
+                            ("#pinBtn", "title", "Annotate on the report: click to drop a pin, or drag to select an area (P)"),
+                            ("#styleBtn", "title", "(S)"),
+                            ("#prev", "title", "(←)"), ("#next", "title", "(→)"),
+                            ("#helpBtn", "title", "(H)"), ("#addBtn", "title", "Add annotation")):
+        got = page.get_attribute(sel, attr) or ""
+        want = want.replace("{key_placeholder}", "")
+        ok(want in got, f"{mode}：{sel} 的 {attr} 是「{want}」（实际 {got!r}）")
+        ok("{" not in got, f"{mode}：{sel} 的 {attr} 里残留了未替换的占位符（实际 {got!r}）")
+    ok("The other side has the same or a similar sentence"
+       in (page.get_attribute("#pairRow", "title") or ""), f"{mode}：英文双侧提示说明勾选后果")
+    page.locator("#selbar [data-sel='replace']").click()
+    ok(visible("#repbox.on"), f"{mode}：改写框弹出")
+    ok("Replace the selected text with:" in page.inner_text("#repbox"), f"{mode}：英文改写框标题")
+    ok(has("#repbox button", "OK") and has("#repbox button", "Cancel"),
+       f"{mode}：英文改写框按钮（实际 {texts('#repbox button')}）")
+    close_overlays(page)
+
+    # ---- 英文：标注与风格优化 ----
+    ok("Annotate on the report" in page.inner_text("#pinBtn"), f"{mode}：英文标注按钮")
+
+    page.click("#styleBtn")
+    ok(visible("#stylemenu.on"), f"{mode}：风格菜单弹出")
+    ok(has("#stylemenu button", "Whole page") and has("#stylemenu button", "At the mark"),
+       f"{mode}：英文风格菜单（实际 {texts('#stylemenu button')}）")
+    ok("Style scope:" in page.inner_text("#stylemenu .hint"), f"{mode}：英文风格菜单标题")
+    page.click('#stylemenu [data-sm="page"]')
+    ok(visible("#styleChip.on"), f"{mode}：英文风格条出现")
+    ok(page.inner_text("#styleChip").startswith("Style · whole page"),
+       f"{mode}：英文风格条写明范围（实际 {page.inner_text('#styleChip')}）")
+    ok(page.get_attribute("#ntext", "placeholder").startswith("The direction you want"),
+       f"{mode}：英文风格输入提示")
+    page.locator("#styleChip button").click()
+    ok(page.get_attribute("#ntext", "placeholder").startswith("Write your change request"),
+       f"{mode}：取消风格后输入提示回到常规")
+
+    # ---- 英文：页码与讲稿栏 ----
+    ok(page.inner_text("#prev").strip().startswith("Previous"), f"{mode}：英文上一页")
+    ok(page.inner_text("#next").strip().startswith("Next"), f"{mode}：英文下一页")
+    ok("Jump to page" == (page.get_attribute("#jump", "aria-label") or ""), f"{mode}：英文页码下拉无障碍名称")
+    stat = page.inner_text("#stat")
+    ok(stat.startswith("Page ") and " · About " in stat and "in total" in stat,
+       f"{mode}：英文统计行页码与时长都完整（实际 {stat!r}）")
+    ok("Talking points" in page.inner_text("#pageScript"), f"{mode}：英文讲法标签")
+    ok("Page 1" in page.inner_text("#pageScript"), f"{mode}：英文页码")
+    jump = texts("#jump option")
+    ok(bool(jump) and all(o.startswith("Page ") for o in jump),
+       f"{mode}：英文页码下拉（实际 {jump[:3]}）")
+
+    # ---- 英文长标签在窄窗口下仍可读可操作 ----
+    close_overlays(page)
+    page.set_viewport_size({"width": 720, "height": 780})
+    for sel, want in (("#addBtn", "Add annotation"), ("#pinBtn", "Annotate on the report"),
+                      ("#styleBtn", "Style"), ("#prev", "Previous"), ("#next", "Next")):
+        box = page.locator(sel).bounding_box()
+        ok(box is not None and box["width"] > 0 and box["height"] > 0
+           and page.locator(sel).is_visible(),
+           f"{mode}：窄窗口下 {sel} 仍可见可操作（实际 {box}）")
+        ok(want in page.locator(sel).inner_text(), f"{mode}：窄窗口下 {sel} 文字仍是 {want}")
+    page.set_viewport_size({"width": 1280, "height": 900})
+
+    # ---- 「本页批注」按钮把列表滚进来 ----
+    close_overlays(page)
+    scrolled = page.evaluate("() => { const s = document.getElementById('script'); s.scrollTop = 0; return s.scrollHeight > s.clientHeight }")
+    page.click("#seeList")
+    ok(not scrolled or wait_until(lambda: page.evaluate(
+        "() => document.getElementById('script').scrollTop > 0"), page, 5),
+       f"{mode}：点「本页批注」滚到批注列表（内容是否可滚：{scrolled}）")
+    ok("On this page" in page.inner_text("#seeList"), f"{mode}：英文界面的本页批注按钮")
+
+    # ---- 说明正文按语言整段切换 ----
+    close_overlays(page)
+    page.click("#helpBtn")
+    ok(visible("#help.on"), f"{mode}：说明弹窗打开")
+    ok(not page.locator('#help [data-ae-lang="en"]').evaluate("e => e.hidden")
+       and page.locator('#help [data-ae-lang="zh-CN"]').evaluate("e => e.hidden"),
+       f"{mode}：英文界面只显示英文说明")
+    # 说明正文在可滚动容器里，inner_text 拿不全，直接断言对应的语言块
+    en_body = page.locator('#help [data-ae-lang="en"]').inner_text()
+    ok("Shortcuts:" in en_body and "Annotate on the report (P)" in en_body,
+       f"{mode}：英文说明正文覆盖快捷键与标注（实际 {en_body[:40]!r}）")
+    page.select_option("#localePick", "zh-CN")
+    ok("快捷键：" in page.locator('#help [data-ae-lang="zh-CN"]').inner_text()
+       and page.locator('#help [data-ae-lang="en"]').evaluate("e => e.hidden"),
+       f"{mode}：切回中文只显示中文说明")
+    page.select_option("#localePick", "en")
+    close_overlays(page)
+
+    # ---- 英文界面不允许残留未替换的占位符 ----
+    leftovers = page.evaluate("""() => {
+      const bad = [];
+      document.querySelectorAll('[title],[aria-label],[placeholder]').forEach(el => {
+        for (const v of [el.getAttribute('title'), el.getAttribute('aria-label'), el.getAttribute('placeholder')]) {
+          if (v && v.includes('{')) bad.push(el.tagName + '#' + el.id + ' = ' + v);
+        }
+      });
+      return bad;
+    }""")
+    ok(not leftovers, f"{mode}：英文界面没有残留占位符（实际 {leftovers}）")
+
+    # ---- 存储值与协议说法不随界面语言改写 ----
+    page.fill("#ntext", "英文界面写的批注")
+    page.select_option("#ntarget", "报告")
+    page.click("#addBtn")
+    ok(wait_until(lambda: any(n["text"] == "英文界面写的批注" for n in read_notes()), page, 5),
+       f"{mode}：英文界面能添加批注")
+    added = next((n for n in read_notes() if n["text"] == "英文界面写的批注"), {})
+    ok(added.get("target") == "报告",
+       f"{mode}：英文界面写批注，对象存储值仍是报告（实际 {added.get('target')!r}）")
+    ok(added.get("text") == "英文界面写的批注", f"{mode}：正文按所写保存，不被系统文案顶替")
+    ok('value="报告"' in page.inner_html("#ntarget"), f"{mode}：对象下拉的存储值不变")
+    aid = added.get("id")
+    ok(aid and has(f'#nlist [data-note="{aid}"] .meta', "Report"), f"{mode}：英文界面显示 Report")
+
+    # ---- 确认后删除生效 ----
+    dialogs.clear()
+    answer[0] = "accept"
+    page.locator(f'#nlist [data-note="{aid}"] [data-act="del"]').click()
+    ok(wait_until(lambda: all(n["id"] != aid for n in read_notes()), page, 5),
+       f"{mode}：确认后删除生效")
+    answer[0] = "dismiss"
+
+
+def close_overlays(page):
+    """关掉挡在页头上的弹窗：先把焦点移出输入框，再用 Esc（快捷键本身保持不变）。"""
+    page.evaluate("() => { if (document.activeElement) document.activeElement.blur() }")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(100)
+
+
 def locale_checks(browser, tmp: Path):
     """最小语言闭环：内嵌词典、0/1/2、切换不写批注，file:// 与服务模式都能加一条普通批注。"""
     d = tmp / "locale_loop"
@@ -524,7 +703,7 @@ def locale_checks(browser, tmp: Path):
     ok("请改标题" in page.inner_text("#nlist") and "报告" in page.inner_text("#nlist"), "中文列表显示原文和对象")
     page.select_option("#localePick", "en")
     en_quote = page.locator("#nlist blockquote").inner_text()
-    ok(en_quote.startswith("Report：") and "原句" in en_quote and "报告：" not in en_quote,
+    ok(en_quote.startswith("Report:") and "原句" in en_quote and "报告：" not in en_quote,
        f"英文批注引用改显示名、原文不变（实际 {en_quote}）")
     ok("Report" in page.inner_text("#nlist") and "请改标题" in page.inner_text("#nlist"), "切回英文只改对象显示")
     again = page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")
@@ -540,6 +719,7 @@ def locale_checks(browser, tmp: Path):
     ok(page.evaluate("document.documentElement.lang") == "zh-CN" and page.inner_text("#addLabel") == "添加批注",
        "本机保存的语言优先于审阅默认英文")
     locale_edit_checks(page, "file://", lambda: page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))"))
+    locale_editing_checks(page, "file://", lambda: page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))"))
     ctx.close()
 
     auto = tmp / "locale_auto"
@@ -590,6 +770,7 @@ def locale_checks(browser, tmp: Path):
         ok(not any("/locales/" in url or url.endswith("en.json") or url.endswith("zh-CN.json")
                    for _method, url in net), "服务模式不请求词典文件")
         locale_edit_checks(sp, "服务模式", lambda: disk_notes(d))
+        locale_editing_checks(sp, "服务模式", lambda: disk_notes(d))
         sctx.close()
     finally:
         stop(server)

@@ -309,6 +309,21 @@ def check_catalogs(root: Path | None = None) -> list[str]:
                         problems.append(
                             f"{tag} 的 {full} 占位符与 {head} 不一致："
                             f"{sorted(want)} 对 {sorted(got)}")
+        # 计数消息必须分支齐全：英文分 one / other，中文不分。少了分支会静默退化成
+        # "1 annotations"，所以这里当成资源错误，而不是留给运行时发现。
+        for key in sorted(bases(tag)):
+            if "count" not in bases(tag)[key]:
+                continue
+            if tag == "en":
+                for suffix in _BRANCH_SUFFIXES:
+                    if f"{key}.{suffix}" not in messages:
+                        problems.append(f"en 的计数消息 {key} 缺少 {key}.{suffix} 分支")
+            else:
+                extra = [s for s in _BRANCH_SUFFIXES if f"{key}.{s}" in messages]
+                if extra:
+                    problems.append(
+                        f"{tag} 的计数消息 {key} 不该有复数分支："
+                        + ", ".join(f"{key}.{s}" for s in extra))
     return problems
 
 

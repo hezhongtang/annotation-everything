@@ -560,7 +560,11 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         sections = infer_sections(doc, sects)
     final_title = title or rtitle or h1 or report.stem
     if not intro:
-        intro = f"<h2>{esc(final_title)}</h2><p>左侧报告、右侧讲稿与批注。选中文字可作为引用，点「在报告上标注」可单击放点或拖动框选。</p>"
+        # 讲稿没有前言时用系统默认简介：句子走词典，页面切语言时由 applyLocale 重写
+        import i18n
+        intro = (f'<h2>{esc(final_title)}</h2>'
+                 f'<p data-msg="viewer.introDefault">'
+                 f'{esc(i18n.translate(i18n.load_catalog(locale_choice or i18n.DEFAULT_LOCALE), "viewer.introDefault"))}</p>')
     out.mkdir(parents=True, exist_ok=True)
     if not no_scan_skills:
         import notes_store
