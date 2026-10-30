@@ -143,7 +143,5 @@ def start_server(d: Path, port: int, cleanup: TestCleanup = CLEANUP) -> subproce
 
 
 def stop(p: subprocess.Popen, cleanup: TestCleanup = CLEANUP) -> None:
-    try:
-        reap(p)
-    finally:
-        cleanup.discard(p)
+    reap(p)
+    cleanup.discard(p)   # 回收成功后才注销；被中断时保留登记，交给退出清理

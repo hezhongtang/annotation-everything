@@ -266,6 +266,11 @@ class AbnormalExitTests(unittest.TestCase):
     def test_keyboard_interrupt_still_cleans_up(self):
         self.assert_cleaned_up("raise KeyboardInterrupt", expect_failure=True)
 
+    def test_ctrl_c_during_stop_does_not_leave_services_behind(self):
+        """正常 stop 等待退出时被打断，仍由 atexit 回收尚未结束的服务。"""
+        self.assert_cleaned_up("e2e_servers.stop(grandchild)", expect_failure=True,
+                               extra=self.second_signal("SIGINT"), ignore_sigterm=True)
+
     def test_uncaught_exception_still_cleans_up(self):
         self.assert_cleaned_up("raise RuntimeError('boom')", expect_failure=True)
 
