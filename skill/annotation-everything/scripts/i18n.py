@@ -189,7 +189,7 @@ def select_key(catalog: Mapping, key: str, count: int | None) -> str:
     if count is None:
         return key
     messages = catalog.get("messages") or {}
-    branch = f"{key}.{plural_category(catalog.get("locale", DEFAULT_LOCALE), count)}"
+    branch = f"{key}.{plural_category(catalog.get('locale', DEFAULT_LOCALE), count)}"
     return branch if branch in messages else key
 
 

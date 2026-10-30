@@ -414,6 +414,51 @@ def full_check_checks(browser, tmp: Path):
         stop(server)
 
 
+def locale_edit_checks(page, mode, read_notes):
+    """语言切换保留已有批注的编辑草稿，保存和取消都以用户的选择为准。"""
+    original = read_notes()[0]
+    nid = original["id"]
+    source = original["page"]
+    target = page.evaluate("source => P.find(p => p.n !== source).n", source)
+    card = page.locator(f'#nlist [data-note="{nid}"]')
+    edited_text = "切换语言后保存的合成批注"
+
+    card.locator('[data-act="edit"]').click()
+    page.fill("#etext", edited_text)
+    page.fill("#eskills", "locale-test-skill")
+    page.select_option("#epage", str(target))
+    for locale in ("en", "zh-CN"):
+        page.select_option("#localePick", locale)
+        ok(page.input_value("#epage") == str(target)
+           and page.input_value("#etext") == edited_text
+           and page.input_value("#eskills") == "locale-test-skill",
+           f"{mode}：切换到 {locale} 保留编辑中的正文、技能和目标页")
+    ok(read_notes() == [original], f"{mode}：切换语言不会提前保存编辑草稿")
+    card.locator('[data-act="save"]').click()
+
+    def saved():
+        note = next((n for n in read_notes() if n["id"] == nid), {})
+        return (note.get("page") == target and note.get("text") == edited_text
+                and note.get("skills") == ["locale-test-skill"])
+
+    ok(wait_until(saved, page, 5), f"{mode}：保存后批注移动到所选页并保留正文和技能")
+    go_page(page, target)
+    # 保存后的编辑缓存必须清除；取消也不能被重绘时重新缓存的旧卡片覆盖。
+    card.locator('[data-act="edit"]').click()
+    ok(page.input_value("#epage") == str(target), f"{mode}：再次编辑使用已保存的页码")
+    page.fill("#etext", "这段草稿应被取消")
+    page.fill("#eskills", "cancelled-test-skill")
+    page.select_option("#epage", str(source))
+    page.select_option("#localePick", "en")
+    card.locator('[data-act="cancel"]').click()
+    card.locator('[data-act="edit"]').click()
+    ok(page.input_value("#epage") == str(target)
+       and page.input_value("#etext") == edited_text
+       and page.input_value("#eskills") == "locale-test-skill",
+       f"{mode}：取消后重新编辑不会恢复已取消的正文、技能或目标页")
+    card.locator('[data-act="cancel"]').click()
+
+
 def locale_checks(browser, tmp: Path):
     """最小语言闭环：内嵌词典、0/1/2、切换不写批注，file:// 与服务模式都能加一条普通批注。"""
     d = tmp / "locale_loop"
@@ -494,6 +539,7 @@ def locale_checks(browser, tmp: Path):
     page.reload()
     ok(page.evaluate("document.documentElement.lang") == "zh-CN" and page.inner_text("#addLabel") == "添加批注",
        "本机保存的语言优先于审阅默认英文")
+    locale_edit_checks(page, "file://", lambda: page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))"))
     ctx.close()
 
     auto = tmp / "locale_auto"
@@ -543,6 +589,7 @@ def locale_checks(browser, tmp: Path):
            and info.get("port") == port, "切换语言不改审阅标识、页面键、默认语言和端口")
         ok(not any("/locales/" in url or url.endswith("en.json") or url.endswith("zh-CN.json")
                    for _method, url in net), "服务模式不请求词典文件")
+        locale_edit_checks(sp, "服务模式", lambda: disk_notes(d))
         sctx.close()
     finally:
         stop(server)
@@ -872,10 +919,14 @@ def main() -> int:
         A, B = editable[0], editable[1]
         page.click(f'#nlist [data-note="{A}"] [data-act="edit"]')
         page.fill("#etext", "AAA 改到一半")
+        other_page = page.evaluate("P.find(p => p.n !== P[i].n).n")
+        page.select_option("#epage", str(other_page))
         page.click(f'#nlist [data-note="{B}"] [data-act="edit"]')
         ok(page.input_value("#etext") != "AAA 改到一半", "从批注 A 的编辑直接点批注 B 的「编辑」，B 不会带上 A 的草稿")
+        ok(page.input_value("#epage") == str(cur[B]["page"]), "批注 B 不会带上 A 尚未保存的目标页")
         page.click(f'#nlist [data-note="{A}"] [data-act="edit"]')
         ok(page.input_value("#etext") == "AAA 改到一半", "切回 A，A 的草稿还在")
+        ok(page.input_value("#epage") == str(other_page), "切回 A，尚未保存的目标页还在")
         page.click(f'#nlist [data-note="{A}"] [data-act="cancel"]')
         # 原页面已不存在的批注：提示条有数，在「批注」里挪到正确的页
         lost_id = B

@@ -746,7 +746,7 @@ function noteHtml(x){
    +(x.quote&&!qe?`<blockquote>${x.quoteFrom?escH(targetLabel(x.quoteFrom))+"：":""}${escH(x.quote)}</blockquote>`:"")
    +body
    +(x.orphan?`<div class="anchor" style="color:#a2412f">⚠ 原来所在的页面在新版报告里找不到，页码可能不对：点「编辑」挪到正确的页</div>`:"")
-   +(ed?`<div class="anchor">移到 <select id="epage">${P.map(q=>`<option value="${q.n}"${q.n===x.page?" selected":""}>第 ${q.n} 页</option>`).join("")}</select></div>`:"")
+   +(ed?`<div class="anchor">移到 <select id="epage">${P.map(q=>`<option value="${q.n}"${q.n===(editBuf["pg:"+x.id]??x.page)?" selected":""}>第 ${q.n} 页</option>`).join("")}</select></div>`:"")
    +(!ed&&x.anchor?`<div class="anchor">位置：${escH(clip(x.anchor,140))}</div>`:"")
    +(()=>{if(ed)return"";const al=done?[]:alwaysFor(x).filter((a,k,arr)=>!sk.includes(a.name)&&arr.findIndex(b=>b.name===a.name)===k);
       return sk.length||al.length?`<div class="skills">${al.map(a=>`<span class="skill al" title="常驻技能（${escH(ALWAYS_ZH[a.scope]||"")}）：处理这条前 Agent 会先调用">常驻 ${escH(a.name)}</span>`).join("")}${sk.map(n=>`<span class="skill" title="处理这条批注时调用的技能">⚙ ${escH(n)}</span>`).join("")}</div>`:""})()
@@ -754,8 +754,9 @@ function noteHtml(x){
    +((done||dr)&&x.resolution?`<div class="res">${dr?"初改说明":"处理说明"}：${escH(x.resolution).replace(/\n/g,"<br>")}</div>`:"")
    +(!ed&&Array.isArray(x.trail)&&x.trail.length?`<div class="trail">痕迹：${trailText(x)}</div>`:"")+`</div>`}
 // 把正在编辑的那张卡片的内容按它自己的 id 存起来（不能按 editingId：切换编辑对象时它已经变了）
-function stashEdit(){const et=$("etext"),es=$("eskills"),card=(et||es)&&(et||es).closest("[data-note]");if(!card)return;
-  const id=card.dataset.note;if(et)editBuf[id]=et.value;if(es)editBuf["sk:"+id]=es.value}
+function stashEdit(){if(!editingId)return;   // 保存或取消后，重绘不能再缓存旧卡片里的草稿
+  const et=$("etext"),es=$("eskills"),ep=$("epage"),card=(et||es)&&(et||es).closest("[data-note]");if(!card)return;
+  const id=card.dataset.note;if(et)editBuf[id]=et.value;if(es)editBuf["sk:"+id]=es.value;if(ep)editBuf["pg:"+id]=+ep.value}
 function refreshList(force){
   if(!force&&(editingId||composing)){listStale=true;updateCounts();return}   // 正在改某条或正在输入法组字：先不重绘
   listStale=false;
@@ -890,10 +891,10 @@ $("script").addEventListener("click",e=>{const b=e.target.closest("[data-act]");
     case "style":openStyleMenu();break;
     case "del":if(confirm("删除这条批注？"))mutate({kind:"del",id});break;
     case "edit":{endRemark();stashEdit();editingId=id;refreshList(true);($("etext")||$("eskills")).focus();break}
-    case "cancel":endRemark();delete editBuf[editingId];delete editBuf["sk:"+editingId];editingId=null;refreshList(true);break;
+    case "cancel":endRemark();delete editBuf[editingId];delete editBuf["sk:"+editingId];delete editBuf["pg:"+editingId];editingId=null;refreshList(true);break;
     case "save":{endRemark();const x=notes.find(n=>n.id===id);if(!x){toast("这条批注已被删除，改动没有保存",4000);editingId=null;refreshList(true);break}
       const qe=editOf(x),et=$("etext"),t=et?et.value.trim():"",skills=parseSkills($("eskills").value);
-      if(et&&!t&&!qe){toast("批注内容不能为空");return}delete editBuf[id];delete editBuf["sk:"+id];editingId=null;
+      if(et&&!t&&!qe){toast("批注内容不能为空");return}delete editBuf[id];delete editBuf["sk:"+id];delete editBuf["pg:"+id];editingId=null;
       const body=qe&&qe.op==="delete"?{skills}:qe?{edit:{...qe,to:t},text:REP_PREFIX+t,skills}:{text:t,skills};
       const np=+(($("epage")||{}).value||x.page),pg=P.find(q=>q.n===np);
       if(pg&&(np!==x.page||x.orphan))Object.assign(body,{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false});   // 挪到别的页（或确认原页）
