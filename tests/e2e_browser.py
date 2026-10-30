@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import os
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -31,6 +30,8 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+from e2e_servers import CLEANUP, free_port, install, start_server, stop
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 FIXTURE = ROOT / "fixtures" / "sample"
@@ -38,6 +39,9 @@ os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-e2e-home-")   # 测试不碰
 os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-e2e-user-")       # 技能扫描只使用合成目录
 os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
 os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")
+install()   # 兜底清理：正常退出、未捕获异常、Ctrl-C 走 atexit，SIGTERM / SIGHUP 另接
+CLEANUP.add_dir(Path(os.environ["AE_HOME"]))
+CLEANUP.add_dir(Path(os.environ["HOME"]))
 RESULTS: list[tuple[bool, str]] = []
 STAGE = "document.getElementById('host').shadowRoot.getElementById('ae-stage')"
 
@@ -45,12 +49,6 @@ STAGE = "document.getElementById('host').shadowRoot.getElementById('ae-stage')"
 def ok(cond, label):
     RESULTS.append((bool(cond), label))
     print(("PASS  " if cond else "FAIL  ") + label, flush=True)
-
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def build(out: Path, report: Path = FIXTURE / "report.html", script: Path | None = FIXTURE / "script.md",
@@ -61,28 +59,6 @@ def build(out: Path, report: Path = FIXTURE / "report.html", script: Path | None
     if name:
         cmd += ["--name", name]
     subprocess.run(cmd, check=True, capture_output=True)
-
-
-def start_server(d: Path, port: int):
-    p = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), str(d), "--port", str(port), "--no-open"],
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    for _ in range(80):
-        info = d / ".annotation-server.json"
-        if info.exists() and json.loads(info.read_text()).get("port") == port:
-            return p
-        time.sleep(0.1)
-    p.terminate()
-    raise RuntimeError("server did not start on the expected port: " + p.communicate()[1])
-
-
-def stop(p):
-    if p.poll() is None:
-        p.terminate()
-        try:
-            p.communicate(timeout=10)
-        except subprocess.TimeoutExpired:
-            p.kill()
-            p.communicate()
 
 
 def disk_notes(d: Path):
@@ -437,6 +413,7 @@ def full_check_checks(browser, tmp: Path):
 
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="ae-e2e-"))
+    CLEANUP.add_dir(tmp)
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="chrome", headless=True)
         if "--full-check-only" in sys.argv:
@@ -814,6 +791,7 @@ def main() -> int:
         # 交给 Agent：代理在后台等待，用户点按钮后等待命令退出（Claude Code 里即唤醒会话）
         waiter = subprocess.Popen([sys.executable, str(SCRIPTS / "notes.py"), "wait", str(sdir), "--timeout", "30",
                                    "--interval", "0.3", "--by", "claude"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        CLEANUP.add(waiter)
         time.sleep(0.8)
         page.keyboard.press("Escape")   # 先离开输入框（在输入框里按 A 是打字）
         page.keyboard.press("a")
