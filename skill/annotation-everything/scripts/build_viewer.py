@@ -514,7 +514,15 @@ def file_label(name: str, rid: str) -> str:
 def build(report: Path, script: Path | None, out: Path, title: str | None = None,
           sections_arg: str | None = None, no_sections: bool = False, lenient: bool = False,
           asset_root: Path | None = None, name: str | None = None,
-          skills_from: list[Path] | None = None, no_scan_skills: bool = False) -> dict:
+          skills_from: list[Path] | None = None, no_scan_skills: bool = False,
+          locale: str | None = None) -> dict:
+    import i18n
+    preview = read_manifest(out) if out.exists() else {}
+    try:
+        # 调用方没写 --locale 时沿用已有 review.json；两边都没有则不写入（旧审阅保持中文）
+        locale_choice = i18n.canonical_choice(locale if locale is not None else preview.get("locale"))
+    except i18n.LocaleError as exc:
+        raise SystemExit(f"错误：{exc}") from exc
     doc = report.read_text(encoding="utf-8")
     assets = Assets(asset_root or report.resolve().parent)
     assets.root_fs = None
@@ -588,12 +596,15 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     skill_context = {"report": report.name, "script": script.name if script else "",
                      "kind": "图片 幻灯片" if image_pages >= (len(sects) + 1) // 2 else "HTML 报告"}
     import notes_store
+    import i18n
+    catalogs = {tag: i18n.load_catalog(tag)["messages"] for tag in i18n.SUPPORTED}
     values = {"TITLE": html.escape(final_title), "INTRO": intro, "PAGES": _js(pages), "SECTIONS": _js(sections),
               "NS": _js(ns), "NAME": _js(review_name), "RID": _js(rid), "RCSS": _js(rcss), "SECT": _js([s["html"] for s in sects]),
               "ROOTFS": assets.root_fs or "100%", "SKILLS": _js(read_skills(out)), "ALWAYS": _js(read_always(out)),
-              "SKILL_CONTEXT": _js(skill_context), "FULL_CHECK_COMPAT": _js("【本批提交选项】" + notes_store.FULL_CHECK_TEXT)}
+              "SKILL_CONTEXT": _js(skill_context), "FULL_CHECK_COMPAT": _js("【本批提交选项】" + notes_store.FULL_CHECK_TEXT),
+              "CATALOGS": _js(catalogs), "LOCALE": _js(locale_choice)}
     # 一次性替换，避免内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
-    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT)__", lambda m: values[m.group(1)],
+    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE)__", lambda m: values[m.group(1)],
                        TEMPLATE.read_text(encoding="utf-8"))
     page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
     write_private(out / "index.html", page_html)
@@ -613,6 +624,9 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         "pages": [{"n": p["n"], "key": p["key"], "stable": p["stable"], "title": html.unescape(p["title"]),
                    "section": next((s[0] for s in sections if s[1] <= p["n"] <= s[2]), "")} for p in pages],
     }
+    if locale_choice is not None:
+        manifest["locale"] = locale_choice
+        manifest["build"]["locale"] = locale_choice
     write_private(out / "review.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     # 已有批注：按页面键校正页码（重排、增删页之后批注跟着原来的页走）
     key_count: dict[str, int] = {}
@@ -639,7 +653,8 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     if assets.total > 40 * 1024 * 1024:
         assets.warn(f"内联资源共 {assets.total // 1024 // 1024} MB，页面较大，打开可能偏慢")
     return {"pages": len(pages), "sections": len(sections), "seconds": sum(p["sec"] for p in pages),
-            "title": final_title, "name": review_name, "warnings": assets.warnings, "reviewId": rid, "remap": remap}
+            "title": final_title, "name": review_name, "warnings": assets.warnings, "reviewId": rid, "remap": remap,
+            "locale": locale_choice}
 
 
 def register_review(rid: str, out: Path, review_name: str, assets: Assets) -> None:
@@ -681,6 +696,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--asset-root", type=Path, help="允许内联本地资源的目录（默认报告所在目录）")
     ap.add_argument("--skills-from", action="extend", nargs="+", type=Path, metavar="目录", help="从指定目录读取技能元数据，可重复")
     ap.add_argument("--no-scan-skills", action="store_true", help="不扫描技能目录")
+    ap.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。省略时，新审阅保持中文，重建沿用 review.json")
     a = ap.parse_args(argv)
     if a.rebuild:
         m = read_manifest(a.rebuild)
@@ -702,13 +718,14 @@ def main(argv: list[str] | None = None) -> int:
     elif not (a.report and a.out):
         ap.error("需要 --report 与 --out（或用 --rebuild 审阅目录）")
     r = build(a.report, a.script, a.out, a.title, a.sections, a.no_sections, a.lenient, a.asset_root,
-              name=a.name, skills_from=a.skills_from, no_scan_skills=a.no_scan_skills)
+              name=a.name, skills_from=a.skills_from, no_scan_skills=a.no_scan_skills, locale=a.locale)
     for w in r["warnings"]:
         print("警告：" + w, file=sys.stderr)
     mins = r["seconds"] // 60
     print(f"wrote {a.out / 'index.html'}：{r['pages']} 页，板块 {r['sections']} 个"
           + (f"，讲稿合计约 {mins} 分钟" if r["seconds"] else "")
-          + f"\n审阅名：{r['name']}（标识 {r['reviewId']}）")
+          + f"\n审阅名：{r['name']}（标识 {r['reviewId']}）"
+          + (f"\n界面语言：{r['locale']}" if r.get("locale") else ""))
     return 0
 
 

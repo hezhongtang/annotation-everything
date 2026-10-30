@@ -13,6 +13,7 @@
 6. 服务卡死（SIGSTOP）：请求超时后转暂存，重启后补传；
 7. 同一端口换成另一份审阅：切换后立刻写也不会写进别人的 notes.json；换回后补传；
 8. 恶意网页写批注全部失败；导入带恶意 id / 内容的批注不执行脚本；旧版 Markdown 导入保留状态。
+9. 语言：单文件内嵌词典；file:// 与服务模式都能加批注；计数覆盖 0/1/2；切换语言不写批注、不改审阅标识；auto 跟随浏览器语言。
 """
 from __future__ import annotations
 
@@ -52,12 +53,14 @@ def ok(cond, label):
 
 
 def build(out: Path, report: Path = FIXTURE / "report.html", script: Path | None = FIXTURE / "script.md",
-          name: str | None = None):
+          name: str | None = None, locale: str | None = None):
     cmd = [sys.executable, str(SCRIPTS / "build_viewer.py"), "--report", str(report), "--out", str(out)]
     if script:
         cmd += ["--script", str(script)]
     if name:
         cmd += ["--name", name]
+    if locale:
+        cmd += ["--locale", locale]
     subprocess.run(cmd, check=True, capture_output=True)
 
 
@@ -411,6 +414,187 @@ def full_check_checks(browser, tmp: Path):
         stop(server)
 
 
+def locale_edit_checks(page, mode, read_notes):
+    """语言切换保留已有批注的编辑草稿，保存和取消都以用户的选择为准。"""
+    original = read_notes()[0]
+    nid = original["id"]
+    source = original["page"]
+    target = page.evaluate("source => P.find(p => p.n !== source).n", source)
+    card = page.locator(f'#nlist [data-note="{nid}"]')
+    edited_text = "切换语言后保存的合成批注"
+
+    card.locator('[data-act="edit"]').click()
+    page.fill("#etext", edited_text)
+    page.fill("#eskills", "locale-test-skill")
+    page.select_option("#epage", str(target))
+    for locale in ("en", "zh-CN"):
+        page.select_option("#localePick", locale)
+        ok(page.input_value("#epage") == str(target)
+           and page.input_value("#etext") == edited_text
+           and page.input_value("#eskills") == "locale-test-skill",
+           f"{mode}：切换到 {locale} 保留编辑中的正文、技能和目标页")
+    ok(read_notes() == [original], f"{mode}：切换语言不会提前保存编辑草稿")
+    card.locator('[data-act="save"]').click()
+
+    def saved():
+        note = next((n for n in read_notes() if n["id"] == nid), {})
+        return (note.get("page") == target and note.get("text") == edited_text
+                and note.get("skills") == ["locale-test-skill"])
+
+    ok(wait_until(saved, page, 5), f"{mode}：保存后批注移动到所选页并保留正文和技能")
+    go_page(page, target)
+    # 保存后的编辑缓存必须清除；取消也不能被重绘时重新缓存的旧卡片覆盖。
+    card.locator('[data-act="edit"]').click()
+    ok(page.input_value("#epage") == str(target), f"{mode}：再次编辑使用已保存的页码")
+    page.fill("#etext", "这段草稿应被取消")
+    page.fill("#eskills", "cancelled-test-skill")
+    page.select_option("#epage", str(source))
+    page.select_option("#localePick", "en")
+    card.locator('[data-act="cancel"]').click()
+    card.locator('[data-act="edit"]').click()
+    ok(page.input_value("#epage") == str(target)
+       and page.input_value("#etext") == edited_text
+       and page.input_value("#eskills") == "locale-test-skill",
+       f"{mode}：取消后重新编辑不会恢复已取消的正文、技能或目标页")
+    card.locator('[data-act="cancel"]').click()
+
+
+def locale_checks(browser, tmp: Path):
+    """最小语言闭环：内嵌词典、0/1/2、切换不写批注，file:// 与服务模式都能加一条普通批注。"""
+    d = tmp / "locale_loop"
+    d.mkdir()
+    build(d, locale="en")
+    html = (d / "index.html").read_text(encoding="utf-8")
+    ok('function pluralCat(locale, count)' in html and 'REVIEW_LOCALE="en";' in html,
+       "英文审阅把词典运行时嵌进单文件")
+    url = (d / "index.html").as_uri()
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    seen: list[str] = []
+    page.on("request", lambda req: seen.append(req.url))
+    page.goto(url)
+    ok(page.evaluate("document.documentElement.lang") == "en", "file:// 按审阅默认显示英文")
+    ok(page.inner_text("#addLabel") == "Add annotation", "file:// 添加按钮是英文")
+    ok(page.inner_text("#targetLabel") == "Which side to change", "file:// 对象名称是英文")
+    ok(page.get_attribute("#ntext", "placeholder") == "Write your change request", "file:// 输入提示是英文")
+    ok("No annotations yet." in page.inner_text("#nlist"), "file:// 空列表是英文")
+    ok(page.locator("#ntarget option").first.inner_text() == "Report", "英文只改对象的显示文字")
+    ok(page.locator("#ntarget option").first.get_attribute("value") == "报告", "对象的存储值仍是报告")
+    counts = page.evaluate("() => [0, 1, 2].map(n => tMsg('cli.show.count', {count: n}))")
+    ok(counts == ["0 annotations", "1 annotation", "2 annotations"], f"file:// 英文计数 0/1/2（实际 {counts}）")
+    ok(page.evaluate("tMsg('viewer.page', {page: 3})") == "Page 3", "file:// 命名占位符按译文替换")
+    ok(page.evaluate("interpolate('{{count}} 与 {count}', {count: 2})") == "{count} 与 2", "成对花括号保持字面量")
+    fallback = page.evaluate("""() => {
+      const backup = CATALOGS.en['viewer.add'];
+      delete CATALOGS.en['viewer.add'];
+      const before = localeMissing().length;
+      const text = tMsg('viewer.add');
+      CATALOGS.en['viewer.add'] = backup;
+      return {text, recorded: localeMissing().slice(before)};
+    }""")
+    ok(fallback["text"] == "添加批注" and fallback["recorded"] == ["viewer.add"],
+       f"缺译回退到另一种语言并留下记录（实际 {fallback}）")
+    page.evaluate("setQuote('原句', '报告')")
+    en_chip = page.inner_text("#qbox")
+    ok("Quote" in en_chip and "Report" in en_chip and "报告" not in en_chip,
+       f"英文引用来源用显示名（实际 {en_chip}）")
+    page.fill("#ntext", "草稿还在")
+    page.select_option("#localePick", "zh-CN")
+    ok(page.input_value("#ntext") == "草稿还在", "file:// 切换语言保留正在写的草稿")
+    ok(page.inner_text("#addLabel") == "添加批注", "file:// 切换后按钮回到中文")
+    ok(page.inner_text("#targetLabel") == "对象", "file:// 切换后对象名称仍是「对象」")
+    ok((page.get_attribute("#ntext", "placeholder") or "").startswith("写修改意见（C）"),
+       "file:// 中文输入提示保持原来的长句")
+    zh_chip = page.inner_text("#qbox")
+    ok("引用（报告）" in zh_chip and "原句" in zh_chip, f"中文引用来源保持原文格式（实际 {zh_chip}）")
+    zh_counts = page.evaluate("() => [0, 1, 2].map(n => tMsg('cli.show.count', {count: n}))")
+    ok(zh_counts == ["0 条批注", "1 条批注", "2 条批注"], f"file:// 中文计数 0/1/2（实际 {zh_counts}）")
+    page.fill("#ntext", "请改标题")
+    page.select_option("#ntarget", "报告")
+    page.click("#addBtn")
+    page.wait_for_timeout(200)
+    notes = page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")
+    ok(len(notes) == 1 and notes[0]["text"] == "请改标题" and notes[0]["target"] == "报告"
+       and notes[0]["quote"] == "原句" and notes[0]["quoteFrom"] == "报告",
+       "file:// 批注原文、引用和对象值不随语言改写")
+    nid, rid, key = notes[0]["id"], page.evaluate("RID"), page.evaluate("P[0].key")
+    zh_quote = page.locator("#nlist blockquote").inner_text()
+    ok(zh_quote.startswith("报告：") and "原句" in zh_quote, f"中文批注引用保持「报告：」（实际 {zh_quote}）")
+    ok("请改标题" in page.inner_text("#nlist") and "报告" in page.inner_text("#nlist"), "中文列表显示原文和对象")
+    page.select_option("#localePick", "en")
+    en_quote = page.locator("#nlist blockquote").inner_text()
+    ok(en_quote.startswith("Report：") and "原句" in en_quote and "报告：" not in en_quote,
+       f"英文批注引用改显示名、原文不变（实际 {en_quote}）")
+    ok("Report" in page.inner_text("#nlist") and "请改标题" in page.inner_text("#nlist"), "切回英文只改对象显示")
+    again = page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")
+    ok(again[0]["id"] == nid and again[0]["text"] == "请改标题" and page.evaluate("RID") == rid
+       and page.evaluate("P[0].key") == key, "file:// 切换语言不改批注 ID、审阅标识和页面键")
+    ok(page.evaluate("localStorage.getItem('ae-locale:' + RID)") == "en", "页面把语言选择存在本机")
+    ok(not any(u.endswith(".json") or "/locales/" in u for u in seen), "file:// 不请求词典文件")
+    page.evaluate("localStorage.setItem('ae-locale:' + RID, 'fr')")
+    page.reload()
+    ok(page.evaluate("document.documentElement.lang") == "en", "本机存了无法识别的语言时沿用审阅默认")
+    page.evaluate("localStorage.setItem('ae-locale:' + RID, 'zh-CN')")
+    page.reload()
+    ok(page.evaluate("document.documentElement.lang") == "zh-CN" and page.inner_text("#addLabel") == "添加批注",
+       "本机保存的语言优先于审阅默认英文")
+    locale_edit_checks(page, "file://", lambda: page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))"))
+    ctx.close()
+
+    auto = tmp / "locale_auto"
+    auto.mkdir()
+    build(auto, locale="auto")
+    auto_url = (auto / "index.html").as_uri()
+    for browser_locale, expect_lang, label in (("en-US", "en", "Add annotation"),
+                                                ("zh-CN", "zh-CN", "添加批注"),
+                                                ("fr-FR", "en", "Add annotation")):
+        actx = browser.new_context(locale=browser_locale)
+        ap = actx.new_page()
+        ap.goto(auto_url)
+        langs = ap.evaluate("navigator.languages")
+        ok(ap.evaluate("document.documentElement.lang") == expect_lang and ap.inner_text("#addLabel") == label,
+           f"auto + {browser_locale} → {expect_lang}（languages={langs}）")
+        actx.close()
+
+    port = free_port()
+    server = start_server(d, port)
+    try:
+        sctx = browser.new_context()
+        sp = sctx.new_page()
+        net: list[tuple[str, str]] = []
+        sp.on("request", lambda req: net.append((req.method, req.url)))
+        sp.goto(f"http://127.0.0.1:{port}/")
+        sp.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        ok(sp.inner_text("#addLabel") == "Add annotation", "服务模式沿用审阅默认英文")
+        sp.fill("#ntext", "服务里的批注")
+        sp.select_option("#ntarget", "讲稿")
+        sp.click("#addBtn")
+        ok(wait_until(lambda: len(disk_notes(d)) == 1, sp, 5), "服务模式批注落盘")
+        stored = disk_notes(d)[0]
+        posts = sum(1 for method, _url in net if method == "POST")
+        info = json.loads((d / ".annotation-server.json").read_text(encoding="utf-8"))
+        rid = sp.evaluate("RID")
+        key = sp.evaluate("P[0].key")
+        sp.fill("#ntext", "草稿还在")
+        sp.select_option("#localePick", "zh-CN")
+        sp.wait_for_timeout(400)
+        kept = disk_notes(d)
+        manifest = json.loads((d / "review.json").read_text(encoding="utf-8"))
+        ok(sp.input_value("#ntext") == "草稿还在", "服务模式切换语言保留草稿")
+        ok(len(kept) == 1 and kept[0]["id"] == stored["id"] and kept[0]["text"] == "服务里的批注"
+           and kept[0]["target"] == "讲稿", "切换语言不改已落盘的批注")
+        ok(sum(1 for method, _url in net if method == "POST") == posts, "切换语言没有新的写请求")
+        ok(manifest["locale"] == "en" and manifest["reviewId"] == rid and sp.evaluate("P[0].key") == key
+           and info.get("port") == port, "切换语言不改审阅标识、页面键、默认语言和端口")
+        ok(not any("/locales/" in url or url.endswith("en.json") or url.endswith("zh-CN.json")
+                   for _method, url in net), "服务模式不请求词典文件")
+        locale_edit_checks(sp, "服务模式", lambda: disk_notes(d))
+        sctx.close()
+    finally:
+        stop(server)
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="ae-e2e-"))
     CLEANUP.add_dir(tmp)
@@ -428,6 +612,7 @@ def main() -> int:
             print(f"\n{len(RESULTS) - failed}/{len(RESULTS)} 通过")
             return 1 if failed else 0
         full_check_checks(browser, tmp)
+        locale_checks(browser, tmp)
 
         # ---------- 1. file:// 退回模式 ----------
         fdir = tmp / "file_mode"
@@ -734,10 +919,14 @@ def main() -> int:
         A, B = editable[0], editable[1]
         page.click(f'#nlist [data-note="{A}"] [data-act="edit"]')
         page.fill("#etext", "AAA 改到一半")
+        other_page = page.evaluate("P.find(p => p.n !== P[i].n).n")
+        page.select_option("#epage", str(other_page))
         page.click(f'#nlist [data-note="{B}"] [data-act="edit"]')
         ok(page.input_value("#etext") != "AAA 改到一半", "从批注 A 的编辑直接点批注 B 的「编辑」，B 不会带上 A 的草稿")
+        ok(page.input_value("#epage") == str(cur[B]["page"]), "批注 B 不会带上 A 尚未保存的目标页")
         page.click(f'#nlist [data-note="{A}"] [data-act="edit"]')
         ok(page.input_value("#etext") == "AAA 改到一半", "切回 A，A 的草稿还在")
+        ok(page.input_value("#epage") == str(other_page), "切回 A，尚未保存的目标页还在")
         page.click(f'#nlist [data-note="{A}"] [data-act="cancel"]')
         # 原页面已不存在的批注：提示条有数，在「批注」里挪到正确的页
         lost_id = B
