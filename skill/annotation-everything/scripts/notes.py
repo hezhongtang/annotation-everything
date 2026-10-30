@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
 from build_viewer import find_pages, resolve_sources, strip_tags, write_private, PAGE_HEAD  # noqa: E402
@@ -240,9 +241,85 @@ def pair_lines(n: dict[str, Any], texts: dict[str, dict[int, str]]) -> list[str]
     return [f"  ↔ 提示：{other}第 {n.get('page')} 页有{MATCH_ZH[got[0]]}的句子「{got[1]}」，确认是否也要同步改（批注时没勾选同改）"]
 
 
+def _en_target(cat: dict, value: object) -> str:
+    key = {"报告": "viewer.target.report", "讲稿": "viewer.target.script",
+           "报告和讲稿": "viewer.target.both"}.get(str(value or ""))
+    if key:
+        return i18n.translate(cat, key)
+    if value:
+        return str(value)
+    return i18n.translate(cat, "viewer.target.unset")
+
+
+def _to_markdown_en(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolved: bool, page: int | None,
+                    sources: dict[str, Path | None] | None = None, handoff: dict[str, Any] | None = None,
+                    only: set[str] | None = None, always: list[dict[str, str]] | None = None) -> str:
+    """英文阅读输出。批注原文、引用原文和 id 不翻译；JSON 导出仍走原始对象。"""
+    cat = i18n.load_catalog("en")
+
+    def t(key: str, **params: object) -> str:
+        return i18n.translate(cat, key, **params)
+
+    all_notes = doc["notes"]
+    titles = {p["n"]: p.get("title", "") for p in manifest.get("pages", [])}
+    keys = {p["n"]: p.get("key", "") for p in manifest.get("pages", [])}
+    notes = [n for n in all_notes if (include_resolved or n.get("status") != "resolved")
+             and (page is None or n.get("page") == page) and (only is None or n.get("id") in only)]
+    notes.sort(key=lambda n: (int(n.get("page", 0) or 0), str(n.get("at", ""))))
+    n_open = sum(n.get("status", "open") == "open" for n in all_notes)
+    n_draft = sum(n.get("status") == "drafted" for n in all_notes)
+    n_resolved = len(all_notes) - n_open - n_draft
+    title = manifest.get("title") or "Review"
+    counts = [t("cli.show.open", count=n_open)]
+    if n_draft:
+        counts.append(t("cli.show.drafted", count=n_draft))
+    counts.append(t("cli.show.resolved", count=n_resolved))
+    head = [
+        "# " + t("cli.show.heading", title=str(title)),
+        t("cli.show.count", count=len(all_notes))
+        + " (" + ", ".join(counts) + "); "
+        + t("cli.show.listing", count=len(notes)) + f". rev {doc.get('rev')}",
+    ]
+    if sources:
+        parts = []
+        for kind, path in sources.items():
+            if not path:
+                continue
+            label = t("cli.show.source.report" if kind == "report" else "cli.show.source.script")
+            parts.append(f"{label} = {path}")
+        if parts:
+            head.append(t("cli.show.sources", list="; ".join(parts)))
+    out = ["\n".join(head)]
+    last = None
+    for n in notes:
+        if n["page"] != last:
+            last = n["page"]
+            page_title = titles.get(last) or n.get("title", "")
+            suffix = f" (key {keys[last]})" if keys.get(last) else ""
+            out.append(f"\n## {t('cli.show.pageWord', page=last)} | {page_title}{suffix}")
+        state = ""
+        if n.get("status") == "resolved":
+            state = f"[{t('cli.status.resolved')}] "
+        elif n.get("status") == "drafted":
+            state = f"[{t('cli.status.drafted')}] "
+        body = str(n.get("text", ""))
+        line = f"- `{n['id']}` {state}[{_en_target(cat, n.get('target'))}] " + body.replace("\n", "\n  ")
+        if n.get("quote"):
+            origin = f" ({_en_target(cat, n['quoteFrom'])})" if n.get("quoteFrom") else ""
+            line += f"\n  > {t('cli.show.quote')}{origin}: {n['quote']}"
+        out.append(line)
+    if not notes:
+        out.append("\n" + t("cli.show.emptyList"))
+    return "\n".join(out) + "\n"
+
+
 def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolved: bool, page: int | None,
                 sources: dict[str, Path | None] | None = None, handoff: dict[str, Any] | None = None,
-                only: set[str] | None = None, always: list[dict[str, str]] | None = None) -> str:
+                only: set[str] | None = None, always: list[dict[str, str]] | None = None,
+                locale: str | None = None) -> str:
+    if locale == "en":
+        return _to_markdown_en(doc, manifest, include_resolved=include_resolved, page=page, sources=sources,
+                               handoff=handoff, only=only, always=always)
     texts = side_texts(sources)
     all_notes = doc["notes"]
     marks = mark_numbers(all_notes)
@@ -412,6 +489,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--all", action="store_true", help="包含已处理")
     s.add_argument("--page", type=int)
     s.add_argument("--json", action="store_true", help="输出原始 JSON")
+    s.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
     s.add_argument("--batch", type=int, help="只看第 N 批涉及的批注（提交时未处理的、这批初改或处理过的）")
     r = sub.add_parser("resolve", help="标记为已处理（两段流程的初改阶段记为「已初改·待复核」）")
     r.add_argument("dir", type=str, help="审阅目录或审阅标识")
@@ -495,6 +573,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd == "show":
         doc = store.load(d)
+        manifest = load_manifest(d)
+        stored = manifest.get("locale")
+        try:
+            lang = i18n.resolve_locale(
+                i18n.effective_choice(a.locale, os.environ.get("AE_LOCALE"), stored if isinstance(stored, str) else None),
+                system_languages=i18n.system_languages())
+        except i18n.LocaleError as exc:
+            print(f"错误：{exc}", file=sys.stderr)
+            return 2
         only = batch_note_ids(d, doc["notes"], a.batch) if a.batch else None
         if a.json:
             notes = [n for n in doc["notes"] if (a.all or n.get("status") != "resolved")
@@ -502,14 +589,14 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({**doc, "notes": notes, "handoff": store.handoff_state(d), "alwaysSkills": store.always_skills(d)},
                              ensure_ascii=False, indent=2))
         else:
-            manifest = load_manifest(d)
             try:
                 sources = resolve_sources(d, manifest) if manifest else None
             except SystemExit as e:
                 print(f"警告：{e}", file=sys.stderr)
                 sources = None
             print(to_markdown(doc, manifest, include_resolved=a.all or bool(a.batch), page=a.page, sources=sources,
-                              handoff=store.handoff_state(d, full=False), only=only, always=store.always_skills(d)), end="")
+                              handoff=store.handoff_state(d, full=False), only=only, always=store.always_skills(d),
+                              locale=lang), end="")
         return 0
     if a.cmd in ("resolve", "reopen"):
         status = "resolved" if a.cmd == "resolve" else "open"

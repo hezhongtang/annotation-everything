@@ -12,6 +12,7 @@ header{display:flex;align-items:center;gap:12px;padding:10px 18px;background:var
 header h1{font-size:15px;font-weight:600;margin:0;flex:1 1 260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 header .stat{font-size:13px;opacity:.9;white-space:nowrap}
 header button,header select{font:inherit;font-size:13px;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.1);color:#fff;border-radius:6px;padding:5px 10px;cursor:pointer}
+header label{display:flex;align-items:center;gap:6px;font-size:13px;white-space:nowrap}
 header select option{color:#111}
 #mode{font-size:12px;border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:help;border:1px solid rgba(255,255,255,.3)}
 #mode.server{background:#1d6b47}#mode.server.old{background:#9b2c1f}#mode.offline{background:#8a5a12}#mode.mismatch{background:#9b2c1f}#mode.file{background:rgba(255,255,255,.12)}
@@ -181,6 +182,13 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
   <button id="strayBtn" title="这个地址下还暂存着别的审阅没保存的改动（旧标签页留下的），可下载后导回那份审阅">其他审阅的未保存改动</button>
   <button id="handBtn" title="这一批批注写好了，交给代理处理（A）">交给 Agent<kbd>A</kbd></button>
   <button id="notesBtn" title="查看、导出、导入全部批注（N）">批注<span class="badge" id="ncount">0</span><span class="badge fl" id="nflight"></span><span class="badge dr" id="ndraft"></span><kbd>N</kbd></button>
+  <label id="localeLabel"><span id="localeLabelText">界面语言</span>
+    <select id="localePick" aria-label="界面语言">
+      <option value="auto">自动</option>
+      <option value="zh-CN">简体中文</option>
+      <option value="en">English</option>
+    </select>
+  </label>
 </header>
 <div class="resume" id="srvBar" role="alert"><span id="srvText"></span><code id="srvCmd"></code><button id="srvCopy">复制命令</button><button id="srvClose" title="关闭提示">×</button></div>
 <div class="resume" id="resume" role="status"><span id="resumeText"></span><button id="resumeGo" style="display:none"></button><button id="resumeClose" title="关闭提示">×</button></div>
@@ -192,14 +200,14 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
     <!-- 输入框停靠在面板底部：讲稿再长也不用往下翻找；翻到底时回到批注列表下方的原位 -->
     <div class="form" id="nform"><div class="quote" id="qbox"></div><span id="styleChip"></span>
       <textarea id="ntext" rows="2" placeholder="写修改意见（C）。可先选中报告或讲稿里的文字：直接删除（D）、改为（R），或作为引用写批注；也可以先「在报告上标注」（单击放点、拖动框选）。"></textarea>
-      <div class="row">对象 <select id="ntarget"><option>报告</option><option>讲稿</option><option>报告和讲稿</option></select>
+      <div class="row"><span id="targetLabel">对象</span> <select id="ntarget"><option value="报告">报告</option><option value="讲稿">讲稿</option><option value="报告和讲稿">报告和讲稿</option></select>
         <label class="sk" title="处理这条批注时让 Agent 调用的技能（skill），多个用逗号分隔（K）">技能<kbd>K</kbd><input id="nskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" placeholder="可选，如 humanizer-zh"></label>
         <button data-act="always" id="alwaysBtn" title="常驻技能：这份审阅里每条批注（按范围）都让 Agent 先调用，适合需要长期约束的 Agent（G）">常驻技能<span id="alwaysN"></span><kbd>G</kbd></button>
         <button data-act="pin" id="pinBtn" title="在报告上标注：单击放一个点，拖动框选一块区域（P）">在报告上标注<kbd>P</kbd></button>
         <button data-act="style" id="styleBtn" title="风格优化：整页 / 标注处（S）">风格优化<kbd>S</kbd></button>
         <button data-act="seelist" id="seeList" title="看本页已有的批注">本页批注 <span id="nhere">0</span> ↑</button>
         <span class="grow"></span>
-        <button class="primary" data-act="add" title="添加批注">添加批注<kbd><span class="kmod">⌘</span>↵</kbd></button></div></div></div>
+        <button class="primary" data-act="add" id="addBtn" title="添加批注"><span id="addLabel">添加批注</span><kbd><span class="kmod">⌘</span>↵</kbd></button></div></div></div>
 <div id="selbar"><div class="sbtns"><button data-sel="delete" title="删除选中的文字（D）">删除<kbd>D</kbd></button><button data-sel="replace" title="把选中的文字改为…（R）">改为…<kbd>R</kbd></button><button data-sel="comment" title="以选中文字为引用写批注（C）">批注<kbd>C</kbd></button></div>
 <label id="pairRow" title="另一侧同一页有相同或相近的句子：勾选后这条批注同时要求改两侧（B 切换）"><input type="checkbox" id="pairOn"><span id="pairText"></span><kbd>B</kbd></label></div>
 <div id="pinpop" role="dialog"></div>
@@ -246,6 +254,7 @@ const P=__PAGES__, S=__SECTIONS__, NS=__NS__, NAME=__NAME__, RID=__RID__, N=P.le
 const SKILL_CONTEXT=__SKILL_CONTEXT__;
 const SECT=__SECT__, RCSS=__RCSS__, SECT_KEYS=P.map(p=>"page-"+p.key);
 const APP="annotation-everything", FILE=location.protocol==="file:";
+const CATALOGS=__CATALOGS__, REVIEW_LOCALE=__LOCALE__;
 const $=id=>document.getElementById(id);
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},
   set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}},
@@ -259,6 +268,116 @@ let markMode=false, pendingPin=null, quote="", quoteFrom="";   // 标注模式�
 const drafts=SS.get(K.drafts,{})||{};   // 各页没写完的批注；存在本标签页的会话存储里，刷新不丢
 const editBuf={};                        // 正在改的已有批注的内容（列表重绘、翻页时不丢）
 const DEL_TEXT="删除引用的这段文字", REP_PREFIX="改为：";   // 快捷修改的固定说法（导出/导入据此还原）
+const LOCALE_STORE="ae-locale:"+RID;
+let uiLocale="zh-CN";
+function normLocale(tag){
+  if(typeof tag!=="string") return null;
+  const parts=tag.trim().toLowerCase().replace(/_/g,"-").split("-").filter(Boolean);
+  if(!parts.length) return null;
+  if(parts[0]==="en") return "en";
+  if(parts[0]!=="zh") return null;
+  const rest=parts.slice(1);
+  if(rest.some(p=>p==="hant"||p==="tw"||p==="hk"||p==="mo")) return null;
+  if(rest.some(p=>p!=="hans"&&p!=="cn")) return null;
+  return "zh-CN";
+}
+function resolveUi(choice){
+  if(choice==null) return "zh-CN";
+  const text=String(choice).trim();
+  if(!text) return "zh-CN";
+  const hit=normLocale(text);
+  if(hit) return hit;
+  if(text.toLowerCase()==="auto"){
+    const langs=(navigator.languages&&navigator.languages.length)?navigator.languages:[navigator.language];
+    for(const raw of langs){const matched=normLocale(raw); if(matched) return matched}
+    return "en";
+  }
+  return "zh-CN";
+}
+function savedLocale(){try{return localStorage.getItem(LOCALE_STORE)}catch(e){return null}}
+function activeChoice(){
+  const saved=savedLocale();
+  if(typeof saved==="string" && saved.trim()){
+    const text=saved.trim();
+    if(normLocale(text) || text.toLowerCase()==="auto") return text;
+  }
+  if(typeof REVIEW_LOCALE==="string" && REVIEW_LOCALE.trim()) return REVIEW_LOCALE.trim();
+  return null;
+}
+const missingKeys=[];
+function pluralCat(locale, count){
+  if(locale==="en") return count===1?"one":"other";
+  return "other";
+}
+function interpolate(text, params){
+  return String(text).replace(/\{\{|\}\}|\{([A-Za-z_][A-Za-z0-9_]*)\}/g,(m,name)=>{
+    if(m==="{{") return "{";
+    if(m==="}}") return "}";
+    if(!params || !Object.prototype.hasOwnProperty.call(params,name)) return m;
+    return String(params[name]);
+  });
+}
+function localeMissing(){return missingKeys.slice()}
+function tMsg(key, params){
+  const count=params && Number.isInteger(params.count)?params.count:null;
+  function pick(locale){
+    const messages=CATALOGS[locale]||{};
+    let chosen=key;
+    if(count!==null){
+      const branch=key+"."+pluralCat(locale, count);
+      if(Object.prototype.hasOwnProperty.call(messages, branch)) chosen=branch;
+    }
+    if(!Object.prototype.hasOwnProperty.call(messages, chosen)) return null;
+    return interpolate(messages[chosen], params||{});
+  }
+  const primary=pick(uiLocale);
+  if(primary!==null) return primary;
+  const other=uiLocale==="en"?"zh-CN":"en";
+  const fallback=pick(other);
+  if(fallback!==null){missingKeys.push(key); return fallback}
+  return key;
+}
+function targetLabel(v){
+  if(v==="报告") return tMsg("viewer.target.report");
+  if(v==="讲稿") return tMsg("viewer.target.script");
+  if(v==="报告和讲稿") return tMsg("viewer.target.both");
+  return v||tMsg("viewer.target.unset");
+}
+function applyLocale(){
+  uiLocale=resolveUi(activeChoice());
+  document.documentElement.lang=uiLocale;
+  const pick=$("localePick");
+  if(pick){
+    for(const opt of pick.options){
+      if(opt.value==="auto") opt.textContent=tMsg("locale.auto");
+      else if(opt.value==="zh-CN") opt.textContent=tMsg("locale.name.zh-CN");
+      else if(opt.value==="en") opt.textContent=tMsg("locale.name.en");
+    }
+    const choice=activeChoice();
+    pick.value=choice==null?"zh-CN":(String(choice).trim().toLowerCase()==="auto"?"auto":(normLocale(choice)||"zh-CN"));
+    const name=$("localeLabelText");
+    if(name) name.textContent=tMsg("locale.switcher");
+    pick.setAttribute("aria-label", tMsg("locale.switcher"));
+  }
+  const area=$("ntext");
+  if(area){
+    const hint=tMsg("viewer.textPlaceholder");
+    if(area.dataset.ph) area.dataset.ph=hint;
+    if(!styleOn) area.placeholder=hint;
+  }
+  const add=$("addLabel");
+  if(add) add.textContent=tMsg("viewer.add");
+  const targetName=$("targetLabel");
+  if(targetName) targetName.textContent=tMsg("viewer.target");
+  const targetSel=$("ntarget");
+  if(targetSel){for(const opt of targetSel.options) opt.textContent=targetLabel(opt.value)}
+  if(typeof showQuote==="function") showQuote();
+  if(typeof refreshList==="function") refreshList(true);
+}
+$("localePick").addEventListener("change",()=>{
+  try{localStorage.setItem(LOCALE_STORE, $("localePick").value)}catch(e){}
+  applyLocale();
+});
 const MOD=/Mac|iPhone|iPad/.test(navigator.platform||navigator.userAgent)?"⌘":"Ctrl";
 document.querySelectorAll(".kmod").forEach(e=>e.textContent=MOD);
 let sel=null;   // 当前选中的文字：{text, from:报告/讲稿, x, y, pair}
@@ -622,8 +741,9 @@ function noteHtml(x){
         :`<div class="body"><del>${escH(qe.from)}</del> → <ins>${escH(qe.to)}</ins></div>`)
     :`<div class="body">${escH(x.text).replace(/\n/g,"<br>")}</div>`;
   const who=w=>escH(w==="claude"?"Claude":w);
-  return `<div class="note${done?" done":""}${dr?" drafted":""}" data-note="${id}"><div class="meta"><span>${escH(x.target||"未指定")}${qe?(qe.op==="delete"?" · 删除":" · 改写"):""}${x.style&&x.style.scope?" · 风格优化"+(hasMark(x)?"":"·整页"):""}${hasMark(x)?` · ${regionOf(x)?"框选":"标点"} ${markNo(x.page,x.id)}`:""}${done?`<span class="chip">已处理${x.resolvedBy&&x.resolvedBy!=="page"?" · "+who(x.resolvedBy):""}</span>`:""}${dr?`<span class="chip dr">已初改·待复核${x.draftedBy?" · "+who(x.draftedBy):""}</span>`:""}${fl?`<span class="chip fl" title="已交给 Agent，正在处理">处理中</span>`:""}</span><span class="acts">${acts}</span></div>`
-   +(x.quote&&!qe?`<blockquote>${x.quoteFrom?escH(x.quoteFrom)+"：":""}${escH(x.quote)}</blockquote>`:"")
+  const targetShown=targetLabel(x.target);
+  return `<div class="note${done?" done":""}${dr?" drafted":""}" data-note="${id}"><div class="meta"><span>${escH(targetShown)}${qe?(qe.op==="delete"?" · 删除":" · 改写"):""}${x.style&&x.style.scope?" · 风格优化"+(hasMark(x)?"":"·整页"):""}${hasMark(x)?` · ${regionOf(x)?"框选":"标点"} ${markNo(x.page,x.id)}`:""}${done?`<span class="chip">已处理${x.resolvedBy&&x.resolvedBy!=="page"?" · "+who(x.resolvedBy):""}</span>`:""}${dr?`<span class="chip dr">已初改·待复核${x.draftedBy?" · "+who(x.draftedBy):""}</span>`:""}${fl?`<span class="chip fl" title="已交给 Agent，正在处理">处理中</span>`:""}</span><span class="acts">${acts}</span></div>`
+   +(x.quote&&!qe?`<blockquote>${x.quoteFrom?escH(targetLabel(x.quoteFrom))+"：":""}${escH(x.quote)}</blockquote>`:"")
    +body
    +(x.orphan?`<div class="anchor" style="color:#a2412f">⚠ 原来所在的页面在新版报告里找不到，页码可能不对：点「编辑」挪到正确的页</div>`:"")
    +(ed?`<div class="anchor">移到 <select id="epage">${P.map(q=>`<option value="${q.n}"${q.n===x.page?" selected":""}>第 ${q.n} 页</option>`).join("")}</select></div>`:"")
@@ -643,7 +763,7 @@ function refreshList(force){
   const mine=notes.filter(x=>x.page===P[i].n), nDone=mine.filter(isDone).length, shown=mine.filter(x=>!(hideDone&&isDone(x)));   // 待复核的不算已处理，不隐藏
   $("nhere").textContent=mine.length;
   $("nlist").innerHTML=`<div class="lab"><span>本页批注${mine.length&&mine.every(isDone)?" · 全部已处理 ✓":""}</span>${nDone?`<button data-act="hide">${hideDone?`显示已处理（${nDone}）`:`隐藏已处理（${nDone}）`}</button>`:""}</div>`
-    +(shown.map(noteHtml).join("")||'<p class="empty">暂无批注。</p>');
+    +(shown.map(noteHtml).join("")||`<p class="empty">${escH(tMsg("viewer.empty"))}</p>`);
   drawPins();updateCounts()}
 // 「批注」按钮：红 = 还没交给 Agent 的未处理，蓝 = 处理中（已交给 Agent），琥珀 = 已初改·待复核
 function counts(list){let o=0,f=0,d=0;list.forEach(x=>{if(isDraft(x))d++;else if(inFlight(x))f++;else if(!isDone(x))o++});return{o,f,d}}
@@ -661,7 +781,8 @@ function setMarkMode(on){markMode=on;stage.classList.toggle("markmode",on);const
   if(on)toast(remarkId?"给这条批注标注：在左侧报告上单击放点，或拖动框选（Esc 取消）":"在左侧报告上单击放一个点，或按住拖动框选一块区域（Esc 取消）",3000);
   else{remarkId=null;if(rdraw){if(rdraw.box)rdraw.box.remove();rdraw=null}}}
 function showQuote(){const q=$("qbox");q.style.display=quote?"block":"none";
-  q.innerHTML=quote?`引用（${escH(quoteFrom)}）：${escH(quote)}${quotePair?`<br>↔ ${escH(quotePair.side)}对应：${escH(clip(quotePair.text,80))}（同时改）`:""} <a href="#" id="qx">取消</a>`:"";
+  const fromLabel=quoteFrom?escH(targetLabel(quoteFrom)):"";
+  q.innerHTML=quote?`${escH(tMsg("viewer.quote"))}（${fromLabel}）：${escH(quote)}${quotePair?`<br>↔ ${escH(quotePair.side)}对应：${escH(clip(quotePair.text,80))}（同时改）`:""} <a href="#" id="qx">取消</a>`:"";
   if(quote)$("qx").onclick=e=>{e.preventDefault();quote="";quotePair=null;showQuote()}}
 function setQuote(t,from){quote=clip(t.replace(/\s+/g," "),300);quoteFrom=from;showQuote();$("ntarget").value=from}
 document.addEventListener("compositionstart",()=>{composing=true},true);
@@ -1283,6 +1404,7 @@ document.addEventListener("keydown",e=>{
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE)poll()});
 
 (async function init(){
+  applyLocale();
   if(FILE){mirror();updateMode();render();return}
   LS.del(K.notes);                      // 服务模式不在浏览器里留整份批注副本
   LS.set(K.meta,{title:unH(document.title),name:NAME,ns:NS});   // 只记名称：这个地址以后换给别的审阅时，那边的页面能说出暂存属于谁
