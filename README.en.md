@@ -92,6 +92,8 @@ annotation-everything moves this whole process into a single page that runs on y
   </tr>
 </table>
 
+The review page can use Simplified Chinese or English. Pass `--locale auto`, `zh-CN`, or `en` when building; the page can switch language too, and the choice stays in this browser. Annotation text stays as written, and the stored target values `报告`, `讲稿`, and `报告和讲稿` do not change with the language. Omitting `--locale` keeps a new review in Chinese and leaves an existing review on its saved choice. Edit and delete buttons stay in Chinese for now.
+
 <details>
 <summary><b>Export and import annotations</b></summary>
 <br>
@@ -258,12 +260,12 @@ See [references/formats.md](skill/annotation-everything/references/formats.md) f
 | Command | What it does |
 |---|---|
 | `ae.py install` / `doctor` / `repair` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--link codex,agents,zcode` symlinks it into other agents' skill directories); check installation, runtime, optional tools and dev environment (`--json` for structured output); repair what the checks find (prints a plan first, fixes safe items automatically, `--forget-stale`/`--stop-orphans` run the destructive ones explicitly, `--dry-run` only prints); uninstall removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first) |
-| `build_viewer.py --report … --script … --out <review-dir>` | Build the review page; `--rebuild <review-dir>` rebuilds it with the recorded options |
+| `build_viewer.py --report … --script … --out <review-dir>` | Build the review page; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
 | `serve.py <review-dir>` | Start the local server; each review keeps its own dedicated port |
 | `serve.py list` / `status` / `forget` | List every review on this machine, show one review's status, remove a ledger entry you no longer need |
 | `serve.py check` | Run the server's security self-check |
 | `notes.py wait` / `claim` | Wait for a submission, or take one that is already waiting |
-| `notes.py show` / `resolve` / `reopen` | List annotations, mark them resolved, reopen them |
+| `notes.py show` / `resolve` / `reopen` | List annotations, mark them resolved, reopen them. `show --locale` chooses the reading language and beats `AE_LOCALE` and the review setting; `show --json` still exports the raw values |
 | `notes.py done` / `review` / `diff` | Close the current stage, record a review verdict, show page by page what the draft changed |
 | `notes.py batches` | Show batch history |
 | `notes.py skills` | Show or set the skill catalog and standing skills |
@@ -290,8 +292,10 @@ Run `serve.py check` after any change to the server; it verifies each of these c
 skill/annotation-everything/       the skill itself, copied as a whole on install
 ├── SKILL.md                       operating guide for the agent
 ├── references/formats.md          input and output formats
+├── locales/                       Chinese and English messages (zh-CN.json, en.json) and the locale contract
 ├── scripts/
 │   ├── build_viewer.py            builds the review page index.html and review.json
+│   ├── i18n.py                    loads the shared catalogs and fills in the chosen language
 │   ├── viewer_template.html       review page template (server mode and local file mode)
 │   ├── serve.py                   local server: serve / status / list / forget / check
 │   ├── notes.py                   annotation command line: wait / show / resolve / done / review and more

@@ -92,6 +92,8 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
   </tr>
 </table>
 
+对照页可以选择简体中文或英文。生成时传入 `--locale auto`、`zh-CN` 或 `en`，页面上也可以切换，选择只保存在本机浏览器。批注原文保持原样，对象的存储值 `报告`、`讲稿`、`报告和讲稿` 不随语言改变。省略 `--locale` 时，新审阅保持中文，已有审阅沿用已保存的选择。编辑、删除等其余按钮仍是中文。
+
 <details>
 <summary><b>导出与导入批注</b></summary>
 <br>
@@ -258,12 +260,12 @@ python3 $S/notes.py wait /tmp/ae-demo
 | 命令 | 作用 |
 |---|---|
 | `ae.py install` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--link codex,agents,zcode` 为其他 Agent 建指向副本的软链接）；体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果）；修复体检发现的问题（先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止） |
-| `build_viewer.py --report … --script … --out 审阅目录` | 生成对照页；`--rebuild 审阅目录` 按上次记录的参数重新生成 |
+| `build_viewer.py --report … --script … --out 审阅目录` | 生成对照页；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
 | `serve.py 审阅目录` | 启动本机服务；每份审阅都有固定的专属端口 |
 | `serve.py list` / `status` / `forget` | 列出本机所有审阅、查看某份审阅的状态、删除不再使用的台账记录 |
 | `serve.py check` | 运行服务安全自检 |
 | `notes.py wait` / `claim` | 等待审阅人提交，或直接接收已有的提交 |
-| `notes.py show` / `resolve` / `reopen` | 列出批注、标为已处理、重新打开 |
+| `notes.py show` / `resolve` / `reopen` | 列出批注、标为已处理、重新打开。`show --locale` 选择阅读语言，优先于 `AE_LOCALE` 和审阅设置；`show --json` 仍导出原始值 |
 | `notes.py done` / `review` / `diff` | 结束当前阶段、给出复核结论、按页查看初改改动了哪些地方 |
 | `notes.py batches` | 查看处理记录 |
 | `notes.py skills` | 查看或设置技能目录和常驻技能 |
@@ -290,8 +292,10 @@ python3 $S/notes.py wait /tmp/ae-demo
 skill/annotation-everything/       技能本体，安装时整体复制
 ├── SKILL.md                       给 Agent 看的操作说明
 ├── references/formats.md          输入与输出格式
+├── locales/                       中英消息（zh-CN.json、en.json）和语言选择契约
 ├── scripts/
 │   ├── build_viewer.py            生成对照页 index.html 和 review.json
+│   ├── i18n.py                    读取共享词典，并按所选语言插值
 │   ├── viewer_template.html       对照页模板（服务模式和本地文件模式）
 │   ├── serve.py                   本机服务：serve / status / list / forget / check
 │   ├── notes.py                   批注命令行：wait / show / resolve / done / review 等
