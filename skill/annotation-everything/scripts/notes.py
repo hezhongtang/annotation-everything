@@ -155,6 +155,40 @@ def target_text(h: dict[str, Any], lang: str | None = None) -> str:
     return out
 
 
+def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
+    """只翻译已知交接错误；中文和未知错误保留原始诊断，不解析异常字符串。"""
+    messages = {
+        "batch-not-active": "cli.hand.error.batchNotActive",
+        "other-draft-batch": "cli.hand.error.otherDraftBatch",
+        "review-reason-required": "cli.hand.error.reviewReasonRequired",
+        "note-not-drafted": "cli.hand.error.noteNotDrafted",
+        "note-not-reviewing": "cli.hand.error.noteNotReviewing",
+        "note-outside-review": "cli.hand.error.noteOutsideReview",
+        "unreviewed": "cli.hand.error.unreviewed",
+        "ambiguous-batches": "cli.hand.error.ambiguousBatches",
+        "final-forbidden": "cli.hand.error.finalForbidden",
+        "subagents-forbidden": "cli.hand.error.subagentsForbidden",
+        "review-not-claimed": "cli.hand.error.reviewNotClaimed",
+        "already-done": "cli.hand.error.alreadyDone",
+    }
+    if lang != "en" or not isinstance(error, store.HandoffError) or error.code not in messages:
+        return str(error)
+    t = cli_text(lang)
+    params = dict(error.params)
+    if error.code == "unreviewed":
+        params.update(count=len(params["ids"]), ids=t("cli.hand.itemSep").join(params["ids"]))
+    if error.code == "ambiguous-batches":
+        params["batches"] = t("cli.hand.itemSep").join(
+            t("cli.hand.error.batchState", seq=seq, status=label(t, STATUS_KEY.get(status, ""), status))
+            for seq, status in params["batches"])
+    if "status" in params:
+        params["status"] = label(t, STATUS_KEY.get(params["status"], ""), params["status"])
+    if error.code == "note-not-reviewing":
+        params["batch"] = (t("cli.hand.error.batchState", seq=params["seq"], status=params["status"])
+                           if params["seq"] is not None and params["status"] else t("cli.hand.error.noReviewBatch"))
+    return t(messages[error.code], **params)
+
+
 def handoff_lines(state: dict[str, Any] | None, lang: str | None = None) -> list[str]:
     """「交给 Agent」提交的摘要行（附言是用户在页面上写给代理的话）。"""
     t = cli_text(lang)
@@ -736,7 +770,7 @@ def main(argv: list[str] | None = None) -> int:
                       else t("cli.hand.noteNoBatch", id=nid, why=e), file=sys.stderr)
                 bad += 1
             except store.NoteError as e:
-                print(t("cli.hand.noteFailed", id=nid, why=e), file=sys.stderr)
+                print(t("cli.hand.noteFailed", id=nid, why=handoff_error_text(e, lang)), file=sys.stderr)
                 bad += 1
         return 1 if bad else 0
     if a.cmd == "import":
@@ -918,7 +952,7 @@ def main(argv: list[str] | None = None) -> int:
             print(t("cli.hand.doneMissing"), file=sys.stderr)
             return 1
         except store.NoteError as e:
-            print(t("cli.hand.doneRefused", why=e), file=sys.stderr)
+            print(t("cli.hand.doneRefused", why=handoff_error_text(e, lang)), file=sys.stderr)
             return 1
         if item["status"] in ("drafted", "review"):
             snapshot(d, item, "draft")
@@ -944,7 +978,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(t("cli.hand.noteMissing", id=nid), file=sys.stderr)
                 bad += 1
             except store.NoteError as e:
-                print(t("cli.hand.noteFailed", id=nid, why=e), file=sys.stderr)
+                print(t("cli.hand.noteFailed", id=nid, why=handoff_error_text(e, lang)), file=sys.stderr)
                 bad += 1
         return 1 if bad else 0
     if a.cmd == "diff":

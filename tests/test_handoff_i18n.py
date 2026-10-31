@@ -403,6 +403,86 @@ class CliFlowTests(unittest.TestCase):
         self.assertIn("Confirm whether to update it too (change both sides was not selected)", out)
         self.assertNotIn("Also change the other side", out)
 
+    def assert_refusal(self, args, *english):
+        paths = [self.d / store.NOTES_FILE, self.d / store.HANDOFF_FILE]
+        before = [p.read_bytes() if p.exists() else None for p in paths]
+        for lang in ("zh-CN", "en"):
+            got = run_cli(*args, "--locale", lang)
+            self.assertEqual(got.returncode, 1, got.stdout + got.stderr)
+            if lang == "en":
+                self.assertFalse(_CJK.search(got.stderr), got.stderr)
+                for text in english:
+                    self.assertIn(text, got.stderr)
+            else:
+                self.assertTrue(_CJK.search(got.stderr), got.stderr)
+            self.assertEqual([p.read_bytes() if p.exists() else None for p in paths], before,
+                             "拒绝操作不能写入批注或批次状态")
+
+    def test_done_refusals_keep_stop_and_subagent_requirements_in_english(self):
+        store.handoff_submit(self.d, "", target="review")
+        self.assert_refusal(("done", str(self.d), "--seq", "1", "--final"),
+                            "batch 1", "stop at “drafted, waiting for review”", "the user can finalize it on the page")
+        store.handoff_claim(self.d)
+        store.handoff_submit(self.d, "", target="final", allow_subagents=False)
+        self.assert_refusal(("done", str(self.d), "--seq", "2", "--draft"),
+                            "batch 2", "user did not allow subagents", "notes.py done without --draft")
+
+    def test_done_unreviewed_refusal_keeps_ids_count_and_recovery_in_english(self):
+        store.handoff_submit(self.d, "", target="review")
+        store.handoff_claim(self.d)
+        for nid in (self.a, self.b):
+            store.set_status(self.d, nid, "drafted", by="drafter")
+        store.handoff_done(self.d)
+        store.handoff_request_review(self.d, 1)
+        store.handoff_claim(self.d, stage="review")
+        self.assert_refusal(("done", str(self.d), "--seq", "1"), "2 drafted annotations",
+                            self.a, self.b, "notes.py review for each one", "--accept-rest only after confirming")
+        store.review(self.d, self.a, "ok")
+        self.assert_refusal(("done", str(self.d), "--seq", "1"), "1 drafted annotation without",
+                            self.b, "--accept-rest only after confirming")
+
+    def test_done_waiting_and_finalized_refusals_are_localized(self):
+        store.handoff_submit(self.d, "", target="review")
+        store.handoff_claim(self.d)
+        store.handoff_done(self.d)
+        self.assert_refusal(("done", str(self.d), "--seq", "1"), "Batch 1 is waiting for review",
+                            "notes.py claim --stage review", "the user must choose that action on the page")
+        store.handoff_request_review(self.d, 1)
+        store.handoff_claim(self.d, stage="review")
+        store.handoff_done(self.d)
+        self.assert_refusal(("done", str(self.d), "--seq", "1"), "Batch 1 is already finalized")
+
+    def test_done_multiple_active_batches_names_each_batch_in_english(self):
+        for _ in range(2):
+            store.handoff_submit(self.d)
+            store.handoff_claim(self.d)
+        self.assert_refusal(("done", str(self.d)), "batch 1 (in progress)", "batch 2 (in progress)",
+                            "Use --seq to choose")
+
+    def test_review_business_refusals_are_localized(self):
+        self.assert_refusal(("review", str(self.d), self.a, "--return"), "Give a reason with --note")
+        self.assert_refusal(("review", str(self.d), self.a, "--ok"), "has no draft to review", "notes.py resolve")
+        store.handoff_submit(self.d, "", target="review")
+        store.handoff_claim(self.d)
+        store.set_status(self.d, self.a, "drafted", by="drafter")
+        self.assert_refusal(("review", str(self.d), self.a, "--ok"), "batch 1 (in progress)",
+                            "notes.py claim --stage review first")
+        store.handoff_done(self.d)
+        self.assert_refusal(("resolve", str(self.d), self.a, "--seq", "1"), "Batch 1 is not active")
+        store.handoff_submit(self.d)
+        store.handoff_claim(self.d)
+        self.assert_refusal(("resolve", str(self.d), self.a, "--seq", "2"),
+                            "was drafted in batch 1", "Do not handle it in batch 2")
+        store.set_status(self.d, self.b, "resolved", by="other-agent", seq=2)
+        store.handoff_request_review(self.d, 1)
+        store.handoff_claim(self.d, stage="review", seq=1)
+        self.assert_refusal(("review", str(self.d), self.b, "--seq", "1", "--ok"),
+                            "outside the review scope of batch 1")
+
+    def test_unknown_handoff_error_keeps_original_diagnostic(self):
+        for error in (store.NoteError("原始诊断"), store.HandoffError("扩展诊断", code="future-code")):
+            self.assertEqual(notes_cli.handoff_error_text(error, "en"), str(error))
+
     def test_chinese_output_keeps_the_shipped_wording(self):
         store.handoff_submit(self.d, "先改第 2 页", target="review", allow_subagents=True, full_check=True)
         got = run_cli("wait", str(self.d), "--timeout", "5")

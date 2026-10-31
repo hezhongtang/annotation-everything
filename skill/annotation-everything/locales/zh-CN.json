@@ -944,6 +944,20 @@
     "cli.show.orphan": "⚠ 这条批注原来所在的页面（键 {pageKey}）在新版报告里找不到，页码可能不对：先确认它对应哪一页",
     "cli.show.keyMismatch": "⚠ 批注记的页面键 {pageKey} 与第 {page} 页（{current}）不一致，重建对照页可自动校正",
     "cli.show.pairRequired": "↔ 另一侧（{side}）也要改，对应句{match}：「{text}」",
-    "cli.show.pairSuggested": "↔ 提示：{side}第 {page} 页有对应句{match}「{text}」，确认是否也要同步改（批注时没勾选同改）"
+    "cli.show.pairSuggested": "↔ 提示：{side}第 {page} 页有对应句{match}「{text}」，确认是否也要同步改（批注时没勾选同改）",
+    "cli.hand.error.batchNotActive": "第 {seq} 批不在处理中（{status}）",
+    "cli.hand.error.otherDraftBatch": "{id} 是第 {draft} 批的初改，在等复核或用户定稿：不要在第 {seq} 批里处理它",
+    "cli.hand.error.reviewReasonRequired": "再改 / 退回要写明理由",
+    "cli.hand.error.noteNotDrafted": "{id} 还没有被处理过（未处理），没有可复核的改动：直接改完用 notes.py resolve",
+    "cli.hand.error.noteNotReviewing": "{id} 不在正在复核的批次里（{batch}）：先 notes.py claim --stage review 接收复核，复核只针对那一批的初改",
+    "cli.hand.error.noteOutsideReview": "{id} 不属于第 {seq} 批的复核范围",
+    "cli.hand.error.unreviewed": "第 {seq} 批还有 {count} 条初改没给复核结论：{ids}。逐条 notes.py review，或确认都可以后加 --accept-rest 一并通过",
+    "cli.hand.error.ambiguousBatches": "同时有 {batches}：用 --seq 指定收尾哪一批",
+    "cli.hand.error.finalForbidden": "用户要求第 {seq} 批做到「已初改·待复核」为止：不能直接定稿（用户可在页面上定稿）",
+    "cli.hand.error.subagentsForbidden": "第 {seq} 批由你直接处理到定稿（用户没有允许派发子代理）：直接 notes.py done",
+    "cli.hand.error.reviewNotClaimed": "第 {seq} 批在等复核：要复核先 notes.py claim --stage review（或用户在页面请求复核）；要直接定稿由用户在页面上点「直接定稿」",
+    "cli.hand.error.alreadyDone": "第 {seq} 批已经定稿了",
+    "cli.hand.error.batchState": "第 {seq} 批（{status}）",
+    "cli.hand.error.noReviewBatch": "没有对应的复核批次"
   }
 }

@@ -1050,6 +1050,22 @@
     "cli.show.orphan": "⚠ The original page (key {pageKey}) is missing from the new report. The page number may be wrong; confirm which page this annotation belongs to before editing.",
     "cli.show.keyMismatch": "⚠ The annotation page key {pageKey} does not match page {page} ({current}). Rebuild the review page to correct the mapping.",
     "cli.show.pairRequired": "↔ Also change the other side ({side}); matching sentence {match}: “{text}”",
-    "cli.show.pairSuggested": "↔ Hint: {side}, page {page}, has a matching sentence {match}: “{text}”. Confirm whether to update it too (change both sides was not selected)."
+    "cli.show.pairSuggested": "↔ Hint: {side}, page {page}, has a matching sentence {match}: “{text}”. Confirm whether to update it too (change both sides was not selected).",
+    "cli.hand.error.batchNotActive": "Batch {seq} is not active ({status}).",
+    "cli.hand.error.otherDraftBatch": "{id} was drafted in batch {draft} and is waiting for review or user finalization. Do not handle it in batch {seq}.",
+    "cli.hand.error.reviewReasonRequired": "Give a reason with --note when revising or returning an annotation.",
+    "cli.hand.error.noteNotDrafted": "{id} is still open and has no draft to review. Make the change and use notes.py resolve.",
+    "cli.hand.error.noteNotReviewing": "{id} is not in a batch under review ({batch}). Claim the review with notes.py claim --stage review first; only review annotations drafted in that batch.",
+    "cli.hand.error.noteOutsideReview": "{id} is outside the review scope of batch {seq}.",
+    "cli.hand.error.unreviewed": "Batch {seq} still has {count} drafted annotations without a review verdict: {ids}. Run notes.py review for each one, or add --accept-rest only after confirming all remaining drafts can be approved.",
+    "cli.hand.error.ambiguousBatches": "Multiple batches are active: {batches}. Use --seq to choose which batch to close out.",
+    "cli.hand.error.finalForbidden": "The user asked batch {seq} to stop at “drafted, waiting for review”. Do not finalize it directly; the user can finalize it on the page.",
+    "cli.hand.error.subagentsForbidden": "Handle batch {seq} through to finalization yourself; the user did not allow subagents. Run notes.py done without --draft.",
+    "cli.hand.error.reviewNotClaimed": "Batch {seq} is waiting for review. Claim it with notes.py claim --stage review (or have the user request review on the page). To skip review and finalize directly, the user must choose that action on the page.",
+    "cli.hand.error.alreadyDone": "Batch {seq} is already finalized.",
+    "cli.hand.error.batchState": "batch {seq} ({status})",
+    "cli.hand.error.noReviewBatch": "no matching review batch",
+    "cli.hand.error.unreviewed.one": "Batch {seq} still has {count} drafted annotation without a review verdict: {ids}. Run notes.py review for each one, or add --accept-rest only after confirming all remaining drafts can be approved.",
+    "cli.hand.error.unreviewed.other": "Batch {seq} still has {count} drafted annotations without a review verdict: {ids}. Run notes.py review for each one, or add --accept-rest only after confirming all remaining drafts can be approved."
   }
 }
