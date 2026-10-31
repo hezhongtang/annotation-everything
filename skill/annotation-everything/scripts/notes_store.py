@@ -61,6 +61,14 @@ class NoteError(ValueError):
     """请求内容不合法（返回 400）。"""
 
 
+class HandoffError(NoteError):
+    """交接业务拒绝：保留旧异常文本，附稳定代码与参数供 CLI 本地化。"""
+
+    def __init__(self, message: str, *, code: str, **params: Any):
+        super().__init__(message)
+        self.code, self.params = code, params
+
+
 class AlwaysLimitError(NoteError):
     """常驻技能超过上限。带上限与当前数量，调用方好用当前语言提示。"""
 
@@ -731,7 +739,8 @@ def _batch_for(items: list[dict[str, Any]], note: dict[str, Any], seq: int | Non
         if it is None:
             raise NotFound(f"handoff#{seq}")
         if it.get("status") not in IN_FLIGHT:
-            raise NoteError(f"第 {seq} 批不在处理中（{it.get('status')}）")
+            raise HandoffError(f"第 {seq} 批不在处理中（{it.get('status')}）",
+                               code="batch-not-active", seq=seq, status=it.get("status"))
         return it
     db = note.get("draftBatch")
     if note.get("status") == "drafted" and db is not None:
@@ -791,7 +800,8 @@ def set_status(review_dir: Path, note_id: str, status: str, *, resolution: str =
         db = note.get("draftBatch")
         if cur and prev == "drafted" and db is not None and db != int(cur.get("seq", 0)) and any(
                 int(i.get("seq", 0)) == db and i.get("status") != "done" for i in items):
-            raise NoteError(f"{note_id} 是第 {db} 批的初改，在等复核或用户定稿：不要在第 {cur['seq']} 批里处理它")
+            raise HandoffError(f"{note_id} 是第 {db} 批的初改，在等复核或用户定稿：不要在第 {cur['seq']} 批里处理它",
+                               code="other-draft-batch", id=note_id, draft=db, seq=cur["seq"])
         stage, seq = _stage_of(cur), (int(cur.get("seq", 0)) if cur else None)
         if status == "resolved" and stage == "draft" and two_stage(cur):
             status = "drafted"
@@ -826,22 +836,25 @@ def review(review_dir: Path, note_id: str, verdict: str, *, note: str = "", by: 
         raise NoteError(f"复核结论须为 {REVIEW_VERDICTS} 之一")
     text = fix_text(note).strip()[:MAX_TEXT]
     if verdict != "ok" and not text:
-        raise NoteError("再改 / 退回要写明理由")
+        raise HandoffError("再改 / 退回要写明理由", code="review-reason-required")
     with locked(review_dir):
         doc = load(review_dir)
         n = _find(doc, note_id)
         if n.get("status", "open") == "open":
-            raise NoteError(f"{note_id} 还没有被处理过（未处理），没有可复核的改动：直接改完用 notes.py resolve")
+            raise HandoffError(f"{note_id} 还没有被处理过（未处理），没有可复核的改动：直接改完用 notes.py resolve",
+                               code="note-not-drafted", id=note_id)
         items = _items(review_dir)
         if seq is None:   # 按批注归属找复核批次：初改 → 它的初改批次；已定的 → 本批复核时定的那一批
             seq = n.get("draftBatch") if n.get("status") == "drafted" else n.get("resolvedBatch")
         cur = next((i for i in items if seq is not None and int(i.get("seq", 0)) == seq), None)
         if not cur or cur.get("status") != "reviewing":
-            raise NoteError(f"{note_id} 不在正在复核的批次里" + (f"（第 {seq} 批现在是「{cur.get('status')}」）" if cur else "")
-                            + "：先 notes.py claim --stage review 接收复核，复核只针对那一批的初改")
+            raise HandoffError(f"{note_id} 不在正在复核的批次里" + (f"（第 {seq} 批现在是「{cur.get('status')}」）" if cur else "")
+                               + "：先 notes.py claim --stage review 接收复核，复核只针对那一批的初改",
+                               code="note-not-reviewing", id=note_id, seq=seq, status=cur.get("status") if cur else None)
         if not ((n.get("status") == "drafted" and n.get("draftBatch") == seq) or
                 (n.get("status") == "resolved" and n.get("resolvedBatch") == seq)):
-            raise NoteError(f"{note_id} 不属于第 {seq} 批的复核范围")
+            raise HandoffError(f"{note_id} 不属于第 {seq} 批的复核范围",
+                               code="note-outside-review", id=note_id, seq=seq)
         if verdict == "return":
             _mark_open(n)
         else:
@@ -1100,12 +1113,13 @@ BATCH_STATUSES = ("pending", "claimed", "drafted", "review", "reviewing", "done"
 #   → review 等待复核接收 → reviewing 复核中 → done 已定稿；drafted / review 也可由用户直接定稿
 
 
-class Unreviewed(NoteError):
+class Unreviewed(HandoffError):
     """复核收尾时还有没给结论的初改批注。"""
 
     def __init__(self, ids: list[str], seq: int):
         super().__init__(f"第 {seq} 批还有 {len(ids)} 条初改没给复核结论：{'、'.join(ids)}。"
-                         f"逐条 notes.py review，或确认都可以后加 --accept-rest 一并通过")
+                         f"逐条 notes.py review，或确认都可以后加 --accept-rest 一并通过",
+                         code="unreviewed", ids=ids, seq=seq)
         self.ids, self.seq = ids, seq
 
 
@@ -1224,8 +1238,9 @@ def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "",
         else:
             active = [i for i in items if i.get("status") in ("claimed", "reviewing")]
             if len(active) > 1:
-                raise NoteError("同时有 " + "、".join(f"第 {i['seq']} 批（{'复核中' if i['status'] == 'reviewing' else '处理中'}）"
-                                                  for i in active) + "：用 --seq 指定收尾哪一批")
+                raise HandoffError("同时有 " + "、".join(f"第 {i['seq']} 批（{'复核中' if i['status'] == 'reviewing' else '处理中'}）"
+                                                      for i in active) + "：用 --seq 指定收尾哪一批",
+                                   code="ambiguous-batches", batches=[(i["seq"], i["status"]) for i in active])
             item = active[0] if active else next((i for i in reversed(items) if i.get("status") == "pending"), None)
             if item is None:
                 raise NotFound("没有待处理的提交")
@@ -1239,11 +1254,13 @@ def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "",
             target = item.get("target", "final")
             if target == "review":
                 if mode == "final":
-                    raise NoteError(f"用户要求第 {n_seq} 批做到「已初改·待复核」为止：不能直接定稿（用户可在页面上定稿）")
+                    raise HandoffError(f"用户要求第 {n_seq} 批做到「已初改·待复核」为止：不能直接定稿（用户可在页面上定稿）",
+                                       code="final-forbidden", seq=n_seq)
                 to = "drafted"
             elif mode == "draft":
                 if not item.get("allowSubagents"):
-                    raise NoteError(f"第 {n_seq} 批由你直接处理到定稿（用户没有允许派发子代理）：直接 notes.py done")
+                    raise HandoffError(f"第 {n_seq} 批由你直接处理到定稿（用户没有允许派发子代理）：直接 notes.py done",
+                                       code="subagents-forbidden", seq=n_seq)
                 to = "review"
             else:
                 to = "done"
@@ -1275,10 +1292,10 @@ def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "",
                 e["summary"] = summary
             _finish(item, notes, items, by, summary)
         elif status in ("drafted", "review"):
-            raise NoteError(f"第 {n_seq} 批在等复核：要复核先 notes.py claim --stage review（或用户在页面请求复核）；"
-                            "要直接定稿由用户在页面上点「直接定稿」")
+            raise HandoffError(f"第 {n_seq} 批在等复核：要复核先 notes.py claim --stage review（或用户在页面请求复核）；"
+                               "要直接定稿由用户在页面上点「直接定稿」", code="review-not-claimed", seq=n_seq)
         else:
-            raise NoteError(f"第 {n_seq} 批已经定稿了")
+            raise HandoffError(f"第 {n_seq} 批已经定稿了", code="already-done", seq=n_seq)
         if changed:
             _commit(review_dir, ndoc, {"op": "finalize", "by": by, "seq": n_seq, "ids": [n["id"] for n in mine]})
         _handoff_commit(review_dir, doc, {"op": "handoff-done", "by": by, "seq": n_seq, "status": item["status"],

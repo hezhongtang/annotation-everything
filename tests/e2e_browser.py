@@ -1210,6 +1210,214 @@ def english_script_checks(browser, tmp: Path):
     ctx.close()
 
 
+def handoff_i18n_checks(browser, tmp: Path):
+    """#32：提交、复核与处理记录在中英两种语言下同一含义；切语言不重新提交、不改选项。"""
+    d = tmp / "handoff_i18n"
+    d.mkdir()
+    build(d, locale="en", name="handoff-i18n")
+    port = free_port()
+    server = start_server(d, port)
+    ctx = browser.new_context()
+    net: list[tuple[str, str]] = []
+    try:
+        page = ctx.new_page()
+        page.on("request", lambda req: net.append((req.method, req.url)))
+        page.goto(f"http://127.0.0.1:{port}/")
+        page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        add_note(page, "把口径改成同比")
+        go_page(page, 4)
+        add_note(page, "表格加上单位")
+        ok(page.inner_text("#mode") == "● Connected to the local service",
+           f"英文服务态徽标（实际 {page.inner_text('#mode')!r}）")
+        ok(page.locator("#handBtn span").first.inner_text() == "Hand to the agent", "英文提交按钮")
+        page.click("#handBtn")
+        ok(page.inner_text("#handTitle") == "Hand to the agent", "英文提交弹窗标题")
+        ok(page.inner_text("#doHand").split("⌘")[0] == "Hand to the agent", "英文提交按钮（弹窗内）")
+        labels = [page.locator("#hTargetRow label").nth(k).inner_text() for k in range(2)]
+        ok(labels == ["be finalized", "stop at drafted, waiting for review"],
+           f"英文「这批做到」两个选项（实际 {labels}）")
+        ok(page.inner_text("#hSubRow") == "Allow subagents", "英文子代理选项")
+        ok(page.inner_text("#hFullRow") == "Full check (consistency across the whole material)", "英文全量勾稽选项")
+        ok(page.get_attribute("#handMsg", "placeholder", ) ==
+           "A note for the agent (optional): for example “start with pages 7–12, leave the numbers alone”",
+           "英文附言提示")
+        ok("Once you submit" in page.inner_text("#handHelp"), "英文提交说明")
+        ok(page.locator("#handHist span").first.inner_text() == "Processing history", "英文处理记录入口")
+
+        # 结构化选项与显示语言无关：提交后落盘的字段是同一套
+        page.check('input[name="htarget"][value="review"]')
+        page.check("#hSub")
+        page.check("#hFullCheck")
+        page.fill("#handMsg", "先改第 2 页")
+        open_lines = page.inner_text("#handInfo")
+        ok("open annotations, on pages" in open_lines, f"英文批次范围（实际 {open_lines!r}）")
+        posts = sum(1 for method, _url in net if method == "POST")
+        page.click("#doHand")
+        ok(wait_until(lambda: (d / "handoff.json").exists(), page, 5), "提交写进 handoff.json")
+        item = json.loads((d / "handoff.json").read_text(encoding="utf-8"))["items"][-1]
+        ok((item["target"], item["allowSubagents"], item["fullCheck"], item["userMessage"]) ==
+           ("review", True, True, "先改第 2 页"), "结构化选项和原始附言不随语言改写")
+        ok(item["message"].count("全量勾稽") == 1, "全量勾稽的固定兼容提示保持原文")
+        ok(wait_until(lambda: "batch 1 waiting to be claimed" in page.inner_text("#handState"), page, 5),
+           f"英文提交状态徽标（实际 {page.inner_text('#handState')!r}）")
+        ok("Note: 先改第 2 页" in (page.get_attribute("#handState", "title") or ""), "徽标提示里附言保持原文")
+
+        received = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "wait", str(d),
+                                   "--timeout", "5", "--locale", "en"], capture_output=True, text=True, timeout=20)
+        out = received.stdout
+        ok(received.returncode == 0 and "# Handed to the agent: batch 1" in out, "等待中的 Agent 收到英文提交")
+        ok("Note from the user: 先改第 2 页" in out, "英文输出里原始附言保持原文")
+        ok("Stop at “drafted, waiting for review” and wait for the user" in out, "英文说明停在待复核")
+        ok("you may dispatch subagents" in out, "英文说明子代理权限")
+        ok("full check: go through the whole report and the speaker notes" in out
+           and "evidence" in out and "uncertain or you did not check" in out, "英文全量勾稽保留全部约束")
+        ok("At submit time 2 annotations were open, on pages 1, 4." in out, "英文说明批次范围")
+        ok(wait_until(lambda: "Agent working · batch 1" in page.inner_text("#handState"), page, 8),
+           f"接收后英文徽标（实际 {page.inner_text('#handState')!r}）")
+
+        page.keyboard.press("j")
+        page.wait_for_timeout(600)
+        history = page.inner_text("#batchList") + page.inner_text("#batchSum")
+        posts_after_submit = sum(1 for method, _url in net if method == "POST")
+        ok("Batch 1" in history and "in progress" in history, f"英文处理记录（实际 {history[:60]!r}）")
+        ok("Asks for: stop at drafted, waiting for review, subagents allowed, full check" in history,
+           "英文处理记录里的提交选项")
+        ok("Note: 先改第 2 页" in history, "英文处理记录里附言保持原文")
+        ok(("Draft · " in history or "Handling · " in history) and "claimed" in history,
+           f"英文阶段轨迹（实际 {history!r}）")
+        page.keyboard.press("Escape")
+
+        # 切到中文：只改显示，不重新提交、不改选项、不请求新接口
+        before = json.loads((d / "handoff.json").read_text(encoding="utf-8"))["items"]
+        page.click("#handBtn")
+        page.select_option("#localePick", "zh-CN")
+        page.wait_for_timeout(500)
+        ok(len(json.loads((d / "handoff.json").read_text(encoding="utf-8"))["items"]) == len(before),
+           "切换语言不重新提交")
+        ok(sum(1 for method, _url in net if method == "POST") == posts_after_submit,
+           "切换语言没有新的写请求")
+        ok(page.is_checked("#hFullCheck") and page.is_checked("#hSub")
+           and page.is_checked('input[name="htarget"][value="review"]'), "切换语言不改变已选选项")
+        ok(page.inner_text("#handTitle") == "交给 Agent", "切换后弹窗标题回到中文")
+        ok(page.inner_text("#hFullRow") == "全量勾稽（检查全文前后一致性）", "切换后全量勾稽选项回到中文")
+        ok(page.inner_text("#mode") == "● 已连接本地服务", "切换后服务态徽标回到中文")
+        ok("第 1 批" in page.inner_text("#handState"), "切换后提交状态徽标回到中文")
+        ok("还没交给 Agent" not in page.inner_text("#resume") and "第 1 批" in page.inner_text("#resume"),
+           f"切换后恢复提示回到中文（实际 {page.inner_text('#resume')!r}）")
+        # 关掉弹窗再切语言：提交按钮是常驻元素，文字也要跟上（不能留着上一种语言）
+        page.keyboard.press("Escape")
+        for pick, want in (("en", "Hand to the agent"), ("zh-CN", "交给 Agent")):
+            page.select_option("#localePick", pick)
+            page.wait_for_timeout(400)
+            ok(page.text_content("#doHandLabel") == want,
+               f"关掉弹窗后切到 {pick}，提交按钮文字是「{want}」（实际 {page.text_content('#doHandLabel')!r}）")
+
+        # 中文下把这一批走到「已初改·待复核」：状态在两种语言下都核对得上
+        note_id = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "show", str(d), "--json"],
+                                 capture_output=True, text=True, timeout=20).stdout
+        first = json.loads(note_id)["notes"][0]["id"]
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "resolve", str(d), first,
+                        "--note", "改成同比", "--seq", "1"], capture_output=True, text=True, timeout=20, check=True)
+        done = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "done", str(d), "--seq", "1",
+                               "--summary", "初改 1 条", "--locale", "zh-CN"],
+                              capture_output=True, text=True, timeout=20)
+        ok("初改完成" in done.stdout and "按用户要求停在这里" in done.stdout,
+           f"中文收尾走到待复核（rc={done.returncode} out={done.stdout[:120]!r} err={done.stderr[:200]!r}）")
+        ok(wait_until(lambda: "待复核" in page.inner_text("#handState"), page, 8),
+           f"中文待复核徽标（实际 {page.inner_text('#handState')!r}）")
+        page.select_option("#localePick", "en")
+        ok(wait_until(lambda: "awaiting review" in page.inner_text("#handState"), page, 8),
+           f"英文待复核徽标（实际 {page.inner_text('#handState')!r}）")
+        page.click("#handBtn")
+        ok("Batch 1 is drafted · awaiting review (1)" in page.inner_text("#handDrafts")
+           and "Ask the agent to review" in page.inner_text("#handDrafts"),
+           f"英文待复核批次行（实际 {page.inner_text('#handDrafts')!r}）")
+        page.click('#handDrafts [data-hreview="1"]')
+        ok("Batch 1 has 1 annotation drafted and waiting for review" in page.inner_text("#handInfo"),
+           f"英文复核说明（实际 {page.inner_text('#handInfo')!r}）")
+        ok(page.inner_text("#handTitle") == "Ask the agent to review batch 1", "英文请求复核标题")
+        ok(page.inner_text("#doHand").split("⌘")[0] == "Ask for the review", "英文请求复核按钮")
+        page.keyboard.press("Escape")
+
+        # 复核定稿：跳过复核直接定稿，确认框与结果状态都用当前语言
+        page.click("#handBtn")
+        confirms: list[str] = []
+        page.on("dialog", lambda dlg: (confirms.append(dlg.message), dlg.accept()))
+        page.click('#handDrafts [data-hfinal="1"]')
+        ok(confirms == ["Skip the review and mark the 1 drafts in batch 1 as resolved?"],
+           f"英文直接定稿的确认框（实际 {confirms}）")
+        ok(wait_until(lambda: "Agent finished · batch 1" in page.text_content("#handState"), page, 8),
+           f"复核定稿后英文徽标（实际 {page.text_content('#handState')!r}）")
+        page.keyboard.press("Escape")
+
+        # 断线提交、待补传与重连重试：英文说清状态与恢复方式，不把未确认的提交说成已保存
+        items = json.loads((d / "handoff.json").read_text(encoding="utf-8"))["items"]
+        ctx.set_offline(True)
+        page.click("#handBtn")
+        page.fill("#handMsg", "断线时补一条")
+        page.click("#doHand")
+        ok(wait_until(lambda: page.text_content("#handState") == "Hand to the agent (held for sending)", page, 6),
+           f"断线提交英文说清还在暂存（实际 {page.text_content('#handState')!r}）")
+        ok("held for sending" in page.inner_text("#mode"), f"待补传英文计数（实际 {page.inner_text('#mode')!r}）")
+        ok(len(json.loads((d / "handoff.json").read_text(encoding="utf-8"))["items"]) == len(items),
+           "未确认的提交不写进 handoff.json")
+        ok(wait_until(lambda: "Nothing is running on port" in page.inner_text("#srvBar")
+                      and "serve.py" in page.inner_text("#srvBar"), page, 10),
+           f"断线时英文提示条给出恢复方式（实际 {page.inner_text('#srvBar')[:80]!r}）")
+        page.keyboard.press("Escape")
+        ctx.set_offline(False)
+        ok(wait_until(lambda: len(json.loads((d / "handoff.json").read_text(encoding="utf-8"))["items"])
+                      == len(items) + 1, page, 10), "重连后暂存的提交自动补传")
+        ok(wait_until(lambda: "Held changes have been sent" in (page.inner_text("#toast") or ""), page, 10),
+           f"重连后英文提示（实际 {page.inner_text('#toast')!r}）")
+
+        # 服务不匹配：英文说清端口上现在是谁、改动没有写进别人的审阅
+        def wrong_review(route):
+            response = route.fetch()
+            body = response.json()
+            body["reviewId"] = "0123456789abcdef"
+            route.fulfill(response=response, json=body)
+
+        page.route("**/api/notes", wrong_review)
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        ok(wait_until(lambda: "Wrong service" in page.inner_text("#mode"), page, 8),
+           f"服务不匹配英文徽标（实际 {page.inner_text('#mode')!r}）")
+        ok("not this review's service" in (page.get_attribute("#mode", "title") or ""),
+           "服务不匹配英文提示说清改动没有写进别人的审阅")
+        ok("has some other program on it" in page.inner_text("#srvBar")
+           and "serve.py" in page.inner_text("#srvBar"),
+           f"不匹配时英文提示条说清端口上是谁、怎么恢复（实际 {page.inner_text('#srvBar')[:90]!r}）")
+        page.unroute("**/api/notes", wrong_review)
+
+        ctx.close()
+
+        # 旧服务：选项不被静默丢掉，提示用当前语言说清怎么恢复
+        old = browser.new_context()
+        opage = old.new_page()
+
+        def no_full_check(route):
+            response = route.fetch()
+            body = response.json()
+            body["features"] = [f for f in body.get("features", []) if f not in ("full-check", "marks")]
+            route.fulfill(response=response, json=body)
+
+        opage.route("**/api/notes", no_full_check)
+        opage.goto(f"http://127.0.0.1:{port}/")
+        opage.wait_for_timeout(1200)
+        ok("Old service" in opage.inner_text("#mode"), f"旧服务英文徽标（实际 {opage.inner_text('#mode')!r}）")
+        ok("does not know about area marks" in (opage.get_attribute("#mode", "title") or ""), "旧服务英文提示")
+        opage.click("#handBtn")
+        ok(opage.is_visible("#hFullOld") and "does not support the full check" in opage.inner_text("#hFullOld"),
+           "旧服务英文提示说清怎么恢复")
+        opage.keyboard.press("Escape")
+        opage.unroute("**/api/notes", no_full_check)
+        old.close()
+        ctx.close()
+    finally:
+        ctx.close()
+        stop(server)
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="ae-e2e-"))
     CLEANUP.add_dir(tmp)
@@ -1220,6 +1428,12 @@ def main() -> int:
             full_check_checks(browser, tmp)
             browser.close()
             return 1 if any(not p for p, _ in RESULTS) else 0
+        if "--handoff-only" in sys.argv:
+            handoff_i18n_checks(browser, tmp)
+            browser.close()
+            failed = sum(not p for p, _ in RESULTS)
+            print(f"\n{len(RESULTS) - failed}/{len(RESULTS)} 通过")
+            return 1 if failed else 0
         skill_search_checks(browser, tmp)
         skill_recommendation_checks(browser, tmp)
         skill_i18n_checks(browser, tmp)
@@ -1231,6 +1445,7 @@ def main() -> int:
         full_check_checks(browser, tmp)
         locale_checks(browser, tmp)
         english_script_checks(browser, tmp)
+        handoff_i18n_checks(browser, tmp)
         export_import_checks(browser, tmp)
 
         # ---------- 1. file:// 退回模式 ----------
