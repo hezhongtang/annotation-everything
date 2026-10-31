@@ -89,6 +89,23 @@ class BetaTests(unittest.TestCase):
         self.assertGreater(3, 2)
 '''
 
+# 合成版全局词典一致性契约：真实仓库里这一检查在 tests/test_i18n_catalog_contract.py，
+# unit-related 组固定附带它（issue #51）。合成版检查合成仓库自己的 locales/。
+CONTRACT_MODULE = '''import json
+import unittest
+from pathlib import Path
+
+LOCALES = Path(__file__).resolve().parents[1] / "locales"
+
+
+class RepoCatalogContractTests(unittest.TestCase):
+    def test_shipped_catalogs_stay_consistent(self):
+        zh = json.loads((LOCALES / "zh-CN.json").read_text(encoding="utf-8"))
+        en = json.loads((LOCALES / "en.json").read_text(encoding="utf-8"))
+        missing = sorted(set(zh) - set(en)) + sorted(set(en) - set(zh))
+        self.assertEqual(missing, [], "合成词典 key 必须一致")
+'''
+
 
 def read_record(artifact_dir: Path, run_id: str) -> dict:
     return json.loads((artifact_dir / "runs" / run_id / "record.json").read_text(encoding="utf-8"))
@@ -106,6 +123,9 @@ class SynthRepo:
         self.write(".gitignore", ".verify/\n__pycache__/\n*.pyc\n*.log\n")
         self.write("README.md", "# 合成仓库\n")
         self.write("tests/test_synth.py", UNIT_PASS)
+        self.write("tests/test_i18n_catalog_contract.py", CONTRACT_MODULE)
+        self.write("locales/zh-CN.json", '{"a": "甲"}\n')
+        self.write("locales/en.json", '{"a": "A"}\n')
         self.write("tests/e2e_browser.py", BROWSER_STUB, executable=True)
         self.write("skill/annotation-everything/scripts/serve.py", SERVE_STUB, executable=True)
         shutil.copy2(VERIFY, self.path / "verify.py")
@@ -230,14 +250,14 @@ class UnitRunTests(VerifyEntryTestCase):
         self.assertEqual(record["context"]["issue"], 50)
         self.assertEqual(record["context"]["phase"], "development")
         counts = record["result"]["counts"]
-        self.assertEqual(counts["cases"], 3)
-        self.assertEqual(counts["passed"], 3)
+        self.assertEqual(counts["cases"], 4)  # 3 个合成用例 + 自动发现的契约用例
+        self.assertEqual(counts["passed"], 4)
         self.assertEqual(counts["failed"], 0)
         self.assertEqual(counts["skipped"], 0)
         group = record["groups"][0]
         self.assertEqual(group["name"], "unit")
         self.assertEqual(group["outcome"], "passed")
-        self.assertEqual(len(group["cases"]), 3, "每个用例一条记录")
+        self.assertEqual(len(group["cases"]), 4, "每个用例一条记录")
         for case in group["cases"]:
             self.assertIn("seconds", case)
             self.assertGreaterEqual(case["seconds"], 0.0)
@@ -377,7 +397,7 @@ class OutcomeTests(VerifyEntryTestCase):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertEqual(record["result"]["outcome"], "error")
         self.assertEqual(record["result"]["counts"]["errors"], 1)
-        self.assertEqual(record["result"]["counts"]["cases"], 1)
+        self.assertEqual(record["result"]["counts"]["cases"], 2)  # 导入错误 + 契约用例
         self.assertFalse(record["result"]["usable_as_evidence"])
 
     def test_subtest_failures_are_counted_apart_from_cases(self):
@@ -386,28 +406,32 @@ class OutcomeTests(VerifyEntryTestCase):
         p, record = self.outcome_of("run", "--group", "unit")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         counts = record["result"]["counts"]
-        self.assertEqual(counts["cases"], 1, "子测试失败不重复计成独立用例")
+        self.assertEqual(counts["cases"], 2, "子测试失败不重复计成独立用例")
         self.assertEqual(counts["subtest_failures"], 1)
         self.assertEqual(counts["failed"], 1)
         self.assertEqual(record["result"]["outcome"], "failed")
-        case = record["groups"][0]["cases"][0]
+        case = {item["id"]: item for item in record["groups"][0]["cases"]}[
+            "test_synth.SubTests.test_subtests"]
         self.assertEqual(case["subtest_failures"], 1)
         self.assertEqual(case["status"], "failed")
 
     def test_all_skipped_is_not_a_pass(self):
         self.unit(UNIT_SKIP)
+        # 契约模块也要整个跳过，套件才是「全部跳过」
+        self.repo.write("tests/test_i18n_catalog_contract.py", UNIT_SKIP)
         self.repo.commit_all("合成跳过")
         p, record = self.outcome_of("run", "--group", "unit")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertEqual(record["result"]["outcome"], "skipped")
         counts = record["result"]["counts"]
-        self.assertEqual((counts["skipped"], counts["cases"]), (1, 1))
+        self.assertEqual((counts["skipped"], counts["cases"]), (2, 2))
         self.assertFalse(record["result"]["usable_as_evidence"])
         self.assertTrue(any("跳过" in note
                             for note in record["result"]["notes"] + [record["result"]["summary"]]))
 
     def test_empty_collection_is_not_a_pass(self):
         (self.repo.path / "tests" / "test_synth.py").unlink()
+        (self.repo.path / "tests" / "test_i18n_catalog_contract.py").unlink()
         self.repo.commit_all("合成空集合")
         p, record = self.outcome_of("run", "--group", "unit")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
@@ -449,7 +473,11 @@ class TimingAttributionTests(VerifyEntryTestCase):
         sidecar = json.loads((self.repo.artifact_dir / "runs" / run_id
                               / "unit.cases.json").read_text(encoding="utf-8"))
         by_kind = sidecar["seconds"]["gap_by_kind"]
-        self.assertGreaterEqual(by_kind.get("run-start", 0.0), 0.3, "模块级准备计入运行开始空隙")
+        # 契约模块按字母序先被发现，test_synth 的模块级准备落在「运行开始」或
+        # 「模块边界」空隙里；两种空隙合计都要覆盖 setUpModule 的 0.3 秒
+        self.assertGreaterEqual(
+            by_kind.get("run-start", 0.0) + by_kind.get("class-boundary", 0.0), 0.3,
+            "模块级准备计入运行开始或模块边界空隙")
         self.assertGreaterEqual(by_kind.get("class-boundary", 0.0), 0.3, "换类时的准备与清理计入边界空隙")
         self.assertLess(sidecar["seconds"]["unattributed"], 0.05, "同类相邻用例之间不应有大额未归属开销")
         self.assertAlmostEqual(sum(gap["seconds"] for gap in sidecar["gaps"]),
@@ -670,7 +698,7 @@ class SignalDuringFinalizeTests(VerifyEntryTestCase):
         self.assertEqual(record["state"], "aborted")
         by_name = {group["name"]: group for group in record["groups"]}
         self.assertEqual(by_name["unit"]["outcome"], "passed", "第一组保留真实结果")
-        self.assertEqual(by_name["unit"]["counts"]["cases"], 3)
+        self.assertEqual(by_name["unit"]["counts"]["cases"], 4)
         self.assertIsNotNone(by_name["unit"]["timing"].get("child_seconds"))
         self.assertEqual(by_name["serve-check"]["outcome"], "passed", "第二组保留真实结果")
         self.assertEqual(by_name["browser"]["outcome"], "interrupted", "未执行的组标 interrupted")
@@ -770,7 +798,7 @@ class OtherGroupTests(VerifyEntryTestCase):
         self.assertEqual(record["context"]["phase"], "pr")
         self.assertEqual(record["context"]["pr"], 50)
         self.assertEqual(record["result"]["counts"]["groups"], 3)
-        self.assertEqual(record["result"]["counts"]["cases"], 3)
+        self.assertEqual(record["result"]["counts"]["cases"], 4)
         self.assertEqual(record["result"]["counts"]["checks"], 6)
         self.assertTrue(record["result"]["usable_as_evidence"])
         for name in ("unit", "serve-check", "browser"):
@@ -797,7 +825,9 @@ class OtherTests(unittest.TestCase):
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         self.assertEqual(record["groups"][0]["name"], "unit-related")
         ids = [case["id"] for case in record["groups"][0]["cases"]]
-        self.assertEqual(sorted(ids), ["test_synth.AlphaTests.test_alpha_also_ok",
+        self.assertEqual(sorted(ids), ["test_i18n_catalog_contract.RepoCatalogContractTests"
+                                       ".test_shipped_catalogs_stay_consistent",
+                                       "test_synth.AlphaTests.test_alpha_also_ok",
                                        "test_synth.AlphaTests.test_alpha_ok",
                                        "test_synth.BetaTests.test_beta_ok"])
         self.assertNotIn("test_other.OtherTests.test_other", ids)
@@ -829,6 +859,96 @@ class OtherTests(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         self.assertEqual(record["groups"][0]["outcome"], "error")
+
+
+class RelatedContractTests(VerifyEntryTestCase):
+    """unit-related 固定附带全局词典契约（issue #51）：去重后独立跑相关组也不丢全局保护。"""
+
+    CONTRACT_ID = ("test_i18n_catalog_contract.RepoCatalogContractTests"
+                   ".test_shipped_catalogs_stay_consistent")
+
+    def test_unit_related_auto_includes_the_global_catalog_contract(self):
+        p = self.repo.run_verify("run", "unit-related", "tests/test_synth.py")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertEqual(record["context"]["selectors"], ["tests/test_synth.py"],
+                         "记录保留调用方的原始选择器")
+        self.assertEqual(record["context"]["selectors_effective"],
+                         ["tests/test_synth.py", "tests/test_i18n_catalog_contract.py"],
+                         "生效选择器要写明自动附带的契约模块")
+        ids = [case["id"] for case in record["groups"][0]["cases"]]
+        self.assertIn(self.CONTRACT_ID, ids, "相关组自动执行全局词典契约")
+        self.assertIn("test_synth.AlphaTests.test_alpha_ok", ids)
+
+    def test_explicit_contract_selector_is_not_duplicated(self):
+        p = self.repo.run_verify("run", "unit-related", "tests/test_i18n_catalog_contract.py")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        ids = [case["id"] for case in record["groups"][0]["cases"]]
+        self.assertEqual(ids.count(self.CONTRACT_ID), 1, "契约只执行一次，不重复")
+        self.assertEqual(record["context"]["selectors_effective"],
+                         ["tests/test_i18n_catalog_contract.py"])
+
+    def test_method_selector_of_the_contract_module_is_not_duplicated(self):
+        p = self.repo.run_verify(
+            "run", "unit-related",
+            "tests.test_i18n_catalog_contract.RepoCatalogContractTests.test_shipped_catalogs_stay_consistent")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        ids = [case["id"] for case in record["groups"][0]["cases"]]
+        # 点分选择器导入的模块名带 tests. 前缀，用方法后缀计数判断唯一
+        contract_runs = [i for i in ids if i.endswith(".RepoCatalogContractTests"
+                                                     ".test_shipped_catalogs_stay_consistent")]
+        self.assertEqual(len(contract_runs), 1, "指到契约模块内部时也不能重复执行")
+
+    def test_missing_contract_module_fails_loudly_instead_of_silently(self):
+        """契约模块被删时局部组必须报错：全局保护不能静默消失。"""
+        (self.repo.path / "tests" / "test_i18n_catalog_contract.py").unlink()
+        self.repo.commit_all("合成删除契约模块")
+        p = self.repo.run_verify("run", "unit-related", "tests/test_synth.py")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertEqual(record["groups"][0]["outcome"], "error")
+
+    def test_synthetic_inconsistent_catalog_fails_local_and_full_groups(self):
+        """合成的不一致词典让局部组与完整组都失败，修复后都恢复通过。"""
+        en = self.repo.path / "locales" / "en.json"
+        original = en.read_text(encoding="utf-8")
+        en.write_text('{"a": "A", "probe": "P"}\n', encoding="utf-8")
+        try:
+            local = self.repo.run_verify("run", "unit-related", "tests/test_synth.py")
+            self.assertEqual(local.returncode, 1, local.stdout + local.stderr)
+            record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+            by_id = {case["id"]: case for case in record["groups"][0]["cases"]}
+            self.assertEqual(by_id[self.CONTRACT_ID]["status"], "failed",
+                             "局部组要发现词典不一致")
+            self.assertEqual(by_id["test_synth.AlphaTests.test_alpha_ok"]["status"], "passed",
+                             "失败只来自词典契约，不连累指定模块")
+            full = self.repo.run_verify("run", "--group", "unit")
+            self.assertEqual(full.returncode, 1, full.stdout + full.stderr)
+            full_record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+            full_status = {case["id"]: case["status"]
+                           for case in full_record["groups"][0]["cases"]}
+            self.assertEqual(full_status[self.CONTRACT_ID], "failed",
+                             "完整组同样发现词典不一致")
+        finally:
+            en.write_text(original, encoding="utf-8")
+        local = self.repo.run_verify("run", "unit-related", "tests/test_synth.py")
+        self.assertEqual(local.returncode, 0, local.stdout + local.stderr)
+        full = self.repo.run_verify("run", "--group", "unit")
+        self.assertEqual(full.returncode, 0, full.stdout + full.stderr)
+
+    def test_plan_shows_the_auto_included_contract(self):
+        p = self.repo.run_verify("plan", "--group", "unit-related", "tests/test_synth.py")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("test_i18n_catalog_contract", p.stdout, "plan 说明自动附带的契约模块")
+        plan = json.loads(self.repo.run_verify(
+            "plan", "--group", "unit-related", "tests/test_synth.py", "--json").stdout)
+        unit_related = {group["name"]: group for group in plan["groups"]}["unit-related"]
+        self.assertEqual(unit_related["auto_included"], ["tests/test_i18n_catalog_contract.py"])
+        plain = json.loads(self.repo.run_verify("plan", "--json").stdout)
+        plain_related = {group["name"]: group for group in plain["groups"]}["unit-related"]
+        self.assertEqual(plain_related["auto_included"], [], "没有选择器就没有自动附带")
 
 
 class OutDirTests(VerifyEntryTestCase):
@@ -1091,10 +1211,10 @@ class SubTests(unittest.TestCase):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         counts = record["result"]["counts"]
-        self.assertEqual((counts["cases"], counts["failed"], counts["passed"]), (2, 1, 1))
+        self.assertEqual((counts["cases"], counts["failed"], counts["passed"]), (3, 1, 2))
         self.assertEqual(counts["subtest_failures"], 3)
         self.assertEqual([case["status"] for case in record["groups"][0]["cases"]],
-                         ["failed", "passed"])
+                         ["passed", "failed", "passed"])
 
     def test_child_sigint_preserves_interruption_and_completed_cases(self):
         self.unit('''import os
@@ -1190,6 +1310,8 @@ class UnitOutcomeBoundaryTests(VerifyEntryTestCase):
         return read_record(self.repo.artifact_dir, self.repo.latest_run_id())
 
     def test_only_skipped_subtest_is_not_a_pass(self):
+        # 契约模块也要整个跳过，套件才是「只有跳过」的形态
+        self.repo.write("tests/test_i18n_catalog_contract.py", UNIT_SKIP)
         record = self.run_body('''import unittest
 
 class SubTests(unittest.TestCase):
@@ -1200,9 +1322,9 @@ class SubTests(unittest.TestCase):
         self.assertEqual(record["result"]["outcome"], "skipped")
         self.assertFalse(record["result"]["usable_as_evidence"])
         counts = record["result"]["counts"]
-        self.assertEqual((counts["cases"], counts["passed"], counts["skipped"]), (1, 0, 1))
+        self.assertEqual((counts["cases"], counts["passed"], counts["skipped"]), (2, 0, 2))
         self.assertEqual(counts["subtest_skips"], 1)
-        self.assertEqual(record["groups"][0]["cases"][0]["status"], "skipped")
+        self.assertEqual(record["groups"][0]["cases"][-1]["status"], "skipped")
 
     def test_class_fixture_skip_does_not_skip_another_passed_case(self):
         record = self.run_body('''import unittest
@@ -1222,9 +1344,10 @@ class BAvailableTests(unittest.TestCase):
         self.assertEqual(record["result"]["outcome"], "passed")
         self.assertTrue(record["result"]["usable_as_evidence"])
         counts = record["result"]["counts"]
-        self.assertEqual((counts["cases"], counts["passed"], counts["skipped"]), (1, 1, 0))
+        self.assertEqual((counts["cases"], counts["passed"], counts["skipped"]), (2, 2, 0))
         self.assertEqual(counts["fixture_skips"], 1)
-        self.assertEqual([case["name"] for case in record["groups"][0]["cases"]], ["test_pass"])
+        self.assertEqual([case["name"] for case in record["groups"][0]["cases"]],
+                         ["test_shipped_catalogs_stay_consistent", "test_pass"])
 
     def test_sigint_during_explicit_module_import_is_interrupted(self):
         record = self.run_body('''import os
@@ -1247,14 +1370,15 @@ class BrokenFixtureTests(unittest.TestCase):
         raise ValueError("合成类 fixture 错误")
 
     def test_not_started(self):
-        self.fail("准备失败后不能执行用例")
+        self.fail("准备失败后不能执行")
 ''', 1)
         self.assertEqual(record["result"]["outcome"], "error")
         self.assertFalse(record["result"]["usable_as_evidence"])
         counts = record["result"]["counts"]
-        self.assertEqual((counts["cases"], counts["passed"], counts["errors"]), (0, 0, 0))
+        self.assertEqual((counts["cases"], counts["passed"], counts["errors"]), (1, 1, 0))
         self.assertEqual(counts["fixture_errors"], 1)
-        self.assertEqual(record["groups"][0]["cases"], [])
+        self.assertEqual([case["name"] for case in record["groups"][0]["cases"]],
+                         ["test_shipped_catalogs_stay_consistent"])
 
     def test_passed_and_skipped_subtests_preserve_passed_main_case(self):
         record = self.run_body('''import unittest
@@ -1269,9 +1393,9 @@ class SubTests(unittest.TestCase):
         self.assertEqual(record["result"]["outcome"], "passed")
         self.assertTrue(record["result"]["usable_as_evidence"])
         counts = record["result"]["counts"]
-        self.assertEqual((counts["cases"], counts["passed"], counts["skipped"]), (1, 1, 0))
+        self.assertEqual((counts["cases"], counts["passed"], counts["skipped"]), (2, 2, 0))
         self.assertEqual(counts["subtest_skips"], 1)
-        self.assertEqual(record["groups"][0]["cases"][0]["status"], "passed")
+        self.assertEqual(record["groups"][0]["cases"][-1]["status"], "passed")
 
     def test_unexpected_success_is_not_counted_as_passed(self):
         record = self.run_body('''import unittest
@@ -1284,5 +1408,5 @@ class ExpectedFailureTests(unittest.TestCase):
         self.assertEqual(record["result"]["outcome"], "failed")
         self.assertFalse(record["result"]["usable_as_evidence"])
         counts = record["result"]["counts"]
-        self.assertEqual((counts["cases"], counts["passed"], counts["unexpected_successes"]), (1, 0, 1))
-        self.assertEqual(record["groups"][0]["cases"][0]["status"], "unexpected_success")
+        self.assertEqual((counts["cases"], counts["passed"], counts["unexpected_successes"]), (2, 1, 1))
+        self.assertEqual(record["groups"][0]["cases"][-1]["status"], "unexpected_success")

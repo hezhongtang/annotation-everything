@@ -35,10 +35,10 @@
 | `run_id` | 字符串 | 是 | UTC 时间戳加随机后缀，同一秒内也不重复 |
 | `started_at` / `ended_at` | ISO 8601 字符串 | `started_at` 必填，`ended_at` 未结束时为 `null` | 带本地时区偏移 |
 | `wrapper` | 对象 | 是 | 入口名、版本、schema、实际 argv（已脱敏）、`cwd_mode` 固定 `repo-root`、Python 版本 |
-| `context` | 对象 | 是 | `phase`、`issue`、`pr`、`reason`、`groups_requested`、`groups_selected`、`selectors` |
+| `context` | 对象 | 是 | `phase`、`issue`、`pr`、`reason`、`groups_requested`、`groups_selected`、`selectors`、`selectors_effective` |
 | `groups` | 数组 | 是 | 实际执行的组，按执行顺序；每项含命令、结论、计数、计时与用例清单 |
 
-`context.issue` 与 `context.pr` 可空：没关联就写 `null`，不写 0。`context.phase` 只接受 `issue`、`development`、`review`、`pr`、`ci`、`manual`，其余值入口直接报错。`context.reason` 可空，但建议写，它是后续判断「这次为什么跑」的唯一来源。
+`context.issue` 与 `context.pr` 可空：没关联就写 `null`，不写 0。`context.phase` 只接受 `issue`、`development`、`review`、`pr`、`ci`、`manual`，其余值入口直接报错。`context.reason` 可空，但建议写，它是后续判断「这次为什么跑」的唯一来源。`context.selectors` 只记调用方给出的选择器；`context.selectors_effective` 记实际生效的选择器——`unit-related` 会固定附带全局词典一致性契约模块（issue #51），附带与去重都在这里可见。
 
 ### 输入
 
@@ -187,6 +187,7 @@ JSON 报告在记录副本上追加 `report_validation.problems` 字符串数组
 
 B–H 在同一个 schema 上追加，不改已有字段：
 
+- 全局词典契约（B，已交付）：无参数全词典检查的唯一权威位置是 `tests/test_i18n_catalog_contract.py`；`unit-related` 组固定附带它（`verify.py` 的 `RELATED_CONTRACT_SELECTORS`），契约模块缺失时局部组加载失败报 `error`，不会静默失去保护。F 的组映射直接引用这一模块与常量。
 - 组级隔离与锁（C）：在 `groups[]` 加锁与隔离字段，`children.json` 的所有权登记保持不变。
 - 浏览器场景拆分（D）：把 `groups[].scenarios` 从空数组填成场景记录，`granularity` 从 `group` 细化到 `scenario`。
 - 阶段选测与影子对照（F）：在 `context` 与 `groups[]` 加策略版本与选择理由；`input.fingerprint` 与 `changed_since_baseline` 已经够了，不需要新字段。
