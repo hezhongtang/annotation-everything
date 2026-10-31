@@ -1502,6 +1502,14 @@ def installed_delivery_checks(browser, tmp: Path):
             note_id = received_notes[0]["id"]
             check(received_notes[0]["text"] == annotation and received_notes[0]["target"] == "报告和讲稿",
                   "原文与 v1 对象值经安装后的 CLI 保持不变")
+            if label == "english":
+                page.locator('#nlist [data-act="edit"]').first.click()
+                page.fill("#etext", "X" * 20001)
+                page.locator('#nlist [data-act="save"]').first.click()
+                check(wait_until(lambda: "bad-note" in page.inner_text("#toast"), page, 5)
+                      and "Changes remain in the browser" not in page.inner_text("#toast")
+                      and "Check the input and try again" in page.inner_text("#toast"),
+                      "不可重试的字段拒绝提示核对输入，不虚称改动已保留")
             if output:
                 page.locator("#nlist").scroll_into_view_if_needed()
                 page.screenshot(path=str(output / "viewer.png"))
@@ -2010,6 +2018,11 @@ def main() -> int:
         page.keyboard.press("Escape")
         page.keyboard.press("n")
         page.select_option(f'#orphanBox select[data-mv="{lost_id}"]', "2")
+        kept_destination = True
+        for locale in ("en", "zh-CN"):
+            page.locator("#localePick").evaluate("(el, value) => {el.value=value;el.dispatchEvent(new Event('change'))}", locale)
+            kept_destination = kept_destination and page.input_value(f'#orphanBox select[data-mv="{lost_id}"]') == "2"
+        ok(kept_destination, "孤立批注选择目标页后切换语言，保留尚未提交的目标页")
         page.click(f'#orphanBox [data-mvgo="{lost_id}"]')
         page.wait_for_timeout(700)
         moved_note = [n for n in disk_notes(sdir) if n["id"] == lost_id][0]

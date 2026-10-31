@@ -536,7 +536,7 @@ async function api(method,path,body){
       "bad-content-type":"badContentType","chunked":"chunked","bad-length":"badLength","too-large":"tooLarge",
       "bad-json":"badJson","not-found":"notFound","preflight":"preflight","no-index":"noIndex","no-note":"noNote",
       "review-mismatch":"reviewMismatch","no-api":"noApi"}[j.code];
-    const message=key?tMsg("serve.err."+key):tMsg("viewer.error.unknown",{status:r.status,code:j.code||"unknown"});
+    const message=key?tMsg("serve.err."+key):tMsg(r.status>=500?"viewer.error.unknown":"viewer.error.rejected",{status:r.status,code:j.code||"unknown"});
     throw Object.assign(new Error(message),{status:r.status,code:j.code})}
   if(!ours)throw Object.assign(new Error(tMsg("viewer.error.format")),{status:0,mismatch:true});
   return j}
@@ -1530,9 +1530,11 @@ $("impFile").onchange=async e=>{const f=e.target.files[0];if(!f)return;let items
 // 原页面已不在新版报告里的批注（重建后标 orphan，或页码已不存在）：在这里挪到正确的页
 function lostNotes(){return notes.filter(x=>x.orphan||!P.some(q=>q.n===x.page))}
 function renderOrphans(){const box=$("orphanBox"),lost=lostNotes();box.style.display=lost.length?"":"none";if(!lost.length){box.innerHTML="";return}
+  const choices=new Map([...box.querySelectorAll("select[data-mv]")].map(el=>[el.dataset.mv,el.value]));
   const opts=P.map(q=>`<option value="${+q.n}">${escH(tMsg("viewer.page",{page:+q.n}))} | ${escH(clip(unH(q.title),24))}</option>`).join("");
   box.innerHTML=`<p>${escH(tMsg("viewer.recovery.orphanHelp",{n:lost.length}))}</p>`+lost.map(x=>
     `<div class="found"><span>${escH(tMsg(x.key?"viewer.recovery.oldPageKey":"viewer.recovery.oldPage",{page:+x.page||"?",key:x.key||"",text:clip(noteSummary(x),60)}))}</span><span><select data-mv="${escH(x.id)}">${opts}</select> <button data-mvgo="${escH(x.id)}">${escH(tMsg("viewer.recovery.move"))}</button></span></div>`).join("");
+  box.querySelectorAll("select[data-mv]").forEach(el=>{const value=choices.get(el.dataset.mv);if([...el.options].some(o=>o.value===value))el.value=value});
   box.querySelectorAll("[data-mvgo]").forEach(b=>b.onclick=()=>{const id=b.dataset.mvgo,sel=box.querySelector(`select[data-mv="${CSS.escape(id)}"]`),pg=P.find(q=>q.n===+sel.value);
     if(pg){mutate({kind:"patch",id,body:{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false}});toast(tMsg("viewer.recovery.moved",{page:pg.n}));setTimeout(renderOrphans,300)}})}
 function openAll(){renderOrphans();const sel=$("expLang");if(sel)sel.value=LS.get(K.lang,"auto");

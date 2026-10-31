@@ -1232,6 +1232,7 @@
     "build.note.moved": "Annotation {id} followed page key {pageKey} from page {old} to {new}",
     "build.note.orphan": "Annotation {id} (original page {page}, key {pageKey}) has no matching page in the rebuilt report; confirmation is required",
     "build.asset.total": "Embedded assets total {size} MB; the large page may load slowly",
-    "build.review.sameName": "Another review named {name} exists (ID {id}, {path}). Export names distinguish IDs by their first four characters; use --name for a clearer name"
+    "build.review.sameName": "Another review named {name} exists (ID {id}, {path}). Export names distinguish IDs by their first four characters; use --name for a clearer name",
+    "viewer.error.rejected": "Request refused (HTTP {status}, code {code}). Check the input and try again."
   }
 }

@@ -760,9 +760,9 @@ def main(argv: list[str] | None = None) -> int:
                              ensure_ascii=False, indent=2))
         else:
             try:
-                sources = resolve_sources(d, manifest) if manifest else None
+                sources = resolve_sources(d, manifest, locale=lang) if manifest else None
             except SystemExit as e:
-                print(f"警告：{e}", file=sys.stderr)
+                print(t("cli.notes.warning", reason=e), file=sys.stderr)
                 sources = None
             print(to_markdown(doc, manifest, include_resolved=a.all or bool(a.batch), page=a.page, sources=sources,
                               handoff=store.handoff_state(d, full=False), only=only, always=store.always_skills(d),
@@ -1201,9 +1201,9 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
                 signal.signal(sig, h)
     manifest = load_manifest(d)
     try:
-        sources = resolve_sources(d, manifest) if manifest else None
+        sources = resolve_sources(d, manifest, locale=lang) if manifest else None
     except SystemExit as e:
-        print(f"警告：{e}", file=sys.stderr)
+        print(t("cli.notes.warning", reason=e), file=sys.stderr)
         sources = None
     if claim and item["stage"] == "draft":
         snapshot(d, item, "base")

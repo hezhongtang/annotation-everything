@@ -46,6 +46,23 @@ class NotesExchangeLanguageTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertFalse((self.review / "notes.json").exists())
 
+    def test_english_show_explains_a_missing_source_without_changing_notes(self):
+        source = self.root / "temporary-report.html"
+        source.write_text((ROOT / "fixtures" / "sample" / "report.en.html").read_text(encoding="utf-8"), encoding="utf-8")
+        built = subprocess.run([sys.executable, str(SCRIPTS / "build_viewer.py"), "--report", str(source),
+                                "--out", str(self.review), "--no-scan-skills"], env=self.env,
+                               capture_output=True, text=True, timeout=30)
+        self.assertEqual(built.returncode, 0, built.stderr)
+        self.assertEqual(self.run_cli("import", self.review, self.input).returncode, 0)
+        source.unlink()
+        before = (self.review / "notes.json").read_bytes()
+        shown = self.run_cli("show", self.review, "--locale", "en")
+        self.assertEqual(shown.returncode, 0)
+        self.assertIn("Cannot find", shown.stderr)
+        self.assertIn("--report/--script/--out", shown.stderr)
+        self.assertNotRegex(shown.stderr, r"[一-鿿]")
+        self.assertEqual((self.review / "notes.json").read_bytes(), before)
+
     def test_import_identity_error_is_english_and_does_not_write(self):
         self.input.write_text(json.dumps({"reviewId": "0123456789abcdef", "notes": []}), encoding="utf-8")
         result = self.run_cli("--locale", "en", "import", self.review, self.input)
