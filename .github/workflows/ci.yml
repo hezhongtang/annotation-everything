@@ -23,14 +23,32 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.12"]
+    env:
+      # 验证记录与日志写在 .verify/（已忽略），CI 里作为构件上传；测试与自检都不碰真实台账
+      AE_HOME: ${{ runner.temp }}/ae-home
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: 单元测试
-        run: python3 -m unittest discover tests -v
-      - name: 服务安全自检
+      # 统一验证入口：完整单元 + 服务安全自检，留下结构化记录与原始日志。
+      # 退出码语义与直接跑 python3 -m unittest discover tests / serve.py check 一致。
+      - name: 单元测试与服务安全自检（统一验证入口）
         run: |
-          export AE_HOME="$(mktemp -d)"
-          python3 skill/annotation-everything/scripts/serve.py check
+          python3 verify.py run --group unit --group serve-check --phase ci \
+            --reason "CI ${{ github.event_name }} ${{ github.ref_name }} Python ${{ matrix.python-version }}"
+      - name: 保存验证构件
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-python${{ matrix.python-version }}
+          path: .verify/
+          if-no-files-found: warn
+          retention-days: 14
+      # 失败时也能看到提交、环境、通过 / 失败 / 跳过与日志定位
+      - name: 验证摘要
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "构件：verify-python${{ matrix.python-version }}（.verify/ 全部内容，含 record.json 与各组原始日志）"
+          python3 verify.py report --latest | tee -a "$GITHUB_STEP_SUMMARY"

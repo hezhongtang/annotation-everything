@@ -281,6 +281,7 @@ See the [English format reference](skill/annotation-everything/references/format
 | Command | What it does |
 |---|---|
 | `ae.py install` / `doctor` / `repair` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--target <dir>` for another skills root; `--link codex,agents,zcode` or `name=path` symlinks it into other agents' skill directories); check installation, runtime, optional tools and dev environment (`--json` for structured output); repair what the checks find (prints a plan first, fixes safe items automatically, `--forget-stale`/`--stop-orphans` run the destructive ones explicitly, `--dry-run` only prints); uninstall removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first). All four subcommands accept `--target <dir>` to locate a custom copy |
+| `verify.py plan` / `run` / `report` | Unified verification entry run from the repository root: `plan` explains the groups and commands without starting anything; `run` executes and writes structured records plus raw logs into `.verify/` (git-ignored); `report` only reads records. Groups: `unit` (full unit), `unit-related` (explicitly named cases), `browser` (full browser), `serve-check` (server security self-check), `all` (the first three in order). Field contract: [docs/verify/record-contract.md](docs/verify/record-contract.md) |
 | `build_viewer.py --report … --script … --out <review-dir>` | Build the review page; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
 | `serve.py <review-dir>` | Start the local server; each review keeps its own dedicated port |
 | `serve.py list` / `status` / `forget` | List every review on this machine, show one review's status, remove a ledger entry you no longer need |
@@ -336,6 +337,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   └── check_pptx_fonts.py        PPTX and PDF font check
 └── evals/                         skill evaluation cases (used with skill-creator)
 ae.py                             unified management command: install the skill copy, doctor checks it, repair fixes it, uninstall removes it
+verify.py                         unified verification entry: plan explains the scope, run executes and records, report only reads
 fixtures/sample/                   synthetic sample (fictional data)
 tests/                             unit tests and end-to-end browser tests
 tools/
@@ -343,6 +345,7 @@ tools/
 └── git-hooks/                     refuse commits on main, pushes to main and deleting main
 .github/                           CI, issue templates and the pull request template
 docs/                              architecture decision records (ADRs), agent conventions, README images
+docs/verify/                       verification record field contract and the unified entry's onboarding guide
 GLOSSARY.md                        glossary
 ```
 
@@ -351,12 +354,18 @@ GLOSSARY.md                        glossary
 After cloning, run `tools/setup-dev.sh` once to enable the git hooks.
 
 ```bash
+python3 verify.py plan                                            # unified verification entry: explains the groups and commands
+python3 verify.py run                                             # full unit tests (the default group), then prints a summary
+python3 verify.py run --group all                                 # full acceptance: unit + server self-check + browser
+python3 verify.py report --latest                                 # read the latest record only, start nothing
 python3 -m unittest discover tests                                   # unit tests (standard library only)
 uv run --no-project --with playwright python tests/e2e_browser.py   # end-to-end browser tests (uses your local Google Chrome)
 python3 skill/annotation-everything/scripts/serve.py check          # server security self-check
 python3 ae.py install                                               # sync to ~/.claude/skills/
 uv run --no-project --with playwright python tests/e2e_browser.py --delivery-only  # three language combinations from a temporary skill copy
 ```
+
+`verify.py` is the unified verification entry: `plan` explains the scope, `run` executes and writes structured records plus raw logs into `.verify/` (git-ignored), and `report` only reads records. A record carries the commit and baseline, an input fingerprint, the environment, per-case timings and a verdict; the field contract is in [docs/verify/record-contract.md](docs/verify/record-contract.md) and the onboarding guide in [docs/verify/onboarding.md](docs/verify/onboarding.md). It only wraps the existing execution: no test selection, no reuse of earlier passes. The direct commands keep working, with the same exit-code semantics.
 
 - Tests put the review ledger in a temporary directory (the `AE_HOME` environment variable). When trying things by hand or running skill evaluations, run `export AE_HOME=$(mktemp -d)` first, so throwaway reviews are not registered in your real ledger and do not take ports that belong to real reviews.
 - Set `AE_DELIVERY_ARTIFACTS` to a directory under `skill/annotation-everything-workspace/` to keep synthetic sources, command outputs, batch state, offline exports, and screenshots. See the [delivery evidence](docs/locale-delivery.en.md) for the command and evaluation boundaries.

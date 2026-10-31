@@ -42,6 +42,8 @@ playwright-report/
 .coverage
 .coverage.*
 htmlcov/
+# 统一验证入口的本地记录与日志（verify.py）：结构化证据，只在本机与 CI 构件里
+.verify/
 
 # ── 密钥与本地配置 ─────────────────────────────────────────────
 .env
