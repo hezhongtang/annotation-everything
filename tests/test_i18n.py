@@ -201,6 +201,26 @@ class CheckCatalogTests(unittest.TestCase):
         problems = i18n.check_catalogs(root=self.root)
         self.assertTrue(any("n.other" in p for p in problems), problems)
 
+    def test_counted_english_message_without_branches_is_reported(self):
+        """英文计数消息一个分支都没有时，运行时会静默显示 "1 annotations"。"""
+        self._write("zh-CN.json", {"locale": "zh-CN", "messages": {"n": "{count} 条"}})
+        self._write("en.json", {"locale": "en", "messages": {"n": "{count} items"}})
+        problems = i18n.check_catalogs(root=self.root)
+        self.assertTrue(any("n.one" in p for p in problems), problems)
+
+    def test_chinese_message_with_plural_branches_is_reported(self):
+        self._write("zh-CN.json", {"locale": "zh-CN", "messages": {
+            "n": "{count} 条", "n.one": "{count} 条"}})
+        self._write("en.json", {"locale": "en", "messages": {
+            "n": "{count} items", "n.one": "{count} item", "n.other": "{count} items"}})
+        problems = i18n.check_catalogs(root=self.root)
+        self.assertTrue(any("n.one" in p and "zh-CN" in p for p in problems), problems)
+
+    def test_non_counted_message_needs_no_branches(self):
+        self._write("zh-CN.json", {"locale": "zh-CN", "messages": {"a": "第 {page} 页"}})
+        self._write("en.json", {"locale": "en", "messages": {"a": "Page {page}"}})
+        self.assertEqual(i18n.check_catalogs(root=self.root), [])
+
     def test_wrong_locale_tag_is_reported(self):
         self._write("zh-CN.json", {"locale": "en", "messages": {"a": "甲"}})
         self._write("en.json", {"locale": "en", "messages": {"a": "A"}})
