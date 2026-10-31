@@ -49,6 +49,19 @@ def load_manifest(review_dir: Path) -> dict[str, Any]:
     return ledger.read_manifest(review_dir)   # 读不了或不是 JSON 对象都返回 {}
 
 
+def stored_locale(review_dir: Path) -> str | None:
+    """审阅里保存的语言选择；没有（旧审阅）返回 None。"""
+    value = load_manifest(review_dir).get("locale")
+    return value if isinstance(value, str) else None
+
+
+def cli_locale(explicit: object, review_dir: Path) -> str:
+    """命令行的语言：--locale 优先于 AE_LOCALE，再优先于审阅设置，最后中文。"""
+    return i18n.resolve_locale(
+        i18n.effective_choice(explicit, os.environ.get("AE_LOCALE"), stored_locale(review_dir)),
+        system_languages=i18n.system_languages())
+
+
 def default_agent() -> str:
     return "claude" if os.environ.get("CLAUDECODE") else "agent"
 
@@ -519,10 +532,12 @@ def main(argv: list[str] | None = None) -> int:
     sk.add_argument("--remove", nargs="*", metavar="名称", help="移除这些技能")
     sk.add_argument("--clear", action="store_true", help="清空目录")
     sk.add_argument("--always", nargs="*", metavar="名称=范围",
-                    help="整体设置常驻技能；范围：全部（默认）/ 报告 / 讲稿 / 风格优化")
+                    help="整体设置常驻技能；范围：全部 / 全部批注（默认）/ 报告 / 讲稿 / 风格优化，"
+                         "英文界面也可写 all / report / script / style")
     sk.add_argument("--always-add", nargs="*", metavar="名称=范围", help="追加常驻技能")
     sk.add_argument("--always-remove", nargs="*", metavar="名称", help="去掉这些常驻技能（所有范围）")
     sk.add_argument("--always-clear", action="store_true", help="清空常驻技能")
+    sk.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
     cl = sub.add_parser("claim", help="不等待：接收最早一个等待中的提交（给自己轮询的代理用，别直接改 handoff.json）")
     cl.add_argument("dir", type=str, help="审阅目录或审阅标识")
     cl.add_argument("--by", default=default_agent())
@@ -654,19 +669,48 @@ def main(argv: list[str] | None = None) -> int:
                 if name:
                     out.append({"name": name[0], "desc": desc.strip()})
             return out
-        scope_of = {"全部": "all", "全部批注": "all", "all": "all", "报告": "报告", "讲稿": "讲稿", "风格优化": "style", "style": "style"}
+        # 常驻技能范围：存储值 → 界面消息 key；scope_of 收中英文所有字面量，
+        # scope_prompt 只放当前语言那份，报错时列给用户看的不能混语言
+        always_label_key = {"all": "viewer.always.scope.all", "报告": "viewer.always.scope.report",
+                            "讲稿": "viewer.always.scope.script", "style": "viewer.always.scope.style"}
+        scope_of = {"all": "all", "全部": "all", "全部批注": "all", "报告": "报告", "report": "报告",
+                    "讲稿": "讲稿", "script": "讲稿", "style": "style", "风格优化": "style"}
+        scope_prompt = {"zh-CN": {"all": "all", "报告": "报告", "讲稿": "讲稿", "style": "style"},
+                        "en": {"all": "all", "报告": "report", "讲稿": "script", "style": "style"}}
+        try:
+            lang = cli_locale(a.locale, d)
+        except i18n.LocaleError as exc:
+            print(f"错误：{exc}", file=sys.stderr)
+            return 2
+        msgs = i18n.load_catalog(lang)
+        catalogs = i18n.load_all()
+
+        def t(key: str, **params: object) -> str:
+            return i18n.translate(msgs, key, catalogs=catalogs, **params)
+
+        def scope_label(scope: str) -> str:
+            return t(always_label_key[scope])
+
+        def scope_item(name: str, scope: str) -> str:
+            return t("viewer.always.scopeItem", name=name, scope=scope_label(scope))
 
         def parse_always(items: list[str] | None) -> list[dict[str, str]]:
             out = []
             for it in items or []:
                 name, _, sc = it.partition("=")
-                if sc.strip() and sc.strip() not in scope_of:
-                    raise ValueError(f"常驻技能范围「{sc}」不认识，可选：全部 / 报告 / 讲稿 / 风格优化")
-                out.append({"name": name, "scope": scope_of[sc.strip() or "全部"]})
+                token = sc.strip().lower()
+                if token and token not in scope_of:
+                    choices = t("viewer.always.listSep").join(
+                        scope_item(scope_prompt[lang][scope], scope) for scope in scope_prompt[lang])
+                    raise ValueError(t("cli.skills.badScope", scope=sc.strip(), choices=choices))
+                out.append({"name": name, "scope": scope_of[token or "全部"]})
             return out
         try:   # 先把参数全部解析、校验完，再写盘：出错时什么都不改
             set_al, add_al = (parse_always(a.always) if a.always is not None else None), parse_always(a.always_add)
             store.clean_always((set_al or []) + add_al)
+        except store.AlwaysLimitError as e:
+            print(f"错误：{t('viewer.always.tooMany', limit=e.limit, count=e.count)}", file=sys.stderr)
+            return 2
         except (ValueError, store.NoteError) as e:
             print(f"错误：{e}", file=sys.stderr)
             return 2
@@ -677,6 +721,9 @@ def main(argv: list[str] | None = None) -> int:
                 cat = store.skills_update(d, set_to=parse(a.set) if a.set is not None else None,
                                           add=parse(a.add), remove=a.remove, clear=a.clear, always_set=set_al,
                                           always_add=add_al, always_remove=a.always_remove, always_clear=a.always_clear)
+            except store.AlwaysLimitError as e:
+                print(f"错误：{t('viewer.always.tooMany', limit=e.limit, count=e.count)}", file=sys.stderr)
+                return 2
             except (OSError, store.NoteError) as e:
                 print(f"错误：{e}", file=sys.stderr)
                 return 2
@@ -685,16 +732,22 @@ def main(argv: list[str] | None = None) -> int:
         if always_change and not catalog_change:
             try:
                 store.always_update(d, set_to=set_al, add=add_al, remove=a.always_remove, clear=a.always_clear)
+            except store.AlwaysLimitError as e:
+                print(f"错误：{t('viewer.always.tooMany', limit=e.limit, count=e.count)}", file=sys.stderr)
+                return 2
             except store.NoteError as e:
                 print(f"错误：{e}", file=sys.stderr)
                 return 2
+        sep = t("cli.skills.listSep")
         used = sorted({x for n in store.load(d)["notes"] for x in (n.get("skills") or [])})
-        print("技能目录（页面「技能」输入栏的候选）：" + ("；".join(f"{c['name']}" + (f"（{c['desc']}）" if c["desc"] else "")
-                                                     for c in cat) or "（空）"))
+        print(t("cli.skills.catalog", list=sep.join(
+            t("cli.skills.item", name=c["name"], desc=c["desc"]) if c["desc"] else c["name"]
+            for c in cat) or t("cli.skills.catalogEmpty")))
         if used:
-            print("批注里用到的技能：" + "、".join(used))
+            print(t("cli.skills.used", list=sep.join(used)))
         alw = store.always_skills(d)
-        print("常驻技能（每条批注按范围先调用）：" + ("、".join(f"{x['name']}（{store.ALWAYS_ZH[x['scope']]}）" for x in alw) or "（无）"))
+        print(t("cli.skills.always", list=sep.join(scope_item(x["name"], x["scope"]) for x in alw)
+               or t("cli.skills.alwaysNone")))
         return 0
     if a.cmd == "claim":
         item = store.handoff_claim(d, by=a.by, stage=a.stage, seq=a.seq)
