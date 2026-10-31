@@ -43,6 +43,8 @@ jobs:
         with:
           name: verify-python${{ matrix.python-version }}
           path: .verify/
+          # .verify 是点开头的目录，upload-artifact@v4 默认排除隐藏文件，必须显式包含
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
       # 失败时也能看到提交、环境、通过 / 失败 / 跳过与日志定位
