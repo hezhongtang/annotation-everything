@@ -890,9 +890,13 @@ def _reconcile_edit(raw: dict[str, Any]) -> None:
     text = raw.get("text")
     if not isinstance(ed, dict) or not isinstance(text, str):
         return
-    if ed.get("op") == "replace" and text.startswith(REPLACE_PREFIX):
-        ed["to"] = text[len(REPLACE_PREFIX):]
-    elif text not in (DELETE_TEXT,) and not text.startswith(REPLACE_PREFIX):
+    if ed.get("op") not in ("delete", "replace") or not isinstance(ed.get("from"), str):
+        return
+    if text == DELETE_TEXT:
+        raw["edit"] = {"op": "delete", "from": ed["from"]}
+    elif text.startswith(REPLACE_PREFIX):
+        raw["edit"] = {"op": "replace", "from": ed["from"], "to": text[len(REPLACE_PREFIX):]}
+    else:
         raw.pop("edit", None)
 
 

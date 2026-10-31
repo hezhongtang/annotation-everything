@@ -823,6 +823,14 @@ def export_import_checks(browser, tmp: Path):
         page.keyboard.press("n")
         page.click("#openImp")
 
+    switched = page.evaluate("""() => [
+      cleanItem({page:1,text:REP_PREFIX+'新句',edit:{op:'delete',from:'原句'}}),
+      cleanItem({page:1,text:DEL_TEXT,edit:{op:'replace',from:'原句',to:'旧句'}})
+    ].map(n => n.edit)""")
+    ok(switched == [{"op": "replace", "from": "原句", "to": "新句"},
+                    {"op": "delete", "from": "原句"}],
+       "JSON 可见正文能双向切换删除和改写，隐藏结构不能恢复旧操作")
+
     # 界面是英文：默认导出英文，可显式选中文
     page.click("#notesBtn")
     ok(page.evaluate("document.getElementById('expLang').value") == "auto", "导出语言默认「跟随界面」")

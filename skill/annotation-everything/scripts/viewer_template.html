@@ -540,8 +540,9 @@ function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:Str
   const e=x.edit;if(e&&(e.op==="delete"||e.op==="replace")&&String(e.from||"").trim())n.edit=e.op==="delete"?{op:"delete",from:String(e.from)}:{op:"replace",from:String(e.from),to:String(e.to??"")};
   // 以看得见的正文为准：快捷修改的结构从正文重新推导，免得只改了正文、结构里还留着旧内容
   if(n.edit&&typeof n.text==="string"){
-    if(n.edit.op==="replace"&&n.text.startsWith(REP_PREFIX))n.edit.to=n.text.slice(REP_PREFIX.length);
-    else if(n.text!==DEL_TEXT&&!n.text.startsWith(REP_PREFIX))delete n.edit}
+    if(n.text===DEL_TEXT)n.edit={op:"delete",from:n.edit.from};
+    else if(n.text.startsWith(REP_PREFIX))n.edit={op:"replace",from:n.edit.from,to:n.text.slice(REP_PREFIX.length)};
+    else delete n.edit}
   return n}
 function mergeLocal(items){const byId=new Map(notes.map(x=>[x.id,x])),keys=new Set(notes.map(dedupKey));let added=0,skipped=0,updated=0;
   items.forEach(raw=>{const x=cleanItem(raw);const cur=byId.get(x.id);

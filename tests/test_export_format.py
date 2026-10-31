@@ -438,6 +438,21 @@ class EditedBodyTests(unittest.TestCase):
         changed = next(n for n in got.values() if n.get("edit"))
         self.assertEqual(changed["edit"]["to"], "改成另一句", "采用编辑后的正文，不写回旧内容")
 
+    def test_json_visible_body_can_switch_quick_edit_operation(self):
+        d = review(tmpdir())
+        for original, text, expected in (
+            ({"op": "delete", "from": "原句"}, "改为：新句", {"op": "replace", "from": "原句", "to": "新句"}),
+            ({"op": "replace", "from": "原句", "to": "旧句"}, store.DELETE_TEXT, {"op": "delete", "from": "原句"}),
+        ):
+            with self.subTest(original=original):
+                f = d / "switch.json"
+                f.write_text(json.dumps({"notes": [{"page": 1, "target": "报告", "text": text,
+                                                    "quote": "原句", "edit": original}]}), encoding="utf-8")
+                code, _, err = run_cli(["import", str(d), str(f)])
+                self.assertEqual(code, 0, err)
+                saved = next(n for n in store.load(d)["notes"] if n["text"] == text)
+                self.assertEqual(saved["edit"], expected)
+
     def test_unrelated_markdown_is_refused_with_a_rule(self):
         for text in ("随便一段文字，没有页头也没有条目。", "# 只是个标题\n\n一些段落。",
                      "<!-- 别的注释 -->\n## 第 1 页｜x\n", "## Page 3 | x\n1. [Report] 意见\n"):
