@@ -221,8 +221,8 @@ class CatalogTests(unittest.TestCase):
         branched = sorted(k for k in EDITING_KEYS if EDITING_KEYS[k] and f"{k}.one" in zh)
         self.assertEqual(branched, [], "中文不该有英文式复数分支")
 
-    def test_catalogs_stay_self_consistent(self):
-        self.assertEqual(i18n.check_catalogs(), [])
+    # 全仓库词典一致性契约集中在 tests/test_i18n_catalog_contract.py（issue #51）；
+    # 本类只保留编辑功能专有的 key、复数与接线断言。
 
     def test_every_editing_key_is_wired_into_the_page(self):
         builder = (ROOT / "skill" / "annotation-everything" / "scripts" / "build_viewer.py").read_text(encoding="utf-8")

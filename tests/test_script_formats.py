@@ -523,8 +523,8 @@ class MixedLanguageTests(unittest.TestCase):
 class CatalogTests(unittest.TestCase):
     """新增的 build.* / formats.* 诊断文案在中英词典里一致、占位符对齐。"""
 
-    def test_shipped_catalogs_stay_consistent(self):
-        self.assertEqual(i18n.check_catalogs(), [], "中英词典 key、占位符与复数分支必须一致")
+    # 全仓库词典一致性契约集中在 tests/test_i18n_catalog_contract.py（issue #51）；
+    # 本类只保留 build.* / formats.* 专有的 key 断言。
 
     def test_new_keys_exist_in_both_languages(self):
         keys = ["build.scriptNoPages", "build.scriptBadHead", "build.scriptDuplicatePage", "build.pageMismatch",

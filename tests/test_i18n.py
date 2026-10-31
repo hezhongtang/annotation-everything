@@ -227,8 +227,8 @@ class CheckCatalogTests(unittest.TestCase):
         problems = i18n.check_catalogs(root=self.root)
         self.assertTrue(any("locale" in p for p in problems), problems)
 
-    def test_repo_catalogs_pass_the_check(self):
-        self.assertEqual(i18n.check_catalogs(), [])
+    # 无参数的全仓库词典检查集中在 tests/test_i18n_catalog_contract.py（issue #51）；
+    # 本类只保留对合成错误输入（root= 临时词典）的校验器行为测试。
 
 
 if __name__ == "__main__":
