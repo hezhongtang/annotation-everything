@@ -39,7 +39,7 @@ python3 "$S/notes.py" skills "$R" --set "writer=Editorial checks" "layout=Layout
 python3 "$S/notes.py" skills "$R" --always "writer=script" "layout=style" --locale en
 ```
 
-Scopes accept `all`, `report`, `script`, `style` or their Chinese equivalents. The CLI maps aliases to the same stored values. `--always-add`, `--always-remove NAME`, and `--always-clear` maintain the list. In the page, search by name or description, use arrows and Enter to select, or enter an unlisted name. Separate names with commas. The standing dialog uses Enter for the next row and Ctrl/Cmd+Enter to save. Applicable standing and per-annotation skills must both be invoked under the shared protocol.
+Scopes accept `all`, `report`, `script`, `style` or their Chinese equivalents. The CLI maps aliases to the same stored values. `--always-add`, `--always-remove NAME`, and `--always-clear` maintain the list. In the page, search by name or description, use arrows and Enter to select, or enter an unlisted name. Separate names with commas. The standing dialog uses Enter for the next row and Ctrl/Cmd+Enter to save. Applicable standing and per-annotation skills must both be invoked under the shared protocol. Read [Agent mechanisms](agent-mechanisms.en.md) before selecting the host-specific invocation method.
 
 ## 4. Start the service and wait
 
@@ -48,7 +48,7 @@ python3 "$S/serve.py" "$R" --locale en
 python3 "$S/notes.py" wait "$R" --locale en
 ```
 
-These are long-running commands. In Claude Code, run them as background Bash tasks so the end of `wait` wakes the agent. Other agents can run a waiter or poll `notes.py claim "$R"`: it claims a waiting submission, prints JSON, and exits 0; no waiting batch exits 3. One waiter handles one review. Do not report completion and leave a required waiter unstarted.
+These are long-running commands. Read [Agent mechanisms](agent-mechanisms.en.md) and select a method that the host supports: background task notifications, bounded polling, or a submission hook. A background process wakes the agent only if the host supplies that notification. `wait --timeout SECONDS` exits 3 when no submission arrives before the timeout. `notes.py claim "$R"` accepts a waiting submission, prints JSON, and exits 0; no waiting batch exits 3. One waiter handles one review. Start the selected waiting mechanism before reporting that the review is ready.
 
 Reuse a matching running service. If the dedicated port is occupied, read the temporary address from the service output; do not casually change port ownership. Stop the service with Ctrl+C or send SIGINT/SIGTERM to its recorded PID. An optional user-configured `--on-handoff "command arguments"` hook receives JSON on stdin and `AE_EVENT`, `AE_REVIEW_DIR`, `AE_HANDOFF_SEQ`, `AE_URL`. It runs from the service's starting directory without a shell. Its snapshot can be older than the accepted batch, so claim before editing. Repeated pending submissions merge rather than trigger another hook.
 
@@ -82,7 +82,7 @@ python3 "$S/notes.py" done "$R" --seq N --summary "Updated both sources. Checked
 python3 "$S/notes.py" batches "$R" --last 3 --locale en
 ```
 
-Use a summary that describes what was actually checked. Keep unimplemented annotations open and explain why. `reopen` corrects a mistaken resolution. Report changed pages, unresolved decisions, and full-check scope to the user; ask them to refresh and inspect. Start `wait` again for the next submission. If the batch requested a stop after the initial edit, stop at that stage as specified below.
+Use `--by` to identify each worker; [Agent mechanisms](agent-mechanisms.en.md) describes the environment-dependent default. Use a summary that describes what was actually checked. Keep unimplemented annotations open and explain why. `reopen` corrects a mistaken resolution. Report changed pages, unresolved decisions, and full-check scope to the user; ask them to refresh and inspect. Start `wait` again for the next submission. If the batch requested a stop after the initial edit, stop at that stage as specified below.
 
 If the user says “apply my annotations” directly, first run `show`. Claim a pending submission before editing so its options and source snapshot apply. With no submission, work from the explicit request and resolve completed annotations; `done` reports that no batch exists.
 
@@ -107,7 +107,7 @@ python3 "$S/notes.py" review "$R" ANNOTATION_ID --seq N --return --note "Two def
 
 Approve, revise directly, or return a decision to the user. Give reasons for revision or return. Do not send work back to the initial editor. Handle remaining open annotations in the same accepted batch with `resolve --seq N`. Review verdicts cannot apply to another batch or to a batch that has not entered review. Rebuild and run `done --seq N --summary ...`. Unreviewed drafts block completion; use `--accept-rest` only after confirming every remaining draft is acceptable.
 
-For permitted delegation, the main agent gives an initial-edit worker the accepted requirements and asks it to `resolve --seq N --by NAME`, without `done`. The main agent runs `done --seq N --draft`. A final target enters the review queue; a review target stops for the user. Claim an authorized review with `claim --stage review --seq N`, give the reviewer the same requirements, and finish with `done --seq N` after its verdicts. Separate sessions may wait with `--stage draft` or `--stage review`; each handles only its accepted sequence.
+For permitted delegation, choose the host-specific method in [Agent mechanisms](agent-mechanisms.en.md). If model selection is available, a lower-cost model can make the initial edit and a stronger model can review it. Without a subagent mechanism, the main session handles the accepted work personally. When delegating, the main agent gives an initial-edit worker the accepted requirements and asks it to `resolve --seq N --by NAME`, without `done`. The main agent runs `done --seq N --draft`. A final target enters the review queue; a review target stops for the user. Claim an authorized review with `claim --stage review --seq N`, give the reviewer the same requirements, and finish with `done --seq N` after its verdicts. Separate sessions may wait with `--stage draft` or `--stage review`; each handles only its accepted sequence.
 
 ## 7. Imports and recovery
 
@@ -138,4 +138,4 @@ python3 "$S/serve.py" "$R" --debug --locale en
 - `reject_counts` uses stable codes such as `bad-host`, `bad-origin`, `no-origin`, `cross-site`, `bad-content-type`, and `review-mismatch`. `errors` counts server-side write failures. Read reason codes and timestamps in `server.log`; request-supplied text is untrusted. Preserve validation when resolving a problem.
 - Repeatedly failed changes can leave the send queue. Download the browser backup and inspect/import it. A corrupt `notes.json` prevents startup and is not overwritten; preserve a backup and use `notes.jsonl` as recovery evidence.
 - A corrupt ledger does not overwrite itself. Review generation and annotation handling can continue with a warning and temporary port allocation. Repair the ledger or move it aside after preserving it. For synthetic demos, set `AE_HOME` to a temporary directory before any command.
-- For installation or port problems, find the repository path in the skill copy's `.install-record.json` (`repo`). Run `python3 /path/to/repo/ae.py doctor --locale en` or add `--json`. `repair` lists its plan and performs safe repairs. Obtain approval for destructive options such as `--forget-stale` or `--stop-orphans`.
+- For installation or port problems, find the repository path in the skill copy's `.install-record.json` (`repo`). Run `python3 /path/to/repo/ae.py doctor --locale en` or add `--json`. For a custom installation, add `--target "/path/to/skills"` to both `doctor` and `repair`; this is the parent directory of the skill copy after resolving symlinks. `repair` lists its plan and performs safe repairs. Obtain approval for destructive options such as `--forget-stale` or `--stop-orphans`.

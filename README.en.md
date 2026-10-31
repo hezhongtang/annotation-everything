@@ -7,12 +7,12 @@
 </p>
 
 <p align="center">
-  annotation-everything is a review and annotation tool that runs on your machine, packaged as a Claude Code skill.<br>It puts a page-by-page HTML report and its speaker notes side by side in one page. Reviewers annotate each page in the browser, submit with one click, and an agent revises the report and the speaker notes accordingly.
+  annotation-everything is a review and annotation tool that runs on your machine, packaged as an Agent Skills skill. Any agent that adopts the open Agent Skills standard can use it. It installs into Claude Code's skill directory by default, and <code>--target</code> / <code>--link</code> put it into other skill directories.<br>It puts a page-by-page HTML report and its speaker notes side by side in one page. Reviewers annotate each page in the browser, submit with one click, and an agent revises the report and the speaker notes accordingly.
 </p>
 
 <p align="center">
   <img alt="version 0.9.0" src="https://img.shields.io/badge/version-0.9.0-1f3a5f?style=flat-square">
-  <img alt="Claude Code skill" src="https://img.shields.io/badge/Claude_Code-skill-d97757?style=flat-square">
+  <img alt="Agent Skills skill" src="https://img.shields.io/badge/Agent_Skills-skill-d97757?style=flat-square">
   <img alt="Python standard library only" src="https://img.shields.io/badge/Python-standard_library_only-3776ab?style=flat-square&logo=python&logoColor=white">
   <img alt="listens on 127.0.0.1 only" src="https://img.shields.io/badge/listens_on-127.0.0.1-2fa36b?style=flat-square">
   <img alt="usage data not sent" src="https://img.shields.io/badge/usage_data-not_sent-555?style=flat-square">
@@ -109,7 +109,7 @@ One skill copy handles Chinese requests such as “按批注改” and English r
 
 Supported languages are Simplified Chinese and English. English regional tags share the English resources; `zh` and `zh-Hans` map to Simplified Chinese. Traditional Chinese and other languages are not supported. The saved browser preference overrides the review default. `auto` matches browser languages in preference order and falls back to English. New reviews and old commands without a language setting remain Chinese. Interface, material, and annotation languages are independent; switching preserves drafts and unsent changes.
 
-Service mode sends real submissions and wakes the agent. Opening `index.html` directly supports browser annotations, copying, and exports; import those annotations to give them to an agent. JSON preserves the annotation structure and review identity. Markdown omits IDs, page keys, timestamps, and processing batches and retains the legacy grammar's text limits; see the [format reference](skill/annotation-everything/references/formats.en.md). The [delivery evidence](docs/locale-delivery.en.md) records three complete language combinations, the compatibility matrix, environment, and limits.
+Service mode accepts real submissions through a running waiter or hook. Automatic agent wake-up depends on host support. Opening `index.html` directly supports browser annotations, copying, and exports; import those annotations to give them to an agent. JSON preserves the annotation structure and review identity. Markdown omits IDs, page keys, timestamps, and processing batches and retains the legacy grammar's text limits; see the [format reference](skill/annotation-everything/references/formats.en.md). The [delivery evidence](docs/locale-delivery.en.md) records three complete language combinations, the compatibility matrix, environment, and limits.
 
 ## How it works
 
@@ -197,7 +197,7 @@ flowchart LR
 
 ## Installation and maintenance
 
-The management command is `ae.py` at the repository root (Python standard library only), with four subcommands: `install`, `doctor`, `repair`, `uninstall`.
+The management command is `ae.py` at the repository root (Python standard library only), with four subcommands: `install`, `doctor`, `repair`, `uninstall`. The tool is an Agent Skills skill: any agent that adopts the open Agent Skills standard can load `SKILL.md` and follow it. It installs into Claude Code's skill directory by default. `--target` and `--link` cover every other agent's skill directory (see below).
 
 ### For people
 
@@ -223,7 +223,7 @@ python3 ae.py doctor --locale en                 # optional: interface language 
 - **Install into another skills directory**: by default `install` copies the skill into `~/.claude/skills/` (`CLAUDE_SKILLS_DIR` still works as an override); `--target <dir>` installs to `<dir>/annotation-everything` instead. `doctor`, `repair` and `uninstall` accept the same `--target` to check, fix and remove that copy, and failing items' fix commands repeat the same `--target`. Besides the built-in names `codex`, `agents` and `zcode`, `--link` accepts `name=path` (e.g. `cursor=~/.cursor/skills`) to symlink the copy into any skills directory and record it in the install record; custom links show up in the checks too (dangling ones fail with a fix command), `repair` rebuilds them and `uninstall` removes them. The install record lives inside the copy, so once the copy is gone custom links can no longer be discovered automatically (links in the built-in directories still have the scan fallback).
 - Before stopping a server, the command verifies that Python is executing the script from this repository or the current skill copy, then checks the process identity again before sending a signal; it refuses to stop an unverified process. `--purge` removes only known ledger files and refuses to proceed if the ledger is corrupt or its directory contains other files or unregistered review directories.
 
-Once installed, tell Claude Code "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow.
+Once installed, tell your agent "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow. How the agent is woken up and how it invokes a skill named on an annotation differ by agent. The [Agent mechanisms reference](skill/annotation-everything/references/agent-mechanisms.en.md) maps the four cases.
 
 ### For agents
 
@@ -317,6 +317,8 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── protocol.md               shared safety, stop conditions, and protocol
 │   ├── workflow.zh-CN.md          Chinese workflow
 │   ├── workflow.en.md             English workflow
+│   ├── agent-mechanisms.zh-CN.md  Chinese agent mechanism reference
+│   ├── agent-mechanisms.en.md     English agent mechanism reference
 │   ├── formats.md                 Chinese input and output formats
 │   └── formats.en.md              English input and output formats
 ├── locales/                       Chinese and English messages (zh-CN.json, en.json) and the locale contract

@@ -15,3 +15,10 @@ Generate a local review page → start its service → wait for a submission →
 4. Read one workflow per request. If the user explicitly requests another language, use that workflow. Do not load both complete workflows by default.
 
 `$S` in the guides means the `scripts/` directory beside this installed `SKILL.md`. Resolve it from the skill copy that was loaded. The scripts use the Python standard library. Both languages use the same installation, scripts, translation resources, review identity, and storage protocol.
+
+## 各 Agent 的对应机制 / Agent mechanisms
+
+- **中文请求**：首次配置等待与唤醒、调用批注指定技能、分派子代理或设置 `--by` 时，读取[各 Agent 的对应机制](references/agent-mechanisms.zh-CN.md)。
+- **English requests**: read [Agent mechanisms](references/agent-mechanisms.en.md) before configuring a waiter, invoking annotation skills, delegating work, or choosing a `--by` name.
+
+Load only the matching language reference. The shared protocol still governs permissions and stage boundaries.

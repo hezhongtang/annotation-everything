@@ -7,12 +7,12 @@
 </p>
 
 <p align="center">
-  annotation-everything 是一个在本机运行的审阅批注工具，以 Claude Code 技能的形式提供。<br>它把逐页 HTML 报告和配套讲稿并排放在同一个页面里。审阅人在浏览器中按页写批注，写完一键提交，由 Agent 按批注修改报告和讲稿。
+  annotation-everything 是一个在本机运行的审阅批注工具，以 Agent Skills 技能的形式提供。任何采纳 Agent Skills 开放标准的 Agent 都能使用它；默认安装到 Claude Code 的技能目录，也能用 <code>--target</code> / <code>--link</code> 装进其他技能目录。<br>它把逐页 HTML 报告和配套讲稿并排放在同一个页面里。审阅人在浏览器中按页写批注，写完一键提交，由 Agent 按批注修改报告和讲稿。
 </p>
 
 <p align="center">
   <img alt="版本 0.9.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.9.0-1f3a5f?style=flat-square">
-  <img alt="Claude Code 技能" src="https://img.shields.io/badge/Claude_Code-%E6%8A%80%E8%83%BD-d97757?style=flat-square">
+  <img alt="Agent Skills 技能" src="https://img.shields.io/badge/Agent_Skills-%E6%8A%80%E8%83%BD-d97757?style=flat-square">
   <img alt="Python 仅标准库" src="https://img.shields.io/badge/Python-%E4%BB%85%E6%A0%87%E5%87%86%E5%BA%93-3776ab?style=flat-square&logo=python&logoColor=white">
   <img alt="只监听 127.0.0.1" src="https://img.shields.io/badge/%E5%8F%AA%E7%9B%91%E5%90%AC-127.0.0.1-2fa36b?style=flat-square">
   <img alt="不上报使用数据" src="https://img.shields.io/badge/%E4%BD%BF%E7%94%A8%E6%95%B0%E6%8D%AE-%E4%B8%8D%E4%B8%8A%E6%8A%A5-555?style=flat-square">
@@ -109,7 +109,7 @@ Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lan
 
 目前支持简体中文与英文。英文地区标签共用英文资源；`zh` / `zh-Hans` 映射到简体中文，不承诺繁体或其他语言。浏览器保存的选择优先于审阅默认值，`auto` 按浏览器语言偏好顺序匹配、不支持时回退英文。省略设置的新审阅和旧命令保持中文。界面、材料和批注语言相互独立，切换语言保留草稿与待补传改动。
 
-服务模式可以实际提交并唤醒 Agent；直接打开 `index.html` 时，只提供浏览器批注、复制和导出，需导入后交给 Agent。JSON 保留完整批注结构与审阅身份；Markdown 不保留 id、页面键、时间戳或处理批次，并有旧文法的文本限制，详见[格式说明](skill/annotation-everything/references/formats.md)。[交付验收记录](docs/locale-delivery.zh-CN.md)列出三种语言组合的完整流程、兼容矩阵、验证环境与限制。
+服务模式可以实际提交，由已启动的等待机制或钩子接收；是否自动唤醒 Agent 取决于宿主支持。直接打开 `index.html` 时，只提供浏览器批注、复制和导出，需导入后交给 Agent。JSON 保留完整批注结构与审阅身份；Markdown 不保留 id、页面键、时间戳或处理批次，并有旧文法的文本限制，详见[格式说明](skill/annotation-everything/references/formats.md)。[交付验收记录](docs/locale-delivery.zh-CN.md)列出三种语言组合的完整流程、兼容矩阵、验证环境与限制。
 
 ## 工作原理
 
@@ -197,7 +197,7 @@ flowchart LR
 
 ## 安装与维护
 
-管理命令是仓库根目录的 `ae.py`（只用 Python 标准库），四个子命令：`install` 安装、`doctor` 体检、`repair` 修复、`uninstall` 卸载。
+管理命令是仓库根目录的 `ae.py`（只用 Python 标准库），四个子命令：`install` 安装、`doctor` 体检、`repair` 修复、`uninstall` 卸载。本工具是 Agent Skills 技能：任何采纳 Agent Skills 开放标准的 Agent 都能加载 `SKILL.md` 并按它工作。默认装进 Claude Code 的技能目录，其余 Agent 的技能目录用 `--target` 和 `--link` 覆盖（见下）。
 
 ### 给人看
 
@@ -223,7 +223,7 @@ python3 ae.py doctor --locale en                 # 可选：界面语言 auto、
 - **装到别的技能目录**：`install` 缺省把技能副本装到 `~/.claude/skills/`（`CLAUDE_SKILLS_DIR` 仍可覆盖），`--target <目录>` 改为装到 `<目录>/annotation-everything`；`doctor`、`repair`、`uninstall` 接受同一个 `--target` 对该副本体检、修复、卸载，失败项的修复命令会带上同一 `--target`。`--link` 除内置名称 `codex`、`agents`、`zcode` 外还接受 `名称=路径`（如 `cursor=~/.cursor/skills`），为任意技能目录建指向副本的软链接并记入安装记录；自定义链接同样出现在体检里（悬空时报失败项与修复命令），`repair` 能重建，`uninstall` 会删除。安装记录只存在技能副本里，副本删除后自定义链接无法再被自动发现（内置目录的链接仍有扫描兜底）。
 - 停止服务前会核实正在执行的是本仓库或当前技能副本的脚本，并在发信号前复核进程身份；无法核实时拒绝停止。`--purge` 仅删除已知台账文件；台账损坏、目录内有其他文件或未登记的审阅目录时拒绝清除。
 
-装好后在 Claude Code 中说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」，Claude Code 就会按这套流程工作。
+装好后对 Agent 说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」，它就会按这套流程工作。技能怎么被唤醒、批注指定的技能怎么调用，各 Agent 的机制不同，对照见 [SKILL.md](skill/annotation-everything/SKILL.md) 的「各 Agent 的对应机制」一节。
 
 ### 给 Agent 看
 
@@ -317,6 +317,8 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── protocol.md               共用安全、停止条件与协议约束
 │   ├── workflow.zh-CN.md          中文操作流程
 │   ├── workflow.en.md             英文操作流程
+│   ├── agent-mechanisms.zh-CN.md  各 Agent 的等待、技能调用与分派机制
+│   ├── agent-mechanisms.en.md     英文 Agent 机制对照
 │   ├── formats.md                 中文输入与输出格式
 │   └── formats.en.md              英文输入与输出格式
 ├── locales/                       中英消息（zh-CN.json、en.json）和语言选择契约
