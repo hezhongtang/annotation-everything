@@ -89,6 +89,12 @@ MODULE_RESOURCES = {
 # 合成资源名：只用于协议自身的测试与顺序获取演示，不映射到真实组。
 SYNTHETIC_RESOURCES = ("synthetic-a", "synthetic-b")
 
+# MODULE_RESOURCES 的键所在的测试包。同一模块有两种加载形态：显式
+# `python3 -m unittest tests.test_x` 得到带包前缀的模块名；discover
+# （`python3 -m unittest discover tests` 与 verify.py 的 _unit-runner）把
+# tests 目录作为顶层目录加载，得到无前缀的顶层名。查表必须两种都认。
+TEST_PACKAGE = "tests"
+
 
 class UnknownResourceError(Exception):
     """资源名不在声明里：拼错名字应当失败，而不是静默拿到一把没人认识的锁。"""
@@ -170,23 +176,28 @@ def held_from_env(env=None) -> set:
 
 
 class LockHandle:
-    """一次 acquire 的结果。borrowed 表示借自祖先（不真正持有，release 是空操作）。
+    """一次 acquire 的结果。borrowed_resources 是借自祖先的资源子集（不真正持有）。
+
+    全部借入时没有任何新获取，release 对锁与豁免标记都是空操作；部分借入时
+    release 只撤销本次新获取部分的豁免标记，借入部分仍属于祖先，不能动。
 
     env 记住 acquire 时写入持有集合的环境：release 不带 env 参数时改它，
     避免调用方拿 os.environ 之外的 env 获取、却又把 os.environ 的豁免标记
     误清掉——那会让同进程后续的子参与者失去豁免、与宿主持有的锁互相等待。
     """
 
-    def __init__(self, resources: tuple, borrowed: bool, waited_seconds: float,
+    def __init__(self, resources: tuple, borrowed_resources, waited_seconds: float,
                  files: Optional[list] = None, env=None):
         self.resources = resources
-        self.borrowed = borrowed
+        self.borrowed_resources = tuple(borrowed_resources or ())
+        self.borrowed = bool(self.borrowed_resources)
         self.waited_seconds = waited_seconds
         self._files = files or []  # [(资源名, 打开的锁文件对象)]；借入时为空
         self.env = env
 
     def describe(self) -> dict:
         return {"resources": list(self.resources), "borrowed": self.borrowed,
+                "borrowed_resources": list(self.borrowed_resources),
                 "wait_seconds": round(self.waited_seconds, 6)}
 
 
@@ -226,7 +237,7 @@ def acquire(resources, timeout: Optional[float] = None, env=None):
     to_lock = [name for name in names if name not in held]
     borrowed = tuple(name for name in names if name in held)
     if not to_lock:
-        return LockHandle(names, bool(borrowed), 0.0, env=import_env)
+        return LockHandle(names, borrowed, 0.0, env=import_env)
     root = lock_root(import_env)
     started = time.monotonic()
     files = []
@@ -256,13 +267,16 @@ def acquire(resources, timeout: Optional[float] = None, env=None):
     waited = time.monotonic() - started
     held.update(to_lock)
     import_env[HELD_ENV] = ":".join(sorted(held))
-    return LockHandle(names, False, waited, files, env=import_env)
+    return LockHandle(names, borrowed, waited, files, env=import_env)
 
 
 def release(handle: LockHandle, env=None) -> None:
     """释放锁（关闭文件描述符即释放）。借入的资源不属于本进程，不动。
 
-    豁免标记回退到 acquire 实际写入的环境（handle.env）：显式传入 env 以兼容
+    豁免标记只撤销本次新获取的部分（resources 减去 borrowed_resources）：
+    部分借入时祖先的标记必须原样保留，否则祖先仍在持有的资源会被当成
+    已释放、同进程后续的子参与者失去豁免、与祖先的锁互相等待。
+    回退到 acquire 实际写入的环境（handle.env）：显式传入 env 以兼容
     旧调用方，但不带 env 时绝不去动 os.environ——handle 不是从它获取的。
     """
     import_env = env if env is not None else handle.env
@@ -274,12 +288,27 @@ def release(handle: LockHandle, env=None) -> None:
         except OSError:
             pass
     handle._files = []
-    if not handle.borrowed and handle.resources:
-        remaining = held_from_env(import_env) - set(handle.resources)
+    acquired = set(handle.resources) - set(handle.borrowed_resources)
+    if acquired:
+        remaining = held_from_env(import_env) - acquired
         if remaining:
             import_env[HELD_ENV] = ":".join(sorted(remaining))
         else:
             import_env.pop(HELD_ENV, None)
+
+
+def resources_for_module(module_name: str) -> Optional[tuple]:
+    """模块名 -> 资源要求；带包前缀（tests.test_x）与 discover 的顶层名（test_x）都命中。
+
+    discover 把 tests 目录作为顶层目录加载，模块 __name__ 没有包前缀；显式
+    `python3 -m unittest tests.test_x` 才有。两种加载形态必须是同一模块，
+    查表口径不同会让 discover 直跑时锁协议整体失效。
+    """
+    if module_name in MODULE_RESOURCES:
+        return MODULE_RESOURCES[module_name]
+    if "." not in module_name:
+        return MODULE_RESOURCES.get("%s.%s" % (TEST_PACKAGE, module_name))
+    return None
 
 
 def require_for_module(module_name: str, env=None) -> Optional[LockHandle]:
@@ -289,7 +318,7 @@ def require_for_module(module_name: str, env=None) -> Optional[LockHandle]:
     而不是把等待超时悄悄当通过。返回的句柄存活到进程结束（模块导入级持有），
     discover 的单进程按序执行因此整组互斥。
     """
-    resources = MODULE_RESOURCES.get(module_name)
+    resources = resources_for_module(module_name)
     if not resources:
         return None
     handle = acquire(resources, env=env)

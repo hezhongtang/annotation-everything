@@ -107,8 +107,12 @@ class InterferenceRegressionTests(unittest.TestCase):
         self.assertNotIn(str(server.pid), item.get("message", ""))
 
     def test_module_participates_in_host_state_protocol(self):
-        """本模块（真实干扰回归）在敏感清单里：直接跑 unittest 也受锁保护。"""
-        self.assertEqual(host_isolation.MODULE_RESOURCES.get(__name__), ("host-state",))
+        """本模块（真实干扰回归）在敏感清单里：直接跑 unittest 也受锁保护。
+
+        用归一入口查询：discover 加载时 __name__ 无 tests. 前缀，直接查
+        MODULE_RESOURCES 会落空，恰是协议失效的形态。
+        """
+        self.assertEqual(host_isolation.resources_for_module(__name__), ("host-state",))
 
 
 if __name__ == "__main__":

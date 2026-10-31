@@ -91,6 +91,29 @@ class AcquireReleaseTests(TemporaryLockDirTestCase):
         with self.assertRaises(hi.UnknownResourceError):
             hi.acquire(["no-such-resource"], timeout=1.0)
 
+    def test_release_keeps_ancestor_marks_for_partially_borrowed_handle(self):
+        """混合获取（部分借入 + 部分新拿）：release 只撤销新拿部分的豁免标记。
+
+        祖先持有的 synthetic-a 经环境变量借入；本进程再新拿 synthetic-b。
+        release 后 synthetic-a 的豁免标记必须保留——它属于祖先，清掉会让
+        同进程后续的子参与者与祖先的锁互相等待。
+        """
+        env = self.child_env()
+        env[hi.HELD_ENV] = "synthetic-a"
+        handle = hi.acquire(["synthetic-a", "synthetic-b"], timeout=5.0, env=env)
+        try:
+            self.assertEqual(handle.borrowed_resources, ("synthetic-a",))
+            self.assertTrue(handle.borrowed)
+            self.assertEqual(hi.held_from_env(env), {"synthetic-a", "synthetic-b"})
+        finally:
+            hi.release(handle, env)
+        self.assertEqual(hi.held_from_env(env), {"synthetic-a"},
+                         "借入资源的豁免标记属于祖先，release 不得清掉")
+        # 新拿的 synthetic-b 已真正释放：别的进程可立即获取
+        follower = WorkerScript(self, ["synthetic-b"], hold=0.05)
+        proc, _marker = follower.start("after-mixed-release")
+        self.assertEqual(proc.wait(timeout=30), 0)
+
 
 class WorkerScript:
     """合成参与者：按协议拿锁，进 / 出临界区各写一行时间戳，供父进程验证不重叠。"""
@@ -122,12 +145,18 @@ class WorkerScript:
         self.marker_dir = Path(tempfile.mkdtemp(prefix="ae-lock-worker-"))
         test.addCleanup(shutil_rmtree, self.marker_dir)
 
-    def start(self, name: str, env=None) -> subprocess.Popen:
+    def start(self, name: str, env=None, resources=None) -> subprocess.Popen:
+        """启动一个合成参与者；resources 覆盖构造时的资源列表与顺序。
+
+        防死锁测试要让第二个参与方以相反顺序请求同一组资源：协议靠
+        normalize_resources 的固定排序化解，而不是靠调用方恰好传入相同顺序。
+        """
+        payload = self.resources if resources is None else json_dumps(resources)
         script = self.marker_dir / (name + ".py")
         script.write_text(self.TEMPLATE.format(root=str(ROOT), timeout=self.timeout), encoding="utf-8")
         marker = self.marker_dir / name
         proc = subprocess.Popen(
-            [sys.executable, str(script), self.resources, str(marker), str(self.hold)],
+            [sys.executable, str(script), payload, str(marker), str(self.hold)],
             env=env or self.test.child_env(),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.test.addCleanup(reap, proc)
@@ -225,10 +254,14 @@ class CrossProcessMutexTests(TemporaryLockDirTestCase):
             hi.release(handle)
 
     def test_cross_resource_deadlock_is_avoided_by_fixed_order(self):
-        """两个参与方以相反顺序请求同一组资源，按固定顺序获取后都能完成。"""
+        """两个参与方以相反顺序请求同一组资源，按固定顺序获取后都能完成。
+
+        第二个参与方显式传入相反顺序：协议必须靠固定排序化解交叉，而不是
+        靠两个调用方恰好用同一个列表。
+        """
         worker = WorkerScript(self, ["synthetic-a", "synthetic-b"], hold=0.2)
         proc_a, marker_a = worker.start("order-ab")
-        proc_b, marker_b = worker.start("order-ba")
+        proc_b, marker_b = worker.start("order-ba", resources=["synthetic-b", "synthetic-a"])
         for proc, marker in ((proc_a, marker_a), (proc_b, marker_b)):
             wait_for_file(marker.with_suffix(".exit"), timeout=30)
             self.assertEqual(proc.wait(timeout=30), 0, "交叉请求多资源发生死锁")
@@ -389,6 +422,30 @@ class RealEntryIntegrationTests(TemporaryLockDirTestCase):
 
 
 class ModuleRequirementTests(TemporaryLockDirTestCase):
+    """敏感清单查表与模块级取锁；discover 的加载形态必须与显式加载同一口径。"""
+
+    # 子进程里用 TestLoader.discover 的真实加载方式导入敏感模块：discover 把
+    # tests 目录作为顶层目录，模块 __name__ 无 tests. 前缀——正式入口
+    # （python3 -m unittest discover tests 与 verify.py 的 _unit-runner）正是
+    # 这种形态。归一失效时查表落空，held 里不会有 host-state（R1 回归）。
+    DISCOVER_PROBE = textwrap.dedent("""
+        import json, sys, unittest
+        sys.path.insert(0, {root!r})
+        loader = unittest.TestLoader()
+        suite = loader.discover({tests_dir!r}, pattern="test_host_interference.py")
+        ids = []
+        def collect(item):
+            if isinstance(item, unittest.TestSuite):
+                for child in item:
+                    collect(child)
+            else:
+                ids.append(item.id())
+        collect(suite)
+        import host_isolation as hi
+        held = sorted({{name for handle in hi._module_handles for name in handle.resources}})
+        print(json.dumps({{"errors": loader.errors, "ids": ids, "held": held}}))
+    """)
+
     def test_sensitive_modules_are_declared_and_exist(self):
         for name in hi.MODULE_RESOURCES:
             path = ROOT / (name.replace(".", "/") + ".py")
@@ -430,6 +487,33 @@ class ModuleRequirementTests(TemporaryLockDirTestCase):
                                       env=self.child_env(AE_LOCK_WAIT_SECONDS="0.2"))
         finally:
             self.assertEqual(proc.wait(timeout=30), 0)
+
+    def test_top_level_module_name_resolves_same_as_packaged(self):
+        """discover 的顶层名（无 tests. 前缀）与显式包名查到同一份资源要求。"""
+        for packaged in hi.MODULE_RESOURCES:
+            top_level = packaged.split(".", 1)[1]
+            self.assertEqual(hi.resources_for_module(packaged),
+                             hi.MODULE_RESOURCES[packaged])
+            self.assertEqual(hi.resources_for_module(top_level),
+                             hi.MODULE_RESOURCES[packaged],
+                             "顶层名 %s 查表落空：discover 直跑时锁协议失效" % top_level)
+        self.assertIsNone(hi.resources_for_module("tests.test_i18n"))
+        self.assertIsNone(hi.resources_for_module("test_i18n"))
+        self.assertIsNone(hi.resources_for_module("some_other.test_ae_cli"))
+
+    def test_discover_loaded_sensitive_module_acquires_host_state(self):
+        """loader.discover 真实加载敏感模块：导入即取 host-state 锁（R1 回归）。"""
+        probe = self.DISCOVER_PROBE.format(root=str(ROOT), tests_dir=str(ROOT / "tests"))
+        proc = subprocess.run([sys.executable, "-c", probe], env=self.child_env(),
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        report = json.loads(proc.stdout.strip().splitlines()[-1])
+        self.assertEqual(report["errors"], [])
+        self.assertTrue(report["ids"], "discover 应收集到敏感模块的用例")
+        self.assertTrue(report["ids"][0].startswith("test_host_interference."),
+                        "加载形态应是顶层名（无 tests. 前缀），实测：%s" % report["ids"][0])
+        self.assertIn("host-state", report["held"],
+                      "discover 加载的敏感模块没有取 host-state 锁")
 
 
 if __name__ == "__main__":

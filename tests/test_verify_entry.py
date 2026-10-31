@@ -177,9 +177,11 @@ class SynthRepo:
         env.pop("AE_LOCALE", None)
         # 合成仓库的隔离锁环境：宿主进程可能正持有真实资源锁（豁免变量会让合成入口
         # 全部借入、锁语义测不到），真实锁目录也可能被同机其他验证占用——测试行为
-        # 不能依赖它们。IsolationLockTests 用 extra_env 指定自己的锁目录。
+        # 不能依赖它们。AE_LOCK_DIR 必须无条件覆盖继承值：外层若已设它（且那里
+        # host-state 正被占用），嵌套的合成 verify.py 会与宿主互等满超时上限。
+        # IsolationLockTests 用 extra_env 指定自己的锁目录（extra_env 仍优先）。
         env.pop("AE_HELD_LOCKS", None)
-        env.setdefault("AE_LOCK_DIR", str(self.test_lock_dir))
+        env["AE_LOCK_DIR"] = str(self.test_lock_dir)
         if extra_env:
             env.update(extra_env)
         return subprocess.run([sys.executable, str((self.path / "verify.py").resolve()), *args],
@@ -712,6 +714,8 @@ class IsolationLockTests(VerifyEntryTestCase):
         group = record["groups"][0]
         self.assertEqual(group["outcome"], "timeout", "锁等待超时不是通过")
         self.assertIn("锁", group["note"])
+        self.assertNotIn("}", group["note"], "超时 note 里不得有格式串杂散字符")
+        self.assertIn("超过 0.3 秒", group["note"], "note 应写明等待的资源与上限")
         self.assertGreaterEqual(record["timing"]["lock_wait_seconds"], 0.25)
         self.assertFalse(record["result"]["usable_as_evidence"])
         self.assertEqual(record["result"]["counts"]["groups"], 1)
@@ -760,6 +764,62 @@ class IsolationLockTests(VerifyEntryTestCase):
         group = record["groups"][0]
         self.assertEqual(group["lock"]["resources"], ["host-state"])
         self.assertEqual(group["outcome"], "passed")
+
+    def test_detour_relative_selector_still_maps_to_sensitive_module(self):
+        """从仓库外 cwd 以 ../<repo>/tests/... 绕行相对路径指定敏感模块，资源判定不落空。"""
+        self.repo.write("tests/test_ae_cli.py", UNIT_PASS)  # 名字命中敏感清单
+        self.repo.commit_all("补敏感名字的合成模块")
+        outside = self.repo.path.parent / "outside-cwd"
+        outside.mkdir()
+        self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
+        detour = os.path.relpath(self.repo.path / "tests" / "test_ae_cli.py", outside)
+        self.assertTrue(detour.startswith(".."), "绕行路径应含 .. 段：%s" % detour)
+        plan = self.repo.run_verify("plan", "--json", "unit-related", detour, cwd=outside)
+        self.assertEqual(plan.returncode, 0, plan.stdout + plan.stderr)
+        planned = {group["name"]: group["resources"]
+                   for group in json.loads(plan.stdout)["groups"]}
+        self.assertEqual(planned["unit-related"], ["host-state"],
+                         "plan 阶段绕行相对路径没有归一到敏感模块")
+        p = self.repo.run_verify("run", "unit-related", detour,
+                                 cwd=outside, extra_env=self.lock_env())
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["lock"]["resources"], ["host-state"],
+                         "绕行相对路径的选择器让组级资源判定落空（R5 回归）")
+        self.assertEqual(group["outcome"], "passed")
+
+    def test_inherited_outer_lock_dir_does_not_make_synth_repo_wait(self):
+        """外层环境带着别人的 AE_LOCK_DIR（那里 host-state 被占住）时不得被继承。
+
+        run_env 若只 setdefault，合成入口会沿用外层锁目录，与外部占用者互等
+        满超时上限（600 秒/组）；必须无条件覆盖成本用例专属目录。
+        """
+        hostile_dir = Path(tempfile.mkdtemp(prefix="verify-hostile-lock-"))
+        self.addCleanup(shutil.rmtree, hostile_dir, ignore_errors=True)
+        script = hostile_dir / "hostile-holder.py"
+        script.write_text(LOCK_HOLDER.format(root=str(ROOT), resource="host-state", hold=45),
+                          encoding="utf-8")
+        holder = subprocess.Popen([sys.executable, str(script)],
+                                  env={"AE_LOCK_DIR": str(hostile_dir)},
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(_reap, holder)
+        self.assertEqual(holder.stdout.readline().strip(), "held", "占用者没拿到锁")
+        inherited = os.environ.get("AE_LOCK_DIR")
+        try:
+            os.environ["AE_LOCK_DIR"] = str(hostile_dir)
+            started = time.monotonic()
+            p = self.repo.run_verify("run", "--group", "unit", timeout=90)
+        finally:
+            if inherited is None:
+                os.environ.pop("AE_LOCK_DIR", None)
+            else:
+                os.environ["AE_LOCK_DIR"] = inherited
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertLess(time.monotonic() - started, 30,
+                        "合成入口继承了外层 AE_LOCK_DIR，与外部占用者互等")
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertEqual(record["groups"][0]["lock"]["resources"], ["host-state"])
 
 
 def _reap(proc: subprocess.Popen) -> None:

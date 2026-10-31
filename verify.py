@@ -434,7 +434,7 @@ def unit_related_resources(selectors: Optional[list]) -> tuple:
     """unit-related 按选择器涉及的敏感模块决定资源；纯逻辑选择器不参与资源锁。"""
     needed = set()
     for module in selector_modules(selectors):
-        needed.update(host_isolation.MODULE_RESOURCES.get(module, ()))
+        needed.update(host_isolation.resources_for_module(module) or ())
     return host_isolation.normalize_resources(needed)
 
 
@@ -896,7 +896,7 @@ def execute_group(group: Group, ctx: RunContext) -> dict:
         handle = host_isolation.acquire(resources)
     except host_isolation.LockTimeoutError as exc:
         holder = host_isolation.read_holder_note(exc.resource) or {}
-        note = ("等待共享资源 %s 超过 %.1f} 秒（当前持有者 pid %s），本组没有执行；"
+        note = ("等待共享资源 %s 超过 %.1f 秒（当前持有者 pid %s），本组没有执行；"
                 "锁等待超时不是通过" % (exc.resource, exc.waited_seconds,
                                         holder.get("pid", "未知")))
         ctx.note(note)
