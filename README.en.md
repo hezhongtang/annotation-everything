@@ -197,10 +197,13 @@ Prerequisites: Python 3.9 or later, macOS or Linux.
 
 ```bash
 python3 ae.py install                            # install: copy the skill into ~/.claude/skills/ (the skill copy)
+python3 ae.py install --target <dir>             # or into another skills root (the copy lands at <dir>/annotation-everything)
 python3 ae.py install --link codex,agents,zcode  # optional: also symlink the copy into these agents' skill directories
+python3 ae.py install --link cursor=~/.cursor/skills  # --link also accepts name=path to link any skills directory
 python3 ae.py doctor                             # check: installation, runtime, optional tools, dev environment
 python3 ae.py repair                             # repair: prints a plan first, fixes the safe items automatically
 python3 ae.py uninstall                          # uninstall: remove the skill copy and links, keep the review ledger by default
+python3 ae.py doctor --target <dir>              # doctor/repair/uninstall accept the same --target to locate a custom copy
 python3 ae.py doctor --locale en                 # optional: interface language auto, zh-CN or en (before or after the subcommand)
 ```
 
@@ -209,6 +212,7 @@ python3 ae.py doctor --locale en                 # optional: interface language 
 - **Machine verdicts are separate from human wording**: in `doctor --json`, `category`, `level`, `code` and `summary` are the verdict fields older consumers read and stay in Chinese regardless of language; the language-independent additions are each item's `status` (`pass` / `warn` / `fail`) and `category_id` (`install` / `tools` / `dev` / `runtime`), plus the top-level `schema` (structure version) and `locale` (which language `message` uses). New consumers can compare `status` / `category_id` without comparing localized labels, while `message` and `fix_command` follow the language. `serve.py` works the same way: HTTP statuses and reason codes (`bad-host`, `cross-site`, `bad-origin`, `no-origin`, `bad-content-type`, `chunked`, `bad-length`, `too-large`, `bad-json`, `not-found`, `preflight`, `no-index`, `no-note`, `server-error`, `review-mismatch`, `no-api`) never change with the language, only the explanation does; an unknown error names the type and the recovery step and never echoes request content.
 - In `repair`, deleting stale ledger entries (`--forget-stale`) and stopping orphaned servers (`--stop-orphans`) are destructive and need their explicit flags; `--dry-run` only prints the plan. Plans and execution reports state plainly that nothing was executed this time, in either language.
 - `uninstall` never touches review directories; `--purge` also deletes the review ledger; a running `serve.py` blocks it unless `--stop-servers` stops it first.
+- **Install into another skills directory**: by default `install` copies the skill into `~/.claude/skills/` (`CLAUDE_SKILLS_DIR` still works as an override); `--target <dir>` installs to `<dir>/annotation-everything` instead. `doctor`, `repair` and `uninstall` accept the same `--target` to check, fix and remove that copy, and failing items' fix commands repeat the same `--target`. Besides the built-in names `codex`, `agents` and `zcode`, `--link` accepts `name=path` (e.g. `cursor=~/.cursor/skills`) to symlink the copy into any skills directory and record it in the install record; custom links show up in the checks too (dangling ones fail with a fix command), `repair` rebuilds them and `uninstall` removes them. The install record lives inside the copy, so once the copy is gone custom links can no longer be discovered automatically (links in the built-in directories still have the scan fallback).
 - Before stopping a server, the command verifies that Python is executing the script from this repository or the current skill copy, then checks the process identity again before sending a signal; it refuses to stop an unverified process. `--purge` removes only known ledger files and refuses to proceed if the ledger is corrupt or its directory contains other files or unregistered review directories.
 
 Once installed, tell Claude Code "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow.
@@ -220,7 +224,7 @@ Send the following to your agent, replacing `<repo-path>` with the absolute path
 > Install and check the annotation-everything skill in `<repo-path>`. Follow the numbered steps, confirming the success signal before moving on:
 >
 > 1. Run `python3 <repo-path>/ae.py doctor --json`. On exit code 2, inspect the JSON `error` and resolve it; a corrupt installation record can be rebuilt by reinstalling in step 2. In normal output, if no item in `results` has `category` `安装状态` (installation) with `level` `失败` (fail), the skill is already installed — skip to step 4.
-> 2. Pick the link flag by which agent you are: Claude Code needs no `--link`; Codex uses `--link codex`; agents under `~/.agents` use `--link agents`; zcode uses `--link zcode`. Run `python3 <repo-path>/ae.py install` (adding the `--link` you need). Success: exit code 0.
+> 2. Pick the link flag by which agent you are: Claude Code needs no `--link`; Codex uses `--link codex`; agents under `~/.agents` use `--link agents`; zcode uses `--link zcode`; other agents use `--link name=skills-dir` (e.g. `--link cursor=~/.cursor/skills`). To keep the primary copy out of the Claude directory, add `--target <dir>` (pass the same value to the later `doctor` / `repair` / `uninstall`). Run `python3 <repo-path>/ae.py install` (adding the flags you need). Success: exit code 0.
 > 3. Run `python3 <repo-path>/ae.py doctor --json` again and judge by the JSON: prefer the language-independent verdict fields — no item with `status` `fail` and `category_id` `install` means the install succeeded (the older reading, `category` `安装状态` with `level` `失败`, still holds: both fields stay in Chinese). Failures in the `运行状态` (runtime) category, such as orphan servers or an owned port held by another process, do not affect the install; note them for the report in step 5. Warnings in `summary.warn` (such as missing optional tools `fc-list`/`pdffonts`) do not block use. If installation failures remain, apply that item's `fix_command` and repeat this step; if a `fix_command` contains a destructive flag listed in step 4, ask the user for consent before running it.
 > 4. When repairs are needed, run `python3 <repo-path>/ae.py repair` (`--dry-run` shows the plan first). **`--purge`, `--forget-stale`, `--stop-orphans`, `--stop-servers` are all destructive — ask the user for consent before adding any of them.**
 > 5. Report back to the user: whether the install succeeded, the check results, and any warnings still unresolved.
@@ -235,7 +239,7 @@ Interface text defaults to Chinese. To get English output, append `--locale en` 
 python3 ae.py install
 ```
 
-The skill is copied to `~/.claude/skills/annotation-everything` (that copy is the *skill copy*). See **Installation and maintenance** above for the full install, check, repair and uninstall instructions.
+The skill is copied to `~/.claude/skills/annotation-everything` (that copy is the *skill copy*); to install into another skills root, use `python3 ae.py install --target <dir>` (the copy lands at `<dir>/annotation-everything`). See **Installation and maintenance** above for the full install, check, repair and uninstall instructions.
 
 **2. Try it on the bundled sample**
 
@@ -268,7 +272,7 @@ See [references/formats.md](skill/annotation-everything/references/formats.md) f
 
 | Command | What it does |
 |---|---|
-| `ae.py install` / `doctor` / `repair` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--link codex,agents,zcode` symlinks it into other agents' skill directories); check installation, runtime, optional tools and dev environment (`--json` for structured output); repair what the checks find (prints a plan first, fixes safe items automatically, `--forget-stale`/`--stop-orphans` run the destructive ones explicitly, `--dry-run` only prints); uninstall removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first) |
+| `ae.py install` / `doctor` / `repair` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--target <dir>` for another skills root; `--link codex,agents,zcode` or `name=path` symlinks it into other agents' skill directories); check installation, runtime, optional tools and dev environment (`--json` for structured output); repair what the checks find (prints a plan first, fixes safe items automatically, `--forget-stale`/`--stop-orphans` run the destructive ones explicitly, `--dry-run` only prints); uninstall removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first). All four subcommands accept `--target <dir>` to locate a custom copy |
 | `build_viewer.py --report … --script … --out <review-dir>` | Build the review page; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
 | `serve.py <review-dir>` | Start the local server; each review keeps its own dedicated port |
 | `serve.py list` / `status` / `forget` | List every review on this machine, show one review's status, remove a ledger entry you no longer need |
