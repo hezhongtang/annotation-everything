@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -190,6 +191,24 @@ class SkillDiscoveryTests(unittest.TestCase):
         self.assertEqual([x for x in self.catalog() if x["name"] == "sample"],
                          [{"name": "sample", "desc": "直接安装"}])
         self.assertIn({"name": "sample:sample", "desc": "新版"}, self.catalog())
+
+    def test_default_roots_include_zcode_plugin_cache(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import skill_sources
+        with mock.patch("pathlib.Path.home", return_value=self.home):
+            roots = skill_sources.default_roots()
+        self.assertIn(self.home / ".zcode" / "cli" / "plugins" / "cache", roots)
+
+    def test_zcode_plugin_cache_uses_newest_version_and_qualified_names(self):
+        for version, desc in [("0.5.1", "旧版"), ("0.6.0", "新版")]:
+            d = (self.home / ".zcode" / "cli" / "plugins" / "cache"
+                 / "zcode-plugins-official" / "browser-use" / version / "skills" / "control-browser")
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text(f"---\nname: control-browser\ndescription: {desc}\n---\n", encoding="utf-8")
+        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn({"name": "browser-use:control-browser", "desc": "新版"}, self.catalog())
+        self.assertNotIn("旧版", [x["desc"] for x in self.catalog()], "旧版说明不入选")
 
     def test_bad_skill_file_preserves_previous_entries_and_imports_good_ones(self):
         self.skill("writer", "writer", "文字校对")
