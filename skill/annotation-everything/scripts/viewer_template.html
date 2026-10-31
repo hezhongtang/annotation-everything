@@ -49,7 +49,7 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,1fr
 .talk p{font-size:16.5px;line-height:1.85;margin:0 0 10px}
 .next{font-size:14.5px;line-height:1.7;color:#374151;border-left:3px solid var(--ae-accent);padding:4px 0 4px 10px}
 .qa{background:var(--ae-qa);border:1px solid var(--ae-line);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:14.5px;line-height:1.7}
-.qa .q{font-weight:600}.qa .q::before{content:"问　";color:var(--ae-accent)}.qa .a::before{content:"答　";color:var(--ae-green);font-weight:600}
+.qa .q{font-weight:600}.qa .q::before{content:attr(data-label);color:var(--ae-accent)}.qa .a::before{content:attr(data-label);color:var(--ae-green);font-weight:600}
 .empty{color:var(--ae-mut);font-size:14px}
 .modal{position:fixed;inset:0;background:rgba(15,20,30,.5);display:none;align-items:center;justify-content:center;padding:24px;z-index:9}
 .modal.on{display:flex}
@@ -210,7 +210,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
         <span class="grow"></span>
         <button class="primary" data-act="add" id="addBtn" data-title="viewer.add"><span id="addLabel" data-msg="viewer.add">添加批注</span><kbd><span class="kmod">⌘</span>↵</kbd></button></div></div></div>
 <div id="selbar"><div class="sbtns"><button data-sel="delete" data-title="viewer.sel.deleteTitle" data-p-key="D"><span data-msg="viewer.sel.delete">删除</span><kbd>D</kbd></button><button data-sel="replace" data-title="viewer.sel.replaceTitle" data-p-key="R"><span data-msg="viewer.sel.replace">改为…</span><kbd>R</kbd></button><button data-sel="comment" data-title="viewer.sel.commentTitle" data-p-key="C"><span data-msg="viewer.sel.comment">批注</span><kbd>C</kbd></button></div>
-<label id="pairRow" data-title="viewer.pairTitle" data-p-key="B"><input type="checkbox" id="pairOn"><span id="pairText" data-msg="viewer.pairLabel">同时改</span><kbd>B</kbd></label></div>
+<label id="pairRow" data-title="viewer.pairTitle" data-p-key="B"><input type="checkbox" id="pairOn"><span id="pairText">同时改</span><kbd>B</kbd></label></div>
 <div id="pinpop" role="dialog"></div>
 <div id="stylemenu" role="menu"><p class="hint" data-msg="viewer.styleScope">风格优化的范围：</p>
 <button data-sm="page"><span data-msg="viewer.stylePage">整页（当前这一页）</span><kbd>1</kbd></button><button data-sm="mark"><span data-msg="viewer.styleMark">标注处（单击放点或拖动框选）</span><kbd>2</kbd></button></div>
@@ -359,6 +359,7 @@ function applyMessages(root){
   scope.querySelectorAll("[data-title]").forEach(el=>{el.title=tMsg(el.dataset.title,msgParams(el))});
   scope.querySelectorAll("[data-aria]").forEach(el=>{el.setAttribute("aria-label",tMsg(el.dataset.aria,msgParams(el)))});
   scope.querySelectorAll("[data-ph]").forEach(el=>{el.placeholder=tMsg(el.dataset.ph,msgParams(el))});
+  scope.querySelectorAll("[data-label-msg]").forEach(el=>{el.dataset.label=tMsg(el.dataset.labelMsg)});
 }
 function applyLocale(){
   uiLocale=resolveUi(activeChoice());
@@ -393,8 +394,11 @@ function applyLocale(){
   if(typeof updateStyleChip==="function") updateStyleChip();
   if(typeof updateMode==="function") updateMode();
   if(typeof showQuote==="function") showQuote();
+  updatePageStat();
+  updatePairText();
   if(typeof refreshList==="function") refreshList(true);
   if(typeof refreshExportPreview==="function"&&$("allnotes").classList.contains("on")) refreshExportPreview();
+  refreshPinPop();
 }
 $("localePick").addEventListener("change",()=>{
   try{localStorage.setItem(LOCALE_STORE, $("localePick").value)}catch(e){}
@@ -454,6 +458,7 @@ P.forEach((p,k)=>{const o=document.createElement("option");o.value=k;o.textConte
 S.forEach(s=>{const b=document.createElement("button");b.textContent=s[0];b.onclick=()=>{const k=P.findIndex(p=>p.n>=s[1]);if(k>=0)go(k)};$("secs").appendChild(b)});
 
 // ---------- 报告舞台（Shadow DOM 隔离报告样式） ----------
+$("host").lang=__REPORT_LANG__;   // 保留材料自己的语言；未知时显式阻断界面语言继承
 const sr=$("host").attachShadow({mode:"open"});
 sr.innerHTML=`<style>:host{all:initial;display:block}
 ${RCSS}
@@ -751,14 +756,14 @@ function drawPins(){stage.querySelectorAll(".ae-pin,.ae-region").forEach(e=>{if(
   const box=(rg,cls,id,label,tip)=>{const d=document.createElement("div");d.className="ae-region"+(cls?" "+cls:"");
     Object.assign(d.style,{left:rg.x+"%",top:rg.y+"%",width:rg.w+"%",height:rg.h+"%"});d.dataset.id=id||"";d.title=tip||"";
     const l=document.createElement("span");l.className="lbl";l.textContent=label;d.appendChild(l);
-    const z=document.createElement("span");z.className="rz";z.title="拖动调整大小";d.appendChild(z);stage.appendChild(d)};
+    const z=document.createElement("span");z.className="rz";z.title=tMsg("viewer.markResize");d.appendChild(z);stage.appendChild(d)};
   notes.filter(x=>x.page===P[i].n&&hasMark(x)).forEach((x,k)=>{if(hideDone&&isDone(x))return;
     const cls=[isDone(x)?"done":"",x.style&&x.style.scope?"sty":""].filter(Boolean).join(" "),sum=clip(noteSummary(x),80),rg=regionOf(x);
-    if(rg)box(rg,cls,x.id,`${k+1}${x.style&&x.style.scope?" 风格":""}`,sum+"（拖动可移动，拖右下角调大小，点击可编辑）");
-    if(x.pin)put(x.pin.x,x.pin.y,k+1,isDone(x)?"done":"",x.id,sum+"（拖动可移动，点击可编辑）")});
-  if(pendingPin)put(pendingPin.x,pendingPin.y,"+","pending","","新标点：写好意见后点「添加批注」；可拖动，点击可移除");
-  if(pendingRegion)box(pendingRegion,"pending","","新框","新框选的区域：写好意见后点「添加批注」；可拖动、拖右下角调大小，点击可移除")}
-function noteSummary(x){const qe=editOf(x);return qe?(qe.op==="delete"?`删除「${qe.from}」`:`「${qe.from}」改为「${qe.to}」`):String(x.text||"")}
+    if(rg)box(rg,cls,x.id,`${k+1}${x.style&&x.style.scope?" "+tMsg("viewer.styleBtn"):""}`,tMsg("viewer.regionTip",{text:sum}));
+    if(x.pin)put(x.pin.x,x.pin.y,k+1,isDone(x)?"done":"",x.id,tMsg("viewer.pinTip",{text:sum}))});
+  if(pendingPin)put(pendingPin.x,pendingPin.y,"+","pending","",tMsg("viewer.pendingPinTip"));
+  if(pendingRegion)box(pendingRegion,"pending","",tMsg("viewer.pendingRegion"),tMsg("viewer.pendingRegionTip"))}
+function noteSummary(x){const qe=editOf(x);return qe?(qe.op==="delete"?tMsg("viewer.deleteSummary",{text:qe.from}):tMsg("viewer.replaceSummary",{from:qe.from,to:qe.to})):String(x.text||"")}
 function editOf(x){const e=x.edit;return e&&typeof e==="object"&&(e.op==="delete"||e.op==="replace")?e:null}
 function noteHtml(x){
   const done=isDone(x), dr=isDraft(x), fl=inFlight(x), ed=editingId===x.id, id=escH(x.id), qe=editOf(x);
@@ -820,8 +825,8 @@ function setMarkMode(on){markMode=on;stage.classList.toggle("markmode",on);const
   if(on)toast(remarkId?tMsg("viewer.markRemarkToast"):tMsg("viewer.markToast"),3000);
   else{remarkId=null;if(rdraw){if(rdraw.box)rdraw.box.remove();rdraw=null}}}
 function showQuote(){const q=$("qbox");q.style.display=quote?"block":"none";
-  const fromLabel=quoteFrom?escH(targetLabel(quoteFrom)):"";
-  q.innerHTML=quote?`${escH(tMsg("viewer.quoteLine",{label:tMsg("viewer.quote"),side:fromLabel,text:escH(quote)}))}${quotePair?`<br>${escH(tMsg("viewer.pairEcho",{side:escH(targetLabel(quotePair.side)),match:tMsg(quotePair.match==="exact"?"viewer.pairSame":"viewer.pairSimilar"),text:escH(clip(quotePair.text,80))}))}`:""} <a href="#" id="qx">${tMsg("viewer.pairCancel")}</a>`:"";
+  const fromLabel=quoteFrom?targetLabel(quoteFrom):"";
+  q.innerHTML=quote?`${escH(tMsg("viewer.quoteLine",{label:tMsg("viewer.quote"),side:fromLabel,text:quote}))}${quotePair?`<br>${escH(tMsg("viewer.pairEcho",{side:targetLabel(quotePair.side),match:tMsg(quotePair.match==="exact"?"viewer.pairSame":"viewer.pairSimilar"),text:clip(quotePair.text,80)}))}`:""} <a href="#" id="qx">${tMsg("viewer.pairCancel")}</a>`:"";
   if(quote)$("qx").onclick=e=>{e.preventDefault();quote="";quotePair=null;showQuote()}}
 function setQuote(t,from){quote=clip(t.replace(/\s+/g," "),300);quoteFrom=from;showQuote();$("ntarget").value=from}
 document.addEventListener("compositionstart",()=>{composing=true},true);
@@ -853,8 +858,8 @@ document.addEventListener("mouseup",e=>{
   sel={text:got.text.replace(/\s+/g," "),from:got.from,x:e.clientX,y:e.clientY};
   sel.pair=findCounterpart(sel.text,sel.from);
   const pr=$("pairRow");pr.classList.toggle("on",!!sel.pair);
-  if(sel.pair){$("pairOn").checked=true;   // 默认同时改：专注一侧时最容易忘的就是另一侧
-    $("pairText").textContent=`${sel.pair.side}这页也有${sel.pair.match==="exact"?"同一句":"相近的句子"}：「${clip(sel.pair.text,46)}${Array.from(sel.pair.text).length>46?"…":""}」同时改`}
+  if(sel.pair)$("pairOn").checked=true;   // 默认同时改：专注一侧时最容易忘的就是另一侧
+  updatePairText();
   syncPair();showSelbar()});
 // 报告 ↔ 讲稿对应句：在同一页另一侧找相同或相近的句子（与 scripts/match.py 同一算法）
 const PUNCT={"，":",","。":".","．":".","：":":","；":";","（":"(","）":")","“":'"',"”":'"',"「":'"',"」":'"',"『":'"',"』":'"',"‘":"'","’":"'","％":"%","！":"!","？":"?"};
@@ -871,6 +876,8 @@ function findCounterpart(text,from){const other=from==="报告"?"讲稿":"报告
   return best&&best.score>=.45?{side:other,text:clip(best.x,300),match:"similar"}:null}
 function syncPair(){const on=!!(sel&&sel.pair&&$("pairOn").checked);quotePair=on?sel.pair:null;
   if(sel)$("ntarget").value=on?"报告和讲稿":sel.from;showQuote()}
+function updatePairText(){const pair=sel&&sel.pair;
+  $("pairText").textContent=pair?tMsg(pair.match==="exact"?"viewer.pairPrompt.same":"viewer.pairPrompt.similar",{side:targetLabel(pair.side),text:clip(pair.text,46)+(Array.from(pair.text).length>46?"…":"")}):tMsg("viewer.pairLabel")}
 $("pairOn").addEventListener("change",syncPair);
 function addEdit(op,to){if(!sel)return;const p=P[i];
   const edit=op==="delete"?{op,from:sel.text}:{op,from:sel.text,to};
@@ -879,7 +886,7 @@ function addEdit(op,to){if(!sel)return;const p=P[i];
     quote:sel.text,quoteFrom:sel.from,pin:null,edit,status:"open",at:nowIso()};
   if(both)note.pair={side:sel.pair.side,text:sel.pair.text,match:sel.pair.match};
   hideSelbar();clearSelection();quote="";quotePair=null;showQuote();sel=null;
-  mutate({kind:"add",note});toast(op==="delete"?"已记下：删除这段":"已记下：改写这段")}
+  mutate({kind:"add",note});toast(tMsg(op==="delete"?"viewer.deleteRecorded":"viewer.replaceRecorded"))}
 function selAction(a){if(!sel)return;
   if(a==="delete")addEdit("delete");
   else if(a==="replace"){const r=$("repbox"),t=$("repText");$("selbar").classList.remove("on");r.classList.add("on");place(r,sel.x,sel.y);
@@ -887,7 +894,7 @@ function selAction(a){if(!sel)return;
   else{hideSelbar();clearSelection();$("ntext").focus()}}
 $("selbar").addEventListener("click",e=>{const b=e.target.closest("[data-sel]");if(b)selAction(b.dataset.sel)});
 function repOk(){const to=$("repText").value.trim();if(!sel)return hideSelbar();
-  if(to===sel.text.trim()){toast("没有改动");return}addEdit("replace",to)}
+  if(to===sel.text.trim()){toast(tMsg("viewer.unchanged"));return}addEdit("replace",to)}
 $("repOk").onclick=repOk;$("repCancel").onclick=()=>{hideSelbar();sel=null};
 $("repText").addEventListener("keydown",e=>{e.stopPropagation();if(e.isComposing||e.keyCode===229)return;
   if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();repOk()}else if(e.key==="Escape"){hideSelbar();sel=null}});
@@ -899,11 +906,11 @@ const markAnchor=mk=>mk.region?regionAnchor(mk.region):mk.pin?pointAnchor(mk.pin
 // 放好一个标注：给正在写的新批注，或替换某条已有批注的标注
 function endRemark(){if(remarkId)setMarkMode(false)}   // 离开「重新标注」：取消、保存、换一条编辑、改风格时都要退出，免得下一次点击改错批注
 function placeMark(mk,rid){
-  if(rid){if(!notes.some(n=>n.id===rid)){toast("这条批注已被删除",3000);return}
+  if(rid){if(!notes.some(n=>n.id===rid)){toast(tMsg("viewer.noteDeleted"),3000);return}
     if(oldGuard())return;
     stashEdit();mutate({kind:"patch",id:rid,body:{pin:mk.pin||null,region:mk.region||null,anchor:markAnchor(mk)}});
     if(editingId===rid)refreshList(true);else drawPins();   // 编辑中的卡片按钮（重新标注 / 去掉标注）跟着变
-    toast(mk.region?"已给这条批注框选区域":"已给这条批注放置标点");return}
+    toast(tMsg(mk.region?"viewer.regionAdded":"viewer.pinAdded"));return}
   pendingPin=mk.pin||null;pendingRegion=mk.region||null;
   if($("ntarget").value==="讲稿")$("ntarget").value="报告";   // 标注在报告上
   updateStyleChip();drawPins();saveDraft();$("ntext").focus();
@@ -920,7 +927,7 @@ function addNote(){let text=$("ntext").value.trim();
   styleOn=false;pendingRegion=null;updateStyleChip();
   if(quote&&quotePair)note.pair={side:quotePair.side,text:quotePair.text,match:quotePair.match};
   const sk=parseSkills($("nskills").value);if(sk.length)note.skills=sk;$("nskills").value="";
-  quote="";quotePair=null;pendingPin=null;$("ntext").value="";autoGrow();showQuote();delete drafts[p.n];SS.set(K.drafts,drafts);mutate({kind:"add",note});toast("已添加")}
+  quote="";quotePair=null;pendingPin=null;$("ntext").value="";autoGrow();showQuote();delete drafts[p.n];SS.set(K.drafts,drafts);mutate({kind:"add",note});toast(tMsg("viewer.added"))}
 $("script").addEventListener("click",e=>{const b=e.target.closest("[data-act]");if(!b)return;const id=b.dataset.id;
   switch(b.dataset.act){
     case "add":addNote();break;
@@ -932,13 +939,13 @@ $("script").addEventListener("click",e=>{const b=e.target.closest("[data-act]");
     case "del":if(confirm(tMsg("viewer.confirmDelete")))mutate({kind:"del",id});break;
     case "edit":{endRemark();stashEdit();editingId=id;refreshList(true);($("etext")||$("eskills")).focus();break}
     case "cancel":endRemark();delete editBuf[editingId];delete editBuf["sk:"+editingId];delete editBuf["pg:"+editingId];editingId=null;refreshList(true);break;
-    case "save":{endRemark();const x=notes.find(n=>n.id===id);if(!x){toast("这条批注已被删除，改动没有保存",4000);editingId=null;refreshList(true);break}
+    case "save":{endRemark();const x=notes.find(n=>n.id===id);if(!x){toast(tMsg("viewer.deletedUnsaved"),4000);editingId=null;refreshList(true);break}
       const qe=editOf(x),et=$("etext"),t=et?et.value.trim():"",skills=parseSkills($("eskills").value);
-      if(et&&!t&&!qe){toast("批注内容不能为空");return}delete editBuf[id];delete editBuf["sk:"+id];delete editBuf["pg:"+id];editingId=null;
+      if(et&&!t&&!qe){toast(tMsg("viewer.emptyNote"));return}delete editBuf[id];delete editBuf["sk:"+id];delete editBuf["pg:"+id];editingId=null;
       const body=qe&&qe.op==="delete"?{skills}:qe?{edit:{...qe,to:t},text:REP_PREFIX+t,skills}:{text:t,skills};
       const np=+(($("epage")||{}).value||x.page),pg=P.find(q=>q.n===np);
       if(pg&&(np!==x.page||x.orphan))Object.assign(body,{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false});   // 挪到别的页（或确认原页）
-      mutate({kind:"patch",id,body});if(body.page&&body.page!==P[i].n)toast(`已移到第 ${body.page} 页`);break}
+      mutate({kind:"patch",id,body});if(body.page&&body.page!==P[i].n)toast(tMsg("viewer.movedPage",{page:body.page}));break}
     case "unpin":stashEdit();mutate({kind:"patch",id,body:{pin:null,region:null}});drawPins();refreshList(true);break;
     case "resolve":mutate({kind:"patch",id,body:{status:"resolved"}});break;
     case "reopen":mutate({kind:"patch",id,body:{status:"open"}});break;
@@ -958,7 +965,11 @@ function highlightPin(id){stage.querySelectorAll(".ae-pin,.ae-region").forEach(p
 function flash(el){if(!el)return;el.classList.remove("flash");void el.offsetWidth;el.classList.add("flash")}
 function flashCard(id){const c=$("nlist").querySelector(`[data-note="${CSS.escape(id)}"]`);if(c){c.scrollIntoView({block:"nearest",behavior:"smooth"});flash(c)}}
 function closePinPop(){$("pinpop").classList.remove("on")}
-function openPinPop(id,el){const pop=$("pinpop"),r=el.getBoundingClientRect();
+function refreshPinPop(){const pop=$("pinpop");if(!pop.classList.contains("on"))return;
+  const el=pop.dataset.id?pinEl(pop.dataset.id):stage.querySelector(pop.dataset.region==="true"?".ae-region.pending":".ae-pin.pending");
+  if(el)openPinPop(pop.dataset.id,el,true);else closePinPop()}
+function openPinPop(id,el,repaint=false){const pop=$("pinpop"),r=el.getBoundingClientRect();
+  pop.dataset.id=id||"";pop.dataset.region=String(el.classList.contains("ae-region"));
   if(!id)pop.innerHTML=el.classList.contains("ae-region")
     ?`<div class="pp-t">${escH(tMsg("viewer.markNewRegion"))}</div><div class="pp-a"><button data-pp="unregion">${tMsg("viewer.markRemoveRegion")}</button></div>`
     :`<div class="pp-t">${escH(tMsg("viewer.markNewPin"))}</div><div class="pp-a"><button data-pp="unpend">${tMsg("viewer.markRemovePin")}</button></div>`;
@@ -966,7 +977,7 @@ function openPinPop(id,el){const pop=$("pinpop"),r=el.getBoundingClientRect();
     pop.innerHTML=`<div class="pp-m">${escH(x.target?targetLabel(x.target):tMsg("viewer.popUnset"))}${isDone(x)?` · ${tMsg("viewer.popResolved")}`:""}</div><div class="pp-t">${escH(clip(noteSummary(x),200))}</div>`
       +`<div class="pp-a"><button data-pp="edit" data-id="${eid}">${tMsg("viewer.edit")}</button><button data-pp="${isDone(x)?"reopen":"resolve"}" data-id="${eid}">${tMsg(isDone(x)?"viewer.reopen":"viewer.resolve")}</button>`
       +`${hasMark(x)?`<button data-pp="unpin" data-id="${eid}">${tMsg("viewer.unpin")}</button>`:""}<button data-pp="del" data-id="${eid}">${tMsg("viewer.delete")}</button><button data-pp="close">${tMsg("viewer.popClose")}</button></div>`;
-    flashCard(id)}
+    if(!repaint)flashCard(id)}
   pop.classList.add("on");place(pop,r.left+r.width/2,r.top+r.height/2)}
 $("pinpop").addEventListener("click",e=>{const b=e.target.closest("[data-pp]");if(!b)return;const id=b.dataset.id,a=b.dataset.pp;closePinPop();
   if(a==="unpend"){pendingPin=null;updateStyleChip();drawPins();saveDraft()}
@@ -1009,8 +1020,8 @@ addEventListener("mouseup",e=>{if(!drag)return;e.stopPropagation();   // 不让�
   const d=drag;drag=null;d.pin.classList.remove("drag");
   if(d.moved&&d.pos){
     if(d.isReg&&d.id&&oldGuard()){drawPins();return}
-    if(d.isReg){if(d.id){mutate({kind:"patch",id:d.id,body:{region:d.pos,anchor:regionAnchor(d.pos)}});drawPins();toast(d.rz?"区域大小已调整":"区域已移动")}else{pendingRegion=d.pos;saveDraft()}}
-    else if(d.id){mutate({kind:"patch",id:d.id,body:{pin:d.pos,anchor:pointAnchor(d.pos)}});drawPins();toast("标点已移动")}else{pendingPin=d.pos;saveDraft()}}
+    if(d.isReg){if(d.id){mutate({kind:"patch",id:d.id,body:{region:d.pos,anchor:regionAnchor(d.pos)}});drawPins();toast(tMsg(d.rz?"viewer.regionResized":"viewer.regionMoved"))}else{pendingRegion=d.pos;saveDraft()}}
+    else if(d.id){mutate({kind:"patch",id:d.id,body:{pin:d.pos,anchor:pointAnchor(d.pos)}});drawPins();toast(tMsg("viewer.pinMoved"))}else{pendingPin=d.pos;saveDraft()}}
   else openPinPop(d.id,d.pin)},true);
 stage.addEventListener("mouseover",e=>{const pin=e.target.closest&&e.target.closest(".ae-pin,.ae-region");
   $("nlist").querySelectorAll(".note.hl").forEach(c=>c.classList.remove("hl"));
@@ -1490,17 +1501,19 @@ function saveDraft(){const n=P[i].n,t=$("ntext").value;
   SS.set(K.drafts,drafts)}
 function loadDraft(){const d=drafts[P[i].n]||{};$("ntext").value=d.text||"";$("ntarget").value=d.target||"报告";
   quote=d.quote||"";quoteFrom=d.quoteFrom||"";pendingPin=d.pin||null;quotePair=d.pair||null;$("nskills").value=d.skills||"";styleOn=!!d.style;pendingRegion=d.region||null;updateStyleChip();showQuote();autoGrow()}
+function updatePageStat(){const p=P[i];
+  $("stat").textContent=tMsg("viewer.pageStat",{page:p.n,total:P[N-1].n})+(total?` · ${tMsg("viewer.timeStat",{at:mmss(cum[i]),total:mmss(total)})}`:"")}
 function render(){
   const p=P[i], s=secOf(p.n);
   stage.innerHTML=SECT[i]; fit();
   $("jump").value=i;
-  $("stat").textContent=tMsg("viewer.pageStat",{page:p.n,total:P[N-1].n})+(total?` · ${tMsg("viewer.timeStat",{at:mmss(cum[i]),total:mmss(total)})}`:"");
+  updatePageStat();
   [...$("secs").children].forEach((b,k)=>b.classList.toggle("on",S[k]===s));
-  const qa=p.qa.length?`<div class="lab">${tMsg("viewer.scriptQA")}</div>`+p.qa.map(x=>`<div class="qa"><div class="q">${x.q}</div>${x.a?`<div class="a">${x.a}</div>`:""}</div>`).join(""):"";
-  $("pageScript").innerHTML=`<div class="pno"><span class="sec">${s?escH(s[0]):""}</span><span>${escH(tMsg("viewer.page",{page:p.n}))}</span></div>
-    <h2>${p.title}</h2>${p.dur?`<span class="dur">${p.dur}</span>`:""}
-    ${p.talk?`<div class="lab">${tMsg("viewer.scriptTalk")}</div><div class="talk">${p.talk}</div>`:`<p class="empty">${tMsg("viewer.scriptEmpty")}</p>`}
-    ${p.next?`<div class="lab">${tMsg("viewer.scriptNext")}</div><div class="next">${p.next}</div>`:""}${qa}`;
+  const qa=p.qa.length?`<div class="lab" data-msg="viewer.scriptQA">${tMsg("viewer.scriptQA")}</div>`+p.qa.map(x=>`<div class="qa"><div class="q" data-label-msg="viewer.question" data-label="${escH(tMsg("viewer.question"))}"><span lang="">${x.q}</span></div>${x.a?`<div class="a" data-label-msg="viewer.answer" data-label="${escH(tMsg("viewer.answer"))}"><span lang="">${x.a}</span></div>`:""}</div>`).join(""):"";
+  $("pageScript").innerHTML=`<div class="pno"><span class="sec">${s?escH(s[0]):""}</span><span data-msg="viewer.page" data-p-page="${p.n}">${escH(tMsg("viewer.page",{page:p.n}))}</span></div>
+    <h2 lang="">${p.title}</h2>${p.dur?`<span class="dur" lang="">${p.dur}</span>`:""}
+    ${p.talk?`<div class="lab" data-msg="viewer.scriptTalk">${tMsg("viewer.scriptTalk")}</div><div class="talk" lang="">${p.talk}</div>`:`<p class="empty" data-msg="viewer.scriptEmpty">${tMsg("viewer.scriptEmpty")}</p>`}
+    ${p.next?`<div class="lab" data-msg="viewer.scriptNext">${tMsg("viewer.scriptNext")}</div><div class="next" lang="">${p.next}</div>`:""}${qa}`;
   stashEdit();
   editingId=null;if(markMode)setMarkMode(false);closeStyleMenu();hideSelbar();closePinPop();sel=null;loadDraft();refreshList(true);$("script").scrollTop=0;
   LS.set(K.page,i+1)}
