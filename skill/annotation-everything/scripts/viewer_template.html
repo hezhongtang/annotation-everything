@@ -130,7 +130,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 #skillList{display:none;position:fixed;z-index:20;min-width:240px;max-width:90vw;max-height:240px;overflow:auto;background:#fff;border:1px solid var(--ae-line);border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.2);padding:4px}
 #skillList.on{display:block}#skillList [role=option]{padding:7px 9px;border-radius:5px;cursor:pointer;font-size:13px}
 #skillList [role=option]:hover,#skillList [aria-selected=true]{background:#eef4fc}#skillList .skill-desc{display:block;color:var(--ae-mut);font-size:12px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-#skillList .skill-rec{margin-left:6px;color:var(--ae-accent);font-size:11px}#skillList .skill-more{display:block;width:100%;padding:7px 9px;text-align:left;border:0;background:#f6f8fb;color:var(--ae-accent);border-radius:5px;cursor:pointer;font:inherit;font-size:12px}
+#skillList .skill-rec{margin-left:6px;color:var(--ae-accent);font-size:11px}#skillList .skill-none{margin:0;padding:7px 9px;color:var(--ae-mut);font-size:12px}#skillList.on.hint{pointer-events:none}#skillList .skill-more{display:block;width:100%;padding:7px 9px;text-align:left;border:0;background:#f6f8fb;color:var(--ae-accent);border-radius:5px;cursor:pointer;font:inherit;font-size:12px}
 #stylemenu{position:fixed;display:none;z-index:8;background:#fff;border:1px solid var(--ae-line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.22);padding:6px;flex-direction:column;gap:2px;min-width:210px}
 #stylemenu.on{display:flex}
 #stylemenu button{font:inherit;font-size:13px;border:none;background:none;text-align:left;padding:6px 10px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;gap:12px}
@@ -201,8 +201,8 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
     <div class="form" id="nform"><div class="quote" id="qbox"></div><span id="styleChip"></span>
       <textarea id="ntext" rows="2" placeholder="写修改意见（C）。可先选中报告或讲稿里的文字：直接删除（D）、改为（R），或作为引用写批注；也可以先「在报告上标注」（单击放点、拖动框选）。"></textarea>
       <div class="row"><span id="targetLabel">对象</span> <select id="ntarget"><option value="报告">报告</option><option value="讲稿">讲稿</option><option value="报告和讲稿">报告和讲稿</option></select>
-        <label class="sk" title="处理这条批注时让 Agent 调用的技能（skill），多个用逗号分隔（K）">技能<kbd>K</kbd><input id="nskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" placeholder="可选，如 humanizer-zh"></label>
-        <button data-act="always" id="alwaysBtn" title="常驻技能：这份审阅里每条批注（按范围）都让 Agent 先调用，适合需要长期约束的 Agent（G）">常驻技能<span id="alwaysN"></span><kbd>G</kbd></button>
+        <label class="sk" data-title="viewer.skill.labelTitle" data-p-key="K"><span data-msg="viewer.skill.label">技能</span><kbd>K</kbd><input id="nskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" data-ph="viewer.skill.placeholder"></label>
+        <button data-act="always" id="alwaysBtn"><span data-msg="viewer.always.button">常驻技能</span><span id="alwaysN"></span><kbd>G</kbd></button>
         <button data-act="pin" id="pinBtn" data-title="viewer.markPinTitle" data-p-key="P"><span data-msg="viewer.markPin">在报告上标注</span><kbd>P</kbd></button>
         <button data-act="style" id="styleBtn" data-title="viewer.styleBtnTitle" data-p-key="S"><span data-msg="viewer.styleBtn">风格优化</span><kbd>S</kbd></button>
         <button data-act="seelist" id="seeList" data-title="viewer.seeListTitle"><span id="seeListLabel" data-msg="viewer.seeList">本页批注</span> <span id="nhere">0</span> ↑</button>
@@ -216,7 +216,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <div id="repbox"><p class="hint" data-msg="viewer.repTitle">把选中的文字改为：</p><textarea id="repText"></textarea>
 <div class="row"><button id="repCancel"><span data-msg="viewer.cancel">取消</span><kbd>Esc</kbd></button><button class="primary" id="repOk"><span data-msg="viewer.repOk">确定</span><kbd>↵</kbd></button></div></div>
 </main>
-<div id="skillList" role="listbox" aria-label="技能候选"></div>
+<div id="skillList" role="listbox" data-aria="viewer.skill.candidates"></div>
 <div class="modal" id="allnotes"><div class="dlg"><div class="bar"><h2>全部批注</h2>
 <button class="primary" id="copyAll">复制全部（粘贴给 Agent）</button><button id="dlAll">下载 Markdown</button><button id="dlJson">下载 JSON</button><button id="openImp">导入…</button><button id="dlFailed" style="display:none" title="多次保存失败、没有写进 notes.json 的改动">下载未能保存的改动</button><button id="clearAll">清空</button><button data-close>关闭</button></div>
 <div class="pad" id="orphanBox" style="display:none;border-bottom:1px solid var(--ae-line)"></div>
@@ -236,22 +236,22 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <span class="hint" id="hOld" style="display:none">背后的本地服务是旧版本，不支持「做到哪一步 / 子代理 / 复核」：停掉旧服务后重新运行 serve.py 再刷新</span></div><p class="hint"><span id="handLast"></span> <button id="handHist" title="每次交给 Agent 一批：解决了几条、处理摘要（J）">处理记录<kbd>J</kbd></button></p>
 <textarea id="handMsg" placeholder="给 Agent 的附言（可选）：例如「先改第 7–12 页，口径问题先别动」"></textarea>
 <p class="hint" id="handHelp">提交后，正在等待的代理会收到这批未处理批注，右上角显示「等待接收 → 处理中 → 已处理」（选「已初改·待复核」则停在待复核，由你决定请求复核或直接定稿）。代理还没接收时再提交一次，会合并成同一次（附言、选项以最新为准）。</p></div></div></div>
-<div class="modal" id="always"><div class="dlg"><div class="bar"><h2>常驻技能</h2><button class="primary" id="alwaysSave">保存<kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close>取消<kbd>Esc</kbd></button></div>
-<div class="pad"><p class="hint">这份审阅里，范围内的每一条批注都会要求 Agent 处理前先调用这些技能——适合需要长期约束、不会主动想到用技能的 Agent。只对当前这份审阅生效；单条批注的「技能」照常可加。名称框按 Enter 添加下一项（有高亮候选时先选择），按 Ctrl/Cmd+Enter 保存。</p>
-<div id="alwaysRows"></div><p><button id="alwaysAdd" title="添加一个常驻技能（在名称输入框按回车）">添加一个<kbd>↵</kbd></button></p></div></div></div>
+<div class="modal" id="always"><div class="dlg"><div class="bar"><h2 data-msg="viewer.always.dialogTitle">常驻技能</h2><button class="primary" id="alwaysSave"><span data-msg="viewer.always.save">保存</span><kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close><span data-msg="viewer.cancel">取消</span><kbd>Esc</kbd></button></div>
+<div class="pad"><p class="hint" data-msg="viewer.always.dialogHint">这份审阅里，范围内的每一条批注都会要求 Agent 处理前先调用这些技能——适合需要长期约束、不会主动想到用技能的 Agent。只对当前这份审阅生效；单条批注的「技能」照常可加。名称框按 Enter 添加下一项（有高亮候选时先选择），按 Ctrl/Cmd+Enter 保存。</p>
+<div id="alwaysRows"></div><p><button id="alwaysAdd" data-title="viewer.always.addTitle"><span data-msg="viewer.always.add">添加一个</span><kbd>↵</kbd></button></p></div></div></div>
 <div class="modal" id="batches"><div class="dlg"><div class="bar"><h2>处理记录</h2><span class="hint" id="batchSum"></span><button data-close>关闭<kbd>Esc</kbd></button></div>
 <div class="pad" id="batchList"></div></div></div>
 <div id="toast"></div>
 <div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys" data-ae-lang="zh-CN">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要；先改后审的批次分初改、复核两段，可在这里请求复核或直接定稿），P 在报告上标注，C 写批注，K 填技能，G 常驻技能（每条批注按范围都让 Agent 先调用）；Esc 关闭或取消。<br>
 在报告上标注（P）：进入标注后，在左侧报告上<b>单击</b>放一个点，或<b>按住拖动</b>框选一块区域（像截图那样），再写意见。点和框都可以直接拖动，框拖右下角可调大小；点一下弹出这条批注的编辑、标为已处理、去掉标注、删除；鼠标移到右侧批注上，对应标注会高亮。已有的批注在「编辑」里可以补标注或重新标注。<br>
 风格优化（S）：选范围——1 整页、2 标注处（用刚放的点或框；还没有就进入标注）；可写想要的方向（不写也行），再添加批注。<br>
-「技能」：某条批注需要特定技能（skill）才能改好时填上，多个用逗号分隔；Agent 处理这条前会先调用它们。候选来自技能目录和用过的技能，会参考当前审阅和批注给出建议；可查看全部，或按名称、说明搜索，用上下方向键和回车选择。<br>
+「技能」：某条批注需要特定技能（skill）才能改好时填上，多个用逗号分隔；Agent 处理这条前会先调用它们。候选来自技能目录和用过的技能，会参考当前审阅和批注给出建议；可查看全部，或按名称、说明搜索，用上下方向键和回车选择；搜不到时会说明没有匹配的技能。技能名称和说明始终用目录里的原文，不随界面语言改写。<br>
 选中报告或讲稿里的文字后：D 删除这段（再按一次 D 或 ↵ 确认，防止打字时误触），R 改为…（在弹出的框里改好按 ↵），C 以它为引用写批注；另一侧同一页有相同或相近的句子时会提示「同时改」（默认勾选，B 切换）。写批注时 ⌘/Ctrl + ↵ 添加。<br>
 批注保存：用本地服务打开（地址是 http://127.0.0.1:端口）时，每次改动自动写入审阅目录的 notes.json，Agent 可直接读取；直接双击打开 HTML 时批注只存在本浏览器，用「复制全部」或「下载」交给 Agent。</div>
 <div class="keys" data-ae-lang="en" hidden>Shortcuts: ← → change page, Home / End for the first and last page; L jumps to the page of the last annotation; H help, N all annotations, A hand to the agent, J processing history (each hand-off counts as one batch: how many it solved and its summary; a draft-then-review batch splits into a draft stage and a review stage, and you can ask for the review or finalize it here), P annotate on the report, C write an annotation, K fill in skills, G standing skills (every annotation asks the agent to call them first, by scope); Esc closes or cancels.<br>
 Annotate on the report (P): once you are in marking mode, <b>click</b> on the report on the left to drop a pin, or <b>hold and drag</b> to select an area (like a screenshot), then write your request. Pins and areas can both be dragged, and an area is resized from its bottom-right corner; click one to edit that annotation, mark it resolved, remove the mark or delete it; hover an annotation on the right and its mark lights up. An existing annotation can be given a mark, or re-annotated, from Edit.<br>
 Style (S): choose a scope — 1 whole page, 2 at the mark (the pin or area you just placed; if there is none, marking mode starts); you can write the direction you want (or leave it empty), then add the annotation.<br>
-"Skills": when an annotation needs a particular skill to be done well, fill it in and separate several with commas; the agent calls them before handling this annotation. Candidates come from the skill catalog and the skills already used, with suggestions based on the current review and its annotations; you can see them all, or search by name or description, and choose with the arrow keys and Enter.<br>
+"Skills": when an annotation needs a particular skill to be done well, fill it in and separate several with commas; the agent calls them before handling this annotation. Candidates come from the skill catalog and the skills already used, with suggestions based on the current review and its annotations; you can see them all, or search by name or description, and choose with the arrow keys and Enter; when nothing matches it says so. Skill names and descriptions always stay as the catalog has them and are not rewritten for the interface language.<br>
 After you select text in the report or the speaker notes: D deletes it (press D or ↵ again to confirm, so typing does not trigger it by accident), R replaces it (edit it in the box that opens and press ↵), C writes an annotation quoting it; when the other side has the same or a similar sentence on this page you are offered "change both" (ticked by default, B toggles). While writing an annotation, ⌘/Ctrl + ↵ adds it.<br>
 Where annotations are kept: when you open it through the local service (the address is http://127.0.0.1:port) every change is written straight into the review directory's notes.json, which the agent can read; when you open the HTML by double-clicking, annotations live only in this browser — use "Copy all" or "Download" to hand them to the agent.</div></div></div></div>
 <script>
@@ -385,6 +385,9 @@ function applyLocale(){
   const targetSel=$("ntarget");
   if(targetSel){for(const opt of targetSel.options) opt.textContent=targetLabel(opt.value)}
   applyMessages();
+  // 技能相关的进行中状态也要按当前语言重刷，否则同一行里会留着上一种语言
+  if(typeof updateAlwaysBtn==="function") updateAlwaysBtn();   // 按钮提示里带着常驻技能的名单和范围标签
+  if(typeof renderSkillList==="function") renderSkillList();   // 候选列表开着就重画（名称与说明仍是目录原文）
   // 说明正文按语言整段切换：长文带行内标记，不进词典（词典不承载 HTML）
   document.querySelectorAll("[data-ae-lang]").forEach(el=>{el.hidden=el.dataset.aeLang!==uiLocale});
   // 进行中的控件状态也要按当前语言重刷，否则同一行里会留着上一种语言
@@ -426,12 +429,17 @@ function settleMarks(x,body){
   if(body&&st&&st.scope&&("pin" in body||"region" in body)&&(("pin" in body&&"region" in body)||st.scope!=="page"))
     x.style={scope:x.region?"region":x.pin?"pin":"page"};
   return x}
-let skillCatalog=__SKILLS__;
-// 常驻技能：[{name, scope: all|报告|讲稿|style}]；服务模式以服务端为准，本地文件模式存本浏览器
-const ALWAYS_ZH={all:"全部批注",报告:"报告",讲稿:"讲稿",style:"风格优化"};
+let skillCatalog=__SKILLS__;   // 代理写进审阅目录的技能目录（skills.json），作为「技能」输入栏的候选
+// 常驻技能：[{name, scope: all|报告|讲稿|style}]；服务模式以服务端为准，本地文件模式存本浏览器。
+// 范围：ALWAYS_SCOPES 是存进 skills.json 的存储值（顺序即下拉顺序），ALWAYS_LABEL 只是界面显示、
+// 随语言变，ALWAYS_EXPORT 是导出 / 导入与「交给 Agent」摘要里的协议写法、固定中文。改显示不改存储值。
+const ALWAYS_SCOPES=["all","报告","讲稿","style"];
+const ALWAYS_LABEL={all:"viewer.always.scope.all",报告:"viewer.always.scope.report",讲稿:"viewer.always.scope.script",style:"viewer.always.scope.style"};
+const ALWAYS_EXPORT={all:"全部批注",报告:"报告",讲稿:"讲稿",style:"风格优化"};
+const alwaysLabel=s=>tMsg(ALWAYS_LABEL[s]||ALWAYS_LABEL.all);
 let alwaysSkills=__ALWAYS__, alwaysSig="";
 const alwaysFor=x=>{const t=String(x.target||""),st=!!(x.style&&x.style.scope);
-  return (alwaysSkills||[]).filter(a=>a.scope==="all"||(a.scope==="报告"&&t.includes("报告"))||(a.scope==="讲稿"&&t.includes("讲稿"))||(a.scope==="style"&&st))};   // 代理写进审阅目录的技能目录（skills.json），作为「技能」输入栏的候选
+  return (alwaysSkills||[]).filter(a=>a.scope==="all"||(a.scope==="报告"&&t.includes("报告"))||(a.scope==="讲稿"&&t.includes("讲稿"))||(a.scope==="style"&&st))};
 const parseSkills=v=>[...new Set(String(v||"").split(/[,，、;；\n]+/).map(x=>x.trim().slice(0,64)).filter(Boolean))].slice(0,10);
 let hand=null, handQueued=false;   // 「交给 Agent」：服务端的提交状态；连不上服务时提交暂存待补传
 const cum=[];P.reduce((a,p,k)=>(cum[k]=a+(p.sec||0),cum[k]),0);
@@ -765,7 +773,7 @@ function noteHtml(x){
       :`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
   const sk=Array.isArray(x.skills)?x.skills:[];
   const body=ed?(qe&&qe.op==="delete"?`<div class="body"><span class="op">${tMsg("viewer.quickDelete")}</span><del>${escH(qe.from)}</del></div>`:`<textarea id="etext">${escH(editBuf[x.id]??(qe?qe.to:x.text))}</textarea>`)
-      +`<input class="eskills" id="eskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" placeholder="技能（可选，逗号分隔）" value="${escH(editBuf["sk:"+x.id]??sk.join(", "))}">`
+      +`<input class="eskills" id="eskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" placeholder="${escH(tMsg("viewer.skill.editPlaceholder"))}" value="${escH(editBuf["sk:"+x.id]??sk.join(", "))}">`
     :qe?(qe.op==="delete"?`<div class="body"><span class="op">${tMsg("viewer.quickDelete")}</span><del>${escH(qe.from)}</del></div>`
         :`<div class="body"><del>${escH(qe.from)}</del> → <ins>${escH(qe.to)}</ins></div>`)
     :`<div class="body">${escH(x.text).replace(/\n/g,"<br>")}</div>`;
@@ -778,7 +786,7 @@ function noteHtml(x){
    +(ed?`<div class="anchor">${tMsg("viewer.moveTo")} <select id="epage">${P.map(q=>`<option value="${q.n}"${q.n===(editBuf["pg:"+x.id]??x.page)?" selected":""}>${escH(tMsg("viewer.page",{page:q.n}))}</option>`).join("")}</select></div>`:"")
    +(!ed&&x.anchor?`<div class="anchor">${tMsg("viewer.anchorLabel")}${escH(clip(x.anchor,140))}</div>`:"")
    +(()=>{if(ed)return"";const al=done?[]:alwaysFor(x).filter((a,k,arr)=>!sk.includes(a.name)&&arr.findIndex(b=>b.name===a.name)===k);
-      return sk.length||al.length?`<div class="skills">${al.map(a=>`<span class="skill al" title="常驻技能（${escH(ALWAYS_ZH[a.scope]||"")}）：处理这条前 Agent 会先调用">常驻 ${escH(a.name)}</span>`).join("")}${sk.map(n=>`<span class="skill" title="处理这条批注时调用的技能">⚙ ${escH(n)}</span>`).join("")}</div>`:""})()
+      return sk.length||al.length?`<div class="skills">${al.map(a=>`<span class="skill al" title="${escH(tMsg("viewer.skill.alwaysChipTitle",{scope:alwaysLabel(a.scope)}))}">${escH(tMsg("viewer.skill.alwaysChip",{name:a.name}))}</span>`).join("")}${sk.map(n=>`<span class="skill" title="${escH(tMsg("viewer.skill.noteTitle"))}">⚙ ${escH(n)}</span>`).join("")}</div>`:""})()
    +(x.pair&&x.pair.text?`<div class="pair">${escH(tMsg("viewer.pairLine",{side:targetLabel(x.pair.side),match:tMsg(x.pair.match==="exact"?"viewer.pairSame":"viewer.pairSimilar"),text:clip(x.pair.text,120)}))}</div>`:"")
    +((done||dr)&&x.resolution?`<div class="res">${dr?"初改说明":"处理说明"}：${escH(x.resolution).replace(/\n/g,"<br>")}</div>`:"")
    +(!ed&&Array.isArray(x.trail)&&x.trail.length?`<div class="trail">痕迹：${trailText(x)}</div>`:"")+`</div>`}
@@ -1057,7 +1065,7 @@ function skillPart(el){const value=String(el.value||"");if(el.classList.contains
   let start=cursor,end=cursor;while(start>0&&!sep.test(value[start-1]))start--;while(end<value.length&&!sep.test(value[end]))end++;
   const others=(value.slice(0,start)+value.slice(end)).split(sep).map(x=>x.trim()).filter(Boolean);
   return{start,end,query:value.slice(start,end).trim(),others}}
-function hideSkillList(){const box=$("skillList");box.classList.remove("on");if(skillInput){skillInput.setAttribute("aria-expanded","false");skillInput.removeAttribute("aria-activedescendant")}skillInput=null;skillChoices=[];skillIndex=-1;skillShowAll=false}
+function hideSkillList(){const box=$("skillList");box.classList.remove("on");box.classList.remove("hint");if(skillInput){skillInput.setAttribute("aria-expanded","false");skillInput.removeAttribute("aria-activedescendant")}skillInput=null;skillChoices=[];skillIndex=-1;skillShowAll=false}
 function positionSkillList(){if(!skillInput||!$("skillList").classList.contains("on"))return;
   const box=$("skillList"),r=skillInput.getBoundingClientRect(),w=Math.min(Math.max(r.width,240),innerWidth-24);
   box.style.width=w+"px";box.style.left=Math.max(12,Math.min(r.left,innerWidth-w-12))+"px";
@@ -1081,16 +1089,19 @@ function renderSkillList(){const el=document.activeElement;if(!isSkillInput(el))
   const selected=skillInput===el&&skillIndex>=0&&skillChoices[skillIndex]?skillChoices[skillIndex].name:null;
   if(skillInput&&skillInput!==el)hideSkillList();skillInput=el;const part=skillPart(el),q=part.query.toLocaleLowerCase();
   const used=[];notes.forEach(x=>(Array.isArray(x.skills)?x.skills:[]).forEach(n=>{if(!used.includes(n))used.push(n)}));
-  const all=[...skillCatalog.map(c=>({name:c.name,desc:c.desc||""})),...used.filter(n=>!skillCatalog.some(c=>c.name===n)).map(n=>({name:n,desc:"用过"}))];
+  const all=[...skillCatalog.map(c=>({name:c.name,desc:c.desc||""})),...used.filter(n=>!skillCatalog.some(c=>c.name===n)).map(n=>({name:n,desc:tMsg("viewer.skill.used")}))];
   const seen=new Set();const matching=all.filter(c=>c.name&&!seen.has(c.name)&&!part.others.includes(c.name)&&
     (String(c.name).toLocaleLowerCase().includes(q)||String(c.desc).toLocaleLowerCase().includes(q))&&(seen.add(c.name),true));
   const ranked=matching.map((c,k)=>({...c,score:skillScore(c),order:k})).sort((a,b)=>b.score-a.score||a.order-b.order);
   skillChoices=!q&&!skillShowAll?ranked.slice(0,8):ranked;
-  skillIndex=selected?skillChoices.findIndex(c=>c.name===selected):-1;const box=$("skillList");box.innerHTML=skillChoices.map((c,k)=>`<div role="option" id="skill-option-${k}" aria-selected="${k===skillIndex}" data-skill="${k}"><b>${escH(c.name)}</b>${c.score?'<span class="skill-rec">建议</span>':""}${c.desc?`<span class="skill-desc">${escH(c.desc)}</span>`:""}</div>`).join("")+
-    (!q&&!skillShowAll&&ranked.length>skillChoices.length?`<button class="skill-more" data-skill-more aria-label="查看全部技能">查看全部技能（${ranked.length}）</button>`:"");
+  const showAll=tMsg("viewer.skill.showAll",{count:ranked.length});
+  skillIndex=selected?skillChoices.findIndex(c=>c.name===selected):-1;const box=$("skillList");box.innerHTML=skillChoices.map((c,k)=>`<div role="option" id="skill-option-${k}" aria-selected="${k===skillIndex}" data-skill="${k}"><b>${escH(c.name)}</b>${c.score?`<span class="skill-rec">${escH(tMsg("viewer.skill.recommended"))}</span>`:""}${c.desc?`<span class="skill-desc">${escH(c.desc)}</span>`:""}</div>`).join("")+
+    (skillChoices.length?"":`<p class="skill-none">${escH(tMsg(q?"viewer.skill.noMatch":"viewer.skill.none"))}</p>`)+
+    (!q&&!skillShowAll&&ranked.length>skillChoices.length?`<button class="skill-more" data-skill-more aria-label="${escH(showAll)}">${escH(showAll)}</button>`:"");
   el.setAttribute("role","combobox");el.setAttribute("aria-controls","skillList");el.setAttribute("aria-expanded",skillChoices.length?"true":"false");
   if(skillIndex>=0)el.setAttribute("aria-activedescendant",`skill-option-${skillIndex}`);else el.removeAttribute("aria-activedescendant");
-  box.classList.toggle("on",!!skillChoices.length);positionSkillList()}
+  // 没有候选时只留一句提示：hint 让浮层不拦点击，免得盖住下面的按钮
+  box.classList.toggle("on",!!skillChoices.length||!!q);box.classList.toggle("hint",!skillChoices.length);positionSkillList()}
 function chooseSkill(k){const el=skillInput,c=skillChoices[k];if(!el||!c)return;const p=skillPart(el),v=String(el.value||""),old=v.slice(p.start,p.end),lead=(old.match(/^\s*/)||[""])[0],tail=(old.match(/\s*$/)||[""])[0];
   el.value=v.slice(0,p.start)+lead+c.name+tail+v.slice(p.end);const pos=p.start+lead.length+c.name.length;el.setSelectionRange(pos,pos);
   el.dispatchEvent(new Event("input",{bubbles:true}));hideSkillList()}
@@ -1116,13 +1127,14 @@ const ALWAYS_EMBED=JSON.stringify(alwaysSkills||[]);
 if(FILE){const v=LS.get(K_ALWAYS,null);
   if(v&&Array.isArray(v.items)&&v.base===ALWAYS_EMBED)alwaysSkills=v.items;
   else if(Array.isArray(v)&&!(alwaysSkills||[]).length)alwaysSkills=v}
+function alwaysList(){return (alwaysSkills||[]).map(a=>tMsg("viewer.always.scopeItem",{name:a.name,scope:alwaysLabel(a.scope)})).join(tMsg("viewer.always.listSep"))}
 function updateAlwaysBtn(){const n=(alwaysSkills||[]).length;$("alwaysN").textContent=n||"";
-  $("alwaysBtn").title=(n?"常驻技能："+alwaysSkills.map(a=>`${a.name}（${ALWAYS_ZH[a.scope]||""}）`).join("、")+"。":"")+"每条批注（按范围）都让 Agent 先调用（G）"}
+  $("alwaysBtn").title=(n?tMsg("viewer.always.buttonList",{list:alwaysList()}):"")+tMsg("viewer.always.buttonTitle",{key:"G"})}
 updateAlwaysBtn();
 function alwaysRow(a){const d=document.createElement("div");d.className="arow";
-  d.innerHTML=`<input class="aname" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" placeholder="技能名，如 humanizer-zh" value="${escH(a.name||"")}">`
-    +`<select class="ascope">${Object.entries(ALWAYS_ZH).map(([k,v])=>`<option value="${escH(k)}"${a.scope===k?" selected":""}>${escH(v)}</option>`).join("")}</select>`
-    +`<button class="adel" title="去掉这一个" aria-label="去掉">×</button>`;
+  d.innerHTML=`<input class="aname" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" data-ph="viewer.always.rowPlaceholder" placeholder="${escH(tMsg("viewer.always.rowPlaceholder"))}" value="${escH(a.name||"")}">`
+    +`<select class="ascope">${ALWAYS_SCOPES.map(k=>`<option value="${escH(k)}" data-msg="${ALWAYS_LABEL[k]}"${a.scope===k?" selected":""}>${escH(alwaysLabel(k))}</option>`).join("")}</select>`
+    +`<button class="adel" data-title="viewer.always.removeRow" data-aria="viewer.always.removeRowAria" title="${escH(tMsg("viewer.always.removeRow"))}" aria-label="${escH(tMsg("viewer.always.removeRowAria"))}">×</button>`;
   d.querySelector(".adel").onclick=()=>d.remove();return d}
 let alwaysOpenSig="";
 function openAlways(){const box=$("alwaysRows");box.innerHTML="";alwaysOpenSig=JSON.stringify(alwaysSkills||[]);(alwaysSkills||[]).forEach(a=>box.appendChild(alwaysRow(a)));
@@ -1131,20 +1143,20 @@ function openAlways(){const box=$("alwaysRows");box.innerHTML="";alwaysOpenSig=J
 $("alwaysAdd").onclick=()=>{const r=alwaysRow({scope:"all"});$("alwaysRows").appendChild(r);r.querySelector(".aname").focus()};
 const SKILL_SEP=/[,，、;；\n]+/;
 function splitAlways(list){const out=[];(list||[]).forEach(a=>String(a.name||"").split(SKILL_SEP).forEach(n=>{n=n.trim().slice(0,64);
-  const e={name:n,scope:ALWAYS_ZH[a.scope]?a.scope:"all"};if(n&&!out.some(o=>o.name===e.name&&o.scope===e.scope))out.push(e)}));return out}
+  const e={name:n,scope:ALWAYS_SCOPES.includes(a.scope)?a.scope:"all"};if(n&&!out.some(o=>o.name===e.name&&o.scope===e.scope))out.push(e)}));return out}
 async function setAlways(items){   // 保存常驻技能；返回实际保存的名单，失败返回 null
   items=splitAlways(items);
-  if(items.length>20){toast(`常驻技能最多 20 个（现在 ${items.length} 个）`,4000);return null}
+  if(items.length>20){toast(tMsg("viewer.always.tooMany",{count:items.length,limit:20}),4000);return null}
   if(FILE){alwaysSkills=items;LS.set(K_ALWAYS,{items,base:ALWAYS_EMBED});return items}
-  if(mode!=="server"){toast("服务没连上：常驻技能暂时保存不了，连上后再试",4000);return null}
+  if(mode!=="server"){toast(tMsg("viewer.always.noServer"),4000);return null}
   try{const r=await api("POST","/api/skills/always",{always:items});alwaysSkills=Array.isArray(r.alwaysSkills)?r.alwaysSkills:items;alwaysSig=JSON.stringify(alwaysSkills);return alwaysSkills}
-  catch(e){toast(e.code==="no-api"?"本地服务是旧版本，不支持常驻技能：停掉旧服务后重新运行 serve.py":"没能保存常驻技能："+(e.status?e.message:"本地服务没有应答，请稍后再试"),6000);return null}}
+  catch(e){toast(e.code==="no-api"?tMsg("viewer.always.oldServer"):e.status?tMsg("viewer.always.saveFailed",{reason:e.message}):tMsg("viewer.always.noReply"),6000);return null}}
 async function saveAlways(){
   const items=[...$("alwaysRows").querySelectorAll(".arow")].map(r=>({name:r.querySelector(".aname").value,scope:r.querySelector(".ascope").value}));
-  if(JSON.stringify(alwaysSkills||[])!==alwaysOpenSig&&!confirm("你打开设置之后，常驻技能被改过（可能是 Agent 改的）。仍用你这份覆盖？"))return;
+  if(JSON.stringify(alwaysSkills||[])!==alwaysOpenSig&&!confirm(tMsg("viewer.always.changed")))return;
   const saved=await setAlways(items);if(!saved)return;
   $("always").classList.remove("on");updateAlwaysBtn();refreshList(true);
-  toast(saved.length?`已保存 ${saved.length} 个常驻技能：之后每条批注（按范围）都会让 Agent 先调用`:"已清空常驻技能",3500)}
+  toast(saved.length?tMsg("viewer.always.saved",{count:saved.length}):tMsg("viewer.always.cleared"),3500)}
 // 导入的内容里带了常驻技能（本地文件模式导出的）：和当前不同就问要不要采用
 function importAlways(text){const t=String(text||"").trim();let list=null;
   try{if(t[0]==="{"){const d=JSON.parse(t);if(Array.isArray(d.alwaysSkills))list=d.alwaysSkills}
@@ -1153,8 +1165,9 @@ function importAlways(text){const t=String(text||"").trim();let list=null;
   return list}
 async function offerAlways(list){if(!list)return;const items=splitAlways(list);
   if(JSON.stringify(items)===JSON.stringify(alwaysSkills||[]))return;
-  if(!confirm(`导入的内容里带了常驻技能：${items.map(a=>`${a.name}（${ALWAYS_ZH[a.scope]}）`).join("、")||"（无）"}。设为这份审阅的常驻技能？`))return;
-  const saved=await setAlways(items);if(saved){updateAlwaysBtn();refreshList(true);toast("已采用导入的常驻技能",3000)}}
+  const shown=items.map(a=>tMsg("viewer.always.scopeItem",{name:a.name,scope:alwaysLabel(a.scope)})).join(tMsg("viewer.always.listSep"))||tMsg("viewer.always.importNone");
+  if(!confirm(tMsg("viewer.always.importOffer",{list:shown})))return;
+  const saved=await setAlways(items);if(saved){updateAlwaysBtn();refreshList(true);toast(tMsg("viewer.always.imported"),3000)}}
 $("alwaysSave").onclick=saveAlways;
 $("always").addEventListener("keydown",e=>{e.stopPropagation();if(e.isComposing||e.keyCode===229)return;
   if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){e.preventDefault();saveAlways()}
@@ -1239,7 +1252,7 @@ function openHand(review){
   if(handMode){const dn=notes.filter(x=>isDraft(x)&&x.draftBatch===handMode.seq).length;
     $("handInfo").textContent=`第 ${handMode.seq} 批有 ${dn} 条已初改·待复核。复核者会逐条看初改（通过 / 再改 / 退回给你），也会接手初改没动的批注。`}
   else $("handInfo").textContent=open.length?`未处理批注 ${open.length} 条，涉及第 ${pages.join("、")} 页。`:"目前没有未处理的批注（也可以只带附言交给 Agent）。";
-  if((alwaysSkills||[]).length)$("handInfo").textContent+=` 常驻技能：${alwaysSkills.map(a=>`${a.name}（${ALWAYS_ZH[a.scope]||""}）`).join("、")}，范围内的每条都会让 Agent 先调用。`;
+  if((alwaysSkills||[]).length)$("handInfo").textContent+=` 常驻技能：${alwaysSkills.map(a=>`${a.name}（${ALWAYS_EXPORT[a.scope]||"全部批注"}）`).join("、")}，范围内的每条都会让 Agent 先调用。`;
   const L=hand&&hand.latest;
   $("handLast").textContent=L?`上一次：第 ${L.seq} 批，${HAND_ZH[L.status]||L.status}${"resolvedCount" in L?`，解决 ${+L.resolvedCount} 条`:""}${L.status==="done"&&L.summary?"。处理摘要："+L.summary:""}`:"";
   $("handHist").style.display=L?"":"none";
@@ -1314,7 +1327,7 @@ function exportText(){
   const by={};notes.slice().sort((a,b)=>a.page-b.page||String(a.at).localeCompare(String(b.at))).forEach(x=>(by[x.page]=by[x.page]||[]).push(x));
   const pages=Object.keys(by).map(Number).sort((a,b)=>a-b), open=notes.filter(x=>!isDone(x)).length;
   let o=`# 批注 · ${unH(document.title)}\n导出时间：${new Date().toLocaleString("zh-CN")}；共 ${notes.length} 条（未处理 ${open}），涉及 ${pages.length} 页\n报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。\n`
-    +((alwaysSkills||[]).length?`常驻技能（每条批注按范围处理前都先调用）：${alwaysSkills.map(a=>`${a.name}（${ALWAYS_ZH[a.scope]||"全部批注"}）`).join("、")}\n`:"");
+    +((alwaysSkills||[]).length?`常驻技能（每条批注按范围处理前都先调用）：${alwaysSkills.map(a=>`${a.name}（${ALWAYS_EXPORT[a.scope]||"全部批注"}）`).join("、")}\n`:"");
   pages.forEach(n=>{const t=P.find(p=>p.n===n);o+=`\n## 第 ${n} 页｜${unH(t?t.title:by[n][0].title||"")}\n`;
     by[n].forEach((x,k)=>{o+=`${k+1}. 【${x.target||"未指定"}${x.pin?`·标点 ${markNo(n,x.id)}（x ${x.pin.x}%，y ${x.pin.y}%）`:""}${(r=>r?`·框选 ${markNo(n,x.id)}（x ${r.x}%，y ${r.y}%，宽 ${r.w}%，高 ${r.h}%）`:"")(regionOf(x))}】${isDone(x)?"【已处理】":isDraft(x)?"【已初改·待复核】":""}${String(x.text).replace(/\n/g,"\n   ")}\n`;
       if(x.quote)o+=`   > 引用${x.quoteFrom?`（${x.quoteFrom}）`:""}：${String(x.quote).replace(/\n/g," ")}\n`;

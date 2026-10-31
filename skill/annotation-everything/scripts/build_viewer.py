@@ -664,6 +664,9 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         locale_choice = i18n.canonical_choice(locale if locale is not None else preview.get("locale"))
     except i18n.LocaleError as exc:
         raise SystemExit(f"错误：{exc}") from exc
+    # 生成侧的提示按本次选择的语言写；没选就是中文（旧审阅、旧调用）。auto 在这里定成具体语言
+    warn_catalog = i18n.load_catalog(
+        i18n.resolve_locale(locale_choice, system_languages=i18n.system_languages()))
     doc = report.read_text(encoding="utf-8")
     assets = Assets(asset_root or report.resolve().parent)
     assets.root_fs = None
@@ -724,11 +727,11 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
             for warning in skill_warnings:
                 assets.warn(warning)
             if skills_from is not None and any(items is None for _key, items, _complete in results):
-                assets.warn("有技能来源不可访问，保留此前该来源的记录")
+                assets.warn(i18n.translate(warn_catalog, "cli.skills.warnUnavailable"))
             if any(items is not None for _key, items, _complete in results) or (out / notes_store.SKILL_SOURCES_FILE).exists():
                 _catalog, retained = notes_store.skills_merge_scan(out, results)
                 if retained and skills_from is None:
-                    assets.warn("有技能来源不可访问，保留此前该来源的记录")
+                    assets.warn(i18n.translate(warn_catalog, "cli.skills.warnUnavailable"))
         except (OSError, notes_store.NoteError) as e:
             assets.warn(str(e))
     old = read_manifest(out)

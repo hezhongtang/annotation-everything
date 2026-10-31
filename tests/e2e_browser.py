@@ -150,7 +150,7 @@ def skill_search_checks(browser, tmp: Path):
         page.fill("#ntext", "合成搜索批注")
         page.fill("#nskills", "custom-skill")
         check(options.count() == 0, "无匹配时不强制选择")
-        page.click('[data-act="add"]')
+        page.click('[data-act="add"]')   # 空结果浮层不能拦住添加按钮
         check("custom-skill" in page.inner_text("#nlist"), "无匹配的手工技能可随批注保存")
         page.locator('#nlist [data-act="edit"]').first.click()
         page.fill("#eskills", "字体")
@@ -269,6 +269,149 @@ def skill_recommendation_checks(browser, tmp: Path):
     options = page.locator('[role="listbox"] [role="option"]')
     ok(options.count() > 0 and "typography" in options.first.inner_text(), "当前页面标题可影响技能推荐")
     ctx.close()
+
+
+def skill_i18n_checks(browser, tmp: Path):
+    """技能选择与常驻技能的中英界面：范围存储值不变、搜索覆盖原文、页面与 CLI 一致。
+
+    目录全部合成：大目录、插件命名空间技能、中英混合说明和特殊字符候选。
+    """
+    d = tmp / "skill_i18n"
+    d.mkdir()
+    catalog = [{"name": f"skill-{n:03d}", "desc": f"合成说明 {n}"} for n in range(205)]
+    catalog += [{"name": "sample:sample", "desc": "插件技能 plugin skill"},
+                {"name": "润色（中文）", "desc": "中英混合说明 mixed-language"},
+                {"name": 'odd"<>&', "desc": "特殊字符 <b>&</b>"}]
+    always = [{"name": "humanizer-zh", "scope": "讲稿"}, {"name": "checker", "scope": "报告"},
+              {"name": "stylish", "scope": "style"}, {"name": "every", "scope": "all"}]
+    (d / "skills.json").write_text(json.dumps({"version": 1, "skills": catalog, "always": always},
+                                              ensure_ascii=False), encoding="utf-8")
+    build(d, locale="en")
+
+    def exercise(page, mode):
+        def check(value, label):
+            ok(value, f"{mode}：{label}")
+        options = page.locator('[role="listbox"] [role="option"]')
+        check(page.get_attribute("#nskills", "placeholder") == "Optional, e.g. humanizer-zh",
+              "英文技能输入提示")
+        check(page.inner_text("#alwaysBtn").strip().startswith("Standing skills"), "英文常驻技能按钮")
+        check(page.get_attribute("#skillList", "aria-label") == "Skill suggestions", "英文候选列表无障碍名称")
+        page.fill("#ntext", "请改标题")
+        page.click('[data-act="add"]')
+        page.wait_for_timeout(400)
+        check("Standing checker" in page.inner_text("#nlist"), "英文卡片上的常驻技能标记")
+        check("Standing every" in page.inner_text("#nlist"), "全部批注范围的常驻技能也标出")
+        page.fill("#nskills", "plugin")
+        check(options.filter(has_text="sample:sample").count() == 1, "按原始说明搜索命中插件技能")
+        page.fill("#nskills", "mixed-language")
+        check(options.filter(has_text="润色（中文）").count() == 1, "按英文说明片段搜索命中混合语言技能")
+        page.fill("#nskills", "SKILL-204")
+        check(options.filter(has_text="skill-204").count() == 1, "首屏之外的大目录候选可搜索")
+        page.fill("#nskills", "zzz-no-such")
+        check(options.count() == 0 and "No matching skills" in page.inner_text("#skillList"),
+              "英文空结果提示")
+        page.click('[data-act="add"]')
+        check(page.locator("#nlist [data-note]").count() >= 1,
+              "空结果浮层不拦住下面的添加按钮")
+        page.fill("#nskills", "")
+        more = page.get_by_role("button", name="See all skills")
+        if more.count():
+            more.click()
+        check(options.count() == len(catalog), "英文可浏览完整技能目录")
+        page.locator("#nskills").press("Escape")
+
+        page.click("#alwaysBtn")
+        rows = page.locator("#alwaysRows .arow")
+        check(rows.count() == 4, "英文常驻技能弹窗列出全部范围")
+        check(rows.nth(0).locator(".ascope").input_value() == "讲稿", "范围存储值仍是讲稿")
+        check(rows.nth(0).locator(".ascope option").first.inner_text() == "All annotations",
+              "范围下拉显示英文标签")
+        check(rows.nth(3).locator(".ascope").input_value() == "all", "全部批注的存储值仍是 all")
+        check(page.inner_text("#always .hint").startswith("In this review"), "英文弹窗说明")
+        rows.nth(0).locator(".aname").fill("sample:sample")
+        rows.nth(0).locator(".ascope").select_option("style")
+        draft_before = page.evaluate("""() => ({
+          rows: [...document.querySelectorAll('#alwaysRows .arow')].map(r =>
+            [r.querySelector('.aname').value, r.querySelector('.ascope').value]),
+          saved: JSON.stringify(alwaysSkills), opened: alwaysOpenSig
+        })""")
+        writes = []
+
+        def record_write(request):
+            if request.method in ("POST", "PATCH", "DELETE"):
+                writes.append(request.url)
+
+        page.on("request", record_write)
+        page.select_option("#localePick", "zh-CN")
+        check(rows.nth(0).locator(".ascope option").nth(3).inner_text() == "风格优化"
+              and rows.nth(0).locator(".aname").get_attribute("placeholder") == "技能名，如 humanizer-zh"
+              and rows.nth(0).locator(".adel").get_attribute("aria-label") == "去掉",
+              "弹窗开着切中文刷新范围、输入提示和删除名称")
+        page.select_option("#localePick", "en")
+        check(rows.nth(0).locator(".ascope option").nth(3).inner_text() == "Style"
+              and rows.nth(0).locator(".aname").get_attribute("placeholder") == "Skill name, e.g. humanizer-zh"
+              and rows.nth(0).locator(".adel").get_attribute("title") == "Remove this one",
+              "弹窗开着切英文刷新行文案")
+        draft_after = page.evaluate("""() => ({
+          rows: [...document.querySelectorAll('#alwaysRows .arow')].map(r =>
+            [r.querySelector('.aname').value, r.querySelector('.ascope').value]),
+          saved: JSON.stringify(alwaysSkills), opened: alwaysOpenSig
+        })""")
+        page.remove_listener("request", record_write)
+        check(draft_after == draft_before and not writes,
+              "弹窗切语言保留临时值和冲突快照、不保存或发送写请求")
+        rows.nth(0).locator(".aname").focus()
+        page.keyboard.press("Control+Enter")
+        check(wait_until(lambda: page.inner_text("#alwaysN") == "4", page, 5), "Ctrl+Enter 保存常驻技能")
+
+        page.select_option("#localePick", "zh-CN")
+        check(page.get_attribute("#nskills", "placeholder") == "可选，如 humanizer-zh", "中文技能输入提示")
+        check(page.inner_text("#alwaysBtn").strip().startswith("常驻技能"), "中文常驻技能按钮")
+        page.fill("#nskills", "mixed-language")
+        check(options.filter(has_text="润色（中文）").count() == 1, "中文界面仍按原始说明搜索")
+        page.click("#alwaysBtn")
+        rows = page.locator("#alwaysRows .arow")
+        check(rows.nth(0).locator(".ascope").input_value() == "style", "切换语言不改范围存储值")
+        check(rows.nth(0).locator(".ascope option").nth(3).inner_text() == "风格优化", "中文范围标签")
+        check(rows.nth(0).locator(".aname").input_value() == "sample:sample", "切换语言不改技能调用名")
+        page.locator("#always").get_by_role("button", name="取消").click()
+        check("sample:sample（风格优化）" in (page.get_attribute("#alwaysBtn", "title") or ""),
+              "中文按钮提示列出范围标签")
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.goto((d / "index.html").as_uri())
+    exercise(page, "文件模式")
+    ctx.close()
+    port = free_port()
+    server = start_server(d, port)
+    try:
+        ctx = browser.new_context()
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        exercise(page, "服务模式")
+        disk = json.loads((d / "skills.json").read_text(encoding="utf-8"))
+        ok([x for x in disk["always"] if x["name"] == "sample:sample"] == [{"name": "sample:sample", "scope": "style"}],
+           "服务模式保存后 skills.json 里的范围存储值不变")
+        ok(len(disk["skills"]) == len(catalog), "保存常驻技能不截断技能目录")
+        ctx.close()
+    finally:
+        stop(server)
+
+    cli = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "skills", str(d), "--locale", "en"],
+                         capture_output=True, text=True, timeout=60)
+    ok(cli.returncode == 0 and "sample:sample (Style)" in cli.stdout
+       and f"skill-204" in cli.stdout and "Standing skills" in cli.stdout,
+       "命令行英文输出与页面保存的结果一致")
+    zh = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "skills", str(d), "--locale", "zh-CN"],
+                        capture_output=True, text=True, timeout=60)
+    ok(zh.returncode == 0 and "sample:sample（风格优化）" in zh.stdout, "命令行中文输出保持原来的范围说法")
+    from_review = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "skills", str(d)],
+                                 capture_output=True, text=True, timeout=60)
+    ok("Standing skills" in from_review.stdout, "不指定语言时命令行跟随审阅保存的选择")
+    notes = disk_notes(d)
+    ok(any(n.get("text") == "请改标题" for n in notes), "批注本身不随语言改写")
 
 
 def full_check_checks(browser, tmp: Path):
@@ -897,6 +1040,7 @@ def main() -> int:
             return 1 if any(not p for p, _ in RESULTS) else 0
         skill_search_checks(browser, tmp)
         skill_recommendation_checks(browser, tmp)
+        skill_i18n_checks(browser, tmp)
         if "--skills-only" in sys.argv:
             browser.close()
             failed = sum(not p for p, _ in RESULTS)
