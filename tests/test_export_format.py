@@ -219,21 +219,40 @@ class RoundTripTests(unittest.TestCase):
                 self.assertEqual(got[1]["edit"]["to"], "删掉整段")
 
     def test_cli_export_defaults_to_the_current_language(self):
+        # 优先级按 i18n.py 的共同契约：--lang > AE_LOCALE > 审阅 locale > 中文；
+        # 只有 auto 读 LC_ALL/LC_MESSAGES/LANG。全部语言环境变量在用例内给定，
+        # 断言不随开发机的系统语言漂移。
         d = review(tmpdir())
         add_notes(d, [rich_notes()[0]])
-        _code, out, _err = run_cli(["export", str(d)])
-        self.assertIn("lang=zh-CN", out.splitlines()[0], "没有 --lang 也没有审阅 locale 时默认中文")
-        _code, out, _err = run_cli(["export", str(d), "--lang", "en"])
-        self.assertIn("lang=en", out.splitlines()[0])
-        saved = os.environ.get("AE_LOCALE")
-        os.environ["AE_LOCALE"] = "en"
+        saved = {name: os.environ.get(name)
+                 for name in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
+
+        def restore() -> None:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+        for name in saved:
+            os.environ.pop(name, None)
         try:
+            _code, out, _err = run_cli(["export", str(d)])
+            self.assertIn("lang=zh-CN", out.splitlines()[0], "没有 --lang 也没有审阅 locale 时默认中文")
+            _code, out, _err = run_cli(["export", str(d), "--lang", "en"])
+            self.assertIn("lang=en", out.splitlines()[0])
+            # --lang auto 是显式选择，压过 AE_LOCALE；auto 只跟随系统语言（LC_ALL 优先）
+            os.environ["AE_LOCALE"] = "en"
+            os.environ["LC_ALL"] = "zh_CN.UTF-8"
             _code, out, _err = run_cli(["export", str(d), "--lang", "auto", "--format", "json"])
+            self.assertIn('"lang": "zh-CN"', out, "显式 --lang auto 只跟随系统语言，不被 AE_LOCALE 改写")
+            # 不带 --lang 时才轮到 AE_LOCALE，且优先于审阅里保存的 locale
+            localized = review(tmpdir(), locale="zh-CN")
+            add_notes(localized, [rich_notes()[0]])
+            _code, out, _err = run_cli(["export", str(localized), "--format", "json"])
+            self.assertIn('"lang": "en"', out, "AE_LOCALE 优先于审阅设置")
         finally:
-            os.environ.pop("AE_LOCALE", None)
-            if saved is not None:
-                os.environ["AE_LOCALE"] = saved
-        self.assertIn('"lang": "en"', out, "auto 时 AE_LOCALE 优先于审阅设置")
+            restore()
 
     def test_export_language_follows_the_review_locale(self):
         d = review(tmpdir(), locale="en")
