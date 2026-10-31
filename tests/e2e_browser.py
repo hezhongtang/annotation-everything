@@ -958,6 +958,17 @@ def handoff_i18n_checks(browser, tmp: Path):
         ok(page.inner_text("#doHand").split("⌘")[0] == "Ask for the review", "英文请求复核按钮")
         page.keyboard.press("Escape")
 
+        # 复核定稿：跳过复核直接定稿，确认框与结果状态都用当前语言
+        page.click("#handBtn")
+        confirms: list[str] = []
+        page.on("dialog", lambda dlg: (confirms.append(dlg.message), dlg.accept()))
+        page.click('#handDrafts [data-hfinal="1"]')
+        ok(confirms == ["Skip the review and mark the 1 drafts in batch 1 as resolved?"],
+           f"英文直接定稿的确认框（实际 {confirms}）")
+        ok(wait_until(lambda: "Agent finished · batch 1" in page.text_content("#handState"), page, 8),
+           f"复核定稿后英文徽标（实际 {page.text_content('#handState')!r}）")
+        page.keyboard.press("Escape")
+
         # 断线提交、待补传与重连重试：英文说清状态与恢复方式，不把未确认的提交说成已保存
         items = json.loads((d / "handoff.json").read_text(encoding="utf-8"))["items"]
         ctx.set_offline(True)
