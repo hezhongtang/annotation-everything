@@ -289,11 +289,14 @@ class AlwaysScopeTests(unittest.TestCase):
         self.assertIn('t.includes("报告")', self.match)
         self.assertIn('t.includes("讲稿")', self.match)
 
-    def test_export_protocol_stays_fixed_chinese(self):
+    def test_chinese_export_protocol_stays_fixed(self):
         export = _between(self.source, "const ALWAYS_EXPORT=", "let alwaysSkills=")
         self.assertIn('{all:"全部批注",报告:"报告",讲稿:"讲稿",style:"风格优化"}', export.replace(" ", ""),
                       "导出的常驻技能范围是协议值，必须固定中文")
-        self.assertIn("ALWAYS_EXPORT[a.scope]", _between(self.source, "function exportText(", "function parseMd("))
+        grammar = _between(self.source, "function expGrammar(", "const G_ZH=")
+        self.assertIn("ALWAYS_EXPORT[s]", grammar)
+        self.assertNotIn("alwaysLabel(", grammar, "交换格式不能从界面语言反推范围标签")
+        self.assertIn("g.alwaysHead(alwaysSkills)", _between(self.source, "function exportText(", "function parseMd("))
 
     def test_lenient_scope_read_maps_unknown_to_all(self):
         self.assertIn("ALWAYS_SCOPES.includes(a.scope)?a.scope:\"all\"", self.split.replace(" ", ""))
@@ -399,10 +402,12 @@ class AlwaysDialogTests(unittest.TestCase):
             self.assertNotIn(literal, region, f"导入提示里还写死了 {literal}")
 
     def test_import_parser_keeps_the_chinese_protocol(self):
-        """导入按导出的中文协议解析，不随界面语言改。"""
+        """导入按文件标记选文法，无标记的旧中文仍可读，不随界面语言改。"""
         region = _between(self.source, "function importAlways(", "async function offerAlways(")
-        self.assertIn("全部批注", region)
-        self.assertIn("风格优化", region)
+        self.assertIn("expMdGrammar(t)||G_ZH", region)
+        grammar = _between(self.source, "function expGrammar(", "const G_ZH=")
+        self.assertIn('全部批注:"all"', grammar)
+        self.assertIn('风格优化:"style"', grammar)
 
 
 class CliSkillsTests(unittest.TestCase):

@@ -104,6 +104,7 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,1fr
 .dlg .bar{display:flex;gap:8px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--ae-line);flex-wrap:wrap}
 .dlg .bar h2{font-size:17px;margin:0;color:var(--ae-navy);flex:1}
 .dlg button{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:5px 12px;background:#fff;cursor:pointer}
+.dlg .bar select{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:5px 8px;background:#fff;cursor:pointer}
 .dlg button.primary{background:var(--ae-navy);border-color:var(--ae-navy);color:#fff}
 .dlg pre{margin:0;padding:16px 20px;overflow:auto;white-space:pre-wrap;font-family:inherit;font-size:13.5px;line-height:1.7}
 .dlg .pad{padding:16px 20px;overflow:auto;font-size:14px;line-height:1.7}
@@ -217,15 +218,15 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <div class="row"><button id="repCancel"><span data-msg="viewer.cancel">取消</span><kbd>Esc</kbd></button><button class="primary" id="repOk"><span data-msg="viewer.repOk">确定</span><kbd>↵</kbd></button></div></div>
 </main>
 <div id="skillList" role="listbox" data-aria="viewer.skill.candidates"></div>
-<div class="modal" id="allnotes"><div class="dlg"><div class="bar"><h2>全部批注</h2>
-<button class="primary" id="copyAll">复制全部（粘贴给 Agent）</button><button id="dlAll">下载 Markdown</button><button id="dlJson">下载 JSON</button><button id="openImp">导入…</button><button id="dlFailed" style="display:none" title="多次保存失败、没有写进 notes.json 的改动">下载未能保存的改动</button><button id="clearAll">清空</button><button data-close>关闭</button></div>
+<div class="modal" id="allnotes"><div class="dlg"><div class="bar"><h2 data-msg="viewer.allTitle">全部批注</h2>
+<button class="primary" id="copyAll" data-msg="export.copyAll">复制全部（粘贴给 Agent）</button><button id="dlAll" data-msg="export.download">下载 Markdown</button><button id="dlJson" data-msg="export.downloadJson">下载 JSON</button><select id="expLang" data-aria="export.langLabel" aria-label="导出语言"><option value="auto" data-msg="export.langAuto">跟随界面</option><option value="zh-CN">中文</option><option value="en">English</option></select><button id="openImp">导入…</button><button id="dlFailed" style="display:none" title="多次保存失败、没有写进 notes.json 的改动">下载未能保存的改动</button><button id="clearAll">清空</button><button data-close>关闭</button></div>
 <div class="pad" id="orphanBox" style="display:none;border-bottom:1px solid var(--ae-line)"></div>
 <pre id="allText"></pre></div></div>
 <div class="modal" id="imp"><div class="dlg"><div class="bar"><h2>导入批注</h2><button class="primary" id="doImp">导入</button><button data-close>关闭</button></div>
 <div class="pad"><div id="strays"></div><div id="found"></div>
 <p class="hint">粘贴之前「复制全部」的文字，或「下载 JSON / Markdown」得到的文件内容。同一条批注（同 id，或页码、对象、内容、引用、标注都相同）不会重复导入；同 id 而导入方更新得更晚的，会更新为导入方的内容和状态。</p>
 <textarea id="impText" placeholder="在这里粘贴批注文字或 JSON"></textarea>
-<p><input type="file" id="impFile" accept=".json,.md,.txt"></p></div></div></div>
+<p><input type="file" id="impFile" accept=".json,.md,.txt" data-aria="import.pick"></p></div></div></div>
 <div class="modal" id="hand"><div class="dlg"><div class="bar"><h2 id="handTitle">交给 Agent</h2><button class="primary" id="doHand">交给 Agent<kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close>取消<kbd>Esc</kbd></button></div>
 <div class="pad"><div id="handDrafts"></div><p id="handInfo"></p>
 <div class="hopts"><span id="hTargetRow"><span>这批做到：</span><label title="Agent 改完即定为已处理"><input type="radio" name="htarget" value="final" checked>定稿</label>
@@ -265,7 +266,7 @@ const $=id=>document.getElementById(id);
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},
   set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}},
   del(k){try{localStorage.removeItem(k)}catch(e){}}};
-const K={notes:`ae.${RID}.notes`,meta:`ae.${RID}.meta`,page:`ae.${RID}.page`,pending:`ae.${RID}.queue`,legacyPending:`ae.${RID}.pending`,failed:`ae.${RID}.failed`,drafts:`ae.${RID}.drafts`,hide:"ae.hideResolved"};
+const K={notes:`ae.${RID}.notes`,meta:`ae.${RID}.meta`,page:`ae.${RID}.page`,pending:`ae.${RID}.queue`,legacyPending:`ae.${RID}.pending`,failed:`ae.${RID}.failed`,drafts:`ae.${RID}.drafts`,hide:"ae.hideResolved",lang:"ae.exportLang"};
 const SS={get(k,d){try{const v=sessionStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{sessionStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 let i=0;{const s=+LS.get(K.page,0);if(s>0&&s<=N)i=s-1}
 let notes=FILE?LS.get(K.notes,[]):[]; if(!Array.isArray(notes))notes=[];
@@ -399,6 +400,7 @@ function applyLocale(){
   updatePageStat();
   updatePairText();
   if(typeof refreshList==="function") refreshList(true);
+  if(typeof refreshExportPreview==="function"&&$("allnotes").classList.contains("on")) refreshExportPreview();
   refreshPinPop();
 }
 $("localePick").addEventListener("change",()=>{
@@ -432,7 +434,7 @@ function settleMarks(x,body){
 let skillCatalog=__SKILLS__;   // 代理写进审阅目录的技能目录（skills.json），作为「技能」输入栏的候选
 // 常驻技能：[{name, scope: all|报告|讲稿|style}]；服务模式以服务端为准，本地文件模式存本浏览器。
 // 范围：ALWAYS_SCOPES 是存进 skills.json 的存储值（顺序即下拉顺序），ALWAYS_LABEL 只是界面显示、
-// 随语言变，ALWAYS_EXPORT 是导出 / 导入与「交给 Agent」摘要里的协议写法、固定中文。改显示不改存储值。
+// 随语言变，ALWAYS_EXPORT 是中文导出与「交给 Agent」摘要里的固定写法。改显示不改存储值。
 const ALWAYS_SCOPES=["all","报告","讲稿","style"];
 const ALWAYS_LABEL={all:"viewer.always.scope.all",报告:"viewer.always.scope.report",讲稿:"viewer.always.scope.script",style:"viewer.always.scope.style"};
 const ALWAYS_EXPORT={all:"全部批注",报告:"报告",讲稿:"讲稿",style:"风格优化"};
@@ -549,6 +551,11 @@ function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:Str
   if(Array.isArray(x.skills)||typeof x.skills==="string"){const sk=parseSkills(Array.isArray(x.skills)?x.skills.join(","):x.skills);if(sk.length)n.skills=sk}
   const pr=x.pair;if(pr&&(pr.side==="报告"||pr.side==="讲稿")&&String(pr.text||"").trim())n.pair={side:pr.side,text:String(pr.text),match:pr.match==="exact"?"exact":"similar"};
   const e=x.edit;if(e&&(e.op==="delete"||e.op==="replace")&&String(e.from||"").trim())n.edit=e.op==="delete"?{op:"delete",from:String(e.from)}:{op:"replace",from:String(e.from),to:String(e.to??"")};
+  // 以看得见的正文为准：快捷修改的结构从正文重新推导，免得只改了正文、结构里还留着旧内容
+  if(n.edit&&typeof n.text==="string"){
+    if(n.text===DEL_TEXT)n.edit={op:"delete",from:n.edit.from};
+    else if(n.text.startsWith(REP_PREFIX))n.edit={op:"replace",from:n.edit.from,to:n.text.slice(REP_PREFIX.length)};
+    else delete n.edit}
   return n}
 function mergeLocal(items){const byId=new Map(notes.map(x=>[x.id,x])),keys=new Set(notes.map(dedupKey));let added=0,skipped=0,updated=0;
   items.forEach(raw=>{const x=cleanItem(raw);const cur=byId.get(x.id);
@@ -1160,8 +1167,9 @@ async function saveAlways(){
 // 导入的内容里带了常驻技能（本地文件模式导出的）：和当前不同就问要不要采用
 function importAlways(text){const t=String(text||"").trim();let list=null;
   try{if(t[0]==="{"){const d=JSON.parse(t);if(Array.isArray(d.alwaysSkills))list=d.alwaysSkills}
-    else{const m=t.match(/^常驻技能（[^）]*）：(.+)$/m);if(m){const rev={全部批注:"all",全部:"all",报告:"报告",讲稿:"讲稿",风格优化:"style"};
-      list=m[1].split("、").map(p=>p.trim().match(/^(.+?)（(全部批注|全部|报告|讲稿|风格优化)）$/)).filter(Boolean).map(mm=>({name:mm[1],scope:rev[mm[2]]}))}}}catch(e){}
+    else{const g=expMdGrammar(t)||G_ZH;const m=g.always.exec(t);
+      if(m)list=m[1].split(g.alwaysSep).map(p=>p.trim().match(g.alwaysItem)).filter(Boolean)
+        .map(mm=>({name:mm[1],scope:g.alwaysRev[mm[2]]||"all"}))}}catch(e){}
   return list}
 async function offerAlways(list){if(!list)return;const items=splitAlways(list);
   if(JSON.stringify(items)===JSON.stringify(alwaysSkills||[]))return;
@@ -1323,47 +1331,137 @@ $("doHand").onclick=()=>{const message=$("handMsg").value.trim(),sub=$("hSub").c
   mutate({kind:"handoff",message,target,allowSubagents:sub,fullCheck})};
 
 // ---------- 导出 / 导入 ----------
+// 交换格式与 scripts/export_format.py 是同一份规范（页面和命令行各一份实现）：
+// 第一行的标记声明格式版本与内容语言，解析按标记选文法，与导入界面的语言无关；
+// 文法里的字面量写死在下面，不从词典取——改界面文案不会改变已发布的交换文法。
+// 中文文法就是 0.3 以来的那份，只多一个标记行；英文文法是它的对照翻译，
+// 只翻译系统包装文字，用户正文、引用、处理说明、技能名称保持原文，存储值导入时还原成中文。
+const EXP_VERSION=1;
+const EXP_MARK=/^<!--\s*annotation-everything\s+export\s+v(\d+)\s+lang=([A-Za-z0-9_-]+)\s*-->\s*$/;
+const EXP_HEAD_ZH="报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。";
+const EXP_HEAD_EN="Marks on the report: a pin is a point and a region is a box; coordinates are percentages from the top-left corner of the page (x across, y down, width, height).";
+const EXP_REV={   // 英文可读标签 → 存储值；未知标签原样通过（与旧中文导入对认不出的对象名一致）
+  target:{Report:"报告",Script:"讲稿","Report and script":"报告和讲稿"},
+  side:{Report:"报告",Script:"讲稿"},
+  style:{"Whole page":"page",Pin:"pin",Region:"region"}};
+const oneLine=s=>String(s==null?"":s).replace(/\n/g," ");
+function expGrammar(lang){
+  const en=lang==="en";
+  const back=(t,v,d)=>en&&t[v]!==undefined?t[v]:d;
+  return {lang,en,
+    marker:`<!-- annotation-everything export v${EXP_VERSION} lang=${lang} -->`,
+    page:en?/^##\s*Page\s+(\d+)\s*\|\s*(.*)$/:/^## 第 (\d+) 页｜(.*)$/,
+    item:en?/^(\d+)\. \[([^\]·]*)(?: · Pin \d+ \(x ([\d.]+)%, y ([\d.]+)%\))?(?: · Region \d+ \(x ([\d.]+)%, y ([\d.]+)%, w ([\d.]+)%, h ([\d.]+)%\))?\]\s?(.*)$/
+           :/^(\d+)\. 【([^】·]*)(?:·标点 \d+（x ([\d.]+)%，y ([\d.]+)%）)?(?:·框选 \d+（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)?】(.*)$/,
+    quote:en?/^\s+> Quote(?: \(([^)]*)\))?: (.*)$/:/^\s+> 引用(?:（([^）]*)）)?：(.*)$/,
+    resolution:en?/^\s+(Resolution|Draft note): (.*)$/:/^\s+(处理|初改)说明：(.*)$/,
+    style:en?/^\s+Style: (Whole page|Pin|Region|Region \(x ([\d.]+)%, y ([\d.]+)%, w ([\d.]+)%, h ([\d.]+)%\))$/
+            :/^\s+风格优化：(整页|标点处|框选处|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$/,
+    anchor:en?/^\s+Position hint: (.*)$/:/^\s+位置线索：(.*)$/,
+    skills:en?/^\s+Skills: (.*)$/:/^\s+技能：(.*)$/,
+    pair:en?/^\s+↔ Other side \((Report|Script)(?: · (identical|similar))?\): (.*)$/:/^\s+↔ 另一侧（(报告|讲稿)(?:·(相同|相近))?）：(.*)$/,
+    always:en?/^Persistent skills \([^)]*\): (.+)$/m:/^常驻技能（[^）]*）：(.+)$/m,
+    alwaysItem:en?/^(.+?) \((All notes|Report|Script|Style)\)$/:/^(.+?)（(全部批注|全部|报告|讲稿|风格优化)）$/,
+    alwaysSep:en?", ":"、",
+    alwaysRev:en?{"All notes":"all",Report:"报告",Script:"讲稿",Style:"style"}:{全部批注:"all",全部:"all",报告:"报告",讲稿:"讲稿",风格优化:"style"},
+    state:en?{resolved:"[Resolved] ",drafted:"[Drafted] "}:{resolved:"【已处理】",drafted:"【已初改·待复核】"},
+    targetIn:v=>back(EXP_REV.target,v,v),
+    sideIn:v=>back(EXP_REV.side,v,v),
+    styleIn:v=>en?back(EXP_REV.style,v,"region"):({"整页":"page","标点处":"pin"}[v]||"region"),
+    matchIn:v=>en?(v==="identical"?"exact":"similar"):(v==="相同"?"exact":"similar"),
+    pageHead:(n,t)=>en?`## Page ${n} | ${t}`:`## 第 ${n} 页｜${t}`,
+    head:o=>en?[`# Annotations · ${o.title}`,
+        `Exported ${o.at}; ${o.total} ${o.total===1?"note":"notes"} (${o.open} open) across ${o.pages} ${o.pages===1?"page":"pages"}`,EXP_HEAD_EN]
+      :[`# 批注 · ${o.title}`,`导出时间：${o.at}；共 ${o.total} 条（未处理 ${o.open}），涉及 ${o.pages} 页`,EXP_HEAD_ZH],
+    alwaysHead:list=>{const lab=s=>en?({all:"All notes",报告:"Report",讲稿:"Script",style:"Style"}[s]||s):(ALWAYS_EXPORT[s]||s);
+      const body=list.map(a=>`${a.name}${en?" (":"（"}${lab(a.scope)}${en?")":"）"}`).join(en?", ":"、");
+      return (en?"Persistent skills (run before every note within scope): ":"常驻技能（每条批注按范围处理前都先调用）：")+body},
+    tag:(x,no)=>{const raw=x.target||"未指定";   // 对象为空时写固定字面量（文法的一部分，与 0.3 以来一致）
+      const t=en?(raw==="报告和讲稿"?"Report and script":({报告:"Report",讲稿:"Script"}[raw]||raw)):raw;
+      let o=t;
+      if(x.pin)o+=en?` · Pin ${no} (x ${x.pin.x}%, y ${x.pin.y}%)`:`·标点 ${no}（x ${x.pin.x}%，y ${x.pin.y}%）`;
+      const r=regionOf(x);
+      if(r)o+=en?` · Region ${no} (x ${r.x}%, y ${r.y}%, w ${r.w}%, h ${r.h}%)`:`·框选 ${no}（x ${r.x}%，y ${r.y}%，宽 ${r.w}%，高 ${r.h}%）`;
+      return en?`[${o}]`:`【${o}】`},
+    quoteLine:(q,from)=>{const src=en?({报告:"Report",讲稿:"Script","报告和讲稿":"Report and script"}[from]||from):from;
+      const lead=src?(en?`   > Quote (${src}): `:`   > 引用（${src}）：`):(en?"   > Quote: ":"   > 引用：");
+      return lead+oneLine(q)},
+    resLine:(r,status)=>en?`   ${status==="drafted"?"Draft note":"Resolution"}: ${oneLine(r)}`
+      :`   ${status==="drafted"?"初改说明":"处理说明"}：${oneLine(r)}`,
+    styleLine:st=>{const lab=en?({page:"Whole page",pin:"Pin",region:"Region"}[st.scope]||"Whole page"):(STYLE_EXPORT[st.scope]||"整页");
+      return en?`   Style: ${lab}`:`   风格优化：${lab}`},
+    anchorLine:a=>en?`   Position hint: ${oneLine(a)}`:`   位置线索：${oneLine(a)}`,
+    skillsLine:sk=>en?`   Skills: ${sk.join(", ")}`:`   技能：${sk.join("、")}`,
+    pairLine:p=>{const side=en?({报告:"Report",讲稿:"Script"}[p.side]||p.side):p.side;
+      const m=en?(p.match==="exact"?"identical":"similar"):(p.match==="exact"?"相同":"相近");
+      return en?`   ↔ Other side (${side} · ${m}): ${oneLine(p.text)}`:`   ↔ 另一侧（${side}·${m}）：${oneLine(p.text)}`}}}
+const G_ZH=expGrammar("zh-CN"), G_EN=expGrammar("en");
+function expMdGrammar(text){   // 按第一行的标记选文法；没有标记返回 null（旧中文格式）
+  for(const line of String(text||"").replace(/^\uFEFF/,"").split(/\r?\n/)){
+    if(!line.trim())continue;
+    const m=EXP_MARK.exec(line.trim());
+    if(!m)return null;
+    if(+m[1]!==EXP_VERSION)throw new Error(`这个导出用的是格式版本 v${m[1]}，当前只支持 v${EXP_VERSION}：请把对照页和 notes.py 都升级到同一版本再导入`);
+    if(m[2]!=="zh-CN"&&m[2]!=="en")throw new Error(`这个导出的内容语言是「${m[2]}」，当前只支持 zh-CN 和 en`);
+    return m[2]==="en"?G_EN:G_ZH}
+  return null}
+function expLang(){const v=$("expLang")?$("expLang").value:"auto";return v==="auto"?uiLocale:(normLocale(v)||uiLocale)}
+const expStamp=()=>{const d=new Date(),p=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`};
+function expName(suffix){return `${expLang()==="en"?"annotations":"批注"}_${NS}_${stamp12()}.${suffix}`}
 function exportText(){
-  const by={};notes.slice().sort((a,b)=>a.page-b.page||String(a.at).localeCompare(String(b.at))).forEach(x=>(by[x.page]=by[x.page]||[]).push(x));
+  const g=expGrammar(expLang());
+  const sorted=notes.slice().sort((a,b)=>a.page-b.page||String(a.at).localeCompare(String(b.at)));
+  const by={};sorted.forEach(x=>(by[x.page]=by[x.page]||[]).push(x));
   const pages=Object.keys(by).map(Number).sort((a,b)=>a-b), open=notes.filter(x=>!isDone(x)).length;
-  let o=`# 批注 · ${unH(document.title)}\n导出时间：${new Date().toLocaleString("zh-CN")}；共 ${notes.length} 条（未处理 ${open}），涉及 ${pages.length} 页\n报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。\n`
-    +((alwaysSkills||[]).length?`常驻技能（每条批注按范围处理前都先调用）：${alwaysSkills.map(a=>`${a.name}（${ALWAYS_EXPORT[a.scope]||"全部批注"}）`).join("、")}\n`:"");
-  pages.forEach(n=>{const t=P.find(p=>p.n===n);o+=`\n## 第 ${n} 页｜${unH(t?t.title:by[n][0].title||"")}\n`;
-    by[n].forEach((x,k)=>{o+=`${k+1}. 【${x.target||"未指定"}${x.pin?`·标点 ${markNo(n,x.id)}（x ${x.pin.x}%，y ${x.pin.y}%）`:""}${(r=>r?`·框选 ${markNo(n,x.id)}（x ${r.x}%，y ${r.y}%，宽 ${r.w}%，高 ${r.h}%）`:"")(regionOf(x))}】${isDone(x)?"【已处理】":isDraft(x)?"【已初改·待复核】":""}${String(x.text).replace(/\n/g,"\n   ")}\n`;
-      if(x.quote)o+=`   > 引用${x.quoteFrom?`（${x.quoteFrom}）`:""}：${String(x.quote).replace(/\n/g," ")}\n`;
-      if((isDone(x)||isDraft(x))&&x.resolution)o+=`   ${isDraft(x)?"初改说明":"处理说明"}：${String(x.resolution).replace(/\n/g," ")}\n`;
-      if(x.style&&x.style.scope)o+=`   风格优化：${STYLE_EXPORT[x.style.scope]||"整页"}\n`;
-      if(x.anchor)o+=`   位置线索：${String(x.anchor).replace(/\n/g," ")}\n`;
-      if(Array.isArray(x.skills)&&x.skills.length)o+=`   技能：${x.skills.join("、")}\n`;
-      if(x.pair&&x.pair.text)o+=`   ↔ 另一侧（${x.pair.side}·${x.pair.match==="exact"?"相同":"相近"}）：${String(x.pair.text).replace(/\n/g," ")}\n`})});
-  return o}
-function parseMd(text){const items=[];let page=null,title="",cur=null;
-  text.split(/\r?\n/).forEach(line=>{let m;
-    if((m=line.match(/^## 第 (\d+) 页｜(.*)$/))){page=+m[1];title=m[2].trim();cur=null;return}
+  const L=[g.marker];
+  L.push(...g.head({title:unH(document.title),total:notes.length,open,pages:pages.length,at:expStamp()}));
+  if((alwaysSkills||[]).length)L.push(g.alwaysHead(alwaysSkills));
+  pages.forEach(n=>{const t=P.find(p=>p.n===n);L.push("",g.pageHead(n,unH(t?t.title:by[n][0].title||"")));
+    by[n].forEach((x,k)=>{const st=isDone(x)?"resolved":isDraft(x)?"drafted":"";
+      L.push(`${k+1}. ${g.tag(x,markNo(n,x.id))}${g.en?" ":""}${g.state[st]||""}${String(x.text).replace(/\n/g,"\n   ")}`);
+      if(x.quote)L.push(g.quoteLine(x.quote,x.quoteFrom));
+      if((isDone(x)||isDraft(x))&&x.resolution)L.push(g.resLine(x.resolution,isDraft(x)?"drafted":"resolved"));
+      if(x.style&&x.style.scope)L.push(g.styleLine(x.style));
+      if(x.anchor)L.push(g.anchorLine(x.anchor));
+      if(Array.isArray(x.skills)&&x.skills.length)L.push(g.skillsLine(x.skills));
+      if(x.pair&&x.pair.text)L.push(g.pairLine(x.pair))})});
+  return L.join("\n")+"\n"}
+function parseMdGrammar(text,g){const items=[];let page=null,title="",cur=null;
+  String(text).split(/\r?\n/).forEach(line=>{let m;
+    if((m=line.match(g.page))){page=+m[1];title=m[2].trim();cur=null;return}
     if(page===null)return;
-    if((m=line.match(/^\d+\. 【([^】·]*)(?:·标点 \d+（x ([\d.]+)%，y ([\d.]+)%）)?(?:·框选 \d+（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)?】(.*)$/))){let t=m[8],st="open";
-      if(t.startsWith("【已处理】")){st="resolved";t=t.slice(5)}else if(t.startsWith("【已初改·待复核】")){st="drafted";t=t.slice(9)}
-      cur={page,title,target:m[1],text:t,status:st,pin:m[2]?{x:+m[2],y:+m[3]}:null};if(m[4])cur.region={x:+m[4],y:+m[5],w:+m[6],h:+m[7]};items.push(cur);return}
+    if((m=line.match(g.item))){let t=m[9],st="open";
+      for(const k in g.state){if(t.startsWith(g.state[k])){st=k;t=t.slice(g.state[k].length);break}}
+      cur={page,title,target:g.targetIn(m[2]),text:t,status:st,pin:m[3]?{x:+m[3],y:+m[4]}:null};
+      if(m[5])cur.region={x:+m[5],y:+m[6],w:+m[7],h:+m[8]};items.push(cur);return}
     if(!cur)return;
-    if((m=line.match(/^\s+> 引用(?:（([^）]*)）)?：(.*)$/))){cur.quoteFrom=m[1]||"";cur.quote=m[2];
+    if((m=line.match(g.quote))){cur.quoteFrom=g.sideIn(m[1]||"");cur.quote=m[2];
       if(cur.text===DEL_TEXT)cur.edit={op:"delete",from:cur.quote};
       else if(cur.text.startsWith(REP_PREFIX))cur.edit={op:"replace",from:cur.quote,to:cur.text.slice(REP_PREFIX.length)};return}
-    if((m=line.match(/^\s+(?:处理|初改)说明：(.*)$/))){cur.resolution=m[1];return}
-    if((m=line.match(/^\s+技能：(.*)$/))){cur.skills=parseSkills(m[1]);return}
-    if((m=line.match(/^\s+风格优化：(整页|标点处|框选处|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$/))){
+    if((m=line.match(g.resolution))){cur.resolution=m[2];return}
+    if((m=line.match(g.style))){
       if(m[2])cur.region={x:+m[2],y:+m[3],w:+m[4],h:+m[5]};   // 0.3 导出：框写在风格优化这一行
-      cur.style={scope:m[1]==="整页"?"page":m[1]==="标点处"?"pin":"region"};return}
-    if((m=line.match(/^\s+位置线索：(.*)$/))){cur.anchor=m[1];return}
-    if((m=line.match(/^\s+↔ 另一侧（(报告|讲稿)(?:·(相同|相近))?）：(.*)$/))){cur.pair={side:m[1],match:m[2]==="相同"?"exact":"similar",text:m[3]};return}
+      cur.style={scope:g.styleIn(m[1])};return}
+    if((m=line.match(g.anchor))){cur.anchor=m[1];return}
+    if((m=line.match(g.skills))){   // 与 export_format 一致：去掉尾缀，带「（常驻·…）」来源标签的不写进单条
+      const body=m[1].trim().replace(/(——处理这条前先调用这些技能|（处理这条前先调用这些技能）)$/,"");
+      cur.skills=parseSkills(body.split(/[,，、;；]+/).filter(x=>!/（常驻·[^）]*）$/.test(x.trim()))
+        .map(x=>x.trim().replace(/（这条指定）$/,"")).join("、"));return}
+    if((m=line.match(g.pair))){cur.pair={side:g.sideIn(m[1]),match:g.matchIn(m[2]),text:m[3]};return}
     if(line.startsWith("   ")&&line.trim())cur.text+="\n"+line.slice(3)});
   return items}
+function parseMd(text){return parseMdGrammar(text,G_ZH)}   // 没有标记的旧中文格式
 function importRid(text){try{const s=String(text||"").trim();if(s[0]!=="{")return null;const d=JSON.parse(s);
   return typeof d.reviewId==="string"&&d.reviewId?{rid:d.reviewId,name:String(d.name||"")}:null}catch(e){return null}}
 function okToImport(text){const f=importRid(text);if(!f||f.rid===RID)return true;   // 导出文件带审阅标识：不是本审阅的先问
   return confirm(`这个文件属于另一份审阅${f.name?`《${f.name}》`:""}（标识 ${f.rid.slice(0,8)}），不是本审阅《${NAME}》。\n通常应该导入到它自己的审阅里。仍要导入到这里吗？`)}
-function parseImport(text){const s=text.trim();if(!s)return[];
+function parseImport(text){const s=String(text||"").trim();if(!s)return[];
   if(s[0]==="{"||s[0]==="["){const d=JSON.parse(s);return Array.isArray(d)?d:(d.notes||[])}
-  return parseMd(s)}
+  const marked=expMdGrammar(s);   // 按格式标记选文法：与导入界面的语言无关
+  const items=parseMdGrammar(s,marked||G_ZH);
+  if(!items.length&&!marked)throw new Error(tMsg("export.badFormat"));   // 没标记又不是旧中文格式
+  return items}
 async function runImport(items,label){
   items=items.filter(x=>x&&+x.page>0&&String(x.text||"").trim()).map(cleanItem);   // 先定好 id，离线补传后与服务端一致
   if(!items.length){toast("没有可导入的批注");return}
@@ -1391,13 +1489,16 @@ function renderOrphans(){const box=$("orphanBox"),lost=lostNotes();box.style.dis
     `<div class="found"><span>原第 ${+x.page||"?"} 页${x.key?`（键 ${escH(x.key)}）`:""}：${escH(clip(noteSummary(x),60))}</span><span><select data-mv="${escH(x.id)}">${opts}</select> <button data-mvgo="${escH(x.id)}">挪过去</button></span></div>`).join("");
   box.querySelectorAll("[data-mvgo]").forEach(b=>b.onclick=()=>{const id=b.dataset.mvgo,sel=box.querySelector(`select[data-mv="${CSS.escape(id)}"]`),pg=P.find(q=>q.n===+sel.value);
     if(pg){mutate({kind:"patch",id,body:{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false}});toast(`已挪到第 ${pg.n} 页`);setTimeout(renderOrphans,300)}})}
-function openAll(){renderOrphans();$("allText").textContent=notes.length?exportText():"还没有批注。";$("clearAll").style.display=FILE?"":"none";$("allnotes").classList.add("on")}
-async function copyAll(msg){const t=exportText();try{await navigator.clipboard.writeText(t)}catch(e){const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove()}toast(msg||"已复制，粘贴到对话里交给 Agent",msg?5000:2200)}
+function openAll(){renderOrphans();const sel=$("expLang");if(sel)sel.value=LS.get(K.lang,"auto");
+  $("allText").textContent=notes.length?exportText():tMsg("export.empty");$("clearAll").style.display=FILE?"":"none";$("allnotes").classList.add("on")}
+async function copyAll(msg){const t=exportText();try{await navigator.clipboard.writeText(t)}catch(e){const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove()}toast(msg||tMsg("export.copied"),msg?5000:2200)}
+function refreshExportPreview(){if(notes.length)$("allText").textContent=exportText();else $("allText").textContent=tMsg("export.empty")}
 function download(name,text,type){const b=new Blob([text],{type});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 const stamp12=()=>new Date().toISOString().slice(0,16).replace(/[-:T]/g,"");
 $("notesBtn").onclick=openAll;$("copyAll").onclick=()=>copyAll();
-$("dlAll").onclick=()=>download(`批注_${NS}_${stamp12()}.md`,exportText(),"text/markdown;charset=utf-8");
-$("dlJson").onclick=()=>download(`批注_${NS}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:RID,name:NAME,namespace:NS,notes,alwaysSkills:alwaysSkills||[]},null,2),"application/json");
+$("expLang").addEventListener("change",()=>{LS.set(K.lang,$("expLang").value);refreshExportPreview()});
+$("dlAll").onclick=()=>download(expName("md"),exportText(),"text/markdown;charset=utf-8");
+$("dlJson").onclick=()=>download(expName("json"),JSON.stringify({version:1,reviewId:RID,name:NAME,namespace:NS,lang:expLang(),notes,alwaysSkills:alwaysSkills||[]},null,2),"application/json");
 $("dlFailed").onclick=()=>{const f=failed.get();if(!f.length)return;
   const items=[];f.forEach(x=>{const op=x.op;if(op.kind==="add")items.push(op.note);else if(op.kind==="import")items.push(...op.notes);
     else if(op.kind==="patch"){const n=notes.find(y=>y.id===op.id);if(n)items.push({...n,...op.body,updatedAt:nowIso()})}});   // 编辑、标已处理：导入时按「更新得更晚」覆盖

@@ -15,6 +15,7 @@
 8. 恶意网页写批注全部失败；导入带恶意 id / 内容的批注不执行脚本；旧版 Markdown 导入保留状态。
 9. 语言：单文件内嵌词典；file:// 与服务模式都能加批注；计数覆盖 0/1/2；切换语言不写批注、不改审阅标识；auto 跟随浏览器语言。
 10. 讲稿语言：英文讲稿在两种界面语言下逐页浏览（栏目标签跟界面，正文和时长跟讲稿）；缺页时 --lenient 显示空讲稿。
+11. 双语导出与跨语言导入：中英文 Markdown 往返、页面↔CLI 互导、解析与界面语言无关、旧中文格式不退步、认不出的文字有明确提示。
 """
 from __future__ import annotations
 
@@ -978,6 +979,187 @@ def locale_checks(browser, tmp: Path):
         stop(server)
 
 
+E2E_NOTES = [
+    {"id": "e2enote000000001", "page": 3, "title": "结论：三季度收入同比增长 12%", "target": "报告",
+     "text": "把 +12% 改成「同比 +12%」\n第二行也要改", "quote": "+12%", "quoteFrom": "报告",
+     "pin": {"x": 38.8, "y": 59.8}, "status": "open", "at": "2026-10-27T10:19:14Z"},
+    {"id": "e2enote000000002", "page": 7, "title": "成本", "target": "讲稿",
+     "text": "改为：删掉整段", "quote": "原句甲乙", "quoteFrom": "讲稿", "status": "drafted",
+     "at": "2026-10-27T11:00:00Z", "resolution": "已缩短", "region": {"x": 5, "y": 20, "w": 60, "h": 30},
+     "style": {"scope": "region"}, "anchor": "table「渠道」", "skills": ["humanizer-zh", "dataviz"],
+     "pair": {"side": "报告", "match": "exact", "text": "对应句子"},
+     "edit": {"op": "replace", "from": "原句甲乙", "to": "删掉整段"}},
+]
+
+
+def write_disk_notes(d: Path, notes: list[dict]) -> None:
+    """往审阅目录的 notes.json 写批注（走 notes_store，和页面经服务落盘一致）。"""
+    code = ("import sys,json;sys.path.insert(0,sys.argv[1]);import notes_store as s;from pathlib import Path;"
+            "d=Path(sys.argv[2]);"
+            "[s.add(d, n) for n in json.loads(sys.argv[3])]")
+    subprocess.run([sys.executable, "-c", code, str(SCRIPTS), str(d), json.dumps(notes, ensure_ascii=False)],
+                   check=True, capture_output=True)
+
+
+def notes_cli(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *args], capture_output=True, text=True)
+
+
+def export_import_checks(browser, tmp: Path):
+    """#35：双语导出与跨语言导入。页面导出→CLI、CLI 导出→页面、两种语言各自与交叉往返、旧格式不退步。"""
+    d = tmp / "export_import"
+    build(d, locale="en")
+    url = (d / "index.html").as_uri()
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.goto(url)
+    page.evaluate("v => localStorage.setItem('ae.' + RID + '.notes', JSON.stringify(v))", E2E_NOTES)
+    page.reload()
+    page.wait_for_timeout(400)
+
+    def open_import():
+        page.keyboard.press("Escape")     # 先收起可能开着的弹窗（焦点也可能在输入框里）
+        page.keyboard.press("n")
+        page.click("#openImp")
+
+    switched = page.evaluate("""() => [
+      cleanItem({page:1,text:REP_PREFIX+'新句',edit:{op:'delete',from:'原句'}}),
+      cleanItem({page:1,text:DEL_TEXT,edit:{op:'replace',from:'原句',to:'旧句'}})
+    ].map(n => n.edit)""")
+    ok(switched == [{"op": "replace", "from": "原句", "to": "新句"},
+                    {"op": "delete", "from": "原句"}],
+       "JSON 可见正文能双向切换删除和改写，隐藏结构不能恢复旧操作")
+
+    # 界面是英文：默认导出英文，可显式选中文
+    page.click("#notesBtn")
+    ok(page.evaluate("document.getElementById('expLang').value") == "auto", "导出语言默认「跟随界面」")
+    md_en = page.evaluate("exportText()")
+    ok(md_en.splitlines()[0] == "<!-- annotation-everything export v1 lang=en -->",
+       "英文界面默认导出英文，第一行是格式标记")
+    ok("# Annotations · " in md_en, "英文导出用英文包装文字")
+    ok("[Report · Pin 1 (x 38.8%, y 59.8%)]" in md_en, "英文导出的标注标签是英文")
+    ok("[Script · Region 1 (x 5%, y 20%, w 60%, h 30%)] [Drafted] 改为：删掉整段" in md_en,
+       "英文导出保留中文存储值与用户正文原文")
+    ok("   > Quote (Script): 原句甲乙" in md_en and "   Draft note: 已缩短" in md_en
+       and "   Style: Region" in md_en and "   Position hint: table「渠道」" in md_en
+       and "   Skills: humanizer-zh, dataviz" in md_en
+       and "   ↔ Other side (Report · identical): 对应句子" in md_en,
+       "英文导出的引用、说明、风格、线索、技能、对应句都是英文标签配中文原文")
+    name = page.evaluate("expName('md')")
+    ok(name.startswith("annotations_") and name.endswith(".md")
+       and len(name[:-3].rsplit("_", 1)[-1]) == 12
+       and page.evaluate("NS") in name,
+       f"英文导出的文件名用英文前缀，保留审阅识别与 12 位机器时间（{name}）")
+    page.select_option("#expLang", "zh-CN")
+    md_zh = page.evaluate("exportText()")
+    ok(md_zh.splitlines()[0] == "<!-- annotation-everything export v1 lang=zh-CN -->",
+       "英文界面可显式选中文导出")
+    ok("# 批注 · " in md_zh and "【已初改·待复核】改为：删掉整段" in md_zh
+       and "   风格优化：框选处" in md_zh and "   技能：humanizer-zh、dataviz" in md_zh,
+       "中文导出与改动前一致")
+
+    # 常驻技能管理和双语导出组合后，所有范围仍能从实际导出正文往返。
+    standing = [{"name": f"sample-{i}", "scope": scope}
+                for i, scope in enumerate(("all", "报告", "讲稿", "style"))]
+    standing_roundtrips = page.evaluate("""items => {
+      const saved = alwaysSkills, choice = $("expLang").value;
+      try {
+        alwaysSkills = items;
+        return ["zh-CN", "en"].map(lang => {
+          $("expLang").value = lang;
+          const text = exportText();
+          return {lang, text, parsed: importAlways(text)};
+        });
+      } finally { alwaysSkills = saved; $("expLang").value = choice; }
+    }""", standing)
+    for result in standing_roundtrips:
+        ok(result["parsed"] == standing,
+           f"{result['lang']} 导出的常驻技能保留全部范围与调用名，跨语言导入可还原")
+    legacy_standing = standing_roundtrips[0]["text"].split("\n", 1)[1]
+    ok(page.evaluate("text => importAlways(text)", legacy_standing) == standing,
+       "没有格式标记的旧中文常驻技能仍可导入")
+
+    # 解析按格式标记选文法，与导入界面 locale 无关：两种导出在中文界面下都读得对
+    page.select_option("#localePick", "zh-CN")
+    page.wait_for_timeout(150)
+    got_en = page.evaluate("t => parseImport(t)", md_en)
+    got_zh = page.evaluate("t => parseImport(t)", md_zh)
+    ok(got_en == got_zh, "同一批注的中英文导出，在中文界面下解析结果一致")
+    ok([n["target"] for n in got_en] == ["报告", "讲稿"]
+       and [n["status"] for n in got_en] == ["open", "drafted"]
+       and got_en[1]["style"] == {"scope": "region"}
+       and got_en[1]["edit"] == {"op": "replace", "from": "原句甲乙", "to": "删掉整段"}
+       and got_en[1]["pair"] == {"side": "报告", "match": "exact", "text": "对应句子"}
+       and got_en[1]["skills"] == ["humanizer-zh", "dataviz"]
+       and got_en[0]["text"] == "把 +12% 改成「同比 +12%」\n第二行也要改",
+       "英文导出在中文界面导入后还原出中文存储值、结构化字段与多行正文")
+
+    # 中文界面导入英文导出 → 按中文协议值落库
+    open_import()
+    page.fill("#impText", md_en)
+    page.click("#doImp")
+    page.wait_for_timeout(700)
+    landed = page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")
+    ok(len(landed) == 2 and [n["target"] for n in landed] == ["报告", "讲稿"]
+       and landed[1]["status"] == "drafted", "中文界面导入英文导出：批注按中文协议值落库")
+
+    # 页面导出 → CLI 导入（导出的语言与界面不同）
+    md_from_page = page.evaluate("exportText()")
+    f = tmp / "from_page.md"
+    f.write_text(md_from_page, encoding="utf-8")
+    cli_dir = tmp / "cli_review"
+    build(cli_dir)
+    write_disk_notes(cli_dir, E2E_NOTES[:1])
+    r = notes_cli("import", str(cli_dir), str(f))
+    ok(r.returncode == 0 and "新增 1 条" in r.stdout and "跳过重复 1 条" in r.stdout,
+       f"页面导出交给 CLI 导入成功，内容相同的按既有规则跳过（{r.stdout.strip()[:46]}）")
+    ok(all(n["target"] in ("报告", "讲稿", "报告和讲稿") for n in disk_notes(cli_dir)),
+       "CLI 落库的协议值仍是中文")
+
+    # CLI 导出（另一种语言）→ 页面导入
+    r = notes_cli("export", str(cli_dir), "--lang", "en")
+    ok(r.returncode == 0 and r.stdout.splitlines()[0] == "<!-- annotation-everything export v1 lang=en -->",
+       "CLI 可显式导出英文")
+    page.evaluate("v => localStorage.setItem('ae.' + RID + '.notes', '[]')")
+    page.reload()
+    page.wait_for_timeout(300)
+    open_import()
+    page.fill("#impText", r.stdout)
+    page.click("#doImp")
+    page.wait_for_timeout(700)
+    back = page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")
+    ok(len(back) == 2 and [n["target"] for n in back] == ["报告", "讲稿"]
+       and back[1]["status"] == "drafted", "CLI 的英文导出能在中文页面里导入，状态与协议值都对")
+
+    # 旧中文格式不退步；认不出的文字有明确规则
+    legacy = ("## 第 4 页｜收入\n1. 【报告和讲稿】删除引用的这段文字\n   > 引用（报告）：甲乙丙\n"
+              "   ↔ 另一侧（讲稿·相近）：丁戊己\n"
+              "2. 【讲稿】讲法太绕\n"
+              "   技能：humanizer-zh（常驻·讲稿）、dataviz（这条指定）——处理这条前先调用这些技能\n")
+    got_legacy = page.evaluate("t => parseImport(t)", legacy)
+    ok(got_legacy and got_legacy[0]["edit"] == {"op": "delete", "from": "甲乙丙"}
+       and got_legacy[0]["pair"]["side"] == "讲稿", "没有标记的旧中文导出仍按中文文法读")
+    ok(got_legacy[1]["skills"] == ["dataviz"],
+       "技能行里的来源标签与命令行一致地剥掉，常驻技能不写进单条")
+    page.evaluate("v => localStorage.setItem('ae.' + RID + '.notes', '[]')")
+    page.reload()
+    page.wait_for_timeout(300)
+    open_import()
+    page.fill("#impText", legacy)
+    page.click("#doImp")
+    page.wait_for_timeout(700)
+    ok(len(page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")) == 2, "旧中文格式能导进页面")
+    page.fill("#impText", "完全不是批注导出的文字")
+    page.click("#doImp")
+    page.wait_for_timeout(400)
+    ok("无法识别" in page.inner_text("#toast"), f"认不出的文字给出明确提示（{page.inner_text('#toast')[:30]}）")
+    page.fill("#impText", "<!-- annotation-everything export v9 lang=en -->\n")
+    page.click("#doImp")
+    page.wait_for_timeout(400)
+    ok("v9" in page.inner_text("#toast"), "不认识的格式版本也给出明确提示")
+    ctx.close()
+
+
 def english_script_checks(browser, tmp: Path):
     """#34：英文讲稿在两种界面语言下都能逐页浏览；缺页时按宽容模式显示空讲稿。"""
     d = tmp / "english_script"
@@ -1049,6 +1231,7 @@ def main() -> int:
         full_check_checks(browser, tmp)
         locale_checks(browser, tmp)
         english_script_checks(browser, tmp)
+        export_import_checks(browser, tmp)
 
         # ---------- 1. file:// 退回模式 ----------
         fdir = tmp / "file_mode"

@@ -92,13 +92,15 @@ annotation-everything moves this whole process into a single page that runs on y
   </tr>
 </table>
 
-The review page can use Simplified Chinese or English. Pass `--locale auto`, `zh-CN`, or `en` when building; the page can switch language too, and the choice stays in this browser. Annotation text stays as written, and the stored target values `报告`, `讲稿`, and `报告和讲稿` do not change with the language. Omitting `--locale` keeps a new review in Chinese and leaves an existing review on its saved choice. Adding, editing, deleting and reopening annotations, quotes, quick delete and replace, pins and area selection, re-annotating, styling, page numbers, the speaker-notes column, Q&A labels, the help text, tooltips and accessible names all follow the current language, as do the confirmation dialogs. So do the skill box, its suggestions and "Suggested" tag, the empty result, the standing-skill scope labels and add/remove prompts, and the output of `notes.py skills`. Search still matches the skill catalog's original name and description, and the stored scope values `all` / `报告` / `讲稿` / `style` and the Chinese export wording stay as they are. The hand-off and batch history, and the import/export wording, are still being adapted.
+The review page can use Simplified Chinese or English. Pass `--locale auto`, `zh-CN`, or `en` when building; the page can switch language too, and the choice stays in this browser. Annotation text stays as written, and the stored target values `报告`, `讲稿`, and `报告和讲稿` do not change with the language. Omitting `--locale` keeps a new review in Chinese and leaves an existing review on its saved choice. Adding, editing, deleting and reopening annotations, quotes, quick delete and replace, pins and area selection, re-annotating, styling, page numbers, the speaker-notes column, Q&A labels, the help text, tooltips and accessible names all follow the current language, as do the confirmation dialogs. So do the skill box, its suggestions and "Suggested" tag, the empty result, the standing-skill scope labels and add/remove prompts, and the output of `notes.py skills`. Search still matches the skill catalog's original name and description, and the stored scope values `all` / `报告` / `讲稿` / `style` stay unchanged. Exported Markdown can be Chinese or English (following the interface by default); both the page and CLI can import either language. Some wording in the import dialog, processing history and hand-off UI is still being adapted.
 
 <details>
 <summary><b>Export and import annotations</b></summary>
 <br>
-<p align="center"><img src="docs/assets/notes-export.png" alt="All annotations panel: copy for an agent, download as Markdown or JSON, import" width="88%"></p>
+<p align="center"><img src="docs/assets/notes-export.png" alt="All annotations panel: choose export language, copy for an agent, download as Markdown or JSON, import" width="88%"></p>
 When no agent is waiting, you can copy all annotations from the All annotations panel and paste them to any agent, or download them as a Markdown or JSON file and import them later.
+
+The first line of the Markdown is a format marker (`<!-- annotation-everything export v1 lang=… -->`) that names the format version and the content language, so parsing picks the Chinese or English grammar from the file itself and never from the language of the importing interface: a Chinese export imports in an English page and an English export imports in a Chinese page, and both land with the same stored values. The export language can be picked in the panel (following the interface by default) or on the command line with `notes.py export --lang en`. Annotation text, quotes, resolution notes and skill names stay as written; only the surrounding wording is translated. Exports without the marker are read as the older Chinese format, and text that matches nothing gets a clear message instead of a guess. Older tools cannot read an English export and are told to upgrade rather than left to guess. The command line exports the same way: `notes.py export <review-dir> [--lang zh-CN|en] [--format json]`.
 </details>
 
 ## How it works
@@ -273,6 +275,7 @@ See [references/formats.md](skill/annotation-everything/references/formats.md) f
 | `serve.py check` | Run the server's security self-check |
 | `notes.py wait` / `claim` | Wait for a submission, or take one that is already waiting |
 | `notes.py show` / `resolve` / `reopen` | List annotations, mark them resolved, reopen them. `show --locale` chooses the reading language and beats `AE_LOCALE` and the review setting; `show --json` still exports the raw values |
+| `notes.py export` / `import` | Export annotations as a re-importable summary (Markdown with a version and language marker, or a structured JSON backup) / import a page export. `export --lang` follows the same priority as `show --locale`, plus `--format json`, `--all`, `--page N` and `--out <file>` |
 | `notes.py done` / `review` / `diff` | Close the current stage, record a review verdict, show page by page what the draft changed |
 | `notes.py batches` | Show batch history |
 | `notes.py skills` | Show or set the skill catalog and standing skills. `--locale` chooses the output language and beats `AE_LOCALE` and the review setting; scopes accept `全部` / `报告` / `讲稿` / `风格优化` or `all` / `report` / `script` / `style` |
@@ -307,6 +310,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── serve.py                   local server: serve / status / list / forget / check
 │   ├── notes.py                   annotation command line: wait / show / resolve / done / review and more
 │   ├── notes_store.py             annotation storage: atomic writes, file locks, change log
+│   ├── export_format.py           annotation exchange format: the marked Markdown grammar and the JSON backup
 │   ├── ledger.py                  review ledger: review IDs, review directories and dedicated ports
 │   ├── match.py                   finds matching sentences between the report and the speaker notes
 │   ├── skill_sources.py           discovers skill directories on this machine

@@ -888,6 +888,27 @@ def _stamp(n: dict[str, Any]) -> float:
     return best
 
 
+def _reconcile_edit(raw: dict[str, Any]) -> None:
+    """导入时以用户看得见的正文为准：快捷修改的结构（edit）从正文重新推导。
+
+    导出里的 text 与 edit 本就是一体的（正文就是「删除引用的这段文字」或「改为：…」），
+    用户按导出改正文时，只改得到正文；不同步的话结构里会留着改之前的内容，
+    之后照结构落笔就写回了旧文字。与 update() 对旧版页面的处理同一套规则。
+    """
+    ed = raw.get("edit")
+    text = raw.get("text")
+    if not isinstance(ed, dict) or not isinstance(text, str):
+        return
+    if ed.get("op") not in ("delete", "replace") or not isinstance(ed.get("from"), str):
+        return
+    if text == DELETE_TEXT:
+        raw["edit"] = {"op": "delete", "from": ed["from"]}
+    elif text.startswith(REPLACE_PREFIX):
+        raw["edit"] = {"op": "replace", "from": ed["from"], "to": text[len(REPLACE_PREFIX):]}
+    else:
+        raw.pop("edit", None)
+
+
 def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "import") -> tuple[dict[str, Any], int, int, int]:
     """批量导入（旧版导出、离线模式积压等）。返回 (文档, 新增, 跳过, 更新)。
 
@@ -905,6 +926,7 @@ def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "im
         for raw in items:
             if not isinstance(raw, dict):
                 raise NoteError("导入项须为对象")
+            _reconcile_edit(raw)
             fields = _clean_fields(raw, partial=False)
             nid = raw.get("id") if valid_id(raw.get("id")) else None
             if nid and nid in by_id:
