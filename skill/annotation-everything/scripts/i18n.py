@@ -21,6 +21,8 @@ AUTO = "auto"
 DEFAULT_LOCALE = "zh-CN"
 # auto 匹配不到任何受支持语言时回退英文
 AUTO_FALLBACK = "en"
+# 命令行共用的语言环境变量名（显式参数优先于它）
+ENV_VAR = "AE_LOCALE"
 
 _BRANCH_SUFFIXES = ("one", "other")
 
@@ -339,3 +341,43 @@ def system_languages(env: Mapping[str, str] | None = None) -> list[str]:
         if value and value not in ("C", "POSIX"):
             found.append(value)
     return found
+
+
+def cli_choice(explicit: object, environ: Mapping[str, str] | None = None,
+               stored: object = None) -> object:
+    """命令行的语言选择：显式参数 > 环境变量 AE_LOCALE > 审阅保存值。
+
+    三级都没有时返回 None，由 resolve_locale 兜底成中文（旧调用行为不变）。
+    """
+    env = os.environ if environ is None else environ
+    return effective_choice(explicit, env.get(ENV_VAR), stored)
+
+
+def cli_locale(explicit: object, environ: Mapping[str, str] | None = None,
+               stored: object = None) -> str:
+    """按共同契约解析命令行的语言；非法选择抛 LocaleError（不静默改值）。"""
+    return resolve_locale(cli_choice(explicit, environ, stored),
+                          system_languages=system_languages(environ))
+
+
+class Translator:
+    """一种语言的消息查找：缺译回退另一种语言，并记录回退过的 key。
+
+    资源整体缺失或损坏时抛 CatalogError，不静默给空词典——命令要么能本地化，
+    要么明确失败，不能输出半套语言。
+    """
+
+    def __init__(self, locale: object, root: Path | None = None):
+        tag = normalize_locale(locale) or DEFAULT_LOCALE
+        catalogs = load_all(root=root)
+        self.locale = tag if tag in catalogs else DEFAULT_LOCALE
+        self.catalog = catalogs[self.locale]
+        self.catalogs = catalogs
+        self.missing: list[str] = []
+
+    def __call__(self, key: str, *, count: int | None = None, **params: object) -> str:
+        def on_missing(used: str) -> None:
+            self.missing.append(used)
+
+        return translate(self.catalog, key, catalogs=self.catalogs,
+                         on_missing=on_missing, count=count, **params)

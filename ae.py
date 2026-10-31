@@ -13,10 +13,15 @@
                                     # 删除技能副本与指向它的链接；默认保留审阅台账（--purge 一并删除），
                                     # 任何情况下不动审阅目录；检测到 serve.py 在运行会拒绝（--stop-servers 先结束）
 
+  以上命令都可加 --locale auto|zh-CN|en（也可写在子命令后面）：界面语言优先用显式参数，
+  再是环境变量 AE_LOCALE，都没有则中文；只有 auto 才读 LC_ALL / LC_MESSAGES / LANG。
+
 约定：
 - 只用 Python 标准库，语法兼容 Python 3.9；
 - 退出码：0 全部通过或只有警告，1 有失败项，2 命令自身出错；
-- 安装记录只写在技能副本里，不进仓库。
+- 安装记录只写在技能副本里，不进仓库；
+- doctor --json 的 category / level / code 是给旧消费者读的判定字段，恒为中文、不随语言改值；
+  新增的 status / category_id 是语言无关的判定字段，`locale` 说明 message 用的哪种语言。
 """
 from __future__ import annotations
 
@@ -25,6 +30,7 @@ import dataclasses
 import datetime
 import hashlib
 import http.client
+import importlib
 import json
 import os
 import platform
@@ -58,6 +64,104 @@ CATEGORY_TOOLS = "可选工具"
 CATEGORY_DEV = "开发环境"
 CATEGORY_RUNTIME = "运行状态"
 MIN_PYTHON = (3, 9)
+
+# 级别与类别到语言无关判定值的映射：旧字段保持中文，新字段让消费者不必比较本地化标签
+LEVEL_STATUS = {LEVEL_PASS: "pass", LEVEL_WARN: "warn", LEVEL_FAIL: "fail"}
+CATEGORY_IDS = {CATEGORY_INSTALL: "install", CATEGORY_TOOLS: "tools",
+                CATEGORY_DEV: "dev", CATEGORY_RUNTIME: "runtime"}
+# doctor --json 的结构版本：1 是没有语言无关判定字段的旧结构
+DOCTOR_SCHEMA = 2
+# 链接状态到显示用消息 key 的映射（状态本身是内部判定值，保持中文）
+LINK_STATUS_KEYS = {"正常": "doctor.linkStatus.ok", "悬空": "doctor.linkStatus.dangling",
+                    "指向别处": "doctor.linkStatus.elsewhere",
+                    "已不是链接": "doctor.linkStatus.notLink", "已删除": "doctor.linkStatus.gone"}
+
+_skill_modules: dict = {}
+_locale = "zh-CN"
+_messages: Optional[Callable[..., str]] = None
+
+
+def skill_module(name: str):
+    """加载技能本体 scripts 里的模块（i18n、ledger）：一套实现，仓库与技能副本共用。
+
+    优先用 ae.py 所在仓库的本体；从别处跑 ae.py 时回退到技能副本自己的 scripts。
+    """
+    if name in _skill_modules:
+        return _skill_modules[name]
+    roots = (Path(__file__).resolve().parent / SKILL_SRC / "scripts", skill_copy_dir() / "scripts")
+    for root in roots:
+        if not (root / f"{name}.py").is_file():
+            continue
+        sys.path.insert(0, str(root))
+        try:
+            module = importlib.import_module(name)
+        except ImportError:
+            sys.path.remove(str(root))
+            continue
+        _skill_modules[name] = module
+        return module
+    raise ImportError(f"找不到技能本体的 {name}.py")
+
+
+def i18n_module():
+    return skill_module("i18n")
+
+
+def current_locale() -> str:
+    """当前界面语言；main() 按共同契约解析后设置，未设置前保持中文。"""
+    return _locale
+
+
+def set_locale(locale: str) -> None:
+    """设置界面语言并重置消息查找。非法值由调用方先解析掉，这里只接受具体 locale。"""
+    global _locale, _messages
+    _locale = locale
+    _messages = None
+    # 台账错误与技能扫描警告也用同一种语言：把已解析的语言传下去，免得中英混排
+    for name in ("ledger", "skill_sources"):
+        try:
+            skill_module(name).set_locale(locale)
+        except ImportError:
+            pass
+
+
+def T(key: str, **params: object) -> str:
+    """按当前语言取一条消息；缺译时回退另一种语言（见 locales/README.md 的契约）。"""
+    global _messages
+    if _messages is None:
+        module = i18n_module()
+        _messages = module.Translator(_locale)
+    return _messages(key, **params)
+
+
+def join(items, item: str = "") -> str:
+    """列表连接符：中文用顿号、英文用逗号与空格；只影响人读的那一层。
+
+    item 可指定另一种分隔符（如分号），用于同一行里还要再分组的长列表。
+    """
+    return (item or T("cli.ae.listSeparator")).join(str(value) for value in items)
+
+
+def locale_error_message(exc: Exception) -> str:
+    """语言选择本身不合法时的一句话；此时没有可用语言，按默认中文说明。"""
+    params = getattr(exc, "params", {}) or {}
+    value = params.get("locale") if isinstance(params, dict) else None
+    if isinstance(value, str) and not value.strip():
+        return T("cli.ae.err.emptyLocale")
+    return T("cli.ae.err.invalidLocale", name="" if value is None else str(value))
+
+
+def explicit_locale_from_argv(argv):
+    """从命令行里取出 --locale 的值（写在子命令前后都认）；没写返回 None。"""
+    tokens = list(argv or [])
+    for index, token in enumerate(tokens):
+        if token == "--":
+            break
+        if token == "--locale":
+            return tokens[index + 1] if index + 1 < len(tokens) else ""
+        if token.startswith("--locale="):
+            return token.partition("=")[2]
+    return None
 
 
 @dataclasses.dataclass
@@ -176,8 +280,7 @@ def copy_skill(src: Path, dst: Path) -> None:
     副本位置与本体重叠（如 CLAUDE_SKILLS_DIR 指进了仓库）时拒绝，避免清掉本体。
     """
     if paths_overlap(src, dst):
-        raise CommandError(f"技能副本位置 {dst} 与技能本体 {src} 重叠，拒绝覆盖；"
-                           "请检查 CLAUDE_SKILLS_DIR")
+        raise CommandError(T("cli.ae.copy.overlap", copy=dst, source=src))
 
     def ignore(directory, names):
         kept = []
@@ -246,19 +349,19 @@ def cmd_install(args) -> int:
     repo = Path(__file__).resolve().parent
     src = repo / SKILL_SRC
     if not src.is_dir():
-        print(f"找不到技能本体：{src}", file=sys.stderr)
+        print(T("cli.ae.install.missingSource", path=src), file=sys.stderr)
         return 2
     agents = parse_link_agents(getattr(args, "link", "") or "")
     unknown = [agent for agent in agents if link_target_dir(agent) is None]
     if unknown:
-        print(f"未知的 Agent 名称：{'、'.join(unknown)}（可选：{'、'.join(LINK_AGENTS)}）",
-              file=sys.stderr)
+        print(T("cli.ae.install.unknownAgent", names=join(unknown),
+                options=join(LINK_AGENTS)), file=sys.stderr)
         return 2
     # 先拦下所有冲突，再动手：目标位置已有同名非链接内容时不覆盖、不复制
     for agent in agents:
         target = link_path(agent)
         if target.exists() and not target.is_symlink():
-            print(f"{agent} 的技能目录里已有同名非链接内容，未覆盖：{target}", file=sys.stderr)
+            print(T("cli.ae.install.occupied", agent=agent, path=target), file=sys.stderr)
             return 2
     dst = skill_copy_dir()
     try:
@@ -270,9 +373,10 @@ def cmd_install(args) -> int:
     created = [create_link(agent, dst) for agent in agents]
     links = merged_links(previous, dst, created)
     write_record(dst, repo, links)
-    print(f"已安装技能副本到 {dst}")
+    print(T("cli.ae.install.done", path=dst))
     if created:
-        print("已建立链接：" + "、".join(f"{entry['agent']}（{entry['path']}）" for entry in created))
+        print(T("cli.ae.install.links",
+                list=join(f"{entry['agent']}（{entry['path']}）" for entry in created)))
     return 0
 
 
@@ -287,7 +391,8 @@ def read_record(skill_copy: Path) -> Optional[dict]:
     except FileNotFoundError:
         return None
     except (OSError, ValueError) as exc:
-        raise CommandError(f"安装记录 {path} 读不了（{exc}），可运行 ae.py install 重建") from None
+        raise CommandError(T("cli.ae.record.unreadable", path=path, detail=exc,
+                             command=install_fix(None))) from None
     valid = isinstance(record, dict)
     if valid:
         valid = all(isinstance(record[key], str)
@@ -297,7 +402,7 @@ def read_record(skill_copy: Path) -> Optional[dict]:
             isinstance(entry, dict) and isinstance(entry.get("path"), str) and entry["path"]
             and isinstance(entry.get("agent", ""), str) for entry in links)
     if not valid:
-        raise CommandError(f"安装记录 {path} 结构不对，可运行 ae.py install 重建")
+        raise CommandError(T("cli.ae.record.broken", path=path, command=install_fix(None)))
     return record
 
 
@@ -341,45 +446,50 @@ def check_python(ctx: DoctorContext) -> CheckResult:
     version = platform.python_version()
     if sys.version_info[:3] < MIN_PYTHON:
         return CheckResult("python-version", CATEGORY_INSTALL, LEVEL_FAIL,
-                           f"Python {version} 低于 3.9，技能无法运行",
+                           T("doctor.python.low", version=version),
                            tool_fix("python@3.12" if sys.platform == "darwin" else "python3.12"))
-    return CheckResult("python-version", CATEGORY_INSTALL, LEVEL_PASS, f"Python {version}")
+    return CheckResult("python-version", CATEGORY_INSTALL, LEVEL_PASS, T("doctor.python.ok", version=version))
 
 
 def check_copy_present(ctx: DoctorContext) -> CheckResult:
     if (ctx.skill_copy / "SKILL.md").is_file():
         return CheckResult("skill-copy-present", CATEGORY_INSTALL, LEVEL_PASS,
-                           f"技能副本在 {ctx.skill_copy}")
+                           T("doctor.copyPresent.ok", path=ctx.skill_copy))
     return CheckResult("skill-copy-present", CATEGORY_INSTALL, LEVEL_FAIL,
-                       f"未找到技能副本（{ctx.skill_copy}）", install_fix(ctx.repo))
+                       T("doctor.copyPresent.missing", path=ctx.skill_copy), install_fix(ctx.repo))
 
 
 def check_copy_sync(ctx: DoctorContext) -> CheckResult:
     if not (ctx.skill_copy / "SKILL.md").is_file():
-        return CheckResult("skill-copy-sync", CATEGORY_INSTALL, LEVEL_PASS, "技能副本缺失，未比对")
+        return CheckResult("skill-copy-sync", CATEGORY_INSTALL, LEVEL_PASS, T("doctor.copySync.skipCopy"))
     if ctx.repo is None:
-        return CheckResult("skill-copy-sync", CATEGORY_INSTALL, LEVEL_PASS, "未找到来源仓库，未比对")
+        return CheckResult("skill-copy-sync", CATEGORY_INSTALL, LEVEL_PASS, T("doctor.copySync.skipRepo"))
     src, dst = ctx.repo / SKILL_SRC, ctx.skill_copy
     if _digests(src) == _digests(dst):
-        return CheckResult("skill-copy-sync", CATEGORY_INSTALL, LEVEL_PASS, "技能副本与来源仓库一致")
+        return CheckResult("skill-copy-sync", CATEGORY_INSTALL, LEVEL_PASS, T("doctor.copySync.ok"))
     return CheckResult("skill-copy-sync", CATEGORY_INSTALL, LEVEL_FAIL,
-                       f"技能副本与来源仓库（{src}）不一致", install_fix(ctx.repo))
+                       T("doctor.copySync.differs", path=src), install_fix(ctx.repo))
 
 
 def check_copy_version(ctx: DoctorContext) -> CheckResult:
     if ctx.record is None:
-        return CheckResult("skill-copy-version", CATEGORY_INSTALL, LEVEL_PASS, "无安装记录，未比对")
+        return CheckResult("skill-copy-version", CATEGORY_INSTALL, LEVEL_PASS,
+                           T("doctor.copyVersion.skipRecord"))
     if ctx.repo is None:
-        return CheckResult("skill-copy-version", CATEGORY_INSTALL, LEVEL_PASS, "未找到来源仓库，未比对")
+        return CheckResult("skill-copy-version", CATEGORY_INSTALL, LEVEL_PASS,
+                           T("doctor.copyVersion.skipRepo"))
     repo_version = read_version(ctx.repo)
     if repo_version is None:
-        return CheckResult("skill-copy-version", CATEGORY_INSTALL, LEVEL_PASS, "读不到来源仓库的版本号，未比对")
+        return CheckResult("skill-copy-version", CATEGORY_INSTALL, LEVEL_PASS,
+                           T("doctor.copyVersion.skipVersion"))
     installed = ctx.record.get("version", "")
     if installed == repo_version:
         return CheckResult("skill-copy-version", CATEGORY_INSTALL, LEVEL_PASS,
-                           f"版本号一致（{repo_version}）")
+                           T("doctor.copyVersion.ok", version=repo_version))
     return CheckResult("skill-copy-version", CATEGORY_INSTALL, LEVEL_FAIL,
-                       f"技能副本装的是 {installed or '未知版本'}，来源仓库已是 {repo_version}",
+                       T("doctor.copyVersion.differs",
+                         installed=installed or T("doctor.copyVersion.unknown"),
+                         repo=repo_version),
                        install_fix(ctx.repo))
 
 
@@ -428,23 +538,31 @@ def known_links(ctx: DoctorContext) -> list:
     return scan_links(ctx.skill_copy)
 
 
+def _link_label(status: str) -> str:
+    """链接状态的显示文案；状态值本身是内部判定，只换给人看的那一层。"""
+    key = LINK_STATUS_KEYS.get(status)
+    return T(key) if key else status
+
+
 def check_links(ctx: DoctorContext) -> CheckResult:
     entries = [entry for entry in known_links(ctx)
                if isinstance(entry, dict) and isinstance(entry.get("path"), str)]
     if not entries:
-        return CheckResult("skill-links", CATEGORY_INSTALL, LEVEL_PASS, "未发现指向技能副本的链接")
+        return CheckResult("skill-links", CATEGORY_INSTALL, LEVEL_PASS, T("doctor.links.none"))
     ok, broken = [], []
     for entry in entries:
         status = _link_status(Path(entry["path"]), ctx.skill_copy)
-        report = f"{entry.get('agent') or '未知'}（{entry['path']}）：{status}"
+        report = T("doctor.linkItem", agent=entry.get("agent") or T("doctor.links.unknownAgent"),
+                   path=entry["path"], status=_link_label(status))
         (ok if status == "正常" else broken).append(report)
     if not broken:
         return CheckResult("skill-links", CATEGORY_INSTALL, LEVEL_PASS,
-                           f"{len(ok)} 个链接正常：{'；'.join(ok)}")
+                           T("doctor.links.ok", count=len(ok), list=join(ok, item=T("cli.ae.itemSeparator"))))
     agents = sorted({str(entry.get("agent") or "") for entry in entries
                      if _link_status(Path(entry["path"]), ctx.skill_copy) != "正常"})
-    summary = f"{len(broken)} 个链接异常：{'；'.join(broken + ok)}"
-    return CheckResult("skill-links", CATEGORY_INSTALL, LEVEL_FAIL, summary,
+    return CheckResult("skill-links", CATEGORY_INSTALL, LEVEL_FAIL,
+                       T("doctor.links.broken", count=len(broken),
+                          list=join(broken + ok, item=T("cli.ae.itemSeparator"))),
                        install_link_fix(ctx.repo, agents))
 
 
@@ -455,21 +573,13 @@ def check_links(ctx: DoctorContext) -> CheckResult:
 STATUS_FILE = ".annotation-server.json"   # 与技能本体 serve.py 的运行状态文件同名，只含 pid/port/dir 等元数据
 HOST = "127.0.0.1"
 # serve.py 的这些命令行选项各带一个值，解析目录参数时要连值一起跳过
-SERVE_OPTIONS_WITH_VALUE = ("--port", "--claim-port", "--on-handoff")
+SERVE_OPTIONS_WITH_VALUE = ("--port", "--claim-port", "--on-handoff", "--locale")
 SERVE_MAINTENANCE_COMMANDS = ("check", "status", "list", "forget")   # 不起服务的 serve.py 子命令
-
-_skill_ledger = None
 
 
 def skill_ledger_module():
     """加载技能本体的 ledger.py：台账格式、专属端口池与失效判定的单一事实来源。"""
-    global _skill_ledger
-    if _skill_ledger is None:
-        scripts = Path(__file__).resolve().parent / SKILL_SRC / "scripts"
-        sys.path.insert(0, str(scripts))
-        import ledger
-        _skill_ledger = ledger
-    return _skill_ledger
+    return skill_module("ledger")
 
 
 def load_ledger(ctx: DoctorContext):
@@ -477,7 +587,7 @@ def load_ledger(ctx: DoctorContext):
     try:
         mod = skill_ledger_module()
     except ImportError:
-        return None, f"技能本体不完整（找不到 {SKILL_SRC / 'scripts' / 'ledger.py'}），读不了审阅台账"
+        return None, T("doctor.ledgerIncomplete", path=SKILL_SRC / "scripts" / "ledger.py")
     home = Path(ctx.ledger_home) if ctx.ledger_home is not None else mod.home()
     path = home / mod.LEDGER_FILE
     if not path.exists():
@@ -577,13 +687,17 @@ def serve_script_index(cmdline: str, pid: Optional[int] = None) -> Optional[int]
 def serve_dir_argument(cmdline: str, pid: Optional[int] = None) -> Optional[str]:
     """已核实脚本的审阅目录参数；排除维护子命令。
 
-    子命令识别与 serve.py main() 一致：只看脚本后的第一个参数；`serve` 后面才是目录。
+    子命令识别与 serve.py main() 一致：先剥掉开头的 --locale，再识别维护子命令或 serve。
     不是 serve.py 进程、或没有目录参数时返回 None。
     """
     index = serve_script_index(cmdline, pid)
     if index is None:
         return None
     args = command_tokens(cmdline)[index + 1:]
+    if args[:1] == ["--locale"]:
+        args = args[2:]
+    elif args[:1] and args[0].startswith("--locale="):
+        args = args[1:]
     if args[:1] and args[0] in SERVE_MAINTENANCE_COMMANDS:
         return None
     if args[:1] == ["serve"]:
@@ -698,7 +812,7 @@ def check_ledger_readable(ctx: DoctorContext) -> CheckResult:
         return CheckResult("ledger-readable", CATEGORY_RUNTIME, LEVEL_FAIL, error,
                            f"python3 -m json.tool {shlex.quote(str(home / 'reviews.json'))}")
     return CheckResult("ledger-readable", CATEGORY_RUNTIME, LEVEL_PASS,
-                       f"审阅台账可读（{len(entries)} 份审阅）")
+                       T("doctor.ledgerReadable.ok", count=len(entries)))
 
 
 def find_stale_entries(entries: dict) -> list:
@@ -710,13 +824,14 @@ def find_stale_entries(entries: dict) -> list:
 def check_ledger_stale(ctx: DoctorContext) -> CheckResult:
     entries, error = load_ledger(ctx)
     if error is not None:
-        return CheckResult("ledger-stale", CATEGORY_RUNTIME, LEVEL_PASS, "台账不可读，未检查失效记录")
+        return CheckResult("ledger-stale", CATEGORY_RUNTIME, LEVEL_PASS, T("doctor.ledgerStale.skip"))
     stale = find_stale_entries(entries)
     if not stale:
-        return CheckResult("ledger-stale", CATEGORY_RUNTIME, LEVEL_PASS, "台账里没有失效记录")
-    detail = "、".join(f"{rid[:8]}（端口 {port if port else '未分配'}）" for rid, port in stale)
+        return CheckResult("ledger-stale", CATEGORY_RUNTIME, LEVEL_PASS, T("doctor.ledgerStale.ok"))
+    detail = join([T("doctor.staleItem" if port else "doctor.staleItemNoPort",
+                     rid=rid[:8], port=port) for rid, port in stale])
     return CheckResult("ledger-stale", CATEGORY_RUNTIME, LEVEL_WARN,
-                       f"台账里有 {len(stale)} 条失效记录：{detail}",
+                       T("doctor.ledgerStale.warn", count=len(stale), detail=detail),
                        repair_fix(ctx.repo, "--forget-stale"))
 
 
@@ -724,22 +839,21 @@ def check_port_pool(ctx: DoctorContext) -> CheckResult:
     """只探测台账里已分配给审阅的专属端口；池里未分配的端口被占用无害（分配时会跳过）。"""
     entries, error = load_ledger(ctx)
     if error is not None:
-        return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS, "台账不可读，未检查专属端口")
+        return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS, T("doctor.portPool.skip"))
     assigned = sorted({e["port"] for e in entries.values()
                        if isinstance(e.get("port"), int) and not isinstance(e.get("port"), bool)
                        and 1 <= e["port"] <= 65535})
     if not assigned:
-        return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS, "台账里没有已分配的专属端口")
+        return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS, T("doctor.portPool.none"))
     probe = ctx.port_probe if ctx.port_probe is not None else probe_port
     foreign = [port for port in assigned
                if (found := probe(port)) is not None and found.get("app") != APP]
     if foreign:
-        ports = "、".join(str(port) for port in foreign)
         return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_FAIL,
-                           f"专属端口被其他进程占用：{ports}",
+                           T("doctor.portPool.foreign", ports=join(foreign)),
                            "lsof -nP -iTCP:" + ",".join(map(str, foreign)) + " -sTCP:LISTEN")
     return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS,
-                       f"{len(assigned)} 个专属端口未被其他进程占用")
+                       T("doctor.portPool.ok", count=len(assigned)))
 
 
 def served_review_dir(pid: int, probe) -> Optional[Path]:
@@ -779,17 +893,20 @@ def check_orphan_servers(ctx: DoctorContext) -> CheckResult:
     """残留服务：运行中的 serve.py，托管的审阅目录不在台账里或已不存在。"""
     entries, error = load_ledger(ctx)
     if error is not None:
-        return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_PASS, "台账不可读，未检查残留服务")
+        return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_PASS, T("doctor.orphans.skip"))
     lister = ctx.process_lister if ctx.process_lister is not None else list_processes
     orphans = find_orphan_servers(entries, lister, ctx.port_probe)
     if orphans:
-        detail = "；".join(f"pid {pid}（端口 {port if port else '未知'}）" for pid, port, _ in orphans)
+        detail = join([T("doctor.orphanItem" if port else "doctor.orphanItemNoPort",
+                        pid=pid, port=port) for pid, port, _ in orphans],
+                      item=T("cli.ae.itemSeparator"))
         return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_FAIL,
-                           f"发现 {len(orphans)} 个残留服务（托管的审阅不在台账里或目录已不存在）：{detail}",
+                           T("doctor.orphans.found", count=len(orphans), detail=detail),
                            repair_fix(ctx.repo, "--stop-orphans"))
     running = sum(1 for pid, cmdline in lister() if serve_dir_argument(cmdline, pid) is not None)
-    suffix = f"（{running} 个 serve.py 进程均在台账内）" if running else ""
-    return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_PASS, f"未发现残留服务{suffix}")
+    suffix = T("doctor.orphans.noneRunning", count=running) if running else ""
+    return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_PASS,
+                       T("doctor.orphans.none") + suffix)
 
 
 # ── 可选工具（缺失只警告，不影响退出码） ────────────────────────
@@ -804,17 +921,17 @@ def tool_fix(package: str) -> str:
 
 def check_fc_list(ctx: DoctorContext) -> CheckResult:
     if shutil.which("fc-list"):
-        return CheckResult("fc-list", CATEGORY_TOOLS, LEVEL_PASS, "fc-list 可用，字体核查可枚举本机字体")
+        return CheckResult("fc-list", CATEGORY_TOOLS, LEVEL_PASS, T("doctor.fcList.ok"))
     return CheckResult("fc-list", CATEGORY_TOOLS, LEVEL_WARN,
-                       "缺少 fc-list，字体核查无法枚举本机字体", tool_fix("fontconfig"))
+                       T("doctor.fcList.warn"), tool_fix("fontconfig"))
 
 
 def check_pdffonts(ctx: DoctorContext) -> CheckResult:
     if shutil.which("pdffonts"):
-        return CheckResult("pdffonts", CATEGORY_TOOLS, LEVEL_PASS, "pdffonts 可用，可列出 PDF 字体证据")
+        return CheckResult("pdffonts", CATEGORY_TOOLS, LEVEL_PASS, T("doctor.pdffonts.ok"))
     package = "poppler" if sys.platform == "darwin" else "poppler-utils"
     return CheckResult("pdffonts", CATEGORY_TOOLS, LEVEL_WARN,
-                       "缺少 pdffonts，字体核查无法检查 PDF 字体", tool_fix(package))
+                       T("doctor.pdffonts.warn"), tool_fix(package))
 
 
 # ── 开发环境（仅在仓库内运行时执行，见 REPO_CHECKS） ─────────────
@@ -839,9 +956,9 @@ def check_git_hooks(ctx: DoctorContext) -> CheckResult:
         if not hooks.is_absolute():
             hooks = ctx.repo / hooks
         if Path(os.path.normpath(hooks)) == Path(os.path.normpath(expected)) and expected.is_dir():
-            return CheckResult("git-hooks", CATEGORY_DEV, LEVEL_PASS, "git 钩子已启用（tools/git-hooks）")
+            return CheckResult("git-hooks", CATEGORY_DEV, LEVEL_PASS, T("doctor.gitHooks.ok"))
     return CheckResult("git-hooks", CATEGORY_DEV, LEVEL_WARN,
-                       "git 钩子未启用，main 保护（拒绝在 main 上提交/推送/删除）不生效",
+                       T("doctor.gitHooks.warn"),
                        f"sh {ctx.repo / 'tools' / 'setup-dev.sh'}")
 
 
@@ -870,10 +987,8 @@ def check_chrome(ctx: DoctorContext) -> CheckResult:
     probe = ctx.chrome_probe if ctx.chrome_probe is not None else find_chrome
     found = probe()
     if found:
-        return CheckResult("e2e-chrome", CATEGORY_DEV, LEVEL_PASS, f"端到端测试可用的 Chrome：{found}")
-    return CheckResult("e2e-chrome", CATEGORY_DEV, LEVEL_WARN,
-                       "未找到端到端测试需要的 Chrome（tests/e2e_browser.py 按 channel=chrome 启动），"
-                       "请安装 Google Chrome")
+        return CheckResult("e2e-chrome", CATEGORY_DEV, LEVEL_PASS, T("doctor.chrome.ok", path=found))
+    return CheckResult("e2e-chrome", CATEGORY_DEV, LEVEL_WARN, T("doctor.chrome.warn"))
 
 
 # 全部检查项：doctor 按此顺序执行；后续工单在元组里追加新检查项函数
@@ -897,23 +1012,36 @@ def summarize(results):
     counts = {LEVEL_PASS: 0, LEVEL_WARN: 0, LEVEL_FAIL: 0}
     for result in results:
         counts[result.level] += 1
+    # 键名本身就是语言无关的判定值，旧消费者照旧读取
     return {"pass": counts[LEVEL_PASS], "warn": counts[LEVEL_WARN], "fail": counts[LEVEL_FAIL]}
 
 
+def result_payload(result: CheckResult) -> dict:
+    """--json 里一个检查项：既有中文字段原样保留，另加语言无关的判定字段。
+
+    category / level 是旧消费者在读的判定字段，恒为中文、不随 locale 改值；
+    status / category_id 让新消费者不必比较本地化标签就能判断状态。
+    """
+    payload = dataclasses.asdict(result)
+    payload["status"] = LEVEL_STATUS[result.level]
+    payload["category_id"] = CATEGORY_IDS[result.category]
+    return payload
+
+
 def print_doctor(results) -> None:
-    """文字输出：按类别分组，失败项附修复命令。"""
+    """文字输出：按类别分组，失败项附修复命令。类别与级别只在这一层按语言显示。"""
     categories = []
     for result in results:
         if result.category not in categories:
             categories.append(result.category)
     for category in categories:
-        print(category)
+        print(T("doctor.cat." + CATEGORY_IDS[category]))
         for result in (r for r in results if r.category == category):
-            print(f"  [{result.level}] {result.code}：{result.message}")
+            print(T("doctor.item", level=T("doctor.level." + LEVEL_STATUS[result.level]),
+                    code=result.code, message=result.message))
             if result.fix_command:
-                print(f"      修复：{result.fix_command}")
-    summary = summarize(results)
-    print(f"\n汇总：通过 {summary['pass']}，警告 {summary['warn']}，失败 {summary['fail']}")
+                print(T("doctor.fix", command=result.fix_command))
+    print(T("doctor.summary", **summarize(results)))
 
 
 def cmd_doctor(args) -> int:
@@ -922,7 +1050,9 @@ def cmd_doctor(args) -> int:
     repo = resolve_repo(record)
     results = run_doctor(DoctorContext(skill_copy=skill_copy, repo=repo, record=record))
     if args.as_json:
-        print(json.dumps({"results": [dataclasses.asdict(r) for r in results],
+        # 结构化输出只走 stdout：正常结果与错误都是合法 JSON，终端提示一律去 stderr
+        print(json.dumps({"schema": DOCTOR_SCHEMA, "locale": current_locale(),
+                          "results": [result_payload(r) for r in results],
                           "summary": summarize(results)}, ensure_ascii=False, indent=2))
     else:
         print_doctor(results)
@@ -961,21 +1091,20 @@ def plan_from_results(results) -> list:
     copy_broken = next((by_code[code] for code in REPAIR_COPY_CODES
                         if code in by_code and by_code[code].level == LEVEL_FAIL), None)
     if copy_broken is not None:
-        plan.append(PlanItem("resync-copy", copy_broken.message,
-                             "重新同步技能副本（覆盖副本内的手工改动，语义同 install）"))
+        plan.append(PlanItem("resync-copy", copy_broken.message, T("cli.ae.plan.resync")))
     r = by_code.get("skill-links")
     if r is not None and r.level == LEVEL_FAIL:
-        plan.append(PlanItem("fix-links", r.message, "修复指向技能副本的链接"))
+        plan.append(PlanItem("fix-links", r.message, T("cli.ae.plan.links")))
     r = by_code.get("git-hooks")
     if r is not None and r.level in (LEVEL_WARN, LEVEL_FAIL):
-        plan.append(PlanItem("git-hooks", r.message, "启用 git 钩子"))
+        plan.append(PlanItem("git-hooks", r.message, T("cli.ae.plan.hooks")))
     r = by_code.get("ledger-stale")
     if r is not None and r.level in (LEVEL_WARN, LEVEL_FAIL):
-        plan.append(PlanItem("forget-stale", r.message, "删除台账失效记录并释放专属端口",
+        plan.append(PlanItem("forget-stale", r.message, T("cli.ae.plan.forgetStale"),
                              "--forget-stale"))
     r = by_code.get("orphan-servers")
     if r is not None and r.level == LEVEL_FAIL:
-        plan.append(PlanItem("stop-orphans", r.message, "结束残留服务（SIGTERM 优雅停止）",
+        plan.append(PlanItem("stop-orphans", r.message, T("cli.ae.plan.stopOrphans"),
                              "--stop-orphans"))
     return plan
 
@@ -991,7 +1120,7 @@ def recreate_link(link: Path, copy_dir: Path) -> None:
 def repair_links(ctx: DoctorContext) -> tuple:
     """修复指向技能副本的链接；返回（已重建的链接条目, 无法修复的说明）。"""
     if not ctx.skill_copy.is_dir():
-        return [], [f"技能副本缺失（{ctx.skill_copy}），先重新同步技能副本再修链接"]
+        return [], [T("cli.ae.repair.copyMissing", path=ctx.skill_copy)]
     created, stuck = [], []
     for entry in known_links(ctx):
         if not (isinstance(entry, dict) and isinstance(entry.get("path"), str)):
@@ -1001,7 +1130,9 @@ def repair_links(ctx: DoctorContext) -> tuple:
             continue
         if link.exists() and not link.is_symlink():
             # 位置被非链接内容占用：与 install 同样不覆盖，留给用户手工处理
-            stuck.append(f"{entry.get('agent') or '未知'}（{entry['path']}）：位置已是普通文件或目录，请手工处理")
+            stuck.append(T("cli.ae.repair.linkOccupied",
+                           agent=entry.get("agent") or T("doctor.links.unknownAgent"),
+                           path=entry["path"]))
             continue
         recreate_link(link, ctx.skill_copy)
         created.append({"agent": entry.get("agent", ""), "path": entry["path"]})
@@ -1020,19 +1151,19 @@ def forget_stale_entries(entries: dict) -> list:
         try:
             current = mod.entries()
         except (mod.LedgerError, OSError) as e:
-            done.append((rid, port, f"台账读不了，未删除（{e}）"))
+            done.append((rid, port, T("doctor.forgetUnreadable", detail=e)))
             continue
         entry = current.get(rid)
         if entry is None:
-            done.append((rid, port, "已不在台账里，无需删除"))
+            done.append((rid, port, T("doctor.forgetSkipGone")))
         elif mod.entry_state(rid, entry) == "ok":
-            done.append((rid, port, "已恢复有效，跳过"))
+            done.append((rid, port, T("doctor.forgetSkipRecovered")))
         else:
             try:
                 mod.forget(rid)
                 done.append((rid, port, None))
             except (mod.LedgerError, OSError) as e:
-                done.append((rid, port, f"未删除（{e}）"))
+                done.append((rid, port, T("doctor.forgetFailed", detail=e)))
     return done
 
 
@@ -1045,7 +1176,7 @@ def stop_orphan_servers(entries: dict, lister) -> list:
         return []
     pids = {pid for pid, _, _ in orphans}
     stuck = {pid for pid, _command in stop_servers([(pid, command) for pid, command in processes if pid in pids])}
-    return [(pid, port, None if pid not in stuck else "未能确认服务身份或停止状态，未强行结束")
+    return [(pid, port, None if pid not in stuck else T("doctor.stopRefused"))
             for pid, port, _dir in orphans]
 
 
@@ -1062,11 +1193,12 @@ def execute_plan(plan: list, ctx: DoctorContext,
         if item.kind == "resync-copy":
             src = ctx.repo / SKILL_SRC if ctx.repo is not None else None
             if src is None or not src.is_dir():
-                lines.append(f"未重新同步技能副本：找不到技能本体（{src or '未定位到来源仓库'}）")
+                lines.append(T("cli.ae.repair.noSource",
+                               path=src if src is not None else T("cli.ae.repair.noRepo")))
                 continue
             copy_skill(src, ctx.skill_copy)
             resynced = True
-            lines.append(f"已重新同步技能副本到 {ctx.skill_copy}")
+            lines.append(T("cli.ae.repair.resynced", path=ctx.skill_copy))
             # 副本回来了：悬空链接多半自愈，其余重建；随后按 install 的合并语义补写安装记录
             created, stuck = repair_links(ctx)
             previous = ctx.record if isinstance(ctx.record, dict) \
@@ -1083,33 +1215,34 @@ def execute_plan(plan: list, ctx: DoctorContext,
         elif item.kind == "forget-stale":
             entries, error = load_ledger(ctx)
             if error is not None:
-                lines.append(f"未删除台账失效记录：{error}")
+                lines.append(T("cli.ae.repair.noForget", detail=error))
                 continue
             for rid, port, note in forget_stale_entries(entries):
-                lines.append(f"台账失效记录 {rid[:8]}（{_port_text(port)}）：{note}"
+                lines.append(T("cli.ae.repair.forgetNote", rid=rid[:8],
+                               port=_port_text(port), note=note)
                              if note is not None
-                             else f"已删除台账失效记录 {rid[:8]}（{_port_text(port)}，已释放）")
+                             else T("cli.ae.repair.forgot", rid=rid[:8], port=_port_text(port)))
         elif item.kind == "stop-orphans":
             entries, error = load_ledger(ctx)
             if error is not None:
-                lines.append(f"未结束残留服务：{error}")
+                lines.append(T("cli.ae.repair.noStop", detail=error))
                 continue
             lister = ctx.process_lister if ctx.process_lister is not None else list_processes
             for pid, port, note in stop_orphan_servers(entries, lister):
-                detail = f"，端口 {port}" if port else ""
-                lines.append(f"已结束残留服务 pid {pid}{detail}" if note is None
-                             else f"残留服务 pid {pid}{detail}：{note}")
+                detail = T("cli.ae.repair.portDetail", port=port) if port else ""
+                lines.append(T("cli.ae.repair.stopped", pid=pid, detail=detail) if note is None
+                             else T("cli.ae.repair.stopNote", pid=pid, detail=detail, note=note))
     return lines, acted
 
 
 def _port_text(port) -> str:
-    return f"端口 {port}" if port else "未分配端口"
+    return T("cli.ae.repair.port", port=port) if port else T("cli.ae.repair.noPort")
 
 
 def _link_report(created: list, stuck: list) -> list:
-    lines = [f"已重建链接：{entry.get('agent') or entry['path']}（{entry['path']}）"
-             for entry in created]
-    lines.extend(f"无法修复链接 {note}" for note in stuck)
+    lines = [T("cli.ae.repair.linkRebuilt", agent=entry.get("agent") or entry["path"],
+               path=entry["path"]) for entry in created]
+    lines.extend(T("cli.ae.repair.linkStuck", detail=note) for note in stuck)
     return lines
 
 
@@ -1117,40 +1250,40 @@ def _enable_git_hooks(repo: Optional[Path]) -> list:
     """启用 git 钩子：执行仓库自带的 tools/setup-dev.sh（与其修复命令同一脚本）。"""
     script = repo / "tools" / "setup-dev.sh" if repo is not None else None
     if script is None or not script.is_file():
-        return [f"未启用 git 钩子：找不到 {script}"]
+        return [T("cli.ae.repair.hooksNoScript", path=script)]
     try:
         # 脚本带 bash 语法（set -o pipefail），显式用 bash 执行
         done = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
-        return [f"启用 git 钩子失败：{e}"]
+        return [T("cli.ae.repair.hooksFailed", detail=e)]
     if done.returncode == 0:
-        return ["已启用 git 钩子（core.hooksPath = tools/git-hooks）"]
-    return [f"启用 git 钩子失败：{(done.stderr or done.stdout).strip()}"]
+        return [T("cli.ae.repair.hooksDone")]
+    return [T("cli.ae.repair.hooksFailed", detail=(done.stderr or done.stdout).strip())]
 
 
 def print_plan(plan: list, forget_stale: bool = False, stop_orphans: bool = False,
                dry_run: bool = False) -> None:
-    print("修复计划：")
+    print(T("cli.ae.repair.planTitle"))
     if not plan:
-        print("  没有发现可修复的问题")
+        print(T("cli.ae.repair.nothing"))
         return
     given = {"--forget-stale": forget_stale, "--stop-orphans": stop_orphans}
     for index, item in enumerate(plan, 1):
         if item.flag and not given.get(item.flag):
-            note = f"（破坏性操作，需要参数 {item.flag}；本次未执行）"
+            note = T("cli.ae.repair.destructive", flag=item.flag)
         elif dry_run:
-            note = "（--dry-run，只打印不执行）"
+            note = T("cli.ae.repair.dryRun")
         else:
             note = ""
-        print(f"  {index}. {item.problem}")
-        print(f"     → {item.action}{note}")
+        print(T("cli.ae.repair.itemProblem", index=index, problem=item.problem))
+        print(T("cli.ae.repair.itemAction", action=item.action, note=note))
 
 
 def _print_unrepairable(results, plan) -> None:
     covered = {code for item in plan for code in REPAIR_KIND_CODES.get(item.kind, ())}
     rest = [r.code for r in results if r.level != LEVEL_PASS and r.code not in covered]
     if rest:
-        print(f"  （另有 {len(rest)} 项不能自动修复：{'、'.join(rest)}，见体检输出）")
+        print(T("cli.ae.repair.unrepairable", count=len(rest), codes=join(rest)))
 
 
 def _fresh_context() -> DoctorContext:
@@ -1171,13 +1304,15 @@ def cmd_repair(args) -> int:
     lines, acted = execute_plan(plan, ctx, forget_stale=args.forget_stale,
                                 stop_orphans=args.stop_orphans)
     if lines:
-        print("\n执行修复：")
+        print(T("cli.ae.repair.execTitle"))
         for line in lines:
             print(f"  - {line}")
     after = run_doctor(_fresh_context()) if acted else results
-    print("\n修复后体检：")
+    print(T("cli.ae.repair.afterTitle"))
     print_doctor(after)
     return 1 if any(r.level == LEVEL_FAIL for r in after) else 0
+
+
 # ── 运行中的服务（卸载用；进程枚举与识别复用运行状态体检的设施） ──
 
 
@@ -1285,14 +1420,14 @@ def ledger_review_dirs(home_dir: Path) -> list:
     except FileNotFoundError:
         return []
     except (OSError, ValueError) as exc:
-        raise CommandError(f"台账读不了，拒绝删除：{exc}") from None
+        raise CommandError(T("cli.ae.purge.unreadable", detail=exc)) from None
     reviews = doc.get("reviews") if isinstance(doc, dict) else None
     if not isinstance(reviews, dict):
-        raise CommandError("台账结构不对，拒绝删除")
+        raise CommandError(T("cli.ae.purge.badStructure"))
     dirs = []
     for entry in reviews.values():
         if not isinstance(entry, dict) or not isinstance(entry.get("dir"), str) or not entry["dir"]:
-            raise CommandError("台账目录记录不完整，拒绝删除")
+            raise CommandError(T("cli.ae.purge.incomplete"))
         dirs.append(entry["dir"])
     return dirs
 
@@ -1303,7 +1438,7 @@ def purge_guard(home_dir: Path) -> Optional[str]:
         return None
     resolved = home_dir.resolve()
     if resolved == Path.home().resolve() or resolved == Path(resolved.root):
-        return f"台账目录异常（{home_dir}），拒绝删除"
+        return T("cli.ae.purge.homeAbnormal", path=home_dir)
     try:
         review_dirs = ledger_review_dirs(home_dir)
     except CommandError as exc:
@@ -1312,13 +1447,12 @@ def purge_guard(home_dir: Path) -> Optional[str]:
         try:
             entry = Path(review_dir).expanduser().resolve()
         except (OSError, ValueError):
-            return "审阅目录无法解析，拒绝删除"
+            return T("cli.ae.purge.unresolved")
         if entry == resolved or resolved in entry.parents or entry in resolved.parents:
-            return (f"审阅目录 {review_dir} 在台账目录里，拒绝删除"
-                    "（卸载任何情况下不动审阅目录）")
+            return T("cli.ae.purge.insideHome", dir=review_dir)
     for child in home_dir.iterdir():
         if not is_ledger_file(child.name) or child.is_symlink() or not child.is_file():
-            return f"台账目录包含非台账内容 {child.name}，拒绝删除（可能是未登记的审阅目录）"
+            return T("cli.ae.purge.foreign", name=child.name)
     return None
 
 
@@ -1349,11 +1483,11 @@ def remove_links(entries: list, skill_copy: Path) -> list:
         if link.is_symlink():
             if os.path.realpath(str(link)) == target or os.readlink(str(link)) == target:
                 link.unlink()
-                report.append((str(link), "已删除链接"))
+                report.append((str(link), T("cli.ae.uninstall.linkRemoved")))
             else:
-                report.append((str(link), "指向别处，未删除"))
+                report.append((str(link), T("cli.ae.uninstall.linkElsewhere")))
         else:
-            report.append((str(link), "已不是链接，未删除"))
+            report.append((str(link), T("cli.ae.uninstall.linkGone")))
     return report
 
 
@@ -1361,20 +1495,19 @@ def ensure_not_skill_source(skill_copy: Path) -> None:
     """技能副本（非软链接）与本仓库的技能本体重叠时拒绝删除。"""
     source = Path(__file__).resolve().parent / SKILL_SRC
     if not skill_copy.is_symlink() and skill_copy.exists() and paths_overlap(source, skill_copy):
-        raise CommandError(f"技能副本位置 {skill_copy} 与技能本体 {source} 重叠，拒绝删除；"
-                           "请检查 CLAUDE_SKILLS_DIR")
+        raise CommandError(T("cli.ae.uninstall.overlap", copy=skill_copy, source=source))
 
 
 def remove_skill_copy(skill_copy: Path) -> str:
     """删除技能副本；返回给用户看的说明。"""
     if skill_copy.is_symlink():
         skill_copy.unlink()
-        return f"已删除技能副本（本身是软链接）：{skill_copy}"
+        return T("cli.ae.uninstall.copySymlink", path=skill_copy)
     if skill_copy.exists():
         ensure_not_skill_source(skill_copy)
         shutil.rmtree(skill_copy)
-        return f"已删除技能副本：{skill_copy}"
-    return f"技能副本不存在：{skill_copy}"
+        return T("cli.ae.uninstall.copyRemoved", path=skill_copy)
+    return T("cli.ae.uninstall.copyAbsent", path=skill_copy)
 
 
 def cmd_uninstall(args) -> int:
@@ -1386,7 +1519,7 @@ def cmd_uninstall(args) -> int:
     ensure_not_skill_source(skill_copy)   # 动手前拦下，避免删了链接才报错
     installed = skill_copy.is_symlink() or skill_copy.exists()
     if not installed and not links:
-        print(f"技能未安装：未找到技能副本（{skill_copy}），也未发现指向它的链接，无需卸载")
+        print(T("cli.ae.uninstall.notInstalled", path=skill_copy))
         if not args.purge:
             return 0
     if args.purge:  # 先做安全检查，再停服务、删任何东西
@@ -1396,71 +1529,136 @@ def cmd_uninstall(args) -> int:
             return 2
     servers = running_servers()
     if servers:
-        print("检测到正在运行的 serve.py：")
+        print(T("cli.ae.uninstall.running"))
         for pid, command in servers:
-            print(f"  pid {pid}：{command}")
+            print(T("cli.ae.uninstall.runningItem", pid=pid, command=command))
         if not args.stop_servers:
-            print("请先停止服务，或加 --stop-servers 由本命令结束它们；已拒绝卸载", file=sys.stderr)
+            print(T("cli.ae.uninstall.refuseRunning"), file=sys.stderr)
             return 1
         stuck = stop_servers(servers)
         if stuck:
-            print(f"有 {len(stuck)} 个 serve.py 未能结束，已拒绝卸载：", file=sys.stderr)
+            print(T("cli.ae.uninstall.stuck", count=len(stuck)), file=sys.stderr)
             for pid, command in stuck:
-                print(f"  pid {pid}：{command}", file=sys.stderr)
+                print(T("cli.ae.uninstall.runningItem", pid=pid, command=command), file=sys.stderr)
             return 1
-        print("已结束全部 serve.py")
+        print(T("cli.ae.uninstall.stopped"))
     for path, action in remove_links(links, skill_copy):
-        print(f"{action}：{path}")
+        print(T("cli.ae.uninstall.linkLine", action=action, path=path))
     print(remove_skill_copy(skill_copy))
     if args.purge:
         home_dir = ledger_home()
         if home_dir.exists():
             purge_ledger(home_dir)
-            print(f"已删除台账目录：{home_dir}")
+            print(T("cli.ae.uninstall.ledgerPurged", path=home_dir))
         else:
-            print(f"台账目录不存在，无需删除：{home_dir}")
+            print(T("cli.ae.uninstall.ledgerAbsent", path=home_dir))
     else:
-        print(f"已保留审阅台账：{ledger_home()}（--purge 可一并删除；审阅目录任何情况下都不动）")
+        print(T("cli.ae.uninstall.ledgerKept", path=ledger_home()))
     return 0
 
 
+class LocalizedParser(argparse.ArgumentParser):
+    """帮助、用法与错误消息都走当前语言的 argparse 解析器。
+
+    参数名、子命令名和合法取值保持原文，只有说明文字按语言变。
+    """
+
+    def error(self, message: str):
+        self.print_usage(sys.stderr)
+        print(translate_cli_error(message), file=sys.stderr)
+        sys.exit(2)
+
+
+def translate_cli_error(message: str) -> str:
+    """把 argparse 的英文错误消息换成本地化的说法；认不出来的保留原文并补上下文。"""
+    text = str(message).strip()
+    match = re.match(r"^(?:argument \S+: )?invalid choice: '([^']*)' \(choose from .*\)$", text)
+    if match:
+        return T("cli.ae.err.unknownCommand", name=match.group(1))
+    match = re.match(r"^argument (\S+): expected one argument$", text)
+    if match:
+        return T("cli.ae.err.missingValue", name=match.group(1))
+    match = re.match(r"^unrecognized arguments: (.+)$", text)
+    if match:
+        return T("cli.ae.err.unknownArgument", detail=match.group(1))
+    if text.startswith("the following arguments are required:"):
+        return T("cli.ae.err.missingCommand")
+    return T("cli.ae.err.generic", detail=text)
+
+
+def _add_help(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("-h", "--help", action="help", default=argparse.SUPPRESS,
+                        help=T("cli.ae.opt.help"))
+
+
+def _add_locale(parser: argparse.ArgumentParser, *, root: bool = False) -> None:
+    # 子命令上的 --locale 用 SUPPRESS 默认值：没写时不覆盖写在根命令上的选择
+    parser.add_argument("--locale", metavar="LANG",
+                        default=None if root else argparse.SUPPRESS,
+                        help=T("cli.ae.opt.locale"))
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="ae.py", description=f"{APP} 统一管理命令")
-    sub = parser.add_subparsers(dest="command", required=True)
-    p_install = sub.add_parser("install", help="把技能本体复制为技能副本")
+    parser = LocalizedParser(prog="ae.py", description=T("cli.ae.appDesc"), add_help=False)
+    _add_help(parser)
+    _add_locale(parser, root=True)
+    sub = parser.add_subparsers(dest="command", metavar="子命令" if current_locale() == "zh-CN" else "COMMAND")
+    p_install = sub.add_parser("install", add_help=False, help=T("cli.ae.cmd.install"))
+    _add_help(p_install)
+    _add_locale(p_install)
     p_install.add_argument("--link", default="", metavar="AGENTS",
-                           help="为其他 Agent 建指向技能副本的软链接，逗号分隔：codex,agents,zcode")
+                           help=T("cli.ae.cmd.install.link"))
     p_install.set_defaults(handler=cmd_install)
-    p_doctor = sub.add_parser("doctor", help="体检：检查安装状态，给出级别与修复命令")
+    p_doctor = sub.add_parser("doctor", add_help=False, help=T("cli.ae.cmd.doctor"))
+    _add_help(p_doctor)
+    _add_locale(p_doctor)
     p_doctor.add_argument("--json", action="store_true", dest="as_json",
-                          help="输出结构化的体检结果（JSON）")
+                          help=T("cli.ae.cmd.doctor.json"))
     p_doctor.set_defaults(handler=cmd_doctor)
-    p_repair = sub.add_parser(
-        "repair", help="修复体检发现的问题：先打印计划，安全项自动执行，破坏性操作需显式参数")
+    p_repair = sub.add_parser("repair", add_help=False, help=T("cli.ae.cmd.repair"))
+    _add_help(p_repair)
+    _add_locale(p_repair)
     p_repair.add_argument("--dry-run", action="store_true", dest="dry_run",
-                          help="只打印修复计划，不执行、不改动任何状态")
+                          help=T("cli.ae.cmd.repair.dryRun"))
     p_repair.add_argument("--forget-stale", action="store_true", dest="forget_stale",
-                          help="删除台账失效记录并释放专属端口（破坏性操作）")
+                          help=T("cli.ae.cmd.repair.forgetStale"))
     p_repair.add_argument("--stop-orphans", action="store_true", dest="stop_orphans",
-                          help="结束残留服务（破坏性操作）")
+                          help=T("cli.ae.cmd.repair.stopOrphans"))
     p_repair.set_defaults(handler=cmd_repair)
-    p_uninstall = sub.add_parser("uninstall", help="删除技能副本与指向它的链接，默认保留审阅台账")
+    p_uninstall = sub.add_parser("uninstall", add_help=False, help=T("cli.ae.cmd.uninstall"))
+    _add_help(p_uninstall)
+    _add_locale(p_uninstall)
     p_uninstall.add_argument("--purge", action="store_true",
-                             help="同时删除台账目录（AE_HOME，默认 ~/.annotation-everything）；"
-                                  "审阅目录任何情况下都不动")
+                             help=T("cli.ae.cmd.uninstall.purge"))
     p_uninstall.add_argument("--stop-servers", action="store_true",
-                             help="先结束正在运行的 serve.py 再卸载（默认检测到就拒绝卸载）")
+                             help=T("cli.ae.cmd.uninstall.stopServers"))
     p_uninstall.set_defaults(handler=cmd_uninstall)
     return parser
 
 
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        set_locale(i18n_module().cli_locale(explicit_locale_from_argv(argv)))
+    except ImportError:
+        print(f"找不到技能本体（{SKILL_SRC / 'scripts' / 'i18n.py'}），加载不了界面语言；"
+              "请确认 ae.py 与 skill/ 目录在一起，或重新安装", file=sys.stderr)
+        return 2
+    except i18n_module().LocaleError as exc:
+        set_locale(i18n_module().DEFAULT_LOCALE)
+        print(locale_error_message(exc), file=sys.stderr)
+        return 2
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "command", None) is None:
+        # 不用 required=True：缺子命令也走本地化说明，退出码与 argparse 一致（2）
+        parser.print_usage(sys.stderr)
+        print(T("cli.ae.err.missingCommand"), file=sys.stderr)
+        return 2
     try:
         return args.handler(args)
     except Exception as exc:
-        message = f"命令执行失败（{type(exc).__name__}）：{exc}"
+        message = T("cli.ae.fail", type=type(exc).__name__, detail=exc)
         if getattr(args, "as_json", False):
             print(json.dumps({"error": message}, ensure_ascii=False))
         print(message, file=sys.stderr)
