@@ -54,56 +54,117 @@ def default_agent() -> str:
     return "claude" if os.environ.get("CLAUDECODE") else "agent"
 
 
-STATUS_ZH = {"pending": "等待接收", "claimed": "处理中", "drafted": "已初改·待复核", "review": "等待复核",
-             "reviewing": "复核中", "done": "已处理"}
-NOTE_STATUS_ZH = {"open": "未处理", "drafted": "已初改·待复核", "resolved": "已处理"}
-ACTION_ZH = {"drafted": "初改", "resolved": "处理", "finalized": "定稿", "approved": "复核通过", "revised": "复核再改",
-             "returned": "退回给用户", "reopened": "重新打开", "accepted": "用户定稿"}
-STAGE_ZH = {"draft": "初改", "review": "复核", "page": "页面"}
+# 批次状态、痕迹动作、阶段与批注状态：存储值 → 界面消息 key（存储值本身不随语言改写）
+STATUS_KEY = {"pending": "cli.batch.status.pending", "claimed": "cli.batch.status.claimed",
+              "drafted": "cli.batch.status.drafted", "review": "cli.batch.status.review",
+              "reviewing": "cli.batch.status.reviewing", "done": "cli.batch.status.done"}
+NOTE_STATUS_KEY = {"open": "cli.status.open", "drafted": "cli.status.drafted", "resolved": "cli.status.resolved"}
+ACTION_KEY = {"drafted": "cli.batch.trail.action.drafted", "resolved": "cli.batch.trail.action.resolved",
+              "finalized": "cli.batch.trail.action.finalized", "approved": "cli.batch.trail.action.approved",
+              "revised": "cli.batch.trail.action.revised", "returned": "cli.batch.trail.action.returned",
+              "reopened": "cli.batch.trail.action.reopened", "accepted": "cli.batch.trail.action.accepted"}
+STAGE_KEY = {"draft": "cli.batch.stageName.draft", "review": "cli.batch.stageName.review"}
+# 输出按当前语言写的命令（其余命令不读界面语言：claim 只输出 JSON，导入与技能设置另有归属）
+LOCALIZED_CMDS = ("show", "wait", "batches", "done", "review", "diff", "resolve", "reopen")
+# 常驻技能的范围：存储值 → 界面显示的消息 key（存储值本身不随语言改写）
+ALWAYS_SCOPE_KEY = {"all": "viewer.hand.scope.all", "报告": "viewer.hand.scope.report",
+                    "讲稿": "viewer.hand.scope.script", "style": "viewer.hand.scope.style"}
 
 
-def trail_text(n: dict[str, Any], last: int = 4) -> str:
-    """处理痕迹（最近几步）：谁、哪个阶段、做了什么、理由。"""
+def cli_language(choice: object, review_dir: Path) -> str:
+    """命令行语言：--locale 优先于 AE_LOCALE，再优先于审阅里保存的选择，都没有时中文。"""
+    stored = load_manifest(review_dir).get("locale")
+    return i18n.resolve_locale(
+        i18n.effective_choice(choice, os.environ.get("AE_LOCALE"), stored if isinstance(stored, str) else None),
+        system_languages=i18n.system_languages())
+
+
+def cli_text(lang: str | None):
+    """按当前语言取命令行文案；缺译时回退到另一种语言（词典自检保证两种语言齐备）。"""
+    catalogs = i18n.load_all()   # 读一次缓存住：处理记录可能几百批，不能每条消息都读一遍文件
+    cat = cli_catalog(lang)
+
+    def t(msg: str, **params: object) -> str:
+        return i18n.translate(cat, msg, catalogs=catalogs, **params)
+
+    return t
+
+
+def cli_catalog(lang: str | None) -> dict:
+    """按语言取词典（读一次缓存住）；语言不在支持列表时退回中文。"""
+    catalogs = i18n.load_all()
+    return catalogs.get(lang or i18n.DEFAULT_LOCALE) or catalogs[i18n.DEFAULT_LOCALE]
+
+
+def label(t, key: str, fallback: object = "") -> str:
+    """词典里有这条消息才用；旧数据里的未知取值按原文显示，不猜。"""
+    try:
+        return t(key)
+    except i18n.MissingMessageError:
+        return str(fallback or "")
+
+
+def always_text(t, items: object) -> str:
+    """常驻技能摘要：名称保持原文，范围只改显示（导出与存储的写法不变）。"""
+    out = []
+    for x in items or []:
+        if not isinstance(x, dict):
+            continue
+        scope = ALWAYS_SCOPE_KEY.get(x.get("scope"))
+        out.append(t("cli.hand.alwaysItem", name=str(x.get("name") or ""),
+                     scope=label(t, scope) if scope else str(x.get("scope") or "")))
+    return t("cli.hand.itemSep").join(out)
+
+
+def trail_text(n: dict[str, Any], last: int = 4, lang: str | None = None) -> str:
+    """处理痕迹（最近几步）：谁、哪个阶段、做了什么、理由。执行者名称与理由保持原文。"""
+    t = cli_text(lang)
     parts = []
     for e in (n.get("trail") or [])[-last:]:
         if not isinstance(e, dict):
             continue
-        who = "用户" if e.get("by") == "page" else str(e.get("by") or "")
-        t = f"{ACTION_ZH.get(e.get('action'), e.get('action'))}（{who}" + (f"·第 {e['batch']} 批" if e.get("batch") else "") + "）"
-        if e.get("note"):
-            t += f"：{str(e['note'])[:80]}"
-        parts.append(t)
+        who = t("cli.batch.trail.whoPage") if e.get("by") == "page" else str(e.get("by") or "")
+        action = label(t, ACTION_KEY.get(e.get("action"), ""), e.get("action"))
+        batch = t("cli.batch.trailBatch", batch=e["batch"]) if e.get("batch") else ""
+        note = t("cli.batch.trailNote", note=str(e.get("note"))[:80]) if e.get("note") else ""
+        parts.append(t("cli.batch.trailEntry", action=action, who=who, batch=batch, note=note))
     return " → ".join(parts)
 
 
-def target_text(h: dict[str, Any]) -> str:
-    return ("做到「已初改·待复核」后停下等用户" if h.get("target") == "review" else "做到定稿") + \
-           ("；允许派发子代理" if h.get("allowSubagents") else "；不允许派发子代理（由当前会话的主代理亲自处理）") + \
-           ("；" + store.FULL_CHECK_TEXT if h.get("fullCheck") else "")
+def target_text(h: dict[str, Any], lang: str | None = None) -> str:
+    """这批的要求：做到定稿还是停在待复核、能不能派子代理、要不要全量勾稽。"""
+    t = cli_text(lang)
+    out = t("cli.hand.target.review" if h.get("target") == "review" else "cli.hand.target.final")
+    out += t("cli.hand.subagents.ok" if h.get("allowSubagents") else "cli.hand.subagents.no")
+    if h.get("fullCheck"):
+        out += t("cli.hand.fullCheck")
+    return out
 
 
-def handoff_lines(state: dict[str, Any] | None) -> list[str]:
+def handoff_lines(state: dict[str, Any] | None, lang: str | None = None) -> list[str]:
     """「交给 Agent」提交的摘要行（附言是用户在页面上写给代理的话）。"""
+    t = cli_text(lang)
     if not state or not state.get("latest"):
         return []
     h = state["latest"]
-    line = (f"交给 Agent：最近一次是第 {h['seq']} 批，{STATUS_ZH.get(h.get('status'), h.get('status'))}"
-            f"（提交于 {h.get('at')}，当时未处理 {h.get('openCount')} 条）")
-    out = [line]
+    out = [t("cli.hand.latest", seq=h["seq"], status=label(t, STATUS_KEY.get(h.get("status"), ""), h.get("status")),
+             at=h.get("at"), count=h.get("openCount"))]
     if message := store.handoff_user_message(h):
-        out.append(f"用户附言：{message}")
+        out.append(t("cli.hand.userMessage", message=message))
     if h.get("status") == "done":
-        out.append(f"这批解决 {h.get('resolvedCount', 0)} 条" + (f"；处理摘要：{h['summary']}" if h.get("summary") else ""))
+        out.append(t("cli.hand.resolvedCount", count=h.get("resolvedCount", 0))
+                   + (t("cli.hand.summary", summary=h["summary"]) if h.get("summary") else ""))
     if state.get("total"):
-        out.append(f"处理记录：共 {state['total']} 批（notes.py batches 查看每批解决了哪些）")
+        out.append(t("cli.hand.history", count=state["total"]))
     if state.get("pending") or state.get("claimed") or state.get("review") or state.get("reviewing"):
-        out.append(f"待接收 {state.get('pending', 0)} 批、处理中 {state.get('claimed', 0)} 批、等待复核 {state.get('review', 0)} 批、"
-                   f"复核中 {state.get('reviewing', 0)} 批（处理中 / 复核中却没有代理在跑，多半是上次中断：处理完用 notes.py done 收尾）")
+        out.append(t("cli.hand.inFlight", pending=state.get("pending", 0), claimed=state.get("claimed", 0),
+                     review=state.get("review", 0), reviewing=state.get("reviewing", 0)))
     if state.get("drafted"):
-        out.append(f"已初改·待复核 {state['drafted']} 批：等用户在页面上请求复核或直接定稿")
+        out.append(t("cli.hand.drafted", count=state["drafted"]))
     for b in state.get("open") or []:
-        out.append(f"第 {b['seq']} 批（{STATUS_ZH.get(b.get('status'), b.get('status'))}）要求：{target_text(b)}"
-                   + ("。还没被接收：先 notes.py claim 接收再处理" if b.get("status") in ("pending", "review") else ""))
+        out.append(t("cli.hand.open", seq=b["seq"], status=label(t, STATUS_KEY.get(b.get("status"), ""), b.get("status")),
+                     target=target_text(b, lang))
+                   + (t("cli.hand.unclaimed") if b.get("status") in ("pending", "review") else ""))
     return out
 
 
@@ -118,71 +179,86 @@ def mark_numbers(notes: list[dict[str, Any]]) -> dict[str, int]:
     return out
 
 
-def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: int | None = None) -> str:
+def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: int | None = None,
+                 lang: str | None = None) -> str:
     """处理记录：每次「交给 Agent」算一批，列出提交、接收、收尾、这批解决了哪些批注和处理摘要（新的在前）。"""
+    t = cli_text(lang)
+    sep = t("cli.hand.itemSep")
     hist = state.get("history") or []
     by_id = {n.get("id"): n for n in notes}
-    out = [f"# 处理记录 · 共 {len(hist)} 批（已处理 {state.get('done', 0)}，处理中 {state.get('claimed', 0)}，"
-           f"等待接收 {state.get('pending', 0)}"
-           + "".join(f"，{STATUS_ZH[k]} {state[k]}" for k in ("drafted", "review", "reviewing") if state.get(k)) + "）"]
+    counts = t("cli.batch.counts", done=state.get("done", 0), claimed=state.get("claimed", 0),
+               pending=state.get("pending", 0))
+    for k in ("drafted", "review", "reviewing"):
+        if state.get(k):
+            counts += t("cli.batch.countsMore", status=label(t, STATUS_KEY.get(k, ""), k), count=state[k])
+    out = [t("cli.batch.title", total=len(hist), counts=counts, count=len(hist))]
     for h in hist[:limit] if limit else hist:
         who = h.get("doneBy") or h.get("claimedBy") or ""
-        out.append(f"\n## 第 {h.get('seq')} 批 · {STATUS_ZH.get(h.get('status'), h.get('status'))}" + (f"（{who}）" if who else ""))
-        out.append(f"提交：{h.get('at')}，当时未处理 {h.get('openCount')} 条"
-                   + (f"，涉及第 {'、'.join(map(str, h.get('pages') or []))} 页" if h.get("pages") else "")
-                   + (f"（等待接收期间又提交 {h['updates']} 次，已合并）" if h.get("updates") else ""))
+        out.append(t("cli.batch.item", seq=h.get("seq"),
+                     status=label(t, STATUS_KEY.get(h.get("status"), ""), h.get("status")),
+                     who=t("cli.batch.who", who=who) if who else ""))
+        out.append(t("cli.batch.submitted", at=h.get("at"), count=h.get("openCount"))
+                   + (t("cli.batch.pages", pages=sep.join(map(str, h.get("pages") or []))) if h.get("pages") else "")
+                   + (t("cli.batch.updates", count=h["updates"]) if h.get("updates") else ""))
         if message := store.handoff_user_message(h):
-            out.append(f"用户附言：{message}")
+            out.append(t("cli.hand.userMessage", message=message))
         if "target" in h:
-            out.append(f"要求：{target_text(h)}")
+            out.append(t("cli.batch.requirement", target=target_text(h, lang)))
         if h.get("alwaysSkills"):
-            out.append("常驻技能（提交时）：" + "、".join(f"{x.get('name')}（{store.ALWAYS_ZH.get(x.get('scope'), '全部批注')}）"
-                                                for x in h["alwaysSkills"] if isinstance(x, dict)))
+            out.append(t("cli.batch.alwaysLine", list=always_text(t, h["alwaysSkills"])))
         stages = [e for e in h.get("stages") or [] if isinstance(e, dict)]
         if not stages and h.get("claimedAt"):
-            out.append(f"接收：{h['claimedAt']}" + (f"　收尾：{h['doneAt']}" if h.get("doneAt") else ""))
+            out.append(t("cli.batch.claimedAt", at=h["claimedAt"])
+                       + (t("cli.batch.doneAt", at=h["doneAt"]) if h.get("doneAt") else ""))
         two = store.two_stage(h)
         for e in stages:
             if e.get("stage") == "accept":
-                out.append(f"用户直接定稿：{e.get('count', 0)} 条初改定为已处理（{e.get('at')}）")
+                out.append(t("cli.batch.acceptLine", count=e.get("count", 0), at=e.get("at")))
                 continue
-            name = STAGE_ZH.get(e.get("stage"), e.get("stage")) if two or e.get("stage") != "draft" else "处理"   # 单段流程不叫「初改」
-            line = f"{name}：{e.get('by') or ''} 接收 {e.get('claimedAt') or '—'}"
-            line += f"，收尾 {e['doneAt']}" if e.get("doneAt") else "（进行中）"
+            # 单段流程不叫「初改」，就叫处理
+            name = (label(t, STAGE_KEY.get(e.get("stage"), ""), e.get("stage")) if two
+                    or e.get("stage") != "draft" else t("cli.batch.stageName.single"))
+            line = t("cli.batch.stage", stage=name, by=e.get("by") or "") + t("cli.batch.stageClaim", at=e.get("claimedAt") or "—")
+            line += t("cli.batch.stageDone", at=e["doneAt"]) if e.get("doneAt") else t("cli.batch.stageLive")
             if two and e.get("stage") == "draft" and "draftedIds" in e and e.get("doneAt"):
-                line += f"；初改 {len(e['draftedIds'])} 条"
+                line += t("cli.batch.stageDrafted", count=len(e["draftedIds"]))
             if e.get("stage") == "review" and e.get("doneAt"):
-                line += f"；通过 {e.get('approved', 0)}、再改 {e.get('revised', 0)}、退回 {e.get('returned', 0)}、新处理 {e.get('resolved', 0)}"
+                line += t("cli.batch.stageReviewed", ok=e.get("approved", 0), revised=e.get("revised", 0),
+                          returned=e.get("returned", 0), resolved=e.get("resolved", 0))
             out.append(line)
             if e.get("summary") and e["summary"] != h.get("summary"):
-                out.append(f"  {name}摘要：{e['summary']}")
+                out.append(t("cli.batch.stageSummary", stage=name, summary=e["summary"]))
         if h.get("reviewMessage"):
-            out.append(f"请求复核时的附言：{h['reviewMessage']}")
+            out.append(t("cli.batch.reviewNote", message=h["reviewMessage"]))
         if "resolvedCount" in h:
-            pages = "、".join(map(str, h.get("resolvedPages") or []))
-            note = "（处理中，实时统计）" if h.get("live") else "（旧批次，按处理时间推算）" if h.get("estimated") else ""
-            out.append(f"解决 {h['resolvedCount']} 条" + (f"（第 {pages} 页）" if pages else "")
-                       + (f"；提交时的批注还剩 {h['leftOpen']} 条未处理" if h.get("leftOpen") else "") + note)
+            pages = sep.join(map(str, h.get("resolvedPages") or []))
+            note = t("cli.batch.live") if h.get("live") else t("cli.batch.estimated") if h.get("estimated") else ""
+            out.append(t("cli.batch.resolved", count=h["resolvedCount"])
+                       + (t("cli.batch.resolvedPages", pages=pages) if pages else "")
+                       + (t("cli.batch.leftOpen", count=h["leftOpen"]) if h.get("leftOpen") else "") + note)
         if h.get("summary"):
-            out.append(f"处理摘要：{h['summary']}")
+            out.append(t("cli.batch.summary", summary=h["summary"]))
         if h.get("draftedCount"):
-            out.append(f"已初改·待复核 {h['draftedCount']} 条：" + "、".join(f"`{x}`" for x in h.get("draftedIds") or []))
+            out.append(t("cli.batch.drafted", count=h["draftedCount"],
+                         list=sep.join(t("cli.batch.draftedItem", id=x) for x in h.get("draftedIds") or [])))
         for nid in h.get("resolvedIds") or []:
             n = by_id.get(nid)
             if not n:
-                out.append(f"- `{nid}`（这条批注已删除）")
+                out.append(t("cli.batch.deleted", id=nid))
                 continue
             body = str(n.get("text", "")).replace("\n", " ")
-            line = f"- `{nid}` 第 {n.get('page')} 页【{n.get('target') or '未指定'}】{body[:60]}{'…' if len(body) > 60 else ''}"
+            line = t("cli.batch.noteLine", id=nid, page=n.get("page"),
+                     target=_en_target(cli_catalog(lang), n.get("target")),
+                     body=body[:60] + ("…" if len(body) > 60 else ""))
             if n.get("status") != "resolved":
-                line += "（之后被重新打开）"
+                line += t("cli.batch.reopened")
             elif n.get("resolution"):
-                line += f"\n  处理说明：{n['resolution']}"
+                line += t("cli.batch.resolution", text=n["resolution"])
             if n.get("trail"):
-                line += f"\n  痕迹：{trail_text(n)}"
+                line += t("cli.batch.trail", text=trail_text(n, lang=lang))
             out.append(line)
     if not hist:
-        out.append("\n（还没有「交给 Agent」的记录）")
+        out.append(t("cli.batch.empty"))
     return "\n".join(out) + "\n"
 
 
@@ -291,6 +367,9 @@ def _to_markdown_en(doc: dict[str, Any], manifest: dict[str, Any], *, include_re
             parts.append(f"{label} = {path}")
         if parts:
             head.append(t("cli.show.sources", list="; ".join(parts)))
+    if always:
+        head.append(t("cli.hand.alwaysHead", list=always_text(t, always)))
+    head += handoff_lines(handoff, "en")   # 提交与要求：与页面同一含义，原始附言保持原文
     out = ["\n".join(head)]
     last = None
     for n in notes:
@@ -309,6 +388,11 @@ def _to_markdown_en(doc: dict[str, Any], manifest: dict[str, Any], *, include_re
         if n.get("quote"):
             origin = f" ({_en_target(cat, n['quoteFrom'])})" if n.get("quoteFrom") else ""
             line += f"\n  > {t('cli.show.quote')}{origin}: {n['quote']}"
+        # 处理说明与痕迹保持原文：Agent 要能看出上一批改了什么、谁改的
+        if n.get("status") in ("resolved", "drafted") and n.get("resolution"):
+            line += t("cli.batch.resolution", text=n["resolution"])
+        if n.get("trail"):
+            line += t("cli.batch.trail", text=trail_text(n, lang="en"))
         out.append(line)
     if not notes:
         out.append("\n" + t("cli.show.emptyList"))
@@ -319,9 +403,11 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
                 sources: dict[str, Path | None] | None = None, handoff: dict[str, Any] | None = None,
                 only: set[str] | None = None, always: list[dict[str, str]] | None = None,
                 locale: str | None = None) -> str:
-    if locale == "en":
+    lang = locale if locale in i18n.SUPPORTED else i18n.DEFAULT_LOCALE
+    if lang == "en":
         return _to_markdown_en(doc, manifest, include_resolved=include_resolved, page=page, sources=sources,
                                handoff=handoff, only=only, always=always)
+    t2 = cli_text(lang)
     texts = side_texts(sources)
     all_notes = doc["notes"]
     marks = mark_numbers(all_notes)
@@ -341,9 +427,8 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
         head.append("源文件（改稿改这里）：" + "；".join(f"{'报告' if k == 'report' else '讲稿'} = {v}"
                                                    for k, v in sources.items() if v))
     if always:
-        head.append("常驻技能（用户要求：每条批注处理前都按范围先调用，下面每条的「技能」里已列出）："
-                    + "、".join(f"{a['name']}（{store.ALWAYS_ZH[a['scope']]}）" for a in always))
-    head += handoff_lines(handoff)
+        head.append(t2("cli.hand.alwaysHead", list=always_text(t2, always)))
+    head += handoff_lines(handoff, lang)
     out = ["\n".join(head)]
     last = None
     for n in notes:
@@ -499,6 +584,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--note", default="", help="处理说明：改了哪里、怎么改的（页面上会显示）")
     r.add_argument("--by", default=default_agent(), help="处理人，页面上显示为「已处理 · 处理人」")
     r.add_argument("--seq", type=int, help="记在第几批名下；默认按批注归属自动找（同时有几批在处理时建议写明）")
+    r.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
     o = sub.add_parser("reopen", help="重新打开")
     o.add_argument("dir", type=str, help="审阅目录或审阅标识")
     o.add_argument("ids", nargs="+")
@@ -514,6 +600,7 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--by", default=default_agent(), help="接收人，页面上显示")
     w.add_argument("--stage", choices=("any", "draft", "review"), default="any",
                    help="等哪种：draft 新提交（初改）、review 请求复核的、any 都等（默认）")
+    w.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
     sk = sub.add_parser("skills", help="查看或设置技能目录（页面「技能」输入栏的候选）与常驻技能（每条批注按范围先调用）")
     sk.add_argument("dir", type=str, help="审阅目录或审阅标识")
     sk.add_argument("--set", nargs="*", metavar="名称=说明", help="整体替换为这些技能")
@@ -539,6 +626,7 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--draft", action="store_true", help="初改完成、交给复核（仅当用户允许派发子代理，由复核者接力时用）")
     g.add_argument("--final", action="store_true", help="初改阶段直接定稿（用户要求停在待复核时不允许）")
     dn.add_argument("--accept-rest", action="store_true", help="复核收尾时，没给结论的初改一并通过")
+    dn.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
     rv = sub.add_parser("review", help="复核结论：--ok 通过 / --revise 复核者再改 / --return 退回给用户拍板")
     rv.add_argument("dir", type=str, help="审阅目录或审阅标识")
     rv.add_argument("ids", nargs="+")
@@ -549,16 +637,19 @@ def main(argv: list[str] | None = None) -> int:
     rv.add_argument("--note", default="", help="理由：再改了什么 / 为什么要用户拍板（再改、退回必填）")
     rv.add_argument("--by", default=default_agent())
     rv.add_argument("--seq", type=int, help="复核的批次；默认按批注的初改批次")
+    rv.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
     df = sub.add_parser("diff", help="看初改动了源文件的哪些地方（按页列出）")
     df.add_argument("dir", type=str, help="审阅目录或审阅标识")
     df.add_argument("--batch", type=int, help="第几批；默认最近一个有快照的批次")
     df.add_argument("--to", choices=("draft", "current"), default="draft",
                     help="对比到：draft 初改收尾时（默认，没有就到当前）/ current 当前文件")
     df.add_argument("--page", type=int, help="只看第 N 页")
+    df.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
     bt = sub.add_parser("batches", help="处理记录：每次「交给 Agent」一批，各批解决了哪些批注、处理摘要")
     bt.add_argument("dir", type=str, help="审阅目录或审阅标识")
     bt.add_argument("--last", type=int, help="只看最近几批")
     bt.add_argument("--json", action="store_true", help="输出原始 JSON")
+    bt.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
     a = ap.parse_args(argv)
     try:
         d = ledger.resolve_dir(a.dir).resolve()   # 也接受审阅标识（或至少 4 位前缀）：从台账查目录
@@ -573,17 +664,19 @@ def main(argv: list[str] | None = None) -> int:
     if warn:
         print(f"警告：{warn}", file=sys.stderr)
 
-    if a.cmd == "show":
-        doc = store.load(d)
-        manifest = load_manifest(d)
-        stored = manifest.get("locale")
+    # 提交、处理记录与批注的输出按当前语言写：--locale 优先于 AE_LOCALE，再优先于审阅里保存的选择。
+    # 只输出 JSON 的 claim、以及导入与技能设置不在此列：语言选择非法时它们照旧工作
+    lang = i18n.DEFAULT_LOCALE
+    if a.cmd in LOCALIZED_CMDS:
         try:
-            lang = i18n.resolve_locale(
-                i18n.effective_choice(a.locale, os.environ.get("AE_LOCALE"), stored if isinstance(stored, str) else None),
-                system_languages=i18n.system_languages())
+            lang = cli_language(getattr(a, "locale", None), d)
         except i18n.LocaleError as exc:
             print(f"错误：{exc}", file=sys.stderr)
             return 2
+
+    if a.cmd == "show":
+        doc = store.load(d)
+        manifest = load_manifest(d)
         only = batch_note_ids(d, doc["notes"], a.batch) if a.batch else None
         if a.json:
             notes = [n for n in doc["notes"] if (a.all or n.get("status") != "resolved")
@@ -602,17 +695,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd in ("resolve", "reopen"):
         status = "resolved" if a.cmd == "resolve" else "open"
+        t = cli_text(lang)
         bad = 0
         for nid in a.ids:
             try:
                 _doc, n = store.set_status(d, nid, status, resolution=getattr(a, "note", ""), by=getattr(a, "by", default_agent()),
                                            seq=getattr(a, "seq", None))
-                print(f"{nid} → {NOTE_STATUS_ZH.get(n.get('status'), n.get('status'))}")
+                print(t("cli.hand.markResult", id=nid,
+                        status=label(t, NOTE_STATUS_KEY.get(n.get("status"), ""), n.get("status"))))
             except store.NotFound as e:
-                print(f"{nid}：{'没有这条批注' if str(e).strip(chr(39)) == nid else f'没有这一批（{e}）'}", file=sys.stderr)
+                print(t("cli.hand.noteMissing", id=nid) if str(e).strip(chr(39)) == nid
+                      else t("cli.hand.noteNoBatch", id=nid, why=e), file=sys.stderr)
                 bad += 1
             except store.NoteError as e:
-                print(f"{nid}：{e}", file=sys.stderr)
+                print(t("cli.hand.noteFailed", id=nid, why=e), file=sys.stderr)
                 bad += 1
         return 1 if bad else 0
     if a.cmd == "import":
@@ -646,7 +742,7 @@ def main(argv: list[str] | None = None) -> int:
                       + "。确认以导出为准就运行 notes.py skills 审阅目录 --always \"名称=范围\" …", file=sys.stderr)
         return 0
     if a.cmd == "wait":
-        return wait(d, a.timeout, a.interval, claim=not a.no_claim, by=a.by, stage=a.stage)
+        return wait(d, a.timeout, a.interval, claim=not a.no_claim, by=a.by, stage=a.stage, lang=lang)
     if a.cmd == "skills":
         def parse(items: list[str] | None) -> list[dict[str, str]]:
             out = []
@@ -708,43 +804,45 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"claimed": True, **{k: v for k, v in item.items() if k != "openIds"}}, ensure_ascii=False))
         return 0
     if a.cmd == "done":
+        t = cli_text(lang)
         try:
             item = store.handoff_done(d, seq=a.seq, summary=a.summary, by=a.by,
                                       mode="draft" if a.draft else "final" if a.final else None, accept_rest=a.accept_rest)
         except store.NotFound:
-            print("没有待处理或处理中的提交（用户还没点「交给 Agent」，或已全部标为已处理）。", file=sys.stderr)
+            print(t("cli.hand.doneMissing"), file=sys.stderr)
             return 1
         except store.NoteError as e:
-            print(f"没有收尾：{e}", file=sys.stderr)
+            print(t("cli.hand.doneRefused", why=e), file=sys.stderr)
             return 1
         if item["status"] in ("drafted", "review"):
             snapshot(d, item, "draft")
-            print(f"第 {item['seq']} 批 → 初改完成：{item.get('draftedCount', 0)} 条已初改·待复核。"
-                  + ("按用户要求停在这里：用户会在页面上看初改，再请求复核或直接定稿。" if item["status"] == "drafted"
-                     else f"已进入「等待复核」：由复核者 notes.py claim {d} --stage review 接手。"))
+            print(t("cli.hand.doneDrafted", seq=item["seq"], count=item.get("draftedCount", 0))
+                  + (t("cli.hand.doneStop") if item["status"] == "drafted"
+                     else t("cli.hand.doneReview", dir=d)))
             return 0
-        print(f"第 {item['seq']} 批 → 已处理：这批解决 {item.get('resolvedCount', 0)} 条"
-              + (f"，提交时的批注还剩 {item['leftOpen']} 条未处理" if item.get("leftOpen") else "")
-              + "。页面的处理记录里会显示这批和处理摘要。")
+        print(t("cli.hand.doneFinal", seq=item["seq"], count=item.get("resolvedCount", 0),
+                left=t("cli.hand.doneLeft", count=item["leftOpen"]) if item.get("leftOpen") else ""))
         if not item.get("resolvedCount"):
-            print("提示：这批没有统计到已处理的批注——改完的批注要用 notes.py resolve 逐条标记，处理记录才数得到。", file=sys.stderr)
+            print(t("cli.hand.doneNone"), file=sys.stderr)
         return 0
     if a.cmd == "review":
+        t = cli_text(lang)
         bad = 0
         for nid in a.ids:
             try:
                 _doc, n = store.review(d, nid, a.verdict, note=a.note, by=a.by, seq=a.seq)
-                print(f"{nid} → {ACTION_ZH[{'ok': 'approved', 'revise': 'revised', 'return': 'returned'}[a.verdict]]}"
-                      f"（{NOTE_STATUS_ZH.get(n.get('status'), n.get('status'))}）")
+                print(t("cli.hand.reviewResult", id=nid,
+                        action=label(t, ACTION_KEY[{"ok": "approved", "revise": "revised", "return": "returned"}[a.verdict]]),
+                        status=label(t, NOTE_STATUS_KEY.get(n.get("status"), ""), n.get("status"))))
             except store.NotFound:
-                print(f"{nid}：没有这条批注", file=sys.stderr)
+                print(t("cli.hand.noteMissing", id=nid), file=sys.stderr)
                 bad += 1
             except store.NoteError as e:
-                print(f"{nid}：{e}", file=sys.stderr)
+                print(t("cli.hand.noteFailed", id=nid, why=e), file=sys.stderr)
                 bad += 1
         return 1 if bad else 0
     if a.cmd == "diff":
-        return diff_cmd(d, a.batch, a.to, a.page)
+        return diff_cmd(d, a.batch, a.to, a.page, lang=lang)
     if a.cmd == "batches":
         state = store.handoff_state(d)
         if state.get("error"):
@@ -753,7 +851,7 @@ def main(argv: list[str] | None = None) -> int:
         if a.json:
             print(json.dumps(state, ensure_ascii=False, indent=2))
         else:
-            print(batches_text(state, store.load(d)["notes"], limit=a.last), end="")
+            print(batches_text(state, store.load(d)["notes"], limit=a.last, lang=lang), end="")
         return 0
     return 2
 
@@ -838,23 +936,25 @@ def _parts(kind: str, text: str) -> list[tuple[str, int, str]]:
     return [("all", 0, text)]
 
 
-def diff_cmd(d: Path, seq: int | None, to: str, page: int | None) -> int:
+def diff_cmd(d: Path, seq: int | None, to: str, page: int | None, lang: str | None = None) -> int:
+    t = cli_text(lang)
     root = d / SNAP_DIR
     if seq is None:   # 最近一个有接收时快照的批次
         have = sorted((int(p.name[6:]) for p in root.glob("batch-*") if p.name[6:].isdigit() and (p / "base").is_dir()), reverse=True)
         if not have:
-            print("还没有源文件快照：代理接收「交给 Agent」的新提交时才会存（notes.py wait / claim）。", file=sys.stderr)
+            print(t("cli.batch.diffNoSnapshot"), file=sys.stderr)
             return 1
         seq = have[0]
     base = root / f"batch-{seq}" / "base"
     if not base.is_dir():
-        print(f"第 {seq} 批没有源文件快照。", file=sys.stderr)
+        print(t("cli.batch.diffNoBatch", seq=seq), file=sys.stderr)
         return 1
     after_dir = root / f"batch-{seq}" / "draft"
     use_current = to == "current" or not after_dir.is_dir()
     sources = _sources(d) or {}
-    zh = {"report": "报告", "script": "讲稿"}
-    print(f"# 第 {seq} 批：源文件改动（{'接收时 → 当前文件' if use_current else '接收时 → 初改收尾时'}）")
+    side = {"report": "cli.show.source.report", "script": "cli.show.source.script"}
+    print(t("cli.batch.diffHead", seq=seq,
+            range=t("cli.batch.diffRangeNow" if use_current else "cli.batch.diffRangeDraft")))
     any_change = False
     for kind in ("report", "script"):
         if not (base / kind).is_file():
@@ -862,7 +962,7 @@ def diff_cmd(d: Path, seq: int | None, to: str, page: int | None) -> int:
         before = (base / kind).read_text(encoding="utf-8")
         src = sources.get(kind) if use_current else after_dir / kind
         if not src or not Path(src).is_file():
-            print(f"\n（{zh[kind]}：找不到对比用的文件）")
+            print(t("cli.batch.diffMissing", side=label(t, side[kind], kind)))
             continue
         after = Path(src).read_text(encoding="utf-8")
         if before == after:
@@ -874,14 +974,17 @@ def diff_cmd(d: Path, seq: int | None, to: str, page: int | None) -> int:
             prev = old.pop(key, (n, ""))[1]
             if prev != text:
                 any_change = True
-                print(f"\n## {zh[kind]} · 第 {n} 页" + (f"（键 {key[2:]}）" if key.startswith("k:") else ""))
-                print("\n".join(difflib.unified_diff(prev.splitlines(), text.splitlines(), "改前", "改后", lineterm="", n=2)))
+                print(t("cli.batch.diffPage", side=label(t, side[kind], kind), page=n,
+                        pageKey=t("cli.batch.diffKey", pageKey=key[2:]) if key.startswith("k:") else ""))
+                print("\n".join(difflib.unified_diff(prev.splitlines(), text.splitlines(),
+                                                     t("cli.batch.diffBefore"), t("cli.batch.diffAfter"),
+                                                     lineterm="", n=2)))
         for key, (n, text) in old.items():
             if page is None or n == page:
                 any_change = True
-                print(f"\n## {zh[kind]} · 第 {n} 页（这一页被删掉了）")
+                print(t("cli.batch.diffRemoved", side=label(t, side[kind], kind), page=n))
     if not any_change:
-        print("\n（没有改动）")
+        print(t("cli.batch.diffNone"))
     return 0
 
 
@@ -892,12 +995,14 @@ def _drop_wait_mark(mark: Path | None) -> None:
             mark.unlink()
 
 
-def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stage: str = "any") -> int:
+def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stage: str = "any",
+         lang: str | None = None) -> int:
     """阻塞等待「交给 Agent」提交。已经在等待中的提交（之前没人接收）会立即返回。"""
+    t = cli_text(lang)
+    sep = t("cli.hand.itemSep")
     state = store.handoff_state(d, full=False)
     if state.get("claimed") or state.get("reviewing"):
-        print(f"提示：有 {state.get('claimed', 0) + state.get('reviewing', 0)} 批处于「处理中 / 复核中」却没有收尾（可能上次中断，"
-              "也可能是另一个会话在处理）。确认是自己的再处理：notes.py show 查看，处理完 notes.py done --seq N。", file=sys.stderr)
+        print(t("cli.hand.waitHint", count=state.get("claimed", 0) + state.get("reviewing", 0)), file=sys.stderr)
     want = {"draft": ("pending",), "review": ("review",), "any": ("pending", "review")}[stage]
     deadline = time.monotonic() + timeout if timeout > 0 else None
     mark: Path | None = ledger.wait_file(d, os.getpid())   # 让 serve.py list 看得出「有代理在等这份审阅」
@@ -927,7 +1032,7 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
                 if item is not None:
                     break
             if deadline is not None and time.monotonic() >= deadline:
-                print(f"等待超时（{timeout:g} 秒），用户还没有点「交给 Agent」。")
+                print(t("cli.hand.timeout", seconds=f"{timeout:g}"))
                 return 3
             time.sleep(max(0.2, interval))
     except KeyboardInterrupt:
@@ -945,53 +1050,48 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
         sources = None
     if claim and item["stage"] == "draft":
         snapshot(d, item, "base")
-    sub_line = ("允许派发子代理：是——可以派便宜模型的子代理初改、强模型的子代理复核（见 SKILL.md「先改后审」）"
-                if item.get("allowSubagents") else
-                "允许派发子代理：否——由你（当前会话的主代理）亲自处理，不要派发子代理")
+    sub_line = t("cli.hand.subLine.ok" if item.get("allowSubagents") else "cli.hand.subLine.no")
     if item["stage"] == "review":
-        print(f"# 收到复核请求：第 {item['seq']} 批（初改由 {item.get('claimedBy') or '代理'} 完成）")
+        print(t("cli.hand.reviewHead", seq=item["seq"], by=item.get("claimedBy") or t("cli.hand.agentFallback")))
         if item.get("reviewMessage"):
-            print(f"用户附言（请求复核时）：{item['reviewMessage']}")
+            print(t("cli.hand.reviewNote", message=item["reviewMessage"]))
         if message := store.handoff_user_message(item):
-            print(f"用户附言（提交时）：{message}")
+            print(t("cli.hand.submitNote", message=message))
         if item.get("summary"):
-            print(f"初改摘要：{item['summary']}")
+            print(t("cli.hand.draftSummary", summary=item["summary"]))
         print(sub_line)
         if item.get("fullCheck"):
-            print(store.FULL_CHECK_TEXT)
-        print("你是复核者：逐条看初改（notes.py diff 看源文件改了哪里），给结论——"
-              f"notes.py review {d} <id> --ok / --revise --note \"再改了什么\" / --return --note \"要用户拍板的原因\"；"
-              f"提交时未处理、初改没动的批注也由你处理（notes.py resolve --seq {item['seq']}）。重建对照页，最后 "
-              f"notes.py done {d} --seq {item['seq']} --summary \"…\" 定稿。\n")
+            print(t("cli.hand.fullCheck").lstrip("；;").lstrip())
+        print(t("cli.hand.reviewerBrief", dir=d, seq=item["seq"]) + "\n")
         doc = store.load(d)
         print(to_markdown(doc, manifest, include_resolved=False, page=None, sources=sources,
-                          only=batch_note_ids(d, doc["notes"], item["seq"]), always=store.always_skills(d)), end="")
+                          only=batch_note_ids(d, doc["notes"], item["seq"]), always=store.always_skills(d),
+                          locale=lang), end="")
         return 0
-    pages = "、".join(str(p) for p in item.get("pages") or []) or "无"
-    print(f"# 收到「交给 Agent」第 {item['seq']} 批（{item.get('at')}）")
+    pages = sep.join(str(p) for p in item.get("pages") or []) or t("cli.hand.noPages")
+    print(t("cli.hand.head", seq=item["seq"], at=item.get("at")))
     if message := store.handoff_user_message(item):
-        print(f"用户附言：{message}")
-    print(f"要求：{target_text(item)}")
+        print(t("cli.hand.userMessage", message=message))
+    print(t("cli.batch.requirement", target=target_text(item, lang)))
     print(sub_line)
     alw = store.always_skills(d)
     if alw:
-        print("常驻技能（用户要求长期遵守）：" + "、".join(f"{x['name']}（{store.ALWAYS_ZH[x['scope']]}）" for x in alw)
-              + "——范围内的每条批注处理前都要先调用；下面每条的「技能」已列全")
+        print(t("cli.hand.alwaysLine", list=always_text(t, alw)))
     need = sorted({x for n in store.load(d)["notes"] if n.get("status", "open") == "open" for x in (n.get("skills") or [])})
     if need:
-        print(f"这批批注另外指定了技能：{'、'.join(need)}（处理对应批注前先调用）")
-    print(f"提交时未处理批注 {item.get('openCount')} 条，涉及第 {pages} 页。"
-          + ("已标为「处理中」，页面同步显示。" if claim else "（--no-claim：未改状态）"))
-    end_hint = ("页面上这些批注会显示「已初改·待复核」，用户看过后再请求复核或直接定稿" if item.get("target") == "review"
-                else "批注随即定为已处理")
-    print(f"处理完：逐条 notes.py resolve {d} <id> --seq {item['seq']} --note \"…\"，重建对照页，"
-          f"最后 notes.py done {d} --seq {item['seq']} --summary \"…\"（{end_hint}）\n")
+        print(t("cli.hand.moreSkills", list=sep.join(need)))
+    print(t("cli.hand.openCount", count=item.get("openCount"), pages=pages)
+          + (t("cli.hand.claimedNote") if claim else t("cli.hand.noClaimNote")))
+    end_hint = t("cli.hand.endReview" if item.get("target") == "review" else "cli.hand.endFinal")
+    print(t("cli.hand.finishLine", dir=d, seq=item["seq"], end=end_hint) + "\n")
     doc = store.load(d)
     mine = {n["id"] for n in doc["notes"] if n.get("id") in set(item.get("openIds") or []) and n.get("status", "open") == "open"}
     others = [n for n in doc["notes"] if n.get("id") in set(item.get("openIds") or []) and n.get("status") == "drafted"]
     if others:   # 提交后被别的批次初改了的：等那一批复核，不要动
-        print("这些批注已在别的批次初改、等待复核，本批不要处理：" + "、".join(f"`{n['id']}`（第 {n.get('draftBatch')} 批）" for n in others) + "\n")
-    print(to_markdown(doc, manifest, include_resolved=False, page=None, sources=sources, only=mine, always=alw), end="")
+        print(t("cli.hand.otherBatch", list=sep.join(
+            t("cli.hand.otherBatchItem", id=n["id"], batch=n.get("draftBatch")) for n in others)) + "\n")
+    print(to_markdown(doc, manifest, include_resolved=False, page=None, sources=sources, only=mine,
+                      always=alw, locale=lang), end="")
     return 0
 
 

@@ -92,7 +92,7 @@ annotation-everything moves this whole process into a single page that runs on y
   </tr>
 </table>
 
-The review page can use Simplified Chinese or English. Pass `--locale auto`, `zh-CN`, or `en` when building; the page can switch language too, and the choice stays in this browser. Annotation text stays as written, and the stored target values `报告`, `讲稿`, and `报告和讲稿` do not change with the language. Omitting `--locale` keeps a new review in Chinese and leaves an existing review on its saved choice. Adding, editing, deleting and reopening annotations, quotes, quick delete and replace, pins and area selection, re-annotating, styling, page numbers, the speaker-notes column, Q&A labels, the help text, tooltips and accessible names all follow the current language, as do the confirmation dialogs. The skill picker, the hand-off and batch history, and the import/export wording are still being adapted.
+The review page can use Simplified Chinese or English. Pass `--locale auto`, `zh-CN`, or `en` when building; the page can switch language too, and the choice stays in this browser. Annotation text stays as written, and the stored target values `报告`, `讲稿`, and `报告和讲稿` do not change with the language. Omitting `--locale` keeps a new review in Chinese and leaves an existing review on its saved choice. Adding, editing, deleting and reopening annotations, quotes, quick delete and replace, pins and area selection, re-annotating, styling, page numbers, the speaker-notes column, Q&A labels, the help text, tooltips and accessible names all follow the current language, as do the confirmation dialogs. So do the "Hand to the agent" dialog, the submission badge, the batch history, the "back to where you were" hint and the hints shown when the local service is not there. The submission options (finalize or stop at drafted, allow subagents, full check) do not depend on the interface language. The skill picker and the import/export wording are still being adapted.
 
 <details>
 <summary><b>Export and import annotations</b></summary>
@@ -266,7 +266,7 @@ See [references/formats.md](skill/annotation-everything/references/formats.md) f
 | `serve.py <review-dir>` | Start the local server; each review keeps its own dedicated port |
 | `serve.py list` / `status` / `forget` | List every review on this machine, show one review's status, remove a ledger entry you no longer need |
 | `serve.py check` | Run the server's security self-check |
-| `notes.py wait` / `claim` | Wait for a submission, or take one that is already waiting |
+| `notes.py wait` / `claim` | Wait for a submission, or take one that is already waiting. The submission, what it asks for and the batch history are written in the current language |
 | `notes.py show` / `resolve` / `reopen` | List annotations, mark them resolved, reopen them. `show --locale` chooses the reading language and beats `AE_LOCALE` and the review setting; `show --json` still exports the raw values |
 | `notes.py done` / `review` / `diff` | Close the current stage, record a review verdict, show page by page what the draft changed |
 | `notes.py batches` | Show batch history |
