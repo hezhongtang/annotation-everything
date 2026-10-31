@@ -1121,9 +1121,9 @@ function updateAlwaysBtn(){const n=(alwaysSkills||[]).length;$("alwaysN").textCo
   $("alwaysBtn").title=(n?tMsg("viewer.always.buttonList",{list:alwaysList()}):"")+tMsg("viewer.always.buttonTitle",{key:"G"})}
 updateAlwaysBtn();
 function alwaysRow(a){const d=document.createElement("div");d.className="arow";
-  d.innerHTML=`<input class="aname" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" placeholder="${escH(tMsg("viewer.always.rowPlaceholder"))}" value="${escH(a.name||"")}">`
-    +`<select class="ascope">${ALWAYS_SCOPES.map(k=>`<option value="${escH(k)}"${a.scope===k?" selected":""}>${escH(alwaysLabel(k))}</option>`).join("")}</select>`
-    +`<button class="adel" title="${escH(tMsg("viewer.always.removeRow"))}" aria-label="${escH(tMsg("viewer.always.removeRowAria"))}">×</button>`;
+  d.innerHTML=`<input class="aname" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" data-ph="viewer.always.rowPlaceholder" placeholder="${escH(tMsg("viewer.always.rowPlaceholder"))}" value="${escH(a.name||"")}">`
+    +`<select class="ascope">${ALWAYS_SCOPES.map(k=>`<option value="${escH(k)}" data-msg="${ALWAYS_LABEL[k]}"${a.scope===k?" selected":""}>${escH(alwaysLabel(k))}</option>`).join("")}</select>`
+    +`<button class="adel" data-title="viewer.always.removeRow" data-aria="viewer.always.removeRowAria" title="${escH(tMsg("viewer.always.removeRow"))}" aria-label="${escH(tMsg("viewer.always.removeRowAria"))}">×</button>`;
   d.querySelector(".adel").onclick=()=>d.remove();return d}
 let alwaysOpenSig="";
 function openAlways(){const box=$("alwaysRows");box.innerHTML="";alwaysOpenSig=JSON.stringify(alwaysSkills||[]);(alwaysSkills||[]).forEach(a=>box.appendChild(alwaysRow(a)));

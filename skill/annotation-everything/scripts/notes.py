@@ -273,6 +273,12 @@ def _to_markdown_en(doc: dict[str, Any], manifest: dict[str, Any], *, include_re
     def t(key: str, **params: object) -> str:
         return i18n.translate(cat, key, **params)
 
+    scope_keys = {"all": "viewer.always.scope.all", "报告": "viewer.always.scope.report",
+                  "讲稿": "viewer.always.scope.script", "style": "viewer.always.scope.style"}
+
+    def scope_label(scope: str) -> str:
+        return t(scope_keys[scope])
+
     all_notes = doc["notes"]
     titles = {p["n"]: p.get("title", "") for p in manifest.get("pages", [])}
     keys = {p["n"]: p.get("key", "") for p in manifest.get("pages", [])}
@@ -302,6 +308,9 @@ def _to_markdown_en(doc: dict[str, Any], manifest: dict[str, Any], *, include_re
             parts.append(f"{label} = {path}")
         if parts:
             head.append(t("cli.show.sources", list="; ".join(parts)))
+    if always:
+        head.append(t("cli.skills.agentAlways", list=t("cli.skills.listSep").join(
+            t("viewer.always.scopeItem", name=a["name"], scope=scope_label(a["scope"])) for a in always)))
     out = ["\n".join(head)]
     last = None
     for n in notes:
@@ -320,6 +329,16 @@ def _to_markdown_en(doc: dict[str, Any], manifest: dict[str, Any], *, include_re
         if n.get("quote"):
             origin = f" ({_en_target(cat, n['quoteFrom'])})" if n.get("quoteFrom") else ""
             line += f"\n  > {t('cli.show.quote')}{origin}: {n['quote']}"
+        active_always = (always or []) if n.get("status") != "resolved" else []
+        sources_by_name = {}
+        for a in store.always_for(n, active_always):
+            sources_by_name.setdefault(a["name"], t("cli.skills.standingSource", scope=scope_label(a["scope"])))
+        skills = store.skills_for(n, active_always)
+        if skills:
+            shown = t("cli.skills.listSep").join(
+                t("cli.skills.agentItem", name=name,
+                  source=sources_by_name.get(name, t("cli.skills.ownSource"))) for name, _ in skills)
+            line += "\n  " + t("cli.skills.agentSkills", list=shown)
         out.append(line)
     if not notes:
         out.append("\n" + t("cli.show.emptyList"))

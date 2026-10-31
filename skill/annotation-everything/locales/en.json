@@ -227,6 +227,11 @@
     "cli.skills.always": "Standing skills (called first for every annotation, by scope): {list}",
     "cli.skills.alwaysNone": "(none)",
     "cli.skills.badScope": "I do not recognise the standing-skill scope “{scope}”. Choose one of: {choices}",
-    "cli.skills.warnUnavailable": "A skill source is not reachable; keeping its previous entries"
+    "cli.skills.warnUnavailable": "A skill source is not reachable; keeping its previous entries",
+    "cli.skills.agentAlways": "Standing skills required by the user: call them before handling each annotation within scope. Each annotation lists its applicable skills below: {list}",
+    "cli.skills.agentSkills": "Skills: {list} — call these before handling this annotation",
+    "cli.skills.agentItem": "{name} ({source})",
+    "cli.skills.standingSource": "standing · {scope}",
+    "cli.skills.ownSource": "specified for this annotation"
   }
 }

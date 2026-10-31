@@ -201,6 +201,11 @@
     "cli.skills.always": "常驻技能（每条批注按范围先调用）：{list}",
     "cli.skills.alwaysNone": "（无）",
     "cli.skills.badScope": "常驻技能范围「{scope}」不认识，可选：{choices}",
-    "cli.skills.warnUnavailable": "有技能来源不可访问，保留此前该来源的记录"
+    "cli.skills.warnUnavailable": "有技能来源不可访问，保留此前该来源的记录",
+    "cli.skills.agentAlways": "常驻技能（用户要求：每条批注处理前都按范围先调用，下面每条的「技能」里已列出）：{list}",
+    "cli.skills.agentSkills": "技能：{list}——处理这条前先调用这些技能",
+    "cli.skills.agentItem": "{name}（{source}）",
+    "cli.skills.standingSource": "常驻·{scope}",
+    "cli.skills.ownSource": "这条指定"
   }
 }

@@ -327,6 +327,37 @@ def skill_i18n_checks(browser, tmp: Path):
         check(page.inner_text("#always .hint").startswith("In this review"), "英文弹窗说明")
         rows.nth(0).locator(".aname").fill("sample:sample")
         rows.nth(0).locator(".ascope").select_option("style")
+        draft_before = page.evaluate("""() => ({
+          rows: [...document.querySelectorAll('#alwaysRows .arow')].map(r =>
+            [r.querySelector('.aname').value, r.querySelector('.ascope').value]),
+          saved: JSON.stringify(alwaysSkills), opened: alwaysOpenSig
+        })""")
+        writes = []
+
+        def record_write(request):
+            if request.method in ("POST", "PATCH", "DELETE"):
+                writes.append(request.url)
+
+        page.on("request", record_write)
+        page.select_option("#localePick", "zh-CN")
+        check(rows.nth(0).locator(".ascope option").nth(3).inner_text() == "风格优化"
+              and rows.nth(0).locator(".aname").get_attribute("placeholder") == "技能名，如 humanizer-zh"
+              and rows.nth(0).locator(".adel").get_attribute("aria-label") == "去掉",
+              "弹窗开着切中文刷新范围、输入提示和删除名称")
+        page.select_option("#localePick", "en")
+        check(rows.nth(0).locator(".ascope option").nth(3).inner_text() == "Style"
+              and rows.nth(0).locator(".aname").get_attribute("placeholder") == "Skill name, e.g. humanizer-zh"
+              and rows.nth(0).locator(".adel").get_attribute("title") == "Remove this one",
+              "弹窗开着切英文刷新行文案")
+        draft_after = page.evaluate("""() => ({
+          rows: [...document.querySelectorAll('#alwaysRows .arow')].map(r =>
+            [r.querySelector('.aname').value, r.querySelector('.ascope').value]),
+          saved: JSON.stringify(alwaysSkills), opened: alwaysOpenSig
+        })""")
+        page.remove_listener("request", record_write)
+        check(draft_after == draft_before and not writes,
+              "弹窗切语言保留临时值和冲突快照、不保存或发送写请求")
+        rows.nth(0).locator(".aname").focus()
         page.keyboard.press("Control+Enter")
         check(wait_until(lambda: page.inner_text("#alwaysN") == "4", page, 5), "Ctrl+Enter 保存常驻技能")
 

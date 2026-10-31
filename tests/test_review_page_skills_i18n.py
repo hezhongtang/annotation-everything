@@ -81,6 +81,11 @@ SKILL_KEYS = {
     "cli.skills.alwaysNone": False,
     "cli.skills.badScope": False,
     "cli.skills.warnUnavailable": False,
+    "cli.skills.agentAlways": False,
+    "cli.skills.agentSkills": False,
+    "cli.skills.agentItem": False,
+    "cli.skills.standingSource": False,
+    "cli.skills.ownSource": False,
 }
 
 # 常驻技能范围的存储值：界面只改显示，这三种写法在中英文下必须一致
@@ -548,6 +553,36 @@ class AgentSnapshotTests(unittest.TestCase):
                              ["讲稿", "报告"] if locale == "zh-CN" else ["Speaker notes", "Report"])
             self.assertEqual([n for n, _ in store.skills_for(note, always)],
                              [n for n, _ in zh], "适用技能名单不随语言变")
+
+    def test_show_preserves_applicable_skills_and_sources_in_both_languages(self):
+        run_skills(self.out, "--always", "humanizer-zh=讲稿", "checker=报告", "stylish=style", "every=all",
+                   "sample:sample=报告", "sample:sample=讲稿")
+        before = (self.out / "notes.json").read_bytes()
+        for locale in i18n.SUPPORTED:
+            result = subprocess.run(
+                [sys.executable, str(SCRIPTS / "notes.py"), "show", str(self.out), "--locale", locale],
+                capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            # Read the output given to the agent, not only the matching helper's result.
+            blocks = re.split(r"\n- `", result.stdout)[1:]
+            self.assertEqual(len(blocks), 2)
+            for name in ("humanizer-zh", "checker", "every", "sample:sample", "润色（中文）"):
+                self.assertIn(name, blocks[0])
+            self.assertNotIn("stylish", blocks[0])
+            self.assertEqual(blocks[0].count("sample:sample"), 1, "同名多范围及本条指定仍只调用一次")
+            for name in ("checker", "stylish", "every", "sample:sample"):
+                self.assertIn(name, blocks[1])
+            self.assertNotIn("humanizer-zh", blocks[1])
+            self.assertNotIn("润色（中文）", blocks[1])
+            if locale == "en":
+                self.assertIn("Standing skills required by the user", result.stdout)
+                self.assertIn("humanizer-zh (standing · Speaker notes)", blocks[0])
+                self.assertIn("润色（中文） (specified for this annotation)", blocks[0])
+                self.assertIn("call these before handling this annotation", blocks[0])
+            else:
+                self.assertIn("常驻技能（用户要求", result.stdout)
+                self.assertIn("humanizer-zh（常驻·讲稿）", blocks[0])
+        self.assertEqual((self.out / "notes.json").read_bytes(), before, "阅读不修改批注与时间戳")
 
     def test_rebuild_keeps_manual_catalog_and_always(self):
         run_skills(self.out, "--add", "manual=手工说明", "--always", "manual=报告")
