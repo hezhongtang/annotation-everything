@@ -26,6 +26,7 @@ os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不�
 os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-test-user-")      # 技能扫描只使用合成目录
 os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
 os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")
+os.environ.pop("AE_LOCALE", None)   # 界面语言由各用例显式给定，不跟随开发者的 shell
 
 import build_viewer  # noqa: E402
 import notes as notes_cli  # noqa: E402

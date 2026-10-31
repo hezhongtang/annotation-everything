@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""对照 PPTX 字体声明与本机字体枚举；不修改或解压源文件。"""
+"""对照 PPTX 字体声明与本机字体枚举；不修改或解压源文件。
+
+语言：`--locale auto|zh-CN|en` 优先于环境变量 AE_LOCALE；都没有则中文，只有 auto 才读
+LC_ALL / LC_MESSAGES / LANG。字体名、来源路径与系统原始错误保持原文，只补本地化上下文。
+"""
 from __future__ import annotations
 
 import argparse
@@ -12,11 +16,40 @@ import xml.etree.ElementTree as ET
 import zlib
 import zipfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import i18n  # noqa: E402
+
 PART = re.compile(r"^ppt/(?:slides/slide\d+|slideMasters/slideMaster\d+|slideLayouts/slideLayout\d+|theme/theme\d+)\.xml$")
 MAX_PART_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_PARTS = 3000
 TOOL_TIMEOUT = 10
+
+# 当前界面语言：main() 按共同契约解析后设置；未设置前保持中文（旧调用行为不变）
+_LOCALE = i18n.DEFAULT_LOCALE
+
+
+def T(key: str, **params: object) -> str:
+    """按当前语言取一条消息；缺译时回退另一种语言（见 locales/README.md 的契约）。"""
+    return i18n.Translator(_LOCALE)(key, **params)
+
+
+def set_locale(locale: str) -> None:
+    global _LOCALE
+    _LOCALE = locale
+
+
+def explicit_locale(argv) -> object:
+    """从命令行里取出 --locale 的值；没写返回 None。"""
+    argv = list(argv or [])
+    for index, token in enumerate(argv):
+        if token == "--":
+            break
+        if token == "--locale":
+            return argv[index + 1] if index + 1 < len(argv) else ""
+        if token.startswith("--locale="):
+            return token.partition("=")[2]
+    return None
 
 
 class CheckError(Exception):
@@ -53,21 +86,21 @@ def declared_fonts(path: Path) -> tuple[list[str], list[str], list[str]]:
         with zipfile.ZipFile(path) as archive:
             parts = [info for info in archive.infolist() if PART.fullmatch(info.filename)]
             if not parts:
-                raise CheckError("PPTX 中没有可读取的幻灯片、母版、布局或主题 XML")
+                raise CheckError(T("font.err.pptxNone"))
             if len(parts) > MAX_PARTS or sum(info.file_size for info in parts) > MAX_TOTAL_BYTES:
-                raise CheckError("PPTX 字体相关 XML 过多或过大")
+                raise CheckError(T("font.err.pptxTooBig"))
             for info in parts:
                 if info.file_size > MAX_PART_BYTES:
-                    raise CheckError(f"PPTX 中的 {info.filename} 过大")
+                    raise CheckError(T("font.err.partTooBig", name=info.filename))
                 data = archive.read(info)
                 if b"\x00" in data:
-                    raise CheckError(f"PPTX 中的 {info.filename} 包含不支持的 XML 编码")
+                    raise CheckError(T("font.err.partEncoding", name=info.filename))
                 if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
-                    raise CheckError(f"PPTX 中的 {info.filename} 包含不支持的 XML 声明")
+                    raise CheckError(T("font.err.partDoctype", name=info.filename))
                 try:
                     xml = ET.fromstring(data)
                 except ET.ParseError as e:
-                    raise CheckError(f"PPTX 中的 {info.filename} 无法解析：{e}") from e
+                    raise CheckError(T("font.err.partParse", name=info.filename, detail=e)) from e
                 parents = {child: parent for parent in xml.iter() for child in parent}
                 for element in xml.iter():
                     face = (element.attrib.get("typeface") or "").strip()
@@ -85,11 +118,11 @@ def declared_fonts(path: Path) -> tuple[list[str], list[str], list[str]]:
                         faces = {_local(child.tag): (child.attrib.get("typeface") or "").strip()
                                  for child in (props.iter() if props is not None else ())}
                         if not any(faces.values()):
-                            unresolved.add("部分文本的字体继承未解析")
+                            unresolved.add(T("font.unresolved.inherit"))
                         elif any(not faces.get(slot) for slot in _theme_slots(element.text)):
-                            unresolved.add("部分非拉丁文字依赖主题的东亚或复杂文种字体")
+                            unresolved.add(T("font.unresolved.slot"))
     except (OSError, zipfile.BadZipFile, RuntimeError, zipfile.LargeZipFile, NotImplementedError, EOFError, zlib.error) as e:
-        raise CheckError(f"无法读取 PPTX：{e}") from e
+        raise CheckError(T("font.err.pptxUnreadable", detail=e)) from e
     by_name = lambda names: sorted(names, key=str.casefold)  # noqa: E731
     return by_name(declared), by_name(unresolved), by_name(fallbacks - declared)
 
@@ -103,35 +136,35 @@ def installed_fonts() -> tuple[set[str], bool]:
         result = subprocess.run(["fc-list", "--format=%{family}\\n"], capture_output=True, text=True,
                                 errors="replace", timeout=TOOL_TIMEOUT, check=False)
     except FileNotFoundError as e:
-        raise CheckError("找不到 fc-list，无法枚举字体；请安装 fontconfig 后重试") from e
+        raise CheckError(T("font.err.noFcList")) from e
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise CheckError(f"字体枚举失败或超时：{e}") from e
+        raise CheckError(T("font.err.fcListFailed", detail=e)) from e
     if result.returncode != 0:
-        raise CheckError("fc-list 字体枚举失败，请检查工具和本机字体配置")
+        raise CheckError(T("font.err.fcListExit"))
     fonts = {normal(name) for line in result.stdout.splitlines() for name in line.split(",") if name.strip()}
     if not fonts:
-        raise CheckError("fc-list 字体枚举为空，无法确认本机字体")
+        raise CheckError(T("font.err.fcListEmpty"))
     return fonts, bool(result.stderr.strip())
 
 
 def pdf_fonts(path: Path) -> tuple[list[dict[str, str]], bool]:
     if not path.is_file():
-        raise CheckError("PDF 文件不存在或无法读取")
+        raise CheckError(T("font.err.pdfMissing"))
     try:
         result = subprocess.run(["pdffonts", str(path.resolve())], capture_output=True, text=True,
                                 errors="replace", timeout=TOOL_TIMEOUT, check=False)
     except FileNotFoundError as e:
-        raise CheckError("找不到 pdffonts，无法检查 PDF 字体；请安装 poppler 后重试") from e
+        raise CheckError(T("font.err.noPdffonts")) from e
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise CheckError(f"PDF 字体检查失败或超时：{e}") from e
+        raise CheckError(T("font.err.pdfFailed", detail=e)) from e
     if result.returncode != 0:
-        raise CheckError("pdffonts 无法读取 PDF，请检查文件和工具")
+        raise CheckError(T("font.err.pdfUnreadable"))
     lines = result.stdout.splitlines()
     if len(lines) < 2 or not lines[0].lstrip().startswith("name"):
-        raise CheckError("无法识别 pdffonts 的输出，请手工核查")
+        raise CheckError(T("font.err.pdfHeader"))
     cols = list(re.finditer(r"-+", lines[1]))
     if len(cols) < 4:
-        raise CheckError("无法识别 pdffonts 的表头，请手工核查")
+        raise CheckError(T("font.err.pdfColumns"))
     rows = []
     for raw in lines[2:]:
         raw = "".join(ch if ch == "\t" or ord(ch) >= 32 and ord(ch) != 127 else " " for ch in raw)
@@ -151,16 +184,16 @@ def pdf_fonts(path: Path) -> tuple[list[dict[str, str]], bool]:
 
 def report_pdf(rows: list[dict[str, str]], declared: list[str], fallbacks: list[str] = ()) -> bool:
     """输出 PDF 证据；返回是否需要人工核查。主题备选字体可用于对应名称，但不要求出现。"""
-    print("PDF 字体证据（pdffonts）：")
+    print(T("font.pdfTitle"))
     if not rows:
-        print("- 无可枚举字体资源；可能是图片或轮廓化文字，待人工核查。")
+        print(T("font.pdfEmpty"))
         return True
     declared_by_name = {normal(name): name for name in [*declared, *fallbacks]}
     matched: set[str] = set()
     review = False
     for row in rows:
         if "raw" in row:
-            print(f"- {row['raw']}：输出列无法确认，待人工核查")
+            print(T("font.pdfRaw", raw=row['raw']))
             review = True
             continue
         name = row["name"]
@@ -171,25 +204,60 @@ def report_pdf(rows: list[dict[str, str]], declared: list[str], fallbacks: list[
             matched.add(key)
         if not known or row["emb"] != "yes":
             review = True
-        verdict = "按名称对应声明" if known and row["emb"] == "yes" else "待人工核查"
-        print(f"- {name} | type={row['type']} | encoding={row['encoding']} | emb={row['emb']} | sub={row['sub']} | uni={row['uni']} | {verdict}")
+        verdict = T("font.pdfVerdict.known" if known and row["emb"] == "yes" else "font.pdfVerdict.review")
+        print(T("font.pdfRow", name=name, type=row['type'], encoding=row['encoding'],
+                emb=row['emb'], sub=row['sub'], uni=row['uni'], verdict=verdict))
     unmatched = [name for name in declared if normal(name) not in matched]
     if unmatched:
-        print("未按名称对应的 PPTX 声明：" + "、".join(unmatched) + "；可能未使用、名称不同或被替换，待人工核查。")
+        print(T("font.pdfUnmatched", names=T("cli.ae.listSeparator").join(unmatched)))
         review = True
-    print("名称一致也不能证明所有字形未被替换；别名、样式、轮廓化和图片内容都需要人工核查。")
+    print(T("font.caveat"))
     return review
 
 
+class LocalizedParser(argparse.ArgumentParser):
+    """帮助、用法与错误消息都走当前语言；参数名与合法取值保持原文。"""
+
+    def error(self, message: str):
+        self.print_usage(sys.stderr)
+        text = str(message).strip()
+        match = re.match(r"^argument (\S+): expected one argument$", text)
+        if match:
+            print(T("font.err.missingValue", name=match.group(1)), file=sys.stderr)
+        elif text.startswith("the following arguments are required:"):
+            print(T("font.err.missingArgument"), file=sys.stderr)
+        elif text.startswith("unrecognized arguments:"):
+            print(T("font.err.unknownArgument",
+                    detail=text.partition(":")[2].strip()), file=sys.stderr)
+        else:
+            print(T("font.err.generic", detail=text), file=sys.stderr)
+        sys.exit(2)
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="检查 PPTX 声明字体与本机字体枚举")
-    ap.add_argument("pptx", type=Path, help="待转换的 PPTX 文件")
-    ap.add_argument("--pdf", type=Path, help="可选：转换后的 PDF，使用 pdffonts 列出字体证据")
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # 先按共同契约定语言，再建解析器：帮助、参数说明与错误消息才能用同一种语言
+    try:
+        set_locale(i18n.cli_locale(explicit_locale(argv)))
+    except i18n.LocaleError as exc:
+        set_locale(i18n.DEFAULT_LOCALE)
+        params = getattr(exc, "params", {}) or {}
+        value = params.get("locale") if isinstance(params, dict) else None
+        if isinstance(value, str) and not value.strip():
+            print(T("font.err.emptyLocale"), file=sys.stderr)
+        else:
+            print(T("font.err.invalidLocale", name="" if value is None else str(value)), file=sys.stderr)
+        return 2
+    ap = LocalizedParser(description=T("font.usage"), add_help=False)
+    ap.add_argument("-h", "--help", action="help", default=argparse.SUPPRESS, help=T("font.opt.help"))
+    ap.add_argument("--locale", metavar="LANG", help=T("font.opt.locale"))
+    ap.add_argument("pptx", type=Path, help=T("font.arg.pptx"))
+    ap.add_argument("--pdf", type=Path, help=T("font.arg.pdf"))
     args = ap.parse_args(argv)
     try:
         fonts, unresolved, fallbacks = declared_fonts(args.pptx)
     except CheckError as e:
-        print(f"错误：{e}", file=sys.stderr)
+        print(T("font.error", detail=e), file=sys.stderr)
         return 2
     error = None
     font_warning = False
@@ -197,27 +265,30 @@ def main(argv: list[str] | None = None) -> int:
         installed, font_warning = installed_fonts()
     except CheckError as e:
         installed, error = None, e
-    print("PPTX 字体声明：")
+    print(T("font.declaredTitle"))
     missing = []
     for font in fonts:
         found = installed is not None and normal(font) in installed
         if installed is not None and not found:
             missing.append(font)
-        result = "无法确认" if installed is None else ("本次枚举找到" if found else "本次枚举未检出（可能未使用）")
-        print(f"- {font}：{result}")
+        result = (T("font.declared.unknown") if installed is None
+                  else T("font.declared.found" if found else "font.declared.missing"))
+        print(T("font.declaredRow", font=font, result=result))
     if fallbacks:
-        head = f"主题按文字脚本的备选字体 {len(fallbacks)} 项（仅在对应文字出现且未另行指定字体时使用，不计入未检出）："
+        head = T("font.themeHead", count=len(fallbacks))
         if installed is None:
-            print(head + "无法确认")
+            print(head + T("font.themeUnknown"))
         else:
             absent = [font for font in fallbacks if normal(font) not in installed]
-            print(head + (f"本次枚举未检出 {len(absent)} 项：" + "、".join(absent) if absent else "本次枚举全部找到"))
+            print(head + (T("font.themeMissing", count=len(absent),
+                            names=T("font.listSeparator").join(absent)) if absent
+                          else T("font.themeAllFound")))
     if unresolved:
-        print("无法解析的字体引用或继承：" + "、".join(unresolved))
+        print(T("font.unresolvedHead", names=T("font.listSeparator").join(unresolved)))
     if not fonts and not unresolved:
-        print("未发现显式字体声明，继承的字体无法确认。")
-    print("本机字体枚举不能证明 LibreOffice 实际使用了这些字体；未使用的主题声明不代表页面缺字。")
-    print("转换前核查未检出或未知项；补齐字体后重新转换，并逐页检查换行、间距和遮挡。")
+        print(T("font.noDeclared"))
+    print(T("font.caveat2"))
+    print(T("font.next"))
     pdf_review = False
     pdf_error = None
     pdf_warning = False
@@ -228,13 +299,13 @@ def main(argv: list[str] | None = None) -> int:
         except CheckError as e:
             pdf_error = e
     if font_warning:
-        print("警告：字体枚举工具输出警告，结果可能不完整，待人工核查。", file=sys.stderr)
+        print(T("font.warn"), file=sys.stderr)
     if pdf_warning:
-        print("警告：PDF 字体工具输出警告，结果可能不完整，待人工核查。", file=sys.stderr)
+        print(T("font.warnPdf"), file=sys.stderr)
     if error:
-        print(f"错误：{error}", file=sys.stderr)
+        print(T("font.error", detail=error), file=sys.stderr)
     if pdf_error:
-        print(f"错误：{pdf_error}", file=sys.stderr)
+        print(T("font.error", detail=pdf_error), file=sys.stderr)
     if error or pdf_error:
         return 2
     return 1 if missing or unresolved or not fonts or pdf_review or font_warning or pdf_warning else 0

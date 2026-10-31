@@ -153,7 +153,11 @@ class AeCliTests(unittest.TestCase):
         p, doc = self.doctor_json()
         self.assertIn(p.returncode, (0, 1))     # 退出码取决于本机真实运行状态，结构则恒定
         for r in doc["results"]:
-            self.assertEqual(set(r), {"code", "category", "level", "message", "fix_command"})
+            # 旧消费者读的五个键原样保留；status / category_id 是 #33 新增的语言无关判定字段
+            self.assertEqual(set(r) - {"status", "category_id"},
+                             {"code", "category", "level", "message", "fix_command"})
+            self.assertIn(r["status"], ("pass", "warn", "fail"))
+            self.assertIn(r["category_id"], ("install", "tools", "dev", "runtime"))
         self.assertEqual(set(doc["summary"]), {"pass", "warn", "fail"})
 
     def test_doctor_text_output_groups_by_category(self):
