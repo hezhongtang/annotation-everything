@@ -70,6 +70,18 @@ class TestCleanup:
             for d in dirs:
                 shutil.rmtree(d, ignore_errors=True)
 
+    def stop_procs(self) -> None:
+        """只回收登记的进程，不动目录。
+
+        场景以 error 结束时用它立即停掉遗留的服务器，兑现注册表「服务用后即停」的
+        隔离声明；临时目录仍留给进程退出时统一清理（跨场景共享的目录不能中途删）。
+        """
+        with _signals_deferred():
+            while self._procs:
+                proc = self._procs[0]
+                reap(proc, timeout=self.terminate_timeout)
+                self._procs.remove(proc)
+
 
 @contextlib.contextmanager
 def _signals_deferred(signals=BLOCKED_SIGNALS):

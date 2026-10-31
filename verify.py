@@ -960,6 +960,10 @@ def classify_group(group: Group, code: Optional[int], timed_out: bool, counts: O
         return UNAVAILABLE, None
     if code < 0:
         return INTERRUPTED, EXIT_INTERRUPTED_BASE + (-code)
+    if code == EXIT_INTERRUPTED_BASE + int(signal.SIGINT):
+        # 子进程没有被信号击杀，而是按 128+SIGINT 约定自行退出（浏览器脚本的中断路径）：
+        # 与被击杀同样视为中断，不冒充失败，更不冒充通过
+        return INTERRUPTED, code
     if interrupted:
         return INTERRUPTED, EXIT_INTERRUPTED_BASE + int(signal.SIGINT)
     if evidence_missing is not None:

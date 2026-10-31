@@ -82,16 +82,24 @@ import sys
 import time
 
 STATUS = os.environ.get("SYNTH_SCENARIO_STATUS", "passed")
-scenarios = [
-    {"id": "skill-search", "status": "passed", "total": 2},
-    {"id": "server-mode", "status": STATUS, "total": 2},
-]
+if STATUS == "interrupted":
+    # 中断形态：当前场景记 interrupted（保留已执行的检查），其后记 not_run，进程以 130 退出
+    scenarios = [
+        {"id": "skill-search", "status": "passed", "total": 2},
+        {"id": "server-mode", "status": "interrupted", "total": 1},
+        {"id": "css-fidelity", "status": "not_run", "total": 0},
+    ]
+else:
+    scenarios = [
+        {"id": "skill-search", "status": "passed", "total": 2},
+        {"id": "server-mode", "status": STATUS, "total": 2},
+    ]
 records = []
 passed_total = 0
 for scenario in scenarios:
     started = time.time()
     time.sleep(0.05)
-    failed = scenario["status"] != "passed"
+    failed = scenario["status"] == "failed"
     print("=== 场景 %s ===" % scenario["id"])
     for index in range(scenario["total"]):
         print("%s  合成检查 %s-%d" % ("FAIL" if failed else "PASS", scenario["id"], index))
@@ -108,6 +116,8 @@ print("\\n%d/%d 通过" % (passed_total, total))
 print("AE-SCENARIOS: " + json.dumps({
     "mode": "partial", "source": "--only",
     "plan": [item["id"] for item in records], "scenarios": records}, ensure_ascii=False))
+if STATUS == "interrupted":
+    sys.exit(130)
 sys.exit(0 if passed_total == total else 1)
 '''
 
@@ -901,6 +911,21 @@ class BrowserScenarioTests(VerifyEntryTestCase):
         self.assertEqual(group["outcome"], "failed")
         statuses = {item["id"]: item["status"] for item in group["scenarios"]}
         self.assertEqual(statuses, {"skill-search": "passed", "server-mode": "failed"})
+
+    def test_browser_exit_130_is_interrupted_not_failed(self):
+        """子进程以 130 自行退出（浏览器脚本的中断路径）时按中断归类，不冒充失败。"""
+        self.use_scenario_browser()
+        p = self.repo.run_verify("run", "--group", "browser",
+                                 extra_env={"SYNTH_SCENARIO_STATUS": "interrupted"})
+        self.assertEqual(p.returncode, 130, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["outcome"], "interrupted", p.stdout)
+        self.assertEqual(group["exit_status"], 130)
+        statuses = {item["id"]: item["status"] for item in group["scenarios"]}
+        self.assertEqual(statuses, {"skill-search": "passed", "server-mode": "interrupted",
+                                    "css-fidelity": "not_run"})
+        self.assertFalse(record["result"]["usable_as_evidence"], "中断不能作为通过证据")
 
 
 class RelatedUnitTests(VerifyEntryTestCase):

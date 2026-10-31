@@ -2449,13 +2449,14 @@ def main() -> int:
     except scenarios.UsageError as exc:
         print("浏览器场景参数错误：%s" % exc, file=sys.stderr)
         return 2
+    problem = scenarios.ensure_runners(SCENARIO_RUNNERS)
+    if problem is not None:
+        # 一致性检查先于 --list 返回：注册表漏挂执行函数时清单也不许照常展示
+        print("场景注册表与执行函数不一致：%s" % problem, file=sys.stderr)
+        return 2
     if request.listing:
         print(scenarios.format_listing())
         return 0
-    problem = scenarios.ensure_runners(SCENARIO_RUNNERS)
-    if problem is not None:
-        print("场景注册表与执行函数不一致：%s" % problem, file=sys.stderr)
-        return 2
     print(scenarios.format_plan(request) + "\n", flush=True)
 
     tmp = Path(tempfile.mkdtemp(prefix="ae-e2e-"))
@@ -2471,6 +2472,7 @@ def main() -> int:
                     scenario = scenarios.scenario_by_id(sid)
                     base = len(RESULTS)
                     started = time.monotonic()
+                    started_wall = iso_now()
                     print("=== 场景 %s：%s ===" % (sid, scenario.title), flush=True)
                     status, message = "passed", None
                     try:
@@ -2478,9 +2480,15 @@ def main() -> int:
                     except KeyboardInterrupt:
                         status, interrupted = "interrupted", True
                     except Exception as exc:   # 场景互相隔离：记下错误继续后面的场景
-                        status = "error"
-                        message = "%s: %s" % (type(exc).__name__, exc)
-                        traceback.print_exc()
+                        if not browser.is_connected():
+                            # Ctrl-C 的 SIGINT 同时到达本进程与浏览器驱动，驱动先死时
+                            # TargetClosedError 会先于 KeyboardInterrupt 抛出：按中断处理，
+                            # 不把用户取消记成错误，也不让后续场景逐个空跑成 error
+                            status, interrupted = "interrupted", True
+                        else:
+                            status = "error"
+                            message = "%s: %s" % (type(exc).__name__, exc)
+                            traceback.print_exc()
                     done = RESULTS[base:]
                     failed = sum(1 for good, _ in done if not good)
                     if status == "passed" and failed:
@@ -2488,10 +2496,13 @@ def main() -> int:
                     records.append({"id": sid, "status": status,
                                     "checks": {"total": len(done), "passed": len(done) - failed,
                                                "failed": failed},
-                                    "started_at": iso_now(), "ended_at": iso_now(),
+                                    "started_at": started_wall, "ended_at": iso_now(),
                                     "seconds": round(time.monotonic() - started, 6)})
                     if message:
                         records[-1]["message"] = message
+                    if status == "error":
+                        # 错误场景遗留的服务器立即停掉，不留到进程退出；目录仍由退出清理统一收
+                        CLEANUP.stop_procs()
                     ran.add(sid)
                     print("--- 场景 %s 结束：%s（检查 %d/%d，%.1f 秒）---\n" % (
                         sid, SCENARIO_STATUS_LABELS[status], len(done) - failed, len(done),

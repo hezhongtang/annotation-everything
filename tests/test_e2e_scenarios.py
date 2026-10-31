@@ -158,6 +158,24 @@ class ListingTests(unittest.TestCase):
             self.assertIn("全量必选", text)
         self.assertIn("--delivery-only", text, "清单里要能看到旧参数别名")
 
+    def test_list_rejects_scene_selections(self):
+        """--list 只打印清单，与任何场景选择冲突都在解析期报错（issue #53 审查 R7）。"""
+        for argv in (["--list", "--only", "skill-i18n"], ["--list", "--skills-only"]):
+            with self.subTest(argv=argv):
+                with self.assertRaises(reg.UsageError) as ctx:
+                    reg.resolve_request(argv)
+                self.assertIn("--list 只打印清单", str(ctx.exception))
+
+    def test_only_as_final_argument_requires_a_value(self):
+        with self.assertRaises(reg.UsageError) as ctx:
+            reg.resolve_request(["--only"])
+        self.assertIn("需要场景 ID", str(ctx.exception))
+
+    def test_only_value_shaped_like_a_flag_is_an_unknown_scene(self):
+        with self.assertRaises(reg.UsageError) as ctx:
+            reg.resolve_request(["--only", "--list"])
+        self.assertIn("未知的浏览器场景：--list", str(ctx.exception))
+
     def test_plan_lines_come_from_the_registry(self):
         request = reg.resolve_request(["--only", "skill-i18n,full-check"])
         text = reg.format_plan(request)
