@@ -127,7 +127,8 @@ def default_roots() -> list[Path]:
     codex = Path(os.environ.get("CODEX_HOME") or home / ".codex")
     claude = Path(os.environ.get("CLAUDE_SKILLS_DIR") or home / ".claude" / "skills")
     return [home / ".agents" / "skills", claude, home / ".zcode" / "skills", codex / "skills",
-            codex / "plugins" / "cache", home / ".claude" / "plugins" / "cache"]
+            codex / "plugins" / "cache", home / ".claude" / "plugins" / "cache",
+            home / ".zcode" / "cli" / "plugins" / "cache"]
 
 
 def scan(roots: list[Path]) -> tuple[list[tuple[str, list[dict[str, str]] | None, bool]], list[str]]:
