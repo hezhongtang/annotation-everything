@@ -17,6 +17,7 @@
 - **issue 跟着合并关闭**：PR 正文写 `Closes #编号`，issue 在合并进 `main` 时自动关闭。有子 issue 的父 issue，在最后一个子 issue 的 PR 里同时写 `Closes #父编号`。不要手动关闭已实现的 issue；只有不做（`wontfix`）、重复或无效的 issue 才手动关闭，并留评论说明原因。
 - **验收项在 PR 里核对**：开 PR 前逐条核对 issue 的验收标准，在 issue 里勾选已满足的项；做不到的写进 PR 正文，不要关闭 issue。
 - **开发前先有验收标准**：新 issue 按 `.github/ISSUE_TEMPLATE/` 的模板写（命令行创建时正文也按模板的小节写）并标 `needs-triage`；验收标准和兼容性要求写清楚后改为 `ready-for-agent`，Agent 只领取 `ready-for-agent` 的 issue。
+- **CI 失败自动修复（auto-fix）**：创建或更新 PR 后主动跟进 CI。出现失败时，读取失败日志、定位原因并自动修复，在原 PR 分支验证、提交和推送修复，持续跟进至最新提交的 CI 全部通过，无需等待用户再次要求。保留既有检查与测试要求；若因权限、凭据或外部服务故障无法继续，明确报告阻塞原因及所需协助。
 - **合并前**：CI 通过，非小改动先做独立审查；合并用 squash，分支在合并后自动删除。
 - **发版**：修改版本号（`skill/annotation-everything/scripts/serve.py` 中的 `VERSION` 常量）的 PR 挂到对应版本的里程碑（如 `v0.9.0`）；合并后在合并提交上打附注标签 `git tag -a v0.9.0 <提交> -m "annotation-everything v0.9.0"` 并推送，再关闭里程碑。
 
