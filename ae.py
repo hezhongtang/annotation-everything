@@ -2,14 +2,18 @@
 """annotation-everything 统一管理命令：安装技能副本、体检、修复。
 
 用法：
-  python3 ae.py install            # 把技能本体复制为技能副本（Claude 技能目录，CLAUDE_SKILLS_DIR 可覆盖）
+  python3 ae.py install [--target 目录]
+                                    # 把技能本体复制为技能副本；缺省装到 ~/.claude/skills（CLAUDE_SKILLS_DIR
+                                    # 可覆盖），--target 指定技能目录的根（副本装在 <目录>/annotation-everything）
   python3 ae.py install --link codex,agents,zcode
-                                    # 同时在这些 Agent 的技能目录里建指向技能副本的软链接
-  python3 ae.py doctor [--json]    # 体检：逐项检查并给出级别与修复命令
-  python3 ae.py repair [--dry-run] [--forget-stale] [--stop-orphans]
+                                    # 同时在这些 Agent 的技能目录里建指向技能副本的软链接；
+                                    # --link 也接受 名称=路径（如 cursor=~/.cursor/skills）为任意目录建链接
+  python3 ae.py doctor [--json] [--target 目录]
+                                    # 体检：逐项检查并给出级别与修复命令；--target 定位自定义位置的副本
+  python3 ae.py repair [--dry-run] [--forget-stale] [--stop-orphans] [--target 目录]
                                     # 修复体检发现的问题：先打印计划；安全项自动修，
                                     # 删除台账失效记录与结束残留服务需显式参数
-  python3 ae.py uninstall [--purge] [--stop-servers]
+  python3 ae.py uninstall [--purge] [--stop-servers] [--target 目录]
                                     # 删除技能副本与指向它的链接；默认保留审阅台账（--purge 一并删除），
                                     # 任何情况下不动审阅目录；检测到 serve.py 在运行会拒绝（--stop-servers 先结束）
 
@@ -50,7 +54,8 @@ SKILL_NAME = "annotation-everything"
 SKILL_SRC = Path("skill") / SKILL_NAME
 RECORD_NAME = ".install-record.json"
 SERVE_PY = SKILL_SRC / "scripts" / "serve.py"
-# --link 接受的 Agent 名称；目录约定与 skill_sources.default_roots 一致
+# --link 接受的内置 Agent 名称；目录约定与 skill_sources.default_roots 一致。
+# 其他 Agent 用 名称=路径 写法指定任意技能目录，不在这里维护各家清单
 LINK_AGENTS = ("codex", "agents", "zcode")
 # 复制与比对都忽略的缓存文件：字节码、系统杂项
 EXCLUDED_DIRS = {"__pycache__"}
@@ -180,6 +185,8 @@ class DoctorContext:
     skill_copy: Path            # 技能副本目录
     repo: Optional[Path]        # 来源仓库根目录；找不到时为 None
     record: Optional[dict]      # 安装记录；读不到时为 None
+    # 用户显式指定的 --target（技能目录的根）；None = 缺省位置。修复命令要复现同一位置时用它
+    target: Optional[Path] = None
     # Chrome 探测函数（返回可执行文件路径或 None）；测试注入用，None 时用默认探测 find_chrome
     chrome_probe: Optional[Callable[[], Optional[str]]] = None
     # 运行状态检查的可注入点（默认 None = 本机真实来源；测试用来把范围限定在自建的台账、进程与端口）
@@ -194,9 +201,16 @@ class CommandError(Exception):
 
 
 def skill_copy_dir() -> Path:
-    """技能副本的位置：CLAUDE_SKILLS_DIR 可覆盖，默认 ~/.claude/skills。"""
+    """缺省的技能副本位置：CLAUDE_SKILLS_DIR 可覆盖，默认 ~/.claude/skills。"""
     skills_root = os.environ.get("CLAUDE_SKILLS_DIR") or Path.home() / ".claude" / "skills"
     return Path(skills_root).expanduser() / SKILL_NAME
+
+
+def resolve_copy_dir(target) -> Path:
+    """技能副本的位置：--target 显式给出时用 <目录>/技能名，否则用缺省位置（skill_copy_dir）。"""
+    if target is None:
+        return skill_copy_dir()
+    return Path(target).expanduser() / SKILL_NAME
 
 
 def link_target_dir(agent: str) -> Optional[Path]:
@@ -218,13 +232,57 @@ def link_path(agent: str) -> Optional[Path]:
 
 
 def parse_link_agents(spec: str) -> list:
-    """解析 --link 的逗号分隔名称：去空白、去重，保留出现顺序。"""
-    agents = []
+    """解析 --link 的逗号分隔列表：内置名称（codex 等）或「名称=路径」指定任意技能目录。
+
+    返回 [(名称, 技能目录)]：去空白、按名称去重并保留出现顺序。内置名称的目录由
+    link_target_dir() 决定，未知名称为 None（由调用方报错）；「名称=路径」展开 ~，
+    相对路径按运行目录补全为绝对路径。写法不完整（缺名称或缺路径）时抛 CommandError。
+    """
+    links = []
     for part in (spec or "").split(","):
-        name = part.strip()
-        if name and name not in agents:
-            agents.append(name)
-    return agents
+        token = part.strip()
+        if not token:
+            continue
+        name, sep, raw = token.partition("=")
+        name = name.strip()
+        if sep:
+            if not name or not raw.strip():
+                raise CommandError(T("cli.ae.install.badLinkSpec", spec=token))
+            directory = Path(raw.strip()).expanduser()
+            if not directory.is_absolute():
+                directory = Path(os.path.abspath(str(directory)))
+        else:
+            directory = link_target_dir(name)
+        if all(name != seen for seen, _dir in links):
+            links.append((name, directory))
+    return links
+
+
+def _link_locations_overlap(a: Path, b: Path) -> bool:
+    """比较写入位置的词法路径与解析父目录后的路径，不跟随末级链接。
+
+    父链接可能在本次安装时被替换，因此原来的词法父子关系也必须保留。
+    """
+    a_locations = (Path(os.path.abspath(a)), a.parent.resolve() / a.name)
+    b_locations = (Path(os.path.abspath(b)), b.parent.resolve() / b.name)
+    return any(left == right or left in right.parents or right in left.parents
+               for left in a_locations for right in b_locations)
+
+
+def _link_overlap(link: Path, src: Path, dst: Path) -> Optional[Path]:
+    """链接位置与技能副本或技能本体冲突时返回对方路径，否则 None。
+
+    已存在的路径按 (设备, inode) 比较（软链接与大小写不敏感的文件系统绕不过），
+    尚不存在的路径按绝对路径的父子关系比较。
+    """
+    # 比较链接所在位置，不跟随链接本身：已有的正常链接可以指向副本，
+    # 但链接所在目录不能在本体或副本内部（即使它原来已经是软链接）。
+    for other in (dst, src):
+        if _link_locations_overlap(link, other):
+            return other
+        if not link.is_symlink() and paths_overlap(link, other):
+            return other
+    return None
 
 
 def read_version(repo: Path) -> Optional[str]:
@@ -314,17 +372,17 @@ def write_record(dst: Path, repo: Path, links: Optional[list] = None) -> Path:
     return path
 
 
-def create_link(agent: str, copy_dir: Path) -> dict:
-    """在 Agent 技能目录里建指向技能副本的软链接；返回写入安装记录的条目。
+def create_link(name: str, directory: Path, copy_dir: Path) -> dict:
+    """在技能目录 directory 里建指向技能副本的软链接；返回写入安装记录的条目。
 
     位置上已有的链接（含悬空的、指向别处的）一律重建；非链接内容由调用方先拦截。
     """
-    link = link_path(agent)
+    link = Path(directory) / SKILL_NAME
     if link.is_symlink():
         link.unlink()
     link.parent.mkdir(parents=True, exist_ok=True)
     os.symlink(str(copy_dir.resolve()), str(link))
-    return {"agent": agent, "path": str(link)}
+    return {"agent": name, "path": str(link)}
 
 
 def merged_links(previous: Optional[dict], copy_dir: Path, created: list) -> list:
@@ -352,25 +410,34 @@ def cmd_install(args) -> int:
         print(T("cli.ae.install.missingSource", path=src), file=sys.stderr)
         return 2
     agents = parse_link_agents(getattr(args, "link", "") or "")
-    unknown = [agent for agent in agents if link_target_dir(agent) is None]
+    unknown = [name for name, directory in agents if directory is None]
     if unknown:
         print(T("cli.ae.install.unknownAgent", names=join(unknown),
                 options=join(LINK_AGENTS)), file=sys.stderr)
         return 2
-    # 先拦下所有冲突，再动手：目标位置已有同名非链接内容时不覆盖、不复制
-    for agent in agents:
-        target = link_path(agent)
-        if target.exists() and not target.is_symlink():
-            print(T("cli.ae.install.occupied", agent=agent, path=target), file=sys.stderr)
+    dst = resolve_copy_dir(getattr(args, "target", None))
+    # 先拦下所有冲突，再动手：链接位置与技能副本或本体重叠、已有同名非链接内容时不复制、不建链
+    locations = [(name, directory / SKILL_NAME) for name, directory in agents]
+    for name, link in locations:
+        other = _link_overlap(link, src, dst)
+        if other is None:
+            # 先创建父链接会使后续子链接落进技能副本；反序创建也会被父链接替换。
+            other = next((candidate for _agent, candidate in locations
+                          if candidate != link and _link_locations_overlap(link, candidate)), None)
+        if other is not None:
+            print(T("cli.ae.install.linkOverlap", agent=name, path=link, other=other),
+                  file=sys.stderr)
             return 2
-    dst = skill_copy_dir()
+        if link.exists() and not link.is_symlink():
+            print(T("cli.ae.install.occupied", agent=name, path=link), file=sys.stderr)
+            return 2
     try:
-        previous = read_record(dst)  # 在清掉旧副本前读出已记录的链接
+        previous = read_record(dst, getattr(args, "target", None))  # 在清掉旧副本前读出已记录的链接
     except CommandError:
         # 重装可以修复损坏记录；已知位置的链接仍通过扫描保留。
         previous = {"links": scan_links(dst)}
     copy_skill(src, dst)
-    created = [create_link(agent, dst) for agent in agents]
+    created = [create_link(name, directory, dst) for name, directory in agents]
     links = merged_links(previous, dst, created)
     write_record(dst, repo, links)
     print(T("cli.ae.install.done", path=dst))
@@ -383,8 +450,11 @@ def cmd_install(args) -> int:
 # ── 体检 ───────────────────────────────────────────────────────
 
 
-def read_record(skill_copy: Path) -> Optional[dict]:
-    """读安装记录：缺失时回退扫描，存在但不可读或结构损坏时报告命令错误。"""
+def read_record(skill_copy: Path, target: Optional[Path] = None) -> Optional[dict]:
+    """读安装记录：缺失时回退扫描，存在但不可读或结构损坏时报告命令错误。
+
+    target 是用户显式指定的 --target（可为 None）：重建记录的修复命令要能复现同一位置。
+    """
     path = skill_copy / RECORD_NAME
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
@@ -392,7 +462,7 @@ def read_record(skill_copy: Path) -> Optional[dict]:
         return None
     except (OSError, ValueError) as exc:
         raise CommandError(T("cli.ae.record.unreadable", path=path, detail=exc,
-                             command=install_fix(None))) from None
+                             command=install_fix(None, target))) from None
     valid = isinstance(record, dict)
     if valid:
         valid = all(isinstance(record[key], str)
@@ -402,7 +472,7 @@ def read_record(skill_copy: Path) -> Optional[dict]:
             isinstance(entry, dict) and isinstance(entry.get("path"), str) and entry["path"]
             and isinstance(entry.get("agent", ""), str) for entry in links)
     if not valid:
-        raise CommandError(T("cli.ae.record.broken", path=path, command=install_fix(None)))
+        raise CommandError(T("cli.ae.record.broken", path=path, command=install_fix(None, target)))
     return record
 
 
@@ -418,9 +488,14 @@ def resolve_repo(record: Optional[dict]) -> Optional[Path]:
     return None
 
 
-def install_fix(repo: Optional[Path]) -> str:
-    target = repo / "ae.py" if repo else Path("ae.py")
-    return f"python3 {target} install"
+def _target_flag(target: Optional[Path]) -> str:
+    """修复命令里的 --target 片段：只在用户显式指定过位置时带上。"""
+    return f" --target {shlex.quote(str(target))}" if target is not None else ""
+
+
+def install_fix(repo: Optional[Path], target: Optional[Path] = None) -> str:
+    script = repo / "ae.py" if repo else Path("ae.py")
+    return f"python3 {shlex.quote(str(script))} install{_target_flag(target)}"
 
 
 def _excluded_rel(rel: Path) -> bool:
@@ -456,7 +531,7 @@ def check_copy_present(ctx: DoctorContext) -> CheckResult:
         return CheckResult("skill-copy-present", CATEGORY_INSTALL, LEVEL_PASS,
                            T("doctor.copyPresent.ok", path=ctx.skill_copy))
     return CheckResult("skill-copy-present", CATEGORY_INSTALL, LEVEL_FAIL,
-                       T("doctor.copyPresent.missing", path=ctx.skill_copy), install_fix(ctx.repo))
+                       T("doctor.copyPresent.missing", path=ctx.skill_copy), install_fix(ctx.repo, ctx.target))
 
 
 def check_copy_sync(ctx: DoctorContext) -> CheckResult:
@@ -468,7 +543,7 @@ def check_copy_sync(ctx: DoctorContext) -> CheckResult:
     if _digests(src) == _digests(dst):
         return CheckResult("skill-copy-sync", CATEGORY_INSTALL, LEVEL_PASS, T("doctor.copySync.ok"))
     return CheckResult("skill-copy-sync", CATEGORY_INSTALL, LEVEL_FAIL,
-                       T("doctor.copySync.differs", path=src), install_fix(ctx.repo))
+                       T("doctor.copySync.differs", path=src), install_fix(ctx.repo, ctx.target))
 
 
 def check_copy_version(ctx: DoctorContext) -> CheckResult:
@@ -490,7 +565,7 @@ def check_copy_version(ctx: DoctorContext) -> CheckResult:
                        T("doctor.copyVersion.differs",
                          installed=installed or T("doctor.copyVersion.unknown"),
                          repo=repo_version),
-                       install_fix(ctx.repo))
+                       install_fix(ctx.repo, ctx.target))
 
 
 # ── 链接体检 ───────────────────────────────────────────────────
@@ -525,9 +600,23 @@ def _link_status(link: Path, skill_copy: Path) -> str:
     return "已删除"
 
 
-def install_link_fix(repo: Optional[Path], agents: list) -> str:
-    target = repo / "ae.py" if repo else Path("ae.py")
-    return f"python3 {target} install --link {','.join(agents)}"
+def link_fix_spec(entry: dict) -> Optional[str]:
+    """把链接条目还原成 --link 的写法：内置名称用裸名，其余用 名称=链接所在目录。
+
+    agent 名称为空或缺路径的条目还原不出来，返回 None（修复命令里跳过，报告里仍列出）。
+    """
+    name = str(entry.get("agent") or "")
+    path = entry.get("path")
+    if not isinstance(path, str) or not path or not name:
+        return None
+    if name in LINK_AGENTS and link_path(name) == Path(path):
+        return name
+    return f"{name}={Path(path).parent}"
+
+
+def install_link_fix(repo: Optional[Path], specs: list, target: Optional[Path] = None) -> str:
+    script = repo / "ae.py" if repo else Path("ae.py")
+    return f"python3 {shlex.quote(str(script))} install --link {shlex.quote(','.join(specs))}{_target_flag(target)}"
 
 
 def known_links(ctx: DoctorContext) -> list:
@@ -558,12 +647,18 @@ def check_links(ctx: DoctorContext) -> CheckResult:
     if not broken:
         return CheckResult("skill-links", CATEGORY_INSTALL, LEVEL_PASS,
                            T("doctor.links.ok", count=len(ok), list=join(ok, item=T("cli.ae.itemSeparator"))))
-    agents = sorted({str(entry.get("agent") or "") for entry in entries
-                     if _link_status(Path(entry["path"]), ctx.skill_copy) != "正常"})
+    specs = []
+    for entry in entries:
+        if _link_status(Path(entry["path"]), ctx.skill_copy) == "正常":
+            continue
+        spec = link_fix_spec(entry)
+        if spec is not None and spec not in specs:
+            specs.append(spec)
+    fix = install_link_fix(ctx.repo, specs, ctx.target) if specs else install_fix(ctx.repo, ctx.target)
     return CheckResult("skill-links", CATEGORY_INSTALL, LEVEL_FAIL,
                        T("doctor.links.broken", count=len(broken),
                           list=join(broken + ok, item=T("cli.ae.itemSeparator"))),
-                       install_link_fix(ctx.repo, agents))
+                       fix)
 
 
 # ── 体检：运行状态（审阅台账、专属端口、残留服务） ──────────────────
@@ -599,9 +694,9 @@ def load_ledger(ctx: DoctorContext):
         return None, str(e)
 
 
-def repair_fix(repo: Optional[Path], *flags: str) -> str:
-    target = repo / "ae.py" if repo else Path("ae.py")
-    return f"python3 {target} repair " + " ".join(flags)
+def repair_fix(repo: Optional[Path], *flags: str, target: Optional[Path] = None) -> str:
+    script = repo / "ae.py" if repo else Path("ae.py")
+    return f"python3 {shlex.quote(str(script))} repair " + " ".join(flags) + _target_flag(target)
 
 
 def probe_port(port: int, timeout: float = 1.0):
@@ -648,8 +743,13 @@ def command_tokens(cmdline: str) -> list:
         return []
 
 
-def serve_script_index(cmdline: str, pid: Optional[int] = None) -> Optional[int]:
-    """只识别 Python 实际执行的本仓库或技能副本脚本；不匹配参数中的脚本名。"""
+def serve_script_index(cmdline: str, pid: Optional[int] = None,
+                       extra_copy: Optional[Path] = None) -> Optional[int]:
+    """只识别 Python 实际执行的本仓库或技能副本脚本；不匹配参数中的脚本名。
+
+    extra_copy 是当前操作的技能副本（--target 指定时的自定义位置）：从它里面运行的
+    serve.py 同样算本工具的进程，缺省只信任仓库本体与缺省位置的副本。
+    """
     tokens = command_tokens(cmdline)
     if not tokens or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?|pypy\d*",
                                       Path(tokens[0]).name.lower()):
@@ -676,21 +776,24 @@ def serve_script_index(cmdline: str, pid: Optional[int] = None) -> Optional[int]
         if cwd is None:
             return None
         script = Path(cwd) / script
-    trusted = (Path(__file__).resolve().parent / SERVE_PY,
-               skill_copy_dir() / "scripts" / "serve.py")
+    trusted = [Path(__file__).resolve().parent / SERVE_PY,
+               skill_copy_dir() / "scripts" / "serve.py"]
+    if extra_copy is not None:
+        trusted.append(Path(extra_copy) / "scripts" / "serve.py")
     try:
         return index if any(script.resolve() == path.resolve() for path in trusted) else None
     except (OSError, ValueError):
         return None
 
 
-def serve_dir_argument(cmdline: str, pid: Optional[int] = None) -> Optional[str]:
+def serve_dir_argument(cmdline: str, pid: Optional[int] = None,
+                       extra_copy: Optional[Path] = None) -> Optional[str]:
     """已核实脚本的审阅目录参数；排除维护子命令。
 
     子命令识别与 serve.py main() 一致：先剥掉开头的 --locale，再识别维护子命令或 serve。
     不是 serve.py 进程、或没有目录参数时返回 None。
     """
-    index = serve_script_index(cmdline, pid)
+    index = serve_script_index(cmdline, pid, extra_copy)
     if index is None:
         return None
     args = command_tokens(cmdline)[index + 1:]
@@ -869,13 +972,13 @@ def served_review_dir(pid: int, probe) -> Optional[Path]:
     return None
 
 
-def find_orphan_servers(entries: dict, lister, probe=None) -> list:
+def find_orphan_servers(entries: dict, lister, probe=None, extra_copy: Optional[Path] = None) -> list:
     """枚举残留服务，返回 [(pid, 端口, 审阅目录)]：运行中的 serve.py，托管的审阅目录
     不在台账里或已不存在。端口/目录定位不到时为 None（如目录已删、标识查不到）。"""
     probe = probe if probe is not None else probe_port
     orphans = []
     for pid, cmdline in lister():
-        arg = serve_dir_argument(cmdline, pid)
+        arg = serve_dir_argument(cmdline, pid, extra_copy)
         if arg is None:
             continue
         review_dir = served_review_dir(pid, probe)
@@ -895,15 +998,16 @@ def check_orphan_servers(ctx: DoctorContext) -> CheckResult:
     if error is not None:
         return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_PASS, T("doctor.orphans.skip"))
     lister = ctx.process_lister if ctx.process_lister is not None else list_processes
-    orphans = find_orphan_servers(entries, lister, ctx.port_probe)
+    orphans = find_orphan_servers(entries, lister, ctx.port_probe, extra_copy=ctx.skill_copy)
     if orphans:
         detail = join([T("doctor.orphanItem" if port else "doctor.orphanItemNoPort",
-                        pid=pid, port=port) for pid, port, _ in orphans],
+                        pid=pid, port=port) for pid, port, _dir in orphans],
                       item=T("cli.ae.itemSeparator"))
         return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_FAIL,
                            T("doctor.orphans.found", count=len(orphans), detail=detail),
-                           repair_fix(ctx.repo, "--stop-orphans"))
-    running = sum(1 for pid, cmdline in lister() if serve_dir_argument(cmdline, pid) is not None)
+                           repair_fix(ctx.repo, "--stop-orphans", target=ctx.target))
+    running = sum(1 for pid, cmdline in lister()
+                  if serve_dir_argument(cmdline, pid, ctx.skill_copy) is not None)
     suffix = T("doctor.orphans.noneRunning", count=running) if running else ""
     return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_PASS,
                        T("doctor.orphans.none") + suffix)
@@ -1045,10 +1149,11 @@ def print_doctor(results) -> None:
 
 
 def cmd_doctor(args) -> int:
-    skill_copy = skill_copy_dir()
-    record = read_record(skill_copy)
+    target = getattr(args, "target", None)
+    skill_copy = resolve_copy_dir(target)
+    record = read_record(skill_copy, target)
     repo = resolve_repo(record)
-    results = run_doctor(DoctorContext(skill_copy=skill_copy, repo=repo, record=record))
+    results = run_doctor(DoctorContext(skill_copy=skill_copy, repo=repo, record=record, target=target))
     if args.as_json:
         # 结构化输出只走 stdout：正常结果与错误都是合法 JSON，终端提示一律去 stderr
         print(json.dumps({"schema": DOCTOR_SCHEMA, "locale": current_locale(),
@@ -1167,15 +1272,16 @@ def forget_stale_entries(entries: dict) -> list:
     return done
 
 
-def stop_orphan_servers(entries: dict, lister) -> list:
+def stop_orphan_servers(entries: dict, lister, extra_copy: Optional[Path] = None) -> list:
     """结束残留服务：先按残留定义筛选，再用共享 stop_servers（SIGTERM 优雅停止，等不到 SIGKILL）。
     返回 [(pid, 端口, 说明)]，说明为 None 表示已停止。"""
     processes = lister()
-    orphans = find_orphan_servers(entries, lambda: processes)
+    orphans = find_orphan_servers(entries, lambda: processes, extra_copy=extra_copy)
     if not orphans:
         return []
     pids = {pid for pid, _, _ in orphans}
-    stuck = {pid for pid, _command in stop_servers([(pid, command) for pid, command in processes if pid in pids])}
+    stuck = {pid for pid, _command in stop_servers(
+        [(pid, command) for pid, command in processes if pid in pids], extra_copy=extra_copy)}
     return [(pid, port, None if pid not in stuck else T("doctor.stopRefused"))
             for pid, port, _dir in orphans]
 
@@ -1228,7 +1334,7 @@ def execute_plan(plan: list, ctx: DoctorContext,
                 lines.append(T("cli.ae.repair.noStop", detail=error))
                 continue
             lister = ctx.process_lister if ctx.process_lister is not None else list_processes
-            for pid, port, note in stop_orphan_servers(entries, lister):
+            for pid, port, note in stop_orphan_servers(entries, lister, extra_copy=ctx.skill_copy):
                 detail = T("cli.ae.repair.portDetail", port=port) if port else ""
                 lines.append(T("cli.ae.repair.stopped", pid=pid, detail=detail) if note is None
                              else T("cli.ae.repair.stopNote", pid=pid, detail=detail, note=note))
@@ -1286,14 +1392,14 @@ def _print_unrepairable(results, plan) -> None:
         print(T("cli.ae.repair.unrepairable", count=len(rest), codes=join(rest)))
 
 
-def _fresh_context() -> DoctorContext:
-    skill_copy = skill_copy_dir()
-    record = read_record(skill_copy)
-    return DoctorContext(skill_copy=skill_copy, repo=resolve_repo(record), record=record)
+def _fresh_context(target: Optional[Path] = None) -> DoctorContext:
+    skill_copy = resolve_copy_dir(target)
+    record = read_record(skill_copy, target)
+    return DoctorContext(skill_copy=skill_copy, repo=resolve_repo(record), record=record, target=target)
 
 
 def cmd_repair(args) -> int:
-    ctx = _fresh_context()
+    ctx = _fresh_context(getattr(args, "target", None))
     results = run_doctor(ctx)
     plan = plan_from_results(results)
     print_plan(plan, forget_stale=args.forget_stale, stop_orphans=args.stop_orphans,
@@ -1307,7 +1413,7 @@ def cmd_repair(args) -> int:
         print(T("cli.ae.repair.execTitle"))
         for line in lines:
             print(f"  - {line}")
-    after = run_doctor(_fresh_context()) if acted else results
+    after = run_doctor(_fresh_context(getattr(args, "target", None))) if acted else results
     print(T("cli.ae.repair.afterTitle"))
     print_doctor(after)
     return 1 if any(r.level == LEVEL_FAIL for r in after) else 0
@@ -1316,16 +1422,18 @@ def cmd_repair(args) -> int:
 # ── 运行中的服务（卸载用；进程枚举与识别复用运行状态体检的设施） ──
 
 
-def running_servers(lister: Optional[Callable[[], list]] = None) -> list:
+def running_servers(lister: Optional[Callable[[], list]] = None,
+                    extra_copy: Optional[Path] = None) -> list:
     """正在运行的 serve.py 进程：[(pid, 命令行), ...]，与台账比对无关。
 
     只接受 Python 正在执行的本仓库或技能副本脚本，排除提及脚本名的其他程序。
     lister 返回 [(pid, 命令行), ...]，测试可注入；默认用 list_processes 枚举。
+    extra_copy 是当前操作的技能副本（--target 时的自定义位置），从它运行的 serve.py 也算。
     """
     if lister is None:
         lister = list_processes
     return [(pid, command) for pid, command in lister()
-            if serve_dir_argument(command, pid) is not None]
+            if serve_dir_argument(command, pid, extra_copy) is not None]
 
 
 def _process_stopped(pid: int) -> bool:
@@ -1341,9 +1449,9 @@ def _process_stopped(pid: int) -> bool:
     return not state or state.startswith("Z")
 
 
-def server_identity(pid: int, command: str) -> Optional[tuple]:
-    index = serve_script_index(command, pid)
-    if index is None or serve_dir_argument(command, pid) is None:
+def server_identity(pid: int, command: str, extra_copy: Optional[Path] = None) -> Optional[tuple]:
+    index = serve_script_index(command, pid, extra_copy)
+    if index is None or serve_dir_argument(command, pid, extra_copy) is None:
         return None
     tokens = command_tokens(command)
     script = Path(tokens[index])
@@ -1355,9 +1463,9 @@ def server_identity(pid: int, command: str) -> Optional[tuple]:
     return (str(script.resolve()), *tokens[index + 1:])
 
 
-def same_server_process(pid: int, command: str) -> bool:
+def same_server_process(pid: int, command: str, extra_copy: Optional[Path] = None) -> bool:
     """每次发信号前重新读命令行，拒绝已换身份或无法核实的 PID。"""
-    expected = server_identity(pid, command)
+    expected = server_identity(pid, command, extra_copy)
     if expected is None or pid <= 0 or pid == os.getpid():
         return False
     try:
@@ -1365,19 +1473,21 @@ def same_server_process(pid: int, command: str) -> bool:
                                  capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return current.returncode == 0 and server_identity(pid, current.stdout.strip()) == expected
+    return current.returncode == 0 and server_identity(pid, current.stdout.strip(), extra_copy) == expected
 
 
-def stop_servers(servers: list, wait_seconds: float = 5.0) -> list:
+def stop_servers(servers: list, wait_seconds: float = 5.0,
+                 extra_copy: Optional[Path] = None) -> list:
     """结束 serve.py 进程：先 SIGTERM（serve.py 收到后优雅退出），等不到再 SIGKILL。
 
+    extra_copy 是当前操作的技能副本（--target 时的自定义位置），身份核实同样信任它。
     返回未能确认停止的 [(pid, 命令行), ...]。
     """
     remaining, refused = [], []
     for pid, command in servers:
         if _process_stopped(pid):
             continue
-        if not same_server_process(pid, command):
+        if not same_server_process(pid, command, extra_copy):
             refused.append((pid, command))
             continue
         try:
@@ -1391,7 +1501,7 @@ def stop_servers(servers: list, wait_seconds: float = 5.0) -> list:
         time.sleep(0.1)
         remaining = [(pid, command) for pid, command in remaining if not _process_stopped(pid)]
     for pid, command in remaining:  # 等了还活着：再次核实身份，才可强杀
-        if not same_server_process(pid, command):
+        if not same_server_process(pid, command, extra_copy):
             refused.append((pid, command))
             continue
         try:
@@ -1511,8 +1621,8 @@ def remove_skill_copy(skill_copy: Path) -> str:
 
 
 def cmd_uninstall(args) -> int:
-    skill_copy = skill_copy_dir()
-    record = read_record(skill_copy)
+    skill_copy = resolve_copy_dir(getattr(args, "target", None))
+    record = read_record(skill_copy, getattr(args, "target", None))
     # 已知链接：记录优先，缺失时回退扫描三个已知 Agent 目录（含悬空链接）
     links = [entry for entry in known_links(DoctorContext(skill_copy=skill_copy, repo=None, record=record))
              if isinstance(entry, dict) and isinstance(entry.get("path"), str)]
@@ -1527,7 +1637,7 @@ def cmd_uninstall(args) -> int:
         if problem:
             print(problem, file=sys.stderr)
             return 2
-    servers = running_servers()
+    servers = running_servers(extra_copy=skill_copy)
     if servers:
         print(T("cli.ae.uninstall.running"))
         for pid, command in servers:
@@ -1535,7 +1645,7 @@ def cmd_uninstall(args) -> int:
         if not args.stop_servers:
             print(T("cli.ae.uninstall.refuseRunning"), file=sys.stderr)
             return 1
-        stuck = stop_servers(servers)
+        stuck = stop_servers(servers, extra_copy=skill_copy)
         if stuck:
             print(T("cli.ae.uninstall.stuck", count=len(stuck)), file=sys.stderr)
             for pid, command in stuck:
@@ -1598,6 +1708,12 @@ def _add_locale(parser: argparse.ArgumentParser, *, root: bool = False) -> None:
                         help=T("cli.ae.opt.locale"))
 
 
+def _add_target(parser: argparse.ArgumentParser) -> None:
+    # 四个子命令共用同一个 --target：install 决定装哪里，其余命令定位已装好的副本
+    parser.add_argument("--target", type=Path, default=None, metavar="DIR",
+                        help=T("cli.ae.opt.target"))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = LocalizedParser(prog="ae.py", description=T("cli.ae.appDesc"), add_help=False)
     _add_help(parser)
@@ -1606,18 +1722,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_install = sub.add_parser("install", add_help=False, help=T("cli.ae.cmd.install"))
     _add_help(p_install)
     _add_locale(p_install)
+    _add_target(p_install)
     p_install.add_argument("--link", default="", metavar="AGENTS",
                            help=T("cli.ae.cmd.install.link"))
     p_install.set_defaults(handler=cmd_install)
     p_doctor = sub.add_parser("doctor", add_help=False, help=T("cli.ae.cmd.doctor"))
     _add_help(p_doctor)
     _add_locale(p_doctor)
+    _add_target(p_doctor)
     p_doctor.add_argument("--json", action="store_true", dest="as_json",
                           help=T("cli.ae.cmd.doctor.json"))
     p_doctor.set_defaults(handler=cmd_doctor)
     p_repair = sub.add_parser("repair", add_help=False, help=T("cli.ae.cmd.repair"))
     _add_help(p_repair)
     _add_locale(p_repair)
+    _add_target(p_repair)
     p_repair.add_argument("--dry-run", action="store_true", dest="dry_run",
                           help=T("cli.ae.cmd.repair.dryRun"))
     p_repair.add_argument("--forget-stale", action="store_true", dest="forget_stale",
@@ -1628,6 +1747,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_uninstall = sub.add_parser("uninstall", add_help=False, help=T("cli.ae.cmd.uninstall"))
     _add_help(p_uninstall)
     _add_locale(p_uninstall)
+    _add_target(p_uninstall)
     p_uninstall.add_argument("--purge", action="store_true",
                              help=T("cli.ae.cmd.uninstall.purge"))
     p_uninstall.add_argument("--stop-servers", action="store_true",

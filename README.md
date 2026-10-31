@@ -77,7 +77,7 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
     </td>
     <td valign="top">
       <h4>🧩 技能与常驻技能</h4>
-      自动发现本机安装的 Claude Code 和 Codex 技能，可以按名称和说明搜索，并根据审阅内容推荐。设为常驻技能后，Agent 处理设定范围内的每条批注时都会先调用这些技能。
+      自动发现本机常见技能目录里的技能（<code>~/.claude</code>、<code>~/.codex</code>、<code>~/.agents</code>、<code>~/.zcode</code> 的技能目录与插件缓存），可以按名称和说明搜索，并根据审阅内容推荐。设为常驻技能后，Agent 处理设定范围内的每条批注时都会先调用这些技能。
     </td>
   </tr>
   <tr>
@@ -205,10 +205,13 @@ flowchart LR
 
 ```bash
 python3 ae.py install                            # 安装：把技能复制为技能副本到 ~/.claude/skills/
+python3 ae.py install --target <目录>            # 或装到其他技能目录的根（副本装在 <目录>/annotation-everything）
 python3 ae.py install --link codex,agents,zcode  # 可选：同时为这些 Agent 建指向副本的软链接
+python3 ae.py install --link cursor=~/.cursor/skills  # --link 也接受 名称=路径，为任意技能目录建链接
 python3 ae.py doctor                             # 体检：安装状态、运行状态、可选工具、开发环境
 python3 ae.py repair                             # 修复：先列计划，安全项自动修
 python3 ae.py uninstall                          # 卸载：删除技能副本和链接，默认保留审阅台账
+python3 ae.py doctor --target <目录>             # doctor/repair/uninstall 同样接受 --target，定位自定义位置的副本
 python3 ae.py doctor --locale en                 # 可选：界面语言 auto、zh-CN 或 en（写在子命令前后都认）
 ```
 
@@ -217,6 +220,7 @@ python3 ae.py doctor --locale en                 # 可选：界面语言 auto、
 - **机器判定与人读文案分开**：`doctor --json` 的 `category`、`level`、`code` 和 `summary` 是旧消费者在读的判定字段，恒为中文、不随语言改值；新增的语言无关判定信息是每项的 `status`（`pass` / `warn` / `fail`）和 `category_id`（`install` / `tools` / `dev` / `runtime`），以及顶层的 `schema`（结构版本）和 `locale`（`message` 用的是哪种语言）。新消费者比较 `status` / `category_id` 即可，不必比较本地化标签；`message`、`fix_command` 里的人读文案按语言变。`serve.py` 的拒绝与错误同理：HTTP 状态和原因代码（`bad-host`、`cross-site`、`bad-origin`、`no-origin`、`bad-content-type`、`chunked`、`bad-length`、`too-large`、`bad-json`、`not-found`、`preflight`、`no-index`、`no-note`、`server-error`、`review-mismatch`、`no-api`）不随语言变，说明按服务启动时定的语言输出；未知错误只说明类型与恢复动作，不回显请求内容。
 - `repair` 里删除台账失效记录（`--forget-stale`）、结束残留服务（`--stop-orphans`）是破坏性操作，要显式加参数；`--dry-run` 只看计划不动手。计划与执行报告都写清楚「本次未执行」，翻译后的提示不弱化后果。
 - `uninstall` 任何情况下都不动审阅目录；`--purge` 才一并删除审阅台账；有 `serve.py` 在运行时会拒绝，`--stop-servers` 先停止再卸。
+- **装到别的技能目录**：`install` 缺省把技能副本装到 `~/.claude/skills/`（`CLAUDE_SKILLS_DIR` 仍可覆盖），`--target <目录>` 改为装到 `<目录>/annotation-everything`；`doctor`、`repair`、`uninstall` 接受同一个 `--target` 对该副本体检、修复、卸载，失败项的修复命令会带上同一 `--target`。`--link` 除内置名称 `codex`、`agents`、`zcode` 外还接受 `名称=路径`（如 `cursor=~/.cursor/skills`），为任意技能目录建指向副本的软链接并记入安装记录；自定义链接同样出现在体检里（悬空时报失败项与修复命令），`repair` 能重建，`uninstall` 会删除。安装记录只存在技能副本里，副本删除后自定义链接无法再被自动发现（内置目录的链接仍有扫描兜底）。
 - 停止服务前会核实正在执行的是本仓库或当前技能副本的脚本，并在发信号前复核进程身份；无法核实时拒绝停止。`--purge` 仅删除已知台账文件；台账损坏、目录内有其他文件或未登记的审阅目录时拒绝清除。
 
 装好后在 Claude Code 中说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」，Claude Code 就会按这套流程工作。
@@ -228,7 +232,7 @@ python3 ae.py doctor --locale en                 # 可选：界面语言 auto、
 > 在 `<仓库路径>` 安装并体检 annotation-everything 技能，按编号步骤执行，每步先确认成功标志再往下：
 >
 > 1. 运行 `python3 <仓库路径>/ae.py doctor --json`。退出码 2 时先查看 JSON 的 `error` 并排障；若提示安装记录损坏，可按第 2 步重新安装。正常输出中，若 `results` 里没有 `category` 为「安装状态」且 `level` 为「失败」的项，说明已装好，跳到第 4 步。
-> 2. 按你是哪种 Agent 决定链接参数：Claude Code 不需要 `--link`；Codex 用 `--link codex`；`~/.agents` 下的 Agent 用 `--link agents`；zcode 用 `--link zcode`。运行 `python3 <仓库路径>/ae.py install`（需要链接时加上对应 `--link`）。成功标志：退出码 0。
+> 2. 按你是哪种 Agent 决定链接参数：Claude Code 不需要 `--link`；Codex 用 `--link codex`；`~/.agents` 下的 Agent 用 `--link agents`；zcode 用 `--link zcode`；其他 Agent 用 `--link 名称=技能目录`（如 `--link cursor=~/.cursor/skills`）。不把主副本装进 Claude 目录时加 `--target <目录>`（后续 `doctor` / `repair` / `uninstall` 带同一个值）。运行 `python3 <仓库路径>/ae.py install`（需要时加上对应参数）。成功标志：退出码 0。
 > 3. 再次运行 `python3 <仓库路径>/ae.py doctor --json`，以 JSON 判定成败：优先看语言无关的判定字段——`results` 里没有 `status` 为 `fail` 且 `category_id` 为 `install` 的项即安装成功（`category` 为「安装状态」且 `level` 为「失败」的旧写法仍然成立，这两个字段恒为中文）。「运行状态」类的失败（如残留服务、专属端口被占用）不影响安装，记下来在第 5 步报告；`summary.warn` 里的警告（如缺少可选工具 `fc-list`/`pdffonts`）不阻塞使用。「安装状态」类仍有失败时，按该项的 `fix_command` 修复后重跑本步；`fix_command` 含第 4 步列出的破坏性参数时，先征得用户同意再执行。
 > 4. 需要修复时运行 `python3 <仓库路径>/ae.py repair`（`--dry-run` 先看计划）。**`--purge`、`--forget-stale`、`--stop-orphans`、`--stop-servers` 都是破坏性操作，必须先征得用户同意再加。**
 > 5. 完成后向用户报告：安装是否成功、各项体检结果，以及尚未解决的警告。
@@ -243,7 +247,7 @@ python3 ae.py doctor --locale en                 # 可选：界面语言 auto、
 python3 ae.py install
 ```
 
-技能会被复制到 `~/.claude/skills/annotation-everything`（这份复制称为「技能副本」）。安装、体检、修复、卸载的完整说明见上面「安装与维护」。
+技能会被复制到 `~/.claude/skills/annotation-everything`（这份复制称为「技能副本」）；要装到其他技能目录的根，用 `python3 ae.py install --target <目录>`（副本装在 `<目录>/annotation-everything`）。安装、体检、修复、卸载的完整说明见上面「安装与维护」。
 
 **2. 用合成样例试用**
 
@@ -276,7 +280,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 | 命令 | 作用 |
 |---|---|
-| `ae.py install` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--link codex,agents,zcode` 为其他 Agent 建指向副本的软链接）；体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；修复体检发现的问题（先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
+| `ae.py install` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；修复体检发现的问题（先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。四个子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
 | `build_viewer.py --report … --script … --out 审阅目录` | 生成对照页；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
 | `serve.py 审阅目录` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
 | `serve.py list` / `status` / `forget` | 列出本机所有审阅、查看某份审阅的状态、删除不再使用的台账记录 |
