@@ -337,6 +337,7 @@
     "serve.err.noNote": "批注不存在（可能已被删除）",
     "serve.err.notAnObject": "请求体须为 JSON 对象",
     "serve.err.badCharacters": "内容含无法保存的字符",
+    "serve.err.textTooLong": "{field} 过长（上限 {limit} 字），请缩短后重试。",
     "serve.err.serverError": "服务端写入失败（{type}），批注暂存浏览器，稍后自动重试",
     "serve.err.reviewMismatch": "页面属于另一份审阅（审阅标识不一致）",
     "serve.err.fullCheck": "fullCheck 须为布尔值",

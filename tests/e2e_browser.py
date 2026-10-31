@@ -1506,10 +1506,29 @@ def installed_delivery_checks(browser, tmp: Path):
                 page.locator('#nlist [data-act="edit"]').first.click()
                 page.fill("#etext", "X" * 20001)
                 page.locator('#nlist [data-act="save"]').first.click()
-                check(wait_until(lambda: "bad-note" in page.inner_text("#toast"), page, 5)
+                check(wait_until(lambda: "maximum 20000 characters" in page.inner_text("#toast"), page, 5)
                       and "Changes remain in the browser" not in page.inner_text("#toast")
-                      and "Check the input and try again" in page.inner_text("#toast"),
-                      "不可重试的字段拒绝提示核对输入，不虚称改动已保留")
+                      and "text is too long" in page.inner_text("#toast"),
+                      "字段拒绝提示具体字段与上限，不虚称改动已保留")
+                error_detail = '<img src=x onerror="window.__errorExecuted=true"> synthetic refusal'
+                route_path = "**/api/notes/" + note_id
+
+                def reject_with_detail(route):
+                    route.fulfill(status=400, content_type="application/json",
+                                  body=json.dumps({"app": "annotation-everything", "code": "bad-note",
+                                                   "error": error_detail}))
+
+                page.route(route_path, reject_with_detail)
+                try:
+                    page.locator('#nlist [data-act="edit"]').first.click()
+                    page.fill("#etext", "synthetic rejected edit")
+                    page.locator('#nlist [data-act="save"]').first.click()
+                    check(wait_until(lambda: error_detail in page.inner_text("#toast"), page, 5)
+                          and page.locator("#toast img").count() == 0
+                          and not page.evaluate("Boolean(window.__errorExecuted)"),
+                          "未知业务拒绝保留具体原因，HTML 仅作文本展示")
+                finally:
+                    page.unroute(route_path, reject_with_detail)
             if output:
                 page.locator("#nlist").scroll_into_view_if_needed()
                 page.screenshot(path=str(output / "viewer.png"))

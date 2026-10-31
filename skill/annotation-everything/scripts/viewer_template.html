@@ -536,7 +536,11 @@ async function api(method,path,body){
       "bad-content-type":"badContentType","chunked":"chunked","bad-length":"badLength","too-large":"tooLarge",
       "bad-json":"badJson","not-found":"notFound","preflight":"preflight","no-index":"noIndex","no-note":"noNote",
       "review-mismatch":"reviewMismatch","no-api":"noApi"}[j.code];
-    const message=key?tMsg("serve.err."+key):tMsg(r.status>=500?"viewer.error.unknown":"viewer.error.rejected",{status:r.status,code:j.code||"unknown"});
+    const detail=j.code==="bad-note"&&j.reason==="text-too-long"&&j.params
+      ?tMsg("serve.err.textTooLong",j.params):(typeof j.error==="string"?j.error.trim():"");
+    const message=key?tMsg("serve.err."+key):r.status>=500
+      ?tMsg("viewer.error.unknown",{status:r.status,code:j.code||"unknown"})
+      :detail||tMsg("viewer.error.rejected",{status:r.status,code:j.code||"unknown"});
     throw Object.assign(new Error(message),{status:r.status,code:j.code})}
   if(!ours)throw Object.assign(new Error(tMsg("viewer.error.format")),{status:0,mismatch:true});
   return j}

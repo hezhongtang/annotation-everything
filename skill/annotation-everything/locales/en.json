@@ -371,6 +371,7 @@
     "serve.err.notAnObject": "The request body must be a JSON object",
     "serve.err.noNote": "That annotation does not exist (it may have been deleted)",
     "serve.err.badCharacters": "The content holds characters that cannot be saved",
+    "serve.err.textTooLong": "{field} is too long (maximum {limit} characters). Shorten it and try again.",
     "serve.err.serverError": "Server-side write failed ({type}); the annotation is kept in the browser and retried later",
     "serve.err.reviewMismatch": "The page belongs to another review (review ids differ)",
     "serve.err.fullCheck": "fullCheck must be a boolean",

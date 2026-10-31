@@ -106,6 +106,32 @@ class RejectLanguageTests(unittest.TestCase):
         self.assertNotIn(secret, payload["error"])
         self.assertIn("retried later", payload["error"])
 
+    def test_text_limit_keeps_bad_note_code_and_exposes_localizable_details(self):
+        for language, expected in (("en", "maximum 20000 characters"), ("zh-CN", "上限 20000 字")):
+            d = tmpdir()
+            self.addCleanup(shutil.rmtree, d)
+            (d / "index.html").write_text("synthetic review")
+            srv = self.start(d, locale=language)
+            headers = {**self.host(srv), "Origin": f"http://127.0.0.1:{srv.port}",
+                       "Content-Type": "application/json"}
+            for field in ("text", "edit.to"):
+                note = {"page": 1, "text": "synthetic annotation"}
+                oversized = "X" * 20001
+                if field == "text":
+                    note["text"] = oversized
+                else:
+                    note["edit"] = {"op": "replace", "from": "old", "to": oversized}
+                with self.subTest(language=language, field=field):
+                    status, _h, raw = serve._req(srv.port, "POST", "/api/notes", headers, note)
+                    payload = json.loads(raw)
+                    self.assertEqual((status, payload["code"]), (400, "bad-note"))
+                    self.assertEqual(payload["reason"], "text-too-long")
+                    self.assertEqual(payload["params"], {"field": field, "limit": 20000})
+                    self.assertIn(expected, payload["error"])
+                    self.assertIn(field, payload["error"])
+                    self.assertNotIn(oversized, payload["error"])
+                    self.assertFalse((d / "notes.json").exists())
+
     def test_unknown_error_message_is_localized(self):
         d = tmpdir()
         (d / "index.html").write_text("x")
