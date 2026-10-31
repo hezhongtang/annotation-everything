@@ -421,7 +421,8 @@ def build_groups(selectors: Optional[list] = None) -> dict:
             counter="unittest", selectors=True, auto_included=auto_included),
         "browser": Group(
             name="browser", title="完整浏览器",
-            purpose="浏览器端到端回归；未拆场景前按整组计时，记录里预留场景级字段",
+            purpose="浏览器端到端回归：按注册场景执行，记录里带逐场景的执行清单与计时；"
+                    "局部场景用 e2e_browser.py --only 直接跑",
             equivalent="uv run --no-project --with playwright python tests/e2e_browser.py",
             argv=["uv", "run", "--no-project", "--with", "playwright", "python", "tests/e2e_browser.py"],
             counter="log", requires=("uv",), scenarios=True),
@@ -729,6 +730,31 @@ def parse_log_counts(text: str) -> Optional[dict]:
     return {"total": total, "passed": passed, "failed": max(0, total - passed)}
 
 
+# 浏览器入口在「N/M 通过」后输出的场景执行清单行（issue #53）
+SCENARIO_MARKER = "AE-SCENARIOS: "
+# 场景结论的人话说法（报告里用；机器可读的仍是英文 status）
+SCENARIO_LABELS = {"passed": "通过", "failed": "失败", "error": "错误",
+                   "interrupted": "中断", "not_run": "未运行"}
+
+
+def parse_scenario_summary(text: str) -> Optional[dict]:
+    """取日志里最后一行场景执行清单；没有或读不出来返回 None，不影响整组计数。"""
+    payload = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(SCENARIO_MARKER):
+            payload = stripped[len(SCENARIO_MARKER):]
+    if payload is None:
+        return None
+    try:
+        summary = json.loads(payload)
+    except ValueError:
+        return None
+    if not isinstance(summary, dict) or not isinstance(summary.get("scenarios"), list):
+        return None
+    return summary
+
+
 # ── 执行 ──────────────────────────────────────────────────────────────────
 
 def _pgid_of(proc) -> Optional[int]:
@@ -875,6 +901,7 @@ def execute_group(group: Group, ctx: RunContext) -> dict:
 
     log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
     counts, cases, seconds, load_error, evidence_missing = None, [], {}, None, None
+    scenario_summary = None
     interrupted = False
     if group.counter == "unittest":
         if not cases_path.is_file():
@@ -897,6 +924,9 @@ def execute_group(group: Group, ctx: RunContext) -> dict:
         counts = parse_log_counts(log_text)
         if counts is None:
             evidence_missing = "日志里没有「N/M 通过」摘要行"
+        if group.scenarios:
+            # 场景级记录来自子进程自己的执行清单；日志里没有时保持整组粒度的既有行为
+            scenario_summary = parse_scenario_summary(log_text)
 
     outcome, exit_status = classify_group(group, code, timed_out, counts, load_error, evidence_missing,
                                           interrupted)
@@ -907,6 +937,7 @@ def execute_group(group: Group, ctx: RunContext) -> dict:
             "signal": signal_name(-int(signal.SIGINT)) if interrupted else signal_name(code),
             "timed_out": timed_out, "note": note, "counts": counts,
             "cases": cases, "seconds": seconds,
+            "scenario_summary": scenario_summary,
             "timing": {"child_seconds": child_seconds,
                        "case_seconds_total": seconds.get("case_total"),
                        "fixture_seconds_total": fixture_total(seconds),
@@ -1053,7 +1084,7 @@ def cmd_plan(args) -> int:
             print("    展开为：%s" % " → ".join(group.expands))
         print("    计数方式：%s；计时粒度：%s%s" % (
             group.counter, group.granularity,
-            "（浏览器未拆场景，记录里已预留场景级字段）" if group.scenarios else ""))
+            "（浏览器按场景计时，记录里带场景执行清单）" if group.scenarios else ""))
         if group.requires:
             print("    需要可执行文件：%s" % "、".join(group.requires))
         if group.selectors:
@@ -1232,6 +1263,10 @@ def cmd_run(args) -> int:
                              signal=item["signal"], timed_out=item["timed_out"], note=item["note"],
                              counts=item["counts"], cases=trim_cases(item["cases"]),
                              seconds=item["seconds"], timing=item["timing"])
+                if item.get("scenario_summary") is not None:
+                    # 浏览器组带场景摘要时填 groups[].scenarios，粒度细化到场景（issue #53）
+                    group["scenarios"] = item["scenario_summary"]["scenarios"]
+                    group["granularity"] = "scenario"
                 continue
             if interrupted_signum is not None:
                 group.update(outcome=INTERRUPTED,
@@ -1525,6 +1560,15 @@ def render_report(record: dict, problems: Optional[list] = None,
         lines.append("  %-11s %-11s %s · %s 秒 · 粒度 %s" % (
             group.get("name"), group.get("outcome"), detail,
             (group.get("timing") or {}).get("child_seconds"), group.get("granularity")))
+        scenarios = group.get("scenarios") or []
+        if scenarios:
+            parts = []
+            for item in scenarios:
+                checks = item.get("checks") or {}
+                parts.append("%s %s（%s/%s，%s 秒）" % (
+                    item.get("id"), SCENARIO_LABELS.get(item.get("status"), item.get("status")),
+                    checks.get("passed", 0), checks.get("total", 0), item.get("seconds")))
+            lines.append("     场景：%s" % "；".join(parts))
         if group.get("note"):
             lines.append("     注意：%s" % group["note"])
     slow = sorted((case for group in record.get("groups") or [] for case in (group.get("cases") or [])),

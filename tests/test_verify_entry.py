@@ -73,6 +73,44 @@ print("\\n%d/%d 通过" % (total - failed, total))
 sys.exit(1 if failed else 0)
 '''
 
+# 合成浏览器入口（场景化）：在「N/M 通过」后再打一行 AE-SCENARIOS 摘要，
+# 与 tests/e2e_browser.py 的场景执行清单同一格式（issue #53）
+BROWSER_SCENARIO_STUB = '''#!/usr/bin/env python3
+import json
+import os
+import sys
+import time
+
+STATUS = os.environ.get("SYNTH_SCENARIO_STATUS", "passed")
+scenarios = [
+    {"id": "skill-search", "status": "passed", "total": 2},
+    {"id": "server-mode", "status": STATUS, "total": 2},
+]
+records = []
+passed_total = 0
+for scenario in scenarios:
+    started = time.time()
+    time.sleep(0.05)
+    failed = scenario["status"] != "passed"
+    print("=== 场景 %s ===" % scenario["id"])
+    for index in range(scenario["total"]):
+        print("%s  合成检查 %s-%d" % ("FAIL" if failed else "PASS", scenario["id"], index))
+    checks = {"total": scenario["total"],
+              "passed": 0 if failed else scenario["total"],
+              "failed": scenario["total"] if failed else 0}
+    passed_total += checks["passed"]
+    records.append({"id": scenario["id"], "status": scenario["status"], "checks": checks,
+                    "started_at": "2026-10-31T00:00:00+00:00",
+                    "ended_at": "2026-10-31T00:00:01+00:00",
+                    "seconds": round(time.time() - started, 6)})
+total = sum(item["checks"]["total"] for item in records)
+print("\\n%d/%d 通过" % (passed_total, total))
+print("AE-SCENARIOS: " + json.dumps({
+    "mode": "partial", "source": "--only",
+    "plan": [item["id"] for item in records], "scenarios": records}, ensure_ascii=False))
+sys.exit(0 if passed_total == total else 1)
+'''
+
 UNIT_PASS = '''import unittest
 
 
@@ -824,6 +862,45 @@ class OtherGroupTests(VerifyEntryTestCase):
         self.assertEqual(len(index), 1)
         self.assertEqual(index[0]["run_id"], run_id)
         self.assertEqual(index[0]["outcome"], "passed")
+
+
+class BrowserScenarioTests(VerifyEntryTestCase):
+    """issue #53：浏览器组从场景摘要行接入场景级记录。"""
+
+    def use_scenario_browser(self) -> None:
+        self.repo.write("tests/e2e_browser.py", BROWSER_SCENARIO_STUB, executable=True)
+        self.repo.commit_all("换成带场景摘要的合成浏览器入口")
+
+    def test_browser_group_records_scenario_list_and_times(self):
+        self.use_scenario_browser()
+        p = self.repo.run_verify("run", "--group", "browser")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["granularity"], "scenario", "有场景摘要时按场景计时")
+        scenarios = group["scenarios"]
+        self.assertEqual([item["id"] for item in scenarios], ["skill-search", "server-mode"])
+        for item in scenarios:
+            self.assertEqual(item["status"], "passed")
+            self.assertEqual(item["checks"], {"total": 2, "passed": 2, "failed": 0})
+            self.assertIn("started_at", item)
+            self.assertIn("ended_at", item)
+            self.assertGreaterEqual(item["seconds"], 0.05)
+        self.assertEqual(group["counts"], {"total": 4, "passed": 4, "failed": 0})
+        self.assertIn("skill-search", p.stdout)
+        self.assertIn("server-mode", p.stdout)
+        self.assertIn("场景", p.stdout)
+
+    def test_failing_scenario_is_identifiable_in_the_record(self):
+        self.use_scenario_browser()
+        p = self.repo.run_verify("run", "--group", "browser",
+                                 extra_env={"SYNTH_SCENARIO_STATUS": "failed"})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["outcome"], "failed")
+        statuses = {item["id"]: item["status"] for item in group["scenarios"]}
+        self.assertEqual(statuses, {"skill-search": "passed", "server-mode": "failed"})
 
 
 class RelatedUnitTests(VerifyEntryTestCase):
