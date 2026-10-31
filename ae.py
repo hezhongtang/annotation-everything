@@ -258,21 +258,30 @@ def parse_link_agents(spec: str) -> list:
     return links
 
 
+def _link_locations_overlap(a: Path, b: Path) -> bool:
+    """比较写入位置的词法路径与解析父目录后的路径，不跟随末级链接。
+
+    父链接可能在本次安装时被替换，因此原来的词法父子关系也必须保留。
+    """
+    a_locations = (Path(os.path.abspath(a)), a.parent.resolve() / a.name)
+    b_locations = (Path(os.path.abspath(b)), b.parent.resolve() / b.name)
+    return any(left == right or left in right.parents or right in left.parents
+               for left in a_locations for right in b_locations)
+
+
 def _link_overlap(link: Path, src: Path, dst: Path) -> Optional[Path]:
     """链接位置与技能副本或技能本体冲突时返回对方路径，否则 None。
 
     已存在的路径按 (设备, inode) 比较（软链接与大小写不敏感的文件系统绕不过），
     尚不存在的路径按绝对路径的父子关系比较。
     """
-    if paths_overlap(link, dst):
-        return dst
-    if paths_overlap(link, src):
-        return src
-    link_abs = Path(os.path.abspath(str(link)))
-    if link_abs == Path(os.path.abspath(str(dst))) or Path(os.path.abspath(str(dst))) in link_abs.parents:
-        return dst
-    if link_abs == Path(os.path.abspath(str(src))) or Path(os.path.abspath(str(src))) in link_abs.parents:
-        return src
+    # 比较链接所在位置，不跟随链接本身：已有的正常链接可以指向副本，
+    # 但链接所在目录不能在本体或副本内部（即使它原来已经是软链接）。
+    for other in (dst, src):
+        if _link_locations_overlap(link, other):
+            return other
+        if not link.is_symlink() and paths_overlap(link, other):
+            return other
     return None
 
 
@@ -408,16 +417,18 @@ def cmd_install(args) -> int:
         return 2
     dst = resolve_copy_dir(getattr(args, "target", None))
     # 先拦下所有冲突，再动手：链接位置与技能副本或本体重叠、已有同名非链接内容时不复制、不建链
-    for name, directory in agents:
-        link = directory / SKILL_NAME
-        if link.is_symlink():
-            continue                    # 已有链接（含悬空、指向别处）一律重建
+    locations = [(name, directory / SKILL_NAME) for name, directory in agents]
+    for name, link in locations:
         other = _link_overlap(link, src, dst)
+        if other is None:
+            # 先创建父链接会使后续子链接落进技能副本；反序创建也会被父链接替换。
+            other = next((candidate for _agent, candidate in locations
+                          if candidate != link and _link_locations_overlap(link, candidate)), None)
         if other is not None:
             print(T("cli.ae.install.linkOverlap", agent=name, path=link, other=other),
                   file=sys.stderr)
             return 2
-        if link.exists():
+        if link.exists() and not link.is_symlink():
             print(T("cli.ae.install.occupied", agent=name, path=link), file=sys.stderr)
             return 2
     try:
@@ -484,7 +495,7 @@ def _target_flag(target: Optional[Path]) -> str:
 
 def install_fix(repo: Optional[Path], target: Optional[Path] = None) -> str:
     script = repo / "ae.py" if repo else Path("ae.py")
-    return f"python3 {script} install{_target_flag(target)}"
+    return f"python3 {shlex.quote(str(script))} install{_target_flag(target)}"
 
 
 def _excluded_rel(rel: Path) -> bool:
@@ -605,7 +616,7 @@ def link_fix_spec(entry: dict) -> Optional[str]:
 
 def install_link_fix(repo: Optional[Path], specs: list, target: Optional[Path] = None) -> str:
     script = repo / "ae.py" if repo else Path("ae.py")
-    return f"python3 {script} install --link {','.join(specs)}{_target_flag(target)}"
+    return f"python3 {shlex.quote(str(script))} install --link {shlex.quote(','.join(specs))}{_target_flag(target)}"
 
 
 def known_links(ctx: DoctorContext) -> list:
@@ -683,9 +694,9 @@ def load_ledger(ctx: DoctorContext):
         return None, str(e)
 
 
-def repair_fix(repo: Optional[Path], *flags: str) -> str:
-    target = repo / "ae.py" if repo else Path("ae.py")
-    return f"python3 {target} repair " + " ".join(flags)
+def repair_fix(repo: Optional[Path], *flags: str, target: Optional[Path] = None) -> str:
+    script = repo / "ae.py" if repo else Path("ae.py")
+    return f"python3 {shlex.quote(str(script))} repair " + " ".join(flags) + _target_flag(target)
 
 
 def probe_port(port: int, timeout: float = 1.0):
@@ -994,7 +1005,7 @@ def check_orphan_servers(ctx: DoctorContext) -> CheckResult:
                       item=T("cli.ae.itemSeparator"))
         return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_FAIL,
                            T("doctor.orphans.found", count=len(orphans), detail=detail),
-                           repair_fix(ctx.repo, "--stop-orphans"))
+                           repair_fix(ctx.repo, "--stop-orphans", target=ctx.target))
     running = sum(1 for pid, cmdline in lister()
                   if serve_dir_argument(cmdline, pid, ctx.skill_copy) is not None)
     suffix = T("doctor.orphans.noneRunning", count=running) if running else ""

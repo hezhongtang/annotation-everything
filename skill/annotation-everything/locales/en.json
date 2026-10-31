@@ -80,7 +80,7 @@
     "cli.ae.install.unknownAgent": "Unknown agent name: {names} (built-in names: {options}, or name=path for any skills directory)",
     "cli.ae.install.occupied": "A non-link item with the same name already sits in the {agent} skills directory; left untouched: {path}",
     "cli.ae.install.badLinkSpec": "Unrecognized --link item: {spec} (use name or name=path)",
-    "cli.ae.install.linkOverlap": "The link location {path} for \"{agent}\" overlaps the skill copy or bundle ({other}); refusing to create the link",
+    "cli.ae.install.linkOverlap": "The link location {path} for \"{agent}\" overlaps another installation path ({other}); refusing to create the link",
     "cli.ae.install.done": "Installed the skill copy at {path}",
     "cli.ae.install.links": "Created links: {list}",
     "cli.ae.record.unreadable": "Cannot read the install record {path} ({detail}); run {command} to rebuild it",

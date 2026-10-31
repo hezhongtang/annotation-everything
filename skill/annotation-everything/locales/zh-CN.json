@@ -70,7 +70,7 @@
     "cli.ae.install.unknownAgent": "未知的 Agent 名称：{names}（内置名称：{options}，或用 名称=路径 指定任意技能目录）",
     "cli.ae.install.occupied": "{agent} 的技能目录里已有同名非链接内容，未覆盖：{path}",
     "cli.ae.install.badLinkSpec": "无法识别的 --link 写法：{spec}（写法：名称 或 名称=路径）",
-    "cli.ae.install.linkOverlap": "「{agent}」的链接位置 {path} 与技能副本或技能本体重叠（{other}），拒绝创建链接",
+    "cli.ae.install.linkOverlap": "「{agent}」的链接位置 {path} 与其他安装路径重叠（{other}），拒绝创建链接",
     "cli.ae.install.done": "已安装技能副本到 {path}",
     "cli.ae.install.links": "已建立链接：{list}",
     "cli.ae.record.unreadable": "安装记录 {path} 读不了（{detail}），可运行 {command} 重建",
