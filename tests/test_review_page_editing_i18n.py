@@ -324,7 +324,8 @@ class SelectionAndPairTests(unittest.TestCase):
 
     def test_pair_row_reads_from_the_catalog(self):
         row = _between(self.source, '<label id="pairRow"', "</label>")
-        self.assertTrue(_uses(row, "viewer.pairLabel"), "viewer.pairLabel")
+        pair = _between(self.source, "function updatePairText(", '$("pairOn").addEventListener')
+        self.assertTrue(_uses(pair, "viewer.pairLabel"), "viewer.pairLabel")
         self.assertTrue(_uses(row, "viewer.pairTitle"), "viewer.pairTitle")
         self.assertNotIn("另一侧同一页有相同或相近的句子", row)
 
@@ -459,7 +460,7 @@ class PageAndScriptTests(unittest.TestCase):
 
     def setUp(self):
         self.source = _source()
-        self.render = _between(self.source, "function render()", "function go(k)")
+        self.render = _between(self.source, "function updatePageStat()", "function go(k)")
 
     def test_page_stat_reads_from_the_catalog(self):
         for key in ("viewer.pageStat", "viewer.timeStat"):
