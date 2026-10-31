@@ -190,6 +190,34 @@ class SecondReviewRegressionTests(RegressionCase):
         self.assertEqual(ae.find_orphan_servers(
             entries, lambda: [(4300, serve("serve", str(review), "--no-open"))], lambda port: None), [])
 
+    def test_locale_flag_does_not_turn_maintenance_commands_into_servers(self):
+        processes = []
+        for prefix in (("--locale", "en"), ("--locale=en",)):
+            for sub in ("check", "status", "list", "forget"):
+                cmd = shlex.join([sys.executable, str(SERVE), *prefix, sub])
+                processes.append((4300 + len(processes), cmd))
+        self.assertEqual(ae.running_servers(lister=lambda: processes), [])
+        with patch.object(ae, "served_review_dir") as probe:
+            self.assertEqual(ae.find_orphan_servers({}, lambda: processes), [])
+        probe.assert_not_called()
+
+    def test_locale_flag_keeps_registered_service_directory_when_probe_fails(self):
+        review, entries = self.registered_review()
+        invocations = [
+            ["--locale", "en", str(review)],
+            ["--locale=en", str(review)],
+            ["--locale", "en", "serve", str(review)],
+            ["--locale=en", "serve", str(review)],
+            ["serve", "--locale", "en", str(review)],
+            [str(review), "--locale", "en"],
+        ]
+        for args in invocations:
+            cmd = shlex.join([sys.executable, str(SERVE), *args, "--no-open"])
+            processes = [(4300, cmd)]
+            with self.subTest(args=args), patch.object(ae, "served_review_dir", return_value=None):
+                self.assertEqual(ae.running_servers(lister=lambda: processes), processes)
+                self.assertEqual(ae.find_orphan_servers(entries, lambda: processes), [])
+
     def test_rid_like_relative_dir_resolves_against_process_cwd(self):
         review, entries = self.registered_review("20241029")
         cmd = shlex.join([sys.executable, str(SERVE), "20241029", "--no-open"])
