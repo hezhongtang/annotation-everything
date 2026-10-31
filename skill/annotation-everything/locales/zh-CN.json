@@ -164,6 +164,16 @@
     "build.diff.order": "；页序不同",
     "build.scriptDuplicateField": "第 {page} 页的字段「{field}」重复（第 {lines} 行），采用最后一次的值。",
     "build.scriptUnknownField": "第 {page} 页第 {line} 行的「{field}」不是可识别的字段名，这段内容按正文保留。{known}",
-    "build.scriptBadDuration": "第 {page} 页的时长「{text}」看不懂，累计用时按 0 秒算。时长写「N 分钟」「N 秒」或「N min」「N seconds」。"
+    "build.scriptBadDuration": "第 {page} 页的时长「{text}」看不懂，累计用时按 0 秒算。时长写「N 分钟」「N 秒」或「N min」「N seconds」。",
+    "export.langLabel": "导出语言",
+    "export.langAuto": "跟随界面",
+    "export.download": "下载 Markdown",
+    "export.downloadJson": "下载 JSON",
+    "export.copyAll": "复制全部（粘贴给 Agent）",
+    "export.badFormat": "无法识别：既不是 JSON，也不是批注 Markdown。新版导出第一行是格式标记（annotation-everything export v1 lang=…），旧版中文导出（## 第 N 页｜…）没有标记也能读。",
+    "import.pick": "选择文件",
+    "viewer.allTitle": "全部批注",
+    "export.empty": "还没有批注。",
+    "export.copied": "已复制，粘贴到对话里交给 Agent"
   }
 }

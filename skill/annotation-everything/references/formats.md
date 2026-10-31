@@ -203,6 +203,110 @@ One line per paragraph.
 - 写入在 `~/.annotation-everything/.reviews.lock` 文件锁下读改写，原子替换；读不加锁。文件损坏时不会被覆盖，相关命令只警告、照常干活。**不要手改**，用 `list` / `forget` / `--claim-port`。
 - 复制出来的审阅目录（原目录还在、标识相同）不会顶替原条目，`--rebuild` 换了新标识后才登记。
 
-## 导出与救回的 JSON
+## 导出与导入（批注摘要）
 
-页面「下载 JSON」：`{"version": 1, "reviewId": …, "name": 审阅名, "namespace": 导出标签, "notes": [...], "alwaysSkills": [...]}`。「未能保存」与「其他审阅的未保存改动」的下载另带 `ops`（原始改动队列，供核对）。`reviewId` 与目标审阅不同时，`notes.py import` 拒绝（`--force` 强制），页面「导入…」先确认。
+页面「批注 → 复制全部 / 下载 Markdown / 下载 JSON」与 `notes.py export` 输出同一种文法；页面「导入…」与 `notes.py import` 读它。页面和命令行各有一份实现，遵守同一份规范（Python 实现在 `scripts/export_format.py`，页面在 `viewer_template.html` 的「导出 / 导入」一节）。
+
+```markdown
+<!-- annotation-everything export v1 lang=zh-CN -->      ← 第一行：格式版本与内容语言
+# 批注 · 示例报告
+导出时间：2026-10-31 09:34:00；共 5 条（未处理 3），涉及 2 页
+报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。
+常驻技能（每条批注按范围处理前都先调用）：humanizer-zh（讲稿）
+
+## 第 3 页｜结论：收入增长 12%
+1. 【报告·标点 1（x 38.8%，y 59.8%）】把 +12% 改成「同比 +12%」
+   第二行也要改
+   > 引用（报告）：+12%
+2. 【讲稿·框选 2（x 5%，y 20%，宽 60%，高 30%）】【已初改·待复核】改为：删掉整段
+   > 引用（讲稿）：原句甲乙
+   初改说明：已缩短
+   风格优化：框选处
+   位置线索：table「渠道」
+   技能：humanizer-zh、dataviz
+   ↔ 另一侧（报告·相同）：对应句子
+```
+
+英文导出是同一份文法的对照翻译，只翻译系统包装文字；用户正文、引用、处理说明和技能名称保持原文：
+
+```markdown
+<!-- annotation-everything export v1 lang=en -->
+# Annotations · Sample review
+Exported 2026-10-31 09:34:00; 5 notes (3 open) across 2 pages
+Marks on the report: a pin is a point and a region is a box; coordinates are percentages from the top-left corner of the page (x across, y down, width, height).
+Persistent skills (run before every note within scope): humanizer-zh (Script)
+
+## Page 3 | Conclusion: revenue up 12% YoY
+1. [Report · Pin 1 (x 38.8%, y 59.8%)] Change +12% to "YoY +12%"
+   > Quote (Report): +12%
+2. [Script · Region 2 (x 5%, y 20%, w 60%, h 30%)] [Drafted] 改为：删掉整段
+   > Quote (Script): 原句甲乙
+   Draft note: 已缩短
+   Style: Region
+   Position hint: table「渠道」
+   Skills: humanizer-zh, dataviz
+   ↔ Other side (Report · identical): 对应句子
+```
+
+- 第一行的标记声明格式版本 `v1` 与内容语言（`zh-CN` / `en`）。 开头三行（标题、计数、标注说明）只给人看，不参与解析；其中「未处理 / open」与页面一致，把已初改·待复核也算作还没定稿。**解析按标记选文法，与导入界面的语言无关**：中文导出在英文界面、英文导出在中文界面都能导入，落库的协议值一致。
+- 文法里的字面量（页头、`【】` / `[]`、`引用` / `Quote`、`风格优化` / `Style` 等）写死在实现里，**不从界面词典取**。改界面文案不会改变已发布的交换文法；要改文法就升版本号，旧工具会明确报「不支持 v2」而不是猜。
+- 中文文法与 0.3 以来的旧格式逐字相同，只多一个标记行，所以旧工具读新的中文导出与读旧导出没有区别。**旧工具读不懂英文导出**：它找不到 `## 第 N 页｜` 页头，会报「没找到批注」。升级 `notes.py` 和对照页到同一版本即可。
+- 没有标记的文字按旧中文格式读；没有标记又读不出批注的算「无法识别」，导入时给出明确提示，不猜、不静默丢弃。
+- 对象为空时写固定字面量 `未指定`（两种语言都一样，它是文法的一部分，不是界面文案），导入时原样成为 `target`。
+
+### Markdown 的往返范围
+
+逐项声明（都有对得上的合成用例，见 `tests/test_export_format.py` 与 `tests/e2e_browser.py` 的 `export_import_checks`）：
+
+| 字段 | 写法 | 往返 |
+|---|---|---|
+| 页码与页标题 | `## 第 3 页｜标题` / `## Page 3 \| Title` | 支持 |
+| 对象 | `【报告】` / `[Report]`，`报告` / `讲稿` / `报告和讲稿` | 支持，导入还原成中文存储值 |
+| 正文（含多行） | 条目的方括号之后；换行后缩进 3 空格 | 支持，但受下面「三条限制」约束 |
+| 状态 | `【已处理】` / `[Resolved] `、`【已初改·待复核】` / `[Drafted] ` | 支持 |
+| 标注 | `·标点 N（x ..%，y ..%）` / ` · Pin N (x ..%, y ..%)`；框选同理，带宽高 | 支持，坐标数字不改写 |
+| 引用与来源 | `> 引用（报告）：` / `> Quote (Report): ` | 支持；引用里的换行折成一行 |
+| 处理说明 | `处理说明：` / `初改说明：`，英文 `Resolution: ` / `Draft note: ` | 支持 |
+| 风格优化 | `风格优化：整页 / 标点处 / 框选处` / `Style: Whole page / Pin / Region` | 只写范围标签；0.3 那种把坐标写在 `区域（x ..%）` 里的写法只读不写 |
+| 位置线索 | `位置线索：` / `Position hint: ` | 支持 |
+| 本条指定的技能 | `技能：` / `Skills: ` | 支持；带 `（常驻·范围）` 来源标签的项不写进单条（常驻技能走开头那一行） |
+| 另一侧对应句 | `↔ 另一侧（报告·相同）：` / `↔ Other side (Report · identical): ` | 支持 |
+| 常驻技能 | 开头 `常驻技能（…）：` / `Persistent skills (…): ` | 支持，范围还原成 `all` / `报告` / `讲稿` / `style` |
+| 痕迹、孤立页警告、页面键不一致警告、来源标签 | — | **不进交换格式**；它们在 `notes.py show` 的阅读输出里 |
+
+Markdown 不是完整审阅归档：不保存 `id`、时间戳、处理痕迹和批次。要完整结构化备份用 JSON。
+
+#### 从 0.3 继承下来的三条限制（都有用例钉住，改动要先改测试）
+
+批注正文是自由文本，而元信息行和正文共用同一套「3 空格缩进」，所以下面三种写法会被按元信息读。**这是 0.3 以来就有的取舍，不是本次引入的回归**；没有去改它，是因为改解析规则会动到已经发布的中文导入文法（旧工具读新导出必须和读旧导出一样），而本 issue 允许把兼容限制记录下来。三种情况页面和命令行行为完全一致。
+
+1. **正文里某一行（去掉缩进后）读起来像元信息行**——`风格优化：…`、`处理说明：…` / `初改说明：…`、`技能：…`、`位置线索：…`、`↔ 另一侧（…）：…`、`> 引用…`——这一行不再算正文，并写进对应字段。导出的元信息行排在正文续行之后，所以批注真有的字段不会被同形的正文行改掉；但批注**本来没有**这个字段时，会凭正文造出一个来：引用被造出来会改掉重复判定，快捷修改的 `edit.from` 也会跟着变。「先一句结论、下面 `> 引用（…）：原句`」这种写法请改用 JSON 导出，或把引用行挪到批注之外。
+2. **多行正文里的空行会被丢掉**（导出时空行也写 3 空格，导入时空白行不算续行）；正文末尾的换行同样不保留。
+3. **正文以状态标记开头**（`【已处理】` / `【已初改·待复核】`，英文 `[Resolved] ` / `[Drafted] `）时，开头那段会被当成状态——一条未处理意见可能被导成已处理，之后默认导出就不再包含它。写完批注尽量避免以这几个字开头。
+
+要原样保留这类内容，用 JSON 导出（`notes` 是原始对象，不做任何文本解析）。
+
+
+### JSON
+
+页面「下载 JSON」与 `notes.py export --format json`：
+
+```json
+{"version": 1, "reviewId": "…", "name": "审阅名", "namespace": "导出标签", "lang": "en",
+ "notes": [ …整份 notes，协议值原样… ], "alwaysSkills": [ … ]}
+```
+
+- `notes` 是 `notes.json` 里的原始对象，`target`、`status`、`scope` 等协议值不改写；`lang` 记录导出时的内容语言，是新增的元信息，**旧消费者按 key 读取、直接忽略即可**。
+- 页面下载的 JSON 始终是整份批注；命令行的 `--all` / `--page N` 对 Markdown 和 JSON 一样有效，默认只含未处理。
+- 身份核对、去重、更新与冲突提示不变：`reviewId` 与目标审阅不同时 `notes.py import` 拒绝（`--force` 强制），页面「导入…」先问；同 id 而导入方更新得更晚的才覆盖，否则跳过；内容相同（页码、对象、正文、引用、标注、是否风格优化）算重复。
+- 用户按已支持方式编辑导出后再导入，**以看得见的正文为准**：Markdown 的正文是唯一内容，没有隐藏副本；JSON 里只改 `text` 时，结构化的快捷修改（`edit`）从 `text` 重新推导，不会写回改之前的内容。
+- 「未能保存」与「其他审阅的未保存改动」的下载另带 `ops`（原始改动队列，供核对）。
+
+### 命令行
+
+```bash
+python3 $S/notes.py export 审阅目录 [--lang zh-CN|en|auto] [--format md|json] [--all] [--page N] [--out 文件]
+python3 $S/notes.py import 审阅目录 批注文件.md|json [--force]
+```
+
+`--lang` 的优先级与 `show --locale` 相同：`--lang` > `AE_LOCALE` > 审阅里存的 `locale` > 中文。默认只导未处理，`--all` 含已处理。不带 `--out` 时打印到标准输出。文件名（页面下载与 `--out` 给目录时）保留审阅识别 `namespace` 和 12 位紧凑 UTC 时间，只有按语言换的前缀会变（`批注_` / `annotations_`）；导出时间写本地时间 `YYYY-MM-DD HH:MM:SS`，两种语言同一格式，时间戳、数值和坐标都不随地区格式改变。

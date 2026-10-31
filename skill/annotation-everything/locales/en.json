@@ -184,6 +184,16 @@
     "build.diff.order": "; in a different order",
     "build.scriptDuplicateField": "Page {page} repeats the \"{field}\" field (lines {lines}); the last value wins.",
     "build.scriptUnknownField": "Line {line} on page {page}: \"{field}\" is not a recognized field name, so this text is kept as body text. {known}",
-    "build.scriptBadDuration": "The duration \"{text}\" on page {page} cannot be read, so it counts as 0 seconds. Write \"N min\", \"N seconds\" and so on."
+    "build.scriptBadDuration": "The duration \"{text}\" on page {page} cannot be read, so it counts as 0 seconds. Write \"N min\", \"N seconds\" and so on.",
+    "export.langLabel": "Export language",
+    "export.langAuto": "Follow the interface",
+    "export.download": "Download Markdown",
+    "export.downloadJson": "Download JSON",
+    "export.copyAll": "Copy all (paste to the agent)",
+    "export.badFormat": "Not recognized: neither JSON nor annotation Markdown. New exports start with a format marker (annotation-everything export v1 lang=…); the older Chinese export (## Page N｜…) has no marker and still reads.",
+    "import.pick": "Choose a file",
+    "viewer.allTitle": "All annotations",
+    "export.empty": "No annotations yet.",
+    "export.copied": "Copied. Paste it into the conversation to hand it to the agent"
   }
 }

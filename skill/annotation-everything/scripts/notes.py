@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import export_format as ef  # noqa: E402
 import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
@@ -108,14 +109,8 @@ def handoff_lines(state: dict[str, Any] | None) -> list[str]:
 
 
 def mark_numbers(notes: list[dict[str, Any]]) -> dict[str, int]:
-    """与页面一致：同一页带标注（点或框）的批注按出现顺序编号 1、2、3…"""
-    out: dict[str, int] = {}
-    count: dict[int, int] = {}
-    for n in notes:
-        if n.get("pin") or store.region_of(n):
-            count[n["page"]] = count.get(n["page"], 0) + 1
-            out[n["id"]] = count[n["page"]]
-    return out
+    """与页面一致：同一页带标注（点或框）的批注按出现顺序编号 1、2、3…（实现在 export_format，导出双方共用）"""
+    return ef.mark_numbers(notes)
 
 
 def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: int | None = None) -> str:
@@ -389,79 +384,28 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
     return "\n".join(out) + "\n"
 
 
-# 旧版对照页导出的 Markdown：
-# ## 第 7 页｜标题
-# 1. 【报告·标点 1（x 12.3%，y 45.6%）】意见……
-# 2. 【报告·框选 2（x 10%，y 20%，宽 30%，高 15%）】意见……
-#    > 引用（报告）：……
+# 交换用的 Markdown（页面「复制全部 / 下载 Markdown」与 notes.py export 的同一种文法）：
+# <!-- annotation-everything export v1 lang=zh-CN -->
+# ## 第 7 页｜标题            或  ## Page 7 | Title
+# 1. 【报告·标点 1（x 12.3%，y 45.6%）】意见……   或  1. [Report · Pin 1 (x 12.3%, y 45.6%)] 意见……
+#    > 引用（报告）：……          或  > Quote (Report): ……
+# 第一行的标记声明格式版本与内容语言，解析按它选文法，与导入界面的语言无关；
+# 没有标记的按旧中文格式读（0.3 以来的导出就是这样）。文法实现见 export_format.py。
 DELETE_TEXT = store.DELETE_TEXT
 REPLACE_PREFIX = store.REPLACE_PREFIX
-LEGACY_PAGE = re.compile(r"^## 第 (\d+) 页｜(.*)$")
-LEGACY_ITEM = re.compile(r"^\d+\. 【([^】·]*)(?:·标点 \d+（x ([\d.]+)%，y ([\d.]+)%）)?"
-                         r"(?:·框选 \d+（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)?】(.*)$")
-LEGACY_QUOTE = re.compile(r"^\s+> 引用(?:（([^）]*)）)?：(.*)$")
 
 
 def parse_legacy_markdown(text: str) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    page, title, cur = None, "", None
-    for line in text.splitlines():
-        if m := LEGACY_PAGE.match(line):
-            page, title, cur = int(m.group(1)), m.group(2).strip(), None
-            continue
-        if page is None:
-            continue
-        if m := LEGACY_ITEM.match(line):
-            text, status = m.group(8), "open"
-            if text.startswith("【已处理】"):
-                text, status = text[len("【已处理】"):], "resolved"
-            elif text.startswith("【已初改·待复核】"):
-                text, status = text[len("【已初改·待复核】"):], "drafted"
-            cur = {"page": page, "title": title, "target": m.group(1), "text": text, "status": status,
-                   "pin": {"x": float(m.group(2)), "y": float(m.group(3))} if m.group(2) else None}
-            if m.group(4):
-                cur["region"] = {k: float(m.group(g)) for k, g in zip(("x", "y", "w", "h"), (4, 5, 6, 7))}
-            items.append(cur)
-        elif cur is not None and (m := LEGACY_QUOTE.match(line)):
-            cur["quoteFrom"], cur["quote"] = m.group(1) or "", m.group(2)
-            # 页面导出的快捷修改：正文是固定说法，引用是原文
-            if cur["text"] == DELETE_TEXT:
-                cur["edit"] = {"op": "delete", "from": cur["quote"]}
-            elif cur["text"].startswith(REPLACE_PREFIX):
-                cur["edit"] = {"op": "replace", "from": cur["quote"], "to": cur["text"][len(REPLACE_PREFIX):]}
-        elif cur is not None and (m := re.match(r"^\s+(?:处理|初改)说明：(.*)$", line)):
-            cur["resolution"] = m.group(1)
-        elif cur is not None and (m := re.match(r"^\s+风格优化：(整页|标点处|框选处|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$", line)):
-            if m.group(2):   # 0.3 导出的格式：框写在风格优化这一行
-                cur["region"] = {"x": float(m.group(2)), "y": float(m.group(3)), "w": float(m.group(4)), "h": float(m.group(5))}
-            cur["style"] = {"scope": {"整页": "page", "标点处": "pin"}.get(m.group(1), "region")}
-        elif cur is not None and (m := re.match(r"^\s+位置线索：(.*)$", line)):
-            cur["anchor"] = m.group(1)
-        elif cur is not None and (m := re.match(r"^\s+技能：(.*)$", line)):
-            body = re.sub(r"(——处理这条前先调用这些技能|（处理这条前先调用这些技能）)$", "", m.group(1).strip())
-            own = [x for x in re.split(r"[,，、;；]+", body) if not re.search(r"（常驻·[^）]*）$", x.strip())]
-            cur["skills"] = store.clean_skill_names([re.sub(r"（这条指定）$", "", x.strip()) for x in own])
-        elif cur is not None and (m := re.match(r"^\s+↔ 另一侧（(报告|讲稿)(?:·(相同|相近))?）：(.*)$", line)):
-            cur["pair"] = {"side": m.group(1), "match": "exact" if m.group(2) == "相同" else "similar", "text": m.group(3)}
-        elif cur is not None and line.startswith("   ") and line.strip():
-            cur["text"] += "\n" + line[3:]
-    return items
+    """旧中文格式（也等于新的中文文法）。保留这个名字：既有脚本和测试都在用。"""
+    return ef.parse_zh(text)
 
 
-ALWAYS_ZH_REV = {"全部批注": "all", "全部": "all", "报告": "报告", "讲稿": "讲稿", "风格优化": "style"}
+ALWAYS_ZH_REV = ef.ALWAYS_ZH_REV
 
 
 def parse_always_header(text: str) -> list[dict[str, str]] | None:
-    """页面导出的文字开头「常驻技能（…）：a（讲稿）、b（全部批注）」；没有这行返回 None。"""
-    m = re.search(r"^常驻技能（[^）]*）：(.+)$", text, re.M)
-    if not m:
-        return None
-    out = []
-    for part in re.split(r"、", m.group(1)):
-        mm = re.match(r"^(.+?)（(全部批注|全部|报告|讲稿|风格优化)）$", part.strip())
-        if mm:
-            out.append({"name": mm.group(1), "scope": ALWAYS_ZH_REV[mm.group(2)]})
-    return out
+    """导出开头那一行常驻技能（中文「常驻技能（…）：」、英文「Persistent skills (…): 」）；没有这行返回 None。"""
+    return ef.parse_always(text, ef.read_marker(text)[1] or "zh-CN")
 
 
 def read_import(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]] | None, str | None]:
@@ -477,10 +421,11 @@ def read_import(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]] 
             return (data.get("notes", []), (al if isinstance(al, list) else None),
                     rid if isinstance(rid, str) and ledger.RID.fullmatch(rid) else None)
         return data, None, None
-    items = parse_legacy_markdown(text)
-    if not items:
-        raise SystemExit(f"{path} 里没找到批注：既不是 JSON，也不是对照页导出的 Markdown 格式")
-    return items, parse_always_header(text), None
+    try:
+        items, always = ef.parse_markdown(text)
+    except ef.FormatError as e:
+        raise SystemExit(f"{path} 里没找到批注：{e}") from e
+    return items, always, None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -506,6 +451,13 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("dir", type=str, help="审阅目录或审阅标识")
     i.add_argument("file", type=Path)
     i.add_argument("--force", action="store_true", help="文件属于另一份审阅（审阅标识不同）时也导入")
+    e = sub.add_parser("export", help="导出可再导入的批注摘要：Markdown（默认）或 JSON")
+    e.add_argument("dir", type=str, help="审阅目录或审阅标识")
+    e.add_argument("--lang", help="导出内容语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
+    e.add_argument("--format", choices=("md", "json"), default="md", help="md 带版本与语言标记的 Markdown（可编辑后再导入）；json 完整结构化备份")
+    e.add_argument("--all", action="store_true", help="包含已处理（默认只导未处理）")
+    e.add_argument("--page", type=int, help="只导第 N 页")
+    e.add_argument("--out", type=Path, help="写到这个文件；默认打印到标准输出")
     w = sub.add_parser("wait", help="等待用户点「交给 Agent」：收到提交后标为处理中，输出提交内容与未处理批注")
     w.add_argument("dir", type=str, help="审阅目录或审阅标识")
     w.add_argument("--timeout", type=float, default=0, help="最多等多少秒，0 表示一直等（默认）")
@@ -644,6 +596,46 @@ def main(argv: list[str] | None = None) -> int:
                 print("注意：导出里的常驻技能与审阅目录里的不同，未自动覆盖。导出里是："
                       + "、".join(f"{x['name']}（{store.ALWAYS_ZH[x['scope']]}）" for x in new)
                       + "。确认以导出为准就运行 notes.py skills 审阅目录 --always \"名称=范围\" …", file=sys.stderr)
+        return 0
+    if a.cmd == "export":
+        doc = store.load(d)
+        manifest = load_manifest(d)
+        stored = manifest.get("locale")
+        try:
+            lang = i18n.resolve_locale(
+                i18n.effective_choice(a.lang, os.environ.get("AE_LOCALE"), stored if isinstance(stored, str) else None),
+                system_languages=i18n.system_languages())
+        except i18n.LocaleError as exc:
+            print(f"错误：{exc}", file=sys.stderr)
+            return 2
+        all_notes = doc["notes"]
+        picked = [n for n in all_notes if (a.all or n.get("status") != "resolved")
+                  and (a.page is None or n.get("page") == a.page)]
+        pages = {p["n"]: p.get("title", "") for p in manifest.get("pages", [])}
+        always = store.always_skills(d)
+        if a.format == "json":
+            body = json.dumps(ef.json_export(review_id=manifest.get("reviewId", ""), name=manifest.get("name", ""),
+                                            namespace=manifest.get("namespace", ""), notes=picked,
+                                            always=always, lang=lang), ensure_ascii=False, indent=2) + "\n"
+            suffix = "json"
+        else:
+            titles = dict(pages)
+            for n in picked:   # 页面标题取不到时退回批注自己记的标题
+                titles.setdefault(int(n.get("page", 0) or 0), str(n.get("title", "")))
+            # 标题与页面 exportText() 取同一个值：页面用 <title>，即 manifest 的 title
+            body = ef.render(all_notes, title=manifest.get("title") or manifest.get("name") or "对照页",
+                             page_titles=titles, always=always, lang=lang,
+                             include_resolved=a.all, page=a.page)
+        if a.out:
+            try:
+                a.out.parent.mkdir(parents=True, exist_ok=True)
+                write_private(a.out, body)   # 原子写入、权限 0600：导出内容就是整份批注
+            except OSError as e:
+                print(f"错误：写不出 {a.out}：{e}", file=sys.stderr)
+                return 2
+            print(f"已导出 {len(picked)} 条（{lang}，{a.format}）→ {a.out}")
+        else:
+            sys.stdout.write(body)
         return 0
     if a.cmd == "wait":
         return wait(d, a.timeout, a.interval, claim=not a.no_claim, by=a.by, stage=a.stage)
