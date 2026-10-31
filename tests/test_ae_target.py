@@ -9,10 +9,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -194,6 +196,31 @@ class TargetUnitTests(unittest.TestCase):
         self.assertEqual(ae.install_fix(Path("/repo")), "python3 /repo/ae.py install")
         self.assertEqual(ae.install_fix(Path("/repo"), Path("/dir with space")),
                          "python3 /repo/ae.py install --target '/dir with space'")
+
+    def test_install_fix_preserves_script_and_target_shell_arguments(self):
+        repo = self.root / "repo with space & 'quote'"
+        target = self.root / "target with space"
+        self.assertEqual(shlex.split(ae.install_fix(repo, target)),
+                         ["python3", str(repo / "ae.py"), "install", "--target", str(target)])
+
+    def test_orphan_fix_command_preserves_custom_target(self):
+        target = self.root / "custom target"
+        copy = target / SKILL
+        scripts = copy / "scripts"
+        scripts.mkdir(parents=True)
+        serve = scripts / "serve.py"
+        serve.write_text("# 合成脚本\n", encoding="utf-8")
+        command = shlex.join(["python3", str(serve), str(self.root / "missing-review")])
+        ctx = ae.DoctorContext(skill_copy=copy, target=target, repo=ROOT, record=None,
+                               ledger_home=self.root / "ledger",
+                               process_lister=lambda: [(424242, command)], port_probe=lambda port: None)
+        with patch.object(ae, "served_review_dir", return_value=None), \
+                patch.object(ae, "server_port_of", return_value=None):
+            result = ae.check_orphan_servers(ctx)
+        self.assertEqual(result.level, ae.LEVEL_FAIL)
+        args = ae.build_parser().parse_args(shlex.split(result.fix_command)[2:])
+        self.assertTrue(args.stop_orphans)
+        self.assertEqual(ae.resolve_copy_dir(args.target), copy)
 
     def test_target_reaches_copy_check_fix_commands(self):
         target = self.root / "custom"

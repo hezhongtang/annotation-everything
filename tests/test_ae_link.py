@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -40,6 +41,7 @@ class AeLinkCliTests(unittest.TestCase):
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
         self.env = {**os.environ, "HOME": str(self.home),
+                    "AE_HOME": str(self.home / ".annotation-everything"),
                     "CLAUDE_SKILLS_DIR": str(self.skills),
                     "CODEX_HOME": str(self.home / ".codex"),
                     "PYTHONDONTWRITEBYTECODE": "1"}
@@ -209,6 +211,53 @@ class AeLinkCliTests(unittest.TestCase):
         p = self.run_ae("install", "--link", f"x={source}")
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertFalse((source / SKILL).is_symlink(), "技能本体不被改写")
+
+    def test_nested_link_locations_are_refused_before_install(self):
+        outer = self.custom_dir("outer")
+        specs = [f"outer={outer}", f"inner={outer / SKILL / 'nested'}"]
+        for ordered in (specs, list(reversed(specs))):
+            with self.subTest(specs=ordered):
+                p = self.run_ae("install", "--link", ",".join(ordered))
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertFalse(self.copy_dir.exists(), "路径重叠时不能先复制")
+                self.assertFalse(outer.exists(), "路径重叠时不能先创建链接目录")
+
+    def test_existing_symlink_inside_copy_is_refused_before_resync(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        nested = self.copy_dir / "nested"
+        nested.mkdir()
+        os.symlink(str(self.home / "missing"), str(nested / SKILL))
+        p = self.run_ae("install", "--link", f"inner={nested}")
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertEqual(os.readlink(nested / SKILL), str(self.home / "missing"))
+
+    def test_nested_link_locations_with_existing_parent_link_are_refused(self):
+        outer = self.custom_dir("outer")
+        outer.mkdir()
+        previous = self.custom_dir("previous")
+        previous.mkdir()
+        os.symlink(str(previous), str(outer / SKILL))
+        specs = [f"outer={outer}", f"inner={outer / SKILL / 'nested'}"]
+        for ordered in (specs, list(reversed(specs))):
+            with self.subTest(specs=ordered):
+                p = self.run_ae("install", "--link", ",".join(ordered))
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertFalse(self.copy_dir.exists(), "路径重叠时不能先复制")
+                self.assertEqual(os.readlink(outer / SKILL), str(previous))
+                self.assertEqual(list(previous.iterdir()), [], "不能在旧链接目标内创建子链接")
+
+    def test_doctor_fix_command_repairs_custom_path_with_shell_characters(self):
+        custom = self.custom_dir("path with space & 'quote'")
+        p = self.run_ae("install", "--link", f"cursor={custom}")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        link = custom / SKILL
+        link.unlink()
+        result = self.doctor_result("skill-links")
+        command = shlex.split(result["fix_command"])
+        p = subprocess.run(command, env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(link.resolve(), self.copy_dir.resolve())
 
     def test_uninstall_removes_custom_link(self):
         custom = self.custom_dir()
@@ -479,7 +528,7 @@ class LinkFixSpecTests(unittest.TestCase):
         self.assertEqual(ae.install_link_fix(Path("/repo"), ["codex"]),
                          "python3 /repo/ae.py install --link codex")
         self.assertEqual(ae.install_link_fix(None, ["codex", "cursor=/x y"], target=Path("/dir with space")),
-                         "python3 ae.py install --link codex,cursor=/x y --target '/dir with space'")
+                         "python3 ae.py install --link 'codex,cursor=/x y' --target '/dir with space'")
 
     def test_merged_links_keeps_custom_entries(self):
         custom = self.home / "cursor-skills"
