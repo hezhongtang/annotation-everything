@@ -1,0 +1,282 @@
+{
+  "schema": "ae-verify-run/1",
+  "wrapper_version": 1,
+  "state": "complete",
+  "run_id": "20261031T115104Z-dbf191",
+  "started_at": "2026-10-31T19:51:04+08:00",
+  "ended_at": "2026-10-31T19:51:04+08:00",
+  "wrapper": {
+    "name": "verify.py",
+    "version": 1,
+    "schema": "ae-verify-run/1",
+    "argv": [
+      "verify.py",
+      "run",
+      "--phase",
+      "ci",
+      "--reason",
+      "生成字段契约的初始样本（合成仓库）",
+      "--group",
+      "unit",
+      "--group",
+      "serve-check"
+    ],
+    "cwd_mode": "repo-root",
+    "python": "3.14.6"
+  },
+  "context": {
+    "phase": "ci",
+    "issue": null,
+    "pr": null,
+    "reason": "生成字段契约的初始样本（合成仓库）",
+    "groups_requested": [
+      "unit",
+      "serve-check"
+    ],
+    "groups_selected": [
+      "unit",
+      "serve-check"
+    ],
+    "selectors": []
+  },
+  "groups": [
+    {
+      "name": "unit",
+      "title": "完整单元",
+      "command": [
+        "python3",
+        "verify.py",
+        "_unit-runner",
+        "discover",
+        "tests"
+      ],
+      "equivalent": "python3 -m unittest discover tests",
+      "counter": "unittest",
+      "granularity": "case",
+      "scenarios": null,
+      "outcome": "passed",
+      "exit_status": 0,
+      "signal": null,
+      "timed_out": false,
+      "note": null,
+      "counts": {
+        "cases": 3,
+        "passed": 2,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 1,
+        "expected_failures": 0,
+        "unexpected_successes": 0,
+        "subtest_failures": 0,
+        "subtest_errors": 0
+      },
+      "cases": [
+        {
+          "id": "test_synth.AlphaTests.test_alpha_ok",
+          "name": "test_alpha_ok",
+          "status": "passed",
+          "seconds": 6.5e-05
+        },
+        {
+          "id": "test_synth.AlphaTests.test_alpha_skipped",
+          "name": "test_alpha_skipped",
+          "status": "skipped",
+          "seconds": 1.4e-05,
+          "message": "合成环境没有这个依赖"
+        },
+        {
+          "id": "test_synth.BetaTests.test_beta_ok",
+          "name": "test_beta_ok",
+          "status": "passed",
+          "seconds": 1.4e-05
+        }
+      ],
+      "seconds": {
+        "case_total": 9.3e-05,
+        "gap_total": 5.1e-05,
+        "gap_by_kind": {
+          "run-start": 9e-06,
+          "same-class": 1.5e-05,
+          "class-boundary": 1.4e-05,
+          "run-end": 1.3e-05
+        },
+        "unattributed": 1.5e-05
+      },
+      "timing": {
+        "child_seconds": 0.043059,
+        "case_seconds_total": 9.3e-05,
+        "fixture_seconds_total": 3.6e-05,
+        "unattributed_seconds": 1.5e-05
+      }
+    },
+    {
+      "name": "serve-check",
+      "title": "服务安全自检",
+      "command": [
+        "python3",
+        "skill/annotation-everything/scripts/serve.py",
+        "check"
+      ],
+      "equivalent": "python3 skill/annotation-everything/scripts/serve.py check",
+      "counter": "log",
+      "granularity": "group",
+      "scenarios": null,
+      "outcome": "passed",
+      "exit_status": 0,
+      "signal": null,
+      "timed_out": false,
+      "note": null,
+      "counts": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0
+      },
+      "cases": [],
+      "seconds": {},
+      "timing": {
+        "child_seconds": 0.013949,
+        "case_seconds_total": null,
+        "fixture_seconds_total": 0.0,
+        "unattributed_seconds": null
+      }
+    }
+  ],
+  "commit": {
+    "head": "85d62e746e5a32c578b795fc47af1d773105cdd3",
+    "short": "85d62e7",
+    "subject": "合成基线",
+    "branch": "main",
+    "working_tree_dirty": false
+  },
+  "input": {
+    "available": true,
+    "reason": null,
+    "fingerprint": "sha256:b038234bba966349f2c81a4c97472fd3abd979ab88477d8956236d8a0a1db619",
+    "final_fingerprint": "sha256:b038234bba966349f2c81a4c97472fd3abd979ab88477d8956236d8a0a1db619",
+    "fingerprint_scope": "HEAD + 工作树中所有非忽略路径的内容摘要（源码、测试、fixture、资源与执行配置）",
+    "baseline": {
+      "commit": "85d62e746e5a32c578b795fc47af1d773105cdd3",
+      "source": "merge-base(main)"
+    },
+    "changed_since_baseline": [],
+    "at_start": {
+      "available": true,
+      "reason": null,
+      "fingerprint": "sha256:b038234bba966349f2c81a4c97472fd3abd979ab88477d8956236d8a0a1db619",
+      "fingerprint_scope": "HEAD + 工作树中所有非忽略路径的内容摘要（源码、测试、fixture、资源与执行配置）",
+      "head": "85d62e746e5a32c578b795fc47af1d773105cdd3",
+      "staged": [],
+      "unstaged": [],
+      "untracked": [],
+      "counts": {
+        "staged": 0,
+        "unstaged": 0,
+        "untracked": 0
+      },
+      "skipped_large": []
+    },
+    "at_end": {
+      "available": true,
+      "reason": null,
+      "fingerprint": "sha256:b038234bba966349f2c81a4c97472fd3abd979ab88477d8956236d8a0a1db619",
+      "fingerprint_scope": "HEAD + 工作树中所有非忽略路径的内容摘要（源码、测试、fixture、资源与执行配置）",
+      "head": "85d62e746e5a32c578b795fc47af1d773105cdd3",
+      "staged": [],
+      "unstaged": [],
+      "untracked": [],
+      "counts": {
+        "staged": 0,
+        "unstaged": 0,
+        "untracked": 0
+      },
+      "skipped_large": []
+    },
+    "changed_during_run": false,
+    "covers_final_input": true,
+    "stale_reason": null
+  },
+  "environment": {
+    "os": {
+      "system": "Darwin",
+      "release": "25.6.0",
+      "machine": "arm64"
+    },
+    "python": {
+      "version": "3.14.6",
+      "implementation": "CPython",
+      "matches_wrapper": true
+    },
+    "host": {
+      "cpu_count": 10,
+      "timezone": "+0800"
+    },
+    "ci": {
+      "is_ci": false,
+      "provider": null,
+      "runner_os": null
+    },
+    "config_summary": {
+      "ae_home_set": false,
+      "ae_locale": null,
+      "ae_verify_dir_set": false
+    }
+  },
+  "timing": {
+    "queued_at": "2026-10-31T19:51:04+08:00",
+    "started_at": "2026-10-31T19:51:04+08:00",
+    "ended_at": "2026-10-31T19:51:04+08:00",
+    "queue_seconds": 0.000684,
+    "wall_seconds": 0.057249,
+    "wrapper_seconds": 0.000241,
+    "case_seconds_total": 9.3e-05,
+    "fixture_seconds_total": 3.6e-05,
+    "unattributed_seconds": 1.5e-05,
+    "attribution_note": "case_seconds_total 是各用例耗时之和，不等于 wall_seconds；类 / 模块级开销计入 fixture_seconds_total，不摊到任何单个用例"
+  },
+  "result": {
+    "outcome": "passed",
+    "exit_status": 0,
+    "counts": {
+      "groups": 2,
+      "cases": 3,
+      "checks": 3,
+      "passed": 5,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 1,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "subtest_failures": 0,
+      "subtest_errors": 0
+    },
+    "summary": "unit passed 用例 3（通过 2 / 失败 0 / 错误 0 / 跳过 1）；serve-check passed 检查 3 / 3",
+    "usable_as_evidence": true,
+    "notes": []
+  },
+  "evidence": {
+    "integrity": "ok",
+    "record_path": "record.json",
+    "logs": [
+      {
+        "group": "unit",
+        "path": "unit.log",
+        "bytes": 332,
+        "sha256": "063462630ee3fc8925256034d1afc8bcfd43e3347fbfd15f472ed982678f153d"
+      },
+      {
+        "group": "serve-check",
+        "path": "serve-check.log",
+        "bytes": 133,
+        "sha256": "8bab99d3b89fd5ddd5c7f47d0263441f24c9ba32fef4af84b895ed97509b7f80"
+      }
+    ],
+    "cases": [
+      {
+        "group": "unit",
+        "path": "unit.cases.json",
+        "cases": 3
+      }
+    ],
+    "notes": []
+  }
+}

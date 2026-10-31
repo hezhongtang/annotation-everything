@@ -1,0 +1,323 @@
+{
+  "schema": "ae-verify-run/1",
+  "wrapper_version": 1,
+  "state": "complete",
+  "run_id": "20261031T115103Z-74d976",
+  "started_at": "2026-10-31T19:51:03+08:00",
+  "ended_at": "2026-10-31T19:51:04+08:00",
+  "wrapper": {
+    "name": "verify.py",
+    "version": 1,
+    "schema": "ae-verify-run/1",
+    "argv": [
+      "verify.py",
+      "run",
+      "--phase",
+      "pr",
+      "--reason",
+      "生成字段契约的初始样本（合成仓库）",
+      "--group",
+      "all",
+      "--pr",
+      "50"
+    ],
+    "cwd_mode": "repo-root",
+    "python": "3.14.6"
+  },
+  "context": {
+    "phase": "pr",
+    "issue": null,
+    "pr": 50,
+    "reason": "生成字段契约的初始样本（合成仓库）",
+    "groups_requested": [
+      "all"
+    ],
+    "groups_selected": [
+      "unit",
+      "serve-check",
+      "browser"
+    ],
+    "selectors": []
+  },
+  "groups": [
+    {
+      "name": "unit",
+      "title": "完整单元",
+      "command": [
+        "python3",
+        "verify.py",
+        "_unit-runner",
+        "discover",
+        "tests"
+      ],
+      "equivalent": "python3 -m unittest discover tests",
+      "counter": "unittest",
+      "granularity": "case",
+      "scenarios": null,
+      "outcome": "passed",
+      "exit_status": 0,
+      "signal": null,
+      "timed_out": false,
+      "note": null,
+      "counts": {
+        "cases": 3,
+        "passed": 2,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 1,
+        "expected_failures": 0,
+        "unexpected_successes": 0,
+        "subtest_failures": 0,
+        "subtest_errors": 0
+      },
+      "cases": [
+        {
+          "id": "test_synth.AlphaTests.test_alpha_ok",
+          "name": "test_alpha_ok",
+          "status": "passed",
+          "seconds": 2.9e-05
+        },
+        {
+          "id": "test_synth.AlphaTests.test_alpha_skipped",
+          "name": "test_alpha_skipped",
+          "status": "skipped",
+          "seconds": 1.3e-05,
+          "message": "合成环境没有这个依赖"
+        },
+        {
+          "id": "test_synth.BetaTests.test_beta_ok",
+          "name": "test_beta_ok",
+          "status": "passed",
+          "seconds": 1.6e-05
+        }
+      ],
+      "seconds": {
+        "case_total": 5.8e-05,
+        "gap_total": 4.3e-05,
+        "gap_by_kind": {
+          "run-start": 9e-06,
+          "same-class": 1e-05,
+          "class-boundary": 1.3e-05,
+          "run-end": 1.1e-05
+        },
+        "unattributed": 1e-05
+      },
+      "timing": {
+        "child_seconds": 0.043519,
+        "case_seconds_total": 5.8e-05,
+        "fixture_seconds_total": 3.3e-05,
+        "unattributed_seconds": 1e-05
+      }
+    },
+    {
+      "name": "serve-check",
+      "title": "服务安全自检",
+      "command": [
+        "python3",
+        "skill/annotation-everything/scripts/serve.py",
+        "check"
+      ],
+      "equivalent": "python3 skill/annotation-everything/scripts/serve.py check",
+      "counter": "log",
+      "granularity": "group",
+      "scenarios": null,
+      "outcome": "failed",
+      "exit_status": 1,
+      "signal": null,
+      "timed_out": false,
+      "note": null,
+      "counts": {
+        "total": 3,
+        "passed": 2,
+        "failed": 1
+      },
+      "cases": [],
+      "seconds": {},
+      "timing": {
+        "child_seconds": 0.014277,
+        "case_seconds_total": null,
+        "fixture_seconds_total": 0.0,
+        "unattributed_seconds": null
+      }
+    },
+    {
+      "name": "browser",
+      "title": "完整浏览器",
+      "command": [
+        "uv",
+        "run",
+        "--no-project",
+        "--with",
+        "playwright",
+        "python",
+        "tests/e2e_browser.py"
+      ],
+      "equivalent": "uv run --no-project --with playwright python tests/e2e_browser.py",
+      "counter": "log",
+      "granularity": "group",
+      "scenarios": [],
+      "outcome": "failed",
+      "exit_status": 1,
+      "signal": null,
+      "timed_out": false,
+      "note": null,
+      "counts": {
+        "total": 3,
+        "passed": 2,
+        "failed": 1
+      },
+      "cases": [],
+      "seconds": {},
+      "timing": {
+        "child_seconds": 0.762051,
+        "case_seconds_total": null,
+        "fixture_seconds_total": 0.0,
+        "unattributed_seconds": null
+      }
+    }
+  ],
+  "commit": {
+    "head": "cf8877854cb11ce51f561fda06f88657b335ab45",
+    "short": "cf88778",
+    "subject": "合成基线",
+    "branch": "main",
+    "working_tree_dirty": false
+  },
+  "input": {
+    "available": true,
+    "reason": null,
+    "fingerprint": "sha256:334d11d6aee9e71507e3a38d4b6b3d39fff3de9fde3e7ce8d762d5b8f5d7df3e",
+    "final_fingerprint": "sha256:334d11d6aee9e71507e3a38d4b6b3d39fff3de9fde3e7ce8d762d5b8f5d7df3e",
+    "fingerprint_scope": "HEAD + 工作树中所有非忽略路径的内容摘要（源码、测试、fixture、资源与执行配置）",
+    "baseline": {
+      "commit": "cf8877854cb11ce51f561fda06f88657b335ab45",
+      "source": "merge-base(main)"
+    },
+    "changed_since_baseline": [],
+    "at_start": {
+      "available": true,
+      "reason": null,
+      "fingerprint": "sha256:334d11d6aee9e71507e3a38d4b6b3d39fff3de9fde3e7ce8d762d5b8f5d7df3e",
+      "fingerprint_scope": "HEAD + 工作树中所有非忽略路径的内容摘要（源码、测试、fixture、资源与执行配置）",
+      "head": "cf8877854cb11ce51f561fda06f88657b335ab45",
+      "staged": [],
+      "unstaged": [],
+      "untracked": [],
+      "counts": {
+        "staged": 0,
+        "unstaged": 0,
+        "untracked": 0
+      },
+      "skipped_large": []
+    },
+    "at_end": {
+      "available": true,
+      "reason": null,
+      "fingerprint": "sha256:334d11d6aee9e71507e3a38d4b6b3d39fff3de9fde3e7ce8d762d5b8f5d7df3e",
+      "fingerprint_scope": "HEAD + 工作树中所有非忽略路径的内容摘要（源码、测试、fixture、资源与执行配置）",
+      "head": "cf8877854cb11ce51f561fda06f88657b335ab45",
+      "staged": [],
+      "unstaged": [],
+      "untracked": [],
+      "counts": {
+        "staged": 0,
+        "unstaged": 0,
+        "untracked": 0
+      },
+      "skipped_large": []
+    },
+    "changed_during_run": false,
+    "covers_final_input": true,
+    "stale_reason": null
+  },
+  "environment": {
+    "os": {
+      "system": "Darwin",
+      "release": "25.6.0",
+      "machine": "arm64"
+    },
+    "python": {
+      "version": "3.14.6",
+      "implementation": "CPython",
+      "matches_wrapper": true
+    },
+    "host": {
+      "cpu_count": 10,
+      "timezone": "+0800"
+    },
+    "ci": {
+      "is_ci": false,
+      "provider": null,
+      "runner_os": null
+    },
+    "config_summary": {
+      "ae_home_set": false,
+      "ae_locale": null,
+      "ae_verify_dir_set": false
+    }
+  },
+  "timing": {
+    "queued_at": "2026-10-31T19:51:03+08:00",
+    "started_at": "2026-10-31T19:51:03+08:00",
+    "ended_at": "2026-10-31T19:51:04+08:00",
+    "queue_seconds": 0.000678,
+    "wall_seconds": 0.820362,
+    "wrapper_seconds": 0.000515,
+    "case_seconds_total": 5.8e-05,
+    "fixture_seconds_total": 3.3e-05,
+    "unattributed_seconds": 1e-05,
+    "attribution_note": "case_seconds_total 是各用例耗时之和，不等于 wall_seconds；类 / 模块级开销计入 fixture_seconds_total，不摊到任何单个用例"
+  },
+  "result": {
+    "outcome": "failed",
+    "exit_status": 1,
+    "counts": {
+      "groups": 3,
+      "cases": 3,
+      "checks": 6,
+      "passed": 6,
+      "failed": 2,
+      "errors": 0,
+      "skipped": 1,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "subtest_failures": 0,
+      "subtest_errors": 0
+    },
+    "summary": "unit passed 用例 3（通过 2 / 失败 0 / 错误 0 / 跳过 1）；serve-check failed 检查 2 / 3；browser failed 检查 2 / 3",
+    "usable_as_evidence": false,
+    "notes": []
+  },
+  "evidence": {
+    "integrity": "ok",
+    "record_path": "record.json",
+    "logs": [
+      {
+        "group": "unit",
+        "path": "unit.log",
+        "bytes": 332,
+        "sha256": "063462630ee3fc8925256034d1afc8bcfd43e3347fbfd15f472ed982678f153d"
+      },
+      {
+        "group": "serve-check",
+        "path": "serve-check.log",
+        "bytes": 107,
+        "sha256": "3553c7c21a112fccb5642d9750beef20178e2e49e6a3da892ece477139bc9fa7"
+      },
+      {
+        "group": "browser",
+        "path": "browser.log",
+        "bytes": 126,
+        "sha256": "5f63cbcc65b481bceff2c09ad254ccd624b82b56e367743ee8d39e39029e739e"
+      }
+    ],
+    "cases": [
+      {
+        "group": "unit",
+        "path": "unit.cases.json",
+        "cases": 3
+      }
+    ],
+    "notes": []
+  }
+}
