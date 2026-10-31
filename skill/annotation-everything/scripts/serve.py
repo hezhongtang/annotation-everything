@@ -347,9 +347,13 @@ class Handler(BaseHTTPRequestHandler):
         except Reject as e:
             self._reject(e)
         except (store.NoteError, UnicodeEncodeError) as e:  # 由请求内容引起的错误一律 4xx，页面不会反复重试
-            self._json(400, {"error": str(e) if isinstance(e, store.NoteError)
-                             else self._t("serve.err.badCharacters"),
-                             "code": "bad-note", "app": APP})
+            detail = {"error": str(e) if isinstance(e, store.NoteError)
+                       else self._t("serve.err.badCharacters"), "code": "bad-note", "app": APP}
+            if isinstance(e, store.TextLimitError):
+                params = {"field": e.field, "limit": e.limit}
+                detail.update(error=self._t("serve.err.textTooLong", **params),
+                              reason="text-too-long", params=params)
+            self._json(400, detail)
         except store.NotFound:
             self._json(404, {"error": self._t("serve.err.noNote"), "code": "no-note", "app": APP})
         except Exception as e:  # 服务端错误也写日志，方便排障

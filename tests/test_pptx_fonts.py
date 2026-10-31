@@ -263,15 +263,21 @@ class FontCheckTests(unittest.TestCase):
     def test_pdf_tool_timeout_is_reported(self):
         self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
         self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
-        self.tool("pdffonts", "exec sleep 2")
         pdf = self.root / "synthetic.pdf"
         pdf.write_bytes(b"%PDF synthetic")
+        # 只让 PDF 工具超时；全局缩短 TOOL_TIMEOUT 会在高负载下误伤 fc-list。
         run = '''
 import sys
+from unittest.mock import patch
 sys.path.insert(0, sys.argv[1])
 import check_pptx_fonts
-check_pptx_fonts.TOOL_TIMEOUT = 0.5
-sys.exit(check_pptx_fonts.main([sys.argv[2], "--pdf", sys.argv[3]]))
+real_run = check_pptx_fonts.subprocess.run
+def run_tool(command, **kwargs):
+    if command[0] == "pdffonts":
+        raise check_pptx_fonts.subprocess.TimeoutExpired(command, kwargs["timeout"])
+    return real_run(command, **kwargs)
+with patch.object(check_pptx_fonts.subprocess, "run", side_effect=run_tool):
+    sys.exit(check_pptx_fonts.main([sys.argv[2], "--pdf", sys.argv[3]]))
 '''
         p = subprocess.run([sys.executable, "-c", run, str(CHECKER.parent), str(self.pptx), str(pdf)],
                            env=self.env, capture_output=True, text=True, timeout=10)

@@ -66,6 +66,11 @@ UNKNOWN_FORMAT = ("既不是 JSON，也不是能识别的批注 Markdown。新�
 class FormatError(Exception):
     """导出内容读不了：格式版本或内容语言不认识，或既不是 JSON 也不是能读的 Markdown。"""
 
+    def __init__(self, message: str, *, code: str = "unknown", **params: object):
+        super().__init__(message)
+        self.code = code
+        self.params = params
+
 
 class Grammar:
     """一种内容语言的导出与导入文法。
@@ -76,7 +81,7 @@ class Grammar:
 
     def __init__(self, lang: str) -> None:
         if lang not in LANGS:
-            raise FormatError(f"不支持的内容语言「{lang}」，可选：{'、'.join(LANGS)}")
+            raise FormatError(f"不支持的内容语言「{lang}」，可选：{'、'.join(LANGS)}", code="language", language=lang)
         self.lang = lang
         en = lang == "en"
         if en:
@@ -329,10 +334,11 @@ def parse_markdown(text: str) -> tuple[list[dict[str, Any]], list[dict[str, str]
         return items, parse_always(text, "zh-CN")
     if version != FORMAT_VERSION:
         raise FormatError(f"这个导出用的是格式版本 v{version}，当前只支持 v{FORMAT_VERSION}："
-                          "请把 notes.py 和对照页都升级到同一版本再导入")
+                          "请把 notes.py 和对照页都升级到同一版本再导入", code="version", version=version,
+                          supported=FORMAT_VERSION)
     g = _GRAMMARS.get(lang)
     if g is None:
-        raise FormatError(f"这个导出的内容语言是「{lang}」，当前只支持 {'、'.join(LANGS)}")
+        raise FormatError(f"这个导出的内容语言是「{lang}」，当前只支持 {'、'.join(LANGS)}", code="language", language=lang)
     return g.parse(text), parse_always(text, lang)
 
 
@@ -345,7 +351,7 @@ def parse_always(text: str, lang: str = "zh-CN") -> list[dict[str, str]] | None:
     """导出开头「常驻技能（…）：a（讲稿）、b（全部批注）」那一行；没有这行返回 None。"""
     g = _GRAMMARS.get(lang)
     if g is None:
-        raise FormatError(f"不支持的内容语言「{lang}」，可选：{'、'.join(LANGS)}")
+        raise FormatError(f"不支持的内容语言「{lang}」，可选：{'、'.join(LANGS)}", code="language", language=lang)
     m = g.always.search(text)
     if not m:
         return None

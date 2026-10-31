@@ -61,6 +61,14 @@ class NoteError(ValueError):
     """请求内容不合法（返回 400）。"""
 
 
+class TextLimitError(NoteError):
+    """字段过长：保留旧错误文本，提供字段与上限用于界面本地化。"""
+
+    def __init__(self, field: str, limit: int):
+        super().__init__(f"{field} 过长（上限 {limit} 字）")
+        self.field, self.limit = field, limit
+
+
 class HandoffError(NoteError):
     """交接业务拒绝：保留旧异常文本，附稳定代码与参数供 CLI 本地化。"""
 
@@ -234,7 +242,7 @@ def _clean_edit(v: Any) -> dict[str, str] | None:
     if v["op"] == "replace":
         to = fix_text(v.get("to"))
         if len(to) > MAX_TEXT:
-            raise NoteError("edit.to 过长")
+            raise TextLimitError("edit.to", MAX_TEXT)
         out["to"] = to
     return out
 
@@ -625,7 +633,7 @@ def _clean_fields(data: dict[str, Any], *, partial: bool) -> dict[str, Any]:
             v = fix_text(v)
             if k in ("text", "quote"):
                 if len(v) > MAX_TEXT:
-                    raise NoteError(f"{k} 过长（上限 {MAX_TEXT} 字）")
+                    raise TextLimitError(k, MAX_TEXT)
             else:  # 标题、对象等短字段：超长就截断，不拒绝（否则这一页永远加不上批注）
                 v = v[:MAX_SHORT]
         out[k] = v

@@ -44,6 +44,7 @@ class AeLocaleTestCase(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
+        self.ae_script = AE
 
     def env(self, **extra) -> dict:
         base = {k: v for k, v in os.environ.items()
@@ -54,7 +55,7 @@ class AeLocaleTestCase(unittest.TestCase):
         return base
 
     def run_ae(self, *args: str, **extra):
-        return subprocess.run([sys.executable, str(AE), *args], env=self.env(**extra),
+        return subprocess.run([sys.executable, str(self.ae_script), *args], env=self.env(**extra),
                               capture_output=True, text=True, timeout=120)
 
     def install(self, *args: str, **extra):
@@ -294,10 +295,19 @@ class DoctorMachineOutputTests(AeLocaleTestCase):
         self.assertIn("[通过] python-version", p.stdout)
 
     def test_exit_codes_are_unchanged(self):
+        # 独立来源路径避免把并行 e2e 的同仓库服务识别为本测试空台账的残留服务。
+        repo = self.root / "repo"
+        repo.mkdir()
+        self.ae_script = repo / "ae.py"
+        shutil.copyfile(AE, self.ae_script)
+        shutil.copytree(ROOT / "skill", repo / "skill",
+                        ignore=shutil.ignore_patterns("__pycache__", ".DS_Store"))
         self.assertEqual(self.run_ae("doctor", "--json").returncode, 1, "没安装时安装状态失败")
         self.install()
-        self.assertIn(self.run_ae("doctor").returncode, (0, 1))
-        self.assertEqual(self.run_ae("repair", "--dry-run").returncode, 0)
+        p = self.run_ae("doctor")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        p = self.run_ae("repair", "--dry-run")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
 
 class CommandMessageTests(AeLocaleTestCase):
