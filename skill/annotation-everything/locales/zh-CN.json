@@ -151,6 +151,19 @@
     "viewer.mode.file": "○ 本地文件模式",
     "viewer.mode.offlineTitle": "新改动暂存在本浏览器；重新运行 serve.py 后会自动补传",
     "viewer.mode.fileTitle": "批注只存在本浏览器。用「批注 → 复制全部 / 下载」交给 Agent；或运行 serve.py 让批注自动落盘",
-    "viewer.styleDroppedMark": "整页风格优化：已去掉刚放的标注"
+    "viewer.styleDroppedMark": "整页风格优化：已去掉刚放的标注",
+    "formats.pageHead": "页头应为「### 第 N 页｜标题」（中文）或「### Page N｜Title」（英文）：### 之后写页码，用全角「｜」或半角「|」与标题分开，再写标题。",
+    "formats.fields": "可识别的字段名为 时长 / Duration、讲法 / Talking points、过渡 / Transition、可能被问 / Likely questions（冒号全角半角都可以）",
+    "build.scriptNoPages": "{path} 里没找到讲稿页头。{expected}",
+    "build.scriptBadHead": "{path} 第 {line} 行不是能识别的讲稿页头：「{text}」。{expected}",
+    "build.scriptDuplicatePage": "{path} 里第 {page} 页有多个页头（第 {lines} 行）。讲稿页码必须唯一，并与报告页序一一对应。",
+    "build.pageMismatch": "讲稿页码与报告页序不一致：报告 {report} 页，讲稿 {script} 页{detail}",
+    "build.pageMismatchLenient": "。修正后重跑，或加 --lenient 以报告页序为准（缺讲稿的页显示为空）。",
+    "build.diff.onlyReport": "；报告有、讲稿缺：{pages}",
+    "build.diff.onlyScript": "；讲稿有、报告缺：{pages}",
+    "build.diff.order": "；页序不同",
+    "build.scriptDuplicateField": "第 {page} 页的字段「{field}」重复（第 {lines} 行），采用最后一次的值。",
+    "build.scriptUnknownField": "第 {page} 页第 {line} 行的「{field}」不是可识别的字段名，这段内容按正文保留。{known}",
+    "build.scriptBadDuration": "第 {page} 页的时长「{text}」看不懂，累计用时按 0 秒算。时长写「N 分钟」「N 秒」或「N min」「N seconds」。"
   }
 }

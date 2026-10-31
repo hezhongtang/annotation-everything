@@ -40,7 +40,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
-from build_viewer import find_pages, resolve_sources, strip_tags, write_private, PAGE_HEAD  # noqa: E402
+from build_viewer import (FIELD_LABEL, field_name, find_pages, page_heads,  # noqa: E402
+                          resolve_sources, strip_tags, write_private)
 import difflib  # noqa: E402
 import match  # noqa: E402
 
@@ -196,10 +197,11 @@ def side_texts(sources: dict[str, Path | None] | None) -> dict[str, dict[int, st
                 out["报告"][sct["n"]] = strip_tags(re.sub(r"<(script|style)\b.*?</\1\s*>", " ", sct["html"], flags=re.S | re.I))
         if sources.get("script"):
             md = sources["script"].read_text(encoding="utf-8")
-            heads = list(PAGE_HEAD.finditer(md))
+            heads = page_heads(md)   # 中英页头都认，与界面语言无关
             for k, h in enumerate(heads):
                 body = md[h.end(): heads[k + 1].start() if k + 1 < len(heads) else len(md)]
-                body = re.sub(r"\*\*(时长|讲法|过渡|可能被问)\*\*\s*[：:]", "\n", body).replace("**", "")
+                # 只删认得出来的字段名：认不出的按正文显示（与对照页一致），不然对应句提示会对不上
+                body = FIELD_LABEL.sub(lambda m: "\n" if field_name(m.group(1)) else m.group(0), body).replace("**", "")
                 out["讲稿"][int(h.group(1))] = h.group(2) + "\n" + body
     except (OSError, ValueError, SystemExit):
         pass
@@ -827,7 +829,7 @@ def _parts(kind: str, text: str) -> list[tuple[str, int, str]]:
     try:
         if kind == "report":
             return [(f"k:{p['key']}" if p.get("key") else f"n:{p['n']}", int(p["n"]), p["html"]) for p in find_pages(text)]
-        heads = list(PAGE_HEAD.finditer(text))
+        heads = page_heads(text)   # 中英页头都认，与界面语言无关
         if heads:
             return [(f"n:{h.group(1)}", int(h.group(1)), text[h.start(): heads[k + 1].start() if k + 1 < len(heads) else len(text)])
                     for k, h in enumerate(heads)]

@@ -247,10 +247,12 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 The command prints the annotations you just submitted, which is exactly what the agent receives.
 
+To try English speaker notes, point `--script` at `fixtures/sample/script.en.md` (the same report in English): the notes column then shows the English talking points, durations, transitions and questions, while the interface language stays as it is.
+
 **3. Prepare your own material**
 
 - **Report**: one HTML file in which every page is a `<section class="page" data-page="N" data-key="unique-key">` element.
-- **Speaker notes**: one Markdown file split into pages by `### 第 N 页｜标题` headings ("page N | title"), giving the duration, talking points, transition and likely questions for each page.
+- **Speaker notes**: one Markdown file split into pages by `### 第 N 页｜标题` headings ("page N | title"), giving the duration, talking points, transition and likely questions for each page. English notes use `### Page N｜Title` with `**Duration**`, `**Talking points**`, `**Transition**` and `**Likely questions**` instead. Both forms may be mixed in one file, and which form is recognized does not depend on the interface language: a Chinese interface reviews English notes and an English interface reviews Chinese notes, with titles and body text kept exactly as written. When a heading cannot be recognized, a page number repeats or a field repeats, the builder reports the line number and the expected form in the current language instead of treating the input as an empty script.
 
 See [references/formats.md](skill/annotation-everything/references/formats.md) for the full format (in Chinese).
 

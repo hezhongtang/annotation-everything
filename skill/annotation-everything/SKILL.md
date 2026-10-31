@@ -31,7 +31,7 @@ python3 $S/build_viewer.py --report 报告.html --script 讲稿.md --out 审阅�
 
 - **按材料给审阅目录起名**（如 `v7-review/`、`ha379-review/`），不要用 `workbench`、`review` 这类通用名；用 `--name` 给一个人看得懂的**审阅名**（默认取页面标题）。审阅名用在导出文件名（`批注_<审阅名>_<标识前4位>_<时间>`）和 `list` 里，重建时沿用。本机已有同名审阅时生成器会提醒一次，不拦。
 
-- 报告须是逐页 `<section class="page" data-page="N" data-key="唯一键">`；讲稿是 `### 第 N 页｜标题` 加 **时长 / 讲法 / 过渡 / 可能被问**。格式细节见 `references/formats.md`，拿到陌生材料先对照检查。
+- 报告须是逐页 `<section class="page" data-page="N" data-key="唯一键">`；讲稿是 `### 第 N 页｜标题` 加 **时长 / 讲法 / 过渡 / 可能被问**，英文讲稿写 `### Page N｜Title` 加 **Duration / Talking points / Transition / Likely questions**（同一份里可以混用，认哪种写法与界面语言无关，标题和正文不翻译）。格式细节见 `references/formats.md`，拿到陌生材料先对照检查。
 - PPTX 转图前先运行 `python3 $S/check_pptx_fonts.py 原始.pptx`；转出 PDF 后再加 `--pdf 转换后.pdf` 对照 `pdffonts` 的字体、嵌入和子集证据。退出码 0 表示本次检查没有发现差异，1 表示有待核查或未知项，2 表示输入或工具错误。字体清单不能证明每个字形的实际渲染；补字体并重转后仍须逐页检查换行、间距和遮挡。
 - `--script` 可省（只批注报告）；页码对不上会列出差异并退出，确认是讲稿漏页后加 `--lenient`。
 - 板块导航默认从报告目录推断；不对就用 `--sections "开篇:1-6,主线一:7-21"`。标题默认取报告 `<title>`，可用 `--title`。
