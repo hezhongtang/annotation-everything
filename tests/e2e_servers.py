@@ -13,6 +13,10 @@ KeyboardInterrupt；SIGTERM 与 SIGHUP 不触发 `atexit`，另接信号处理�
 期间又补一个 kill，都不该把还没收完的进程留下。
 
 这张登记表和「审阅台账」不是一回事——后者按审阅标识记录目录与端口。
+
+等待参数（issue #51）：TERMINATE_TIMEOUT / READY_TIMEOUT 是缺省配置，语义与
+产品超时一致；测试通过受控参数（TestCleanup(terminate_timeout=...) 与
+start_server(ready_timeout=...)）注入更短的等待，不扩散成产品开关。
 """
 from __future__ import annotations
 
@@ -39,9 +43,11 @@ BLOCKED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 class TestCleanup:
     """登记测试拉起的子进程与临时目录，退出时统一收掉。"""
 
-    def __init__(self):
+    def __init__(self, terminate_timeout: float | None = None):
         self._procs: list[subprocess.Popen] = []
         self._dirs: list[Path] = []
+        # None 表示沿用模块缺省；测试可注入短等待，缺省配置不变
+        self.terminate_timeout = TERMINATE_TIMEOUT if terminate_timeout is None else terminate_timeout
 
     def add(self, proc: subprocess.Popen) -> None:
         self._procs.append(proc)
@@ -58,7 +64,7 @@ class TestCleanup:
         with _signals_deferred():
             while self._procs:
                 proc = self._procs[0]
-                reap(proc)
+                reap(proc, timeout=self.terminate_timeout)
                 self._procs.remove(proc)   # 收掉了才摘，中途被打断也不会丢下剩下的
             dirs, self._dirs = self._dirs, []
             for d in dirs:
@@ -83,12 +89,17 @@ def _signals_deferred(signals=BLOCKED_SIGNALS):
             signal.signal(sig, handler)
 
 
-def reap(proc: subprocess.Popen) -> tuple[str | None, str | None]:
-    """结束子进程并返回管道输出；不响应 SIGTERM 的升级到 SIGKILL。"""
+def reap(proc: subprocess.Popen, timeout: float | None = None) -> tuple[str | None, str | None]:
+    """结束子进程并返回管道输出；不响应 SIGTERM 的升级到 SIGKILL。
+
+    timeout 缺省用 TERMINATE_TIMEOUT；测试可注入短等待（issue #51）。
+    """
+    if timeout is None:
+        timeout = TERMINATE_TIMEOUT
     if proc.poll() is None:
         proc.terminate()
     try:
-        return proc.communicate(timeout=TERMINATE_TIMEOUT)
+        return proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
         return proc.communicate()
@@ -127,22 +138,25 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def start_server(d: Path, port: int, cleanup: TestCleanup = CLEANUP, *, scripts: Path | None = None) -> subprocess.Popen:
+def start_server(d: Path, port: int, cleanup: TestCleanup = CLEANUP, *, scripts: Path | None = None,
+                 ready_timeout: float | None = None) -> subprocess.Popen:
     scripts = SCRIPTS if scripts is None else scripts
+    if ready_timeout is None:
+        ready_timeout = READY_TIMEOUT
     p = subprocess.Popen([sys.executable, str(scripts / "serve.py"), str(d), "--port", str(port), "--no-open"],
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     cleanup.add(p)
-    end = time.time() + READY_TIMEOUT
-    while time.time() < end:
+    end = time.monotonic() + ready_timeout
+    while time.monotonic() < end:
         info = d / ".annotation-server.json"
         if info.exists() and json.loads(info.read_text()).get("port") == port:
             return p
         time.sleep(0.1)
-    _, stderr = reap(p)
+    _, stderr = reap(p, timeout=cleanup.terminate_timeout)
     cleanup.discard(p)   # 启动失败也先完成回收，中断时仍由退出清理接手
     raise RuntimeError("server did not start on the expected port: " + (stderr or ""))
 
 
 def stop(p: subprocess.Popen, cleanup: TestCleanup = CLEANUP) -> None:
-    reap(p)
+    reap(p, timeout=cleanup.terminate_timeout)
     cleanup.discard(p)   # 回收成功后才注销；被中断时保留登记，交给退出清理
