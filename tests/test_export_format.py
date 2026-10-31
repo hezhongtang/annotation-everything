@@ -7,11 +7,13 @@ export_import_checks 用同一批用例核对。只用标准库：python3 -m uni
 from __future__ import annotations
 
 import io
+import importlib.util
 import json
 import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -128,15 +130,8 @@ class MarkerTests(unittest.TestCase):
 
     ZH_ONLY = ("## 第 3 页｜", "【已处理】", "【已初改·待复核】")
 
-    def test_grammar_literals_do_not_come_from_the_catalog(self):
-        """普通 UI 文案修改不能隐式改变已发布的交换文法：文法字面量不在界面词典里。"""
-        for locale in ("zh-CN", "en"):
-            messages = i18n.load_catalog(locale)["messages"]
-            for key, value in messages.items():
-                text = value if isinstance(value, str) else ""
-                for literal in self.GRAMMAR_LITERALS + self.ZH_ONLY:
-                    self.assertNotIn(literal, text, f"{locale} 的 {key} 里出现了文法字面量 {literal!r}")
-        # 同一批字面量必须在导出里真的出现（中文的看中文导出，英文的看英文导出）
+    def test_version_one_labels_stay_fixed(self):
+        """交换格式保持 v1 标签；显示文案可以恰好使用相同的词，不代表文法依赖词典。"""
         with_resolved = rich_notes() + [{"id": "r" * 16, "page": 9, "title": "结尾", "target": "报告",
                                           "text": "已处理的意见", "status": "resolved",
                                           "at": "2026-10-27T14:00:00Z"}]
@@ -150,16 +145,17 @@ class MarkerTests(unittest.TestCase):
                 self.assertIn(literal, en)   # 其余几个这批合成数据里没有对应字段
 
     def test_ui_copy_change_does_not_change_the_grammar(self):
-        before = ef.render(rich_notes(), title="t", lang="en", exported_at=AT)
-        catalogs = i18n.load_catalog("en")
-        saved = catalogs["messages"].get("viewer.add")
-        catalogs["messages"]["viewer.add"] = "Totally different button text"
-        try:
-            after = ef.render(rich_notes(), title="t", lang="en", exported_at=AT)
-        finally:
-            if saved is not None:
-                catalogs["messages"]["viewer.add"] = saved
-        self.assertEqual(before, after)
+        """从模块加载到导出和解析都不读取 UI 词典，普通文案变化不会影响交换格式。"""
+        before = {lang: ef.render(rich_notes(), title="t", lang=lang, exported_at=AT)
+                  for lang in ("zh-CN", "en")}
+        spec = importlib.util.spec_from_file_location("isolated_export_format", SCRIPTS / "export_format.py")
+        isolated = importlib.util.module_from_spec(spec)
+        with mock.patch.object(i18n, "load_catalog", side_effect=AssertionError("交换格式不得读取 UI 词典")) as load:
+            spec.loader.exec_module(isolated)
+            for lang, text in before.items():
+                self.assertEqual(isolated.render(rich_notes(), title="t", lang=lang, exported_at=AT), text)
+                self.assertEqual(isolated.parse_markdown(text), ef.parse_markdown(text))
+            load.assert_not_called()
 
 
 class RoundTripTests(unittest.TestCase):

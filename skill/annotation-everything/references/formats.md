@@ -309,4 +309,4 @@ python3 $S/notes.py export 审阅目录 [--lang zh-CN|en|auto] [--format md|json
 python3 $S/notes.py import 审阅目录 批注文件.md|json [--force]
 ```
 
-`--lang` 的优先级与 `show --locale` 相同：`--lang` > `AE_LOCALE` > 审阅里存的 `locale` > 中文。默认只导未处理，`--all` 含已处理。不带 `--out` 时打印到标准输出。文件名（页面下载与 `--out` 给目录时）保留审阅识别 `namespace` 和 12 位紧凑 UTC 时间，只有按语言换的前缀会变（`批注_` / `annotations_`）；导出时间写本地时间 `YYYY-MM-DD HH:MM:SS`，两种语言同一格式，时间戳、数值和坐标都不随地区格式改变。
+`--lang` 的优先级与 `show --locale` 相同：`--lang` > `AE_LOCALE` > 审阅里存的 `locale` > 中文。默认只导未处理，`--all` 含已处理。不带 `--out` 时打印到标准输出；`--out` 指定完整文件路径，不接受目录。页面下载的文件名保留审阅识别 `namespace` 和 12 位紧凑 UTC 时间，只有按语言换的前缀会变（`批注_` / `annotations_`）；导出时间写本地时间 `YYYY-MM-DD HH:MM:SS`，两种语言同一格式，时间戳、数值和坐标都不随地区格式改变。
