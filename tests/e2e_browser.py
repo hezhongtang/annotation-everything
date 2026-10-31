@@ -958,6 +958,45 @@ def handoff_i18n_checks(browser, tmp: Path):
         ok(page.inner_text("#doHand").split("⌘")[0] == "Ask for the review", "英文请求复核按钮")
         page.keyboard.press("Escape")
 
+        # 断线提交、待补传与重连重试：英文说清状态与恢复方式，不把未确认的提交说成已保存
+        items = json.loads((d / "handoff.json").read_text(encoding="utf-8"))["items"]
+        ctx.set_offline(True)
+        page.click("#handBtn")
+        page.fill("#handMsg", "断线时补一条")
+        page.click("#doHand")
+        ok(wait_until(lambda: page.text_content("#handState") == "Hand to the agent (held for sending)", page, 6),
+           f"断线提交英文说清还在暂存（实际 {page.text_content('#handState')!r}）")
+        ok("held for sending" in page.inner_text("#mode"), f"待补传英文计数（实际 {page.inner_text('#mode')!r}）")
+        ok(len(json.loads((d / "handoff.json").read_text(encoding="utf-8"))["items"]) == len(items),
+           "未确认的提交不写进 handoff.json")
+        ok(wait_until(lambda: "Nothing is running on port" in page.inner_text("#srvBar")
+                      and "serve.py" in page.inner_text("#srvBar"), page, 10),
+           f"断线时英文提示条给出恢复方式（实际 {page.inner_text('#srvBar')[:80]!r}）")
+        page.keyboard.press("Escape")
+        ctx.set_offline(False)
+        ok(wait_until(lambda: len(json.loads((d / "handoff.json").read_text(encoding="utf-8"))["items"])
+                      == len(items) + 1, page, 10), "重连后暂存的提交自动补传")
+        ok(wait_until(lambda: "Held changes have been sent" in (page.inner_text("#toast") or ""), page, 10),
+           f"重连后英文提示（实际 {page.inner_text('#toast')!r}）")
+
+        # 服务不匹配：英文说清端口上现在是谁、改动没有写进别人的审阅
+        def wrong_review(route):
+            response = route.fetch()
+            body = response.json()
+            body["reviewId"] = "0123456789abcdef"
+            route.fulfill(response=response, json=body)
+
+        page.route("**/api/notes", wrong_review)
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        ok(wait_until(lambda: "Wrong service" in page.inner_text("#mode"), page, 8),
+           f"服务不匹配英文徽标（实际 {page.inner_text('#mode')!r}）")
+        ok("not this review's service" in (page.get_attribute("#mode", "title") or ""),
+           "服务不匹配英文提示说清改动没有写进别人的审阅")
+        ok("has some other program on it" in page.inner_text("#srvBar")
+           and "serve.py" in page.inner_text("#srvBar"),
+           f"不匹配时英文提示条说清端口上是谁、怎么恢复（实际 {page.inner_text('#srvBar')[:90]!r}）")
+        page.unroute("**/api/notes", wrong_review)
+
         ctx.close()
 
         # 旧服务：选项不被静默丢掉，提示用当前语言说清怎么恢复
@@ -981,6 +1020,7 @@ def handoff_i18n_checks(browser, tmp: Path):
         opage.keyboard.press("Escape")
         opage.unroute("**/api/notes", no_full_check)
         old.close()
+        ctx.close()
     finally:
         ctx.close()
         stop(server)
