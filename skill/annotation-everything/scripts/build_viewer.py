@@ -278,7 +278,7 @@ def parse_script(script: str, locale: str | None = None, path: str = "") -> tupl
 
 
 # ---------- 报告解析 ----------
-def find_pages(doc: str) -> list[dict]:
+def find_pages(doc: str, *, locale: str | None = None) -> list[dict]:
     """按嵌套层级找出 class 含 page 且带 data-page 的 section（注释、脚本、样式里的标签不算）。"""
     masked = MASKED.sub(lambda m: " " * len(m.group(0)), doc)
     stack: list[tuple[int, dict[str, str], bool]] = []
@@ -288,7 +288,7 @@ def find_pages(doc: str) -> list[dict]:
             attrs = attrs_of(doc[m.start():m.end()])
             is_page = "page" in attrs.get("class", "").split() and "data-page" in attrs
             if is_page and any(p for _s, _a, p in stack):
-                raise SystemExit(f"报告结构不对：第 {attrs['data-page']} 页的 section.page 嵌在另一页里面")
+                raise SystemExit(diag(locale, "build.report.nested", page=attrs["data-page"]))
             stack.append((m.start(), attrs, is_page))
         elif stack:
             start, attrs, is_page = stack.pop()
@@ -296,16 +296,16 @@ def find_pages(doc: str) -> list[dict]:
                 pages.append({"attrs": attrs, "html": doc[start:m.end()]})
     unclosed = [a.get("data-page") for _s, a, p in stack if p]
     if unclosed:
-        raise SystemExit(f"报告结构不对：第 {unclosed} 页的 <section> 没有闭合")
+        raise SystemExit(diag(locale, "build.report.unclosed", pages=unclosed))
     out, seen = [], set()
     for p in pages:
         a = p["attrs"]
         try:
             n = int(a["data-page"].strip())
         except ValueError:
-            raise SystemExit(f"报告结构不对：data-page={a['data-page']!r} 不是整数页码") from None
+            raise SystemExit(diag(locale, "build.report.pageNumber", page=repr(a["data-page"]))) from None
         if n in seen:
-            raise SystemExit(f"报告结构不对：页码 {n} 重复")
+            raise SystemExit(diag(locale, "build.report.duplicate", page=n))
         seen.add(n)
         key = a.get("data-key") or a.get("id", "").removeprefix("page-") or f"p{n}"
         hm = re.search(r"<h[1-3][^>]*>(.*?)</h[1-3]>", p["html"], re.S)
@@ -345,7 +345,7 @@ def infer_sections(doc: str, sects: list[dict]) -> list[list]:
     return [[c["name"], c["lo"], c["hi"]] for c in sorted(top, key=lambda c: c["lo"])]
 
 
-def parse_sections_arg(arg: str) -> list[list]:
+def parse_sections_arg(arg: str, *, locale: str | None = None) -> list[list]:
     out = []
     for part in re.split(r"[,，]", arg):
         part = part.strip()
@@ -353,7 +353,7 @@ def parse_sections_arg(arg: str) -> list[list]:
             continue
         m = re.match(r"^(.+?)[:：]\s*(\d+)\s*(?:[-–~]\s*(\d+))?$", part)
         if not m:
-            raise SystemExit(f"--sections 格式不对：{part!r}，应为 名称:起-止，用逗号分隔")
+            raise SystemExit(diag(locale, "build.report.sections", part=repr(part)))
         a = int(m.group(2))
         out.append([m.group(1).strip(), a, int(m.group(3) or a)])
     return out
@@ -370,7 +370,8 @@ class Assets:
     这样报告里写错的路径（例如 ../../.ssh/id_rsa）不会被悄悄塞进要分享出去的单文件页面。
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, locale: str | None = None) -> None:
+        self.locale = locale
         self.root = root.resolve()
         self.cache: dict[Path, str] = {}
         self.warnings: list[str] = []
@@ -380,7 +381,7 @@ class Assets:
         """解析本地引用；超出允许目录时记警告并返回 None。"""
         path = (base / unquote(ref.split("#", 1)[0].split("?", 1)[0])).resolve()
         if not path.is_relative_to(self.root):
-            self.warn(f"引用了允许目录之外的文件，未内联：{ref[:120]}（允许目录 {self.root}，可用 --asset-root 放宽）")
+            self.warn(diag(self.locale, "build.asset.outside", ref=ref[:120], root=self.root))
             return None
         return path
 
@@ -390,7 +391,7 @@ class Assets:
         if not r or low.startswith(("data:", "#", "mailto:", "javascript:", "blob:", "about:")):
             return None
         if low.startswith(("http:", "https:", "//")):
-            self.warn(f"外链资源不会加载（对照页禁止联网）：{r[:120]}")
+            self.warn(diag(self.locale, "build.asset.external", ref=r[:120]))
             return None
         path = self.local(r, base)
         if path is None:
@@ -398,15 +399,15 @@ class Assets:
         if path in self.cache:
             return self.cache[path]
         if not path.is_file():
-            self.warn(f"找不到本地资源：{r[:120]}（相对 {base}）")
+            self.warn(diag(self.locale, "build.asset.missing", ref=r[:120], base=base))
             return None
         mime = EXTRA_MIME.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         if not mime.startswith(ASSET_TYPES):
-            self.warn(f"只内联图片、字体、音视频，跳过 {mime} 类型的文件：{r[:120]}")
+            self.warn(diag(self.locale, "build.asset.type", mime=mime, ref=r[:120]))
             return None
         size = path.stat().st_size
         if size > MAX_ASSET:
-            self.warn(f"资源超过 {MAX_ASSET // 1024 // 1024} MB，未内联：{path}")
+            self.warn(diag(self.locale, "build.asset.large", limit=MAX_ASSET // 1024 // 1024, path=path))
             return None
         data = f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode()
         self.cache[path] = data
@@ -561,7 +562,7 @@ def report_parts(doc: str, report: Path, assets: Assets) -> tuple[str, str, list
             continue
         href = a["href"]
         if href.lower().startswith(("http:", "https:", "//")):
-            assets.warn(f"外链样式表不会加载（对照页禁止联网）：{href[:120]}")
+            assets.warn(diag(assets.locale, "build.asset.externalCss", ref=href[:120]))
             continue
         f = assets.local(href, base)
         if f is None:
@@ -569,8 +570,8 @@ def report_parts(doc: str, report: Path, assets: Assets) -> tuple[str, str, list
         if f.is_file():
             css_parts.append(assets.css(f.read_text(encoding="utf-8", errors="replace"), f.parent))
         else:
-            assets.warn(f"找不到样式表：{href}")
-    sects = find_pages(doc)
+            assets.warn(diag(assets.locale, "build.asset.missingCss", ref=href))
+    sects = find_pages(doc, locale=assets.locale)
     for s in sects:
         s["html"] = assets.html(s["html"], base)
     raw_css = "\n".join(css_parts)
@@ -626,7 +627,7 @@ def read_manifest(review_dir: Path) -> dict:
         return {}
 
 
-def resolve_sources(review_dir: Path, manifest: dict | None = None) -> dict[str, Path | None]:
+def resolve_sources(review_dir: Path, manifest: dict | None = None, *, locale: str | None = None) -> dict[str, Path | None]:
     """按 review.json 找源文件：先用相对审阅目录的路径（目录树整体复制后仍指向副本），再用绝对路径。"""
     m = manifest if manifest is not None else read_manifest(review_dir)
     if "sourcesRel" in m:  # 0.1 版格式：sources 是绝对路径
@@ -640,8 +641,7 @@ def resolve_sources(review_dir: Path, manifest: dict | None = None) -> dict[str,
         hit = next((c.resolve() for c in cand if c.is_file()), None)
         if hit is None and cand:
             tried = "、".join(str(c) for c in cand)
-            raise SystemExit(f"找不到{'报告' if k == 'report' else '讲稿'}源文件（试过：{tried}）。"
-                             "源文件改名或移动了的话，用 --report/--script/--out 重新生成。")
+            raise SystemExit(diag(locale, "build.source.missing", kind=diag(locale, "cli.show.source." + k), paths=tried))
         out[k] = hit
     return out
 
@@ -661,18 +661,18 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     preview = read_manifest(out) if out.exists() else {}
     try:
         # 调用方没写 --locale 时沿用已有 review.json；两边都没有则不写入（旧审阅保持中文）
-        locale_choice = i18n.canonical_choice(locale if locale is not None else preview.get("locale"))
+        locale_choice = i18n.canonical_choice(i18n.effective_choice(locale, os.environ.get("AE_LOCALE"), preview.get("locale")))
     except i18n.LocaleError as exc:
         raise SystemExit(f"错误：{exc}") from exc
     # 生成侧的提示按本次选择的语言写；没选就是中文（旧审阅、旧调用）。auto 在这里定成具体语言
     warn_catalog = i18n.load_catalog(
         i18n.resolve_locale(locale_choice, system_languages=i18n.system_languages()))
     doc = report.read_text(encoding="utf-8")
-    assets = Assets(asset_root or report.resolve().parent)
+    assets = Assets(asset_root or report.resolve().parent, locale=locale_choice)
     assets.root_fs = None
     rtitle, rcss, sects = report_parts(doc, report, assets)
     if not sects:
-        raise SystemExit(f"{report} 里没找到 <section class=\"page\" data-page=\"N\"> 逐页结构")
+        raise SystemExit(diag(locale_choice, "build.report.noPages", path=report))
     h1, intro, spages = ("", "", [])
     script_warnings: list[str] = []
     if script is not None:
@@ -695,9 +695,9 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
             if not lenient:
                 # 讲稿里的格式警告一起给出：只报页码不一致，作者不知道该先修哪一处
                 for w in script_warnings:
-                    print("警告：" + w, file=sys.stderr)
+                    print(diag(locale_choice, "cli.notes.warning", reason=w), file=sys.stderr)
                 raise SystemExit(msg + diag(locale_choice, "build.pageMismatchLenient"))
-            print("警告：" + msg, file=sys.stderr)
+            print(diag(locale_choice, "cli.notes.warning", reason=msg), file=sys.stderr)
         for w in script_warnings:
             assets.warn(w)
     by_n = {p["n"]: p for p in spages}
@@ -708,7 +708,7 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     if no_sections:
         sections: list[list] = []
     elif sections_arg:
-        sections = parse_sections_arg(sections_arg)
+        sections = parse_sections_arg(sections_arg, locale=locale_choice)
     else:
         sections = infer_sections(doc, sects)
     final_title = title or rtitle or h1 or report.stem
@@ -743,7 +743,7 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     # 原目录还在、且标识相同才算复制；整个目录被移走（原目录已不在）则沿用标识，浏览器里的暂存不丢
     copied = bool(rid and orig and orig != out.resolve() and read_manifest(orig).get("reviewId") == rid)
     if copied:
-        assets.warn(f"审阅目录是从 {old['reviewDir']} 复制来的，已换新的审阅标识（原目录的浏览器暂存不会带过来）")
+        assets.warn(diag(locale_choice, "build.source.copied", path=old["reviewDir"]))
     if rid is None or copied:
         rid = secrets.token_hex(8)
     # 审阅名：给人看的名字（导出文件名、台账列表都用它），默认取标题；不要求唯一
@@ -793,11 +793,10 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         key_count[pg["key"]] = key_count.get(pg["key"], 0) + 1
     dup = {k for k, c in key_count.items() if c > 1}
     if dup:
-        assets.warn(f"报告里有重复的页面键 {sorted(dup)[:5]}，这些页上的批注无法按键校正页码")
+        assets.warn(diag(locale_choice, "build.key.duplicate", keys=sorted(dup)[:5]))
     unstable = [pg["n"] for pg in pages if not pg["stable"]]
     if unstable:
-        assets.warn(f"有 {len(unstable)} 页没有稳定的 data-key（键由页码生成，如第 {unstable[:5]} 页），"
-                    "重排页序后这些页上的批注不会自动跟着走")
+        assets.warn(diag(locale_choice, "build.key.unstable", n=len(unstable), pages=unstable[:5]))
     remap = {"moved": [], "orphans": [], "keyed": 0}
     if (out / "notes.json").exists():
         sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -805,12 +804,12 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         remap = notes_store.remap_pages(out, old_keys, {pg["key"]: pg["n"] for pg in pages if pg["stable"]},
                                         {pg["n"]: html.unescape(pg["title"]) for pg in pages}, dup)
         for mv in remap["moved"]:
-            assets.warn(f"批注 {mv['id']} 随页面「{mv['key']}」从第 {mv['from']} 页移到第 {mv['to']} 页")
+            assets.warn(diag(locale_choice, "build.note.moved", id=mv["id"], pageKey=mv["key"], old=mv["from"], new=mv["to"]))
         for o in remap["orphans"]:
-            assets.warn(f"批注 {o['id']}（原第 {o['page']} 页，键 {o['key']}）对应的页面在新版报告里找不到，已标出待确认")
+            assets.warn(diag(locale_choice, "build.note.orphan", id=o["id"], page=o["page"], pageKey=o["key"]))
     register_review(rid, out, review_name, assets)
     if assets.total > 40 * 1024 * 1024:
-        assets.warn(f"内联资源共 {assets.total // 1024 // 1024} MB，页面较大，打开可能偏慢")
+        assets.warn(diag(locale_choice, "build.asset.total", size=assets.total // 1024 // 1024))
     return {"pages": len(pages), "sections": len(sections), "seconds": sum(p["sec"] for p in pages),
             "title": final_title, "name": review_name, "warnings": assets.warnings, "reviewId": rid, "remap": remap,
             "locale": locale_choice}
@@ -837,31 +836,47 @@ def register_review(rid: str, out: Path, review_name: str, assets: Assets) -> No
     except (ledger.LedgerError, OSError):
         return
     for k, d in same[:3]:
-        assets.warn(f"本机已有同名审阅「{review_name}」（标识 {k[:8]}，{d}）；导出文件名靠标识前 4 位区分。"
-                    "想让人一眼分清，可用 --name 换个审阅名")
+        assets.warn(diag(assets.locale, "build.review.sameName", name=review_name, id=k[:8], path=d))
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="build_viewer.py", description="生成报告 + 讲稿对照审阅页")
-    ap.add_argument("--rebuild", type=Path, metavar="审阅目录", help="按该目录 review.json 记录的源文件与参数重建")
-    ap.add_argument("--report", "--html", dest="report", type=Path, help="报告 HTML（逐页 section.page）")
-    ap.add_argument("--script", type=Path, help="讲稿 Markdown（可选）")
-    ap.add_argument("--out", type=Path, help="审阅目录：写 index.html 与 review.json，批注也存这里")
-    ap.add_argument("--title", help="页面标题；默认取报告 <title>，其次讲稿一级标题")
-    ap.add_argument("--name", help="审阅名：给人看的名字，用在导出文件名和 serve.py list 里；默认取页面标题")
-    ap.add_argument("--sections", help='板块导航，如 "开篇:1-6,主线一:7-21"；默认从报告目录推断')
-    ap.add_argument("--no-sections", action="store_true", help="不显示板块导航")
-    ap.add_argument("--lenient", action="store_true", help="讲稿与报告页码不一致时只警告，以报告页序为准")
-    ap.add_argument("--asset-root", type=Path, help="允许内联本地资源的目录（默认报告所在目录）")
-    ap.add_argument("--skills-from", action="extend", nargs="+", type=Path, metavar="目录", help="从指定目录读取技能元数据，可重复")
-    ap.add_argument("--no-scan-skills", action="store_true", help="不扫描技能目录")
-    ap.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。省略时，新审阅保持中文，重建沿用 review.json")
+    import i18n
+    argv = sys.argv[1:] if argv is None else argv
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--locale")
+    pre.add_argument("--rebuild", type=Path)
+    pre.add_argument("--out", type=Path)
+    requested, _ = pre.parse_known_args(argv)
+    previous = read_manifest(requested.rebuild or requested.out) if requested.rebuild or requested.out else {}
+    try:
+        language = i18n.cli_locale(requested.locale, stored=previous.get("locale"))
+    except i18n.LocaleError as exc:
+        language = i18n.normalize_locale(os.environ.get("AE_LOCALE")) or i18n.DEFAULT_LOCALE
+        print(diag(language, "cli.notes.invalidLocale", name=exc.params.get("locale", "")), file=sys.stderr)
+        return 2
+    t = i18n.Translator(language)
+    import ledger
+    ledger.set_locale(language)
+    ap = argparse.ArgumentParser(prog="build_viewer.py", description=t("build.cli.description"))
+    ap.add_argument("--rebuild", type=Path, metavar=t("build.cli.reviewDir"), help=t("build.cli.rebuild"))
+    ap.add_argument("--report", "--html", dest="report", type=Path, help=t("build.cli.report"))
+    ap.add_argument("--script", type=Path, help=t("build.cli.script"))
+    ap.add_argument("--out", type=Path, help=t("build.cli.out"))
+    ap.add_argument("--title", help=t("build.cli.title"))
+    ap.add_argument("--name", help=t("build.cli.name"))
+    ap.add_argument("--sections", help=t("build.cli.sections"))
+    ap.add_argument("--no-sections", action="store_true", help=t("build.cli.noSections"))
+    ap.add_argument("--lenient", action="store_true", help=t("build.cli.lenient"))
+    ap.add_argument("--asset-root", type=Path, help=t("build.cli.assetRoot"))
+    ap.add_argument("--skills-from", action="extend", nargs="+", type=Path, metavar=t("build.cli.directory"), help=t("build.cli.skillsFrom"))
+    ap.add_argument("--no-scan-skills", action="store_true", help=t("build.cli.noScan"))
+    ap.add_argument("--locale", help=t("build.cli.locale"))
     a = ap.parse_args(argv)
     if a.rebuild:
         m = read_manifest(a.rebuild)
         if not m:
-            ap.error(f"读不到 {a.rebuild / 'review.json'}，不是本工具生成的审阅目录？")
-        src, opt = resolve_sources(a.rebuild, m), m.get("build") or {}
+            ap.error(t("build.cli.missingManifest", path=a.rebuild / "review.json"))
+        src, opt = resolve_sources(a.rebuild, m, locale=language), m.get("build") or {}
         a.out, a.report, a.script = a.rebuild, src["report"], src["script"]
         a.title = a.title or opt.get("title")
         a.name = a.name or opt.get("name")
@@ -875,16 +890,16 @@ def main(argv: list[str] | None = None) -> int:
         if not explicit_sources:
             a.no_scan_skills = a.no_scan_skills or bool(opt.get("noScanSkills"))
     elif not (a.report and a.out):
-        ap.error("需要 --report 与 --out（或用 --rebuild 审阅目录）")
+        ap.error(t("build.cli.missingArgs"))
     r = build(a.report, a.script, a.out, a.title, a.sections, a.no_sections, a.lenient, a.asset_root,
               name=a.name, skills_from=a.skills_from, no_scan_skills=a.no_scan_skills, locale=a.locale)
     for w in r["warnings"]:
-        print("警告：" + w, file=sys.stderr)
+        print(t("cli.notes.warning", reason=w), file=sys.stderr)
     mins = r["seconds"] // 60
-    print(f"wrote {a.out / 'index.html'}：{r['pages']} 页，板块 {r['sections']} 个"
-          + (f"，讲稿合计约 {mins} 分钟" if r["seconds"] else "")
-          + f"\n审阅名：{r['name']}（标识 {r['reviewId']}）"
-          + (f"\n界面语言：{r['locale']}" if r.get("locale") else ""))
+    print(t("build.cli.success", path=a.out / "index.html", pages=r["pages"], sections=r["sections"])
+          + (t("build.cli.duration", minutes=mins) if r["seconds"] else "")
+          + "\n" + t("build.cli.identity", name=r["name"], id=r["reviewId"])
+          + ("\n" + t("build.cli.language", locale=r["locale"]) if r.get("locale") else ""))
     return 0
 
 

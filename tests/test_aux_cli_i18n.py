@@ -1,6 +1,7 @@
 """字体检查与技能扫描的语言选择：人读文案按语言变，字体名与路径保持原文。"""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -170,12 +171,18 @@ class SkillScanLanguageTests(unittest.TestCase):
                 args = ["--report", str(ROOT / "fixtures/sample/report.html"),
                         "--script", str(ROOT / "fixtures/sample/script.md"),
                         "--out", str(out), "--locale", locale, "--skills-from", str(self.source)]
-                for command in (args, ["--rebuild", str(out)]):
+                for command, run_env in ((args, env), (["--rebuild", str(out)], {k:v for k,v in env.items() if k != "AE_LOCALE"})):
                     p = subprocess.run([sys.executable, str(SCRIPTS / "build_viewer.py"), *command],
-                                       env=env, capture_output=True, text=True)
+                                       env=run_env, capture_output=True, text=True)
                     self.assertEqual(p.returncode, 0, p.stderr)
                     self.assertIn(message, p.stdout + p.stderr)
                     self.assertIn(str(self.source / "broken" / "SKILL.md"), p.stdout + p.stderr)
+                overridden = subprocess.run([sys.executable, str(SCRIPTS / "build_viewer.py"), "--rebuild", str(out)],
+                                            env=env, capture_output=True, text=True)
+                self.assertEqual(overridden.returncode, 0, overridden.stderr)
+                self.assertIn("Missing frontmatter" if fallback == "en" else "缺少 frontmatter",
+                              overridden.stdout + overridden.stderr)
+                self.assertEqual(json.loads((out / "review.json").read_text(encoding="utf-8"))["locale"], fallback)
 
     def test_not_skill_file_error_is_localized(self):
         other = self.source / "broken" / "README.md"

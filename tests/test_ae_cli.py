@@ -68,6 +68,27 @@ class AeCliTests(unittest.TestCase):
         self.assertTrue((self.copy_dir / "evals" / "build-review-page" / "prompt.md").is_file())
         self.assertEqual(snapshot(self.copy_dir), snapshot(SKILL_SRC), "副本内容与技能本体一致")
 
+    def test_installed_language_guides_and_their_links_are_complete(self):
+        """安装副本能按语言找到操作说明，说明里的本地引用也必须随安装交付。"""
+        p = self.run_ae("install")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        pending = [self.copy_dir / "SKILL.md"]
+        visited = set()
+        while pending:
+            path = pending.pop()
+            if path in visited:
+                continue
+            self.assertTrue(path.is_file(), f"安装副本缺少引用文件：{path}")
+            visited.add(path)
+            text = path.read_text(encoding="utf-8")
+            for target in re.findall(r"\[[^\]]+\]\(([^)#]+)(?:#[^)]*)?\)", text):
+                if "://" not in target and target.endswith(".md"):
+                    linked = (path.parent / target).resolve()
+                    self.assertTrue(linked.is_relative_to(self.copy_dir.resolve()))
+                    pending.append(linked)
+        self.assertTrue(any(p.name == "workflow.en.md" for p in visited), "英文流程可从技能入口到达")
+        self.assertTrue(any(p.name == "workflow.zh-CN.md" for p in visited), "中文流程可从技能入口到达")
+
     def test_install_skips_cache_files(self):
         cache = SKILL_SRC / "scripts" / "__pycache__"
         cache.mkdir(exist_ok=True)

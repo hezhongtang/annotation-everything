@@ -182,7 +182,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
   <button id="legacyBtn" data-title="viewer.legacyTitle"><span data-msg="viewer.legacy">导入旧批注</span></button>
   <button id="strayBtn" data-title="viewer.strayTitle"><span data-msg="viewer.stray">其他审阅的未保存改动</span></button>
   <button id="handBtn" data-title="viewer.hand.btnTitle"><span data-msg="viewer.hand.btn">交给 Agent</span><kbd>A</kbd></button>
-  <button id="notesBtn" title="查看、导出、导入全部批注（N）">批注<span class="badge" id="ncount">0</span><span class="badge fl" id="nflight"></span><span class="badge dr" id="ndraft"></span><kbd>N</kbd></button>
+  <button id="notesBtn" data-title="viewer.notesTitle"><span data-msg="viewer.notes">批注</span><span class="badge" id="ncount">0</span><span class="badge fl" id="nflight"></span><span class="badge dr" id="ndraft"></span><kbd>N</kbd></button>
   <label id="localeLabel"><span id="localeLabelText">界面语言</span>
     <select id="localePick" aria-label="界面语言">
       <option value="auto">自动</option>
@@ -219,13 +219,13 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 </main>
 <div id="skillList" role="listbox" data-aria="viewer.skill.candidates"></div>
 <div class="modal" id="allnotes"><div class="dlg"><div class="bar"><h2 data-msg="viewer.allTitle">全部批注</h2>
-<button class="primary" id="copyAll" data-msg="export.copyAll">复制全部（粘贴给 Agent）</button><button id="dlAll" data-msg="export.download">下载 Markdown</button><button id="dlJson" data-msg="export.downloadJson">下载 JSON</button><select id="expLang" data-aria="export.langLabel" aria-label="导出语言"><option value="auto" data-msg="export.langAuto">跟随界面</option><option value="zh-CN">中文</option><option value="en">English</option></select><button id="openImp">导入…</button><button id="dlFailed" style="display:none" title="多次保存失败、没有写进 notes.json 的改动">下载未能保存的改动</button><button id="clearAll">清空</button><button data-close>关闭</button></div>
+<button class="primary" id="copyAll" data-msg="export.copyAll">复制全部（粘贴给 Agent）</button><button id="dlAll" data-msg="export.download">下载 Markdown</button><button id="dlJson" data-msg="export.downloadJson">下载 JSON</button><select id="expLang" data-aria="export.langLabel" aria-label="导出语言"><option value="auto" data-msg="export.langAuto">跟随界面</option><option value="zh-CN">中文</option><option value="en">English</option></select><button id="openImp" data-msg="import.open">导入…</button><button id="dlFailed" style="display:none" data-title="viewer.recovery.failedTitle" data-msg="viewer.recovery.downloadFailed">下载未能保存的改动</button><button id="clearAll" data-msg="viewer.recovery.clear">清空</button><button data-close data-msg="viewer.close">关闭</button></div>
 <div class="pad" id="orphanBox" style="display:none;border-bottom:1px solid var(--ae-line)"></div>
 <pre id="allText"></pre></div></div>
-<div class="modal" id="imp"><div class="dlg"><div class="bar"><h2>导入批注</h2><button class="primary" id="doImp">导入</button><button data-close>关闭</button></div>
+<div class="modal" id="imp"><div class="dlg"><div class="bar"><h2 data-msg="import.title">导入批注</h2><button class="primary" id="doImp" data-msg="import.submit">导入</button><button data-close data-msg="viewer.close">关闭</button></div>
 <div class="pad"><div id="strays"></div><div id="found"></div>
-<p class="hint">粘贴之前「复制全部」的文字，或「下载 JSON / Markdown」得到的文件内容。同一条批注（同 id，或页码、对象、内容、引用、标注都相同）不会重复导入；同 id 而导入方更新得更晚的，会更新为导入方的内容和状态。</p>
-<textarea id="impText" placeholder="在这里粘贴批注文字或 JSON"></textarea>
+<p class="hint" data-msg="import.help">粘贴之前「复制全部」的文字，或「下载 JSON / Markdown」得到的文件内容。同一条批注（同 id，或页码、对象、内容、引用、标注都相同）不会重复导入；同 id 而导入方更新得更晚的，会更新为导入方的内容和状态。</p>
+<textarea id="impText" data-ph="import.placeholder" placeholder="在这里粘贴批注文字或 JSON"></textarea>
 <p><input type="file" id="impFile" accept=".json,.md,.txt" data-aria="import.pick"></p></div></div></div>
 <div class="modal" id="hand"><div class="dlg"><div class="bar"><h2 id="handTitle" data-msg="viewer.hand.title">交给 Agent</h2><button class="primary" id="doHand"><span id="doHandLabel" data-msg="viewer.hand.submit">交给 Agent</span><kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close><span data-msg="viewer.hand.cancel">取消</span><kbd>Esc</kbd></button></div>
 <div class="pad"><div id="handDrafts"></div><p id="handInfo"></p>
@@ -406,6 +406,9 @@ function applyLocale(){
   if($("hand").classList.contains("on")&&typeof paintHand==="function") paintHand();
   if($("batches").classList.contains("on")&&typeof renderBatches==="function") renderBatches();
   if(typeof refreshExportPreview==="function"&&$("allnotes").classList.contains("on")) refreshExportPreview();
+  if($("imp").classList.contains("on")){renderStrays();renderFound()}
+  if($("allnotes").classList.contains("on"))renderOrphans();
+  updateStray();
   refreshPinPop();
 }
 $("localePick").addEventListener("change",()=>{
@@ -522,22 +525,27 @@ async function api(method,path,body){
   if(body!==undefined){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(wellFormed(body))}
   let r;
   try{r=await fetch(path,opt)}
-  catch(e){throw Object.assign(new Error(e&&e.name==="AbortError"?"本地服务没有应答（超时）":"连不上本地服务"),{status:0})}
+  catch(e){throw Object.assign(new Error(e&&e.name==="AbortError"?tMsg("viewer.error.timeout"):tMsg("viewer.error.offline")),{status:0})}
   finally{clearTimeout(timer)}
   let j=null;try{j=await r.json()}catch(e){}
   const ours=!!j&&typeof j==="object"&&(j.app===APP||(j.doc&&j.doc.app===APP));   // 只认带本服务标记的应答
   if(!r.ok){
     // 不是本服务格式的错误（端口上是别的程序），或本服务明确说审阅不匹配：按「服务不匹配」处理，改动留在队列
-    if(!ours||j.code==="review-mismatch")throw Object.assign(new Error("这个地址上的服务不是这份审阅的"),{status:0,mismatch:true});
-    throw Object.assign(new Error(j.error||("HTTP "+r.status)),{status:r.status,code:j.code})}
-  if(!ours)throw Object.assign(new Error("应答不是本服务的格式"),{status:0,mismatch:true});
+    if(!ours||j.code==="review-mismatch")throw Object.assign(new Error(tMsg("viewer.error.mismatch")),{status:0,mismatch:true});
+    const key={"bad-host":"badHost","cross-site":"crossSite","bad-origin":"badOrigin","no-origin":"noOrigin",
+      "bad-content-type":"badContentType","chunked":"chunked","bad-length":"badLength","too-large":"tooLarge",
+      "bad-json":"badJson","not-found":"notFound","preflight":"preflight","no-index":"noIndex","no-note":"noNote",
+      "review-mismatch":"reviewMismatch","no-api":"noApi"}[j.code];
+    const message=key?tMsg("serve.err."+key):tMsg("viewer.error.unknown",{status:r.status,code:j.code||"unknown"});
+    throw Object.assign(new Error(message),{status:r.status,code:j.code})}
+  if(!ours)throw Object.assign(new Error(tMsg("viewer.error.format")),{status:0,mismatch:true});
   return j}
 // 只认同一份审阅的服务：端口被别的审阅目录或别的程序占用时，不读它、不往里写
 const sameReview=d=>!!d&&d.app===APP&&d.reviewId===RID&&Array.isArray(d.notes);
 async function getNotes(){const d=await api("GET","/api/notes");
-  if(!sameReview(d))throw Object.assign(new Error("不是这份审阅的服务"),{status:0,mismatch:true});return d}
+  if(!sameReview(d))throw Object.assign(new Error(tMsg("viewer.error.mismatch")),{status:0,mismatch:true});return d}
 const hasFeature=(d,name)=>Array.isArray(d.features)&&d.features.includes(name);
-function mirror(){if(!FILE)return;if(!LS.set(K.notes,notes))toast("浏览器未能保存批注，请及时导出");LS.set(K.meta,{title:unH(document.title),name:NAME,ns:NS})}
+function mirror(){if(!FILE)return;if(!LS.set(K.notes,notes))toast(tMsg("viewer.recovery.fileSaveFailed"));LS.set(K.meta,{title:unH(document.title),name:NAME,ns:NS})}
 function setDoc(d){notes=d.notes;rev=d.rev}
 function stamp(x){const t=Array.isArray(x.trail)&&x.trail.length?x.trail[x.trail.length-1]:null;
   return Math.max(0,...["updatedAt","resolvedAt","draftedAt","at"].map(k=>Date.parse(x[k]||"")||0),Date.parse((t&&t.at)||"")||0)}
@@ -591,7 +599,7 @@ function send(op,fullCheckSupported=true){
     if(op.fullCheck===true){body.userMessage=message;body.message=FULL_CHECK_COMPAT+(message?"\n\n"+message:"")}
     if("fullCheck" in op&&fullCheckSupported)body.fullCheck=op.fullCheck===true;return api("POST","/api/handoff",body)}}
 const pend={get(){const v=LS.get(K.pending,[]);return Array.isArray(v)?v:[]},
-  set(v){if(!LS.set(K.pending,v))toast("浏览器存储已满：这次改动没能暂存，请尽快在「批注」里下载 JSON",6000)},
+  set(v){if(!LS.set(K.pending,v))toast(tMsg("viewer.recovery.storageFull"),6000)},
   push(op){const v=pend.get();v.push(op);pend.set(v)},remove(id){if(!id)return;pend.set(pend.get().filter(o=>o.opId!==id))}};
 // 0.2 版页面用旧键名暂存改动、且没有操作 id：挪到新队列并补上 id（初始化和每次轮询都检查，旧标签页还开着也不丢）
 function migrateLegacyQueue(){const old=LS.get(K.legacyPending,null);if(!Array.isArray(old)||!old.length)return;
@@ -610,11 +618,11 @@ async function mutate(op){
 function onSent(op,r){
   if(op.kind==="handoff"){if(!pend.get().some(o=>o.kind==="handoff"))handQueued=false;setHand(r.handoff);
     toast(r.merged?tMsg("viewer.hand.toast.merged"):tMsg("viewer.hand.toast.sent"),3500)}
-  else if(op.kind==="import")toast(`导入完成：新增 ${r.added} 条，更新 ${r.updated||0} 条，跳过重复 ${r.skipped} 条`,3500)}
+  else if(op.kind==="import")toast(tMsg("import.complete",{label:tMsg("import.saved"),added:r.added,updated:r.updated||0,skipped:r.skipped}),3500)}
 function onRejected(op,e){   // 服务明确不接受（4xx）：不重试
   if(op.kind==="handoff"){handQueued=pend.get().some(o=>o.kind==="handoff");renderHand();
     toast(e.status===404||e.status===405?tMsg("viewer.hand.toast.legacy"):tMsg("viewer.hand.toast.failed",{message:e.message}),6000);return}
-  toast("服务未接受这次改动："+e.message,6000);
+  toast(tMsg("viewer.recovery.rejected",{reason:e.message}),6000);
   if(op.kind==="add"&&!editOf(op.note)&&op.note.page===P[i].n&&!$("ntext").value.trim()){   // 把内容放回输入框
     $("ntext").value=op.note.text;quote=op.note.quote||"";quoteFrom=op.note.quoteFrom||"";pendingPin=op.note.pin||null;pendingRegion=op.note.region||null;styleOn=!!op.note.style;quotePair=op.note.pair||null;showQuote();updateStyleChip();drawPins()}}
 const fails={};let flushing=null;
@@ -633,7 +641,7 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
           if(!fullCheckSupported&&(op.fullCheck===true||pendingCheck)){
             toast(tMsg("viewer.hand.toast.fullCheckStashed"),6000);return}}
         const r=await send(op,fullCheckSupported);
-        if(r&&r.doc&&!sameReview(r.doc))throw Object.assign(new Error("不是这份审阅的服务"),{status:0,mismatch:true});
+        if(r&&r.doc&&!sameReview(r.doc))throw Object.assign(new Error(tMsg("viewer.error.mismatch")),{status:0,mismatch:true});
         if(hasFullCheck){const latest=r&&r.handoff&&r.handoff.latest,requested=op.fullCheck===true;
           const legacyOff=!requested&&r&&!("acceptedFullCheck" in r)&&latest&&latest.seq===r.seq&&latest.fullCheck!==true;
           if(!r||(r.acceptedFullCheck!==requested&&!legacyOff)){
@@ -645,7 +653,7 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
         if(e.status>=500){fails[op.opId]=(fails[op.opId]||0)+1;
           if(fails[op.opId]<MAX_FAILS){toast(e.message,4000);return}
           failed.push(op,e.message);pend.remove(op.opId);   // 同一条连续失败：移到「未能保存」，不再堵住后面的改动
-          toast("有一项改动多次保存失败，已移到「批注 → 未能保存」，可下载后再导入",6000);continue}
+          toast(tMsg("viewer.recovery.failed"),6000);continue}
         pend.remove(op.opId);onRejected(op,e)}}
     mode="server";await resync();if(!pend.get().length)break}}
   finally{busy--;updateMode()}}
@@ -742,17 +750,17 @@ function strays(){const by={};try{for(let k=0;k<localStorage.length;k++){const k
       else if(op.kind==="del"&&m.has(op.id))m.delete(op.id);
       else other++});
     return{...s,items:[...m.values()],other,name:String(meta.name||meta.title||"")}})}
-const fileSlug=t=>String(t||"").replace(/[^\p{L}\p{N}_.-]+/gu,"_").replace(/^[._]+|[._]+$/g,"").slice(0,40)||"审阅";
+const fileSlug=t=>String(t||"").replace(/[^\p{L}\p{N}_.-]+/gu,"_").replace(/^[._]+|[._]+$/g,"").slice(0,40)||"review";
 function updateStray(){const n=strays().reduce((a,s)=>a+s.ops.length,0),b=$("strayBtn");
-  b.style.display=n?"inline-block":"none";b.textContent=`其他审阅的未保存改动（${n}）`}
+  b.style.display=n?"inline-block":"none";b.textContent=tMsg("viewer.recovery.strayButton",{n})}
 function renderStrays(){const list=strays(),box=$("strays");
-  box.innerHTML=list.length?`<p><b>这个地址下还暂存着别的审阅没保存的改动</b>（多半是这个端口以前属于那份审阅时、旧标签页留下的）。它们不能导入到本审阅：下载后在终端运行 <code>notes.py import &lt;那份审阅的标识&gt; 下载的文件</code> 导回原审阅，确认导好了再清除。</p>`
-    +list.map((s,k)=>`<div class="stray"><span>《${escH(s.name||"未记录名称")}》 · 标识 <code>${s.rid.slice(0,8)}</code> · 未保存改动 ${s.ops.length} 项（其中新批注 ${s.items.length} 条${s.other?`，修改 / 删除 / 提交 ${s.other} 项只保留在文件的 ops 里供核对`:""}）</span><button data-sdl="${k}">下载 JSON</button><button data-sclr="${k}">已导入，清除</button></div>`).join(""):"";
+  box.innerHTML=list.length?`<p>${escH(tMsg("viewer.recovery.strayHelp"))}</p>`
+    +list.map((s,k)=>`<div class="stray"><span>${escH(tMsg("viewer.recovery.strayRow",{name:s.name||tMsg("viewer.recovery.unknownName"),id:s.rid.slice(0,8),n:s.ops.length,notes:s.items.length}))}${s.other?escH(tMsg("viewer.recovery.opsOnly",{n:s.other})):""}</span><button data-sdl="${k}">${escH(tMsg("export.downloadJson"))}</button><button data-sclr="${k}">${escH(tMsg("viewer.recovery.clearRecovered"))}</button></div>`).join(""):"";
   box.querySelectorAll("[data-sdl]").forEach(b=>b.onclick=()=>{const s=list[+b.dataset.sdl];
-    download(`未保存_${fileSlug(s.name)}_${s.rid.slice(0,4)}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:s.rid,name:s.name,notes:s.items,ops:s.ops,rescuedFrom:location.origin,at:nowIso()},null,2),"application/json");
-    toast(`已下载。到终端运行：notes.py import ${s.rid} 下载的文件`,6000)});
+    download(`${uiLocale==="en"?"unsent":"未保存"}_${fileSlug(s.name)}_${s.rid.slice(0,4)}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:s.rid,name:s.name,notes:s.items,ops:s.ops,rescuedFrom:location.origin,at:nowIso()},null,2),"application/json");
+    toast(tMsg("viewer.recovery.downloaded",{id:s.rid}),6000)});
   box.querySelectorAll("[data-sclr]").forEach(b=>b.onclick=()=>{const s=list[+b.dataset.sclr];
-    if(!confirm(`确认已把《${s.name||s.rid.slice(0,8)}》的这 ${s.ops.length} 项改动导回它自己的审阅了吗？清除后这个浏览器里就没有了。`))return;
+    if(!confirm(tMsg("viewer.recovery.confirmClear",{name:s.name||s.rid.slice(0,8),n:s.ops.length})))return;
     // 只删列表打开时看到的那些改动（按操作 id）：那份审阅的旧标签页之后又暂存的，留着
     const opKey=o=>o.opId||JSON.stringify(o);   // 0.2 版的旧队列没有操作 id：按内容比对
     const seen=new Set(s.ops.map(opKey));let kept=0;
@@ -760,9 +768,9 @@ function renderStrays(){const list=strays(),box=$("strays");
       const rest=v.filter(x=>{const op=/\.failed$/.test(k)?x&&x.op:x;return !(op&&seen.has(opKey(op)))});
       kept+=rest.length;if(rest.length)LS.set(k,rest);else LS.del(k)});
     renderStrays();updateStray();
-    if(kept)toast(`还有 ${kept} 项是刚才之后才暂存的，没有清除：请重新下载`,6000)})}
+    if(kept)toast(tMsg("viewer.recovery.kept",{n:kept}),6000)})}
 function updateLegacy(){const n=foundSets().filter(s=>s.same).reduce((a,s)=>a+s.items.length,0);const b=$("legacyBtn");
-  b.style.display=n?"inline-block":"none";b.textContent=`导入旧批注（${n}）`}
+  b.style.display=n?"inline-block":"none";b.textContent=tMsg("viewer.recovery.legacyButton",{n})}
 
 // ---------- 批注区：列表与输入框分开，刷新列表不碰正在写的内容 ----------
 function markNo(n,id){return notes.filter(x=>x.page===n&&hasMark(x)).findIndex(x=>x.id===id)+1}   // 同一页的点和框统一编号
@@ -1439,8 +1447,8 @@ function expMdGrammar(text){   // 按第一行的标记选文法；没有标记�
     if(!line.trim())continue;
     const m=EXP_MARK.exec(line.trim());
     if(!m)return null;
-    if(+m[1]!==EXP_VERSION)throw new Error(`这个导出用的是格式版本 v${m[1]}，当前只支持 v${EXP_VERSION}：请把对照页和 notes.py 都升级到同一版本再导入`);
-    if(m[2]!=="zh-CN"&&m[2]!=="en")throw new Error(`这个导出的内容语言是「${m[2]}」，当前只支持 zh-CN 和 en`);
+    if(+m[1]!==EXP_VERSION)throw new Error(tMsg("cli.notes.format.version",{version:m[1],supported:EXP_VERSION}));
+    if(m[2]!=="zh-CN"&&m[2]!=="en")throw new Error(tMsg("cli.notes.format.language",{language:m[2]}));
     return m[2]==="en"?G_EN:G_ZH}
   return null}
 function expLang(){const v=$("expLang")?$("expLang").value:"auto";return v==="auto"?uiLocale:(normLocale(v)||uiLocale)}
@@ -1493,7 +1501,7 @@ function parseMd(text){return parseMdGrammar(text,G_ZH)}   // 没有标记的旧
 function importRid(text){try{const s=String(text||"").trim();if(s[0]!=="{")return null;const d=JSON.parse(s);
   return typeof d.reviewId==="string"&&d.reviewId?{rid:d.reviewId,name:String(d.name||"")}:null}catch(e){return null}}
 function okToImport(text){const f=importRid(text);if(!f||f.rid===RID)return true;   // 导出文件带审阅标识：不是本审阅的先问
-  return confirm(`这个文件属于另一份审阅${f.name?`《${f.name}》`:""}（标识 ${f.rid.slice(0,8)}），不是本审阅《${NAME}》。\n通常应该导入到它自己的审阅里。仍要导入到这里吗？`)}
+  return confirm(tMsg("import.wrongReview",{other:f.name?` “${f.name}”`:"",id:f.rid.slice(0,8),name:NAME}))}
 function parseImport(text){const s=String(text||"").trim();if(!s)return[];
   if(s[0]==="{"||s[0]==="["){const d=JSON.parse(s);return Array.isArray(d)?d:(d.notes||[])}
   const marked=expMdGrammar(s);   // 按格式标记选文法：与导入界面的语言无关
@@ -1502,31 +1510,31 @@ function parseImport(text){const s=String(text||"").trim();if(!s)return[];
   return items}
 async function runImport(items,label){
   items=items.filter(x=>x&&+x.page>0&&String(x.text||"").trim()).map(cleanItem);   // 先定好 id，离线补传后与服务端一致
-  if(!items.length){toast("没有可导入的批注");return}
+  if(!items.length){toast(tMsg("import.empty"));return}
   const r=await mutate({kind:"import",notes:items})||{};
-  if(FILE)toast(`${label}：新增 ${r.added} 条，更新 ${r.updated} 条，跳过重复 ${r.skipped} 条`,3500);
-  else toast(mode==="server"?"正在导入…":"服务未连接：导入先暂存，连上后自动补传",3000);
+  if(FILE)toast(tMsg("import.complete",{label,added:r.added,updated:r.updated,skipped:r.skipped}),3500);
+  else toast(mode==="server"?tMsg("import.running"):tMsg("import.held"),3000);
   updateLegacy();renderFound()}
 function renderFound(){const f=foundSets();
-  $("found").innerHTML=f.length?`<p><b>本浏览器里发现以下批注</b>（其他版本或其他稿件，确认是这份稿件的再导入）：</p>`+f.map((s,k)=>`<div class="found"><span>${escH(s.title||"（未记录稿件名）")} · <code>${escH(s.key)}</code> · 新批注 ${s.items.length} 条</span><button data-found="${k}">导入这些</button></div>`).join(""):"";
-  $("found").querySelectorAll("[data-found]").forEach(b=>b.onclick=()=>runImport(f[+b.dataset.found].items,"已导入"))}
+  $("found").innerHTML=f.length?`<p>${escH(tMsg("viewer.recovery.foundHelp"))}</p>`+f.map((s,k)=>`<div class="found"><span>${escH(tMsg("viewer.recovery.foundRow",{name:s.title||tMsg("viewer.recovery.unknownName"),key:s.key,n:s.items.length}))}</span><button data-found="${k}">${escH(tMsg("viewer.recovery.importFound"))}</button></div>`).join(""):"";
+  $("found").querySelectorAll("[data-found]").forEach(b=>b.onclick=()=>runImport(f[+b.dataset.found].items,tMsg("import.done")))}
 function openImp(){renderStrays();renderFound();$("imp").classList.add("on")}
 $("openImp").onclick=openImp;$("legacyBtn").onclick=openImp;$("strayBtn").onclick=openImp;$("reloadBtn").onclick=()=>location.reload();
-$("doImp").onclick=async()=>{let items;try{items=parseImport($("impText").value)}catch(e){toast("无法解析："+e.message,3500);return}
+$("doImp").onclick=async()=>{let items;try{items=parseImport($("impText").value)}catch(e){toast(tMsg("import.parseFailed",{reason:e.message}),3500);return}
   if(!okToImport($("impText").value))return;
-  const al=importAlways($("impText").value);await runImport(items,"已导入");$("impText").value="";await offerAlways(al)};
+  const al=importAlways($("impText").value);await runImport(items,tMsg("import.done"));$("impText").value="";await offerAlways(al)};
 $("impFile").onchange=async e=>{const f=e.target.files[0];if(!f)return;let items;
-  let txt="";try{txt=await f.text();items=parseImport(txt)}catch(err){toast("无法解析文件："+err.message,3500);return}
+  let txt="";try{txt=await f.text();items=parseImport(txt)}catch(err){toast(tMsg("import.fileFailed",{reason:err.message}),3500);return}
   if(!okToImport(txt)){e.target.value="";return}
-  await runImport(items,`已导入 ${f.name}`);e.target.value="";await offerAlways(importAlways(txt))};
+  await runImport(items,tMsg("import.fileDone",{name:f.name}));e.target.value="";await offerAlways(importAlways(txt))};
 // 原页面已不在新版报告里的批注（重建后标 orphan，或页码已不存在）：在这里挪到正确的页
 function lostNotes(){return notes.filter(x=>x.orphan||!P.some(q=>q.n===x.page))}
 function renderOrphans(){const box=$("orphanBox"),lost=lostNotes();box.style.display=lost.length?"":"none";if(!lost.length){box.innerHTML="";return}
-  const opts=P.map(q=>`<option value="${+q.n}">第 ${+q.n} 页｜${escH(clip(unH(q.title),24))}</option>`).join("");
-  box.innerHTML=`<p><b>${lost.length} 条批注原来所在的页面在新版报告里找不到</b>，请挪到正确的页：</p>`+lost.map(x=>
-    `<div class="found"><span>原第 ${+x.page||"?"} 页${x.key?`（键 ${escH(x.key)}）`:""}：${escH(clip(noteSummary(x),60))}</span><span><select data-mv="${escH(x.id)}">${opts}</select> <button data-mvgo="${escH(x.id)}">挪过去</button></span></div>`).join("");
+  const opts=P.map(q=>`<option value="${+q.n}">${escH(tMsg("viewer.page",{page:+q.n}))} | ${escH(clip(unH(q.title),24))}</option>`).join("");
+  box.innerHTML=`<p>${escH(tMsg("viewer.recovery.orphanHelp",{n:lost.length}))}</p>`+lost.map(x=>
+    `<div class="found"><span>${escH(tMsg(x.key?"viewer.recovery.oldPageKey":"viewer.recovery.oldPage",{page:+x.page||"?",key:x.key||"",text:clip(noteSummary(x),60)}))}</span><span><select data-mv="${escH(x.id)}">${opts}</select> <button data-mvgo="${escH(x.id)}">${escH(tMsg("viewer.recovery.move"))}</button></span></div>`).join("");
   box.querySelectorAll("[data-mvgo]").forEach(b=>b.onclick=()=>{const id=b.dataset.mvgo,sel=box.querySelector(`select[data-mv="${CSS.escape(id)}"]`),pg=P.find(q=>q.n===+sel.value);
-    if(pg){mutate({kind:"patch",id,body:{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false}});toast(`已挪到第 ${pg.n} 页`);setTimeout(renderOrphans,300)}})}
+    if(pg){mutate({kind:"patch",id,body:{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false}});toast(tMsg("viewer.recovery.moved",{page:pg.n}));setTimeout(renderOrphans,300)}})}
 function openAll(){renderOrphans();const sel=$("expLang");if(sel)sel.value=LS.get(K.lang,"auto");
   $("allText").textContent=notes.length?exportText():tMsg("export.empty");$("clearAll").style.display=FILE?"":"none";$("allnotes").classList.add("on")}
 async function copyAll(msg){const t=exportText();try{await navigator.clipboard.writeText(t)}catch(e){const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove()}toast(msg||tMsg("export.copied"),msg?5000:2200)}
@@ -1540,9 +1548,9 @@ $("dlJson").onclick=()=>download(expName("json"),JSON.stringify({version:1,revie
 $("dlFailed").onclick=()=>{const f=failed.get();if(!f.length)return;
   const items=[];f.forEach(x=>{const op=x.op;if(op.kind==="add")items.push(op.note);else if(op.kind==="import")items.push(...op.notes);
     else if(op.kind==="patch"){const n=notes.find(y=>y.id===op.id);if(n)items.push({...n,...op.body,updatedAt:nowIso()})}});   // 编辑、标已处理：导入时按「更新得更晚」覆盖
-  download(`未能保存_${NS}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:RID,name:NAME,notes:items,ops:f},null,2),"application/json");
-  if(confirm("已下载。要清除这些「未能保存」的记录吗？（下载的文件可在「导入…」里重新导入）")){failed.clear();updateMode()}};
-$("clearAll").onclick=()=>{if(notes.length&&confirm(`清空全部 ${notes.length} 条批注？建议先复制或下载。`)){notes=[];mirror();refreshList(true);openAll()}};
+  download(`${uiLocale==="en"?"failed":"未能保存"}_${NS}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:RID,name:NAME,notes:items,ops:f},null,2),"application/json");
+  if(confirm(tMsg("viewer.recovery.confirmFailed"))){failed.clear();updateMode()}};
+$("clearAll").onclick=()=>{if(notes.length&&confirm(tMsg("viewer.recovery.confirmAll",{n:notes.length}))){notes=[];mirror();refreshList(true);openAll()}};
 document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{if(e.target===m||e.target.closest("[data-close]"))m.classList.remove("on")}));
 
 // ---------- 翻页（每页的草稿、引用、标点各自保留） ----------

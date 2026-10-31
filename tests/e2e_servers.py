@@ -127,8 +127,9 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def start_server(d: Path, port: int, cleanup: TestCleanup = CLEANUP) -> subprocess.Popen:
-    p = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), str(d), "--port", str(port), "--no-open"],
+def start_server(d: Path, port: int, cleanup: TestCleanup = CLEANUP, *, scripts: Path | None = None) -> subprocess.Popen:
+    scripts = SCRIPTS if scripts is None else scripts
+    p = subprocess.Popen([sys.executable, str(scripts / "serve.py"), str(d), "--port", str(port), "--no-open"],
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     cleanup.add(p)
     end = time.time() + READY_TIMEOUT

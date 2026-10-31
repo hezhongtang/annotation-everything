@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import shutil
 import signal
 import subprocess
 import sys
@@ -1418,11 +1420,248 @@ def handoff_i18n_checks(browser, tmp: Path):
         stop(server)
 
 
+def installed_delivery_checks(browser, tmp: Path):
+    """#36：从唯一的临时安装副本完成三种语言组合的真实审阅流程。
+
+    AE_DELIVERY_ARTIFACTS 可保留合成演示的命令、源文件、导出与截图。
+    这是确定性的产品流程演示，不冒充实际模型的发现率或改稿质量评测。
+    """
+    installed = tmp / "installed-skills" / "annotation-everything"
+    env = {**os.environ, "CLAUDE_SKILLS_DIR": str(installed.parent)}
+    subprocess.run([sys.executable, str(ROOT / "ae.py"), "install", "--locale", "en"],
+                   env=env, check=True, capture_output=True, text=True, timeout=60)
+    scripts = installed / "scripts"
+    artifacts = Path(os.environ["AE_DELIVERY_ARTIFACTS"]) if os.environ.get("AE_DELIVERY_ARTIFACTS") else None
+    evidence = {"python": platform.python_version(), "platform": platform.platform(),
+                "browser": browser.version, "scenarios": []}
+    for label, ui, material in (("english", "en", "en"), ("chinese", "zh-CN", "zh-CN"),
+                                ("mixed", "en", "zh-CN")):
+        case = tmp / ("installed-" + label)
+        case.mkdir()
+        source_report = FIXTURE / ("report.en.html" if material == "en" else "report.html")
+        source_script = FIXTURE / ("script.en.md" if material == "en" else "script.md")
+        report, script = case / "report.html", case / "script.md"
+        shutil.copyfile(source_report, report)
+        shutil.copyfile(source_script, script)
+        review = case / "sample-review"
+        transcript = []
+        start_result = len(RESULTS)
+        output = artifacts / label if artifacts else None
+        if output:
+            output.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(report, output / "report.before.html")
+            shutil.copyfile(script, output / "script.before.md")
+
+        def cli(tool, *args):
+            result = subprocess.run([sys.executable, str(scripts / tool), *map(str, args)],
+                                    env=env, capture_output=True, text=True, timeout=30)
+            transcript.append({"tool": tool, "args": list(map(str, args)), "exit": result.returncode,
+                               "stdout": result.stdout, "stderr": result.stderr})
+            if result.returncode:
+                raise RuntimeError(f"installed {tool} failed: {result.stderr or result.stdout}")
+            return result.stdout
+
+        def check(condition, text):
+            ok(condition, f"安装副本 {label}：{text}")
+
+        cli("build_viewer.py", "--report", report, "--script", script, "--out", review,
+            "--locale", ui, "--name", "Sample Coffee", "--no-scan-skills")
+        rid = json.loads((review / "review.json").read_text(encoding="utf-8"))["reviewId"]
+        port = free_port()
+        server = start_server(review, port, scripts=scripts)
+        ctx = browser.new_context(locale=ui, viewport={"width": 1440, "height": 1000})
+        try:
+            page = ctx.new_page()
+            page.goto(f"http://127.0.0.1:{port}/")
+            page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+            check(page.get_attribute("html", "lang") == ui, "页面语言来自生成参数")
+            if ui == "en":
+                check(page.inner_text("#notesBtn").startswith("Annotations"), "英文批注入口没有遗漏翻译")
+                page.click("#notesBtn")
+                page.click("#openImp")
+                check(page.inner_text("#imp h2") == "Import annotations"
+                      and page.inner_text("#doImp") == "Import", "导入弹窗与操作按钮使用英文")
+                page.fill("#impText", "Unsubmitted import draft: 原文 <tag> {count}")
+                page.locator("#imp [data-close]").click()
+                page.locator("#allnotes [data-close]").click()
+                page.select_option("#localePick", "zh-CN")
+                page.select_option("#localePick", "en")
+                page.click("#notesBtn")
+                page.click("#openImp")
+                check(page.input_value("#impText") == "Unsubmitted import draft: 原文 <tag> {count}",
+                      "弹窗内切换语言保留导入草稿")
+                page.locator("#imp [data-close]").click()
+                page.locator("#allnotes [data-close]").click()
+            go_page(page, 3)
+            annotation = ('Change +12% to YoY +12% in the report; make the same wording change in the speaker notes.'
+                          if material == "en" else '报告的 +12% 改成「同比 +12%」，讲稿同步补上「同比」。')
+            page.select_option("#ntarget", "报告和讲稿")
+            add_note(page, annotation, pin=(0.55, 0.35))
+            check(wait_until(lambda: len(disk_notes(review)) == 1, page, 5), "浏览器批注自动落盘")
+            received_notes = json.loads(cli("notes.py", "show", review, "--json"))["notes"]
+            note_id = received_notes[0]["id"]
+            check(received_notes[0]["text"] == annotation and received_notes[0]["target"] == "报告和讲稿",
+                  "原文与 v1 对象值经安装后的 CLI 保持不变")
+            if output:
+                page.locator("#nlist").scroll_into_view_if_needed()
+                page.screenshot(path=str(output / "viewer.png"))
+                page.keyboard.press("n")
+                page.screenshot(path=str(output / "notes-export.png"))
+                page.keyboard.press("Escape")
+
+            # wait 必须在提交前启动，证明浏览器能唤醒安装副本中的接收命令。
+            waiter = subprocess.Popen([sys.executable, str(scripts / "notes.py"), "wait", str(review),
+                                       "--timeout", "20", "--locale", ui], env=env,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            CLEANUP.add(waiter)
+            page.click("#handBtn")
+            page.check('input[name="htarget"][value="review"]')
+            page.uncheck("#hSub")
+            page.check("#hFullCheck")
+            message = ("Apply my annotations. Stop after the initial edit. Do not use subagents."
+                       if ui == "en" else "按批注改稿，初改完成后停在待复核，不派发子代理。")
+            page.fill("#handMsg", message)
+            page.click("#doHand")
+            out, err = waiter.communicate(timeout=25)
+            CLEANUP.discard(waiter)
+            transcript.append({"tool": "notes.py wait", "exit": waiter.returncode, "stdout": out, "stderr": err})
+            check(waiter.returncode == 0 and annotation in out, "实际提交唤醒等待命令并交付原始批注")
+            batch = json.loads((review / "handoff.json").read_text(encoding="utf-8"))["items"][-1]
+            check((batch["status"], batch["target"], batch["allowSubagents"], batch["fullCheck"], batch["userMessage"]) ==
+                  ("claimed", "review", False, True, message), "接受的批次保留停止条件、主代理权限、全量勾稽和原始附言")
+            if ui == "en":
+                check("Stop at “drafted, waiting for review” and wait for the user" in out
+                      and "evidence" in out and "uncertain or you did not check" in out,
+                      "英文交接保留停止条件、证据与不确定性要求")
+
+            report_text = report.read_text(encoding="utf-8")
+            script_text = script.read_text(encoding="utf-8")
+            report_text = report_text.replace('<p class="kpi">+12%</p>',
+                                              '<p class="kpi">YoY +12%</p>' if material == "en"
+                                              else '<p class="kpi">同比 +12%</p>')
+            if material == "en":
+                script_text = script_text.replace("Revenue grew 12% year on year", "Revenue grew 12% YoY")
+            else:
+                script_text = script_text.replace("收入增长 12%", "收入同比增长 12%")
+            report.write_text(report_text, encoding="utf-8")
+            script.write_text(script_text, encoding="utf-8")
+            cli("build_viewer.py", "--rebuild", review)
+            # 改动必须能从产品的差异与状态接口读回，不能只检查测试直接写过的文件。
+            diff = cli("notes.py", "diff", review, "--batch", "1", "--to", "current", "--locale", ui)
+            check(("YoY +12%" if material == "en" else "同比 +12%") in diff,
+                  "源报告修改出现在按页差异中")
+            check(("Revenue grew 12% YoY" if material == "en" else "收入同比增长 12%") in diff,
+                  "配套讲稿同步修改出现在按页差异中")
+            resolution = "Updated both sources without changing figures." if ui == "en" else "报告与讲稿同步，未改数字。"
+            cli("notes.py", "resolve", review, note_id, "--seq", "1", "--note", resolution, "--locale", ui)
+            summary = ("Checked all six synthetic report pages and their notes. Changed the page 3 wording only; no figures changed."
+                       if ui == "en" else "核对合成报告和讲稿全部 6 页，仅改第 3 页表述，未改数字。")
+            cli("notes.py", "done", review, "--seq", "1", "--summary", summary, "--locale", ui)
+            batches = json.loads(cli("notes.py", "batches", review, "--json"))["history"]
+            check(batches[-1]["status"] == "drafted", "初改收尾停在待复核，没有自行定稿")
+            page.reload()
+            go_page(page, 3)
+            check(("YoY +12%" if material == "en" else "同比 +12%") in page.locator(".kpi").inner_text(),
+                  "重建后浏览器看到源报告修改")
+            check(("Revenue grew 12% YoY" if material == "en" else "收入同比增长 12%") in page.inner_text("#pageScript"),
+                  "重建后浏览器看到讲稿修改")
+
+            # 由浏览器中的用户动作授权复核；再次接收、逐条通过、收尾。
+            page.click("#handBtn")
+            page.click('#handDrafts [data-hreview="1"]')
+            page.click("#doHand")
+            review_out = cli("notes.py", "wait", review, "--stage", "review", "--timeout", "5", "--locale", ui)
+            check(annotation in review_out, "显式请求复核后 CLI 收到同一批批注")
+            cli("notes.py", "review", review, note_id, "--seq", "1", "--ok", "--locale", ui)
+            cli("notes.py", "done", review, "--seq", "1", "--summary", summary, "--locale", ui)
+            final = json.loads(cli("notes.py", "show", review, "--all", "--json"))["notes"][0]
+            final_batch = json.loads(cli("notes.py", "batches", review, "--json"))["history"][-1]
+            check(final["status"] == "resolved" and final["id"] == note_id and final_batch["status"] == "done"
+                  and final_batch["resolvedCount"] == 1, "批注身份、复核结论和处理计数一致")
+            check(json.loads((review / "review.json").read_text(encoding="utf-8"))["reviewId"] == rid,
+                  "生成、提交、重建、复核保留审阅身份")
+            if output:
+                for name in ("report.html", "script.md"):
+                    shutil.copyfile(case / name, output / name)
+                for name in ("notes.json", "handoff.json"):
+                    shutil.copyfile(review / name, output / name)
+                (output / "commands.json").write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
+        finally:
+            ctx.close()
+            stop(server)
+
+        # 直接打开同一单文件：界面语言与材料原文保留；下载后通过 CLI 导回。
+        ctx = browser.new_context(locale=ui, viewport={"width": 1000, "height": 800})
+        try:
+            page = ctx.new_page()
+            page.goto((review / "index.html").as_uri())
+            check("file" in page.inner_text("#mode").lower() if ui == "en" else "本地文件模式" in page.inner_text("#mode"),
+                  "无服务时明确显示本地文件模式")
+            go_page(page, 4)
+            offline_text = "Offline annotation: 原文 <tag> {count}" if ui == "en" else "离线批注：原文 <tag> {count}"
+            add_note(page, offline_text)
+            page.reload()
+            go_page(page, 4)
+            check(offline_text in page.inner_text("#nlist"), "文件模式刷新后保留未翻译的批注")
+            page.keyboard.press("n")
+            page.select_option("#expLang", ui)
+            for selector, extension in (("#dlAll", "md"), ("#dlJson", "json")):
+                with page.expect_download() as event:
+                    page.click(selector)
+                export = case / ("offline." + extension)
+                event.value.save_as(export)
+                if extension == "md":
+                    check(export.read_text(encoding="utf-8").startswith(f"<!-- annotation-everything export v1 lang={ui} -->"),
+                          "文件模式下载带语言标记的 Markdown")
+                    cli("notes.py", "import", review, export, "--locale", "zh-CN" if ui == "en" else "en")
+                else:
+                    check(json.loads(export.read_text(encoding="utf-8"))["reviewId"] == rid,
+                          "JSON 下载保留审阅身份")
+                if output:
+                    shutil.copyfile(export, output / export.name)
+            imported = json.loads(cli("notes.py", "show", review, "--all", "--json"))["notes"]
+            check(any(note["text"] == offline_text for note in imported), "文件模式批注可跨语言导入原审阅")
+            if ui == "en":
+                page.click("#openImp")
+                page.fill("#impText", json.dumps({"reviewId": "0123456789abcdef", "name": '<img src=x onerror="window.__deliveryXss=1">',
+                                                  "notes": [{"page": 1, "text": "Do not import this review"}]}))
+                dialogs = []
+
+                def reject_wrong_review(dialog):
+                    dialogs.append(dialog.message)
+                    dialog.dismiss()
+
+                page.on("dialog", reject_wrong_review)
+                page.click("#doImp")
+                page.remove_listener("dialog", reject_wrong_review)
+                check(len(dialogs) == 1 and "another review" in dialogs[0], "导入身份冲突的确认提示使用当前语言")
+                check(page.evaluate("window.__deliveryXss") is None
+                      and "Do not import this review" not in page.inner_text("#nlist"),
+                      "取消跨审阅导入保留数据隔离，名称中的恶意属性不执行")
+            offline_batches = json.loads(cli("notes.py", "batches", review, "--json"))["history"]
+            check(len(offline_batches) == 1 and offline_batches[0]["status"] == "done",
+                  "文件模式未凭空制造服务端提交")
+        finally:
+            ctx.close()
+        evidence["scenarios"].append({"name": label, "ui": ui, "material": material,
+                                       "checks": RESULTS[start_result:]})
+        if output:
+            (output / "commands.json").write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
+    if artifacts:
+        (artifacts / "evidence.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="ae-e2e-"))
     CLEANUP.add_dir(tmp)
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="chrome", headless=True)
+        installed_delivery_checks(browser, tmp)
+        if "--delivery-only" in sys.argv:
+            browser.close()
+            failed = sum(not p for p, _ in RESULTS)
+            print(f"\n{len(RESULTS) - failed}/{len(RESULTS)} 通过")
+            return 1 if failed else 0
         locale_live_controls_checks(browser, tmp)
         if "--full-check-only" in sys.argv:
             full_check_checks(browser, tmp)

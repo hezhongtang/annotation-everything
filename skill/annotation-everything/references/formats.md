@@ -1,5 +1,7 @@
 # 输入与输出格式
 
+[English format reference](formats.en.md) · [中文操作流程](workflow.zh-CN.md) · [共用安全与协议约束](protocol.md)
+
 ## 报告 HTML
 
 逐页一个 `section`，`class` 含 `page`，带页码与唯一键；版面按 1280×720 设计（对照页按这个尺寸缩放）：

@@ -31,9 +31,9 @@
 <br>
 
 <p align="center">
-  <img src="docs/assets/viewer.png" alt="对照页：左侧报告上有一个标点和一个框选区域，右侧是讲稿和本页批注" width="92%">
+  <img src="docs/assets/viewer.png" alt="对照页：左侧为带标点的合成报告，右侧是讲稿和本页批注" width="92%">
   <br>
-  <sub>对照页：左侧是报告，可以单击放置标点、拖动框选区域；右侧是讲稿和本页批注。图中数据均为虚构样例。</sub>
+  <sub>对照页：左侧是带标点的报告，右侧是讲稿和本页批注；也支持拖动框选区域。图中数据均为虚构样例。</sub>
 </p>
 
 ## 为什么需要它
@@ -92,7 +92,7 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
   </tr>
 </table>
 
-对照页可以选择简体中文或英文。生成时传入 `--locale auto`、`zh-CN` 或 `en`，页面上也可以切换，选择只保存在本机浏览器。批注原文保持原样，对象的存储值 `报告`、`讲稿`、`报告和讲稿` 不随语言改变。省略 `--locale` 时，新审阅保持中文，已有审阅沿用已保存的选择。批注的新增、编辑、删除、重开、引用、快捷删除与改写、放点与框选、重新标注、风格优化、页码、讲稿栏、问答标签、编辑帮助、工具提示和无障碍名称都已支持两种语言；删除确认等对话框同样跟随当前语言。技能输入栏、候选与推荐、空结果、常驻技能的范围标签与增删提示，以及 `notes.py skills` 的输出也按当前语言显示；搜索仍按技能目录里的原始名称和原始说明匹配，常驻技能范围的存储值 `all` / `报告` / `讲稿` / `style` 不变。导出的 Markdown 可以选中文或英文（默认跟随界面），页面和命令行都能跨语言导入。「交给 Agent」弹窗、提交状态徽标、处理记录、回到上次提示和服务未连接时的提示也支持两种语言。提交选项（做到定稿还是停在待复核、是否允许派发子代理、是否全量勾稽）与界面语言无关。
+对照页可以选择简体中文或英文。生成时传入 `--locale auto`、`zh-CN` 或 `en`，页面上也可以切换，选择只保存在本机浏览器。批注原文保持原样，对象的存储值 `报告`、`讲稿`、`报告和讲稿` 不随语言改变。未配置语言时，新审阅保持中文，已有审阅沿用已保存的选择；`AE_LOCALE` 可覆盖已保存配置，显式参数优先。批注的新增、编辑、删除、重开、引用、快捷删除与改写、放点与框选、重新标注、风格优化、页码、讲稿栏、问答标签、编辑帮助、工具提示和无障碍名称都已支持两种语言；删除确认等对话框同样跟随当前语言。技能输入栏、候选与推荐、空结果、常驻技能的范围标签与增删提示，以及 `notes.py skills` 的输出也按当前语言显示；搜索仍按技能目录里的原始名称和原始说明匹配，常驻技能范围的存储值 `all` / `报告` / `讲稿` / `style` 不变。导出的 Markdown 可以选中文或英文（默认跟随界面），页面和命令行都能跨语言导入。「交给 Agent」弹窗、提交状态徽标、处理记录、回到上次提示和服务未连接时的提示也支持两种语言。提交选项（做到定稿还是停在待复核、是否允许派发子代理、是否全量勾稽）与界面语言无关。
 
 <details>
 <summary><b>导出与导入批注</b></summary>
@@ -102,6 +102,14 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
 
 Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lang=… -->`），声明格式版本和内容语言，解析按它选中文或英文文法，与导入界面的语言无关——中文导出在英文页面、英文导出在中文页面都能导入，落库的协议值一致。导出的语言可以在面板里选，默认跟随界面；命令行用 `notes.py export --lang en`。用户正文、引用、处理说明和技能名称保持原文，只有系统包装文字翻译。没有标记的旧中文导出照读；认不出的文字会明确提示。旧版工具读不懂英文导出，会提示升级而不是猜。命令行同样能导出：`notes.py export 审阅目录 [--lang zh-CN|en] [--format json]`。
 </details>
+
+### 语言与 Agent 操作指引
+
+只需安装一个技能副本。中文请求（如「按批注改」）和英文请求（如 “review this report” 或 “apply my annotations”）都由同一个 `annotation-everything` 入口处理，再按请求语言加载[中文流程](skill/annotation-everything/references/workflow.zh-CN.md)或[英文流程](skill/annotation-everything/references/workflow.en.md)。两种流程先读取同一份[安全与协议约束](skill/annotation-everything/references/protocol.md)，涵盖停在待复核、子代理权限、全量勾稽的证据和不确定性要求；无需按语言重复安装。
+
+目前支持简体中文与英文。英文地区标签共用英文资源；`zh` / `zh-Hans` 映射到简体中文，不承诺繁体或其他语言。浏览器保存的选择优先于审阅默认值，`auto` 按浏览器语言偏好顺序匹配、不支持时回退英文。省略设置的新审阅和旧命令保持中文。界面、材料和批注语言相互独立，切换语言保留草稿与待补传改动。
+
+服务模式可以实际提交并唤醒 Agent；直接打开 `index.html` 时，只提供浏览器批注、复制和导出，需导入后交给 Agent。JSON 保留完整批注结构与审阅身份；Markdown 不保留 id、页面键、时间戳或处理批次，并有旧文法的文本限制，详见[格式说明](skill/annotation-everything/references/formats.md)。[交付验收记录](docs/locale-delivery.zh-CN.md)列出三种语言组合的完整流程、兼容矩阵、验证环境与限制。
 
 ## 工作原理
 
@@ -205,7 +213,7 @@ python3 ae.py doctor --locale en                 # 可选：界面语言 auto、
 ```
 
 - 体检逐项给出「通过 / 警告 / 失败」；失败项附修复或排障命令。退出码 0 表示全部通过或只有警告，1 表示有失败项，2 表示命令自身出错（`doctor --json` 输出 `error`）。开发环境类别仅在当前工作目录位于来源仓库内时出现。
-- **界面语言**：`ae.py`、`serve.py`（`serve` / `status` / `list` / `forget` / `check`）、`notes.py show`、`check_pptx_fonts.py` 都支持 `--locale auto|zh-CN|en`（写在子命令前后都认）和环境变量 `AE_LOCALE`；生成对照页时的技能扫描警告跟随 `AE_LOCALE`。优先级是显式参数、`AE_LOCALE`，两者都没有则中文；只有 `auto` 才读 `LC_ALL` / `LC_MESSAGES` / `LANG`。`serve.py serve` 和 `serve.py status` 在目录解析出来后还会回落到那份审阅里保存的 `locale`；`list` / `forget` / `check` 不对应单份审阅，只认前两级。语言选择非法时命令以退出码 2 停下并说明原因，不改动任何状态。帮助、参数说明、缺参、非法值和命令失败都用同一种语言；来源路径、命令、字体名、技能名与系统原始错误保持原文。
+- **界面语言**：`ae.py`、`serve.py`（`serve` / `status` / `list` / `forget` / `check`）、`notes.py`、`check_pptx_fonts.py` 都支持 `--locale auto|zh-CN|en`（写在子命令前后都认）和环境变量 `AE_LOCALE`；生成器的帮助、结果与资源诊断也按显式 `--locale`、`AE_LOCALE`、已保存审阅配置的顺序选语言。优先级是显式参数、`AE_LOCALE`，两者都没有则中文；只有 `auto` 才读 `LC_ALL` / `LC_MESSAGES` / `LANG`。`serve.py serve` 和 `serve.py status` 在目录解析出来后还会回落到那份审阅里保存的 `locale`；`list` / `forget` / `check` 不对应单份审阅，只认前两级。语言选择非法时命令以退出码 2 停下并说明原因，不改动任何状态。帮助、参数说明、缺参、非法值和命令失败都用同一种语言；来源路径、命令、字体名、技能名与系统原始错误保持原文。
 - **机器判定与人读文案分开**：`doctor --json` 的 `category`、`level`、`code` 和 `summary` 是旧消费者在读的判定字段，恒为中文、不随语言改值；新增的语言无关判定信息是每项的 `status`（`pass` / `warn` / `fail`）和 `category_id`（`install` / `tools` / `dev` / `runtime`），以及顶层的 `schema`（结构版本）和 `locale`（`message` 用的是哪种语言）。新消费者比较 `status` / `category_id` 即可，不必比较本地化标签；`message`、`fix_command` 里的人读文案按语言变。`serve.py` 的拒绝与错误同理：HTTP 状态和原因代码（`bad-host`、`cross-site`、`bad-origin`、`no-origin`、`bad-content-type`、`chunked`、`bad-length`、`too-large`、`bad-json`、`not-found`、`preflight`、`no-index`、`no-note`、`server-error`、`review-mismatch`、`no-api`）不随语言变，说明按服务启动时定的语言输出；未知错误只说明类型与恢复动作，不回显请求内容。
 - `repair` 里删除台账失效记录（`--forget-stale`）、结束残留服务（`--stop-orphans`）是破坏性操作，要显式加参数；`--dry-run` 只看计划不动手。计划与执行报告都写清楚「本次未执行」，翻译后的提示不弱化后果。
 - `uninstall` 任何情况下都不动审阅目录；`--purge` 才一并删除审阅台账；有 `serve.py` 在运行时会拒绝，`--stop-servers` 先停止再卸。
@@ -254,7 +262,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 命令会输出刚才提交的批注，这就是 Agent 收到的内容。
 
-想试英文讲稿，把 `--script` 换成 `fixtures/sample/script.en.md`（同一份报告的英文讲稿）：对照页右侧的讲法、时长、过渡和问答都会是英文原文，界面语言不变。
+想试英文材料，把 `--report` 换成 `fixtures/sample/report.en.html`，`--script` 换成 `fixtures/sample/script.en.md`，加 `--locale en` 即可体验英文界面；只换材料时界面语言不变，也可用英文界面审阅原来的中文材料。
 
 **3. 准备自己的材料**
 
@@ -300,8 +308,13 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 ```text
 skill/annotation-everything/       技能本体，安装时整体复制
-├── SKILL.md                       给 Agent 看的操作说明
-├── references/formats.md          输入与输出格式
+├── SKILL.md                       中英文发现入口，按请求语言加载流程
+├── references/
+│   ├── protocol.md               共用安全、停止条件与协议约束
+│   ├── workflow.zh-CN.md          中文操作流程
+│   ├── workflow.en.md             英文操作流程
+│   ├── formats.md                 中文输入与输出格式
+│   └── formats.en.md              英文输入与输出格式
 ├── locales/                       中英消息（zh-CN.json、en.json）和语言选择契约
 ├── scripts/
 │   ├── build_viewer.py            生成对照页 index.html 和 review.json
@@ -336,9 +349,11 @@ python3 -m unittest discover tests                                   # 单元测
 uv run --no-project --with playwright python tests/e2e_browser.py   # 浏览器端到端测试（使用本机的 Google Chrome）
 python3 skill/annotation-everything/scripts/serve.py check          # 服务安全自检
 python3 ae.py install                                               # 同步到 ~/.claude/skills/
+uv run --no-project --with playwright python tests/e2e_browser.py --delivery-only  # 临时安装副本的三种语言组合验收
 ```
 
 - 测试会把审阅台账放到临时目录（环境变量 `AE_HOME`）。手动试用或运行技能评测时，也建议先执行 `export AE_HOME=$(mktemp -d)`，避免临时审阅登记进本机真实的台账，或占用真实审阅的专属端口。
+- 验收产物可用 `AE_DELIVERY_ARTIFACTS` 指向 `skill/annotation-everything-workspace/` 下的目录，保留合成源材料、命令输出、批次状态、离线导出和截图。具体命令与评测边界见[交付验收记录](docs/locale-delivery.zh-CN.md)。
 - `main` 只通过 PR 的 squash 合并更新：从 issue 开分支，PR 正文写 `Closes #编号`，CI 通过后合并，issue 随合并自动关闭。完整流程见 [AGENTS.md](AGENTS.md)「分支、issue 与 PR」。
 - 仓库中只放合成样例。真实材料、批注和审阅目录一律不放进仓库，也不放进技能目录。
 - 术语以 [GLOSSARY.md](GLOSSARY.md) 为准；架构决策记录见 [docs/adr/](docs/adr/)；协作约定见 [AGENTS.md](AGENTS.md)。
