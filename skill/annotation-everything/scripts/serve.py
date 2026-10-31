@@ -1125,9 +1125,10 @@ def _add_locale(parser: argparse.ArgumentParser) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    locale_choice = explicit_locale(argv)
     # 先按共同契约定语言，再建解析器：帮助、参数说明与错误消息才能用同一种语言
     try:
-        set_locale(i18n.cli_locale(explicit_locale(argv)))
+        set_locale(i18n.cli_locale(locale_choice))
     except i18n.LocaleError as exc:
         set_locale(i18n.DEFAULT_LOCALE)
         params = getattr(exc, "params", {}) or {}
@@ -1149,7 +1150,7 @@ def main(argv: list[str] | None = None) -> int:
         a = ap.parse_args(rest[1:])
         d = resolve_arg(a.dir)
         # 目录解析出来后还有一级兜底：审阅里保存的 locale
-        set_locale(cli_locale(explicit_locale(argv), d))
+        set_locale(cli_locale(locale_choice, d))
         return status(d, locale=_LOCALE)
     if rest[:1] == ["list"]:
         ap = LocalizedParser(prog="serve.py list", add_help=False, description=T("serve.desc.list"))
@@ -1181,7 +1182,7 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     d = resolve_arg(a.dir)
     # 目录解析出来后还有一级兜底：审阅里保存的 locale
-    set_locale(cli_locale(explicit_locale(argv), d))
+    set_locale(cli_locale(locale_choice, d))
     return serve(d, a.port, not a.no_open, a.debug, parse_hook(a.on_handoff),
                  claim=a.claim_port, locale=_LOCALE)
 

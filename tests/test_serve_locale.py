@@ -290,6 +290,25 @@ class ServeCliLanguageTests(unittest.TestCase):
         p = self.run_serve("status", str(d), "--locale", "zh-CN", AE_LOCALE="en")
         self.assertEqual(json.loads(p.stdout)["server"], "未运行", "显式参数最优先")
 
+    def test_start_keeps_explicit_locale_before_directory_or_subcommand(self):
+        d = self.make_review()
+        manifest = d / "review.json"
+        previous = serve._LOCALE
+        self.addCleanup(serve.set_locale, previous)
+        for explicit, fallback in (("en", "zh-CN"), ("zh-CN", "en")):
+            manifest.write_text(json.dumps({"reviewId": "0" * 16, "locale": fallback}),
+                                encoding="utf-8")
+            for args in (["--locale", explicit, str(d)],
+                         ["--locale=" + explicit, str(d)],
+                         ["--locale", explicit, "serve", str(d)],
+                         ["--locale=" + explicit, "serve", str(d)],
+                         ["serve", str(d), "--locale", explicit]):
+                with self.subTest(args=args), \
+                        unittest.mock.patch.dict(os.environ, {"AE_LOCALE": fallback}), \
+                        unittest.mock.patch.object(serve, "serve", return_value=0) as start:
+                    self.assertEqual(serve.main([*args, "--no-open"]), 0)
+                    self.assertEqual(start.call_args.kwargs["locale"], explicit)
+
     def test_locale_reaches_skill_copy(self):
         """从技能副本运行 serve.py 时，--locale 与 AE_LOCALE 同样生效（词典随副本走）。"""
         copy = self.home / ".claude" / "skills" / "annotation-everything"

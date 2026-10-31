@@ -573,7 +573,7 @@ def check_links(ctx: DoctorContext) -> CheckResult:
 STATUS_FILE = ".annotation-server.json"   # 与技能本体 serve.py 的运行状态文件同名，只含 pid/port/dir 等元数据
 HOST = "127.0.0.1"
 # serve.py 的这些命令行选项各带一个值，解析目录参数时要连值一起跳过
-SERVE_OPTIONS_WITH_VALUE = ("--port", "--claim-port", "--on-handoff")
+SERVE_OPTIONS_WITH_VALUE = ("--port", "--claim-port", "--on-handoff", "--locale")
 SERVE_MAINTENANCE_COMMANDS = ("check", "status", "list", "forget")   # 不起服务的 serve.py 子命令
 
 
@@ -687,13 +687,17 @@ def serve_script_index(cmdline: str, pid: Optional[int] = None) -> Optional[int]
 def serve_dir_argument(cmdline: str, pid: Optional[int] = None) -> Optional[str]:
     """已核实脚本的审阅目录参数；排除维护子命令。
 
-    子命令识别与 serve.py main() 一致：只看脚本后的第一个参数；`serve` 后面才是目录。
+    子命令识别与 serve.py main() 一致：先剥掉开头的 --locale，再识别维护子命令或 serve。
     不是 serve.py 进程、或没有目录参数时返回 None。
     """
     index = serve_script_index(cmdline, pid)
     if index is None:
         return None
     args = command_tokens(cmdline)[index + 1:]
+    if args[:1] == ["--locale"]:
+        args = args[2:]
+    elif args[:1] and args[0].startswith("--locale="):
+        args = args[1:]
     if args[:1] and args[0] in SERVE_MAINTENANCE_COMMANDS:
         return None
     if args[:1] == ["serve"]:
