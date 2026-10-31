@@ -92,12 +92,12 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
   </tr>
 </table>
 
-对照页可以选择简体中文或英文。生成时传入 `--locale auto`、`zh-CN` 或 `en`，页面上也可以切换，选择只保存在本机浏览器。批注原文保持原样，对象的存储值 `报告`、`讲稿`、`报告和讲稿` 不随语言改变。省略 `--locale` 时，新审阅保持中文，已有审阅沿用已保存的选择。批注的新增、编辑、删除、重开、引用、快捷删除与改写、放点与框选、重新标注、风格优化、页码、讲稿栏、问答标签、编辑帮助、工具提示和无障碍名称都已支持两种语言；删除确认等对话框同样跟随当前语言。技能选择和导出的界面文案也跟随当前语言：导出的 Markdown 可以选中文或英文（默认跟随界面），页面上和命令行都能把任一种语言的导出导入回来。导入弹窗、处理记录和交给 Agent 的界面文案仍在逐项适配。
+对照页可以选择简体中文或英文。生成时传入 `--locale auto`、`zh-CN` 或 `en`，页面上也可以切换，选择只保存在本机浏览器。批注原文保持原样，对象的存储值 `报告`、`讲稿`、`报告和讲稿` 不随语言改变。省略 `--locale` 时，新审阅保持中文，已有审阅沿用已保存的选择。批注的新增、编辑、删除、重开、引用、快捷删除与改写、放点与框选、重新标注、风格优化、页码、讲稿栏、问答标签、编辑帮助、工具提示和无障碍名称都已支持两种语言；删除确认等对话框同样跟随当前语言。技能输入栏、候选与推荐、空结果、常驻技能的范围标签与增删提示，以及 `notes.py skills` 的输出也按当前语言显示；搜索仍按技能目录里的原始名称和原始说明匹配，常驻技能范围的存储值 `all` / `报告` / `讲稿` / `style` 不变。导出的 Markdown 可以选中文或英文（默认跟随界面），页面和命令行都能跨语言导入。导入弹窗、处理记录和交给 Agent 的部分界面文案仍在逐项适配。
 
 <details>
 <summary><b>导出与导入批注</b></summary>
 <br>
-<p align="center"><img src="docs/assets/notes-export.png" alt="「全部批注」面板：复制给 Agent、下载 Markdown 或 JSON、导入" width="88%"></p>
+<p align="center"><img src="docs/assets/notes-export.png" alt="「全部批注」面板：选择导出语言、复制给 Agent、下载 Markdown 或 JSON、导入" width="88%"></p>
 没有 Agent 在等待时，可以在「全部批注」面板里复制全部批注，粘贴给任意 Agent；也可以下载为 Markdown 或 JSON 文件，之后再导入。
 
 Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lang=… -->`），声明格式版本和内容语言，解析按它选中文或英文文法，与导入界面的语言无关——中文导出在英文页面、英文导出在中文页面都能导入，落库的协议值一致。导出的语言可以在面板里选，默认跟随界面；命令行用 `notes.py export --lang en`。用户正文、引用、处理说明和技能名称保持原文，只有系统包装文字翻译。没有标记的旧中文导出照读；认不出的文字会明确提示。旧版工具读不懂英文导出，会提示升级而不是猜。命令行同样能导出：`notes.py export 审阅目录 [--lang zh-CN|en] [--format json]`。
@@ -278,7 +278,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `notes.py export` / `import` | 导出可再导入的批注摘要（Markdown 带版本与语言标记，或 JSON 结构化备份）／导入页面导出的 JSON 或 Markdown。`export --lang` 与 `show --locale` 同一套优先级，`--format json`、`--all`、`--page N`、`--out 文件` |
 | `notes.py done` / `review` / `diff` | 结束当前阶段、给出复核结论、按页查看初改改动了哪些地方 |
 | `notes.py batches` | 查看处理记录 |
-| `notes.py skills` | 查看或设置技能目录和常驻技能 |
+| `notes.py skills` | 查看或设置技能目录和常驻技能。`--locale` 选择输出语言，优先于 `AE_LOCALE` 和审阅设置；范围可写 `全部` / `报告` / `讲稿` / `风格优化` 或 `all` / `report` / `script` / `style` |
 | `check_pptx_fonts.py 原始.pptx [--pdf 转换后.pdf]` | PPTX 转换前后的字体核查；`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选界面语言 |
 
 </details>

@@ -61,6 +61,15 @@ class NoteError(ValueError):
     """请求内容不合法（返回 400）。"""
 
 
+class AlwaysLimitError(NoteError):
+    """常驻技能超过上限。带上限与当前数量，调用方好用当前语言提示。"""
+
+    def __init__(self, limit: int, count: int):
+        super().__init__(f"常驻技能最多 {limit} 个（现在 {count} 个）")
+        self.limit = limit
+        self.count = count
+
+
 class NotFound(KeyError):
     """批注不存在（返回 404）。"""
 
@@ -451,7 +460,7 @@ def _always_items(v: Any, *, strict: bool) -> list[dict[str, str]]:
                 out.append(e)
     if len(out) > MAX_ALWAYS:
         if strict:
-            raise NoteError(f"常驻技能最多 {MAX_ALWAYS} 个（现在 {len(out)} 个）")
+            raise AlwaysLimitError(MAX_ALWAYS, len(out))
         out = out[:MAX_ALWAYS]
     return out
 
