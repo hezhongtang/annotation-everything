@@ -969,11 +969,24 @@ class ReportTests(VerifyEntryTestCase):
 
     def test_tampered_log_breaks_the_evidence(self):
         record = self.prepare("run", "--group", "unit")
-        log = self.repo.artifact_dir / "runs" / record["run_id"] / "unit.log"
+        run_dir = self.repo.artifact_dir / "runs" / record["run_id"]
+        original_record = (run_dir / "record.json").read_bytes()
+        log = run_dir / "unit.log"
         log.write_text(log.read_text(encoding="utf-8") + "事后补的一行\n", encoding="utf-8")
         p = self.repo.run_verify("report", "--run", record["run_id"])
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("校验和不一致", p.stdout)
+        self.assertIn("不能作为通过证据", p.stdout)
+        self.assertNotIn("；可作为通过证据", p.stdout)
+        report = self.repo.run_verify("report", "--run", record["run_id"], "--json")
+        self.assertEqual(report.returncode, 1, report.stdout + report.stderr)
+        current = json.loads(report.stdout)
+        self.assertFalse(current["result"]["usable_as_evidence"])
+        self.assertEqual(current["evidence"]["integrity"], "degraded")
+        self.assertIn("校验和不一致", report.stdout)
+        self.assertEqual(current["result"]["outcome"], "passed", "原始测试结论仍然保留")
+        self.assertEqual((run_dir / "record.json").read_bytes(), original_record,
+                         "报告重新校验证据，但不改写原始运行记录")
 
     def test_missing_log_breaks_the_evidence(self):
         record = self.prepare("run", "--group", "unit")
@@ -981,8 +994,295 @@ class ReportTests(VerifyEntryTestCase):
         p = self.repo.run_verify("report", "--run", record["run_id"])
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("缺少日志", p.stdout)
+        self.assertIn("不能作为通过证据", p.stdout)
+        report = self.repo.run_verify("report", "--run", record["run_id"], "--json")
+        self.assertEqual(report.returncode, 1, report.stdout + report.stderr)
+        current = json.loads(report.stdout)
+        self.assertFalse(current["result"]["usable_as_evidence"])
+        self.assertEqual(current["evidence"]["integrity"], "degraded")
+        self.assertIn("缺少日志", report.stdout)
 
     def test_report_without_any_record_is_not_a_success(self):
         p = self.repo.run_verify("report", "--latest")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("还没有可报告的验证记录", p.stderr)
+
+
+class ReviewRegressionTests(VerifyEntryTestCase):
+    """PR #62 独立审查：边界输入、证据读取与异常退出的命令行回归。"""
+
+    def test_absolute_output_and_selector_paths_are_redacted_in_records(self):
+        selector = self.repo.path / "tests" / "test_synth.py"
+        for equals_style in (False, True):
+            with self.subTest(equals_style=equals_style):
+                artifacts = Path(self.temp.name) / ("out-%s" % equals_style)
+                out_args = (["--out-dir=" + str(artifacts)] if equals_style
+                            else ["--out-dir", str(artifacts)])
+                p = self.repo.run_verify("run", "unit-related", str(selector), *out_args)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                run_id = json.loads((artifacts / "latest.json").read_text(encoding="utf-8"))["run_id"]
+                record = read_record(artifacts, run_id)
+                serialized = json.dumps(record, ensure_ascii=False)
+                self.assertNotIn(str(artifacts), serialized, "产物路径不能落入共享记录")
+                self.assertNotIn(str(artifacts.resolve()), serialized)
+                self.assertNotIn(str(self.repo.path), serialized, "选择器不能暴露本机仓库位置")
+                self.assertNotIn(str(self.repo.path.resolve()), serialized)
+                self.assertEqual(record["context"]["selectors"], ["tests/test_synth.py"])
+                self.assertEqual(absolute_strings(record), [])
+                sidecar = (artifacts / "runs" / run_id / "unit-related.cases.json").read_text(
+                    encoding="utf-8")
+                self.assertNotIn(str(self.repo.path), sidecar, "用例明细也只记仓库相对选择器")
+                self.assertNotIn(str(self.repo.path.resolve()), sidecar)
+
+    def test_equal_size_large_fixture_change_invalidates_input_coverage(self):
+        self.unit('''import pathlib
+import unittest
+
+class LargeFixtureTests(unittest.TestCase):
+    def test_change(self):
+        with pathlib.Path("fixtures/large.bin").open("r+b") as handle:
+            handle.seek(8)
+            handle.write(b"B")
+''')
+        self.repo.commit_all("合成大文件变更测试")
+        fixture = self.repo.path / "fixtures" / "large.bin"
+        fixture.parent.mkdir()
+        fixture.write_bytes(b"A" * (4 * 1024 * 1024 + 1))
+        size = fixture.stat().st_size
+        p = self.repo.run_verify("run", "--quiet")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(fixture.stat().st_size, size, "复现保持文件长度不变")
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertTrue(record["input"]["changed_during_run"])
+        self.assertFalse(record["input"]["covers_final_input"])
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        self.assertNotEqual(record["input"]["fingerprint"], record["input"]["final_fingerprint"])
+
+    @unittest.skipUnless(os.name == "posix" and os.geteuid() != 0,
+                         "文件读取权限回归需要非 root 的 POSIX 用户")
+    def test_unreadable_input_cannot_produce_usable_evidence(self):
+        fixture = self.repo.write("fixtures/unreadable.txt", "合成受限输入")
+        fixture.chmod(0)
+        self.addCleanup(fixture.chmod, 0o600)
+        p = self.repo.run_verify("run", "--quiet")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertFalse(record["input"]["available"])
+        self.assertTrue(record["input"]["reason"])
+        self.assertIsNot(record["input"]["covers_final_input"], True)
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        report = self.repo.run_verify("report", "--latest")
+        self.assertEqual(report.returncode, 1, report.stdout + report.stderr)
+
+    def test_multiple_failed_subtests_count_one_failed_main_case(self):
+        self.unit('''import unittest
+
+class SubTests(unittest.TestCase):
+    def test_failures(self):
+        for index in range(3):
+            with self.subTest(index=index):
+                self.fail("合成子测试失败")
+
+    def test_pass(self):
+        self.assertTrue(True)
+''')
+        self.repo.commit_all("合成多个失败子测试")
+        p = self.repo.run_verify("run", "--quiet")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        counts = record["result"]["counts"]
+        self.assertEqual((counts["cases"], counts["failed"], counts["passed"]), (2, 1, 1))
+        self.assertEqual(counts["subtest_failures"], 3)
+        self.assertEqual([case["status"] for case in record["groups"][0]["cases"]],
+                         ["failed", "passed"])
+
+    def test_child_sigint_preserves_interruption_and_completed_cases(self):
+        self.unit('''import os
+import signal
+import unittest
+
+class InterruptTests(unittest.TestCase):
+    def test_a_completed(self):
+        self.assertTrue(True)
+
+    def test_b_interrupt(self):
+        os.kill(os.getpid(), signal.SIGINT)
+
+    def test_c_not_started(self):
+        self.fail("中断后的用例不能执行")
+''')
+        self.repo.commit_all("合成子进程 SIGINT")
+        p = self.repo.run_verify("run", "--quiet")
+        self.assertEqual(p.returncode, 130, p.stdout + p.stderr)
+        run_id = self.repo.latest_run_id()
+        record = read_record(self.repo.artifact_dir, run_id)
+        self.assertEqual(record["result"]["outcome"], "interrupted")
+        self.assertEqual(record["result"]["exit_status"], 130)
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        cases = {case["name"]: case for case in record["groups"][0]["cases"]}
+        self.assertEqual(cases["test_a_completed"]["status"], "passed")
+        self.assertNotEqual(cases.get("test_b_interrupt", {}).get("status"), "passed")
+        self.assertNotIn("test_c_not_started", cases)
+        children = json.loads((self.repo.artifact_dir / "runs" / run_id / "children.json").read_text(
+            encoding="utf-8"))
+        self.assertEqual(children[0]["exit_status"], 130)
+        self.assertTrue(children[0]["reaped"])
+
+    def test_registry_write_failure_reaps_owned_child_and_preserves_decoy(self):
+        self.unit(UNIT_SLOW)
+        self.repo.commit_all("合成登记失败时的慢测试")
+        injection = Path(self.temp.name) / "injection"
+        injection.mkdir()
+        pid_file = Path(self.temp.name) / "owned-child.pid"
+        (injection / "sitecustomize.py").write_text('''import errno
+import json
+import os
+from pathlib import Path
+
+original_replace = os.replace
+
+def replace_with_registry_failure(source, target):
+    if str(target).endswith("/children.json"):
+        entries = json.loads(Path(source).read_text(encoding="utf-8"))
+        Path(os.environ["SYNTH_CHILD_PID"]).write_text(str(entries[0]["pid"]), encoding="utf-8")
+        raise OSError(errno.ENOSPC, "synthetic registry disk full")
+    return original_replace(source, target)
+
+os.replace = replace_with_registry_failure
+''', encoding="utf-8")
+        decoy = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+        child_pid = None
+        try:
+            p = self.repo.run_verify("run", "--quiet", timeout=20, extra_env={
+                "PYTHONPATH": str(injection), "SYNTH_CHILD_PID": str(pid_file)})
+            self.assertTrue(pid_file.is_file(), "故障发生在子进程已经启动并登记之后")
+            child_pid = int(pid_file.read_text(encoding="utf-8"))
+            self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+            self.assertIn("入口自身失败", p.stderr)
+            self.assertNotIn("Traceback", p.stderr)
+            self.assertFalse(pid_alive(child_pid), "写登记文件失败也必须回收已启动的子进程")
+            self.assertIsNone(decoy.poll(), "未登记进程不受异常收尾影响")
+            record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+            self.assertEqual(record["result"]["outcome"], "wrapper_error")
+            self.assertFalse(record["result"]["usable_as_evidence"])
+        finally:
+            if child_pid is None and pid_file.is_file():
+                child_pid = int(pid_file.read_text(encoding="utf-8"))
+            if child_pid and pid_alive(child_pid):
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            decoy.kill()
+            decoy.wait(timeout=5)
+
+
+class UnitOutcomeBoundaryTests(VerifyEntryTestCase):
+    """主用例、子测试与 fixture 的结论分别计数，加载期间的信号仍属于中断。"""
+
+    def run_body(self, body: str, expected_exit: int, *selection: str) -> dict:
+        self.unit(body)
+        self.repo.commit_all("合成单元结论边界")
+        p = self.repo.run_verify("run", *selection, "--quiet")
+        self.assertEqual(p.returncode, expected_exit, p.stdout + p.stderr)
+        return read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+
+    def test_only_skipped_subtest_is_not_a_pass(self):
+        record = self.run_body('''import unittest
+
+class SubTests(unittest.TestCase):
+    def test_skipped(self):
+        with self.subTest(name="合成跳过"):
+            self.skipTest("没有执行子测试")
+''', 1)
+        self.assertEqual(record["result"]["outcome"], "skipped")
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        counts = record["result"]["counts"]
+        self.assertEqual((counts["cases"], counts["passed"], counts["skipped"]), (1, 0, 1))
+        self.assertEqual(counts["subtest_skips"], 1)
+        self.assertEqual(record["groups"][0]["cases"][0]["status"], "skipped")
+
+    def test_class_fixture_skip_does_not_skip_another_passed_case(self):
+        record = self.run_body('''import unittest
+
+class AUnavailableTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        raise unittest.SkipTest("合成类 fixture 不适用")
+
+    def test_not_started(self):
+        self.fail("被跳过的类不能执行")
+
+class BAvailableTests(unittest.TestCase):
+    def test_pass(self):
+        self.assertTrue(True)
+''', 0)
+        self.assertEqual(record["result"]["outcome"], "passed")
+        self.assertTrue(record["result"]["usable_as_evidence"])
+        counts = record["result"]["counts"]
+        self.assertEqual((counts["cases"], counts["passed"], counts["skipped"]), (1, 1, 0))
+        self.assertEqual(counts["fixture_skips"], 1)
+        self.assertEqual([case["name"] for case in record["groups"][0]["cases"]], ["test_pass"])
+
+    def test_sigint_during_explicit_module_import_is_interrupted(self):
+        record = self.run_body('''import os
+import signal
+
+os.kill(os.getpid(), signal.SIGINT)
+''', 130, "unit-related", "tests/test_synth.py")
+        self.assertEqual(record["result"]["outcome"], "interrupted")
+        self.assertEqual(record["result"]["exit_status"], 130)
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        self.assertEqual(record["result"]["counts"]["cases"], 0)
+        self.assertEqual(record["groups"][0]["cases"], [])
+
+    def test_class_fixture_error_is_separate_from_case_errors(self):
+        record = self.run_body('''import unittest
+
+class BrokenFixtureTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        raise ValueError("合成类 fixture 错误")
+
+    def test_not_started(self):
+        self.fail("准备失败后不能执行用例")
+''', 1)
+        self.assertEqual(record["result"]["outcome"], "error")
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        counts = record["result"]["counts"]
+        self.assertEqual((counts["cases"], counts["passed"], counts["errors"]), (0, 0, 0))
+        self.assertEqual(counts["fixture_errors"], 1)
+        self.assertEqual(record["groups"][0]["cases"], [])
+
+    def test_passed_and_skipped_subtests_preserve_passed_main_case(self):
+        record = self.run_body('''import unittest
+
+class SubTests(unittest.TestCase):
+    def test_mixed(self):
+        with self.subTest(name="通过"):
+            self.assertTrue(True)
+        with self.subTest(name="跳过"):
+            self.skipTest("合成子测试不适用")
+''', 0)
+        self.assertEqual(record["result"]["outcome"], "passed")
+        self.assertTrue(record["result"]["usable_as_evidence"])
+        counts = record["result"]["counts"]
+        self.assertEqual((counts["cases"], counts["passed"], counts["skipped"]), (1, 1, 0))
+        self.assertEqual(counts["subtest_skips"], 1)
+        self.assertEqual(record["groups"][0]["cases"][0]["status"], "passed")
+
+    def test_unexpected_success_is_not_counted_as_passed(self):
+        record = self.run_body('''import unittest
+
+class ExpectedFailureTests(unittest.TestCase):
+    @unittest.expectedFailure
+    def test_unexpected_success(self):
+        self.assertTrue(True)
+''', 1)
+        self.assertEqual(record["result"]["outcome"], "failed")
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        counts = record["result"]["counts"]
+        self.assertEqual((counts["cases"], counts["passed"], counts["unexpected_successes"]), (1, 0, 1))
+        self.assertEqual(record["groups"][0]["cases"][0]["status"], "unexpected_success")

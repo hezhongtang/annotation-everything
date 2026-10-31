@@ -50,7 +50,6 @@ PLAN_SCHEMA = "ae-verify-plan/1"
 WRAPPER_VERSION = 1
 ARTIFACT_DIRNAME = ".verify"
 TEST_START_DIR = "tests"
-MAX_HASH_BYTES = 4 * 1024 * 1024
 KILL_GRACE_SECONDS = 5.0
 
 EXIT_OK = 0
@@ -107,7 +106,7 @@ def new_run_id() -> str:
 
 
 def display_argv(argv: list) -> list:
-    """记录里不放本机绝对路径：解释器与入口本身换成稳定写法。"""
+    """路径参数只记仓库相对位置；仓库外路径使用占位符。"""
     out = []
     for token in argv:
         if token == sys.executable:
@@ -115,7 +114,14 @@ def display_argv(argv: list) -> list:
         elif token == str(VERIFY_PY):
             out.append("verify.py")
         else:
-            out.append(token)
+            option, separator, value = token.partition("=") if token.startswith("--") else ("", "", token)
+            path = Path(value).expanduser() if value.startswith("~/") else Path(value)
+            if path.is_absolute():
+                try:
+                    value = str(path.resolve().relative_to(REPO))
+                except (OSError, ValueError):
+                    value = "<external-path>"
+            out.append(option + separator + value)
     return out
 
 
@@ -221,38 +227,39 @@ def snapshot_input() -> dict:
         touched.append(path)
         if old:
             touched.append(old)
-    skipped = []
+    unreadable = []
     digests = []
     for path in sorted(set(touched)):
         if path == ARTIFACT_DIRNAME or path.startswith(ARTIFACT_DIRNAME + "/"):
             continue
         full = REPO / path
         try:
-            if not full.exists():
-                digests.append("%s:absent" % path)
-                continue
-            size = full.stat().st_size
-            if size > MAX_HASH_BYTES:
-                skipped.append(path)
-                digests.append("%s:large:%d" % (path, size))
-                continue
-            digests.append("%s:%s" % (path, hashlib.sha256(full.read_bytes()).hexdigest()))
+            full.stat()
+        except FileNotFoundError:
+            digests.append("%s:absent" % path)
+            continue
         except OSError:
-            skipped.append(path)
-            digests.append("%s:unreadable" % path)
+            unreadable.append(path)
+            continue
+        digest = digest_file(full)
+        if digest is None:
+            unreadable.append(path)
+        else:
+            digests.append("%s:%s" % (path, digest))
     fingerprint = "sha256:" + hashlib.sha256(
         ("\n".join(["head:%s" % head] + digests)).encode("utf-8")).hexdigest()
     return {
-        "available": True,
-        "reason": None,
-        "fingerprint": fingerprint,
+        "available": not unreadable,
+        "reason": "无法读取有效输入：%s" % "、".join(unreadable) if unreadable else None,
+        "fingerprint": None if unreadable else fingerprint,
         "fingerprint_scope": "HEAD + 工作树中所有非忽略路径的内容摘要（源码、测试、fixture、资源与执行配置）",
         "head": head,
         "staged": sorted(staged),
         "unstaged": sorted(unstaged),
         "untracked": sorted(untracked),
         "counts": {"staged": len(staged), "unstaged": len(unstaged), "untracked": len(untracked)},
-        "skipped_large": skipped,
+        "skipped_large": [],  # 保留 v1 字段；所有大小的文件现在都计算完整摘要
+        "unreadable": unreadable,
     }
 
 
@@ -339,7 +346,7 @@ class Group:
 
 def build_groups(selectors: Optional[list] = None) -> dict:
     names = list(selectors or [])
-    shown = names or ["<选择器>"]
+    shown = display_argv(names) or ["<选择器>"]
     groups = {
         "unit": Group(
             name="unit", title="完整单元",
@@ -441,11 +448,14 @@ def cmd_unit_runner(argv: list) -> int:
             self.gaps = []
             self.subtest_failures = 0
             self.subtest_errors = 0
-            self._subtest_by_case = {"failures": {}, "errors": {}}
+            self.subtest_skips = 0
+            self._subtest_by_case = {"failures": {}, "errors": {}, "passed": {}, "skipped": {}}
             self._run_started = None
             self._last_stop = None
             self._previous_class = None
             self._pending = None
+            self.fixture_errors = 0
+            self.fixture_skips = 0
 
         def startTestRun(self):
             super().startTestRun()
@@ -476,9 +486,16 @@ def cmd_unit_runner(argv: list) -> int:
             status = self._status_of(test)
             subtest_failures = self._subtest_by_case["failures"].get(identifier, 0)
             subtest_errors = self._subtest_by_case["errors"].get(identifier, 0)
+            subtest_skips = self._subtest_by_case["skipped"].get(identifier, 0)
             if status == PASSED and (subtest_failures or subtest_errors):
                 # 用例本身跑完了，但它的子测试有失败：结论不能算通过
-                status = ERROR if subtest_errors and not subtest_failures else FAILED
+                status = ERROR if subtest_errors else FAILED
+            active_exception = sys.exc_info()[0]
+            if active_exception is not None and issubclass(active_exception, KeyboardInterrupt):
+                status = INTERRUPTED
+            elif (status == PASSED and subtest_skips
+                  and not self._subtest_by_case["passed"].get(identifier, 0)):
+                status = SKIPPED
             self.case_records.append({
                 "id": identifier,
                 "module": getattr(test, "__module__", None),
@@ -488,8 +505,24 @@ def cmd_unit_runner(argv: list) -> int:
                 "seconds": round(now - started, 6),
                 "subtest_failures": subtest_failures,
                 "subtest_errors": subtest_errors,
+                "subtest_skips": subtest_skips,
                 "message": self._message_of(test),
             })
+
+        def addError(self, test, err):
+            if self._pending is None:
+                self.fixture_errors += 1
+            super().addError(test, err)
+
+        def addSkip(self, test, reason):
+            if self._pending is None:
+                self.fixture_skips += 1
+            elif test is not self._pending[0]:
+                self.subtest_skips += 1
+                identifier = _test_id(self._pending[0])
+                counter = self._subtest_by_case["skipped"]
+                counter[identifier] = counter.get(identifier, 0) + 1
+            super().addSkip(test, reason)
 
         def addSubTest(self, test, subtest, err):
             if err is not None:
@@ -499,9 +532,11 @@ def cmd_unit_runner(argv: list) -> int:
                 else:
                     self.subtest_errors += 1
                     bucket = "errors"
-                counter = self._subtest_by_case[bucket]
-                identifier = _test_id(test)
-                counter[identifier] = counter.get(identifier, 0) + 1
+            else:
+                bucket = "passed"
+            counter = self._subtest_by_case[bucket]
+            identifier = _test_id(test)
+            counter[identifier] = counter.get(identifier, 0) + 1
             super().addSubTest(test, subtest, err)
 
         def _add_gap(self, from_label, to_label, seconds):
@@ -520,7 +555,7 @@ def cmd_unit_runner(argv: list) -> int:
 
         def _status_of(self, test) -> str:
             identifier = _test_id(test)
-            for bucket, status in (("failures", FAILED), ("errors", ERROR), ("skipped", SKIPPED),
+            for bucket, status in (("errors", ERROR), ("failures", FAILED), ("skipped", SKIPPED),
                                    ("expectedFailures", "expected_failure")):
                 for entry in getattr(self, bucket, None) or []:
                     if _test_id(entry[0]) == identifier:
@@ -541,21 +576,30 @@ def cmd_unit_runner(argv: list) -> int:
     loader = unittest.TestLoader()
     suite = None
     load_error = None
+    interrupted = False
     try:
         if args.mode == "discover":
             suite = loader.discover(args.targets[0], pattern=args.pattern)
         else:
             sys.path.insert(0, os.path.abspath(TEST_START_DIR))
             suite = loader.loadTestsFromNames([_selector_name(target) for target in args.targets])
+    except KeyboardInterrupt:
+        interrupted = True
     except BaseException as exc:  # 加载失败也要留下记录，不能静默通过
         load_error = "%s: %s" % (type(exc).__name__, exc)
         print(load_error, file=sys.stderr)
 
     result = None
-    interrupted = False
     runner_error = None
-    if load_error is None:
-        runner = unittest.TextTestRunner(verbosity=args.verbosity, resultclass=TimingResult)
+
+    class TimingRunner(unittest.TextTestRunner):
+        def _makeResult(self):
+            nonlocal result
+            result = super()._makeResult()
+            return result
+
+    if load_error is None and not interrupted:
+        runner = TimingRunner(verbosity=args.verbosity, resultclass=TimingResult)
         try:
             result = runner.run(suite)
         except KeyboardInterrupt:
@@ -567,17 +611,21 @@ def cmd_unit_runner(argv: list) -> int:
     def counts_of(result_obj) -> dict:
         if result_obj is None:
             return {}
+        statuses = [case["status"] for case in result_obj.case_records]
         return {
             "cases": result_obj.testsRun,
-            "passed": max(0, result_obj.testsRun - len(result_obj.failures) - len(result_obj.errors)
-                          - len(result_obj.skipped) - len(result_obj.expectedFailures)),
-            "failed": len(result_obj.failures),
-            "errors": len(result_obj.errors),
-            "skipped": len(result_obj.skipped),
-            "expected_failures": len(result_obj.expectedFailures),
-            "unexpected_successes": len(result_obj.unexpectedSuccesses),
+            "passed": statuses.count(PASSED),
+            "failed": statuses.count(FAILED),
+            "errors": statuses.count(ERROR),
+            "skipped": statuses.count(SKIPPED),
+            "fixture_errors": result_obj.fixture_errors,
+            "fixture_skips": result_obj.fixture_skips,
+            "expected_failures": statuses.count("expected_failure"),
+            "unexpected_successes": statuses.count("unexpected_success"),
+            "interrupted": statuses.count(INTERRUPTED),
             "subtest_failures": result_obj.subtest_failures,
             "subtest_errors": result_obj.subtest_errors,
+            "subtest_skips": result_obj.subtest_skips,
         }
 
     cases = list(getattr(result, "case_records", None) or [])
@@ -589,7 +637,7 @@ def cmd_unit_runner(argv: list) -> int:
         "schema": CASES_SCHEMA,
         "run_id": args.run_id,
         "mode": args.mode,
-        "targets": args.targets,
+        "targets": display_argv(args.targets),
         "load_error": load_error,
         "runner_error": runner_error,
         "interrupted": interrupted,
@@ -704,7 +752,8 @@ class RunContext:
     def abort(self, signum: int) -> None:
         """回收本次登记的子进程：先原信号，宽限期后升级；未登记的进程一律不动。"""
         for entry in self.registry.live():
-            signal_group(entry["proc"], signum)
+            if entry["proc"].poll() is None:
+                signal_group(entry["proc"], signum)
         deadline = time.monotonic() + KILL_GRACE_SECONDS
         for entry in self.registry.live():
             remaining = max(0.0, deadline - time.monotonic())
@@ -716,8 +765,14 @@ class RunContext:
                     entry["proc"].wait(timeout=KILL_GRACE_SECONDS)
                 except subprocess.TimeoutExpired:
                     pass
-            entry["reaped"] = True
-        self.save_children()
+            code = entry["proc"].poll()
+            entry.update(reaped=code is not None, exit_status=code, signal=signal_name(code))
+            if code is None:
+                self.note("登记的 %s 子进程未能在宽限期内退出" % entry["group"])
+        try:
+            self.save_children()
+        except OSError as exc:
+            self.note("子进程回收后，登记簿写入失败：%s" % exc)
 
 
 def execute_group(group: Group, ctx: RunContext) -> dict:
@@ -761,6 +816,7 @@ def execute_group(group: Group, ctx: RunContext) -> dict:
 
     log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
     counts, cases, seconds, load_error, evidence_missing = None, [], {}, None, None
+    interrupted = False
     if group.counter == "unittest":
         if not cases_path.is_file():
             evidence_missing = "子进程没有留下计时证据（%s）" % cases_path.name
@@ -777,17 +833,20 @@ def execute_group(group: Group, ctx: RunContext) -> dict:
                     cases = payload.get("cases") or []
                     seconds = payload.get("seconds") or {}
                     load_error = payload.get("load_error") or payload.get("runner_error")
+                    interrupted = payload.get("interrupted") is True
     else:
         counts = parse_log_counts(log_text)
         if counts is None:
             evidence_missing = "日志里没有「N/M 通过」摘要行"
 
-    outcome, exit_status = classify_group(group, code, timed_out, counts, load_error, evidence_missing)
+    outcome, exit_status = classify_group(group, code, timed_out, counts, load_error, evidence_missing,
+                                          interrupted)
     note = evidence_missing
     if timed_out:
         note = "超过 %s 秒被入口终止" % ctx.timeout
     return {"name": group.name, "outcome": outcome, "exit_status": exit_status,
-            "signal": signal_name(code), "timed_out": timed_out, "note": note, "counts": counts,
+            "signal": signal_name(-int(signal.SIGINT)) if interrupted else signal_name(code),
+            "timed_out": timed_out, "note": note, "counts": counts,
             "cases": cases, "seconds": seconds,
             "timing": {"child_seconds": child_seconds,
                        "case_seconds_total": seconds.get("case_total"),
@@ -802,7 +861,8 @@ def fixture_total(seconds: dict) -> float:
 
 
 def classify_group(group: Group, code: Optional[int], timed_out: bool, counts: Optional[dict],
-                   load_error: Optional[str], evidence_missing: Optional[str]) -> tuple:
+                   load_error: Optional[str], evidence_missing: Optional[str],
+                   interrupted: bool = False) -> tuple:
     """把原始退出状态翻译成结论。空集合与全跳过都不是通过。"""
     if timed_out:
         return TIMEOUT, EXIT_TIMEOUT
@@ -810,14 +870,18 @@ def classify_group(group: Group, code: Optional[int], timed_out: bool, counts: O
         return UNAVAILABLE, None
     if code < 0:
         return INTERRUPTED, EXIT_INTERRUPTED_BASE + (-code)
+    if interrupted:
+        return INTERRUPTED, EXIT_INTERRUPTED_BASE + int(signal.SIGINT)
     if evidence_missing is not None:
         return ERROR, EXIT_FAILED
     if group.counter == "unittest":
-        if load_error or (counts or {}).get("errors"):
+        if load_error or (counts or {}).get("errors") or (counts or {}).get("fixture_errors"):
             return ERROR, EXIT_FAILED
         if (counts or {}).get("failed") or (counts or {}).get("unexpected_successes"):
             return FAILED, EXIT_FAILED
         if not (counts or {}).get("cases"):
+            if (counts or {}).get("fixture_skips"):
+                return SKIPPED, EXIT_FAILED
             return EMPTY, EXIT_FAILED
         if (counts or {}).get("skipped") == (counts or {}).get("cases"):
             return SKIPPED, EXIT_FAILED
@@ -873,9 +937,10 @@ def trim_cases(cases: list) -> list:
                 "seconds": case.get("seconds")}
         if case.get("status") != PASSED:
             item["message"] = case.get("message")
-        if case.get("subtest_failures") or case.get("subtest_errors"):
+        if case.get("subtest_failures") or case.get("subtest_errors") or case.get("subtest_skips"):
             item["subtest_failures"] = case.get("subtest_failures")
             item["subtest_errors"] = case.get("subtest_errors")
+            item["subtest_skips"] = case.get("subtest_skips")
         trimmed.append(item)
     return trimmed
 
@@ -952,7 +1017,7 @@ def build_record(args, groups: dict, selected: list) -> dict:
                     "python": platform.python_version()},
         "context": {"phase": args.phase, "issue": args.issue, "pr": args.pr, "reason": args.reason,
                     "groups_requested": args.group, "groups_selected": selected,
-                    "selectors": args.selectors},
+                    "selectors": display_argv(args.selectors)},
         "groups": [{"name": name, "title": groups[name].title,
                     "command": display_argv(groups[name].argv),
                     "equivalent": groups[name].equivalent, "counter": groups[name].counter,
@@ -992,12 +1057,14 @@ def fill_result(record: dict, ctx: RunContext) -> None:
     outcomes = [group.get("outcome") or WRAPPER_ERROR for group in record["groups"]]
     counts = {"groups": len(record["groups"]), "cases": 0, "checks": 0, "passed": 0, "failed": 0,
               "errors": 0, "skipped": 0, "expected_failures": 0, "unexpected_successes": 0,
-              "subtest_failures": 0, "subtest_errors": 0}
+              "subtest_failures": 0, "subtest_errors": 0, "subtest_skips": 0, "interrupted": 0,
+              "fixture_errors": 0, "fixture_skips": 0}
     for group in record["groups"]:
         group_counts = group.get("counts") or {}
         if group.get("counter") == "unittest":
             for key in ("cases", "passed", "failed", "errors", "skipped", "expected_failures",
-                        "unexpected_successes", "subtest_failures", "subtest_errors"):
+                        "unexpected_successes", "subtest_failures", "subtest_errors", "subtest_skips",
+                        "interrupted", "fixture_errors", "fixture_skips"):
                 counts[key] += group_counts.get(key) or 0
         elif group.get("counter") == "log":
             counts["checks"] += group_counts.get("total") or 0
@@ -1141,6 +1208,8 @@ def cmd_run(args) -> int:
             ctx.abort(exc.signum)
     except Exception as exc:  # 入口自身出错也要留下记录，并且不冒充产品失败
         wrapper_error = "%s: %s" % (type(exc).__name__, exc)
+        with shield_termination():
+            ctx.abort(signal.SIGTERM)
 
     try:
         end_snapshot = snapshot_input()
@@ -1278,6 +1347,10 @@ def load_record(run_dir: Path) -> tuple:
             problems.append("缺少日志 %s" % name)
         elif log.get("sha256") and digest_file(target) != log["sha256"]:
             problems.append("日志 %s 校验和不一致" % name)
+    record["report_validation"] = {"problems": problems}
+    if problems:
+        record.setdefault("result", {})["usable_as_evidence"] = False
+        record.setdefault("evidence", {})["integrity"] = "degraded"
     return record, problems
 
 
@@ -1368,9 +1441,13 @@ def render_report(record: dict, problems: Optional[list] = None,
     for group in record.get("groups") or []:
         counts = group.get("counts") or {}
         if group.get("counter") == "unittest":
-            detail = "用例 %s（通过 %s / 失败 %s / 错误 %s / 跳过 %s / 子测试失败 %s）" % (
+            detail = "用例 %s（通过 %s / 失败 %s / 错误 %s / 跳过 %s / 中断 %s / 子测试失败 %s）" % (
                 counts.get("cases", 0), counts.get("passed", 0), counts.get("failed", 0),
-                counts.get("errors", 0), counts.get("skipped", 0), counts.get("subtest_failures", 0))
+                counts.get("errors", 0), counts.get("skipped", 0), counts.get("interrupted", 0),
+                counts.get("subtest_failures", 0))
+            if counts.get("fixture_errors") or counts.get("fixture_skips"):
+                detail += "；类 / 模块准备清理：错误 %s / 跳过 %s" % (
+                    counts.get("fixture_errors", 0), counts.get("fixture_skips", 0))
         elif group.get("counter") == "log":
             detail = "检查 %s / %s" % (counts.get("passed", 0), counts.get("total", 0))
         else:
@@ -1445,7 +1522,7 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--run", default=None, metavar="ID", help="run ID；缺省读 latest.json")
     report.add_argument("--latest", action="store_true", help="读最近一次运行")
     report.add_argument("--out-dir", default=None, metavar="DIR", help="验证产物目录，缺省 .verify/")
-    report.add_argument("--json", action="store_true", dest="as_json", help="输出原始记录 JSON")
+    report.add_argument("--json", action="store_true", dest="as_json", help="输出记录与当前证据校验结果 JSON")
     report.set_defaults(handler=cmd_report)
     return parser
 

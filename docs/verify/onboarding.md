@@ -26,7 +26,7 @@ python3 verify.py report --latest           # 读最近一次记录，不启动�
 | `unit-related` | 相关单元，显式指定 | `python3 -m unittest <选择器>` | 按用例 | 用例 |
 | `browser` | 完整浏览器 | `uv run --no-project --with playwright python tests/e2e_browser.py` | 按日志摘要 | 整组 |
 | `serve-check` | 服务安全自检 | `python3 skill/annotation-everything/scripts/serve.py check` | 按日志摘要 | 整组 |
-| `all` | 完整验收 | 上面三组依次执行 | 分别计数 | 分别计时 |
+| `all` | 完整验收 | `unit` → `serve-check` → `browser` 依次执行 | 分别计数 | 分别计时 |
 
 `--group` 可以重复。组名也可以直接写在 `run` 后面：`python3 verify.py run unit`、`python3 verify.py run unit-related tests/test_core.py`。不写 `--group` 时，有选择器按 `unit-related`，否则按 `unit`。
 
@@ -54,9 +54,9 @@ python3 verify.py run --group browser --timeout 300
 
 报告分七段：结论、阶段与关联、提交与基线、输入指纹与环境、耗时、分组结果、证据。三个要点：
 
-- 结论行有两个信息：入口退出码，以及「能否作为通过证据」。后者还要求记录完整、输入覆盖最终输入、证据校验和一致。
+- 结论行保留原运行的结论和退出码；「能否作为通过证据」反映本次读取时的校验结果。日志丢失或损坏时，报告标为证据不可用并返回 1，即使原运行通过也不例外。`report --json` 同样输出当前校验结果和问题，不改写磁盘上的原记录。
 - 耗时段把排队、墙钟、入口自身开销、用例耗时合计、类 / 模块级开销、未归属开销分开列。用例耗时合计是各用例之和，不是等待时间；要看等待时间看墙钟。
-- 输入段说明开始与结束的指纹是否一致。不一致时结论仍是当次测试的结果，但报告明确写「不能覆盖最终输入」，`report` 返回 1。
+- 输入段说明开始与结束的指纹是否一致。指纹按完整文件内容计算，包括大文件；输入不可读时，快照标为不可用。指纹变化或任一快照不可用时，保留原测试结果，但记录不能作为覆盖最终输入的通过证据，`report` 返回 1。
 
 ## 重现步骤
 
@@ -67,10 +67,10 @@ git clone <仓库地址> && cd annotation-everything
 python3 verify.py plan                      # 1. 看将执行什么
 python3 verify.py run --phase development --issue 50 --reason "复现样本"
 python3 verify.py report --latest           # 2. 读这次记录
-python3 verify.py report --run <run ID> --json   # 3. 拿原始记录
+python3 verify.py report --run <run ID> --json   # 3. 获取当前校验后的 JSON 报告
 ```
 
-记录在 `.verify/runs/<run ID>/`：`record.json` 是结构化记录，`unit.log` 等是子进程原始输出，`unit.cases.json` 是用例级计时明细。`.verify/` 已被 `.gitignore` 忽略；用 `AE_VERIFY_DIR` 或 `--out-dir` 可以改位置。
+记录在 `.verify/runs/<run ID>/`：`record.json` 是结构化记录，`unit.log` 等是子进程原始输出，`unit.cases.json` 是用例级计时明细。`.verify/` 已被 `.gitignore` 忽略；用 `AE_VERIFY_DIR` 或 `--out-dir` 可以改位置。记录中的路径参数会脱敏：仓库内选择器保存为相对路径，仓库外产物位置保存为占位符，实际执行路径不受影响。
 
 只读一份已有的产物目录也可以报告，不需要仓库：
 
@@ -117,13 +117,13 @@ python3 verify.py report --out-dir <解压后的构件目录> --latest
 - C（同机隔离与锁）：`children.json` 已经是所有权登记簿，只登记本次入口拉起的进程；锁字段加在 `groups[]` 上，不要改登记语义。
 - D（浏览器场景）：把 `groups[].scenarios` 从空数组填成场景记录，`granularity` 从 `group` 细化到 `scenario`；完整模式的行为矩阵不变。
 - F（阶段选测）：`input.fingerprint`、`input.changed_since_baseline` 和 `context.phase` 已经够了；选择理由和策略版本加在 `context` 与 `groups[]`。
-- G（证据复用）：按 `input.fingerprint` + `environment` + `groups[].name` 匹配已有记录，只认 `result.usable_as_evidence` 为 `true` 的记录。
+- G（证据复用）：按 `input.fingerprint` + `environment` + `groups[].name` 匹配已有记录，只认当前校验后 `result.usable_as_evidence` 为 `true` 的记录，不能直接信任落盘时的通过标记。
 - H（持续报告）：读 `.verify/index.jsonl` 汇总，不新增记录字段，也不在产品测试之外再跑东西。
 
 ## 兼容与迁移
 
-- 原来的直接命令继续有效，退出码语义一致：`python3 -m unittest discover tests`、`uv run --no-project --with playwright python tests/e2e_browser.py`、`python3 skill/annotation-everything/scripts/serve.py check`。
-- 唯一的例外是空集合：直接跑 `unittest` 对零个用例返回 0，入口返回 1。
+- 原来的直接命令继续有效，完整执行的成功 / 失败退出码语义一致：`python3 -m unittest discover tests`、`uv run --no-project --with playwright python tests/e2e_browser.py`、`python3 skill/annotation-everything/scripts/serve.py check`。
+- 例外是空集合与全跳过：直接跑 `unittest` 返回 0，入口返回 1，两者都不算完整成功。
 - 运行时只用 Python 标准库，语法兼容 Python 3.9。playwright 仍然只从 `tests/e2e_browser.py` 导入，入口不导入它。
 - 服务行为、审阅格式、Git 钩子和 CI 矩阵的 Python 版本集合都没有改。
 

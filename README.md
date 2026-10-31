@@ -281,7 +281,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 | 命令 | 作用 |
 |---|---|
 | `ae.py install` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；修复体检发现的问题（先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。四个子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
-| `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略）；`report` 只读记录。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（前三者依次执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md) |
+| `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略）；`report` 只读记录。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md) |
 | `build_viewer.py --report … --script … --out 审阅目录` | 生成对照页；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
 | `serve.py 审阅目录` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
 | `serve.py list` / `status` / `forget` | 列出本机所有审阅、查看某份审阅的状态、删除不再使用的台账记录 |
@@ -365,7 +365,7 @@ python3 ae.py install                                               # 同步到 
 uv run --no-project --with playwright python tests/e2e_browser.py --delivery-only  # 临时安装副本的三种语言组合验收
 ```
 
-`verify.py` 是统一验证入口：`plan` 解释范围，`run` 执行并把结构化记录和原始日志写进 `.verify/`（已被忽略），`report` 只读记录。记录含提交与基线、输入指纹、环境、逐用例耗时和结论，字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，接入说明见 [docs/verify/onboarding.md](docs/verify/onboarding.md)。它只包裹现有执行行为，不选测、不复用旧结果；原来的直接命令继续有效，退出码语义一致。
+`verify.py` 是统一验证入口：`plan` 解释范围，`run` 执行并把结构化记录和原始日志写进 `.verify/`（已被忽略），`report` 只读记录。输入指纹包含有效输入文件的完整内容；文本与 JSON 报告保留原测试结果，并显示当前校验后的证据可用性。记录还含提交与基线、环境和逐用例耗时，字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，接入说明见 [docs/verify/onboarding.md](docs/verify/onboarding.md)。它只包裹现有执行行为，不选测、不复用旧结果；原来的直接命令继续有效，完整执行的成功 / 失败退出码语义一致。空集合与全跳过不算通过，新入口返回 1。
 
 - 测试会把审阅台账放到临时目录（环境变量 `AE_HOME`）。手动试用或运行技能评测时，也建议先执行 `export AE_HOME=$(mktemp -d)`，避免临时审阅登记进本机真实的台账，或占用真实审阅的专属端口。
 - 验收产物可用 `AE_DELIVERY_ARTIFACTS` 指向 `skill/annotation-everything-workspace/` 下的目录，保留合成源材料、命令输出、批次状态、离线导出和截图。具体命令与评测边界见[交付验收记录](docs/locale-delivery.zh-CN.md)。
