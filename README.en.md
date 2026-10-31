@@ -31,9 +31,9 @@
 <br>
 
 <p align="center">
-  <img src="docs/assets/viewer.png" alt="Review page: the report with a pin and a highlighted region on the left, speaker notes and this page's annotations on the right" width="92%">
+  <img src="docs/assets/viewer.en.png" alt="Review page: synthetic report with a pin on the left, speaker notes and annotations on the right" width="92%">
   <br>
-  <sub>The review page: the report on the left, where you can click to drop a pin or drag to mark a region; the speaker notes and this page's annotations on the right. The interface is in Chinese, and all data shown is fictional.</sub>
+  <sub>The review page: the report with a pin on the left, speaker notes and annotations on the right. Regions can also be selected by dragging. The interface and material are in English; all data shown is fictional.</sub>
 </p>
 
 ## Why
@@ -44,7 +44,7 @@ annotation-everything moves this whole process into a single page that runs on y
 
 - **Comments stay where they belong.** Every annotation is tied to a specific page, a quoted passage, or a spot on the report. The agent receives the original annotations with their pages and positions, not a retelling.
 - **The report and the notes change together.** Report pages and speaker-note pages are matched one to one. When you select a sentence on one side to request a change, and the same page on the other side has an identical or similar sentence, the page suggests changing both. The agent revises page by page and then regenerates the review page.
-- **Every round is recorded.** Each click on **Hand off to Agent** creates a batch. Every annotation has a status and a resolution note that you can look back on at any time.
+- **Every round is recorded.** Each click on **Hand to the agent** creates a batch. Every annotation has a status and a resolution note that you can look back on at any time.
 - **Your material never leaves your machine.** The server listens on `127.0.0.1` only, makes no network requests, and sends no usage data. Annotations are saved in a review directory you choose.
 
 ## Features
@@ -97,11 +97,19 @@ The review page can use Simplified Chinese or English. Pass `--locale auto`, `zh
 <details>
 <summary><b>Export and import annotations</b></summary>
 <br>
-<p align="center"><img src="docs/assets/notes-export.png" alt="All annotations panel: choose export language, copy for an agent, download as Markdown or JSON, import" width="88%"></p>
+<p align="center"><img src="docs/assets/notes-export.en.png" alt="All annotations panel: choose export language, copy for an agent, download as Markdown or JSON, import" width="88%"></p>
 When no agent is waiting, you can copy all annotations from the All annotations panel and paste them to any agent, or download them as a Markdown or JSON file and import them later.
 
 The first line of the Markdown is a format marker (`<!-- annotation-everything export v1 lang=… -->`) that names the format version and the content language, so parsing picks the Chinese or English grammar from the file itself and never from the language of the importing interface: a Chinese export imports in an English page and an English export imports in a Chinese page, and both land with the same stored values. The export language can be picked in the panel (following the interface by default) or on the command line with `notes.py export --lang en`. Annotation text, quotes, resolution notes and skill names stay as written; only the surrounding wording is translated. Exports without the marker are read as the older Chinese format, and text that matches nothing gets a clear message instead of a guess. Older tools cannot read an English export and are told to upgrade rather than left to guess. The command line exports the same way: `notes.py export <review-dir> [--lang zh-CN|en] [--format json]`.
 </details>
+
+### Language and agent guides
+
+One skill copy handles Chinese requests such as “按批注改” and English requests such as “review this report” or “apply my annotations”. The same `annotation-everything` entry point loads the [Chinese workflow](skill/annotation-everything/references/workflow.zh-CN.md) or [English workflow](skill/annotation-everything/references/workflow.en.md) on demand. Both read one [shared safety and protocol reference](skill/annotation-everything/references/protocol.md), including the stop before review, subagent permission, and evidence and uncertainty requirements for a full check. No language-specific installation is needed.
+
+Supported languages are Simplified Chinese and English. English regional tags share the English resources; `zh` and `zh-Hans` map to Simplified Chinese. Traditional Chinese and other languages are not supported. The saved browser preference overrides the review default. `auto` matches browser languages in preference order and falls back to English. New reviews and old commands without a language setting remain Chinese. Interface, material, and annotation languages are independent; switching preserves drafts and unsent changes.
+
+Service mode sends real submissions and wakes the agent. Opening `index.html` directly supports browser annotations, copying, and exports; import those annotations to give them to an agent. JSON preserves the annotation structure and review identity. Markdown omits IDs, page keys, timestamps, and processing batches and retains the legacy grammar's text limits; see the [format reference](skill/annotation-everything/references/formats.en.md). The [delivery evidence](docs/locale-delivery.en.md) records three complete language combinations, the compatibility matrix, environment, and limits.
 
 ## How it works
 
@@ -146,7 +154,7 @@ sequenceDiagram
 
 ### The life of a batch
 
-Each click on **Hand off to Agent** creates a batch. Without the two-stage flow, a batch goes straight from "In progress" to "Resolved". With draft first, then review, a finished draft also goes through review, unless the reviewer finalizes it directly.
+Each click on **Hand to the agent** creates a batch. Without the two-stage flow, a batch goes straight from "In progress" to "Resolved". With draft first, then review, a finished draft also goes through review, unless the reviewer finalizes it directly.
 
 ```mermaid
 stateDiagram-v2
@@ -208,7 +216,7 @@ python3 ae.py doctor --locale en                 # optional: interface language 
 ```
 
 - Each check reports pass / warning / failure; failures include a repair or diagnostic command. Exit code 0 means all passed or only warnings, 1 means there are failures, and 2 means the command itself failed (`doctor --json` outputs `error`). Development checks appear only when the current working directory is inside the source repository.
-- **Interface language**: `ae.py`, `serve.py` (`serve` / `status` / `list` / `forget` / `check`), `notes.py show`, `check_pptx_fonts.py` all accept `--locale auto|zh-CN|en` (before or after the subcommand) and the `AE_LOCALE` environment variable; the skill-scan warnings printed while building a review page follow `AE_LOCALE`. The order is the explicit flag, then `AE_LOCALE`, and Chinese when neither is set; only `auto` reads `LC_ALL` / `LC_MESSAGES` / `LANG`. `serve.py serve` and `serve.py status` also fall back to the `locale` saved in that review once its directory is resolved; `list`, `forget` and `check` do not map to a single review and only honour the first two levels. An unsupported choice stops the command with exit code 2 and an explanation, changing nothing. Help, option descriptions, missing values, invalid values and command failures all use one language; source paths, commands, font names, skill names and raw system errors stay as they are.
+- **Interface language**: `ae.py`, `serve.py` (`serve` / `status` / `list` / `forget` / `check`), `notes.py`, `check_pptx_fonts.py` all accept `--locale auto|zh-CN|en` (before or after the subcommand) and the `AE_LOCALE` environment variable; generator help, results, and resource diagnostics follow the explicit `--locale`, then `AE_LOCALE`, then the saved review setting. The order is the explicit flag, then `AE_LOCALE`, and Chinese when neither is set; only `auto` reads `LC_ALL` / `LC_MESSAGES` / `LANG`. `serve.py serve` and `serve.py status` also fall back to the `locale` saved in that review once its directory is resolved; `list`, `forget` and `check` do not map to a single review and only honour the first two levels. An unsupported choice stops the command with exit code 2 and an explanation, changing nothing. Help, option descriptions, missing values, invalid values and command failures all use one language; source paths, commands, font names, skill names and raw system errors stay as they are.
 - **Machine verdicts are separate from human wording**: in `doctor --json`, `category`, `level`, `code` and `summary` are the verdict fields older consumers read and stay in Chinese regardless of language; the language-independent additions are each item's `status` (`pass` / `warn` / `fail`) and `category_id` (`install` / `tools` / `dev` / `runtime`), plus the top-level `schema` (structure version) and `locale` (which language `message` uses). New consumers can compare `status` / `category_id` without comparing localized labels, while `message` and `fix_command` follow the language. `serve.py` works the same way: HTTP statuses and reason codes (`bad-host`, `cross-site`, `bad-origin`, `no-origin`, `bad-content-type`, `chunked`, `bad-length`, `too-large`, `bad-json`, `not-found`, `preflight`, `no-index`, `no-note`, `server-error`, `review-mismatch`, `no-api`) never change with the language, only the explanation does; an unknown error names the type and the recovery step and never echoes request content.
 - In `repair`, deleting stale ledger entries (`--forget-stale`) and stopping orphaned servers (`--stop-orphans`) are destructive and need their explicit flags; `--dry-run` only prints the plan. Plans and execution reports state plainly that nothing was executed this time, in either language.
 - `uninstall` never touches review directories; `--purge` also deletes the review ledger; a running `serve.py` blocks it unless `--stop-servers` stops it first.
@@ -246,26 +254,26 @@ The skill is copied to `~/.claude/skills/annotation-everything` (that copy is th
 ```bash
 S=skill/annotation-everything/scripts
 export AE_HOME=$(mktemp -d)   # keep the review ledger in a temporary directory so your real ledger is untouched
-python3 $S/build_viewer.py --report fixtures/sample/report.html --script fixtures/sample/script.md --out /tmp/ae-demo
-python3 $S/serve.py /tmp/ae-demo
+python3 $S/build_viewer.py --report fixtures/sample/report.en.html --script fixtures/sample/script.en.md --out /tmp/ae-demo --locale en
+python3 $S/serve.py /tmp/ae-demo --locale en
 ```
 
-The review page opens in your browser. Add a few annotations, click **Hand off to Agent**, then run this in another terminal:
+The review page opens in your browser. Add a few annotations, click **Hand to the agent**, then run this in another terminal:
 
 ```bash
-python3 $S/notes.py wait /tmp/ae-demo
+python3 $S/notes.py wait /tmp/ae-demo --locale en
 ```
 
 The command prints the annotations you just submitted, which is exactly what the agent receives.
 
-To try English speaker notes, point `--script` at `fixtures/sample/script.en.md` (the same report in English): the notes column then shows the English talking points, durations, transitions and questions, while the interface language stays as it is.
+For Chinese material, use `fixtures/sample/report.html` and `fixtures/sample/script.md`. Keep `--locale en` to review it in English, or choose `--locale zh-CN` for a Chinese interface. Changing the source material alone does not change the interface language.
 
 **3. Prepare your own material**
 
 - **Report**: one HTML file in which every page is a `<section class="page" data-page="N" data-key="unique-key">` element.
 - **Speaker notes**: one Markdown file split into pages by `### 第 N 页｜标题` headings ("page N | title"), giving the duration, talking points, transition and likely questions for each page. English notes use `### Page N｜Title` with `**Duration**`, `**Talking points**`, `**Transition**` and `**Likely questions**` instead. Both forms may be mixed in one file, and which form is recognized does not depend on the interface language: a Chinese interface reviews English notes and an English interface reviews Chinese notes, with titles and body text kept exactly as written. When a heading cannot be recognized, a page number repeats or a field repeats, the builder reports the line number and the expected form in the current language instead of treating the input as an empty script.
 
-See [references/formats.md](skill/annotation-everything/references/formats.md) for the full format (in Chinese).
+See the [English format reference](skill/annotation-everything/references/formats.en.md) for the full input and output formats.
 
 <details>
 <summary><b>Command reference</b></summary>
@@ -304,8 +312,13 @@ Run `serve.py check` after any change to the server; it verifies each of these c
 
 ```text
 skill/annotation-everything/       the skill itself, copied as a whole on install
-├── SKILL.md                       operating guide for the agent
-├── references/formats.md          input and output formats
+├── SKILL.md                       bilingual discovery and on-demand workflow entry
+├── references/
+│   ├── protocol.md               shared safety, stop conditions, and protocol
+│   ├── workflow.zh-CN.md          Chinese workflow
+│   ├── workflow.en.md             English workflow
+│   ├── formats.md                 Chinese input and output formats
+│   └── formats.en.md              English input and output formats
 ├── locales/                       Chinese and English messages (zh-CN.json, en.json) and the locale contract
 ├── scripts/
 │   ├── build_viewer.py            builds the review page index.html and review.json
@@ -340,9 +353,11 @@ python3 -m unittest discover tests                                   # unit test
 uv run --no-project --with playwright python tests/e2e_browser.py   # end-to-end browser tests (uses your local Google Chrome)
 python3 skill/annotation-everything/scripts/serve.py check          # server security self-check
 python3 ae.py install                                               # sync to ~/.claude/skills/
+uv run --no-project --with playwright python tests/e2e_browser.py --delivery-only  # three language combinations from a temporary skill copy
 ```
 
 - Tests put the review ledger in a temporary directory (the `AE_HOME` environment variable). When trying things by hand or running skill evaluations, run `export AE_HOME=$(mktemp -d)` first, so throwaway reviews are not registered in your real ledger and do not take ports that belong to real reviews.
+- Set `AE_DELIVERY_ARTIFACTS` to a directory under `skill/annotation-everything-workspace/` to keep synthetic sources, command outputs, batch state, offline exports, and screenshots. See the [delivery evidence](docs/locale-delivery.en.md) for the command and evaluation boundaries.
 - `main` is updated only by squash-merging pull requests: branch from an issue, put `Closes #<number>` in the pull request body, and merge once CI passes; the issue closes automatically on merge. See "分支、issue 与 PR" (branches, issues and pull requests) in [AGENTS.md](AGENTS.md) for the full workflow.
 - The repository holds synthetic samples only. Real material, annotations and review directories never go into the repository or the skill directory.
 - [GLOSSARY.md](GLOSSARY.md) defines the terms, [docs/adr/](docs/adr/) holds the architecture decision records, and [AGENTS.md](AGENTS.md) describes the collaboration conventions. All three are in Chinese.

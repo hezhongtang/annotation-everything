@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: english-apply-and-stop
+expected_outcome: |
+  The agent loads the English workflow and shared protocol from one installed skill copy.
+  It accepts the pending batch, edits the synthetic English report and speaker notes,
+  rebuilds the page, records each completed initial edit, and stops at drafted, waiting
+  for review. It does not use subagents, invent a supplier decision, change numeric facts,
+  review or finalize its own initial edits, or directly rewrite locked state files.
+  Its English report and batch summary identify the checked scope and unresolved decision.
+context:
+  scaffold_script: place-files.sh

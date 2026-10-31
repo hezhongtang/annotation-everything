@@ -78,8 +78,8 @@ ACTION_KEY = {"drafted": "cli.batch.trail.action.drafted", "resolved": "cli.batc
               "revised": "cli.batch.trail.action.revised", "returned": "cli.batch.trail.action.returned",
               "reopened": "cli.batch.trail.action.reopened", "accepted": "cli.batch.trail.action.accepted"}
 STAGE_KEY = {"draft": "cli.batch.stageName.draft", "review": "cli.batch.stageName.review"}
-# 输出按当前语言写的命令（其余命令不读界面语言：claim 只输出 JSON，导入与技能设置另有归属）
-LOCALIZED_CMDS = ("show", "wait", "batches", "done", "review", "diff", "resolve", "reopen")
+# 人读命令遵循同一语言优先级；claim 的原始 JSON 与技能设置另有归属。
+LOCALIZED_CMDS = ("show", "wait", "batches", "done", "review", "diff", "resolve", "reopen", "import", "export")
 # 常驻技能的范围：存储值 → 界面显示的消息 key（存储值本身不随语言改写）
 ALWAYS_SCOPE_KEY = {"all": "viewer.hand.scope.all", "报告": "viewer.hand.scope.report",
                     "讲稿": "viewer.hand.scope.script", "style": "viewer.hand.scope.style"}
@@ -601,7 +601,7 @@ def parse_always_header(text: str) -> list[dict[str, str]] | None:
     return ef.parse_always(text, ef.read_marker(text)[1] or "zh-CN")
 
 
-def read_import(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]] | None, str | None]:
+def read_import(path: Path, *, lang: str = i18n.DEFAULT_LOCALE) -> tuple[list[dict[str, Any]], list[dict[str, str]] | None, str | None]:
     """返回 (批注, 常驻技能, 来源审阅标识)。常驻技能只有导出里带了才不是 None（本地文件模式设的常驻技能随之带过来）；
     来源审阅标识取自页面导出的 JSON（reviewId），用来防止导进别的审阅。"""
     text = path.read_text(encoding="utf-8")
@@ -617,124 +617,137 @@ def read_import(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]] 
     try:
         items, always = ef.parse_markdown(text)
     except ef.FormatError as e:
+        if lang == "en":
+            t = cli_text(lang)
+            reason = t("cli.notes.format." + e.code, **e.params)
+            raise SystemExit(t("cli.notes.import.badFormat", path=path, reason=reason)) from e
         raise SystemExit(f"{path} 里没找到批注：{e}") from e
     return items, always, None
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="notes.py", description="读写审阅目录里的批注")
+    # 先看显式语言，让 --help 和参数错误也使用该语言；只输出 JSON 的 claim 保留原有行为。
+    argv = sys.argv[1:] if argv is None else argv
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--locale")
+    pre.add_argument("--lang")
+    requested, _ = pre.parse_known_args(argv)
+    try:
+        help_lang = i18n.cli_locale(requested.locale or requested.lang)
+    except i18n.LocaleError:
+        help_lang = i18n.normalize_locale(os.environ.get("AE_LOCALE")) or i18n.DEFAULT_LOCALE
+    t = cli_text(help_lang)
+    ap = argparse.ArgumentParser(prog="notes.py", description=t("cli.notes.description"))
+    ap.add_argument("--locale", help=t("cli.notes.localeHelp"))
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("show", help="列出批注（默认只列未处理）")
-    s.add_argument("dir", type=str, help="审阅目录或审阅标识")
-    s.add_argument("--all", action="store_true", help="包含已处理")
+    s = sub.add_parser("show", help=t("cli.notes.help.command.show"))
+    s.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    s.add_argument("--all", action="store_true", help=t("cli.notes.help.includeResolved"))
     s.add_argument("--page", type=int)
-    s.add_argument("--json", action="store_true", help="输出原始 JSON")
-    s.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
-    s.add_argument("--batch", type=int, help="只看第 N 批涉及的批注（提交时未处理的、这批初改或处理过的）")
-    r = sub.add_parser("resolve", help="标记为已处理（两段流程的初改阶段记为「已初改·待复核」）")
-    r.add_argument("dir", type=str, help="审阅目录或审阅标识")
+    s.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
+    s.add_argument("--batch", type=int, help=t("cli.notes.help.show.batch"))
+    r = sub.add_parser("resolve", help=t("cli.notes.help.command.resolve"))
+    r.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     r.add_argument("ids", nargs="+")
-    r.add_argument("--note", default="", help="处理说明：改了哪里、怎么改的（页面上会显示）")
-    r.add_argument("--by", default=default_agent(), help="处理人，页面上显示为「已处理 · 处理人」")
-    r.add_argument("--seq", type=int, help="记在第几批名下；默认按批注归属自动找（同时有几批在处理时建议写明）")
-    r.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
-    o = sub.add_parser("reopen", help="重新打开")
-    o.add_argument("dir", type=str, help="审阅目录或审阅标识")
+    r.add_argument("--note", default="", help=t("cli.notes.help.resolve.note"))
+    r.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
+    r.add_argument("--seq", type=int, help=t("cli.notes.help.resolve.seq"))
+    o = sub.add_parser("reopen", help=t("cli.notes.help.command.reopen"))
+    o.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     o.add_argument("ids", nargs="+")
-    i = sub.add_parser("import", help="导入页面导出的 JSON 或旧版 Markdown")
-    i.add_argument("dir", type=str, help="审阅目录或审阅标识")
+    i = sub.add_parser("import", help=t("cli.notes.help.command.import"))
+    i.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     i.add_argument("file", type=Path)
-    i.add_argument("--force", action="store_true", help="文件属于另一份审阅（审阅标识不同）时也导入")
-    e = sub.add_parser("export", help="导出可再导入的批注摘要：Markdown（默认）或 JSON")
-    e.add_argument("dir", type=str, help="审阅目录或审阅标识")
-    e.add_argument("--lang", help="导出内容语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
-    e.add_argument("--format", choices=("md", "json"), default="md", help="md 带版本与语言标记的 Markdown（可编辑后再导入）；json 完整结构化备份")
-    e.add_argument("--all", action="store_true", help="包含已处理（默认只导未处理）")
-    e.add_argument("--page", type=int, help="只导第 N 页")
-    e.add_argument("--out", type=Path, help="写到这个文件；默认打印到标准输出")
-    w = sub.add_parser("wait", help="等待用户点「交给 Agent」：收到提交后标为处理中，输出提交内容与未处理批注")
-    w.add_argument("dir", type=str, help="审阅目录或审阅标识")
-    w.add_argument("--timeout", type=float, default=0, help="最多等多少秒，0 表示一直等（默认）")
-    w.add_argument("--interval", type=float, default=1.0, help="检查间隔秒数，默认 1")
-    w.add_argument("--no-claim", action="store_true", help="只看不接收（不改状态）")
-    w.add_argument("--by", default=default_agent(), help="接收人，页面上显示")
+    i.add_argument("--force", action="store_true", help=t("cli.notes.help.import.force"))
+    e = sub.add_parser("export", help=t("cli.notes.help.command.export"))
+    e.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    e.add_argument("--lang", help=t("cli.notes.help.export.lang"))
+    e.add_argument("--format", choices=("md", "json"), default="md", help=t("cli.notes.help.export.format"))
+    e.add_argument("--all", action="store_true", help=t("cli.notes.help.export.all"))
+    e.add_argument("--page", type=int, help=t("cli.notes.help.export.page"))
+    e.add_argument("--out", type=Path, help=t("cli.notes.help.export.out"))
+    w = sub.add_parser("wait", help=t("cli.notes.help.command.wait"))
+    w.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    w.add_argument("--timeout", type=float, default=0, help=t("cli.notes.help.wait.timeout"))
+    w.add_argument("--interval", type=float, default=1.0, help=t("cli.notes.help.wait.interval"))
+    w.add_argument("--no-claim", action="store_true", help=t("cli.notes.help.wait.no_claim"))
+    w.add_argument("--by", default=default_agent(), help=t("cli.notes.help.wait.by"))
     w.add_argument("--stage", choices=("any", "draft", "review"), default="any",
-                   help="等哪种：draft 新提交（初改）、review 请求复核的、any 都等（默认）")
-    w.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
-    sk = sub.add_parser("skills", help="查看或设置技能目录（页面「技能」输入栏的候选）与常驻技能（每条批注按范围先调用）")
-    sk.add_argument("dir", type=str, help="审阅目录或审阅标识")
-    sk.add_argument("--set", nargs="*", metavar="名称=说明", help="整体替换为这些技能")
-    sk.add_argument("--add", nargs="*", metavar="名称=说明", help="追加或更新这些技能")
-    sk.add_argument("--remove", nargs="*", metavar="名称", help="移除这些技能")
-    sk.add_argument("--clear", action="store_true", help="清空目录")
-    sk.add_argument("--always", nargs="*", metavar="名称=范围",
-                    help="整体设置常驻技能；范围：全部 / 全部批注（默认）/ 报告 / 讲稿 / 风格优化，"
-                         "英文界面也可写 all / report / script / style")
-    sk.add_argument("--always-add", nargs="*", metavar="名称=范围", help="追加常驻技能")
-    sk.add_argument("--always-remove", nargs="*", metavar="名称", help="去掉这些常驻技能（所有范围）")
-    sk.add_argument("--always-clear", action="store_true", help="清空常驻技能")
-    sk.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
-    cl = sub.add_parser("claim", help="不等待：接收最早一个等待中的提交（给自己轮询的代理用，别直接改 handoff.json）")
-    cl.add_argument("dir", type=str, help="审阅目录或审阅标识")
+                   help=t("cli.notes.help.wait.stage"))
+    sk = sub.add_parser("skills", help=t("cli.notes.help.command.skills"))
+    sk.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    sk.add_argument("--set", nargs="*", metavar=t("cli.notes.help.skillDescription"), help=t("cli.notes.help.skills.set"))
+    sk.add_argument("--add", nargs="*", metavar=t("cli.notes.help.skillDescription"), help=t("cli.notes.help.skills.add"))
+    sk.add_argument("--remove", nargs="*", metavar=t("cli.notes.help.skillName"), help=t("cli.notes.help.skills.remove"))
+    sk.add_argument("--clear", action="store_true", help=t("cli.notes.help.skills.clear"))
+    sk.add_argument("--always", nargs="*", metavar=t("cli.notes.help.skillScope"),
+                    help=t("cli.notes.help.skills.always"))
+    sk.add_argument("--always-add", nargs="*", metavar=t("cli.notes.help.skillScope"), help=t("cli.notes.help.skills.always_add"))
+    sk.add_argument("--always-remove", nargs="*", metavar=t("cli.notes.help.skillName"), help=t("cli.notes.help.skills.always_remove"))
+    sk.add_argument("--always-clear", action="store_true", help=t("cli.notes.help.skills.always_clear"))
+    cl = sub.add_parser("claim", help=t("cli.notes.help.command.claim"))
+    cl.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     cl.add_argument("--by", default=default_agent())
     cl.add_argument("--stage", choices=("any", "draft", "review"), default="any")
-    cl.add_argument("--seq", type=int, help="只接这一批")
-    dn = sub.add_parser("done", help="收尾当前阶段：初改（按用户要求停在待复核或定稿）或复核（定稿）")
-    dn.add_argument("dir", type=str, help="审阅目录或审阅标识")
-    dn.add_argument("--summary", default="", help="处理结果：改了几条、哪些留给用户定")
-    dn.add_argument("--seq", type=int, help="提交序号；默认最近一个处理中的提交")
+    cl.add_argument("--seq", type=int, help=t("cli.notes.help.claim.seq"))
+    dn = sub.add_parser("done", help=t("cli.notes.help.command.done"))
+    dn.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    dn.add_argument("--summary", default="", help=t("cli.notes.help.done.summary"))
+    dn.add_argument("--seq", type=int, help=t("cli.notes.help.done.seq"))
     dn.add_argument("--by", default=default_agent())
     g = dn.add_mutually_exclusive_group()
-    g.add_argument("--draft", action="store_true", help="初改完成、交给复核（仅当用户允许派发子代理，由复核者接力时用）")
-    g.add_argument("--final", action="store_true", help="初改阶段直接定稿（用户要求停在待复核时不允许）")
-    dn.add_argument("--accept-rest", action="store_true", help="复核收尾时，没给结论的初改一并通过")
-    dn.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
-    rv = sub.add_parser("review", help="复核结论：--ok 通过 / --revise 复核者再改 / --return 退回给用户拍板")
-    rv.add_argument("dir", type=str, help="审阅目录或审阅标识")
+    g.add_argument("--draft", action="store_true", help=t("cli.notes.help.done.draft"))
+    g.add_argument("--final", action="store_true", help=t("cli.notes.help.done.final"))
+    dn.add_argument("--accept-rest", action="store_true", help=t("cli.notes.help.done.accept_rest"))
+    rv = sub.add_parser("review", help=t("cli.notes.help.command.review"))
+    rv.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     rv.add_argument("ids", nargs="+")
     vg = rv.add_mutually_exclusive_group(required=True)
     vg.add_argument("--ok", action="store_const", const="ok", dest="verdict")
     vg.add_argument("--revise", action="store_const", const="revise", dest="verdict")
     vg.add_argument("--return", action="store_const", const="return", dest="verdict")
-    rv.add_argument("--note", default="", help="理由：再改了什么 / 为什么要用户拍板（再改、退回必填）")
+    rv.add_argument("--note", default="", help=t("cli.notes.help.review.note"))
     rv.add_argument("--by", default=default_agent())
-    rv.add_argument("--seq", type=int, help="复核的批次；默认按批注的初改批次")
-    rv.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
-    df = sub.add_parser("diff", help="看初改动了源文件的哪些地方（按页列出）")
-    df.add_argument("dir", type=str, help="审阅目录或审阅标识")
-    df.add_argument("--batch", type=int, help="第几批；默认最近一个有快照的批次")
+    rv.add_argument("--seq", type=int, help=t("cli.notes.help.review.seq"))
+    df = sub.add_parser("diff", help=t("cli.notes.help.command.diff"))
+    df.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    df.add_argument("--batch", type=int, help=t("cli.notes.help.diff.batch"))
     df.add_argument("--to", choices=("draft", "current"), default="draft",
-                    help="对比到：draft 初改收尾时（默认，没有就到当前）/ current 当前文件")
-    df.add_argument("--page", type=int, help="只看第 N 页")
-    df.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
-    bt = sub.add_parser("batches", help="处理记录：每次「交给 Agent」一批，各批解决了哪些批注、处理摘要")
-    bt.add_argument("dir", type=str, help="审阅目录或审阅标识")
-    bt.add_argument("--last", type=int, help="只看最近几批")
-    bt.add_argument("--json", action="store_true", help="输出原始 JSON")
-    bt.add_argument("--locale", help="界面语言：auto、zh-CN 或 en。优先于 AE_LOCALE 和审阅设置")
+                    help=t("cli.notes.help.diff.to"))
+    df.add_argument("--page", type=int, help=t("cli.notes.help.diff.page"))
+    bt = sub.add_parser("batches", help=t("cli.notes.help.command.batches"))
+    bt.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    bt.add_argument("--last", type=int, help=t("cli.notes.help.batches.last"))
+    bt.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
+    for parser in sub.choices.values():
+        parser.add_argument("--locale", default=argparse.SUPPRESS, help=t("cli.notes.localeHelp"))
     a = ap.parse_args(argv)
+    ledger.set_locale(help_lang)
     try:
         d = ledger.resolve_dir(a.dir).resolve()   # 也接受审阅标识（或至少 4 位前缀）：从台账查目录
     except (ledger.LedgerError, OSError) as e:
-        print(f"错误：{e}", file=sys.stderr)
+        print(t("cli.notes.error", reason=e), file=sys.stderr)
         return 2
     # 打错目录时不要悄悄新建一个空审阅目录
     if not d.is_dir() or not any((d / f).exists() for f in ("review.json", "index.html", store.NOTES_FILE)):
-        print(f"错误：{d} 不是审阅目录（里面没有 review.json / index.html / notes.json）。", file=sys.stderr)
+        print(t("cli.notes.notReview", path=d), file=sys.stderr)
         return 2
-    warn = ledger.try_register(load_manifest(d).get("reviewId"), d)   # 顺带登记到审阅台账（目录搬家后更新路径）
-    if warn:
-        print(f"警告：{warn}", file=sys.stderr)
 
     # 提交、处理记录与批注的输出按当前语言写：--locale 优先于 AE_LOCALE，再优先于审阅里保存的选择。
-    # 只输出 JSON 的 claim、以及导入与技能设置不在此列：语言选择非法时它们照旧工作
+    # 只输出 JSON 的 claim 不在此列：环境语言非法时仍可供旧消费者接收。
     lang = i18n.DEFAULT_LOCALE
     if a.cmd in LOCALIZED_CMDS:
         try:
-            lang = cli_language(getattr(a, "locale", None), d)
+            explicit = a.locale or (a.lang if a.cmd == "export" else None)
+            lang = cli_language(explicit, d)
         except i18n.LocaleError as exc:
-            print(f"错误：{exc}", file=sys.stderr)
+            print(t("cli.notes.invalidLocale", name=exc.params.get("locale", "")), file=sys.stderr)
             return 2
+    t = cli_text(lang)
+    ledger.set_locale(lang)
+    warn = ledger.try_register(load_manifest(d).get("reviewId"), d)
+    if warn:
+        print(t("cli.notes.warning", reason=warn), file=sys.stderr)
 
     if a.cmd == "show":
         doc = store.load(d)
@@ -747,9 +760,9 @@ def main(argv: list[str] | None = None) -> int:
                              ensure_ascii=False, indent=2))
         else:
             try:
-                sources = resolve_sources(d, manifest) if manifest else None
+                sources = resolve_sources(d, manifest, locale=lang) if manifest else None
             except SystemExit as e:
-                print(f"警告：{e}", file=sys.stderr)
+                print(t("cli.notes.warning", reason=e), file=sys.stderr)
                 sources = None
             print(to_markdown(doc, manifest, include_resolved=a.all or bool(a.batch), page=a.page, sources=sources,
                               handoff=store.handoff_state(d, full=False), only=only, always=store.always_skills(d),
@@ -774,34 +787,38 @@ def main(argv: list[str] | None = None) -> int:
                 bad += 1
         return 1 if bad else 0
     if a.cmd == "import":
-        items, always, src_rid = read_import(a.file)
+        try:
+            items, always, src_rid = read_import(a.file, lang=lang)
+        except (OSError, UnicodeError, ValueError, SystemExit) as exc:
+            print(t("cli.notes.error", reason=exc), file=sys.stderr)
+            return 2
         mine = load_manifest(d).get("reviewId")
         if src_rid and mine and src_rid != mine and not a.force:
             other = ""
             try:
                 e = ledger.get(src_rid)
-                other = f"；台账里它在 {e['dir']}" if e else ""
+                other = t("cli.notes.import.otherLocation", path=e["dir"]) if e else ""
             except (ledger.LedgerError, OSError):
                 pass
-            print(f"错误：这个文件属于另一份审阅（标识 {src_rid}），不是 {d}（标识 {mine}）{other}。"
-                  "请导入到它自己的审阅目录；确认就要导进这里，加 --force。", file=sys.stderr)
+            print(t("cli.notes.import.wrongReview", source=src_rid, path=d, target=mine, other=other), file=sys.stderr)
             return 2
         _doc, added, skipped, updated = store.import_notes(d, items, by="cli-import")
-        print(f"导入完成：新增 {added} 条，更新 {updated} 条，跳过重复 {skipped} 条 → {d / store.NOTES_FILE}")
+        print(t("cli.notes.import.complete", added=added, updated=updated, skipped=skipped, path=d / store.NOTES_FILE))
         if always is not None:
             try:
                 new = store.clean_always(always)
             except store.NoteError as e:
-                print(f"导出里的常驻技能没能读懂（{e}），请按导出开头那行用 notes.py skills --always 设置", file=sys.stderr)
+                print(t("cli.notes.import.badSkills", reason=e), file=sys.stderr)
                 return 0
             cur = store.always_skills(d)
+            sep = "、" if lang == "zh-CN" else ", "
+            names = sep.join(f"{x['name']}（{store.ALWAYS_ZH[x['scope']]}）" if lang == "zh-CN" else
+                             f"{x['name']} ({label(t, ALWAYS_SCOPE_KEY.get(x['scope'], ''), x['scope'])})" for x in new)
             if not cur or cur == new:
                 store.always_save(d, new)
-                print("常驻技能（随导出带来，已写入 skills.json）：" + ("、".join(f"{x['name']}（{store.ALWAYS_ZH[x['scope']]}）" for x in new) or "（无）"))
+                print(t("cli.notes.import.skillsSaved", list=names or t("cli.skills.alwaysNone")))
             else:
-                print("注意：导出里的常驻技能与审阅目录里的不同，未自动覆盖。导出里是："
-                      + "、".join(f"{x['name']}（{store.ALWAYS_ZH[x['scope']]}）" for x in new)
-                      + "。确认以导出为准就运行 notes.py skills 审阅目录 --always \"名称=范围\" …", file=sys.stderr)
+                print(t("cli.notes.import.skillsConflict", list=names), file=sys.stderr)
         return 0
     if a.cmd == "export":
         doc = store.load(d)
@@ -812,7 +829,7 @@ def main(argv: list[str] | None = None) -> int:
                 i18n.effective_choice(a.lang, os.environ.get("AE_LOCALE"), stored if isinstance(stored, str) else None),
                 system_languages=i18n.system_languages())
         except i18n.LocaleError as exc:
-            print(f"错误：{exc}", file=sys.stderr)
+            print(t("cli.notes.invalidLocale", name=exc.params.get("locale", "")), file=sys.stderr)
             return 2
         all_notes = doc["notes"]
         picked = [n for n in all_notes if (a.all or n.get("status") != "resolved")
@@ -837,9 +854,9 @@ def main(argv: list[str] | None = None) -> int:
                 a.out.parent.mkdir(parents=True, exist_ok=True)
                 write_private(a.out, body)   # 原子写入、权限 0600：导出内容就是整份批注
             except OSError as e:
-                print(f"错误：写不出 {a.out}：{e}", file=sys.stderr)
+                print(t("cli.notes.export.writeFailed", path=a.out, reason=e), file=sys.stderr)
                 return 2
-            print(f"已导出 {len(picked)} 条（{lang}，{a.format}）→ {a.out}")
+            print(t("cli.notes.export.complete", count=len(picked), lang=lang, format=a.format, path=a.out))
         else:
             sys.stdout.write(body)
         return 0
@@ -1184,9 +1201,9 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
                 signal.signal(sig, h)
     manifest = load_manifest(d)
     try:
-        sources = resolve_sources(d, manifest) if manifest else None
+        sources = resolve_sources(d, manifest, locale=lang) if manifest else None
     except SystemExit as e:
-        print(f"警告：{e}", file=sys.stderr)
+        print(t("cli.notes.warning", reason=e), file=sys.stderr)
         sources = None
     if claim and item["stage"] == "draft":
         snapshot(d, item, "base")
