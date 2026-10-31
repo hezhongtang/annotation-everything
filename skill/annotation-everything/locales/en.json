@@ -257,6 +257,19 @@
     "viewer.regionMoved": "Area moved",
     "viewer.pinMoved": "Pin moved",
     "viewer.pairPrompt.same": "The same sentence appears in {side} on this page: “{text}” — change both",
-    "viewer.pairPrompt.similar": "A similar sentence appears in {side} on this page: “{text}” — change both"
+    "viewer.pairPrompt.similar": "A similar sentence appears in {side} on this page: “{text}” — change both",
+    "formats.pageHead": "A page heading is \"### Page N｜Title\": after ### write the page number, then the title, separated by \"｜\" or \"|\".",
+    "formats.fields": "Recognized field names are Duration, Talking points, Transition and Likely questions; the colon may be full-width or half-width",
+    "build.scriptNoPages": "No script page headings found in {path}. {expected}",
+    "build.scriptBadHead": "Line {line} of {path} is not a recognizable script page heading: \"{text}\". {expected}",
+    "build.scriptDuplicatePage": "{path} has several page headings for page {page} (lines {lines}). Script page numbers must be unique and match the report page order one to one.",
+    "build.pageMismatch": "Script page numbers do not match the report: {report} pages in the report, {script} in the script{detail}",
+    "build.pageMismatchLenient": ". Fix it and run again, or pass --lenient to follow the report page order (pages without script text show as empty).",
+    "build.diff.onlyReport": "; missing from the script: {pages}",
+    "build.diff.onlyScript": "; not in the report: {pages}",
+    "build.diff.order": "; in a different order",
+    "build.scriptDuplicateField": "Page {page} repeats the \"{field}\" field (lines {lines}); the last value wins.",
+    "build.scriptUnknownField": "Line {line} on page {page}: \"{field}\" is not a recognized field name, so this text is kept as body text. {known}",
+    "build.scriptBadDuration": "The duration \"{text}\" on page {page} cannot be read, so it counts as 0 seconds. Write \"N min\", \"N seconds\" and so on."
   }
 }

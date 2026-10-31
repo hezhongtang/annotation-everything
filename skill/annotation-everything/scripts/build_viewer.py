@@ -14,8 +14,11 @@
   <link rel="stylesheet"> 会一并带上；本地图片、字体等相对路径资源会内联成 data URI（单个上限 10 MB）。
   板块导航优先从报告目录推断（<a data-range-start="键" data-range-end="键"> 内含 .toc-label / .toc-title），
   也可用 --sections "开篇:1-6,主线一:7-21" 指定。
-- 讲稿 Markdown（可选）：每页以「### 第 N 页｜标题」开头，字段 **时长** / **讲法** / **过渡** / **可能被问**
-  （「可能被问」逐行写「问：……答：……」）。首个「### 第」之前的内容作为「说明」浮层。
+- 讲稿 Markdown（可选）：中文每页以「### 第 N 页｜标题」开头，英文每页以「### Page N｜Title」开头（同一份
+  讲稿里可以混用，识别与界面语言无关）；字段中文写 **时长** / **讲法** / **过渡** / **可能被问**，英文写
+  **Duration** / **Talking points** / **Transition** / **Likely questions**（冒号全角半角都可以，
+  「可能被问」逐行写「问：……答：……」或「Q: … A: …」）。首个页头之前的内容作为「说明」浮层。
+  页头认不出来、页码重复或字段重复时给出当前语言的诊断并退出，不把错输入当成空讲稿。
 
 用法：
   python3 build_viewer.py --report 报告.html [--script 讲稿.md] --out 审阅目录 [--title 标题] [--name 审阅名] [--sections ...]
@@ -41,7 +44,24 @@ from pathlib import Path
 from urllib.parse import unquote
 
 PAGE_HEAD = re.compile(r"^###\s*第\s*(\d+)\s*页\s*[｜|]\s*(.*)$", re.M)
-FIELD = re.compile(r"^\*\*(时长|讲法|过渡|可能被问)\*\*\s*[：:]", re.M)
+PAGE_HEAD_EN = re.compile(r"^###\s*page\s*(\d+)\s*[｜|]\s*(.*)$", re.M | re.I)
+# 以 ### 开头、紧跟页码标记，但不是合法页头的行：认不出来时指出来，不并进上一页或前言
+HEAD_LIKE = re.compile(r"^#{3,}\s*(?:第\s*\d+\s*页?|page\s*\d+)", re.M | re.I)
+# 字段名行：先抓出来，再判断认不认得；认不出的按正文保留（旧讲稿里的加粗引导句不会丢）
+FIELD_LABEL = re.compile(r"^\*\*([^*：:]+)\*\*\s*[：:]", re.M)
+FIELD_ALIASES = {   # 规范化字段名 → 认得的写法（大小写、空格多少不限）
+    "时长": ("时长", "duration", "time"),
+    "讲法": ("讲法", "talking points", "talking point", "talk"),
+    "过渡": ("过渡", "transition"),
+    "可能被问": ("可能被问", "likely questions", "likely question", "q&a", "questions"),
+}
+FIELD_BY_LABEL = {alias: name for name, aliases in FIELD_ALIASES.items() for alias in aliases}
+# 问答行：「问：……答：……」与「Q: … A: …」。答的标记取先出现的那个；英文 A 紧贴字母或汉字时
+# 不算标记（「套餐A：」「plan A:」都是正文），只有前面是空白、标点或行首才算。
+QA_ANSWER = re.compile(r"答\s*[：:]|(?<!\w)A\s*[：:]")
+QA_QUESTION = re.compile(r"^\s*(?:问|Q)\s*[：:]")
+DURATION_UNIT = re.compile(r"([\d.]+)\s*(分钟|分|秒|min|minute|sec|second|s)", re.I)
+MINUTE_UNITS = frozenset({"分钟", "分", "min", "minute"})
 ATTR = re.compile(r"""([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""")
 SECTION_TAG = re.compile(r"<(/?)section\b[^>]*>", re.I)
 MASKED = re.compile(r"<!--.*?-->|<script\b[^>]*>.*?</script\s*>|<style\b[^>]*>.*?</style\s*>", re.S | re.I)
@@ -102,38 +122,159 @@ def md_block(text: str) -> str:
     return re.sub(r"((?:<li>.*?</li>)+)", r"<ul>\1</ul>", "".join(out))
 
 
+def duration_seconds(dur: str) -> tuple[int, bool]:
+    """时长字段 → (秒数, 是否至少成功读出一段)。写错的数字（「1.2.3 分钟」）跳过，不让生成器崩掉。"""
+    total, read = 0.0, False
+    for v, unit in DURATION_UNIT.findall(dur):
+        try:
+            total += float(v) * (60 if unit.lower() in MINUTE_UNITS else 1)
+        except ValueError:
+            continue
+        read = True
+    return round(total), read
+
+
 def seconds(dur: str) -> int:
-    total = 0.0
-    for v, unit in re.findall(r"([\d.]+)\s*(分钟|分|秒|min|s)", dur):
-        total += float(v) * (60 if unit in ("分钟", "分", "min") else 1)
-    return round(total)
+    return duration_seconds(dur)[0]
 
 
-def parse_script(script: str) -> tuple[str, str, list[dict]]:
-    """返回 (H1 标题, 说明浮层 HTML, 逐页讲稿)。"""
-    heads = list(PAGE_HEAD.finditer(script))
-    intro = script[: heads[0].start()] if heads else script
+class ScriptError(Exception):
+    """讲稿格式问题：messages 是已经本地化的诊断，调用方转成 SystemExit 报给作者。"""
+
+    def __init__(self, messages: list[str]):
+        super().__init__("\n".join(messages))
+        self.messages = messages
+
+
+def page_heads(script: str) -> list[re.Match]:
+    """中英页头按出现顺序合并：`### 第 N 页｜标题` 与 `### Page N｜Title` 可以在同一份讲稿里混用。
+
+    两种写法的 group(1) 都是页码、group(2) 都是标题。
+    """
+    return sorted((*PAGE_HEAD.finditer(script), *PAGE_HEAD_EN.finditer(script)), key=lambda m: m.start())
+
+
+def field_name(label: str) -> str | None:
+    """字段名归一：中文原名或英文写法（大小写、空格不限）→ 规范中文名；认不出返回 None。"""
+    return FIELD_BY_LABEL.get(" ".join(label.split()).lower())
+
+
+def line_no(text: str, pos: int) -> int:
+    return text.count("\n", 0, pos) + 1
+
+
+def line_of(text: str, pos: int) -> str:
+    """pos 所在的整行（从 pos 到行尾）。"""
+    end = text.find("\n", pos)
+    return text[pos: len(text) if end < 0 else end]
+
+
+def clip(text: str, limit: int = 60) -> str:
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def join_lines(locale: str | None, lines: list[int]) -> str:
+    """诊断里的行号列表：英文用逗号加空格，中文用顿号。"""
+    return (", " if ui_locale(locale) == "en" else "、").join(str(x) for x in lines)
+
+
+def qa_pair(line: str) -> tuple[str, str]:
+    """一行问答拆成 (问, 答)：答的标记取先出现的那个，问的标记在开头时才去掉。"""
+    m = QA_ANSWER.search(line)
+    q, a = (line[:m.start()], line[m.end():]) if m else (line, "")
+    return QA_QUESTION.sub("", q, count=1).strip(), a.strip()
+
+
+def ui_locale(locale: str | None) -> str:
+    """本次生成用的具体语言：auto 按系统语言，没有配置（旧审阅、旧调用）保持中文。"""
+    import i18n
+    try:
+        return i18n.resolve_locale(locale, system_languages=i18n.system_languages())
+    except i18n.LocaleError:
+        return i18n.DEFAULT_LOCALE
+
+
+def diag(locale: str | None, key: str, **params: object) -> str:
+    """按当前语言取一条诊断文案。"""
+    import i18n
+    return i18n.translate(i18n.load_catalog(ui_locale(locale)), key, **params)
+
+
+def parse_script(script: str, locale: str | None = None, path: str = "") -> tuple[str, str, list[dict], list[str]]:
+    """返回 (H1 标题, 说明浮层 HTML, 逐页讲稿, 格式警告)。
+
+    页头与字段的中英文写法都认，与界面语言无关：locale 只决定诊断用哪种语言说，path 只用在诊断里。
+    认不出的字段名按正文保留（旧讲稿不会丢内容），重复字段采用最后一次的值，都给出警告；
+    认不出的页头和重复的页码是格式错误，抛 ScriptError。
+    """
+    heads = page_heads(script)
+    if not heads:
+        raise ScriptError([diag(locale, "build.scriptNoPages", path=path, expected=diag(locale, "formats.pageHead"))])
+    problems: list[str] = []
+    starts = {h.start() for h in heads}
+    for m in HEAD_LIKE.finditer(script):
+        if m.start() in starts:
+            continue
+        problems.append(diag(locale, "build.scriptBadHead", path=path, line=line_no(script, m.start()),
+                             text=clip(line_of(script, m.start()).strip()), expected=diag(locale, "formats.pageHead")))
+    seen: dict[int, list[int]] = {}
+    for h in heads:
+        seen.setdefault(int(h.group(1)), []).append(line_no(script, h.start()))
+    for n, lines in sorted(seen.items()):
+        if len(lines) > 1:
+            problems.append(diag(locale, "build.scriptDuplicatePage", path=path, page=n,
+                                 lines=join_lines(locale, lines)))
+    if problems:
+        raise ScriptError(problems)
+    intro = script[: heads[0].start()]
     h1 = next((ln[2:].strip() for ln in intro.splitlines() if ln.startswith("# ")), "")
-    pages = []
+    pages, warnings = [], []
     for i, h in enumerate(heads):
         body = script[h.end(): heads[i + 1].start() if i + 1 < len(heads) else len(script)]
+        base = h.end()   # body 里的偏移换算回整份讲稿的行号
+        page_no = int(h.group(1))
         fields: dict[str, str] = {}
-        fs = list(FIELD.finditer(body))
-        for j, f in enumerate(fs):
-            fields[f.group(1)] = body[f.end(): fs[j + 1].start() if j + 1 < len(fs) else len(body)].strip()
-        talk_src = fields.get("讲法", "") if fs else body.strip()
+        known: list[tuple[re.Match, str]] = []
+        for m in FIELD_LABEL.finditer(body):
+            name = field_name(m.group(1))
+            if name is None:
+                warnings.append(diag(locale, "build.scriptUnknownField", page=page_no,
+                                     line=line_no(script, base + m.start()), field=m.group(1).strip(),
+                                     known=diag(locale, "formats.fields")))
+                continue
+            known.append((m, name))
+        placed: dict[str, list[int]] = {}
+        labels: dict[str, str] = {}
+        for j, (m, name) in enumerate(known):
+            end = known[j + 1][0].start() if j + 1 < len(known) else len(body)
+            here = line_no(script, base + m.start())
+            if name in fields:   # 重复字段：后面的值生效，并指出前面几次出现在哪几行
+                placed[name].append(here)
+                warnings.append(diag(locale, "build.scriptDuplicateField", page=page_no,
+                                     field=labels[name], lines=join_lines(locale, placed[name])))
+            else:
+                placed[name] = [here]
+                labels[name] = m.group(1).strip()   # 诊断里用作者写的字段名，中英各按原样
+            fields[name] = body[m.end():end].strip()
+        # 第一个字段之前的内容也按「讲法」显示：写错的字段名、漏掉的加粗都不会让文字凭空消失
+        lead = body[: known[0][0].start()].strip() if known else ""
+        talk_src = (lead + "\n" + fields.get("讲法", "")) if known else body.strip()
         talk = "".join(f"<p>{inline(ln)}</p>" for ln in talk_src.splitlines() if ln.strip() and ln.strip() != "---")
         qa = []
         for ln in fields.get("可能被问", "").splitlines():
-            ln = ln.strip().lstrip("-").strip()
+            ln = ln.strip().lstrip("-*•").strip()
             if not ln:
                 continue
-            q, _, a = ln.partition("答：")
-            qa.append({"q": inline(q.removeprefix("问：")), "a": inline(a)})
+            q, a = qa_pair(ln)
+            qa.append({"q": inline(q), "a": inline(a)})
         dur = fields.get("时长", "").strip()
-        pages.append({"n": int(h.group(1)), "title": esc(h.group(2)), "dur": esc(dur), "sec": seconds(dur),
+        sec, read = duration_seconds(dur)
+        if dur and not read and re.search(r"\d", dur):
+            # 有时长字段、里面也有数字，却一段都没读出来：写法看不懂，别静默按 0 秒算
+            warnings.append(diag(locale, "build.scriptBadDuration", page=page_no, text=clip(dur)))
+        pages.append({"n": int(h.group(1)), "title": esc(h.group(2)), "dur": esc(dur), "sec": sec,
                       "talk": talk, "next": inline(fields.get("过渡", "")), "qa": qa})
-    return h1, md_block(intro), pages
+    return h1, md_block(intro), pages, warnings
 
 
 # ---------- 报告解析 ----------
@@ -533,23 +674,32 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     if not sects:
         raise SystemExit(f"{report} 里没找到 <section class=\"page\" data-page=\"N\"> 逐页结构")
     h1, intro, spages = ("", "", [])
+    script_warnings: list[str] = []
     if script is not None:
-        h1, intro, spages = parse_script(script.read_text(encoding="utf-8"))
-        if not spages:
-            raise SystemExit(f"{script} 里没找到「### 第 N 页｜标题」页头")
+        try:
+            h1, intro, spages, script_warnings = parse_script(script.read_text(encoding="utf-8"),
+                                                              locale_choice, str(script))
+        except ScriptError as exc:
+            raise SystemExit("\n".join(exc.messages)) from None
     rnums = [s["n"] for s in sects]
     if script is not None:
         snums = [p["n"] for p in spages]
         if snums != rnums:
             only_r = sorted(set(rnums) - set(snums))
             only_s = sorted(set(snums) - set(rnums))
-            msg = (f"讲稿页码与报告页序不一致：报告 {len(rnums)} 页，讲稿 {len(snums)} 页"
-                   + (f"；报告有、讲稿缺：{only_r}" if only_r else "")
-                   + (f"；讲稿有、报告缺：{only_s}" if only_s else "")
-                   + ("；页序不同" if not only_r and not only_s else ""))
+            detail = "".join(x for x in (
+                diag(locale_choice, "build.diff.onlyReport", pages=only_r) if only_r else "",
+                diag(locale_choice, "build.diff.onlyScript", pages=only_s) if only_s else "",
+                diag(locale_choice, "build.diff.order") if not only_r and not only_s else "") if x)
+            msg = diag(locale_choice, "build.pageMismatch", report=len(rnums), script=len(snums), detail=detail)
             if not lenient:
-                raise SystemExit(msg + "。修正后重跑，或加 --lenient 以报告页序为准（缺讲稿的页显示为空）。")
+                # 讲稿里的格式警告一起给出：只报页码不一致，作者不知道该先修哪一处
+                for w in script_warnings:
+                    print("警告：" + w, file=sys.stderr)
+                raise SystemExit(msg + diag(locale_choice, "build.pageMismatchLenient"))
             print("警告：" + msg, file=sys.stderr)
+        for w in script_warnings:
+            assets.warn(w)
     by_n = {p["n"]: p for p in spages}
     pages = []
     for s in sects:
@@ -564,10 +714,9 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     final_title = title or rtitle or h1 or report.stem
     if not intro:
         # 讲稿没有前言时用系统默认简介：句子走词典，页面切语言时由 applyLocale 重写
-        import i18n
         intro = (f'<h2>{esc(final_title)}</h2>'
                  f'<p data-msg="viewer.introDefault">'
-                 f'{esc(i18n.translate(i18n.load_catalog(i18n.resolve_locale(locale_choice, system_languages=i18n.system_languages())), "viewer.introDefault"))}</p>')
+                 f'{esc(i18n.translate(i18n.load_catalog(ui_locale(locale_choice)), "viewer.introDefault"))}</p>')
     out.mkdir(parents=True, exist_ok=True)
     if not no_scan_skills:
         import notes_store
