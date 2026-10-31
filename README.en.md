@@ -77,7 +77,7 @@ annotation-everything moves this whole process into a single page that runs on y
     </td>
     <td valign="top">
       <h4>🧩 Skills and standing skills</h4>
-      Finds the Claude Code and Codex skills installed on your machine, lets you search them by name and description, and suggests skills based on what is being reviewed. Once a skill is set as a standing skill, the agent calls it first for every annotation within its scope.
+      Finds skills in common local skill directories and plugin caches (<code>~/.claude</code>, <code>~/.codex</code>, <code>~/.agents</code>, and <code>~/.zcode</code>), lets you search them by name and description, and suggests skills based on what is being reviewed. Once a skill is set as a standing skill, the agent calls it first for every annotation within its scope.
     </td>
   </tr>
   <tr>

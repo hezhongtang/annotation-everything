@@ -77,7 +77,7 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
     </td>
     <td valign="top">
       <h4>🧩 技能与常驻技能</h4>
-      自动发现本机安装的 Claude Code 和 Codex 技能，可以按名称和说明搜索，并根据审阅内容推荐。设为常驻技能后，Agent 处理设定范围内的每条批注时都会先调用这些技能。
+      自动发现本机常见技能目录里的技能（<code>~/.claude</code>、<code>~/.codex</code>、<code>~/.agents</code>、<code>~/.zcode</code> 的技能目录与插件缓存），可以按名称和说明搜索，并根据审阅内容推荐。设为常驻技能后，Agent 处理设定范围内的每条批注时都会先调用这些技能。
     </td>
   </tr>
   <tr>
