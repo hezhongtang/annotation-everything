@@ -23,9 +23,6 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.12"]
-    env:
-      # 验证记录与日志写在 .verify/（已忽略），CI 里作为构件上传；测试与自检都不碰真实台账
-      AE_HOME: ${{ runner.temp }}/ae-home
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,6 +32,9 @@ jobs:
       # 退出码语义与直接跑 python3 -m unittest discover tests / serve.py check 一致。
       - name: 单元测试与服务安全自检（统一验证入口）
         run: |
+          # 验证记录与日志写在 .verify/（已忽略），CI 里作为构件上传；测试与自检都不碰真实台账。
+          # job 级 env 不允许 runner 上下文，AE_HOME 用运行器的 RUNNER_TEMP 在脚本内展开。
+          export AE_HOME="$RUNNER_TEMP/ae-home"
           python3 verify.py run --group unit --group serve-check --phase ci \
             --reason "CI ${{ github.event_name }} ${{ github.ref_name }} Python ${{ matrix.python-version }}"
       - name: 保存验证构件
