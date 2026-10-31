@@ -459,6 +459,62 @@ def locale_edit_checks(page, mode, read_notes):
     card.locator('[data-act="cancel"]').click()
 
 
+def locale_live_controls_checks(browser, tmp):
+    """同一页切语言只改系统标签，原文、选区和待提交标注留在原位。"""
+    d = tmp / "locale_live_controls"
+    build(d, locale="zh-CN")
+    # 没有讲稿前言时 auto 也必须先解析成词典支持的具体语言。
+    build(tmp / "locale_auto_without_intro", script=None, locale="auto")
+    ok(True, "auto 语言在仅报告模式下生成默认简介")
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = ctx.new_page()
+    page.goto((d / "index.html").as_uri())
+    go_page(page, 3)
+    page.evaluate("window.__originalTalk = document.querySelector('#pageScript .talk')")
+    body = page.inner_text("#pageScript .talk")
+    page.fill("#ntext", "未提交的合成草稿 <&>")
+    for lang, start, labels, qa in (
+        ("en", "Page 3", ("Talking points", "Transition", "Likely questions"), "Q: "),
+        ("zh-CN", "第 3", ("讲法", "过渡", "可能被问"), "问　"),
+    ):
+        page.select_option("#localePick", lang)
+        ok(page.inner_text("#stat").startswith(start)
+           and all(label in page.inner_text("#pageScript") for label in labels),
+           f"同页切到 {lang} 后页码与讲稿标签立即更新")
+        ok(page.locator("#pageScript .q").first.get_attribute("data-label") == qa,
+           f"同页切到 {lang} 后问答前缀立即更新")
+        ok(page.evaluate("window.__originalTalk === document.querySelector('#pageScript .talk')")
+           and page.inner_text("#pageScript .talk") == body
+           and page.input_value("#ntext") == "未提交的合成草稿 <&>",
+           f"同页切到 {lang} 不替换材料节点或丢失草稿")
+        ok(page.get_attribute("#host", "lang") == "zh-CN"
+           and page.get_attribute("#pageScript .talk", "lang") == "",
+           f"切到 {lang} 后保留报告语言，未知讲稿语言不冒用界面语言")
+    special = '<img src=x onerror="window.__quoteInjected=1"> & "原文"'
+    page.evaluate("""text => {
+      quote = text; quoteFrom = '报告';
+      sel = {text, from:'报告', pair:{side:'讲稿', text, match:'exact'}};
+      quotePair = sel.pair; document.getElementById('pairOn').checked = false;
+      showQuote(); updatePairText();
+      pendingRegion = {x:10,y:10,w:20,h:20}; drawPins();
+      openPinPop('', stage.querySelector('.ae-region.pending'));
+    }""", special)
+    for lang, tip in (("en", "drag"), ("zh-CN", "拖动")):
+        # 程序触发 select change，保留已打开的标注浮层来验证重刷。
+        page.locator("#localePick").evaluate("(el, lang) => {el.value=lang;el.dispatchEvent(new Event('change'))}", lang)
+        ok(special in page.inner_text("#qbox") and page.locator("#qbox img").count() == 0
+           and page.evaluate("window.__quoteInjected") is None,
+           f"{lang} 引用和对应句的特殊字符只转义一次且不执行 HTML")
+        ok(tip in page.locator(".ae-region.pending").get_attribute("title"),
+           f"{lang} 标注工具提示跟随当前语言")
+        ok(("New selected area" if lang == "en" else "新框选") in page.inner_text("#pinpop")
+           and ("Speaker notes" if lang == "en" else "讲稿") in page.inner_text("#pairText"),
+           f"{lang} 已打开浮层与双侧对应句提示刷新")
+        ok(not page.is_checked("#pairOn") and page.evaluate("pendingRegion.w") == 20,
+           f"{lang} 切换不改双侧选择或标注坐标")
+    ctx.close()
+
+
 def locale_editing_checks(page, mode, read_notes):
     """#30：中英文下完成编辑、标注与风格优化的常用操作，存储值与协议说法不变。"""
     def texts(sel):
@@ -781,6 +837,7 @@ def main() -> int:
     CLEANUP.add_dir(tmp)
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="chrome", headless=True)
+        locale_live_controls_checks(browser, tmp)
         if "--full-check-only" in sys.argv:
             full_check_checks(browser, tmp)
             browser.close()
