@@ -21,6 +21,12 @@ ROOT = Path(__file__).resolve().parents[1]
 AE = ROOT / "ae.py"
 SKILL_SRC = ROOT / "skill" / "annotation-everything"
 sys.path.insert(0, str(ROOT))
+
+import host_isolation  # noqa: E402
+
+# 直接跑 unittest 的旧入口与 verify.py 共用同一隔离协议：--target 的 doctor 走真实全机进程视图
+host_isolation.require_for_module(__name__)
+
 import ae  # noqa: E402
 
 RECORD_NAME = ae.RECORD_NAME

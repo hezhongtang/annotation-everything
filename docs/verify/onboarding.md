@@ -20,13 +20,13 @@ python3 verify.py report --latest           # 读最近一次记录，不启动�
 
 ## 验证组
 
-| 组 | 内容 | 等价命令 | 计数 | 计时粒度 |
-| --- | --- | --- | --- | --- |
-| `unit` | 完整单元 | `python3 -m unittest discover tests` | 按用例 | 用例 |
-| `unit-related` | 相关单元，显式指定，并自动附带全局词典契约 | `python3 -m unittest <选择器> tests/test_i18n_catalog_contract.py` | 按用例 | 用例 |
-| `browser` | 完整浏览器 | `uv run --no-project --with playwright python tests/e2e_browser.py` | 按日志摘要 | 整组 |
-| `serve-check` | 服务安全自检 | `python3 skill/annotation-everything/scripts/serve.py check` | 按日志摘要 | 整组 |
-| `all` | 完整验收 | `unit` → `serve-check` → `browser` 依次执行 | 分别计数 | 分别计时 |
+| 组 | 内容 | 等价命令 | 计数 | 计时粒度 | 共享资源 |
+| --- | --- | --- | --- | --- | --- |
+| `unit` | 完整单元 | `python3 -m unittest discover tests` | 按用例 | 用例 | `host-state` |
+| `unit-related` | 相关单元，显式指定，并自动附带全局词典契约 | `python3 -m unittest <选择器> tests/test_i18n_catalog_contract.py` | 按用例 | 用例 | 命中敏感模块时 `host-state` |
+| `browser` | 完整浏览器 | `uv run --no-project --with playwright python tests/e2e_browser.py` | 按日志摘要 | 整组 | `host-state` |
+| `serve-check` | 服务安全自检 | `python3 skill/annotation-everything/scripts/serve.py check` | 按日志摘要 | 整组 | 无（进程内自检） |
+| `all` | 完整验收 | `unit` → `serve-check` → `browser` 依次执行 | 分别计数 | 分别计时 | 各成员组自持 |
 
 `unit-related` 自动附带的契约：无参数的全词典一致性检查只执行一次，权威位置在 `tests/test_i18n_catalog_contract.py`（issue #51）。完整单元组经 discover 执行它；相关局部组由入口自动带上，独立运行相关模块也不丢全局保护。调用方已显式指定契约模块（含类 / 方法级选择器）时不重复附带；契约模块被删时局部组加载失败报 `error`，不会静默失去保护。各功能模块自己专有的 key、占位符、复数与接线断言仍在各自模块里。
 
@@ -57,8 +57,23 @@ python3 verify.py run --group browser --timeout 300
 报告分七段：结论、阶段与关联、提交与基线、输入指纹与环境、耗时、分组结果、证据。三个要点：
 
 - 结论行保留原运行的结论和退出码；「能否作为通过证据」反映本次读取时的校验结果。日志丢失或损坏时，报告标为证据不可用并返回 1，即使原运行通过也不例外。`report --json` 同样输出当前校验结果和问题，不改写磁盘上的原记录。
-- 耗时段把排队、墙钟、入口自身开销、用例耗时合计、类 / 模块级开销、未归属开销分开列。用例耗时合计是各用例之和，不是等待时间；要看等待时间看墙钟。
+- 耗时段把排队、锁等待、墙钟、入口自身开销、清理、用例耗时合计、类 / 模块级开销、未归属开销分开列。用例耗时合计是各用例之和，不是等待时间；锁等待是同机资源互斥的排队时长，单独一列，既不摊进执行耗时也不算入口开销。要看总等待看墙钟。
 - 输入段说明开始与结束的指纹是否一致。指纹按完整文件内容计算，包括大文件；输入不可读时，快照标为不可用。指纹变化或任一快照不可用时，保留原测试结果，但记录不能作为覆盖最终输入的通过证据，`report` 返回 1。
+
+## 同机并发与资源锁（C 项）
+
+同一台机器上多个 worktree / checkout 并行验证时，资源敏感组会互相干扰（安装维护
+检查的真实进程枚举会看到浏览器测试启动的 serve.py）。C 项起，这些参与方按共享
+资源互斥，锁等待单独计时。要点：
+
+- 资源敏感的范围与锁位置、超时、嵌套豁免、安全边界见 [isolation.md](isolation.md)；
+  机器可读声明在 `plan --json` 的 `isolation` 字段。
+- 旧直接入口（`python3 -m unittest …`、直跑 `tests/e2e_browser.py`）与新入口共用
+  同一协议，没有绕过路径；纯逻辑组（如 `unit-related tests/test_i18n.py`、
+  `serve-check`）不被无关锁阻塞。
+- 等待上限缺省 600 秒，`AE_LOCK_WAIT_SECONDS` 可调；锁等待超时是明确的非成功
+  （组 `timeout`、退出码 124），不是通过。
+- 锁只协调参与者：外部进程与用户真实服务不受影响，也绝不因锁被停止。
 
 ## 重现步骤
 
@@ -117,7 +132,7 @@ python3 verify.py report --out-dir <解压后的构件目录> --latest
 
 - 记录契约已版本化，后续只在 `ae-verify-run/1` 上追加字段，升版本才改结构。字段语义和必填 / 可空规则见 [record-contract.md](record-contract.md)。
 - B（清理测试与词典契约提速，已交付）：清理测试的短等待经 `tests/e2e_servers.py` 的受控参数注入（`TestCleanup(terminate_timeout=...)`、`start_server(ready_timeout=...)`），缺省仍是 5 秒 / 8 秒的产品语义；权威词典契约模块是 `tests/test_i18n_catalog_contract.py`，入口常量 `RELATED_CONTRACT_SELECTORS`（verify.py）声明局部组的固定附带，F 的组映射直接引用它。
-- C（同机隔离与锁）：`children.json` 已经是所有权登记簿，只登记本次入口拉起的进程；锁字段加在 `groups[]` 上，不要改登记语义。
+- C（同机隔离与锁，已交付）：`groups[].resources` 与 `groups[].lock` 记录组级锁获取，`timing.lock_wait_seconds` 单列排队，`children.json` 登记语义未动；协议本体在仓库根 `host_isolation.py`，新入口要接资源锁时复用它，不要另起一套。
 - D（浏览器场景）：把 `groups[].scenarios` 从空数组填成场景记录，`granularity` 从 `group` 细化到 `scenario`；完整模式的行为矩阵不变。
 - F（阶段选测）：`input.fingerprint`、`input.changed_since_baseline` 和 `context.phase` 已经够了；选择理由和策略版本加在 `context` 与 `groups[]`。
 - G（证据复用）：按 `input.fingerprint` + `environment` + `groups[].name` 匹配已有记录，只认当前校验后 `result.usable_as_evidence` 为 `true` 的记录，不能直接信任落盘时的通过标记。
@@ -136,7 +151,7 @@ python3 verify.py report --out-dir <解压后的构件目录> --latest
 - playwright 版本在记录里是声明依赖，没有实测值。
 - 指纹不覆盖被 git 忽略的目录（例如 `.venv/`），那些算环境不算输入。
 - 本地记录与 Linux CI 记录的结构一致性靠同一 schema 保证；Linux 上的实测运行要等 PR 的 CI。
-- 入口不阻止两次验证并发跑。实测过一次：完整验收跑到浏览器组时，另一条命令同时在跑完整单元，浏览器组的 `serve.py` 让 `ae.py` 的进程盘点类测试失败。同机互斥归 C 项，本项只把干扰暴露出来。
+- ~~入口不阻止两次验证并发跑~~：该干扰（完整验收的浏览器组 + 并行完整单元，`serve.py` 进入 `ae.py` 的进程盘点）已由 C 项的同机资源隔离协议治理，见 [isolation.md](isolation.md) 与 `tests/test_host_interference.py` 的复现回归；并发敏感组现在按 `host-state` 资源锁排队，锁等待在记录里单独计时。
 - 观测到两例偶发失败，都与入口无关，复跑即过，建议各自开 issue：
   - `tests/test_pptx_fonts.py` 的 `test_pdf_tool_timeout_is_reported` 把 `TOOL_TIMEOUT` 压到 0.5 秒，整包高压下 `fc-list` 可能被判超时。
   - `tests/test_e2e_servers.py` 的升级终止测试曾用 `time.time()` 量耗时，和 `communicate` 的单调时钟 deadline 比较；issue #51 改造时已换成 `time.monotonic()`，并把该测试改为注入短超时。

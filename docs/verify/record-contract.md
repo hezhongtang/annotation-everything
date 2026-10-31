@@ -69,6 +69,7 @@
 | `environment.host` | 对象 | 是 | `cpu_count`、`timezone` |
 | `environment.ci` | 对象 | 是 | `is_ci`、`provider`、`runner_os`；非 CI 时后两个为 `null` |
 | `environment.config_summary` | 对象 | 是 | 只记 `ae_home_set`、`ae_locale`、`ae_verify_dir_set` 三个布尔或非敏感值 |
+| `environment.isolation` | 对象 | 是 | 环境隔离方式（C 项起有值）：`mechanism`（`flock`）、`lock_dir_source`（`AE_LOCK_DIR` / `XDG_RUNTIME_DIR` / `tmpdir`，只记来源类别不记路径）、`resources`、`note`。协议详情见 [isolation.md](isolation.md) |
 
 环境里不记环境变量原值、不记路径、不记凭据。浏览器组的 playwright 版本由 `uv` 在运行时解析，入口不导入它，因此记为声明依赖而不是实测版本；D、E 两项可以在组记录里补实测值。
 
@@ -80,7 +81,9 @@
 | `timing.started_at` / `timing.ended_at` | ISO 8601 | `started_at` 必填 | 第一个组开始前 / 最后一个组结束后 |
 | `timing.queue_seconds` | 浮点秒 | 是 | 排队与准备开销 |
 | `timing.wall_seconds` | 浮点秒 | 是 | 从开始到结束的墙钟，用户等待的下界 |
-| `timing.wrapper_seconds` | 浮点秒 | 是 | 入口自身开销，等于墙钟减去各组子进程耗时 |
+| `timing.lock_wait_seconds` | 浮点秒 | 是 | 各组等待共享资源锁的时间之和（C 项起有值）；单列为排队时长，不计入 `wrapper_seconds`，也不摊进执行耗时 |
+| `timing.wrapper_seconds` | 浮点秒 | 是 | 入口自身开销，等于墙钟减去各组子进程耗时与锁等待 |
+| `timing.cleanup_seconds` | 浮点秒 | 是 | 中断后回收登记子进程的耗时；正常完成为 0 |
 | `timing.case_seconds_total` | 浮点秒 | 是 | 各用例耗时之和，不等于墙钟 |
 | `timing.fixture_seconds_total` | 浮点秒 | 是 | 类 / 模块级准备与清理之和 |
 | `timing.unattributed_seconds` | 浮点秒 | 是 | 同类相邻用例之间的空隙，明确标成未归属 |
@@ -106,6 +109,8 @@
 | `result.notes` | 数组 | 是 | 需要人看的说明 |
 
 组记录里 `counter` 标明计数方式：`unittest` 表示按用例计数，`log` 表示从日志末尾的「N/M 通过」摘要行计数，`composite` 表示展开组。`granularity` 标明计时粒度：`case` 或 `group`。浏览器组另有 `scenarios` 数组，当前固定为空列表，是场景级计时的预留位。
+
+组记录另有两个隔离字段（C 项起有值，见 [isolation.md](isolation.md)）：`resources` 是组要求的共享资源名数组（空数组即纯逻辑组）；`lock` 记录本次锁获取——`resources`、`wait_seconds`（等待时长，锁等待不是执行耗时）与可选的 `timeout: true`（等待超时，组没有执行、结论为 `timeout`，note 写明资源与持有者 pid）。
 
 用例记录在 `groups[].cases`，每项含 `id`、`name`、`status`、`seconds`；非通过时加 `message`，发生子测试失败、错误或跳过时，分别带 `subtest_failures`、`subtest_errors`、`subtest_skips`。`status` 取 `passed`、`failed`、`error`、`skipped`、`interrupted`、`expected_failure`、`unexpected_success`。
 
@@ -140,7 +145,7 @@ unittest 执行期间捕获中断时，已完成用例保留原结果，中断�
 | `error` | 有用例错误、fixture 错误、加载失败，或计时证据缺失 |
 | `skipped` | 全部用例被跳过 |
 | `empty` | 用例或检查数量为 0 |
-| `timeout` | 超过 `--timeout` 被入口终止 |
+| `timeout` | 超过 `--timeout` 被入口终止；或共享资源锁等待超过上限（C 项起，组没有启动子进程，note 写明等待的资源与持有者） |
 | `interrupted` | 子进程被信号终止，或 unittest 在显式选择器加载 / 用例执行期间捕获 `SIGINT` / `KeyboardInterrupt` 后以 130 退出；保留已执行用例记录 |
 | `unavailable` | 命令无法启动，例如找不到 `uv` |
 | `wrapper_error` | 入口自身没能完成登记，例如记录写不进去 |
@@ -188,7 +193,7 @@ JSON 报告在记录副本上追加 `report_validation.problems` 字符串数组
 B–H 在同一个 schema 上追加，不改已有字段：
 
 - 全局词典契约（B，已交付）：无参数全词典检查的唯一权威位置是 `tests/test_i18n_catalog_contract.py`；`unit-related` 组固定附带它（`verify.py` 的 `RELATED_CONTRACT_SELECTORS`），契约模块缺失时局部组加载失败报 `error`，不会静默失去保护。F 的组映射直接引用这一模块与常量。
-- 组级隔离与锁（C）：在 `groups[]` 加锁与隔离字段，`children.json` 的所有权登记保持不变。
+- 组级隔离与锁（C，已交付）：`groups[].resources`、`groups[].lock`、`timing.lock_wait_seconds`、`timing.cleanup_seconds`、`environment.isolation`；`children.json` 的所有权登记保持不变。
 - 浏览器场景拆分（D）：把 `groups[].scenarios` 从空数组填成场景记录，`granularity` 从 `group` 细化到 `scenario`。
 - 阶段选测与影子对照（F）：在 `context` 与 `groups[]` 加策略版本与选择理由；`input.fingerprint` 与 `changed_since_baseline` 已经够了，不需要新字段。
 - 证据复用（G）：按 `input.fingerprint`、`environment`、`groups[].name` 与 `context.phase` 匹配已有记录；通过判定使用当前校验后的 `usable_as_evidence`，不能跳过证据完整性校验。

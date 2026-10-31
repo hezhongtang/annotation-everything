@@ -81,6 +81,10 @@ DEFAULT_PHASE = "development"
 REPO = Path(__file__).resolve().parent
 VERIFY_PY = Path(__file__).resolve()
 
+# 同机资源隔离协议（issue #52）：资源敏感组按共享资源互斥，锁只协调参与者。
+# 协议本体在仓库根的 host_isolation.py；直接跑 unittest / e2e_browser 的旧入口共用它。
+import host_isolation  # noqa: E402
+
 
 class UsageError(Exception):
     """命令行用错：退出码 2，不冒充产品失败。"""
@@ -321,6 +325,16 @@ def environment_summary() -> dict:
             "ae_locale": os.environ.get("AE_LOCALE"),
             "ae_verify_dir_set": bool(os.environ.get("AE_VERIFY_DIR")),
         },
+        # 环境隔离方式（issue #52）：锁在哪类共享位置、覆盖哪些资源；不记本机绝对路径
+        "isolation": {
+            "mechanism": "flock",
+            "lock_dir_source": ("AE_LOCK_DIR" if os.environ.get("AE_LOCK_DIR")
+                                else "XDG_RUNTIME_DIR" if os.environ.get("XDG_RUNTIME_DIR")
+                                else "tmpdir"),
+            "resources": sorted(host_isolation.RESOURCE_DECLARATIONS),
+            "note": "资源锁按同机同用户的共享资源划分，跨 worktree 与独立 checkout 生效；"
+                    "锁只协调验证参与者，不影响也不停止外部进程",
+        },
     }
 
 
@@ -345,6 +359,7 @@ class Group:
     scenarios: bool = False
     expands: tuple = ()
     auto_included: tuple = ()
+    resources: tuple = ()  # 组要求的同机共享资源；为空即纯逻辑组，不参与资源锁
 
     @property
     def granularity(self) -> str:
@@ -398,6 +413,31 @@ def expand_related_selectors(selectors: list) -> tuple:
     return effective, added
 
 
+def selector_modules(selectors: Optional[list]) -> set:
+    """选择器 -> 模块名集合（tests.test_x），用于判定 unit-related 的资源要求。
+
+    复用 _selector_module_prefix 的归一（./ 前缀、绕行相对路径、点分到类 / 方法
+    的写法），与契约模块附带的判定保持同一口径；类 / 方法级选择器归到所在模块。
+    """
+    modules = set()
+    for selector in selectors or []:
+        prefix = _selector_module_prefix(selector)
+        if not prefix or "/" in prefix:
+            continue   # 空选择器或指到仓库外：没有可归一的模块名
+        module = prefix.split(".")[0]
+        if module:
+            modules.add(TEST_START_DIR + "." + module)
+    return modules
+
+
+def unit_related_resources(selectors: Optional[list]) -> tuple:
+    """unit-related 按选择器涉及的敏感模块决定资源；纯逻辑选择器不参与资源锁。"""
+    needed = set()
+    for module in selector_modules(selectors):
+        needed.update(host_isolation.MODULE_RESOURCES.get(module, ()))
+    return host_isolation.normalize_resources(needed)
+
+
 def build_groups(selectors: Optional[list] = None) -> dict:
     names = list(selectors or [])
     auto_included: tuple = ()
@@ -411,20 +451,23 @@ def build_groups(selectors: Optional[list] = None) -> dict:
             purpose="仓库全部单元测试；逐个用例计时，类 / 模块级开销单独归属",
             equivalent="python3 -m unittest discover tests",
             argv=[sys.executable, str(VERIFY_PY), "_unit-runner", "discover", TEST_START_DIR],
-            counter="unittest"),
+            counter="unittest",
+            resources=host_isolation.normalize_resources(host_isolation.GROUP_RESOURCES["unit"])),
         "unit-related": Group(
             name="unit-related", title="相关单元",
             purpose="只执行显式指定的用例 / 模块，并固定附带全局词典一致性契约；"
                     "不给选择器即空集合，入口报错",
             equivalent="python3 -m unittest " + " ".join(shown),
             argv=[sys.executable, str(VERIFY_PY), "_unit-runner", "names", *names],
-            counter="unittest", selectors=True, auto_included=auto_included),
+            counter="unittest", selectors=True, auto_included=auto_included,
+            resources=unit_related_resources(names)),
         "browser": Group(
             name="browser", title="完整浏览器",
             purpose="浏览器端到端回归；未拆场景前按整组计时，记录里预留场景级字段",
             equivalent="uv run --no-project --with playwright python tests/e2e_browser.py",
             argv=["uv", "run", "--no-project", "--with", "playwright", "python", "tests/e2e_browser.py"],
-            counter="log", requires=("uv",), scenarios=True),
+            counter="log", requires=("uv",), scenarios=True,
+            resources=host_isolation.normalize_resources(host_isolation.GROUP_RESOURCES["browser"])),
         "serve-check": Group(
             name="serve-check", title="服务安全自检",
             purpose="服务安全约束自检：127.0.0.1 监听、Host 校验、写操作同源 Origin 与 JSON "
@@ -797,6 +840,7 @@ class RunContext:
         self.quiet = quiet
         self.registry = ChildRegistry()
         self.notes: list = []
+        self.cleanup_seconds = 0.0  # 中断回收登记子进程的耗时（清理时间与执行时间分开呈现）
 
     def save_record(self, record: dict) -> None:
         write_json_atomic(self.run_dir / "record.json", record)
@@ -810,6 +854,7 @@ class RunContext:
 
     def abort(self, signum: int) -> None:
         """回收本次登记的子进程：先原信号，宽限期后升级；未登记的进程一律不动。"""
+        cleanup_started = time.monotonic()
         for entry in self.registry.live():
             if entry["proc"].poll() is None:
                 signal_group(entry["proc"], signum)
@@ -832,9 +877,43 @@ class RunContext:
             self.save_children()
         except OSError as exc:
             self.note("子进程回收后，登记簿写入失败：%s" % exc)
+        self.cleanup_seconds = round(time.monotonic() - cleanup_started, 6)
 
 
 def execute_group(group: Group, ctx: RunContext) -> dict:
+    """执行一个组；资源敏感组先按隔离协议取锁，锁等待单独计时，超时不是通过。
+
+    锁等待超时的组没有启动子进程：结论 timeout、退出码 124、note 写明等待的是哪个
+    资源与当前持有者；等待过程绝不停止任何进程——占用者可能是别的检出的合法验证。
+    """
+    resources = list(group.resources)
+    if not resources:
+        result = _execute_group_body(group, ctx)
+        result["lock"] = {"resources": [], "wait_seconds": 0.0}
+        return result
+    handle = None
+    try:
+        handle = host_isolation.acquire(resources)
+    except host_isolation.LockTimeoutError as exc:
+        holder = host_isolation.read_holder_note(exc.resource) or {}
+        note = ("等待共享资源 %s 超过 %.1f} 秒（当前持有者 pid %s），本组没有执行；"
+                "锁等待超时不是通过" % (exc.resource, exc.waited_seconds,
+                                        holder.get("pid", "未知")))
+        ctx.note(note)
+        return {"name": group.name, "outcome": TIMEOUT, "exit_status": EXIT_TIMEOUT,
+                "signal": None, "timed_out": False, "note": note, "counts": None,
+                "cases": [], "seconds": {}, "timing": {},
+                "lock": {"resources": resources,
+                         "wait_seconds": round(exc.waited_seconds, 6), "timeout": True}}
+    try:
+        result = _execute_group_body(group, ctx)
+    finally:
+        host_isolation.release(handle)
+    result["lock"] = {"resources": resources, "wait_seconds": round(handle.waited_seconds, 6)}
+    return result
+
+
+def _execute_group_body(group: Group, ctx: RunContext) -> dict:
     started_wall = time.monotonic()
     missing = [name for name in group.requires if shutil.which(name) is None]
     if missing:
@@ -1032,12 +1111,19 @@ def cmd_plan(args) -> int:
             "requested": args.group or ["unit"],
             "selected": selected,
             "artifact_dir": ARTIFACT_DIRNAME,
+            "isolation": {
+                "resources": host_isolation.resource_declarations(),
+                "order": host_isolation.resource_order(),
+                "note": "资源锁按共享资源而非检出目录划分；锁只协调验证参与者，"
+                        "不停止任何未登记进程；锁等待单独计时，超时不是通过",
+            },
             "groups": [{"name": group.name, "title": group.title, "purpose": group.purpose,
                         "equivalent": group.equivalent, "command": display_argv(group.argv),
                         "counter": group.counter, "granularity": group.granularity,
                         "selectors": group.selectors, "requires": list(group.requires),
                         "scenarios": group.scenarios, "expands": list(group.expands),
-                        "auto_included": list(group.auto_included)}
+                        "auto_included": list(group.auto_included),
+                        "resources": list(group.resources)}
                        for group in groups.values()],
         }, ensure_ascii=False, indent=2))
         return EXIT_OK
@@ -1061,7 +1147,15 @@ def cmd_plan(args) -> int:
         if group.auto_included:
             print("    自动附带：%s（全局词典一致性契约，独立跑相关组也不丢全局保护）"
                   % "、".join(group.auto_included))
+        print("    共享资源：%s" % ("、".join(group.resources) if group.resources
+                                    else "无（纯逻辑组，不参与资源锁）"))
         print()
+    print("隔离：资源锁按同机同用户的共享资源划分（%s），跨 worktree 与独立 checkout 生效；"
+          % "、".join(host_isolation.resource_order()))
+    for name, entry in host_isolation.resource_declarations().items():
+        state = "互斥" if entry["mutually_exclusive"] else "独立"
+        print("      %-20s %s：%s" % (name, state, entry["why"]))
+    print("      锁只协调验证参与者，不影响也不停止外部进程；锁等待单独计时，超时不是通过。")
     print("记录写在 %s/runs/<run ID>/：record.json 是结构化记录，<组名>.log 是子进程原始输出，"
           "<组名>.cases.json 是用例级计时明细。" % ARTIFACT_DIRNAME)
     print("字段契约：docs/verify/record-contract.md；读取已有结果用 python3 verify.py report --latest")
@@ -1093,6 +1187,8 @@ def build_record(args, groups: dict, selected: list) -> dict:
                     "equivalent": groups[name].equivalent, "counter": groups[name].counter,
                     "granularity": groups[name].granularity,
                     "scenarios": [] if groups[name].scenarios else None,
+                    "resources": list(groups[name].resources),
+                    "lock": {"resources": list(groups[name].resources), "wait_seconds": None},
                     "outcome": None, "exit_status": None} for name in selected],
         "commit": commit_summary(snapshot),
         "input": {
@@ -1112,10 +1208,12 @@ def build_record(args, groups: dict, selected: list) -> dict:
         "environment": environment_summary(),
         "timing": {"queued_at": started_at, "started_at": None, "ended_at": None,
                    "queue_seconds": None, "wall_seconds": None, "wrapper_seconds": None,
+                   "lock_wait_seconds": None, "cleanup_seconds": None,
                    "case_seconds_total": None, "fixture_seconds_total": None,
                    "unattributed_seconds": None,
                    "attribution_note": "case_seconds_total 是各用例耗时之和，不等于 wall_seconds；"
-                                       "类 / 模块级开销计入 fixture_seconds_total，不摊到任何单个用例"},
+                                       "类 / 模块级开销计入 fixture_seconds_total，不摊到任何单个用例；"
+                                       "锁等待单列为 lock_wait_seconds，不计入口开销，也不摊进执行耗时"},
         "result": {"outcome": None, "exit_status": None, "counts": {}, "summary": None,
                    "usable_as_evidence": False, "notes": []},
         "evidence": {"integrity": "ok", "record_path": "record.json", "logs": [], "cases": [],
@@ -1218,10 +1316,16 @@ def cmd_run(args) -> int:
         record["timing"]["wall_seconds"] = round(time.monotonic() - started, 6)
         child_total = round(sum((item.get("timing") or {}).get("child_seconds") or 0
                                 for item in results.values()), 6)
-        record["timing"]["wrapper_seconds"] = round(record["timing"]["wall_seconds"] - child_total, 6)
+        lock_wait_total = round(sum((item.get("lock") or {}).get("wait_seconds") or 0
+                                    for item in results.values()), 6)
+        # 锁等待不是入口开销，也不是执行耗时：单独一列，不摊进 wrapper_seconds
+        record["timing"]["wrapper_seconds"] = round(
+            record["timing"]["wall_seconds"] - child_total - lock_wait_total, 6)
         for key in ("case_seconds_total", "fixture_seconds_total", "unattributed_seconds"):
             record["timing"][key] = round(sum((item.get("timing") or {}).get(key) or 0
                                               for item in results.values()), 6)
+        record["timing"]["lock_wait_seconds"] = lock_wait_total
+        record["timing"]["cleanup_seconds"] = round(getattr(ctx, "cleanup_seconds", 0.0), 6)
         record["timing"]["ended_at"] = now_iso()
         for group in record["groups"]:
             if group.get("outcome") is not None:
@@ -1231,7 +1335,8 @@ def cmd_run(args) -> int:
                 group.update(outcome=item["outcome"], exit_status=item["exit_status"],
                              signal=item["signal"], timed_out=item["timed_out"], note=item["note"],
                              counts=item["counts"], cases=trim_cases(item["cases"]),
-                             seconds=item["seconds"], timing=item["timing"])
+                             seconds=item["seconds"], timing=item["timing"],
+                             lock=item.get("lock") or group.get("lock"))
                 continue
             if interrupted_signum is not None:
                 group.update(outcome=INTERRUPTED,
@@ -1501,9 +1606,15 @@ def render_report(record: dict, problems: Optional[list] = None,
         (env.get("os") or {}).get("system"), (env.get("os") or {}).get("release"),
         (env.get("os") or {}).get("machine"), (env.get("python") or {}).get("implementation"),
         (env.get("python") or {}).get("version"), "是" if (env.get("ci") or {}).get("is_ci") else "否"))
+    isolation = env.get("isolation") or {}
+    if isolation:
+        lines.append("隔离：%s 锁，位置来源 %s，跨 worktree 生效；锁只协调参与者，不停止外部进程" % (
+            isolation.get("mechanism"), isolation.get("lock_dir_source")))
     timing = record.get("timing") or {}
-    lines.append("耗时：排队 %s 秒，墙钟 %s 秒，入口自身 %s 秒" % (
-        timing.get("queue_seconds"), timing.get("wall_seconds"), timing.get("wrapper_seconds")))
+    lines.append("耗时：排队 %s 秒，锁等待 %s 秒，墙钟 %s 秒，入口自身 %s 秒，清理 %s 秒" % (
+        timing.get("queue_seconds"), timing.get("lock_wait_seconds"),
+        timing.get("wall_seconds"), timing.get("wrapper_seconds"),
+        timing.get("cleanup_seconds")))
     lines.append("     用例耗时合计 %s 秒，类 / 模块级开销 %s 秒，未归属 %s 秒（合计不是等待时间）" % (
         timing.get("case_seconds_total"), timing.get("fixture_seconds_total"),
         timing.get("unattributed_seconds")))
@@ -1525,6 +1636,11 @@ def render_report(record: dict, problems: Optional[list] = None,
         lines.append("  %-11s %-11s %s · %s 秒 · 粒度 %s" % (
             group.get("name"), group.get("outcome"), detail,
             (group.get("timing") or {}).get("child_seconds"), group.get("granularity")))
+        lock = group.get("lock") or {}
+        if lock.get("resources"):
+            lines.append("     锁：%s，等待 %s 秒%s" % (
+                "、".join(lock["resources"]), lock.get("wait_seconds"),
+                "（等待超时，本组没有执行）" if lock.get("timeout") else ""))
         if group.get("note"):
             lines.append("     注意：%s" % group["note"])
     slow = sorted((case for group in record.get("groups") or [] for case in (group.get("cases") or [])),

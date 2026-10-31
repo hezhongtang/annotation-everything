@@ -22,6 +22,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import host_isolation  # noqa: E402
+
+# 直接跑 unittest 的旧入口与 verify.py 共用同一隔离协议：本模块触及真实进程视图与端口
+host_isolation.require_for_module(__name__)
+
 import ae  # noqa: E402
 
 PASS, WARN, FAIL = ae.LEVEL_PASS, ae.LEVEL_WARN, ae.LEVEL_FAIL

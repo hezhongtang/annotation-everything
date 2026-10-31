@@ -338,6 +338,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 └── evals/                         技能评测用例（供 skill-creator 使用）
 ae.py                             统一管理命令：install 安装技能副本，doctor 体检，repair 修复，uninstall 卸载
 verify.py                         统一验证入口：plan 解释范围，run 执行并记录，report 只读记录
+host_isolation.py                 同机资源隔离协议：验证参与方按共享资源互斥的锁与声明
 fixtures/sample/                   合成样例（虚构数据）
 tests/                             单元测试和浏览器端到端测试
 tools/
@@ -365,7 +366,7 @@ python3 ae.py install                                               # 同步到 
 uv run --no-project --with playwright python tests/e2e_browser.py --delivery-only  # 临时安装副本的三种语言组合验收
 ```
 
-`verify.py` 是统一验证入口：`plan` 解释范围，`run` 执行并把结构化记录和原始日志写进 `.verify/`（已被忽略），`report` 只读记录。输入指纹包含有效输入文件的完整内容；文本与 JSON 报告保留原测试结果，并显示当前校验后的证据可用性。记录还含提交与基线、环境和逐用例耗时，字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，接入说明见 [docs/verify/onboarding.md](docs/verify/onboarding.md)。它只包裹现有执行行为，不选测、不复用旧结果；原来的直接命令继续有效，完整执行的成功 / 失败退出码语义一致。空集合与全跳过不算通过，新入口返回 1。
+`verify.py` 是统一验证入口：`plan` 解释范围，`run` 执行并把结构化记录和原始日志写进 `.verify/`（已被忽略），`report` 只读记录。输入指纹包含有效输入文件的完整内容；文本与 JSON 报告保留原测试结果，并显示当前校验后的证据可用性。记录还含提交与基线、环境和逐用例耗时，字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，接入说明见 [docs/verify/onboarding.md](docs/verify/onboarding.md)。它只包裹现有执行行为，不选测、不复用旧结果；原来的直接命令继续有效，完整执行的成功 / 失败退出码语义一致。空集合与全跳过不算通过，新入口返回 1。同机多个工作区并行验证时，资源敏感的组（完整单元、完整浏览器、敏感模块直跑）按共享资源自动互斥排队：跨 worktree 与独立 checkout 生效，锁等待单独计时、超时不算通过，纯逻辑组不受影响；详见[同机资源隔离协议](docs/verify/isolation.md)。
 
 - 测试会把审阅台账放到临时目录（环境变量 `AE_HOME`）。手动试用或运行技能评测时，也建议先执行 `export AE_HOME=$(mktemp -d)`，避免临时审阅登记进本机真实的台账，或占用真实审阅的专属端口。
 - 验收产物可用 `AE_DELIVERY_ARTIFACTS` 指向 `skill/annotation-everything-workspace/` 下的目录，保留合成源材料、命令输出、批次状态、离线导出和截图。具体命令与评测边界见[交付验收记录](docs/locale-delivery.zh-CN.md)。

@@ -129,6 +129,7 @@ class SynthRepo:
         self.write("tests/e2e_browser.py", BROWSER_STUB, executable=True)
         self.write("skill/annotation-everything/scripts/serve.py", SERVE_STUB, executable=True)
         shutil.copy2(VERIFY, self.path / "verify.py")
+        shutil.copy2(ROOT / "host_isolation.py", self.path / "host_isolation.py")
         self.git("init", "-q")
         self.git("add", "-A")
         self.git("-c", "user.name=synth", "-c", "user.email=synth@example.invalid",
@@ -174,6 +175,11 @@ class SynthRepo:
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env.pop("AE_VERIFY_DIR", None)
         env.pop("AE_LOCALE", None)
+        # 合成仓库的隔离锁环境：宿主进程可能正持有真实资源锁（豁免变量会让合成入口
+        # 全部借入、锁语义测不到），真实锁目录也可能被同机其他验证占用——测试行为
+        # 不能依赖它们。IsolationLockTests 用 extra_env 指定自己的锁目录。
+        env.pop("AE_HELD_LOCKS", None)
+        env.setdefault("AE_LOCK_DIR", str(self.test_lock_dir))
         if extra_env:
             env.update(extra_env)
         return subprocess.run([sys.executable, str((self.path / "verify.py").resolve()), *args],
@@ -191,7 +197,12 @@ class VerifyEntryTestCase(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="verify-entry-test-")
         self.addCleanup(self.temp.cleanup)
+        # 本用例专属的隔离锁目录：合成入口的锁行为与宿主进程、同机其他验证互不相干
+        lock_temp = tempfile.TemporaryDirectory(prefix="verify-entry-lock-")
+        self.addCleanup(lock_temp.cleanup)
+        self.test_lock_dir = Path(lock_temp.name)
         self.repo = SynthRepo(Path(self.temp.name))
+        self.repo.test_lock_dir = self.test_lock_dir
 
     def unit(self, body: str) -> None:
         self.repo.write("tests/test_synth.py", body)
@@ -557,6 +568,8 @@ class ProcessLifecycleTests(VerifyEntryTestCase):
         env = dict(os.environ)
         env["PATH"] = "%s%s%s" % (self.repo.path / "bin", os.pathsep, env["PATH"])
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env.pop("AE_HELD_LOCKS", None)
+        env["AE_LOCK_DIR"] = str(self.test_lock_dir)
         wrapper = subprocess.Popen([sys.executable, "verify.py", "run", "--group", "unit"],
                                    cwd=str(self.repo.path), env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -612,6 +625,152 @@ class ProcessLifecycleTests(VerifyEntryTestCase):
 FINALIZE_CHURN_FILES = 1500
 
 
+# 外部锁占用者：扮演另一检出里直跑 unittest / 浏览器入口的参与者（同样遵守协议），
+# 或一个只持锁的合成占用者。绝不被入口停止。
+LOCK_HOLDER = '''
+import sys, time
+sys.path.insert(0, {root!r})
+import host_isolation as hi
+handle = hi.acquire([{resource!r}], timeout=30)
+print("held", flush=True)
+time.sleep({hold!r})
+hi.release(handle)
+'''
+
+
+class IsolationLockTests(VerifyEntryTestCase):
+    """issue #52：资源敏感组经 verify.py 与其他参与者共用同一隔离协议。
+
+    锁等待单独计时、超时是明确非成功、纯逻辑组不被阻塞、并发敏感组串行且无假失败。
+    """
+
+    def setUp(self):
+        super().setUp()
+        lock_dir = tempfile.TemporaryDirectory(prefix="verify-lock-test-")
+        self.addCleanup(lock_dir.cleanup)
+        self.lock_root = Path(lock_dir.name)
+
+    def lock_env(self, **extra) -> dict:
+        env = {"AE_LOCK_DIR": str(self.lock_root)}
+        env.update(extra)
+        return env
+
+    def start_holder(self, hold: float, resource: str = "host-state") -> subprocess.Popen:
+        """合成占用者：持锁 sleep 后自行退出。放在仓库外的临时目录，不污染输入指纹。"""
+        holder_dir = Path(tempfile.mkdtemp(prefix="verify-holder-"))
+        self.addCleanup(shutil.rmtree, holder_dir, ignore_errors=True)
+        script = holder_dir / "holder.py"
+        script.write_text(LOCK_HOLDER.format(root=str(ROOT), resource=resource, hold=hold),
+                          encoding="utf-8")
+        proc = subprocess.Popen([sys.executable, str(script)], env=self.lock_env(),
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(_reap, proc)
+        self.assertEqual(proc.stdout.readline().strip(), "held", "占用者没拿到锁")
+        return proc
+
+    def test_plan_declares_isolation_resources_per_group(self):
+        p = self.repo.run_verify("plan", "--json")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        plan = json.loads(p.stdout)
+        isolation = plan["isolation"]
+        self.assertIn("host-state", isolation["resources"])
+        self.assertEqual(isolation["resources"]["host-state"]["scope"], "machine-user")
+        resources = {group["name"]: group["resources"] for group in plan["groups"]}
+        self.assertEqual(resources["unit"], ["host-state"])
+        self.assertEqual(resources["browser"], ["host-state"])
+        self.assertEqual(resources["serve-check"], [], "纯静态自检不占用宿主机资源")
+        text = self.repo.run_verify("plan").stdout
+        self.assertIn("隔离", text, "文本计划要说明互斥与独立资源")
+
+    def test_sensitive_group_waits_for_external_holder_and_records_wait(self):
+        holder = self.start_holder(hold=0.8)
+        p = self.repo.run_verify("run", "--group", "browser",
+                                 extra_env=self.lock_env())
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["outcome"], "passed")
+        self.assertEqual(group["lock"]["resources"], ["host-state"])
+        self.assertGreaterEqual(group["lock"]["wait_seconds"], 0.4, "锁等待被单独记录")
+        self.assertGreaterEqual(record["timing"]["lock_wait_seconds"], 0.4)
+        # 锁等待不摊进入口自身开销，也不摊进组执行耗时
+        self.assertLess(record["timing"]["wrapper_seconds"],
+                        record["timing"]["wall_seconds"] - 0.4,
+                        "锁等待不应计入 wrapper_seconds")
+        self.assertLess(group["timing"]["child_seconds"], 0.4 + 0.2,
+                        "锁等待不应计入组执行耗时")
+        self.assertTrue(record["environment"]["isolation"]["mechanism"])
+        self.assertIn("锁等待", p.stdout, "报告文本要呈现锁等待")
+        self.assertEqual(holder.wait(timeout=15), 0)
+
+    def test_lock_wait_timeout_is_failure_and_external_holder_survives(self):
+        holder = self.start_holder(hold=2.0)
+        p = self.repo.run_verify("run", "--group", "browser",
+                                 extra_env=self.lock_env(AE_LOCK_WAIT_SECONDS="0.3"))
+        self.assertEqual(p.returncode, 124, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["outcome"], "timeout", "锁等待超时不是通过")
+        self.assertIn("锁", group["note"])
+        self.assertGreaterEqual(record["timing"]["lock_wait_seconds"], 0.25)
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        self.assertEqual(record["result"]["counts"]["groups"], 1)
+        self.assertIsNone(holder.poll(), "等待超时绝不停止外部占用者")
+        self.assertEqual(holder.wait(timeout=15), 0, "占用者按自己的节奏退出")
+
+    def test_pure_logic_group_not_blocked_by_unrelated_lock(self):
+        holder = self.start_holder(hold=1.5)
+        started = time.monotonic()
+        p = self.repo.run_verify("run", "unit-related", "tests/test_synth.py",
+                                 extra_env=self.lock_env())
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertLess(time.monotonic() - started, 1.4, "纯逻辑组被无关资源锁阻塞")
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["lock"]["resources"], [])
+        self.assertEqual(record["timing"]["lock_wait_seconds"], 0.0)
+        self.assertIsNone(holder.poll())
+
+    def test_concurrent_sensitive_groups_serialize_without_false_failure(self):
+        env = dict(os.environ)
+        env["PATH"] = "%s%s%s" % (self.repo.path / "bin", os.pathsep, env["PATH"])
+        env["GIT_CONFIG_GLOBAL"] = os.devnull
+        env["GIT_CONFIG_SYSTEM"] = os.devnull
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env.pop("AE_HELD_LOCKS", None)
+        env.update(self.lock_env(SYNTH_BROWSER_SECONDS="1.0"))
+        command = [sys.executable, "verify.py", "run", "--group", "browser", "--quiet"]
+        first = subprocess.Popen(command, cwd=str(self.repo.path), env=env,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(_reap, first)
+        second = subprocess.Popen(command, cwd=str(self.repo.path), env=env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(_reap, second)
+        self.assertEqual(first.wait(timeout=60), 0, "并发敏感组出现假失败（第一个）")
+        self.assertEqual(second.wait(timeout=60), 0, "并发敏感组出现假失败（第二个）")
+        records = [read_record(self.repo.artifact_dir, run_id) for run_id in self.repo.run_ids()]
+        waits = [group["lock"]["wait_seconds"] for record in records for group in record["groups"]]
+        self.assertGreaterEqual(max(waits), 0.3, "后到者应当等待先到者释放 host-state")
+
+    def test_unit_group_holds_lock_while_its_children_run(self):
+        """unit 组持锁期间子流程正常运行：组级持锁与子进程执行不互相阻塞。"""
+        p = self.repo.run_verify("run", "--group", "unit", extra_env=self.lock_env())
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["lock"]["resources"], ["host-state"])
+        self.assertEqual(group["outcome"], "passed")
+
+
+def _reap(proc: subprocess.Popen) -> None:
+    if proc.poll() is None:
+        proc.kill()
+    try:
+        proc.communicate(timeout=10)
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        pass
+
+
 class SignalDuringFinalizeTests(VerifyEntryTestCase):
     """R1/R2：信号落在收尾段或组与组之间时，入口仍落最终记录、按 128+信号退出，
     已完整执行的组保留真实结果，只有没执行的组标 interrupted。"""
@@ -621,6 +780,8 @@ class SignalDuringFinalizeTests(VerifyEntryTestCase):
         env["PATH"] = "%s%s%s" % (self.repo.path / "bin", os.pathsep, env["PATH"])
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env.pop("AE_VERIFY_DIR", None)
+        env.pop("AE_HELD_LOCKS", None)
+        env.setdefault("AE_LOCK_DIR", str(self.test_lock_dir))
         if extra_env:
             env.update(extra_env)
         return subprocess.Popen([sys.executable, "verify.py", *args], cwd=str(self.repo.path),

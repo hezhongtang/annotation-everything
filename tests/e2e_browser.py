@@ -44,6 +44,14 @@ os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-e2e-home-")   # 测试不碰
 os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-e2e-user-")       # 技能扫描只使用合成目录
 os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
 os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")
+sys.path.insert(0, str(ROOT))
+
+import host_isolation
+
+# 直跑本脚本（uv run …）与 verify.py 的浏览器组共用同一隔离协议：启动任何真实服务前先取宿主机资源锁；
+# 被 verify.py 拉起时父入口已持锁，环境变量会让这次获取按借入处理，不会自锁
+host_isolation.require_for_module("tests.e2e_browser")
+
 install()   # 兜底清理：正常退出、未捕获异常、Ctrl-C 走 atexit，SIGTERM / SIGHUP 另接
 CLEANUP.add_dir(Path(os.environ["AE_HOME"]))
 CLEANUP.add_dir(Path(os.environ["HOME"]))

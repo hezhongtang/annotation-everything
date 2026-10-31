@@ -25,6 +25,11 @@ SETUP_DEV = ROOT / "tools" / "setup-dev.sh"
 
 sys.path.insert(0, str(ROOT))
 
+import host_isolation  # noqa: E402
+
+# 直接跑 unittest 的旧入口与 verify.py 共用同一隔离协议：本模块启动真实 serve.py、跑真实 doctor
+host_isolation.require_for_module(__name__)
+
 import ae  # noqa: E402
 from test_ae_checks_runtime import ServeProcess, make_review_dir, write_ledger  # noqa: E402
 
