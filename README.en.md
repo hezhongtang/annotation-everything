@@ -7,12 +7,12 @@
 </p>
 
 <p align="center">
-  annotation-everything is a review and annotation tool that runs on your machine, packaged as a Claude Code skill.<br>It puts a page-by-page HTML report and its speaker notes side by side in one page. Reviewers annotate each page in the browser, submit with one click, and an agent revises the report and the speaker notes accordingly.
+  annotation-everything is a review and annotation tool that runs on your machine, packaged as an Agent Skills skill. Any agent that adopts the open Agent Skills standard can use it. It installs into Claude Code's skill directory by default, and <code>--target</code> / <code>--link</code> put it into other skill directories.<br>It puts a page-by-page HTML report and its speaker notes side by side in one page. Reviewers annotate each page in the browser, submit with one click, and an agent revises the report and the speaker notes accordingly.
 </p>
 
 <p align="center">
   <img alt="version 0.9.0" src="https://img.shields.io/badge/version-0.9.0-1f3a5f?style=flat-square">
-  <img alt="Claude Code skill" src="https://img.shields.io/badge/Claude_Code-skill-d97757?style=flat-square">
+  <img alt="Agent Skills skill" src="https://img.shields.io/badge/Agent_Skills-skill-d97757?style=flat-square">
   <img alt="Python standard library only" src="https://img.shields.io/badge/Python-standard_library_only-3776ab?style=flat-square&logo=python&logoColor=white">
   <img alt="listens on 127.0.0.1 only" src="https://img.shields.io/badge/listens_on-127.0.0.1-2fa36b?style=flat-square">
   <img alt="usage data not sent" src="https://img.shields.io/badge/usage_data-not_sent-555?style=flat-square">
@@ -77,7 +77,7 @@ annotation-everything moves this whole process into a single page that runs on y
     </td>
     <td valign="top">
       <h4>🧩 Skills and standing skills</h4>
-      Finds the Claude Code and Codex skills installed on your machine, lets you search them by name and description, and suggests skills based on what is being reviewed. Once a skill is set as a standing skill, the agent calls it first for every annotation within its scope.
+      Finds the skills in your machine's common skill directories (<code>~/.claude</code>, <code>~/.codex</code>, <code>~/.agents</code>, <code>~/.zcode</code>, and their plugin caches), lets you search them by name and description, and suggests skills based on what is being reviewed. Once a skill is set as a standing skill, the agent calls it first for every annotation within its scope.
     </td>
   </tr>
   <tr>
@@ -189,7 +189,7 @@ flowchart LR
 
 ## Installation and maintenance
 
-The management command is `ae.py` at the repository root (Python standard library only), with four subcommands: `install`, `doctor`, `repair`, `uninstall`.
+The management command is `ae.py` at the repository root (Python standard library only), with four subcommands: `install`, `doctor`, `repair`, `uninstall`. The tool is an Agent Skills skill: any agent that adopts the open Agent Skills standard can load `SKILL.md` and follow it. It installs into Claude Code's skill directory by default. `--target` and `--link` cover every other agent's skill directory (see below).
 
 ### For people
 
@@ -215,7 +215,7 @@ python3 ae.py doctor --locale en                 # optional: interface language 
 - **Install into another skills directory**: by default `install` copies the skill into `~/.claude/skills/` (`CLAUDE_SKILLS_DIR` still works as an override); `--target <dir>` installs to `<dir>/annotation-everything` instead. `doctor`, `repair` and `uninstall` accept the same `--target` to check, fix and remove that copy, and failing items' fix commands repeat the same `--target`. Besides the built-in names `codex`, `agents` and `zcode`, `--link` accepts `name=path` (e.g. `cursor=~/.cursor/skills`) to symlink the copy into any skills directory and record it in the install record; custom links show up in the checks too (dangling ones fail with a fix command), `repair` rebuilds them and `uninstall` removes them. The install record lives inside the copy, so once the copy is gone custom links can no longer be discovered automatically (links in the built-in directories still have the scan fallback).
 - Before stopping a server, the command verifies that Python is executing the script from this repository or the current skill copy, then checks the process identity again before sending a signal; it refuses to stop an unverified process. `--purge` removes only known ledger files and refuses to proceed if the ledger is corrupt or its directory contains other files or unregistered review directories.
 
-Once installed, tell Claude Code "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow.
+Once installed, tell your agent "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow. How the agent is woken up and how it invokes a skill named on an annotation differ by agent. The section 各 Agent 的对应机制 (per-agent mechanics) in [SKILL.md](skill/annotation-everything/SKILL.md) maps the four cases.
 
 ### For agents
 
