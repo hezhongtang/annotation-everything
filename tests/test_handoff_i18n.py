@@ -234,8 +234,8 @@ class CatalogTests(unittest.TestCase):
         branched = sorted(k for k in HANDOFF_KEYS if HANDOFF_KEYS[k] and f"{k}.one" in zh)
         self.assertEqual(branched, [], "中文不该有英文式复数分支")
 
-    def test_catalogs_stay_self_consistent(self):
-        self.assertEqual(i18n.check_catalogs(), [])
+    # 全仓库词典一致性契约集中在 tests/test_i18n_catalog_contract.py（issue #51）；
+    # 本类只保留 handoff 专有的 key、复数与接线断言。
 
     def test_every_key_is_wired_into_the_page_or_the_cli(self):
         page = source() + (ROOT / "skill" / "annotation-everything" / "scripts" / "notes.py").read_text(encoding="utf-8")

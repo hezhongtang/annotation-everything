@@ -4,7 +4,7 @@
 
 ## 它解决什么问题
 
-以前完整单元、浏览器和服务安全自检都靠人拼命令，结果只有终端里滚过的文本。失败、跳过、超时、信号中断和「输入在跑的过程中被改过」在文本里分不开，也没法跨阶段比较。`verify.py` 把这三件事收到一个入口：`plan` 解释范围，`run` 执行并留下结构化记录，`report` 只读记录。它只包裹现有执行行为，不选测、不复用旧结果、不并行化、不删慢项。
+以前完整单元、浏览器和服务安全自检都靠人拼命令，结果只有终端里滚过的文本。失败、跳过、超时、信号中断和「输入在跑的过程中被改过」在文本里分不开，也没法跨阶段比较。`verify.py` 把这三件事收到一个入口：`plan` 解释范围，`run` 执行并留下结构化记录，`report` 只读记录。它只包裹现有执行行为，不选测、不复用旧结果、不并行化、不删慢项；唯一的固定组合是 `unit-related` 自动附带全局词典一致性契约（见下）。
 
 入口放在仓库根目录，和 `ae.py` 并列，而不是并进 `ae.py`：`ae.py` 是发给用户的产品管理命令，输出走中英双语、围绕技能副本和本机台账；验证入口面向仓库检出，技能副本还没装也能验证，输出只要中文。两者生命周期不同，理由见 [docs/adr/0002-unified-verification-entry.md](../adr/0002-unified-verification-entry.md)。
 
@@ -23,10 +23,12 @@ python3 verify.py report --latest           # 读最近一次记录，不启动�
 | 组 | 内容 | 等价命令 | 计数 | 计时粒度 |
 | --- | --- | --- | --- | --- |
 | `unit` | 完整单元 | `python3 -m unittest discover tests` | 按用例 | 用例 |
-| `unit-related` | 相关单元，显式指定 | `python3 -m unittest <选择器>` | 按用例 | 用例 |
+| `unit-related` | 相关单元，显式指定，并自动附带全局词典契约 | `python3 -m unittest <选择器> tests/test_i18n_catalog_contract.py` | 按用例 | 用例 |
 | `browser` | 完整浏览器 | `uv run --no-project --with playwright python tests/e2e_browser.py` | 按日志摘要 | 整组 |
 | `serve-check` | 服务安全自检 | `python3 skill/annotation-everything/scripts/serve.py check` | 按日志摘要 | 整组 |
 | `all` | 完整验收 | `unit` → `serve-check` → `browser` 依次执行 | 分别计数 | 分别计时 |
+
+`unit-related` 自动附带的契约：无参数的全词典一致性检查只执行一次，权威位置在 `tests/test_i18n_catalog_contract.py`（issue #51）。完整单元组经 discover 执行它；相关局部组由入口自动带上，独立运行相关模块也不丢全局保护。调用方已显式指定契约模块（含类 / 方法级选择器）时不重复附带；契约模块被删时局部组加载失败报 `error`，不会静默失去保护。各功能模块自己专有的 key、占位符、复数与接线断言仍在各自模块里。
 
 `--group` 可以重复。组名也可以直接写在 `run` 后面：`python3 verify.py run unit`、`python3 verify.py run unit-related tests/test_core.py`。不写 `--group` 时，有选择器按 `unit-related`，否则按 `unit`。
 
@@ -114,6 +116,7 @@ python3 verify.py report --out-dir <解压后的构件目录> --latest
 ## 给 B–H 的接入点
 
 - 记录契约已版本化，后续只在 `ae-verify-run/1` 上追加字段，升版本才改结构。字段语义和必填 / 可空规则见 [record-contract.md](record-contract.md)。
+- B（清理测试与词典契约提速，已交付）：清理测试的短等待经 `tests/e2e_servers.py` 的受控参数注入（`TestCleanup(terminate_timeout=...)`、`start_server(ready_timeout=...)`），缺省仍是 5 秒 / 8 秒的产品语义；权威词典契约模块是 `tests/test_i18n_catalog_contract.py`，入口常量 `RELATED_CONTRACT_SELECTORS`（verify.py）声明局部组的固定附带，F 的组映射直接引用它。
 - C（同机隔离与锁）：`children.json` 已经是所有权登记簿，只登记本次入口拉起的进程；锁字段加在 `groups[]` 上，不要改登记语义。
 - D（浏览器场景）：把 `groups[].scenarios` 从空数组填成场景记录，`granularity` 从 `group` 细化到 `scenario`；完整模式的行为矩阵不变。
 - F（阶段选测）：`input.fingerprint`、`input.changed_since_baseline` 和 `context.phase` 已经够了；选择理由和策略版本加在 `context` 与 `groups[]`。
@@ -136,4 +139,4 @@ python3 verify.py report --out-dir <解压后的构件目录> --latest
 - 入口不阻止两次验证并发跑。实测过一次：完整验收跑到浏览器组时，另一条命令同时在跑完整单元，浏览器组的 `serve.py` 让 `ae.py` 的进程盘点类测试失败。同机互斥归 C 项，本项只把干扰暴露出来。
 - 观测到两例偶发失败，都与入口无关，复跑即过，建议各自开 issue：
   - `tests/test_pptx_fonts.py` 的 `test_pdf_tool_timeout_is_reported` 把 `TOOL_TIMEOUT` 压到 0.5 秒，整包高压下 `fc-list` 可能被判超时。
-  - `tests/test_e2e_servers.py` 的 `test_stop_all_escalates_to_sigkill_when_a_service_ignores_sigterm` 用 `time.time()` 量耗时，却和 `communicate` 的单调时钟 deadline 比较；系统时钟回跳几十分之一毫秒就断言不成立（实测 4.9990859 < 5.0）。改成 `time.monotonic()` 即可。
+  - `tests/test_e2e_servers.py` 的升级终止测试曾用 `time.time()` 量耗时，和 `communicate` 的单调时钟 deadline 比较；issue #51 改造时已换成 `time.monotonic()`，并把该测试改为注入短超时。

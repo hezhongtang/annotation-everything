@@ -326,6 +326,12 @@ def environment_summary() -> dict:
 
 # ── 验证组 ────────────────────────────────────────────────────────────────
 
+# unit-related 固定附带的全局契约（issue #51）：无参数全词典一致性检查集中在
+# tests/test_i18n_catalog_contract.py，局部组自动带上它，去重后独立跑相关组
+# 也不丢全局保护。模块缺失时局部组加载失败报 error，不会静默失去保护。
+RELATED_CONTRACT_SELECTORS = ("tests/test_i18n_catalog_contract.py",)
+
+
 @dataclasses.dataclass
 class Group:
     name: str
@@ -338,14 +344,66 @@ class Group:
     selectors: bool = False
     scenarios: bool = False
     expands: tuple = ()
+    auto_included: tuple = ()
 
     @property
     def granularity(self) -> str:
         return "case" if self.counter == "unittest" else "group"
 
 
+def _selector_module_prefix(selector: str) -> str:
+    """把路径或点分选择器归一成模块名前缀（不带 tests.），用于判断是否已含某模块。
+
+    tests/test_x.py、tests.test_x、./tests/test_x.py、绕行相对路径（../51/tests/…）、
+    绝对路径与指到类 / 方法的点分写法都归一到同一个前缀，避免同一模块因写法不同
+    被附带两次。
+    """
+    text = str(selector).replace("\\", "/")
+    if text.endswith(".py"):
+        text = text[:-len(".py")]
+    candidate = Path(text)
+    if candidate.is_absolute() or ".." in text.split("/"):
+        # 绝对路径与含 .. 的绕行相对路径先落成仓库内相对路径：段处理消不掉 .. 段，
+        # 不归一的话 ../51/tests/x 与 tests/x 会被当成两个模块
+        try:
+            text = "/".join(candidate.resolve()
+                            .relative_to((REPO / TEST_START_DIR).resolve()).parts)
+        except (OSError, ValueError):
+            if candidate.is_absolute():
+                return text  # 指到仓库外：没有可归一的模块名，保持去 .py 后的原文
+    parts = [part for part in text.split("/") if part and part != "."]
+    if parts and parts[0] == TEST_START_DIR:
+        parts = parts[1:]
+    joined = ".".join(parts)
+    if joined.startswith(TEST_START_DIR + "."):
+        joined = joined[len(TEST_START_DIR) + 1:]
+    return joined
+
+
+def expand_related_selectors(selectors: list) -> tuple:
+    """unit-related 的生效选择器：显式指定的模块，加上固定附带的契约模块。
+
+    返回 (生效选择器, 自动补上的选择器)。已显式指到契约模块（含类 / 方法级）
+    时不重复附带；契约模块本体缺失不在这里兜底——局部组会加载失败报 error。
+    """
+    effective, added = list(selectors), []
+    keys = {item: _selector_module_prefix(item) for item in effective}
+    for contract in RELATED_CONTRACT_SELECTORS:
+        key = _selector_module_prefix(contract)
+        if any(value == key or value.startswith(key + ".") for value in keys.values()):
+            continue
+        effective.append(contract)
+        keys[contract] = key
+        added.append(contract)
+    return effective, added
+
+
 def build_groups(selectors: Optional[list] = None) -> dict:
     names = list(selectors or [])
+    auto_included: tuple = ()
+    if names:
+        names, appended = expand_related_selectors(names)
+        auto_included = tuple(appended)
     shown = display_argv(names) or ["<选择器>"]
     groups = {
         "unit": Group(
@@ -356,10 +414,11 @@ def build_groups(selectors: Optional[list] = None) -> dict:
             counter="unittest"),
         "unit-related": Group(
             name="unit-related", title="相关单元",
-            purpose="只执行显式指定的用例 / 模块；不给选择器即空集合，入口报错",
+            purpose="只执行显式指定的用例 / 模块，并固定附带全局词典一致性契约；"
+                    "不给选择器即空集合，入口报错",
             equivalent="python3 -m unittest " + " ".join(shown),
             argv=[sys.executable, str(VERIFY_PY), "_unit-runner", "names", *names],
-            counter="unittest", selectors=True),
+            counter="unittest", selectors=True, auto_included=auto_included),
         "browser": Group(
             name="browser", title="完整浏览器",
             purpose="浏览器端到端回归；未拆场景前按整组计时，记录里预留场景级字段",
@@ -959,6 +1018,10 @@ def artifact_root(out_dir: Optional[str]) -> Path:
 
 
 def cmd_plan(args) -> int:
+    # 与 run 一致：「plan unit-related tests/test_x.py」这类写法，第一个位置参数是
+    # 组名时当组名用，不把组名混进选择器与等价 / 实际命令
+    if args.group is None and args.selectors and args.selectors[0] in build_groups():
+        args.group = [args.selectors.pop(0)]
     groups = build_groups(args.selectors)
     selected = expand_groups(args.group or ["unit"], groups)
     if args.as_json:
@@ -973,7 +1036,8 @@ def cmd_plan(args) -> int:
                         "equivalent": group.equivalent, "command": display_argv(group.argv),
                         "counter": group.counter, "granularity": group.granularity,
                         "selectors": group.selectors, "requires": list(group.requires),
-                        "scenarios": group.scenarios, "expands": list(group.expands)}
+                        "scenarios": group.scenarios, "expands": list(group.expands),
+                        "auto_included": list(group.auto_included)}
                        for group in groups.values()],
         }, ensure_ascii=False, indent=2))
         return EXIT_OK
@@ -994,6 +1058,9 @@ def cmd_plan(args) -> int:
             print("    需要可执行文件：%s" % "、".join(group.requires))
         if group.selectors:
             print("    用法：python3 verify.py run unit-related tests/test_xxx.py")
+        if group.auto_included:
+            print("    自动附带：%s（全局词典一致性契约，独立跑相关组也不丢全局保护）"
+                  % "、".join(group.auto_included))
         print()
     print("记录写在 %s/runs/<run ID>/：record.json 是结构化记录，<组名>.log 是子进程原始输出，"
           "<组名>.cases.json 是用例级计时明细。" % ARTIFACT_DIRNAME)
@@ -1017,7 +1084,10 @@ def build_record(args, groups: dict, selected: list) -> dict:
                     "python": platform.python_version()},
         "context": {"phase": args.phase, "issue": args.issue, "pr": args.pr, "reason": args.reason,
                     "groups_requested": args.group, "groups_selected": selected,
-                    "selectors": display_argv(args.selectors)},
+                    "selectors": display_argv(args.selectors),
+                    "selectors_effective": display_argv(
+                        expand_related_selectors(list(args.selectors or []))[0]
+                        if args.selectors else [])},
         "groups": [{"name": name, "title": groups[name].title,
                     "command": display_argv(groups[name].argv),
                     "equivalent": groups[name].equivalent, "counter": groups[name].counter,
