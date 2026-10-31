@@ -113,12 +113,14 @@ class FontCliLanguageTests(unittest.TestCase):
         self.assertNotIn("Traceback", p.stderr)
 
     def test_missing_tool_error_is_localized_and_keeps_command(self):
+        """工具缺失时的本地化错误。PATH 只留临时目录：CI 的 Ubuntu 自带 fc-list
+        （在 /usr/bin），不隔离就会走到「枚举成功」那条分支，断言随之落空。"""
         self.make_pptx()
-        p = self.run_check("--locale", "en")
+        p = self.run_check("--locale", "en", PATH=str(self.bin))
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn("fc-list", p.stderr)
         self.assertIn("fontconfig", p.stderr)
-        p = self.run_check()
+        p = self.run_check(PATH=str(self.bin))
         self.assertIn("找不到 fc-list", p.stderr)
 
 
