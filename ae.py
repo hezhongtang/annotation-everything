@@ -6,7 +6,8 @@
                                     # 把技能本体复制为技能副本；缺省装到 ~/.claude/skills（CLAUDE_SKILLS_DIR
                                     # 可覆盖），--target 指定技能目录的根（副本装在 <目录>/annotation-everything）
   python3 ae.py install --link codex,agents,zcode
-                                    # 同时在这些 Agent 的技能目录里建指向技能副本的软链接
+                                    # 同时在这些 Agent 的技能目录里建指向技能副本的软链接；
+                                    # --link 也接受 名称=路径（如 cursor=~/.cursor/skills）为任意目录建链接
   python3 ae.py doctor [--json] [--target 目录]
                                     # 体检：逐项检查并给出级别与修复命令；--target 定位自定义位置的副本
   python3 ae.py repair [--dry-run] [--forget-stale] [--stop-orphans] [--target 目录]
@@ -53,7 +54,8 @@ SKILL_NAME = "annotation-everything"
 SKILL_SRC = Path("skill") / SKILL_NAME
 RECORD_NAME = ".install-record.json"
 SERVE_PY = SKILL_SRC / "scripts" / "serve.py"
-# --link 接受的 Agent 名称；目录约定与 skill_sources.default_roots 一致
+# --link 接受的内置 Agent 名称；目录约定与 skill_sources.default_roots 一致。
+# 其他 Agent 用 名称=路径 写法指定任意技能目录，不在这里维护各家清单
 LINK_AGENTS = ("codex", "agents", "zcode")
 # 复制与比对都忽略的缓存文件：字节码、系统杂项
 EXCLUDED_DIRS = {"__pycache__"}
@@ -230,13 +232,48 @@ def link_path(agent: str) -> Optional[Path]:
 
 
 def parse_link_agents(spec: str) -> list:
-    """解析 --link 的逗号分隔名称：去空白、去重，保留出现顺序。"""
-    agents = []
+    """解析 --link 的逗号分隔列表：内置名称（codex 等）或「名称=路径」指定任意技能目录。
+
+    返回 [(名称, 技能目录)]：去空白、按名称去重并保留出现顺序。内置名称的目录由
+    link_target_dir() 决定，未知名称为 None（由调用方报错）；「名称=路径」展开 ~，
+    相对路径按运行目录补全为绝对路径。写法不完整（缺名称或缺路径）时抛 CommandError。
+    """
+    links = []
     for part in (spec or "").split(","):
-        name = part.strip()
-        if name and name not in agents:
-            agents.append(name)
-    return agents
+        token = part.strip()
+        if not token:
+            continue
+        name, sep, raw = token.partition("=")
+        name = name.strip()
+        if sep:
+            if not name or not raw.strip():
+                raise CommandError(T("cli.ae.install.badLinkSpec", spec=token))
+            directory = Path(raw.strip()).expanduser()
+            if not directory.is_absolute():
+                directory = Path(os.path.abspath(str(directory)))
+        else:
+            directory = link_target_dir(name)
+        if all(name != seen for seen, _dir in links):
+            links.append((name, directory))
+    return links
+
+
+def _link_overlap(link: Path, src: Path, dst: Path) -> Optional[Path]:
+    """链接位置与技能副本或技能本体冲突时返回对方路径，否则 None。
+
+    已存在的路径按 (设备, inode) 比较（软链接与大小写不敏感的文件系统绕不过），
+    尚不存在的路径按绝对路径的父子关系比较。
+    """
+    if paths_overlap(link, dst):
+        return dst
+    if paths_overlap(link, src):
+        return src
+    link_abs = Path(os.path.abspath(str(link)))
+    if link_abs == Path(os.path.abspath(str(dst))) or Path(os.path.abspath(str(dst))) in link_abs.parents:
+        return dst
+    if link_abs == Path(os.path.abspath(str(src))) or Path(os.path.abspath(str(src))) in link_abs.parents:
+        return src
+    return None
 
 
 def read_version(repo: Path) -> Optional[str]:
@@ -326,17 +363,17 @@ def write_record(dst: Path, repo: Path, links: Optional[list] = None) -> Path:
     return path
 
 
-def create_link(agent: str, copy_dir: Path) -> dict:
-    """在 Agent 技能目录里建指向技能副本的软链接；返回写入安装记录的条目。
+def create_link(name: str, directory: Path, copy_dir: Path) -> dict:
+    """在技能目录 directory 里建指向技能副本的软链接；返回写入安装记录的条目。
 
     位置上已有的链接（含悬空的、指向别处的）一律重建；非链接内容由调用方先拦截。
     """
-    link = link_path(agent)
+    link = Path(directory) / SKILL_NAME
     if link.is_symlink():
         link.unlink()
     link.parent.mkdir(parents=True, exist_ok=True)
     os.symlink(str(copy_dir.resolve()), str(link))
-    return {"agent": agent, "path": str(link)}
+    return {"agent": name, "path": str(link)}
 
 
 def merged_links(previous: Optional[dict], copy_dir: Path, created: list) -> list:
@@ -364,25 +401,32 @@ def cmd_install(args) -> int:
         print(T("cli.ae.install.missingSource", path=src), file=sys.stderr)
         return 2
     agents = parse_link_agents(getattr(args, "link", "") or "")
-    unknown = [agent for agent in agents if link_target_dir(agent) is None]
+    unknown = [name for name, directory in agents if directory is None]
     if unknown:
         print(T("cli.ae.install.unknownAgent", names=join(unknown),
                 options=join(LINK_AGENTS)), file=sys.stderr)
         return 2
-    # 先拦下所有冲突，再动手：目标位置已有同名非链接内容时不覆盖、不复制
-    for agent in agents:
-        target = link_path(agent)
-        if target.exists() and not target.is_symlink():
-            print(T("cli.ae.install.occupied", agent=agent, path=target), file=sys.stderr)
-            return 2
     dst = resolve_copy_dir(getattr(args, "target", None))
+    # 先拦下所有冲突，再动手：链接位置与技能副本或本体重叠、已有同名非链接内容时不复制、不建链
+    for name, directory in agents:
+        link = directory / SKILL_NAME
+        if link.is_symlink():
+            continue                    # 已有链接（含悬空、指向别处）一律重建
+        other = _link_overlap(link, src, dst)
+        if other is not None:
+            print(T("cli.ae.install.linkOverlap", agent=name, path=link, other=other),
+                  file=sys.stderr)
+            return 2
+        if link.exists():
+            print(T("cli.ae.install.occupied", agent=name, path=link), file=sys.stderr)
+            return 2
     try:
         previous = read_record(dst, getattr(args, "target", None))  # 在清掉旧副本前读出已记录的链接
     except CommandError:
         # 重装可以修复损坏记录；已知位置的链接仍通过扫描保留。
         previous = {"links": scan_links(dst)}
     copy_skill(src, dst)
-    created = [create_link(agent, dst) for agent in agents]
+    created = [create_link(name, directory, dst) for name, directory in agents]
     links = merged_links(previous, dst, created)
     write_record(dst, repo, links)
     print(T("cli.ae.install.done", path=dst))
@@ -545,9 +589,23 @@ def _link_status(link: Path, skill_copy: Path) -> str:
     return "已删除"
 
 
-def install_link_fix(repo: Optional[Path], agents: list, target: Optional[Path] = None) -> str:
+def link_fix_spec(entry: dict) -> Optional[str]:
+    """把链接条目还原成 --link 的写法：内置名称用裸名，其余用 名称=链接所在目录。
+
+    agent 名称为空或缺路径的条目还原不出来，返回 None（修复命令里跳过，报告里仍列出）。
+    """
+    name = str(entry.get("agent") or "")
+    path = entry.get("path")
+    if not isinstance(path, str) or not path or not name:
+        return None
+    if name in LINK_AGENTS and link_path(name) == Path(path):
+        return name
+    return f"{name}={Path(path).parent}"
+
+
+def install_link_fix(repo: Optional[Path], specs: list, target: Optional[Path] = None) -> str:
     script = repo / "ae.py" if repo else Path("ae.py")
-    return f"python3 {script} install --link {','.join(agents)}{_target_flag(target)}"
+    return f"python3 {script} install --link {','.join(specs)}{_target_flag(target)}"
 
 
 def known_links(ctx: DoctorContext) -> list:
@@ -578,12 +636,18 @@ def check_links(ctx: DoctorContext) -> CheckResult:
     if not broken:
         return CheckResult("skill-links", CATEGORY_INSTALL, LEVEL_PASS,
                            T("doctor.links.ok", count=len(ok), list=join(ok, item=T("cli.ae.itemSeparator"))))
-    agents = sorted({str(entry.get("agent") or "") for entry in entries
-                     if _link_status(Path(entry["path"]), ctx.skill_copy) != "正常"})
+    specs = []
+    for entry in entries:
+        if _link_status(Path(entry["path"]), ctx.skill_copy) == "正常":
+            continue
+        spec = link_fix_spec(entry)
+        if spec is not None and spec not in specs:
+            specs.append(spec)
+    fix = install_link_fix(ctx.repo, specs, ctx.target) if specs else install_fix(ctx.repo, ctx.target)
     return CheckResult("skill-links", CATEGORY_INSTALL, LEVEL_FAIL,
                        T("doctor.links.broken", count=len(broken),
                           list=join(broken + ok, item=T("cli.ae.itemSeparator"))),
-                       install_link_fix(ctx.repo, agents, ctx.target))
+                       fix)
 
 
 # ── 体检：运行状态（审阅台账、专属端口、残留服务） ──────────────────
