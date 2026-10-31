@@ -161,6 +161,22 @@ class SkillScanLanguageTests(unittest.TestCase):
         _results, warnings = skill_sources.scan([self.source])
         self.assertTrue(any("保留" in w for w in warnings), warnings)
 
+    def test_build_scan_uses_explicit_and_saved_page_language(self):
+        for locale, fallback, message in (("en", "zh-CN", "Missing frontmatter"),
+                                           ("zh-CN", "en", "缺少 frontmatter")):
+            with self.subTest(locale=locale):
+                out = self.root / locale
+                env = {**os.environ, "AE_HOME": str(self.root / "ledger"), "AE_LOCALE": fallback}
+                args = ["--report", str(ROOT / "fixtures/sample/report.html"),
+                        "--script", str(ROOT / "fixtures/sample/script.md"),
+                        "--out", str(out), "--locale", locale, "--skills-from", str(self.source)]
+                for command in (args, ["--rebuild", str(out)]):
+                    p = subprocess.run([sys.executable, str(SCRIPTS / "build_viewer.py"), *command],
+                                       env=env, capture_output=True, text=True)
+                    self.assertEqual(p.returncode, 0, p.stderr)
+                    self.assertIn(message, p.stdout + p.stderr)
+                    self.assertIn(str(self.source / "broken" / "SKILL.md"), p.stdout + p.stderr)
+
     def test_not_skill_file_error_is_localized(self):
         other = self.source / "broken" / "README.md"
         other.write_text("x", encoding="utf-8")

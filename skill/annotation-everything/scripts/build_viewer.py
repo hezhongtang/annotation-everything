@@ -565,6 +565,7 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     if not no_scan_skills:
         import notes_store
         import skill_sources
+        skill_sources.set_locale(i18n.resolve_locale(locale_choice, system_languages=i18n.system_languages()))
         try:
             results, skill_warnings = skill_sources.scan(skills_from if skills_from is not None else skill_sources.default_roots())
             for warning in skill_warnings:
