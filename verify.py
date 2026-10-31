@@ -354,20 +354,24 @@ class Group:
 def _selector_module_prefix(selector: str) -> str:
     """把路径或点分选择器归一成模块名前缀（不带 tests.），用于判断是否已含某模块。
 
-    tests/test_x.py、tests.test_x、绝对路径与指到类 / 方法的点分写法都归一到
-    同一个前缀，避免同一模块因写法不同被附带两次。
+    tests/test_x.py、tests.test_x、./tests/test_x.py、绕行相对路径（../51/tests/…）、
+    绝对路径与指到类 / 方法的点分写法都归一到同一个前缀，避免同一模块因写法不同
+    被附带两次。
     """
     text = str(selector).replace("\\", "/")
     if text.endswith(".py"):
         text = text[:-len(".py")]
     candidate = Path(text)
-    if candidate.is_absolute():
+    if candidate.is_absolute() or ".." in text.split("/"):
+        # 绝对路径与含 .. 的绕行相对路径先落成仓库内相对路径：段处理消不掉 .. 段，
+        # 不归一的话 ../51/tests/x 与 tests/x 会被当成两个模块
         try:
             text = "/".join(candidate.resolve()
                             .relative_to((REPO / TEST_START_DIR).resolve()).parts)
         except (OSError, ValueError):
-            return text
-    parts = [part for part in text.split("/") if part]
+            if candidate.is_absolute():
+                return text  # 指到仓库外：没有可归一的模块名，保持去 .py 后的原文
+    parts = [part for part in text.split("/") if part and part != "."]
     if parts and parts[0] == TEST_START_DIR:
         parts = parts[1:]
     joined = ".".join(parts)
@@ -1014,6 +1018,10 @@ def artifact_root(out_dir: Optional[str]) -> Path:
 
 
 def cmd_plan(args) -> int:
+    # 与 run 一致：「plan unit-related tests/test_x.py」这类写法，第一个位置参数是
+    # 组名时当组名用，不把组名混进选择器与等价 / 实际命令
+    if args.group is None and args.selectors and args.selectors[0] in build_groups():
+        args.group = [args.selectors.pop(0)]
     groups = build_groups(args.selectors)
     selected = expand_groups(args.group or ["unit"], groups)
     if args.as_json:

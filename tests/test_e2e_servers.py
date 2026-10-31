@@ -283,15 +283,22 @@ class AbnormalExitTests(unittest.TestCase):
             pass
 
     def _salvage(self, probe: Path) -> None:
-        """子进程超时或被打断时，按探针回收它登记的孙进程与临时目录。"""
+        """子进程超时或被打断时，按探针回收它登记的孙进程与临时目录。
+
+        探针写了一半（只有 pid 行）时至少回收孙进程；探针没写出时无凭据可回收，
+        孙进程只能靠自灭时限（CHILD 注入的 sleep(120)）退出——登记机制以探针为
+        唯一凭据，这是它的固有边界。
+        """
         if not probe.exists():
             return
         try:
-            pid_text, dir_text = probe.read_text(encoding="utf-8").split("\n")[:2]
+            pid_text, *rest = probe.read_text(encoding="utf-8").split("\n")
+            pid = int(pid_text)
         except ValueError:
             return
-        self.kill_pid(int(pid_text))
-        shutil.rmtree(dir_text, ignore_errors=True)
+        self.kill_pid(pid)
+        if rest and rest[0].strip():
+            shutil.rmtree(rest[0], ignore_errors=True)
 
     def run_child(self, tail: str, extra: str = "", ignore_sigterm: bool = False,
                   terminate_timeout: float = SHORT_TERMINATE):
@@ -302,14 +309,17 @@ class AbnormalExitTests(unittest.TestCase):
                             grandchild=grandchild_code(ready, ignore_sigterm, got_term),
                             ready=str(ready), probe=str(probe), extra=extra, tail=tail,
                             terminate_timeout=terminate_timeout)
+        # 探针断言与读取也在 try 里：断言失败（探针没写出 / 只写了一半）同样要
+        # _salvage，不能把孙进程留在登记机制外。探针完全没写出时 _salvage 没有
+        # 凭据，孙进程只能靠自灭时限（sleep(120)）退出——见 _salvage 的边界说明。
         try:
             proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
                                   text=True, timeout=180)
+            self.assertTrue(probe.exists(), f"子进程没写出探针：{proc.stdout!r} {proc.stderr!r}")
+            pid_text, dir_text = probe.read_text(encoding="utf-8").split("\n")[:2]
         except BaseException:
             self._salvage(probe)
             raise
-        self.assertTrue(probe.exists(), f"子进程没写出探针：{proc.stdout!r} {proc.stderr!r}")
-        pid_text, dir_text = probe.read_text(encoding="utf-8").split("\n")[:2]
         return int(pid_text), Path(dir_text), proc
 
     def assert_cleaned_up(self, tail, expect_failure=False, returncode=None,
@@ -331,6 +341,42 @@ class AbnormalExitTests(unittest.TestCase):
         self.assertTrue(wait_dead(pid),
                         f"退出后服务成了残留服务（pid {pid}，returncode {proc.returncode}）")
         self.assertFalse(d.exists(), f"退出后临时目录没清理：{d}")
+
+    def test_probe_assertion_failure_still_salvages_the_grandchild(self):
+        """R2：探针断言与读取失败也要走 _salvage，半截探针至少回收孙进程。
+
+        模拟 CHILD 没能写出完整探针（写探针前崩溃 / 只写了一半）：探针存在但
+        只有 pid 行时读取 unpack 会失败，这条路径不走 _salvage 就会漏掉回收。
+        os._exit 绕过 atexit，排除子进程兜底清理的干扰，回收只能来自 _salvage。
+        """
+        probe = self.root / "probe.txt"
+        orphan_pid = self.root / "grandchild-pid"
+        tail = (f"Path({str(probe)!r}).write_text(str(grandchild.pid)); "
+                f"Path({str(orphan_pid)!r}).write_text(str(grandchild.pid)); "
+                "os._exit(3)")
+        with self.assertRaises(ValueError):
+            self.run_child(tail)
+        pid = int(orphan_pid.read_text(encoding="utf-8"))
+        self.addCleanup(self.kill_pid, pid)
+        self.assertTrue(wait_dead(pid), "探针断言 / 读取失败路径没有回收孙进程")
+
+    def test_missing_probe_assertion_failure_accepts_the_self_destruct_boundary(self):
+        """R2 登记机制的固有边界：探针完全没写出时 _salvage 没有凭据，无孙进程 pid 可回收。
+
+        孙进程在自灭时限（CHILD 注入的 sleep(120)）内会自行退出，测试不等待它，
+        只证明断言失败路径确实执行、也不把「无凭据」伪装成已回收，并自己清场。
+        """
+        probe = self.root / "probe.txt"
+        orphan_pid = self.root / "grandchild-pid"
+        tail = (f"Path({str(orphan_pid)!r}).write_text(str(grandchild.pid)); "
+                f"Path({str(probe)!r}).unlink(); os._exit(3)")
+        with self.assertRaises(AssertionError):
+            self.run_child(tail)
+        pid = int(orphan_pid.read_text(encoding="utf-8"))
+        self.addCleanup(self.kill_pid, pid)
+        self.assertTrue(alive(pid),
+                        "场景失真：探针没写出时孙进程应仍在自灭时限内运行，"
+                        "而不是被凭空回收")
 
     def test_keyboard_interrupt_still_cleans_up(self):
         self.assert_cleaned_up("raise KeyboardInterrupt", expect_failure=True)

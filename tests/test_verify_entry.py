@@ -210,6 +210,22 @@ class PlanTests(VerifyEntryTestCase):
         self.assertFalse((self.repo.artifact_dir).exists(), "plan 不写任何记录")
         self.assertNotIn("test_alpha_ok", p.stdout, "plan 不执行测试")
 
+    def test_plan_pops_the_leading_group_name_out_of_selectors(self):
+        """R3：plan 与 run 一致，首个位置参数是组名时当组名用，不混进选择器展示。"""
+        p = self.repo.run_verify("plan", "unit-related", "tests/test_synth.py", "--json")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        plan = json.loads(p.stdout)
+        self.assertEqual(plan["requested"], ["unit-related"], "组名要弹出到组请求里")
+        unit_related = {group["name"]: group for group in plan["groups"]}["unit-related"]
+        self.assertNotIn("unit-related", unit_related["command"],
+                         "组名不是选择器，不得出现在实际命令里")
+        self.assertNotIn("unit-related", unit_related["equivalent"],
+                         "组名不得出现在等价命令里")
+        text = self.repo.run_verify("plan", "unit-related", "tests/test_synth.py")
+        self.assertEqual(text.returncode, 0, text.stdout + text.stderr)
+        self.assertIn("python3 -m unittest tests/test_synth.py", text.stdout)
+        self.assertNotIn("unittest unit-related", text.stdout, "组名不进等价命令")
+
     def test_plan_json_is_readable_and_marks_the_default_group(self):
         p = self.repo.run_verify("plan", "--json")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -900,6 +916,31 @@ class RelatedContractTests(VerifyEntryTestCase):
         contract_runs = [i for i in ids if i.endswith(".RepoCatalogContractTests"
                                                      ".test_shipped_catalogs_stay_consistent")]
         self.assertEqual(len(contract_runs), 1, "指到契约模块内部时也不能重复执行")
+
+    def test_explicit_contract_selector_with_dot_slash_prefix_is_not_duplicated(self):
+        """R1：./ 前缀写法与标准写法指向同一模块，去重按归一后的前缀判断。"""
+        p = self.repo.run_verify("run", "unit-related", "./tests/test_i18n_catalog_contract.py")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertEqual(record["context"]["selectors_effective"],
+                         ["./tests/test_i18n_catalog_contract.py"],
+                         "./ 写法归一后不得再附带第二种写法的契约模块")
+        ids = [case["id"] for case in record["groups"][0]["cases"]]
+        self.assertEqual(ids.count(self.CONTRACT_ID), 1, "契约只执行一次，不重复")
+
+    def test_explicit_contract_selector_via_detour_relative_path_is_not_duplicated(self):
+        """R1：绕行相对路径（../<repo>/tests/…，从仓库外 cwd 出发）也归一到同一前缀。"""
+        outside = Path(self.temp.name) / "outside"
+        outside.mkdir()
+        p = self.repo.run_verify("run", "unit-related",
+                                 "../repo/tests/test_i18n_catalog_contract.py", cwd=outside)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertEqual(record["context"]["selectors_effective"],
+                         ["../repo/tests/test_i18n_catalog_contract.py"],
+                         "绕行写法归一后不得再附带契约模块的第二种写法")
+        ids = [case["id"] for case in record["groups"][0]["cases"]]
+        self.assertEqual(ids.count(self.CONTRACT_ID), 1, "绕行写法也只执行一次契约")
 
     def test_missing_contract_module_fails_loudly_instead_of_silently(self):
         """契约模块被删时局部组必须报错：全局保护不能静默消失。"""
