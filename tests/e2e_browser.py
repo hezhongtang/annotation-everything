@@ -14,6 +14,7 @@
 7. 同一端口换成另一份审阅：切换后立刻写也不会写进别人的 notes.json；换回后补传；
 8. 恶意网页写批注全部失败；导入带恶意 id / 内容的批注不执行脚本；旧版 Markdown 导入保留状态。
 9. 语言：单文件内嵌词典；file:// 与服务模式都能加批注；计数覆盖 0/1/2；切换语言不写批注、不改审阅标识；auto 跟随浏览器语言。
+10. 讲稿语言：英文讲稿在两种界面语言下逐页浏览（栏目标签跟界面，正文和时长跟讲稿）；缺页时 --lenient 显示空讲稿。
 """
 from __future__ import annotations
 
@@ -53,7 +54,7 @@ def ok(cond, label):
 
 
 def build(out: Path, report: Path = FIXTURE / "report.html", script: Path | None = FIXTURE / "script.md",
-          name: str | None = None, locale: str | None = None):
+          name: str | None = None, locale: str | None = None, lenient: bool = False):
     cmd = [sys.executable, str(SCRIPTS / "build_viewer.py"), "--report", str(report), "--out", str(out)]
     if script:
         cmd += ["--script", str(script)]
@@ -61,6 +62,8 @@ def build(out: Path, report: Path = FIXTURE / "report.html", script: Path | None
         cmd += ["--name", name]
     if locale:
         cmd += ["--locale", locale]
+    if lenient:
+        cmd += ["--lenient"]
     subprocess.run(cmd, check=True, capture_output=True)
 
 
@@ -832,6 +835,56 @@ def locale_checks(browser, tmp: Path):
         stop(server)
 
 
+def english_script_checks(browser, tmp: Path):
+    """#34：英文讲稿在两种界面语言下都能逐页浏览；缺页时按宽容模式显示空讲稿。"""
+    d = tmp / "english_script"
+    d.mkdir()
+    build(d, script=FIXTURE / "script.en.md", locale="en")
+    url = (d / "index.html").as_uri()
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.goto(url)
+    go_page(page, 3)
+    script = page.inner_text("#pageScript")
+    ok("Talking points" in script and "Transition" in script and "Likely questions" in script,
+       f"英文讲稿用英文栏目标签（实际 {script[:40]!r}）")
+    ok("Conclusion: Q3 revenue up 12% year on year" in script, "英文讲稿的标题按原文显示")
+    ok("Revenue grew 12% year on year" in script and "Same-store growth was 4%" in script, "英文讲稿正文按原文显示")
+    ok("1.5 min" in script, "英文时长按原文显示")
+    ok("In the revenue mix, delivery keeps taking share" in script, "英文过渡按原文显示")
+    ok("About two thirds of the increase" in script, "英文问答按原文显示")
+    # 栏目条里的「开篇 结论与收入」是报告目录推出来的板块名（报告是中文的），不属于讲稿翻译
+    ok("三季度收入同比增长 12%" not in script and "主要来自新开的 3 家门店" not in script,
+       "英文讲稿不被换成中文讲稿的内容")
+    page.select_option("#localePick", "zh-CN")
+    go_page(page, 4)   # 栏目条在翻页时按当前语言重画
+    go_page(page, 3)
+    zh_script = page.inner_text("#pageScript")
+    ok("讲法" in zh_script and "过渡" in zh_script and "可能被问" in zh_script,
+       f"切到中文界面只换栏目标签（实际 {zh_script[:60]!r}）")
+    ok("Revenue grew 12% year on year" in zh_script and "1.5 min" in zh_script,
+       "切到中文界面讲稿正文和时长仍是英文原文")
+    ok("Conclusion: Q3 revenue up 12% year on year" in zh_script, "切到中文界面标题仍是英文原文")
+    page.select_option("#localePick", "en")
+
+    # 缺页：--lenient 以报告页序为准，缺讲稿的那一页显示空讲稿，其余页不受影响
+    missing = tmp / "script-missing.md"
+    missing.write_text((FIXTURE / "script.en.md").read_text(encoding="utf-8").split("### Page 6")[0],
+                       encoding="utf-8")
+    md = tmp / "english_missing"
+    md.mkdir()
+    build(md, script=missing, locale="en", name="en-missing", lenient=True)
+    mpage = ctx.new_page()
+    mpage.goto((md / "index.html").as_uri())
+    go_page(mpage, 5)
+    ok("Green coffee is up 9%" in mpage.inner_text("#pageScript"), "缺页不影响前面各页的讲稿")
+    go_page(mpage, 6)
+    ok("(No speaker notes on this page)" in mpage.inner_text("#pageScript"),
+       "缺讲稿的那一页显示空讲稿，不报错")
+    mpage.close()
+    ctx.close()
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="ae-e2e-"))
     CLEANUP.add_dir(tmp)
@@ -851,6 +904,7 @@ def main() -> int:
             return 1 if failed else 0
         full_check_checks(browser, tmp)
         locale_checks(browser, tmp)
+        english_script_checks(browser, tmp)
 
         # ---------- 1. file:// 退回模式 ----------
         fdir = tmp / "file_mode"

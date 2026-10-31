@@ -247,10 +247,12 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 命令会输出刚才提交的批注，这就是 Agent 收到的内容。
 
+想试英文讲稿，把 `--script` 换成 `fixtures/sample/script.en.md`（同一份报告的英文讲稿）：对照页右侧的讲法、时长、过渡和问答都会是英文原文，界面语言不变。
+
 **3. 准备自己的材料**
 
 - **报告**：一份 HTML 文件，每一页是一个 `<section class="page" data-page="N" data-key="唯一键">` 元素。
-- **讲稿**：一份 Markdown 文件，用 `### 第 N 页｜标题` 分页，每页写明时长、讲法、过渡和可能被问到的问题。
+- **讲稿**：一份 Markdown 文件，中文用 `### 第 N 页｜标题` 分页，每页写明时长、讲法、过渡和可能被问到的问题；英文讲稿写 `### Page N｜Title` 加 `**Duration**` / `**Talking points**` / `**Transition**` / `**Likely questions**`。两种写法可以在同一份讲稿里混用，认哪种写法与界面语言无关：中文界面能审阅英文讲稿，英文界面能审阅中文讲稿，标题和正文按原文保留、不翻译。页头认不出来、页码重复或字段重复时，生成器按当前语言给出行号与期望写法，不把错输入当成空讲稿。
 
 完整格式见 [references/formats.md](skill/annotation-everything/references/formats.md)。
 
