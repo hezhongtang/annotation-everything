@@ -29,6 +29,10 @@ AE_HANDOFF_SEQ / AE_URL；运行中又来的事件排队依次补跑；命令输
 停了也不让给别的审阅——浏览器暂存按地址（127.0.0.1:端口）隔离，地址不变，旧标签页和暂存才接得上。
 本目录的服务已在跑就直接复用；专属端口被别的程序占用（或传了 --port）时本次临时顺延（跳过别人的专属端口，最多 20 个）
 并警告，实际端口写进审阅目录的 .annotation-server.json。
+
+语言：`--locale auto|zh-CN|en`（写在子命令前后都认）优先于环境变量 AE_LOCALE，再优先于审阅里的 locale；
+三者都没有则中文，只有 auto 才读 LC_ALL / LC_MESSAGES / LANG。拒绝与错误的原因代码、HTTP 状态和退出码
+不随语言变，只换给人看的说明；来源路径、命令与系统原始错误保持原文。
 """
 from __future__ import annotations
 
@@ -55,6 +59,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
 
@@ -62,6 +67,37 @@ APP = "annotation-everything"
 VERSION = "0.9.0"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
 FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check"]
+
+# 当前界面语言：main() 与 serve() 按共同契约解析后设置；未设置前保持中文（旧调用行为不变）
+_LOCALE = i18n.DEFAULT_LOCALE
+
+
+def T(key: str, **params: object) -> str:
+    """按当前语言取一条消息；缺译时回退另一种语言（见 locales/README.md 的契约）。"""
+    return i18n.Translator(_LOCALE)(key, **params)
+
+
+def set_locale(locale: str) -> None:
+    global _LOCALE
+    _LOCALE = locale
+    ledger.set_locale(locale)   # 台账错误也用同一种语言，免得中英混排
+
+
+def stored_locale(review_dir) -> object:
+    """审阅里保存的语言选择（review.json 的 locale）；读不到返回 None。"""
+    if review_dir is None:
+        return None
+    try:
+        manifest = json.loads((Path(review_dir) / MANIFEST).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = manifest.get("locale") if isinstance(manifest, dict) else None
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def cli_locale(explicit: object, review_dir=None) -> str:
+    """按共同契约解析命令行语言：--locale > AE_LOCALE > 审阅 locale > 默认中文。"""
+    return i18n.cli_locale(explicit, stored=stored_locale(review_dir))
 
 
 class StaleServer(Exception):
@@ -107,11 +143,14 @@ class ReviewServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, review_dir: Path, port: int, debug: bool = False, log_to_file: bool = True,
-                 on_handoff: list[str] | None = None, hook_cwd: str | None = None):
+                 on_handoff: list[str] | None = None, hook_cwd: str | None = None,
+                 locale: str | None = None):
         self.review_dir = review_dir
         self.debug = debug
         self.on_handoff = on_handoff
         self.hook_cwd = hook_cwd or os.getcwd()
+        # 诊断说明用的语言；None 时保持中文（旧调用行为不变）
+        self.locale = locale or i18n.DEFAULT_LOCALE
         self._hook_lock = threading.Lock()
         self._hook_running = False
         self._hook_queue: list[dict[str, Any]] = []   # 钩子运行中又来的事件：按到达顺序排队，同一批同一事件只留最新
@@ -253,40 +292,44 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self._json(e.status, {"error": e.msg, "code": e.code, "app": APP})
 
+    def _t(self, key: str, **params: object) -> str:
+        """拒绝说明用的消息：按服务启动时定的语言取，原因代码与状态不走这里。"""
+        return i18n.Translator(self.server.locale)(key, **params)
+
     def _check_host(self) -> None:
         host = (self.headers.get("Host") or "").strip().lower()
         if host not in self.server.allowed_hosts:
-            raise Reject(421, "bad-host", "Host 不是本服务（请用启动时打印的 127.0.0.1 地址打开）")
+            raise Reject(421, "bad-host", self._t("serve.err.badHost"))
 
     def _check_api_origin(self, mutating: bool) -> None:
         site = self.headers.get("Sec-Fetch-Site")
         if site and site not in ("same-origin", "none"):
-            raise Reject(403, "cross-site", "来自其他网站或端口的请求")
+            raise Reject(403, "cross-site", self._t("serve.err.crossSite"))
         origin = self.headers.get("Origin")
         if origin is not None and origin.lower() not in self.server.allowed_origins:
-            raise Reject(403, "bad-origin", "Origin 不是本服务")
+            raise Reject(403, "bad-origin", self._t("serve.err.badOrigin"))
         if mutating and origin is None:
-            raise Reject(403, "no-origin", "写操作缺少 Origin")
+            raise Reject(403, "no-origin", self._t("serve.err.noOrigin"))
 
     def _body(self) -> Any:
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if ctype != "application/json":
-            raise Reject(415, "bad-content-type", "Content-Type 须为 application/json")
+            raise Reject(415, "bad-content-type", self._t("serve.err.badContentType"))
         if self.headers.get("Transfer-Encoding"):
-            raise Reject(411, "chunked", "不支持分块传输，请带 Content-Length")
+            raise Reject(411, "chunked", self._t("serve.err.chunked"))
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError as e:
-            raise Reject(400, "bad-length", "Content-Length 不合法") from e
+            raise Reject(400, "bad-length", self._t("serve.err.badLength")) from e
         if length < 0:
-            raise Reject(400, "bad-length", "Content-Length 不合法")
+            raise Reject(400, "bad-length", self._t("serve.err.badLength"))
         if length > MAX_BODY:
-            raise Reject(413, "too-large", "请求体过大")
+            raise Reject(413, "too-large", self._t("serve.err.tooLarge"))
         raw = self.rfile.read(length) if length else b""
         try:
             return json.loads(raw.decode("utf-8") or "null")
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            raise Reject(400, "bad-json", "请求体不是合法 JSON") from e
+            raise Reject(400, "bad-json", self._t("serve.err.badJson")) from e
 
     def _dispatch(self) -> None:
         try:
@@ -300,18 +343,20 @@ class Handler(BaseHTTPRequestHandler):
             elif self.command in ("GET", "HEAD") and path == "/favicon.ico":
                 self._send(204, b"", "image/x-icon")
             else:
-                raise Reject(404, "not-found", "没有这个路径")
+                raise Reject(404, "not-found", self._t("serve.err.notFound"))
         except Reject as e:
             self._reject(e)
         except (store.NoteError, UnicodeEncodeError) as e:  # 由请求内容引起的错误一律 4xx，页面不会反复重试
-            self._json(400, {"error": str(e) if isinstance(e, store.NoteError) else "内容含无法保存的字符",
+            self._json(400, {"error": str(e) if isinstance(e, store.NoteError)
+                             else self._t("serve.err.badCharacters"),
                              "code": "bad-note", "app": APP})
         except store.NotFound:
-            self._json(404, {"error": "批注不存在（可能已被删除）", "code": "no-note", "app": APP})
+            self._json(404, {"error": self._t("serve.err.noNote"), "code": "no-note", "app": APP})
         except Exception as e:  # 服务端错误也写日志，方便排障
             self.server.log("error", f"code=server-error method={clean(self.command, 12)} path={clean(self.path)} "
                                      f"{type(e).__name__}: {e}")
-            self._json(500, {"error": f"服务端写入失败（{type(e).__name__}），批注暂存浏览器，稍后自动重试",
+            # 只说明类型与恢复动作，不回显异常内容（可能含请求数据）
+            self._json(500, {"error": self._t("serve.err.serverError", type=type(e).__name__),
                              "code": "server-error", "app": APP})
 
     do_GET = do_HEAD = do_POST = do_PATCH = do_DELETE = do_PUT = _dispatch
@@ -319,7 +364,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:  # 不支持预检：跨源写请求在浏览器侧即失败
         try:
             self._check_host()
-            raise Reject(405, "preflight", "不支持跨源预检")
+            raise Reject(405, "preflight", self._t("serve.err.preflight"))
         except Reject as e:
             self._reject(e)
 
@@ -327,7 +372,7 @@ class Handler(BaseHTTPRequestHandler):
     def _index(self) -> None:
         got = self.server.index()
         if got is None:
-            raise Reject(404, "no-index", "审阅目录里没有 index.html，先运行 build_viewer.py")
+            raise Reject(404, "no-index", self._t("serve.err.noIndex"))
         body, csp = got
         self._send(200, body, "text/html; charset=utf-8", {"Content-Security-Policy": csp})
 
@@ -345,7 +390,7 @@ class Handler(BaseHTTPRequestHandler):
         if claimed is not None and path != "/api/health":
             rid = self.server.review_id()
             if not rid or claimed != rid:
-                raise Reject(409, "review-mismatch", "页面属于另一份审阅（审阅标识不一致）")
+                raise Reject(409, "review-mismatch", self._t("serve.err.reviewMismatch"))
         if path == "/api/health" and cmd == "GET":
             self._json(200, {**self._ident(), "dir": str(d), "pid": os.getpid(),
                              "port": self.server.port, "hook": bool(self.server.on_handoff)})
@@ -362,9 +407,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/handoff" and cmd == "POST":
             body = self._expect_obj(self._body())
             if "fullCheck" in body and not isinstance(body["fullCheck"], bool):
-                raise Reject(400, "bad-request", "fullCheck 须为布尔值")
+                raise Reject(400, "bad-request", self._t("serve.err.fullCheck"))
             if "userMessage" in body and not isinstance(body["userMessage"], str):
-                raise Reject(400, "bad-request", "userMessage 须为字符串")
+                raise Reject(400, "bad-request", self._t("serve.err.userMessage"))
             message = body["userMessage"] if body.get("fullCheck") is True and "userMessage" in body else str(body.get("message") or "")
             _h, item, merged = store.handoff_submit(d, message, by="page",
                                                     target=str(body.get("target") or "final"),
@@ -377,7 +422,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/skills/always" and cmd == "POST":
             body = self._expect_obj(self._body())
             if "always" not in body:
-                raise Reject(400, "bad-request", "缺少 always（要清空请传空列表）")
+                raise Reject(400, "bad-request", self._t("serve.err.noAlways"))
             items = store.always_save(d, body.get("always"))
             self.server.log("info", f"always-skills count={len(items)}")
             self._json(200, {"alwaysSkills": items, **self._ident()})
@@ -385,7 +430,7 @@ class Handler(BaseHTTPRequestHandler):
             body = self._expect_obj(self._body())
             seq = body.get("seq")
             if not isinstance(seq, int) or isinstance(seq, bool):
-                raise Reject(400, "bad-request", "缺少批次序号 seq")
+                raise Reject(400, "bad-request", self._t("serve.err.noSeq"))
             if path.endswith("review"):
                 item = store.handoff_request_review(d, seq, str(body.get("message") or ""),
                                                     allow_subagents=body.get("allowSubagents") is True, by="page")
@@ -420,12 +465,11 @@ class Handler(BaseHTTPRequestHandler):
             self.server.log("info", f"delete {m.group(1)}")
             self._json(200, {"doc": {**doc, **self._ident()}})
         else:
-            raise Reject(404 if cmd == "GET" else 405, "no-api", "没有这个接口")
+            raise Reject(404 if cmd == "GET" else 405, "no-api", self._t("serve.err.noApi"))
 
-    @staticmethod
-    def _expect_obj(body: Any) -> dict[str, Any]:
+    def _expect_obj(self, body: Any) -> dict[str, Any]:
         if not isinstance(body, dict):
-            raise store.NoteError("请求体须为 JSON 对象")
+            raise store.NoteError(self._t("serve.err.notAnObject"))
         return body
 
 
@@ -493,7 +537,8 @@ def same_dir(found: dict[str, Any], review_dir: Path) -> bool:
 
 def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
          on_handoff: list[str] | None = None,
-         avoid: dict[int, str] | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
+         avoid: dict[int, str] | None = None,
+         locale: str | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
     """返回 (服务, 已在运行的 URL, 过程记录)。本目录已有旧版本服务在跑时抛 StaleServer（不静默复用）。
 
     avoid：别的审阅的专属端口（端口 → 标识）。顺延时跳过它们，免得占了别人的地址。
@@ -503,34 +548,34 @@ def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
 
     def check_version(found: dict[str, Any], p: int) -> None:
         if found.get("version") != VERSION:
-            raise StaleServer(f"本目录已有 {found.get('version') or '旧'} 版的服务在端口 {p} 运行（pid {found.get('pid')}），"
-                              f"当前是 {VERSION}。旧服务不认识新版页面的字段（框选、重新标注等会被静默丢掉），"
-                              f"请先停掉它（在它的终端按 Ctrl+C，或 kill {found.get('pid')}），再重新运行本命令。")
+            raise StaleServer(T("serve.stale.detail", old=found.get('version') or T("serve.stale.oldWord"),
+                                port=p, pid=found.get('pid'), version=VERSION))
 
     info = read_status(review_dir)
     if info and pid_alive(int(info.get("pid") or 0)) and info.get("port"):
         found = probe(int(info["port"]))
         if found and same_dir(found, review_dir):
             check_version(found, int(info["port"]))
-            notes.append(f"本目录的服务已在端口 {info['port']} 运行（pid {info.get('pid')}），直接复用")
+            notes.append(T("serve.bind.runningHere", port=info['port'], pid=info.get('pid')))
             return None, f"http://127.0.0.1:{info['port']}/", notes
     for p in range(port, port + tries):
         if p in avoid:
-            notes.append(f"端口 {p} 是另一份审阅（标识 {avoid[p][:8]}）的专属端口，跳过")
+            notes.append(T("serve.bind.skipReserved", port=p, rid=avoid[p][:8]))
             continue
         found = probe(p)
         if found is not None:
             if same_dir(found, review_dir):
                 check_version(found, p)
-                notes.append(f"端口 {p}：本服务已在托管此目录（pid {found.get('pid')}），直接复用")
+                notes.append(T("serve.bind.runningThere", port=p, pid=found.get('pid')))
                 return None, f"http://127.0.0.1:{p}/", notes
-            who = "另一个审阅目录的本服务" if found.get("app") == APP else "其他程序"
-            notes.append(f"端口 {p} 被{who}占用，顺延")
+            who = T("serve.bind.otherReview") if found.get("app") == APP else T("serve.bind.otherProgram")
+            notes.append(T("serve.bind.busy", port=p, who=who))
             continue
         try:
-            return ReviewServer(review_dir, p, debug=debug, on_handoff=on_handoff), None, notes
+            return ReviewServer(review_dir, p, debug=debug, on_handoff=on_handoff,
+                                locale=locale or _LOCALE), None, notes
         except OSError as e:
-            notes.append(f"端口 {p} 绑定失败（{e.strerror or e}），顺延")
+            notes.append(T("serve.bind.failed", port=p, detail=e.strerror or e))
     return None, None, notes
 
 
@@ -541,13 +586,13 @@ def parse_hook(cmd: str | None) -> list[str] | None:
     try:
         argv = shlex.split(cmd)
     except ValueError as e:
-        raise SystemExit(f"错误：--on-handoff 的命令写法不对（{e}），检查引号是否配对") from None
+        raise SystemExit(T("serve.err.hookSyntax", detail=e)) from None
     if not argv:
         return None
     exe = argv[0]
     full = os.path.abspath(exe) if os.sep in exe else shutil.which(exe)
     if not full or not os.access(full, os.X_OK):
-        raise SystemExit(f"错误：--on-handoff 的命令找不到或不可执行：{exe}")
+        raise SystemExit(T("serve.err.hookMissing", command=exe))
     return [full, *argv[1:]]   # 钩子在启动 serve.py 的目录下运行，参数里的相对路径按这个目录解析
 
 
@@ -574,16 +619,16 @@ def plan_port(review_dir: Path, rid: str | None, port: int | None, claim: int | 
     """
     fallback = port or DEFAULT_PORT
     if claim and not rid:
-        raise ClaimRefused("review.json 里没有审阅标识，不能认领专属端口；先运行 build_viewer.py --rebuild")
+        raise ClaimRefused(T("serve.port.claimNoRid"))
     if not rid:
-        print("[端口] review.json 里没有审阅标识（旧版生成？），不登记台账；建议先运行 build_viewer.py --rebuild", file=sys.stderr)
+        print(T("serve.port.noRid"), file=sys.stderr)
         return fallback, None, _others_ports(None)
     if claim:
         try:
             ledger.claim_port(rid, review_dir, claim)
         except (ledger.LedgerError, OSError) as e:
             raise ClaimRefused(str(e)) from None
-        print(f"[端口] 专属端口已改为 {claim}", file=sys.stderr)
+        print(T("serve.port.claimed", port=claim), file=sys.stderr)
     try:
         ledger.register(rid, review_dir)
         owned = (ledger.get(rid) or {}).get("port")
@@ -595,26 +640,27 @@ def plan_port(review_dir: Path, rid: str | None, port: int | None, claim: int | 
                 found = probe(p, timeout=0.5)
                 return found is None or same_dir(found, review_dir)
             owned = ledger.assign_port(rid, review_dir, prefer=running, is_free=free)
-            print(f"[端口] 这份审阅的专属端口：{owned}（此后一直用它，服务停了也不让给别的审阅）", file=sys.stderr)
+            print(T("serve.port.owned", port=owned), file=sys.stderr)
     except ledger.CopiedDir as e:
-        print(f"[端口] {e}。本次不用专属端口，从 {fallback} 起顺延（避开原审阅和其他审阅的端口）", file=sys.stderr)
+        print(T("serve.port.copied", detail=e, port=fallback), file=sys.stderr)
         return fallback, None, _others_ports(None)
     except (ledger.LedgerError, OSError) as e:
-        print(f"[端口] 没能用上专属端口（{e}），本次从 {fallback} 起顺延（避开别的审阅的专属端口）", file=sys.stderr)
+        print(T("serve.port.fallback", detail=e, port=fallback), file=sys.stderr)
         return fallback, None, _others_ports(rid)
     return (port if port else owned), owned, _others_ports(rid)
 
 
 def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, on_handoff: list[str] | None = None,
-          claim: int | None = None) -> int:
+          claim: int | None = None, locale: str | None = None) -> int:
     review_dir = review_dir.resolve()
+    set_locale(locale or cli_locale(None, review_dir))
     if not (review_dir / "index.html").is_file():
-        print(f"错误：{review_dir} 下没有 index.html。先用 build_viewer.py 生成对照页。", file=sys.stderr)
+        print(T("serve.serve.noIndex", dir=review_dir), file=sys.stderr)
         return 2
     try:
         store.load(review_dir)
     except ValueError as e:
-        print(f"错误：notes.json 无法读取（{e}）。请先修复或改名备份后再启动，服务不会覆盖它。", file=sys.stderr)
+        print(T("serve.serve.badNotes", detail=e), file=sys.stderr)
         return 2
     try:
         m = json.loads((review_dir / MANIFEST).read_text(encoding="utf-8"))
@@ -622,48 +668,46 @@ def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, o
         if orig and orig != review_dir and (orig / MANIFEST).exists():
             om = json.loads((orig / MANIFEST).read_text(encoding="utf-8"))
             if om.get("reviewId") == m.get("reviewId"):
-                print(f"提示：这个审阅目录是从 {orig} 复制来的，与原目录共用审阅标识。"
-                      f"建议先运行 build_viewer.py --rebuild {review_dir}，让它换一个新标识。", file=sys.stderr)
+                print(T("serve.serve.copiedHint", orig=orig, dir=review_dir), file=sys.stderr)
     except (OSError, ValueError, AttributeError):
         pass
     rid = ledger.read_manifest(review_dir).get("reviewId")
     try:
         first, owned, avoid = plan_port(review_dir, rid, port, claim)
     except ClaimRefused as e:
-        print(f"错误：没能认领端口 {claim}：{e}。服务没有启动。", file=sys.stderr)
+        print(T("serve.serve.claimRefused", port=claim, detail=e), file=sys.stderr)
         return 2
     try:
-        server, running_url, trail = bind(review_dir, first, debug, on_handoff=on_handoff, avoid=avoid)
+        server, running_url, trail = bind(review_dir, first, debug, on_handoff=on_handoff, avoid=avoid,
+                                          locale=_LOCALE)
     except StaleServer as e:
-        print(f"错误：{e}", file=sys.stderr)
+        print(T("serve.serve.stale", detail=e), file=sys.stderr)
         return 6
     for t in trail:
-        print(f"[端口] {t}", file=sys.stderr)
+        print(T("serve.port.trail", detail=t), file=sys.stderr)
     if running_url:
         if claim and f":{claim}/" not in running_url:
-            print(f"[端口] 专属端口已改为 {claim}，但服务还在原来的地址运行；停掉后重新启动才会换到 {claim}。", file=sys.stderr)
-        print(f"已在运行：{running_url}" + ("（注意：沿用已在运行的服务，本次的 --on-handoff 不生效；要换钩子先停掉它）"
-                                          if on_handoff else ""))
+            print(T("serve.port.claimButRunning", port=claim), file=sys.stderr)
+        print(T("serve.serve.running", url=running_url)
+              + (T("serve.serve.runningHookNote") if on_handoff else ""))
         if open_browser:
             webbrowser.open(running_url)
         return 0
     if server is None:
-        print(f"错误：端口 {first}–{first + PORT_TRIES - 1} 都不可用。可用 --port 临时指定其他端口，"
-              f"或运行 `lsof -nP -iTCP:{first} -sTCP:LISTEN` 查看占用者。", file=sys.stderr)
+        print(T("serve.serve.noPort", first=first, last=first + PORT_TRIES - 1), file=sys.stderr)
         return 3
     url = f"http://127.0.0.1:{server.port}/"
     if owned and server.port != owned:
-        why = f"按 --port 临时用 {server.port}" if port else f"专属端口 {owned} 被占用，本次临时用 {server.port}"
-        print(f"[端口] 注意：{why}，专属端口仍是 {owned}。批注照常落盘；但开在 {owned} 上的旧标签页里还没补传的改动"
-              f"不会跟到新地址（浏览器暂存按地址隔离），那些标签页会显示「服务不匹配」。"
-              f"{owned} 空出来后重启服务就会回到它；要换专属端口用 --claim-port N。", file=sys.stderr)
+        why = T("serve.serve.whyTemp", port=server.port) if port \
+            else T("serve.serve.whyOccupied", owned=owned, port=server.port)
+        print(T("serve.serve.tempPortNote", why=why, owned=owned), file=sys.stderr)
     elif not owned and server.port != first:
-        print(f"[端口] 首选端口 {first} 不可用，改用 {server.port}。", file=sys.stderr)
+        print(T("serve.port.firstBusy", first=first, port=server.port), file=sys.stderr)
     write_status(server)
     server.log("info", f"启动 {APP} {VERSION}：{url} 托管 {review_dir}（pid {os.getpid()}）")
-    print(f"对照页：{url}\n批注落盘：{review_dir / store.NOTES_FILE}"
-          + (f"\n「交给 Agent」时运行：{shlex.join(on_handoff)}" if on_handoff else "")
-          + "\n按 Ctrl+C 停止。", flush=True)
+    print(T("serve.serve.ready", url=url, path=review_dir / store.NOTES_FILE)
+          + (T("serve.serve.hookLine", command=shlex.join(on_handoff)) if on_handoff else "")
+          + T("serve.serve.stopHint"), flush=True)
 
     def _term(*_a: Any) -> None:
         raise KeyboardInterrupt
@@ -676,14 +720,15 @@ def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, o
     except KeyboardInterrupt:
         pass
     finally:
-        server.log("info", "停止")
+        server.log("info", T("serve.serve.stoppedLog"))
         server.server_close()
         clear_status(review_dir)
     return 0
 
 
-def status(review_dir: Path) -> int:
+def status(review_dir: Path, locale: str | None = None) -> int:
     """汇总运行状态。只输出计数与本服务写的字段，不回显请求内容（日志里的路径等来自外部，不可信）。"""
+    set_locale(locale or cli_locale(None, review_dir))
     review_dir = review_dir.resolve()
     out: dict[str, Any] = {"dir": str(review_dir), "index_html": (review_dir / "index.html").is_file()}
     m = ledger.read_manifest(review_dir)
@@ -693,7 +738,7 @@ def status(review_dir: Path) -> int:
         e = ledger.get(out["reviewId"]) if out["reviewId"] else None
         out["owned_port"] = (e or {}).get("port")
     except (ledger.LedgerError, OSError) as err:
-        out["owned_port"] = f"台账不可用：{err}"
+        out["owned_port"] = T("serve.status.ledgerDown", detail=err)
     try:
         doc = store.load(review_dir)
         notes = doc["notes"]
@@ -702,7 +747,7 @@ def status(review_dir: Path) -> int:
                         "drafted": sum(n.get("status") == "drafted" for n in notes),
                         "resolved": sum(n.get("status") == "resolved" for n in notes)}
     except ValueError as e:
-        out["notes"] = {"error": f"notes.json 无法解析：{type(e).__name__}"}
+        out["notes"] = {"error": T("serve.status.notesBroken", type=type(e).__name__)}
     hs = store.handoff_state(review_dir, full=False)
     latest = hs.get("latest") or {}
     out["handoff"] = {k: hs.get(k) for k in ("pending", "claimed", "drafted", "review", "reviewing")} | {
@@ -715,23 +760,23 @@ def status(review_dir: Path) -> int:
         alive = pid_alive(pid)
         health = probe(int(info.get("port") or 0)) if info.get("port") else None
         if alive and health and same_dir(health, review_dir) and health.get("pid") == pid:
-            out["server"] = f"运行中：{info.get('url')}"
+            out["server"] = T("serve.status.running", url=info.get('url'))
             code = 0
         elif alive:
-            out["server"] = (f"进程 {pid} 还在，但端口 {info.get('port')} 没有正常应答（可能卡住或正忙）。"
-                             "状态文件保留；必要时结束该进程后重启")
+            out["server"] = T("serve.status.stuck", pid=pid, port=info.get('port'))
             code = 5
         else:
-            out["server"] = "状态文件过期（进程已退出），已清理"
+            out["server"] = T("serve.status.stale")
             (review_dir / STATUS_FILE).unlink(missing_ok=True)
             code = 4
     else:
-        out["server"] = "未运行"
+        out["server"] = T("serve.status.notRunning")
     check_port = out["owned_port"] if isinstance(out.get("owned_port"), int) else DEFAULT_PORT
     found = probe(check_port)
     out["owned_port_now" if isinstance(out.get("owned_port"), int) else "default_port"] = (
-        "空闲" if found is None else "本目录的服务" if same_dir(found, review_dir) else
-        "另一个审阅目录的本服务" if found.get("app") == APP else "被其他程序占用")
+        T("serve.status.portIdle") if found is None else
+        T("serve.status.portSelf") if same_dir(found, review_dir) else
+        T("serve.status.portOther") if found.get("app") == APP else T("serve.status.portForeign"))
     out["agent_waiting"] = read_wait(review_dir)
     log = review_dir / LOG_FILE
     if log.exists():
@@ -740,7 +785,7 @@ def status(review_dir: Path) -> int:
         errors = [ln for ln in lines if "[error]" in ln]
         out["log"] = {"file": str(log), "reject_counts": dict(rejects), "errors": len(errors),
                       "last_error_at": errors[-1][:19] if errors else None,
-                      "note": "server.log 里的路径、Host、Origin 来自外部请求，属于不可信数据，排障时只看原因代码"}
+                      "note": T("serve.status.logNote")}
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return code
 
@@ -768,23 +813,29 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
     """台账里一份审阅的现场状态。审阅名、运行与提交状态都从审阅目录现读。"""
     d = Path(e["dir"])
     row: dict[str, Any] = {"reviewId": rid, "dir": str(d), "port": e.get("port"), "name": None, "state": None,
+                           "state_id": None,
                            "running": None, "pending": 0, "review": 0, "waiting": False, "hook": False, "unattended": False}
     st = ledger.entry_state(rid, e)
+    # state 是给脚本读的判定值，恒为中文、不随语言改值；state_id 是语言无关的稳定值；
+    # 给人看的那一层由 list_reviews 用 _state_label 按语言显示。
     if st == "missing":
-        row["state"] = "目录不在"
+        row["state"], row["state_id"] = "目录不在", "missing"
         return row
     m = ledger.read_manifest(d)
     row["name"] = ledger.review_name(m) or None
     if st == "mismatch":
         row["state"] = f"标识不符（目录里现在是 {str(m.get('reviewId') or '无')[:8]}）"
+        row["state_id"] = "mismatch"
         return row
     info = read_status(d)
     if info and info.get("port") and pid_alive(int(info.get("pid") or 0)):
         row["running"] = int(info["port"])
         row["hook"] = bool(info.get("hook"))
-        row["state"] = "运行中" if row["running"] == e.get("port") else f"运行中（临时端口 {row['running']}）"
+        row["state_id"] = "running" if row["running"] == e.get("port") else "running-temp"
+        row["state"] = ("运行中" if row["running"] == e.get("port")
+                        else f"运行中（临时端口 {row['running']}）")
     else:
-        row["state"] = "已停"
+        row["state"], row["state_id"] = "已停", "stopped"
     try:
         hs = store.handoff_state(d, full=False)
         row["pending"], row["review"] = int(hs.get("pending") or 0), int(hs.get("review") or 0)
@@ -799,11 +850,27 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def list_reviews(under: Path | None, as_json: bool) -> int:
+def _state_label(r: dict[str, Any]) -> str:
+    """状态的人读文案；判定值本身不随语言变。"""
+    if r["state_id"] == "missing":
+        return T("serve.msg.stateMissing")
+    if r["state_id"] == "mismatch":
+        rid = str(ledger.read_manifest(Path(r["dir"])).get("reviewId") or "")[:8]
+        return (T("serve.msg.stateMismatch", id=rid) if rid
+                else T("serve.msg.stateMismatchNoId"))
+    if r["state_id"] == "running-temp":
+        return T("serve.msg.stateRunningTemp", port=r["running"])
+    if r["state_id"] == "running":
+        return T("serve.msg.stateRunning")
+    return T("serve.msg.stateStopped")
+
+
+def list_reviews(under: Path | None, as_json: bool, locale: str | None = None) -> int:
+    set_locale(locale or cli_locale(None))
     try:
         items = ledger.entries()
     except (ledger.LedgerError, OSError) as e:
-        print(f"错误：{e}", file=sys.stderr)
+        print(T("serve.msg.error", detail=e), file=sys.stderr)
         return 2
     root = under.expanduser().resolve() if under else None
     rows = [review_row(rid, e) for rid, e in items.items()
@@ -813,33 +880,40 @@ def list_reviews(under: Path | None, as_json: bool) -> int:
         print(json.dumps({"ledger": str(ledger.home() / ledger.LEDGER_FILE), "reviews": rows}, ensure_ascii=False, indent=2))
         return 0
     if not rows:
-        print("审阅台账里没有审阅" + (f"（{root} 之下）" if root else "") + "。生成对照页或启动服务时会自动登记。")
+        print(T("serve.msg.listEmpty") + (T("serve.msg.listEmptyUnder", root=root) if root else "")
+              + T("serve.msg.listAutoRegister"))
         return 0
-    print(f"审阅台账：{ledger.home() / ledger.LEDGER_FILE}（{len(rows)} 份）\n")
+    print(T("serve.msg.listHeader", path=ledger.home() / ledger.LEDGER_FILE, count=len(rows)))
     for r in rows:
-        sub = "、".join(x for x in (f"待接收 {r['pending']} 批" if r["pending"] else "",
-                                     f"待复核 {r['review']} 批" if r["review"] else "") if x) or "无待接收"
-        who = "代理在等" if r["waiting"] else "钩子" if r["hook"] else "无代理在等"
-        print(f"{r['reviewId'][:8]}  {r['name'] or '（未知）'}")
-        print(f"  端口 {r['port'] or '未分配'} · {r['state']} · {sub} · {who}")
-        print(f"  {r['dir']}")
+        parts = [T("serve.msg.pending", count=r["pending"]) if r["pending"] else "",
+                 T("serve.msg.review", count=r["review"]) if r["review"] else ""]
+        sub = T("serve.msg.listSeparator").join(x for x in parts if x) or T("serve.msg.noPending")
+        who = (T("serve.msg.agentWaiting") if r["waiting"]
+               else T("serve.msg.hook") if r["hook"] else T("serve.msg.nobodyWaiting"))
+        print(T("serve.msg.reviewHead", rid=r['reviewId'][:8], name=r['name'] or T("serve.msg.unknownName")))
+        print(T("serve.msg.reviewLine", port=r['port'] or T("serve.msg.noPort"),
+                state=_state_label(r), sub=sub, who=who))
+        print(T("serve.msg.reviewDir", dir=r['dir']))
         if r["unattended"]:
-            print(f"  ⚠ 有提交在等接收，但没有代理在等：python3 {Path(__file__).resolve().with_name('notes.py')} wait {r['dir']}")
+            print(T("serve.msg.unattended",
+                    command=f"python3 {Path(__file__).resolve().with_name('notes.py')} wait {r['dir']}"))
         print()
-    stale = [r for r in rows if r["state"] == "目录不在" or str(r["state"]).startswith("标识不符")]
+    stale = [r for r in rows if r["state_id"] in ("missing", "mismatch")]
     if stale:
-        print(f"有 {len(stale)} 份已失效（目录不在或标识不符），专属端口仍保留。确认不用了：serve.py forget <标识前缀>")
+        print(T("serve.msg.stale", count=len(stale)))
     return 0
 
 
-def forget(key: str) -> int:
+def forget(key: str, locale: str | None = None) -> int:
+    set_locale(locale or cli_locale(None))
     try:
         rid, e = ledger.forget(key)
     except (ledger.LedgerError, OSError) as err:
-        print(f"错误：{err}", file=sys.stderr)
+        print(T("serve.msg.error", detail=err), file=sys.stderr)
         return 2
-    print(f"已从审阅台账移除 {rid}（{e['dir']}）" + (f"，释放端口 {e['port']}" if e.get("port") else "")
-          + "。审阅目录本身没动；以后再生成或启动它会重新登记。")
+    print(T("serve.msg.forgetDone", rid=rid, dir=e['dir'])
+          + (T("serve.msg.forgetPort", port=e['port']) if e.get("port") else "")
+          + T("serve.msg.forgetTail"))
     return 0
 
 
@@ -848,7 +922,7 @@ def resolve_arg(arg: str) -> Path:
     try:
         return ledger.resolve_dir(arg)
     except (ledger.LedgerError, OSError) as e:
-        raise SystemExit(f"错误：{e}") from None
+        raise SystemExit(T("serve.msg.error", detail=e)) from None
 
 
 # ---------- 自检 ----------
@@ -879,7 +953,8 @@ def lan_ip() -> str | None:
         return None
 
 
-def check() -> int:
+def check(locale: str | None = None) -> int:
+    set_locale(locale or cli_locale(None))
     results: list[tuple[bool, str]] = []
 
     def ok(cond: bool, label: str) -> None:
@@ -889,14 +964,14 @@ def check() -> int:
     try:
         (tmp / "index.html").write_text("<!doctype html><title>check</title><script>var ok=1</script>ok", encoding="utf-8")
         (tmp / MANIFEST).write_text(json.dumps({"reviewId": "checkreview"}), encoding="utf-8")
-        srv = ReviewServer(tmp, 0, log_to_file=True)
+        srv = ReviewServer(tmp, 0, log_to_file=True, locale=_LOCALE)
         port = srv.port
         t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
         t.start()
         good = {"Host": f"127.0.0.1:{port}"}
         same = {**good, "Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json"}
 
-        ok(srv.server_address[0] == "127.0.0.1", f"只绑定回环地址（实际 {srv.server_address[0]}）")
+        ok(srv.server_address[0] == "127.0.0.1", T("serve.check.loopback", host=srv.server_address[0]))
         ip = lan_ip()
         if ip:
             # 只看能否拿到本服务的应答：代理/TUN 网卡（如 198.18.x.x）可能接受任意 TCP 连接，单测连通会误报
@@ -910,126 +985,206 @@ def check() -> int:
                 c.close()
             except (OSError, http.client.HTTPException):
                 pass
-            ok(not reached, f"从非回环地址 {ip} 访问不到本服务")
+            ok(not reached, T("serve.check.lanUnreachable", ip=ip))
         else:
-            results.append((True, "（无非回环网卡，跳过局域网连接检查）"))
+            results.append((True, T("serve.check.noLan")))
         s, h, b = _req(port, "GET", "/", good)
-        ok(s == 200 and b"ok" in b, "正常 Host 能打开对照页")
+        ok(s == 200 and b"ok" in b, T("serve.check.indexOpens"))
         csp = h.get("content-security-policy", "")
         ok("'sha256-" in csp and "unsafe-inline" not in csp.split("script-src", 1)[1].split(";", 1)[0],
-           "对照页 CSP 只按哈希放行页面脚本")
+           T("serve.check.csp"))
         s, _, _ = _req(port, "GET", "/", {"Host": f"evil.example:{port}"})
-        ok(s == 421, f"伪造 Host（DNS 重绑定）被拒（{s}）")
+        ok(s == 421, T("serve.check.badHost", status=s))
         s, _, _ = _req(port, "GET", "/api/notes", {"Host": f"evil.example:{port}"})
-        ok(s == 421, f"伪造 Host 读批注被拒（{s}）")
+        ok(s == 421, T("serve.check.badHostRead", status=s))
         s, _, _ = _req(port, "POST", "/api/notes", {**same, "Origin": "http://evil.example"}, {"page": 1, "text": "x"})
-        ok(s == 403, f"伪造 Origin 写批注被拒（{s}）")
+        ok(s == 403, T("serve.check.badOrigin", status=s))
         s, _, _ = _req(port, "POST", "/api/notes", {**same, "Origin": "null"}, {"page": 1, "text": "x"})
-        ok(s == 403, f"Origin=null（file:// 或沙箱页）写批注被拒（{s}）")
+        ok(s == 403, T("serve.check.nullOrigin", status=s))
         hdr = {k: v for k, v in same.items() if k != "Origin"}
         s, _, _ = _req(port, "POST", "/api/notes", hdr, {"page": 1, "text": "x"})
-        ok(s == 403, f"缺 Origin 的写请求被拒（{s}）")
+        ok(s == 403, T("serve.check.noOrigin", status=s))
         s, _, _ = _req(port, "POST", "/api/notes", {**same, "Content-Type": "text/plain"}, {"page": 1, "text": "x"})
-        ok(s == 415, f"非 JSON Content-Type（可绕过预检的简单请求）被拒（{s}）")
+        ok(s == 415, T("serve.check.badContentType", status=s))
         s, _, _ = _req(port, "POST", "/api/notes", {**same, "Sec-Fetch-Site": "cross-site"}, {"page": 1, "text": "x"})
-        ok(s == 403, f"Sec-Fetch-Site=cross-site 被拒（{s}）")
+        ok(s == 403, T("serve.check.crossSite", status=s))
         s, _, _ = _req(port, "POST", "/api/notes", {**same, "Content-Length": "-5"}, raw=b"")
-        ok(s == 400, f"负数 Content-Length 被拒（{s}）")
+        ok(s == 400, T("serve.check.negativeLength", status=s))
         s, h, _ = _req(port, "OPTIONS", "/api/notes", {**good, "Origin": "http://evil.example",
                                                          "Access-Control-Request-Method": "POST"})
-        ok(s == 405 and "access-control-allow-origin" not in h, f"预检被拒且无 CORS 头（{s}）")
+        ok(s == 405 and "access-control-allow-origin" not in h, T("serve.check.preflight", status=s))
         s, _, _ = _req(port, "GET", "/../notes.json", good)
-        ok(s == 404, f"路径穿越 / 其他文件 404（{s}）")
+        ok(s == 404, T("serve.check.traversal", status=s))
         s, _, _ = _req(port, "GET", "/server.log", good)
-        ok(s == 404, f"不暴露审阅目录其他文件（{s}）")
+        ok(s == 404, T("serve.check.otherFiles", status=s))
 
         evil_id = 'z"><img src=x onerror=alert(1)>'
         s, h, b = _req(port, "POST", "/api/notes", same, {"id": evil_id, "page": 2, "text": "自检批注",
                                                            "pin": {"x": 10, "y": 20}})
-        ok(s == 201 and "access-control-allow-origin" not in h, f"同源写批注成功且无 CORS 头（{s}）")
+        ok(s == 201 and "access-control-allow-origin" not in h, T("serve.check.sameOriginWrite", status=s))
         nid = json.loads(b)["note"]["id"] if s == 201 else ""
-        ok(nid and nid != evil_id and store.valid_id(nid), "不合法的批注 id 被重新生成")
+        ok(nid and nid != evil_id and store.valid_id(nid), T("serve.check.idRegenerated"))
         s, _, b = _req(port, "GET", "/api/notes", good)
-        ok(s == 200 and json.loads(b).get("reviewId") == "checkreview", "接口返回审阅标识（页面据此确认连对了服务）")
+        ok(s == 200 and json.loads(b).get("reviewId") == "checkreview", T("serve.check.reviewId"))
         disk = json.loads((tmp / store.NOTES_FILE).read_text(encoding="utf-8"))
-        ok(any(n["id"] == nid for n in disk["notes"]), "批注已写入 notes.json")
+        ok(any(n["id"] == nid for n in disk["notes"]), T("serve.check.noteOnDisk"))
         log_lines = (tmp / store.LOG_FILE).read_text(encoding="utf-8").strip().splitlines()
-        ok(log_lines and json.loads(log_lines[-1])["op"] == "add", "notes.jsonl 追加了 add 记录")
+        ok(log_lines and json.loads(log_lines[-1])["op"] == "add", T("serve.check.logAppended"))
         ok(oct((tmp / store.NOTES_FILE).stat().st_mode & 0o777) == "0o600"
-           and oct((tmp / store.LOG_FILE).stat().st_mode & 0o777) == "0o600", "批注文件只有本用户可读写（0600）")
+           and oct((tmp / store.LOG_FILE).stat().st_mode & 0o777) == "0o600", T("serve.check.fileMode"))
         s, _, _ = _req(port, "PATCH", f"/api/notes/{nid}", same, {"status": "resolved", "resolution": "已改"})
-        ok(s == 200, f"标记已处理（{s}）")
+        ok(s == 200, T("serve.check.markResolved", status=s))
         hook_out = tmp / "hook.json"
         srv.on_handoff = [sys.executable, "-c", "import sys,pathlib;pathlib.Path(sys.argv[1]).write_text(sys.stdin.read())",
                           str(hook_out)]
         s, _, _ = _req(port, "POST", "/api/handoff", {**same, "Origin": "http://evil.example"}, {"message": "x"})
-        ok(s == 403, f"跨源「交给 Agent」被拒（{s}）")
+        ok(s == 403, T("serve.check.crossSiteHandoff", status=s))
         s, _, b = _req(port, "POST", "/api/handoff", same, {"message": "请处理"})
         h = json.loads(b) if s == 200 else {}
-        ok(s == 200 and (h.get("handoff") or {}).get("pending") == 1, f"同源「交给 Agent」记下一次提交（{s}）")
+        ok(s == 200 and (h.get("handoff") or {}).get("pending") == 1, T("serve.check.handoffRecorded", status=s))
         for _ in range(50):
             if hook_out.exists() and hook_out.stat().st_size:
                 break
             time.sleep(0.1)
         payload = json.loads(hook_out.read_text(encoding="utf-8")) if hook_out.exists() and hook_out.stat().st_size else {}
         ok(payload.get("seq") == 1 and payload.get("reviewId") == "checkreview" and payload.get("message") == "请处理",
-           "提交时运行 --on-handoff 钩子，提交内容经标准输入传入")
+           T("serve.check.hookRuns"))
         s, _, b = _req(port, "POST", "/api/handoff", same, {"message": "补充"})
-        ok(s == 200 and json.loads(b).get("merged") and json.loads(b).get("seq") == 1, "未被接收的提交再次提交时合并，不重复排队")
+        ok(s == 200 and json.loads(b).get("merged") and json.loads(b).get("seq") == 1, T("serve.check.merge"))
         srv.shutdown()
         srv.server_close()
-        srv2 = ReviewServer(tmp, 0, log_to_file=True)
+        srv2 = ReviewServer(tmp, 0, log_to_file=True, locale=_LOCALE)
         t2 = threading.Thread(target=srv2.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
         t2.start()
         s, _, b = _req(srv2.port, "GET", "/api/notes", {"Host": f"127.0.0.1:{srv2.port}"})
         notes = json.loads(b)["notes"] if s == 200 else []
-        ok(any(n["id"] == nid and n["status"] == "resolved" for n in notes), "重启服务后批注与已处理状态仍在")
+        ok(any(n["id"] == nid and n["status"] == "resolved" for n in notes), T("serve.check.restartKeeps"))
         srv2.shutdown()
         srv2.server_close()
         log_text = (tmp / LOG_FILE).read_text(encoding="utf-8")
-        ok(log_text.count("[reject]") >= 10, f"拒绝原因写入 server.log（{log_text.count('[reject]')} 条）")
-        ok("evil.example" in log_text and "<" not in log_text, "日志里的请求字段已过滤特殊字符")
+        ok(log_text.count("[reject]") >= 10, T("serve.check.rejectsLogged", count=log_text.count("[reject]")))
+        ok("evil.example" in log_text and "<" not in log_text, T("serve.check.logFiltered"))
     except Exception as e:  # 自检本身出错也要清楚报告
-        results.append((False, f"自检异常：{type(e).__name__}: {e}"))
+        results.append((False, T("serve.check.crashed", type=type(e).__name__, detail=e)))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     for passed, label in results:
-        print(f"{'PASS' if passed else 'FAIL'}  {label}")
+        print(T("serve.check.row", verdict=T("serve.check.pass" if passed else "serve.check.fail"), label=label))
     failed = sum(not p for p, _ in results)
-    print(f"\n{len(results) - failed}/{len(results)} 通过")
+    print(T("serve.check.summary", passed=len(results) - failed, total=len(results)))
     return 1 if failed else 0
+
+
+def explicit_locale(argv: list[str]) -> object:
+    """从命令行里取出 --locale 的值（写在子命令前后都认）；没写返回 None。"""
+    for index, token in enumerate(argv):
+        if token == "--":
+            break
+        if token == "--locale":
+            return argv[index + 1] if index + 1 < len(argv) else ""
+        if token.startswith("--locale="):
+            return token.partition("=")[2]
+    return None
+
+
+class LocalizedParser(argparse.ArgumentParser):
+    """帮助、用法与错误消息都走当前语言的 argparse 解析器；参数名与合法取值保持原文。"""
+
+    def error(self, message: str):
+        self.print_usage(sys.stderr)
+        print(translate_cli_error(message), file=sys.stderr)
+        sys.exit(2)
+
+
+def translate_cli_error(message: str) -> str:
+    text = str(message).strip()
+    match = re.match(r"^(?:argument \S+: )?invalid choice: '([^']*)' \(choose from .*\)$", text)
+    if match:
+        return T("serve.err.unknownChoice", name=match.group(1))
+    match = re.match(r"^argument (\S+): expected one argument$", text)
+    if match:
+        return T("serve.err.missingValue", name=match.group(1))
+    match = re.match(r"^unrecognized arguments: (.+)$", text)
+    if match:
+        return T("serve.err.unknownArgument", detail=match.group(1))
+    if text.startswith("the following arguments are required:"):
+        return T("serve.err.missingArgument")
+    return T("serve.err.generic", detail=text)
+
+
+def _add_help(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("-h", "--help", action="help", default=argparse.SUPPRESS,
+                        help=T("serve.opt.help"))
+
+
+def _add_locale(parser: argparse.ArgumentParser) -> None:
+    # 子命令上的 --locale 用 SUPPRESS 默认值：没写时不覆盖写在根命令上的选择
+    parser.add_argument("--locale", metavar="LANG", default=argparse.SUPPRESS,
+                        help=T("serve.opt.locale"))
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv[:1] == ["check"]:
-        return check()
-    if argv[:1] == ["status"]:
-        ap = argparse.ArgumentParser(prog="serve.py status")
-        ap.add_argument("dir", type=str, help="审阅目录或审阅标识")
-        return status(resolve_arg(ap.parse_args(argv[1:]).dir))
-    if argv[:1] == ["list"]:
-        ap = argparse.ArgumentParser(prog="serve.py list", description="列出审阅台账里的审阅：端口、运行状态、待接收的提交、有没有代理在等")
-        ap.add_argument("--under", type=Path, metavar="目录", help="只列这个目录之下的审阅（比如某个项目）")
-        ap.add_argument("--json", action="store_true", help="输出 JSON")
-        a = ap.parse_args(argv[1:])
-        return list_reviews(a.under, a.json)
-    if argv[:1] == ["forget"]:
-        ap = argparse.ArgumentParser(prog="serve.py forget", description="从审阅台账移除一份审阅并释放它的专属端口（不动审阅目录）")
-        ap.add_argument("key", help="审阅标识（或至少 4 位的前缀）")
-        return forget(ap.parse_args(argv[1:]).key)
-    if argv[:1] == ["serve"]:
-        argv = argv[1:]
-    ap = argparse.ArgumentParser(prog="serve.py", description="annotation-everything 本地批注服务（只监听 127.0.0.1）")
-    ap.add_argument("dir", type=str, help="审阅目录（含 build_viewer.py 生成的 index.html），或审阅标识（从台账查目录）")
-    ap.add_argument("--port", type=int, help="本次临时用这个端口（被占用时顺延），专属端口不变")
-    ap.add_argument("--claim-port", type=int, metavar="N", help="把这份审阅的专属端口改成 N 再启动")
-    ap.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
-    ap.add_argument("--debug", action="store_true", help="记录每个请求（默认只记录拒绝、错误与批注改动）")
-    ap.add_argument("--on-handoff", metavar="命令", help="可选：用户点「交给 Agent」时运行的命令（不经 shell；"
-                                                      "提交内容以 JSON 从标准输入传入）")
+    locale_choice = explicit_locale(argv)
+    # 先按共同契约定语言，再建解析器：帮助、参数说明与错误消息才能用同一种语言
+    try:
+        set_locale(i18n.cli_locale(locale_choice))
+    except i18n.LocaleError as exc:
+        set_locale(i18n.DEFAULT_LOCALE)
+        params = getattr(exc, "params", {}) or {}
+        value = params.get("locale") if isinstance(params, dict) else None
+        if isinstance(value, str) and not value.strip():
+            print(T("serve.err.emptyLocale"), file=sys.stderr)
+        else:
+            print(T("serve.err.invalidLocale", name="" if value is None else str(value)), file=sys.stderr)
+        return 2
+    # 子命令也可以写在 --locale 之后：认子命令前先剥掉开头这个选项
+    rest = argv[2:] if argv[:1] == ["--locale"] else (argv[1:] if argv[:1] and argv[0].startswith("--locale=") else argv)
+    if rest[:1] == ["check"]:
+        return check(locale=_LOCALE)
+    if rest[:1] == ["status"]:
+        ap = LocalizedParser(prog="serve.py status", add_help=False)
+        _add_help(ap)
+        _add_locale(ap)
+        ap.add_argument("dir", type=str, help=T("serve.opt.dirOrId"))
+        a = ap.parse_args(rest[1:])
+        d = resolve_arg(a.dir)
+        # 目录解析出来后还有一级兜底：审阅里保存的 locale
+        set_locale(cli_locale(locale_choice, d))
+        return status(d, locale=_LOCALE)
+    if rest[:1] == ["list"]:
+        ap = LocalizedParser(prog="serve.py list", add_help=False, description=T("serve.desc.list"))
+        _add_help(ap)
+        _add_locale(ap)
+        ap.add_argument("--under", type=Path, metavar="目录" if _LOCALE == "zh-CN" else "DIR",
+                        help=T("serve.opt.under"))
+        ap.add_argument("--json", action="store_true", help=T("serve.opt.json"))
+        a = ap.parse_args(rest[1:])
+        return list_reviews(a.under, a.json, locale=_LOCALE)
+    if rest[:1] == ["forget"]:
+        ap = LocalizedParser(prog="serve.py forget", add_help=False, description=T("serve.desc.forget"))
+        _add_help(ap)
+        _add_locale(ap)
+        ap.add_argument("key", help=T("serve.opt.key"))
+        a = ap.parse_args(rest[1:])
+        return forget(a.key, locale=_LOCALE)
+    argv = rest[1:] if rest[:1] == ["serve"] else rest
+    ap = LocalizedParser(prog="serve.py", add_help=False, description=T("serve.desc"))
+    _add_help(ap)
+    _add_locale(ap)
+    ap.add_argument("dir", type=str, help=T("serve.opt.dir"))
+    ap.add_argument("--port", type=int, help=T("serve.opt.port"))
+    ap.add_argument("--claim-port", type=int, metavar="N", help=T("serve.opt.claimPort"))
+    ap.add_argument("--no-open", action="store_true", help=T("serve.opt.noOpen"))
+    ap.add_argument("--debug", action="store_true", help=T("serve.opt.debug"))
+    ap.add_argument("--on-handoff", metavar="命令" if _LOCALE == "zh-CN" else "COMMAND",
+                    help=T("serve.opt.onHandoff"))
     a = ap.parse_args(argv)
-    return serve(resolve_arg(a.dir), a.port, not a.no_open, a.debug, parse_hook(a.on_handoff), claim=a.claim_port)
+    d = resolve_arg(a.dir)
+    # 目录解析出来后还有一级兜底：审阅里保存的 locale
+    set_locale(cli_locale(locale_choice, d))
+    return serve(d, a.port, not a.no_open, a.debug, parse_hook(a.on_handoff),
+                 claim=a.claim_port, locale=_LOCALE)
 
 
 if __name__ == "__main__":

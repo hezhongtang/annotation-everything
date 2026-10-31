@@ -335,6 +335,74 @@ class CliFlowTests(unittest.TestCase):
         self.assertIn("Marked “in progress”", out)
         self.assertIn(f"notes.py resolve {self.d.resolve()} <id> --seq 1", out)   # 命令本身不翻译
 
+    def test_english_wait_keeps_action_context_in_draft_and_review(self):
+        """按审阅保存的语言交接时，初改与复核都拿到完整定位、同改要求和技能归属。"""
+        (self.d / "review.json").write_text(json.dumps({"locale": "en", "pages": [
+            {"n": 2, "title": "合成图表", "key": "chart"}]}), encoding="utf-8")
+        region = store.add(self.d, {
+            "page": 2, "key": "chart", "target": "报告", "text": "对齐这里", "anchor": "右下角图例",
+            "region": {"x": 10, "y": 20, "w": 30, "h": 40}, "style": {"scope": "region"},
+            "skills": ["layout-check"],
+            "pair": {"side": "讲稿", "text": "对应句保持原文 <&>", "match": "similar"},
+        })[1]["id"]
+        pin = store.add(self.d, {"page": 2, "text": "调整字号", "target": "报告",
+                                 "pin": {"x": 90, "y": 80}})[1]["id"]
+        store.always_save(self.d, [{"name": "style-check", "scope": "style"}])
+        store.handoff_submit(self.d, "按标注处理", target="review", allow_subagents=True)
+        expected = ("Region 1 (x 10.0%, y 20.0%, w 30.0%, h 40.0%)", "Style · selected area",
+                    "Pin 2 (x 90.0%, y 80.0%)", "Position hint: 右下角图例", "layout-check",
+                    "style-check", "specified for this annotation", "standing", "Also change the other side",
+                    "Speaker notes", "对应句保持原文 <&>", "percentages relative to the top-left")
+        for stage, who in (("draft", "drafter"), ("review", "reviewer")):
+            got = run_cli("wait", str(self.d), "--timeout", "5", "--stage", stage, "--by", who)
+            self.assertEqual(got.returncode, 0, got.stderr)
+            for text in expected:
+                self.assertIn(text, got.stdout, f"{stage}: missing {text}")
+            if stage == "draft":
+                store.set_status(self.d, region, "drafted", by=who, resolution="图例已对齐")
+                store.set_status(self.d, pin, "drafted", by=who, resolution="字号已调整")
+                store.handoff_done(self.d, by=who, summary="完成合成标注")
+                store.handoff_request_review(self.d, 1)
+            else:
+                self.assertIn("Draft note: 图例已对齐", got.stdout)
+
+    def test_english_show_keeps_structured_edits(self):
+        for op, before, after, text in (("delete", "应删原文", "", "删除引用的这段文字"),
+                                         ("replace", "旧口径", "新口径", "改为：新口径")):
+            store.add(self.d, {"page": 2, "text": text, "target": "报告", "quote": before,
+                              "quoteFrom": "报告", "edit": {"op": op, "from": before, "to": after}})
+        got = run_cli("show", str(self.d), "--locale", "en")
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertIn('[Report · Delete] Delete “应删原文”', got.stdout)
+        self.assertIn('[Report · Replace] Replace “旧口径” with “新口径”', got.stdout)
+
+    def test_english_show_keeps_legacy_marks_and_page_warnings(self):
+        doc = {"rev": 1, "notes": [
+            {"id": "done", "page": 2, "text": "已处理", "status": "resolved", "pin": {"x": 1, "y": 2}},
+            {"id": "legacy", "page": 2, "key": "old-page", "text": "保留旧标注", "target": "报告",
+             "pin": {"x": 3, "y": 4}, "style": {"scope": "region", "region": {"x": 5, "y": 6, "w": 7, "h": 8}},
+             "orphan": True},
+            {"id": "moved", "page": 2, "key": "wrong-page", "text": "确认页码", "target": "报告"},
+        ]}
+        out = notes_cli.to_markdown(doc, {"pages": [{"n": 2, "key": "new-page"}]},
+                                    include_resolved=False, page=2, locale="en")
+        for text in ("Pin 2 (x 3%, y 4%)", "Region 2 (x 5%, y 6%, w 7%, h 8%)",
+                     "original page (key old-page) is missing", "wrong-page does not match page 2 (new-page)"):
+            self.assertIn(text, out)
+        self.assertNotIn("`done`", out)
+
+    def test_english_show_distinguishes_suggested_counterpart_from_required_edit(self):
+        script = self.d / "script.md"
+        sentence = "Revenue increased by ten percent."
+        script.write_text(f"### Page 2 | Synthetic\n**Talking points**: {sentence}\n", encoding="utf-8")
+        note = {"id": "quote", "page": 2, "target": "报告", "text": "核对口径", "quote": sentence}
+        out = notes_cli.to_markdown({"rev": 1, "notes": [note]}, {}, include_resolved=False,
+                                    page=None, locale="en", sources={"script": script})
+        self.assertIn(sentence, out)
+        self.assertIn("Hint: Speaker notes, page 2", out)
+        self.assertIn("Confirm whether to update it too (change both sides was not selected)", out)
+        self.assertNotIn("Also change the other side", out)
+
     def test_chinese_output_keeps_the_shipped_wording(self):
         store.handoff_submit(self.d, "先改第 2 页", target="review", allow_subagents=True, full_check=True)
         got = run_cli("wait", str(self.d), "--timeout", "5")
@@ -506,8 +574,8 @@ class CliFlowTests(unittest.TestCase):
                                                       {"name": "humanizer-zh", "scope": "all"}]))
         store.handoff_submit(self.d, "先改")
         en = run_cli("show", str(self.d), "--all", "--locale", "en").stdout
-        self.assertIn("Standing skills (the user wants every annotation in scope", en)
-        self.assertIn("术语表 (report), humanizer-zh (every annotation)", en)
+        self.assertIn("Standing skills required by the user: call them before handling each annotation within scope", en)
+        self.assertIn("术语表 (Report), humanizer-zh (All annotations)", en)
         zh = run_cli("show", str(self.d), "--all").stdout
         self.assertIn("常驻技能（用户要求：每条批注处理前都按范围先调用，下面每条的「技能」里已列出）："
                       "术语表（报告）、humanizer-zh（全部批注）", zh)

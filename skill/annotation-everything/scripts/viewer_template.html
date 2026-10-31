@@ -49,7 +49,7 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,1fr
 .talk p{font-size:16.5px;line-height:1.85;margin:0 0 10px}
 .next{font-size:14.5px;line-height:1.7;color:#374151;border-left:3px solid var(--ae-accent);padding:4px 0 4px 10px}
 .qa{background:var(--ae-qa);border:1px solid var(--ae-line);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:14.5px;line-height:1.7}
-.qa .q{font-weight:600}.qa .q::before{content:"问　";color:var(--ae-accent)}.qa .a::before{content:"答　";color:var(--ae-green);font-weight:600}
+.qa .q{font-weight:600}.qa .q::before{content:attr(data-label);color:var(--ae-accent)}.qa .a::before{content:attr(data-label);color:var(--ae-green);font-weight:600}
 .empty{color:var(--ae-mut);font-size:14px}
 .modal{position:fixed;inset:0;background:rgba(15,20,30,.5);display:none;align-items:center;justify-content:center;padding:24px;z-index:9}
 .modal.on{display:flex}
@@ -104,6 +104,7 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,1fr
 .dlg .bar{display:flex;gap:8px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--ae-line);flex-wrap:wrap}
 .dlg .bar h2{font-size:17px;margin:0;color:var(--ae-navy);flex:1}
 .dlg button{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:5px 12px;background:#fff;cursor:pointer}
+.dlg .bar select{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:5px 8px;background:#fff;cursor:pointer}
 .dlg button.primary{background:var(--ae-navy);border-color:var(--ae-navy);color:#fff}
 .dlg pre{margin:0;padding:16px 20px;overflow:auto;white-space:pre-wrap;font-family:inherit;font-size:13.5px;line-height:1.7}
 .dlg .pad{padding:16px 20px;overflow:auto;font-size:14px;line-height:1.7}
@@ -130,7 +131,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 #skillList{display:none;position:fixed;z-index:20;min-width:240px;max-width:90vw;max-height:240px;overflow:auto;background:#fff;border:1px solid var(--ae-line);border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.2);padding:4px}
 #skillList.on{display:block}#skillList [role=option]{padding:7px 9px;border-radius:5px;cursor:pointer;font-size:13px}
 #skillList [role=option]:hover,#skillList [aria-selected=true]{background:#eef4fc}#skillList .skill-desc{display:block;color:var(--ae-mut);font-size:12px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-#skillList .skill-rec{margin-left:6px;color:var(--ae-accent);font-size:11px}#skillList .skill-more{display:block;width:100%;padding:7px 9px;text-align:left;border:0;background:#f6f8fb;color:var(--ae-accent);border-radius:5px;cursor:pointer;font:inherit;font-size:12px}
+#skillList .skill-rec{margin-left:6px;color:var(--ae-accent);font-size:11px}#skillList .skill-none{margin:0;padding:7px 9px;color:var(--ae-mut);font-size:12px}#skillList.on.hint{pointer-events:none}#skillList .skill-more{display:block;width:100%;padding:7px 9px;text-align:left;border:0;background:#f6f8fb;color:var(--ae-accent);border-radius:5px;cursor:pointer;font:inherit;font-size:12px}
 #stylemenu{position:fixed;display:none;z-index:8;background:#fff;border:1px solid var(--ae-line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.22);padding:6px;flex-direction:column;gap:2px;min-width:210px}
 #stylemenu.on{display:flex}
 #stylemenu button{font:inherit;font-size:13px;border:none;background:none;text-align:left;padding:6px 10px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;gap:12px}
@@ -201,31 +202,31 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
     <div class="form" id="nform"><div class="quote" id="qbox"></div><span id="styleChip"></span>
       <textarea id="ntext" rows="2" placeholder="写修改意见（C）。可先选中报告或讲稿里的文字：直接删除（D）、改为（R），或作为引用写批注；也可以先「在报告上标注」（单击放点、拖动框选）。"></textarea>
       <div class="row"><span id="targetLabel">对象</span> <select id="ntarget"><option value="报告">报告</option><option value="讲稿">讲稿</option><option value="报告和讲稿">报告和讲稿</option></select>
-        <label class="sk" title="处理这条批注时让 Agent 调用的技能（skill），多个用逗号分隔（K）">技能<kbd>K</kbd><input id="nskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" placeholder="可选，如 humanizer-zh"></label>
-        <button data-act="always" id="alwaysBtn" title="常驻技能：这份审阅里每条批注（按范围）都让 Agent 先调用，适合需要长期约束的 Agent（G）">常驻技能<span id="alwaysN"></span><kbd>G</kbd></button>
+        <label class="sk" data-title="viewer.skill.labelTitle" data-p-key="K"><span data-msg="viewer.skill.label">技能</span><kbd>K</kbd><input id="nskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" data-ph="viewer.skill.placeholder"></label>
+        <button data-act="always" id="alwaysBtn"><span data-msg="viewer.always.button">常驻技能</span><span id="alwaysN"></span><kbd>G</kbd></button>
         <button data-act="pin" id="pinBtn" data-title="viewer.markPinTitle" data-p-key="P"><span data-msg="viewer.markPin">在报告上标注</span><kbd>P</kbd></button>
         <button data-act="style" id="styleBtn" data-title="viewer.styleBtnTitle" data-p-key="S"><span data-msg="viewer.styleBtn">风格优化</span><kbd>S</kbd></button>
         <button data-act="seelist" id="seeList" data-title="viewer.seeListTitle"><span id="seeListLabel" data-msg="viewer.seeList">本页批注</span> <span id="nhere">0</span> ↑</button>
         <span class="grow"></span>
         <button class="primary" data-act="add" id="addBtn" data-title="viewer.add"><span id="addLabel" data-msg="viewer.add">添加批注</span><kbd><span class="kmod">⌘</span>↵</kbd></button></div></div></div>
 <div id="selbar"><div class="sbtns"><button data-sel="delete" data-title="viewer.sel.deleteTitle" data-p-key="D"><span data-msg="viewer.sel.delete">删除</span><kbd>D</kbd></button><button data-sel="replace" data-title="viewer.sel.replaceTitle" data-p-key="R"><span data-msg="viewer.sel.replace">改为…</span><kbd>R</kbd></button><button data-sel="comment" data-title="viewer.sel.commentTitle" data-p-key="C"><span data-msg="viewer.sel.comment">批注</span><kbd>C</kbd></button></div>
-<label id="pairRow" data-title="viewer.pairTitle" data-p-key="B"><input type="checkbox" id="pairOn"><span id="pairText" data-msg="viewer.pairLabel">同时改</span><kbd>B</kbd></label></div>
+<label id="pairRow" data-title="viewer.pairTitle" data-p-key="B"><input type="checkbox" id="pairOn"><span id="pairText">同时改</span><kbd>B</kbd></label></div>
 <div id="pinpop" role="dialog"></div>
 <div id="stylemenu" role="menu"><p class="hint" data-msg="viewer.styleScope">风格优化的范围：</p>
 <button data-sm="page"><span data-msg="viewer.stylePage">整页（当前这一页）</span><kbd>1</kbd></button><button data-sm="mark"><span data-msg="viewer.styleMark">标注处（单击放点或拖动框选）</span><kbd>2</kbd></button></div>
 <div id="repbox"><p class="hint" data-msg="viewer.repTitle">把选中的文字改为：</p><textarea id="repText"></textarea>
 <div class="row"><button id="repCancel"><span data-msg="viewer.cancel">取消</span><kbd>Esc</kbd></button><button class="primary" id="repOk"><span data-msg="viewer.repOk">确定</span><kbd>↵</kbd></button></div></div>
 </main>
-<div id="skillList" role="listbox" aria-label="技能候选"></div>
-<div class="modal" id="allnotes"><div class="dlg"><div class="bar"><h2>全部批注</h2>
-<button class="primary" id="copyAll">复制全部（粘贴给 Agent）</button><button id="dlAll">下载 Markdown</button><button id="dlJson">下载 JSON</button><button id="openImp">导入…</button><button id="dlFailed" style="display:none" title="多次保存失败、没有写进 notes.json 的改动">下载未能保存的改动</button><button id="clearAll">清空</button><button data-close>关闭</button></div>
+<div id="skillList" role="listbox" data-aria="viewer.skill.candidates"></div>
+<div class="modal" id="allnotes"><div class="dlg"><div class="bar"><h2 data-msg="viewer.allTitle">全部批注</h2>
+<button class="primary" id="copyAll" data-msg="export.copyAll">复制全部（粘贴给 Agent）</button><button id="dlAll" data-msg="export.download">下载 Markdown</button><button id="dlJson" data-msg="export.downloadJson">下载 JSON</button><select id="expLang" data-aria="export.langLabel" aria-label="导出语言"><option value="auto" data-msg="export.langAuto">跟随界面</option><option value="zh-CN">中文</option><option value="en">English</option></select><button id="openImp">导入…</button><button id="dlFailed" style="display:none" title="多次保存失败、没有写进 notes.json 的改动">下载未能保存的改动</button><button id="clearAll">清空</button><button data-close>关闭</button></div>
 <div class="pad" id="orphanBox" style="display:none;border-bottom:1px solid var(--ae-line)"></div>
 <pre id="allText"></pre></div></div>
 <div class="modal" id="imp"><div class="dlg"><div class="bar"><h2>导入批注</h2><button class="primary" id="doImp">导入</button><button data-close>关闭</button></div>
 <div class="pad"><div id="strays"></div><div id="found"></div>
 <p class="hint">粘贴之前「复制全部」的文字，或「下载 JSON / Markdown」得到的文件内容。同一条批注（同 id，或页码、对象、内容、引用、标注都相同）不会重复导入；同 id 而导入方更新得更晚的，会更新为导入方的内容和状态。</p>
 <textarea id="impText" placeholder="在这里粘贴批注文字或 JSON"></textarea>
-<p><input type="file" id="impFile" accept=".json,.md,.txt"></p></div></div></div>
+<p><input type="file" id="impFile" accept=".json,.md,.txt" data-aria="import.pick"></p></div></div></div>
 <div class="modal" id="hand"><div class="dlg"><div class="bar"><h2 id="handTitle" data-msg="viewer.hand.title">交给 Agent</h2><button class="primary" id="doHand"><span id="doHandLabel" data-msg="viewer.hand.submit">交给 Agent</span><kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close><span data-msg="viewer.hand.cancel">取消</span><kbd>Esc</kbd></button></div>
 <div class="pad"><div id="handDrafts"></div><p id="handInfo"></p>
 <div class="hopts"><span id="hTargetRow"><span data-msg="viewer.hand.targetLabel">这批做到：</span><label data-title="viewer.hand.targetFinalTitle"><input type="radio" name="htarget" value="final" checked><span data-msg="viewer.hand.targetFinal">定稿</span></label>
@@ -236,22 +237,22 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <span class="hint" id="hOld" style="display:none" data-msg="viewer.hand.oldServer">背后的本地服务是旧版本，不支持「做到哪一步 / 子代理 / 复核」：停掉旧服务后重新运行 serve.py 再刷新</span></div><p class="hint"><span id="handLast"></span> <button id="handHist" data-title="viewer.hand.histTitle"><span data-msg="viewer.hand.hist">处理记录</span><kbd>J</kbd></button></p>
 <textarea id="handMsg" data-ph="viewer.hand.msgPlaceholder"></textarea>
 <p class="hint" id="handHelp" data-msg="viewer.hand.help">提交后，正在等待的代理会收到这批未处理批注，右上角显示「等待接收 → 处理中 → 已处理」（选「已初改·待复核」则停在待复核，由你决定请求复核或直接定稿）。代理还没接收时再提交一次，会合并成同一次（附言、选项以最新为准）。</p></div></div></div>
-<div class="modal" id="always"><div class="dlg"><div class="bar"><h2>常驻技能</h2><button class="primary" id="alwaysSave">保存<kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close>取消<kbd>Esc</kbd></button></div>
-<div class="pad"><p class="hint">这份审阅里，范围内的每一条批注都会要求 Agent 处理前先调用这些技能——适合需要长期约束、不会主动想到用技能的 Agent。只对当前这份审阅生效；单条批注的「技能」照常可加。名称框按 Enter 添加下一项（有高亮候选时先选择），按 Ctrl/Cmd+Enter 保存。</p>
-<div id="alwaysRows"></div><p><button id="alwaysAdd" title="添加一个常驻技能（在名称输入框按回车）">添加一个<kbd>↵</kbd></button></p></div></div></div>
+<div class="modal" id="always"><div class="dlg"><div class="bar"><h2 data-msg="viewer.always.dialogTitle">常驻技能</h2><button class="primary" id="alwaysSave"><span data-msg="viewer.always.save">保存</span><kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close><span data-msg="viewer.cancel">取消</span><kbd>Esc</kbd></button></div>
+<div class="pad"><p class="hint" data-msg="viewer.always.dialogHint">这份审阅里，范围内的每一条批注都会要求 Agent 处理前先调用这些技能——适合需要长期约束、不会主动想到用技能的 Agent。只对当前这份审阅生效；单条批注的「技能」照常可加。名称框按 Enter 添加下一项（有高亮候选时先选择），按 Ctrl/Cmd+Enter 保存。</p>
+<div id="alwaysRows"></div><p><button id="alwaysAdd" data-title="viewer.always.addTitle"><span data-msg="viewer.always.add">添加一个</span><kbd>↵</kbd></button></p></div></div></div>
 <div class="modal" id="batches"><div class="dlg"><div class="bar"><h2 data-msg="viewer.batch.title">处理记录</h2><span class="hint" id="batchSum"></span><button data-close><span data-msg="viewer.batch.close">关闭</span><kbd>Esc</kbd></button></div>
 <div class="pad" id="batchList"></div></div></div>
 <div id="toast"></div>
 <div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys" data-ae-lang="zh-CN">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要；先改后审的批次分初改、复核两段，可在这里请求复核或直接定稿），P 在报告上标注，C 写批注，K 填技能，G 常驻技能（每条批注按范围都让 Agent 先调用）；Esc 关闭或取消。<br>
 在报告上标注（P）：进入标注后，在左侧报告上<b>单击</b>放一个点，或<b>按住拖动</b>框选一块区域（像截图那样），再写意见。点和框都可以直接拖动，框拖右下角可调大小；点一下弹出这条批注的编辑、标为已处理、去掉标注、删除；鼠标移到右侧批注上，对应标注会高亮。已有的批注在「编辑」里可以补标注或重新标注。<br>
 风格优化（S）：选范围——1 整页、2 标注处（用刚放的点或框；还没有就进入标注）；可写想要的方向（不写也行），再添加批注。<br>
-「技能」：某条批注需要特定技能（skill）才能改好时填上，多个用逗号分隔；Agent 处理这条前会先调用它们。候选来自技能目录和用过的技能，会参考当前审阅和批注给出建议；可查看全部，或按名称、说明搜索，用上下方向键和回车选择。<br>
+「技能」：某条批注需要特定技能（skill）才能改好时填上，多个用逗号分隔；Agent 处理这条前会先调用它们。候选来自技能目录和用过的技能，会参考当前审阅和批注给出建议；可查看全部，或按名称、说明搜索，用上下方向键和回车选择；搜不到时会说明没有匹配的技能。技能名称和说明始终用目录里的原文，不随界面语言改写。<br>
 选中报告或讲稿里的文字后：D 删除这段（再按一次 D 或 ↵ 确认，防止打字时误触），R 改为…（在弹出的框里改好按 ↵），C 以它为引用写批注；另一侧同一页有相同或相近的句子时会提示「同时改」（默认勾选，B 切换）。写批注时 ⌘/Ctrl + ↵ 添加。<br>
 批注保存：用本地服务打开（地址是 http://127.0.0.1:端口）时，每次改动自动写入审阅目录的 notes.json，Agent 可直接读取；直接双击打开 HTML 时批注只存在本浏览器，用「复制全部」或「下载」交给 Agent。</div>
 <div class="keys" data-ae-lang="en" hidden>Shortcuts: ← → change page, Home / End for the first and last page; L jumps to the page of the last annotation; H help, N all annotations, A hand to the agent, J processing history (each hand-off counts as one batch: how many it solved and its summary; a draft-then-review batch splits into a draft stage and a review stage, and you can ask for the review or finalize it here), P annotate on the report, C write an annotation, K fill in skills, G standing skills (every annotation asks the agent to call them first, by scope); Esc closes or cancels.<br>
 Annotate on the report (P): once you are in marking mode, <b>click</b> on the report on the left to drop a pin, or <b>hold and drag</b> to select an area (like a screenshot), then write your request. Pins and areas can both be dragged, and an area is resized from its bottom-right corner; click one to edit that annotation, mark it resolved, remove the mark or delete it; hover an annotation on the right and its mark lights up. An existing annotation can be given a mark, or re-annotated, from Edit.<br>
 Style (S): choose a scope — 1 whole page, 2 at the mark (the pin or area you just placed; if there is none, marking mode starts); you can write the direction you want (or leave it empty), then add the annotation.<br>
-"Skills": when an annotation needs a particular skill to be done well, fill it in and separate several with commas; the agent calls them before handling this annotation. Candidates come from the skill catalog and the skills already used, with suggestions based on the current review and its annotations; you can see them all, or search by name or description, and choose with the arrow keys and Enter.<br>
+"Skills": when an annotation needs a particular skill to be done well, fill it in and separate several with commas; the agent calls them before handling this annotation. Candidates come from the skill catalog and the skills already used, with suggestions based on the current review and its annotations; you can see them all, or search by name or description, and choose with the arrow keys and Enter; when nothing matches it says so. Skill names and descriptions always stay as the catalog has them and are not rewritten for the interface language.<br>
 After you select text in the report or the speaker notes: D deletes it (press D or ↵ again to confirm, so typing does not trigger it by accident), R replaces it (edit it in the box that opens and press ↵), C writes an annotation quoting it; when the other side has the same or a similar sentence on this page you are offered "change both" (ticked by default, B toggles). While writing an annotation, ⌘/Ctrl + ↵ adds it.<br>
 Where annotations are kept: when you open it through the local service (the address is http://127.0.0.1:port) every change is written straight into the review directory's notes.json, which the agent can read; when you open the HTML by double-clicking, annotations live only in this browser — use "Copy all" or "Download" to hand them to the agent.</div></div></div></div>
 <script>
@@ -265,7 +266,7 @@ const $=id=>document.getElementById(id);
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},
   set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}},
   del(k){try{localStorage.removeItem(k)}catch(e){}}};
-const K={notes:`ae.${RID}.notes`,meta:`ae.${RID}.meta`,page:`ae.${RID}.page`,pending:`ae.${RID}.queue`,legacyPending:`ae.${RID}.pending`,failed:`ae.${RID}.failed`,drafts:`ae.${RID}.drafts`,hide:"ae.hideResolved"};
+const K={notes:`ae.${RID}.notes`,meta:`ae.${RID}.meta`,page:`ae.${RID}.page`,pending:`ae.${RID}.queue`,legacyPending:`ae.${RID}.pending`,failed:`ae.${RID}.failed`,drafts:`ae.${RID}.drafts`,hide:"ae.hideResolved",lang:"ae.exportLang"};
 const SS={get(k,d){try{const v=sessionStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{sessionStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 let i=0;{const s=+LS.get(K.page,0);if(s>0&&s<=N)i=s-1}
 let notes=FILE?LS.get(K.notes,[]):[]; if(!Array.isArray(notes))notes=[];
@@ -358,6 +359,7 @@ function applyMessages(root){
   scope.querySelectorAll("[data-title]").forEach(el=>{el.title=tMsg(el.dataset.title,msgParams(el))});
   scope.querySelectorAll("[data-aria]").forEach(el=>{el.setAttribute("aria-label",tMsg(el.dataset.aria,msgParams(el)))});
   scope.querySelectorAll("[data-ph]").forEach(el=>{el.placeholder=tMsg(el.dataset.ph,msgParams(el))});
+  scope.querySelectorAll("[data-label-msg]").forEach(el=>{el.dataset.label=tMsg(el.dataset.labelMsg)});
 }
 function applyLocale(){
   uiLocale=resolveUi(activeChoice());
@@ -384,6 +386,9 @@ function applyLocale(){
   const targetSel=$("ntarget");
   if(targetSel){for(const opt of targetSel.options) opt.textContent=targetLabel(opt.value)}
   applyMessages();
+  // 技能相关的进行中状态也要按当前语言重刷，否则同一行里会留着上一种语言
+  if(typeof updateAlwaysBtn==="function") updateAlwaysBtn();   // 按钮提示里带着常驻技能的名单和范围标签
+  if(typeof renderSkillList==="function") renderSkillList();   // 候选列表开着就重画（名称与说明仍是目录原文）
   // 说明正文按语言整段切换：长文带行内标记，不进词典（词典不承载 HTML）
   document.querySelectorAll("[data-ae-lang]").forEach(el=>{el.hidden=el.dataset.aeLang!==uiLocale});
   // 进行中的控件状态也要按当前语言重刷，否则同一行里会留着上一种语言
@@ -392,12 +397,16 @@ function applyLocale(){
   if(typeof updateStyleChip==="function") updateStyleChip();
   if(typeof updateMode==="function") updateMode();
   if(typeof showQuote==="function") showQuote();
+  updatePageStat();
+  updatePairText();
   if(typeof refreshList==="function") refreshList(true);
   // 提交状态、恢复提示和弹窗里的文字同理：只重画，不重新提交、不改选项、不请求新接口
   if(typeof renderHand==="function") renderHand();
   if(typeof renderResume==="function") renderResume();
   if($("hand").classList.contains("on")&&typeof paintHand==="function") paintHand();
   if($("batches").classList.contains("on")&&typeof renderBatches==="function") renderBatches();
+  if(typeof refreshExportPreview==="function"&&$("allnotes").classList.contains("on")) refreshExportPreview();
+  refreshPinPop();
 }
 $("localePick").addEventListener("change",()=>{
   try{localStorage.setItem(LOCALE_STORE, $("localePick").value)}catch(e){}
@@ -427,12 +436,17 @@ function settleMarks(x,body){
   if(body&&st&&st.scope&&("pin" in body||"region" in body)&&(("pin" in body&&"region" in body)||st.scope!=="page"))
     x.style={scope:x.region?"region":x.pin?"pin":"page"};
   return x}
-let skillCatalog=__SKILLS__;
-// 常驻技能：[{name, scope: all|报告|讲稿|style}]；服务模式以服务端为准，本地文件模式存本浏览器
-const ALWAYS_ZH={all:"全部批注",报告:"报告",讲稿:"讲稿",style:"风格优化"};
+let skillCatalog=__SKILLS__;   // 代理写进审阅目录的技能目录（skills.json），作为「技能」输入栏的候选
+// 常驻技能：[{name, scope: all|报告|讲稿|style}]；服务模式以服务端为准，本地文件模式存本浏览器。
+// 范围：ALWAYS_SCOPES 是存进 skills.json 的存储值（顺序即下拉顺序），ALWAYS_LABEL 只是界面显示、
+// 随语言变，ALWAYS_EXPORT 是中文导出文法里的固定写法。改显示不改存储值。
+const ALWAYS_SCOPES=["all","报告","讲稿","style"];
+const ALWAYS_LABEL={all:"viewer.always.scope.all",报告:"viewer.always.scope.report",讲稿:"viewer.always.scope.script",style:"viewer.always.scope.style"};
+const ALWAYS_EXPORT={all:"全部批注",报告:"报告",讲稿:"讲稿",style:"风格优化"};
+const alwaysLabel=s=>tMsg(ALWAYS_LABEL[s]||ALWAYS_LABEL.all);
 let alwaysSkills=__ALWAYS__, alwaysSig="";
 const alwaysFor=x=>{const t=String(x.target||""),st=!!(x.style&&x.style.scope);
-  return (alwaysSkills||[]).filter(a=>a.scope==="all"||(a.scope==="报告"&&t.includes("报告"))||(a.scope==="讲稿"&&t.includes("讲稿"))||(a.scope==="style"&&st))};   // 代理写进审阅目录的技能目录（skills.json），作为「技能」输入栏的候选
+  return (alwaysSkills||[]).filter(a=>a.scope==="all"||(a.scope==="报告"&&t.includes("报告"))||(a.scope==="讲稿"&&t.includes("讲稿"))||(a.scope==="style"&&st))};
 const parseSkills=v=>[...new Set(String(v||"").split(/[,，、;；\n]+/).map(x=>x.trim().slice(0,64)).filter(Boolean))].slice(0,10);
 let hand=null, handQueued=false;   // 「交给 Agent」：服务端的提交状态；连不上服务时提交暂存待补传
 const cum=[];P.reduce((a,p,k)=>(cum[k]=a+(p.sec||0),cum[k]),0);
@@ -462,6 +476,7 @@ P.forEach((p,k)=>{const o=document.createElement("option");o.value=k;o.textConte
 S.forEach(s=>{const b=document.createElement("button");b.textContent=s[0];b.onclick=()=>{const k=P.findIndex(p=>p.n>=s[1]);if(k>=0)go(k)};$("secs").appendChild(b)});
 
 // ---------- 报告舞台（Shadow DOM 隔离报告样式） ----------
+$("host").lang=__REPORT_LANG__;   // 保留材料自己的语言；未知时显式阻断界面语言继承
 const sr=$("host").attachShadow({mode:"open"});
 sr.innerHTML=`<style>:host{all:initial;display:block}
 ${RCSS}
@@ -546,6 +561,11 @@ function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:Str
   if(Array.isArray(x.skills)||typeof x.skills==="string"){const sk=parseSkills(Array.isArray(x.skills)?x.skills.join(","):x.skills);if(sk.length)n.skills=sk}
   const pr=x.pair;if(pr&&(pr.side==="报告"||pr.side==="讲稿")&&String(pr.text||"").trim())n.pair={side:pr.side,text:String(pr.text),match:pr.match==="exact"?"exact":"similar"};
   const e=x.edit;if(e&&(e.op==="delete"||e.op==="replace")&&String(e.from||"").trim())n.edit=e.op==="delete"?{op:"delete",from:String(e.from)}:{op:"replace",from:String(e.from),to:String(e.to??"")};
+  // 以看得见的正文为准：快捷修改的结构从正文重新推导，免得只改了正文、结构里还留着旧内容
+  if(n.edit&&typeof n.text==="string"){
+    if(n.text===DEL_TEXT)n.edit={op:"delete",from:n.edit.from};
+    else if(n.text.startsWith(REP_PREFIX))n.edit={op:"replace",from:n.edit.from,to:n.text.slice(REP_PREFIX.length)};
+    else delete n.edit}
   return n}
 function mergeLocal(items){const byId=new Map(notes.map(x=>[x.id,x])),keys=new Set(notes.map(dedupKey));let added=0,skipped=0,updated=0;
   items.forEach(raw=>{const x=cleanItem(raw);const cur=byId.get(x.id);
@@ -752,14 +772,14 @@ function drawPins(){stage.querySelectorAll(".ae-pin,.ae-region").forEach(e=>{if(
   const box=(rg,cls,id,label,tip)=>{const d=document.createElement("div");d.className="ae-region"+(cls?" "+cls:"");
     Object.assign(d.style,{left:rg.x+"%",top:rg.y+"%",width:rg.w+"%",height:rg.h+"%"});d.dataset.id=id||"";d.title=tip||"";
     const l=document.createElement("span");l.className="lbl";l.textContent=label;d.appendChild(l);
-    const z=document.createElement("span");z.className="rz";z.title="拖动调整大小";d.appendChild(z);stage.appendChild(d)};
+    const z=document.createElement("span");z.className="rz";z.title=tMsg("viewer.markResize");d.appendChild(z);stage.appendChild(d)};
   notes.filter(x=>x.page===P[i].n&&hasMark(x)).forEach((x,k)=>{if(hideDone&&isDone(x))return;
     const cls=[isDone(x)?"done":"",x.style&&x.style.scope?"sty":""].filter(Boolean).join(" "),sum=clip(noteSummary(x),80),rg=regionOf(x);
-    if(rg)box(rg,cls,x.id,`${k+1}${x.style&&x.style.scope?" 风格":""}`,sum+"（拖动可移动，拖右下角调大小，点击可编辑）");
-    if(x.pin)put(x.pin.x,x.pin.y,k+1,isDone(x)?"done":"",x.id,sum+"（拖动可移动，点击可编辑）")});
-  if(pendingPin)put(pendingPin.x,pendingPin.y,"+","pending","","新标点：写好意见后点「添加批注」；可拖动，点击可移除");
-  if(pendingRegion)box(pendingRegion,"pending","","新框","新框选的区域：写好意见后点「添加批注」；可拖动、拖右下角调大小，点击可移除")}
-function noteSummary(x){const qe=editOf(x);return qe?(qe.op==="delete"?`删除「${qe.from}」`:`「${qe.from}」改为「${qe.to}」`):String(x.text||"")}
+    if(rg)box(rg,cls,x.id,`${k+1}${x.style&&x.style.scope?" "+tMsg("viewer.styleBtn"):""}`,tMsg("viewer.regionTip",{text:sum}));
+    if(x.pin)put(x.pin.x,x.pin.y,k+1,isDone(x)?"done":"",x.id,tMsg("viewer.pinTip",{text:sum}))});
+  if(pendingPin)put(pendingPin.x,pendingPin.y,"+","pending","",tMsg("viewer.pendingPinTip"));
+  if(pendingRegion)box(pendingRegion,"pending","",tMsg("viewer.pendingRegion"),tMsg("viewer.pendingRegionTip"))}
+function noteSummary(x){const qe=editOf(x);return qe?(qe.op==="delete"?tMsg("viewer.deleteSummary",{text:qe.from}):tMsg("viewer.replaceSummary",{from:qe.from,to:qe.to})):String(x.text||"")}
 function editOf(x){const e=x.edit;return e&&typeof e==="object"&&(e.op==="delete"||e.op==="replace")?e:null}
 function noteHtml(x){
   const done=isDone(x), dr=isDraft(x), fl=inFlight(x), ed=editingId===x.id, id=escH(x.id), qe=editOf(x);
@@ -768,7 +788,7 @@ function noteHtml(x){
       :`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
   const sk=Array.isArray(x.skills)?x.skills:[];
   const body=ed?(qe&&qe.op==="delete"?`<div class="body"><span class="op">${tMsg("viewer.quickDelete")}</span><del>${escH(qe.from)}</del></div>`:`<textarea id="etext">${escH(editBuf[x.id]??(qe?qe.to:x.text))}</textarea>`)
-      +`<input class="eskills" id="eskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" placeholder="技能（可选，逗号分隔）" value="${escH(editBuf["sk:"+x.id]??sk.join(", "))}">`
+      +`<input class="eskills" id="eskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" placeholder="${escH(tMsg("viewer.skill.editPlaceholder"))}" value="${escH(editBuf["sk:"+x.id]??sk.join(", "))}">`
     :qe?(qe.op==="delete"?`<div class="body"><span class="op">${tMsg("viewer.quickDelete")}</span><del>${escH(qe.from)}</del></div>`
         :`<div class="body"><del>${escH(qe.from)}</del> → <ins>${escH(qe.to)}</ins></div>`)
     :`<div class="body">${escH(x.text).replace(/\n/g,"<br>")}</div>`;
@@ -781,7 +801,7 @@ function noteHtml(x){
    +(ed?`<div class="anchor">${tMsg("viewer.moveTo")} <select id="epage">${P.map(q=>`<option value="${q.n}"${q.n===(editBuf["pg:"+x.id]??x.page)?" selected":""}>${escH(tMsg("viewer.page",{page:q.n}))}</option>`).join("")}</select></div>`:"")
    +(!ed&&x.anchor?`<div class="anchor">${tMsg("viewer.anchorLabel")}${escH(clip(x.anchor,140))}</div>`:"")
    +(()=>{if(ed)return"";const al=done?[]:alwaysFor(x).filter((a,k,arr)=>!sk.includes(a.name)&&arr.findIndex(b=>b.name===a.name)===k);
-      return sk.length||al.length?`<div class="skills">${al.map(a=>`<span class="skill al" title="常驻技能（${escH(ALWAYS_ZH[a.scope]||"")}）：处理这条前 Agent 会先调用">常驻 ${escH(a.name)}</span>`).join("")}${sk.map(n=>`<span class="skill" title="处理这条批注时调用的技能">⚙ ${escH(n)}</span>`).join("")}</div>`:""})()
+      return sk.length||al.length?`<div class="skills">${al.map(a=>`<span class="skill al" title="${escH(tMsg("viewer.skill.alwaysChipTitle",{scope:alwaysLabel(a.scope)}))}">${escH(tMsg("viewer.skill.alwaysChip",{name:a.name}))}</span>`).join("")}${sk.map(n=>`<span class="skill" title="${escH(tMsg("viewer.skill.noteTitle"))}">⚙ ${escH(n)}</span>`).join("")}</div>`:""})()
    +(x.pair&&x.pair.text?`<div class="pair">${escH(tMsg("viewer.pairLine",{side:targetLabel(x.pair.side),match:tMsg(x.pair.match==="exact"?"viewer.pairSame":"viewer.pairSimilar"),text:clip(x.pair.text,120)}))}</div>`:"")
    +((done||dr)&&x.resolution?`<div class="res">${dr?"初改说明":"处理说明"}：${escH(x.resolution).replace(/\n/g,"<br>")}</div>`:"")
    +(!ed&&Array.isArray(x.trail)&&x.trail.length?`<div class="trail">${tMsg("viewer.batch.trailLabel")}${trailText(x)}</div>`:"")+`</div>`}
@@ -821,8 +841,8 @@ function setMarkMode(on){markMode=on;stage.classList.toggle("markmode",on);const
   if(on)toast(remarkId?tMsg("viewer.markRemarkToast"):tMsg("viewer.markToast"),3000);
   else{remarkId=null;if(rdraw){if(rdraw.box)rdraw.box.remove();rdraw=null}}}
 function showQuote(){const q=$("qbox");q.style.display=quote?"block":"none";
-  const fromLabel=quoteFrom?escH(targetLabel(quoteFrom)):"";
-  q.innerHTML=quote?`${escH(tMsg("viewer.quoteLine",{label:tMsg("viewer.quote"),side:fromLabel,text:escH(quote)}))}${quotePair?`<br>${escH(tMsg("viewer.pairEcho",{side:escH(targetLabel(quotePair.side)),match:tMsg(quotePair.match==="exact"?"viewer.pairSame":"viewer.pairSimilar"),text:escH(clip(quotePair.text,80))}))}`:""} <a href="#" id="qx">${tMsg("viewer.pairCancel")}</a>`:"";
+  const fromLabel=quoteFrom?targetLabel(quoteFrom):"";
+  q.innerHTML=quote?`${escH(tMsg("viewer.quoteLine",{label:tMsg("viewer.quote"),side:fromLabel,text:quote}))}${quotePair?`<br>${escH(tMsg("viewer.pairEcho",{side:targetLabel(quotePair.side),match:tMsg(quotePair.match==="exact"?"viewer.pairSame":"viewer.pairSimilar"),text:clip(quotePair.text,80)}))}`:""} <a href="#" id="qx">${tMsg("viewer.pairCancel")}</a>`:"";
   if(quote)$("qx").onclick=e=>{e.preventDefault();quote="";quotePair=null;showQuote()}}
 function setQuote(t,from){quote=clip(t.replace(/\s+/g," "),300);quoteFrom=from;showQuote();$("ntarget").value=from}
 document.addEventListener("compositionstart",()=>{composing=true},true);
@@ -854,8 +874,8 @@ document.addEventListener("mouseup",e=>{
   sel={text:got.text.replace(/\s+/g," "),from:got.from,x:e.clientX,y:e.clientY};
   sel.pair=findCounterpart(sel.text,sel.from);
   const pr=$("pairRow");pr.classList.toggle("on",!!sel.pair);
-  if(sel.pair){$("pairOn").checked=true;   // 默认同时改：专注一侧时最容易忘的就是另一侧
-    $("pairText").textContent=`${sel.pair.side}这页也有${sel.pair.match==="exact"?"同一句":"相近的句子"}：「${clip(sel.pair.text,46)}${Array.from(sel.pair.text).length>46?"…":""}」同时改`}
+  if(sel.pair)$("pairOn").checked=true;   // 默认同时改：专注一侧时最容易忘的就是另一侧
+  updatePairText();
   syncPair();showSelbar()});
 // 报告 ↔ 讲稿对应句：在同一页另一侧找相同或相近的句子（与 scripts/match.py 同一算法）
 const PUNCT={"，":",","。":".","．":".","：":":","；":";","（":"(","）":")","“":'"',"”":'"',"「":'"',"」":'"',"『":'"',"』":'"',"‘":"'","’":"'","％":"%","！":"!","？":"?"};
@@ -872,6 +892,8 @@ function findCounterpart(text,from){const other=from==="报告"?"讲稿":"报告
   return best&&best.score>=.45?{side:other,text:clip(best.x,300),match:"similar"}:null}
 function syncPair(){const on=!!(sel&&sel.pair&&$("pairOn").checked);quotePair=on?sel.pair:null;
   if(sel)$("ntarget").value=on?"报告和讲稿":sel.from;showQuote()}
+function updatePairText(){const pair=sel&&sel.pair;
+  $("pairText").textContent=pair?tMsg(pair.match==="exact"?"viewer.pairPrompt.same":"viewer.pairPrompt.similar",{side:targetLabel(pair.side),text:clip(pair.text,46)+(Array.from(pair.text).length>46?"…":"")}):tMsg("viewer.pairLabel")}
 $("pairOn").addEventListener("change",syncPair);
 function addEdit(op,to){if(!sel)return;const p=P[i];
   const edit=op==="delete"?{op,from:sel.text}:{op,from:sel.text,to};
@@ -880,7 +902,7 @@ function addEdit(op,to){if(!sel)return;const p=P[i];
     quote:sel.text,quoteFrom:sel.from,pin:null,edit,status:"open",at:nowIso()};
   if(both)note.pair={side:sel.pair.side,text:sel.pair.text,match:sel.pair.match};
   hideSelbar();clearSelection();quote="";quotePair=null;showQuote();sel=null;
-  mutate({kind:"add",note});toast(op==="delete"?"已记下：删除这段":"已记下：改写这段")}
+  mutate({kind:"add",note});toast(tMsg(op==="delete"?"viewer.deleteRecorded":"viewer.replaceRecorded"))}
 function selAction(a){if(!sel)return;
   if(a==="delete")addEdit("delete");
   else if(a==="replace"){const r=$("repbox"),t=$("repText");$("selbar").classList.remove("on");r.classList.add("on");place(r,sel.x,sel.y);
@@ -888,7 +910,7 @@ function selAction(a){if(!sel)return;
   else{hideSelbar();clearSelection();$("ntext").focus()}}
 $("selbar").addEventListener("click",e=>{const b=e.target.closest("[data-sel]");if(b)selAction(b.dataset.sel)});
 function repOk(){const to=$("repText").value.trim();if(!sel)return hideSelbar();
-  if(to===sel.text.trim()){toast("没有改动");return}addEdit("replace",to)}
+  if(to===sel.text.trim()){toast(tMsg("viewer.unchanged"));return}addEdit("replace",to)}
 $("repOk").onclick=repOk;$("repCancel").onclick=()=>{hideSelbar();sel=null};
 $("repText").addEventListener("keydown",e=>{e.stopPropagation();if(e.isComposing||e.keyCode===229)return;
   if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();repOk()}else if(e.key==="Escape"){hideSelbar();sel=null}});
@@ -900,11 +922,11 @@ const markAnchor=mk=>mk.region?regionAnchor(mk.region):mk.pin?pointAnchor(mk.pin
 // 放好一个标注：给正在写的新批注，或替换某条已有批注的标注
 function endRemark(){if(remarkId)setMarkMode(false)}   // 离开「重新标注」：取消、保存、换一条编辑、改风格时都要退出，免得下一次点击改错批注
 function placeMark(mk,rid){
-  if(rid){if(!notes.some(n=>n.id===rid)){toast("这条批注已被删除",3000);return}
+  if(rid){if(!notes.some(n=>n.id===rid)){toast(tMsg("viewer.noteDeleted"),3000);return}
     if(oldGuard())return;
     stashEdit();mutate({kind:"patch",id:rid,body:{pin:mk.pin||null,region:mk.region||null,anchor:markAnchor(mk)}});
     if(editingId===rid)refreshList(true);else drawPins();   // 编辑中的卡片按钮（重新标注 / 去掉标注）跟着变
-    toast(mk.region?"已给这条批注框选区域":"已给这条批注放置标点");return}
+    toast(tMsg(mk.region?"viewer.regionAdded":"viewer.pinAdded"));return}
   pendingPin=mk.pin||null;pendingRegion=mk.region||null;
   if($("ntarget").value==="讲稿")$("ntarget").value="报告";   // 标注在报告上
   updateStyleChip();drawPins();saveDraft();$("ntext").focus();
@@ -921,7 +943,7 @@ function addNote(){let text=$("ntext").value.trim();
   styleOn=false;pendingRegion=null;updateStyleChip();
   if(quote&&quotePair)note.pair={side:quotePair.side,text:quotePair.text,match:quotePair.match};
   const sk=parseSkills($("nskills").value);if(sk.length)note.skills=sk;$("nskills").value="";
-  quote="";quotePair=null;pendingPin=null;$("ntext").value="";autoGrow();showQuote();delete drafts[p.n];SS.set(K.drafts,drafts);mutate({kind:"add",note});toast("已添加")}
+  quote="";quotePair=null;pendingPin=null;$("ntext").value="";autoGrow();showQuote();delete drafts[p.n];SS.set(K.drafts,drafts);mutate({kind:"add",note});toast(tMsg("viewer.added"))}
 $("script").addEventListener("click",e=>{const b=e.target.closest("[data-act]");if(!b)return;const id=b.dataset.id;
   switch(b.dataset.act){
     case "add":addNote();break;
@@ -933,13 +955,13 @@ $("script").addEventListener("click",e=>{const b=e.target.closest("[data-act]");
     case "del":if(confirm(tMsg("viewer.confirmDelete")))mutate({kind:"del",id});break;
     case "edit":{endRemark();stashEdit();editingId=id;refreshList(true);($("etext")||$("eskills")).focus();break}
     case "cancel":endRemark();delete editBuf[editingId];delete editBuf["sk:"+editingId];delete editBuf["pg:"+editingId];editingId=null;refreshList(true);break;
-    case "save":{endRemark();const x=notes.find(n=>n.id===id);if(!x){toast("这条批注已被删除，改动没有保存",4000);editingId=null;refreshList(true);break}
+    case "save":{endRemark();const x=notes.find(n=>n.id===id);if(!x){toast(tMsg("viewer.deletedUnsaved"),4000);editingId=null;refreshList(true);break}
       const qe=editOf(x),et=$("etext"),t=et?et.value.trim():"",skills=parseSkills($("eskills").value);
-      if(et&&!t&&!qe){toast("批注内容不能为空");return}delete editBuf[id];delete editBuf["sk:"+id];delete editBuf["pg:"+id];editingId=null;
+      if(et&&!t&&!qe){toast(tMsg("viewer.emptyNote"));return}delete editBuf[id];delete editBuf["sk:"+id];delete editBuf["pg:"+id];editingId=null;
       const body=qe&&qe.op==="delete"?{skills}:qe?{edit:{...qe,to:t},text:REP_PREFIX+t,skills}:{text:t,skills};
       const np=+(($("epage")||{}).value||x.page),pg=P.find(q=>q.n===np);
       if(pg&&(np!==x.page||x.orphan))Object.assign(body,{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false});   // 挪到别的页（或确认原页）
-      mutate({kind:"patch",id,body});if(body.page&&body.page!==P[i].n)toast(`已移到第 ${body.page} 页`);break}
+      mutate({kind:"patch",id,body});if(body.page&&body.page!==P[i].n)toast(tMsg("viewer.movedPage",{page:body.page}));break}
     case "unpin":stashEdit();mutate({kind:"patch",id,body:{pin:null,region:null}});drawPins();refreshList(true);break;
     case "resolve":mutate({kind:"patch",id,body:{status:"resolved"}});break;
     case "reopen":mutate({kind:"patch",id,body:{status:"open"}});break;
@@ -959,7 +981,11 @@ function highlightPin(id){stage.querySelectorAll(".ae-pin,.ae-region").forEach(p
 function flash(el){if(!el)return;el.classList.remove("flash");void el.offsetWidth;el.classList.add("flash")}
 function flashCard(id){const c=$("nlist").querySelector(`[data-note="${CSS.escape(id)}"]`);if(c){c.scrollIntoView({block:"nearest",behavior:"smooth"});flash(c)}}
 function closePinPop(){$("pinpop").classList.remove("on")}
-function openPinPop(id,el){const pop=$("pinpop"),r=el.getBoundingClientRect();
+function refreshPinPop(){const pop=$("pinpop");if(!pop.classList.contains("on"))return;
+  const el=pop.dataset.id?pinEl(pop.dataset.id):stage.querySelector(pop.dataset.region==="true"?".ae-region.pending":".ae-pin.pending");
+  if(el)openPinPop(pop.dataset.id,el,true);else closePinPop()}
+function openPinPop(id,el,repaint=false){const pop=$("pinpop"),r=el.getBoundingClientRect();
+  pop.dataset.id=id||"";pop.dataset.region=String(el.classList.contains("ae-region"));
   if(!id)pop.innerHTML=el.classList.contains("ae-region")
     ?`<div class="pp-t">${escH(tMsg("viewer.markNewRegion"))}</div><div class="pp-a"><button data-pp="unregion">${tMsg("viewer.markRemoveRegion")}</button></div>`
     :`<div class="pp-t">${escH(tMsg("viewer.markNewPin"))}</div><div class="pp-a"><button data-pp="unpend">${tMsg("viewer.markRemovePin")}</button></div>`;
@@ -967,7 +993,7 @@ function openPinPop(id,el){const pop=$("pinpop"),r=el.getBoundingClientRect();
     pop.innerHTML=`<div class="pp-m">${escH(x.target?targetLabel(x.target):tMsg("viewer.popUnset"))}${isDone(x)?` · ${tMsg("viewer.popResolved")}`:""}</div><div class="pp-t">${escH(clip(noteSummary(x),200))}</div>`
       +`<div class="pp-a"><button data-pp="edit" data-id="${eid}">${tMsg("viewer.edit")}</button><button data-pp="${isDone(x)?"reopen":"resolve"}" data-id="${eid}">${tMsg(isDone(x)?"viewer.reopen":"viewer.resolve")}</button>`
       +`${hasMark(x)?`<button data-pp="unpin" data-id="${eid}">${tMsg("viewer.unpin")}</button>`:""}<button data-pp="del" data-id="${eid}">${tMsg("viewer.delete")}</button><button data-pp="close">${tMsg("viewer.popClose")}</button></div>`;
-    flashCard(id)}
+    if(!repaint)flashCard(id)}
   pop.classList.add("on");place(pop,r.left+r.width/2,r.top+r.height/2)}
 $("pinpop").addEventListener("click",e=>{const b=e.target.closest("[data-pp]");if(!b)return;const id=b.dataset.id,a=b.dataset.pp;closePinPop();
   if(a==="unpend"){pendingPin=null;updateStyleChip();drawPins();saveDraft()}
@@ -1010,8 +1036,8 @@ addEventListener("mouseup",e=>{if(!drag)return;e.stopPropagation();   // 不让�
   const d=drag;drag=null;d.pin.classList.remove("drag");
   if(d.moved&&d.pos){
     if(d.isReg&&d.id&&oldGuard()){drawPins();return}
-    if(d.isReg){if(d.id){mutate({kind:"patch",id:d.id,body:{region:d.pos,anchor:regionAnchor(d.pos)}});drawPins();toast(d.rz?"区域大小已调整":"区域已移动")}else{pendingRegion=d.pos;saveDraft()}}
-    else if(d.id){mutate({kind:"patch",id:d.id,body:{pin:d.pos,anchor:pointAnchor(d.pos)}});drawPins();toast("标点已移动")}else{pendingPin=d.pos;saveDraft()}}
+    if(d.isReg){if(d.id){mutate({kind:"patch",id:d.id,body:{region:d.pos,anchor:regionAnchor(d.pos)}});drawPins();toast(tMsg(d.rz?"viewer.regionResized":"viewer.regionMoved"))}else{pendingRegion=d.pos;saveDraft()}}
+    else if(d.id){mutate({kind:"patch",id:d.id,body:{pin:d.pos,anchor:pointAnchor(d.pos)}});drawPins();toast(tMsg("viewer.pinMoved"))}else{pendingPin=d.pos;saveDraft()}}
   else openPinPop(d.id,d.pin)},true);
 stage.addEventListener("mouseover",e=>{const pin=e.target.closest&&e.target.closest(".ae-pin,.ae-region");
   $("nlist").querySelectorAll(".note.hl").forEach(c=>c.classList.remove("hl"));
@@ -1054,7 +1080,7 @@ function skillPart(el){const value=String(el.value||"");if(el.classList.contains
   let start=cursor,end=cursor;while(start>0&&!sep.test(value[start-1]))start--;while(end<value.length&&!sep.test(value[end]))end++;
   const others=(value.slice(0,start)+value.slice(end)).split(sep).map(x=>x.trim()).filter(Boolean);
   return{start,end,query:value.slice(start,end).trim(),others}}
-function hideSkillList(){const box=$("skillList");box.classList.remove("on");if(skillInput){skillInput.setAttribute("aria-expanded","false");skillInput.removeAttribute("aria-activedescendant")}skillInput=null;skillChoices=[];skillIndex=-1;skillShowAll=false}
+function hideSkillList(){const box=$("skillList");box.classList.remove("on");box.classList.remove("hint");if(skillInput){skillInput.setAttribute("aria-expanded","false");skillInput.removeAttribute("aria-activedescendant")}skillInput=null;skillChoices=[];skillIndex=-1;skillShowAll=false}
 function positionSkillList(){if(!skillInput||!$("skillList").classList.contains("on"))return;
   const box=$("skillList"),r=skillInput.getBoundingClientRect(),w=Math.min(Math.max(r.width,240),innerWidth-24);
   box.style.width=w+"px";box.style.left=Math.max(12,Math.min(r.left,innerWidth-w-12))+"px";
@@ -1078,16 +1104,19 @@ function renderSkillList(){const el=document.activeElement;if(!isSkillInput(el))
   const selected=skillInput===el&&skillIndex>=0&&skillChoices[skillIndex]?skillChoices[skillIndex].name:null;
   if(skillInput&&skillInput!==el)hideSkillList();skillInput=el;const part=skillPart(el),q=part.query.toLocaleLowerCase();
   const used=[];notes.forEach(x=>(Array.isArray(x.skills)?x.skills:[]).forEach(n=>{if(!used.includes(n))used.push(n)}));
-  const all=[...skillCatalog.map(c=>({name:c.name,desc:c.desc||""})),...used.filter(n=>!skillCatalog.some(c=>c.name===n)).map(n=>({name:n,desc:"用过"}))];
+  const all=[...skillCatalog.map(c=>({name:c.name,desc:c.desc||""})),...used.filter(n=>!skillCatalog.some(c=>c.name===n)).map(n=>({name:n,desc:tMsg("viewer.skill.used")}))];
   const seen=new Set();const matching=all.filter(c=>c.name&&!seen.has(c.name)&&!part.others.includes(c.name)&&
     (String(c.name).toLocaleLowerCase().includes(q)||String(c.desc).toLocaleLowerCase().includes(q))&&(seen.add(c.name),true));
   const ranked=matching.map((c,k)=>({...c,score:skillScore(c),order:k})).sort((a,b)=>b.score-a.score||a.order-b.order);
   skillChoices=!q&&!skillShowAll?ranked.slice(0,8):ranked;
-  skillIndex=selected?skillChoices.findIndex(c=>c.name===selected):-1;const box=$("skillList");box.innerHTML=skillChoices.map((c,k)=>`<div role="option" id="skill-option-${k}" aria-selected="${k===skillIndex}" data-skill="${k}"><b>${escH(c.name)}</b>${c.score?'<span class="skill-rec">建议</span>':""}${c.desc?`<span class="skill-desc">${escH(c.desc)}</span>`:""}</div>`).join("")+
-    (!q&&!skillShowAll&&ranked.length>skillChoices.length?`<button class="skill-more" data-skill-more aria-label="查看全部技能">查看全部技能（${ranked.length}）</button>`:"");
+  const showAll=tMsg("viewer.skill.showAll",{count:ranked.length});
+  skillIndex=selected?skillChoices.findIndex(c=>c.name===selected):-1;const box=$("skillList");box.innerHTML=skillChoices.map((c,k)=>`<div role="option" id="skill-option-${k}" aria-selected="${k===skillIndex}" data-skill="${k}"><b>${escH(c.name)}</b>${c.score?`<span class="skill-rec">${escH(tMsg("viewer.skill.recommended"))}</span>`:""}${c.desc?`<span class="skill-desc">${escH(c.desc)}</span>`:""}</div>`).join("")+
+    (skillChoices.length?"":`<p class="skill-none">${escH(tMsg(q?"viewer.skill.noMatch":"viewer.skill.none"))}</p>`)+
+    (!q&&!skillShowAll&&ranked.length>skillChoices.length?`<button class="skill-more" data-skill-more aria-label="${escH(showAll)}">${escH(showAll)}</button>`:"");
   el.setAttribute("role","combobox");el.setAttribute("aria-controls","skillList");el.setAttribute("aria-expanded",skillChoices.length?"true":"false");
   if(skillIndex>=0)el.setAttribute("aria-activedescendant",`skill-option-${skillIndex}`);else el.removeAttribute("aria-activedescendant");
-  box.classList.toggle("on",!!skillChoices.length);positionSkillList()}
+  // 没有候选时只留一句提示：hint 让浮层不拦点击，免得盖住下面的按钮
+  box.classList.toggle("on",!!skillChoices.length||!!q);box.classList.toggle("hint",!skillChoices.length);positionSkillList()}
 function chooseSkill(k){const el=skillInput,c=skillChoices[k];if(!el||!c)return;const p=skillPart(el),v=String(el.value||""),old=v.slice(p.start,p.end),lead=(old.match(/^\s*/)||[""])[0],tail=(old.match(/\s*$/)||[""])[0];
   el.value=v.slice(0,p.start)+lead+c.name+tail+v.slice(p.end);const pos=p.start+lead.length+c.name.length;el.setSelectionRange(pos,pos);
   el.dispatchEvent(new Event("input",{bubbles:true}));hideSkillList()}
@@ -1113,13 +1142,14 @@ const ALWAYS_EMBED=JSON.stringify(alwaysSkills||[]);
 if(FILE){const v=LS.get(K_ALWAYS,null);
   if(v&&Array.isArray(v.items)&&v.base===ALWAYS_EMBED)alwaysSkills=v.items;
   else if(Array.isArray(v)&&!(alwaysSkills||[]).length)alwaysSkills=v}
+function alwaysList(){return (alwaysSkills||[]).map(a=>tMsg("viewer.always.scopeItem",{name:a.name,scope:alwaysLabel(a.scope)})).join(tMsg("viewer.always.listSep"))}
 function updateAlwaysBtn(){const n=(alwaysSkills||[]).length;$("alwaysN").textContent=n||"";
-  $("alwaysBtn").title=(n?"常驻技能："+alwaysSkills.map(a=>`${a.name}（${ALWAYS_ZH[a.scope]||""}）`).join("、")+"。":"")+"每条批注（按范围）都让 Agent 先调用（G）"}
+  $("alwaysBtn").title=(n?tMsg("viewer.always.buttonList",{list:alwaysList()}):"")+tMsg("viewer.always.buttonTitle",{key:"G"})}
 updateAlwaysBtn();
 function alwaysRow(a){const d=document.createElement("div");d.className="arow";
-  d.innerHTML=`<input class="aname" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" placeholder="技能名，如 humanizer-zh" value="${escH(a.name||"")}">`
-    +`<select class="ascope">${Object.entries(ALWAYS_ZH).map(([k,v])=>`<option value="${escH(k)}"${a.scope===k?" selected":""}>${escH(v)}</option>`).join("")}</select>`
-    +`<button class="adel" title="去掉这一个" aria-label="去掉">×</button>`;
+  d.innerHTML=`<input class="aname" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" data-ph="viewer.always.rowPlaceholder" placeholder="${escH(tMsg("viewer.always.rowPlaceholder"))}" value="${escH(a.name||"")}">`
+    +`<select class="ascope">${ALWAYS_SCOPES.map(k=>`<option value="${escH(k)}" data-msg="${ALWAYS_LABEL[k]}"${a.scope===k?" selected":""}>${escH(alwaysLabel(k))}</option>`).join("")}</select>`
+    +`<button class="adel" data-title="viewer.always.removeRow" data-aria="viewer.always.removeRowAria" title="${escH(tMsg("viewer.always.removeRow"))}" aria-label="${escH(tMsg("viewer.always.removeRowAria"))}">×</button>`;
   d.querySelector(".adel").onclick=()=>d.remove();return d}
 let alwaysOpenSig="";
 function openAlways(){const box=$("alwaysRows");box.innerHTML="";alwaysOpenSig=JSON.stringify(alwaysSkills||[]);(alwaysSkills||[]).forEach(a=>box.appendChild(alwaysRow(a)));
@@ -1128,30 +1158,32 @@ function openAlways(){const box=$("alwaysRows");box.innerHTML="";alwaysOpenSig=J
 $("alwaysAdd").onclick=()=>{const r=alwaysRow({scope:"all"});$("alwaysRows").appendChild(r);r.querySelector(".aname").focus()};
 const SKILL_SEP=/[,，、;；\n]+/;
 function splitAlways(list){const out=[];(list||[]).forEach(a=>String(a.name||"").split(SKILL_SEP).forEach(n=>{n=n.trim().slice(0,64);
-  const e={name:n,scope:ALWAYS_ZH[a.scope]?a.scope:"all"};if(n&&!out.some(o=>o.name===e.name&&o.scope===e.scope))out.push(e)}));return out}
+  const e={name:n,scope:ALWAYS_SCOPES.includes(a.scope)?a.scope:"all"};if(n&&!out.some(o=>o.name===e.name&&o.scope===e.scope))out.push(e)}));return out}
 async function setAlways(items){   // 保存常驻技能；返回实际保存的名单，失败返回 null
   items=splitAlways(items);
-  if(items.length>20){toast(`常驻技能最多 20 个（现在 ${items.length} 个）`,4000);return null}
+  if(items.length>20){toast(tMsg("viewer.always.tooMany",{count:items.length,limit:20}),4000);return null}
   if(FILE){alwaysSkills=items;LS.set(K_ALWAYS,{items,base:ALWAYS_EMBED});return items}
-  if(mode!=="server"){toast("服务没连上：常驻技能暂时保存不了，连上后再试",4000);return null}
+  if(mode!=="server"){toast(tMsg("viewer.always.noServer"),4000);return null}
   try{const r=await api("POST","/api/skills/always",{always:items});alwaysSkills=Array.isArray(r.alwaysSkills)?r.alwaysSkills:items;alwaysSig=JSON.stringify(alwaysSkills);return alwaysSkills}
-  catch(e){toast(e.code==="no-api"?"本地服务是旧版本，不支持常驻技能：停掉旧服务后重新运行 serve.py":"没能保存常驻技能："+(e.status?e.message:"本地服务没有应答，请稍后再试"),6000);return null}}
+  catch(e){toast(e.code==="no-api"?tMsg("viewer.always.oldServer"):e.status?tMsg("viewer.always.saveFailed",{reason:e.message}):tMsg("viewer.always.noReply"),6000);return null}}
 async function saveAlways(){
   const items=[...$("alwaysRows").querySelectorAll(".arow")].map(r=>({name:r.querySelector(".aname").value,scope:r.querySelector(".ascope").value}));
-  if(JSON.stringify(alwaysSkills||[])!==alwaysOpenSig&&!confirm("你打开设置之后，常驻技能被改过（可能是 Agent 改的）。仍用你这份覆盖？"))return;
+  if(JSON.stringify(alwaysSkills||[])!==alwaysOpenSig&&!confirm(tMsg("viewer.always.changed")))return;
   const saved=await setAlways(items);if(!saved)return;
   $("always").classList.remove("on");updateAlwaysBtn();refreshList(true);
-  toast(saved.length?`已保存 ${saved.length} 个常驻技能：之后每条批注（按范围）都会让 Agent 先调用`:"已清空常驻技能",3500)}
+  toast(saved.length?tMsg("viewer.always.saved",{count:saved.length}):tMsg("viewer.always.cleared"),3500)}
 // 导入的内容里带了常驻技能（本地文件模式导出的）：和当前不同就问要不要采用
 function importAlways(text){const t=String(text||"").trim();let list=null;
   try{if(t[0]==="{"){const d=JSON.parse(t);if(Array.isArray(d.alwaysSkills))list=d.alwaysSkills}
-    else{const m=t.match(/^常驻技能（[^）]*）：(.+)$/m);if(m){const rev={全部批注:"all",全部:"all",报告:"报告",讲稿:"讲稿",风格优化:"style"};
-      list=m[1].split("、").map(p=>p.trim().match(/^(.+?)（(全部批注|全部|报告|讲稿|风格优化)）$/)).filter(Boolean).map(mm=>({name:mm[1],scope:rev[mm[2]]}))}}}catch(e){}
+    else{const g=expMdGrammar(t)||G_ZH;const m=g.always.exec(t);
+      if(m)list=m[1].split(g.alwaysSep).map(p=>p.trim().match(g.alwaysItem)).filter(Boolean)
+        .map(mm=>({name:mm[1],scope:g.alwaysRev[mm[2]]||"all"}))}}catch(e){}
   return list}
 async function offerAlways(list){if(!list)return;const items=splitAlways(list);
   if(JSON.stringify(items)===JSON.stringify(alwaysSkills||[]))return;
-  if(!confirm(`导入的内容里带了常驻技能：${items.map(a=>`${a.name}（${ALWAYS_ZH[a.scope]}）`).join("、")||"（无）"}。设为这份审阅的常驻技能？`))return;
-  const saved=await setAlways(items);if(saved){updateAlwaysBtn();refreshList(true);toast("已采用导入的常驻技能",3000)}}
+  const shown=items.map(a=>tMsg("viewer.always.scopeItem",{name:a.name,scope:alwaysLabel(a.scope)})).join(tMsg("viewer.always.listSep"))||tMsg("viewer.always.importNone");
+  if(!confirm(tMsg("viewer.always.importOffer",{list:shown})))return;
+  const saved=await setAlways(items);if(saved){updateAlwaysBtn();refreshList(true);toast(tMsg("viewer.always.imported"),3000)}}
 $("alwaysSave").onclick=saveAlways;
 $("always").addEventListener("keydown",e=>{e.stopPropagation();if(e.isComposing||e.keyCode===229)return;
   if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){e.preventDefault();saveAlways()}
@@ -1223,7 +1255,7 @@ function renderHand(){const el=$("handState"),L=hand&&hand.latest;
       :(handUserMessage(L)?tMsg("viewer.hand.stateTitle.note",{message:handUserMessage(L)}):""))+tMsg("viewer.hand.stateTitle.hint")}
 let handMode=null;   // null = 交一批新的；{seq} = 请求复核这一批
 const HOPT=`ae.${RID}.handOpts`;   // 提交选项按审阅分别记住
-// 常驻技能的范围只改显示：存储值与导出写法固定（ALWAYS_ZH 不动）
+// 常驻技能的范围只改显示：存储值与导出文法保持不变。
 const HAND_SCOPE={all:"viewer.hand.scope.all",报告:"viewer.hand.scope.report",讲稿:"viewer.hand.scope.script",style:"viewer.hand.scope.style"};
 const handScope=s=>tMsg(HAND_SCOPE[s]||"viewer.hand.scope.all");
 function draftedBatches(){const L=hand&&hand.latest,H=(hand&&hand.history)||[];
@@ -1337,47 +1369,137 @@ $("doHand").onclick=()=>{const message=$("handMsg").value.trim(),sub=$("hSub").c
   mutate({kind:"handoff",message,target,allowSubagents:sub,fullCheck})};
 
 // ---------- 导出 / 导入 ----------
+// 交换格式与 scripts/export_format.py 是同一份规范（页面和命令行各一份实现）：
+// 第一行的标记声明格式版本与内容语言，解析按标记选文法，与导入界面的语言无关；
+// 文法里的字面量写死在下面，不从词典取——改界面文案不会改变已发布的交换文法。
+// 中文文法就是 0.3 以来的那份，只多一个标记行；英文文法是它的对照翻译，
+// 只翻译系统包装文字，用户正文、引用、处理说明、技能名称保持原文，存储值导入时还原成中文。
+const EXP_VERSION=1;
+const EXP_MARK=/^<!--\s*annotation-everything\s+export\s+v(\d+)\s+lang=([A-Za-z0-9_-]+)\s*-->\s*$/;
+const EXP_HEAD_ZH="报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。";
+const EXP_HEAD_EN="Marks on the report: a pin is a point and a region is a box; coordinates are percentages from the top-left corner of the page (x across, y down, width, height).";
+const EXP_REV={   // 英文可读标签 → 存储值；未知标签原样通过（与旧中文导入对认不出的对象名一致）
+  target:{Report:"报告",Script:"讲稿","Report and script":"报告和讲稿"},
+  side:{Report:"报告",Script:"讲稿"},
+  style:{"Whole page":"page",Pin:"pin",Region:"region"}};
+const oneLine=s=>String(s==null?"":s).replace(/\n/g," ");
+function expGrammar(lang){
+  const en=lang==="en";
+  const back=(t,v,d)=>en&&t[v]!==undefined?t[v]:d;
+  return {lang,en,
+    marker:`<!-- annotation-everything export v${EXP_VERSION} lang=${lang} -->`,
+    page:en?/^##\s*Page\s+(\d+)\s*\|\s*(.*)$/:/^## 第 (\d+) 页｜(.*)$/,
+    item:en?/^(\d+)\. \[([^\]·]*)(?: · Pin \d+ \(x ([\d.]+)%, y ([\d.]+)%\))?(?: · Region \d+ \(x ([\d.]+)%, y ([\d.]+)%, w ([\d.]+)%, h ([\d.]+)%\))?\]\s?(.*)$/
+           :/^(\d+)\. 【([^】·]*)(?:·标点 \d+（x ([\d.]+)%，y ([\d.]+)%）)?(?:·框选 \d+（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)?】(.*)$/,
+    quote:en?/^\s+> Quote(?: \(([^)]*)\))?: (.*)$/:/^\s+> 引用(?:（([^）]*)）)?：(.*)$/,
+    resolution:en?/^\s+(Resolution|Draft note): (.*)$/:/^\s+(处理|初改)说明：(.*)$/,
+    style:en?/^\s+Style: (Whole page|Pin|Region|Region \(x ([\d.]+)%, y ([\d.]+)%, w ([\d.]+)%, h ([\d.]+)%\))$/
+            :/^\s+风格优化：(整页|标点处|框选处|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$/,
+    anchor:en?/^\s+Position hint: (.*)$/:/^\s+位置线索：(.*)$/,
+    skills:en?/^\s+Skills: (.*)$/:/^\s+技能：(.*)$/,
+    pair:en?/^\s+↔ Other side \((Report|Script)(?: · (identical|similar))?\): (.*)$/:/^\s+↔ 另一侧（(报告|讲稿)(?:·(相同|相近))?）：(.*)$/,
+    always:en?/^Persistent skills \([^)]*\): (.+)$/m:/^常驻技能（[^）]*）：(.+)$/m,
+    alwaysItem:en?/^(.+?) \((All notes|Report|Script|Style)\)$/:/^(.+?)（(全部批注|全部|报告|讲稿|风格优化)）$/,
+    alwaysSep:en?", ":"、",
+    alwaysRev:en?{"All notes":"all",Report:"报告",Script:"讲稿",Style:"style"}:{全部批注:"all",全部:"all",报告:"报告",讲稿:"讲稿",风格优化:"style"},
+    state:en?{resolved:"[Resolved] ",drafted:"[Drafted] "}:{resolved:"【已处理】",drafted:"【已初改·待复核】"},
+    targetIn:v=>back(EXP_REV.target,v,v),
+    sideIn:v=>back(EXP_REV.side,v,v),
+    styleIn:v=>en?back(EXP_REV.style,v,"region"):({"整页":"page","标点处":"pin"}[v]||"region"),
+    matchIn:v=>en?(v==="identical"?"exact":"similar"):(v==="相同"?"exact":"similar"),
+    pageHead:(n,t)=>en?`## Page ${n} | ${t}`:`## 第 ${n} 页｜${t}`,
+    head:o=>en?[`# Annotations · ${o.title}`,
+        `Exported ${o.at}; ${o.total} ${o.total===1?"note":"notes"} (${o.open} open) across ${o.pages} ${o.pages===1?"page":"pages"}`,EXP_HEAD_EN]
+      :[`# 批注 · ${o.title}`,`导出时间：${o.at}；共 ${o.total} 条（未处理 ${o.open}），涉及 ${o.pages} 页`,EXP_HEAD_ZH],
+    alwaysHead:list=>{const lab=s=>en?({all:"All notes",报告:"Report",讲稿:"Script",style:"Style"}[s]||s):(ALWAYS_EXPORT[s]||s);
+      const body=list.map(a=>`${a.name}${en?" (":"（"}${lab(a.scope)}${en?")":"）"}`).join(en?", ":"、");
+      return (en?"Persistent skills (run before every note within scope): ":"常驻技能（每条批注按范围处理前都先调用）：")+body},
+    tag:(x,no)=>{const raw=x.target||"未指定";   // 对象为空时写固定字面量（文法的一部分，与 0.3 以来一致）
+      const t=en?(raw==="报告和讲稿"?"Report and script":({报告:"Report",讲稿:"Script"}[raw]||raw)):raw;
+      let o=t;
+      if(x.pin)o+=en?` · Pin ${no} (x ${x.pin.x}%, y ${x.pin.y}%)`:`·标点 ${no}（x ${x.pin.x}%，y ${x.pin.y}%）`;
+      const r=regionOf(x);
+      if(r)o+=en?` · Region ${no} (x ${r.x}%, y ${r.y}%, w ${r.w}%, h ${r.h}%)`:`·框选 ${no}（x ${r.x}%，y ${r.y}%，宽 ${r.w}%，高 ${r.h}%）`;
+      return en?`[${o}]`:`【${o}】`},
+    quoteLine:(q,from)=>{const src=en?({报告:"Report",讲稿:"Script","报告和讲稿":"Report and script"}[from]||from):from;
+      const lead=src?(en?`   > Quote (${src}): `:`   > 引用（${src}）：`):(en?"   > Quote: ":"   > 引用：");
+      return lead+oneLine(q)},
+    resLine:(r,status)=>en?`   ${status==="drafted"?"Draft note":"Resolution"}: ${oneLine(r)}`
+      :`   ${status==="drafted"?"初改说明":"处理说明"}：${oneLine(r)}`,
+    styleLine:st=>{const lab=en?({page:"Whole page",pin:"Pin",region:"Region"}[st.scope]||"Whole page"):(STYLE_EXPORT[st.scope]||"整页");
+      return en?`   Style: ${lab}`:`   风格优化：${lab}`},
+    anchorLine:a=>en?`   Position hint: ${oneLine(a)}`:`   位置线索：${oneLine(a)}`,
+    skillsLine:sk=>en?`   Skills: ${sk.join(", ")}`:`   技能：${sk.join("、")}`,
+    pairLine:p=>{const side=en?({报告:"Report",讲稿:"Script"}[p.side]||p.side):p.side;
+      const m=en?(p.match==="exact"?"identical":"similar"):(p.match==="exact"?"相同":"相近");
+      return en?`   ↔ Other side (${side} · ${m}): ${oneLine(p.text)}`:`   ↔ 另一侧（${side}·${m}）：${oneLine(p.text)}`}}}
+const G_ZH=expGrammar("zh-CN"), G_EN=expGrammar("en");
+function expMdGrammar(text){   // 按第一行的标记选文法；没有标记返回 null（旧中文格式）
+  for(const line of String(text||"").replace(/^\uFEFF/,"").split(/\r?\n/)){
+    if(!line.trim())continue;
+    const m=EXP_MARK.exec(line.trim());
+    if(!m)return null;
+    if(+m[1]!==EXP_VERSION)throw new Error(`这个导出用的是格式版本 v${m[1]}，当前只支持 v${EXP_VERSION}：请把对照页和 notes.py 都升级到同一版本再导入`);
+    if(m[2]!=="zh-CN"&&m[2]!=="en")throw new Error(`这个导出的内容语言是「${m[2]}」，当前只支持 zh-CN 和 en`);
+    return m[2]==="en"?G_EN:G_ZH}
+  return null}
+function expLang(){const v=$("expLang")?$("expLang").value:"auto";return v==="auto"?uiLocale:(normLocale(v)||uiLocale)}
+const expStamp=()=>{const d=new Date(),p=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`};
+function expName(suffix){return `${expLang()==="en"?"annotations":"批注"}_${NS}_${stamp12()}.${suffix}`}
 function exportText(){
-  const by={};notes.slice().sort((a,b)=>a.page-b.page||String(a.at).localeCompare(String(b.at))).forEach(x=>(by[x.page]=by[x.page]||[]).push(x));
+  const g=expGrammar(expLang());
+  const sorted=notes.slice().sort((a,b)=>a.page-b.page||String(a.at).localeCompare(String(b.at)));
+  const by={};sorted.forEach(x=>(by[x.page]=by[x.page]||[]).push(x));
   const pages=Object.keys(by).map(Number).sort((a,b)=>a-b), open=notes.filter(x=>!isDone(x)).length;
-  let o=`# 批注 · ${unH(document.title)}\n导出时间：${new Date().toLocaleString("zh-CN")}；共 ${notes.length} 条（未处理 ${open}），涉及 ${pages.length} 页\n报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。\n`
-    +((alwaysSkills||[]).length?`常驻技能（每条批注按范围处理前都先调用）：${alwaysSkills.map(a=>`${a.name}（${ALWAYS_ZH[a.scope]||"全部批注"}）`).join("、")}\n`:"");
-  pages.forEach(n=>{const t=P.find(p=>p.n===n);o+=`\n## 第 ${n} 页｜${unH(t?t.title:by[n][0].title||"")}\n`;
-    by[n].forEach((x,k)=>{o+=`${k+1}. 【${x.target||"未指定"}${x.pin?`·标点 ${markNo(n,x.id)}（x ${x.pin.x}%，y ${x.pin.y}%）`:""}${(r=>r?`·框选 ${markNo(n,x.id)}（x ${r.x}%，y ${r.y}%，宽 ${r.w}%，高 ${r.h}%）`:"")(regionOf(x))}】${isDone(x)?"【已处理】":isDraft(x)?"【已初改·待复核】":""}${String(x.text).replace(/\n/g,"\n   ")}\n`;
-      if(x.quote)o+=`   > 引用${x.quoteFrom?`（${x.quoteFrom}）`:""}：${String(x.quote).replace(/\n/g," ")}\n`;
-      if((isDone(x)||isDraft(x))&&x.resolution)o+=`   ${isDraft(x)?"初改说明":"处理说明"}：${String(x.resolution).replace(/\n/g," ")}\n`;
-      if(x.style&&x.style.scope)o+=`   风格优化：${STYLE_EXPORT[x.style.scope]||"整页"}\n`;
-      if(x.anchor)o+=`   位置线索：${String(x.anchor).replace(/\n/g," ")}\n`;
-      if(Array.isArray(x.skills)&&x.skills.length)o+=`   技能：${x.skills.join("、")}\n`;
-      if(x.pair&&x.pair.text)o+=`   ↔ 另一侧（${x.pair.side}·${x.pair.match==="exact"?"相同":"相近"}）：${String(x.pair.text).replace(/\n/g," ")}\n`})});
-  return o}
-function parseMd(text){const items=[];let page=null,title="",cur=null;
-  text.split(/\r?\n/).forEach(line=>{let m;
-    if((m=line.match(/^## 第 (\d+) 页｜(.*)$/))){page=+m[1];title=m[2].trim();cur=null;return}
+  const L=[g.marker];
+  L.push(...g.head({title:unH(document.title),total:notes.length,open,pages:pages.length,at:expStamp()}));
+  if((alwaysSkills||[]).length)L.push(g.alwaysHead(alwaysSkills));
+  pages.forEach(n=>{const t=P.find(p=>p.n===n);L.push("",g.pageHead(n,unH(t?t.title:by[n][0].title||"")));
+    by[n].forEach((x,k)=>{const st=isDone(x)?"resolved":isDraft(x)?"drafted":"";
+      L.push(`${k+1}. ${g.tag(x,markNo(n,x.id))}${g.en?" ":""}${g.state[st]||""}${String(x.text).replace(/\n/g,"\n   ")}`);
+      if(x.quote)L.push(g.quoteLine(x.quote,x.quoteFrom));
+      if((isDone(x)||isDraft(x))&&x.resolution)L.push(g.resLine(x.resolution,isDraft(x)?"drafted":"resolved"));
+      if(x.style&&x.style.scope)L.push(g.styleLine(x.style));
+      if(x.anchor)L.push(g.anchorLine(x.anchor));
+      if(Array.isArray(x.skills)&&x.skills.length)L.push(g.skillsLine(x.skills));
+      if(x.pair&&x.pair.text)L.push(g.pairLine(x.pair))})});
+  return L.join("\n")+"\n"}
+function parseMdGrammar(text,g){const items=[];let page=null,title="",cur=null;
+  String(text).split(/\r?\n/).forEach(line=>{let m;
+    if((m=line.match(g.page))){page=+m[1];title=m[2].trim();cur=null;return}
     if(page===null)return;
-    if((m=line.match(/^\d+\. 【([^】·]*)(?:·标点 \d+（x ([\d.]+)%，y ([\d.]+)%）)?(?:·框选 \d+（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)?】(.*)$/))){let t=m[8],st="open";
-      if(t.startsWith("【已处理】")){st="resolved";t=t.slice(5)}else if(t.startsWith("【已初改·待复核】")){st="drafted";t=t.slice(9)}
-      cur={page,title,target:m[1],text:t,status:st,pin:m[2]?{x:+m[2],y:+m[3]}:null};if(m[4])cur.region={x:+m[4],y:+m[5],w:+m[6],h:+m[7]};items.push(cur);return}
+    if((m=line.match(g.item))){let t=m[9],st="open";
+      for(const k in g.state){if(t.startsWith(g.state[k])){st=k;t=t.slice(g.state[k].length);break}}
+      cur={page,title,target:g.targetIn(m[2]),text:t,status:st,pin:m[3]?{x:+m[3],y:+m[4]}:null};
+      if(m[5])cur.region={x:+m[5],y:+m[6],w:+m[7],h:+m[8]};items.push(cur);return}
     if(!cur)return;
-    if((m=line.match(/^\s+> 引用(?:（([^）]*)）)?：(.*)$/))){cur.quoteFrom=m[1]||"";cur.quote=m[2];
+    if((m=line.match(g.quote))){cur.quoteFrom=g.sideIn(m[1]||"");cur.quote=m[2];
       if(cur.text===DEL_TEXT)cur.edit={op:"delete",from:cur.quote};
       else if(cur.text.startsWith(REP_PREFIX))cur.edit={op:"replace",from:cur.quote,to:cur.text.slice(REP_PREFIX.length)};return}
-    if((m=line.match(/^\s+(?:处理|初改)说明：(.*)$/))){cur.resolution=m[1];return}
-    if((m=line.match(/^\s+技能：(.*)$/))){cur.skills=parseSkills(m[1]);return}
-    if((m=line.match(/^\s+风格优化：(整页|标点处|框选处|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$/))){
+    if((m=line.match(g.resolution))){cur.resolution=m[2];return}
+    if((m=line.match(g.style))){
       if(m[2])cur.region={x:+m[2],y:+m[3],w:+m[4],h:+m[5]};   // 0.3 导出：框写在风格优化这一行
-      cur.style={scope:m[1]==="整页"?"page":m[1]==="标点处"?"pin":"region"};return}
-    if((m=line.match(/^\s+位置线索：(.*)$/))){cur.anchor=m[1];return}
-    if((m=line.match(/^\s+↔ 另一侧（(报告|讲稿)(?:·(相同|相近))?）：(.*)$/))){cur.pair={side:m[1],match:m[2]==="相同"?"exact":"similar",text:m[3]};return}
+      cur.style={scope:g.styleIn(m[1])};return}
+    if((m=line.match(g.anchor))){cur.anchor=m[1];return}
+    if((m=line.match(g.skills))){   // 与 export_format 一致：去掉尾缀，带「（常驻·…）」来源标签的不写进单条
+      const body=m[1].trim().replace(/(——处理这条前先调用这些技能|（处理这条前先调用这些技能）)$/,"");
+      cur.skills=parseSkills(body.split(/[,，、;；]+/).filter(x=>!/（常驻·[^）]*）$/.test(x.trim()))
+        .map(x=>x.trim().replace(/（这条指定）$/,"")).join("、"));return}
+    if((m=line.match(g.pair))){cur.pair={side:g.sideIn(m[1]),match:g.matchIn(m[2]),text:m[3]};return}
     if(line.startsWith("   ")&&line.trim())cur.text+="\n"+line.slice(3)});
   return items}
+function parseMd(text){return parseMdGrammar(text,G_ZH)}   // 没有标记的旧中文格式
 function importRid(text){try{const s=String(text||"").trim();if(s[0]!=="{")return null;const d=JSON.parse(s);
   return typeof d.reviewId==="string"&&d.reviewId?{rid:d.reviewId,name:String(d.name||"")}:null}catch(e){return null}}
 function okToImport(text){const f=importRid(text);if(!f||f.rid===RID)return true;   // 导出文件带审阅标识：不是本审阅的先问
   return confirm(`这个文件属于另一份审阅${f.name?`《${f.name}》`:""}（标识 ${f.rid.slice(0,8)}），不是本审阅《${NAME}》。\n通常应该导入到它自己的审阅里。仍要导入到这里吗？`)}
-function parseImport(text){const s=text.trim();if(!s)return[];
+function parseImport(text){const s=String(text||"").trim();if(!s)return[];
   if(s[0]==="{"||s[0]==="["){const d=JSON.parse(s);return Array.isArray(d)?d:(d.notes||[])}
-  return parseMd(s)}
+  const marked=expMdGrammar(s);   // 按格式标记选文法：与导入界面的语言无关
+  const items=parseMdGrammar(s,marked||G_ZH);
+  if(!items.length&&!marked)throw new Error(tMsg("export.badFormat"));   // 没标记又不是旧中文格式
+  return items}
 async function runImport(items,label){
   items=items.filter(x=>x&&+x.page>0&&String(x.text||"").trim()).map(cleanItem);   // 先定好 id，离线补传后与服务端一致
   if(!items.length){toast("没有可导入的批注");return}
@@ -1405,13 +1527,16 @@ function renderOrphans(){const box=$("orphanBox"),lost=lostNotes();box.style.dis
     `<div class="found"><span>原第 ${+x.page||"?"} 页${x.key?`（键 ${escH(x.key)}）`:""}：${escH(clip(noteSummary(x),60))}</span><span><select data-mv="${escH(x.id)}">${opts}</select> <button data-mvgo="${escH(x.id)}">挪过去</button></span></div>`).join("");
   box.querySelectorAll("[data-mvgo]").forEach(b=>b.onclick=()=>{const id=b.dataset.mvgo,sel=box.querySelector(`select[data-mv="${CSS.escape(id)}"]`),pg=P.find(q=>q.n===+sel.value);
     if(pg){mutate({kind:"patch",id,body:{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false}});toast(`已挪到第 ${pg.n} 页`);setTimeout(renderOrphans,300)}})}
-function openAll(){renderOrphans();$("allText").textContent=notes.length?exportText():"还没有批注。";$("clearAll").style.display=FILE?"":"none";$("allnotes").classList.add("on")}
-async function copyAll(msg){const t=exportText();try{await navigator.clipboard.writeText(t)}catch(e){const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove()}toast(msg||"已复制，粘贴到对话里交给 Agent",msg?5000:2200)}
+function openAll(){renderOrphans();const sel=$("expLang");if(sel)sel.value=LS.get(K.lang,"auto");
+  $("allText").textContent=notes.length?exportText():tMsg("export.empty");$("clearAll").style.display=FILE?"":"none";$("allnotes").classList.add("on")}
+async function copyAll(msg){const t=exportText();try{await navigator.clipboard.writeText(t)}catch(e){const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove()}toast(msg||tMsg("export.copied"),msg?5000:2200)}
+function refreshExportPreview(){if(notes.length)$("allText").textContent=exportText();else $("allText").textContent=tMsg("export.empty")}
 function download(name,text,type){const b=new Blob([text],{type});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 const stamp12=()=>new Date().toISOString().slice(0,16).replace(/[-:T]/g,"");
 $("notesBtn").onclick=openAll;$("copyAll").onclick=()=>copyAll();
-$("dlAll").onclick=()=>download(`批注_${NS}_${stamp12()}.md`,exportText(),"text/markdown;charset=utf-8");
-$("dlJson").onclick=()=>download(`批注_${NS}_${stamp12()}.json`,JSON.stringify({version:1,reviewId:RID,name:NAME,namespace:NS,notes,alwaysSkills:alwaysSkills||[]},null,2),"application/json");
+$("expLang").addEventListener("change",()=>{LS.set(K.lang,$("expLang").value);refreshExportPreview()});
+$("dlAll").onclick=()=>download(expName("md"),exportText(),"text/markdown;charset=utf-8");
+$("dlJson").onclick=()=>download(expName("json"),JSON.stringify({version:1,reviewId:RID,name:NAME,namespace:NS,lang:expLang(),notes,alwaysSkills:alwaysSkills||[]},null,2),"application/json");
 $("dlFailed").onclick=()=>{const f=failed.get();if(!f.length)return;
   const items=[];f.forEach(x=>{const op=x.op;if(op.kind==="add")items.push(op.note);else if(op.kind==="import")items.push(...op.notes);
     else if(op.kind==="patch"){const n=notes.find(y=>y.id===op.id);if(n)items.push({...n,...op.body,updatedAt:nowIso()})}});   // 编辑、标已处理：导入时按「更新得更晚」覆盖
@@ -1427,17 +1552,19 @@ function saveDraft(){const n=P[i].n,t=$("ntext").value;
   SS.set(K.drafts,drafts)}
 function loadDraft(){const d=drafts[P[i].n]||{};$("ntext").value=d.text||"";$("ntarget").value=d.target||"报告";
   quote=d.quote||"";quoteFrom=d.quoteFrom||"";pendingPin=d.pin||null;quotePair=d.pair||null;$("nskills").value=d.skills||"";styleOn=!!d.style;pendingRegion=d.region||null;updateStyleChip();showQuote();autoGrow()}
+function updatePageStat(){const p=P[i];
+  $("stat").textContent=tMsg("viewer.pageStat",{page:p.n,total:P[N-1].n})+(total?` · ${tMsg("viewer.timeStat",{at:mmss(cum[i]),total:mmss(total)})}`:"")}
 function render(){
   const p=P[i], s=secOf(p.n);
   stage.innerHTML=SECT[i]; fit();
   $("jump").value=i;
-  $("stat").textContent=tMsg("viewer.pageStat",{page:p.n,total:P[N-1].n})+(total?` · ${tMsg("viewer.timeStat",{at:mmss(cum[i]),total:mmss(total)})}`:"");
+  updatePageStat();
   [...$("secs").children].forEach((b,k)=>b.classList.toggle("on",S[k]===s));
-  const qa=p.qa.length?`<div class="lab">${tMsg("viewer.scriptQA")}</div>`+p.qa.map(x=>`<div class="qa"><div class="q">${x.q}</div>${x.a?`<div class="a">${x.a}</div>`:""}</div>`).join(""):"";
-  $("pageScript").innerHTML=`<div class="pno"><span class="sec">${s?escH(s[0]):""}</span><span>${escH(tMsg("viewer.page",{page:p.n}))}</span></div>
-    <h2>${p.title}</h2>${p.dur?`<span class="dur">${p.dur}</span>`:""}
-    ${p.talk?`<div class="lab">${tMsg("viewer.scriptTalk")}</div><div class="talk">${p.talk}</div>`:`<p class="empty">${tMsg("viewer.scriptEmpty")}</p>`}
-    ${p.next?`<div class="lab">${tMsg("viewer.scriptNext")}</div><div class="next">${p.next}</div>`:""}${qa}`;
+  const qa=p.qa.length?`<div class="lab" data-msg="viewer.scriptQA">${tMsg("viewer.scriptQA")}</div>`+p.qa.map(x=>`<div class="qa"><div class="q" data-label-msg="viewer.question" data-label="${escH(tMsg("viewer.question"))}"><span lang="">${x.q}</span></div>${x.a?`<div class="a" data-label-msg="viewer.answer" data-label="${escH(tMsg("viewer.answer"))}"><span lang="">${x.a}</span></div>`:""}</div>`).join(""):"";
+  $("pageScript").innerHTML=`<div class="pno"><span class="sec">${s?escH(s[0]):""}</span><span data-msg="viewer.page" data-p-page="${p.n}">${escH(tMsg("viewer.page",{page:p.n}))}</span></div>
+    <h2 lang="">${p.title}</h2>${p.dur?`<span class="dur" lang="">${p.dur}</span>`:""}
+    ${p.talk?`<div class="lab" data-msg="viewer.scriptTalk">${tMsg("viewer.scriptTalk")}</div><div class="talk" lang="">${p.talk}</div>`:`<p class="empty" data-msg="viewer.scriptEmpty">${tMsg("viewer.scriptEmpty")}</p>`}
+    ${p.next?`<div class="lab" data-msg="viewer.scriptNext">${tMsg("viewer.scriptNext")}</div><div class="next" lang="">${p.next}</div>`:""}${qa}`;
   stashEdit();
   editingId=null;if(markMode)setMarkMode(false);closeStyleMenu();hideSelbar();closePinPop();sel=null;loadDraft();refreshList(true);$("script").scrollTop=0;
   LS.set(K.page,i+1)}

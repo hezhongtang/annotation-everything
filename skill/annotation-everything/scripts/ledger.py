@@ -9,6 +9,9 @@
 - 目录不在、标识对不上的条目只标出来，不自动删除（外接盘暂时没挂上时不误删、不释放端口）。
 
 台账读写失败不应挡住生成、启动、批注这些主流程：调用方捕获 LedgerError / OSError，只给警告。
+
+语言：LedgerError 的人读文案按界面语言变（`AE_LOCALE`，默认中文）；台账路径、标识、
+端口与恢复命令保持原文。调用方（serve.py / notes.py / ae.py）只负责打印。
 """
 from __future__ import annotations
 
@@ -17,9 +20,13 @@ import fcntl
 import json
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Iterator
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import i18n  # noqa: E402
 
 LEDGER_FILE = "reviews.json"
 WAIT_PREFIX = ".annotation-wait."   # 审阅目录里：每个 notes.py wait 进程留一个 .annotation-wait.<pid>.json，退出时删掉
@@ -32,6 +39,37 @@ BASE_PORT = 8765
 MAX_SCAN = 500          # 分配专属端口时最多往后找多少个
 RID = re.compile(r"[0-9a-f]{16}")
 RID_PREFIX = re.compile(r"[0-9a-f]{4,16}")
+
+
+# 当前界面语言：按共同契约从 AE_LOCALE 解析；未设置或选择非法时保持中文（旧行为不变）
+_LOCALE = i18n.DEFAULT_LOCALE
+# 调用方（ae.py / serve.py）已经把 --locale、AE_LOCALE、审阅 locale 解析完时定好语言，
+# 之后不再被 AE_LOCALE 覆盖——否则同一进程里两种来源不一致，会出现中英混排
+_PINNED = False
+
+
+def set_locale(locale: object = None) -> None:
+    """定界面语言。locale 为 None 时按 AE_LOCALE 重新解析；给了具体 locale 就定住。"""
+    global _LOCALE, _PINNED
+    if locale is None:
+        _PINNED = False
+        try:
+            _LOCALE = i18n.cli_locale(None)
+        except i18n.LocaleError:
+            _LOCALE = i18n.DEFAULT_LOCALE
+    else:
+        _LOCALE, _PINNED = str(locale), True
+
+
+def _refresh_locale() -> None:
+    """没有外部定过语言时，才按 AE_LOCALE 刷新；非法选择保持中文，不让台账操作失败。"""
+    if not _PINNED:
+        set_locale(None)
+
+
+def T(key: str, **params: object) -> str:
+    """按当前语言取一条消息；缺译时回退另一种语言（见 locales/README.md 的契约）。"""
+    return i18n.Translator(_LOCALE)(key, **params)
 
 
 class LedgerError(Exception):
@@ -58,14 +96,15 @@ def _empty() -> dict[str, Any]:
 
 
 def _read(path: Path) -> dict[str, Any]:
+    _refresh_locale()
     if not path.exists():
         return _empty()
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-        raise LedgerError(f"审阅台账 {path} 读不了（{type(e).__name__}）。请检查或改名备份后重试，不会自动覆盖它") from None
+        raise LedgerError(T("ledger.err.unreadable", path=path, type=type(e).__name__)) from None
     if not isinstance(doc, dict) or not isinstance(doc.get("reviews"), dict):
-        raise LedgerError(f"审阅台账 {path} 结构不对（缺少 reviews）。请检查或改名备份后重试，不会自动覆盖它")
+        raise LedgerError(T("ledger.err.structure", path=path))
     # 只留合法条目：标识 16 位十六进制，目录是字符串，端口是整数或空
     clean: dict[str, dict[str, Any]] = {}
     for rid, e in doc["reviews"].items():
@@ -92,6 +131,7 @@ def _write(path: Path, doc: dict[str, Any]) -> None:
 
 @contextlib.contextmanager
 def _edit() -> Iterator[dict[str, Any]]:
+    _refresh_locale()
     """在台账文件锁下读改写：多个 serve / build 同时分配端口也不会撞号。"""
     h = _ensure_home()
     fd = os.open(h / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
@@ -130,16 +170,16 @@ def _set_dir(reviews: dict[str, Any], rid: str, d: str) -> dict[str, Any]:
     elif e["dir"] != d:
         old = Path(e["dir"])
         if old.is_dir() and read_manifest(old).get("reviewId") == rid:
-            raise CopiedDir(f"{d} 是从 {old} 复制来的，与它共用审阅标识 {rid[:8]}；台账仍指向原目录。"
-                            f"先运行 build_viewer.py --rebuild {d} 给副本换一个新标识")
+            raise CopiedDir(T("ledger.err.copied", dir=d, old=old, rid=rid[:8]))
         e["dir"] = d
     return e
 
 
 def register(rid: str, review_dir: Path) -> dict[str, Any]:
     """登记（或更新目录）一份审阅，返回它的条目。标识不合法时不登记。"""
+    _refresh_locale()   # 标识非法的报错也可能先于任何读写发生，语言要已经定好
     if not RID.fullmatch(str(rid or "")):
-        raise LedgerError(f"审阅标识不合法：{rid!r}")
+        raise LedgerError(T("ledger.err.badRid", rid=rid))
     d = str(Path(review_dir).resolve())
     with _edit() as doc:
         return dict(_set_dir(doc["reviews"], rid, d))
@@ -171,19 +211,19 @@ def assign_port(rid: str, review_dir: Path, *, prefer: int | None = None,
             if p not in taken and is_free(p):
                 e["port"] = p
                 return p
-        raise LedgerError(f"端口 {BASE_PORT}–{BASE_PORT + MAX_SCAN - 1} 都已被别的审阅认领或占用；"
-                          "用 serve.py forget 清掉不用的审阅后再试")
+        raise LedgerError(T("ledger.err.portsExhausted", base=BASE_PORT,
+                            end=BASE_PORT + MAX_SCAN - 1))
 
 
 def claim_port(rid: str, review_dir: Path, port: int) -> None:
     """把专属端口改成 port。端口归别的审阅时拒绝（先 forget 那一份）。"""
     if not 1024 <= port <= 65535:
-        raise LedgerError(f"端口 {port} 不在 1024–65535 范围内")
+        raise LedgerError(T("ledger.err.portRange", port=port))
     d = str(Path(review_dir).resolve())
     with _edit() as doc:
         for k, x in doc["reviews"].items():
             if k != rid and x.get("port") == port:
-                raise LedgerError(f"端口 {port} 已归另一份审阅（标识 {k}）。确认那份不用了，先 serve.py forget {k[:8]}")
+                raise LedgerError(T("ledger.err.portTaken", port=port, rid=k, short=k[:8]))
         _set_dir(doc["reviews"], rid, d)["port"] = port
 
 
@@ -191,12 +231,13 @@ def match(key: str) -> str:
     """按完整标识或唯一前缀（至少 4 位）找到台账里的审阅标识。"""
     key = str(key or "").strip().lower()
     if not RID_PREFIX.fullmatch(key):
-        raise LedgerError(f"{key!r} 不是审阅标识（16 位十六进制，可只写前 4 位以上）")
+        raise LedgerError(T("ledger.err.badKey", value=repr(key)))
     hits = [rid for rid in entries() if rid.startswith(key)]
     if not hits:
-        raise LedgerError(f"审阅台账里没有标识以 {key} 开头的审阅（serve.py list 查看全部）")
+        raise LedgerError(T("ledger.err.noSuchKey", prefix=key))
     if len(hits) > 1:
-        raise LedgerError(f"标识前缀 {key} 对应多份审阅：{'、'.join(h[:8] for h in hits)}，请多写几位")
+        raise LedgerError(T("ledger.err.ambiguousKey", prefix=key,
+                            hits=T("cli.ae.listSeparator").join(h[:8] for h in hits)))
     return hits[0]
 
 
@@ -205,7 +246,7 @@ def forget(key: str) -> tuple[str, dict[str, Any]]:
     with _edit() as doc:
         e = doc["reviews"].pop(rid, None)
     if e is None:
-        raise LedgerError(f"审阅台账里已经没有 {rid}")
+        raise LedgerError(T("ledger.err.gone", rid=rid))
     return rid, e
 
 
@@ -253,6 +294,6 @@ def try_register(rid: Any, review_dir: Path) -> str | None:
         register(str(rid), review_dir)
         return None
     except CopiedDir as e:
-        return f"没有登记到审阅台账：{e}"
+        return T("ledger.err.notRegistered", detail=e)
     except (LedgerError, OSError) as e:
-        return f"没能登记到审阅台账（{e}）；不影响本次操作"
+        return T("ledger.err.registerFailed", detail=e)

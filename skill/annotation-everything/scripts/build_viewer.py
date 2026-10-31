@@ -664,6 +664,9 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         locale_choice = i18n.canonical_choice(locale if locale is not None else preview.get("locale"))
     except i18n.LocaleError as exc:
         raise SystemExit(f"错误：{exc}") from exc
+    # 生成侧的提示按本次选择的语言写；没选就是中文（旧审阅、旧调用）。auto 在这里定成具体语言
+    warn_catalog = i18n.load_catalog(
+        i18n.resolve_locale(locale_choice, system_languages=i18n.system_languages()))
     doc = report.read_text(encoding="utf-8")
     assets = Assets(asset_root or report.resolve().parent)
     assets.root_fs = None
@@ -718,16 +721,17 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     if not no_scan_skills:
         import notes_store
         import skill_sources
+        skill_sources.set_locale(i18n.resolve_locale(locale_choice, system_languages=i18n.system_languages()))
         try:
             results, skill_warnings = skill_sources.scan(skills_from if skills_from is not None else skill_sources.default_roots())
             for warning in skill_warnings:
                 assets.warn(warning)
             if skills_from is not None and any(items is None for _key, items, _complete in results):
-                assets.warn("有技能来源不可访问，保留此前该来源的记录")
+                assets.warn(i18n.translate(warn_catalog, "cli.skills.warnUnavailable"))
             if any(items is not None for _key, items, _complete in results) or (out / notes_store.SKILL_SOURCES_FILE).exists():
                 _catalog, retained = notes_store.skills_merge_scan(out, results)
                 if retained and skills_from is None:
-                    assets.warn("有技能来源不可访问，保留此前该来源的记录")
+                    assets.warn(i18n.translate(warn_catalog, "cli.skills.warnUnavailable"))
         except (OSError, notes_store.NoteError) as e:
             assets.warn(str(e))
     old = read_manifest(out)
@@ -751,13 +755,15 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     import notes_store
     import i18n
     catalogs = {tag: i18n.load_catalog(tag)["messages"] for tag in i18n.SUPPORTED}
+    report_html = re.search(r"<html\b[^>]*>", doc, re.I)
+    report_language = attrs_of(report_html.group()).get("lang", "") if report_html else ""
     values = {"TITLE": html.escape(final_title), "INTRO": intro, "PAGES": _js(pages), "SECTIONS": _js(sections),
               "NS": _js(ns), "NAME": _js(review_name), "RID": _js(rid), "RCSS": _js(rcss), "SECT": _js([s["html"] for s in sects]),
               "ROOTFS": assets.root_fs or "100%", "SKILLS": _js(read_skills(out)), "ALWAYS": _js(read_always(out)),
               "SKILL_CONTEXT": _js(skill_context), "FULL_CHECK_COMPAT": _js("【本批提交选项】" + notes_store.FULL_CHECK_TEXT),
-              "CATALOGS": _js(catalogs), "LOCALE": _js(locale_choice)}
+              "CATALOGS": _js(catalogs), "LOCALE": _js(locale_choice), "REPORT_LANG": _js(report_language)}
     # 一次性替换，避免内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
-    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE)__", lambda m: values[m.group(1)],
+    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG)__", lambda m: values[m.group(1)],
                        TEMPLATE.read_text(encoding="utf-8"))
     page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
     write_private(out / "index.html", page_html)
