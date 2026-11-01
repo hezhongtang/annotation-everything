@@ -589,8 +589,10 @@ def full_check_checks(browser, tmp: Path):
 
         old.route("**/api/notes", no_full_check)
         old.goto(f"http://127.0.0.1:{port}/")
-        # 首次轮询读到被剥掉功能的应答后，徽标才会进入旧服务状态（事件驱动的就绪）
-        wait_mode(old, "old", condition="旧服务徽标出现（首次轮询按功能集判定）")
+        # 该路由只剥掉 full-check 功能（marks 保留），徽标不会变「旧版服务」；
+        # 就绪信号是首次轮询应用后徽标从「未连接」变为「已连接」，此后功能集判定完成
+        wait_dom(old, "() => document.getElementById('mode').textContent.includes('已连接')", 10,
+                 condition="首次轮询应用（徽标从「未连接」变为「已连接」）")
         items = json.loads((d / "handoff.json").read_text())["items"]
         remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
         ok(len(items) == 1 and remaining and remaining[0].get("fullCheck") is True,
