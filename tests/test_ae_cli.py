@@ -13,6 +13,13 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+import host_isolation  # noqa: E402
+
+# 直接跑 unittest 的旧入口与 verify.py 共用同一隔离协议：doctor / uninstall 读真实全机进程视图
+host_isolation.require_for_module(__name__)
+
 AE = ROOT / "ae.py"
 SKILL_SRC = ROOT / "skill" / "annotation-everything"
 SERVE_PY = SKILL_SRC / "scripts" / "serve.py"

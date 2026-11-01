@@ -24,6 +24,12 @@ from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
+sys.path.insert(0, str(TESTS.parent))
+
+import host_isolation  # noqa: E402
+
+# 直接跑 unittest 的旧入口与 verify.py 共用同一隔离协议：本模块驱动真实 serve.py 生命周期
+host_isolation.require_for_module(__name__)
 
 import e2e_servers  # noqa: E402
 

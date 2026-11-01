@@ -24,6 +24,12 @@ ROOT = Path(__file__).resolve().parents[1]
 AE = ROOT / "ae.py"
 SERVE = ROOT / "skill" / "annotation-everything" / "scripts" / "serve.py"
 sys.path.insert(0, str(ROOT))
+
+import host_isolation  # noqa: E402
+
+# 直接跑 unittest 的旧入口与 verify.py 共用同一隔离协议：本模块启动真实 serve.py、含 real_ps 用例
+host_isolation.require_for_module(__name__)
+
 import ae  # noqa: E402
 
 RECORD_NAME = ae.RECORD_NAME

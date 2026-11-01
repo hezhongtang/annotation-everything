@@ -4,6 +4,7 @@
 - skill 本体在 `skill/annotation-everything/`，改完跑 `python3 ae.py install` 同步到 `~/.claude/skills/`。
 - 运行时脚本只用 Python 标准库；测试专用依赖（playwright）只出现在 `tests/e2e_browser.py`。
 - 验证：优先用统一入口 `python3 verify.py run`（缺省完整单元；`--group all` 是完整单元 + 服务安全自检 + 完整浏览器；`run unit-related <路径>` 只跑显式指定的用例）。它把结构化记录和原始日志写进 `.verify/`（已忽略），`plan` 解释范围，`report --latest` 只读记录。原来的直接命令仍然有效、退出码语义一致：`python3 -m unittest discover tests`；动了页面模板或服务，再跑 `uv run --no-project --with playwright python tests/e2e_browser.py`。记录字段契约见 `docs/verify/record-contract.md`。
+- 同机并发：资源敏感的验证（完整单元、完整浏览器、敏感模块直跑）按 `host-state` 共享资源自动互斥，跨 worktree 与独立 checkout 生效，锁等待在记录里单独计时（上限 `AE_LOCK_WAIT_SECONDS`，缺省 600 秒，超时不是通过）；纯逻辑组不受影响。协议与安全边界见 `docs/verify/isolation.md`，不要绕开或另建互斥机制。
 - 安全底线不能退：只绑 127.0.0.1、Host 校验、写操作 Origin 同源 + JSON Content-Type、无 CORS 头、只暴露 index.html 与 /api/*。改服务后跑 `serve.py check`（或 `python3 verify.py run --group serve-check`）。
 - 测试与 eval 只用合成数据（`fixtures/`、`skill/annotation-everything/evals/*/files/`）。任何真实业务材料、批注不得进入本仓库或 skill 目录。
 - eval 运行产物在 `skill/annotation-everything-workspace/`（已忽略）。
