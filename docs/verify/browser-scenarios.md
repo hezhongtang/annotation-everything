@@ -4,7 +4,8 @@
 行为说明、fixture、隔离边界与旧参数别名登记在 `tests/e2e_scenarios.py` 的注册表里；
 该模块只用标准库，`python3 -m unittest discover tests` 可以导入，playwright 仍只在
 `tests/e2e_browser.py` 导入。清单、执行计划和结构化摘要都从这一份注册表生成，
-不另维护副本。
+不另维护副本。场景内的等待基于可观察状态（#54）：等待机制分类、固定等待保留
+清单与前后性能样本见 `docs/verify/browser-waits.md`。
 
 ## 用法
 
