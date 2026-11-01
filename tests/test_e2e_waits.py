@@ -7,11 +7,13 @@
 """
 from __future__ import annotations
 
+import ast
 import contextlib
 import io
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
@@ -254,6 +256,50 @@ class WaitRevTests(unittest.TestCase):
             result = e2e_waits.wait_rev(page, 7, 1, describe=lambda: "rev=7")
         self.assertFalse(result)
         self.assertIn("7", out.getvalue())
+
+
+class InvariantEvidenceTests(unittest.TestCase):
+    """隔离执行真实场景的选择步骤：等待失败时，保持不变的选区不能冒充通过。
+
+    只加载函数 AST，不导入浏览器入口，因此不启动浏览器、服务或宿主机锁。
+    后续步骤在目标断言后终止，模拟页面只需要此前的候选查询和输入值。
+    """
+
+    def run_selection_step(self, poll_applied):
+        source = ast.parse((TESTS / "e2e_browser.py").read_text(encoding="utf-8"))
+        scenario = next(node for node in source.body
+                        if isinstance(node, ast.FunctionDef) and node.name == "skill_search_checks")
+        exercise = next(node for node in scenario.body
+                        if isinstance(node, ast.FunctionDef) and node.name == "exercise")
+        observations = []
+
+        class ReachedSelection(Exception):
+            pass
+
+        def record(value, label):
+            if label == "服务模式：方向键和回车选择候选":
+                observations.append(bool(value))
+                raise ReachedSelection
+
+        page = mock.Mock()
+        options = page.locator.return_value
+        options.locator.return_value.count.return_value = 0
+        options.filter.return_value.count.return_value = 1
+        page.input_value.side_effect = ["chart", "writer"]
+        namespace = {"ok": record, "wait_dom": mock.Mock(return_value=poll_applied),
+                     "wait_poll": mock.Mock(return_value=poll_applied),
+                     "subprocess": mock.Mock(), "sys": sys, "SCRIPTS": Path("synthetic-scripts"),
+                     "d": Path("synthetic-review")}
+        exec(compile(ast.Module(body=[exercise], type_ignores=[]), "<isolated-skill-search>", "exec"), namespace)
+        with self.assertRaises(ReachedSelection):
+            namespace["exercise"](page, "服务模式")
+        return observations
+
+    def test_unchanged_selection_does_not_pass_when_poll_evidence_times_out(self):
+        self.assertEqual(self.run_selection_step(False), [False])
+
+    def test_unchanged_selection_passes_after_new_poll_was_applied(self):
+        self.assertEqual(self.run_selection_step(True), [True])
 
 
 if __name__ == "__main__":

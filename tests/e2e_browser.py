@@ -244,12 +244,18 @@ def skill_search_checks(browser, tmp: Path):
         page.fill("#nskills", "字体")
         check(options.filter(has_text="writer").count() == 1, "按技能说明中的部分文字显示候选")
         page.keyboard.press("ArrowDown")
+        poll_applied = True
         if mode == "服务模式":
-            # 时间边界：先证明一次服务轮询往返确实发生，再按回车——
-            # 「跨过轮询后选择不丢」必须建立在轮询事件之上，而不是睡够 4.5 秒
-            wait_poll(page, 10, condition="跨过一次服务轮询（GET /api/notes 往返）")
+            # 用本次修改独有的目录说明证明 applyServer 已应用新轮询并重绘候选；
+            # 仅收到响应头还不能证明页面处理完成，超时也不能让不变量空转通过。
+            description = "文字和字体校对（本次轮询已应用）"
+            subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "skills", str(d),
+                            "--add", "writer=" + description], check=True, capture_output=True)
+            poll_applied = wait_dom(
+                page, "text => skillCatalog.some(s => s.name === 'writer' && s.desc === text)",
+                10, arg=description, condition="轮询应用本次技能目录修改并重绘候选")
         page.keyboard.press("Enter")
-        check(page.input_value("#nskills") == "writer", "方向键和回车选择候选")
+        check(poll_applied and page.input_value("#nskills") == "writer", "方向键和回车选择候选")
         page.fill("#nskills", "chart, 字体, custom")
         page.locator("#nskills").evaluate("el => { el.setSelectionRange(9, 9); el.dispatchEvent(new MouseEvent('click', {bubbles:true})); }")
         page.keyboard.press("ArrowDown")
@@ -585,11 +591,11 @@ def full_check_checks(browser, tmp: Path):
         old.goto(f"http://127.0.0.1:{port}/")
         # 该路由只剥掉 full-check 功能（marks 保留），徽标不会变「旧版服务」；
         # 就绪信号是首次轮询应用后徽标从「未连接」变为「已连接」，此后功能集判定完成
-        wait_dom(old, "() => document.getElementById('mode').textContent.includes('已连接')", 10,
-                 condition="首次轮询应用（徽标从「未连接」变为「已连接」）")
+        ready = wait_dom(old, "() => document.getElementById('mode').textContent.includes('已连接')", 10,
+                         condition="首次轮询应用（徽标从「未连接」变为「已连接」）")
         items = json.loads((d / "handoff.json").read_text())["items"]
         remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
-        ok(len(items) == 1 and remaining and remaining[0].get("fullCheck") is True,
+        ok(ready and len(items) == 1 and remaining and remaining[0].get("fullCheck") is True,
            "旧服务不能静默丢弃暂存的全量勾稽要求")
         old.click("#handBtn")
         old.click("#doHand")
@@ -612,11 +618,11 @@ def full_check_checks(browser, tmp: Path):
         old.route("**/api/notes", no_full_check)
         old.click("#doHand")
         # 负面观察：提交经旧服务裁决后必须仍在页面暂存；以旧服务明确拒绝的提示为事件证据
-        wait_toast(old, "本地服务不支持修改全量勾稽",
-                   condition="旧服务拒绝全量勾稽的提示出现（提交留在页面暂存）")
+        rejected = wait_toast(old, "本地服务不支持修改全量勾稽",
+                              condition="旧服务拒绝全量勾稽的提示出现（提交留在页面暂存）")
         items = json.loads((d / "handoff.json").read_text())["items"]
         remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
-        ok(items[-1].get("fullCheck") is False and remaining and remaining[0].get("fullCheck") is True,
+        ok(rejected and items[-1].get("fullCheck") is False and remaining and remaining[0].get("fullCheck") is True,
            "服务换成旧版后立即提交，也不会丢掉全量勾稽要求")
         old.unroute("**/api/notes", no_full_check)
         flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is True, old, 7)
@@ -655,11 +661,11 @@ def full_check_checks(browser, tmp: Path):
         old.route("**/api/handoff", legacy_post)
         old.click("#doHand")
         # 旧服务截短附言且未确认勾选：以「未确认」提示为裁决完成的事件证据
-        wait_toast(old, "服务未确认全量勾稽",
-                   condition="旧服务未确认全量勾稽的提示出现（提交留在页面暂存）")
+        rejected = wait_toast(old, "服务未确认全量勾稽",
+                              condition="旧服务未确认全量勾稽的提示出现（提交留在页面暂存）")
         item = json.loads((d / "handoff.json").read_text())["items"][-1]
         remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
-        ok(item.get("fullCheck") is False and all(word in item.get("message", "") for word in ("全量勾稽", "报告和讲稿", "有依据", "不确定"))
+        ok(rejected and item.get("fullCheck") is False and all(word in item.get("message", "") for word in ("全量勾稽", "报告和讲稿", "有依据", "不确定"))
            and remaining and remaining[0].get("fullCheck") is True and "截短附言" in old.inner_text("#toast"),
            "提交时旧服务未确认勾选：保留待补传要求")
         old.unroute("**/api/handoff", legacy_post)
@@ -669,19 +675,17 @@ def full_check_checks(browser, tmp: Path):
 
         old.click("#handBtn")
         old.uncheck("#hFullCheck")
-        items_before = len(json.loads((d / "handoff.json").read_text())["items"])
         old.route("**/api/handoff", legacy_post)
-        # 先证明旧服务确实收到并改写了这次提交（POST 往返到达），等裁决结束（落盘或提示）再断言；
+        # 先证明旧服务确实收到并改写了这次提交，再等这次补传处理结束；
         # 监听先于 click 注册（action 在注册后执行），毫秒级完成的本地应答不会漏事件
-        wait_response(old, lambda r: r.request.method == "POST" and r.url.endswith("/api/handoff"), 10,
-                      condition="本次提交的 POST /api/handoff 往返（旧服务被咨询）",
-                      action=lambda: old.click("#doHand"))
-        wait_until(lambda: len(json.loads((d / "handoff.json").read_text())["items"]) > items_before
-                   or "全量勾稽" in old.inner_text("#toast"), old, 5,
-                   condition="提交已裁决（落盘，或出现全量勾稽未确认提示）")
+        responded = wait_response(old, lambda r: r.request.method == "POST" and r.url.endswith("/api/handoff"), 10,
+                                  condition="本次提交的 POST /api/handoff 响应到达（旧服务被咨询）",
+                                  action=lambda: old.click("#doHand"))
+        settled = wait_dom(old, "() => flushing === null", 5,
+                           condition="本次提交的补传处理已结束（不接受上一次的旧提示）")
         item = json.loads((d / "handoff.json").read_text())["items"][-1]
         remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
-        ok(item.get("fullCheck") is True and remaining and remaining[0].get("fullCheck") is False,
+        ok(responded and settled and item.get("fullCheck") is True and remaining and remaining[0].get("fullCheck") is False,
            "旧服务未确认取消勾选：保留待补传要求")
         old.unroute("**/api/handoff", legacy_post)
         flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is False, old, 7)
@@ -2207,10 +2211,10 @@ def server_mode_checks(browser, tmp: Path):
     subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "resolve", str(sdir), nid, "--note", "已拆成两句",
                     "--by", "claude"], check=True, capture_output=True)
     # 不变量前置证据：先证明一次轮询把服务端新修订应用到页面（rev 离开基线），再检查草稿与焦点保住
-    wait_rev(page, baseline_rev, 10)
+    refreshed = wait_rev(page, baseline_rev, 10)
     txt = page.inner_text("#nlist")
-    ok("已处理 · Claude" in txt and "处理说明：已拆成两句" in txt, "Claude 用 CLI 标已处理后页面自动刷新显示")
-    ok(page.input_value("#ntext") == "正在写的草稿" and page.evaluate("document.activeElement.id") == "ntext",
+    ok(refreshed and "已处理 · Claude" in txt and "处理说明：已拆成两句" in txt, "Claude 用 CLI 标已处理后页面自动刷新显示")
+    ok(refreshed and page.input_value("#ntext") == "正在写的草稿" and page.evaluate("document.activeElement.id") == "ntext",
        "轮询刷新不打断正在写的草稿（内容与焦点都在）")
     page.keyboard.type("，继续")
     ok(page.input_value("#ntext") == "正在写的草稿，继续", "刷新后继续输入不丢字")
@@ -2458,13 +2462,14 @@ def server_mode_checks(browser, tmp: Path):
     stop(srv)
     srv_b = start_server(other, port)
     add_note(page, "切换后立刻写的 A 稿意见")   # 页面还以为连着 A
-    # 写入必然被 B 稿服务拒绝（审阅标识不匹配），这条负面结果不依赖时间：直接核对 B 稿落盘
-    ok(not any("A 稿" in n["text"] for n in disk_notes(other)), "服务刚切换就写，也不会写进 B 稿的 notes.json")
     # A 停掉的空档里若刚好轮询过，页面先是「服务未连接」，下一次轮询（4 秒内）才认出端口上换成了 B
-    # （对照页的 CSP 不放行 eval，wait_for_function 用不了，在这边轮询）
-    wait_until(lambda: "服务不匹配" in page.inner_text("#mode"), page, 8,
-               condition="下一次轮询认出端口上是别的审阅（服务不匹配）")
-    ok("服务不匹配" in page.inner_text("#mode") and "待补传" in page.inner_text("#mode"), "页面显示「服务不匹配」，改动留在待补传")
+    # 若已发出写请求，还要等 flush 的拒绝处理结束；若没有发出，则由新轮询确认不匹配。
+    mismatch_settled = wait_dom(page, "() => mode === 'mismatch' && flushing === null", 10,
+                               condition="确认服务不匹配且本次补传处理结束")
+    ok(mismatch_settled and not any("A 稿" in n["text"] for n in disk_notes(other)),
+       "服务刚切换就写，也不会写进 B 稿的 notes.json")
+    ok(mismatch_settled and "服务不匹配" in page.inner_text("#mode") and "待补传" in page.inner_text("#mode"),
+       "页面显示「服务不匹配」，改动留在待补传")
     rid_a = json.loads((sdir / "review.json").read_text())["reviewId"]
     wait_until(lambda: "《B 稿票面》" in page.inner_text("#srvText"), page, 5)   # 提示条先显示，再异步问端口上是谁
     bar = page.inner_text("#srvBar")

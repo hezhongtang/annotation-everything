@@ -98,9 +98,9 @@ def wait_dom(page, expression: str, seconds, *, arg=None, condition=None, descri
 
 def wait_response(page, predicate, seconds, *, condition=None, describe=None,
                   action=None) -> bool:
-    """等下一个匹配的网络事件完成：page.expect_response（事件驱动，不靠固定间隔）。
+    """等下一个匹配的响应头到达：page.expect_response（事件驱动，不靠固定间隔）。
 
-    用于把等待绑定到「本次动作产生的请求 / 应答」或「一次轮询往返确实发生」。
+    用于把等待绑定到本次动作的请求 / 响应；页面正文处理完成须另等 DOM 或修订状态。
     action 在监听注册之后、等待之前执行（Playwright 推荐模式）：先注册再触发动作，
     毫秒级完成的请求不会落在注册前的漏事件窗口里。超时返回 False 并输出诊断；
     非超时异常原样传播。
@@ -118,13 +118,13 @@ def wait_response(page, predicate, seconds, *, condition=None, describe=None,
 
 
 def is_note_poll(response) -> bool:
-    """GET /api/notes 的完整往返（页面轮询的请求特征；不含子路径与其他方法）。"""
+    """GET /api/notes 的响应（页面轮询的请求特征；不含子路径与其他方法）。"""
     request = getattr(response, "request", None)
     return bool(request) and request.method == "GET" and request.url.endswith("/api/notes")
 
 
 def wait_poll(page, seconds, *, condition="下一次对 /api/notes 的轮询往返", describe=None) -> bool:
-    """等一次页面轮询确实发生（GET /api/notes 请求与应答都到达）。"""
+    """等一次页面轮询响应头到达；不代表页面已应用响应正文。"""
     return wait_response(page, is_note_poll, seconds, condition=condition, describe=describe)
 
 
