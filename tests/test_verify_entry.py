@@ -735,6 +735,87 @@ class IsolationLockTests(VerifyEntryTestCase):
         self.assertEqual(record["timing"]["lock_wait_seconds"], 0.0)
         self.assertIsNone(holder.poll())
 
+    def start_wrapper(self, group="browser") -> subprocess.Popen:
+        env = dict(os.environ)
+        env["PATH"] = "%s%s%s" % (self.repo.path / "bin", os.pathsep, env["PATH"])
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env.pop("AE_HELD_LOCKS", None)
+        env.update(self.lock_env())
+        proc = subprocess.Popen(
+            [sys.executable, "verify.py", "run", "--group", group, "--quiet"],
+            cwd=str(self.repo.path), env=env, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(_reap, proc)
+        return proc
+
+    def wait_for_marker(self, path: Path) -> None:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if path.is_file():
+                return
+            time.sleep(0.01)
+        self.fail("没有等到合成进程握手：%s" % path.name)
+
+    def test_cancelled_lock_wait_keeps_elapsed_wait_and_does_not_start_group(self):
+        holder = self.start_holder(hold=30)
+        wrapper = self.start_wrapper(group="unit")
+        self.wait_for_marker(self.repo.artifact_dir / "latest.json")
+        # 外部占用者一直持锁，确保取消落在等待阶段，而不是产品执行阶段。
+        time.sleep(0.3)
+        wrapper.send_signal(signal.SIGTERM)
+        output, _ = wrapper.communicate(timeout=15)
+        self.assertEqual(wrapper.returncode, 143, output)
+        run_id = self.repo.latest_run_id()
+        record = read_record(self.repo.artifact_dir, run_id)
+        group = record["groups"][0]
+        self.assertEqual(record["state"], "aborted")
+        self.assertEqual(group["outcome"], "interrupted")
+        self.assertIn("等待共享资源 host-state", group["note"])
+        self.assertIn("本组没有执行", group["note"])
+        self.assertGreaterEqual(group["lock"]["wait_seconds"], 0.2)
+        self.assertEqual(record["timing"]["lock_wait_seconds"], group["lock"]["wait_seconds"])
+        self.assertLess(record["timing"]["wrapper_seconds"], record["timing"]["wall_seconds"] - 0.2)
+        self.assertFalse((self.repo.artifact_dir / "runs" / run_id / "unit.log").exists())
+        self.assertIsNone(holder.poll(), "等待者取消不得停止占用者")
+
+    def test_interrupted_group_holds_lock_until_child_cleanup_finishes(self):
+        import host_isolation as hi
+
+        started = self.lock_root / "child-started"
+        cleaning = self.lock_root / "child-cleaning"
+        finished = self.lock_root / "allow-child-exit"
+        self.repo.write("tests/e2e_browser.py", '''import signal, sys, time
+from pathlib import Path
+
+def cleanup(signum, frame):
+    Path(%r).write_text("cleaning", encoding="utf-8")
+    while not Path(%r).exists():
+        time.sleep(0.01)
+    print("1/1 通过", flush=True)
+    sys.exit(128 + signum)
+
+signal.signal(signal.SIGTERM, cleanup)
+Path(%r).write_text("started", encoding="utf-8")
+time.sleep(30)
+''' % (str(cleaning), str(finished), str(started)))
+        wrapper = self.start_wrapper()
+        self.wait_for_marker(started)
+        wrapper.send_signal(signal.SIGTERM)
+        try:
+            self.wait_for_marker(cleaning)
+            with self.assertRaises(hi.LockTimeoutError,
+                                   msg="旧组仍在清理时不得让后继进入临界区"):
+                handle = hi.acquire(["host-state"], timeout=0.2, env=self.lock_env())
+                hi.release(handle)
+        finally:
+            finished.write_text("exit", encoding="utf-8")
+            output, _ = wrapper.communicate(timeout=15)
+        self.assertEqual(wrapper.returncode, 143, output)
+        handle = hi.acquire(["host-state"], timeout=0.2, env=self.lock_env())
+        hi.release(handle)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertEqual(record["groups"][0]["outcome"], "interrupted")
+
     def test_concurrent_sensitive_groups_serialize_without_false_failure(self):
         env = dict(os.environ)
         env["PATH"] = "%s%s%s" % (self.repo.path / "bin", os.pathsep, env["PATH"])
@@ -755,6 +836,39 @@ class IsolationLockTests(VerifyEntryTestCase):
         records = [read_record(self.repo.artifact_dir, run_id) for run_id in self.repo.run_ids()]
         waits = [group["lock"]["wait_seconds"] for record in records for group in record["groups"]]
         self.assertGreaterEqual(max(waits), 0.3, "后到者应当等待先到者释放 host-state")
+
+    def test_killed_wrapper_keeps_lock_in_running_group_until_it_exits(self):
+        import host_isolation as hi
+
+        started = self.lock_root / "surviving-child"
+        finished = self.lock_root / "allow-surviving-child-exit"
+        self.repo.write("tests/e2e_browser.py", '''import os, time
+from pathlib import Path
+
+Path(%r).write_text(str(os.getpid()), encoding="utf-8")
+while not Path(%r).exists():
+    time.sleep(0.01)
+''' % (str(started), str(finished)))
+        wrapper = self.start_wrapper()
+        self.wait_for_marker(started)
+        child_pid = int(started.read_text(encoding="utf-8"))
+        wrapper.kill()
+        wrapper.wait(timeout=15)
+        try:
+            self.assertTrue(pid_alive(child_pid), "合成组仍运行，才能覆盖入口先退出的时序")
+            with self.assertRaises(hi.LockTimeoutError,
+                                   msg="入口被杀时，仍运行的组必须继续持有锁"):
+                handle = hi.acquire(["host-state"], timeout=0.2, env=self.lock_env())
+                hi.release(handle)
+        finally:
+            finished.write_text("exit", encoding="utf-8")
+            deadline = time.monotonic() + 5
+            while pid_alive(child_pid) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            if pid_alive(child_pid):
+                os.kill(child_pid, signal.SIGKILL)
+        handle = hi.acquire(["host-state"], timeout=2, env=self.lock_env())
+        hi.release(handle)
 
     def test_unit_group_holds_lock_while_its_children_run(self):
         """unit 组持锁期间子流程正常运行：组级持锁与子进程执行不互相阻塞。"""

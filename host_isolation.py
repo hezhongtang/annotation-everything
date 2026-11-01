@@ -8,7 +8,9 @@ tests/e2e_browser.py。它们在启动资源敏感的验证前先取锁，结束
 
 机制：fcntl.flock 排他锁。锁文件放在同一用户共享的位置（XDG_RUNTIME_DIR 或
 系统临时目录），跨 worktree、跨独立 checkout 生效；进程无论正常退出、失败还
-是被 SIGKILL，内核都会释放锁。锁文件内容只是持有者诊断信息，所有权判断以
+是被 SIGKILL，内核都会在最后一个持有该文件描述符的进程退出后释放锁。验证入口
+把锁描述符传给执行中的组，入口被杀时不会让仍运行的组失去保护。锁文件内容只是
+持有者诊断信息，所有权判断以
 flock 为准。只用 Python 标准库，语法兼容 Python 3.9；依赖 POSIX flock
 （macOS 与 Linux 均支持，Windows 不在支持范围）。
 """
@@ -133,7 +135,8 @@ def lock_root(env=None) -> Path:
 
     AE_LOCK_DIR 可覆盖（测试与特殊环境用）。缺省依次取 XDG_RUNTIME_DIR（Linux
     用户运行时目录，每用户独立）与系统临时目录（macOS 的 TMPDIR 同样每用户
-    独立）。两个检出无论是不是同一个仓库的 worktree，解析结果都相同。
+    独立）。目录名包含用户 UID，Linux 回退到共享 /tmp 时不同用户也不会争用
+    同一目录的写权限。两个检出无论是不是同一个仓库的 worktree，解析结果都相同。
     """
     env = os.environ if env is None else env
     override = env.get("AE_LOCK_DIR")
@@ -141,7 +144,7 @@ def lock_root(env=None) -> Path:
         return Path(override)
     runtime = env.get("XDG_RUNTIME_DIR")
     base = Path(runtime) if runtime else Path(tempfile.gettempdir())
-    return base / "annotation-everything-locks"
+    return base / ("annotation-everything-locks-%s" % os.getuid())
 
 
 def wait_limit(env=None) -> float:
@@ -200,6 +203,10 @@ class LockHandle:
                 "borrowed_resources": list(self.borrowed_resources),
                 "wait_seconds": round(self.waited_seconds, 6)}
 
+    def file_descriptors(self) -> tuple:
+        """本次实际持有的锁描述符，传给组子进程以覆盖入口先退出的时序。"""
+        return tuple(handle.fileno() for _name, handle in self._files)
+
 
 def _write_holder_note(path: Path, resource: str) -> None:
     """把持有者诊断信息写进锁文件。只用于观测（报告谁在持有），所有权以 flock 为准。"""
@@ -243,7 +250,7 @@ def acquire(resources, timeout: Optional[float] = None, env=None):
     files = []
     try:
         for name in to_lock:
-            root.mkdir(parents=True, exist_ok=True)
+            root.mkdir(parents=True, exist_ok=True, mode=0o700)
             path = root / ("%s.lock" % name)
             handle = open(path, "a+", encoding="utf-8")
             files.append((name, handle))

@@ -892,8 +892,19 @@ def execute_group(group: Group, ctx: RunContext) -> dict:
         result["lock"] = {"resources": [], "wait_seconds": 0.0}
         return result
     handle = None
+    wait_started = time.monotonic()
     try:
         handle = host_isolation.acquire(resources)
+    except Interrupted as exc:
+        waited = round(time.monotonic() - wait_started, 6)
+        note = "等待共享资源 %s 时收到 %s，本组没有执行" % (
+            "、".join(resources), signal_name(-exc.signum) or exc.signum)
+        return {"name": group.name, "outcome": INTERRUPTED,
+                "exit_status": EXIT_INTERRUPTED_BASE + exc.signum,
+                "signal": signal_name(-exc.signum), "interrupted_signum": exc.signum,
+                "timed_out": False, "note": note, "counts": None,
+                "cases": [], "seconds": {}, "timing": {},
+                "lock": {"resources": resources, "wait_seconds": waited}}
     except host_isolation.LockTimeoutError as exc:
         holder = host_isolation.read_holder_note(exc.resource) or {}
         note = ("等待共享资源 %s 超过 %.1f 秒（当前持有者 pid %s），本组没有执行；"
@@ -906,14 +917,14 @@ def execute_group(group: Group, ctx: RunContext) -> dict:
                 "lock": {"resources": resources,
                          "wait_seconds": round(exc.waited_seconds, 6), "timeout": True}}
     try:
-        result = _execute_group_body(group, ctx)
+        result = _execute_group_body(group, ctx, lock_fds=handle.file_descriptors())
     finally:
         host_isolation.release(handle)
     result["lock"] = {"resources": resources, "wait_seconds": round(handle.waited_seconds, 6)}
     return result
 
 
-def _execute_group_body(group: Group, ctx: RunContext) -> dict:
+def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> dict:
     started_wall = time.monotonic()
     missing = [name for name in group.requires if shutil.which(name) is None]
     if missing:
@@ -930,7 +941,8 @@ def _execute_group_body(group: Group, ctx: RunContext) -> dict:
     with open(log_path, "w", encoding="utf-8") as log_fh:
         proc = subprocess.Popen(child_argv, cwd=str(REPO), env=dict(os.environ),
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, encoding="utf-8", errors="replace", start_new_session=True)
+                                text=True, encoding="utf-8", errors="replace", start_new_session=True,
+                                pass_fds=lock_fds)
         registry_entry = ctx.registry.register(proc, group.name)
         ctx.save_children()
         reader = threading.Thread(target=pump,

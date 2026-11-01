@@ -18,6 +18,7 @@ import textwrap
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -90,6 +91,16 @@ class AcquireReleaseTests(TemporaryLockDirTestCase):
     def test_unknown_resource_is_rejected(self):
         with self.assertRaises(hi.UnknownResourceError):
             hi.acquire(["no-such-resource"], timeout=1.0)
+
+    def test_shared_tmp_fallback_keeps_each_users_lock_directory_separate(self):
+        with mock.patch.object(hi.tempfile, "gettempdir", return_value="/tmp"):
+            with mock.patch.object(hi.os, "getuid", return_value=1001):
+                first = hi.lock_root({})
+            with mock.patch.object(hi.os, "getuid", return_value=1002):
+                second = hi.lock_root({})
+        self.assertEqual(first.parent, Path("/tmp"))
+        self.assertEqual(second.parent, Path("/tmp"))
+        self.assertNotEqual(first, second, "共享 /tmp 下不同用户不得争用私有锁目录")
 
     def test_release_keeps_ancestor_marks_for_partially_borrowed_handle(self):
         """混合获取（部分借入 + 部分新拿）：release 只撤销新拿部分的豁免标记。

@@ -17,6 +17,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 TESTS = Path(__file__).resolve().parent
 ROOT = TESTS.parent
@@ -79,6 +80,15 @@ class InterferenceRegressionTests(unittest.TestCase):
                               capture_output=True, text=True, timeout=90)
         return json.loads(done.stdout)
 
+    def start_server(self, review: Path):
+        # 服务子进程继承启动窗口内的合成配置；不依赖其他测试模块先改过全局环境。
+        with mock.patch.dict(os.environ, self.env_for(self.server_home)):
+            server = e2e_servers.start_server(
+                review, e2e_servers.free_port(),
+                scripts=ROOT / "skill" / "annotation-everything" / "scripts")
+        self.addCleanup(e2e_servers.stop, server)
+        return server
+
     @staticmethod
     def orphan_item(doc: dict) -> dict:
         return next(item for item in doc["results"] if item["code"] == "orphan-servers")
@@ -86,10 +96,8 @@ class InterferenceRegressionTests(unittest.TestCase):
     def test_unserialised_real_server_is_reported_by_doctor_as_orphan(self):
         """干扰复现：真实 serve.py 运行时，维护侧 doctor 的全机枚举把它判成残留服务。"""
         review = make_review_dir(self.root)
-        server = e2e_servers.start_server(review, e2e_servers.free_port(),
-                                          scripts=ROOT / "skill" / "annotation-everything" / "scripts")
+        server = self.start_server(review)
         # serve 在自己的台账侧登记；让它真正出现在 /api/health 里再盘点
-        self.addCleanup(e2e_servers.stop, server)
         item = self.orphan_item(self.doctor())
         self.assertEqual(item["level"], "失败",
                          "并行真实服务应当被 doctor 的全机枚举捕获（干扰复现）")
@@ -98,13 +106,29 @@ class InterferenceRegressionTests(unittest.TestCase):
     def test_serialised_by_protocol_doctor_no_longer_sees_the_server(self):
         """隔离修复：serve 所在临界区结束（进程已退出）后，同一 doctor 不再报告它。"""
         review = make_review_dir(self.root)
-        server = e2e_servers.start_server(review, e2e_servers.free_port(),
-                                          scripts=ROOT / "skill" / "annotation-everything" / "scripts")
+        server = self.start_server(review)
         e2e_servers.stop(server)
         item = self.orphan_item(self.doctor())
         self.assertNotEqual(item["level"], "失败",
                             "服务退出后 doctor 仍报告残留：干扰没有被隔离修复")
         self.assertNotIn(str(server.pid), item.get("message", ""))
+
+    def test_server_uses_its_own_ledger_without_changing_parent_ledger(self):
+        """单独跑本模块也不能把合成审阅登记进父进程的台账。"""
+        outer_home = self.root / "outer-home"
+        outer_ledger = empty_ledger(outer_home)
+        original = outer_ledger.read_bytes()
+        review = make_review_dir(self.root)
+        with mock.patch.dict(os.environ, self.env_for(outer_home)):
+            self.start_server(review)
+            self.assertEqual(os.environ["AE_HOME"], str(outer_home),
+                             "服务启动后必须恢复父进程的环境")
+        self.assertEqual(outer_ledger.read_bytes(), original,
+                         "合成服务不能修改父进程台账")
+        self.assertEqual(sorted(path.name for path in outer_home.iterdir()), ["reviews.json"],
+                         "父进程台账目录不能留下锁或其他新增文件")
+        server_ledger = json.loads((self.server_home / "reviews.json").read_text(encoding="utf-8"))
+        self.assertEqual(server_ledger["reviews"][REVIEW_ID]["dir"], str(review.resolve()))
 
     def test_module_participates_in_host_state_protocol(self):
         """本模块（真实干扰回归）在敏感清单里：直接跑 unittest 也受锁保护。
