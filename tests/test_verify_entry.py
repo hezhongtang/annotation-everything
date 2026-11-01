@@ -789,6 +789,9 @@ class IsolationLockTests(VerifyEntryTestCase):
         self.assertGreaterEqual(record["timing"]["lock_wait_seconds"], 0.25)
         self.assertFalse(record["result"]["usable_as_evidence"])
         self.assertEqual(record["result"]["counts"]["groups"], 1)
+        self.assertIsNone(group["started_at"], "锁等待超时没有启动本组子进程")
+        self.assertEqual(record["shadow"]["executed_groups"], [])
+        self.assertFalse(record["shadow"]["coverage"]["browser"])
         self.assertIsNone(holder.poll(), "等待超时绝不停止外部占用者")
         self.assertEqual(holder.wait(timeout=15), 0, "占用者按自己的节奏退出")
 
@@ -861,6 +864,9 @@ def acquire(resources, timeout=None, env=None):
         self.assertEqual(record["timing"]["lock_wait_seconds"], group["lock"]["wait_seconds"])
         self.assertLess(record["timing"]["wrapper_seconds"], record["timing"]["wall_seconds"] - 0.2)
         self.assertFalse((self.repo.artifact_dir / "runs" / run_id / "unit.log").exists())
+        self.assertIsNone(group["started_at"])
+        self.assertEqual(record["shadow"]["executed_groups"], [])
+        self.assertFalse(record["shadow"]["coverage"]["unit"])
         self.assertIsNone(holder.poll(), "等待者取消不得停止占用者")
 
     def test_interrupted_group_holds_lock_until_child_cleanup_finishes(self):
@@ -1125,6 +1131,9 @@ sys.exit(verify.main())
         self.assertEqual(record["result"]["exit_status"], 143)
         self.assertFalse(record["result"]["usable_as_evidence"])
         self.assertEqual(record["groups"][0]["outcome"], "passed", "已完成的组保留真实结果")
+        self.assertEqual(record["shadow"]["run_outcome"], "interrupted",
+                         "收尾中断时影子结论必须与整次运行一致")
+        self.assertFalse(record["shadow"]["usable_as_evidence"])
         self.assertIn(run_id, [entry["run_id"] for entry in self.index_entries()],
                       "index.jsonl 记下这次运行")
 
@@ -1149,6 +1158,11 @@ sys.exit(verify.main())
         self.assertEqual(group["outcome"], "passed", "已完成组保留真实结果")
         self.assertEqual(group["counts"]["passed"], 4)
         self.assertEqual(record["groups"][1]["outcome"], "interrupted")
+        self.assertIsNotNone(group["started_at"], "已执行的组有进程登记时间")
+        self.assertIsNone(record["groups"][1]["started_at"], "取消后的计划组未启动")
+        self.assertEqual(record["shadow"]["executed_groups"], ["unit"])
+        self.assertEqual(record["shadow"]["coverage"],
+                         {"unit": True, "serve-check": False, "browser": False})
         children = json.loads((self.repo.artifact_dir / "runs" / run_id / "children.json").read_text())
         self.assertEqual(len(children), 1, "首次取消后不再启动后续组")
         self.assertTrue(children[0]["reaped"])
@@ -1629,6 +1643,9 @@ class WrapperFailureTests(VerifyEntryTestCase):
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         self.assertEqual(record["groups"][0]["outcome"], "unavailable")
         self.assertIn("uv", record["groups"][0]["note"])
+        self.assertIsNone(record["groups"][0]["started_at"])
+        self.assertEqual(record["shadow"]["executed_groups"], [])
+        self.assertFalse(record["shadow"]["coverage"]["browser"])
         self.assertFalse(record["result"]["usable_as_evidence"])
 
     def test_run_json_mode_prints_the_record_on_stdout(self):
@@ -1749,6 +1766,10 @@ class ReportTests(VerifyEntryTestCase):
         self.assertEqual(report.returncode, 1, report.stdout + report.stderr)
         current = json.loads(report.stdout)
         self.assertFalse(current["result"]["usable_as_evidence"])
+        self.assertFalse(current["shadow"]["usable_as_evidence"], "影子证据同步降级")
+        self.assertFalse(current["shadow"]["comparable"])
+        self.assertIn("校验失败", current["shadow"]["incomparable_reason"])
+        self.assertEqual(current["shadow"]["candidate_omissions"], [])
         self.assertEqual(current["evidence"]["integrity"], "degraded")
         self.assertIn("校验和不一致", report.stdout)
         self.assertEqual(current["result"]["outcome"], "passed", "原始测试结论仍然保留")
@@ -2386,6 +2407,87 @@ class SelectionShadowTests(VerifyEntryTestCase):
         p = self.repo.run_verify("run", *args, extra_env=merged, timeout=timeout)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         return p, record
+
+    def test_full_group_suggestions_cover_failures_without_false_omissions(self):
+        self.repo.write("tests/test_synth.py", UNIT_PASS.replace("1 + 1, 2", "1 + 1, 3"))
+        self.repo.write("tests/e2e_browser.py", BROWSER_SCENARIO_STUB, executable=True)
+        self.repo.commit_all("合成失败与场景记录")
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        for phase, groups, expected_groups in (
+                ("pr", ["--group", "all"], {"unit", "serve-check", "browser"}),
+                ("ci", ["--group", "unit", "--group", "serve-check"], {"unit", "serve-check"})):
+            with self.subTest(phase=phase):
+                p, record = self.run_shadow(*groups, "--phase", phase,
+                    env={"SYNTH_SERVE_FAILED": "1", "SYNTH_SCENARIO_STATUS": "failed"})
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIsNone(record["context"]["selection"]["fallback"])
+                shadow = record["shadow"]
+                self.assertTrue(shadow["comparable"])
+                self.assertEqual({item["group"] for item in shadow["failures"]}, expected_groups)
+                self.assertEqual(shadow["candidate_omissions"], [],
+                                 "完整组已覆盖失败，不能根据空 selectors 误报遗漏")
+
+    def test_wildcard_only_expands_for_a_matching_rule(self):
+        import copy
+        payload = copy.deepcopy(SELECTION_MAP_OK)
+        next(rule for rule in payload["rules"] if rule["id"] == "r-page")["scenarios"] = ["*"]
+        self.map_path.write_text(json.dumps(payload), encoding="utf-8")
+        self.repo.write("tests/e2e_browser.py", BROWSER_SCENARIO_STUB, executable=True)
+        self.repo.commit_all("合成全场景映射")
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        plan = self.repo.run_verify("plan", "--phase", "development", "--json",
+                                   extra_env=self.sel_env)
+        self.assertEqual(plan.returncode, 0, plan.stdout + plan.stderr)
+        self.assertEqual(json.loads(plan.stdout)["selection"]["suggested"]["scenarios"], [],
+                         "未命中的全场景规则不能把 CLI 建议扩大到浏览器")
+        self.repo.write("templates/page.html", "合成模板\n")
+        p, record = self.run_shadow("--group", "all", "--phase", "development",
+                                   env={"SYNTH_SCENARIO_STATUS": "failed"})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(record["shadow"]["browser_planned_scenarios"],
+                         ["server-mode", "skill-search"])
+        self.assertEqual(record["shadow"]["candidate_omissions"], [],
+                         "全场景覆盖必须识别实际失败场景")
+        self.repo.write("unknown.txt", "触发回退\n")
+        fallback_plan = self.repo.run_verify("plan", "--phase", "development", "--json",
+                                            extra_env=self.sel_env)
+        self.assertEqual(json.loads(fallback_plan.stdout)["selection"]["suggested"]["scenarios"],
+                         ["server-mode", "skill-search"], "回退也保留展开后的场景")
+
+    def test_non_utf8_override_falls_back_and_still_executes_gate(self):
+        self.map_path.write_bytes(b"\xff\xfe")
+        p, record = self.run_shadow("--phase", "development")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(record["context"]["selection"]["fallback"]["kind"], "broken_rules")
+        self.assertGreater(record["result"]["counts"]["cases"], 0, "损坏映射不能阻止实际门禁")
+
+    def test_missing_full_unit_group_is_not_comparable(self):
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        for group in ("serve-check", "browser"):
+            with self.subTest(group=group):
+                p, record = self.run_shadow("--group", group, "--phase", "development")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertFalse(record["shadow"]["comparable"])
+                self.assertIn("完整单元", record["shadow"]["incomparable_reason"])
+
+    def test_fallback_keeps_observed_failures(self):
+        self.repo.write("tests/test_synth.py", UNIT_PASS.replace("1 + 1, 2", "1 + 1, 3"))
+        self.repo.commit_all("合成失败")
+        p, record = self.run_shadow("--phase", "development")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIsNotNone(record["context"]["selection"]["fallback"])
+        self.assertTrue(record["shadow"]["failures"], "回退只禁止遗漏判断，不丢实际失败")
+        self.assertEqual(record["shadow"]["candidate_omissions"], [])
+
+    def test_incomparable_input_keeps_observed_failures(self):
+        self.repo.write("tests/test_synth.py", CHURN_BODY.replace("self.assertTrue(True)",
+                                                                "self.fail('合成失败')"))
+        self.repo.commit_all("合成输入变化与失败")
+        p, record = self.run_shadow("--phase", "development")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertFalse(record["shadow"]["comparable"])
+        self.assertTrue(record["shadow"]["failures"], "不可比较不丢实际失败")
+        self.assertEqual(record["shadow"]["candidate_omissions"], [])
 
     def test_run_records_selection_and_shadow_without_changing_gate(self):
         self.repo.write("tools/synth-cli.py", "v1\n")

@@ -36,6 +36,7 @@ cat .verify/runs/<run ID>/shadow.json
 
 - `SELECTION_RULES`：路径前缀 → 建议选择器 / 浏览器场景 / 是否带 `serve-check` / 命中即回退的类别。初始覆盖：`ae.py`（CLI）、`notes.py` / `notes_store.py` / `ledger.py`(审阅协议与存储)、`serve.py` / `viewer_template.html` / `build_viewer.py`（服务与页面）、`match.py` / `skill_sources.py`（页面匹配与技能发现）、`i18n.py` 与两处 `locales/`（词典，显式含全局契约模块）、`export_format.py` / `check_pptx_fonts.py`（导出与字体）；`skill/annotation-everything/SKILL.md`、`references/`、`evals/`（技能资源，回退）、`fixtures/`（回退）、`verify.py` 等执行配置（回退）、`docs/` 等说明文档（回退）。
 - `DOC_ALLOWLIST`（狭窄允许列表）：`README.md`、`README.en.md`、`docs/assets/`。命中后产品测试标记「不适用」——影子模式实际执行不因此减少任何检查，不会增加通过数量。
+- 浏览器场景 `*` 仅在该规则命中时展开为注册场景清单，未命中的规则不会扩大浏览器建议。
 - `STRATEGY_VERSION`：映射或判定逻辑变化时递增；记录里的 `context.selection.strategy_version` 标明计划用的版本。修改映射走普通 PR（受审查的策略变更）。
 - `AE_SELECTION_MAP` 环境变量可指向同结构的 JSON 覆盖映射（测试与实验用）；覆盖映射损坏按 `broken_rules` 回退。路径不进记录。
 
@@ -62,8 +63,8 @@ cat .verify/runs/<run ID>/shadow.json
 
 每次 `run` 开始时计算建议（`context.selection`），结束时把建议与实际执行对照（`record.json` 的 `shadow` 字段 + 运行目录的 `shadow.json`，schema `ae-verify-shadow/1`）：
 
-- **可比条件**：输入快照可用、运行期间输入指纹未变、运行正常结束且整次结论不是超时 / 入口错误 / 依赖缺失、实际执行含完整单元且完整单元真实执行（结论为通过；超时 / 空集合 / 全跳过 / 加载错误都算没有可对照的执行）。不满足时 `comparable=false` 并写明「不可比较」原因——输入 / 环境不匹配、没有完整通过的执行可对照的两次运行不会被错误计为选择遗漏；整次结论与证据可用性同时记录在 `shadow.run_outcome` / `shadow.usable_as_evidence`。
-- **遗漏判断**：可比且未回退时，实际失败（用例失败 / 意外成功 / 服务自检失败 / 浏览器场景失败）落在建议范围外才成为候选遗漏（`candidate_omissions`），每条带归因：`selector-gap`（建议范围没覆盖）或 `infrastructure`（加载 / fixture 错误）。回退完整检查时建议本身就是完整检查，不产出遗漏判断，失败清单照常保留。
+- **可比条件**：输入快照可用、运行期间输入指纹未变、运行正常结束且整次结论不是超时 / 入口错误 / 依赖缺失、实际执行含完整单元且有可对应的真实单元执行用例（允许断言失败；超时 / 空集合 / 全跳过 / 加载错误不可比较）。不满足时 `comparable=false` 并写明「不可比较」原因——输入不匹配、未运行完整单元或执行证据损坏时，不会错误产生选择遗漏；整次结论与证据可用性同时记录在 `shadow.run_outcome` / `shadow.usable_as_evidence`。
+- **遗漏判断**：可比且未回退时，实际失败（用例失败 / 意外成功 / 服务自检失败 / 浏览器场景失败）落在建议范围外才成为候选遗漏（`candidate_omissions`），每条带归因：`selector-gap`（建议范围没覆盖）或 `infrastructure`（加载 / fixture 错误）。`all`、`unit` 和 `browser` 按完整组覆盖判断，不能把这些组已覆盖的失败误报为遗漏。回退完整检查或不可比较时不产出遗漏判断，实际失败清单仍保留。
 - **候选遗漏不会被丢弃**：完整检查的失败原样保留在组结果与 `shadow.failures` 里；`rule_candidates` 给出修正映射规则的候选。确认遗漏后扩大相关范围，缩小门禁必须走受审查的策略变更。
 - **浏览器范围**：浏览器组未执行时（例如并行工单占用浏览器资源，run 只跑 `unit + serve-check`），`coverage.browser=false` 明示，建议的场景清单仅在计划层对照（`browser_planned_scenarios`），不构成遗漏证据，也不构成通过。
 

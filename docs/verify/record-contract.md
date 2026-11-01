@@ -115,6 +115,8 @@
 
 组记录另有两个隔离字段（C 项起有值，见 [isolation.md](isolation.md)）：`resources` 是组要求的共享资源名数组（空数组即纯逻辑组）；`lock` 记录本次锁获取——`resources`、`wait_seconds`（等待时长，锁等待不是执行耗时）与可选的 `timeout: true`（等待超时，组没有执行、结论为 `timeout`，note 写明资源与持有者 pid）。
 
+`groups[].started_at`（F 项起）来自本次子进程登记簿，是实际启动时间；未启动时为 `null`。等锁超时、缺依赖或因中断未启动的计划组不计入 `shadow.executed_groups` 和 `shadow.coverage`，即使它们仍保留在 `groups` 中说明未执行原因。
+
 用例记录在 `groups[].cases`，每项含 `id`、`name`、`status`、`seconds`；非通过时加 `message`，发生子测试失败、错误或跳过时，分别带 `subtest_failures`、`subtest_errors`、`subtest_skips`。`status` 取 `passed`、`failed`、`error`、`skipped`、`interrupted`、`expected_failure`、`unexpected_success`。
 
 单元组的 `counts.cases` 统计已执行的主用例，`passed`、`failed`、`errors`、`skipped` 等计数严格按主用例状态统计。同一主用例有多个子测试失败或错误时，不重复增加主用例数。子测试失败、错误和跳过分别计入 `subtest_failures`、`subtest_errors` 和 `subtest_skips`，不额外计成独立用例。全部子测试跳过的主用例记为 `skipped`；子测试有成功和跳过、没有失败或错误时，主用例记为 `passed`。
@@ -209,8 +211,8 @@ JSON 报告在记录副本上追加 `report_validation.problems` 字符串数组
 
 | 字段 | 说明 |
 | --- | --- |
-| `shadow.comparable` / `incomparable_reason` | 输入快照可用、运行期间指纹未变、运行正常结束且整次结论不是超时 / 入口错误 / 依赖缺失、实际执行含完整单元且完整单元真实执行（结论为通过；超时 / 空集合 / 全跳过 / 加载错误都算没有可对照的执行），齐备才可比较；否则写明不可比较原因 |
-| `shadow.run_outcome` / `shadow.usable_as_evidence` | 整次运行的结论与证据可用性（与 `result` 同值），随影子记录一起落盘 `shadow.json` |
+| `shadow.comparable` / `incomparable_reason` | 输入快照可用、运行期间指纹未变、运行正常结束且整次结论不是超时 / 入口错误 / 依赖缺失、实际执行含完整单元且有可对应的真实执行用例，齐备才可比较；允许断言失败作为遗漏分析的证据，超时 / 空集合 / 全跳过 / 加载错误不可比较；否则写明原因 |
+| `shadow.run_outcome` / `shadow.usable_as_evidence` | 整次运行的最终结论与证据可用性（与 `result` 同值），随影子记录一起落盘 `shadow.json`；读取报告发现证据损坏时，报告副本中的影子可用性同步降级，落盘原件保留 |
 | `shadow.coverage` | `unit` / `serve-check` / `browser` 是否实际执行 |
 | `shadow.suggested_groups` / `suggested_selectors` / `executed_groups` | 建议范围与实际执行并列 |
 | `shadow.browser_planned_scenarios` | 建议的浏览器场景；浏览器未执行时仅在计划层对照，不构成遗漏证据 |

@@ -271,7 +271,7 @@ def load_strategy(repo: Path, env: Optional[dict] = None) -> dict:
     if override:
         try:
             text = Path(override).read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             return {"rules": SELECTION_RULES, "allowlist": DOC_ALLOWLIST,
                     "version": STRATEGY_VERSION, "source": "builtin",
                     "problems": ["覆盖映射读不出来（%s），按内置映射继续校验" % exc],
@@ -550,7 +550,8 @@ def _suggest_for_phase(phase: str, classified: dict, changes: dict, fallback: Op
             scenarios.update(entry["scenarios"])
             serve_check = serve_check or entry["serve_check"]
         suggested["groups"] = ["unit"] + (["serve-check"] if serve_check else [])
-        suggested["scenarios"] = sorted(scenarios)
+        suggested["scenarios"] = (sorted(expanded_scenarios) if ALL_SCENARIOS in scenarios
+                                  else sorted(scenarios))
         suggested["serve_check"] = serve_check
         suggested["notes"] = ["回退完整检查：%s" % fallback["reason"]]
         if serve_check or scenarios:
@@ -573,7 +574,8 @@ def _suggest_for_phase(phase: str, classified: dict, changes: dict, fallback: Op
         return suggested
     suggested["groups"] = ["unit-related"] + (["serve-check"] if serve_check else [])
     suggested["selectors"] = sorted(selectors)
-    suggested["scenarios"] = sorted(scenarios) or sorted(expanded_scenarios)
+    suggested["scenarios"] = (sorted(expanded_scenarios) if ALL_SCENARIOS in scenarios
+                              else sorted(scenarios))
     suggested["serve_check"] = serve_check
     if scenarios:
         suggested["notes"] = ["浏览器场景为计划层对照：影子模式不因此增减实际执行的组。"]

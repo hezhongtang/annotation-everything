@@ -1324,7 +1324,8 @@ def compute_shadow(record: dict, selection: Optional[dict]) -> dict:
         "suggested_groups": list(suggested.get("groups") or []),
         "suggested_selectors": list(suggested.get("selectors_effective")
                                     or suggested.get("selectors") or []),
-        "executed_groups": [group["name"] for group in record["groups"]],
+        "executed_groups": [group["name"] for group in record["groups"]
+                            if group.get("started_at") is not None],
         "browser_planned_scenarios": list(suggested.get("scenarios") or []),
         "failures": [],
         "candidate_omissions": [],
@@ -1337,6 +1338,23 @@ def compute_shadow(record: dict, selection: Optional[dict]) -> dict:
     shadow["coverage"] = {"unit": "unit" in executed,
                           "serve-check": "serve-check" in executed,
                           "browser": "browser" in executed}
+    # 失败是本次执行的事实，不依赖计划是否可比较；先收集，再决定是否判断遗漏。
+    for group in record["groups"]:
+        if group.get("counter") == "unittest":
+            for case in group.get("cases") or []:
+                if case.get("status") in (FAILED, ERROR, "unexpected_success"):
+                    shadow["failures"].append({
+                        "group": group["name"], "target": case.get("id"),
+                        "module": (case.get("id") or "").split(".")[0],
+                        "status": case.get("status")})
+        elif group["name"] == "serve-check" and (group.get("counts") or {}).get("failed"):
+            shadow["failures"].append({"group": "serve-check", "target": "服务安全自检",
+                                       "status": FAILED})
+        else:
+            for scenario in group.get("scenarios") or []:
+                if scenario.get("status") in ("failed", "error"):
+                    shadow["failures"].append({"group": "browser", "target": scenario.get("id"),
+                                               "status": scenario.get("status")})
     reasons = []
     if not selection or not selection.get("available"):
         reasons.append("选测计划不可用（%s）" % (selection.get("reason") or "未知原因"))
@@ -1347,7 +1365,7 @@ def compute_shadow(record: dict, selection: Optional[dict]) -> dict:
     if record.get("state") != "complete":
         reasons.append("运行没有正常结束")
     run_outcome = shadow["run_outcome"]
-    if run_outcome in (TIMEOUT, WRAPPER_ERROR, UNAVAILABLE):
+    if run_outcome in (TIMEOUT, WRAPPER_ERROR, UNAVAILABLE, INTERRUPTED):
         reasons.append("整次运行结论是 %s（%s），没有正常通过的完整执行可对照"
                        % (run_outcome, VERDICT_LABELS.get(run_outcome, run_outcome)))
     if "unit" in executed:
@@ -1356,8 +1374,10 @@ def compute_shadow(record: dict, selection: Optional[dict]) -> dict:
         if unit_outcome in (TIMEOUT, EMPTY, ERROR, SKIPPED):
             reasons.append("完整单元组的结论是 %s（%s），没有真实执行的用例可对照"
                            % (unit_outcome, VERDICT_LABELS.get(unit_outcome, unit_outcome)))
-    if "unit-related" in executed and "unit" not in executed:
-        reasons.append("实际执行是相关单元而非完整检查，没有完整对照")
+    if "unit" not in executed:
+        reasons.append("实际执行不含完整单元，没有完整对照")
+    if (record.get("evidence") or {}).get("integrity") == "degraded":
+        reasons.append("执行证据完整性已降级，不能用于遗漏判断")
     if reasons:
         shadow["incomparable_reason"] = "；".join(reasons)
         return shadow
@@ -1372,46 +1392,39 @@ def compute_shadow(record: dict, selection: Optional[dict]) -> dict:
         prefix = _selector_module_prefix(selector)
         if prefix and "/" not in prefix:
             suggested_modules.add(prefix.split(".")[0])
-    serve_suggested = ("serve-check" in shadow["suggested_groups"]
+    suggested_groups = set(shadow["suggested_groups"])
+    all_suggested = "all" in suggested_groups
+    unit_suggested = all_suggested or "unit" in suggested_groups
+    serve_suggested = (all_suggested or "serve-check" in suggested_groups
                        or bool(suggested.get("serve_check")))
     suggested_scenarios = set(shadow["browser_planned_scenarios"])
+    browser_suggested = (all_suggested or "browser" in suggested_groups
+                         or "*" in suggested_scenarios)
     paths_hint = sorted({path for rule in selection.get("matched_rules") or []
                          for path in rule.get("paths") or []}
                         | set(selection.get("unknown_paths") or []))
-    for group in record["groups"]:
-        if group.get("counter") == "unittest":
-            for case in group.get("cases") or []:
-                if case.get("status") not in (FAILED, ERROR, "unexpected_success"):
-                    continue
-                module = (case.get("id") or "").split(".")[0]
-                shadow["failures"].append({"group": group["name"], "target": case.get("id"),
-                                           "module": module, "status": case.get("status")})
-                if module not in suggested_modules:
-                    attribution = "infrastructure" if case.get("status") == ERROR else "selector-gap"
-                    shadow["candidate_omissions"].append({
-                        "group": group["name"], "target": case.get("id"),
-                        "attribution": attribution, "module": module,
-                        "note": "失败用例的模块 %s 不在建议范围的选择器里" % module,
-                        "paths_hint": paths_hint})
-        elif group["name"] == "serve-check" and (group.get("counts") or {}).get("failed"):
-            shadow["failures"].append({"group": "serve-check", "target": "服务安全自检",
-                                       "status": FAILED})
+    for failure in shadow["failures"]:
+        if "module" in failure:
+            module = failure["module"]
+            if not unit_suggested and module not in suggested_modules:
+                attribution = "infrastructure" if failure["status"] == ERROR else "selector-gap"
+                shadow["candidate_omissions"].append({
+                    "group": failure["group"], "target": failure["target"],
+                    "attribution": attribution, "module": module,
+                    "note": "失败用例的模块 %s 不在建议范围的选择器里" % module,
+                    "paths_hint": paths_hint})
+        elif failure["group"] == "serve-check":
             if not serve_suggested:
                 shadow["candidate_omissions"].append({
                     "group": "serve-check", "target": "组级", "attribution": "selector-gap",
                     "note": "服务安全自检失败，但建议范围未包含该组",
                     "paths_hint": paths_hint})
         else:
-            for scenario in group.get("scenarios") or []:
-                if scenario.get("status") not in ("failed", "error"):
-                    continue
-                shadow["failures"].append({"group": "browser", "target": scenario.get("id"),
-                                           "status": scenario.get("status")})
-                if scenario.get("id") not in suggested_scenarios:
-                    shadow["candidate_omissions"].append({
-                        "group": "browser", "target": scenario.get("id"),
-                        "attribution": "selector-gap",
-                        "note": "失败场景不在建议的场景清单里", "paths_hint": paths_hint})
+            if not browser_suggested and failure["target"] not in suggested_scenarios:
+                shadow["candidate_omissions"].append({
+                    "group": "browser", "target": failure["target"],
+                    "attribution": "selector-gap",
+                    "note": "失败场景不在建议的场景清单里", "paths_hint": paths_hint})
     shadow["rule_candidates"] = [
         {"missing": item["target"], "group": item["group"],
          "suggestion": "把 %s 的失败纳入建议范围：为相关变更路径补映射规则或扩大现有规则"
@@ -1499,7 +1512,7 @@ def build_record(args, groups: dict, selected: list) -> dict:
                     "scenarios": [] if groups[name].scenarios else None,
                     "resources": list(groups[name].resources),
                     "lock": {"resources": list(groups[name].resources), "wait_seconds": None},
-                    "outcome": None, "exit_status": None} for name in selected],
+                    "started_at": None, "outcome": None, "exit_status": None} for name in selected],
         "commit": commit_summary(snapshot),
         "input": {
             "available": snapshot.get("available"),
@@ -1624,6 +1637,7 @@ def cmd_run(args) -> int:
 
     def merge_group_results() -> None:
         """把已完成的组结果合并进记录；没拿到结果的组才按中断 / 入口失败补齐。"""
+        started_groups = {entry["group"]: entry["started_at"] for entry in ctx.registry.entries}
         record["timing"]["wall_seconds"] = round(time.monotonic() - started, 6)
         child_total = round(sum((item.get("timing") or {}).get("child_seconds") or 0
                                 for item in results.values()), 6)
@@ -1639,6 +1653,8 @@ def cmd_run(args) -> int:
         record["timing"]["cleanup_seconds"] = round(getattr(ctx, "cleanup_seconds", 0.0), 6)
         record["timing"]["ended_at"] = now_iso()
         for group in record["groups"]:
+            # 登记簿只收录确实启动的子进程；排队超时、缺依赖和取消后的计划组为空。
+            group["started_at"] = started_groups.get(group["name"])
             if group.get("outcome") is not None:
                 continue  # 收尾被打断后重跑时，已合并的组不重复覆盖
             item = results.get(group["name"])
@@ -1682,6 +1698,11 @@ def cmd_run(args) -> int:
                 % (signal_name(-interrupted_signum) or interrupted_signum)]
         fill_evidence(record, ctx)
         fill_result(record, ctx)
+        if interrupted_signum is not None:
+            # 先确定最终结论，再生成影子记录，避免收尾中断时两处结论不一致。
+            record["result"].update(outcome=INTERRUPTED,
+                                    exit_status=EXIT_INTERRUPTED_BASE + interrupted_signum,
+                                    usable_as_evidence=False)
         # 影子对照（issue #55）：建议范围与本次实际执行并列；不改变结论与退出码
         try:
             record["shadow"] = compute_shadow(record, record["context"].get("selection"))
@@ -1693,11 +1714,6 @@ def cmd_run(args) -> int:
                                 "usable_as_evidence": False,
                                 "candidate_omissions": [], "failures": [],
                                 "rule_candidates": []}
-        if interrupted_signum is not None:
-            # 被信号中断时退出码语义是 128+信号，不能让 overall_exit 算回 0
-            record["result"].update(outcome=INTERRUPTED,
-                                    exit_status=EXIT_INTERRUPTED_BASE + interrupted_signum,
-                                    usable_as_evidence=False)
         with shield_termination():
             _finish(record, ctx, args)
 
@@ -1895,6 +1911,11 @@ def load_record(run_dir: Path) -> tuple:
     if problems:
         record.setdefault("result", {})["usable_as_evidence"] = False
         record.setdefault("evidence", {})["integrity"] = "degraded"
+        shadow = record.get("shadow")
+        if isinstance(shadow, dict):
+            shadow.update(usable_as_evidence=False, comparable=False,
+                          incomparable_reason="报告读取时证据校验失败：%s" % "；".join(problems),
+                          candidate_omissions=[], rule_candidates=[])
     return record, problems
 
 
