@@ -58,19 +58,21 @@ def _safe_describe(describe):
 
 
 def bounded_poll(probe, seconds, *, step=0.05, sleeper=time.sleep, clock=time.monotonic,
-                 condition=None, describe=None) -> bool:
+                 condition=None, describe=None):
     """有界轮询 Python 侧条件（磁盘文件、组合判断等）。
 
-    probe() 为真立即返回 True；超时返回 False 并输出诊断（条件、最后状态、
-    场景 ID）。probe 抛出的异常原样传播，不被轮询掩盖。clock / sleeper 可注入，
-    单元测试用假时钟验证边界，不需要真的等待。
+    probe() 为真时立即返回它的真值（可以是列表 / 字典等，便于调用方直接取用，
+    与改造前 wait_until 返回 cond() 值的契约一致）；超时返回 False 并输出诊断
+    （条件、最后状态、场景 ID）。probe 抛出的异常原样传播，不被轮询掩盖。
+    clock / sleeper 可注入，单元测试用假时钟验证边界，不需要真的等待。
     """
     if not isinstance(seconds, (int, float)) or seconds <= 0:
         raise ValueError("等待必须有正的上限（秒），收到 %r" % (seconds,))
     deadline = clock() + seconds
     while True:
-        if probe():
-            return True
+        value = probe()
+        if value:
+            return value
         if clock() >= deadline:
             break
         sleeper(step)

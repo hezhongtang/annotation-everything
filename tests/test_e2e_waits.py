@@ -95,6 +95,15 @@ class BoundedPollTests(unittest.TestCase):
         self.assertEqual(len(probes), 1)
         self.assertEqual(clock.now, 100.0)   # 没有任何固定等待
 
+    def test_returns_the_probe_truthy_value_not_just_true(self):
+        clock = FakeClock()
+        marker = [{"id": "n1"}]
+
+        def probe():
+            return marker or False
+
+        self.assertIs(e2e_waits.bounded_poll(probe, 5, clock=clock.monotonic, sleeper=clock.sleep), marker)
+
     def test_polls_until_deadline_then_returns_false_with_bounded_probes(self):
         clock = FakeClock()
         probes = []
