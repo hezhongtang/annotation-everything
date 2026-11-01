@@ -696,11 +696,6 @@ time.sleep(30)
         self.fail("入口没有登记子进程")
 
 
-# 收尾段（结束快照 + 落最终记录）要长到足够在组执行结束后发一个信号进去：
-# 未跟踪文件越多，结束快照的 git status 与逐文件哈希越慢。
-FINALIZE_CHURN_FILES = 1500
-
-
 # 外部锁占用者：扮演另一检出里直跑 unittest / 浏览器入口的参与者（同样遵守协议），
 # 或一个只持锁的合成占用者。绝不被入口停止。
 LOCK_HOLDER = '''
@@ -795,6 +790,21 @@ class IsolationLockTests(VerifyEntryTestCase):
         self.assertEqual(record["result"]["counts"]["groups"], 1)
         self.assertIsNone(holder.poll(), "等待超时绝不停止外部占用者")
         self.assertEqual(holder.wait(timeout=15), 0, "占用者按自己的节奏退出")
+
+    def test_timeout_message_uses_limit_while_record_keeps_actual_wait(self):
+        """调度延迟使实际等待越过上限时，提示上限与耗时记录不能混为一谈。"""
+        module = self.repo.path / "host_isolation.py"
+        module.write_text(module.read_text(encoding="utf-8") + '''
+def acquire(resources, timeout=None, env=None):
+    raise LockTimeoutError("host-state", 0.45)
+''', encoding="utf-8")
+        p = self.repo.run_verify("run", "--group", "browser",
+                                 extra_env=self.lock_env(AE_LOCK_WAIT_SECONDS="0.3"))
+        self.assertEqual(p.returncode, 124, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertIn("超过 0.3 秒", group["note"])
+        self.assertEqual(group["lock"]["wait_seconds"], 0.45)
 
     def test_pure_logic_group_not_blocked_by_unrelated_lock(self):
         holder = self.start_holder(hold=1.5)
@@ -1023,7 +1033,8 @@ class SignalDuringFinalizeTests(VerifyEntryTestCase):
     """R1/R2：信号落在收尾段或组与组之间时，入口仍落最终记录、按 128+信号退出，
     已完整执行的组保留真实结果，只有没执行的组标 interrupted。"""
 
-    def start_wrapper(self, *args: str, extra_env: dict | None = None) -> subprocess.Popen:
+    def start_wrapper(self, *args: str, extra_env: dict | None = None,
+                      launcher: str | None = None) -> subprocess.Popen:
         env = dict(os.environ)
         env["PATH"] = "%s%s%s" % (self.repo.path / "bin", os.pathsep, env["PATH"])
         env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -1032,7 +1043,8 @@ class SignalDuringFinalizeTests(VerifyEntryTestCase):
         env.setdefault("AE_LOCK_DIR", str(self.test_lock_dir))
         if extra_env:
             env.update(extra_env)
-        return subprocess.Popen([sys.executable, "verify.py", *args], cwd=str(self.repo.path),
+        command = [sys.executable, "-c", launcher] if launcher else [sys.executable, "verify.py"]
+        return subprocess.Popen([*command, *args], cwd=str(self.repo.path),
                                 env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     def wait_latest_run(self, timeout: float = 30) -> str:
@@ -1061,47 +1073,84 @@ class SignalDuringFinalizeTests(VerifyEntryTestCase):
             time.sleep(0.05)
         self.fail("入口没有登记 %d 个子进程" % count)
 
-    def wait_all_reaped(self, run_id: str, timeout: float = 30) -> None:
-        """等登记的子进程全部回收：组执行已结束，主进程正走在收尾段上。"""
-        path = self.repo.artifact_dir / "runs" / run_id / "children.json"
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if path.is_file():
-                try:
-                    children = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
-                    children = []
-                if children and all(entry["reaped"] and entry["exit_status"] is not None
-                                    for entry in children):
-                    return
-            time.sleep(0.005)
-        self.fail("子进程没有在时限内完成，没有出现收尾窗口")
-
     def index_entries(self) -> list:
         return [json.loads(line) for line in
                 (self.repo.artifact_dir / "index.jsonl").read_text(encoding="utf-8").splitlines()]
 
     def test_signal_during_finalize_seals_aborted_record(self):
-        churn = self.repo.path / "churn"
-        churn.mkdir()
-        for index in range(FINALIZE_CHURN_FILES):
-            (churn / ("file-%04d.txt" % index)).write_text("churn %d\n" % index, encoding="utf-8")
-        wrapper = self.start_wrapper("run", "--group", "unit")
+        marker = Path(self.temp.name) / "finalize-ready"
+        # reaped 只说明子进程结束，尚可能处于组证据收尾。明确在第二次输入快照
+        # （整次运行收尾）握手，不用创建大量文件来赌不同平台上的耗时窗口。
+        launcher = '''import os
+import signal
+import sys
+import time
+from pathlib import Path
+import verify
+
+original_snapshot = verify.snapshot_input
+snapshot_calls = 0
+def snapshot_with_barrier():
+    global snapshot_calls
+    snapshot_calls += 1
+    if snapshot_calls == 2:
+        assert callable(signal.getsignal(signal.SIGTERM))
+        Path(os.environ["SYNTH_FINALIZE_READY"]).write_text("ready")
+        time.sleep(30)
+    return original_snapshot()
+
+verify.snapshot_input = snapshot_with_barrier
+sys.exit(verify.main())
+'''
+        wrapper = self.start_wrapper("run", "--group", "unit", launcher=launcher,
+                                     extra_env={"SYNTH_FINALIZE_READY": str(marker)})
+        self.addCleanup(_reap, wrapper)
         try:
             run_id = self.wait_latest_run()
-            self.wait_all_reaped(run_id)
+            deadline = time.monotonic() + 10
+            while not marker.exists() and wrapper.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(marker.exists(), "入口已进入最终输入快照，等待取消信号")
             wrapper.send_signal(signal.SIGTERM)  # 组已完成，信号落在收尾段
-            code = wrapper.wait(timeout=30)
-            output = wrapper.stdout.read()
+            output, _ = wrapper.communicate(timeout=15)
+            code = wrapper.returncode
         finally:
             wrapper.stdout.close()
         self.assertEqual(code, 143, "入口按 128+SIGTERM 退出\n" + output)
         self.assertNotIn("Traceback", output, "收尾段被打断也不留裸 traceback")
         record = read_record(self.repo.artifact_dir, run_id)
         self.assertEqual(record["state"], "aborted", "最终记录落成 aborted，不停在 running")
+        self.assertEqual(record["result"]["outcome"], "interrupted")
+        self.assertEqual(record["result"]["exit_status"], 143)
+        self.assertFalse(record["result"]["usable_as_evidence"])
         self.assertEqual(record["groups"][0]["outcome"], "passed", "已完成的组保留真实结果")
         self.assertIn(run_id, [entry["run_id"] for entry in self.index_entries()],
                       "index.jsonl 记下这次运行")
+
+    def test_first_signal_during_group_evidence_is_captured_not_ignored(self):
+        """子进程已结束但组证据尚未交回时，首次取消不能被二次信号保护吞掉。"""
+        wrapper_path = self.repo.path / "verify.py"
+        source = wrapper_path.read_text(encoding="utf-8")
+        boundary = "cleanup_guard.enter_context(capture_termination(result))"
+        self.assertIn(boundary, source)
+        source = source.replace(boundary, boundary + "\n"
+                                "                os.kill(os.getpid(), signal.SIGTERM)", 1)
+        wrapper_path.write_text(source, encoding="utf-8")
+        self.repo.commit_all("合成组证据收尾首次取消")
+        p = self.repo.run_verify("run", "--group", "unit", "--group", "serve-check")
+        self.assertEqual(p.returncode, 143, p.stdout + p.stderr)
+        run_id = self.repo.latest_run_id()
+        record = read_record(self.repo.artifact_dir, run_id)
+        self.assertEqual(record["state"], "aborted")
+        self.assertEqual(record["result"]["outcome"], "interrupted")
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        group = record["groups"][0]
+        self.assertEqual(group["outcome"], "passed", "已完成组保留真实结果")
+        self.assertEqual(group["counts"]["passed"], 4)
+        self.assertEqual(record["groups"][1]["outcome"], "interrupted")
+        children = json.loads((self.repo.artifact_dir / "runs" / run_id / "children.json").read_text())
+        self.assertEqual(len(children), 1, "首次取消后不再启动后续组")
+        self.assertTrue(children[0]["reaped"])
 
     def test_interrupt_between_groups_keeps_completed_group_results(self):
         wrapper = self.start_wrapper("run", "--group", "all",

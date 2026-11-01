@@ -921,8 +921,9 @@ def execute_group(group: Group, ctx: RunContext) -> dict:
         return result
     handle = None
     wait_started = time.monotonic()
+    wait_limit = host_isolation.wait_limit()
     try:
-        handle = host_isolation.acquire(resources)
+        handle = host_isolation.acquire(resources, timeout=wait_limit)
     except Interrupted as exc:
         waited = round(time.monotonic() - wait_started, 6)
         note = "等待共享资源 %s 时收到 %s，本组没有执行" % (
@@ -936,7 +937,7 @@ def execute_group(group: Group, ctx: RunContext) -> dict:
     except host_isolation.LockTimeoutError as exc:
         holder = host_isolation.read_holder_note(exc.resource) or {}
         note = ("等待共享资源 %s 超过 %.1f 秒（当前持有者 pid %s），本组没有执行；"
-                "锁等待超时不是通过" % (exc.resource, exc.waited_seconds,
+                "锁等待超时不是通过" % (exc.resource, wait_limit,
                                         holder.get("pid", "未知")))
         ctx.note(note)
         return {"name": group.name, "outcome": TIMEOUT, "exit_status": EXIT_TIMEOUT,
@@ -954,6 +955,7 @@ def execute_group(group: Group, ctx: RunContext) -> dict:
 
 def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> dict:
     with contextlib.ExitStack() as cleanup_guard:
+        result = {}
         started_wall = time.monotonic()
         missing = [name for name in group.requires if shutil.which(name) is None]
         if missing:
@@ -1010,8 +1012,10 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
                 if reader is not None and reader.ident is not None:
                     reader.join(timeout=5)
                 raise
-            # 子进程已结束；把读取证据和交回结果作为一次收尾，二次信号不能抹去摘要。
-            cleanup_guard.enter_context(shield_termination())
+            # 正常组收尾收到的首次取消要保留；已在回收中则仍屏蔽二次信号。
+            # 捕获器直接写入待返回结果，既不丢已完成证据，也不吞掉用户取消。
+            if interrupted_signum is None:
+                cleanup_guard.enter_context(capture_termination(result))
             if registry_entry is not None:
                 registry_entry.update(reaped=code is not None, exit_status=code, signal=signal_name(code))
             ctx.save_children()
@@ -1055,17 +1059,19 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
             note = "本组没有拿到执行结果；%s" % evidence_missing
         if timed_out:
             note = "超过 %s 秒被入口终止" % ctx.timeout
-        return {"name": group.name, "outcome": outcome, "exit_status": exit_status,
+        result.update({"name": group.name, "outcome": outcome, "exit_status": exit_status,
                 "signal": (signal_name(-interrupted_signum) if interrupted_signum is not None else
                            signal_name(-int(signal.SIGINT)) if interrupted else signal_name(code)),
-                "interrupted_signum": interrupted_signum,
                 "timed_out": timed_out, "note": note, "counts": counts,
                 "cases": cases, "seconds": seconds,
                 "scenario_summary": scenario_summary,
                 "timing": {"child_seconds": child_seconds,
                            "case_seconds_total": seconds.get("case_total"),
                            "fixture_seconds_total": fixture_total(seconds),
-                           "unattributed_seconds": seconds.get("unattributed")}}
+                           "unattributed_seconds": seconds.get("unattributed")}})
+        if interrupted_signum is not None:
+            result["interrupted_signum"] = interrupted_signum
+        return result
 
 
 def fixture_total(seconds: dict) -> float:
@@ -1453,7 +1459,9 @@ def cmd_run(args) -> int:
         fill_result(record, ctx)
         if interrupted_signum is not None:
             # 被信号中断时退出码语义是 128+信号，不能让 overall_exit 算回 0
-            record["result"]["exit_status"] = EXIT_INTERRUPTED_BASE + interrupted_signum
+            record["result"].update(outcome=INTERRUPTED,
+                                    exit_status=EXIT_INTERRUPTED_BASE + interrupted_signum,
+                                    usable_as_evidence=False)
         with shield_termination():
             _finish(record, ctx, args)
 
@@ -1546,6 +1554,37 @@ def install_signal_handlers() -> None:
             signal.signal(sig, handler)
         except (OSError, ValueError):
             pass
+
+
+@contextlib.contextmanager
+def capture_termination(result: dict):
+    """正常组收尾时保留首次取消，等完整结果交回 cmd_run 后再结束整次运行。
+
+    处理器只更新待返回的同一个对象；结果装配、日志落盘和上下文退出之间收到
+    信号都能留下记录，不必抛出异常而丢掉已经完成的组。
+    """
+    def handler(signum, frame):
+        if result.get("interrupted_signum") is None:
+            result["interrupted_signum"] = signum
+
+    installed = []
+    for name in ("SIGINT", "SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            previous = signal.signal(sig, handler)
+        except (OSError, ValueError):
+            continue
+        installed.append((sig, previous))
+    try:
+        yield
+    finally:
+        for sig, previous in installed:
+            try:
+                signal.signal(sig, previous)
+            except (OSError, ValueError):
+                pass
 
 
 @contextlib.contextmanager
