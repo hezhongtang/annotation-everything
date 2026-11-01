@@ -40,6 +40,9 @@ python3 verify.py report --latest           # 读最近一次记录，不启动�
 # 开发中：只跑改动涉及的模块
 python3 verify.py run unit-related tests/test_core.py tests/test_i18n.py
 
+# 看当前改动建议跑什么、为什么（不启动测试）
+python3 verify.py plan --phase development
+
 # PR 收敛：完整单元 + 服务安全自检 + 完整浏览器
 python3 verify.py run --group all --phase pr --pr 50 --reason "PR 收敛前验收"
 
@@ -74,6 +77,15 @@ python3 verify.py run --group browser --timeout 300
 - 等待上限缺省 600 秒，`AE_LOCK_WAIT_SECONDS` 可调；锁等待超时是明确的非成功
   （组 `timeout`、退出码 124），不是通过。
 - 锁只协调参与者：外部进程与用户真实服务不受影响，也绝不因锁被停止。
+
+## 阶段选测与影子对照（F 项）
+
+选测回答「这次改动该跑什么、为什么」，影子对照保证它先被证明再被信任。要点：
+
+- `python3 verify.py plan --phase development`（可加 `--baseline`）：解释有效差异（含新增 / 删除 / 重命名两端与未提交文件）、命中的映射规则、未知路径、回退原因与建议范围；不启动任何测试。
+- `run` 默认影子模式：实际执行仍是请求的组（缺省完整单元），建议范围写进 `context.selection`；结束时对照写进 `shadow` 字段与 `shadow.json`。候选遗漏（完整检查发现而建议范围没覆盖的失败）保留并归因，不会被丢弃，也不会自动改规则。
+- 未知路径、坏基线、损坏规则、清单缺口、策略自身变化一律回退完整检查并解释原因；空差异不解释成「不用测」。`issue` 阶段不自动启动测试，缺陷复现显式请求相关组。
+- 策略版本、回退情形、允许列表边界与样本清单见 [selection-strategy.md](selection-strategy.md)；影子报告可被 G / H 直接读取（`shadow.json` + `context.selection`）。
 
 ## 重现步骤
 
@@ -134,7 +146,7 @@ python3 verify.py report --out-dir <解压后的构件目录> --latest
 - B（清理测试与词典契约提速，已交付）：清理测试的短等待经 `tests/e2e_servers.py` 的受控参数注入（`TestCleanup(terminate_timeout=...)`、`start_server(ready_timeout=...)`），缺省仍是 5 秒 / 8 秒的产品语义；权威词典契约模块是 `tests/test_i18n_catalog_contract.py`，入口常量 `RELATED_CONTRACT_SELECTORS`（verify.py）声明局部组的固定附带，F 的组映射直接引用它。
 - C（同机隔离与锁，已交付）：`groups[].resources` 与 `groups[].lock` 记录组级锁获取，`timing.lock_wait_seconds` 单列排队，`children.json` 登记语义未动；协议本体在仓库根 `host_isolation.py`，新入口要接资源锁时复用它，不要另起一套。
 - D（浏览器场景，已交付）：`groups[].scenarios` 已填充场景记录，`granularity` 细化到 `scenario`；场景注册表在 `tests/e2e_scenarios.py`（纯标准库），局部执行用 `--only` 或旧参数别名，清单用 `--list`；完整模式行为矩阵不变（629=629 前后对照）。
-- F（阶段选测）：`input.fingerprint`、`input.changed_since_baseline` 和 `context.phase` 已经够了；选择理由和策略版本加在 `context` 与 `groups[]`。
+- F（阶段选测与影子对照，已交付）：`plan --phase` 解释建议范围与回退原因；`run` 默认影子模式——`context.selection` 记录建议（策略版本、命中规则、未知路径、回退原因、建议组与场景），`shadow` 字段与运行目录 `shadow.json` 记录建议与实际执行的对照（候选遗漏、归因、不可比较原因）。策略本体与映射表在仓库根 `verify_selection.py`，语义、回退情形与样本清单见 [selection-strategy.md](selection-strategy.md) 与 `docs/verify/shadow-samples.json`。
 - G（证据复用）：按 `input.fingerprint` + `environment` + `groups[].name` 匹配已有记录，只认当前校验后 `result.usable_as_evidence` 为 `true` 的记录，不能直接信任落盘时的通过标记。
 - H（持续报告）：读 `.verify/index.jsonl` 汇总，不新增记录字段，也不在产品测试之外再跑东西。
 

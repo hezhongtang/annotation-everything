@@ -35,8 +35,9 @@
 | `run_id` | 字符串 | 是 | UTC 时间戳加随机后缀，同一秒内也不重复 |
 | `started_at` / `ended_at` | ISO 8601 字符串 | `started_at` 必填，`ended_at` 未结束时为 `null` | 带本地时区偏移 |
 | `wrapper` | 对象 | 是 | 入口名、版本、schema、实际 argv（已脱敏）、`cwd_mode` 固定 `repo-root`、Python 版本 |
-| `context` | 对象 | 是 | `phase`、`issue`、`pr`、`reason`、`groups_requested`、`groups_selected`、`selectors`、`selectors_effective` |
+| `context` | 对象 | 是 | `phase`、`issue`、`pr`、`reason`、`groups_requested`、`groups_selected`、`selectors`、`selectors_effective`、`selection`（F 项起：选测建议，见「影子对照」） |
 | `groups` | 数组 | 是 | 实际执行的组，按执行顺序；每项含命令、结论、计数、计时与用例清单 |
+| `shadow` | 对象或 `null` | F 项起必填 | 影子对照结果，见「影子对照」；收尾被信号打断等极端情况下可能保持 `null` |
 
 `context.issue` 与 `context.pr` 可空：没关联就写 `null`，不写 0。`context.phase` 只接受 `issue`、`development`、`review`、`pr`、`ci`、`manual`，其余值入口直接报错。`context.reason` 可空，但建议写，它是后续判断「这次为什么跑」的唯一来源。`context.selectors` 只记调用方给出的选择器；`context.selectors_effective` 记实际生效的选择器——`unit-related` 会固定附带全局词典一致性契约模块（issue #51），附带与去重都在这里可见。
 
@@ -190,6 +191,34 @@ JSON 报告在记录副本上追加 `report_validation.problems` 字符串数组
 
 元数据写失败的优先级：子进程的退出码优先。测试已经失败时，记录写不进去不会把退出码改成 0；测试通过但记录写不进去，入口返回 2 并明确报告。
 
+## 影子对照（F 项）
+
+选测建议在 `run` 开始时计算（与 `input.at_start` 同一快照），写在 `context.selection`，schema 为 `ae-verify-selection/1`；建议不改变实际执行的组。主要字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `context.selection.strategy_version` / `strategy_source` | 策略版本与来源（`builtin` / `override`） |
+| `context.selection.changes` | 有效差异：`added`、`deleted`、`modified`、`renamed`（含 `from` / `to` 两端）、`untracked`、`staged`、`unstaged`、`counts` |
+| `context.selection.matched_rules` | 命中的映射规则，每条含 `id`、`why`、`paths`、`selectors`、`scenarios`、`serve_check` |
+| `context.selection.doc_exempt` / `unknown_paths` | 允许列表豁免的文档（带类别）与未分类路径 |
+| `context.selection.manifest_check` | 测试清单覆盖检查：`new_tests`、`deleted_tests`、`renamed_tests`、`problems` |
+| `context.selection.fallback` | `null` 或 `{kind, reason}`；kind 见 selection-strategy.md 的回退表 |
+| `context.selection.suggested` | `runs_tests`、`groups`、`selectors`（附带契约前）、`selectors_effective`（附带后）、`contract_added`、`scenarios`、`serve_check`、`not_applicable`、`notes` |
+
+对照结果在 `shadow`（同内容另存运行目录 `shadow.json`，schema `ae-verify-shadow/1`）：
+
+| 字段 | 说明 |
+| --- | --- |
+| `shadow.comparable` / `incomparable_reason` | 输入快照可用、运行期间指纹未变、运行正常结束、实际执行含完整单元，四者齐备才可比较；否则写明不可比较原因 |
+| `shadow.coverage` | `unit` / `serve-check` / `browser` 是否实际执行 |
+| `shadow.suggested_groups` / `suggested_selectors` / `executed_groups` | 建议范围与实际执行并列 |
+| `shadow.browser_planned_scenarios` | 建议的浏览器场景；浏览器未执行时仅在计划层对照，不构成遗漏证据 |
+| `shadow.failures` | 本次实际失败的用例 / 检查 / 场景清单（保留，不因建议范围而丢弃） |
+| `shadow.candidate_omissions` | 候选遗漏：可比且未回退时，落在建议范围外的失败；每条带 `attribution`（`selector-gap` / `infrastructure`）与 `paths_hint` |
+| `shadow.rule_candidates` | 修正映射规则的候选（受审查的策略变更，不自动应用） |
+
+影子对照不改变 `result.outcome`、退出码与 `usable_as_evidence` 的判定；影子计算自身失败时降级为 `comparable=false` 并写明原因，不吞掉门禁结果。
+
 ## 扩展点
 
 B–H 在同一个 schema 上追加，不改已有字段：
@@ -197,7 +226,7 @@ B–H 在同一个 schema 上追加，不改已有字段：
 - 全局词典契约（B，已交付）：无参数全词典检查的唯一权威位置是 `tests/test_i18n_catalog_contract.py`；`unit-related` 组固定附带它（`verify.py` 的 `RELATED_CONTRACT_SELECTORS`），契约模块缺失时局部组加载失败报 `error`，不会静默失去保护。F 的组映射直接引用这一模块与常量。
 - 组级隔离与锁（C，已交付）：`groups[].resources`、`groups[].lock`、`timing.lock_wait_seconds`、`timing.cleanup_seconds`、`environment.isolation`；`children.json` 的所有权登记保持不变。
 - 浏览器场景拆分（D，已交付）：`groups[].scenarios` 由浏览器入口的场景执行清单（日志里的 `AE-SCENARIOS:` 行）填充，`granularity` 细化到 `scenario`；场景注册表、选择与旧参数别名见 `docs/verify/browser-scenarios.md`。
-- 阶段选测与影子对照（F）：在 `context` 与 `groups[]` 加策略版本与选择理由；`input.fingerprint` 与 `changed_since_baseline` 已经够了，不需要新字段。
+- 阶段选测与影子对照（F，已交付）：`context.selection` 与顶层 `shadow`（另存 `shadow.json`）；`input.fingerprint` 与 `changed_since_baseline` 沿用既有语义，不需要新字段。策略版本、回退情形与样本清单见 [selection-strategy.md](selection-strategy.md)。
 - 证据复用（G）：按 `input.fingerprint`、`environment`、`groups[].name` 与 `context.phase` 匹配已有记录；通过判定使用当前校验后的 `usable_as_evidence`，不能跳过证据完整性校验。
 - 持续报告（H）：读 `index.jsonl` 汇总，不新增记录字段。
 

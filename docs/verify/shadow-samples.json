@@ -1,0 +1,687 @@
+{
+  "schema": "ae-verify-shadow-samples/1",
+  "note": [
+    "issue #55 的影子对照样本清单：每个样本是一次独立变更的「建议范围 vs 实际完整检查」对照。",
+    "real 样本在本仓库真实改动上运行（unit + serve-check 完整门禁；浏览器因并行工单 #54 独占而不执行，场景只在计划文本层对照，coverage.browser=false 明示）。",
+    "synthetic 样本在合成仓库生成（tests/test_verify_entry.py 的 SynthRepo 模式），补齐真实样本不足的类别；合成样本不能冒充生产漏测率，漏测率统计属后续 H 项。",
+    "candidate_omissions 是候选遗漏（保留供审查），不是已确认的选择器缺陷；确认遗漏后由受审查的映射变更缩小风险，本清单不自动改规则。"
+  ],
+  "strategy_version": 1,
+  "selection_schema": "ae-verify-selection/1",
+  "shadow_schema": "ae-verify-shadow/1",
+  "real_samples": [
+    {
+      "id": "R1",
+      "category": "策略与执行配置（分支整体变更）",
+      "change": "verify.py + verify_selection.py + tests/test_verify_entry.py（相对 origin/main 的分支变更）",
+      "kind": "real",
+      "run_id": "20261101T072802Z-b018dd",
+      "phase": "development",
+      "baseline": "merge-base(origin/main)",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": "strategy_change",
+      "fallback_reason": "规则 exec-config：验证入口、策略与 CI 配置自身变化，映射边界不可信（路径 verify.py）；规则 exec-config：验证入口、策略与 CI 配置自身变化，映射边界不可信（路径 verify_selection.py）",
+      "matched_rules": [],
+      "suggested_groups": [
+        "unit"
+      ],
+      "suggested_selectors": [],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_note": "浏览器未执行（并行工单 #54 独占浏览器组），场景只在计划层对照",
+      "failures": [],
+      "candidate_omissions": [],
+      "rule_candidates": []
+    },
+    {
+      "id": "R2",
+      "category": "词典",
+      "change": "skill/annotation-everything/locales/zh-CN.json 的 messages 新增 key、en 未改（契约失败样本）",
+      "kind": "real",
+      "run_id": "20261101T073852Z-90ffe1",
+      "phase": "development",
+      "baseline": "explicit",
+      "outcome": "failed",
+      "exit_status": 1,
+      "fallback": null,
+      "fallback_reason": null,
+      "matched_rules": [
+        "dict"
+      ],
+      "suggested_groups": [
+        "unit-related"
+      ],
+      "suggested_selectors": [
+        "tests/test_ae_cli_i18n.py",
+        "tests/test_aux_cli_i18n.py",
+        "tests/test_export_format.py",
+        "tests/test_handoff_i18n.py",
+        "tests/test_i18n.py",
+        "tests/test_i18n_catalog_contract.py",
+        "tests/test_locale_loop.py",
+        "tests/test_notes_exchange_i18n.py",
+        "tests/test_review_page_editing_i18n.py",
+        "tests/test_review_page_i18n.py",
+        "tests/test_review_page_skills_i18n.py",
+        "tests/test_serve_locale.py"
+      ],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_note": "浏览器未执行（同上）",
+      "failures": [
+        {
+          "group": "unit",
+          "target": "test_host_isolation.RealEntryIntegrationTests.test_unit_related_with_sensitive_selector_waits_and_never_deadlocks",
+          "status": "failed"
+        },
+        {
+          "group": "unit",
+          "target": "test_i18n_catalog_contract.RepoCatalogContractTests.test_shipped_catalogs_stay_consistent",
+          "status": "failed"
+        }
+      ],
+      "candidate_omissions": [
+        {
+          "group": "unit",
+          "target": "test_host_isolation.RealEntryIntegrationTests.test_unit_related_with_sensitive_selector_waits_and_never_deadlocks",
+          "attribution": "selector-gap"
+        }
+      ],
+      "rule_candidates": [
+        "把 unit 的失败纳入建议范围：为相关变更路径补映射规则或扩大现有规则（受审查的策略变更，skill/annotation-everything/locales/zh-CN.json）"
+      ]
+    },
+    {
+      "id": "R3",
+      "category": "服务",
+      "change": "skill/annotation-everything/scripts/serve.py 追加注释行",
+      "kind": "real",
+      "run_id": "20261101T074143Z-7806d6",
+      "phase": "development",
+      "baseline": "explicit",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": null,
+      "fallback_reason": null,
+      "matched_rules": [
+        "serve-page"
+      ],
+      "suggested_groups": [
+        "unit-related",
+        "serve-check"
+      ],
+      "suggested_selectors": [
+        "tests/test_aux_cli_i18n.py",
+        "tests/test_core.py",
+        "tests/test_notes_exchange_i18n.py",
+        "tests/test_review_page_editing_i18n.py",
+        "tests/test_review_page_i18n.py",
+        "tests/test_review_page_skills_i18n.py",
+        "tests/test_serve_locale.py",
+        "tests/test_i18n_catalog_contract.py"
+      ],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_note": "浏览器未执行（同上）；建议场景为全部注册场景（计划层）",
+      "failures": [],
+      "candidate_omissions": [],
+      "rule_candidates": []
+    },
+    {
+      "id": "R4",
+      "category": "文档（允许列表）",
+      "change": "README.md 追加影子模式说明",
+      "kind": "real",
+      "run_id": "20261101T074433Z-302ade",
+      "phase": "development",
+      "baseline": "explicit",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": null,
+      "fallback_reason": null,
+      "matched_rules": [],
+      "suggested_groups": [],
+      "suggested_selectors": [],
+      "not_applicable": [
+        "unit",
+        "unit-related",
+        "serve-check",
+        "browser"
+      ],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_note": "浏览器未执行（同上）",
+      "failures": [],
+      "candidate_omissions": [],
+      "rule_candidates": []
+    },
+    {
+      "id": "R5",
+      "category": "未分类路径",
+      "change": "新增 scratch-shadowsample.xyz（未分类，已清理）",
+      "kind": "real",
+      "run_id": "20261101T074802Z-d98b26",
+      "phase": "development",
+      "baseline": "explicit",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": "unknown_path",
+      "fallback_reason": "未分类路径不在任何映射规则或文档允许列表中：scratch-shadowsample.xyz",
+      "matched_rules": [],
+      "suggested_groups": [
+        "unit"
+      ],
+      "suggested_selectors": [],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_note": "浏览器未执行（同上）",
+      "failures": [],
+      "candidate_omissions": [],
+      "rule_candidates": []
+    }
+  ],
+  "synthetic_samples": [
+    {
+      "id": "S1",
+      "category": "文档（允许列表）",
+      "change": "README.md 追加一行说明",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": null,
+      "fallback_reason": null,
+      "matched_rules": [],
+      "suggested_groups": [],
+      "suggested_selectors": [],
+      "suggested_scenarios": [],
+      "not_applicable": [
+        "unit",
+        "unit-related",
+        "serve-check",
+        "browser"
+      ],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_planned_scenarios": [],
+      "failures": 0,
+      "candidate_omissions": [],
+      "rule_candidates": 0
+    },
+    {
+      "id": "S2",
+      "category": "文档（技能指引，不可放行）",
+      "change": "新增 SKILL.md 技能指引",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": "shared_resource",
+      "fallback_reason": "规则 r-skill：技能指引不放行（路径 SKILL.md）",
+      "matched_rules": [],
+      "suggested_groups": [
+        "unit"
+      ],
+      "suggested_selectors": [],
+      "suggested_scenarios": [],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_planned_scenarios": [],
+      "failures": 0,
+      "candidate_omissions": [],
+      "rule_candidates": 0
+    },
+    {
+      "id": "S3",
+      "category": "CLI",
+      "change": "tools/synth-cli.py 修改",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": null,
+      "fallback_reason": null,
+      "matched_rules": [
+        "r-cli"
+      ],
+      "suggested_groups": [
+        "unit-related"
+      ],
+      "suggested_selectors": [
+        "tests/test_synth.py",
+        "tests/test_i18n_catalog_contract.py"
+      ],
+      "suggested_scenarios": [],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_planned_scenarios": [],
+      "failures": 0,
+      "candidate_omissions": [],
+      "rule_candidates": 0
+    },
+    {
+      "id": "S4",
+      "category": "页面（场景计划层）",
+      "change": "templates/viewer.html 修改",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": null,
+      "fallback_reason": null,
+      "matched_rules": [
+        "r-page"
+      ],
+      "suggested_groups": [
+        "unit-related"
+      ],
+      "suggested_selectors": [
+        "tests/test_synth.py",
+        "tests/test_i18n_catalog_contract.py"
+      ],
+      "suggested_scenarios": [
+        "skill-search"
+      ],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_planned_scenarios": [
+        "skill-search"
+      ],
+      "failures": 0,
+      "candidate_omissions": [],
+      "rule_candidates": 0
+    },
+    {
+      "id": "S5",
+      "category": "服务",
+      "change": "serve.py 追加注释行",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": null,
+      "fallback_reason": null,
+      "matched_rules": [
+        "r-serve"
+      ],
+      "suggested_groups": [
+        "unit-related",
+        "serve-check"
+      ],
+      "suggested_selectors": [
+        "tests/test_synth.py",
+        "tests/test_i18n_catalog_contract.py"
+      ],
+      "suggested_scenarios": [
+        "skill-search"
+      ],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_planned_scenarios": [
+        "skill-search"
+      ],
+      "failures": 0,
+      "candidate_omissions": [],
+      "rule_candidates": 0
+    },
+    {
+      "id": "S6",
+      "category": "词典",
+      "change": "zh-CN.json 新增 key 不改 en（契约失败）",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "failed",
+      "exit_status": 1,
+      "fallback": null,
+      "fallback_reason": null,
+      "matched_rules": [
+        "r-dict"
+      ],
+      "suggested_groups": [
+        "unit-related"
+      ],
+      "suggested_selectors": [
+        "tests/test_i18n_catalog_contract.py",
+        "tests/test_synth.py"
+      ],
+      "suggested_scenarios": [],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_planned_scenarios": [],
+      "failures": 1,
+      "candidate_omissions": [],
+      "rule_candidates": 0
+    },
+    {
+      "id": "S7",
+      "category": "fixture",
+      "change": "fixtures/sample 新增文件",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": "shared_resource",
+      "fallback_reason": "规则 r-fixture：fixture 不能按扩展名放行（路径 fixtures/sample/new.json）",
+      "matched_rules": [],
+      "suggested_groups": [
+        "unit"
+      ],
+      "suggested_selectors": [],
+      "suggested_scenarios": [],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_planned_scenarios": [],
+      "failures": 0,
+      "candidate_omissions": [],
+      "rule_candidates": 0
+    },
+    {
+      "id": "S8",
+      "category": "未分类路径",
+      "change": "新增 scratch.xyz",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": "unknown_path",
+      "fallback_reason": "未分类路径不在任何映射规则或文档允许列表中：scratch.xyz",
+      "matched_rules": [],
+      "suggested_groups": [
+        "unit"
+      ],
+      "suggested_selectors": [],
+      "suggested_scenarios": [],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_planned_scenarios": [],
+      "failures": 0,
+      "candidate_omissions": [],
+      "rule_candidates": 0
+    },
+    {
+      "id": "S9",
+      "category": "新增测试（清单检查）",
+      "change": "新增 tests/test_new_area.py 未入映射",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": "incomplete_manifest",
+      "fallback_reason": "新增或改名进来的测试未纳入任何映射规则：tests/test_new_area.py",
+      "matched_rules": [],
+      "suggested_groups": [
+        "unit"
+      ],
+      "suggested_selectors": [],
+      "suggested_scenarios": [],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_planned_scenarios": [],
+      "failures": 0,
+      "candidate_omissions": [],
+      "rule_candidates": 0
+    },
+    {
+      "id": "S10",
+      "category": "删除测试（清单检查）",
+      "change": "git rm tests/test_synth.py",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": "incomplete_manifest",
+      "fallback_reason": "规则 r-cli 的选择器指向不存在的测试文件：tests/test_synth.py；规则 r-serve 的选择器指向不存在的测试文件：tests/test_synth.py；规则 r-dict 的选择器指向不存在的测试文件：tests/test_synth.py；测试清单变化（删除）：tests/test_synth.py",
+      "matched_rules": [],
+      "suggested_groups": [
+        "unit"
+      ],
+      "suggested_selectors": [],
+      "suggested_scenarios": [],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_planned_scenarios": [],
+      "failures": 0,
+      "candidate_omissions": [],
+      "rule_candidates": 0
+    },
+    {
+      "id": "S11",
+      "category": "重命名（两端识别）",
+      "change": "synth-cli.py 改名 renamed-cli.py 并修改",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": "unknown_path",
+      "fallback_reason": "未分类路径不在任何映射规则或文档允许列表中：tools/renamed-cli.py",
+      "matched_rules": [],
+      "suggested_groups": [
+        "unit"
+      ],
+      "suggested_selectors": [],
+      "suggested_scenarios": [],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_planned_scenarios": [],
+      "failures": 0,
+      "candidate_omissions": [],
+      "rule_candidates": 0
+    },
+    {
+      "id": "S12",
+      "category": "执行配置（策略自身）",
+      "change": "verify.py 修改",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": "strategy_change",
+      "fallback_reason": "规则 r-exec：验证入口自身变化（路径 verify.py）",
+      "matched_rules": [],
+      "suggested_groups": [
+        "unit"
+      ],
+      "suggested_selectors": [],
+      "suggested_scenarios": [],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_planned_scenarios": [],
+      "failures": 0,
+      "candidate_omissions": [],
+      "rule_candidates": 0
+    },
+    {
+      "id": "S13",
+      "category": "植入漏选",
+      "change": "过窄映射下 serve-check 失败（人工植入）",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "failed",
+      "exit_status": 1,
+      "fallback": null,
+      "fallback_reason": null,
+      "matched_rules": [
+        "r-serve"
+      ],
+      "suggested_groups": [
+        "unit-related"
+      ],
+      "suggested_selectors": [
+        "tests/test_synth.py",
+        "tests/test_i18n_catalog_contract.py"
+      ],
+      "suggested_scenarios": [],
+      "not_applicable": [],
+      "comparable": true,
+      "incomparable_reason": null,
+      "coverage": {
+        "unit": true,
+        "serve-check": true,
+        "browser": false
+      },
+      "browser_planned_scenarios": [],
+      "failures": 1,
+      "candidate_omissions": [
+        {
+          "group": "serve-check",
+          "target": "组级",
+          "attribution": "selector-gap"
+        }
+      ],
+      "rule_candidates": 1
+    },
+    {
+      "id": "S14",
+      "category": "输入变化（不可比较）",
+      "change": "运行期间改写 README.md",
+      "kind": "synthetic",
+      "source": "tests/test_verify_entry.py 的合成仓库影子 run（SynthRepo）",
+      "outcome": "passed",
+      "exit_status": 0,
+      "fallback": "no_changes",
+      "fallback_reason": "相对基线没有可用差异；空差异不解释成不用测，保守按完整检查",
+      "matched_rules": [],
+      "suggested_groups": [
+        "unit"
+      ],
+      "suggested_selectors": [],
+      "suggested_scenarios": [],
+      "not_applicable": [],
+      "comparable": false,
+      "incomparable_reason": "运行期间有效输入发生变化，开始与结束的输入不匹配",
+      "coverage": {
+        "unit": true,
+        "serve-check": false,
+        "browser": false
+      },
+      "browser_planned_scenarios": [],
+      "failures": 0,
+      "candidate_omissions": [],
+      "rule_candidates": 0
+    }
+  ],
+  "summary": {
+    "real": 5,
+    "synthetic": 14,
+    "total": 19,
+    "categories_covered": [
+      "CLI",
+      "fixture",
+      "删除测试（清单检查）",
+      "执行配置（策略自身）",
+      "文档（允许列表）",
+      "文档（技能指引，不可放行）",
+      "新增测试（清单检查）",
+      "服务",
+      "未分类路径",
+      "植入漏选",
+      "策略与执行配置（分支整体变更）",
+      "词典",
+      "输入变化（不可比较）",
+      "重命名（两端识别）",
+      "页面（场景计划层）"
+    ],
+    "candidate_omissions_total": 2
+  }
+}
