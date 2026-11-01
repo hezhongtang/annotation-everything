@@ -463,7 +463,8 @@ def build_groups(selectors: Optional[list] = None) -> dict:
             resources=unit_related_resources(names)),
         "browser": Group(
             name="browser", title="完整浏览器",
-            purpose="浏览器端到端回归；未拆场景前按整组计时，记录里预留场景级字段",
+            purpose="浏览器端到端回归：按注册场景执行，记录里带逐场景的执行清单与计时；"
+                    "局部场景用 e2e_browser.py --only 直接跑",
             equivalent="uv run --no-project --with playwright python tests/e2e_browser.py",
             argv=["uv", "run", "--no-project", "--with", "playwright", "python", "tests/e2e_browser.py"],
             counter="log", requires=("uv",), scenarios=True,
@@ -772,6 +773,31 @@ def parse_log_counts(text: str) -> Optional[dict]:
     return {"total": total, "passed": passed, "failed": max(0, total - passed)}
 
 
+# 浏览器入口在「N/M 通过」后输出的场景执行清单行（issue #53）
+SCENARIO_MARKER = "AE-SCENARIOS: "
+# 场景结论的人话说法（报告里用；机器可读的仍是英文 status）
+SCENARIO_LABELS = {"passed": "通过", "failed": "失败", "error": "错误",
+                   "interrupted": "中断", "not_run": "未运行"}
+
+
+def parse_scenario_summary(text: str) -> Optional[dict]:
+    """取日志里最后一行场景执行清单；没有或读不出来返回 None，不影响整组计数。"""
+    payload = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(SCENARIO_MARKER):
+            payload = stripped[len(SCENARIO_MARKER):]
+    if payload is None:
+        return None
+    try:
+        summary = json.loads(payload)
+    except ValueError:
+        return None
+    if not isinstance(summary, dict) or not isinstance(summary.get("scenarios"), list):
+        return None
+    return summary
+
+
 # ── 执行 ──────────────────────────────────────────────────────────────────
 
 def _pgid_of(proc) -> Optional[int]:
@@ -927,83 +953,119 @@ def execute_group(group: Group, ctx: RunContext) -> dict:
 
 
 def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> dict:
-    started_wall = time.monotonic()
-    missing = [name for name in group.requires if shutil.which(name) is None]
-    if missing:
-        return {"name": group.name, "outcome": UNAVAILABLE, "exit_status": None, "signal": None,
-                "timed_out": False, "note": "找不到可执行文件：%s；本组没有执行" % "、".join(missing),
-                "counts": None, "cases": [], "seconds": {}, "timing": {}}
+    with contextlib.ExitStack() as cleanup_guard:
+        started_wall = time.monotonic()
+        missing = [name for name in group.requires if shutil.which(name) is None]
+        if missing:
+            return {"name": group.name, "outcome": UNAVAILABLE, "exit_status": None, "signal": None,
+                    "timed_out": False, "note": "找不到可执行文件：%s；本组没有执行" % "、".join(missing),
+                    "counts": None, "cases": [], "seconds": {}, "timing": {}}
 
-    log_path = ctx.run_dir / ("%s.log" % group.name)
-    cases_path = ctx.run_dir / ("%s.cases.json" % group.name)
-    child_argv = list(group.argv)
-    if group.counter == "unittest":
-        child_argv += ["--cases-out", str(cases_path), "--run-id", ctx.run_id]
+        log_path = ctx.run_dir / ("%s.log" % group.name)
+        cases_path = ctx.run_dir / ("%s.cases.json" % group.name)
+        child_argv = list(group.argv)
+        if group.counter == "unittest":
+            child_argv += ["--cases-out", str(cases_path), "--run-id", ctx.run_id]
 
-    with open(log_path, "w", encoding="utf-8") as log_fh:
-        proc = subprocess.Popen(child_argv, cwd=str(REPO), env=dict(os.environ),
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, encoding="utf-8", errors="replace", start_new_session=True,
-                                pass_fds=lock_fds)
-        registry_entry = ctx.registry.register(proc, group.name)
-        ctx.save_children()
-        reader = threading.Thread(target=pump,
-                                  args=(proc.stdout, log_fh, None if ctx.quiet else ctx.echo), daemon=True)
-        reader.start()
-        timed_out = False
-        try:
-            code = proc.wait(timeout=ctx.timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            signal_group(proc, signal.SIGTERM)
+        interrupted_signum = None
+        with open(log_path, "w", encoding="utf-8") as log_fh:
+            proc, reader, registry_entry = None, None, None
+            timed_out = False
             try:
-                code = proc.wait(timeout=KILL_GRACE_SECONDS)
-            except subprocess.TimeoutExpired:
-                signal_group(proc, signal.SIGKILL)
-                code = proc.wait()
-        reader.join(timeout=5)
-        registry_entry.update(reaped=True, exit_status=code, signal=signal_name(code))
-        ctx.save_children()
-    child_seconds = round(time.monotonic() - started_wall, 6)
+                proc = subprocess.Popen(child_argv, cwd=str(REPO), env=dict(os.environ),
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, encoding="utf-8", errors="replace", start_new_session=True,
+                                        pass_fds=lock_fds)
+                registry_entry = ctx.registry.register(proc, group.name)
+                ctx.save_children()
+                reader = threading.Thread(target=pump,
+                                          args=(proc.stdout, log_fh, None if ctx.quiet else ctx.echo), daemon=True)
+                reader.start()
+                try:
+                    code = proc.wait(timeout=ctx.timeout)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    signal_group(proc, signal.SIGTERM)
+                    try:
+                        code = proc.wait(timeout=KILL_GRACE_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        signal_group(proc, signal.SIGKILL)
+                        code = proc.wait()
+                reader.join(timeout=5)
+            except Interrupted as exc:
+                # 先让子进程在原日志流上完成中断摘要，再关闭文件。否则读线程会
+                # 写入已关闭的文件，父入口也拿不到已经完成 / 中断 / 未运行的场景。
+                interrupted_signum = exc.signum
+                cleanup_guard.enter_context(shield_termination())
+                if proc is not None and registry_entry is None:
+                    registry_entry = ctx.registry.register(proc, group.name)
+                ctx.abort(exc.signum)
+                code = proc.poll() if proc is not None else None
+                if reader is not None and reader.ident is not None:
+                    reader.join(timeout=5)
+            except Exception:
+                # 记录写入等入口错误也须在日志关闭、资源锁释放之前回收自己的子进程。
+                cleanup_guard.enter_context(shield_termination())
+                ctx.abort(signal.SIGTERM)
+                if reader is not None and reader.ident is not None:
+                    reader.join(timeout=5)
+                raise
+            # 子进程已结束；把读取证据和交回结果作为一次收尾，二次信号不能抹去摘要。
+            cleanup_guard.enter_context(shield_termination())
+            if registry_entry is not None:
+                registry_entry.update(reaped=code is not None, exit_status=code, signal=signal_name(code))
+            ctx.save_children()
+        child_seconds = round(time.monotonic() - started_wall, 6)
 
-    log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
-    counts, cases, seconds, load_error, evidence_missing = None, [], {}, None, None
-    interrupted = False
-    if group.counter == "unittest":
-        if not cases_path.is_file():
-            evidence_missing = "子进程没有留下计时证据（%s）" % cases_path.name
-        else:
-            try:
-                payload = json.loads(cases_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:
-                evidence_missing = "计时证据读不出来：%s" % exc
+        log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+        counts, cases, seconds, load_error, evidence_missing = None, [], {}, None, None
+        scenario_summary = None
+        interrupted = False
+        if group.counter == "unittest":
+            if not cases_path.is_file():
+                evidence_missing = "子进程没有留下计时证据（%s）" % cases_path.name
             else:
-                if payload.get("schema") != CASES_SCHEMA:
-                    evidence_missing = "计时证据 schema 不支持：%r" % payload.get("schema")
+                try:
+                    payload = json.loads(cases_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    evidence_missing = "计时证据读不出来：%s" % exc
                 else:
-                    counts = payload.get("counts") or {}
-                    cases = payload.get("cases") or []
-                    seconds = payload.get("seconds") or {}
-                    load_error = payload.get("load_error") or payload.get("runner_error")
-                    interrupted = payload.get("interrupted") is True
-    else:
-        counts = parse_log_counts(log_text)
-        if counts is None:
-            evidence_missing = "日志里没有「N/M 通过」摘要行"
+                    if payload.get("schema") != CASES_SCHEMA:
+                        evidence_missing = "计时证据 schema 不支持：%r" % payload.get("schema")
+                    else:
+                        counts = payload.get("counts") or {}
+                        cases = payload.get("cases") or []
+                        seconds = payload.get("seconds") or {}
+                        load_error = payload.get("load_error") or payload.get("runner_error")
+                        interrupted = payload.get("interrupted") is True
+        else:
+            counts = parse_log_counts(log_text)
+            if counts is None:
+                evidence_missing = "日志里没有「N/M 通过」摘要行"
+            if group.scenarios:
+                # 场景级记录来自子进程自己的执行清单；日志里没有时保持整组粒度的既有行为
+                scenario_summary = parse_scenario_summary(log_text)
 
-    outcome, exit_status = classify_group(group, code, timed_out, counts, load_error, evidence_missing,
-                                          interrupted)
-    note = evidence_missing
-    if timed_out:
-        note = "超过 %s 秒被入口终止" % ctx.timeout
-    return {"name": group.name, "outcome": outcome, "exit_status": exit_status,
-            "signal": signal_name(-int(signal.SIGINT)) if interrupted else signal_name(code),
-            "timed_out": timed_out, "note": note, "counts": counts,
-            "cases": cases, "seconds": seconds,
-            "timing": {"child_seconds": child_seconds,
-                       "case_seconds_total": seconds.get("case_total"),
-                       "fixture_seconds_total": fixture_total(seconds),
-                       "unattributed_seconds": seconds.get("unattributed")}}
+        outcome, exit_status = classify_group(group, code, timed_out, counts, load_error, evidence_missing,
+                                              interrupted)
+        if interrupted_signum is not None:
+            outcome, exit_status = INTERRUPTED, EXIT_INTERRUPTED_BASE + interrupted_signum
+        note = evidence_missing
+        if interrupted_signum is not None and evidence_missing is not None:
+            note = "本组没有拿到执行结果；%s" % evidence_missing
+        if timed_out:
+            note = "超过 %s 秒被入口终止" % ctx.timeout
+        return {"name": group.name, "outcome": outcome, "exit_status": exit_status,
+                "signal": (signal_name(-interrupted_signum) if interrupted_signum is not None else
+                           signal_name(-int(signal.SIGINT)) if interrupted else signal_name(code)),
+                "interrupted_signum": interrupted_signum,
+                "timed_out": timed_out, "note": note, "counts": counts,
+                "cases": cases, "seconds": seconds,
+                "scenario_summary": scenario_summary,
+                "timing": {"child_seconds": child_seconds,
+                           "case_seconds_total": seconds.get("case_total"),
+                           "fixture_seconds_total": fixture_total(seconds),
+                           "unattributed_seconds": seconds.get("unattributed")}}
 
 
 def fixture_total(seconds: dict) -> float:
@@ -1022,6 +1084,10 @@ def classify_group(group: Group, code: Optional[int], timed_out: bool, counts: O
         return UNAVAILABLE, None
     if code < 0:
         return INTERRUPTED, EXIT_INTERRUPTED_BASE + (-code)
+    if code == EXIT_INTERRUPTED_BASE + int(signal.SIGINT):
+        # 子进程没有被信号击杀，而是按 128+SIGINT 约定自行退出（浏览器脚本的中断路径）：
+        # 与被击杀同样视为中断，不冒充失败，更不冒充通过
+        return INTERRUPTED, code
     if interrupted:
         return INTERRUPTED, EXIT_INTERRUPTED_BASE + int(signal.SIGINT)
     if evidence_missing is not None:
@@ -1153,7 +1219,7 @@ def cmd_plan(args) -> int:
             print("    展开为：%s" % " → ".join(group.expands))
         print("    计数方式：%s；计时粒度：%s%s" % (
             group.counter, group.granularity,
-            "（浏览器未拆场景，记录里已预留场景级字段）" if group.scenarios else ""))
+            "（浏览器按场景计时，记录里带场景执行清单）" if group.scenarios else ""))
         if group.requires:
             print("    需要可执行文件：%s" % "、".join(group.requires))
         if group.selectors:
@@ -1351,6 +1417,10 @@ def cmd_run(args) -> int:
                              counts=item["counts"], cases=trim_cases(item["cases"]),
                              seconds=item["seconds"], timing=item["timing"],
                              lock=item.get("lock") or group.get("lock"))
+                if item.get("scenario_summary") is not None:
+                    # 浏览器组带场景摘要时填 groups[].scenarios，粒度细化到场景（issue #53）
+                    group["scenarios"] = item["scenario_summary"]["scenarios"]
+                    group["granularity"] = "scenario"
                 continue
             if interrupted_signum is not None:
                 group.update(outcome=INTERRUPTED,
@@ -1391,6 +1461,9 @@ def cmd_run(args) -> int:
     try:
         for name in selected:
             results[name] = execute_group(groups[name], ctx)
+            if results[name].get("interrupted_signum") is not None:
+                interrupted_signum = results[name]["interrupted_signum"]
+                break  # 结果已完整收集；后续组不再执行，整次仍按入口中断落盘
     except Interrupted as exc:
         interrupted_signum = exc.signum
         with shield_termination():
@@ -1655,6 +1728,15 @@ def render_report(record: dict, problems: Optional[list] = None,
             lines.append("     锁：%s，等待 %s 秒%s" % (
                 "、".join(lock["resources"]), lock.get("wait_seconds"),
                 "（等待超时，本组没有执行）" if lock.get("timeout") else ""))
+        scenarios = group.get("scenarios") or []
+        if scenarios:
+            parts = []
+            for item in scenarios:
+                checks = item.get("checks") or {}
+                parts.append("%s %s（%s/%s，%s 秒）" % (
+                    item.get("id"), SCENARIO_LABELS.get(item.get("status"), item.get("status")),
+                    checks.get("passed", 0), checks.get("total", 0), item.get("seconds")))
+            lines.append("     场景：%s" % "；".join(parts))
         if group.get("note"):
             lines.append("     注意：%s" % group["note"])
     slow = sorted((case for group in record.get("groups") or [] for case in (group.get("cases") or [])),

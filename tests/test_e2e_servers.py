@@ -501,5 +501,21 @@ class AbnormalExitTests(unittest.TestCase):
                                terminate_timeout=HANDSHAKE_TERMINATE, sent=sent)
 
 
+class StopProcsTests(unittest.TestCase):
+    """issue #53 审查 R6：场景以 error 结束时只回收登记的服务器进程，目录留给退出时清理。"""
+
+    def test_stop_procs_reaps_registered_processes_but_keeps_dirs(self):
+        cleanup = e2e_servers.TestCleanup(terminate_timeout=2.0)
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        cleanup.add(proc)
+        d = Path(tempfile.mkdtemp(prefix="ae-stopprocs-"))
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        cleanup.add_dir(d)
+        cleanup.stop_procs()
+        self.assertIsNotNone(proc.poll(), "登记的服务器进程应被立即回收")
+        self.assertTrue(d.exists(), "stop_procs 不动目录，目录仍在退出时统一清理")
+
+
 if __name__ == "__main__":
     unittest.main()

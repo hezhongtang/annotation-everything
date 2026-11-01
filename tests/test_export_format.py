@@ -434,7 +434,9 @@ class EditedBodyTests(unittest.TestCase):
     def test_json_import_uses_the_edited_body(self):
         """JSON 里只改正文：结构化的快捷修改要跟着正文走，不能写回旧文字。"""
         d = review(tmpdir())
-        add_notes(d)
+        # 原批注与导入编辑都使用合成时钟，避免真实日期超过固定编辑日期后误判为旧版本。
+        with mock.patch.object(store, "now_iso", return_value="2026-10-31T00:00:00Z"):
+            add_notes(d)
         _code, out, _err = run_cli(["export", str(d), "--format", "json"])
         data = json.loads(out)
         edited = 0
