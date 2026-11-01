@@ -244,6 +244,9 @@ class RunnerOutcomeTests(unittest.TestCase):
         cleanup = mock.Mock()
         namespace = dict(scenarios=reg, SCENARIO_RUNNERS=runners, RESULTS=results,
                          CLEANUP=cleanup, sync_playwright=playwright,
+                         # main() 在每个场景前后登记场景 ID，供等待超时诊断使用（issue #54）；
+                         # 这里的合成场景不经过真实等待层，用空实现即可
+                         e2e_waits=SimpleNamespace(set_scenario=lambda *_: None),
                          SCENARIO_STATUS_LABELS={name: name for name in
                              ("passed", "failed", "error", "interrupted", "not_run")},
                          sys=sys, signal=signal, Path=Path, tempfile=tempfile,

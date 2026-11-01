@@ -40,9 +40,10 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 import e2e_scenarios as scenarios
+import e2e_waits
 from e2e_servers import CLEANUP, free_port, install, start_server, stop
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +61,9 @@ import host_isolation
 # 被 verify.py 拉起时父入口已持锁，环境变量会让这次获取按借入处理，不会自锁
 host_isolation.require_for_module("tests.e2e_browser")
 
+# 等待层的超时识别：playwright 的 TimeoutError 视为「等待超时」，其他异常原样传播
+e2e_waits.register_timeout_errors(PlaywrightTimeoutError)
+
 install()   # 兜底清理：正常退出、未捕获异常、Ctrl-C 走 atexit，SIGTERM / SIGHUP 另接
 CLEANUP.add_dir(Path(os.environ["AE_HOME"]))
 CLEANUP.add_dir(Path(os.environ["HOME"]))
@@ -70,6 +74,81 @@ STAGE = "document.getElementById('host').shadowRoot.getElementById('ae-stage')"
 def ok(cond, label):
     RESULTS.append((bool(cond), label))
     print(("PASS  " if cond else "FAIL  ") + label, flush=True)
+
+
+def describe_page(page):
+    """超时诊断用的「最后观察到的状态」快照：徽标、提示条、提交状态与批注列表。"""
+    try:
+        state = page.evaluate("""() => {
+            const g = id => { const el = document.getElementById(id); return el ? el.textContent : null };
+            return {mode: g('mode'), toast: g('toast'), hand: g('handState'),
+                    notes: (g('nlist') || '').slice(0, 120)};
+        }""")
+        return "mode=%r toast=%r handState=%r nlist=%r" % (
+            state.get("mode"), state.get("toast"), state.get("hand"), state.get("notes"))
+    except Exception as exc:   # 页面已关闭等：快照失败不能掩盖等待超时本身
+        return "（页面快照失败：%s: %s）" % (type(exc).__name__, exc)
+
+
+def wait_dom(page, expression, seconds, arg=None, condition=None):
+    """等浏览器里的可观察状态（wait_for_function 浏览器侧自动重试），超时 False + 诊断。"""
+    return e2e_waits.wait_dom(page, expression, seconds, arg=arg, condition=condition,
+                              describe=lambda: describe_page(page))
+
+
+def wait_poll(page, seconds=10, condition=None):
+    """等一次页面轮询往返确实发生（GET /api/notes 请求与应答都到达）。"""
+    return e2e_waits.wait_poll(page, seconds, condition=condition,
+                               describe=lambda: describe_page(page))
+
+
+def wait_rev(page, before, seconds=10):
+    """等页面应用一次新的服务端修订（全局 rev 离开基线），作为「轮询推进」的证据。"""
+    return e2e_waits.wait_rev(page, before, seconds, describe=lambda: describe_page(page))
+
+
+def wait_response(page, predicate, seconds, condition=None, action=None):
+    """等下一个匹配的网络事件完成（expect_response 事件驱动，不靠固定间隔）。"""
+    return e2e_waits.wait_response(page, predicate, seconds, condition=condition,
+                                   describe=lambda: describe_page(page), action=action)
+
+
+# 常用可观察条件的 JS 表达式（全部是页面自身的状态，不需要往页面加测试钩子）
+JS_MODE_CLASS = "c => document.getElementById('mode').classList.contains(c)"
+JS_TOAST_TEXT = "t => document.getElementById('toast').textContent.includes(t)"
+JS_CARD_MORE = "n => document.querySelectorAll('#nlist [data-note]').length > n"
+JS_LIST_TEXT = "t => document.getElementById('nlist').textContent.includes(t)"
+JS_PAGE_IS = "n => localStorage.getItem('ae.' + RID + '.page') === String(n)"
+JS_BATCHES_ON = "() => document.getElementById('batches').classList.contains('on')"
+
+
+def wait_card(page, before, seconds=5, condition=None):
+    """等批注列表出现新卡片：添加动作的可观察结果（比固定等待短，也不会误等）。"""
+    return wait_dom(page, JS_CARD_MORE, seconds, arg=before,
+                    condition=condition or "批注列表出现新卡片")
+
+
+def wait_mode(page, class_name, seconds=10, condition=None):
+    """等 mode 徽标进入指定状态（server / offline / mismatch / old）。"""
+    return wait_dom(page, JS_MODE_CLASS, seconds, arg=class_name,
+                    condition=condition or "mode 徽标进入 %r 状态" % class_name)
+
+
+def wait_toast(page, text, seconds=10, condition=None):
+    """等提示条出现指定文字（toast 文案是页面处理结果的直接证据）。"""
+    return wait_dom(page, JS_TOAST_TEXT, seconds, arg=text,
+                    condition=condition or "提示条出现 %r" % text)
+
+
+def wait_batches(page, text, seconds=8, condition=None):
+    """等处理记录弹窗打开且载入了期望内容。
+
+    openBatches 先显示弹窗，再经 GET /api/handoff 异步取全量历史：弹窗打开 ≠ 内容就绪，
+    读 #batchList 前必须等内容（此前靠固定等待垫住这个时差）。
+    """
+    return wait_until(lambda: page.is_visible("#batches") and text in page.inner_text("#batchList"),
+                      page, seconds,
+                      condition=condition or "处理记录显示 %r" % text)
 
 
 def build(out: Path, report: Path = FIXTURE / "report.html", script: Path | None = FIXTURE / "script.md",
@@ -92,38 +171,55 @@ def disk_notes(d: Path):
 
 
 def add_note(page, text, pin=None):
+    """添加一条批注，并等到它作为新卡片出现在列表里（添加动作的可观察结果）。
+
+    列表重绘是 mutate 的同步结果；服务模式下的落盘由调用方按磁盘状态另行等待。
+    """
+    before = page.locator("#nlist [data-note]").count()
     if pin:
         page.click('[data-act="pin"]')
         box = page.locator("#slide").bounding_box()
         page.mouse.click(box["x"] + box["width"] * pin[0], box["y"] + box["height"] * pin[1])
     page.fill("#ntext", text)
     page.click('[data-act="add"]')
-    page.wait_for_timeout(400)
+    wait_card(page, before, condition="新批注 %r 出现在列表里" % text[:30])
 
 
-def wait_until(cond, page, seconds: float) -> bool:
-    end = time.time() + seconds
-    while time.time() < end:
-        if cond():
-            return True
-        page.wait_for_timeout(200)
-    return cond()
+def wait_until(cond, page, seconds: float, condition=None) -> bool:
+    """有界轮询 Python 侧条件（磁盘文件、DOM 与磁盘的组合），超时 False + 诊断。
+
+    每圈先做一次不等待的 evaluate，让 playwright 事件循环跑一圈：排队的网络
+    事件（request / response 回调）及时进入测试侧计数器——时序与旧的
+    wait_for_timeout 轮询一致，但不引入任何固定时间等待。
+    """
+    def probe():
+        try:
+            page.evaluate("() => null")
+        except Exception:
+            pass   # 页面跳转 / 关闭中的抖动让位给条件本身或后续异常路径
+        return cond()
+    return e2e_waits.bounded_poll(probe, seconds, condition=condition,
+                                  describe=lambda: describe_page(page))
 
 
 def go_page(page, n):
     page.select_option("#jump", str(n - 1))
-    page.wait_for_timeout(150)
+    # render() 同步把当前页写进 localStorage（ae.<RID>.page），与界面语言无关
+    wait_dom(page, JS_PAGE_IS, 5, arg=n, condition="翻页后当前页是第 %d 页" % n)
 
 
 def drag_select(page, locator):
-    """真实的鼠标拖选（报告在 Shadow DOM 里，locator 能穿透）。"""
+    """真实的鼠标拖选（报告在 Shadow DOM 里，locator 能穿透）。
+
+    mouseup 的处理是同步的：选区条、待确认状态的出现与否在返回时已确定，
+    由调用方按各自的可观察状态断言（不再垫固定等待）。
+    """
     b = locator.bounding_box()
     y = b["y"] + min(12, b["height"] / 2)   # 第一行文字上，避免落在两行之间的空隙
     page.mouse.move(b["x"] + 2, y)
     page.mouse.down()
     page.mouse.move(b["x"] + b["width"] - 2, y, steps=8)
     page.mouse.up()
-    page.wait_for_timeout(200)
 
 
 def skill_search_checks(browser, tmp: Path):
@@ -148,10 +244,18 @@ def skill_search_checks(browser, tmp: Path):
         page.fill("#nskills", "字体")
         check(options.filter(has_text="writer").count() == 1, "按技能说明中的部分文字显示候选")
         page.keyboard.press("ArrowDown")
+        poll_applied = True
         if mode == "服务模式":
-            page.wait_for_timeout(4500)  # 跨过一次服务轮询，选择不能丢失
+            # 用本次修改独有的目录说明证明 applyServer 已应用新轮询并重绘候选；
+            # 仅收到响应头还不能证明页面处理完成，超时也不能让不变量空转通过。
+            description = "文字和字体校对（本次轮询已应用）"
+            subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "skills", str(d),
+                            "--add", "writer=" + description], check=True, capture_output=True)
+            poll_applied = wait_dom(
+                page, "text => skillCatalog.some(s => s.name === 'writer' && s.desc === text)",
+                10, arg=description, condition="轮询应用本次技能目录修改并重绘候选")
         page.keyboard.press("Enter")
-        check(page.input_value("#nskills") == "writer", "方向键和回车选择候选")
+        check(poll_applied and page.input_value("#nskills") == "writer", "方向键和回车选择候选")
         page.fill("#nskills", "chart, 字体, custom")
         page.locator("#nskills").evaluate("el => { el.setSelectionRange(9, 9); el.dispatchEvent(new MouseEvent('click', {bubbles:true})); }")
         page.keyboard.press("ArrowDown")
@@ -316,8 +420,9 @@ def skill_i18n_checks(browser, tmp: Path):
         check(page.inner_text("#alwaysBtn").strip().startswith("Standing skills"), "英文常驻技能按钮")
         check(page.get_attribute("#skillList", "aria-label") == "Skill suggestions", "英文候选列表无障碍名称")
         page.fill("#ntext", "请改标题")
+        before = page.locator("#nlist [data-note]").count()
         page.click('[data-act="add"]')
-        page.wait_for_timeout(400)
+        wait_card(page, before, condition="英文批注卡片出现在列表里")
         check("Standing checker" in page.inner_text("#nlist"), "英文卡片上的常驻技能标记")
         check("Standing every" in page.inner_text("#nlist"), "全部批注范围的常驻技能也标出")
         page.fill("#nskills", "plugin")
@@ -461,8 +566,7 @@ def full_check_checks(browser, tmp: Path):
                                   capture_output=True, text=True, timeout=15)
         ok(received.returncode == 0 and "全量勾稽" in received.stdout, "等待中的 Agent 收到全量勾稽要求")
         page.keyboard.press("j")
-        page.wait_for_timeout(500)
-        ok("全量勾稽" in page.inner_text("#batchList"), "处理记录显示全量勾稽要求")
+        ok(wait_batches(page, "全量勾稽"), "处理记录显示全量勾稽要求")
         page.keyboard.press("Escape")
         page.click("#handBtn")
         ok(page.is_checked("#hFullCheck"), "再次提交时记住这份审阅的勾选状态")
@@ -485,10 +589,13 @@ def full_check_checks(browser, tmp: Path):
 
         old.route("**/api/notes", no_full_check)
         old.goto(f"http://127.0.0.1:{port}/")
-        old.wait_for_timeout(1200)
+        # 该路由只剥掉 full-check 功能（marks 保留），徽标不会变「旧版服务」；
+        # 就绪信号是首次轮询应用后徽标从「未连接」变为「已连接」，此后功能集判定完成
+        ready = wait_dom(old, "() => document.getElementById('mode').textContent.includes('已连接')", 10,
+                         condition="首次轮询应用（徽标从「未连接」变为「已连接」）")
         items = json.loads((d / "handoff.json").read_text())["items"]
         remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
-        ok(len(items) == 1 and remaining and remaining[0].get("fullCheck") is True,
+        ok(ready and len(items) == 1 and remaining and remaining[0].get("fullCheck") is True,
            "旧服务不能静默丢弃暂存的全量勾稽要求")
         old.click("#handBtn")
         old.click("#doHand")
@@ -510,10 +617,12 @@ def full_check_checks(browser, tmp: Path):
         old.check("#hFullCheck")
         old.route("**/api/notes", no_full_check)
         old.click("#doHand")
-        old.wait_for_timeout(800)
+        # 负面观察：提交经旧服务裁决后必须仍在页面暂存；以旧服务明确拒绝的提示为事件证据
+        rejected = wait_toast(old, "本地服务不支持修改全量勾稽",
+                              condition="旧服务拒绝全量勾稽的提示出现（提交留在页面暂存）")
         items = json.loads((d / "handoff.json").read_text())["items"]
         remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
-        ok(items[-1].get("fullCheck") is False and remaining and remaining[0].get("fullCheck") is True,
+        ok(rejected and items[-1].get("fullCheck") is False and remaining and remaining[0].get("fullCheck") is True,
            "服务换成旧版后立即提交，也不会丢掉全量勾稽要求")
         old.unroute("**/api/notes", no_full_check)
         flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is True, old, 7)
@@ -551,10 +660,12 @@ def full_check_checks(browser, tmp: Path):
 
         old.route("**/api/handoff", legacy_post)
         old.click("#doHand")
-        old.wait_for_timeout(800)
+        # 旧服务截短附言且未确认勾选：以「未确认」提示为裁决完成的事件证据
+        rejected = wait_toast(old, "服务未确认全量勾稽",
+                              condition="旧服务未确认全量勾稽的提示出现（提交留在页面暂存）")
         item = json.loads((d / "handoff.json").read_text())["items"][-1]
         remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
-        ok(item.get("fullCheck") is False and all(word in item.get("message", "") for word in ("全量勾稽", "报告和讲稿", "有依据", "不确定"))
+        ok(rejected and item.get("fullCheck") is False and all(word in item.get("message", "") for word in ("全量勾稽", "报告和讲稿", "有依据", "不确定"))
            and remaining and remaining[0].get("fullCheck") is True and "截短附言" in old.inner_text("#toast"),
            "提交时旧服务未确认勾选：保留待补传要求")
         old.unroute("**/api/handoff", legacy_post)
@@ -565,11 +676,16 @@ def full_check_checks(browser, tmp: Path):
         old.click("#handBtn")
         old.uncheck("#hFullCheck")
         old.route("**/api/handoff", legacy_post)
-        old.click("#doHand")
-        old.wait_for_timeout(800)
+        # 先证明旧服务确实收到并改写了这次提交，再等这次补传处理结束；
+        # 监听先于 click 注册（action 在注册后执行），毫秒级完成的本地应答不会漏事件
+        responded = wait_response(old, lambda r: r.request.method == "POST" and r.url.endswith("/api/handoff"), 10,
+                                  condition="本次提交的 POST /api/handoff 响应到达（旧服务被咨询）",
+                                  action=lambda: old.click("#doHand"))
+        settled = wait_dom(old, "() => flushing === null", 5,
+                           condition="本次提交的补传处理已结束（不接受上一次的旧提示）")
         item = json.loads((d / "handoff.json").read_text())["items"][-1]
         remaining = old.evaluate("key => JSON.parse(localStorage.getItem(key) || '[]')", key)
-        ok(item.get("fullCheck") is True and remaining and remaining[0].get("fullCheck") is False,
+        ok(responded and settled and item.get("fullCheck") is True and remaining and remaining[0].get("fullCheck") is False,
            "旧服务未确认取消勾选：保留待补传要求")
         old.unroute("**/api/handoff", legacy_post)
         flushed = wait_until(lambda: json.loads((d / "handoff.json").read_text())["items"][-1].get("fullCheck") is False, old, 7)
@@ -853,10 +969,12 @@ def locale_editing_checks(page, mode, read_notes):
 
 
 def close_overlays(page):
-    """关掉挡在页头上的弹窗：先把焦点移出输入框，再用 Esc（快捷键本身保持不变）。"""
+    """关掉挡在页头上的弹窗：先把焦点移出输入框，再用 Esc（快捷键本身保持不变）。
+
+    Esc 处理同步关闭弹窗，随后的断言按各自条件等待，不需要垫固定等待。
+    """
     page.evaluate("() => { if (document.activeElement) document.activeElement.blur() }")
     page.keyboard.press("Escape")
-    page.wait_for_timeout(100)
 
 
 def locale_checks(browser, tmp: Path):
@@ -913,9 +1031,11 @@ def locale_checks(browser, tmp: Path):
     page.fill("#ntext", "请改标题")
     page.select_option("#ntarget", "报告")
     page.click("#addBtn")
-    page.wait_for_timeout(200)
+    # 文件模式：mutate 同步写 localStorage，以「批注已入存储」为添加动作的可观察结果
+    stored = wait_until(lambda: page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes')) || []"), page, 5,
+                        condition="批注写入本地存储")
     notes = page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")
-    ok(len(notes) == 1 and notes[0]["text"] == "请改标题" and notes[0]["target"] == "报告"
+    ok(stored and len(notes) == 1 and notes[0]["text"] == "请改标题" and notes[0]["target"] == "报告"
        and notes[0]["quote"] == "原句" and notes[0]["quoteFrom"] == "报告",
        "file:// 批注原文、引用和对象值不随语言改写")
     nid, rid, key = notes[0]["id"], page.evaluate("RID"), page.evaluate("P[0].key")
@@ -979,7 +1099,9 @@ def locale_checks(browser, tmp: Path):
         key = sp.evaluate("P[0].key")
         sp.fill("#ntext", "草稿还在")
         sp.select_option("#localePick", "zh-CN")
-        sp.wait_for_timeout(400)
+        # 保留的固定观察窗口（0.7s，覆盖页面 400ms 的草稿防抖定时器）：证明切换语言
+        # 不产生任何写请求是负面观察，窗口结束后核对请求计数（原因与预算见 docs/verify/browser-waits.md）
+        sp.wait_for_timeout(700)
         kept = disk_notes(d)
         manifest = json.loads((d / "review.json").read_text(encoding="utf-8"))
         ok(sp.input_value("#ntext") == "草稿还在", "服务模式切换语言保留草稿")
@@ -1032,8 +1154,7 @@ def export_import_checks(browser, tmp: Path):
     page = ctx.new_page()
     page.goto(url)
     page.evaluate("v => localStorage.setItem('ae.' + RID + '.notes', JSON.stringify(v))", E2E_NOTES)
-    page.reload()
-    page.wait_for_timeout(400)
+    page.reload()   # 文件模式初始化同步渲染（无 await），goto / reload 返回时 DOM 已就绪
 
     def open_import():
         page.keyboard.press("Escape")     # 先收起可能开着的弹窗（焦点也可能在输入框里）
@@ -1098,8 +1219,7 @@ def export_import_checks(browser, tmp: Path):
        "没有格式标记的旧中文常驻技能仍可导入")
 
     # 解析按格式标记选文法，与导入界面 locale 无关：两种导出在中文界面下都读得对
-    page.select_option("#localePick", "zh-CN")
-    page.wait_for_timeout(150)
+    page.select_option("#localePick", "zh-CN")   # 界面语言切换同步重绘，无需等待
     got_en = page.evaluate("t => parseImport(t)", md_en)
     got_zh = page.evaluate("t => parseImport(t)", md_zh)
     ok(got_en == got_zh, "同一批注的中英文导出，在中文界面下解析结果一致")
@@ -1116,9 +1236,10 @@ def export_import_checks(browser, tmp: Path):
     open_import()
     page.fill("#impText", md_en)
     page.click("#doImp")
-    page.wait_for_timeout(700)
+    landed = wait_until(lambda: page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes')) || []"), page, 5,
+                        condition="导入的批注写入本地存储")
     landed = page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")
-    ok(len(landed) == 2 and [n["target"] for n in landed] == ["报告", "讲稿"]
+    ok(landed and len(landed) == 2 and [n["target"] for n in landed] == ["报告", "讲稿"]
        and landed[1]["status"] == "drafted", "中文界面导入英文导出：批注按中文协议值落库")
 
     # 页面导出 → CLI 导入（导出的语言与界面不同）
@@ -1140,13 +1261,13 @@ def export_import_checks(browser, tmp: Path):
        "CLI 可显式导出英文")
     page.evaluate("v => localStorage.setItem('ae.' + RID + '.notes', '[]')")
     page.reload()
-    page.wait_for_timeout(300)
     open_import()
     page.fill("#impText", r.stdout)
     page.click("#doImp")
-    page.wait_for_timeout(700)
+    back = wait_until(lambda: page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes')) || []"), page, 5,
+                      condition="导入的批注写入本地存储")
     back = page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")
-    ok(len(back) == 2 and [n["target"] for n in back] == ["报告", "讲稿"]
+    ok(back and len(back) == 2 and [n["target"] for n in back] == ["报告", "讲稿"]
        and back[1]["status"] == "drafted", "CLI 的英文导出能在中文页面里导入，状态与协议值都对")
 
     # 旧中文格式不退步；认不出的文字有明确规则
@@ -1161,20 +1282,17 @@ def export_import_checks(browser, tmp: Path):
        "技能行里的来源标签与命令行一致地剥掉，常驻技能不写进单条")
     page.evaluate("v => localStorage.setItem('ae.' + RID + '.notes', '[]')")
     page.reload()
-    page.wait_for_timeout(300)
     open_import()
     page.fill("#impText", legacy)
     page.click("#doImp")
-    page.wait_for_timeout(700)
-    ok(len(page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")) == 2, "旧中文格式能导进页面")
+    ok(wait_until(lambda: len(page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes')) || []")) == 2, page, 5,
+                  condition="旧格式导入的 2 条批注写入本地存储"), "旧中文格式能导进页面")
     page.fill("#impText", "完全不是批注导出的文字")
     page.click("#doImp")
-    page.wait_for_timeout(400)
-    ok("无法识别" in page.inner_text("#toast"), f"认不出的文字给出明确提示（{page.inner_text('#toast')[:30]}）")
+    ok(wait_toast(page, "无法识别", condition="认不出文字的提示出现"), f"认不出的文字给出明确提示（{page.inner_text('#toast')[:30]}）")
     page.fill("#impText", "<!-- annotation-everything export v9 lang=en -->\n")
     page.click("#doImp")
-    page.wait_for_timeout(400)
-    ok("v9" in page.inner_text("#toast"), "不认识的格式版本也给出明确提示")
+    ok(wait_toast(page, "v9", condition="不认识格式的提示出现"), "不认识的格式版本也给出明确提示")
     ctx.close()
 
 
@@ -1245,7 +1363,9 @@ def handoff_i18n_checks(browser, tmp: Path):
         add_note(page, "把口径改成同比")
         go_page(page, 4)
         add_note(page, "表格加上单位")
-        ok(page.inner_text("#mode") == "● Connected to the local service",
+        # 服务态徽标回到「已连接」= 这两条批注的写请求都已确认（不再是 held for sending）
+        ok(wait_until(lambda: page.inner_text("#mode") == "● Connected to the local service", page, 8,
+                      condition="两条批注的写请求均已确认（徽标回到已连接）"),
            f"英文服务态徽标（实际 {page.inner_text('#mode')!r}）")
         ok(page.locator("#handBtn span").first.inner_text() == "Hand to the agent", "英文提交按钮")
         page.click("#handBtn")
@@ -1294,7 +1414,7 @@ def handoff_i18n_checks(browser, tmp: Path):
            f"接收后英文徽标（实际 {page.inner_text('#handState')!r}）")
 
         page.keyboard.press("j")
-        page.wait_for_timeout(600)
+        wait_batches(page, "Batch 1")
         history = page.inner_text("#batchList") + page.inner_text("#batchSum")
         posts_after_submit = sum(1 for method, _url in net if method == "POST")
         ok("Batch 1" in history and "in progress" in history, f"英文处理记录（实际 {history[:60]!r}）")
@@ -1308,8 +1428,7 @@ def handoff_i18n_checks(browser, tmp: Path):
         # 切到中文：只改显示，不重新提交、不改选项、不请求新接口
         before = json.loads((d / "handoff.json").read_text(encoding="utf-8"))["items"]
         page.click("#handBtn")
-        page.select_option("#localePick", "zh-CN")
-        page.wait_for_timeout(500)
+        page.select_option("#localePick", "zh-CN")   # 界面语言切换同步重绘；后续断言按可观察状态核对
         ok(len(json.loads((d / "handoff.json").read_text(encoding="utf-8"))["items"]) == len(before),
            "切换语言不重新提交")
         ok(sum(1 for method, _url in net if method == "POST") == posts_after_submit,
@@ -1326,8 +1445,8 @@ def handoff_i18n_checks(browser, tmp: Path):
         page.keyboard.press("Escape")
         for pick, want in (("en", "Hand to the agent"), ("zh-CN", "交给 Agent")):
             page.select_option("#localePick", pick)
-            page.wait_for_timeout(400)
-            ok(page.text_content("#doHandLabel") == want,
+            ok(wait_dom(page, "w => document.getElementById('doHandLabel').textContent === w", 5, arg=want,
+                        condition=f"提交按钮文字变为「{want}」"),
                f"关掉弹窗后切到 {pick}，提交按钮文字是「{want}」（实际 {page.text_content('#doHandLabel')!r}）")
 
         # 中文下把这一批走到「已初改·待复核」：状态在两种语言下都核对得上
@@ -1421,7 +1540,7 @@ def handoff_i18n_checks(browser, tmp: Path):
 
         opage.route("**/api/notes", no_full_check)
         opage.goto(f"http://127.0.0.1:{port}/")
-        opage.wait_for_timeout(1200)
+        wait_mode(opage, "old", condition="旧服务徽标出现（首次轮询按功能集判定）")
         ok("Old service" in opage.inner_text("#mode"), f"旧服务英文徽标（实际 {opage.inner_text('#mode')!r}）")
         ok("does not know about area marks" in (opage.get_attribute("#mode", "title") or ""), "旧服务英文提示")
         opage.click("#handBtn")
@@ -1733,13 +1852,11 @@ def file_mode_checks(browser, tmp: Path):
     ok("本地文件模式" in page.inner_text("#mode"), "file:// 打开显示「本地文件模式」")
     go_page(page, 3)
     add_note(page, "file 模式批注", pin=(0.5, 0.5))
-    page.reload()
-    page.wait_for_timeout(300)
+    page.reload()   # 文件模式初始化同步渲染，返回时列表与提示条已就绪
     ok("file 模式批注" in page.inner_text("#script"), "file:// 刷新后批注仍在（localStorage）")
     ok("上次批注到第 3 页" in page.inner_text("#resume"), "file:// 打开时提示上次批注到哪一页")
     page2 = ctx.new_page()
     page2.goto(url)
-    page2.wait_for_timeout(300)
     go_page(page2, 4)
     add_note(page2, "第二个标签页的批注")
     go_page(page, 5)
@@ -1748,7 +1865,9 @@ def file_mode_checks(browser, tmp: Path):
     ok({"file 模式批注", "第二个标签页的批注", "第一个标签页又加一条"} <= set(texts), "两个 file:// 标签页各自添加，批注都在")
     page2.close()
     page.evaluate(f"() => {STAGE}.insertAdjacentHTML('beforeend', '<img src=\"x:y\" onerror=\"window.__p_file=1\">')")
-    page.wait_for_timeout(300)
+    # 保留的固定观察窗口（0.5s）：给无效 src 的 img 错误事件留出发火机会，
+    # 证明 CSP 拦截的是「内联处理器不执行」这一负面行为（原因与预算见 docs/verify/browser-waits.md）
+    page.wait_for_timeout(500)
     ok(page.evaluate("window.__p_file") is None, "file:// 模式下 CSP 拦住注入的内联事件")
     legacy = [{"id": "old1", "page": 4, "title": "收入结构", "target": "报告", "text": "旧版批注甲",
                "quote": "", "quoteFrom": "", "pin": {"x": 20, "y": 30}, "at": "2026-10-27T01:00:00Z"},
@@ -1756,21 +1875,20 @@ def file_mode_checks(browser, tmp: Path):
                "quote": "", "quoteFrom": "", "pin": None, "at": "2026-10-27T01:01:00Z"}]
     page.evaluate("v => localStorage.setItem('v7viewer.notes.viewer_r2', JSON.stringify(v))", legacy)
     page.reload()
-    page.wait_for_timeout(300)
     ok(page.is_visible("#legacyBtn") and "2" in page.inner_text("#legacyBtn"), "发现旧版对照页的 2 条批注，显示导入按钮")
     page.click("#legacyBtn")
     page.click("[data-found='0']")
-    page.wait_for_timeout(300)
+    imported = wait_until(lambda: page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes')).length") == 5,
+                          page, 5, condition="旧批注导入本地存储")
     n = page.evaluate("JSON.parse(localStorage.getItem('ae.' + RID + '.notes')).length")
-    ok(n == 5, f"旧批注导入后共 5 条（实际 {n}）")
+    ok(imported and n == 5, f"旧批注导入后共 5 条（实际 {n}）")
     ok(not page.is_visible("#legacyBtn"), "导入后不再提示旧批注")
     page.keyboard.press("Escape")
     go_page(page, 3)
-    page.evaluate("document.querySelector('[data-note] [data-act=\"resolve\"]')?.click()")
-    page.wait_for_timeout(200)
+    page.evaluate("document.querySelector('[data-note] [data-act=\"resolve\"]')?.click()")   # 同步改写列表
     page.click("#handBtn")
-    page.wait_for_timeout(300)
-    ok("本地文件模式连不到 Agent" in page.inner_text("#toast"), "file:// 模式点「交给 Agent」退回为复制全部并提示")
+    ok(wait_toast(page, "本地文件模式连不到 Agent", condition="文件模式提交的退回提示出现"),
+       "file:// 模式点「交给 Agent」退回为复制全部并提示")
     md = page.evaluate("exportText()")
     ok("【已处理】file 模式批注" in md and "## 第 4 页" in md, "导出 Markdown 含页码与已处理标记")
     ctx.close()
@@ -1820,7 +1938,7 @@ def server_mode_checks(browser, tmp: Path):
     page = ctx.new_page()
     base = f"http://127.0.0.1:{port}/"
     page.goto(base)
-    page.wait_for_timeout(700)
+    wait_mode(page, "server", condition="首次轮询确认服务后徽标进入服务模式")
     ok("已连接本地服务" in page.inner_text("#mode"), "经服务打开显示「已连接本地服务」")
     ok(page.locator("header kbd").count() >= 5 and "P" in page.inner_text("#pinBtn"), "按钮上显示快捷键")
     go_page(page, 3)
@@ -1829,15 +1947,16 @@ def server_mode_checks(browser, tmp: Path):
             document.dispatchEvent(new MouseEvent('mouseup')); }""")
     page.keyboard.press("Escape")
     add_note(page, "服务模式批注：讲法第一句太长", pin=(0.3, 0.4))
-    notes = disk_notes(sdir)
-    ok(len(notes) == 1 and notes[0]["page"] == 3 and notes[0].get("key") == "sum" and notes[0]["pin"] and notes[0]["quoteFrom"] == "讲稿",
+    ok(wait_until(lambda: (lambda ns: len(ns) == 1 and ns[0]["page"] == 3 and ns[0].get("key") == "sum"
+                           and ns[0]["pin"] and ns[0]["quoteFrom"] == "讲稿")(disk_notes(sdir)),
+                  page, 5, condition="批注经服务写入 notes.json"),
        "批注即时写入 notes.json（页码、页面键、标点、讲稿引用）")
     ok(page.evaluate("localStorage.getItem('ae.' + RID + '.notes')") is None, "服务模式不在浏览器里留整份批注副本")
     page.click('[data-act="edit"]')
     page.fill("#etext", "服务模式批注（已编辑）")
     page.click('[data-act="save"]')
-    page.wait_for_timeout(500)
-    ok(disk_notes(sdir)[0]["text"] == "服务模式批注（已编辑）", "页面编辑批注后落盘")
+    ok(wait_until(lambda: disk_notes(sdir)[0]["text"] == "服务模式批注（已编辑）", page, 5,
+                  condition="编辑后的正文落盘"), "页面编辑批注后落盘")
     # 标点交互：拖动、悬停高亮、点击弹出操作
     page.on("dialog", lambda dlg: dlg.accept())
     nid0, old_pin = disk_notes(sdir)[0]["id"], disk_notes(sdir)[0]["pin"]
@@ -1848,41 +1967,47 @@ def server_mode_checks(browser, tmp: Path):
     page.mouse.down()
     page.mouse.move(cx + 80, cy + 40, steps=6)
     page.mouse.up()
-    page.wait_for_timeout(700)
+    moved = wait_until(lambda: (lambda pn: bool(pn) and pn["x"] > old_pin["x"] and pn["y"] > old_pin["y"])(
+                           [n for n in disk_notes(sdir) if n["id"] == nid0][0]["pin"]),
+                       page, 5, condition="拖动后的标点位置落盘")
     new_pin = [n for n in disk_notes(sdir) if n["id"] == nid0][0]["pin"]
-    ok(new_pin and new_pin["x"] > old_pin["x"] and new_pin["y"] > old_pin["y"], f"拖动标点：新位置落盘（{old_pin} → {new_pin}）")
+    ok(moved, f"拖动标点：新位置落盘（{old_pin} → {new_pin}）")
     page.hover(f'#nlist [data-note="{nid0}"] .body')
     ok("hl" in (pin.get_attribute("class") or ""), "鼠标移到右侧批注上，对应标点高亮")
     bb = pin.bounding_box()
     page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
-    page.wait_for_timeout(200)
-    ok(page.is_visible("#pinpop") and "服务模式批注" in page.inner_text("#pinpop"), "点击标点弹出这条批注及操作")
+    ok(wait_dom(page, "() => document.getElementById('pinpop').classList.contains('on')", 5,
+                condition="标点弹窗打开") and "服务模式批注" in page.inner_text("#pinpop"),
+       "点击标点弹出这条批注及操作")
     page.keyboard.press("Escape")
     add_note(page, "临时标点批注", pin=(0.6, 0.6))
+    wait_until(lambda: any(n["text"] == "临时标点批注" for n in disk_notes(sdir)), page, 5,
+               condition="临时标点批注落盘")
     tid = [n for n in disk_notes(sdir) if n["text"] == "临时标点批注"][0]["id"]
     tpin = page.locator(f'#host .ae-pin[data-id="{tid}"]')
     bb = tpin.bounding_box()
     page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
     page.click('#pinpop [data-pp="unpin"]')
-    page.wait_for_timeout(600)
-    tn = [n for n in disk_notes(sdir) if n["id"] == tid][0]
-    ok(tn["pin"] is None and not tn.get("region"), "在标注弹窗里「去掉标注」")
+    ok(wait_until(lambda: [n for n in disk_notes(sdir) if n["id"] == tid][0]["pin"] is None, page, 5,
+                  condition="「去掉标注」落盘"), "在标注弹窗里「去掉标注」")
     page.click(f'#nlist [data-note="{tid}"] [data-act="del"]')
-    page.wait_for_timeout(600)
-    ok(not any(n["id"] == tid for n in disk_notes(sdir)), "删除批注（确认后）")
-    # 技能：代理写入技能目录 → 输入栏有候选 → 批注带上技能
+    ok(wait_until(lambda: not any(n["id"] == tid for n in disk_notes(sdir)), page, 5,
+                  condition="删除的批注从 notes.json 消失"), "删除批注（确认后）")
+    # 技能：代理写入技能目录 → 轮询把它应用到页面 → 输入栏有候选 → 批注带上技能
     subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "skills", str(sdir), "--set", "humanizer-zh=中文润色", "dataviz=图表"],
                    check=True, capture_output=True)
-    page.wait_for_timeout(4600)
+    # 候选目录只经轮询（applyServer → renderSkillList）进入页面：等目录确实应用，而不是睡过一个周期
+    wait_dom(page, "() => skillCatalog.some(s => s.name === 'humanizer-zh')", 10,
+             condition="轮询把新的技能目录应用到页面（humanizer-zh 进入候选目录）")
     page.click("#nskills")
     ok(page.locator('#skillList [role="option"]').filter(has_text="humanizer-zh").count() == 1, "技能目录出现在「技能」输入栏的候选里")
     go_page(page, 2)   # 放在第 2 页，不影响第 3 页「全部已处理」的检查
     page.fill("#ntext", "这段口气太硬，润色一下")
     page.fill("#nskills", "humanizer-zh, dataviz")
     page.click('[data-act="add"]')
-    page.wait_for_timeout(600)
-    sk = [n for n in disk_notes(sdir) if n["text"] == "这段口气太硬，润色一下"]
-    ok(sk and sk[0].get("skills") == ["humanizer-zh", "dataviz"] and "⚙ humanizer-zh" in page.inner_text("#nlist"),
+    sk = wait_until(lambda: [n for n in disk_notes(sdir) if n["text"] == "这段口气太硬，润色一下"], page, 5,
+                    condition="带技能的批注落盘")
+    ok(bool(sk) and sk[0].get("skills") == ["humanizer-zh", "dataviz"] and "⚙ humanizer-zh" in page.inner_text("#nlist"),
        "批注带上指定技能并显示")
     shown = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "show", str(sdir)], capture_output=True, text=True).stdout
     ok("技能：humanizer-zh（这条指定）、dataviz（这条指定）——处理这条前先调用这些技能" in shown, "notes.py show 列出这条批注要调用的技能")
@@ -1895,11 +2020,11 @@ def server_mode_checks(browser, tmp: Path):
     page.fill("#alwaysRows .arow:last-child .aname", "humanizer-zh")
     page.select_option("#alwaysRows .arow:last-child .ascope", "讲稿")
     page.click("#alwaysSave")
-    page.wait_for_timeout(500)
-    sj = json.loads((sdir / "skills.json").read_text())
-    ok(sj.get("always") == [{"name": "checker-x", "scope": "all"}, {"name": "humanizer-zh", "scope": "讲稿"}]
-       and sj.get("skills"), "常驻技能存进审阅目录的 skills.json，技能目录不受影响")
-    ok("常驻 checker-x" in page.inner_text("#nlist") and page.inner_text("#alwaysN") == "2",
+    ok(wait_until(lambda: json.loads((sdir / "skills.json").read_text()).get("always")
+                  == [{"name": "checker-x", "scope": "all"}, {"name": "humanizer-zh", "scope": "讲稿"}], page, 5,
+                  condition="常驻技能写入 skills.json"), "常驻技能存进审阅目录的 skills.json，技能目录不受影响")
+    ok(wait_until(lambda: "常驻 checker-x" in page.inner_text("#nlist") and page.inner_text("#alwaysN") == "2", page, 8,
+                  condition="保存响应后卡片与按钮刷新（常驻技能 2）"),
        "保存后：批注卡片标出适用的常驻技能，按钮显示个数")
     shown = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "show", str(sdir)], capture_output=True, text=True).stdout
     ok("checker-x（常驻·全部批注）" in shown and "常驻技能（用户要求" in shown, "notes.py show 每条批注都列出常驻技能")
@@ -1910,13 +2035,14 @@ def server_mode_checks(browser, tmp: Path):
     ok(page.is_visible("#pairRow") and "讲稿这页也有相近的句子" in page.inner_text("#pairRow") and page.is_checked("#pairOn"),
        "讲稿同一页有相近的句子：提示「同时改」并默认勾选")
     page.keyboard.press("d")
-    page.wait_for_timeout(400)
-    ok(not any((n.get("edit") or {}).get("op") == "delete" for n in disk_notes(sdir)) and "确认删除" in page.inner_text("#selbar"),
+    ok(wait_dom(page, "() => document.getElementById('selbar').textContent.includes('确认删除')", 5,
+                condition="第一次 D 后选区条进入「待确认」")
+       and not any((n.get("edit") or {}).get("op") == "delete" for n in disk_notes(sdir)),
        "按一次 D 只进入「待确认」，不会误记删除（防止打拼音时误触）")
     page.keyboard.press("d")
-    page.wait_for_timeout(600)
-    dels = [n for n in disk_notes(sdir) if (n.get("edit") or {}).get("op") == "delete"]
-    ok(dels and dels[0]["target"] == "报告和讲稿" and "毛利率" in dels[0]["edit"]["from"]
+    dels = wait_until(lambda: [n for n in disk_notes(sdir) if (n.get("edit") or {}).get("op") == "delete"], page, 5,
+                      condition="「删除这段」落盘")
+    ok(bool(dels) and dels[0]["target"] == "报告和讲稿" and "毛利率" in dels[0]["edit"]["from"]
        and (dels[0].get("pair") or {}).get("side") == "讲稿" and "平台抽成" in dels[0]["pair"]["text"],
        "再按 D：记下「删除这段」，对象自动为报告和讲稿，并带上讲稿的对应句")
     ok("↔ 讲稿" in page.inner_text("#nlist"), "批注卡片上显示另一侧也要改")
@@ -1925,13 +2051,14 @@ def server_mode_checks(browser, tmp: Path):
     page.keyboard.press("b")
     ok(not page.is_checked("#pairOn") and page.input_value("#ntarget") == "讲稿", "按 B 取消同时改，对象回到讲稿")
     page.keyboard.press("r")
-    page.wait_for_timeout(200)
-    ok(page.is_visible("#repbox") and "平台抽成" in page.input_value("#repText"), "按 R：弹出改写框，预填选中的原文")
+    ok(wait_dom(page, "() => document.getElementById('repbox').classList.contains('on')"
+                " && document.getElementById('repText').value.includes('平台抽成')", 5,
+                condition="改写框弹出并预填选中的原文"), "按 R：弹出改写框，预填选中的原文")
     page.fill("#repText", "平台抽成上调，外卖毛利率降了 2 个百分点。")
     page.keyboard.press("Enter")
-    page.wait_for_timeout(600)
-    reps = [n for n in disk_notes(sdir) if (n.get("edit") or {}).get("op") == "replace"]
-    ok(reps and reps[0]["target"] == "讲稿" and reps[0]["edit"]["to"].startswith("平台抽成上调，") and not reps[0].get("pair"),
+    reps = wait_until(lambda: [n for n in disk_notes(sdir) if (n.get("edit") or {}).get("op") == "replace"], page, 5,
+                      condition="「改为」落盘")
+    ok(bool(reps) and reps[0]["target"] == "讲稿" and reps[0]["edit"]["to"].startswith("平台抽成上调，") and not reps[0].get("pair"),
        "改写框按回车：记下「改为」（只改讲稿）")
     ok(page.locator("#nlist del").count() >= 2 and page.locator("#nlist ins").count() >= 1, "快捷修改在批注区显示为删除线 → 新文字")
     shown = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "show", str(sdir)], capture_output=True, text=True).stdout
@@ -1948,13 +2075,12 @@ def server_mode_checks(browser, tmp: Path):
     page.mouse.down()
     page.mouse.move(tb["x"] + tb["width"] + 4, tb["y"] + tb["height"] + 4, steps=8)
     page.mouse.up()
-    page.wait_for_timeout(200)
     ok("风格优化 · 框选处" in page.inner_text("#styleChip"), "S → 2 后拖动框选，输入框标明「风格优化 · 框选处」")
     page.fill("#ntext", "表格太挤，加大行距并对齐")
     page.click('[data-act="add"]')
-    page.wait_for_timeout(600)
-    rg = [n for n in disk_notes(sdir) if n["text"] == "表格太挤，加大行距并对齐"]
-    ok(rg and rg[0]["style"] == {"scope": "region"} and rg[0]["region"]["w"] > 5 and "table" in (rg[0].get("anchor") or ""),
+    rg = wait_until(lambda: [n for n in disk_notes(sdir) if n["text"] == "表格太挤，加大行距并对齐"], page, 5,
+                    condition="框选区域的风格优化落盘")
+    ok(bool(rg) and rg[0]["style"] == {"scope": "region"} and rg[0]["region"]["w"] > 5 and "table" in (rg[0].get("anchor") or ""),
        f"框选区域的风格优化落盘，附位置线索（{(rg[0].get('anchor') or '')[:40] if rg else ''}）")
     reg = page.locator(f'#host .ae-region[data-id="{rg[0]["id"]}"]')
     bb = reg.bounding_box()
@@ -1962,11 +2088,9 @@ def server_mode_checks(browser, tmp: Path):
     page.mouse.down()
     page.mouse.move(bb["x"] + bb["width"] / 2 + 40, bb["y"] + bb["height"] / 2 + 30, steps=6)
     page.mouse.up()
-    page.wait_for_timeout(600)
-    moved_n = [n for n in disk_notes(sdir) if n["id"] == rg[0]["id"]][0]
-    moved = moved_n["region"]
-    ok(moved["x"] > rg[0]["region"]["x"] and moved["w"] == rg[0]["region"]["w"] and moved_n["style"] == {"scope": "region"},
-       "拖动区域：新位置落盘，大小不变")
+    ok(wait_until(lambda: (lambda mn: mn["region"]["x"] > rg[0]["region"]["x"] and mn["region"]["w"] == rg[0]["region"]["w"]
+                           and mn["style"] == {"scope": "region"})([n for n in disk_notes(sdir) if n["id"] == rg[0]["id"]][0]),
+                  page, 5, condition="拖动后的区域位置落盘"), "拖动区域：新位置落盘，大小不变")
     bb = reg.bounding_box()
     page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
     ok(page.is_visible("#pinpop") and "表格太挤" in page.inner_text("#pinpop"), "点击区域弹出这条批注")
@@ -1975,9 +2099,9 @@ def server_mode_checks(browser, tmp: Path):
     page.keyboard.press("1")
     page.keyboard.press("Escape")   # 离开输入框
     page.click('[data-act="add"]')
-    page.wait_for_timeout(600)
-    whole = [n for n in disk_notes(sdir) if (n.get("style") or {}).get("scope") == "page"]
-    ok(whole and whole[0]["text"] == "风格优化：整页" and whole[0]["target"] == "报告" and "整页" in whole[0].get("anchor", ""),
+    whole = wait_until(lambda: [n for n in disk_notes(sdir) if (n.get("style") or {}).get("scope") == "page"], page, 5,
+                       condition="整页风格优化落盘")
+    ok(bool(whole) and whole[0]["text"] == "风格优化：整页" and whole[0]["target"] == "报告" and "整页" in whole[0].get("anchor", ""),
        "整页风格优化：不写方向也能添加")
     shown = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "show", str(sdir)], capture_output=True, text=True).stdout
     ok("·风格优化·框选处】" in shown and "·框选 " in shown and "位置线索：" in shown and "·风格优化·整页】" in shown,
@@ -1990,15 +2114,14 @@ def server_mode_checks(browser, tmp: Path):
     page.mouse.down()
     page.mouse.move(sec["x"] + sec["width"] * .35, sec["y"] + sec["height"] * .35, steps=8)
     page.mouse.up()
-    page.wait_for_timeout(200)
     ok(page.locator("#host .ae-region.pending").count() == 1 and page.locator("#host .ae-pin.pending").count() == 0
        and "on" not in (page.get_attribute("#pinBtn", "class") or ""), "标注模式下拖动 = 框选一块区域（不是放点），放好后退出标注模式")
     ok(not page.is_visible("#styleChip"), "普通框选不会变成风格优化")
     page.fill("#ntext", "这块口径要和讲稿一致")
     page.click('[data-act="add"]')
-    page.wait_for_timeout(600)
-    bx = [n for n in disk_notes(sdir) if n["text"] == "这块口径要和讲稿一致"]
-    ok(bx and bx[0].get("region") and abs(bx[0]["region"]["w"] - 25) < 2 and not bx[0].get("style") and not bx[0].get("pin")
+    bx = wait_until(lambda: [n for n in disk_notes(sdir) if n["text"] == "这块口径要和讲稿一致"], page, 5,
+                    condition="普通批注的框选落盘")
+    ok(bool(bx) and bx[0].get("region") and abs(bx[0]["region"]["w"] - 25) < 2 and not bx[0].get("style") and not bx[0].get("pin")
        and bx[0]["target"] == "报告" and bx[0].get("anchor"), f"普通批注框选：区域与位置线索落盘（{bx[0].get('region') if bx else ''}）")
     bid, r1 = bx[0]["id"], bx[0]["region"]
     ok("框选 " in page.inner_text(f'#nlist [data-note="{bid}"] .meta'), "批注卡片标明「框选 n」")
@@ -2007,28 +2130,28 @@ def server_mode_checks(browser, tmp: Path):
     page.mouse.down()
     page.mouse.move(rz["x"] + 70, rz["y"] + 45, steps=6)
     page.mouse.up()
-    page.wait_for_timeout(600)
+    resized = wait_until(lambda: (lambda r2: r2["w"] > r1["w"] and r2["h"] > r1["h"] and r2["x"] == r1["x"] and r2["y"] == r1["y"])(
+                             [n for n in disk_notes(sdir) if n["id"] == bid][0]["region"]),
+                         page, 5, condition="调整大小后的区域落盘")
     r2 = [n for n in disk_notes(sdir) if n["id"] == bid][0]["region"]
-    ok(r2["w"] > r1["w"] and r2["h"] > r1["h"] and r2["x"] == r1["x"] and r2["y"] == r1["y"], f"拖框的右下角调大小：落盘，位置不变（{r1} → {r2}）")
+    ok(resized, f"拖框的右下角调大小：落盘，位置不变（{r1} → {r2}）")
     page.click(f'#nlist [data-note="{bid}"] [data-act="edit"]')
     page.click(f'#nlist [data-note="{bid}"] [data-act="remark"]')
     ok("on" in (page.get_attribute("#pinBtn", "class") or ""), "编辑里点「重新标注」进入标注模式")
     page.mouse.click(sec["x"] + sec["width"] * .8, sec["y"] + sec["height"] * .8)
-    page.wait_for_timeout(600)
-    rn = [n for n in disk_notes(sdir) if n["id"] == bid][0]
-    ok(rn.get("pin") and not rn.get("region") and page.locator(f'#host .ae-pin[data-id="{bid}"]').count() == 1,
-       "重新标注时单击 = 放点，原来的框被替换")
+    ok(wait_until(lambda: (lambda rn: bool(rn.get("pin")) and not rn.get("region"))([n for n in disk_notes(sdir) if n["id"] == bid][0])
+                  and page.locator(f'#host .ae-pin[data-id="{bid}"]').count() == 1,
+                  page, 5, condition="放点替换原来的框（落盘）"), "重新标注时单击 = 放点，原来的框被替换")
     page.click(f'#nlist [data-note="{bid}"] [data-act="unpin"]')
-    page.wait_for_timeout(600)
-    rn = [n for n in disk_notes(sdir) if n["id"] == bid][0]
-    ok(not rn.get("pin") and not rn.get("region") and page.locator(f'#host [data-id="{bid}"]').count() == 0, "编辑里「去掉标注」")
+    ok(wait_until(lambda: (lambda rn: not rn.get("pin") and not rn.get("region"))([n for n in disk_notes(sdir) if n["id"] == bid][0])
+                  and page.locator(f'#host [data-id="{bid}"]').count() == 0,
+                  page, 5, condition="「去掉标注」落盘"), "编辑里「去掉标注」")
     page.click(f'#nlist [data-note="{bid}"] [data-act="remark"]')
     page.click(f'#nlist [data-note="{bid}"] [data-act="cancel"]')
     page.mouse.click(sec["x"] + sec["width"] * .5, sec["y"] + sec["height"] * .9)
-    page.wait_for_timeout(500)
-    rn = [n for n in disk_notes(sdir) if n["id"] == bid][0]
-    ok("on" not in (page.get_attribute("#pinBtn", "class") or "") and not rn.get("pin"),
-       "点了「重新标注」又取消：退出标注模式，之后随手点报告不会改这条批注")
+    ok(wait_until(lambda: "on" not in (page.get_attribute("#pinBtn", "class") or "")
+                  and not [n for n in disk_notes(sdir) if n["id"] == bid][0].get("pin"),
+                  page, 5, condition="取消重新标注后退出标注模式"), "点了「重新标注」又取消：退出标注模式，之后随手点报告不会改这条批注")
     # 从一条的编辑直接切到另一条：草稿各归各的
     cur = {n["id"]: n for n in disk_notes(sdir)}
     cards = page.locator("#nlist [data-note]")
@@ -2050,8 +2173,10 @@ def server_mode_checks(browser, tmp: Path):
     lost_id = B
     subprocess.run([sys.executable, "-c", "import sys;sys.path.insert(0,sys.argv[1]);import notes_store as s;from pathlib import Path;"
                     "s.update(Path(sys.argv[2]),sys.argv[3],{'page':99,'orphan':True})", str(SCRIPTS), str(sdir), lost_id], check=True)
-    page.wait_for_timeout(4800)
-    ok("条批注的原页面在新版报告里找不到" in page.inner_text("#resume"), "原页面找不到的批注：提示条给出数量")
+    # 服务端修订只经轮询进入页面：以提示条出现为「轮询已应用」的证据
+    ok(wait_dom(page, "() => document.getElementById('resume').textContent.includes('条批注的原页面在新版报告里找不到')", 10,
+                condition="轮询应用修订后提示条给出孤立批注数量"),
+       "原页面找不到的批注：提示条给出数量")
     page.keyboard.press("Escape")
     page.keyboard.press("n")
     page.select_option(f'#orphanBox select[data-mv="{lost_id}"]', "2")
@@ -2061,9 +2186,8 @@ def server_mode_checks(browser, tmp: Path):
         kept_destination = kept_destination and page.input_value(f'#orphanBox select[data-mv="{lost_id}"]') == "2"
     ok(kept_destination, "孤立批注选择目标页后切换语言，保留尚未提交的目标页")
     page.click(f'#orphanBox [data-mvgo="{lost_id}"]')
-    page.wait_for_timeout(700)
-    moved_note = [n for n in disk_notes(sdir) if n["id"] == lost_id][0]
-    ok(moved_note["page"] == 2 and not moved_note.get("orphan"), "在「批注」里把它挪到第 2 页")
+    ok(wait_until(lambda: (lambda mn: mn["page"] == 2 and not mn.get("orphan"))([n for n in disk_notes(sdir) if n["id"] == lost_id][0]),
+                  page, 5, condition="挪动结果落盘"), "在「批注」里把它挪到第 2 页")
     page.keyboard.press("Escape")
     # 快捷键
     page.keyboard.press("p")
@@ -2083,35 +2207,37 @@ def server_mode_checks(browser, tmp: Path):
     page.click("#ntext")
     page.keyboard.type("正在写的草稿")
     nid = [n for n in disk_notes(sdir) if n["text"].startswith("服务模式批注")][0]["id"]
+    baseline_rev = page.evaluate("() => rev")
     subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "resolve", str(sdir), nid, "--note", "已拆成两句",
                     "--by", "claude"], check=True, capture_output=True)
-    page.wait_for_timeout(5000)
+    # 不变量前置证据：先证明一次轮询把服务端新修订应用到页面（rev 离开基线），再检查草稿与焦点保住
+    refreshed = wait_rev(page, baseline_rev, 10)
     txt = page.inner_text("#nlist")
-    ok("已处理 · Claude" in txt and "处理说明：已拆成两句" in txt, "Claude 用 CLI 标已处理后页面自动刷新显示")
-    ok(page.input_value("#ntext") == "正在写的草稿" and page.evaluate("document.activeElement.id") == "ntext",
+    ok(refreshed and "已处理 · Claude" in txt and "处理说明：已拆成两句" in txt, "Claude 用 CLI 标已处理后页面自动刷新显示")
+    ok(refreshed and page.input_value("#ntext") == "正在写的草稿" and page.evaluate("document.activeElement.id") == "ntext",
        "轮询刷新不打断正在写的草稿（内容与焦点都在）")
     page.keyboard.type("，继续")
     ok(page.input_value("#ntext") == "正在写的草稿，继续", "刷新后继续输入不丢字")
     page.click("#next")
-    page.wait_for_timeout(150)
-    ok(page.input_value("#ntext") == "", "翻到下一页，输入框是该页自己的（空）")
+    ok(wait_dom(page, "() => document.getElementById('ntext').value === ''", 5,
+                condition="翻到下一页后输入框重置"), "翻到下一页，输入框是该页自己的（空）")
     page.click("#prev")
-    page.wait_for_timeout(150)
-    ok(page.input_value("#ntext") == "正在写的草稿，继续", "翻回来，草稿还在")
+    ok(wait_dom(page, "() => document.getElementById('ntext').value === '正在写的草稿，继续'", 5,
+                condition="翻回来后本页草稿恢复"), "翻回来，草稿还在")
     ok("全部已处理" in page.inner_text("#nlist") or "✓" in page.inner_text("#jump"), "已处理完的页有 ✓ 标记")
     page.fill("#ntext", "")
     # 交给 Agent：代理在后台等待，用户点按钮后等待命令退出（Claude Code 里即唤醒会话）
     waiter = subprocess.Popen([sys.executable, str(SCRIPTS / "notes.py"), "wait", str(sdir), "--timeout", "30",
                                "--interval", "0.3", "--by", "claude"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    CLEANUP.add(waiter)
-    time.sleep(0.8)
+    CLEANUP.add(waiter)   # wait 就算在提交后才启动，也会先读到已存在的待处理批次并立即退出，无需固定垫等待
     page.keyboard.press("Escape")   # 先离开输入框（在输入框里按 A 是打字）
     page.keyboard.press("a")
     page.fill("#handMsg", "先改第 3 页")
     page.click("#doHand")
-    page.wait_for_timeout(600)
-    hfile = json.loads((sdir / "handoff.json").read_text())
-    ok(hfile["items"][-1]["message"] == "先改第 3 页", "按 A 打开「交给 Agent」，提交与附言记进审阅目录")
+    ok(wait_until(lambda: (sdir / "handoff.json").exists()
+                  and json.loads((sdir / "handoff.json").read_text())["items"][-1]["message"] == "先改第 3 页",
+                  page, 5, condition="提交与附言落盘（handoff.json）"),
+       "按 A 打开「交给 Agent」，提交与附言记进审阅目录")
     try:
         wout, _ = waiter.communicate(timeout=10)
     except subprocess.TimeoutExpired:
@@ -2119,73 +2245,79 @@ def server_mode_checks(browser, tmp: Path):
         wout = ""
     ok(waiter.returncode == 0 and "第 1 批" in wout and "先改第 3 页" in wout and "指定了技能：dataviz、humanizer-zh" in wout,
        "后台等待的 notes.py wait 随即退出，输出提交、附言与要用的技能")
-    page.wait_for_timeout(4800)
-    ok("Agent 处理中" in page.inner_text("#handState"), "代理接收后页面显示「Agent 处理中」")
+    ok(wait_until(lambda: "Agent 处理中" in page.inner_text("#handState"), page, 10,
+                  condition="轮询应用批次状态（Agent 处理中）"), "代理接收后页面显示「Agent 处理中」")
     fixed = [n for n in disk_notes(sdir) if n["status"] == "open"][0]
     subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "resolve", str(sdir), fixed["id"], "--note", "标题缩短了", "--by", "claude"],
                    check=True, capture_output=True)
     subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "done", str(sdir), "--summary", "第 3 页已改"],
                    check=True, capture_output=True)
-    page.wait_for_timeout(4800)
-    hs = page.inner_text("#handState")
-    ok("Agent 已处理 · 第 1 批（解决 1 条）" in hs and "第 3 页已改" in (page.get_attribute("#handState", "title") or ""),
-       f"代理收尾后页面显示「Agent 已处理 · 第 1 批（解决 1 条）」与处理摘要（{hs}）")
+    ok(wait_until(lambda: "Agent 已处理 · 第 1 批（解决 1 条）" in page.inner_text("#handState")
+                  and "第 3 页已改" in (page.get_attribute("#handState", "title") or ""), page, 10,
+                  condition="轮询应用收尾状态（Agent 已处理）"),
+       "代理收尾后页面显示「Agent 已处理 · 第 1 批（解决 1 条）」与处理摘要")
     page.click("#handState")
-    page.wait_for_timeout(200)
-    bl = page.inner_text("#batchList") if page.is_visible("#batches") else ""
+    batches_ready = wait_batches(page, "第 1 批", condition="点 Agent 状态后处理记录打开并载入批次")
+    bl = page.inner_text("#batchList") if batches_ready else ""
     ok("第 1 批" in bl and "解决 1 条" in bl and "处理摘要：第 3 页已改" in bl and "处理说明：标题缩短了" in bl and "附言：先改第 3 页" in bl,
        "点 Agent 状态打开处理记录：批次、解决几条、处理摘要、每条的处理说明")
     page.click(f'#batchList [data-goto="{fixed["id"]}"]')
-    page.wait_for_timeout(300)
-    ok(not page.is_visible("#batches") and page.input_value("#jump") == str(fixed["page"] - 1),
-       "在处理记录里点一条批注：跳到它所在的页")
+    ok(wait_dom(page, "() => !document.getElementById('batches').classList.contains('on')", 5,
+                condition="处理记录关闭")
+       and page.input_value("#jump") == str(fixed["page"] - 1), "在处理记录里点一条批注：跳到它所在的页")
     page.keyboard.press("j")
-    ok(page.is_visible("#batches"), "按 J 打开处理记录")
+    ok(wait_dom(page, JS_BATCHES_ON, 5, condition="处理记录打开"), "按 J 打开处理记录")
     page.keyboard.press("Escape")
     go_page(page, 1)
     page.reload()
-    page.wait_for_timeout(900)
-    rs = page.inner_text("#resume")
-    ok("上次批注到第" in rs and "Agent 已处理完第 1 批（解决 1 条）" in rs, f"重新打开时提示上次批注到哪页、Agent 是否处理完（{rs[:60]}…）")
+    ok(wait_until(lambda: "上次批注到第" in page.inner_text("#resume")
+                  and "Agent 已处理完第 1 批（解决 1 条）" in page.inner_text("#resume"), page, 10,
+                  condition="重新打开后的提示条恢复"),
+       "重新打开时提示上次批注到哪页、Agent 是否处理完")
     page.keyboard.press("l")
-    page.wait_for_timeout(200)
     from datetime import datetime
     def user_time(n):
         return max(datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp() for v in (n["at"], n.get("updatedAt") or n["at"]))
     last_page = max(disk_notes(sdir), key=user_time)["page"]
-    ok(page.inner_text("#stat").startswith(f"第 {last_page} /"), f"按 L 跳到上次批注的页（第 {last_page} 页）")
-    time.sleep(1.1)
+    ok(wait_until(lambda: page.inner_text("#stat").startswith(f"第 {last_page} /"), page, 5,
+                  condition=f"统计行跳到第 {last_page} 页"), f"按 L 跳到上次批注的页（第 {last_page} 页）")
+    time.sleep(1.1)   # 保留的固定等待：跨过文件系统 mtime 粒度，保证重建后 indexMtime 可被轮询观察到变化
     subprocess.run([sys.executable, str(SCRIPTS / "build_viewer.py"), "--rebuild", str(sdir)], check=True, capture_output=True)
-    page.wait_for_timeout(5000)
-    ok(page.is_visible("#reloadBtn"), "Claude 重建对照页后页面提示「点此刷新」")
+    ok(wait_until(lambda: page.is_visible("#reloadBtn"), page, 10,
+                  condition="轮询发现对照页更新（提示「点此刷新」）"), "Claude 重建对照页后页面提示「点此刷新」")
 
     # ---------- 4. 断线暂存与补传 ----------
     stop(srv)
-    page.wait_for_timeout(4500)
-    ok("服务未连接" in page.inner_text("#mode"), "服务停止后页面提示未连接")
+    # 断线是事件：下一次轮询连接失败后徽标才变化，以「服务未连接」出现为准，不垫固定等待
+    ok(wait_until(lambda: "服务未连接" in page.inner_text("#mode"), page, 10,
+                  condition="下一次轮询连接失败（服务未连接）"), "服务停止后页面提示未连接")
     add_note(page, "删", pin=(0.2, 0.2))
     add_note(page, "删", pin=(0.7, 0.7))
-    ok("待补传 2" in page.inner_text("#mode"), "断线时两条批注暂存浏览器并显示待补传")
+    ok(wait_until(lambda: "待补传 2" in page.inner_text("#mode"), page, 10,
+                  condition="两条批注的补传尝试都失败并计入待补传"), "断线时两条批注暂存浏览器并显示待补传")
     page.click("#handBtn")
     page.click("#doHand")
-    page.wait_for_timeout(300)
-    ok("待补传" in page.inner_text("#handState"), "断线时点「交给 Agent」也先暂存")
+    ok(wait_until(lambda: "待补传" in page.inner_text("#handState"), page, 8,
+                  condition="断线提交进入页面暂存"), "断线时点「交给 Agent」也先暂存")
     srv = start_server(sdir, port)
-    page.wait_for_timeout(5500)
+    flushed = wait_until(lambda: len([n for n in disk_notes(sdir) if n["text"] == "删"]) == 2, page, 10,
+                         condition="断线暂存的两条批注补传落盘")
     dels = [n for n in disk_notes(sdir) if n["text"] == "删"]
-    ok(len(dels) == 2 and "已连接" in page.inner_text("#mode"), f"服务恢复后补传，同文不同标点两条都在（{len(dels)} 条）")
+    ok(flushed and "已连接" in page.inner_text("#mode"), f"服务恢复后补传，同文不同标点两条都在（{len(dels)} 条）")
     last = json.loads((sdir / "handoff.json").read_text())["items"][-1]
     ok(last["seq"] == 2 and last["status"] == "pending" and {n["id"] for n in dels} <= set(last["openIds"]),
        "暂存的「交给 Agent」在批注补传之后才提交（提交快照里包含这两条）")
     # 处理记录：用户展开的批次在状态变化重绘后仍展开
     page.keyboard.press("Escape")
     page.keyboard.press("j")
-    page.wait_for_timeout(500)
+    wait_dom(page, JS_BATCHES_ON, 5, condition="处理记录弹窗打开")
     page.click('#batchList details[data-seq="1"] summary')
     subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "claim", str(sdir)], check=True, capture_output=True)
-    page.wait_for_timeout(4800)
-    ok("处理中" in page.inner_text("#batchList") and page.evaluate(
-        "document.querySelector('#batchList details[data-seq=\"1\"]').open"), f"处理记录随状态刷新，用户展开的批次保持展开（{page.inner_text('#batchList')[:120]!r}）")
+    # 「处理中」只会随轮询应用的认领状态出现：它是重绘确实发生过的证据，然后再查展开状态保持
+    ok(wait_dom(page, "() => document.getElementById('batchList').textContent.includes('处理中')", 10,
+                condition="轮询应用认领状态（处理记录出现「处理中」）")
+       and page.evaluate("document.querySelector('#batchList details[data-seq=\"1\"]').open"),
+       f"处理记录随状态刷新，用户展开的批次保持展开（{page.inner_text('#batchList')[:120]!r}）")
     page.keyboard.press("Escape")
     # 背后是旧版服务（没有 marks 功能）：提示并拦住框选，不让改动被静默丢掉
     old = ctx.new_page()
@@ -2196,7 +2328,7 @@ def server_mode_checks(browser, tmp: Path):
         route.fulfill(response=r, json=body)
     old.route("**/api/notes", strip_features)
     old.goto(f"http://127.0.0.1:{port}/")
-    old.wait_for_timeout(1200)
+    wait_mode(old, "old", condition="旧服务徽标出现（首次轮询按功能集判定）")
     ok("旧版服务" in old.inner_text("#mode"), "背后是旧版服务：状态处显示「旧版服务」")
     old.keyboard.press("p")
     ob = old.locator("#host section.page").bounding_box()
@@ -2204,7 +2336,6 @@ def server_mode_checks(browser, tmp: Path):
     old.mouse.down()
     old.mouse.move(ob["x"] + 240, ob["y"] + 160, steps=6)
     old.mouse.up()
-    old.wait_for_timeout(200)
     ok(old.locator("#host .ae-region.pending").count() == 0 and "旧版本" in old.inner_text("#toast"),
        "旧版服务时拖框被拦下并提示停掉旧服务")
     old.close()
@@ -2215,18 +2346,20 @@ def server_mode_checks(browser, tmp: Path):
         return json.loads((sdir / "handoff.json").read_text())["items"][-1]
     cli("done", str(sdir), "--summary", "收尾上一批")
     page.keyboard.press("j")
-    page.wait_for_timeout(400)
+    wait_dom(page, JS_BATCHES_ON, 5, condition="处理记录弹窗打开")
     page.click("#batches [data-close] kbd")
-    ok(not page.is_visible("#batches"), "点关闭按钮上的「Esc」标签也能关掉处理记录")
+    ok(wait_dom(page, "() => !document.getElementById('batches').classList.contains('on')", 5,
+                condition="处理记录关闭"), "点关闭按钮上的「Esc」标签也能关掉处理记录")
     page.keyboard.press("a")
     page.check('input[name="htarget"][value="review"]')
     page.uncheck("#hSub")
     page.fill("#handMsg", "先初改，我看过再复核")
     page.click("#doHand")
-    page.wait_for_timeout(4800)
-    lb = last_batch()
-    ok(lb["target"] == "review" and lb["allowSubagents"] is False and lb["status"] == "pending",
+    ok(wait_until(lambda: last_batch()["target"] == "review" and last_batch()["allowSubagents"] is False
+                  and last_batch()["status"] == "pending", page, 10,
+                  condition="提交选项落盘（handoff.json 最新批次）"),
        "交给 Agent 时选「已初改·待复核」、不允许子代理，选项随提交落盘")
+    lb = last_batch()
     ok(page.inner_text("#nflight").startswith("处理中") and page.inner_text("#ncount") == "",
        f"交给 Agent 后，「批注」按钮显示「处理中 N」而不是未处理红点（{page.inner_text('#notesBtn')!r}）")
     cli("claim", str(sdir), "--by", "sonnet-初改")
@@ -2234,51 +2367,55 @@ def server_mode_checks(browser, tmp: Path):
     cli("resolve", str(sdir), target["id"], "--note", "标题改短", "--by", "sonnet-初改")
     cli("done", str(sdir), "--summary", "初改 1 条", "--by", "sonnet-初改")
     go_page(page, target["page"])
-    page.wait_for_timeout(4800)
-    card = page.inner_text(f'#nlist [data-note="{target["id"]}"]')
-    ok("已初改 · 待复核" in page.inner_text("#handState") and page.inner_text("#ndraft") == "待复核 1",
+    state_ready = wait_until(lambda: "已初改 · 待复核" in page.inner_text("#handState") and page.inner_text("#ndraft") == "待复核 1", page, 10,
+                             condition="轮询应用初改收尾状态（已初改 · 待复核 / 待复核 1）")
+    ok(state_ready,
        f"初改收尾后：状态显示「已初改 · 待复核」，「批注」按钮显示「待复核 1」（{page.inner_text('#handState')!r} / {page.inner_text('#notesBtn')!r}）")
+    card = page.inner_text(f'#nlist [data-note="{target["id"]}"]')
     ok("已初改·待复核" in card and "初改说明：标题改短" in card and "痕迹：初改（sonnet-初改 · 第" in card,
        "待复核的批注卡片显示状态、初改说明与处理痕迹")
     page.keyboard.press("j")
-    page.wait_for_timeout(600)
+    batches_ready = wait_batches(page, "要求：做到已初改·待复核",
+                                 condition="处理记录打开并载入初改批次")
     bl = page.inner_text("#batchList")
-    ok("要求：做到已初改·待复核" in bl and "初改 · sonnet-初改" in bl and "已初改·待复核的 1 条" in bl,
+    ok(batches_ready and "初改 · sonnet-初改" in bl and "已初改·待复核的 1 条" in bl,
        "处理记录显示要求、初改阶段与待复核的批注")
     page.click(f'#batchList [data-breview="{lb["seq"]}"]')
     ok(page.is_visible("#hand") and f"请 Agent 复核第 {lb['seq']} 批" in page.inner_text("#handTitle")
        and not page.is_visible("#hTargetRow"), "点「请 Agent 复核」打开复核请求（不再问做到哪一步）")
     page.fill("#handMsg", "重点看标题")
     page.click("#doHand")
-    page.wait_for_timeout(600)
-    lb = last_batch()
-    ok(lb["status"] == "review" and lb["reviewMessage"] == "重点看标题", "请求复核落盘：等待复核接收")
+    ok(wait_until(lambda: last_batch()["status"] == "review" and last_batch()["reviewMessage"] == "重点看标题", page, 8,
+                  condition="复核请求落盘（handoff.json 最新批次）"), "请求复核落盘：等待复核接收")
     wout = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "wait", str(sdir), "--timeout", "5", "--stage", "review",
                            "--by", "opus-复核"], capture_output=True, text=True).stdout
     ok("收到复核请求" in wout and "重点看标题" in wout and target["id"] in wout, "复核者 wait --stage review 收到复核请求与待复核批注")
     cli("review", str(sdir), target["id"], "--return", "--note", "口径要你定", "--by", "opus-复核")
     cli("done", str(sdir), "--summary", "退回 1 条", "--by", "opus-复核")
-    page.wait_for_timeout(4800)
+    returned = wait_until(lambda: "退回给你" in page.inner_text(f'#nlist [data-note="{target["id"]}"]'), page, 10,
+                          condition="轮询应用退回状态（卡片显示「退回给你」）")
     card = page.inner_text(f'#nlist [data-note="{target["id"]}"]')
-    ok("退回给你" in card and "口径要你定" in card and "已初改" not in card.split("痕迹")[0],
+    ok(returned and "口径要你定" in card and "已初改" not in card.split("痕迹")[0],
        "复核者退回：批注回到未处理，痕迹里写明退回原因")
     page.keyboard.press("Escape")
     page.keyboard.press("a")
     page.check('input[name="htarget"][value="review"]')
+    seq_before = last_batch()["seq"]
     page.click("#doHand")
-    page.wait_for_timeout(400)
+    # 先等这次提交落盘（seq 前进），再让 CLI 认领，避免测试准备与页面写入竞争
+    wait_until(lambda: last_batch()["seq"] > seq_before, page, 8, condition="新提交落盘（seq 前进）")
     cli("claim", str(sdir), "--by", "claude")
     cli("resolve", str(sdir), target["id"], "--note", "按你上次说的口径改", "--by", "claude")
     cli("done", str(sdir), "--by", "claude")
-    page.wait_for_timeout(4800)
     page.keyboard.press("a")
-    page.wait_for_timeout(200)
     seq2 = last_batch()["seq"]
+    wait_dom(page, 's => !!document.querySelector(`#handDrafts [data-hfinal="${s}"]`)', 10,
+             arg=str(seq2), condition="待复核弹窗出现「直接定稿」按钮（轮询应用批次状态后）")
     page.click(f'#handDrafts [data-hfinal="{seq2}"]')
-    page.wait_for_timeout(800)
+    finalized = wait_until(lambda: last_batch()["status"] == "done", page, 8, condition="直接定稿落盘（批次 done）")
     lb = last_batch()
     fin = [n for n in disk_notes(sdir) if n["id"] == target["id"]][0]
-    ok(lb["status"] == "done" and fin["status"] == "resolved" and fin["trail"][-1]["action"] == "accepted",
+    ok(finalized and lb["status"] == "done" and fin["status"] == "resolved" and fin["trail"][-1]["action"] == "accepted",
        "「交给 Agent」弹窗顶部的「直接定稿」：跳过复核，批注定为已处理并记为你定稿")
     page.keyboard.press("Escape")
 
@@ -2286,34 +2423,38 @@ def server_mode_checks(browser, tmp: Path):
     os.chmod(sdir, 0o500)
     try:
         add_note(page, "写盘失败时的批注")
-        ok("写盘失败时的批注" in page.inner_text("#nlist") and "待补传 1" in page.inner_text("#mode"),
+        ok(wait_until(lambda: "写盘失败时的批注" in page.inner_text("#nlist")
+                      and "待补传 1" in page.inner_text("#mode"), page, 10,
+                      condition="写入失败后批注留在页面并计入待补传"),
            "服务端写入失败（5xx）时批注仍在页面上并进入待补传")
     finally:
         os.chmod(sdir, 0o700)
-    page.wait_for_timeout(5500)
-    ok(any(n["text"] == "写盘失败时的批注" for n in disk_notes(sdir)) and "待补传" not in page.inner_text("#mode"),
-       "目录恢复可写后自动补传")
+    ok(wait_until(lambda: any(n["text"] == "写盘失败时的批注" for n in disk_notes(sdir))
+                  and "待补传" not in page.inner_text("#mode"), page, 10,
+                  condition="恢复可写后轮询补传落盘并清空待补传"), "目录恢复可写后自动补传")
     page.evaluate("() => setQuote('甲'.repeat(299) + '📈尾巴', '讲稿')")
     add_note(page, "引用里有被截断的 emoji")
     add_note(page, "后面一条普通批注")
-    page.wait_for_timeout(600)
-    texts = [n["text"] for n in disk_notes(sdir)]
-    ok("引用里有被截断的 emoji" in texts and "后面一条普通批注" in texts and "待补传" not in page.inner_text("#mode"),
+    ok(wait_until(lambda: (lambda texts: "引用里有被截断的 emoji" in texts and "后面一条普通批注" in texts)(
+                      [n["text"] for n in disk_notes(sdir)])
+                  and "待补传" not in page.inner_text("#mode"), page, 8,
+                  condition="两条批注都落盘且待补传清空"),
        "引用含 emoji 被截断时照常保存，不卡住后面的批注")
 
     # ---------- 6. 服务卡死 ----------
     os.kill(srv.pid, signal.SIGSTOP)
     try:
         add_note(page, "服务卡住时写的批注")
-        page.wait_for_timeout(9500)
-        ok("待补传" in page.inner_text("#mode"), "服务卡住时请求超时，批注转入待补传")
+        # 时间边界：页面 8 秒请求超时真正走完，批注才转待补传——以模式变化为超时发生的证据
+        ok(wait_until(lambda: "待补传" in page.inner_text("#mode"), page, 14,
+                      condition="请求超时（页面 8 秒上限）后转入待补传"), "服务卡住时请求超时，批注转入待补传")
     finally:
         os.kill(srv.pid, signal.SIGKILL)
         srv.communicate()
     (sdir / ".annotation-server.json").unlink(missing_ok=True)
     srv = start_server(sdir, port)
-    page.wait_for_timeout(5500)
-    ok(any(n["text"] == "服务卡住时写的批注" for n in disk_notes(sdir)), "重启服务后补传到 notes.json")
+    ok(wait_until(lambda: any(n["text"] == "服务卡住时写的批注" for n in disk_notes(sdir)), page, 10,
+                  condition="重启后轮询补传落盘"), "重启服务后补传到 notes.json")
 
     # ---------- 7. 同一端口换成另一份审阅 ----------
     other = tmp / "other_review"
@@ -2321,12 +2462,14 @@ def server_mode_checks(browser, tmp: Path):
     stop(srv)
     srv_b = start_server(other, port)
     add_note(page, "切换后立刻写的 A 稿意见")   # 页面还以为连着 A
-    page.wait_for_timeout(1500)
-    ok(not any("A 稿" in n["text"] for n in disk_notes(other)), "服务刚切换就写，也不会写进 B 稿的 notes.json")
     # A 停掉的空档里若刚好轮询过，页面先是「服务未连接」，下一次轮询（4 秒内）才认出端口上换成了 B
-    # （对照页的 CSP 不放行 eval，wait_for_function 用不了，在这边轮询）
-    wait_until(lambda: "服务不匹配" in page.inner_text("#mode"), page, 8)
-    ok("服务不匹配" in page.inner_text("#mode") and "待补传" in page.inner_text("#mode"), "页面显示「服务不匹配」，改动留在待补传")
+    # 若已发出写请求，还要等 flush 的拒绝处理结束；若没有发出，则由新轮询确认不匹配。
+    mismatch_settled = wait_dom(page, "() => mode === 'mismatch' && flushing === null", 10,
+                               condition="确认服务不匹配且本次补传处理结束")
+    ok(mismatch_settled and not any("A 稿" in n["text"] for n in disk_notes(other)),
+       "服务刚切换就写，也不会写进 B 稿的 notes.json")
+    ok(mismatch_settled and "服务不匹配" in page.inner_text("#mode") and "待补传" in page.inner_text("#mode"),
+       "页面显示「服务不匹配」，改动留在待补传")
     rid_a = json.loads((sdir / "review.json").read_text())["reviewId"]
     wait_until(lambda: "《B 稿票面》" in page.inner_text("#srvText"), page, 5)   # 提示条先显示，再异步问端口上是谁
     bar = page.inner_text("#srvBar")
@@ -2353,8 +2496,8 @@ def server_mode_checks(browser, tmp: Path):
     pb.close()
     stop(srv_b)
     srv = start_server(sdir, port)
-    page.wait_for_timeout(5500)
-    ok(any(n["text"] == "切换后立刻写的 A 稿意见" for n in disk_notes(sdir)), "换回本审阅的服务后补传到正确的位置")
+    ok(wait_until(lambda: any(n["text"] == "切换后立刻写的 A 稿意见" for n in disk_notes(sdir)), page, 10,
+                  condition="换回本审阅服务后轮询补传落盘"), "换回本审阅的服务后补传到正确的位置")
 
     # ---------- 8. 恶意网页与导入 ----------
     evil_dir = tmp / "evil"
@@ -2384,13 +2527,18 @@ const T = "http://127.0.0.1:{port}";
     threading.Thread(target=ehttp.serve_forever, daemon=True).start()
     before = len(disk_notes(sdir))
     hbefore = len(json.loads((sdir / "handoff.json").read_text())["items"])
+    log_path = sdir / "server.log"
+    rejects_before = log_path.read_text(encoding="utf-8").count("[reject]") if log_path.exists() else 0
     epage = ctx.new_page()
     epage.goto(f"http://localhost:{eport}/")  # 另一个来源
     epage.wait_for_function("window.results && window.results.done", timeout=10000)
-    epage.wait_for_timeout(1500)
+    # 先证明恶意请求确实到达服务并被拒绝（server.log 出现新的 [reject]），再核对什么都没写进去
+    got_reject = wait_until(lambda: (log_path.read_text(encoding="utf-8").count("[reject]")
+                                     if log_path.exists() else 0) > rejects_before,
+                            epage, 10, condition="server.log 出现新的 [reject]（恶意请求被拒）")
     res = epage.evaluate("window.results")
     after = disk_notes(sdir)
-    ok(len(after) == before and not any("EVIL" in n["text"] for n in after)
+    ok(got_reject and len(after) == before and not any("EVIL" in n["text"] for n in after)
        and len(json.loads((sdir / "handoff.json").read_text())["items"]) == hbefore,
        f"跨源网页的 fetch / no-cors / 表单写入全部失败（{res.get('json')}, {res.get('nocors')}）")
     ok(res.get("read") == "blocked", "跨源网页读不到批注内容")
@@ -2405,21 +2553,21 @@ const T = "http://127.0.0.1:{port}";
     page.click("#openImp")
     page.fill("#impText", json.dumps({"notes": evil}, ensure_ascii=False))
     page.click("#doImp")
-    page.wait_for_timeout(900)
+    shown = wait_dom(page, JS_LIST_TEXT, 8, arg="注入测试", condition="导入的批注显示在列表（不执行脚本）")
     page.keyboard.press("Escape")
     pwned = page.evaluate("[window.__p_id, window.__p_txt, window.__p_q]")
-    ok(pwned == [None, None, None] and "注入测试" in page.inner_text("#nlist"), "导入带恶意 id / 内容的批注：照常显示为文字，不执行脚本")
-    imported = [n for n in disk_notes(sdir) if "注入测试" in n["text"]]
-    ok(imported and imported[0]["id"].replace("-", "").replace("_", "").isalnum(), "恶意 id 落盘前被重新生成")
+    ok(shown and pwned == [None, None, None] and "注入测试" in page.inner_text("#nlist"), "导入带恶意 id / 内容的批注：照常显示为文字，不执行脚本")
+    imported = wait_until(lambda: [n for n in disk_notes(sdir) if "注入测试" in n["text"]], page, 8,
+                          condition="导入的批注落盘")
+    ok(bool(imported) and imported[0]["id"].replace("-", "").replace("_", "").isalnum(), "恶意 id 落盘前被重新生成")
     page.keyboard.press("n")
     page.click("#openImp")
     page.fill("#impText", import_md)
     page.click("#doImp")
-    page.wait_for_timeout(900)
-    texts = [n["text"] for n in disk_notes(sdir)]
-    ok("旧版批注甲" in texts and "file 模式批注" in texts, "粘贴导出的 Markdown 导入到服务端 notes.json")
+    ok(wait_until(lambda: (lambda texts: "旧版批注甲" in texts and "file 模式批注" in texts)([n["text"] for n in disk_notes(sdir)]),
+                  page, 8, condition="粘贴导入的批注落盘"), "粘贴导出的 Markdown 导入到服务端 notes.json")
     resolved = [n for n in disk_notes(sdir) if n["text"] == "file 模式批注"]
-    ok(resolved and resolved[0]["status"] == "resolved", "导入保留已处理状态")
+    ok(bool(resolved) and resolved[0]["status"] == "resolved", "导入保留已处理状态")
     ctx.close()
     if srv.poll() is None:
         stop(srv)
@@ -2491,6 +2639,7 @@ def main() -> int:
                     started_wall = iso_now()
                     print("=== 场景 %s：%s ===" % (sid, scenario.title), flush=True)
                     status, message = "passed", None
+                    e2e_waits.set_scenario(sid)   # 等待超时的诊断要能报出场景 ID
                     try:
                         SCENARIO_RUNNERS[sid](browser, tmp)
                     except KeyboardInterrupt:
@@ -2505,6 +2654,8 @@ def main() -> int:
                             status = "error"
                             message = "%s: %s" % (type(exc).__name__, exc)
                             traceback.print_exc()
+                    finally:
+                        e2e_waits.set_scenario(None)
                     done = RESULTS[base:]
                     failed = sum(1 for good, _ in done if not good)
                     if status == "passed" and failed:

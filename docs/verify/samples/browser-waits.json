@@ -1,0 +1,1141 @@
+{
+  "schema": "ae-browser-wait-samples/1",
+  "provenance": "摘录既有合成浏览器日志的 AE-SCENARIOS 行；日志没有记录运行环境和提交 SHA。最终候选3次连续运行，并非与基线交替。",
+  "summary": {
+    "baseline": {
+      "scenario_seconds_totals": [
+        198.233718,
+        198.38235899999998,
+        198.166103
+      ],
+      "median_seconds": 198.233718
+    },
+    "candidate": {
+      "scenario_seconds_totals": [
+        104.676716,
+        104.620061,
+        104.652822
+      ],
+      "median_seconds": 104.652822
+    },
+    "reduction_percent": 47.207355511538154
+  },
+  "samples": [
+    {
+      "group": "baseline",
+      "source_log": "base_run1.log",
+      "source_sha256": "ec26dbb6be84b978330023760c66766f6fb282c511bc76eef54562732049a406",
+      "reported_commit": "50c7a72",
+      "commit_evidence": "原 PR 文档注明；原日志未记录 SHA",
+      "environment": null,
+      "summary": {
+        "mode": "full",
+        "source": "default",
+        "requested": [],
+        "plan": [
+          "installed-delivery",
+          "locale-live-controls",
+          "skill-search",
+          "skill-recommendations",
+          "skill-i18n",
+          "full-check",
+          "locale-loop",
+          "english-script",
+          "handoff-i18n",
+          "export-import",
+          "file-mode",
+          "css-fidelity",
+          "server-mode"
+        ],
+        "scenarios": [
+          {
+            "id": "installed-delivery",
+            "status": "passed",
+            "checks": {
+              "total": 71,
+              "passed": 71,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T15:54:44+0800",
+            "ended_at": "2026-11-01T15:54:57+0800",
+            "seconds": 13.070878
+          },
+          {
+            "id": "locale-live-controls",
+            "status": "passed",
+            "checks": {
+              "total": 17,
+              "passed": 17,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T15:54:57+0800",
+            "ended_at": "2026-11-01T15:54:57+0800",
+            "seconds": 0.392407
+          },
+          {
+            "id": "skill-search",
+            "status": "passed",
+            "checks": {
+              "total": 36,
+              "passed": 36,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T15:54:57+0800",
+            "ended_at": "2026-11-01T15:55:03+0800",
+            "seconds": 5.708224
+          },
+          {
+            "id": "skill-recommendations",
+            "status": "passed",
+            "checks": {
+              "total": 18,
+              "passed": 18,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T15:55:03+0800",
+            "ended_at": "2026-11-01T15:55:04+0800",
+            "seconds": 1.180043
+          },
+          {
+            "id": "skill-i18n",
+            "status": "passed",
+            "checks": {
+              "total": 60,
+              "passed": 60,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T15:55:04+0800",
+            "ended_at": "2026-11-01T15:55:06+0800",
+            "seconds": 1.842868
+          },
+          {
+            "id": "full-check",
+            "status": "passed",
+            "checks": {
+              "total": 17,
+              "passed": 17,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T15:55:06+0800",
+            "ended_at": "2026-11-01T15:55:23+0800",
+            "seconds": 17.464016
+          },
+          {
+            "id": "locale-loop",
+            "status": "passed",
+            "checks": {
+              "total": 189,
+              "passed": 189,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T15:55:23+0800",
+            "ended_at": "2026-11-01T15:55:30+0800",
+            "seconds": 6.425022
+          },
+          {
+            "id": "english-script",
+            "status": "passed",
+            "checks": {
+              "total": 12,
+              "passed": 12,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T15:55:30+0800",
+            "ended_at": "2026-11-01T15:55:31+0800",
+            "seconds": 1.095963
+          },
+          {
+            "id": "handoff-i18n",
+            "status": "passed",
+            "checks": {
+              "total": 58,
+              "passed": 58,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T15:55:31+0800",
+            "ended_at": "2026-11-01T15:55:45+0800",
+            "seconds": 14.007635
+          },
+          {
+            "id": "export-import",
+            "status": "passed",
+            "checks": {
+              "total": 25,
+              "passed": 25,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T15:55:45+0800",
+            "ended_at": "2026-11-01T15:55:50+0800",
+            "seconds": 4.836772
+          },
+          {
+            "id": "file-mode",
+            "status": "passed",
+            "checks": {
+              "total": 10,
+              "passed": 10,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T15:55:50+0800",
+            "ended_at": "2026-11-01T15:55:54+0800",
+            "seconds": 4.441478
+          },
+          {
+            "id": "css-fidelity",
+            "status": "passed",
+            "checks": {
+              "total": 5,
+              "passed": 5,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T15:55:54+0800",
+            "ended_at": "2026-11-01T15:55:54+0800",
+            "seconds": 0.158588
+          },
+          {
+            "id": "server-mode",
+            "status": "passed",
+            "checks": {
+              "total": 111,
+              "passed": 111,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T15:55:54+0800",
+            "ended_at": "2026-11-01T15:58:02+0800",
+            "seconds": 127.609824
+          }
+        ]
+      }
+    },
+    {
+      "group": "baseline",
+      "source_log": "base_run2.log",
+      "source_sha256": "2327dd5b5e7e1631445349d58efd6deef6f0973daa61a987bb5ab43d7e382d16",
+      "reported_commit": "50c7a72",
+      "commit_evidence": "原 PR 文档注明；原日志未记录 SHA",
+      "environment": null,
+      "summary": {
+        "mode": "full",
+        "source": "default",
+        "requested": [],
+        "plan": [
+          "installed-delivery",
+          "locale-live-controls",
+          "skill-search",
+          "skill-recommendations",
+          "skill-i18n",
+          "full-check",
+          "locale-loop",
+          "english-script",
+          "handoff-i18n",
+          "export-import",
+          "file-mode",
+          "css-fidelity",
+          "server-mode"
+        ],
+        "scenarios": [
+          {
+            "id": "installed-delivery",
+            "status": "passed",
+            "checks": {
+              "total": 71,
+              "passed": 71,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:03:29+0800",
+            "ended_at": "2026-11-01T16:03:42+0800",
+            "seconds": 13.113282
+          },
+          {
+            "id": "locale-live-controls",
+            "status": "passed",
+            "checks": {
+              "total": 17,
+              "passed": 17,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:03:42+0800",
+            "ended_at": "2026-11-01T16:03:43+0800",
+            "seconds": 0.386433
+          },
+          {
+            "id": "skill-search",
+            "status": "passed",
+            "checks": {
+              "total": 36,
+              "passed": 36,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:03:43+0800",
+            "ended_at": "2026-11-01T16:03:49+0800",
+            "seconds": 5.750176
+          },
+          {
+            "id": "skill-recommendations",
+            "status": "passed",
+            "checks": {
+              "total": 18,
+              "passed": 18,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:03:49+0800",
+            "ended_at": "2026-11-01T16:03:50+0800",
+            "seconds": 1.165365
+          },
+          {
+            "id": "skill-i18n",
+            "status": "passed",
+            "checks": {
+              "total": 60,
+              "passed": 60,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:03:50+0800",
+            "ended_at": "2026-11-01T16:03:52+0800",
+            "seconds": 1.830653
+          },
+          {
+            "id": "full-check",
+            "status": "passed",
+            "checks": {
+              "total": 17,
+              "passed": 17,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:03:52+0800",
+            "ended_at": "2026-11-01T16:04:09+0800",
+            "seconds": 17.54771
+          },
+          {
+            "id": "locale-loop",
+            "status": "passed",
+            "checks": {
+              "total": 189,
+              "passed": 189,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:04:09+0800",
+            "ended_at": "2026-11-01T16:04:15+0800",
+            "seconds": 6.432595
+          },
+          {
+            "id": "english-script",
+            "status": "passed",
+            "checks": {
+              "total": 12,
+              "passed": 12,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:04:15+0800",
+            "ended_at": "2026-11-01T16:04:17+0800",
+            "seconds": 1.094746
+          },
+          {
+            "id": "handoff-i18n",
+            "status": "passed",
+            "checks": {
+              "total": 58,
+              "passed": 58,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:04:17+0800",
+            "ended_at": "2026-11-01T16:04:31+0800",
+            "seconds": 14.024759
+          },
+          {
+            "id": "export-import",
+            "status": "passed",
+            "checks": {
+              "total": 25,
+              "passed": 25,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:04:31+0800",
+            "ended_at": "2026-11-01T16:04:35+0800",
+            "seconds": 4.839955
+          },
+          {
+            "id": "file-mode",
+            "status": "passed",
+            "checks": {
+              "total": 10,
+              "passed": 10,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:04:35+0800",
+            "ended_at": "2026-11-01T16:04:40+0800",
+            "seconds": 4.441731
+          },
+          {
+            "id": "css-fidelity",
+            "status": "passed",
+            "checks": {
+              "total": 5,
+              "passed": 5,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:04:40+0800",
+            "ended_at": "2026-11-01T16:04:40+0800",
+            "seconds": 0.159733
+          },
+          {
+            "id": "server-mode",
+            "status": "passed",
+            "checks": {
+              "total": 111,
+              "passed": 111,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:04:40+0800",
+            "ended_at": "2026-11-01T16:06:48+0800",
+            "seconds": 127.595221
+          }
+        ]
+      }
+    },
+    {
+      "group": "baseline",
+      "source_log": "base_run3.log",
+      "source_sha256": "baf4f31fe1a7fe0b49e2881565cf397c46127b599229b53c5f8e4f34f5024dd4",
+      "reported_commit": "50c7a72",
+      "commit_evidence": "原 PR 文档注明；原日志未记录 SHA",
+      "environment": null,
+      "summary": {
+        "mode": "full",
+        "source": "default",
+        "requested": [],
+        "plan": [
+          "installed-delivery",
+          "locale-live-controls",
+          "skill-search",
+          "skill-recommendations",
+          "skill-i18n",
+          "full-check",
+          "locale-loop",
+          "english-script",
+          "handoff-i18n",
+          "export-import",
+          "file-mode",
+          "css-fidelity",
+          "server-mode"
+        ],
+        "scenarios": [
+          {
+            "id": "installed-delivery",
+            "status": "passed",
+            "checks": {
+              "total": 71,
+              "passed": 71,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:08:56+0800",
+            "ended_at": "2026-11-01T16:09:09+0800",
+            "seconds": 13.111135
+          },
+          {
+            "id": "locale-live-controls",
+            "status": "passed",
+            "checks": {
+              "total": 17,
+              "passed": 17,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:09:09+0800",
+            "ended_at": "2026-11-01T16:09:10+0800",
+            "seconds": 0.386565
+          },
+          {
+            "id": "skill-search",
+            "status": "passed",
+            "checks": {
+              "total": 36,
+              "passed": 36,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:09:10+0800",
+            "ended_at": "2026-11-01T16:09:15+0800",
+            "seconds": 5.703769
+          },
+          {
+            "id": "skill-recommendations",
+            "status": "passed",
+            "checks": {
+              "total": 18,
+              "passed": 18,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:09:15+0800",
+            "ended_at": "2026-11-01T16:09:17+0800",
+            "seconds": 1.173972
+          },
+          {
+            "id": "skill-i18n",
+            "status": "passed",
+            "checks": {
+              "total": 60,
+              "passed": 60,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:09:17+0800",
+            "ended_at": "2026-11-01T16:09:18+0800",
+            "seconds": 1.83864
+          },
+          {
+            "id": "full-check",
+            "status": "passed",
+            "checks": {
+              "total": 17,
+              "passed": 17,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:09:18+0800",
+            "ended_at": "2026-11-01T16:09:36+0800",
+            "seconds": 17.509317
+          },
+          {
+            "id": "locale-loop",
+            "status": "passed",
+            "checks": {
+              "total": 189,
+              "passed": 189,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:09:36+0800",
+            "ended_at": "2026-11-01T16:09:42+0800",
+            "seconds": 6.316483
+          },
+          {
+            "id": "english-script",
+            "status": "passed",
+            "checks": {
+              "total": 12,
+              "passed": 12,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:09:42+0800",
+            "ended_at": "2026-11-01T16:09:43+0800",
+            "seconds": 1.03651
+          },
+          {
+            "id": "handoff-i18n",
+            "status": "passed",
+            "checks": {
+              "total": 58,
+              "passed": 58,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:09:43+0800",
+            "ended_at": "2026-11-01T16:09:57+0800",
+            "seconds": 13.991625
+          },
+          {
+            "id": "export-import",
+            "status": "passed",
+            "checks": {
+              "total": 25,
+              "passed": 25,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:09:57+0800",
+            "ended_at": "2026-11-01T16:10:02+0800",
+            "seconds": 4.857703
+          },
+          {
+            "id": "file-mode",
+            "status": "passed",
+            "checks": {
+              "total": 10,
+              "passed": 10,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:10:02+0800",
+            "ended_at": "2026-11-01T16:10:07+0800",
+            "seconds": 4.437903
+          },
+          {
+            "id": "css-fidelity",
+            "status": "passed",
+            "checks": {
+              "total": 5,
+              "passed": 5,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:10:07+0800",
+            "ended_at": "2026-11-01T16:10:07+0800",
+            "seconds": 0.159131
+          },
+          {
+            "id": "server-mode",
+            "status": "passed",
+            "checks": {
+              "total": 111,
+              "passed": 111,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:10:07+0800",
+            "ended_at": "2026-11-01T16:12:14+0800",
+            "seconds": 127.64335
+          }
+        ]
+      }
+    },
+    {
+      "group": "candidate",
+      "source_log": "cand2_run1.log",
+      "source_sha256": "5c72f4c9623ce0faeeade8fed86ab192f7bca25c132d74d8a1a5559e01232bab",
+      "reported_commit": "136d21a",
+      "commit_evidence": "原 PR 文档注明；原日志未记录 SHA",
+      "environment": null,
+      "summary": {
+        "mode": "full",
+        "source": "default",
+        "requested": [],
+        "plan": [
+          "installed-delivery",
+          "locale-live-controls",
+          "skill-search",
+          "skill-recommendations",
+          "skill-i18n",
+          "full-check",
+          "locale-loop",
+          "english-script",
+          "handoff-i18n",
+          "export-import",
+          "file-mode",
+          "css-fidelity",
+          "server-mode"
+        ],
+        "scenarios": [
+          {
+            "id": "installed-delivery",
+            "status": "passed",
+            "checks": {
+              "total": 71,
+              "passed": 71,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:22:10+0800",
+            "ended_at": "2026-11-01T16:22:19+0800",
+            "seconds": 8.587677
+          },
+          {
+            "id": "locale-live-controls",
+            "status": "passed",
+            "checks": {
+              "total": 17,
+              "passed": 17,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:22:19+0800",
+            "ended_at": "2026-11-01T16:22:19+0800",
+            "seconds": 0.216249
+          },
+          {
+            "id": "skill-search",
+            "status": "passed",
+            "checks": {
+              "total": 36,
+              "passed": 36,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:22:19+0800",
+            "ended_at": "2026-11-01T16:22:24+0800",
+            "seconds": 5.017395
+          },
+          {
+            "id": "skill-recommendations",
+            "status": "passed",
+            "checks": {
+              "total": 18,
+              "passed": 18,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:22:24+0800",
+            "ended_at": "2026-11-01T16:22:25+0800",
+            "seconds": 1.180432
+          },
+          {
+            "id": "skill-i18n",
+            "status": "passed",
+            "checks": {
+              "total": 60,
+              "passed": 60,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:22:25+0800",
+            "ended_at": "2026-11-01T16:22:26+0800",
+            "seconds": 1.00239
+          },
+          {
+            "id": "full-check",
+            "status": "passed",
+            "checks": {
+              "total": 17,
+              "passed": 17,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:22:26+0800",
+            "ended_at": "2026-11-01T16:22:43+0800",
+            "seconds": 16.766342
+          },
+          {
+            "id": "locale-loop",
+            "status": "passed",
+            "checks": {
+              "total": 189,
+              "passed": 189,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:22:43+0800",
+            "ended_at": "2026-11-01T16:22:47+0800",
+            "seconds": 3.651897
+          },
+          {
+            "id": "english-script",
+            "status": "passed",
+            "checks": {
+              "total": 12,
+              "passed": 12,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:22:47+0800",
+            "ended_at": "2026-11-01T16:22:47+0800",
+            "seconds": 0.275882
+          },
+          {
+            "id": "handoff-i18n",
+            "status": "passed",
+            "checks": {
+              "total": 58,
+              "passed": 58,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:22:47+0800",
+            "ended_at": "2026-11-01T16:23:00+0800",
+            "seconds": 12.622771
+          },
+          {
+            "id": "export-import",
+            "status": "passed",
+            "checks": {
+              "total": 25,
+              "passed": 25,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:23:00+0800",
+            "ended_at": "2026-11-01T16:23:00+0800",
+            "seconds": 0.657918
+          },
+          {
+            "id": "file-mode",
+            "status": "passed",
+            "checks": {
+              "total": 10,
+              "passed": 10,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:23:00+0800",
+            "ended_at": "2026-11-01T16:23:01+0800",
+            "seconds": 1.075178
+          },
+          {
+            "id": "css-fidelity",
+            "status": "passed",
+            "checks": {
+              "total": 5,
+              "passed": 5,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:23:01+0800",
+            "ended_at": "2026-11-01T16:23:02+0800",
+            "seconds": 0.142124
+          },
+          {
+            "id": "server-mode",
+            "status": "passed",
+            "checks": {
+              "total": 111,
+              "passed": 111,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:23:02+0800",
+            "ended_at": "2026-11-01T16:23:55+0800",
+            "seconds": 53.480461
+          }
+        ]
+      }
+    },
+    {
+      "group": "candidate",
+      "source_log": "cand2_run2.log",
+      "source_sha256": "d176bd2eff0cd5be7cf5f81606e5775fbe5dbc21edc5d0531d7428714baf5430",
+      "reported_commit": "136d21a",
+      "commit_evidence": "原 PR 文档注明；原日志未记录 SHA",
+      "environment": null,
+      "summary": {
+        "mode": "full",
+        "source": "default",
+        "requested": [],
+        "plan": [
+          "installed-delivery",
+          "locale-live-controls",
+          "skill-search",
+          "skill-recommendations",
+          "skill-i18n",
+          "full-check",
+          "locale-loop",
+          "english-script",
+          "handoff-i18n",
+          "export-import",
+          "file-mode",
+          "css-fidelity",
+          "server-mode"
+        ],
+        "scenarios": [
+          {
+            "id": "installed-delivery",
+            "status": "passed",
+            "checks": {
+              "total": 71,
+              "passed": 71,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:26:57+0800",
+            "ended_at": "2026-11-01T16:27:06+0800",
+            "seconds": 8.559886
+          },
+          {
+            "id": "locale-live-controls",
+            "status": "passed",
+            "checks": {
+              "total": 17,
+              "passed": 17,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:27:06+0800",
+            "ended_at": "2026-11-01T16:27:06+0800",
+            "seconds": 0.220246
+          },
+          {
+            "id": "skill-search",
+            "status": "passed",
+            "checks": {
+              "total": 36,
+              "passed": 36,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:27:06+0800",
+            "ended_at": "2026-11-01T16:27:11+0800",
+            "seconds": 5.004881
+          },
+          {
+            "id": "skill-recommendations",
+            "status": "passed",
+            "checks": {
+              "total": 18,
+              "passed": 18,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:27:11+0800",
+            "ended_at": "2026-11-01T16:27:12+0800",
+            "seconds": 1.182648
+          },
+          {
+            "id": "skill-i18n",
+            "status": "passed",
+            "checks": {
+              "total": 60,
+              "passed": 60,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:27:12+0800",
+            "ended_at": "2026-11-01T16:27:13+0800",
+            "seconds": 0.998049
+          },
+          {
+            "id": "full-check",
+            "status": "passed",
+            "checks": {
+              "total": 17,
+              "passed": 17,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:27:13+0800",
+            "ended_at": "2026-11-01T16:27:30+0800",
+            "seconds": 16.714534
+          },
+          {
+            "id": "locale-loop",
+            "status": "passed",
+            "checks": {
+              "total": 189,
+              "passed": 189,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:27:30+0800",
+            "ended_at": "2026-11-01T16:27:33+0800",
+            "seconds": 3.752954
+          },
+          {
+            "id": "english-script",
+            "status": "passed",
+            "checks": {
+              "total": 12,
+              "passed": 12,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:27:33+0800",
+            "ended_at": "2026-11-01T16:27:34+0800",
+            "seconds": 0.277079
+          },
+          {
+            "id": "handoff-i18n",
+            "status": "passed",
+            "checks": {
+              "total": 58,
+              "passed": 58,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:27:34+0800",
+            "ended_at": "2026-11-01T16:27:46+0800",
+            "seconds": 12.622463
+          },
+          {
+            "id": "export-import",
+            "status": "passed",
+            "checks": {
+              "total": 25,
+              "passed": 25,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:27:46+0800",
+            "ended_at": "2026-11-01T16:27:47+0800",
+            "seconds": 0.641289
+          },
+          {
+            "id": "file-mode",
+            "status": "passed",
+            "checks": {
+              "total": 10,
+              "passed": 10,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:27:47+0800",
+            "ended_at": "2026-11-01T16:27:48+0800",
+            "seconds": 1.062269
+          },
+          {
+            "id": "css-fidelity",
+            "status": "passed",
+            "checks": {
+              "total": 5,
+              "passed": 5,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:27:48+0800",
+            "ended_at": "2026-11-01T16:27:48+0800",
+            "seconds": 0.140477
+          },
+          {
+            "id": "server-mode",
+            "status": "passed",
+            "checks": {
+              "total": 111,
+              "passed": 111,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:27:48+0800",
+            "ended_at": "2026-11-01T16:28:42+0800",
+            "seconds": 53.443286
+          }
+        ]
+      }
+    },
+    {
+      "group": "candidate",
+      "source_log": "cand2_run3.log",
+      "source_sha256": "1f805996cdc9bc352e95b24c35954ca5337d6171600bea3739666d51f1e2a7f5",
+      "reported_commit": "136d21a",
+      "commit_evidence": "原 PR 文档注明；原日志未记录 SHA",
+      "environment": null,
+      "summary": {
+        "mode": "full",
+        "source": "default",
+        "requested": [],
+        "plan": [
+          "installed-delivery",
+          "locale-live-controls",
+          "skill-search",
+          "skill-recommendations",
+          "skill-i18n",
+          "full-check",
+          "locale-loop",
+          "english-script",
+          "handoff-i18n",
+          "export-import",
+          "file-mode",
+          "css-fidelity",
+          "server-mode"
+        ],
+        "scenarios": [
+          {
+            "id": "installed-delivery",
+            "status": "passed",
+            "checks": {
+              "total": 71,
+              "passed": 71,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:28:48+0800",
+            "ended_at": "2026-11-01T16:28:56+0800",
+            "seconds": 8.447658
+          },
+          {
+            "id": "locale-live-controls",
+            "status": "passed",
+            "checks": {
+              "total": 17,
+              "passed": 17,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:28:56+0800",
+            "ended_at": "2026-11-01T16:28:56+0800",
+            "seconds": 0.223633
+          },
+          {
+            "id": "skill-search",
+            "status": "passed",
+            "checks": {
+              "total": 36,
+              "passed": 36,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:28:56+0800",
+            "ended_at": "2026-11-01T16:29:02+0800",
+            "seconds": 5.040022
+          },
+          {
+            "id": "skill-recommendations",
+            "status": "passed",
+            "checks": {
+              "total": 18,
+              "passed": 18,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:29:02+0800",
+            "ended_at": "2026-11-01T16:29:03+0800",
+            "seconds": 1.162672
+          },
+          {
+            "id": "skill-i18n",
+            "status": "passed",
+            "checks": {
+              "total": 60,
+              "passed": 60,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:29:03+0800",
+            "ended_at": "2026-11-01T16:29:04+0800",
+            "seconds": 1.03486
+          },
+          {
+            "id": "full-check",
+            "status": "passed",
+            "checks": {
+              "total": 17,
+              "passed": 17,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:29:04+0800",
+            "ended_at": "2026-11-01T16:29:20+0800",
+            "seconds": 16.716295
+          },
+          {
+            "id": "locale-loop",
+            "status": "passed",
+            "checks": {
+              "total": 189,
+              "passed": 189,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:29:20+0800",
+            "ended_at": "2026-11-01T16:29:24+0800",
+            "seconds": 3.71836
+          },
+          {
+            "id": "english-script",
+            "status": "passed",
+            "checks": {
+              "total": 12,
+              "passed": 12,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:29:24+0800",
+            "ended_at": "2026-11-01T16:29:24+0800",
+            "seconds": 0.287648
+          },
+          {
+            "id": "handoff-i18n",
+            "status": "passed",
+            "checks": {
+              "total": 58,
+              "passed": 58,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:29:24+0800",
+            "ended_at": "2026-11-01T16:29:37+0800",
+            "seconds": 12.640191
+          },
+          {
+            "id": "export-import",
+            "status": "passed",
+            "checks": {
+              "total": 25,
+              "passed": 25,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:29:37+0800",
+            "ended_at": "2026-11-01T16:29:38+0800",
+            "seconds": 0.640348
+          },
+          {
+            "id": "file-mode",
+            "status": "passed",
+            "checks": {
+              "total": 10,
+              "passed": 10,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:29:38+0800",
+            "ended_at": "2026-11-01T16:29:39+0800",
+            "seconds": 1.069297
+          },
+          {
+            "id": "css-fidelity",
+            "status": "passed",
+            "checks": {
+              "total": 5,
+              "passed": 5,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:29:39+0800",
+            "ended_at": "2026-11-01T16:29:39+0800",
+            "seconds": 0.147401
+          },
+          {
+            "id": "server-mode",
+            "status": "passed",
+            "checks": {
+              "total": 111,
+              "passed": 111,
+              "failed": 0
+            },
+            "started_at": "2026-11-01T16:29:39+0800",
+            "ended_at": "2026-11-01T16:30:32+0800",
+            "seconds": 53.524437
+          }
+        ]
+      }
+    }
+  ]
+}
