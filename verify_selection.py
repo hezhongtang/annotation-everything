@@ -542,8 +542,19 @@ def _suggest_for_phase(phase: str, classified: dict, changes: dict, fallback: Op
         return suggested
     # development / review / manual
     if fallback is not None:
-        suggested["groups"] = ["unit"]
+        # 回退建议取并集：完整单元之外，已命中规则的 serve-check 与场景计划保留在
+        # 建议里（回退解释的是「为什么要完整检查」，不是「已命中的信息可以丢弃」）
+        serve_check = False
+        scenarios = set()
+        for entry in classified["matched_rules"].values():
+            scenarios.update(entry["scenarios"])
+            serve_check = serve_check or entry["serve_check"]
+        suggested["groups"] = ["unit"] + (["serve-check"] if serve_check else [])
+        suggested["scenarios"] = sorted(scenarios)
+        suggested["serve_check"] = serve_check
         suggested["notes"] = ["回退完整检查：%s" % fallback["reason"]]
+        if serve_check or scenarios:
+            suggested["notes"].append("回退时已命中规则的 serve-check 与场景计划保留在建议里。")
         return suggested
     selectors = set(classified["self_selectors"])
     serve_check = False

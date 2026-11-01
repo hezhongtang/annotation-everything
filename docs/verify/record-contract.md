@@ -209,7 +209,8 @@ JSON 报告在记录副本上追加 `report_validation.problems` 字符串数组
 
 | 字段 | 说明 |
 | --- | --- |
-| `shadow.comparable` / `incomparable_reason` | 输入快照可用、运行期间指纹未变、运行正常结束、实际执行含完整单元，四者齐备才可比较；否则写明不可比较原因 |
+| `shadow.comparable` / `incomparable_reason` | 输入快照可用、运行期间指纹未变、运行正常结束且整次结论不是超时 / 入口错误 / 依赖缺失、实际执行含完整单元且完整单元真实执行（结论为通过；超时 / 空集合 / 全跳过 / 加载错误都算没有可对照的执行），齐备才可比较；否则写明不可比较原因 |
+| `shadow.run_outcome` / `shadow.usable_as_evidence` | 整次运行的结论与证据可用性（与 `result` 同值），随影子记录一起落盘 `shadow.json` |
 | `shadow.coverage` | `unit` / `serve-check` / `browser` 是否实际执行 |
 | `shadow.suggested_groups` / `suggested_selectors` / `executed_groups` | 建议范围与实际执行并列 |
 | `shadow.browser_planned_scenarios` | 建议的浏览器场景；浏览器未执行时仅在计划层对照，不构成遗漏证据 |

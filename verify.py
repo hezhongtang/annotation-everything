@@ -1305,17 +1305,21 @@ def compute_shadow(record: dict, selection: Optional[dict]) -> dict:
     """影子对照：建议范围与本次实际执行（完整检查）并列，失败落在建议范围外时保留候选遗漏。
 
     只有输入、环境、用例身份可对应的样本才用于遗漏判断；输入在运行中变化、
-    快照不可用、运行没有正常结束、实际执行不含完整单元时，明确标注「不可比较」，
-    不产出遗漏判断。回退完整检查时建议本身就是完整检查，不产出遗漏判断，
-    失败清单照常保留。
+    快照不可用、运行没有正常结束、整次结论是超时 / 入口错误 / 依赖缺失、
+    完整单元没有真实执行（空集合 / 全跳过 / 超时 / 加载错误）、实际执行不含
+    完整单元时，明确标注「不可比较」，不产出遗漏判断。回退完整检查时建议本身
+    就是完整检查，不产出遗漏判断，失败清单照常保留。
     """
     selection = selection or {}
     suggested = selection.get("suggested") or {}
+    result = record.get("result") or {}
     shadow = {
         "schema": SHADOW_SCHEMA,
         "strategy_version": selection.get("strategy_version"),
         "comparable": False,
         "incomparable_reason": None,
+        "run_outcome": result.get("outcome"),
+        "usable_as_evidence": bool(result.get("usable_as_evidence")),
         "coverage": {"unit": False, "serve-check": False, "browser": False},
         "suggested_groups": list(suggested.get("groups") or []),
         "suggested_selectors": list(suggested.get("selectors_effective")
@@ -1342,6 +1346,16 @@ def compute_shadow(record: dict, selection: Optional[dict]) -> dict:
         reasons.append("输入快照不可用，无法确认观察针对同一输入")
     if record.get("state") != "complete":
         reasons.append("运行没有正常结束")
+    run_outcome = shadow["run_outcome"]
+    if run_outcome in (TIMEOUT, WRAPPER_ERROR, UNAVAILABLE):
+        reasons.append("整次运行结论是 %s（%s），没有正常通过的完整执行可对照"
+                       % (run_outcome, VERDICT_LABELS.get(run_outcome, run_outcome)))
+    if "unit" in executed:
+        unit_outcome = next((group.get("outcome") for group in record["groups"]
+                             if group["name"] == "unit"), None)
+        if unit_outcome in (TIMEOUT, EMPTY, ERROR, SKIPPED):
+            reasons.append("完整单元组的结论是 %s（%s），没有真实执行的用例可对照"
+                           % (unit_outcome, VERDICT_LABELS.get(unit_outcome, unit_outcome)))
     if "unit-related" in executed and "unit" not in executed:
         reasons.append("实际执行是相关单元而非完整检查，没有完整对照")
     if reasons:
@@ -1675,6 +1689,8 @@ def cmd_run(args) -> int:
             record["shadow"] = {"schema": SHADOW_SCHEMA, "comparable": False,
                                 "incomparable_reason": "影子对照计算失败：%s: %s"
                                                        % (type(exc).__name__, exc),
+                                "run_outcome": record["result"].get("outcome"),
+                                "usable_as_evidence": False,
                                 "candidate_omissions": [], "failures": [],
                                 "rule_candidates": []}
         if interrupted_signum is not None:

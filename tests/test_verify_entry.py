@@ -2103,6 +2103,10 @@ SELECTION_MAP_OK = {
          "serve_check": True,
          "scenarios": ["skill-search"],
          "why": "合成服务影响服务安全自检与场景"},
+        {"id": "r-page", "prefixes": ["templates/"],
+         "selectors": ["tests/test_synth.py"],
+         "scenarios": ["skill-search"],
+         "why": "合成页面模板影响场景"},
         {"id": "r-dict", "prefixes": ["locales/"],
          "selectors": ["tests/test_i18n_catalog_contract.py", "tests/test_synth.py"],
          "why": "合成词典与全局契约"},
@@ -2289,6 +2293,23 @@ class SelectionPlanTests(VerifyEntryTestCase):
         self.assertIn("tests/test_synth.py", plan["suggested"]["selectors"],
                       "测试自身变化建议运行自身")
 
+    def test_fallback_suggestion_keeps_matched_serve_check_and_scenarios(self):
+        # R2 回归：回退建议取并集——命中规则的 serve-check 与场景计划不能被丢弃
+        self.repo.write("skill/annotation-everything/scripts/serve.py",
+                        SERVE_STUB + "\n# 合成变更\n")
+        self.repo.write("scratch.xyz", "?\n")
+        plan = self.selection("--phase", "development")
+        self.assertIsNotNone(plan["fallback"], "未分类路径触发回退")
+        self.assertEqual(plan["fallback"]["kind"], "unknown_path")
+        matched = {item["id"] for item in plan["matched_rules"]}
+        self.assertIn("r-serve", matched, "回退时命中规则仍保留在计划里")
+        suggested = plan["suggested"]
+        self.assertEqual(suggested["groups"], ["unit", "serve-check"],
+                         "回退建议保留命中规则的 serve-check")
+        self.assertTrue(suggested["serve_check"])
+        self.assertIn("skill-search", suggested["scenarios"],
+                      "回退建议保留命中规则的场景计划")
+
     def test_issue_phase_does_not_auto_start_tests(self):
         self.repo.write("tools/synth-cli.py", "v1\n")
         plan = self.selection("--phase", "issue")
@@ -2379,6 +2400,8 @@ class SelectionShadowTests(VerifyEntryTestCase):
         self.assertEqual(shadow["schema"], "ae-verify-shadow/1")
         self.assertTrue(shadow["comparable"])
         self.assertIsNone(shadow["incomparable_reason"])
+        self.assertEqual(shadow["run_outcome"], "passed", "可比较样本同时给出整次运行结论")
+        self.assertTrue(shadow["usable_as_evidence"], "可比较样本同时给出证据可用性")
         self.assertEqual(shadow["suggested_groups"], ["unit-related"])
         self.assertEqual(shadow["executed_groups"], ["unit"])
         self.assertTrue(shadow["coverage"]["unit"])
@@ -2429,6 +2452,22 @@ class SelectionShadowTests(VerifyEntryTestCase):
         self.assertIn("输入", shadow["incomparable_reason"])
         self.assertEqual(shadow["candidate_omissions"], [], "不可比较时不产出遗漏判断")
 
+    def test_timeout_run_is_not_compared(self):
+        # R1 回归：超时的运行没有完整通过的执行可对照，影子不能判「可比较」
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        p, record = self.run_shadow("--phase", "development", "--timeout", "0.001")
+        self.assertEqual(p.returncode, 124, p.stdout + p.stderr)
+        self.assertEqual(record["result"]["outcome"], "timeout")
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        shadow = record["shadow"]
+        self.assertEqual(shadow["schema"], "ae-verify-shadow/1")
+        self.assertFalse(shadow["comparable"], "超时的运行不能计为选择遗漏的对照")
+        self.assertIn("超时", shadow["incomparable_reason"])
+        self.assertEqual(shadow["candidate_omissions"], [], "不可比较时不产出遗漏判断")
+        self.assertEqual(shadow["rule_candidates"], [])
+        self.assertEqual(shadow["run_outcome"], "timeout", "shadow 顶层带整次运行结论")
+        self.assertFalse(shadow["usable_as_evidence"], "shadow 顶层带证据可用性")
+
     def test_partial_run_is_not_compared_as_full_check(self):
         self.repo.write("tools/synth-cli.py", "v1\n")
         p, record = self.run_shadow("unit-related", "tests/test_synth.py", "--phase", "development")
@@ -2452,6 +2491,125 @@ class SelectionShadowTests(VerifyEntryTestCase):
         self.assertFalse(shadow["coverage"]["browser"], "浏览器未执行")
         self.assertIn("skill-search", shadow["browser_planned_scenarios"],
                       "浏览器场景只在计划层对照")
+
+
+class SelectionSampleReplayTests(unittest.TestCase):
+    """docs/verify/shadow-samples.json 的合成样本可复现（R3）：重放变更形态，
+    记录字段必须与样本一致；S3 / S13 / S14 由 SelectionShadowTests 的既有用例覆盖。"""
+
+    SAMPLES_PATH = ROOT / "docs" / "verify" / "shadow-samples.json"
+    REPLAY_IDS = ("S1", "S2", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12")
+
+    def setUp(self):
+        self.counter = 0
+
+    def make_repo(self) -> SynthRepo:
+        self.counter += 1
+        temp = tempfile.TemporaryDirectory(prefix="verify-sample-replay-")
+        self.addCleanup(temp.cleanup)
+        lock = tempfile.TemporaryDirectory(prefix="verify-sample-replay-lock-")
+        self.addCleanup(lock.cleanup)
+        repo = SynthRepo(Path(temp.name) / ("repo-%d" % self.counter))
+        repo.test_lock_dir = Path(lock.name)
+        # 与 SelectionShadowTests 相同的测试基建：场景 stub + 覆盖映射提交进基线
+        repo.write("tests/e2e_scenarios.py", E2E_SCENARIOS_STUB)
+        map_path = repo.write(
+            "selection-map.json", json.dumps(SELECTION_MAP_OK, ensure_ascii=False, indent=2))
+        repo.commit_all("选测测试基建")
+        self.sel_env = {"AE_SELECTION_MAP": str(map_path)}
+        return repo
+
+    def prepare(self, repo: SynthRepo, sample_id: str) -> None:
+        """样本形态的变更（与 shadow-samples.json 的 change 描述一致）。"""
+        if sample_id == "S1":
+            repo.write("README.md", "# 合成仓库\n\n影子样本说明\n")
+        elif sample_id == "S2":
+            repo.write("SKILL.md", "# 技能指引\n")
+        elif sample_id == "S4":
+            repo.write("templates/viewer.html", "<!-- 合成页面 v1 -->\n")
+            repo.commit_all("合成页面")
+            repo.write("templates/viewer.html", "<!-- 合成页面 v2 -->\n")
+        elif sample_id == "S5":
+            repo.write("skill/annotation-everything/scripts/serve.py",
+                       SERVE_STUB + "\n# 合成变更\n")
+        elif sample_id == "S6":
+            repo.write("locales/zh-CN.json", '{"a": "甲", "b": "乙"}\n')
+        elif sample_id == "S7":
+            repo.write("fixtures/sample/new.json", "{}\n")
+        elif sample_id == "S8":
+            repo.write("scratch.xyz", "?\n")
+        elif sample_id == "S9":
+            repo.write("tests/test_new_area.py",
+                       UNIT_PASS.replace("AlphaTests", "NewAreaTests")
+                                .replace("test_alpha_ok", "test_new_area_ok"))
+        elif sample_id == "S10":
+            repo.git("rm", "-q", "tests/test_synth.py")
+        elif sample_id == "S11":
+            repo.write("tools/synth-cli.py", "#!/usr/bin/env python3\nprint('cli')\n")
+            repo.commit_all("合成 CLI")
+            repo.git("mv", "tools/synth-cli.py", "tools/renamed-cli.py")
+            repo.write("tools/renamed-cli.py", "#!/usr/bin/env python3\nprint('cli v2')\n")
+        elif sample_id == "S12":
+            entry = repo.path / "verify.py"
+            entry.write_text(entry.read_text(encoding="utf-8") + "\n# 合成变更\n",
+                             encoding="utf-8")
+        else:
+            raise AssertionError("未登记的重放形态：%s" % sample_id)
+
+    def assert_replays_to_sample(self, repo: SynthRepo, sample: dict) -> None:
+        where = sample["id"]
+        p = repo.run_verify("run", "--group", "unit", "--group", "serve-check",
+                            "--phase", "development", extra_env=dict(self.sel_env))
+        self.assertEqual(p.returncode, sample["exit_status"],
+                         where + " 退出码与样本不一致：" + p.stdout + p.stderr)
+        record = read_record(repo.artifact_dir, repo.latest_run_id())
+        selection = record["context"]["selection"]
+        shadow = record["shadow"]
+        self.assertEqual(record["result"]["outcome"], sample["outcome"], where)
+        fallback = selection.get("fallback")
+        self.assertEqual(fallback["kind"] if fallback else None, sample["fallback"], where)
+        if fallback is not None:
+            self.assertTrue(fallback["reason"], where + " 回退必须带原因")
+            self.assertEqual(fallback["reason"], sample.get("fallback_reason"),
+                             where + " 回退原因与样本记录一致")
+        self.assertEqual(sorted(item["id"] for item in selection["matched_rules"]),
+                         sample["matched_rules"], where)
+        suggested = selection["suggested"]
+        self.assertEqual(suggested["groups"], sample["suggested_groups"], where)
+        self.assertEqual(suggested.get("not_applicable"), sample.get("not_applicable"), where)
+        self.assertEqual(shadow["suggested_selectors"], sample["suggested_selectors"], where)
+        self.assertEqual(shadow["browser_planned_scenarios"],
+                         sample["suggested_scenarios"], where)
+        self.assertEqual(shadow["comparable"], sample["comparable"], where)
+        if sample["comparable"]:
+            self.assertIsNone(shadow["incomparable_reason"], where)
+        else:
+            self.assertEqual(shadow["incomparable_reason"],
+                             sample["incomparable_reason"], where)
+        self.assertEqual(shadow["coverage"], sample["coverage"], where)
+        expected_failures = sample["failures"]
+        if isinstance(expected_failures, int):
+            self.assertEqual(len(shadow["failures"]), expected_failures, where)
+        else:
+            self.assertEqual(shadow["failures"], expected_failures, where)
+        expected_omissions = sample["candidate_omissions"]
+        if isinstance(expected_omissions, int):
+            self.assertEqual(len(shadow["candidate_omissions"]), expected_omissions, where)
+        else:
+            self.assertEqual(
+                [(item["group"], item["target"], item["attribution"])
+                 for item in shadow["candidate_omissions"]],
+                [(item["group"], item["target"], item["attribution"])
+                 for item in expected_omissions], where)
+
+    def test_synthetic_samples_replay_to_recorded_fields(self):
+        samples = {item["id"]: item for item in
+                   json.loads(self.SAMPLES_PATH.read_text(encoding="utf-8"))["synthetic_samples"]}
+        for sample_id in self.REPLAY_IDS:
+            with self.subTest(sample=sample_id):
+                repo = self.make_repo()
+                self.prepare(repo, sample_id)
+                self.assert_replays_to_sample(repo, samples[sample_id])
 
 
 class SelectionBuiltinMapTests(unittest.TestCase):
