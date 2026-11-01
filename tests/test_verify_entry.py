@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import shutil
@@ -179,6 +180,7 @@ class SynthRepo:
         shutil.copy2(VERIFY, self.path / "verify.py")
         shutil.copy2(ROOT / "host_isolation.py", self.path / "host_isolation.py")
         shutil.copy2(ROOT / "verify_selection.py", self.path / "verify_selection.py")
+        shutil.copy2(ROOT / "verify_evidence.py", self.path / "verify_evidence.py")
         self.git("init", "-q")
         self.git("add", "-A")
         self.git("-c", "user.name=synth", "-c", "user.email=synth@example.invalid",
@@ -2737,3 +2739,539 @@ class SelectionBuiltinMapTests(unittest.TestCase):
         selection = json.loads(p.stdout)["selection"]
         self.assertEqual(selection["strategy_source"], "builtin")
         self.assertIsNotNone(selection["fallback"], "外来仓库对内置映射保守回退")
+
+
+# ── 证据复用与流程接入（issue #56） ─────────────────────────────────────────
+
+# 带执行痕迹的合成单元测试：每次真实执行都在 SYNTH_TOUCH 指向的文件（仓库外）追加一行。
+# 「没有重新执行」用真实执行事件证明，不靠报告文字。
+UNIT_TOUCH = '''import os
+import unittest
+
+
+class TouchTests(unittest.TestCase):
+    def test_touch(self):
+        with open(os.environ["SYNTH_TOUCH"], "a", encoding="utf-8") as fh:
+            fh.write("unit\\n")
+        self.assertTrue(True)
+'''
+
+# 带执行痕迹的合成服务安全自检：摘要行与 SERVE_STUB 相同，另追加执行痕迹
+SERVE_TOUCH_STUB = '''#!/usr/bin/env python3
+import os
+import sys
+
+touch = os.environ.get("SYNTH_SERVE_TOUCH")
+if touch:
+    with open(touch, "a", encoding="utf-8") as fh:
+        fh.write("serve\\n")
+total = int(os.environ.get("SYNTH_SERVE_TOTAL", "3"))
+failed = int(os.environ.get("SYNTH_SERVE_FAILED", "0"))
+for index in range(total - failed):
+    print("通过  合成自检项 %d" % index)
+for index in range(failed):
+    print("失败  合成自检项 %d" % (total - failed + index))
+print("\\n%d/%d 通过" % (total - failed, total))
+sys.exit(1 if failed else 0)
+'''
+
+# 带执行痕迹的合成浏览器入口：摘要行与 BROWSER_STUB 相同，另追加执行痕迹
+BROWSER_TOUCH_STUB = '''#!/usr/bin/env python3
+import os
+import sys
+import time
+
+touch = os.environ.get("SYNTH_BROWSER_TOUCH")
+if touch:
+    with open(touch, "a", encoding="utf-8") as fh:
+        fh.write("browser\\n")
+total = int(os.environ.get("SYNTH_BROWSER_TOTAL", "3"))
+failed = int(os.environ.get("SYNTH_BROWSER_FAILED", "0"))
+time.sleep(0.2)
+for index in range(total - failed):
+    print("PASS  合成场景 %d" % index)
+for index in range(failed):
+    print("FAIL  合成场景 %d" % (total - failed + index))
+print("\\n%d/%d 通过" % (total - failed, total))
+sys.exit(1 if failed else 0)
+'''
+
+
+class EvidenceReuseTests(VerifyEntryTestCase):
+    """证据复用（issue #56）：同输入、同环境、范围覆盖且当前有效的通过记录跨阶段引用。
+
+    复用判定从紧：任一条件不满足就实际执行，失效证据绝不冒充通过。
+    组的执行痕迹（trace）证明是否真的重跑：复用后行数不增加。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.unit_touch = Path(self.temp.name) / "unit-touch.txt"
+        self.serve_touch = Path(self.temp.name) / "serve-touch.txt"
+        self.browser_touch = Path(self.temp.name) / "browser-touch.txt"
+        self.repo.write("tests/test_synth.py", UNIT_TOUCH)
+        self.repo.write("tests/e2e_scenarios.py", E2E_SCENARIOS_STUB)
+        self.repo.write("skill/annotation-everything/scripts/serve.py",
+                        SERVE_TOUCH_STUB, executable=True)
+        self.repo.write("tests/e2e_browser.py", BROWSER_TOUCH_STUB, executable=True)
+        self.repo.commit_all("合成执行痕迹基建")
+        self.trace_env = {"SYNTH_TOUCH": str(self.unit_touch),
+                          "SYNTH_SERVE_TOUCH": str(self.serve_touch),
+                          "SYNTH_BROWSER_TOUCH": str(self.browser_touch)}
+
+    # -- 工具 -------------------------------------------------------------
+
+    def verify(self, *args, **kwargs):
+        extra = dict(self.trace_env)
+        extra.update(kwargs.pop("extra_env", {}) or {})
+        return self.repo.run_verify(*args, extra_env=extra, **kwargs)
+
+    def trace(self, path: Path) -> int:
+        return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
+
+    def record(self) -> dict:
+        return read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+
+    def decision(self, record: dict, group: str) -> dict:
+        return next(item for item in record["reuse"]["decisions"] if item["group"] == group)
+
+    def group(self, record: dict, name: str) -> dict:
+        return next(item for item in record["groups"] if item["name"] == name)
+
+    def index_entries(self) -> list:
+        text = (self.repo.artifact_dir / "index.jsonl").read_text(encoding="utf-8")
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+    def backdate(self, run_id: str, hours: float) -> None:
+        """把来源记录的结束时间改到 hours 小时前；负数表示未来（时间回退形态）。"""
+        path = self.repo.artifact_dir / "runs" / run_id / "record.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        stamp = (datetime.datetime.now(datetime.timezone.utc)
+                 - datetime.timedelta(hours=hours)).isoformat()
+        payload["ended_at"] = stamp
+        payload["timing"]["ended_at"] = stamp
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # -- 跨阶段演示 ---------------------------------------------------------
+
+    def test_cross_stage_demo_reuses_evidence_and_pr_gate_reruns(self):
+        """开发验证 → 审查 → PR 整理引用原有效结果（0 次重跑）；pr 门禁仍实际执行。"""
+        p = self.verify("run", "--group", "serve-check", "--phase", "development",
+                        "--issue", "56", "--reason", "开发验证")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        dev_serve = self.repo.latest_run_id()
+        p = self.verify("run", "unit-related", "tests/test_synth.py",
+                        "--phase", "development", "--reason", "开发验证")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        dev_unit = self.repo.latest_run_id()
+        self.assertEqual(self.trace(self.serve_touch), 1)
+        self.assertEqual(self.trace(self.unit_touch), 1)
+
+        # 审查阶段：读取有效证据，不重跑
+        p = self.verify("run", "--group", "serve-check", "--phase", "review",
+                        "--reason", "独立审查读取有效证据")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        review_serve = self.record()
+        self.assertEqual(self.group(review_serve, "serve-check")["outcome"], "reused")
+        self.assertEqual(self.decision(review_serve, "serve-check")["source_run_id"], dev_serve)
+        self.assertEqual(self.trace(self.serve_touch), 1, "审查阶段没有重新执行 serve-check")
+
+        p = self.verify("run", "unit-related", "tests/test_synth.py", "--phase", "review",
+                        "--reason", "独立审查读取有效证据")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        review_unit = self.record()
+        self.assertEqual(self.group(review_unit, "unit-related")["outcome"], "reused")
+        self.assertEqual(self.decision(review_unit, "unit-related")["source_run_id"], dev_unit)
+        self.assertEqual(self.trace(self.unit_touch), 1, "审查阶段没有重新执行相关单元")
+
+        # PR 整理（manual 阶段）：继续引用，且来源是实际执行的记录而不是复用记录
+        p = self.verify("run", "--group", "serve-check", "--phase", "manual",
+                        "--reason", "PR 整理，引用已有验证")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        tidy = self.record()
+        self.assertEqual(self.group(tidy, "serve-check")["outcome"], "reused")
+        self.assertEqual(self.decision(tidy, "serve-check")["source_run_id"], dev_serve,
+                         "复用来源必须是实际执行的记录，不能链式引用另一条复用记录")
+        self.assertEqual(self.trace(self.serve_touch), 1)
+        self.assertEqual(self.trace(self.unit_touch), 1,
+                         "开发验证 → 审查 → PR 整理全程 0 次重复执行")
+
+        # 引用不重复计入通过数量：引用组的检查数不计入 result.counts
+        self.assertEqual(review_serve["result"]["counts"]["checks"], 0)
+        self.assertEqual(tidy["result"]["counts"]["checks"], 0)
+        self.assertEqual(tidy["result"]["outcome"], "passed")
+        self.assertTrue(tidy["result"]["usable_as_evidence"])
+
+        # pr 门禁：按口径必须实际执行，不引用
+        p = self.verify("run", "--group", "serve-check", "--phase", "pr",
+                        "--reason", "PR 收敛门禁")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        gate = self.record()
+        self.assertEqual(self.group(gate, "serve-check")["outcome"], "passed")
+        self.assertEqual(self.decision(gate, "serve-check")["decision"], "run")
+        self.assertIn("门禁", self.decision(gate, "serve-check")["reason"])
+        self.assertFalse(gate["reuse"]["enabled"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+        # 索引带引用清单，供 H 项汇总
+        by_id = {entry["run_id"]: entry for entry in self.index_entries()}
+        self.assertEqual(by_id[review_serve["run_id"]]["reused_groups"], ["serve-check"])
+        self.assertEqual(by_id[gate["run_id"]]["reused_groups"], [])
+
+        # report 展示证据链：来源 run、时间与指纹（门禁运行没有引用可展示）
+        p = self.repo.run_verify("report", "--run", tidy["run_id"])
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("证据复用", p.stdout)
+        self.assertIn("引用已有验证", p.stdout)
+
+    # -- 输入与环境变化 -------------------------------------------------------
+
+    def test_single_byte_change_forces_rerun(self):
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        # 改动对象是非文档有效输入（README 属于文档允许列表，见文档无关等价用例）
+        self.repo.write("locales/en.json", '{"a": "A!"}\n')
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("输入指纹不同", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    def test_commit_between_runs_keeps_fingerprints_apart(self):
+        """未提交改动与提交落地是不同输入（HEAD 参与指纹）：互不沿用。"""
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        self.repo.write("locales/en.json", '{"a": "A", "b": "B"}\n')
+        p = self.verify("run", "--group", "serve-check", "--phase", "development")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.repo.commit_all("改动落地")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("输入指纹不同", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 3)
+
+    def test_deleted_file_invalidates_evidence(self):
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        self.repo.git("rm", "-q", "locales/zh-CN.json")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("输入指纹不同", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    def test_doc_only_change_still_reuses(self):
+        """验收：仅变化显式允许且已证明无关的文档时，独立测试组仍可复用。"""
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        self.repo.write("README.md", "# 合成仓库\n\n只改了说明文档\n")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "reuse")
+        self.assertIn("文档", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 1)
+
+    def test_committed_doc_only_change_still_reuses(self):
+        """文档改动已提交（HEAD 变化）时同样按文档无关等价处理。"""
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        self.repo.write("README.md", "# 合成仓库\n\n提交的文档改动\n")
+        self.repo.commit_all("文档改动")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "reuse")
+        self.assertIn("文档", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 1)
+
+    def test_doc_change_with_code_change_reruns(self):
+        """文档之外还有任何有效输入变化时无法证明无关，回退重新验证。"""
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        self.repo.write("README.md", "# 合成仓库\n\n文档也改了\n")
+        self.repo.write("locales/en.json", '{"a": "A2"}\n')
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("非文档输入不同", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    def test_doc_equivalence_requires_builtin_strategy(self):
+        """覆盖映射（AE_SELECTION_MAP）下文档等价停用：无法证明独立性就重跑。"""
+        map_path = Path(self.temp.name) / "map.json"
+        map_path.write_text(json.dumps(dict(SELECTION_MAP_OK)), encoding="utf-8")
+        env = {"AE_SELECTION_MAP": str(map_path)}
+        self.verify("run", "--group", "serve-check", "--phase", "development", extra_env=env)
+        self.repo.write("README.md", "# 合成仓库\n\n覆盖映射下的文档改动\n")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review", extra_env=env)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("无法证明文档无关", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    def test_environment_change_invalidates_evidence(self):
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review",
+                        extra_env={"AE_LOCALE": "fr"})
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("环境不同", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    def test_baseline_change_invalidates_evidence(self):
+        first_commit = self.repo.git("rev-parse", "HEAD~1").stdout.strip()
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review",
+                        "--baseline", first_commit)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("基线不同", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    # -- 时间与证据完整性 -----------------------------------------------------
+
+    def test_expired_evidence_is_rejected(self):
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        self.backdate(self.repo.latest_run_id(), hours=25)
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("保鲜", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    def test_end_time_in_the_future_is_rejected(self):
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        self.backdate(self.repo.latest_run_id(), hours=-2)
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("未来", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    def test_tampered_source_log_is_rejected(self):
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        run_id = self.repo.latest_run_id()
+        log = self.repo.artifact_dir / "runs" / run_id / "serve-check.log"
+        log.write_text(log.read_text(encoding="utf-8") + "事后补写的一行\n", encoding="utf-8")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("证据当前校验不可用", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    def test_sources_that_are_not_passes_are_rejected(self):
+        self.repo.write("skill/annotation-everything/scripts/serve.py",
+                        SERVE_TOUCH_STUB.replace('SYNTH_SERVE_FAILED", "0"',
+                                                 'SYNTH_SERVE_FAILED", "1"'),
+                        executable=True)
+        self.repo.commit_all("自检失败形态")
+        p = self.verify("run", "--group", "serve-check", "--phase", "development")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.repo.write("skill/annotation-everything/scripts/serve.py",
+                        SERVE_TOUCH_STUB, executable=True)
+        self.repo.commit_all("自检恢复")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("不能作为通过证据", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+        # 半写 / 中止形态：state 不是 complete 的记录同样拒用。
+        # 前一条通过记录（恢复后的 run 2）先回拨超期，让中止记录成为唯一候选，
+        # 单独验证「中止」这一拒用原因。
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        source_id = self.repo.latest_run_id()
+        path = self.repo.artifact_dir / "runs" / source_id / "record.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["state"] = "aborted"
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        for entry in self.index_entries():
+            if entry["run_id"] not in (source_id,) and entry["outcome"] == "passed":
+                self.backdate(entry["run_id"], hours=25)
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("证据当前校验不可用", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 3)
+
+    def test_records_without_reuse_policy_version_are_never_reused(self):
+        """统一入口 G 之前的记录没有复用策略版本，不参与复用（迁移口径）。"""
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        path = self.repo.artifact_dir / "runs" / self.repo.latest_run_id() / "record.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("reuse")
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("复用策略版本", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    # -- 版本与范围 -----------------------------------------------------------
+
+    def test_strategy_version_change_invalidates(self):
+        payload_v7 = dict(SELECTION_MAP_OK)
+        payload_v8 = dict(SELECTION_MAP_OK)
+        payload_v8["version"] = 8
+        map_v7 = Path(self.temp.name) / "map-v7.json"
+        map_v8 = Path(self.temp.name) / "map-v8.json"
+        map_v7.write_text(json.dumps(payload_v7), encoding="utf-8")
+        map_v8.write_text(json.dumps(payload_v8), encoding="utf-8")
+        self.verify("run", "--group", "serve-check", "--phase", "development",
+                    extra_env={"AE_SELECTION_MAP": str(map_v7)})
+        p = self.verify("run", "--group", "serve-check", "--phase", "review",
+                        extra_env={"AE_SELECTION_MAP": str(map_v8)})
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("策略版本不同", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    def test_scope_not_covered_reruns(self):
+        self.repo.write("tests/test_extra.py", UNIT_TOUCH)
+        self.repo.commit_all("新增合成模块")
+        self.verify("run", "unit-related", "tests/test_synth.py", "--phase", "development")
+        p = self.verify("run", "unit-related", "tests/test_synth.py", "tests/test_extra.py",
+                        "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "unit-related")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("范围不覆盖", item["reason"])
+        self.assertEqual(self.trace(self.unit_touch), 3, "两个模块都实际执行")
+
+    def test_case_level_request_reruns_for_targeted_review(self):
+        """按疑点点名到类 / 用例的选择器不复用：独立复测不受证据复用限制。"""
+        self.verify("run", "unit-related", "tests/test_synth.py", "--phase", "development")
+        p = self.verify("run", "unit-related", "tests.test_synth.TouchTests", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "unit-related")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("按疑点复测", item["reason"])
+        self.assertEqual(self.trace(self.unit_touch), 2)
+
+    def test_host_state_groups_are_never_reused(self):
+        """依赖宿主机状态的组指纹相同也不复用；纯逻辑组在同一记录里照常复用。"""
+        self.verify("run", "--group", "browser", "--group", "serve-check",
+                    "--phase", "development")
+        p = self.verify("run", "--group", "browser", "--group", "serve-check",
+                        "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = self.record()
+        browser = self.decision(record, "browser")
+        serve = self.decision(record, "serve-check")
+        self.assertEqual(browser["decision"], "run")
+        self.assertIn("宿主机状态", browser["reason"])
+        self.assertEqual(serve["decision"], "reuse")
+        self.assertEqual(self.trace(self.browser_touch), 2, "浏览器组重新执行")
+        self.assertEqual(self.trace(self.serve_touch), 1, "serve-check 引用已有验证")
+
+    def test_sensitive_module_run_is_never_reused(self):
+        """unit-related 命中资源敏感模块（host-state）时不复用。"""
+        self.repo.write("tests/test_core.py", UNIT_TOUCH)
+        self.repo.commit_all("合成敏感模块")
+        self.verify("run", "unit-related", "tests/test_core.py", "--phase", "development")
+        p = self.verify("run", "unit-related", "tests/test_core.py", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "unit-related")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("宿主机状态", item["reason"])
+        self.assertEqual(self.trace(self.unit_touch), 2)
+
+    # -- 开关与阶段 -----------------------------------------------------------
+
+    def test_no_reuse_flag_forces_full_rerun(self):
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review", "--no-reuse")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = self.record()
+        self.assertFalse(record["reuse"]["enabled"])
+        self.assertIn("--no-reuse", record["reuse"]["reason"])
+        self.assertEqual(self.decision(record, "serve-check")["decision"], "run")
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    def test_pr_and_ci_phases_do_not_reuse(self):
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        for phase in ("pr", "ci"):
+            p = self.verify("run", "--group", "serve-check", "--phase", phase)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            item = self.decision(self.record(), "serve-check")
+            self.assertEqual(item["decision"], "run")
+            self.assertIn("门禁", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 3)
+
+    # -- 报告呈现与引用链 -------------------------------------------------------
+
+    def test_report_shows_the_reuse_chain(self):
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        first = self.repo.latest_run_id()
+        self.verify("run", "--group", "serve-check", "--phase", "review",
+                    "--reason", "独立审查")
+        second = self.repo.latest_run_id()
+        p = self.repo.run_verify("report", "--run", second)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("证据复用", p.stdout)
+        self.assertIn("引用已有验证", p.stdout)
+        self.assertIn(first, p.stdout, "报告列出被引用的 run ID")
+        self.assertIn("serve-check", p.stdout)
+        j = self.repo.run_verify("report", "--run", second, "--json")
+        self.assertEqual(j.returncode, 0, j.stdout + j.stderr)
+        payload = json.loads(j.stdout)
+        self.assertTrue(payload["result"]["usable_as_evidence"])
+        self.assertTrue(payload["reuse"]["enabled"])
+        self.assertEqual(payload["reuse"]["decisions"][0]["source_run_id"], first)
+        self.assertEqual(payload["groups"][0]["outcome"], "reused")
+        self.assertEqual(payload["groups"][0]["reuse"]["source_run_id"], first)
+
+    def test_report_revalidates_the_reuse_chain(self):
+        """来源证据事后被篡改时，引用它的记录在报告里降级为不可用。"""
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        first = self.repo.latest_run_id()
+        self.verify("run", "--group", "serve-check", "--phase", "review")
+        second = self.repo.latest_run_id()
+        log = self.repo.artifact_dir / "runs" / first / "serve-check.log"
+        log.write_text(log.read_text(encoding="utf-8") + "事后补写的一行\n", encoding="utf-8")
+        p = self.repo.run_verify("report", "--run", second)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("引用的证据 run %s" % first, p.stdout)
+        self.assertIn("不能作为通过证据", p.stdout)
+        j = self.repo.run_verify("report", "--run", second, "--json")
+        self.assertEqual(j.returncode, 1, j.stdout + j.stderr)
+        payload = json.loads(j.stdout)
+        self.assertFalse(payload["result"]["usable_as_evidence"])
+        self.assertTrue(any("引用的证据" in item for item in payload["report_validation"]["problems"]))
+        # 原始记录不被改写
+        record = read_record(self.repo.artifact_dir, second)
+        self.assertTrue(record["result"]["usable_as_evidence"])
+
+    # -- 降级 -----------------------------------------------------------------
+
+    def test_broken_policy_module_disables_reuse(self):
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        self.repo.write("verify_evidence.py", "raise RuntimeError('合成损坏')\n")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = self.record()
+        self.assertFalse(record["reuse"]["enabled"])
+        self.assertIn("加载失败", record["reuse"]["reason"])
+        self.assertEqual(self.decision(record, "serve-check")["decision"], "run")
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    def test_first_run_without_any_records_executes_everything(self):
+        p = self.verify("run", "--group", "serve-check", "--phase", "development")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = self.record()
+        self.assertTrue(record["reuse"]["enabled"])
+        item = self.decision(record, "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("没有可引用的已有记录", item["reason"])
+        self.assertEqual(item["attempts"], [])
