@@ -38,6 +38,7 @@
 | `context` | 对象 | 是 | `phase`、`issue`、`pr`、`reason`、`groups_requested`、`groups_selected`、`selectors`、`selectors_effective`、`selection`（F 项起：选测建议，见「影子对照」） |
 | `groups` | 数组 | 是 | 实际执行的组，按执行顺序；每项含命令、结论、计数、计时与用例清单 |
 | `shadow` | 对象或 `null` | F 项起必填 | 影子对照结果，见「影子对照」；收尾被信号打断等极端情况下可能保持 `null` |
+| `reuse` | 对象或 `null` | G 项起必填 | 证据复用规划：每个请求组「引用已有验证」还是「实际执行」，见「证据复用（G 项）」；规划发生在执行前，即使整次被中断也已写入 |
 
 `context.issue` 与 `context.pr` 可空：没关联就写 `null`，不写 0。`context.phase` 只接受 `issue`、`development`、`review`、`pr`、`ci`、`manual`，其余值入口直接报错。`context.reason` 可空，但建议写，它是后续判断「这次为什么跑」的唯一来源。`context.selectors` 只记调用方给出的选择器；`context.selectors_effective` 记实际生效的选择器——`unit-related` 会固定附带全局词典一致性契约模块（issue #51），附带与去重都在这里可见。
 
@@ -57,7 +58,7 @@
 | `input.covers_final_input` | 布尔或 `null` | 是 | 本次记录能否覆盖最终输入；未结束或任一快照不可用时为 `null` |
 | `input.stale_reason` | 字符串 | 未失效为 `null` | 失效原因 |
 
-快照对象里 `staged`、`unstaged`、`untracked` 是三个路径数组，`counts` 是各自的条数。`unreadable` 列出无法读取内容的有效输入；只要该列表非空，快照的 `available` 就为 `false`，不能作为通过证据。`skipped_large` 保留以兼容已有 v1 读取者；新记录固定为空数组，不再因文件大小跳过内容哈希。数组里只有仓库相对路径，没有文件内容。
+快照对象里 `staged`、`unstaged`、`untracked` 是三个路径数组，`counts` 是各自的条数。G 项起快照另有三份「非文档有效输入摘要」：`core_digests` 是被 git 认为有改动、且不在选测策略文档允许列表内的路径到内容摘要的映射（缺失文件记 `absent`），`core_fingerprint` 是这些摘要与 HEAD 的聚合指纹，`core_scope` 是固定口径说明——它们只服务于证据复用的文档无关等价判断（见「证据复用（G 项）」），不改变 `fingerprint` 本身。`unreadable` 列出无法读取内容的有效输入；只要该列表非空，快照的 `available` 就为 `false`，不能作为通过证据。`skipped_large` 保留以兼容已有 v1 读取者；新记录固定为空数组，不再因文件大小跳过内容哈希。数组里只有仓库相对路径，没有文件内容。
 
 指纹的算法：`sha256(HEAD + 每个非忽略变更路径的内容摘要)`。每个文件都以流式 SHA-256 读取完整内容，包括大文件和未跟踪文件；同样大小的内容改动也会改变指纹。范围覆盖源码、测试、fixture、模板、词典和执行配置——只要有改动就进指纹；被 git 忽略的路径不是仓库输入，不参与；`.verify/` 永远排除，避免记录自身污染指纹。重命名时旧路径记 `absent`。
 
@@ -115,7 +116,9 @@
 
 组记录另有两个隔离字段（C 项起有值，见 [isolation.md](isolation.md)）：`resources` 是组要求的共享资源名数组（空数组即纯逻辑组）；`lock` 记录本次锁获取——`resources`、`wait_seconds`（等待时长，锁等待不是执行耗时）与可选的 `timeout: true`（等待超时，组没有执行、结论为 `timeout`，note 写明资源与持有者 pid）。
 
-`groups[].started_at`（F 项起）来自本次子进程登记簿，是实际启动时间；未启动时为 `null`。等锁超时、缺依赖或因中断未启动的计划组不计入 `shadow.executed_groups` 和 `shadow.coverage`，即使它们仍保留在 `groups` 中说明未执行原因。
+`groups[].started_at`（F 项起）来自本次子进程登记簿，是实际启动时间；未启动时为 `null`。等锁超时、缺依赖或因中断未启动的计划组不计入 `shadow.executed_groups` 和 `shadow.coverage`，即使它们仍保留在 `groups` 中说明未执行原因。被引用（`reused`）的组同样没有启动子进程，`started_at` 为 `null`，也不计入 `shadow.executed_groups`。
+
+组记录另有一个引用字段（G 项起，仅 `outcome` 为 `reused` 的组）：`reuse` 含 `source_run_id`（被引用的 run）、`source_ended_at`（来源记录结束时间）、`source_fingerprint`（引用时的来源输入指纹，供报告重校验引用链）、`age_hours`（引用时来源记录的年龄）与 `reason`（复用理由）。
 
 用例记录在 `groups[].cases`，每项含 `id`、`name`、`status`、`seconds`；非通过时加 `message`，发生子测试失败、错误或跳过时，分别带 `subtest_failures`、`subtest_errors`、`subtest_skips`。`status` 取 `passed`、`failed`、`error`、`skipped`、`interrupted`、`expected_failure`、`unexpected_success`。
 
@@ -137,6 +140,8 @@ unittest 执行期间捕获中断时，已完成用例保留原结果，中断�
 | `evidence.cases` | 数组 | 是 | 用例明细的定位与条数，仅 unittest 计数的组 |
 | `evidence.notes` | 数组 | 是 | 证据侧的说明 |
 
+`evidence.logs` / `evidence.cases` 只描述本次运行自己的产物：被引用（`reused`）的组没有本地子进程产物，不产生条目，也不影响完整性判定——引用链的有效性由 `reuse` 决策时的来源校验和 `report` 的引用链重校验保证。
+
 `children.json` 是子进程登记簿，每项含 `group`、`pid`、`pgid`、`started_at`、`reaped`、`exit_status`、`signal`。它只登记本次入口自己拉起的进程；入口不去盘点、不去结束任何未登记进程。登记或元数据写入失败时，入口退出前仍回收本次已登记且尚未结束的子进程。
 
 ## 结论与优先级
@@ -154,8 +159,9 @@ unittest 执行期间捕获中断时，已完成用例保留原结果，中断�
 | `interrupted` | 入口在等锁或组执行期间收到终止信号；子进程被信号终止；或 unittest / 浏览器入口捕获 `SIGINT` / `KeyboardInterrupt` 后以 130 退出。保留已执行用例与场景记录，尚未开始的场景记为 `not_run` |
 | `unavailable` | 命令无法启动，例如找不到 `uv` |
 | `wrapper_error` | 入口自身没能完成登记，例如记录写不进去 |
+| `reused` | 组引用了一条当前仍有效的通过记录而没有重新执行（G 项起）。它不是跳过（空集合 / 全跳过是非成功），也不是新的执行：`counts` 为 `null`，引用链在 `groups[].reuse`；只有实际执行（`passed`）的组能再次被引用，复用不链式传递 |
 
-整次运行的结论按下面的顺序取第一个出现的：`wrapper_error`、`unavailable`、`error`、`failed`、`timeout`、`interrupted`、`skipped`、`empty`、`passed`。计数分开表示，结论只是汇总；一次运行同时有失败和错误时结论是 `error`，两个数都在 `result.counts` 里。
+整次运行的结论按下面的顺序取第一个出现的：`wrapper_error`、`unavailable`、`error`、`failed`、`timeout`、`interrupted`、`skipped`、`empty`、`passed`。计数分开表示，结论只是汇总；一次运行同时有失败和错误时结论是 `error`，两个数都在 `result.counts` 里。`reused` 不参与这条严重度链：它比 `passed` 更不严重，全部组都被引用时整次结论是 `passed`、退出码 0——报告与 `result.notes` 会明确列出哪些组是引用而非执行，`result.counts` 不把引用组的用例 / 检查计入通过数量。
 
 ## 状态机
 
@@ -189,7 +195,8 @@ JSON 报告在记录副本上追加 `report_validation.problems` 字符串数组
 - `record.json` 是半写或损坏的 JSON；
 - `schema` 不是本入口认识的版本；
 - `state` 不是 `complete`；
-- 日志文件缺失，或内容校验和与记录里不一致。
+- 日志文件缺失，或内容校验和与记录里不一致；
+- 记录里有引用（`reused`）的组，而被引用的来源 run 当前校验失败、来源输入指纹与引用时不一致、来源组不再是实际通过的执行，或来源当前不能作为通过证据（G 项起，报告对引用链做与读取时同一套的重校验）。
 
 元数据写失败的优先级：子进程的退出码优先。测试已经失败时，记录写不进去不会把退出码改成 0；测试通过但记录写不进去，入口返回 2 并明确报告。
 
@@ -222,6 +229,24 @@ JSON 报告在记录副本上追加 `report_validation.problems` 字符串数组
 
 影子对照不改变 `result.outcome`、退出码与 `usable_as_evidence` 的判定；影子计算自身失败时降级为 `comparable=false` 并写明原因，不吞掉门禁结果。
 
+## 证据复用（G 项）
+
+复用规划在执行前完成（规划耗时计入排队时间），写在顶层 `reuse` 字段（策略本体与判定逻辑在仓库根 `verify_evidence.py`，schema `ae-verify-reuse/1`）。主要字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `reuse.policy_version` | 复用策略版本；判定逻辑变化时递增，来源记录的版本不一致即拒用（因此统一入口 G 之前的记录永远不参与复用） |
+| `reuse.enabled` / `reason` | 是否启用与未启用原因：`--no-reuse` 显式绕过、`pr` / `ci` 门禁阶段、输入指纹不可用、请求组全部依赖宿主机状态 |
+| `reuse.freshness_hours` | 保鲜窗口（缺省 24 小时）：本地证据的新鲜度上限，不代表外部状态在窗口内稳定 |
+| `reuse.session_scope` / `environment_scope` | 会话近似口径（同一产物根 = 同一检出）与环境比对范围（`os`、`python`、`ci`、`config_summary`） |
+| `reuse.decisions` | 与请求组一一对应。`decision` 为 `reuse` 时带 `source_run_id`、`source_ended_at`、`source_fingerprint`、`source_phase`、`age_hours`、`reason`；为 `run` 时带 `reason`（最近一条拒用原因）与 `attempts`（最多 5 条被拒候选的原因，解释「为什么没有复用」） |
+
+一个组被引用必须同时满足：当前阶段与来源阶段都在复用白名单（`issue`、`development`、`review`、`manual`）；组不依赖同机宿主机状态（`groups[].resources` 为空）；来源输入指纹与当前一致（或差异被证明仅在文档允许列表内，见下），且来源确认覆盖最终输入、基线一致（基线提交差异同样只在文档允许列表内时不算不同）；环境比对范围内一致；请求范围被来源已验证范围覆盖（`serve-check` 按组名；`unit-related` 按归一化模块选择器，点名到类 / 用例的按疑点复测不复用）；来源证据在读取时通过 `report` 同一套校验且 `usable_as_evidence` 为真；来源结束时间在保鲜窗口内且不在未来；入口版本、选测策略版本与复用策略版本一致。任何一条不满足就实际执行。
+
+**文档无关等价**：指纹不同时，若两侧记录的选测映射都来自内置版本（覆盖映射的允许列表没有落进记录，无法证明），则比较快照里的非文档有效输入摘要（`core_digests`）与 HEAD 差异——两者都只含允许列表内的文档路径（`README.md`、`README.en.md`、`docs/assets/`，与选测策略同一来源）时，判定「差异仅在文档允许列表内」，已证明与产品测试无关，仍然复用并在复用理由中注明；任何读不出来、解析不了或口径不一致的情况都判不等价、回退重新验证。
+
+引用只来自实际执行的组（`outcome` 为 `passed`），复用不链式传递；`result.counts` 不计入引用组的用例 / 检查；`index.jsonl` 行内新增 `reused_groups` 数组。`report` 读取时对引用链重校验（见「证据可用性」），来源被篡改即降级为不可用。
+
 ## 扩展点
 
 B–H 在同一个 schema 上追加，不改已有字段：
@@ -230,7 +255,7 @@ B–H 在同一个 schema 上追加，不改已有字段：
 - 组级隔离与锁（C，已交付）：`groups[].resources`、`groups[].lock`、`timing.lock_wait_seconds`、`timing.cleanup_seconds`、`environment.isolation`；`children.json` 的所有权登记保持不变。
 - 浏览器场景拆分（D，已交付）：`groups[].scenarios` 由浏览器入口的场景执行清单（日志里的 `AE-SCENARIOS:` 行）填充，`granularity` 细化到 `scenario`；场景注册表、选择与旧参数别名见 `docs/verify/browser-scenarios.md`。
 - 阶段选测与影子对照（F，已交付）：`context.selection` 与顶层 `shadow`（另存 `shadow.json`）；`input.fingerprint` 与 `changed_since_baseline` 沿用既有语义，不需要新字段。策略版本、回退情形与样本清单见 [selection-strategy.md](selection-strategy.md)。
-- 证据复用（G）：按 `input.fingerprint`、`environment`、`groups[].name` 与 `context.phase` 匹配已有记录；通过判定使用当前校验后的 `usable_as_evidence`，不能跳过证据完整性校验。
+- 证据复用（G，已交付）：顶层 `reuse` 与 `groups[].outcome = "reused"`（另见 `groups[].reuse`）；匹配按 `input.fingerprint`、`environment`、`groups[].name` 与 `context.phase`，通过判定使用当前校验后的 `usable_as_evidence`，不跳过证据完整性校验；`--no-reuse` 强制全部重跑。语义见「证据复用（G 项）」。
 - 持续报告（H）：读 `index.jsonl` 汇总，不新增记录字段。
 
 ## 已知限制

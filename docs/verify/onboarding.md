@@ -49,6 +49,12 @@ python3 verify.py run --group all --phase pr --pr 50 --reason "PR 收敛前验�
 # CI：完整单元 + 服务安全自检（浏览器依赖不进 CI）
 python3 verify.py run --group unit --group serve-check --phase ci
 
+# 审查阶段针对具体疑点补测：点名到类 / 用例的选择器不复用旧证据
+python3 verify.py run unit-related tests.test_core.ServerTests --phase review
+
+# 完全独立复测：绕过证据复用，全部组实际执行（原因写进记录）
+python3 verify.py run --no-reuse --reason "独立审查者复测"
+
 # 某个组设超时，超时按 124 退出并回收子进程
 python3 verify.py run --group browser --timeout 300
 ```
@@ -57,7 +63,7 @@ python3 verify.py run --group browser --timeout 300
 
 ## 怎么读报告
 
-报告分七段：结论、阶段与关联、提交与基线、输入指纹与环境、耗时、分组结果、证据。三个要点：
+报告分段：结论、阶段与关联、提交与基线、输入指纹与环境、耗时、分组结果、影子对照、证据复用（有引用决策时）、证据。三个要点：
 
 - 结论行保留原运行的结论和退出码；「能否作为通过证据」反映本次读取时的校验结果。日志丢失或损坏时，报告标为证据不可用并返回 1，即使原运行通过也不例外。`report --json` 同样输出当前校验结果和问题，不改写磁盘上的原记录。
 - 耗时段把排队、锁等待、墙钟、入口自身开销、清理、用例耗时合计、类 / 模块级开销、未归属开销分开列。用例耗时合计是各用例之和，不是等待时间；锁等待是同机资源互斥的排队时长，单独一列，既不摊进执行耗时也不算入口开销。要看总等待看墙钟。
@@ -86,6 +92,18 @@ python3 verify.py run --group browser --timeout 300
 - `run` 默认影子模式：实际执行仍是请求的组（缺省完整单元），建议范围写进 `context.selection`；结束时对照写进 `shadow` 字段与 `shadow.json`。候选遗漏（完整检查发现而建议范围没覆盖的失败）保留并归因，不会被丢弃，也不会自动改规则。
 - 未知路径、坏基线、损坏规则、清单缺口、策略自身变化一律回退完整检查并解释原因；空差异不解释成「不用测」。`issue` 阶段不自动启动测试，缺陷复现显式请求相关组。
 - 策略版本、回退情形、允许列表边界与样本清单见 [selection-strategy.md](selection-strategy.md)；影子报告可被 G / H 直接读取（`shadow.json` + `context.selection`）。
+
+## 证据复用与流程接入（G 项）
+
+有效验证证据可以跨阶段引用：开发者完成验证后，审查和 PR 整理引用当前仍有效的记录，而不是无条件重跑全套。判定策略在仓库根 `verify_evidence.py`（版本化，`POLICY_VERSION` 随判定逻辑递增）。
+
+- **复用判定（从紧，任何一条不满足就实际执行）**：同输入指纹（HEAD + 工作树全部有效输入的内容摘要，含 staged / unstaged / untracked）+ 同环境（OS、Python、CI 标记、配置摘要）+ 范围覆盖（请求组的测试清单 ⊆ 已验证组的清单）+ 来源记录当前校验后 `usable_as_evidence=true`（不信任落盘时的旧标记）+ 未超 24 小时保鲜窗口且结束时间不在未来 + 入口版本、选测策略版本、复用策略版本一致 + 基线一致。唯一放宽：差异被证明仅在文档允许列表内（`README.md`、`README.en.md`、`docs/assets/`，与选测策略同一允许列表；覆盖映射下停用）时仍可复用，复用理由注明「差异仅在文档允许列表内」；无法证明独立性就回退重新验证。
+- **永远不复用的组**：依赖同机宿主机状态的组（`groups[].resources` 非空——完整单元、完整浏览器、命中敏感模块的相关单元直跑）。指纹相同也不复用，必须实际执行或要求隔离证明。
+- **阶段口径**：`issue` / `development` / `review` / `manual` 默认启用复用；`pr` / `ci` 是收敛与平台门禁，按口径必须实际执行（完整单元、条件触发的完整浏览器与服务安全检查在 PR 收敛时都要真跑，本地记录也不替代 Linux 双 Python CI）。PR 整理阶段的引用走 `review` / `manual`。
+- **按疑点复测不受限**：`unit-related` 点名到类 / 用例的选择器不复用（如 `python3 verify.py run unit-related tests.test_synth.TouchTests --phase review`）；要完全独立复测用 `--no-reuse`，绕过原因写进记录。
+- **呈现与统计**：被引用的组 `outcome` 为 `reused`（引用已有验证），明确区别于「跳过（空集合）」——后者不是通过；引用不重复计入通过数量（`result.counts` 只统计实际执行），报告列出来源 run、时间、范围与理由；`report` 读取时对引用链重校验，来源被篡改即降级为不可用并返回 1。
+- **迁移与故障恢复**：统一入口 G 之前的记录没有复用策略版本，一律不参与复用；未经统一入口生成的旧日志更不会被当作可信记录。读取错误一律回退为全部实际执行，不把旧记录误判成功。全量回退模式始终可用：`python3 verify.py run --no-reuse`（等价于 G 之前的完整执行行为）。
+- **会话口径（v1）**：「同一次逻辑工作会话」以同一产物根（同一检出 / worktree）近似——跨检出的记录互相不可见，也不跨机器；在此之上叠加 24 小时保鲜上限。
 
 ## 重现步骤
 
@@ -147,7 +165,7 @@ python3 verify.py report --out-dir <解压后的构件目录> --latest
 - C（同机隔离与锁，已交付）：`groups[].resources` 与 `groups[].lock` 记录组级锁获取，`timing.lock_wait_seconds` 单列排队，`children.json` 登记语义未动；协议本体在仓库根 `host_isolation.py`，新入口要接资源锁时复用它，不要另起一套。
 - D（浏览器场景，已交付）：`groups[].scenarios` 已填充场景记录，`granularity` 细化到 `scenario`；场景注册表在 `tests/e2e_scenarios.py`（纯标准库），局部执行用 `--only` 或旧参数别名，清单用 `--list`；完整模式行为矩阵不变（629=629 前后对照）。
 - F（阶段选测与影子对照，已交付）：`plan --phase` 解释建议范围与回退原因；`run` 默认影子模式——`context.selection` 记录建议（策略版本、命中规则、未知路径、回退原因、建议组与场景），`shadow` 字段与运行目录 `shadow.json` 记录建议与实际执行的对照（候选遗漏、归因、不可比较原因）。策略本体与映射表在仓库根 `verify_selection.py`，语义、回退情形与样本清单见 [selection-strategy.md](selection-strategy.md) 与 `docs/verify/shadow-samples.json`。
-- G（证据复用）：按 `input.fingerprint` + `environment` + `groups[].name` 匹配已有记录，只认当前校验后 `result.usable_as_evidence` 为 `true` 的记录，不能直接信任落盘时的通过标记。
+- G（证据复用，已交付）：`run` 在执行前按 `input.fingerprint` + `environment` + 范围覆盖 + 阶段与版本口径决定哪些组引用已有验证（`reuse` 字段与 `groups[].outcome = "reused"`），只认当前校验后 `usable_as_evidence` 为 `true` 的记录，不能直接信任落盘时的通过标记；`--no-reuse` 强制全部重跑。语义见下文「证据复用与流程接入（G 项）」。
 - H（持续报告）：读 `.verify/index.jsonl` 汇总，不新增记录字段，也不在产品测试之外再跑东西。
 
 ## 兼容与迁移
