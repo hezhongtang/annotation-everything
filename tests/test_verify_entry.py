@@ -546,6 +546,32 @@ class InputSnapshotTests(VerifyEntryTestCase):
 
 
 class ProcessLifecycleTests(VerifyEntryTestCase):
+    def test_repeated_abort_preserves_time_spent_reaping_children(self):
+        import verify
+
+        ctx = verify.RunContext("cleanup-probe", self.repo.artifact_dir,
+                                None, sys.stdout, True)
+        ctx.run_dir.mkdir(parents=True)
+        child = subprocess.Popen([sys.executable, "-c", '''import signal, sys, time
+def cleanup(signum, frame):
+    time.sleep(0.2)
+    sys.exit(128 + signum)
+signal.signal(signal.SIGTERM, cleanup)
+print("ready", flush=True)
+time.sleep(30)
+'''], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                 start_new_session=True)
+        self.addCleanup(_reap, child)
+        self.assertEqual(child.stdout.readline().strip(), "ready")
+        ctx.registry.register(child, "synthetic")
+        ctx.abort(signal.SIGTERM)
+        first_cleanup = ctx.cleanup_seconds
+        self.assertGreaterEqual(first_cleanup, 0.15, "第一次回收包含子进程的实际清理")
+        self.assertEqual(child.returncode, 143)
+        ctx.abort(signal.SIGTERM)  # 外层收尾再次调用：已经没有活跃子进程
+        self.assertGreaterEqual(ctx.cleanup_seconds, first_cleanup,
+                                "第二次空回收不得抹去已经发生的清理耗时")
+
     def test_group_timeout_reaps_the_child_and_reports_timeout(self):
         self.unit(UNIT_SLOW)
         self.repo.commit_all("合成超时")

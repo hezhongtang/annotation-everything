@@ -877,7 +877,9 @@ class RunContext:
             self.save_children()
         except OSError as exc:
             self.note("子进程回收后，登记簿写入失败：%s" % exc)
-        self.cleanup_seconds = round(time.monotonic() - cleanup_started, 6)
+        # 组内异常和外层收尾可能先后调用；空回收不得覆盖已经发生的清理耗时。
+        self.cleanup_seconds = round(
+            self.cleanup_seconds + time.monotonic() - cleanup_started, 6)
 
 
 def execute_group(group: Group, ctx: RunContext) -> dict:

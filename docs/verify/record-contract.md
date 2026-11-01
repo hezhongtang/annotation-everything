@@ -83,7 +83,7 @@
 | `timing.wall_seconds` | 浮点秒 | 是 | 从开始到结束的墙钟，用户等待的下界 |
 | `timing.lock_wait_seconds` | 浮点秒 | 是 | 各组等待共享资源锁的时间之和（C 项起有值）；单列为排队时长，不计入 `wrapper_seconds`，也不摊进执行耗时 |
 | `timing.wrapper_seconds` | 浮点秒 | 是 | 入口自身开销，等于墙钟减去各组子进程耗时与锁等待 |
-| `timing.cleanup_seconds` | 浮点秒 | 是 | 中断后回收登记子进程的耗时；正常完成为 0 |
+| `timing.cleanup_seconds` | 浮点秒 | 是 | 中断或入口异常后回收登记子进程的累计耗时；正常完成为 0 |
 | `timing.case_seconds_total` | 浮点秒 | 是 | 各用例耗时之和，不等于墙钟 |
 | `timing.fixture_seconds_total` | 浮点秒 | 是 | 类 / 模块级准备与清理之和 |
 | `timing.unattributed_seconds` | 浮点秒 | 是 | 同类相邻用例之间的空隙，明确标成未归属 |
@@ -91,6 +91,8 @@
 
 计时归属规则：
 
+- `cleanup_seconds` 是回收阶段的单独观测值，已经包含在对应组的 `child_seconds`
+  或组外收尾的 `wrapper_seconds` 中，不与它们相加；重复进入收尾时累计实际回收耗时。
 - 单个用例的耗时从 `startTest` 到 `stopTest`，含该用例自己的 `setUp` / `tearDown`。
 - 类 / 模块级 `setUpClass`、`setUpModule`、`tearDownClass`、`tearDownModule` 发生在两个用例之间，计入两者之间的空隙，按 `run-start`、`class-boundary`、`run-end`、`same-class` 四类归入 `fixture_seconds_total`；不摊到任何单个用例，也不重复累计。
 - `same-class` 空隙是同类相邻用例之间的时间，本应是零；非零时单独计入 `unattributed_seconds`，不冒充 fixture。
