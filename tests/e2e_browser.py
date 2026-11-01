@@ -90,12 +90,6 @@ def describe_page(page):
         return "（页面快照失败：%s: %s）" % (type(exc).__name__, exc)
 
 
-def wait_until(cond, page, seconds, condition=None):
-    """有界轮询 Python 侧条件（磁盘文件、DOM 与磁盘的组合判断），超时 False + 诊断。"""
-    return e2e_waits.bounded_poll(cond, seconds, condition=condition,
-                                  describe=lambda: describe_page(page))
-
-
 def wait_dom(page, expression, seconds, arg=None, condition=None):
     """等浏览器里的可观察状态（wait_for_function 浏览器侧自动重试），超时 False + 诊断。"""
     return e2e_waits.wait_dom(page, expression, seconds, arg=arg, condition=condition,
@@ -113,10 +107,10 @@ def wait_rev(page, before, seconds=10):
     return e2e_waits.wait_rev(page, before, seconds, describe=lambda: describe_page(page))
 
 
-def wait_response(page, predicate, seconds, condition=None):
+def wait_response(page, predicate, seconds, condition=None, action=None):
     """等下一个匹配的网络事件完成（expect_response 事件驱动，不靠固定间隔）。"""
     return e2e_waits.wait_response(page, predicate, seconds, condition=condition,
-                                   describe=lambda: describe_page(page))
+                                   describe=lambda: describe_page(page), action=action)
 
 
 # 常用可观察条件的 JS 表达式（全部是页面自身的状态，不需要往页面加测试钩子）
@@ -677,10 +671,11 @@ def full_check_checks(browser, tmp: Path):
         old.uncheck("#hFullCheck")
         items_before = len(json.loads((d / "handoff.json").read_text())["items"])
         old.route("**/api/handoff", legacy_post)
-        old.click("#doHand")
-        # 先证明旧服务确实收到并改写了这次提交（POST 往返到达），等裁决结束（落盘或提示）再断言
+        # 先证明旧服务确实收到并改写了这次提交（POST 往返到达），等裁决结束（落盘或提示）再断言；
+        # 监听先于 click 注册（action 在注册后执行），毫秒级完成的本地应答不会漏事件
         wait_response(old, lambda r: r.request.method == "POST" and r.url.endswith("/api/handoff"), 10,
-                      condition="本次提交的 POST /api/handoff 往返（旧服务被咨询）")
+                      condition="本次提交的 POST /api/handoff 往返（旧服务被咨询）",
+                      action=lambda: old.click("#doHand"))
         wait_until(lambda: len(json.loads((d / "handoff.json").read_text())["items"]) > items_before
                    or "全量勾稽" in old.inner_text("#toast"), old, 5,
                    condition="提交已裁决（落盘，或出现全量勾稽未确认提示）")

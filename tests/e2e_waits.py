@@ -96,15 +96,19 @@ def wait_dom(page, expression: str, seconds, *, arg=None, condition=None, descri
         return False
 
 
-def wait_response(page, predicate, seconds, *, condition=None, describe=None) -> bool:
+def wait_response(page, predicate, seconds, *, condition=None, describe=None,
+                  action=None) -> bool:
     """等下一个匹配的网络事件完成：page.expect_response（事件驱动，不靠固定间隔）。
 
     用于把等待绑定到「本次动作产生的请求 / 应答」或「一次轮询往返确实发生」。
-    超时返回 False 并输出诊断；非超时异常原样传播。
+    action 在监听注册之后、等待之前执行（Playwright 推荐模式）：先注册再触发动作，
+    毫秒级完成的请求不会落在注册前的漏事件窗口里。超时返回 False 并输出诊断；
+    非超时异常原样传播。
     """
     try:
         with page.expect_response(predicate, timeout=int(seconds * 1000)):
-            pass
+            if action is not None:
+                action()
         return True
     except Exception as exc:
         if not _is_timeout(exc):
