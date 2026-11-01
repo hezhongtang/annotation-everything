@@ -47,6 +47,7 @@ from typing import Optional
 SCHEMA = "ae-verify-run/1"
 CASES_SCHEMA = "ae-verify-cases/1"
 PLAN_SCHEMA = "ae-verify-plan/1"
+SHADOW_SCHEMA = "ae-verify-shadow/1"
 WRAPPER_VERSION = 1
 ARTIFACT_DIRNAME = ".verify"
 TEST_START_DIR = "tests"
@@ -84,6 +85,16 @@ VERIFY_PY = Path(__file__).resolve()
 # 同机资源隔离协议（issue #52）：资源敏感组按共享资源互斥，锁只协调参与者。
 # 协议本体在仓库根的 host_isolation.py；直接跑 unittest / e2e_browser 的旧入口共用它。
 import host_isolation  # noqa: E402
+
+# 阶段选测与影子对照（issue #55）：策略层在仓库根 verify_selection.py。
+# 加载失败不拖垮入口：影子建议按不可用处理（保守回退完整检查），实际执行不受影响。
+try:
+    import verify_selection  # noqa: E402
+except Exception as _selection_error:  # pragma: no cover - 防御分支
+    verify_selection = None  # type: ignore[assignment]
+    _SELECTION_IMPORT_ERROR = "%s: %s" % (type(_selection_error).__name__, _selection_error)
+else:
+    _SELECTION_IMPORT_ERROR = None
 
 
 class UsageError(Exception):
@@ -1187,10 +1198,19 @@ def cmd_plan(args) -> int:
     # 组名时当组名用，不把组名混进选择器与等价 / 实际命令
     if args.group is None and args.selectors and args.selectors[0] in build_groups():
         args.group = [args.selectors.pop(0)]
+    phase = getattr(args, "phase", None)
+    if phase is not None and phase not in PHASES:
+        raise UsageError("未知的开发阶段：%s（可选：%s）" % (phase, "、".join(PHASES)))
     groups = build_groups(args.selectors)
     selected = expand_groups(args.group or ["unit"], groups)
+    # 选测计划（issue #55）：--json 与 --phase 时计算；解释范围，不启动任何产品测试
+    selection = None
+    if args.as_json or phase is not None:
+        selection = build_selection_for(phase or DEFAULT_PHASE,
+                                        resolve_baseline(getattr(args, "baseline", None)),
+                                        snapshot_input())
     if args.as_json:
-        print(json.dumps({
+        payload = {
             "schema": PLAN_SCHEMA,
             "wrapper_version": WRAPPER_VERSION,
             "default_group": "unit",
@@ -1211,7 +1231,10 @@ def cmd_plan(args) -> int:
                         "auto_included": list(group.auto_included),
                         "resources": list(group.resources)}
                        for group in groups.values()],
-        }, ensure_ascii=False, indent=2))
+        }
+        if selection is not None:
+            payload["selection"] = selection
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
         return EXIT_OK
     print("验证入口 verify.py（记录 schema %s，入口版本 %d）" % (SCHEMA, WRAPPER_VERSION))
     print("本次将执行：%s\n" % "、".join(selected))
@@ -1245,13 +1268,226 @@ def cmd_plan(args) -> int:
     print("记录写在 %s/runs/<run ID>/：record.json 是结构化记录，<组名>.log 是子进程原始输出，"
           "<组名>.cases.json 是用例级计时明细。" % ARTIFACT_DIRNAME)
     print("字段契约：docs/verify/record-contract.md；读取已有结果用 python3 verify.py report --latest")
+    if selection is not None:
+        print()
+        print(render_selection_text(selection))
     return EXIT_OK
+
+
+# ── 阶段选测与影子对照（issue #55） ────────────────────────────────────────
+
+def build_selection_for(phase: str, baseline: dict, snapshot: dict) -> dict:
+    """构建选测计划并补上契约附带后的生效选择器；策略层不可用时保守回退。"""
+    if verify_selection is None:
+        return {"schema": "ae-verify-selection/1", "strategy_version": None,
+                "strategy_source": None, "available": False,
+                "reason": "策略模块加载失败（%s），影子建议不可用；实际执行不受影响"
+                          % _SELECTION_IMPORT_ERROR,
+                "phase": phase, "baseline": baseline, "changes": None,
+                "fallback": {"kind": "broken_rules", "reason": "策略模块加载失败"},
+                "matched_rules": [], "doc_exempt": [], "unknown_paths": [],
+                "manifest_check": {"new_tests": [], "deleted_tests": [], "renamed_tests": [],
+                                   "problems": []},
+                "suggested": {"runs_tests": True, "groups": ["unit"], "selectors": [],
+                              "selectors_effective": [], "contract_added": [], "scenarios": [],
+                              "serve_check": False, "not_applicable": [],
+                              "notes": ["回退完整检查：选测策略层不可用。"]}}
+    selection = verify_selection.build_selection(snapshot, baseline, phase, REPO)
+    suggested = selection.get("suggested")
+    if suggested and suggested.get("selectors"):
+        effective, added = expand_related_selectors(list(suggested["selectors"]))
+        suggested["selectors_effective"] = display_argv(effective)
+        suggested["contract_added"] = display_argv(added)
+    return selection
+
+
+def compute_shadow(record: dict, selection: Optional[dict]) -> dict:
+    """影子对照：建议范围与本次实际执行（完整检查）并列，失败落在建议范围外时保留候选遗漏。
+
+    只有输入、环境、用例身份可对应的样本才用于遗漏判断；输入在运行中变化、
+    快照不可用、运行没有正常结束、整次结论是超时 / 入口错误 / 依赖缺失、
+    完整单元没有真实执行（空集合 / 全跳过 / 超时 / 加载错误）、实际执行不含
+    完整单元时，明确标注「不可比较」，不产出遗漏判断。回退完整检查时建议本身
+    就是完整检查，不产出遗漏判断，失败清单照常保留。
+    """
+    selection = selection or {}
+    suggested = selection.get("suggested") or {}
+    result = record.get("result") or {}
+    shadow = {
+        "schema": SHADOW_SCHEMA,
+        "strategy_version": selection.get("strategy_version"),
+        "comparable": False,
+        "incomparable_reason": None,
+        "run_outcome": result.get("outcome"),
+        "usable_as_evidence": bool(result.get("usable_as_evidence")),
+        "coverage": {"unit": False, "serve-check": False, "browser": False},
+        "suggested_groups": list(suggested.get("groups") or []),
+        "suggested_selectors": list(suggested.get("selectors_effective")
+                                    or suggested.get("selectors") or []),
+        "executed_groups": [group["name"] for group in record["groups"]
+                            if group.get("started_at") is not None],
+        "browser_planned_scenarios": list(suggested.get("scenarios") or []),
+        "failures": [],
+        "candidate_omissions": [],
+        "rule_candidates": [],
+        "attribution_note": "candidate_omissions 只在可比较且未回退时产出；"
+                            "infrastructure 表示加载 / fixture 错误，selector-gap 表示失败"
+                            "落在建议范围外；运行中改码由输入失效标注，平台差异由环境段区分",
+    }
+    executed = set(shadow["executed_groups"])
+    shadow["coverage"] = {"unit": "unit" in executed,
+                          "serve-check": "serve-check" in executed,
+                          "browser": "browser" in executed}
+    # 失败是本次执行的事实，不依赖计划是否可比较；先收集，再决定是否判断遗漏。
+    for group in record["groups"]:
+        if group.get("counter") == "unittest":
+            for case in group.get("cases") or []:
+                if case.get("status") in (FAILED, ERROR, "unexpected_success"):
+                    shadow["failures"].append({
+                        "group": group["name"], "target": case.get("id"),
+                        "module": (case.get("id") or "").split(".")[0],
+                        "status": case.get("status")})
+        elif group["name"] == "serve-check" and (group.get("counts") or {}).get("failed"):
+            shadow["failures"].append({"group": "serve-check", "target": "服务安全自检",
+                                       "status": FAILED})
+        else:
+            for scenario in group.get("scenarios") or []:
+                if scenario.get("status") in ("failed", "error"):
+                    shadow["failures"].append({"group": "browser", "target": scenario.get("id"),
+                                               "status": scenario.get("status")})
+    reasons = []
+    if not selection or not selection.get("available"):
+        reasons.append("选测计划不可用（%s）" % (selection.get("reason") or "未知原因"))
+    if record["input"].get("covers_final_input") is False:
+        reasons.append("运行期间有效输入发生变化，开始与结束的输入不匹配")
+    elif record["input"].get("covers_final_input") is None:
+        reasons.append("输入快照不可用，无法确认观察针对同一输入")
+    if record.get("state") != "complete":
+        reasons.append("运行没有正常结束")
+    run_outcome = shadow["run_outcome"]
+    if run_outcome in (TIMEOUT, WRAPPER_ERROR, UNAVAILABLE, INTERRUPTED):
+        reasons.append("整次运行结论是 %s（%s），没有正常通过的完整执行可对照"
+                       % (run_outcome, VERDICT_LABELS.get(run_outcome, run_outcome)))
+    if "unit" in executed:
+        unit_outcome = next((group.get("outcome") for group in record["groups"]
+                             if group["name"] == "unit"), None)
+        if unit_outcome in (TIMEOUT, EMPTY, ERROR, SKIPPED):
+            reasons.append("完整单元组的结论是 %s（%s），没有真实执行的用例可对照"
+                           % (unit_outcome, VERDICT_LABELS.get(unit_outcome, unit_outcome)))
+    if "unit" not in executed:
+        reasons.append("实际执行不含完整单元，没有完整对照")
+    if (record.get("evidence") or {}).get("integrity") == "degraded":
+        reasons.append("执行证据完整性已降级，不能用于遗漏判断")
+    if reasons:
+        shadow["incomparable_reason"] = "；".join(reasons)
+        return shadow
+    shadow["comparable"] = True
+    fallback = selection.get("fallback")
+    if fallback is not None:
+        # 回退模式下建议就是完整检查：没有「建议范围外」可言，失败清单照常保留
+        shadow["notes"] = ["回退完整检查（%s），本次对照不产出遗漏判断" % fallback["kind"]]
+        return shadow
+    suggested_modules = set()
+    for selector in shadow["suggested_selectors"]:
+        prefix = _selector_module_prefix(selector)
+        if prefix and "/" not in prefix:
+            suggested_modules.add(prefix.split(".")[0])
+    suggested_groups = set(shadow["suggested_groups"])
+    all_suggested = "all" in suggested_groups
+    unit_suggested = all_suggested or "unit" in suggested_groups
+    serve_suggested = (all_suggested or "serve-check" in suggested_groups
+                       or bool(suggested.get("serve_check")))
+    suggested_scenarios = set(shadow["browser_planned_scenarios"])
+    browser_suggested = (all_suggested or "browser" in suggested_groups
+                         or "*" in suggested_scenarios)
+    paths_hint = sorted({path for rule in selection.get("matched_rules") or []
+                         for path in rule.get("paths") or []}
+                        | set(selection.get("unknown_paths") or []))
+    for failure in shadow["failures"]:
+        if "module" in failure:
+            module = failure["module"]
+            if not unit_suggested and module not in suggested_modules:
+                attribution = "infrastructure" if failure["status"] == ERROR else "selector-gap"
+                shadow["candidate_omissions"].append({
+                    "group": failure["group"], "target": failure["target"],
+                    "attribution": attribution, "module": module,
+                    "note": "失败用例的模块 %s 不在建议范围的选择器里" % module,
+                    "paths_hint": paths_hint})
+        elif failure["group"] == "serve-check":
+            if not serve_suggested:
+                shadow["candidate_omissions"].append({
+                    "group": "serve-check", "target": "组级", "attribution": "selector-gap",
+                    "note": "服务安全自检失败，但建议范围未包含该组",
+                    "paths_hint": paths_hint})
+        else:
+            if not browser_suggested and failure["target"] not in suggested_scenarios:
+                shadow["candidate_omissions"].append({
+                    "group": "browser", "target": failure["target"],
+                    "attribution": "selector-gap",
+                    "note": "失败场景不在建议的场景清单里", "paths_hint": paths_hint})
+    shadow["rule_candidates"] = [
+        {"missing": item["target"], "group": item["group"],
+         "suggestion": "把 %s 的失败纳入建议范围：为相关变更路径补映射规则或扩大现有规则"
+                       "（受审查的策略变更，%s）"
+                       % (item["group"], "、".join((item.get("paths_hint") or [])[:3]) or "相关路径")}
+        for item in shadow["candidate_omissions"]]
+    return shadow
+
+
+def render_selection_text(selection: dict) -> str:
+    """选测计划的人话解释：差异、命中规则、回退原因、建议范围与影子说明。"""
+    baseline = selection.get("baseline") or {}
+    lines = ["选测（策略版本 %s，来源 %s，阶段 %s，基线 %s）：" % (
+        selection.get("strategy_version"), selection.get("strategy_source"),
+        selection.get("phase"), (baseline.get("commit") or "不可解析")[:12])]
+    changes = selection.get("changes")
+    if changes is not None:
+        counts = changes.get("counts") or {}
+        lines.append("  有效差异：新增 %d、删除 %d、修改 %d、重命名 %d、未跟踪 %d"
+                     "（staged %d、unstaged %d、untracked %d）" % (
+                         len(changes.get("added") or []), len(changes.get("deleted") or []),
+                         len(changes.get("modified") or []), len(changes.get("renamed") or []),
+                         len(changes.get("untracked") or []), counts.get("staged", 0),
+                         counts.get("unstaged", 0), counts.get("untracked", 0)))
+    for rule in selection.get("matched_rules") or []:
+        lines.append("  命中规则：%s —— %s（%s）" % (rule["id"], rule["why"], "、".join(rule["paths"])))
+    for item in selection.get("doc_exempt") or []:
+        lines.append("  文档豁免：%s（%s）" % (item["path"], item["category"]))
+    if selection.get("unknown_paths"):
+        lines.append("  未知路径：%s" % "、".join(selection["unknown_paths"]))
+    for problem in (selection.get("manifest_check") or {}).get("problems") or []:
+        lines.append("  清单检查：%s" % problem)
+    fallback = selection.get("fallback")
+    if fallback:
+        lines.append("  回退完整检查（%s）：%s" % (fallback["kind"], fallback["reason"]))
+    suggested = selection.get("suggested") or {}
+    for note in suggested.get("notes") or []:
+        lines.append("  - %s" % note)
+    if suggested.get("runs_tests") is False:
+        lines.append("  建议范围：本阶段不自动启动测试（不是「不用测」）。")
+    else:
+        parts = []
+        if suggested.get("groups"):
+            parts.append("、".join(suggested["groups"]))
+        if suggested.get("selectors_effective"):
+            parts.append(" ".join(suggested["selectors_effective"]))
+        if suggested.get("contract_added"):
+            parts.append("（自动附带契约：%s）" % "、".join(suggested["contract_added"]))
+        lines.append("  建议范围：%s" % (" ".join(parts) or "（无）"))
+        if suggested.get("scenarios"):
+            lines.append("  浏览器场景（计划层对照）：%s" % "、".join(suggested["scenarios"]))
+        if suggested.get("not_applicable"):
+            lines.append("  不适用：%s（只有确认不适用的组才标注；影子模式实际执行不因此减少）"
+                         % "、".join(suggested["not_applicable"]))
+    lines.append("  影子模式：建议范围只记录不裁剪；run 把计划与实际执行对照写进记录与 shadow.json。")
+    return "\n".join(lines)
 
 
 def build_record(args, groups: dict, selected: list) -> dict:
     started_at = now_iso()
     snapshot = snapshot_input()
     baseline = resolve_baseline(args.baseline)
+    selection = build_selection_for(args.phase, baseline, snapshot)
     return {
         "schema": SCHEMA,
         "wrapper_version": WRAPPER_VERSION,
@@ -1267,7 +1503,8 @@ def build_record(args, groups: dict, selected: list) -> dict:
                     "selectors": display_argv(args.selectors),
                     "selectors_effective": display_argv(
                         expand_related_selectors(list(args.selectors or []))[0]
-                        if args.selectors else [])},
+                        if args.selectors else []),
+                    "selection": selection},
         "groups": [{"name": name, "title": groups[name].title,
                     "command": display_argv(groups[name].argv),
                     "equivalent": groups[name].equivalent, "counter": groups[name].counter,
@@ -1275,7 +1512,7 @@ def build_record(args, groups: dict, selected: list) -> dict:
                     "scenarios": [] if groups[name].scenarios else None,
                     "resources": list(groups[name].resources),
                     "lock": {"resources": list(groups[name].resources), "wait_seconds": None},
-                    "outcome": None, "exit_status": None} for name in selected],
+                    "started_at": None, "outcome": None, "exit_status": None} for name in selected],
         "commit": commit_summary(snapshot),
         "input": {
             "available": snapshot.get("available"),
@@ -1302,6 +1539,7 @@ def build_record(args, groups: dict, selected: list) -> dict:
                                        "锁等待单列为 lock_wait_seconds，不计入口开销，也不摊进执行耗时"},
         "result": {"outcome": None, "exit_status": None, "counts": {}, "summary": None,
                    "usable_as_evidence": False, "notes": []},
+        "shadow": None,
         "evidence": {"integrity": "ok", "record_path": "record.json", "logs": [], "cases": [],
                      "notes": []},
     }
@@ -1399,6 +1637,7 @@ def cmd_run(args) -> int:
 
     def merge_group_results() -> None:
         """把已完成的组结果合并进记录；没拿到结果的组才按中断 / 入口失败补齐。"""
+        started_groups = {entry["group"]: entry["started_at"] for entry in ctx.registry.entries}
         record["timing"]["wall_seconds"] = round(time.monotonic() - started, 6)
         child_total = round(sum((item.get("timing") or {}).get("child_seconds") or 0
                                 for item in results.values()), 6)
@@ -1414,6 +1653,8 @@ def cmd_run(args) -> int:
         record["timing"]["cleanup_seconds"] = round(getattr(ctx, "cleanup_seconds", 0.0), 6)
         record["timing"]["ended_at"] = now_iso()
         for group in record["groups"]:
+            # 登记簿只收录确实启动的子进程；排队超时、缺依赖和取消后的计划组为空。
+            group["started_at"] = started_groups.get(group["name"])
             if group.get("outcome") is not None:
                 continue  # 收尾被打断后重跑时，已合并的组不重复覆盖
             item = results.get(group["name"])
@@ -1458,10 +1699,21 @@ def cmd_run(args) -> int:
         fill_evidence(record, ctx)
         fill_result(record, ctx)
         if interrupted_signum is not None:
-            # 被信号中断时退出码语义是 128+信号，不能让 overall_exit 算回 0
+            # 先确定最终结论，再生成影子记录，避免收尾中断时两处结论不一致。
             record["result"].update(outcome=INTERRUPTED,
                                     exit_status=EXIT_INTERRUPTED_BASE + interrupted_signum,
                                     usable_as_evidence=False)
+        # 影子对照（issue #55）：建议范围与本次实际执行并列；不改变结论与退出码
+        try:
+            record["shadow"] = compute_shadow(record, record["context"].get("selection"))
+        except Exception as exc:  # 策略层问题不能吞掉门禁结果，只降级影子说明
+            record["shadow"] = {"schema": SHADOW_SCHEMA, "comparable": False,
+                                "incomparable_reason": "影子对照计算失败：%s: %s"
+                                                       % (type(exc).__name__, exc),
+                                "run_outcome": record["result"].get("outcome"),
+                                "usable_as_evidence": False,
+                                "candidate_omissions": [], "failures": [],
+                                "rule_candidates": []}
         with shield_termination():
             _finish(record, ctx, args)
 
@@ -1536,6 +1788,13 @@ def _finish(record: dict, ctx: RunContext, args) -> None:
         if record["result"].get("exit_status") == EXIT_OK:
             record["result"]["exit_status"] = EXIT_WRAPPER
         return
+    shadow = record.get("shadow")
+    if shadow is not None:
+        try:
+            write_json_atomic(ctx.run_dir / "shadow.json", shadow)
+        except OSError as exc:
+            record["result"]["notes"] = list(record["result"].get("notes") or []) + [
+                "shadow.json 写入失败（影子数据只在 record.json 里）：%s" % exc]
     if args.as_json:
         print(json.dumps(record, ensure_ascii=False, indent=2))
     else:
@@ -1652,6 +1911,11 @@ def load_record(run_dir: Path) -> tuple:
     if problems:
         record.setdefault("result", {})["usable_as_evidence"] = False
         record.setdefault("evidence", {})["integrity"] = "degraded"
+        shadow = record.get("shadow")
+        if isinstance(shadow, dict):
+            shadow.update(usable_as_evidence=False, comparable=False,
+                          incomparable_reason="报告读取时证据校验失败：%s" % "；".join(problems),
+                          candidate_omissions=[], rule_candidates=[])
     return record, problems
 
 
@@ -1780,6 +2044,32 @@ def render_report(record: dict, problems: Optional[list] = None,
             lines.append("     注意：%s" % group["note"])
     slow = sorted((case for group in record.get("groups") or [] for case in (group.get("cases") or [])),
                   key=lambda case: case.get("seconds") or 0, reverse=True)[:5]
+    shadow = record.get("shadow")
+    if shadow:
+        suggested_parts = ["、".join(shadow.get("suggested_groups") or ["（无）"])]
+        if shadow.get("suggested_selectors"):
+            suggested_parts.append(" ".join(shadow["suggested_selectors"]))
+        lines.append("影子对照（策略版本 %s）：建议 %s；实际执行 %s" % (
+            shadow.get("strategy_version"), " ".join(suggested_parts),
+            "、".join(shadow.get("executed_groups") or [])))
+        if shadow.get("comparable"):
+            coverage = shadow.get("coverage") or {}
+            lines.append("  可比较：是；覆盖 完整单元 %s / 服务自检 %s / 浏览器 %s" % (
+                "是" if coverage.get("unit") else "否", "是" if coverage.get("serve-check") else "否",
+                "是" if coverage.get("browser") else "否"))
+        else:
+            lines.append("  不可比较：%s" % shadow.get("incomparable_reason"))
+        if shadow.get("browser_planned_scenarios") and not (shadow.get("coverage") or {}).get("browser"):
+            lines.append("  浏览器场景（计划层对照，未执行）：%s"
+                         % "、".join(shadow["browser_planned_scenarios"]))
+        for item in shadow.get("candidate_omissions") or []:
+            lines.append("  候选遗漏（%s）：%s %s —— %s"
+                         % (item.get("attribution"), item.get("group"), item.get("target"),
+                            item.get("note")))
+        for item in shadow.get("rule_candidates") or []:
+            lines.append("  修正规则候选：%s" % item.get("suggestion"))
+        for note in shadow.get("notes") or []:
+            lines.append("  - %s" % note)
     if slow:
         lines.append("慢用例前 %d：" % len(slow))
         for index, case in enumerate(slow, start=1):
@@ -1815,6 +2105,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_help(plan)
     plan.add_argument("--group", action="append", default=None, metavar="NAME",
                       help="验证组，可重复；缺省 unit")
+    plan.add_argument("--phase", default=None, metavar="PHASE",
+                      help="给出阶段后输出选测建议与回退原因：%s" % "、".join(PHASES))
+    plan.add_argument("--baseline", default=None, metavar="SHA", help="选测用的基线提交")
     plan.add_argument("--json", action="store_true", dest="as_json", help="输出结构化计划")
     plan.add_argument("selectors", nargs="*", help=argparse.SUPPRESS)
     plan.set_defaults(handler=cmd_plan)
