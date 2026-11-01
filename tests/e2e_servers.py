@@ -62,10 +62,7 @@ class TestCleanup:
     def stop_all(self) -> None:
         """回收所有登记项；可重复调用。清理期间挡掉信号，防止被二次打断。"""
         with _signals_deferred():
-            while self._procs:
-                proc = self._procs[0]
-                reap(proc, timeout=self.terminate_timeout)
-                self._procs.remove(proc)   # 收掉了才摘，中途被打断也不会丢下剩下的
+            self.stop_procs()
             dirs, self._dirs = self._dirs, []
             for d in dirs:
                 shutil.rmtree(d, ignore_errors=True)
@@ -80,7 +77,7 @@ class TestCleanup:
             while self._procs:
                 proc = self._procs[0]
                 reap(proc, timeout=self.terminate_timeout)
-                self._procs.remove(proc)
+                self._procs.remove(proc)   # 收掉了才摘，中途被打断也不会丢下剩下的
 
 
 @contextlib.contextmanager

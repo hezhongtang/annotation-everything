@@ -8,7 +8,18 @@ from __future__ import annotations
 
 import sys
 import unittest
+import ast
+import contextlib
+import io
+import json
+import os
+import signal
+import tempfile
+import time
+import traceback
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
@@ -200,6 +211,94 @@ class RunnerConsistencyTests(unittest.TestCase):
         self.assertIsNotNone(problem)
         self.assertIn("ghost", problem)
         self.assertIn("注册", problem)
+
+
+class RunnerOutcomeTests(unittest.TestCase):
+    """执行真实入口调度函数，以合成浏览器覆盖失败和取消，不导入浏览器依赖。"""
+
+    def run_main(self, first, *, connected=True, launch_error=False):
+        tree = ast.parse((TESTS / "e2e_browser.py").read_text(encoding="utf-8"))
+        functions = ast.Module(body=[node for node in tree.body
+                                    if isinstance(node, ast.FunctionDef)
+                                    and node.name in ("main", "iso_now")], type_ignores=[])
+        results = []
+        browser = SimpleNamespace(is_connected=lambda: connected, close=lambda: None)
+
+        def launch(**_kwargs):
+            if launch_error:
+                raise RuntimeError("synthetic launch failure")
+            return browser
+
+        @contextlib.contextmanager
+        def playwright():
+            yield SimpleNamespace(chromium=SimpleNamespace(launch=launch))
+
+        def run_first(*_args):
+            first(results)
+
+        def run_next(*_args):
+            results.append((True, "later check"))
+
+        runners = {sid: run_next for sid in reg.SCENARIO_IDS}
+        runners["file-mode"] = run_first
+        cleanup = mock.Mock()
+        namespace = dict(scenarios=reg, SCENARIO_RUNNERS=runners, RESULTS=results,
+                         CLEANUP=cleanup, sync_playwright=playwright,
+                         SCENARIO_STATUS_LABELS={name: name for name in
+                             ("passed", "failed", "error", "interrupted", "not_run")},
+                         sys=sys, signal=signal, Path=Path, tempfile=tempfile,
+                         time=time, traceback=traceback, json=json)
+        exec(compile(functions, str(TESTS / "e2e_browser.py"), "exec"), namespace)
+        output = io.StringIO()
+        previous_handler = signal.getsignal(signal.SIGINT)
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(sys, "argv", ["e2e_browser.py", "--only", "file-mode,css-fidelity"]), \
+                mock.patch.object(tempfile, "mkdtemp", return_value=tmp), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            code = namespace["main"]()
+        self.assertIs(signal.getsignal(signal.SIGINT), previous_handler)
+        summary = json.loads(next(line.removeprefix("AE-SCENARIOS: ")
+                                  for line in output.getvalue().splitlines()
+                                  if line.startswith("AE-SCENARIOS: ")))
+        return code, summary["scenarios"], cleanup
+
+    def test_browser_crash_is_error_and_later_scene_not_run(self):
+        def crash(_results):
+            raise RuntimeError("synthetic browser crash")
+        code, scenes, cleanup = self.run_main(crash, connected=False)
+        self.assertEqual(code, 1)
+        self.assertEqual([item["status"] for item in scenes], ["error", "not_run"])
+        self.assertIn("synthetic browser crash", scenes[0]["message"])
+        cleanup.stop_procs.assert_called_once()
+
+    def test_actual_sigint_is_interrupted_even_if_driver_translates_exception(self):
+        def interrupt(results):
+            results.append((True, "completed check"))
+            try:
+                os.kill(os.getpid(), signal.SIGINT)
+            except KeyboardInterrupt:
+                raise RuntimeError("synthetic disconnected driver")
+        code, scenes, _ = self.run_main(interrupt, connected=False)
+        self.assertEqual(code, 130)
+        self.assertEqual([item["status"] for item in scenes], ["interrupted", "not_run"])
+        self.assertEqual(scenes[0]["checks"]["passed"], 1)
+
+    def test_empty_runner_is_error_instead_of_zero_check_pass(self):
+        code, scenes, _ = self.run_main(lambda results: None)
+        self.assertEqual(code, 1)
+        self.assertEqual([item["status"] for item in scenes], ["error", "passed"])
+        self.assertIn("没有执行任何检查", scenes[0]["message"])
+
+    def test_disconnect_after_completed_check_does_not_pass_unrun_scenes(self):
+        code, scenes, _ = self.run_main(
+            lambda results: results.append((True, "completed check")), connected=False)
+        self.assertEqual(code, 1)
+        self.assertEqual([item["status"] for item in scenes], ["passed", "not_run"])
+
+    def test_launch_failure_records_unrun_scenes(self):
+        code, scenes, _ = self.run_main(lambda results: None, launch_error=True)
+        self.assertEqual(code, 1)
+        self.assertEqual([item["status"] for item in scenes], ["not_run", "not_run"])
 
 
 if __name__ == "__main__":

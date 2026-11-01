@@ -24,6 +24,8 @@ uv run --no-project --with playwright python tests/e2e_browser.py --skills-only 
   数量、结果），`verify.py run --group browser` 把它写进记录的 `groups[].scenarios`
   （见 `docs/verify/record-contract.md`）。
 - 中断（Ctrl-C）时正在执行的场景记为 `interrupted`，其后场景记为 `not_run`，退出码 130。
+  通过 `verify.py` 取消时也保留已完成检查、场景明细与原始日志；清理期间的再次中断不打断回收。
+  没有收到中断信号的浏览器异常按错误记录；空检查与未完整执行的计划都不能作为通过结果。
 
 ## 旧行为到新场景的对照
 

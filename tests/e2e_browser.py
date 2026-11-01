@@ -2464,6 +2464,14 @@ def main() -> int:
     records: list[dict] = []
     ran: set[str] = set()
     interrupted = False
+    startup_error = None
+
+    def record_sigint(signum, frame):
+        nonlocal interrupted
+        interrupted = True
+        signal.default_int_handler(signum, frame)
+
+    previous_sigint = signal.signal(signal.SIGINT, record_sigint)
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(channel="chrome", headless=True)
@@ -2480,10 +2488,10 @@ def main() -> int:
                     except KeyboardInterrupt:
                         status, interrupted = "interrupted", True
                     except Exception as exc:   # 场景互相隔离：记下错误继续后面的场景
-                        if not browser.is_connected():
+                        if interrupted:
                             # Ctrl-C 的 SIGINT 同时到达本进程与浏览器驱动，驱动先死时
                             # TargetClosedError 会先于 KeyboardInterrupt 抛出：按中断处理，
-                            # 不把用户取消记成错误，也不让后续场景逐个空跑成 error
+                            # 只有实际收到 SIGINT 才算取消；浏览器意外断线仍是错误
                             status, interrupted = "interrupted", True
                         else:
                             status = "error"
@@ -2493,6 +2501,8 @@ def main() -> int:
                     failed = sum(1 for good, _ in done if not good)
                     if status == "passed" and failed:
                         status = "failed"
+                    if status == "passed" and not done:
+                        status, message = "error", "场景没有执行任何检查"
                     records.append({"id": sid, "status": status,
                                     "checks": {"total": len(done), "passed": len(done) - failed,
                                                "failed": failed},
@@ -2507,7 +2517,7 @@ def main() -> int:
                     print("--- 场景 %s 结束：%s（检查 %d/%d，%.1f 秒）---\n" % (
                         sid, SCENARIO_STATUS_LABELS[status], len(done) - failed, len(done),
                         records[-1]["seconds"]), flush=True)
-                    if interrupted:
+                    if interrupted or not browser.is_connected():
                         break
             finally:
                 try:
@@ -2516,6 +2526,11 @@ def main() -> int:
                     pass   # 中断后驱动连接可能已断：尽力关闭，结果以场景记录与摘要为准
     except KeyboardInterrupt:
         interrupted = True
+    except Exception as exc:
+        startup_error = "%s: %s" % (type(exc).__name__, exc)
+        traceback.print_exc()
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
 
     for sid in request.plan:   # 提前停止时，没跑到的场景记为未运行，不冒充通过
         if sid not in ran:
@@ -2535,8 +2550,8 @@ def main() -> int:
         "plan": list(request.plan), "scenarios": records}, ensure_ascii=False), flush=True)
     if interrupted:
         return 130
-    bad = any(record["status"] in ("failed", "error") for record in records)
-    return 1 if (failed or bad) else 0
+    bad = any(record["status"] != "passed" for record in records)
+    return 1 if (failed or bad or startup_error) else 0
 
 
 if __name__ == "__main__":
