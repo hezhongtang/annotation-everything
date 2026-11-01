@@ -178,6 +178,7 @@ class SynthRepo:
         self.write("skill/annotation-everything/scripts/serve.py", SERVE_STUB, executable=True)
         shutil.copy2(VERIFY, self.path / "verify.py")
         shutil.copy2(ROOT / "host_isolation.py", self.path / "host_isolation.py")
+        shutil.copy2(ROOT / "verify_selection.py", self.path / "verify_selection.py")
         self.git("init", "-q")
         self.git("add", "-A")
         self.git("-c", "user.name=synth", "-c", "user.email=synth@example.invalid",
@@ -2056,3 +2057,423 @@ class ExpectedFailureTests(unittest.TestCase):
         counts = record["result"]["counts"]
         self.assertEqual((counts["cases"], counts["passed"], counts["unexpected_successes"]), (2, 1, 1))
         self.assertEqual(record["groups"][0]["cases"][-1]["status"], "unexpected_success")
+
+
+# ── 阶段选测与影子对照（issue #55） ─────────────────────────────────────────
+#
+# 全部用合成仓库验证外部行为：plan 的建议 / 回退解释，run 的影子记录与遗漏归因。
+# 合成映射经 AE_SELECTION_MAP 注入（结构与真实仓库内置映射相同）；测试不镜像
+# 内置映射表逐字断言，只验证计划、执行与报告的外部行为。
+
+E2E_SCENARIOS_STUB = '''"""合成浏览器场景注册表：与真实 tests/e2e_scenarios.py 同构的最小清单。"""
+import dataclasses
+
+
+@dataclasses.dataclass(frozen=True)
+class Scenario:
+    id: str
+    title: str
+    fixture: str
+    isolation: str
+    full_required: bool = True
+    aliases: tuple = ()
+
+
+SCENARIOS = [
+    Scenario(id="skill-search", title="合成场景一", fixture="合成材料", isolation="独立上下文"),
+    Scenario(id="server-mode", title="合成场景二", fixture="合成材料", isolation="独立上下文"),
+]
+SCENARIO_IDS = tuple(scenario.id for scenario in SCENARIOS)
+'''
+
+# 合成映射：结构与内置映射一致；version 取 7 以区分内置版本，验证版本随来源透传
+SELECTION_MAP_OK = {
+    "schema": "ae-verify-selection/1",
+    "version": 7,
+    "doc_allowlist": [
+        {"prefix": "README.md", "category": "仓库说明"},
+        {"prefix": "docs/assets/", "category": "头图与截图"},
+    ],
+    "rules": [
+        {"id": "r-cli", "prefixes": ["tools/synth-cli.py"],
+         "selectors": ["tests/test_synth.py"],
+         "why": "合成 CLI 影响 test_synth"},
+        {"id": "r-serve", "prefixes": ["skill/annotation-everything/scripts/serve.py"],
+         "selectors": ["tests/test_synth.py"],
+         "serve_check": True,
+         "scenarios": ["skill-search"],
+         "why": "合成服务影响服务安全自检与场景"},
+        {"id": "r-dict", "prefixes": ["locales/"],
+         "selectors": ["tests/test_i18n_catalog_contract.py", "tests/test_synth.py"],
+         "why": "合成词典与全局契约"},
+        {"id": "r-docs", "prefixes": ["docs/"],
+         "selectors": [], "fallback": "guarded_doc",
+         "why": "docs 不在允许列表，保守回退"},
+        {"id": "r-skill", "prefixes": ["SKILL.md"],
+         "selectors": [], "fallback": "shared_resource",
+         "why": "技能指引不放行"},
+        {"id": "r-exec", "prefixes": ["verify.py"],
+         "selectors": [], "fallback": "strategy_change",
+         "why": "验证入口自身变化"},
+        {"id": "r-fixture", "prefixes": ["fixtures/"],
+         "selectors": [], "fallback": "shared_resource",
+         "why": "fixture 不能按扩展名放行"},
+    ],
+}
+
+# 运行期间改写已跟踪文件的慢测试：让结束快照与开始快照不同（AC8 的输入变化）
+CHURN_BODY = '''import pathlib
+import time
+import unittest
+
+
+class ChurnShadowTests(unittest.TestCase):
+    def test_touches_source_while_running(self):
+        path = pathlib.Path(__file__).resolve().parents[1] / "README.md"
+        path.write_text(path.read_text(encoding="utf-8") + "运行期改动\\n", encoding="utf-8")
+        time.sleep(1.0)
+        self.assertTrue(True)
+'''
+
+
+class SelectionPlanTests(VerifyEntryTestCase):
+    """阶段选测计划：plan --phase 的建议、回退与可解释性。"""
+
+    def setUp(self):
+        super().setUp()
+        self.repo.write("tests/e2e_scenarios.py", E2E_SCENARIOS_STUB)
+        self.map_path = self.repo.write(
+            "selection-map.json", json.dumps(SELECTION_MAP_OK, ensure_ascii=False, indent=2))
+        self.sel_env = {"AE_SELECTION_MAP": str(self.map_path)}
+        # 映射与场景 stub 属于测试基建：提交进基线，避免被当成未分类改动
+        self.repo.commit_all("选测测试基建")
+
+    def selection(self, *args: str, env: dict | None = None) -> dict:
+        merged = dict(self.sel_env)
+        if env:
+            merged.update(env)
+        p = self.repo.run_verify("plan", "--json", *args, extra_env=merged)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        return json.loads(p.stdout)["selection"]
+
+    def write_map(self, payload: dict) -> None:
+        self.map_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def test_development_plan_matches_rules_and_is_deterministic(self):
+        self.repo.write("tools/synth-cli.py", "#!/usr/bin/env python3\nprint('cli')\n")
+        self.repo.commit_all("合成 CLI")
+        self.repo.write("tools/synth-cli.py", "#!/usr/bin/env python3\nprint('cli v2')\n")
+        first = self.selection("--phase", "development")
+        self.assertEqual(first["schema"], "ae-verify-selection/1")
+        self.assertEqual(first["strategy_version"], 7, "策略版本随映射来源透传")
+        self.assertEqual(first["strategy_source"], "override")
+        self.assertIsNone(first["fallback"], "命中规则时不需要回退")
+        matched = {item["id"]: item for item in first["matched_rules"]}
+        self.assertIn("r-cli", matched, "改动命中声明的规则")
+        self.assertIn("tools/synth-cli.py", matched["r-cli"]["paths"])
+        self.assertTrue(matched["r-cli"]["why"], "每条命中规则可解释")
+        suggested = first["suggested"]
+        self.assertEqual(suggested["groups"], ["unit-related"])
+        self.assertIn("tests/test_synth.py", suggested["selectors"])
+        self.assertTrue(suggested["runs_tests"])
+        second = self.selection("--phase", "development")
+        self.assertEqual(first, second, "同一输入、阶段和策略版本得到相同计划")
+
+    def test_unknown_path_falls_back_to_full_check(self):
+        self.repo.write("mystery.xyz", "未知类别\n")
+        plan = self.selection("--phase", "development")
+        self.assertIsNotNone(plan["fallback"], "未分类路径保守回退")
+        self.assertEqual(plan["fallback"]["kind"], "unknown_path")
+        self.assertIn("mystery.xyz", plan["fallback"]["reason"], "回退原因点名未知路径")
+        self.assertIn("mystery.xyz", plan["unknown_paths"])
+        self.assertEqual(plan["suggested"]["groups"], ["unit"], "回退建议完整检查，不是空集合")
+        self.assertTrue(plan["suggested"]["notes"])
+
+    def test_bad_baseline_falls_back(self):
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        self.repo.commit_all("合成 CLI")
+        plan = self.selection("--phase", "development", "--baseline", "deadbeefdeadbeef")
+        self.assertIsNone(plan["baseline"]["commit"], "解析不了的基线明示为空")
+        self.assertEqual(plan["fallback"]["kind"], "bad_baseline")
+
+    def test_unparsable_map_falls_back(self):
+        self.repo.write("selection-map.json", "{ 不是 JSON")
+        plan = self.selection("--phase", "development")
+        self.assertEqual(plan["fallback"]["kind"], "broken_rules")
+        self.assertTrue(plan["fallback"]["reason"])
+
+    def test_unknown_scenario_id_falls_back(self):
+        import copy
+        payload = copy.deepcopy(SELECTION_MAP_OK)
+        for rule in payload["rules"]:
+            if rule["id"] == "r-serve":
+                rule["scenarios"] = ["no-such-scene"]
+        self.write_map(payload)
+        self.repo.write("skill/annotation-everything/scripts/serve.py", SERVE_STUB)
+        plan = self.selection("--phase", "development")
+        self.assertEqual(plan["fallback"]["kind"], "incomplete_manifest",
+                         "规则引用不存在的场景：映射与场景注册表失配，保守回退")
+        self.assertIn("no-such-scene", plan["fallback"]["reason"])
+
+    def test_manifest_gaps_fall_back(self):
+        import copy
+        # 选择器指向不存在的测试文件：测试清单不完整
+        payload = copy.deepcopy(SELECTION_MAP_OK)
+        for rule in payload["rules"]:
+            if rule["id"] == "r-cli":
+                rule["selectors"] = ["tests/test_missing.py"]
+        self.write_map(payload)
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        plan = self.selection("--phase", "development")
+        self.assertEqual(plan["fallback"]["kind"], "incomplete_manifest")
+        # 场景注册表缺失但规则引用场景
+        self.write_map(SELECTION_MAP_OK)
+        (self.repo.path / "tests" / "e2e_scenarios.py").unlink()
+        plan2 = self.selection("--phase", "development")
+        self.assertEqual(plan2["fallback"]["kind"], "incomplete_manifest")
+
+    def test_doc_allowlist_is_narrow(self):
+        self.repo.write("README.md", "# 合成仓库\n改动\n")
+        plan = self.selection("--phase", "development")
+        self.assertIsNone(plan["fallback"], "允许列表内的文档不需要产品测试")
+        exempt = {item["path"]: item for item in plan["doc_exempt"]}
+        self.assertIn("README.md", exempt)
+        self.assertTrue(exempt["README.md"]["category"])
+        self.assertEqual(plan["suggested"]["groups"], [])
+        self.assertIn("unit", plan["suggested"]["not_applicable"], "确认不适用的组显式标注")
+
+    def test_skill_guidance_and_guarded_docs_fall_back(self):
+        self.repo.write("SKILL.md", "技能指引\n")
+        plan = self.selection("--phase", "development")
+        self.assertEqual(plan["fallback"]["kind"], "shared_resource",
+                         "技能指引不能按扩展名放行")
+        self.repo.commit_all("技能指引")
+        self.repo.write("docs/verify/onboarding.md", "接入说明\n")
+        plan2 = self.selection("--phase", "development")
+        self.assertEqual(plan2["fallback"]["kind"], "guarded_doc")
+
+    def test_rename_cannot_disguise_into_allowlist(self):
+        self.repo.git("mv", "README.md", "NOTICE.md")
+        plan = self.selection("--phase", "development")
+        self.assertIsNotNone(plan["fallback"], "改名换姓进不了允许列表")
+        self.assertEqual(plan["fallback"]["kind"], "unknown_path")
+        self.assertIn("NOTICE.md", plan["fallback"]["reason"])
+        self.assertEqual(plan["changes"]["renamed"], [{"from": "README.md", "to": "NOTICE.md"}],
+                         "重命名两端都被识别")
+
+    def test_added_and_deleted_tests_trigger_manifest_check(self):
+        # 新增测试用不同内容：与被删文件内容相同时 git 的 rename 检测会把它配成重命名
+        self.repo.write("tests/test_new_area.py",
+                        UNIT_PASS.replace("AlphaTests", "NewAreaTests")
+                                 .replace("test_alpha_ok", "test_new_area_ok"))
+        plan = self.selection("--phase", "development")
+        self.assertEqual(plan["fallback"]["kind"], "incomplete_manifest",
+                         "新增测试未纳入映射，触发清单覆盖检查并保守回退")
+        self.assertIn("tests/test_new_area.py", plan["manifest_check"]["new_tests"])
+        self.repo.git("add", "-A")
+        plan2 = self.selection("--phase", "development")
+        self.assertIn("tests/test_new_area.py", plan2["manifest_check"]["new_tests"],
+                      "新增测试提交前后都触发清单覆盖检查")
+        # 先把新增测试提交进基线，再删除另一个测试文件：差异里只有删除，
+        # 不会被 git 的 rename 检测把新增与删除配对成重命名
+        self.repo.commit_all("新增区域测试")
+        self.repo.git("rm", "-q", "tests/test_synth.py")
+        plan3 = self.selection("--phase", "development")
+        self.assertEqual(plan3["fallback"]["kind"], "incomplete_manifest")
+        self.assertIn("tests/test_synth.py", plan3["manifest_check"]["deleted_tests"])
+
+    def test_modified_test_suggests_itself(self):
+        self.repo.write("tests/test_synth.py", UNIT_PASS + "\n# 改动\n")
+        plan = self.selection("--phase", "development")
+        self.assertIsNone(plan["fallback"], "修改已有测试是可解释的常见情形")
+        self.assertIn("tests/test_synth.py", plan["suggested"]["selectors"],
+                      "测试自身变化建议运行自身")
+
+    def test_issue_phase_does_not_auto_start_tests(self):
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        plan = self.selection("--phase", "issue")
+        self.assertFalse(plan["suggested"]["runs_tests"], "需求阶段不自动启动测试")
+        self.assertEqual(plan["suggested"]["groups"], [])
+        notes = "\n".join(plan["suggested"]["notes"])
+        self.assertIn("unit-related", notes, "缺陷复现的显式请求入口写进说明")
+
+    def test_pr_phase_requires_full_acceptance(self):
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        plan = self.selection("--phase", "pr")
+        self.assertIn("all", plan["suggested"]["groups"], "PR 收敛完成完整验收")
+        notes = "\n".join(plan["suggested"]["notes"])
+        self.assertIn("CI", notes, "双 Python 全量与浏览器责任由 CI 说明")
+
+    def test_ci_phase_matches_matrix(self):
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        plan = self.selection("--phase", "ci")
+        self.assertEqual(plan["suggested"]["groups"], ["unit", "serve-check"],
+                         "CI 阶段与现有矩阵一致：完整单元 + 服务安全自检")
+
+    def test_dict_rule_keeps_global_contract(self):
+        self.repo.write("locales/zh-CN.json", '{"a": "甲", "b": "乙"}\n')
+        plan = self.selection("--phase", "development")
+        matched = {item["id"] for item in plan["matched_rules"]}
+        self.assertIn("r-dict", matched)
+        self.assertIn("tests/test_i18n_catalog_contract.py", plan["suggested"]["selectors_effective"],
+                      "词典功能局部组包含全局契约")
+
+    def test_uncommitted_changes_are_collected(self):
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        self.repo.git("add", "tools/synth-cli.py")
+        self.repo.write("tools/synth-cli.py", "v2\n")
+        self.repo.write("notes-draft.md", "草稿\n")
+        plan = self.selection("--phase", "development")
+        self.assertIn("tools/synth-cli.py", plan["changes"]["staged"])
+        self.assertIn("tools/synth-cli.py", plan["changes"]["unstaged"])
+        self.assertIn("notes-draft.md", plan["changes"]["untracked"])
+        self.assertIn("notes-draft.md", plan["unknown_paths"], "未分类的未提交文件保守回退")
+
+    def test_baseline_change_changes_the_plan(self):
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        self.repo.commit_all("CLI v1")
+        first = self.repo.git("rev-parse", "HEAD").stdout.strip()
+        self.repo.write("README.md", "# 改\n")
+        self.repo.commit_all("文档改动")
+        with_baseline = self.selection("--phase", "development", "--baseline", first)
+        self.assertIsNone(with_baseline["fallback"], "基线之后只有允许列表内的文档")
+        self.assertEqual(with_baseline["suggested"]["groups"], [])
+        head_plan = self.selection("--phase", "development")
+        self.assertIsNotNone(head_plan["fallback"], "默认基线（HEAD）下没有差异")
+        self.assertEqual(head_plan["fallback"]["kind"], "no_changes",
+                         "空差异不解释成不用测，保守按完整检查")
+        self.assertEqual(with_baseline["baseline"]["source"], "explicit")
+
+
+class SelectionShadowTests(VerifyEntryTestCase):
+    """影子对照：run 默认记录建议范围并对照实际完整检查，不改变既有门禁。"""
+
+    def setUp(self):
+        super().setUp()
+        self.repo.write("tests/e2e_scenarios.py", E2E_SCENARIOS_STUB)
+        self.map_path = self.repo.write(
+            "selection-map.json", json.dumps(SELECTION_MAP_OK, ensure_ascii=False, indent=2))
+        self.sel_env = {"AE_SELECTION_MAP": str(self.map_path)}
+        # 映射与场景 stub 属于测试基建：提交进基线，避免被当成未分类改动
+        self.repo.commit_all("选测测试基建")
+
+    def run_shadow(self, *args: str, env: dict | None = None,
+                   timeout: float = 120) -> tuple:
+        merged = dict(self.sel_env)
+        if env:
+            merged.update(env)
+        p = self.repo.run_verify("run", *args, extra_env=merged, timeout=timeout)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        return p, record
+
+    def test_run_records_selection_and_shadow_without_changing_gate(self):
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        p, record = self.run_shadow("--phase", "development", "--reason", "影子样本")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(record["result"]["outcome"], "passed", "影子模式不改变既有完整门禁的结论")
+        selection = record["context"]["selection"]
+        self.assertEqual(selection["schema"], "ae-verify-selection/1")
+        self.assertEqual(selection["strategy_version"], 7)
+        self.assertEqual(selection["suggested"]["groups"], ["unit-related"])
+        shadow = record["shadow"]
+        self.assertEqual(shadow["schema"], "ae-verify-shadow/1")
+        self.assertTrue(shadow["comparable"])
+        self.assertIsNone(shadow["incomparable_reason"])
+        self.assertEqual(shadow["suggested_groups"], ["unit-related"])
+        self.assertEqual(shadow["executed_groups"], ["unit"])
+        self.assertTrue(shadow["coverage"]["unit"])
+        self.assertFalse(shadow["coverage"]["serve-check"], "未执行的组在覆盖标注里明示")
+        self.assertFalse(shadow["coverage"]["browser"])
+        self.assertEqual(shadow["candidate_omissions"], [], "完整门禁全绿时没有候选遗漏")
+        shadow_file = self.repo.artifact_dir / "runs" / record["run_id"] / "shadow.json"
+        self.assertTrue(shadow_file.is_file(), "影子对照单独落盘供 G / H 读取")
+        self.assertEqual(json.loads(shadow_file.read_text(encoding="utf-8"))["schema"],
+                         "ae-verify-shadow/1")
+
+    def test_planted_miss_is_recorded_and_failure_kept(self):
+        import copy
+        payload = copy.deepcopy(SELECTION_MAP_OK)
+        for rule in payload["rules"]:
+            if rule["id"] == "r-serve":
+                rule["selectors"] = ["tests/test_synth.py"]
+                rule["serve_check"] = False
+                rule["scenarios"] = []
+        self.map_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        # 窄映射提交进基线；服务变更留在工作树未提交（合成仓库在 main 上，
+        # 默认基线退化为 HEAD，提交过的变更相对基线不可见）
+        self.repo.commit_all("窄映射")
+        self.repo.write("skill/annotation-everything/scripts/serve.py",
+                        SERVE_STUB + "\n# 合成变更\n")
+        p, record = self.run_shadow("--group", "unit", "--group", "serve-check",
+                                    "--phase", "development", env={"SYNTH_SERVE_FAILED": "1"})
+        self.assertEqual(p.returncode, 1, "完整门禁的失败必须保留，不能被影子层吞掉")
+        self.assertEqual(record["result"]["outcome"], "failed")
+        serve_group = {group["name"]: group for group in record["groups"]}["serve-check"]
+        self.assertEqual(serve_group["outcome"], "failed")
+        shadow = record["shadow"]
+        omissions = shadow["candidate_omissions"]
+        self.assertTrue(omissions, "人工植入的漏选被对照识别")
+        targets = {item["group"] for item in omissions}
+        self.assertIn("serve-check", targets)
+        self.assertTrue(all(item.get("attribution") for item in omissions), "每条候选遗漏带归因")
+        self.assertTrue(shadow["rule_candidates"], "遗漏产生修正规则的候选")
+        self.assertTrue(shadow["failures"], "实际失败清单保留在影子记录里")
+
+    def test_input_change_marks_shadow_incomparable(self):
+        self.repo.write("tests/test_synth.py", CHURN_BODY)
+        self.repo.commit_all("慢测试")
+        p, record = self.run_shadow("--group", "unit", "--phase", "development")
+        self.assertEqual(record["input"]["covers_final_input"], False)
+        shadow = record["shadow"]
+        self.assertFalse(shadow["comparable"], "输入不匹配的运行不能计为选择遗漏")
+        self.assertIn("输入", shadow["incomparable_reason"])
+        self.assertEqual(shadow["candidate_omissions"], [], "不可比较时不产出遗漏判断")
+
+    def test_partial_run_is_not_compared_as_full_check(self):
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        p, record = self.run_shadow("unit-related", "tests/test_synth.py", "--phase", "development")
+        shadow = record["shadow"]
+        self.assertFalse(shadow["comparable"], "局部执行不是完整检查，不产出遗漏判断")
+        self.assertIn("完整", shadow["incomparable_reason"])
+        self.assertEqual(shadow["candidate_omissions"], [])
+
+    def test_report_shows_suggestion_and_actual_side_by_side(self):
+        self.repo.write("tools/synth-cli.py", "v1\n")
+        self.run_shadow("--phase", "development")
+        p = self.repo.run_verify("report", "--latest")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("影子", p.stdout, "报告并列呈现影子对照")
+        self.assertIn("unit-related", p.stdout, "建议范围出现在报告里")
+
+    def test_browser_scenarios_stay_at_plan_level_when_not_executed(self):
+        self.repo.write("skill/annotation-everything/scripts/serve.py", SERVE_STUB + "\n# 合成变更\n")
+        p, record = self.run_shadow("--group", "unit", "--phase", "development")
+        shadow = record["shadow"]
+        self.assertFalse(shadow["coverage"]["browser"], "浏览器未执行")
+        self.assertIn("skill-search", shadow["browser_planned_scenarios"],
+                      "浏览器场景只在计划层对照")
+
+
+class SelectionBuiltinMapTests(unittest.TestCase):
+    """内置映射自身的清单完整性：策略声明属于外部行为，直接校验。"""
+
+    def test_builtin_map_declares_real_repo_manifest(self):
+        sys.path.insert(0, str(ROOT))
+        import verify_selection as vs
+        problems = vs.validate_builtin_map(repo_root=ROOT)
+        self.assertEqual(problems, [], "内置映射的选择器与场景必须在真实仓库里全部可解析")
+
+    def test_builtin_map_falls_back_safely_in_foreign_repo(self):
+        # 不注入映射：内置映射的选择器在合成仓库不存在，必须安全回退而不是崩溃或空建议
+        temp = tempfile.TemporaryDirectory(prefix="verify-selection-builtin-")
+        self.addCleanup(temp.cleanup)
+        lock_temp = tempfile.TemporaryDirectory(prefix="verify-selection-lock-")
+        self.addCleanup(lock_temp.cleanup)
+        repo = SynthRepo(Path(temp.name))
+        repo.test_lock_dir = Path(lock_temp.name)
+        repo.write("mystery.xyz", "?\n")
+        p = repo.run_verify("plan", "--json", "--phase", "development")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        selection = json.loads(p.stdout)["selection"]
+        self.assertEqual(selection["strategy_source"], "builtin")
+        self.assertIsNotNone(selection["fallback"], "外来仓库对内置映射保守回退")
