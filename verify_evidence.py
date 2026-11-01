@@ -351,8 +351,10 @@ def _decide_group(name: str, meta: dict, sources: list, general_attempts: list,
 
 
 def _trim_attempts(attempts: list) -> list:
+    # 候选按新到旧处理、拒用原因按处理序追加：保留最新的 MAX_ATTEMPTS 条，
+    # 与主原因（attempts[0]，最新候选）方向一致
     return [{"run_id": run_id, "reason": reason}
-            for run_id, reason in attempts[-MAX_ATTEMPTS:]]
+            for run_id, reason in attempts[:MAX_ATTEMPTS]]
 
 
 def _run_decision(name: str, reason: str) -> dict:

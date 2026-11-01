@@ -3043,6 +3043,19 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         self.assertIn("保鲜", item["reason"])
         self.assertEqual(self.trace(self.serve_touch), 2)
 
+    def test_attempts_keep_the_newest_candidates_matching_the_main_reason(self):
+        """拒用候选超过上限时保留最新的几条，主原因（最新候选）不出列表。"""
+        for _ in range(7):
+            self.verify("run", "--group", "serve-check", "--phase", "development")
+            self.backdate(self.repo.latest_run_id(), hours=25)
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertEqual(len(item["attempts"]), 5)
+        self.assertEqual(item["attempts"][0]["reason"], item["reason"],
+                         "主原因取最新候选，attempts 也必须以最新候选开头")
+
     def test_end_time_in_the_future_is_rejected(self):
         self.verify("run", "--group", "serve-check", "--phase", "development")
         self.backdate(self.repo.latest_run_id(), hours=-2)
