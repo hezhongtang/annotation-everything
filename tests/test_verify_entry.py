@@ -73,6 +73,54 @@ print("\\n%d/%d 通过" % (total - failed, total))
 sys.exit(1 if failed else 0)
 '''
 
+# 合成浏览器入口（场景化）：在「N/M 通过」后再打一行 AE-SCENARIOS 摘要，
+# 与 tests/e2e_browser.py 的场景执行清单同一格式（issue #53）
+BROWSER_SCENARIO_STUB = '''#!/usr/bin/env python3
+import json
+import os
+import sys
+import time
+
+STATUS = os.environ.get("SYNTH_SCENARIO_STATUS", "passed")
+if STATUS == "interrupted":
+    # 中断形态：当前场景记 interrupted（保留已执行的检查），其后记 not_run，进程以 130 退出
+    scenarios = [
+        {"id": "skill-search", "status": "passed", "total": 2},
+        {"id": "server-mode", "status": "interrupted", "total": 1},
+        {"id": "css-fidelity", "status": "not_run", "total": 0},
+    ]
+else:
+    scenarios = [
+        {"id": "skill-search", "status": "passed", "total": 2},
+        {"id": "server-mode", "status": STATUS, "total": 2},
+    ]
+records = []
+passed_total = 0
+for scenario in scenarios:
+    started = time.time()
+    time.sleep(0.05)
+    failed = scenario["status"] == "failed"
+    print("=== 场景 %s ===" % scenario["id"])
+    for index in range(scenario["total"]):
+        print("%s  合成检查 %s-%d" % ("FAIL" if failed else "PASS", scenario["id"], index))
+    checks = {"total": scenario["total"],
+              "passed": 0 if failed else scenario["total"],
+              "failed": scenario["total"] if failed else 0}
+    passed_total += checks["passed"]
+    records.append({"id": scenario["id"], "status": scenario["status"], "checks": checks,
+                    "started_at": "2026-10-31T00:00:00+00:00",
+                    "ended_at": "2026-10-31T00:00:01+00:00",
+                    "seconds": round(time.time() - started, 6)})
+total = sum(item["checks"]["total"] for item in records)
+print("\\n%d/%d 通过" % (passed_total, total))
+print("AE-SCENARIOS: " + json.dumps({
+    "mode": "partial", "source": "--only",
+    "plan": [item["id"] for item in records], "scenarios": records}, ensure_ascii=False))
+if STATUS == "interrupted":
+    sys.exit(130)
+sys.exit(0 if passed_total == total else 1)
+'''
+
 UNIT_PASS = '''import unittest
 
 
@@ -824,6 +872,153 @@ class OtherGroupTests(VerifyEntryTestCase):
         self.assertEqual(len(index), 1)
         self.assertEqual(index[0]["run_id"], run_id)
         self.assertEqual(index[0]["outcome"], "passed")
+
+
+class BrowserScenarioTests(VerifyEntryTestCase):
+    """issue #53：浏览器组从场景摘要行接入场景级记录。"""
+
+    def use_scenario_browser(self) -> None:
+        self.repo.write("tests/e2e_browser.py", BROWSER_SCENARIO_STUB, executable=True)
+        self.repo.commit_all("换成带场景摘要的合成浏览器入口")
+
+    def test_browser_group_records_scenario_list_and_times(self):
+        self.use_scenario_browser()
+        p = self.repo.run_verify("run", "--group", "browser")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["granularity"], "scenario", "有场景摘要时按场景计时")
+        scenarios = group["scenarios"]
+        self.assertEqual([item["id"] for item in scenarios], ["skill-search", "server-mode"])
+        for item in scenarios:
+            self.assertEqual(item["status"], "passed")
+            self.assertEqual(item["checks"], {"total": 2, "passed": 2, "failed": 0})
+            self.assertIn("started_at", item)
+            self.assertIn("ended_at", item)
+            self.assertGreaterEqual(item["seconds"], 0.05)
+        self.assertEqual(group["counts"], {"total": 4, "passed": 4, "failed": 0})
+        self.assertIn("skill-search", p.stdout)
+        self.assertIn("server-mode", p.stdout)
+        self.assertIn("场景", p.stdout)
+
+    def test_failing_scenario_is_identifiable_in_the_record(self):
+        self.use_scenario_browser()
+        p = self.repo.run_verify("run", "--group", "browser",
+                                 extra_env={"SYNTH_SCENARIO_STATUS": "failed"})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["outcome"], "failed")
+        statuses = {item["id"]: item["status"] for item in group["scenarios"]}
+        self.assertEqual(statuses, {"skill-search": "passed", "server-mode": "failed"})
+
+    def test_browser_exit_130_is_interrupted_not_failed(self):
+        """子进程以 130 自行退出（浏览器脚本的中断路径）时按中断归类，不冒充失败。"""
+        self.use_scenario_browser()
+        p = self.repo.run_verify("run", "--group", "browser",
+                                 extra_env={"SYNTH_SCENARIO_STATUS": "interrupted"})
+        self.assertEqual(p.returncode, 130, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["outcome"], "interrupted", p.stdout)
+        self.assertEqual(group["exit_status"], 130)
+        statuses = {item["id"]: item["status"] for item in group["scenarios"]}
+        self.assertEqual(statuses, {"skill-search": "passed", "server-mode": "interrupted",
+                                    "css-fidelity": "not_run"})
+        self.assertFalse(record["result"]["usable_as_evidence"], "中断不能作为通过证据")
+
+    def test_interrupting_wrapper_preserves_scenarios_and_finishes_child_cleanup(self):
+        """真实中断父入口：日志流须留到子进程交出场景摘要，二次信号不打断回收。"""
+        script = BROWSER_SCENARIO_STUB.replace(
+            'STATUS = os.environ.get("SYNTH_SCENARIO_STATUS", "passed")', '''from pathlib import Path
+import signal
+
+def cancel(signum, frame):
+    raise KeyboardInterrupt
+
+signal.signal(signal.SIGTERM, cancel)
+try:
+    Path(os.environ["SYNTH_READY"]).write_text("ready")
+    time.sleep(30)
+except KeyboardInterrupt:
+    Path(os.environ["SYNTH_CLEANING"]).write_text("cleaning")
+    time.sleep(0.3)
+    STATUS = "interrupted"
+''')
+        self.repo.write("tests/e2e_browser.py", script, executable=True)
+        self.repo.commit_all("合成父入口取消与场景摘要")
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signum=signum):
+                ready = Path(self.temp.name) / ("ready-%s" % signum)
+                cleaning = Path(self.temp.name) / ("cleaning-%s" % signum)
+                env = dict(os.environ)
+                env.update(PATH=str(self.repo.path / "bin") + os.pathsep + env["PATH"],
+                           SYNTH_READY=str(ready), SYNTH_CLEANING=str(cleaning))
+                wrapper = subprocess.Popen(
+                    [sys.executable, "verify.py", "run", "--group", "browser",
+                     "--group", "serve-check"], cwd=self.repo.path, env=env,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                try:
+                    deadline = time.monotonic() + 10
+                    while not ready.exists() and wrapper.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertTrue(ready.exists(), "浏览器子进程已就绪")
+                    wrapper.send_signal(signum)
+                    while not cleaning.exists() and wrapper.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertTrue(cleaning.exists(), "子进程正在处理取消并准备摘要")
+                    wrapper.send_signal(signum)
+                    output, _ = wrapper.communicate(timeout=15)
+                finally:
+                    if wrapper.poll() is None:
+                        wrapper.kill()
+                        wrapper.wait()
+                    wrapper.stdout.close()
+                self.assertEqual(wrapper.returncode, 128 + signum, output)
+                run_id = self.repo.latest_run_id()
+                record = read_record(self.repo.artifact_dir, run_id)
+                self.assertEqual(record["state"], "aborted")
+                group = record["groups"][0]
+                self.assertEqual(group["outcome"], "interrupted")
+                self.assertEqual(group["exit_status"], 128 + signum)
+                self.assertEqual(group["signal"], signal.Signals(signum).name)
+                self.assertEqual(group["granularity"], "scenario")
+                self.assertEqual(group["counts"], {"total": 3, "passed": 3, "failed": 0})
+                self.assertEqual({item["id"]: item["status"] for item in group["scenarios"]},
+                                 {"skill-search": "passed", "server-mode": "interrupted",
+                                  "css-fidelity": "not_run"})
+                self.assertFalse(record["result"]["usable_as_evidence"])
+                run_dir = self.repo.artifact_dir / "runs" / run_id
+                self.assertIn("AE-SCENARIOS:", (run_dir / "browser.log").read_text())
+                children = json.loads((run_dir / "children.json").read_text())
+                self.assertEqual(len(children), 1, "取消后不再执行后续组")
+                self.assertTrue(children[0]["reaped"])
+                self.assertFalse(pid_alive(children[0]["pid"]))
+
+    def test_signal_while_draining_log_keeps_completed_scenario_evidence(self):
+        """子进程退出与读线程结束之间收到信号，也不能丢掉已输出的场景证据。"""
+        self.use_scenario_browser()
+        wrapper_path = self.repo.path / "verify.py"
+        source = wrapper_path.read_text(encoding="utf-8")
+        # 在合成入口的日志排空边界注入一次真实信号，避免依赖调度速度碰竞态。
+        source = source.replace("reader.join(timeout=5)",
+                                "os.kill(os.getpid(), signal.SIGINT)\n"
+                                "                reader.join(timeout=5)", 1)
+        wrapper_path.write_text(source, encoding="utf-8")
+        self.repo.commit_all("合成日志排空期间取消")
+        p = self.repo.run_verify("run", "--group", "browser", "--group", "serve-check")
+        self.assertEqual(p.returncode, 130, p.stdout + p.stderr)
+        run_id = self.repo.latest_run_id()
+        record = read_record(self.repo.artifact_dir, run_id)
+        self.assertEqual(record["state"], "aborted")
+        group = record["groups"][0]
+        self.assertEqual(group["outcome"], "interrupted")
+        self.assertEqual(group["counts"], {"total": 4, "passed": 4, "failed": 0})
+        self.assertEqual([item["status"] for item in group["scenarios"]], ["passed", "passed"])
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        children = json.loads((self.repo.artifact_dir / "runs" / run_id / "children.json").read_text())
+        self.assertEqual(len(children), 1)
+        self.assertTrue(children[0]["reaped"])
 
 
 class RelatedUnitTests(VerifyEntryTestCase):

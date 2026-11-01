@@ -111,14 +111,14 @@ python3 verify.py report --out-dir <解压后的构件目录> --latest
 
 入口自身开销约 0.001%，远低于 5% 的目标。两种跑法的墙钟差落在同一模式的运行间波动范围内，不能归因于计时：计时探针跑在被测进程内，没有为计时把纯逻辑测试改成独立进程，也没有并行累计值冒充等待时间。整包套件里新增了 43 个验收用例，其中多数要起子进程，这是测试数量的增加，不是单次验证的采集成本。
 
-浏览器组的真实接入：`python3 verify.py run --group browser` 在 macOS 开发机上 557/557 通过，墙钟约 189 秒，入口自身开销 0.0006 秒。浏览器组按整组计时，记录里用例耗时合计为 0 是预期的——场景级计时要等 D 项。
+浏览器组的真实接入：`python3 verify.py run --group browser` 在 macOS 开发机上 557/557 通过（A 交付时点的样本，当时场景少于现在的 629 项），墙钟约 189 秒，入口自身开销 0.0006 秒。浏览器组自 D 项起按场景计时（`granularity: scenario`），逐场景的起止时间与耗时在 `groups[].scenarios` 里；记录里用例耗时合计为 0 仍是预期的——那是单元组的口径，两组不混用。
 
 ## 给 B–H 的接入点
 
 - 记录契约已版本化，后续只在 `ae-verify-run/1` 上追加字段，升版本才改结构。字段语义和必填 / 可空规则见 [record-contract.md](record-contract.md)。
 - B（清理测试与词典契约提速，已交付）：清理测试的短等待经 `tests/e2e_servers.py` 的受控参数注入（`TestCleanup(terminate_timeout=...)`、`start_server(ready_timeout=...)`），缺省仍是 5 秒 / 8 秒的产品语义；权威词典契约模块是 `tests/test_i18n_catalog_contract.py`，入口常量 `RELATED_CONTRACT_SELECTORS`（verify.py）声明局部组的固定附带，F 的组映射直接引用它。
 - C（同机隔离与锁）：`children.json` 已经是所有权登记簿，只登记本次入口拉起的进程；锁字段加在 `groups[]` 上，不要改登记语义。
-- D（浏览器场景）：把 `groups[].scenarios` 从空数组填成场景记录，`granularity` 从 `group` 细化到 `scenario`；完整模式的行为矩阵不变。
+- D（浏览器场景，已交付）：`groups[].scenarios` 已填充场景记录，`granularity` 细化到 `scenario`；场景注册表在 `tests/e2e_scenarios.py`（纯标准库），局部执行用 `--only` 或旧参数别名，清单用 `--list`；完整模式行为矩阵不变（629=629 前后对照）。
 - F（阶段选测）：`input.fingerprint`、`input.changed_since_baseline` 和 `context.phase` 已经够了；选择理由和策略版本加在 `context` 与 `groups[]`。
 - G（证据复用）：按 `input.fingerprint` + `environment` + `groups[].name` 匹配已有记录，只认当前校验后 `result.usable_as_evidence` 为 `true` 的记录，不能直接信任落盘时的通过标记。
 - H（持续报告）：读 `.verify/index.jsonl` 汇总，不新增记录字段，也不在产品测试之外再跑东西。
@@ -132,7 +132,7 @@ python3 verify.py report --out-dir <解压后的构件目录> --latest
 
 ## 已知限制与未验证项
 
-- 浏览器组和自检组按整组计时；场景级计时要等 D 项。
+- 自检组按整组计时；浏览器组自 D 项起按场景计时。
 - playwright 版本在记录里是声明依赖，没有实测值。
 - 指纹不覆盖被 git 忽略的目录（例如 `.venv/`），那些算环境不算输入。
 - 本地记录与 Linux CI 记录的结构一致性靠同一 schema 保证；Linux 上的实测运行要等 PR 的 CI。

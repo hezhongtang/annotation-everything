@@ -81,3 +81,6 @@ Thumbs.db
 tmp/
 *.tmp
 *.log
+
+# 本地验证/测试用的隔离台账目录（AE_HOME=$PWD/.ae-home 约定）
+.ae-home/

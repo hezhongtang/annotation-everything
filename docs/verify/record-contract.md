@@ -105,7 +105,7 @@
 | `result.usable_as_evidence` | 布尔 | 是 | 能否作为通过证据，见「证据可用性」 |
 | `result.notes` | 数组 | 是 | 需要人看的说明 |
 
-组记录里 `counter` 标明计数方式：`unittest` 表示按用例计数，`log` 表示从日志末尾的「N/M 通过」摘要行计数，`composite` 表示展开组。`granularity` 标明计时粒度：`case` 或 `group`。浏览器组另有 `scenarios` 数组，当前固定为空列表，是场景级计时的预留位。
+组记录里 `counter` 标明计数方式：`unittest` 表示按用例计数，`log` 表示从日志末尾的「N/M 通过」摘要行计数，`composite` 表示展开组。`granularity` 标明计时粒度：`case`、`group` 或 `scenario`。浏览器组（`counter=log`）的子进程在「N/M 通过」摘要后输出一行 `AE-SCENARIOS: <JSON>` 场景执行清单；入口解析该行并填进 `groups[].scenarios`，每项含 `id`（注册表稳定场景 ID）、`status`（`passed` / `failed` / `error` / `interrupted` / `not_run`）、`checks`（`total` / `passed` / `failed`）、`started_at`、`ended_at`、`seconds`，场景出错时另带 `message`；`granularity` 相应从 `group` 细化为 `scenario`。`not_run` 表示因提前停止（如中断）没有执行的场景，不算通过。日志里没有该行时保持空列表与整组粒度，兼容不带场景清单的旧输出。场景注册表与选择见 `docs/verify/browser-scenarios.md`。
 
 用例记录在 `groups[].cases`，每项含 `id`、`name`、`status`、`seconds`；非通过时加 `message`，发生子测试失败、错误或跳过时，分别带 `subtest_failures`、`subtest_errors`、`subtest_skips`。`status` 取 `passed`、`failed`、`error`、`skipped`、`interrupted`、`expected_failure`、`unexpected_success`。
 
@@ -189,14 +189,14 @@ B–H 在同一个 schema 上追加，不改已有字段：
 
 - 全局词典契约（B，已交付）：无参数全词典检查的唯一权威位置是 `tests/test_i18n_catalog_contract.py`；`unit-related` 组固定附带它（`verify.py` 的 `RELATED_CONTRACT_SELECTORS`），契约模块缺失时局部组加载失败报 `error`，不会静默失去保护。F 的组映射直接引用这一模块与常量。
 - 组级隔离与锁（C）：在 `groups[]` 加锁与隔离字段，`children.json` 的所有权登记保持不变。
-- 浏览器场景拆分（D）：把 `groups[].scenarios` 从空数组填成场景记录，`granularity` 从 `group` 细化到 `scenario`。
+- 浏览器场景拆分（D，已交付）：`groups[].scenarios` 由浏览器入口的场景执行清单（日志里的 `AE-SCENARIOS:` 行）填充，`granularity` 细化到 `scenario`；场景注册表、选择与旧参数别名见 `docs/verify/browser-scenarios.md`。
 - 阶段选测与影子对照（F）：在 `context` 与 `groups[]` 加策略版本与选择理由；`input.fingerprint` 与 `changed_since_baseline` 已经够了，不需要新字段。
 - 证据复用（G）：按 `input.fingerprint`、`environment`、`groups[].name` 与 `context.phase` 匹配已有记录；通过判定使用当前校验后的 `usable_as_evidence`，不能跳过证据完整性校验。
 - 持续报告（H）：读 `index.jsonl` 汇总，不新增记录字段。
 
 ## 已知限制
 
-- 浏览器组与自检组按整组计时，用例 / 场景级计时要等 D 项。
+- 自检组按整组计时；浏览器组已细化到场景级（D），单个场景内部的检查仍按整场景合并计时。
 - playwright 版本记为声明依赖，没有实测值。
 - 指纹只覆盖 git 认识的路径与被跟踪内容；被忽略的目录（例如 `.venv/`）属于环境，不算输入。
 - `wrapper_seconds` 是入口自身开销的实测值，不含子进程启动时操作系统层面的抖动。

@@ -345,7 +345,7 @@ tools/
 └── git-hooks/                     refuse commits on main, pushes to main and deleting main
 .github/                           CI, issue templates and the pull request template
 docs/                              architecture decision records (ADRs), agent conventions, README images
-docs/verify/                       verification record field contract and the unified entry's onboarding guide
+docs/verify/                       verification record field contract, the unified entry's onboarding guide and the browser scenario registry
 GLOSSARY.md                        glossary
 ```
 
@@ -362,10 +362,13 @@ python3 -m unittest discover tests                                   # unit test
 uv run --no-project --with playwright python tests/e2e_browser.py   # end-to-end browser tests (uses your local Google Chrome)
 python3 skill/annotation-everything/scripts/serve.py check          # server security self-check
 python3 ae.py install                                               # sync to ~/.claude/skills/
-uv run --no-project --with playwright python tests/e2e_browser.py --delivery-only  # three language combinations from a temporary skill copy
+uv run --no-project --with playwright python tests/e2e_browser.py --list            # browser scenario registry (IDs, behavior, fixtures, isolation)
+uv run --no-project --with playwright python tests/e2e_browser.py --only skill-i18n # run only the selected scenarios (comma-separated, deduplicated; legacy flags like --delivery-only remain as aliases)
 ```
 
 `verify.py` is the unified verification entry: `plan` explains the scope, `run` executes and writes structured records plus raw logs into `.verify/` (git-ignored), and `report` only reads records. The input fingerprint covers the full content of effective input files; text and JSON reports preserve the original test result and show whether the evidence passes the current integrity checks. A record also carries the commit and baseline, the environment and per-case timings; the field contract is in [docs/verify/record-contract.md](docs/verify/record-contract.md) and the onboarding guide in [docs/verify/onboarding.md](docs/verify/onboarding.md). It only wraps the existing execution: no test selection, no reuse of earlier passes. The direct commands keep working, with the same success and failure exit codes for completed test runs. Empty and fully skipped runs do not count as a pass; the new entry returns 1.
+
+The browser end-to-end tests are organized around a scenario registry: no arguments runs every registered scenario; `--list` prints the registry; `--only scenario1,scenario2` deduplicates and runs only the targets plus their declared fixtures, while unknown, empty or conflicting selections fail before the browser starts. See [docs/verify/browser-scenarios.md](docs/verify/browser-scenarios.md) for the registry, legacy flag aliases and how to register new scenarios.
 
 - Tests put the review ledger in a temporary directory (the `AE_HOME` environment variable). When trying things by hand or running skill evaluations, run `export AE_HOME=$(mktemp -d)` first, so throwaway reviews are not registered in your real ledger and do not take ports that belong to real reviews.
 - Set `AE_DELIVERY_ARTIFACTS` to a directory under `skill/annotation-everything-workspace/` to keep synthetic sources, command outputs, batch state, offline exports, and screenshots. See the [delivery evidence](docs/locale-delivery.en.md) for the command and evaluation boundaries.
