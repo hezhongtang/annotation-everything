@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import ctypes
 import datetime
 import fcntl
 import hashlib
@@ -10,14 +12,18 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 import i18n
 import ledger
+import content_manifest
 
 SKILL = "annotation-everything"
 RECORD = ".install-record.json"
@@ -68,20 +74,19 @@ def explicit_locale(argv):
     return None
 
 
+def update_storage(copy: Path) -> Path:
+    key = hashlib.sha256(os.fsencode(str(copy))).hexdigest()[:24]
+    data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share").expanduser()
+    preferred = (data / SKILL / "updates" / key).resolve()
+    if preferred == copy or copy in preferred.parents or preferred in copy.parents:
+        # --target 可以指向任意目录，包括 XDG_DATA_HOME。
+        return copy.parent / (".annotation-everything-updates-" + key)
+    return preferred
+
+
 def version(value):
     match = VERSION.fullmatch(value) if isinstance(value, str) else None
     return tuple(int(part) for part in match.groups()) if match else None
-
-
-def digests(root: Path) -> dict:
-    result = {}
-    for path in sorted(root.rglob("*")):
-        rel = path.relative_to(root)
-        if ("__pycache__" in rel.parts[:-1] or rel.name in {RECORD, ".DS_Store"}
-                or rel.suffix in {".pyc", ".pyo"} or not path.is_file()):
-            continue
-        result[rel.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return result
 
 
 def git(repo: Path, *args: str, timeout: int = 15) -> str:
@@ -166,12 +171,82 @@ def has_running_review() -> bool:
     return False
 
 
+def process_cwd(pid: int):
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                                    capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return next((line[1:] for line in result.stdout.splitlines() if line.startswith("n")), None)
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        return None
+
+
+def has_legacy_process(copy: Path, record: dict) -> bool:
+    """检查没有新版共享锁的旧服务与批注进程；命令只在本机读取，不回显。"""
+    try:
+        done = subprocess.run(["ps", "-ww", "-eo", "pid=,command="], stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        raise UpdateError("cli.update.cannotVerifyServices") from None
+    if done.returncode:
+        raise UpdateError("cli.update.cannotVerifyServices")
+    names = ("serve.py", "notes.py")
+    target_paths = {copy / "scripts" / name for name in names}
+    roots = [Path(__file__).parent.parent]
+    links = record.get("links", [])
+    if isinstance(links, list):
+        roots.extend(Path(item["path"]) for item in links
+                     if isinstance(item, dict) and isinstance(item.get("path"), str))
+    aliases = {str(root / "scripts" / name) for root in [copy, *roots] for name in names}
+    aliases |= {path.removeprefix("/private") for path in aliases if path.startswith("/private/var/")}
+    for line in done.stdout.splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) != 2 or not fields[0].isdigit() or int(fields[0]) == os.getpid():
+            continue
+        command = fields[1]
+        try:
+            words = shlex.split(command)
+        except ValueError:
+            if any(alias in command for alias in aliases):
+                return True
+            continue
+        if not words or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?|pypy\d*", Path(words[0]).name.lower()):
+            continue
+        index = 1
+        while index < len(words) and words[index].startswith("-"):
+            if words[index].startswith(("-c", "-m")) or words[index] == "-":
+                break
+            index += 2 if words[index] in ("-W", "-X") else 1
+        if index >= len(words) or words[index].startswith("-"):
+            continue
+        if any(re.search(r"(?:^|\s)" + re.escape(alias) + r"(?:\s|$)", command) for alias in aliases):
+            return True
+        script = Path(words[index])
+        if script.name not in names:
+            continue
+        if not script.is_absolute():
+            cwd = process_cwd(int(fields[0]))
+            if cwd is None:
+                raise UpdateError("cli.update.cannotVerifyServices")
+            script = Path(cwd) / script
+        if script.resolve() in target_paths:
+            return True
+    return False
+
+
 def clone_release(repo: Path, cache: Path, tag: str, commit: str) -> Path:
     release = cache / ("release-" + commit)
     if release.exists():
-        if git(release, "rev-parse", "HEAD") != commit or git(release, "status", "--porcelain"):
+        if git(release, "rev-parse", "HEAD") != commit:
             raise UpdateError("cli.update.badRelease")
-        return release
+        if not git(release, "status", "--porcelain", "--ignored", "--untracked-files=all"):
+            return release
+        # 不删除缓存里的未知或忽略文件；另取一份干净的正式版本。
+        release = cache / ("release-" + commit + "-" + uuid.uuid4().hex)
     with tempfile.TemporaryDirectory(prefix=".fetch-", dir=cache) as temp:
         checkout = Path(temp) / "repo"
         git(repo, "clone", "--quiet", "--no-local", "--depth", "1", "--branch", tag,
@@ -182,6 +257,46 @@ def clone_release(repo: Path, cache: Path, tag: str, commit: str) -> Path:
     return release
 
 
+def copy_tracked_skill(release: Path, stage: Path) -> None:
+    """只复制 Git 提交里的普通文件，不带上缓存中被忽略的用户文件。"""
+    prefix = f"skill/{SKILL}/"
+    files = git(release, "ls-files", "-z", "--", prefix).split("\0")
+    stage.mkdir()
+    for name in filter(None, files):
+        if not name.startswith(prefix):
+            raise UpdateError("cli.update.badRelease")
+        relative = Path(name[len(prefix):])
+        if relative.is_absolute() or ".." in relative.parts:
+            raise UpdateError("cli.update.badRelease")
+        source = release / name
+        if source.is_symlink() or not source.is_file():
+            raise UpdateError("cli.update.badRelease")
+        target = stage / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
+def exchange_directories(first: Path, second: Path) -> None:
+    """使用操作系统的原子交换；不支持时失败，绝不先移走技能副本。"""
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        if sys.platform == "darwin":
+            exchange = libc.renamex_np
+            exchange.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
+            args = (os.fsencode(first), os.fsencode(second), 2)  # RENAME_SWAP
+        elif sys.platform.startswith("linux"):
+            exchange = libc.renameat2
+            exchange.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+            args = (-100, os.fsencode(first), -100, os.fsencode(second), 2)  # AT_FDCWD, RENAME_EXCHANGE
+        else:
+            raise AttributeError
+    except AttributeError:
+        raise UpdateError("cli.update.noAtomicSwap") from None
+    exchange.restype = ctypes.c_int
+    if exchange(*args) != 0:
+        raise UpdateError("cli.update.noAtomicSwap")
+
+
 def install_release(copy: Path, record: dict, release: Path, tag: str, commit: str) -> None:
     source = release / "skill" / SKILL
     try:
@@ -189,43 +304,43 @@ def install_release(copy: Path, record: dict, release: Path, tag: str, commit: s
     except OSError:
         raise UpdateError("cli.update.badRelease") from None
     match = re.search(r'^VERSION = "([^"]+)"', serve, re.M)
-    required = ("SKILL.md", "scripts/update.py", "scripts/i18n.py", "scripts/ledger.py",
+    required = ("SKILL.md", "scripts/update.py", "scripts/content_manifest.py", "scripts/i18n.py", "scripts/ledger.py",
                 "locales/zh-CN.json", "locales/en.json")
     if any(not (source / item).is_file() for item in required) or not match or match.group(1) != tag[1:]:
         raise UpdateError("cli.update.badRelease")
-    expected = record.get("files")
+    expected = record.get("tree")
     if not isinstance(expected, dict):
         previous = Path(record["repo"]) / "skill" / SKILL
         if not previous.is_dir():
             raise UpdateError("cli.update.modified", latest=tag[1:])
-        expected = digests(previous)
-    if digests(copy) != expected:
+        expected = content_manifest.snapshot(previous)
+    if content_manifest.snapshot(copy) != expected:
         raise UpdateError("cli.update.modified", latest=tag[1:])
 
     temp = Path(tempfile.mkdtemp(prefix=".ae-update-", dir=copy.parent))
-    preserve_backup = False
+    exchange_started = False
     try:
         stage = temp / SKILL
-        shutil.copytree(source, stage, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".DS_Store"))
+        copy_tracked_skill(release, stage)
+        os.chmod(stage, stat.S_IMODE(copy.stat().st_mode))
         updated = {**record, "repo": str(release), "commit": commit, "version": tag[1:],
                    "installed_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
-                   "files": digests(stage)}
+                   "tree": content_manifest.snapshot(stage)}
+        updated.pop("files", None)
         (stage / RECORD).write_text(json.dumps(updated, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        if digests(copy) != expected:
+        if content_manifest.snapshot(copy) != expected:
             raise UpdateError("cli.update.modified", latest=tag[1:])
-        backup = temp / "previous"
-        os.replace(copy, backup)
+        # 一旦开始交换就保留临时目录：它可能持有旧副本及并发写入的内容。
+        exchange_started = True
+        exchange_directories(copy, stage)
         try:
-            os.replace(stage, copy)
-        except BaseException:
-            try:
-                os.replace(backup, copy)
-            except OSError:
-                preserve_backup = True
-                raise UpdateError("cli.update.recover", path=backup) from None
-            raise
+            old_tree = content_manifest.snapshot(stage)
+        except OSError:
+            raise UpdateError("cli.update.concurrentChanges", path=stage, latest=tag[1:]) from None
+        if old_tree != expected:
+            raise UpdateError("cli.update.concurrentChanges", path=stage, latest=tag[1:])
     finally:
-        if not preserve_backup:
+        if not exchange_started:
             shutil.rmtree(temp, ignore_errors=True)
 
 
@@ -255,9 +370,7 @@ def main(argv=None) -> int:
         if not (repo / "skill" / SKILL).is_dir():
             raise UpdateError("cli.update.noRecord")
         # 这个检出也是 doctor / repair 的来源，不能放在可能被系统随时清理的缓存目录。
-        cache_root = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share").expanduser()
-        key = hashlib.sha256(os.fsencode(str(copy))).hexdigest()[:24]
-        cache = cache_root / SKILL / "updates" / key
+        cache = update_storage(copy)
         cache.mkdir(mode=0o700, parents=True, exist_ok=True)
         lock_fd = os.open(cache / "lock", os.O_CREAT | os.O_RDWR, 0o600)
         with os.fdopen(lock_fd, "r+") as lock:
@@ -286,15 +399,22 @@ def main(argv=None) -> int:
             if args.mode == "check":
                 print(translate("cli.update.available", installed=record["version"], latest=tag[1:]))
                 return 0
-            if has_running_review():
-                raise UpdateError("cli.update.running", latest=tag[1:])
             release = clone_release(repo, cache, tag, commit)
-            if has_running_review():
-                raise UpdateError("cli.update.running", latest=tag[1:])
-            install_release(copy, record, release, tag, commit)
+            with contextlib.ExitStack() as stack:
+                try:
+                    stack.enter_context(ledger.update_lock(exclusive=True, nonblocking=True))
+                except BlockingIOError:
+                    raise UpdateError("cli.update.running", latest=tag[1:]) from None
+                except OSError:
+                    raise UpdateError("cli.update.cannotVerifyServices") from None
+                if has_running_review() or has_legacy_process(copy, record):
+                    raise UpdateError("cli.update.running", latest=tag[1:])
+                install_release(copy, record, release, tag, commit)
             print(translate("cli.update.installed", installed=record["version"], latest=tag[1:]))
             return 0
     except UpdateError as exc:
+        if exc.key == "cli.update.concurrentChanges":
+            print(translate("cli.update.installed", installed=record["version"], latest=exc.params["latest"]))
         if args.mode != "auto" or exc.key != "cli.update.noRecord" or (copy / RECORD).exists():
             print(translate(exc.key, **exc.params), file=sys.stderr)
         return 0 if args.mode == "auto" else 1

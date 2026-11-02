@@ -98,7 +98,8 @@ SELECTION_RULES = (
     ),
     SelectionRule(
         rid="skill-updates",
-        prefixes=("skill/annotation-everything/scripts/update.py",),
+        prefixes=("skill/annotation-everything/scripts/update.py",
+                  "skill/annotation-everything/scripts/content_manifest.py"),
         selectors=("tests/test_skill_updates.py", "tests/test_ae_cli.py", "tests/test_ae_target.py"),
         why="更新器与安装记录、副本和运行中的服务共同构成更新边界",
     ),

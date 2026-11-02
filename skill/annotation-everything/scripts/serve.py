@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import hashlib
 import http.client
 import json
@@ -656,6 +657,29 @@ def plan_port(review_dir: Path, rid: str | None, port: int | None, claim: int | 
 
 def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, on_handoff: list[str] | None = None,
           claim: int | None = None, locale: str | None = None) -> int:
+    set_locale(locale or cli_locale(None, review_dir))
+    # 启动期间和整个服务生命周期持共享锁；更新只在没有服务时原子切换。
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(ledger.update_lock())
+        except OSError:
+            # 台账位置不可用时仍允许审阅；更新器遇到同一错误时会拒绝切换。
+            print(T("serve.serve.updateLockUnavailable"), file=sys.stderr)
+        try:
+            source = Path(__file__).resolve().read_text(encoding="utf-8")
+            match = re.search(r'^VERSION = "([^"]+)"', source, re.M)
+            if match is None or match.group(1) != VERSION:
+                print(T("serve.serve.updateRestart"), file=sys.stderr)
+                return 6
+        except OSError:
+            print(T("serve.serve.updateRestart"), file=sys.stderr)
+            return 6
+        return _serve_locked(review_dir, port, open_browser, debug, on_handoff, claim, locale)
+
+
+def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug: bool,
+                  on_handoff: list[str] | None = None, claim: int | None = None,
+                  locale: str | None = None) -> int:
     review_dir = review_dir.resolve()
     set_locale(locale or cli_locale(None, review_dir))
     if not (review_dir / "index.html").is_file():
