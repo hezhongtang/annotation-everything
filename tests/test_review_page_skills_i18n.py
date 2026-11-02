@@ -631,7 +631,7 @@ class AlwaysApiTests(unittest.TestCase):
         srv = serve.ReviewServer(self.out, 0, log_to_file=False)
         self.addCleanup(srv.shutdown)
         self.addCleanup(srv.server_close)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         self.port = srv.port
         self.headers = {"Host": f"127.0.0.1:{srv.port}", "Origin": f"http://127.0.0.1:{srv.port}",
                         "Content-Type": "application/json"}

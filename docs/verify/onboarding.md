@@ -166,7 +166,7 @@ python3 verify.py report --out-dir <解压后的构件目录> --latest
 - D（浏览器场景，已交付）：`groups[].scenarios` 已填充场景记录，`granularity` 细化到 `scenario`；场景注册表在 `tests/e2e_scenarios.py`（纯标准库），局部执行用 `--only` 或旧参数别名，清单用 `--list`；完整模式行为矩阵不变（629=629 前后对照）。
 - F（阶段选测与影子对照，已交付）：`plan --phase` 解释建议范围与回退原因；`run` 默认影子模式——`context.selection` 记录建议（策略版本、命中规则、未知路径、回退原因、建议组与场景），`shadow` 字段与运行目录 `shadow.json` 记录建议与实际执行的对照（候选遗漏、归因、不可比较原因）。策略本体与映射表在仓库根 `verify_selection.py`，语义、回退情形与样本清单见 [selection-strategy.md](selection-strategy.md) 与 `docs/verify/shadow-samples.json`。
 - G（证据复用，已交付）：`run` 在执行前按 `input.fingerprint` + `environment` + 范围覆盖 + 阶段与版本口径决定哪些组引用已有验证（`reuse` 字段与 `groups[].outcome = "reused"`），只认当前校验后 `usable_as_evidence` 为 `true` 的记录，不能直接信任落盘时的通过标记；`--no-reuse` 强制全部重跑。语义见下文「证据复用与流程接入（G 项）」。
-- H（持续报告，已接入）：每次运行后从索引和原始记录重建有界效率投影；`report --efficiency` 只读历史，`--rebuild` 更新投影与增量回顾。比较、缺口、CI 导入和策略守卫见 [efficiency.md](efficiency.md)；总验收结果与未完成项见 [final-acceptance.md](final-acceptance.md)。
+- H（持续报告，已接入）：每次运行后从索引和原始记录重建有界效率投影；`report --efficiency` 只读历史，`--rebuild` 更新投影与增量回顾。比较、缺口、CI 导入和策略守卫见 [efficiency.md](efficiency.md)；总验收结果、原始证据与限制见 [final-acceptance.md](final-acceptance.md)。
 
 ## 兼容与迁移
 
@@ -185,3 +185,7 @@ python3 verify.py report --out-dir <解压后的构件目录> --latest
 - 观测到两例偶发失败，都与入口无关，复跑即过，建议各自开 issue：
   - `tests/test_pptx_fonts.py` 的 `test_pdf_tool_timeout_is_reported` 把 `TOOL_TIMEOUT` 压到 0.5 秒，整包高压下 `fc-list` 可能被判超时。
   - `tests/test_e2e_servers.py` 的升级终止测试曾用 `time.time()` 量耗时，和 `communicate` 的单调时钟 deadline 比较；issue #51 改造时已换成 `time.monotonic()`，并把该测试改为注入短超时。
+
+## 组内进程隔离与串行回退
+
+完整范围与原资源锁保持不变。已审查的独立任务最多使用 3 个进程，未知和敏感单元模块继续串行；场景默认不允许并行。`AE_VERIFY_SERIAL=1` 恢复串行，执行方式与失败保留规则见 [parallel-execution.md](parallel-execution.md)。

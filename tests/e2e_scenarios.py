@@ -24,16 +24,19 @@ class Scenario:
     isolation: str             # 隔离边界：浏览器上下文、临时审阅目录与收尾
     full_required: bool = True  # 是否全量模式必选
     aliases: tuple[str, ...] = ()   # 旧局部参数（兼容别名）
+    parallel_safe: bool = False  # 审查过的进程 / HOME / 台账隔离；新场景默认串行
 
 
 SCENARIOS: list[Scenario] = [
     Scenario(
+        parallel_safe=True,
         id="receiver-binding",
         title="接收方身份：harness、会话和等待／处理／未等待状态常显，双语与旧服务提示一致",
         fixture="fixtures/sample 合成审阅；显式等待会话绑定；notes.py wait/claim/done 真实子进程",
         isolation="独立审阅目录、端口与浏览器上下文；等待者与服务全部登记回收",
     ),
     Scenario(
+        parallel_safe=True,
         id="generated-draft-loop",
         title="默认范式初稿闭环：安装副本上的核验入口放行初稿、对照页吃进带基础样式的产物、"
               "批注落盘后页序调整再重建，批注按稳定页面键找回且审阅标识不变",
@@ -42,6 +45,7 @@ SCENARIOS: list[Scenario] = [
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
+        parallel_safe=True,
         id="report-verdict-loop",
         title="结构与视觉核验的可交付判定：真实渲染逐页测得溢出与无溢出并作为视觉证据写进记录，"
               "正确产物支持「报告可交付」，故障产物（如实登记的溢出、缺页覆盖）不能通过整体交付验收；"
@@ -52,6 +56,7 @@ SCENARIOS: list[Scenario] = [
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
+        parallel_safe=True,
         id="revision-update-loop",
         title="改稿更新核验：可交付初态经改数字、来源变动、只改样式与页序调整后旧判定失效，"
               "维护记录（更新哈希、受影响引用与计算、revision 重新核验声明）后恢复，"
@@ -61,6 +66,7 @@ SCENARIOS: list[Scenario] = [
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
+        parallel_safe=True,
         id="legacy-report-compat",
         title="旧报告无核验记录仍直接审阅：批注落盘、页面提交（已初改·待复核）、接收初改、重建，"
               "批次停在待复核且报告质量状态独立；整体核验请求下按完整清单建立记录恢复可交付，"
@@ -70,6 +76,7 @@ SCENARIOS: list[Scenario] = [
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
+        parallel_safe=True,
         id="external-method-loop",
         title="外部生成技能共用验收：明确指定的合成外部技能被实际调用（运行其脚本，"
               "可观察的调用效果与调用说明写进记录），产物走同一核验入口与记录契约、"
@@ -82,6 +89,7 @@ SCENARIOS: list[Scenario] = [
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
+        parallel_safe=True,
         id="installed-delivery",
         title="从唯一的临时安装副本完成英文、中文、中英混合三种语言组合的真实审阅流程",
         fixture="ae.py install 装进合成 HOME 的临时副本；fixtures/sample 合成报告与讲稿；"
@@ -90,12 +98,14 @@ SCENARIOS: list[Scenario] = [
         aliases=("--delivery-only",),
     ),
     Scenario(
+        parallel_safe=True,
         id="locale-live-controls",
         title="同一页切换界面语言只改系统标签：原文、选区、待提交标注与弹窗留在原位，auto 在仅报告模式下先解析成具体语言",
         fixture="内嵌词典的合成单文件（含仅报告、无讲稿前言的 auto 变体）",
         isolation="独立临时审阅目录与浏览器上下文",
     ),
     Scenario(
+        parallel_safe=True,
         id="skill-search",
         title="技能输入栏的搜索与选择：方向键、光标处替换、输入法组合、常驻技能编辑，文件与服务两种模式一致",
         fixture="合成 skills.json（含恶意说明与插件技能），经真实 build_viewer 生成页面",
@@ -103,6 +113,7 @@ SCENARIOS: list[Scenario] = [
         aliases=("--skills-only",),
     ),
     Scenario(
+        parallel_safe=True,
         id="skill-recommendations",
         title="技能推荐：批注内容、材料文件名与当前页标题影响候选，可浏览与搜索完整目录，编辑草稿互不干扰",
         fixture="合成 skills.json 大目录与中性标题报告，经真实 build_viewer 生成页面",
@@ -110,6 +121,7 @@ SCENARIOS: list[Scenario] = [
         aliases=("--skills-only",),
     ),
     Scenario(
+        parallel_safe=True,
         id="skill-i18n",
         title="技能选择与常驻技能的中英界面：范围与调用名的存储值不变、搜索覆盖原文、页面与 CLI 输出一致",
         fixture="205 条合成技能目录（含插件命名空间与特殊字符）与四类范围的常驻技能",
@@ -117,6 +129,7 @@ SCENARIOS: list[Scenario] = [
         aliases=("--skills-only",),
     ),
     Scenario(
+        parallel_safe=True,
         id="full-check",
         title="全量勾稽提交：页面勾选与附言落盘、等待中的 Agent 收到要求、断线暂存、旧服务不静默丢弃并提示升级",
         fixture="fixtures/sample 合成材料生成的审阅；notes.py claim/wait 真实子进程",
@@ -124,18 +137,21 @@ SCENARIOS: list[Scenario] = [
         aliases=("--full-check-only",),
     ),
     Scenario(
+        parallel_safe=True,
         id="locale-loop",
         title="语言最小闭环：内嵌词典、0/1/2 计数、切换不写批注不改审阅标识，file:// 与服务模式都能加批注，auto 跟随浏览器语言",
         fixture="英文与 auto 两种 locale 的合成单文件；服务模式读落盘 notes.json",
         isolation="独立临时审阅目录、独立端口与浏览器上下文（auto 逐语言另开），服务用后即停",
     ),
     Scenario(
+        parallel_safe=True,
         id="english-script",
         title="英文讲稿在两种界面语言下逐页浏览：栏目标签跟界面、正文和时长跟讲稿；缺页时 --lenient 显示空讲稿",
         fixture="fixtures/sample 的英文讲稿与其截去后段的缺页变体（--lenient 构建）",
         isolation="独立临时审阅目录与浏览器上下文",
     ),
     Scenario(
+        parallel_safe=True,
         id="handoff-i18n",
         title="提交、复核与处理记录在中英两种语言下同一含义：结构化选项不随语言改写、断线说清暂存、服务不匹配给出恢复方式、旧服务提示升级",
         fixture="英文 locale 的合成审阅；notes.py wait/resolve/done 真实子进程；路由模拟旧服务响应",
@@ -143,30 +159,35 @@ SCENARIOS: list[Scenario] = [
         aliases=("--handoff-only",),
     ),
     Scenario(
+        parallel_safe=True,
         id="current-task-controls",
         title="当前任务详情的展开与收起、双语与轮询保持状态，以及安全停止本审阅服务并保留数据",
         fixture="fixtures/sample 合成材料生成的审阅；独立批次、待补传改动与服务重启",
         isolation="独立临时审阅目录、独立端口与浏览器上下文；所有服务和 CLI 子进程用后回收",
     ),
     Scenario(
+        parallel_safe=True,
         id="export-import",
         title="双语导出与跨语言导入：中英文 Markdown 往返、页面与 CLI 互导、解析按格式标记选文法、旧中文格式不退步、认不出的文字有明确提示",
         fixture="E2E_NOTES 合成批注（含删除 / 改写、标注、风格、对应句与技能）；CLI 侧独立审阅目录",
         isolation="独立临时审阅目录与浏览器上下文；CLI 审阅目录单独构建",
     ),
     Scenario(
+        parallel_safe=True,
         id="file-mode",
         title="file:// 退回模式：批注存 localStorage、刷新仍在、两个标签页互不覆盖、CSP 拦截内联事件、发现并导入旧版批注、导出 Markdown、「交给 Agent」退回为复制",
         fixture="合成单文件与旧版 v7viewer 批注（注入用字符串均为合成数据）",
         isolation="独立临时审阅目录与浏览器上下文（同上下文的第二个标签页是场景自身行为）",
     ),
     Scenario(
+        parallel_safe=True,
         id="css-fidelity",
         title="报告样式保真：报告 :root 变量在 Shadow DOM 里生效、外壳同名变量不渗入、body 布局不把幻灯片挤偏、rem 按报告根字号",
         fixture="自带样式的合成报告页（内联 :root、body flex 与 rem 用例）",
         isolation="独立临时审阅目录与浏览器上下文",
     ),
     Scenario(
+        parallel_safe=True,
         id="server-mode",
         title="服务模式全流程：落盘与编辑、标点 / 区域交互、快捷删除与改写、风格优化、常驻技能、轮询不打断草稿、交给 Agent 唤醒等待命令，随后断线补传、写入失败、服务卡死、同一端口换审阅、恶意网页与恶意导入",
         fixture="fixtures/sample 合成材料生成的审阅；导入用的 Markdown 由真实 CLI（resolve 标已处理后 "

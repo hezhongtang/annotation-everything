@@ -25,6 +25,9 @@ SCRIPTS = SERVE_PY.parent
 sys.path.insert(0, str(SCRIPTS))
 
 import serve  # noqa: E402
+sys.path.insert(0, str(ROOT))
+import host_isolation  # noqa: E402
+host_isolation.require_for_module(__name__)
 
 
 def tmpdir() -> Path:
@@ -36,7 +39,7 @@ class RejectLanguageTests(unittest.TestCase):
 
     def start(self, review_dir: Path, **kwargs):
         srv = serve.ReviewServer(review_dir, 0, log_to_file=False, **kwargs)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         self.addCleanup(srv.shutdown)
         self.addCleanup(srv.server_close)
         return srv

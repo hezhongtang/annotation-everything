@@ -88,3 +88,7 @@ serve.py——并行时盘点结果里混进对方的服务，被误判成残留
   `tests/test_host_interference.py` 复现并修复「浏览器组 × 安装维护组」的真实
   干扰场景；`tests/test_verify_entry.py` 的 `IsolationLockTests` 覆盖入口组级
   行为。这些测试都使用合成锁目录与登记过的合成进程，不影响并行会话。
+
+## 组内进程隔离
+
+入口版本 2 在原组锁内最多执行 3 个独立任务。所有敏感单元模块仍在同一串行任务中运行；浏览器场景必须显式声明隔离。fork 继承原锁描述符，不另起互斥机制，尚存任务继续持有资源。环境、收尾与串行回退见 [parallel-execution.md](parallel-execution.md)。

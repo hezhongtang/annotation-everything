@@ -2,7 +2,7 @@
 
 `verify.py` 是仓库的统一验证入口：`plan` 解释将执行什么，`run` 执行并留下结构化记录，`report` 只读已有结果。这份文档固定记录的结构、字段语义和必填 / 可空规则。后续子项（B–H）在同一个 schema 上追加字段，不重新定义已有字段的含义。
 
-当前版本：`ae-verify-run/1`（`verify.py` 入口版本 1）。schema 字符串进记录，也进文件名；改结构就升版本号，旧记录由 `report` 判为「不支持的记录 schema」，不静默当成新结构读。
+当前记录 schema：`ae-verify-run/1`；`verify.py` 入口版本为 2。入口版本随执行策略演进，schema 仅在删字段或改变已有字段含义时升级；兼容的追加字段沿用当前 schema。schema 字符串进入记录，`report` 对不支持的 schema 明确报错，不静默按新结构读取。
 
 ## 落点与文件
 
@@ -30,7 +30,7 @@
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `schema` | 字符串 | 是 | 固定 `ae-verify-run/1` |
-| `wrapper_version` | 整数 | 是 | 入口版本，与 schema 同步升 |
+| `wrapper_version` | 整数 | 是 | 入口执行版本；可独立于兼容的记录 schema 升级 |
 | `state` | 字符串 | 是 | `running` / `complete` / `aborted`，见「状态机」 |
 | `run_id` | 字符串 | 是 | UTC 时间戳加随机后缀，同一秒内也不重复 |
 | `started_at` / `ended_at` | ISO 8601 字符串 | `started_at` 必填，`ended_at` 未结束时为 `null` | 带本地时区偏移 |
@@ -72,10 +72,10 @@
 | `environment.python` | 对象 | 是 | `version`、`implementation`、`matches_wrapper`（子进程与入口同一解释器时为 `true`） |
 | `environment.host` | 对象 | 是 | `cpu_count`、`timezone` |
 | `environment.ci` | 对象 | 是 | `is_ci`、`provider`、`runner_os`；非 CI 时后两个为 `null` |
-| `environment.config_summary` | 对象 | 是 | 只记 `ae_home_set`、`ae_locale`、`ae_verify_dir_set` 三个布尔或非敏感值 |
+| `environment.config_summary` | 对象 | 是 | 只记 `ae_home_set`、`ae_locale`、`ae_verify_dir_set` 与 `verification_execution`；后者区分 `serial` 和 `isolated-processes/1` |
 | `environment.isolation` | 对象 | 是 | 环境隔离方式（C 项起有值）：`mechanism`（`flock`）、`lock_dir_source`（`AE_LOCK_DIR` / `XDG_RUNTIME_DIR` / `tmpdir`，只记来源类别不记路径）、`resources`、`note`。协议详情见 [isolation.md](isolation.md) |
 
-环境里不记环境变量原值、不记路径、不记凭据。浏览器组的 playwright 版本由 `uv` 在运行时解析，入口不导入它，因此记为声明依赖而不是实测版本；D、E 两项可以在组记录里补实测值。
+环境里不记任意环境变量原值、本机路径或凭据。浏览器组由专用测试入口输出实际 `browser_environment`，包含 `schema=ae-browser-environment/1`、`browser`、`channel`、浏览器 `version` 与 `playwright` 版本；统一入口只解析日志，不导入 Playwright。旧记录或无法确认版本时保持缺失，不能把两个未知版本当作相同环境。
 
 ### 时间
 
@@ -165,6 +165,8 @@ unittest 执行期间捕获中断时，已完成用例保留原结果，中断�
 | `reused` | 组引用了一条当前仍有效的通过记录而没有重新执行（G 项起）。它不是跳过（空集合 / 全跳过是非成功），也不是新的执行：`counts` 为 `null`，引用链在 `groups[].reuse`；只有实际执行（`passed`）的组能再次被引用，复用不链式传递 |
 
 整次运行的结论按下面的顺序取第一个出现的：`wrapper_error`、`unavailable`、`error`、`failed`、`timeout`、`interrupted`、`skipped`、`empty`、`passed`。计数分开表示，结论只是汇总；一次运行同时有失败和错误时结论是 `error`，两个数都在 `result.counts` 里。`reused` 不参与这条严重度链：它比 `passed` 更不严重，全部组都被引用时整次结论是 `passed`、退出码 0——报告与 `result.notes` 会明确列出哪些组是引用而非执行，`result.counts` 不把引用组的用例 / 检查计入通过数量。
+
+入口 v2 可在组记录中追加 `execution`：`mode=isolated-processes/1`、实际并发上限 `jobs`，单元组另含各 worker 的退出码、独立耗时与 `inline` 标记。worker 的 `timing_precision=measured` 表示实际结束时刻；未能写出结束时刻时用 `reaped-upper-bound` 标记回收时刻的上界。敏感和未知模块留在原进程，组执行墙钟按父级区间记录；worker 与用例累计值可能重叠，不能相加为等待时间。执行边界见 [parallel-execution.md](parallel-execution.md)。
 
 ## 状态机
 

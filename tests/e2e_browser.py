@@ -4092,10 +4092,77 @@ def iso_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
-def main() -> int:
+def run_parallel_browser(request):
+    """整组持有原 host-state 锁；每个场景独享进程、浏览器和全部合成用户目录。"""
+    import verify_parallel
+    import verify
+
+    # 首先启动实测最长的场景；最终清单仍保持注册顺序，局部入口仍按序执行。
+    priority = {"server-mode": 0, "receiver-binding": 1, "current-task-controls": 2,
+                "full-check": 3, "handoff-i18n": 4, "installed-delivery": 5}
+    ordered = sorted(request.plan, key=lambda sid: priority.get(sid, 6))
+
+    def worker(sid, _output):
+        # fork 不得继承父进程登记的目录所有权，更不能清理其他场景的用户目录。
+        CLEANUP._dirs = []
+        CLEANUP._procs = []
+        CLEANUP.add_dir(Path(os.environ["HOME"]))
+        CLEANUP.add_dir(Path(os.environ["AE_HOME"]))
+        try:
+            return main(["--only", sid], allow_parallel=False)
+        finally:
+            CLEANUP.stop_all()
+
+    records, environments = {}, []
+    interrupted, failed, interrupted_signal = False, False, signal.SIGINT
+    with tempfile.TemporaryDirectory(prefix="ae-browser-workers-") as temp:
+        try:
+            results = verify_parallel.run_tasks([(sid, sid) for sid in ordered], worker, Path(temp))
+        except verify_parallel.InterruptedRun as exc:
+            results, interrupted, interrupted_signal = exc.results, True, exc.signum
+        for sid in request.plan:
+            item = results.get(sid)
+            if item is None:
+                records[sid] = {"id": sid, "status": "not_run", "checks": {"total": 0, "passed": 0, "failed": 0},
+                                "started_at": None, "ended_at": None, "seconds": None}
+                failed = True
+                continue
+            log = item["log"].read_text(encoding="utf-8", errors="replace")
+            print("=== 独立浏览器进程 %s（退出码 %s）===" % (sid, item["exit_status"]), flush=True)
+            print(log, end="", flush=True)
+            summary = verify.parse_scenario_summary(log)
+            environment = verify.parse_browser_environment(log)
+            environments.append(environment)
+            if (summary and summary.get("plan") == [sid] and len(summary["scenarios"]) == 1
+                    and summary["scenarios"][0].get("id") == sid):
+                record = dict(summary["scenarios"][0])
+                if item["exit_status"] != 0 and record["status"] == "passed":
+                    record.update(status="error", message="场景进程未正常退出")
+            else:
+                record = {"id": sid, "status": "error", "checks": {"total": 0, "passed": 0, "failed": 0},
+                          "started_at": None, "ended_at": None, "seconds": item["seconds"],
+                          "message": "场景进程没有留下完整且匹配的执行清单"}
+            records[sid] = record
+            failed = failed or item["exit_status"] != 0 or record["status"] != "passed"
+    if environments and environments[0] and all(env == environments[0] for env in environments):
+        environment = environments[0]
+    else:
+        environment = {"schema": "ae-browser-environment/1", "unavailable": "worker-version-mismatch-or-missing"}
+    print("AE-BROWSER-ENV: " + json.dumps(environment, ensure_ascii=False), flush=True)
+    total = sum(record["checks"]["total"] for record in records.values())
+    passed = sum(record["checks"]["passed"] for record in records.values())
+    print("%d/%d 通过" % (passed, total), flush=True)
+    print("AE-SCENARIOS: " + json.dumps({"mode": request.mode, "source": request.source,
+        "requested": list(request.requested), "plan": list(request.plan),
+        "scenarios": [records[sid] for sid in request.plan],
+        "execution": {"mode": "isolated-processes/1", "jobs": 3}}, ensure_ascii=False), flush=True)
+    return 128 + interrupted_signal if interrupted else 1 if failed else 0
+
+
+def main(argv=None, *, allow_parallel=True) -> int:
     # 参数解析、选择与注册表一致性检查都发生在启动浏览器之前
     try:
-        request = scenarios.resolve_request(sys.argv[1:])
+        request = scenarios.resolve_request(sys.argv[1:] if argv is None else argv)
     except scenarios.UsageError as exc:
         print("浏览器场景参数错误：%s" % exc, file=sys.stderr)
         return 2
@@ -4108,6 +4175,10 @@ def main() -> int:
         print(scenarios.format_listing())
         return 0
     print(scenarios.format_plan(request) + "\n", flush=True)
+
+    if (allow_parallel and request.mode == "full" and os.environ.get("AE_VERIFY_SERIAL") != "1"
+            and all(scenarios.scenario_by_id(sid).parallel_safe for sid in request.plan)):
+        return run_parallel_browser(request)
 
     tmp = Path(tempfile.mkdtemp(prefix="ae-e2e-"))
     CLEANUP.add_dir(tmp)

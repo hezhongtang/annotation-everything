@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 8
+STRATEGY_VERSION = 9
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -177,7 +177,7 @@ SELECTION_RULES = (
     ),
     SelectionRule(
         rid="exec-config",
-        prefixes=("verify.py", "verify_selection.py", "verify_evidence.py", "verify_report.py", "host_isolation.py", ".github/", "tools/"),
+        prefixes=("verify.py", "verify_selection.py", "verify_evidence.py", "verify_report.py", "verify_parallel.py", "host_isolation.py", ".github/", "tools/"),
         fallback="strategy_change",
         why="验证入口、策略与 CI 配置自身变化，映射边界不可信",
     ),
