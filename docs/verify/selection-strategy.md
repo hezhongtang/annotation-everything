@@ -51,7 +51,7 @@ cat .verify/runs/<run ID>/shadow.json
 | `broken_rules` | 映射结构损坏、场景 ID 不在注册表、覆盖映射解析失败 |
 | `incomplete_manifest` | 映射选择器指向不存在的测试文件、场景注册表缺失、全局契约模块缺失、新增 / 删除 / 重命名的测试未纳入映射 |
 | `unknown_path` | 路径不在任何规则或允许列表（含改名伪装进允许列表、未提交的新文件） |
-| `strategy_change` | `verify.py` / `verify_selection.py` / `host_isolation.py` / `.github/` / `tools/` 自身变化：映射边界不可信 |
+| `strategy_change` | `verify.py` / `verify_selection.py` / `verify_evidence.py` / `verify_report.py` / `host_isolation.py` / `.github/` / `tools/` 自身变化：映射边界不可信 |
 | `infrastructure_change` | `tests/` 下非测试文件的新增、删除、重命名或修改 |
 | `shared_resource` | fixture、技能指引与评估资源：影响面不可静态判定，不能按扩展名放行 |
 | `guarded_doc` | 不在允许列表内的说明文档 |
@@ -71,3 +71,7 @@ cat .verify/runs/<run ID>/shadow.json
 ## 对照样本
 
 `docs/verify/shadow-samples.json` 记录已完成的对照样本（真实与合成分别标注，schema `ae-verify-shadow-samples/1`），供后续 G / H 读取。真实样本在真实改动上运行完整门禁；合成样本在合成仓库生成，补齐类别覆盖——合成样本不冒充生产漏测率，漏测率统计属 H 项。
+
+## 效率守卫（策略 v3）
+
+已确认遗漏或无法界定影响的确认事件会保守扩大到 `all` 并实际执行，停用复用；损坏或缺失的守卫保持全量回退。事件格式、版本替代与维护步骤见 [efficiency.md](efficiency.md)。普通影子候选只作为调查线索。v3 同时把证据复用与效率报告模块纳入执行配置变更的完整回退范围。

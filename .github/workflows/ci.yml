@@ -54,3 +54,4 @@ jobs:
         run: |
           echo "构件：verify-python${{ matrix.python-version }}（.verify/ 全部内容，含 record.json 与各组原始日志）"
           python3 verify.py report --latest | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 verify.py report --efficiency | tee -a "$GITHUB_STEP_SUMMARY"

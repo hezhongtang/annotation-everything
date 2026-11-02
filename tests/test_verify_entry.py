@@ -181,6 +181,7 @@ class SynthRepo:
         shutil.copy2(ROOT / "host_isolation.py", self.path / "host_isolation.py")
         shutil.copy2(ROOT / "verify_selection.py", self.path / "verify_selection.py")
         shutil.copy2(ROOT / "verify_evidence.py", self.path / "verify_evidence.py")
+        shutil.copy2(ROOT / "verify_report.py", self.path / "verify_report.py")
         self.git("init", "-q")
         self.git("add", "-A")
         self.git("-c", "user.name=synth", "-c", "user.email=synth@example.invalid",
@@ -1302,12 +1303,92 @@ class OtherGroupTests(VerifyEntryTestCase):
         self.assertEqual(index[0]["outcome"], "passed")
 
 
+class EfficiencyIntegrationTests(VerifyEntryTestCase):
+    def test_reused_groups_need_no_local_log_but_missing_source_evidence_is_rejected(self):
+        original = self.repo.run_verify("run", "--group", "serve-check", "--json")
+        self.assertEqual(original.returncode, 0, original.stdout + original.stderr)
+        source = json.loads(original.stdout)
+        reused = self.repo.run_verify("run", "--group", "serve-check", "--phase", "review", "--json")
+        self.assertEqual(reused.returncode, 0, reused.stdout + reused.stderr)
+        reference = json.loads(reused.stdout)
+        self.assertEqual(reference["groups"][0]["outcome"], "reused")
+        self.assertEqual(reference["evidence"]["logs"], [])
+        self.assertEqual(self.repo.run_verify("report", "--run", reference["run_id"]).returncode, 0)
+        path = self.repo.artifact_dir / "runs" / source["run_id"] / "record.json"
+        damaged = json.loads(path.read_text())
+        del damaged["evidence"]
+        path.write_text(json.dumps(damaged))
+        self.assertEqual(self.repo.run_verify("report", "--run", reference["run_id"]).returncode, 1)
+        retried = self.repo.run_verify("run", "--group", "serve-check", "--phase", "manual", "--json")
+        self.assertEqual(retried.returncode, 0, retried.stdout + retried.stderr)
+        self.assertEqual(json.loads(retried.stdout)["groups"][0]["outcome"], "passed")
+
+    def test_guard_read_error_cannot_put_absolute_paths_in_the_run_record(self):
+        self.repo.write(".verify/efficiency/selection-guard.json/placeholder", "synthetic")
+        result = self.repo.run_verify("run", "unit-related", "tests/test_synth.py", "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        record = json.loads(result.stdout)
+        selection = json.dumps(record["context"]["selection"], ensure_ascii=False)
+        self.assertNotIn(str(self.repo.artifact_dir), selection)
+        self.assertTrue(record["context"]["selection"]["policy_guard"]["active"])
+
+    def test_guard_paths_next_to_chinese_are_redacted_and_urls_are_preserved(self):
+        paths = ["/Users/synthetic/private.json", "/private/synthetic/quoted.json",
+                 "/tmp/synthetic/spaced.json"]
+        urls = ["https://example.invalid/review/49", "https://合成.invalid/审阅/49"]
+        reason = "无法读取%s；引号\"%s\"；空格 %s；来源 %s %s" % (*paths, *urls)
+        self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
+            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": 3,
+            "reason": reason, "evidence": ["synthetic"]}, ensure_ascii=False))
+        result = self.repo.run_verify("run", "unit-related", "tests/test_synth.py", "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        record = json.loads(result.stdout)
+        selection = json.dumps(record["context"]["selection"], ensure_ascii=False)
+        for path in paths:
+            self.assertNotIn(path, selection)
+        for url in urls:
+            self.assertIn(url, selection)
+        self.assertTrue(record["context"]["selection"]["policy_guard"]["active"])
+
+    def test_a_known_new_policy_version_replaces_an_older_guard(self):
+        self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
+            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": 3,
+            "reason": "old reviewed policy", "evidence": ["synthetic"]}))
+        policy = (self.repo.path / "verify_selection.py").read_text()
+        self.repo.write("verify_selection.py", policy.replace("STRATEGY_VERSION = 3", "STRATEGY_VERSION = 4"))
+        self.repo.commit_all("合成受审查策略升级")
+        result = self.repo.run_verify("plan", "--phase", "development", "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(json.loads(result.stdout)["selection"]["policy_guard"]["active"])
+
+    def test_uncertain_impact_expands_explicit_related_run_to_actual_full_gate(self):
+        self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
+            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": 3,
+            "reason": "合成无法界定的影响", "evidence": ["synthetic"]}))
+        p = self.repo.run_verify("run", "unit-related", "tests/test_synth.py", "--json")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = json.loads(p.stdout)
+        self.assertEqual([item["name"] for item in record["groups"]], ["unit", "serve-check", "browser"])
+        self.assertTrue(all(item["outcome"] == "passed" for item in record["groups"]))
+        self.assertIn("扩大实际执行范围", " ".join(record["result"]["notes"]))
+
+
 class BrowserScenarioTests(VerifyEntryTestCase):
     """issue #53：浏览器组从场景摘要行接入场景级记录。"""
 
     def use_scenario_browser(self) -> None:
         self.repo.write("tests/e2e_browser.py", BROWSER_SCENARIO_STUB, executable=True)
         self.repo.commit_all("换成带场景摘要的合成浏览器入口")
+
+    def test_browser_runtime_versions_are_preserved_from_synthetic_log(self):
+        metadata = {"schema": "ae-browser-environment/1", "browser": "chromium", "channel": "chrome",
+                    "version": "synthetic-130.0", "playwright": "synthetic-1.48"}
+        stub = BROWSER_SCENARIO_STUB.replace("import time", "import time\nprint('AE-BROWSER-ENV: ' + " + repr(json.dumps(metadata)) + ")")
+        self.repo.write("tests/e2e_browser.py", stub, executable=True)
+        p = self.repo.run_verify("run", "--group", "browser")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertEqual(record["groups"][0]["browser_environment"], metadata)
 
     def test_browser_group_records_scenario_list_and_times(self):
         self.use_scenario_browser()
@@ -1381,7 +1462,9 @@ except KeyboardInterrupt:
                 cleaning = Path(self.temp.name) / ("cleaning-%s" % signum)
                 env = dict(os.environ)
                 env.update(PATH=str(self.repo.path / "bin") + os.pathsep + env["PATH"],
-                           SYNTH_READY=str(ready), SYNTH_CLEANING=str(cleaning))
+                           SYNTH_READY=str(ready), SYNTH_CLEANING=str(cleaning),
+                           AE_LOCK_DIR=str(self.test_lock_dir))
+                env.pop("AE_HELD_LOCKS", None)
                 wrapper = subprocess.Popen(
                     [sys.executable, "verify.py", "run", "--group", "browser",
                      "--group", "serve-check"], cwd=self.repo.path, env=env,

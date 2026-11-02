@@ -4022,6 +4022,14 @@ def main() -> int:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(channel="chrome", headless=True)
             try:
+                import importlib.metadata
+                browser_environment = {"schema": "ae-browser-environment/1", "browser": "chromium", "channel": "chrome",
+                                       "version": browser.version, "playwright": importlib.metadata.version("playwright")}
+            except Exception as exc:
+                # 采集不改变场景行为；无法确认版本时保留缺口，不用于性能比较。
+                browser_environment = {"schema": "ae-browser-environment/1", "unavailable": type(exc).__name__}
+            print("AE-BROWSER-ENV: " + json.dumps(browser_environment, ensure_ascii=False), flush=True)
+            try:
                 for sid in request.plan:
                     scenario = scenarios.scenario_by_id(sid)
                     base = len(RESULTS)
