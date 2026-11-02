@@ -46,6 +46,24 @@ SCENARIOS: list[Scenario] = [
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
+        id="revision-update-loop",
+        title="改稿更新核验：可交付初态经改数字、来源变动、只改样式与页序调整后旧判定失效，"
+              "维护记录（更新哈希、受影响引用与计算、revision 重新核验声明）后恢复，"
+              "无法确认影响范围时摘要如实披露待核验范围与原因，页序重排按稳定页面键保持关联",
+        fixture="ae.py install 装进合成 HOME 的临时副本；带完整核验记录的合成三页报告（内联 "
+                "report-base.css）、讲稿与合成材料；独立 AE_HOME，不碰真实台账",
+        isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
+    ),
+    Scenario(
+        id="legacy-report-compat",
+        title="旧报告无核验记录仍直接审阅：批注落盘、页面提交（已初改·待复核）、接收初改、重建，"
+              "批次停在待复核且报告质量状态独立；整体核验请求下按完整清单建立记录恢复可交付，"
+              "原始依据不可得时缺口登记不伪称核验完成",
+        fixture="无核验记录的合成三页报告与讲稿（部分用例带合成材料、部分材料缺席）；"
+                "独立 AE_HOME，不碰真实台账",
+        isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
+    ),
+    Scenario(
         id="installed-delivery",
         title="从唯一的临时安装副本完成英文、中文、中英混合三种语言组合的真实审阅流程",
         fixture="ae.py install 装进合成 HOME 的临时副本；fixtures/sample 合成报告与讲稿；"
