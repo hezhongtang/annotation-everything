@@ -181,6 +181,76 @@ class OfficePipelineDemoTests(unittest.TestCase):
             self.assertIn(location, page, f"材料定位 {location} 应随报告进入对照页")
 
 
+_installed: list[Path] = []
+
+
+def installed_copy() -> Path:
+    """用 ae.py install 建一份临时技能副本（模块内只装一次），返回副本目录。"""
+    if _installed:
+        return _installed[0]
+    import subprocess
+    temp = tempfile.mkdtemp(prefix="ae-read-res-")
+    home = Path(temp) / "home"
+    skills = home / ".claude" / "skills"
+    env = {**os.environ, "HOME": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
+    done = subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"], env=env,
+                          capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stdout + done.stderr
+    _installed.append(skills / "annotation-everything")
+    return _installed[0]
+
+
+class GuideReadingContractTests(unittest.TestCase):
+    """中英生成指引随安装发布读取编排小节；登记字段与实现不漂移（issue #71）。"""
+
+    ZH_ANCHORS = ("### 读取编排与能力边界", "### 能力不足时的登记",
+                  "OCR", "工作表", "单元格", "全部实质材料", "record.reading-blocked")
+    EN_ANCHORS = ("### Reading orchestration and capability limits",
+                  "### Registering insufficient capability",
+                  "OCR", "worksheet", "all substantive materials", "record.reading-blocked")
+
+    @classmethod
+    def setUpClass(cls):
+        copy = installed_copy()
+        cls.zh = (copy / "references" / "generation.zh-CN.md").read_text(encoding="utf-8")
+        cls.en = (copy / "references" / "generation.en.md").read_text(encoding="utf-8")
+
+    def test_guides_ship_reading_sections(self):
+        self.assertTrue(installed_copy().is_dir())
+        for anchor in self.ZH_ANCHORS:
+            self.assertIn(anchor, self.zh, f"中文指引缺 {anchor}")
+        for anchor in self.EN_ANCHORS:
+            self.assertIn(anchor, self.en, f"英文指引缺 {anchor}")
+
+    def test_guides_list_statuses_matching_implementation(self):
+        """指引写的读取状态与 report_check 的枚举一致，防止文档漂移。"""
+        for text in (self.zh, self.en):
+            for status in rc.SOURCE_STATUSES:
+                self.assertIn(f"`{status}`", text, f"指引缺状态 {status}")
+
+    def test_guides_document_registration_fields(self):
+        """读取范围、定位线索与原因三个登记字段都要在指引里。"""
+        for text in (self.zh, self.en):
+            for field in ("coverage", "locations", "reason"):
+                self.assertIn(field, text, f"指引缺登记字段 {field}")
+
+    def test_record_example_shows_partial_disclosure(self):
+        """记录示例带 partial 条目：实际读取范围与原因写在示例里，不留空话。"""
+        import re
+        for text, label in ((self.zh, "中文"), (self.en, "英文")):
+            block = re.search(r"```[a-z]*\n([^`]*\"schema\"[^`]*)```", text)
+            self.assertIsNotNone(block, f"{label}指引里有记录示例")
+            self.assertIn('"status": "partial"', block.group(1),
+                          f"{label}指引的记录示例缺 partial 条目")
+            self.assertIn('"reason"', block.group(1), f"{label}指引示例缺 reason")
+            self.assertIn('"locations"', block.group(1), f"{label}指引示例缺 locations")
+
+    def test_check_entry_documented_with_reading(self):
+        """第 5 步的程序检查清单包含读取登记与缺口披露。"""
+        self.assertIn("读取登记与缺口披露", self.zh)
+        self.assertIn("reading registration and gap disclosure", self.en)
+
+
 class ReadingRegistrationTests(unittest.TestCase):
     """读取登记：状态枚举、披露完整性与定位线索类型。"""
 
