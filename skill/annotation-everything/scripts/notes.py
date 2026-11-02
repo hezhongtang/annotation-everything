@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import json
 import os
 import re
@@ -46,6 +47,61 @@ from build_viewer import (FIELD_LABEL, field_name, find_pages, page_heads,  # no
                           resolve_sources, strip_tags, write_private)
 import difflib  # noqa: E402
 import match  # noqa: E402
+
+
+def _inherited_update_lock(value: str | None) -> bool:
+    """重启后的进程只信任仍指向当前技能副本协调锁的文件描述符。"""
+    try:
+        fd = int(value or "")
+        held = os.fstat(fd)
+        current = ledger.update_lock_path().stat()
+        if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
+            return False
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _interpreter_options() -> list[str]:
+    """重启前保留解释器隔离和运行选项；Python 3.9 没有 sys.orig_argv。"""
+    original = getattr(sys, "orig_argv", None)
+    if original:
+        options = []
+        index = 1
+        while index < len(original):
+            token = original[index]
+            if token in ("-", "--") or token.startswith(("-c", "-m")) or not token.startswith("-"):
+                break
+            options.append(token)
+            if token in ("-W", "-X", "--check-hash-based-pycs") and index + 1 < len(original):
+                index += 1
+                options.append(original[index])
+            index += 1
+        return options
+    flags = sys.flags
+    options = []
+    if flags.isolated:
+        options.append("-I")
+    else:
+        if flags.ignore_environment:
+            options.append("-E")
+        if flags.no_user_site:
+            options.append("-s")
+    for name, option in (("no_site", "-S"), ("dont_write_bytecode", "-B"),
+                         ("inspect", "-i"), ("quiet", "-q"), ("safe_path", "-P")):
+        if getattr(flags, name, False) and not (name == "safe_path" and flags.isolated):
+            options.append(option)
+    for name, option in (("optimize", "O"), ("bytes_warning", "b"),
+                         ("verbose", "v"), ("debug", "d")):
+        count = getattr(flags, name, 0)
+        if count:
+            options.append("-" + option * count)
+    for warning in sys.warnoptions:
+        options.extend(("-W", warning))
+    for key, value in getattr(sys, "_xoptions", {}).items():
+        options.extend(("-X", key if value is True else f"{key}={value}"))
+    return options
 
 
 def load_manifest(review_dir: Path) -> dict[str, Any]:
@@ -627,6 +683,30 @@ def read_import(path: Path, *, lang: str = i18n.DEFAULT_LOCALE) -> tuple[list[di
 
 
 def main(argv: list[str] | None = None) -> int:
+    inherited = os.environ.pop("_AE_NOTES_UPDATE_LOCK_FD", None)
+    if __name__ == "__main__" and _inherited_update_lock(inherited):
+        return _main_locked(argv)
+    with contextlib.ExitStack() as stack:
+        try:
+            fd = stack.enter_context(ledger.update_lock())
+        except OSError:
+            print(cli_text(i18n.DEFAULT_LOCALE)("cli.notes.updateLockUnavailable"), file=sys.stderr)
+            return _main_locked(argv)
+        if __name__ == "__main__":
+            # 锁可能在导入旧代码后才拿到。持锁重新执行入口，保证载入的是切换后的整套代码。
+            args = list(sys.argv[1:] if argv is None else argv)
+            try:
+                os.set_inheritable(fd, True)
+                env = {**os.environ, "_AE_NOTES_UPDATE_LOCK_FD": str(fd)}
+                os.execve(sys.executable,
+                          [sys.executable, *_interpreter_options(), str(Path(__file__).resolve()), *args], env)
+            except OSError:
+                print(cli_text(i18n.DEFAULT_LOCALE)("cli.notes.updateRestart"), file=sys.stderr)
+                return 2
+        return _main_locked(argv)
+
+
+def _main_locked(argv: list[str] | None = None) -> int:
     # 先看显式语言，让 --help 和参数错误也使用该语言；只输出 JSON 的 claim 保留原有行为。
     argv = sys.argv[1:] if argv is None else argv
     pre = argparse.ArgumentParser(add_help=False)
