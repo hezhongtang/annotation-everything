@@ -3,7 +3,7 @@
 - 对话用中文；标识符、命令、路径保持原文。提交信息用约定式格式 `<type>: <description>`，描述用中文。
 - skill 本体在 `skill/annotation-everything/`，改完跑 `python3 ae.py install` 同步到 `~/.claude/skills/`。
 - 运行时脚本只用 Python 标准库；测试专用依赖（playwright）只出现在 `tests/e2e_browser.py`。
-- 验证按阶段走统一入口 `python3 verify.py`：需求（issue）阶段不自动跑测试；开发先用 `plan --phase development` 看建议，再用 `run unit-related <路径>` 跑相关组；审查先读 `report --latest` 的有效证据与差异，疑点点名到类 / 用例补测（`run unit-related tests.test_x.Class`，点名即实际执行），需要完全独立复测加 `--no-reuse`；PR 收敛完成明确门禁 `python3 verify.py run --group all --phase pr`（完整单元 + 服务安全自检 + 完整浏览器）。同输入、同环境、范围覆盖且当前有效的通过记录在 issue / development / review / manual 阶段自动跨阶段引用（保鲜 24 小时）；依赖宿主机状态的组（完整单元、完整浏览器、敏感模块直跑）与 `pr` / `ci` 门禁永远实际执行。`run` 把结构化记录和原始日志写进 `.verify/`（已忽略）。原来的直接命令仍可作诊断，但其输出不是可复用的验证记录；字段契约见 `docs/verify/record-contract.md`，复用语义见 `docs/verify/onboarding.md`。
+- 验证按阶段使用 `python3 verify.py`：开发跑相关组，审查先读有效证据并按疑点补测，PR 收敛实际执行 `run --group all --phase pr`。需求阶段不自动跑测试；宿主状态组与 PR / CI 门禁实际执行。阶段流程、会话复用和故障恢复见 `docs/verify/onboarding.md`；效率缺口、周期回顾或策略更新见 `docs/verify/efficiency.md`；记录契约见 `docs/verify/record-contract.md`。
 - 同机并发：资源敏感的验证（完整单元、完整浏览器、敏感模块直跑）按 `host-state` 共享资源自动互斥，跨 worktree 与独立 checkout 生效，锁等待在记录里单独计时（上限 `AE_LOCK_WAIT_SECONDS`，缺省 600 秒，超时不是通过）；纯逻辑组不受影响。协议与安全边界见 `docs/verify/isolation.md`，不要绕开或另建互斥机制。
 - 安全底线不能退：只绑 127.0.0.1、Host 校验、写操作 Origin 同源 + JSON Content-Type、无 CORS 头、只暴露 index.html 与 /api/*。改服务后跑 `serve.py check`（或 `python3 verify.py run --group serve-check`）。
 - 测试与 eval 只用合成数据（`fixtures/`、`skill/annotation-everything/evals/*/files/`）。任何真实业务材料、批注不得进入本仓库或 skill 目录。

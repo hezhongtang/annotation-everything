@@ -21,6 +21,8 @@ Closes #
 - [ ] 改了 skill：已运行 `python3 ae.py install`
 - [ ] 按 AGENTS.md「README 维护」检查过中英两份 README
 
+- [ ] 附 run ID、输入指纹 / 提交、环境、实际范围与 `report --run <ID>` 证据链；记录 `report --efficiency` 的可比性、缺口和未达标项。未完成的总验收保持 issue 开放，只有全部满足才写关闭引用。
+
 ## 兼容性
 
 <!-- 对已有审阅目录、旧版服务和旧数据格式的影响；没有影响也写明。 -->

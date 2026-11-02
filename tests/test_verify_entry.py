@@ -181,6 +181,7 @@ class SynthRepo:
         shutil.copy2(ROOT / "host_isolation.py", self.path / "host_isolation.py")
         shutil.copy2(ROOT / "verify_selection.py", self.path / "verify_selection.py")
         shutil.copy2(ROOT / "verify_evidence.py", self.path / "verify_evidence.py")
+        shutil.copy2(ROOT / "verify_report.py", self.path / "verify_report.py")
         self.git("init", "-q")
         self.git("add", "-A")
         self.git("-c", "user.name=synth", "-c", "user.email=synth@example.invalid",
@@ -1302,12 +1303,35 @@ class OtherGroupTests(VerifyEntryTestCase):
         self.assertEqual(index[0]["outcome"], "passed")
 
 
+class EfficiencyIntegrationTests(VerifyEntryTestCase):
+    def test_uncertain_impact_expands_explicit_related_run_to_actual_full_gate(self):
+        self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
+            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": 3,
+            "reason": "合成无法界定的影响", "evidence": ["synthetic"]}))
+        p = self.repo.run_verify("run", "unit-related", "tests/test_synth.py", "--json")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = json.loads(p.stdout)
+        self.assertEqual([item["name"] for item in record["groups"]], ["unit", "serve-check", "browser"])
+        self.assertTrue(all(item["outcome"] == "passed" for item in record["groups"]))
+        self.assertIn("扩大实际执行范围", " ".join(record["result"]["notes"]))
+
+
 class BrowserScenarioTests(VerifyEntryTestCase):
     """issue #53：浏览器组从场景摘要行接入场景级记录。"""
 
     def use_scenario_browser(self) -> None:
         self.repo.write("tests/e2e_browser.py", BROWSER_SCENARIO_STUB, executable=True)
         self.repo.commit_all("换成带场景摘要的合成浏览器入口")
+
+    def test_browser_runtime_versions_are_preserved_from_synthetic_log(self):
+        metadata = {"schema": "ae-browser-environment/1", "browser": "chromium", "channel": "chrome",
+                    "version": "synthetic-130.0", "playwright": "synthetic-1.48"}
+        stub = BROWSER_SCENARIO_STUB.replace("import time", "import time\nprint('AE-BROWSER-ENV: ' + " + repr(json.dumps(metadata)) + ")")
+        self.repo.write("tests/e2e_browser.py", stub, executable=True)
+        p = self.repo.run_verify("run", "--group", "browser")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertEqual(record["groups"][0]["browser_environment"], metadata)
 
     def test_browser_group_records_scenario_list_and_times(self):
         self.use_scenario_browser()
@@ -1381,7 +1405,9 @@ except KeyboardInterrupt:
                 cleaning = Path(self.temp.name) / ("cleaning-%s" % signum)
                 env = dict(os.environ)
                 env.update(PATH=str(self.repo.path / "bin") + os.pathsep + env["PATH"],
-                           SYNTH_READY=str(ready), SYNTH_CLEANING=str(cleaning))
+                           SYNTH_READY=str(ready), SYNTH_CLEANING=str(cleaning),
+                           AE_LOCK_DIR=str(self.test_lock_dir))
+                env.pop("AE_HELD_LOCKS", None)
                 wrapper = subprocess.Popen(
                     [sys.executable, "verify.py", "run", "--group", "browser",
                      "--group", "serve-check"], cwd=self.repo.path, env=env,
