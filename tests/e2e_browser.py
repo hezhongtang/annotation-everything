@@ -1696,31 +1696,37 @@ def current_task_controls_checks(browser, tmp: Path):
         page.unroute("**/api/notes", wrong_review)
         ok(wait_mode(page, "server"), "停止服务：恢复本审阅连接")
         page.locator("#batches [data-close]").click()
-        rejection_status = [503]
+        pending_saves = []
 
         def reject_save(route):
             if route.request.method == "POST":
-                route.fulfill(status=rejection_status[0], content_type="application/json",
-                              json={"app": "annotation-everything", "code": "bad-note",
-                                    "error": "synthetic save failure"})
+                pending_saves.append(route)
             else:
                 route.continue_()
 
         page.route("**/api/notes", reject_save)
         add_note(page, "synthetic saved before stop")
         ok(wait_until(lambda: "held for sending" in page.inner_text("#mode"), page, 5),
-           "停止服务：写入失败保留待补传改动")
+           "停止服务：等待响应的改动仍在待补传队列")
         page.keyboard.press("j")
         wait_batches(page, "Batch 2")
-        page.once("dialog", lambda dialog: dialog.accept())
-        page.get_by_role("button", name="Stop local service", exact=True).click()
-        ok(wait_toast(page, "Some changes have not been saved") and not stop_requests()
-           and server.poll() is None, "停止服务：补传 5xx 失败时保持服务运行")
-        rejection_status[0] = 400
-        page.once("dialog", lambda dialog: dialog.accept())
-        page.get_by_role("button", name="Stop local service", exact=True).click()
-        ok(wait_toast(page, "Some changes have not been saved") and not stop_requests()
-           and server.poll() is None, "停止服务：明确拒绝保存时也不停止")
+
+        def stop_after_failed_save(status):
+            page.once("dialog", lambda dialog: dialog.accept())
+            page.get_by_role("button", name="Stop local service", exact=True).click()
+            if not wait_until(lambda: bool(pending_saves), page, 5,
+                              condition=f"停止操作等待补传响应（{status}）"):
+                return False
+            waiting = page.is_disabled("#stopServiceBtn")
+            pending_saves.pop(0).fulfill(status=status, json={"app": "annotation-everything", "code": "bad-note",
+                                                            "error": "synthetic save failure"})
+            settled = wait_until(lambda: page.is_enabled("#stopServiceBtn")
+                                 and "Some changes have not been saved" in page.inner_text("#toast"),
+                                 page, 5, condition=f"本次停止操作因保存失败结束（{status}）")
+            return waiting and settled and not stop_requests() and server.poll() is None
+
+        ok(stop_after_failed_save(503), "停止服务：补传 5xx 失败时保持服务运行")
+        ok(stop_after_failed_save(400), "停止服务：明确拒绝保存时也不停止")
         page.unroute("**/api/notes", reject_save)
         page.locator("#batches [data-close]").click()
         add_note(page, "synthetic saved before stop")
