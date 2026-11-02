@@ -296,6 +296,55 @@ else:
         self.assertEqual(second.returncode, 0, outputs[1][1])
         self.assertEqual(sum(json.loads(output[0])["review"]["generated"] for output in outputs), 1)
 
+    def test_ci_state_restore_keeps_state_created_during_download(self):
+        self.record("concurrent-local")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("efficiency/state.json", json.dumps({
+                "schema": "ae-verify-efficiency/1", "sample_ids": ["old-remote"],
+                "reviewed_prs": [], "candidate_versions": {}, "reviewed_at": stamp()}))
+        expected = Path(self.tmp.name) / "concurrent-state.json"
+        fake_bin = Path(self.tmp.name) / "bin"
+        fake_bin.mkdir()
+        command = [sys.executable, str(ROOT / "verify.py"), "report", "--efficiency", "--rebuild",
+                   "--out-dir", str(self.root), "--now", stamp(3600), "--json"]
+        script = """#!/usr/bin/env python3
+import base64, json, pathlib, subprocess, sys
+endpoint = sys.argv[-1]
+if '/pulls?' in endpoint:
+    print('[]')
+elif '/actions/artifacts?' in endpoint:
+    print(json.dumps({'artifacts': [{'id': 42, 'name': 'verify-efficiency-history',
+        'size_in_bytes': 100, 'created_at': '2026-01-01', 'workflow_run': {'id': 7}}]}))
+elif endpoint == 'repos/synthetic/repo':
+    result = subprocess.run(COMMAND, capture_output=True, text=True, check=True)
+    pathlib.Path(EXPECTED).write_text(pathlib.Path(STATE).read_text())
+    print(json.dumps({'id': 1, 'default_branch': 'main'}))
+elif endpoint.endswith('/workflows/verify-efficiency.yml'):
+    print(json.dumps({'id': 9}))
+elif endpoint.endswith('/runs/7'):
+    print(json.dumps({'workflow_id': 9, 'head_branch': 'main',
+        'head_repository': {'id': 1}, 'event': 'workflow_run'}))
+elif endpoint.endswith('/42/zip'):
+    sys.stdout.buffer.write(base64.b64decode(BYTES))
+else:
+    sys.exit(1)
+""".replace("COMMAND", repr(command)).replace("EXPECTED", repr(str(expected))).replace(
+            "STATE", repr(str(self.root / "efficiency" / "state.json"))).replace(
+            "BYTES", repr(base64.b64encode(buffer.getvalue()).decode()))
+        gh = fake_bin / "gh"
+        gh.write_text(script)
+        gh.chmod(0o755)
+        env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"],
+                   AE_LOCK_DIR=str(Path(self.tmp.name) / "locks"))
+        env.pop("AE_HELD_LOCKS", None)
+        result = subprocess.run([sys.executable, str(ROOT / "tools" / "collect_verify_history.py"),
+                                 "--repo", "synthetic/repo", "--out-dir", str(self.root)],
+                                env=env, capture_output=True, text=True, timeout=20)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(json.loads((self.root / "efficiency" / "state.json").read_text()),
+                         json.loads(expected.read_text()))
+
     def test_seven_day_review_without_merge_events_and_no_sample_stays_quiet(self):
         self.record("initial")
         self.cli("--rebuild")

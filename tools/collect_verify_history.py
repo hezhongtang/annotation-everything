@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+import host_isolation
 import verify_report
 
 MAX_COMPRESSED = 30 * 1024 * 1024
@@ -138,8 +139,17 @@ def collect(repository, out_dir, limit):
                 state = json.loads(states[0].read_text(encoding="utf-8"))
                 if state.get("schema") != verify_report.SCHEMA:
                     raise ValueError("历史状态 schema 不兼容")
-                verify_report._write(out_dir / "efficiency" / "state.json", json.dumps(verify_report.redact_paths(state, [out_dir]), ensure_ascii=False))
-            except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile) as exc:
+                # 下载在锁外；恢复前重新检查，保留下载期间本地回顾已更新的去重状态。
+                handle = host_isolation.acquire(("verification-reports",), timeout=5)
+                try:
+                    state_path = out_dir / "efficiency" / "state.json"
+                    if not state_path.exists():
+                        verify_report._write(state_path, json.dumps(
+                            verify_report.redact_paths(state, [out_dir]), ensure_ascii=False))
+                finally:
+                    host_isolation.release(handle)
+            except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile,
+                    host_isolation.LockTimeoutError) as exc:
                 gap("review-state", exc)
         wanted = {Path(source).parts[1] for source in sources}
         ci_dir = out_dir / "ci"
