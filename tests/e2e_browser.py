@@ -1729,6 +1729,30 @@ def current_task_controls_checks(browser, tmp: Path):
         other_tab = ctx.new_page()
         other_tab.goto(f"http://127.0.0.1:{port}/")
         ok(wait_mode(other_tab, "server"), "停止服务：同一审阅的第二个标签页已连接")
+        held_saves = []
+
+        def hold_other_save(route):
+            if route.request.method == "POST":
+                held_saves.append(route)
+            else:
+                route.continue_()
+
+        other_tab.route("**/api/notes", hold_other_save)
+        add_note(other_tab, "synthetic rejected in another tab")
+        ok(wait_until(lambda: bool(held_saves), other_tab, 5), "停止服务：另一标签页补传正在等待响应")
+        page.bring_to_front()
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.get_by_role("button", name="Stop local service", exact=True).click()
+        ok(page.get_by_role("button", name="Saving and stopping…", exact=True).is_disabled()
+           and not stop_requests(), "停止服务：等待另一标签页的补传完成")
+        held_saves[0].fulfill(status=400, json={"app": "annotation-everything", "code": "bad-note",
+                                              "error": "synthetic rejection in another tab"})
+        cross_tab_blocked = (wait_toast(page, "Some changes have not been saved", seconds=5)
+                             and server.poll() is None and not stop_requests())
+        ok(cross_tab_blocked, "停止服务：另一标签页保存被拒时也保持服务运行")
+        if not cross_tab_blocked:
+            return
+        other_tab.unroute("**/api/notes", hold_other_save)
         page.bring_to_front()
         saved_before_stop = []
         page.on("request", lambda req: saved_before_stop.append(

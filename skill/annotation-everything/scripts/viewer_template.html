@@ -277,7 +277,7 @@ const $=id=>document.getElementById(id);
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},
   set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}},
   del(k){try{localStorage.removeItem(k)}catch(e){}}};
-const K={notes:`ae.${RID}.notes`,meta:`ae.${RID}.meta`,page:`ae.${RID}.page`,pending:`ae.${RID}.queue`,legacyPending:`ae.${RID}.pending`,failed:`ae.${RID}.failed`,drafts:`ae.${RID}.drafts`,hide:"ae.hideResolved",lang:"ae.exportLang"};
+const K={notes:`ae.${RID}.notes`,meta:`ae.${RID}.meta`,page:`ae.${RID}.page`,pending:`ae.${RID}.queue`,legacyPending:`ae.${RID}.pending`,failed:`ae.${RID}.failed`,rejected:`ae.${RID}.rejected`,drafts:`ae.${RID}.drafts`,hide:"ae.hideResolved",lang:"ae.exportLang"};
 const SS={get(k,d){try{const v=sessionStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{sessionStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 let i=0;{const s=+LS.get(K.page,0);if(s>0&&s<=N)i=s-1}
 let notes=FILE?LS.get(K.notes,[]):[]; if(!Array.isArray(notes))notes=[];
@@ -637,7 +637,7 @@ function onSent(op,r){
     toast(r.merged?tMsg("viewer.hand.toast.merged"):tMsg("viewer.hand.toast.sent"),3500)}
   else if(op.kind==="import")toast(tMsg("import.complete",{label:tMsg("import.saved"),added:r.added,updated:r.updated||0,skipped:r.skipped}),3500)}
 function onRejected(op,e){   // 服务明确不接受（4xx）：不重试
-  saveFailures++;
+  saveFailures++;LS.set(K.rejected,newId());   // 其他标签页等待补传锁时也能看到保存被拒
   if(op.kind==="handoff"){handQueued=pend.get().some(o=>o.kind==="handoff");renderHand();
     toast(e.status===404||e.status===405?tMsg("viewer.hand.toast.legacy"):tMsg("viewer.hand.toast.failed",{message:e.message}),6000);return}
   toast(tMsg("viewer.recovery.rejected",{reason:e.message}),6000);
@@ -1355,10 +1355,11 @@ async function stopLocalService(){
   if(!stopServiceSupported){toast(tMsg("viewer.batch.stopLegacy"),8000);return}
   if(!confirm(tMsg("viewer.batch.stopConfirm")))return;
   stoppingService=true;busy++;renderServiceControls();
-  const rejectedBefore=saveFailures;
+  const rejectedBefore=saveFailures,sharedRejectedBefore=LS.get(K.rejected,null);
   try{
     await flush();
-    if(pend.get().length||failed.get().length||saveFailures!==rejectedBefore||mode!=="server"){
+    if(pend.get().length||failed.get().length||saveFailures!==rejectedBefore
+        ||LS.get(K.rejected,null)!==sharedRejectedBefore||mode!=="server"){
       toast(tMsg("viewer.batch.stopUnsaved"),8000);return}
     const d=await getNotes();
     if(!hasFeature(d,"stop-service")){stopServiceSupported=false;toast(tMsg("viewer.batch.stopLegacy"),8000);return}
