@@ -28,6 +28,12 @@ class Scenario:
 
 SCENARIOS: list[Scenario] = [
     Scenario(
+        id="receiver-binding",
+        title="接收方身份：harness、会话和等待／处理／未等待状态常显，双语与旧服务提示一致",
+        fixture="fixtures/sample 合成审阅；显式等待会话绑定；notes.py wait/claim/done 真实子进程",
+        isolation="独立审阅目录、端口与浏览器上下文；等待者与服务全部登记回收",
+    ),
+    Scenario(
         id="generated-draft-loop",
         title="默认范式初稿闭环：安装副本上的核验入口放行初稿、对照页吃进带基础样式的产物、"
               "批注落盘后页序调整再重建，批注按稳定页面键找回且审阅标识不变",

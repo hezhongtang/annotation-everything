@@ -56,6 +56,8 @@ python3 $S/build_viewer.py --report 报告.html --script 讲稿.md --out 审阅�
 
 ## 2. 启动服务并挂起等待
 
+先按[接收方绑定与交接](receiver-binding.zh-CN.md)绑定当前接收会话，再启动服务。下面的等待命令须使用绑定的 `--harness` / `--session` 或对应环境变量；Codex 桌面事件模式按 Agent 机制接收，不另开认领型等待者。页面上的服务连接和接收方身份分别核对。
+
 Codex 桌面且用户要求自动处理：先按[Agent 机制中的持久绑定流程](agent-mechanisms.zh-CN.md#codex-桌面审阅级事件接入)配置技能接入，然后正常启动服务。已保存绑定的审阅不再运行下面的认领型 `wait`；服务重启会恢复接入。
 
 ```bash

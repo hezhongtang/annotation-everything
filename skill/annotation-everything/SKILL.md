@@ -5,7 +5,7 @@ description: 从原始材料生成逐页报告初稿、本机逐页审阅、批�
 
 # annotation-everything
 
-Generate a report draft from raw material (default paradigm) or a local review page → start its service → wait for a submission → edit the source report and speaker notes → rebuild → record each result → finish the batch → wait again.
+Generate a report draft from raw material (default paradigm) or a local review page → bind its receiving session → start its service → receive a submission → edit the source report and speaker notes → rebuild → record each result → finish the batch → receive the next submission.
 
 Before loading a workflow, resolve `$S` to the `scripts/` directory beside this loaded `SKILL.md` and run `python3 "$S/update.py" auto --locale LANG`, replacing `LANG` with `zh-CN` or `en` for the user's request. The check runs at most once per day and does not block the review when offline. If it installs an update, reload this `SKILL.md` and its references; before resuming an existing review, stop any old service, rebuild the review page, start the new service, and ask the user to refresh the browser. Briefly tell the user about an installed update or a warning from the command.
 
@@ -24,5 +24,7 @@ Before loading a workflow, resolve `$S` to the `scripts/` directory beside this 
 - **English requests**: read [Agent mechanisms](references/agent-mechanisms.en.md) before configuring a waiter, invoking annotation skills, delegating work, or choosing a `--by` name.
 
 Load only the matching language reference. The shared protocol still governs permissions and stage boundaries.
+
+接收方身份：首次接收、换 harness 或换会话前，读取[接收方绑定与交接](references/receiver-binding.zh-CN.md)。Receiver identity: before first receipt or changing harness or session, read [Receiver binding and transfer](references/receiver-binding.en.md). Load only the matching language.
 
 Codex 桌面接入与服务重启：首次配置自动接收时，读取匹配语言的 Agent 机制中的持久绑定流程；先验证空闲会话实际接手，再宣布自动处理可用。Codex desktop delivery and service restarts: follow the persistent binding procedure in the matching Agent mechanisms reference; verify receipt by an idle chat before declaring automatic processing ready.

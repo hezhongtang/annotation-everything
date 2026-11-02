@@ -22,7 +22,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 NOTES_FILE = "notes.json"
 LOG_FILE = "notes.jsonl"
@@ -792,7 +792,7 @@ def _mark_open(note: dict[str, Any]) -> None:
 
 
 def set_status(review_dir: Path, note_id: str, status: str, *, resolution: str = "", by: str = "page",
-               seq: int | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+               seq: int | None = None, authorize: Callable[[], None] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """标已处理 / 重新打开。代理在两段流程的初改阶段标已处理时，记为「已初改·待复核」（drafted），
     复核通过或用户定稿后才算已处理。每次都在批注的处理痕迹里追加一条。"""
     if status not in STATUSES:
@@ -800,6 +800,8 @@ def set_status(review_dir: Path, note_id: str, status: str, *, resolution: str =
     if status == "drafted" and by == "page":
         raise NoteError("「已初改·待复核」只能由代理在初改时标记")
     with locked(review_dir):
+        if authorize is not None:
+            authorize()
         doc = load(review_dir)
         note = _find(doc, note_id)
         prev = note.get("status", "open")
@@ -838,7 +840,7 @@ REVIEW_VERDICTS = ("ok", "revise", "return")
 
 
 def review(review_dir: Path, note_id: str, verdict: str, *, note: str = "", by: str = "agent",
-           seq: int | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+           seq: int | None = None, authorize: Callable[[], None] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """复核结论：ok 通过（定为已处理）、revise 复核者直接再改（写明改了什么）、return 退回给用户拍板（重新打开，写明原因）。"""
     if verdict not in REVIEW_VERDICTS:
         raise NoteError(f"复核结论须为 {REVIEW_VERDICTS} 之一")
@@ -846,6 +848,8 @@ def review(review_dir: Path, note_id: str, verdict: str, *, note: str = "", by: 
     if verdict != "ok" and not text:
         raise HandoffError("再改 / 退回要写明理由", code="review-reason-required")
     with locked(review_dir):
+        if authorize is not None:
+            authorize()
         doc = load(review_dir)
         n = _find(doc, note_id)
         if n.get("status", "open") == "open":
@@ -1138,7 +1142,8 @@ def _open_snapshot(notes: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def handoff_submit(review_dir: Path, message: str = "", *, target: str = "final", allow_subagents: bool = False,
-                   full_check: bool | None = None, by: str = "page") -> tuple[dict[str, Any], dict[str, Any], bool]:
+                   full_check: bool | None = None, by: str = "page",
+                   authorize: Callable[[], None] | None = None) -> tuple[dict[str, Any], dict[str, Any], bool]:
     """记一次提交（一批），快照当时的未处理批注。上一次提交还没被代理接收时合并进去（刷新快照、附言与选项），不重复排队。
 
     target：final 做到定稿 / review 做到「已初改·待复核」后停下；allow_subagents：是否允许代理派发子代理；
@@ -1147,6 +1152,8 @@ def handoff_submit(review_dir: Path, message: str = "", *, target: str = "final"
     if target not in TARGETS:
         raise NoteError(f"target 须为 {TARGETS} 之一")
     with locked(review_dir):
+        if authorize is not None:
+            authorize()
         notes = load(review_dir)["notes"]
         doc = handoff_load(review_dir)
         latest = doc["items"][-1] if doc["items"] else None
@@ -1190,13 +1197,16 @@ def _stage_entry(item: dict[str, Any], stage: str) -> dict[str, Any]:
     return e
 
 
-def handoff_claim(review_dir: Path, *, by: str = "agent", stage: str = "any", seq: int | None = None) -> dict[str, Any] | None:
+def handoff_claim(review_dir: Path, *, by: str = "agent", stage: str = "any", seq: int | None = None,
+                  authorize: Callable[[], None] | None = None) -> dict[str, Any] | None:
     """接收最早一个等着的批次：stage=draft 只接新提交（→ 初改中），review 只接请求复核的（→ 复核中），any 都接。
     返回的批次带 stage 字段说明是哪个阶段；没有则 None。"""
     want = {"draft": ("pending",), "review": ("review",), "any": ("pending", "review")}.get(stage)
     if want is None:
         raise NoteError("stage 须为 draft / review / any")
     with locked(review_dir):
+        if authorize is not None:
+            authorize()
         doc = handoff_load(review_dir)
         item = next((i for i in doc["items"] if i.get("status") in want and (seq is None or int(i.get("seq", 0)) == seq)), None)
         if item is None:
@@ -1230,7 +1240,8 @@ def _load_notes_or_none(review_dir: Path) -> dict[str, Any] | None:
 
 
 def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "", by: str = "agent",
-                 mode: str | None = None, accept_rest: bool = False) -> dict[str, Any]:
+                 mode: str | None = None, accept_rest: bool = False,
+                 authorize: Callable[[], None] | None = None) -> dict[str, Any]:
     """收尾当前阶段。不给 seq 时取最近一个处理中（初改中 / 复核中）的，没有就取最近一个等待接收的。
 
     初改阶段：用户选了「待复核」（target=review）→ 停在 drafted 等用户；选了定稿 → 直接定稿（done）；
@@ -1239,6 +1250,8 @@ def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "",
     if mode not in (None, "draft", "final"):
         raise NoteError("mode 须为 draft / final")
     with locked(review_dir):
+        if authorize is not None:
+            authorize()
         doc = handoff_load(review_dir)
         items = doc["items"]
         if seq is not None:
@@ -1325,9 +1338,11 @@ def _review_counts(notes: list[dict[str, Any]], seq: int) -> dict[str, int]:
 
 
 def handoff_request_review(review_dir: Path, seq: int, message: str = "", *, allow_subagents: bool = False,
-                           by: str = "page") -> dict[str, Any]:
+                           by: str = "page", authorize: Callable[[], None] | None = None) -> dict[str, Any]:
     """用户看过初改，请代理复核：drafted → review（等待复核接收）。"""
     with locked(review_dir):
+        if authorize is not None:
+            authorize()
         doc = handoff_load(review_dir)
         item = _find_batch(doc["items"], seq)
         if item.get("status") not in ("drafted", "review"):

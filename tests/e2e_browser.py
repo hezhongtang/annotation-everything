@@ -223,6 +223,109 @@ def drag_select(page, locator):
     page.mouse.up()
 
 
+def receiver_binding_checks(browser, tmp: Path):
+    d = tmp / "receiver-binding"
+    build(d)
+    subprocess.run([sys.executable, str(SCRIPTS / "wakeup.py"), "bind", str(d), "--adapter", "wait",
+                    "--harness", "Claude Code", "--session", "browser-session-a"], check=True, capture_output=True)
+    srv = start_server(d, free_port())
+    port = json.loads((d / ".annotation-server.json").read_text())["port"]
+    waiter = None
+    ctx = browser.new_context(viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{json.loads((d / '.annotation-server.json').read_text())['port']}/")
+        wait_mode(page, "server")
+        visible = page.locator("#receiver").count() > 0
+        ok(visible, "页面常显接收方身份")
+        if not visible:
+            return
+        text = page.inner_text("#receiver")
+        ok("Claude Code" in text and "browser-" in text and "未等待" in text, "harness、会话短标识与未等待状态同时可见")
+        page.click("#handBtn")
+        ok("Claude Code" in page.inner_text("#handReceiver"), "提交前再次明确接收方")
+        page.keyboard.press("Escape")
+        add_note(page, "请简化这一页的标题（合成批注）")
+        identity_flags = ["--harness", "Claude Code", "--session", "browser-session-a"]
+        def start_waiter():
+            process = subprocess.Popen([sys.executable, str(SCRIPTS / "notes.py"), "wait", str(d),
+                                        "--timeout", "30", "--interval", ".1", *identity_flags],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            CLEANUP.add(process)
+            return process
+        waiter = start_waiter()
+        waiting = "() => document.getElementById('receiver').textContent.includes('等待中')"
+        ok(wait_dom(page, waiting, 8), "真实绑定等待者启动后显示等待中")
+        artifacts = Path(os.environ["AE_RECEIVER_ARTIFACTS"]) if os.environ.get("AE_RECEIVER_ARTIFACTS") else None
+        if artifacts:
+            artifacts.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(artifacts / "receiver.zh.png"))
+        page.select_option("#localePick", "en")
+        ok("Receiver: Claude Code" in page.inner_text("#receiver") and "Waiting" in page.inner_text("#receiver"),
+           "切换英文只翻译接收状态，harness 与会话身份不变")
+        ok("browser-session-a" in page.get_attribute("#receiver", "title"), "完整会话标识可核对")
+        if artifacts:
+            page.screenshot(path=str(artifacts / "receiver.en.png"))
+        page.click("#handBtn")
+        page.fill("#handMsg", "Synthetic receiver batch")
+        page.click("#doHand")
+        out, err = waiter.communicate(timeout=15)
+        CLEANUP.discard(waiter)
+        ok(waiter.returncode == 0, "页面提交由绑定会话接收：" + (err if waiter.returncode else "batch 1"))
+        ok(wait_dom(page, "() => document.getElementById('receiver').textContent.includes('Processing')", 8),
+           "领取后显示接收方与处理中状态")
+        shown = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "show", str(d), "--json"],
+                               capture_output=True, text=True, check=True)
+        nid = json.loads(shown.stdout)["notes"][0]["id"]
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "resolve", str(d), nid, *identity_flags],
+                       capture_output=True, check=True)
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "done", str(d), "--seq", "1", *identity_flags],
+                       capture_output=True, check=True)
+        ok(wait_dom(page, "() => document.getElementById('receiver').textContent.includes('Not waiting')", 8),
+           "批次收尾后保留接收方，显示未等待")
+        page.select_option("#localePick", "zh-CN")
+        waiter = start_waiter()
+        ok(wait_dom(page, waiting, 8), "下次等待仍归原会话")
+        page.click("#handBtn")
+        ok("等待中" in page.inner_text("#handReceiver"), "提交窗口显示当前等待状态")
+        stop(waiter)
+        waiter = None
+        ok(wait_dom(page, "() => document.getElementById('receiver').textContent.includes('未等待')", 8)
+           and "Claude Code" in page.inner_text("#receiver"), "停止等待不解除绑定、不自动改接收方")
+        ok(wait_dom(page, "() => document.getElementById('handReceiver').textContent.includes('未等待')", 4),
+           "同一绑定停止等待后，已打开的提交窗口也更新接收状态")
+        page.keyboard.press("Escape")
+        stop(srv)
+        ok(wait_mode(page, "offline", 12) and "待确认" in page.inner_text("#receiver"), "服务断开后不沿用在线状态")
+        srv = start_server(d, port)
+        page.reload()
+        wait_mode(page, "server")
+        def old_service(route):
+            response = route.fetch()
+            data = response.json()
+            data.pop("receiver", None)
+            data["features"] = [f for f in data["features"] if f != "receiver-binding"]
+            route.fulfill(response=response, json=data)
+        page.route("**/api/notes", old_service)
+        ok(wait_dom(page, "() => document.getElementById('receiver').textContent.includes('请升级')", 8),
+           "旧版服务明确提示接收方未知")
+        page.unroute("**/api/notes", old_service)
+        subprocess.run([sys.executable, str(SCRIPTS / "wakeup.py"), "unbind", str(d)], check=True, capture_output=True)
+        stop(srv)
+        srv = start_server(d, port)
+        page.reload()
+        wait_mode(page, "server")
+        ok("未绑定接收方" in page.inner_text("#receiver"), "旧审阅未绑定时不猜测 harness")
+        local = ctx.new_page()
+        local.goto((d / "index.html").as_uri())
+        ok("本地文件" in local.inner_text("#receiver"), "文件模式不冒充连接到任何 harness")
+    finally:
+        if waiter is not None and waiter.poll() is None:
+            stop(waiter)
+        ctx.close()
+        stop(srv)
+
+
 def skill_search_checks(browser, tmp: Path):
     """通过真实浏览器验证技能输入；目录内容均为合成数据。"""
     d = tmp / "skill_search"
@@ -3959,6 +4062,7 @@ def external_method_checks(browser, tmp: Path):
 
 
 SCENARIO_RUNNERS = {
+    "receiver-binding": receiver_binding_checks,
     "generated-draft-loop": generated_draft_checks,
     "report-verdict-loop": report_verdict_checks,
     "revision-update-loop": revision_update_checks,

@@ -31,9 +31,9 @@
 <br>
 
 <p align="center">
-  <img src="docs/assets/viewer.en.png" alt="Review page: synthetic report with a pin on the left, speaker notes and annotations on the right" width="92%">
+  <img src="docs/assets/receiver.en.png" alt="Synthetic review page with report, speaker notes and annotations; the header identifies the receiving harness, session and waiting state" width="92%">
   <br>
-  <sub>The review page: the report with a pin on the left, speaker notes and annotations on the right. Regions can also be selected by dragging. The interface and material are in English; all data shown is fictional.</sub>
+  <sub>The review page places the report, speaker notes and annotations side by side, with the receiving harness, session and waiting state in the header. Interface labels are in English; material stays in its original language. All data shown is fictional.</sub>
 </p>
 
 ## Why
@@ -63,7 +63,7 @@ annotation-everything moves this whole process into a single page that runs on y
   <tr>
     <td valign="top">
       <h4>🤖 Hand off to an agent in one click</h4>
-      The agent runs <code>notes.py wait</code> ahead of time to wait for a submission. When the reviewer clicks <b>Hand off to Agent</b>, the agent receives the batch, revises the report and speaker notes page by page, regenerates the review page, and marks each annotation as resolved. The page shows progress as it happens.
+      The agent binds its receiving session, then configures a waiter or event delivery. When the reviewer clicks <b>Hand off to Agent</b>, it revises the report and speaker notes, rebuilds the page and records each result. The page always shows the receiving harness, short session ID and state; other sessions cannot claim a bound review.
     </td>
     <td valign="top">
       <h4>🔍 Full consistency check</h4>
@@ -131,6 +131,8 @@ Reading source material depends on the host's available capabilities. The agent 
 One skill copy handles Chinese requests such as “按批注改” and English requests such as “review this report” or “apply my annotations”. The same `annotation-everything` entry point loads the [Chinese workflow](skill/annotation-everything/references/workflow.zh-CN.md) or [English workflow](skill/annotation-everything/references/workflow.en.md) on demand. Both read one [shared safety and protocol reference](skill/annotation-everything/references/protocol.md), including the stop before review, subagent permission, and evidence and uncertainty requirements for a full check. No language-specific installation is needed.
 
 Supported languages are Simplified Chinese and English. English regional tags share the English resources; `zh` and `zh-Hans` map to Simplified Chinese. Traditional Chinese and other languages are not supported. The saved browser preference overrides the review default. `auto` matches browser languages in preference order and falls back to English. New reviews and old commands without a language setting remain Chinese. Interface, material, and annotation languages are independent; switching preserves drafts and unsent changes.
+
+The page separates service connection from receiver binding and always shows the harness, short session ID and waiting or processing state. Stopping a waiter retains the binding; receivers never switch automatically. Finish active batches before an explicit transfer. See [Receiver binding and transfer](skill/annotation-everything/references/receiver-binding.en.md) for setup and session changes.
 
 Service mode accepts real submissions through a running waiter or hook. Automatic agent wake-up depends on host support. Codex desktop supports a review-scoped binding: the agent runs `wakeup.py bind REVIEW_DIR`, then normal `serve.py` starts and restarts restore event delivery. The page distinguishes desktop acceptance from actual chat acknowledgement. No Codex configuration changes are required. See [Agent mechanisms](skill/annotation-everything/references/agent-mechanisms.en.md#codex-desktop-review-scoped-event-delivery) for compatibility and idle-chat verification. Opening `index.html` directly supports browser annotations, copying, and exports; import those annotations to give them to an agent. JSON preserves the annotation structure and review identity. Markdown omits IDs, page keys, timestamps, and processing batches and retains the legacy grammar's text limits; see the [format reference](skill/annotation-everything/references/formats.en.md). The [delivery evidence](docs/locale-delivery.en.md) records three complete language combinations, the compatibility matrix, environment, and limits.
 
@@ -318,7 +320,7 @@ See the [English format reference](skill/annotation-everything/references/format
 | `serve.py <review-dir>` | Start the local server; each review keeps its own dedicated port |
 | `serve.py list` / `status` / `forget` | List every review on this machine, show one review's status, remove a ledger entry you no longer need |
 | `serve.py check` | Run the server's security self-check |
-| `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | Save a review-scoped Codex chat binding, inspect delivery, acknowledge chat receipt, or unbind; normal server restarts restore delivery without schedules or Codex configuration changes |
+| `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | Bind the receiving harness and session and inspect identity and state; Codex desktop uses events, other harnesses can use `--adapter wait`; transfer with `bind --replace` after active batches finish |
 | `notes.py wait` / `claim` | Wait for a submission, or take one that is already waiting. `wait --locale` chooses the handoff language and preserves location, operation and skill requirements; `claim` keeps the original JSON values |
 | `notes.py show` / `resolve` / `reopen` | List annotations, mark them resolved, reopen them. `show --locale` chooses the reading language and beats `AE_LOCALE` and the review setting; `show --json` still exports the raw values |
 | `notes.py export` / `import` | Export annotations as a re-importable summary (Markdown with a version and language marker, or a structured JSON backup) / import a page export. `export --lang` follows the same priority as `show --locale`, plus `--format json`, `--all`, `--page N` and `--out <file>` |
@@ -356,6 +358,8 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── report-base.css            base stylesheet for page-by-page HTML reports
 │   ├── agent-mechanisms.zh-CN.md  Chinese agent mechanism reference
 │   ├── agent-mechanisms.en.md     English agent mechanism reference
+│   ├── receiver-binding.zh-CN.md  Receiving session identity, states and explicit transfer
+│   ├── receiver-binding.en.md     English receiver binding and transfer
 │   ├── formats.md                 Chinese input and output formats
 │   └── formats.en.md              English input and output formats
 ├── locales/                       Chinese and English messages (zh-CN.json, en.json) and the locale contract
@@ -367,7 +371,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── content_manifest.py        fingerprints the skill copy's files, directories and links
 │   ├── viewer_template.html       review page template (server mode and local file mode)
 │   ├── serve.py                   local server: serve / status / list / forget / check
-│   ├── wakeup.py                  Codex desktop events: saved binding, delivery, receipts and deduplication
+│   ├── wakeup.py                  Receiving session binding; Codex events, receipts and deduplication
 │   ├── notes.py                   annotation command line: wait / show / resolve / done / review and more
 │   ├── notes_store.py             annotation storage: atomic writes, file locks, change log
 │   ├── export_format.py           annotation exchange format: the marked Markdown grammar and the JSON backup

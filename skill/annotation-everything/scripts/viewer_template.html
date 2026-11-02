@@ -21,6 +21,8 @@ header select option{color:#111}
 header #handBtn{background:var(--ae-red);border-color:var(--ae-red)}
 #handState{display:none;font-size:12px;border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:pointer;border:1px solid rgba(255,255,255,.3)}
 #agentDelivery{font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#receiver{font-size:12px;border:1px solid rgba(255,255,255,.3);border-radius:6px;padding:4px 9px;overflow-wrap:anywhere}
+#receiver.warn{color:#fde68a;border-color:#d9b95e}
 #handState.pending{display:inline-block;background:#8a5a12}#handState.claimed{display:inline-block;background:#2a78d6}
 #handState.done{display:inline-block;background:#1d6b47}#handState.drafted,#handState.review{display:inline-block;background:#b7791f}#handState.reviewing{display:inline-block;background:#2a78d6}#handState.queued{display:inline-block;background:#6b7280}
 .resume{display:none;align-items:center;gap:10px;flex-wrap:wrap;padding:7px 18px;background:#fff8e6;border-bottom:1px solid #f0dfb0;font-size:13px;color:#5c4a12}
@@ -181,6 +183,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <header>
   <h1>__TITLE__</h1>
   <span id="mode" class="file"></span>
+  <span id="receiver" role="status" aria-live="polite"></span>
   <span id="handState"></span>
   <span id="agentDelivery" role="status" aria-live="polite"></span>
   <span class="stat" id="stat"></span>
@@ -238,7 +241,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <textarea id="impText" data-ph="import.placeholder" placeholder="在这里粘贴批注文字或 JSON"></textarea>
 <p><input type="file" id="impFile" accept=".json,.md,.txt" data-aria="import.pick"></p></div></div></div>
 <div class="modal" id="hand"><div class="dlg"><div class="bar"><h2 id="handTitle" data-msg="viewer.hand.title">交给 Agent</h2><button class="primary" id="doHand"><span id="doHandLabel" data-msg="viewer.hand.submit">交给 Agent</span><kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close><span data-msg="viewer.hand.cancel">取消</span><kbd>Esc</kbd></button></div>
-<div class="pad"><div id="handDrafts"></div><p id="handInfo"></p>
+<div class="pad"><div id="handDrafts"></div><p id="handReceiver" class="hint"></p><p id="handInfo"></p>
 <div class="hopts"><span id="hTargetRow"><span data-msg="viewer.hand.targetLabel">这批做到：</span><label data-title="viewer.hand.targetFinalTitle"><input type="radio" name="htarget" value="final" checked><span data-msg="viewer.hand.targetFinal">定稿</span></label>
 <label data-title="viewer.hand.targetReviewTitle"><input type="radio" name="htarget" value="review"><span data-msg="viewer.hand.targetReview">已初改·待复核</span></label></span>
 <label id="hSubRow" data-title="viewer.hand.subagentsTitle"><input type="checkbox" id="hSub"><span data-msg="viewer.hand.subagents">允许派发子代理</span></label>
@@ -465,6 +468,7 @@ const alwaysFor=x=>{const t=String(x.target||""),st=!!(x.style&&x.style.scope);
 const parseSkills=v=>[...new Set(String(v||"").split(/[,，、;；\n]+/).map(x=>x.trim().slice(0,64)).filter(Boolean))].slice(0,10);
 let hand=null, handQueued=false;   // 「交给 Agent」：服务端的提交状态；连不上服务时提交暂存待补传
 let agentDelivery=null;
+let receiver=null,handDestination=null;
 const cum=[];P.reduce((a,p,k)=>(cum[k]=a+(p.sec||0),cum[k]),0);
 const total=cum[N-1]||0;
 const mmss=s=>`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
@@ -613,6 +617,7 @@ function send(op,fullCheckSupported=true){
   if(op.kind==="del")return api("DELETE","/api/notes/"+encodeURIComponent(op.id));
   if(op.kind==="import")return api("POST","/api/notes/import",{notes:op.notes});
   if(op.kind==="handoff"){const message=op.message||"",body={message,target:op.target||"final",allowSubagents:!!op.allowSubagents};
+    body.receiverBindingId=op.receiverBindingId??null;
     if(op.fullCheck===true){body.userMessage=message;body.message=FULL_CHECK_COMPAT+(message?"\n\n"+message:"")}
     if("fullCheck" in op&&fullCheckSupported)body.fullCheck=op.fullCheck===true;return api("POST","/api/handoff",body)}}
 const pend={get(){const v=LS.get(K.pending,[]);return Array.isArray(v)?v:[]},
@@ -639,6 +644,7 @@ function onSent(op,r){
 function onRejected(op,e){   // 服务明确不接受（4xx）：不重试
   saveFailures++;LS.set(K.rejected,newId());   // 其他标签页等待补传锁时也能看到保存被拒
   if(op.kind==="handoff"){handQueued=pend.get().some(o=>o.kind==="handoff");renderHand();
+    if(e.code&&e.code.startsWith("receiver-")){failed.push(op,e.message);if(!$("handMsg").value.trim())$("handMsg").value=op.message||""}
     toast(e.status===404||e.status===405?tMsg("viewer.hand.toast.legacy"):tMsg("viewer.hand.toast.failed",{message:e.message}),6000);return}
   toast(tMsg("viewer.recovery.rejected",{reason:e.message}),6000);
   if(op.kind==="add"&&!editOf(op.note)&&op.note.page===P[i].n&&!$("ntext").value.trim()){   // 把内容放回输入框
@@ -678,6 +684,7 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
 async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 function applyServer(d){
   agentDelivery=d.agentDelivery||null;
+  receiver=d.receiver||null;
   const old=!hasFeature(d,"marks");if(old&&!srvOld)toast(tMsg("viewer.mode.oldTitle"),9000);srvOld=old;
   srvNoStages=!hasFeature(d,"stages");
   srvNoFullCheck=!hasFeature(d,"full-check");stopServiceSupported=hasFeature(d,"stop-service");updateMode();
@@ -737,7 +744,7 @@ function updateMode(){const m=$("mode"),q=pend.get().length,f=failed.get().lengt
   else if(mode==="mismatch"){m.textContent=tMsg("viewer.mode.mismatch",{extra});m.title=tMsg("viewer.mode.mismatchTitle")}
   else{m.textContent=tMsg("viewer.mode.file");m.title=tMsg("viewer.mode.fileTitle")}
   const fb=$("dlFailed");if(fb)fb.style.display=f?"":"none";
-  syncSrvBar();renderServiceControls()}
+  syncSrvBar();renderServiceControls();renderReceiver()}
 addEventListener("storage",e=>{
   if(FILE&&e.key===K.notes){const v=LS.get(K.notes,[]);notes=Array.isArray(v)?v:[];refreshList()}   // 别的标签页改了：跟上
   else if(e.key===K.pending||e.key===K.failed)updateMode();
@@ -1267,10 +1274,24 @@ const BATCH_STATUS={pending:"viewer.batch.status.pending",claimed:"viewer.batch.
 const BATCH_STAGE={draft:"viewer.batch.stage.draft",review:"viewer.batch.stage.review"};
 const batchStatus=s=>tMsg(BATCH_STATUS[s]||"")||s;   // 旧数据里的未知状态按原文显示
 const DELIVERY_LABEL={bound:"viewer.agent.bound",connecting:"viewer.agent.connecting",sending:"viewer.agent.sending",accepted:"viewer.agent.accepted",received:"viewer.agent.received",failed:"viewer.agent.failed",unconfirmed:"viewer.agent.unconfirmed",unknown:"viewer.agent.unknown",error:"viewer.agent.error"};
+const RECEIVER_LABEL={unconfigured:"viewer.receiver.unconfigured",waiting:"viewer.receiver.waiting",processing:"viewer.receiver.processing",idle:"viewer.receiver.idle",event:"viewer.receiver.event","restart-required":"viewer.receiver.restart",error:"viewer.receiver.error"};
+function receiverText(r){
+  const state=FILE?tMsg("viewer.receiver.file"):mode!=="server"?tMsg("viewer.receiver.offline")
+    :tMsg(RECEIVER_LABEL[r&&r.state]||"viewer.receiver.legacy");
+  if(!r||!r.harness||!r.sessionId)return state;
+  const id=String(r.sessionId),short=id.length>16?id.slice(0,8)+"…"+id.slice(-4):id;
+  return tMsg("viewer.receiver.identity",{harness:r.harness,session:short,state})}
+function handReceiverText(){const changed=(handDestination&&handDestination.bindingId)!==(receiver&&receiver.bindingId);
+  return receiverText(changed?handDestination:receiver)+(changed?" · "+tMsg("viewer.receiver.changed"):"")}
+function renderReceiver(){const el=$("receiver");el.textContent=receiverText(receiver);
+  el.title=receiver&&receiver.sessionId?tMsg("viewer.receiver.full",{harness:receiver.harness,session:receiver.sessionId}):el.textContent;
+  el.className=mode!=="server"||!receiver||["unconfigured","restart-required","error"].includes(receiver.state)?"warn":"";
+  if($("hand").classList.contains("on"))$("handReceiver").textContent=handReceiverText()}
 function renderDelivery(){const el=$("agentDelivery"),a=agentDelivery,L=hand&&hand.latest;
+  if(a&&a.adapter==="wait"){el.textContent="";el.title="";return}
   const event=L&&["review","reviewing"].includes(L.status)?"review":"handoff";
   const matched=a&&L&&a.seq===L.seq&&a.event===event;
-  let state=a&&a.adapter?a.state:null;
+  let state=a&&a.adapter==="codex-desktop"?a.state:null;
   if(L&&!matched&&state!=="error")state=["pending","claimed","review","reviewing"].includes(L.status)?"unknown":a&&a.adapter?"bound":null;
   el.textContent=state?tMsg(DELIVERY_LABEL[state]||"viewer.agent.error"):"";
   el.title=el.textContent;el.style.color=["failed","unconfirmed","error"].includes(state)?"#fcd34d":""}
@@ -1302,6 +1323,7 @@ function renderHandDrafts(){const ds=handMode?[]:draftedBatches();
     :`<div class="hd"><span>${tMsg("viewer.hand.drafts.drafted",{seq:+h.seq,n:+h.draftedCount||0})}</span><button data-hreview="${+h.seq}">${tMsg("viewer.hand.drafts.reviewBtn")}</button><button data-hfinal="${+h.seq}">${tMsg("viewer.hand.drafts.finalize")}</button></div>`).join("")}
 // 弹窗里的文字单独重画：切语言时按当前语言再写一遍，不重新提交、不改选项、不请求新接口
 function paintHand(){
+  $("handReceiver").textContent=handReceiverText();
   $("handTitle").textContent=handMode?tMsg("viewer.hand.reviewTitle",{seq:handMode.seq}):tMsg("viewer.hand.title");
   $("doHandLabel").textContent=handMode?tMsg("viewer.hand.requestReview"):tMsg("viewer.hand.submit");
   $("hTargetRow").style.display=handMode||srvNoStages?"none":"";$("hSubRow").style.display=srvNoStages?"none":"";
@@ -1324,6 +1346,7 @@ function paintHand(){
   $("handMsg").placeholder=handMode?tMsg("viewer.hand.reviewMsgPlaceholder"):tMsg("viewer.hand.msgPlaceholder")}
 function openHand(review){
   if(FILE){copyAll(tMsg("viewer.hand.toast.fileMode"));return}
+  handDestination=receiver?{...receiver}:null;
   handMode=review&&review.seq?{seq:+review.seq}:null;
   const o=LS.get(HOPT,{})||{};document.querySelectorAll('input[name="htarget"]').forEach(r=>r.checked=r.value===(o.target==="review"?"review":"final"));
   $("hSub").checked=!!o.sub;
@@ -1337,7 +1360,7 @@ async function batchAction(path,body,okMsg){
   if(mode!=="server"){toast(tMsg("viewer.hand.toast.needServer",{mode:$("mode").textContent.replace("● ","")}),4000);return}
   try{const r=await api("POST",path,body);if(r&&r.handoff)setHand(r.handoff);await resync();if($("batches").classList.contains("on"))loadBatches();toast(okMsg,3500)}
   catch(e){toast(e.code==="no-api"?tMsg("viewer.hand.toast.actionLegacy"):tMsg("viewer.hand.toast.actionFailed",{message:e.message}),6000)}}
-function requestReview(seq,message,sub){return batchAction("/api/handoff/review",{seq,message,allowSubagents:sub},tMsg("viewer.hand.toast.reviewRequested",{seq}))}
+function requestReview(seq,message,sub){return batchAction("/api/handoff/review",{seq,message,allowSubagents:sub,receiverBindingId:handDestination&&handDestination.bindingId},tMsg("viewer.hand.toast.reviewRequested",{seq}))}
 function finalizeBatch(seq){const dn=notes.filter(x=>isDraft(x)&&x.draftBatch===seq).length;
   if(!confirm(tMsg("viewer.hand.toast.confirmFinalize",{seq,n:dn})))return;
   return batchAction("/api/handoff/finalize",{seq},tMsg("viewer.hand.toast.finalized",{seq}))}
@@ -1437,10 +1460,12 @@ $("batchList").addEventListener("click",e=>{
 $("handMsg").addEventListener("keydown",e=>{if(!e.isComposing&&e.key==="Enter"&&(e.metaKey||e.ctrlKey))$("doHand").click();else if(e.key==="Escape")$("hand").classList.remove("on")});
 $("doHand").onclick=()=>{const message=$("handMsg").value.trim(),sub=$("hSub").checked,fullCheck=$("hFullCheck").checked,
     target=(document.querySelector('input[name="htarget"]:checked')||{}).value==="review"?"review":"final";
+  if((handDestination&&handDestination.bindingId)!==(receiver&&receiver.bindingId)||receiver&&["error","restart-required"].includes(receiver.state)){
+    toast(tMsg("viewer.receiver.changed"),6000);return}
   if(!handMode&&fullCheck&&mode==="server"&&srvNoFullCheck){toast(tMsg("viewer.hand.toast.fullCheckOld"),6000);return}
   LS.set(HOPT,{target,sub,fullCheck});$("hand").classList.remove("on");$("handMsg").value="";
   if(handMode){requestReview(handMode.seq,message,sub);return}
-  mutate({kind:"handoff",message,target,allowSubagents:sub,fullCheck})};
+  mutate({kind:"handoff",message,target,allowSubagents:sub,fullCheck,receiverBindingId:handDestination&&handDestination.bindingId})};
 
 // ---------- 导出 / 导入 ----------
 // 交换格式与 scripts/export_format.py 是同一份规范（页面和命令行各一份实现）：

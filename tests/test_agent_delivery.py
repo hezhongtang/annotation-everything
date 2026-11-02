@@ -115,8 +115,11 @@ class DeliveryTests(unittest.TestCase):
     def submit(self, server):
         headers = {"Host": f"127.0.0.1:{server.port}", "Origin": f"http://127.0.0.1:{server.port}",
                    "Content-Type": "application/json", "X-AE-Review": "synthetic-delivery"}
+        _, _, metadata = serve._req(server.port, "GET", "/api/notes", headers)
+        receiver = json.loads(metadata)["receiver"]
         status, _, data = serve._req(server.port, "POST", "/api/handoff", headers,
-                                     {"message": "synthetic", "allowSubagents": False})
+                                     {"message": "synthetic", "allowSubagents": False,
+                                      "receiverBindingId": receiver.get("bindingId")})
         self.assertEqual(status, 200)
         return json.loads(data)["seq"]
 
@@ -252,6 +255,7 @@ class DeliveryTests(unittest.TestCase):
         finally:
             process.terminate()
             process.wait(timeout=5)
+
         process = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), str(self.review), "--no-open"],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
@@ -266,6 +270,34 @@ class DeliveryTests(unittest.TestCase):
         finally:
             process.terminate()
             process.wait(timeout=5)
+
+    def test_wait_binding_reuses_the_same_running_service(self):
+        wakeup.bind_wait(self.review, "Claude Code", "session-a")
+        process = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), str(self.review), "--no-open"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            deadline = time.monotonic() + 4
+            while not (self.review / serve.STATUS_FILE).exists() and time.monotonic() < deadline:
+                time.sleep(.02)
+            reused = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), str(self.review), "--no-open"],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(reused.returncode, 0, reused.stdout + reused.stderr)
+            self.assertEqual(json.loads((self.review / serve.STATUS_FILE).read_text())["pid"], process.pid)
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+
+    def test_old_delivery_event_cannot_route_to_the_replacement_chat(self):
+        old = self.bind()
+        replacement = "22222222-2222-4222-8222-222222222222"
+        wakeup.bind(self.review, replacement, self.desktop.path, replace=True)
+        store.handoff_submit(self.review, "Synthetic queued event")
+        payload = {"app": "annotation-everything", "reviewId": "synthetic-delivery", "reviewDir": str(self.review),
+                   "bindingId": old["bindingId"], "event": "handoff", "seq": 1}
+        sent = subprocess.run([sys.executable, str(SCRIPTS / "wakeup.py"), "deliver", str(self.review)],
+                              input=json.dumps(payload), capture_output=True, text=True, timeout=10)
+        self.assertEqual(sent.returncode, 2, sent.stdout + sent.stderr)
+        self.assertEqual(self.desktop.requests, [])
 
 
 if __name__ == "__main__":
