@@ -224,6 +224,7 @@ class SynthRepo:
         env["GIT_CONFIG_GLOBAL"] = os.devnull
         env["GIT_CONFIG_SYSTEM"] = os.devnull
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["AE_VERIFY_SESSION"] = "synthetic-verification-session"
         env.pop("AE_VERIFY_DIR", None)
         env.pop("AE_LOCALE", None)
         # 合成仓库的隔离锁环境：宿主进程可能正持有真实资源锁（豁免变量会让合成入口
@@ -2882,6 +2883,8 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         review_unit = self.record()
         self.assertEqual(self.group(review_unit, "unit-related")["outcome"], "reused")
         self.assertEqual(self.decision(review_unit, "unit-related")["source_run_id"], dev_unit)
+        self.assertEqual(self.group(review_unit, "unit-related")["reuse"]["source_scope"]["selectors"],
+                         ["tests/test_synth.py", "tests/test_i18n_catalog_contract.py"])
         self.assertEqual(self.trace(self.unit_touch), 1, "审查阶段没有重新执行相关单元")
 
         # PR 整理（manual 阶段）：继续引用，且来源是实际执行的记录而不是复用记录
@@ -2984,6 +2987,58 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         self.assertIn("文档", item["reason"])
         self.assertEqual(self.trace(self.serve_touch), 1)
 
+    def test_committed_code_renamed_to_allowed_document_invalidates_evidence(self):
+        self.repo.write("engine.py", "# synthetic effective source\n")
+        self.repo.commit_all("合成源码")
+        baseline = self.repo.git("rev-parse", "HEAD").stdout.strip()
+        self.verify("run", "--group", "serve-check", "--phase", "development", "--baseline", baseline)
+        self.repo.git("rm", "README.md")
+        self.repo.git("mv", "engine.py", "README.md")
+        self.repo.commit_all("源码重命名为允许文档")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review", "--baseline", baseline)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.decision(self.record(), "serve-check")["decision"], "run")
+        self.assertEqual(self.trace(self.serve_touch), 2, "提交重命名不能隐藏源码删除")
+
+    def test_different_or_unknown_logical_session_cannot_reuse(self):
+        for session in ("another-synthetic-session", ""):
+            with self.subTest(session=session):
+                p = self.verify("run", "--group", "serve-check", "--phase", "development", "--no-reuse")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                p = self.verify("run", "--group", "serve-check", "--phase", "review",
+                                extra_env={"AE_VERIFY_SESSION": session})
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                decision = self.decision(self.record(), "serve-check")
+                self.assertEqual(decision["decision"], "run")
+                self.assertIn("会话", decision["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 4)
+
+    def test_baseline_rename_to_allowed_document_is_not_equivalent(self):
+        self.repo.write("engine.py", "# synthetic effective source\n")
+        self.repo.commit_all("合成源码基线")
+        previous = self.repo.git("rev-parse", "HEAD").stdout.strip()
+        self.repo.git("rm", "README.md")
+        self.repo.git("mv", "engine.py", "README.md")
+        self.repo.commit_all("合成重命名基线")
+        current = self.repo.git("rev-parse", "HEAD").stdout.strip()
+        self.verify("run", "--group", "serve-check", "--phase", "development", "--baseline", previous)
+        p = self.verify("run", "--group", "serve-check", "--phase", "review", "--baseline", current)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        decision = self.decision(self.record(), "serve-check")
+        self.assertEqual(decision["decision"], "run")
+        self.assertIn("基线不同", decision["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
+
+    def test_session_identity_is_hashed_in_the_record(self):
+        secret = "synthetic-private-chat-identity"
+        p = self.verify("run", "--group", "serve-check", "--phase", "development",
+                        extra_env={"AE_VERIFY_SESSION": secret})
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = self.record()
+        self.assertEqual(record["context"]["session"]["source"], "AE_VERIFY_SESSION")
+        self.assertTrue(record["context"]["session"]["id"].startswith("sha256:"))
+        self.assertNotIn(secret, json.dumps(record))
+
     def test_doc_change_with_code_change_reruns(self):
         """文档之外还有任何有效输入变化时无法证明无关，回退重新验证。"""
         self.verify("run", "--group", "serve-check", "--phase", "development")
@@ -3055,6 +3110,19 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         self.assertEqual(len(item["attempts"]), 5)
         self.assertEqual(item["attempts"][0]["reason"], item["reason"],
                          "主原因取最新候选，attempts 也必须以最新候选开头")
+
+    def test_newest_group_rejection_precedes_older_general_rejection(self):
+        self.repo.write("tests/test_extra.py", UNIT_TOUCH)
+        self.repo.commit_all("合成额外模块")
+        self.verify("run", "unit-related", "tests/test_synth.py", "--phase", "development")
+        self.backdate(self.repo.latest_run_id(), hours=25)
+        self.verify("run", "unit-related", "tests/test_synth.py", "--phase", "development")
+        newest = self.repo.latest_run_id()
+        p = self.verify("run", "unit-related", "tests/test_synth.py", "tests/test_extra.py", "--phase", "review")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        decision = self.decision(self.record(), "unit-related")
+        self.assertEqual(decision["attempts"][0]["run_id"], newest)
+        self.assertIn("范围不覆盖", decision["reason"])
 
     def test_end_time_in_the_future_is_rejected(self):
         self.verify("run", "--group", "serve-check", "--phase", "development")
@@ -3244,6 +3312,13 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         self.assertEqual(payload["reuse"]["decisions"][0]["source_run_id"], first)
         self.assertEqual(payload["groups"][0]["outcome"], "reused")
         self.assertEqual(payload["groups"][0]["reuse"]["source_run_id"], first)
+        reference = payload["groups"][0]["reuse"]
+        self.assertEqual(reference["source_scope"]["group"], "serve-check")
+        self.assertEqual(reference["source_environment"]["os"], payload["environment"]["os"])
+        self.assertIn(reference["source_fingerprint"], p.stdout)
+        self.assertIn("来源环境", p.stdout)
+        self.assertIn("已验证范围", p.stdout)
+        self.assertEqual(payload["result"]["counts"]["groups"], 0)
 
     def test_report_revalidates_the_reuse_chain(self):
         """来源证据事后被篡改时，引用它的记录在报告里降级为不可用。"""
@@ -3261,10 +3336,73 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         self.assertEqual(j.returncode, 1, j.stdout + j.stderr)
         payload = json.loads(j.stdout)
         self.assertFalse(payload["result"]["usable_as_evidence"])
+        self.assertEqual(payload["evidence"]["integrity"], "degraded")
+        self.assertFalse(payload["shadow"]["usable_as_evidence"])
+        self.assertFalse(payload["shadow"]["comparable"])
         self.assertTrue(any("引用的证据" in item for item in payload["report_validation"]["problems"]))
         # 原始记录不被改写
         record = read_record(self.repo.artifact_dir, second)
         self.assertTrue(record["result"]["usable_as_evidence"])
+
+    def test_report_rechecks_reference_freshness_environment_session_and_scope(self):
+        self.repo.write("tests/test_extra.py", UNIT_TOUCH)
+        self.repo.commit_all("合成可追溯范围")
+        self.verify("run", "unit-related", "tests/test_synth.py", "tests/test_extra.py", "--phase", "development")
+        first = self.repo.latest_run_id()
+        self.verify("run", "unit-related", "tests/test_synth.py", "tests/test_extra.py", "--phase", "review")
+        second = self.repo.latest_run_id()
+        source_path = self.repo.artifact_dir / "runs" / first / "record.json"
+        original = source_path.read_text(encoding="utf-8")
+        for change in ("freshness", "environment", "session", "scope", "policy"):
+            with self.subTest(change=change):
+                payload = json.loads(original)
+                if change == "freshness":
+                    payload["ended_at"] = (datetime.datetime.now(datetime.timezone.utc)
+                                           - datetime.timedelta(hours=25)).isoformat()
+                elif change == "environment":
+                    payload["environment"]["os"]["system"] = "synthetic-other-os"
+                elif change == "session":
+                    payload["context"]["session"] = {"id": "synthetic-other-session"}
+                elif change == "scope":
+                    payload["context"]["selectors_effective"] = ["tests/test_synth.py"]
+                else:
+                    payload["reuse"]["policy_version"] = 0
+                source_path.write_text(json.dumps(payload), encoding="utf-8")
+                report = self.repo.run_verify("report", "--run", second, "--json")
+                self.assertEqual(report.returncode, 1, report.stdout + report.stderr)
+                self.assertEqual(json.loads(report.stdout)["evidence"]["integrity"], "degraded")
+        source_path.write_text(original, encoding="utf-8")
+
+    def test_signal_during_reuse_planning_aborts_without_running_groups(self):
+        policy = self.repo.path / "verify_evidence.py"
+        source = policy.read_text(encoding="utf-8")
+        marker = '    context = record.get("context") or {}\n'
+        self.assertIn(marker, source)
+        policy.write_text(source.replace(marker,
+            '    __import__("os").kill(__import__("os").getpid(), __import__("signal").SIGTERM)\n' + marker),
+            encoding="utf-8")
+        self.repo.commit_all("合成规划期间取消")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(p.returncode, 128 + signal.SIGTERM, p.stdout + p.stderr)
+        record = self.record()
+        self.assertEqual(record["state"], "aborted")
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        self.assertIsNotNone(record["reuse"])
+        self.assertEqual(self.trace(self.serve_touch), 0)
+
+    def test_cyclic_evidence_reference_is_unusable_without_crashing(self):
+        self.verify("run", "--group", "serve-check", "--phase", "development")
+        first = self.repo.latest_run_id()
+        self.verify("run", "--group", "serve-check", "--phase", "review")
+        second = self.repo.latest_run_id()
+        source_path = self.repo.artifact_dir / "runs" / first / "record.json"
+        payload = json.loads(source_path.read_text(encoding="utf-8"))
+        payload["groups"][0].update(outcome="reused", reuse={"source_run_id": second})
+        source_path.write_text(json.dumps(payload), encoding="utf-8")
+        report = self.repo.run_verify("report", "--run", second, "--json")
+        self.assertEqual(report.returncode, 1, report.stdout + report.stderr)
+        self.assertIn("循环", report.stdout)
+        self.assertFalse(json.loads(report.stdout)["result"]["usable_as_evidence"])
 
     # -- 降级 -----------------------------------------------------------------
 

@@ -357,6 +357,19 @@ def commit_summary(snapshot: dict) -> dict:
             "working_tree_dirty": bool(counts.get("staged") or counts.get("unstaged"))}
 
 
+def logical_session() -> dict:
+    """只保存会话摘要；无法继承宿主身份时由调用方显式设置 AE_VERIFY_SESSION。"""
+    for name in ("AE_VERIFY_SESSION", "CODEX_THREAD_ID", "CLAUDE_SESSION_ID"):
+        if name not in os.environ:
+            continue
+        value = os.environ[name]
+        if not value.strip():
+            return {"id": None, "source": name}
+        digest = hashlib.sha256((name + ":" + value).encode("utf-8")).hexdigest()
+        return {"id": "sha256:" + digest, "source": name}
+    return {"id": None, "source": None}
+
+
 def environment_summary() -> dict:
     return {
         "os": {"system": platform.system(), "release": platform.release(), "machine": platform.machine()},
@@ -1572,6 +1585,8 @@ def build_reuse_plan(artifact_dir: Path, record: dict, groups: dict, selected: l
             artifact_dir=artifact_dir, record=record, requested=selected,
             group_meta=group_meta, prefix_of=_selector_module_prefix,
             load_record=load_record, repo=REPO, bypass_reason=bypass_reason)
+    except Interrupted:
+        raise  # 用户取消必须结束本次运行，不能当作策略损坏后继续执行。
     except Exception as exc:  # 复用规划出错不能拖垮验证：全部实际执行并写明原因
         return {"schema": REUSE_SCHEMA, "policy_version": verify_evidence.POLICY_VERSION,
                 "enabled": False,
@@ -1598,16 +1613,18 @@ def reused_group_result(group: Group, decision: dict) -> dict:
             "reuse": {"source_run_id": decision.get("source_run_id"),
                       "source_ended_at": decision.get("source_ended_at"),
                       "source_fingerprint": decision.get("source_fingerprint"),
+                      "source_scope": decision.get("source_scope"),
+                      "source_environment": decision.get("source_environment"),
                       "age_hours": decision.get("age_hours"),
                       "reason": decision.get("reason")}}
 
 
-def validate_reuse_chain(record: dict, root: Path, problems: list) -> list:
+def validate_reuse_chain(record: dict, root: Path, problems: list, visiting: Optional[set] = None) -> list:
     """报告读取时重校验引用链：来源被篡改、缺失或失效时降级为不可用（issue #56）。
 
     落盘原件不改写；问题追加进 problems（与 report_validation.problems 同一列表），
-    引用链失效的记录副本 usable_as_evidence 置为假。复用来源必须是实际执行的组，
-    所以这里没有递归。
+    引用链失效时同步降级完整性与影子结论；来源的其他组也可能引用更早证据，
+    读取来源时递归校验并拒绝循环。
     """
     chain_problems = []
     for group in record.get("groups") or []:
@@ -1615,11 +1632,11 @@ def validate_reuse_chain(record: dict, root: Path, problems: list) -> list:
             continue
         reference = group.get("reuse") or {}
         run_id = reference.get("source_run_id")
-        if not run_id:
+        if not isinstance(run_id, str) or not run_id or Path(run_id).name != run_id or run_id in (".", ".."):
             chain_problems.append("组 %s 标记为引用已有验证，但没有来源 run ID"
                                   % group.get("name"))
             continue
-        source, source_problems = load_record(root / "runs" / run_id)
+        source, source_problems = load_record(root / "runs" / run_id, visiting)
         if source is None or source_problems:
             chain_problems.append("引用的证据 run %s 当前校验不可用：%s"
                                   % (run_id, "；".join(source_problems) or "读不出来"))
@@ -1633,9 +1650,21 @@ def validate_reuse_chain(record: dict, root: Path, problems: list) -> list:
                                   % (run_id, group.get("name")))
         if not (source.get("result") or {}).get("usable_as_evidence"):
             chain_problems.append("引用的证据 run %s 当前不能作为通过证据" % run_id)
+        if verify_evidence is None:
+            chain_problems.append("复用策略不可用，无法校验引用的证据 run %s" % run_id)
+        else:
+            try:
+                reason = verify_evidence.reference_reject_reason(source, record, group, REPO,
+                                                                 _selector_module_prefix)
+            except Interrupted:
+                raise
+            except Exception as exc:
+                reason = "引用有效性无法确认（%s）" % type(exc).__name__
+            if reason:
+                chain_problems.append("引用的证据 run %s 当前不满足复用条件：%s" % (run_id, reason))
     problems.extend(chain_problems)
     if chain_problems:
-        record.setdefault("result", {})["usable_as_evidence"] = False
+        degrade_evidence(record, problems)
     return chain_problems
 
 
@@ -1655,6 +1684,7 @@ def build_record(args, groups: dict, selected: list) -> dict:
                     "argv": display_argv(list(sys.argv)), "cwd_mode": "repo-root",
                     "python": platform.python_version()},
         "context": {"phase": args.phase, "issue": args.issue, "pr": args.pr, "reason": args.reason,
+                    "session": logical_session(),
                     "groups_requested": args.group, "groups_selected": selected,
                     "selectors": display_argv(args.selectors),
                     "selectors_effective": display_argv(
@@ -1704,7 +1734,8 @@ def build_record(args, groups: dict, selected: list) -> dict:
 
 def fill_result(record: dict, ctx: RunContext) -> None:
     outcomes = [group.get("outcome") or WRAPPER_ERROR for group in record["groups"]]
-    counts = {"groups": len(record["groups"]), "cases": 0, "checks": 0, "passed": 0, "failed": 0,
+    counts = {"groups": sum(group.get("outcome") != REUSED for group in record["groups"]),
+              "cases": 0, "checks": 0, "passed": 0, "failed": 0,
               "errors": 0, "skipped": 0, "expected_failures": 0, "unexpected_successes": 0,
               "subtest_failures": 0, "subtest_errors": 0, "subtest_skips": 0, "interrupted": 0,
               "fixture_errors": 0, "fixture_skips": 0}
@@ -1780,6 +1811,8 @@ def cmd_run(args) -> int:
                      sys.stderr if args.as_json else sys.stdout, args.quiet)
     record = build_record(args, groups, selected)
     record["run_id"] = ctx.run_id
+    record["reuse"] = {"schema": REUSE_SCHEMA, "policy_version": None, "enabled": False,
+                       "reason": "复用规划尚未完成", "freshness_hours": None, "decisions": []}
     queued_at = time.monotonic()
     try:
         ctx.run_dir.mkdir(parents=True, exist_ok=True)
@@ -1791,13 +1824,6 @@ def cmd_run(args) -> int:
         return EXIT_WRAPPER
 
     install_signal_handlers()
-    # 证据复用规划（issue #56）：在执行前决定哪些组引用仍有效的已有验证。
-    # 规划耗时计入排队时间；规划失败在 build_reuse_plan 里降级为全部实际执行。
-    record["reuse"] = build_reuse_plan(ctx.artifact_dir, record, groups, selected,
-                                       bypass=bool(args.no_reuse))
-    reuse_decisions = {item["group"]: item for item in record["reuse"]["decisions"]}
-    record["timing"]["queue_seconds"] = round(time.monotonic() - queued_at, 6)
-    record["timing"]["started_at"] = now_iso()
     started = time.monotonic()
     interrupted_signum = None
     wrapper_error = None
@@ -1889,6 +1915,14 @@ def cmd_run(args) -> int:
 
     sealed = False
     try:
+        # 规划与保存同样受取消保护；规划耗时单独记入排队时间。
+        record["reuse"] = build_reuse_plan(ctx.artifact_dir, record, groups, selected,
+                                           bypass=bool(args.no_reuse))
+        ctx.save_record(record)
+        reuse_decisions = {item["group"]: item for item in record["reuse"]["decisions"]}
+        record["timing"]["queue_seconds"] = round(time.monotonic() - queued_at, 6)
+        record["timing"]["started_at"] = now_iso()
+        started = time.monotonic()
         for name in selected:
             decision = reuse_decisions.get(name)
             if decision is not None and decision.get("decision") == "reuse":
@@ -1908,6 +1942,10 @@ def cmd_run(args) -> int:
         with shield_termination():
             ctx.abort(signal.SIGTERM)
 
+    if record["timing"]["started_at"] is None:
+        record["timing"]["queue_seconds"] = round(time.monotonic() - queued_at, 6)
+        record["timing"]["started_at"] = now_iso()
+        started = time.monotonic()
     try:
         end_snapshot = snapshot_input()
         record["input"]["at_end"] = end_snapshot
@@ -2052,8 +2090,23 @@ def shield_termination():
 
 # ── 报告 ──────────────────────────────────────────────────────────────────
 
-def load_record(run_dir: Path) -> tuple:
+def degrade_evidence(record: dict, problems: list) -> None:
+    """完整性、可用性与影子结论使用同一降级规则，保留原始执行结论。"""
+    record.setdefault("result", {})["usable_as_evidence"] = False
+    record.setdefault("evidence", {})["integrity"] = "degraded"
+    shadow = record.get("shadow")
+    if isinstance(shadow, dict):
+        shadow.update(usable_as_evidence=False, comparable=False,
+                      incomparable_reason="报告读取时证据校验失败：%s" % "；".join(problems),
+                      candidate_omissions=[], rule_candidates=[])
+
+
+def load_record(run_dir: Path, visiting: Optional[set] = None) -> tuple:
     """返回 (记录或 None, 问题列表)。半写、损坏、版本不认识的记录一律算证据不可用。"""
+    key = str(run_dir.resolve())
+    if key in (visiting or set()):
+        return None, ["引用链出现循环：%s" % run_dir.name]
+    visiting = set(visiting or ()) | {key}
     path = run_dir / "record.json"
     if not run_dir.is_dir():
         return None, ["找不到运行目录 %s" % run_dir.name]
@@ -2086,13 +2139,8 @@ def load_record(run_dir: Path) -> tuple:
             problems.append("日志 %s 校验和不一致" % name)
     record["report_validation"] = {"problems": problems}
     if problems:
-        record.setdefault("result", {})["usable_as_evidence"] = False
-        record.setdefault("evidence", {})["integrity"] = "degraded"
-        shadow = record.get("shadow")
-        if isinstance(shadow, dict):
-            shadow.update(usable_as_evidence=False, comparable=False,
-                          incomparable_reason="报告读取时证据校验失败：%s" % "；".join(problems),
-                          candidate_omissions=[], rule_candidates=[])
+        degrade_evidence(record, problems)
+    validate_reuse_chain(record, run_dir.parent.parent, problems, visiting)
     return record, problems
 
 
@@ -2121,9 +2169,6 @@ def cmd_report(args) -> int:
         print("latest.json 里没有 run_id：证据不可用", file=sys.stderr)
         return EXIT_FAILED
     record, problems = load_record(root / "runs" / run_id)
-    if record is not None:
-        # 引用链随报告一起重校验（issue #56）：来源被篡改 / 缺失 / 失效时降级为不可用
-        validate_reuse_chain(record, root, problems)
     if args.as_json:
         print(json.dumps(record if record is not None
                          else {"schema": SCHEMA, "run_id": run_id, "problems": problems},
@@ -2269,6 +2314,9 @@ def render_report(record: dict, problems: Optional[list] = None,
                 lines.append("  引用已有验证：%s ← run %s（来源阶段 %s，结束于 %s）—— %s" % (
                     item.get("group"), item.get("source_run_id"), item.get("source_phase"),
                     item.get("source_ended_at"), item.get("reason")))
+                lines.append("    来源输入：%s；已验证范围：%s" % (
+                    item.get("source_fingerprint"), json.dumps(item.get("source_scope"), ensure_ascii=False)))
+                lines.append("    来源环境：%s" % json.dumps(item.get("source_environment"), ensure_ascii=False))
             else:
                 lines.append("  实际执行：%s —— %s" % (item.get("group"), item.get("reason")))
     if slow:

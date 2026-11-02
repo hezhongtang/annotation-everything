@@ -38,9 +38,11 @@
 | `context` | 对象 | 是 | `phase`、`issue`、`pr`、`reason`、`groups_requested`、`groups_selected`、`selectors`、`selectors_effective`、`selection`（F 项起：选测建议，见「影子对照」） |
 | `groups` | 数组 | 是 | 实际执行的组，按执行顺序；每项含命令、结论、计数、计时与用例清单 |
 | `shadow` | 对象或 `null` | F 项起必填 | 影子对照结果，见「影子对照」；收尾被信号打断等极端情况下可能保持 `null` |
-| `reuse` | 对象或 `null` | G 项起必填 | 证据复用规划：每个请求组「引用已有验证」还是「实际执行」，见「证据复用（G 项）」；规划发生在执行前，即使整次被中断也已写入 |
+| `reuse` | 对象或 `null` | G 项起必填 | 证据复用规划：每个请求组「引用已有验证」还是「实际执行」，见「证据复用（G 项）」；先保存「规划尚未完成」状态，完整规划在执行前保存；规划期间取消也会留下 `aborted` 记录 |
 
 `context.issue` 与 `context.pr` 可空：没关联就写 `null`，不写 0。`context.phase` 只接受 `issue`、`development`、`review`、`pr`、`ci`、`manual`，其余值入口直接报错。`context.reason` 可空，但建议写，它是后续判断「这次为什么跑」的唯一来源。`context.selectors` 只记调用方给出的选择器；`context.selectors_effective` 记实际生效的选择器——`unit-related` 会固定附带全局词典一致性契约模块（issue #51），附带与去重都在这里可见。
+
+`context.session` 自复用策略 v2 起记录逻辑工作会话：`id` 为 SHA-256 摘要或 `null`，`source` 为 `AE_VERIFY_SESSION`、`CODEX_THREAD_ID`、`CLAUDE_SESSION_ID` 或 `null`。只保存摘要和变量名，不保存环境变量原值。没有可用会话身份、来源记录缺少身份或身份不一致时不复用；普通终端的设置方式见 [onboarding.md](onboarding.md)。
 
 ### 输入
 
@@ -236,16 +238,16 @@ JSON 报告在记录副本上追加 `report_validation.problems` 字符串数组
 | 字段 | 说明 |
 | --- | --- |
 | `reuse.policy_version` | 复用策略版本；判定逻辑变化时递增，来源记录的版本不一致即拒用（因此统一入口 G 之前的记录永远不参与复用） |
-| `reuse.enabled` / `reason` | 是否启用与未启用原因：`--no-reuse` 显式绕过、`pr` / `ci` 门禁阶段、输入指纹不可用、请求组全部依赖宿主机状态 |
+| `reuse.enabled` / `reason` | 是否启用与未启用原因：`--no-reuse` 显式绕过、`pr` / `ci` 门禁阶段、输入指纹不可用、会话身份无法确认、请求组全部依赖宿主机状态 |
 | `reuse.freshness_hours` | 保鲜窗口（缺省 24 小时）：本地证据的新鲜度上限，不代表外部状态在窗口内稳定 |
-| `reuse.session_scope` / `environment_scope` | 会话近似口径（同一产物根 = 同一检出）与环境比对范围（`os`、`python`、`ci`、`config_summary`） |
-| `reuse.decisions` | 与请求组一一对应。`decision` 为 `reuse` 时带 `source_run_id`、`source_ended_at`、`source_fingerprint`、`source_phase`、`age_hours`、`reason`；为 `run` 时带 `reason`（最近一条拒用原因）与 `attempts`（最多 5 条被拒候选的原因，解释「为什么没有复用」） |
+| `reuse.session_scope` / `environment_scope` | 会话边界（同一产物根且 `context.session.id` 相同）与环境比对范围（`os`、`python`、`ci`、`config_summary`） |
+| `reuse.decisions` | 与请求组一一对应。`decision` 为 `reuse` 时带 `source_run_id`、`source_ended_at`、`source_fingerprint`、`source_phase`、`source_scope`（来源组与已验证选择器）、`source_environment`（参与比对的来源环境摘要）、`age_hours`、`reason`；为 `run` 时带 `reason`（最近一条拒用原因）与 `attempts`（最多 5 条，整体拒因与组级拒因合并后按候选新到旧排序） |
 
 一个组被引用必须同时满足：当前阶段与来源阶段都在复用白名单（`issue`、`development`、`review`、`manual`）；组不依赖同机宿主机状态（`groups[].resources` 为空）；来源输入指纹与当前一致（或差异被证明仅在文档允许列表内，见下），且来源确认覆盖最终输入、基线一致（基线提交差异同样只在文档允许列表内时不算不同）；环境比对范围内一致；请求范围被来源已验证范围覆盖（`serve-check` 按组名；`unit-related` 按归一化模块选择器，点名到类 / 用例的按疑点复测不复用）；来源证据在读取时通过 `report` 同一套校验且 `usable_as_evidence` 为真；来源结束时间在保鲜窗口内且不在未来；入口版本、选测策略版本与复用策略版本一致。任何一条不满足就实际执行。
 
 **文档无关等价**：指纹不同时，若两侧记录的选测映射都来自内置版本（覆盖映射的允许列表没有落进记录，无法证明），则比较快照里的非文档有效输入摘要（`core_digests`）与 HEAD 差异——两者都只含允许列表内的文档路径（`README.md`、`README.en.md`、`docs/assets/`，与选测策略同一来源）时，判定「差异仅在文档允许列表内」，已证明与产品测试无关，仍然复用并在复用理由中注明；任何读不出来、解析不了或口径不一致的情况都判不等价、回退重新验证。
 
-引用只来自实际执行的组（`outcome` 为 `passed`），复用不链式传递；`result.counts` 不计入引用组的用例 / 检查；`index.jsonl` 行内新增 `reused_groups` 数组。`report` 读取时对引用链重校验（见「证据可用性」），来源被篡改即降级为不可用。
+引用只来自实际执行的组（`outcome` 为 `passed`），不能以同组的复用结果再次作为来源；来源记录的其他组若引用更早证据，仍递归校验完整引用链，循环引用拒用。`result.counts` 不计入引用组的组数、用例或检查；`index.jsonl` 行内新增 `reused_groups` 数组。`report` 读取时与规划共用会话、输入、环境、版本、阶段、覆盖及保鲜判断；来源被篡改、损坏、超期或失效时，证据完整性、可用性与影子结论同步降级，落盘原件不改写。
 
 ## 扩展点
 

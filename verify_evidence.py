@@ -27,9 +27,8 @@ verify.py 的复用策略：同一产物根（同一检出 / worktree）里，�
 - 版本一致：入口版本、选测策略版本与复用策略版本都一致。没有复用策略版本的
   旧记录（统一入口 G 之前）不参与复用。
 
-会话边界（v1）：「同一次逻辑工作会话」以同一产物根近似——跨检出 / worktree
-的记录互相不可见（各自的 .verify/），也不跨机器；在此之上叠加 24 小时保鲜上限。
-更细的会话判定留给后续版本，宁可少复用。
+会话边界：只引用同一产物根、同一显式工作会话摘要的记录；无法确认会话身份时
+实际执行。在此之上叠加 24 小时保鲜上限，不跨机器或检出复用。
 
 本模块只读取记录做判定，不写任何文件、不启动任何子进程；`load_record` 与选择器
 归一化由调用方注入，避免与 verify.py 循环导入。任何读取错误由调用方回退为
@@ -49,7 +48,7 @@ except Exception:  # pragma: no cover - 防御分支：选测层不可用时没�
     verify_selection = None  # type: ignore[assignment]
 
 SCHEMA = "ae-verify-reuse/1"
-POLICY_VERSION = 1
+POLICY_VERSION = 2
 
 # 本地证据的保鲜上限（小时）。这只是本地证据的新鲜度边界，不代表外部状态在
 # 24 小时内稳定。
@@ -125,7 +124,7 @@ def _git_diff_paths(repo: Path, from_head: str, to_head: str) -> tuple:
     """两个 HEAD 之间的变更路径列表；返回 (0, 路径) 或 (非 0, 错误文本)。"""
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo), "diff", "--name-only", "-z", from_head, to_head],
+            ["git", "-C", str(repo), "diff", "--no-renames", "--name-only", "-z", from_head, to_head],
             capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, str(exc)
@@ -241,6 +240,10 @@ def _source_reject_reason(source: dict, record: dict, fingerprint: str, basis: d
     result = source.get("result") or {}
     if result.get("usable_as_evidence") is not True:
         return "run %s 当前不能作为通过证据" % run_id, False
+    session = (record.get("context") or {}).get("session") or {}
+    source_session = (source.get("context") or {}).get("session") or {}
+    if not session.get("id") or session.get("id") != source_session.get("id"):
+        return "run %s 的逻辑工作会话不同或无法确认，实际执行" % run_id, False
     source_input = source.get("input") or {}
     doc_equivalent = False
     if source_input.get("fingerprint") != fingerprint:
@@ -311,7 +314,7 @@ def _selectors_covered(requested: list, source: dict, prefix_of) -> tuple:
 
 
 def _decide_group(name: str, meta: dict, sources: list, general_attempts: list,
-                  prefix_of) -> dict:
+                  prefix_of, candidate_order: dict) -> dict:
     """为一个可复用类组挑选最新的合格来源；找不到则给出从紧原因。"""
     attempts = list(general_attempts)
     requested = meta.get("selectors_effective") or []
@@ -342,19 +345,47 @@ def _decide_group(name: str, meta: dict, sources: list, general_attempts: list,
             "source_ended_at": source.get("ended_at"),
             "source_fingerprint": (source.get("input") or {}).get("fingerprint"),
             "source_phase": (source.get("context") or {}).get("phase"),
+            "source_scope": {"group": name,
+                             "selectors": ((source.get("context") or {}).get("selectors_effective") or [])
+                             if counter == "unittest" else []},
+            "source_environment": environment_basis(source.get("environment")),
             "age_hours": round(age_hours, 6),
-            "attempts": _trim_attempts(attempts),
+            "attempts": _trim_attempts(attempts, candidate_order),
         }
-    reason = attempts[0][1] if attempts else "没有可引用的已有记录"
+    trimmed = _trim_attempts(attempts, candidate_order)
+    reason = trimmed[0]["reason"] if trimmed else "没有可引用的已有记录"
     return {"group": name, "decision": DECISION_RUN, "reason": reason,
-            "attempts": _trim_attempts(attempts)}
+            "attempts": trimmed}
 
 
-def _trim_attempts(attempts: list) -> list:
-    # 候选按新到旧处理、拒用原因按处理序追加：保留最新的 MAX_ATTEMPTS 条，
-    # 与主原因（attempts[0]，最新候选）方向一致
+def _trim_attempts(attempts: list, candidate_order: dict) -> list:
+    # 整体拒因与组级拒因分开收集，合并后仍按候选的新旧顺序呈现。
+    attempts = sorted(attempts, key=lambda item: candidate_order.get(item[0], MAX_CANDIDATES))
     return [{"run_id": run_id, "reason": reason}
             for run_id, reason in attempts[:MAX_ATTEMPTS]]
+
+
+def reference_reject_reason(source: dict, record: dict, group: dict, repo: Path, prefix_of) -> Optional[str]:
+    """报告与规划共用有效性、会话和覆盖判断；保鲜时间按本次读取计算。"""
+    context = record.get("context") or {}
+    if context.get("phase") not in REUSE_PHASES:
+        return "引用记录的阶段不允许复用"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    reason, doc_equivalent = _source_reject_reason(
+        source, record, (record.get("input") or {}).get("fingerprint"),
+        environment_basis(record.get("environment")),
+        (context.get("selection") or {}).get("strategy_version"), record.get("wrapper_version"),
+        ((record.get("input") or {}).get("baseline") or {}).get("commit"), now, repo)
+    if reason:
+        return reason
+    if group.get("resources"):
+        return "依赖宿主机状态的组不能引用已有验证"
+    run_id = source.get("run_id")
+    decision = _decide_group(
+        group.get("name"), {"counter": group.get("counter"),
+                            "selectors_effective": context.get("selectors_effective") or []},
+        [(run_id, source, 0.0, doc_equivalent)], [], prefix_of, {run_id: 0})
+    return decision["reason"] if decision["decision"] != DECISION_REUSE else None
 
 
 def _run_decision(name: str, reason: str) -> dict:
@@ -388,8 +419,7 @@ def build_reuse_plan(artifact_dir: Path, record: dict, requested: list, group_me
         "enabled": False,
         "reason": None,
         "freshness_hours": FRESHNESS_HOURS,
-        "session_scope": "候选记录只来自同一产物根（同一检出）；"
-                         "以保鲜窗口近似同一次逻辑工作会话",
+        "session_scope": "候选记录只来自同一产物根，且逻辑工作会话摘要一致；无身份时实际执行",
         "environment_scope": list(ENVIRONMENT_KEYS),
         "decisions": [],
     }
@@ -402,6 +432,8 @@ def build_reuse_plan(artifact_dir: Path, record: dict, requested: list, group_me
     fingerprint = (record.get("input") or {}).get("fingerprint")
     if disabled is None and not fingerprint:
         disabled = "当前输入指纹不可用，无法匹配同输入证据"
+    if disabled is None and not (context.get("session") or {}).get("id"):
+        disabled = "无法确认逻辑工作会话身份，保守实际执行"
     eligible = [name for name in requested if not (group_meta.get(name) or {}).get("resources")]
     if disabled is None and not eligible:
         disabled = "请求的组都依赖同机宿主机状态（resources 非空），没有可复用的组"
@@ -419,7 +451,9 @@ def build_reuse_plan(artifact_dir: Path, record: dict, requested: list, group_me
 
     attempts = []  # (run_id, 原因)：整体门槛拒掉的候选，新到旧
     sources = []   # (run_id, 记录, 年龄小时)：通过整体门槛的候选，新到旧
-    for run_id in _candidates(artifact_dir, eligible)[:MAX_CANDIDATES]:
+    candidates = _candidates(artifact_dir, eligible)[:MAX_CANDIDATES]
+    candidate_order = {run_id: index for index, run_id in enumerate(candidates)}
+    for run_id in candidates:
         source, problems = load_record(artifact_dir / "runs" / run_id)
         if source is None or problems:
             attempts.append((run_id, "证据当前校验不可用：%s"
@@ -442,5 +476,5 @@ def build_reuse_plan(artifact_dir: Path, record: dict, requested: list, group_me
                 name, "组依赖同机宿主机状态（资源：%s），指纹相同也不可复用，"
                       "必须实际执行或要求隔离证明" % "、".join(meta["resources"])))
             continue
-        plan["decisions"].append(_decide_group(name, meta, sources, attempts, prefix_of))
+        plan["decisions"].append(_decide_group(name, meta, sources, attempts, prefix_of, candidate_order))
     return plan
