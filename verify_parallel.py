@@ -36,7 +36,7 @@ def _signal_family(pid, signum):
     return True
 
 
-def _stop_families(pids, grace=1.0, reap=None):
+def _stop_families(pids, grace=3.0, reap=None):
     """只处理本次登记的进程组；SIGCONT 使被 SIGSTOP 的受控服务也能退出。"""
     if reap:
         reap()  # macOS 对尚未 waitpid 的 zombie 进程组发信号会返回 EPERM。
@@ -48,8 +48,8 @@ def _stop_families(pids, grace=1.0, reap=None):
     if remaining:
         deadline = time.monotonic() + grace
         while time.monotonic() < deadline:
-            if reap:
-                reap()
+            if reap and not reap():
+                break  # 全部 worker 已完成结果落盘；剩余孤立后代可直接强制回收。
             time.sleep(0.01)
     for pid in remaining:
         _signal_family(pid, signal.SIGKILL)
@@ -198,6 +198,7 @@ def run_tasks(tasks, worker, root: Path, jobs: int = 3, inline=None):
                 waited, status = os.waitpid(pid, os.WNOHANG)
                 if waited:
                     remember(pid, status)
+            return bool(active)
         _stop_families(list(families), reap=reap_ready)
         for pid in list(active):
             _pid, status = os.waitpid(pid, 0)

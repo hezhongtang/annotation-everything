@@ -3644,8 +3644,9 @@ class ParallelUnitTests(VerifyEntryTestCase):
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         self.assertEqual(record["result"]["outcome"], "interrupted")
         self.assertFalse(record["result"]["usable_as_evidence"])
-        failure = next(case for case in record["groups"][0]["cases"]
-                       if case["id"].endswith("test_a_original_failure"))
+        failure = next((case for case in record["groups"][0]["cases"]
+                        if case["id"].endswith("test_a_original_failure")), None)
+        self.assertIsNotNone(failure, json.dumps(record, ensure_ascii=False))
         self.assertEqual(failure["status"], "failed")
         self.assertIn("original synthetic failure", (self.repo.artifact_dir / "runs" /
                       record["run_id"] / "unit.log").read_text())

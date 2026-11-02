@@ -363,3 +363,28 @@ except parallel.InterruptedRun as error:
         out, err = process.communicate(timeout=10)
         self.assertEqual(process.returncode, 143, out + err)
         self.assertEqual((self.root / "preserved").read_text(), "original failed result")
+
+    def test_cancel_allows_a_worker_to_finish_writing_its_partial_failure(self):
+        process, _env = self.start_script('''
+import os, time
+from pathlib import Path
+import verify_parallel as parallel
+root = Path(sys.argv[1])
+def worker(name, output):
+    (root / 'ready').write_text('failure already happened')
+    try:
+        while True: time.sleep(.01)
+    finally:
+        time.sleep(1.2)
+        output.write_text('original failed result after bounded flush')
+try:
+    parallel.run_tasks([('partial', 'partial')], worker, root / 'workers', jobs=1)
+except parallel.InterruptedRun as error:
+    (root / 'preserved').write_text(error.results['partial']['output'].read_text())
+    sys.exit(128 + error.signum)
+''')
+        self.wait_file(self.root / "ready")
+        process.terminate()
+        out, err = process.communicate(timeout=10)
+        self.assertEqual(process.returncode, 143, out + err)
+        self.assertEqual((self.root / "preserved").read_text(), "original failed result after bounded flush")
