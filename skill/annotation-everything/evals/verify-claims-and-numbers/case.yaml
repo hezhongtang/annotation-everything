@@ -1,0 +1,19 @@
+schema_version: "1.1"
+name: verify-claims-and-numbers
+expected_outcome: |
+  只装 annotation-everything 时，从 materials/ 的合成材料生成可审阅的逐页报告初稿与讲稿，
+  并按内容核验清单完成支持性核验。已知事实（收入 112 万、同比 +12% 可由 100→112 复算、
+  外卖占比 38%、咖啡豆上涨 9%、租金 54 万约占收入 48%）进入报告，且核验记录的每条
+  findings 都带 refs（含材料原文 quote 与 found）、support、basis；可复算计算带
+  unit / period / definition / inputLocations 四要素且复算一致。已知答案的反例都要拦住：
+  华东区增长不能写成全国（全区域）增长，若写了必须标 support=unsupported 且内容核验
+  不通过；管理层「保持乐观」不能写成利润或收入预测；「老店坪效提升明显」是口头说法，
+  不得写成确认事实；10 月停业与 10 月数据缺失不能与 9 月事件混淆，四季度影响不得写成
+  已确认的量化结论。报告显示必要引用（.ae-source 或等效来源标注），待核实内容有
+  .ae-todo 或等效标记。核验记录为 ae-report-record/1：结论引用页都在报告中存在、
+  引用的材料都在 sources 登记、sources 带 sha256、八项 content.* 检查逐项声明
+  （未执行的写 not_run）、gaps 披露十月数据与分区域明细缺口、verdict.draftComplete=true
+  且不声称 deliverable（视觉检查未执行）。Agent 实际运行 report_check.py（命令行证据），
+  如实回报哪些结论有支撑、哪些待核实、覆盖与缺口，没有提前宣称「报告可交付」。
+context:
+  scaffold_script: place-files.sh

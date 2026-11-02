@@ -1178,7 +1178,7 @@
     "check.err.recordBadType": "记录字段类型不符：{fields}",
     "check.err.pageMissing": "记录引用的页面在报告里找不到：{keys}",
     "check.err.stale": "记录与当前产物不对应，以下文件内容已变化：{items}",
-    "check.err.calcMismatch": "{claim}：按声明输入复算为 {actual}，记录声明 {expected}",
+    "check.err.calcMismatch": "{claim}（报告页 {pages}）：按声明输入复算为 {actual}，记录声明 {expected}",
     "check.err.calcUnsupportedOp": "{claim}：不支持的运算 {op}（支持：{supported}）",
     "check.err.calcBad": "{claim}：计算声明无法复算（{reason}）",
     "check.err.checksEmpty": "记录没有可用的检查结果：内容核验与视觉核验都须逐项声明（{reason}）",
@@ -1190,6 +1190,21 @@
     "check.warn.derivedKeys": "页面键由页码生成（{keys}），重排页序后无法校正批注位置，建议改用稳定唯一的语义键（如 data-key=\"sum\"）",
     "check.count.passed": "{n} 项通过",
     "check.gaps.line": "记录披露的缺口：{gaps}",
-    "check.err.noPages": "报告里没有逐页 section（class 含 page 且带 data-page）"
+    "check.err.noPages": "报告里没有逐页 section（class 含 page 且带 data-page）",
+    "check.item.record.claims": "关键结论支持映射（引用可定位、材料支持）",
+    "check.item.record.sources": "材料关联（登记映射与 sha256 新鲜度）",
+    "check.err.claimUnsupported": "{claims}：材料不支持该表述，引用存在不等于结论受支持",
+    "check.err.claimUnlocatable": "{claims}：声明 supported 的结论存在 found=false 的引用位置，引用不可定位",
+    "check.err.claimBad": "{claims}：结论映射字段无效（{reason}）",
+    "check.warn.claimsPending": "以下关键结论缺支持声明（support）或标为未核实，按待核实处理，不能支持内容核验通过：{items}",
+    "check.coverage.capped": "证据不足：记录声明的通过不能按已执行通过显示（结论支持、计算口径或材料对应不完整，见未通过项与提示）",
+    "check.warn.calcPending": "以下计算的口径、单位、期间或输入位置声明不全，标为待核实，不能支持可交付：{items}",
+    "check.err.sourceBad": "材料登记项无效（path 与 status 必须是 read / partial / unreadable）：{items}",
+    "check.err.sourceMissing": "结论引用了记录未登记的材料：{items}",
+    "check.err.sourceStale": "材料内容与记录中的 sha256 不符，旧核验结果不能为新材料背书：{items}",
+    "check.warn.sourceUnresolved": "记录声明了材料哈希，但报告旁找不到该文件，无法核对（材料可能已移动）：{items}",
+    "check.warn.sourceNoHash": "结论引用的材料在记录中没有 sha256，无法发现材料事后变化：{items}",
+    "check.record.path": "记录文件：{path}",
+    "check.openItems.line": "记录待办：{n} 项（阻塞 {blocking} 项）"
   }
 }

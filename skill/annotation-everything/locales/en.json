@@ -1288,7 +1288,7 @@
     "check.err.recordBadType": "Record fields have the wrong type: {fields}",
     "check.err.pageMissing": "Pages referenced by the record are missing from the report: {keys}",
     "check.err.stale": "Record does not match the current artifacts; these files changed: {items}",
-    "check.err.calcMismatch": "{claim}: recomputing from the declared inputs gives {actual}, the record declares {expected}",
+    "check.err.calcMismatch": "{claim} (report page {pages}): recomputing from the declared inputs gives {actual}, the record declares {expected}",
     "check.err.calcUnsupportedOp": "{claim}: unsupported operation {op} (supported: {supported})",
     "check.err.calcBad": "{claim}: the calculation declaration cannot be recomputed ({reason})",
     "check.err.checksEmpty": "The record has no usable check results: content and visual checks must each be declared item by item ({reason})",
@@ -1300,6 +1300,21 @@
     "check.warn.derivedKeys": "Page keys are derived from page numbers ({keys}); annotations cannot be re-anchored after reordering. Use stable, unique semantic keys (e.g. data-key=\"sum\")",
     "check.count.passed": "{n} passed",
     "check.gaps.line": "Gaps disclosed by the record: {gaps}",
-    "check.err.noPages": "The report has no page sections (class containing page with data-page)"
+    "check.err.noPages": "The report has no page sections (class containing page with data-page)",
+    "check.item.record.claims": "Claim support mapping (locatable citations, material support)",
+    "check.item.record.sources": "Material association (registration mapping and sha256 freshness)",
+    "check.err.claimUnsupported": "{claims}: the material does not support these claims; a citation existing does not mean the claim is supported",
+    "check.err.claimUnlocatable": "{claims}: claims marked supported cite positions with found=false; the citations are not locatable",
+    "check.err.claimBad": "{claims}: invalid claim mapping field ({reason})",
+    "check.warn.claimsPending": "Key claims without a support declaration (support) or marked unverified are treated as pending verification and cannot back a content pass: {items}",
+    "check.coverage.capped": "Insufficient evidence: passes declared in the record cannot be shown as run and passed (claim support, calculation definitions, or material association incomplete; see failed items and warnings)",
+    "check.warn.calcPending": "Calculations with incomplete definition, unit, period, or input locations are marked pending verification and cannot back delivery: {items}",
+    "check.err.sourceBad": "Invalid material registration entries (path required; status must be read / partial / unreadable): {items}",
+    "check.err.sourceMissing": "Claims cite materials not registered in the record: {items}",
+    "check.err.sourceStale": "Material content no longer matches the sha256 in the record; old verification results cannot back the new material: {items}",
+    "check.warn.sourceUnresolved": "The record declares hashes for materials whose files are not found next to the report; they cannot be checked (the material may have moved): {items}",
+    "check.warn.sourceNoHash": "Materials cited by claims have no sha256 in the record; later material changes cannot be detected: {items}",
+    "check.record.path": "Record file: {path}",
+    "check.openItems.line": "Open items in the record: {n} ({blocking} blocking)"
   }
 }

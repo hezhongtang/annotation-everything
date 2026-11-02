@@ -1,10 +1,19 @@
-"""报告产物核验入口的表驱动契约测试（issue #70）。
+"""报告产物核验入口的表驱动契约测试（issue #70，#72 演进）。
 
 公开入口是技能副本里的 `scripts/report_check.py`：接收报告、可选讲稿与可选核验记录，
 输出结构化结果与可读摘要。这里钉住它的对外契约：检查项 id 与状态、核验记录
 `ae-report-record/1` 的结构校验、损坏 / 未知版本 / 讲稿不对应 / 过期记录 / 计算
 不一致 / 空检查集合的明确报错，以及「程序检查通过不自动形成可交付结论」的判定语义。
 结构化字段（id、status、code、verdict 字段）语言无关；detail 与摘要按 locale 本地化。
+
+#72 演进（全部走可选字段的追加式演进，schema 仍是 ae-report-record/1）：
+- `findings[].refs` / `support` / `basis` 分别表达引用是否可定位、材料是否支持
+  表述与检查依据；「引用存在但结论不受支持」的反例不能判为内容核验通过。
+- `calculation` 增加口径四要素（unit / period / definition / inputLocations），
+  声明不全标为待核实；复算不一致时定位到结论与报告页。
+- `sources[].sha256` 关联材料内容；材料变化后旧核验结果标为 unverified。
+- 内容核验清单补齐（含 content.script-consistency），可交付要求内容清单逐项
+  通过；缺支持声明、口径不明的计算与未哈希的材料都会阻止 covered。
 
 只用标准库与内联合成数据：python3 -m unittest discover tests
 """
@@ -31,9 +40,25 @@ import report_check as rc  # noqa: E402
 RECORD_SCHEMA = "ae-report-record/1"
 CHECK_SCHEMA = "ae-report-check/1"
 
+# #72 内容核验清单（决策 10）：八个内容项 + 视觉项；视觉检查本切片仍未执行。
+CONTENT_CHECK_IDS = ("content.requirements", "content.claims", "content.fact-vs-inference",
+                     "content.units-dates", "content.numbers-charts", "content.cross-page",
+                     "content.script-consistency", "content.open-questions")
+VISUAL_CHECK_IDS = ("visual.pages",)
+
+# 合成材料原文：用于 sources[].sha256 的新鲜度用例。
+MATERIAL = "# 三季度笔记\n\n三季度收入 112 万元，上年同期 100 万元。\n"
+
 
 def tmpdir() -> Path:
     return Path(tempfile.mkdtemp())
+
+
+def all_checks(status: str) -> list[dict]:
+    """完整内容核验清单 + 视觉项的逐项声明；status 用于构造 pass / not_run 记录。"""
+    return [{"id": cid, "kind": "visual" if cid in VISUAL_CHECK_IDS else "content",
+             "status": status, "scope": "全部", "note": "合成契约数据"}
+            for cid in CONTENT_CHECK_IDS + VISUAL_CHECK_IDS]
 
 
 REPORT = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>合成季度回顾</title>
@@ -76,7 +101,7 @@ def sha(text: str) -> str:
 
 def make_record(report_text: str = REPORT, script_text: str | None = SCRIPT,
                 report_name: str = "report.html", **overrides) -> dict:
-    """一份结构完整的最小核验记录；检查结果缺省全部 not_run。"""
+    """一份结构完整的最小核验记录（#72 形态）；检查结果缺省全部 not_run。"""
     links = {
         "report": report_name,
         "script": "script.md" if script_text is not None else None,
@@ -96,19 +121,32 @@ def make_record(report_text: str = REPORT, script_text: str | None = SCRIPT,
         "links": links,
         "findings": [{"claim": "三季度收入同比增长 12%", "type": "calculation",
                       "sources": ["materials/q3-notes.md"], "pages": ["sum"],
+                      "refs": [{"path": "materials/q3-notes.md", "locator": "§1 收入",
+                                "quote": "去年同期为 100 万元", "found": True}],
+                      "support": "supported",
+                      "basis": "对比材料 §1 两期收入原文，并按声明输入复算 percent-change",
                       "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 112},
-                                      "expected": 12},
+                                      "expected": 12,
+                                      "unit": "万元", "period": "2025Q3 对 2024Q3",
+                                      "definition": "对上年同期收入的增长百分比",
+                                      "inputLocations": {
+                                          "a": "materials/q3-notes.md §1：去年同期 100 万元",
+                                          "b": "materials/q3-notes.md §1：三季度收入 112 万元"}},
                       "note": "收入 112 对上年 100，四舍五入到整数"}],
         "gaps": ["十月的周报缺失"],
-        "checks": [
-            {"id": "content.requirements", "kind": "content", "status": "not_run",
-             "scope": "全部需求", "note": ""},
-            {"id": "visual.pages", "kind": "visual", "status": "not_run",
-             "scope": "全部 2 页", "note": ""},
-        ],
+        "checks": all_checks("not_run"),
         "openItems": [{"item": "十月周报待补", "blocking": False}],
         "verdict": {"draftComplete": True, "deliverable": None},
     }
+    record.update(overrides)
+    return record
+
+
+def compliant_record(**overrides) -> dict:
+    """内容清单逐项通过、结论支持映射完备、计算口径齐全的可交付形态记录。"""
+    record = make_record(checks=all_checks("pass"))
+    record["sources"][0]["sha256"] = sha(MATERIAL)
+    record["verdict"] = {"draftComplete": True, "deliverable": True}
     record.update(overrides)
     return record
 
@@ -313,6 +351,109 @@ class FreshnessTests(unittest.TestCase):
         self.assertFalse(payload["verdict"]["deliverable"])
 
 
+class ClaimSupportTests(unittest.TestCase):
+    """结论支持映射（#72）：引用可定位、材料支持表述与检查依据分开表达；
+    「引用存在但结论不受支持」的反例不能被判为内容核验通过。"""
+
+    def test_unsupported_claim_cannot_pass_content(self):
+        d = tmpdir()
+        record = compliant_record()
+        # 反例：引用还在（refs 齐全且可定位），但材料不支持该表述
+        record["findings"][0]["support"] = "unsupported"
+        paths = write_case(d, record=record)
+        code, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.claims")
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.claim-unsupported")
+        self.assertIn("收入", item["detail"], "报错要定位到具体结论")
+        self.assertEqual(payload["coverage"]["content"], "uncovered")
+        self.assertFalse(payload["verdict"]["deliverable"])
+        self.assertIn("引用存在不等于结论受支持", item["detail"])
+        # 摘要与 JSON 同源：zh 摘要同样点名「材料不支持该表述」
+        _, _, zh_text, _ = run_check(paths, locale="zh-CN")
+        self.assertIn("材料不支持该表述", zh_text)
+
+    def test_unlocatable_reference_fails_supported_claim(self):
+        d = tmpdir()
+        record = compliant_record()
+        record["findings"][0]["refs"][0]["found"] = False
+        paths = write_case(d, record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.claims")
+        self.assertEqual(item["code"], "record.claim-unlocatable")
+        self.assertEqual(payload["coverage"]["content"], "uncovered")
+        self.assertFalse(payload["verdict"]["deliverable"])
+
+    def test_bad_support_value_fails(self):
+        d = tmpdir()
+        record = compliant_record()
+        record["findings"][0]["support"] = "surely-true"
+        paths = write_case(d, record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        self.assertEqual(check_by_id(payload, "record.claims")["code"], "record.claim-bad")
+
+    def test_malformed_refs_fail(self):
+        d = tmpdir()
+        record = compliant_record()
+        record["findings"][0]["refs"] = [{"path": 3}]
+        paths = write_case(d, record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        self.assertEqual(check_by_id(payload, "record.claims")["code"], "record.claim-bad")
+
+    def test_missing_support_caps_content_not_run(self):
+        d = tmpdir()
+        record = compliant_record()
+        del record["findings"][0]["support"]
+        paths = write_case(d, record=record)
+        code, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0, "缺支持声明是披露缺口，不是程序检查失败")
+        self.assertEqual(payload["coverage"]["content"], "not_run")
+        self.assertFalse(payload["verdict"]["deliverable"])
+        self.assertTrue(payload["warnings"], "缺支持声明的结论要有待核实警示")
+        self.assertIn("待核实", text)
+
+    def test_unverified_support_caps_content_not_run(self):
+        d = tmpdir()
+        record = compliant_record()
+        record["findings"][0]["support"] = "unverified"
+        paths = write_case(d, record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["coverage"]["content"], "not_run")
+        self.assertFalse(payload["verdict"]["deliverable"])
+
+    def test_partial_support_caps_content_partial(self):
+        d = tmpdir()
+        record = compliant_record()
+        record["findings"][0]["support"] = "partial"
+        paths = write_case(d, record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["coverage"]["content"], "partial")
+        self.assertFalse(payload["verdict"]["deliverable"])
+
+    def test_unfound_reference_with_partial_support_caps_not_run(self):
+        d = tmpdir()
+        record = compliant_record()
+        record["findings"][0]["support"] = "partial"
+        record["findings"][0]["refs"][0]["found"] = False
+        paths = write_case(d, record=record)
+        _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(payload["coverage"]["content"], "not_run")
+
+    def test_record_without_findings_cannot_cover_content(self):
+        d = tmpdir()
+        paths = write_case(d, record=compliant_record(findings=[]))
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["coverage"]["content"], "not_run")
+        self.assertFalse(payload["verdict"]["deliverable"])
+
+
 class CalculationTests(unittest.TestCase):
     """明确声明输入与口径的可复算数值：复算一致通过，不一致明确报错。"""
 
@@ -345,6 +486,151 @@ class CalculationTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(check_by_id(payload, "record.calculations")["code"],
                          "record.calc-unsupported-op")
+
+
+class CalculationBasisTests(unittest.TestCase):
+    """派生数值的口径四要素（#72）：单位、期间、口径、输入位置；声明不全的
+    计算明确标为待核实并阻止内容核验 covered；复算不一致定位到结论与报告页。"""
+
+    def test_complete_basis_passes_without_pending_warning(self):
+        d = tmpdir()
+        paths = write_case(d, record=compliant_record())
+        code, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(check_by_id(payload, "record.calculations")["status"], "pass")
+        self.assertNotIn("待核实", text)
+        self.assertTrue(payload["verdict"]["deliverable"])
+
+    def test_missing_unit_marks_pending(self):
+        d = tmpdir()
+        record = compliant_record()
+        del record["findings"][0]["calculation"]["unit"]
+        paths = write_case(d, record=record)
+        code, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0, "口径声明不全是待核实，不是程序检查失败")
+        self.assertEqual(check_by_id(payload, "record.calculations")["status"], "pass")
+        self.assertEqual(payload["coverage"]["content"], "partial")
+        self.assertFalse(payload["verdict"]["deliverable"])
+        self.assertIn("待核实", text)
+
+    def test_missing_input_location_marks_pending(self):
+        d = tmpdir()
+        record = compliant_record()
+        del record["findings"][0]["calculation"]["inputLocations"]["b"]
+        paths = write_case(d, record=record)
+        _, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(payload["coverage"]["content"], "partial")
+        self.assertFalse(payload["verdict"]["deliverable"])
+        self.assertIn("待核实", text)
+
+    def test_blank_definition_marks_pending(self):
+        d = tmpdir()
+        record = compliant_record()
+        record["findings"][0]["calculation"]["definition"] = "   "
+        paths = write_case(d, record=record)
+        _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(payload["coverage"]["content"], "partial")
+        self.assertFalse(payload["verdict"]["deliverable"])
+
+    def test_pending_does_not_block_draft(self):
+        d = tmpdir()
+        record = compliant_record()
+        del record["findings"][0]["calculation"]["period"]
+        paths = write_case(d, record=record)
+        _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertTrue(payload["verdict"]["draftComplete"],
+                        "有明确缺口的初稿仍可进入审阅")
+
+    def test_mismatch_locates_claim_and_page(self):
+        d = tmpdir()
+        record = compliant_record()
+        record["findings"][0]["calculation"]["expected"] = 15
+        paths = write_case(d, record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.calculations")
+        self.assertEqual(item["code"], "record.calc-mismatch")
+        self.assertIn("15", item["detail"])
+        self.assertIn("sum", item["detail"], "要定位到报告页")
+        self.assertIn("收入", item["detail"], "要定位到具体结论")
+
+
+class SourceAssociationTests(unittest.TestCase):
+    """材料关联（#72）：结论引用的材料必须登记；sources[].sha256 与报告旁的
+    材料内容对应，材料变化后旧结果标为 unverified；无法对应的明确提示。"""
+
+    def test_citing_unregistered_source_fails(self):
+        d = tmpdir()
+        record = compliant_record()
+        record["findings"][0]["sources"] = ["materials/other.md"]
+        paths = write_case(d, record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.sources")
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.source-missing")
+        self.assertIn("materials/other.md", item["detail"])
+
+    def test_stale_material_unverifies_content(self):
+        d = tmpdir()
+        (d / "materials").mkdir()
+        (d / "materials" / "q3-notes.md").write_text(MATERIAL, encoding="utf-8")
+        paths = write_case(d, record=compliant_record())
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(check_by_id(payload, "record.sources")["status"], "pass")
+        # 材料内容变化：旧核验结果不能为新材料背书
+        (d / "materials" / "q3-notes.md").write_text(MATERIAL + "\n四季度：待补充\n",
+                                                     encoding="utf-8")
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.sources")
+        self.assertEqual(item["code"], "record.source-stale")
+        self.assertIn("materials/q3-notes.md", item["detail"])
+        self.assertEqual(payload["coverage"]["content"], "unverified")
+        self.assertFalse(payload["verdict"]["deliverable"])
+
+    def test_matching_material_hash_passes(self):
+        d = tmpdir()
+        (d / "materials").mkdir()
+        (d / "materials" / "q3-notes.md").write_text(MATERIAL, encoding="utf-8")
+        paths = write_case(d, record=compliant_record())
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(check_by_id(payload, "record.sources")["status"], "pass")
+        self.assertTrue(payload["verdict"]["deliverable"])
+
+    def test_unresolved_material_warns_only(self):
+        d = tmpdir()
+        # compliant_record 声明了 sha256，但报告旁没有该材料文件：无法对应要提示，
+        # 不能静默通过，也不由本入口武断失败（材料不在检查边界内）
+        paths = write_case(d, record=compliant_record())
+        code, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(check_by_id(payload, "record.sources")["status"], "pass")
+        self.assertTrue(any("materials/q3-notes.md" in w for w in payload["warnings"]),
+                        payload["warnings"])
+        self.assertIn("无法核对", text)
+
+    def test_missing_hash_caps_not_run(self):
+        d = tmpdir()
+        record = compliant_record()
+        del record["sources"][0]["sha256"]
+        paths = write_case(d, record=record)
+        code, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["coverage"]["content"], "not_run")
+        self.assertFalse(payload["verdict"]["deliverable"])
+        self.assertIn("sha256", text)
+
+    def test_bad_source_status_fails(self):
+        d = tmpdir()
+        record = compliant_record()
+        record["sources"][0]["status"] = "skimmed"
+        paths = write_case(d, record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        self.assertEqual(check_by_id(payload, "record.sources")["code"], "record.source-bad")
 
 
 class RecordChecksTests(unittest.TestCase):
@@ -401,15 +687,8 @@ class DeliverableVerdictTests(unittest.TestCase):
 
     @staticmethod
     def passed_record(**overrides) -> dict:
-        record = make_record(
-            checks=[
-                {"id": "content.requirements", "kind": "content", "status": "pass",
-                 "scope": "全部需求", "note": "逐项核对，见记录"},
-                {"id": "visual.pages", "kind": "visual", "status": "pass",
-                 "scope": "全部 2 页", "note": "已逐页查看"},
-            ],
-            **overrides)
-        record["verdict"] = {"draftComplete": True, "deliverable": True}
+        record = compliant_record()
+        record.update(overrides)
         return record
 
     def test_full_coverage_supports_declared_deliverable(self):
@@ -424,7 +703,9 @@ class DeliverableVerdictTests(unittest.TestCase):
     def test_deliverable_claim_without_visual_not_supported(self):
         d = tmpdir()
         record = self.passed_record()
-        record["checks"][1]["status"] = "not_run"
+        for item in record["checks"]:
+            if item["id"] == "visual.pages":
+                item["status"] = "not_run"
         record["verdict"] = {"draftComplete": True, "deliverable": True}
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
@@ -446,8 +727,10 @@ class DeliverableVerdictTests(unittest.TestCase):
     def test_failed_content_check_blocks(self):
         d = tmpdir()
         record = self.passed_record()
-        record["checks"][0] = {"id": "content.requirements", "kind": "content", "status": "fail",
-                               "scope": "核心问题 2", "note": "报告未回应第二个核心问题"}
+        for item in record["checks"]:
+            if item["id"] == "content.requirements":
+                item.update({"status": "fail", "scope": "核心问题 2",
+                             "note": "报告未回应第二个核心问题"})
         record["verdict"] = {"draftComplete": True, "deliverable": False}
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
@@ -463,6 +746,132 @@ class DeliverableVerdictTests(unittest.TestCase):
         # 未执行就是未执行：coverage 不是 covered，摘要不能把 not_run 说成通过
         self.assertNotEqual(payload["coverage"]["content"], "covered")
         self.assertNotEqual(payload["coverage"]["visual"], "covered")
+
+
+class ChecklistCoverageTests(unittest.TestCase):
+    """内容核验清单（#72）：可交付要求内置清单逐项通过；只声明子集、或有失败项，
+    都不算内容核验通过。清单 id 只追加（含 #72 新增的 script-consistency）。"""
+
+    def test_partial_content_checklist_cannot_cover(self):
+        d = tmpdir()
+        record = compliant_record(checks=[
+            {"id": "content.requirements", "kind": "content", "status": "pass",
+             "scope": "全部需求", "note": ""},
+            {"id": "visual.pages", "kind": "visual", "status": "pass",
+             "scope": "全部 2 页", "note": ""},
+        ])
+        paths = write_case(d, record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["coverage"]["content"], "partial")
+        self.assertEqual(payload["coverageCounts"]["content"],
+                         {"done": 1, "total": len(CONTENT_CHECK_IDS), "failed": 0})
+        self.assertFalse(payload["verdict"]["deliverable"])
+
+    def test_full_checklist_declared_pass_is_covered(self):
+        d = tmpdir()
+        paths = write_case(d, record=compliant_record())
+        _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(payload["coverage"]["content"], "covered")
+        self.assertEqual(payload["coverageCounts"]["content"],
+                         {"done": len(CONTENT_CHECK_IDS), "total": len(CONTENT_CHECK_IDS),
+                          "failed": 0})
+        self.assertEqual(payload["coverageCounts"]["visual"], {"done": 1, "total": 1, "failed": 0})
+
+    def test_script_consistency_check_is_known(self):
+        self.assertIn("content.script-consistency", CONTENT_CHECK_IDS)
+        d = tmpdir()
+        record = compliant_record()
+        self.assertIn("content.script-consistency", [c["id"] for c in record["checks"]])
+        paths = write_case(d, record=record)
+        _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(check_by_id(payload, "record.checks")["status"], "pass")
+
+    def test_failed_check_shows_failed_count(self):
+        d = tmpdir()
+        record = compliant_record()
+        for item in record["checks"]:
+            if item["id"] == "content.units-dates":
+                item.update({"status": "fail", "scope": "咖啡豆成本",
+                             "note": "单位口径未在报告标注"})
+        paths = write_case(d, record=record)
+        _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(payload["coverage"]["content"], "uncovered")
+        self.assertEqual(payload["coverageCounts"]["content"]["failed"], 1)
+        self.assertFalse(payload["verdict"]["deliverable"])
+
+
+class SummaryDisclosureTests(unittest.TestCase):
+    """摘要披露（#72）：检查范围、结果、缺口及记录位置出自同一份结构化结果。"""
+
+    def test_summary_discloses_gaps_open_items_and_record_path(self):
+        d = tmpdir()
+        record = compliant_record()
+        record["gaps"] = ["十月的周报缺失", "渠道明细只有汇总"]
+        record["openItems"] = [{"item": "提价幅度待定", "blocking": False}]
+        paths = write_case(d, record=record)
+        _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(payload["record"]["gaps"], ["十月的周报缺失", "渠道明细只有汇总"])
+        self.assertEqual(payload["record"]["openItems"], {"n": 1, "blocking": 0})
+        _, _, zh, _ = run_check(paths, locale="zh-CN")
+        self.assertIn("记录披露的缺口", zh)
+        self.assertIn("十月的周报缺失", zh)
+        self.assertIn("记录待办", zh)
+        self.assertIn("记录文件：report-record.json", zh)
+        _, _, en, _ = run_check(paths, locale="en")
+        self.assertIn("Gaps disclosed by the record", en)
+        self.assertIn("Record file: report-record.json", en)
+        self.assertIn("Open items in the record", en)
+
+    def test_blocking_count_disclosed(self):
+        d = tmpdir()
+        record = compliant_record()
+        record["openItems"] = [{"item": "核心口径二选一", "blocking": True},
+                               {"item": "附录页码", "blocking": False}]
+        paths = write_case(d, record=record)
+        _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(payload["record"]["openItems"], {"n": 2, "blocking": 1})
+        _, _, zh, _ = run_check(paths, locale="zh-CN")
+        self.assertIn("阻塞 1 项", zh)
+
+
+class LegacyRecordCompatTests(unittest.TestCase):
+    """兼容（#69 决策 15）：#70 形态的旧记录仍可校验、初稿成立，只是到不了可交付。"""
+
+    def test_legacy_record_valid_draft_complete_not_deliverable(self):
+        d = tmpdir()
+        legacy = {
+            "schema": RECORD_SCHEMA,
+            "generatedAt": "2026-11-02T09:00:00+08:00",
+            "request": {"purpose": "季度经营汇报"},
+            "sources": [{"path": "materials/q3-notes.md", "status": "read",
+                         "coverage": "全文", "note": ""}],
+            "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
+                       "version": "0.9.0", "unavailable": []},
+            "links": {"report": "report.html", "script": "script.md",
+                      "sha256": {"report": sha(REPORT), "script": sha(SCRIPT)},
+                      "sourceNote": ""},
+            "findings": [{"claim": "三季度收入同比增长 12%", "type": "calculation",
+                          "sources": ["materials/q3-notes.md"], "pages": ["sum"],
+                          "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 112},
+                                          "expected": 12},
+                          "note": ""}],
+            "gaps": [],
+            "checks": [{"id": "content.requirements", "kind": "content", "status": "not_run",
+                        "scope": "", "note": ""},
+                       {"id": "visual.pages", "kind": "visual", "status": "not_run",
+                        "scope": "", "note": ""}],
+            "openItems": [],
+            "verdict": {"draftComplete": True, "deliverable": None},
+        }
+        paths = write_case(d, record=legacy)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0, "旧形态记录不引入新的程序检查失败")
+        self.assertEqual(check_by_id(payload, "record.structure")["status"], "pass")
+        self.assertTrue(payload["verdict"]["draftComplete"])
+        self.assertFalse(payload["verdict"]["deliverable"])
+        self.assertEqual(payload["coverage"]["content"], "not_run")
+        self.assertEqual(check_by_id(payload, "record.checks")["status"], "pass")
 
 
 class ReportFormatTests(unittest.TestCase):
@@ -521,6 +930,10 @@ class CliContractTests(unittest.TestCase):
         self.assertEqual([c["id"] for c in zh["checks"]], [c["id"] for c in en["checks"]])
         self.assertEqual([c["status"] for c in zh["checks"]], [c["status"] for c in en["checks"]])
         self.assertEqual(zh["coverage"], en["coverage"])
+        self.assertEqual(zh["coverageCounts"], en["coverageCounts"])
+        self.assertEqual(zh["coverageCapped"], en["coverageCapped"])
+        self.assertEqual(zh["record"]["gaps"], en["record"]["gaps"])
+        self.assertEqual(zh["record"]["openItems"], en["record"]["openItems"])
         self.assertEqual(zh["verdict"]["draftComplete"], en["verdict"]["draftComplete"])
         self.assertEqual(zh["verdict"]["deliverable"], en["verdict"]["deliverable"])
         # reason 的具体条数可以随语言一致：两条路径都有理由且非空
