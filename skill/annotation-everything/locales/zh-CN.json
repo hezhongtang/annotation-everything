@@ -1193,6 +1193,10 @@
     "check.err.noPages": "报告里没有逐页 section（class 含 page 且带 data-page）",
     "check.item.record.reading": "读取登记与缺口披露",
     "check.err.sourceStatus": "{entry} 的读取登记没有可识别的状态 {status}（status 用 read / partial / unreadable）",
-    "check.err.sourceField": "{entry} 的读取披露不完整：缺 {fields}（partial 要写明实际读取范围与未读部分，unreadable 要写明原因）"
+    "check.err.sourceField": "{entry} 的读取披露不完整：缺 {fields}（partial 要写明实际读取范围与未读部分，unreadable 要写明原因）",
+    "check.reading.line": "读取登记：已读 {read} · 部分读取 {partial} · 无法读取 {unreadable}",
+    "check.reading.unread": "未读范围：{items}",
+    "check.err.readingBlocked": "全部实质材料（{n} 份）均不可读：空结构或虚构内容不能当作初稿生成完成",
+    "check.reason.readingBlocked": "全部实质材料均不可读：初稿不能宣布生成完成"
   }
 }

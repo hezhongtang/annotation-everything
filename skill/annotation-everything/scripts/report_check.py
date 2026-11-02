@@ -454,12 +454,16 @@ def coverage_for(record: dict | None, fresh: bool, kind: str) -> tuple[str, int,
 # ── 汇总判定 ────────────────────────────────────────────────────────────────
 
 def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
-              record_ok: bool) -> dict:
+              record_ok: bool, reading: dict | None = None) -> dict:
     reasons: list[str] = []
     failed_program = checks.failed()
-    draft_complete = draft_ok and not [f for f in failed_program
-                                       if f["id"] in ("report.parse", "report.pageKeys",
-                                                      "script.pages", "record.pageRefs")]
+    # 全部实质材料不可读：空结构或虚构内容不能当作初稿生成完成（issue #71）。
+    reading_blocked = any(f["id"] == "record.reading" and f["code"] == "record.reading-blocked"
+                          for f in failed_program)
+    draft_complete = draft_ok and not reading_blocked \
+        and not [f for f in failed_program
+                 if f["id"] in ("report.parse", "report.pageKeys",
+                                "script.pages", "record.pageRefs")]
     coverage = {"content": coverage_for(record, fresh, "content")[0],
                 "visual": coverage_for(record, fresh, "visual")[0]}
     declared = None if record is None else record["verdict"].get("deliverable")
@@ -493,6 +497,8 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
         elif not record_ok:
             reasons.append(t(checks.locale, "check.reason.recordChecks"))
         if failed_program:
+            if reading_blocked:
+                reasons.append(t(checks.locale, "check.reason.readingBlocked"))
             reasons.append(t(checks.locale, "check.reason.programFailed",
                              items="、".join(checks.name(f["id"]) for f in failed_program)))
     return {
@@ -504,6 +510,9 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
                    "declaredDraftComplete": None if record is None
                    else bool(record["verdict"].get("draftComplete"))},
         "coverage": coverage,
+        "reading": reading,
+        "gaps": [g for g in record["gaps"] if isinstance(g, str) and g.strip()]
+        if record is not None else [],
         "verdict": {"draftComplete": draft_complete, "deliverable": deliverable,
                     "reasons": reasons},
     }
@@ -541,7 +550,7 @@ def check_report(report_path: Path, script_path: Path | None = None,
         check_calculations(record, c)
         check_record_checks(record, c)
         reading = check_reading(record, c)
-    result = summarize(record, fresh, c, draft_ok, record_ok)
+    result = summarize(record, fresh, c, draft_ok, record_ok, reading=reading)
     result["schema"] = RESULT_SCHEMA
     result["inputs"] = {
         "report": {"path": report_path.name, "sha256": sha256_bytes(report_bytes)},
@@ -585,6 +594,16 @@ def render_summary(result: dict) -> str:
         label = t(loc, "check.coverage." + kind)
         word = t(loc, "check.coverage." + state)
         lines.append(f"  · {label}：{word}" if loc == "zh-CN" else f"  · {label}: {word}")
+    reading = result.get("reading")
+    if reading and (reading["read"] or reading["partial"] or reading["unreadable"]):
+        lines.append(t(loc, "check.reading.line", read=reading["read"],
+                       partial=reading["partial"], unreadable=reading["unreadable"]))
+        if reading["unread"]:
+            items = "；".join(f"{e['path']} — {e['detail']}" if e.get("detail") else e["path"]
+                              for e in reading["unread"])
+            lines.append("  " + t(loc, "check.reading.unread", items=items))
+    if result.get("gaps"):
+        lines.append("  " + t(loc, "check.gaps.line", gaps="；".join(result["gaps"])))
     rec = result["record"]
     if rec["version"] is None:
         rec_line = t(loc, "check.record.line", version=t(loc, "check.record.missing"),
