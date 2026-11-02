@@ -196,7 +196,7 @@ class SkillUpdateTests(unittest.TestCase):
             "import os, pathlib\npathlib.Path(os.environ['SITE_MARKER']).write_text('ran')\n")
         env = {**self.env, "PYTHONPATH": str(site), "SITE_MARKER": str(marker)}
         script = str(self.copy / "scripts" / "notes.py")
-        fallback = "import runpy, sys; del sys.orig_argv; sys.argv = [sys.argv[1], '--help']; runpy.run_path(sys.argv[0], run_name='__main__')"
+        fallback = "import runpy, sys; sys.orig_argv = None; sys.argv = [sys.argv[1], '--help']; runpy.run_path(sys.argv[0], run_name='__main__')"
         for command in ([sys.executable, "-I", script, "--help"],
                         [sys.executable, "-I", "-c", fallback, script]):
             with self.subTest(command=command[:3]):
