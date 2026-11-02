@@ -85,6 +85,25 @@ def home() -> Path:
     return Path(env).expanduser().resolve() if env else Path.home() / ".annotation-everything"
 
 
+def update_lock_path() -> Path:
+    copy = Path(__file__).resolve().parent.parent
+    return copy.parent / ".annotation-everything-update.lock"
+
+
+@contextlib.contextmanager
+def update_lock(*, exclusive: bool = False, nonblocking: bool = False):
+    """按技能副本路径协调，不同 AE_HOME 的服务共用一把锁。"""
+    lock_path = update_lock_path()
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "r+") as fh:
+        mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+        fcntl.flock(fh, mode | (fcntl.LOCK_NB if nonblocking else 0))
+        try:
+            yield fh.fileno()
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def _ensure_home() -> Path:
     h = home()
     h.mkdir(mode=0o700, parents=True, exist_ok=True)

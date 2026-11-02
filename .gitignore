@@ -46,6 +46,8 @@ htmlcov/
 .verify/
 # 开发循环的本地台账（AE_HOME 指向的隔离位置，见 AGENTS.md 并发约定）：本机运行时数据
 .ae-home/
+# 技能副本旁的服务与自动更新协调锁（不保存审阅内容）
+skill/.annotation-everything-update.lock
 
 # ── 密钥与本地配置 ─────────────────────────────────────────────
 .env

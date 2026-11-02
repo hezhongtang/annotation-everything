@@ -1,5 +1,19 @@
 # Agent mechanisms
 
+## Codex desktop: review-scoped event delivery
+
+When the user requests automatic handling after web submission, the agent configures the skill; the user does not edit Codex configuration.
+
+1. Read `python3 $S/wakeup.py status REVIEW_DIR`. Preserve an existing binding instead of silently switching its receiving chat.
+2. Run `python3 $S/wakeup.py bind REVIEW_DIR`. It uses the current host's `CODEX_THREAD_ID`; if unavailable, pass the verified current chat identity with `--thread UUID`. The command checks the local desktop socket and thread owner, then saves private metadata beside the review. `--by Codex` is only an attribution label.
+3. Start `python3 $S/serve.py REVIEW_DIR` normally. If an older service exists, verify its identity and avoid interrupting another person's work before stopping and restarting it. Every subsequent normal restart restores the binding. A custom `--on-handoff` conflicts with a saved binding and is rejected; changing delivery method requires an explicit decision, `wakeup.py unbind REVIEW_DIR`, and restart.
+4. On receipt, run the supplied `wakeup.py ack ...` command, then `notes.py claim --seq N --by Codex`. Apply the accepted requirements and original completion protocol. Do not start a claiming waiter or scheduler in binding mode. The updated CLI prevents a different chat from claiming the bound review.
+5. Verify an actually idle chat: after the previous turn completes, submit through a synthetic review page and confirm a new chat turn, acknowledgement, annotation resolution, and done. Restart the same service normally and repeat. Busy-chat delivery, owner discovery, and process exit 0 are not idle-wakeup proof.
+
+`wakeup.py status` and the page distinguish `accepted` (desktop accepted delivery) from `received` (the chat executed acknowledgement). Failed deliveries can retry on service restart or another user submission. Interrupted sending or a lost transport acknowledgement stays `unconfirmed`; inspect chat and batch state before any replay. Startup recovery handles only pending submissions/review requests, never work already claimed by another agent.
+
+This adapter uses the desktop's existing local IPC, without changing Codex configuration, permissions, models, or application files or starting a second CLI agent. IPC is not a stable public API; the verified environment is macOS desktop 26.1027.51404. An unavailable desktop, missing thread owner, or incompatible protocol produces a visible error and preserves annotations. Binding applies only to its original review identity and directory; verify and rebind moved/copied reviews. Unbinding preserves annotations and delivery history.
+
 [简体中文](agent-mechanisms.zh-CN.md)
 
 Commands, files, and exit codes are the same for every agent. Use this table when configuring a waiter, invoking annotation skills, delegating work, or choosing a worker name. The [shared protocol](protocol.md) governs permissions, stage boundaries, and safety. Follow the [English workflow](workflow.en.md) for the complete sequence.

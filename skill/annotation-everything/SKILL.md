@@ -7,6 +7,8 @@ description: 从原始材料生成逐页报告初稿、本机逐页审阅、批�
 
 Generate a report draft from raw material (default paradigm) or a local review page → start its service → wait for a submission → edit the source report and speaker notes → rebuild → record each result → finish the batch → wait again.
 
+Before loading a workflow, resolve `$S` to the `scripts/` directory beside this loaded `SKILL.md` and run `python3 "$S/update.py" auto --locale LANG`, replacing `LANG` with `zh-CN` or `en` for the user's request. The check runs at most once per day and does not block the review when offline. If it installs an update, reload this `SKILL.md` and its references; before resuming an existing review, stop any old service, rebuild the review page, start the new service, and ask the user to refresh the browser. Briefly tell the user about an installed update or a warning from the command.
+
 先按用户请求的语言选择操作指引。Choose the workflow from the user's request language, independently of the material language or the page's display language.
 
 1. **两种语言都先读 / Always read** [共用安全与协议约束 / Shared safety and protocol](references/protocol.md). This is the single source for safety, permissions, stop conditions, and compatibility rules.
@@ -22,3 +24,5 @@ Generate a report draft from raw material (default paradigm) or a local review p
 - **English requests**: read [Agent mechanisms](references/agent-mechanisms.en.md) before configuring a waiter, invoking annotation skills, delegating work, or choosing a `--by` name.
 
 Load only the matching language reference. The shared protocol still governs permissions and stage boundaries.
+
+Codex 桌面接入与服务重启：首次配置自动接收时，读取匹配语言的 Agent 机制中的持久绑定流程；先验证空闲会话实际接手，再宣布自动处理可用。Codex desktop delivery and service restarts: follow the persistent binding procedure in the matching Agent mechanisms reference; verify receipt by an idle chat before declaring automatic processing ready.

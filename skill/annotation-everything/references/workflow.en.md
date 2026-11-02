@@ -45,6 +45,8 @@ Scopes accept `all`, `report`, `script`, `style` or their Chinese equivalents. T
 
 ## 4. Start the service and wait
 
+For automatic handling in Codex desktop, first follow the [persistent binding procedure](agent-mechanisms.en.md#codex-desktop-review-scoped-event-delivery), then start the service normally. A bound review restores delivery on restart and must not start the claiming waiter below.
+
 ```bash
 python3 "$S/serve.py" "$R" --locale en
 python3 "$S/notes.py" wait "$R" --locale en
@@ -84,7 +86,7 @@ python3 "$S/notes.py" done "$R" --seq N --summary "Updated both sources. Checked
 python3 "$S/notes.py" batches "$R" --last 3 --locale en
 ```
 
-Use `--by` to identify each worker; [Agent mechanisms](agent-mechanisms.en.md) describes the environment-dependent default. Use a summary that describes what was actually checked. Keep unimplemented annotations open and explain why. `reopen` corrects a mistaken resolution. Report changed pages, unresolved decisions, and full-check scope to the user; ask them to refresh and inspect. Start `wait` again for the next submission. If the batch requested a stop after the initial edit, stop at that stage as specified below.
+Use `--by` to identify each worker; [Agent mechanisms](agent-mechanisms.en.md) describes the environment-dependent default. Use a summary that describes what was actually checked. Keep unimplemented annotations open and explain why. `reopen` corrects a mistaken resolution. Report changed pages, unresolved decisions, and full-check scope to the user; ask them to refresh and inspect. With a saved event binding, leave the service running and end the turn; with a verified host completion-notification mechanism, start `wait` again. A running process, exit 0, or a claimed batch does not alone prove chat receipt. If the batch requested a stop after the initial edit, stop at that stage as specified below.
 
 If the user says “apply my annotations” directly, first run `show`. Claim a pending submission before editing so its options and source snapshot apply. With no submission, work from the explicit request and resolve completed annotations; `done` reports that no batch exists.
 

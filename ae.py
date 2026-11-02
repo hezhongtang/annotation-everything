@@ -366,6 +366,8 @@ def write_record(dst: Path, repo: Path, links: Optional[list] = None) -> Path:
         "version": read_version(repo) or "",
         "installed_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         "links": list(links or []),
+        # 更新器用安装时的内容指纹识别副本内的后续手工修改。
+        "tree": skill_module("content_manifest").snapshot(dst),
     }
     path = dst / RECORD_NAME
     path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
