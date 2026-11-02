@@ -149,9 +149,9 @@ class ReviewServer(ThreadingHTTPServer):
                  locale: str | None = None):
         self.review_dir = review_dir
         self.debug = debug
-        with store.locked(review_dir):
-            self.on_handoff = wakeup.hook_command(review_dir, on_handoff)
-            self.agent_binding = wakeup.load_binding(review_dir)
+        # Capture identity and route from one atomic metadata read without changing an untouched review.
+        self.agent_binding = wakeup.load_binding(review_dir)
+        self.on_handoff = wakeup.hook_command(review_dir, on_handoff, binding=self.agent_binding)
         self.hook_cwd = hook_cwd or os.getcwd()
         # 诊断说明用的语言；None 时保持中文（旧调用行为不变）
         self.locale = locale or i18n.DEFAULT_LOCALE

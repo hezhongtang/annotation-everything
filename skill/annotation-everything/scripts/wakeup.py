@@ -409,8 +409,9 @@ def receiver_status(review, active_binding=_ANY_BINDING):
         return {"state": "error"}
 
 
-def hook_command(review, custom=None):
-    binding = load_binding(review)
+def hook_command(review, custom=None, *, binding=_ANY_BINDING):
+    if binding is _ANY_BINDING:
+        binding = load_binding(review)
     if binding and custom:
         raise ValueError("saved-agent-binding-conflicts-with-custom-hook")
     return ([sys.executable, str(Path(__file__).resolve()), "deliver", str(Path(review).resolve())]
