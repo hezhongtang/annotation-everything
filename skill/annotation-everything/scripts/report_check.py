@@ -839,14 +839,31 @@ def check_record_revision(record: dict | None, c: Checks) -> dict | None:
     ok_rechecked = isinstance(rechecked, list) \
         and all(isinstance(x, str) for x in rechecked)
     ok_pending = isinstance(pending, list) and all(
-        isinstance(x, dict)
-        and isinstance(x.get("scope"), str) and bool(x["scope"].strip())
-        and isinstance(x.get("reason"), str) and bool(x["reason"].strip())
-        for x in pending)
+        isinstance(x, dict) for x in pending)
     if not (ok_basis and ok_rechecked and ok_pending):
         c.set("record.revision", "fail", code="record.revision-bad",
               detail="revision needs basis, rechecked (list of known check ids) "
                      "and pending ({scope, reason}) entries")
+        return None
+    unknown = [x for x in rechecked if x not in KNOWN_RECORD_CHECKS]
+    if unknown:
+        c.set("record.revision", "fail", code="record.revision-unknown",
+              ids="、".join(dict.fromkeys(unknown)))
+        return None
+    # 声明重新核验过的项必须在记录里有实际检查结果（pass / fail）；仍是 not_run
+    # 或 unavailable 就是「声明核验了但没有结果」，如实暴露。
+    by_id = {x.get("id"): x for x in record["checks"] if isinstance(x, dict)}
+    unrechecked = [x for x in dict.fromkeys(rechecked)
+                   if by_id.get(x, {}).get("status") not in ("pass", "fail")]
+    if unrechecked:
+        c.set("record.revision", "fail", code="record.revision-unrechecked",
+              ids="、".join(unrechecked))
+        return None
+    if not all(isinstance(x.get("scope"), str) and bool(x["scope"].strip())
+               and isinstance(x.get("reason"), str) and bool(x["reason"].strip())
+               for x in pending):
+        c.set("record.revision", "fail", code="record.revision-pending",
+              detail="pending entries need non-empty scope and reason")
         return None
     c.set("record.revision", "pass")
     return {"basis": basis.strip(), "rechecked": list(dict.fromkeys(rechecked)),

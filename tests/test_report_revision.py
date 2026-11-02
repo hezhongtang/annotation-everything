@@ -246,5 +246,87 @@ class RevisionEntryTests(unittest.TestCase):
         self.assertIn("报告可交付：否", summary)
 
 
+class RevisionStructureTests(unittest.TestCase):
+    """切片 2：改稿维护声明的结构校验——声明了就要能对上，不符要能暴露。"""
+
+    def check_revision(self, **rev_overrides) -> tuple[int, dict, dict]:
+        record = compliant_record(revision=revision(**rev_overrides))
+        paths = write_case(tmpdir() / "revcase", record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        return code, payload, check_by_id(payload, "record.revision")
+
+    def test_missing_basis_fails(self):
+        """缺影响范围判定依据：改稿声明无法证明范围怎么定的，程序检查失败。"""
+        code, _, item = self.check_revision(basis="")
+        self.assertEqual(code, 1)
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.revision-bad")
+        code2, _, item2 = self.check_revision(basis=None)
+        self.assertEqual(code2, 1)
+        self.assertEqual(item2["code"], "record.revision-bad")
+
+    def test_non_dict_revision_fails(self):
+        code, _, item = self.check_revision(**{"basis": "x", "rechecked": [], "pending": []})
+        # 正常结构仍应通过，先自证 helper 无误
+        self.assertEqual(item["status"], "pass")
+
+    def test_unknown_rechecked_id_fails(self):
+        """声明重新核验了清单外项目：无法证明已执行，程序检查失败。"""
+        code, _, item = self.check_revision(rechecked=["content.numbers-charts", "made.up"])
+        self.assertEqual(code, 1)
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.revision-unknown")
+
+    def test_rechecked_without_results_fails(self):
+        """声明重新核验了某项，但记录里该项没有实际检查结果：程序检查失败。"""
+        record = compliant_record(revision=revision(rechecked=["content.units-dates"]))
+        for c in record["checks"]:
+            if c["id"] == "content.units-dates":
+                c["status"] = "not_run"
+        paths = write_case(tmpdir() / "unrechecked", record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.revision")
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.revision-unrechecked")
+        self.assertFalse(payload["verdict"]["deliverable"])
+
+    def test_rechecked_fail_result_is_consistent(self):
+        """重新核验后如实记 fail：声明与结果一致（程序检查通过），覆盖如实降级。"""
+        record = compliant_record(revision=revision(rechecked=["content.units-dates"]))
+        for c in record["checks"]:
+            if c["id"] == "content.units-dates":
+                c["status"] = "fail"
+                c["note"] = "改稿后八月口径写成了十月"
+        paths = write_case(tmpdir() / "recheckfail", record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        item = check_by_id(payload, "record.revision")
+        self.assertEqual(item["status"], "pass")
+        self.assertFalse(payload["verdict"]["deliverable"])
+        self.assertEqual(payload["coverage"]["content"], "uncovered")
+
+    def test_bad_pending_entry_fails(self):
+        """待核验项缺范围或原因：无法向用户交代待核验什么，程序检查失败。"""
+        code, _, item = self.check_revision(
+            pending=[{"scope": "第 4–6 页视觉检查"}])
+        self.assertEqual(code, 1)
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.revision-pending")
+        code2, _, item2 = self.check_revision(
+            pending=[{"scope": "第 4–6 页视觉检查", "reason": " "}])
+        self.assertEqual(code2, 1)
+        self.assertEqual(item2["code"], "record.revision-pending")
+
+    def test_revision_not_an_object_fails(self):
+        record = compliant_record()
+        record["revision"] = "改稿声明"
+        paths = write_case(tmpdir() / "revstr", record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.revision")
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.revision-bad")
+
+
 if __name__ == "__main__":
     unittest.main()
