@@ -800,7 +800,10 @@ def _main_locked(argv: list[str] | None = None) -> int:
     bt.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     bt.add_argument("--last", type=int, help=t("cli.notes.help.batches.last"))
     bt.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
-    for parser in sub.choices.values():
+    for name, parser in sub.choices.items():
+        if name in ("wait", "claim", "resolve", "reopen", "review", "done"):
+            parser.add_argument("--harness", help=t("cli.notes.help.receiver.harness"))
+            parser.add_argument("--session", help=t("cli.notes.help.receiver.session"))
         parser.add_argument("--locale", default=argparse.SUPPRESS, help=t("cli.notes.localeHelp"))
     a = ap.parse_args(argv)
     ledger.set_locale(help_lang)
@@ -830,6 +833,16 @@ def _main_locked(argv: list[str] | None = None) -> int:
     if warn:
         print(t("cli.notes.warning", reason=warn), file=sys.stderr)
 
+    def authorize():
+        wakeup.assert_claim_owner(d, getattr(a, "harness", None), getattr(a, "session", None))
+
+    if a.cmd in ("resolve", "reopen", "review", "done"):
+        try:
+            authorize()
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
+
     if a.cmd == "show":
         doc = store.load(d)
         manifest = load_manifest(d)
@@ -856,7 +869,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
         for nid in a.ids:
             try:
                 _doc, n = store.set_status(d, nid, status, resolution=getattr(a, "note", ""), by=getattr(a, "by", default_agent()),
-                                           seq=getattr(a, "seq", None))
+                                           seq=getattr(a, "seq", None), authorize=authorize)
                 print(t("cli.hand.markResult", id=nid,
                         status=label(t, NOTE_STATUS_KEY.get(n.get("status"), ""), n.get("status"))))
             except store.NotFound as e:
@@ -866,6 +879,9 @@ def _main_locked(argv: list[str] | None = None) -> int:
             except store.NoteError as e:
                 print(t("cli.hand.noteFailed", id=nid, why=handoff_error_text(e, lang)), file=sys.stderr)
                 bad += 1
+            except (OSError, ValueError, KeyError) as error:
+                print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+                return 2
         return 1 if bad else 0
     if a.cmd == "import":
         try:
@@ -942,7 +958,8 @@ def _main_locked(argv: list[str] | None = None) -> int:
             sys.stdout.write(body)
         return 0
     if a.cmd == "wait":
-        return wait(d, a.timeout, a.interval, claim=not a.no_claim, by=a.by, stage=a.stage, lang=lang)
+        return wait(d, a.timeout, a.interval, claim=not a.no_claim, by=a.by, stage=a.stage, lang=lang,
+                    harness=a.harness, session=a.session)
     if a.cmd == "skills":
         def parse(items: list[str] | None) -> list[dict[str, str]]:
             out = []
@@ -1034,11 +1051,11 @@ def _main_locked(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "claim":
         try:
-            wakeup.assert_claim_owner(d)
+            item = store.handoff_claim(d, by=a.by, stage=a.stage, seq=a.seq,
+                                       authorize=authorize)
         except (OSError, ValueError, KeyError) as error:
             print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
             return 2
-        item = store.handoff_claim(d, by=a.by, stage=a.stage, seq=a.seq)
         if item is None:
             print(json.dumps({"claimed": False}, ensure_ascii=False))
             return 3
@@ -1050,13 +1067,17 @@ def _main_locked(argv: list[str] | None = None) -> int:
         t = cli_text(lang)
         try:
             item = store.handoff_done(d, seq=a.seq, summary=a.summary, by=a.by,
-                                      mode="draft" if a.draft else "final" if a.final else None, accept_rest=a.accept_rest)
+                                      mode="draft" if a.draft else "final" if a.final else None, accept_rest=a.accept_rest,
+                                      authorize=authorize)
         except store.NotFound:
             print(t("cli.hand.doneMissing"), file=sys.stderr)
             return 1
         except store.NoteError as e:
             print(t("cli.hand.doneRefused", why=handoff_error_text(e, lang)), file=sys.stderr)
             return 1
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
         if item["status"] in ("drafted", "review"):
             snapshot(d, item, "draft")
             print(t("cli.hand.doneDrafted", seq=item["seq"], count=item.get("draftedCount", 0))
@@ -1073,7 +1094,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
         bad = 0
         for nid in a.ids:
             try:
-                _doc, n = store.review(d, nid, a.verdict, note=a.note, by=a.by, seq=a.seq)
+                _doc, n = store.review(d, nid, a.verdict, note=a.note, by=a.by, seq=a.seq, authorize=authorize)
                 print(t("cli.hand.reviewResult", id=nid,
                         action=label(t, ACTION_KEY[{"ok": "approved", "revise": "revised", "return": "returned"}[a.verdict]]),
                         status=label(t, NOTE_STATUS_KEY.get(n.get("status"), ""), n.get("status"))))
@@ -1083,6 +1104,9 @@ def _main_locked(argv: list[str] | None = None) -> int:
             except store.NoteError as e:
                 print(t("cli.hand.noteFailed", id=nid, why=handoff_error_text(e, lang)), file=sys.stderr)
                 bad += 1
+            except (OSError, ValueError, KeyError) as error:
+                print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+                return 2
         return 1 if bad else 0
     if a.cmd == "diff":
         return diff_cmd(d, a.batch, a.to, a.page, lang=lang)
@@ -1239,15 +1263,18 @@ def _drop_wait_mark(mark: Path | None) -> None:
 
 
 def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stage: str = "any",
-         lang: str | None = None) -> int:
+         lang: str | None = None, harness: str | None = None, session: str | None = None) -> int:
     """阻塞等待「交给 Agent」提交。已经在等待中的提交（之前没人接收）会立即返回。"""
     t = cli_text(lang)
     sep = t("cli.hand.itemSep")
+    binding = None
     if claim:
         try:
-            if wakeup.load_binding(d):
+            binding = wakeup.load_binding(d)
+            if binding and binding["adapter"] == "codex-desktop":
                 print(t("cli.hand.eventWaitRefused"), file=sys.stderr)
                 return 2
+            wakeup.assert_claim_owner(d, harness, session)
         except (OSError, ValueError, KeyError) as error:
             print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
             return 2
@@ -1257,8 +1284,11 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     want = {"draft": ("pending",), "review": ("review",), "any": ("pending", "review")}[stage]
     deadline = time.monotonic() + timeout if timeout > 0 else None
     mark: Path | None = ledger.wait_file(d, os.getpid())   # 让 serve.py list 看得出「有代理在等这份审阅」
+    wait_info = {"version": 1, "pid": os.getpid(), "stage": stage, "since": store.now_iso()}
+    if claim and binding:
+        wait_info.update(bindingId=binding["bindingId"], **wakeup.binding_identity(binding))
     try:
-        write_private(mark, json.dumps({"pid": os.getpid(), "stage": stage, "since": store.now_iso()}) + "\n")
+        write_private(mark, json.dumps(wait_info) + "\n")
     except OSError:
         mark = None
 
@@ -1270,13 +1300,27 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
             old_handlers[sig] = signal.signal(sig, _stop)
     try:
         while True:
+            if claim:
+                try:
+                    wakeup.assert_claim_owner(d, harness, session, expected_binding=(binding or {}).get("bindingId"))
+                    if mark is not None and binding:
+                        write_private(mark, json.dumps({**wait_info, "expiresAt": time.time() + max(5, interval * 3)}) + "\n")
+                except (OSError, ValueError, KeyError) as error:
+                    print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+                    return 2
             try:
                 doc = store.handoff_load(d)
             except (OSError, ValueError):
                 doc = {"items": []}
             if any(i.get("status") in want for i in doc["items"]):
                 if claim:
-                    item = store.handoff_claim(d, by=by, stage=stage)
+                    try:
+                        item = store.handoff_claim(d, by=by, stage=stage,
+                            authorize=lambda: wakeup.assert_claim_owner(d, harness, session,
+                                expected_binding=(binding or {}).get("bindingId")))
+                    except (OSError, ValueError, KeyError) as error:
+                        print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+                        return 2
                 else:
                     item = next(i for i in doc["items"] if i.get("status") in want)
                     item = {**item, "stage": "review" if item.get("status") == "review" else "draft"}

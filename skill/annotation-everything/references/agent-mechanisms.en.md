@@ -1,5 +1,7 @@
 # Agent mechanisms
 
+Before configuring a receiver or switching sessions, read [Receiver binding and transfer](receiver-binding.en.md). Confirm the receiving session, then choose event delivery or a waiter below. `--by` does not establish session identity.
+
 ## Codex desktop: review-scoped event delivery
 
 When the user requests automatic handling after web submission, the agent configures the skill; the user does not edit Codex configuration.

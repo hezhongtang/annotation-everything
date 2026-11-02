@@ -31,9 +31,9 @@
 <br>
 
 <p align="center">
-  <img src="docs/assets/viewer.png" alt="对照页：左侧为带标点的合成报告，右侧是讲稿和本页批注" width="92%">
+  <img src="docs/assets/receiver.zh.png" alt="合成对照页：报告、讲稿与批注并排，顶部显示接收方 harness、会话与等待状态" width="92%">
   <br>
-  <sub>对照页：左侧是带标点的报告，右侧是讲稿和本页批注；也支持拖动框选区域。图中数据均为虚构样例。</sub>
+  <sub>对照页：报告、讲稿和批注并排，顶部明确接收方 harness、会话与等待状态。图中数据均为虚构样例。</sub>
 </p>
 
 ## 为什么需要它
@@ -63,7 +63,7 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
   <tr>
     <td valign="top">
       <h4>🤖 一键交给 Agent</h4>
-      Agent 事先运行 <code>notes.py wait</code> 等待提交。审阅人点「交给 Agent」后，Agent 收到这一批批注，按页修改报告和讲稿，重新生成对照页，并逐条把批注标为已处理；页面实时显示处理进度。
+      Agent 先绑定接收会话，再配置等待或事件接收。审阅人点「交给 Agent」后，Agent 按页修改报告和讲稿，重建对照页，并逐条记录处理结果。页面常显 harness、会话短标识和接收状态；绑定后，其他会话不能直接领取批注。
     </td>
     <td valign="top">
       <h4>🔍 全量勾稽（检查全文前后一致性）</h4>
@@ -123,6 +123,8 @@ Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lan
 只需安装一个技能副本。中文请求（如「按批注改」）和英文请求（如 “review this report” 或 “apply my annotations”）都由同一个 `annotation-everything` 入口处理，再按请求语言加载[中文流程](skill/annotation-everything/references/workflow.zh-CN.md)或[英文流程](skill/annotation-everything/references/workflow.en.md)。两种流程先读取同一份[安全与协议约束](skill/annotation-everything/references/protocol.md)，涵盖停在待复核、子代理权限、全量勾稽的证据和不确定性要求；无需按语言重复安装。
 
 目前支持简体中文与英文。英文地区标签共用英文资源；`zh` / `zh-Hans` 映射到简体中文，不承诺繁体或其他语言。浏览器保存的选择优先于审阅默认值，`auto` 按浏览器语言偏好顺序匹配、不支持时回退英文。省略设置的新审阅和旧命令保持中文。界面、材料和批注语言相互独立，切换语言保留草稿与待补传改动。
+
+页面将「服务已连接」和「接收方已绑定」分开展示，常显 harness、会话短标识与等待／处理状态。停止等待保留绑定，不自动切换接收方；显式交接前先完成处理中批次。首次配置和切换会话见[接收方绑定与交接](skill/annotation-everything/references/receiver-binding.zh-CN.md)。
 
 服务模式可以实际提交，由已启动的等待机制或钩子接收；是否自动唤醒 Agent 取决于宿主支持。Codex 桌面可由 Agent 运行 `wakeup.py bind 审阅目录` 保存当前聊天绑定；此后正常启动或重启 `serve.py` 都会恢复事件接入。页面区分“已投递”和“聊天已确认接手”，用户无需修改 Codex 配置。适配边界与空闲验收见[Agent 机制](skill/annotation-everything/references/agent-mechanisms.zh-CN.md#codex-桌面审阅级事件接入)。直接打开 `index.html` 时，只提供浏览器批注、复制和导出，需导入后交给 Agent。JSON 保留完整批注结构与审阅身份；Markdown 不保留 id、页面键、时间戳或处理批次，并有旧文法的文本限制，详见[格式说明](skill/annotation-everything/references/formats.md)。[交付验收记录](docs/locale-delivery.zh-CN.md)列出三种语言组合的完整流程、兼容矩阵、验证环境与限制。
 
@@ -309,7 +311,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `serve.py 审阅目录` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
 | `serve.py list` / `status` / `forget` | 列出本机所有审阅、查看某份审阅的状态、删除不再使用的台账记录 |
 | `serve.py check` | 运行服务安全自检 |
-| `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | 保存审阅级 Codex 聊天绑定、检查投递、确认实际接手或解除绑定；普通服务重启恢复接入，不创建定时任务或修改 Codex 配置 |
+| `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | 绑定接收 harness 与会话、查看身份与状态；Codex 桌面使用事件接收，其他 harness 可用 `--adapter wait`；显式交接用 `bind --replace`，处理中批次先收尾 |
 | `notes.py wait` / `claim` | 等待审阅人提交，或直接接收已有的提交。`wait --locale` 选择交接语言，保留定位、操作与技能要求；`claim` 输出的 JSON 保持原始值 |
 | `notes.py show` / `resolve` / `reopen` | 列出批注、标为已处理、重新打开。`show --locale` 选择阅读语言，优先于 `AE_LOCALE` 和审阅设置；`show --json` 仍导出原始值 |
 | `notes.py export` / `import` | 导出可再导入的批注摘要（Markdown 带版本与语言标记，或 JSON 结构化备份）／导入页面导出的 JSON 或 Markdown。`export --lang` 与 `show --locale` 同一套优先级，`--format json`、`--all`、`--page N`、`--out 文件` |
@@ -344,6 +346,8 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── workflow.en.md             英文操作流程
 │   ├── agent-mechanisms.zh-CN.md  各 Agent 的等待、技能调用与分派机制
 │   ├── agent-mechanisms.en.md     英文 Agent 机制对照
+│   ├── receiver-binding.zh-CN.md  接收方身份、状态与显式交接
+│   ├── receiver-binding.en.md     英文接收方绑定与交接
 │   ├── formats.md                 中文输入与输出格式
 │   └── formats.en.md              英文输入与输出格式
 ├── locales/                       中英消息（zh-CN.json、en.json）和语言选择契约
@@ -354,7 +358,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── content_manifest.py        记录技能副本的文件、目录和链接指纹
 │   ├── viewer_template.html       对照页模板（服务模式和本地文件模式）
 │   ├── serve.py                   本机服务：serve / status / list / forget / check
-│   ├── wakeup.py                  Codex 桌面事件接入：持久绑定、投递、回执与去重
+│   ├── wakeup.py                  接收会话绑定；Codex 事件投递、回执与去重
 │   ├── notes.py                   批注命令行：wait / show / resolve / done / review 等
 │   ├── notes_store.py             批注存储：原子写入、文件锁、操作日志
 │   ├── export_format.py           批注交换格式：带标记的 Markdown 文法与 JSON 备份

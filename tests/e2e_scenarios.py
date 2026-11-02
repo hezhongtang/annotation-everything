@@ -28,6 +28,12 @@ class Scenario:
 
 SCENARIOS: list[Scenario] = [
     Scenario(
+        id="receiver-binding",
+        title="接收方身份：harness、会话和等待／处理／未等待状态常显，双语与旧服务提示一致",
+        fixture="fixtures/sample 合成审阅；显式等待会话绑定；notes.py wait/claim/done 真实子进程",
+        isolation="独立审阅目录、端口与浏览器上下文；等待者与服务全部登记回收",
+    ),
+    Scenario(
         id="installed-delivery",
         title="从唯一的临时安装副本完成英文、中文、中英混合三种语言组合的真实审阅流程",
         fixture="ae.py install 装进合成 HOME 的临时副本；fixtures/sample 合成报告与讲稿；"

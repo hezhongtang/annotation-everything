@@ -68,7 +68,7 @@ import wakeup  # noqa: E402
 APP = "annotation-everything"
 VERSION = "0.9.0"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
-FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service"]
+FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding"]
 
 # 当前界面语言：main() 与 serve() 按共同契约解析后设置；未设置前保持中文（旧调用行为不变）
 _LOCALE = i18n.DEFAULT_LOCALE
@@ -149,8 +149,9 @@ class ReviewServer(ThreadingHTTPServer):
                  locale: str | None = None):
         self.review_dir = review_dir
         self.debug = debug
-        self.on_handoff = wakeup.hook_command(review_dir, on_handoff)
-        self.agent_binding = wakeup.load_binding(review_dir)
+        with store.locked(review_dir):
+            self.on_handoff = wakeup.hook_command(review_dir, on_handoff)
+            self.agent_binding = wakeup.load_binding(review_dir)
         self.hook_cwd = hook_cwd or os.getcwd()
         # 诊断说明用的语言；None 时保持中文（旧调用行为不变）
         self.locale = locale or i18n.DEFAULT_LOCALE
@@ -195,10 +196,19 @@ class ReviewServer(ThreadingHTTPServer):
         """
         if not self.on_handoff or (merged and not self.agent_binding):
             return
+        try:
+            current = wakeup.load_binding(self.review_dir)
+            if (current or {}).get("bindingId") != (self.agent_binding or {}).get("bindingId"):
+                self.log("error", "code=receiver-restart")
+                return
+        except (OSError, ValueError, KeyError):
+            self.log("error", "code=receiver-invalid")
+            return
         url = f"http://127.0.0.1:{self.port}/"
         user_message = store.handoff_user_message(item)
         message = store.full_check_message(user_message) if item.get("fullCheck") is True else user_message
         payload = {"event": event, "app": APP, "reviewId": self.review_id(), "reviewDir": str(self.review_dir),
+                   "bindingId": (self.agent_binding or {}).get("bindingId"),
                    "url": url, "seq": item.get("seq"), "message": message, "userMessage": user_message,
                    "stage": "review" if event == "review" else "draft", "target": item.get("target", "final"),
                    "allowSubagents": bool(item.get("allowSubagents")), "fullCheck": bool(item.get("fullCheck")),
@@ -394,7 +404,20 @@ class Handler(BaseHTTPRequestHandler):
     def _ident(self) -> dict[str, Any]:
         # name：审阅名。别的审阅的旧标签页连到这个端口时，据此告诉用户「这里现在是哪一份」（无 CORS 头，只有同源页面读得到）
         return {"app": APP, "reviewId": self.server.review_id(), "name": self.server.review_name(),
-                "version": VERSION, "features": FEATURES}
+                "version": VERSION, "features": FEATURES,
+                "receiver": wakeup.receiver_status(self.server.review_dir, self.server.agent_binding)}
+
+    def _check_receiver(self, body: dict[str, Any]) -> None:
+        # Called inside the batch lock: a transfer and submission must agree on one binding.
+        try:
+            binding = wakeup.load_binding(self.server.review_dir)
+        except (OSError, ValueError, KeyError):
+            raise Reject(409, "receiver-invalid", self._t("serve.err.receiverInvalid"))
+        current = (binding or {}).get("bindingId")
+        if current != (self.server.agent_binding or {}).get("bindingId"):
+            raise Reject(409, "receiver-restart", self._t("serve.err.receiverRestart"))
+        if body.get("receiverBindingId") != current:
+            raise Reject(409, "receiver-mismatch", self._t("serve.err.receiverMismatch"))
 
     def _api(self, path: str) -> None:
         d, m = self.server.review_dir, NOTE_PATH.match(path)
@@ -440,7 +463,8 @@ class Handler(BaseHTTPRequestHandler):
             _h, item, merged = store.handoff_submit(d, message, by="page",
                                                     target=str(body.get("target") or "final"),
                                                     allow_subagents=body.get("allowSubagents") is True,
-                                                    full_check=body.get("fullCheck"))
+                                                    full_check=body.get("fullCheck"),
+                                                    authorize=lambda: self._check_receiver(body))
             self.server.log("info", f"handoff seq={item['seq']} open={item['openCount']} merged={merged} target={item['target']}")
             self.server.run_hook(item, merged)
             self._json(200, {"doc": {**store.load(d), **self._ident()}, "handoff": store.handoff_state(d, full=False),
@@ -459,7 +483,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise Reject(400, "bad-request", self._t("serve.err.noSeq"))
             if path.endswith("review"):
                 item = store.handoff_request_review(d, seq, str(body.get("message") or ""),
-                                                    allow_subagents=body.get("allowSubagents") is True, by="page")
+                                                    allow_subagents=body.get("allowSubagents") is True, by="page",
+                                                    authorize=lambda: self._check_receiver(body))
                 self.server.log("info", f"handoff-review seq={seq}")
                 self.server.run_hook(item, False, event="review")
             else:
@@ -735,11 +760,17 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
     for t in trail:
         print(T("serve.port.trail", detail=t), file=sys.stderr)
     if running_url:
-        if wakeup.load_binding(review_dir):
-            found = probe(int(running_url.rstrip("/").rsplit(":", 1)[1])) or {}
-            if "agent-delivery" not in found.get("features", []) or not found.get("hook"):
-                print(T("serve.serve.agentRestart"), file=sys.stderr)
-                return 6
+        binding = wakeup.load_binding(review_dir)
+        found = probe(int(running_url.rstrip("/").rsplit(":", 1)[1])) or {}
+        receiver = found.get("receiver") or {}
+        needs_restart = receiver.get("state") == "restart-required"
+        if binding:
+            needs_restart = needs_restart or "receiver-binding" not in found.get("features", []) or receiver.get("bindingId") != binding["bindingId"]
+            if binding["adapter"] == "codex-desktop":
+                needs_restart = needs_restart or "agent-delivery" not in found.get("features", []) or not found.get("hook")
+        if needs_restart:
+            print(T("serve.serve.agentRestart"), file=sys.stderr)
+            return 6
         if claim and f":{claim}/" not in running_url:
             print(T("serve.port.claimButRunning", port=claim), file=sys.stderr)
         print(T("serve.serve.running", url=running_url)

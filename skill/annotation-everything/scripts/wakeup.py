@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import socket
 import stat
@@ -28,6 +29,7 @@ DELIVERY_FILE = ".agent-deliveries.json"
 DISPATCH_LOCK = ".agent-dispatch.lock"
 SCHEMA = 1
 MAX_FRAME = 16 * 1024 * 1024
+_ANY_BINDING = object()
 
 
 class Rejected(RuntimeError):
@@ -135,15 +137,76 @@ def load_binding(review):
         return None
     binding = _read(path)
     manifest = ledger.read_manifest(review)
-    if binding.get("adapter") != "codex-desktop" or binding.get("reviewId") != manifest.get("reviewId"):
+    if binding.get("adapter") not in ("codex-desktop", "wait") or binding.get("reviewId") != manifest.get("reviewId"):
         raise ValueError("agent-binding-identity-mismatch")
     if binding.get("reviewDir") != str(review):
         raise ValueError("agent-binding-moved: rebind explicitly")
-    uuid.UUID(binding["threadId"])
+    if not isinstance(binding.get("bindingId"), str):
+        raise ValueError("invalid-binding-id")
     uuid.UUID(binding["bindingId"])
-    if not Path(binding["socketPath"]).is_absolute():
-        raise ValueError("absolute-socket-required")
+    if binding["adapter"] == "codex-desktop":
+        if not isinstance(binding.get("threadId"), str) or not isinstance(binding.get("socketPath"), str):
+            raise ValueError("invalid-desktop-binding")
+        uuid.UUID(binding["threadId"])
+        if not Path(binding["socketPath"]).is_absolute():
+            raise ValueError("absolute-socket-required")
+    else:
+        identity(binding.get("harness"), binding.get("sessionId"))
     return binding
+
+
+def identity(harness, session):
+    """A declared session identity, independent of the human-readable --by signature."""
+    if not isinstance(harness, str) or not harness.strip() or len(harness) > 64 or not harness.isprintable():
+        raise ValueError("harness-required")
+    if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,199}", session):
+        raise ValueError("session-required")
+    harness = {"codex": "Codex", "claude": "Claude Code", "claude code": "Claude Code"}.get(harness.strip().lower(), harness.strip())
+    return {"harness": harness, "sessionId": session}
+
+
+def caller_identity(harness=None, session=None):
+    harness = harness if harness is not None else os.environ.get("AE_HARNESS")
+    session = session if session is not None else os.environ.get("AE_SESSION_ID")
+    if harness is not None or session is not None:
+        return identity(harness, session)
+    return identity("Codex", os.environ.get("CODEX_THREAD_ID"))
+
+
+def binding_identity(binding):
+    return (identity("Codex", binding["threadId"]) if binding["adapter"] == "codex-desktop"
+            else identity(binding["harness"], binding["sessionId"]))
+
+
+def assert_transferable(review):
+    """Call under the annotation lock so a concurrent claim cannot race a transfer."""
+    if any(item.get("status") in ("claimed", "reviewing") for item in store.handoff_load(review)["items"]):
+        raise ValueError("batch-in-progress: finish the current batch before transferring or unbinding")
+
+
+def bind_wait(review, harness, session, replace=False):
+    review = Path(review).resolve()
+    receiver = identity(harness, session)
+    manifest = ledger.read_manifest(review)
+    if not manifest.get("reviewId"):
+        raise ValueError("review-identity-required")
+    with dispatch_lock(review), store.locked(review):
+        try:
+            previous = load_binding(review)
+        except ValueError:
+            if not replace:
+                raise
+            previous = None
+        if previous and previous["adapter"] == "wait" and binding_identity(previous) == receiver:
+            return previous
+        if previous and not replace:
+            raise ValueError("already-bound: explicit --replace required")
+        assert_transferable(review)
+        binding = {"version": SCHEMA, "adapter": "wait", "bindingId": str(uuid.uuid4()),
+                   "reviewId": manifest["reviewId"], "reviewDir": str(review),
+                   **receiver, "boundAt": store.now_iso()}
+        _write(review / BINDING_FILE, binding)
+        return binding
 
 
 def bind(review, thread, socket_path=None, replace=False):
@@ -162,10 +225,11 @@ def bind(review, thread, socket_path=None, replace=False):
             if not replace:
                 raise
             previous = None
-        if previous and previous["threadId"] == thread and previous["socketPath"] == str(socket_path):
+        if previous and previous["adapter"] == "codex-desktop" and previous["threadId"] == thread and previous["socketPath"] == str(socket_path):
             return previous
         if previous and not replace:
             raise ValueError("already-bound: explicit --replace required")
+        assert_transferable(review)
         binding = {"version": SCHEMA, "adapter": "codex-desktop", "bindingId": str(uuid.uuid4()),
                    "reviewId": manifest["reviewId"], "reviewDir": str(review),
                    "threadId": thread, "socketPath": str(socket_path), "boundAt": store.now_iso()}
@@ -223,13 +287,17 @@ def prompt(binding, event, seq, message_id):
     )
 
 
-def deliver(review, event, seq):
+def deliver(review, event, seq, *, expected_binding=_ANY_BINDING):
     review = Path(review).resolve()
     # Network operations use their own short-lived lock, not the annotation data lock.
     with dispatch_lock(review):
         binding = load_binding(review)
         if not binding:
             raise ValueError("no-agent-binding")
+        if expected_binding is not _ANY_BINDING and binding["bindingId"] != expected_binding:
+            raise ValueError("delivery-binding-changed")
+        if binding["adapter"] != "codex-desktop":
+            raise ValueError("event-adapter-required")
         key = _key(binding, event, seq)
         previous = _deliveries(review)["items"].get(key, {})
         if previous.get("state") in ("accepted", "received", "unconfirmed"):
@@ -293,10 +361,12 @@ def status(review):
     review = Path(review).resolve()
     binding = load_binding(review)
     if not binding:
-        return {"adapter": None, "state": "unconfigured"}
+        return {"adapter": None, "state": "unconfigured", "receiver": receiver_status(review)}
+    if binding["adapter"] == "wait":
+        return {"adapter": "wait", "state": "bound", "receiver": receiver_status(review)}
     items = [v for v in _deliveries(review)["items"].values() if v.get("bindingId") == binding["bindingId"]]
     latest = max(items, key=lambda v: (v.get("seq", 0), v.get("event") == "review"), default={})
-    return {"adapter": binding["adapter"], "state": latest.get("state", "bound"),
+    return {"adapter": binding["adapter"], "state": latest.get("state", "bound"), "receiver": receiver_status(review),
             **{k: latest[k] for k in ("seq", "event", "messageId", "acceptedAt", "receivedAt", "errorCode", "turnId") if k in latest}}
 
 
@@ -307,17 +377,52 @@ def public_status(review):
         return {"adapter": "codex-desktop", "state": "error", "errorCode": "invalid-binding-or-receipt"}
 
 
+def receiver_status(review, active_binding=_ANY_BINDING):
+    """Public receiver metadata. Never return paths, socket addresses or hook commands."""
+    try:
+        binding = load_binding(review)
+        if not binding:
+            return {"state": "restart-required" if active_binding is not _ANY_BINDING and active_binding else "unconfigured"}
+        result = {"bindingId": binding["bindingId"], "adapter": binding["adapter"], **binding_identity(binding)}
+        if active_binding is not _ANY_BINDING and (active_binding or {}).get("bindingId") != binding["bindingId"]:
+            return {**result, "state": "restart-required"}
+        active = [b for b in store.handoff_load(Path(review))["items"] if b.get("status") in ("claimed", "reviewing")]
+        if active:
+            return {**result, "state": "processing"}
+        if binding["adapter"] == "codex-desktop":
+            return {**result, "state": "event"}
+        for path in Path(review).glob(ledger.WAIT_PREFIX + "*.json"):
+            try:
+                mark = _read(path)
+                pid = mark.get("pid")
+                if (not isinstance(pid, int) or pid <= 0 or path.name != ledger.wait_file(review, pid).name
+                        or mark.get("bindingId") != binding["bindingId"]
+                        or {k: mark.get(k) for k in ("harness", "sessionId")} != binding_identity(binding)
+                        or not isinstance(mark.get("expiresAt"), (int, float)) or not time.time() < mark["expiresAt"]):
+                    continue
+                os.kill(pid, 0)
+                return {**result, "state": "waiting"}
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        return {**result, "state": "idle"}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"state": "error"}
+
+
 def hook_command(review, custom=None):
     binding = load_binding(review)
     if binding and custom:
         raise ValueError("saved-agent-binding-conflicts-with-custom-hook")
-    return [sys.executable, str(Path(__file__).resolve()), "deliver", str(Path(review).resolve())] if binding else custom
+    return ([sys.executable, str(Path(__file__).resolve()), "deliver", str(Path(review).resolve())]
+            if binding and binding["adapter"] == "codex-desktop" else custom)
 
 
-def assert_claim_owner(review):
+def assert_claim_owner(review, harness=None, session=None, *, expected_binding=_ANY_BINDING):
     binding = load_binding(review)
-    if binding and os.environ.get("CODEX_THREAD_ID") != binding["threadId"]:
-        raise ValueError("review-bound-to-another-chat: use the bound chat or explicitly unbind")
+    if expected_binding is not _ANY_BINDING and (binding or {}).get("bindingId") != expected_binding:
+        raise ValueError("agent-binding-changed: restart the waiter in the bound session")
+    if binding and caller_identity(harness, session) != binding_identity(binding):
+        raise ValueError("review-bound-to-another-session: use the bound session or explicitly transfer")
 
 
 def main(argv=None):
@@ -327,6 +432,9 @@ def main(argv=None):
         p = sub.add_parser(command)
         p.add_argument("review")
         if command == "bind":
+            p.add_argument("--adapter", choices=("codex-desktop", "wait"), default="codex-desktop")
+            p.add_argument("--harness", default=os.environ.get("AE_HARNESS"))
+            p.add_argument("--session", default=os.environ.get("AE_SESSION_ID"))
             p.add_argument("--thread", default=os.environ.get("CODEX_THREAD_ID"))
             p.add_argument("--socket", type=Path)
             p.add_argument("--replace", action="store_true")
@@ -337,26 +445,36 @@ def main(argv=None):
     args = parser.parse_args(argv)
     review = ledger.resolve_dir(args.review)
     if args.command == "bind":
-        if not args.thread:
-            raise ValueError("thread-required: use --thread or CODEX_THREAD_ID")
-        result = bind(review, args.thread, args.socket, args.replace)
-        result = {"state": "bound", "threadId": result["threadId"], "restartRequired": True}
+        if args.adapter == "wait":
+            result = bind_wait(review, args.harness, args.session, args.replace)
+            result = {"state": "bound", **binding_identity(result), "restartRequired": True}
+        else:
+            if not args.thread:
+                raise ValueError("thread-required: use --thread or CODEX_THREAD_ID")
+            result = bind(review, args.thread, args.socket, args.replace)
+            result = {"state": "bound", "threadId": result["threadId"], "restartRequired": True}
     elif args.command == "check":
         binding = load_binding(review)
         if not binding:
             raise ValueError("no-agent-binding")
-        with contextlib.closing(DesktopIPC(binding["socketPath"])) as ipc:
-            result = {"ownerFound": bool(ipc.owner(binding["threadId"])), "chatReceiptVerified": False}
+        if binding["adapter"] == "wait":
+            result = {"adapter": "wait", "receiver": receiver_status(review), "chatReceiptVerified": False}
+        else:
+            with contextlib.closing(DesktopIPC(binding["socketPath"])) as ipc:
+                result = {"ownerFound": bool(ipc.owner(binding["threadId"])), "chatReceiptVerified": False}
     elif args.command == "ack":
         result = acknowledge(review, args.event, args.seq, args.message_id, os.environ.get("CODEX_THREAD_ID"))
     elif args.command == "deliver":
         payload = json.load(sys.stdin)
         binding = load_binding(review)
-        if not binding or payload.get("app") != "annotation-everything" or payload.get("reviewId") != binding["reviewId"] or Path(payload.get("reviewDir", "")).resolve() != review.resolve():
+        if (not binding or binding["adapter"] != "codex-desktop" or payload.get("bindingId") != binding["bindingId"]
+                or payload.get("app") != "annotation-everything" or payload.get("reviewId") != binding["reviewId"]
+                or Path(payload.get("reviewDir", "")).resolve() != review.resolve()):
             raise ValueError("delivery-event-identity-mismatch")
-        result = deliver(review, payload.get("event"), payload.get("seq"))
+        result = deliver(review, payload.get("event"), payload.get("seq"), expected_binding=payload.get("bindingId"))
     elif args.command == "unbind":
         with dispatch_lock(review), store.locked(review):
+            assert_transferable(review)
             if (review / BINDING_FILE).exists():
                 _read(review / BINDING_FILE)
             (review / BINDING_FILE).unlink(missing_ok=True)

@@ -44,6 +44,7 @@ uv run --no-project --with playwright python tests/e2e_browser.py --skills-only 
 | `english_script_checks`（#34 英文讲稿） | `english-script` | — |
 | `handoff_i18n_checks`（#32 提交 / 复核 / 处理记录双语） | `handoff-i18n` | `--handoff-only` |
 | `current_task_controls_checks`（#81 新增：详情开关、保存失败拦截、停止服务与重启恢复） | `current-task-controls` | — |
+| `receiver_binding_checks`（#84 接收方身份、状态、旧服务与断线） | `receiver-binding` | — |
 | `export_import_checks`（#35 双语导出与跨语言导入） | `export-import` | — |
 | main() 内联段 1（file:// 退回模式） | `file-mode` | — |
 | main() 内联段 2（报告样式保真） | `css-fidelity` | — |

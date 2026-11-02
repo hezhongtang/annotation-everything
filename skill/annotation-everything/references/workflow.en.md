@@ -43,7 +43,9 @@ Scopes accept `all`, `report`, `script`, `style` or their Chinese equivalents. T
 
 ## 4. Start the service and wait
 
-For automatic handling in Codex desktop, first follow the [persistent binding procedure](agent-mechanisms.en.md#codex-desktop-review-scoped-event-delivery), then start the service normally. A bound review restores delivery on restart and must not start the claiming waiter below.
+First bind the current receiving session using [Receiver binding and transfer](receiver-binding.en.md). Supply the bound `--harness` / `--session` or their environment variables when waiting. Codex desktop event mode uses the Agent mechanisms procedure instead of a claiming waiter. Check service connection and receiver identity separately on the page.
+
+For automatic handling in Codex desktop, first follow the [persistent binding procedure](agent-mechanisms.en.md#codex-desktop-review-scoped-event-delivery), then start the service normally. A Codex event binding restores delivery on restart and must not start the claiming waiter below.
 
 ```bash
 python3 "$S/serve.py" "$R" --locale en

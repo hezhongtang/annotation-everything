@@ -19,6 +19,10 @@ Read this file for both workflows. These rules apply in every language. Use the 
 - Preserve exact quotations and requested deletions or replacements. Check the corresponding page on the other side. Apply an explicit paired edit to both sides; for a suggestion, decide whether the other side needs a change and explain the decision.
 - When a decision needs the user, leave the annotation open or return it with a reason. Complete independent changes. Record every completed annotation with `resolve` or a review verdict, then finish with `done --summary`. A batch summary alone does not count annotations as resolved.
 
+## Receiver identity / 接收方身份
+
+Bind a receiving harness and session before configuring receipt. Keep the binding after waiting stops. Claim and update a bound review only as that session; `--by` is attribution. Transfer only after an explicit user decision and after claimed drafting or reviewing batches finish. The matching-language receiver binding reference defines commands and migration. A read-only waiter or a running local service is not proof that a receiving chat is online.
+
 ## Full check / 全量勾稽
 
 If `fullCheck` is true, check the **whole** report and its speaker notes after editing. Check definitions, figures, dates, units, conclusions, charts, and references across pages and between the two sources. In a two-stage process, do this after both the initial edit and the review.
