@@ -945,6 +945,9 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
                 deliverable = False
                 reasons.append(t(checks.locale, "check.reason.blocking",
                                  items="；".join(blocking)))
+            # 改稿待核验项（#75 决策 8）：影响范围没有确认之前，不沿用可交付判定。
+            if deliverable and revision and revision.get("pending"):
+                deliverable = False
         else:
             not_run = [k for k, v in coverage.items() if v != "covered"]
             reasons.append(t(checks.locale, "check.reason.notRun",
@@ -965,6 +968,14 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
                 reasons.append(t(checks.locale, "check.reason.readingBlocked"))
             reasons.append(t(checks.locale, "check.reason.programFailed",
                              items="、".join(checks.name(f["id"]) for f in failed_program)))
+    # 待核验范围与原因始终披露（#75）：即使整体已因其他原因不可交付，
+    # 用户也要知道哪些范围没有核验、为什么。
+    if revision and revision.get("pending"):
+        sep = "；" if checks.locale == "zh-CN" else "; "
+        items = sep.join(f"{x['scope']}（{x['reason']}）" if checks.locale == "zh-CN"
+                         else f"{x['scope']} ({x['reason']})"
+                         for x in revision["pending"])
+        reasons.append(t(checks.locale, "check.reason.revisionPending", items=items))
     scopes: list[dict] = []
     if record is not None:
         for item in record["checks"]:
@@ -1100,6 +1111,19 @@ def render_summary(result: dict) -> str:
         joined = "、".join(dict.fromkeys(scopes)) if loc == "zh-CN" \
             else ", ".join(dict.fromkeys(scopes))
         lines.append("  " + t(loc, "check.scope.line", items=joined))
+    # 改稿维护声明（#75）：本次重新核验的范围与待核验范围，摘要如实披露。
+    rev = result.get("record", {}).get("revision")
+    if rev:
+        sep = "、" if loc == "zh-CN" else ", "
+        names = [t(loc, "check.check." + cid) for cid in rev.get("rechecked", [])]
+        if names:
+            lines.append("  " + t(loc, "check.revision.line", items=sep.join(names)))
+        if rev.get("pending"):
+            pending_sep = "；" if loc == "zh-CN" else "; "
+            items = pending_sep.join(f"{x['scope']}（{x['reason']}）" if loc == "zh-CN"
+                                     else f"{x['scope']} ({x['reason']})"
+                                     for x in rev["pending"])
+            lines.append("  " + t(loc, "check.revision.pendingLine", items=items))
     reading = result.get("reading")
     if reading and (reading["read"] or reading["partial"] or reading["unreadable"]):
         lines.append(t(loc, "check.reading.line", read=reading["read"],

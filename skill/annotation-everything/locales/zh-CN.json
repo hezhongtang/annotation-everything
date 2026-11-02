@@ -1236,6 +1236,20 @@
     "check.err.revisionPending": "待核验项披露不完整：每项需要 scope（范围）与 reason（原因）",
     "check.reason.revisionPending": "改稿后存在待核验范围，未确认前不能判可交付：{items}",
     "check.revision.line": "改稿重新核验：{items}",
-    "check.revision.pendingLine": "待核验：{items}"
+    "check.revision.pendingLine": "待核验：{items}",
+    "check.check.content.requirements": "需求覆盖",
+    "check.check.content.claims": "结论依据与支持",
+    "check.check.content.fact-vs-inference": "事实与推断区分",
+    "check.check.content.units-dates": "日期单位口径",
+    "check.check.content.numbers-charts": "数字与图表",
+    "check.check.content.cross-page": "跨页一致性",
+    "check.check.content.script-consistency": "报告与讲稿一致",
+    "check.check.content.open-questions": "未解决问题影响",
+    "check.check.structure.flow": "叙述顺序",
+    "check.check.structure.headings": "标题与内容",
+    "check.check.structure.claim-support": "结论支撑",
+    "check.check.structure.dup-gaps": "重复与缺口",
+    "check.check.structure.length": "篇幅或时长",
+    "check.check.visual.pages": "逐页视觉"
   }
 }

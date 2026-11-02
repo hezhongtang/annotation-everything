@@ -328,5 +328,55 @@ class RevisionStructureTests(unittest.TestCase):
         self.assertEqual(item["code"], "record.revision-bad")
 
 
+class RevisionPendingTests(unittest.TestCase):
+    """切片 3：无法确认影响范围时如实披露待核验范围与原因，不伪称核验完成。"""
+
+    def pending_record(self, **rev_overrides) -> dict:
+        return compliant_record(revision=revision(**rev_overrides))
+
+    def test_pending_blocks_deliverable_with_reason(self):
+        """待核验项存在：记录声明本身诚实（检查通过），但可交付被拦下并写明范围与原因。"""
+        paths = write_case(tmpdir() / "pending", record=self.pending_record(
+            pending=[{"scope": "第 4–6 页视觉检查", "reason": "共享样式影响范围无法确认"}]))
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        item = check_by_id(payload, "record.revision")
+        self.assertEqual(item["status"], "pass")
+        self.assertFalse(payload["verdict"]["deliverable"])
+        reasons = "；".join(payload["verdict"]["reasons"])
+        self.assertIn("第 4–6 页视觉检查", reasons)
+        self.assertIn("共享样式影响范围无法确认", reasons)
+
+    def test_pending_and_rechecked_coexist(self):
+        """部分范围确认、部分待核验：两边都披露，整体不可交付。"""
+        paths = write_case(tmpdir() / "mixed", record=self.pending_record(
+            rechecked=["content.numbers-charts"],
+            pending=[{"scope": "讲稿第 3 页同步情况", "reason": "讲稿是否也要改无法确认"}]))
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertFalse(payload["verdict"]["deliverable"])
+        self.assertEqual(payload["record"]["revision"]["rechecked"],
+                         ["content.numbers-charts"])
+        _, _, summary, _ = run_check(paths, locale="zh-CN")
+        self.assertIn("数字与图表", summary, "摘要列出重新核验项的本地化检查名")
+        self.assertIn("讲稿第 3 页同步情况", summary)
+        self.assertIn("待核验", summary)
+
+    def test_empty_pending_keeps_deliverable(self):
+        """没有待核验项（pending 为空）：不产生可交付原因。"""
+        paths = write_case(tmpdir() / "cleanrev", record=self.pending_record())
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertTrue(payload["verdict"]["deliverable"])
+        self.assertFalse(any("待核验" in r for r in payload["verdict"]["reasons"]))
+
+    def test_revision_json_language_invariant(self):
+        """revision 的结构化字段语言无关：中英运行结果一致。"""
+        rev = revision(pending=[{"scope": "样式影响页", "reason": "影响范围未知"}])
+        zh_paths = write_case(tmpdir() / "revzh", record=self.pending_record(**rev))
+        en_paths = write_case(tmpdir() / "reven", record=self.pending_record(**rev))
+        _, zh, _, _ = run_check(zh_paths, locale="zh-CN", argv_extra=["--json"])
+        _, en, _, _ = run_check(en_paths, locale="en", argv_extra=["--json"])
+        self.assertEqual(zh["record"]["revision"], en["record"]["revision"])
+        self.assertEqual(zh["verdict"]["deliverable"], en["verdict"]["deliverable"])
+
+
 if __name__ == "__main__":
     unittest.main()

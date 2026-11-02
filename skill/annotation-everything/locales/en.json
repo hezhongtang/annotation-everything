@@ -1346,6 +1346,20 @@
     "check.err.revisionPending": "Pending entries are incomplete: each needs scope and reason",
     "check.reason.revisionPending": "Pending re-verification after revision; not deliverable until confirmed: {items}",
     "check.revision.line": "Rechecked after revision: {items}",
-    "check.revision.pendingLine": "Pending re-verification: {items}"
+    "check.revision.pendingLine": "Pending re-verification: {items}",
+    "check.check.content.requirements": "Requirements coverage",
+    "check.check.content.claims": "Claim support",
+    "check.check.content.fact-vs-inference": "Fact vs inference",
+    "check.check.content.units-dates": "Units and dates",
+    "check.check.content.numbers-charts": "Numbers and charts",
+    "check.check.content.cross-page": "Cross-page consistency",
+    "check.check.content.script-consistency": "Report–script consistency",
+    "check.check.content.open-questions": "Open questions",
+    "check.check.structure.flow": "Narrative flow",
+    "check.check.structure.headings": "Headings match content",
+    "check.check.structure.claim-support": "Claim support on page",
+    "check.check.structure.dup-gaps": "Duplication and gaps",
+    "check.check.structure.length": "Length",
+    "check.check.visual.pages": "Page-by-page visual"
   }
 }
