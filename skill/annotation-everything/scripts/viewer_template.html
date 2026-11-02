@@ -1281,11 +1281,12 @@ function receiverText(r){
   if(!r||!r.harness||!r.sessionId)return state;
   const id=String(r.sessionId),short=id.length>16?id.slice(0,8)+"…"+id.slice(-4):id;
   return tMsg("viewer.receiver.identity",{harness:r.harness,session:short,state})}
+function handReceiverText(){const changed=(handDestination&&handDestination.bindingId)!==(receiver&&receiver.bindingId);
+  return receiverText(changed?handDestination:receiver)+(changed?" · "+tMsg("viewer.receiver.changed"):"")}
 function renderReceiver(){const el=$("receiver");el.textContent=receiverText(receiver);
   el.title=receiver&&receiver.sessionId?tMsg("viewer.receiver.full",{harness:receiver.harness,session:receiver.sessionId}):el.textContent;
   el.className=mode!=="server"||!receiver||["unconfigured","restart-required","error"].includes(receiver.state)?"warn":"";
-  if($("hand").classList.contains("on"))$("handReceiver").textContent=receiverText(handDestination)
-    +((handDestination&&handDestination.bindingId)!==(receiver&&receiver.bindingId)?" · "+tMsg("viewer.receiver.changed"):"")}
+  if($("hand").classList.contains("on"))$("handReceiver").textContent=handReceiverText()}
 function renderDelivery(){const el=$("agentDelivery"),a=agentDelivery,L=hand&&hand.latest;
   if(a&&a.adapter==="wait"){el.textContent="";el.title="";return}
   const event=L&&["review","reviewing"].includes(L.status)?"review":"handoff";
@@ -1322,7 +1323,7 @@ function renderHandDrafts(){const ds=handMode?[]:draftedBatches();
     :`<div class="hd"><span>${tMsg("viewer.hand.drafts.drafted",{seq:+h.seq,n:+h.draftedCount||0})}</span><button data-hreview="${+h.seq}">${tMsg("viewer.hand.drafts.reviewBtn")}</button><button data-hfinal="${+h.seq}">${tMsg("viewer.hand.drafts.finalize")}</button></div>`).join("")}
 // 弹窗里的文字单独重画：切语言时按当前语言再写一遍，不重新提交、不改选项、不请求新接口
 function paintHand(){
-  $("handReceiver").textContent=receiverText(handDestination);
+  $("handReceiver").textContent=handReceiverText();
   $("handTitle").textContent=handMode?tMsg("viewer.hand.reviewTitle",{seq:handMode.seq}):tMsg("viewer.hand.title");
   $("doHandLabel").textContent=handMode?tMsg("viewer.hand.requestReview"):tMsg("viewer.hand.submit");
   $("hTargetRow").style.display=handMode||srvNoStages?"none":"";$("hSubRow").style.display=srvNoStages?"none":"";

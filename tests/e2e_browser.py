@@ -285,10 +285,15 @@ def receiver_binding_checks(browser, tmp: Path):
         page.select_option("#localePick", "zh-CN")
         waiter = start_waiter()
         ok(wait_dom(page, waiting, 8), "下次等待仍归原会话")
+        page.click("#handBtn")
+        ok("等待中" in page.inner_text("#handReceiver"), "提交窗口显示当前等待状态")
         stop(waiter)
         waiter = None
         ok(wait_dom(page, "() => document.getElementById('receiver').textContent.includes('未等待')", 8)
            and "Claude Code" in page.inner_text("#receiver"), "停止等待不解除绑定、不自动改接收方")
+        ok(wait_dom(page, "() => document.getElementById('handReceiver').textContent.includes('未等待')", 4),
+           "同一绑定停止等待后，已打开的提交窗口也更新接收状态")
+        page.keyboard.press("Escape")
         stop(srv)
         ok(wait_mode(page, "offline", 12) and "待确认" in page.inner_text("#receiver"), "服务断开后不沿用在线状态")
         srv = start_server(d, port)
