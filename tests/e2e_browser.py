@@ -25,6 +25,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -1926,6 +1927,163 @@ def css_fidelity_checks(browser, tmp: Path):
 
 
 
+def generated_draft_checks(browser, tmp: Path):
+    """场景 generated-draft-loop：默认范式初稿闭环（详见 e2e_scenarios 注册表）。
+
+    确定性的产品流程验证：安装副本的公开核验入口放行初稿、对照页接受带基础
+    样式的产物、批注在页序调整后按稳定页面键找回。不冒充实际模型的生成质量
+    评测（那由 evals/ 的技能评测覆盖）。
+    """
+    installed = tmp / "installed-skills" / "annotation-everything"
+    env = {**os.environ, "CLAUDE_SKILLS_DIR": str(installed.parent)}
+    subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"],
+                   env=env, check=True, capture_output=True, text=True, timeout=60)
+    scripts = installed / "scripts"
+    case = tmp / "draft-case"
+    case.mkdir(parents=True)
+
+    base_css = (scripts.parent / "references" / "report-base.css").read_text(encoding="utf-8")
+    head_html = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+                 "<title>季度经营回顾初稿</title><style>" + base_css + "</style></head><body>")
+    sec_sum = ('<section class="page" data-page="1" data-key="sum" id="page-sum">'
+               "<h2>结论：收入同比增长 12%</h2><p class=\"ae-kpi\">+12%</p>"
+               '<p>新开 3 家门店贡献主要增量。</p>'
+               '<p class="ae-source">materials/q3-notes.md 第 2 节</p></section>')
+    sec_rev = ('<section class="page" data-page="2" data-key="rev" id="page-rev">'
+               "<h2>收入结构</h2>"
+               "<table><tr><th>渠道</th><th>上季</th><th>本季</th></tr>"
+               "<tr><td>堂食</td><td>66%</td><td>62%</td></tr>"
+               "<tr><td>外卖</td><td>34%</td><td>38%</td></tr></table></section>")
+    sec_next = ('<section class="page" data-page="3" data-key="next" id="page-next">'
+                "<h2>下一步</h2><p>两件事。</p>"
+                '<p class="ae-gap">十月周报缺失，待补充后复核结论。</p></section>')
+    tail_html = "</body></html>"
+    script_md = ("# 讲稿：季度经营回顾初稿\n\n"
+                 "### 第 1 页｜结论\n**讲法**：\n先说结论：收入同比增长 12%。\n"
+                 "### 第 2 页｜收入结构\n**讲法**：\n外卖占比继续上升。\n"
+                 "### 第 3 页｜下一步\n**讲法**：\n两件事。\n")
+    report, script = case / "report.html", case / "script.md"
+    report.write_text(head_html + sec_sum + sec_rev + sec_next + tail_html, encoding="utf-8")
+    script.write_text(script_md, encoding="utf-8")
+
+    def sha(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    record = {
+        "schema": "ae-report-record/1",
+        "generatedAt": "2026-11-02T09:00:00+08:00",
+        "request": {"purpose": "季度经营汇报", "audience": "管理层",
+                    "coreQuestions": ["收入为什么增长"], "length": "3 页", "script": "yes"},
+        "sources": [{"path": "materials/q3-notes.md", "status": "read",
+                     "coverage": "全文", "note": ""}],
+        "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
+                   "version": "0.9.0", "unavailable": []},
+        "links": {"report": "report.html", "script": "script.md",
+                  "sha256": {"report": sha(report), "script": sha(script)},
+                  "sourceNote": "materials/q3-notes.md"},
+        "findings": [{"claim": "收入同比增长 12%", "type": "calculation",
+                      "sources": ["materials/q3-notes.md"], "pages": ["sum"],
+                      "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 112},
+                                      "expected": 12},
+                      "note": "口径：对上年同期"}],
+        "gaps": ["十月周报缺失"],
+        "openItems": [{"item": "提价幅度待定", "blocking": False}],
+        "checks": [{"id": "content.requirements", "kind": "content", "status": "not_run",
+                    "scope": "全部需求", "note": ""},
+                   {"id": "visual.pages", "kind": "visual", "status": "not_run",
+                    "scope": "全部 3 页", "note": ""}],
+        "verdict": {"draftComplete": True, "deliverable": None},
+    }
+    record_path = case / "report-record.json"
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    def cli(tool, *args, expect=0):
+        done = subprocess.run([sys.executable, str(scripts / tool), *map(str, args)],
+                              env=env, capture_output=True, text=True, timeout=60)
+        if expect is not None:
+            assert done.returncode == expect, \
+                f"{tool} 退出码 {done.returncode}（期望 {expect}）：{done.stderr or done.stdout}"
+        return done
+
+    # 公开核验入口：初稿通过，可交付未被支持（内容与视觉核验未执行）
+    checked = json.loads(cli("report_check.py", str(report), "--script", str(script),
+                             "--record", str(record_path), "--locale", "zh-CN",
+                             "--json").stdout)
+    ok(checked["schema"] == "ae-report-check/1", "核验入口输出 ae-report-check/1 结构化结果")
+    ok(checked["verdict"]["draftComplete"] is True, "初稿生成判定为完成")
+    ok(checked["verdict"]["deliverable"] is False, "未执行内容与视觉核验时不支持可交付")
+    ok(checked["coverage"]["content"] == "not_run" and checked["coverage"]["visual"] == "not_run",
+       "覆盖情况如实显示未执行")
+    ok(checked["record"]["fresh"] is True, "记录与当前产物对应（新鲜度通过）")
+
+    review = case / "q3-review"
+    cli("build_viewer.py", "--report", str(report), "--script", str(script),
+        "--out", str(review), "--name", "季度回顾初稿", "--no-scan-skills")
+    rid_before = json.loads((review / "review.json").read_text(encoding="utf-8"))["reviewId"]
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="对照页进入服务模式")
+        page_count = page.locator("#jump option").count()
+        ok(page_count == 3, f"带基础样式的三页报告进入对照页（{page_count} 页）")
+        colors = page.evaluate(
+            "() => { const r = document.getElementById('host').shadowRoot;"
+            "  const h = r.querySelector('.page h1, .page h2');"
+            "  const k = r.querySelector('.ae-kpi');"
+            "  return [getComputedStyle(h).color, k ? getComputedStyle(k).color : null]; }")
+        ok(colors[0] == "rgb(31, 41, 51)", f"基础样式正文色生效（{colors[0]}）")
+        ok(colors[1] == "rgb(154, 52, 18)", f"基础样式 KPI 强调色生效（{colors[1]}）")
+        go_page(page, 2)
+        go_page(page, 3)
+        ok(page.evaluate(
+            "() => { const r = document.getElementById('host').shadowRoot;"
+            "  return Boolean(r.querySelector('.ae-gap')); }"), "缺口标记随报告进入页面")
+        go_page(page, 2)
+        annotation = "外卖占比的数字加同比说明"
+        add_note(page, annotation, pin=(0.5, 0.4))
+        ok(wait_until(lambda: len(disk_notes(review)) == 1, page, 5), "批注自动落盘")
+        ok(disk_notes(review)[0]["key"] == "rev" and disk_notes(review)[0]["page"] == 2,
+           "批注关联稳定页面键 rev")
+    finally:
+        stop(server)
+        ctx.close()
+
+    # 页序调整（next 提到第 2 页，rev 退到第 3 页）后重建：真实改稿按新页序重写报告文档
+    # （data-page 跟着新位置更新），讲稿同步；批注按 key 找回，审阅标识不变
+    sec_next_2 = sec_next.replace('data-page="3"', 'data-page="2"')
+    sec_rev_3 = sec_rev.replace('data-page="2"', 'data-page="3"')
+    report.write_text(head_html + sec_sum + sec_next_2 + sec_rev_3 + tail_html, encoding="utf-8")
+    reordered_script = script_md.replace(
+        "### 第 2 页｜收入结构\n**讲法**：\n外卖占比继续上升。\n"
+        "### 第 3 页｜下一步\n**讲法**：\n两件事。\n",
+        "### 第 2 页｜下一步\n**讲法**：\n两件事。\n"
+        "### 第 3 页｜收入结构\n**讲法**：\n外卖占比继续上升。\n")
+    script.write_text(reordered_script, encoding="utf-8")
+    cli("build_viewer.py", "--rebuild", str(review))
+    rid_after = json.loads((review / "review.json").read_text(encoding="utf-8"))["reviewId"]
+    ok(rid_after == rid_before, "重建后审阅标识不变")
+    note = disk_notes(review)[0]
+    ok(note["key"] == "rev" and note["page"] == 3,
+       f"批注按页面键校正到新页码（key={note['key']} page={note['page']}）")
+
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="重建后的对照页再次进入服务模式")
+        go_page(page, 3)   # 批注列表按当前页过滤：翻到批注所在的新页码
+        ok(wait_until(lambda: annotation in page.locator("#nlist").inner_text(), page, 5),
+           "重建后批注卡片可见且内容完整")
+    finally:
+        stop(server)
+        ctx.close()
+
+
 def server_mode_checks(browser, tmp: Path):
     """场景 server-mode：服务模式全流程与恢复、离线、安全边界（详见 e2e_scenarios 注册表）。"""
     import_md = server_import_export_fixture(tmp)
@@ -2575,6 +2733,7 @@ const T = "http://127.0.0.1:{port}";
 
 
 SCENARIO_RUNNERS = {
+    "generated-draft-loop": generated_draft_checks,
     "installed-delivery": installed_delivery_checks,
     "locale-live-controls": locale_live_controls_checks,
     "skill-search": skill_search_checks,

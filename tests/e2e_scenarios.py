@@ -28,6 +28,14 @@ class Scenario:
 
 SCENARIOS: list[Scenario] = [
     Scenario(
+        id="generated-draft-loop",
+        title="默认范式初稿闭环：安装副本上的核验入口放行初稿、对照页吃进带基础样式的产物、"
+              "批注落盘后页序调整再重建，批注按稳定页面键找回且审阅标识不变",
+        fixture="ae.py install 装进合成 HOME 的临时副本；按范式合成的三页报告（内联 report-base.css）、"
+                "讲稿与 ae-report-record/1 核验记录；独立 AE_HOME，不碰真实台账",
+        isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
+    ),
+    Scenario(
         id="installed-delivery",
         title="从唯一的临时安装副本完成英文、中文、中英混合三种语言组合的真实审阅流程",
         fixture="ae.py install 装进合成 HOME 的临时副本；fixtures/sample 合成报告与讲稿；"
