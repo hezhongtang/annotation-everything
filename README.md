@@ -103,6 +103,14 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
 Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lang=… -->`），声明格式版本和内容语言，解析按它选中文或英文文法，与导入界面的语言无关——中文导出在英文页面、英文导出在中文页面都能导入，落库的协议值一致。导出的语言可以在面板里选，默认跟随界面；命令行用 `notes.py export --lang en`。用户正文、引用、处理说明和技能名称保持原文，只有系统包装文字翻译。没有标记的旧中文导出照读；认不出的文字会明确提示。旧版工具读不懂英文导出，会提示升级而不是猜。命令行同样能导出：`notes.py export 审阅目录 [--lang zh-CN|en] [--format json]`。
 </details>
 
+### 从材料生成初稿与报告核验
+
+还没有报告时，可将原始材料与需求交给 Agent，按随技能安装的[内置生成范式](skill/annotation-everything/references/generation.zh-CN.md)生成逐页 HTML 报告和可选讲稿。已明确的需求直接沿用，只补问影响结果的缺项；默认提供[报告基础样式](skill/annotation-everything/references/report-base.css)。用户指定可用的外部生成技能，或任务需要扩展时，可以采用外部方法，产物接受相同核验，并记录实际采用的方法。
+
+材料读取依赖宿主实际可用的能力。Agent 登记已读、部分读取或无法读取的范围与原因，保留关键结论、数值的引用和计算口径；缺口如实披露，全部实质材料不可读时不能宣布初稿完成。报告、所需讲稿与 `report-record.json` 核验记录保存在受控材料位置，记录契约和操作步骤见生成指引。
+
+「初稿生成完成」与「报告可交付」分别判定：内容可读、结构完整、可审阅且缺口已披露，可以形成初稿；可交付还须通过程序检查和内容、结构、视觉核验，影响核心结论的缺口会阻止交付验收。`report_check.py` 提供结构化结果与可读摘要，只执行确定规则；内容判断与逐页视觉检查由 Agent 实际执行，未执行、无法执行或过期的结果不计为通过。已有报告没有核验记录时仍可直接审阅，无需补建；带记录的报告改稿后维护受影响的核验信息，报告质量判定与批注处理状态分别保留。
+
 ### 语言与 Agent 操作指引
 
 只需安装一个技能副本。中文请求（如「按批注改」）和英文请求（如 “review this report” 或 “apply my annotations”）都由同一个 `annotation-everything` 入口处理，再按请求语言加载[中文流程](skill/annotation-everything/references/workflow.zh-CN.md)或[英文流程](skill/annotation-everything/references/workflow.en.md)。两种流程先读取同一份[安全与协议约束](skill/annotation-everything/references/protocol.md)，涵盖停在待复核、子代理权限、全量勾稽的证据和不确定性要求；无需按语言重复安装。
@@ -271,7 +279,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 **3. 准备自己的材料**
 
 - **报告**：一份 HTML 文件，每一页是一个 `<section class="page" data-page="N" data-key="唯一键">` 元素。
-- **讲稿**：一份 Markdown 文件，中文用 `### 第 N 页｜标题` 分页，每页写明时长、讲法、过渡和可能被问到的问题；英文讲稿写 `### Page N｜Title` 加 `**Duration**` / `**Talking points**` / `**Transition**` / `**Likely questions**`。两种写法可以在同一份讲稿里混用，认哪种写法与界面语言无关：中文界面能审阅英文讲稿，英文界面能审阅中文讲稿，标题和正文按原文保留、不翻译。页头认不出来、页码重复或字段重复时，生成器按当前语言给出行号与期望写法，不把错输入当成空讲稿。
+- **讲稿（可选）**：一份 Markdown 文件，中文用 `### 第 N 页｜标题` 分页，每页写明时长、讲法、过渡和可能被问到的问题；英文讲稿写 `### Page N｜Title` 加 `**Duration**` / `**Talking points**` / `**Transition**` / `**Likely questions**`。两种写法可以在同一份讲稿里混用，认哪种写法与界面语言无关：中文界面能审阅英文讲稿，英文界面能审阅中文讲稿，标题和正文按原文保留、不翻译。页头认不出来、页码重复或字段重复时，生成器按当前语言给出行号与期望写法，不把错输入当成空讲稿。
 
 完整格式见 [references/formats.md](skill/annotation-everything/references/formats.md)。
 
@@ -282,7 +290,8 @@ python3 $S/notes.py wait /tmp/ae-demo
 |---|---|
 | `ae.py install` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；修复体检发现的问题（先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。四个子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
 | `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照；`report` 只读记录。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
-| `build_viewer.py --report … --script … --out 审阅目录` | 生成对照页；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
+| `build_viewer.py --report … [--script …] --out 审阅目录` | 生成对照页；讲稿可选；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
+| `report_check.py 报告.html [--script 讲稿.md] [--record report-record.json]` | 公开报告核验入口：输出可读摘要，`--json` 输出结构化结果，`--locale zh-CN` 或 `en` 选择语言。退出码 0 表示程序检查通过，不等于报告可交付；1 表示检查未通过；2 表示输入或用法错误。内容、结构与视觉覆盖及交付阻塞项分别列出 |
 | `serve.py 审阅目录` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
 | `serve.py list` / `status` / `forget` | 列出本机所有审阅、查看某份审阅的状态、删除不再使用的台账记录 |
 | `serve.py check` | 运行服务安全自检 |
@@ -318,6 +327,9 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── protocol.md               共用安全、停止条件与协议约束
 │   ├── workflow.zh-CN.md          中文操作流程
 │   ├── workflow.en.md             英文操作流程
+│   ├── generation.zh-CN.md        中文生成范式、核验清单与记录契约
+│   ├── generation.en.md           英文生成范式、核验清单与记录契约
+│   ├── report-base.css            逐页 HTML 报告的基础样式
 │   ├── agent-mechanisms.zh-CN.md  各 Agent 的等待、技能调用与分派机制
 │   ├── agent-mechanisms.en.md     英文 Agent 机制对照
 │   ├── formats.md                 中文输入与输出格式
@@ -325,6 +337,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 ├── locales/                       中英消息（zh-CN.json、en.json）和语言选择契约
 ├── scripts/
 │   ├── build_viewer.py            生成对照页 index.html 和 review.json
+│   ├── report_check.py            报告产物核验：确定规则、覆盖与交付判定
 │   ├── i18n.py                    读取共享词典，并按所选语言插值
 │   ├── viewer_template.html       对照页模板（服务模式和本地文件模式）
 │   ├── serve.py                   本机服务：serve / status / list / forget / check
@@ -335,7 +348,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── match.py                   在报告与讲稿之间查找对应句子
 │   ├── skill_sources.py           发现本机的技能目录
 │   └── check_pptx_fonts.py        PPTX 与 PDF 字体核查
-└── evals/                         技能评测用例（供 skill-creator 使用）
+└── evals/                         技能评测用例，含生成、核验与改稿（供 skill-creator 使用）
 ae.py                             统一管理命令：install 安装技能副本，doctor 体检，repair 修复，uninstall 卸载
 verify.py                         统一验证入口：plan 解释范围，run 执行并记录，report 只读记录
 verify_selection.py               阶段选测与影子对照策略：版本化映射、保守回退与遗漏对照

@@ -142,6 +142,9 @@ def compliant_record(method: dict | None = None, **overrides) -> dict:
 def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
                record: dict | None = None) -> dict:
     d.mkdir(parents=True, exist_ok=True)
+    if not (d / "materials" / "notes.md").exists():
+        (d / "materials").mkdir(exist_ok=True)
+        (d / "materials" / "notes.md").write_text(MATERIAL, encoding="utf-8")
     paths = {"report": d / "report.html"}
     paths["report"].write_text(report, encoding="utf-8")
     if script is not None:

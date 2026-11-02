@@ -162,9 +162,12 @@ def compliant_record(**overrides) -> dict:
 
 def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
                record: dict | None = None, record_text: str | None = None,
-               report_name: str = "report.html") -> dict:
+               report_name: str = "report.html", material: bool = True) -> dict:
     """把合成产物写进临时目录；返回各文件路径。"""
     d.mkdir(parents=True, exist_ok=True)
+    if material and not (d / "materials" / "q3-notes.md").exists():
+        (d / "materials").mkdir(exist_ok=True)
+        (d / "materials" / "q3-notes.md").write_text(MATERIAL, encoding="utf-8")
     paths = {"report": d / report_name}
     paths["report"].write_text(report, encoding="utf-8")
     if script is not None:
@@ -551,6 +554,109 @@ class ClaimSupportTests(unittest.TestCase):
         self.assertFalse(payload["verdict"]["deliverable"])
 
 
+class ReviewBoundaryTests(unittest.TestCase):
+    """公开核验入口不能因错误记录崩溃，或用无法核对的证据支持交付。"""
+
+    def setUp(self):
+        self.directory = tmpdir()
+        material = self.directory / "materials" / "q3-notes.md"
+        material.parent.mkdir()
+        material.write_text(MATERIAL, encoding="utf-8")
+
+    def check(self, record):
+        paths = write_case(self.directory, record=record)
+        return run_check(paths, locale="zh-CN", argv_extra=["--json"])
+
+    def test_sum_uses_numeric_inputs_and_reports_mismatch(self):
+        for expected, status in ((212, "pass"), (213, "fail")):
+            with self.subTest(expected=expected):
+                record = compliant_record()
+                record["findings"][0]["calculation"].update(op="sum", expected=expected)
+                code, payload, _, _ = self.check(record)
+                self.assertEqual(code, int(status == "fail"))
+                self.assertEqual(check_by_id(payload, "record.calculations")["status"], status)
+
+    def test_malformed_nested_mappings_return_structured_error(self):
+        for field, value in (("hash", None), ("hash", []), ("hash", "bad"),
+                             ("source", []), ("source", {}), ("source", "materials/\0.md"),
+                             ("citations", 1), ("check", []), ("unavailable", 1)):
+            with self.subTest(field=field, value=value):
+                record = compliant_record()
+                if field == "hash":
+                    record["links"]["sha256"] = value
+                elif field == "source":
+                    record["sources"][0]["path"] = value
+                elif field == "check":
+                    record["checks"][0]["id"] = value
+                elif field == "unavailable":
+                    record["method"]["unavailable"] = value
+                else:
+                    record["findings"][0]["sources"] = value
+                code, payload, _, _ = self.check(record)
+                self.assertEqual(code, 1)
+                self.assertFalse(payload["verdict"]["deliverable"])
+
+    def test_supported_claim_needs_refs_sources_and_checking_basis(self):
+        for field in ("refs", "sources", "basis"):
+            for value in (None, [], ""):
+                with self.subTest(field=field, value=value):
+                    record = compliant_record()
+                    if value is None:
+                        del record["findings"][0][field]
+                    else:
+                        record["findings"][0][field] = value
+                    _, payload, _, _ = self.check(record)
+                    self.assertFalse(payload["verdict"]["deliverable"])
+                    self.assertNotEqual(payload["coverage"]["content"], "covered")
+
+    def test_reference_must_match_its_registered_source(self):
+        record = compliant_record()
+        record["findings"][0]["refs"][0]["path"] = "materials/unregistered.md"
+        code, payload, _, _ = self.check(record)
+        self.assertEqual(code, 1)
+        self.assertEqual(check_by_id(payload, "record.claims")["code"], "record.claim-unlocatable")
+        self.assertFalse(payload["verdict"]["deliverable"])
+
+    def test_lost_source_preserves_draft_but_invalidates_delivery(self):
+        record = compliant_record()
+        paths = write_case(self.directory, record=record)
+        _, before, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertTrue(before["verdict"]["deliverable"])
+        (self.directory / "materials" / "q3-notes.md").unlink()
+        code, after, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        self.assertTrue(after["verdict"]["draftComplete"])
+        self.assertEqual(after["coverage"]["content"], "unverified")
+        self.assertFalse(after["verdict"]["deliverable"])
+
+    def test_supplied_script_needs_matching_hash(self):
+        for absent in (True, False):
+            with self.subTest(absent=absent):
+                record = compliant_record()
+                if absent:
+                    del record["links"]["sha256"]["script"]
+                else:
+                    record["links"]["sha256"]["script"] = None
+                _, payload, _, _ = self.check(record)
+                self.assertTrue(payload["verdict"]["draftComplete"])
+                self.assertFalse(payload["verdict"]["deliverable"])
+                self.assertFalse(payload["record"]["fresh"])
+
+    def test_calculations_reject_nonfinite_and_out_of_range_numbers(self):
+        for field in ("input", "expected"):
+            for value in (float("nan"), float("inf"), 10 ** 1000, True):
+                with self.subTest(field=field, value=repr(value)[:20]):
+                    record = compliant_record()
+                    calculation = record["findings"][0]["calculation"]
+                    if field == "input":
+                        calculation["inputs"]["a"] = value
+                    else:
+                        calculation["expected"] = value
+                    code, payload, _, _ = self.check(record)
+                    self.assertEqual(code, 1)
+                    self.assertEqual(check_by_id(payload, "record.calculations")["code"], "record.calc-bad")
+
+
 class CalculationTests(unittest.TestCase):
     """明确声明输入与口径的可复算数值：复算一致通过，不一致明确报错。"""
 
@@ -701,7 +807,7 @@ class SourceAssociationTests(unittest.TestCase):
         d = tmpdir()
         # compliant_record 声明了 sha256，但报告旁没有该材料文件：无法对应要提示，
         # 不能静默通过，也不由本入口武断失败（材料不在检查边界内）
-        paths = write_case(d, record=compliant_record())
+        paths = write_case(d, record=compliant_record(), material=False)
         code, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0)
         self.assertEqual(check_by_id(payload, "record.sources")["status"], "pass")

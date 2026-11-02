@@ -103,6 +103,14 @@ When no agent is waiting, you can copy all annotations from the All annotations 
 The first line of the Markdown is a format marker (`<!-- annotation-everything export v1 lang=… -->`) that names the format version and the content language, so parsing picks the Chinese or English grammar from the file itself and never from the language of the importing interface: a Chinese export imports in an English page and an English export imports in a Chinese page, and both land with the same stored values. The export language can be picked in the panel (following the interface by default) or on the command line with `notes.py export --lang en`. Annotation text, quotes, resolution notes and skill names stay as written; only the surrounding wording is translated. Exports without the marker are read as the older Chinese format, and text that matches nothing gets a clear message instead of a guess. Older tools cannot read an English export and are told to upgrade rather than left to guess. The command line exports the same way: `notes.py export <review-dir> [--lang zh-CN|en] [--format json]`.
 </details>
 
+### Drafting from source material and verifying reports
+
+When no report exists yet, give the agent your source material and requirements. The agent follows the [built-in generation guide](skill/annotation-everything/references/generation.en.md), shipped with the skill, to produce a page-by-page HTML report and optional speaker notes. It reuses requirements already supplied, asks only about missing details that affect the result, and uses the supplied [base report stylesheet](skill/annotation-everything/references/report-base.css) by default. When you name an available external generation skill, or the task needs an extension, an external method can be used. Its output receives the same verification, and the method actually used is recorded.
+
+Reading source material depends on the host's available capabilities. The agent records what was read, partly read or unreadable, including the scope and reasons, and preserves citations and calculation definitions for key claims and figures. Gaps are disclosed; if all substantive material is unreadable, the draft cannot be declared complete. The report, requested speaker notes and `report-record.json` verification record stay beside the controlled source material. The generation guide defines the record and the workflow.
+
+“Draft complete” and “Report deliverable” are separate verdicts. Readable, structured material with disclosed gaps can form a reviewable draft. Delivery also requires program checks and content, structure and visual verification; gaps affecting core conclusions block delivery. `report_check.py` provides structured results and a readable summary, and checks deterministic rules only. The agent performs the content judgments and page-by-page visual checks; unperformed, unavailable or stale checks never count as passed. Existing reports without a record can still enter review directly, with no backfill required. Revisions to reports with a record maintain the affected verification info, while report quality stays separate from annotation-processing status.
+
 ### Language and agent guides
 
 One skill copy handles Chinese requests such as “按批注改” and English requests such as “review this report” or “apply my annotations”. The same `annotation-everything` entry point loads the [Chinese workflow](skill/annotation-everything/references/workflow.zh-CN.md) or [English workflow](skill/annotation-everything/references/workflow.en.md) on demand. Both read one [shared safety and protocol reference](skill/annotation-everything/references/protocol.md), including the stop before review, subagent permission, and evidence and uncertainty requirements for a full check. No language-specific installation is needed.
@@ -271,7 +279,7 @@ For Chinese material, use `fixtures/sample/report.html` and `fixtures/sample/scr
 **3. Prepare your own material**
 
 - **Report**: one HTML file in which every page is a `<section class="page" data-page="N" data-key="unique-key">` element.
-- **Speaker notes**: one Markdown file split into pages by `### 第 N 页｜标题` headings ("page N | title"), giving the duration, talking points, transition and likely questions for each page. English notes use `### Page N｜Title` with `**Duration**`, `**Talking points**`, `**Transition**` and `**Likely questions**` instead. Both forms may be mixed in one file, and which form is recognized does not depend on the interface language: a Chinese interface reviews English notes and an English interface reviews Chinese notes, with titles and body text kept exactly as written. When a heading cannot be recognized, a page number repeats or a field repeats, the builder reports the line number and the expected form in the current language instead of treating the input as an empty script.
+- **Speaker notes (optional)**: one Markdown file split into pages by `### 第 N 页｜标题` headings ("page N | title"), giving the duration, talking points, transition and likely questions for each page. English notes use `### Page N｜Title` with `**Duration**`, `**Talking points**`, `**Transition**` and `**Likely questions**` instead. Both forms may be mixed in one file, and which form is recognized does not depend on the interface language: a Chinese interface reviews English notes and an English interface reviews Chinese notes, with titles and body text kept exactly as written. When a heading cannot be recognized, a page number repeats or a field repeats, the builder reports the line number and the expected form in the current language instead of treating the input as an empty script.
 
 See the [English format reference](skill/annotation-everything/references/formats.en.md) for the full input and output formats.
 
@@ -282,7 +290,8 @@ See the [English format reference](skill/annotation-everything/references/format
 |---|---|
 | `ae.py install` / `doctor` / `repair` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--target <dir>` for another skills root; `--link codex,agents,zcode` or `name=path` symlinks it into other agents' skill directories); check installation, runtime, optional tools and dev environment (`--json` for structured output); repair what the checks find (prints a plan first, fixes safe items automatically, `--forget-stale`/`--stop-orphans` run the destructive ones explicitly, `--dry-run` only prints); uninstall removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first). All four subcommands accept `--target <dir>` to locate a custom copy |
 | `verify.py plan` / `run` / `report` | Unified verification entry run from the repository root: `plan` explains the groups and commands without starting anything (`plan --phase development` also shows what the current changes should run, why, and when it falls back to the full check); `run` executes and writes structured records plus raw logs into `.verify/` (git-ignored), and records the shadow comparison between the suggested selection and the full gate by default; `report` only reads records. Groups: `unit` (full unit), `unit-related` (explicitly named cases, always augmented with the global dictionary contract in `tests/test_i18n_catalog_contract.py`), `browser` (full browser), `serve-check` (server security self-check), `all` (runs `unit` → `serve-check` → `browser` in order). Field contract: [docs/verify/record-contract.md](docs/verify/record-contract.md), selection strategy: [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
-| `build_viewer.py --report … --script … --out <review-dir>` | Build the review page; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
+| `build_viewer.py --report … [--script …] --out <review-dir>` | Build the review page with optional speaker notes; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
+| `report_check.py report.html [--script script.md] [--record report-record.json]` | Public report verification entry: a readable summary by default, structured results with `--json`, and `--locale en` or `zh-CN` for the language. Exit 0 means program checks passed, not that the report is deliverable; 1 means checks failed; 2 means an input or usage error. Content, structure and visual coverage and delivery blockers are listed separately |
 | `serve.py <review-dir>` | Start the local server; each review keeps its own dedicated port |
 | `serve.py list` / `status` / `forget` | List every review on this machine, show one review's status, remove a ledger entry you no longer need |
 | `serve.py check` | Run the server's security self-check |
@@ -318,6 +327,9 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── protocol.md               shared safety, stop conditions, and protocol
 │   ├── workflow.zh-CN.md          Chinese workflow
 │   ├── workflow.en.md             English workflow
+│   ├── generation.zh-CN.md        Chinese generation guide, checklists and record contract
+│   ├── generation.en.md           English generation guide, checklists and record contract
+│   ├── report-base.css            base stylesheet for page-by-page HTML reports
 │   ├── agent-mechanisms.zh-CN.md  Chinese agent mechanism reference
 │   ├── agent-mechanisms.en.md     English agent mechanism reference
 │   ├── formats.md                 Chinese input and output formats
@@ -325,6 +337,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 ├── locales/                       Chinese and English messages (zh-CN.json, en.json) and the locale contract
 ├── scripts/
 │   ├── build_viewer.py            builds the review page index.html and review.json
+│   ├── report_check.py            report verification: deterministic rules, coverage and delivery verdict
 │   ├── i18n.py                    loads the shared catalogs and fills in the chosen language
 │   ├── viewer_template.html       review page template (server mode and local file mode)
 │   ├── serve.py                   local server: serve / status / list / forget / check
@@ -335,7 +348,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── match.py                   finds matching sentences between the report and the speaker notes
 │   ├── skill_sources.py           discovers skill directories on this machine
 │   └── check_pptx_fonts.py        PPTX and PDF font check
-└── evals/                         skill evaluation cases (used with skill-creator)
+└── evals/                         skill evaluations, including generation, verification and revisions (used with skill-creator)
 ae.py                             unified management command: install the skill copy, doctor checks it, repair fixes it, uninstall removes it
 verify.py                         unified verification entry: plan explains the scope, run executes and records, report only reads
 verify_selection.py               staged test selection and shadow comparison strategy: versioned mapping, conservative fallback and gap comparison

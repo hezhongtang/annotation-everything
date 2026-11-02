@@ -78,7 +78,7 @@ CAP_SEVERITY = {"covered": 0, "partial": 1, "not_run": 2, "uncovered": 3, "unver
 
 # 可复算运算（决策 9）：op 是封闭枚举，输入是明确数字，不执行材料中的代码。
 CALC_OPS = {
-    "sum": lambda v: sum(v),
+    "sum": lambda v: sum(v.values()),
     "difference": lambda v: v["a"] - v["b"],
     "product": lambda v: v["a"] * v["b"],
     "ratio": lambda v: v["a"] / v["b"],
@@ -266,6 +266,7 @@ def load_record(record_path: Path | None, c: Checks) -> tuple[dict | None, bool]
     type_errors = []
     links = record["links"]
     if not isinstance(links, dict) or not isinstance(links.get("report"), str) \
+            or not isinstance(links.get("sha256"), dict) \
             or not isinstance(links.get("sha256", {}).get("report"), str):
         type_errors.append("links{report,sha256.report}")
     for field, want in (("request", dict), ("method", dict), ("verdict", dict),
@@ -273,6 +274,24 @@ def load_record(record_path: Path | None, c: Checks) -> tuple[dict | None, bool]
                         ("checks", list), ("openItems", list)):
         if not isinstance(record[field], want):
             type_errors.append(field)
+    if isinstance(record["sources"], list) and any(
+            isinstance(source, dict) and (not isinstance(source.get("path"), str)
+                                         or "\0" in source["path"])
+            for source in record["sources"]):
+        type_errors.append("sources[].path")
+    if isinstance(record["checks"], list) and any(
+            not isinstance(item, dict) or not isinstance(item.get("id"), str)
+            for item in record["checks"]):
+        type_errors.append("checks[].id")
+    if isinstance(record["findings"], list):
+        for finding in record["findings"]:
+            if not isinstance(finding, dict):
+                type_errors.append("findings[]")
+                continue
+            for field in ("sources", "pages"):
+                if field in finding and (not isinstance(finding[field], list)
+                        or any(not isinstance(item, str) for item in finding[field])):
+                    type_errors.append("findings[]." + field)
     if type_errors:
         c.set("record.structure", "fail", code="record.bad-type", fields="、".join(type_errors))
         return None, False
@@ -290,8 +309,7 @@ def check_freshness(record: dict | None, report_bytes: bytes, script_bytes: byte
     if links["sha256"]["report"] != sha256_bytes(report_bytes):
         changed.append(str(links.get("report") or "report"))
     script_hash = links["sha256"].get("script")
-    if script_bytes is not None and script_hash is not None \
-            and script_hash != sha256_bytes(script_bytes):
+    if script_bytes is not None and script_hash != sha256_bytes(script_bytes):
         changed.append(str(links.get("script") or "script"))
     if changed:
         c.set("record.freshness", "fail", code="record.stale", items="、".join(changed))
@@ -379,21 +397,30 @@ def check_calculations(record: dict | None, c: Checks) -> list[str]:
             failures += 1
             continue
         try:
+            if not calc["inputs"] or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                                         for v in calc["inputs"].values()):
+                raise ValueError("inputs are not all numbers")
             values = {k: float(v) for k, v in calc["inputs"].items()}
-        except (TypeError, ValueError):
+            expected = float(calc["expected"])
+            if not math.isfinite(expected) or not all(math.isfinite(v) for v in values.values()):
+                raise ValueError("nonfinite number")
+        except (TypeError, ValueError, OverflowError):
             c.set("record.calculations", "fail", code="record.calc-bad",
-                  claim=claim, reason="inputs are not all numbers")
+                  claim=claim, reason="inputs and expected must be finite numbers")
             failures += 1
             continue
         try:
             actual = op(values)
-        except (KeyError, ZeroDivisionError):
+        except (KeyError, ZeroDivisionError, OverflowError):
             c.set("record.calculations", "fail", code="record.calc-bad",
                   claim=claim, reason="missing or degenerate inputs")
             failures += 1
             continue
-        expected = float(calc["expected"])
-        if not math.isfinite(actual) or abs(actual - expected) > 1e-6 * max(1.0, abs(expected)):
+        if not math.isfinite(actual):
+            c.set("record.calculations", "fail", code="record.calc-bad",
+                  claim=claim, reason="calculation result is not finite")
+            failures += 1
+        elif abs(actual - expected) > 1e-6 * max(1.0, abs(expected)):
             shown = int(actual) if float(actual).is_integer() else round(actual, 4)
             pages = "、".join(str(p) for p in f.get("pages") or [] if isinstance(p, (str, int)))
             c.set("record.calculations", "fail", code="record.calc-mismatch",
@@ -436,7 +463,8 @@ def valid_ref(r: object) -> bool:
 def analyze_claims(record: dict) -> dict:
     """对 findings 做纯分析，供结论检查与覆盖封顶共用；不产生检查结果。"""
     info = {"bad": [], "unsupported": [], "unlocatable": [], "missing_support": [],
-            "unverified": [], "partial": [], "unfound_ref": [], "no_hash": []}
+            "unverified": [], "partial": [], "unfound_ref": [], "no_hash": [],
+            "missing_evidence": []}
     sources = {s.get("path"): s for s in record["sources"] if isinstance(s, dict)}
     for f in record["findings"]:
         if not isinstance(f, dict):
@@ -451,6 +479,13 @@ def analyze_claims(record: dict) -> dict:
                                  or any(not valid_ref(r) for r in refs)):
             info["bad"].append(claim)
             continue
+        cited = f.get("sources") or []
+        basis = f.get("basis")
+        if not refs or not cited or not isinstance(basis, str) or not basis.strip():
+            info["missing_evidence"].append(claim)
+        if isinstance(refs, list) and any(r["path"] not in cited or r["path"] not in sources
+                                          for r in refs):
+            info["unlocatable" if support == "supported" else "unfound_ref"].append(claim)
         if support is None:
             info["missing_support"].append(claim)
         elif support == "unsupported":
@@ -490,7 +525,7 @@ def check_record_claims(info: dict, c: Checks) -> bool:
               claims=join_claims(info["unlocatable"]))
         return False
     c.set("record.claims", "pass")
-    pending = info["missing_support"] + info["unverified"]
+    pending = info["missing_support"] + info["unverified"] + info["missing_evidence"]
     if pending:
         c.add_warning("check.warn.claimsPending", items=join_claims(pending))
     return True
@@ -516,9 +551,10 @@ def content_cap(record: dict | None, info: dict | None, calc_pending: list[str] 
     if not [f for f in record["findings"] if isinstance(f, dict)]:
         lower("not_run")
     if info:
-        if info["unsupported"] or info["unlocatable"]:
+        if info["bad"] or info["unsupported"] or info["unlocatable"]:
             lower("uncovered")
-        if info["missing_support"] or info["unverified"] or info["unfound_ref"] or info["no_hash"]:
+        if (info["missing_support"] or info["unverified"] or info["unfound_ref"]
+                or info["no_hash"] or info["missing_evidence"]):
             lower("not_run")
         if info["partial"]:
             lower("partial")
@@ -532,7 +568,7 @@ def content_cap(record: dict | None, info: dict | None, calc_pending: list[str] 
 def check_record_sources(record: dict, base_dir: Path, info: dict, c: Checks) -> bool:
     """材料关联检查：登记项合法、结论引用的材料已登记、sha256 与报告旁材料一致。
 
-    返回是否存在「材料内容已变化」（stale）：变化时旧核验结果标为 unverified。
+    返回是否存在过期或无法对应的材料：旧核验结果均标为 unverified。
     哈希声明了但报告旁找不到文件 → 提示无法对应（材料不在本入口的检查边界内，
     不能武断失败，但也不能静默通过）；结论引用的材料没有 sha256 → 警告并封顶。"""
     entries = record["sources"]
@@ -584,7 +620,7 @@ def check_record_sources(record: dict, base_dir: Path, info: dict, c: Checks) ->
         c.add_warning("check.warn.sourceNoHash",
                       items=join_claims(sorted(dict.fromkeys(info["no_hash"]))))
     c.set("record.sources", "pass")
-    return False
+    return bool(unresolved)
 
 
 def check_record_checks(record: dict | None, c: Checks,
@@ -1062,12 +1098,13 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
     method_info = None
     if record is not None:
         method = record["method"]
+        unavailable = method.get("unavailable")
         method_info = {"kind": method.get("kind"), "name": method.get("name"),
                        "version": method.get("version"),
                        "requested": method.get("requested"),
                        "invocation": method.get("invocation"),
-                       "unavailable": [x for x in method.get("unavailable") or []
-                                       if isinstance(x, str)]}
+                       "unavailable": [x for x in unavailable if isinstance(x, str)]
+                       if isinstance(unavailable, list) else []}
     return {
         "checks": [checks.items[cid] for cid in Checks.ORDER],
         "warnings": list(checks.warnings),

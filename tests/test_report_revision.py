@@ -165,6 +165,9 @@ def revision(**overrides) -> dict:
 def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
                record: dict | None = None) -> dict:
     d.mkdir(parents=True, exist_ok=True)
+    if not (d / "materials" / "q3-notes.md").exists():
+        (d / "materials").mkdir(exist_ok=True)
+        (d / "materials" / "q3-notes.md").write_text(MATERIAL, encoding="utf-8")
     paths = {"report": d / "report.html"}
     paths["report"].write_text(report, encoding="utf-8")
     if script is not None:
