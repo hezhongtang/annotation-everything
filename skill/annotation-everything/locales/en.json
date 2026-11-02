@@ -1341,7 +1341,7 @@
     "check.err.visualDupPages": "duplicate evidence entries for pages: {pages}",
     "check.err.lengthMismatch": "the report has {actual} pages, but the recorded length constraint is {expected} pages — fix the report or update the recorded constraint, then re-run this check",
     "check.item.record.revision": "Revision scope and pending disclosure",
-    "check.err.revisionBad": "Revision declaration is invalid: needs basis (how the affected scope was determined), rechecked (check ids verified this time) and pending ({scope, reason} entries)",
+    "check.err.revisionBad": "Revision declaration is invalid: {detail}; needs basis (how the affected scope was determined), rechecked (check ids verified this time) and pending ({scope, reason} entries)",
     "check.err.revisionUnknown": "Revision declares unknown checks {ids}, which cannot be proven rechecked",
     "check.err.revisionUnrechecked": "Revision declares {ids} rechecked, but the record has no actual check results for them",
     "check.err.revisionPending": "Pending entries are incomplete: each needs scope and reason",

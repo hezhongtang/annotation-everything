@@ -1231,7 +1231,7 @@
     "check.err.visualDupPages": "同一页有多条证据：{pages}",
     "check.err.lengthMismatch": "报告共 {actual} 页，需求记录的篇幅约束是 {expected} 页——先改报告或更新需求记录，再重新核验",
     "check.item.record.revision": "改稿影响范围与待核验披露",
-    "check.err.revisionBad": "改稿维护声明（revision）无效：需要 basis（影响范围判定依据）、rechecked（本次重新核验的检查项）与 pending（{scope, reason} 待核验项）",
+    "check.err.revisionBad": "改稿维护声明（revision）无效：{detail}；需要 basis（影响范围判定依据）、rechecked（本次重新核验的检查项）与 pending（{scope, reason} 待核验项）",
     "check.err.revisionUnknown": "改稿维护声明里出现了本工具不认识的检查 {ids}，无法证明其已重新核验",
     "check.err.revisionUnrechecked": "改稿维护声明重新核验了 {ids}，但记录里没有这些项的实际检查结果",
     "check.err.revisionPending": "待核验项披露不完整：每项需要 scope（范围）与 reason（原因）",

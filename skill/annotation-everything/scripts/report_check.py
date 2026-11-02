@@ -1248,7 +1248,8 @@ def render_summary(result: dict) -> str:
     if rec["version"] is None:
         rec_line = t(loc, "check.record.line", version=t(loc, "check.record.missing"),
                      fresh="")
-        lines.append(rec_line.rstrip("，"))
+        # fresh 留空时中英模板都留下尾随分隔符（「，」/「, 」），两种一起剥掉
+        lines.append(rec_line.rstrip("，, "))
     else:
         lines.append(t(loc, "check.record.line", version=rec["version"],
                        fresh=t(loc, "check.record.fresh" if rec["fresh"] else "check.record.stale")))
