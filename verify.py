@@ -31,6 +31,7 @@ import dataclasses
 import datetime
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -125,7 +126,7 @@ class Interrupted(Exception):
 # ── 小工具 ────────────────────────────────────────────────────────────────
 
 def now_iso() -> str:
-    return datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="seconds")
+    return datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="microseconds")
 
 
 def new_run_id() -> str:
@@ -858,6 +859,21 @@ def parse_scenario_summary(text: str) -> Optional[dict]:
     return summary
 
 
+def parse_browser_environment(text: str) -> Optional[dict]:
+    for line in reversed(text.splitlines()):
+        if line.startswith("AE-BROWSER-ENV: "):
+            try:
+                payload = json.loads(line[len("AE-BROWSER-ENV: "):])
+                if (isinstance(payload, dict) and payload.get("schema") == "ae-browser-environment/1"
+                        and all(isinstance(payload.get(key), str) and payload[key]
+                                for key in ("browser", "channel", "version", "playwright"))):
+                    return {key: payload[key] for key in ("schema", "browser", "channel", "version", "playwright")}
+            except ValueError:
+                pass
+            return None
+    return None
+
+
 # ── 执行 ──────────────────────────────────────────────────────────────────
 
 def _pgid_of(proc) -> Optional[int]:
@@ -1125,6 +1141,7 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
                 "timed_out": timed_out, "note": note, "counts": counts,
                 "cases": cases, "seconds": seconds,
                 "scenario_summary": scenario_summary,
+                "browser_environment": parse_browser_environment(log_text) if group.scenarios else None,
                 "timing": {"child_seconds": child_seconds,
                            "case_seconds_total": seconds.get("case_total"),
                            "fixture_seconds_total": fixture_total(seconds),
@@ -1348,7 +1365,7 @@ def cmd_plan(args) -> int:
 
 # ── 阶段选测与影子对照（issue #55） ────────────────────────────────────────
 
-def build_selection_for(phase: str, baseline: dict, snapshot: dict) -> dict:
+def build_selection_for(phase: str, baseline: dict, snapshot: dict, artifact_dir: Optional[Path] = None) -> dict:
     """构建选测计划并补上契约附带后的生效选择器；策略层不可用时保守回退。"""
     if verify_selection is None:
         return {"schema": "ae-verify-selection/1", "strategy_version": None,
@@ -1370,7 +1387,17 @@ def build_selection_for(phase: str, baseline: dict, snapshot: dict) -> dict:
         effective, added = expand_related_selectors(list(suggested["selectors"]))
         suggested["selectors_effective"] = display_argv(effective)
         suggested["contract_added"] = display_argv(added)
-    return selection
+    try:
+        import verify_report
+        return verify_report.selection_guard(selection, artifact_dir or artifact_root(None))
+    except Exception as exc:
+        # 报告模块未安装不改变旧入口；已有守卫却无法读取时不能静默放行。
+        if ((artifact_dir or artifact_root(None)) / "efficiency" / "selection-guard.json").exists():
+            selection["policy_guard"] = {"active": True, "reason": "策略守卫加载失败：%s" % type(exc).__name__}
+            selection["fallback"] = {"kind": "efficiency_guard", "reason": selection["policy_guard"]["reason"]}
+            selection["suggested"] = {"runs_tests": True, "groups": ["all"], "selectors": [],
+                                      "scenarios": ["*"], "serve_check": True}
+        return selection
 
 
 def compute_shadow(record: dict, selection: Optional[dict]) -> dict:
@@ -1672,7 +1699,7 @@ def build_record(args, groups: dict, selected: list) -> dict:
     started_at = now_iso()
     snapshot = snapshot_input()
     baseline = resolve_baseline(args.baseline)
-    selection = build_selection_for(args.phase, baseline, snapshot)
+    selection = build_selection_for(args.phase, baseline, snapshot, artifact_root(args.out_dir))
     return {
         "schema": SCHEMA,
         "wrapper_version": WRAPPER_VERSION,
@@ -1718,6 +1745,7 @@ def build_record(args, groups: dict, selected: list) -> dict:
         "timing": {"queued_at": started_at, "started_at": None, "ended_at": None,
                    "queue_seconds": None, "wall_seconds": None, "wrapper_seconds": None,
                    "lock_wait_seconds": None, "cleanup_seconds": None,
+                   "first_feedback_seconds": None,
                    "case_seconds_total": None, "fixture_seconds_total": None,
                    "unattributed_seconds": None,
                    "attribution_note": "case_seconds_total 是各用例耗时之和，不等于 wall_seconds；"
@@ -1810,6 +1838,12 @@ def cmd_run(args) -> int:
     ctx = RunContext(new_run_id(), artifact_root(args.out_dir), args.timeout,
                      sys.stderr if args.as_json else sys.stdout, args.quiet)
     record = build_record(args, groups, selected)
+    guard = (record["context"]["selection"].get("policy_guard") or {})
+    if guard.get("active"):
+        selected = expand_groups(["all"], groups)
+        record = build_record(args, groups, selected)
+        record["result"]["notes"].append("效率守卫扩大实际执行范围到 all：%s" % guard["reason"])
+        args.no_reuse = True
     record["run_id"] = ctx.run_id
     record["reuse"] = {"schema": REUSE_SCHEMA, "policy_version": None, "enabled": False,
                        "reason": "复用规划尚未完成", "freshness_hours": None, "decisions": []}
@@ -1864,6 +1898,8 @@ def cmd_run(args) -> int:
                     # 浏览器组带场景摘要时填 groups[].scenarios，粒度细化到场景（issue #53）
                     group["scenarios"] = item["scenario_summary"]["scenarios"]
                     group["granularity"] = "scenario"
+                if item.get("browser_environment") is not None:
+                    group["browser_environment"] = item["browser_environment"]
                 continue
             if interrupted_signum is not None:
                 group.update(outcome=INTERRUPTED,
@@ -1930,6 +1966,8 @@ def cmd_run(args) -> int:
                 results[name] = reused_group_result(groups[name], decision)
                 continue
             results[name] = execute_group(groups[name], ctx)
+            if record["timing"]["first_feedback_seconds"] is None:
+                record["timing"]["first_feedback_seconds"] = round(time.monotonic() - queued_at, 6)
             if results[name].get("interrupted_signum") is not None:
                 interrupted_signum = results[name]["interrupted_signum"]
                 break  # 结果已完整收集；后续组不再执行，整次仍按入口中断落盘
@@ -2010,6 +2048,20 @@ def _finish(record: dict, ctx: RunContext, args) -> None:
         except OSError as exc:
             record["result"]["notes"] = list(record["result"].get("notes") or []) + [
                 "shadow.json 写入失败（影子数据只在 record.json 里）：%s" % exc]
+    # 持续报告只读取已落盘的证据；分组产品资源已经释放，不改变原结论或 JSON。
+    try:
+        import verify_report
+        events_path = ctx.artifact_dir / "ci-events.json"
+        events = verify_report.read_events(events_path) if events_path.exists() else None
+        summary = verify_report.rebuild(ctx.artifact_dir, verify_report.sources(ctx.artifact_dir, [], events),
+                                        load_record, events=events)
+        print("效率摘要：%s/efficiency/summary.md（样本 %d，累计执行 %.3f 秒，执行区间并集 %.3f 秒；%s）" % (
+            _show(ctx.artifact_dir), summary["metrics"]["runs"], summary["metrics"]["execution_seconds"],
+            summary["metrics"]["execution_union_seconds"], summary["review"]["reason"]),
+            file=sys.stderr if args.as_json else sys.stdout)
+    except Exception as exc:
+        print("效率摘要缺口：%s（保留原始验证结论，可用 report --efficiency --rebuild 重建）" % exc,
+              file=sys.stderr)
     if args.as_json:
         print(json.dumps(record, ensure_ascii=False, indent=2))
     else:
@@ -2092,13 +2144,120 @@ def shield_termination():
 
 def degrade_evidence(record: dict, problems: list) -> None:
     """完整性、可用性与影子结论使用同一降级规则，保留原始执行结论。"""
-    record.setdefault("result", {})["usable_as_evidence"] = False
-    record.setdefault("evidence", {})["integrity"] = "degraded"
+    if not isinstance(record.get("result"), dict):
+        record["result"] = {}
+    if not isinstance(record.get("evidence"), dict):
+        record["evidence"] = {}
+    record["result"]["usable_as_evidence"] = False
+    record["evidence"]["integrity"] = "degraded"
     shadow = record.get("shadow")
     if isinstance(shadow, dict):
         shadow.update(usable_as_evidence=False, comparable=False,
                       incomparable_reason="报告读取时证据校验失败：%s" % "；".join(problems),
                       candidate_omissions=[], rule_candidates=[])
+
+
+def valid_duration(value) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
+
+
+def validate_local_evidence(record: dict, run_dir: Path) -> list:
+    """报告、G 复用与 H 投影共用必要字段、实际组日志和有效时长校验。"""
+    problems = []
+    evidence = record.get("evidence")
+    if not isinstance(evidence, dict):
+        problems.append("缺少 evidence 对象")
+        evidence = {}
+    if evidence.get("integrity") != "ok":
+        problems.append("证据完整性不是 ok")
+    if evidence.get("record_path") != "record.json":
+        problems.append("缺少固定 record.json 证据定位")
+    for key in ("logs", "cases", "notes"):
+        if not isinstance(evidence.get(key), list):
+            problems.append("缺少 evidence.%s 数组" % key)
+    logs = evidence.get("logs") if isinstance(evidence.get("logs"), list) else []
+    located_groups = set()
+    for log in logs:
+        if not isinstance(log, dict):
+            problems.append("日志证据条目不是对象")
+            continue
+        name, group = log.get("path"), log.get("group")
+        if not isinstance(name, str) or not name or "/" in name or "\\" in name or name in (".", ".."):
+            problems.append("日志路径不是根内文件名")
+            continue
+        if not isinstance(group, str) or group in located_groups:
+            problems.append("日志分组缺失或重复")
+        else:
+            located_groups.add(group)
+        target = run_dir / name
+        if log.get("missing") or not target.is_file():
+            problems.append("缺少日志 %s" % name)
+            continue
+        checksum = log.get("sha256")
+        size = log.get("bytes")
+        try:
+            if not isinstance(size, int) or isinstance(size, bool) or size < 0 or target.stat().st_size != size:
+                problems.append("日志 %s 字节数缺失或不一致" % name)
+            if not isinstance(checksum, str) or re.fullmatch(r"[0-9a-fA-F]{64}", checksum) is None:
+                problems.append("日志 %s 缺少有效校验和" % name)
+            elif digest_file(target) != checksum.lower():
+                problems.append("日志 %s 校验和不一致" % name)
+        except OSError as exc:
+            problems.append("日志读取失败：%s" % type(exc).__name__)
+    timing = record.get("timing")
+    if not isinstance(timing, dict):
+        problems.append("缺少运行计时对象")
+        timing = {}
+    for key in ("queue_seconds", "wall_seconds"):
+        if record.get("state") == "complete" and not valid_duration(timing.get(key)):
+            problems.append("运行 %s 缺失或不是有限非负时长" % key)
+    for key, value in timing.items():
+        if key.endswith("_seconds") and value is not None and not valid_duration(value):
+            problems.append("运行 %s 不是有限非负时长" % key)
+    groups = record.get("groups")
+    if not isinstance(groups, list) or not groups:
+        return problems + ["缺少实际或引用分组清单"]
+    for group in groups:
+        if not isinstance(group, dict):
+            problems.append("分组记录不是对象")
+            continue
+        if group.get("outcome") == REUSED:
+            continue  # 本地日志不适用于引用组，来源链仍由 validate_reuse_chain 校验。
+        actual = group.get("started_at") is not None or group.get("outcome") in (PASSED, FAILED, SKIPPED, EMPTY)
+        if not actual:
+            continue
+        try:
+            started = datetime.datetime.fromisoformat(group["started_at"].replace("Z", "+00:00"))
+            if started.tzinfo is None:
+                raise ValueError("缺少时区")
+        except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
+            problems.append("实际分组缺少有效启动时间")
+        group_timing = group.get("timing") if isinstance(group.get("timing"), dict) else {}
+        if not valid_duration(group_timing.get("child_seconds")):
+            problems.append("实际分组 child_seconds 缺失或不是有限非负时长")
+        if not isinstance(group.get("name"), str) or group["name"] not in located_groups:
+            problems.append("实际分组缺少本地日志证据")
+        for key, value in group_timing.items():
+            if value is not None and not valid_duration(value):
+                problems.append("分组 %s 不是有限非负时长" % key)
+        for key in ("cases", "scenarios"):
+            members = group.get(key)
+            if members is None:
+                continue
+            if not isinstance(members, list):
+                problems.append("用例或场景清单不是数组")
+                continue
+            for member in members:
+                if not isinstance(member, dict):
+                    problems.append("用例或场景记录不是对象")
+                elif member.get("status") != "not_run" and not valid_duration(member.get("seconds")):
+                    problems.append("用例或场景 seconds 缺失或不是有限非负时长")
+    return list(dict.fromkeys(problems))
 
 
 def load_record(run_dir: Path, visiting: Optional[set] = None) -> tuple:
@@ -2124,23 +2283,12 @@ def load_record(run_dir: Path, visiting: Optional[set] = None) -> tuple:
     problems = []
     if record.get("state") != "complete":
         problems.append("记录状态是 %r：本次运行没有正常结束" % record.get("state"))
-    integrity = (record.get("evidence") or {}).get("integrity")
-    if integrity not in (None, "ok"):
-        problems.append("证据完整性 %r" % integrity)
-    for log in (record.get("evidence") or {}).get("logs") or []:
-        name = log.get("path") or ""
-        if not name or os.sep in name or name in (".", ".."):
-            problems.append("日志路径不合法：%r" % name)
-            continue
-        target = run_dir / name
-        if log.get("missing") or not target.is_file():
-            problems.append("缺少日志 %s" % name)
-        elif log.get("sha256") and digest_file(target) != log["sha256"]:
-            problems.append("日志 %s 校验和不一致" % name)
+    problems.extend(validate_local_evidence(record, run_dir))
     record["report_validation"] = {"problems": problems}
     if problems:
         degrade_evidence(record, problems)
-    validate_reuse_chain(record, run_dir.parent.parent, problems, visiting)
+    if isinstance(record.get("groups"), list) and all(isinstance(group, dict) for group in record["groups"]):
+        validate_reuse_chain(record, run_dir.parent.parent, problems, visiting)
     return record, problems
 
 
@@ -2151,6 +2299,23 @@ def report_exit(record: Optional[dict], problems: list) -> int:
 
 
 def cmd_report(args) -> int:
+    if args.efficiency:
+        if args.run or args.latest:
+            raise UsageError("--efficiency 不与 --run / --latest 混用")
+        import verify_report
+        now = verify_report.instant(args.now) if args.now else None
+        if args.now and now is None:
+            raise UsageError("--now 需要带时区的 ISO 8601 时间")
+        root = artifact_root(args.out_dir)
+        events_path = Path(args.events) if args.events else root / "ci-events.json"
+        events = verify_report.read_events(events_path) if args.events or events_path.exists() else None
+        roots = verify_report.sources(root, args.source, events)
+        summary = (verify_report.rebuild(root, roots, load_record, now=now, events=events) if args.rebuild else
+                   verify_report.build_summary(roots, load_record, now=now, events=events))
+        print(json.dumps(summary, ensure_ascii=False, indent=2) if args.as_json else verify_report.render(summary))
+        return EXIT_FAILED if summary["gaps"] else EXIT_OK
+    if args.rebuild or args.source or args.events or args.now:
+        raise UsageError("历史报告选项需要 --efficiency")
     if args.run and args.latest:
         raise UsageError("--run 与 --latest 只能用一个")
     root = artifact_root(args.out_dir)
@@ -2388,6 +2553,11 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--latest", action="store_true", help="读最近一次运行")
     report.add_argument("--out-dir", default=None, metavar="DIR", help="验证产物目录，缺省 .verify/")
     report.add_argument("--json", action="store_true", dest="as_json", help="输出记录与当前证据校验结果 JSON")
+    report.add_argument("--efficiency", action="store_true", help="只读已有历史的效率摘要，不运行测试")
+    report.add_argument("--rebuild", action="store_true", help="重建效率归档与增量回顾，不运行测试")
+    report.add_argument("--source", action="append", default=[], metavar="DIR", help="额外记录根（已下载的 CI 构件），可重复")
+    report.add_argument("--events", default=None, metavar="FILE", help="合并 PR 事件与远端数据缺口清单")
+    report.add_argument("--now", default=None, metavar="ISO", help="报告参考时间（带时区；支持重放合成历史）")
     report.set_defaults(handler=cmd_report)
     return parser
 

@@ -367,6 +367,7 @@ ae.py                             统一管理命令：install 安装技能副�
 verify.py                         统一验证入口：plan 解释范围，run 执行并记录，report 只读记录
 verify_selection.py               阶段选测与影子对照策略：版本化映射、保守回退与遗漏对照
 verify_evidence.py                证据复用策略：同输入同环境且当前有效的通过记录跨阶段引用
+verify_report.py                  持续效率报告、同环境分组、有界回顾与去重
 host_isolation.py                 同机资源隔离协议：验证参与方按共享资源互斥的锁与声明
 fixtures/sample/                   合成样例（虚构数据）
 tests/                             单元测试和浏览器端到端测试
@@ -391,6 +392,8 @@ python3 verify.py run                                             # 完整单元
 python3 verify.py run --group all                                 # 完整验收：单元 + 服务安全自检 + 浏览器
 python3 verify.py run --no-reuse                                  # 独立复测：绕过证据复用，全部实际执行
 python3 verify.py report --latest                                 # 只读最近一次记录，不启动测试
+python3 verify.py report --efficiency                             # 只读已有记录的持续效率报告
+python3 verify.py report --efficiency --rebuild                   # 重建投影与增量回顾，不启动测试
 python3 -m unittest discover tests                                   # 单元测试（只用标准库）
 uv run --no-project --with playwright python tests/e2e_browser.py   # 浏览器端到端测试（使用本机的 Google Chrome）
 python3 skill/annotation-everything/scripts/serve.py check          # 服务安全自检
@@ -404,6 +407,8 @@ uv run --no-project --with playwright python tests/e2e_browser.py --only skill-i
 阶段选测与影子对照默认开启：`run` 依据版本化的映射（`verify_selection.py`）记录「当前改动建议跑什么」，实际执行仍是请求的完整门禁；结束时把建议范围与实际结果并列对照，完整检查发现而建议范围没覆盖的失败保留为候选遗漏并归因。未知路径、坏基线、损坏规则、测试清单缺口和策略自身变化一律保守回退完整检查并解释原因。`issue` 阶段不自动启动测试，缺陷复现显式请求相关组。策略、回退情形与对照样本见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md)。
 
 有效验证证据跨阶段引用（`verify_evidence.py`，判定从紧）：同一逻辑工作会话内，同输入指纹、同环境、请求范围被已验证范围覆盖，且来源记录当前校验后仍可作为通过证据、未超 24 小时保鲜窗口、版本一致时，`run` 在 `issue` / `development` / `review` / `manual` 阶段直接引用已有结果。会话身份只保存摘要，优先使用 `AE_VERIFY_SESSION`，其次继承 `CODEX_THREAD_ID` / `CLAUDE_SESSION_ID`；无法确认身份时实际执行，终端设置方式见[接入说明](docs/verify/onboarding.md)。报告列出来源 run、指纹、范围、环境与理由（差异被证明仅在文档允许列表内时不算输入变化；覆盖映射下停用该放宽）；依赖宿主机状态的组（完整单元、完整浏览器、敏感模块直跑）指纹相同也不复用，`pr` / `ci` 门禁阶段必须实际执行，点名到类 / 用例的补测不复用。被引用的组显示为「引用已有验证」，不重复计入通过数量；来源被篡改、超期或失效时，完整性和影子结论同步降级为不可用。`--no-reuse` 强制全部重跑。
+
+持续效率报告：自动更新耗时、重复执行、证据引用与失败候选；只读历史用 `python3 verify.py report --efficiency`，重建衍生归档用 `--rebuild`，不启动产品测试。比较、周期回顾、CI 缺口与策略维护见 [docs/verify/efficiency.md](docs/verify/efficiency.md)。
 
 浏览器端到端测试按场景注册执行：无参数跑全部注册场景；`--list` 列出场景清单，`--only 场景1,场景2` 去重后只跑目标场景及其声明的准备步骤，未知、空或冲突的选择在启动浏览器前报错。场景注册表、旧参数别名与新增场景的接入规则见 [docs/verify/browser-scenarios.md](docs/verify/browser-scenarios.md)。
 

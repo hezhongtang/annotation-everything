@@ -14,6 +14,10 @@ Five canonical triage roles map to GitHub labels. See `docs/agents/triage-labels
 
 Single-context: root `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.
 
+## 验证与效率回顾
+
+阶段验证和证据交接见 `docs/verify/onboarding.md`；排查效率报告缺口、回顾触发或修改策略时，读取 `docs/verify/efficiency.md`。
+
 ## PR 的 CI
 
 PR 出现 CI 失败时，立即按 AGENTS.md「分支、issue 与 PR」中的「CI 失败自动修复（auto-fix）」规则处理，无需等待用户再次要求。

@@ -45,6 +45,13 @@ _RETRY_INTERVAL = 0.05
 #   CLAUDE_SKILLS_DIR 等环境变量注入合成位置，没有跨进程共享的可变状态，
 #   因此声明为不需要互斥（登记在此是为了说明「为什么独立」）。
 RESOURCE_DECLARATIONS = {
+    "verification-reports": {
+        "title": "验证效率摘要与回顾状态",
+        "scope": "machine-user",
+        "mutually_exclusive": True,
+        "shared_by": "同机验证结束与手动重建摘要的参与方",
+        "why": "沿用共享资源锁协议，避免并发聚合丢失回顾去重状态；不锁产品测试执行",
+    },
     "host-state": {
         "title": "宿主机进程视图与端口池",
         "scope": "machine-user",

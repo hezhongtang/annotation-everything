@@ -367,6 +367,7 @@ ae.py                             unified management command: install the skill 
 verify.py                         unified verification entry: plan explains the scope, run executes and records, report only reads
 verify_selection.py               staged test selection and shadow comparison strategy: versioned mapping, conservative fallback and gap comparison
 verify_evidence.py                evidence reuse policy: valid same-input same-environment passes are referenced across stages
+verify_report.py                  continuous efficiency reports, comparable groups and bounded deduplicated reviews
 host_isolation.py                 host isolation protocol: locks and declarations for mutual exclusion by shared resource
 fixtures/sample/                   synthetic sample (fictional data)
 tests/                             unit tests and end-to-end browser tests
@@ -391,6 +392,8 @@ python3 verify.py run                                             # full unit te
 python3 verify.py run --group all                                 # full acceptance: unit + server self-check + browser
 python3 verify.py run --no-reuse                                  # independent recheck: bypass evidence reuse, run everything
 python3 verify.py report --latest                                 # read the latest record only, start nothing
+python3 verify.py report --efficiency                             # read the efficiency report from existing records
+python3 verify.py report --efficiency --rebuild                   # rebuild derived reports and reviews without tests
 python3 -m unittest discover tests                                   # unit tests (standard library only)
 uv run --no-project --with playwright python tests/e2e_browser.py   # end-to-end browser tests (uses your local Google Chrome)
 python3 skill/annotation-everything/scripts/serve.py check          # server security self-check
@@ -404,6 +407,8 @@ uv run --no-project --with playwright python tests/e2e_browser.py --only skill-i
 Staged selection and shadow comparison are on by default: `run` records what the versioned mapping in `verify_selection.py` suggests for the current changes, while the groups you actually run stay the requested full gate; when the run finishes, the suggestion is compared side by side with the actual result, and any failure the full check found outside the suggested scope is kept as a candidate omission with an attribution. Unknown paths, bad baselines, broken rules, test-manifest gaps and changes to the strategy itself all fall back to the full check with an explanation. The `issue` phase never starts tests automatically; defect reproduction asks for a related group explicitly. See [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) for the strategy, fallback kinds and comparison samples.
 
 Valid verification evidence is referenced across stages (`verify_evidence.py`, deliberately strict): within the same logical work session, when the input fingerprint and environment match, the requested scope is covered by the verified scope, the source record still passes the current checks, it is within the 24-hour freshness window and all versions agree, `run` references the existing result during the `issue` / `development` / `review` / `manual` phases. Only a hash of the session identity is stored: `AE_VERIFY_SESSION` takes precedence over inherited `CODEX_THREAD_ID` / `CLAUDE_SESSION_ID`; an unknown identity requires execution. Terminal setup is described in the [onboarding guide](docs/verify/onboarding.md). The report lists the source run, fingerprint, scope, environment and reason (differences proven to stay inside the documentation allowlist do not count as input changes; the relaxation is disabled under override mappings). Host-state-dependent groups (full unit, full browser, direct runs of sensitive modules) are never reused even with identical fingerprints, the `pr` / `ci` gate phases must actually execute, and class / case-level requests for targeted rechecks never reuse. Referenced groups show up as "reused" and are not counted twice; if the source is tampered with, expired or invalid, evidence integrity and shadow conclusions also degrade to unusable. `--no-reuse` forces a full rerun.
+
+Continuous efficiency reports update timings, repeated executions, evidence references and failure candidates after each run. Read history with `python3 verify.py report --efficiency`; add `--rebuild` to rebuild derived reports without starting product tests. Comparison rules, periodic reviews, CI gaps and policy maintenance are described in [docs/verify/efficiency.md](docs/verify/efficiency.md).
 
 The browser end-to-end tests are organized around a scenario registry: no arguments runs every registered scenario; `--list` prints the registry; `--only scenario1,scenario2` deduplicates and runs only the targets plus their declared fixtures, while unknown, empty or conflicting selections fail before the browser starts. See [docs/verify/browser-scenarios.md](docs/verify/browser-scenarios.md) for the registry, legacy flag aliases and how to register new scenarios.
 
