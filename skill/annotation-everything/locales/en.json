@@ -1315,6 +1315,13 @@
     "check.warn.sourceUnresolved": "The record declares hashes for materials whose files are not found next to the report; they cannot be checked (the material may have moved): {items}",
     "check.warn.sourceNoHash": "Materials cited by claims have no sha256 in the record; later material changes cannot be detected: {items}",
     "check.record.path": "Record file: {path}",
-    "check.openItems.line": "Open items in the record: {n} ({blocking} blocking)"
+    "check.openItems.line": "Open items in the record: {n} ({blocking} blocking)",
+    "check.item.record.reading": "Reading registration and gap disclosure",
+    "check.err.sourceStatus": "{entry} has no recognizable reading status {status} (status is read / partial / unreadable)",
+    "check.err.sourceField": "{entry} has an incomplete reading disclosure: missing {fields} (partial must state the range actually read and the unread part; unreadable must state why)",
+    "check.reading.line": "Reading: {read} read · {partial} partial · {unreadable} unreadable",
+    "check.reading.unread": "Unread ranges: {items}",
+    "check.err.readingBlocked": "All substantive materials ({n}) are unreadable: an empty shell or fabricated content does not count as a completed draft",
+    "check.reason.readingBlocked": "All substantive materials are unreadable: draft generation cannot be declared complete"
   }
 }

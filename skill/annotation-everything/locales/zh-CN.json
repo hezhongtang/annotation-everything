@@ -1205,6 +1205,13 @@
     "check.warn.sourceUnresolved": "记录声明了材料哈希，但报告旁找不到该文件，无法核对（材料可能已移动）：{items}",
     "check.warn.sourceNoHash": "结论引用的材料在记录中没有 sha256，无法发现材料事后变化：{items}",
     "check.record.path": "记录文件：{path}",
-    "check.openItems.line": "记录待办：{n} 项（阻塞 {blocking} 项）"
+    "check.openItems.line": "记录待办：{n} 项（阻塞 {blocking} 项）",
+    "check.item.record.reading": "读取登记与缺口披露",
+    "check.err.sourceStatus": "{entry} 的读取登记没有可识别的状态 {status}（status 用 read / partial / unreadable）",
+    "check.err.sourceField": "{entry} 的读取披露不完整：缺 {fields}（partial 要写明实际读取范围与未读部分，unreadable 要写明原因）",
+    "check.reading.line": "读取登记：已读 {read} · 部分读取 {partial} · 无法读取 {unreadable}",
+    "check.reading.unread": "未读范围：{items}",
+    "check.err.readingBlocked": "全部实质材料（{n} 份）均不可读：空结构或虚构内容不能当作初稿生成完成",
+    "check.reason.readingBlocked": "全部实质材料均不可读：初稿不能宣布生成完成"
   }
 }

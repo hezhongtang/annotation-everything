@@ -1,0 +1,14 @@
+schema_version: "1.1"
+name: generate-draft-office-partial
+expected_outcome: |
+  只装 annotation-everything 时，从「部分可读」的合成办公材料生成有明确边界的初稿。
+  三种材料各有一处读不到：PDF 第 3–4 页是扫描页（无文本层）、Word 的成本数字只在图里、
+  表格 10 月列公式引用的本文件外数据（Sheet3）。核验记录 sources 如实登记 partial 并写
+  明已读与未读范围（coverage）与原因（reason），没有把格式能打开当成内容已读完；具体
+  未读范围（第 3–4 页、成本结构图、10 月公式列）在记录 gaps 与回复/摘要中可指出。报告
+  用 .ae-gap 或缺口页披露这些范围，依赖未读数据的核心结论（四季度能否持续）带待核实
+  标记或列入 blocking openItems，没有被当成已回答；没有编造十月数字或成本数字。
+  draftComplete=true 的有边界初稿进入审阅，deliverable 未被宣布；report_check.py 程序
+  检查通过（读取登记通过）；对照页生成，回复给出审阅入口与产物位置。
+context:
+  scaffold_script: place-files.sh

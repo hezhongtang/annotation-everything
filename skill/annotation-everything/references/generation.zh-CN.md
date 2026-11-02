@@ -20,6 +20,18 @@
 - **格式名称不代表读取成功**：PDF 打开了但扫描页没 OCR、表格没读到隐藏列，都按实际读到的范围写。
 - 读取工具缺失或能力不足时如实披露，不要用缺失内容补造事实。
 
+### 读取编排与能力边界
+
+- 优先用宿主实际可用的读取能力，不为读取引入第三方依赖或联网转换服务。常见材料成功路径需要宿主具备：**PDF** 提取文本层并保留页码；**Word**（.docx 等）读正文段落与表格；**表格**（.xlsx / .csv）读工作表与单元格——公式读到的要么是计算结果、要么是公式文本，注明是哪种。
+- 定位信息沿流程保留：提取事实时记下它来自 **PDF 第几页、Word 第几段、哪个工作表哪些单元格**，写进报告的 `.ae-source` 标注和记录的 `sources[].locations` 与 `findings[].locations`，审阅人才能核对原文。
+- 表格里的**空白、缺失、数值零、单位与期间**是四件事：空白单元格不写成 0，缺失值不当作不存在，0 不当作缺失，单位与统计期间跟数字一起保留。未读取的公式、图表、隐藏行列或受保护区域如影响结论，列入 `gaps`。
+
+### 能力不足时的登记
+
+- 读取工具缺失：`unreadable`，`reason` 写明缺什么能力（如「宿主无 PDF 文本提取工具」）。
+- 部分提取失败：`partial`，`coverage` 同时写明已读与未读范围（如「第 1–8 页已读；第 9–12 页为扫描页，未识别」），`reason` 写原因；只写「文件已打开」不算登记。
+- **全部实质材料都不可读**：停下来说明材料缺口和可继续的条件（换可读格式、安装读取工具或提供文字版），不要生成只有空结构或虚构内容的报告并宣布初稿完成——核验入口会判 `record.reading-blocked`，初稿不算完成。
+
 ## 2. 组织报告并生成逐页 HTML
 
 - 章节按用途组织，报告必须回应用户的核心问题；回应不了的列入缺口。
@@ -45,14 +57,19 @@
   "request": {"purpose": "季度经营汇报", "audience": "管理层",
               "coreQuestions": ["收入为什么增长"], "length": "6 页", "script": "yes"},
   "sources": [{"path": "materials/q3.md", "status": "read", "coverage": "全文",
-               "sha256": "<材料文件 sha256>", "note": ""}],
+               "sha256": "<材料文件 sha256>",
+               "locations": ["q3.md 第 1–3 段"], "note": ""},
+              {"path": "materials/q3-scan.pdf", "status": "partial",
+               "coverage": "第 1–3 页文本层已读；第 4–5 页为扫描页，未识别",
+               "locations": ["q3-scan.pdf 第 1–3 页"], "reason": "宿主无 OCR 能力",
+               "sha256": "<材料文件 sha256>"}],
   "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
              "version": "0.9.0", "unavailable": []},
   "links": {"report": "report.html", "script": "script.md",
             "sha256": {"report": "<报告文件 sha256>", "script": "<讲稿文件 sha256>"},
             "sourceNote": "材料位置说明"},
   "findings": [{"claim": "收入同比增长 12%", "type": "calculation",
-                "sources": ["materials/q3.md"], "pages": ["sum"],
+                "sources": ["materials/q3.md"], "locations": ["q3.md 第 2 段"], "pages": ["sum"],
                 "refs": [{"path": "materials/q3.md", "locator": "§1 收入",
                           "quote": "去年同期为 100 万元", "found": true}],
                 "support": "supported",
@@ -91,10 +108,10 @@
 字段语义：
 
 - `request`：第 0 步的需求；问过的与沿用的都写。
-- `sources`：第 1 步的读取登记；`status` 用 `read` / `partial` / `unreadable`；`sha256` 用 `sha256sum` 或等价方式算材料内容哈希——核验入口用它发现材料事后变化，材料改了旧核验结果就不再算数。
+- `sources`：第 1 步的读取登记；`status` 用 `read` / `partial` / `unreadable`；`coverage` 写实际读到的范围，`partial` 必须同时写明已读与未读部分；`partial` / `unreadable` 必须写 `reason`；`locations` 列定位线索（PDF 页码、Word 段落、工作表与单元格）；`sha256` 用 `sha256sum` 或等价方式算材料内容哈希——核验入口用它发现材料事后变化，材料改了旧核验结果就不再算数。**全部实质材料都 `unreadable` 时初稿不能算完成**，核验入口会判 `record.reading` 未通过。
 - `method`：实际生成方法；外部技能写它的名称与可得版本信息，扫描到候选不算采用。
 - `links`：产物关联与 sha256（`sha256sum` 或等价方式计算）；这是核验入口判断记录是否对应当前产物的依据。
-- `findings`：关键结论（含数值与影响判断）与来源、报告页的对应。`refs` 写材料内的定位：`quote` 保留材料原文（不翻译、不改写），`locator` 写位置（章节、行、表名），`found` 如实标是否定位到；`support` 写材料是否支持表述——`supported`（支持）/ `partial`（部分支持，表述强于材料）/ `unsupported`（不受支持）/ `unverified`（未核实），**引用存在不等于受支持，核对后不支持就必须标 `unsupported`**；`basis` 写检查依据：怎么核对的、看了材料哪几处。能声明输入与口径的计算写 `calculation`（运算支持 `sum`、`difference`、`product`、`ratio`、`percent-change`），并带齐四要素：`unit` 单位、`period` 期间、`definition` 口径、`inputLocations` 每个输入的位置；缺要素的计算核验入口会标为**待核实**，复算不一致会定位到结论与报告页。
+- `findings`：关键结论（含数值与影响判断）与来源、报告页的对应；`locations` 可列材料内定位（如 `q3.pdf 第 2 页`、`Sheet1!B3`），让审阅人能核对原文；`refs` 写结构化定位：`quote` 保留材料原文（不翻译、不改写），`locator` 写位置（章节、行、表名），`found` 如实标是否定位到；`support` 写材料是否支持表述——`supported`（支持）/ `partial`（部分支持，表述强于材料）/ `unsupported`（不受支持）/ `unverified`（未核实），**引用存在不等于受支持，核对后不支持就必须标 `unsupported`**；`basis` 写检查依据：怎么核对的、看了材料哪几处。能声明输入与口径的计算写 `calculation`（运算支持 `sum`、`difference`、`product`、`ratio`、`percent-change`），并带齐四要素：`unit` 单位、`period` 期间、`definition` 口径、`inputLocations` 每个输入的位置；缺要素的计算核验入口会标为**待核实**，复算不一致会定位到结论与报告页。
 - `gaps`：材料与需求缺口。`openItems`：待用户拍板的事项，影响核心结论的 `blocking: true`。
 - `checks`：内容（`content.*`，八项清单见下）与视觉（`visual.*`）核验的逐项声明，状态 `pass` / `fail` / `not_run` / `unavailable`。**没执行的写 `not_run`，不能写 pass。** 要判可交付时，内容八项必须逐项 `pass`；有关键结论缺支持、口径不明的计算或材料没哈希时，核验入口会把内容覆盖降级，不让它显示为通过。
 - `verdict.draftComplete`：结构完整、能进入审阅即为 `true`；`verdict.deliverable` 只有在内容与视觉核验都通过且无阻塞事项时才 `true`，否则留 `null` 或 `false`。**初稿生成完成 ≠ 报告可交付。**
@@ -123,7 +140,7 @@ python3 $S/report_check.py 报告.html --script 讲稿.md --record report-record
 ```
 
 - `--json` 输出 `ae-report-check/1` 结构化结果；退出码 0 表示程序检查全部通过（**不代表可交付**），1 表示有检查未通过，2 表示输入或用法错误。
-- 程序检查覆盖：报告可解析、页面键唯一、讲稿逐页对应、记录结构与版本、记录对应当前产物、引用页存在、计算可复算、检查集合完整、结论支持映射（support 与 refs 一致、无不受支持的结论）、材料关联（登记映射与 sha256 新鲜度）。程序不执行材料中的代码，不推断任意业务口径。
+- 程序检查覆盖：报告可解析、页面键唯一、讲稿逐页对应、记录结构与版本、记录对应当前产物、引用页存在、计算可复算、检查集合完整、读取登记与缺口披露、结论支持映射（support 与 refs 一致、无不受支持的结论）、材料关联（登记映射与 sha256 新鲜度）。程序不执行材料中的代码，不推断任意业务口径。摘要里会给出读取汇总（已读 / 部分读取 / 无法读取）、具体未读范围与记录披露的缺口。
 - 有 `fail` 就修对应产物或记录再重跑；摘要里的「内容核验 / 视觉核验」覆盖情况来自记录，未执行不会显示为通过；结论缺支持声明、计算待核实、材料没哈希或材料变了，覆盖会被降级并写明原因。
 - 向用户回报时引用这份摘要：初稿状态、覆盖、缺口与待办、记录文件位置。**记录未判定可交付之前，不要声称报告可交付。**
 

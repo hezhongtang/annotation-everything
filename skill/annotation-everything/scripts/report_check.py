@@ -53,13 +53,14 @@ KNOWN_RECORD_CHECKS = {
     "visual.pages": "visual",
 }
 CHECK_STATUSES = ("pass", "fail", "not_run", "unavailable")
+# sources[].status 的封闭取值：材料读取登记（#69 决策 4）——格式被接受不等于内容
+# 已读完，按实际读到的范围登记（#71 读取登记、#72 材料关联共用）。
+SOURCE_STATUSES = ("read", "partial", "unreadable")
 REQUIRED_RECORD_FIELDS = ("schema", "generatedAt", "request", "sources", "method",
                           "links", "findings", "gaps", "checks", "openItems", "verdict")
 
 # findings[].support 的封闭取值：材料是否支持表述（决策 12：引用存在不等于受支持）。
 SUPPORT_STATUSES = ("supported", "partial", "unsupported", "unverified")
-# sources[].status 的封闭取值：材料读取登记（#69 决策 4）。
-SOURCE_STATUSES = ("read", "partial", "unreadable")
 # 覆盖状态的严重度序：封顶取更差值；unverified 由新鲜度或材料失配直接给出。
 CAP_SEVERITY = {"covered": 0, "partial": 1, "not_run": 2, "uncovered": 3, "unverified": 4}
 
@@ -88,7 +89,7 @@ class Checks:
 
     ORDER = ("report.parse", "report.pageKeys", "script.pages", "record.structure",
              "record.freshness", "record.pageRefs", "record.calculations", "record.checks",
-             "record.claims", "record.sources")
+             "record.claims", "record.reading", "record.sources")
 
     def __init__(self, locale: str):
         self.locale = locale
@@ -131,6 +132,10 @@ class Checks:
                                   "record.source-stale": "check.err.sourceStale",
                                   "record.source-bad": "check.err.sourceBad"}.get(
                                       code, "check.err.sourceBad"),
+               "record.reading": {"record.source-status": "check.err.sourceStatus",
+                                  "record.source-field": "check.err.sourceField",
+                                  "record.reading-blocked": "check.err.readingBlocked"}.get(
+                                      code, "check.err.sourceStatus"),
                }[cid]
         detail = t(self.locale, key, **params) if params else ""
         self.items[cid] = {"id": cid, "status": state, "code": code, "detail": detail}
@@ -486,10 +491,17 @@ def check_record_sources(record: dict, base_dir: Path, info: dict, c: Checks) ->
     哈希声明了但报告旁找不到文件 → 提示无法对应（材料不在本入口的检查边界内，
     不能武断失败，但也不能静默通过）；结论引用的材料没有 sha256 → 警告并封顶。"""
     entries = record["sources"]
-    bad = [str(s.get("path") or "?") for s in entries
-           if not isinstance(s, dict)
-           or not (isinstance(s.get("path"), str) and s["path"])
-           or s.get("status") not in SOURCE_STATUSES]
+    if not entries:
+        # 材料只在对话里（#71）：没有登记就没有可对应的材料，读取登记判不适用，
+        # 关联检查同样不适用，不把缺登记伪装成已核验。
+        c.set("record.sources", "not_applicable")
+        return False
+    bad = []
+    for s in entries:
+        if not isinstance(s, dict) \
+                or not (isinstance(s.get("path"), str) and s["path"]) \
+                or s.get("status") not in SOURCE_STATUSES:
+            bad.append(str(s.get("path") or "?") if isinstance(s, dict) else "?")
     if bad:
         c.set("record.sources", "fail", code="record.source-bad", items="、".join(bad))
         return False
@@ -570,6 +582,72 @@ def check_record_checks(record: dict | None, c: Checks) -> bool:
     return True
 
 
+def check_reading(record: dict | None, c: Checks) -> dict | None:
+    """读取登记检查（issue #71）：状态枚举、缺口披露完整、定位线索类型。
+
+    返回读取汇总（语言无关的计数与未读明细）；没有记录时返回 None。
+    全部实质材料都不可读时判 record.reading-blocked——空结构或虚构内容
+    不能当成初稿生成完成。格式被接受不等于内容已读完。
+    """
+    if record is None:
+        return None
+    sources = record["sources"]
+    if not sources:
+        c.set("record.reading", "not_applicable")
+        return {"read": 0, "partial": 0, "unreadable": 0, "unread": []}
+    counts = {"read": 0, "partial": 0, "unreadable": 0}
+    unread: list[dict] = []
+    malformed = False
+    for entry in sources:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str) \
+                or not entry["path"].strip():
+            c.set("record.reading", "fail", code="record.source-status", entry="?",
+                  status="?")
+            malformed = True
+            continue
+        path = entry["path"]
+        status = entry.get("status")
+        if status not in SOURCE_STATUSES:
+            c.set("record.reading", "fail", code="record.source-status", entry=path,
+                  status=repr(status))
+            malformed = True
+            continue
+        counts[status] += 1
+        coverage = entry.get("coverage")
+        reason = entry.get("reason")
+        locations = entry.get("locations")
+        bad = []
+        if status == "partial" and not (isinstance(coverage, str) and coverage.strip()):
+            bad.append("coverage")
+        if status in ("partial", "unreadable") \
+                and not (isinstance(reason, str) and reason.strip()):
+            bad.append("reason")
+        if locations is not None and (not isinstance(locations, list)
+                                      or not all(isinstance(x, str) and x.strip()
+                                                 for x in locations)):
+            bad.append("locations")
+        if bad:
+            c.set("record.reading", "fail", code="record.source-field",
+                  entry=path, fields="、".join(bad))
+            malformed = True
+            continue
+        if status != "read":
+            detail = "；".join(x for x in (coverage, reason)
+                              if isinstance(x, str) and x.strip())
+            unread.append({"path": path, "status": status, "detail": detail})
+    if malformed:
+        return {"read": counts["read"], "partial": counts["partial"],
+                "unreadable": counts["unreadable"], "unread": unread}
+    if counts["read"] == 0 and counts["partial"] == 0 and counts["unreadable"] > 0:
+        c.set("record.reading", "fail", code="record.reading-blocked",
+              n=counts["unreadable"])
+        return {"read": 0, "partial": 0, "unreadable": counts["unreadable"],
+                "unread": unread}
+    c.set("record.reading", "pass")
+    return {"read": counts["read"], "partial": counts["partial"],
+            "unreadable": counts["unreadable"], "unread": unread}
+
+
 def coverage_for(record: dict | None, fresh: bool, kind: str) -> tuple[str, int, int, int]:
     """汇总一类核验的覆盖情况；状态语义语言无关，返回 (状态, 通过数, 总数, 失败数)。
 
@@ -599,12 +677,17 @@ def coverage_for(record: dict | None, fresh: bool, kind: str) -> tuple[str, int,
 
 def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
               record_ok: bool, claims_info: dict | None = None,
-              calc_pending: list[str] | None = None, source_stale: bool = False) -> dict:
+              calc_pending: list[str] | None = None, source_stale: bool = False,
+              reading: dict | None = None) -> dict:
     reasons: list[str] = []
     failed_program = checks.failed()
-    draft_complete = draft_ok and not [f for f in failed_program
-                                       if f["id"] in ("report.parse", "report.pageKeys",
-                                                      "script.pages", "record.pageRefs")]
+    # 全部实质材料不可读：空结构或虚构内容不能当作初稿生成完成（issue #71）。
+    reading_blocked = any(f["id"] == "record.reading" and f["code"] == "record.reading-blocked"
+                          for f in failed_program)
+    draft_complete = draft_ok and not reading_blocked \
+        and not [f for f in failed_program
+                 if f["id"] in ("report.parse", "report.pageKeys",
+                                "script.pages", "record.pageRefs")]
     coverage_raw = {"content": coverage_for(record, fresh, "content"),
                     "visual": coverage_for(record, fresh, "visual")}
     coverage = {"content": coverage_raw["content"][0], "visual": coverage_raw["visual"][0]}
@@ -647,6 +730,8 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
         elif not record_ok:
             reasons.append(t(checks.locale, "check.reason.recordChecks"))
         if failed_program:
+            if reading_blocked:
+                reasons.append(t(checks.locale, "check.reason.readingBlocked"))
             reasons.append(t(checks.locale, "check.reason.programFailed",
                              items="、".join(checks.name(f["id"]) for f in failed_program)))
     return {
@@ -666,6 +751,9 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
         "coverage": coverage,
         "coverageCounts": coverage_counts,
         "coverageCapped": {"content": bool(capped), "visual": False},
+        "reading": reading,
+        "gaps": [g for g in record["gaps"] if isinstance(g, str) and g.strip()]
+        if record is not None else [],
         "verdict": {"draftComplete": draft_complete, "deliverable": deliverable,
                     "reasons": reasons},
     }
@@ -700,6 +788,7 @@ def check_report(report_path: Path, script_path: Path | None = None,
     claims_info = None
     calc_pending: list[str] = []
     source_stale = False
+    reading = None
     if record is not None:
         claims_info = analyze_claims(record)
         check_page_refs(record, pages, c)
@@ -707,8 +796,9 @@ def check_report(report_path: Path, script_path: Path | None = None,
         check_record_claims(claims_info, c)
         source_stale = check_record_sources(record, report_path.parent, claims_info, c)
         check_record_checks(record, c)
+        reading = check_reading(record, c)
     result = summarize(record, fresh, c, draft_ok, record_ok, claims_info=claims_info,
-                       calc_pending=calc_pending, source_stale=source_stale)
+                       calc_pending=calc_pending, source_stale=source_stale, reading=reading)
     result["schema"] = RESULT_SCHEMA
     result["inputs"] = {
         "report": {"path": report_path.name, "sha256": sha256_bytes(report_bytes)},
@@ -759,6 +849,16 @@ def render_summary(result: dict) -> str:
             word = t(loc, "check.coverage." + state, done=n.get("done", 0),
                      total=n.get("total", 0), failed=n.get("failed", 0))
         lines.append(f"  · {label}：{word}" if loc == "zh-CN" else f"  · {label}: {word}")
+    reading = result.get("reading")
+    if reading and (reading["read"] or reading["partial"] or reading["unreadable"]):
+        lines.append(t(loc, "check.reading.line", read=reading["read"],
+                       partial=reading["partial"], unreadable=reading["unreadable"]))
+        if reading["unread"]:
+            items = "；".join(f"{e['path']} — {e['detail']}" if e.get("detail") else e["path"]
+                              for e in reading["unread"])
+            lines.append("  " + t(loc, "check.reading.unread", items=items))
+    if result.get("gaps"):
+        lines.append("  " + t(loc, "check.gaps.line", gaps="；".join(result["gaps"])))
     rec = result["record"]
     rec_input = (result.get("inputs") or {}).get("record")
     if rec_input:
@@ -770,11 +870,6 @@ def render_summary(result: dict) -> str:
     else:
         lines.append(t(loc, "check.record.line", version=rec["version"],
                        fresh=t(loc, "check.record.fresh" if rec["fresh"] else "check.record.stale")))
-        if rec["gaps"]:
-            shown = "；".join(g[:40] for g in rec["gaps"][:3])
-            if len(rec["gaps"]) > 3:
-                shown += "…"
-            lines.append(t(loc, "check.gaps.line", gaps=shown))
         oi = rec["openItems"]
         lines.append(t(loc, "check.openItems.line", n=oi["n"], blocking=oi["blocking"]))
     lines.append(t(loc, "check.deliverable.yes" if v["deliverable"]
