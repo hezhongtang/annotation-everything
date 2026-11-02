@@ -32,6 +32,7 @@ import e2e_scenarios as reg  # noqa: E402
 FULL_ORDER = (
     "generated-draft-loop",
     "report-verdict-loop",
+    "external-method-loop",
     "installed-delivery",
     "locale-live-controls",
     "skill-search",
