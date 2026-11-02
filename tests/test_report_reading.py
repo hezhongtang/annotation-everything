@@ -149,6 +149,38 @@ def check_by_id(payload: dict, cid: str) -> dict:
     raise AssertionError(f"检查结果里没有 {cid}：{[c['id'] for c in payload['checks']]}")
 
 
+class OfficePipelineDemoTests(unittest.TestCase):
+    """管线演示（issue #71 验收 1 的确定性部分）：
+    合成 PDF / Word / 表格的提取事实与定位 → 逐页报告 → 核验入口 → 对照页。
+    读取本身由宿主能力完成；这里从提取结果开始，钉住定位信息沿流程保留、
+    核验入口认得这份记录、审阅目录能生成。真实 Agent 行为由 evals/ 覆盖。
+    """
+
+    def test_report_with_locations_checks_and_builds(self):
+        import subprocess
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, make_reading_record())
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["verdict"]["draftComplete"])
+        self.assertEqual(check_by_id(payload, "record.reading")["status"], "pass")
+        self.assertEqual(payload["reading"]["read"], 2)
+        self.assertEqual(payload["reading"]["partial"], 1)
+        # 结论定位引用报告页键；材料内定位（页码/段落/单元格）留在记录里
+        review = d / "review"
+        done = subprocess.run(
+            [sys.executable, str(SCRIPTS / "build_viewer.py"), "--report", str(paths["report"]),
+             "--script", str(paths["script"]), "--out", str(review), "--name", "办公材料演示",
+             "--no-scan-skills"],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "AE_HOME": str(d / "ledger")})
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        page = (review / "index.html").read_text(encoding="utf-8")
+        for location in ("q3-review.pdf 第 2 页", "sales-plan.docx 第 3 段",
+                         "channel-sales.xlsx Sheet1!B2:B9"):
+            self.assertIn(location, page, f"材料定位 {location} 应随报告进入对照页")
+
+
 class ReadingRegistrationTests(unittest.TestCase):
     """读取登记：状态枚举、披露完整性与定位线索类型。"""
 
