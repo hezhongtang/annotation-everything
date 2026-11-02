@@ -55,10 +55,11 @@ class EfficiencyCliTests(unittest.TestCase):
                                   "isolation": {"mechanism": "flock"}},
                   "groups": [group], "timing": {"queued_at": stamp(start),
                        "started_at": stamp(start), "ended_at": stamp(start + seconds),
-                       "queue_seconds": 2, "lock_wait_seconds": 3, "cleanup_seconds": 1},
+                       "queue_seconds": 2, "lock_wait_seconds": 3, "cleanup_seconds": 1, "wall_seconds": seconds},
                   "result": {"outcome": outcome, "exit_status": 0 if outcome == "passed" else 1,
                              "usable_as_evidence": outcome == "passed"},
-                  "evidence": {"integrity": "ok", "logs": [{"path": "unit.log",
+                  "evidence": {"integrity": "ok", "record_path": "record.json", "cases": [], "notes": [],
+                       "logs": [{"group": "unit-related", "path": "unit.log", "bytes": len(log),
                        "sha256": hashlib.sha256(log).hexdigest()}]},
                   "shadow": {"comparable": True, "candidate_omissions": omissions or []}}
         (directory / "record.json").write_text(json.dumps(record), encoding="utf-8")
@@ -71,6 +72,13 @@ class EfficiencyCliTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(ROOT / "verify.py"), "report", "--efficiency",
                                "--out-dir", str(self.root), "--now", stamp(now), "--json", *args],
                               capture_output=True, text=True, env=env, timeout=20)
+
+    def plan(self):
+        env = dict(os.environ, AE_VERIFY_DIR=str(self.root))
+        result = subprocess.run([sys.executable, str(ROOT / "verify.py"), "plan", "--phase", "development", "--json"],
+                                capture_output=True, text=True, env=env, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)["selection"]
 
     def test_report_distinguishes_parallel_execution_and_only_reads_history(self):
         first = self.record("one", seconds=20)
@@ -329,6 +337,137 @@ else:
         self.assertEqual(result.returncode, 1)
         self.assertEqual(json.loads(result.stdout)["status"], "gaps")
         self.assertNotIn("Traceback", result.stderr)
+
+    def test_persisted_reports_redact_paths_and_keep_locatable_source_aliases(self):
+        self.record("local-record")
+        imported_record = self.record("imported-record", start=30)
+        imported = Path(self.tmp.name) / "private-source"
+        (imported / "runs").mkdir(parents=True)
+        shutil.move(str(imported_record.parent), str(imported / "runs" / imported_record.parent.name))
+        prior_review = self.root / "efficiency" / "reviews" / "prior.json"
+        prior_review.parent.mkdir(parents=True)
+        prior_review.write_text(json.dumps({"schema": "ae-verify-efficiency/1", "source": str(imported)}))
+        events = Path(self.tmp.name) / "private-events.json"
+        events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": list(range(10)),
+            "gaps": [{"source": str(imported / "missing"), "reason": "cannot read " + str(imported / "missing")}],
+            "selection_findings": [{"status": "confirmed", "strategy_version": 3,
+                "reason": "synthetic finding in /private/synthetic-home/secret/file.json",
+                "evidence": [str(imported / "runs" / "imported-record" / "record.json")]}]}))
+        result = self.cli("--rebuild", "--source", str(imported), "--events", str(events))
+        report = json.loads(result.stdout)
+        locations = [item["record_path"] for item in report["history"]]
+        self.assertIn("local/runs/local-record/record.json", locations)
+        self.assertTrue(any(item.startswith("source-") and item.endswith("/runs/imported-record/record.json") for item in locations))
+        for path in (self.root / "efficiency").rglob("*"):
+            if path.is_file():
+                content = path.read_text()
+                self.assertNotIn(str(Path(self.tmp.name)), content, str(path))
+                self.assertNotIn("/private/synthetic-home", content, str(path))
+
+    def test_old_findings_cannot_downgrade_the_current_guard_in_any_order(self):
+        self.record("guard-input")
+        events = Path(self.tmp.name) / "guard-events.json"
+        current = {"status": "confirmed", "strategy_version": 3, "reason": "current guard",
+                   "evidence": ["runs/guard-input/record.json"]}
+        old = dict(current, strategy_version=2, reason="old guard")
+        for findings in ([current, old], [old, current], [old]):
+            with self.subTest(findings=[item["strategy_version"] for item in findings]):
+                events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": [],
+                                              "gaps": [], "selection_findings": findings}))
+                self.cli("--rebuild", "--events", str(events))
+                selection = self.plan()
+                self.assertTrue(selection["policy_guard"]["active"])
+                self.assertEqual(selection["suggested"]["groups"], ["all"])
+                guard = json.loads((self.root / "efficiency" / "selection-guard.json").read_text())
+                self.assertEqual(guard["strategy_version"], 3)
+        for findings in ([dict(current, strategy_version=4), old], [current]):
+            events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": [],
+                                          "gaps": [], "selection_findings": findings}))
+            self.cli("--rebuild", "--events", str(events))
+            self.assertTrue(self.plan()["policy_guard"]["active"])
+            self.assertEqual(self.plan()["suggested"]["groups"], ["all"])
+            self.assertEqual(json.loads((self.root / "efficiency" / "selection-guard.json").read_text())["strategy_version"], 4)
+
+    def test_missing_evidence_and_invalid_durations_preserve_claims_but_exclude_samples(self):
+        changes = [("evidence-object", None), ("logs", None), ("log-file", None),
+                   ("duration", None), ("duration", -1), ("duration", True), ("duration", "20"),
+                   ("duration", float("nan")), ("duration", float("inf")), ("duration", 10 ** 1000)]
+        for index, (kind, value) in enumerate(changes):
+            with self.subTest(kind=kind, value=repr(value)[:20]):
+                path = self.record("invalid-%d" % index, start=index * 30)
+                record = json.loads(path.read_text())
+                if kind == "evidence-object":
+                    del record["evidence"]
+                elif kind == "logs":
+                    record["evidence"]["logs"] = []
+                elif kind == "log-file":
+                    (path.parent / "unit.log").unlink()
+                else:
+                    record["groups"][0]["timing"]["child_seconds"] = value
+                path.write_text(json.dumps(record))
+        result = self.cli()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["metrics"]["outcomes"]["passed"], len(changes))
+        self.assertTrue(report["gaps"])
+        self.assertTrue(all(bucket["sample_count"] == 0 and all(not sample["valid"] for sample in bucket["samples"])
+                            for bucket in report["comparison_groups"]))
+
+    def test_missing_execution_duration_is_not_a_valid_zero_second_pass(self):
+        path = self.record("missing-duration")
+        record = json.loads(path.read_text())
+        del record["groups"][0]["timing"]["child_seconds"]
+        path.write_text(json.dumps(record))
+        result = self.cli()
+        self.assertEqual(result.returncode, 1)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["metrics"]["outcomes"]["passed"], 1)
+        self.assertEqual(report["comparison_groups"][0]["sample_count"], 0)
+        self.assertFalse(report["comparison_groups"][0]["samples"][0]["valid"])
+        raw_report = subprocess.run([sys.executable, str(ROOT / "verify.py"), "report", "--out-dir", str(self.root),
+                                     "--run", "missing-duration", "--json"], capture_output=True, text=True, timeout=20)
+        self.assertEqual(raw_report.returncode, 1)
+        self.assertFalse(json.loads(raw_report.stdout)["result"]["usable_as_evidence"])
+
+    def test_bounded_merge_history_keeps_consumption_order_and_rejects_unknown_replays(self):
+        events = Path(self.tmp.name) / "merge-history.json"
+        batches = [list(range(800, 900)), list(range(900, 1000)), list(range(910, 1010))]
+        for index, batch in enumerate(batches):
+            self.record("merge-batch-%d" % index, start=index * 60)
+            events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": batch, "gaps": []}))
+            report = json.loads(self.cli("--rebuild", "--events", str(events), now=3600 + index * 10).stdout)
+            self.assertTrue(report["review"]["generated"])
+        self.record("same-events-new-sample", start=200)
+        replay = json.loads(self.cli("--rebuild", "--events", str(events), now=3640).stdout)
+        self.assertFalse(replay["review"]["generated"])
+        self.record("evicted-events-new-sample", start=250)
+        events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": batches[0], "gaps": []}))
+        old_replay = json.loads(self.cli("--rebuild", "--events", str(events), now=3650).stdout)
+        self.assertFalse(old_replay["review"]["generated"])
+        self.assertTrue(old_replay["merge_events"]["unconfirmed"])
+        self.assertTrue(old_replay["gaps"])
+        self.record("fresh-low-numbered-merges", start=300)
+        fresh = list(range(1, 11))
+        events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": fresh, "gaps": [],
+            "merged_pr_events": [{"id": identity, "merged_at": stamp(3660).replace("+00:00", "Z")} for identity in fresh]}))
+        newly_merged = json.loads(self.cli("--rebuild", "--events", str(events), now=3670).stdout)
+        self.assertTrue(newly_merged["review"]["generated"])
+        self.assertEqual(newly_merged["merge_events"]["new"], [str(identity) for identity in fresh])
+        self.record("known-merge-time-replay", start=330)
+        self.assertFalse(json.loads(self.cli("--rebuild", "--events", str(events), now=3680).stdout)["review"]["generated"])
+
+    def test_lost_review_state_does_not_describe_old_events_as_new(self):
+        self.record("before-state-loss")
+        events = Path(self.tmp.name) / "old-events.json"
+        identities = list(range(10))
+        events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": identities, "gaps": []}))
+        self.cli("--rebuild", "--events", str(events))
+        (self.root / "efficiency" / "state.json").write_text("{broken")
+        self.record("after-state-loss", start=30)
+        report = json.loads(self.cli("--rebuild", "--events", str(events), now=3610).stdout)
+        self.assertFalse(report["review"]["generated"])
+        self.assertEqual(report["merge_events"]["new"], [])
+        self.assertEqual(report["merge_events"]["unconfirmed"], [str(identity) for identity in identities])
 
 
 if __name__ == "__main__":

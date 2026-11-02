@@ -72,14 +72,16 @@ def extract_artifact(repository, artifact, target):
 
 def collect(repository, out_dir, limit):
     out_dir.mkdir(parents=True, exist_ok=True)
-    gaps, merged, sources, locations = [], [], [], []
+    gaps, merged, merge_events, sources, locations = [], [], [], [], []
     def gap(source, reason):
-        gaps.append({"source": source, "reason": str(reason)})
+        gaps.append({"source": source, "reason": verify_report.error_label(reason) if isinstance(reason, Exception) else str(reason)})
     try:
         prs = gh_api("repos/%s/pulls?state=closed&sort=updated&direction=desc&per_page=100" % repository)
         if not isinstance(prs, list):
             raise ValueError("合并 PR 清单 schema 不兼容")
         merged = ["%s#%s" % (repository, item["number"]) for item in prs if item.get("merged_at")]
+        merge_events = [{"id": "%s#%s" % (repository, item["number"]), "merged_at": item["merged_at"]}
+                        for item in prs if item.get("merged_at")]
         if len(prs) == 100:
             gap("merged-prs", "只覆盖最近100个已关闭PR；更早事件缺失，不推断完整历史")
     except (ValueError, KeyError, TypeError) as exc:
@@ -116,6 +118,9 @@ def collect(repository, out_dir, limit):
         # 只恢复同仓库、默认分支、报告工作流自己的状态；PR 构件不能设置守卫或去重状态。
         prior = next((a for a in sorted(artifacts, key=lambda a: a.get("created_at", ""), reverse=True)
                       if a.get("name") == "verify-efficiency-history" and not a.get("expired")), None)
+        if (prior is None and any(a.get("name") == "verify-efficiency-history" for a in artifacts)
+                and not (out_dir / "efficiency" / "state.json").exists()):
+            gap("review-state", "历史回顾构件已过期，无法确认去重历史")
         if prior is not None and not (out_dir / "efficiency" / "state.json").exists():
             try:
                 repo = gh_api("repos/%s" % repository)
@@ -133,7 +138,7 @@ def collect(repository, out_dir, limit):
                 state = json.loads(states[0].read_text(encoding="utf-8"))
                 if state.get("schema") != verify_report.SCHEMA:
                     raise ValueError("历史状态 schema 不兼容")
-                verify_report._write(out_dir / "efficiency" / "state.json", json.dumps(state, ensure_ascii=False))
+                verify_report._write(out_dir / "efficiency" / "state.json", json.dumps(verify_report.redact_paths(state, [out_dir]), ensure_ascii=False))
             except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile) as exc:
                 gap("review-state", exc)
         wanted = {Path(source).parts[1] for source in sources}
@@ -145,8 +150,9 @@ def collect(repository, out_dir, limit):
     except (ValueError, KeyError, TypeError) as exc:
         gap("ci-artifacts", exc)
     payload = {"schema": "ae-verify-events/1", "collected_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-               "merged_prs": merged, "sources": sources, "source_artifacts": locations, "gaps": gaps}
-    verify_report._write(out_dir / "ci-events.json", json.dumps(payload, ensure_ascii=False, indent=2))
+               "merged_prs": merged, "merged_pr_events": merge_events,
+               "sources": sources, "source_artifacts": locations, "gaps": gaps}
+    verify_report._write(out_dir / "ci-events.json", json.dumps(verify_report.redact_paths(payload, [out_dir]), ensure_ascii=False, indent=2))
     print("只读 CI 采集：%d 个记录根、%d 个合并 PR、%d 个明确缺口" % (len(sources), len(merged), len(gaps)))
     return 1 if gaps else 0
 

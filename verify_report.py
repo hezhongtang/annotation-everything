@@ -6,19 +6,56 @@ import hashlib
 import json
 import math
 import os
+import re
 import statistics
 import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
 
 SCHEMA = "ae-verify-efficiency/1"
-RULE_VERSION = 1
+RULE_VERSION = 2
 MAX_HISTORY = 200
 MAX_REVIEWS = 12
 FRESHNESS_HOURS = 24
 REGRESSION_SAMPLES = 3
 REGRESSION_RATIO = 1.2
 REGRESSION_SECONDS = 10
+
+_ABSOLUTE_PATH = re.compile(r"(?<![\w:/])(?:[A-Za-z]:[\\/]|/)[^\s\"'<>，；：,;\]\[{}()]+")
+
+
+def redact_paths(value, roots=()):
+    """投影只保存来源别名与根内定位；异常中的其他绝对路径也不落盘。"""
+    replacements = []
+    primary = Path(roots[0]).absolute() if roots else None
+    for root in roots:
+        absolute = Path(root).absolute()
+        try:
+            relative = absolute.relative_to(primary)
+            alias = "local" + ("/" + relative.as_posix() if relative.parts else "")
+        except ValueError:
+            alias = "source-" + digest(str(absolute))[:12]
+        replacements.append((str(absolute), alias))
+    replacements.sort(key=lambda item: -len(item[0]))
+
+    def text_value(text):
+        for path, alias in replacements:
+            text = text.replace(path, alias)
+        return _ABSOLUTE_PATH.sub("<external-path>", text)
+
+    def visit(item):
+        if isinstance(item, str):
+            return text_value(item)
+        if isinstance(item, dict):
+            return {text_value(key) if isinstance(key, str) else key: visit(child) for key, child in item.items()}
+        if isinstance(item, (tuple, list)):
+            return [visit(child) for child in item]
+        return item
+    return visit(value)
+
+
+def error_label(exc):
+    return type(exc).__name__ if isinstance(exc, OSError) else redact_paths(str(exc))
 
 
 def instant(value):
@@ -31,8 +68,11 @@ def instant(value):
         return None
 
 
-def number(value):
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else 0.0
+def number(value, default=0.0):
+    try:
+        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else default
+    except OverflowError:
+        return default
 
 
 def digest(value):
@@ -121,7 +161,7 @@ def _history(roots, loader, now):
                                 "content_digest": raw_digest,
                                 "problems": problems, "historical_only": historical})
             except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-                gaps.append({"source": str(path), "reason": "证据不可用：%s" % exc})
+                gaps.append({"source": str(path), "reason": "证据不可用：%s" % error_label(exc)})
     entries.sort(key=lambda item: (instant(item["record"].get("ended_at")) or 0, item["run_id"]))
     truncated += max(0, len(entries) - MAX_HISTORY)
     return entries[-MAX_HISTORY:], gaps, truncated
@@ -195,7 +235,7 @@ def build_summary(roots, loader, now=None, events=None):
             if group.get("outcome") == "reused":
                 metrics["evidence_references"] += 1
                 continue
-            seconds = number((group.get("timing") or {}).get("child_seconds"))
+            seconds = number((group.get("timing") or {}).get("child_seconds"), default=None)
             started = instant(group.get("started_at"))
             if started is not None and seconds:
                 if window is not None:
@@ -206,13 +246,14 @@ def build_summary(roots, loader, now=None, events=None):
                         metrics["interval_clipped_runs"].append(entry["run_id"])
                 if first_group is None:
                     first_group = group
-            metrics["execution_seconds"] += seconds
+            metrics["execution_seconds"] += seconds if seconds is not None else 0
             metrics["skipped_cases"] += int(number((group.get("counts") or {}).get("skipped")))
             key, dimensions, missing = _comparison(record, group)
             bucket = buckets.setdefault(key, {"id": key, "dimensions": dimensions,
                       "comparable": not missing, "incomparable_reasons": missing, "samples": []})
             valid = (not entry["problems"] and record.get("state") == "complete"
-                     and (record.get("input") or {}).get("covers_final_input") is True)
+                     and (record.get("input") or {}).get("covers_final_input") is True
+                     and seconds is not None and started is not None)
             sample = {"run_id": entry["run_id"], "record_path": entry["record_path"],
                       "seconds": seconds, "outcome": group.get("outcome"),
                       "valid": valid, "historical_only": entry["historical_only"]}
@@ -222,14 +263,14 @@ def build_summary(roots, loader, now=None, events=None):
                 attempts[(fingerprint, key)].append(sample)
                 if group.get("outcome") == "passed":
                     repeats[(fingerprint, key)].append(sample)
-            for case in (group.get("cases") or []) + (group.get("scenarios") or []):
+            for case in ((group.get("cases") or []) + (group.get("scenarios") or [])) if valid else []:
                 if case.get("seconds") is not None:
                     slow.append({"id": case.get("id"), "seconds": number(case.get("seconds")),
                                  "run_id": entry["run_id"], "group": group.get("name"),
                                  "comparison_group": key, "record_path": entry["record_path"]})
         if first_group is not None and (record.get("context") or {}).get("phase") == "development":
-            measured = timing.get("first_feedback_seconds")
-            if isinstance(measured, (int, float)) and not isinstance(measured, bool) and math.isfinite(measured) and measured >= 0:
+            measured = number(timing.get("first_feedback_seconds"), default=None)
+            if measured is not None:
                 feedback, precision = measured, "monotonic"
             else:
                 # 旧秒级时间戳不能与高精度 child_seconds 相减；按已记录的时长估算。
@@ -303,7 +344,7 @@ def build_summary(roots, loader, now=None, events=None):
                 "先固定环境与集合采样，保留信号、时序和安全断言"))
     unique = {candidate["id"]: candidate for candidate in candidates}
     chosen = sorted(unique.values(), key=lambda item: (-item["priority"], item["id"]))[:3]
-    return {"schema": SCHEMA, "rule_version": RULE_VERSION,
+    return redact_paths({"schema": SCHEMA, "rule_version": RULE_VERSION,
             "generated_at": datetime.datetime.fromtimestamp(now, datetime.timezone.utc).isoformat(),
             "status": "gaps" if gaps else "observed", "metrics": metrics,
             "comparison_groups": groups, "comparison_note": "跨环境、跨测试/场景集合不可直接比较；缺失版本不推断性能收益",
@@ -312,9 +353,9 @@ def build_summary(roots, loader, now=None, events=None):
             "history": [{k: v for k, v in entry.items() if k != "record"} for entry in entries],
             "retention": {"max_runs": MAX_HISTORY, "omitted_runs": truncated,
                           "raw_evidence": "原始证据不改写；投影有界，旧构件按原保留策略管理"},
-            "merged_prs": sorted(set(str(item) for item in event_data.get("merged_prs") or [])),
+            "merged_prs": list(dict.fromkeys(str(item) for item in event_data.get("merged_prs") or [])),
             "source_artifacts": event_data.get("source_artifacts") or [],
-            "review": {"generated": False, "reason": "只读报告；--rebuild 更新归档与周期状态"}}
+            "review": {"generated": False, "reason": "只读报告；--rebuild 更新归档与周期状态"}}, roots)
 
 
 def read_events(path):
@@ -339,7 +380,7 @@ def read_events(path):
         return payload
     except (OSError, ValueError) as exc:
         return {"schema": "ae-verify-events/1", "merged_prs": [],
-                "gaps": [{"source": str(path), "reason": "远端事件清单不可用：%s" % exc}]}
+                "gaps": [{"source": str(path), "reason": "远端事件清单不可用：%s" % error_label(exc)}]}
 
 
 def sources(root, extra, events):
@@ -353,17 +394,92 @@ def sources(root, extra, events):
     return list(dict.fromkeys(roots))
 
 
+def _version(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _valid_guard(guard):
+    return (isinstance(guard, dict) and guard.get("schema") == "ae-verify-policy-guard/1"
+            and guard.get("active") is True and _version(guard.get("strategy_version"))
+            and isinstance(guard.get("reason"), str) and bool(guard["reason"])
+            and isinstance(guard.get("evidence", []), list)
+            and all(isinstance(item, str) for item in guard.get("evidence", [])))
+
+
+def _merge_guard(directory, state, findings, roots):
+    """已有守卫和确认事件取最高策略版本；乱序、重放或缺损均不能降级。"""
+    try:
+        import verify_selection
+        current = verify_selection.STRATEGY_VERSION
+        if not _version(current):
+            raise ValueError("策略版本未知")
+    except Exception:
+        current = 2 ** 31 - 1  # 版本无法确认时保持守卫，待恢复可信策略后人工处理。
+    candidates, problems = [], []
+    path = directory / "selection-guard.json"
+
+    def uncertain(reason, version=None):
+        candidates.append({"schema": "ae-verify-policy-guard/1", "active": True,
+                           "strategy_version": version if _version(version) else current,
+                           "reason": reason, "evidence": []})
+
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if not _valid_guard(existing):
+                raise ValueError("守卫字段不完整")
+            candidates.append(existing)
+        except (OSError, ValueError) as exc:
+            uncertain("既有策略守卫不可确认，保守扩大完整检查：%s" % error_label(exc))
+    prior = state.get("guard_strategy_version")
+    if state.get("guard_required") and (_version(prior) and prior > max(
+            [item["strategy_version"] for item in candidates] or [-1]) or not _version(prior)):
+        uncertain("状态要求的策略守卫缺失或版本倒退，保守扩大完整检查", prior)
+    if not isinstance(findings, list):
+        findings = [None]
+    for finding in findings:
+        if (isinstance(finding, dict) and finding.get("status") in ("confirmed", "uncertain")
+                and _version(finding.get("strategy_version")) and isinstance(finding.get("reason"), str)
+                and finding["reason"] and isinstance(finding.get("evidence"), list)
+                and finding["evidence"] and all(isinstance(item, str) for item in finding["evidence"])):
+            candidates.append({"schema": "ae-verify-policy-guard/1", "active": True,
+                               "strategy_version": finding["strategy_version"],
+                               "reason": finding["reason"], "evidence": finding["evidence"]})
+        else:
+            uncertain("影响确认事件不完整，无法界定影响，保守扩大完整检查")
+            problems.append({"source": "selection_findings", "reason": "影响确认事件不完整；已保守扩大范围"})
+    if not candidates:
+        return None, False, problems
+    highest = max(item["strategy_version"] for item in candidates)
+    applicable = [redact_paths(item, roots) for item in candidates if item["strategy_version"] == highest]
+    reasons = sorted({reason for item in applicable for reason in
+                      (item.get("reasons") if isinstance(item.get("reasons"), list) else [item["reason"]])
+                      if isinstance(reason, str)})[:MAX_HISTORY]
+    evidence = sorted({source for item in applicable for source in item.get("evidence", [])})[:MAX_HISTORY]
+    guard = {"schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": highest,
+             "reason": "；".join(reasons), "reasons": reasons, "evidence": evidence}
+    _write(path, json.dumps(guard, ensure_ascii=False, indent=2))
+    return highest, True, problems
+
+
 def selection_guard(selection, root):
     """守卫只扩大范围；损坏从紧，旧策略守卫由受审查的新版本替代。"""
     path = Path(root) / "efficiency" / "selection-guard.json"
-    if not path.exists():
+    try:
+        path.stat()
+        missing = False
+    except FileNotFoundError:
+        missing = True
+    except OSError:
+        missing = False  # 无法读取不能被 exists() 的 False 误解为不存在。
+    if missing:
         state_path = Path(root) / "efficiency" / "state.json"
         try:
             state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
             prior = state.get("guard_strategy_version")
             current = selection.get("strategy_version")
             if (not state.get("guard_required") or
-                    isinstance(prior, int) and isinstance(current, int) and prior < current):
+                    _version(prior) and _version(current) and prior < current):
                 return selection
         except (OSError, ValueError, AttributeError):
             pass
@@ -375,17 +491,15 @@ def selection_guard(selection, root):
         return selection
     try:
         guard = json.loads(path.read_text(encoding="utf-8"))
-        if (guard.get("schema") != "ae-verify-policy-guard/1" or guard.get("active") is not True
-                or not isinstance(guard.get("strategy_version"), int)
-                or not isinstance(guard.get("reason"), str) or not guard["reason"]):
+        if not _valid_guard(guard):
             raise ValueError("守卫字段不完整")
         current = selection.get("strategy_version")
         if isinstance(current, int) and guard["strategy_version"] < current:
             selection["policy_guard"] = {"active": False, "reason": "守卫属于旧策略版本；当前受版本控制策略已更新"}
             return selection
-        reason = guard["reason"]
+        reason = redact_paths(guard["reason"], [root])
     except (OSError, ValueError, AttributeError, TypeError) as exc:
-        reason = "效率策略守卫不可确认，保守扩大完整检查：%s" % exc
+        reason = "效率策略守卫不可确认，保守扩大完整检查：%s" % error_label(exc)
     selection["policy_guard"] = {"active": True, "reason": reason, "rule_version": RULE_VERSION}
     selection["fallback"] = {"kind": "efficiency_guard", "reason": reason}
     selection["suggested"] = {"runs_tests": True, "groups": ["all"], "selectors": [],
@@ -408,6 +522,42 @@ def _write(path, value):
             pass
 
 
+def _new_merge_events(summary, state, events):
+    """有限窗口外只以 merged_at 晚于上次回顾证明新合并，不用编号推断时序。"""
+    known = list(dict.fromkeys(state.get("reviewed_prs") or []))
+    truncated = state.get("pr_history_truncated", len(known) >= MAX_HISTORY)
+    clock, previous = instant(summary["generated_at"]), instant(state.get("reviewed_at"))
+    times, invalid, gaps = {}, set(), []
+    rows = (events or {}).get("merged_pr_events", [])
+    if not isinstance(rows, list):
+        rows = [{"id": identity} for identity in summary["merged_prs"]]
+    for item in rows:
+        identity = item.get("id") if isinstance(item, dict) else None
+        if not isinstance(identity, (str, int)) or isinstance(identity, bool):
+            gaps.append({"source": "merged_pr_events", "reason": "合并时间事件缺少有效身份"})
+            continue
+        identity = str(identity)
+        merged_at = instant(item.get("merged_at"))
+        if merged_at is None or merged_at > clock or identity in times and times[identity] != merged_at:
+            invalid.add(identity)
+            gaps.append({"source": "merged_pr_events", "reason": "合并时间缺失、在未来或存在冲突"})
+        else:
+            times[identity] = merged_at
+    new, uncertain = [], []
+    known_set = set(known)
+    for identity in summary["merged_prs"]:
+        if identity in known_set:
+            continue
+        if identity in invalid or state.get("incomplete_history") or truncated and not (
+                identity in times and previous is not None and times[identity] > previous):
+            uncertain.append(identity)
+        else:
+            new.append(identity)
+    if uncertain:
+        gaps.append({"source": "merged_prs", "reason": "合并事件超出可证明的去重窗口或时间不可确认；未计为新增"})
+    return known, new, uncertain, bool(truncated), gaps
+
+
 def rebuild(root, roots, loader, now=None, events=None):
     """在既有资源锁协议内更新有界投影，原始记录不改写。"""
     import host_isolation
@@ -424,44 +574,33 @@ def rebuild(root, roots, loader, now=None, events=None):
                     or not all(isinstance(state.get(key), list) and all(isinstance(item, str) for item in state[key])
                                for key in ("sample_ids", "reviewed_prs"))
                     or not isinstance(state.get("candidate_versions"), dict)
+                    or "pr_history_truncated" in state and not isinstance(state["pr_history_truncated"], bool)
                     or instant(state.get("reviewed_at")) is None):
                 raise ValueError("回顾状态字段不完整")
             if state.get("incomplete_history"):
                 state_problem = "回顾去重历史不完整；须恢复可信状态后再生成增量回顾"
         except (OSError, ValueError) as exc:
             state = {}
-            state_problem = "回顾状态损坏；不生成增量回顾：%s" % exc
+            state_problem = "回顾状态损坏；不生成增量回顾：%s" % error_label(exc)
+        if any(item.get("source") == "review-state" for item in (events or {}).get("gaps", []) if isinstance(item, dict)):
+            state_problem = "远端回顾去重历史不可确认；恢复可信状态后再生成增量回顾"
         summary = build_summary(roots, loader, now=now, events=events)
-        findings = (events or {}).get("selection_findings") or []
-        if not isinstance(findings, list):
-            findings = [None]
-        guard_version = state.get("guard_strategy_version")
-        for finding in findings:
-            if (isinstance(finding, dict) and finding.get("status") in ("confirmed", "uncertain")
-                    and isinstance(finding.get("strategy_version"), int)
-                    and isinstance(finding.get("reason"), str) and finding["reason"]
-                    and isinstance(finding.get("evidence"), list) and finding["evidence"]):
-                guard = {"schema": "ae-verify-policy-guard/1", "active": True,
-                         "strategy_version": finding["strategy_version"],
-                         "reason": finding["reason"], "evidence": finding["evidence"]}
-                _write(directory / "selection-guard.json", json.dumps(guard, ensure_ascii=False, indent=2))
-                guard_version = finding["strategy_version"]
-            else:
-                import verify_selection
-                guard_version = verify_selection.STRATEGY_VERSION
-                _write(directory / "selection-guard.json", json.dumps({
-                    "schema": "ae-verify-policy-guard/1", "active": True,
-                    "strategy_version": guard_version,
-                    "reason": "影响确认事件不完整，无法界定影响，保守扩大完整检查",
-                    "evidence": []}, ensure_ascii=False, indent=2))
-                summary["gaps"].append({"source": "selection_findings", "reason": "影响确认事件不完整；已保守扩大范围"})
-                summary["status"] = "gaps"
+        guard_version, guard_required, guard_problems = _merge_guard(
+            directory, state, (events or {}).get("selection_findings") or [], roots)
+        summary["gaps"].extend(guard_problems)
+        if guard_problems:
+            summary["status"] = "gaps"
         clock = instant(summary["generated_at"])
         ids = sorted(item["run_id"] + ":" + item["content_digest"] for item in summary["history"])
         previous_ids = set(state.get("sample_ids") or [])
         new_samples = sorted(set(ids) - previous_ids)
-        old_prs = set(state.get("reviewed_prs") or [])
-        new_prs = sorted(set(summary["merged_prs"]) - old_prs)
+        merge_state = dict(state, incomplete_history=True) if state_problem else state
+        consumed_prs, new_prs, uncertain_prs, history_truncated, merge_gaps = _new_merge_events(summary, merge_state, events)
+        summary["gaps"].extend(merge_gaps)
+        summary["merge_events"] = {"new": new_prs, "unconfirmed": uncertain_prs,
+                                   "history_truncated": history_truncated}
+        if merge_gaps:
+            summary["status"] = "gaps"
         previous_time = instant(state.get("reviewed_at"))
         days_due = previous_time is not None and clock - previous_time >= 7 * 86400
         merges_due = len(new_prs) >= 10
@@ -483,7 +622,9 @@ def rebuild(root, roots, loader, now=None, events=None):
                       "reason": reason, "new_samples": new_samples,
                       "new_merged_prs": new_prs, "candidates": changed[:3], "gaps": summary["gaps"]}
             _write(directory / "reviews" / (review_id + ".json"), json.dumps(review, ensure_ascii=False, indent=2))
-            old_prs.update(summary["merged_prs"])
+            consumed_prs.extend(new_prs)
+            history_truncated = history_truncated or len(consumed_prs) > MAX_HISTORY
+            summary["merge_events"]["history_truncated"] = history_truncated
             summary["review"] = {"generated": True, "review_id": review_id, "reason": reason,
                                  "candidates": changed[:3]}
         else:
@@ -494,17 +635,27 @@ def rebuild(root, roots, loader, now=None, events=None):
         # 首次收集建立7天起点；只有回顾消费 PR 事件和候选，避免未到期时吞掉增量。
         updated = {"schema": SCHEMA, "sample_ids": ids if due or not state else state.get("sample_ids", []),
                    "reviewed_at": summary["generated_at"] if due or previous_time is None else state["reviewed_at"],
-                   "reviewed_prs": sorted(old_prs)[-MAX_HISTORY:],
+                   "reviewed_prs": consumed_prs[-MAX_HISTORY:], "pr_history_truncated": history_truncated,
                    "candidate_versions": dict(list(candidate_versions.items())[-MAX_HISTORY:]) if due else state.get("candidate_versions", {}),
                    "incomplete_history": bool(state_problem),
-                   "guard_required": guard_version is not None, "guard_strategy_version": guard_version}
-        _write(state_path, json.dumps(updated, ensure_ascii=False, indent=2))
+                   "guard_required": guard_required, "guard_strategy_version": guard_version}
+        summary = redact_paths(summary, roots)
+        _write(state_path, json.dumps(redact_paths(updated, roots), ensure_ascii=False, indent=2))
         _write(directory / "summary.json", json.dumps(summary, ensure_ascii=False, indent=2))
         _write(directory / "summary.md", render(summary) + "\n")
         review_dir = directory / "reviews"
         if review_dir.exists():
-            for path in sorted(review_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)[:-MAX_REVIEWS]:
+            archived = sorted(review_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)
+            for path in archived[:-MAX_REVIEWS]:
                 path.unlink()
+            for path in archived[-MAX_REVIEWS:]:
+                try:
+                    previous = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    previous = {"schema": SCHEMA, "review_id": path.stem, "status": "gaps",
+                                "gaps": [{"source": "reviews/" + path.name,
+                                          "reason": "旧衍生回顾不可读取：%s" % error_label(exc)}]}
+                _write(path, json.dumps(redact_paths(previous, roots), ensure_ascii=False, indent=2))
         return summary
     finally:
         host_isolation.release(handle)

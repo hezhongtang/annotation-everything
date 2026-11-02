@@ -31,6 +31,7 @@ import dataclasses
 import datetime
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -1392,7 +1393,7 @@ def build_selection_for(phase: str, baseline: dict, snapshot: dict, artifact_dir
     except Exception as exc:
         # 报告模块未安装不改变旧入口；已有守卫却无法读取时不能静默放行。
         if ((artifact_dir or artifact_root(None)) / "efficiency" / "selection-guard.json").exists():
-            selection["policy_guard"] = {"active": True, "reason": "策略守卫加载失败：%s" % exc}
+            selection["policy_guard"] = {"active": True, "reason": "策略守卫加载失败：%s" % type(exc).__name__}
             selection["fallback"] = {"kind": "efficiency_guard", "reason": selection["policy_guard"]["reason"]}
             selection["suggested"] = {"runs_tests": True, "groups": ["all"], "selectors": [],
                                       "scenarios": ["*"], "serve_check": True}
@@ -2143,13 +2144,120 @@ def shield_termination():
 
 def degrade_evidence(record: dict, problems: list) -> None:
     """完整性、可用性与影子结论使用同一降级规则，保留原始执行结论。"""
-    record.setdefault("result", {})["usable_as_evidence"] = False
-    record.setdefault("evidence", {})["integrity"] = "degraded"
+    if not isinstance(record.get("result"), dict):
+        record["result"] = {}
+    if not isinstance(record.get("evidence"), dict):
+        record["evidence"] = {}
+    record["result"]["usable_as_evidence"] = False
+    record["evidence"]["integrity"] = "degraded"
     shadow = record.get("shadow")
     if isinstance(shadow, dict):
         shadow.update(usable_as_evidence=False, comparable=False,
                       incomparable_reason="报告读取时证据校验失败：%s" % "；".join(problems),
                       candidate_omissions=[], rule_candidates=[])
+
+
+def valid_duration(value) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
+
+
+def validate_local_evidence(record: dict, run_dir: Path) -> list:
+    """报告、G 复用与 H 投影共用必要字段、实际组日志和有效时长校验。"""
+    problems = []
+    evidence = record.get("evidence")
+    if not isinstance(evidence, dict):
+        problems.append("缺少 evidence 对象")
+        evidence = {}
+    if evidence.get("integrity") != "ok":
+        problems.append("证据完整性不是 ok")
+    if evidence.get("record_path") != "record.json":
+        problems.append("缺少固定 record.json 证据定位")
+    for key in ("logs", "cases", "notes"):
+        if not isinstance(evidence.get(key), list):
+            problems.append("缺少 evidence.%s 数组" % key)
+    logs = evidence.get("logs") if isinstance(evidence.get("logs"), list) else []
+    located_groups = set()
+    for log in logs:
+        if not isinstance(log, dict):
+            problems.append("日志证据条目不是对象")
+            continue
+        name, group = log.get("path"), log.get("group")
+        if not isinstance(name, str) or not name or "/" in name or "\\" in name or name in (".", ".."):
+            problems.append("日志路径不是根内文件名")
+            continue
+        if not isinstance(group, str) or group in located_groups:
+            problems.append("日志分组缺失或重复")
+        else:
+            located_groups.add(group)
+        target = run_dir / name
+        if log.get("missing") or not target.is_file():
+            problems.append("缺少日志 %s" % name)
+            continue
+        checksum = log.get("sha256")
+        size = log.get("bytes")
+        try:
+            if not isinstance(size, int) or isinstance(size, bool) or size < 0 or target.stat().st_size != size:
+                problems.append("日志 %s 字节数缺失或不一致" % name)
+            if not isinstance(checksum, str) or re.fullmatch(r"[0-9a-fA-F]{64}", checksum) is None:
+                problems.append("日志 %s 缺少有效校验和" % name)
+            elif digest_file(target) != checksum.lower():
+                problems.append("日志 %s 校验和不一致" % name)
+        except OSError as exc:
+            problems.append("日志读取失败：%s" % type(exc).__name__)
+    timing = record.get("timing")
+    if not isinstance(timing, dict):
+        problems.append("缺少运行计时对象")
+        timing = {}
+    for key in ("queue_seconds", "wall_seconds"):
+        if record.get("state") == "complete" and not valid_duration(timing.get(key)):
+            problems.append("运行 %s 缺失或不是有限非负时长" % key)
+    for key, value in timing.items():
+        if key.endswith("_seconds") and value is not None and not valid_duration(value):
+            problems.append("运行 %s 不是有限非负时长" % key)
+    groups = record.get("groups")
+    if not isinstance(groups, list) or not groups:
+        return problems + ["缺少实际或引用分组清单"]
+    for group in groups:
+        if not isinstance(group, dict):
+            problems.append("分组记录不是对象")
+            continue
+        if group.get("outcome") == REUSED:
+            continue  # 本地日志不适用于引用组，来源链仍由 validate_reuse_chain 校验。
+        actual = group.get("started_at") is not None or group.get("outcome") in (PASSED, FAILED, SKIPPED, EMPTY)
+        if not actual:
+            continue
+        try:
+            started = datetime.datetime.fromisoformat(group["started_at"].replace("Z", "+00:00"))
+            if started.tzinfo is None:
+                raise ValueError("缺少时区")
+        except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
+            problems.append("实际分组缺少有效启动时间")
+        group_timing = group.get("timing") if isinstance(group.get("timing"), dict) else {}
+        if not valid_duration(group_timing.get("child_seconds")):
+            problems.append("实际分组 child_seconds 缺失或不是有限非负时长")
+        if not isinstance(group.get("name"), str) or group["name"] not in located_groups:
+            problems.append("实际分组缺少本地日志证据")
+        for key, value in group_timing.items():
+            if value is not None and not valid_duration(value):
+                problems.append("分组 %s 不是有限非负时长" % key)
+        for key in ("cases", "scenarios"):
+            members = group.get(key)
+            if members is None:
+                continue
+            if not isinstance(members, list):
+                problems.append("用例或场景清单不是数组")
+                continue
+            for member in members:
+                if not isinstance(member, dict):
+                    problems.append("用例或场景记录不是对象")
+                elif member.get("status") != "not_run" and not valid_duration(member.get("seconds")):
+                    problems.append("用例或场景 seconds 缺失或不是有限非负时长")
+    return list(dict.fromkeys(problems))
 
 
 def load_record(run_dir: Path, visiting: Optional[set] = None) -> tuple:
@@ -2175,23 +2283,12 @@ def load_record(run_dir: Path, visiting: Optional[set] = None) -> tuple:
     problems = []
     if record.get("state") != "complete":
         problems.append("记录状态是 %r：本次运行没有正常结束" % record.get("state"))
-    integrity = (record.get("evidence") or {}).get("integrity")
-    if integrity not in (None, "ok"):
-        problems.append("证据完整性 %r" % integrity)
-    for log in (record.get("evidence") or {}).get("logs") or []:
-        name = log.get("path") or ""
-        if not name or os.sep in name or name in (".", ".."):
-            problems.append("日志路径不合法：%r" % name)
-            continue
-        target = run_dir / name
-        if log.get("missing") or not target.is_file():
-            problems.append("缺少日志 %s" % name)
-        elif log.get("sha256") and digest_file(target) != log["sha256"]:
-            problems.append("日志 %s 校验和不一致" % name)
+    problems.extend(validate_local_evidence(record, run_dir))
     record["report_validation"] = {"problems": problems}
     if problems:
         degrade_evidence(record, problems)
-    validate_reuse_chain(record, run_dir.parent.parent, problems, visiting)
+    if isinstance(record.get("groups"), list) and all(isinstance(group, dict) for group in record["groups"]):
+        validate_reuse_chain(record, run_dir.parent.parent, problems, visiting)
     return record, problems
 
 
