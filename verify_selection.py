@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 1
+STRATEGY_VERSION = 2
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -93,8 +93,14 @@ SELECTION_RULES = (
         selectors=("tests/test_ae_cli.py", "tests/test_ae_cli_i18n.py", "tests/test_ae_checks.py",
                    "tests/test_ae_checks_runtime.py", "tests/test_ae_checks_tools.py",
                    "tests/test_ae_repair.py", "tests/test_ae_target.py", "tests/test_ae_uninstall.py",
-                   "tests/test_aux_cli_i18n.py", "tests/test_core.py"),
+                   "tests/test_aux_cli_i18n.py", "tests/test_core.py", "tests/test_skill_updates.py"),
         why="ae.py 是安装 / 体检 / 修复 CLI，行为由这些模块覆盖",
+    ),
+    SelectionRule(
+        rid="skill-updates",
+        prefixes=("skill/annotation-everything/scripts/update.py",),
+        selectors=("tests/test_skill_updates.py", "tests/test_ae_cli.py", "tests/test_ae_target.py"),
+        why="更新器与安装记录、副本和运行中的服务共同构成更新边界",
     ),
     SelectionRule(
         rid="protocol-notes",

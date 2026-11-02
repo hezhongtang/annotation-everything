@@ -7,6 +7,8 @@ description: 本机逐页审阅、批注和改稿。将 HTML 报告与讲稿并�
 
 Generate a local review page → start its service → wait for a submission → edit the source report and speaker notes → rebuild → record each result → finish the batch → wait again.
 
+Before loading a workflow, resolve `$S` to the `scripts/` directory beside this loaded `SKILL.md` and run `python3 "$S/update.py" auto --locale LANG`, replacing `LANG` with `zh-CN` or `en` for the user's request. The check runs at most once per day and does not block the review when offline. If it installs an update, reload this `SKILL.md` and its references before continuing. Briefly tell the user about an installed update or a warning from the command.
+
 先按用户请求的语言选择操作指引。Choose the workflow from the user's request language, independently of the material language or the page's display language.
 
 1. **两种语言都先读 / Always read** [共用安全与协议约束 / Shared safety and protocol](references/protocol.md). This is the single source for safety, permissions, stop conditions, and compatibility rules.

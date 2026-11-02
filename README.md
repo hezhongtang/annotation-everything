@@ -213,8 +213,12 @@ python3 ae.py repair                             # 修复：先列计划，安�
 python3 ae.py uninstall                          # 卸载：删除技能副本和链接，默认保留审阅台账
 python3 ae.py doctor --target <目录>             # doctor/repair/uninstall 同样接受 --target，定位自定义位置的副本
 python3 ae.py doctor --locale en                 # 可选：界面语言 auto、zh-CN 或 en（写在子命令前后都认）
+python3 ~/.claude/skills/annotation-everything/scripts/update.py check  # 立即检查正式版本，不安装
+python3 ~/.claude/skills/annotation-everything/scripts/update.py now    # 立即检查并安装新版
 ```
 
+- **版本更新**：Agent 按 `SKILL.md` 使用技能时，每份技能副本至多每天检查一次安装来源 `origin` 的正式版本标签（`v主.次.修订`），发现更高版本后自动更新并提示；预发布标签不会自动安装。离线、认证失败、来源不可用时保留当前版本并继续审阅；技能副本有本地改动，或已登记的审阅服务仍在运行时，先提示并推迟更新。停止服务后可运行 `update.py now`；自定义安装位置请把命令中的路径换成当前技能副本的路径。设置 `AE_AUTO_UPDATE=0` 可关闭自动检查，手动命令仍可使用。
+- 更新只替换技能副本，保留指向它的软链接、审阅台账与审阅目录，不修改来源仓库的检出。正式版本的本地来源保存在 `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`，供后续体检、修复和更新使用；不要在仍使用该副本时删除它。首次获得更新功能仍需先用包含此功能的版本运行一次 `ae.py install`。
 - 体检逐项给出「通过 / 警告 / 失败」；失败项附修复或排障命令。退出码 0 表示全部通过或只有警告，1 表示有失败项，2 表示命令自身出错（`doctor --json` 输出 `error`）。开发环境类别仅在当前工作目录位于来源仓库内时出现。
 - **界面语言**：`ae.py`、`serve.py`（`serve` / `status` / `list` / `forget` / `check`）、`notes.py`、`check_pptx_fonts.py` 都支持 `--locale auto|zh-CN|en`（写在子命令前后都认）和环境变量 `AE_LOCALE`；生成器的帮助、结果与资源诊断也按显式 `--locale`、`AE_LOCALE`、已保存审阅配置的顺序选语言。优先级是显式参数、`AE_LOCALE`，两者都没有则中文；只有 `auto` 才读 `LC_ALL` / `LC_MESSAGES` / `LANG`。`serve.py serve` 和 `serve.py status` 在目录解析出来后还会回落到那份审阅里保存的 `locale`；`list` / `forget` / `check` 不对应单份审阅，只认前两级。语言选择非法时命令以退出码 2 停下并说明原因，不改动任何状态。帮助、参数说明、缺参、非法值和命令失败都用同一种语言；来源路径、命令、字体名、技能名与系统原始错误保持原文。
 - **机器判定与人读文案分开**：`doctor --json` 的 `category`、`level`、`code` 和 `summary` 是旧消费者在读的判定字段，恒为中文、不随语言改值；新增的语言无关判定信息是每项的 `status`（`pass` / `warn` / `fail`）和 `category_id`（`install` / `tools` / `dev` / `runtime`），以及顶层的 `schema`（结构版本）和 `locale`（`message` 用的是哪种语言）。新消费者比较 `status` / `category_id` 即可，不必比较本地化标签；`message`、`fix_command` 里的人读文案按语言变。`serve.py` 的拒绝与错误同理：HTTP 状态和原因代码（`bad-host`、`cross-site`、`bad-origin`、`no-origin`、`bad-content-type`、`chunked`、`bad-length`、`too-large`、`bad-json`、`not-found`、`preflight`、`no-index`、`no-note`、`server-error`、`review-mismatch`、`no-api`）不随语言变，说明按服务启动时定的语言输出；未知错误只说明类型与恢复动作，不回显请求内容。
@@ -281,6 +285,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 | 命令 | 作用 |
 |---|---|
 | `ae.py install` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；修复体检发现的问题（先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。四个子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
+| `update.py auto` / `check` / `now` | 在技能副本中检查正式版本并自动更新 / 只检查 / 立即检查并安装；`auto` 由技能入口触发，最多每天一次 |
 | `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照；`report` 只读记录。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
 | `build_viewer.py --report … --script … --out 审阅目录` | 生成对照页；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
 | `serve.py 审阅目录` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
@@ -304,7 +309,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 | 防止跨站伪造写入 | 写入请求的来源（Origin）必须与页面同源，并且内容类型必须是 JSON |
 | 只开放必要的内容 | 只提供 `index.html` 和 `/api/*` 接口，审阅目录里的其他文件无法通过服务访问 |
 | 不依赖第三方 Python 库 | 运行时只用 Python 标准库；字体核查会调用系统工具 `fc-list` 和 `pdffonts`，缺少时会给出安装提示 |
-| 不访问网络 | 不上报使用数据；报告中引用的外部资源不加载，本地图片和字体直接嵌入页面 |
+| 网络访问范围 | 审阅服务不访问网络；更新检查仅访问安装来源的 Git 远端，不上传审阅数据或遥测。报告中引用的外部资源不加载，本地图片和字体直接嵌入页面 |
 | 数据留在本地 | 批注和对照页都保存在审阅人指定的审阅目录；本机的审阅台账 `~/.annotation-everything/` 只记录审阅标识、目录路径和端口 |
 
 每次修改服务后运行 `serve.py check`，它会逐项检查以上约束。
@@ -326,6 +331,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 ├── scripts/
 │   ├── build_viewer.py            生成对照页 index.html 和 review.json
 │   ├── i18n.py                    读取共享词典，并按所选语言插值
+│   ├── update.py                  检查正式版本并更新技能副本
 │   ├── viewer_template.html       对照页模板（服务模式和本地文件模式）
 │   ├── serve.py                   本机服务：serve / status / list / forget / check
 │   ├── notes.py                   批注命令行：wait / show / resolve / done / review 等
