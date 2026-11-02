@@ -88,6 +88,16 @@ Use `--by` to identify each worker; [Agent mechanisms](agent-mechanisms.en.md) d
 
 If the user says “apply my annotations” directly, first run `show`. Claim a pending submission before editing so its options and source snapshot apply. With no submission, work from the explicit request and resolve completed annotations; `done` reports that no batch exists.
 
+### Maintaining verification info after a revision (reports with a verification record)
+
+When the report has a verification record beside it (`report-record.json`, step 4 of the [generation guide](generation.en.md)), any content, source, or style change requires maintaining the affected verification info. Old deliverable verdicts never silently cover new content; the check entry marks records that no longer match the current artifacts as such.
+
+- **Determine the affected scope**: check the citations and calculations for the pages you changed; when the same figure or wording appears on other pages or in the matching script sentence, check those too (both sides stay in sync); when a shared style or template changed, include every affected page in the visual check and redo the page-by-page evidence before declaring. After reordering pages, annotations and record references follow the stable page keys (`data-key`) — rewrite the document order and update `data-page`; do not just swap attributes.
+- **Update the record**: refresh `links.sha256` for the changed artifacts; update the affected `findings` (refs, calculation, support) and check results to match what you actually verified; then write the `revision` declaration — `basis` states how the affected scope was determined, `rechecked` lists the check ids verified this time (each with an actual result in `checks`), and items whose scope could not be confirmed go into `pending` with scope and reason. Never pretend verification completed. Evidence you can prove unaffected keeps its original status; it does not count as rechecked.
+- **Re-verify**: after rebuilding, run `report_check.py` (step 5 of the generation guide). The summary lists the rechecked scope and the pending scope; until the pending items are confirmed, the report cannot reach a deliverable verdict. A normal revision maintains only the affected scope and never opens a full check on its own; when the user explicitly asks for overall verification, run the complete checklist and disclose the full coverage.
+- **Existing reports without a record**: reviewing, annotating, editing, and rebuilding work exactly as before; do not force a generated record onto them. When the user explicitly requests overall verification, build the record with the complete checklist; register any unavailable original evidence as a gap instead of treating the report's own claims as source evidence.
+- **Status separation**: maintaining verification info only affects the report quality verdict, never batch status or review rights — a batch stopped at *drafted, waiting for review* still waits for the user; subagent permissions, exact edits, and existing stop conditions keep constraining revisions; overlapping operations keep following the existing file locks and batch rules, and locked state files are never rewritten directly.
+
 ## 6. Initial edit, review, and delegation
 
 | Accepted requirement | Required result |
