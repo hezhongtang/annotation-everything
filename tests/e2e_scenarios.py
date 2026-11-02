@@ -89,6 +89,12 @@ SCENARIOS: list[Scenario] = [
         aliases=("--handoff-only",),
     ),
     Scenario(
+        id="current-task-controls",
+        title="当前任务详情的展开与收起、双语与轮询保持状态，以及安全停止本审阅服务并保留数据",
+        fixture="fixtures/sample 合成材料生成的审阅；独立批次、待补传改动与服务重启",
+        isolation="独立临时审阅目录、独立端口与浏览器上下文；所有服务和 CLI 子进程用后回收",
+    ),
+    Scenario(
         id="export-import",
         title="双语导出与跨语言导入：中英文 Markdown 往返、页面与 CLI 互导、解析按格式标记选文法、旧中文格式不退步、认不出的文字有明确提示",
         fixture="E2E_NOTES 合成批注（含删除 / 改写、标注、风格、对应句与技能）；CLI 侧独立审阅目录",

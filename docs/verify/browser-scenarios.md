@@ -43,6 +43,7 @@ uv run --no-project --with playwright python tests/e2e_browser.py --skills-only 
 | `locale_checks`（语言最小闭环 + 编辑操作双语） | `locale-loop` | — |
 | `english_script_checks`（#34 英文讲稿） | `english-script` | — |
 | `handoff_i18n_checks`（#32 提交 / 复核 / 处理记录双语） | `handoff-i18n` | `--handoff-only` |
+| `current_task_controls_checks`（#81 新增：详情开关、保存失败拦截、停止服务与重启恢复） | `current-task-controls` | — |
 | `export_import_checks`（#35 双语导出与跨语言导入） | `export-import` | — |
 | main() 内联段 1（file:// 退回模式） | `file-mode` | — |
 | main() 内联段 2（报告样式保真） | `css-fidelity` | — |
@@ -58,8 +59,7 @@ uv run --no-project --with playwright python tests/e2e_browser.py --skills-only 
   导出同一格式的 Markdown，不再依赖其他场景留下的数据。
 - 旧局部参数的行为修正：改造前所有旧参数都会先执行 `installed-delivery` 与
   `locale-live-controls` 再判断参数；现在别名只执行原定目标场景，目标行为本身不变。
-- 全量模式的场景集合与改造前逐项对应，没有增删检查；数量差异只可能来自去重对照，
-  不能用通过数下降证明性能。
+- #53 改造保留原有检查；后续新增的 `current-task-controls` 在全量模式中执行，也可通过 `--only current-task-controls` 单独运行。不能用通过数下降证明性能。
 
 ## 新增场景的接入规则
 

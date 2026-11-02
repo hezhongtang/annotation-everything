@@ -1669,6 +1669,86 @@ class ServerTests(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
 
+    def test_stop_service_preserves_review_and_leaves_other_review_running(self):
+        d, other = tmpdir(), tmpdir()
+        for directory, rid in ((d, "aaaaaaaaaaaaaaaa"), (other, "bbbbbbbbbbbbbbbb")):
+            (directory / "index.html").write_text("synthetic review")
+            (directory / "review.json").write_text(json.dumps({"reviewId": rid}))
+        srv = serve.ReviewServer(d, 0, log_to_file=False)
+        other_srv = serve.ReviewServer(other, 0, log_to_file=False)
+        worker = threading.Thread(target=srv.serve_forever, daemon=True)
+        worker.start()
+        threading.Thread(target=other_srv.serve_forever, daemon=True).start()
+        headers = {"Host": f"127.0.0.1:{srv.port}", "Origin": f"http://127.0.0.1:{srv.port}",
+                   "Content-Type": "application/json", "X-AE-Review": "aaaaaaaaaaaaaaaa"}
+        try:
+            status, _, raw = serve._req(srv.port, "POST", "/api/notes", headers,
+                                        {"page": 1, "text": "synthetic annotation"})
+            self.assertEqual(status, 201)
+            note_id = json.loads(raw)["note"]["id"]
+            status, response_headers, raw = serve._req(srv.port, "POST", "/api/server/stop", headers, {})
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(raw)["reviewId"], "aaaaaaaaaaaaaaaa")
+            self.assertTrue(json.loads(raw)["stopping"])
+            self.assertFalse(any(k.lower().startswith("access-control-") for k in response_headers))
+            worker.join(timeout=3)
+            self.assertFalse(worker.is_alive(), "停止接口应结束该审阅的服务循环")
+            status, _, _ = serve._req(other_srv.port, "GET", "/api/health",
+                                     {"Host": f"127.0.0.1:{other_srv.port}"})
+            self.assertEqual(status, 200, "其他审阅的服务仍可访问")
+            srv.server_close()
+            restarted = serve.ReviewServer(d, 0, log_to_file=False)
+            threading.Thread(target=restarted.serve_forever, daemon=True).start()
+            try:
+                status, _, raw = serve._req(restarted.port, "GET", "/api/notes",
+                                            {"Host": f"127.0.0.1:{restarted.port}"})
+                self.assertEqual(status, 200)
+                self.assertEqual([(n["id"], n["text"]) for n in json.loads(raw)["notes"]],
+                                 [(note_id, "synthetic annotation")])
+            finally:
+                restarted.shutdown()
+                restarted.server_close()
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            other_srv.shutdown()
+            other_srv.server_close()
+
+    def test_stop_service_rejects_unsafe_requests_without_stopping(self):
+        d = tmpdir()
+        (d / "index.html").write_text("synthetic review")
+        (d / "review.json").write_text(json.dumps({"reviewId": "aaaaaaaaaaaaaaaa"}))
+        srv = serve.ReviewServer(d, 0, log_to_file=False)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        headers = {"Host": f"127.0.0.1:{srv.port}", "Origin": f"http://127.0.0.1:{srv.port}",
+                   "Content-Type": "application/json", "X-AE-Review": "aaaaaaaaaaaaaaaa"}
+        cases = [
+            ("POST", {**headers, "Host": "evil.example"}, b"{}", 421, "bad-host"),
+            ("POST", {**headers, "Origin": "http://evil.example"}, b"{}", 403, "bad-origin"),
+            ("POST", {k: v for k, v in headers.items() if k != "Origin"}, b"{}", 403, "no-origin"),
+            ("POST", {**headers, "Sec-Fetch-Site": "cross-site"}, b"{}", 403, "cross-site"),
+            ("POST", {**headers, "Content-Type": "text/plain"}, b"{}", 415, "bad-content-type"),
+            ("POST", headers, b"{", 400, "bad-json"),
+            ("POST", headers, b"[]", 400, "bad-note"),
+            ("POST", {k: v for k, v in headers.items() if k != "X-AE-Review"}, b"{}", 409, "review-mismatch"),
+            ("POST", {**headers, "X-AE-Review": "bbbbbbbbbbbbbbbb"}, b"{}", 409, "review-mismatch"),
+            ("GET", headers, None, 404, "no-api"),
+            ("DELETE", headers, b"{}", 405, "no-api"),
+            ("OPTIONS", headers, None, 405, "preflight"),
+        ]
+        try:
+            for method, request_headers, raw, expected_status, expected_code in cases:
+                with self.subTest(method=method, code=expected_code):
+                    status, response_headers, body = serve._req(srv.port, method, "/api/server/stop",
+                                                                request_headers, raw=raw)
+                    self.assertEqual((status, json.loads(body)["code"]), (expected_status, expected_code))
+                    self.assertFalse(any(k.lower().startswith("access-control-") for k in response_headers))
+                    status, _, _ = serve._req(srv.port, "GET", "/api/health", headers)
+                    self.assertEqual(status, 200, "拒绝请求后服务继续运行")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
     def test_cli_and_server_share_lock(self):
         """服务开着时 CLI 标已处理，页面再写也不会覆盖掉（按操作合并，而不是整份覆盖）。"""
         d = tmpdir()

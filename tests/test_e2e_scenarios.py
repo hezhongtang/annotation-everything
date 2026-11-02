@@ -39,6 +39,7 @@ FULL_ORDER = (
     "locale-loop",
     "english-script",
     "handoff-i18n",
+    "current-task-controls",
     "export-import",
     "file-mode",
     "css-fidelity",

@@ -68,7 +68,7 @@ import wakeup  # noqa: E402
 APP = "annotation-everything"
 VERSION = "0.9.0"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
-FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery"]
+FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service"]
 
 # 当前界面语言：main() 与 serve() 按共同契约解析后设置；未设置前保持中文（旧调用行为不变）
 _LOCALE = i18n.DEFAULT_LOCALE
@@ -420,6 +420,16 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {**doc, **self._ident()})
         elif path == "/api/handoff" and cmd == "GET":
             self._json(200, {**store.handoff_state(d), **self._ident()})
+        elif path == "/api/server/stop" and cmd == "POST":
+            self._expect_obj(self._body())
+            # 停止服务必须明确指向当前审阅；其他旧接口仍兼容不带标识的页面。
+            if not claimed or claimed != self.server.review_id():
+                raise Reject(409, "review-mismatch", self._t("serve.err.reviewMismatch"))
+            self.server.log("info", "stop requested from review page")
+            self._json(200, {**self._ident(), "stopping": True})
+            self.wfile.flush()
+            # 当前请求在工作线程处理，shutdown 等主循环退出后由 serve() 正常清理。
+            self.server.shutdown()
         elif path == "/api/handoff" and cmd == "POST":
             body = self._expect_obj(self._body())
             if "fullCheck" in body and not isinstance(body["fullCheck"], bool):
@@ -1104,6 +1114,12 @@ def check(locale: str | None = None) -> int:
            T("serve.check.hookRuns"))
         s, _, b = _req(port, "POST", "/api/handoff", same, {"message": "补充"})
         ok(s == 200 and json.loads(b).get("merged") and json.loads(b).get("seq") == 1, T("serve.check.merge"))
+        s, _, _ = _req(port, "POST", "/api/server/stop", same, {})
+        ok(s == 409, T("serve.check.stopNeedsReview"))
+        s, _, b = _req(port, "POST", "/api/server/stop", {**same, "X-AE-Review": "checkreview"}, {})
+        t.join(timeout=3)
+        ok(s == 200 and json.loads(b).get("stopping") is True and not t.is_alive(),
+           T("serve.check.stopFromPage"))
         srv.shutdown()
         srv.server_close()
         srv2 = ReviewServer(tmp, 0, log_to_file=True, locale=_LOCALE)
