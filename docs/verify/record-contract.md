@@ -83,6 +83,7 @@
 | --- | --- | --- | --- |
 | `timing.queued_at` | ISO 8601 | 是 | 入口被调用的时刻 |
 | `timing.started_at` / `timing.ended_at` | ISO 8601 | `started_at` 必填 | 第一个组开始前 / 最后一个组结束后 |
+| `timing.first_feedback_seconds` | 数字或 `null` | H 起追加 | 从运行器入队单调时钟起点到首个实际组完成；仅引用证据时为 `null`。旧记录在效率投影中按时长估算并标记精度，不能用秒级戳推导假精确值 |
 | `timing.queue_seconds` | 浮点秒 | 是 | 排队与准备开销 |
 | `timing.wall_seconds` | 浮点秒 | 是 | 从开始到结束的墙钟，用户等待的下界 |
 | `timing.lock_wait_seconds` | 浮点秒 | 是 | 各组等待共享资源锁的时间之和（C 项起有值）；单列为排队时长，不计入 `wrapper_seconds`，也不摊进执行耗时 |
@@ -258,7 +259,7 @@ B–H 在同一个 schema 上追加，不改已有字段：
 - 浏览器场景拆分（D，已交付）：`groups[].scenarios` 由浏览器入口的场景执行清单（日志里的 `AE-SCENARIOS:` 行）填充，`granularity` 细化到 `scenario`；场景注册表、选择与旧参数别名见 `docs/verify/browser-scenarios.md`。
 - 阶段选测与影子对照（F，已交付）：`context.selection` 与顶层 `shadow`（另存 `shadow.json`）；`input.fingerprint` 与 `changed_since_baseline` 沿用既有语义，不需要新字段。策略版本、回退情形与样本清单见 [selection-strategy.md](selection-strategy.md)。
 - 证据复用（G，已交付）：顶层 `reuse` 与 `groups[].outcome = "reused"`（另见 `groups[].reuse`）；匹配按 `input.fingerprint`、`environment`、`groups[].name` 与 `context.phase`，通过判定使用当前校验后的 `usable_as_evidence`，不跳过证据完整性校验；`--no-reuse` 强制全部重跑。语义见「证据复用（G 项）」。
-- 持续报告（H）：读 `index.jsonl` 汇总，不新增记录字段。
+- 持续报告（H）：从索引和当前校验后的原始记录生成 `ae-verify-efficiency/1` 投影，详见 [efficiency.md](efficiency.md)。浏览器组追加可选 `browser_environment`（schema、browser、channel、version、playwright），由测试进程实测；旧记录缺失时标记不可比较。原始记录不改写。
 
 ## 已知限制
 

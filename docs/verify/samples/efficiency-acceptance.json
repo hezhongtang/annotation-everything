@@ -1,0 +1,714 @@
+{
+  "schema": "ae-efficiency-acceptance-samples/1",
+  "starting_main": "95f7e2314e6de32b63da5703ac8aef18438b7d9b",
+  "equivalent_reference_tree": "ac88217dfcb22a0d755db04acaa8ac0988e52ab9",
+  "fixed_before_sampling": "2026-11-02",
+  "plan": {
+    "schema": "ae-efficiency-acceptance-plan/1",
+    "fixed_before_sampling": "2026-11-02",
+    "starting_main": "95f7e2314e6de32b63da5703ac8aef18438b7d9b",
+    "python": "CPython 3.14.6",
+    "host": "Darwin 25.6.0 arm64",
+    "samples_per_local_case": 3,
+    "local_cases": [
+      {
+        "id": "cli-export",
+        "category": "CLI",
+        "path": "skill/annotation-everything/scripts/export_format.py",
+        "synthetic_change": "append a Python comment",
+        "scope": "all unit selectors recommended by built-in strategy for this path"
+      },
+      {
+        "id": "page-match",
+        "category": "page behavior",
+        "path": "skill/annotation-everything/scripts/match.py",
+        "synthetic_change": "append a Python comment",
+        "scope": "all unit selectors recommended by built-in strategy for this path; browser recommendations remain separately reported"
+      },
+      {
+        "id": "language-en",
+        "category": "language text",
+        "path": "skill/annotation-everything/locales/en.json",
+        "synthetic_change": "append valid JSON whitespace",
+        "scope": "all unit selectors recommended by built-in strategy for this path; browser recommendations remain separately reported"
+      }
+    ],
+    "first_feedback": "wall time until the complete first recommended related-unit group returns; excludes any subsequent browser acceptance and is not a claim that all required validation finished",
+    "safety_boundary": "serve.py: confirm explicit service-check and conservative scope separately, excluded from the 3 common local cases",
+    "reuse": "no reuse for timed samples; developer/review/PR-preparation demo uses the same explicit session on synthetic-safe serve-check evidence; final PR and CI gates still execute",
+    "historic_data_policy": "Deduplicate run IDs; compare only matching environments, case/scenario sets and isolation. Retain unknown versions and mismatches as gaps; never count archived copies as independent samples."
+  },
+  "initial_reference_runs": [
+    {
+      "run_id": "20261102T045006Z-b961bb",
+      "commit": "7a03937bd234cb94b3b2c873e39371ed5b759261",
+      "input_fingerprint": "sha256:5edbd33d214852f6735ca3241c3972d5cefe2ca17e39d57a36de7c950d50a6cc",
+      "covers_final_input": true,
+      "environment": {
+        "os": {
+          "system": "Darwin",
+          "release": "25.6.0",
+          "machine": "arm64"
+        },
+        "python": {
+          "version": "3.14.6",
+          "implementation": "CPython",
+          "matches_wrapper": true
+        },
+        "host": {
+          "cpu_count": 10,
+          "timezone": "+0800"
+        },
+        "ci": {
+          "is_ci": false,
+          "provider": null,
+          "runner_os": null
+        },
+        "config_summary": {
+          "ae_home_set": true,
+          "ae_locale": null,
+          "ae_verify_dir_set": false
+        },
+        "isolation": {
+          "mechanism": "flock",
+          "lock_dir_source": "tmpdir",
+          "resources": [
+            "host-state",
+            "ledger-and-skill-copy"
+          ],
+          "note": "资源锁按同机同用户的共享资源划分，跨 worktree 与独立 checkout 生效；锁只协调验证参与者，不影响也不停止外部进程"
+        }
+      },
+      "wall_seconds": 356.423531,
+      "lock_wait_seconds": 0.000452,
+      "record_sha256": "0c7614c1c88b25640b7a5838b718bfb794878afb06877e71f701d76d864a60d0",
+      "groups": [
+        {
+          "name": "unit",
+          "seconds": 245.002289,
+          "counts": {
+            "cases": 1018,
+            "passed": 1018,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "interrupted": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0
+          },
+          "identity_count": 1018,
+          "identity_sha256": "27b2f8557e94f7ca15676910e047b6ed6836f2d635f83c45698a47e933020e2f",
+          "browser_environment": null
+        },
+        {
+          "name": "serve-check",
+          "seconds": 1.906835,
+          "counts": {
+            "total": 29,
+            "passed": 29,
+            "failed": 0
+          },
+          "identity_count": 0,
+          "identity_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "browser_environment": null
+        },
+        {
+          "name": "browser",
+          "seconds": 109.472359,
+          "counts": {
+            "total": 635,
+            "passed": 635,
+            "failed": 0
+          },
+          "identity_count": 13,
+          "identity_sha256": "64fcc4ed97ae0c21cd8aae5e398cc0f9238504bcaf4b8efdaf72d832fdd93413",
+          "browser_environment": null
+        }
+      ]
+    },
+    {
+      "run_id": "20261102T051028Z-408f49",
+      "commit": "95f7e2314e6de32b63da5703ac8aef18438b7d9b",
+      "input_fingerprint": "sha256:8d58f53ce948906b65c0d1ab82fdaff6fa9f60e3b03436660e4fa8ae589c4caf",
+      "covers_final_input": true,
+      "environment": {
+        "os": {
+          "system": "Darwin",
+          "release": "25.6.0",
+          "machine": "arm64"
+        },
+        "python": {
+          "version": "3.14.6",
+          "implementation": "CPython",
+          "matches_wrapper": true
+        },
+        "host": {
+          "cpu_count": 10,
+          "timezone": "+0800"
+        },
+        "ci": {
+          "is_ci": false,
+          "provider": null,
+          "runner_os": null
+        },
+        "config_summary": {
+          "ae_home_set": true,
+          "ae_locale": null,
+          "ae_verify_dir_set": false
+        },
+        "isolation": {
+          "mechanism": "flock",
+          "lock_dir_source": "tmpdir",
+          "resources": [
+            "host-state",
+            "ledger-and-skill-copy"
+          ],
+          "note": "资源锁按同机同用户的共享资源划分，跨 worktree 与独立 checkout 生效；锁只协调验证参与者，不影响也不停止外部进程"
+        }
+      },
+      "wall_seconds": 395.2768,
+      "lock_wait_seconds": 58.449392,
+      "record_sha256": "42904c75417a80cf5812bc95e22300801b471a1cbc4f793dee6c493f96753752",
+      "groups": [
+        {
+          "name": "unit",
+          "seconds": 227.3792,
+          "counts": {
+            "cases": 1018,
+            "passed": 1018,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "interrupted": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0
+          },
+          "identity_count": 1018,
+          "identity_sha256": "27b2f8557e94f7ca15676910e047b6ed6836f2d635f83c45698a47e933020e2f",
+          "browser_environment": null
+        },
+        {
+          "name": "serve-check",
+          "seconds": 1.893881,
+          "counts": {
+            "total": 29,
+            "passed": 29,
+            "failed": 0
+          },
+          "identity_count": 0,
+          "identity_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "browser_environment": null
+        },
+        {
+          "name": "browser",
+          "seconds": 107.514448,
+          "counts": {
+            "total": 635,
+            "passed": 635,
+            "failed": 0
+          },
+          "identity_count": 13,
+          "identity_sha256": "64fcc4ed97ae0c21cd8aae5e398cc0f9238504bcaf4b8efdaf72d832fdd93413",
+          "browser_environment": null
+        }
+      ]
+    },
+    {
+      "run_id": "20261102T051704Z-06c7cc",
+      "commit": "95f7e2314e6de32b63da5703ac8aef18438b7d9b",
+      "input_fingerprint": "sha256:8d58f53ce948906b65c0d1ab82fdaff6fa9f60e3b03436660e4fa8ae589c4caf",
+      "covers_final_input": true,
+      "environment": {
+        "os": {
+          "system": "Darwin",
+          "release": "25.6.0",
+          "machine": "arm64"
+        },
+        "python": {
+          "version": "3.14.6",
+          "implementation": "CPython",
+          "matches_wrapper": true
+        },
+        "host": {
+          "cpu_count": 10,
+          "timezone": "+0800"
+        },
+        "ci": {
+          "is_ci": false,
+          "provider": null,
+          "runner_os": null
+        },
+        "config_summary": {
+          "ae_home_set": true,
+          "ae_locale": null,
+          "ae_verify_dir_set": false
+        },
+        "isolation": {
+          "mechanism": "flock",
+          "lock_dir_source": "tmpdir",
+          "resources": [
+            "host-state",
+            "ledger-and-skill-copy"
+          ],
+          "note": "资源锁按同机同用户的共享资源划分，跨 worktree 与独立 checkout 生效；锁只协调验证参与者，不影响也不停止外部进程"
+        }
+      },
+      "wall_seconds": 335.074595,
+      "lock_wait_seconds": 0.000393,
+      "record_sha256": "8dd1375fbc6ba3fc917cb17147bb5bd39f1282f3518fb602daf3483bb5abfb71",
+      "groups": [
+        {
+          "name": "unit",
+          "seconds": 223.572834,
+          "counts": {
+            "cases": 1018,
+            "passed": 1018,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "interrupted": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0
+          },
+          "identity_count": 1018,
+          "identity_sha256": "27b2f8557e94f7ca15676910e047b6ed6836f2d635f83c45698a47e933020e2f",
+          "browser_environment": null
+        },
+        {
+          "name": "serve-check",
+          "seconds": 1.895068,
+          "counts": {
+            "total": 29,
+            "passed": 29,
+            "failed": 0
+          },
+          "identity_count": 0,
+          "identity_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "browser_environment": null
+        },
+        {
+          "name": "browser",
+          "seconds": 109.567586,
+          "counts": {
+            "total": 635,
+            "passed": 635,
+            "failed": 0
+          },
+          "identity_count": 13,
+          "identity_sha256": "64fcc4ed97ae0c21cd8aae5e398cc0f9238504bcaf4b8efdaf72d832fdd93413",
+          "browser_environment": null
+        }
+      ]
+    }
+  ],
+  "local_cases": [
+    {
+      "case": "cleanup",
+      "samples": [
+        {
+          "case": "cleanup",
+          "sample": 1,
+          "run_id": "20261102T050520Z-f576ca",
+          "outcome": "passed",
+          "wall_seconds": 8.617791,
+          "lock_wait_seconds": 0.000666,
+          "execution_seconds": 8.585969,
+          "counts": {
+            "groups": 1,
+            "cases": 25,
+            "checks": 0,
+            "passed": 25,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0,
+            "interrupted": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0
+          },
+          "fingerprint": "sha256:8d58f53ce948906b65c0d1ab82fdaff6fa9f60e3b03436660e4fa8ae589c4caf",
+          "covers_final_input": true
+        },
+        {
+          "case": "cleanup",
+          "sample": 2,
+          "run_id": "20261102T050616Z-47d52e",
+          "exit": 0,
+          "outcome": "passed",
+          "wall_seconds": 8.084742,
+          "lock_wait_seconds": 0.000104,
+          "execution_seconds": 8.053942,
+          "counts": {
+            "groups": 1,
+            "cases": 25,
+            "checks": 0,
+            "passed": 25,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0,
+            "interrupted": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0
+          },
+          "fingerprint": "sha256:8d58f53ce948906b65c0d1ab82fdaff6fa9f60e3b03436660e4fa8ae589c4caf",
+          "covers_final_input": true
+        },
+        {
+          "case": "cleanup",
+          "sample": 3,
+          "run_id": "20261102T050624Z-cde186",
+          "exit": 0,
+          "outcome": "passed",
+          "wall_seconds": 8.082984,
+          "lock_wait_seconds": 0.000101,
+          "execution_seconds": 8.052128,
+          "counts": {
+            "groups": 1,
+            "cases": 25,
+            "checks": 0,
+            "passed": 25,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0,
+            "interrupted": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0
+          },
+          "fingerprint": "sha256:8d58f53ce948906b65c0d1ab82fdaff6fa9f60e3b03436660e4fa8ae589c4caf",
+          "covers_final_input": true
+        }
+      ],
+      "n": 3,
+      "median_wall_seconds": 8.084742,
+      "target_seconds": 12,
+      "target_met": true,
+      "classification": "actual controlled subprocess cleanup tests"
+    },
+    {
+      "case": "cli-export",
+      "samples": [
+        {
+          "case": "cli-export",
+          "sample": 1,
+          "run_id": "20261102T050633Z-0226fe",
+          "exit": 0,
+          "outcome": "passed",
+          "wall_seconds": 13.540906,
+          "lock_wait_seconds": 0,
+          "execution_seconds": 13.510364,
+          "counts": {
+            "groups": 1,
+            "cases": 131,
+            "checks": 0,
+            "passed": 131,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0,
+            "interrupted": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0
+          },
+          "fingerprint": "sha256:2e70d00517680e81d23e844e45ac8bd5052c7b6bdd19cc085ab30cbe4b8e5e07",
+          "covers_final_input": true
+        },
+        {
+          "case": "cli-export",
+          "sample": 2,
+          "run_id": "20261102T050646Z-9c3f9c",
+          "exit": 0,
+          "outcome": "passed",
+          "wall_seconds": 9.405804,
+          "lock_wait_seconds": 0,
+          "execution_seconds": 9.372411,
+          "counts": {
+            "groups": 1,
+            "cases": 131,
+            "checks": 0,
+            "passed": 131,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0,
+            "interrupted": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0
+          },
+          "fingerprint": "sha256:2e70d00517680e81d23e844e45ac8bd5052c7b6bdd19cc085ab30cbe4b8e5e07",
+          "covers_final_input": true
+        },
+        {
+          "case": "cli-export",
+          "sample": 3,
+          "run_id": "20261102T050656Z-f88bdd",
+          "exit": 0,
+          "outcome": "passed",
+          "wall_seconds": 9.213491,
+          "lock_wait_seconds": 0,
+          "execution_seconds": 9.181815,
+          "counts": {
+            "groups": 1,
+            "cases": 131,
+            "checks": 0,
+            "passed": 131,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0,
+            "interrupted": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0
+          },
+          "fingerprint": "sha256:2e70d00517680e81d23e844e45ac8bd5052c7b6bdd19cc085ab30cbe4b8e5e07",
+          "covers_final_input": true
+        }
+      ],
+      "n": 3,
+      "median_wall_seconds": 9.405804,
+      "target_seconds": 30,
+      "target_met": true,
+      "classification": "synthetic source-path modification with actual product test execution"
+    },
+    {
+      "case": "page-match",
+      "samples": [
+        {
+          "case": "page-match",
+          "sample": 1,
+          "run_id": "20261102T050705Z-7d6052",
+          "exit": 0,
+          "outcome": "passed",
+          "wall_seconds": 10.124835,
+          "lock_wait_seconds": 0,
+          "execution_seconds": 10.092668,
+          "counts": {
+            "groups": 1,
+            "cases": 80,
+            "checks": 0,
+            "passed": 80,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0,
+            "interrupted": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0
+          },
+          "fingerprint": "sha256:9fbf41cf51f8f583dc647bc48986c5f035bd5bda78021ee3d8698f880af0b113",
+          "covers_final_input": true
+        },
+        {
+          "case": "page-match",
+          "sample": 2,
+          "run_id": "20261102T050716Z-b5d7fc",
+          "exit": 0,
+          "outcome": "passed",
+          "wall_seconds": 9.946937,
+          "lock_wait_seconds": 0,
+          "execution_seconds": 9.916615,
+          "counts": {
+            "groups": 1,
+            "cases": 80,
+            "checks": 0,
+            "passed": 80,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0,
+            "interrupted": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0
+          },
+          "fingerprint": "sha256:9fbf41cf51f8f583dc647bc48986c5f035bd5bda78021ee3d8698f880af0b113",
+          "covers_final_input": true
+        },
+        {
+          "case": "page-match",
+          "sample": 3,
+          "run_id": "20261102T050726Z-9107f1",
+          "exit": 0,
+          "outcome": "passed",
+          "wall_seconds": 9.610894,
+          "lock_wait_seconds": 0,
+          "execution_seconds": 9.581392,
+          "counts": {
+            "groups": 1,
+            "cases": 80,
+            "checks": 0,
+            "passed": 80,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0,
+            "interrupted": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0
+          },
+          "fingerprint": "sha256:9fbf41cf51f8f583dc647bc48986c5f035bd5bda78021ee3d8698f880af0b113",
+          "covers_final_input": true
+        }
+      ],
+      "n": 3,
+      "median_wall_seconds": 9.946937,
+      "target_seconds": 30,
+      "target_met": true,
+      "classification": "synthetic source-path modification with actual product test execution"
+    },
+    {
+      "case": "language-en",
+      "samples": [
+        {
+          "case": "language-en",
+          "sample": 1,
+          "run_id": "20261102T050736Z-8e388d",
+          "exit": 0,
+          "outcome": "passed",
+          "wall_seconds": 40.856988,
+          "lock_wait_seconds": 0,
+          "execution_seconds": 40.826749,
+          "counts": {
+            "groups": 1,
+            "cases": 333,
+            "checks": 0,
+            "passed": 333,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0,
+            "interrupted": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0
+          },
+          "fingerprint": "sha256:9e1f6c2226485e8f4be19a7a59f1fbe1d24cbd8bc9842f91000ab705580441cd",
+          "covers_final_input": true
+        },
+        {
+          "case": "language-en",
+          "sample": 2,
+          "run_id": "20261102T050817Z-9e5f5d",
+          "exit": 0,
+          "outcome": "passed",
+          "wall_seconds": 41.160298,
+          "lock_wait_seconds": 0,
+          "execution_seconds": 41.13061,
+          "counts": {
+            "groups": 1,
+            "cases": 333,
+            "checks": 0,
+            "passed": 333,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0,
+            "interrupted": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0
+          },
+          "fingerprint": "sha256:9e1f6c2226485e8f4be19a7a59f1fbe1d24cbd8bc9842f91000ab705580441cd",
+          "covers_final_input": true
+        },
+        {
+          "case": "language-en",
+          "sample": 3,
+          "run_id": "20261102T050858Z-b73c71",
+          "exit": 0,
+          "outcome": "passed",
+          "wall_seconds": 42.2167,
+          "lock_wait_seconds": 0,
+          "execution_seconds": 42.183778,
+          "counts": {
+            "groups": 1,
+            "cases": 333,
+            "checks": 0,
+            "passed": 333,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "expected_failures": 0,
+            "unexpected_successes": 0,
+            "subtest_failures": 0,
+            "subtest_errors": 0,
+            "subtest_skips": 0,
+            "interrupted": 0,
+            "fixture_errors": 0,
+            "fixture_skips": 0
+          },
+          "fingerprint": "sha256:9e1f6c2226485e8f4be19a7a59f1fbe1d24cbd8bc9842f91000ab705580441cd",
+          "covers_final_input": true
+        }
+      ],
+      "n": 3,
+      "median_wall_seconds": 41.160298,
+      "target_seconds": 30,
+      "target_met": false,
+      "classification": "synthetic source-path modification with actual product test execution"
+    }
+  ],
+  "limitations": [
+    "Historical browser versions were not captured; unknown versions do not establish a comparable browser environment.",
+    "The language case median exceeds 30 seconds.",
+    "Current 1018/635 behavior sets differ from historical 792/629 sets; a 25% equivalent-coverage reduction is not established.",
+    "Final H candidate acceptance and cross-platform CI evidence belong to the PR, not this fixed experimental snapshot."
+  ]
+}
