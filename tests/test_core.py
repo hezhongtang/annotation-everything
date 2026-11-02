@@ -1329,7 +1329,15 @@ class ReviewRound3Tests(unittest.TestCase):
             h = {"Host": f"127.0.0.1:{srv.port}", "Origin": f"http://127.0.0.1:{srv.port}", "Content-Type": "application/json"}
             for k in range(4):
                 serve._req(srv.port, "POST", "/api/handoff", h, {"message": f"m{k}", "fullCheck": k == 0})
-            time.sleep(1.0)
+            # 请求已全部返回，等真实 hook 进程及其队列收尾；固定 1 秒不能证明退出。
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                with srv._hook_lock:
+                    hook_idle = not srv._hook_running and not srv._hook_queue
+                if hook_idle and log.exists():
+                    break
+                time.sleep(0.01)
+            self.assertTrue(hook_idle and log.exists(), "真实钩子应在有界时间内完成")
         finally:
             srv.shutdown()
             srv.server_close()
