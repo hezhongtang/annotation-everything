@@ -1410,8 +1410,30 @@ def handoff_i18n_checks(browser, tmp: Path):
         ok("full check: go through the whole report and the speaker notes" in out
            and "evidence" in out and "uncertain or you did not check" in out, "英文全量勾稽保留全部约束")
         ok("At submit time 2 annotations were open, on pages 1, 4." in out, "英文说明批次范围")
-        ok(wait_until(lambda: "Agent working · batch 1" in page.inner_text("#handState"), page, 8),
+        ok(wait_until(lambda: "Agent claimed batch 1" in page.inner_text("#handState"), page, 8),
            f"接收后英文徽标（实际 {page.inner_text('#handState')!r}）")
+        ok("Chat receipt unconfirmed" in page.inner_text("#agentDelivery"), "英文区分后台认领与聊天接手回执")
+
+        delivery_cases = page.evaluate("""async () => {
+          const original = await getNotes(), result = [];
+          try {
+            for (const [seq, status, event] of [[1, "claimed", "handoff"],
+                [2, "pending", "handoff"], [1, "review", "handoff"],
+                [1, "reviewing", "review"]]) {
+              applyServer({...original,
+                handoff: {...original.handoff, latest: {...original.handoff.latest, seq, status}},
+                agentDelivery: {adapter: "codex-desktop", seq: 1, event, state: "received"}});
+              result.push({receipt: document.getElementById("agentDelivery").textContent,
+                state: document.getElementById("handState").textContent});
+            }
+          } finally { applyServer(original); }
+          return result;
+        }""")
+        ok(delivery_cases[0]["receipt"] == "Chat receipt confirmed", "同批同阶段的聊天回执可确认接手")
+        ok("unconfirmed" in delivery_cases[1]["receipt"], "新批次不能沿用上一批的接手回执")
+        ok("unconfirmed" in delivery_cases[2]["receipt"], "请求复核不能沿用初改的接手回执")
+        ok(delivery_cases[3]["receipt"] == "Chat receipt confirmed"
+           and "claimed review" in delivery_cases[3]["state"], "复核回执独立确认，认领状态只表示已认领")
 
         page.keyboard.press("j")
         wait_batches(page, "Batch 1")
@@ -2245,8 +2267,9 @@ def server_mode_checks(browser, tmp: Path):
         wout = ""
     ok(waiter.returncode == 0 and "第 1 批" in wout and "先改第 3 页" in wout and "指定了技能：dataviz、humanizer-zh" in wout,
        "后台等待的 notes.py wait 随即退出，输出提交、附言与要用的技能")
-    ok(wait_until(lambda: "Agent 处理中" in page.inner_text("#handState"), page, 10,
-                  condition="轮询应用批次状态（Agent 处理中）"), "代理接收后页面显示「Agent 处理中」")
+    ok(wait_until(lambda: "Agent 已认领" in page.inner_text("#handState"), page, 10,
+                  condition="轮询应用批次状态（Agent 已认领）"), "代理接收后页面显示「Agent 已认领」")
+    ok("接手未确认" in page.inner_text("#agentDelivery"), "等待进程退出后，页面如实显示主会话接手未确认")
     fixed = [n for n in disk_notes(sdir) if n["status"] == "open"][0]
     subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "resolve", str(sdir), fixed["id"], "--note", "标题缩短了", "--by", "claude"],
                    check=True, capture_output=True)
