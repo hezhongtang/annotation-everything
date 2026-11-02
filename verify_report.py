@@ -21,7 +21,9 @@ REGRESSION_SAMPLES = 3
 REGRESSION_RATIO = 1.2
 REGRESSION_SECONDS = 10
 
-_ABSOLUTE_PATH = re.compile(r"(?<![\w:/])(?:[A-Za-z]:[\\/]|/)[^\s\"'<>，；：,;\]\[{}()]+")
+_ABSOLUTE_PATH = re.compile(
+    r"(?P<url>[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>，；：,;\]\[{}()]+)"
+    r"|(?<![A-Za-z0-9_:/])(?:[A-Za-z]:[\\/]|/)[^\s\"'<>，；：,;\]\[{}()]+")
 
 
 def redact_paths(value, roots=()):
@@ -41,7 +43,7 @@ def redact_paths(value, roots=()):
     def text_value(text):
         for path, alias in replacements:
             text = text.replace(path, alias)
-        return _ABSOLUTE_PATH.sub("<external-path>", text)
+        return _ABSOLUTE_PATH.sub(lambda match: match.group("url") or "<external-path>", text)
 
     def visit(item):
         if isinstance(item, str):
@@ -567,17 +569,21 @@ def rebuild(root, roots, loader, now=None, events=None):
         state_path = directory / "state.json"
         state_problem = None
         try:
-            state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+            state_exists = state_path.exists()
+            state = json.loads(state_path.read_text(encoding="utf-8")) if state_exists else {}
             if not isinstance(state, dict) or state.get("schema", SCHEMA) != SCHEMA:
                 raise ValueError("回顾状态 schema 不兼容")
-            if state_path.exists() and (state.get("schema") != SCHEMA
+            if state_exists and (state.get("schema") != SCHEMA
                     or not all(isinstance(state.get(key), list) and all(isinstance(item, str) for item in state[key])
                                for key in ("sample_ids", "reviewed_prs"))
                     or not isinstance(state.get("candidate_versions"), dict)
                     or "pr_history_truncated" in state and not isinstance(state["pr_history_truncated"], bool)
                     or instant(state.get("reviewed_at")) is None):
                 raise ValueError("回顾状态字段不完整")
-            if state.get("incomplete_history"):
+            if not state_exists and ((directory / "summary.json").exists()
+                    or (directory / "summary.md").exists() or any((directory / "reviews").glob("*.json"))):
+                state_problem = "回顾状态缺失但已有衍生历史；须恢复可信状态后再生成增量回顾"
+            elif state.get("incomplete_history"):
                 state_problem = "回顾去重历史不完整；须恢复可信状态后再生成增量回顾"
         except (OSError, ValueError) as exc:
             state = {}

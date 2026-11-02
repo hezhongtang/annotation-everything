@@ -1332,6 +1332,24 @@ class EfficiencyIntegrationTests(VerifyEntryTestCase):
         self.assertNotIn(str(self.repo.artifact_dir), selection)
         self.assertTrue(record["context"]["selection"]["policy_guard"]["active"])
 
+    def test_guard_paths_next_to_chinese_are_redacted_and_urls_are_preserved(self):
+        paths = ["/Users/synthetic/private.json", "/private/synthetic/quoted.json",
+                 "/tmp/synthetic/spaced.json"]
+        urls = ["https://example.invalid/review/49", "https://合成.invalid/审阅/49"]
+        reason = "无法读取%s；引号\"%s\"；空格 %s；来源 %s %s" % (*paths, *urls)
+        self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
+            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": 3,
+            "reason": reason, "evidence": ["synthetic"]}, ensure_ascii=False))
+        result = self.repo.run_verify("run", "unit-related", "tests/test_synth.py", "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        record = json.loads(result.stdout)
+        selection = json.dumps(record["context"]["selection"], ensure_ascii=False)
+        for path in paths:
+            self.assertNotIn(path, selection)
+        for url in urls:
+            self.assertIn(url, selection)
+        self.assertTrue(record["context"]["selection"]["policy_guard"]["active"])
+
     def test_a_known_new_policy_version_replaces_an_older_guard(self):
         self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
             "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": 3,

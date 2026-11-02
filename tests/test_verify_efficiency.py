@@ -469,6 +469,28 @@ else:
         self.assertEqual(report["merge_events"]["new"], [])
         self.assertEqual(report["merge_events"]["unconfirmed"], [str(identity) for identity in identities])
 
+    def test_deleted_review_state_with_existing_projections_does_not_reconsume_events(self):
+        self.record("before-state-deletion")
+        events = Path(self.tmp.name) / "replayed-events.json"
+        identities = list(range(10))
+        events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": identities, "gaps": []}))
+        first = self.cli("--rebuild", "--events", str(events))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertTrue(json.loads(first.stdout)["review"]["generated"])
+        directory = self.root / "efficiency"
+        (directory / "state.json").unlink()
+        self.record("after-state-deletion", start=30)
+        for now in (3610, 3620):
+            replay = self.cli("--rebuild", "--events", str(events), now=now)
+            self.assertEqual(replay.returncode, 1, replay.stderr)
+            report = json.loads(replay.stdout)
+            self.assertTrue(report["gaps"])
+            self.assertFalse(report["review"]["generated"])
+            self.assertEqual(report["merge_events"]["new"], [])
+            self.assertEqual(report["merge_events"]["unconfirmed"], [str(identity) for identity in identities])
+            self.assertTrue(json.loads((directory / "state.json").read_text())["incomplete_history"])
+            self.assertEqual(len(list((directory / "reviews").glob("*.json"))), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
