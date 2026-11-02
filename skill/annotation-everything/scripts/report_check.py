@@ -99,7 +99,7 @@ class Checks:
     ORDER = ("report.parse", "report.pageKeys", "script.pages", "record.structure",
              "record.freshness", "record.pageRefs", "record.calculations", "record.checks",
              "record.claims", "record.reading", "record.sources",
-             "record.visual", "record.length")
+             "record.visual", "record.length", "record.revision")
 
     def __init__(self, locale: str):
         self.locale = locale
@@ -155,6 +155,11 @@ class Checks:
                                      code, "check.err.visualBad"),
                "record.length": {"record.length-mismatch": "check.err.lengthMismatch"}.get(
                    code, "check.err.lengthMismatch"),
+               "record.revision": {"record.revision-bad": "check.err.revisionBad",
+                                    "record.revision-unknown": "check.err.revisionUnknown",
+                                    "record.revision-unrechecked": "check.err.revisionUnrechecked",
+                                    "record.revision-pending": "check.err.revisionPending"}.get(
+                                        code, "check.err.revisionBad"),
                }[cid]
         detail = t(self.locale, key, **params) if params else ""
         self.items[cid] = {"id": cid, "status": state, "code": code, "detail": detail}
@@ -810,6 +815,45 @@ def check_record_length(record: dict | None, pages: list[dict], c: Checks) -> No
           actual=n, expected=expected)
 
 
+def check_record_revision(record: dict | None, c: Checks) -> dict | None:
+    """改稿维护声明（#75 决策 8、15）：可选 revision 字段表达本次改稿核验信息。
+
+    字段可选——初次生成的记录没有 revision，判不适用；没有记录同样不适用。
+    声明了就要能对上：basis 写影响范围判定依据，rechecked 列出本次重新核验的
+    检查项（必须在记录里有实际检查结果），pending 列出无法确认影响范围的待核验
+    项（scope 范围 + reason 原因）。返回规范化后的 revision；没有则 None。"""
+    if record is None:
+        c.set("record.revision", "not_applicable")
+        return None
+    rev = record.get("revision")
+    if rev is None:
+        c.set("record.revision", "not_applicable")
+        return None
+    if not isinstance(rev, dict):
+        c.set("record.revision", "fail", code="record.revision-bad", detail="revision is not an object")
+        return None
+    basis = rev.get("basis")
+    rechecked = rev.get("rechecked")
+    pending = rev.get("pending")
+    ok_basis = isinstance(basis, str) and bool(basis.strip())
+    ok_rechecked = isinstance(rechecked, list) \
+        and all(isinstance(x, str) for x in rechecked)
+    ok_pending = isinstance(pending, list) and all(
+        isinstance(x, dict)
+        and isinstance(x.get("scope"), str) and bool(x["scope"].strip())
+        and isinstance(x.get("reason"), str) and bool(x["reason"].strip())
+        for x in pending)
+    if not (ok_basis and ok_rechecked and ok_pending):
+        c.set("record.revision", "fail", code="record.revision-bad",
+              detail="revision needs basis, rechecked (list of known check ids) "
+                     "and pending ({scope, reason}) entries")
+        return None
+    c.set("record.revision", "pass")
+    return {"basis": basis.strip(), "rechecked": list(dict.fromkeys(rechecked)),
+            "pending": [{"scope": x["scope"].strip(), "reason": x["reason"].strip()}
+                        for x in pending]}
+
+
 def coverage_for(record: dict | None, fresh: bool, kind: str,
                  script_present: bool = True) -> tuple[str, int, int, int]:
     """汇总一类核验的覆盖情况；状态语义语言无关，返回 (状态, 通过数, 总数, 失败数)。
@@ -844,7 +888,8 @@ def coverage_for(record: dict | None, fresh: bool, kind: str,
 def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
               record_ok: bool, claims_info: dict | None = None,
               calc_pending: list[str] | None = None, source_stale: bool = False,
-              reading: dict | None = None, script_present: bool = True) -> dict:
+              reading: dict | None = None, script_present: bool = True,
+              revision: dict | None = None) -> dict:
     reasons: list[str] = []
     failed_program = checks.failed()
     # 全部实质材料不可读：空结构或虚构内容不能当作初稿生成完成（issue #71）。
@@ -924,7 +969,8 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
                    else {"n": sum(1 for x in record["openItems"] if isinstance(x, dict)),
                          "blocking": sum(1 for x in record["openItems"]
                                          if isinstance(x, dict) and x.get("blocking") is True)},
-                   "scopes": scopes},
+                   "scopes": scopes,
+                   "revision": revision},
         "coverage": coverage,
         "coverageCounts": coverage_counts,
         "coverageCapped": capped,
@@ -966,6 +1012,7 @@ def check_report(report_path: Path, script_path: Path | None = None,
     calc_pending: list[str] = []
     source_stale = False
     reading = None
+    revision = None
     if record is not None:
         claims_info = analyze_claims(record)
         check_page_refs(record, pages, c)
@@ -976,9 +1023,10 @@ def check_report(report_path: Path, script_path: Path | None = None,
         reading = check_reading(record, c)
         check_record_visual(record, pages, c)
         check_record_length(record, pages, c)
+        revision = check_record_revision(record, c)
     result = summarize(record, fresh, c, draft_ok, record_ok, claims_info=claims_info,
                        calc_pending=calc_pending, source_stale=source_stale, reading=reading,
-                       script_present=script_text is not None)
+                       script_present=script_text is not None, revision=revision)
     result["schema"] = RESULT_SCHEMA
     result["inputs"] = {
         "report": {"path": report_path.name, "sha256": sha256_bytes(report_bytes)},
