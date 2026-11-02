@@ -31,6 +31,11 @@ import e2e_scenarios as reg  # noqa: E402
 # 新增场景时在注册表登记后同步更新这里，保持全量模式可解释。
 FULL_ORDER = (
     "receiver-binding",
+    "generated-draft-loop",
+    "report-verdict-loop",
+    "revision-update-loop",
+    "legacy-report-compat",
+    "external-method-loop",
     "installed-delivery",
     "locale-live-controls",
     "skill-search",

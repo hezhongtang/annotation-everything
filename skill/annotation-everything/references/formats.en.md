@@ -2,6 +2,8 @@
 
 Use this reference with the [English workflow](workflow.en.md) and [shared protocol](protocol.md). The [Chinese reference](formats.md) documents the same inputs and storage fields. Display language never determines input language.
 
+This page covers existing reports, scripts, and review data. **To generate a new report from raw material**, read [Report generation: default paradigm](generation.en.md) first; the field contract for the verification record that accompanies new reports (schema `ae-report-record/1`, saved as `report-record.json` beside the report) and the public check entry `scripts/report_check.py` live in that guide. Existing reports without a record go straight into review; there is no need to backfill one.
+
 ## HTML report
 
 ```html

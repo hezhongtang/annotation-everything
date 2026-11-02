@@ -20,6 +20,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VERIFY = ROOT / "verify.py"
+sys.path.insert(0, str(ROOT))
+from verify_selection import STRATEGY_VERSION
 
 # 合成 uv：剥掉 run --no-project --with <依赖>，直接执行剩下的命令（浏览器依赖仍只在真入口里导入）
 UV_STUB = '''#!/usr/bin/env python3
@@ -1338,7 +1340,7 @@ class EfficiencyIntegrationTests(VerifyEntryTestCase):
         urls = ["https://example.invalid/review/49", "https://合成.invalid/审阅/49"]
         reason = "无法读取%s；引号\"%s\"；空格 %s；来源 %s %s" % (*paths, *urls)
         self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
-            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": 3,
+            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": STRATEGY_VERSION,
             "reason": reason, "evidence": ["synthetic"]}, ensure_ascii=False))
         result = self.repo.run_verify("run", "unit-related", "tests/test_synth.py", "--json")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -1352,10 +1354,13 @@ class EfficiencyIntegrationTests(VerifyEntryTestCase):
 
     def test_a_known_new_policy_version_replaces_an_older_guard(self):
         self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
-            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": 3,
+            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": STRATEGY_VERSION,
             "reason": "old reviewed policy", "evidence": ["synthetic"]}))
         policy = (self.repo.path / "verify_selection.py").read_text()
-        self.repo.write("verify_selection.py", policy.replace("STRATEGY_VERSION = 3", "STRATEGY_VERSION = 4"))
+        upgraded = policy.replace("STRATEGY_VERSION = %d" % STRATEGY_VERSION,
+                                  "STRATEGY_VERSION = %d" % (STRATEGY_VERSION + 1))
+        self.assertNotEqual(upgraded, policy, "合成升级必须实际修改策略版本")
+        self.repo.write("verify_selection.py", upgraded)
         self.repo.commit_all("合成受审查策略升级")
         result = self.repo.run_verify("plan", "--phase", "development", "--json")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -1363,7 +1368,7 @@ class EfficiencyIntegrationTests(VerifyEntryTestCase):
 
     def test_uncertain_impact_expands_explicit_related_run_to_actual_full_gate(self):
         self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
-            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": 3,
+            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": STRATEGY_VERSION,
             "reason": "合成无法界定的影响", "evidence": ["synthetic"]}))
         p = self.repo.run_verify("run", "unit-related", "tests/test_synth.py", "--json")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)

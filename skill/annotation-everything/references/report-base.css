@@ -1,0 +1,109 @@
+/* annotation-everything 报告基础样式（issue #70 默认范式）
+ *
+ * 随技能安装发布，供生成方内联进报告的 <style>。逐页版面按对照页的
+ * 1280×720 设计，生成器会把报告里的样式收进 Shadow DOM（:root 会改写
+ * 为 :host，body 布局属性复位），本文件只依赖 .page 上的类名与变量。
+ * 不引用外部资源；字体用系统回退栈。颜色是可读性优先的中性主题，
+ * 生成方可以按用途调整变量，但不要删除语义类（.ae-source / .ae-gap /
+ * .ae-todo），审阅人靠它们识别依据与缺口。
+ */
+
+:root {
+  --ae-bg: #ffffff;
+  --ae-ink: #1f2933;
+  --ae-muted: #6b7280;
+  --ae-accent: #9a3412;
+  --ae-line: #d6d3d1;
+  --ae-soft: #f5f5f4;
+  --ae-font: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Source Han Sans SC", -apple-system, "Segoe UI", sans-serif;
+}
+
+.page {
+  width: 1280px;
+  height: 720px;
+  padding: 64px 72px;
+  box-sizing: border-box;
+  background: var(--ae-bg);
+  color: var(--ae-ink);
+  font-family: var(--ae-font);
+  font-size: 22px;
+  line-height: 1.6;
+  position: relative;
+  overflow: hidden;
+}
+
+.page h1 { font-size: 44px; line-height: 1.25; margin: 0 0 20px; color: var(--ae-ink); }
+.page h2 { font-size: 32px; line-height: 1.3; margin: 0 0 18px; color: var(--ae-ink); }
+.page h3 { font-size: 25px; line-height: 1.35; margin: 0 0 14px; color: var(--ae-ink); }
+
+.page p { margin: 0 0 14px; }
+.page ul, .page ol { margin: 0 0 14px; padding-left: 1.4em; }
+.page li { margin: 0 0 6px; }
+.page strong { font-weight: 700; }
+
+.page a { color: var(--ae-accent); text-decoration: none; }
+
+/* 大数字与要点行 */
+.page .ae-kpi {
+  font-size: 56px;
+  font-weight: 700;
+  color: var(--ae-accent);
+  margin: 8px 0 12px;
+  line-height: 1.1;
+}
+.page .ae-point { margin: 0 0 12px; padding-left: 14px; border-left: 4px solid var(--ae-accent); }
+
+/* 结论的依据标注：引用来源紧跟在结论附近 */
+.page .ae-source {
+  font-size: 16px;
+  color: var(--ae-muted);
+  margin: 4px 0 12px;
+}
+.page .ae-source::before { content: "依据 · "; color: var(--ae-muted); }
+
+/* 材料缺口与未核实内容：必须显眼，不能当成已确认事实 */
+.page .ae-gap {
+  background: var(--ae-soft);
+  border-left: 4px solid var(--ae-muted);
+  padding: 10px 14px;
+  margin: 10px 0;
+  font-size: 19px;
+  color: var(--ae-ink);
+}
+.page .ae-gap::before { content: "缺口 · "; font-weight: 700; color: var(--ae-muted); }
+.page .ae-todo {
+  background: #fef3c7;
+  padding: 0 6px;
+  font-weight: 700;
+}
+
+/* 表格 */
+.page table { border-collapse: collapse; font-size: 20px; margin: 0 0 16px; }
+.page td, .page th { border: 1px solid var(--ae-line); padding: 6px 14px; text-align: left; }
+.page th { background: var(--ae-soft); font-weight: 700; }
+
+/* 目录行（板块导航由生成器按 data-range-start/end 推断） */
+.page .toc-row {
+  display: flex;
+  gap: 16px;
+  font-size: 22px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--ae-line);
+  color: var(--ae-ink);
+}
+.page .toc-label { font-weight: 700; width: 140px; }
+.page .toc-title { flex: 1; }
+.page .toc-range { margin-left: auto; color: var(--ae-muted); }
+
+/* 页脚：页码与来源提示由生成方写入 */
+.page .ae-footer {
+  position: absolute;
+  left: 72px;
+  right: 72px;
+  bottom: 28px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 15px;
+  color: var(--ae-muted);
+}

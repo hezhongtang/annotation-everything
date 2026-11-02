@@ -1,0 +1,574 @@
+"""改稿更新核验与既有报告兼容的契约测试（issue #75）。
+
+report_check.py 的 `record.revision` 检查与记录级可选 `revision` 字段钉住
+#69 决策 8、13、15 的确定规则：改稿后的记录可以声明本次重新核验的影响范围
+（rechecked）与无法确认范围的待核验项（pending，带 scope 与 reason）；声明
+重新核验过的项在记录里必须有实际检查结果，无法确认影响范围时如实披露待核验
+范围与原因、不能伪称核验完成。核验关联保持可选：没有 revision 的旧记录、
+没有记录的旧报告都不受影响，直接进入审阅。旧的可交付判定在报告变化后由
+新鲜度检查拦下，受影响项重新核验、未受影响证据保留后才可能恢复。
+
+只用标准库与内联合成数据：python3 -m unittest discover tests
+"""
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))
+os.environ.pop("AE_LOCALE", None)   # 语言由各用例显式给定
+
+import report_check as rc  # noqa: E402
+
+RECORD_SCHEMA = "ae-report-record/1"
+CHECK_SCHEMA = "ae-report-check/1"
+
+CONTENT_CHECK_IDS = ("content.requirements", "content.claims", "content.fact-vs-inference",
+                     "content.units-dates", "content.numbers-charts", "content.cross-page",
+                     "content.script-consistency", "content.open-questions")
+STRUCTURE_CHECK_IDS = ("structure.flow", "structure.headings", "structure.claim-support",
+                       "structure.dup-gaps", "structure.length")
+
+MATERIAL = "# 三季度笔记\n\n三季度收入 112 万元，上年同期 100 万元。\n"
+
+
+def tmpdir() -> Path:
+    return Path(tempfile.mkdtemp())
+
+
+def sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+REPORT = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>合成季度回顾</title>
+<style>.page{width:1280px;height:720px;padding:56px;box-sizing:border-box;font-family:sans-serif}
+.kpi{font-size:48px;font-weight:700}</style></head><body>
+<section class="page" data-page="1" data-key="sum" id="page-sum"><h2>结论</h2><p class="kpi">收入同比 +12%</p>
+<p>新开 3 家门店贡献主要增量。</p></section>
+<section class="page" data-page="2" data-key="rev" id="page-rev"><h2>收入结构</h2><p>外卖占比 38%。</p></section>
+<section class="page" data-page="3" data-key="next" id="page-next"><h2>下一步</h2><p>两件事。</p></section>
+</body></html>
+"""
+
+SCRIPT = """# 讲稿：合成季度回顾
+
+### 第 1 页｜结论
+**讲法**：
+先说结论：收入同比增长 12%。
+
+### 第 2 页｜收入结构
+**讲法**：
+外卖占比继续上升。
+
+### 第 3 页｜下一步
+**讲法**：
+两件事。
+"""
+
+
+def visual_evidence(pages: list | None = None, *, status: str = "pass") -> list[dict]:
+    item = {"id": "visual.pages", "kind": "visual", "status": status,
+            "scope": "全部 3 页（1280×720 实际渲染）", "note": "逐页渲染检查"}
+    if pages is not None:
+        item["pages"] = pages
+    return item
+
+
+def full_pages(*, checked: bool = True, issues: list | None = None) -> list[dict]:
+    entries = []
+    for n in (1, 2, 3):
+        entry = {"page": n, "checked": checked, "viewport": "1280x720"}
+        if issues:
+            entry["issues"] = issues
+        entries.append(entry)
+    return entries
+
+
+def all_checks(*, content: str = "pass", structure: str = "pass",
+               visual: dict | None = None) -> list[dict]:
+    items = [{"id": cid, "kind": "content", "status": content,
+              "scope": "全部", "note": "合成契约数据"}
+             for cid in CONTENT_CHECK_IDS]
+    items += [{"id": cid, "kind": "structure", "status": structure,
+               "scope": "全部页", "note": "合成契约数据"}
+              for cid in STRUCTURE_CHECK_IDS]
+    if visual is None:
+        visual = visual_evidence(full_pages())
+    items.append(visual)
+    return items
+
+
+def make_record(script_text: str = SCRIPT, **overrides) -> dict:
+    record = {
+        "schema": RECORD_SCHEMA,
+        "generatedAt": "2026-11-02T09:00:00+08:00",
+        "request": {"purpose": "季度经营汇报", "audience": "管理层",
+                    "coreQuestions": ["三季度收入为什么增长"], "length": "3 页",
+                    "script": "yes"},
+        "sources": [{"path": "materials/q3-notes.md", "status": "read",
+                     "coverage": "全文", "sha256": sha(MATERIAL), "note": ""}],
+        "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
+                   "version": "0.9.0", "unavailable": []},
+        "links": {"report": "report.html", "script": "script.md",
+                  "sha256": {"report": sha(REPORT), "script": sha(script_text)},
+                  "sourceNote": "materials/q3-notes.md 及同目录讲稿"},
+        "findings": [{"claim": "三季度收入同比增长 12%", "type": "calculation",
+                      "sources": ["materials/q3-notes.md"], "pages": ["sum"],
+                      "refs": [{"path": "materials/q3-notes.md", "locator": "§1 收入",
+                                "quote": "去年同期为 100 万元", "found": True}],
+                      "support": "supported",
+                      "basis": "对比材料 §1 两期收入原文，并按声明输入复算 percent-change",
+                      "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 112},
+                                      "expected": 12,
+                                      "unit": "万元", "period": "2025Q3 对 2024Q3",
+                                      "definition": "对上年同期收入的增长百分比",
+                                      "inputLocations": {
+                                          "a": "materials/q3-notes.md §1：去年同期 100 万元",
+                                          "b": "materials/q3-notes.md §1：三季度收入 112 万元"}},
+                      "note": "收入 112 对上年 100，四舍五入到整数"}],
+        "gaps": ["十月的周报缺失"],
+        "checks": all_checks(content="not_run", structure="not_run",
+                             visual=visual_evidence(status="not_run")),
+        "openItems": [{"item": "十月周报待补", "blocking": False}],
+        "verdict": {"draftComplete": True, "deliverable": None},
+    }
+    record.update(overrides)
+    return record
+
+
+def compliant_record(**overrides) -> dict:
+    record = make_record(checks=all_checks())
+    record["verdict"] = {"draftComplete": True, "deliverable": True}
+    record.update(overrides)
+    return record
+
+
+def revision(**overrides) -> dict:
+    """改稿维护声明：默认声明重新核验了数字与跨页一致性，无待核验项。"""
+    data = {"basis": "改动落在第 1 页收入数字，讲稿第 1 页同步；核对相关引用与跨页口径",
+            "rechecked": ["content.numbers-charts", "content.cross-page"],
+            "pending": []}
+    data.update(overrides)
+    return data
+
+
+def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
+               record: dict | None = None) -> dict:
+    d.mkdir(parents=True, exist_ok=True)
+    if not (d / "materials" / "q3-notes.md").exists():
+        (d / "materials").mkdir(exist_ok=True)
+        (d / "materials" / "q3-notes.md").write_text(MATERIAL, encoding="utf-8")
+    paths = {"report": d / "report.html"}
+    paths["report"].write_text(report, encoding="utf-8")
+    if script is not None:
+        paths["script"] = d / "script.md"
+        paths["script"].write_text(script, encoding="utf-8")
+    if record is not None:
+        paths["record"] = d / "report-record.json"
+        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                                   encoding="utf-8")
+    return paths
+
+
+def run_check(paths: dict, *, locale: str | None = None,
+              argv_extra: list[str] | None = None) -> tuple[int, dict | None, str, str]:
+    argv = [str(paths["report"])]
+    if paths.get("script"):
+        argv += ["--script", str(paths["script"])]
+    if paths.get("record"):
+        argv += ["--record", str(paths["record"])]
+    if locale:
+        argv += ["--locale", locale]
+    if argv_extra:
+        argv += argv_extra
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        code = rc.main(argv)
+    text = out.getvalue()
+    payload = json.loads(text) if "--json" in (argv_extra or []) else None
+    return code, payload, text, err.getvalue()
+
+
+def check_by_id(payload: dict, cid: str) -> dict:
+    for item in payload["checks"]:
+        if item["id"] == cid:
+            return item
+    raise AssertionError(f"检查结果里没有 {cid}：{payload['checks']}")
+
+
+class RevisionEntryTests(unittest.TestCase):
+    """切片 1：record.revision 检查存在；没有 revision 的旧记录不受影响。"""
+
+    def test_check_order_appends_revision_at_tail(self):
+        self.assertEqual(rc.Checks.ORDER[-1], "record.revision")
+        self.assertIn("record.revision", rc.Checks.ORDER)
+
+    def test_legacy_record_without_revision_is_not_applicable(self):
+        """#70–#73 形态的旧记录没有 revision 字段：判不适用，不产生失败。"""
+        paths = write_case(tmpdir() / "legacy", record=compliant_record())
+        code, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        item = check_by_id(payload, "record.revision")
+        self.assertEqual(item["status"], "not_applicable")
+        self.assertTrue(payload["verdict"]["deliverable"],
+                        "旧记录的可交付判定不受新检查影响")
+
+    def test_revision_declaration_passes(self):
+        """改稿维护声明齐备：检查通过，不影响其他检查与可交付判定。"""
+        record = compliant_record(revision=revision())
+        paths = write_case(tmpdir() / "declared", record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        item = check_by_id(payload, "record.revision")
+        self.assertEqual(item["status"], "pass")
+        self.assertTrue(payload["verdict"]["deliverable"])
+        self.assertEqual(payload["record"]["revision"]["rechecked"],
+                         ["content.numbers-charts", "content.cross-page"])
+
+    def test_no_record_report_stays_reviewable(self):
+        """没有记录的旧报告：初稿判定不因缺记录受阻，不被迫补建记录。"""
+        paths = write_case(tmpdir() / "norecord", record=None)
+        code, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["verdict"]["draftComplete"])
+        self.assertFalse(payload["verdict"]["deliverable"])
+        item = check_by_id(payload, "record.revision")
+        self.assertEqual(item["status"], "not_applicable")
+        _, _, summary, _ = run_check(paths, locale="zh-CN")
+        self.assertIn("初稿生成：已完成", summary)
+        self.assertIn("报告可交付：否", summary)
+
+
+class RevisionStructureTests(unittest.TestCase):
+    """切片 2：改稿维护声明的结构校验——声明了就要能对上，不符要能暴露。"""
+
+    def check_revision(self, **rev_overrides) -> tuple[int, dict, dict]:
+        record = compliant_record(revision=revision(**rev_overrides))
+        paths = write_case(tmpdir() / "revcase", record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        return code, payload, check_by_id(payload, "record.revision")
+
+    def test_missing_basis_fails(self):
+        """缺影响范围判定依据：改稿声明无法证明范围怎么定的，程序检查失败。"""
+        code, _, item = self.check_revision(basis="")
+        self.assertEqual(code, 1)
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.revision-bad")
+        code2, _, item2 = self.check_revision(basis=None)
+        self.assertEqual(code2, 1)
+        self.assertEqual(item2["code"], "record.revision-bad")
+
+    def test_non_dict_revision_fails(self):
+        code, _, item = self.check_revision(**{"basis": "x", "rechecked": [], "pending": []})
+        # 正常结构仍应通过，先自证 helper 无误
+        self.assertEqual(item["status"], "pass")
+
+    def test_unknown_rechecked_id_fails(self):
+        """声明重新核验了清单外项目：无法证明已执行，程序检查失败。"""
+        code, _, item = self.check_revision(rechecked=["content.numbers-charts", "made.up"])
+        self.assertEqual(code, 1)
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.revision-unknown")
+
+    def test_rechecked_without_results_fails(self):
+        """声明重新核验了某项，但记录里该项没有实际检查结果：程序检查失败。"""
+        record = compliant_record(revision=revision(rechecked=["content.units-dates"]))
+        for c in record["checks"]:
+            if c["id"] == "content.units-dates":
+                c["status"] = "not_run"
+        paths = write_case(tmpdir() / "unrechecked", record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.revision")
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.revision-unrechecked")
+        self.assertFalse(payload["verdict"]["deliverable"])
+
+    def test_rechecked_fail_result_is_consistent(self):
+        """重新核验后如实记 fail：声明与结果一致（程序检查通过），覆盖如实降级。"""
+        record = compliant_record(revision=revision(rechecked=["content.units-dates"]))
+        for c in record["checks"]:
+            if c["id"] == "content.units-dates":
+                c["status"] = "fail"
+                c["note"] = "改稿后八月口径写成了十月"
+        paths = write_case(tmpdir() / "recheckfail", record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        item = check_by_id(payload, "record.revision")
+        self.assertEqual(item["status"], "pass")
+        self.assertFalse(payload["verdict"]["deliverable"])
+        self.assertEqual(payload["coverage"]["content"], "uncovered")
+
+    def test_bad_pending_entry_fails(self):
+        """待核验项缺范围或原因：无法向用户交代待核验什么，程序检查失败。"""
+        code, _, item = self.check_revision(
+            pending=[{"scope": "第 4–6 页视觉检查"}])
+        self.assertEqual(code, 1)
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.revision-pending")
+        code2, _, item2 = self.check_revision(
+            pending=[{"scope": "第 4–6 页视觉检查", "reason": " "}])
+        self.assertEqual(code2, 1)
+        self.assertEqual(item2["code"], "record.revision-pending")
+
+    def test_revision_not_an_object_fails(self):
+        record = compliant_record()
+        record["revision"] = "改稿声明"
+        paths = write_case(tmpdir() / "revstr", record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.revision")
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.revision-bad")
+
+
+class RevisionPendingTests(unittest.TestCase):
+    """切片 3：无法确认影响范围时如实披露待核验范围与原因，不伪称核验完成。"""
+
+    def pending_record(self, **rev_overrides) -> dict:
+        return compliant_record(revision=revision(**rev_overrides))
+
+    def test_pending_blocks_deliverable_with_reason(self):
+        """待核验项存在：记录声明本身诚实（检查通过），但可交付被拦下并写明范围与原因。"""
+        paths = write_case(tmpdir() / "pending", record=self.pending_record(
+            pending=[{"scope": "第 4–6 页视觉检查", "reason": "共享样式影响范围无法确认"}]))
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        item = check_by_id(payload, "record.revision")
+        self.assertEqual(item["status"], "pass")
+        self.assertFalse(payload["verdict"]["deliverable"])
+        reasons = "；".join(payload["verdict"]["reasons"])
+        self.assertIn("第 4–6 页视觉检查", reasons)
+        self.assertIn("共享样式影响范围无法确认", reasons)
+
+    def test_pending_and_rechecked_coexist(self):
+        """部分范围确认、部分待核验：两边都披露，整体不可交付。"""
+        paths = write_case(tmpdir() / "mixed", record=self.pending_record(
+            rechecked=["content.numbers-charts"],
+            pending=[{"scope": "讲稿第 3 页同步情况", "reason": "讲稿是否也要改无法确认"}]))
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertFalse(payload["verdict"]["deliverable"])
+        self.assertEqual(payload["record"]["revision"]["rechecked"],
+                         ["content.numbers-charts"])
+        _, _, summary, _ = run_check(paths, locale="zh-CN")
+        self.assertIn("数字与图表", summary, "摘要列出重新核验项的本地化检查名")
+        self.assertIn("讲稿第 3 页同步情况", summary)
+        self.assertIn("待核验", summary)
+
+    def test_empty_pending_keeps_deliverable(self):
+        """没有待核验项（pending 为空）：不产生可交付原因。"""
+        paths = write_case(tmpdir() / "cleanrev", record=self.pending_record())
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertTrue(payload["verdict"]["deliverable"])
+        self.assertFalse(any("待核验" in r for r in payload["verdict"]["reasons"]))
+
+    def test_revision_json_language_invariant(self):
+        """revision 的结构化字段语言无关：中英运行结果一致。"""
+        rev = revision(pending=[{"scope": "样式影响页", "reason": "影响范围未知"}])
+        zh_paths = write_case(tmpdir() / "revzh", record=self.pending_record(**rev))
+        en_paths = write_case(tmpdir() / "reven", record=self.pending_record(**rev))
+        _, zh, _, _ = run_check(zh_paths, locale="zh-CN", argv_extra=["--json"])
+        _, en, _, _ = run_check(en_paths, locale="en", argv_extra=["--json"])
+        self.assertEqual(zh["record"]["revision"], en["record"]["revision"])
+        self.assertEqual(zh["verdict"]["deliverable"], en["verdict"]["deliverable"])
+
+
+class RevisionUpdateFlowTests(unittest.TestCase):
+    """切片 4：改稿更新链路——旧可交付判定失效、维护后恢复、页序稳定键保持关联。"""
+
+    def test_changed_report_voids_old_deliverable(self):
+        """改了报告：记录对不上当前产物，旧的可交付结论不能继续有效。"""
+        d = tmpdir() / "voided"
+        record = compliant_record(revision=revision())
+        paths = write_case(d, record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertTrue(payload["verdict"]["deliverable"])
+        # 真实改稿：源文件内容变化
+        paths["report"].write_text(
+            paths["report"].read_text(encoding="utf-8").replace("+12%", "+18%"),
+            encoding="utf-8")
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertFalse(payload["verdict"]["deliverable"],
+                         "旧的可交付判定不能为改后的报告背书")
+        fresh_item = check_by_id(payload, "record.freshness")
+        self.assertEqual(fresh_item["status"], "fail")
+        self.assertEqual(fresh_item["code"], "record.stale")
+        self.assertEqual(payload["coverage"]["content"], "unverified")
+        self.assertTrue(payload["verdict"]["draftComplete"],
+                        "记录过期挡可交付，不挡初稿进入审阅")
+
+    def test_maintained_record_restores_deliverable(self):
+        """改稿维护：更新产物哈希、声明重新核验范围后，可交付判定恢复。"""
+        d = tmpdir() / "restored"
+        record = compliant_record(revision=revision())
+        paths = write_case(d, record=record)
+        # 改数字（第 1 页结论页）
+        changed_report = (paths["report"].read_text(encoding="utf-8")
+                          .replace("+12%", "+15%"))
+        paths["report"].write_text(changed_report, encoding="utf-8")
+        # 改稿方维护记录：更新报告哈希，声明本次重新核验的检查项与判定依据
+        record = compliant_record(
+            links={"report": "report.html", "script": "script.md",
+                   "sha256": {"report": sha(changed_report), "script": sha(SCRIPT)},
+                   "sourceNote": "materials/q3-notes.md 及同目录讲稿"},
+            revision=revision(basis="改动只在第 1 页结论数字，讲稿同步；跨页口径与引用未受影响",
+                              rechecked=["content.numbers-charts", "content.cross-page",
+                                         "content.script-consistency"]))
+        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                                   encoding="utf-8")
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertTrue(payload["verdict"]["deliverable"],
+                        "受影响项重新核验、未受影响证据保留后可交付恢复")
+        self.assertTrue(payload["record"]["fresh"])
+        self.assertEqual(check_by_id(payload, "record.revision")["status"], "pass")
+        self.assertEqual(payload["coverage"]["content"], "covered")
+
+    def test_affected_refs_and_calculations_update_with_revision(self):
+        """AC2 链路：改关键数字后，受影响引用与计算声明随改稿更新，核验恢复。
+
+        材料收入 112 → 118，报告与记录同步更新（引用 quote、计算 inputs 与
+        expected、revision 声明）；核验入口按新声明复算一致。"""
+        d = tmpdir() / "revsync"
+        record = compliant_record(revision=revision())
+        paths = write_case(d, record=record)
+        new_material = MATERIAL.replace("112", "118")
+        (paths["report"].parent / "materials").mkdir(exist_ok=True)
+        material_path = paths["report"].parent / "materials" / "q3-notes.md"
+        material_path.write_text(MATERIAL, encoding="utf-8")
+        # 真实改稿：材料、报告一起更新
+        material_path.write_text(new_material, encoding="utf-8")
+        changed_report = (paths["report"].read_text(encoding="utf-8")
+                          .replace("+12%", "+18%"))
+        paths["report"].write_text(changed_report, encoding="utf-8")
+        updated_finding = {
+            "claim": "三季度收入同比增长 18%", "type": "calculation",
+            "sources": ["materials/q3-notes.md"], "pages": ["sum"],
+            "refs": [{"path": "materials/q3-notes.md", "locator": "§1 收入",
+                      "quote": "三季度收入 118 万元，上年同期 100 万元。", "found": True}],
+            "support": "supported",
+            "basis": "改稿后重新定位材料原文，并按新输入复算 percent-change",
+            "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 118},
+                            "expected": 18,
+                            "unit": "万元", "period": "2025Q3 对 2024Q3",
+                            "definition": "对上年同期收入的增长百分比",
+                            "inputLocations": {
+                                "a": "materials/q3-notes.md §1：上年同期 100 万元",
+                                "b": "materials/q3-notes.md §1：三季度收入 118 万元"}},
+            "note": "改稿后口径不变，数字随材料更新"}
+        record = compliant_record(
+            sources=[{"path": "materials/q3-notes.md", "status": "read",
+                      "coverage": "全文", "sha256": sha(new_material), "note": ""}],
+            links={"report": "report.html", "script": "script.md",
+                   "sha256": {"report": sha(changed_report), "script": sha(SCRIPT)},
+                   "sourceNote": "materials/q3-notes.md 及同目录讲稿"},
+            findings=[updated_finding],
+            revision=revision(basis="材料收入数字更新，报告结论页与讲稿同步；跨页口径未受影响",
+                              rechecked=["content.numbers-charts", "content.cross-page",
+                                         "content.script-consistency"]))
+        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                                   encoding="utf-8")
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertTrue(payload["verdict"]["deliverable"],
+                        "受影响的引用、计算与检查结果更新后核验恢复")
+        self.assertEqual(check_by_id(payload, "record.calculations")["status"], "pass")
+        self.assertEqual(check_by_id(payload, "record.claims")["status"], "pass")
+
+    def test_source_changed_again_without_maintenance_stays_unverified(self):
+        """来源再次变化而记录未维护：内容覆盖 unverified，旧结论不背书（AC4）。"""
+        d = tmpdir() / "rematch"
+        record = compliant_record(revision=revision())
+        paths = write_case(d, record=record)
+        (paths["report"].parent / "materials").mkdir(exist_ok=True)
+        material_path = paths["report"].parent / "materials" / "q3-notes.md"
+        material_path.write_text(MATERIAL, encoding="utf-8")
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertTrue(payload["verdict"]["deliverable"])
+        # 来源再次变化（改稿之外的因素），记录没有跟着维护
+        material_path.write_text(MATERIAL.replace("112", "117"), encoding="utf-8")
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(check_by_id(payload, "record.sources")["code"], "record.source-stale")
+        self.assertEqual(payload["coverage"]["content"], "unverified")
+        self.assertEqual(payload["coverage"]["structure"], "unverified")
+        self.assertFalse(payload["verdict"]["deliverable"],
+                         "来源再次变化后，旧的可交付结论不再有效")
+
+    def test_reordered_pages_keep_stable_refs(self):
+        """页序重排：data-page 重写、data-key 不变，记录引用经稳定键保持关联。"""
+        d = tmpdir() / "reordered"
+        record = compliant_record(revision=revision())
+        paths = write_case(d, record=record)
+        original = paths["report"].read_text(encoding="utf-8")
+        # 按新页序重写文档顺序，并更新 data-page（真实改稿做法，见 generated-draft-loop）
+        swapped = original
+        swapped = swapped.replace('<section class="page" data-page="2" data-key="rev"',
+                                  '<section class="page" data-page="3" data-key="rev"')
+        swapped = swapped.replace('<section class="page" data-page="3" data-key="next"',
+                                  '<section class="page" data-page="2" data-key="next"')
+        head, _, rest = swapped.partition('data-key="rev"')
+        # 重排文档顺序：sum, next, rev
+        sum_html = original[original.index('<section class="page" data-page="1"'):
+                            original.index('<section class="page" data-page="2"')]
+        rev_html_new = ('<section class="page" data-page="3" data-key="rev" id="page-rev">'
+                        '<h2>收入结构</h2><p>外卖占比 38%。</p></section>\n')
+        next_html_new = ('<section class="page" data-page="2" data-key="next" id="page-next">'
+                         '<h2>下一步</h2><p>两件事。</p></section>\n')
+        body_head = original[:original.index('<section class="page" data-page="2"')]
+        tail = "</body></html>\n"
+        reordered = body_head + next_html_new + rev_html_new + tail
+        paths["report"].write_text(reordered, encoding="utf-8")
+        # 改稿方维护记录：只更新报告哈希；findings[].pages 仍是稳定键 sum
+        record = compliant_record(
+            links={"report": "report.html", "script": "script.md",
+                   "sha256": {"report": sha(reordered), "script": sha(SCRIPT)},
+                   "sourceNote": "materials/q3-notes.md 及同目录讲稿"},
+            revision=revision(basis="页序调整，内容未变；引用按稳定页面键保持",
+                              rechecked=["structure.flow"]))
+        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                                   encoding="utf-8")
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        refs_item = check_by_id(payload, "record.pageRefs")
+        self.assertEqual(refs_item["status"], "pass",
+                         "稳定页面键在重排后保持记录引用关联")
+        self.assertTrue(payload["verdict"]["deliverable"])
+
+    def test_material_change_stays_unverified_until_maintained(self):
+        """来源变动：材料哈希不符 → 内容覆盖 unverified；维护后恢复。"""
+        d = tmpdir() / "matchange"
+        record = compliant_record(revision=revision())
+        paths = write_case(d, record=record)
+        (paths["report"].parent / "materials").mkdir(exist_ok=True)
+        (paths["report"].parent / "materials" / "q3-notes.md").write_text(
+            MATERIAL, encoding="utf-8")
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertTrue(payload["verdict"]["deliverable"], "材料一致时判定成立")
+        # 材料被再次修改（改稿之外的因素）
+        new_material = MATERIAL.replace("112", "115")
+        (paths["report"].parent / "materials" / "q3-notes.md").write_text(
+            new_material, encoding="utf-8")
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        sources_item = check_by_id(payload, "record.sources")
+        self.assertEqual(sources_item["code"], "record.source-stale")
+        self.assertEqual(payload["coverage"]["content"], "unverified")
+        self.assertFalse(payload["verdict"]["deliverable"])
+        # 改稿方核对新材料后维护记录
+        record = compliant_record(
+            sources=[{"path": "materials/q3-notes.md", "status": "read",
+                      "coverage": "全文", "sha256": sha(new_material), "note": "改稿后重新读取"}],
+            revision=revision(basis="材料更新收入数字，报告与讲稿同步改",
+                              rechecked=["content.numbers-charts", "content.cross-page"]))
+        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                                   encoding="utf-8")
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertTrue(payload["verdict"]["deliverable"], "来源重新核验后判定恢复")
+
+
+if __name__ == "__main__":
+    unittest.main()

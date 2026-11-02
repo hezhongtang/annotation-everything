@@ -31,6 +31,14 @@ Correct a contradiction only when the material or user instructions provide evid
 
 When other batches or sessions can edit the same sources, coordinate the edit order and preserve their changes. Before finishing, check whether the inspected sources changed again. Recheck affected pages and references. If that cannot be verified, report that the full check is incomplete.
 
+## Revision verification records / 改稿核验记录
+
+A report may carry a verification record (`ae-report-record/1`) beside it. After any content, source, or style change, maintain the affected verification info: refresh the artifact hashes, update the affected findings and check results, and declare the revision — the scope rechecked this time (`revision.rechecked` with `basis`) and anything whose affected scope could not be confirmed (`revision.pending` with scope and reason). Stale records never endorse changed artifacts; the check entry keeps a record with pending items from reaching a deliverable verdict. Keep evidence you can prove unaffected; never present unverified work as verified.
+
+A normal revision checks only the affected scope. Never open a full check on your own initiative; run the complete checklist only when the user explicitly requests overall verification, and disclose the full coverage. Existing reports without a verification record keep entering review directly; when overall verification is requested, build the record with the complete checklist and register unavailable original evidence as a gap — never treat the report's own claims as source evidence.
+
+The report quality verdict is separate from annotation and batch status. Maintaining verification info does not change review rights, stop conditions, or the two-stage workflow; existing locks and batch rules continue to apply.
+
 ## Compatibility
 
 - Display labels come from the selected locale. Stored v1 values remain `报告`, `讲稿`, `报告和讲稿`; skill scopes remain `all`, `报告`, `讲稿`, `style`. Machine statuses and exit codes do not change with locale. Compare codes and structured options, not translated strings.

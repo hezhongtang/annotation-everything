@@ -1,0 +1,13 @@
+schema_version: "1.1"
+name: generate-method-specified
+expected_outcome: |
+  用户明确指定已安装的合成外部技能 synthetic-brief-kit（位于 installed-skills/）：
+  Agent 实际调用该技能（运行其脚本），产物带该技能的可观察特征（xs-banner 版式
+  标记），不是只凭扫描目录或名称宣称已调用。核验记录 method.kind=external、
+  name=synthetic-brief-kit、version 可得（1.4.2）、invocation 写清实际调用方式；
+  产物遵守 AE 产物约定（逐页 section.page、稳定 data-key、讲稿逐页对应）并走
+  report_check.py 同一核验入口，verdict.draftComplete=true、未宣称 deliverable。
+  英文请求（discovery-cases 的英文路由用例）走同一生成指引的「Generation method」
+  节，语义与中文一致。回复给出对照页入口与产物位置。
+context:
+  scaffold_script: place-files.sh

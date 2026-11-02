@@ -2,6 +2,8 @@
 
 [English format reference](formats.en.md) · [中文操作流程](workflow.zh-CN.md) · [共用安全与协议约束](protocol.md)
 
+本页讲已有报告、讲稿与审阅数据的格式。**从原始材料生成新报告**时，先读[报告生成：默认范式](generation.zh-CN.md)；新报告随附的核验记录（schema `ae-report-record/1`，存为报告旁的 `report-record.json`）与公开核验入口 `scripts/report_check.py` 的字段契约以那份指引为准，已有报告没有记录时直接审阅、不需要补建。
+
 ## 报告 HTML
 
 逐页一个 `section`，`class` 含 `page`，带页码与唯一键；版面按 1280×720 设计（对照页按这个尺寸缩放）：

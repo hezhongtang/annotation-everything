@@ -1,0 +1,21 @@
+schema_version: "1.1"
+name: revision-scope-verification
+expected_outcome: |
+  只装 annotation-everything 时，对一份已交付、已有完整核验记录（ae-report-record/1，
+  初态可交付）的合成季度回顾按两条批注改稿：收入最新口径 115 万元（材料已更新为 115，
+  初稿写的是旧对话口径 112 → 增速 12%）与外卖占比同比口径核对。已知答案与预设状态：
+  材料「三季度收入 115 万元，上年同期 100 万元」→ 增速 15%；讲稿第 1 页同一数字要
+  同步；笔记只记录了外卖占比「较上季继续上升」（环比），没有上年同期值 → 同比口径
+  无法确认。改稿后 Agent 要维护核验记录而不是全量重做：更新 links.sha256 为改后产物
+  哈希；受影响的 finding 更新（引用 quote 指向材料原文、calculation inputs 改为
+  100→115、expected 15）；revision.basis 写影响范围判定依据，revision.rechecked 只列
+  实际重新核验的项（至少覆盖 content.claims / content.numbers-charts /
+  content.cross-page / content.script-consistency 中实际受影响的项，每项在 checks 里
+  有实际结果），无法确认的同比口径进 revision.pending（scope 与 reason）或如实登记
+  为未核实，不伪称已核验。运行 report_check.py：改稿后旧哈希会先判 stale（旧可交付
+  判定失效），维护后恢复。有 pending 项时报告到不了可交付（deliverable 为 null/false），
+  摘要与回复如实列出待核验范围与原因；没有 pending 且维护完整时才可交付。两侧一致：
+  报告结论页与讲稿第 1 页都改成 15%；未受影响的页（下一步）与检查项保留原状，普通
+  改稿不擅自打开全量勾稽。不改批注、批次状态文件，不自动定稿。
+context:
+  scaffold_script: place-files.sh

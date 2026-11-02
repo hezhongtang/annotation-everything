@@ -1,0 +1,13 @@
+schema_version: "1.1"
+name: generate-method-default
+expected_outcome: |
+  用户没有指定生成技能、任务也没有扩展需要：Agent 直接用内置范式（generation
+  指引）生成，不追问「用哪个技能」，也不因环境里存在其他技能而调用或宣称调用
+  任何一个。核验记录 method.kind=builtin、name 为 AE 内置范式并带版本；回复与
+  产物中没有「已使用某外部生成技能」的虚假宣称。已知事实（收入 112 万、同比
+  +12%、外卖占比 38%）进入报告并保留依据；十月数据缺失如实披露。需求按 brief.md
+  沿用（含讲稿：需要），report_check.py 已运行且程序检查通过；verdict
+  draftComplete=true、deliverable 未宣称完成；回复给出对照页入口与产物位置。
+  产物保存在材料旁，记录为 ae-report-record/1。
+context:
+  scaffold_script: place-files.sh

@@ -1,0 +1,494 @@
+"""材料读取登记与缺口披露的契约测试（issue #71）。
+
+report_check.py 的 `record.reading` 检查钉住核验记录里读取登记的确定规则：
+`sources[].status` 只认 `read` / `partial` / `unreadable`；`partial` 必须写明
+实际读取范围与原因，`unreadable` 必须写明原因；`locations` 存在时必须是字符
+串列表（PDF 页码、Word 段落、工作表与单元格等定位线索）；全部实质材料不可
+读时初稿不能宣布生成完成。读取范围、定位线索与缺口以结构化结果和可读摘要
+披露——格式被接受不等于内容已读完。
+
+只用标准库与内联合成数据：python3 -m unittest discover tests
+"""
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))
+os.environ.pop("AE_LOCALE", None)   # 语言由各用例显式给定
+
+import report_check as rc  # noqa: E402
+
+RECORD_SCHEMA = "ae-report-record/1"
+CHECK_SCHEMA = "ae-report-check/1"
+
+# 一份由合成办公材料提取结果编成的报告：三个结论页各对应一种材料，
+# .ae-source 写材料内定位（PDF 页码 / Word 段落 / 工作表单元格）。
+REPORT = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>合成季度办公材料汇报</title>
+<style>.page{width:1280px;height:720px;padding:56px;box-sizing:border-box;font-family:sans-serif}</style></head><body>
+<section class="page" data-page="1" data-key="rev" id="page-rev"><h2>收入结论</h2>
+<p>三季度收入 112 万元，同比 +12%。</p>
+<p class="ae-source">q3-review.pdf 第 2 页</p></section>
+<section class="page" data-page="2" data-key="plan" id="page-plan"><h2>渠道计划</h2>
+<p>四季度新增两家门店。</p>
+<p class="ae-source">sales-plan.docx 第 3 段</p></section>
+<section class="page" data-page="3" data-key="tbl" id="page-tbl"><h2>渠道明细</h2>
+<p>华东区 9 月销售 38 万元（空白单元格表示未统计，0 表示确认为零）。</p>
+<p class="ae-source">channel-sales.xlsx Sheet1!B2:B9</p>
+<div class="ae-gap">渠道表 10 月公式列未读取</div></section>
+</body></html>
+"""
+
+SCRIPT = """# 讲稿：合成季度办公材料汇报
+
+### 第 1 页｜收入结论
+**讲法**：
+收入同比 +12%。
+
+### 第 2 页｜渠道计划
+**讲法**：
+四季度新增两家门店。
+
+### 第 3 页｜渠道明细
+**讲法**：
+华东 9 月 38 万。
+"""
+
+
+def sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def make_reading_record(sources: list | None = None, gaps: list | None = None,
+                        **overrides) -> dict:
+    """一份结构完整、读取登记可替换的最小核验记录。"""
+    if sources is None:
+        sources = [
+            {"path": "materials/q3-review.pdf", "status": "read",
+             "coverage": "全部 4 页文本层", "locations": ["q3-review.pdf 第 1–4 页"], "note": ""},
+            {"path": "materials/sales-plan.docx", "status": "read",
+             "coverage": "正文全部 12 段", "locations": ["sales-plan.docx 第 1–12 段"], "note": ""},
+            {"path": "materials/channel-sales.xlsx", "status": "partial",
+             "coverage": "Sheet1!A1:C9 已读；Sheet2 公式区未读取",
+             "locations": ["channel-sales.xlsx Sheet1!A1:C9"],
+             "reason": "宿主无公式重算工具，Sheet2 公式无缓存结果", "note": ""},
+        ]
+    if gaps is None:
+        gaps = ["channel-sales.xlsx Sheet2 公式区未读取"]
+    record = {
+        "schema": RECORD_SCHEMA,
+        "generatedAt": "2026-11-02T09:00:00+08:00",
+        "request": {"purpose": "季度经营汇报", "audience": "管理层",
+                    "coreQuestions": ["三季度收入为什么增长"], "length": "3 页", "script": "yes"},
+        "sources": sources,
+        "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
+                   "version": "0.9.0", "unavailable": []},
+        "links": {"report": "report.html", "script": "script.md",
+                  "sha256": {"report": sha(REPORT), "script": sha(SCRIPT)},
+                  "sourceNote": "materials/ 及同目录讲稿"},
+        "findings": [{"claim": "三季度收入同比增长 12%", "type": "calculation",
+                      "sources": ["materials/q3-review.pdf"],
+                      "locations": ["q3-review.pdf 第 2 页"], "pages": ["rev"],
+                      "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 112},
+                                      "expected": 12},
+                      "note": "收入 112 对上年 100"}],
+        "gaps": gaps,
+        "checks": [
+            {"id": "content.requirements", "kind": "content", "status": "not_run",
+             "scope": "全部需求", "note": ""},
+            {"id": "visual.pages", "kind": "visual", "status": "not_run",
+             "scope": "全部 3 页", "note": ""},
+        ],
+        "openItems": [{"item": "渠道表 10 月数据待补", "blocking": False}],
+        "verdict": {"draftComplete": True, "deliverable": None},
+    }
+    record.update(overrides)
+    return record
+
+
+def write_case(d: Path, record: dict | None = None) -> dict:
+    d.mkdir(parents=True, exist_ok=True)
+    paths = {"report": d / "report.html", "script": d / "script.md"}
+    paths["report"].write_text(REPORT, encoding="utf-8")
+    paths["script"].write_text(SCRIPT, encoding="utf-8")
+    if record is not None:
+        paths["record"] = d / "report-record.json"
+        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                                   encoding="utf-8")
+    return paths
+
+
+def run_check(paths: dict, *, locale: str | None = None) -> tuple[int, dict | None, str]:
+    argv = [str(paths["report"]), "--script", str(paths["script"])]
+    if paths.get("record"):
+        argv += ["--record", str(paths["record"])]
+    if locale:
+        argv += ["--locale", locale]
+    argv.append("--json")
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        code = rc.main(argv)
+    payload = json.loads(out.getvalue())
+    return code, payload, out.getvalue()
+
+
+def check_by_id(payload: dict, cid: str) -> dict:
+    for item in payload["checks"]:
+        if item["id"] == cid:
+            return item
+    raise AssertionError(f"检查结果里没有 {cid}：{[c['id'] for c in payload['checks']]}")
+
+
+class OfficePipelineDemoTests(unittest.TestCase):
+    """管线演示（issue #71 验收 1 的确定性部分）：
+    合成 PDF / Word / 表格的提取事实与定位 → 逐页报告 → 核验入口 → 对照页。
+    读取本身由宿主能力完成；这里从提取结果开始，钉住定位信息沿流程保留、
+    核验入口认得这份记录、审阅目录能生成。真实 Agent 行为由 evals/ 覆盖。
+    """
+
+    def test_report_with_locations_checks_and_builds(self):
+        import subprocess
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, make_reading_record())
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["verdict"]["draftComplete"])
+        self.assertEqual(check_by_id(payload, "record.reading")["status"], "pass")
+        self.assertEqual(payload["reading"]["read"], 2)
+        self.assertEqual(payload["reading"]["partial"], 1)
+        # 结论定位引用报告页键；材料内定位（页码/段落/单元格）留在记录里
+        review = d / "review"
+        done = subprocess.run(
+            [sys.executable, str(SCRIPTS / "build_viewer.py"), "--report", str(paths["report"]),
+             "--script", str(paths["script"]), "--out", str(review), "--name", "办公材料演示",
+             "--no-scan-skills"],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "AE_HOME": str(d / "ledger")})
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        page = (review / "index.html").read_text(encoding="utf-8")
+        for location in ("q3-review.pdf 第 2 页", "sales-plan.docx 第 3 段",
+                         "channel-sales.xlsx Sheet1!B2:B9"):
+            self.assertIn(location, page, f"材料定位 {location} 应随报告进入对照页")
+
+
+_installed: list[Path] = []
+
+
+def installed_copy() -> Path:
+    """用 ae.py install 建一份临时技能副本（模块内只装一次），返回副本目录。"""
+    if _installed:
+        return _installed[0]
+    import subprocess
+    temp = tempfile.mkdtemp(prefix="ae-read-res-")
+    home = Path(temp) / "home"
+    skills = home / ".claude" / "skills"
+    env = {**os.environ, "HOME": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
+    done = subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"], env=env,
+                          capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stdout + done.stderr
+    _installed.append(skills / "annotation-everything")
+    return _installed[0]
+
+
+class GuideReadingContractTests(unittest.TestCase):
+    """中英生成指引随安装发布读取编排小节；登记字段与实现不漂移（issue #71）。"""
+
+    ZH_ANCHORS = ("### 读取编排与能力边界", "### 能力不足时的登记",
+                  "OCR", "工作表", "单元格", "全部实质材料", "record.reading-blocked")
+    EN_ANCHORS = ("### Reading orchestration and capability limits",
+                  "### Registering insufficient capability",
+                  "OCR", "worksheet", "all substantive materials", "record.reading-blocked")
+
+    @classmethod
+    def setUpClass(cls):
+        copy = installed_copy()
+        cls.zh = (copy / "references" / "generation.zh-CN.md").read_text(encoding="utf-8")
+        cls.en = (copy / "references" / "generation.en.md").read_text(encoding="utf-8")
+
+    def test_guides_ship_reading_sections(self):
+        self.assertTrue(installed_copy().is_dir())
+        for anchor in self.ZH_ANCHORS:
+            self.assertIn(anchor, self.zh, f"中文指引缺 {anchor}")
+        for anchor in self.EN_ANCHORS:
+            self.assertIn(anchor, self.en, f"英文指引缺 {anchor}")
+
+    def test_guides_list_statuses_matching_implementation(self):
+        """指引写的读取状态与 report_check 的枚举一致，防止文档漂移。"""
+        for text in (self.zh, self.en):
+            for status in rc.SOURCE_STATUSES:
+                self.assertIn(f"`{status}`", text, f"指引缺状态 {status}")
+
+    def test_guides_document_registration_fields(self):
+        """读取范围、定位线索与原因三个登记字段都要在指引里。"""
+        for text in (self.zh, self.en):
+            for field in ("coverage", "locations", "reason"):
+                self.assertIn(field, text, f"指引缺登记字段 {field}")
+
+    def test_record_example_shows_partial_disclosure(self):
+        """记录示例带 partial 条目：实际读取范围与原因写在示例里，不留空话。"""
+        import re
+        for text, label in ((self.zh, "中文"), (self.en, "英文")):
+            block = re.search(r"```[a-z]*\n([^`]*\"schema\"[^`]*)```", text)
+            self.assertIsNotNone(block, f"{label}指引里有记录示例")
+            self.assertIn('"status": "partial"', block.group(1),
+                          f"{label}指引的记录示例缺 partial 条目")
+            self.assertIn('"reason"', block.group(1), f"{label}指引示例缺 reason")
+            self.assertIn('"locations"', block.group(1), f"{label}指引示例缺 locations")
+
+    def test_check_entry_documented_with_reading(self):
+        """第 5 步的程序检查清单包含读取登记与缺口披露。"""
+        self.assertIn("读取登记与缺口披露", self.zh)
+        self.assertIn("reading registration and gap disclosure", self.en)
+
+
+class ReadingRegistrationTests(unittest.TestCase):
+    """读取登记：状态枚举、披露完整性与定位线索类型。"""
+
+    def test_mixed_statuses_pass(self):
+        """read / partial 混合并如实披露：读取登记通过，初稿成立。"""
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, make_reading_record())
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 0)
+        self.assertEqual(check_by_id(payload, "record.reading")["status"], "pass")
+        self.assertTrue(payload["verdict"]["draftComplete"])
+
+    def test_reading_check_in_order(self):
+        """record.reading 是程序检查的固定一项；没有记录时不适用。"""
+        self.assertIn("record.reading", rc.Checks.ORDER)
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, None)
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 0)
+        self.assertEqual(check_by_id(payload, "record.reading")["status"], "not_applicable")
+
+    def test_empty_sources_not_applicable(self):
+        """材料只在对话里（sources 为空）时读取登记不适用，不算失败。"""
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, make_reading_record(sources=[]))
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 0)
+        self.assertEqual(check_by_id(payload, "record.reading")["status"], "not_applicable")
+
+    def test_missing_status_fails(self):
+        d = Path(tempfile.mkdtemp())
+        sources = [{"path": "materials/q3-review.pdf", "coverage": "全部"}]
+        paths = write_case(d, make_reading_record(sources=sources))
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.reading")
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.source-status")
+        self.assertIn("q3-review.pdf", item["detail"])
+
+    def test_unknown_status_fails(self):
+        """格式被打开不代表已读：status 必须用既定枚举，不能自造「opened」。"""
+        d = Path(tempfile.mkdtemp())
+        sources = [{"path": "materials/q3-review.pdf", "status": "opened",
+                    "coverage": "文件能打开"}]
+        paths = write_case(d, make_reading_record(sources=sources))
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.reading")
+        self.assertEqual(item["code"], "record.source-status")
+        self.assertIn("opened", item["detail"])
+
+    def test_partial_requires_range_and_reason(self):
+        """partial 只写状态不写范围与原因：核验记录不能证明未读部分已知。"""
+        d = Path(tempfile.mkdtemp())
+        sources = [{"path": "materials/scan.pdf", "status": "partial"}]
+        paths = write_case(d, make_reading_record(sources=sources))
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.reading")
+        self.assertEqual(item["code"], "record.source-field")
+        self.assertIn("scan.pdf", item["detail"])
+        self.assertIn("coverage", item["detail"])
+        self.assertIn("reason", item["detail"])
+
+    def test_partial_reason_alone_not_enough(self):
+        """partial 有原因但没写实际读取范围：仍算披露不完整。"""
+        d = Path(tempfile.mkdtemp())
+        sources = [{"path": "materials/scan.pdf", "status": "partial",
+                    "reason": "第 3–4 页为扫描页"}]
+        paths = write_case(d, make_reading_record(sources=sources))
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 1)
+        self.assertEqual(check_by_id(payload, "record.reading")["code"], "record.source-field")
+
+    def test_unreadable_requires_reason(self):
+        d = Path(tempfile.mkdtemp())
+        sources = [{"path": "materials/legacy.doc", "status": "unreadable"}]
+        paths = write_case(d, make_reading_record(sources=sources))
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.reading")
+        self.assertEqual(item["code"], "record.source-field")
+        self.assertIn("reason", item["detail"])
+        self.assertNotIn("coverage", item["detail"])   # unreadable 不要求范围
+
+    def test_unreadable_full_disclosure_passes(self):
+        """单份材料不可读但有原因与缺口：登记本身成立（初稿是否成立见切片 2）。"""
+        d = Path(tempfile.mkdtemp())
+        sources = [{"path": "materials/q3-review.pdf", "status": "read",
+                    "coverage": "全部 4 页文本层"},
+                   {"path": "materials/legacy.doc", "status": "unreadable",
+                    "reason": "宿主无 .doc 旧格式解析工具"}]
+        paths = write_case(d, make_reading_record(sources=sources,
+                                                  gaps=["legacy.doc 无法读取"]))
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 0)
+        self.assertEqual(check_by_id(payload, "record.reading")["status"], "pass")
+        self.assertTrue(payload["verdict"]["draftComplete"])
+
+    def test_locations_must_be_string_list(self):
+        """定位线索存在时必须是字符串列表：页码、段落、单元格要能逐条核对。"""
+        d = Path(tempfile.mkdtemp())
+        sources = [{"path": "materials/q3-review.pdf", "status": "read",
+                    "coverage": "全部", "locations": "第 1–4 页"}]
+        paths = write_case(d, make_reading_record(sources=sources))
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.reading")
+        self.assertEqual(item["code"], "record.source-field")
+        self.assertIn("locations", item["detail"])
+
+    def test_non_dict_entry_fails(self):
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, make_reading_record(sources=["materials/q3-review.pdf"]))
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 1)
+        self.assertEqual(check_by_id(payload, "record.reading")["status"], "fail")
+
+
+class ReadingSummaryTests(unittest.TestCase):
+    """读取汇总与缺口披露：结构化结果和摘要都指得出具体未读范围。"""
+
+    def test_reading_counts_in_structured_result(self):
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, make_reading_record())
+        _, payload, _ = run_check(paths, locale="zh-CN")
+        reading = payload["reading"]
+        self.assertEqual(reading["read"], 2)
+        self.assertEqual(reading["partial"], 1)
+        self.assertEqual(reading["unreadable"], 0)
+        self.assertEqual(len(reading["unread"]), 1)
+        entry = reading["unread"][0]
+        self.assertEqual(entry["path"], "materials/channel-sales.xlsx")
+        self.assertEqual(entry["status"], "partial")
+        self.assertIn("Sheet2", entry["detail"], "未读明细要能定位到具体区域")
+
+    def test_summary_discloses_unread_ranges(self):
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, make_reading_record())
+        argv = [str(paths["report"]), "--script", str(paths["script"]),
+                "--record", str(paths["record"]), "--locale", "zh-CN"]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            rc.main(argv)
+        text = out.getvalue()
+        self.assertIn("读取登记", text)
+        self.assertIn("未读范围", text)
+        self.assertIn("channel-sales.xlsx", text)
+
+    def test_gaps_line_in_summary(self):
+        """记录披露的缺口进入摘要：读没读完以记录为准，不靠印象。"""
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, make_reading_record())
+        argv = [str(paths["report"]), "--script", str(paths["script"]),
+                "--record", str(paths["record"]), "--locale", "zh-CN"]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            rc.main(argv)
+        self.assertIn("记录披露的缺口", out.getvalue())
+        self.assertIn("Sheet2 公式区未读取", out.getvalue())
+
+    def test_summary_english(self):
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, make_reading_record())
+        argv = [str(paths["report"]), "--script", str(paths["script"]),
+                "--record", str(paths["record"]), "--locale", "en"]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            rc.main(argv)
+        text = out.getvalue()
+        self.assertIn("Reading:", text)
+        self.assertIn("Unread", text)
+        self.assertIn("channel-sales.xlsx", text)
+
+    def test_no_reading_line_without_record(self):
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, None)
+        argv = [str(paths["report"]), "--script", str(paths["script"]),
+                "--locale", "zh-CN"]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = rc.main(argv)
+        self.assertEqual(code, 0)
+        self.assertNotIn("读取登记：", out.getvalue())
+
+
+class AllUnreadableTests(unittest.TestCase):
+    """所有实质材料均不可读：初稿不能宣布生成完成。"""
+
+    @staticmethod
+    def unreadable_record(**overrides) -> dict:
+        sources = [
+            {"path": "materials/scan-report.pdf", "status": "unreadable",
+             "reason": "只有扫描图像，宿主无 OCR 工具未识别任何文本"},
+            {"path": "materials/legacy-notes.doc", "status": "unreadable",
+             "reason": "宿主无旧版 Word 二进制解析工具"},
+        ]
+        return make_reading_record(sources=sources,
+                                   gaps=["scan-report.pdf 扫描页未识别",
+                                         "legacy-notes.doc 无法读取"],
+                                   **overrides)
+
+    def test_all_unreadable_blocks_draft(self):
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, self.unreadable_record())
+        code, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertEqual(code, 1)
+        item = check_by_id(payload, "record.reading")
+        self.assertEqual(item["status"], "fail")
+        self.assertEqual(item["code"], "record.reading-blocked")
+        self.assertFalse(payload["verdict"]["draftComplete"],
+                         "全部实质材料不可读时初稿不算完成")
+        self.assertFalse(payload["verdict"]["deliverable"])
+        self.assertTrue(payload["record"]["declaredDraftComplete"],
+                        "生成方声称完成与程序判定不一致，应保持可见")
+        self.assertTrue(any("材料" in r for r in payload["verdict"]["reasons"]),
+                        payload["verdict"]["reasons"])
+
+    def test_all_unreadable_reading_counts(self):
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, self.unreadable_record())
+        _, payload, _ = run_check(paths, locale="zh-CN")
+        reading = payload["reading"]
+        self.assertEqual(reading["read"], 0)
+        self.assertEqual(reading["partial"], 0)
+        self.assertEqual(reading["unreadable"], 2)
+        self.assertEqual({e["path"] for e in reading["unread"]},
+                         {"materials/scan-report.pdf", "materials/legacy-notes.doc"})
+
+    def test_partial_still_allows_draft(self):
+        """部分材料可读 + 缺口已披露：初稿可以成立，可交付另判。"""
+        d = Path(tempfile.mkdtemp())
+        paths = write_case(d, make_reading_record())
+        _, payload, _ = run_check(paths, locale="zh-CN")
+        self.assertTrue(payload["verdict"]["draftComplete"])
+        self.assertFalse(payload["verdict"]["deliverable"])
+
+
+if __name__ == "__main__":
+    unittest.main()
