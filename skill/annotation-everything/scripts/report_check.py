@@ -61,6 +61,9 @@ KNOWN_RECORD_CHECKS = {
 # 讲稿关联的检查项（#73 适用性规则）：没有讲稿时这些项不计入覆盖总数，
 # 也不要求声明；声明了 pass 就是虚假的已检查，按程序检查失败暴露。
 SCRIPT_SCOPED_CHECKS = ("content.script-consistency", "structure.length")
+# 记录 method.kind 的封闭取值（#74 决策 14）：实际生成方法必须声明类别与名称；
+# 外部方法还须写实际调用依据（invocation）——扫描到候选或名字出现不算已采用。
+METHOD_KINDS = ("builtin", "external")
 CHECK_STATUSES = ("pass", "fail", "not_run", "unavailable")
 # sources[].status 的封闭取值：材料读取登记（#69 决策 4）——格式被接受不等于内容
 # 已读完，按实际读到的范围登记（#71 读取登记、#72 材料关联共用）。
@@ -99,7 +102,7 @@ class Checks:
     ORDER = ("report.parse", "report.pageKeys", "script.pages", "record.structure",
              "record.freshness", "record.pageRefs", "record.calculations", "record.checks",
              "record.claims", "record.reading", "record.sources",
-             "record.visual", "record.length", "record.revision")
+             "record.visual", "record.length", "record.method", "record.revision")
 
     def __init__(self, locale: str):
         self.locale = locale
@@ -155,6 +158,11 @@ class Checks:
                                      code, "check.err.visualBad"),
                "record.length": {"record.length-mismatch": "check.err.lengthMismatch"}.get(
                    code, "check.err.lengthMismatch"),
+               "record.method": {"record.method-unknown": "check.err.methodUnknown",
+                                 "record.method-missing": "check.err.methodMissing",
+                                 "record.method-bad": "check.err.methodBad",
+                                 "record.method-invocation": "check.err.methodInvocation"}.get(
+                                     code, "check.err.methodBad"),
                "record.revision": {"record.revision-bad": "check.err.revisionBad",
                                     "record.revision-unknown": "check.err.revisionUnknown",
                                     "record.revision-unrechecked": "check.err.revisionUnrechecked",
@@ -871,6 +879,53 @@ def check_record_revision(record: dict | None, c: Checks) -> dict | None:
                         for x in pending]}
 
 
+def check_record_method(record: dict | None, c: Checks) -> None:
+    """实际生成方法声明（issue #74 决策 14）：kind / name 必须写明，外部方法
+    必须带实际调用依据（invocation）——扫描到候选或名字出现不算已采用；用户
+    指定但未实际采用（requested + note）与能力缺口（unavailable）如实披露。
+    版本信息可得时应写明：外部方法缺 version 给警告不失败。方法声明缺失不挡
+    初稿进审阅，但记录不能借它宣称使用了别的方法或已满足其能力要求。"""
+    if record is None:
+        c.set("record.method", "not_applicable")
+        return
+    method = record["method"]
+    kind = method.get("kind")
+    if not isinstance(kind, str) or kind not in METHOD_KINDS:
+        c.set("record.method", "fail", code="record.method-unknown",
+              kind=repr(kind) if kind is not None else "缺失",
+              supported="、".join(METHOD_KINDS))
+        return
+    name = method.get("name")
+    if not isinstance(name, str) or not name.strip():
+        c.set("record.method", "fail", code="record.method-missing", field="name")
+        return
+    bad = []
+    for field in ("version", "requested", "note"):
+        value = method.get(field)
+        if value is not None and not isinstance(value, str):
+            bad.append(field)
+    invocation = method.get("invocation")
+    if invocation is not None and not isinstance(invocation, str):
+        bad.append("invocation")
+    unavailable = method.get("unavailable")
+    if unavailable is not None and (not isinstance(unavailable, list)
+                                    or not all(isinstance(x, str) and x.strip()
+                                               for x in unavailable)):
+        bad.append("unavailable")
+    if bad:
+        c.set("record.method", "fail", code="record.method-bad", fields="、".join(bad))
+        return
+    # 空串等同未说明；唯一例外是外部方法的 invocation——宣称采用了外部技能
+    # 就必须有实际调用依据，空的 invocation 等于没有依据。
+    if kind == "external" and not (isinstance(invocation, str) and invocation.strip()):
+        c.set("record.method", "fail", code="record.method-invocation", name=name)
+        return
+    if kind == "external" and not (isinstance(method.get("version"), str)
+                                   and method["version"].strip()):
+        c.add_warning("check.warn.methodNoVersion", name=name)
+    c.set("record.method", "pass")
+
+
 def coverage_for(record: dict | None, fresh: bool, kind: str,
                  script_present: bool = True) -> tuple[str, int, int, int]:
     """汇总一类核验的覆盖情况；状态语义语言无关，返回 (状态, 通过数, 总数, 失败数)。
@@ -983,11 +1038,22 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
                     and isinstance(item.get("id"), str) \
                     and isinstance(item.get("scope"), str) and item["scope"].strip():
                 scopes.append({"id": item["id"], "scope": item["scope"].strip()})
+    # 实际生成方法（#74）：从记录原样带出，供摘要与结构化结果如实披露。
+    method_info = None
+    if record is not None:
+        method = record["method"]
+        method_info = {"kind": method.get("kind"), "name": method.get("name"),
+                       "version": method.get("version"),
+                       "requested": method.get("requested"),
+                       "invocation": method.get("invocation"),
+                       "unavailable": [x for x in method.get("unavailable") or []
+                                       if isinstance(x, str)]}
     return {
         "checks": [checks.items[cid] for cid in Checks.ORDER],
         "warnings": list(checks.warnings),
         "record": {"version": None if record is None else record["schema"],
                    "fresh": bool(record is not None and fresh),
+                   "method": method_info,
                    "declaredDeliverable": declared,
                    "declaredDraftComplete": None if record is None
                    else bool(record["verdict"].get("draftComplete")),
@@ -1046,6 +1112,7 @@ def check_report(report_path: Path, script_path: Path | None = None,
         check_page_refs(record, pages, c)
         calc_pending = check_calculations(record, c)
         check_record_claims(claims_info, c)
+        check_record_method(record, c)
         source_stale = check_record_sources(record, report_path.parent, claims_info, c)
         check_record_checks(record, c, script_present=script_text is not None)
         reading = check_reading(record, c)
@@ -1134,6 +1201,24 @@ def render_summary(result: dict) -> str:
             lines.append("  " + t(loc, "check.reading.unread", items=items))
     if result.get("gaps"):
         lines.append("  " + t(loc, "check.gaps.line", gaps="；".join(result["gaps"])))
+    # 实际生成方法与能力缺口的如实披露（issue #74）：只有声明了 requested /
+    # unavailable 才出现对应行，没有就不渲染，不制造虚假说明。
+    rec_method = result.get("record", {}).get("method")
+    if rec_method:
+        kind = rec_method.get("kind")
+        kind_label = t(loc, "check.method.kind." + kind) if kind in ("builtin", "external") \
+            else str(kind)
+        lines.append(t(loc, "check.method.line", name=rec_method.get("name") or "?",
+                       kind=kind_label))
+        if rec_method.get("requested"):
+            note = rec_method.get("note")
+            lines.append("  " + t(loc, "check.method.requested",
+                                  requested=rec_method["requested"],
+                                  note=note.strip() if isinstance(note, str) and note.strip()
+                                  else t(loc, "check.method.noReason")))
+        if rec_method.get("unavailable"):
+            lines.append("  " + t(loc, "check.method.unavailable",
+                                  items="；".join(rec_method["unavailable"])))
     rec = result["record"]
     rec_input = (result.get("inputs") or {}).get("record")
     if rec_input:

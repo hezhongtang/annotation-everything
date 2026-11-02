@@ -34,6 +34,7 @@ FULL_ORDER = (
     "report-verdict-loop",
     "revision-update-loop",
     "legacy-report-compat",
+    "external-method-loop",
     "installed-delivery",
     "locale-live-controls",
     "skill-search",

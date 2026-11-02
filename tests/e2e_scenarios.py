@@ -64,6 +64,18 @@ SCENARIOS: list[Scenario] = [
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
+        id="external-method-loop",
+        title="外部生成技能共用验收：明确指定的合成外部技能被实际调用（运行其脚本，"
+              "可观察的调用效果与调用说明写进记录），产物走同一核验入口与记录契约、"
+              "打开现有对照页渲染并批注；缺依据的外部产物与换成内置方法声明的孪生"
+              "记录判定一致，外部方法不放宽验收",
+        fixture="ae.py install 装进合成 HOME 的临时副本；fixtures/external-report-skill 与 "
+                "external-report-skill-lite（受控合成外部技能）复制进同一合成技能目录；"
+                "按技能脚本合成的两页简报、讲稿与 ae-report-record/1 记录、合成材料；"
+                "独立 AE_HOME，不碰真实台账",
+        isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
+    ),
+    Scenario(
         id="installed-delivery",
         title="从唯一的临时安装副本完成英文、中文、中英混合三种语言组合的真实审阅流程",
         fixture="ae.py install 装进合成 HOME 的临时副本；fixtures/sample 合成报告与讲稿；"

@@ -1360,6 +1360,18 @@
     "check.check.structure.claim-support": "Claim support on page",
     "check.check.structure.dup-gaps": "Duplication and gaps",
     "check.check.structure.length": "Length",
-    "check.check.visual.pages": "Page-by-page visual"
+    "check.check.visual.pages": "Page-by-page visual",
+    "check.item.record.method": "generation method declaration (kind, name, external invocation evidence)",
+    "check.err.methodUnknown": "record method.kind is {kind}; the actually used generation method cannot be proven (kind is {supported})",
+    "check.err.methodMissing": "record method is missing {field} — the generation method actually used must be named",
+    "check.err.methodBad": "record method fields have invalid types: {fields} (version / requested / note / invocation are non-empty strings, unavailable is a list of non-empty strings)",
+    "check.err.methodInvocation": "external generation method {name} has no invocation description (method.invocation) — a scanned candidate or a mentioned name is not evidence it was used",
+    "check.warn.methodNoVersion": "external generation method {name} has no version information recorded; add method.version when available",
+    "check.method.line": "Generation method: {name} ({kind})",
+    "check.method.kind.builtin": "built-in paradigm",
+    "check.method.kind.external": "external skill",
+    "check.method.requested": "the user-specified generation method \"{requested}\" was not the one actually used ({note})",
+    "check.method.noReason": "no reason given",
+    "check.method.unavailable": "method capability gaps: {items}"
   }
 }

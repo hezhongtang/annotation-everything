@@ -3533,12 +3533,149 @@ const T = "http://127.0.0.1:{port}";
         stop(srv)
 
 
+def external_method_checks(browser, tmp: Path):
+    """场景 external-method-loop：外部生成技能共用验收（详见 e2e_scenarios 注册表）。
+
+    明确指定的合成外部技能（fixtures/external-report-skill）被实际调用：运行其
+    脚本，可观察的调用效果（产物标记、调用说明）写进核验记录；产物走安装副本的
+    同一核验入口与同一记录契约，打开现有对照页渲染、批注。缺依据的外部产物
+    （lite 变体）与换成内置方法声明的孪生记录判定完全一致——外部方法不放宽验收。
+    确定性产品流程验证，不冒充实际模型的评测（那由 evals/generate-method-* 定义）。
+    """
+    base = tmp / "external-loop"
+    installed = base / "installed-skills" / "annotation-everything"
+    env = {**os.environ, "HOME": str(base / "home"),
+           "CLAUDE_SKILLS_DIR": str(base / "installed-skills"),
+           "AE_HOME": str(base / "ae-home")}
+    subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"],
+                   env=env, check=True, capture_output=True, text=True, timeout=60)
+    scripts = installed / "scripts"
+    # 指定的外部技能放进同一合成技能目录：它在本场景里「可用」
+    for fixture in ("external-report-skill", "external-report-skill-lite"):
+        shutil.copytree(ROOT / "fixtures" / fixture,
+                        base / "installed-skills" / fixture, dirs_exist_ok=True)
+    case = base / "case"
+    (case / "materials").mkdir(parents=True)
+    material = case / "materials" / "notes.md"
+    material.write_text("# 三季度经营笔记（合成）\n\n- 三季度收入 112 万元\n"
+                        "- 上年同期收入 100 万元\n- 外卖渠道占比 38%\n"
+                        "- 十月周报缺失，十月趋势暂无法核对\n", encoding="utf-8")
+
+    def cli(tool, *args, expect=0):
+        done = subprocess.run([sys.executable, str(scripts / tool), *map(str, args)],
+                              env=env, capture_output=True, text=True, timeout=60)
+        if expect is not None:
+            assert done.returncode == expect, \
+                f"{tool} 退出码 {done.returncode}（期望 {expect}）：{done.stderr or done.stdout}"
+        return done
+
+    # ── 选定方法：实际调用指定技能（不是只凭目录扫描或名称宣称） ──
+    done = subprocess.run(
+        [sys.executable, str(base / "installed-skills" / "external-report-skill" / "scripts" / "make_report.py"),
+         "--materials", str(material), "--out", str(case)],
+        env=env, capture_output=True, text=True, timeout=60)
+    ok(done.returncode == 0 and "xs-banner" in done.stdout,
+       f"指定的合成技能被实际调用（退出码 {done.returncode}，调用输出带产物标记）")
+    report, script = case / "report.html", case / "script.md"
+    record_path = case / "report-record.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    ok(report.exists() and script.exists() and record_path.exists(),
+       "外部技能产出报告、讲稿与核验记录")
+    ok(record["method"]["kind"] == "external"
+       and record["method"]["name"] == "synthetic-brief-kit"
+       and record["method"].get("version")
+       and record["method"].get("invocation", "").strip(),
+       "记录保留实际生成方法、版本信息与调用说明")
+
+    # ── 相同核验：同一入口、同一记录契约、同一判定语义 ──
+    checked = json.loads(cli("report_check.py", str(report), "--script", str(script),
+                             "--record", str(record_path), "--locale", "zh-CN",
+                             "--json").stdout)
+    ok(checked["schema"] == "ae-report-check/1", "外部产物走同一核验入口（ae-report-check/1）")
+    ok(checked["verdict"]["draftComplete"] is True and checked["verdict"]["deliverable"] is False,
+       "判定语义与内置产物一致：初稿完成、内容与视觉核验未执行不支持可交付")
+    ok(checked["record"]["method"]["name"] == "synthetic-brief-kit"
+       and checked["record"]["method"]["kind"] == "external",
+       "核验结果披露实际生成方法")
+
+    # ── 打开现有对照页：外部版式进同一审阅页，批注与页面键照常工作 ──
+    review = case / "brief-review"
+    cli("build_viewer.py", "--report", str(report), "--script", str(script),
+        "--out", str(review), "--name", "外部技能简报", "--no-scan-skills")
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="对照页进入服务模式")
+        page_count = page.locator("#jump option").count()
+        ok(page_count == 2, f"外部技能的两页报告进入现有对照页（{page_count} 页）")
+        banner = page.evaluate(
+            "() => { const r = document.getElementById('host').shadowRoot;"
+            "  const b = r.querySelector('.xs-banner');"
+            "  return b ? [getComputedStyle(b).backgroundColor, b.textContent] : null; }")
+        ok(banner and banner[0] == "rgb(11, 114, 133)" and "SYNTHETIC-BRIEF-KIT" in banner[1],
+           f"外部技能自己的版式真实渲染（背景 {banner and banner[0]}，标记 {banner and banner[1]!r}）")
+        go_page(page, 1)
+        source_seen = page.evaluate(
+            "() => Boolean(document.getElementById('host').shadowRoot.querySelector('.ae-source'))")
+        ok(source_seen, "外部产物保留依据标注语义类")
+        add_note(page, "外部来源标注补同比基数", pin=(0.5, 0.4))
+        ok(wait_until(lambda: len(disk_notes(review)) == 1, page, 5), "批注照常落盘")
+        note = disk_notes(review)[0]
+        ok(note["key"] == "sum" and note["page"] == 1,
+           f"批注关联稳定页面键 sum（key={note['key']} page={note['page']}）")
+    finally:
+        stop(server)
+        ctx.close()
+
+    # ── 缺依据的外部产物：缺口如实列出、不可交付；与内置孪生判定一致 ──
+    lite = base / "case-lite"
+    lite_done = subprocess.run(
+        [sys.executable, str(base / "installed-skills" / "external-report-skill-lite" / "scripts" / "make_report.py"),
+         "--materials", str(material), "--out", str(lite)],
+        env=env, capture_output=True, text=True, timeout=60)
+    ok(lite_done.returncode == 0, "lite 变体技能实际运行生成缺依据产物")
+    lite_checked = json.loads(cli("report_check.py", str(lite / "report.html"),
+                                  "--script", str(lite / "script.md"),
+                                  "--record", str(lite / "report-record.json"),
+                                  "--locale", "zh-CN", "--json").stdout)
+    ok(lite_checked["verdict"]["deliverable"] is False
+       and lite_checked["coverage"]["content"] != "covered"
+       and any("另行核对" in g for g in lite_checked["gaps"]),
+       "缺依据的外部产物：缺口如实列出、覆盖不显示为通过、不可交付")
+
+    def outline(payload):
+        return {"checks": [(c["id"], c["status"], c["code"]) for c in payload["checks"]],
+                "coverage": payload["coverage"],
+                "draftComplete": payload["verdict"]["draftComplete"],
+                "deliverable": payload["verdict"]["deliverable"]}
+
+    lite_record = json.loads((lite / "report-record.json").read_text(encoding="utf-8"))
+    twin_dir = base / "case-lite-twin"
+    twin_dir.mkdir()
+    shutil.copy(lite / "report.html", twin_dir / "report.html")
+    shutil.copy(lite / "script.md", twin_dir / "script.md")
+    twin = dict(lite_record)
+    twin["method"] = {"kind": "builtin", "name": "annotation-everything 内置范式",
+                      "version": "0.9.0", "unavailable": []}
+    twin_path = twin_dir / "report-record.json"
+    twin_path.write_text(json.dumps(twin, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    twin_checked = json.loads(cli("report_check.py", str(twin_dir / "report.html"),
+                                  "--script", str(twin_dir / "script.md"),
+                                  "--record", str(twin_path),
+                                  "--locale", "zh-CN", "--json").stdout)
+    ok(outline(twin_checked) == outline(lite_checked),
+       "相同缺陷的内置与外部产物判定完全一致（外部方法不放宽也不加严）")
+
 
 SCENARIO_RUNNERS = {
     "generated-draft-loop": generated_draft_checks,
     "report-verdict-loop": report_verdict_checks,
     "revision-update-loop": revision_update_checks,
     "legacy-report-compat": legacy_report_checks,
+    "external-method-loop": external_method_checks,
     "installed-delivery": installed_delivery_checks,
     "locale-live-controls": locale_live_controls_checks,
     "skill-search": skill_search_checks,

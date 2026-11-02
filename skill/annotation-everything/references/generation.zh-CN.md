@@ -4,6 +4,15 @@
 
 只安装 AE 时，从这里开始把原始材料变成可审阅的初稿。本指引是默认范式；用户指定了其他生成技能时按其流程执行，产物仍然走同一套检查（第 5 步）。生成推理、材料读取与内容判断由你（Agent）执行；AE 提供流程、基础样式、产物约定与确定规则检查。
 
+## 生成方法：内置范式与外部生成技能
+
+- **没有指定、也没有扩展需要**：用本指引（内置范式），记录 `method` 写 `{"kind": "builtin", "name": "annotation-everything 内置范式", "version": "<AE 版本>", "unavailable": []}`。
+- **用户明确指定了生成技能，且它可用**：**实际调用该技能**（按[各 Agent 的对应机制](agent-mechanisms.zh-CN.md)的技能调用方式找到并执行它），按它的流程生成；产物仍须遵守第 2–4 步的约定（逐页 `<section class="page">`、稳定 `data-key`、可选讲稿、`ae-report-record/1` 记录），并走第 5 步同一核验入口、按同一清单验收。**扫描到候选或名称出现不等于已调用**：宣称采用了指定技能，就必须真的调用过，记录 `method.invocation` 写清怎么调用的、产物从哪来；核验入口会检查这一声明（`record.method`），缺依据按程序失败暴露。
+- **指定的技能不可用、未启用或调用失败**：明确说明，不能假称已使用该技能或已满足其能力要求。改用内置范式继续时，记录 `method.requested` 写用户指定的方法、`note` 写原因；拿不准是否继续就先问用户。
+- **能力缺口**：外部技能缺读取、版式或核验能力时，把缺口写进 `method.unavailable`；产物缺来源、口径或检查证据就按缺口披露（`gaps`），**不放宽验收**——外部产物与内置产物在同一缺陷下的判定完全一致。
+- **额外交付形式**（PPTX / PDF / Word 等）：由外部能力提供，AE 核心不内置通用导出器。实际得到的产物写进记录（可用 `links.extras`），未满足的部分写进 `gaps`；核心可审阅 HTML 仍按第 6 步进 AE，额外格式不取代共同验收依据。
+- **不自动搜索或安装远程技能**：生成技能由用户安装在受控位置；不用联网方式寻找、下载或安装生成技能，也不为接入外部技能放宽服务边界。
+
 ## 0. 明确需求：只补问影响结果的缺项
 
 需要明确六件事：**用途、读者、核心问题、篇幅或时长、材料范围、要不要讲稿**。
@@ -119,7 +128,7 @@
 
 - `request`：第 0 步的需求；问过的与沿用的都写。
 - `sources`：第 1 步的读取登记；`status` 用 `read` / `partial` / `unreadable`；`coverage` 写实际读到的范围，`partial` 必须同时写明已读与未读部分；`partial` / `unreadable` 必须写 `reason`；`locations` 列定位线索（PDF 页码、Word 段落、工作表与单元格）；`sha256` 用 `sha256sum` 或等价方式算材料内容哈希——核验入口用它发现材料事后变化，材料改了旧核验结果就不再算数。**全部实质材料都 `unreadable` 时初稿不能算完成**，核验入口会判 `record.reading` 未通过。
-- `method`：实际生成方法；外部技能写它的名称与可得版本信息，扫描到候选不算采用。
+- `method`：实际生成方法；`kind` 用 `builtin` / `external`（封闭枚举），`name` 写实际采用的方法名，`version` 写可得的版本信息。外部技能必须写 `invocation`（怎么调用的、产物从哪来——扫描到候选或名称出现不算采用，缺它核验入口会判 `record.method` 失败）；用户指定但未实际采用的技能写 `requested` 与 `note`（原因）；能力缺口写 `unavailable`。核验入口核对这些声明并把方法信息带进摘要与结构化结果。外部技能示例：`{"kind": "external", "name": "synthetic-brief-kit", "version": "1.4.2", "invocation": "运行其 scripts/make_report.py 生成", "unavailable": []}`。
 - `links`：产物关联与 sha256（`sha256sum` 或等价方式计算）；这是核验入口判断记录是否对应当前产物的依据。
 - `findings`：关键结论（含数值与影响判断）与来源、报告页的对应；`locations` 可列材料内定位（如 `q3.pdf 第 2 页`、`Sheet1!B3`），让审阅人能核对原文；`refs` 写结构化定位：`quote` 保留材料原文（不翻译、不改写），`locator` 写位置（章节、行、表名），`found` 如实标是否定位到；`support` 写材料是否支持表述——`supported`（支持）/ `partial`（部分支持，表述强于材料）/ `unsupported`（不受支持）/ `unverified`（未核实），**引用存在不等于受支持，核对后不支持就必须标 `unsupported`**；`basis` 写检查依据：怎么核对的、看了材料哪几处。能声明输入与口径的计算写 `calculation`（运算支持 `sum`、`difference`、`product`、`ratio`、`percent-change`），并带齐四要素：`unit` 单位、`period` 期间、`definition` 口径、`inputLocations` 每个输入的位置；缺要素的计算核验入口会标为**待核实**，复算不一致会定位到结论与报告页。
 - `gaps`：材料与需求缺口。`openItems`：待用户拍板的事项，影响核心结论的 `blocking: true`。

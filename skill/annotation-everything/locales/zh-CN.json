@@ -1250,6 +1250,18 @@
     "check.check.structure.claim-support": "结论支撑",
     "check.check.structure.dup-gaps": "重复与缺口",
     "check.check.structure.length": "篇幅或时长",
-    "check.check.visual.pages": "逐页视觉"
+    "check.check.visual.pages": "逐页视觉",
+    "check.item.record.method": "生成方法声明（kind、name、外部调用依据）",
+    "check.err.methodUnknown": "记录的 method.kind 是 {kind}，无法证明实际生成方法（kind 用 {supported}）",
+    "check.err.methodMissing": "记录的 method 缺少 {field}——实际采用的生成方法必须写明名称",
+    "check.err.methodBad": "记录的 method 字段类型无效：{fields}（version / requested / note / invocation 用非空字符串，unavailable 用非空字符串列表）",
+    "check.err.methodInvocation": "外部生成方法 {name} 缺实际调用说明（method.invocation）——扫描到候选或名称出现不算已采用",
+    "check.warn.methodNoVersion": "外部生成方法 {name} 没有记录版本信息，可得时写进 method.version",
+    "check.method.line": "生成方法：{name}（{kind}）",
+    "check.method.kind.builtin": "内置范式",
+    "check.method.kind.external": "外部技能",
+    "check.method.requested": "用户指定的生成方法「{requested}」未被实际采用（{note}）",
+    "check.method.noReason": "未说明原因",
+    "check.method.unavailable": "方法能力缺口：{items}"
   }
 }
