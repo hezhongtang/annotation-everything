@@ -90,6 +90,7 @@ MODULE_RESOURCES = {
     "tests.test_ae_repair": ("host-state",),           # 真实 serve.py + doctor 子进程
     "tests.test_ae_target": ("host-state",),           # --target doctor 真实子进程读全机视图
     "tests.test_ae_uninstall": ("host-state",),        # 真实 serve.py + real_ps 用例
+    "tests.test_serve_locale": ("host-state",),       # CLI 安全自检短暂启动真实 serve.py
     "tests.test_skill_updates": ("host-state",),      # 更新期间读取真实进程并启动合成审阅服务
     "tests.test_core": ("host-state",),                # ServerTests / StaleServerTests 启动真实 serve.py
     "tests.test_e2e_servers": ("host-state",),         # 真实 serve.py 生命周期

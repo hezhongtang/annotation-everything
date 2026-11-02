@@ -1041,7 +1041,7 @@ while not Path(%r).exists():
         hostile_dir = Path(tempfile.mkdtemp(prefix="verify-hostile-lock-"))
         self.addCleanup(shutil.rmtree, hostile_dir, ignore_errors=True)
         script = hostile_dir / "hostile-holder.py"
-        script.write_text(LOCK_HOLDER.format(root=str(ROOT), resource="host-state", hold=45),
+        script.write_text(LOCK_HOLDER.format(root=str(ROOT), resource="host-state", hold=45, ready=None),
                           encoding="utf-8")
         holder = subprocess.Popen([sys.executable, str(script)],
                                   env={"AE_LOCK_DIR": str(hostile_dir)},
@@ -3567,7 +3567,7 @@ class ParallelUnitTests(VerifyEntryTestCase):
         self.assertEqual(len({case["id"] for case in group["cases"]}), 28)
         execution = group["execution"]
         self.assertEqual(execution["jobs"], 3)
-        self.assertEqual({item["id"] for item in execution["workers"]}, {"serial", "test_handoff_i18n", "test_i18n_catalog_contract"})
+        self.assertEqual({item["id"] for item in execution["workers"]}, {"serial", "independent-1", "independent-2"})
         serial_ids = [case["id"] for case in group["cases"] if "unclassified" in case["id"]]
         self.assertEqual(len(serial_ids), 21, "新模块全部进入串行任务，不能漏掉")
 
@@ -3601,6 +3601,54 @@ class ParallelUnitTests(VerifyEntryTestCase):
         self.assertEqual(record["groups"][0]["counts"]["cases"], 28)
         self.assertNotIn("execution", record["groups"][0])
         self.assertEqual(record["environment"]["config_summary"]["verification_execution"], "serial")
+
+
+    def test_browser_signal_exit_codes_keep_the_actual_signal(self):
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=sig):
+                stub = BROWSER_STUB.replace("sys.exit(1 if failed else 0)",
+                                            "sys.exit(%s)" % (128 + sig))
+                self.repo.write("tests/e2e_browser.py", stub, executable=True)
+                result = self.repo.run_verify("run", "--group", "browser", "--no-reuse")
+                self.assertEqual(result.returncode, 128 + sig, result.stdout + result.stderr)
+                record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+                self.assertEqual(record["groups"][0]["outcome"], "interrupted")
+                self.assertEqual(record["groups"][0]["signal"], signal.Signals(sig).name)
+                self.assertFalse(record["result"]["usable_as_evidence"])
+
+    def test_cancellation_preserves_the_actual_unittest_failure_from_a_worker(self):
+        self.prepare_parallel_suite()
+        marker = Path(self.temp.name) / "failure-written"
+        self.repo.write("tests/test_handoff_i18n.py", "import time, unittest\nfrom pathlib import Path\n"
+                        "class PartialTests(unittest.TestCase):\n"
+                        "    def test_a_original_failure(self): self.fail('original synthetic failure')\n"
+                        "    def test_b_wait(self):\n"
+                        "        Path(%r).write_text('ready')\n"
+                        "        deadline = time.monotonic() + 20\n"
+                        "        while time.monotonic() < deadline: time.sleep(.01)\n" % str(marker))
+        env = self.repo.git_env
+        env.pop("AE_HELD_LOCKS", None)
+        env.pop("AE_VERIFY_DIR", None)
+        env.update(AE_LOCK_DIR=str(self.test_lock_dir), AE_HOME=str(Path(self.temp.name) / "ledger"))
+        wrapper = subprocess.Popen([sys.executable, str(self.repo.path / "verify.py"), "run", "--no-reuse"],
+                                   cwd=self.repo.path, env=env, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, start_new_session=True)
+        self.addCleanup(_reap, wrapper)
+        deadline = time.monotonic() + 10
+        while not marker.exists() and wrapper.poll() is None and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertTrue(marker.exists(), "必须先执行原始失败再取消")
+        wrapper.terminate()
+        out, err = wrapper.communicate(timeout=20)
+        self.assertEqual(wrapper.returncode, 143, out + err)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertEqual(record["result"]["outcome"], "interrupted")
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        failure = next(case for case in record["groups"][0]["cases"]
+                       if case["id"].endswith("test_a_original_failure"))
+        self.assertEqual(failure["status"], "failed")
+        self.assertIn("original synthetic failure", (self.repo.artifact_dir / "runs" /
+                      record["run_id"] / "unit.log").read_text())
 
 
 if __name__ == "__main__":

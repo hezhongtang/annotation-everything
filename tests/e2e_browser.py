@@ -4114,12 +4114,12 @@ def run_parallel_browser(request):
             CLEANUP.stop_all()
 
     records, environments = {}, []
-    interrupted, failed = False, False
+    interrupted, failed, interrupted_signal = False, False, signal.SIGINT
     with tempfile.TemporaryDirectory(prefix="ae-browser-workers-") as temp:
         try:
             results = verify_parallel.run_tasks([(sid, sid) for sid in ordered], worker, Path(temp))
         except verify_parallel.InterruptedRun as exc:
-            results, interrupted = exc.results, True
+            results, interrupted, interrupted_signal = exc.results, True, exc.signum
         for sid in request.plan:
             item = results.get(sid)
             if item is None:
@@ -4156,7 +4156,7 @@ def run_parallel_browser(request):
         "requested": list(request.requested), "plan": list(request.plan),
         "scenarios": [records[sid] for sid in request.plan],
         "execution": {"mode": "isolated-processes/1", "jobs": 3}}, ensure_ascii=False), flush=True)
-    return 130 if interrupted else 1 if failed else 0
+    return 128 + interrupted_signal if interrupted else 1 if failed else 0
 
 
 def main(argv=None, *, allow_parallel=True) -> int:

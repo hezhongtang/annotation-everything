@@ -345,7 +345,7 @@ class ParallelBrowserSummaryTests(unittest.TestCase):
             return result
 
         namespace = dict(scenarios=reg, Path=Path, tempfile=tempfile, json=json,
-                         CLEANUP=mock.Mock(), os=os, main=mock.Mock(return_value=0))
+                         CLEANUP=mock.Mock(), os=os, signal=signal, main=mock.Mock(return_value=0))
         exec(compile(ast.Module(body=[function], type_ignores=[]), str(TESTS / "e2e_browser.py"), "exec"), namespace)
         output = io.StringIO()
         with mock.patch.object(verify_parallel, "run_tasks", side_effect=tasks), contextlib.redirect_stdout(output):

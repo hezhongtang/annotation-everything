@@ -25,6 +25,9 @@ SCRIPTS = SERVE_PY.parent
 sys.path.insert(0, str(SCRIPTS))
 
 import serve  # noqa: E402
+sys.path.insert(0, str(ROOT))
+import host_isolation  # noqa: E402
+host_isolation.require_for_module(__name__)
 
 
 def tmpdir() -> Path:
