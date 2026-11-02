@@ -40,10 +40,13 @@ import report_check as rc  # noqa: E402
 RECORD_SCHEMA = "ae-report-record/1"
 CHECK_SCHEMA = "ae-report-check/1"
 
-# #72 内容核验清单（决策 10）：八个内容项 + 视觉项；视觉检查本切片仍未执行。
+# #72 内容核验清单（决策 10）：八个内容项 + 视觉项；#73 增加结构清单与视觉逐页证据，
+# 可交付要求内容、结构、视觉三类覆盖全部 covered。
 CONTENT_CHECK_IDS = ("content.requirements", "content.claims", "content.fact-vs-inference",
                      "content.units-dates", "content.numbers-charts", "content.cross-page",
                      "content.script-consistency", "content.open-questions")
+STRUCTURE_CHECK_IDS = ("structure.flow", "structure.headings", "structure.claim-support",
+                       "structure.dup-gaps", "structure.length")
 VISUAL_CHECK_IDS = ("visual.pages",)
 
 # 合成材料原文：用于 sources[].sha256 的新鲜度用例。
@@ -55,10 +58,16 @@ def tmpdir() -> Path:
 
 
 def all_checks(status: str) -> list[dict]:
-    """完整内容核验清单 + 视觉项的逐项声明；status 用于构造 pass / not_run 记录。"""
-    return [{"id": cid, "kind": "visual" if cid in VISUAL_CHECK_IDS else "content",
-             "status": status, "scope": "全部", "note": "合成契约数据"}
-            for cid in CONTENT_CHECK_IDS + VISUAL_CHECK_IDS]
+    """完整核验清单（内容 + 结构 + 视觉）的逐项声明；status 用于构造 pass / not_run 记录。
+
+    #73 起视觉项声明 pass 必须带逐页证据（checks[].pages）；本 helper 用 status 统一
+    构造时，视觉项在 pass 下携带覆盖全部报告页的证据。"""
+    pages = [{"page": n, "checked": True, "issues": []} for n in (1, 2)]
+    return [{"id": cid, "kind": "visual" if cid in VISUAL_CHECK_IDS else
+             ("structure" if cid in STRUCTURE_CHECK_IDS else "content"),
+             "status": status, "scope": "全部", "note": "合成契约数据",
+             **({"pages": pages} if cid in VISUAL_CHECK_IDS else {})}
+            for cid in CONTENT_CHECK_IDS + STRUCTURE_CHECK_IDS + VISUAL_CHECK_IDS]
 
 
 REPORT = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>合成季度回顾</title>
@@ -758,7 +767,8 @@ class ChecklistCoverageTests(unittest.TestCase):
             {"id": "content.requirements", "kind": "content", "status": "pass",
              "scope": "全部需求", "note": ""},
             {"id": "visual.pages", "kind": "visual", "status": "pass",
-             "scope": "全部 2 页", "note": ""},
+             "scope": "全部 2 页", "note": "",
+             "pages": [{"page": 1, "checked": True}, {"page": 2, "checked": True}]},
         ])
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])

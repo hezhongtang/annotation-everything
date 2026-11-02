@@ -1212,6 +1212,22 @@
     "check.reading.line": "读取登记：已读 {read} · 部分读取 {partial} · 无法读取 {unreadable}",
     "check.reading.unread": "未读范围：{items}",
     "check.err.readingBlocked": "全部实质材料（{n} 份）均不可读：空结构或虚构内容不能当作初稿生成完成",
-    "check.reason.readingBlocked": "全部实质材料均不可读：初稿不能宣布生成完成"
+    "check.reason.readingBlocked": "全部实质材料均不可读：初稿不能宣布生成完成",
+    "check.item.record.visual": "视觉核验逐页证据与声明一致",
+    "check.item.record.length": "篇幅约束与报告页数一致",
+    "check.coverage.structure": "结构核验",
+    "check.scope.line": "已检查范围：{items}",
+    "check.err.checkNotApplicable": "这些检查在无讲稿时不适用，声明已通过属于虚假的已检查：{ids}",
+    "check.err.visualEvidence": "{id}：声明已逐页检查通过，但记录里没有每页的实际检查证据（checks[].pages）",
+    "check.err.visualCoverage": "{detail}",
+    "check.err.visualMissingPages": "证据缺页：{pages}",
+    "check.err.visualExtraPages": "证据引用了报告里没有的页：{pages}",
+    "check.err.visualUnchecked": "视觉证据里有未检查的页：{pages}——未检查的页不能算已逐页检查通过",
+    "check.err.visualIssue": "视觉证据记录了未解决的问题却声明通过：{items}",
+    "check.err.visualBad": "{detail}",
+    "check.err.visualBadNotList": "checks 里 visual.pages 的 pages 应该是非空的逐页证据列表",
+    "check.err.visualBadEntry": "每页证据需要 page（整数）与 checked（布尔），issues 存在时须为非空字符串列表",
+    "check.err.visualDupPages": "同一页有多条证据：{pages}",
+    "check.err.lengthMismatch": "报告共 {actual} 页，需求记录的篇幅约束是 {expected} 页——先改报告或更新需求记录，再重新核验"
   }
 }

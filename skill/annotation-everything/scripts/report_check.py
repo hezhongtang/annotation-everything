@@ -27,6 +27,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -39,8 +40,8 @@ RECORD_SCHEMA = "ae-report-record/1"
 RESULT_SCHEMA = "ae-report-check/1"
 SUPPORTED_LOCALES = ("zh-CN", "en")
 
-# 记录里内容 / 视觉核验的内置检查 id（决策 10、11 的清单；#72 补齐内容清单，
-# 检查 id 只追加不改名）。记录声明这里没有的 id 时无法证明其已执行。
+# 记录里内容 / 结构 / 视觉核验的内置检查 id（决策 10、11 的清单；#72 补齐内容清单，
+# #73 补齐结构清单；检查 id 只追加不改名）。记录声明这里没有的 id 时无法证明其已执行。
 KNOWN_RECORD_CHECKS = {
     "content.requirements": "content",
     "content.claims": "content",
@@ -50,8 +51,16 @@ KNOWN_RECORD_CHECKS = {
     "content.cross-page": "content",
     "content.script-consistency": "content",
     "content.open-questions": "content",
+    "structure.flow": "structure",
+    "structure.headings": "structure",
+    "structure.claim-support": "structure",
+    "structure.dup-gaps": "structure",
+    "structure.length": "structure",
     "visual.pages": "visual",
 }
+# 讲稿关联的检查项（#73 适用性规则）：没有讲稿时这些项不计入覆盖总数，
+# 也不要求声明；声明了 pass 就是虚假的已检查，按程序检查失败暴露。
+SCRIPT_SCOPED_CHECKS = ("content.script-consistency", "structure.length")
 CHECK_STATUSES = ("pass", "fail", "not_run", "unavailable")
 # sources[].status 的封闭取值：材料读取登记（#69 决策 4）——格式被接受不等于内容
 # 已读完，按实际读到的范围登记（#71 读取登记、#72 材料关联共用）。
@@ -89,7 +98,8 @@ class Checks:
 
     ORDER = ("report.parse", "report.pageKeys", "script.pages", "record.structure",
              "record.freshness", "record.pageRefs", "record.calculations", "record.checks",
-             "record.claims", "record.reading", "record.sources")
+             "record.claims", "record.reading", "record.sources",
+             "record.visual", "record.length")
 
     def __init__(self, locale: str):
         self.locale = locale
@@ -122,7 +132,8 @@ class Checks:
                                            code, "check.err.calcBad"),
                "record.checks": {"record.checks-empty": "check.err.checksEmpty",
                                  "record.check-unknown": "check.err.checkUnknown",
-                                 "record.check-status": "check.err.checkStatus"}.get(
+                                 "record.check-status": "check.err.checkStatus",
+                                 "record.check-not-applicable": "check.err.checkNotApplicable"}.get(
                                      code, "check.err.checksEmpty"),
                "record.claims": {"record.claim-unsupported": "check.err.claimUnsupported",
                                  "record.claim-unlocatable": "check.err.claimUnlocatable",
@@ -136,6 +147,14 @@ class Checks:
                                   "record.source-field": "check.err.sourceField",
                                   "record.reading-blocked": "check.err.readingBlocked"}.get(
                                       code, "check.err.sourceStatus"),
+               "record.visual": {"record.visual-evidence": "check.err.visualEvidence",
+                                 "record.visual-coverage": "check.err.visualCoverage",
+                                 "record.visual-unchecked": "check.err.visualUnchecked",
+                                 "record.visual-issue": "check.err.visualIssue",
+                                 "record.visual-bad": "check.err.visualBad"}.get(
+                                     code, "check.err.visualBad"),
+               "record.length": {"record.length-mismatch": "check.err.lengthMismatch"}.get(
+                   code, "check.err.lengthMismatch"),
                }[cid]
         detail = t(self.locale, key, **params) if params else ""
         self.items[cid] = {"id": cid, "status": state, "code": code, "detail": detail}
@@ -542,8 +561,12 @@ def check_record_sources(record: dict, base_dir: Path, info: dict, c: Checks) ->
     return False
 
 
-def check_record_checks(record: dict | None, c: Checks) -> bool:
-    """记录检查集合：非空、id 可识别、状态有效、内容与视觉两类都有声明。"""
+def check_record_checks(record: dict | None, c: Checks,
+                        script_present: bool = True) -> bool:
+    """记录检查集合：非空、id 可识别、状态有效、内容与视觉两类都有声明。
+
+    讲稿关联项（SCRIPT_SCOPED_CHECKS，#73 适用性规则）：无讲稿时不要求声明、
+    不计入覆盖总数；声明了 pass 属于虚假的已检查，程序检查失败。"""
     if record is None:
         return True
     checks = record["checks"]
@@ -573,6 +596,14 @@ def check_record_checks(record: dict | None, c: Checks) -> bool:
         c.set("record.checks", "fail", code="record.check-status",
               id=bad_status[0].split("=")[0], status=bad_status[0].split("=", 1)[1])
         return False
+    if not script_present:
+        false_checked = [item["id"] for item in checks if isinstance(item, dict)
+                         and item.get("id") in SCRIPT_SCOPED_CHECKS
+                         and item.get("status") == "pass"]
+        if false_checked:
+            c.set("record.checks", "fail", code="record.check-not-applicable",
+                  ids="、".join(false_checked))
+            return False
     missing_kinds = {"content", "visual"} - kinds
     if missing_kinds:
         c.set("record.checks", "fail", code="record.checks-empty",
@@ -648,11 +679,144 @@ def check_reading(record: dict | None, c: Checks) -> dict | None:
             "unreadable": counts["unreadable"], "unread": unread}
 
 
-def coverage_for(record: dict | None, fresh: bool, kind: str) -> tuple[str, int, int, int]:
+def check_record_visual(record: dict, pages: list[dict], c: Checks) -> None:
+    """视觉证据一致性（#73 决策 11）：声明与证据对得上，不符要能暴露。
+
+    visual.pages 声明 pass 时必须有逐页证据结构（checks[].pages）：覆盖报告的
+    全部页面、每页 checked=true、没有未解决的问题、页码与报告对应。核验入口
+    不渲染页面——逐页检查由生成方（宿主 Agent 或测试中的浏览器）执行，这里只
+    做确定规则判定；如实记录的 fail / not_run / unavailable 不产生程序失败，
+    覆盖情况由 coverage_for 如实降级，「程序检查通过」不代替视觉检查通过。
+    """
+    if not pages:
+        c.set("record.visual", "not_applicable")
+        return
+    by_id = {x.get("id"): x for x in record["checks"] if isinstance(x, dict)}
+    item = by_id.get("visual.pages")
+    if not isinstance(item, dict):
+        c.set("record.visual", "not_applicable")
+        return
+    status = item.get("status")
+    evidence = item.get("pages")
+    if evidence is None:
+        if status == "pass":
+            c.set("record.visual", "fail", code="record.visual-evidence",
+                  id="visual.pages")
+        else:
+            c.set("record.visual", "not_applicable")
+        return
+    if not isinstance(evidence, list) or not evidence:
+        c.set("record.visual", "fail", code="record.visual-bad",
+              detail=t(c.locale, "check.err.visualBadNotList"))
+        return
+    report_ns = sorted(p["n"] for p in pages)
+    report_keys = {p["key"] for p in pages}
+    entry_ns: list[int] = []
+    unchecked: list[int] = []
+    issue_items: list[str] = []
+    for entry in evidence:
+        page = entry.get("page") if isinstance(entry, dict) else None
+        checked = entry.get("checked") if isinstance(entry, dict) else None
+        if not isinstance(page, int) or isinstance(page, bool) \
+                or not isinstance(checked, bool):
+            c.set("record.visual", "fail", code="record.visual-bad",
+                  detail=t(c.locale, "check.err.visualBadEntry"))
+            return
+        issues = entry.get("issues")
+        if issues is not None and (not isinstance(issues, list)
+                                   or not all(isinstance(x, str) and x.strip()
+                                              for x in issues)):
+            c.set("record.visual", "fail", code="record.visual-bad",
+                  detail=t(c.locale, "check.err.visualBadEntry"))
+            return
+        entry_ns.append(page)
+        if checked:
+            if issues:
+                issue_items.append(f"{page}: " + "；".join(issues))
+        else:
+            unchecked.append(page)
+    dupes = sorted({n for n in entry_ns if entry_ns.count(n) > 1})
+    if dupes:
+        c.set("record.visual", "fail", code="record.visual-bad",
+              detail=t(c.locale, "check.err.visualDupPages",
+                       pages="、".join(map(str, dupes))))
+        return
+    missing = sorted(set(report_ns) - set(entry_ns))
+    extra = sorted(set(entry_ns) - set(report_ns))
+    if missing or extra:
+        parts = []
+        if missing:
+            parts.append(t(c.locale, "check.err.visualMissingPages",
+                           pages="、".join(map(str, missing))))
+        if extra:
+            parts.append(t(c.locale, "check.err.visualExtraPages",
+                           pages="、".join(map(str, extra))))
+        c.set("record.visual", "fail", code="record.visual-coverage",
+              detail="；".join(parts))
+        return
+    if status == "pass":
+        if unchecked:
+            c.set("record.visual", "fail", code="record.visual-unchecked",
+                  pages="、".join(map(str, sorted(unchecked))))
+            return
+        if issue_items:
+            c.set("record.visual", "fail", code="record.visual-issue",
+                  items="；".join(issue_items))
+            return
+    c.set("record.visual", "pass")
+
+
+# request.length 的页数约束（#73）：支持「N 页」「N pages」与「N–M 页」区间；
+# 只认整数页数，时长约束（如「10 分钟」）不折算页数，留给清单项判断。
+LENGTH_RANGE_RE = re.compile(r"(\d+)\s*(?:-|–|—|~|至|到)\s*(\d+)\s*(?:页|pages?\b)",
+                             re.IGNORECASE)
+LENGTH_RE = re.compile(r"(\d+)\s*(?:页|pages?\b)", re.IGNORECASE)
+
+
+def parse_length_pages(text: object) -> tuple[int, int] | None:
+    """从 request.length 提取页数约束；返回 (下限, 上限)，解析不了返回 None。"""
+    if not isinstance(text, str):
+        return None
+    m = LENGTH_RANGE_RE.search(text)
+    if m:
+        lo, hi = int(m.group(1)), int(m.group(2))
+        return (lo, hi) if lo <= hi else None
+    m = LENGTH_RE.search(text)
+    if m:
+        n = int(m.group(1))
+        return n, n
+    return None
+
+
+def check_record_length(record: dict | None, pages: list[dict], c: Checks) -> None:
+    """篇幅约束（#73）：request.length 可解析为页数时与报告页数比对。
+
+    可解析且不一致是程序检查失败（需求与产物的确定矛盾）；只有时长约束或没有
+    记录时判不适用，不虚假比较，也不把无法解析的约束当成失败。"""
+    if record is None or not pages:
+        c.set("record.length", "not_applicable")
+        return
+    constraint = parse_length_pages(record["request"].get("length"))
+    if constraint is None:
+        c.set("record.length", "not_applicable")
+        return
+    n = len(pages)
+    lo, hi = constraint
+    if lo <= n <= hi:
+        c.set("record.length", "pass")
+        return
+    expected = str(lo) if lo == hi else f"{lo}–{hi}"
+    c.set("record.length", "fail", code="record.length-mismatch",
+          actual=n, expected=expected)
+
+
+def coverage_for(record: dict | None, fresh: bool, kind: str,
+                 script_present: bool = True) -> tuple[str, int, int, int]:
     """汇总一类核验的覆盖情况；状态语义语言无关，返回 (状态, 通过数, 总数, 失败数)。
 
     总数按内置清单的全部条目计（决策 10：可交付要求清单逐项检查），记录未声明的
-    条目视为未执行。covered 全部通过；partial 有通过也有未完成；uncovered 有失败；
+    条目视为未执行；讲稿关联项在无讲稿时不计入总数（#73 适用性规则）。
+    covered 全部通过；partial 有通过也有未完成；uncovered 有失败；
     not_run 未执行；unverified 无法证明（记录对不上当前产物）。
     """
     if record is None:
@@ -660,6 +824,8 @@ def coverage_for(record: dict | None, fresh: bool, kind: str) -> tuple[str, int,
     if not fresh:
         return "unverified", 0, 0, 0
     known_ids = [cid for cid, k in KNOWN_RECORD_CHECKS.items() if k == kind]
+    if not script_present:
+        known_ids = [cid for cid in known_ids if cid not in SCRIPT_SCOPED_CHECKS]
     by_id = {x.get("id"): x for x in record["checks"] if isinstance(x, dict)}
     total = len(known_ids)
     passed = sum(1 for cid in known_ids if by_id.get(cid, {}).get("status") == "pass")
@@ -678,7 +844,7 @@ def coverage_for(record: dict | None, fresh: bool, kind: str) -> tuple[str, int,
 def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
               record_ok: bool, claims_info: dict | None = None,
               calc_pending: list[str] | None = None, source_stale: bool = False,
-              reading: dict | None = None) -> dict:
+              reading: dict | None = None, script_present: bool = True) -> dict:
     reasons: list[str] = []
     failed_program = checks.failed()
     # 全部实质材料不可读：空结构或虚构内容不能当作初稿生成完成（issue #71）。
@@ -688,23 +854,27 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
         and not [f for f in failed_program
                  if f["id"] in ("report.parse", "report.pageKeys",
                                 "script.pages", "record.pageRefs")]
-    coverage_raw = {"content": coverage_for(record, fresh, "content"),
-                    "visual": coverage_for(record, fresh, "visual")}
-    coverage = {"content": coverage_raw["content"][0], "visual": coverage_raw["visual"][0]}
+    coverage_raw = {kind: coverage_for(record, fresh, kind, script_present)
+                    for kind in ("content", "structure", "visual")}
+    coverage = {k: v[0] for k, v in coverage_raw.items()}
     coverage_counts = {k: {"done": v[1], "total": v[2], "failed": v[3]}
                        for k, v in coverage_raw.items()}
     # 覆盖封顶：记录声明了 pass，但结论支持、计算口径或材料对应的证据不足时，
-    # 内容核验不能显示为 covered（决策 8、12；#72）。
+    # 内容与结构核验不能显示为 covered（决策 8、12；#72；#73 把封顶同样用于结构类，
+    # 因为 structure.claim-support 与结论支持映射共用同一份证据）。
     cap = content_cap(record, claims_info, calc_pending, source_stale)
-    capped = cap is not None and CAP_SEVERITY[cap] > CAP_SEVERITY[coverage["content"]]
-    if capped:
-        coverage["content"] = cap
+    capped: dict[str, bool] = {"content": False, "structure": False, "visual": False}
+    for kind in ("content", "structure"):
+        if cap is not None and CAP_SEVERITY[cap] > CAP_SEVERITY[coverage[kind]]:
+            capped[kind] = True
+            coverage[kind] = cap
     declared = None if record is None else record["verdict"].get("deliverable")
     declared = declared if isinstance(declared, bool) else None
     deliverable = draft_complete and record is not None and fresh and record_ok \
         and not failed_program
     if deliverable:
-        deliverable = coverage["content"] == "covered" and coverage["visual"] == "covered"
+        deliverable = all(coverage[k] == "covered"
+                          for k in ("content", "structure", "visual"))
         if deliverable:
             blocking = [x.get("item") for x in record["openItems"]
                         if isinstance(x, dict) and x.get("blocking") is True
@@ -716,9 +886,8 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
         else:
             not_run = [k for k, v in coverage.items() if v != "covered"]
             reasons.append(t(checks.locale, "check.reason.notRun",
-                             items="、".join(t(checks.locale,
-                                              "check.coverage.content" if k == "content"
-                                              else "check.coverage.visual") for k in not_run)))
+                             items="、".join(t(checks.locale, "check.coverage." + k)
+                                             for k in not_run)))
         if deliverable and declared is not True:
             deliverable = False
             reasons.append(t(checks.locale, "check.reason.declaredNo"))
@@ -734,6 +903,13 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
                 reasons.append(t(checks.locale, "check.reason.readingBlocked"))
             reasons.append(t(checks.locale, "check.reason.programFailed",
                              items="、".join(checks.name(f["id"]) for f in failed_program)))
+    scopes: list[dict] = []
+    if record is not None:
+        for item in record["checks"]:
+            if isinstance(item, dict) and item.get("status") == "pass" \
+                    and isinstance(item.get("id"), str) \
+                    and isinstance(item.get("scope"), str) and item["scope"].strip():
+                scopes.append({"id": item["id"], "scope": item["scope"].strip()})
     return {
         "checks": [checks.items[cid] for cid in Checks.ORDER],
         "warnings": list(checks.warnings),
@@ -747,10 +923,11 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
                    "openItems": {"n": 0, "blocking": 0} if record is None
                    else {"n": sum(1 for x in record["openItems"] if isinstance(x, dict)),
                          "blocking": sum(1 for x in record["openItems"]
-                                         if isinstance(x, dict) and x.get("blocking") is True)}},
+                                         if isinstance(x, dict) and x.get("blocking") is True)},
+                   "scopes": scopes},
         "coverage": coverage,
         "coverageCounts": coverage_counts,
-        "coverageCapped": {"content": bool(capped), "visual": False},
+        "coverageCapped": capped,
         "reading": reading,
         "gaps": [g for g in record["gaps"] if isinstance(g, str) and g.strip()]
         if record is not None else [],
@@ -795,10 +972,13 @@ def check_report(report_path: Path, script_path: Path | None = None,
         calc_pending = check_calculations(record, c)
         check_record_claims(claims_info, c)
         source_stale = check_record_sources(record, report_path.parent, claims_info, c)
-        check_record_checks(record, c)
+        check_record_checks(record, c, script_present=script_text is not None)
         reading = check_reading(record, c)
+        check_record_visual(record, pages, c)
+        check_record_length(record, pages, c)
     result = summarize(record, fresh, c, draft_ok, record_ok, claims_info=claims_info,
-                       calc_pending=calc_pending, source_stale=source_stale, reading=reading)
+                       calc_pending=calc_pending, source_stale=source_stale, reading=reading,
+                       script_present=script_text is not None)
     result["schema"] = RESULT_SCHEMA
     result["inputs"] = {
         "report": {"path": report_path.name, "sha256": sha256_bytes(report_bytes)},
@@ -839,7 +1019,7 @@ def render_summary(result: dict) -> str:
     lines.append(t(loc, "check.coverage.label"))
     capped = result.get("coverageCapped", {})
     counts = result.get("coverageCounts", {})
-    for kind in ("content", "visual"):
+    for kind in ("content", "structure", "visual"):
         state = result["coverage"][kind]
         label = t(loc, "check.coverage." + kind)
         if capped.get(kind):
@@ -849,6 +1029,12 @@ def render_summary(result: dict) -> str:
             word = t(loc, "check.coverage." + state, done=n.get("done", 0),
                      total=n.get("total", 0), failed=n.get("failed", 0))
         lines.append(f"  · {label}：{word}" if loc == "zh-CN" else f"  · {label}: {word}")
+    scopes = [s["scope"] for s in result.get("record", {}).get("scopes", [])
+              if isinstance(s, dict) and s.get("scope")]
+    if scopes:
+        joined = "、".join(dict.fromkeys(scopes)) if loc == "zh-CN" \
+            else ", ".join(dict.fromkeys(scopes))
+        lines.append("  " + t(loc, "check.scope.line", items=joined))
     reading = result.get("reading")
     if reading and (reading["read"] or reading["partial"] or reading["unreadable"]):
         lines.append(t(loc, "check.reading.line", read=reading["read"],

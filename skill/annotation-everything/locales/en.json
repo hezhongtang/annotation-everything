@@ -1322,6 +1322,22 @@
     "check.reading.line": "Reading: {read} read · {partial} partial · {unreadable} unreadable",
     "check.reading.unread": "Unread ranges: {items}",
     "check.err.readingBlocked": "All substantive materials ({n}) are unreadable: an empty shell or fabricated content does not count as a completed draft",
-    "check.reason.readingBlocked": "All substantive materials are unreadable: draft generation cannot be declared complete"
+    "check.reason.readingBlocked": "All substantive materials are unreadable: draft generation cannot be declared complete",
+    "check.item.record.visual": "Visual page evidence matches the declaration",
+    "check.item.record.length": "Length constraint matches the report pages",
+    "check.coverage.structure": "Structure verification",
+    "check.scope.line": "Checked scope: {items}",
+    "check.err.checkNotApplicable": "These checks do not apply without a script, so declaring them passed is a false checked claim: {ids}",
+    "check.err.visualEvidence": "{id}: declared a page-by-page visual pass, but the record has no per-page evidence (checks[].pages)",
+    "check.err.visualCoverage": "{detail}",
+    "check.err.visualMissingPages": "evidence missing pages: {pages}",
+    "check.err.visualExtraPages": "evidence references pages not in the report: {pages}",
+    "check.err.visualUnchecked": "visual evidence contains unchecked pages: {pages} — unchecked pages cannot count as a page-by-page pass",
+    "check.err.visualIssue": "visual evidence records unresolved issues while declaring a pass: {items}",
+    "check.err.visualBad": "{detail}",
+    "check.err.visualBadNotList": "visual.pages in checks should be a non-empty list of per-page evidence",
+    "check.err.visualBadEntry": "each page entry needs page (integer) and checked (boolean); issues, when present, must be a list of non-empty strings",
+    "check.err.visualDupPages": "duplicate evidence entries for pages: {pages}",
+    "check.err.lengthMismatch": "the report has {actual} pages, but the recorded length constraint is {expected} pages — fix the report or update the recorded constraint, then re-run this check"
   }
 }
