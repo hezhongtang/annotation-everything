@@ -243,13 +243,13 @@ def snapshot_input() -> dict:
     覆盖源码、测试、fixture、模板、词典与执行配置——只要它们有改动就进指纹；
     被 git 忽略的路径不是仓库输入，不参与。产物目录永远排除，避免记录自身污染指纹。
     """
-    code, out = git_output(["rev-parse", "--is-inside-work-tree"])
-    if code != 0 or out.strip() != "true":
+    code, out = git_output(["rev-parse", "--is-inside-work-tree", "HEAD"])
+    identity = out.strip().splitlines()
+    if not identity or identity[0] != "true":
         return {"available": False, "reason": "不是 git 工作树", "fingerprint": None}
-    code, head = git_output(["rev-parse", "HEAD"])
-    if code != 0:
-        return {"available": False, "reason": "读不到 HEAD：%s" % head.strip(), "fingerprint": None}
-    head = head.strip()
+    if code != 0 or len(identity) != 2:
+        return {"available": False, "reason": "读不到 HEAD：%s" % out.strip(), "fingerprint": None}
+    head = identity[1]
     code, status = git_output(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
     if code != 0:
         return {"available": False, "reason": "git status 失败：%s" % status.strip(), "fingerprint": None}
@@ -344,9 +344,12 @@ def changed_since_baseline(baseline: Optional[str], snapshot: dict) -> Optional[
 
 
 def commit_summary(snapshot: dict) -> dict:
-    code, out = git_output(["rev-parse", "HEAD"])
-    head = out.strip() if code == 0 else None
-    code, out = git_output(["log", "-1", "--format=%h%x00%s"])
+    head = snapshot.get("head")
+    if not head:
+        code, out = git_output(["rev-parse", "HEAD"])
+        head = out.strip() if code == 0 else None
+    # 提交标题与输入使用同一份已捕获身份；开始和结束仍各自重新快照。
+    code, out = git_output(["log", "-1", "--format=%h%x00%s", *([head] if head else [])])
     short, subject = ("", "")
     if code == 0:
         parts = out.rstrip("\n").split("\0", 1)

@@ -475,7 +475,7 @@ class ModuleRequirementTests(TemporaryLockDirTestCase):
     def test_declared_sensitive_modules_really_touch_host_state(self):
         """防清单腐烂：列入敏感清单的模块必须能找到触及宿主机状态的真实路径。"""
         signals = ("start_server", "free_port", "spawn_server", '"doctor"', "'doctor'",
-                   "probe_port(", "list_processes()")
+                   "probe_port(", "list_processes()", "serve.ReviewServer(")
         for name in hi.MODULE_RESOURCES:
             text = (ROOT / (name.replace(".", "/") + ".py")).read_text(encoding="utf-8")
             self.assertTrue(any(token in text for token in signals),

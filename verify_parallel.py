@@ -130,6 +130,9 @@ def run_tasks(tasks, worker, root: Path, jobs: int = 3, inline=None):
                             with item["log"].open("w", encoding="utf-8") as stream:
                                 os.dup2(stream.fileno(), 1)
                                 os.dup2(stream.fileno(), 2)
+                                # 调用方可能已重定向到其他 fd；重新绑定 Python 文本流。
+                                sys.stdout = os.fdopen(os.dup(1), "w", buffering=1, encoding="utf-8", errors="backslashreplace")
+                                sys.stderr = os.fdopen(os.dup(2), "w", buffering=1, encoding="utf-8", errors="backslashreplace")
                                 isolate_environment(directory)
                                 code = worker(payload, item["output"])
                         except KeyboardInterrupt:

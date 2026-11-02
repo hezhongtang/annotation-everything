@@ -1,6 +1,7 @@
 """有界验证进程调度的行为测试；只用合成目录和本测试启动的进程。"""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -38,8 +39,10 @@ class ParallelProcessTests(unittest.TestCase):
             print("synthetic output " + name)
             return 1 if name == "failure" else 0
 
-        results = parallel.run_tasks([("success", "success"), ("failure", "failure")], worker,
-                                     self.root / "workers", jobs=2)
+        with (self.root / "caller.log").open("w") as caller, \
+                contextlib.redirect_stdout(caller), contextlib.redirect_stderr(caller):
+            results = parallel.run_tasks([("success", "success"), ("failure", "failure")], worker,
+                                         self.root / "workers", jobs=2)
         self.assertEqual(results["success"]["exit_status"], 0)
         self.assertEqual(results["failure"]["exit_status"], 1)
         environments = [json.loads(item["output"].read_text()) for item in results.values()]
