@@ -2,9 +2,11 @@
   "description": "Model discovery and routing cases. Inspect the actual skill-loading trace; literal keyword matching is not a model evaluation.",
   "cases": [
     {"request": "帮我把这份报告和讲稿做成可逐页批注的页面。", "workflow": "references/workflow.zh-CN.md", "action": "generate"},
+    {"request": "材料是这几份文本，帮我从中生成一份汇报用的报告初稿，需要讲稿。", "workflow": "references/generation.zh-CN.md", "action": "generate-from-material"},
     {"request": "我批注完了，按批注改，初改后先停下等我复核。", "workflow": "references/workflow.zh-CN.md", "action": "apply-and-stop"},
     {"request": "批注保存失败了，帮我恢复。", "workflow": "references/workflow.zh-CN.md", "action": "recover"},
     {"request": "Review this report with its speaker notes. Set up a page where I can annotate it.", "workflow": "references/workflow.en.md", "action": "generate"},
+    {"request": "Here are the source notes; generate a report draft for a briefing with a speaker script.", "workflow": "references/generation.en.md", "action": "generate-from-material"},
     {"request": "I finished annotating. Apply my annotations and stop after the initial edit; do not use subagents.", "workflow": "references/workflow.en.md", "action": "apply-and-stop"},
     {"request": "The review page cannot save. Recover my unsent annotations.", "workflow": "references/workflow.en.md", "action": "recover"}
   ]

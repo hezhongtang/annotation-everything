@@ -8,6 +8,7 @@ build_viewer 的样式管道并生成可通过 report_check 核验的报告。
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -163,6 +164,32 @@ class GenerationGuideTests(unittest.TestCase):
         en_flow = (SKILL_SRC / "references" / "workflow.en.md").read_text(encoding="utf-8")
         self.assertIn("generation.zh-CN.md", zh_flow, "中文工作流链到生成指引")
         self.assertIn("generation.en.md", en_flow, "英文工作流链到生成指引")
+
+
+class RoutingEntryTests(unittest.TestCase):
+    """发现与路由入口认识「从原始材料生成」这条路径。"""
+
+    def test_skill_description_mentions_generation(self):
+        front = (SKILL_SRC / "SKILL.md").read_text(encoding="utf-8").split("---")[1]
+        self.assertIn("生成", front, "中文描述含生成触发词")
+        self.assertIn("generate", front.lower(), "英文描述含生成触发词")
+
+    def test_discovery_cases_cover_generation_routing(self):
+        cases = json.loads((SKILL_SRC / "evals" / "discovery-cases.json").read_text(encoding="utf-8"))
+        actions = {(c.get("action"), c.get("workflow")) for c in cases["cases"]}
+        self.assertIn(("generate-from-material", "references/generation.zh-CN.md"), actions,
+                      "中文生成路由用例")
+        self.assertIn(("generate-from-material", "references/generation.en.md"), actions,
+                      "英文生成路由用例")
+        # 既有路由用例不回退
+        self.assertIn(("generate", "references/workflow.zh-CN.md"), actions)
+
+    def test_formats_reference_the_record(self):
+        """格式参考指向核验记录契约（单一来源在生成指引与 report_check.py）。"""
+        for name in ("formats.md", "formats.en.md"):
+            text = (SKILL_SRC / "references" / name).read_text(encoding="utf-8")
+            self.assertIn("ae-report-record/1", text, f"{name} 提及核验记录")
+            self.assertIn("generation.", text, f"{name} 链到生成指引")
 
 
 if __name__ == "__main__":
