@@ -36,6 +36,16 @@ SCENARIOS: list[Scenario] = [
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
+        id="report-verdict-loop",
+        title="结构与视觉核验的可交付判定：真实渲染逐页测得溢出与无溢出并作为视觉证据写进记录，"
+              "正确产物支持「报告可交付」，故障产物（如实登记的溢出、缺页覆盖）不能通过整体交付验收；"
+              "判定离线完成不落批注，报告仍在对照页可审阅",
+        fixture="ae.py install 装进合成 HOME 的临时副本；正确与故障两套合成产物（内联 report-base.css 的"
+                "三页报告、讲稿、合成材料与 ae-report-record/1 记录，故障报告第 3 页带 1600px 宽块）；"
+                "独立 AE_HOME，不碰真实台账",
+        isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
+    ),
+    Scenario(
         id="installed-delivery",
         title="从唯一的临时安装副本完成英文、中文、中英混合三种语言组合的真实审阅流程",
         fixture="ae.py install 装进合成 HOME 的临时副本；fixtures/sample 合成报告与讲稿；"

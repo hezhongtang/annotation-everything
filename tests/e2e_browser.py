@@ -2084,6 +2084,270 @@ def generated_draft_checks(browser, tmp: Path):
         ctx.close()
 
 
+def report_verdict_checks(browser, tmp: Path):
+    """场景 report-verdict-loop：结构与视觉核验的可交付判定（详见 e2e_scenarios 注册表）。
+
+    视觉逐页检查由本场景里的真实渲染执行：逐页测量画布溢出，把测量结果作为
+    逐页证据写进核验记录，再由安装副本的核验入口做确定规则判定。正确产物
+    （程序+内容+结构+视觉全部 covered）支持「报告可交付」；故障产物——如实
+    登记的溢出、或声明逐页通过却缺页覆盖——不能通过整体交付验收。判定离线
+    完成：不落批注、不触发复核或定稿，报告仍在对照页可审阅。不冒充实际模型
+    的生成质量评测（那由 evals/ 覆盖）。
+    """
+    installed = tmp / "installed-skills" / "annotation-everything"
+    env = {**os.environ, "CLAUDE_SKILLS_DIR": str(installed.parent)}
+    subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"],
+                   env=env, check=True, capture_output=True, text=True, timeout=60)
+    scripts = installed / "scripts"
+    base_css = (scripts.parent / "references" / "report-base.css").read_text(encoding="utf-8")
+    head = ('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+            "<title>交付判定场景（合成）</title><style>" + base_css + "</style></head><body>")
+
+    def section(n, key, title, body):
+        return (f'<section class="page" data-page="{n}" data-key="{key}" id="page-{key}">'
+                f"<h2>{title}</h2>{body}</section>")
+
+    script_md = ("# 讲稿：交付判定场景（合成）\n\n"
+                 "### 第 1 页｜结论\n**讲法**：\n先说结论：收入同比增长 12%。\n"
+                 "### 第 2 页｜收入结构\n**讲法**：\n外卖占比继续上升。\n"
+                 "### 第 3 页｜下一步\n**讲法**：\n两件事。\n")
+    material_text = "# 三季度笔记\n\n三季度收入 112 万元，上年同期 100 万元。\n"
+
+    def sha_text(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def sha_file(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def write_case(name: str, report: str) -> dict:
+        d = tmp / name
+        (d / "materials").mkdir(parents=True)
+        paths = {"dir": d,
+                 "report": d / "report.html",
+                 "script": d / "script.md",
+                 "material": d / "materials" / "q3-notes.md"}
+        paths["report"].write_text(head + report + "</body></html>", encoding="utf-8")
+        paths["script"].write_text(script_md, encoding="utf-8")
+        paths["material"].write_text(material_text, encoding="utf-8")
+        return paths
+
+    def record_for(paths: dict, *, visual: dict, declared=None) -> dict:
+        """除视觉项外全部齐备的可交付形态记录；视觉项与交付声明由调用方给定。"""
+        return {
+            "schema": "ae-report-record/1",
+            "generatedAt": "2026-11-02T09:00:00+08:00",
+            "request": {"purpose": "季度经营汇报", "audience": "管理层",
+                        "coreQuestions": ["三季度收入为什么增长"], "length": "3 页",
+                        "script": "yes"},
+            "sources": [{"path": "materials/q3-notes.md", "status": "read",
+                         "coverage": "全文",
+                         "sha256": sha_text(material_text), "note": ""}],
+            "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
+                       "version": "0.9.0", "unavailable": []},
+            "links": {"report": "report.html", "script": "script.md",
+                      "sha256": {"report": sha_file(paths["report"]),
+                                 "script": sha_file(paths["script"])},
+                      "sourceNote": "materials/q3-notes.md 及同目录讲稿"},
+            "findings": [{"claim": "三季度收入同比增长 12%", "type": "calculation",
+                          "sources": ["materials/q3-notes.md"], "pages": ["sum"],
+                          "refs": [{"path": "materials/q3-notes.md", "locator": "§1 收入",
+                                    "quote": "上年同期 100 万元", "found": True}],
+                          "support": "supported",
+                          "basis": "对比材料两期收入原文，并按声明输入复算 percent-change",
+                          "calculation": {"op": "percent-change",
+                                          "inputs": {"a": 100, "b": 112}, "expected": 12,
+                                          "unit": "万元", "period": "2025Q3 对 2024Q3",
+                                          "definition": "对上年同期收入的增长百分比",
+                                          "inputLocations": {
+                                              "a": "materials/q3-notes.md §1：上年同期 100 万元",
+                                              "b": "materials/q3-notes.md §1：三季度收入 112 万元"}},
+                          "note": "收入 112 对上年 100"}],
+            "gaps": ["十月周报缺失"],
+            "checks": (
+                [{"id": cid, "kind": "content", "status": "pass",
+                  "scope": "全部", "note": "真实渲染核验场景的合成声明"}
+                 for cid in ("content.requirements", "content.claims",
+                             "content.fact-vs-inference", "content.units-dates",
+                             "content.numbers-charts", "content.cross-page",
+                             "content.script-consistency", "content.open-questions")]
+                + [{"id": cid, "kind": "structure", "status": "pass",
+                    "scope": "全部页", "note": "真实渲染核验场景的合成声明"}
+                   for cid in ("structure.flow", "structure.headings",
+                               "structure.claim-support", "structure.dup-gaps",
+                               "structure.length")]
+                + [visual]),
+            "openItems": [{"item": "提价幅度待定", "blocking": False}],
+            "verdict": {"draftComplete": True, "deliverable": declared},
+        }
+
+    def measure_page_overflow(page) -> list[dict]:
+        """真实渲染逐页测量：当前页画布是否溢出（scrollWidth/Height 超出 client）。"""
+        evidence = []
+        for n in (1, 2, 3):
+            go_page(page, n)
+            m = page.evaluate(
+                "() => { const r = document.getElementById('host').shadowRoot;"
+                "  const s = r.querySelector('section.page');"
+                "  return {sw: s.scrollWidth, cw: s.clientWidth,"
+                "          sh: s.scrollHeight, ch: s.clientHeight}; }")
+            issues = []
+            if m["sw"] > m["cw"]:
+                issues.append(f"内容超出画布右缘约 {m['sw'] - m['cw']}px")
+            if m["sh"] > m["ch"]:
+                issues.append(f"内容超出画布底部约 {m['sh'] - m['ch']}px")
+            evidence.append({"page": n, "checked": True, "issues": issues,
+                             "viewport": "1280x720"})
+        return evidence
+
+    def cli(tool, *args, expect=0):
+        done = subprocess.run([sys.executable, str(scripts / tool), *map(str, args)],
+                              env=env, capture_output=True, text=True, timeout=60)
+        if expect is not None:
+            assert done.returncode == expect, \
+                f"{tool} 退出码 {done.returncode}（期望 {expect}）：{done.stderr or done.stdout}"
+        return done
+
+    # ── 正确产物：渲染测量无溢出 → 证据写进记录 → 可交付判定成立 ──
+    good_body = "".join([
+        section(1, "sum", "结论：收入同比增长 12%",
+                '<p class="ae-kpi">+12%</p><p>新开 3 家门店贡献主要增量。</p>'
+                '<p class="ae-source">materials/q3-notes.md 第 2 节</p>'),
+        section(2, "rev", "收入结构",
+                "<table><tr><th>渠道</th><th>上季</th><th>本季</th></tr>"
+                "<tr><td>堂食</td><td>66%</td><td>62%</td></tr>"
+                "<tr><td>外卖</td><td>34%</td><td>38%</td></tr></table>"),
+        section(3, "next", "下一步", "<p>两件事。</p>"
+                '<p class="ae-gap">十月周报缺失，待补充后复核结论。</p>'),
+    ])
+    good = write_case("verdict-good", good_body)
+    review = good["dir"] / "q3-review"
+    cli("build_viewer.py", "--report", str(good["report"]), "--script", str(good["script"]),
+        "--out", str(review), "--name", "交付判定正确产物", "--no-scan-skills")
+    rid_before = json.loads((review / "review.json").read_text(encoding="utf-8"))["reviewId"]
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="正确产物对照页进入服务模式")
+        ok(page.locator("#jump option").count() == 3, "正确产物三页进入对照页")
+        evidence = measure_page_overflow(page)
+        ok(all(not e["issues"] for e in evidence),
+           f"真实渲染逐页测量：正确产物无溢出（{evidence}）")
+    finally:
+        stop(server)
+        ctx.close()
+    visual_pass = {"id": "visual.pages", "kind": "visual", "status": "pass",
+                   "scope": "全部 3 页（1280×720 实际渲染，逐页测量）",
+                   "note": "逐页渲染检查", "pages": evidence}
+    record_path = good["dir"] / "report-record.json"
+    record_path.write_text(json.dumps(record_for(good, visual=visual_pass, declared=True),
+                                      ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    checked = json.loads(cli("report_check.py", str(good["report"]), "--script",
+                             str(good["script"]), "--record", str(record_path),
+                             "--locale", "zh-CN", "--json").stdout)
+    ok(checked["verdict"]["deliverable"] is True,
+       "程序、内容、结构、视觉全部 covered 时报告可交付判定成立")
+    ok(checked["coverage"] == {"content": "covered", "structure": "covered",
+                               "visual": "covered"},
+       f"三类覆盖全部 covered（{checked['coverage']}）")
+    ok(checked["verdict"]["draftComplete"] is True, "初稿与可交付分别输出（初稿完成）")
+    ok(disk_notes(review) == [], "核验判定不落批注")
+    rid_after = json.loads((review / "review.json").read_text(encoding="utf-8"))["reviewId"]
+    ok(rid_after == rid_before, "核验判定不改变审阅标识，不触发复核或定稿")
+    # 判定之后审阅照常：批注仍能落盘
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="判定后对照页仍进入服务模式")
+        add_note(page, "外卖占比的数字加同比说明", pin=(0.5, 0.4))
+        ok(wait_until(lambda: len(disk_notes(review)) == 1, page, 5),
+           "判定之后批注照常落盘，审阅不受影响")
+    finally:
+        stop(server)
+        ctx.close()
+
+    # ── 故障产物：第 3 页 1600px 宽块真实溢出 ──
+    wide = ('<div style="width:1600px"><table>'
+            "<tr><th>项目</th><th>数值</th></tr><tr><td>咖啡豆成本</td><td>+9%</td></tr>"
+            "</table></div>")
+    faulty_body = "".join([
+        section(1, "sum", "结论：收入同比增长 12%",
+                '<p class="ae-kpi">+12%</p><p>新开 3 家门店贡献主要增量。</p>'),
+        section(2, "rev", "收入结构", "<p>外卖占比 38%。</p>"),
+        section(3, "next", "下一步", "<p>两件事。</p>" + wide),
+    ])
+    faulty = write_case("verdict-faulty", faulty_body)
+    faulty_review = faulty["dir"] / "q3-review"
+    cli("build_viewer.py", "--report", str(faulty["report"]), "--script", str(faulty["script"]),
+        "--out", str(faulty_review), "--name", "交付判定故障产物", "--no-scan-skills")
+    port = free_port()
+    server = start_server(faulty_review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="故障产物对照页进入服务模式")
+        evidence = measure_page_overflow(page)
+        overflow_pages = [e["page"] for e in evidence if e["issues"]]
+        ok(overflow_pages == [3],
+           f"真实渲染逐页测量：只有第 3 页溢出（{overflow_pages}）")
+    finally:
+        stop(server)
+        ctx.close()
+    # 如实登记溢出：声明与证据一致（程序检查通过），但视觉覆盖 uncovered，
+    # 「程序检查通过」不代替视觉检查通过，可交付被挡下
+    visual_fail = {"id": "visual.pages", "kind": "visual", "status": "fail",
+                   "scope": "全部 3 页（1280×720 实际渲染，逐页测量）",
+                   "note": "逐页渲染检查，第 3 页溢出", "pages": evidence}
+    record_path = faulty["dir"] / "report-record.json"
+    record_path.write_text(json.dumps(record_for(faulty, visual=visual_fail, declared=False),
+                                      ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    checked = json.loads(cli("report_check.py", str(faulty["report"]), "--script",
+                             str(faulty["script"]), "--record", str(record_path),
+                             "--locale", "zh-CN", "--json").stdout)
+    ok(checked["verdict"]["deliverable"] is False,
+       "如实登记的溢出阻止可交付判定（程序检查通过不代替视觉检查通过）")
+    ok(checked["coverage"]["visual"] == "uncovered",
+       f"视觉覆盖如实显示未通过（{checked['coverage']['visual']}）")
+    ok(checked["verdict"]["draftComplete"] is True, "故障产物的初稿仍可进入审阅")
+    # 缺页覆盖反例：声明逐页通过但证据缺第 3 页，判定入口直接判否
+    missing = record_for(faulty, visual=visual_fail)
+    missing["verdict"] = {"draftComplete": True, "deliverable": True}
+    for item in missing["checks"]:
+        if item["id"] == "visual.pages":
+            item.update({"status": "pass", "note": "声称全部检查通过",
+                         "pages": [e for e in evidence if e["page"] in (1, 2)]})
+    record_path.write_text(json.dumps(missing, ensure_ascii=False, indent=2) + "\n",
+                           encoding="utf-8")
+    done = cli("report_check.py", str(faulty["report"]), "--script", str(faulty["script"]),
+               "--record", str(record_path), "--locale", "zh-CN", "--json", expect=1)
+    payload = json.loads(done.stdout)
+    visual_item = [c for c in payload["checks"] if c["id"] == "record.visual"][0]
+    ok(visual_item["code"] == "record.visual-coverage"
+       and "3" in visual_item["detail"],
+       f"声明逐页通过但缺页覆盖被程序判否（{visual_item['code']}：{visual_item['detail']}）")
+    ok(payload["verdict"]["deliverable"] is False,
+       "缺页覆盖的反例不能通过整体交付验收")
+    # 故障产物仍在对照页可审阅
+    port = free_port()
+    server = start_server(faulty_review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="故障产物对照页仍进入服务模式")
+        go_page(page, 3)
+        ok(True, "故障产物第 3 页在对照页照常渲染审阅")
+    finally:
+        stop(server)
+        ctx.close()
+
+
 def server_mode_checks(browser, tmp: Path):
     """场景 server-mode：服务模式全流程与恢复、离线、安全边界（详见 e2e_scenarios 注册表）。"""
     import_md = server_import_export_fixture(tmp)
@@ -2734,6 +2998,7 @@ const T = "http://127.0.0.1:{port}";
 
 SCENARIO_RUNNERS = {
     "generated-draft-loop": generated_draft_checks,
+    "report-verdict-loop": report_verdict_checks,
     "installed-delivery": installed_delivery_checks,
     "locale-live-controls": locale_live_controls_checks,
     "skill-search": skill_search_checks,
