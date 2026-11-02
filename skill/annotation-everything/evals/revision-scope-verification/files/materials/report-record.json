@@ -47,7 +47,7 @@
       ],
       "refs": [
         {
-          "path": "materials/q3-notes.md",
+          "path": "q3-notes.md",
           "locator": "§ 收入",
           "quote": "上年同期 100 万元",
           "found": true
@@ -66,7 +66,7 @@
         "period": "2025Q3 对 2024Q3",
         "definition": "对上年同期收入的增长百分比",
         "inputLocations": {
-          "a": "materials/q3-notes.md § 收入：上年同期 100 万元",
+          "a": "q3-notes.md § 收入：上年同期 100 万元",
           "b": "交付时对话确认的 112 万元（材料旧版）"
         }
       },
@@ -83,7 +83,7 @@
       ],
       "refs": [
         {
-          "path": "materials/q3-notes.md",
+          "path": "q3-notes.md",
           "locator": "§ 渠道结构",
           "quote": "外卖渠道占比 38%",
           "found": true

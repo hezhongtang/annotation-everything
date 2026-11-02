@@ -91,33 +91,33 @@
                                                    "b": "materials/q3.md §1 三季度收入 112 万元"}},
                 "note": "口径：对上年同期"}],
   "gaps": ["十月周报缺失"],
-  "checks": [{"id": "content.requirements", "kind": "content", "status": "not_run",
+  "checks": [{"id": "content.requirements", "status": "not_run",
               "scope": "全部需求", "note": ""},
-             {"id": "content.claims", "kind": "content", "status": "not_run",
+             {"id": "content.claims", "status": "not_run",
               "scope": "全部关键结论", "note": ""},
-             {"id": "content.fact-vs-inference", "kind": "content", "status": "not_run",
+             {"id": "content.fact-vs-inference", "status": "not_run",
               "scope": "全部结论页", "note": ""},
-             {"id": "content.units-dates", "kind": "content", "status": "not_run",
+             {"id": "content.units-dates", "status": "not_run",
               "scope": "全部数字", "note": ""},
-             {"id": "content.numbers-charts", "kind": "content", "status": "not_run",
+             {"id": "content.numbers-charts", "status": "not_run",
               "scope": "数字与图表", "note": ""},
-             {"id": "content.cross-page", "kind": "content", "status": "not_run",
+             {"id": "content.cross-page", "status": "not_run",
               "scope": "全部页", "note": ""},
-             {"id": "content.script-consistency", "kind": "content", "status": "not_run",
+             {"id": "content.script-consistency", "status": "not_run",
               "scope": "报告与讲稿", "note": ""},
-             {"id": "content.open-questions", "kind": "content", "status": "not_run",
+             {"id": "content.open-questions", "status": "not_run",
               "scope": "openItems", "note": ""},
-             {"id": "structure.flow", "kind": "structure", "status": "not_run",
+             {"id": "structure.flow", "status": "not_run",
               "scope": "全部页", "note": ""},
-             {"id": "structure.headings", "kind": "structure", "status": "not_run",
+             {"id": "structure.headings", "status": "not_run",
               "scope": "全部页", "note": ""},
-             {"id": "structure.claim-support", "kind": "structure", "status": "not_run",
+             {"id": "structure.claim-support", "status": "not_run",
               "scope": "全部结论页", "note": ""},
-             {"id": "structure.dup-gaps", "kind": "structure", "status": "not_run",
+             {"id": "structure.dup-gaps", "status": "not_run",
               "scope": "全部页", "note": ""},
-             {"id": "structure.length", "kind": "structure", "status": "not_run",
+             {"id": "structure.length", "status": "not_run",
               "scope": "篇幅与讲稿时长", "note": ""},
-             {"id": "visual.pages", "kind": "visual", "status": "not_run",
+             {"id": "visual.pages", "status": "not_run",
               "scope": "全部 6 页", "note": ""}],
   "openItems": [{"item": "提价幅度二选一", "blocking": false}],
   "verdict": {"draftComplete": true, "deliverable": null}
@@ -127,12 +127,12 @@
 字段语义：
 
 - `request`：第 0 步的需求；问过的与沿用的都写。
-- `sources`：第 1 步的读取登记；`status` 用 `read` / `partial` / `unreadable`；`coverage` 写实际读到的范围，`partial` 必须同时写明已读与未读部分；`partial` / `unreadable` 必须写 `reason`；`locations` 列定位线索（PDF 页码、Word 段落、工作表与单元格）；`sha256` 用 `sha256sum` 或等价方式算材料内容哈希——核验入口用它发现材料事后变化，材料改了旧核验结果就不再算数。**全部实质材料都 `unreadable` 时初稿不能算完成**，核验入口会判 `record.reading` 未通过。
+- `sources`：第 1 步的读取登记；`status` 用 `read` / `partial` / `unreadable`；`coverage` 写实际读到的范围，`partial` 必须同时写明已读与未读部分；`partial` / `unreadable` 必须写 `reason`；**`path` 相对报告所在目录解析**——核验入口按报告所在目录找材料文件核对哈希；`locations` 列定位线索（PDF 页码、Word 段落、工作表与单元格）；`sha256` 用 `sha256sum` 或等价方式算材料内容哈希——核验入口用它发现材料事后变化，材料改了旧核验结果就不再算数。**全部实质材料都 `unreadable` 时初稿不能算完成**，核验入口会判 `record.reading` 未通过。
 - `method`：实际生成方法；`kind` 用 `builtin` / `external`（封闭枚举），`name` 写实际采用的方法名，`version` 写可得的版本信息。外部技能必须写 `invocation`（怎么调用的、产物从哪来——扫描到候选或名称出现不算采用，缺它核验入口会判 `record.method` 失败）；用户指定但未实际采用的技能写 `requested` 与 `note`（原因）；能力缺口写 `unavailable`。核验入口核对这些声明并把方法信息带进摘要与结构化结果。外部技能示例：`{"kind": "external", "name": "synthetic-brief-kit", "version": "1.4.2", "invocation": "运行其 scripts/make_report.py 生成", "unavailable": []}`。
 - `links`：产物关联与 sha256（`sha256sum` 或等价方式计算）；这是核验入口判断记录是否对应当前产物的依据。
-- `findings`：关键结论（含数值与影响判断）与来源、报告页的对应；`locations` 可列材料内定位（如 `q3.pdf 第 2 页`、`Sheet1!B3`），让审阅人能核对原文；`refs` 写结构化定位：`quote` 保留材料原文（不翻译、不改写），`locator` 写位置（章节、行、表名），`found` 如实标是否定位到；`support` 写材料是否支持表述——`supported`（支持）/ `partial`（部分支持，表述强于材料）/ `unsupported`（不受支持）/ `unverified`（未核实），**引用存在不等于受支持，核对后不支持就必须标 `unsupported`**；`basis` 写检查依据：怎么核对的、看了材料哪几处。能声明输入与口径的计算写 `calculation`（运算支持 `sum`、`difference`、`product`、`ratio`、`percent-change`），并带齐四要素：`unit` 单位、`period` 期间、`definition` 口径、`inputLocations` 每个输入的位置；缺要素的计算核验入口会标为**待核实**，复算不一致会定位到结论与报告页。
+- `findings`：关键结论（含数值与影响判断）与来源、报告页的对应；`locations` 可列材料内定位（如 `q3.pdf 第 2 页`、`Sheet1!B3`），让审阅人能核对原文；`refs` 写结构化定位：`path` 与 `sources[].path` 同基准（相对报告所在目录，供审阅人定位材料原文），`quote` 保留材料原文（不翻译、不改写），`locator` 写位置（章节、行、表名），`found` 如实标是否定位到；`support` 写材料是否支持表述——`supported`（支持）/ `partial`（部分支持，表述强于材料）/ `unsupported`（不受支持）/ `unverified`（未核实），**引用存在不等于受支持，核对后不支持就必须标 `unsupported`**；`basis` 写检查依据：怎么核对的、看了材料哪几处。能声明输入与口径的计算写 `calculation`（运算支持 `sum`、`difference`、`product`、`ratio`、`percent-change`），并带齐四要素：`unit` 单位、`period` 期间、`definition` 口径、`inputLocations` 每个输入的位置；缺要素的计算核验入口会标为**待核实**，复算不一致会定位到结论与报告页。
 - `gaps`：材料与需求缺口。`openItems`：待用户拍板的事项，影响核心结论的 `blocking: true`。
-- `checks`：内容（`content.*`，八项清单见下）、结构（`structure.*`，五项清单见下）与视觉（`visual.pages`）核验的逐项声明，状态 `pass` / `fail` / `not_run` / `unavailable`。**没执行的写 `not_run`，不能写 pass。** 要判可交付时，三类清单必须逐项 `pass`，视觉项还要带覆盖全部报告页的逐页证据（见下面「视觉核验」）；无讲稿时讲稿关联的两项（`content.script-consistency`、`structure.length`）不适用、不必声明，核验入口也不把它们计入覆盖总数——声明了 pass 属于虚假的已检查，会按程序检查失败暴露。有关键结论缺支持、口径不明的计算或材料没哈希时，核验入口会把内容与结构覆盖降级，不让它显示为通过。
+- `checks`：内容（`content.*`，八项清单见下）、结构（`structure.*`，五项清单见下）与视觉（`visual.pages`）核验的逐项声明，状态 `pass` / `fail` / `not_run` / `unavailable`；条目写 `id` 与 `status`（加 `scope` / `note`），内容 / 结构 / 视觉的类别由核验入口按内置清单 id 归类，条目自带的类别字段不参与判定。**没执行的写 `not_run`，不能写 pass。** 要判可交付时，三类清单必须逐项 `pass`，视觉项还要带覆盖全部报告页的逐页证据（见下面「视觉核验」）；无讲稿时讲稿关联的两项（`content.script-consistency`、`structure.length`）不适用、不必声明，核验入口也不把它们计入覆盖总数——声明了 pass 属于虚假的已检查，会按程序检查失败暴露。有关键结论缺支持、口径不明的计算或材料没哈希时，核验入口会把内容与结构覆盖降级，不让它显示为通过。
 - `verdict.draftComplete`：结构完整、能进入审阅即为 `true`；`verdict.deliverable` 只有在内容、结构与视觉核验都通过且无阻塞事项时才 `true`，否则留 `null` 或 `false`。**初稿生成完成 ≠ 报告可交付。**
 - `revision`（可选，改稿维护时写）：本次改稿核验信息的声明。`basis` 写影响范围怎么判定的（改动落在哪些页、哪些来源、是否涉及讲稿与跨页引用）；`rechecked` 列出本次重新核验过的检查项 id，每项都必须在 `checks` 里有实际结果（`pass` / `fail`）；`pending` 列出无法确认影响范围的待核验项，每项带 `scope`（范围）与 `reason`（原因）——核验入口会让有 `pending` 的记录到不了可交付，并在摘要里如实列出待核验范围。没有 `revision` 的记录（初次生成、旧报告）不受影响。字段语义见[中文操作流程](workflow.zh-CN.md)「改稿后的核验信息维护」。
 
@@ -171,7 +171,7 @@
 - 检查结果写进 `visual.pages` 声明的 `pages` 证据，每页一条：
 
 ```json
-{"id": "visual.pages", "kind": "visual", "status": "pass",
+{"id": "visual.pages", "status": "pass",
  "scope": "全部 3 页（1280×720 实际渲染）", "note": "逐页渲染检查",
  "pages": [{"page": 1, "checked": true, "issues": [], "viewport": "1280x720"},
            {"page": 2, "checked": true, "issues": []},

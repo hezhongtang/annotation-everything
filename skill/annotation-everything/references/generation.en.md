@@ -91,33 +91,33 @@ Save `report-record.json` next to the report (same directory, i.e. beside the ma
                                                    "b": "materials/q3.md §1: 112 this quarter"}},
                 "note": "Definition: versus the same quarter last year"}],
   "gaps": ["October weekly reports missing"],
-  "checks": [{"id": "content.requirements", "kind": "content", "status": "not_run",
+  "checks": [{"id": "content.requirements", "status": "not_run",
               "scope": "all requirements", "note": ""},
-             {"id": "content.claims", "kind": "content", "status": "not_run",
+             {"id": "content.claims", "status": "not_run",
               "scope": "all key claims", "note": ""},
-             {"id": "content.fact-vs-inference", "kind": "content", "status": "not_run",
+             {"id": "content.fact-vs-inference", "status": "not_run",
               "scope": "all claim pages", "note": ""},
-             {"id": "content.units-dates", "kind": "content", "status": "not_run",
+             {"id": "content.units-dates", "status": "not_run",
               "scope": "all numbers", "note": ""},
-             {"id": "content.numbers-charts", "kind": "content", "status": "not_run",
+             {"id": "content.numbers-charts", "status": "not_run",
               "scope": "numbers and charts", "note": ""},
-             {"id": "content.cross-page", "kind": "content", "status": "not_run",
+             {"id": "content.cross-page", "status": "not_run",
               "scope": "all pages", "note": ""},
-             {"id": "content.script-consistency", "kind": "content", "status": "not_run",
+             {"id": "content.script-consistency", "status": "not_run",
               "scope": "report and script", "note": ""},
-             {"id": "content.open-questions", "kind": "content", "status": "not_run",
+             {"id": "content.open-questions", "status": "not_run",
               "scope": "openItems", "note": ""},
-             {"id": "structure.flow", "kind": "structure", "status": "not_run",
+             {"id": "structure.flow", "status": "not_run",
               "scope": "all pages", "note": ""},
-             {"id": "structure.headings", "kind": "structure", "status": "not_run",
+             {"id": "structure.headings", "status": "not_run",
               "scope": "all pages", "note": ""},
-             {"id": "structure.claim-support", "kind": "structure", "status": "not_run",
+             {"id": "structure.claim-support", "status": "not_run",
               "scope": "all claim pages", "note": ""},
-             {"id": "structure.dup-gaps", "kind": "structure", "status": "not_run",
+             {"id": "structure.dup-gaps", "status": "not_run",
               "scope": "all pages", "note": ""},
-             {"id": "structure.length", "kind": "structure", "status": "not_run",
+             {"id": "structure.length", "status": "not_run",
               "scope": "length and script duration", "note": ""},
-             {"id": "visual.pages", "kind": "visual", "status": "not_run",
+             {"id": "visual.pages", "status": "not_run",
               "scope": "all 6 pages", "note": ""}],
   "openItems": [{"item": "price increase: pick one of two options", "blocking": false}],
   "verdict": {"draftComplete": true, "deliverable": null}
@@ -127,12 +127,12 @@ Save `report-record.json` next to the report (same directory, i.e. beside the ma
 Field semantics:
 
 - `request`: the clarified request from step 0, including what was asked and what was reused.
-- `sources`: the reading registrations from step 1; `status` is `read` / `partial` / `unreadable`; `coverage` states the range actually read, and `partial` must state both the read and unread parts; `partial` / `unreadable` must include `reason`; `locations` lists locators (PDF pages, Word paragraphs, worksheets and cells); `sha256` is the material content hash (`shasum -a 256` or equivalent) — the check entry uses it to detect later material changes, and a changed material invalidates old verification results. **When all substantive materials are `unreadable`, the draft does not count as complete**; the check entry fails `record.reading`.
+- `sources`: the reading registrations from step 1; `status` is `read` / `partial` / `unreadable`; `coverage` states the range actually read, and `partial` must state both the read and unread parts; `partial` / `unreadable` must include `reason`; **`path` is resolved relative to the directory containing the report** — the check entry looks material files up next to the report to verify hashes; `locations` lists locators (PDF pages, Word paragraphs, worksheets and cells); `sha256` is the material content hash (`shasum -a 256` or equivalent) — the check entry uses it to detect later material changes, and a changed material invalidates old verification results. **When all substantive materials are `unreadable`, the draft does not count as complete**; the check entry fails `record.reading`.
 - `method`: what actually generated the output; `kind` is the closed enum `builtin` / `external`, `name` records the method actually used, and `version` any version information available. An external skill must carry `invocation` (how it was invoked and where the artifacts came from — a scanned candidate or a mentioned name is not an invocation; without it the check entry fails `record.method`); a user-specified method that was NOT the one used goes into `requested` with `note` (the reason); capability gaps go into `unavailable`. The check entry verifies these declarations and surfaces the method information in the summary and the structured result. External example: `{"kind": "external", "name": "synthetic-brief-kit", "version": "1.4.2", "invocation": "ran its scripts/make_report.py to generate", "unavailable": []}`.
 - `links`: artifact association and sha256 (via `shasum -a 256` or equivalent); the check entry uses this to decide whether the record matches the current artifacts.
-- `findings`: key claims (including figures and impact judgments) mapped to sources and report pages; `locations` may list locators inside the material (e.g. `q3.pdf page 2`, `Sheet1!B3`) so reviewers can check the original; `refs` give the structured locator: `quote` keeps the material's original wording (never translated or paraphrased), `locator` names the position (section, line, table), and `found` honestly records whether it was located; `support` records whether the material supports the claim — `supported` / `partial` (the claim is stronger than the material) / `unsupported` / `unverified`. **A citation existing does not mean the claim is supported; if the check says otherwise, mark `unsupported`.** `basis` records how the check was made and which parts of the material were consulted. Calculations with declared inputs and definitions include `calculation` (operations: `sum`, `difference`, `product`, `ratio`, `percent-change`) plus the four definition elements: `unit`, `period`, `definition`, and `inputLocations` covering every input key; calculations missing elements are marked **pending verification** by the check entry, and mismatches are located to the claim and report page.
+- `findings`: key claims (including figures and impact judgments) mapped to sources and report pages; `locations` may list locators inside the material (e.g. `q3.pdf page 2`, `Sheet1!B3`) so reviewers can check the original; `refs` give the structured locator: `path` uses the same basis as `sources[].path` (relative to the report's directory, so reviewers can locate the material), `quote` keeps the material's original wording (never translated or paraphrased), `locator` names the position (section, line, table), and `found` honestly records whether it was located; `support` records whether the material supports the claim — `supported` / `partial` (the claim is stronger than the material) / `unsupported` / `unverified`. **A citation existing does not mean the claim is supported; if the check says otherwise, mark `unsupported`.** `basis` records how the check was made and which parts of the material were consulted. Calculations with declared inputs and definitions include `calculation` (operations: `sum`, `difference`, `product`, `ratio`, `percent-change`) plus the four definition elements: `unit`, `period`, `definition`, and `inputLocations` covering every input key; calculations missing elements are marked **pending verification** by the check entry, and mismatches are located to the claim and report page.
 - `gaps`: material and requirement gaps. `openItems`: items waiting on the user; `blocking: true` when they affect the core conclusions.
-- `checks`: per-item declarations of content (`content.*`, the eight-item checklist below), structure (`structure.*`, the five-item checklist below), and visual (`visual.pages`) verification, with status `pass` / `fail` / `not_run` / `unavailable`. **Anything not executed is `not_run`, never pass.** Reaching deliverable requires every item of all three checklists to be `pass`, and the visual item must carry page-by-page evidence covering every report page (see "Visual verification" below). Without a script, the two script-scoped items (`content.script-consistency`, `structure.length`) do not apply and need not be declared; the check entry excludes them from the coverage totals — declaring them `pass` anyway is a false checked claim and fails the program checks. Missing claim support, pending calculations, or unhashed materials downgrade the content and structure coverage so they are not shown as passed.
+- `checks`: per-item declarations of content (`content.*`, the eight-item checklist below), structure (`structure.*`, the five-item checklist below), and visual (`visual.pages`) verification, with status `pass` / `fail` / `not_run` / `unavailable`; each entry carries `id` and `status` (plus `scope` / `note`), the content / structure / visual categories are derived by the check entry from the built-in checklist ids, and a category field on the entry itself plays no part in the verdict. **Anything not executed is `not_run`, never pass.** Reaching deliverable requires every item of all three checklists to be `pass`, and the visual item must carry page-by-page evidence covering every report page (see "Visual verification" below). Without a script, the two script-scoped items (`content.script-consistency`, `structure.length`) do not apply and need not be declared; the check entry excludes them from the coverage totals — declaring them `pass` anyway is a false checked claim and fails the program checks. Missing claim support, pending calculations, or unhashed materials downgrade the content and structure coverage so they are not shown as passed.
 - `verdict.draftComplete` is `true` when the structure is complete and reviewable; `verdict.deliverable` is `true` only when content, structure, and visual verification all passed with no blocking items — otherwise leave `null` or `false`. **Draft complete is not the same as deliverable.**
 - `revision` (optional, written when maintaining after a revision): the declaration of this revision's verification updates. `basis` states how the affected scope was determined (which pages, which sources, whether script and cross-page references are involved); `rechecked` lists the check ids verified this time, each of which must have an actual result (`pass` / `fail`) in `checks`; `pending` lists the items whose affected scope could not be confirmed, each with `scope` and `reason` — the check entry keeps any record with `pending` entries from reaching deliverable and lists the pending scope in the summary. Records without `revision` (first generation, existing reports) are unaffected. See "Maintaining verification info after a revision" in the [English workflow](workflow.en.md).
 
@@ -171,7 +171,7 @@ Field semantics:
 - Write the results into the `pages` evidence of the `visual.pages` declaration, one entry per page:
 
 ```json
-{"id": "visual.pages", "kind": "visual", "status": "pass",
+{"id": "visual.pages", "status": "pass",
  "scope": "all 3 pages (rendered at 1280×720)", "note": "page-by-page render check",
  "pages": [{"page": 1, "checked": true, "issues": [], "viewport": "1280x720"},
            {"page": 2, "checked": true, "issues": []},
