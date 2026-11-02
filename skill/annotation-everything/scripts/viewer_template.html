@@ -1358,11 +1358,12 @@ async function stopLocalService(){
   const rejectedBefore=saveFailures,sharedRejectedBefore=LS.get(K.rejected,null);
   try{
     await flush();
+    const d=await getNotes();
+    if(!hasFeature(d,"stop-service")){stopServiceSupported=false;toast(tMsg("viewer.batch.stopLegacy"),8000);return}
+    // 所有等待都结束后再核对保存结果，避免身份预检期间其他标签页保存失败仍继续停止。
     if(pend.get().length||failed.get().length||saveFailures!==rejectedBefore
         ||LS.get(K.rejected,null)!==sharedRejectedBefore||mode!=="server"){
       toast(tMsg("viewer.batch.stopUnsaved"),8000);return}
-    const d=await getNotes();
-    if(!hasFeature(d,"stop-service")){stopServiceSupported=false;toast(tMsg("viewer.batch.stopLegacy"),8000);return}
     const r=await api("POST","/api/server/stop",{});
     if(r.reviewId!==RID||r.stopping!==true)throw new Error(tMsg("viewer.error.format"));
     mode="offline";occupant=null;barClosedFor="";firstPolled=true;

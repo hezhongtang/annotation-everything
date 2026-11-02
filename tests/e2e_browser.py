@@ -1759,6 +1759,41 @@ def current_task_controls_checks(browser, tmp: Path):
         if not cross_tab_blocked:
             return
         other_tab.unroute("**/api/notes", hold_other_save)
+        held_reads = []
+        read_count = 0
+
+        def hold_final_read(route):
+            nonlocal read_count
+            if route.request.method == "GET":
+                read_count += 1
+                if read_count == 2:
+                    held_reads.append((route, route.fetch()))
+                    return
+            route.continue_()
+
+        # 补传结束后的身份预检也可能让出执行；在响应回来前让另一标签页保存被拒。
+        page.route("**/api/notes", hold_final_read)
+        held_saves.clear()
+        other_tab.route("**/api/notes", hold_other_save)
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.get_by_role("button", name="Stop local service", exact=True).click()
+        ok(wait_until(lambda: bool(held_reads), page, 5), "停止服务：最终身份预检正在等待响应")
+        other_tab.bring_to_front()
+        add_note(other_tab, "synthetic rejection during final service check")
+        ok(wait_until(lambda: bool(held_saves), other_tab, 5), "停止服务：最终预检期间另一标签页正在补传")
+        held_saves[0].fulfill(status=400, json={"app": "annotation-everything", "code": "bad-note",
+                                              "error": "synthetic rejection during final service check"})
+        ok(wait_toast(other_tab, "synthetic rejection during final service check", seconds=5),
+           "停止服务：最终预检期间另一标签页保存被拒")
+        page.bring_to_front()
+        held_reads[0][0].fulfill(response=held_reads[0][1])
+        final_read_blocked = (wait_toast(page, "Some changes have not been saved", seconds=5)
+                              and server.poll() is None and not stop_requests())
+        ok(final_read_blocked, "停止服务：最终预检期间保存被拒仍保持服务运行")
+        page.unroute("**/api/notes", hold_final_read)
+        other_tab.unroute("**/api/notes", hold_other_save)
+        if not final_read_blocked:
+            return
         page.bring_to_front()
         saved_before_stop = []
         page.on("request", lambda req: saved_before_stop.append(
