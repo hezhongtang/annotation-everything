@@ -14,9 +14,10 @@ Closes #
 
 ## 验证
 
-- [ ] `python3 -m unittest discover tests`
-- [ ] 改了页面模板或服务：`uv run --no-project --with playwright python tests/e2e_browser.py`
-- [ ] 改了服务：`python3 skill/annotation-everything/scripts/serve.py check`
+<!-- 统一入口是命令与范围的唯一来源；直接命令（unittest / e2e_browser / serve.py check）只作诊断，其输出不是可复用的验证记录。 -->
+
+- [ ] 开发 / 审查：`python3 verify.py run unit-related <路径>` 完成本阶段验证并留下记录；引用已有验证时附 `python3 verify.py report --latest` 的证据链，按疑点补测点名到类 / 用例，独立复测加 `--no-reuse`
+- [ ] PR 收敛门禁：`python3 verify.py run --group all --phase pr`（完整单元 + 服务安全自检 + 完整浏览器；`pr` 阶段不引用旧证据，必须实际执行）
 - [ ] 改了 skill：已运行 `python3 ae.py install`
 - [ ] 按 AGENTS.md「README 维护」检查过中英两份 README
 

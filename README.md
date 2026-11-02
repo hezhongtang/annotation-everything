@@ -293,7 +293,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 |---|---|
 | `ae.py install` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；修复体检发现的问题（先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。四个子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
 | `update.py auto` / `check` / `now` | 在技能副本中检查正式版本并自动更新 / 只检查 / 立即检查并安装；`auto` 由技能入口触发，最多每天一次 |
-| `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照；`report` 只读记录。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
+| `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照，并把当前仍有效的通过证据跨阶段引用给后续阶段（`--no-reuse` 强制全部重跑）；`report` 只读记录并展示证据链。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
 | `build_viewer.py --report … --script … --out 审阅目录` | 生成对照页；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
 | `serve.py 审阅目录` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
 | `serve.py list` / `status` / `forget` | 列出本机所有审阅、查看某份审阅的状态、删除不再使用的台账记录 |
@@ -353,6 +353,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 ae.py                             统一管理命令：install 安装技能副本，doctor 体检，repair 修复，uninstall 卸载
 verify.py                         统一验证入口：plan 解释范围，run 执行并记录，report 只读记录
 verify_selection.py               阶段选测与影子对照策略：版本化映射、保守回退与遗漏对照
+verify_evidence.py                证据复用策略：同输入同环境且当前有效的通过记录跨阶段引用
 host_isolation.py                 同机资源隔离协议：验证参与方按共享资源互斥的锁与声明
 fixtures/sample/                   合成样例（虚构数据）
 tests/                             单元测试和浏览器端到端测试
@@ -375,6 +376,7 @@ python3 verify.py plan                                            # 统一验证
 python3 verify.py plan --phase development                        # 选测建议：当前改动该跑什么、为什么、何时回退
 python3 verify.py run                                             # 完整单元（缺省组），结束后打印摘要
 python3 verify.py run --group all                                 # 完整验收：单元 + 服务安全自检 + 浏览器
+python3 verify.py run --no-reuse                                  # 独立复测：绕过证据复用，全部实际执行
 python3 verify.py report --latest                                 # 只读最近一次记录，不启动测试
 python3 -m unittest discover tests                                   # 单元测试（只用标准库）
 uv run --no-project --with playwright python tests/e2e_browser.py   # 浏览器端到端测试（使用本机的 Google Chrome）
@@ -384,9 +386,11 @@ uv run --no-project --with playwright python tests/e2e_browser.py --list        
 uv run --no-project --with playwright python tests/e2e_browser.py --only skill-i18n # 只跑选定的浏览器场景（逗号分隔、去重；--delivery-only 等旧参数保留为别名）
 ```
 
-`verify.py` 是统一验证入口：`plan` 解释范围，`run` 执行并把结构化记录和原始日志写进 `.verify/`（已被忽略），`report` 只读记录。输入指纹包含有效输入文件的完整内容；文本与 JSON 报告保留原测试结果，并显示当前校验后的证据可用性。记录还含提交与基线、环境和逐用例耗时，字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，接入说明见 [docs/verify/onboarding.md](docs/verify/onboarding.md)。它不裁剪实际执行的组、不复用旧结果；原来的直接命令继续有效，完整执行的成功 / 失败退出码语义一致。空集合与全跳过不算通过，新入口返回 1。同机多个工作区并行验证时，资源敏感的组（完整单元、完整浏览器、敏感模块直跑）按共享资源自动互斥排队：跨 worktree 与独立 checkout 生效，锁等待单独计时、超时不算通过，纯逻辑组不受影响；详见[同机资源隔离协议](docs/verify/isolation.md)。
+`verify.py` 是统一验证入口：`plan` 解释范围，`run` 执行并把结构化记录和原始日志写进 `.verify/`（已被忽略），`report` 只读记录。输入指纹包含有效输入文件的完整内容；文本与 JSON 报告保留原测试结果，并显示当前校验后的证据可用性。记录还含提交与基线、环境和逐用例耗时，字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，接入说明见 [docs/verify/onboarding.md](docs/verify/onboarding.md)。它不裁剪实际执行的组；原来的直接命令继续有效，完整执行的成功 / 失败退出码语义一致。空集合与全跳过不算通过，新入口返回 1。同机多个工作区并行验证时，资源敏感的组（完整单元、完整浏览器、敏感模块直跑）按共享资源自动互斥排队：跨 worktree 与独立 checkout 生效，锁等待单独计时、超时不算通过，纯逻辑组不受影响；详见[同机资源隔离协议](docs/verify/isolation.md)。
 
 阶段选测与影子对照默认开启：`run` 依据版本化的映射（`verify_selection.py`）记录「当前改动建议跑什么」，实际执行仍是请求的完整门禁；结束时把建议范围与实际结果并列对照，完整检查发现而建议范围没覆盖的失败保留为候选遗漏并归因。未知路径、坏基线、损坏规则、测试清单缺口和策略自身变化一律保守回退完整检查并解释原因。`issue` 阶段不自动启动测试，缺陷复现显式请求相关组。策略、回退情形与对照样本见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md)。
+
+有效验证证据跨阶段引用（`verify_evidence.py`，判定从紧）：同一逻辑工作会话内，同输入指纹、同环境、请求范围被已验证范围覆盖，且来源记录当前校验后仍可作为通过证据、未超 24 小时保鲜窗口、版本一致时，`run` 在 `issue` / `development` / `review` / `manual` 阶段直接引用已有结果。会话身份只保存摘要，优先使用 `AE_VERIFY_SESSION`，其次继承 `CODEX_THREAD_ID` / `CLAUDE_SESSION_ID`；无法确认身份时实际执行，终端设置方式见[接入说明](docs/verify/onboarding.md)。报告列出来源 run、指纹、范围、环境与理由（差异被证明仅在文档允许列表内时不算输入变化；覆盖映射下停用该放宽）；依赖宿主机状态的组（完整单元、完整浏览器、敏感模块直跑）指纹相同也不复用，`pr` / `ci` 门禁阶段必须实际执行，点名到类 / 用例的补测不复用。被引用的组显示为「引用已有验证」，不重复计入通过数量；来源被篡改、超期或失效时，完整性和影子结论同步降级为不可用。`--no-reuse` 强制全部重跑。
 
 浏览器端到端测试按场景注册执行：无参数跑全部注册场景；`--list` 列出场景清单，`--only 场景1,场景2` 去重后只跑目标场景及其声明的准备步骤，未知、空或冲突的选择在启动浏览器前报错。场景注册表、旧参数别名与新增场景的接入规则见 [docs/verify/browser-scenarios.md](docs/verify/browser-scenarios.md)。
 
