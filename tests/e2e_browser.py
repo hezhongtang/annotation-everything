@@ -2551,8 +2551,12 @@ def server_mode_checks(browser, tmp: Path):
                          condition="断线暂存的两条批注补传落盘")
     dels = [n for n in disk_notes(sdir) if n["text"] == "删"]
     ok(flushed and "已连接" in page.inner_text("#mode"), f"服务恢复后补传，同文不同标点两条都在（{len(dels)} 条）")
-    last = json.loads((sdir / "handoff.json").read_text())["items"][-1]
-    ok(last["seq"] == 2 and last["status"] == "pending" and {n["id"] for n in dels} <= set(last["openIds"]),
+    def queued_handoff_saved():
+        last = json.loads((sdir / "handoff.json").read_text())["items"][-1]
+        return (last["seq"] == 2 and last["status"] == "pending"
+                and {n["id"] for n in dels} <= set(last["openIds"]))
+
+    ok(wait_until(queued_handoff_saved, page, 8, condition="批注补传后的提交快照包含这两条批注"),
        "暂存的「交给 Agent」在批注补传之后才提交（提交快照里包含这两条）")
     # 处理记录：用户展开的批次在状态变化重绘后仍展开
     page.keyboard.press("Escape")
