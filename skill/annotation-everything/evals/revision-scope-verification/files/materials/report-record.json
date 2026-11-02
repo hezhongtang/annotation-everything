@@ -1,0 +1,223 @@
+{
+  "schema": "ae-report-record/1",
+  "generatedAt": "2026-11-02T09:00:00+08:00",
+  "request": {
+    "purpose": "三季度经营回顾",
+    "audience": "公司管理层",
+    "coreQuestions": [
+      "三季度收入表现如何",
+      "收入结构有什么变化"
+    ],
+    "length": "3 页",
+    "script": "yes"
+  },
+  "sources": [
+    {
+      "path": "q3-notes.md",
+      "status": "read",
+      "coverage": "全文",
+      "sha256": "REPLACE_MATERIAL_SHA",
+      "note": ""
+    }
+  ],
+  "method": {
+    "kind": "builtin",
+    "name": "annotation-everything 内置范式",
+    "version": "0.9.0",
+    "unavailable": []
+  },
+  "links": {
+    "report": "report.html",
+    "script": "script.md",
+    "sha256": {
+      "report": "REPLACE_REPORT_SHA",
+      "script": "REPLACE_SCRIPT_SHA"
+    },
+    "sourceNote": "q3-notes.md（报告同目录）及同目录讲稿"
+  },
+  "findings": [
+    {
+      "claim": "三季度收入同比增长 12%",
+      "type": "calculation",
+      "sources": [
+        "q3-notes.md"
+      ],
+      "pages": [
+        "sum"
+      ],
+      "refs": [
+        {
+          "path": "materials/q3-notes.md",
+          "locator": "§ 收入",
+          "quote": "上年同期 100 万元",
+          "found": true
+        }
+      ],
+      "support": "supported",
+      "basis": "上年同期取材料原文；本期 112 万元来自交付时与用户确认的对话口径，材料当时为旧版",
+      "calculation": {
+        "op": "percent-change",
+        "inputs": {
+          "a": 100,
+          "b": 112
+        },
+        "expected": 12,
+        "unit": "万元",
+        "period": "2025Q3 对 2024Q3",
+        "definition": "对上年同期收入的增长百分比",
+        "inputLocations": {
+          "a": "materials/q3-notes.md § 收入：上年同期 100 万元",
+          "b": "交付时对话确认的 112 万元（材料旧版）"
+        }
+      },
+      "note": "初稿交付时与用户确认过的口径"
+    },
+    {
+      "claim": "外卖渠道占比 38%，同比继续上升",
+      "type": "fact",
+      "sources": [
+        "q3-notes.md"
+      ],
+      "pages": [
+        "rev"
+      ],
+      "refs": [
+        {
+          "path": "materials/q3-notes.md",
+          "locator": "§ 渠道结构",
+          "quote": "外卖渠道占比 38%",
+          "found": true
+        }
+      ],
+      "support": "supported",
+      "basis": "38% 与上升方向取材料原文；「同比」说法为交付时与用户确认的沿用口径",
+      "note": ""
+    }
+  ],
+  "gaps": [],
+  "checks": [
+    {
+      "id": "content.requirements",
+      "kind": "content",
+      "status": "pass",
+      "scope": "两项核心问题与篇幅、讲稿需求",
+      "note": "核心问题逐页回应；3 页；有讲稿"
+    },
+    {
+      "id": "content.claims",
+      "kind": "content",
+      "status": "pass",
+      "scope": "两项关键结论",
+      "note": "结论均有 refs 与 support"
+    },
+    {
+      "id": "content.fact-vs-inference",
+      "kind": "content",
+      "status": "pass",
+      "scope": "全部结论页",
+      "note": "无推断当事实"
+    },
+    {
+      "id": "content.units-dates",
+      "kind": "content",
+      "status": "pass",
+      "scope": "全部数字",
+      "note": "单位万元、期间三季度"
+    },
+    {
+      "id": "content.numbers-charts",
+      "kind": "content",
+      "status": "pass",
+      "scope": "数字与表格",
+      "note": "表格数字与正文一致"
+    },
+    {
+      "id": "content.cross-page",
+      "kind": "content",
+      "status": "pass",
+      "scope": "全部页",
+      "note": "无跨页矛盾"
+    },
+    {
+      "id": "content.script-consistency",
+      "kind": "content",
+      "status": "pass",
+      "scope": "报告与讲稿逐页",
+      "note": "两侧数字与说法一致"
+    },
+    {
+      "id": "content.open-questions",
+      "kind": "content",
+      "status": "pass",
+      "scope": "openItems",
+      "note": "无未解决问题"
+    },
+    {
+      "id": "structure.flow",
+      "kind": "structure",
+      "status": "pass",
+      "scope": "全部页",
+      "note": "先结论后结构再下一步"
+    },
+    {
+      "id": "structure.headings",
+      "kind": "structure",
+      "status": "pass",
+      "scope": "全部页",
+      "note": "标题与内容匹配"
+    },
+    {
+      "id": "structure.claim-support",
+      "kind": "structure",
+      "status": "pass",
+      "scope": "结论页",
+      "note": "结论带 ae-source"
+    },
+    {
+      "id": "structure.dup-gaps",
+      "kind": "structure",
+      "status": "pass",
+      "scope": "全部页",
+      "note": "无重复与缺口"
+    },
+    {
+      "id": "structure.length",
+      "kind": "structure",
+      "status": "pass",
+      "scope": "篇幅与讲稿时长",
+      "note": "3 页，讲稿约 2.5 分钟"
+    },
+    {
+      "id": "visual.pages",
+      "kind": "visual",
+      "status": "pass",
+      "scope": "全部 3 页（1280×720 实际渲染）",
+      "note": "逐页渲染检查",
+      "pages": [
+        {
+          "page": 1,
+          "checked": true,
+          "issues": [],
+          "viewport": "1280x720"
+        },
+        {
+          "page": 2,
+          "checked": true,
+          "issues": [],
+          "viewport": "1280x720"
+        },
+        {
+          "page": 3,
+          "checked": true,
+          "issues": [],
+          "viewport": "1280x720"
+        }
+      ]
+    }
+  ],
+  "openItems": [],
+  "verdict": {
+    "draftComplete": true,
+    "deliverable": true
+  }
+}
