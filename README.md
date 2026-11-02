@@ -109,7 +109,9 @@ Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lan
 
 目前支持简体中文与英文。英文地区标签共用英文资源；`zh` / `zh-Hans` 映射到简体中文，不承诺繁体或其他语言。浏览器保存的选择优先于审阅默认值，`auto` 按浏览器语言偏好顺序匹配、不支持时回退英文。省略设置的新审阅和旧命令保持中文。界面、材料和批注语言相互独立，切换语言保留草稿与待补传改动。
 
-服务模式可以实际提交，由已启动的等待机制或钩子接收；是否自动唤醒 Agent 取决于宿主支持。直接打开 `index.html` 时，只提供浏览器批注、复制和导出，需导入后交给 Agent。JSON 保留完整批注结构与审阅身份；Markdown 不保留 id、页面键、时间戳或处理批次，并有旧文法的文本限制，详见[格式说明](skill/annotation-everything/references/formats.md)。[交付验收记录](docs/locale-delivery.zh-CN.md)列出三种语言组合的完整流程、兼容矩阵、验证环境与限制。
+服务模式可以实际提交，由已启动的等待机制或钩子接收；是否自动唤醒 Agent 取决于宿主支持。Codex 桌面可由 Agent 运行 `wakeup.py bind 审阅目录` 保存当前聊天绑定；此后正常启动或重启 `serve.py` 都会恢复事件接入。页面区分“已投递”和“聊天已确认接手”，用户无需修改 Codex 配置。适配边界与空闲验收见[Agent 机制](skill/annotation-everything/references/agent-mechanisms.zh-CN.md#codex-桌面审阅级事件接入)。直接打开 `index.html` 时，只提供浏览器批注、复制和导出，需导入后交给 Agent。JSON 保留完整批注结构与审阅身份；Markdown 不保留 id、页面键、时间戳或处理批次，并有旧文法的文本限制，详见[格式说明](skill/annotation-everything/references/formats.md)。[交付验收记录](docs/locale-delivery.zh-CN.md)列出三种语言组合的完整流程、兼容矩阵、验证环境与限制。
+
+[Codex 空闲唤醒验收](docs/codex-delivery.zh-CN.md)记录隔离合成网页的两次真实空闲提交、普通重启恢复及适配限制。
 
 ## 工作原理
 
@@ -286,6 +288,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `serve.py 审阅目录` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
 | `serve.py list` / `status` / `forget` | 列出本机所有审阅、查看某份审阅的状态、删除不再使用的台账记录 |
 | `serve.py check` | 运行服务安全自检 |
+| `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | 保存审阅级 Codex 聊天绑定、检查投递、确认实际接手或解除绑定；普通服务重启恢复接入，不创建定时任务或修改 Codex 配置 |
 | `notes.py wait` / `claim` | 等待审阅人提交，或直接接收已有的提交。`wait --locale` 选择交接语言，保留定位、操作与技能要求；`claim` 输出的 JSON 保持原始值 |
 | `notes.py show` / `resolve` / `reopen` | 列出批注、标为已处理、重新打开。`show --locale` 选择阅读语言，优先于 `AE_LOCALE` 和审阅设置；`show --json` 仍导出原始值 |
 | `notes.py export` / `import` | 导出可再导入的批注摘要（Markdown 带版本与语言标记，或 JSON 结构化备份）／导入页面导出的 JSON 或 Markdown。`export --lang` 与 `show --locale` 同一套优先级，`--format json`、`--all`、`--page N`、`--out 文件` |
@@ -328,6 +331,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── i18n.py                    读取共享词典，并按所选语言插值
 │   ├── viewer_template.html       对照页模板（服务模式和本地文件模式）
 │   ├── serve.py                   本机服务：serve / status / list / forget / check
+│   ├── wakeup.py                  Codex 桌面事件接入：持久绑定、投递、回执与去重
 │   ├── notes.py                   批注命令行：wait / show / resolve / done / review 等
 │   ├── notes_store.py             批注存储：原子写入、文件锁、操作日志
 │   ├── export_format.py           批注交换格式：带标记的 Markdown 文法与 JSON 备份

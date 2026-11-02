@@ -41,6 +41,7 @@ import export_format as ef  # noqa: E402
 import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
+import wakeup  # noqa: E402
 from build_viewer import (FIELD_LABEL, field_name, find_pages, page_heads,  # noqa: E402
                           resolve_sources, strip_tags, write_private)
 import difflib  # noqa: E402
@@ -952,6 +953,11 @@ def main(argv: list[str] | None = None) -> int:
                or t("cli.skills.alwaysNone")))
         return 0
     if a.cmd == "claim":
+        try:
+            wakeup.assert_claim_owner(d)
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
         item = store.handoff_claim(d, by=a.by, stage=a.stage, seq=a.seq)
         if item is None:
             print(json.dumps({"claimed": False}, ensure_ascii=False))
@@ -1157,6 +1163,14 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     """阻塞等待「交给 Agent」提交。已经在等待中的提交（之前没人接收）会立即返回。"""
     t = cli_text(lang)
     sep = t("cli.hand.itemSep")
+    if claim:
+        try:
+            if wakeup.load_binding(d):
+                print(t("cli.hand.eventWaitRefused"), file=sys.stderr)
+                return 2
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
     state = store.handoff_state(d, full=False)
     if state.get("claimed") or state.get("reviewing"):
         print(t("cli.hand.waitHint", count=state.get("claimed", 0) + state.get("reviewing", 0)), file=sys.stderr)

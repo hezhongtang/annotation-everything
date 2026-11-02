@@ -22,3 +22,5 @@ Generate a local review page → start its service → wait for a submission →
 - **English requests**: read [Agent mechanisms](references/agent-mechanisms.en.md) before configuring a waiter, invoking annotation skills, delegating work, or choosing a `--by` name.
 
 Load only the matching language reference. The shared protocol still governs permissions and stage boundaries.
+
+Codex 桌面接入与服务重启：首次配置自动接收时，读取匹配语言的 Agent 机制中的持久绑定流程；先验证空闲会话实际接手，再宣布自动处理可用。Codex desktop delivery and service restarts: follow the persistent binding procedure in the matching Agent mechanisms reference; verify receipt by an idle chat before declaring automatic processing ready.
