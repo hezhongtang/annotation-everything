@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 4
+STRATEGY_VERSION = 5
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -106,8 +106,10 @@ SELECTION_RULES = (
                    "tests/test_locale_loop.py", "tests/test_export_format.py",
                    "tests/test_skill_discovery.py", "tests/test_review_page_skills_i18n.py",
                    "tests/test_report_check.py", "tests/test_report_generation_resources.py",
-                   "tests/test_report_reading.py", "tests/test_report_structure_visual.py"),
-        scenarios=("full-check", "locale-loop", "generated-draft-loop"),
+                   "tests/test_report_reading.py", "tests/test_report_structure_visual.py",
+                   "tests/test_report_revision.py"),
+        scenarios=("full-check", "locale-loop", "generated-draft-loop",
+                   "revision-update-loop", "legacy-report-compat"),
         serve_check=True,
         why="审阅协议、共享存储与报告产物核验是服务/产物边界，变更必须带上服务安全自检",
     ),
