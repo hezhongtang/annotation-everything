@@ -1338,6 +1338,18 @@
     "check.err.visualBadNotList": "visual.pages in checks should be a non-empty list of per-page evidence",
     "check.err.visualBadEntry": "each page entry needs page (integer) and checked (boolean); issues, when present, must be a list of non-empty strings",
     "check.err.visualDupPages": "duplicate evidence entries for pages: {pages}",
-    "check.err.lengthMismatch": "the report has {actual} pages, but the recorded length constraint is {expected} pages — fix the report or update the recorded constraint, then re-run this check"
+    "check.err.lengthMismatch": "the report has {actual} pages, but the recorded length constraint is {expected} pages — fix the report or update the recorded constraint, then re-run this check",
+    "check.item.record.method": "generation method declaration (kind, name, external invocation evidence)",
+    "check.err.methodUnknown": "record method.kind is {kind}; the actually used generation method cannot be proven (kind is {supported})",
+    "check.err.methodMissing": "record method is missing {field} — the generation method actually used must be named",
+    "check.err.methodBad": "record method fields have invalid types: {fields} (version / requested / note / invocation are non-empty strings, unavailable is a list of non-empty strings)",
+    "check.err.methodInvocation": "external generation method {name} has no invocation description (method.invocation) — a scanned candidate or a mentioned name is not evidence it was used",
+    "check.warn.methodNoVersion": "external generation method {name} has no version information recorded; add method.version when available",
+    "check.method.line": "Generation method: {name} ({kind})",
+    "check.method.kind.builtin": "built-in paradigm",
+    "check.method.kind.external": "external skill",
+    "check.method.requested": "the user-specified generation method \"{requested}\" was not the one actually used ({note})",
+    "check.method.noReason": "no reason given",
+    "check.method.unavailable": "method capability gaps: {items}"
   }
 }

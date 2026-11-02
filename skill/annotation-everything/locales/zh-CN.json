@@ -1228,6 +1228,18 @@
     "check.err.visualBadNotList": "checks 里 visual.pages 的 pages 应该是非空的逐页证据列表",
     "check.err.visualBadEntry": "每页证据需要 page（整数）与 checked（布尔），issues 存在时须为非空字符串列表",
     "check.err.visualDupPages": "同一页有多条证据：{pages}",
-    "check.err.lengthMismatch": "报告共 {actual} 页，需求记录的篇幅约束是 {expected} 页——先改报告或更新需求记录，再重新核验"
+    "check.err.lengthMismatch": "报告共 {actual} 页，需求记录的篇幅约束是 {expected} 页——先改报告或更新需求记录，再重新核验",
+    "check.item.record.method": "生成方法声明（kind、name、外部调用依据）",
+    "check.err.methodUnknown": "记录的 method.kind 是 {kind}，无法证明实际生成方法（kind 用 {supported}）",
+    "check.err.methodMissing": "记录的 method 缺少 {field}——实际采用的生成方法必须写明名称",
+    "check.err.methodBad": "记录的 method 字段类型无效：{fields}（version / requested / note / invocation 用非空字符串，unavailable 用非空字符串列表）",
+    "check.err.methodInvocation": "外部生成方法 {name} 缺实际调用说明（method.invocation）——扫描到候选或名称出现不算已采用",
+    "check.warn.methodNoVersion": "外部生成方法 {name} 没有记录版本信息，可得时写进 method.version",
+    "check.method.line": "生成方法：{name}（{kind}）",
+    "check.method.kind.builtin": "内置范式",
+    "check.method.kind.external": "外部技能",
+    "check.method.requested": "用户指定的生成方法「{requested}」未被实际采用（{note}）",
+    "check.method.noReason": "未说明原因",
+    "check.method.unavailable": "方法能力缺口：{items}"
   }
 }
