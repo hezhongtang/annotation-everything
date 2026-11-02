@@ -292,6 +292,94 @@ class ScriptCorrespondenceTests(unittest.TestCase):
         self.assertEqual(check_by_id(payload, "script.pages")["status"], "fail")
 
 
+class ScriptDeclarationConsistencyTests(unittest.TestCase):
+    """记录声明讲稿哈希与核验调用输入的一致性（规格 #69 审查 P2-1）。
+
+    记录在 links.sha256.script 里声明了讲稿哈希，就是声明了「讲稿」这份产物；
+    核验调用漏传 --script 时，讲稿哈希不比对、逐页对应不查、讲稿关联检查不计入
+    覆盖总数，其余全部通过后可交付判定就静默成立。语义决策：已声明产物的检查
+    没有执行 → 拦可交付（不拦初稿），原因进 verdict.reasons，摘要给出显式警告；
+    没有声明哈希、真无讲稿的既有适用性规则不变。讲稿关联两项声明了 pass 而无讲稿
+    的既有程序失败规则（record.check-not-applicable）保持原样。
+    """
+
+    @staticmethod
+    def declared_script_record(*, with_scoped: bool) -> dict:
+        """声明讲稿哈希的可交付形态记录；with_scoped 控制 checks 是否声明讲稿关联两项。"""
+        checks = [c for c in all_checks("pass")
+                  if with_scoped or c["id"] not in rc.SCRIPT_SCOPED_CHECKS]
+        return compliant_record(checks=checks)
+
+    def test_declared_script_hash_without_script_blocks_deliverable(self):
+        """核心静默场景：讲稿哈希已声明、讲稿关联两项未声明，其余全 pass——
+        修复前其余 pass 后可交付静默成立；修复后拦可交付并显式警告。"""
+        d = tmpdir()
+        paths = write_case(d, script=None,
+                           record=self.declared_script_record(with_scoped=False))
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0, "讲稿缺失拦可交付判定，不是程序检查失败")
+        self.assertFalse(payload["verdict"]["deliverable"],
+                         "声明了讲稿哈希而未收到讲稿：已声明产物的检查未执行")
+        self.assertTrue(payload["verdict"]["draftComplete"], "拦可交付，不拦初稿")
+        reasons = "；".join(payload["verdict"]["reasons"])
+        self.assertIn("讲稿", reasons, payload["verdict"]["reasons"])
+        self.assertTrue(any("讲稿" in w for w in payload["warnings"]),
+                        payload["warnings"])
+        _, _, summary, _ = run_check(paths, locale="zh-CN")
+        self.assertIn("讲稿", summary, "可读摘要里要有显式警告")
+        self.assertIn("报告可交付：否", summary)
+        self.assertIn("初稿生成：已完成", summary)
+
+    def test_declared_scoped_pass_still_fails_with_warning(self):
+        """讲稿关联两项声明 pass 而无讲稿：既有程序失败规则不动，另给显式警告。"""
+        d = tmpdir()
+        paths = write_case(d, script=None,
+                           record=self.declared_script_record(with_scoped=True))
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        self.assertFalse(payload["verdict"]["deliverable"])
+        self.assertEqual(check_by_id(payload, "record.checks")["code"],
+                         "record.check-not-applicable")
+        self.assertTrue(any("讲稿" in w for w in payload["warnings"]),
+                        payload["warnings"])
+
+    def test_declared_script_hash_warning_is_localized(self):
+        """核心静默场景在英文下同样拦可交付并给出英文警告。"""
+        d = tmpdir()
+        paths = write_case(d, script=None,
+                           record=self.declared_script_record(with_scoped=False))
+        code, payload, _, _ = run_check(paths, locale="en", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        self.assertFalse(payload["verdict"]["deliverable"])
+        self.assertTrue(any("script" in w.lower() for w in payload["warnings"]),
+                        payload["warnings"])
+        self.assertTrue(any("script" in r.lower() for r in payload["verdict"]["reasons"]),
+                        payload["verdict"]["reasons"])
+
+    def test_undeclared_no_script_keeps_applicability_rules(self):
+        """真无讲稿（无哈希声明）：适用性规则不变，可交付判定照常成立。"""
+        d = tmpdir()
+        record = compliant_record(
+            request={"purpose": "季度经营汇报", "audience": "管理层",
+                     "coreQuestions": ["三季度收入为什么增长"], "length": "2 页",
+                     "script": "no"},
+            links={"report": "report.html", "script": None,
+                   "sha256": {"report": sha(REPORT), "script": None},
+                   "sourceNote": "materials/q3-notes.md"},
+            checks=[c for c in all_checks("pass")
+                    if c["id"] not in rc.SCRIPT_SCOPED_CHECKS])
+        paths = write_case(d, script=None, record=record)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(check_by_id(payload, "script.pages")["status"], "not_applicable")
+        self.assertEqual(payload["coverage"]["content"], "covered",
+                         "讲稿关联项不计入覆盖总数的规则不变")
+        self.assertTrue(payload["verdict"]["deliverable"],
+                        "无声明、真无讲稿的可交付判定不受影响")
+        self.assertFalse(any("讲稿" in w for w in payload["warnings"]),
+                         "真无讲稿不产生讲稿声明警告")
+
+
 class RecordStructureTests(unittest.TestCase):
     """损坏记录、未知版本与缺失字段的明确报错。"""
 

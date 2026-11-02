@@ -300,6 +300,19 @@ def check_freshness(record: dict | None, report_bytes: bytes, script_bytes: byte
     return True
 
 
+def script_declared_but_missing(record: dict | None, script_present: bool) -> bool:
+    """记录声明了讲稿哈希而核验调用未收到讲稿文件（#69 审查 P2-1）。
+
+    links.sha256.script 是对「讲稿」这份产物的声明；声明了而本次核验没有输入，
+    讲稿哈希比对与逐页对应都没有执行——已声明产物的检查缺席，拦可交付并显式
+    警告。没有声明哈希、真无讲稿的适用性规则（SCRIPT_SCOPED_CHECKS 不计入
+    覆盖总数）不受影响。"""
+    if record is None or script_present:
+        return False
+    script_hash = record["links"]["sha256"].get("script")
+    return isinstance(script_hash, str) and bool(script_hash.strip())
+
+
 def check_page_refs(record: dict | None, pages: list[dict], c: Checks) -> bool:
     if record is None:
         return True
@@ -987,6 +1000,9 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
             coverage[kind] = cap
     declared = None if record is None else record["verdict"].get("deliverable")
     declared = declared if isinstance(declared, bool) else None
+    # 记录声明了讲稿哈希而核验未收到讲稿（#69 审查 P2-1）：讲稿检查缺席，
+    # 不能沿用「其余检查都通过」的支持去成立可交付；显式警告在检查阶段给出。
+    script_missing = script_declared_but_missing(record, script_present)
     deliverable = draft_complete and record is not None and fresh and record_ok \
         and not failed_program
     if deliverable:
@@ -1003,6 +1019,10 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
             # 改稿待核验项（#75 决策 8）：影响范围没有确认之前，不沿用可交付判定。
             if deliverable and revision and revision.get("pending"):
                 deliverable = False
+            # 声明讲稿哈希而未收到讲稿：已声明产物的检查未执行，拦可交付。
+            if deliverable and script_missing:
+                deliverable = False
+                reasons.append(t(checks.locale, "check.reason.scriptDeclaredMissing"))
         else:
             not_run = [k for k, v in coverage.items() if v != "covered"]
             reasons.append(t(checks.locale, "check.reason.notRun",
@@ -1119,6 +1139,8 @@ def check_report(report_path: Path, script_path: Path | None = None,
         check_record_visual(record, pages, c)
         check_record_length(record, pages, c)
         revision = check_record_revision(record, c)
+        if script_declared_but_missing(record, script_text is not None):
+            c.add_warning("check.warn.scriptDeclaredMissing")
     result = summarize(record, fresh, c, draft_ok, record_ok, claims_info=claims_info,
                        calc_pending=calc_pending, source_stale=source_stale, reading=reading,
                        script_present=script_text is not None, revision=revision)
