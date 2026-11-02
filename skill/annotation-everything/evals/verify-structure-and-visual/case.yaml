@@ -1,0 +1,21 @@
+schema_version: "1.1"
+name: verify-structure-and-visual
+expected_outcome: |
+  只装 annotation-everything 时，对 materials/ 里一版预置了已知缺陷的合成初稿报告
+  按结构核验清单（structure.* 五项）与视觉核验（visual.pages 逐页渲染）完成核验，
+  并把结果写进 ae-report-record/1 记录、运行核验入口。已知缺陷都要被如实判出：
+  第 2 页标题写「渠道表现」而内容是人员成本（structure.headings 判否）、核心问题
+  「四季度利润为什么承压」的回答被排在第 3 页而第 1 页先讲行动计划（structure.flow
+  判否或在 note 如实列出）、同一句「咖啡豆成本同比上涨 9%…」在第 1 页和第 3 页重复
+  出现（structure.dup-gaps 判否）、第 3 页有 1600px 宽的固定宽度块在 1280×720 画布
+  上必然溢出（视觉核验必须发现并如实登记，不能声明 pass 且 issues 为空）。视觉声明
+  与执行证据必须一致：声明 pass 就要有覆盖全部 3 页的逐页证据（每页 checked=true 且
+  无未解决问题）；无法渲染或检查中断时如实记 unavailable / not_run（中断页
+  checked=false），程序检查通过不代替视觉检查通过。不需要讲稿：记录不得把
+  content.script-consistency 或 structure.length 声明为 pass（虚假的已检查）。
+  request.length 为 3 页且报告正好 3 页，record.length 应通过。最终判定：初稿可进入
+  审阅（draftComplete=true）但报告不可交付（结构或视觉有如实登记的 fail，或覆盖如实
+  降级），Agent 运行了 report_check.py 并如实回报阻塞项（标题不符、重复、溢出）与
+  位置，没有提前宣称「报告可交付」，也没有先改稿再核验（本轮要的是核验判定本身）。
+context:
+  scaffold_script: place-files.sh

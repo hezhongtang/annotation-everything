@@ -1170,7 +1170,7 @@
     "check.reason.blocking": "记录中有交付阻塞事项：{items}",
     "check.reason.declaredNo": "记录自身未声明可交付",
     "check.reason.recordChecks": "记录的检查集合不完整或包含无法识别的检查",
-    "check.next": "下一步：完成记录中未执行的内容与视觉核验并更新记录后重新运行本检查；初稿可直接进入对照页审阅。",
+    "check.next": "下一步：完成记录中未执行的内容、结构与视觉核验并更新记录后重新运行本检查；初稿可直接进入对照页审阅。",
     "check.next.blocked": "下一步：先解决初稿生成的结构问题，再进入审阅。",
     "check.err.recordBroken": "记录不是合法 JSON：{reason}",
     "check.err.recordVersionUnknown": "不支持的记录版本 {version}（本工具支持 {supported}）",

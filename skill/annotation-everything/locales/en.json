@@ -1280,7 +1280,7 @@
     "check.reason.blocking": "The record lists delivery-blocking items: {items}",
     "check.reason.declaredNo": "The record itself does not declare the report deliverable",
     "check.reason.recordChecks": "The record's check set is incomplete or contains unrecognized checks",
-    "check.next": "Next: run the content and visual checks not yet executed, update the record, then re-run this check; the draft can go straight into the review page.",
+    "check.next": "Next: run the content, structure, and visual checks not yet executed, update the record, then re-run this check; the draft can go straight into the review page.",
     "check.next.blocked": "Next: resolve the structural problems above before review.",
     "check.err.recordBroken": "Record is not valid JSON: {reason}",
     "check.err.recordVersionUnknown": "Unsupported record version {version} (this tool supports {supported})",
