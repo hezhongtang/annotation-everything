@@ -2,7 +2,7 @@
 
 Read [Shared safety and protocol](protocol.md) before acting. `$S` is the `scripts/` directory in the loaded skill copy. `$R` is the chosen review directory. Use absolute paths when invoking commands from another directory.
 
-Pick the entry point by request: **generate a new report from raw material** (the user supplies material and a request; no report exists yet) — read [Report generation: default paradigm](generation.en.md) first, then continue from section 2 below once the draft and its verification are done; **review an existing report** starts at section 1; **apply annotations** starts at section 3; for an **explicitly requested full verification** run `report_check.py` on the complete artifact set (see step 5 of the generation guide), and never treat annotation-processing status as the report's quality verdict.
+Pick the entry point by request: **generate a new report from raw material** (the user supplies material and a request; no report exists yet) — read [Report generation: default paradigm](generation.en.md) first, then continue from section 2 below once the draft and its verification are done; **review an existing report** starts at section 1; **apply annotations** starts at section 3; for an **explicitly requested full verification** run `report_check.py` on the complete artifact set (see step 5 of the generation guide), and never treat annotation-processing status as the report's quality verdict. The generation entry uses the built-in paradigm by default; when the user names an external generation skill, see "Generation method: built-in paradigm and external generation skills" in the generation guide for the selection and integration rules.
 
 ## 1. Find the review and select a language
 

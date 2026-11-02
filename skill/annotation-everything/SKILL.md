@@ -10,8 +10,8 @@ Generate a report draft from raw material (default paradigm) or a local review p
 先按用户请求的语言选择操作指引。Choose the workflow from the user's request language, independently of the material language or the page's display language.
 
 1. **两种语言都先读 / Always read** [共用安全与协议约束 / Shared safety and protocol](references/protocol.md). This is the single source for safety, permissions, stop conditions, and compatibility rules.
-2. **中文请求**：读取[中文操作流程](references/workflow.zh-CN.md)，只加载本次需要的格式参考。要从原始材料生成新报告时，再读[报告生成：默认范式](references/generation.zh-CN.md)。
-3. **English requests**: read the [English workflow](references/workflow.en.md). Load the [English format reference](references/formats.en.md) when checking inputs, importing annotations, or reading structured fields. To generate a new report from raw material, also read [Report generation: default paradigm](references/generation.en.md).
+2. **中文请求**：读取[中文操作流程](references/workflow.zh-CN.md)，只加载本次需要的格式参考。要从原始材料生成新报告时，再读[报告生成：默认范式](references/generation.zh-CN.md)——生成方法的选择（内置范式或外部生成技能）与接入约定也在其中。
+3. **English requests**: read the [English workflow](references/workflow.en.md). Load the [English format reference](references/formats.en.md) when checking inputs, importing annotations, or reading structured fields. To generate a new report from raw material, also read [Report generation: default paradigm](references/generation.en.md) — it also covers choosing the generation method (built-in paradigm or an external generation skill) and the integration rules.
 4. Read one workflow per request. If the user explicitly requests another language, use that workflow. Do not load both complete workflows by default.
 
 `$S` in the guides means the `scripts/` directory beside this installed `SKILL.md`. Resolve it from the skill copy that was loaded. The scripts use the Python standard library. Both languages use the same installation, scripts, translation resources, review identity, and storage protocol.
