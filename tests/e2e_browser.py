@@ -2520,7 +2520,7 @@ def revision_update_checks(browser, tmp: Path):
     # ── 改数字（源文件+讲稿同步）：旧可交付判定失效 ──
     write_report(write_body(v12="15%"))
     script.write_text(script_md.replace("同比增长 12%", "同比增长 15%"), encoding="utf-8")
-    checked = run_check()
+    checked = run_check(expect=1)
     ok(checked["verdict"]["deliverable"] is False, "改数字后旧的可交付判定不再有效")
     ok(checked["record"]["fresh"] is False and checked["coverage"]["content"] == "unverified",
        f"记录对不上当前产物（fresh={checked['record']['fresh']}，"
@@ -2547,7 +2547,7 @@ def revision_update_checks(browser, tmp: Path):
 
     # ── 来源变动：材料哈希不符 → unverified ──
     material.write_text(material_text.replace("112", "119"), encoding="utf-8")
-    checked = run_check()
+    checked = run_check(expect=1)
     ok(checked["verdict"]["deliverable"] is False, "来源变动后旧结论不能为新材料背书")
     ok(checked["coverage"]["content"] == "unverified",
        f"来源变动的覆盖降级（{checked['coverage']['content']}）")
@@ -2555,7 +2555,7 @@ def revision_update_checks(browser, tmp: Path):
 
     # ── 只改样式：真实渲染重测视觉证据后按范围恢复，内容类覆盖保留 ──
     write_report(write_body(v12="15%"), style_extra=" .page{padding:80px}")
-    checked = run_check()
+    checked = run_check(expect=1)
     ok(checked["verdict"]["deliverable"] is False, "改样式后同样需要维护核验记录")
     style_evidence = render_evidence()
     ok(all(not e["issues"] for e in style_evidence),
@@ -2591,8 +2591,10 @@ def revision_update_checks(browser, tmp: Path):
     reasons = "；".join(checked["verdict"]["reasons"])
     ok("第 2 页图表与讲稿对应说法" in reasons and "边距变化是否影响表格可读无法确认" in reasons,
        f"待核验范围与原因写入判定原因（{reasons}）")
-    _, _, summary, _ = run_check()
-    ok("待核验" in summary and "第 2 页图表" in summary, "摘要如实披露待核验范围")
+    summary_run = cli("report_check.py", str(report_path), "--script", str(script),
+                      "--record", str(record_path), "--locale", "zh-CN")
+    ok("待核验" in summary_run.stdout and "第 2 页图表" in summary_run.stdout,
+       "摘要如实披露待核验范围")
 
     # ── 页序调整：稳定页面键保持批注与记录引用的关联 ──
     port = free_port()
