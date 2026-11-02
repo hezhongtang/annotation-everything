@@ -98,6 +98,16 @@
               "scope": "报告与讲稿", "note": ""},
              {"id": "content.open-questions", "kind": "content", "status": "not_run",
               "scope": "openItems", "note": ""},
+             {"id": "structure.flow", "kind": "structure", "status": "not_run",
+              "scope": "全部页", "note": ""},
+             {"id": "structure.headings", "kind": "structure", "status": "not_run",
+              "scope": "全部页", "note": ""},
+             {"id": "structure.claim-support", "kind": "structure", "status": "not_run",
+              "scope": "全部结论页", "note": ""},
+             {"id": "structure.dup-gaps", "kind": "structure", "status": "not_run",
+              "scope": "全部页", "note": ""},
+             {"id": "structure.length", "kind": "structure", "status": "not_run",
+              "scope": "篇幅与讲稿时长", "note": ""},
              {"id": "visual.pages", "kind": "visual", "status": "not_run",
               "scope": "全部 6 页", "note": ""}],
   "openItems": [{"item": "提价幅度二选一", "blocking": false}],
@@ -113,8 +123,8 @@
 - `links`：产物关联与 sha256（`sha256sum` 或等价方式计算）；这是核验入口判断记录是否对应当前产物的依据。
 - `findings`：关键结论（含数值与影响判断）与来源、报告页的对应；`locations` 可列材料内定位（如 `q3.pdf 第 2 页`、`Sheet1!B3`），让审阅人能核对原文；`refs` 写结构化定位：`quote` 保留材料原文（不翻译、不改写），`locator` 写位置（章节、行、表名），`found` 如实标是否定位到；`support` 写材料是否支持表述——`supported`（支持）/ `partial`（部分支持，表述强于材料）/ `unsupported`（不受支持）/ `unverified`（未核实），**引用存在不等于受支持，核对后不支持就必须标 `unsupported`**；`basis` 写检查依据：怎么核对的、看了材料哪几处。能声明输入与口径的计算写 `calculation`（运算支持 `sum`、`difference`、`product`、`ratio`、`percent-change`），并带齐四要素：`unit` 单位、`period` 期间、`definition` 口径、`inputLocations` 每个输入的位置；缺要素的计算核验入口会标为**待核实**，复算不一致会定位到结论与报告页。
 - `gaps`：材料与需求缺口。`openItems`：待用户拍板的事项，影响核心结论的 `blocking: true`。
-- `checks`：内容（`content.*`，八项清单见下）与视觉（`visual.*`）核验的逐项声明，状态 `pass` / `fail` / `not_run` / `unavailable`。**没执行的写 `not_run`，不能写 pass。** 要判可交付时，内容八项必须逐项 `pass`；有关键结论缺支持、口径不明的计算或材料没哈希时，核验入口会把内容覆盖降级，不让它显示为通过。
-- `verdict.draftComplete`：结构完整、能进入审阅即为 `true`；`verdict.deliverable` 只有在内容与视觉核验都通过且无阻塞事项时才 `true`，否则留 `null` 或 `false`。**初稿生成完成 ≠ 报告可交付。**
+- `checks`：内容（`content.*`，八项清单见下）、结构（`structure.*`，五项清单见下）与视觉（`visual.pages`）核验的逐项声明，状态 `pass` / `fail` / `not_run` / `unavailable`。**没执行的写 `not_run`，不能写 pass。** 要判可交付时，三类清单必须逐项 `pass`，视觉项还要带覆盖全部报告页的逐页证据（见下面「视觉核验」）；无讲稿时讲稿关联的两项（`content.script-consistency`、`structure.length`）不适用、不必声明，核验入口也不把它们计入覆盖总数——声明了 pass 属于虚假的已检查，会按程序检查失败暴露。有关键结论缺支持、口径不明的计算或材料没哈希时，核验入口会把内容与结构覆盖降级，不让它显示为通过。
+- `verdict.draftComplete`：结构完整、能进入审阅即为 `true`；`verdict.deliverable` 只有在内容、结构与视觉核验都通过且无阻塞事项时才 `true`，否则留 `null` 或 `false`。**初稿生成完成 ≠ 报告可交付。**
 
 ### 内容核验清单（`content.*` 八项：逐项核对，逐项写 scope / note）
 
@@ -133,6 +143,35 @@
 - 典型反例：**引用位置存在但结论不受支持**（材料只说华东增长，报告写成全国增长）必须标 `support: "unsupported"`，内容核验不通过；漏记依据（结论没有 refs / basis）按待核实处理；日期或单位混淆、过度推断都是 fail——先改稿，再重跑核验入口。
 - 需要判断的项目保留依据与检查说明；这八项由你执行，核验入口只核对记录声明与确定规则，不能替你证明提炼准确。
 
+### 结构核验清单（`structure.*` 五项：逐项核对，逐项写 scope / note）
+
+| id | 查什么 | note 写什么 |
+|---|---|---|
+| `structure.flow` | 叙述顺序与章节回应核心问题：先答核心问题的内容在前，铺垫不过量，读起来是同一条线 | 页序安排及理由 |
+| `structure.headings` | 每页标题与该页内容匹配，不夸大、不跑题 | 改过的标题及原因 |
+| `structure.claim-support` | 结论页有相邻的依据（`.ae-source`、数据或图表），结论不被孤立摆放 | 缺支撑的页与补法 |
+| `structure.dup-gaps` | 影响理解的重复与缺口：重复的数字或段落合并，关键信息不缺页 | 合并了什么、补了什么 |
+| `structure.length` | 篇幅或时长符合 `request.length`；有讲稿时逐页核对时长 | 实际页数 / 时长与约束的关系 |
+
+- 适用性规则：**无讲稿时**，`content.script-consistency` 与 `structure.length` 的讲稿部分不适用——两项不必声明，核验入口也不把它们计入覆盖总数；声明了 pass 就是虚假的已检查，程序检查会判否。篇幅约束本身仍由核验入口按 `request.length` 里的页数直接核对（`record.length`），可解析为页数而页数对不上会明确报错。
+
+### 视觉核验（`visual.pages`：逐页实际渲染，证据随声明交付）
+
+- 用**实际渲染**逐页查看（浏览器打开报告，或按 1280×720 逐页截图），每页检查五类问题：**溢出**（内容超出画布）、**遮挡**（元素互相压盖）、**文字与图表可读性**（字号、对比度）、**字体**（按基础样式渲染）、**内容缺失**（空白页、丢段、图表无数据）。
+- 检查结果写进 `visual.pages` 声明的 `pages` 证据，每页一条：
+
+```json
+{"id": "visual.pages", "kind": "visual", "status": "pass",
+ "scope": "全部 3 页（1280×720 实际渲染）", "note": "逐页渲染检查",
+ "pages": [{"page": 1, "checked": true, "issues": [], "viewport": "1280x720"},
+           {"page": 2, "checked": true, "issues": []},
+           {"page": 3, "checked": true, "issues": []}]}
+```
+
+- 声明 `pass` 就必须有覆盖**全部报告页**的证据：缺页、有页 `checked: false`、或带着未解决的问题声明 pass，核验入口都会判否（`record.visual`）。
+- 无法渲染或缺少查看能力写 `unavailable`（`note` 说明缺什么）；检查中断时把中断页如实记 `checked: false`、整体状态写 `not_run`；发现的问题如实写进 `issues` 并把状态写 `fail`——程序检查通过不代替视觉检查通过，未解决的问题是可交付判定的阻塞项。
+- 反例必须判否：**声明已逐页检查但记录缺页覆盖**、**带溢出却声明通过**，都不能通过整体交付验收。
+
 ## 5. 运行公开核验入口
 
 ```bash
@@ -140,8 +179,8 @@ python3 $S/report_check.py 报告.html --script 讲稿.md --record report-record
 ```
 
 - `--json` 输出 `ae-report-check/1` 结构化结果；退出码 0 表示程序检查全部通过（**不代表可交付**），1 表示有检查未通过，2 表示输入或用法错误。
-- 程序检查覆盖：报告可解析、页面键唯一、讲稿逐页对应、记录结构与版本、记录对应当前产物、引用页存在、计算可复算、检查集合完整、读取登记与缺口披露、结论支持映射（support 与 refs 一致、无不受支持的结论）、材料关联（登记映射与 sha256 新鲜度）。程序不执行材料中的代码，不推断任意业务口径。摘要里会给出读取汇总（已读 / 部分读取 / 无法读取）、具体未读范围与记录披露的缺口。
-- 有 `fail` 就修对应产物或记录再重跑；摘要里的「内容核验 / 视觉核验」覆盖情况来自记录，未执行不会显示为通过；结论缺支持声明、计算待核实、材料没哈希或材料变了，覆盖会被降级并写明原因。
+- 程序检查覆盖：报告可解析、页面键唯一、讲稿逐页对应、记录结构与版本、记录对应当前产物、引用页存在、计算可复算、检查集合完整、读取登记与缺口披露、结论支持映射（support 与 refs 一致、无不受支持的结论）、材料关联（登记映射与 sha256 新鲜度）、视觉证据一致性（声明逐页检查通过就要有覆盖全部报告页的证据）、篇幅约束（`request.length` 可解析为页数时与报告页数比对）。程序不执行材料中的代码，不渲染页面，也不推断任意业务口径。摘要里会给出读取汇总（已读 / 部分读取 / 无法读取）、具体未读范围、记录披露的缺口与已检查范围。
+- 有 `fail` 就修对应产物或记录再重跑；摘要里的「内容核验 / 结构核验 / 视觉核验」覆盖情况来自记录，未执行不会显示为通过；结论缺支持声明、计算待核实、材料没哈希或材料变了，覆盖会被降级并写明原因。
 - 向用户回报时引用这份摘要：初稿状态、覆盖、缺口与待办、记录文件位置。**记录未判定可交付之前，不要声称报告可交付。**
 
 ## 6. 进入审阅
@@ -157,6 +196,6 @@ python3 $S/serve.py 审阅目录
 
 ## 边界
 
-- 不嵌入模型服务；生成由你完成。
-- 本切片交付的是「初稿生成完成」：内容核验与视觉核验没执行的，如实写 `not_run`，不能提前声称「报告可交付」。
+- 不嵌入模型服务；生成由你完成。视觉逐页检查由你（或测试中的浏览器）执行，核验入口只做确定规则判定。
+- **初稿生成完成 ≠ 报告可交付**：内容、结构与视觉核验没执行的，如实写 `not_run`，不能提前声称「报告可交付」；程序检查通过也不代表可交付。
 - 核验记录和产物留在受控材料位置，不进仓库、不进技能副本。

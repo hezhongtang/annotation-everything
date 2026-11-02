@@ -98,6 +98,16 @@ Save `report-record.json` next to the report (same directory, i.e. beside the ma
               "scope": "report and script", "note": ""},
              {"id": "content.open-questions", "kind": "content", "status": "not_run",
               "scope": "openItems", "note": ""},
+             {"id": "structure.flow", "kind": "structure", "status": "not_run",
+              "scope": "all pages", "note": ""},
+             {"id": "structure.headings", "kind": "structure", "status": "not_run",
+              "scope": "all pages", "note": ""},
+             {"id": "structure.claim-support", "kind": "structure", "status": "not_run",
+              "scope": "all claim pages", "note": ""},
+             {"id": "structure.dup-gaps", "kind": "structure", "status": "not_run",
+              "scope": "all pages", "note": ""},
+             {"id": "structure.length", "kind": "structure", "status": "not_run",
+              "scope": "length and script duration", "note": ""},
              {"id": "visual.pages", "kind": "visual", "status": "not_run",
               "scope": "all 6 pages", "note": ""}],
   "openItems": [{"item": "price increase: pick one of two options", "blocking": false}],
@@ -113,8 +123,8 @@ Field semantics:
 - `links`: artifact association and sha256 (via `shasum -a 256` or equivalent); the check entry uses this to decide whether the record matches the current artifacts.
 - `findings`: key claims (including figures and impact judgments) mapped to sources and report pages; `locations` may list locators inside the material (e.g. `q3.pdf page 2`, `Sheet1!B3`) so reviewers can check the original; `refs` give the structured locator: `quote` keeps the material's original wording (never translated or paraphrased), `locator` names the position (section, line, table), and `found` honestly records whether it was located; `support` records whether the material supports the claim — `supported` / `partial` (the claim is stronger than the material) / `unsupported` / `unverified`. **A citation existing does not mean the claim is supported; if the check says otherwise, mark `unsupported`.** `basis` records how the check was made and which parts of the material were consulted. Calculations with declared inputs and definitions include `calculation` (operations: `sum`, `difference`, `product`, `ratio`, `percent-change`) plus the four definition elements: `unit`, `period`, `definition`, and `inputLocations` covering every input key; calculations missing elements are marked **pending verification** by the check entry, and mismatches are located to the claim and report page.
 - `gaps`: material and requirement gaps. `openItems`: items waiting on the user; `blocking: true` when they affect the core conclusions.
-- `checks`: per-item declarations of content (`content.*`, the eight-item checklist below) and visual (`visual.*`) verification, with status `pass` / `fail` / `not_run` / `unavailable`. **Anything not executed is `not_run`, never pass.** Reaching deliverable requires every one of the eight content items to be `pass`; missing claim support, pending calculations, or unhashed materials downgrade the content coverage and it is not shown as passed.
-- `verdict.draftComplete` is `true` when the structure is complete and reviewable; `verdict.deliverable` is `true` only when both content and visual verification passed with no blocking items — otherwise leave `null` or `false`. **Draft complete is not the same as deliverable.**
+- `checks`: per-item declarations of content (`content.*`, the eight-item checklist below), structure (`structure.*`, the five-item checklist below), and visual (`visual.pages`) verification, with status `pass` / `fail` / `not_run` / `unavailable`. **Anything not executed is `not_run`, never pass.** Reaching deliverable requires every item of all three checklists to be `pass`, and the visual item must carry page-by-page evidence covering every report page (see "Visual verification" below). Without a script, the two script-scoped items (`content.script-consistency`, `structure.length`) do not apply and need not be declared; the check entry excludes them from the coverage totals — declaring them `pass` anyway is a false checked claim and fails the program checks. Missing claim support, pending calculations, or unhashed materials downgrade the content and structure coverage so they are not shown as passed.
+- `verdict.draftComplete` is `true` when the structure is complete and reviewable; `verdict.deliverable` is `true` only when content, structure, and visual verification all passed with no blocking items — otherwise leave `null` or `false`. **Draft complete is not the same as deliverable.**
 
 ### Content verification checklist (`content.*`, eight items: check each one, write scope / note for each)
 
@@ -133,6 +143,35 @@ Field semantics:
 - Typical counterexamples: **a citation exists but the claim is not supported** (the material says the East region grew; the report claims nationwide growth) must be marked `support: "unsupported"` and fails content verification; missing evidence (a claim without refs / basis) is treated as pending verification; date or unit confusions and over-inference are failures — fix the report first, then re-run the check entry.
 - Judgment items keep their evidence and checking notes; you perform these eight checks — the check entry only verifies record declarations and deterministic rules, it cannot prove your extraction is accurate for you.
 
+### Structure verification checklist (`structure.*`, five items: check each one, write scope / note for each)
+
+| id | what to check | what note records |
+|---|---|---|
+| `structure.flow` | narrative order and sections answer the core questions: the answers come first, setup stays lean, the whole reads as one line | page order and the reasoning behind it |
+| `structure.headings` | every page title matches that page's content; no overclaiming, no drift | titles rewritten and why |
+| `structure.claim-support` | claim pages have adjacent evidence (`.ae-source`, data, or charts); conclusions never stand alone | pages missing support and the fix |
+| `structure.dup-gaps` | duplication and gaps that hurt comprehension: merge repeated numbers or paragraphs, fill missing key information | what was merged or added |
+| `structure.length` | length or duration matches `request.length`; with a script, check the duration page by page | actual pages / duration versus the constraint |
+
+- Applicability rule: **without a script**, `content.script-consistency` and `structure.length` do not apply — they need not be declared and the check entry excludes them from the coverage totals; declaring them `pass` is a false checked claim and fails the program checks. The length constraint itself is still compared directly against the report page count when `request.length` states one (`record.length`), and a parseable mismatch is an explicit error.
+
+### Visual verification (`visual.pages`: render every page, evidence ships with the declaration)
+
+- Inspect every page under **actual rendering** (open the report in a browser, or screenshot page by page at 1280×720), checking five problem classes per page: **overflow** (content beyond the canvas), **occlusion** (elements overlapping), **text and chart readability** (font size, contrast), **fonts** (rendered with the base style), and **missing content** (blank pages, dropped paragraphs, charts without data).
+- Write the results into the `pages` evidence of the `visual.pages` declaration, one entry per page:
+
+```json
+{"id": "visual.pages", "kind": "visual", "status": "pass",
+ "scope": "all 3 pages (rendered at 1280×720)", "note": "page-by-page render check",
+ "pages": [{"page": 1, "checked": true, "issues": [], "viewport": "1280x720"},
+           {"page": 2, "checked": true, "issues": []},
+           {"page": 3, "checked": true, "issues": []}]}
+```
+
+- Declaring `pass` requires evidence covering **every report page**: missing pages, a page with `checked: false`, or declaring pass while unresolved issues remain are all rejected by the check entry (`record.visual`).
+- When pages cannot be rendered or viewing capability is missing, declare `unavailable` (`note` says what is missing); when a check is interrupted, record the interrupted pages honestly as `checked: false` and set the overall status to `not_run`; record found problems in `issues` and set the status to `fail` — a passing program check never substitutes for a passing visual check, and unresolved issues block the deliverable verdict.
+- Counterexamples must fail: **declaring a page-by-page pass while the record misses page coverage**, or **declaring pass with an unresolved overflow**, cannot pass the overall deliverable acceptance.
+
 ## 5. Run the public check entry
 
 ```bash
@@ -140,8 +179,8 @@ python3 $S/report_check.py report.html --script script.md --record report-record
 ```
 
 - `--json` emits the `ae-report-check/1` structured result; exit code 0 means all program checks passed (**not deliverable**), 1 means some check failed, 2 means bad input or usage.
-- Program checks cover: report parses, page keys unique, script matches page-for-page, record structure and version, record matches the current artifacts, referenced pages exist, calculations reproduce, check set complete, reading registration and gap disclosure, claim support mapping (support consistent with refs, no unsupported claims), and material association (registration mapping and sha256 freshness). The program does not execute code from the material and does not infer business definitions. The summary shows the reading totals (read / partially read / unread), the specific unread ranges, and the gaps disclosed by the record.
-- Fix whatever `fail`s and re-run; the summary's content / visual coverage comes from the record, and not-run is never shown as passed. Missing claim support, pending calculations, unhashed materials, or changed materials downgrade the coverage and say why.
+- Program checks cover: report parses, page keys unique, script matches page-for-page, record structure and version, record matches the current artifacts, referenced pages exist, calculations reproduce, check set complete, reading registration and gap disclosure, claim support mapping (support consistent with refs, no unsupported claims), material association (registration mapping and sha256 freshness), visual evidence consistency (a declared page-by-page pass requires evidence covering every report page), and the length constraint (compared against the report page count when `request.length` states one). The program does not execute code from the material, does not render pages, and does not infer business definitions. The summary shows the reading totals (read / partially read / unread), the specific unread ranges, the gaps disclosed by the record, and the checked scope.
+- Fix whatever `fail`s and re-run; the summary's content / structure / visual coverage comes from the record, and not-run is never shown as passed. Missing claim support, pending calculations, unhashed materials, or changed materials downgrade the coverage and say why.
 - When reporting to the user, quote this summary: draft status, coverage, gaps and open items, and the record file location. **Do not claim the report is deliverable before the record supports it.**
 
 ## 6. Enter review
@@ -157,6 +196,6 @@ Waiting, annotating, revision, and rebuilds continue from section 2 of the [Engl
 
 ## Boundaries
 
-- No model service is embedded; generation is done by you.
-- This slice delivers "draft generation complete": content and visual verification that has not run is recorded as `not_run`, and the report must not be called deliverable early.
+- No model service is embedded; generation is done by you. The page-by-page visual check is performed by you (or a browser in tests); the check entry only applies deterministic rules.
+- **Draft complete is not the same as deliverable**: content, structure, and visual verification that has not run is recorded as `not_run`, and the report must not be called deliverable early; a passing program check does not mean deliverable either.
 - Verification records and artifacts stay in the controlled material location — never in the repository or the skill copy.
