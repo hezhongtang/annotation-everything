@@ -195,6 +195,8 @@ flowchart LR
     RV -->|"Return to the reviewer"| U["Flags the annotations that need the reviewer's decision, with reasons"]
 ```
 
+
+Codex desktop supports a review-scoped binding: the agent runs `wakeup.py bind REVIEW_DIR`, then normal `serve.py` starts and restarts restore event delivery. The page distinguishes desktop acceptance from actual chat acknowledgement. No Codex configuration changes are required. See [Agent mechanisms](skill/annotation-everything/references/agent-mechanisms.en.md#codex-desktop-review-scoped-event-delivery) for compatibility and idle-chat verification.
 ## Installation and maintenance
 
 The management command is `ae.py` at the repository root (Python standard library only), with four subcommands: `install`, `doctor`, `repair`, `uninstall`. The tool is an Agent Skills skill: any agent that adopts the open Agent Skills standard can load `SKILL.md` and follow it. It installs into Claude Code's skill directory by default. `--target` and `--link` cover every other agent's skill directory (see below).

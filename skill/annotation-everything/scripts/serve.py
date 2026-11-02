@@ -62,11 +62,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
+import wakeup  # noqa: E402
 
 APP = "annotation-everything"
 VERSION = "0.9.0"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
-FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check"]
+FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery"]
 
 # 当前界面语言：main() 与 serve() 按共同契约解析后设置；未设置前保持中文（旧调用行为不变）
 _LOCALE = i18n.DEFAULT_LOCALE
@@ -147,7 +148,8 @@ class ReviewServer(ThreadingHTTPServer):
                  locale: str | None = None):
         self.review_dir = review_dir
         self.debug = debug
-        self.on_handoff = on_handoff
+        self.on_handoff = wakeup.hook_command(review_dir, on_handoff)
+        self.agent_binding = wakeup.load_binding(review_dir)
         self.hook_cwd = hook_cwd or os.getcwd()
         # 诊断说明用的语言；None 时保持中文（旧调用行为不变）
         self.locale = locale or i18n.DEFAULT_LOCALE
@@ -190,7 +192,7 @@ class ReviewServer(ThreadingHTTPServer):
 
         只在新的提交时触发（合并进还没被接收的提交不再触发）；同一时间只跑一个，运行中又来新提交就等它结束后补跑一次。
         """
-        if not self.on_handoff or merged:
+        if not self.on_handoff or (merged and not self.agent_binding):
             return
         url = f"http://127.0.0.1:{self.port}/"
         user_message = store.handoff_user_message(item)
@@ -213,6 +215,13 @@ class ReviewServer(ThreadingHTTPServer):
                 return
             self._hook_running = True
         threading.Thread(target=self._hook_worker, args=(job,), daemon=True).start()
+
+    def recover_deliveries(self) -> None:
+        """Recover pending submissions once at startup; no periodic agent polling."""
+        if self.agent_binding:
+            for item in store.handoff_load(self.review_dir)["items"]:
+                if item.get("status") in ("pending", "review"):
+                    self.run_hook(item, False, "review" if item["status"] == "review" else "handoff")
 
     def _hook_worker(self, job: dict[str, Any]) -> None:
         while job is not None:
@@ -397,12 +406,14 @@ class Handler(BaseHTTPRequestHandler):
                 raise Reject(409, "review-mismatch", self._t("serve.err.reviewMismatch"))
         if path == "/api/health" and cmd == "GET":
             self._json(200, {**self._ident(), "dir": str(d), "pid": os.getpid(),
-                             "port": self.server.port, "hook": bool(self.server.on_handoff)})
+                             "port": self.server.port, "hook": bool(self.server.on_handoff),
+                             "agentDelivery": wakeup.public_status(d)})
         elif path == "/api/notes" and cmd == "GET":
             doc = store.load(d)
             idx = d / "index.html"
             doc["indexMtime"] = idx.stat().st_mtime if idx.exists() else None  # 页面据此提示「已重建，请刷新」
             doc["handoff"] = store.handoff_state(d, full=False)   # 轮询只带最新一批；处理记录全量走 GET /api/handoff
+            doc["agentDelivery"] = wakeup.public_status(d)
             doc["skillCatalog"] = store.skills_catalog(d)
             doc["alwaysSkills"] = store.always_skills(d)
             self._json(200, {**doc, **self._ident()})
@@ -690,6 +701,11 @@ def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, o
     for t in trail:
         print(T("serve.port.trail", detail=t), file=sys.stderr)
     if running_url:
+        if wakeup.load_binding(review_dir):
+            found = probe(int(running_url.rstrip("/").rsplit(":", 1)[1])) or {}
+            if "agent-delivery" not in found.get("features", []) or not found.get("hook"):
+                print(T("serve.serve.agentRestart"), file=sys.stderr)
+                return 6
         if claim and f":{claim}/" not in running_url:
             print(T("serve.port.claimButRunning", port=claim), file=sys.stderr)
         print(T("serve.serve.running", url=running_url)
@@ -708,6 +724,7 @@ def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, o
     elif not owned and server.port != first:
         print(T("serve.port.firstBusy", first=first, port=server.port), file=sys.stderr)
     write_status(server)
+    server.recover_deliveries()
     server.log("info", f"启动 {APP} {VERSION}：{url} 托管 {review_dir}（pid {os.getpid()}）")
     print(T("serve.serve.ready", url=url, path=review_dir / store.NOTES_FILE)
           + (T("serve.serve.hookLine", command=shlex.join(on_handoff)) if on_handoff else "")
@@ -782,6 +799,7 @@ def status(review_dir: Path, locale: str | None = None) -> int:
         T("serve.status.portSelf") if same_dir(found, review_dir) else
         T("serve.status.portOther") if found.get("app") == APP else T("serve.status.portForeign"))
     out["agent_waiting"] = read_wait(review_dir)
+    out["agentDelivery"] = wakeup.public_status(review_dir)
     log = review_dir / LOG_FILE
     if log.exists():
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()

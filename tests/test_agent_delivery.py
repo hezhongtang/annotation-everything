@@ -1,0 +1,250 @@
+"""Synthetic HTTP -> persisted binding -> desktop IPC, including service restart."""
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+from pathlib import Path
+import socket
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "skill/annotation-everything/scripts"
+sys.path.insert(0, str(SCRIPTS))
+import serve
+import notes_store as store
+import wakeup
+import notes as notes_cli
+sys.path.insert(0, str(ROOT))
+import host_isolation
+host_isolation.require_for_module(__name__)
+
+THREAD = "11111111-1111-4111-8111-111111111111"
+
+
+class Desktop:
+    def __init__(self, path):
+        self.path = path
+        self.requests = []
+        self.reject = False
+        self.drop_reply = False
+        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.listener.bind(str(path))
+        path.chmod(0o600)
+        self.listener.listen()
+        self.listener.settimeout(0.1)
+        self.stopped = threading.Event()
+        self.worker = threading.Thread(target=self.run, daemon=True)
+        self.worker.start()
+
+    def run(self):
+        while not self.stopped.is_set():
+            try:
+                client, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            with client:
+                def exact(n):
+                    data = b""
+                    while len(data) < n:
+                        part = client.recv(n - len(data))
+                        if not part:
+                            return None
+                        data += part
+                    return data
+                while True:
+                    head = exact(4)
+                    if not head:
+                        break
+                    request = json.loads(exact(struct.unpack("<I", head)[0]))
+                    method = request["method"]
+                    result = {"clientId": "fixture"} if method == "initialize" else {}
+                    if method == "thread-follower-start-turn":
+                        self.requests.append(request)
+                        if self.drop_reply:
+                            break
+                        result = {"result": {"turn": {"id": "fixture-turn", "status": "inProgress"}}}
+                    reply = {"type": "response", "requestId": request["requestId"],
+                             "resultType": "error" if self.reject and method.endswith("start-turn") else "success",
+                             "error": "unsupported-protocol", "result": result,
+                             "handledByClientId": "owner"}
+                    raw = json.dumps(reply).encode()
+                    client.sendall(struct.pack("<I", len(raw)) + raw)
+
+    def close(self):
+        self.stopped.set()
+        self.worker.join(2)
+        self.listener.close()
+
+
+class DeliveryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ae-delivery-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.env = patch.dict(os.environ, {"AE_HOME": str(self.root / "ledger"), "CODEX_THREAD_ID": THREAD})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.review = self.root / "review"
+        self.review.mkdir(mode=0o700)
+        (self.review / "review.json").write_text(json.dumps({"reviewId": "synthetic-delivery", "reviewDir": str(self.review)}))
+        (self.review / "index.html").write_text("<!doctype html><title>Synthetic</title>")
+        self.desktop = Desktop(self.root / "desktop.sock")
+        self.addCleanup(self.desktop.close)
+
+    def bind(self):
+        return wakeup.bind(self.review, THREAD, self.desktop.path)
+
+    def start_server(self):
+        server = serve.ReviewServer(self.review, 0, log_to_file=False)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        def close():
+            server.shutdown()
+            server.server_close()
+            worker.join(2)
+        return server, close
+
+    def submit(self, server):
+        headers = {"Host": f"127.0.0.1:{server.port}", "Origin": f"http://127.0.0.1:{server.port}",
+                   "Content-Type": "application/json", "X-AE-Review": "synthetic-delivery"}
+        status, _, data = serve._req(server.port, "POST", "/api/handoff", headers,
+                                     {"message": "synthetic", "allowSubagents": False})
+        self.assertEqual(status, 200)
+        return json.loads(data)["seq"]
+
+    def wait_status(self, state):
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            result = wakeup.status(self.review)
+            if result.get("state") == state:
+                return result
+            time.sleep(.02)
+        self.fail(wakeup.status(self.review))
+
+    def test_binding_survives_plain_service_restart_and_ack_is_separate(self):
+        binding = self.bind()
+        first, close = self.start_server()
+        try:
+            self.assertEqual(self.submit(first), 1)
+            sent = self.wait_status("accepted")
+            self.assertEqual(store.handoff_state(self.review)["latest"]["status"], "pending")
+            wakeup.acknowledge(self.review, "handoff", 1, sent["messageId"], THREAD)
+            self.assertEqual(wakeup.status(self.review)["state"], "received")
+            store.handoff_claim(self.review, by="Synthetic")
+        finally:
+            close()
+        second, close = self.start_server()
+        try:
+            self.assertEqual(self.submit(second), 2)
+            self.wait_status("accepted")
+            self.assertEqual(len(self.desktop.requests), 2)
+            self.assertEqual(wakeup.load_binding(self.review)["bindingId"], binding["bindingId"])
+            self.assertIsNotNone(second.on_handoff)
+        finally:
+            close()
+
+    def test_duplicate_and_lost_ack_not_replayed(self):
+        self.bind()
+        store.handoff_submit(self.review, "synthetic")
+        self.desktop.drop_reply = True
+        with self.assertRaises(Exception):
+            wakeup.deliver(self.review, "handoff", 1)
+        self.assertEqual(wakeup.status(self.review)["state"], "unconfirmed")
+        wakeup.deliver(self.review, "handoff", 1)
+        self.assertEqual(len(self.desktop.requests), 1)
+
+    def test_rejected_delivery_can_retry_on_restart_and_never_claims(self):
+        self.bind()
+        store.handoff_submit(self.review, "synthetic")
+        self.desktop.reject = True
+        with self.assertRaises(Exception):
+            wakeup.deliver(self.review, "handoff", 1)
+        self.assertEqual(wakeup.status(self.review)["state"], "failed")
+        self.desktop.reject = False
+        server, close = self.start_server()
+        try:
+            server.recover_deliveries()
+            self.wait_status("accepted")
+            self.assertEqual(store.handoff_state(self.review)["latest"]["status"], "pending")
+            server.recover_deliveries()
+            time.sleep(.1)
+            self.assertEqual(len(self.desktop.requests), 2)
+        finally:
+            close()
+
+    def test_binding_validation_and_custom_hook_conflict(self):
+        self.bind()
+        with self.assertRaises(ValueError):
+            serve.ReviewServer(self.review, 0, on_handoff=[sys.executable, "-V"])
+        with self.assertRaises(ValueError):
+            wakeup.acknowledge(self.review, "handoff", 1, "wrong", "22222222-2222-4222-8222-222222222222")
+        manifest = self.review / "review.json"
+        manifest.write_text(json.dumps({"reviewId": "copied-review"}))
+        with self.assertRaises(ValueError):
+            wakeup.load_binding(self.review)
+
+    def test_handoff_and_review_are_different_deliveries(self):
+        self.bind()
+        store.handoff_submit(self.review, "synthetic", target="review")
+        wakeup.deliver(self.review, "handoff", 1)
+        wakeup.deliver(self.review, "handoff", 1)
+        self.assertEqual(len(self.desktop.requests), 1)
+        request = self.desktop.requests[0]["params"]["turnStart"]
+        self.assertEqual(request["context"], {"inheritThreadSettings": True})
+        self.assertNotIn("sandboxPolicy", request["request"])
+        self.assertIn("--seq 1", request["request"]["input"][0]["text"])
+        self.assertEqual((self.review / wakeup.BINDING_FILE).stat().st_mode & 0o777, 0o600)
+        store.handoff_claim(self.review, by="Synthetic")
+        store.handoff_done(self.review, seq=1, by="Synthetic", mode="draft")
+        store.handoff_request_review(self.review, 1)
+        wakeup.deliver(self.review, "review", 1)
+        self.assertEqual(len(self.desktop.requests), 2)
+        self.assertNotEqual(self.desktop.requests[0]["params"]["turnStart"]["request"]["clientUserMessageId"],
+                            self.desktop.requests[1]["params"]["turnStart"]["request"]["clientUserMessageId"])
+
+    def test_bound_review_rejects_claiming_waiter_and_wrong_chat(self):
+        self.bind()
+        store.handoff_submit(self.review, "synthetic")
+        self.assertEqual(notes_cli.main(["wait", str(self.review), "--timeout", "1"]), 2)
+        with patch.dict(os.environ, {"CODEX_THREAD_ID": "different-chat"}):
+            self.assertEqual(notes_cli.main(["claim", str(self.review), "--seq", "1"]), 2)
+        self.assertEqual(store.handoff_state(self.review)["latest"]["status"], "pending")
+
+    def test_plain_cli_restart_recovers_unsent_submission(self):
+        self.bind()
+        store.handoff_submit(self.review, "synthetic")
+        process = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), str(self.review), "--no-open"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            self.wait_status("accepted")
+            state = json.loads((self.review / serve.STATUS_FILE).read_text())
+            self.assertTrue(serve.probe(state["port"])["hook"])
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+        process = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), str(self.review), "--no-open"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            deadline = time.monotonic() + 3
+            while not (self.review / serve.STATUS_FILE).exists() and time.monotonic() < deadline:
+                time.sleep(.02)
+            state = json.loads((self.review / serve.STATUS_FILE).read_text())
+            self.assertEqual(state["pid"], process.pid)
+            self.assertTrue(serve.probe(state["port"])["hook"])
+            time.sleep(.1)
+            self.assertEqual(len(self.desktop.requests), 1)
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+
+
+if __name__ == "__main__":
+    unittest.main()
