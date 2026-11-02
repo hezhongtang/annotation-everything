@@ -175,7 +175,7 @@ def bind(review, thread, socket_path=None, replace=False):
 
 def _deliveries(review):
     path = Path(review) / DELIVERY_FILE
-    value = _read(path) if path.exists() else {"version": SCHEMA, "items": {}}
+    value = _read(path) if path.exists() or path.is_symlink() else {"version": SCHEMA, "items": {}}
     if not isinstance(value.get("items"), dict):
         raise ValueError("invalid-delivery-history")
     return value

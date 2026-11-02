@@ -194,6 +194,16 @@ class DeliveryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             wakeup.load_binding(self.review)
 
+    def test_broken_delivery_link_is_an_error_and_is_not_overwritten(self):
+        binding = self.bind()
+        history = self.review / wakeup.DELIVERY_FILE
+        history.symlink_to(self.review / "missing-delivery-history.json")
+        key = wakeup._key(binding, "handoff", 1)
+        with self.assertRaises((OSError, ValueError)):
+            wakeup._record(self.review, key, {"state": "connecting"})
+        self.assertTrue(history.is_symlink(), "损坏的历史不能被新回执静默覆盖")
+        self.assertEqual(wakeup.public_status(self.review)["state"], "error")
+
     def test_handoff_and_review_are_different_deliveries(self):
         self.bind()
         store.handoff_submit(self.review, "synthetic", target="review")

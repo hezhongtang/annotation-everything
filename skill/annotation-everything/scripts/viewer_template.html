@@ -1254,11 +1254,14 @@ let handSig="", flightSig="", batchOpen=null;   // 处理记录弹窗：上次�
 const BATCH_STATUS={pending:"viewer.batch.status.pending",claimed:"viewer.batch.status.claimed",drafted:"viewer.batch.status.drafted",review:"viewer.batch.status.review",reviewing:"viewer.batch.status.reviewing",done:"viewer.batch.status.done"};
 const BATCH_STAGE={draft:"viewer.batch.stage.draft",review:"viewer.batch.stage.review"};
 const batchStatus=s=>tMsg(BATCH_STATUS[s]||"")||s;   // 旧数据里的未知状态按原文显示
-const DELIVERY_LABEL={bound:"viewer.agent.bound",connecting:"viewer.agent.connecting",sending:"viewer.agent.sending",accepted:"viewer.agent.accepted",received:"viewer.agent.received",failed:"viewer.agent.failed",unconfirmed:"viewer.agent.unconfirmed",error:"viewer.agent.error"};
+const DELIVERY_LABEL={bound:"viewer.agent.bound",connecting:"viewer.agent.connecting",sending:"viewer.agent.sending",accepted:"viewer.agent.accepted",received:"viewer.agent.received",failed:"viewer.agent.failed",unconfirmed:"viewer.agent.unconfirmed",unknown:"viewer.agent.unknown",error:"viewer.agent.error"};
 function renderDelivery(){const el=$("agentDelivery"),a=agentDelivery,L=hand&&hand.latest;
-  const unknown=(!a||!a.adapter)&&L&&["claimed","reviewing"].includes(L.status);
-  el.textContent=unknown?tMsg("viewer.agent.unknown"):(a&&a.adapter?tMsg(DELIVERY_LABEL[a.state]||"viewer.agent.error"):"");
-  el.title=el.textContent;el.style.color=a&&["failed","unconfirmed","error"].includes(a.state)?"#fcd34d":""}
+  const event=L&&["review","reviewing"].includes(L.status)?"review":"handoff";
+  const matched=a&&L&&a.seq===L.seq&&a.event===event;
+  let state=a&&a.adapter?a.state:null;
+  if(L&&!matched&&state!=="error")state=["pending","claimed","review","reviewing"].includes(L.status)?"unknown":a&&a.adapter?"bound":null;
+  el.textContent=state?tMsg(DELIVERY_LABEL[state]||"viewer.agent.error"):"";
+  el.title=el.textContent;el.style.color=["failed","unconfirmed","error"].includes(state)?"#fcd34d":""}
 function renderHand(){renderDelivery();const el=$("handState"),L=hand&&hand.latest;
   if(handQueued){el.className="queued";el.textContent=tMsg("viewer.hand.state.queued");el.title=tMsg("viewer.hand.state.queuedTitle");return}
   if(!L){el.className="";el.textContent="";el.title="";return}

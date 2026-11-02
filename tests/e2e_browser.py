@@ -1414,6 +1414,27 @@ def handoff_i18n_checks(browser, tmp: Path):
            f"接收后英文徽标（实际 {page.inner_text('#handState')!r}）")
         ok("Chat receipt unconfirmed" in page.inner_text("#agentDelivery"), "英文区分后台认领与聊天接手回执")
 
+        delivery_cases = page.evaluate("""async () => {
+          const original = await getNotes(), result = [];
+          try {
+            for (const [seq, status, event] of [[1, "claimed", "handoff"],
+                [2, "pending", "handoff"], [1, "review", "handoff"],
+                [1, "reviewing", "review"]]) {
+              applyServer({...original,
+                handoff: {...original.handoff, latest: {...original.handoff.latest, seq, status}},
+                agentDelivery: {adapter: "codex-desktop", seq: 1, event, state: "received"}});
+              result.push({receipt: document.getElementById("agentDelivery").textContent,
+                state: document.getElementById("handState").textContent});
+            }
+          } finally { applyServer(original); }
+          return result;
+        }""")
+        ok(delivery_cases[0]["receipt"] == "Chat receipt confirmed", "同批同阶段的聊天回执可确认接手")
+        ok("unconfirmed" in delivery_cases[1]["receipt"], "新批次不能沿用上一批的接手回执")
+        ok("unconfirmed" in delivery_cases[2]["receipt"], "请求复核不能沿用初改的接手回执")
+        ok(delivery_cases[3]["receipt"] == "Chat receipt confirmed"
+           and "claimed review" in delivery_cases[3]["state"], "复核回执独立确认，认领状态只表示已认领")
+
         page.keyboard.press("j")
         wait_batches(page, "Batch 1")
         history = page.inner_text("#batchList") + page.inner_text("#batchSum")
