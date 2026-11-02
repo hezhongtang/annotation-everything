@@ -1300,6 +1300,9 @@
     "check.warn.derivedKeys": "Page keys are derived from page numbers ({keys}); annotations cannot be re-anchored after reordering. Use stable, unique semantic keys (e.g. data-key=\"sum\")",
     "check.count.passed": "{n} passed",
     "check.gaps.line": "Gaps disclosed by the record: {gaps}",
-    "check.err.noPages": "The report has no page sections (class containing page with data-page)"
+    "check.err.noPages": "The report has no page sections (class containing page with data-page)",
+    "check.item.record.reading": "Reading registration and gap disclosure",
+    "check.err.sourceStatus": "{entry} has no recognizable reading status {status} (status is read / partial / unreadable)",
+    "check.err.sourceField": "{entry} has an incomplete reading disclosure: missing {fields} (partial must state the range actually read and the unread part; unreadable must state why)"
   }
 }

@@ -50,6 +50,8 @@ KNOWN_RECORD_CHECKS = {
     "visual.pages": "visual",
 }
 CHECK_STATUSES = ("pass", "fail", "not_run", "unavailable")
+# 读取登记状态（issue #71）：格式被接受不等于内容已读完，按实际读到的范围登记。
+SOURCE_STATUSES = ("read", "partial", "unreadable")
 REQUIRED_RECORD_FIELDS = ("schema", "generatedAt", "request", "sources", "method",
                           "links", "findings", "gaps", "checks", "openItems", "verdict")
 
@@ -77,7 +79,8 @@ class Checks:
     """按固定顺序收集检查结果；id 与 status 语言无关，detail 本地化。"""
 
     ORDER = ("report.parse", "report.pageKeys", "script.pages", "record.structure",
-             "record.freshness", "record.pageRefs", "record.calculations", "record.checks")
+             "record.freshness", "record.pageRefs", "record.calculations", "record.checks",
+             "record.reading")
 
     def __init__(self, locale: str):
         self.locale = locale
@@ -112,6 +115,10 @@ class Checks:
                                  "record.check-unknown": "check.err.checkUnknown",
                                  "record.check-status": "check.err.checkStatus"}.get(
                                      code, "check.err.checksEmpty"),
+               "record.reading": {"record.source-status": "check.err.sourceStatus",
+                                  "record.source-field": "check.err.sourceField",
+                                  "record.reading-blocked": "check.err.readingBlocked"}.get(
+                                      code, "check.err.sourceStatus"),
                }[cid]
         detail = t(self.locale, key, **params) if params else ""
         self.items[cid] = {"id": cid, "status": state, "code": code, "detail": detail}
@@ -352,6 +359,72 @@ def check_record_checks(record: dict | None, c: Checks) -> bool:
     return True
 
 
+def check_reading(record: dict | None, c: Checks) -> dict | None:
+    """读取登记检查（issue #71）：状态枚举、缺口披露完整、定位线索类型。
+
+    返回读取汇总（语言无关的计数与未读明细）；没有记录时返回 None。
+    全部实质材料都不可读时判 record.reading-blocked——空结构或虚构内容
+    不能当成初稿生成完成。格式被接受不等于内容已读完。
+    """
+    if record is None:
+        return None
+    sources = record["sources"]
+    if not sources:
+        c.set("record.reading", "not_applicable")
+        return {"read": 0, "partial": 0, "unreadable": 0, "unread": []}
+    counts = {"read": 0, "partial": 0, "unreadable": 0}
+    unread: list[dict] = []
+    malformed = False
+    for entry in sources:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str) \
+                or not entry["path"].strip():
+            c.set("record.reading", "fail", code="record.source-status", entry="?",
+                  status="?")
+            malformed = True
+            continue
+        path = entry["path"]
+        status = entry.get("status")
+        if status not in SOURCE_STATUSES:
+            c.set("record.reading", "fail", code="record.source-status", entry=path,
+                  status=repr(status))
+            malformed = True
+            continue
+        counts[status] += 1
+        coverage = entry.get("coverage")
+        reason = entry.get("reason")
+        locations = entry.get("locations")
+        bad = []
+        if status == "partial" and not (isinstance(coverage, str) and coverage.strip()):
+            bad.append("coverage")
+        if status in ("partial", "unreadable") \
+                and not (isinstance(reason, str) and reason.strip()):
+            bad.append("reason")
+        if locations is not None and (not isinstance(locations, list)
+                                      or not all(isinstance(x, str) and x.strip()
+                                                 for x in locations)):
+            bad.append("locations")
+        if bad:
+            c.set("record.reading", "fail", code="record.source-field",
+                  entry=path, fields="、".join(bad))
+            malformed = True
+            continue
+        if status != "read":
+            detail = "；".join(x for x in (coverage, reason)
+                              if isinstance(x, str) and x.strip())
+            unread.append({"path": path, "status": status, "detail": detail})
+    if malformed:
+        return {"read": counts["read"], "partial": counts["partial"],
+                "unreadable": counts["unreadable"], "unread": unread}
+    if counts["read"] == 0 and counts["partial"] == 0 and counts["unreadable"] > 0:
+        c.set("record.reading", "fail", code="record.reading-blocked",
+              n=counts["unreadable"])
+        return {"read": 0, "partial": 0, "unreadable": counts["unreadable"],
+                "unread": unread}
+    c.set("record.reading", "pass")
+    return {"read": counts["read"], "partial": counts["partial"],
+            "unreadable": counts["unreadable"], "unread": unread}
+
+
 def coverage_for(record: dict | None, fresh: bool, kind: str) -> tuple[str, int, int]:
     """汇总一类核验的覆盖情况；状态语义语言无关。
 
@@ -462,10 +535,12 @@ def check_report(report_path: Path, script_path: Path | None = None,
         c.set("script.pages", "pass")   # 能解析且页序一致时已 set(pass)，这里兜底
     record, record_ok = load_record(record_path, c)
     fresh = check_freshness(record, report_bytes, script_bytes, c)
+    reading = None
     if record is not None:
         check_page_refs(record, pages, c)
         check_calculations(record, c)
         check_record_checks(record, c)
+        reading = check_reading(record, c)
     result = summarize(record, fresh, c, draft_ok, record_ok)
     result["schema"] = RESULT_SCHEMA
     result["inputs"] = {
