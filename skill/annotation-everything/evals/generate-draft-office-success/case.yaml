@@ -1,0 +1,15 @@
+schema_version: "1.1"
+name: generate-draft-office-success
+expected_outcome: |
+  只装 annotation-everything 时，从 materials/ 的合成 PDF、Word、表格三种办公材料生成可
+  审阅的逐页报告初稿（无讲稿）。三份材料在核验记录的 sources 里都登记为 read，且带
+  locations 定位线索（PDF 页码、Word 段落、工作表与单元格），coverage 写实际读取范围；
+  没有把「文件能打开」当成已读全文，status 没有自造值。报告关键数字（收入 1.12M/1.00M、
+  同比 +12%、3 家新店、外卖 38%、储值 50 万）带 .ae-source 材料内定位，+12% 在 findings
+  里可复算（calculation）。表格语义可区分：华北 10 月空白写成未统计/缺失，华东 10 月 0
+  写成确认为零，单位（万元）与期间（9 月/10 月）跟数字一起保留，没有把空白写成 0 或把
+  0 写成缺失。产物（报告、report-record.json）在材料旁；运行了 report_check.py，程序检
+  查全部通过（含读取登记），draftComplete=true 且未声称「报告可交付」，内容与视觉核验
+  尚未执行如实说明；对照页生成，回复给出审阅入口与产物位置。
+context:
+  scaffold_script: place-files.sh

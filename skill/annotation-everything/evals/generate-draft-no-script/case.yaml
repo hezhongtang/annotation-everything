@@ -1,0 +1,14 @@
+schema_version: "1.1"
+name: generate-draft-no-script
+expected_outcome: |
+  只装 annotation-everything 时，从 materials/ 的合成文本材料生成可审阅的逐页报告初稿。
+  用户明确不需要讲稿：产物只有报告与核验记录，没有补造空讲稿来满足检查；审阅目录按
+  仅报告方式生成，批注功能不受影响。已知事实（收入 112 万、同比 +12%、外卖占比 38%、
+  咖啡豆上涨 9%）进入报告且保留可定位依据；十月数据缺失与「老店坪效」无数字支撑如实
+  披露；收入同比 +12% 可由材料复算（100 → 112）。需求按 brief.md 沿用，没有重复提问。
+  产物保存在材料旁；核验记录为 ae-report-record/1，request.script 如实反映不需要讲稿，
+  verdict.draftComplete=true、deliverable 未声称完成；运行了 report_check.py 且程序检查
+  通过（无讲稿时讲稿对应项显示为不适用而不是失败）；回复给出审阅入口与产物位置，并如实
+  说明内容与视觉核验尚未执行。
+context:
+  scaffold_script: place-files.sh

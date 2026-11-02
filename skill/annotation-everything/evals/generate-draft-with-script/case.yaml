@@ -1,0 +1,15 @@
+schema_version: "1.1"
+name: generate-draft-with-script
+expected_outcome: |
+  只装 annotation-everything 时，从 materials/ 的合成文本材料生成可审阅的逐页报告初稿，
+  并按用户的明确要求配套逐页讲稿。已知事实（收入 112 万、同比 +12%、外卖占比 38%、
+  咖啡豆成本上涨 9%）进入报告且保留可定位依据；十月数据缺失与「老店坪效」无数字支撑
+  两处缺口如实披露（.ae-gap / 记录 gaps / 报告文字），不写成已确认结论；收入同比 +12%
+  可由材料复算（100 → 112）。需求按 brief.md 沿用，没有重复提问已说明项；讲稿选择
+  brief 里没写，生成前问清（或按用户在对话里的补充执行），没有自作主张；讲稿与报告
+  逐页对应（### 第 N 页｜标题）。产物（报告、讲稿、report-record.json）保存在材料旁；
+  核验记录为 ae-report-record/1，verdict.draftComplete=true、deliverable 未声称完成；
+  运行了 report_check.py 公开核验入口且程序检查通过；回复给出审阅入口与产物位置，
+  并如实说明内容与视觉核验尚未执行，没有提前声称「报告可交付」。
+context:
+  scaffold_script: place-files.sh

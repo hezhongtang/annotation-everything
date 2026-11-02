@@ -25,6 +25,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -2206,6 +2207,965 @@ def css_fidelity_checks(browser, tmp: Path):
 
 
 
+def generated_draft_checks(browser, tmp: Path):
+    """场景 generated-draft-loop：默认范式初稿闭环（详见 e2e_scenarios 注册表）。
+
+    确定性的产品流程验证：安装副本的公开核验入口放行初稿、对照页接受带基础
+    样式的产物、批注在页序调整后按稳定页面键找回。不冒充实际模型的生成质量
+    评测（那由 evals/ 的技能评测覆盖）。
+    """
+    installed = tmp / "installed-skills" / "annotation-everything"
+    env = {**os.environ, "CLAUDE_SKILLS_DIR": str(installed.parent)}
+    subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"],
+                   env=env, check=True, capture_output=True, text=True, timeout=60)
+    scripts = installed / "scripts"
+    case = tmp / "draft-case"
+    case.mkdir(parents=True)
+
+    base_css = (scripts.parent / "references" / "report-base.css").read_text(encoding="utf-8")
+    head_html = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+                 "<title>季度经营回顾初稿</title><style>" + base_css + "</style></head><body>")
+    sec_sum = ('<section class="page" data-page="1" data-key="sum" id="page-sum">'
+               "<h2>结论：收入同比增长 12%</h2><p class=\"ae-kpi\">+12%</p>"
+               '<p>新开 3 家门店贡献主要增量。</p>'
+               '<p class="ae-source">materials/q3-notes.md 第 2 节</p></section>')
+    sec_rev = ('<section class="page" data-page="2" data-key="rev" id="page-rev">'
+               "<h2>收入结构</h2>"
+               "<table><tr><th>渠道</th><th>上季</th><th>本季</th></tr>"
+               "<tr><td>堂食</td><td>66%</td><td>62%</td></tr>"
+               "<tr><td>外卖</td><td>34%</td><td>38%</td></tr></table></section>")
+    sec_next = ('<section class="page" data-page="3" data-key="next" id="page-next">'
+                "<h2>下一步</h2><p>两件事。</p>"
+                '<p class="ae-gap">十月周报缺失，待补充后复核结论。</p></section>')
+    tail_html = "</body></html>"
+    script_md = ("# 讲稿：季度经营回顾初稿\n\n"
+                 "### 第 1 页｜结论\n**讲法**：\n先说结论：收入同比增长 12%。\n"
+                 "### 第 2 页｜收入结构\n**讲法**：\n外卖占比继续上升。\n"
+                 "### 第 3 页｜下一步\n**讲法**：\n两件事。\n")
+    report, script = case / "report.html", case / "script.md"
+    report.write_text(head_html + sec_sum + sec_rev + sec_next + tail_html, encoding="utf-8")
+    script.write_text(script_md, encoding="utf-8")
+
+    def sha(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    record = {
+        "schema": "ae-report-record/1",
+        "generatedAt": "2026-11-02T09:00:00+08:00",
+        "request": {"purpose": "季度经营汇报", "audience": "管理层",
+                    "coreQuestions": ["收入为什么增长"], "length": "3 页", "script": "yes"},
+        "sources": [{"path": "materials/q3-notes.md", "status": "read",
+                     "coverage": "全文", "note": ""}],
+        "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
+                   "version": "0.9.0", "unavailable": []},
+        "links": {"report": "report.html", "script": "script.md",
+                  "sha256": {"report": sha(report), "script": sha(script)},
+                  "sourceNote": "materials/q3-notes.md"},
+        "findings": [{"claim": "收入同比增长 12%", "type": "calculation",
+                      "sources": ["materials/q3-notes.md"], "pages": ["sum"],
+                      "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 112},
+                                      "expected": 12},
+                      "note": "口径：对上年同期"}],
+        "gaps": ["十月周报缺失"],
+        "openItems": [{"item": "提价幅度待定", "blocking": False}],
+        "checks": [{"id": "content.requirements", "kind": "content", "status": "not_run",
+                    "scope": "全部需求", "note": ""},
+                   {"id": "visual.pages", "kind": "visual", "status": "not_run",
+                    "scope": "全部 3 页", "note": ""}],
+        "verdict": {"draftComplete": True, "deliverable": None},
+    }
+    record_path = case / "report-record.json"
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    def cli(tool, *args, expect=0):
+        done = subprocess.run([sys.executable, str(scripts / tool), *map(str, args)],
+                              env=env, capture_output=True, text=True, timeout=60)
+        if expect is not None:
+            assert done.returncode == expect, \
+                f"{tool} 退出码 {done.returncode}（期望 {expect}）：{done.stderr or done.stdout}"
+        return done
+
+    # 公开核验入口：初稿通过，可交付未被支持（内容与视觉核验未执行）
+    checked = json.loads(cli("report_check.py", str(report), "--script", str(script),
+                             "--record", str(record_path), "--locale", "zh-CN",
+                             "--json").stdout)
+    ok(checked["schema"] == "ae-report-check/1", "核验入口输出 ae-report-check/1 结构化结果")
+    ok(checked["verdict"]["draftComplete"] is True, "初稿生成判定为完成")
+    ok(checked["verdict"]["deliverable"] is False, "未执行内容与视觉核验时不支持可交付")
+    ok(checked["coverage"]["content"] == "not_run" and checked["coverage"]["visual"] == "not_run",
+       "覆盖情况如实显示未执行")
+    ok(checked["record"]["fresh"] is True, "记录与当前产物对应（新鲜度通过）")
+
+    review = case / "q3-review"
+    cli("build_viewer.py", "--report", str(report), "--script", str(script),
+        "--out", str(review), "--name", "季度回顾初稿", "--no-scan-skills")
+    rid_before = json.loads((review / "review.json").read_text(encoding="utf-8"))["reviewId"]
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="对照页进入服务模式")
+        page_count = page.locator("#jump option").count()
+        ok(page_count == 3, f"带基础样式的三页报告进入对照页（{page_count} 页）")
+        colors = page.evaluate(
+            "() => { const r = document.getElementById('host').shadowRoot;"
+            "  const h = r.querySelector('.page h1, .page h2');"
+            "  const k = r.querySelector('.ae-kpi');"
+            "  return [getComputedStyle(h).color, k ? getComputedStyle(k).color : null]; }")
+        ok(colors[0] == "rgb(31, 41, 51)", f"基础样式正文色生效（{colors[0]}）")
+        ok(colors[1] == "rgb(154, 52, 18)", f"基础样式 KPI 强调色生效（{colors[1]}）")
+        go_page(page, 2)
+        go_page(page, 3)
+        ok(page.evaluate(
+            "() => { const r = document.getElementById('host').shadowRoot;"
+            "  return Boolean(r.querySelector('.ae-gap')); }"), "缺口标记随报告进入页面")
+        go_page(page, 2)
+        annotation = "外卖占比的数字加同比说明"
+        add_note(page, annotation, pin=(0.5, 0.4))
+        ok(wait_until(lambda: len(disk_notes(review)) == 1, page, 5), "批注自动落盘")
+        ok(disk_notes(review)[0]["key"] == "rev" and disk_notes(review)[0]["page"] == 2,
+           "批注关联稳定页面键 rev")
+    finally:
+        stop(server)
+        ctx.close()
+
+    # 页序调整（next 提到第 2 页，rev 退到第 3 页）后重建：真实改稿按新页序重写报告文档
+    # （data-page 跟着新位置更新），讲稿同步；批注按 key 找回，审阅标识不变
+    sec_next_2 = sec_next.replace('data-page="3"', 'data-page="2"')
+    sec_rev_3 = sec_rev.replace('data-page="2"', 'data-page="3"')
+    report.write_text(head_html + sec_sum + sec_next_2 + sec_rev_3 + tail_html, encoding="utf-8")
+    reordered_script = script_md.replace(
+        "### 第 2 页｜收入结构\n**讲法**：\n外卖占比继续上升。\n"
+        "### 第 3 页｜下一步\n**讲法**：\n两件事。\n",
+        "### 第 2 页｜下一步\n**讲法**：\n两件事。\n"
+        "### 第 3 页｜收入结构\n**讲法**：\n外卖占比继续上升。\n")
+    script.write_text(reordered_script, encoding="utf-8")
+    cli("build_viewer.py", "--rebuild", str(review))
+    rid_after = json.loads((review / "review.json").read_text(encoding="utf-8"))["reviewId"]
+    ok(rid_after == rid_before, "重建后审阅标识不变")
+    note = disk_notes(review)[0]
+    ok(note["key"] == "rev" and note["page"] == 3,
+       f"批注按页面键校正到新页码（key={note['key']} page={note['page']}）")
+
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="重建后的对照页再次进入服务模式")
+        go_page(page, 3)   # 批注列表按当前页过滤：翻到批注所在的新页码
+        ok(wait_until(lambda: annotation in page.locator("#nlist").inner_text(), page, 5),
+           "重建后批注卡片可见且内容完整")
+    finally:
+        stop(server)
+        ctx.close()
+
+
+def report_verdict_checks(browser, tmp: Path):
+    """场景 report-verdict-loop：结构与视觉核验的可交付判定（详见 e2e_scenarios 注册表）。
+
+    视觉逐页检查由本场景里的真实渲染执行：逐页测量画布溢出，把测量结果作为
+    逐页证据写进核验记录，再由安装副本的核验入口做确定规则判定。正确产物
+    （程序+内容+结构+视觉全部 covered）支持「报告可交付」；故障产物——如实
+    登记的溢出、或声明逐页通过却缺页覆盖——不能通过整体交付验收。判定离线
+    完成：不落批注、不触发复核或定稿，报告仍在对照页可审阅。不冒充实际模型
+    的生成质量评测（那由 evals/ 覆盖）。
+    """
+    installed = tmp / "installed-skills" / "annotation-everything"
+    env = {**os.environ, "CLAUDE_SKILLS_DIR": str(installed.parent)}
+    subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"],
+                   env=env, check=True, capture_output=True, text=True, timeout=60)
+    scripts = installed / "scripts"
+    base_css = (scripts.parent / "references" / "report-base.css").read_text(encoding="utf-8")
+    head = ('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+            "<title>交付判定场景（合成）</title><style>" + base_css + "</style></head><body>")
+
+    def section(n, key, title, body):
+        return (f'<section class="page" data-page="{n}" data-key="{key}" id="page-{key}">'
+                f"<h2>{title}</h2>{body}</section>")
+
+    script_md = ("# 讲稿：交付判定场景（合成）\n\n"
+                 "### 第 1 页｜结论\n**讲法**：\n先说结论：收入同比增长 12%。\n"
+                 "### 第 2 页｜收入结构\n**讲法**：\n外卖占比继续上升。\n"
+                 "### 第 3 页｜下一步\n**讲法**：\n两件事。\n")
+    material_text = "# 三季度笔记\n\n三季度收入 112 万元，上年同期 100 万元。\n"
+
+    def sha_text(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def sha_file(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def write_case(name: str, report: str) -> dict:
+        d = tmp / name
+        (d / "materials").mkdir(parents=True)
+        paths = {"dir": d,
+                 "report": d / "report.html",
+                 "script": d / "script.md",
+                 "material": d / "materials" / "q3-notes.md"}
+        paths["report"].write_text(head + report + "</body></html>", encoding="utf-8")
+        paths["script"].write_text(script_md, encoding="utf-8")
+        paths["material"].write_text(material_text, encoding="utf-8")
+        return paths
+
+    def record_for(paths: dict, *, visual: dict, declared=None) -> dict:
+        """除视觉项外全部齐备的可交付形态记录；视觉项与交付声明由调用方给定。"""
+        return {
+            "schema": "ae-report-record/1",
+            "generatedAt": "2026-11-02T09:00:00+08:00",
+            "request": {"purpose": "季度经营汇报", "audience": "管理层",
+                        "coreQuestions": ["三季度收入为什么增长"], "length": "3 页",
+                        "script": "yes"},
+            "sources": [{"path": "materials/q3-notes.md", "status": "read",
+                         "coverage": "全文",
+                         "sha256": sha_text(material_text), "note": ""}],
+            "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
+                       "version": "0.9.0", "unavailable": []},
+            "links": {"report": "report.html", "script": "script.md",
+                      "sha256": {"report": sha_file(paths["report"]),
+                                 "script": sha_file(paths["script"])},
+                      "sourceNote": "materials/q3-notes.md 及同目录讲稿"},
+            "findings": [{"claim": "三季度收入同比增长 12%", "type": "calculation",
+                          "sources": ["materials/q3-notes.md"], "pages": ["sum"],
+                          "refs": [{"path": "materials/q3-notes.md", "locator": "§1 收入",
+                                    "quote": "上年同期 100 万元", "found": True}],
+                          "support": "supported",
+                          "basis": "对比材料两期收入原文，并按声明输入复算 percent-change",
+                          "calculation": {"op": "percent-change",
+                                          "inputs": {"a": 100, "b": 112}, "expected": 12,
+                                          "unit": "万元", "period": "2025Q3 对 2024Q3",
+                                          "definition": "对上年同期收入的增长百分比",
+                                          "inputLocations": {
+                                              "a": "materials/q3-notes.md §1：上年同期 100 万元",
+                                              "b": "materials/q3-notes.md §1：三季度收入 112 万元"}},
+                          "note": "收入 112 对上年 100"}],
+            "gaps": ["十月周报缺失"],
+            "checks": (
+                [{"id": cid, "kind": "content", "status": "pass",
+                  "scope": "全部", "note": "真实渲染核验场景的合成声明"}
+                 for cid in ("content.requirements", "content.claims",
+                             "content.fact-vs-inference", "content.units-dates",
+                             "content.numbers-charts", "content.cross-page",
+                             "content.script-consistency", "content.open-questions")]
+                + [{"id": cid, "kind": "structure", "status": "pass",
+                    "scope": "全部页", "note": "真实渲染核验场景的合成声明"}
+                   for cid in ("structure.flow", "structure.headings",
+                               "structure.claim-support", "structure.dup-gaps",
+                               "structure.length")]
+                + [visual]),
+            "openItems": [{"item": "提价幅度待定", "blocking": False}],
+            "verdict": {"draftComplete": True, "deliverable": declared},
+        }
+
+    def measure_page_overflow(page) -> list[dict]:
+        """真实渲染逐页测量：当前页画布是否溢出（scrollWidth/Height 超出 client）。"""
+        evidence = []
+        for n in (1, 2, 3):
+            go_page(page, n)
+            m = page.evaluate(
+                "() => { const r = document.getElementById('host').shadowRoot;"
+                "  const s = r.querySelector('section.page');"
+                "  return {sw: s.scrollWidth, cw: s.clientWidth,"
+                "          sh: s.scrollHeight, ch: s.clientHeight}; }")
+            issues = []
+            if m["sw"] > m["cw"]:
+                issues.append(f"内容超出画布右缘约 {m['sw'] - m['cw']}px")
+            if m["sh"] > m["ch"]:
+                issues.append(f"内容超出画布底部约 {m['sh'] - m['ch']}px")
+            evidence.append({"page": n, "checked": True, "issues": issues,
+                             "viewport": "1280x720"})
+        return evidence
+
+    def cli(tool, *args, expect=0):
+        done = subprocess.run([sys.executable, str(scripts / tool), *map(str, args)],
+                              env=env, capture_output=True, text=True, timeout=60)
+        if expect is not None:
+            assert done.returncode == expect, \
+                f"{tool} 退出码 {done.returncode}（期望 {expect}）：{done.stderr or done.stdout}"
+        return done
+
+    # ── 正确产物：渲染测量无溢出 → 证据写进记录 → 可交付判定成立 ──
+    good_body = "".join([
+        section(1, "sum", "结论：收入同比增长 12%",
+                '<p class="ae-kpi">+12%</p><p>新开 3 家门店贡献主要增量。</p>'
+                '<p class="ae-source">materials/q3-notes.md 第 2 节</p>'),
+        section(2, "rev", "收入结构",
+                "<table><tr><th>渠道</th><th>上季</th><th>本季</th></tr>"
+                "<tr><td>堂食</td><td>66%</td><td>62%</td></tr>"
+                "<tr><td>外卖</td><td>34%</td><td>38%</td></tr></table>"),
+        section(3, "next", "下一步", "<p>两件事。</p>"
+                '<p class="ae-gap">十月周报缺失，待补充后复核结论。</p>'),
+    ])
+    good = write_case("verdict-good", good_body)
+    review = good["dir"] / "q3-review"
+    cli("build_viewer.py", "--report", str(good["report"]), "--script", str(good["script"]),
+        "--out", str(review), "--name", "交付判定正确产物", "--no-scan-skills")
+    rid_before = json.loads((review / "review.json").read_text(encoding="utf-8"))["reviewId"]
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="正确产物对照页进入服务模式")
+        ok(page.locator("#jump option").count() == 3, "正确产物三页进入对照页")
+        evidence = measure_page_overflow(page)
+        ok(all(not e["issues"] for e in evidence),
+           f"真实渲染逐页测量：正确产物无溢出（{evidence}）")
+    finally:
+        stop(server)
+        ctx.close()
+    visual_pass = {"id": "visual.pages", "kind": "visual", "status": "pass",
+                   "scope": "全部 3 页（1280×720 实际渲染，逐页测量）",
+                   "note": "逐页渲染检查", "pages": evidence}
+    record_path = good["dir"] / "report-record.json"
+    record_path.write_text(json.dumps(record_for(good, visual=visual_pass, declared=True),
+                                      ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    checked = json.loads(cli("report_check.py", str(good["report"]), "--script",
+                             str(good["script"]), "--record", str(record_path),
+                             "--locale", "zh-CN", "--json").stdout)
+    ok(checked["verdict"]["deliverable"] is True,
+       "程序、内容、结构、视觉全部 covered 时报告可交付判定成立")
+    ok(checked["coverage"] == {"content": "covered", "structure": "covered",
+                               "visual": "covered"},
+       f"三类覆盖全部 covered（{checked['coverage']}）")
+    ok(checked["verdict"]["draftComplete"] is True, "初稿与可交付分别输出（初稿完成）")
+    ok(disk_notes(review) == [], "核验判定不落批注")
+    rid_after = json.loads((review / "review.json").read_text(encoding="utf-8"))["reviewId"]
+    ok(rid_after == rid_before, "核验判定不改变审阅标识，不触发复核或定稿")
+    # 判定之后审阅照常：批注仍能落盘
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="判定后对照页仍进入服务模式")
+        add_note(page, "外卖占比的数字加同比说明", pin=(0.5, 0.4))
+        ok(wait_until(lambda: len(disk_notes(review)) == 1, page, 5),
+           "判定之后批注照常落盘，审阅不受影响")
+    finally:
+        stop(server)
+        ctx.close()
+
+    # ── 故障产物：第 3 页 1600px 宽块真实溢出 ──
+    wide = ('<div style="width:1600px"><table>'
+            "<tr><th>项目</th><th>数值</th></tr><tr><td>咖啡豆成本</td><td>+9%</td></tr>"
+            "</table></div>")
+    faulty_body = "".join([
+        section(1, "sum", "结论：收入同比增长 12%",
+                '<p class="ae-kpi">+12%</p><p>新开 3 家门店贡献主要增量。</p>'),
+        section(2, "rev", "收入结构", "<p>外卖占比 38%。</p>"),
+        section(3, "next", "下一步", "<p>两件事。</p>" + wide),
+    ])
+    faulty = write_case("verdict-faulty", faulty_body)
+    faulty_review = faulty["dir"] / "q3-review"
+    cli("build_viewer.py", "--report", str(faulty["report"]), "--script", str(faulty["script"]),
+        "--out", str(faulty_review), "--name", "交付判定故障产物", "--no-scan-skills")
+    port = free_port()
+    server = start_server(faulty_review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="故障产物对照页进入服务模式")
+        evidence = measure_page_overflow(page)
+        overflow_pages = [e["page"] for e in evidence if e["issues"]]
+        ok(overflow_pages == [3],
+           f"真实渲染逐页测量：只有第 3 页溢出（{overflow_pages}）")
+    finally:
+        stop(server)
+        ctx.close()
+    # 如实登记溢出：声明与证据一致（程序检查通过），但视觉覆盖 uncovered，
+    # 「程序检查通过」不代替视觉检查通过，可交付被挡下
+    visual_fail = {"id": "visual.pages", "kind": "visual", "status": "fail",
+                   "scope": "全部 3 页（1280×720 实际渲染，逐页测量）",
+                   "note": "逐页渲染检查，第 3 页溢出", "pages": evidence}
+    record_path = faulty["dir"] / "report-record.json"
+    record_path.write_text(json.dumps(record_for(faulty, visual=visual_fail, declared=False),
+                                      ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    checked = json.loads(cli("report_check.py", str(faulty["report"]), "--script",
+                             str(faulty["script"]), "--record", str(record_path),
+                             "--locale", "zh-CN", "--json").stdout)
+    ok(checked["verdict"]["deliverable"] is False,
+       "如实登记的溢出阻止可交付判定（程序检查通过不代替视觉检查通过）")
+    ok(checked["coverage"]["visual"] == "uncovered",
+       f"视觉覆盖如实显示未通过（{checked['coverage']['visual']}）")
+    ok(checked["verdict"]["draftComplete"] is True, "故障产物的初稿仍可进入审阅")
+    # 缺页覆盖反例：声明逐页通过但证据缺第 3 页，判定入口直接判否
+    missing = record_for(faulty, visual=visual_fail)
+    missing["verdict"] = {"draftComplete": True, "deliverable": True}
+    for item in missing["checks"]:
+        if item["id"] == "visual.pages":
+            item.update({"status": "pass", "note": "声称全部检查通过",
+                         "pages": [e for e in evidence if e["page"] in (1, 2)]})
+    record_path.write_text(json.dumps(missing, ensure_ascii=False, indent=2) + "\n",
+                           encoding="utf-8")
+    done = cli("report_check.py", str(faulty["report"]), "--script", str(faulty["script"]),
+               "--record", str(record_path), "--locale", "zh-CN", "--json", expect=1)
+    payload = json.loads(done.stdout)
+    visual_item = [c for c in payload["checks"] if c["id"] == "record.visual"][0]
+    ok(visual_item["code"] == "record.visual-coverage"
+       and "3" in visual_item["detail"],
+       f"声明逐页通过但缺页覆盖被程序判否（{visual_item['code']}：{visual_item['detail']}）")
+    ok(payload["verdict"]["deliverable"] is False,
+       "缺页覆盖的反例不能通过整体交付验收")
+    # 故障产物仍在对照页可审阅
+    port = free_port()
+    server = start_server(faulty_review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="故障产物对照页仍进入服务模式")
+        go_page(page, 3)
+        ok(True, "故障产物第 3 页在对照页照常渲染审阅")
+    finally:
+        stop(server)
+        ctx.close()
+
+
+def revision_update_checks(browser, tmp: Path):
+    """场景 revision-update-loop：改稿更新核验（详见 e2e_scenarios 注册表）。
+
+    真实公开操作串起一条改稿链：可交付初态 → 改数字（源文件+讲稿同步）→ 旧可
+    交付判定失效 → 维护记录（更新哈希、revision 重新核验声明）→ 恢复；来源变动
+    → 材料哈希不符 → unverified；只改样式 → 真实渲染重测视觉证据后按范围恢复；
+    无法确认影响范围 → 摘要披露待核验范围与原因、可交付被拦；页序调整 → 批注按
+    稳定页面键找回、记录引用保持关联。判定用安装副本的核验入口，不落批注。
+    """
+    installed = tmp / "installed-skills" / "annotation-everything"
+    env = {**os.environ, "CLAUDE_SKILLS_DIR": str(installed.parent)}
+    subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"],
+                   env=env, check=True, capture_output=True, text=True, timeout=60)
+    scripts = installed / "scripts"
+    base_css = (scripts.parent / "references" / "report-base.css").read_text(encoding="utf-8")
+
+    def section(n, key, title, body):
+        return (f'<section class="page" data-page="{n}" data-key="{key}" id="page-{key}">'
+                f"<h2>{title}</h2>{body}</section>")
+
+    material_text = "# 三季度笔记\n\n三季度收入 112 万元，上年同期 100 万元。\n"
+    script_md = ("# 讲稿：改稿核验场景（合成）\n\n"
+                 "### 第 1 页｜结论\n**讲法**：\n先说结论：收入同比增长 12%。\n"
+                 "### 第 2 页｜收入结构\n**讲法**：\n外卖占比继续上升。\n"
+                 "### 第 3 页｜下一步\n**讲法**：\n两件事。\n")
+    case = tmp / "revision-case"
+    case.mkdir(parents=True)
+    (case / "materials").mkdir()
+    report, script, material = case / "report.html", case / "script.md", case / "materials" / "q3-notes.md"
+    report_path = report
+
+    def sha_file(p: Path) -> str:
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+
+    def write_report(body: str, style_extra: str = "") -> None:
+        head = ('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+                "<title>改稿核验场景（合成）</title><style>" + base_css + style_extra
+                + "</style></head><body>")
+        report_path.write_text(head + body + "</body></html>", encoding="utf-8")
+
+    def write_body(v12: str = "12%") -> str:
+        return "".join([
+            section(1, "sum", f"结论：收入同比增长 {v12}",
+                    f'<p class="ae-kpi">+{v12}</p><p>新开 3 家门店贡献主要增量。</p>'
+                    '<p class="ae-source">materials/q3-notes.md 第 1 节</p>'),
+            section(2, "rev", "收入结构",
+                    "<table><tr><th>渠道</th><th>本季</th></tr>"
+                    "<tr><td>外卖</td><td>38%</td></tr></table>"),
+            section(3, "next", "下一步", "<p>两件事。</p>"),
+        ])
+
+    material.write_text(material_text, encoding="utf-8")
+    script.write_text(script_md, encoding="utf-8")
+    write_report(write_body())
+
+    def cli(tool, *args, expect=0):
+        done = subprocess.run([sys.executable, str(scripts / tool), *map(str, args)],
+                              env=env, capture_output=True, text=True, timeout=60)
+        if expect is not None:
+            assert done.returncode == expect, \
+                f"{tool} 退出码 {done.returncode}（期望 {expect}）：{done.stderr or done.stdout}"
+        return done
+
+    def base_record(record_report_sha: str) -> dict:
+        return {
+            "schema": "ae-report-record/1",
+            "generatedAt": "2026-11-02T09:00:00+08:00",
+            "request": {"purpose": "季度经营汇报", "audience": "管理层",
+                        "coreQuestions": ["三季度收入为什么增长"], "length": "3 页",
+                        "script": "yes"},
+            "sources": [{"path": "materials/q3-notes.md", "status": "read",
+                         "coverage": "全文", "sha256": sha_file(material), "note": ""}],
+            "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
+                       "version": "0.9.0", "unavailable": []},
+            "links": {"report": "report.html", "script": "script.md",
+                      "sha256": {"report": record_report_sha, "script": sha_file(script)},
+                      "sourceNote": "materials/q3-notes.md 及同目录讲稿"},
+            "findings": [{"claim": "三季度收入同比增长 12%", "type": "calculation",
+                          "sources": ["materials/q3-notes.md"], "pages": ["sum"],
+                          "refs": [{"path": "materials/q3-notes.md", "locator": "§1 收入",
+                                    "quote": "上年同期 100 万元", "found": True}],
+                          "support": "supported",
+                          "basis": "对比材料两期收入原文，并按声明输入复算 percent-change",
+                          "calculation": {"op": "percent-change",
+                                          "inputs": {"a": 100, "b": 112}, "expected": 12,
+                                          "unit": "万元", "period": "2025Q3 对 2024Q3",
+                                          "definition": "对上年同期收入的增长百分比",
+                                          "inputLocations": {
+                                              "a": "materials/q3-notes.md §1：上年同期 100 万元",
+                                              "b": "materials/q3-notes.md §1：三季度收入 112 万元"}},
+                          "note": "收入 112 对上年 100"}],
+            "gaps": [],
+            "checks": (
+                [{"id": cid, "kind": "content", "status": "pass",
+                  "scope": "全部", "note": "真实渲染核验场景的合成声明"}
+                 for cid in ("content.requirements", "content.claims",
+                             "content.fact-vs-inference", "content.units-dates",
+                             "content.numbers-charts", "content.cross-page",
+                             "content.script-consistency", "content.open-questions")]
+                + [{"id": cid, "kind": "structure", "status": "pass",
+                    "scope": "全部页", "note": "真实渲染核验场景的合成声明"}
+                   for cid in ("structure.flow", "structure.headings",
+                               "structure.claim-support", "structure.dup-gaps",
+                               "structure.length")]
+                + [{"id": "visual.pages", "kind": "visual", "status": "pass",
+                    "scope": "全部 3 页（1280×720 实际渲染，逐页测量）",
+                    "note": "逐页渲染检查", "pages": []}]),
+            "openItems": [],
+            "verdict": {"draftComplete": True, "deliverable": True},
+        }
+
+    def run_check(expect=0):
+        return json.loads(cli("report_check.py", str(report_path), "--script", str(script),
+                              "--record", str(record_path), "--locale", "zh-CN",
+                              "--json", expect=expect).stdout)
+
+    def measure_page_overflow(page, pages=(1, 2, 3)) -> list[dict]:
+        """真实渲染逐页测量：当前页画布是否溢出（scrollWidth/Height 超出 client）。"""
+        evidence = []
+        for n in pages:
+            go_page(page, n)
+            m = page.evaluate(
+                "() => { const r = document.getElementById('host').shadowRoot;"
+                "  const s = r.querySelector('section.page');"
+                "  return {sw: s.scrollWidth, cw: s.clientWidth,"
+                "          sh: s.scrollHeight, ch: s.clientHeight}; }")
+            issues = []
+            if m["sw"] > m["cw"]:
+                issues.append(f"内容超出画布右缘约 {m['sw'] - m['cw']}px")
+            if m["sh"] > m["ch"]:
+                issues.append(f"内容超出画布底部约 {m['sh'] - m['ch']}px")
+            evidence.append({"page": n, "checked": True, "issues": issues,
+                             "viewport": "1280x720"})
+        return evidence
+
+    def render_evidence() -> list[dict]:
+        """对照页真实渲染逐页测量，返回视觉证据。"""
+        port = free_port()
+        review = case / "q3-review"
+        server = start_server(review, port, scripts=scripts)
+        ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+        try:
+            page = ctx.new_page()
+            page.goto(f"http://127.0.0.1:{port}/")
+            wait_mode(page, "server", condition="改稿核验对照页进入服务模式")
+            return measure_page_overflow(page)
+        finally:
+            stop(server)
+            ctx.close()
+
+    record_path = case / "report-record.json"
+    review = case / "q3-review"
+
+    # ── 初态：真实渲染证据 + 完整记录 → 可交付 ──
+    cli("build_viewer.py", "--report", str(report_path), "--script", str(script),
+        "--out", str(review), "--name", "改稿核验场景", "--no-scan-skills")
+    evidence = render_evidence()
+    ok(all(not e["issues"] for e in evidence),
+       f"初态真实渲染逐页测量无溢出（{[e['issues'] for e in evidence]}）")
+    record = base_record(sha_file(report_path))
+    for item in record["checks"]:
+        if item["id"] == "visual.pages":
+            item["pages"] = evidence
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                           encoding="utf-8")
+    checked = run_check()
+    ok(checked["verdict"]["deliverable"] is True, "初态完整记录支持可交付判定")
+    ok(checked["record"]["revision"] is None, "初次生成形态没有 revision 声明")
+
+    # ── 改数字（源文件+讲稿同步）：旧可交付判定失效 ──
+    write_report(write_body(v12="15%"))
+    script.write_text(script_md.replace("同比增长 12%", "同比增长 15%"), encoding="utf-8")
+    checked = run_check(expect=1)
+    ok(checked["verdict"]["deliverable"] is False, "改数字后旧的可交付判定不再有效")
+    ok(checked["record"]["fresh"] is False and checked["coverage"]["content"] == "unverified",
+       f"记录对不上当前产物（fresh={checked['record']['fresh']}，"
+       f"coverage={checked['coverage']['content']}）")
+    ok(checked["verdict"]["draftComplete"] is True, "记录过期挡可交付，不挡初稿审阅")
+
+    # ── 维护记录：更新哈希 + revision 重新核验声明 → 恢复 ──
+    record = base_record(sha_file(report_path))
+    for item in record["checks"]:
+        if item["id"] == "visual.pages":
+            item["pages"] = evidence
+    record["revision"] = {
+        "basis": "改动落在第 1 页收入数字，讲稿同步；跨页口径与引用未受影响",
+        "rechecked": ["content.numbers-charts", "content.cross-page",
+                      "content.script-consistency", "content.claims"],
+        "pending": []}
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                           encoding="utf-8")
+    checked = run_check()
+    ok(checked["verdict"]["deliverable"] is True,
+       "受影响项重新核验并维护记录后可交付恢复（未受影响证据保留）")
+    ok(checked["record"]["revision"]["rechecked"][0] == "content.numbers-charts",
+       "结构化结果披露本次重新核验范围")
+
+    # ── 来源变动：材料哈希不符 → unverified ──
+    material.write_text(material_text.replace("112", "119"), encoding="utf-8")
+    checked = run_check(expect=1)
+    ok(checked["verdict"]["deliverable"] is False, "来源变动后旧结论不能为新材料背书")
+    ok(checked["coverage"]["content"] == "unverified",
+       f"来源变动的覆盖降级（{checked['coverage']['content']}）")
+    material.write_text(material_text, encoding="utf-8")   # 恢复材料
+
+    # ── 只改样式：真实渲染重测视觉证据后按范围恢复，内容类覆盖保留 ──
+    write_report(write_body(v12="15%"), style_extra=" .page{padding:80px}")
+    checked = run_check(expect=1)
+    ok(checked["verdict"]["deliverable"] is False, "改样式后同样需要维护核验记录")
+    style_evidence = render_evidence()
+    ok(all(not e["issues"] for e in style_evidence),
+       "样式改动的视觉影响经真实渲染重测（无溢出）")
+    record = base_record(sha_file(report_path))
+    for item in record["checks"]:
+        if item["id"] == "visual.pages":
+            item["pages"] = style_evidence
+    record["revision"] = {
+        "basis": "改动是全局页边距样式，内容与来源未变；视觉逐页重测",
+        "rechecked": ["visual.pages"],
+        "pending": []}
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                           encoding="utf-8")
+    checked = run_check()
+    ok(checked["verdict"]["deliverable"] is True, "只改样式经视觉重测与记录维护后恢复")
+    ok(checked["coverage"]["content"] == "covered", "内容类覆盖保留（未受影响证据不重查）")
+
+    # ── 无法确认影响范围：待核验披露拦下可交付 ──
+    record = base_record(sha_file(report_path))
+    for item in record["checks"]:
+        if item["id"] == "visual.pages":
+            item["pages"] = style_evidence
+    record["revision"] = {
+        "basis": "样式改动疑似影响图表对齐，但无法确认涉及哪些页",
+        "rechecked": ["visual.pages"],
+        "pending": [{"scope": "第 2 页图表与讲稿对应说法",
+                     "reason": "边距变化是否影响表格可读无法确认"}]}
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                           encoding="utf-8")
+    checked = run_check()
+    ok(checked["verdict"]["deliverable"] is False, "存在待核验项时不能判可交付")
+    reasons = "；".join(checked["verdict"]["reasons"])
+    ok("第 2 页图表与讲稿对应说法" in reasons and "边距变化是否影响表格可读无法确认" in reasons,
+       f"待核验范围与原因写入判定原因（{reasons}）")
+    summary_run = cli("report_check.py", str(report_path), "--script", str(script),
+                      "--record", str(record_path), "--locale", "zh-CN")
+    ok("待核验" in summary_run.stdout and "第 2 页图表" in summary_run.stdout,
+       "摘要如实披露待核验范围")
+
+    # ── 页序调整：稳定页面键保持批注与记录引用的关联 ──
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="页序调整前对照页进入服务模式")
+        add_note(page, "收入数字引用请标注期间", pin=(0.5, 0.4))
+        ok(wait_until(lambda: len(disk_notes(review)) == 1, page, 5), "批注落盘")
+    finally:
+        stop(server)
+        ctx.close()
+    # 真实改稿按新页序重写文档顺序并更新 data-page，讲稿同步
+    body_reordered = "".join([
+        section(1, "sum", "结论：收入同比增长 15%",
+                '<p class="ae-kpi">+15%</p><p>新开 3 家门店贡献主要增量。</p>'
+                '<p class="ae-source">materials/q3-notes.md 第 1 节</p>'),
+        section(2, "next", "下一步", "<p>两件事。</p>"),
+        section(3, "rev", "收入结构",
+                "<table><tr><th>渠道</th><th>本季</th></tr>"
+                "<tr><td>外卖</td><td>38%</td></tr></table>"),
+    ])
+    write_report(body_reordered)
+    script.write_text(script_md.replace("同比增长 12%", "同比增长 15%").replace(
+        "### 第 2 页｜收入结构\n**讲法**：\n外卖占比继续上升。\n"
+        "### 第 3 页｜下一步\n**讲法**：\n两件事。\n",
+        "### 第 2 页｜下一步\n**讲法**：\n两件事。\n"
+        "### 第 3 页｜收入结构\n**讲法**：\n外卖占比继续上升。\n"), encoding="utf-8")
+    cli("build_viewer.py", "--rebuild", str(review))
+    note = disk_notes(review)[0]
+    ok(note["key"] == "sum" and note["page"] == 1, "批注按页面键保持在结论页")
+    reordered_evidence = render_evidence()
+    record = base_record(sha_file(report_path))
+    for item in record["checks"]:
+        if item["id"] == "visual.pages":
+            item["pages"] = reordered_evidence
+    record["revision"] = {
+        "basis": "页序调整，内容与来源未变；批注与记录引用按稳定页面键关联",
+        "rechecked": ["structure.flow", "content.cross-page"],
+        "pending": []}
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                           encoding="utf-8")
+    checked = run_check()
+    page_refs = [c for c in checked["checks"] if c["id"] == "record.pageRefs"][0]
+    ok(page_refs["status"] == "pass",
+       "页序重排后记录引用经稳定页面键保持关联")
+    ok(checked["verdict"]["deliverable"] is True, "页序调整维护后判定恢复")
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="重建后的对照页进入服务模式")
+        ok(page.locator("#jump option").count() == 3, "重建后仍为三页")
+        go_page(page, 1)
+        ok(wait_until(lambda: "收入数字引用请标注期间" in page.locator("#nlist").inner_text(),
+                      page, 5), "重建后批注在结论页可见")
+    finally:
+        stop(server)
+        ctx.close()
+
+
+def legacy_report_checks(browser, tmp: Path):
+    """场景 legacy-report-compat：旧报告无核验记录仍直接审阅（详见 e2e_scenarios 注册表）。
+
+    无记录旧报告走完整审阅回路：对照页、批注落盘、页面提交（已初改·待复核）、
+    claim 接收、初改、重建、done --draft 停在待复核；报告质量状态与批次状态分离
+    （核验入口对旧报告显示无记录，批次状态不受影响）。整体核验请求下按完整清单
+    建立记录恢复可交付；原始依据不可得的缺口形态如实显示，不伪称核验完成。
+    """
+    installed = tmp / "installed-skills" / "annotation-everything"
+    env = {**os.environ, "CLAUDE_SKILLS_DIR": str(installed.parent)}
+    subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"],
+                   env=env, check=True, capture_output=True, text=True, timeout=60)
+    scripts = installed / "scripts"
+    base_css = (scripts.parent / "references" / "report-base.css").read_text(encoding="utf-8")
+
+    case = tmp / "legacy-case"
+    case.mkdir(parents=True)
+    report = case / "report.html"
+    script = case / "script.md"
+    body = "".join([
+        '<section class="page" data-page="1" data-key="sum" id="page-sum">'
+        "<h2>结论</h2><p>收入同比上升。</p></section>",
+        '<section class="page" data-page="2" data-key="rev" id="page-rev">'
+        "<h2>结构</h2><p>外卖占比上升。</p></section>",
+        '<section class="page" data-page="3" data-key="next" id="page-next">'
+        "<h2>下一步</h2><p>两件事。</p></section>",
+    ])
+    report.write_text('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+                      "<title>旧版季度回顾（合成，无核验记录）</title><style>" + base_css
+                      + "</style></head><body>" + body + "</body></html>", encoding="utf-8")
+    script.write_text("# 讲稿：旧版季度回顾（合成）\n\n"
+                      "### 第 1 页｜结论\n**讲法**：\n先说结论。\n"
+                      "### 第 2 页｜结构\n**讲法**：\n外卖占比上升。\n"
+                      "### 第 3 页｜下一步\n**讲法**：\n两件事。\n", encoding="utf-8")
+
+    def cli(tool, *args, expect=0, in_env=None):
+        done = subprocess.run([sys.executable, str(scripts / tool), *map(str, args)],
+                              env=in_env or env, capture_output=True, text=True, timeout=60)
+        if expect is not None:
+            assert done.returncode == expect, \
+                f"{tool} 退出码 {done.returncode}（期望 {expect}）：{done.stderr or done.stdout}"
+        return done
+
+    def run_check(record=None, expect=0):
+        args = ["report_check.py", str(report), "--script", str(script)]
+        if record is not None:
+            args += ["--record", str(record)]
+        args += ["--locale", "zh-CN", "--json"]
+        return json.loads(cli(*args, expect=expect).stdout)
+
+    # ── 旧报告没有核验记录：核验入口如实显示，不阻塞审阅 ──
+    checked = run_check()
+    ok(checked["verdict"]["draftComplete"] is True and not checked["record"]["fresh"],
+       "无记录旧报告：初稿判定不受阻，不被迫补建记录")
+    ok(any("没有可用的核验记录" in r for r in checked["verdict"]["reasons"]),
+       "缺记录是如实披露（记录缺失说明原因，不是程序失败）")
+
+    # ── 真实审阅回路：对照页 → 批注 → 提交（已初改·待复核）→ 接收 → 初改 → 停 ──
+    review = case / "old-review"
+    cli("build_viewer.py", "--report", str(report), "--script", str(script),
+        "--out", str(review), "--name", "旧版季度回顾", "--no-scan-skills")
+    rid_before = json.loads((review / "review.json").read_text(encoding="utf-8"))["reviewId"]
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="旧报告对照页进入服务模式")
+        ok(page.locator("#jump option").count() == 3, "旧报告三页进入对照页")
+        add_note(page, "收入上升的幅度请补数字", pin=(0.5, 0.4))
+        ok(wait_until(lambda: len(disk_notes(review)) == 1, page, 5), "旧报告批注落盘")
+        page.click("#handBtn")
+        page.check('input[name="htarget"][value="review"]')
+        page.fill("#handMsg", "先改，改完等我复核")
+        page.click("#doHand")
+        ok(wait_until(lambda: (review / "handoff.json").exists(), page, 5),
+           "旧报告的提交照常落盘（目标：已初改·待复核）")
+    finally:
+        stop(server)
+        ctx.close()
+    item = json.loads((review / "handoff.json").read_text(encoding="utf-8"))["items"][-1]
+    ok(item.get("target") == "review", "提交目标记录为已初改·待复核")
+    claimed = cli("notes.py", "claim", str(review))
+    ok(claimed.returncode == 0, "Agent 照常接收旧报告的批次")
+    batch = json.loads(claimed.stdout)
+    seq = batch.get("seq")
+    ok(seq is not None and batch.get("target") == "review",
+       f"接收输出带批号与目标（seq={seq}）")
+    # 初改：改源文件 + 重建 + 初改标记（target=review 的批次里 resolve 自动记为已初改·待复核）
+    report.write_text(report.read_text(encoding="utf-8").replace("收入同比上升。",
+                                                                "收入同比上升 12%。"),
+                      encoding="utf-8")
+    cli("build_viewer.py", "--rebuild", str(review))
+    note_id = disk_notes(review)[0]["id"]
+    cli("notes.py", "resolve", str(review), note_id, "--seq", str(seq),
+        "--by", "初改", "--note", "结论页补上 12%")
+    done = cli("notes.py", "done", str(review), "--seq", str(seq), "--draft",
+               "--summary", "初改完成，等用户复核")
+    ok(done.returncode == 0, "初改收尾")
+    batch_after = json.loads((review / "handoff.json").read_text(encoding="utf-8"))["items"][-1]
+    ok(batch_after.get("status") == "drafted",
+       f"批次停在已初改·待复核，等用户（status={batch_after.get('status')}）")
+    note_after = [n for n in disk_notes(review) if n["id"] == note_id][0]
+    ok(note_after.get("status") == "drafted", "批注记为已初改·待复核（drafted）")
+    rid_after = json.loads((review / "review.json").read_text(encoding="utf-8"))["reviewId"]
+    ok(rid_after == rid_before, "改稿与重建保持审阅标识")
+
+    # ── 状态分离：报告质量状态独立于批次状态 ──
+    checked = run_check()
+    ok(checked["verdict"]["draftComplete"] is True and not checked["record"]["fresh"],
+       "初改后报告仍无核验记录：报告质量状态如实独立显示，不受批次影响")
+    ok(checked["verdict"]["deliverable"] is False, "无记录不等于可交付")
+
+    # ── 整体核验请求：按完整清单建立记录（真实渲染视觉证据）→ 可交付 ──
+    (case / "materials").mkdir(exist_ok=True)
+    material = case / "materials" / "old-notes.md"
+    material.write_text("# 旧季度笔记\n\n收入 112，上年 100；外卖占比 38%。\n", encoding="utf-8")
+
+    def sha_file(p: Path) -> str:
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="整体核验前对照页进入服务模式")
+        evidence = []
+        for n in (1, 2, 3):
+            go_page(page, n)
+            m = page.evaluate(
+                "() => { const r = document.getElementById('host').shadowRoot;"
+                "  const s = r.querySelector('section.page');"
+                "  return {sw: s.scrollWidth, cw: s.clientWidth,"
+                "          sh: s.scrollHeight, ch: s.clientHeight}; }")
+            evidence.append({"page": n, "checked": True,
+                             "issues": ([] if m["sw"] <= m["cw"] and m["sh"] <= m["ch"]
+                                        else ["画布溢出"]), "viewport": "1280x720"})
+        ok(all(not e["issues"] for e in evidence), "整体核验逐页渲染测量完成")
+    finally:
+        stop(server)
+        ctx.close()
+    record = {
+        "schema": "ae-report-record/1",
+        "generatedAt": "2026-11-02T10:00:00+08:00",
+        "request": {"purpose": "季度经营回顾", "audience": "管理层",
+                    "coreQuestions": ["收入与结构表现"], "length": "3 页", "script": "yes"},
+        "sources": [{"path": "materials/old-notes.md", "status": "read",
+                     "coverage": "全文", "sha256": sha_file(material), "note": "整体核验时重新读取"}],
+        "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
+                   "version": "0.9.0", "unavailable": []},
+        "links": {"report": "report.html", "script": "script.md",
+                  "sha256": {"report": sha_file(report), "script": sha_file(script)},
+                  "sourceNote": "旧报告整体核验（无原始生成记录）"},
+        "findings": [{"claim": "收入同比上升 12%", "type": "fact",
+                      "sources": ["materials/old-notes.md"], "pages": ["sum"],
+                      "refs": [{"path": "materials/old-notes.md", "locator": "全文",
+                                "quote": "收入 112，上年 100", "found": True}],
+                      "support": "supported", "basis": "按材料两期数字复算核对手工口径",
+                      "note": "旧报告的结论重新定位到材料"}],
+        "gaps": [],
+        "checks": (
+            [{"id": cid, "kind": "content", "status": "pass", "scope": "全部",
+              "note": "整体核验补建"} for cid in (
+                "content.requirements", "content.claims", "content.fact-vs-inference",
+                "content.units-dates", "content.numbers-charts", "content.cross-page",
+                "content.script-consistency", "content.open-questions")]
+            + [{"id": cid, "kind": "structure", "status": "pass", "scope": "全部页",
+                "note": "整体核验补建"} for cid in (
+                "structure.flow", "structure.headings", "structure.claim-support",
+                "structure.dup-gaps", "structure.length")]
+            + [{"id": "visual.pages", "kind": "visual", "status": "pass",
+                "scope": "全部 3 页（1280×720 实际渲染，逐页测量）",
+                "note": "逐页渲染检查", "pages": evidence}]),
+        "openItems": [],
+        "verdict": {"draftComplete": True, "deliverable": True},
+    }
+    record_path = case / "report-record.json"
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                           encoding="utf-8")
+    checked = run_check(record=record_path)
+    ok(checked["verdict"]["deliverable"] is True,
+       "整体核验请求下为旧报告建立完整记录并恢复可交付判定")
+    ok(checked["record"]["fresh"] is True, "补建的记录对应当前产物")
+
+    # ── 原始依据不可得：缺口登记，不伪称核验完成 ──
+    gap_case = tmp / "legacy-gap"
+    gap_case.mkdir(parents=True)
+    gap_report = gap_case / "report.html"
+    gap_report.write_text(report.read_text(encoding="utf-8"), encoding="utf-8")
+    gap_script = gap_case / "script.md"
+    gap_script.write_text(script.read_text(encoding="utf-8"), encoding="utf-8")
+    gap_record = json.loads(json.dumps(record))
+    gap_record["sources"] = []
+    gap_record["links"] = {"report": "report.html", "script": "script.md",
+                           "sha256": {"report": sha_file(gap_report),
+                                      "script": sha_file(gap_script)},
+                           "sourceNote": "原始材料不可获得，仅报告自身可用"}
+    for it in gap_record["findings"]:
+        it["sources"] = []
+        it["refs"] = []
+        it["support"] = "unverified"
+        it["basis"] = "原始材料不可获得，无法对照"
+    for it in gap_record["checks"]:
+        if it["id"] in ("content.claims", "content.numbers-charts"):
+            it["status"] = "not_run"
+            it["note"] = "原始材料不可获得，无法核对"
+    gap_record["gaps"] = ["原始材料不可获得：核验依据以报告自身为准，待材料补充后复核"]
+    gap_record["verdict"] = {"draftComplete": True, "deliverable": None}
+    gap_path = gap_case / "report-record.json"
+    gap_path.write_text(json.dumps(gap_record, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8")
+    gap_checked = json.loads(cli("report_check.py", str(gap_report), "--script", str(gap_script),
+                                 "--record", str(gap_path), "--locale", "zh-CN",
+                                 "--json").stdout)
+    ok(gap_checked["verdict"]["deliverable"] is False,
+       "原始依据不可得的记录不能伪称可交付")
+    gap_reasons = "；".join(gap_checked["verdict"]["reasons"])
+    ok("内容核验" in gap_reasons, f"未执行的内容核验在原因中如实列出（{gap_reasons}）")
+    gap_summary_run = cli("report_check.py", str(gap_report), "--script", str(gap_script),
+                          "--record", str(gap_path), "--locale", "zh-CN")
+    ok("原始材料不可获得" in gap_summary_run.stdout, "摘要披露缺口登记")
+
+
 def server_mode_checks(browser, tmp: Path):
     """场景 server-mode：服务模式全流程与恢复、离线、安全边界（详见 e2e_scenarios 注册表）。"""
     import_md = server_import_export_fixture(tmp)
@@ -2861,8 +3821,149 @@ const T = "http://127.0.0.1:{port}";
         stop(srv)
 
 
+def external_method_checks(browser, tmp: Path):
+    """场景 external-method-loop：外部生成技能共用验收（详见 e2e_scenarios 注册表）。
+
+    明确指定的合成外部技能（fixtures/external-report-skill）被实际调用：运行其
+    脚本，可观察的调用效果（产物标记、调用说明）写进核验记录；产物走安装副本的
+    同一核验入口与同一记录契约，打开现有对照页渲染、批注。缺依据的外部产物
+    （lite 变体）与换成内置方法声明的孪生记录判定完全一致——外部方法不放宽验收。
+    确定性产品流程验证，不冒充实际模型的评测（那由 evals/generate-method-* 定义）。
+    """
+    base = tmp / "external-loop"
+    installed = base / "installed-skills" / "annotation-everything"
+    env = {**os.environ, "HOME": str(base / "home"),
+           "CLAUDE_SKILLS_DIR": str(base / "installed-skills"),
+           "AE_HOME": str(base / "ae-home")}
+    subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"],
+                   env=env, check=True, capture_output=True, text=True, timeout=60)
+    scripts = installed / "scripts"
+    # 指定的外部技能放进同一合成技能目录：它在本场景里「可用」
+    for fixture in ("external-report-skill", "external-report-skill-lite"):
+        shutil.copytree(ROOT / "fixtures" / fixture,
+                        base / "installed-skills" / fixture, dirs_exist_ok=True)
+    case = base / "case"
+    (case / "materials").mkdir(parents=True)
+    material = case / "materials" / "notes.md"
+    material.write_text("# 三季度经营笔记（合成）\n\n- 三季度收入 112 万元\n"
+                        "- 上年同期收入 100 万元\n- 外卖渠道占比 38%\n"
+                        "- 十月周报缺失，十月趋势暂无法核对\n", encoding="utf-8")
+
+    def cli(tool, *args, expect=0):
+        done = subprocess.run([sys.executable, str(scripts / tool), *map(str, args)],
+                              env=env, capture_output=True, text=True, timeout=60)
+        if expect is not None:
+            assert done.returncode == expect, \
+                f"{tool} 退出码 {done.returncode}（期望 {expect}）：{done.stderr or done.stdout}"
+        return done
+
+    # ── 选定方法：实际调用指定技能（不是只凭目录扫描或名称宣称） ──
+    done = subprocess.run(
+        [sys.executable, str(base / "installed-skills" / "external-report-skill" / "scripts" / "make_report.py"),
+         "--materials", str(material), "--out", str(case)],
+        env=env, capture_output=True, text=True, timeout=60)
+    ok(done.returncode == 0 and "xs-banner" in done.stdout,
+       f"指定的合成技能被实际调用（退出码 {done.returncode}，调用输出带产物标记）")
+    report, script = case / "report.html", case / "script.md"
+    record_path = case / "report-record.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    ok(report.exists() and script.exists() and record_path.exists(),
+       "外部技能产出报告、讲稿与核验记录")
+    ok(record["method"]["kind"] == "external"
+       and record["method"]["name"] == "synthetic-brief-kit"
+       and record["method"].get("version")
+       and record["method"].get("invocation", "").strip(),
+       "记录保留实际生成方法、版本信息与调用说明")
+
+    # ── 相同核验：同一入口、同一记录契约、同一判定语义 ──
+    checked = json.loads(cli("report_check.py", str(report), "--script", str(script),
+                             "--record", str(record_path), "--locale", "zh-CN",
+                             "--json").stdout)
+    ok(checked["schema"] == "ae-report-check/1", "外部产物走同一核验入口（ae-report-check/1）")
+    ok(checked["verdict"]["draftComplete"] is True and checked["verdict"]["deliverable"] is False,
+       "判定语义与内置产物一致：初稿完成、内容与视觉核验未执行不支持可交付")
+    ok(checked["record"]["method"]["name"] == "synthetic-brief-kit"
+       and checked["record"]["method"]["kind"] == "external",
+       "核验结果披露实际生成方法")
+
+    # ── 打开现有对照页：外部版式进同一审阅页，批注与页面键照常工作 ──
+    review = case / "brief-review"
+    cli("build_viewer.py", "--report", str(report), "--script", str(script),
+        "--out", str(review), "--name", "外部技能简报", "--no-scan-skills")
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="对照页进入服务模式")
+        page_count = page.locator("#jump option").count()
+        ok(page_count == 2, f"外部技能的两页报告进入现有对照页（{page_count} 页）")
+        banner = page.evaluate(
+            "() => { const r = document.getElementById('host').shadowRoot;"
+            "  const b = r.querySelector('.xs-banner');"
+            "  return b ? [getComputedStyle(b).backgroundColor, b.textContent] : null; }")
+        ok(banner and banner[0] == "rgb(11, 114, 133)" and "SYNTHETIC-BRIEF-KIT" in banner[1],
+           f"外部技能自己的版式真实渲染（背景 {banner and banner[0]}，标记 {banner and banner[1]!r}）")
+        go_page(page, 1)
+        source_seen = page.evaluate(
+            "() => Boolean(document.getElementById('host').shadowRoot.querySelector('.ae-source'))")
+        ok(source_seen, "外部产物保留依据标注语义类")
+        add_note(page, "外部来源标注补同比基数", pin=(0.5, 0.4))
+        ok(wait_until(lambda: len(disk_notes(review)) == 1, page, 5), "批注照常落盘")
+        note = disk_notes(review)[0]
+        ok(note["key"] == "sum" and note["page"] == 1,
+           f"批注关联稳定页面键 sum（key={note['key']} page={note['page']}）")
+    finally:
+        stop(server)
+        ctx.close()
+
+    # ── 缺依据的外部产物：缺口如实列出、不可交付；与内置孪生判定一致 ──
+    lite = base / "case-lite"
+    lite_done = subprocess.run(
+        [sys.executable, str(base / "installed-skills" / "external-report-skill-lite" / "scripts" / "make_report.py"),
+         "--materials", str(material), "--out", str(lite)],
+        env=env, capture_output=True, text=True, timeout=60)
+    ok(lite_done.returncode == 0, "lite 变体技能实际运行生成缺依据产物")
+    lite_checked = json.loads(cli("report_check.py", str(lite / "report.html"),
+                                  "--script", str(lite / "script.md"),
+                                  "--record", str(lite / "report-record.json"),
+                                  "--locale", "zh-CN", "--json").stdout)
+    ok(lite_checked["verdict"]["deliverable"] is False
+       and lite_checked["coverage"]["content"] != "covered"
+       and any("另行核对" in g for g in lite_checked["gaps"]),
+       "缺依据的外部产物：缺口如实列出、覆盖不显示为通过、不可交付")
+
+    def outline(payload):
+        return {"checks": [(c["id"], c["status"], c["code"]) for c in payload["checks"]],
+                "coverage": payload["coverage"],
+                "draftComplete": payload["verdict"]["draftComplete"],
+                "deliverable": payload["verdict"]["deliverable"]}
+
+    lite_record = json.loads((lite / "report-record.json").read_text(encoding="utf-8"))
+    twin_dir = base / "case-lite-twin"
+    twin_dir.mkdir()
+    shutil.copy(lite / "report.html", twin_dir / "report.html")
+    shutil.copy(lite / "script.md", twin_dir / "script.md")
+    twin = dict(lite_record)
+    twin["method"] = {"kind": "builtin", "name": "annotation-everything 内置范式",
+                      "version": "0.9.0", "unavailable": []}
+    twin_path = twin_dir / "report-record.json"
+    twin_path.write_text(json.dumps(twin, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    twin_checked = json.loads(cli("report_check.py", str(twin_dir / "report.html"),
+                                  "--script", str(twin_dir / "script.md"),
+                                  "--record", str(twin_path),
+                                  "--locale", "zh-CN", "--json").stdout)
+    ok(outline(twin_checked) == outline(lite_checked),
+       "相同缺陷的内置与外部产物判定完全一致（外部方法不放宽也不加严）")
+
 
 SCENARIO_RUNNERS = {
+    "generated-draft-loop": generated_draft_checks,
+    "report-verdict-loop": report_verdict_checks,
+    "revision-update-loop": revision_update_checks,
+    "legacy-report-compat": legacy_report_checks,
+    "external-method-loop": external_method_checks,
     "installed-delivery": installed_delivery_checks,
     "locale-live-controls": locale_live_controls_checks,
     "skill-search": skill_search_checks,

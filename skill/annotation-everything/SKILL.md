@@ -1,19 +1,19 @@
 ---
 name: annotation-everything
-description: 本机逐页审阅、批注和改稿。将 HTML 报告与讲稿并排展示，收集引用、删除、改写、点或区域标注，接收提交后按批注同步修改报告和讲稿。用户说「审阅这份报告」「讲稿对照」「看我的批注」「按批注改」「交给你了」，或报告对照页打不开、批注未保存时使用。Use when the user asks to review a slide-style HTML report with speaker notes, collect page annotations, apply annotations, revise an annotated report, receive a submission, or recover a local review page. Triggers include “review this report”, “set up a review”, “I finished annotating”, “apply my annotations”, and “the review page cannot save”.
+description: 从原始材料生成逐页报告初稿、本机逐页审阅、批注和改稿。生成走内置默认范式（需求澄清、材料读取登记、逐页 HTML、可选讲稿、核验记录、公开核验入口）；审阅将 HTML 报告与讲稿并排展示，收集引用、删除、改写、点或区域标注，接收提交后按批注同步修改报告和讲稿。用户说「帮我生成一份报告」「从这份材料做汇报」「审阅这份报告」「讲稿对照」「看我的批注」「按批注改」「交给你了」，或报告对照页打不开、批注未保存时使用。Use when the user asks to generate a report draft from raw material, review a slide-style HTML report with speaker notes, collect page annotations, apply annotations, revise an annotated report, receive a submission, or recover a local review page. Triggers include “generate a report”, “turn this material into a briefing”, “review this report”, “set up a review”, “I finished annotating”, “apply my annotations”, and “the review page cannot save”.
 ---
 
 # annotation-everything
 
-Generate a local review page → start its service → wait for a submission → edit the source report and speaker notes → rebuild → record each result → finish the batch → wait again.
+Generate a report draft from raw material (default paradigm) or a local review page → start its service → wait for a submission → edit the source report and speaker notes → rebuild → record each result → finish the batch → wait again.
 
 Before loading a workflow, resolve `$S` to the `scripts/` directory beside this loaded `SKILL.md` and run `python3 "$S/update.py" auto --locale LANG`, replacing `LANG` with `zh-CN` or `en` for the user's request. The check runs at most once per day and does not block the review when offline. If it installs an update, reload this `SKILL.md` and its references; before resuming an existing review, stop any old service, rebuild the review page, start the new service, and ask the user to refresh the browser. Briefly tell the user about an installed update or a warning from the command.
 
 先按用户请求的语言选择操作指引。Choose the workflow from the user's request language, independently of the material language or the page's display language.
 
 1. **两种语言都先读 / Always read** [共用安全与协议约束 / Shared safety and protocol](references/protocol.md). This is the single source for safety, permissions, stop conditions, and compatibility rules.
-2. **中文请求**：读取[中文操作流程](references/workflow.zh-CN.md)，只加载本次需要的格式参考。
-3. **English requests**: read the [English workflow](references/workflow.en.md). Load the [English format reference](references/formats.en.md) when checking inputs, importing annotations, or reading structured fields.
+2. **中文请求**：读取[中文操作流程](references/workflow.zh-CN.md)，只加载本次需要的格式参考。要从原始材料生成新报告时，再读[报告生成：默认范式](references/generation.zh-CN.md)——生成方法的选择（内置范式或外部生成技能）与接入约定也在其中。
+3. **English requests**: read the [English workflow](references/workflow.en.md). Load the [English format reference](references/formats.en.md) when checking inputs, importing annotations, or reading structured fields. To generate a new report from raw material, also read [Report generation: default paradigm](references/generation.en.md) — it also covers choosing the generation method (built-in paradigm or an external generation skill) and the integration rules.
 4. Read one workflow per request. If the user explicitly requests another language, use that workflow. Do not load both complete workflows by default.
 
 `$S` in the guides means the `scripts/` directory beside this installed `SKILL.md`. Resolve it from the skill copy that was loaded. The scripts use the Python standard library. Both languages use the same installation, scripts, translation resources, review identity, and storage protocol.

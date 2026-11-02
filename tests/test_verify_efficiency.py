@@ -16,6 +16,9 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from verify_selection import STRATEGY_VERSION
+
 EPOCH = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
 
 
@@ -166,7 +169,7 @@ class EfficiencyCliTests(unittest.TestCase):
         self.record("finding")
         events = Path(self.tmp.name) / "events.json"
         events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": [], "gaps": [],
-            "selection_findings": [{"status": "confirmed", "strategy_version": 3,
+            "selection_findings": [{"status": "confirmed", "strategy_version": STRATEGY_VERSION,
                 "reason": "合成的已确认漏选", "evidence": ["runs/finding/record.json"]}]}))
         self.cli("--rebuild", "--events", str(events))
         env = dict(os.environ, AE_VERIFY_DIR=str(self.root))
@@ -399,7 +402,7 @@ else:
         events = Path(self.tmp.name) / "private-events.json"
         events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": list(range(10)),
             "gaps": [{"source": str(imported / "missing"), "reason": "cannot read " + str(imported / "missing")}],
-            "selection_findings": [{"status": "confirmed", "strategy_version": 3,
+            "selection_findings": [{"status": "confirmed", "strategy_version": STRATEGY_VERSION,
                 "reason": "synthetic finding in /private/synthetic-home/secret/file.json",
                 "evidence": [str(imported / "runs" / "imported-record" / "record.json")]}]}))
         result = self.cli("--rebuild", "--source", str(imported), "--events", str(events))
@@ -416,9 +419,9 @@ else:
     def test_old_findings_cannot_downgrade_the_current_guard_in_any_order(self):
         self.record("guard-input")
         events = Path(self.tmp.name) / "guard-events.json"
-        current = {"status": "confirmed", "strategy_version": 3, "reason": "current guard",
+        current = {"status": "confirmed", "strategy_version": STRATEGY_VERSION, "reason": "current guard",
                    "evidence": ["runs/guard-input/record.json"]}
-        old = dict(current, strategy_version=2, reason="old guard")
+        old = dict(current, strategy_version=STRATEGY_VERSION - 1, reason="old guard")
         for findings in ([current, old], [old, current], [old]):
             with self.subTest(findings=[item["strategy_version"] for item in findings]):
                 events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": [],
@@ -428,14 +431,14 @@ else:
                 self.assertTrue(selection["policy_guard"]["active"])
                 self.assertEqual(selection["suggested"]["groups"], ["all"])
                 guard = json.loads((self.root / "efficiency" / "selection-guard.json").read_text())
-                self.assertEqual(guard["strategy_version"], 3)
-        for findings in ([dict(current, strategy_version=4), old], [current]):
+                self.assertEqual(guard["strategy_version"], STRATEGY_VERSION)
+        for findings in ([dict(current, strategy_version=STRATEGY_VERSION + 1), old], [current]):
             events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": [],
                                           "gaps": [], "selection_findings": findings}))
             self.cli("--rebuild", "--events", str(events))
             self.assertTrue(self.plan()["policy_guard"]["active"])
             self.assertEqual(self.plan()["suggested"]["groups"], ["all"])
-            self.assertEqual(json.loads((self.root / "efficiency" / "selection-guard.json").read_text())["strategy_version"], 4)
+            self.assertEqual(json.loads((self.root / "efficiency" / "selection-guard.json").read_text())["strategy_version"], STRATEGY_VERSION + 1)
 
     def test_missing_evidence_and_invalid_durations_preserve_claims_but_exclude_samples(self):
         changes = [("evidence-object", None), ("logs", None), ("log-file", None),

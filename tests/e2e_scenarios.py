@@ -28,6 +28,54 @@ class Scenario:
 
 SCENARIOS: list[Scenario] = [
     Scenario(
+        id="generated-draft-loop",
+        title="默认范式初稿闭环：安装副本上的核验入口放行初稿、对照页吃进带基础样式的产物、"
+              "批注落盘后页序调整再重建，批注按稳定页面键找回且审阅标识不变",
+        fixture="ae.py install 装进合成 HOME 的临时副本；按范式合成的三页报告（内联 report-base.css）、"
+                "讲稿与 ae-report-record/1 核验记录；独立 AE_HOME，不碰真实台账",
+        isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
+    ),
+    Scenario(
+        id="report-verdict-loop",
+        title="结构与视觉核验的可交付判定：真实渲染逐页测得溢出与无溢出并作为视觉证据写进记录，"
+              "正确产物支持「报告可交付」，故障产物（如实登记的溢出、缺页覆盖）不能通过整体交付验收；"
+              "判定离线完成不落批注，报告仍在对照页可审阅",
+        fixture="ae.py install 装进合成 HOME 的临时副本；正确与故障两套合成产物（内联 report-base.css 的"
+                "三页报告、讲稿、合成材料与 ae-report-record/1 记录，故障报告第 3 页带 1600px 宽块）；"
+                "独立 AE_HOME，不碰真实台账",
+        isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
+    ),
+    Scenario(
+        id="revision-update-loop",
+        title="改稿更新核验：可交付初态经改数字、来源变动、只改样式与页序调整后旧判定失效，"
+              "维护记录（更新哈希、受影响引用与计算、revision 重新核验声明）后恢复，"
+              "无法确认影响范围时摘要如实披露待核验范围与原因，页序重排按稳定页面键保持关联",
+        fixture="ae.py install 装进合成 HOME 的临时副本；带完整核验记录的合成三页报告（内联 "
+                "report-base.css）、讲稿与合成材料；独立 AE_HOME，不碰真实台账",
+        isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
+    ),
+    Scenario(
+        id="legacy-report-compat",
+        title="旧报告无核验记录仍直接审阅：批注落盘、页面提交（已初改·待复核）、接收初改、重建，"
+              "批次停在待复核且报告质量状态独立；整体核验请求下按完整清单建立记录恢复可交付，"
+              "原始依据不可得时缺口登记不伪称核验完成",
+        fixture="无核验记录的合成三页报告与讲稿（部分用例带合成材料、部分材料缺席）；"
+                "独立 AE_HOME，不碰真实台账",
+        isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
+    ),
+    Scenario(
+        id="external-method-loop",
+        title="外部生成技能共用验收：明确指定的合成外部技能被实际调用（运行其脚本，"
+              "可观察的调用效果与调用说明写进记录），产物走同一核验入口与记录契约、"
+              "打开现有对照页渲染并批注；缺依据的外部产物与换成内置方法声明的孪生"
+              "记录判定一致，外部方法不放宽验收",
+        fixture="ae.py install 装进合成 HOME 的临时副本；fixtures/external-report-skill 与 "
+                "external-report-skill-lite（受控合成外部技能）复制进同一合成技能目录；"
+                "按技能脚本合成的两页简报、讲稿与 ae-report-record/1 记录、合成材料；"
+                "独立 AE_HOME，不碰真实台账",
+        isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
+    ),
+    Scenario(
         id="installed-delivery",
         title="从唯一的临时安装副本完成英文、中文、中英混合三种语言组合的真实审阅流程",
         fixture="ae.py install 装进合成 HOME 的临时副本；fixtures/sample 合成报告与讲稿；"
