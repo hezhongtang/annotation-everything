@@ -49,7 +49,7 @@ SCHEMA = "ae-verify-run/1"
 CASES_SCHEMA = "ae-verify-cases/1"
 PLAN_SCHEMA = "ae-verify-plan/1"
 SHADOW_SCHEMA = "ae-verify-shadow/1"
-WRAPPER_VERSION = 1
+WRAPPER_VERSION = 2
 ARTIFACT_DIRNAME = ".verify"
 TEST_START_DIR = "tests"
 KILL_GRACE_SECONDS = 5.0
@@ -385,6 +385,7 @@ def environment_summary() -> dict:
             "ae_home_set": bool(os.environ.get("AE_HOME")),
             "ae_locale": os.environ.get("AE_LOCALE"),
             "ae_verify_dir_set": bool(os.environ.get("AE_VERIFY_DIR")),
+            "verification_execution": "serial" if os.environ.get("AE_VERIFY_SERIAL") == "1" else "isolated-processes/1",
         },
         # 环境隔离方式（issue #52）：锁在哪类共享位置、覆盖哪些资源；不记本机绝对路径
         "isolation": {
@@ -753,74 +754,183 @@ def cmd_unit_runner(argv: list) -> int:
         load_error = "%s: %s" % (type(exc).__name__, exc)
         print(load_error, file=sys.stderr)
 
-    result = None
-    runner_error = None
+    def run_suite(suite):
+        nonlocal interrupted
+        result = None
+        runner_error = None
 
-    class TimingRunner(unittest.TextTestRunner):
-        def _makeResult(self):
-            nonlocal result
-            result = super()._makeResult()
-            return result
+        class TimingRunner(unittest.TextTestRunner):
+            def _makeResult(self):
+                nonlocal result
+                result = super()._makeResult()
+                return result
 
-    if load_error is None and not interrupted:
-        runner = TimingRunner(verbosity=args.verbosity, resultclass=TimingResult)
+        if load_error is None and not interrupted:
+            runner = TimingRunner(verbosity=args.verbosity, resultclass=TimingResult)
+            try:
+                result = runner.run(suite)
+            except KeyboardInterrupt:
+                interrupted = True
+            except BaseException as exc:
+                runner_error = "%s: %s" % (type(exc).__name__, exc)
+                print(runner_error, file=sys.stderr)
+
+        def counts_of(result_obj) -> dict:
+            if result_obj is None:
+                return {}
+            statuses = [case["status"] for case in result_obj.case_records]
+            return {
+                "cases": result_obj.testsRun,
+                "passed": statuses.count(PASSED),
+                "failed": statuses.count(FAILED),
+                "errors": statuses.count(ERROR),
+                "skipped": statuses.count(SKIPPED),
+                "fixture_errors": result_obj.fixture_errors,
+                "fixture_skips": result_obj.fixture_skips,
+                "expected_failures": statuses.count("expected_failure"),
+                "unexpected_successes": statuses.count("unexpected_success"),
+                "interrupted": statuses.count(INTERRUPTED),
+                "subtest_failures": result_obj.subtest_failures,
+                "subtest_errors": result_obj.subtest_errors,
+                "subtest_skips": result_obj.subtest_skips,
+            }
+
+        cases = list(getattr(result, "case_records", None) or [])
+        gaps = list(getattr(result, "gaps", None) or [])
+        gap_by_kind: dict = {}
+        for gap in gaps:
+            gap_by_kind[gap["kind"]] = round(gap_by_kind.get(gap["kind"], 0.0) + gap["seconds"], 6)
+        write_json_atomic(Path(args.cases_out), {
+            "schema": CASES_SCHEMA,
+            "run_id": args.run_id,
+            "mode": args.mode,
+            "targets": display_argv(args.targets),
+            "load_error": load_error,
+            "runner_error": runner_error,
+            "interrupted": interrupted,
+            "counts": counts_of(result),
+            "cases": cases,
+            "gaps": gaps,
+            "seconds": {
+                "case_total": round(sum(item["seconds"] for item in cases), 6),
+                "gap_total": round(sum(gap["seconds"] for gap in gaps), 6),
+                "gap_by_kind": gap_by_kind,
+                "unattributed": round(gap_by_kind.get("same-class", 0.0), 6),
+            },
+            "python": platform.python_version(),
+        })
+        if interrupted:
+            return EXIT_INTERRUPTED_BASE + int(signal.SIGINT)
+        if load_error is not None or runner_error is not None:
+            return EXIT_FAILED
+        return EXIT_OK if result is not None and result.wasSuccessful() else EXIT_FAILED
+
+    # 仅标准 TestSuite 可分组；自定义套件、少量模块或显式串行均沿用旧执行路径。
+    def flatten(node):
+        if type(node) is unittest.TestSuite:
+            return [case for child in node for case in flatten(child)]
+        if isinstance(node, unittest.TestCase):
+            return [node]
+        raise TypeError("自定义测试套件保持串行")
+
+    if suite is not None and not load_error and not interrupted and os.environ.get("AE_VERIFY_SERIAL") != "1":
         try:
-            result = runner.run(suite)
-        except KeyboardInterrupt:
-            interrupted = True
-        except BaseException as exc:
-            runner_error = "%s: %s" % (type(exc).__name__, exc)
-            print(runner_error, file=sys.stderr)
+            cases = flatten(suite)
+        except TypeError as exc:
+            print("保持串行验证：%s" % exc, file=sys.stderr)
+        else:
+            modules = {case.__class__.__module__ for case in cases}
+            if len(modules) >= 8 and threading.active_count() == 1:
+                return run_parallel_units(cases, args, run_suite)
+    return run_suite(suite)
 
-    def counts_of(result_obj) -> dict:
-        if result_obj is None:
-            return {}
-        statuses = [case["status"] for case in result_obj.case_records]
-        return {
-            "cases": result_obj.testsRun,
-            "passed": statuses.count(PASSED),
-            "failed": statuses.count(FAILED),
-            "errors": statuses.count(ERROR),
-            "skipped": statuses.count(SKIPPED),
-            "fixture_errors": result_obj.fixture_errors,
-            "fixture_skips": result_obj.fixture_skips,
-            "expected_failures": statuses.count("expected_failure"),
-            "unexpected_successes": statuses.count("unexpected_success"),
-            "interrupted": statuses.count(INTERRUPTED),
-            "subtest_failures": result_obj.subtest_failures,
-            "subtest_errors": result_obj.subtest_errors,
-            "subtest_skips": result_obj.subtest_skips,
-        }
 
-    cases = list(getattr(result, "case_records", None) or [])
-    gaps = list(getattr(result, "gaps", None) or [])
-    gap_by_kind: dict = {}
-    for gap in gaps:
-        gap_by_kind[gap["kind"]] = round(gap_by_kind.get(gap["kind"], 0.0) + gap["seconds"], 6)
-    write_json_atomic(Path(args.cases_out), {
-        "schema": CASES_SCHEMA,
-        "run_id": args.run_id,
-        "mode": args.mode,
-        "targets": display_argv(args.targets),
-        "load_error": load_error,
-        "runner_error": runner_error,
-        "interrupted": interrupted,
-        "counts": counts_of(result),
-        "cases": cases,
-        "gaps": gaps,
-        "seconds": {
-            "case_total": round(sum(item["seconds"] for item in cases), 6),
-            "gap_total": round(sum(gap["seconds"] for gap in gaps), 6),
-            "gap_by_kind": gap_by_kind,
-            "unattributed": round(gap_by_kind.get("same-class", 0.0), 6),
-        },
-        "python": platform.python_version(),
-    })
+# 经过审查的独立模块；其他模块（含新模块与全部资源敏感模块）在唯一串行任务执行。
+# 不依赖「没有资源声明」推断可以并行，避免未知测试静默获得并行权限。
+PARALLEL_UNIT_MODULES = frozenset({
+    "test_verify_entry", "test_pptx_fonts", "test_handoff_i18n", "test_verify_efficiency",
+    "test_i18n_catalog_contract", "test_ae_cli_i18n", "test_serve_locale",
+})
+
+
+def run_parallel_units(cases, args, run_suite) -> int:
+    import unittest
+    import verify_parallel
+
+    by_module = {}
+    serial = []
+    for case in cases:
+        name = case.__class__.__module__
+        short = name[len("tests."):] if name.startswith("tests.") else name
+        if short in PARALLEL_UNIT_MODULES and not host_isolation.resources_for_module(name):
+            by_module.setdefault(short, []).append(case)
+        else:
+            serial.append(case)
+    if not by_module:
+        return run_suite(unittest.TestSuite(cases))
+    # 先开始最大独立模块和串行任务；清单与最终结果仍按原始用例 ID 核对。
+    tasks = [(name, selected) for name, selected in by_module.items()]
+    tasks.sort(key=lambda item: (item[0] != "test_verify_entry", -len(item[1])))
+    if serial:
+        tasks.insert(1, ("serial", serial))
+    original_out = Path(args.cases_out)
+
+    def worker(selected, output):
+        args.cases_out = str(output)
+        return run_suite(unittest.TestSuite(selected))
+
+    interrupted, results = False, {}
+    with tempfile.TemporaryDirectory(prefix="ae-unit-workers-") as temp:
+        try:
+            results = verify_parallel.run_tasks(tasks, worker, Path(temp))
+        except verify_parallel.InterruptedRun as exc:
+            interrupted, results = True, exc.results
+        payloads, errors, worker_records = [], [], []
+        failed = False
+        for name, _selected in tasks:
+            item = results.get(name)
+            if item is None:
+                errors.append("任务 %s 未完成" % name)
+                continue
+            print("=== 单元任务 %s（退出码 %s，%.3f 秒）===" %
+                  (name, item["exit_status"], item["seconds"]), flush=True)
+            print(item["log"].read_text(encoding="utf-8", errors="replace"), end="", flush=True)
+            failed = failed or item["exit_status"] != 0
+            worker_records.append({key: item[key] for key in ("id", "exit_status", "seconds")})
+            try:
+                data = json.loads(item["output"].read_text(encoding="utf-8"))
+                if data.get("schema") != CASES_SCHEMA or not isinstance(data.get("cases"), list):
+                    raise ValueError("用例记录格式不兼容")
+                payloads.append(data)
+            except (OSError, ValueError, TypeError) as exc:
+                errors.append("任务 %s 缺少有效结果：%s" % (name, type(exc).__name__))
+        counts, gap_by_kind = {}, {}
+        all_cases, gaps = [], []
+        for data in payloads:
+            for key, value in data["counts"].items():
+                counts[key] = counts.get(key, 0) + value
+            all_cases.extend(data["cases"])
+            gaps.extend(data["gaps"])
+            for key, value in data["seconds"]["gap_by_kind"].items():
+                gap_by_kind[key] = round(gap_by_kind.get(key, 0) + value, 6)
+            if data.get("load_error") or data.get("runner_error"):
+                errors.append(data.get("load_error") or data["runner_error"])
+            interrupted = interrupted or data.get("interrupted", False)
+        # 进程累计时间与整组墙钟分别存放；不把重叠用例耗时当作用户等待。
+        write_json_atomic(original_out, {
+            "schema": CASES_SCHEMA, "run_id": args.run_id, "mode": args.mode,
+            "targets": display_argv(args.targets), "load_error": None,
+            "runner_error": "；".join(errors) or None, "interrupted": interrupted,
+            "counts": counts, "cases": all_cases, "gaps": gaps,
+            "seconds": {"case_total": round(sum(c["seconds"] for c in all_cases), 6),
+                        "gap_total": round(sum(g["seconds"] for g in gaps), 6),
+                        "gap_by_kind": gap_by_kind,
+                        "unattributed": gap_by_kind.get("same-class", 0.0)},
+            "python": platform.python_version(), "parallel": {"mode": "isolated-processes/1", "jobs": 3, "workers": worker_records},
+        })
     if interrupted:
-        return EXIT_INTERRUPTED_BASE + int(signal.SIGINT)
-    if load_error is not None or runner_error is not None:
-        return EXIT_FAILED
-    return EXIT_OK if result is not None and result.wasSuccessful() else EXIT_FAILED
+        return 130
+    return 1 if failed or errors else 0
 
 
 def parse_log_counts(text: str) -> Optional[dict]:
@@ -1100,6 +1210,7 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
         log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
         counts, cases, seconds, load_error, evidence_missing = None, [], {}, None, None
         scenario_summary = None
+        execution = None
         interrupted = False
         if group.counter == "unittest":
             if not cases_path.is_file():
@@ -1118,6 +1229,7 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
                         seconds = payload.get("seconds") or {}
                         load_error = payload.get("load_error") or payload.get("runner_error")
                         interrupted = payload.get("interrupted") is True
+                        execution = payload.get("parallel")
         else:
             counts = parse_log_counts(log_text)
             if counts is None:
@@ -1125,6 +1237,7 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
             if group.scenarios:
                 # 场景级记录来自子进程自己的执行清单；日志里没有时保持整组粒度的既有行为
                 scenario_summary = parse_scenario_summary(log_text)
+                execution = (scenario_summary or {}).get("execution")
 
         outcome, exit_status = classify_group(group, code, timed_out, counts, load_error, evidence_missing,
                                               interrupted)
@@ -1140,7 +1253,7 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
                            signal_name(-int(signal.SIGINT)) if interrupted else signal_name(code)),
                 "timed_out": timed_out, "note": note, "counts": counts,
                 "cases": cases, "seconds": seconds,
-                "scenario_summary": scenario_summary,
+                "scenario_summary": scenario_summary, "execution": execution,
                 "browser_environment": parse_browser_environment(log_text) if group.scenarios else None,
                 "timing": {"child_seconds": child_seconds,
                            "case_seconds_total": seconds.get("case_total"),
@@ -1892,6 +2005,8 @@ def cmd_run(args) -> int:
                              counts=item["counts"], cases=trim_cases(item["cases"]),
                              seconds=item["seconds"], timing=item["timing"],
                              lock=item.get("lock") or group.get("lock"))
+                if item.get("execution") is not None:
+                    group["execution"] = item["execution"]
                 if item.get("reuse") is not None:
                     group["reuse"] = item["reuse"]
                 if item.get("scenario_summary") is not None:

@@ -385,6 +385,7 @@ verify.py                         unified verification entry: plan explains the 
 verify_selection.py               staged test selection and shadow comparison strategy: versioned mapping, conservative fallback and gap comparison
 verify_evidence.py                evidence reuse policy: valid same-input same-environment passes are referenced across stages
 verify_report.py                  continuous efficiency reports, comparable groups and bounded deduplicated reviews
+verify_parallel.py                bounded process scheduling inside a verification group; existing locks and failures are preserved
 host_isolation.py                 host isolation protocol: locks and declarations for mutual exclusion by shared resource
 fixtures/sample/                   synthetic sample (fictional data)
 tests/                             unit tests and end-to-end browser tests
@@ -407,6 +408,7 @@ python3 verify.py plan                                            # unified veri
 python3 verify.py plan --phase development                        # selection advice: what the current changes should run, why, when to fall back
 python3 verify.py run                                             # full unit tests (the default group), then prints a summary
 python3 verify.py run --group all                                 # full acceptance: unit + server self-check + browser
+AE_VERIFY_SERIAL=1 python3 verify.py run --group all               # restore serial execution with the same complete scope
 python3 verify.py run --no-reuse                                  # independent recheck: bypass evidence reuse, run everything
 python3 verify.py report --latest                                 # read the latest record only, start nothing
 python3 verify.py report --efficiency                             # read the efficiency report from existing records
@@ -420,6 +422,8 @@ uv run --no-project --with playwright python tests/e2e_browser.py --only skill-i
 ```
 
 `verify.py` is the unified verification entry: `plan` explains the scope, `run` executes and writes structured records plus raw logs into `.verify/` (git-ignored), and `report` only reads records. The input fingerprint covers the full content of effective input files; text and JSON reports preserve the original test result and show whether the evidence passes the current integrity checks. A record also carries the commit and baseline, the environment and per-case timings; the field contract is in [docs/verify/record-contract.md](docs/verify/record-contract.md) and the onboarding guide in [docs/verify/onboarding.md](docs/verify/onboarding.md). It never trims the groups you actually run. The direct commands keep working, with the same success and failure exit codes for completed test runs. Empty and fully skipped runs do not count as a pass; the new entry returns 1. When several workspaces on the same machine verify in parallel, resource-sensitive groups (full unit, full browser, direct runs of sensitive modules) queue on a shared-resource lock that spans worktrees and independent checkouts: lock waits are timed separately, a wait timeout is not a pass, and pure-logic groups are never blocked. See the [host isolation protocol](docs/verify/isolation.md).
+
+A verification group uses at most 3 isolated processes. Sensitive unit modules and unclassified new modules remain in one serial task; only explicitly approved independent modules run in parallel. Each full-browser scenario has its own browser, synthetic HOME, ledger and skill directories. The group retains its existing resource lock, so sensitive verification in other workspaces still queues. `AE_VERIFY_SERIAL=1` restores serial execution. The execution mode is recorded in the environment, and later successes never erase failed or incomplete results. See [docs/verify/parallel-execution.md](docs/verify/parallel-execution.md) for boundaries and fallback.
 
 Staged selection and shadow comparison are on by default: `run` records what the versioned mapping in `verify_selection.py` suggests for the current changes, while the groups you actually run stay the requested full gate; when the run finishes, the suggestion is compared side by side with the actual result, and any failure the full check found outside the suggested scope is kept as a candidate omission with an attribution. Unknown paths, bad baselines, broken rules, test-manifest gaps and changes to the strategy itself all fall back to the full check with an explanation. The `issue` phase never starts tests automatically; defect reproduction asks for a related group explicitly. See [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) for the strategy, fallback kinds and comparison samples.
 

@@ -42,7 +42,7 @@ class ReceiverCliTests(unittest.TestCase):
 
     def server(self):
         server = serve.ReviewServer(self.review, 0, log_to_file=False)
-        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         worker.start()
         def close():
             server.shutdown()

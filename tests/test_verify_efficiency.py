@@ -149,7 +149,7 @@ class EfficiencyCliTests(unittest.TestCase):
         scripts = repo / "skill" / "annotation-everything" / "scripts"
         scripts.mkdir(parents=True)
         (repo / ".gitignore").write_text(".verify/\n__pycache__/\n")
-        for name in ("verify.py", "verify_evidence.py", "verify_selection.py", "verify_report.py", "host_isolation.py"):
+        for name in ("verify.py", "verify_evidence.py", "verify_selection.py", "verify_report.py", "verify_parallel.py", "host_isolation.py"):
             shutil.copy2(ROOT / name, repo / name)
         (scripts / "serve.py").write_text("print('1/1 通过')\n")
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)

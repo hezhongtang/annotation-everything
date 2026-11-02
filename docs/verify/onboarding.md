@@ -185,3 +185,7 @@ python3 verify.py report --out-dir <解压后的构件目录> --latest
 - 观测到两例偶发失败，都与入口无关，复跑即过，建议各自开 issue：
   - `tests/test_pptx_fonts.py` 的 `test_pdf_tool_timeout_is_reported` 把 `TOOL_TIMEOUT` 压到 0.5 秒，整包高压下 `fc-list` 可能被判超时。
   - `tests/test_e2e_servers.py` 的升级终止测试曾用 `time.time()` 量耗时，和 `communicate` 的单调时钟 deadline 比较；issue #51 改造时已换成 `time.monotonic()`，并把该测试改为注入短超时。
+
+## 组内进程隔离与串行回退
+
+完整范围与原资源锁保持不变。已审查的独立任务最多使用 3 个进程，未知和敏感单元模块继续串行；场景默认不允许并行。`AE_VERIFY_SERIAL=1` 恢复串行，执行方式与失败保留规则见 [parallel-execution.md](parallel-execution.md)。

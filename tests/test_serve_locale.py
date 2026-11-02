@@ -36,7 +36,7 @@ class RejectLanguageTests(unittest.TestCase):
 
     def start(self, review_dir: Path, **kwargs):
         srv = serve.ReviewServer(review_dir, 0, log_to_file=False, **kwargs)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         self.addCleanup(srv.shutdown)
         self.addCleanup(srv.server_close)
         return srv

@@ -311,5 +311,82 @@ class RunnerOutcomeTests(unittest.TestCase):
         self.assertEqual([item["status"] for item in scenes], ["not_run", "not_run"])
 
 
+
+
+class ParallelBrowserSummaryTests(unittest.TestCase):
+    """执行真实汇总函数；合成进程输出，不导入 playwright。"""
+
+    def run_summary(self, *, broken=None, failed=None, interrupted=False, mismatch=False):
+        sys.path.insert(0, str(TESTS.parent))
+        import verify_parallel
+        tree = ast.parse((TESTS / "e2e_browser.py").read_text(encoding="utf-8"))
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == "run_parallel_browser")
+        request = reg.resolve_request(["--only", "file-mode,css-fidelity"])
+        request = reg.Request(mode="full", plan=request.plan, requested=(), source="default")
+        env = {"schema": "ae-browser-environment/1", "browser": "chromium", "channel": "chrome",
+               "version": "synthetic-1", "playwright": "synthetic-1"}
+
+        def tasks(spec, _worker, root):
+            result = {}
+            for index, (sid, _value) in enumerate(spec):
+                if interrupted and index == 1:
+                    raise verify_parallel.InterruptedRun(result)
+                log = root / (sid + ".log")
+                summary = {"mode": "partial", "plan": ["wrong"] if sid == broken else [sid],
+                           "scenarios": [{"id": sid, "status": "passed",
+                               "checks": {"total": index + 1, "passed": index + 1, "failed": 0},
+                               "started_at": "synthetic-start", "ended_at": "synthetic-end", "seconds": 0.01}]}
+                local_env = {**env, "version": "synthetic-2"} if mismatch and index else env
+                log.write_text("AE-BROWSER-ENV: " + json.dumps(local_env) + "\nAE-SCENARIOS: "
+                               + json.dumps(summary) + "\n")
+                result[sid] = {"id": sid, "log": log, "seconds": 0.01,
+                               "exit_status": 1 if sid == failed else 0}
+            return result
+
+        namespace = dict(scenarios=reg, Path=Path, tempfile=tempfile, json=json,
+                         CLEANUP=mock.Mock(), os=os, main=mock.Mock(return_value=0))
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(TESTS / "e2e_browser.py"), "exec"), namespace)
+        output = io.StringIO()
+        with mock.patch.object(verify_parallel, "run_tasks", side_effect=tasks), contextlib.redirect_stdout(output):
+            code = namespace["run_parallel_browser"](request)
+        lines = output.getvalue().splitlines()
+        summary = json.loads(next(line[len("AE-SCENARIOS: "):] for line in reversed(lines)
+                                  if line.startswith("AE-SCENARIOS: ")))
+        actual_env = json.loads(next(line[len("AE-BROWSER-ENV: "):] for line in reversed(lines)
+                                     if line.startswith("AE-BROWSER-ENV: ")))
+        return code, summary, actual_env
+
+    def test_same_complete_scope_and_registry_order_are_preserved(self):
+        code, summary, _env = self.run_summary()
+        self.assertEqual(code, 0)
+        self.assertEqual(summary["mode"], "full")
+        self.assertEqual([item["id"] for item in summary["scenarios"]], ["file-mode", "css-fidelity"])
+        self.assertEqual(sum(item["checks"]["total"] for item in summary["scenarios"]), 3)
+        self.assertEqual(summary["execution"]["jobs"], 3)
+
+    def test_mismatched_scope_and_nonzero_exit_never_become_passed(self):
+        for kwargs in ({"broken": "file-mode"}, {"failed": "file-mode"}):
+            with self.subTest(kwargs=kwargs):
+                code, summary, _env = self.run_summary(**kwargs)
+                self.assertEqual(code, 1)
+                self.assertEqual(summary["scenarios"][0]["status"], "error")
+
+    def test_interrupt_preserves_completed_results_and_marks_missing_scenes(self):
+        code, summary, _env = self.run_summary(interrupted=True)
+        self.assertEqual(code, 130)
+        self.assertEqual([item["status"] for item in summary["scenarios"]], ["passed", "not_run"])
+
+    def test_versions_must_match_across_all_browser_workers(self):
+        code, _summary, env = self.run_summary(mismatch=True)
+        self.assertEqual(code, 0)
+        self.assertIn("unavailable", env)
+        self.assertNotIn("version", env, "不匹配的浏览器版本不能伪装成同环境证据")
+
+    def test_new_scenarios_require_explicit_parallel_safety(self):
+        scenario = reg.Scenario(id="synthetic", title="synthetic", fixture="synthetic", isolation="synthetic")
+        self.assertFalse(scenario.parallel_safe)
+
+
 if __name__ == "__main__":
     unittest.main()

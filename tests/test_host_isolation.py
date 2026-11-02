@@ -372,29 +372,38 @@ class RealEntryIntegrationTests(TemporaryLockDirTestCase):
     """真实仓库的新入口端到端：敏感选择器触发锁等待，且入口持锁不会锁死自己的子进程。"""
 
     def test_unit_related_with_sensitive_selector_waits_and_never_deadlocks(self):
-        holder = WorkerScript(self, ["host-state"], hold=0.8)
-        proc, marker = holder.start("real-entry-holder")
-        wait_for_file(marker.with_suffix(".enter"))
+        # 在入口完成规划后才开始计持锁窗口；Python / git 启动耗时不吃掉等待预算。
+        holder_env = self.child_env()
+        holder = hi.acquire(["host-state"], env=holder_env)
+        self.addCleanup(hi.release, holder, holder_env)
         out_dir = Path(tempfile.mkdtemp(prefix="ae-verify-out-"))
         self.addCleanup(shutil_rmtree, out_dir)
         env = self.child_env(AE_VERIFY_DIR=str(out_dir), AE_HOME=str(out_dir / "home"))
         started = time.monotonic()
-        done = subprocess.run(
+        process = subprocess.Popen(
             [sys.executable, str(ROOT / "verify.py"), "run",
              "unit-related", "tests.test_ae_cli.AeCliTests.test_missing_subcommand_is_command_error",
              "--quiet", "--out-dir", str(out_dir), "--phase", "development", "--reason",
              "issue 52 隔离协议端到端"],
-            env=env, capture_output=True, text=True, timeout=120)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        record = json.loads((out_dir / "runs" / json.loads(
-            (out_dir / "latest.json").read_text(encoding="utf-8"))["run_id"]
-            / "record.json").read_text(encoding="utf-8"))
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(reap, process)
+        wait_for_file(out_dir / "latest.json")
+        run_id = json.loads((out_dir / "latest.json").read_text(encoding="utf-8"))["run_id"]
+        run_dir = out_dir / "runs" / run_id
+        wait_for_file(run_dir / "record.json")
+        time.sleep(0.6)  # 实际持锁窗口：不是入口启动时间，也不是产品测试的垫等待
+        self.assertIsNone(process.poll(), "外部持有者尚未释放时入口不能结束")
+        self.assertFalse((run_dir / "unit-related.cases.json").exists(),
+                         "外部锁释放前不能执行敏感测试")
+        hi.release(holder, holder_env)
+        stdout, stderr = process.communicate(timeout=120)
+        self.assertEqual(process.returncode, 0, stdout + stderr)
+        record = json.loads((run_dir / "record.json").read_text(encoding="utf-8"))
         group = record["groups"][0]
         self.assertEqual(group["lock"]["resources"], ["host-state"],
                          "敏感选择器（tests.test_ae_cli）应触发 host-state 锁")
         self.assertGreaterEqual(group["lock"]["wait_seconds"], 0.4, "入口等到了外部持有者释放")
         self.assertEqual(group["outcome"], "passed")
-        self.assertEqual(proc.wait(timeout=30), 0)
         # 入口拿锁后拉起 _unit-runner：敏感模块导入按借入处理，没有自锁
         self.assertLess(time.monotonic() - started, 60)
 

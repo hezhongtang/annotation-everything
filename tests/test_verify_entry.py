@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -165,8 +166,12 @@ def read_record(artifact_dir: Path, run_id: str) -> dict:
 class SynthRepo:
     """合成仓库：自带 git 历史、合成测试程序与合成 uv；verify.py 用本仓库的副本运行。"""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, template: Path | None = None):
         self.path = root / "repo"
+        if template is not None:
+            # 每个用例仍有完整独立的工作树与 .git；仅复用不变的合成初始历史。
+            shutil.copytree(template, self.path)
+            return
         (self.path / "tests").mkdir(parents=True)
         (self.path / "skill" / "annotation-everything" / "scripts").mkdir(parents=True)
         (self.path / "bin").mkdir(parents=True)
@@ -184,6 +189,7 @@ class SynthRepo:
         shutil.copy2(ROOT / "verify_selection.py", self.path / "verify_selection.py")
         shutil.copy2(ROOT / "verify_evidence.py", self.path / "verify_evidence.py")
         shutil.copy2(ROOT / "verify_report.py", self.path / "verify_report.py")
+        shutil.copy2(ROOT / "verify_parallel.py", self.path / "verify_parallel.py")
         self.git("init", "-q")
         self.git("add", "-A")
         self.git("-c", "user.name=synth", "-c", "user.email=synth@example.invalid",
@@ -251,6 +257,13 @@ class SynthRepo:
 
 
 class VerifyEntryTestCase(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        template = tempfile.TemporaryDirectory(prefix="verify-entry-template-")
+        cls.addClassCleanup(template.cleanup)
+        cls.repo_template = SynthRepo(Path(template.name)).path
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="verify-entry-test-")
         self.addCleanup(self.temp.cleanup)
@@ -258,7 +271,7 @@ class VerifyEntryTestCase(unittest.TestCase):
         lock_temp = tempfile.TemporaryDirectory(prefix="verify-entry-lock-")
         self.addCleanup(lock_temp.cleanup)
         self.test_lock_dir = Path(lock_temp.name)
-        self.repo = SynthRepo(Path(self.temp.name))
+        self.repo = SynthRepo(Path(self.temp.name), template=self.repo_template)
         self.repo.test_lock_dir = self.test_lock_dir
 
     def unit(self, body: str) -> None:
@@ -711,6 +724,13 @@ sys.path.insert(0, {root!r})
 import host_isolation as hi
 handle = hi.acquire([{resource!r}], timeout=30)
 print("held", flush=True)
+if {ready!r} is not None:
+    from pathlib import Path
+    deadline = time.monotonic() + 30
+    while not Path({ready!r}).exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if not Path({ready!r}).exists():
+        raise RuntimeError("verification entry did not finish planning")
 time.sleep({hold!r})
 hi.release(handle)
 '''
@@ -733,12 +753,12 @@ class IsolationLockTests(VerifyEntryTestCase):
         env.update(extra)
         return env
 
-    def start_holder(self, hold: float, resource: str = "host-state") -> subprocess.Popen:
+    def start_holder(self, hold: float, resource: str = "host-state", ready: Path | None = None) -> subprocess.Popen:
         """合成占用者：持锁 sleep 后自行退出。放在仓库外的临时目录，不污染输入指纹。"""
         holder_dir = Path(tempfile.mkdtemp(prefix="verify-holder-"))
         self.addCleanup(shutil.rmtree, holder_dir, ignore_errors=True)
         script = holder_dir / "holder.py"
-        script.write_text(LOCK_HOLDER.format(root=str(ROOT), resource=resource, hold=hold),
+        script.write_text(LOCK_HOLDER.format(root=str(ROOT), resource=resource, hold=hold, ready=str(ready) if ready else None),
                           encoding="utf-8")
         proc = subprocess.Popen([sys.executable, str(script)], env=self.lock_env(),
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -761,7 +781,16 @@ class IsolationLockTests(VerifyEntryTestCase):
         self.assertIn("隔离", text, "文本计划要说明互斥与独立资源")
 
     def test_sensitive_group_waits_for_external_holder_and_records_wait(self):
-        holder = self.start_holder(hold=0.8)
+        ready = Path(self.temp.name) / "entry-planned"
+        holder = self.start_holder(hold=0.8, ready=ready)
+        def release_after_planning():
+            deadline = time.monotonic() + 15
+            while not (self.repo.artifact_dir / "latest.json").exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            ready.write_text("planned")
+        notifier = threading.Thread(target=release_after_planning)
+        notifier.start()
+        self.addCleanup(notifier.join, 20)
         p = self.repo.run_verify("run", "--group", "browser",
                                  extra_env=self.lock_env())
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -775,8 +804,11 @@ class IsolationLockTests(VerifyEntryTestCase):
         self.assertLess(record["timing"]["wrapper_seconds"],
                         record["timing"]["wall_seconds"] - 0.4,
                         "锁等待不应计入 wrapper_seconds")
-        self.assertLess(group["timing"]["child_seconds"], 0.4 + 0.2,
-                        "锁等待不应计入组执行耗时")
+        self.assertAlmostEqual(record["timing"]["wall_seconds"],
+                               group["timing"]["child_seconds"] + record["timing"]["wrapper_seconds"]
+                               + record["timing"]["lock_wait_seconds"], delta=0.0001,
+                               msg="墙钟必须分别归属执行、入口与锁等待；不能按宿主速度猜执行上限")
+        self.assertGreaterEqual(record["timing"]["wrapper_seconds"], 0)
         self.assertTrue(record["environment"]["isolation"]["mechanism"])
         self.assertIn("锁等待", p.stdout, "报告文本要呈现锁等待")
         self.assertEqual(holder.wait(timeout=15), 0)
@@ -3514,3 +3546,62 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         self.assertEqual(item["decision"], "run")
         self.assertIn("没有可引用的已有记录", item["reason"])
         self.assertEqual(item["attempts"], [])
+
+
+class ParallelUnitTests(VerifyEntryTestCase):
+    def prepare_parallel_suite(self, extra=""):
+        for index in range(7):
+            self.repo.write("tests/test_unclassified_%s.py" % index,
+                            UNIT_PASS.replace("AlphaTests", "Unclassified%sTests" % index))
+        self.repo.write("tests/test_handoff_i18n.py", UNIT_PASS + extra)
+        self.repo.commit_all("合成并行验证集合")
+
+    def test_complete_scope_and_unknown_modules_are_preserved(self):
+        self.prepare_parallel_suite()
+        result = self.repo.run_verify("run", "--no-reuse")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["counts"]["cases"], 28)
+        self.assertEqual(group["counts"]["passed"], 28)
+        self.assertEqual(len({case["id"] for case in group["cases"]}), 28)
+        execution = group["execution"]
+        self.assertEqual(execution["jobs"], 3)
+        self.assertEqual({item["id"] for item in execution["workers"]}, {"serial", "test_handoff_i18n", "test_i18n_catalog_contract"})
+        serial_ids = [case["id"] for case in group["cases"] if "unclassified" in case["id"]]
+        self.assertEqual(len(serial_ids), 21, "新模块全部进入串行任务，不能漏掉")
+
+    def test_failed_worker_preserves_original_failure_and_counts(self):
+        self.prepare_parallel_suite()
+        path = self.repo.path / "tests/test_handoff_i18n.py"
+        path.write_text(UNIT_PASS.replace("1 + 1, 2", "1 + 1, 3"))
+        result = self.repo.run_verify("run", "--no-reuse")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertEqual(record["result"]["outcome"], "failed")
+        self.assertEqual(record["groups"][0]["counts"]["failed"], 1)
+        self.assertEqual(record["groups"][0]["counts"]["passed"], 27)
+
+    def test_killed_worker_leaves_unusable_evidence_instead_of_false_success(self):
+        self.prepare_parallel_suite()
+        self.repo.write("tests/test_handoff_i18n.py", "import unittest, os, signal\n"
+                        "class KilledTests(unittest.TestCase):\n"
+                        "    def test_killed(self): os.kill(os.getpid(), signal.SIGKILL)\n")
+        result = self.repo.run_verify("run", "--no-reuse")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        self.assertNotEqual(record["groups"][0]["outcome"], "passed")
+
+    def test_explicit_serial_fallback_runs_the_same_cases(self):
+        self.prepare_parallel_suite()
+        result = self.repo.run_verify("run", "--no-reuse", extra_env={"AE_VERIFY_SERIAL": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertEqual(record["groups"][0]["counts"]["cases"], 28)
+        self.assertNotIn("execution", record["groups"][0])
+        self.assertEqual(record["environment"]["config_summary"]["verification_execution"], "serial")
+
+
+if __name__ == "__main__":
+    unittest.main()
