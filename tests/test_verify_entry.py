@@ -1304,6 +1304,45 @@ class OtherGroupTests(VerifyEntryTestCase):
 
 
 class EfficiencyIntegrationTests(VerifyEntryTestCase):
+    def test_reused_groups_need_no_local_log_but_missing_source_evidence_is_rejected(self):
+        original = self.repo.run_verify("run", "--group", "serve-check", "--json")
+        self.assertEqual(original.returncode, 0, original.stdout + original.stderr)
+        source = json.loads(original.stdout)
+        reused = self.repo.run_verify("run", "--group", "serve-check", "--phase", "review", "--json")
+        self.assertEqual(reused.returncode, 0, reused.stdout + reused.stderr)
+        reference = json.loads(reused.stdout)
+        self.assertEqual(reference["groups"][0]["outcome"], "reused")
+        self.assertEqual(reference["evidence"]["logs"], [])
+        self.assertEqual(self.repo.run_verify("report", "--run", reference["run_id"]).returncode, 0)
+        path = self.repo.artifact_dir / "runs" / source["run_id"] / "record.json"
+        damaged = json.loads(path.read_text())
+        del damaged["evidence"]
+        path.write_text(json.dumps(damaged))
+        self.assertEqual(self.repo.run_verify("report", "--run", reference["run_id"]).returncode, 1)
+        retried = self.repo.run_verify("run", "--group", "serve-check", "--phase", "manual", "--json")
+        self.assertEqual(retried.returncode, 0, retried.stdout + retried.stderr)
+        self.assertEqual(json.loads(retried.stdout)["groups"][0]["outcome"], "passed")
+
+    def test_guard_read_error_cannot_put_absolute_paths_in_the_run_record(self):
+        self.repo.write(".verify/efficiency/selection-guard.json/placeholder", "synthetic")
+        result = self.repo.run_verify("run", "unit-related", "tests/test_synth.py", "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        record = json.loads(result.stdout)
+        selection = json.dumps(record["context"]["selection"], ensure_ascii=False)
+        self.assertNotIn(str(self.repo.artifact_dir), selection)
+        self.assertTrue(record["context"]["selection"]["policy_guard"]["active"])
+
+    def test_a_known_new_policy_version_replaces_an_older_guard(self):
+        self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
+            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": 3,
+            "reason": "old reviewed policy", "evidence": ["synthetic"]}))
+        policy = (self.repo.path / "verify_selection.py").read_text()
+        self.repo.write("verify_selection.py", policy.replace("STRATEGY_VERSION = 3", "STRATEGY_VERSION = 4"))
+        self.repo.commit_all("合成受审查策略升级")
+        result = self.repo.run_verify("plan", "--phase", "development", "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(json.loads(result.stdout)["selection"]["policy_guard"]["active"])
+
     def test_uncertain_impact_expands_explicit_related_run_to_actual_full_gate(self):
         self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
             "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": 3,
