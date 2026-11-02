@@ -95,6 +95,14 @@ main{flex:1;display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,1fr
 .batch .bst{font-size:12.5px;color:var(--ae-ink);padding-left:.6em;border-left:2px solid var(--ae-line);margin:3px 0}
 .batch .bact{display:flex;gap:8px;margin-top:6px}
 #batches .bar .hint{font-size:12.5px;color:var(--ae-mut);margin:0}
+#batches .bar{flex:none}
+#batches .bar h2{flex:1 1 180px}
+#batches .bar button,#currentTaskToggleRow{flex-shrink:0;white-space:nowrap}
+#batchSum{flex:1 0 100%;order:1}
+#currentTaskToggleRow{font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer}
+#currentTaskToggleRow[hidden]{display:none}
+#stopServiceBtn{color:#a32f21;border-color:#e5b5ad}
+#stopServiceInfo{margin:0;padding:10px 20px;background:var(--ae-qa);font-size:12.5px;color:var(--ae-mut)}
 .batch{border:1px solid var(--ae-line);border-left:4px solid var(--ae-mut);border-radius:8px;padding:8px 12px;margin:0 0 10px}
 .batch.done{border-left-color:var(--ae-green)}.batch.claimed{border-left-color:var(--ae-accent)}.batch.pending{border-left-color:#b7791f}
 .batch .bh{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.batch .bh b{color:var(--ae-navy)}
@@ -242,7 +250,8 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 <div class="modal" id="always"><div class="dlg"><div class="bar"><h2 data-msg="viewer.always.dialogTitle">常驻技能</h2><button class="primary" id="alwaysSave"><span data-msg="viewer.always.save">保存</span><kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close><span data-msg="viewer.cancel">取消</span><kbd>Esc</kbd></button></div>
 <div class="pad"><p class="hint" data-msg="viewer.always.dialogHint">这份审阅里，范围内的每一条批注都会要求 Agent 处理前先调用这些技能——适合需要长期约束、不会主动想到用技能的 Agent。只对当前这份审阅生效；单条批注的「技能」照常可加。名称框按 Enter 添加下一项（有高亮候选时先选择），按 Ctrl/Cmd+Enter 保存。</p>
 <div id="alwaysRows"></div><p><button id="alwaysAdd" data-title="viewer.always.addTitle"><span data-msg="viewer.always.add">添加一个</span><kbd>↵</kbd></button></p></div></div></div>
-<div class="modal" id="batches"><div class="dlg"><div class="bar"><h2 data-msg="viewer.batch.title">处理记录</h2><span class="hint" id="batchSum"></span><button data-close><span data-msg="viewer.batch.close">关闭</span><kbd>Esc</kbd></button></div>
+<div class="modal" id="batches"><div class="dlg"><div class="bar"><h2 data-msg="viewer.batch.title">处理记录</h2><span class="hint" id="batchSum"></span><label id="currentTaskToggleRow" hidden><input type="checkbox" role="switch" id="currentTaskToggle" aria-controls="batchCurrentDetail"><span data-msg="viewer.batch.currentToggle">当前任务详情</span></label><button id="stopServiceBtn" aria-describedby="stopServiceInfo" data-msg="viewer.batch.stop">停止本地服务</button><button data-close><span data-msg="viewer.batch.close">关闭</span><kbd>Esc</kbd></button></div>
+<p id="stopServiceInfo" data-msg="viewer.batch.stopHint">停止本审阅所有标签页的本地服务，保留材料和批注；Agent 继续运行。</p>
 <div class="pad" id="batchList"></div></div></div>
 <div id="toast"></div>
 <div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys" data-ae-lang="zh-CN">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要；先改后审的批次分初改、复核两段，可在这里请求复核或直接定稿），P 在报告上标注，C 写批注，K 填技能，G 常驻技能（每条批注按范围都让 Agent 先调用）；Esc 关闭或取消。<br>
@@ -273,6 +282,7 @@ const SS={get(k,d){try{const v=sessionStorage.getItem(k);return v==null?d:JSON.p
 let i=0;{const s=+LS.get(K.page,0);if(s>0&&s<=N)i=s-1}
 let notes=FILE?LS.get(K.notes,[]):[]; if(!Array.isArray(notes))notes=[];
 let mode=FILE?"file":"offline", rev=null, idx0=null, busy=0, editingId=null, composing=false, listStale=false, hideDone=!!LS.get(K.hide,false);
+let stopServiceSupported=false, stoppingService=false, saveFailures=0;
 let markMode=false, pendingPin=null, quote="", quoteFrom="";   // 标注模式；还没添加的新标注（点）
 const drafts=SS.get(K.drafts,{})||{};   // 各页没写完的批注；存在本标签页的会话存储里，刷新不丢
 const editBuf={};                        // 正在改的已有批注的内容（列表重绘、翻页时不丢）
@@ -627,6 +637,7 @@ function onSent(op,r){
     toast(r.merged?tMsg("viewer.hand.toast.merged"):tMsg("viewer.hand.toast.sent"),3500)}
   else if(op.kind==="import")toast(tMsg("import.complete",{label:tMsg("import.saved"),added:r.added,updated:r.updated||0,skipped:r.skipped}),3500)}
 function onRejected(op,e){   // 服务明确不接受（4xx）：不重试
+  saveFailures++;
   if(op.kind==="handoff"){handQueued=pend.get().some(o=>o.kind==="handoff");renderHand();
     toast(e.status===404||e.status===405?tMsg("viewer.hand.toast.legacy"):tMsg("viewer.hand.toast.failed",{message:e.message}),6000);return}
   toast(tMsg("viewer.recovery.rejected",{reason:e.message}),6000);
@@ -669,7 +680,7 @@ function applyServer(d){
   agentDelivery=d.agentDelivery||null;
   const old=!hasFeature(d,"marks");if(old&&!srvOld)toast(tMsg("viewer.mode.oldTitle"),9000);srvOld=old;
   srvNoStages=!hasFeature(d,"stages");
-  srvNoFullCheck=!hasFeature(d,"full-check");updateMode();
+  srvNoFullCheck=!hasFeature(d,"full-check");stopServiceSupported=hasFeature(d,"stop-service");updateMode();
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
   if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
@@ -726,7 +737,7 @@ function updateMode(){const m=$("mode"),q=pend.get().length,f=failed.get().lengt
   else if(mode==="mismatch"){m.textContent=tMsg("viewer.mode.mismatch",{extra});m.title=tMsg("viewer.mode.mismatchTitle")}
   else{m.textContent=tMsg("viewer.mode.file");m.title=tMsg("viewer.mode.fileTitle")}
   const fb=$("dlFailed");if(fb)fb.style.display=f?"":"none";
-  syncSrvBar()}
+  syncSrvBar();renderServiceControls()}
 addEventListener("storage",e=>{
   if(FILE&&e.key===K.notes){const v=LS.get(K.notes,[]);notes=Array.isArray(v)?v:[];refreshList()}   // 别的标签页改了：跟上
   else if(e.key===K.pending||e.key===K.failed)updateMode();
@@ -1251,6 +1262,7 @@ function setHand(h){if(!h||h.error)return;const L=h.latest,prev=hand&&hand.lates
   if(fsig!==flightSig){flightSig=fsig;flight=new Set(fl);refreshList()}   // 「处理中」的批注变了才重绘列表
   if($("batches").classList.contains("on")&&sig!==handSig)loadBatches();handSig=sig}
 let handSig="", flightSig="", batchOpen=null;   // 处理记录弹窗：上次的状态签名、用户展开的批次
+let currentTaskSeq=null, currentTaskOpen=false;
 const BATCH_STATUS={pending:"viewer.batch.status.pending",claimed:"viewer.batch.status.claimed",drafted:"viewer.batch.status.drafted",review:"viewer.batch.status.review",reviewing:"viewer.batch.status.reviewing",done:"viewer.batch.status.done"};
 const BATCH_STAGE={draft:"viewer.batch.stage.draft",review:"viewer.batch.stage.review"};
 const batchStatus=s=>tMsg(BATCH_STATUS[s]||"")||s;   // 旧数据里的未知状态按原文显示
@@ -1333,23 +1345,59 @@ $("handBtn").onclick=()=>openHand();$("handState").onclick=()=>hand&&hand.latest
 $("handHist").onclick=()=>{$("hand").classList.remove("on");openBatches()};
 // 处理记录：每次「交给 Agent」算一批——提交、接收、收尾，这批解决了哪些批注，处理摘要
 const fmtIso=v=>fmtTime(Date.parse(v||"")||0);
+function renderServiceControls(){
+  $("stopServiceBtn").disabled=stoppingService||FILE;
+  $("stopServiceBtn").textContent=tMsg(stoppingService?"viewer.batch.stopping":"viewer.batch.stop");
+  $("stopServiceInfo").textContent=tMsg(mode==="server"&&!stopServiceSupported?"viewer.batch.stopLegacy":"viewer.batch.stopHint")}
+async function stopLocalService(){
+  if(stoppingService)return;
+  if(mode!=="server"){toast(tMsg("viewer.batch.stopOffline"),6000);return}
+  if(!stopServiceSupported){toast(tMsg("viewer.batch.stopLegacy"),8000);return}
+  if(!confirm(tMsg("viewer.batch.stopConfirm")))return;
+  stoppingService=true;busy++;renderServiceControls();
+  const rejectedBefore=saveFailures;
+  try{
+    await flush();
+    if(pend.get().length||failed.get().length||saveFailures!==rejectedBefore||mode!=="server"){
+      toast(tMsg("viewer.batch.stopUnsaved"),8000);return}
+    const d=await getNotes();
+    if(!hasFeature(d,"stop-service")){stopServiceSupported=false;toast(tMsg("viewer.batch.stopLegacy"),8000);return}
+    const r=await api("POST","/api/server/stop",{});
+    if(r.reviewId!==RID||r.stopping!==true)throw new Error(tMsg("viewer.error.format"));
+    mode="offline";occupant=null;barClosedFor="";firstPolled=true;
+    toast(tMsg("viewer.batch.stopSent"),8000);
+  }catch(e){
+    if(e.mismatch)mode="mismatch";else if(!e.status)mode="offline";
+    toast(e.code==="no-api"?tMsg("viewer.batch.stopLegacy"):tMsg("viewer.batch.stopFailed",{message:e.message}),8000);
+  }finally{stoppingService=false;busy--;updateMode()}}
+$("stopServiceBtn").onclick=stopLocalService;
+$("currentTaskToggle").onchange=()=>{currentTaskOpen=$("currentTaskToggle").checked;
+  const detail=$("batchCurrentDetail");if(detail)detail.hidden=!currentTaskOpen};
+$("batches").addEventListener("keydown",e=>{if(e.key==="Escape"&&!e.isComposing){
+  e.preventDefault();e.stopPropagation();$("batches").classList.remove("on");$("handBtn").focus()}});
 async function loadBatches(){   // 全量处理记录只在弹窗打开时取（轮询只带最新一批）
   let d=null;try{d=await api("GET","/api/handoff")}catch(e){}
   if(d&&Array.isArray(d.history))hand={...hand,...d};
   else hand={...(hand||{}),history:hand&&hand.latest?[hand.latest]:[]};   // 旧版服务没有历史：至少显示最近一批
   renderBatches()}
 function renderBatches(){
-  if(!hand||!Array.isArray(hand.history)){$("batchList").innerHTML=`<p class="empty">${tMsg("viewer.batch.loading")}</p>`;$("batchSum").textContent="";return}
+  renderServiceControls();
+  if(!hand||!Array.isArray(hand.history)){$("batchList").innerHTML=`<p class="empty">${tMsg("viewer.batch.loading")}</p>`;$("batchSum").textContent="";$("currentTaskToggleRow").hidden=true;return}
   const H=hand.history,byId=new Map(notes.map(x=>[x.id,x])),who=w=>w==="claude"?"Claude":w==="page"?tMsg("viewer.batch.whoPage"):w;
+  const seq=H.length?+(hand.latest||H[0]).seq:null;
+  if(seq!==currentTaskSeq){currentTaskSeq=seq;currentTaskOpen=false}
+  $("currentTaskToggleRow").hidden=!H.some(h=>+h.seq===seq);
+  $("currentTaskToggle").checked=currentTaskOpen;
   $("batchSum").textContent=H.length?tMsg("viewer.batch.sum",{total:H.length,count:H.length,
       counts:tMsg("viewer.batch.sumCounts",{done:+hand.done||0,claimed:+hand.claimed||0,pending:+hand.pending||0})
       +["drafted","review","reviewing"].map(k=>hand[k]?tMsg("viewer.batch.sumMore",{status:batchStatus(k),n:+hand[k]}):"").join("")}):"";
   const stageName=(e,two)=>e==="draft"&&!two?tMsg("viewer.batch.stage.single"):(tMsg(BATCH_STAGE[e]||"")||e);
   const box=$("batchList");if(box.querySelector("details"))batchOpen=new Set([...box.querySelectorAll("details[data-seq]")].filter(e=>e.open).map(e=>e.dataset.seq));
-  box.innerHTML=H.length?H.map(h=>{const ids=Array.isArray(h.resolvedIds)?h.resolvedIds:[],by=h.doneBy||h.claimedBy||"";
+  box.innerHTML=H.length?H.map(h=>{const ids=Array.isArray(h.resolvedIds)?h.resolvedIds:[],by=h.doneBy||h.claimedBy||"",current=+h.seq===currentTaskSeq;
     return `<div class="batch ${escH(h.status)}"><div class="bh"><b>${tMsg("viewer.batch.item",{seq:+h.seq})}</b><span class="bs">${escH(batchStatus(h.status))}${by?tMsg("viewer.batch.itemWho",{who:escH(who(by))}):""}</span>`
+      +(current?`<span class="bt">${tMsg("viewer.batch.current")}</span>`:"")
       +("resolvedCount" in h?`<span class="bn">${tMsg("viewer.batch.resolved",{n:+h.resolvedCount,
-          extra:(h.leftOpen?tMsg("viewer.batch.resolvedLeft",{n:+h.leftOpen}):"")+(h.live?tMsg("viewer.batch.resolvedLive"):h.estimated?tMsg("viewer.batch.resolvedEstimated"):"")})}</span>`:"")+`</div>`
+          extra:(h.leftOpen?tMsg("viewer.batch.resolvedLeft",{n:+h.leftOpen}):"")+(h.live?tMsg("viewer.batch.resolvedLive"):h.estimated?tMsg("viewer.batch.resolvedEstimated"):"")})}</span>`:"")+`</div><div${current?` id="batchCurrentDetail"${currentTaskOpen?"":" hidden"}`:""}>`
       +`<div class="bt">${tMsg("viewer.batch.submitted",{at:escH(fmtIso(h.at)),n:+h.openCount||0,
           extra:(Array.isArray(h.pages)&&h.pages.length?tMsg("viewer.batch.submittedPages",{pages:h.pages.map(Number).join(tMsg("viewer.hand.listSep"))}):"")
             +(h.claimedAt?tMsg("viewer.batch.submittedClaim",{at:escH(fmtIso(h.claimedAt))}):"")
@@ -1374,7 +1422,7 @@ function renderBatches(){
         return x?`<div class="bi" data-goto="${escH(id)}">${tMsg("viewer.batch.noteLine",{page:+x.page,summary:escH(clip(noteSummary(x),70))})}${x.resolution?`<span class="br">${tMsg("viewer.batch.draftNote",{text:escH(clip(x.resolution,100))})}</span>`:""}</div>`:""}).join("")}</details>`:"")
       +(ids.length?`<details data-seq="${+h.seq}"${(batchOpen?batchOpen.has(String(+h.seq)):h===H[0])?" open":""}><summary>${tMsg("viewer.batch.resolvedList",{count:ids.length})}</summary>${ids.map(id=>{const x=byId.get(id);
         return x?`<div class="bi" data-goto="${escH(id)}">${tMsg("viewer.batch.noteLine",{page:+x.page,summary:escH(clip(noteSummary(x),70))})}${isDone(x)?(x.resolution?`<span class="br">${tMsg("viewer.batch.resolutionNote",{text:escH(clip(x.resolution,100))})}</span>`:""):tMsg("viewer.batch.reopened")}</div>`
-          :`<div class="bi">${tMsg("viewer.batch.deleted")}</div>`}).join("")}</details>`:"")+`</div>`}).join(""):`<p class="empty">${tMsg("viewer.batch.empty")}</p>`}
+          :`<div class="bi">${tMsg("viewer.batch.deleted")}</div>`}).join("")}</details>`:"")+`</div></div>`}).join(""):`<p class="empty">${tMsg("viewer.batch.empty")}</p>`}
 function openBatches(){if(FILE){toast(tMsg("viewer.batch.fileMode"));return}batchOpen=null;$("batchList").innerHTML="";renderBatches();$("batches").classList.add("on");loadBatches()}
 $("batchList").addEventListener("click",e=>{
   const rv=e.target.closest("[data-breview]"),fn=e.target.closest("[data-bfinal]");
