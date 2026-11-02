@@ -836,7 +836,8 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
     d = Path(e["dir"])
     row: dict[str, Any] = {"reviewId": rid, "dir": str(d), "port": e.get("port"), "name": None, "state": None,
                            "state_id": None,
-                           "running": None, "pending": 0, "review": 0, "waiting": False, "hook": False, "unattended": False}
+                           "running": None, "pending": 0, "review": 0, "waiting": False, "hook": False, "unattended": False,
+                           "agentDelivery": None, "receiptConfirmed": None}
     st = ledger.entry_state(rid, e)
     # state 是给脚本读的判定值，恒为中文、不随语言改值；state_id 是语言无关的稳定值；
     # 给人看的那一层由 list_reviews 用 _state_label 按语言显示。
@@ -861,6 +862,12 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
     try:
         hs = store.handoff_state(d, full=False)
         row["pending"], row["review"] = int(hs.get("pending") or 0), int(hs.get("review") or 0)
+        delivery = row["agentDelivery"] = wakeup.public_status(d)
+        latest = hs.get("latest") or {}
+        event = "review" if latest.get("status") in ("review", "reviewing") else "handoff"
+        if delivery.get("state") == "received" and delivery.get("seq") == latest.get("seq") and delivery.get("event") == event:
+            row["receiptConfirmed"] = True
+        # No receipt is unknown, never evidence that a claimed worker is offline.
     except (OSError, ValueError):
         pass
     stages = read_wait(d)

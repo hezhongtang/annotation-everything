@@ -139,6 +139,9 @@ class DeliveryTests(unittest.TestCase):
             wakeup.acknowledge(self.review, "handoff", 1, sent["messageId"], THREAD)
             self.assertEqual(wakeup.status(self.review)["state"], "received")
             store.handoff_claim(self.review, by="Synthetic")
+            row = serve.review_row("synthetic-delivery", {"dir": str(self.review), "port": None})
+            self.assertTrue(row["receiptConfirmed"])
+            self.assertFalse(row["unattended"])
         finally:
             close()
         second, close = self.start_server()
@@ -209,6 +212,15 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(len(self.desktop.requests), 2)
         self.assertNotEqual(self.desktop.requests[0]["params"]["turnStart"]["request"]["clientUserMessageId"],
                             self.desktop.requests[1]["params"]["turnStart"]["request"]["clientUserMessageId"])
+
+    def test_claim_without_chat_receipt_is_unknown_not_offline(self):
+        store.handoff_submit(self.review, "synthetic")
+        store.handoff_claim(self.review, by="Synthetic")
+        row = serve.review_row("synthetic-delivery", {"dir": str(self.review), "port": None})
+        self.assertIsNone(row["receiptConfirmed"])
+        self.assertEqual(row["agentDelivery"]["state"], "unconfigured")
+        self.assertFalse(row["unattended"])
+        self.assertEqual(store.handoff_state(self.review)["latest"]["status"], "claimed")
 
     def test_bound_review_rejects_claiming_waiter_and_wrong_chat(self):
         self.bind()

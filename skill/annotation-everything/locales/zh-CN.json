@@ -1131,6 +1131,7 @@
     "serve.serve.agentRestart": "已保存 Codex 接入，但运行中的服务尚未启用。请停止旧服务后重新启动；绑定会自动恢复。",
     "cli.hand.agentBindingError": "审阅自动接入配置阻止了本次认领：{reason}",
     "cli.hand.eventWaitRefused": "本审阅已绑定提交事件接入。由绑定聊天接收后 claim；不要另开 wait 提前认领。只读等待可用 --no-claim。",
+    "viewer.agent.unknown": "接手未确认 · 请查看处理记录",
     "viewer.agent.bound": "自动接入已配置",
     "viewer.agent.connecting": "正在连接聊天",
     "viewer.agent.sending": "正在投递",

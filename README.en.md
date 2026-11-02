@@ -109,7 +109,9 @@ One skill copy handles Chinese requests such as “按批注改” and English r
 
 Supported languages are Simplified Chinese and English. English regional tags share the English resources; `zh` and `zh-Hans` map to Simplified Chinese. Traditional Chinese and other languages are not supported. The saved browser preference overrides the review default. `auto` matches browser languages in preference order and falls back to English. New reviews and old commands without a language setting remain Chinese. Interface, material, and annotation languages are independent; switching preserves drafts and unsent changes.
 
-Service mode accepts real submissions through a running waiter or hook. Automatic agent wake-up depends on host support. Opening `index.html` directly supports browser annotations, copying, and exports; import those annotations to give them to an agent. JSON preserves the annotation structure and review identity. Markdown omits IDs, page keys, timestamps, and processing batches and retains the legacy grammar's text limits; see the [format reference](skill/annotation-everything/references/formats.en.md). The [delivery evidence](docs/locale-delivery.en.md) records three complete language combinations, the compatibility matrix, environment, and limits.
+Service mode accepts real submissions through a running waiter or hook. Automatic agent wake-up depends on host support. Codex desktop supports a review-scoped binding: the agent runs `wakeup.py bind REVIEW_DIR`, then normal `serve.py` starts and restarts restore event delivery. The page distinguishes desktop acceptance from actual chat acknowledgement. No Codex configuration changes are required. See [Agent mechanisms](skill/annotation-everything/references/agent-mechanisms.en.md#codex-desktop-review-scoped-event-delivery) for compatibility and idle-chat verification. Opening `index.html` directly supports browser annotations, copying, and exports; import those annotations to give them to an agent. JSON preserves the annotation structure and review identity. Markdown omits IDs, page keys, timestamps, and processing batches and retains the legacy grammar's text limits; see the [format reference](skill/annotation-everything/references/formats.en.md). The [delivery evidence](docs/locale-delivery.en.md) records three complete language combinations, the compatibility matrix, environment, and limits.
+
+[Codex idle-wakeup acceptance](docs/codex-delivery.en.md) records two real idle submissions from an isolated synthetic page, normal restart recovery, and adapter limits.
 
 ## How it works
 
@@ -195,8 +197,6 @@ flowchart LR
     RV -->|"Return to the reviewer"| U["Flags the annotations that need the reviewer's decision, with reasons"]
 ```
 
-
-Codex desktop supports a review-scoped binding: the agent runs `wakeup.py bind REVIEW_DIR`, then normal `serve.py` starts and restarts restore event delivery. The page distinguishes desktop acceptance from actual chat acknowledgement. No Codex configuration changes are required. See [Agent mechanisms](skill/annotation-everything/references/agent-mechanisms.en.md#codex-desktop-review-scoped-event-delivery) for compatibility and idle-chat verification.
 ## Installation and maintenance
 
 The management command is `ae.py` at the repository root (Python standard library only), with four subcommands: `install`, `doctor`, `repair`, `uninstall`. The tool is an Agent Skills skill: any agent that adopts the open Agent Skills standard can load `SKILL.md` and follow it. It installs into Claude Code's skill directory by default. `--target` and `--link` cover every other agent's skill directory (see below).
@@ -288,6 +288,7 @@ See the [English format reference](skill/annotation-everything/references/format
 | `serve.py <review-dir>` | Start the local server; each review keeps its own dedicated port |
 | `serve.py list` / `status` / `forget` | List every review on this machine, show one review's status, remove a ledger entry you no longer need |
 | `serve.py check` | Run the server's security self-check |
+| `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | Save a review-scoped Codex chat binding, inspect delivery, acknowledge chat receipt, or unbind; normal server restarts restore delivery without schedules or Codex configuration changes |
 | `notes.py wait` / `claim` | Wait for a submission, or take one that is already waiting. `wait --locale` chooses the handoff language and preserves location, operation and skill requirements; `claim` keeps the original JSON values |
 | `notes.py show` / `resolve` / `reopen` | List annotations, mark them resolved, reopen them. `show --locale` chooses the reading language and beats `AE_LOCALE` and the review setting; `show --json` still exports the raw values |
 | `notes.py export` / `import` | Export annotations as a re-importable summary (Markdown with a version and language marker, or a structured JSON backup) / import a page export. `export --lang` follows the same priority as `show --locale`, plus `--format json`, `--all`, `--page N` and `--out <file>` |
@@ -330,6 +331,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── i18n.py                    loads the shared catalogs and fills in the chosen language
 │   ├── viewer_template.html       review page template (server mode and local file mode)
 │   ├── serve.py                   local server: serve / status / list / forget / check
+│   ├── wakeup.py                  Codex desktop events: saved binding, delivery, receipts and deduplication
 │   ├── notes.py                   annotation command line: wait / show / resolve / done / review and more
 │   ├── notes_store.py             annotation storage: atomic writes, file locks, change log
 │   ├── export_format.py           annotation exchange format: the marked Markdown grammar and the JSON backup

@@ -1241,6 +1241,7 @@
     "serve.serve.agentRestart": "A Codex binding is saved, but the running service has not loaded it. Stop and restart the service; the binding will be restored automatically.",
     "cli.hand.agentBindingError": "The review delivery binding prevents this claim: {reason}",
     "cli.hand.eventWaitRefused": "This review uses event delivery. The bound chat must claim after receipt. Do not start another claiming waiter; use --no-claim for observation.",
+    "viewer.agent.unknown": "Chat receipt unconfirmed · see processing history",
     "viewer.agent.bound": "Automatic delivery configured",
     "viewer.agent.connecting": "Connecting to chat",
     "viewer.agent.sending": "Sending to chat",
