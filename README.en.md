@@ -83,7 +83,7 @@ annotation-everything moves this whole process into a single page that runs on y
   <tr>
     <td valign="top">
       <h4>🗂️ Batch history</h4>
-      See, for each submission, how many annotations were resolved, who handled each stage, and what was done. When you reopen the page, it tells you which page you were last annotating and whether the agent has finished.
+      See, for each submission, how many annotations were resolved, who handled each stage, and what was done. The "Current task details" switch expands or collapses the latest batch, and you can stop this review's local service here. When you reopen the page, it tells you which page you were last annotating and whether the agent has finished.
     </td>
     <td valign="top">
       <h4>🔤 PPTX font check</h4>
@@ -99,6 +99,15 @@ annotation-everything moves this whole process into a single page that runs on y
 </table>
 
 The review page can use Simplified Chinese or English. Pass `--locale auto`, `zh-CN`, or `en` when building; the page can switch language too, and the choice stays in this browser. Annotation text stays as written, and the stored target values `报告`, `讲稿`, and `报告和讲稿` do not change with the language. Omitting `--locale` keeps a new review in Chinese and leaves an existing review on its saved choice. Adding, editing, deleting and reopening annotations, quotes, quick delete and replace, pins and area selection, re-annotating, styling, page numbers, the speaker-notes column, Q&A labels, the help text, tooltips and accessible names all follow the current language, as do the confirmation dialogs. So do the skill box, its suggestions and "Suggested" tag, the empty result, the standing-skill scope labels and add/remove prompts, and the output of `notes.py skills`. Search still matches the skill catalog's original name and description, and the stored scope values `all` / `报告` / `讲稿` / `style` stay unchanged. Exported Markdown can be Chinese or English (following the interface by default); both the page and CLI can import either language. The "Hand to the agent" dialog, submission badge, batch history, resume hint and connection guidance also follow the current language. Submission options (finalize or stop at drafted, allow subagents, full check) do not depend on the interface language.
+
+<details>
+<summary><b>Current task and stopping the local service</b></summary>
+<br>
+<p align="center"><img src="docs/assets/batch-controls.en.png" alt="Current task details switch and Stop local service button in processing history" width="88%"></p>
+Press `J` or click the agent status to open "Processing history". The current task is the latest batch handed to the agent. Its details start collapsed; expand them to see the note, requirements, stages and summary. Polling and language changes preserve the expanded state; a new batch starts collapsed.
+
+"Stop local service" sends held changes first and keeps the service running if saving fails. Older services show an upgrade hint. Stopping takes every tab for this review offline while preserving the materials, annotations, submission history and owned port. Other reviews and running agents keep working. The page shows the command to restart the service. "Close" in the top right only closes the history panel.
+</details>
 
 <details>
 <summary><b>Export and import annotations</b></summary>

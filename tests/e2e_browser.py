@@ -566,6 +566,8 @@ def full_check_checks(browser, tmp: Path):
                                   capture_output=True, text=True, timeout=15)
         ok(received.returncode == 0 and "全量勾稽" in received.stdout, "等待中的 Agent 收到全量勾稽要求")
         page.keyboard.press("j")
+        wait_batches(page, "第 1 批")
+        page.check("#currentTaskToggle")
         ok(wait_batches(page, "全量勾稽"), "处理记录显示全量勾稽要求")
         page.keyboard.press("Escape")
         page.click("#handBtn")
@@ -1437,6 +1439,7 @@ def handoff_i18n_checks(browser, tmp: Path):
 
         page.keyboard.press("j")
         wait_batches(page, "Batch 1")
+        page.check("#currentTaskToggle")
         history = page.inner_text("#batchList") + page.inner_text("#batchSum")
         posts_after_submit = sum(1 for method, _url in net if method == "POST")
         ok("Batch 1" in history and "in progress" in history, f"英文处理记录（实际 {history[:60]!r}）")
@@ -1572,6 +1575,261 @@ def handoff_i18n_checks(browser, tmp: Path):
         opage.unroute("**/api/notes", no_full_check)
         old.close()
         ctx.close()
+    finally:
+        ctx.close()
+        stop(server)
+
+
+def current_task_controls_checks(browser, tmp: Path):
+    """当前任务详情通过界面展开、收起；语言与轮询不会重置用户选择。"""
+    d = tmp / "current_task_controls"
+    d.mkdir()
+    build(d, locale="en", name="current-task-controls")
+    port = free_port()
+    server = start_server(d, port)
+    ctx = browser.new_context(viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        ok(wait_mode(page, "server"), "当前任务：连接本地服务")
+        page.keyboard.press("j")
+        ok(wait_dom(page, JS_BATCHES_ON, 5), "当前任务：无提交时仍可打开处理记录")
+        ok(not page.is_visible("#currentTaskToggle"), "当前任务：无批次时没有无效详情开关")
+        page.locator("#batches [data-close]").click()
+        add_note(page, "synthetic current-task annotation")
+        page.click("#handBtn")
+        page.fill("#handMsg", "synthetic current-task message")
+        page.click("#doHand")
+        ok(wait_until(lambda: "batch 1" in page.inner_text("#handState"), page, 8),
+           "当前任务：第一批提交成功")
+        page.keyboard.press("j")
+        ok(wait_batches(page, "Batch 1"), "当前任务：处理记录显示最新批次")
+        toggle = page.get_by_role("switch", name="Current task details", exact=True)
+        exists = toggle.count() == 1
+        ok(exists, "当前任务：提供可访问的详情开关")
+        if not exists:
+            return
+        ok(not toggle.is_checked() and "synthetic current-task message" not in page.inner_text("#batchList"),
+           "当前任务：详情默认收起")
+        toggle.check()
+        ok("Note: synthetic current-task message" in page.inner_text("#batchList")
+           and "Asks for:" in page.inner_text("#batchList"), "当前任务：展开显示附言与要求")
+        before = json.loads((d / "handoff.json").read_text())
+        page.select_option("#localePick", "zh-CN")
+        ok(page.get_by_role("switch", name="当前任务详情", exact=True).is_checked()
+           and "附言：synthetic current-task message" in page.inner_text("#batchList"),
+           "当前任务：切到中文保留展开与原始附言")
+        ok(json.loads((d / "handoff.json").read_text()) == before, "当前任务：详情浏览与切换语言不改提交数据")
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "claim", str(d)],
+                       check=True, capture_output=True)
+        ok(wait_batches(page, "处理中") and page.is_checked("#currentTaskToggle"),
+           "当前任务：认领状态轮询保留展开")
+        page.uncheck("#currentTaskToggle")
+        page.select_option("#localePick", "en")
+        ok(not page.is_checked("#currentTaskToggle")
+           and "synthetic current-task message" not in page.inner_text("#batchList"),
+           "当前任务：收起与语言切换保留选择")
+        page.check("#currentTaskToggle")
+        page.locator("#batches [data-close]").click()
+        page.keyboard.press("j")
+        ok(page.is_checked("#currentTaskToggle"), "当前任务：关闭再打开处理记录保留展开")
+        page.focus("#currentTaskToggle")
+        page.keyboard.press("Escape")
+        ok(not page.is_visible("#batches"), "当前任务：开关有焦点时 Esc 仍可关闭面板")
+        page.keyboard.press("j")
+        wait_batches(page, "Batch 1")
+        page.locator("#batches [data-close]").click()
+        add_note(page, "synthetic second-batch annotation")
+        page.click("#handBtn")
+        page.fill("#handMsg", "synthetic second-batch message")
+        page.click("#doHand")
+        ok(wait_until(lambda: "batch 2" in page.inner_text("#handState"), page, 8), "当前任务：创建新批次")
+        page.keyboard.press("j")
+        ok(wait_batches(page, "Batch 2") and not page.is_checked("#currentTaskToggle")
+           and "synthetic second-batch message" not in page.inner_text("#batchList")
+           and "synthetic current-task message" in page.inner_text("#batchList"),
+           "当前任务：新的一批默认收起，旧批次详情仍可查看")
+        page.check("#currentTaskToggle")
+        artifacts = os.environ.get("AE_BATCH_CONTROLS_ARTIFACTS")
+        if artifacts:
+            output = Path(artifacts)
+            output.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(output / "batch-controls.en.png"))
+            page.select_option("#localePick", "zh-CN")
+            page.screenshot(path=str(output / "batch-controls.zh.png"))
+            page.select_option("#localePick", "en")
+
+        requests = []
+        page.on("request", lambda req: requests.append((req.method, req.url)))
+        stop_requests = lambda: [r for r in requests if r[0] == "POST" and r[1].endswith("/api/server/stop")]
+        page.once("dialog", lambda dialog: dialog.dismiss())
+        page.get_by_role("button", name="Stop local service", exact=True).click()
+        ok(server.poll() is None and not stop_requests(), "停止服务：取消确认不发送停止请求")
+
+        def legacy_service(route):
+            response = route.fetch()
+            body = response.json()
+            body["features"] = [f for f in body.get("features", []) if f != "stop-service"]
+            route.fulfill(response=response, json=body)
+
+        page.route("**/api/notes", legacy_service)
+        ok(wait_until(lambda: "cannot be stopped from the page" in page.inner_text("#stopServiceInfo"),
+                      page, 8), "停止服务：旧服务显示升级指引")
+        page.get_by_role("button", name="Stop local service", exact=True).click()
+        ok(wait_toast(page, "run the new serve.py") and not stop_requests() and server.poll() is None,
+           "停止服务：旧服务不发送不支持的停止请求")
+        page.unroute("**/api/notes", legacy_service)
+        ok(wait_until(lambda: "cannot be stopped from the page" not in page.inner_text("#stopServiceInfo"),
+                      page, 8), "停止服务：恢复新服务能力")
+
+        def wrong_review(route):
+            response = route.fetch()
+            body = response.json()
+            body["reviewId"] = "0123456789abcdef"
+            route.fulfill(response=response, json=body)
+
+        page.route("**/api/notes", wrong_review)
+        ok(wait_mode(page, "mismatch"), "停止服务：检测服务审阅不匹配")
+        page.get_by_role("button", name="Stop local service", exact=True).click()
+        ok(wait_toast(page, "not connected to its review") and not stop_requests() and server.poll() is None,
+           "停止服务：不会停止不匹配的服务")
+        page.unroute("**/api/notes", wrong_review)
+        ok(wait_mode(page, "server"), "停止服务：恢复本审阅连接")
+        page.locator("#batches [data-close]").click()
+        pending_saves = []
+
+        def reject_save(route):
+            if route.request.method == "POST":
+                pending_saves.append(route)
+            else:
+                route.continue_()
+
+        page.route("**/api/notes", reject_save)
+        add_note(page, "synthetic saved before stop")
+        ok(wait_until(lambda: "held for sending" in page.inner_text("#mode"), page, 5),
+           "停止服务：等待响应的改动仍在待补传队列")
+        page.keyboard.press("j")
+        wait_batches(page, "Batch 2")
+
+        def stop_after_failed_save(status):
+            page.once("dialog", lambda dialog: dialog.accept())
+            page.get_by_role("button", name="Stop local service", exact=True).click()
+            if not wait_until(lambda: bool(pending_saves), page, 5,
+                              condition=f"停止操作等待补传响应（{status}）"):
+                return False
+            waiting = page.is_disabled("#stopServiceBtn")
+            pending_saves.pop(0).fulfill(status=status, json={"app": "annotation-everything", "code": "bad-note",
+                                                            "error": "synthetic save failure"})
+            settled = wait_until(lambda: page.is_enabled("#stopServiceBtn")
+                                 and "Some changes have not been saved" in page.inner_text("#toast"),
+                                 page, 5, condition=f"本次停止操作因保存失败结束（{status}）")
+            return waiting and settled and not stop_requests() and server.poll() is None
+
+        ok(stop_after_failed_save(503), "停止服务：补传 5xx 失败时保持服务运行")
+        ok(stop_after_failed_save(400), "停止服务：明确拒绝保存时也不停止")
+        page.unroute("**/api/notes", reject_save)
+        page.locator("#batches [data-close]").click()
+        add_note(page, "synthetic saved before stop")
+        page.keyboard.press("j")
+        wait_batches(page, "Batch 2")
+        other_tab = ctx.new_page()
+        other_tab.goto(f"http://127.0.0.1:{port}/")
+        ok(wait_mode(other_tab, "server"), "停止服务：同一审阅的第二个标签页已连接")
+        held_saves = []
+
+        def hold_other_save(route):
+            if route.request.method == "POST":
+                held_saves.append(route)
+            else:
+                route.continue_()
+
+        other_tab.route("**/api/notes", hold_other_save)
+        add_note(other_tab, "synthetic rejected in another tab")
+        ok(wait_until(lambda: bool(held_saves), other_tab, 5), "停止服务：另一标签页补传正在等待响应")
+        page.bring_to_front()
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.get_by_role("button", name="Stop local service", exact=True).click()
+        ok(page.get_by_role("button", name="Saving and stopping…", exact=True).is_disabled()
+           and not stop_requests(), "停止服务：等待另一标签页的补传完成")
+        held_saves[0].fulfill(status=400, json={"app": "annotation-everything", "code": "bad-note",
+                                              "error": "synthetic rejection in another tab"})
+        cross_tab_blocked = (wait_toast(page, "Some changes have not been saved", seconds=5)
+                             and server.poll() is None and not stop_requests())
+        ok(cross_tab_blocked, "停止服务：另一标签页保存被拒时也保持服务运行")
+        if not cross_tab_blocked:
+            return
+        other_tab.unroute("**/api/notes", hold_other_save)
+        held_reads = []
+        read_count = 0
+
+        def hold_final_read(route):
+            nonlocal read_count
+            if route.request.method == "GET":
+                read_count += 1
+                if read_count == 2:
+                    held_reads.append((route, route.fetch()))
+                    return
+            route.continue_()
+
+        # 补传结束后的身份预检也可能让出执行；在响应回来前让另一标签页保存被拒。
+        page.route("**/api/notes", hold_final_read)
+        held_saves.clear()
+        other_tab.route("**/api/notes", hold_other_save)
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.get_by_role("button", name="Stop local service", exact=True).click()
+        ok(wait_until(lambda: bool(held_reads), page, 5), "停止服务：最终身份预检正在等待响应")
+        other_tab.bring_to_front()
+        add_note(other_tab, "synthetic rejection during final service check")
+        ok(wait_until(lambda: bool(held_saves), other_tab, 5), "停止服务：最终预检期间另一标签页正在补传")
+        held_saves[0].fulfill(status=400, json={"app": "annotation-everything", "code": "bad-note",
+                                              "error": "synthetic rejection during final service check"})
+        ok(wait_toast(other_tab, "synthetic rejection during final service check", seconds=5),
+           "停止服务：最终预检期间另一标签页保存被拒")
+        page.bring_to_front()
+        held_reads[0][0].fulfill(response=held_reads[0][1])
+        final_read_blocked = (wait_toast(page, "Some changes have not been saved", seconds=5)
+                              and server.poll() is None and not stop_requests())
+        ok(final_read_blocked, "停止服务：最终预检期间保存被拒仍保持服务运行")
+        page.unroute("**/api/notes", hold_final_read)
+        other_tab.unroute("**/api/notes", hold_other_save)
+        if not final_read_blocked:
+            return
+        page.bring_to_front()
+        saved_before_stop = []
+        page.on("request", lambda req: saved_before_stop.append(
+            any(n["text"] == "synthetic saved before stop" for n in disk_notes(d)))
+            if req.method == "POST" and req.url.endswith("/api/server/stop") else None)
+        confirmations = []
+        page.once("dialog", lambda dialog: (confirmations.append(dialog.message), dialog.accept()))
+        page.select_option("#localePick", "zh-CN")
+        status_before = json.loads(subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "status", str(d)],
+                                                 check=True, capture_output=True, text=True).stdout)
+        history_before = json.loads((d / "handoff.json").read_text())
+        page.get_by_role("button", name="停止本地服务", exact=True).click()
+        ok(wait_until(lambda: server.poll() is not None, page, 8), "停止服务：真实服务进程正常退出")
+        ok(server.returncode == 0 and not (d / ".annotation-server.json").exists(),
+           "停止服务：退出码为零，运行状态文件清理")
+        ok(saved_before_stop == [True] and len(stop_requests()) == 1,
+           "停止服务：确认改动已落盘后只发送一次停止请求")
+        ok(len(confirmations) == 1 and "所有标签页" in confirmations[0] and "Agent 继续运行" in confirmations[0],
+           "停止服务：中文确认说明停止范围、保留数据与 Agent 行为")
+        other_tab.bring_to_front()
+        ok(wait_mode(other_tab, "offline"), "停止服务：同一审阅其他标签页转离线")
+        page.bring_to_front()
+        ok(wait_mode(page, "offline") and wait_until(lambda: "serve.py" in page.inner_text("#srvBar"), page, 8),
+           "停止服务：页面转离线并给出重启命令")
+        status_after = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "status", str(d)],
+                                      capture_output=True, text=True)
+        ok(status_after.returncode == 3 and isinstance(status_before["owned_port"], int)
+           and json.loads(status_after.stdout)["owned_port"] == status_before["owned_port"],
+           "停止服务：专属端口仍保留")
+        stop(server)
+        server = start_server(d, port)
+        page.reload()
+        ok(wait_mode(page, "server")
+           and "synthetic saved before stop" in page.inner_text("#nlist")
+           and json.loads((d / "handoff.json").read_text()) == history_before,
+           "停止服务：重启后批注与提交记录恢复")
     finally:
         ctx.close()
         stop(server)
@@ -2281,6 +2539,7 @@ def server_mode_checks(browser, tmp: Path):
        "代理收尾后页面显示「Agent 已处理 · 第 1 批（解决 1 条）」与处理摘要")
     page.click("#handState")
     batches_ready = wait_batches(page, "第 1 批", condition="点 Agent 状态后处理记录打开并载入批次")
+    page.check("#currentTaskToggle")
     bl = page.inner_text("#batchList") if batches_ready else ""
     ok("第 1 批" in bl and "解决 1 条" in bl and "处理摘要：第 3 页已改" in bl and "处理说明：标题缩短了" in bl and "附言：先改第 3 页" in bl,
        "点 Agent 状态打开处理记录：批次、解决几条、处理摘要、每条的处理说明")
@@ -2327,8 +2586,12 @@ def server_mode_checks(browser, tmp: Path):
                          condition="断线暂存的两条批注补传落盘")
     dels = [n for n in disk_notes(sdir) if n["text"] == "删"]
     ok(flushed and "已连接" in page.inner_text("#mode"), f"服务恢复后补传，同文不同标点两条都在（{len(dels)} 条）")
-    last = json.loads((sdir / "handoff.json").read_text())["items"][-1]
-    ok(last["seq"] == 2 and last["status"] == "pending" and {n["id"] for n in dels} <= set(last["openIds"]),
+    def queued_handoff_saved():
+        last = json.loads((sdir / "handoff.json").read_text())["items"][-1]
+        return (last["seq"] == 2 and last["status"] == "pending"
+                and {n["id"] for n in dels} <= set(last["openIds"]))
+
+    ok(wait_until(queued_handoff_saved, page, 8, condition="批注补传后的提交快照包含这两条批注"),
        "暂存的「交给 Agent」在批注补传之后才提交（提交快照里包含这两条）")
     # 处理记录：用户展开的批次在状态变化重绘后仍展开
     page.keyboard.press("Escape")
@@ -2398,6 +2661,8 @@ def server_mode_checks(browser, tmp: Path):
     ok("已初改·待复核" in card and "初改说明：标题改短" in card and "痕迹：初改（sonnet-初改 · 第" in card,
        "待复核的批注卡片显示状态、初改说明与处理痕迹")
     page.keyboard.press("j")
+    wait_batches(page, f"第 {lb['seq']} 批")
+    page.check("#currentTaskToggle")
     batches_ready = wait_batches(page, "要求：做到已初改·待复核",
                                  condition="处理记录打开并载入初改批次")
     bl = page.inner_text("#batchList")
@@ -2607,6 +2872,7 @@ SCENARIO_RUNNERS = {
     "locale-loop": locale_checks,
     "english-script": english_script_checks,
     "handoff-i18n": handoff_i18n_checks,
+    "current-task-controls": current_task_controls_checks,
     "export-import": export_import_checks,
     "file-mode": file_mode_checks,
     "css-fidelity": css_fidelity_checks,
