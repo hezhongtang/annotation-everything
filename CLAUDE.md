@@ -1,5 +1,9 @@
 @AGENTS.md
 
+## 用户问答
+
+向用户提问时，必须调用当前环境可用的问答工具互动；具体规则见 AGENTS.md「用户问答」。
+
 ## Agent skills
 
 ### Issue tracker

@@ -9,6 +9,10 @@
 - 测试与 eval 只用合成数据（`fixtures/`、`skill/annotation-everything/evals/*/files/`）。任何真实业务材料、批注不得进入本仓库或 skill 目录。
 - eval 运行产物在 `skill/annotation-everything-workspace/`（已忽略）。
 
+## 用户问答
+
+需要用户补充信息、澄清需求、选择方案或确认设计结论时，必须调用当前环境可用的问答工具互动；有可选方案时给出推荐选项，不以普通回复中的问题列表代替工具。沿用用户已明确的决定，避免重复提问。问答工具确实不可用时，先说明原因，再用文字提问。
+
 ## 分支、issue 与 PR
 
 `main` 只通过 PR 的 squash 合并更新。仓库是免费版私有仓库，GitHub 无法在服务器端锁定 `main`，下面的规则靠本地钩子和这份约定执行。
