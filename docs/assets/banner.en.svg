@@ -42,7 +42,7 @@
     <g transform="translate(72 0)">
       <rect x="0" y="92" width="344" height="30" rx="15" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.18"/>
       <circle cx="18" cy="107" r="4.5" fill="#3ddc84"/>
-      <text x="32" y="112" font-size="13" font-weight="600" letter-spacing="2.2" fill="#d7e3f7">AGENT SKILLS · VERSION 0.9.0</text>
+      <text x="32" y="112" font-size="13" font-weight="600" letter-spacing="2.2" fill="#d7e3f7">AGENT SKILLS · VERSION 0.10.0</text>
       <text x="-3" y="190" font-size="58" font-weight="800" letter-spacing="-1.2" fill="url(#title)">annotation-everything</text>
       <text x="0" y="240" font-size="27" font-weight="600" fill="#e8eef9">Annotate pages, then hand off to an agent</text>
       <text x="0" y="280" font-size="17" fill="#9fb2d1">Slides and speaker notes side by side, on your machine</text>

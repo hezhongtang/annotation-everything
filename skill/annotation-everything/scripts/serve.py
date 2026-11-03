@@ -66,7 +66,7 @@ import notes_store as store  # noqa: E402
 import wakeup  # noqa: E402
 
 APP = "annotation-everything"
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
 FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding"]
 
