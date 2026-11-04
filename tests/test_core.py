@@ -1778,6 +1778,130 @@ class ServerTests(unittest.TestCase):
             srv.server_close()
 
 
+class OverviewTests(unittest.TestCase):
+    """总览从 HTTP 观察多审阅范围，全部使用临时台账和合成材料。"""
+
+    def setUp(self):
+        previous = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+        self.addCleanup(os.environ.__setitem__, "AE_HOME", previous)
+        self.tree = tmpdir()
+        self.workspace = self.tree / "workspace"
+        self.workspace.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.workspace)], check=True, capture_output=True)
+        self.d = self.workspace / "current"
+        self.current = self.build(self.d, "Current review")
+        self.srv = serve.ReviewServer(self.d, 0, log_to_file=False)
+        thread = threading.Thread(target=self.srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread.start()
+        self.addCleanup(self.srv.server_close)
+        self.addCleanup(self.srv.shutdown)
+        self.good = {"Host": f"127.0.0.1:{self.srv.port}"}
+
+    def build(self, directory, name):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", directory, name=name)
+
+    def request(self, path):
+        status, headers, raw = serve._req(self.srv.port, "GET", path, self.good)
+        self.assertNotIn("access-control-allow-origin", headers)
+        self.assertEqual(status, 200, raw)
+        return json.loads(raw)
+
+    def test_workspace_and_machine_scope_keep_paths_private(self):
+        self.build(self.workspace / "second", "Second review")
+        self.build(self.workspace / "nested" / "third", "Third review")
+        self.build(self.tree / "elsewhere" / "fourth", "Outside review")
+        local = self.request("/api/overview?scope=workspace")
+        self.assertEqual(local["workspace"], "workspace")
+        self.assertEqual(len(local["reviews"]), 3)
+        self.assertEqual(sum(row["current"] for row in local["reviews"]), 1)
+        all_reviews = self.request("/api/overview?scope=all")["reviews"]
+        self.assertEqual(len(all_reviews), 4)
+        for row in all_reviews:
+            self.assertFalse(Path(row["path"]).is_absolute(), row)
+            self.assertNotIn(str(self.tree), json.dumps(row), row)
+
+    def test_activity_order_counts_running_and_invalid_entries(self):
+        older = self.workspace / "older"
+        recent = self.workspace / "recent"
+        older_id = self.build(older, "Older review")["reviewId"]
+        recent_id = self.build(recent, "Recent review")["reviewId"]
+        store.add(older, {"page": 1, "text": "Synthetic pending annotation"})
+        store.handoff_submit(older, "Synthetic submission")
+        store.handoff_submit(recent, "Synthetic review", target="review")
+        store.handoff_claim(recent)
+        draft = store.handoff_done(recent, summary="Synthetic draft finished")
+        store.handoff_request_review(recent, draft["seq"], "Synthetic request for review")
+        for directory, activity in ((older, 100), (recent, 300)):
+            for filename in (store.NOTES_FILE, store.HANDOFF_FILE):
+                if (directory / filename).exists():
+                    os.utime(directory / filename, (activity, activity))
+        missing = self.workspace / "missing"
+        missing_id = self.build(missing, "Missing review")["reviewId"]
+        missing.rename(self.tree / "moved")
+        mismatch = self.workspace / "mismatch"
+        mismatch_id = self.build(mismatch, "Mismatched review")["reviewId"]
+        manifest = json.loads((mismatch / "review.json").read_text())
+        manifest["reviewId"] = "f" * 16
+        (mismatch / "review.json").write_text(json.dumps(manifest))
+        ledger.assign_port(self.current["reviewId"], self.d, prefer=self.srv.port)
+        serve.write_status(self.srv)
+
+        rows = self.request("/api/overview")["reviews"]
+        self.assertEqual([row["reviewId"] for row in rows[:3]],
+                         [self.current["reviewId"], recent_id, older_id])
+        by_id = {row["reviewId"]: row for row in rows}
+        self.assertEqual(by_id[recent_id]["lastActivity"], 300)
+        self.assertEqual(by_id[older_id]["lastActivity"], 100)
+        self.assertEqual(by_id[self.current["reviewId"]]["url"], f"http://127.0.0.1:{self.srv.port}/")
+        self.assertEqual(by_id[missing_id]["state"], "missing")
+        self.assertEqual(by_id[mismatch_id]["state"], "mismatch")
+        for rid in (missing_id, mismatch_id):
+            self.assertIsNone(by_id[rid]["url"])
+            self.assertEqual(by_id[rid]["forgetCommand"], f"serve.py forget {rid[:8]}")
+        listed = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "list", "--json"],
+                                capture_output=True, text=True, check=True, timeout=30)
+        for row in json.loads(listed.stdout)["reviews"]:
+            actual = by_id[row["reviewId"]]
+            self.assertEqual((actual["pending"], actual["review"]), (row["pending"], row["review"]))
+        self.assertEqual((by_id[older_id]["pending"], by_id[recent_id]["review"]), (1, 1))
+
+    def test_non_git_review_uses_parent_without_including_prefix_siblings(self):
+        loose = self.tree / "loose"
+        current = loose / "current"
+        self.build(current, "Loose current")
+        self.build(loose / "nested" / "peer", "Loose peer")
+        self.build(self.tree / "loose-extra" / "outside", "Prefix sibling")
+        server = serve.ReviewServer(current, 0, log_to_file=False)
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        status, _, raw = serve._req(server.port, "GET", "/api/overview",
+                                    {"Host": f"127.0.0.1:{server.port}"})
+        self.assertEqual(status, 200, raw)
+        result = json.loads(raw)
+        self.assertEqual(result["workspace"], "loose")
+        self.assertEqual({row["path"] for row in result["reviews"]}, {"current", "nested/peer"})
+
+    def test_overview_keeps_host_origin_identity_and_scope_guards(self):
+        for headers, expected in (({"Host": "evil.example"}, 421),
+                                  ({**self.good, "Origin": "http://evil.example"}, 403),
+                                  ({**self.good, "Sec-Fetch-Site": "same-site"}, 403),
+                                  ({**self.good, "X-AE-Review": "f" * 16}, 409)):
+            with self.subTest(headers=headers):
+                status, response, _ = serve._req(self.srv.port, "GET", "/api/overview", headers)
+                self.assertEqual(status, expected)
+                self.assertNotIn("access-control-allow-origin", response)
+        for query in ("scope=", "scope=unknown", "scope=all&scope=workspace"):
+            with self.subTest(query=query):
+                status, _, raw = serve._req(self.srv.port, "GET", "/api/overview?" + query, self.good)
+                self.assertEqual(status, 400, raw)
+                self.assertEqual(json.loads(raw)["code"], "bad-scope")
+        status, _, _ = serve._req(self.srv.port, "GET", "/overview", self.good)
+        self.assertEqual(status, 404, "总览仍是 index.html 内的视图，不新增可访问路径")
+
+
 class LedgerTests(unittest.TestCase):
     """审阅台账、审阅名、专属端口。每个用例用自己的台账目录。"""
 
