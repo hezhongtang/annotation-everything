@@ -91,7 +91,11 @@ annotation-everything moves this whole process into a single page that runs on y
     </td>
   </tr>
   <tr>
-    <td colspan="2" valign="top">
+    <td valign="top">
+      <h4>📚 Review overview and archiving</h4>
+      Browse reviews in this workspace or across the machine, find material by status and activity, and inspect summaries and pending submissions. Open, start or archive a review in the browser.
+    </td>
+    <td valign="top">
       <h4>🔄 Automatic release updates</h4>
       The skill periodically checks its installation source for stable releases, installs and announces updates, and keeps the current copy when offline or locally modified.
     </td>
@@ -99,6 +103,16 @@ annotation-everything moves this whole process into a single page that runs on y
 </table>
 
 The review page can use Simplified Chinese or English. Pass `--locale auto`, `zh-CN`, or `en` when building; the page can switch language too, and the choice stays in this browser. Annotation text stays as written, and the stored target values `报告`, `讲稿`, and `报告和讲稿` do not change with the language. Omitting `--locale` keeps a new review in Chinese and leaves an existing review on its saved choice. Adding, editing, deleting and reopening annotations, quotes, quick delete and replace, pins and area selection, re-annotating, styling, page numbers, the speaker-notes column, Q&A labels, the help text, tooltips and accessible names all follow the current language, as do the confirmation dialogs. So do the skill box, its suggestions and "Suggested" tag, the empty result, the standing-skill scope labels and add/remove prompts, and the output of `notes.py skills`. Search still matches the skill catalog's original name and description, and the stored scope values `all` / `报告` / `讲稿` / `style` stay unchanged. Exported Markdown can be Chinese or English (following the interface by default); both the page and CLI can import either language. The "Hand to the agent" dialog, submission badge, batch history, resume hint and connection guidance also follow the current language. Submission options (finalize or stop at drafted, allow subagents, full check) do not depend on the interface language.
+
+### Review overview and archiving
+
+<p align="center"><img src="docs/assets/overview.en.png" alt="Synthetic review overview: status groups and a detail pane with the report summary, purpose, audience, core questions and start action" width="92%"></p>
+
+Choose "Review overview" on any running review page, or open `/#overview` at its address. The default scope is "This workspace"; switch to "All on this machine" to see other registered reviews. The workspace is the review's git repository root, or its parent directory when it is outside a git repository. Paths are relative; other workspace paths start with `~` or show only the review name. If no review is running, start one with `serve.py <review-id>` first.
+
+The list groups Running, Stopped, Archived and Invalid reviews, with the latest activity first within each group. Select a review to see its summary, purpose, audience, core questions and pending receipt/review counts. Choose "Open" for a running review or "Start and open" for a stopped one to open its page in a new tab. Starting uses its owned port; follow the error guidance before retrying a failed start. Invalid entries provide a `serve.py forget <short-id>` cleanup command. "Back to current review" returns to the page hosting the overview.
+
+Archiving hides reviews that are no longer being advanced from the default list. Annotations, submissions and the owned port remain, and the service keeps running. Choose "Expand" or "Show archived" to reveal them, then select a review and choose "Unarchive". An archived current review displays a banner in both views and still accepts annotations and submissions; archiving does not cancel submitted processing requirements. `serve.py list` still includes every review and marks archived entries.
 
 <details>
 <summary><b>Current task and stopping the local service</b></summary>
@@ -123,6 +137,8 @@ The first line of the Markdown is a format marker (`<!-- annotation-everything e
 When no report exists yet, give the agent your source material and requirements. The agent follows the [built-in generation guide](skill/annotation-everything/references/generation.en.md), shipped with the skill, to produce a page-by-page HTML report and optional speaker notes. It reuses requirements already supplied, asks only about missing details that affect the result, and uses the supplied [base report stylesheet](skill/annotation-everything/references/report-base.css) by default. When you name an available external generation skill, or the task needs an extension, an external method can be used. Its output receives the same verification, and the method actually used is recorded.
 
 Reading source material depends on the host's available capabilities. The agent records what was read, partly read or unreadable, including the scope and reasons, and preserves citations and calculation definitions for key claims and figures. Gaps are disclosed; if all substantive material is unreadable, the draft cannot be declared complete. The report, requested speaker notes and `report-record.json` verification record stay beside the controlled source material. The generation guide defines the record and the workflow.
+
+For a newly generated report, write a one- or two-sentence `summary` in its verification record to identify it in the overview. The field is optional and older records remain valid. Without it, the overview shows "(No summary)" with the cover title. The summary does not replace the report's verification verdict; see [step 4, "Write the verification record," in the generation guide](skill/annotation-everything/references/generation.en.md).
 
 “Draft complete” and “Report deliverable” are separate verdicts. Readable, structured material with disclosed gaps can form a reviewable draft. Delivery also requires program checks and content, structure and visual verification; gaps affecting core conclusions block delivery. `report_check.py` provides structured results and a readable summary, and checks deterministic rules only. The agent performs the content judgments and page-by-page visual checks; unperformed, unavailable or stale checks never count as passed. Existing reports without a record can still enter review directly, with no backfill required. Revisions to reports with a record maintain the affected verification info, while report quality stays separate from annotation-processing status.
 
@@ -317,8 +333,11 @@ See the [English format reference](skill/annotation-everything/references/format
 | `verify.py plan` / `run` / `report` | Unified verification entry run from the repository root: `plan` explains the groups and commands without starting anything (`plan --phase development` also shows what the current changes should run, why, and when it falls back to the full check); `run` executes and writes structured records plus raw logs into `.verify/` (git-ignored), records the shadow comparison between the suggested selection and the full gate by default, and lets later stages reference currently valid passing evidence (`--no-reuse` forces a full rerun); `report` only reads records and shows the evidence chain. Groups: `unit` (full unit), `unit-related` (explicitly named cases, always augmented with the global dictionary contract in `tests/test_i18n_catalog_contract.py`), `browser` (full browser), `serve-check` (server security self-check), `all` (runs `unit` → `serve-check` → `browser` in order). Field contract: [docs/verify/record-contract.md](docs/verify/record-contract.md), selection strategy: [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
 | `build_viewer.py --report … [--script …] --out <review-dir>` | Build the review page with optional speaker notes; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
 | `report_check.py report.html [--script script.md] [--record report-record.json]` | Public report verification entry: a readable summary by default, structured results with `--json`, and `--locale en` or `zh-CN` for the language. Exit 0 means program checks passed, not that the report is deliverable; 1 means checks failed; 2 means an input or usage error. Content, structure and visual coverage and delivery blockers are listed separately |
-| `serve.py <review-dir>` | Start the local server; each review keeps its own dedicated port |
-| `serve.py list` / `status` / `forget` | List every review on this machine, show one review's status, remove a ledger entry you no longer need |
+| `serve.py <review-dir-or-id>` | Start the local server; each review keeps its own dedicated port |
+| `http://127.0.0.1:<port>/#overview` (browser address) | Open the review overview to switch scope, inspect details, open or start reviews, and archive or unarchive them; start a local service first |
+| `serve.py list [--json]` | List every review on this machine, including archived entries; both readable output and JSON include an archive flag |
+| `serve.py status <review-dir-or-id>` | Show one review's running status |
+| `serve.py forget <short-id>` | Remove a ledger entry confirmed unnecessary and release its owned port while keeping the review directory. The overview provides this command for invalid entries; cleanup runs in the CLI |
 | `serve.py check` | Run the server's security self-check |
 | `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | Bind the receiving harness and session and inspect identity and state; Codex desktop uses events, other harnesses can use `--adapter wait`; transfer with `bind --replace` after active batches finish |
 | `notes.py wait` / `claim` | Wait for a submission, or take one that is already waiting. `wait --locale` chooses the handoff language and preserves location, operation and skill requirements; `claim` keeps the original JSON values |
@@ -369,8 +388,9 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── i18n.py                    loads the shared catalogs and fills in the chosen language
 │   ├── update.py                  checks stable releases and updates the skill copy
 │   ├── content_manifest.py        fingerprints the skill copy's files, directories and links
-│   ├── viewer_template.html       review page template (server mode and local file mode)
+│   ├── viewer_template.html       review page and overview template (server mode and local file mode)
 │   ├── serve.py                   local server: serve / status / list / forget / check
+│   ├── review_overview.py         overview scope, report metadata, archiving and starting reviews
 │   ├── wakeup.py                  Receiving session binding; Codex events, receipts and deduplication
 │   ├── notes.py                   annotation command line: wait / show / resolve / done / review and more
 │   ├── notes_store.py             annotation storage: atomic writes, file locks, change log
