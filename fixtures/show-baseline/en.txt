@@ -1,0 +1,240 @@
+===== default =====
+# Annotations · 示例咖啡 2030 年三季度经营回顾
+14 annotations (12 open, 1 drafted, waiting for review, 1 resolved); listing 13. rev 16
+Report marks: a pin is a point; a region is an area. Coordinates are percentages relative to the top-left of the page (x, y, width, height).
+Sources: Report = <TREE>/report.html; Speaker notes = <TREE>/script.md
+Standing skills required by the user: call them before handling each annotation within scope. Each annotation lists its applicable skills below: checker (All annotations), humanizer-zh (Report), dataviz (Speaker notes), frontend-design (Style)
+Handed to the agent: the latest is batch 1, waiting to be claimed (submitted 2026-11-01T10:20:00Z; 12 annotations were open then)
+Note from the user: 请按批注修改，改完重建对照页
+History: 1 batch in all (run notes.py batches to see what each one resolved)
+1 waiting to be claimed, 0 in progress, 0 waiting for review, 0 under review (in progress or under review with no agent running usually means the last run was cut short: finish it with notes.py done)
+Batch 1 (waiting to be claimed) asks for: Take it through to finalized; no subagents — the main agent of this session handles it in person. Not claimed yet: run notes.py claim before you start
+
+## Page 3 | 结论：三季度收入同比增长 12% (key sum)
+- `show0001` [Report · Pin 1 (x 12.5%, y 40.0%)] 把 +12% 改成「同比 +12%」
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+- `show0002` [Report · Pin 2 (x 38.8%, y 59.8%)] 数字要标单位
+  > Quote (Report): +12%
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Hint: Speaker notes, page 3, has a matching sentence (similar): “结论：三季度收入同比增长 12%”. Confirm whether to update it too (change both sides was not selected).
+
+## Page 4 | 收入结构：外卖占比升至 38% (key rev)
+- `show0003` [Report] 删掉这句
+  > Quote: 外卖平台抽成上调后，外卖毛利率下降 2 个百分点。
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Hint: Speaker notes, page 4, has a matching sentence (similar): “需要注意的是，平台抽成上调后外卖毛利率下降了 2 个百分点。”. Confirm whether to update it too (change both sides was not selected).
+- `show0004` [Speaker notes · Region 1 (x 5.0%, y 20.0%, w 60.0%, h 30.0%) · Replace · Style · selected area] Replace “原句甲乙” with “删掉整段”
+  Position hint: table「渠道」
+  Skills: checker (standing · All annotations), dataviz (standing · Speaker notes), frontend-design (standing · Style) — call these before handling this annotation
+- `show0005` [Report · Pin 2 (x 1.5%, y 2.0%) · Delete] Delete “外卖平台抽成上调后”
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Hint: Speaker notes, page 4, has a matching sentence (similar): “需要注意的是，平台抽成上调后外卖毛利率下降了 2 个百分点。”. Confirm whether to update it too (change both sides was not selected).
+
+## Page 5 | 成本：咖啡豆采购价上涨 9% (key cost)
+- `show0006` [Report and speaker notes] 改
+  > Quote: 外卖套餐提价 1 元
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report), dataviz (standing · Speaker notes) — call these before handling this annotation
+  ↔ Also change the other side (Speaker notes); matching sentence (same sentence): “第二，外卖套餐提价 1 元”
+- `show0007` [Report] 统一口径
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Also change the other side (Speaker notes); matching sentence (similar): “相近的对应句”
+- `show0008` [Drafted, waiting for review] [Report · Style · whole page] 表格太挤
+  Draft note: 已调整列宽
+  Trail: Drafted (agent): 已调整列宽
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report), frontend-design (standing · Style), dataviz (specified for this annotation) — call these before handling this annotation
+
+## Page 6 | 下一步：四季度三件事 (key next)
+- `show0010` [Speaker notes] 外卖套餐提价 1 元
+  > Quote: 外卖套餐提价 1 元
+  Skills: checker (standing · All annotations), dataviz (standing · Speaker notes) — call these before handling this annotation
+  ↔ Hint: Report, page 6, has a matching sentence (same sentence): “外卖套餐提价 1 元”. Confirm whether to update it too (change both sides was not selected).
+- `show0011` [Report] 原来这一页被删了
+  ⚠ The original page (key gone) is missing from the new report. The page number may be wrong; confirm which page this annotation belongs to before editing.
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+- `show0012` [Report] 页面键对不上
+  ⚠ The annotation page key rev does not match page 6 (next). Rebuild the review page to correct the mapping.
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+- `show0013` [Unspecified] 没选对象的一条
+  Skills: checker (standing · All annotations) — call these before handling this annotation
+
+## Page 9 | 附录：口径说明
+- `show0014` [Report] 多行意见
+  第二行也要改
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+
+===== include-resolved =====
+# Annotations · 示例咖啡 2030 年三季度经营回顾
+14 annotations (12 open, 1 drafted, waiting for review, 1 resolved); listing 14. rev 16
+Report marks: a pin is a point; a region is an area. Coordinates are percentages relative to the top-left of the page (x, y, width, height).
+Sources: Report = <TREE>/report.html; Speaker notes = <TREE>/script.md
+Standing skills required by the user: call them before handling each annotation within scope. Each annotation lists its applicable skills below: checker (All annotations), humanizer-zh (Report), dataviz (Speaker notes), frontend-design (Style)
+Handed to the agent: the latest is batch 1, waiting to be claimed (submitted 2026-11-01T10:20:00Z; 12 annotations were open then)
+Note from the user: 请按批注修改，改完重建对照页
+History: 1 batch in all (run notes.py batches to see what each one resolved)
+1 waiting to be claimed, 0 in progress, 0 waiting for review, 0 under review (in progress or under review with no agent running usually means the last run was cut short: finish it with notes.py done)
+Batch 1 (waiting to be claimed) asks for: Take it through to finalized; no subagents — the main agent of this session handles it in person. Not claimed yet: run notes.py claim before you start
+
+## Page 3 | 结论：三季度收入同比增长 12% (key sum)
+- `show0001` [Report · Pin 1 (x 12.5%, y 40.0%)] 把 +12% 改成「同比 +12%」
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+- `show0002` [Report · Pin 2 (x 38.8%, y 59.8%)] 数字要标单位
+  > Quote (Report): +12%
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Hint: Speaker notes, page 3, has a matching sentence (similar): “结论：三季度收入同比增长 12%”. Confirm whether to update it too (change both sides was not selected).
+
+## Page 4 | 收入结构：外卖占比升至 38% (key rev)
+- `show0003` [Report] 删掉这句
+  > Quote: 外卖平台抽成上调后，外卖毛利率下降 2 个百分点。
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Hint: Speaker notes, page 4, has a matching sentence (similar): “需要注意的是，平台抽成上调后外卖毛利率下降了 2 个百分点。”. Confirm whether to update it too (change both sides was not selected).
+- `show0004` [Speaker notes · Region 1 (x 5.0%, y 20.0%, w 60.0%, h 30.0%) · Replace · Style · selected area] Replace “原句甲乙” with “删掉整段”
+  Position hint: table「渠道」
+  Skills: checker (standing · All annotations), dataviz (standing · Speaker notes), frontend-design (standing · Style) — call these before handling this annotation
+- `show0005` [Report · Pin 2 (x 1.5%, y 2.0%) · Delete] Delete “外卖平台抽成上调后”
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Hint: Speaker notes, page 4, has a matching sentence (similar): “需要注意的是，平台抽成上调后外卖毛利率下降了 2 个百分点。”. Confirm whether to update it too (change both sides was not selected).
+
+## Page 5 | 成本：咖啡豆采购价上涨 9% (key cost)
+- `show0006` [Report and speaker notes] 改
+  > Quote: 外卖套餐提价 1 元
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report), dataviz (standing · Speaker notes) — call these before handling this annotation
+  ↔ Also change the other side (Speaker notes); matching sentence (same sentence): “第二，外卖套餐提价 1 元”
+- `show0007` [Report] 统一口径
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Also change the other side (Speaker notes); matching sentence (similar): “相近的对应句”
+- `show0008` [Drafted, waiting for review] [Report · Style · whole page] 表格太挤
+  Draft note: 已调整列宽
+  Trail: Drafted (agent): 已调整列宽
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report), frontend-design (standing · Style), dataviz (specified for this annotation) — call these before handling this annotation
+- `show0009` [Resolved] [Report · Pin 1 (x 90.0%, y 10.0%) · Style · pin] 这句话冗长
+  How it was handled: 已拆成两句
+  Trail: Handled (agent): 已拆成两句
+  Skills: dataviz (specified for this annotation) — call these before handling this annotation
+
+## Page 6 | 下一步：四季度三件事 (key next)
+- `show0010` [Speaker notes] 外卖套餐提价 1 元
+  > Quote: 外卖套餐提价 1 元
+  Skills: checker (standing · All annotations), dataviz (standing · Speaker notes) — call these before handling this annotation
+  ↔ Hint: Report, page 6, has a matching sentence (same sentence): “外卖套餐提价 1 元”. Confirm whether to update it too (change both sides was not selected).
+- `show0011` [Report] 原来这一页被删了
+  ⚠ The original page (key gone) is missing from the new report. The page number may be wrong; confirm which page this annotation belongs to before editing.
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+- `show0012` [Report] 页面键对不上
+  ⚠ The annotation page key rev does not match page 6 (next). Rebuild the review page to correct the mapping.
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+- `show0013` [Unspecified] 没选对象的一条
+  Skills: checker (standing · All annotations) — call these before handling this annotation
+
+## Page 9 | 附录：口径说明
+- `show0014` [Report] 多行意见
+  第二行也要改
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+
+===== page =====
+# Annotations · 示例咖啡 2030 年三季度经营回顾
+14 annotations (12 open, 1 drafted, waiting for review, 1 resolved); listing 3. rev 16
+Report marks: a pin is a point; a region is an area. Coordinates are percentages relative to the top-left of the page (x, y, width, height).
+Sources: Report = <TREE>/report.html; Speaker notes = <TREE>/script.md
+Standing skills required by the user: call them before handling each annotation within scope. Each annotation lists its applicable skills below: checker (All annotations), humanizer-zh (Report), dataviz (Speaker notes), frontend-design (Style)
+Handed to the agent: the latest is batch 1, waiting to be claimed (submitted 2026-11-01T10:20:00Z; 12 annotations were open then)
+Note from the user: 请按批注修改，改完重建对照页
+History: 1 batch in all (run notes.py batches to see what each one resolved)
+1 waiting to be claimed, 0 in progress, 0 waiting for review, 0 under review (in progress or under review with no agent running usually means the last run was cut short: finish it with notes.py done)
+Batch 1 (waiting to be claimed) asks for: Take it through to finalized; no subagents — the main agent of this session handles it in person. Not claimed yet: run notes.py claim before you start
+
+## Page 4 | 收入结构：外卖占比升至 38% (key rev)
+- `show0003` [Report] 删掉这句
+  > Quote: 外卖平台抽成上调后，外卖毛利率下降 2 个百分点。
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Hint: Speaker notes, page 4, has a matching sentence (similar): “需要注意的是，平台抽成上调后外卖毛利率下降了 2 个百分点。”. Confirm whether to update it too (change both sides was not selected).
+- `show0004` [Speaker notes · Region 1 (x 5.0%, y 20.0%, w 60.0%, h 30.0%) · Replace · Style · selected area] Replace “原句甲乙” with “删掉整段”
+  Position hint: table「渠道」
+  Skills: checker (standing · All annotations), dataviz (standing · Speaker notes), frontend-design (standing · Style) — call these before handling this annotation
+- `show0005` [Report · Pin 2 (x 1.5%, y 2.0%) · Delete] Delete “外卖平台抽成上调后”
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Hint: Speaker notes, page 4, has a matching sentence (similar): “需要注意的是，平台抽成上调后外卖毛利率下降了 2 个百分点。”. Confirm whether to update it too (change both sides was not selected).
+
+===== page-empty =====
+# Annotations · 示例咖啡 2030 年三季度经营回顾
+14 annotations (12 open, 1 drafted, waiting for review, 1 resolved); listing 0. rev 16
+Report marks: a pin is a point; a region is an area. Coordinates are percentages relative to the top-left of the page (x, y, width, height).
+Sources: Report = <TREE>/report.html; Speaker notes = <TREE>/script.md
+Standing skills required by the user: call them before handling each annotation within scope. Each annotation lists its applicable skills below: checker (All annotations), humanizer-zh (Report), dataviz (Speaker notes), frontend-design (Style)
+Handed to the agent: the latest is batch 1, waiting to be claimed (submitted 2026-11-01T10:20:00Z; 12 annotations were open then)
+Note from the user: 请按批注修改，改完重建对照页
+History: 1 batch in all (run notes.py batches to see what each one resolved)
+1 waiting to be claimed, 0 in progress, 0 waiting for review, 0 under review (in progress or under review with no agent running usually means the last run was cut short: finish it with notes.py done)
+Batch 1 (waiting to be claimed) asks for: Take it through to finalized; no subagents — the main agent of this session handles it in person. Not claimed yet: run notes.py claim before you start
+
+(No matching annotations.)
+
+===== batch =====
+# Annotations · 示例咖啡 2030 年三季度经营回顾
+14 annotations (12 open, 1 drafted, waiting for review, 1 resolved); listing 12. rev 16
+Report marks: a pin is a point; a region is an area. Coordinates are percentages relative to the top-left of the page (x, y, width, height).
+Sources: Report = <TREE>/report.html; Speaker notes = <TREE>/script.md
+Standing skills required by the user: call them before handling each annotation within scope. Each annotation lists its applicable skills below: checker (All annotations), humanizer-zh (Report), dataviz (Speaker notes), frontend-design (Style)
+Handed to the agent: the latest is batch 1, waiting to be claimed (submitted 2026-11-01T10:20:00Z; 12 annotations were open then)
+Note from the user: 请按批注修改，改完重建对照页
+History: 1 batch in all (run notes.py batches to see what each one resolved)
+1 waiting to be claimed, 0 in progress, 0 waiting for review, 0 under review (in progress or under review with no agent running usually means the last run was cut short: finish it with notes.py done)
+Batch 1 (waiting to be claimed) asks for: Take it through to finalized; no subagents — the main agent of this session handles it in person. Not claimed yet: run notes.py claim before you start
+
+## Page 3 | 结论：三季度收入同比增长 12% (key sum)
+- `show0001` [Report · Pin 1 (x 12.5%, y 40.0%)] 把 +12% 改成「同比 +12%」
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+- `show0002` [Report · Pin 2 (x 38.8%, y 59.8%)] 数字要标单位
+  > Quote (Report): +12%
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Hint: Speaker notes, page 3, has a matching sentence (similar): “结论：三季度收入同比增长 12%”. Confirm whether to update it too (change both sides was not selected).
+
+## Page 4 | 收入结构：外卖占比升至 38% (key rev)
+- `show0003` [Report] 删掉这句
+  > Quote: 外卖平台抽成上调后，外卖毛利率下降 2 个百分点。
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Hint: Speaker notes, page 4, has a matching sentence (similar): “需要注意的是，平台抽成上调后外卖毛利率下降了 2 个百分点。”. Confirm whether to update it too (change both sides was not selected).
+- `show0004` [Speaker notes · Region 1 (x 5.0%, y 20.0%, w 60.0%, h 30.0%) · Replace · Style · selected area] Replace “原句甲乙” with “删掉整段”
+  Position hint: table「渠道」
+  Skills: checker (standing · All annotations), dataviz (standing · Speaker notes), frontend-design (standing · Style) — call these before handling this annotation
+- `show0005` [Report · Pin 2 (x 1.5%, y 2.0%) · Delete] Delete “外卖平台抽成上调后”
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Hint: Speaker notes, page 4, has a matching sentence (similar): “需要注意的是，平台抽成上调后外卖毛利率下降了 2 个百分点。”. Confirm whether to update it too (change both sides was not selected).
+
+## Page 5 | 成本：咖啡豆采购价上涨 9% (key cost)
+- `show0006` [Report and speaker notes] 改
+  > Quote: 外卖套餐提价 1 元
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report), dataviz (standing · Speaker notes) — call these before handling this annotation
+  ↔ Also change the other side (Speaker notes); matching sentence (same sentence): “第二，外卖套餐提价 1 元”
+- `show0007` [Report] 统一口径
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+  ↔ Also change the other side (Speaker notes); matching sentence (similar): “相近的对应句”
+
+## Page 6 | 下一步：四季度三件事 (key next)
+- `show0010` [Speaker notes] 外卖套餐提价 1 元
+  > Quote: 外卖套餐提价 1 元
+  Skills: checker (standing · All annotations), dataviz (standing · Speaker notes) — call these before handling this annotation
+  ↔ Hint: Report, page 6, has a matching sentence (same sentence): “外卖套餐提价 1 元”. Confirm whether to update it too (change both sides was not selected).
+- `show0011` [Report] 原来这一页被删了
+  ⚠ The original page (key gone) is missing from the new report. The page number may be wrong; confirm which page this annotation belongs to before editing.
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+- `show0012` [Report] 页面键对不上
+  ⚠ The annotation page key rev does not match page 6 (next). Rebuild the review page to correct the mapping.
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+- `show0013` [Unspecified] 没选对象的一条
+  Skills: checker (standing · All annotations) — call these before handling this annotation
+
+## Page 9 | 附录：口径说明
+- `show0014` [Report] 多行意见
+  第二行也要改
+  Skills: checker (standing · All annotations), humanizer-zh (standing · Report) — call these before handling this annotation
+
+===== no-manifest =====
+# Annotations · Review
+2 annotations (2 open, 0 resolved); listing 2. rev 2
+Report marks: a pin is a point; a region is an area. Coordinates are percentages relative to the top-left of the page (x, y, width, height).
+
+## Page 1 | 封面
+- `bare0001` [Report · Pin 1 (x 20%, y 30%)] 标题字号不统一
+
+## Page 2 | 
+- `bare0002` [Speaker notes] 目录页也顺一遍
