@@ -166,13 +166,14 @@ def get(rid: str) -> dict[str, Any] | None:
 def _set_dir(reviews: dict[str, Any], rid: str, d: str) -> dict[str, Any]:
     """取（或新建）条目并把目录更新为 d。d 是从登记在册的那份审阅复制来的副本：拒绝。
 
-    原目录已不在（整个搬走了、或已删除）才按标识更新路径。
+    原目录已不在（整个搬走了、或已删除）才按标识更新路径。候选原目录是台账登记的目录，
+    比的是登记用的标识（d 里可能还没有 review.json），不看 d 的 manifest 里的 reviewDir。
     """
     e = reviews.get(rid)
     if e is None:
         e = reviews[rid] = {"dir": d, "port": None}
     elif e["dir"] != d:
-        if copied_from(d) is not None:
+        if copied_from(d, {"reviewId": rid}, origin=Path(e["dir"])) is not None:
             raise CopiedDir(T("ledger.err.copied", dir=d, old=Path(e["dir"]), rid=rid[:8]))
         e["dir"] = d
     return e
@@ -276,21 +277,25 @@ def read_manifest(review_dir: Path) -> dict[str, Any]:
         return {}
 
 
-def copied_from(review_dir: Path, manifest: dict[str, Any] | None = None) -> Path | None:
-    """这个目录是从哪份审阅复制来的：manifest 的 reviewDir 还在、且那份里还是同一个审阅标识。
+def copied_from(review_dir: Path, manifest: dict[str, Any] | None = None, *,
+                origin: Path | None = None) -> Path | None:
+    """这个目录是从哪份审阅复制来的：候选原目录还在、不是它自己、且那份里还是同一个审阅标识。
 
-    返回复制来源的目录，不是复制来的是 None。整个目录被移走或原目录已删除（reviewDir 不在）
+    候选原目录默认取 manifest 的 reviewDir（build_viewer 与 serve 的口径）；台账传 origin，
+    用登记在册的目录（搬家后没重建时 reviewDir 还指向旧位置，旧版 manifest 也可能没有它）。
+    返回复制来源的目录，不是复制来的是 None。整个目录被移走或原目录已删除（候选不在）
     时不算复制，调用方沿用原标识。reviewDir 缺失、不是字符串或构不成路径（含空字节等）时按
     「没有复制来源信息」处理：manifest 写坏不拦登记、不拦服务启动，与 read_manifest 读不了时
     返回 {} 的容错一致。manifest 传调用方已经读好的 review.json，不传就自己读（读不了或不是
-    JSON 对象都按 {} 处理，与 read_manifest 一致）。审阅标识的格式规则见 RID。
+    JSON 对象都按 {} 处理，与 read_manifest 一致）；只用到其中的 reviewId 与 reviewDir。
+    审阅标识的格式规则见 RID。
     """
     review_dir = Path(review_dir).resolve()
     m = manifest if manifest is not None else read_manifest(review_dir)
     rid = m.get("reviewId")
-    orig = None
+    orig = Path(origin) if origin is not None else None
     raw = m.get("reviewDir")
-    if isinstance(raw, str) and raw:
+    if orig is None and isinstance(raw, str) and raw:
         try:
             orig = Path(raw)
         except (ValueError, OSError):   # 含空字节等构不成路径的值：按没有来源处理

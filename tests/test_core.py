@@ -2984,6 +2984,40 @@ class CopiedReviewTests(unittest.TestCase):
         self.assertEqual(ledger.get(rid)["dir"], str(moved.resolve()))
         self.assertEqual(len(ledger.entries()), 1, "三种情况都还是同一条目")
 
+    def test_ledger_refuses_a_copy_made_after_a_move_without_rebuild(self):
+        """搬家后只 serve、没重建：manifest 的 reviewDir 还指向搬走前的旧位置。
+
+        台账按登记在册的目录判断复制（与改动前一致）：从搬家后的目录再复制一份，仍要拒绝，
+        不能把台账改指到副本、让两份目录共用一个标识和端口。
+        """
+        tree = tmpdir()
+        rid = self.build(tree / "v1")["reviewId"]
+        ledger.register(rid, tree / "v1")
+        moved = tree / "moved"
+        (tree / "v1").rename(moved)
+        self.assertIsNone(ledger.try_register(rid, moved), "搬家按标识更新路径")
+        copy = tree / "copy"
+        shutil.copytree(moved, copy)
+        with self.assertRaises(ledger.CopiedDir) as cm:
+            ledger.register(rid, copy)
+        self.assertIn(str(moved.resolve()), str(cm.exception), "指出台账仍指向的目录")
+        self.assertEqual(ledger.get(rid)["dir"], str(moved.resolve()), "副本顶替不了原条目")
+
+    def test_ledger_refuses_a_copy_whose_manifest_has_no_review_dir(self):
+        """旧版生成的 review.json 没有 reviewDir：台账仍按登记的目录认出副本（与改动前一致）。"""
+        tree = tmpdir()
+        rid = self.build(tree / "v1")["reviewId"]
+        manifest = tree / "v1" / "review.json"
+        m = json.loads(manifest.read_text(encoding="utf-8"))
+        m.pop("reviewDir", None)
+        manifest.write_text(json.dumps(m), encoding="utf-8")
+        ledger.register(rid, tree / "v1")
+        copy = tree / "copy"
+        shutil.copytree(tree / "v1", copy)
+        with self.assertRaises(ledger.CopiedDir):
+            ledger.register(rid, copy)
+        self.assertEqual(ledger.get(rid)["dir"], str((tree / "v1").resolve()))
+
     def test_ledger_tolerates_a_broken_review_dir_field(self):
         """reviewDir 缺失、非字符串或构不成路径：按「没有复制来源信息」处理，登记不炸。
 
