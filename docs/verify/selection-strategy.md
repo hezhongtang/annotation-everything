@@ -34,7 +34,7 @@ cat .verify/runs/<run ID>/shadow.json
 
 映射是 `verify_selection.py` 里的受版本控制声明，不用 CodeGraph / AST 索引做判定依据。每条规则带 `why`，计划里逐条展示命中：
 
-- `SELECTION_RULES`：路径前缀 → 建议选择器 / 浏览器场景 / 是否带 `serve-check` / 命中即回退的类别。初始覆盖：`ae.py`（CLI）、`notes.py` / `notes_store.py` / `ledger.py`(审阅协议与存储)、`serve.py` / `viewer_template.html` / `build_viewer.py`（服务与页面）、`match.py` / `skill_sources.py`（页面匹配与技能发现）、`i18n.py` 与两处 `locales/`（词典，显式含全局契约模块）、`export_format.py` / `check_pptx_fonts.py`（导出与字体）；`skill/annotation-everything/SKILL.md`、`references/`、`evals/`（技能资源，回退）、`fixtures/`（回退）、`verify.py` 等执行配置（回退）、`docs/` 等说明文档（回退）。
+- `SELECTION_RULES`：路径前缀 → 建议选择器 / 浏览器场景 / 是否带 `serve-check` / 命中即回退的类别。一个路径可命中多条规则，选测取并集：选择器、场景与 `serve-check` 都合并，不会因为多命中而丢掉任何一组的范围。初始覆盖：`ae.py`（CLI）、`notes.py` / `notes_store.py` / `ledger.py`（审阅协议与存储）、`serve.py` / `viewer_template.html` / `build_viewer.py`（服务与页面）、`match.py` / `skill_sources.py`（页面匹配与技能发现）、`i18n.py` 与两处 `locales/`（词典，显式含全局契约模块）、`export_format.py` / `check_pptx_fonts.py`（导出与字体）、`fsutil.py`（共享叶子模块，被台账与批注存储、生成器、更新器共同依赖，同时并入审阅协议与存储、服务与页面、更新器三组）；`skill/annotation-everything/SKILL.md`、`references/`、`evals/`（技能资源，回退）、`fixtures/`（回退）、`verify.py` 等执行配置（回退）、`docs/` 等说明文档（回退）。
 - `DOC_ALLOWLIST`（狭窄允许列表）：`README.md`、`README.en.md`、`docs/assets/`。命中后产品测试标记「不适用」——影子模式实际执行不因此减少任何检查，不会增加通过数量。
 - 浏览器场景 `*` 仅在该规则命中时展开为注册场景清单，未命中的规则不会扩大浏览器建议。
 - `STRATEGY_VERSION`：映射或判定逻辑变化时递增；记录里的 `context.selection.strategy_version` 标明计划用的版本。修改映射走普通 PR（受审查的策略变更）。
@@ -72,8 +72,10 @@ cat .verify/runs/<run ID>/shadow.json
 
 `docs/verify/shadow-samples.json` 记录已完成的对照样本（真实与合成分别标注，schema `ae-verify-shadow-samples/1`），供后续 G / H 读取。真实样本在真实改动上运行完整门禁；合成样本在合成仓库生成，补齐类别覆盖——合成样本不冒充生产漏测率，漏测率统计属 H 项。
 
-## 效率守卫（策略 v9）
+## 效率守卫（策略 v10）
 
 已确认遗漏或无法界定影响的确认事件会保守扩大到 `all` 并实际执行，停用复用；损坏或缺失的守卫保持全量回退。事件格式、版本替代与维护步骤见 [efficiency.md](efficiency.md)。普通影子候选只作为调查线索。v3 同时把证据复用与效率报告模块纳入执行配置变更的完整回退范围。
 
 策略 v9 将 `verify_parallel.py` 纳入执行配置的完整回退范围；入口版本 2 与环境中的执行方式共同阻止沿用旧执行策略的验证证据。选测边界与完整 CI 要求保持不变。
+
+策略 v10 把 `fsutil.py` 按依赖方同时并入存储协议、对照页与技能更新三组规则：只改它时按三组的并集给建议，不再因 `unknown_path` 回退完整检查。策略版本已递增，版本不一致的旧记录不参与复用。改动 `verify_selection.py` 自身仍命中执行配置规则并回退完整检查，这是预期行为。
