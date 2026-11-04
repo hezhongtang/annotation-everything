@@ -37,6 +37,7 @@ os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "sk
 os.environ.pop("AE_LOCALE", None)   # 界面语言由各用例显式给定，不跟随开发者的 shell
 
 import build_viewer  # noqa: E402
+import export_format as ef  # noqa: E402
 import notes as notes_cli  # noqa: E402
 import notes_store as store  # noqa: E402
 import ledger  # noqa: E402
@@ -2088,6 +2089,201 @@ class LedgerTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             first, owned, _ = serve.plan_port(d, r["reviewId"], 9300, None)
         self.assertEqual((first, owned), (9300, 8766), "--port 只是本次临时用")
+
+
+# ---------- show 的中文输出改由词典驱动，并与导出格式共用中文标注格式（issue #90） ----------
+# 合成批注覆盖 show 的全部字段：未处理、已初改、已处理、标点、框选、快捷删除、快捷改写、风格、
+# 引用、孤立页、页面键不一致、位置线索、同改与对应句提示、常驻技能、技能；另附一份没有
+# review.json 的旧审阅（标题回退、没有源文件行与键后缀）。改动前用它在两种语言下生成基线
+# （fixtures/show-baseline/），改动后逐字比对；中英文走同一条词典驱动的渲染路径。
+SHOW_BASELINE_DIR = ROOT / "fixtures" / "show-baseline"
+SHOW_ALWAYS = [{"name": "checker", "scope": "all"}, {"name": "humanizer-zh", "scope": "报告"},
+               {"name": "dataviz", "scope": "讲稿"}, {"name": "frontend-design", "scope": "style"}]
+SHOW_NOTES = [
+    {"id": "show0001", "page": 3, "title": "结论：三季度收入同比增长 12%", "target": "报告",
+     "text": "把 +12% 改成「同比 +12%」", "pin": {"x": 12.5, "y": 40}, "at": "2026-11-01T10:00:00Z"},
+    {"id": "show0002", "page": 3, "target": "报告", "text": "数字要标单位",
+     "quote": "+12%", "quoteFrom": "报告", "pin": {"x": 38.8, "y": 59.8}, "at": "2026-11-01T10:01:00Z"},
+    {"id": "show0003", "page": 4, "target": "报告", "text": "删掉这句",
+     "quote": "外卖平台抽成上调后，外卖毛利率下降 2 个百分点。", "at": "2026-11-01T10:02:00Z"},
+    {"id": "show0004", "page": 4, "target": "讲稿", "text": "改为：删掉整段",
+     "quote": "原句甲乙", "quoteFrom": "讲稿", "region": {"x": 5, "y": 20, "w": 60, "h": 30},
+     "style": {"scope": "region"}, "anchor": "table「渠道」",
+     "edit": {"op": "replace", "from": "原句甲乙", "to": "删掉整段"}, "at": "2026-11-01T10:03:00Z"},
+    {"id": "show0005", "page": 4, "target": "报告", "text": "删除引用的这段文字",
+     "quote": "外卖平台抽成上调后", "quoteFrom": "报告", "pin": {"x": 1.5, "y": 2},
+     "edit": {"op": "delete", "from": "外卖平台抽成上调后"}, "at": "2026-11-01T10:04:00Z"},
+    {"id": "show0006", "page": 5, "target": "报告和讲稿", "text": "改", "quote": "外卖套餐提价 1 元",
+     "pair": {"side": "讲稿", "text": "第二，外卖套餐提价 1 元", "match": "exact"}, "at": "2026-11-01T10:05:00Z"},
+    {"id": "show0007", "page": 5, "target": "报告", "text": "统一口径",
+     "pair": {"side": "讲稿", "text": "相近的对应句", "match": "similar"}, "at": "2026-11-01T10:06:00Z"},
+    {"id": "show0008", "page": 5, "target": "报告", "text": "表格太挤", "style": {"scope": "page"},
+     "skills": ["humanizer-zh", "dataviz"], "at": "2026-11-01T10:07:00Z"},
+    {"id": "show0009", "page": 5, "target": "报告", "text": "这句话冗长", "style": {"scope": "pin"},
+     "pin": {"x": 90, "y": 10}, "skills": ["dataviz"], "at": "2026-11-01T10:08:00Z"},
+    {"id": "show0010", "page": 6, "target": "讲稿", "text": "外卖套餐提价 1 元",
+     "quote": "外卖套餐提价 1 元", "at": "2026-11-01T10:09:00Z"},
+    {"id": "show0011", "page": 6, "target": "报告", "text": "原来这一页被删了", "key": "gone",
+     "orphan": True, "at": "2026-11-01T10:10:00Z"},
+    {"id": "show0012", "page": 6, "target": "报告", "text": "页面键对不上", "key": "rev", "at": "2026-11-01T10:11:00Z"},
+    {"id": "show0013", "page": 6, "text": "没选对象的一条", "at": "2026-11-01T10:12:00Z"},
+    {"id": "show0014", "page": 9, "title": "附录：口径说明", "target": "报告",
+     "text": "多行意见\n第二行也要改", "at": "2026-11-01T10:13:00Z"},
+]
+SHOW_BARE_NOTES = [
+    {"id": "bare0001", "page": 1, "title": "封面", "target": "报告", "text": "标题字号不统一",
+     "pin": {"x": 20, "y": 30}, "at": "2026-11-01T09:00:00Z"},
+    {"id": "bare0002", "page": 2, "target": "讲稿", "text": "目录页也顺一遍", "at": "2026-11-01T09:01:00Z"},
+]
+# 三种筛选（--include-resolved / --page / --batch）外加空列表与没有 review.json 的旧审阅
+SHOW_VARIANTS = [
+    ("default", ["show", "{d}"]),
+    ("include-resolved", ["show", "{d}", "--all"]),
+    ("page", ["show", "{d}", "--page", "4"]),
+    ("page-empty", ["show", "{d}", "--page", "99"]),
+    ("batch", ["show", "{d}", "--batch", "1"]),
+    ("no-manifest", ["show", "{bare}"]),
+]
+
+
+def build_show_review(tree: Path) -> tuple[Path, Path]:
+    """按 SHOW_NOTES 建一份合成审阅（含一个待接收批次）和一份只有 notes.json 的旧审阅。"""
+    for f in ("report.html", "script.md"):
+        (tree / f).write_bytes((FIXTURE / f).read_bytes())
+    d = tree / "review"
+    build_viewer.build(tree / "report.html", tree / "script.md", d)
+    for n in SHOW_NOTES:
+        store.add(d, n)
+    store.set_status(d, "show0008", "drafted", resolution="已调整列宽", by="agent")
+    store.set_status(d, "show0009", "resolved", resolution="已拆成两句", by="agent")
+    store.always_save(d, SHOW_ALWAYS)
+    store.handoff_submit(d, "请按批注修改，改完重建对照页")
+    doc = json.loads((d / "handoff.json").read_text(encoding="utf-8"))
+    for item in doc.get("items") or []:
+        item["at"] = "2026-11-01T10:20:00Z"   # 提交时间固定：输出才可逐字复现
+    (d / "handoff.json").write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    bare = tree / "bare"
+    bare.mkdir()
+    (bare / "notes.json").write_text(json.dumps(
+        {"version": 1, "rev": len(SHOW_BARE_NOTES),
+         "notes": [{**n, "title": n.get("title", ""), "target": n.get("target", ""), "quote": "",
+                    "quoteFrom": "", "pin": n.get("pin"), "status": "open"} for n in SHOW_BARE_NOTES]},
+        ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return d, bare
+
+
+def run_notes_cli(*args: str) -> str:
+    """进程内跑 notes.py 的命令，返回 stdout；stderr 必须干净、退出码必须为 0。"""
+    buf, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(buf), redirect_stderr(err):
+        code = notes_cli.main(list(args))
+    assert err.getvalue() == "", "命令不该往 stderr 写东西"
+    assert code == 0, code
+    return buf.getvalue()
+
+
+class ShowBaselineTests(unittest.TestCase):
+    """中英 show 输出与改动前生成的基线逐字相同（三种筛选同样比对）。"""
+
+    def test_show_output_is_byte_identical_to_the_recorded_baseline(self):
+        tree = tmpdir()
+        d, bare = build_show_review(tree)
+        for locale in ("zh-CN", "en"):
+            with self.subTest(locale=locale):
+                sections = []
+                for name, args in SHOW_VARIANTS:
+                    out = run_notes_cli(*[a.format(d=d, bare=bare) for a in args], "--locale", locale)
+                    sections.append(f"===== {name} =====\n{out.replace(str(tree.resolve()), '<TREE>')}")
+                expected = (SHOW_BASELINE_DIR / f"{locale}.txt").read_text(encoding="utf-8")
+                self.assertEqual("\n".join(sections), expected)
+
+
+class ShowCatalogTests(unittest.TestCase):
+    """show 的中文措辞全部来自词典：输出里出现的就是 cli.show.* 词条（英文由基线逐字保护）。"""
+
+    def test_chinese_show_wording_comes_from_the_catalog(self):
+        d, bare = build_show_review(tmpdir())
+        t = notes_cli.cli_text("zh-CN")
+        out = run_notes_cli("show", str(d), "--all", "--locale", "zh-CN")
+        empty = run_notes_cli("show", str(d), "--page", "99", "--locale", "zh-CN")
+        bare_out = run_notes_cli("show", str(bare), "--locale", "zh-CN")
+        cases = [
+            (out, "cli.show.heading", {"title": "示例咖啡 2030 年三季度经营回顾"}),
+            (out, "cli.show.count", {"count": 14}),
+            (out, "cli.show.open", {"count": 12}),
+            (out, "cli.show.drafted", {"count": 1}),
+            (out, "cli.show.resolved", {"count": 1}),
+            (out, "cli.show.listingAll", {"count": 14}),
+            (out, "cli.show.rev", {"rev": 16}),
+            (out, "cli.show.markHint", {}),
+            (out, "cli.show.sources", {"list": "报告 = " + str((d.parent / "report.html").resolve())
+                                       + "；讲稿 = " + str((d.parent / "script.md").resolve())}),
+            (out, "cli.show.pageWord", {"page": 4}),
+            (out, "cli.show.pageSep", {}),
+            (out, "cli.show.keySuffix", {"pageKey": "rev"}),
+            (out, "cli.show.bracket", {"text": t("cli.status.resolved")}),
+            (out, "cli.show.bracket", {"text": t("cli.status.drafted")}),
+            (out, "cli.show.bracket", {"text": "报告" + ef.PIN_ZH.format(no=1, x=12.5, y=40.0)}),
+            (out, "cli.show.deleteText", {"text": "外卖平台抽成上调后"}),
+            (out, "cli.show.replaceText", {"before": "原句甲乙", "after": "删掉整段"}),
+            (out, "cli.show.markSep", {}),
+            (out, "cli.show.deleteTag", {}),
+            (out, "cli.show.replaceTag", {}),
+            (out, "cli.show.styleChip", {"scope": "整页"}),
+            (out, "cli.show.styleChip", {"scope": "标点处"}),
+            (out, "cli.show.styleChip", {"scope": "框选处"}),
+            (out, "cli.show.quote", {}),
+            (out, "cli.show.quoteFrom", {"target": "报告"}),
+            (out, "cli.show.quoteColon", {}),
+            (out, "cli.show.draftResolution", {"text": "已调整列宽"}),
+            (out, "cli.batch.resolution", {"text": "已拆成两句"}),
+            (out, "cli.batch.trail", {"text": "处理（agent）：已拆成两句"}),
+            (out, "cli.show.orphan", {"pageKey": "gone"}),
+            (out, "cli.show.keyMismatch", {"pageKey": "rev", "page": 6, "current": "next"}),
+            (out, "cli.show.anchor", {"text": "table「渠道」"}),
+            (out, "cli.show.pairRequired", {"side": "讲稿", "match": "相同", "text": "第二，外卖套餐提价 1 元"}),
+            (out, "cli.show.pairRequired", {"side": "讲稿", "match": "相近", "text": "相近的对应句"}),
+            (out, "cli.show.pairSuggested", {"side": "讲稿", "page": 4, "match": "相近",
+                                             "text": "需要注意的是，平台抽成上调后外卖毛利率下降了 2 个百分点。"}),
+            (out, "cli.show.pairSuggested", {"side": "报告", "page": 6, "match": "相同",
+                                             "text": "外卖套餐提价 1 元"}),
+            (out, "cli.skills.agentAlways",
+             {"list": "checker（全部批注）、humanizer-zh（报告）、dataviz（讲稿）、frontend-design（风格优化）"}),
+            (out, "cli.skills.agentSkills", {"list": "checker（常驻·全部批注）、humanizer-zh（常驻·报告）"}),
+            (out, "cli.skills.agentItem", {"name": "dataviz", "source": "这条指定"}),
+            (out, "cli.skills.standingSource", {"scope": "全部批注"}),
+            (out, "cli.skills.ownSource", {}),
+            (empty, "cli.show.emptyList", {}),
+            (bare_out, "cli.show.defaultTitle", {}),
+        ]
+        for text, key, params in cases:
+            with self.subTest(key=key):
+                self.assertIn(t(key, **params), text)
+
+
+class ShowExportSharedFormatTests(unittest.TestCase):
+    """中文标注格式、说明句与风格标签只在导出格式模块定义一处，show 与导出共用这一份。"""
+
+    def test_chinese_marks_hint_and_style_labels_are_shared_with_the_export(self):
+        d, _bare = build_show_review(tmpdir())
+        shown = run_notes_cli("show", str(d), "--all", "--locale", "zh-CN")
+        exported = run_notes_cli("export", str(d), "--all", "--lang", "zh-CN")
+        for label, text in (("标注", ef.PIN_ZH.format(no=1, x=12.5, y=40.0)),
+                            ("框选", ef.REGION_ZH.format(no=1, x=5.0, y=20.0, w=60.0, h=30.0)),
+                            ("说明句", ef.HEAD_NOTE)):
+            with self.subTest(shared=label):
+                self.assertIn(text, shown)
+                self.assertIn(text, exported)
+        for scope in ("page", "pin", "region"):
+            with self.subTest(style=scope):
+                self.assertIn("风格优化：" + ef.STYLE_LABEL_ZH[scope], exported)
+        self.assertIn("·风格优化·" + ef.STYLE_LABEL_ZH["region"], shown)
+        # 词典里这两条与导出格式的逐字定义保持一致（页面内嵌全量词典，但不使用它们）
+        t = notes_cli.cli_text("zh-CN")
+        self.assertEqual(t("cli.show.pin", no=1, x=12.5, y=40.0), ef.PIN_ZH.format(no=1, x=12.5, y=40.0))
+        self.assertEqual(t("cli.show.region", no=1, x=5.0, y=20.0, w=60.0, h=30.0),
+                         ef.REGION_ZH.format(no=1, x=5.0, y=20.0, w=60.0, h=30.0))
+        self.assertEqual(t("cli.show.markHint"), ef.HEAD_NOTE)
 
 
 class ServeRequestReadsTests(unittest.TestCase):
