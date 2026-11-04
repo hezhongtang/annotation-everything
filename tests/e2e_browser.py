@@ -256,7 +256,9 @@ def review_overview_checks(browser, tmp: Path):
         ok("serve.py forget " in page.inner_text("#overviewDetail") and page.locator("#overviewDetail a").count() == 0,
            "失效审阅只能复制清理命令，不能打开")
         page.click("#overviewBack")
-        ok(page.is_visible("#ntext") and not page.is_visible("#overview"), "返回当前审阅恢复批注界面")
+        returned = wait_dom(page, "() => document.getElementById('overview').hidden && !document.body.classList.contains('overview-mode')", 5,
+                            condition="hashchange 后恢复当前审阅")
+        ok(returned and page.is_visible("#ntext"), "返回当前审阅恢复批注界面")
         page.select_option("#localePick", "en")
         page.click("#overviewBtn")
         ok(wait_dom(page, "() => document.getElementById('overview').textContent.includes('Review overview')", 5),
