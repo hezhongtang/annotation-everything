@@ -41,6 +41,9 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fsutil  # noqa: E402
+
 PAGE_HEAD = re.compile(r"^###\s*第\s*(\d+)\s*页\s*[｜|]\s*(.*)$", re.M)
 PAGE_HEAD_EN = re.compile(r"^###\s*page\s*(\d+)\s*[｜|]\s*(.*)$", re.M | re.I)
 # 以 ### 开头、紧跟页码标记，但不是合法页头的行：认不出来时指出来，不并进上一页或前言
@@ -594,7 +597,6 @@ def page_csp(page_html: str) -> str:
 
     哈希算法与 serve.py 的响应头共用一份；这一版不带 frame-ancestors、没有脚本时也不兜底。
     """
-    import fsutil
     hashes = fsutil.script_hashes(page_html)
     return (f"default-src 'none'; script-src {hashes}; style-src 'unsafe-inline'; img-src data: blob:; "
             "font-src data:; media-src data: blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
