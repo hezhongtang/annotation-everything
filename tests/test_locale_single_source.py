@@ -2,7 +2,7 @@
 
 对应 issue #95。词典适配层（i18n）持进程级的「定住语言 / 按 AE_LOCALE 刷新」状态，
 ledger、skill_sources、serve、check_pptx_fonts 的 T 都从它取；ae.py 的 set_locale 不再
-逐个模块传递。两层断言：
+逐个模块传递（只有技能副本是还没有进程级状态的旧版本时，才退回逐个传递）。两层断言：
 
 - 进程内：定住后不被 AE_LOCALE 覆盖、没定住时按 AE_LOCALE 刷新、非法时退回中文；
   任何模块调 set_locale(None) 都解除整个进程的定住状态（运行时代码不传 None，只有测试会）。
@@ -21,6 +21,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -241,6 +242,42 @@ class EntryLanguageTests(unittest.TestCase):
                                    self.root / "missing.pptx", "--locale", locale)
                 self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
                 self.assertIn(needle, p.stderr)
+
+
+class AeOldSkillCopyLocaleTests(unittest.TestCase):
+    """技能副本是还没有进程级语言状态的旧版本时，ae.py 仍把语言传给台账与技能发现。
+
+    旧副本（#95 之前）的 i18n 没有 set_locale，台账、技能发现各自保存语言；ae.py 只在这条
+    兜底路径上逐个传递，否则 `ae.py --locale en doctor` 的台账行会退回中文（中英混排）。
+    """
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT))
+        import ae
+        self.ae = ae
+        saved = (dict(ae._skill_modules), ae._locale, ae._messages)
+
+        def restore():
+            ae._skill_modules.clear()
+            ae._skill_modules.update(saved[0])
+            ae._locale, ae._messages = saved[1], saved[2]
+        self.addCleanup(restore)
+
+    def test_language_reaches_ledger_and_skill_sources_of_an_old_copy(self):
+        got: dict[str, list] = {"ledger": [], "skill_sources": []}
+
+        def module_with_set_locale(name):
+            return types.SimpleNamespace(set_locale=got[name].append)
+
+        old_i18n = types.SimpleNamespace(Translator=i18n.Translator)   # 旧版：没有 set_locale
+        self.ae._skill_modules.clear()
+        self.ae._skill_modules.update({"i18n": old_i18n,
+                                       "ledger": module_with_set_locale("ledger"),
+                                       "skill_sources": module_with_set_locale("skill_sources")})
+        self.assertIsNone(self.ae.ui_language(), "合成的旧副本没有进程级语言状态")
+        self.ae.set_locale("en")
+        self.assertEqual(got, {"ledger": ["en"], "skill_sources": ["en"]})
+        self.assertEqual(self.ae.current_locale(), "en")
 
 
 if __name__ == "__main__":

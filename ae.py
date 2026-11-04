@@ -151,6 +151,13 @@ def set_locale(locale: str) -> None:
     state = ui_language()
     if state is not None:
         state.set_locale(locale)
+        return
+    # 技能副本是还没有进程级语言状态的旧版本：台账与技能发现各自保存语言，只能逐个传下去
+    for name in ("ledger", "skill_sources"):
+        try:
+            skill_module(name).set_locale(locale)
+        except ImportError:
+            pass
 
 
 def T(key: str, **params: object) -> str:
