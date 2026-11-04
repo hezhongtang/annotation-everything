@@ -1133,7 +1133,7 @@ def locale_checks(browser, tmp: Path):
     zh_chip = page.inner_text("#qbox")
     ok("引用（报告）" in zh_chip and "原句" in zh_chip, f"中文引用来源保持原文格式（实际 {zh_chip}）")
     zh_counts = page.evaluate("() => [0, 1, 2].map(n => tMsg('cli.show.count', {count: n}))")
-    ok(zh_counts == ["0 条批注", "1 条批注", "2 条批注"], f"file:// 中文计数 0/1/2（实际 {zh_counts}）")
+    ok(zh_counts == ["共 0 条", "共 1 条", "共 2 条"], f"file:// 中文计数 0/1/2（实际 {zh_counts}）")
     page.fill("#ntext", "请改标题")
     page.select_option("#ntarget", "报告")
     page.click("#addBtn")
