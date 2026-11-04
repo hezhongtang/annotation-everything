@@ -5,11 +5,27 @@ from pathlib import Path
 from typing import Any, Callable
 
 import build_viewer
+import fsutil
 import ledger
 import notes_store as store
 import report_check
 
-STATE_ORDER = {"running": 0, "running-temp": 0, "stopped": 1, "missing": 2, "mismatch": 2}
+STATE_ORDER = {"running": 0, "running-temp": 0, "stopped": 1, "missing": 3, "mismatch": 3}
+ARCHIVE_FILE = ".annotation-archived"
+
+
+def is_archived(review_dir: Path) -> bool:
+    """目录标记即归档事实；状态轮询只 stat，不打开额外文件。"""
+    return (Path(review_dir) / ARCHIVE_FILE).is_file()
+
+
+def set_archived(review_dir: Path, archived: bool) -> None:
+    """只改归档标记，台账、专属端口和审阅内容均不参与写入。"""
+    marker = Path(review_dir) / ARCHIVE_FILE
+    if archived:
+        fsutil.atomic_write(marker, "", prefix=".archive-")
+    else:
+        marker.unlink(missing_ok=True)
 
 
 def workspace_for(review_dir: Path) -> Path:
@@ -107,6 +123,7 @@ def snapshot(review_dir: Path, review_id: str | None, scope: str,
         rows.append({
             "reviewId": rid, "name": source["name"] or directory.name,
             "path": display_path(directory, workspace), "state": state,
+            "archived": source["archived"],
             "port": source["port"], "running": running,
             "pending": source["pending"], "review": source["review"],
             "lastActivity": last_activity(directory), "current": rid == review_id,
@@ -114,6 +131,7 @@ def snapshot(review_dir: Path, review_id: str | None, scope: str,
             "forgetCommand": f"serve.py forget {rid[:8]}" if state in ("missing", "mismatch") else None,
             **report_metadata(directory, rid),
         })
-    rows.sort(key=lambda row: (STATE_ORDER.get(row["state"], 2), -(row["lastActivity"] or 0),
+    rows.sort(key=lambda row: (2 if row["archived"] and row["state"] not in ("missing", "mismatch")
+                              else STATE_ORDER.get(row["state"], 3), -(row["lastActivity"] or 0),
                                row["name"].casefold(), row["reviewId"]))
     return {"workspace": workspace.name, "scope": scope, "reviews": rows}

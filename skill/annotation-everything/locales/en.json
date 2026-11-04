@@ -20,6 +20,17 @@
     "viewer.overview.coreQuestions": "Core questions",
     "viewer.overview.running": "Running",
     "viewer.overview.stopped": "Stopped",
+    "viewer.overview.archived": "Archived",
+    "viewer.overview.archive": "Archive",
+    "viewer.overview.unarchive": "Unarchive",
+    "viewer.overview.showArchived": "Show archived",
+    "viewer.overview.hiddenArchived": "{count} archived reviews hidden",
+    "viewer.overview.hiddenArchived.one": "{count} archived review hidden",
+    "viewer.overview.hiddenArchived.other": "{count} archived reviews hidden",
+    "viewer.overview.expandArchived": "Expand",
+    "viewer.overview.archiveNotice": "Archived · Annotations and submissions remain available.",
+    "viewer.overview.archiveUpdating": "Updating…",
+    "viewer.overview.archiveError": "Unable to change the archive status. Check that the local service is running, then try again.",
     "viewer.overview.invalid": "Invalid",
     "viewer.overview.current": "Current",
     "viewer.overview.pending": "Pending receipt: {count}",
@@ -1478,6 +1489,14 @@
     "cli.notes.help.receiver.harness": "Receiver harness (or AE_HARNESS)",
     "cli.notes.help.receiver.session": "Receiver session identity (or AE_SESSION_ID)",
     "serve.err.overviewScope": "Overview scope must be workspace or all.",
-    "serve.check.overviewHost": "Overview rejects a forged Host ({status})"
+    "serve.check.overviewHost": "Overview rejects a forged Host ({status})",
+    "serve.err.archivePayload": "Archiving requires a full review identifier and a boolean archived value.",
+    "serve.err.archiveUnknown": "This review is not registered in the ledger.",
+    "serve.err.archiveUnavailable": "This review directory is missing or its identifier does not match.",
+    "serve.msg.archived": "archived",
+    "serve.check.archiveHost": "Archiving rejects a forged Host ({status})",
+    "serve.check.archiveOrigin": "Archiving rejects a forged Origin ({status})",
+    "serve.check.archiveNoOrigin": "Archiving rejects a missing Origin ({status})",
+    "serve.check.archiveContentType": "Archiving rejects a non-JSON Content-Type ({status})"
   }
 }

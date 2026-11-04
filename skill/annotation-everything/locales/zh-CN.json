@@ -20,6 +20,15 @@
     "viewer.overview.coreQuestions": "核心问题",
     "viewer.overview.running": "运行中",
     "viewer.overview.stopped": "已停",
+    "viewer.overview.archived": "已归档",
+    "viewer.overview.archive": "归档",
+    "viewer.overview.unarchive": "取消归档",
+    "viewer.overview.showArchived": "显示已归档",
+    "viewer.overview.hiddenArchived": "已归档 {count} 份已隐藏",
+    "viewer.overview.expandArchived": "展开",
+    "viewer.overview.archiveNotice": "已归档 · 批注和提交仍可使用。",
+    "viewer.overview.archiveUpdating": "正在更新…",
+    "viewer.overview.archiveError": "无法更改归档状态。请确认本地服务仍在运行，然后重试。",
     "viewer.overview.invalid": "失效",
     "viewer.overview.current": "当前",
     "viewer.overview.pending": "待接收 {count}",
@@ -1364,6 +1373,14 @@
     "cli.notes.help.receiver.harness": "接收方 harness（或 AE_HARNESS）",
     "cli.notes.help.receiver.session": "接收方会话标识（或 AE_SESSION_ID）",
     "serve.err.overviewScope": "总览范围必须是 workspace 或 all。",
-    "serve.check.overviewHost": "总览读取拒绝伪造 Host（{status}）"
+    "serve.check.overviewHost": "总览读取拒绝伪造 Host（{status}）",
+    "serve.err.archivePayload": "归档需要完整审阅标识和布尔值 archived。",
+    "serve.err.archiveUnknown": "这份审阅尚未登记在台账里。",
+    "serve.err.archiveUnavailable": "这份审阅的目录不在或标识不符。",
+    "serve.msg.archived": "已归档",
+    "serve.check.archiveHost": "归档拒绝伪造 Host（{status}）",
+    "serve.check.archiveOrigin": "归档拒绝伪造 Origin（{status}）",
+    "serve.check.archiveNoOrigin": "归档拒绝缺少 Origin（{status}）",
+    "serve.check.archiveContentType": "归档拒绝非 JSON Content-Type（{status}）"
   }
 }
