@@ -280,13 +280,21 @@ def copied_from(review_dir: Path, manifest: dict[str, Any] | None = None) -> Pat
     """这个目录是从哪份审阅复制来的：manifest 的 reviewDir 还在、且那份里还是同一个审阅标识。
 
     返回复制来源的目录，不是复制来的是 None。整个目录被移走或原目录已删除（reviewDir 不在）
-    时不算复制，调用方沿用原标识。manifest 传调用方已经读好的 review.json，不传就自己读
-    （读不了或不是 JSON 对象都按 {} 处理，与 read_manifest 一致）。审阅标识的格式规则见 RID。
+    时不算复制，调用方沿用原标识。reviewDir 缺失、不是字符串或构不成路径（含空字节等）时按
+    「没有复制来源信息」处理：manifest 写坏不拦登记、不拦服务启动，与 read_manifest 读不了时
+    返回 {} 的容错一致。manifest 传调用方已经读好的 review.json，不传就自己读（读不了或不是
+    JSON 对象都按 {} 处理，与 read_manifest 一致）。审阅标识的格式规则见 RID。
     """
     review_dir = Path(review_dir).resolve()
     m = manifest if manifest is not None else read_manifest(review_dir)
     rid = m.get("reviewId")
-    orig = Path(m["reviewDir"]) if m.get("reviewDir") else None
+    orig = None
+    raw = m.get("reviewDir")
+    if isinstance(raw, str) and raw:
+        try:
+            orig = Path(raw)
+        except (ValueError, OSError):   # 含空字节等构不成路径的值：按没有来源处理
+            orig = None
     if orig is None or orig == review_dir or not orig.is_dir():
         return None
     return orig if read_manifest(orig).get("reviewId") == rid else None

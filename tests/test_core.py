@@ -2965,6 +2965,27 @@ class CopiedReviewTests(unittest.TestCase):
         self.assertEqual(ledger.get(rid)["dir"], str(moved.resolve()))
         self.assertEqual(len(ledger.entries()), 1, "三种情况都还是同一条目")
 
+    def test_ledger_tolerates_a_broken_review_dir_field(self):
+        """reviewDir 缺失、非字符串或构不成路径：按「没有复制来源信息」处理，登记不炸。
+
+        台账的 _set_dir 只判断目录在不在；manifest 写坏时原有的容错是不拦（不当成复制），
+        统一后的 copied_from 也不能让坏值把 register / serve / build 变成 TypeError。
+        """
+        tree = tmpdir()
+        rid = self.build(tree / "v1")["reviewId"]
+        copy = tree / "copy"
+        shutil.copytree(tree / "v1", copy)
+        for bad in (None, 123, {"dir": str(tree / "v1")}, [str(tree / "v1")], "", "\0"):
+            os.environ["AE_HOME"] = str(tmpdir())   # 每个值一份干净台账，register 真走到判断
+            if bad is None:
+                (copy / "review.json").write_text(json.dumps({"reviewId": rid}), encoding="utf-8")
+            else:
+                (copy / "review.json").write_text(json.dumps({"reviewId": rid, "reviewDir": bad}),
+                                                  encoding="utf-8")
+            self.assertIsNone(ledger.copied_from(copy), f"reviewDir={bad!r}")
+            self.assertEqual(ledger.register(rid, copy)["dir"], str(copy.resolve()),
+                             f"reviewDir={bad!r}：按没有来源信息处理，不抛错")
+
     def test_build_switches_id_for_a_copy_and_keeps_it_otherwise(self):
         tree = tmpdir()
         self.build(tree / "v1")
