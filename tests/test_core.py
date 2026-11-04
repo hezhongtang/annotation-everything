@@ -2226,9 +2226,9 @@ class OverviewTests(unittest.TestCase):
                           '<section class="page" data-page="1" data-key="cover">'
                           '<h1>Synthetic cover title</h1></section>', encoding="utf-8")
         record = {"schema": "ae-report-record/1", "generatedAt": "2026-11-03T12:00:00Z",
-                  "summary": "Revenue grew. <b>Review costs.</b>",
-                  "request": {"purpose": "Quarterly decision", "audience": "Management",
-                              "coreQuestions": ["Why growth?", "Which costs?"]},
+                  "summary": "Revenue grew. 📈 <b>Review costs.</b>",
+                  "request": {"purpose": "Quarterly decision 🧭", "audience": "Management 👥",
+                              "coreQuestions": ["Why growth? 📊", "Which costs?"]},
                   "sources": [{"path": str(material / "private-material.md")}],
                   "method": {}, "links": {"report": "report.html", "sha256": {"report": "synthetic"}},
                   "findings": [], "gaps": [], "checks": [], "openItems": [], "verdict": {}}
@@ -2239,10 +2239,10 @@ class OverviewTests(unittest.TestCase):
         # 总览沿着报告来源找记录，不读取审阅目录里同名的无关文件。
         (directory / "report-record.json").write_text('{"summary": "Wrong directory"}', encoding="utf-8")
         row = next(row for row in self.request("/api/overview")["reviews"] if row["reviewId"] == rid)
-        self.assertEqual(row["summary"], "Revenue grew. <b>Review costs.</b>")
-        self.assertEqual(row["purpose"], "Quarterly decision")
-        self.assertEqual(row["audience"], "Management")
-        self.assertEqual(row["coreQuestions"], ["Why growth?", "Which costs?"])
+        self.assertEqual(row["summary"], "Revenue grew. 📈 <b>Review costs.</b>")
+        self.assertEqual(row["purpose"], "Quarterly decision 🧭")
+        self.assertEqual(row["audience"], "Management 👥")
+        self.assertEqual(row["coreQuestions"], ["Why growth? 📊", "Which costs?"])
         self.assertEqual(row["coverTitle"], "Synthetic cover title")
         self.assertNotIn(str(material), json.dumps(row))
         self.assertNotIn("sources", row)
@@ -2279,6 +2279,13 @@ class OverviewTests(unittest.TestCase):
                      json.dumps({**record, "request": {"purpose": 7}}).encode(),
                      json.dumps({**record, "request": {"coreQuestions": ["Why?", {}]}}).encode(),
                      ("[" * 20000 + "]" * 20000).encode()]
+        for text in ("\ud800", "\udfff"):
+            malformed.extend(json.dumps(damaged).encode() for damaged in (
+                {**record, "summary": text},
+                {**record, "request": {**record["request"], "purpose": text}},
+                {**record, "request": {**record["request"], "audience": text}},
+                {**record, "request": {**record["request"], "coreQuestions": ["Why?", text]}},
+            ))
         for content in malformed:
             with self.subTest(content=content[:80]):
                 (material / "report-record.json").write_bytes(content)
