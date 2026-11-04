@@ -108,16 +108,18 @@ def load_manifest(review_dir: Path) -> dict[str, Any]:
     return ledger.read_manifest(review_dir)   # 读不了或不是 JSON 对象都返回 {}
 
 
-def stored_locale(review_dir: Path) -> str | None:
-    """审阅里保存的语言选择；没有（旧审阅）返回 None。"""
-    value = load_manifest(review_dir).get("locale")
+def stored_locale(review_dir: Path, manifest: dict[str, Any] | None = None) -> str | None:
+    """审阅里保存的语言选择；没有（旧审阅）返回 None。
+
+    manifest：调用方已读好的 review.json（不重复打开同一份文件时传入）；不传就自己读。"""
+    value = (manifest if manifest is not None else load_manifest(review_dir)).get("locale")
     return value if isinstance(value, str) else None
 
 
-def cli_locale(explicit: object, review_dir: Path) -> str:
+def cli_locale(explicit: object, review_dir: Path, manifest: dict[str, Any] | None = None) -> str:
     """命令行的语言：--locale 优先于 AE_LOCALE，再优先于审阅设置，最后中文。"""
     return i18n.resolve_locale(
-        i18n.effective_choice(explicit, os.environ.get("AE_LOCALE"), stored_locale(review_dir)),
+        i18n.effective_choice(explicit, os.environ.get("AE_LOCALE"), stored_locale(review_dir, manifest)),
         system_languages=i18n.system_languages())
 
 
@@ -740,19 +742,22 @@ def _main_locked(argv: list[str] | None = None) -> int:
         print(t("cli.notes.notReview", path=d), file=sys.stderr)
         return 2
 
+    # review.json 只读一次：语言选择、登记与 wait 的绑定校验共用这份（#91 起各入口「读一次、多方复用」）
+    manifest = load_manifest(d)
+
     # 提交、处理记录与批注的输出按当前语言写：--locale 优先于 AE_LOCALE，再优先于审阅里保存的选择。
     # 只输出 JSON 的 claim 不在此列：环境语言非法时仍可供旧消费者接收。
     lang = i18n.DEFAULT_LOCALE
     if a.cmd in LOCALIZED_CMDS:
         try:
             explicit = a.locale or (a.lang if a.cmd == "export" else None)
-            lang = cli_locale(explicit, d)
+            lang = cli_locale(explicit, d, manifest)
         except i18n.LocaleError as exc:
             print(t("cli.notes.invalidLocale", name=exc.params.get("locale", "")), file=sys.stderr)
             return 2
     t = cli_text(lang)
     ledger.set_locale(lang)
-    warn = ledger.try_register(load_manifest(d).get("reviewId"), d)
+    warn = ledger.try_register(manifest.get("reviewId"), d)
     if warn:
         print(t("cli.notes.warning", reason=warn), file=sys.stderr)
 
@@ -877,7 +882,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "wait":
         return wait(d, a.timeout, a.interval, claim=not a.no_claim, by=a.by, stage=a.stage, lang=lang,
-                    harness=a.harness, session=a.session)
+                    harness=a.harness, session=a.session, manifest=manifest)
     if a.cmd == "skills":
         def parse(items: list[str] | None) -> list[dict[str, str]]:
             out = []
@@ -1174,19 +1179,39 @@ def _drop_wait_mark(mark: Path | None) -> None:
             mark.unlink()
 
 
+# 等待轮询的强制完整重读周期：文件签名没变就跳过解析，但 inode 号可能被复用、粗粒度 mtime 的
+# 文件系统上四元组可能碰巧相同，所以每这么久仍完整重读一次，最坏只晚一个周期发现变化。
+WAIT_FORCE_READ_SECONDS = 30.0
+
+
+def _poll_signature(path: Path) -> tuple[int, int, int, int] | None:
+    """文件的 (st_dev, st_ino, st_mtime_ns, st_size)；不存在（或读不到）返回 None。
+
+    handoff.json、接收方绑定和 review.json 的写入都是原子替换（换 inode），四元组没变就
+    当内容没变，跳过打开与解析。"""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+
+
 def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stage: str = "any",
-         lang: str | None = None, harness: str | None = None, session: str | None = None) -> int:
-    """阻塞等待「交给 Agent」提交。已经在等待中的提交（之前没人接收）会立即返回。"""
+         lang: str | None = None, harness: str | None = None, session: str | None = None,
+         manifest: dict[str, Any] | None = None) -> int:
+    """阻塞等待「交给 Agent」提交。已经在等待中的提交（之前没人接收）会立即返回。
+
+    manifest：调用方已读好的 review.json（接收方绑定的校验用它，不重复打开同一份文件）。"""
     t = cli_text(lang)
     sep = t("cli.hand.itemSep")
     binding = None
     if claim:
         try:
-            binding = wakeup.load_binding(d)
+            binding = wakeup.load_binding(d, manifest=manifest)
             if binding and binding["adapter"] == "codex-desktop":
                 print(t("cli.hand.eventWaitRefused"), file=sys.stderr)
                 return 2
-            wakeup.assert_claim_owner(d, harness, session)
+            wakeup.assert_claim_owner(d, harness, session, binding=binding, manifest=manifest)
         except (OSError, ValueError, KeyError) as error:
             print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
             return 2
@@ -1199,8 +1224,10 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     wait_info = {"version": 1, "pid": os.getpid(), "stage": stage, "since": store.now_iso()}
     if claim and binding:
         wait_info.update(bindingId=binding["bindingId"], **wakeup.binding_identity(binding))
+    mark_window = max(5, interval * 3)   # 等待标记的有效期；服务端据此判断「有代理在等」
+    mark_expires = time.time() + mark_window
     try:
-        write_private(mark, json.dumps(wait_info) + "\n")
+        write_private(mark, json.dumps({**wait_info, "expiresAt": mark_expires}) + "\n")
     except OSError:
         mark = None
 
@@ -1210,20 +1237,36 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     for sig in (signal.SIGTERM, signal.SIGHUP):
         with contextlib.suppress(ValueError, OSError):   # 不在主线程时设不了，靠 pid 存活判断兜底
             old_handlers[sig] = signal.signal(sig, _stop)
+    # 轮询只盯着这几个文件；claim 时绑定与 review.json 也每次都读（绑定的归属校验要它们）
+    poll_paths = [d / store.HANDOFF_FILE] + ([d / wakeup.BINDING_FILE, d / "review.json"] if claim else [])
+    force_read = WAIT_FORCE_READ_SECONDS
+    last_sig: tuple[tuple[int, int, int, int] | None, ...] | None = None   # None = 还没读过，首轮必读
+    next_force = time.monotonic() + force_read
     try:
         while True:
-            if claim:
+            sig = tuple(_poll_signature(p) for p in poll_paths)
+            now = time.monotonic()
+            if sig != last_sig or now >= next_force:   # 变了、或到了强制重读周期：完整读一次
+                last_sig, next_force = sig, now + force_read
+                if claim:
+                    try:
+                        wakeup.assert_claim_owner(d, harness, session,
+                                                  expected_binding=(binding or {}).get("bindingId"))
+                    except (OSError, ValueError, KeyError) as error:
+                        print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+                        return 2
                 try:
-                    wakeup.assert_claim_owner(d, harness, session, expected_binding=(binding or {}).get("bindingId"))
-                    if mark is not None and binding:
-                        write_private(mark, json.dumps({**wait_info, "expiresAt": time.time() + max(5, interval * 3)}) + "\n")
+                    doc = store.handoff_load(d)
+                except (OSError, ValueError):
+                    doc = {"items": []}
+            if claim and mark is not None and binding:
+                try:
+                    if time.time() + mark_window / 2 > mark_expires:   # 剩余有效期不到一半才重写
+                        mark_expires = time.time() + mark_window
+                        write_private(mark, json.dumps({**wait_info, "expiresAt": mark_expires}) + "\n")
                 except (OSError, ValueError, KeyError) as error:
                     print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
                     return 2
-            try:
-                doc = store.handoff_load(d)
-            except (OSError, ValueError):
-                doc = {"items": []}
             if any(i.get("status") in want for i in doc["items"]):
                 if claim:
                     try:

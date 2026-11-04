@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import fcntl
 import hashlib
 import http.client
 import io
@@ -53,6 +54,10 @@ def tmpdir() -> Path:
 # 文件打开计数（规格 #89 为服务请求快照指定的唯一新接缝）：审计钩子装上就不能移除，
 # 整个进程只装一次，靠开关只在测量窗口内计数；只统计审阅目录下的文件，按文件名归类。
 _OPEN_COUNTS = {"on": False, "root": None, "files": {}}
+# 最近的 io 层打开（文件名, flags）：Python 3.9 的 pathlib 带 opener 开文件，同一次打开会先发
+# io 层事件（mode 是字符串）再补发一个 os.open 事件（mode 为 None）；3.10 起没有这个重复事件。
+# 不去重的话 3.9 上每次 Path.read_text 都记成两次打开，计数全部翻倍。按 (文件名, flags) 配对合并。
+_IO_OPEN_KEYS: list = []
 
 
 def _count_review_opens(event, args):
@@ -62,6 +67,14 @@ def _count_review_opens(event, args):
         name = str(Path(str(args[0])).resolve().relative_to(_OPEN_COUNTS["root"]))
     except Exception:   # 审阅目录以外的打开不计数；钩子本身绝不能抛异常
         return
+    mode, flags = args[1], args[2]
+    key = (name, flags)
+    if mode is None and key in _IO_OPEN_KEYS:
+        _IO_OPEN_KEYS.remove(key)   # 3.9 pathlib 对同一次打开补发的 os.open 事件，不重复计数
+        return
+    if mode is not None:
+        _IO_OPEN_KEYS.append(key)
+        del _IO_OPEN_KEYS[:-8]   # 只保留最近几个，避免无限增长
     files = _OPEN_COUNTS["files"]
     files[name] = files.get(name, 0) + 1
 
@@ -2736,6 +2749,520 @@ class BuildErrorContractTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(out, "")
         self.assertIn("里没找到批注", err)
+# ---------- 底层原语（#96）：文件锁、服务存活判断、CSP、复制目录判断 ----------
+
+def try_exclusive(path: Path) -> bool:
+    """试着独占锁住 path（不等待）：拿得到返回 True，被任何锁挡着返回 False。用完即释放。"""
+    fd = os.open(path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+    finally:
+        os.close(fd)
+
+
+class FileLockTests(unittest.TestCase):
+    """「打开锁文件、flock、释放」五个调用点的对外行为：加锁、非阻塞失败、释放、锁文件是符号链接时。"""
+
+    def setUp(self):
+        self._home = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+
+    def tearDown(self):
+        os.environ["AE_HOME"] = self._home
+
+    def test_notes_lock_is_exclusive_and_released(self):
+        d = tmpdir()
+        store.add(d, {"page": 1, "text": "锁"})
+        lock = d / store.LOCK_FILE
+        self.assertEqual(oct(lock.stat().st_mode & 0o777), "0o600", "锁文件只允许本人读写")
+        with store.locked(d):
+            self.assertFalse(try_exclusive(lock), "持锁期间别人拿不到这把锁")
+        self.assertTrue(try_exclusive(lock), "退出后释放")
+
+    def test_notes_lock_requires_existing_review_dir(self):
+        with self.assertRaises(FileNotFoundError):
+            with store.locked(tmpdir() / "no-such-review"):
+                pass
+
+    def test_notes_lock_follows_symlinked_lock_file(self):
+        d = tmpdir()
+        target = tmpdir() / "lock-target"
+        target.write_text("", encoding="utf-8")
+        (d / store.LOCK_FILE).symlink_to(target)
+        with store.locked(d):
+            self.assertFalse(try_exclusive(target), "符号链接被跟随：锁落在目标文件上")
+
+    def test_update_lock_is_shared_by_default_and_exclusive_on_request(self):
+        path = tmpdir() / ".annotation-everything-update.lock"
+        original = ledger.update_lock_path
+        ledger.update_lock_path = lambda: path
+        try:
+            with ledger.update_lock() as fd:
+                self.assertIsInstance(fd, int, "notes.py 靠这个描述符持锁重新执行自身")
+                self.assertFalse(try_exclusive(path), "共享锁也挡独占")
+                with ledger.update_lock():     # 共享锁可以叠加
+                    pass
+                with self.assertRaises(BlockingIOError):
+                    with ledger.update_lock(exclusive=True, nonblocking=True):
+                        pass
+            self.assertTrue(try_exclusive(path), "退出后释放")
+            with ledger.update_lock(exclusive=True, nonblocking=True):
+                self.assertFalse(try_exclusive(path), "独占锁挡独占")
+                with self.assertRaises(BlockingIOError):
+                    with ledger.update_lock(nonblocking=True):
+                        pass
+            self.assertTrue(try_exclusive(path), "退出后释放")
+        finally:
+            ledger.update_lock_path = original
+
+    def test_update_lock_refuses_symlinked_lock_file(self):
+        path = tmpdir() / ".annotation-everything-update.lock"
+        target = tmpdir() / "lock-target"
+        target.write_text("", encoding="utf-8")
+        path.symlink_to(target)
+        original = ledger.update_lock_path
+        ledger.update_lock_path = lambda: path
+        try:
+            with self.assertRaises(OSError):
+                with ledger.update_lock():
+                    pass
+            self.assertTrue(try_exclusive(target), "符号链接没有被锁")
+        finally:
+            ledger.update_lock_path = original
+
+    def test_ledger_lock_is_exclusive_and_released(self):
+        ledger.register("a" * 16, tmpdir())
+        lock = Path(os.environ["AE_HOME"]) / ledger.LOCK_FILE
+        self.assertEqual(oct(lock.stat().st_mode & 0o777), "0o600")
+        self.assertTrue(try_exclusive(lock), "退出后释放")
+        held, release, done = threading.Event(), threading.Event(), threading.Event()
+
+        def holder():
+            fd = os.open(lock, os.O_RDWR)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            held.set()
+            release.wait(10)
+            os.close(fd)
+
+        def writer():
+            ledger.register("b" * 16, tmpdir())
+            done.set()
+        t, w = threading.Thread(target=holder, daemon=True), threading.Thread(target=writer, daemon=True)
+        t.start()
+        self.assertTrue(held.wait(10))
+        w.start()
+        self.assertFalse(done.wait(0.3), "台账锁被占着时登记要等")
+        release.set()
+        self.assertTrue(done.wait(10), "锁释放后登记继续")
+        t.join(10)
+        w.join(10)
+
+    def test_ledger_lock_follows_symlinked_lock_file(self):
+        home = Path(os.environ["AE_HOME"])
+        home.mkdir(parents=True, exist_ok=True)
+        target = tmpdir() / "lock-target"
+        target.write_text("", encoding="utf-8")
+        (home / ledger.LOCK_FILE).symlink_to(target)
+        ledger.register("c" * 16, tmpdir())
+        self.assertIn("c" * 16, ledger.entries(), "符号链接被跟随：登记照常完成")
+
+    def test_dispatch_lock_is_exclusive_and_released(self):
+        d = tmpdir()
+        lock = d / wakeup.DISPATCH_LOCK
+        with wakeup.dispatch_lock(d):
+            self.assertEqual(oct(lock.stat().st_mode & 0o777), "0o600")
+            self.assertFalse(try_exclusive(lock), "投递期间别人拿不到这把锁")
+        self.assertTrue(try_exclusive(lock), "退出后释放")
+
+    def test_dispatch_lock_follows_symlinked_lock_file(self):
+        d = tmpdir()
+        target = tmpdir() / "lock-target"
+        target.write_text("", encoding="utf-8")
+        (d / wakeup.DISPATCH_LOCK).symlink_to(target)
+        with wakeup.dispatch_lock(d):
+            self.assertFalse(try_exclusive(target), "符号链接被跟随：锁落在目标文件上")
+
+
+class ServiceStateTests(unittest.TestCase):
+    """服务状态文件名与「进程还在不在」的判断：服务、更新器、等待接收共用同一份。"""
+
+    def test_status_treats_non_positive_or_missing_pid_as_not_running(self):
+        d = tmpdir()
+        for info in ({"pid": 0, "port": 12345}, {"pid": -3, "port": 12345}, {"port": 12345}):
+            (d / serve.STATUS_FILE).write_text(json.dumps(info), encoding="utf-8")
+            st = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "status", str(d)],
+                                capture_output=True, text=True, timeout=30)
+            self.assertEqual(st.returncode, 4, st.stdout)
+            self.assertFalse((d / serve.STATUS_FILE).exists(), "失效的状态文件被清掉")
+
+    def test_status_file_name_is_the_one_the_ledger_exports(self):
+        self.assertEqual(serve.STATUS_FILE, ".annotation-server.json")
+        self.assertEqual(ledger.STATUS_FILE, ".annotation-server.json")
+        d = tmpdir()
+        self.assertEqual(ledger.status_file(d), d / ".annotation-server.json")
+
+
+class CspPolicyTests(unittest.TestCase):
+    """响应头与页面 meta 两个出口的策略串逐项不变（含没有内联脚本的情况）。"""
+
+    SCRIPTS = ('<!doctype html><html><head><script>var a = 1 < 2 && "x";</script>'
+               '<script>\n  second()\n</script></head><body></body></html>')
+    NO_SCRIPTS = "<!doctype html><html><head><title>t</title></head><body></body></html>"
+    HASHES = ("'sha256-qruuVyo/doZTNHINowyGpWW23FFzoMXI8NIQH2g1xmc=' "
+              "'sha256-pZHjM+U1cZ+xv5ZI3pk6kzOfyWr2vx8iMGLcHgcKb3E='")
+    SHARED = ("default-src 'none'; script-src %s; style-src 'unsafe-inline'; img-src data: blob:; "
+              "font-src data:; media-src data: blob:; connect-src 'self'; ")
+    HEAD_TAIL = "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
+    META_TAIL = "base-uri 'none'; form-action 'none'; object-src 'none'"
+
+    def test_response_header_policy_is_unchanged(self):
+        self.assertEqual(serve.csp_for(self.SCRIPTS), self.SHARED % self.HASHES + self.HEAD_TAIL)
+        self.assertEqual(serve.csp_for(self.NO_SCRIPTS), self.SHARED % "'none'" + self.HEAD_TAIL,
+                         "没有内联脚本时兜底 script-src 'none'")
+
+    def test_page_meta_policy_is_unchanged(self):
+        self.assertEqual(build_viewer.page_csp(self.SCRIPTS), self.SHARED % self.HASHES + self.META_TAIL)
+        self.assertEqual(build_viewer.page_csp(self.NO_SCRIPTS), self.SHARED % "" + self.META_TAIL,
+                         "meta 版不带 frame-ancestors，也没有兜底")
+
+
+class CopiedReviewTests(unittest.TestCase):
+    """「目录是不是从另一份审阅复制来的」：复制、搬家、原目录已删除三种情况，三个入口一致。"""
+
+    def setUp(self):
+        self._home = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+
+    def tearDown(self):
+        os.environ["AE_HOME"] = self._home
+
+    def build(self, out: Path) -> dict:
+        with redirect_stderr(io.StringIO()):
+            return build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", out)
+
+    def test_ledger_refuses_a_copy_but_accepts_a_move_or_a_deleted_original(self):
+        tree = tmpdir()
+        rid = self.build(tree / "v1")["reviewId"]
+        copy = tree / "copy"
+        shutil.copytree(tree / "v1", copy)
+        with self.assertRaises(ledger.CopiedDir) as cm:
+            ledger.register(rid, copy)
+        self.assertIn("复制来", str(cm.exception))
+        self.assertIn(str((tree / "v1").resolve()), str(cm.exception), "指出台账仍指向的目录")
+        self.assertEqual(ledger.get(rid)["dir"], str((tree / "v1").resolve()), "副本顶替不了原条目")
+        self.assertIn("复制来", ledger.try_register(rid, copy))
+        # 原目录已删除：副本按标识更新路径（沿用标识，不换新）
+        shutil.rmtree(tree / "v1")
+        self.assertIsNone(ledger.try_register(rid, copy))
+        self.assertEqual(ledger.get(rid)["dir"], str(copy.resolve()))
+        # 搬家：整个目录移走，按标识更新路径
+        moved = tree / "moved"
+        copy.rename(moved)
+        self.assertIsNone(ledger.try_register(rid, moved))
+        self.assertEqual(ledger.get(rid)["dir"], str(moved.resolve()))
+        self.assertEqual(len(ledger.entries()), 1, "三种情况都还是同一条目")
+
+    def test_build_switches_id_for_a_copy_and_keeps_it_otherwise(self):
+        tree = tmpdir()
+        self.build(tree / "v1")
+        rid = json.loads((tree / "v1" / "review.json").read_text())["reviewId"]
+        copy = tree / "copy"
+        shutil.copytree(tree / "v1", copy)
+        r = self.build(copy)
+        self.assertNotEqual(r["reviewId"], rid, "复制来的目录换新标识")
+        self.assertTrue(any("复制来" in w for w in r["warnings"]), r["warnings"])
+        self.assertEqual(json.loads((copy / "review.json").read_text())["reviewDir"], str(copy.resolve()))
+        # 搬家：整个目录移走，沿用标识
+        moved = tree / "moved"
+        (tree / "v1").rename(moved)
+        r2 = self.build(moved)
+        self.assertEqual(r2["reviewId"], rid, "搬家沿用标识")
+        self.assertFalse(any("复制来" in w for w in r2["warnings"]), r2["warnings"])
+        # 原目录已删除：副本沿用标识
+        gone = tree / "gone"
+        shutil.copytree(moved, gone)
+        shutil.rmtree(moved)
+        r3 = self.build(gone)
+        self.assertEqual(r3["reviewId"], rid, "原目录已删除也算搬家，沿用标识")
+        self.assertFalse(any("复制来" in w for w in r3["warnings"]), r3["warnings"])
+
+    def _serve(self, review_dir: Path) -> str:
+        p = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), str(review_dir), "--no-open"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        sf = review_dir / serve.STATUS_FILE
+        for _ in range(80):
+            if sf.exists() or p.poll() is not None:
+                break
+            time.sleep(0.1)
+        self.assertTrue(sf.exists(), "副本也要能启动")
+        p.terminate()
+        _out, err = p.communicate(timeout=10)
+        return err
+
+    def test_serve_hints_on_a_copied_review_dir(self):
+        tree = tmpdir()
+        self.build(tree / "v1")
+        copy = tree / "copy"
+        shutil.copytree(tree / "v1", copy)
+        err = self._serve(copy)
+        self.assertIn("复制来", err, err)
+        self.assertIn("不用专属端口", err, err)
+
+    def test_serve_does_not_hint_on_a_moved_review_dir(self):
+        tree = tmpdir()
+        self.build(tree / "v1")
+        moved = tree / "moved"
+        (tree / "v1").rename(moved)
+        self.assertNotIn("复制来", self._serve(moved))
+
+
+class WaitPollReadsTests(unittest.TestCase):
+    """wait 轮询：文件没变就跳过解析（打开计数），四元组没变也靠强制重读发现提交。只用合成审阅。"""
+
+    def setUp(self):
+        self._home = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(Path(tempfile.mkdtemp(prefix="ae-wait-home-")))
+        self.addCleanup(self.restore_home)
+        self._force = notes_cli.WAIT_FORCE_READ_SECONDS
+        self.addCleanup(self.restore_force)
+
+    def restore_home(self):
+        os.environ["AE_HOME"] = self._home
+
+    def restore_force(self):
+        notes_cli.WAIT_FORCE_READ_SECONDS = self._force
+
+    # ---------- 合成审阅 ----------
+    def note(self) -> dict:
+        return {"id": "n1", "page": 1, "title": "T", "target": "报告", "text": "合成批注",
+                "status": "open", "at": "2026-01-01T00:00:00"}
+
+    def batch(self, seq: int = 1, status: str = "pending", **kw) -> dict:
+        item = {"seq": seq, "status": status, "at": "2026-01-01T00:00:00", "by": "page",
+                "message": "合成批次", "userMessage": "合成批次", "target": "final",
+                "allowSubagents": False, "fullCheck": False, "alwaysSkills": [],
+                "openCount": 1, "openIds": ["n1"], "pages": [1]}
+        item.update(kw)
+        return item
+
+    def start(self, *, rid: str = "a" * 16) -> Path:
+        """一份新的合成审阅并绑定接收方；返回审阅目录。"""
+        root = Path(tempfile.mkdtemp(prefix="ae-wait-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        review = root / "review"
+        review.mkdir()
+        (review / "report.html").write_text(
+            '<!doctype html><html><body><section class="page" data-page="1" data-key="p1">'
+            "<h1>T</h1><p>x</p></section></body></html>", encoding="utf-8")
+        (review / "index.html").write_text(
+            "<!doctype html><title>t</title><script>var ok=1</script>ok", encoding="utf-8")
+        (review / store.NOTES_FILE).write_text(json.dumps(
+            {"version": 1, "rev": 1, "updatedAt": "2026-01-01T00:00:00", "notes": [self.note()]}),
+            encoding="utf-8")
+        (review / store.HANDOFF_FILE).write_text(
+            json.dumps({"version": 1, "seq": 0, "items": []}), encoding="utf-8")
+        (review / serve.MANIFEST).write_text(json.dumps({
+            "app": serve.APP, "kind": "deck", "reviewId": rid, "reviewDir": str(review.resolve()),
+            "title": "合成审阅", "name": "合成审阅", "namespace": "ns",
+            "sources": {"report": "report.html", "script": None},
+            "sourcesAbs": {"report": str(review / "report.html"), "script": None},
+            "pages": [{"n": 1, "key": "p1", "stable": True, "title": "T"}], "locale": "zh-CN"}),
+            encoding="utf-8")
+        wakeup.bind_wait(review, "claude", "sess-1")
+        self.review = review
+        return review
+
+    def wait(self, *extra, timeout: float = 6, interval: float = 1):
+        """进程内直接调 notes 的 main()（模块不以 __main__ 运行，不会重新执行自身）。"""
+        argv = ["wait", str(self.review), "--timeout", str(timeout), "--interval", str(interval),
+                "--by", "agent", "--harness", "claude", "--session", "sess-1", *extra]
+        started = time.monotonic()
+        with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+            code = notes_cli.main(argv)
+        return code, out.getvalue(), err.getvalue(), time.monotonic() - started
+
+    def count_opens(self, *extra, **kw):
+        """数一次 wait 打开了审阅目录里的哪些文件：按文件名归类，只算审阅目录下的文件。"""
+        _OPEN_COUNTS["root"] = self.review.resolve()
+        _OPEN_COUNTS["files"] = {}
+        _OPEN_COUNTS["on"] = True
+        try:
+            code, out, err, elapsed = self.wait(*extra, **kw)
+        finally:
+            _OPEN_COUNTS["on"] = False
+        return code, dict(_OPEN_COUNTS["files"]), elapsed
+
+    def wait_mark_writes(self, files: dict) -> int:
+        """等待标记被写了几次（原子写的临时文件也在审阅目录里，按同名片段归类）。"""
+        return sum(n for name, n in files.items() if ledger.WAIT_PREFIX in name)
+
+    # ---------- 进程内服务 ----------
+    def stop(self, srv, worker):
+        srv.shutdown()
+        srv.server_close()
+        worker.join(2)
+
+    def request(self, srv, method: str = "GET", path: str = "/api/notes", body=None):
+        headers = {"Host": f"127.0.0.1:{srv.port}"}
+        code, _, raw = serve._req(srv.port, method, path, headers, body)
+        return code, json.loads(raw)
+
+    def test_server_keeps_reporting_a_waiting_agent_across_mark_rewrites(self):
+        review = self.start()
+        srv = serve.ReviewServer(review, 0, log_to_file=False)
+        worker = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        worker.start()
+        self.addCleanup(self.stop, srv, worker)
+        result = {}
+
+        def run_wait():   # 等待进程跑在后台线程里：主线程同时向服务发请求
+            with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+                result["code"] = notes_cli.main(["wait", str(review), "--timeout", "8", "--interval", "1",
+                                                 "--by", "agent", "--harness", "claude", "--session", "sess-1"])
+                result["out"] = out.getvalue()
+
+        waiter = threading.Thread(target=run_wait, daemon=True)
+        waiter.start()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:   # 先等到服务认出「有代理在等」
+            _code, body = self.request(srv)
+            if body["receiver"]["state"] == "waiting":
+                break
+            time.sleep(0.03)
+        self.assertEqual(body["receiver"]["state"], "waiting")
+        seen = []
+        until = time.monotonic() + 4.5   # 跨过一次等待标记重写（剩余有效期不到一半时）
+        while time.monotonic() < until:
+            for path in ("/api/notes", "/api/health"):
+                code, got = self.request(srv, path=path)
+                self.assertEqual(code, 200)
+                seen.append((path, got["receiver"]["state"]))
+            time.sleep(0.1)
+        store.handoff_submit(review, "合成批次")   # 提交到达：等待结束
+        waiter.join(10)
+        self.assertEqual(result.get("code"), 0, result.get("out"))
+        self.assertIn("第 1 批", result.get("out", ""))
+        self.assertEqual({state for _path, state in seen}, {"waiting"}, seen[:4])
+
+    # ---------- 打开计数 ----------
+    def test_wait_without_submission_reads_each_file_at_most_twice(self):
+        self.start()
+        code, files, elapsed = self.count_opens()
+        self.assertEqual(code, 3, "没有新提交：超时退出")
+        self.assertGreater(elapsed, 5.9, "跑满 6 秒窗口")
+        self.assertLessEqual(files.get(serve.MANIFEST, 0), 2, files)
+        self.assertLessEqual(files.get(wakeup.BINDING_FILE, 0), 2, files)
+        self.assertLessEqual(files.get(store.HANDOFF_FILE, 0), 2, files)
+        self.assertLessEqual(self.wait_mark_writes(files), 4, files)
+
+    def test_wait_without_binding_reads_handoff_at_most_twice(self):
+        review = self.start()
+        (review / wakeup.BINDING_FILE).unlink()   # 没有接收方绑定：不等绑定文件
+        code, files, elapsed = self.count_opens(timeout=3)
+        self.assertEqual(code, 3)
+        self.assertLessEqual(files.get(serve.MANIFEST, 0), 1, files)
+        self.assertLessEqual(files.get(wakeup.BINDING_FILE, 0), 0, files)
+        self.assertLessEqual(files.get(store.HANDOFF_FILE, 0), 2, files)
+        self.assertLessEqual(self.wait_mark_writes(files), 4, files)
+
+    # ---------- 四元组没变也能发现 ----------
+    def test_wait_detects_submission_whose_stat_signature_is_unchanged(self):
+        review = self.start()
+        handoff = review / store.HANDOFF_FILE
+        empty = json.dumps({"version": 1, "seq": 0, "items": []})
+        fresh = json.dumps({"version": 1, "seq": 1, "items": [self.batch(1)]}, ensure_ascii=False)
+        width = max(len(empty.encode()), len(fresh.encode())) + 8   # 两份等字节长：JSON 允许结尾空白
+        empty += " " * (width - len(empty.encode()))
+        fresh += " " * (width - len(fresh.encode()))
+        handoff.write_text(empty, encoding="utf-8")
+        notes_cli.WAIT_FORCE_READ_SECONDS = 1.0   # 缩短强制重读周期，测试不必等满 30 秒
+        sigs = []
+
+        def submit_in_place():
+            time.sleep(1.5)
+            before = handoff.stat()
+            sigs.append((before.st_dev, before.st_ino, before.st_mtime_ns, before.st_size))
+            handoff.write_text(fresh, encoding="utf-8")   # 原地等长改写：不换 inode
+            os.utime(handoff, ns=(before.st_atime_ns, before.st_mtime_ns))   # 恢复 mtime
+            after = handoff.stat()
+            sigs.append((after.st_dev, after.st_ino, after.st_mtime_ns, after.st_size))
+
+        worker = threading.Thread(target=submit_in_place, daemon=True)
+        worker.start()
+        code, out, _err, elapsed = self.wait(timeout=8)
+        worker.join(10)
+        self.assertEqual(sigs[0], sigs[1], "内容变了但四元组相同：只能靠强制重读发现")
+        self.assertEqual(code, 0, out)
+        self.assertIn("第 1 批", out)
+        self.assertIn("用户附言：合成批次", out)
+        self.assertEqual(store.handoff_state(review)["latest"]["status"], "claimed")
+        self.assertLess(elapsed, 5, "一个强制重读周期内发现")
+        self.assertEqual(list(review.glob(ledger.WAIT_PREFIX + "*")), [], "收到提交后删掉标记")
+
+    def test_wait_returns_one_interval_after_a_real_submission(self):
+        review = self.start()
+
+        def submit():
+            time.sleep(1.2)
+            store.handoff_submit(review, "合成批次")   # 真实提交：原子替换，换 inode
+
+        worker = threading.Thread(target=submit, daemon=True)
+        worker.start()
+        code, out, _err, elapsed = self.wait(timeout=10)
+        worker.join(10)
+        self.assertEqual(code, 0, out)
+        self.assertIn("第 1 批", out)
+        self.assertEqual(store.handoff_state(review)["latest"]["status"], "claimed")
+        self.assertLess(elapsed, 7, "提交后一个轮询周期内返回，不等强制重读周期")
+
+    # ---------- 等待标记与绑定 ----------
+    def test_wait_mark_stays_valid_until_the_waiter_leaves(self):
+        review = self.start()
+        seen = []
+        stop = threading.Event()
+
+        def watch():
+            while not stop.is_set():
+                try:
+                    mark = json.loads(ledger.wait_file(review, os.getpid()).read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                seen.append((time.time(), mark.get("expiresAt")))
+                time.sleep(0.02)
+
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
+        code, _out, _err, _elapsed = self.wait(timeout=4)   # 4 秒：剩余有效期不到一半（2.5 秒）时就会重写
+        stop.set()
+        watcher.join(5)
+        self.assertEqual(code, 3)
+        self.assertTrue(seen, "等待期间标记一直在")
+        self.assertTrue(all(isinstance(expires, (int, float)) and expires > now for now, expires in seen),
+                        "expiresAt 始终在未来")
+        self.assertGreater(len({expires for _now, expires in seen}), 1, "有效期按剩余时间重写过")
+        self.assertEqual(list(review.glob(ledger.WAIT_PREFIX + "*")), [], "结束后删掉标记")
+
+    def test_wait_exits_when_binding_is_deleted_while_waiting(self):
+        review = self.start()
+        gone = threading.Event()
+
+        def delete_binding():
+            time.sleep(1.2)
+            (review / wakeup.BINDING_FILE).unlink()
+            gone.set()
+
+        worker = threading.Thread(target=delete_binding, daemon=True)
+        worker.start()
+        code, _out, err, elapsed = self.wait(timeout=8)
+        worker.join(10)
+        self.assertTrue(gone.is_set())
+        self.assertEqual(code, 2, err)
+        self.assertIn("agent-binding-changed", err)
+        self.assertLess(elapsed, 7, "一个轮询周期内发现绑定没了")
+        self.assertEqual(list(review.glob(ledger.WAIT_PREFIX + "*")), [], "报错退出也删掉标记")
 
 
 if __name__ == "__main__":
