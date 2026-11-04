@@ -144,6 +144,12 @@ class ScriptError(Exception):
         self.messages = messages
 
 
+class BuildError(SystemExit):
+    """可复用库函数（报告分页、板块参数、源文件查找）的报错：调用方捕它来降级，
+    不用再捕 SystemExit——那会连调用方自己的 sys.exit 一起吞掉。继承 SystemExit：
+    库函数直接作为命令行跑时，退出码与 stderr 和以前完全一样。"""
+
+
 def page_heads(script: str) -> list[re.Match]:
     """中英页头按出现顺序合并：`### 第 N 页｜标题` 与 `### Page N｜Title` 可以在同一份讲稿里混用。
 
@@ -286,7 +292,7 @@ def find_pages(doc: str, *, locale: str | None = None) -> list[dict]:
             attrs = attrs_of(doc[m.start():m.end()])
             is_page = "page" in attrs.get("class", "").split() and "data-page" in attrs
             if is_page and any(p for _s, _a, p in stack):
-                raise SystemExit(diag(locale, "build.report.nested", page=attrs["data-page"]))
+                raise BuildError(diag(locale, "build.report.nested", page=attrs["data-page"]))
             stack.append((m.start(), attrs, is_page))
         elif stack:
             start, attrs, is_page = stack.pop()
@@ -294,16 +300,16 @@ def find_pages(doc: str, *, locale: str | None = None) -> list[dict]:
                 pages.append({"attrs": attrs, "html": doc[start:m.end()]})
     unclosed = [a.get("data-page") for _s, a, p in stack if p]
     if unclosed:
-        raise SystemExit(diag(locale, "build.report.unclosed", pages=unclosed))
+        raise BuildError(diag(locale, "build.report.unclosed", pages=unclosed))
     out, seen = [], set()
     for p in pages:
         a = p["attrs"]
         try:
             n = int(a["data-page"].strip())
         except ValueError:
-            raise SystemExit(diag(locale, "build.report.pageNumber", page=repr(a["data-page"]))) from None
+            raise BuildError(diag(locale, "build.report.pageNumber", page=repr(a["data-page"]))) from None
         if n in seen:
-            raise SystemExit(diag(locale, "build.report.duplicate", page=n))
+            raise BuildError(diag(locale, "build.report.duplicate", page=n))
         seen.add(n)
         key = a.get("data-key") or a.get("id", "").removeprefix("page-") or f"p{n}"
         hm = re.search(r"<h[1-3][^>]*>(.*?)</h[1-3]>", p["html"], re.S)
@@ -351,7 +357,7 @@ def parse_sections_arg(arg: str, *, locale: str | None = None) -> list[list]:
             continue
         m = re.match(r"^(.+?)[:：]\s*(\d+)\s*(?:[-–~]\s*(\d+))?$", part)
         if not m:
-            raise SystemExit(diag(locale, "build.report.sections", part=repr(part)))
+            raise BuildError(diag(locale, "build.report.sections", part=repr(part)))
         a = int(m.group(2))
         out.append([m.group(1).strip(), a, int(m.group(3) or a)])
     return out
@@ -628,7 +634,7 @@ def resolve_sources(review_dir: Path, manifest: dict | None = None, *, locale: s
         hit = next((c.resolve() for c in cand if c.is_file()), None)
         if hit is None and cand:
             tried = "、".join(str(c) for c in cand)
-            raise SystemExit(diag(locale, "build.source.missing", kind=diag(locale, "cli.show.source." + k), paths=tried))
+            raise BuildError(diag(locale, "build.source.missing", kind=diag(locale, "cli.show.source." + k), paths=tried))
         out[k] = hit
     return out
 
