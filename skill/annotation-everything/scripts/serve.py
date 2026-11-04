@@ -58,17 +58,19 @@ from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
+import review_overview  # noqa: E402
 import wakeup  # noqa: E402
 
 APP = "annotation-everything"
 VERSION = "0.10.0"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
-FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding"]
+FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding", "overview"]
 
 # 当前界面语言：main() 与 serve() 按共同契约解析后设置；未设置前保持中文（旧调用行为不变）
 _LOCALE = i18n.DEFAULT_LOCALE
@@ -515,6 +517,12 @@ class Handler(BaseHTTPRequestHandler):
             doc = store.delete(d, m.group(1), by="page")
             self.server.log("info", f"delete {m.group(1)}")
             self._json(200, {"doc": {**doc, **self._ident()}})
+        elif path == "/api/overview" and cmd == "GET":
+            scopes = parse_qs(self.path.partition("?")[2], keep_blank_values=True).get("scope", ["workspace"])
+            if len(scopes) != 1 or scopes[0] not in ("workspace", "all"):
+                raise Reject(400, "bad-scope", self._t("serve.err.overviewScope"))
+            self._json(200, {"app": APP, "reviewId": self.server.review_id(),
+                             **review_overview.snapshot(d, self.server.review_id(), scopes[0], review_row)})
         else:
             raise Reject(404 if cmd == "GET" else 405, "no-api", self._t("serve.err.noApi"))
 
@@ -1091,6 +1099,8 @@ def check(locale: str | None = None) -> int:
         ok(s == 421, T("serve.check.badHost", status=s))
         s, _, _ = _req(port, "GET", "/api/notes", {"Host": f"evil.example:{port}"})
         ok(s == 421, T("serve.check.badHostRead", status=s))
+        s, _, _ = _req(port, "GET", "/api/overview?scope=all", {"Host": f"evil.example:{port}"})
+        ok(s == 421, T("serve.check.overviewHost", status=s))
         s, _, _ = _req(port, "POST", "/api/notes", {**same, "Origin": "http://evil.example"}, {"page": 1, "text": "x"})
         ok(s == 403, T("serve.check.badOrigin", status=s))
         s, _, _ = _req(port, "POST", "/api/notes", {**same, "Origin": "null"}, {"page": 1, "text": "x"})

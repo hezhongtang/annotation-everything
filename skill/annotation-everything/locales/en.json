@@ -1439,6 +1439,8 @@
     "viewer.receiver.offline": "Service disconnected · Receiver unconfirmed",
     "viewer.receiver.changed": "The receiver changed. Close and reopen the submission dialog; restart the service first if required.",
     "cli.notes.help.receiver.harness": "Receiver harness (or AE_HARNESS)",
-    "cli.notes.help.receiver.session": "Receiver session identity (or AE_SESSION_ID)"
+    "cli.notes.help.receiver.session": "Receiver session identity (or AE_SESSION_ID)",
+    "serve.err.overviewScope": "Overview scope must be workspace or all.",
+    "serve.check.overviewHost": "Overview rejects a forged Host ({status})"
   }
 }

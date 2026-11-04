@@ -1329,6 +1329,8 @@
     "viewer.receiver.offline": "服务未连接 · 接收方待确认",
     "viewer.receiver.changed": "接收方已变更，请关闭并重新打开提交窗口；需重启时请先重启服务。",
     "cli.notes.help.receiver.harness": "接收方 harness（或 AE_HARNESS）",
-    "cli.notes.help.receiver.session": "接收方会话标识（或 AE_SESSION_ID）"
+    "cli.notes.help.receiver.session": "接收方会话标识（或 AE_SESSION_ID）",
+    "serve.err.overviewScope": "总览范围必须是 workspace 或 all。",
+    "serve.check.overviewHost": "总览读取拒绝伪造 Host（{status}）"
   }
 }
