@@ -4107,8 +4107,6 @@ def external_method_checks(browser, tmp: Path):
        "相同缺陷的内置与外部产物判定完全一致（外部方法不放宽也不加严）")
 
 
-
-
 SCENARIO_RUNNERS = {
     "receiver-binding": receiver_binding_checks,
     "generated-draft-loop": generated_draft_checks,
