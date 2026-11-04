@@ -378,6 +378,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── ledger.py                  review ledger: review IDs, review directories and dedicated ports
 │   ├── match.py                   finds matching sentences between the report and the speaker notes
 │   ├── skill_sources.py           discovers skill directories on this machine
+│   ├── fsutil.py                  shared atomic file-write helper
 │   └── check_pptx_fonts.py        PPTX and PDF font check
 └── evals/                         skill evaluations, including generation, verification and revisions (used with skill-creator)
 ae.py                             unified management command: install the skill copy, doctor checks it, repair fixes it, uninstall removes it

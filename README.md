@@ -378,6 +378,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── ledger.py                  审阅台账：审阅标识、审阅目录和专属端口
 │   ├── match.py                   在报告与讲稿之间查找对应句子
 │   ├── skill_sources.py           发现本机的技能目录
+│   ├── fsutil.py                  原子写文件的公共小工具
 │   └── check_pptx_fonts.py        PPTX 与 PDF 字体核查
 └── evals/                         技能评测用例，含生成、核验与改稿（供 skill-creator 使用）
 ae.py                             统一管理命令：install 安装技能副本，doctor 体检，repair 修复，uninstall 卸载

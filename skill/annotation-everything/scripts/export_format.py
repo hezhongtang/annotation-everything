@@ -39,16 +39,14 @@ TARGET_EN = {"报告": "Report", "讲稿": "Script", "报告和讲稿": "Report 
 SCOPE_EN = {"all": "All notes", "报告": "Report", "讲稿": "Script", "style": "Style"}
 STYLE_EN = {"page": "Whole page", "pin": "Pin", "region": "Region"}
 MATCH_EN = {"exact": "identical", "similar": "similar"}
-STATUS_EN = {"resolved": "Resolved", "drafted": "Drafted"}
 
 TARGET_ZH = {v: k for k, v in TARGET_EN.items()}
 SCOPE_ZH = {"All notes": "all", "Report": "报告", "Script": "讲稿", "Style": "style"}
 STYLE_ZH = {v: k for k, v in STYLE_EN.items()}
 MATCH_ZH = {"identical": "exact", "similar": "similar"}
-STATUS_ZH = {"Resolved": "resolved", "Drafted": "drafted"}
 
 # 常驻技能范围：中文用法与 0.3 以来一致（ALWAYS_ZH），英文用上表的对照名。
-ALWAYS_ZH_LABEL = {"all": "全部批注", "报告": "报告", "讲稿": "讲稿", "style": "风格优化"}
+ALWAYS_ZH_LABEL = store.ALWAYS_ZH
 ALWAYS_ZH_REV = {"全部批注": "all", "全部": "all", "报告": "报告", "讲稿": "讲稿", "风格优化": "style"}
 
 HEAD_NOTE = "报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。"
@@ -113,10 +111,9 @@ class Grammar:
             self.always = re.compile(r"^常驻技能（[^）]*）：(.+)$", re.M)
             self.always_item = re.compile(r"^(.+?)（(全部批注|全部|报告|讲稿|风格优化)）$")
             self.always_sep = "、"
-        self.status = {("【已处理】" if not en else "[Resolved] "): "resolved",
-                       ("【已初改·待复核】" if not en else "[Drafted] "): "drafted"}
         self.state_prefix = {"resolved": "【已处理】" if not en else "[Resolved] ",
                              "drafted": "【已初改·待复核】" if not en else "[Drafted] "}
+        self.status = {prefix: state for state, prefix in self.state_prefix.items()}   # 导入：前缀 → 状态
         self.indent = "   "
 
     # ---------- 导入 ----------
@@ -280,10 +277,6 @@ class Grammar:
 _GRAMMARS = {lang: Grammar(lang) for lang in LANGS}
 
 
-def grammar(lang: str) -> Grammar:
-    return _GRAMMARS[lang]
-
-
 def _plural(count: int, word: str) -> str:
     return word if count == 1 else word + "s"
 
@@ -356,7 +349,7 @@ def parse_always(text: str, lang: str = "zh-CN") -> list[dict[str, str]] | None:
     if not m:
         return None
     out: list[dict[str, str]] = []
-    for part in re.split(re.escape(g.always_sep) if lang == "en" else "、", m.group(1)):
+    for part in re.split(re.escape(g.always_sep), m.group(1)):
         mm = g.always_item.match(part.strip())
         if mm:
             scope = SCOPE_ZH.get(mm.group(2), mm.group(2)) if lang == "en" else ALWAYS_ZH_REV.get(mm.group(2), "all")

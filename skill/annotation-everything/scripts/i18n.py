@@ -232,6 +232,27 @@ def load_all(root: Path | None = None) -> dict[str, dict]:
     return cached
 
 
+_ONE: dict[tuple[Path, str], dict] = {}
+
+
+def catalog(locale: str, root: Path | None = None) -> dict:
+    """带缓存的 load_catalog：同一进程里每种语言的词典只读一次文件。
+
+    只读所要的那一种语言，失败面与 load_catalog 相同；返回的词典是共享缓存，调用方不得修改。
+    """
+    tag = normalize_locale(locale)
+    if not tag:
+        raise CatalogError(f"没有 {locale} 的词典资源（可选：{'、'.join(SUPPORTED)}）")
+    base = locales_dir(root)
+    full = _CACHE.get(base)
+    if full is not None:
+        return full[tag]
+    cached = _ONE.get((base, tag))
+    if cached is None:
+        cached = _ONE[(base, tag)] = load_catalog(tag, root=root)
+    return cached
+
+
 def translate(catalog: Mapping, key: str, *, catalogs: Mapping[str, Mapping] | None = None,
               on_missing: Callable[[str], None] | None = None,
               count: int | None = None, **params: object) -> str:
@@ -358,6 +379,52 @@ def cli_locale(explicit: object, environ: Mapping[str, str] | None = None,
     """按共同契约解析命令行的语言；非法选择抛 LocaleError（不静默改值）。"""
     return resolve_locale(cli_choice(explicit, environ, stored),
                           system_languages=system_languages(environ))
+
+
+def explicit_locale(argv) -> object:
+    """从命令行里取出 --locale 的值（写在子命令前后都认，`--` 之后不看）；没写返回 None。"""
+    argv = list(argv or [])
+    for index, token in enumerate(argv):
+        if token == "--":
+            break
+        if token == "--locale":
+            return argv[index + 1] if index + 1 < len(argv) else ""
+        if token.startswith("--locale="):
+            return token.partition("=")[2]
+    return None
+
+
+class ModuleLocale:
+    """单个模块自己的界面语言状态（每个模块各持一个实例，不跨模块共享）。
+
+    调用方已经把 --locale、AE_LOCALE、审阅 locale 解析完时用 set(具体 locale) 定住，
+    之后不再被 AE_LOCALE 覆盖——否则同一进程里两种来源不一致，会出现中英混排。
+    未定住时 refresh() 按 AE_LOCALE 重新解析；未设置或选择非法时保持中文。
+    """
+
+    def __init__(self) -> None:
+        self.locale = DEFAULT_LOCALE
+        self.pinned = False
+
+    def set(self, locale: object = None) -> None:
+        """定界面语言。locale 为 None 时按 AE_LOCALE 重新解析；给了具体 locale 就定住。"""
+        if locale is None:
+            self.pinned = False
+            try:
+                self.locale = cli_locale(None)
+            except LocaleError:
+                self.locale = DEFAULT_LOCALE
+        else:
+            self.locale, self.pinned = str(locale), True
+
+    def refresh(self) -> None:
+        """没有外部定过语言时，才按 AE_LOCALE 刷新。"""
+        if not self.pinned:
+            self.set(None)
+
+    def __call__(self, key: str, **params: object) -> str:
+        """按当前语言取一条消息；缺译时回退另一种语言。"""
+        return Translator(self.locale)(key, **params)
 
 
 class Translator:

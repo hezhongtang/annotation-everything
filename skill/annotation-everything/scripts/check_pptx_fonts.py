@@ -39,19 +39,6 @@ def set_locale(locale: str) -> None:
     _LOCALE = locale
 
 
-def explicit_locale(argv) -> object:
-    """从命令行里取出 --locale 的值；没写返回 None。"""
-    argv = list(argv or [])
-    for index, token in enumerate(argv):
-        if token == "--":
-            break
-        if token == "--locale":
-            return argv[index + 1] if index + 1 < len(argv) else ""
-        if token.startswith("--locale="):
-            return token.partition("=")[2]
-    return None
-
-
 class CheckError(Exception):
     pass
 
@@ -238,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # 先按共同契约定语言，再建解析器：帮助、参数说明与错误消息才能用同一种语言
     try:
-        set_locale(i18n.cli_locale(explicit_locale(argv)))
+        set_locale(i18n.cli_locale(i18n.explicit_locale(argv)))
     except i18n.LocaleError as exc:
         set_locale(i18n.DEFAULT_LOCALE)
         params = getattr(exc, "params", {}) or {}

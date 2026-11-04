@@ -19,35 +19,25 @@ import i18n  # noqa: E402
 MAX_SKILL_BYTES = 2 * 1024 * 1024
 MAX_FRONTMATTER = 32768
 
-# 当前界面语言：按共同契约从 AE_LOCALE 解析；未设置时保持中文（旧行为不变）
-_LOCALE = i18n.DEFAULT_LOCALE
+# 当前界面语言：按共同契约从 AE_LOCALE 解析；未设置时保持中文（旧行为不变）。
 # 调用方（ae.py）已经把 --locale、AE_LOCALE、审阅 locale 解析完时定好语言，
 # 之后不再被 AE_LOCALE 覆盖——否则同一进程里两种来源不一致，会出现中英混排
-_PINNED = False
+_UI = i18n.ModuleLocale()
 
 
 def T(key: str, **params: object) -> str:
     """按当前语言取一条消息；缺译时回退另一种语言（见 locales/README.md 的契约）。"""
-    return i18n.Translator(_LOCALE)(key, **params)
+    return _UI(key, **params)
 
 
 def set_locale(locale: object = None) -> None:
     """定界面语言。locale 为 None 时按 AE_LOCALE 重新解析；给了具体 locale 就定住。"""
-    global _LOCALE, _PINNED
-    if locale is None:
-        _PINNED = False
-        try:
-            _LOCALE = i18n.cli_locale(None)
-        except i18n.LocaleError:
-            _LOCALE = i18n.DEFAULT_LOCALE
-    else:
-        _LOCALE, _PINNED = str(locale), True
+    _UI.set(locale)
 
 
 def _refresh_locale() -> None:
     """没有外部定过语言时，才按 AE_LOCALE 刷新；非法选择保持中文，不让扫描失败。"""
-    if not _PINNED:
-        set_locale(None)
+    _UI.refresh()
 
 
 def _value(raw: str) -> str:
