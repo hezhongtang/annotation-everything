@@ -255,13 +255,55 @@ def review_overview_checks(browser, tmp: Path):
         invalid.click()
         ok("serve.py forget " in page.inner_text("#overviewDetail") and page.locator("#overviewDetail a").count() == 0,
            "失效审阅只能复制清理命令，不能打开")
+        current_id = json.loads((current / "review.json").read_text())["reviewId"]
+        page.click('[data-review-id="%s"]' % current_id)
+        archive_available = page.locator("#overviewArchive").count() == 1
+        ok(archive_available, "当前审阅详情提供归档操作")
+        if not archive_available:
+            return
+        page.click("#overviewArchive")
+        archived = wait_dom(page, "() => !document.getElementById('overviewArchiveBanner').hidden", 8,
+                            condition="归档当前审阅后显示总览横幅")
+        ok(archived, "归档当前审阅后总览显示已归档横幅")
+        if not archived:
+            return
+        ok(not page.is_checked("#overviewShowArchived") and page.is_visible("#overviewHiddenArchived")
+           and page.locator('[data-overview-group="archived"] [data-review-id]').count() == 0,
+           "已归档分组默认隐藏，只保留可展开提示")
+        page.click("#overviewExpandArchived")
+        ok(page.is_checked("#overviewShowArchived")
+           and page.locator('[data-overview-group="archived"] [data-review-id]').count() == 1,
+           "展开提示打开开关并显示已归档审阅")
+        page.uncheck("#overviewShowArchived")
+        page.click("#overviewBack")
+        viewer_banner = wait_dom(page, "() => !document.body.classList.contains('overview-mode') && !document.getElementById('archiveBanner').hidden", 5,
+                                 condition="回到已归档审阅后显示对照页横幅")
+        ok(viewer_banner and page.is_visible("#ntext"), "已归档对照页仍显示批注区和取消归档按钮")
+        page.click("#archiveUnarchive")
+        restored = wait_dom(page, "() => document.getElementById('archiveBanner').hidden && document.getElementById('overviewArchiveBanner').hidden", 8,
+                            condition="对照页取消归档后横幅消失")
+        ok(restored and not (current / ".annotation-archived").exists(), "对照页取消归档移除标记和两处横幅")
+        page.click("#overviewBtn")
+        page.click('[data-review-id="%s"]' % current_id)
+        page.click("#overviewArchive")
+        archived_again = wait_dom(page, "() => !document.getElementById('overviewArchiveBanner').hidden", 8,
+                                  condition="再次归档后可在总览撤销")
+        if archived_again:
+            page.click("#overviewUnarchive")
+        ok(archived_again and wait_dom(page, "() => document.getElementById('overviewArchiveBanner').hidden", 8,
+                                      condition="总览取消归档后横幅消失"),
+           "总览横幅也能取消归档")
         page.click("#overviewBack")
         returned = wait_dom(page, "() => document.getElementById('overview').hidden && !document.body.classList.contains('overview-mode')", 5,
                             condition="hashchange 后恢复当前审阅")
         ok(returned and page.is_visible("#ntext"), "返回当前审阅恢复批注界面")
         page.select_option("#localePick", "en")
         page.click("#overviewBtn")
-        ok(wait_dom(page, "() => document.getElementById('overview').textContent.includes('Review overview')", 5),
+        ok(wait_dom(page, """() => document.body.classList.contains('overview-mode')
+                   && !document.getElementById('overview').hidden
+                   && document.querySelector('#overviewDetail dt')?.textContent === 'Status'
+                   && document.querySelector('[data-overview-group="running"] h2')?.textContent.includes('Running')""", 5,
+                   condition="hashchange 后总览详情和分组已按英文重绘"),
            "英文界面的总览标题已翻译")
         visible = page.inner_text("#overview")
         ok(not any("\u4e00" <= char <= "\u9fff" for char in visible), "英文总览没有系统中文残留")
