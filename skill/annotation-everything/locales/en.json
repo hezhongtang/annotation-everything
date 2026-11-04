@@ -1473,6 +1473,22 @@
     "cli.notes.help.receiver.harness": "Receiver harness (or AE_HARNESS)",
     "cli.notes.help.receiver.session": "Receiver session identity (or AE_SESSION_ID)",
     "serve.err.overviewScope": "Overview scope must be workspace or all.",
-    "serve.check.overviewHost": "Overview rejects a forged Host ({status})"
+    "serve.check.overviewHost": "Overview rejects a forged Host ({status})",
+    "serve.err.overviewStartBody": "The start request must contain only a full reviewId.",
+    "serve.err.overviewStartUnknown": "This review is not in the local ledger. Refresh the overview.",
+    "serve.err.overviewStartInvalid": "The review directory or identity is invalid. Refresh the overview.",
+    "serve.err.overviewStartBusy": "The owned port is occupied. Free the port and retry.",
+    "serve.err.overviewStartFailed": "Unable to start this review on its owned port. Please retry.",
+    "viewer.overview.start": "Start and open",
+    "viewer.overview.starting": "Starting…",
+    "viewer.overview.startError": "Unable to start this review. Please retry.",
+    "viewer.overview.popupBlocked": "The browser could not open a new tab. Allow popups, then retry.",
+    "serve.check.overviewStartHost": "Review start rejects a forged Host ({status})",
+    "serve.check.overviewStartOrigin": "Review start rejects a forged Origin ({status})",
+    "serve.check.overviewStartNoOrigin": "Review start rejects a missing Origin ({status})",
+    "serve.check.overviewStartContentType": "Review start rejects non-JSON requests ({status})",
+    "serve.check.overviewStartCrossSite": "Review start rejects cross-site requests ({status})",
+    "serve.check.overviewStartUnknown": "Review start rejects an unregistered identity ({status})",
+    "serve.check.overviewStartNoProcess": "Rejected review start requests create no process"
   }
 }

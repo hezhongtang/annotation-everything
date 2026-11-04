@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -16,7 +17,9 @@ import threading
 import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
@@ -1807,6 +1810,234 @@ class OverviewTests(unittest.TestCase):
         self.assertNotIn("access-control-allow-origin", headers)
         self.assertEqual(status, 200, raw)
         return json.loads(raw)
+
+    def start_request(self, body, headers=None):
+        same = {**self.good, "Origin": f"http://127.0.0.1:{self.srv.port}",
+                "Content-Type": "application/json", "X-AE-Review": self.current["reviewId"]}
+        connection = http.client.HTTPConnection(serve.HOST, self.srv.port, timeout=12)
+        try:
+            connection.request("POST", "/api/overview/start", json.dumps(body),
+                               headers=same if headers is None else headers)
+            response = connection.getresponse()
+            self.assertIsNone(response.getheader("Access-Control-Allow-Origin"))
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    def stop_started_review(self, directory, rid):
+        info = serve.read_status(directory)
+        if not info:
+            return
+        port = info["port"]
+        found = serve.probe(port, timeout=0.2)
+        if found and found.get("reviewId") == rid and serve.same_dir(found, directory):
+            serve._req(port, "POST", "/api/server/stop",
+                       {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}",
+                        "Content-Type": "application/json", "X-AE-Review": rid}, {})
+            end = time.monotonic() + 5
+            while time.monotonic() < end and serve.pid_alive(info["pid"]):
+                time.sleep(0.02)
+
+    def test_starts_stopped_review_on_its_owned_port(self):
+        directory = self.workspace / "stopped"
+        rid = self.build(directory, "Stopped review")["reviewId"]
+        port = free_port()
+        ledger.claim_port(rid, directory, port)
+        self.addCleanup(self.stop_started_review, directory, rid)
+
+        status, result = self.start_request({"reviewId": rid})
+
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["app"], serve.APP)
+        self.assertEqual(result["url"], f"http://127.0.0.1:{port}/")
+        health = serve.probe(port)
+        self.assertEqual((health["reviewId"], health["dir"], health["port"]),
+                         (rid, str(directory.resolve()), port))
+        self.assertNotEqual(health["pid"], os.getpid())
+        self.assertEqual(ledger.get(rid)["port"], port)
+
+    def test_simultaneous_starts_share_one_background_process(self):
+        directory = self.workspace / "double-start"
+        rid = self.build(directory, "Double start review")["reviewId"]
+        port = free_port()
+        ledger.claim_port(rid, directory, port)
+        self.addCleanup(self.stop_started_review, directory, rid)
+        barrier = threading.Barrier(3)
+        results, errors = [], []
+
+        def start():
+            try:
+                barrier.wait(timeout=5)
+                results.append(self.start_request({"reviewId": rid}))
+            except Exception as error:
+                errors.append(error)
+
+        # Popen is the OS process boundary; the children and their ports stay real.
+        with patch.object(subprocess, "Popen", wraps=subprocess.Popen) as spawned:
+            threads = [threading.Thread(target=start) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            barrier.wait(timeout=5)
+            for thread in threads:
+                thread.join(timeout=10)
+            self.assertFalse(errors, errors)
+            self.assertEqual([status for status, _ in results], [200, 200], results)
+            again, opened = self.start_request({"reviewId": rid})
+            self.assertEqual((again, opened["url"]), (200, f"http://127.0.0.1:{port}/"))
+            self.assertEqual(spawned.call_count, 1, "并发点击和再次打开只创建一份后台服务")
+        self.assertEqual({result["url"] for _, result in results}, {opened["url"]})
+
+    def test_start_reuses_a_legacy_service_after_checking_its_health(self):
+        directory = self.workspace / "legacy"
+        rid = self.build(directory, "Legacy running review")["reviewId"]
+
+        class LegacyHandler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_GET(self):
+                body = json.dumps({"app": serve.APP, "version": "0.1.0", "reviewId": rid,
+                                   "dir": str(directory.resolve()), "port": self.server.server_port,
+                                   "pid": os.getpid()}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        legacy = ThreadingHTTPServer((serve.HOST, 0), LegacyHandler)
+        threading.Thread(target=legacy.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+        self.addCleanup(legacy.server_close)
+        self.addCleanup(legacy.shutdown)
+        ledger.claim_port(rid, directory, free_port())
+        (directory / serve.STATUS_FILE).write_text(json.dumps(
+            {"pid": os.getpid(), "port": legacy.server_port, "url": "http://evil.example/"}))
+
+        with patch.object(subprocess, "Popen", side_effect=AssertionError("must reuse legacy service")) as spawned:
+            status, result = self.start_request({"reviewId": rid})
+            self.assertEqual((status, result["url"]), (200, f"http://127.0.0.1:{legacy.server_port}/"))
+            spawned.assert_not_called()
+
+    def test_start_rejects_unknown_invalid_and_non_id_targets_without_a_process(self):
+        valid = self.workspace / "valid"
+        valid_id = self.build(valid, "Valid review")["reviewId"]
+        missing = self.workspace / "gone"
+        missing_id = self.build(missing, "Missing review")["reviewId"]
+        shutil.rmtree(missing)
+        mismatch = self.workspace / "replaced"
+        mismatch_id = self.build(mismatch, "Replaced review")["reviewId"]
+        (mismatch / "review.json").write_text(json.dumps({"reviewId": "f" * 16}))
+        no_index = self.workspace / "no-index"
+        no_index_id = self.build(no_index, "Incomplete review")["reviewId"]
+        (no_index / "index.html").unlink()
+        before = (ledger.home() / ledger.LEDGER_FILE).read_bytes()
+        cases = [(None, 400), ([], 400), ({}, 400), ({"reviewId": None}, 400),
+                 ({"reviewId": valid_id[:8]}, 400), ({"reviewId": "A" * 16}, 400),
+                 ({"reviewId": str(valid)}, 400), ({"reviewId": 8765}, 400),
+                 ({"reviewId": valid_id, "port": 9000}, 400),
+                 ({"reviewId": valid_id, "command": "serve.py"}, 400),
+                 ({"reviewId": "0" * 16}, 404), ({"reviewId": missing_id}, 409),
+                 ({"reviewId": mismatch_id}, 409), ({"reviewId": no_index_id}, 409)]
+        with patch.object(subprocess, "Popen", side_effect=AssertionError("rejected target spawned")) as spawned:
+            for body, expected in cases:
+                with self.subTest(body=body):
+                    status, result = self.start_request(body)
+                    self.assertEqual(status, expected, result)
+                    self.assertNotIn(str(self.workspace), result["error"])
+            spawned.assert_not_called()
+        self.assertEqual((ledger.home() / ledger.LEDGER_FILE).read_bytes(), before)
+        self.assertFalse((valid / serve.STATUS_FILE).exists())
+
+    def test_start_keeps_write_guards_before_creating_a_process(self):
+        directory = self.workspace / "guarded"
+        rid = self.build(directory, "Guarded review")["reviewId"]
+        same = {**self.good, "Origin": f"http://127.0.0.1:{self.srv.port}",
+                "Content-Type": "application/json", "X-AE-Review": self.current["reviewId"]}
+        cases = [({**same, "Host": "evil.example"}, 421, "bad-host"),
+                 ({key: value for key, value in same.items() if key != "Origin"}, 403, "no-origin"),
+                 ({**same, "Origin": "http://evil.example"}, 403, "bad-origin"),
+                 ({**same, "Origin": "null"}, 403, "bad-origin"),
+                 ({**same, "Content-Type": "text/plain"}, 415, "bad-content-type"),
+                 ({**same, "Sec-Fetch-Site": "same-site"}, 403, "cross-site"),
+                 ({**same, "X-AE-Review": rid}, 409, "review-mismatch")]
+        with patch.object(subprocess, "Popen", side_effect=AssertionError("unsafe request spawned")) as spawned:
+            for headers, expected, code in cases:
+                with self.subTest(headers=headers):
+                    status, result = self.start_request({"reviewId": rid}, headers)
+                    self.assertEqual((status, result["code"]), (expected, code), result)
+            spawned.assert_not_called()
+        self.assertIsNone(ledger.get(rid)["port"])
+
+    def test_start_refuses_an_occupied_owned_port_without_falling_back(self):
+        directory = self.workspace / "occupied"
+        rid = self.build(directory, "Occupied port review")["reviewId"]
+        with socket.socket() as blocker:
+            blocker.bind((serve.HOST, 0))
+            blocker.listen()
+            port = blocker.getsockname()[1]
+            ledger.claim_port(rid, directory, port)
+            with patch.object(subprocess, "Popen", side_effect=AssertionError("busy port spawned")) as spawned:
+                status, result = self.start_request({"reviewId": rid})
+                self.assertEqual((status, result["code"]), (409, "overview-port-busy"), result)
+                spawned.assert_not_called()
+        self.assertEqual(ledger.get(rid)["port"], port)
+        self.assertFalse((directory / serve.STATUS_FILE).exists())
+
+    def test_start_timeout_reaps_only_the_process_it_created(self):
+        directory = self.workspace / "timeout"
+        rid = self.build(directory, "Startup timeout review")["reviewId"]
+        port = free_port()
+        ledger.claim_port(rid, directory, port)
+        real_popen, children = subprocess.Popen, []
+
+        def start_unresponsive_child(_command, **options):
+            child = real_popen([sys.executable, "-c", "import time; time.sleep(30)"], **options)
+            children.append(child)
+            return child
+
+        def cleanup():
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=5)
+
+        self.addCleanup(cleanup)
+        with patch.object(subprocess, "Popen", side_effect=start_unresponsive_child):
+            status, result = self.start_request({"reviewId": rid})
+        self.assertEqual((status, result["code"]), (503, "overview-start-failed"), result)
+        self.assertEqual(len(children), 1)
+        self.assertIsNotNone(children[0].poll(), "启动超时必须回收本次子进程")
+        self.assertIsNone(serve.probe(port, timeout=0.2))
+        self.assertEqual(self.request("/api/health")["reviewId"], self.current["reviewId"])
+
+    def test_owned_port_taken_during_start_does_not_return_a_fallback_service(self):
+        directory = self.workspace / "port-race"
+        rid = self.build(directory, "Port race review")["reviewId"]
+        port = free_port()
+        ledger.claim_port(rid, directory, port)
+        real_popen, children = subprocess.Popen, []
+        with socket.socket() as blocker:
+            def take_port_then_start(command, **options):
+                blocker.bind((serve.HOST, port))
+                blocker.listen()
+                child = real_popen(command, **options)
+                children.append(child)
+                return child
+
+            def cleanup():
+                for child in children:
+                    if child.poll() is None:
+                        child.kill()
+                    child.wait(timeout=5)
+
+            self.addCleanup(cleanup)
+            with patch.object(subprocess, "Popen", side_effect=take_port_then_start):
+                status, result = self.start_request({"reviewId": rid})
+            self.assertEqual((status, result["code"]), (503, "overview-start-failed"), result)
+            self.assertEqual(len(children), 1)
+            self.assertIsNotNone(children[0].poll(), "专属端口被抢占时回收本次启动的进程")
+            self.assertEqual(blocker.getsockname(), (serve.HOST, port), "没有停止占用专属端口的程序")
+        self.assertEqual(ledger.get(rid)["port"], port)
+        self.assertFalse((directory / serve.STATUS_FILE).exists())
 
     def test_workspace_and_machine_scope_keep_paths_private(self):
         self.build(self.workspace / "second", "Second review")
