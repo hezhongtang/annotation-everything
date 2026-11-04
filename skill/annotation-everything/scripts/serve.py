@@ -69,8 +69,8 @@ VERSION = "0.10.0"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
 FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding"]
 
-# 当前界面语言：main() 与 serve() 按共同契约解析后设置；未设置前保持中文（旧调用行为不变）
-_LOCALE = i18n.DEFAULT_LOCALE
+# 界面语言只有进程级一个来源（见 i18n.set_locale）：main() 与 serve() 按共同契约解析后
+# 设置一次，服务与台账等各模块共同遵循；未设置前保持中文（旧调用行为不变）
 
 # 本入口的 CLI 消息 key 表：argparse 报错类别与语言选择问题 → 消息 key
 ERROR_KEYS = {
@@ -86,13 +86,12 @@ ERROR_KEYS = {
 
 def T(key: str, **params: object) -> str:
     """按当前语言取一条消息；缺译时回退另一种语言（见 locales/README.md 的契约）。"""
-    return i18n.Translator(_LOCALE)(key, **params)
+    return i18n.T(key, **params)
 
 
 def set_locale(locale: str) -> None:
-    global _LOCALE
-    _LOCALE = locale
-    ledger.set_locale(locale)   # 台账错误也用同一种语言，免得中英混排
+    """薄转发：定进程级界面语言。台账等模块的错误因此也用同一种语言，不会中英混排。"""
+    i18n.set_locale(locale)
 
 
 def stored_locale(review_dir) -> object:
@@ -709,7 +708,7 @@ def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
             continue
         try:
             return ReviewServer(review_dir, p, debug=debug, on_handoff=on_handoff,
-                                locale=locale or _LOCALE), None, notes
+                                locale=locale or i18n.current_locale()), None, notes
         except OSError as e:
             notes.append(T("serve.bind.failed", port=p, detail=e.strerror or e))
     return None, None, notes
@@ -833,7 +832,7 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         return 2
     try:
         server, running_url, trail = bind(review_dir, first, debug, on_handoff=on_handoff, avoid=avoid,
-                                          locale=_LOCALE)
+                                          locale=i18n.current_locale())
     except StaleServer as e:
         print(T("serve.serve.stale", detail=e), file=sys.stderr)
         return 6
@@ -1147,7 +1146,7 @@ def check(locale: str | None = None) -> int:
     try:
         (tmp / "index.html").write_text("<!doctype html><title>check</title><script>var ok=1</script>ok", encoding="utf-8")
         (tmp / MANIFEST).write_text(json.dumps({"reviewId": "checkreview"}), encoding="utf-8")
-        srv = ReviewServer(tmp, 0, log_to_file=True, locale=_LOCALE)
+        srv = ReviewServer(tmp, 0, log_to_file=True, locale=i18n.current_locale())
         port = srv.port
         t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
         t.start()
@@ -1242,7 +1241,7 @@ def check(locale: str | None = None) -> int:
            T("serve.check.stopFromPage"))
         srv.shutdown()
         srv.server_close()
-        srv2 = ReviewServer(tmp, 0, log_to_file=True, locale=_LOCALE)
+        srv2 = ReviewServer(tmp, 0, log_to_file=True, locale=i18n.current_locale())
         t2 = threading.Thread(target=srv2.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
         t2.start()
         s, _, b = _req(srv2.port, "GET", "/api/notes", {"Host": f"127.0.0.1:{srv2.port}"})
@@ -1288,7 +1287,7 @@ def main(argv: list[str] | None = None) -> int:
     # 子命令也可以写在 --locale 之后：认子命令前先剥掉开头这个选项
     rest = argv[2:] if argv[:1] == ["--locale"] else (argv[1:] if argv[:1] and argv[0].startswith("--locale=") else argv)
     if rest[:1] == ["check"]:
-        return check(locale=_LOCALE)
+        return check(locale=i18n.current_locale())
     if rest[:1] == ["status"]:
         ap = i18n.LocalizedParser(prog="serve.py status", add_help=False,
                                   keys=ERROR_KEYS, translate=T)
@@ -1299,17 +1298,17 @@ def main(argv: list[str] | None = None) -> int:
         d = resolve_arg(a.dir)
         # 目录解析出来后还有一级兜底：审阅里保存的 locale
         set_locale(cli_locale(locale_choice, d))
-        return status(d, locale=_LOCALE)
+        return status(d, locale=i18n.current_locale())
     if rest[:1] == ["list"]:
         ap = i18n.LocalizedParser(prog="serve.py list", add_help=False, description=T("serve.desc.list"),
                                   keys=ERROR_KEYS, translate=T)
         _add_help(ap)
         _add_locale(ap)
-        ap.add_argument("--under", type=Path, metavar="目录" if _LOCALE == "zh-CN" else "DIR",
+        ap.add_argument("--under", type=Path, metavar="目录" if i18n.current_locale() == "zh-CN" else "DIR",
                         help=T("serve.opt.under"))
         ap.add_argument("--json", action="store_true", help=T("serve.opt.json"))
         a = ap.parse_args(rest[1:])
-        return list_reviews(a.under, a.json, locale=_LOCALE)
+        return list_reviews(a.under, a.json, locale=i18n.current_locale())
     if rest[:1] == ["forget"]:
         ap = i18n.LocalizedParser(prog="serve.py forget", add_help=False, description=T("serve.desc.forget"),
                                   keys=ERROR_KEYS, translate=T)
@@ -1317,7 +1316,7 @@ def main(argv: list[str] | None = None) -> int:
         _add_locale(ap)
         ap.add_argument("key", help=T("serve.opt.key"))
         a = ap.parse_args(rest[1:])
-        return forget(a.key, locale=_LOCALE)
+        return forget(a.key, locale=i18n.current_locale())
     argv = rest[1:] if rest[:1] == ["serve"] else rest
     ap = i18n.LocalizedParser(prog="serve.py", add_help=False, description=T("serve.desc"),
                               keys=ERROR_KEYS, translate=T)
@@ -1328,14 +1327,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--claim-port", type=int, metavar="N", help=T("serve.opt.claimPort"))
     ap.add_argument("--no-open", action="store_true", help=T("serve.opt.noOpen"))
     ap.add_argument("--debug", action="store_true", help=T("serve.opt.debug"))
-    ap.add_argument("--on-handoff", metavar="命令" if _LOCALE == "zh-CN" else "COMMAND",
+    ap.add_argument("--on-handoff", metavar="命令" if i18n.current_locale() == "zh-CN" else "COMMAND",
                     help=T("serve.opt.onHandoff"))
     a = ap.parse_args(argv)
     d = resolve_arg(a.dir)
     # 目录解析出来后还有一级兜底：审阅里保存的 locale
     set_locale(cli_locale(locale_choice, d))
     return serve(d, a.port, not a.no_open, a.debug, parse_hook(a.on_handoff),
-                 claim=a.claim_port, locale=_LOCALE)
+                 claim=a.claim_port, locale=i18n.current_locale())
 
 
 if __name__ == "__main__":

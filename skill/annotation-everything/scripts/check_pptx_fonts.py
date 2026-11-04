@@ -25,8 +25,8 @@ MAX_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_PARTS = 3000
 TOOL_TIMEOUT = 10
 
-# 当前界面语言：main() 按共同契约解析后设置；未设置前保持中文（旧调用行为不变）
-_LOCALE = i18n.DEFAULT_LOCALE
+# 界面语言只有进程级一个来源（见 i18n.set_locale）：main() 按共同契约解析后设置一次；
+# 未设置前保持中文（旧调用行为不变）
 
 # 本入口的 CLI 消息 key 表：argparse 报错类别与语言选择问题 → 消息 key。
 # 这里没有带 choices 的参数，argparse 不会报「非法选项」，这一类就不列，让它退回
@@ -43,12 +43,12 @@ ERROR_KEYS = {
 
 def T(key: str, **params: object) -> str:
     """按当前语言取一条消息；缺译时回退另一种语言（见 locales/README.md 的契约）。"""
-    return i18n.Translator(_LOCALE)(key, **params)
+    return i18n.T(key, **params)
 
 
 def set_locale(locale: str) -> None:
-    global _LOCALE
-    _LOCALE = locale
+    """薄转发：定进程级界面语言。"""
+    i18n.set_locale(locale)
 
 
 class CheckError(Exception):
