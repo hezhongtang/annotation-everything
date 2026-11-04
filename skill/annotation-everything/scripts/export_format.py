@@ -53,6 +53,13 @@ HEAD_NOTE = "报告上的标注：标点是一个点，框选是一块区域；�
 HEAD_NOTE_EN = ("Marks on the report: a pin is a point and a region is a box; coordinates are percentages "
                 "from the top-left corner of the page (x across, y down, width, height).")
 
+# 中文标注格式（标点、框选）与风格标签：导出 Markdown 与 notes.py show 的阅读输出共用这一份定义
+# （show 的中文侧从这里取，英文侧仍走界面词典）。改这里的间距或标点会同时改变两边，正是目的：
+# 代理对照着读导出内容时，看到的标注写法与 show 里完全一致。
+PIN_ZH = "·标点 {no}（x {x}%，y {y}%）"
+REGION_ZH = "·框选 {no}（x {x}%，y {y}%，宽 {w}%，高 {h}%）"
+STYLE_LABEL_ZH = {"page": "整页", "pin": "标点处", "region": "框选处"}
+
 # 对象为空时的固定字面量：文法的一部分，两种语言一样，导入时原样成为 target（与 0.3 以来一致）
 UNSET_TARGET = "未指定"
 
@@ -208,12 +215,12 @@ class Grammar:
         if note.get("pin"):
             p = note["pin"]
             out += (f" · Pin {no} (x {p['x']}%, y {p['y']}%)" if self.lang == "en"
-                    else f"·标点 {no}（x {p['x']}%，y {p['y']}%）")
+                    else PIN_ZH.format(no=no, x=p["x"], y=p["y"]))
         rg = store.region_of(note)
         if rg:
             out += (f" · Region {no} (x {rg.get('x')}%, y {rg.get('y')}%, w {rg.get('w')}%, h {rg.get('h')}%)"
                     if self.lang == "en"
-                    else f"·框选 {no}（x {rg.get('x')}%，y {rg.get('y')}%，宽 {rg.get('w')}%，高 {rg.get('h')}%）")
+                    else REGION_ZH.format(no=no, **{k: rg.get(k) for k in ("x", "y", "w", "h")}))
         return f"[{out}]" if self.lang == "en" else f"【{out}】"
 
     def head(self, *, title: str, total: int, open_count: int, pages: int, exported_at: str) -> list[str]:
@@ -254,7 +261,7 @@ class Grammar:
         """只写范围标签；坐标已在标题行里（0.3 那种「区域（x…）」写法只读不写）。"""
         scope = str(style.get("scope") or "page")
         label = STYLE_EN.get(scope, "Whole page") if self.lang == "en" else \
-            {"page": "整页", "pin": "标点处", "region": "框选处"}.get(scope, "整页")
+            STYLE_LABEL_ZH.get(scope, "整页")
         return f"   Style: {label}" if self.lang == "en" else f"   风格优化：{label}"
 
     def anchor_line(self, anchor: str) -> str:
