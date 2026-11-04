@@ -103,6 +103,12 @@ def report_metadata(directory: Path, review_id: str) -> dict[str, Any]:
     if not isinstance(purpose, str) or not isinstance(audience, str) \
             or not isinstance(questions, list) or any(not isinstance(q, str) for q in questions):
         return metadata
+    # JSON 能解码孤立 UTF-16 代理，但总览响应必须是有效 UTF-8。
+    try:
+        for text in (record.get("summary", ""), purpose, audience, *questions):
+            text.encode("utf-8")
+    except UnicodeEncodeError:
+        return metadata
     metadata.update(summary=record.get("summary", ""), purpose=purpose,
                     audience=audience, coreQuestions=questions)
     return metadata
