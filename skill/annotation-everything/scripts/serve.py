@@ -407,6 +407,7 @@ class Handler(BaseHTTPRequestHandler):
     def _ident(self) -> dict[str, Any]:
         # name：审阅名。别的审阅的旧标签页连到这个端口时，据此告诉用户「这里现在是哪一份」（无 CORS 头，只有同源页面读得到）
         return {"app": APP, "reviewId": self.server.review_id(), "name": self.server.review_name(),
+                "archived": review_overview.is_archived(self.server.review_dir),
                 "version": VERSION, "features": FEATURES,
                 "receiver": wakeup.receiver_status(self.server.review_dir, self.server.agent_binding)}
 
@@ -530,6 +531,18 @@ class Handler(BaseHTTPRequestHandler):
                 raise Reject(400, "bad-overview-start", self._t("serve.err.overviewStartBody"))
             url = start_overview_review(body["reviewId"], self._t)
             self._json(200, {"app": APP, "url": url})
+        elif path == "/api/overview/archive" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            target, archived = body.get("reviewId"), body.get("archived")
+            if not isinstance(target, str) or not ledger.RID.fullmatch(target) or not isinstance(archived, bool):
+                raise Reject(400, "bad-archive", self._t("serve.err.archivePayload"))
+            entry = ledger.get(target)
+            if entry is None:
+                raise Reject(404, "archive-unknown", self._t("serve.err.archiveUnknown"))
+            if ledger.entry_state(target, entry) != "ok":
+                raise Reject(409, "archive-unavailable", self._t("serve.err.archiveUnavailable"))
+            review_overview.set_archived(Path(entry["dir"]), archived)
+            self._json(200, {"app": APP, "reviewId": target, "archived": archived})
         else:
             raise Reject(404 if cmd == "GET" else 405, "no-api", self._t("serve.err.noApi"))
 
@@ -1027,6 +1040,7 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
     """台账里一份审阅的现场状态。审阅名、运行与提交状态都从审阅目录现读。"""
     d = Path(e["dir"])
     row: dict[str, Any] = {"reviewId": rid, "dir": str(d), "port": e.get("port"), "name": None, "state": None,
+                           "archived": review_overview.is_archived(d),
                            "state_id": None,
                            "running": None, "pending": 0, "review": 0, "waiting": False, "hook": False, "unattended": False,
                            "agentDelivery": None, "receiptConfirmed": None}
@@ -1111,9 +1125,12 @@ def list_reviews(under: Path | None, as_json: bool, locale: str | None = None) -
         sub = T("serve.msg.listSeparator").join(x for x in parts if x) or T("serve.msg.noPending")
         who = (T("serve.msg.agentWaiting") if r["waiting"]
                else T("serve.msg.hook") if r["hook"] else T("serve.msg.nobodyWaiting"))
+        state = _state_label(r)
+        if r["archived"]:
+            state += " · " + T("serve.msg.archived")
         print(T("serve.msg.reviewHead", rid=r['reviewId'][:8], name=r['name'] or T("serve.msg.unknownName")))
         print(T("serve.msg.reviewLine", port=r['port'] or T("serve.msg.noPort"),
-                state=_state_label(r), sub=sub, who=who))
+                state=state, sub=sub, who=who))
         print(T("serve.msg.reviewDir", dir=r['dir']))
         if r["unattended"]:
             print(T("serve.msg.unattended",
@@ -1239,6 +1256,16 @@ def check(locale: str | None = None) -> int:
             ok(s == 404 and json.loads(raw).get("code") == "overview-review-unknown",
                T("serve.check.overviewStartUnknown", status=s))
             ok(spawned.call_count == 0, T("serve.check.overviewStartNoProcess"))
+
+        archive = {"reviewId": "0" * 16, "archived": True}
+        s, _, _ = _req(port, "POST", "/api/overview/archive", {**same, "Host": f"evil.example:{port}"}, archive)
+        ok(s == 421, T("serve.check.archiveHost", status=s))
+        s, _, _ = _req(port, "POST", "/api/overview/archive", {**same, "Origin": "http://evil.example"}, archive)
+        ok(s == 403, T("serve.check.archiveOrigin", status=s))
+        s, _, _ = _req(port, "POST", "/api/overview/archive", {k: v for k, v in same.items() if k != "Origin"}, archive)
+        ok(s == 403, T("serve.check.archiveNoOrigin", status=s))
+        s, _, _ = _req(port, "POST", "/api/overview/archive", {**same, "Content-Type": "text/plain"}, archive)
+        ok(s == 415, T("serve.check.archiveContentType", status=s))
         s, _, _ = _req(port, "POST", "/api/notes", {**same, "Origin": "http://evil.example"}, {"page": 1, "text": "x"})
         ok(s == 403, T("serve.check.badOrigin", status=s))
         s, _, _ = _req(port, "POST", "/api/notes", {**same, "Origin": "null"}, {"page": 1, "text": "x"})

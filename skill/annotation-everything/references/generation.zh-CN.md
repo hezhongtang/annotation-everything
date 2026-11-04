@@ -63,6 +63,7 @@
 {
   "schema": "ae-report-record/1",
   "generatedAt": "2026-11-02T09:00:00+08:00",
+  "summary": "三季度收入增长主要来自新店，外卖占比上升与原料涨价挤压毛利。四季度需优先改善老店坪效。",
   "request": {"purpose": "季度经营汇报", "audience": "管理层",
               "coreQuestions": ["收入为什么增长"], "length": "6 页", "script": "yes"},
   "sources": [{"path": "materials/q3.md", "status": "read", "coverage": "全文",
@@ -126,6 +127,7 @@
 
 字段语义：
 
+- `summary`：新生成的报告必须写一两句摘要，概括报告内容和要解决的问题，供审阅总览识别报告。值必须是字符串；兼容旧记录时可省略，schema 仍为 `ae-report-record/1`。总览同时显示 `request.purpose`、`request.audience` 和 `request.coreQuestions`；没有摘要时显示「（无摘要）」和封面页标题。
 - `request`：第 0 步的需求；问过的与沿用的都写。
 - `sources`：第 1 步的读取登记；`status` 用 `read` / `partial` / `unreadable`；`coverage` 写实际读到的范围，`partial` 必须同时写明已读与未读部分；`partial` / `unreadable` 必须写 `reason`；**`path` 相对报告所在目录解析**——核验入口按报告所在目录找材料文件核对哈希；`locations` 列定位线索（PDF 页码、Word 段落、工作表与单元格）；`sha256` 用 `sha256sum` 或等价方式算材料内容哈希——核验入口用它发现材料事后变化，材料改了旧核验结果就不再算数。**全部实质材料都 `unreadable` 时初稿不能算完成**，核验入口会判 `record.reading` 未通过。
 - `method`：实际生成方法；`kind` 用 `builtin` / `external`（封闭枚举），`name` 写实际采用的方法名，`version` 写可得的版本信息。外部技能必须写 `invocation`（怎么调用的、产物从哪来——扫描到候选或名称出现不算采用，缺它核验入口会判 `record.method` 失败）；用户指定但未实际采用的技能写 `requested` 与 `note`（原因）；能力缺口写 `unavailable`。核验入口核对这些声明并把方法信息带进摘要与结构化结果。外部技能示例：`{"kind": "external", "name": "synthetic-brief-kit", "version": "1.4.2", "invocation": "运行其 scripts/make_report.py 生成", "unavailable": []}`。

@@ -182,7 +182,11 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 /* 审阅总览：沿用方案 C 的左侧列表与右侧详情。 */
 .overview-entry{font:inherit;font-size:13px;color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.35);border-radius:6px;padding:5px 10px}
 .overview-entry:focus-visible,#overview button:focus-visible,#overview a:focus-visible{outline:3px solid var(--ae-accent);outline-offset:3px}
-body.overview-mode>header,body.overview-mode>#srvBar,body.overview-mode>#resume,body.overview-mode>nav,body.overview-mode>main{display:none}
+body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#srvBar,body.overview-mode>#resume,body.overview-mode>nav,body.overview-mode>main{display:none}
+.archive-banner{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 24px;background:#fff7e7;border-bottom:1px solid #ebd6ac;color:#79501e;font-size:13px;line-height:1.7}
+.archive-banner[hidden]{display:none}
+.archive-banner button{font:inherit;white-space:nowrap;border:1px solid #d6b67e;border-radius:6px;padding:5px 10px;background:#fff;color:inherit;cursor:pointer}
+.archive-banner button:disabled{opacity:.55;cursor:default}
 #overview{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
 #overview[hidden]{display:none}
 .overview-top{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:14px 24px;background:var(--ae-panel);border-bottom:1px solid var(--ae-line);position:sticky;top:0;z-index:4}
@@ -190,6 +194,8 @@ body.overview-mode>header,body.overview-mode>#srvBar,body.overview-mode>#resume,
 #overview button,#overview select,#overview .overview-open{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:7px 12px;background:#fff;color:var(--ae-ink);cursor:pointer}
 #overview button:disabled{opacity:.55;cursor:default}
 .overview-top select{max-width:100%}
+.overview-archive-toggle{display:flex;align-items:center;gap:6px;font-size:13px;white-space:nowrap}
+.overview-archive-toggle input{margin:0;accent-color:var(--ae-accent)}
 .overview-body{width:100%;max-width:1240px;margin:0 auto;padding:24px;display:grid;grid-template-columns:340px minmax(0,1fr);gap:22px;align-items:start}
 .overview-list{border:1px solid var(--ae-line);border-radius:10px;overflow:hidden;background:var(--ae-panel)}
 .overview-group h2{margin:0;background:#f6f8fb;border-bottom:1px solid var(--ae-line);padding:10px 14px;font-size:12px;font-weight:600;color:var(--ae-mut)}
@@ -199,18 +205,25 @@ body.overview-mode>header,body.overview-mode>#srvBar,body.overview-mode>#resume,
 #overview .overview-row[aria-pressed=true]{background:#eaf2fd;box-shadow:inset 3px 0 0 var(--ae-accent)}
 .overview-row-title{display:flex;align-items:baseline;gap:7px;overflow-wrap:anywhere;font-weight:600;line-height:1.6}
 .overview-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#8b93a0;flex:none;align-self:center}
-.overview-dot.running{background:var(--ae-green)}.overview-dot.invalid{background:var(--ae-red)}
+.overview-dot.running{background:var(--ae-green)}.overview-dot.invalid{background:var(--ae-red)}.overview-dot.archived{background:#ad7b30}
 .overview-row-meta{display:flex;gap:6px 12px;flex-wrap:wrap;color:var(--ae-mut);font-size:12px;line-height:1.6;margin-top:4px}
 .overview-current{font-size:11px;font-weight:400;color:var(--ae-accent);border:1px solid #b8d4f6;border-radius:4px;padding:0 4px;white-space:nowrap}
 .overview-detail{background:var(--ae-panel);border:1px solid var(--ae-line);border-radius:12px;padding:24px;min-width:0;position:sticky;top:86px;overflow-wrap:anywhere}
 .overview-detail h2{margin:0 0 8px;font-size:21px;line-height:1.5;color:var(--ae-navy)}
 .overview-identity{font-size:12px;color:var(--ae-mut);line-height:1.7;margin-bottom:16px}
+.overview-metadata{padding:16px 0;border-top:1px solid var(--ae-line);border-bottom:1px solid var(--ae-line)}
+.overview-metadata h3{font-size:12px;font-weight:600;color:var(--ae-mut);margin:0 0 8px}
+.overview-summary{font-size:15px;line-height:1.8;margin:0;white-space:pre-wrap}
+.overview-empty-summary{color:var(--ae-mut)}
+.overview-questions{margin:0;padding-left:20px}
 .overview-detail dl{display:grid;grid-template-columns:95px minmax(0,1fr);gap:10px 14px;margin:18px 0;font-size:14px;line-height:1.7}
+.overview-metadata dl{margin-bottom:0}
 .overview-detail dt{color:var(--ae-mut)}.overview-detail dd{margin:0}
 .overview-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:20px;padding-top:16px;border-top:1px solid var(--ae-line)}
 #overview .overview-open{text-decoration:none;display:inline-block;background:var(--ae-accent);color:#fff;border-color:var(--ae-accent)}
 .overview-command{display:block;max-width:100%;padding:9px 12px;border:1px solid var(--ae-line);border-radius:6px;background:#f6f8fb;font-size:13px;user-select:all;overflow-wrap:anywhere}
 .overview-message{color:var(--ae-mut);padding:18px;font-size:14px;line-height:1.7;margin:0}
+.overview-archived-hidden{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;font-size:13px;color:var(--ae-mut);border-bottom:1px solid var(--ae-line)}
 #overviewError{color:#9b2c1f}.overview-count{font-weight:400;margin-left:6px}
 @media(max-width:800px){.overview-body{grid-template-columns:minmax(0,1fr);padding:14px;gap:14px}.overview-top{padding:12px 14px;gap:10px}.overview-detail{position:static}.overview-detail dl{grid-template-columns:80px minmax(0,1fr)}}
 </style></head><body>
@@ -239,6 +252,10 @@ body.overview-mode>header,body.overview-mode>#srvBar,body.overview-mode>#resume,
     </select>
   </label>
 </header>
+<div id="archiveBanner" class="archive-banner" role="status" hidden>
+  <span data-msg="viewer.overview.archiveNotice"></span>
+  <button id="archiveUnarchive" type="button" data-msg="viewer.overview.unarchive"></button>
+</div>
 <section id="overview" hidden data-aria="viewer.overview.title">
   <div class="overview-top">
     <h1 id="overviewTitle" data-msg="viewer.overview.title"></h1>
@@ -246,8 +263,13 @@ body.overview-mode>header,body.overview-mode>#srvBar,body.overview-mode>#resume,
       <option value="workspace" data-msg="viewer.overview.workspace"></option>
       <option value="all" data-msg="viewer.overview.all"></option>
     </select>
+    <label class="overview-archive-toggle"><input id="overviewShowArchived" type="checkbox"><span data-msg="viewer.overview.showArchived"></span></label>
     <button id="overviewRefresh" data-msg="viewer.overview.refresh"></button>
     <button id="overviewBack" data-msg="viewer.overview.back"></button>
+  </div>
+  <div id="overviewArchiveBanner" class="archive-banner" role="status" hidden>
+    <span data-msg="viewer.overview.archiveNotice"></span>
+    <button id="overviewUnarchive" type="button" data-msg="viewer.overview.unarchive"></button>
   </div>
   <p id="overviewError" class="overview-message" role="alert" hidden></p>
   <div class="overview-body">
@@ -477,6 +499,7 @@ function applyLocale(){
   if($("allnotes").classList.contains("on"))renderOrphans();
   updateStray();
   refreshPinPop();
+  renderArchiveBanners();
   renderOverview();
 }
 $("localePick").addEventListener("change",()=>{
@@ -738,6 +761,7 @@ async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}cat
 function applyServer(d){
   agentDelivery=d.agentDelivery||null;
   receiver=d.receiver||null;
+  if(!archiveBusy)setCurrentArchive(d.archived);
   const old=!hasFeature(d,"marks");if(old&&!srvOld)toast(tMsg("viewer.mode.oldTitle"),9000);srvOld=old;
   srvNoStages=!hasFeature(d,"stages");
   srvNoFullCheck=!hasFeature(d,"full-check");stopServiceSupported=hasFeature(d,"stop-service");updateMode();
@@ -1756,8 +1780,20 @@ document.addEventListener("keydown",e=>{
 // ---------- 审阅总览（同一个 index.html 的 #overview 视图） ----------
 let overviewData=null,overviewSelected=null,overviewRequest=0,overviewLoading=false;
 const overviewStarting=new Set(),overviewStartFailures=new Map();
+let currentArchived=false,archiveBusy=false;
+function renderArchiveBanners(){
+  ["archiveBanner","overviewArchiveBanner"].forEach(id=>{$(id).hidden=!currentArchived});
+  ["archiveUnarchive","overviewUnarchive"].forEach(id=>{const button=$(id);button.disabled=archiveBusy||FILE;button.textContent=tMsg(archiveBusy?"viewer.overview.archiveUpdating":"viewer.overview.unarchive")});
+}
+function setCurrentArchive(value){
+  const archived=value===true;
+  if(currentArchived!==archived){currentArchived=archived;renderArchiveBanners()}
+}
 function overviewShown(){return location.hash==="#overview"}
-function overviewState(row){return row.state==="running"||row.state==="running-temp"?"running":row.state==="stopped"?"stopped":"invalid"}
+function overviewState(row){
+  if(!["running","running-temp","stopped"].includes(row.state))return "invalid";
+  return row.archived?"archived":row.state==="stopped"?"stopped":"running";
+}
 function overviewStateLabel(row){return tMsg("viewer.overview."+overviewState(row))}
 function overviewTime(value){
   if(typeof value!=="number"||!Number.isFinite(value)||value<=0)return tMsg("viewer.overview.noActivity");
@@ -1770,12 +1806,14 @@ function renderOverview(){
   if(!overviewData){$("overviewList").innerHTML=`<p class="overview-message">${escH(tMsg(FILE?"viewer.overview.needService":"viewer.overview.loading"))}</p>`;$("overviewDetail").textContent="";return}
   const rows=overviewData.reviews||[];
   if(!rows.some(row=>row.reviewId===overviewSelected))overviewSelected=(rows.find(row=>row.current)||rows[0]||{}).reviewId;
-  $("overviewList").innerHTML=["running","stopped","invalid"].map(state=>{
+  $("overviewList").innerHTML=["running","stopped","archived","invalid"].map(state=>{
     const group=rows.filter(row=>overviewState(row)===state).sort((a,b)=>(b.lastActivity||0)-(a.lastActivity||0));
     if(!group.length)return "";
+    if(state==="archived"&&!$("overviewShowArchived").checked)return `<section class="overview-archived-hidden" data-overview-group="archived"><span id="overviewHiddenArchived">${escH(tMsg("viewer.overview.hiddenArchived",{count:group.length}))}</span><button id="overviewExpandArchived">${escH(tMsg("viewer.overview.expandArchived"))}</button></section>`;
     return `<section class="overview-group" data-overview-group="${state}"><h2>${escH(tMsg("viewer.overview."+state))}<span class="overview-count">${group.length}</span></h2>`+group.map(row=>
       `<button class="overview-row" data-review-id="${escH(row.reviewId)}" aria-pressed="${row.reviewId===overviewSelected}"><span class="overview-row-title"><span class="overview-dot ${state}" aria-hidden="true"></span><span>${escH(row.name||row.reviewId.slice(0,8))}</span>${row.current?`<span class="overview-current">${escH(tMsg("viewer.overview.current"))}</span>`:""}</span><span class="overview-row-meta"><span>${escH(overviewTime(row.lastActivity))}</span><span>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}</span><span>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</span></span></button>`).join("")+"</section>";
   }).join("")||`<p class="overview-message">${escH(tMsg("viewer.overview.empty"))}</p>`;
+  const expand=$("overviewExpandArchived");if(expand)expand.onclick=()=>{$("overviewShowArchived").checked=true;renderOverview()};
   const row=rows.find(row=>row.reviewId===overviewSelected);
   if(!row){$("overviewDetail").innerHTML=`<p class="overview-message">${escH(tMsg("viewer.overview.select"))}</p>`;return}
   const invalid=overviewState(row)==="invalid";
@@ -1785,10 +1823,21 @@ function renderOverview(){
     :!invalid&&row.state==="stopped"?`<button id="overviewStart" class="overview-open" ${starting?"disabled":""}>${escH(tMsg(starting?"viewer.overview.starting":"viewer.overview.start"))}</button>`
     :!invalid&&url?`<a class="overview-open" href="${escH(url)}" target="_blank" rel="noopener noreferrer">${escH(tMsg("viewer.overview.open"))}</a>`:"";
   const forget=invalid&&typeof row.forgetCommand==="string"?`<code class="overview-command">${escH(row.forgetCommand)}</code><button id="overviewForgetCopy">${escH(tMsg("viewer.overview.copyCommand"))}</button>`:"";
+  const summary=typeof row.summary==="string"&&row.summary.trim()?`<span lang="">${escH(row.summary)}</span>`
+    :`<span class="overview-empty-summary">${escH(tMsg("viewer.overview.noSummary"))}</span>${typeof row.coverTitle==="string"&&row.coverTitle?` <span lang="">${escH(row.coverTitle)}</span>`:""}`;
+  const purpose=typeof row.purpose==="string"?row.purpose:"",audience=typeof row.audience==="string"?row.audience:"";
+  const questions=Array.isArray(row.coreQuestions)?row.coreQuestions.filter(q=>typeof q==="string"&&q.trim()):[];
+  const problems=(purpose?`<dt>${escH(tMsg("viewer.overview.purpose"))}</dt><dd lang="">${escH(purpose)}</dd>`:"")
+    +(audience?`<dt>${escH(tMsg("viewer.overview.audience"))}</dt><dd lang="">${escH(audience)}</dd>`:"")
+    +(questions.length?`<dt>${escH(tMsg("viewer.overview.coreQuestions"))}</dt><dd lang=""><ul class="overview-questions">${questions.map(q=>`<li>${escH(q)}</li>`).join("")}</ul></dd>`:"");
+  const metadata=`<section class="overview-metadata"><h3>${escH(tMsg("viewer.overview.summary"))}</h3><p class="overview-summary">${summary}</p>${problems?`<dl>${problems}</dl>`:""}</section>`;
+  const archive=invalid?"":`<button id="overviewArchive"${archiveBusy?" disabled":""}>${escH(tMsg(archiveBusy?"viewer.overview.archiveUpdating":row.archived?"viewer.overview.unarchive":"viewer.overview.archive"))}</button>`;
   $("overviewDetail").innerHTML=`<h2>${escH(row.name||row.reviewId.slice(0,8))}</h2><div class="overview-identity"><span>${escH(row.reviewId.slice(0,8))}</span><br><span>${escH(row.path||"")}</span></div>
+    ${metadata}
     <dl><dt>${escH(tMsg("viewer.overview.status"))}</dt><dd>${escH(overviewStateLabel(row))}</dd><dt>${escH(tMsg("viewer.overview.submissions"))}</dt><dd>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}<br>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</dd><dt>${escH(tMsg("viewer.overview.activity"))}</dt><dd>${escH(overviewTime(row.lastActivity))}</dd><dt>${escH(tMsg("viewer.overview.port"))}</dt><dd>${escH(row.port||"—")}${row.running&&row.running!==row.port?" · "+escH(tMsg("viewer.overview.actualPort",{port:row.running})):""}</dd></dl>
-    <div class="overview-actions">${invalid?forget:action}</div>${startFailure?`<p id="overviewStartError" class="overview-message" role="alert">${escH(tMsg(startFailure))}</p>`:""}`;
+    <div class="overview-actions">${invalid?forget:action+archive}</div>${startFailure?`<p id="overviewStartError" class="overview-message" role="alert">${escH(tMsg(startFailure))}</p>`:""}`;
   const copy=$("overviewForgetCopy");if(copy)copy.onclick=async()=>{await copyText(row.forgetCommand);toast(tMsg("viewer.overview.copied"))};
+  const archiveButton=$("overviewArchive");if(archiveButton)archiveButton.onclick=()=>archiveReview(row.reviewId,!row.archived);
   const start=$("overviewStart");if(start)start.onclick=()=>startOverview(row);
 }
 async function startOverview(row){
@@ -1813,16 +1862,30 @@ async function startOverview(row){
     overviewStartFailures.set(rid,"viewer.overview.startError");
   }finally{overviewStarting.delete(rid);renderOverview()}
 }
+async function archiveReview(reviewId,archived){
+  if(FILE||archiveBusy)return;
+  archiveBusy=true;renderArchiveBanners();renderOverview();
+  try{
+    const result=await api("POST","/api/overview/archive",{reviewId,archived});
+    if(result.reviewId!==reviewId||result.archived!==archived)throw new Error("archive-format");
+    if(reviewId===RID)setCurrentArchive(archived);
+    const row=overviewData&&overviewData.reviews.find(row=>row.reviewId===reviewId);if(row)row.archived=archived;
+  }catch(error){toast(tMsg("viewer.overview.archiveError"),5000)}
+  finally{archiveBusy=false;renderArchiveBanners();renderOverview()}
+  await loadOverview();
+}
 async function loadOverview(){
   if(FILE){renderOverview();return}
+  if(archiveBusy)return;
   const request=++overviewRequest;
   overviewLoading=true;
   $("overviewRefresh").disabled=true;
   try{
     const data=await api("GET","/api/overview?scope="+encodeURIComponent($("overviewScope").value));
-    if(request!==overviewRequest)return;
+    if(request!==overviewRequest||archiveBusy)return;
     if(data.reviewId!==RID||!Array.isArray(data.reviews))throw new Error("overview-format");
     const changed=JSON.stringify(overviewData)!==JSON.stringify(data);
+    const current=data.reviews.find(row=>row.current);if(current)setCurrentArchive(current.archived);
     overviewData=data;$("overviewError").hidden=true;if(changed)renderOverview();
   }catch(error){
     if(request!==overviewRequest)return;
@@ -1838,6 +1901,8 @@ function overviewRoute(event){
 }
 $("overviewBack").onclick=()=>{location.hash=""};
 $("overviewRefresh").onclick=loadOverview;
+$("overviewShowArchived").onchange=renderOverview;
+$("archiveUnarchive").onclick=$("overviewUnarchive").onclick=()=>archiveReview(RID,false);
 $("overviewScope").onchange=()=>{overviewData=null;overviewSelected=null;renderOverview();loadOverview()};
 $("overviewList").onclick=event=>{const row=event.target.closest("[data-review-id]");if(row){overviewSelected=row.dataset.reviewId;renderOverview();const selected=$("overviewList").querySelector('[aria-pressed="true"]');if(selected)selected.focus({preventScroll:true})}};
 addEventListener("hashchange",overviewRoute);
