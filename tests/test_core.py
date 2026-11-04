@@ -20,6 +20,7 @@ import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
@@ -2904,6 +2905,24 @@ class ServiceStateTests(unittest.TestCase):
         d = tmpdir()
         self.assertEqual(ledger.status_file(d), d / ".annotation-server.json")
 
+    def test_pid_alive_treats_another_users_process_as_alive(self):
+        """探活契约：进程存在但不属于当前用户（发信号 0 得 EPERM）时按活着算。
+
+        PermissionError 在 waiting_state 的路径上实际不可达：等待标记按 0600 属主写入，别的
+        用户的标记在读阶段就被拒（打开失败按 OSError 跳过），走不到 pid 判断。这里用打桩把
+        这个分支钉住：状态文件被别的用户写脏时，宁可当成运行中，也不当成已停。
+        """
+        self.assertTrue(ledger.pid_alive(os.getpid()), "自己的进程活着")
+        self.assertFalse(ledger.pid_alive(0), "pid 0 不是进程")
+        self.assertFalse(ledger.pid_alive(-1), "负 pid 不是进程")
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        self.assertFalse(ledger.pid_alive(p.pid), "已回收的 pid 不在")
+        with patch("os.kill", side_effect=PermissionError(1, "operation not permitted")):
+            self.assertTrue(ledger.pid_alive(4242), "EPERM：进程存在，只是属于别的用户")
+        with patch("os.kill", side_effect=ProcessLookupError(3, "no such process")):
+            self.assertFalse(ledger.pid_alive(4242), "ESRCH：进程不在")
+
 
 class CspPolicyTests(unittest.TestCase):
     """响应头与页面 meta 两个出口的策略串逐项不变（含没有内联脚本的情况）。"""
@@ -2964,6 +2983,27 @@ class CopiedReviewTests(unittest.TestCase):
         self.assertIsNone(ledger.try_register(rid, moved))
         self.assertEqual(ledger.get(rid)["dir"], str(moved.resolve()))
         self.assertEqual(len(ledger.entries()), 1, "三种情况都还是同一条目")
+
+    def test_ledger_tolerates_a_broken_review_dir_field(self):
+        """reviewDir 缺失、非字符串或构不成路径：按「没有复制来源信息」处理，登记不炸。
+
+        台账的 _set_dir 只判断目录在不在；manifest 写坏时原有的容错是不拦（不当成复制），
+        统一后的 copied_from 也不能让坏值把 register / serve / build 变成 TypeError。
+        """
+        tree = tmpdir()
+        rid = self.build(tree / "v1")["reviewId"]
+        copy = tree / "copy"
+        shutil.copytree(tree / "v1", copy)
+        for bad in (None, 123, {"dir": str(tree / "v1")}, [str(tree / "v1")], "", "\0"):
+            os.environ["AE_HOME"] = str(tmpdir())   # 每个值一份干净台账，register 真走到判断
+            if bad is None:
+                (copy / "review.json").write_text(json.dumps({"reviewId": rid}), encoding="utf-8")
+            else:
+                (copy / "review.json").write_text(json.dumps({"reviewId": rid, "reviewDir": bad}),
+                                                  encoding="utf-8")
+            self.assertIsNone(ledger.copied_from(copy), f"reviewDir={bad!r}")
+            self.assertEqual(ledger.register(rid, copy)["dir"], str(copy.resolve()),
+                             f"reviewDir={bad!r}：按没有来源信息处理，不抛错")
 
     def test_build_switches_id_for_a_copy_and_keeps_it_otherwise(self):
         tree = tmpdir()

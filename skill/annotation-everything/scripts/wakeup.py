@@ -404,7 +404,10 @@ def receiver_status(review, active_binding=_ANY_BINDING, *, binding=_ANY_BINDING
 
     binding / handoff / waiting：调用方已读好的接收方绑定、批次记录与「有没有代理在等」
     （一次请求里只读一次时传入，见 serve.py 的请求快照）；都不传就自己读，读取失败时的降级结果与原来一致。
-    waiting 为 None 表示调用方确认还没到读等待标记的那一步（没有绑定、有批次在处理中等）。
+    waiting 为 None 表示调用方确认还没到读等待标记的那一步（没有绑定、有批次在处理中、
+    codex-desktop 三种情况都会在读标记之前返回，见 serve.py 的请求快照），此时本函数自己读
+    一次；将来新增分支时注意：早返回的分支必须都排在读等待标记之前，否则 None 会被当成
+    「没读」而多开一次文件，或把没读到的等待状态误判成 idle。
     """
     try:
         binding = store.pre_read(binding, _ANY_BINDING, lambda: load_binding(review))
