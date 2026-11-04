@@ -1,6 +1,7 @@
 """单元测试：批注存储、命令行、生成器、本地服务。只用标准库：python3 -m unittest discover tests"""
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import http.client
@@ -2561,6 +2562,180 @@ class ServeRequestReadsTests(unittest.TestCase):
         self.assertIn("代理在等", text)
         self.assertIn("⚠ 有提交在等接收，但没有代理在等", text)
         self.assertEqual(text.count("无待接收"), 2, "损坏与无批次的审阅都按没有待接收显示")
+
+
+# ── #97：生成器库函数抛 BuildError(SystemExit)，调用方只捕它 ──────────────────
+
+def _except_handlers(path: Path) -> list[tuple[set[str], bool]]:
+    """源码里每个 except 子句：（捕的异常名集合, 所在 try 是否调用 read_import）。
+
+    notes 的导入命令捕的是它自己 read_import 抛的 SystemExit（不在 #97 范围内），
+    按 try 体里的调用认出来，其余 except 一概不许再出现 SystemExit。
+    """
+    out = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.Try):
+            continue
+        reads_import = any(isinstance(n, ast.Call)
+                           and getattr(n.func, "id", getattr(n.func, "attr", "")) == "read_import"
+                           for stmt in node.body for n in ast.walk(stmt))
+        for handler in node.handlers:
+            names = set()
+            if isinstance(handler.type, ast.Name):
+                names = {handler.type.id}
+            elif isinstance(handler.type, ast.Attribute):
+                names = {handler.type.attr}
+            elif isinstance(handler.type, ast.Tuple):
+                names = {e.id for e in handler.type.elts if isinstance(e, ast.Name)}
+            out.append((names, reads_import))
+    return out
+
+
+class BuildErrorContractTests(unittest.TestCase):
+    """#97：可复用库函数抛 BuildError(SystemExit)，notes / report_check 只捕它；
+    生成器 CLI 与调用方的退出码、stderr 与警告逐字不变。"""
+
+    # 报告第 2 页里再嵌一个 section.page：find_pages 报「嵌套」的最小合成输入
+    NESTED_REPORT = (FIXTURE / "report.html").read_text(encoding="utf-8") \
+        .replace('<section class="page" data-page="2"',
+                 '<section class="page" data-page="2"><section class="page" data-page="99">', 1) \
+        .replace('</section>\n<section class="page" data-page="3"',
+                 '</section></section>\n<section class="page" data-page="3"', 1)
+
+    def setUp(self):
+        self.tree = tmpdir()
+
+    def review(self) -> Path:
+        """按 fixtures 建一份合成审阅；报告与讲稿源文件事后可改写、可删。"""
+        for f in ("report.html", "script.md"):
+            (self.tree / f).write_bytes((FIXTURE / f).read_bytes())
+        out = self.tree / "review"
+        build_viewer.build(self.tree / "report.html", self.tree / "script.md", out, no_scan_skills=True)
+        store.add(out, {"page": 3, "text": "数字要标单位"})
+        return out
+
+    def run_cli(self, *args):
+        buf, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(err):
+            code = notes_cli.main(list(args))
+        return code, buf.getvalue(), err.getvalue()
+
+    def test_build_error_is_a_system_exit(self):
+        self.assertTrue(issubclass(build_viewer.BuildError, SystemExit))
+
+    def test_report_library_functions_raise_build_error_with_unchanged_messages(self):
+        cases = [
+            (lambda: build_viewer.find_pages('<section class="page" data-page="1">'
+                                             '<section class="page" data-page="2">x</section></section>'),
+             "报告结构不对：第 2 页的 section.page 嵌在另一页里面"),
+            (lambda: build_viewer.find_pages('<section class="page" data-page="1">x'), "没有闭合"),
+            (lambda: build_viewer.find_pages('<section class="page" data-page="x">x</section>'),
+             "报告结构不对：data-page='x' 不是整数页码"),
+            (lambda: build_viewer.find_pages('<section class="page" data-page="1">a</section>'
+                                             '<section class="page" data-page="1">b</section>'),
+             "报告结构不对：页码 1 重复"),
+            (lambda: build_viewer.parse_sections_arg("坏板块"), "--sections 格式不对：'坏板块'"),
+        ]
+        for call, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaises(build_viewer.BuildError) as cm:
+                    call()
+                self.assertIn(message, str(cm.exception))
+
+    def test_resolve_sources_raises_build_error_when_source_is_gone(self):
+        d = self.review()
+        (self.tree / "report.html").unlink()
+        with self.assertRaises(build_viewer.BuildError) as cm:
+            build_viewer.resolve_sources(d)
+        self.assertIn("找不到报告源文件", str(cm.exception))
+
+    def test_generator_cli_error_cases_keep_exit_code_and_stderr(self):
+        """生成器作为 CLI 跑：报告不存在、讲稿解析失败、源文件找不到的退出码与 stderr 不变。"""
+        tree = self.tree
+        no_pages = tree / "empty.html"
+        no_pages.write_text("<html><body><p>不是逐页报告</p></body></html>", encoding="utf-8")
+        bad_script = tree / "bad.md"
+        bad_script.write_text("# 只有标题\n## 说明\n一些内容\n", encoding="utf-8")
+        gone = tmpdir()
+        for f in ("report.html", "script.md"):
+            (gone / f).write_bytes((FIXTURE / f).read_bytes())
+        out = gone / "review"
+        build_viewer.build(gone / "report.html", gone / "script.md", out, no_scan_skills=True)
+        (gone / "report.html").unlink()
+        cases = [
+            (["--report", str(no_pages), "--out", str(tree / "a"), "--no-scan-skills"],
+             "里没找到 <section class=\"page\" data-page=\"N\"> 逐页结构"),
+            (["--report", str(FIXTURE / "report.html"), "--script", str(bad_script),
+              "--out", str(tree / "b"), "--no-scan-skills"], "里没找到讲稿页头"),
+            (["--report", str(FIXTURE / "report.html"), "--sections", "坏板块",
+              "--out", str(tree / "c"), "--no-scan-skills"], "--sections 格式不对：'坏板块'"),
+            (["--rebuild", str(out)], "找不到报告源文件"),
+        ]
+        for argv, message in cases:
+            with self.subTest(argv=argv):
+                r = subprocess.run([sys.executable, str(SCRIPTS / "build_viewer.py"), *argv],
+                                   capture_output=True, text=True, timeout=120)
+                self.assertEqual(r.returncode, 1)
+                self.assertEqual(r.stdout, "")
+                self.assertIn(message, r.stderr)
+
+    def test_capture_points_only_catch_build_error(self):
+        """6 个捕获点只捕 BuildError；notes 导入命令捕自己 read_import 的那一处不在此列。"""
+        notes = _except_handlers(SCRIPTS / "notes.py")
+        system_exits = [reads for names, reads in notes if "SystemExit" in names]
+        self.assertEqual(system_exits, [True], "只剩导入命令捕自己的 SystemExit 这一处")
+        self.assertEqual(sum("BuildError" in names for names, _r in notes), 5)
+        check = _except_handlers(SCRIPTS / "report_check.py")
+        self.assertEqual([names for names, _r in check if "SystemExit" in names], [])
+        self.assertEqual(sum("BuildError" in names for names, _r in check), 1)
+
+    def test_show_warns_and_keeps_going_when_source_is_gone(self):
+        d = self.review()
+        (self.tree / "report.html").unlink()
+        code, out, err = self.run_cli("show", str(d))
+        self.assertEqual(code, 0)
+        self.assertIn("警告：找不到报告源文件", err)
+        self.assertIn("数字要标单位", out)
+
+    def test_show_survives_a_report_it_cannot_parse(self):
+        d = self.review()
+        (self.tree / "report.html").write_text(self.NESTED_REPORT, encoding="utf-8")
+        code, out, err = self.run_cli("show", str(d))
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+        self.assertIn("数字要标单位", out)
+
+    def test_diff_reports_missing_and_unparseable_sources_without_failing(self):
+        d = self.review()
+        notes_cli._snapshot(d, 1, "base")
+        (self.tree / "report.html").unlink()
+        code, out, _err = self.run_cli("diff", str(d), "--batch", "1")
+        self.assertEqual(code, 0)
+        self.assertIn("（报告：找不到对比用的文件）", out)
+        (self.tree / "report.html").write_text(self.NESTED_REPORT, encoding="utf-8")
+        code, out, _err = self.run_cli("diff", str(d), "--batch", "1")
+        self.assertEqual(code, 0)
+        self.assertIn("## 报告 · 第 0 页", out, "整份报告按一页对比，不因为解析失败就退出")
+
+    def test_wait_warns_when_source_is_gone(self):
+        d = self.review()
+        store.handoff_submit(d, "", target="review")
+        (self.tree / "report.html").unlink()
+        r = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "wait", str(d), "--timeout", "5"],
+                           capture_output=True, text=True, env={**os.environ, "CLAUDECODE": ""}, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("警告：找不到报告源文件", r.stderr)
+        self.assertIn("数字要标单位", r.stdout)
+
+    def test_import_still_catches_its_own_bad_format(self):
+        """notes 导入命令捕的是 read_import 自己抛的 SystemExit，不在 #97 范围内，行为不变。"""
+        d = self.review()
+        bad = self.tree / "bad.md"
+        bad.write_text("不是批注导出\n", encoding="utf-8")
+        code, out, err = self.run_cli("import", str(d), str(bad))
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("里没找到批注", err)
 
 
 if __name__ == "__main__":

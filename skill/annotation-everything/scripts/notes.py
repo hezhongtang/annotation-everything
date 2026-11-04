@@ -43,7 +43,7 @@ import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
 import wakeup  # noqa: E402
-from build_viewer import (FIELD_LABEL, field_name, find_pages, page_heads,  # noqa: E402
+from build_viewer import (BuildError, FIELD_LABEL, field_name, find_pages, page_heads,  # noqa: E402
                           resolve_sources, strip_tags, write_private)
 import difflib  # noqa: E402
 import match  # noqa: E402
@@ -370,7 +370,7 @@ def side_texts(sources: dict[str, Path | None] | None) -> dict[str, dict[int, st
                 # 只删认得出来的字段名：认不出的按正文显示（与对照页一致），不然对应句提示会对不上
                 body = FIELD_LABEL.sub(lambda m: "\n" if field_name(m.group(1)) else m.group(0), body).replace("**", "")
                 out["讲稿"][int(h.group(1))] = h.group(2) + "\n" + body
-    except (OSError, ValueError, SystemExit):
+    except (OSError, ValueError, BuildError):
         pass
     return out
 
@@ -778,7 +778,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
         else:
             try:
                 sources = resolve_sources(d, manifest, locale=lang) if manifest else None
-            except SystemExit as e:
+            except BuildError as e:
                 print(t("cli.notes.warning", reason=e), file=sys.stderr)
                 sources = None
             print(to_markdown(doc, manifest, include_resolved=a.all or bool(a.batch), page=a.page, sources=sources,
@@ -1058,7 +1058,7 @@ def _sources(d: Path) -> dict[str, Path | None] | None:
     manifest = load_manifest(d)
     try:
         return resolve_sources(d, manifest) if manifest else None
-    except SystemExit:
+    except BuildError:
         return None
 
 
@@ -1110,7 +1110,7 @@ def _parts(kind: str, text: str) -> list[tuple[str, int, str]]:
         if heads:
             return [(f"n:{h.group(1)}", int(h.group(1)), text[h.start(): heads[k + 1].start() if k + 1 < len(heads) else len(text)])
                     for k, h in enumerate(heads)]
-    except (SystemExit, ValueError):
+    except (BuildError, ValueError):
         pass
     return [("all", 0, text)]
 
@@ -1252,7 +1252,7 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     manifest = load_manifest(d)
     try:
         sources = resolve_sources(d, manifest, locale=lang) if manifest else None
-    except SystemExit as e:
+    except BuildError as e:
         print(t("cli.notes.warning", reason=e), file=sys.stderr)
         sources = None
     if claim and item["stage"] == "draft":
