@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -41,10 +42,32 @@ import notes as notes_cli  # noqa: E402
 import notes_store as store  # noqa: E402
 import ledger  # noqa: E402
 import serve  # noqa: E402
+import wakeup  # noqa: E402
 
 
 def tmpdir() -> Path:
     return Path(tempfile.mkdtemp())
+
+
+# 文件打开计数（规格 #89 为服务请求快照指定的唯一新接缝）：审计钩子装上就不能移除，
+# 整个进程只装一次，靠开关只在测量窗口内计数；只统计审阅目录下的文件，按文件名归类。
+_OPEN_COUNTS = {"on": False, "root": None, "files": {}}
+
+
+def _count_review_opens(event, args):
+    if event != "open" or not _OPEN_COUNTS["on"]:
+        return
+    try:
+        name = str(Path(str(args[0])).resolve().relative_to(_OPEN_COUNTS["root"]))
+    except Exception:   # 审阅目录以外的打开不计数；钩子本身绝不能抛异常
+        return
+    files = _OPEN_COUNTS["files"]
+    files[name] = files.get(name, 0) + 1
+
+
+if not getattr(sys, "_ae_review_open_hook", False):
+    sys.addaudithook(_count_review_opens)
+    sys._ae_review_open_hook = True
 
 
 class StoreTests(unittest.TestCase):
@@ -2261,6 +2284,283 @@ class ShowExportSharedFormatTests(unittest.TestCase):
         self.assertEqual(t("cli.show.region", no=1, x=5.0, y=20.0, w=60.0, h=30.0),
                          ef.REGION_ZH.format(no=1, x=5.0, y=20.0, w=60.0, h=30.0))
         self.assertEqual(t("cli.show.markHint"), ef.HEAD_NOTE)
+
+
+class ServeRequestReadsTests(unittest.TestCase):
+    """一次请求只读一次审阅文件：打开计数上限、响应字段与 serve.py list 输出。只用合成审阅。"""
+
+    def setUp(self):
+        self._home = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(Path(tempfile.mkdtemp(prefix="ae-reads-home-")))
+        self.addCleanup(self.restore_home)
+
+    def restore_home(self):
+        os.environ["AE_HOME"] = self._home
+
+    # ---------- 合成审阅与进程内服务 ----------
+    def note(self) -> dict:
+        return {"id": "n1", "page": 1, "title": "T", "target": "报告", "text": "合成批注",
+                "status": "open", "at": "2026-01-01T00:00:00"}
+
+    def batch(self, seq: int = 1, status: str = "pending", **kw) -> dict:
+        item = {"seq": seq, "status": status, "at": "2026-01-01T00:00:00", "by": "page",
+                "message": "合成批次", "userMessage": "合成批次", "target": "final",
+                "allowSubagents": False, "fullCheck": False, "alwaysSkills": [],
+                "openCount": 1, "openIds": ["n1"], "pages": [1]}
+        item.update(kw)
+        return item
+
+    def start(self, *, rid: str = "a" * 16, binding: bool = True, waiting: bool = False,
+              handoff=(), corrupt_handoff: bool = False):
+        """一份新的合成审阅加进程内的审阅服务；返回 (审阅目录, 服务, 绑定)。
+
+        waiting 要真放一个未过期的等待标记（服务据此说「有代理在等」），因此隐含已绑定。
+        """
+        root = Path(tempfile.mkdtemp(prefix="ae-reads-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        review = root / "review"
+        review.mkdir()
+        (review / "report.html").write_text(
+            '<!doctype html><html><body><section class="page" data-page="1" data-key="p1">'
+            "<h1>T</h1><p>x</p></section></body></html>", encoding="utf-8")
+        (review / "index.html").write_text(
+            "<!doctype html><title>t</title><script>var ok=1</script>ok", encoding="utf-8")
+        (review / store.NOTES_FILE).write_text(
+            json.dumps({"version": 1, "rev": 3, "updatedAt": "2026-01-01T00:00:00",
+                        "notes": [self.note()]}), encoding="utf-8")
+        (review / store.SKILLS_FILE).write_text(
+            json.dumps({"version": 1, "skills": [{"name": "sk", "desc": "d"}], "always": []}), encoding="utf-8")
+        (review / store.HANDOFF_FILE).write_text(
+            json.dumps({"version": 1, "seq": len(handoff), "items": list(handoff)}), encoding="utf-8")
+        (review / serve.MANIFEST).write_text(json.dumps({
+            "app": serve.APP, "kind": "deck", "reviewId": rid, "reviewDir": str(review.resolve()),
+            "title": "合成审阅", "name": "合成审阅", "namespace": "ns",
+            "sources": {"report": "report.html", "script": None},
+            "sourcesAbs": {"report": str(review / "report.html"), "script": None},
+            "pages": [{"n": 1, "key": "p1", "stable": True, "title": "T"}], "locale": "zh-CN"}), encoding="utf-8")
+        bound = wakeup.bind_wait(review, "claude", "sess-1") if binding or waiting else None
+        if corrupt_handoff:   # 绑定之后再写坏：绑定本身要能读批次记录
+            (review / store.HANDOFF_FILE).write_text("{坏的", encoding="utf-8")
+        if waiting:
+            mark = ledger.wait_file(review, os.getpid())
+            mark.write_text(json.dumps({"version": 1, "pid": os.getpid(), "stage": "any",
+                                        "since": "2026-01-01T00:00:00", "bindingId": bound["bindingId"],
+                                        "harness": "Claude Code", "sessionId": "sess-1",
+                                        "expiresAt": time.time() + 60}), encoding="utf-8")
+            os.chmod(mark, 0o600)   # 私有文件校验：组或其他人可读的标记服务不认
+        srv = serve.ReviewServer(review, 0, log_to_file=False)
+        worker = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        worker.start()
+        self.addCleanup(self.stop, srv, worker)
+        self.review, self.srv = review, srv
+        return review, srv, bound
+
+    def stop(self, srv, worker):
+        srv.shutdown()
+        srv.server_close()
+        worker.join(2)
+
+    def headers(self, method: str) -> dict:
+        return {"Host": f"127.0.0.1:{self.srv.port}", **(
+            {"Origin": f"http://127.0.0.1:{self.srv.port}", "Content-Type": "application/json"}
+            if method not in ("GET", "HEAD") else {})}
+
+    def request(self, method: str = "GET", path: str = "/api/notes", body=None):
+        code, _, raw = serve._req(self.srv.port, method, path, self.headers(method), body)
+        return code, json.loads(raw)
+
+    def count_opens(self, method: str = "GET", path: str = "/api/notes", body=None) -> dict:
+        """数一次动作打开了审阅目录里的哪些文件：按文件名归类，只算审阅目录下的文件。"""
+        _OPEN_COUNTS["root"] = self.review.resolve()
+        _OPEN_COUNTS["files"] = {}
+        _OPEN_COUNTS["on"] = True
+        try:
+            self.request(method, path, body)
+        finally:
+            _OPEN_COUNTS["on"] = False
+        return dict(_OPEN_COUNTS["files"])
+
+    def wait_scans(self, files: dict) -> int:
+        """等待标记被读了几遍（服务据此判断「有代理在等」）。"""
+        return sum(n for name, n in files.items() if name.startswith(ledger.WAIT_PREFIX))
+
+    # ---------- 打开计数 ----------
+    def test_get_notes_reads_each_review_file_once(self):
+        self.start(waiting=True)
+        self.request()   # 预热服务端 manifest 缓存
+        files = self.count_opens()
+        self.assertLessEqual(files.get(wakeup.BINDING_FILE, 0), 1, files)
+        self.assertLessEqual(files.get(store.HANDOFF_FILE, 0), 1, files)
+        self.assertLessEqual(files.get(store.NOTES_FILE, 0), 1, files)
+        self.assertLessEqual(files.get(store.SKILLS_FILE, 0), 1, files)
+        self.assertEqual(files.get(serve.MANIFEST, 0), 0, files)
+        self.assertLessEqual(self.wait_scans(files), 1, files)
+
+    def test_get_health_reads_each_review_file_once(self):
+        self.start(waiting=True)
+        self.request()
+        files = self.count_opens(path="/api/health")
+        self.assertLessEqual(files.get(wakeup.BINDING_FILE, 0), 1, files)
+        self.assertLessEqual(files.get(store.HANDOFF_FILE, 0), 1, files)
+        self.assertEqual(files.get(serve.MANIFEST, 0), 0, files)
+        self.assertLessEqual(self.wait_scans(files), 1, files)
+
+    def test_post_notes_reads_no_more_files_than_before(self):
+        self.start()
+        self.request()   # 预热服务端 manifest 缓存（与实测基线同一方法）
+        files = self.count_opens("POST", "/api/notes", {"page": 1, "text": "合成批注"})
+        self.assertLessEqual(files.get(wakeup.BINDING_FILE, 0), 1, files)
+        self.assertLessEqual(files.get(store.HANDOFF_FILE, 0), 1, files)
+        self.assertLessEqual(files.get(serve.MANIFEST, 0), 1, files)
+
+    def test_keep_alive_requests_read_the_review_again(self):
+        """长连接复用同一个 handler：每个请求重新读审阅文件，不沿用上一个请求的结果。"""
+        review, srv, _ = self.start()
+        c = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=5)
+        self.addCleanup(c.close)
+        c.request("GET", "/api/notes", headers={"Host": f"127.0.0.1:{srv.port}"})
+        self.assertEqual(json.loads(c.getresponse().read())["rev"], 3)
+        (review / store.NOTES_FILE).write_text(json.dumps(
+            {"version": 1, "rev": 4, "updatedAt": "2026-01-02T00:00:00", "notes": [self.note()]}),
+            encoding="utf-8")
+        c.request("GET", "/api/notes", headers={"Host": f"127.0.0.1:{srv.port}"})
+        self.assertEqual(json.loads(c.getresponse().read())["rev"], 4)
+
+    def test_list_counts_from_batch_records_without_loading_notes(self):
+        self.start(handoff=[self.batch(1)])
+        ledger.register("a" * 16, self.review)
+        _OPEN_COUNTS["root"] = self.review.resolve()
+        _OPEN_COUNTS["files"] = {}
+        _OPEN_COUNTS["on"] = True
+        try:
+            with redirect_stdout(io.StringIO()):
+                serve.list_reviews(None, True)
+        finally:
+            _OPEN_COUNTS["on"] = False
+        files = dict(_OPEN_COUNTS["files"])
+        self.assertEqual(files.get(store.NOTES_FILE, 0), 0, files)
+        self.assertLessEqual(files.get(serve.MANIFEST, 0), 1, files)
+        self.assertLessEqual(files.get(wakeup.BINDING_FILE, 0), 1, files)
+
+    # ---------- 响应逐字段相同 ----------
+    def test_poll_and_health_bodies_match_direct_reads(self):
+        for label, kw in (("有绑定", {}), ("无绑定", {"binding": False}),
+                          ("有代理在等", {"waiting": True, "handoff": [self.batch(1)]}),
+                          ("批次记录损坏", {"corrupt_handoff": True})):
+            with self.subTest(label):
+                review, srv, _ = self.start(**kw)
+                code, notes = self.request()
+                self.assertEqual(code, 200)
+                self.assertEqual(set(notes), {"version", "rev", "updatedAt", "notes", "indexMtime",
+                                              "handoff", "agentDelivery", "skillCatalog", "alwaysSkills",
+                                              "app", "reviewId", "name", "features", "receiver"})
+                self.assertEqual(notes["handoff"], store.handoff_state(review, full=False))
+                self.assertEqual(notes["agentDelivery"], wakeup.public_status(review))
+                self.assertEqual(notes["skillCatalog"], store.skills_catalog(review))
+                self.assertEqual(notes["alwaysSkills"], store.always_skills(review))
+                self.assertEqual(notes["receiver"], wakeup.receiver_status(review, srv.agent_binding))
+                self.assertEqual(notes["notes"], store.load(review)["notes"])
+                self.assertEqual(notes["indexMtime"], (review / "index.html").stat().st_mtime)
+                self.assertEqual((notes["app"], notes["reviewId"], notes["name"], notes["version"],
+                                  notes["features"]), (serve.APP, "a" * 16, "合成审阅", serve.VERSION, serve.FEATURES))
+                code, health = self.request(path="/api/health")
+                self.assertEqual(code, 200)
+                self.assertEqual(set(health), {"app", "reviewId", "name", "version", "features", "receiver",
+                                               "dir", "pid", "port", "hook", "agentDelivery"})
+                self.assertEqual(health["agentDelivery"], wakeup.public_status(review))
+                self.assertEqual(health["receiver"], wakeup.receiver_status(review, srv.agent_binding))
+                self.assertEqual((health["dir"], health["pid"], health["port"], health["hook"]),
+                                 (str(review), os.getpid(), srv.port, False))
+                code, full = self.request(path="/api/handoff")
+                self.assertEqual(code, 200)
+                summary = store.handoff_state(review)
+                self.assertEqual(set(full), set(summary) | {
+                    "app", "reviewId", "name", "version", "features", "receiver"})
+                self.assertEqual({k: full[k] for k in summary}, summary)
+                self.assertEqual(full["receiver"], wakeup.receiver_status(review, srv.agent_binding))
+
+    def test_write_bodies_match_direct_reads(self):
+        for label, kw in (("有绑定", {}), ("无绑定", {"binding": False}),
+                          ("有代理在等", {"waiting": True}), ("批次记录损坏", {"corrupt_handoff": True})):
+            with self.subTest(label):
+                review, srv, bound = self.start(**kw)
+                receiver = {"receiverBindingId": (bound or {}).get("bindingId")}
+                code, body = self.request("POST", "/api/notes", {"page": 1, "text": "合成批注"})
+                self.assertEqual(code, 201)
+                self.assertEqual(set(body), {"doc", "note"})
+                self.assertEqual(body["doc"]["receiver"], wakeup.receiver_status(review, srv.agent_binding))
+                self.assertEqual(body["doc"]["notes"], store.load(review)["notes"])
+                self.assertEqual(body["note"]["page"], 1)
+                nid = body["note"]["id"]
+                code, body = self.request("PATCH", f"/api/notes/{nid}", {"status": "resolved", "resolution": "已改"})
+                self.assertEqual(code, 200)
+                self.assertEqual(set(body), {"doc", "note"})
+                self.assertEqual(body["doc"]["receiver"], wakeup.receiver_status(review, srv.agent_binding))
+                self.assertEqual(body["note"]["status"], "resolved")
+                code, body = self.request("DELETE", f"/api/notes/{nid}")
+                self.assertEqual(code, 200)
+                self.assertEqual(set(body), {"doc"})
+                self.assertEqual(body["doc"]["receiver"], wakeup.receiver_status(review, srv.agent_binding))
+                self.assertEqual(body["doc"]["notes"], store.load(review)["notes"])
+                code, body = self.request("POST", "/api/notes/import",
+                                          [{"page": 1, "text": "导入的合成批注", "id": "imported-1"}])
+                self.assertEqual(code, 200)
+                self.assertEqual(set(body), {"doc", "added", "skipped", "updated"})
+                self.assertEqual(body["doc"]["receiver"], wakeup.receiver_status(review, srv.agent_binding))
+                self.assertEqual((body["added"], body["skipped"], body["updated"]), (1, 0, 0))
+                code, body = self.request("POST", "/api/skills/always", {"always": [{"name": "sk", "scope": "all"}]})
+                self.assertEqual(code, 200)
+                self.assertEqual(set(body), {"alwaysSkills", "app", "reviewId", "name", "version",
+                                             "features", "receiver"})
+                self.assertEqual(body["receiver"], wakeup.receiver_status(review, srv.agent_binding))
+                self.assertEqual(body["alwaysSkills"], [{"name": "sk", "scope": "all"}])
+                code, body = self.request("POST", "/api/handoff", {"message": "合成", **receiver})
+                if kw.get("corrupt_handoff"):
+                    self.assertEqual((code, body["code"]), (500, "server-error"), "记录损坏：写接口照旧报错")
+                else:
+                    self.assertEqual(code, 200)
+                    self.assertEqual(set(body), {"doc", "handoff", "merged", "seq", "acceptedFullCheck"})
+                    self.assertEqual(body["doc"]["receiver"], wakeup.receiver_status(review, srv.agent_binding))
+                    self.assertEqual(body["handoff"], store.handoff_state(review, full=False))
+                    self.assertEqual(body["doc"]["notes"], store.load(review)["notes"])
+                    self.assertEqual((body["seq"], body["merged"], body["acceptedFullCheck"]), (1, False, False))
+
+    def test_list_output_matches_recorded_rows(self):
+        pending, _, _ = self.start(rid="a" * 16, binding=False, handoff=[self.batch(1), self.batch(2, status="review")])
+        corrupt, _, _ = self.start(rid="b" * 16, binding=False, corrupt_handoff=True)
+        waiting, _, _ = self.start(rid="c" * 16, waiting=True)
+        for review in (pending, corrupt, waiting):
+            ledger.register(json.loads((review / serve.MANIFEST).read_text())["reviewId"], review)
+        with redirect_stdout(io.StringIO()) as out:
+            serve.list_reviews(None, True)
+        rows = {r["reviewId"]: r for r in json.loads(out.getvalue())["reviews"]}
+        unbound = {"adapter": None, "state": "unconfigured", "receiver": {"state": "unconfigured"}}
+        # 台账里存的是解析后的目录（登记时 resolve）
+        self.assertEqual(rows["a" * 16], {"reviewId": "a" * 16, "dir": str(pending.resolve()), "port": None,
+                                          "name": "合成审阅", "state": "已停", "state_id": "stopped",
+                                          "running": None, "pending": 1, "review": 1, "waiting": False,
+                                          "hook": False, "unattended": True, "agentDelivery": unbound,
+                                          "receiptConfirmed": None})
+        self.assertEqual(rows["b" * 16], {"reviewId": "b" * 16, "dir": str(corrupt.resolve()), "port": None,
+                                          "name": "合成审阅", "state": "已停", "state_id": "stopped",
+                                          "running": None, "pending": 0, "review": 0, "waiting": False,
+                                          "hook": False, "unattended": False, "agentDelivery": unbound,
+                                          "receiptConfirmed": None})
+        self.assertEqual({k: v for k, v in rows["c" * 16].items() if k != "agentDelivery"},
+                         {"reviewId": "c" * 16, "dir": str(waiting.resolve()), "port": None, "name": "合成审阅",
+                          "state": "已停", "state_id": "stopped", "running": None, "pending": 0,
+                          "review": 0, "waiting": True, "hook": False, "unattended": False,
+                          "receiptConfirmed": None})
+        self.assertEqual(rows["c" * 16]["agentDelivery"]["state"], "bound")
+        self.assertEqual(rows["c" * 16]["agentDelivery"]["receiver"]["state"], "waiting")
+        with redirect_stdout(io.StringIO()) as out:
+            serve.list_reviews(None, False)
+        text = out.getvalue()
+        self.assertIn("待接收 1 批", text)
+        self.assertIn("待复核 1 批", text)
+        self.assertIn("代理在等", text)
+        self.assertIn("⚠ 有提交在等接收，但没有代理在等", text)
+        self.assertEqual(text.count("无待接收"), 2, "损坏与无批次的审阅都按没有待接收显示")
 
 
 if __name__ == "__main__":
