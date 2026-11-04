@@ -18,11 +18,12 @@ import math
 import os
 import re
 import secrets
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
+
+import fsutil
 
 NOTES_FILE = "notes.json"
 LOG_FILE = "notes.jsonl"
@@ -141,17 +142,7 @@ def load(review_dir: Path) -> dict[str, Any]:
 
 
 def _atomic_write(path: Path, text: str) -> None:
-    fd, tmp = tempfile.mkstemp(prefix=".notes-", suffix=".tmp", dir=path.parent)  # mkstemp 建出的文件是 0600
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(tmp)
-        raise
+    fsutil.atomic_write(path, text, prefix=".notes-")
 
 
 def append_private(path: Path, line: str) -> None:
@@ -273,11 +264,7 @@ def clean_skill_names(v: Any) -> list[str]:
 
 def skills_catalog(review_dir: Path) -> list[dict[str, str]]:
     """审阅目录里的技能目录（代理写入的可用技能，页面据此给出候选）。读不到就返回空。"""
-    try:
-        doc = json.loads((review_dir / SKILLS_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    return _catalog_items(doc.get("skills")) if isinstance(doc, dict) else []
+    return _catalog_items(_skills_doc(review_dir).get("skills"))
 
 
 # 常驻技能：对这份审阅的每条批注（按范围）都要先调用的技能，给需要长期约束的代理用。范围：
@@ -500,16 +487,13 @@ def always_skills(review_dir: Path) -> list[dict[str, str]]:
     return _always_items(_skills_doc(review_dir).get("always"), strict=False)
 
 
-def _write_skills_doc(review_dir: Path, *, skills: list[dict[str, str]] | None = None,
-                      always: Any = None, update: Any = None) -> list[dict[str, str]]:
+def _write_skills_doc(review_dir: Path, *, always: Any = None, update: Any = None) -> list[dict[str, str]]:
     """在文件锁内读改写 skills.json，技能目录与常驻技能互不覆盖。update(当前常驻) → 新常驻。"""
-    _require_dir(review_dir)
-    with locked(review_dir):
+    with locked(review_dir):   # locked 先确认审阅目录存在
         doc = _skills_doc_for_write(review_dir)
         cur = _always_items(doc.get("always"), strict=False)
         new = update(cur) if update else (always if always is not None else cur)
-        cat = skills if skills is not None else [x for x in doc.get("skills", []) if isinstance(x, dict)] \
-            if isinstance(doc.get("skills"), list) else []
+        cat = [x for x in doc.get("skills", []) if isinstance(x, dict)] if isinstance(doc.get("skills"), list) else []
         _atomic_write(review_dir / SKILLS_FILE, _dumps({"version": 1, "skills": cat, "always": new}, indent=2) + "\n")
         return new
 
@@ -743,9 +727,7 @@ def _batch_for(items: list[dict[str, Any]], note: dict[str, Any], seq: int | Non
     待复核的初改 → 它的初改批次；提交时包含它的在途批次（复核中 > 处理中 > 等待复核 > 等待接收，同级取最早）；
     都没有、且恰好只有一批在处理中 / 复核中 → 那一批。"""
     if seq is not None:
-        it = next((i for i in items if int(i.get("seq", 0)) == seq), None)
-        if it is None:
-            raise NotFound(f"handoff#{seq}")
+        it = _find_batch(items, seq)
         if it.get("status") not in IN_FLIGHT:
             raise HandoffError(f"第 {seq} 批不在处理中（{it.get('status')}）",
                                code="batch-not-active", seq=seq, status=it.get("status"))
@@ -1063,10 +1045,16 @@ def _next_start(items: list[dict[str, Any]], item: dict[str, Any]) -> str | None
     return items[k + 1].get("claimedAt") if 0 <= k < len(items) - 1 else None
 
 
+def _open_ids(notes: list[dict[str, Any]]) -> set[Any]:
+    return {n.get("id") for n in notes if n.get("status", "open") == "open"}
+
+
 def _batch_stats(notes: list[dict[str, Any]], item: dict[str, Any], end: str | None,
-                 next_start: str | None = None) -> dict[str, Any]:
+                 next_start: str | None = None, open_now: set[Any] | None = None) -> dict[str, Any]:
+    """open_now：此刻仍未处理的批注 id；一次算多批时由调用方算好传入，不传就现算。"""
     got = batch_resolved(notes, item, end, next_start)
-    open_now = {n.get("id") for n in notes if n.get("status", "open") == "open"}
+    if open_now is None:
+        open_now = _open_ids(notes)
     seq = int(item.get("seq", 0) or 0)
     drafted = [n.get("id") for n in notes if n.get("status") == "drafted" and n.get("draftBatch") == seq]
     return {"resolvedIds": [n.get("id") for n in got], "resolvedCount": len(got),
@@ -1092,13 +1080,18 @@ def handoff_state(review_dir: Path, *, full: bool = True) -> dict[str, Any]:
     except (OSError, ValueError):
         notes = []
     history = []
-    for it in reversed(items if full else items[-1:]):
+    open_now = _open_ids(notes)
+    last = len(items) - 1
+    # 新的在前；pos 是批次在 items 里的位置，下一批（pos + 1）的接收时间是时间窗上界（同 _next_start）
+    for pos in range(last, (0 if full else max(last, 0)) - 1, -1):
+        it = items[pos]
+        next_start = items[pos + 1].get("claimedAt") if pos < last else None
         h = {k: v for k, v in it.items() if k != "openIds"}
         h["userMessage"] = handoff_user_message(it)
         if it.get("status") in ("claimed", "drafted", "review", "reviewing"):
-            h.update(_batch_stats(notes, it, None, _next_start(items, it)), live=True)
+            h.update(_batch_stats(notes, it, None, next_start, open_now), live=True)
         elif it.get("status") == "done" and "resolvedIds" not in it:
-            h.update(_batch_stats(notes, it, it.get("doneAt"), _next_start(items, it)), estimated=True)
+            h.update(_batch_stats(notes, it, it.get("doneAt"), next_start, open_now), estimated=True)
         history.append(h)
     flight = [i for i in items if i.get("status") in IN_FLIGHT]
     by_id = {n.get("id"): n for n in notes}
@@ -1197,11 +1190,15 @@ def _stage_entry(item: dict[str, Any], stage: str) -> dict[str, Any]:
     return e
 
 
+# 接收批次：阶段 → 该阶段可接收的批次状态（notes.py wait 共用同一张表）
+CLAIM_STATUSES = {"draft": ("pending",), "review": ("review",), "any": ("pending", "review")}
+
+
 def handoff_claim(review_dir: Path, *, by: str = "agent", stage: str = "any", seq: int | None = None,
                   authorize: Callable[[], None] | None = None) -> dict[str, Any] | None:
     """接收最早一个等着的批次：stage=draft 只接新提交（→ 初改中），review 只接请求复核的（→ 复核中），any 都接。
     返回的批次带 stage 字段说明是哪个阶段；没有则 None。"""
-    want = {"draft": ("pending",), "review": ("review",), "any": ("pending", "review")}.get(stage)
+    want = CLAIM_STATUSES.get(stage)
     if want is None:
         raise NoteError("stage 须为 draft / review / any")
     with locked(review_dir):

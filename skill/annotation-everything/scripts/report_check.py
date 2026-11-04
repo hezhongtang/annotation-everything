@@ -38,7 +38,6 @@ import i18n
 
 RECORD_SCHEMA = "ae-report-record/1"
 RESULT_SCHEMA = "ae-report-check/1"
-SUPPORTED_LOCALES = ("zh-CN", "en")
 
 # 记录里内容 / 结构 / 视觉核验的内置检查 id（决策 10、11 的清单；#72 补齐内容清单，
 # #73 补齐结构清单；检查 id 只追加不改名）。记录声明这里没有的 id 时无法证明其已执行。
@@ -87,7 +86,7 @@ CALC_OPS = {
 
 
 def t(loc: str, key: str, **params: object) -> str:
-    return i18n.translate(i18n.load_catalog(loc), key, **params)
+    return i18n.translate(i18n.catalog(loc), key, **params)
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -171,9 +170,6 @@ class Checks:
                }[cid]
         detail = t(self.locale, key, **params) if params else ""
         self.items[cid] = {"id": cid, "status": state, "code": code, "detail": detail}
-
-    def warn(self, key: str, **params: object) -> str:
-        return t(self.locale, key, **params)
 
     def failed(self) -> list[dict]:
         return [c for c in self.items.values() if c["status"] == "fail"]
@@ -299,17 +295,18 @@ def load_record(record_path: Path | None, c: Checks) -> tuple[dict | None, bool]
     return record, True
 
 
-def check_freshness(record: dict | None, report_bytes: bytes, script_bytes: bytes | None,
+def check_freshness(record: dict | None, report_sha: str, script_sha: str | None,
                     c: Checks) -> bool:
-    """记录里的产物哈希对不对得上当前文件；返回记录是否新鲜（无记录为 False）。"""
+    """记录里的产物哈希对不对得上当前文件（传入当前文件的 sha256，没有讲稿为 None）；
+    返回记录是否新鲜（无记录为 False）。"""
     if record is None:
         return False
     links = record["links"]
     changed = []
-    if links["sha256"]["report"] != sha256_bytes(report_bytes):
+    if links["sha256"]["report"] != report_sha:
         changed.append(str(links.get("report") or "report"))
     script_hash = links["sha256"].get("script")
-    if script_bytes is not None and script_hash != sha256_bytes(script_bytes):
+    if script_sha is not None and script_hash != script_sha:
         changed.append(str(links.get("script") or "script"))
     if changed:
         c.set("record.freshness", "fail", code="record.stale", items="、".join(changed))
@@ -772,7 +769,6 @@ def check_record_visual(record: dict, pages: list[dict], c: Checks) -> None:
               detail=t(c.locale, "check.err.visualBadNotList"))
         return
     report_ns = sorted(p["n"] for p in pages)
-    report_keys = {p["key"] for p in pages}
     entry_ns: list[int] = []
     unchecked: list[int] = []
     issue_items: list[str] = []
@@ -1158,7 +1154,9 @@ def check_report(report_path: Path, script_path: Path | None = None,
     if script_text is not None and c.items["script.pages"]["status"] == "not_applicable":
         c.set("script.pages", "pass")   # 能解析且页序一致时已 set(pass)，这里兜底
     record, record_ok = load_record(record_path, c)
-    fresh = check_freshness(record, report_bytes, script_bytes, c)
+    report_sha = sha256_bytes(report_bytes)
+    script_sha = None if script_bytes is None else sha256_bytes(script_bytes)
+    fresh = check_freshness(record, report_sha, script_sha, c)
     claims_info = None
     calc_pending: list[str] = []
     source_stale = False
@@ -1183,9 +1181,9 @@ def check_report(report_path: Path, script_path: Path | None = None,
                        script_present=script_text is not None, revision=revision)
     result["schema"] = RESULT_SCHEMA
     result["inputs"] = {
-        "report": {"path": report_path.name, "sha256": sha256_bytes(report_bytes)},
+        "report": {"path": report_path.name, "sha256": report_sha},
         "script": None if script_path is None
-        else {"path": script_path.name, "sha256": sha256_bytes(script_bytes)},
+        else {"path": script_path.name, "sha256": script_sha},
         "record": None if record_path is None
         else {"path": record_path.name},
     }

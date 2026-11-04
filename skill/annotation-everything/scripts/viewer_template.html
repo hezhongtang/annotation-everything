@@ -274,6 +274,7 @@ Where annotations are kept: when you open it through the local service (the addr
 const P=__PAGES__, S=__SECTIONS__, NS=__NS__, NAME=__NAME__, RID=__RID__, N=P.length;
 const SKILL_CONTEXT=__SKILL_CONTEXT__;
 const SECT=__SECT__, RCSS=__RCSS__, SECT_KEYS=P.map(p=>"page-"+p.key);
+const PAGE_NS=new Set(P.map(q=>q.n));   // 报告页码：页面生命周期内不变，找失页批注时直接查
 const APP="annotation-everything", FILE=location.protocol==="file:";
 const CATALOGS=__CATALOGS__, REVIEW_LOCALE=__LOCALE__;
 const $=id=>document.getElementById(id);
@@ -751,15 +752,15 @@ addEventListener("storage",e=>{
   else if(e.key&&/^ae\.[0-9a-f]{16}\.(queue|pending|failed)$/.test(e.key))updateStray()});
 
 // ---------- 旧批注发现（同一浏览器来源下的其他版本；导入需用户确认） ----------
-function foundSets(){const out=[];try{for(let k=0;k<localStorage.length;k++){const key=localStorage.key(k);
+function foundSets(){const out=[];try{const have=new Set(notes.map(x=>x.id)),keys=new Set(notes.map(dedupKey)),docTitle=unH(document.title);
+  for(let k=0;k<localStorage.length;k++){const key=localStorage.key(k);
   const legacy=/^v7viewer\.notes\./.test(key), m=key.match(/^ae\.(.+)\.notes$/);
   if(!legacy&&!(m&&m[1]!==RID))continue;
   let arr=[];try{arr=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){}
   if(!Array.isArray(arr)||!arr.length)continue;
   const meta=m?LS.get(`ae.${m[1]}.meta`,null):null;
-  const have=new Set(notes.map(x=>x.id)),keys=new Set(notes.map(dedupKey));
   const fresh=arr.filter(x=>x&&x.page&&x.text&&!have.has(x.id)&&!keys.has(dedupKey(x)));
-  if(fresh.length)out.push({key,items:fresh,title:meta&&meta.title||"",same:legacy||(meta&&meta.title===unH(document.title))})}}catch(e){}return out}
+  if(fresh.length)out.push({key,items:fresh,title:meta&&meta.title||"",same:legacy||(meta&&meta.title===docTitle)})}}catch(e){}return out}
 // ---------- 别的审阅留在这个地址下、还没补传的改动（旧标签页留下的）：只能下载后导回那份审阅，不写进本审阅 ----------
 function strays(){const by={};try{for(let k=0;k<localStorage.length;k++){const key=localStorage.key(k);
     const m=key&&key.match(/^ae\.([0-9a-f]{16})\.(queue|pending|failed)$/);if(!m||m[1]===RID)continue;
@@ -1588,7 +1589,6 @@ function parseMdGrammar(text,g){const items=[];let page=null,title="",cur=null;
     if((m=line.match(g.pair))){cur.pair={side:g.sideIn(m[1]),match:g.matchIn(m[2]),text:m[3]};return}
     if(line.startsWith("   ")&&line.trim())cur.text+="\n"+line.slice(3)});
   return items}
-function parseMd(text){return parseMdGrammar(text,G_ZH)}   // 没有标记的旧中文格式
 function importRid(text){try{const s=String(text||"").trim();if(s[0]!=="{")return null;const d=JSON.parse(s);
   return typeof d.reviewId==="string"&&d.reviewId?{rid:d.reviewId,name:String(d.name||"")}:null}catch(e){return null}}
 function okToImport(text){const f=importRid(text);if(!f||f.rid===RID)return true;   // 导出文件带审阅标识：不是本审阅的先问
@@ -1619,7 +1619,7 @@ $("impFile").onchange=async e=>{const f=e.target.files[0];if(!f)return;let items
   if(!okToImport(txt)){e.target.value="";return}
   await runImport(items,tMsg("import.fileDone",{name:f.name}));e.target.value="";await offerAlways(importAlways(txt))};
 // 原页面已不在新版报告里的批注（重建后标 orphan，或页码已不存在）：在这里挪到正确的页
-function lostNotes(){return notes.filter(x=>x.orphan||!P.some(q=>q.n===x.page))}
+function lostNotes(){return notes.filter(x=>x.orphan||!PAGE_NS.has(x.page))}
 function renderOrphans(){const box=$("orphanBox"),lost=lostNotes();box.style.display=lost.length?"":"none";if(!lost.length){box.innerHTML="";return}
   const choices=new Map([...box.querySelectorAll("select[data-mv]")].map(el=>[el.dataset.mv,el.value]));
   const opts=P.map(q=>`<option value="${+q.n}">${escH(tMsg("viewer.page",{page:+q.n}))} | ${escH(clip(unH(q.title),24))}</option>`).join("");

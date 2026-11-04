@@ -736,8 +736,8 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
     except ValueError as e:
         print(T("serve.serve.badNotes", detail=e), file=sys.stderr)
         return 2
+    m = ledger.read_manifest(review_dir)   # 读不了或不是 JSON 对象都返回 {}：不提示复制
     try:
-        m = json.loads((review_dir / MANIFEST).read_text(encoding="utf-8"))
         orig = Path(m["reviewDir"]) if m.get("reviewDir") else None
         if orig and orig != review_dir and (orig / MANIFEST).exists():
             om = json.loads((orig / MANIFEST).read_text(encoding="utf-8"))
@@ -745,7 +745,7 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
                 print(T("serve.serve.copiedHint", orig=orig, dir=review_dir), file=sys.stderr)
     except (OSError, ValueError, AttributeError):
         pass
-    rid = ledger.read_manifest(review_dir).get("reviewId")
+    rid = m.get("reviewId")
     try:
         first, owned, avoid = plan_port(review_dir, rid, port, claim)
     except ClaimRefused as e:
@@ -1175,18 +1175,6 @@ def check(locale: str | None = None) -> int:
     return 1 if failed else 0
 
 
-def explicit_locale(argv: list[str]) -> object:
-    """从命令行里取出 --locale 的值（写在子命令前后都认）；没写返回 None。"""
-    for index, token in enumerate(argv):
-        if token == "--":
-            break
-        if token == "--locale":
-            return argv[index + 1] if index + 1 < len(argv) else ""
-        if token.startswith("--locale="):
-            return token.partition("=")[2]
-    return None
-
-
 class LocalizedParser(argparse.ArgumentParser):
     """帮助、用法与错误消息都走当前语言的 argparse 解析器；参数名与合法取值保持原文。"""
 
@@ -1225,7 +1213,7 @@ def _add_locale(parser: argparse.ArgumentParser) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    locale_choice = explicit_locale(argv)
+    locale_choice = i18n.explicit_locale(argv)
     # 先按共同契约定语言，再建解析器：帮助、参数说明与错误消息才能用同一种语言
     try:
         set_locale(i18n.cli_locale(locale_choice))

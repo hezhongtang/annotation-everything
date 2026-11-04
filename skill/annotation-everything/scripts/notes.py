@@ -142,14 +142,6 @@ ALWAYS_SCOPE_KEY = {"all": "viewer.hand.scope.all", "报告": "viewer.hand.scope
                     "讲稿": "viewer.hand.scope.script", "style": "viewer.hand.scope.style"}
 
 
-def cli_language(choice: object, review_dir: Path) -> str:
-    """命令行语言：--locale 优先于 AE_LOCALE，再优先于审阅里保存的选择，都没有时中文。"""
-    stored = load_manifest(review_dir).get("locale")
-    return i18n.resolve_locale(
-        i18n.effective_choice(choice, os.environ.get("AE_LOCALE"), stored if isinstance(stored, str) else None),
-        system_languages=i18n.system_languages())
-
-
 def cli_text(lang: str | None):
     """按当前语言取命令行文案；缺译时回退到另一种语言（词典自检保证两种语言齐备）。"""
     catalogs = i18n.load_all()   # 读一次缓存住：处理记录可能几百批，不能每条消息都读一遍文件
@@ -414,7 +406,7 @@ def pair_lines(n: dict[str, Any], texts: dict[str, dict[int, str]], lang: str | 
     pr = n.get("pair") if isinstance(n.get("pair"), dict) else None
     if pr:
         if lang == "en":
-            cat = i18n.load_catalog(lang)
+            cat = i18n.catalog(lang)
             return ["  " + i18n.translate(cat, "cli.show.pairRequired", side=_en_target(cat, pr.get("side")),
                                          match=i18n.translate(cat, "viewer.pairSame" if pr.get("match") == "exact" else "viewer.pairSimilar"),
                                          text=pr.get("text", ""))]
@@ -430,7 +422,7 @@ def pair_lines(n: dict[str, Any], texts: dict[str, dict[int, str]], lang: str | 
     if not got:
         return []
     if lang == "en":
-        cat = i18n.load_catalog(lang)
+        cat = i18n.catalog(lang)
         return ["  " + i18n.translate(cat, "cli.show.pairSuggested", side=_en_target(cat, other), page=n.get("page"),
                                      match=i18n.translate(cat, "viewer.pairSame" if got[0] == "exact" else "viewer.pairSimilar"),
                                      text=got[1])]
@@ -451,7 +443,7 @@ def _to_markdown_en(doc: dict[str, Any], manifest: dict[str, Any], *, include_re
                     sources: dict[str, Path | None] | None = None, handoff: dict[str, Any] | None = None,
                     only: set[str] | None = None, always: list[dict[str, str]] | None = None) -> str:
     """英文阅读输出。批注原文、引用原文和 id 不翻译；JSON 导出仍走原始对象。"""
-    cat = i18n.load_catalog("en")
+    cat = i18n.catalog("en")
 
     def t(key: str, **params: object) -> str:
         return i18n.translate(cat, key, **params)
@@ -641,21 +633,9 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
 #    > 引用（报告）：……          或  > Quote (Report): ……
 # 第一行的标记声明格式版本与内容语言，解析按它选文法，与导入界面的语言无关；
 # 没有标记的按旧中文格式读（0.3 以来的导出就是这样）。文法实现见 export_format.py。
-DELETE_TEXT = store.DELETE_TEXT
-REPLACE_PREFIX = store.REPLACE_PREFIX
-
-
 def parse_legacy_markdown(text: str) -> list[dict[str, Any]]:
     """旧中文格式（也等于新的中文文法）。保留这个名字：既有脚本和测试都在用。"""
     return ef.parse_zh(text)
-
-
-ALWAYS_ZH_REV = ef.ALWAYS_ZH_REV
-
-
-def parse_always_header(text: str) -> list[dict[str, str]] | None:
-    """导出开头那一行常驻技能（中文「常驻技能（…）：」、英文「Persistent skills (…): 」）；没有这行返回 None。"""
-    return ef.parse_always(text, ef.read_marker(text)[1] or "zh-CN")
 
 
 def read_import(path: Path, *, lang: str = i18n.DEFAULT_LOCALE) -> tuple[list[dict[str, Any]], list[dict[str, str]] | None, str | None]:
@@ -823,7 +803,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
     if a.cmd in LOCALIZED_CMDS:
         try:
             explicit = a.locale or (a.lang if a.cmd == "export" else None)
-            lang = cli_language(explicit, d)
+            lang = cli_locale(explicit, d)
         except i18n.LocaleError as exc:
             print(t("cli.notes.invalidLocale", name=exc.params.get("locale", "")), file=sys.stderr)
             return 2
@@ -864,7 +844,6 @@ def _main_locked(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd in ("resolve", "reopen"):
         status = "resolved" if a.cmd == "resolve" else "open"
-        t = cli_text(lang)
         bad = 0
         for nid in a.ids:
             try:
@@ -920,11 +899,8 @@ def _main_locked(argv: list[str] | None = None) -> int:
     if a.cmd == "export":
         doc = store.load(d)
         manifest = load_manifest(d)
-        stored = manifest.get("locale")
         try:
-            lang = i18n.resolve_locale(
-                i18n.effective_choice(a.lang, os.environ.get("AE_LOCALE"), stored if isinstance(stored, str) else None),
-                system_languages=i18n.system_languages())
+            lang = cli_locale(a.lang, d)
         except i18n.LocaleError as exc:
             print(t("cli.notes.invalidLocale", name=exc.params.get("locale", "")), file=sys.stderr)
             return 2
@@ -937,7 +913,6 @@ def _main_locked(argv: list[str] | None = None) -> int:
             body = json.dumps(ef.json_export(review_id=manifest.get("reviewId", ""), name=manifest.get("name", ""),
                                             namespace=manifest.get("namespace", ""), notes=picked,
                                             always=always, lang=lang), ensure_ascii=False, indent=2) + "\n"
-            suffix = "json"
         else:
             titles = dict(pages)
             for n in picked:   # 页面标题取不到时退回批注自己记的标题
@@ -982,11 +957,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
         except i18n.LocaleError as exc:
             print(f"错误：{exc}", file=sys.stderr)
             return 2
-        msgs = i18n.load_catalog(lang)
-        catalogs = i18n.load_all()
-
-        def t(key: str, **params: object) -> str:
-            return i18n.translate(msgs, key, catalogs=catalogs, **params)
+        t = cli_text(lang)
 
         def scope_label(scope: str) -> str:
             return t(always_label_key[scope])
@@ -1064,7 +1035,6 @@ def _main_locked(argv: list[str] | None = None) -> int:
         print(json.dumps({"claimed": True, **{k: v for k, v in item.items() if k != "openIds"}}, ensure_ascii=False))
         return 0
     if a.cmd == "done":
-        t = cli_text(lang)
         try:
             item = store.handoff_done(d, seq=a.seq, summary=a.summary, by=a.by,
                                       mode="draft" if a.draft else "final" if a.final else None, accept_rest=a.accept_rest,
@@ -1090,7 +1060,6 @@ def _main_locked(argv: list[str] | None = None) -> int:
             print(t("cli.hand.doneNone"), file=sys.stderr)
         return 0
     if a.cmd == "review":
-        t = cli_text(lang)
         bad = 0
         for nid in a.ids:
             try:
@@ -1281,7 +1250,7 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     state = store.handoff_state(d, full=False)
     if state.get("claimed") or state.get("reviewing"):
         print(t("cli.hand.waitHint", count=state.get("claimed", 0) + state.get("reviewing", 0)), file=sys.stderr)
-    want = {"draft": ("pending",), "review": ("review",), "any": ("pending", "review")}[stage]
+    want = store.CLAIM_STATUSES[stage]
     deadline = time.monotonic() + timeout if timeout > 0 else None
     mark: Path | None = ledger.wait_file(d, os.getpid())   # 让 serve.py list 看得出「有代理在等这份审阅」
     wait_info = {"version": 1, "pid": os.getpid(), "stage": stage, "since": store.now_iso()}
@@ -1380,8 +1349,9 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     end_hint = t("cli.hand.endReview" if item.get("target") == "review" else "cli.hand.endFinal")
     print(t("cli.hand.finishLine", dir=d, seq=item["seq"], end=end_hint) + "\n")
     doc = store.load(d)
-    mine = {n["id"] for n in doc["notes"] if n.get("id") in set(item.get("openIds") or []) and n.get("status", "open") == "open"}
-    others = [n for n in doc["notes"] if n.get("id") in set(item.get("openIds") or []) and n.get("status") == "drafted"]
+    open_ids = set(item.get("openIds") or [])
+    mine = {n["id"] for n in doc["notes"] if n.get("id") in open_ids and n.get("status", "open") == "open"}
+    others = [n for n in doc["notes"] if n.get("id") in open_ids and n.get("status") == "drafted"]
     if others:   # 提交后被别的批次初改了的：等那一批复核，不要动
         print(t("cli.hand.otherBatch", list=sep.join(
             t("cli.hand.otherBatchItem", id=n["id"], batch=n.get("draftBatch")) for n in others)) + "\n")

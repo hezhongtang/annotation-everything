@@ -296,7 +296,7 @@ class AlwaysScopeTests(unittest.TestCase):
         grammar = _between(self.source, "function expGrammar(", "const G_ZH=")
         self.assertIn("ALWAYS_EXPORT[s]", grammar)
         self.assertNotIn("alwaysLabel(", grammar, "交换格式不能从界面语言反推范围标签")
-        self.assertIn("g.alwaysHead(alwaysSkills)", _between(self.source, "function exportText(", "function parseMd("))
+        self.assertIn("g.alwaysHead(alwaysSkills)", _between(self.source, "function exportText(", "function importRid("))
 
     def test_lenient_scope_read_maps_unknown_to_all(self):
         self.assertIn("ALWAYS_SCOPES.includes(a.scope)?a.scope:\"all\"", self.split.replace(" ", ""))

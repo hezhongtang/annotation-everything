@@ -38,7 +38,6 @@ import os
 import re
 import secrets
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
@@ -197,7 +196,7 @@ def ui_locale(locale: str | None) -> str:
 def diag(locale: str | None, key: str, **params: object) -> str:
     """按当前语言取一条诊断文案。"""
     import i18n
-    return i18n.translate(i18n.load_catalog(ui_locale(locale)), key, **params)
+    return i18n.translate(i18n.catalog(ui_locale(locale)), key, **params)
 
 
 def parse_script(script: str, locale: str | None = None, path: str = "") -> tuple[str, str, list[dict], list[str]]:
@@ -596,15 +595,8 @@ def page_csp(page_html: str) -> str:
 
 def write_private(path: Path, text: str) -> None:
     """原子写入（临时文件 + os.replace），权限 0600：服务读到的不会是写了一半的文件。"""
-    fd, tmp = tempfile.mkstemp(prefix="." + path.name + "-", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
+    import fsutil
+    fsutil.atomic_write(path, text, prefix="." + path.name + "-", fsync=False)
 
 
 def read_skills(review_dir: Path) -> list[dict]:
@@ -619,17 +611,10 @@ def read_always(review_dir: Path) -> list[dict]:
     return notes_store.always_skills(review_dir)
 
 
-def read_manifest(review_dir: Path) -> dict:
-    try:
-        m = json.loads((review_dir / "review.json").read_text(encoding="utf-8"))
-        return m if isinstance(m, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
 def resolve_sources(review_dir: Path, manifest: dict | None = None, *, locale: str | None = None) -> dict[str, Path | None]:
     """按 review.json 找源文件：先用相对审阅目录的路径（目录树整体复制后仍指向副本），再用绝对路径。"""
-    m = manifest if manifest is not None else read_manifest(review_dir)
+    import ledger
+    m = manifest if manifest is not None else ledger.read_manifest(review_dir)
     if "sourcesRel" in m:  # 0.1 版格式：sources 是绝对路径
         rel, absolute = m.get("sourcesRel") or {}, m.get("sources") or {}
     else:
@@ -658,14 +643,15 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
           skills_from: list[Path] | None = None, no_scan_skills: bool = False,
           locale: str | None = None) -> dict:
     import i18n
-    preview = read_manifest(out) if out.exists() else {}
+    import ledger
+    preview = ledger.read_manifest(out) if out.exists() else {}
     try:
         # 调用方没写 --locale 时沿用已有 review.json；两边都没有则不写入（旧审阅保持中文）
         locale_choice = i18n.canonical_choice(i18n.effective_choice(locale, os.environ.get("AE_LOCALE"), preview.get("locale")))
     except i18n.LocaleError as exc:
         raise SystemExit(f"错误：{exc}") from exc
     # 生成侧的提示按本次选择的语言写；没选就是中文（旧审阅、旧调用）。auto 在这里定成具体语言
-    warn_catalog = i18n.load_catalog(
+    warn_catalog = i18n.catalog(
         i18n.resolve_locale(locale_choice, system_languages=i18n.system_languages()))
     doc = report.read_text(encoding="utf-8")
     assets = Assets(asset_root or report.resolve().parent, locale=locale_choice)
@@ -716,7 +702,7 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         # 讲稿没有前言时用系统默认简介：句子走词典，页面切语言时由 applyLocale 重写
         intro = (f'<h2>{esc(final_title)}</h2>'
                  f'<p data-msg="viewer.introDefault">'
-                 f'{esc(i18n.translate(i18n.load_catalog(ui_locale(locale_choice)), "viewer.introDefault"))}</p>')
+                 f'{esc(i18n.translate(i18n.catalog(ui_locale(locale_choice)), "viewer.introDefault"))}</p>')
     out.mkdir(parents=True, exist_ok=True)
     if not no_scan_skills:
         import notes_store
@@ -734,14 +720,14 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
                     assets.warn(i18n.translate(warn_catalog, "cli.skills.warnUnavailable"))
         except (OSError, notes_store.NoteError) as e:
             assets.warn(str(e))
-    old = read_manifest(out)
+    old = ledger.read_manifest(out)
     old_keys = {int(pg["n"]): str(pg["key"]) for pg in old.get("pages", [])
                 if isinstance(pg, dict) and "n" in pg and pg.get("key") and pg.get("stable", stable_key(pg["key"]))}
     # 审阅标识：页面据此确认连上的是这份审阅的服务；重建时沿用。目录是从别处复制来的，就换一个新的
     rid = old.get("reviewId") if re.fullmatch(r"[0-9a-f]{16}", str(old.get("reviewId", ""))) else None
     orig = Path(old["reviewDir"]) if old.get("reviewDir") else None
     # 原目录还在、且标识相同才算复制；整个目录被移走（原目录已不在）则沿用标识，浏览器里的暂存不丢
-    copied = bool(rid and orig and orig != out.resolve() and read_manifest(orig).get("reviewId") == rid)
+    copied = bool(rid and orig and orig != out.resolve() and ledger.read_manifest(orig).get("reviewId") == rid)
     if copied:
         assets.warn(diag(locale_choice, "build.source.copied", path=old["reviewDir"]))
     if rid is None or copied:
@@ -754,7 +740,7 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
                      "kind": "图片 幻灯片" if image_pages >= (len(sects) + 1) // 2 else "HTML 报告"}
     import notes_store
     import i18n
-    catalogs = {tag: i18n.load_catalog(tag)["messages"] for tag in i18n.SUPPORTED}
+    catalogs = {tag: i18n.catalog(tag)["messages"] for tag in i18n.SUPPORTED}
     report_html = re.search(r"<html\b[^>]*>", doc, re.I)
     report_language = attrs_of(report_html.group()).get("lang", "") if report_html else ""
     values = {"TITLE": html.escape(final_title), "INTRO": intro, "PAGES": _js(pages), "SECTIONS": _js(sections),
@@ -841,13 +827,14 @@ def register_review(rid: str, out: Path, review_name: str, assets: Assets) -> No
 
 def main(argv: list[str] | None = None) -> int:
     import i18n
+    import ledger
     argv = sys.argv[1:] if argv is None else argv
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--locale")
     pre.add_argument("--rebuild", type=Path)
     pre.add_argument("--out", type=Path)
     requested, _ = pre.parse_known_args(argv)
-    previous = read_manifest(requested.rebuild or requested.out) if requested.rebuild or requested.out else {}
+    previous = ledger.read_manifest(requested.rebuild or requested.out) if requested.rebuild or requested.out else {}
     try:
         language = i18n.cli_locale(requested.locale, stored=previous.get("locale"))
     except i18n.LocaleError as exc:
@@ -855,7 +842,6 @@ def main(argv: list[str] | None = None) -> int:
         print(diag(language, "cli.notes.invalidLocale", name=exc.params.get("locale", "")), file=sys.stderr)
         return 2
     t = i18n.Translator(language)
-    import ledger
     ledger.set_locale(language)
     ap = argparse.ArgumentParser(prog="build_viewer.py", description=t("build.cli.description"))
     ap.add_argument("--rebuild", type=Path, metavar=t("build.cli.reviewDir"), help=t("build.cli.rebuild"))
@@ -873,7 +859,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--locale", help=t("build.cli.locale"))
     a = ap.parse_args(argv)
     if a.rebuild:
-        m = read_manifest(a.rebuild)
+        m = ledger.read_manifest(a.rebuild)
         if not m:
             ap.error(t("build.cli.missingManifest", path=a.rebuild / "review.json"))
         src, opt = resolve_sources(a.rebuild, m, locale=language), m.get("build") or {}
