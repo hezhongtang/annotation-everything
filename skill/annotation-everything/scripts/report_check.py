@@ -242,7 +242,7 @@ def load_record(record_path: Path | None, c: Checks) -> tuple[dict | None, bool]
         return None, False
     try:
         record = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         c.set("record.structure", "fail", code="record.broken", reason=str(exc))
         return None, False
     if not isinstance(record, dict):
@@ -260,6 +260,8 @@ def load_record(record_path: Path | None, c: Checks) -> tuple[dict | None, bool]
               fields="、".join(missing))
         return None, False
     type_errors = []
+    if "summary" in record and not isinstance(record["summary"], str):
+        type_errors.append("summary")
     links = record["links"]
     if not isinstance(links, dict) or not isinstance(links.get("report"), str) \
             or not isinstance(links.get("sha256"), dict) \

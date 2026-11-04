@@ -406,8 +406,8 @@ class Handler(BaseHTTPRequestHandler):
     def _ident(self) -> dict[str, Any]:
         # name：审阅名。别的审阅的旧标签页连到这个端口时，据此告诉用户「这里现在是哪一份」（无 CORS 头，只有同源页面读得到）
         return {"app": APP, "reviewId": self.server.review_id(), "name": self.server.review_name(),
-                "version": VERSION, "features": FEATURES,
                 "archived": review_overview.is_archived(self.server.review_dir),
+                "version": VERSION, "features": FEATURES,
                 "receiver": wakeup.receiver_status(self.server.review_dir, self.server.agent_binding)}
 
     def _check_receiver(self, body: dict[str, Any]) -> None:
@@ -921,10 +921,10 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
     """台账里一份审阅的现场状态。审阅名、运行与提交状态都从审阅目录现读。"""
     d = Path(e["dir"])
     row: dict[str, Any] = {"reviewId": rid, "dir": str(d), "port": e.get("port"), "name": None, "state": None,
+                           "archived": review_overview.is_archived(d),
                            "state_id": None,
                            "running": None, "pending": 0, "review": 0, "waiting": False, "hook": False, "unattended": False,
-                           "agentDelivery": None, "receiptConfirmed": None,
-                           "archived": review_overview.is_archived(d)}
+                           "agentDelivery": None, "receiptConfirmed": None}
     st = ledger.entry_state(rid, e)
     # state 是给脚本读的判定值，恒为中文、不随语言改值；state_id 是语言无关的稳定值；
     # 给人看的那一层由 list_reviews 用 _state_label 按语言显示。

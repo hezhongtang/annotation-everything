@@ -229,7 +229,19 @@ def review_overview_checks(browser, tmp: Path):
     subprocess.run(["git", "init", "-q", str(workspace)], check=True, capture_output=True)
     current, stopped, missing = [workspace / name for name in ("current", "stopped", "missing")]
     build(current, name="Synthetic current review")
-    build(stopped, name="Synthetic stopped review")
+    material = workspace / "synthetic-material"
+    material.mkdir()
+    report = material / "report.html"
+    shutil.copyfile(FIXTURE / "report.en.html", report)
+    record = {"schema": "ae-report-record/1", "generatedAt": "2026-11-03T12:00:00Z",
+              "summary": "Revenue grew. <b>Review costs.</b>",
+              "request": {"purpose": "Quarterly decision", "audience": "经营委员会",
+                          "coreQuestions": ["Why growth?", "Which costs?"]},
+              "sources": [], "method": {},
+              "links": {"report": "report.html", "sha256": {"report": hashlib.sha256(report.read_bytes()).hexdigest()}},
+              "findings": [], "gaps": [], "checks": [], "openItems": [], "verdict": {}}
+    (material / "report-record.json").write_text(json.dumps(record), encoding="utf-8")
+    build(stopped, report=report, script=FIXTURE / "script.en.md", name="Synthetic stopped review")
     build(missing, name="Synthetic missing review")
     shutil.rmtree(missing)
     srv = start_server(current, free_port())
@@ -243,12 +255,21 @@ def review_overview_checks(browser, tmp: Path):
         ok(ready, "地址 #overview 直接打开审阅总览")
         if not ready:
             return
+        detail = page.inner_text("#overviewDetail")
+        ok("（无摘要）" in detail and "示例咖啡 2030 年三季度经营回顾" in detail,
+           "无记录审阅显示无摘要和报告封面真实标题")
         ok(page.is_visible("#overviewBack") and page.is_visible("#overviewScope"), "总览提供范围切换和返回当前审阅")
         for state in ("running", "stopped", "invalid"):
             ok(page.locator('[data-overview-group="%s"]' % state).count() == 1, "总览显示 %s 分组" % state)
         stopped_id = json.loads((stopped / "review.json").read_text())["reviewId"]
         page.click('[data-review-id="%s"]' % stopped_id)
         ok("Synthetic stopped review" in page.inner_text("#overviewDetail"), "选择审阅后详情与列表一致")
+        detail = page.inner_text("#overviewDetail")
+        ok(all(text in detail for text in (record["summary"], "Quarterly decision", "经营委员会",
+                                          "Why growth?", "Which costs?")),
+           "详情显示摘要、用途、读者和核心问题原文")
+        ok(record["summary"] in detail and page.locator("#overviewDetail b, #overviewDetail img").count() == 0,
+           "核验记录中的 HTML 只显示为文字")
         ok("stopped" in page.inner_text("#overviewDetail") and str(workspace) not in page.inner_text("#overview"),
            "详情显示相对路径，不暴露工作区绝对路径")
         invalid = page.locator('[data-overview-group="invalid"] [data-review-id]').first
@@ -301,12 +322,23 @@ def review_overview_checks(browser, tmp: Path):
         page.click("#overviewBtn")
         ok(wait_dom(page, """() => document.body.classList.contains('overview-mode')
                    && !document.getElementById('overview').hidden
-                   && document.querySelector('#overviewDetail dt')?.textContent === 'Status'
+                   && Array.from(document.querySelectorAll('#overviewDetail dt')).some(el => el.textContent === 'Status')
                    && document.querySelector('[data-overview-group="running"] h2')?.textContent.includes('Running')""", 5,
                    condition="hashchange 后总览详情和分组已按英文重绘"),
            "英文界面的总览标题已翻译")
-        visible = page.inner_text("#overview")
-        ok(not any("\u4e00" <= char <= "\u9fff" for char in visible), "英文总览没有系统中文残留")
+        current_id = json.loads((current / "review.json").read_text())["reviewId"]
+        page.click('[data-review-id="%s"]' % current_id)
+        detail = page.inner_text("#overviewDetail")
+        ok("(No summary)" in detail and "示例咖啡 2030 年三季度经营回顾" in detail,
+           "英文无摘要提示保留中文封面原文")
+        page.click('[data-review-id="%s"]' % stopped_id)
+        detail = page.inner_text("#overviewDetail")
+        ok(all(text in detail for text in ("Summary", "Purpose", "Audience", "Core questions", "经营委员会")),
+           "英文详情翻译系统标签并保留核验记录原文")
+        system_copy = page.locator(".overview-top, .overview-group h2, .overview-row-meta, "
+                                   "#overviewDetail dt, #overviewDetail h3, .overview-actions").all_text_contents()
+        ok(not any("\u4e00" <= char <= "\u9fff" for char in "".join(system_copy)),
+           "英文总览的系统文案没有中文残留")
     finally:
         ctx.close()
         stop(srv)
