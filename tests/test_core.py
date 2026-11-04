@@ -1967,6 +1967,26 @@ class LedgerTests(unittest.TestCase):
         self.assertTrue(seen and all(seen), "等待期间留着标记")
         self.assertFalse(ledger.wait_file(d, os.getpid()).exists(), "结束后删掉")
 
+    def test_wait_marker_without_binding_keeps_its_format(self):
+        """没有接收方绑定的等待标记格式不变（#92）：不带 expiresAt——它不会按有效期重写。"""
+        d = tmpdir() / "r"
+        self.build(d)
+        seen = []
+        real = time.sleep
+
+        def spy(x):
+            seen.append(json.loads(ledger.wait_file(d, os.getpid()).read_text(encoding="utf-8")))
+            real(0.01)
+        time.sleep = spy
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(notes_cli.main(["wait", str(d), "--timeout", "0.3", "--interval", "0.2"]), 3)
+        finally:
+            time.sleep = real
+        self.assertTrue(seen)
+        for mark in seen:
+            self.assertEqual(set(mark), {"version", "pid", "stage", "since"})
+
     def test_health_reports_review_name(self):
         d = tmpdir() / "r"
         self.build(d, name="V7 汇报稿")

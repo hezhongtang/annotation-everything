@@ -1226,8 +1226,10 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
         wait_info.update(bindingId=binding["bindingId"], **wakeup.binding_identity(binding))
     mark_window = max(5, interval * 3)   # 等待标记的有效期；服务端据此判断「有代理在等」
     mark_expires = time.time() + mark_window
+    # 有效期只对带绑定的标记有意义（只有它会按有效期重写）；没有绑定的标记格式不变
+    first = {**wait_info, "expiresAt": mark_expires} if claim and binding else wait_info
     try:
-        write_private(mark, json.dumps({**wait_info, "expiresAt": mark_expires}) + "\n")
+        write_private(mark, json.dumps(first) + "\n")
     except OSError:
         mark = None
 
