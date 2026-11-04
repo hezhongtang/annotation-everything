@@ -4,8 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+import build_viewer
 import ledger
 import notes_store as store
+import report_check
 
 STATE_ORDER = {"running": 0, "running-temp": 0, "stopped": 1, "missing": 2, "mismatch": 2}
 
@@ -40,6 +42,56 @@ def last_activity(directory: Path) -> float | None:
     return max(times) if times else None
 
 
+def report_metadata(directory: Path, review_id: str) -> dict[str, Any]:
+    """顺着报告来源读取可展示的核验信息；损坏记录不影响其他审阅。"""
+    metadata: dict[str, Any] = {"summary": "", "purpose": "", "audience": "",
+                                "coreQuestions": [], "coverTitle": ""}
+    manifest = ledger.read_manifest(directory)
+    if manifest.get("reviewId") != review_id:
+        return metadata
+    pages = manifest.get("pages")
+    if isinstance(pages, list) and pages and isinstance(pages[0], dict):
+        title = pages[0].get("title")
+        if isinstance(title, str):
+            metadata["coverTitle"] = title
+    # 与构建入口相同：相对路径优先，兼容 0.1 的 sourcesRel / sources 组合。
+    relative, absolute = ((manifest.get("sourcesRel"), manifest.get("sources"))
+                          if "sourcesRel" in manifest else
+                          (manifest.get("sources"), manifest.get("sourcesAbs")))
+    report = None
+    for base, sources in ((directory, relative), (Path(), absolute)):
+        name = sources.get("report") if isinstance(sources, dict) else None
+        if not isinstance(name, str) or not name:
+            continue
+        try:
+            candidate = base / name
+            if candidate.is_file():
+                report = candidate.resolve()
+                break
+        except (OSError, ValueError, RuntimeError):
+            continue
+    if report is None:
+        return metadata
+    try:
+        cover = build_viewer.find_pages(report.read_text(encoding="utf-8"), locale="en")
+        if cover:
+            metadata["coverTitle"] = cover[0]["title"]
+    except (OSError, UnicodeError, SystemExit):
+        pass
+    record, valid = report_check.load_record(report.with_name("report-record.json"), report_check.Checks("en"))
+    if not valid or record is None:
+        return metadata
+    request = record["request"]
+    purpose, audience = request.get("purpose", ""), request.get("audience", "")
+    questions = request.get("coreQuestions", [])
+    if not isinstance(purpose, str) or not isinstance(audience, str) \
+            or not isinstance(questions, list) or any(not isinstance(q, str) for q in questions):
+        return metadata
+    metadata.update(summary=record.get("summary", ""), purpose=purpose,
+                    audience=audience, coreQuestions=questions)
+    return metadata
+
+
 def snapshot(review_dir: Path, review_id: str | None, scope: str,
              row_builder: Callable[[str, dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
     """台账是索引，审阅名、计数和运行状态由 list 的同一份逻辑现读。"""
@@ -60,6 +112,7 @@ def snapshot(review_dir: Path, review_id: str | None, scope: str,
             "lastActivity": last_activity(directory), "current": rid == review_id,
             "url": f"http://127.0.0.1:{running}/" if running else None,
             "forgetCommand": f"serve.py forget {rid[:8]}" if state in ("missing", "mismatch") else None,
+            **report_metadata(directory, rid),
         })
     rows.sort(key=lambda row: (STATE_ORDER.get(row["state"], 2), -(row["lastActivity"] or 0),
                                row["name"].casefold(), row["reviewId"]))

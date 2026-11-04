@@ -1798,9 +1798,9 @@ class OverviewTests(unittest.TestCase):
         self.addCleanup(self.srv.shutdown)
         self.good = {"Host": f"127.0.0.1:{self.srv.port}"}
 
-    def build(self, directory, name):
+    def build(self, directory, name, report=FIXTURE / "report.html", script=FIXTURE / "script.md"):
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            return build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", directory, name=name)
+            return build_viewer.build(report, script, directory, name=name)
 
     def request(self, path):
         status, headers, raw = serve._req(self.srv.port, "GET", path, self.good)
@@ -1821,6 +1821,114 @@ class OverviewTests(unittest.TestCase):
         for row in all_reviews:
             self.assertFalse(Path(row["path"]).is_absolute(), row)
             self.assertNotIn(str(self.tree), json.dumps(row), row)
+
+    def test_report_metadata_reads_next_to_source_and_preserves_text(self):
+        material = self.workspace / "synthetic-material"
+        material.mkdir()
+        report = material / "report.html"
+        report.write_text('<!doctype html><title>Synthetic document</title>'
+                          '<section class="page" data-page="1" data-key="cover">'
+                          '<h1>Synthetic cover title</h1></section>', encoding="utf-8")
+        record = {"schema": "ae-report-record/1", "generatedAt": "2026-11-03T12:00:00Z",
+                  "summary": "Revenue grew. <b>Review costs.</b>",
+                  "request": {"purpose": "Quarterly decision", "audience": "Management",
+                              "coreQuestions": ["Why growth?", "Which costs?"]},
+                  "sources": [{"path": str(material / "private-material.md")}],
+                  "method": {}, "links": {"report": "report.html", "sha256": {"report": "synthetic"}},
+                  "findings": [], "gaps": [], "checks": [], "openItems": [], "verdict": {}}
+        record_path = material / "report-record.json"
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+        directory = self.workspace / "metadata-review"
+        rid = self.build(directory, "Synthetic metadata review", report=report, script=None)["reviewId"]
+        # 总览沿着报告来源找记录，不读取审阅目录里同名的无关文件。
+        (directory / "report-record.json").write_text('{"summary": "Wrong directory"}', encoding="utf-8")
+        row = next(row for row in self.request("/api/overview")["reviews"] if row["reviewId"] == rid)
+        self.assertEqual(row["summary"], "Revenue grew. <b>Review costs.</b>")
+        self.assertEqual(row["purpose"], "Quarterly decision")
+        self.assertEqual(row["audience"], "Management")
+        self.assertEqual(row["coreQuestions"], ["Why growth?", "Which costs?"])
+        self.assertEqual(row["coverTitle"], "Synthetic cover title")
+        self.assertNotIn(str(material), json.dumps(row))
+        self.assertNotIn("sources", row)
+        record["summary"] = "Updated after the review was built."
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+        updated = next(row for row in self.request("/api/overview")["reviews"] if row["reviewId"] == rid)
+        self.assertEqual(updated["summary"], "Updated after the review was built.")
+
+    def test_missing_record_falls_back_to_report_cover_title_not_script_heading(self):
+        row = next(row for row in self.request("/api/overview")["reviews"]
+                   if row["reviewId"] == self.current["reviewId"])
+        self.assertEqual((row["summary"], row["purpose"], row["audience"], row["coreQuestions"]),
+                         ("", "", "", []))
+        self.assertEqual(row["coverTitle"], "示例咖啡 2030 年三季度经营回顾")
+
+    def test_damaged_report_records_leave_metadata_empty_without_breaking_overview(self):
+        material = self.workspace / "damaged-material"
+        material.mkdir()
+        report = material / "report.html"
+        report.write_text('<section class="page" data-page="1" data-key="cover">'
+                          '<h1>Synthetic damaged-record cover</h1></section>', encoding="utf-8")
+        rid = self.build(self.workspace / "damaged", "Synthetic damaged record", report=report, script=None)["reviewId"]
+        record = {"schema": "ae-report-record/1", "generatedAt": "2026-11-03T12:00:00Z",
+                  "summary": "This metadata must not survive a damaged record.",
+                  "request": {"purpose": "Quarterly decision", "audience": "Management",
+                              "coreQuestions": ["Why growth?"]},
+                  "sources": [], "method": {},
+                  "links": {"report": "report.html", "sha256": {"report": "synthetic"}},
+                  "findings": [], "gaps": [], "checks": [], "openItems": [], "verdict": {}}
+        malformed = [b"{ not json", b"\xff", b"[]", b"{}",
+                     json.dumps({**record, "schema": "ae-report-record/99"}).encode(),
+                     json.dumps({**record, "summary": None}).encode(),
+                     json.dumps({**record, "request": []}).encode(),
+                     json.dumps({**record, "request": {"purpose": 7}}).encode(),
+                     json.dumps({**record, "request": {"coreQuestions": ["Why?", {}]}}).encode(),
+                     ("[" * 20000 + "]" * 20000).encode()]
+        for content in malformed:
+            with self.subTest(content=content[:80]):
+                (material / "report-record.json").write_bytes(content)
+                rows = self.request("/api/overview")["reviews"]
+                self.assertEqual(len(rows), 2)
+                row = next(row for row in rows if row["reviewId"] == rid)
+                self.assertEqual((row["summary"], row["purpose"], row["audience"], row["coreQuestions"]),
+                                 ("", "", "", []))
+                self.assertEqual(row["coverTitle"], "Synthetic damaged-record cover")
+
+    def test_old_records_and_source_locations_keep_overview_metadata(self):
+        material = self.workspace / "legacy-material"
+        material.mkdir()
+        report = material / "report.html"
+        report.write_text('<section class="page" data-page="1" data-key="cover">'
+                          '<h1>Synthetic legacy cover</h1></section>', encoding="utf-8")
+        record = {"schema": "ae-report-record/1", "generatedAt": "2026-11-03T12:00:00Z",
+                  "request": {"purpose": "Legacy quarterly decision", "audience": "Management",
+                              "coreQuestions": ["What changes next?"]},
+                  "sources": [], "method": {},
+                  "links": {"report": "report.html", "sha256": {"report": "synthetic"}},
+                  "findings": [], "gaps": [], "checks": [], "openItems": [], "verdict": {}}
+        (material / "report-record.json").write_text(json.dumps(record), encoding="utf-8")
+        decoy = self.workspace / "other-material"
+        decoy.mkdir()
+        (decoy / "report.html").write_text(report.read_text(encoding="utf-8"), encoding="utf-8")
+        (decoy / "report-record.json").write_text(json.dumps({**record, "summary": "Wrong source"}), encoding="utf-8")
+        directory = self.workspace / "legacy-review"
+        rid = self.build(directory, "Synthetic legacy review", report=report, script=None)["reviewId"]
+        original = json.loads((directory / "review.json").read_text(encoding="utf-8"))
+        relative = original["sources"]["report"]
+        formats = [
+            {"sources": {"report": relative, "script": "missing-script.md"},
+             "sourcesAbs": {"report": str(decoy / "report.html")}},
+            {"sources": {"report": "missing-report.html"}, "sourcesAbs": {"report": str(report)}},
+            {"sourcesRel": {"report": relative}, "sources": {"report": str(decoy / "report.html")}},
+        ]
+        for source_format in formats:
+            with self.subTest(source_format=source_format):
+                (directory / "review.json").write_text(json.dumps({**original, **source_format}), encoding="utf-8")
+                row = next(row for row in self.request("/api/overview")["reviews"] if row["reviewId"] == rid)
+                self.assertEqual(row["summary"], "")
+                self.assertEqual(row["purpose"], "Legacy quarterly decision")
+                self.assertEqual(row["audience"], "Management")
+                self.assertEqual(row["coreQuestions"], ["What changes next?"])
+                self.assertEqual(row["coverTitle"], "Synthetic legacy cover")
 
     def test_activity_order_counts_running_and_invalid_entries(self):
         older = self.workspace / "older"
@@ -1860,6 +1968,8 @@ class OverviewTests(unittest.TestCase):
         for rid in (missing_id, mismatch_id):
             self.assertIsNone(by_id[rid]["url"])
             self.assertEqual(by_id[rid]["forgetCommand"], f"serve.py forget {rid[:8]}")
+            self.assertEqual((by_id[rid]["summary"], by_id[rid]["purpose"], by_id[rid]["audience"],
+                              by_id[rid]["coreQuestions"], by_id[rid]["coverTitle"]), ("", "", "", [], ""))
         listed = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "list", "--json"],
                                 capture_output=True, text=True, check=True, timeout=30)
         for row in json.loads(listed.stdout)["reviews"]:

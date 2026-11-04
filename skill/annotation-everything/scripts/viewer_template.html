@@ -205,7 +205,13 @@ body.overview-mode>header,body.overview-mode>#srvBar,body.overview-mode>#resume,
 .overview-detail{background:var(--ae-panel);border:1px solid var(--ae-line);border-radius:12px;padding:24px;min-width:0;position:sticky;top:86px;overflow-wrap:anywhere}
 .overview-detail h2{margin:0 0 8px;font-size:21px;line-height:1.5;color:var(--ae-navy)}
 .overview-identity{font-size:12px;color:var(--ae-mut);line-height:1.7;margin-bottom:16px}
+.overview-metadata{padding:16px 0;border-top:1px solid var(--ae-line);border-bottom:1px solid var(--ae-line)}
+.overview-metadata h3{font-size:12px;font-weight:600;color:var(--ae-mut);margin:0 0 8px}
+.overview-summary{font-size:15px;line-height:1.8;margin:0;white-space:pre-wrap}
+.overview-empty-summary{color:var(--ae-mut)}
+.overview-questions{margin:0;padding-left:20px}
 .overview-detail dl{display:grid;grid-template-columns:95px minmax(0,1fr);gap:10px 14px;margin:18px 0;font-size:14px;line-height:1.7}
+.overview-metadata dl{margin-bottom:0}
 .overview-detail dt{color:var(--ae-mut)}.overview-detail dd{margin:0}
 .overview-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:20px;padding-top:16px;border-top:1px solid var(--ae-line)}
 #overview .overview-open{text-decoration:none;display:inline-block;background:var(--ae-accent);color:#fff;border-color:var(--ae-accent)}
@@ -1782,7 +1788,16 @@ function renderOverview(){
   const action=row.current?`<button class="overview-open" disabled>${escH(tMsg("viewer.overview.open"))}</button>`
     :!invalid&&url?`<a class="overview-open" href="${escH(url)}" target="_blank" rel="noopener noreferrer">${escH(tMsg("viewer.overview.open"))}</a>`:"";
   const forget=invalid&&typeof row.forgetCommand==="string"?`<code class="overview-command">${escH(row.forgetCommand)}</code><button id="overviewForgetCopy">${escH(tMsg("viewer.overview.copyCommand"))}</button>`:"";
+  const summary=typeof row.summary==="string"&&row.summary.trim()?`<span lang="">${escH(row.summary)}</span>`
+    :`<span class="overview-empty-summary">${escH(tMsg("viewer.overview.noSummary"))}</span>${typeof row.coverTitle==="string"&&row.coverTitle?` <span lang="">${escH(row.coverTitle)}</span>`:""}`;
+  const purpose=typeof row.purpose==="string"?row.purpose:"",audience=typeof row.audience==="string"?row.audience:"";
+  const questions=Array.isArray(row.coreQuestions)?row.coreQuestions.filter(q=>typeof q==="string"&&q.trim()):[];
+  const problems=(purpose?`<dt>${escH(tMsg("viewer.overview.purpose"))}</dt><dd lang="">${escH(purpose)}</dd>`:"")
+    +(audience?`<dt>${escH(tMsg("viewer.overview.audience"))}</dt><dd lang="">${escH(audience)}</dd>`:"")
+    +(questions.length?`<dt>${escH(tMsg("viewer.overview.coreQuestions"))}</dt><dd lang=""><ul class="overview-questions">${questions.map(q=>`<li>${escH(q)}</li>`).join("")}</ul></dd>`:"");
+  const metadata=`<section class="overview-metadata"><h3>${escH(tMsg("viewer.overview.summary"))}</h3><p class="overview-summary">${summary}</p>${problems?`<dl>${problems}</dl>`:""}</section>`;
   $("overviewDetail").innerHTML=`<h2>${escH(row.name||row.reviewId.slice(0,8))}</h2><div class="overview-identity"><span>${escH(row.reviewId.slice(0,8))}</span><br><span>${escH(row.path||"")}</span></div>
+    ${metadata}
     <dl><dt>${escH(tMsg("viewer.overview.status"))}</dt><dd>${escH(overviewStateLabel(row))}</dd><dt>${escH(tMsg("viewer.overview.submissions"))}</dt><dd>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}<br>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</dd><dt>${escH(tMsg("viewer.overview.activity"))}</dt><dd>${escH(overviewTime(row.lastActivity))}</dd><dt>${escH(tMsg("viewer.overview.port"))}</dt><dd>${escH(row.port||"—")}${row.running&&row.running!==row.port?" · "+escH(tMsg("viewer.overview.actualPort",{port:row.running})):""}</dd></dl>
     <div class="overview-actions">${invalid?forget:action}</div>`;
   const copy=$("overviewForgetCopy");if(copy)copy.onclick=async()=>{await copyText(row.forgetCommand);toast(tMsg("viewer.overview.copied"))};
