@@ -223,6 +223,52 @@ def drag_select(page, locator):
     page.mouse.up()
 
 
+def review_overview_checks(browser, tmp: Path):
+    workspace = tmp / "overview-workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-q", str(workspace)], check=True, capture_output=True)
+    current, stopped, missing = [workspace / name for name in ("current", "stopped", "missing")]
+    build(current, name="Synthetic current review")
+    build(stopped, name="Synthetic stopped review")
+    build(missing, name="Synthetic missing review")
+    shutil.rmtree(missing)
+    srv = start_server(current, free_port())
+    port = json.loads((current / ".annotation-server.json").read_text())["port"]
+    ctx = browser.new_context(viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/#overview")
+        ready = wait_dom(page, "() => document.getElementById('overviewList')?.querySelector('[data-review-id]') != null", 8,
+                         condition="总览显示合成审阅列表")
+        ok(ready, "地址 #overview 直接打开审阅总览")
+        if not ready:
+            return
+        ok(page.is_visible("#overviewBack") and page.is_visible("#overviewScope"), "总览提供范围切换和返回当前审阅")
+        for state in ("running", "stopped", "invalid"):
+            ok(page.locator('[data-overview-group="%s"]' % state).count() == 1, "总览显示 %s 分组" % state)
+        stopped_id = json.loads((stopped / "review.json").read_text())["reviewId"]
+        page.click('[data-review-id="%s"]' % stopped_id)
+        ok("Synthetic stopped review" in page.inner_text("#overviewDetail"), "选择审阅后详情与列表一致")
+        ok("stopped" in page.inner_text("#overviewDetail") and str(workspace) not in page.inner_text("#overview"),
+           "详情显示相对路径，不暴露工作区绝对路径")
+        invalid = page.locator('[data-overview-group="invalid"] [data-review-id]').first
+        invalid.click()
+        ok("serve.py forget " in page.inner_text("#overviewDetail") and page.locator("#overviewDetail a").count() == 0,
+           "失效审阅只能复制清理命令，不能打开")
+        page.click("#overviewBack")
+        ok(page.is_visible("#ntext") and not page.is_visible("#overview"), "返回当前审阅恢复批注界面")
+        page.select_option("#localePick", "en")
+        page.click("#overviewBtn")
+        ok(wait_dom(page, "() => document.getElementById('overview').textContent.includes('Review overview')", 5),
+           "英文界面的总览标题已翻译")
+        visible = page.inner_text("#overview")
+        ok(not any("\u4e00" <= char <= "\u9fff" for char in visible), "英文总览没有系统中文残留")
+    finally:
+        ctx.close()
+        stop(srv)
+
+
+
 def receiver_binding_checks(browser, tmp: Path):
     d = tmp / "receiver-binding"
     build(d)
@@ -4061,49 +4107,6 @@ def external_method_checks(browser, tmp: Path):
        "相同缺陷的内置与外部产物判定完全一致（外部方法不放宽也不加严）")
 
 
-def review_overview_checks(browser, tmp: Path):
-    workspace = tmp / "overview-workspace"
-    workspace.mkdir()
-    subprocess.run(["git", "init", "-q", str(workspace)], check=True, capture_output=True)
-    current, stopped, missing = [workspace / name for name in ("current", "stopped", "missing")]
-    build(current, name="Synthetic current review")
-    build(stopped, name="Synthetic stopped review")
-    build(missing, name="Synthetic missing review")
-    shutil.rmtree(missing)
-    srv = start_server(current, free_port())
-    port = json.loads((current / ".annotation-server.json").read_text())["port"]
-    ctx = browser.new_context(viewport={"width": 1440, "height": 1000})
-    try:
-        page = ctx.new_page()
-        page.goto(f"http://127.0.0.1:{port}/#overview")
-        ready = wait_dom(page, "() => document.getElementById('overviewList')?.querySelector('[data-review-id]') != null", 8,
-                         condition="总览显示合成审阅列表")
-        ok(ready, "地址 #overview 直接打开审阅总览")
-        if not ready:
-            return
-        ok(page.is_visible("#overviewBack") and page.is_visible("#overviewScope"), "总览提供范围切换和返回当前审阅")
-        for state in ("running", "stopped", "invalid"):
-            ok(page.locator('[data-overview-group="%s"]' % state).count() == 1, "总览显示 %s 分组" % state)
-        stopped_id = json.loads((stopped / "review.json").read_text())["reviewId"]
-        page.click('[data-review-id="%s"]' % stopped_id)
-        ok("Synthetic stopped review" in page.inner_text("#overviewDetail"), "选择审阅后详情与列表一致")
-        ok("stopped" in page.inner_text("#overviewDetail") and str(workspace) not in page.inner_text("#overview"),
-           "详情显示相对路径，不暴露工作区绝对路径")
-        invalid = page.locator('[data-overview-group="invalid"] [data-review-id]').first
-        invalid.click()
-        ok("serve.py forget " in page.inner_text("#overviewDetail") and page.locator("#overviewDetail a").count() == 0,
-           "失效审阅只能复制清理命令，不能打开")
-        page.click("#overviewBack")
-        ok(page.is_visible("#ntext") and not page.is_visible("#overview"), "返回当前审阅恢复批注界面")
-        page.select_option("#localePick", "en")
-        page.click("#overviewBtn")
-        ok(wait_dom(page, "() => document.getElementById('overview').textContent.includes('Review overview')", 5),
-           "英文界面的总览标题已翻译")
-        visible = page.inner_text("#overview")
-        ok(not any("\u4e00" <= char <= "\u9fff" for char in visible), "英文总览没有系统中文残留")
-    finally:
-        ctx.close()
-        stop(srv)
 
 
 SCENARIO_RUNNERS = {
