@@ -195,6 +195,14 @@ SCENARIOS: list[Scenario] = [
         isolation="独立临时审阅目录与端口；一个跨阶段的浏览器上下文承载同一次审阅会话，"
                   "服务进程全部经登记表启动与回收，场景结束即停",
     ),
+    Scenario(
+        id="poll-repaint",
+        title="轮询数据不变时不重画提交状态与续看提示：跳页计数、标注序号与标点编号不变，"
+              "只改摘要字段仍重画，本地写批注、翻页、切语言与别的标签页写入都立即更新",
+        fixture="fixtures/sample 合成材料生成的两份审阅（一份预写合成批注）；"
+                "notes.py claim/resolve/done 真实子进程；file:// 阶段用同一上下文的第二个标签页",
+        isolation="每阶段独立临时审阅目录、端口与浏览器上下文；服务与 CLI 子进程全部登记回收",
+    ),
 ]
 
 SCENARIO_IDS: tuple[str, ...] = tuple(scenario.id for scenario in SCENARIOS)
