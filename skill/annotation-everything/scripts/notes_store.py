@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import math
 import os
@@ -127,13 +126,8 @@ def _require_dir(review_dir: Path) -> None:
 @contextlib.contextmanager
 def locked(review_dir: Path) -> Iterator[None]:
     _require_dir(review_dir)
-    fd = os.open(review_dir / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
-    with os.fdopen(fd, "r+") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+    with fsutil.flocked(review_dir / LOCK_FILE, exclusive=True):
+        yield
 
 
 def load(review_dir: Path) -> dict[str, Any]:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import datetime
-import fcntl
 import hashlib
 import json
 import os
@@ -23,6 +22,7 @@ import uuid
 import i18n
 import ledger
 import content_manifest
+import fsutil
 
 SKILL = "annotation-everything"
 RECORD = ".install-record.json"
@@ -124,7 +124,7 @@ def has_running_review() -> bool:
     except (ledger.LedgerError, OSError):
         raise UpdateError("cli.update.cannotVerifyServices") from None
     for entry in entries.values():
-        status = Path(entry["dir"]) / ".annotation-server.json"
+        status = ledger.status_file(entry["dir"])
         try:
             info = json.loads(status.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -136,13 +136,8 @@ def has_running_review() -> bool:
         pid = info.get("pid")
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
             raise UpdateError("cli.update.cannotVerifyServices")
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            continue
-        except PermissionError:
-            pass
-        return True
+        if ledger.pid_alive(pid):
+            return True
     return False
 
 
@@ -350,14 +345,14 @@ def main(argv=None) -> int:
         # 这个检出也是 doctor / repair 的来源，不能放在可能被系统随时清理的缓存目录。
         cache = update_storage(copy)
         cache.mkdir(mode=0o700, parents=True, exist_ok=True)
-        lock_fd = os.open(cache / "lock", os.O_CREAT | os.O_RDWR, 0o600)
-        with os.fdopen(lock_fd, "r+") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                if args.mode != "auto":
-                    print(translate("cli.update.busy"))
-                return 0
+        stack = contextlib.ExitStack()
+        try:
+            stack.enter_context(fsutil.flocked(cache / "lock", exclusive=True, nonblocking=True))
+        except BlockingIOError:
+            if args.mode != "auto":
+                print(translate("cli.update.busy"))
+            return 0
+        with stack:
             state_file = cache / "state.json"
             try:
                 state = json.loads(state_file.read_text(encoding="utf-8"))

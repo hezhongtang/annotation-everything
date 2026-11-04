@@ -37,9 +37,7 @@ AE_HANDOFF_SEQ / AE_URL；运行中又来的事件排队依次补跑；命令输
 from __future__ import annotations
 
 import argparse
-import base64
 import contextlib
-import hashlib
 import http.client
 import json
 import os
@@ -60,6 +58,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fsutil  # noqa: E402
 import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
@@ -117,20 +116,18 @@ class StaleServer(Exception):
     """本目录已有旧版本的服务在跑：复用它会让新页面的改动被静默丢掉。"""
 DEFAULT_PORT = 8765
 PORT_TRIES = 20
-STATUS_FILE = ".annotation-server.json"
+STATUS_FILE = ledger.STATUS_FILE   # 运行状态文件名只在台账模块定义一次；这里是给既有调用方的名字
 LOG_FILE = "server.log"
 MANIFEST = "review.json"
 MAX_BODY = 2 * 1024 * 1024
 HOST = "127.0.0.1"
 NOTE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})$")
-INLINE_SCRIPT = re.compile(r"<script>(.*?)</script>", re.S)
 SAFE_CHARS = re.compile(r"[^A-Za-z0-9._:/?=&%+@-]")
 
 
 def csp_for(html_text: str) -> str:
     """只放行页面里的内联脚本（按内容 sha256），其余脚本、内联事件一律不执行。"""
-    hashes = " ".join("'sha256-" + base64.b64encode(hashlib.sha256(s.encode("utf-8")).digest()).decode() + "'"
-                      for s in INLINE_SCRIPT.findall(html_text))
+    hashes = fsutil.script_hashes(html_text)
     return (f"default-src 'none'; script-src {hashes or chr(39) + 'none' + chr(39)}; style-src 'unsafe-inline'; "
             "img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'self'; "
             "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'")
@@ -643,21 +640,9 @@ def probe(port: int, timeout: float = 1.0) -> dict[str, Any] | None:
         return {"app": "other"}
 
 
-def pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-
-
 def read_status(review_dir: Path) -> dict[str, Any] | None:
     try:
-        info = json.loads((review_dir / STATUS_FILE).read_text(encoding="utf-8"))
+        info = json.loads(ledger.status_file(review_dir).read_text(encoding="utf-8"))
         return info if isinstance(info, dict) else None
     except (OSError, ValueError):
         return None
@@ -667,7 +652,7 @@ def write_status(server: ReviewServer) -> None:
     info = {"app": APP, "version": VERSION, "pid": os.getpid(), "port": server.port,
             "url": f"http://127.0.0.1:{server.port}/", "dir": str(server.review_dir),
             "hook": bool(server.on_handoff), "startedAt": store.now_iso()}
-    f = server.review_dir / STATUS_FILE
+    f = ledger.status_file(server.review_dir)
     fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(json.dumps(info, ensure_ascii=False, indent=2) + "\n")
@@ -676,7 +661,7 @@ def write_status(server: ReviewServer) -> None:
 def clear_status(review_dir: Path) -> None:
     info = read_status(review_dir)
     if info and info.get("pid") == os.getpid():
-        (review_dir / STATUS_FILE).unlink(missing_ok=True)
+        ledger.status_file(review_dir).unlink(missing_ok=True)
 
 
 def same_dir(found: dict[str, Any], review_dir: Path) -> bool:
@@ -703,7 +688,7 @@ def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
                                 port=p, pid=found.get('pid'), version=VERSION))
 
     info = read_status(review_dir)
-    if info and pid_alive(int(info.get("pid") or 0)) and info.get("port"):
+    if info and ledger.pid_alive(int(info.get("pid") or 0)) and info.get("port"):
         found = probe(int(info["port"]))
         if found and same_dir(found, review_dir):
             check_version(found, int(info["port"]))
@@ -785,7 +770,7 @@ def plan_port(review_dir: Path, rid: str | None, port: int | None, claim: int | 
         owned = (ledger.get(rid) or {}).get("port")
         if not owned:
             info = read_status(review_dir)
-            running = int(info["port"]) if info and info.get("port") and pid_alive(int(info.get("pid") or 0)) else None
+            running = int(info["port"]) if info and info.get("port") and ledger.pid_alive(int(info.get("pid") or 0)) else None
 
             def free(p: int) -> bool:
                 found = probe(p, timeout=0.5)
@@ -837,14 +822,9 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         print(T("serve.serve.badNotes", detail=e), file=sys.stderr)
         return 2
     m = ledger.read_manifest(review_dir)   # 读不了或不是 JSON 对象都返回 {}：不提示复制
-    try:
-        orig = Path(m["reviewDir"]) if m.get("reviewDir") else None
-        if orig and orig != review_dir and (orig / MANIFEST).exists():
-            om = json.loads((orig / MANIFEST).read_text(encoding="utf-8"))
-            if om.get("reviewId") == m.get("reviewId"):
-                print(T("serve.serve.copiedHint", orig=orig, dir=review_dir), file=sys.stderr)
-    except (OSError, ValueError, AttributeError):
-        pass
+    orig = ledger.copied_from(review_dir, m)
+    if orig is not None:
+        print(T("serve.serve.copiedHint", orig=orig, dir=review_dir), file=sys.stderr)
     rid = m.get("reviewId")
     try:
         first, owned, avoid = plan_port(review_dir, rid, port, claim)
@@ -943,7 +923,7 @@ def status(review_dir: Path, locale: str | None = None) -> int:
     if info is not None:
         pid = int(info.get("pid") or 0)
         out["status_file"] = {k: info.get(k) for k in ("pid", "port", "url", "startedAt", "version")}
-        alive = pid_alive(pid)
+        alive = ledger.pid_alive(pid)
         health = probe(int(info.get("port") or 0)) if info.get("port") else None
         if alive and health and same_dir(health, review_dir) and health.get("pid") == pid:
             out["server"] = T("serve.status.running", url=info.get('url'))
@@ -953,7 +933,7 @@ def status(review_dir: Path, locale: str | None = None) -> int:
             code = 5
         else:
             out["server"] = T("serve.status.stale")
-            (review_dir / STATUS_FILE).unlink(missing_ok=True)
+            ledger.status_file(review_dir).unlink(missing_ok=True)
             code = 4
     else:
         out["server"] = T("serve.status.notRunning")
@@ -991,7 +971,7 @@ def read_wait(review_dir: Path) -> list[str]:
         except (OSError, ValueError):
             continue
         if isinstance(w, dict) and f.name == ledger.wait_file(review_dir, int(w.get("pid") or 0)).name \
-                and pid_alive(int(w.get("pid") or 0)):
+                and ledger.pid_alive(int(w.get("pid") or 0)):
             stages.append(str(w.get("stage") or "any"))
     return stages
 
@@ -1020,7 +1000,7 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
         row["state_id"] = "mismatch"
         return row
     info = read_status(d)
-    if info and info.get("port") and pid_alive(int(info.get("pid") or 0)):
+    if info and info.get("port") and ledger.pid_alive(int(info.get("pid") or 0)):
         row["running"] = int(info["port"])
         row["hook"] = bool(info.get("hook"))
         row["state_id"] = "running" if row["running"] == e.get("port") else "running-temp"
