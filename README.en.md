@@ -366,7 +366,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 ├── scripts/
 │   ├── build_viewer.py            builds the review page index.html and review.json
 │   ├── report_check.py            report verification: deterministic rules, coverage and delivery verdict
-│   ├── i18n.py                    loads the shared catalogs and fills in the chosen language; the command line boilerplate shared by every entry (reading --locale, translating argparse errors, reporting an unsupported language)
+│   ├── i18n.py                    loads the shared catalogs and fills in the chosen language; holds the process-wide interface language state (set once by an entry, shared by every module); the command line boilerplate shared by every entry (reading --locale, translating argparse errors, reporting an unsupported language)
 │   ├── update.py                  checks stable releases and updates the skill copy
 │   ├── content_manifest.py        fingerprints the skill copy's files, directories and links
 │   ├── viewer_template.html       review page template (server mode and local file mode)

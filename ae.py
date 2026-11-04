@@ -125,9 +125,20 @@ def i18n_module():
     return skill_module("i18n")
 
 
+def ui_language():
+    """技能本体的界面语言公共实现（进程级状态与消息查找）；副本是还没有它的旧版本时
+    返回 None，用 ae.py 自己记的语言兜底。"""
+    try:
+        module = i18n_module()
+    except ImportError:
+        return None
+    return module if hasattr(module, "set_locale") else None
+
+
 def current_locale() -> str:
     """当前界面语言；main() 按共同契约解析后设置，未设置前保持中文。"""
-    return _locale
+    state = ui_language()
+    return state.current_locale() if state is not None else _locale
 
 
 def set_locale(locale: str) -> None:
@@ -135,17 +146,20 @@ def set_locale(locale: str) -> None:
     global _locale, _messages
     _locale = locale
     _messages = None
-    # 台账错误与技能扫描警告也用同一种语言：把已解析的语言传下去，免得中英混排
-    for name in ("ledger", "skill_sources"):
-        try:
-            skill_module(name).set_locale(locale)
-        except ImportError:
-            pass
+    # 界面语言只有进程级一个来源：定住它，台账错误与技能扫描警告也就用同一种语言，
+    # 不必再逐个模块传递（免得漏设一个就中英混排）
+    state = ui_language()
+    if state is not None:
+        state.set_locale(locale)
 
 
 def T(key: str, **params: object) -> str:
     """按当前语言取一条消息；缺译时回退另一种语言（见 locales/README.md 的契约）。"""
     global _messages
+    state = ui_language()
+    if state is not None:
+        return state.T(key, **params)
+    # 技能副本是还没有进程级语言状态的旧版本：用 ae.py 自己记的语言兜底
     if _messages is None:
         module = i18n_module()
         _messages = module.Translator(_locale)

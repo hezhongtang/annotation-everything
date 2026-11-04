@@ -24,6 +24,7 @@ SERVE_PY = ROOT / "skill" / "annotation-everything" / "scripts" / "serve.py"
 SCRIPTS = SERVE_PY.parent
 sys.path.insert(0, str(SCRIPTS))
 
+import i18n  # noqa: E402
 import serve  # noqa: E402
 sys.path.insert(0, str(ROOT))
 import host_isolation  # noqa: E402
@@ -322,8 +323,8 @@ class ServeCliLanguageTests(unittest.TestCase):
     def test_start_keeps_explicit_locale_before_directory_or_subcommand(self):
         d = self.make_review()
         manifest = d / "review.json"
-        previous = serve._LOCALE
-        self.addCleanup(serve.set_locale, previous)
+        # 界面语言是进程级状态：本用例定过语言，结束后解除定住，别污染后面的用例
+        self.addCleanup(i18n.set_locale, None)
         for explicit, fallback in (("en", "zh-CN"), ("zh-CN", "en")):
             manifest.write_text(json.dumps({"reviewId": "0" * 16, "locale": fallback}),
                                 encoding="utf-8")

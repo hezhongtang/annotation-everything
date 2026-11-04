@@ -366,7 +366,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 ├── scripts/
 │   ├── build_viewer.py            生成对照页 index.html 和 review.json
 │   ├── report_check.py            报告产物核验：确定规则、覆盖与交付判定
-│   ├── i18n.py                    读取共享词典，并按所选语言插值；命令行共用的语言样板（取 --locale、翻译 argparse 报错、报告非法语言）
+│   ├── i18n.py                    读取共享词典，并按所选语言插值；持进程级的界面语言状态（入口设置一次，各模块共用）；命令行共用的语言样板（取 --locale、翻译 argparse 报错、报告非法语言）
 │   ├── update.py                  检查正式版本并更新技能副本
 │   ├── content_manifest.py        记录技能副本的文件、目录和链接指纹
 │   ├── viewer_template.html       对照页模板（服务模式和本地文件模式）

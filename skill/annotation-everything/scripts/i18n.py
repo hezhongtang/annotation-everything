@@ -1,5 +1,6 @@
-"""中英 locale 适配层：共享 JSON 词典的定位、读取、查找、插值与受限复数，以及命令行
-共用的语言样板（取 --locale、翻译 argparse 英文报错、报告非法语言选择）。
+"""中英 locale 适配层：共享 JSON 词典的定位、读取、查找、插值与受限复数，进程级的界面
+语言状态（定住语言 / 按 AE_LOCALE 刷新），以及命令行共用的语言样板（取 --locale、翻译
+argparse 英文报错、报告非法语言选择）。
 
 只用 Python 标准库。浏览器一侧把同一套语义内嵌在 viewer_template.html 的
 tMsg 里，不另开资源路由。tests/test_i18n.py 与 tests/test_review_page_i18n.py
@@ -496,12 +497,16 @@ def locale_error_message(exc: Exception, keys: Mapping[str, str],
     return translate(keys[CLI_ERROR_INVALID_LOCALE], name=name)
 
 
-class ModuleLocale:
-    """单个模块自己的界面语言状态（每个模块各持一个实例，不跨模块共享）。
+class _ProcessLocale:
+    """进程级界面语言状态：全进程一份，各模块的 T 都从这里取。
 
-    调用方已经把 --locale、AE_LOCALE、审阅 locale 解析完时用 set(具体 locale) 定住，
+    入口已经把 --locale、AE_LOCALE、审阅 locale 解析完时用 set_locale(具体 locale) 定住，
     之后不再被 AE_LOCALE 覆盖——否则同一进程里两种来源不一致，会出现中英混排。
     未定住时 refresh() 按 AE_LOCALE 重新解析；未设置或选择非法时保持中文。
+
+    按模块各持一份并没有带来实际隔离（所有入口本来就把同一种语言逐个传下去），只增加了
+    漏设的机会，所以这里只保留进程级一份。set_locale(None) 因此解除的是整个进程的定住
+    状态，各模块一起回到「按 AE_LOCALE 刷新」；运行时代码不传 None，只有测试会传。
     """
 
     def __init__(self) -> None:
@@ -527,6 +532,33 @@ class ModuleLocale:
     def __call__(self, key: str, **params: object) -> str:
         """按当前语言取一条消息；缺译时回退另一种语言。"""
         return Translator(self.locale)(key, **params)
+
+
+_STATE = _ProcessLocale()
+
+
+def set_locale(locale: object = None) -> None:
+    """定界面语言（进程级，全进程一份）。
+
+    locale 为 None 时解除定住并按 AE_LOCALE 重新解析；给了具体 locale 就定住。
+    各模块的 set_locale 是这里的薄转发，外部调用方不用改。
+    """
+    _STATE.set(locale)
+
+
+def refresh_locale() -> None:
+    """没有外部定过语言时，才按 AE_LOCALE 刷新。"""
+    _STATE.refresh()
+
+
+def current_locale() -> str:
+    """当前界面语言；入口按共同契约解析后设置一次，各模块共用这一份。"""
+    return _STATE.locale
+
+
+def T(key: str, **params: object) -> str:
+    """按当前语言取一条消息；缺译时回退另一种语言（见 locales/README.md 的契约）。"""
+    return _STATE(key, **params)
 
 
 class Translator:
