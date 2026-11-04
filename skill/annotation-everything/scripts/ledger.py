@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import os
 import re
@@ -30,6 +29,7 @@ import i18n  # noqa: E402
 
 LEDGER_FILE = "reviews.json"
 WAIT_PREFIX = ".annotation-wait."   # 审阅目录里：每个 notes.py wait 进程留一个 .annotation-wait.<pid>.json，退出时删掉
+STATUS_FILE = ".annotation-server.json"   # 审阅目录里：服务运行状态（pid/端口/地址），停止时删除；服务与更新器共用这个名字
 
 
 def wait_file(review_dir: Path, pid: int) -> Path:
@@ -83,15 +83,27 @@ def update_lock_path() -> Path:
 @contextlib.contextmanager
 def update_lock(*, exclusive: bool = False, nonblocking: bool = False):
     """按技能副本路径协调，不同 AE_HOME 的服务共用一把锁。"""
-    lock_path = update_lock_path()
-    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(fd, "r+") as fh:
-        mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-        fcntl.flock(fh, mode | (fcntl.LOCK_NB if nonblocking else 0))
-        try:
-            yield fh.fileno()
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+    with fsutil.flocked(update_lock_path(), exclusive=exclusive, nonblocking=nonblocking,
+                        nofollow=True) as fd:
+        yield fd
+
+
+def status_file(review_dir: Path) -> Path:
+    """审阅目录里的服务运行状态文件（pid / 端口 / 地址；只含元数据，不读批注）。"""
+    return Path(review_dir) / STATUS_FILE
+
+
+def pid_alive(pid: int) -> bool:
+    """这个 pid 的进程还在不在：发信号 0 探活；没权限（别人的进程）时按活着算。"""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
 
 
 def _ensure_home() -> Path:
@@ -133,17 +145,12 @@ def _edit() -> Iterator[dict[str, Any]]:
     _refresh_locale()
     """在台账文件锁下读改写：多个 serve / build 同时分配端口也不会撞号。"""
     h = _ensure_home()
-    fd = os.open(h / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
-    with os.fdopen(fd, "r+") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            doc = _read(h / LEDGER_FILE)
-            before = json.dumps(doc, sort_keys=True)
-            yield doc
-            if json.dumps(doc, sort_keys=True) != before:
-                _write(h / LEDGER_FILE, doc)
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+    with fsutil.flocked(h / LOCK_FILE, exclusive=True):
+        doc = _read(h / LEDGER_FILE)
+        before = json.dumps(doc, sort_keys=True)
+        yield doc
+        if json.dumps(doc, sort_keys=True) != before:
+            _write(h / LEDGER_FILE, doc)
 
 
 def load() -> dict[str, Any]:
@@ -159,17 +166,16 @@ def get(rid: str) -> dict[str, Any] | None:
 
 
 def _set_dir(reviews: dict[str, Any], rid: str, d: str) -> dict[str, Any]:
-    """取（或新建）条目并把目录更新为 d。原目录还在、且里面还是同一个标识时，d 是复制出来的副本：拒绝。
+    """取（或新建）条目并把目录更新为 d。d 是从登记在册的那份审阅复制来的副本：拒绝。
 
-    原目录已不在（整个搬走了）才按标识更新路径。
+    原目录已不在（整个搬走了、或已删除）才按标识更新路径。
     """
     e = reviews.get(rid)
     if e is None:
         e = reviews[rid] = {"dir": d, "port": None}
     elif e["dir"] != d:
-        old = Path(e["dir"])
-        if old.is_dir() and read_manifest(old).get("reviewId") == rid:
-            raise CopiedDir(T("ledger.err.copied", dir=d, old=old, rid=rid[:8]))
+        if copied_from(d) is not None:
+            raise CopiedDir(T("ledger.err.copied", dir=d, old=Path(e["dir"]), rid=rid[:8]))
         e["dir"] = d
     return e
 
@@ -270,6 +276,22 @@ def read_manifest(review_dir: Path) -> dict[str, Any]:
         return m if isinstance(m, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def copied_from(review_dir: Path, manifest: dict[str, Any] | None = None) -> Path | None:
+    """这个目录是从哪份审阅复制来的：manifest 的 reviewDir 还在、且那份里还是同一个审阅标识。
+
+    返回复制来源的目录，不是复制来的是 None。整个目录被移走或原目录已删除（reviewDir 不在）
+    时不算复制，调用方沿用原标识。manifest 传调用方已经读好的 review.json，不传就自己读
+    （读不了或不是 JSON 对象都按 {} 处理，与 read_manifest 一致）。审阅标识的格式规则见 RID。
+    """
+    review_dir = Path(review_dir).resolve()
+    m = manifest if manifest is not None else read_manifest(review_dir)
+    rid = m.get("reviewId")
+    orig = Path(m["reviewDir"]) if m.get("reviewDir") else None
+    if orig is None or orig == review_dir or not orig.is_dir():
+        return None
+    return orig if read_manifest(orig).get("reviewId") == rid else None
 
 
 def review_name(manifest: dict[str, Any]) -> str:
