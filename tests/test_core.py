@@ -20,6 +20,7 @@ import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
@@ -2903,6 +2904,24 @@ class ServiceStateTests(unittest.TestCase):
         self.assertEqual(ledger.STATUS_FILE, ".annotation-server.json")
         d = tmpdir()
         self.assertEqual(ledger.status_file(d), d / ".annotation-server.json")
+
+    def test_pid_alive_treats_another_users_process_as_alive(self):
+        """探活契约：进程存在但不属于当前用户（发信号 0 得 EPERM）时按活着算。
+
+        PermissionError 在 waiting_state 的路径上实际不可达：等待标记按 0600 属主写入，别的
+        用户的标记在读阶段就被拒（打开失败按 OSError 跳过），走不到 pid 判断。这里用打桩把
+        这个分支钉住：状态文件被别的用户写脏时，宁可当成运行中，也不当成已停。
+        """
+        self.assertTrue(ledger.pid_alive(os.getpid()), "自己的进程活着")
+        self.assertFalse(ledger.pid_alive(0), "pid 0 不是进程")
+        self.assertFalse(ledger.pid_alive(-1), "负 pid 不是进程")
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        self.assertFalse(ledger.pid_alive(p.pid), "已回收的 pid 不在")
+        with patch("os.kill", side_effect=PermissionError(1, "operation not permitted")):
+            self.assertTrue(ledger.pid_alive(4242), "EPERM：进程存在，只是属于别的用户")
+        with patch("os.kill", side_effect=ProcessLookupError(3, "no such process")):
+            self.assertFalse(ledger.pid_alive(4242), "ESRCH：进程不在")
 
 
 class CspPolicyTests(unittest.TestCase):
