@@ -277,12 +277,17 @@ def review_name(manifest: dict[str, Any]) -> str:
     return str(manifest.get("name") or manifest.get("title") or "").strip()
 
 
-def entry_state(rid: str, e: dict[str, Any]) -> str:
-    """ok / missing（目录不在）/ mismatch（目录里的审阅标识对不上，可能被重建或复制过）。"""
+def entry_state(rid: str, e: dict[str, Any], manifest: dict[str, Any] | None = None) -> str:
+    """ok / missing（目录不在）/ mismatch（目录里的审阅标识对不上，可能被重建或复制过）。
+
+    manifest：调用方已读好的 review.json（不重复打开同一份文件时传入）；不传就自己读。
+    """
     d = Path(e["dir"])
     if not d.is_dir():
         return "missing"
-    return "ok" if read_manifest(d).get("reviewId") == rid else "mismatch"
+    if manifest is None:
+        manifest = read_manifest(d)
+    return "ok" if manifest.get("reviewId") == rid else "mismatch"
 
 
 def try_register(rid: Any, review_dir: Path) -> str | None:

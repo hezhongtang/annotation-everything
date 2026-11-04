@@ -130,13 +130,15 @@ def dispatch_lock(review):
         yield
 
 
-def load_binding(review):
+def load_binding(review, *, manifest=None):
+    """manifest：调用方已读好的 review.json（服务端按 mtime 缓存，命中不开文件）；不传就自己读。"""
     review = Path(review).resolve()
     path = review / BINDING_FILE
     if not path.exists() and not path.is_symlink():
         return None
     binding = _read(path)
-    manifest = ledger.read_manifest(review)
+    if manifest is None:
+        manifest = ledger.read_manifest(review)
     if binding.get("adapter") not in ("codex-desktop", "wait") or binding.get("reviewId") != manifest.get("reviewId"):
         raise ValueError("agent-binding-identity-mismatch")
     if binding.get("reviewDir") != str(review):
@@ -357,53 +359,70 @@ def acknowledge(review, event, seq, message_id, thread):
         return dict(item)
 
 
-def status(review):
+def status(review, *, binding=_ANY_BINDING, handoff=None, manifest=None, waiting=None):
     review = Path(review).resolve()
-    binding = load_binding(review)
+    binding = store.pre_read(binding, _ANY_BINDING, lambda: load_binding(review, manifest=manifest))
     if not binding:
-        return {"adapter": None, "state": "unconfigured", "receiver": receiver_status(review)}
+        return {"adapter": None, "state": "unconfigured", "receiver": receiver_status(review, binding=binding, handoff=handoff, waiting=waiting)}
     if binding["adapter"] == "wait":
-        return {"adapter": "wait", "state": "bound", "receiver": receiver_status(review)}
+        return {"adapter": "wait", "state": "bound", "receiver": receiver_status(review, binding=binding, handoff=handoff, waiting=waiting)}
     items = [v for v in _deliveries(review)["items"].values() if v.get("bindingId") == binding["bindingId"]]
     latest = max(items, key=lambda v: (v.get("seq", 0), v.get("event") == "review"), default={})
-    return {"adapter": binding["adapter"], "state": latest.get("state", "bound"), "receiver": receiver_status(review),
+    return {"adapter": binding["adapter"], "state": latest.get("state", "bound"), "receiver": receiver_status(review, binding=binding, handoff=handoff, waiting=waiting),
             **{k: latest[k] for k in ("seq", "event", "messageId", "acceptedAt", "receivedAt", "errorCode", "turnId") if k in latest}}
 
 
-def public_status(review):
+def public_status(review, *, binding=_ANY_BINDING, handoff=None, manifest=None, waiting=None):
+    """binding / handoff / waiting / manifest：调用方已读好的接收方绑定、批次记录、「有没有代理在等」
+    与绑定校验用的 review.json（一次请求里只读一次时传入，见 serve.py 的请求快照）；
+    都不传就自己读，读取失败时的降级结果与原来一致。"""
     try:
-        return status(review)
+        return status(review, binding=binding, handoff=handoff, manifest=manifest, waiting=waiting)
     except (OSError, ValueError, KeyError):
         return {"adapter": "codex-desktop", "state": "error", "errorCode": "invalid-binding-or-receipt"}
 
 
-def receiver_status(review, active_binding=_ANY_BINDING):
-    """Public receiver metadata. Never return paths, socket addresses or hook commands."""
+def waiting_state(review, binding) -> bool:
+    """这个绑定有没有代理正在等：读等待标记，文件名、归属、身份与有效期都对得上且进程还活着，才算。"""
+    for path in Path(review).glob(ledger.WAIT_PREFIX + "*.json"):
+        try:
+            mark = _read(path)
+            pid = mark.get("pid")
+            if (not isinstance(pid, int) or pid <= 0 or path.name != ledger.wait_file(review, pid).name
+                    or mark.get("bindingId") != binding["bindingId"]
+                    or {k: mark.get(k) for k in ("harness", "sessionId")} != binding_identity(binding)
+                    or not isinstance(mark.get("expiresAt"), (int, float)) or not time.time() < mark["expiresAt"]):
+                continue
+            os.kill(pid, 0)
+            return True
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return False
+
+
+def receiver_status(review, active_binding=_ANY_BINDING, *, binding=_ANY_BINDING, handoff=None,
+                    waiting=None):
+    """Public receiver metadata. Never return paths, socket addresses or hook commands.
+
+    binding / handoff / waiting：调用方已读好的接收方绑定、批次记录与「有没有代理在等」
+    （一次请求里只读一次时传入，见 serve.py 的请求快照）；都不传就自己读，读取失败时的降级结果与原来一致。
+    waiting 为 None 表示调用方确认还没到读等待标记的那一步（没有绑定、有批次在处理中等）。
+    """
     try:
-        binding = load_binding(review)
+        binding = store.pre_read(binding, _ANY_BINDING, lambda: load_binding(review))
         if not binding:
             return {"state": "restart-required" if active_binding is not _ANY_BINDING and active_binding else "unconfigured"}
         result = {"bindingId": binding["bindingId"], "adapter": binding["adapter"], **binding_identity(binding)}
         if active_binding is not _ANY_BINDING and (active_binding or {}).get("bindingId") != binding["bindingId"]:
             return {**result, "state": "restart-required"}
-        active = [b for b in store.handoff_load(Path(review))["items"] if b.get("status") in ("claimed", "reviewing")]
+        items = store.pre_read(handoff, None, lambda: store.handoff_load(Path(review)))["items"]
+        active = [b for b in items if b.get("status") in ("claimed", "reviewing")]
         if active:
             return {**result, "state": "processing"}
         if binding["adapter"] == "codex-desktop":
             return {**result, "state": "event"}
-        for path in Path(review).glob(ledger.WAIT_PREFIX + "*.json"):
-            try:
-                mark = _read(path)
-                pid = mark.get("pid")
-                if (not isinstance(pid, int) or pid <= 0 or path.name != ledger.wait_file(review, pid).name
-                        or mark.get("bindingId") != binding["bindingId"]
-                        or {k: mark.get(k) for k in ("harness", "sessionId")} != binding_identity(binding)
-                        or not isinstance(mark.get("expiresAt"), (int, float)) or not time.time() < mark["expiresAt"]):
-                    continue
-                os.kill(pid, 0)
-                return {**result, "state": "waiting"}
-            except (OSError, ValueError, KeyError, TypeError):
-                continue
+        if store.pre_read(waiting, None, lambda: waiting_state(review, binding)):
+            return {**result, "state": "waiting"}
         return {**result, "state": "idle"}
     except (OSError, ValueError, KeyError, TypeError):
         return {"state": "error"}
