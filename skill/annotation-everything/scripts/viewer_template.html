@@ -1754,7 +1754,7 @@ document.addEventListener("keydown",e=>{
   else if(e.key==="h"||e.key==="H")$("help").classList.toggle("on");
   else if(e.key==="Escape"){document.querySelectorAll(".modal").forEach(m=>m.classList.remove("on"));if(markMode)setMarkMode(false);closePinPop();closeStyleMenu()}});
 // ---------- 审阅总览（同一个 index.html 的 #overview 视图） ----------
-let overviewData=null,overviewSelected=null,overviewRequest=0;
+let overviewData=null,overviewSelected=null,overviewRequest=0,overviewLoading=false;
 function overviewShown(){return location.hash==="#overview"}
 function overviewState(row){return row.state==="running"||row.state==="running-temp"?"running":row.state==="stopped"?"stopped":"invalid"}
 function overviewStateLabel(row){return tMsg("viewer.overview."+overviewState(row))}
@@ -1790,6 +1790,7 @@ function renderOverview(){
 async function loadOverview(){
   if(FILE){renderOverview();return}
   const request=++overviewRequest;
+  overviewLoading=true;
   $("overviewRefresh").disabled=true;
   try{
     const data=await api("GET","/api/overview?scope="+encodeURIComponent($("overviewScope").value));
@@ -1800,7 +1801,8 @@ async function loadOverview(){
   }catch(error){
     if(request!==overviewRequest)return;
     $("overviewError").textContent=tMsg("viewer.overview.loadError");$("overviewError").hidden=false;
-  }finally{if(request===overviewRequest)$("overviewRefresh").disabled=false}
+    if(!overviewData){$("overviewList").textContent="";$("overviewDetail").textContent=""}
+  }finally{if(request===overviewRequest){overviewLoading=false;$("overviewRefresh").disabled=false}}
 }
 function overviewRoute(event){
   const shown=overviewShown();
@@ -1813,7 +1815,7 @@ $("overviewRefresh").onclick=loadOverview;
 $("overviewScope").onchange=()=>{overviewData=null;overviewSelected=null;renderOverview();loadOverview()};
 $("overviewList").onclick=event=>{const row=event.target.closest("[data-review-id]");if(row){overviewSelected=row.dataset.reviewId;renderOverview();const selected=$("overviewList").querySelector('[aria-pressed="true"]');if(selected)selected.focus({preventScroll:true})}};
 addEventListener("hashchange",overviewRoute);
-setInterval(()=>{if(overviewShown()&&!document.hidden)loadOverview()},4000);
+setInterval(()=>{if(overviewShown()&&!document.hidden&&!overviewLoading)loadOverview()},4000);
 
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE)poll()});
 
