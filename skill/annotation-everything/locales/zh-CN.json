@@ -1381,6 +1381,22 @@
     "serve.check.archiveHost": "归档拒绝伪造 Host（{status}）",
     "serve.check.archiveOrigin": "归档拒绝伪造 Origin（{status}）",
     "serve.check.archiveNoOrigin": "归档拒绝缺少 Origin（{status}）",
-    "serve.check.archiveContentType": "归档拒绝非 JSON Content-Type（{status}）"
+    "serve.check.archiveContentType": "归档拒绝非 JSON Content-Type（{status}）",
+    "serve.err.overviewStartBody": "启动参数必须只包含完整的审阅标识 reviewId。",
+    "serve.err.overviewStartUnknown": "这份审阅不在本机台账里，请刷新总览。",
+    "serve.err.overviewStartInvalid": "这份审阅的目录或标识已失效，请刷新总览。",
+    "serve.err.overviewStartBusy": "这份审阅的专属端口正被占用，请释放端口后重试。",
+    "serve.err.overviewStartFailed": "未能在专属端口上启动这份审阅，请重试。",
+    "viewer.overview.start": "启动并打开",
+    "viewer.overview.starting": "启动中…",
+    "viewer.overview.startError": "启动失败，请重试。",
+    "viewer.overview.popupBlocked": "浏览器未能打开新标签页。请允许弹出窗口后重试。",
+    "serve.check.overviewStartHost": "代为启动拒绝伪造 Host（{status}）",
+    "serve.check.overviewStartOrigin": "代为启动拒绝伪造 Origin（{status}）",
+    "serve.check.overviewStartNoOrigin": "代为启动拒绝缺少 Origin（{status}）",
+    "serve.check.overviewStartContentType": "代为启动拒绝非 JSON 请求（{status}）",
+    "serve.check.overviewStartCrossSite": "代为启动拒绝跨站请求（{status}）",
+    "serve.check.overviewStartUnknown": "代为启动拒绝台账外标识（{status}）",
+    "serve.check.overviewStartNoProcess": "拒绝代为启动的请求没有创建进程"
   }
 }

@@ -1779,6 +1779,7 @@ document.addEventListener("keydown",e=>{
   else if(e.key==="Escape"){document.querySelectorAll(".modal").forEach(m=>m.classList.remove("on"));if(markMode)setMarkMode(false);closePinPop();closeStyleMenu()}});
 // ---------- 审阅总览（同一个 index.html 的 #overview 视图） ----------
 let overviewData=null,overviewSelected=null,overviewRequest=0,overviewLoading=false;
+const overviewStarting=new Set(),overviewStartFailures=new Map();
 let currentArchived=false,archiveBusy=false;
 function renderArchiveBanners(){
   ["archiveBanner","overviewArchiveBanner"].forEach(id=>{$(id).hidden=!currentArchived});
@@ -1816,8 +1817,10 @@ function renderOverview(){
   const row=rows.find(row=>row.reviewId===overviewSelected);
   if(!row){$("overviewDetail").innerHTML=`<p class="overview-message">${escH(tMsg("viewer.overview.select"))}</p>`;return}
   const invalid=overviewState(row)==="invalid";
+  const starting=overviewStarting.has(row.reviewId),startFailure=overviewStartFailures.get(row.reviewId);
   const url=typeof row.url==="string"&&/^http:\/\/127\.0\.0\.1:\d+\/$/.test(row.url)?row.url:null;
   const action=row.current?`<button class="overview-open" disabled>${escH(tMsg("viewer.overview.open"))}</button>`
+    :!invalid&&row.state==="stopped"?`<button id="overviewStart" class="overview-open" ${starting?"disabled":""}>${escH(tMsg(starting?"viewer.overview.starting":"viewer.overview.start"))}</button>`
     :!invalid&&url?`<a class="overview-open" href="${escH(url)}" target="_blank" rel="noopener noreferrer">${escH(tMsg("viewer.overview.open"))}</a>`:"";
   const forget=invalid&&typeof row.forgetCommand==="string"?`<code class="overview-command">${escH(row.forgetCommand)}</code><button id="overviewForgetCopy">${escH(tMsg("viewer.overview.copyCommand"))}</button>`:"";
   const summary=typeof row.summary==="string"&&row.summary.trim()?`<span lang="">${escH(row.summary)}</span>`
@@ -1832,9 +1835,32 @@ function renderOverview(){
   $("overviewDetail").innerHTML=`<h2>${escH(row.name||row.reviewId.slice(0,8))}</h2><div class="overview-identity"><span>${escH(row.reviewId.slice(0,8))}</span><br><span>${escH(row.path||"")}</span></div>
     ${metadata}
     <dl><dt>${escH(tMsg("viewer.overview.status"))}</dt><dd>${escH(overviewStateLabel(row))}</dd><dt>${escH(tMsg("viewer.overview.submissions"))}</dt><dd>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}<br>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</dd><dt>${escH(tMsg("viewer.overview.activity"))}</dt><dd>${escH(overviewTime(row.lastActivity))}</dd><dt>${escH(tMsg("viewer.overview.port"))}</dt><dd>${escH(row.port||"—")}${row.running&&row.running!==row.port?" · "+escH(tMsg("viewer.overview.actualPort",{port:row.running})):""}</dd></dl>
-    <div class="overview-actions">${invalid?forget:action+archive}</div>`;
+    <div class="overview-actions">${invalid?forget:action+archive}</div>${startFailure?`<p id="overviewStartError" class="overview-message" role="alert">${escH(tMsg(startFailure))}</p>`:""}`;
   const copy=$("overviewForgetCopy");if(copy)copy.onclick=async()=>{await copyText(row.forgetCommand);toast(tMsg("viewer.overview.copied"))};
   const archiveButton=$("overviewArchive");if(archiveButton)archiveButton.onclick=()=>archiveReview(row.reviewId,!row.archived);
+  const start=$("overviewStart");if(start)start.onclick=()=>startOverview(row);
+}
+async function startOverview(row){
+  const rid=row.reviewId;
+  if(overviewStarting.has(rid))return;
+  // 用户点击的同步阶段预留标签页；等网络应答后再 window.open 会被浏览器拦截。
+  const opened=window.open("about:blank","_blank");
+  if(!opened){overviewStartFailures.set(rid,"viewer.overview.popupBlocked");renderOverview();return}
+  opened.opener=null;
+  opened.document.title=tMsg("viewer.overview.starting");
+  opened.document.body.textContent=tMsg("viewer.overview.starting");
+  overviewStarting.add(rid);overviewStartFailures.delete(rid);renderOverview();
+  try{
+    const data=await api("POST","/api/overview/start",{reviewId:rid});
+    if(typeof data.url!=="string"||!/^http:\/\/127\.0\.0\.1:\d+\/$/.test(data.url))throw new Error("overview-start-format");
+    const selected=(overviewData&&overviewData.reviews||[]).find(review=>review.reviewId===rid);
+    if(selected){const port=Number(new URL(data.url).port);Object.assign(selected,{url:data.url,running:port,state:port===selected.port?"running":"running-temp"})}
+    if(!opened.closed)opened.location.replace(data.url);
+    await loadOverview();
+  }catch(error){
+    if(!opened.closed)opened.close();
+    overviewStartFailures.set(rid,"viewer.overview.startError");
+  }finally{overviewStarting.delete(rid);renderOverview()}
 }
 async function archiveReview(reviewId,archived){
   if(FILE||archiveBusy)return;

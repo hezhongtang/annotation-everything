@@ -272,6 +272,36 @@ def review_overview_checks(browser, tmp: Path):
            "核验记录中的 HTML 只显示为文字")
         ok("stopped" in page.inner_text("#overviewDetail") and str(workspace) not in page.inner_text("#overview"),
            "详情显示相对路径，不暴露工作区绝对路径")
+        start = page.locator("#overviewStart")
+        ok(start.count() == 1, "已停审阅提供启动并打开操作")
+        if start.count():
+            pending = []
+            ctx.route("**/api/overview/start", lambda route: pending.append(route))
+            with page.expect_popup() as first_popup:
+                start.click()
+            empty = first_popup.value
+            ok(wait_until(lambda: bool(pending), page, 5) and empty.url == "about:blank",
+               "点击时同步预留新标签页，启动请求尚未完成")
+            ok(page.locator("#overviewStart").is_disabled()
+               and "启动中" in page.inner_text("#overviewStart"), "等待启动时显示启动中并阻止重复点击")
+            pending.pop(0).fulfill(status=503, content_type="application/json",
+                                   body=json.dumps({"app": "annotation-everything", "code": "overview-start-failed",
+                                                    "error": "Synthetic launch failure"}))
+            ok(wait_until(empty.is_closed, page, 5), "启动失败关闭预留的空白标签页")
+            ok(page.locator("#overviewStart").is_enabled()
+               and "重试" in page.inner_text("#overviewStartError"), "启动失败提供可重试提示并恢复操作")
+            with page.expect_popup() as second_popup:
+                page.click("#overviewStart")
+            opened = second_popup.value
+            ok(wait_until(lambda: bool(pending), page, 5), "失败后可以再次发起启动")
+            pending.pop(0).continue_()
+            navigated = wait_until(lambda: opened.url.startswith("http://127.0.0.1:"), page, 10)
+            owned = json.loads((Path(os.environ["AE_HOME"]) / "reviews.json").read_text())["reviews"][stopped_id]["port"]
+            ok(navigated and opened.url == f"http://127.0.0.1:{owned}/"
+               and wait_mode(opened, "server"), "重试成功后在专属端口的新标签页打开目标审阅")
+            ok(opened.evaluate("window.opener === null"), "新审阅标签页不保留 opener")
+            opened.close()
+            ctx.unroute("**/api/overview/start")
         invalid = page.locator('[data-overview-group="invalid"] [data-review-id]').first
         invalid.click()
         ok("serve.py forget " in page.inner_text("#overviewDetail") and page.locator("#overviewDetail a").count() == 0,
@@ -340,6 +370,20 @@ def review_overview_checks(browser, tmp: Path):
         ok(not any("\u4e00" <= char <= "\u9fff" for char in "".join(system_copy)),
            "英文总览的系统文案没有中文残留")
     finally:
+        info_path = stopped / ".annotation-server.json"
+        if info_path.exists():
+            info = json.loads(info_path.read_text())
+            target_url = f"http://127.0.0.1:{info['port']}"
+            try:
+                health = ctx.request.get(target_url + "/api/health").json()
+                if health.get("reviewId") == stopped_id:
+                    ctx.request.post(target_url + "/api/server/stop", data={},
+                                     headers={"Origin": target_url, "X-AE-Review": stopped_id,
+                                              "Content-Type": "application/json"})
+                    wait_until(lambda: not info_path.exists(), page, 5,
+                               condition="回收总览启动的合成审阅服务")
+            except Exception as error:
+                ok(False, "总览启动服务清理失败：%s" % error)
         ctx.close()
         stop(srv)
 
