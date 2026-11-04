@@ -197,7 +197,14 @@ class _RequestReads:
         return self._once("skills", lambda: store.skills_doc(self.server.review_dir))
 
     def waiting(self) -> Any:
-        """有没有这个绑定正在等的代理（读等待标记）；还没到读它那一步时返回 None。"""
+        """有没有这个绑定正在等的代理（读等待标记）；还没到读它那一步时返回 None。
+
+        None 的语义是「调用方确认还没到读等待标记那一步」：没有绑定（或读取失败）、有批次在
+        处理中、codex-desktop 三种情况都在读标记之前返回。当前这样是安全的——receiver_status
+        收到 None 时会自己读一次等待标记，而这三种情况它在读之前就先返回了（未配置 / error /
+        processing / event），既不会多开文件也不会漏判。将来新增分支时注意：只有在确认不可能
+        有代理在等时才返回 None，否则要真的去读一次等待标记。
+        """
         def read():
             binding, handoff = self.binding(), self.handoff()
             if isinstance(binding, Exception) or isinstance(handoff, Exception) or not binding:
@@ -1015,6 +1022,8 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
         items = handoff["items"] if isinstance(handoff, dict) else []
         row["pending"] = sum(1 for i in items if i.get("status") == "pending")
         row["review"] = sum(1 for i in items if i.get("status") == "review")
+        # latest 只取 status / seq 两个字段判断回执，与 handoff_state 的 userMessage 归一无关；
+        # 将来给这里加字段（或改「最新一条」的取法）时，需重新核对取值口径与回执判定。
         latest = items[-1] if items else {}
         delivery = row["agentDelivery"] = wakeup.public_status(d, handoff=handoff, manifest=m)
         event = "review" if latest.get("status") in ("review", "reviewing") else "handoff"
