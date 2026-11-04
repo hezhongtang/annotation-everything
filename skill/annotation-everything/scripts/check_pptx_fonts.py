@@ -28,6 +28,18 @@ TOOL_TIMEOUT = 10
 # 当前界面语言：main() 按共同契约解析后设置；未设置前保持中文（旧调用行为不变）
 _LOCALE = i18n.DEFAULT_LOCALE
 
+# 本入口的 CLI 消息 key 表：argparse 报错类别与语言选择问题 → 消息 key。
+# 这里没有带 choices 的参数，argparse 不会报「非法选项」，这一类就不列，让它退回
+# 通用消息——与从前没有对应分支时的输出一致
+ERROR_KEYS = {
+    i18n.CLI_ERROR_MISSING_VALUE: "font.err.missingValue",
+    i18n.CLI_ERROR_UNKNOWN_ARGUMENT: "font.err.unknownArgument",
+    i18n.CLI_ERROR_MISSING_ARGUMENT: "font.err.missingArgument",
+    i18n.CLI_ERROR_GENERIC: "font.err.generic",
+    i18n.CLI_ERROR_EMPTY_LOCALE: "font.err.emptyLocale",
+    i18n.CLI_ERROR_INVALID_LOCALE: "font.err.invalidLocale",
+}
+
 
 def T(key: str, **params: object) -> str:
     """按当前语言取一条消息；缺译时回退另一种语言（见 locales/README.md 的契约）。"""
@@ -202,25 +214,6 @@ def report_pdf(rows: list[dict[str, str]], declared: list[str], fallbacks: list[
     return review
 
 
-class LocalizedParser(argparse.ArgumentParser):
-    """帮助、用法与错误消息都走当前语言；参数名与合法取值保持原文。"""
-
-    def error(self, message: str):
-        self.print_usage(sys.stderr)
-        text = str(message).strip()
-        match = re.match(r"^argument (\S+): expected one argument$", text)
-        if match:
-            print(T("font.err.missingValue", name=match.group(1)), file=sys.stderr)
-        elif text.startswith("the following arguments are required:"):
-            print(T("font.err.missingArgument"), file=sys.stderr)
-        elif text.startswith("unrecognized arguments:"):
-            print(T("font.err.unknownArgument",
-                    detail=text.partition(":")[2].strip()), file=sys.stderr)
-        else:
-            print(T("font.err.generic", detail=text), file=sys.stderr)
-        sys.exit(2)
-
-
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # 先按共同契约定语言，再建解析器：帮助、参数说明与错误消息才能用同一种语言
@@ -228,14 +221,10 @@ def main(argv: list[str] | None = None) -> int:
         set_locale(i18n.cli_locale(i18n.explicit_locale(argv)))
     except i18n.LocaleError as exc:
         set_locale(i18n.DEFAULT_LOCALE)
-        params = getattr(exc, "params", {}) or {}
-        value = params.get("locale") if isinstance(params, dict) else None
-        if isinstance(value, str) and not value.strip():
-            print(T("font.err.emptyLocale"), file=sys.stderr)
-        else:
-            print(T("font.err.invalidLocale", name="" if value is None else str(value)), file=sys.stderr)
+        print(i18n.locale_error_message(exc, ERROR_KEYS, T), file=sys.stderr)
         return 2
-    ap = LocalizedParser(description=T("font.usage"), add_help=False)
+    ap = i18n.LocalizedParser(description=T("font.usage"), add_help=False,
+                              keys=ERROR_KEYS, translate=T)
     ap.add_argument("-h", "--help", action="help", default=argparse.SUPPRESS, help=T("font.opt.help"))
     ap.add_argument("--locale", metavar="LANG", help=T("font.opt.locale"))
     ap.add_argument("pptx", type=Path, help=T("font.arg.pptx"))
