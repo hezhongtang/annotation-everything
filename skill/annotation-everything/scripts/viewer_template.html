@@ -179,6 +179,40 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 .note.done .body del,.note.done .body ins{background:none}
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1d2330;color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;display:none;z-index:10;max-width:80vw}
 @media (max-width:900px){main{grid-template-columns:1fr;grid-template-rows:auto 1fr;padding:12px 16px}.slide{aspect-ratio:16/9}.script{min-height:50vh}}
+/* 审阅总览：沿用方案 C 的左侧列表与右侧详情。 */
+.overview-entry{font:inherit;font-size:13px;color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.35);border-radius:6px;padding:5px 10px}
+.overview-entry:focus-visible,#overview button:focus-visible,#overview a:focus-visible{outline:3px solid var(--ae-accent);outline-offset:3px}
+body.overview-mode>header,body.overview-mode>#srvBar,body.overview-mode>#resume,body.overview-mode>nav,body.overview-mode>main{display:none}
+#overview{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
+#overview[hidden]{display:none}
+.overview-top{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:14px 24px;background:var(--ae-panel);border-bottom:1px solid var(--ae-line);position:sticky;top:0;z-index:4}
+.overview-top h1{font-size:17px;line-height:1.5;margin:0;flex:1 1 220px;color:var(--ae-navy);overflow-wrap:anywhere}
+#overview button,#overview select,#overview .overview-open{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:7px 12px;background:#fff;color:var(--ae-ink);cursor:pointer}
+#overview button:disabled{opacity:.55;cursor:default}
+.overview-top select{max-width:100%}
+.overview-body{width:100%;max-width:1240px;margin:0 auto;padding:24px;display:grid;grid-template-columns:340px minmax(0,1fr);gap:22px;align-items:start}
+.overview-list{border:1px solid var(--ae-line);border-radius:10px;overflow:hidden;background:var(--ae-panel)}
+.overview-group h2{margin:0;background:#f6f8fb;border-bottom:1px solid var(--ae-line);padding:10px 14px;font-size:12px;font-weight:600;color:var(--ae-mut)}
+#overview .overview-row{display:block;width:100%;border:0;border-radius:0;border-bottom:1px solid var(--ae-line);padding:13px 14px;text-align:left;background:#fff}
+#overview .overview-row:last-child{border-bottom:0}
+#overview .overview-row:hover{background:#f7f9fc}
+#overview .overview-row[aria-pressed=true]{background:#eaf2fd;box-shadow:inset 3px 0 0 var(--ae-accent)}
+.overview-row-title{display:flex;align-items:baseline;gap:7px;overflow-wrap:anywhere;font-weight:600;line-height:1.6}
+.overview-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#8b93a0;flex:none;align-self:center}
+.overview-dot.running{background:var(--ae-green)}.overview-dot.invalid{background:var(--ae-red)}
+.overview-row-meta{display:flex;gap:6px 12px;flex-wrap:wrap;color:var(--ae-mut);font-size:12px;line-height:1.6;margin-top:4px}
+.overview-current{font-size:11px;font-weight:400;color:var(--ae-accent);border:1px solid #b8d4f6;border-radius:4px;padding:0 4px;white-space:nowrap}
+.overview-detail{background:var(--ae-panel);border:1px solid var(--ae-line);border-radius:12px;padding:24px;min-width:0;position:sticky;top:86px;overflow-wrap:anywhere}
+.overview-detail h2{margin:0 0 8px;font-size:21px;line-height:1.5;color:var(--ae-navy)}
+.overview-identity{font-size:12px;color:var(--ae-mut);line-height:1.7;margin-bottom:16px}
+.overview-detail dl{display:grid;grid-template-columns:95px minmax(0,1fr);gap:10px 14px;margin:18px 0;font-size:14px;line-height:1.7}
+.overview-detail dt{color:var(--ae-mut)}.overview-detail dd{margin:0}
+.overview-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:20px;padding-top:16px;border-top:1px solid var(--ae-line)}
+#overview .overview-open{text-decoration:none;display:inline-block;background:var(--ae-accent);color:#fff;border-color:var(--ae-accent)}
+.overview-command{display:block;max-width:100%;padding:9px 12px;border:1px solid var(--ae-line);border-radius:6px;background:#f6f8fb;font-size:13px;user-select:all;overflow-wrap:anywhere}
+.overview-message{color:var(--ae-mut);padding:18px;font-size:14px;line-height:1.7;margin:0}
+#overviewError{color:#9b2c1f}.overview-count{font-weight:400;margin-left:6px}
+@media(max-width:800px){.overview-body{grid-template-columns:minmax(0,1fr);padding:14px;gap:14px}.overview-top{padding:12px 14px;gap:10px}.overview-detail{position:static}.overview-detail dl{grid-template-columns:80px minmax(0,1fr)}}
 </style></head><body>
 <header>
   <h1>__TITLE__</h1>
@@ -190,6 +224,7 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
   <button id="prev" data-title="viewer.prevTitle" data-p-key="←"><span data-msg="viewer.prev">上一页</span><kbd>←</kbd></button>
   <select id="jump" data-aria="viewer.jumpLabel"></select>
   <button id="next" data-title="viewer.nextTitle" data-p-key="→"><span data-msg="viewer.next">下一页</span><kbd>→</kbd></button>
+  <a id="overviewBtn" class="overview-entry" href="#overview" data-msg="viewer.overview.title"></a>
   <button id="helpBtn" data-title="viewer.helpTitle" data-p-key="H"><span data-msg="viewer.help">说明</span><kbd>H</kbd></button>
   <button id="reloadBtn" data-title="viewer.reloadTitle"><span data-msg="viewer.reload">对照页已更新，点此刷新</span></button>
   <button id="legacyBtn" data-title="viewer.legacyTitle"><span data-msg="viewer.legacy">导入旧批注</span></button>
@@ -204,6 +239,22 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
     </select>
   </label>
 </header>
+<section id="overview" hidden data-aria="viewer.overview.title">
+  <div class="overview-top">
+    <h1 id="overviewTitle" data-msg="viewer.overview.title"></h1>
+    <select id="overviewScope" data-aria="viewer.overview.scope">
+      <option value="workspace" data-msg="viewer.overview.workspace"></option>
+      <option value="all" data-msg="viewer.overview.all"></option>
+    </select>
+    <button id="overviewRefresh" data-msg="viewer.overview.refresh"></button>
+    <button id="overviewBack" data-msg="viewer.overview.back"></button>
+  </div>
+  <p id="overviewError" class="overview-message" role="alert" hidden></p>
+  <div class="overview-body">
+    <div id="overviewList" class="overview-list" data-aria="viewer.overview.list"></div>
+    <section id="overviewDetail" class="overview-detail" aria-live="polite" data-aria="viewer.overview.detail"></section>
+  </div>
+</section>
 <div class="resume" id="srvBar" role="alert"><span id="srvText"></span><code id="srvCmd"></code><button id="srvCopy"><span data-msg="viewer.mode.barCopy">复制命令</span></button><button id="srvClose" data-title="viewer.mode.barClose">×</button></div>
 <div class="resume" id="resume" role="status"><span id="resumeText"></span><button id="resumeGo" style="display:none"></button><button id="resumeClose" title="关闭提示">×</button></div>
 <nav id="secs"></nav>
@@ -426,6 +477,7 @@ function applyLocale(){
   if($("allnotes").classList.contains("on"))renderOrphans();
   updateStray();
   refreshPinPop();
+  renderOverview();
 }
 $("localePick").addEventListener("change",()=>{
   try{localStorage.setItem(LOCALE_STORE, $("localePick").value)}catch(e){}
@@ -1674,6 +1726,7 @@ $("prev").onclick=()=>go(i-1);$("next").onclick=()=>go(i+1);addEventListener("re
 $("jump").onchange=e=>go(+e.target.value);
 $("helpBtn").onclick=()=>$("help").classList.toggle("on");
 document.addEventListener("keydown",e=>{
+  if(overviewShown())return;
   if(["SELECT","TEXTAREA","INPUT"].includes(e.target.tagName)||e.isComposing||e.metaKey||e.ctrlKey||e.altKey)return;
   const k=e.key.toLowerCase();
   if($("stylemenu").classList.contains("on")){   // 风格优化范围：1 整页、2 标注处（3 是旧版的「标点处」，同 2）
@@ -1700,10 +1753,73 @@ document.addEventListener("keydown",e=>{
   else if(e.key==="Home")go(0);else if(e.key==="End")go(N-1);
   else if(e.key==="h"||e.key==="H")$("help").classList.toggle("on");
   else if(e.key==="Escape"){document.querySelectorAll(".modal").forEach(m=>m.classList.remove("on"));if(markMode)setMarkMode(false);closePinPop();closeStyleMenu()}});
+// ---------- 审阅总览（同一个 index.html 的 #overview 视图） ----------
+let overviewData=null,overviewSelected=null,overviewRequest=0;
+function overviewShown(){return location.hash==="#overview"}
+function overviewState(row){return row.state==="running"||row.state==="running-temp"?"running":row.state==="stopped"?"stopped":"invalid"}
+function overviewStateLabel(row){return tMsg("viewer.overview."+overviewState(row))}
+function overviewTime(value){
+  if(typeof value!=="number"||!Number.isFinite(value)||value<=0)return tMsg("viewer.overview.noActivity");
+  const date=new Date(value*1000);return Number.isFinite(date.getTime())?date.toLocaleString(uiLocale):tMsg("viewer.overview.noActivity");
+}
+function renderOverview(){
+  if(!overviewShown())return;
+  const title=tMsg("viewer.overview.title");
+  $("overviewTitle").textContent=title+(overviewData?" · "+overviewData.workspace:"");
+  if(!overviewData){$("overviewList").innerHTML=`<p class="overview-message">${escH(tMsg(FILE?"viewer.overview.needService":"viewer.overview.loading"))}</p>`;$("overviewDetail").textContent="";return}
+  const rows=overviewData.reviews||[];
+  if(!rows.some(row=>row.reviewId===overviewSelected))overviewSelected=(rows.find(row=>row.current)||rows[0]||{}).reviewId;
+  $("overviewList").innerHTML=["running","stopped","invalid"].map(state=>{
+    const group=rows.filter(row=>overviewState(row)===state).sort((a,b)=>(b.lastActivity||0)-(a.lastActivity||0));
+    if(!group.length)return "";
+    return `<section class="overview-group" data-overview-group="${state}"><h2>${escH(tMsg("viewer.overview."+state))}<span class="overview-count">${group.length}</span></h2>`+group.map(row=>
+      `<button class="overview-row" data-review-id="${escH(row.reviewId)}" aria-pressed="${row.reviewId===overviewSelected}"><span class="overview-row-title"><span class="overview-dot ${state}" aria-hidden="true"></span><span>${escH(row.name||row.reviewId.slice(0,8))}</span>${row.current?`<span class="overview-current">${escH(tMsg("viewer.overview.current"))}</span>`:""}</span><span class="overview-row-meta"><span>${escH(overviewTime(row.lastActivity))}</span><span>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}</span><span>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</span></span></button>`).join("")+"</section>";
+  }).join("")||`<p class="overview-message">${escH(tMsg("viewer.overview.empty"))}</p>`;
+  const row=rows.find(row=>row.reviewId===overviewSelected);
+  if(!row){$("overviewDetail").innerHTML=`<p class="overview-message">${escH(tMsg("viewer.overview.select"))}</p>`;return}
+  const invalid=overviewState(row)==="invalid";
+  const url=typeof row.url==="string"&&/^http:\/\/127\.0\.0\.1:\d+\/$/.test(row.url)?row.url:null;
+  const action=row.current?`<button class="overview-open" disabled>${escH(tMsg("viewer.overview.open"))}</button>`
+    :!invalid&&url?`<a class="overview-open" href="${escH(url)}" target="_blank" rel="noopener noreferrer">${escH(tMsg("viewer.overview.open"))}</a>`:"";
+  const forget=invalid&&typeof row.forgetCommand==="string"?`<code class="overview-command">${escH(row.forgetCommand)}</code><button id="overviewForgetCopy">${escH(tMsg("viewer.overview.copyCommand"))}</button>`:"";
+  $("overviewDetail").innerHTML=`<h2>${escH(row.name||row.reviewId.slice(0,8))}</h2><div class="overview-identity"><span>${escH(row.reviewId.slice(0,8))}</span><br><span>${escH(row.path||"")}</span></div>
+    <dl><dt>${escH(tMsg("viewer.overview.status"))}</dt><dd>${escH(overviewStateLabel(row))}</dd><dt>${escH(tMsg("viewer.overview.submissions"))}</dt><dd>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}<br>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</dd><dt>${escH(tMsg("viewer.overview.activity"))}</dt><dd>${escH(overviewTime(row.lastActivity))}</dd><dt>${escH(tMsg("viewer.overview.port"))}</dt><dd>${escH(row.port||"—")}${row.running&&row.running!==row.port?" · "+escH(tMsg("viewer.overview.actualPort",{port:row.running})):""}</dd></dl>
+    <div class="overview-actions">${invalid?forget:action}</div>`;
+  const copy=$("overviewForgetCopy");if(copy)copy.onclick=async()=>{await copyText(row.forgetCommand);toast(tMsg("viewer.overview.copied"))};
+}
+async function loadOverview(){
+  if(FILE){renderOverview();return}
+  const request=++overviewRequest;
+  $("overviewRefresh").disabled=true;
+  try{
+    const data=await api("GET","/api/overview?scope="+encodeURIComponent($("overviewScope").value));
+    if(request!==overviewRequest)return;
+    if(data.reviewId!==RID||!Array.isArray(data.reviews))throw new Error("overview-format");
+    const changed=JSON.stringify(overviewData)!==JSON.stringify(data);
+    overviewData=data;$("overviewError").hidden=true;if(changed)renderOverview();
+  }catch(error){
+    if(request!==overviewRequest)return;
+    $("overviewError").textContent=tMsg("viewer.overview.loadError");$("overviewError").hidden=false;
+  }finally{if(request===overviewRequest)$("overviewRefresh").disabled=false}
+}
+function overviewRoute(event){
+  const shown=overviewShown();
+  if(shown&&event){saveDraft();document.querySelectorAll(".modal.on").forEach(el=>el.classList.remove("on"))}
+  document.body.classList.toggle("overview-mode",shown);$("overview").hidden=!shown;
+  if(shown){renderOverview();loadOverview()}else requestAnimationFrame(fit);
+}
+$("overviewBack").onclick=()=>{location.hash=""};
+$("overviewRefresh").onclick=loadOverview;
+$("overviewScope").onchange=()=>{overviewData=null;overviewSelected=null;renderOverview();loadOverview()};
+$("overviewList").onclick=event=>{const row=event.target.closest("[data-review-id]");if(row){overviewSelected=row.dataset.reviewId;renderOverview();const selected=$("overviewList").querySelector('[aria-pressed="true"]');if(selected)selected.focus({preventScroll:true})}};
+addEventListener("hashchange",overviewRoute);
+setInterval(()=>{if(overviewShown()&&!document.hidden)loadOverview()},4000);
+
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE)poll()});
 
 (async function init(){
   applyLocale();
+  overviewRoute();
   if(FILE){mirror();updateMode();render();return}
   LS.del(K.notes);                      // 服务模式不在浏览器里留整份批注副本
   LS.set(K.meta,{title:unH(document.title),name:NAME,ns:NS});   // 只记名称：这个地址以后换给别的审阅时，那边的页面能说出暂存属于谁

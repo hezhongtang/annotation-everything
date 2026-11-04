@@ -181,6 +181,13 @@ SCENARIOS: list[Scenario] = [
     ),
     Scenario(
         parallel_safe=True,
+        id="review-overview",
+        title="审阅总览：工作区分组、选中详情、当前审阅与双语界面、返回对照页",
+        fixture="fixtures/sample 构建的独立合成 git 工作区，运行中、已停和目录失效的审阅",
+        isolation="独立工作区、审阅目录、端口与浏览器上下文，服务登记并在场景结束回收",
+    ),
+    Scenario(
+        parallel_safe=True,
         id="css-fidelity",
         title="报告样式保真：报告 :root 变量在 Shadow DOM 里生效、外壳同名变量不渗入、body 布局不把幻灯片挤偏、rem 按报告根字号",
         fixture="自带样式的合成报告页（内联 :root、body flex 与 rem 用例）",

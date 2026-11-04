@@ -48,6 +48,7 @@ FULL_ORDER = (
     "current-task-controls",
     "export-import",
     "file-mode",
+    "review-overview",
     "css-fidelity",
     "server-mode",
 )
