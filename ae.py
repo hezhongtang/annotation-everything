@@ -85,6 +85,19 @@ _skill_modules: dict = {}
 _locale = "zh-CN"
 _messages: Optional[Callable[..., str]] = None
 
+# 本入口的 CLI 消息 key 表：argparse 报错类别与语言选择问题 → 消息 key。
+# 类别名与 i18n 的 CLI 语言样板一致；技能副本是旧版时这里不能引用那些常量，
+# 所以按字面量写
+ERROR_KEYS = {
+    "invalid-choice": "cli.ae.err.unknownCommand",
+    "missing-value": "cli.ae.err.missingValue",
+    "unknown-argument": "cli.ae.err.unknownArgument",
+    "missing-argument": "cli.ae.err.missingCommand",
+    "generic": "cli.ae.err.generic",
+    "empty-locale": "cli.ae.err.emptyLocale",
+    "invalid-locale": "cli.ae.err.invalidLocale",
+}
+
 
 def skill_module(name: str):
     """加载技能本体 scripts 里的模块（i18n、ledger）：一套实现，仓库与技能副本共用。
@@ -148,25 +161,45 @@ def join(items, item: str = "") -> str:
 
 
 def locale_error_message(exc: Exception) -> str:
-    """语言选择本身不合法时的一句话；此时没有可用语言，按默认中文说明。"""
+    """语言选择为空或非法时的一句话；此时没有可用语言，按默认中文说明。"""
+    module = cli_language()
+    if module is not None:
+        return module.locale_error_message(exc, ERROR_KEYS, T)
+    # 技能副本还没有公共实现：不区分空值与非法值，统一按非法值说明
     params = getattr(exc, "params", {}) or {}
     value = params.get("locale") if isinstance(params, dict) else None
-    if isinstance(value, str) and not value.strip():
-        return T("cli.ae.err.emptyLocale")
-    return T("cli.ae.err.invalidLocale", name="" if value is None else str(value))
+    return T(ERROR_KEYS["invalid-locale"], name="" if value is None else str(value))
 
 
-def explicit_locale_from_argv(argv):
-    """从命令行里取出 --locale 的值（写在子命令前后都认）；没写返回 None。"""
-    tokens = list(argv or [])
-    for index, token in enumerate(tokens):
-        if token == "--":
-            break
-        if token == "--locale":
-            return tokens[index + 1] if index + 1 < len(tokens) else ""
-        if token.startswith("--locale="):
-            return token.partition("=")[2]
-    return None
+def cli_language():
+    """技能本体的 CLI 语言公共实现；副本是还没有它的旧版本时返回 None（用内置兜底）。"""
+    try:
+        module = i18n_module()
+    except ImportError:
+        return None
+    return module if hasattr(module, "LocalizedParser") else None
+
+
+class MinimalLocalizedParser(argparse.ArgumentParser):
+    """取不到公共实现时的最小本地化解析器：不区分类别，统一用兜底消息。
+
+    接受与公共实现相同的 keys / translate 参数并忽略，调用点因此不必分叉；
+    stderr 流向与退出码和公共实现一致。
+    """
+
+    def __init__(self, *args, keys=None, translate=None, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def error(self, message: str):
+        self.print_usage(sys.stderr)
+        print(T(ERROR_KEYS["generic"], detail=str(message).strip()), file=sys.stderr)
+        sys.exit(2)
+
+
+def localized_parser_class() -> type:
+    """错误消息本地化的解析器；取不到公共实现时用内置最小实现。"""
+    module = cli_language()
+    return MinimalLocalizedParser if module is None else module.LocalizedParser
 
 
 @dataclasses.dataclass
@@ -1669,35 +1702,6 @@ def cmd_uninstall(args) -> int:
     return 0
 
 
-class LocalizedParser(argparse.ArgumentParser):
-    """帮助、用法与错误消息都走当前语言的 argparse 解析器。
-
-    参数名、子命令名和合法取值保持原文，只有说明文字按语言变。
-    """
-
-    def error(self, message: str):
-        self.print_usage(sys.stderr)
-        print(translate_cli_error(message), file=sys.stderr)
-        sys.exit(2)
-
-
-def translate_cli_error(message: str) -> str:
-    """把 argparse 的英文错误消息换成本地化的说法；认不出来的保留原文并补上下文。"""
-    text = str(message).strip()
-    match = re.match(r"^(?:argument \S+: )?invalid choice: '([^']*)' \(choose from .*\)$", text)
-    if match:
-        return T("cli.ae.err.unknownCommand", name=match.group(1))
-    match = re.match(r"^argument (\S+): expected one argument$", text)
-    if match:
-        return T("cli.ae.err.missingValue", name=match.group(1))
-    match = re.match(r"^unrecognized arguments: (.+)$", text)
-    if match:
-        return T("cli.ae.err.unknownArgument", detail=match.group(1))
-    if text.startswith("the following arguments are required:"):
-        return T("cli.ae.err.missingCommand")
-    return T("cli.ae.err.generic", detail=text)
-
-
 def _add_help(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-h", "--help", action="help", default=argparse.SUPPRESS,
                         help=T("cli.ae.opt.help"))
@@ -1717,7 +1721,8 @@ def _add_target(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = LocalizedParser(prog="ae.py", description=T("cli.ae.appDesc"), add_help=False)
+    parser = localized_parser_class()(prog="ae.py", description=T("cli.ae.appDesc"),
+                                      add_help=False, keys=ERROR_KEYS, translate=T)
     _add_help(parser)
     _add_locale(parser, root=True)
     sub = parser.add_subparsers(dest="command", metavar="子命令" if current_locale() == "zh-CN" else "COMMAND")
@@ -1761,13 +1766,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
-        set_locale(i18n_module().cli_locale(explicit_locale_from_argv(argv)))
+        module = i18n_module()
+        set_locale(module.cli_locale(module.explicit_locale(argv)))
     except ImportError:
         print(f"找不到技能本体（{SKILL_SRC / 'scripts' / 'i18n.py'}），加载不了界面语言；"
               "请确认 ae.py 与 skill/ 目录在一起，或重新安装", file=sys.stderr)
         return 2
-    except i18n_module().LocaleError as exc:
-        set_locale(i18n_module().DEFAULT_LOCALE)
+    except module.LocaleError as exc:
+        set_locale(module.DEFAULT_LOCALE)
         print(locale_error_message(exc), file=sys.stderr)
         return 2
     parser = build_parser()

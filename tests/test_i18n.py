@@ -231,5 +231,76 @@ class CheckCatalogTests(unittest.TestCase):
     # 本类只保留对合成错误输入（root= 临时词典）的校验器行为测试。
 
 
+class CliErrorTests(unittest.TestCase):
+    """argparse 英文报错的唯一分类：类别、参数，以及入口没列的那一类如何退回。"""
+
+    KEYS = {
+        i18n.CLI_ERROR_INVALID_CHOICE: "probe.choice",
+        i18n.CLI_ERROR_MISSING_VALUE: "probe.value",
+        i18n.CLI_ERROR_UNKNOWN_ARGUMENT: "probe.unknown",
+        i18n.CLI_ERROR_MISSING_ARGUMENT: "probe.required",
+        i18n.CLI_ERROR_GENERIC: "probe.generic",
+    }
+
+    def translate(self, key, **params):
+        return "%s(%s)" % (key, ",".join("%s=%s" % item for item in sorted(params.items())))
+
+    def classify(self, message):
+        return i18n.classify_cli_error(message)
+
+    def test_each_class_is_recognized(self):
+        self.assertEqual(self.classify("argument --link: expected one argument"),
+                         (i18n.CLI_ERROR_MISSING_VALUE, {"name": "--link"}))
+        self.assertEqual(self.classify("unrecognized arguments: --nope extra"),
+                         (i18n.CLI_ERROR_UNKNOWN_ARGUMENT, {"detail": "--nope extra"}))
+        self.assertEqual(self.classify("the following arguments are required: dir"),
+                         (i18n.CLI_ERROR_MISSING_ARGUMENT, {}))
+        self.assertEqual(
+            self.classify("argument mode: invalid choice: 'bogus' (choose from 'auto', 'now')"),
+            (i18n.CLI_ERROR_INVALID_CHOICE, {"name": "bogus"}))
+        # 没带 argument 前缀的非法选项（子命令写错）也认
+        self.assertEqual(
+            self.classify("invalid choice: 'nope' (choose from 'install', 'doctor')"),
+            (i18n.CLI_ERROR_INVALID_CHOICE, {"name": "nope"}))
+
+    def test_unknown_wording_falls_back_to_generic_with_the_original_text(self):
+        self.assertEqual(self.classify("argument --port: invalid int value: 'abc'"),
+                         (i18n.CLI_ERROR_GENERIC,
+                          {"detail": "argument --port: invalid int value: 'abc'"}))
+        self.assertEqual(self.classify("expected at least one argument"),
+                         (i18n.CLI_ERROR_GENERIC, {"detail": "expected at least one argument"}))
+
+    def test_listed_class_uses_its_own_key(self):
+        message = i18n.translate_cli_error("argument --link: expected one argument",
+                                           self.KEYS, self.translate)
+        self.assertEqual(message, "probe.value(name=--link)")
+
+    def test_unlisted_class_falls_back_to_the_generic_key_with_the_original_text(self):
+        """入口原来不认的报错类型，退回它自己的通用消息，用原文补上下文。"""
+        keys = {k: v for k, v in self.KEYS.items() if k != i18n.CLI_ERROR_INVALID_CHOICE}
+        message = i18n.translate_cli_error(
+            "invalid choice: 'bogus' (choose from 'auto', 'check', 'now')", keys, self.translate)
+        self.assertEqual(message,
+                         "probe.generic(detail=invalid choice: 'bogus' "
+                         "(choose from 'auto', 'check', 'now'))")
+
+    def test_locale_error_message_separates_empty_from_invalid(self):
+        keys = {i18n.CLI_ERROR_EMPTY_LOCALE: "probe.empty",
+                i18n.CLI_ERROR_INVALID_LOCALE: "probe.invalid"}
+        empty = i18n.LocaleError("unsupported-locale", "语言选择是空的", locale="  ")
+        invalid = i18n.LocaleError("unsupported-locale", "不支持的语言", locale="fr")
+        self.assertEqual(i18n.locale_error_message(empty, keys, self.translate), "probe.empty()")
+        self.assertEqual(i18n.locale_error_message(invalid, keys, self.translate),
+                         "probe.invalid(name=fr)")
+
+    def test_locale_error_message_uses_the_given_name_when_offered(self):
+        """调用方另有取值方式时按它给的名字回显，不改用异常里归一后的值。"""
+        keys = {i18n.CLI_ERROR_EMPTY_LOCALE: "probe.empty",
+                i18n.CLI_ERROR_INVALID_LOCALE: "probe.invalid"}
+        exc = i18n.LocaleError("unsupported-locale", "不支持的语言", locale="fr")
+        self.assertEqual(i18n.locale_error_message(exc, keys, self.translate, name=" fr "),
+                         "probe.invalid(name= fr )")
+
+
 if __name__ == "__main__":
     unittest.main()

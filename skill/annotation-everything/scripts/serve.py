@@ -73,6 +73,17 @@ FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-ch
 # 当前界面语言：main() 与 serve() 按共同契约解析后设置；未设置前保持中文（旧调用行为不变）
 _LOCALE = i18n.DEFAULT_LOCALE
 
+# 本入口的 CLI 消息 key 表：argparse 报错类别与语言选择问题 → 消息 key
+ERROR_KEYS = {
+    i18n.CLI_ERROR_INVALID_CHOICE: "serve.err.unknownChoice",
+    i18n.CLI_ERROR_MISSING_VALUE: "serve.err.missingValue",
+    i18n.CLI_ERROR_UNKNOWN_ARGUMENT: "serve.err.unknownArgument",
+    i18n.CLI_ERROR_MISSING_ARGUMENT: "serve.err.missingArgument",
+    i18n.CLI_ERROR_GENERIC: "serve.err.generic",
+    i18n.CLI_ERROR_EMPTY_LOCALE: "serve.err.emptyLocale",
+    i18n.CLI_ERROR_INVALID_LOCALE: "serve.err.invalidLocale",
+}
+
 
 def T(key: str, **params: object) -> str:
     """按当前语言取一条消息；缺译时回退另一种语言（见 locales/README.md 的契约）。"""
@@ -1175,31 +1186,6 @@ def check(locale: str | None = None) -> int:
     return 1 if failed else 0
 
 
-class LocalizedParser(argparse.ArgumentParser):
-    """帮助、用法与错误消息都走当前语言的 argparse 解析器；参数名与合法取值保持原文。"""
-
-    def error(self, message: str):
-        self.print_usage(sys.stderr)
-        print(translate_cli_error(message), file=sys.stderr)
-        sys.exit(2)
-
-
-def translate_cli_error(message: str) -> str:
-    text = str(message).strip()
-    match = re.match(r"^(?:argument \S+: )?invalid choice: '([^']*)' \(choose from .*\)$", text)
-    if match:
-        return T("serve.err.unknownChoice", name=match.group(1))
-    match = re.match(r"^argument (\S+): expected one argument$", text)
-    if match:
-        return T("serve.err.missingValue", name=match.group(1))
-    match = re.match(r"^unrecognized arguments: (.+)$", text)
-    if match:
-        return T("serve.err.unknownArgument", detail=match.group(1))
-    if text.startswith("the following arguments are required:"):
-        return T("serve.err.missingArgument")
-    return T("serve.err.generic", detail=text)
-
-
 def _add_help(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-h", "--help", action="help", default=argparse.SUPPRESS,
                         help=T("serve.opt.help"))
@@ -1219,19 +1205,15 @@ def main(argv: list[str] | None = None) -> int:
         set_locale(i18n.cli_locale(locale_choice))
     except i18n.LocaleError as exc:
         set_locale(i18n.DEFAULT_LOCALE)
-        params = getattr(exc, "params", {}) or {}
-        value = params.get("locale") if isinstance(params, dict) else None
-        if isinstance(value, str) and not value.strip():
-            print(T("serve.err.emptyLocale"), file=sys.stderr)
-        else:
-            print(T("serve.err.invalidLocale", name="" if value is None else str(value)), file=sys.stderr)
+        print(i18n.locale_error_message(exc, ERROR_KEYS, T), file=sys.stderr)
         return 2
     # 子命令也可以写在 --locale 之后：认子命令前先剥掉开头这个选项
     rest = argv[2:] if argv[:1] == ["--locale"] else (argv[1:] if argv[:1] and argv[0].startswith("--locale=") else argv)
     if rest[:1] == ["check"]:
         return check(locale=_LOCALE)
     if rest[:1] == ["status"]:
-        ap = LocalizedParser(prog="serve.py status", add_help=False)
+        ap = i18n.LocalizedParser(prog="serve.py status", add_help=False,
+                                  keys=ERROR_KEYS, translate=T)
         _add_help(ap)
         _add_locale(ap)
         ap.add_argument("dir", type=str, help=T("serve.opt.dirOrId"))
@@ -1241,7 +1223,8 @@ def main(argv: list[str] | None = None) -> int:
         set_locale(cli_locale(locale_choice, d))
         return status(d, locale=_LOCALE)
     if rest[:1] == ["list"]:
-        ap = LocalizedParser(prog="serve.py list", add_help=False, description=T("serve.desc.list"))
+        ap = i18n.LocalizedParser(prog="serve.py list", add_help=False, description=T("serve.desc.list"),
+                                  keys=ERROR_KEYS, translate=T)
         _add_help(ap)
         _add_locale(ap)
         ap.add_argument("--under", type=Path, metavar="目录" if _LOCALE == "zh-CN" else "DIR",
@@ -1250,14 +1233,16 @@ def main(argv: list[str] | None = None) -> int:
         a = ap.parse_args(rest[1:])
         return list_reviews(a.under, a.json, locale=_LOCALE)
     if rest[:1] == ["forget"]:
-        ap = LocalizedParser(prog="serve.py forget", add_help=False, description=T("serve.desc.forget"))
+        ap = i18n.LocalizedParser(prog="serve.py forget", add_help=False, description=T("serve.desc.forget"),
+                                  keys=ERROR_KEYS, translate=T)
         _add_help(ap)
         _add_locale(ap)
         ap.add_argument("key", help=T("serve.opt.key"))
         a = ap.parse_args(rest[1:])
         return forget(a.key, locale=_LOCALE)
     argv = rest[1:] if rest[:1] == ["serve"] else rest
-    ap = LocalizedParser(prog="serve.py", add_help=False, description=T("serve.desc"))
+    ap = i18n.LocalizedParser(prog="serve.py", add_help=False, description=T("serve.desc"),
+                              keys=ERROR_KEYS, translate=T)
     _add_help(ap)
     _add_locale(ap)
     ap.add_argument("dir", type=str, help=T("serve.opt.dir"))
