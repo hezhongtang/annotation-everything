@@ -369,6 +369,66 @@ def review_overview_checks(browser, tmp: Path):
                                    "#overviewDetail dt, #overviewDetail h3, .overview-actions").all_text_contents()
         ok(not any("\u4e00" <= char <= "\u9fff" for char in "".join(system_copy)),
            "英文总览的系统文案没有中文残留")
+        artifacts = os.environ.get("AE_OVERVIEW_ARTIFACTS")
+        if artifacts:
+            output = Path(artifacts)
+            output.mkdir(parents=True, exist_ok=True)
+            # 行为断言完成后，用同一组合成审阅采集文档截图。
+            # 保留真实列表与 API，只把安全用例的正文换成可读的报告样例。
+            page.click("#overviewBack")
+            page.wait_for_function("() => !document.body.classList.contains('overview-mode')")
+            add_note(page, "请写清收入增长的对比期间（合成批注）")
+            page.click("#handBtn")
+            page.fill("#handMsg", "请同步核对报告和讲稿（合成提交）")
+            page.click("#doHand")
+            target_info = stopped / ".annotation-server.json"
+            target_port = json.loads(target_info.read_text())["port"]
+            target_url = f"http://127.0.0.1:{target_port}"
+            response = ctx.request.post(target_url + "/api/server/stop", data={},
+                                        headers={"Origin": target_url, "X-AE-Review": stopped_id,
+                                                 "Content-Type": "application/json"})
+            if not response.ok or not wait_until(lambda: not target_info.exists(), page, 5):
+                raise RuntimeError("截图前未能停止合成目标审阅")
+            archived_sample = workspace / "archived"
+            build(archived_sample, name="Sample Coffee · Previous review")
+            archived_id = json.loads((archived_sample / "review.json").read_text())["reviewId"]
+            source_url = f"http://127.0.0.1:{port}"
+            response = ctx.request.post(source_url + "/api/overview/archive",
+                                        data={"reviewId": archived_id, "archived": True},
+                                        headers={"Origin": source_url, "X-AE-Review": current_id,
+                                                 "Content-Type": "application/json"})
+            if not response.ok:
+                raise RuntimeError("截图前未能归档合成样例")
+            samples = (
+                ("zh-CN", "zh", "示例咖啡 · 三季度经营回顾", "示例咖啡 · 成本复盘",
+                 "汇总三季度经营表现，重点复核增长来源与成本变化。",
+                 {"purpose": "为下一季度经营安排提供依据", "audience": "经营委员会",
+                  "coreQuestions": ["收入增长由哪些因素带动？", "哪些成本需要进一步核实？"]}),
+                ("en", "en", "Sample Coffee · Q3 business review", "Sample Coffee · Cost review",
+                 "Review Q3 business performance, with a focus on growth drivers and changes in costs.",
+                 {"purpose": "Inform next quarter's operating plan", "audience": "Operating committee",
+                  "coreQuestions": ["What drove revenue growth?", "Which costs need further verification?"]}),
+            )
+            for locale, suffix, current_name, stopped_name, summary, request in samples:
+                source_report = FIXTURE / ("report.en.html" if locale == "en" else "report.html")
+                source_script = FIXTURE / ("script.en.md" if locale == "en" else "script.md")
+                shutil.copyfile(source_report, report)
+                record.update(summary=summary, request=request)
+                record["links"]["sha256"]["report"] = hashlib.sha256(report.read_bytes()).hexdigest()
+                (material / "report-record.json").write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+                build(current, report=source_report, script=source_script, name=current_name, locale=locale)
+                build(stopped, report=report, script=source_script, name=stopped_name, locale=locale)
+                page.goto(source_url + "/")
+                page.wait_for_function("() => document.getElementById('mode').classList.contains('server')")
+                page.select_option("#localePick", locale)
+                page.click("#overviewBtn")
+                page.wait_for_function("name => document.getElementById('overviewList').textContent.includes(name)",
+                                       arg=stopped_name)
+                page.click('[data-review-id="%s"]' % stopped_id)
+                page.wait_for_function("summary => document.getElementById('overviewDetail').textContent.includes(summary)",
+                                       arg=summary)
+                page.locator("#toast").wait_for(state="hidden")
+                page.screenshot(path=str(output / ("overview.%s.png" % suffix)))
     finally:
         info_path = stopped / ".annotation-server.json"
         if info_path.exists():
@@ -1924,6 +1984,7 @@ def current_task_controls_checks(browser, tmp: Path):
         if artifacts:
             output = Path(artifacts)
             output.mkdir(parents=True, exist_ok=True)
+            page.locator("#toast").wait_for(state="hidden")
             page.screenshot(path=str(output / "batch-controls.en.png"))
             page.select_option("#localePick", "zh-CN")
             page.screenshot(path=str(output / "batch-controls.zh.png"))
@@ -2215,11 +2276,14 @@ def installed_delivery_checks(browser, tmp: Path):
                 finally:
                     page.unroute(route_path, reject_with_detail)
             if output:
+                page.locator("#toast").wait_for(state="hidden")
+                page.set_viewport_size({"width": 1600, "height": 1100})
                 page.locator("#nlist").scroll_into_view_if_needed()
                 page.screenshot(path=str(output / "viewer.png"))
                 page.keyboard.press("n")
                 page.screenshot(path=str(output / "notes-export.png"))
                 page.keyboard.press("Escape")
+                page.set_viewport_size({"width": 1440, "height": 1000})
 
             # wait 必须在提交前启动，证明浏览器能唤醒安装副本中的接收命令。
             waiter = subprocess.Popen([sys.executable, str(scripts / "notes.py"), "wait", str(review),

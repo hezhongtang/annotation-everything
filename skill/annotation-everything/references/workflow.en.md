@@ -17,6 +17,18 @@ Choose `--locale en`, `zh-CN`, or `auto` explicitly when requested. The page's s
 
 CLI commands accept `--locale` and `AE_LOCALE`. An explicit option wins, then the environment, then the review setting for review-specific commands. Unconfigured calls remain Chinese. Only `auto` follows the system language. The repository's `ae.py` has no review default. Use `notes.py export --lang en` to select the export wrapper language. Commands and raw JSON values stay unchanged. Inspect `--help` for the command's arguments.
 
+### Use the review overview in the browser
+
+Start a local review service first. If none is running, use `python3 "$S/serve.py" <review-id>`. Then choose "Review overview" on its review page, or open `/#overview` at that review's address. The overview can also stay open in a separate tab.
+
+- The default scope is "This workspace"; choose "All on this machine" to see other reviews in the same ledger. The workspace is the current review's git repository root, or the review directory's parent when it is outside a git repository. Paths are relative to the workspace; paths in other workspaces start with `~` or show only the review name.
+- Reviews are grouped as Running, Stopped, Archived and Invalid, with the latest activity first within each group. Select a review to see its summary, purpose, audience, core questions and pending receipt/review counts. A missing summary shows "(No summary)" with the cover title. Material text retains its original language.
+- Choose "Open" for a running review or "Start and open" for a stopped review. Both open the target review page in a new tab. Starting uses the target's owned port; if the port is occupied or startup fails, follow the error guidance before retrying. Starting the service does not configure an agent receiver or waiter; check those separately under section 4. "Back to current review" returns to the page hosting the overview.
+- Archiving means the review is no longer being advanced and hides it by default. Annotations, submissions and the owned port remain, and the service keeps running. Choose "Expand" or "Show archived" to reveal archived reviews, then select one and choose "Unarchive". An archived current review shows a banner in both views and still accepts annotations and submissions. **Archiving does not cancel work on submitted annotations**; continue according to the batch requirements.
+- Invalid entries cannot be opened. Their details provide `serve.py forget <short-id>`. Once the entry is confirmed unnecessary, remove it from the ledger using the CLI. The overview does not delete review directories. `serve.py list` and `list --json` still include all reviews and mark archived entries.
+
+When generating a new report, write a one- or two-sentence `summary` in its verification record so the overview can identify it. This optional field requires no backfill for older records. See [step 4, "Write the verification record," in the generation guide](generation.en.md).
+
 ## 2. Generate or rebuild the page
 
 ```bash
