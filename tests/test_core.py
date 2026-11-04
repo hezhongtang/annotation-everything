@@ -2563,5 +2563,251 @@ class ServeRequestReadsTests(unittest.TestCase):
         self.assertEqual(text.count("无待接收"), 2, "损坏与无批次的审阅都按没有待接收显示")
 
 
+class WaitPollReadsTests(unittest.TestCase):
+    """wait 轮询：文件没变就跳过解析（打开计数），四元组没变也靠强制重读发现提交。只用合成审阅。"""
+
+    def setUp(self):
+        self._home = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(Path(tempfile.mkdtemp(prefix="ae-wait-home-")))
+        self.addCleanup(self.restore_home)
+        self._force = notes_cli.WAIT_FORCE_READ_SECONDS
+        self.addCleanup(self.restore_force)
+
+    def restore_home(self):
+        os.environ["AE_HOME"] = self._home
+
+    def restore_force(self):
+        notes_cli.WAIT_FORCE_READ_SECONDS = self._force
+
+    # ---------- 合成审阅 ----------
+    def note(self) -> dict:
+        return {"id": "n1", "page": 1, "title": "T", "target": "报告", "text": "合成批注",
+                "status": "open", "at": "2026-01-01T00:00:00"}
+
+    def batch(self, seq: int = 1, status: str = "pending", **kw) -> dict:
+        item = {"seq": seq, "status": status, "at": "2026-01-01T00:00:00", "by": "page",
+                "message": "合成批次", "userMessage": "合成批次", "target": "final",
+                "allowSubagents": False, "fullCheck": False, "alwaysSkills": [],
+                "openCount": 1, "openIds": ["n1"], "pages": [1]}
+        item.update(kw)
+        return item
+
+    def start(self, *, rid: str = "a" * 16) -> Path:
+        """一份新的合成审阅并绑定接收方；返回审阅目录。"""
+        root = Path(tempfile.mkdtemp(prefix="ae-wait-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        review = root / "review"
+        review.mkdir()
+        (review / "report.html").write_text(
+            '<!doctype html><html><body><section class="page" data-page="1" data-key="p1">'
+            "<h1>T</h1><p>x</p></section></body></html>", encoding="utf-8")
+        (review / "index.html").write_text(
+            "<!doctype html><title>t</title><script>var ok=1</script>ok", encoding="utf-8")
+        (review / store.NOTES_FILE).write_text(json.dumps(
+            {"version": 1, "rev": 1, "updatedAt": "2026-01-01T00:00:00", "notes": [self.note()]}),
+            encoding="utf-8")
+        (review / store.HANDOFF_FILE).write_text(
+            json.dumps({"version": 1, "seq": 0, "items": []}), encoding="utf-8")
+        (review / serve.MANIFEST).write_text(json.dumps({
+            "app": serve.APP, "kind": "deck", "reviewId": rid, "reviewDir": str(review.resolve()),
+            "title": "合成审阅", "name": "合成审阅", "namespace": "ns",
+            "sources": {"report": "report.html", "script": None},
+            "sourcesAbs": {"report": str(review / "report.html"), "script": None},
+            "pages": [{"n": 1, "key": "p1", "stable": True, "title": "T"}], "locale": "zh-CN"}),
+            encoding="utf-8")
+        wakeup.bind_wait(review, "claude", "sess-1")
+        self.review = review
+        return review
+
+    def wait(self, *extra, timeout: float = 6, interval: float = 1):
+        """进程内直接调 notes 的 main()（模块不以 __main__ 运行，不会重新执行自身）。"""
+        argv = ["wait", str(self.review), "--timeout", str(timeout), "--interval", str(interval),
+                "--by", "agent", "--harness", "claude", "--session", "sess-1", *extra]
+        started = time.monotonic()
+        with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+            code = notes_cli.main(argv)
+        return code, out.getvalue(), err.getvalue(), time.monotonic() - started
+
+    def count_opens(self, *extra, **kw):
+        """数一次 wait 打开了审阅目录里的哪些文件：按文件名归类，只算审阅目录下的文件。"""
+        _OPEN_COUNTS["root"] = self.review.resolve()
+        _OPEN_COUNTS["files"] = {}
+        _OPEN_COUNTS["on"] = True
+        try:
+            code, out, err, elapsed = self.wait(*extra, **kw)
+        finally:
+            _OPEN_COUNTS["on"] = False
+        return code, dict(_OPEN_COUNTS["files"]), elapsed
+
+    def wait_mark_writes(self, files: dict) -> int:
+        """等待标记被写了几次（原子写的临时文件也在审阅目录里，按同名片段归类）。"""
+        return sum(n for name, n in files.items() if ledger.WAIT_PREFIX in name)
+
+    # ---------- 进程内服务 ----------
+    def stop(self, srv, worker):
+        srv.shutdown()
+        srv.server_close()
+        worker.join(2)
+
+    def request(self, srv, method: str = "GET", path: str = "/api/notes", body=None):
+        headers = {"Host": f"127.0.0.1:{srv.port}"}
+        code, _, raw = serve._req(srv.port, method, path, headers, body)
+        return code, json.loads(raw)
+
+    def test_server_keeps_reporting_a_waiting_agent_across_mark_rewrites(self):
+        review = self.start()
+        srv = serve.ReviewServer(review, 0, log_to_file=False)
+        worker = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        worker.start()
+        self.addCleanup(self.stop, srv, worker)
+        result = {}
+
+        def run_wait():   # 等待进程跑在后台线程里：主线程同时向服务发请求
+            with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+                result["code"] = notes_cli.main(["wait", str(review), "--timeout", "8", "--interval", "1",
+                                                 "--by", "agent", "--harness", "claude", "--session", "sess-1"])
+                result["out"] = out.getvalue()
+
+        waiter = threading.Thread(target=run_wait, daemon=True)
+        waiter.start()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:   # 先等到服务认出「有代理在等」
+            _code, body = self.request(srv)
+            if body["receiver"]["state"] == "waiting":
+                break
+            time.sleep(0.03)
+        self.assertEqual(body["receiver"]["state"], "waiting")
+        seen = []
+        until = time.monotonic() + 4.5   # 跨过一次等待标记重写（剩余有效期不到一半时）
+        while time.monotonic() < until:
+            for path in ("/api/notes", "/api/health"):
+                code, got = self.request(srv, path=path)
+                self.assertEqual(code, 200)
+                seen.append((path, got["receiver"]["state"]))
+            time.sleep(0.1)
+        store.handoff_submit(review, "合成批次")   # 提交到达：等待结束
+        waiter.join(10)
+        self.assertEqual(result.get("code"), 0, result.get("out"))
+        self.assertIn("第 1 批", result.get("out", ""))
+        self.assertEqual({state for _path, state in seen}, {"waiting"}, seen[:4])
+
+    # ---------- 打开计数 ----------
+    def test_wait_without_submission_reads_each_file_at_most_twice(self):
+        self.start()
+        code, files, elapsed = self.count_opens()
+        self.assertEqual(code, 3, "没有新提交：超时退出")
+        self.assertGreater(elapsed, 5.9, "跑满 6 秒窗口")
+        self.assertLessEqual(files.get(serve.MANIFEST, 0), 2, files)
+        self.assertLessEqual(files.get(wakeup.BINDING_FILE, 0), 2, files)
+        self.assertLessEqual(files.get(store.HANDOFF_FILE, 0), 2, files)
+        self.assertLessEqual(self.wait_mark_writes(files), 4, files)
+
+    def test_wait_without_binding_reads_handoff_at_most_twice(self):
+        review = self.start()
+        (review / wakeup.BINDING_FILE).unlink()   # 没有接收方绑定：不等绑定文件
+        code, files, elapsed = self.count_opens(timeout=3)
+        self.assertEqual(code, 3)
+        self.assertLessEqual(files.get(serve.MANIFEST, 0), 1, files)
+        self.assertLessEqual(files.get(wakeup.BINDING_FILE, 0), 0, files)
+        self.assertLessEqual(files.get(store.HANDOFF_FILE, 0), 2, files)
+        self.assertLessEqual(self.wait_mark_writes(files), 4, files)
+
+    # ---------- 四元组没变也能发现 ----------
+    def test_wait_detects_submission_whose_stat_signature_is_unchanged(self):
+        review = self.start()
+        handoff = review / store.HANDOFF_FILE
+        empty = json.dumps({"version": 1, "seq": 0, "items": []})
+        fresh = json.dumps({"version": 1, "seq": 1, "items": [self.batch(1)]}, ensure_ascii=False)
+        width = max(len(empty.encode()), len(fresh.encode())) + 8   # 两份等字节长：JSON 允许结尾空白
+        empty += " " * (width - len(empty.encode()))
+        fresh += " " * (width - len(fresh.encode()))
+        handoff.write_text(empty, encoding="utf-8")
+        notes_cli.WAIT_FORCE_READ_SECONDS = 1.0   # 缩短强制重读周期，测试不必等满 30 秒
+        sigs = []
+
+        def submit_in_place():
+            time.sleep(1.5)
+            before = handoff.stat()
+            sigs.append((before.st_dev, before.st_ino, before.st_mtime_ns, before.st_size))
+            handoff.write_text(fresh, encoding="utf-8")   # 原地等长改写：不换 inode
+            os.utime(handoff, ns=(before.st_atime_ns, before.st_mtime_ns))   # 恢复 mtime
+            after = handoff.stat()
+            sigs.append((after.st_dev, after.st_ino, after.st_mtime_ns, after.st_size))
+
+        worker = threading.Thread(target=submit_in_place, daemon=True)
+        worker.start()
+        code, out, _err, elapsed = self.wait(timeout=8)
+        worker.join(10)
+        self.assertEqual(sigs[0], sigs[1], "内容变了但四元组相同：只能靠强制重读发现")
+        self.assertEqual(code, 0, out)
+        self.assertIn("第 1 批", out)
+        self.assertIn("用户附言：合成批次", out)
+        self.assertEqual(store.handoff_state(review)["latest"]["status"], "claimed")
+        self.assertLess(elapsed, 5, "一个强制重读周期内发现")
+        self.assertEqual(list(review.glob(ledger.WAIT_PREFIX + "*")), [], "收到提交后删掉标记")
+
+    def test_wait_returns_one_interval_after_a_real_submission(self):
+        review = self.start()
+
+        def submit():
+            time.sleep(1.2)
+            store.handoff_submit(review, "合成批次")   # 真实提交：原子替换，换 inode
+
+        worker = threading.Thread(target=submit, daemon=True)
+        worker.start()
+        code, out, _err, elapsed = self.wait(timeout=10)
+        worker.join(10)
+        self.assertEqual(code, 0, out)
+        self.assertIn("第 1 批", out)
+        self.assertEqual(store.handoff_state(review)["latest"]["status"], "claimed")
+        self.assertLess(elapsed, 7, "提交后一个轮询周期内返回，不等强制重读周期")
+
+    # ---------- 等待标记与绑定 ----------
+    def test_wait_mark_stays_valid_until_the_waiter_leaves(self):
+        review = self.start()
+        seen = []
+        stop = threading.Event()
+
+        def watch():
+            while not stop.is_set():
+                try:
+                    mark = json.loads(ledger.wait_file(review, os.getpid()).read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                seen.append((time.time(), mark.get("expiresAt")))
+                time.sleep(0.02)
+
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
+        code, _out, _err, _elapsed = self.wait(timeout=4)   # 4 秒：剩余有效期不到一半（2.5 秒）时就会重写
+        stop.set()
+        watcher.join(5)
+        self.assertEqual(code, 3)
+        self.assertTrue(seen, "等待期间标记一直在")
+        self.assertTrue(all(isinstance(expires, (int, float)) and expires > now for now, expires in seen),
+                        "expiresAt 始终在未来")
+        self.assertGreater(len({expires for _now, expires in seen}), 1, "有效期按剩余时间重写过")
+        self.assertEqual(list(review.glob(ledger.WAIT_PREFIX + "*")), [], "结束后删掉标记")
+
+    def test_wait_exits_when_binding_is_deleted_while_waiting(self):
+        review = self.start()
+        gone = threading.Event()
+
+        def delete_binding():
+            time.sleep(1.2)
+            (review / wakeup.BINDING_FILE).unlink()
+            gone.set()
+
+        worker = threading.Thread(target=delete_binding, daemon=True)
+        worker.start()
+        code, _out, err, elapsed = self.wait(timeout=8)
+        worker.join(10)
+        self.assertTrue(gone.is_set())
+        self.assertEqual(code, 2, err)
+        self.assertIn("agent-binding-changed", err)
+        self.assertLess(elapsed, 7, "一个轮询周期内发现绑定没了")
+        self.assertEqual(list(review.glob(ledger.WAIT_PREFIX + "*")), [], "报错退出也删掉标记")
+
+
 if __name__ == "__main__":
     unittest.main()
