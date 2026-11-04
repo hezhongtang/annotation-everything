@@ -53,6 +53,10 @@ def tmpdir() -> Path:
 # 文件打开计数（规格 #89 为服务请求快照指定的唯一新接缝）：审计钩子装上就不能移除，
 # 整个进程只装一次，靠开关只在测量窗口内计数；只统计审阅目录下的文件，按文件名归类。
 _OPEN_COUNTS = {"on": False, "root": None, "files": {}}
+# 最近的 io 层打开（文件名, flags）：Python 3.9 的 pathlib 带 opener 开文件，同一次打开会先发
+# io 层事件（mode 是字符串）再补发一个 os.open 事件（mode 为 None）；3.10 起没有这个重复事件。
+# 不去重的话 3.9 上每次 Path.read_text 都记成两次打开，计数全部翻倍。按 (文件名, flags) 配对合并。
+_IO_OPEN_KEYS: list = []
 
 
 def _count_review_opens(event, args):
@@ -62,6 +66,14 @@ def _count_review_opens(event, args):
         name = str(Path(str(args[0])).resolve().relative_to(_OPEN_COUNTS["root"]))
     except Exception:   # 审阅目录以外的打开不计数；钩子本身绝不能抛异常
         return
+    mode, flags = args[1], args[2]
+    key = (name, flags)
+    if mode is None and key in _IO_OPEN_KEYS:
+        _IO_OPEN_KEYS.remove(key)   # 3.9 pathlib 对同一次打开补发的 os.open 事件，不重复计数
+        return
+    if mode is not None:
+        _IO_OPEN_KEYS.append(key)
+        del _IO_OPEN_KEYS[:-8]   # 只保留最近几个，避免无限增长
     files = _OPEN_COUNTS["files"]
     files[name] = files.get(name, 0) + 1
 
