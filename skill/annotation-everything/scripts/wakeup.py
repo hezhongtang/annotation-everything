@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -23,6 +22,7 @@ import uuid
 
 import ledger
 import notes_store as store
+import fsutil
 
 BINDING_FILE = ".agent-binding.json"
 DELIVERY_FILE = ".agent-deliveries.json"
@@ -124,9 +124,7 @@ def _write(path, value):
 
 @contextlib.contextmanager
 def dispatch_lock(review):
-    fd = os.open(Path(review) / DISPATCH_LOCK, os.O_CREAT | os.O_RDWR, 0o600)
-    with os.fdopen(fd, "r+") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with fsutil.flocked(Path(review) / DISPATCH_LOCK, exclusive=True):
         yield
 
 
@@ -393,8 +391,8 @@ def waiting_state(review, binding) -> bool:
                     or {k: mark.get(k) for k in ("harness", "sessionId")} != binding_identity(binding)
                     or not isinstance(mark.get("expiresAt"), (int, float)) or not time.time() < mark["expiresAt"]):
                 continue
-            os.kill(pid, 0)
-            return True
+            if ledger.pid_alive(pid):
+                return True
         except (OSError, ValueError, KeyError, TypeError):
             continue
     return False

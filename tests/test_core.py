@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import fcntl
 import hashlib
 import http.client
 import io
@@ -2561,6 +2562,276 @@ class ServeRequestReadsTests(unittest.TestCase):
         self.assertIn("代理在等", text)
         self.assertIn("⚠ 有提交在等接收，但没有代理在等", text)
         self.assertEqual(text.count("无待接收"), 2, "损坏与无批次的审阅都按没有待接收显示")
+
+
+# ---------- 底层原语（#96）：文件锁、服务存活判断、CSP、复制目录判断 ----------
+
+def try_exclusive(path: Path) -> bool:
+    """试着独占锁住 path（不等待）：拿得到返回 True，被任何锁挡着返回 False。用完即释放。"""
+    fd = os.open(path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+    finally:
+        os.close(fd)
+
+
+class FileLockTests(unittest.TestCase):
+    """「打开锁文件、flock、释放」五个调用点的对外行为：加锁、非阻塞失败、释放、锁文件是符号链接时。"""
+
+    def setUp(self):
+        self._home = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+
+    def tearDown(self):
+        os.environ["AE_HOME"] = self._home
+
+    def test_notes_lock_is_exclusive_and_released(self):
+        d = tmpdir()
+        store.add(d, {"page": 1, "text": "锁"})
+        lock = d / store.LOCK_FILE
+        self.assertEqual(oct(lock.stat().st_mode & 0o777), "0o600", "锁文件只允许本人读写")
+        with store.locked(d):
+            self.assertFalse(try_exclusive(lock), "持锁期间别人拿不到这把锁")
+        self.assertTrue(try_exclusive(lock), "退出后释放")
+
+    def test_notes_lock_requires_existing_review_dir(self):
+        with self.assertRaises(FileNotFoundError):
+            with store.locked(tmpdir() / "no-such-review"):
+                pass
+
+    def test_notes_lock_follows_symlinked_lock_file(self):
+        d = tmpdir()
+        target = tmpdir() / "lock-target"
+        target.write_text("", encoding="utf-8")
+        (d / store.LOCK_FILE).symlink_to(target)
+        with store.locked(d):
+            self.assertFalse(try_exclusive(target), "符号链接被跟随：锁落在目标文件上")
+
+    def test_update_lock_is_shared_by_default_and_exclusive_on_request(self):
+        path = tmpdir() / ".annotation-everything-update.lock"
+        original = ledger.update_lock_path
+        ledger.update_lock_path = lambda: path
+        try:
+            with ledger.update_lock() as fd:
+                self.assertIsInstance(fd, int, "notes.py 靠这个描述符持锁重新执行自身")
+                self.assertFalse(try_exclusive(path), "共享锁也挡独占")
+                with ledger.update_lock():     # 共享锁可以叠加
+                    pass
+                with self.assertRaises(BlockingIOError):
+                    with ledger.update_lock(exclusive=True, nonblocking=True):
+                        pass
+            self.assertTrue(try_exclusive(path), "退出后释放")
+            with ledger.update_lock(exclusive=True, nonblocking=True):
+                self.assertFalse(try_exclusive(path), "独占锁挡独占")
+                with self.assertRaises(BlockingIOError):
+                    with ledger.update_lock(nonblocking=True):
+                        pass
+            self.assertTrue(try_exclusive(path), "退出后释放")
+        finally:
+            ledger.update_lock_path = original
+
+    def test_update_lock_refuses_symlinked_lock_file(self):
+        path = tmpdir() / ".annotation-everything-update.lock"
+        target = tmpdir() / "lock-target"
+        target.write_text("", encoding="utf-8")
+        path.symlink_to(target)
+        original = ledger.update_lock_path
+        ledger.update_lock_path = lambda: path
+        try:
+            with self.assertRaises(OSError):
+                with ledger.update_lock():
+                    pass
+            self.assertTrue(try_exclusive(target), "符号链接没有被锁")
+        finally:
+            ledger.update_lock_path = original
+
+    def test_ledger_lock_is_exclusive_and_released(self):
+        ledger.register("a" * 16, tmpdir())
+        lock = Path(os.environ["AE_HOME"]) / ledger.LOCK_FILE
+        self.assertEqual(oct(lock.stat().st_mode & 0o777), "0o600")
+        self.assertTrue(try_exclusive(lock), "退出后释放")
+        held, release, done = threading.Event(), threading.Event(), threading.Event()
+
+        def holder():
+            fd = os.open(lock, os.O_RDWR)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            held.set()
+            release.wait(10)
+            os.close(fd)
+
+        def writer():
+            ledger.register("b" * 16, tmpdir())
+            done.set()
+        t, w = threading.Thread(target=holder, daemon=True), threading.Thread(target=writer, daemon=True)
+        t.start()
+        self.assertTrue(held.wait(10))
+        w.start()
+        self.assertFalse(done.wait(0.3), "台账锁被占着时登记要等")
+        release.set()
+        self.assertTrue(done.wait(10), "锁释放后登记继续")
+        t.join(10)
+        w.join(10)
+
+    def test_ledger_lock_follows_symlinked_lock_file(self):
+        home = Path(os.environ["AE_HOME"])
+        home.mkdir(parents=True, exist_ok=True)
+        target = tmpdir() / "lock-target"
+        target.write_text("", encoding="utf-8")
+        (home / ledger.LOCK_FILE).symlink_to(target)
+        ledger.register("c" * 16, tmpdir())
+        self.assertIn("c" * 16, ledger.entries(), "符号链接被跟随：登记照常完成")
+
+    def test_dispatch_lock_is_exclusive_and_released(self):
+        d = tmpdir()
+        lock = d / wakeup.DISPATCH_LOCK
+        with wakeup.dispatch_lock(d):
+            self.assertEqual(oct(lock.stat().st_mode & 0o777), "0o600")
+            self.assertFalse(try_exclusive(lock), "投递期间别人拿不到这把锁")
+        self.assertTrue(try_exclusive(lock), "退出后释放")
+
+    def test_dispatch_lock_follows_symlinked_lock_file(self):
+        d = tmpdir()
+        target = tmpdir() / "lock-target"
+        target.write_text("", encoding="utf-8")
+        (d / wakeup.DISPATCH_LOCK).symlink_to(target)
+        with wakeup.dispatch_lock(d):
+            self.assertFalse(try_exclusive(target), "符号链接被跟随：锁落在目标文件上")
+
+
+class ServiceStateTests(unittest.TestCase):
+    """服务状态文件名与「进程还在不在」的判断：服务、更新器、等待接收共用同一份。"""
+
+    def test_status_treats_non_positive_or_missing_pid_as_not_running(self):
+        d = tmpdir()
+        for info in ({"pid": 0, "port": 12345}, {"pid": -3, "port": 12345}, {"port": 12345}):
+            (d / serve.STATUS_FILE).write_text(json.dumps(info), encoding="utf-8")
+            st = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "status", str(d)],
+                                capture_output=True, text=True, timeout=30)
+            self.assertEqual(st.returncode, 4, st.stdout)
+            self.assertFalse((d / serve.STATUS_FILE).exists(), "失效的状态文件被清掉")
+
+    def test_status_file_name_is_the_one_the_ledger_exports(self):
+        self.assertEqual(serve.STATUS_FILE, ".annotation-server.json")
+        self.assertEqual(ledger.STATUS_FILE, ".annotation-server.json")
+        d = tmpdir()
+        self.assertEqual(ledger.status_file(d), d / ".annotation-server.json")
+
+
+class CspPolicyTests(unittest.TestCase):
+    """响应头与页面 meta 两个出口的策略串逐项不变（含没有内联脚本的情况）。"""
+
+    SCRIPTS = ('<!doctype html><html><head><script>var a = 1 < 2 && "x";</script>'
+               '<script>\n  second()\n</script></head><body></body></html>')
+    NO_SCRIPTS = "<!doctype html><html><head><title>t</title></head><body></body></html>"
+    HASHES = ("'sha256-qruuVyo/doZTNHINowyGpWW23FFzoMXI8NIQH2g1xmc=' "
+              "'sha256-pZHjM+U1cZ+xv5ZI3pk6kzOfyWr2vx8iMGLcHgcKb3E='")
+    SHARED = ("default-src 'none'; script-src %s; style-src 'unsafe-inline'; img-src data: blob:; "
+              "font-src data:; media-src data: blob:; connect-src 'self'; ")
+    HEAD_TAIL = "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
+    META_TAIL = "base-uri 'none'; form-action 'none'; object-src 'none'"
+
+    def test_response_header_policy_is_unchanged(self):
+        self.assertEqual(serve.csp_for(self.SCRIPTS), self.SHARED % self.HASHES + self.HEAD_TAIL)
+        self.assertEqual(serve.csp_for(self.NO_SCRIPTS), self.SHARED % "'none'" + self.HEAD_TAIL,
+                         "没有内联脚本时兜底 script-src 'none'")
+
+    def test_page_meta_policy_is_unchanged(self):
+        self.assertEqual(build_viewer.page_csp(self.SCRIPTS), self.SHARED % self.HASHES + self.META_TAIL)
+        self.assertEqual(build_viewer.page_csp(self.NO_SCRIPTS), self.SHARED % "" + self.META_TAIL,
+                         "meta 版不带 frame-ancestors，也没有兜底")
+
+
+class CopiedReviewTests(unittest.TestCase):
+    """「目录是不是从另一份审阅复制来的」：复制、搬家、原目录已删除三种情况，三个入口一致。"""
+
+    def setUp(self):
+        self._home = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+
+    def tearDown(self):
+        os.environ["AE_HOME"] = self._home
+
+    def build(self, out: Path) -> dict:
+        with redirect_stderr(io.StringIO()):
+            return build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", out)
+
+    def test_ledger_refuses_a_copy_but_accepts_a_move_or_a_deleted_original(self):
+        tree = tmpdir()
+        rid = self.build(tree / "v1")["reviewId"]
+        copy = tree / "copy"
+        shutil.copytree(tree / "v1", copy)
+        with self.assertRaises(ledger.CopiedDir) as cm:
+            ledger.register(rid, copy)
+        self.assertIn("复制来", str(cm.exception))
+        self.assertIn(str((tree / "v1").resolve()), str(cm.exception), "指出台账仍指向的目录")
+        self.assertEqual(ledger.get(rid)["dir"], str((tree / "v1").resolve()), "副本顶替不了原条目")
+        self.assertIn("复制来", ledger.try_register(rid, copy))
+        # 原目录已删除：副本按标识更新路径（沿用标识，不换新）
+        shutil.rmtree(tree / "v1")
+        self.assertIsNone(ledger.try_register(rid, copy))
+        self.assertEqual(ledger.get(rid)["dir"], str(copy.resolve()))
+        # 搬家：整个目录移走，按标识更新路径
+        moved = tree / "moved"
+        copy.rename(moved)
+        self.assertIsNone(ledger.try_register(rid, moved))
+        self.assertEqual(ledger.get(rid)["dir"], str(moved.resolve()))
+        self.assertEqual(len(ledger.entries()), 1, "三种情况都还是同一条目")
+
+    def test_build_switches_id_for_a_copy_and_keeps_it_otherwise(self):
+        tree = tmpdir()
+        self.build(tree / "v1")
+        rid = json.loads((tree / "v1" / "review.json").read_text())["reviewId"]
+        copy = tree / "copy"
+        shutil.copytree(tree / "v1", copy)
+        r = self.build(copy)
+        self.assertNotEqual(r["reviewId"], rid, "复制来的目录换新标识")
+        self.assertTrue(any("复制来" in w for w in r["warnings"]), r["warnings"])
+        self.assertEqual(json.loads((copy / "review.json").read_text())["reviewDir"], str(copy.resolve()))
+        # 搬家：整个目录移走，沿用标识
+        moved = tree / "moved"
+        (tree / "v1").rename(moved)
+        r2 = self.build(moved)
+        self.assertEqual(r2["reviewId"], rid, "搬家沿用标识")
+        self.assertFalse(any("复制来" in w for w in r2["warnings"]), r2["warnings"])
+        # 原目录已删除：副本沿用标识
+        gone = tree / "gone"
+        shutil.copytree(moved, gone)
+        shutil.rmtree(moved)
+        r3 = self.build(gone)
+        self.assertEqual(r3["reviewId"], rid, "原目录已删除也算搬家，沿用标识")
+        self.assertFalse(any("复制来" in w for w in r3["warnings"]), r3["warnings"])
+
+    def _serve(self, review_dir: Path) -> str:
+        p = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), str(review_dir), "--no-open"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        sf = review_dir / serve.STATUS_FILE
+        for _ in range(80):
+            if sf.exists() or p.poll() is not None:
+                break
+            time.sleep(0.1)
+        self.assertTrue(sf.exists(), "副本也要能启动")
+        p.terminate()
+        _out, err = p.communicate(timeout=10)
+        return err
+
+    def test_serve_hints_on_a_copied_review_dir(self):
+        tree = tmpdir()
+        self.build(tree / "v1")
+        copy = tree / "copy"
+        shutil.copytree(tree / "v1", copy)
+        err = self._serve(copy)
+        self.assertIn("复制来", err, err)
+        self.assertIn("不用专属端口", err, err)
+
+    def test_serve_does_not_hint_on_a_moved_review_dir(self):
+        tree = tmpdir()
+        self.build(tree / "v1")
+        moved = tree / "moved"
+        (tree / "v1").rename(moved)
+        self.assertNotIn("复制来", self._serve(moved))
 
 
 if __name__ == "__main__":
