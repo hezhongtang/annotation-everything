@@ -1,7 +1,6 @@
 """#114 公开行为：检查点、分析线、历史回看与结案。"""
 from __future__ import annotations
 
-import copy
 import json
 import os
 import sys
@@ -270,4 +269,3 @@ class AnalysisHistoryTests(unittest.TestCase):
         self.assertEqual(answered["nodes"]["n1"]["decision"], did)
         self.assertEqual(len(answered["decisions"]), 1)
         self.assertEqual(next(n for n in notes.load(self.review)["notes"] if n["id"] == note["id"])["status"], "open")
-

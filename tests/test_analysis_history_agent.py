@@ -134,4 +134,3 @@ class AnalysisHistoryAgentTests(unittest.TestCase):
         self.assertIn("完整合成说明。", out)
         self.assertIn("read-only", out)
         self.assertNotIn("analysis-writeback", out)
-
