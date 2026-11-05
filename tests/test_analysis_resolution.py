@@ -1,0 +1,245 @@
+"""#115 公开行为：推翻假设、死局及整线组合。"""
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "skill/annotation-everything/scripts"))
+sys.path.insert(0, str(ROOT))
+
+import host_isolation
+host_isolation.require_for_module(__name__)
+import analysis_store as analysis
+import notes_store as notes
+
+
+def question(key, *, parent=None):
+    return {"key": key, "text": "合成材料应采用哪个统计口径？", "short": "统计口径",
+            "options": [{"id": "year", "label": "全年"}, {"id": "quarter", "label": "季度"}],
+            "recommend": "year", "parent": parent}
+
+
+class AnalysisResolutionTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="ae-analysis-resolution-")
+        self.addCleanup(temporary.cleanup)
+        self.review = Path(temporary.name)
+        env = patch.dict(os.environ, {"AE_HOME": str(self.review / "ledger")})
+        env.start()
+        self.addCleanup(env.stop)
+        state, self.opening = analysis.start_question(self.review, "合成材料的增长结论是否成立？")
+        self.aid = state["id"]
+
+    def write(self, number, proposals=(), **kwargs):
+        analysis.submit_round(self.review, self.aid, number)
+        claimed = analysis.claim(self.review, seq=number)
+        return analysis.writeback(self.review, self.aid, number, claimed["baseRev"], list(proposals), **kwargs)
+
+    def reasoning(self):
+        number = self.write(self.opening, [question("caliber")])["nextRound"]
+        analysis.answer(self.review, self.aid, number, "S:caliber", {"kind": "accept"})
+        before = analysis.answer(self.review, self.aid, number, "Q:n1", {"kind": "accept"})
+        first = before["nodes"]["n1"]["decision"]
+        child = question("comparison", parent={"node": "n1", "option": "year"})
+        child.update(text="合成材料的对比期间应采用哪个范围？", short="对比期间")
+        number = self.write(number, [child], assumptions=[
+            {"key": "source", "text": "合成原始材料的全年口径可比", "decisions": [first]}],
+            facts=[{"key": "verified", "text": "合成查证：样例数据覆盖全年", "source": "fixtures/sample"}])["nextRound"]
+        analysis.answer(self.review, self.aid, number, "A:a1", {"kind": "accept"})
+        analysis.answer(self.review, self.aid, number, "S:comparison", {"kind": "accept"})
+        before = analysis.answer(self.review, self.aid, number, "Q:n2", {"kind": "accept"})
+        second = before["nodes"]["n2"]["decision"]
+        linked = []
+        for node in ("n1", "n2"):
+            draft = analysis.convert(self.review, self.aid, node, text="合成批注：" + node)
+            linked.append(analysis.confirm_convert(self.review, self.aid, draft["id"]))
+        return number, first, second, linked
+
+    def test_refuting_a_direct_assumption_forks_and_only_reuses_unaffected_decisions(self):
+        number, first, second, linked = self.reasoning()
+        before = analysis.load(self.review, self.aid)
+        changed = analysis.refute_assumption(self.review, self.aid, "a1")
+        self.assertNotEqual(changed["line"], "main")
+        self.assertEqual(changed["checkpoints"][-1]["snapshot"]["nodes"]["n1"]["decision"], first)
+        self.assertFalse(changed["checkpoints"][-1]["snapshot"]["assumptions"]["a1"]["refuted"])
+        self.assertTrue(changed["assumptions"]["a1"]["refuted"])
+        self.assertEqual(changed["facts"], before["facts"])
+        self.assertEqual(changed["lines"]["main"]["nodes"]["n1"]["decision"], first)
+        self.assertIn("a1", changed["lines"]["main"]["basedOnRefuted"])
+        self.assertIsNone(changed["nodes"]["n1"]["decision"])
+        self.assertEqual(changed["nodes"]["n1"]["reopened"]["answer"], "全年")
+        self.assertEqual(changed["nodes"]["n2"]["branch"], "detached")
+        self.assertEqual(next(r for r in changed["rounds"] if r["seq"] == number)["status"], "void")
+        self.assertEqual([n["status"] for n in analysis.linked_notes(self.review, self.aid)], ["held", "held"])
+        refresh = next(r for r in changed["rounds"] if r["line"] == changed["line"] and r["status"] == "submitted")
+        restored = analysis.answer(self.review, self.aid, refresh["seq"], "Q:n1", {"kind": "accept"})
+        self.assertNotEqual(restored["nodes"]["n1"]["decision"], first)
+        self.assertEqual(restored["nodes"]["n2"]["decision"], second)
+        self.assertEqual(restored["nodes"]["n2"]["branch"], "current")
+        statuses = {n["id"]: n["status"] for n in analysis.linked_notes(self.review, self.aid)}
+        self.assertEqual((statuses[linked[0]["id"]], statuses[linked[1]["id"]]), ("held", "open"))
+        old = analysis.switch_line(self.review, self.aid, "main")
+        self.assertTrue(old["nodes"]["n1"]["needsReview"])
+        self.assertEqual([n["status"] for n in analysis.linked_notes(self.review, self.aid)], ["held", "held"])
+        self.assertEqual(analysis.load(self.review, self.aid), old)
+
+    def test_refuting_without_a_current_direct_dependency_reissues_without_forking(self):
+        _number, _first, _second, _linked = self.reasoning()
+        changed = analysis.redecide(self.review, self.aid, "n1", "quarter")
+        queued = next(r for r in changed["rounds"] if r["status"] == "submitted")
+        before = analysis.load(self.review, self.aid)
+        refuted = analysis.refute_assumption(self.review, self.aid, "a1")
+        self.assertEqual(refuted["line"], before["line"])
+        self.assertEqual(refuted["lines"].keys(), before["lines"].keys())
+        self.assertEqual(refuted["checkpoints"], before["checkpoints"])
+        self.assertTrue(refuted["assumptions"]["a1"]["refuted"])
+        self.assertEqual(next(r for r in refuted["rounds"] if r["seq"] == queued["seq"])["status"], "void")
+        self.assertEqual(len(analysis.queue(self.review)), 1)
+        self.assertEqual(analysis.refute_assumption(self.review, self.aid, "a1"), refuted)
+
+    def test_confirmed_option_dead_end_blocks_redecision_across_lines_until_refutation(self):
+        number, _first, _second, _linked = self.reasoning()
+        result = self.write(number, dead_ends=[{
+            "key": "quarter-impossible", "kind": "option", "node": "n1", "option": "quarter",
+            "reason": "合成原始材料缺少季度可比范围", "assumptions": ["a1"]}])
+        pending = result["state"]
+        end = next(iter(pending["deadEnds"].values()))
+        self.assertEqual(end["status"], "pending")
+        analysis.redecide(self.review, self.aid, "n1", "quarter")
+        state = analysis.redecide(self.review, self.aid, "n1", "year")
+        number = analysis.queue(self.review)[0]["seq"]
+        confirmed = analysis.answer(self.review, self.aid, number, "D:" + end["id"], {"kind": "accept"})
+        self.assertEqual(confirmed["deadEnds"][end["id"]]["status"], "confirmed")
+        with self.assertRaises(notes.HandoffError) as blocked:
+            analysis.redecide(self.review, self.aid, "n1", "quarter")
+        self.assertEqual(blocked.exception.code, "dead-end-option")
+        self.assertEqual(blocked.exception.params["reason"], "合成原始材料缺少季度可比范围")
+        self.assertEqual(blocked.exception.params["assumptions"], ["合成原始材料的全年口径可比"])
+        self.assertEqual(analysis.load(self.review, self.aid), confirmed)
+        cp = analysis.seal_checkpoint(self.review, self.aid)["checkpoints"][-1]
+        alternative = analysis.fork_line(self.review, self.aid, cp["id"])
+        with self.assertRaises(notes.HandoffError) as across_lines:
+            analysis.redecide(self.review, self.aid, "n1", "quarter")
+        self.assertEqual(across_lines.exception.code, "dead-end-option")
+        released = analysis.refute_assumption(self.review, self.aid, "a1")
+        self.assertEqual(released["deadEnds"][end["id"]]["status"], "review")
+        refresh = analysis.queue(self.review)[0]["seq"]
+        allowed = analysis.answer(self.review, self.aid, refresh, "Q:n1", {"kind": "option", "option": "quarter"})
+        self.assertEqual(allowed["decisions"][allowed["nodes"]["n1"]["decision"]]["option"], "quarter")
+        self.assertEqual(set(allowed["deadEnds"]), {end["id"]})
+        self.assertEqual(analysis.load(self.review, self.aid)["deadEnds"], allowed["deadEnds"])
+
+    def test_confirmed_line_dead_end_blocks_switch_and_checkpoint_fork_until_refutation(self):
+        _number, _first, _second, _linked = self.reasoning()
+        checkpoint = analysis.seal_checkpoint(self.review, self.aid)["checkpoints"][-1]
+        other = analysis.fork_line(self.review, self.aid, checkpoint["id"])
+        number = analysis.queue(self.review)[0]["seq"]
+        result = self.write(number, dead_ends=[{
+            "key": "old-line", "kind": "line", "targetLine": "main",
+            "reason": "合成旧思路需要重新审视", "assumptions": ["a1"]}])
+        end = next(iter(result["state"]["deadEnds"].values()))
+        confirmed = analysis.answer(self.review, self.aid, result["nextRound"], "D:" + end["id"], {"kind": "accept"})
+        for action in (
+            lambda: analysis.switch_line(self.review, self.aid, "main"),
+            lambda: analysis.fork_line(self.review, self.aid, checkpoint["id"]),
+        ):
+            with self.assertRaises(notes.HandoffError) as blocked:
+                action()
+            self.assertEqual(blocked.exception.code, "dead-end-line")
+            self.assertEqual(blocked.exception.params["reason"], "合成旧思路需要重新审视")
+            self.assertEqual(analysis.load(self.review, self.aid), confirmed)
+        released = analysis.refute_assumption(self.review, self.aid, "a1")
+        self.assertEqual(released["deadEnds"][end["id"]]["status"], "review")
+        self.assertEqual(analysis.switch_line(self.review, self.aid, "main")["line"], "main")
+        forked = analysis.fork_line(self.review, self.aid, checkpoint["id"])
+        self.assertNotEqual(forked["line"], "main")
+        self.assertEqual(set(forked["deadEnds"]), {end["id"]})
+
+    def test_round_answers_cannot_choose_a_dead_option_by_recommendation_option_or_same_text(self):
+        number, _first, _second, _linked = self.reasoning()
+        proposed = question("pending")
+        proposed["recommend"] = "quarter"
+        number = self.write(number, [proposed])["nextRound"]
+        analysis.answer(self.review, self.aid, number, "S:pending", {"kind": "accept"})
+        result = self.write(number, dead_ends=[{
+            "key": "pending-quarter", "kind": "option", "node": "n3", "option": "quarter",
+            "reason": "合成季度路径不成立", "assumptions": ["a1"]}])
+        end = next(iter(result["state"]["deadEnds"].values()))
+        number = result["nextRound"]
+        before = analysis.answer(self.review, self.aid, number, "D:" + end["id"], {"kind": "accept"})
+        for value in ({"kind": "accept"}, {"kind": "option", "option": "quarter"}, {"kind": "text", "text": "季度"}):
+            with self.assertRaises(notes.HandoffError) as blocked:
+                analysis.answer(self.review, self.aid, number, "Q:n3", value)
+            self.assertEqual(blocked.exception.code, "dead-end-option")
+            self.assertEqual(analysis.load(self.review, self.aid), before)
+        allowed = analysis.answer(self.review, self.aid, number, "Q:n3", {"kind": "option", "option": "year"})
+        self.assertEqual(allowed["decisions"][allowed["nodes"]["n3"]["decision"]]["option"], "year")
+
+    def test_a_claim_on_any_line_blocks_refutation_but_allows_answers(self):
+        _number, _first, _second, _linked = self.reasoning()
+        checkpoint = analysis.seal_checkpoint(self.review, self.aid)["checkpoints"][-1]
+        forked = analysis.fork_line(self.review, self.aid, checkpoint["id"])
+        number = analysis.queue(self.review)[0]["seq"]
+        analysis.switch_line(self.review, self.aid, "main")
+        claimed = analysis.claim(self.review, seq=number)
+        before = analysis.load(self.review, self.aid)
+        with self.assertRaises(notes.HandoffError) as blocked:
+            analysis.refute_assumption(self.review, self.aid, "a1")
+        self.assertEqual(blocked.exception.code, "analysis-locked")
+        self.assertEqual(analysis.load(self.review, self.aid), before)
+        analysis.writeback(self.review, self.aid, number, claimed["baseRev"], [])
+        changed = analysis.refute_assumption(self.review, self.aid, "a1")
+        self.assertTrue(changed["assumptions"]["a1"]["refuted"])
+
+    def test_next_round_order_and_carry_preserve_all_valid_answers_once(self):
+        number, _first, _second, linked = self.reasoning()
+        number = self.write(number, [question("frontier")])["nextRound"]
+        analysis.answer(self.review, self.aid, number, "S:frontier", {"kind": "accept"})
+        state = analysis.redecide(self.review, self.aid, "n1", "quarter")
+        decision = state["nodes"]["n1"]["decision"]
+        analysis.request_update(self.review, self.aid, linked[0]["id"])
+        number = analysis.queue(self.review)[0]["seq"]
+        result = self.write(number, [question("later")],
+                            updates=[{"noteId": linked[0]["id"], "text": "合成更新原话"}],
+                            assumptions=[{"key": "new-source", "text": "合成新口径假设", "decisions": [decision]}],
+                            dead_ends=[{"key": "comparison-quarter", "kind": "option", "node": "n2",
+                                        "option": "quarter", "reason": "合成不可比路径", "assumptions": ["a1"]}])
+        number = result["nextRound"]
+        context = analysis.round_context(self.review, self.aid, number)
+        self.assertEqual([item["type"] for item in context["items"]],
+                         ["deadend", "update", "assumption", "structure", "question"])
+        answers = {"D:e1": {"kind": "accept", "verbatim": "死局确认原话"},
+                   "U:u1": {"kind": "accept", "verbatim": "新文本确认原话"},
+                   "A:a2": {"kind": "accept", "verbatim": "假设确认原话"},
+                   "S:later": {"kind": "accept", "verbatim": "结构确认原话"},
+                   "Q:n3": {"kind": "text", "text": "合成保留原话", "verbatim": "问题回答原话"}}
+        for key, value in answers.items():
+            analysis.answer(self.review, self.aid, number, key, value)
+        analysis.answer(self.review, self.aid, number, "Q:n4", {"kind": "accept"})
+        state = analysis.redecide(self.review, self.aid, "n4", "quarter")
+        refreshed = analysis.queue(self.review)[0]["seq"]
+        context = analysis.round_context(self.review, self.aid, refreshed)
+        for key, value in answers.items():
+            self.assertEqual(context["answers"].get(key), value, key)
+        self.assertNotIn("Q:n4", context["answers"])
+        self.assertEqual([item["type"] for item in context["items"]],
+                         sorted([item["type"] for item in context["items"]],
+                                key={"deadend": 0, "update": 1, "assumption": 2, "structure": 3, "question": 4}.get))
+        counts = (len(state["nodes"]), len(state["decisions"]), len(state["deadEnds"]), len(state["updates"]))
+        result = self.write(refreshed)
+        self.assertIsNotNone(result["nextRound"])
+        final = self.write(result["nextRound"])
+        self.assertIsNone(final["nextRound"])
+        state = final["state"]
+        self.assertEqual((len(state["nodes"]), len(state["decisions"]), len(state["deadEnds"]), len(state["updates"])), counts)
+        note = next(n for n in analysis.linked_notes(self.review, self.aid) if n["id"] == linked[0]["id"])
+        self.assertEqual((note["text"], len(note["analysisHistory"])), ("合成更新原话", 1))
+
+
+if __name__ == "__main__":
+    unittest.main()

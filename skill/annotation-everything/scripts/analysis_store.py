@@ -150,6 +150,7 @@ def _decide(state: dict[str, Any], node: dict[str, Any], option: str, round_no: 
             if did not in node["history"]:
                 node["history"].append(did)
             node["decision"], node["status"] = did, "decided"
+            node.pop("reopened", None)
             return decision
     did = f"d{state['seq']['decision'] + 1}"
     state["seq"]["decision"] += 1
@@ -158,6 +159,7 @@ def _decide(state: dict[str, Any], node: dict[str, Any], option: str, round_no: 
     state["decisions"][did] = decision
     node["history"].append(did)
     node["decision"], node["status"] = did, "decided"
+    node.pop("reopened", None)
     return decision
 
 
@@ -219,6 +221,9 @@ def _apply_structure_change(state: dict[str, Any], round_: dict[str, Any], key: 
 def _apply_answer(state: dict[str, Any], round_: dict[str, Any], key: str, value: dict[str, Any]) -> None:
     previous = round_["answers"].get(key)
     round_["answers"][key] = value
+    if key.startswith("D:"):
+        state["deadEnds"][key[2:]]["status"] = "confirmed" if value["kind"] == "accept" else "rejected"
+        return
     if key.startswith("U:"):
         draft = state["updates"][key[2:]]
         draft["status"] = "confirmed" if value["kind"] == "accept" else "rejected"
@@ -289,22 +294,26 @@ def _round_items(state: dict[str, Any], round_: dict[str, Any]) -> list[dict[str
     问题条目随状态动态出现（确认提议入树后同轮即可作答；没答的问题一直留到下一轮）。"""
     if round_["status"] in ("done", "void"):
         return [{"key": "S:" + p["key"], "type": "structure", "proposal": p} for p in round_["proposals"]]
-    items = [{"key": "U:" + draft["id"], "type": "update", "update": draft["id"]}
+    items = [{"key": "D:" + end["id"], "type": "deadend", "deadEnd": end["id"]}
+             for end in state["deadEnds"].values()
+             if end["line"] == round_.get("line", LINE_MAIN) and end["status"] == "pending"]
+    items.extend({"key": "U:" + draft["id"], "type": "update", "update": draft["id"]}
              for draft in state.get("updates", {}).values()
              if draft.get("line", LINE_MAIN) == round_.get("line", LINE_MAIN) and _update_valid(state, draft)
-             and "U:" + draft["id"] not in round_["answers"]]
+             and "U:" + draft["id"] not in round_["answers"])
     items.extend([{"key": "A:" + aid, "type": "assumption", "assumption": aid}
              for aid, assumption in state["assumptions"].items()
-             if assumption["confirmed"].get(round_.get("line", LINE_MAIN), "pending") == "pending"])
+             if not assumption["refuted"] and assumption["confirmed"].get(round_.get("line", LINE_MAIN), "pending") == "pending"])
     items.extend({"key": "S:" + p["key"], "type": "structure", "proposal": p}
              for p in round_["proposals"]
              if "S:" + p["key"] not in round_["answers"] and "S:" + p["key"] not in round_["rejected"])
     items.extend(_frontier_question_items(state))
     keys = {item["key"] for item in items}
     for item in round_.get("carriedItems", []):
-        if item["key"] not in keys and _carry_question_valid(state, item, round_["answers"].get(item["key"])):
+        if item["key"] not in keys and _carry_item_valid(state, item, round_["answers"].get(item["key"])):
             items.append(item)
-    return items
+    priority = {"deadend": 0, "update": 1, "assumption": 2, "structure": 3, "question": 4}
+    return sorted(items, key=lambda item: priority[item["type"]])
 
 
 def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -317,7 +326,7 @@ def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
         "line": LINE_MAIN, "seq": {"node": 0, "decision": 0, "draft": 0},
         "nodes": {}, "decisions": {}, "rounds": [], "drafts": [],
         "carry": {}, "pendingProposals": {}, "updateRequests": {}, "updates": {}, "rejections": [],
-        "assumptions": {}, "facts": {}, "rejectedProposals": [], "checkpoints": [],
+        "assumptions": {}, "facts": {}, "rejectedProposals": [], "checkpoints": [], "deadEnds": {},
     }
     state["lines"] = {LINE_MAIN: {"id": LINE_MAIN, "ordinal": 1, "from": None, "nodes": state["nodes"]}}
     current_line = LINE_MAIN
@@ -381,6 +390,8 @@ def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
                 if not any(f["key"] == fact["key"] for f in state["facts"].values()):
                     fid = f"f{len(state['facts']) + 1}"
                     state["facts"][fid] = {"id": fid, **fact, "round": event["round"]}
+            for end in event.get("deadEnds", []):
+                state["deadEnds"].setdefault(end["id"], copy.deepcopy(end))
         elif kind == "round-voided":
             round_ = _round(state, event["round"])
             round_.update(status="void", voidReason=event.get("reason"))
@@ -414,8 +425,23 @@ def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
                     assumption["confirmed"].get(checkpoint["line"], "pending"))
             state["pendingProposals"][event["line"]] = {
                 p["key"]: copy.deepcopy(p) for p in checkpoint["snapshot"].get("pendingProposals", [])}
+            if event.get("carry"):
+                state["carry"][event["line"]] = copy.deepcopy(event["carry"])
             current_line = event["line"]
             state["rev"] = event["rev"]
+        elif kind == "assumption-refuted":
+            state["assumptions"][event["assumption"]]["refuted"] = True
+            for end in state["deadEnds"].values():
+                if end["status"] in ("pending", "confirmed") and event["assumption"] in end["assumptions"]:
+                    end.update(status="review", releasedBy=event["assumption"])
+            if event.get("checkpoint"):
+                state["lines"][event["line"]].setdefault("basedOnRefuted", []).append(event["assumption"])
+            state["rev"] = event["rev"]
+        elif kind == "decisions-reopened":
+            for entry in event["nodes"]:
+                node = state["nodes"][entry["node"]]
+                node["reopened"] = {**entry, "assumption": event["assumption"], "reason": "assumption-refuted"}
+                node["decision"], node["status"] = None, "pending"
         elif kind == "line-switched":
             current_line = event["line"]
             state["rev"] = event["rev"]
@@ -481,6 +507,7 @@ def load(review_dir: Path, analysis_id: str) -> dict[str, Any]:
         view = _line_view(state, line)
         for node in view["nodes"].values():
             node["branch"] = node_branch(view, node["id"])
+            node["needsReview"] = _decision_needs_review(view, node.get("decision"))
     return state
 
 
@@ -717,10 +744,14 @@ def answer(review_dir: Path, analysis_id: str, round_no: int, key: str, value: d
                 item = {"key": key, "type": "update", "update": key[2:]}
             elif key.startswith("A:") and key[2:] in state["assumptions"]:
                 item = {"key": key, "type": "assumption", "assumption": key[2:]}
+            elif key.startswith("D:") and key[2:] in state["deadEnds"]:
+                item = {"key": key, "type": "deadend", "deadEnd": key[2:]}
         if item is None:
             raise store.HandoffError(f"第 {round_no} 轮里没有 {key} 这一项", code="item-not-in-round",
                                      round=round_no, key=key)
         _check_answer_value(state, item, value)
+        if item["type"] == "question":
+            _guard_dead_option(state, item["node"], value)
         if item["type"] == "structure" and value["kind"] == "accept":
             proposal = item["proposal"]
             already = round_["answers"].get(key, {}).get("kind") == "accept"
@@ -749,9 +780,12 @@ def _check_answer_value(state: dict[str, Any], item: dict[str, Any], value: Any)
     if not isinstance(value, dict):
         raise AnalysisInputError("回答须为 {kind: ...} 对象")
     kind = value.get("kind")
-    if item["type"] in ("structure", "assumption", "update"):
+    if item["type"] in ("structure", "assumption", "update", "deadend"):
         if kind not in ("accept", "reject"):
             raise AnalysisInputError("结构提议的回答只能是 accept（同意）或 reject（不采纳）")
+        if item["type"] == "deadend" and any(state["assumptions"][aid]["refuted"]
+                                              for aid in state["deadEnds"][item["deadEnd"]]["assumptions"]):
+            raise store.HandoffError("这项死局的依据已被推翻，请刷新后复核", code="dead-end-obsolete")
         return
     if kind == "text":
         if not isinstance(value.get("text"), str) or not value["text"].strip():
@@ -984,9 +1018,73 @@ def _clean_evidence(values: Any, state: dict[str, Any], *, assumptions: bool) ->
     return out
 
 
+def _clean_dead_ends(values: Any, state: dict[str, Any], round_no: int) -> list[dict[str, Any]]:
+    if values is None:
+        return []
+    if not isinstance(values, list) or len(values) > MAX_PROPOSALS:
+        raise store.HandoffError("deadEnds 须为死局提议列表，每轮最多50项", code="bad-dead-ends")
+    out, seen = [], set()
+    next_id = len(state["deadEnds"]) + 1
+    for value in values:
+        if not isinstance(value, dict):
+            raise store.HandoffError("死局提议须为对象", code="bad-dead-ends")
+        key, reason, assumptions = value.get("key"), value.get("reason"), value.get("assumptions")
+        node = state["nodes"].get(value.get("node")) if isinstance(value.get("node"), str) else None
+        if (not isinstance(key, str) or not PROP_KEY_RE.fullmatch(key) or key in seen
+                or not isinstance(reason, str) or not reason.strip()
+                or not isinstance(assumptions, list)
+                or any(not isinstance(aid, str) or aid not in state["assumptions"]
+                       or state["assumptions"][aid]["refuted"] for aid in assumptions)
+                or value.get("kind") not in ("option", "line")):
+            raise store.HandoffError("死局须提供稳定key、目标选项、理由与已存在的假设", code="bad-dead-ends")
+        seen.add(key)
+        clean = {"key": key, "kind": value["kind"],
+                 "reason": store.fix_text(reason), "assumptions": list(dict.fromkeys(assumptions))}
+        if value["kind"] == "option":
+            if node is None or not isinstance(value.get("option"), str) or value["option"] not in node["options"]:
+                raise store.HandoffError("请选择问题树中已有的选项", code="bad-dead-ends")
+            clean.update(node=node["id"], option=value["option"])
+        else:
+            if not isinstance(value.get("targetLine"), str) or value["targetLine"] not in state["lines"]:
+                raise store.HandoffError("请选择已有的分析线", code="bad-dead-ends")
+            clean["targetLine"] = value["targetLine"]
+        old = next((end for end in state["deadEnds"].values() if end["key"] == key), None)
+        if old is not None:
+            if any(old.get(k) != v for k, v in clean.items()):
+                raise store.HandoffError("同一死局标识不能改写目标或理由", code="bad-dead-ends")
+            out.append(old)
+        else:
+            out.append({"id": f"e{next_id}",
+                        **clean, "line": state["line"], "round": round_no, "status": "pending"})
+            next_id += 1
+    return out
+
+
+def _dead_blocks(state: dict[str, Any], end: dict[str, Any]) -> bool:
+    return end["status"] == "confirmed" and not any(state["assumptions"][aid]["refuted"] for aid in end["assumptions"])
+
+
+def _guard_dead_option(state: dict[str, Any], node_id: str, value: dict[str, Any]) -> None:
+    node = state["nodes"][node_id]
+    option = node["recommend"] if value.get("kind") == "accept" else value.get("option")
+    for end in state["deadEnds"].values():
+        same_text = value.get("kind") == "text" and value.get("text", "").strip() == node["options"].get(end.get("option"))
+        if (end["kind"] == "option" and end["node"] == node_id and _dead_blocks(state, end)
+                and (end["option"] == option or same_text)):
+            raise store.HandoffError("这条路已经确认为死局；请先复核其依据", code="dead-end-option",
+                                     reason=end["reason"], assumptions=[state["assumptions"][aid]["text"] for aid in end["assumptions"]])
+
+
+def _guard_dead_line(state: dict[str, Any], line: str) -> None:
+    for end in state["deadEnds"].values():
+        if end["kind"] == "line" and end["targetLine"] == line and _dead_blocks(state, end):
+            raise store.HandoffError("这条分析线已经确认为死局；请先复核其依据", code="dead-end-line",
+                                     reason=end["reason"], assumptions=[state["assumptions"][aid]["text"] for aid in end["assumptions"]])
+
+
 def writeback(review_dir: Path, analysis_id: str, round_no: int, base_rev: int, proposals: Any, *,
               note: str = "", by: str = "agent", assumptions: Any = None,
-              facts: Any = None, updates: Any = None,
+              facts: Any = None, updates: Any = None, dead_ends: Any = None,
               authorize: Callable[[], None] | None = None) -> dict[str, Any]:
     """Agent 写回轮次：校验领取时记录的基线版本，记下这一轮的说明，
     把没答的提议带进下一轮并附上新的结构提议；没有可作答的内容就不再开新轮。"""
@@ -1019,15 +1117,16 @@ def writeback(review_dir: Path, analysis_id: str, round_no: int, base_rev: int, 
         candidates = _clean_evidence(assumptions, state, assumptions=True)
         findings = _clean_evidence(facts, state, assumptions=False)
         drafted_updates = _clean_updates(review_dir, state, round_, updates)
+        ends = _clean_dead_ends(dead_ends, state, round_no)
         history = _historical_context(review_dir, state, round_, "done")
         history["note"] = store.fix_text(note)
         history["writeback"] = {"proposals": cleaned, "assumptions": candidates,
-                                "facts": findings, "updates": drafted_updates}
+                                "facts": findings, "updates": drafted_updates, "deadEnds": ends}
         new_rev = state["rev"] + 1
         _append_event(review_dir, analysis_id, {"type": "round-done", "at": store.now_iso(), "by": by,
                                                 "round": round_no, "note": store.fix_text(note),
                                                 "rev": new_rev, "assumptions": candidates, "facts": findings,
-                                                "context": history})
+                                                "context": history, "deadEnds": ends})
         for draft in drafted_updates:
             _record(review_dir, analysis_id, "note-update-drafted", by, draft=draft, round=round_no)
         next_round = None
@@ -1038,11 +1137,13 @@ def writeback(review_dir: Path, analysis_id: str, round_no: int, base_rev: int, 
         fresh = [p for p in cleaned if p["key"] not in {c["key"] for c in carried}]
         current = _line_view(load(review_dir, analysis_id), line)
         frontier = _frontier_question_items(current)
-        pending_assumptions = any(a["confirmed"].get(line, "pending") == "pending"
+        pending_assumptions = any(not a["refuted"] and a["confirmed"].get(line, "pending") == "pending"
                                   for a in current["assumptions"].values())
         combined = carried + fresh
         prefilled = _prefill(current, line, combined, round_)
-        if combined or frontier or pending_assumptions or prefilled["answers"] or any(_update_valid(current, draft) for draft in current["updates"].values()):
+        if (combined or frontier or pending_assumptions or prefilled["answers"]
+                or any(_update_valid(current, draft) for draft in current["updates"].values())
+                or any(end["status"] == "pending" and end["line"] == line for end in current["deadEnds"].values())):
             next_round = _next_round(review_dir)
             _append_event(review_dir, analysis_id, {"type": "round-requested", "at": store.now_iso(),
                                                     "by": by, "round": next_round, "kind": "next",
@@ -1089,8 +1190,17 @@ def _round_context_data(review_dir: Path, state: dict[str, Any], round_: dict[st
             missing_answers.append({"key": key, "type": "assumption", "assumption": key[2:]})
         elif key.startswith("U:") and key[2:] in state["updates"]:
             missing_answers.append({"key": key, "type": "update", "update": key[2:]})
+        elif key.startswith("D:") and key[2:] in state["deadEnds"]:
+            missing_answers.append({"key": key, "type": "deadend", "deadEnd": key[2:]})
     for item in current_items + missing_answers:
-        if item["type"] == "update":
+        if item["type"] == "deadend":
+            end = state["deadEnds"][item["deadEnd"]]
+            node = state["nodes"].get(end.get("node")) or {}
+            items.append({**end, "key": item["key"], "type": "deadend", "deadEnd": end["id"],
+                          "targetText": node.get("short", ""),
+                          "optionLabel": node.get("options", {}).get(end.get("option"), ""),
+                          "assumptionTexts": [state["assumptions"][aid]["text"] for aid in end["assumptions"]]})
+        elif item["type"] == "update":
             draft = state["updates"][item["update"]]
             items.append({"key": item["key"], "type": "update", "update": draft["id"],
                           "noteId": draft["noteId"], "text": draft["text"], "beforeText": draft["beforeText"],
@@ -1126,6 +1236,7 @@ def _round_context_data(review_dir: Path, state: dict[str, Any], round_: dict[st
             "updateRequests": _update_context(Path(review_dir), state, round_.get("line", LINE_MAIN)),
             "protection": state["protection"],
             "assumptions": assumptions, "facts": list(state["facts"].values()),
+            "deadEnds": list(state["deadEnds"].values()),
             "verificationRequests": verification,
             "parked": [n for n in state["nodes"].values() if n["status"] == "parked" and _is_active(state, n["id"])]}
 
@@ -1317,6 +1428,7 @@ def fork_line(review_dir: Path, analysis_id: str, checkpoint_id: str, *, by: str
         checkpoint = next((c for c in state["checkpoints"] if c["id"] == checkpoint_id), None)
         if checkpoint is None:
             raise store.HandoffError("没有找到这个检查点，请刷新后查看", code="checkpoint-not-found")
+        _guard_dead_line(state, checkpoint["line"])
         line = f"line{len(state['lines']) + 1}"
         _void_open_rounds(review_dir, state, state["line"], "line-forked", by)
         _record(review_dir, analysis_id, "line-forked", by, checkpoint=checkpoint_id,
@@ -1339,9 +1451,50 @@ def switch_line(review_dir: Path, analysis_id: str, line: str, *, by: str = "pag
         guard_unlocked(state)
         if not isinstance(line, str) or line not in state["lines"]:
             raise store.HandoffError("没有找到这条分析线，请刷新后查看", code="line-not-found")
+        _guard_dead_line(state, line)
         if line != state["line"]:
             _record(review_dir, analysis_id, "line-switched", by, line=line, rev=state["rev"] + 1)
             _sync_notes_locked(review_dir, load(review_dir, analysis_id), by)
+        return load(review_dir, analysis_id)
+
+
+def refute_assumption(review_dir: Path, analysis_id: str, assumption_id: str, *, by: str = "page",
+                      authorize: Callable[[], None] | None = None) -> dict[str, Any]:
+    """推翻前记录快照；当前选择有直接依赖时分线重问，旧推理保持原样。"""
+    review_dir = Path(review_dir)
+    with store.locked(review_dir):
+        if authorize is not None:
+            authorize()
+        state = load(review_dir, analysis_id)
+        guard_unlocked(state)
+        assumption = state["assumptions"].get(assumption_id) if isinstance(assumption_id, str) else None
+        if assumption is None:
+            raise store.HandoffError("没有找到这个假设，请刷新后查看", code="assumption-not-found")
+        if assumption["refuted"]:
+            return state
+        affected = []
+        for node in state["nodes"].values():
+            decision = state["decisions"].get(node.get("decision"))
+            if decision and _is_active(state, node["id"]) and assumption_id in decision.get("assumptions", []):
+                affected.append({"node": node["id"], "decision": decision["id"], "answer": decision["label"]})
+        checkpoint = None
+        if affected:
+            checkpoint = _checkpoint_locked(review_dir, analysis_id, by, auto=True)
+        pending = any(r["line"] == state["line"] and r["status"] in ROUND_OPEN for r in state["rounds"])
+        _void_open_rounds(review_dir, state, state["line"], "assumption-refuted", by)
+        _record(review_dir, analysis_id, "assumption-refuted", by, assumption=assumption_id,
+                line=state["line"], checkpoint=checkpoint["id"] if checkpoint else None, rev=state["rev"] + 1)
+        if affected:
+            line = f"line{len(state['lines']) + 1}"
+            current = load(review_dir, analysis_id)
+            _record(review_dir, analysis_id, "line-forked", by, checkpoint=checkpoint["id"],
+                    line=line, carry=current["carry"].get(state["line"], {}), rev=current["rev"] + 1)
+            _record(review_dir, analysis_id, "decisions-reopened", by, line=line,
+                    assumption=assumption_id, nodes=affected)
+        after = load(review_dir, analysis_id)
+        _sync_notes_locked(review_dir, after, by)
+        if affected or pending:
+            _enqueue_refresh(review_dir, after, after["line"], "refute", by)
         return load(review_dir, analysis_id)
 
 
@@ -1396,6 +1549,12 @@ def _answer_carry(state: dict[str, Any], round_: dict[str, Any]) -> dict[str, An
             node = state["nodes"][key[2:]]
             item = {"key": key, "type": "question", "node": node["id"],
                     "text": node["text"], "options": node["options"]}
+        elif key.startswith("D:") and key[2:] in state["deadEnds"]:
+            item = {"key": key, "type": "deadend", "deadEnd": key[2:]}
+        elif key.startswith("U:") and key[2:] in state["updates"]:
+            item = {"key": key, "type": "update", "update": key[2:]}
+        elif key.startswith("A:") and key[2:] in state["assumptions"]:
+            item = {"key": key, "type": "assumption", "assumption": key[2:]}
         if item is not None:
             out[key] = {"value": value, "item": item}
     return out
@@ -1433,10 +1592,11 @@ def _carry_question_valid(state: dict[str, Any], item: dict[str, Any], value: An
         return False
     node = state["nodes"].get(item.get("node"))
     if (node is None or not _is_active(state, node["id"]) or node["text"] != item.get("text")
-            or node.get("status") == "parked"):
+            or node.get("status") == "parked" or node.get("reopened")):
         return False
     try:
         _check_answer_value(state, item, value)
+        _guard_dead_option(state, node["id"], value)
     except (store.NoteError, KeyError, TypeError):
         return False
     decision = state["decisions"].get(node.get("decision"))
@@ -1450,6 +1610,26 @@ def _carry_question_valid(state: dict[str, Any], item: dict[str, Any], value: An
     return value.get("kind") != "verify" or node.get("status") == "verifying"
 
 
+def _carry_item_valid(state: dict[str, Any], item: dict[str, Any], value: Any) -> bool:
+    if item.get("type") == "question":
+        return _carry_question_valid(state, item, value)
+    if not isinstance(value, dict) or value.get("kind") not in ("accept", "reject"):
+        return False
+    expected = "confirmed" if value["kind"] == "accept" else "rejected"
+    if item["type"] == "assumption":
+        assumption = state["assumptions"].get(item.get("assumption"))
+        return bool(assumption and not assumption["refuted"]
+                    and assumption["confirmed"].get(state["line"]) == expected)
+    if item["type"] == "deadend":
+        end = state["deadEnds"].get(item.get("deadEnd"))
+        return bool(end and end["status"] == expected
+                    and not any(state["assumptions"][aid]["refuted"] for aid in end["assumptions"]))
+    if item["type"] == "update":
+        draft = state["updates"].get(item.get("update"))
+        return bool(draft and draft["status"] == expected and decision_in_force(state, draft["basis"]["decision"]))
+    return False
+
+
 def _prefill(state: dict[str, Any], line: str, proposals: list[dict[str, Any]],
              round_: dict[str, Any] | None = None) -> dict[str, Any]:
     state = _line_view(state, line)
@@ -1459,7 +1639,7 @@ def _prefill(state: dict[str, Any], line: str, proposals: list[dict[str, Any]],
     out: dict[str, Any] = {"answers": {}, "carriedItems": [], "proposalNodes": {}, "structureNodes": {}}
     for key, entry in carried.items():
         item, value = entry["item"], entry["value"]
-        if _carry_question_valid(state, item, value):
+        if _carry_item_valid(state, item, value):
             out["answers"][key] = value
             out["carriedItems"].append(item)
         elif item.get("type") == "structure":
@@ -1508,6 +1688,7 @@ def redecide(review_dir: Path, analysis_id: str, node_id: str, option: str, *, b
             raise store.HandoffError("请选择这个问题已有的选项", code="bad-option")
         if state["decisions"][node["decision"]]["option"] == option:
             return state
+        _guard_dead_option(state, node_id, {"kind": "option", "option": option})
         _record(review_dir, analysis_id, "redecided", by, node=node_id, option=option,
                 line=state["line"], rev=state["rev"] + 1)
         _void_open_rounds(review_dir, state, state["line"], "redecided", by)
@@ -1538,15 +1719,23 @@ def decision_in_force(state: dict[str, Any], decision_id: str | None) -> bool:
     node = state["nodes"].get(decision["node"])
     if node is None or node.get("decision") != decision_id or not _is_active(state, decision["node"]):
         return False
-    # 继承来的决策保留来源 line，是否生效只看当前节点投影与依赖，不能按来源线过滤。
+    return not _decision_needs_review(state, decision_id)
+
+
+def _decision_needs_review(state: dict[str, Any], decision_id: str | None) -> bool:
+    """当前投影上的决策是否因自身或上游依赖的假设被推翻而待复核。"""
+    decision = state["decisions"].get(decision_id)
+    if decision is None:
+        return False
+    node = state["nodes"].get(decision["node"])
     current = node
     while current is not None:
         chosen = state["decisions"].get(current.get("decision")) or {}
         if any((state.get("assumptions", {}).get(aid) or {}).get("refuted")
                for aid in chosen.get("assumptions", [])):
-            return False
+            return True
         current = state["nodes"].get((current.get("parent") or {}).get("node"))
-    return True
+    return False
 
 
 def _sync_notes_locked(review_dir: Path, state: dict[str, Any], by: str) -> None:
