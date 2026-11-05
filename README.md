@@ -367,6 +367,8 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `notes.py suggest-analysis <审阅目录> <批注标识> --reason 原因` | 给未处理批注加「建议展开分析」提示，由审阅人决定是否发起 |
 | `notes.py analysis-check <审阅目录> --json` | 只读各分析当前线的有效结论与待确认信息，没有活动轮次也可读取 |
 | `notes.py analysis-redecide <审阅目录> --analysis A --node N --option O` / `analysis-note <审阅目录> --analysis A --note-id N --action update\|keep\|delete` | 重裁答案 / 请求更新、保留原文或删除结论已变的批注；沿用保护与确认规则 |
+| `notes.py analysis-history <审阅目录> --analysis A --json` | 只读分析线、检查点及完整历史，不交出旧轮次 |
+| `notes.py analysis-line <审阅目录> --analysis A --action seal\|fork\|switch\|close\|reopen [--checkpoint CP] [--line L]` | 封存、从检查点分线、切线、结案或重新打开；沿用整分析保护 |
 | `notes.py show` / `resolve` / `reopen` | 列出批注、标为已处理、重新打开。`show --locale` 选择阅读语言，优先于 `AE_LOCALE` 和审阅设置；`show --json` 仍导出原始值 |
 | `notes.py export` / `import` | 导出可再导入的批注摘要（Markdown 带版本与语言标记，或 JSON 结构化备份）／导入页面导出的 JSON 或 Markdown。`export --lang` 与 `show --locale` 同一套优先级，`--format json`、`--all`、`--page N`、`--out 文件` |
 | `notes.py done` / `review` / `diff` | 结束当前阶段、给出复核结论、按页查看初改改动了哪些地方；均可用 `--locale` 选择输出语言 |

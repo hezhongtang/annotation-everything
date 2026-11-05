@@ -19,7 +19,7 @@ Keep `baseRev` from the claim result. The complete context contains the focus qu
 
 When `wait --events analysis` returns a round, it has already claimed it; read its context without claiming again. If an exact claim exits 3, use `claim "$R" --events analysis` to accept the actual queue head and route by the returned `event`. Handle the target round only after a successful claim.
 
-Each round belongs to its own analysis line. Read and write back that round's `line` even when the reviewer is viewing another line; do not switch their current line yourself. `analysis --round N --json` also reads historical questions, options, answers, explanations and writebacks. `historical: true` marks a read-only record that cannot receive more answers or another writeback. New events freeze this history against later decisions or option changes on other lines.
+Each round belongs to its own analysis line. Read and write back that round's `line` even when the reviewer is viewing another line; do not switch their current line yourself. `analysis --round N --json` also reads historical questions, options, answers, explanations and writebacks. `historical: true` marks a read-only record that cannot receive more answers or another writeback. Use `python3 "$S/notes.py" analysis-history "$R" --analysis A --json` to inspect the whole analysis. New events freeze this history against later decisions or option changes on other lines.
 
 ## Write back
 

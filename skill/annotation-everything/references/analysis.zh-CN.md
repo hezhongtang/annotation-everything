@@ -19,7 +19,7 @@ python3 "$S/notes.py" analysis "$R" --round N --json
 
 若由 `wait --events analysis` 返回，该轮已经领取，直接读取上下文，不要重复领取。精确领取返回 3 时，可用 `claim "$R" --events analysis` 接收真正的队首，再按返回的 `event` 分流；不能先处理尚未领取的目标轮次。
 
-每轮有自己的分析线。即使审阅人正在查看另一条线，也按本轮 `line` 的上下文处理和写回，不擅自切换审阅人的当前线。历史轮次仍可用 `analysis --round N --json` 读取完整原问题、选项、回答、说明与写回内容；`historical: true` 表示只读记录，不得再次作答或写回。新事件保存的历史不随后续重裁或跨线选项变化而改写。
+每轮有自己的分析线。即使审阅人正在查看另一条线，也按本轮 `line` 的上下文处理和写回，不擅自切换审阅人的当前线。历史轮次仍可用 `analysis --round N --json` 读取完整原问题、选项、回答、说明与写回内容；`historical: true` 表示只读记录，不得再次作答或写回。需要回看整个分析时，使用 `python3 "$S/notes.py" analysis-history "$R" --analysis A --json`。新事件保存的历史不随后续重裁或跨线选项变化而改写。
 
 ## 写回下一轮
 

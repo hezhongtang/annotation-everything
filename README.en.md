@@ -367,6 +367,8 @@ See the [English format reference](skill/annotation-everything/references/format
 | `notes.py suggest-analysis REVIEW_DIR NOTE_ID --reason REASON` | Suggest analysis of an open annotation; the reviewer decides whether to start it |
 | `notes.py analysis-check REVIEW_DIR --json` | Read current-line conclusions and review items without changing state; works without an open round |
 | `notes.py analysis-redecide REVIEW_DIR --analysis A --node N --option O` / `analysis-note REVIEW_DIR --analysis A --note-id N --action update\|keep\|delete` | Change a prior answer / request an update, keep or delete a changed-conclusion annotation, subject to protection and confirmation rules |
+| `notes.py analysis-history REVIEW_DIR --analysis A --json` | Read analysis lines, checkpoints and complete history without submitting old rounds |
+| `notes.py analysis-line REVIEW_DIR --analysis A --action seal\|fork\|switch\|close\|reopen [--checkpoint CP] [--line L]` | Seal, fork from a checkpoint, switch, close or reopen, subject to analysis-wide protection |
 | `notes.py show` / `resolve` / `reopen` | List annotations, mark them resolved, reopen them. `show --locale` chooses the reading language and beats `AE_LOCALE` and the review setting; `show --json` still exports the raw values |
 | `notes.py export` / `import` | Export annotations as a re-importable summary (Markdown with a version and language marker, or structured annotation JSON) / import a page export. `export --lang` follows the same priority as `show --locale`, plus `--format json`, `--all`, `--page N` and `--out <file>` |
 | `notes.py done` / `review` / `diff` | Close the current stage, record a review verdict, show page by page what the draft changed; all accept `--locale` to choose the output language |
