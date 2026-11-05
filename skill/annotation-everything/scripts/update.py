@@ -275,7 +275,7 @@ def install_release(copy: Path, record: dict, release: Path, tag: str, commit: s
         raise UpdateError("cli.update.badRelease") from None
     match = re.search(r'^VERSION = "([^"]+)"', serve, re.M)
     required = ("SKILL.md", "scripts/update.py", "scripts/content_manifest.py", "scripts/i18n.py", "scripts/ledger.py",
-                "scripts/fsutil.py", "locales/zh-CN.json", "locales/en.json")
+                "scripts/fsutil.py", "scripts/review_overview.py", "locales/zh-CN.json", "locales/en.json")
     if any(not (source / item).is_file() for item in required) or not match or match.group(1) != tag[1:]:
         raise UpdateError("cli.update.badRelease")
     expected = record.get("tree")

@@ -223,6 +223,259 @@ def drag_select(page, locator):
     page.mouse.up()
 
 
+def review_overview_checks(browser, tmp: Path):
+    workspace = tmp / "overview-workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-q", str(workspace)], check=True, capture_output=True)
+    current, stopped, missing = [workspace / name for name in ("current", "stopped", "missing")]
+    build(current, name="Synthetic current review")
+    material = workspace / "synthetic-material"
+    material.mkdir()
+    report = material / "report.html"
+    shutil.copyfile(FIXTURE / "report.en.html", report)
+    record = {"schema": "ae-report-record/1", "generatedAt": "2026-11-03T12:00:00Z",
+              "summary": "Revenue grew. <b>Review costs.</b>",
+              "request": {"purpose": "Quarterly decision", "audience": "经营委员会",
+                          "coreQuestions": ["Why growth?", "Which costs?"]},
+              "sources": [], "method": {},
+              "links": {"report": "report.html", "sha256": {"report": hashlib.sha256(report.read_bytes()).hexdigest()}},
+              "findings": [], "gaps": [], "checks": [], "openItems": [], "verdict": {}}
+    (material / "report-record.json").write_text(json.dumps(record), encoding="utf-8")
+    build(stopped, report=report, script=FIXTURE / "script.en.md", name="Synthetic stopped review")
+    build(missing, name="Synthetic missing review")
+    shutil.rmtree(missing)
+    srv = start_server(current, free_port())
+    port = json.loads((current / ".annotation-server.json").read_text())["port"]
+    ctx = browser.new_context(viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/#overview")
+        ready = wait_dom(page, "() => document.getElementById('overviewList')?.querySelector('[data-review-id]') != null", 8,
+                         condition="总览显示合成审阅列表")
+        ok(ready, "地址 #overview 直接打开审阅总览")
+        if not ready:
+            return
+        detail = page.inner_text("#overviewDetail")
+        ok("（无摘要）" in detail and "示例咖啡 2030 年三季度经营回顾" in detail,
+           "无记录审阅显示无摘要和报告封面真实标题")
+        ok(page.is_visible("#overviewBack") and page.is_visible("#overviewScope"), "总览提供范围切换和返回当前审阅")
+        for state in ("running", "stopped", "invalid"):
+            ok(page.locator('[data-overview-group="%s"]' % state).count() == 1, "总览显示 %s 分组" % state)
+        stopped_id = json.loads((stopped / "review.json").read_text())["reviewId"]
+        page.click('[data-review-id="%s"]' % stopped_id)
+        ok("Synthetic stopped review" in page.inner_text("#overviewDetail"), "选择审阅后详情与列表一致")
+        detail = page.inner_text("#overviewDetail")
+        ok(all(text in detail for text in (record["summary"], "Quarterly decision", "经营委员会",
+                                          "Why growth?", "Which costs?")),
+           "详情显示摘要、用途、读者和核心问题原文")
+        ok(record["summary"] in detail and page.locator("#overviewDetail b, #overviewDetail img").count() == 0,
+           "核验记录中的 HTML 只显示为文字")
+        ok("stopped" in page.inner_text("#overviewDetail") and str(workspace) not in page.inner_text("#overview"),
+           "详情显示相对路径，不暴露工作区绝对路径")
+        start = page.locator("#overviewStart")
+        ok(start.count() == 1, "已停审阅提供启动并打开操作")
+        if start.count():
+            pending = []
+            ctx.route("**/api/overview/start", lambda route: pending.append(route))
+            with page.expect_popup() as first_popup:
+                start.click()
+            empty = first_popup.value
+            ok(wait_until(lambda: bool(pending), page, 5) and empty.url == "about:blank",
+               "点击时同步预留新标签页，启动请求尚未完成")
+            ok(page.locator("#overviewStart").is_disabled()
+               and "启动中" in page.inner_text("#overviewStart"), "等待启动时显示启动中并阻止重复点击")
+            pending.pop(0).fulfill(status=503, content_type="application/json",
+                                   body=json.dumps({"app": "annotation-everything", "code": "overview-start-failed",
+                                                    "error": "Synthetic launch failure"}))
+            ok(wait_until(empty.is_closed, page, 5), "启动失败关闭预留的空白标签页")
+            ok(page.locator("#overviewStart").is_enabled()
+               and "重试" in page.inner_text("#overviewStartError"), "启动失败提供可重试提示并恢复操作")
+            for status, code, zh, en in (
+                (409, "overview-port-busy", "请释放端口后重试", "Free the port and retry"),
+                (404, "overview-review-unknown", "不在本机台账里", "not in the local ledger"),
+                (409, "overview-review-invalid", "目录或标识已失效", "directory or identity is invalid"),
+            ):
+                with page.expect_popup() as failed_popup:
+                    page.click("#overviewStart")
+                failed = failed_popup.value
+                if not wait_until(lambda: bool(pending), page, 5):
+                    ok(False, "启动请求到达：" + code)
+                    failed.close()
+                    continue
+                pending.pop(0).fulfill(status=status, content_type="application/json",
+                                       body=json.dumps({"app": "annotation-everything", "code": code,
+                                                        "error": "Synthetic recovery guidance"}))
+                ok(wait_until(failed.is_closed, page, 5), "失败关闭空白标签页：" + code)
+                ok(page.locator("#overviewStart").is_enabled()
+                   and zh in page.inner_text("#overviewStartError"), "保留具体启动恢复提示：" + code)
+                page.click("#overviewBack")
+                page.select_option("#localePick", "en")
+                page.click("#overviewBtn")
+                ok(wait_dom(page, "text => document.getElementById('overviewStartError')?.textContent.includes(text)",
+                            5, arg=en, condition="启动错误的英文恢复提示"),
+                   "启动恢复提示随界面切换英文：" + code)
+                page.click("#overviewBack")
+                page.select_option("#localePick", "zh-CN")
+                page.click("#overviewBtn")
+            with page.expect_popup() as second_popup:
+                page.click("#overviewStart")
+            opened = second_popup.value
+            ok(wait_until(lambda: bool(pending), page, 5), "失败后可以再次发起启动")
+            pending.pop(0).continue_()
+            navigated = wait_until(lambda: opened.url.startswith("http://127.0.0.1:"), page, 10)
+            owned = json.loads((Path(os.environ["AE_HOME"]) / "reviews.json").read_text())["reviews"][stopped_id]["port"]
+            ok(navigated and opened.url == f"http://127.0.0.1:{owned}/"
+               and wait_mode(opened, "server"), "重试成功后在专属端口的新标签页打开目标审阅")
+            ok(opened.evaluate("window.opener === null"), "新审阅标签页不保留 opener")
+            opened.close()
+            ctx.unroute("**/api/overview/start")
+        invalid = page.locator('[data-overview-group="invalid"] [data-review-id]').first
+        invalid.click()
+        ok("serve.py forget " in page.inner_text("#overviewDetail") and page.locator("#overviewDetail a").count() == 0,
+           "失效审阅只能复制清理命令，不能打开")
+        current_id = json.loads((current / "review.json").read_text())["reviewId"]
+        page.click('[data-review-id="%s"]' % current_id)
+        archive_available = page.locator("#overviewArchive").count() == 1
+        ok(archive_available, "当前审阅详情提供归档操作")
+        if not archive_available:
+            return
+        page.click("#overviewArchive")
+        archived = wait_dom(page, "() => !document.getElementById('overviewArchiveBanner').hidden", 8,
+                            condition="归档当前审阅后显示总览横幅")
+        ok(archived, "归档当前审阅后总览显示已归档横幅")
+        if not archived:
+            return
+        ok(not page.is_checked("#overviewShowArchived") and page.is_visible("#overviewHiddenArchived")
+           and page.locator('[data-overview-group="archived"] [data-review-id]').count() == 0,
+           "已归档分组默认隐藏，只保留可展开提示")
+        page.click("#overviewExpandArchived")
+        ok(page.is_checked("#overviewShowArchived")
+           and page.locator('[data-overview-group="archived"] [data-review-id]').count() == 1,
+           "展开提示打开开关并显示已归档审阅")
+        page.uncheck("#overviewShowArchived")
+        page.click("#overviewBack")
+        viewer_banner = wait_dom(page, "() => !document.body.classList.contains('overview-mode') && !document.getElementById('archiveBanner').hidden", 5,
+                                 condition="回到已归档审阅后显示对照页横幅")
+        ok(viewer_banner and page.is_visible("#ntext"), "已归档对照页仍显示批注区和取消归档按钮")
+        page.click("#archiveUnarchive")
+        restored = wait_dom(page, "() => document.getElementById('archiveBanner').hidden && document.getElementById('overviewArchiveBanner').hidden", 8,
+                            condition="对照页取消归档后横幅消失")
+        ok(restored and not (current / ".annotation-archived").exists(), "对照页取消归档移除标记和两处横幅")
+        page.click("#overviewBtn")
+        page.click('[data-review-id="%s"]' % current_id)
+        page.click("#overviewArchive")
+        archived_again = wait_dom(page, "() => !document.getElementById('overviewArchiveBanner').hidden", 8,
+                                  condition="再次归档后可在总览撤销")
+        if archived_again:
+            page.click("#overviewUnarchive")
+        ok(archived_again and wait_dom(page, "() => document.getElementById('overviewArchiveBanner').hidden", 8,
+                                      condition="总览取消归档后横幅消失"),
+           "总览横幅也能取消归档")
+        page.click("#overviewBack")
+        returned = wait_dom(page, "() => document.getElementById('overview').hidden && !document.body.classList.contains('overview-mode')", 5,
+                            condition="hashchange 后恢复当前审阅")
+        ok(returned and page.is_visible("#ntext"), "返回当前审阅恢复批注界面")
+        page.select_option("#localePick", "en")
+        page.click("#overviewBtn")
+        ok(wait_dom(page, """() => document.body.classList.contains('overview-mode')
+                   && !document.getElementById('overview').hidden
+                   && Array.from(document.querySelectorAll('#overviewDetail dt')).some(el => el.textContent === 'Status')
+                   && document.querySelector('[data-overview-group="running"] h2')?.textContent.includes('Running')""", 5,
+                   condition="hashchange 后总览详情和分组已按英文重绘"),
+           "英文界面的总览标题已翻译")
+        current_id = json.loads((current / "review.json").read_text())["reviewId"]
+        page.click('[data-review-id="%s"]' % current_id)
+        detail = page.inner_text("#overviewDetail")
+        ok("(No summary)" in detail and "示例咖啡 2030 年三季度经营回顾" in detail,
+           "英文无摘要提示保留中文封面原文")
+        page.click('[data-review-id="%s"]' % stopped_id)
+        detail = page.inner_text("#overviewDetail")
+        ok(all(text in detail for text in ("Summary", "Purpose", "Audience", "Core questions", "经营委员会")),
+           "英文详情翻译系统标签并保留核验记录原文")
+        system_copy = page.locator(".overview-top, .overview-group h2, .overview-row-meta, "
+                                   "#overviewDetail dt, #overviewDetail h3, .overview-actions").all_text_contents()
+        ok(not any("\u4e00" <= char <= "\u9fff" for char in "".join(system_copy)),
+           "英文总览的系统文案没有中文残留")
+        artifacts = os.environ.get("AE_OVERVIEW_ARTIFACTS")
+        if artifacts:
+            output = Path(artifacts)
+            output.mkdir(parents=True, exist_ok=True)
+            # 行为断言完成后，用同一组合成审阅采集文档截图。
+            # 保留真实列表与 API，只把安全用例的正文换成可读的报告样例。
+            page.click("#overviewBack")
+            page.wait_for_function("() => !document.body.classList.contains('overview-mode')")
+            add_note(page, "请写清收入增长的对比期间（合成批注）")
+            page.click("#handBtn")
+            page.fill("#handMsg", "请同步核对报告和讲稿（合成提交）")
+            page.click("#doHand")
+            target_info = stopped / ".annotation-server.json"
+            target_port = json.loads(target_info.read_text())["port"]
+            target_url = f"http://127.0.0.1:{target_port}"
+            response = ctx.request.post(target_url + "/api/server/stop", data={},
+                                        headers={"Origin": target_url, "X-AE-Review": stopped_id,
+                                                 "Content-Type": "application/json"})
+            if not response.ok or not wait_until(lambda: not target_info.exists(), page, 5):
+                raise RuntimeError("截图前未能停止合成目标审阅")
+            archived_sample = workspace / "archived"
+            build(archived_sample, name="Sample Coffee · Previous review")
+            archived_id = json.loads((archived_sample / "review.json").read_text())["reviewId"]
+            source_url = f"http://127.0.0.1:{port}"
+            response = ctx.request.post(source_url + "/api/overview/archive",
+                                        data={"reviewId": archived_id, "archived": True},
+                                        headers={"Origin": source_url, "X-AE-Review": current_id,
+                                                 "Content-Type": "application/json"})
+            if not response.ok:
+                raise RuntimeError("截图前未能归档合成样例")
+            samples = (
+                ("zh-CN", "zh", "示例咖啡 · 三季度经营回顾", "示例咖啡 · 成本复盘",
+                 "汇总三季度经营表现，重点复核增长来源与成本变化。",
+                 {"purpose": "为下一季度经营安排提供依据", "audience": "经营委员会",
+                  "coreQuestions": ["收入增长由哪些因素带动？", "哪些成本需要进一步核实？"]}),
+                ("en", "en", "Sample Coffee · Q3 business review", "Sample Coffee · Cost review",
+                 "Review Q3 business performance, with a focus on growth drivers and changes in costs.",
+                 {"purpose": "Inform next quarter's operating plan", "audience": "Operating committee",
+                  "coreQuestions": ["What drove revenue growth?", "Which costs need further verification?"]}),
+            )
+            for locale, suffix, current_name, stopped_name, summary, request in samples:
+                source_report = FIXTURE / ("report.en.html" if locale == "en" else "report.html")
+                source_script = FIXTURE / ("script.en.md" if locale == "en" else "script.md")
+                shutil.copyfile(source_report, report)
+                record.update(summary=summary, request=request)
+                record["links"]["sha256"]["report"] = hashlib.sha256(report.read_bytes()).hexdigest()
+                (material / "report-record.json").write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+                build(current, report=source_report, script=source_script, name=current_name, locale=locale)
+                build(stopped, report=report, script=source_script, name=stopped_name, locale=locale)
+                page.goto(source_url + "/")
+                page.wait_for_function("() => document.getElementById('mode').classList.contains('server')")
+                page.select_option("#localePick", locale)
+                page.click("#overviewBtn")
+                page.wait_for_function("name => document.getElementById('overviewList').textContent.includes(name)",
+                                       arg=stopped_name)
+                page.click('[data-review-id="%s"]' % stopped_id)
+                page.wait_for_function("summary => document.getElementById('overviewDetail').textContent.includes(summary)",
+                                       arg=summary)
+                page.locator("#toast").wait_for(state="hidden")
+                page.screenshot(path=str(output / ("overview.%s.png" % suffix)))
+    finally:
+        info_path = stopped / ".annotation-server.json"
+        if info_path.exists():
+            info = json.loads(info_path.read_text())
+            target_url = f"http://127.0.0.1:{info['port']}"
+            try:
+                health = ctx.request.get(target_url + "/api/health").json()
+                if health.get("reviewId") == stopped_id:
+                    ctx.request.post(target_url + "/api/server/stop", data={},
+                                     headers={"Origin": target_url, "X-AE-Review": stopped_id,
+                                              "Content-Type": "application/json"})
+                    wait_until(lambda: not info_path.exists(), page, 5,
+                               condition="回收总览启动的合成审阅服务")
+            except Exception as error:
+                ok(False, "总览启动服务清理失败：%s" % error)
+        ctx.close()
+        stop(srv)
+
+
+
 def receiver_binding_checks(browser, tmp: Path):
     d = tmp / "receiver-binding"
     build(d)
@@ -1758,6 +2011,7 @@ def current_task_controls_checks(browser, tmp: Path):
         if artifacts:
             output = Path(artifacts)
             output.mkdir(parents=True, exist_ok=True)
+            page.locator("#toast").wait_for(state="hidden")
             page.screenshot(path=str(output / "batch-controls.en.png"))
             page.select_option("#localePick", "zh-CN")
             page.screenshot(path=str(output / "batch-controls.zh.png"))
@@ -2049,11 +2303,14 @@ def installed_delivery_checks(browser, tmp: Path):
                 finally:
                     page.unroute(route_path, reject_with_detail)
             if output:
+                page.locator("#toast").wait_for(state="hidden")
+                page.set_viewport_size({"width": 1600, "height": 1100})
                 page.locator("#nlist").scroll_into_view_if_needed()
                 page.screenshot(path=str(output / "viewer.png"))
                 page.keyboard.press("n")
                 page.screenshot(path=str(output / "notes-export.png"))
                 page.keyboard.press("Escape")
+                page.set_viewport_size({"width": 1440, "height": 1000})
 
             # wait 必须在提交前启动，证明浏览器能唤醒安装副本中的接收命令。
             waiter = subprocess.Popen([sys.executable, str(scripts / "notes.py"), "wait", str(review),
@@ -4277,6 +4534,7 @@ SCENARIO_RUNNERS = {
     "current-task-controls": current_task_controls_checks,
     "export-import": export_import_checks,
     "file-mode": file_mode_checks,
+    "review-overview": review_overview_checks,
     "css-fidelity": css_fidelity_checks,
     "server-mode": server_mode_checks,
     "poll-repaint": poll_repaint_checks,

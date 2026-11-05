@@ -63,6 +63,7 @@ Save `report-record.json` next to the report (same directory, i.e. beside the ma
 {
   "schema": "ae-report-record/1",
   "generatedAt": "2026-11-02T09:00:00+08:00",
+  "summary": "New stores drove third-quarter revenue growth, while delivery mix and higher ingredient costs reduced margins. The fourth quarter should prioritize productivity at existing stores.",
   "request": {"purpose": "Quarterly business review", "audience": "Management",
               "coreQuestions": ["Why did revenue grow"], "length": "6 pages", "script": "yes"},
   "sources": [{"path": "materials/q3.md", "status": "read", "coverage": "full text",
@@ -126,6 +127,7 @@ Save `report-record.json` next to the report (same directory, i.e. beside the ma
 
 Field semantics:
 
+- `summary`: write one or two sentences for every newly generated report, describing its content and the problem it addresses so readers can identify it in the review overview. The value must be a string; older records may omit it, and the schema remains `ae-report-record/1`. The overview also shows `request.purpose`, `request.audience`, and `request.coreQuestions`; without a summary it shows “(No summary)” and the cover-page title.
 - `request`: the clarified request from step 0, including what was asked and what was reused.
 - `sources`: the reading registrations from step 1; `status` is `read` / `partial` / `unreadable`; `coverage` states the range actually read, and `partial` must state both the read and unread parts; `partial` / `unreadable` must include `reason`; **`path` is resolved relative to the directory containing the report** — the check entry looks material files up next to the report to verify hashes; `locations` lists locators (PDF pages, Word paragraphs, worksheets and cells); `sha256` is the material content hash (`shasum -a 256` or equivalent) — the check entry uses it to detect later material changes, and a changed material invalidates old verification results. **When all substantive materials are `unreadable`, the draft does not count as complete**; the check entry fails `record.reading`.
 - `method`: what actually generated the output; `kind` is the closed enum `builtin` / `external`, `name` records the method actually used, and `version` any version information available. An external skill must carry `invocation` (how it was invoked and where the artifacts came from — a scanned candidate or a mentioned name is not an invocation; without it the check entry fails `record.method`); a user-specified method that was NOT the one used goes into `requested` with `note` (the reason); capability gaps go into `unavailable`. The check entry verifies these declarations and surfaces the method information in the summary and the structured result. External example: `{"kind": "external", "name": "synthetic-brief-kit", "version": "1.4.2", "invocation": "ran its scripts/make_report.py to generate", "unavailable": []}`.

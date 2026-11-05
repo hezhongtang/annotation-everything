@@ -91,7 +91,11 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
     </td>
   </tr>
   <tr>
-    <td colspan="2" valign="top">
+    <td valign="top">
+      <h4>📚 审阅总览与归档</h4>
+      在浏览器里查看本工作区或本机全部审阅，按状态和最近活动找到材料，查看摘要与待处理提交；直接打开、代为启动或归档审阅。
+    </td>
+    <td valign="top">
       <h4>🔄 正式版本自动更新</h4>
       使用技能时定期检查安装来源的正式版本，自动更新并提示；离线或技能副本有本地改动时保留现有版本。
     </td>
@@ -99,6 +103,16 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
 </table>
 
 对照页可以选择简体中文或英文。生成时传入 `--locale auto`、`zh-CN` 或 `en`，页面上也可以切换，选择只保存在本机浏览器。批注原文保持原样，对象的存储值 `报告`、`讲稿`、`报告和讲稿` 不随语言改变。未配置语言时，新审阅保持中文，已有审阅沿用已保存的选择；`AE_LOCALE` 可覆盖已保存配置，显式参数优先。批注的新增、编辑、删除、重开、引用、快捷删除与改写、放点与框选、重新标注、风格优化、页码、讲稿栏、问答标签、编辑帮助、工具提示和无障碍名称都已支持两种语言；删除确认等对话框同样跟随当前语言。技能输入栏、候选与推荐、空结果、常驻技能的范围标签与增删提示，以及 `notes.py skills` 的输出也按当前语言显示；搜索仍按技能目录里的原始名称和原始说明匹配，常驻技能范围的存储值 `all` / `报告` / `讲稿` / `style` 不变。导出的 Markdown 可以选中文或英文（默认跟随界面），页面和命令行都能跨语言导入。「交给 Agent」弹窗、提交状态徽标、处理记录、回到上次提示和服务未连接时的提示也支持两种语言。提交选项（做到定稿还是停在待复核、是否允许派发子代理、是否全量勾稽）与界面语言无关。
+
+### 审阅总览与归档
+
+<p align="center"><img src="docs/assets/overview.zh.png" alt="合成审阅总览：按状态分组，右侧显示报告摘要、用途、读者、核心问题与启动操作" width="92%"></p>
+
+从任一正在运行的对照页点击「审阅总览」，或打开它的 `/#overview` 地址。默认显示「本工作区」，也可切到「本机全部」。工作区取审阅所在的 git 仓库根目录；不在 git 仓库里时，取审阅目录的上一级。总览显示相对路径，其他工作区的路径用 `~` 开头或只显示审阅名。没有任何审阅运行时，先用 `serve.py <审阅标识>` 启动一份。
+
+左侧按「运行中 / 已停 / 已归档 / 失效」分组，组内按最近活动时间倒序；选中后可看摘要、用途、读者、核心问题、待接收和待复核数。运行中的点「打开」，已停的点「启动并打开」，在新标签页打开目标对照页。代为启动使用专属端口；端口被占用时先释放端口，台账条目或目录失效时先刷新总览，再按提示重试。失效条目提供 `serve.py forget <短标识>` 清理命令。总览里的「回到当前审阅」返回托管它的对照页。
+
+归档把不再推进的审阅从默认列表里收起，保留批注、提交和专属端口，服务继续运行。点击「展开」或勾选「显示已归档」可取消归档。当前审阅已归档时，两种视图都显示横幅，批注和提交照常可用；归档不取消已经提交的处理要求。`serve.py list` 仍列出全部审阅，并标出已归档项。
 
 <details>
 <summary><b>当前任务与停止本地服务</b></summary>
@@ -123,6 +137,8 @@ Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lan
 还没有报告时，可将原始材料与需求交给 Agent，按随技能安装的[内置生成范式](skill/annotation-everything/references/generation.zh-CN.md)生成逐页 HTML 报告和可选讲稿。已明确的需求直接沿用，只补问影响结果的缺项；默认提供[报告基础样式](skill/annotation-everything/references/report-base.css)。用户指定可用的外部生成技能，或任务需要扩展时，可以采用外部方法，产物接受相同核验，并记录实际采用的方法。
 
 材料读取依赖宿主实际可用的能力。Agent 登记已读、部分读取或无法读取的范围与原因，保留关键结论、数值的引用和计算口径；缺口如实披露，全部实质材料不可读时不能宣布初稿完成。报告、所需讲稿与 `report-record.json` 核验记录保存在受控材料位置，记录契约和操作步骤见生成指引。
+
+新生成的报告在核验记录里写一两句 `summary`，供总览识别。字段可选，旧记录仍合法；没有摘要时，总览显示「（无摘要）」和封面页标题。摘要不替代报告核验结论，写法见[生成指引第 4 步「写核验记录」](skill/annotation-everything/references/generation.zh-CN.md)。
 
 「初稿生成完成」与「报告可交付」分别判定：内容可读、结构完整、可审阅且缺口已披露，可以形成初稿；可交付还须通过程序检查和内容、结构、视觉核验，影响核心结论的缺口会阻止交付验收。`report_check.py` 提供结构化结果与可读摘要，只执行确定规则；内容判断与逐页视觉检查由 Agent 实际执行，未执行、无法执行或过期的结果不计为通过。已有报告没有核验记录时仍可直接审阅，无需补建；带记录的报告改稿后维护受影响的核验信息，报告质量判定与批注处理状态分别保留。
 
@@ -317,8 +333,11 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照，并把当前仍有效的通过证据跨阶段引用给后续阶段（`--no-reuse` 强制全部重跑）；`report` 只读记录并展示证据链。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
 | `build_viewer.py --report … [--script …] --out 审阅目录` | 生成对照页；讲稿可选；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
 | `report_check.py 报告.html [--script 讲稿.md] [--record report-record.json]` | 公开报告核验入口：输出可读摘要，`--json` 输出结构化结果，`--locale zh-CN` 或 `en` 选择语言。退出码 0 表示程序检查通过，不等于报告可交付；1 表示检查未通过；2 表示输入或用法错误。内容、结构与视觉覆盖及交付阻塞项分别列出 |
-| `serve.py 审阅目录` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
-| `serve.py list` / `status` / `forget` | 列出本机所有审阅、查看某份审阅的状态、删除不再使用的台账记录 |
+| `serve.py 审阅目录或审阅标识` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
+| `http://127.0.0.1:<端口>/#overview`（浏览器地址） | 打开审阅总览：切换范围、查看详情、打开或代为启动审阅、归档或取消归档；先启动一份本机服务 |
+| `serve.py list [--json]` | 列出本机全部审阅，包含归档项；人读输出和 JSON 都带归档标记 |
+| `serve.py status 审阅目录或审阅标识` | 查看一份审阅的运行状态 |
+| `serve.py forget <短标识>` | 移除确认不再需要的台账记录并释放专属端口；保留审阅目录。总览对失效项提供这条命令，清理仍在命令行执行 |
 | `serve.py check` | 运行服务安全自检 |
 | `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | 绑定接收 harness 与会话、查看身份与状态；Codex 桌面使用事件接收，其他 harness 可用 `--adapter wait`；显式交接用 `bind --replace`，处理中批次先收尾 |
 | `notes.py wait` / `claim` | 等待审阅人提交，或直接接收已有的提交。`wait --locale` 选择交接语言，保留定位、操作与技能要求；`claim` 输出的 JSON 保持原始值 |
@@ -369,8 +388,9 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── i18n.py                    读取共享词典，并按所选语言插值；持进程级的界面语言状态（入口设置一次，各模块共用）；命令行共用的语言样板（取 --locale、翻译 argparse 报错、报告非法语言）
 │   ├── update.py                  检查正式版本并更新技能副本
 │   ├── content_manifest.py        记录技能副本的文件、目录和链接指纹
-│   ├── viewer_template.html       对照页模板（服务模式和本地文件模式）
+│   ├── viewer_template.html       对照页与审阅总览模板（服务模式和本地文件模式）
 │   ├── serve.py                   本机服务：serve / status / list / forget / check
+│   ├── review_overview.py         总览范围、报告摘要与归档标记
 │   ├── wakeup.py                  接收会话绑定；Codex 事件投递、回执与去重
 │   ├── notes.py                   批注命令行：wait / show / resolve / done / review 等
 │   ├── notes_store.py             批注存储：原子写入、文件锁、操作日志

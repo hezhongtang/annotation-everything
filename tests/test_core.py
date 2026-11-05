@@ -19,6 +19,7 @@ import threading
 import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1817,6 +1818,658 @@ class ServerTests(unittest.TestCase):
             srv.server_close()
 
 
+class OverviewTests(unittest.TestCase):
+    """总览从 HTTP 观察多审阅范围，全部使用临时台账和合成材料。"""
+
+    def setUp(self):
+        previous = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+        self.addCleanup(os.environ.__setitem__, "AE_HOME", previous)
+        self.tree = tmpdir()
+        self.workspace = self.tree / "workspace"
+        self.workspace.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.workspace)], check=True, capture_output=True)
+        self.d = self.workspace / "current"
+        self.current = self.build(self.d, "Current review")
+        self.srv = serve.ReviewServer(self.d, 0, log_to_file=False)
+        thread = threading.Thread(target=self.srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread.start()
+        self.addCleanup(self.srv.server_close)
+        self.addCleanup(self.srv.shutdown)
+        self.good = {"Host": f"127.0.0.1:{self.srv.port}"}
+
+    def build(self, directory, name, report=FIXTURE / "report.html", script=FIXTURE / "script.md"):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return build_viewer.build(report, script, directory, name=name)
+
+    def request(self, path):
+        status, headers, raw = serve._req(self.srv.port, "GET", path, self.good)
+        self.assertNotIn("access-control-allow-origin", headers)
+        self.assertEqual(status, 200, raw)
+        return json.loads(raw)
+
+    def start_request(self, body, headers=None):
+        same = {**self.good, "Origin": f"http://127.0.0.1:{self.srv.port}",
+                "Content-Type": "application/json", "X-AE-Review": self.current["reviewId"]}
+        connection = http.client.HTTPConnection(serve.HOST, self.srv.port, timeout=12)
+        try:
+            connection.request("POST", "/api/overview/start", json.dumps(body),
+                               headers=same if headers is None else headers)
+            response = connection.getresponse()
+            self.assertIsNone(response.getheader("Access-Control-Allow-Origin"))
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    def stop_started_review(self, directory, rid):
+        info = serve.read_status(directory)
+        if not info:
+            return
+        port = info["port"]
+        found = serve.probe(port, timeout=0.2)
+        if found and found.get("reviewId") == rid and serve.same_dir(found, directory):
+            serve._req(port, "POST", "/api/server/stop",
+                       {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}",
+                        "Content-Type": "application/json", "X-AE-Review": rid}, {})
+            end = time.monotonic() + 5
+            while time.monotonic() < end and ledger.pid_alive(info["pid"]):
+                time.sleep(0.02)
+
+    def test_starts_stopped_review_on_its_owned_port(self):
+        directory = self.workspace / "stopped"
+        rid = self.build(directory, "Stopped review")["reviewId"]
+        port = free_port()
+        ledger.claim_port(rid, directory, port)
+        self.addCleanup(self.stop_started_review, directory, rid)
+
+        status, result = self.start_request({"reviewId": rid})
+
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["app"], serve.APP)
+        self.assertEqual(result["url"], f"http://127.0.0.1:{port}/")
+        health = serve.probe(port)
+        self.assertEqual((health["reviewId"], health["dir"], health["port"]),
+                         (rid, str(directory.resolve()), port))
+        self.assertNotEqual(health["pid"], os.getpid())
+        self.assertEqual(ledger.get(rid)["port"], port)
+
+    def test_start_with_relative_ledger_home_uses_same_owned_port(self):
+        directory = self.workspace / "relative-ledger"
+        rid = self.build(directory, "Relative ledger review")["reviewId"]
+        port = free_port()
+        ledger.claim_port(rid, directory, port)
+        self.addCleanup(self.stop_started_review, directory, rid)
+        relative_home = os.path.relpath(ledger.home(), Path.cwd())
+
+        with patch.dict(os.environ, {"AE_HOME": relative_home}):
+            status, result = self.start_request({"reviewId": rid})
+
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["url"], f"http://127.0.0.1:{port}/")
+        health = serve.probe(port)
+        self.assertEqual((health["reviewId"], health["dir"], health["port"]),
+                         (rid, str(directory.resolve()), port))
+        self.assertEqual(ledger.get(rid)["port"], port)
+
+    def test_simultaneous_starts_share_one_background_process(self):
+        directory = self.workspace / "double-start"
+        rid = self.build(directory, "Double start review")["reviewId"]
+        port = free_port()
+        ledger.claim_port(rid, directory, port)
+        self.addCleanup(self.stop_started_review, directory, rid)
+        barrier = threading.Barrier(3)
+        results, errors = [], []
+
+        def start():
+            try:
+                barrier.wait(timeout=5)
+                results.append(self.start_request({"reviewId": rid}))
+            except Exception as error:
+                errors.append(error)
+
+        # Popen is the OS process boundary; the children and their ports stay real.
+        with patch.object(subprocess, "Popen", wraps=subprocess.Popen) as spawned:
+            threads = [threading.Thread(target=start) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            barrier.wait(timeout=5)
+            for thread in threads:
+                thread.join(timeout=10)
+            self.assertFalse(errors, errors)
+            self.assertEqual([status for status, _ in results], [200, 200], results)
+            again, opened = self.start_request({"reviewId": rid})
+            self.assertEqual((again, opened["url"]), (200, f"http://127.0.0.1:{port}/"))
+            self.assertEqual(spawned.call_count, 1, "并发点击和再次打开只创建一份后台服务")
+        self.assertEqual({result["url"] for _, result in results}, {opened["url"]})
+
+    def test_start_reuses_a_legacy_service_after_checking_its_health(self):
+        directory = self.workspace / "legacy"
+        rid = self.build(directory, "Legacy running review")["reviewId"]
+
+        class LegacyHandler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_GET(self):
+                body = json.dumps({"app": serve.APP, "version": "0.1.0", "reviewId": rid,
+                                   "dir": str(directory.resolve()), "port": self.server.server_port,
+                                   "pid": os.getpid()}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        legacy = ThreadingHTTPServer((serve.HOST, 0), LegacyHandler)
+        threading.Thread(target=legacy.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+        self.addCleanup(legacy.server_close)
+        self.addCleanup(legacy.shutdown)
+        ledger.claim_port(rid, directory, free_port())
+        (directory / serve.STATUS_FILE).write_text(json.dumps(
+            {"pid": os.getpid(), "port": legacy.server_port, "url": "http://evil.example/"}))
+
+        with patch.object(subprocess, "Popen", side_effect=AssertionError("must reuse legacy service")) as spawned:
+            status, result = self.start_request({"reviewId": rid})
+            self.assertEqual((status, result["url"]), (200, f"http://127.0.0.1:{legacy.server_port}/"))
+            spawned.assert_not_called()
+
+    def test_start_rejects_unknown_invalid_and_non_id_targets_without_a_process(self):
+        valid = self.workspace / "valid"
+        valid_id = self.build(valid, "Valid review")["reviewId"]
+        missing = self.workspace / "gone"
+        missing_id = self.build(missing, "Missing review")["reviewId"]
+        shutil.rmtree(missing)
+        mismatch = self.workspace / "replaced"
+        mismatch_id = self.build(mismatch, "Replaced review")["reviewId"]
+        (mismatch / "review.json").write_text(json.dumps({"reviewId": "f" * 16}))
+        no_index = self.workspace / "no-index"
+        no_index_id = self.build(no_index, "Incomplete review")["reviewId"]
+        (no_index / "index.html").unlink()
+        before = (ledger.home() / ledger.LEDGER_FILE).read_bytes()
+        cases = [(None, 400), ([], 400), ({}, 400), ({"reviewId": None}, 400),
+                 ({"reviewId": valid_id[:8]}, 400), ({"reviewId": "A" * 16}, 400),
+                 ({"reviewId": str(valid)}, 400), ({"reviewId": 8765}, 400),
+                 ({"reviewId": valid_id, "port": 9000}, 400),
+                 ({"reviewId": valid_id, "command": "serve.py"}, 400),
+                 ({"reviewId": "0" * 16}, 404), ({"reviewId": missing_id}, 409),
+                 ({"reviewId": mismatch_id}, 409), ({"reviewId": no_index_id}, 409)]
+        with patch.object(subprocess, "Popen", side_effect=AssertionError("rejected target spawned")) as spawned:
+            for body, expected in cases:
+                with self.subTest(body=body):
+                    status, result = self.start_request(body)
+                    self.assertEqual(status, expected, result)
+                    self.assertNotIn(str(self.workspace), result["error"])
+            spawned.assert_not_called()
+        self.assertEqual((ledger.home() / ledger.LEDGER_FILE).read_bytes(), before)
+        self.assertFalse((valid / serve.STATUS_FILE).exists())
+
+    def test_start_keeps_write_guards_before_creating_a_process(self):
+        directory = self.workspace / "guarded"
+        rid = self.build(directory, "Guarded review")["reviewId"]
+        same = {**self.good, "Origin": f"http://127.0.0.1:{self.srv.port}",
+                "Content-Type": "application/json", "X-AE-Review": self.current["reviewId"]}
+        cases = [({**same, "Host": "evil.example"}, 421, "bad-host"),
+                 ({key: value for key, value in same.items() if key != "Origin"}, 403, "no-origin"),
+                 ({**same, "Origin": "http://evil.example"}, 403, "bad-origin"),
+                 ({**same, "Origin": "null"}, 403, "bad-origin"),
+                 ({**same, "Content-Type": "text/plain"}, 415, "bad-content-type"),
+                 ({**same, "Sec-Fetch-Site": "same-site"}, 403, "cross-site"),
+                 ({**same, "X-AE-Review": rid}, 409, "review-mismatch")]
+        with patch.object(subprocess, "Popen", side_effect=AssertionError("unsafe request spawned")) as spawned:
+            for headers, expected, code in cases:
+                with self.subTest(headers=headers):
+                    status, result = self.start_request({"reviewId": rid}, headers)
+                    self.assertEqual((status, result["code"]), (expected, code), result)
+            spawned.assert_not_called()
+        self.assertIsNone(ledger.get(rid)["port"])
+
+    def test_start_refuses_an_occupied_owned_port_without_falling_back(self):
+        directory = self.workspace / "occupied"
+        rid = self.build(directory, "Occupied port review")["reviewId"]
+        with socket.socket() as blocker:
+            blocker.bind((serve.HOST, 0))
+            blocker.listen()
+            port = blocker.getsockname()[1]
+            ledger.claim_port(rid, directory, port)
+            with patch.object(subprocess, "Popen", side_effect=AssertionError("busy port spawned")) as spawned:
+                status, result = self.start_request({"reviewId": rid})
+                self.assertEqual((status, result["code"]), (409, "overview-port-busy"), result)
+                spawned.assert_not_called()
+        self.assertEqual(ledger.get(rid)["port"], port)
+        self.assertFalse((directory / serve.STATUS_FILE).exists())
+
+    def test_start_timeout_reaps_only_the_process_it_created(self):
+        directory = self.workspace / "timeout"
+        rid = self.build(directory, "Startup timeout review")["reviewId"]
+        port = free_port()
+        ledger.claim_port(rid, directory, port)
+        real_popen, children = subprocess.Popen, []
+
+        def start_unresponsive_child(_command, **options):
+            child = real_popen([sys.executable, "-c", "import time; time.sleep(30)"], **options)
+            children.append(child)
+            return child
+
+        def cleanup():
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=5)
+
+        self.addCleanup(cleanup)
+        with patch.object(subprocess, "Popen", side_effect=start_unresponsive_child):
+            status, result = self.start_request({"reviewId": rid})
+        self.assertEqual((status, result["code"]), (503, "overview-start-failed"), result)
+        self.assertEqual(len(children), 1)
+        self.assertIsNotNone(children[0].poll(), "启动超时必须回收本次子进程")
+        self.assertIsNone(serve.probe(port, timeout=0.2))
+        self.assertEqual(self.request("/api/health")["reviewId"], self.current["reviewId"])
+
+    def test_owned_port_taken_during_start_does_not_return_a_fallback_service(self):
+        directory = self.workspace / "port-race"
+        rid = self.build(directory, "Port race review")["reviewId"]
+        port = free_port()
+        ledger.claim_port(rid, directory, port)
+        real_popen, children = subprocess.Popen, []
+        with socket.socket() as blocker:
+            def take_port_then_start(command, **options):
+                blocker.bind((serve.HOST, port))
+                blocker.listen()
+                child = real_popen(command, **options)
+                children.append(child)
+                return child
+
+            def cleanup():
+                for child in children:
+                    if child.poll() is None:
+                        child.kill()
+                    child.wait(timeout=5)
+
+            self.addCleanup(cleanup)
+            with patch.object(subprocess, "Popen", side_effect=take_port_then_start):
+                status, result = self.start_request({"reviewId": rid})
+            self.assertEqual((status, result["code"]), (503, "overview-start-failed"), result)
+            self.assertEqual(len(children), 1)
+            self.assertIsNotNone(children[0].poll(), "专属端口被抢占时回收本次启动的进程")
+            self.assertEqual(blocker.getsockname(), (serve.HOST, port), "没有停止占用专属端口的程序")
+        self.assertEqual(ledger.get(rid)["port"], port)
+        self.assertFalse((directory / serve.STATUS_FILE).exists())
+
+    def archive(self, review_id, archived):
+        headers = {**self.good, "Origin": f"http://127.0.0.1:{self.srv.port}",
+                   "Content-Type": "application/json", "X-AE-Review": self.current["reviewId"]}
+        status, response, raw = serve._req(self.srv.port, "POST", "/api/overview/archive", headers,
+                                            {"reviewId": review_id, "archived": archived})
+        self.assertNotIn("access-control-allow-origin", response)
+        self.assertEqual(status, 200, raw)
+        return json.loads(raw)
+
+    def test_archive_keeps_service_port_annotations_and_submissions(self):
+        rid = self.current["reviewId"]
+        ledger.assign_port(rid, self.d, prefer=self.srv.port)
+        serve.write_status(self.srv)
+        store.add(self.d, {"page": 1, "text": "Synthetic annotation to retain"})
+        store.handoff_submit(self.d, "Synthetic submission to retain")
+        protected = [ledger.home() / ledger.LEDGER_FILE,
+                     self.d / "review.json", self.d / serve.STATUS_FILE,
+                     self.d / store.NOTES_FILE, self.d / store.HANDOFF_FILE]
+        before = {path: path.read_bytes() for path in protected}
+
+        result = self.archive(rid, True)
+
+        self.assertEqual((result["reviewId"], result["archived"]), (rid, True))
+        self.assertTrue((self.d / ".annotation-archived").is_file())
+        self.assertEqual({path: path.read_bytes() for path in protected}, before)
+        health = self.request("/api/health")
+        self.assertEqual((health["reviewId"], health["port"], health["pid"], health["archived"]),
+                         (rid, self.srv.port, os.getpid(), True))
+        self.assertTrue(self.request("/api/notes")["archived"])
+        current = next(row for row in self.request("/api/overview")["reviews"] if row["current"])
+        self.assertTrue(current["archived"])
+        self.assertEqual((current["port"], current["running"]), (self.srv.port, self.srv.port))
+
+    def test_list_marks_archived_reviews_without_hiding_legacy_reviews(self):
+        peer = self.build(self.workspace / "legacy", "Legacy review without archive marker")
+        rid = self.current["reviewId"]
+        self.archive(rid, True)
+        command = [sys.executable, str(SCRIPTS / "serve.py"), "list"]
+        listed = subprocess.run(command + ["--json"], capture_output=True, text=True, check=True, timeout=30)
+        rows = {row["reviewId"]: row for row in json.loads(listed.stdout)["reviews"]}
+        self.assertEqual(set(rows), {rid, peer["reviewId"]})
+        self.assertTrue(rows[rid]["archived"])
+        self.assertFalse(rows[peer["reviewId"]]["archived"])
+        for locale, marker in (("zh-CN", "已归档"), ("en", "archived")):
+            with self.subTest(locale=locale):
+                human = subprocess.run(command + ["--locale", locale], capture_output=True,
+                                       text=True, check=True, timeout=30).stdout
+                self.assertIn("Current review", human)
+                self.assertIn("Legacy review without archive marker", human)
+                self.assertEqual(human.count(marker), 1)
+
+    def test_archived_rows_follow_stopped_rows_but_invalid_rows_stay_last(self):
+        stopped = self.build(self.workspace / "stopped", "Stopped review")
+        invalid_dir = self.workspace / "invalid"
+        invalid = self.build(invalid_dir, "Invalid archived review")
+        self.archive(invalid["reviewId"], True)
+        manifest = json.loads((invalid_dir / "review.json").read_text())
+        manifest["reviewId"] = "f" * 16
+        (invalid_dir / "review.json").write_text(json.dumps(manifest))
+        ledger.assign_port(self.current["reviewId"], self.d, prefer=self.srv.port)
+        serve.write_status(self.srv)
+        self.archive(self.current["reviewId"], True)
+
+        rows = self.request("/api/overview")["reviews"]
+
+        self.assertEqual([row["reviewId"] for row in rows],
+                         [stopped["reviewId"], self.current["reviewId"], invalid["reviewId"]])
+        self.assertEqual((rows[1]["state"], rows[1]["archived"]), ("running", True))
+        self.assertEqual((rows[2]["state"], rows[2]["archived"]), ("mismatch", True))
+        self.assertIsNone(rows[2]["url"])
+
+    def test_archive_and_unarchive_another_review_keep_current_identity_and_ledger(self):
+        peer_dir = self.workspace / "peer"
+        peer = self.build(peer_dir, "Peer review")
+        rid = peer["reviewId"]
+        ledger.assign_port(rid, peer_dir, prefer=61234)
+        ledger_before = (ledger.home() / ledger.LEDGER_FILE).read_bytes()
+
+        result = self.archive(rid, True)
+
+        self.assertEqual((result["reviewId"], result["archived"]), (rid, True))
+        self.assertTrue((peer_dir / ".annotation-archived").is_file())
+        self.assertFalse(self.request("/api/notes")["archived"])
+        self.assertFalse((self.d / ".annotation-archived").exists())
+        peer_row = next(row for row in self.request("/api/overview")["reviews"] if row["reviewId"] == rid)
+        self.assertEqual((peer_row["archived"], peer_row["port"]), (True, 61234))
+        for _ in range(2):
+            restored = self.archive(rid, False)
+            self.assertEqual((restored["reviewId"], restored["archived"]), (rid, False))
+            self.assertFalse((peer_dir / ".annotation-archived").exists())
+        self.assertEqual((ledger.home() / ledger.LEDGER_FILE).read_bytes(), ledger_before)
+
+    def test_archived_review_survives_rebuild_and_accepts_annotations_and_submissions(self):
+        rid = self.current["reviewId"]
+        self.archive(rid, True)
+        rebuilt = self.build(self.d, "Current review")
+        self.assertEqual(rebuilt["reviewId"], rid)
+        self.assertTrue((self.d / ".annotation-archived").is_file())
+        self.assertTrue(self.request("/api/notes")["archived"])
+        headers = {**self.good, "Origin": f"http://127.0.0.1:{self.srv.port}",
+                   "Content-Type": "application/json", "X-AE-Review": rid}
+        status, _, raw = serve._req(self.srv.port, "POST", "/api/notes", headers,
+                                    {"page": 1, "text": "Synthetic annotation after archiving"})
+        self.assertEqual(status, 201, raw)
+        status, _, raw = serve._req(self.srv.port, "POST", "/api/handoff", headers,
+                                    {"message": "Synthetic submission after archiving", "receiverBindingId": None})
+        self.assertEqual(status, 200, raw)
+        state = self.request("/api/notes")
+        self.assertEqual(state["notes"][0]["text"], "Synthetic annotation after archiving")
+        self.assertEqual(state["handoff"]["pending"], 1)
+        protected = [self.d / store.NOTES_FILE, self.d / store.HANDOFF_FILE,
+                     ledger.home() / ledger.LEDGER_FILE]
+        before = {path: path.read_bytes() for path in protected}
+
+        self.archive(rid, False)
+
+        self.assertFalse((self.d / ".annotation-archived").exists())
+        self.assertFalse(self.request("/api/notes")["archived"])
+        self.assertEqual({path: path.read_bytes() for path in protected}, before)
+
+    def test_archive_preserves_host_origin_content_type_and_current_identity_guards(self):
+        same = {**self.good, "Origin": f"http://127.0.0.1:{self.srv.port}",
+                "Content-Type": "application/json", "X-AE-Review": self.current["reviewId"]}
+        guards = [({**same, "Host": "evil.example"}, 421),
+                  ({key: value for key, value in same.items() if key != "Origin"}, 403),
+                  ({**same, "Origin": "http://evil.example"}, 403),
+                  ({**same, "Content-Type": "text/plain"}, 415),
+                  ({**same, "Sec-Fetch-Site": "cross-site"}, 403),
+                  ({**same, "X-AE-Review": "f" * 16}, 409)]
+        for archived in (True, False):
+            for headers, expected in guards:
+                with self.subTest(archived=archived, headers=headers):
+                    status, response, raw = serve._req(self.srv.port, "POST", "/api/overview/archive", headers,
+                                                       {"reviewId": self.current["reviewId"], "archived": archived})
+                    self.assertEqual(status, expected, raw)
+                    self.assertNotIn("access-control-allow-origin", response)
+        self.assertFalse((self.d / ".annotation-archived").exists())
+
+    def test_archive_refuses_bad_unregistered_missing_and_mismatched_targets(self):
+        missing_dir = self.workspace / "missing"
+        missing_id = self.build(missing_dir, "Missing review")["reviewId"]
+        missing_dir.rename(self.tree / "moved")
+        mismatch_dir = self.workspace / "mismatch"
+        mismatch_id = self.build(mismatch_dir, "Mismatched review")["reviewId"]
+        manifest = json.loads((mismatch_dir / "review.json").read_text())
+        manifest["reviewId"] = "e" * 16
+        (mismatch_dir / "review.json").write_text(json.dumps(manifest))
+        ledger_before = (ledger.home() / ledger.LEDGER_FILE).read_bytes()
+        same = {**self.good, "Origin": f"http://127.0.0.1:{self.srv.port}", "Content-Type": "application/json",
+                "X-AE-Review": self.current["reviewId"]}
+        targets = [(None, True, 400), (self.current["reviewId"][:8], True, 400),
+                   (str(self.d), True, 400), ("f" * 16, True, 404),
+                   (missing_id, True, 409), (mismatch_id, False, 409)]
+        targets += [(self.current["reviewId"], value, 400) for value in (None, 0, 1, "true", [], {})]
+        for target, archived, expected in targets:
+            with self.subTest(target=target, archived=archived):
+                status, response, raw = serve._req(self.srv.port, "POST", "/api/overview/archive", same,
+                                                   {"reviewId": target, "archived": archived})
+                self.assertEqual(status, expected, raw)
+                self.assertNotIn("access-control-allow-origin", response)
+        self.assertFalse(missing_dir.exists())
+        self.assertFalse((mismatch_dir / ".annotation-archived").exists())
+        self.assertFalse((self.d / ".annotation-archived").exists())
+        self.assertEqual((ledger.home() / ledger.LEDGER_FILE).read_bytes(), ledger_before)
+
+    def test_workspace_and_machine_scope_keep_paths_private(self):
+        self.build(self.workspace / "second", "Second review")
+        self.build(self.workspace / "nested" / "third", "Third review")
+        self.build(self.tree / "elsewhere" / "fourth", "Outside review")
+        local = self.request("/api/overview?scope=workspace")
+        self.assertEqual(local["workspace"], "workspace")
+        self.assertEqual(len(local["reviews"]), 3)
+        self.assertEqual(sum(row["current"] for row in local["reviews"]), 1)
+        all_reviews = self.request("/api/overview?scope=all")["reviews"]
+        self.assertEqual(len(all_reviews), 4)
+        for row in all_reviews:
+            self.assertFalse(Path(row["path"]).is_absolute(), row)
+            self.assertNotIn(str(self.tree), json.dumps(row), row)
+
+    def test_report_metadata_reads_next_to_source_and_preserves_text(self):
+        material = self.workspace / "synthetic-material"
+        material.mkdir()
+        report = material / "report.html"
+        report.write_text('<!doctype html><title>Synthetic document</title>'
+                          '<section class="page" data-page="1" data-key="cover">'
+                          '<h1>Synthetic cover title</h1></section>', encoding="utf-8")
+        record = {"schema": "ae-report-record/1", "generatedAt": "2026-11-03T12:00:00Z",
+                  "summary": "Revenue grew. 📈 <b>Review costs.</b>",
+                  "request": {"purpose": "Quarterly decision 🧭", "audience": "Management 👥",
+                              "coreQuestions": ["Why growth? 📊", "Which costs?"]},
+                  "sources": [{"path": str(material / "private-material.md")}],
+                  "method": {}, "links": {"report": "report.html", "sha256": {"report": "synthetic"}},
+                  "findings": [], "gaps": [], "checks": [], "openItems": [], "verdict": {}}
+        record_path = material / "report-record.json"
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+        directory = self.workspace / "metadata-review"
+        rid = self.build(directory, "Synthetic metadata review", report=report, script=None)["reviewId"]
+        # 总览沿着报告来源找记录，不读取审阅目录里同名的无关文件。
+        (directory / "report-record.json").write_text('{"summary": "Wrong directory"}', encoding="utf-8")
+        row = next(row for row in self.request("/api/overview")["reviews"] if row["reviewId"] == rid)
+        self.assertEqual(row["summary"], "Revenue grew. 📈 <b>Review costs.</b>")
+        self.assertEqual(row["purpose"], "Quarterly decision 🧭")
+        self.assertEqual(row["audience"], "Management 👥")
+        self.assertEqual(row["coreQuestions"], ["Why growth? 📊", "Which costs?"])
+        self.assertEqual(row["coverTitle"], "Synthetic cover title")
+        self.assertNotIn(str(material), json.dumps(row))
+        self.assertNotIn("sources", row)
+        record["summary"] = "Updated after the review was built."
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+        updated = next(row for row in self.request("/api/overview")["reviews"] if row["reviewId"] == rid)
+        self.assertEqual(updated["summary"], "Updated after the review was built.")
+
+    def test_missing_record_falls_back_to_report_cover_title_not_script_heading(self):
+        row = next(row for row in self.request("/api/overview")["reviews"]
+                   if row["reviewId"] == self.current["reviewId"])
+        self.assertEqual((row["summary"], row["purpose"], row["audience"], row["coreQuestions"]),
+                         ("", "", "", []))
+        self.assertEqual(row["coverTitle"], "示例咖啡 2030 年三季度经营回顾")
+
+    def test_damaged_report_records_leave_metadata_empty_without_breaking_overview(self):
+        material = self.workspace / "damaged-material"
+        material.mkdir()
+        report = material / "report.html"
+        report.write_text('<section class="page" data-page="1" data-key="cover">'
+                          '<h1>Synthetic damaged-record cover</h1></section>', encoding="utf-8")
+        rid = self.build(self.workspace / "damaged", "Synthetic damaged record", report=report, script=None)["reviewId"]
+        record = {"schema": "ae-report-record/1", "generatedAt": "2026-11-03T12:00:00Z",
+                  "summary": "This metadata must not survive a damaged record.",
+                  "request": {"purpose": "Quarterly decision", "audience": "Management",
+                              "coreQuestions": ["Why growth?"]},
+                  "sources": [], "method": {},
+                  "links": {"report": "report.html", "sha256": {"report": "synthetic"}},
+                  "findings": [], "gaps": [], "checks": [], "openItems": [], "verdict": {}}
+        malformed = [b"{ not json", b"\xff", b"[]", b"{}",
+                     json.dumps({**record, "schema": "ae-report-record/99"}).encode(),
+                     json.dumps({**record, "summary": None}).encode(),
+                     json.dumps({**record, "request": []}).encode(),
+                     json.dumps({**record, "request": {"purpose": 7}}).encode(),
+                     json.dumps({**record, "request": {"coreQuestions": ["Why?", {}]}}).encode(),
+                     ("[" * 20000 + "]" * 20000).encode()]
+        for text in ("\ud800", "\udfff"):
+            malformed.extend(json.dumps(damaged).encode() for damaged in (
+                {**record, "summary": text},
+                {**record, "request": {**record["request"], "purpose": text}},
+                {**record, "request": {**record["request"], "audience": text}},
+                {**record, "request": {**record["request"], "coreQuestions": ["Why?", text]}},
+            ))
+        for content in malformed:
+            with self.subTest(content=content[:80]):
+                (material / "report-record.json").write_bytes(content)
+                rows = self.request("/api/overview")["reviews"]
+                self.assertEqual(len(rows), 2)
+                row = next(row for row in rows if row["reviewId"] == rid)
+                self.assertEqual((row["summary"], row["purpose"], row["audience"], row["coreQuestions"]),
+                                 ("", "", "", []))
+                self.assertEqual(row["coverTitle"], "Synthetic damaged-record cover")
+
+    def test_old_records_and_source_locations_keep_overview_metadata(self):
+        material = self.workspace / "legacy-material"
+        material.mkdir()
+        report = material / "report.html"
+        report.write_text('<section class="page" data-page="1" data-key="cover">'
+                          '<h1>Synthetic legacy cover</h1></section>', encoding="utf-8")
+        record = {"schema": "ae-report-record/1", "generatedAt": "2026-11-03T12:00:00Z",
+                  "request": {"purpose": "Legacy quarterly decision", "audience": "Management",
+                              "coreQuestions": ["What changes next?"]},
+                  "sources": [], "method": {},
+                  "links": {"report": "report.html", "sha256": {"report": "synthetic"}},
+                  "findings": [], "gaps": [], "checks": [], "openItems": [], "verdict": {}}
+        (material / "report-record.json").write_text(json.dumps(record), encoding="utf-8")
+        decoy = self.workspace / "other-material"
+        decoy.mkdir()
+        (decoy / "report.html").write_text(report.read_text(encoding="utf-8"), encoding="utf-8")
+        (decoy / "report-record.json").write_text(json.dumps({**record, "summary": "Wrong source"}), encoding="utf-8")
+        directory = self.workspace / "legacy-review"
+        rid = self.build(directory, "Synthetic legacy review", report=report, script=None)["reviewId"]
+        original = json.loads((directory / "review.json").read_text(encoding="utf-8"))
+        relative = original["sources"]["report"]
+        formats = [
+            {"sources": {"report": relative, "script": "missing-script.md"},
+             "sourcesAbs": {"report": str(decoy / "report.html")}},
+            {"sources": {"report": "missing-report.html"}, "sourcesAbs": {"report": str(report)}},
+            {"sourcesRel": {"report": relative}, "sources": {"report": str(decoy / "report.html")}},
+        ]
+        for source_format in formats:
+            with self.subTest(source_format=source_format):
+                (directory / "review.json").write_text(json.dumps({**original, **source_format}), encoding="utf-8")
+                row = next(row for row in self.request("/api/overview")["reviews"] if row["reviewId"] == rid)
+                self.assertEqual(row["summary"], "")
+                self.assertEqual(row["purpose"], "Legacy quarterly decision")
+                self.assertEqual(row["audience"], "Management")
+                self.assertEqual(row["coreQuestions"], ["What changes next?"])
+                self.assertEqual(row["coverTitle"], "Synthetic legacy cover")
+
+    def test_activity_order_counts_running_and_invalid_entries(self):
+        older = self.workspace / "older"
+        recent = self.workspace / "recent"
+        older_id = self.build(older, "Older review")["reviewId"]
+        recent_id = self.build(recent, "Recent review")["reviewId"]
+        store.add(older, {"page": 1, "text": "Synthetic pending annotation"})
+        store.handoff_submit(older, "Synthetic submission")
+        store.handoff_submit(recent, "Synthetic review", target="review")
+        store.handoff_claim(recent)
+        draft = store.handoff_done(recent, summary="Synthetic draft finished")
+        store.handoff_request_review(recent, draft["seq"], "Synthetic request for review")
+        for directory, activity in ((older, 100), (recent, 300)):
+            for filename in (store.NOTES_FILE, store.HANDOFF_FILE):
+                if (directory / filename).exists():
+                    os.utime(directory / filename, (activity, activity))
+        missing = self.workspace / "missing"
+        missing_id = self.build(missing, "Missing review")["reviewId"]
+        missing.rename(self.tree / "moved")
+        mismatch = self.workspace / "mismatch"
+        mismatch_id = self.build(mismatch, "Mismatched review")["reviewId"]
+        manifest = json.loads((mismatch / "review.json").read_text())
+        manifest["reviewId"] = "f" * 16
+        (mismatch / "review.json").write_text(json.dumps(manifest))
+        ledger.assign_port(self.current["reviewId"], self.d, prefer=self.srv.port)
+        serve.write_status(self.srv)
+
+        rows = self.request("/api/overview")["reviews"]
+        self.assertEqual([row["reviewId"] for row in rows[:3]],
+                         [self.current["reviewId"], recent_id, older_id])
+        by_id = {row["reviewId"]: row for row in rows}
+        self.assertEqual(by_id[recent_id]["lastActivity"], 300)
+        self.assertEqual(by_id[older_id]["lastActivity"], 100)
+        self.assertEqual(by_id[self.current["reviewId"]]["url"], f"http://127.0.0.1:{self.srv.port}/")
+        self.assertEqual(by_id[missing_id]["state"], "missing")
+        self.assertEqual(by_id[mismatch_id]["state"], "mismatch")
+        for rid in (missing_id, mismatch_id):
+            self.assertIsNone(by_id[rid]["url"])
+            self.assertEqual(by_id[rid]["forgetCommand"], f"serve.py forget {rid[:8]}")
+            self.assertEqual((by_id[rid]["summary"], by_id[rid]["purpose"], by_id[rid]["audience"],
+                              by_id[rid]["coreQuestions"], by_id[rid]["coverTitle"]), ("", "", "", [], ""))
+        listed = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "list", "--json"],
+                                capture_output=True, text=True, check=True, timeout=30)
+        for row in json.loads(listed.stdout)["reviews"]:
+            actual = by_id[row["reviewId"]]
+            self.assertEqual((actual["pending"], actual["review"]), (row["pending"], row["review"]))
+        self.assertEqual((by_id[older_id]["pending"], by_id[recent_id]["review"]), (1, 1))
+
+    def test_non_git_review_uses_parent_without_including_prefix_siblings(self):
+        loose = self.tree / "loose"
+        current = loose / "current"
+        self.build(current, "Loose current")
+        self.build(loose / "nested" / "peer", "Loose peer")
+        self.build(self.tree / "loose-extra" / "outside", "Prefix sibling")
+        server = serve.ReviewServer(current, 0, log_to_file=False)
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        status, _, raw = serve._req(server.port, "GET", "/api/overview",
+                                    {"Host": f"127.0.0.1:{server.port}"})
+        self.assertEqual(status, 200, raw)
+        result = json.loads(raw)
+        self.assertEqual(result["workspace"], "loose")
+        self.assertEqual({row["path"] for row in result["reviews"]}, {"current", "nested/peer"})
+
+    def test_overview_keeps_host_origin_identity_and_scope_guards(self):
+        for headers, expected in (({"Host": "evil.example"}, 421),
+                                  ({**self.good, "Origin": "http://evil.example"}, 403),
+                                  ({**self.good, "Sec-Fetch-Site": "same-site"}, 403),
+                                  ({**self.good, "X-AE-Review": "f" * 16}, 409)):
+            with self.subTest(headers=headers):
+                status, response, _ = serve._req(self.srv.port, "GET", "/api/overview", headers)
+                self.assertEqual(status, expected)
+                self.assertNotIn("access-control-allow-origin", response)
+        for query in ("scope=", "scope=unknown", "scope=all&scope=workspace"):
+            with self.subTest(query=query):
+                status, _, raw = serve._req(self.srv.port, "GET", "/api/overview?" + query, self.good)
+                self.assertEqual(status, 400, raw)
+                self.assertEqual(json.loads(raw)["code"], "bad-scope")
+        status, _, _ = serve._req(self.srv.port, "GET", "/overview", self.good)
+        self.assertEqual(status, 404, "总览仍是 index.html 内的视图，不新增可访问路径")
+
+
 class LedgerTests(unittest.TestCase):
     """审阅台账、审阅名、专属端口。每个用例用自己的台账目录。"""
 
@@ -2008,10 +2661,11 @@ class LedgerTests(unittest.TestCase):
         def start(*extra):
             p = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), r["reviewId"][:8], "--no-open", *extra],
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-            sf = d / serve.STATUS_FILE
+            self.addCleanup(stop, p)
             for _ in range(80):
-                if sf.exists() and json.loads(sf.read_text()).get("pid") == p.pid:
-                    return p, json.loads(sf.read_text())["port"]
+                info = serve.read_status(d) or {}
+                if info.get("pid") == p.pid:
+                    return p, info["port"]
                 if p.poll() is not None:
                     break
                 time.sleep(0.1)
@@ -2488,7 +3142,8 @@ class ServeRequestReadsTests(unittest.TestCase):
                 self.assertEqual(code, 200)
                 self.assertEqual(set(notes), {"version", "rev", "updatedAt", "notes", "indexMtime",
                                               "handoff", "agentDelivery", "skillCatalog", "alwaysSkills",
-                                              "app", "reviewId", "name", "features", "receiver"})
+                                              "app", "reviewId", "name", "features", "receiver", "archived"})
+                self.assertFalse(notes["archived"])
                 self.assertEqual(notes["handoff"], store.handoff_state(review, full=False))
                 self.assertEqual(notes["agentDelivery"], wakeup.public_status(review))
                 self.assertEqual(notes["skillCatalog"], store.skills_catalog(review))
@@ -2501,7 +3156,8 @@ class ServeRequestReadsTests(unittest.TestCase):
                 code, health = self.request(path="/api/health")
                 self.assertEqual(code, 200)
                 self.assertEqual(set(health), {"app", "reviewId", "name", "version", "features", "receiver",
-                                               "dir", "pid", "port", "hook", "agentDelivery"})
+                                               "dir", "pid", "port", "hook", "agentDelivery", "archived"})
+                self.assertFalse(health["archived"])
                 self.assertEqual(health["agentDelivery"], wakeup.public_status(review))
                 self.assertEqual(health["receiver"], wakeup.receiver_status(review, srv.agent_binding))
                 self.assertEqual((health["dir"], health["pid"], health["port"], health["hook"]),
@@ -2510,7 +3166,8 @@ class ServeRequestReadsTests(unittest.TestCase):
                 self.assertEqual(code, 200)
                 summary = store.handoff_state(review)
                 self.assertEqual(set(full), set(summary) | {
-                    "app", "reviewId", "name", "version", "features", "receiver"})
+                    "app", "reviewId", "name", "version", "features", "receiver", "archived"})
+                self.assertFalse(full["archived"])
                 self.assertEqual({k: full[k] for k in summary}, summary)
                 self.assertEqual(full["receiver"], wakeup.receiver_status(review, srv.agent_binding))
 
@@ -2546,7 +3203,8 @@ class ServeRequestReadsTests(unittest.TestCase):
                 code, body = self.request("POST", "/api/skills/always", {"always": [{"name": "sk", "scope": "all"}]})
                 self.assertEqual(code, 200)
                 self.assertEqual(set(body), {"alwaysSkills", "app", "reviewId", "name", "version",
-                                             "features", "receiver"})
+                                             "features", "receiver", "archived"})
+                self.assertFalse(body["archived"])
                 self.assertEqual(body["receiver"], wakeup.receiver_status(review, srv.agent_binding))
                 self.assertEqual(body["alwaysSkills"], [{"name": "sk", "scope": "all"}])
                 code, body = self.request("POST", "/api/handoff", {"message": "合成", **receiver})
@@ -2572,18 +3230,19 @@ class ServeRequestReadsTests(unittest.TestCase):
         unbound = {"adapter": None, "state": "unconfigured", "receiver": {"state": "unconfigured"}}
         # 台账里存的是解析后的目录（登记时 resolve）
         self.assertEqual(rows["a" * 16], {"reviewId": "a" * 16, "dir": str(pending.resolve()), "port": None,
-                                          "name": "合成审阅", "state": "已停", "state_id": "stopped",
+                                          "name": "合成审阅", "state": "已停", "state_id": "stopped", "archived": False,
                                           "running": None, "pending": 1, "review": 1, "waiting": False,
                                           "hook": False, "unattended": True, "agentDelivery": unbound,
                                           "receiptConfirmed": None})
         self.assertEqual(rows["b" * 16], {"reviewId": "b" * 16, "dir": str(corrupt.resolve()), "port": None,
-                                          "name": "合成审阅", "state": "已停", "state_id": "stopped",
+                                          "name": "合成审阅", "state": "已停", "state_id": "stopped", "archived": False,
                                           "running": None, "pending": 0, "review": 0, "waiting": False,
                                           "hook": False, "unattended": False, "agentDelivery": unbound,
                                           "receiptConfirmed": None})
         self.assertEqual({k: v for k, v in rows["c" * 16].items() if k != "agentDelivery"},
                          {"reviewId": "c" * 16, "dir": str(waiting.resolve()), "port": None, "name": "合成审阅",
                           "state": "已停", "state_id": "stopped", "running": None, "pending": 0,
+                          "archived": False,
                           "review": 0, "waiting": True, "hook": False, "unattended": False,
                           "receiptConfirmed": None})
         self.assertEqual(rows["c" * 16]["agentDelivery"]["state"], "bound")

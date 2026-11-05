@@ -247,6 +247,22 @@ class ValidInputsTests(unittest.TestCase):
         self.assertIn("Draft", en)
         self.assertIn("not", en.lower() or en)   # 英文摘要说明未执行项
 
+    def test_report_summary_is_optional_but_must_be_text(self):
+        for fields, valid in (({}, True), ({"summary": "Synthetic revenue review."}, True),
+                              ({"summary": ""}, True), ({"summary": None}, False),
+                              ({"summary": 42}, False), ({"summary": True}, False),
+                              ({"summary": []}, False), ({"summary": {}}, False)):
+            with self.subTest(fields=fields):
+                paths = write_case(tmpdir(), record=make_record(**fields))
+                code, payload, _, _ = run_check(paths, locale="en", argv_extra=["--json"])
+                item = check_by_id(payload, "record.structure")
+                self.assertEqual(code, 0 if valid else 1)
+                self.assertEqual(item["status"], "pass" if valid else "fail")
+                self.assertEqual(payload["record"]["version"], RECORD_SCHEMA if valid else None)
+                if not valid:
+                    self.assertEqual(item["code"], "record.bad-type")
+                    self.assertIn("summary", item["detail"])
+
     def test_report_only_no_record(self):
         d = tmpdir()
         paths = write_case(d, script=None)
@@ -387,14 +403,15 @@ class RecordStructureTests(unittest.TestCase):
     """损坏记录、未知版本与缺失字段的明确报错。"""
 
     def test_broken_record(self):
-        d = tmpdir()
-        paths = write_case(d, record_text="{ not json")
-        code, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
-        self.assertEqual(code, 1)
-        item = check_by_id(payload, "record.structure")
-        self.assertEqual(item["status"], "fail")
-        self.assertEqual(item["code"], "record.broken")
-        self.assertTrue(item["detail"].strip())
+        for text in ("{ not json", "[" * 20000 + "]" * 20000):
+            with self.subTest(record=text[:80]):
+                paths = write_case(tmpdir(), record_text=text)
+                code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+                self.assertEqual(code, 1)
+                item = check_by_id(payload, "record.structure")
+                self.assertEqual(item["status"], "fail")
+                self.assertEqual(item["code"], "record.broken")
+                self.assertTrue(item["detail"].strip())
 
     def test_unknown_record_version(self):
         d = tmpdir()
