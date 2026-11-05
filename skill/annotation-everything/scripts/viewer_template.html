@@ -4,253 +4,347 @@
 <meta name="generator" content="annotation-everything">
 <title>__TITLE__</title>
 <style>
-:root{--ae-bg:#f4f5f7;--ae-panel:#fff;--ae-ink:#1d2330;--ae-mut:#6b7280;--ae-line:#e3e6eb;--ae-navy:#1f3a5f;--ae-accent:#2a78d6;--ae-qa:#f6f8fb;--ae-warm:#fdf6e3;--ae-red:#d94a38;--ae-green:#16794d}
+:root{
+  --ae-bg:#f6f7f9;--ae-panel:#fff;--ae-ink:#1f2328;--ae-mut:#656d76;--ae-line:#d9dee4;
+  --ae-navy:#1e3a5f;--ae-accent:#3769ad;--ae-qa:#f6f8fb;--ae-warm:#fff7e7;
+  --ae-red:#cf222e;--ae-green:#1f883d;--ae-activity:#24272e;--ae-stage:#e8ebef;
+  --ae-warning:#9d3328;--ae-on-dark:#e3eaf3;--ae-selected:#dfe7f2;
+  --ae-font:"PingFang SC","Noto Sans CJK SC",system-ui,sans-serif;
+  --ae-text:13px;--ae-small:12px;--ae-title:15px;--ae-radius:6px;--ae-radius-lg:10px;
+  --ae-space:8px;--ae-space-lg:16px;--ae-shadow:0 6px 24px rgba(31,35,40,.2);
+  --ae-rail:48px;--ae-sidebar:224px;--ae-panel-height:264px;
+
+  --ae-activity-muted:#b1b8c2;--ae-signal:#79d68e;--ae-danger-bg:#fff0ee;--ae-danger-line:#edc4bd;--ae-amber:#865d20;
+  --ae-warm-line:#e4d2ab;--ae-success-bg:#edf5ef;--ae-success-line:#cddfd1;--ae-accent-line:#bdcde2;--ae-purple:#684c96;
+  --ae-purple-bg:#f2edf8;--ae-micro:10px;--ae-badge:11px;--ae-compact:12.5px;--ae-body-small:13.5px;
+  --ae-body:14px;--ae-body-large:14.5px;--ae-section:15.5px;--ae-lead:16.5px;--ae-dialog-title:17px;
+  --ae-heading:18px;--ae-help-title:19px;--ae-review-title:21px;--ae-radius-xs:4px;--ae-radius-sm:5px;
+  --ae-radius-md:8px;--ae-radius-xl:12px;--ae-radius-pill:999px;--ae-shadow-focus:0 0 0 4px rgba(207,34,46,.3);--ae-gap-2:2px;
+  --ae-gap-3:3px;--ae-gap-4:4px;--ae-gap-5:5px;--ae-gap-6:6px;--ae-gap-7:7px;
+  --ae-gap-9:9px;--ae-gap-10:10px;--ae-gap-12:12px;--ae-gap-14:14px;--ae-gap-18:18px;
+  --ae-gap-20:20px;--ae-gap-22:22px;--ae-gap-24:24px;--ae-gap-28:28px;
+}
 *{box-sizing:border-box} html,body{height:100%;margin:0}
 html{font-size:__ROOTFS__}
-body{font-family:"PingFang SC","Noto Sans CJK SC",system-ui,sans-serif;background:var(--ae-bg);color:var(--ae-ink);display:flex;flex-direction:column}
-header{display:flex;align-items:center;gap:12px;padding:10px 18px;background:var(--ae-navy);color:#fff;flex-wrap:wrap}
-header h1{font-size:15px;font-weight:600;margin:0;flex:1 1 260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-header .stat{font-size:13px;opacity:.9;white-space:nowrap}
-header button,header select{font:inherit;font-size:13px;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.1);color:#fff;border-radius:6px;padding:5px 10px;cursor:pointer}
-header label{display:flex;align-items:center;gap:6px;font-size:13px;white-space:nowrap}
-header select option{color:#111}
-#mode{font-size:12px;border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:help;border:1px solid rgba(255,255,255,.3)}
-#mode.server{background:#1d6b47}#mode.server.old{background:#9b2c1f}#mode.offline{background:#8a5a12}#mode.mismatch{background:#9b2c1f}#mode.file{background:rgba(255,255,255,.12)}
-#legacyBtn,#strayBtn{display:none;background:#8a5a12}
-#reloadBtn{display:none;background:#2a78d6;border-color:#2a78d6}
-header #handBtn{background:var(--ae-red);border-color:var(--ae-red)}
-#handState{display:none;font-size:12px;border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:pointer;border:1px solid rgba(255,255,255,.3)}
-#agentDelivery{font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#receiver{font-size:12px;border:1px solid rgba(255,255,255,.3);border-radius:6px;padding:4px 9px;overflow-wrap:anywhere}
-#receiver.warn{color:#fde68a;border-color:#d9b95e}
-#handState.pending{display:inline-block;background:#8a5a12}#handState.claimed{display:inline-block;background:#2a78d6}
-#handState.done{display:inline-block;background:#1d6b47}#handState.drafted,#handState.review{display:inline-block;background:#b7791f}#handState.reviewing{display:inline-block;background:#2a78d6}#handState.queued{display:inline-block;background:#6b7280}
-.resume{display:none;align-items:center;gap:10px;flex-wrap:wrap;padding:7px 18px;background:#fff8e6;border-bottom:1px solid #f0dfb0;font-size:13px;color:#5c4a12}
+body{font-family:var(--ae-font);overflow:hidden;background:var(--ae-bg);color:var(--ae-ink);display:flex;flex-direction:column}
+header{position:relative;display:flex;align-items:center;gap:var(--ae-space-lg);height:48px;flex:none;padding:0 var(--ae-gap-12) 0 0;background:var(--ae-panel);color:var(--ae-ink);border-bottom:1px solid var(--ae-line);white-space:nowrap}
+header h1{font-size:var(--ae-text);font-weight:600;margin:0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.brand{width:var(--ae-rail);height:100%;flex:none;display:grid;place-items:center;background:var(--ae-activity);color:var(--ae-panel);font-size:var(--ae-text);font-weight:700}
+button,select{font-family:inherit;color:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible,select:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px solid var(--ae-accent);outline-offset:2px}
+button:disabled{cursor:default;opacity:.5}
+header button{height:30px;font-size:var(--ae-text);border:1px solid var(--ae-line);background:var(--ae-panel);border-radius:var(--ae-radius);padding:0 var(--ae-gap-10);flex:none}
+.layout-controls{display:flex;align-items:center;gap:var(--ae-gap-2);margin-left:auto;border-right:1px solid var(--ae-line);padding-right:var(--ae-space)}
+header .icon-button{width:30px;padding:0;border:0;background:transparent}
+.icon{width:18px;height:18px;vertical-align:middle;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.icon-button{display:inline-grid;place-items:center;flex:none}
+.icon-button:hover{background:var(--ae-selected)}
+.icon-button[aria-expanded=false]{color:var(--ae-mut)}
+#primaryAction{flex:none}
+header #handBtn{background:var(--ae-green);border-color:var(--ae-green);color:var(--ae-panel);font-weight:600}
+#modeSwitch{position:absolute;left:50%;transform:translateX(-50%);display:flex;gap:var(--ae-gap-2);flex:none;border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-2)}
+#modeSwitch[hidden]{display:none}
+header:has(#modeSwitch:not([hidden])) h1{max-width:calc(50% - 160px)}
+#modeSwitch button{border:0;height:26px;background:transparent}
+#modeSwitch [aria-pressed=true]{background:var(--ae-selected)}
+#legacyBtn,#strayBtn,#reloadBtn{display:none}
+.resume{display:none;align-items:center;gap:var(--ae-gap-10);flex-wrap:wrap;padding:var(--ae-gap-7) var(--ae-gap-18);background:var(--ae-warm);border-bottom:1px solid var(--ae-warm-line);font-size:var(--ae-text);color:var(--ae-amber)}
 .resume.on{display:flex}
 .resume #resumeText{flex:1 1 auto}
-.resume button{font:inherit;font-size:12.5px;border:1px solid #e4cf94;background:#fff;border-radius:6px;padding:3px 10px;cursor:pointer;color:#5c4a12}
+.resume button{font:inherit;font-size:var(--ae-compact);border:1px solid var(--ae-warm-line);background:var(--ae-panel);border-radius:var(--ae-radius);padding:var(--ae-gap-3) var(--ae-gap-10);cursor:pointer;color:var(--ae-amber)}
 .resume .ok{color:var(--ae-green);font-weight:600}
-#srvBar{background:#fdecea;border-bottom-color:#f1c4bd;color:#7a2318}
-#srvBar code{font-size:12px;background:#fff;border:1px solid #f1c4bd;border-radius:5px;padding:2px 6px;user-select:all;word-break:break-all}
-#srvBar button{border-color:#f1c4bd;color:#7a2318}
-.stray{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px dashed #e8dcc0}
+#srvBar{background:var(--ae-danger-bg);border-bottom-color:var(--ae-danger-line);color:var(--ae-warning)}
+#srvBar code{font-size:var(--ae-small);background:var(--ae-panel);border:1px solid var(--ae-danger-line);border-radius:var(--ae-radius-sm);padding:var(--ae-gap-2) var(--ae-gap-6);user-select:all;word-break:break-all}
+#srvBar button{border-color:var(--ae-danger-line);color:var(--ae-warning)}
+.stray{display:flex;align-items:center;gap:var(--ae-space);flex-wrap:wrap;padding:var(--ae-gap-6) 0;border-bottom:1px dashed var(--ae-warm-line)}
 .stray span{flex:1 1 auto}
-nav{display:flex;gap:6px;padding:8px 18px;background:var(--ae-panel);border-bottom:1px solid var(--ae-line);overflow-x:auto}
-nav:empty{display:none}
-nav button{font:inherit;font-size:12.5px;white-space:nowrap;border:1px solid var(--ae-line);background:#fff;color:var(--ae-ink);border-radius:999px;padding:4px 12px;cursor:pointer}
-nav button.on{background:var(--ae-navy);border-color:var(--ae-navy);color:#fff}
-main{flex:1;display:grid;grid-template-columns:minmax(0,1.65fr) minmax(360px,1fr);gap:14px;padding:14px 18px;min-height:0}
-.slide{background:#2b2f36;border-radius:10px;display:flex;align-items:center;justify-content:center;min-height:0;overflow:hidden;position:relative}
+/* F+ 控制台：活动栏、按章节的页面树、报告与讲稿、批注面板。 */
+main{flex:1;display:grid;grid-template-columns:var(--ae-rail) var(--ae-sidebar) minmax(0,1fr);min-height:0;min-width:0}
+.activity{display:flex;flex-direction:column;align-items:center;background:var(--ae-activity);padding:var(--ae-gap-4) 0;gap:var(--ae-gap-2);min-height:0}
+.activity button,.activity a{position:relative;width:var(--ae-rail);height:44px;flex:none;border:0;border-radius:0;background:none;color:var(--ae-activity-muted);text-decoration:none;display:grid;place-items:center;padding:0}
+.activity button:hover,.activity a:hover{color:var(--ae-panel);background:rgba(255,255,255,.08)}
+.activity [aria-expanded=true]{color:var(--ae-panel);box-shadow:inset 2px 0 var(--ae-panel)}
+.activity .badge{position:absolute;top:2px;right:2px;font-size:var(--ae-micro);line-height:16px;min-width:16px;padding:0 var(--ae-gap-3);margin:0}
+.activity #nflight,.activity #ndraft{top:22px;font-size:0}
+.activity #ndraft{left:2px;right:auto}
+.activity #nflight::after,.activity #ndraft::after{content:attr(data-count);font-size:var(--ae-micro)}
+.activity #helpBtn{margin-top:auto}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+#sidebar{display:flex;flex-direction:column;min-height:0;background:var(--ae-bg);border-right:1px solid var(--ae-line)}
+.pane-head{display:flex;align-items:center;gap:var(--ae-space);height:35px;flex:none;padding:0 var(--ae-gap-12);font-size:var(--ae-small);border-bottom:1px solid var(--ae-line);color:var(--ae-mut);background:var(--ae-bg)}
+.pane-head>span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pane-head button,.panel-tabs button{border:0;background:none;font-size:var(--ae-small);padding:var(--ae-gap-4) var(--ae-space);border-radius:var(--ae-radius)}
+.pane-head .icon-button{width:26px;height:26px;padding:0}
+.page-nav{display:flex;gap:var(--ae-gap-4);align-items:center;padding:var(--ae-space)}
+.page-nav button,.page-nav select{border:1px solid var(--ae-line);background:var(--ae-panel);border-radius:var(--ae-radius);height:28px;font-size:var(--ae-small);min-width:0}
+.page-nav button{position:relative;width:28px;flex:none}.page-nav select{flex:1;width:0}
+#secs{display:flex;gap:var(--ae-gap-4);overflow:auto;flex:none;padding:0 var(--ae-space) var(--ae-space)}
+#secs:empty{display:none}
+#secs button{font:inherit;font-size:var(--ae-small);white-space:nowrap;border:1px solid var(--ae-line);background:var(--ae-panel);border-radius:var(--ae-radius);padding:var(--ae-gap-3) var(--ae-space)}
+#secs button.on{background:var(--ae-selected);border-color:var(--ae-accent);color:var(--ae-navy)}
+#pageTree{overflow:auto;padding:0 var(--ae-gap-6) var(--ae-space);min-height:0}
+.page-group{font-size:var(--ae-small);font-weight:600;color:var(--ae-mut);padding:var(--ae-gap-12) var(--ae-space) var(--ae-gap-4);margin:0}
+.page-node{display:flex;align-items:center;gap:var(--ae-space);width:100%;border:0;background:none;padding:var(--ae-gap-7) var(--ae-space);border-radius:var(--ae-radius);font-size:var(--ae-text);text-align:left}
+.page-node:hover{background:var(--ae-line)}.page-node[aria-current=page]{background:var(--ae-selected)}
+.page-node .page-number{color:var(--ae-mut);font-size:var(--ae-small);font-variant-numeric:tabular-nums;min-width:16px;text-align:right}
+.page-node .page-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.page-node .badge{margin:0;font-size:var(--ae-micro);line-height:17px;min-width:17px;text-align:center}
+#workspace{display:grid;grid-template-rows:minmax(0,1fr) auto;min-width:0;min-height:0}
+#panes{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,1fr);min-height:0;min-width:0}
+.pane{display:flex;flex-direction:column;min-height:0;min-width:0}
+#scriptPane{border-left:1px solid var(--ae-line)}
+.slide{background:var(--ae-stage);display:flex;align-items:center;justify-content:center;flex:1;min-height:0;overflow:hidden;position:relative}
 #host{display:block}
-.script{background:var(--ae-panel);border-radius:10px;border:1px solid var(--ae-line);overflow-y:auto;padding:20px 24px 28px;min-height:0}
-.pno{font-size:12.5px;color:var(--ae-mut);display:flex;justify-content:space-between;gap:8px;margin-bottom:6px}
+.script{background:var(--ae-panel);overflow-y:auto;padding:var(--ae-gap-20) var(--ae-gap-24) var(--ae-gap-28);flex:1;min-height:0}
+#scriptHandle{display:none;border:0;border-left:1px solid var(--ae-line);background:var(--ae-bg);color:var(--ae-mut);writing-mode:vertical-rl;font-size:var(--ae-small);padding:var(--ae-gap-12) var(--ae-space)}
+#bottomPanel{border-top:1px solid var(--ae-line);min-width:0;background:var(--ae-panel)}
+.panel-tabs{display:flex;align-items:center;gap:var(--ae-gap-4);padding:0 var(--ae-space);height:35px;background:var(--ae-bg);border-bottom:1px solid var(--ae-line);white-space:nowrap}
+.panel-tabs #seeList{border-radius:0;align-self:stretch;box-shadow:inset 0 2px var(--ae-navy);background:var(--ae-panel);color:var(--ae-navy)}
+.panel-tabs [data-layout-toggle]{margin-left:auto}
+#nhere{margin-left:var(--ae-gap-5);color:var(--ae-mut)}
+#panelBody{height:var(--ae-panel-height);max-height:45vh;display:flex;flex-direction:column;min-height:0}
+#panelBody .notes{overflow:auto;flex:1;min-height:0;padding:0 var(--ae-gap-12)}
+body.side-off main{grid-template-columns:var(--ae-rail) minmax(0,1fr)}
+body.side-off #sidebar{display:none}
+body.script-off #panes{grid-template-columns:minmax(0,1fr) 32px}
+body.script-off #scriptPane{display:none}body.script-off #scriptHandle{display:block}
+body.panel-off #panelBody{display:none}
+#statusbar{position:relative;display:flex;align-items:center;gap:0;min-height:28px;flex:none;background:var(--ae-navy);color:var(--ae-on-dark);font-size:var(--ae-small);overflow-x:auto;white-space:nowrap}
+#statusbar.warn{background:var(--ae-warning)}
+#statusbar>span,#statusbar>button,#localeLabel{padding:var(--ae-gap-4) var(--ae-gap-10);flex:none;white-space:nowrap}
+#statusbar button,#statusbar select{font:inherit;border:0;background:transparent;color:inherit;border-radius:0}
+#statusbar button:hover{background:rgba(255,255,255,.12)}
+#statusbar button{padding:var(--ae-gap-4) var(--ae-gap-10)}
+#statusbar select{max-width:110px;cursor:pointer}
+#statusbar select option{color:var(--ae-ink);background:var(--ae-panel)}
+#statusbar #stat{margin-left:auto}
+#statusbar #receiver{cursor:help}
+#agentDelivery{max-width:200px;overflow:hidden;text-overflow:ellipsis}
+#agentDelivery:empty{display:none}
+#handState{display:none;cursor:pointer}#handState:not(:empty){display:block}
+#mode{cursor:help}#mode.server::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ae-signal);margin-right:var(--ae-gap-6)}
+#mode.server.old::before{background:var(--ae-on-dark)}
+#localeLabel{display:flex;align-items:center;gap:var(--ae-gap-5)}
+#focusHint{display:none}
+body.overview-mode>main,body.overview-mode>#statusbar{display:none}
+body.focus-mode>header,body.focus-mode>#statusbar,body.focus-mode>.resume,body.focus-mode>#archiveBanner{display:none}
+body.focus-mode main{position:fixed;inset:0;display:block;background:var(--ae-activity)}
+body.focus-mode .activity,body.focus-mode #sidebar,body.focus-mode #scriptPane,body.focus-mode #scriptHandle,body.focus-mode .pane-head,body.focus-mode .panel-tabs,body.focus-mode .notes{display:none}
+body.focus-mode #workspace,body.focus-mode #panes,body.focus-mode #reportPane{display:flex;height:100%;width:100%;flex-direction:column}
+body.focus-mode #slide{background:var(--ae-activity);padding:40px var(--ae-gap-24) 52px}
+body.focus-mode #bottomPanel,body.focus-mode #panelBody{display:contents}
+body.focus-mode #nform{display:none;position:fixed;z-index:6;left:50%;bottom:20px;transform:translateX(-50%);width:min(760px,calc(100% - 32px));border:1px solid var(--ae-line);border-radius:var(--ae-radius-lg);box-shadow:var(--ae-shadow);max-height:65vh;overflow:auto}
+body.focus-mode.focus-composer #nform{display:flex}
+body.focus-mode #focusHint{position:fixed;display:flex;align-items:center;justify-content:center;gap:var(--ae-space-lg);left:0;right:0;bottom:12px;color:var(--ae-on-dark);font-size:var(--ae-small)}
+body.focus-mode.focus-composer #focusHint{display:none}
+#focusExit{font:inherit;background:transparent;color:inherit;border:1px solid var(--ae-mut);border-radius:var(--ae-radius);padding:var(--ae-gap-4) var(--ae-gap-10)}
+@media(max-width:900px){
+  :root{--ae-rail:42px;--ae-sidebar:200px;--ae-panel-height:240px}
+  header{gap:var(--ae-gap-6);padding-right:var(--ae-gap-6)}header .layout-controls{padding-right:var(--ae-gap-4)}header h1{font-size:var(--ae-small)}header button{font-size:var(--ae-small);padding:0 var(--ae-gap-6)}
+  #panes{display:flex;flex-direction:column;overflow:auto}.pane{flex:1;min-height:220px}#reportPane{min-height:240px}#scriptPane{border-left:0;border-top:1px solid var(--ae-line)}
+  body.script-off #scriptHandle{writing-mode:horizontal-tb;flex:none;border-top:1px solid var(--ae-line);padding:var(--ae-gap-6)}body.script-off #reportPane{flex:1}
+  #statusbar #stat{margin-left:0}#statusbar #localeLabelText{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden}
+  #nform .row{gap:var(--ae-gap-4)}.form .sk{flex:1 1 120px;min-width:100px}.form select,.form button{padding:var(--ae-gap-4) var(--ae-gap-6)}
+  body.focus-mode #slide{padding:var(--ae-gap-28) var(--ae-space) 50px}body.focus-mode #reportPane{min-height:0}#focusHint{flex-wrap:wrap;gap:var(--ae-gap-6)}
+}
+@media(max-width:600px){
+  header{height:auto;min-height:48px;flex-wrap:wrap;padding:var(--ae-gap-6)}
+  header .brand{display:none}header h1{flex:1 0 100%;padding:var(--ae-gap-2) 0}
+  .layout-controls{margin-left:0}#primaryAction{margin-left:auto}
+}
+.pno{font-size:var(--ae-compact);color:var(--ae-mut);display:flex;justify-content:space-between;gap:var(--ae-space);margin-bottom:var(--ae-gap-6)}
 .pno .sec{color:var(--ae-accent);font-weight:600}
-.script h2{font-size:18px;line-height:1.45;margin:0 0 12px;color:var(--ae-navy)}
-.dur{display:inline-block;font-size:12.5px;background:var(--ae-warm);border:1px solid #e8d9a8;color:#7a5b16;border-radius:5px;padding:2px 8px;margin-bottom:14px}
-.lab{font-size:12px;font-weight:600;color:var(--ae-mut);letter-spacing:.5px;margin:16px 0 6px;display:flex;justify-content:space-between;align-items:center}
-.lab button{font:inherit;font-size:12px;border:none;background:none;color:var(--ae-accent);cursor:pointer;padding:0}
-.talk p{font-size:16.5px;line-height:1.85;margin:0 0 10px}
-.next{font-size:14.5px;line-height:1.7;color:#374151;border-left:3px solid var(--ae-accent);padding:4px 0 4px 10px}
-.qa{background:var(--ae-qa);border:1px solid var(--ae-line);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:14.5px;line-height:1.7}
+.script h2{font-size:var(--ae-heading);line-height:1.45;margin:0 0 var(--ae-gap-12);color:var(--ae-navy)}
+.dur{display:inline-block;font-size:var(--ae-compact);background:var(--ae-warm);border:1px solid var(--ae-warm-line);color:var(--ae-amber);border-radius:var(--ae-radius-sm);padding:var(--ae-gap-2) var(--ae-space);margin-bottom:var(--ae-gap-14)}
+.lab{font-size:var(--ae-small);font-weight:600;color:var(--ae-mut);letter-spacing:.5px;margin:var(--ae-space-lg) 0 var(--ae-gap-6);display:flex;justify-content:space-between;align-items:center}
+.lab button{font:inherit;font-size:var(--ae-small);border:none;background:none;color:var(--ae-accent);cursor:pointer;padding:0}
+.talk p{font-size:var(--ae-lead);line-height:1.85;margin:0 0 var(--ae-gap-10)}
+.next{font-size:var(--ae-body-large);line-height:1.7;color:var(--ae-mut);border-left:3px solid var(--ae-accent);padding:var(--ae-gap-4) 0 var(--ae-gap-4) var(--ae-gap-10)}
+.qa{background:var(--ae-qa);border:1px solid var(--ae-line);border-radius:var(--ae-radius-md);padding:var(--ae-gap-10) var(--ae-gap-12);margin-bottom:var(--ae-space);font-size:var(--ae-body-large);line-height:1.7}
 .qa .q{font-weight:600}.qa .q::before{content:attr(data-label);color:var(--ae-accent)}.qa .a::before{content:attr(data-label);color:var(--ae-green);font-weight:600}
-.empty{color:var(--ae-mut);font-size:14px}
-.modal{position:fixed;inset:0;background:rgba(15,20,30,.5);display:none;align-items:center;justify-content:center;padding:24px;z-index:9}
+.empty{color:var(--ae-mut);font-size:var(--ae-body)}
+.modal{position:fixed;inset:0;background:rgba(15,20,30,.5);display:none;align-items:center;justify-content:center;padding:var(--ae-gap-24);z-index:9}
 .modal.on{display:flex}
-#help table{border-collapse:collapse;width:100%;margin:8px 0 14px;font-size:13px}
-#help th,#help td{border:1px solid var(--ae-line);padding:5px 8px;text-align:left;vertical-align:top}
-#help th{background:#eef2f7;color:var(--ae-navy)}
-#help h2{margin:0 0 8px;color:var(--ae-navy);font-size:19px}#help h3{margin:16px 0 6px;color:var(--ae-navy);font-size:15.5px}
-.keys{font-size:12px;color:var(--ae-mut);margin-top:18px}
-.notes{margin-top:22px;border-top:1px dashed var(--ae-line);padding-top:12px}
-.note{border:1px solid #f0d2cc;background:#fff7f5;border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:14px;line-height:1.65}
-.note.done{background:#f3f6f4;border-color:#cfe0d6}
-.note.done .body{text-decoration:line-through;color:#7b8a80}
-.note .meta{font-size:12px;color:#a2412f;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+#help table{border-collapse:collapse;width:100%;margin:var(--ae-space) 0 var(--ae-gap-14);font-size:var(--ae-text)}
+#help th,#help td{border:1px solid var(--ae-line);padding:var(--ae-gap-5) var(--ae-space);text-align:left;vertical-align:top}
+#help th{background:var(--ae-bg);color:var(--ae-navy)}
+#help h2{margin:0 0 var(--ae-space);color:var(--ae-navy);font-size:var(--ae-help-title)}#help h3{margin:var(--ae-space-lg) 0 var(--ae-gap-6);color:var(--ae-navy);font-size:var(--ae-section)}
+.keys{font-size:var(--ae-small);color:var(--ae-mut);margin-top:var(--ae-gap-18)}
+.notes{margin:0}
+.note{border:1px solid var(--ae-danger-line);background:var(--ae-danger-bg);border-radius:var(--ae-radius-md);padding:var(--ae-space) var(--ae-gap-10);margin-bottom:var(--ae-space);font-size:var(--ae-body);line-height:1.65}
+.note.done{background:var(--ae-success-bg);border-color:var(--ae-success-line)}
+.note.done .body{text-decoration:line-through;color:var(--ae-mut)}
+.note .meta{font-size:var(--ae-small);color:var(--ae-warning);display:flex;justify-content:space-between;gap:var(--ae-space);flex-wrap:wrap}
 .note.done .meta{color:var(--ae-green)}
-.note .meta .acts{display:flex;gap:10px}
-.note .meta button{border:none;background:none;color:inherit;cursor:pointer;font-size:12px;padding:0;text-decoration:underline}
-.note blockquote{margin:4px 0;padding-left:8px;border-left:3px solid #e8b4aa;color:#555;font-size:13px}
-.note .res{font-size:13px;color:var(--ae-green);margin-top:4px}
-.note textarea{width:100%;font:inherit;font-size:14px;min-height:60px;border:1px solid var(--ae-line);border-radius:6px;padding:6px 8px}
-.chip{display:inline-block;font-size:11px;border-radius:4px;padding:0 5px;margin-left:6px;background:#d8eee1;color:var(--ae-green)}
-.chip.dr{background:#fdf0d5;color:#8a5a12}.chip.fl{background:#dbe9fb;color:#1f5fa8}
-.note.drafted{border-color:#e9c98a}.note .trail{font-size:12px;color:var(--ae-mut);margin-top:3px}
-.note .trail b{font-weight:600;color:#8a5a12}
-.form{display:flex;flex-direction:column;gap:6px;margin-top:8px}
-#nform{position:sticky;bottom:-28px;z-index:3;margin:14px -24px -28px;padding:10px 24px 14px;background:var(--ae-panel);border-top:1px solid var(--ae-line);box-shadow:0 -8px 14px -10px rgba(0,0,0,.25)}
+.note .meta .acts{display:flex;gap:var(--ae-gap-10)}
+.note .meta button{border:none;background:none;color:inherit;cursor:pointer;font-size:var(--ae-small);padding:0;text-decoration:underline}
+.note blockquote{margin:var(--ae-gap-4) 0;padding-left:var(--ae-space);border-left:3px solid var(--ae-danger-line);color:var(--ae-mut);font-size:var(--ae-text)}
+.note .res{font-size:var(--ae-text);color:var(--ae-green);margin-top:var(--ae-gap-4)}
+.note textarea{width:100%;font:inherit;font-size:var(--ae-body);min-height:60px;border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-6) var(--ae-space)}
+.chip{display:inline-block;font-size:var(--ae-badge);border-radius:var(--ae-radius-xs);padding:0 var(--ae-gap-5);margin-left:var(--ae-gap-6);background:var(--ae-success-bg);color:var(--ae-green)}
+.chip.dr{background:var(--ae-warm);color:var(--ae-amber)}.chip.fl{background:var(--ae-selected);color:var(--ae-accent)}
+.note.drafted{border-color:var(--ae-warm-line)}.note .trail{font-size:var(--ae-small);color:var(--ae-mut);margin-top:var(--ae-gap-3)}
+.note .trail b{font-weight:600;color:var(--ae-amber)}
+.form{display:flex;flex-direction:column;gap:var(--ae-gap-6);margin-top:var(--ae-space)}
+#nform{flex:none;margin:0;padding:var(--ae-space) var(--ae-gap-12);background:var(--ae-panel);border-top:1px solid var(--ae-line);max-height:100%;overflow:auto}
 #nform .grow{flex:1}
-.form textarea{font:inherit;font-size:14px;min-height:46px;max-height:40vh;border:1px solid var(--ae-line);border-radius:6px;padding:6px 8px;resize:none;overflow-y:auto}
-.form .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:13px}
-.form select,.form button{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:4px 10px;background:#fff;cursor:pointer}
-.form button.primary{background:var(--ae-red);border-color:var(--ae-red);color:#fff}
-.form button.on{background:#fde7e3;border-color:var(--ae-red);color:#a2412f}
-.quote{font-size:12.5px;color:#555;background:#f6f6f6;border-radius:5px;padding:4px 8px;display:none}
-.badge{display:inline-block;min-width:18px;padding:0 6px;border-radius:9px;background:var(--ae-red);color:#fff;font-size:12px;margin-left:4px}
-.badge:empty{display:none}.badge.zero{background:#6b7280}.badge.fl{background:#2a78d6}.badge.dr{background:#b7791f}
-.dlg{background:#fff;border-radius:12px;max-width:900px;width:100%;max-height:88vh;display:flex;flex-direction:column}
+.form textarea{font:inherit;font-size:var(--ae-body);min-height:46px;max-height:40vh;border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-6) var(--ae-space);resize:none;overflow-y:auto}
+.form .row{display:flex;gap:var(--ae-gap-6);align-items:center;flex-wrap:wrap;font-size:var(--ae-text)}
+.form select,.form button{font:inherit;font-size:var(--ae-text);border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-4) var(--ae-gap-10);background:var(--ae-panel);cursor:pointer}
+.form button.primary{background:var(--ae-navy);border-color:var(--ae-navy);color:var(--ae-panel);white-space:nowrap}
+.form button.on{background:var(--ae-danger-bg);border-color:var(--ae-red);color:var(--ae-warning)}
+.quote{font-size:var(--ae-compact);color:var(--ae-mut);background:var(--ae-bg);border-radius:var(--ae-radius-sm);padding:var(--ae-gap-4) var(--ae-space);display:none}
+.badge{display:inline-block;min-width:18px;padding:0 var(--ae-gap-6);border-radius:var(--ae-radius-pill);background:var(--ae-red);color:var(--ae-panel);font-size:var(--ae-small);margin-left:var(--ae-gap-4)}
+.badge:empty{display:none}.badge.zero{background:var(--ae-mut)}.badge.fl{background:var(--ae-accent)}.badge.dr{background:var(--ae-amber)}
+.dlg{background:var(--ae-panel);border-radius:var(--ae-radius-xl);max-width:900px;width:100%;max-height:88vh;display:flex;flex-direction:column}
 #help .dlg{max-width:980px}
-#hand .hopts{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font-size:13.5px;margin:4px 0 10px}
-#hand .hopts label{display:inline-flex;gap:5px;align-items:center;cursor:pointer}
-#handDrafts .hd{background:#fdf6e3;border:1px solid #ecd9a8;border-radius:8px;padding:6px 10px;margin:0 0 8px;font-size:13.5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#hand .hopts{display:flex;flex-wrap:wrap;gap:var(--ae-gap-6) var(--ae-space-lg);align-items:center;font-size:var(--ae-body-small);margin:var(--ae-gap-4) 0 var(--ae-gap-10)}
+#hand .hopts label{display:inline-flex;gap:var(--ae-gap-5);align-items:center;cursor:pointer}
+#handDrafts .hd{background:var(--ae-warm);border:1px solid var(--ae-warm-line);border-radius:var(--ae-radius-md);padding:var(--ae-gap-6) var(--ae-gap-10);margin:0 0 var(--ae-space);font-size:var(--ae-body-small);display:flex;gap:var(--ae-space);align-items:center;flex-wrap:wrap}
 #handDrafts .hd span{flex:1}
-.batch.drafted,.batch.review{border-left-color:#b7791f}.batch.reviewing{border-left-color:var(--ae-accent)}
-.batch .bst{font-size:12.5px;color:var(--ae-ink);padding-left:.6em;border-left:2px solid var(--ae-line);margin:3px 0}
-.batch .bact{display:flex;gap:8px;margin-top:6px}
-#batches .bar .hint{font-size:12.5px;color:var(--ae-mut);margin:0}
+.batch.drafted,.batch.review{border-left-color:var(--ae-amber)}.batch.reviewing{border-left-color:var(--ae-accent)}
+.batch .bst{font-size:var(--ae-compact);color:var(--ae-ink);padding-left:.6em;border-left:2px solid var(--ae-line);margin:var(--ae-gap-3) 0}
+.batch .bact{display:flex;gap:var(--ae-space);margin-top:var(--ae-gap-6)}
+#batches .bar .hint{font-size:var(--ae-compact);color:var(--ae-mut);margin:0}
 #batches .bar{flex:none}
 #batches .bar h2{flex:1 1 180px}
 #batches .bar button,#currentTaskToggleRow{flex-shrink:0;white-space:nowrap}
 #batchSum{flex:1 0 100%;order:1}
-#currentTaskToggleRow{font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer}
+#currentTaskToggleRow{font-size:var(--ae-text);display:flex;align-items:center;gap:var(--ae-gap-6);cursor:pointer}
 #currentTaskToggleRow[hidden]{display:none}
-#stopServiceBtn{color:#a32f21;border-color:#e5b5ad}
-#stopServiceInfo{margin:0;padding:10px 20px;background:var(--ae-qa);font-size:12.5px;color:var(--ae-mut)}
-.batch{border:1px solid var(--ae-line);border-left:4px solid var(--ae-mut);border-radius:8px;padding:8px 12px;margin:0 0 10px}
-.batch.done{border-left-color:var(--ae-green)}.batch.claimed{border-left-color:var(--ae-accent)}.batch.pending{border-left-color:#b7791f}
-.batch .bh{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.batch .bh b{color:var(--ae-navy)}
-.batch .bs{font-size:12.5px;color:var(--ae-mut)}.batch .bn{font-size:13px;font-weight:600;color:var(--ae-green);margin-left:auto}
-.batch .bt{font-size:12.5px;color:var(--ae-mut)}.batch .bm{font-size:13px}.batch .bsum{font-size:13.5px;background:var(--ae-qa);border-radius:6px;padding:4px 8px;margin:4px 0;white-space:pre-wrap}
-.batch details{margin-top:4px;font-size:13px}.batch summary{cursor:pointer;color:var(--ae-accent)}
-.batch .bi{padding:3px 6px;border-radius:4px;cursor:pointer}.batch .bi:hover{background:var(--ae-qa)}.batch .br{display:block;color:var(--ae-mut);font-size:12px;padding-left:1em}
-.dlg .bar{display:flex;gap:8px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--ae-line);flex-wrap:wrap}
-.dlg .bar h2{font-size:17px;margin:0;color:var(--ae-navy);flex:1}
-.dlg button{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:5px 12px;background:#fff;cursor:pointer}
-.dlg .bar select{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:5px 8px;background:#fff;cursor:pointer}
-.dlg button.primary{background:var(--ae-navy);border-color:var(--ae-navy);color:#fff}
-.dlg pre{margin:0;padding:16px 20px;overflow:auto;white-space:pre-wrap;font-family:inherit;font-size:13.5px;line-height:1.7}
-.dlg .pad{padding:16px 20px;overflow:auto;font-size:14px;line-height:1.7}
-.dlg textarea{width:100%;min-height:160px;font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:8px}
-.dlg .found{border:1px solid var(--ae-line);border-radius:8px;padding:8px 10px;margin:6px 0;display:flex;justify-content:space-between;gap:8px;align-items:center}
-.hint{font-size:12.5px;color:var(--ae-mut)}
-kbd{font:600 10.5px/1 ui-monospace,SFMono-Regular,Menlo,monospace;padding:2px 4px;border-radius:4px;border:1px solid rgba(0,0,0,.18);background:rgba(0,0,0,.05);margin-left:5px;vertical-align:1px;color:inherit}
+#stopServiceBtn{color:var(--ae-warning);border-color:var(--ae-danger-line)}
+#stopServiceInfo{margin:0;padding:var(--ae-gap-10) var(--ae-gap-20);background:var(--ae-qa);font-size:var(--ae-compact);color:var(--ae-mut)}
+.batch{border:1px solid var(--ae-line);border-left:4px solid var(--ae-mut);border-radius:var(--ae-radius-md);padding:var(--ae-space) var(--ae-gap-12);margin:0 0 var(--ae-gap-10)}
+.batch.done{border-left-color:var(--ae-green)}.batch.claimed{border-left-color:var(--ae-accent)}.batch.pending{border-left-color:var(--ae-amber)}
+.batch .bh{display:flex;gap:var(--ae-gap-10);align-items:baseline;flex-wrap:wrap}.batch .bh b{color:var(--ae-navy)}
+.batch .bs{font-size:var(--ae-compact);color:var(--ae-mut)}.batch .bn{font-size:var(--ae-text);font-weight:600;color:var(--ae-green);margin-left:auto}
+.batch .bt{font-size:var(--ae-compact);color:var(--ae-mut)}.batch .bm{font-size:var(--ae-text)}.batch .bsum{font-size:var(--ae-body-small);background:var(--ae-qa);border-radius:var(--ae-radius);padding:var(--ae-gap-4) var(--ae-space);margin:var(--ae-gap-4) 0;white-space:pre-wrap}
+.batch details{margin-top:var(--ae-gap-4);font-size:var(--ae-text)}.batch summary{cursor:pointer;color:var(--ae-accent)}
+.batch .bi{padding:var(--ae-gap-3) var(--ae-gap-6);border-radius:var(--ae-radius-xs);cursor:pointer}.batch .bi:hover{background:var(--ae-qa)}.batch .br{display:block;color:var(--ae-mut);font-size:var(--ae-small);padding-left:1em}
+.dlg .bar{display:flex;gap:var(--ae-space);align-items:center;padding:var(--ae-gap-14) var(--ae-gap-20);border-bottom:1px solid var(--ae-line);flex-wrap:wrap}
+.dlg .bar h2{font-size:var(--ae-dialog-title);margin:0;color:var(--ae-navy);flex:1}
+.dlg button{font:inherit;font-size:var(--ae-text);border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-5) var(--ae-gap-12);background:var(--ae-panel);cursor:pointer}
+.dlg .bar select{font:inherit;font-size:var(--ae-text);border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-5) var(--ae-space);background:var(--ae-panel);cursor:pointer}
+.dlg button.primary{background:var(--ae-navy);border-color:var(--ae-navy);color:var(--ae-panel)}
+.dlg pre{margin:0;padding:var(--ae-space-lg) var(--ae-gap-20);overflow:auto;white-space:pre-wrap;font-family:inherit;font-size:var(--ae-body-small);line-height:1.7}
+.dlg .pad{padding:var(--ae-space-lg) var(--ae-gap-20);overflow:auto;font-size:var(--ae-body);line-height:1.7}
+.dlg textarea{width:100%;min-height:160px;font:inherit;font-size:var(--ae-text);border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-space)}
+.dlg .found{border:1px solid var(--ae-line);border-radius:var(--ae-radius-md);padding:var(--ae-space) var(--ae-gap-10);margin:var(--ae-gap-6) 0;display:flex;justify-content:space-between;gap:var(--ae-space);align-items:center}
+.hint{font-size:var(--ae-compact);color:var(--ae-mut)}
+kbd{font:600 10.5px/1 ui-monospace,SFMono-Regular,Menlo,monospace;padding:var(--ae-gap-2) var(--ae-gap-4);border-radius:var(--ae-radius-xs);border:1px solid rgba(0,0,0,.18);background:rgba(0,0,0,.05);margin-left:var(--ae-gap-5);vertical-align:1px;color:inherit}
 header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
-#selbar{position:fixed;display:none;z-index:8;background:#fff;border:1px solid var(--ae-line);border-radius:8px;box-shadow:0 4px 18px rgba(0,0,0,.2);padding:4px;gap:4px;flex-direction:column;max-width:min(460px,92vw)}
+#selbar{position:fixed;display:none;z-index:8;background:var(--ae-panel);border:1px solid var(--ae-line);border-radius:var(--ae-radius-md);box-shadow:var(--ae-shadow);padding:var(--ae-gap-4);gap:var(--ae-gap-4);flex-direction:column;max-width:min(460px,92vw)}
 #selbar.on{display:flex}
-#selbar .sbtns{display:flex;gap:2px}
-#pairRow{display:none;align-items:flex-start;gap:6px;font-size:12.5px;line-height:1.5;color:#5c4a12;background:#fff8e6;border:1px solid #f0dfb0;border-radius:6px;padding:5px 8px;cursor:pointer}
+#selbar .sbtns{display:flex;gap:var(--ae-gap-2)}
+#pairRow{display:none;align-items:flex-start;gap:var(--ae-gap-6);font-size:var(--ae-compact);line-height:1.5;color:var(--ae-amber);background:var(--ae-warm);border:1px solid var(--ae-warm-line);border-radius:var(--ae-radius);padding:var(--ae-gap-5) var(--ae-space);cursor:pointer}
 #pairRow.on{display:flex}
-#pairRow input{margin-top:3px}
-.form .sk{display:flex;align-items:center;gap:4px;flex:1 1 160px;min-width:140px}
-.form .sk input,.note .eskills{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:4px 8px;flex:1;min-width:80px;width:100%}
-.note .skills{margin-top:4px;display:flex;gap:4px;flex-wrap:wrap}
-.note .skill{font-size:12px;background:#eef2f7;color:var(--ae-navy);border-radius:4px;padding:1px 6px}
-.note .skill.al{background:#f3ecfb;color:#5b3a99}
-#alwaysN:not(:empty){display:inline-block;min-width:16px;margin-left:4px;padding:0 5px;border-radius:8px;background:#5b3a99;color:#fff;font-size:11px}
-#always .arow{display:flex;gap:8px;align-items:center;margin:0 0 8px}#always .arow input{flex:1;font:inherit;font-size:13.5px;border:1px solid var(--ae-line);border-radius:6px;padding:5px 8px}
-#always .arow select{font:inherit;font-size:13.5px}
-.note .eskills{margin-top:4px}
-#skillList{display:none;position:fixed;z-index:20;min-width:240px;max-width:90vw;max-height:240px;overflow:auto;background:#fff;border:1px solid var(--ae-line);border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.2);padding:4px}
-#skillList.on{display:block}#skillList [role=option]{padding:7px 9px;border-radius:5px;cursor:pointer;font-size:13px}
-#skillList [role=option]:hover,#skillList [aria-selected=true]{background:#eef4fc}#skillList .skill-desc{display:block;color:var(--ae-mut);font-size:12px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-#skillList .skill-rec{margin-left:6px;color:var(--ae-accent);font-size:11px}#skillList .skill-none{margin:0;padding:7px 9px;color:var(--ae-mut);font-size:12px}#skillList.on.hint{pointer-events:none}#skillList .skill-more{display:block;width:100%;padding:7px 9px;text-align:left;border:0;background:#f6f8fb;color:var(--ae-accent);border-radius:5px;cursor:pointer;font:inherit;font-size:12px}
-#stylemenu{position:fixed;display:none;z-index:8;background:#fff;border:1px solid var(--ae-line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.22);padding:6px;flex-direction:column;gap:2px;min-width:210px}
+#pairRow input{margin-top:var(--ae-gap-3)}
+.form .sk{display:flex;align-items:center;gap:var(--ae-gap-4);flex:1 1 160px;min-width:140px}
+.form .sk input,.note .eskills{font:inherit;font-size:var(--ae-text);border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-4) var(--ae-space);flex:1;min-width:80px;width:100%}
+.note .skills{margin-top:var(--ae-gap-4);display:flex;gap:var(--ae-gap-4);flex-wrap:wrap}
+.note .skill{font-size:var(--ae-small);background:var(--ae-bg);color:var(--ae-navy);border-radius:var(--ae-radius-xs);padding:1px var(--ae-gap-6)}
+.note .skill.al{background:var(--ae-purple-bg);color:var(--ae-purple)}
+#alwaysN:not(:empty){display:inline-block;min-width:16px;margin-left:var(--ae-gap-4);padding:0 var(--ae-gap-5);border-radius:var(--ae-radius-md);background:var(--ae-purple);color:var(--ae-panel);font-size:var(--ae-badge)}
+#always .arow{display:flex;gap:var(--ae-space);align-items:center;margin:0 0 var(--ae-space)}#always .arow input{flex:1;font:inherit;font-size:var(--ae-body-small);border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-5) var(--ae-space)}
+#always .arow select{font:inherit;font-size:var(--ae-body-small)}
+.note .eskills{margin-top:var(--ae-gap-4)}
+#skillList{display:none;position:fixed;z-index:20;min-width:240px;max-width:90vw;max-height:240px;overflow:auto;background:var(--ae-panel);border:1px solid var(--ae-line);border-radius:var(--ae-radius-md);box-shadow:var(--ae-shadow);padding:var(--ae-gap-4)}
+#skillList.on{display:block}#skillList [role=option]{padding:var(--ae-gap-7) var(--ae-gap-9);border-radius:var(--ae-radius-sm);cursor:pointer;font-size:var(--ae-text)}
+#skillList [role=option]:hover,#skillList [aria-selected=true]{background:var(--ae-selected)}#skillList .skill-desc{display:block;color:var(--ae-mut);font-size:var(--ae-small);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+#skillList .skill-rec{margin-left:var(--ae-gap-6);color:var(--ae-accent);font-size:var(--ae-badge)}#skillList .skill-none{margin:0;padding:var(--ae-gap-7) var(--ae-gap-9);color:var(--ae-mut);font-size:var(--ae-small)}#skillList.on.hint{pointer-events:none}#skillList .skill-more{display:block;width:100%;padding:var(--ae-gap-7) var(--ae-gap-9);text-align:left;border:0;background:var(--ae-qa);color:var(--ae-accent);border-radius:var(--ae-radius-sm);cursor:pointer;font:inherit;font-size:var(--ae-small)}
+#stylemenu{position:fixed;display:none;z-index:8;background:var(--ae-panel);border:1px solid var(--ae-line);border-radius:var(--ae-radius-lg);box-shadow:var(--ae-shadow);padding:var(--ae-gap-6);flex-direction:column;gap:var(--ae-gap-2);min-width:210px}
 #stylemenu.on{display:flex}
-#stylemenu button{font:inherit;font-size:13px;border:none;background:none;text-align:left;padding:6px 10px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;gap:12px}
-#stylemenu button:hover{background:#f1f3f6}
-#stylemenu .hint{padding:2px 10px 4px}
-#styleChip{display:none;align-self:flex-start;font-size:12.5px;background:#e8f0fb;color:#1f4f8f;border:1px solid #c5d8f2;border-radius:999px;padding:2px 4px 2px 10px}
-#styleChip.on{display:inline-flex;align-items:center;gap:6px}
-#styleChip button{border:none;background:none;cursor:pointer;color:#1f4f8f;font-size:14px;line-height:1;padding:0 4px}
-.note .anchor{font-size:12px;color:var(--ae-mut);margin-top:3px}
-#pinpop{position:fixed;display:none;z-index:8;width:min(340px,90vw);background:#fff;border:1px solid var(--ae-line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.22);padding:10px 12px;font-size:13.5px;line-height:1.6}
+#stylemenu button{font:inherit;font-size:var(--ae-text);border:none;background:none;text-align:left;padding:var(--ae-gap-6) var(--ae-gap-10);border-radius:var(--ae-radius);cursor:pointer;display:flex;justify-content:space-between;gap:var(--ae-gap-12)}
+#stylemenu button:hover{background:var(--ae-bg)}
+#stylemenu .hint{padding:var(--ae-gap-2) var(--ae-gap-10) var(--ae-gap-4)}
+#styleChip{display:none;align-self:flex-start;font-size:var(--ae-compact);background:var(--ae-selected);color:var(--ae-accent);border:1px solid var(--ae-accent-line);border-radius:var(--ae-radius-pill);padding:var(--ae-gap-2) var(--ae-gap-4) var(--ae-gap-2) var(--ae-gap-10)}
+#styleChip.on{display:inline-flex;align-items:center;gap:var(--ae-gap-6)}
+#styleChip button{border:none;background:none;cursor:pointer;color:var(--ae-accent);font-size:var(--ae-body);line-height:1;padding:0 var(--ae-gap-4)}
+.note .anchor{font-size:var(--ae-small);color:var(--ae-mut);margin-top:var(--ae-gap-3)}
+#pinpop{position:fixed;display:none;z-index:8;width:min(340px,90vw);background:var(--ae-panel);border:1px solid var(--ae-line);border-radius:var(--ae-radius-lg);box-shadow:var(--ae-shadow);padding:var(--ae-gap-10) var(--ae-gap-12);font-size:var(--ae-body-small);line-height:1.6}
 #pinpop.on{display:block}
-#pinpop .pp-m{font-size:12px;color:#a2412f}
-#pinpop .pp-t{margin:2px 0 8px;white-space:pre-wrap;word-break:break-word}
-#pinpop .pp-a{display:flex;gap:6px;flex-wrap:wrap}
-#pinpop button{font:inherit;font-size:12.5px;border:1px solid var(--ae-line);border-radius:6px;padding:3px 9px;background:#fff;cursor:pointer}
-#pinpop button[data-pp="del"]{color:#a2412f}
-.note.hl{outline:2px solid #e8b4aa;outline-offset:1px}
+#pinpop .pp-m{font-size:var(--ae-small);color:var(--ae-warning)}
+#pinpop .pp-t{margin:var(--ae-gap-2) 0 var(--ae-space);white-space:pre-wrap;word-break:break-word}
+#pinpop .pp-a{display:flex;gap:var(--ae-gap-6);flex-wrap:wrap}
+#pinpop button{font:inherit;font-size:var(--ae-compact);border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-3) var(--ae-gap-9);background:var(--ae-panel);cursor:pointer}
+#pinpop button[data-pp="del"]{color:var(--ae-warning)}
+.note.hl{outline:2px solid var(--ae-danger-line);outline-offset:1px}
 .note.flash{animation:aeflash 1.2s ease}
-@keyframes aeflash{0%,100%{box-shadow:none}30%{box-shadow:0 0 0 4px rgba(217,74,56,.35)}}
-.note .pair{font-size:12.5px;color:#5c4a12;background:#fff8e6;border-radius:5px;padding:3px 8px;margin-top:4px}
-#selbar button{font:inherit;font-size:13px;border:none;background:none;padding:5px 10px;border-radius:6px;cursor:pointer;color:var(--ae-ink);white-space:nowrap}
-#selbar button:hover{background:#f1f3f6}
-#selbar button[data-sel="delete"]{color:#a2412f}
-#repbox{position:fixed;display:none;z-index:8;width:min(460px,90vw);background:#fff;border:1px solid var(--ae-line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.22);padding:10px 12px}
+@keyframes aeflash{0%,100%{box-shadow:none}30%{box-shadow:var(--ae-shadow-focus)}}
+.note .pair{font-size:var(--ae-compact);color:var(--ae-amber);background:var(--ae-warm);border-radius:var(--ae-radius-sm);padding:var(--ae-gap-3) var(--ae-space);margin-top:var(--ae-gap-4)}
+#selbar button{font:inherit;font-size:var(--ae-text);border:none;background:none;padding:var(--ae-gap-5) var(--ae-gap-10);border-radius:var(--ae-radius);cursor:pointer;color:var(--ae-ink);white-space:nowrap}
+#selbar button:hover{background:var(--ae-bg)}
+#selbar button[data-sel="delete"]{color:var(--ae-warning)}
+#repbox{position:fixed;display:none;z-index:8;width:min(460px,90vw);background:var(--ae-panel);border:1px solid var(--ae-line);border-radius:var(--ae-radius-lg);box-shadow:var(--ae-shadow);padding:var(--ae-gap-10) var(--ae-gap-12)}
 #repbox.on{display:block}
-#repbox .hint{margin:0 0 6px}
-#repbox textarea{width:100%;min-height:72px;font:inherit;font-size:14px;border:1px solid var(--ae-line);border-radius:6px;padding:6px 8px;resize:vertical}
-#repbox .row{display:flex;gap:6px;justify-content:flex-end;margin-top:6px}
-#repbox button{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:4px 10px;background:#fff;cursor:pointer}
-#repbox button.primary{background:var(--ae-navy);border-color:var(--ae-navy);color:#fff}
-.note del{color:#a2412f;background:#fde7e3;text-decoration:line-through}
-.note ins{color:#16794d;background:#e3f4ea;text-decoration:none}
-.note .op{font-size:12px;color:#a2412f;margin-right:6px}
+#repbox .hint{margin:0 0 var(--ae-gap-6)}
+#repbox textarea{width:100%;min-height:72px;font:inherit;font-size:var(--ae-body);border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-6) var(--ae-space);resize:vertical}
+#repbox .row{display:flex;gap:var(--ae-gap-6);justify-content:flex-end;margin-top:var(--ae-gap-6)}
+#repbox button{font:inherit;font-size:var(--ae-text);border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-4) var(--ae-gap-10);background:var(--ae-panel);cursor:pointer}
+#repbox button.primary{background:var(--ae-navy);border-color:var(--ae-navy);color:var(--ae-panel)}
+.note del{color:var(--ae-warning);background:var(--ae-danger-bg);text-decoration:line-through}
+.note ins{color:var(--ae-green);background:var(--ae-success-bg);text-decoration:none}
+.note .op{font-size:var(--ae-small);color:var(--ae-warning);margin-right:var(--ae-gap-6)}
 .note.done .body del,.note.done .body ins{background:none}
-#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1d2330;color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;display:none;z-index:10;max-width:80vw}
-@media (max-width:900px){main{grid-template-columns:1fr;grid-template-rows:auto 1fr;padding:12px 16px}.slide{aspect-ratio:16/9}.script{min-height:50vh}}
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--ae-ink);color:var(--ae-panel);padding:var(--ae-space) var(--ae-space-lg);border-radius:var(--ae-radius-md);font-size:var(--ae-text);display:none;z-index:10;max-width:80vw}
+
 /* 审阅总览：沿用方案 C 的左侧列表与右侧详情。 */
-.overview-entry{font:inherit;font-size:13px;color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.35);border-radius:6px;padding:5px 10px}
+.overview-entry{font:inherit;font-size:var(--ae-text);color:var(--ae-panel);text-decoration:none;border:1px solid rgba(255,255,255,.35);border-radius:var(--ae-radius);padding:var(--ae-gap-5) var(--ae-gap-10)}
 .overview-entry:focus-visible,#overview button:focus-visible,#overview a:focus-visible{outline:3px solid var(--ae-accent);outline-offset:3px}
 body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#srvBar,body.overview-mode>#resume,body.overview-mode>nav,body.overview-mode>main{display:none}
-.archive-banner{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 24px;background:#fff7e7;border-bottom:1px solid #ebd6ac;color:#79501e;font-size:13px;line-height:1.7}
+.archive-banner{display:flex;align-items:center;justify-content:space-between;gap:var(--ae-gap-14);padding:var(--ae-gap-10) var(--ae-gap-24);background:var(--ae-warm);border-bottom:1px solid var(--ae-warm-line);color:var(--ae-amber);font-size:var(--ae-text);line-height:1.7}
 .archive-banner[hidden]{display:none}
-.archive-banner button{font:inherit;white-space:nowrap;border:1px solid #d6b67e;border-radius:6px;padding:5px 10px;background:#fff;color:inherit;cursor:pointer}
+.archive-banner button{font:inherit;white-space:nowrap;border:1px solid var(--ae-warm-line);border-radius:var(--ae-radius);padding:var(--ae-gap-5) var(--ae-gap-10);background:var(--ae-panel);color:inherit;cursor:pointer}
 .archive-banner button:disabled{opacity:.55;cursor:default}
 #overview{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
 #overview[hidden]{display:none}
-.overview-top{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:14px 24px;background:var(--ae-panel);border-bottom:1px solid var(--ae-line);position:sticky;top:0;z-index:4}
-.overview-top h1{font-size:17px;line-height:1.5;margin:0;flex:1 1 220px;color:var(--ae-navy);overflow-wrap:anywhere}
-#overview button,#overview select,#overview .overview-open{font:inherit;font-size:13px;border:1px solid var(--ae-line);border-radius:6px;padding:7px 12px;background:#fff;color:var(--ae-ink);cursor:pointer}
+.overview-top{display:flex;align-items:center;gap:var(--ae-space-lg);flex-wrap:wrap;padding:var(--ae-gap-14) var(--ae-gap-24);background:var(--ae-panel);border-bottom:1px solid var(--ae-line);position:sticky;top:0;z-index:4}
+.overview-top h1{font-size:var(--ae-dialog-title);line-height:1.5;margin:0;flex:1 1 220px;color:var(--ae-navy);overflow-wrap:anywhere}
+#overview button,#overview select,#overview .overview-open{font:inherit;font-size:var(--ae-text);border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-7) var(--ae-gap-12);background:var(--ae-panel);color:var(--ae-ink);cursor:pointer}
 #overview button:disabled{opacity:.55;cursor:default}
 .overview-top select{max-width:100%}
-.overview-archive-toggle{display:flex;align-items:center;gap:6px;font-size:13px;white-space:nowrap}
+.overview-archive-toggle{display:flex;align-items:center;gap:var(--ae-gap-6);font-size:var(--ae-text);white-space:nowrap}
 .overview-archive-toggle input{margin:0;accent-color:var(--ae-accent)}
-.overview-body{width:100%;max-width:1240px;margin:0 auto;padding:24px;display:grid;grid-template-columns:340px minmax(0,1fr);gap:22px;align-items:start}
-.overview-list{border:1px solid var(--ae-line);border-radius:10px;overflow:hidden;background:var(--ae-panel)}
-.overview-group h2{margin:0;background:#f6f8fb;border-bottom:1px solid var(--ae-line);padding:10px 14px;font-size:12px;font-weight:600;color:var(--ae-mut)}
-#overview .overview-row{display:block;width:100%;border:0;border-radius:0;border-bottom:1px solid var(--ae-line);padding:13px 14px;text-align:left;background:#fff}
+.overview-body{width:100%;max-width:1240px;margin:0 auto;padding:var(--ae-gap-24);display:grid;grid-template-columns:340px minmax(0,1fr);gap:var(--ae-gap-22);align-items:start}
+.overview-list{border:1px solid var(--ae-line);border-radius:var(--ae-radius-lg);overflow:hidden;background:var(--ae-panel)}
+.overview-group h2{margin:0;background:var(--ae-qa);border-bottom:1px solid var(--ae-line);padding:var(--ae-gap-10) var(--ae-gap-14);font-size:var(--ae-small);font-weight:600;color:var(--ae-mut)}
+#overview .overview-row{display:block;width:100%;border:0;border-radius:0;border-bottom:1px solid var(--ae-line);padding:13px var(--ae-gap-14);text-align:left;background:var(--ae-panel)}
 #overview .overview-row:last-child{border-bottom:0}
-#overview .overview-row:hover{background:#f7f9fc}
-#overview .overview-row[aria-pressed=true]{background:#eaf2fd;box-shadow:inset 3px 0 0 var(--ae-accent)}
-.overview-row-title{display:flex;align-items:baseline;gap:7px;overflow-wrap:anywhere;font-weight:600;line-height:1.6}
-.overview-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#8b93a0;flex:none;align-self:center}
-.overview-dot.running{background:var(--ae-green)}.overview-dot.invalid{background:var(--ae-red)}.overview-dot.archived{background:#ad7b30}
-.overview-row-meta{display:flex;gap:6px 12px;flex-wrap:wrap;color:var(--ae-mut);font-size:12px;line-height:1.6;margin-top:4px}
-.overview-current{font-size:11px;font-weight:400;color:var(--ae-accent);border:1px solid #b8d4f6;border-radius:4px;padding:0 4px;white-space:nowrap}
-.overview-detail{background:var(--ae-panel);border:1px solid var(--ae-line);border-radius:12px;padding:24px;min-width:0;position:sticky;top:86px;overflow-wrap:anywhere}
-.overview-detail h2{margin:0 0 8px;font-size:21px;line-height:1.5;color:var(--ae-navy)}
-.overview-identity{font-size:12px;color:var(--ae-mut);line-height:1.7;margin-bottom:16px}
-.overview-metadata{padding:16px 0;border-top:1px solid var(--ae-line);border-bottom:1px solid var(--ae-line)}
-.overview-metadata h3{font-size:12px;font-weight:600;color:var(--ae-mut);margin:0 0 8px}
-.overview-summary{font-size:15px;line-height:1.8;margin:0;white-space:pre-wrap}
+#overview .overview-row:hover{background:var(--ae-bg)}
+#overview .overview-row[aria-pressed=true]{background:var(--ae-selected);box-shadow:inset 3px 0 0 var(--ae-accent)}
+.overview-row-title{display:flex;align-items:baseline;gap:var(--ae-gap-7);overflow-wrap:anywhere;font-weight:600;line-height:1.6}
+.overview-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ae-mut);flex:none;align-self:center}
+.overview-dot.running{background:var(--ae-green)}.overview-dot.invalid{background:var(--ae-red)}.overview-dot.archived{background:var(--ae-amber)}
+.overview-row-meta{display:flex;gap:var(--ae-gap-6) var(--ae-gap-12);flex-wrap:wrap;color:var(--ae-mut);font-size:var(--ae-small);line-height:1.6;margin-top:var(--ae-gap-4)}
+.overview-current{font-size:var(--ae-badge);font-weight:400;color:var(--ae-accent);border:1px solid var(--ae-accent-line);border-radius:var(--ae-radius-xs);padding:0 var(--ae-gap-4);white-space:nowrap}
+.overview-detail{background:var(--ae-panel);border:1px solid var(--ae-line);border-radius:var(--ae-radius-xl);padding:var(--ae-gap-24);min-width:0;position:sticky;top:86px;overflow-wrap:anywhere}
+.overview-detail h2{margin:0 0 var(--ae-space);font-size:var(--ae-review-title);line-height:1.5;color:var(--ae-navy)}
+.overview-identity{font-size:var(--ae-small);color:var(--ae-mut);line-height:1.7;margin-bottom:var(--ae-space-lg)}
+.overview-metadata{padding:var(--ae-space-lg) 0;border-top:1px solid var(--ae-line);border-bottom:1px solid var(--ae-line)}
+.overview-metadata h3{font-size:var(--ae-small);font-weight:600;color:var(--ae-mut);margin:0 0 var(--ae-space)}
+.overview-summary{font-size:var(--ae-title);line-height:1.8;margin:0;white-space:pre-wrap}
 .overview-empty-summary{color:var(--ae-mut)}
-.overview-questions{margin:0;padding-left:20px}
-.overview-detail dl{display:grid;grid-template-columns:95px minmax(0,1fr);gap:10px 14px;margin:18px 0;font-size:14px;line-height:1.7}
+.overview-questions{margin:0;padding-left:var(--ae-gap-20)}
+.overview-detail dl{display:grid;grid-template-columns:95px minmax(0,1fr);gap:var(--ae-gap-10) var(--ae-gap-14);margin:var(--ae-gap-18) 0;font-size:var(--ae-body);line-height:1.7}
 .overview-metadata dl{margin-bottom:0}
 .overview-detail dt{color:var(--ae-mut)}.overview-detail dd{margin:0}
-.overview-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:20px;padding-top:16px;border-top:1px solid var(--ae-line)}
-#overview .overview-open{text-decoration:none;display:inline-block;background:var(--ae-accent);color:#fff;border-color:var(--ae-accent)}
-.overview-command{display:block;max-width:100%;padding:9px 12px;border:1px solid var(--ae-line);border-radius:6px;background:#f6f8fb;font-size:13px;user-select:all;overflow-wrap:anywhere}
-.overview-message{color:var(--ae-mut);padding:18px;font-size:14px;line-height:1.7;margin:0}
-.overview-archived-hidden{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;font-size:13px;color:var(--ae-mut);border-bottom:1px solid var(--ae-line)}
-#overviewError{color:#9b2c1f}.overview-count{font-weight:400;margin-left:6px}
-@media(max-width:800px){.overview-body{grid-template-columns:minmax(0,1fr);padding:14px;gap:14px}.overview-top{padding:12px 14px;gap:10px}.overview-detail{position:static}.overview-detail dl{grid-template-columns:80px minmax(0,1fr)}}
+.overview-actions{display:flex;gap:var(--ae-gap-10);align-items:center;flex-wrap:wrap;margin-top:var(--ae-gap-20);padding-top:var(--ae-space-lg);border-top:1px solid var(--ae-line)}
+#overview .overview-open{text-decoration:none;display:inline-block;background:var(--ae-accent);color:var(--ae-panel);border-color:var(--ae-accent)}
+.overview-command{display:block;max-width:100%;padding:var(--ae-gap-9) var(--ae-gap-12);border:1px solid var(--ae-line);border-radius:var(--ae-radius);background:var(--ae-qa);font-size:var(--ae-text);user-select:all;overflow-wrap:anywhere}
+.overview-message{color:var(--ae-mut);padding:var(--ae-gap-18);font-size:var(--ae-body);line-height:1.7;margin:0}
+.overview-archived-hidden{display:flex;align-items:center;justify-content:space-between;gap:var(--ae-gap-10);padding:var(--ae-gap-12) var(--ae-gap-14);font-size:var(--ae-text);color:var(--ae-mut);border-bottom:1px solid var(--ae-line)}
+#overviewError{color:var(--ae-warning)}.overview-count{font-weight:400;margin-left:var(--ae-gap-6)}
+@media(max-width:800px){.overview-body{grid-template-columns:minmax(0,1fr);padding:var(--ae-gap-14);gap:var(--ae-gap-14)}.overview-top{padding:var(--ae-gap-12) var(--ae-gap-14);gap:var(--ae-gap-10)}.overview-detail{position:static}.overview-detail dl{grid-template-columns:80px minmax(0,1fr)}}
 </style></head><body>
 <header>
-  <h1>__TITLE__</h1>
-  <span id="mode" class="file"></span>
-  <span id="receiver" role="status" aria-live="polite"></span>
-  <span id="handState"></span>
-  <span id="agentDelivery" role="status" aria-live="polite"></span>
-  <span class="stat" id="stat"></span>
-  <button id="prev" data-title="viewer.prevTitle" data-p-key="←"><span data-msg="viewer.prev">上一页</span><kbd>←</kbd></button>
-  <select id="jump" data-aria="viewer.jumpLabel"></select>
-  <button id="next" data-title="viewer.nextTitle" data-p-key="→"><span data-msg="viewer.next">下一页</span><kbd>→</kbd></button>
-  <a id="overviewBtn" class="overview-entry" href="#overview" data-msg="viewer.overview.title"></a>
-  <button id="helpBtn" data-title="viewer.helpTitle" data-p-key="H"><span data-msg="viewer.help">说明</span><kbd>H</kbd></button>
-  <button id="reloadBtn" data-title="viewer.reloadTitle"><span data-msg="viewer.reload">对照页已更新，点此刷新</span></button>
-  <button id="legacyBtn" data-title="viewer.legacyTitle"><span data-msg="viewer.legacy">导入旧批注</span></button>
-  <button id="strayBtn" data-title="viewer.strayTitle"><span data-msg="viewer.stray">其他审阅的未保存改动</span></button>
-  <button id="handBtn" data-title="viewer.hand.btnTitle"><span data-msg="viewer.hand.btn">交给 Agent</span><kbd>A</kbd></button>
-  <button id="notesBtn" data-title="viewer.notesTitle"><span data-msg="viewer.notes">批注</span><span class="badge" id="ncount">0</span><span class="badge fl" id="nflight"></span><span class="badge dr" id="ndraft"></span><kbd>N</kbd></button>
-  <label id="localeLabel"><span id="localeLabelText">界面语言</span>
-    <select id="localePick" aria-label="界面语言">
-      <option value="auto">自动</option>
-      <option value="zh-CN">简体中文</option>
-      <option value="en">English</option>
-    </select>
-  </label>
+  <div class="brand" aria-hidden="true">AE</div><h1 id="reviewTitle">__TITLE__</h1>
+  <!-- #111 接入分析能力后显示；主操作始终复用 primaryAction 插槽。 -->
+  <div id="modeSwitch" role="group" data-aria="viewer.layout.mode" hidden><button aria-pressed="true" data-msg="viewer.layout.annotations"></button><button aria-pressed="false" data-msg="viewer.layout.analysis"></button></div>
+  <div class="layout-controls" role="group" data-aria="viewer.layout.title">
+    <button id="sideToggle" class="icon-button" data-layout-toggle="side" data-title="viewer.layout.side" data-aria="viewer.layout.side" data-p-key="[" aria-controls="sidebar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></button><button id="scriptToggle" class="icon-button" data-layout-toggle="script" data-title="viewer.layout.script" data-aria="viewer.layout.script" data-p-key="]" aria-controls="scriptPane"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button><button id="panelToggle" class="icon-button" data-layout-toggle="panel" data-title="viewer.layout.panel" data-aria="viewer.layout.panel" data-p-key="&#92;" aria-controls="panelBody"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/></svg></button>
+  </div>
+  <button id="focusBtn" data-title="viewer.layout.focusTitle" data-p-key="F"><span data-msg="viewer.layout.focus"></span></button>
+  <div id="primaryAction"><button id="handBtn" data-title="viewer.hand.btnTitle"><span data-msg="viewer.hand.btn">交给 Agent</span></button></div>
 </header>
 <div id="archiveBanner" class="archive-banner" role="status" hidden>
   <span data-msg="viewer.overview.archiveNotice"></span>
@@ -279,22 +373,42 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
 </section>
 <div class="resume" id="srvBar" role="alert"><span id="srvText"></span><code id="srvCmd"></code><button id="srvCopy"><span data-msg="viewer.mode.barCopy">复制命令</span></button><button id="srvClose" data-title="viewer.mode.barClose">×</button></div>
 <div class="resume" id="resume" role="status"><span id="resumeText"></span><button id="resumeGo" style="display:none"></button><button id="resumeClose" title="关闭提示">×</button></div>
-<nav id="secs"></nav>
-<main>
-  <div class="slide" id="slide"><div id="host"></div></div>
-  <div class="script" id="script"><div id="pageScript"></div>
-    <div class="notes"><div id="nlist"></div></div>
-    <!-- 输入框停靠在面板底部：讲稿再长也不用往下翻找；翻到底时回到批注列表下方的原位 -->
+<main id="console">
+  <nav class="activity" data-aria="viewer.layout.title">
+    <button id="activityPages" class="icon-button" data-layout-toggle="side" data-title="viewer.layout.side" data-aria="viewer.layout.side" data-p-key="[" aria-controls="sidebar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/></svg></button>
+    <button id="notesBtn" data-title="viewer.notesTitle" data-aria="viewer.allTitle"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v13H9l-5 4zM8 8h8M8 12h6"/></svg><span class="sr-only" data-msg="viewer.notes"></span><span class="badge" id="ncount">0</span><span class="badge fl" id="nflight"></span><span class="badge dr" id="ndraft"></span></button>
+    <button id="historyBtn" data-title="viewer.hand.histTitle" data-aria="viewer.batch.title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg></button>
+    <a id="overviewBtn" href="#overview" data-title="viewer.overview.title" data-aria="viewer.overview.title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span class="sr-only" data-msg="viewer.overview.title"></span></a>
+    <button id="helpBtn" data-title="viewer.helpTitle" data-p-key="H" data-aria="viewer.help"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 4 2c-1 .5-1.5 1-1.5 2M12 17h.01"/></svg><span class="sr-only" data-msg="viewer.help"></span></button>
+  </nav>
+  <aside id="sidebar" data-aria="viewer.layout.pages">
+    <div class="pane-head"><span data-msg="viewer.layout.pages"></span><button  class="icon-button" data-layout-toggle="side" data-title="viewer.layout.side" data-aria="viewer.layout.side" data-p-key="[" aria-controls="sidebar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></button></div>
+    <div class="page-nav"><button id="prev" data-title="viewer.prevTitle" data-p-key="←" data-aria="viewer.prev"><span class="sr-only" data-msg="viewer.prev">上一页</span><span aria-hidden="true">←</span></button><select id="jump" data-aria="viewer.jumpLabel"></select><button id="next" data-title="viewer.nextTitle" data-p-key="→" data-aria="viewer.next"><span class="sr-only" data-msg="viewer.next">下一页</span><span aria-hidden="true">→</span></button></div>
+    <nav id="secs"></nav><div id="pageTree"></div>
+  </aside>
+  <section id="workspace">
+    <div id="panes">
+      <section id="reportPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.report"></span></div><div class="slide" id="slide"><div id="host"></div></div></section>
+      <section id="scriptPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.script"></span><button  class="icon-button" data-layout-toggle="script" data-title="viewer.layout.script" data-aria="viewer.layout.script" data-p-key="]" aria-controls="scriptPane"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button></div><div class="script" id="script"><div id="pageScript"></div></div></section>
+      <button id="scriptHandle" data-layout-toggle="script" data-title="viewer.layout.script" data-p-key="]" data-msg="viewer.target.script" aria-controls="scriptPane"></button>
+    </div>
+    <section id="bottomPanel" data-aria="viewer.layout.panel" data-p-key="&#92;">
+      <div class="panel-tabs">        <button data-act="seelist" id="seeList" data-title="viewer.seeListTitle"><span id="seeListLabel" data-msg="viewer.seeList">本页批注</span> <span id="nhere">0</span></button><button id="allTab" data-msg="viewer.allTitle"></button><button id="batchesTab" data-msg="viewer.batch.title"></button><button  class="icon-button" data-layout-toggle="panel" data-title="viewer.layout.panel" data-aria="viewer.layout.panel" data-p-key="&#92;" aria-controls="panelBody"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/></svg></button></div>
+      <div id="panelBody"><div class="notes"><div id="nlist"></div></div>
     <div class="form" id="nform"><div class="quote" id="qbox"></div><span id="styleChip"></span>
-      <textarea id="ntext" rows="2" placeholder="写修改意见（C）。可先选中报告或讲稿里的文字：直接删除（D）、改为（R），或作为引用写批注；也可以先「在报告上标注」（单击放点、拖动框选）。"></textarea>
-      <div class="row"><span id="targetLabel">对象</span> <select id="ntarget"><option value="报告">报告</option><option value="讲稿">讲稿</option><option value="报告和讲稿">报告和讲稿</option></select>
-        <label class="sk" data-title="viewer.skill.labelTitle" data-p-key="K"><span data-msg="viewer.skill.label">技能</span><kbd>K</kbd><input id="nskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" data-ph="viewer.skill.placeholder"></label>
-        <button data-act="always" id="alwaysBtn"><span data-msg="viewer.always.button">常驻技能</span><span id="alwaysN"></span><kbd>G</kbd></button>
-        <button data-act="pin" id="pinBtn" data-title="viewer.markPinTitle" data-p-key="P"><span data-msg="viewer.markPin">在报告上标注</span><kbd>P</kbd></button>
-        <button data-act="style" id="styleBtn" data-title="viewer.styleBtnTitle" data-p-key="S"><span data-msg="viewer.styleBtn">风格优化</span><kbd>S</kbd></button>
-        <button data-act="seelist" id="seeList" data-title="viewer.seeListTitle"><span id="seeListLabel" data-msg="viewer.seeList">本页批注</span> <span id="nhere">0</span> ↑</button>
+      <textarea id="ntext" rows="1" placeholder="写修改意见（C）。可先选中报告或讲稿里的文字：直接删除（D）、改为（R），或作为引用写批注；也可以先「在报告上标注」（单击放点、拖动框选）。"></textarea>
+      <div class="row"><span id="targetLabel" class="sr-only">对象</span> <select id="ntarget" aria-labelledby="targetLabel"><option value="报告">报告</option><option value="讲稿">讲稿</option><option value="报告和讲稿">报告和讲稿</option></select>
+        <label class="sk" data-title="viewer.skill.labelTitle" data-p-key="K"><span data-msg="viewer.skill.label">技能</span><input id="nskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" data-ph="viewer.skill.placeholder"></label>
+        <button data-act="always" id="alwaysBtn" data-title="viewer.always.button" data-p-key="G"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 10 5-10 5L2 8zM3 12l9 5 9-5M3 16l9 5 9-5"/></svg><span class="sr-only" data-msg="viewer.always.button">常驻技能</span><span id="alwaysN"></span></button>
+        <button data-act="pin" id="pinBtn" data-title="viewer.markPinTitle" data-p-key="P"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.5 7-12a7 7 0 0 0-14 0c0 5.5 7 12 7 12z"/><circle cx="12" cy="9" r="2"/></svg><span class="sr-only" data-msg="viewer.markPin">在报告上标注</span></button>
+        <button data-act="style" id="styleBtn" data-title="viewer.styleBtnTitle" data-p-key="S"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z"/></svg><span class="sr-only" data-msg="viewer.styleBtn">风格优化</span></button>
+
         <span class="grow"></span>
-        <button class="primary" data-act="add" id="addBtn" data-title="viewer.add"><span id="addLabel" data-msg="viewer.add">添加批注</span><kbd><span class="kmod">⌘</span>↵</kbd></button></div></div></div>
+        <button class="primary" data-act="add" id="addBtn" data-title="viewer.layout.addTitle"><span id="addLabel" data-msg="viewer.add">添加批注</span></button></div></div>
+      </div>
+    </section>
+  </section>
+  <div id="focusHint"><span data-msg="viewer.layout.focusHint"></span><button id="focusExit" data-msg="viewer.layout.exit"></button></div>
 <div id="selbar"><div class="sbtns"><button data-sel="delete" data-title="viewer.sel.deleteTitle" data-p-key="D"><span data-msg="viewer.sel.delete">删除</span><kbd>D</kbd></button><button data-sel="replace" data-title="viewer.sel.replaceTitle" data-p-key="R"><span data-msg="viewer.sel.replace">改为…</span><kbd>R</kbd></button><button data-sel="comment" data-title="viewer.sel.commentTitle" data-p-key="C"><span data-msg="viewer.sel.comment">批注</span><kbd>C</kbd></button></div>
 <label id="pairRow" data-title="viewer.pairTitle" data-p-key="B"><input type="checkbox" id="pairOn"><span id="pairText">同时改</span><kbd>B</kbd></label></div>
 <div id="pinpop" role="dialog"></div>
@@ -303,6 +417,15 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
 <div id="repbox"><p class="hint" data-msg="viewer.repTitle">把选中的文字改为：</p><textarea id="repText"></textarea>
 <div class="row"><button id="repCancel"><span data-msg="viewer.cancel">取消</span><kbd>Esc</kbd></button><button class="primary" id="repOk"><span data-msg="viewer.repOk">确定</span><kbd>↵</kbd></button></div></div>
 </main>
+<footer id="statusbar" data-aria="viewer.layout.status">
+  <span id="mode" class="file"></span><span id="receiver" role="status" aria-live="polite"></span><button id="handState"></button><span id="agentDelivery" role="status" aria-live="polite"></span>
+  <!-- 分析队列由 #111 接入，默认不显示。 -->
+  <span id="analysisQueue" hidden></span>
+  <button id="reloadBtn" data-title="viewer.reloadTitle" data-msg="viewer.reload"></button><button id="legacyBtn" data-title="viewer.legacyTitle" data-msg="viewer.legacy"></button><button id="strayBtn" data-title="viewer.strayTitle" data-msg="viewer.stray"></button>
+  <span class="stat" id="stat"></span>
+  <label id="localeLabel"><span id="localeLabelText">界面语言</span><select id="localePick" aria-label="界面语言"><option value="auto">自动</option><option value="zh-CN">简体中文</option><option value="en">English</option></select></label>
+  <button id="shortcutsBtn" data-msg="viewer.layout.shortcuts"></button>
+</footer>
 <div id="skillList" role="listbox" data-aria="viewer.skill.candidates"></div>
 <div class="modal" id="allnotes"><div class="dlg"><div class="bar"><h2 data-msg="viewer.allTitle">全部批注</h2>
 <button class="primary" id="copyAll" data-msg="export.copyAll">复制全部（粘贴给 Agent）</button><button id="dlAll" data-msg="export.download">下载 Markdown</button><button id="dlJson" data-msg="export.downloadJson">下载 JSON</button><select id="expLang" data-aria="export.langLabel" aria-label="导出语言"><option value="auto" data-msg="export.langAuto">跟随界面</option><option value="zh-CN">中文</option><option value="en">English</option></select><button id="openImp" data-msg="import.open">导入…</button><button id="dlFailed" style="display:none" data-title="viewer.recovery.failedTitle" data-msg="viewer.recovery.downloadFailed">下载未能保存的改动</button><button id="clearAll" data-msg="viewer.recovery.clear">清空</button><button data-close data-msg="viewer.close">关闭</button></div>
@@ -322,7 +445,7 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
 <span class="hint" id="hFullOld" style="display:none" data-msg="viewer.hand.fullCheckOld">本地服务是旧版本，不支持全量勾稽。请停掉旧服务，运行新版 serve.py 后刷新。</span>
 <span class="hint" id="hOld" style="display:none" data-msg="viewer.hand.oldServer">背后的本地服务是旧版本，不支持「做到哪一步 / 子代理 / 复核」：停掉旧服务后重新运行 serve.py 再刷新</span></div><p class="hint"><span id="handLast"></span> <button id="handHist" data-title="viewer.hand.histTitle"><span data-msg="viewer.hand.hist">处理记录</span><kbd>J</kbd></button></p>
 <textarea id="handMsg" data-ph="viewer.hand.msgPlaceholder"></textarea>
-<p class="hint" id="handHelp" data-msg="viewer.hand.help">提交后，正在等待的代理会收到这批未处理批注，右上角显示「等待接收 → 处理中 → 已处理」（选「已初改·待复核」则停在待复核，由你决定请求复核或直接定稿）。代理还没接收时再提交一次，会合并成同一次（附言、选项以最新为准）。</p></div></div></div>
+<p class="hint" id="handHelp" data-msg="viewer.hand.help">提交后，正在等待的代理会收到这批未处理批注，状态栏显示「等待接收 → 处理中 → 已处理」（选「已初改·待复核」则停在待复核，由你决定请求复核或直接定稿）。代理还没接收时再提交一次，会合并成同一次（附言、选项以最新为准）。</p></div></div></div>
 <div class="modal" id="always"><div class="dlg"><div class="bar"><h2 data-msg="viewer.always.dialogTitle">常驻技能</h2><button class="primary" id="alwaysSave"><span data-msg="viewer.always.save">保存</span><kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close><span data-msg="viewer.cancel">取消</span><kbd>Esc</kbd></button></div>
 <div class="pad"><p class="hint" data-msg="viewer.always.dialogHint">这份审阅里，范围内的每一条批注都会要求 Agent 处理前先调用这些技能——适合需要长期约束、不会主动想到用技能的 Agent。只对当前这份审阅生效；单条批注的「技能」照常可加。名称框按 Enter 添加下一项（有高亮候选时先选择），按 Ctrl/Cmd+Enter 保存。</p>
 <div id="alwaysRows"></div><p><button id="alwaysAdd" data-title="viewer.always.addTitle"><span data-msg="viewer.always.add">添加一个</span><kbd>↵</kbd></button></p></div></div></div>
@@ -330,14 +453,14 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
 <p id="stopServiceInfo" data-msg="viewer.batch.stopHint">停止本审阅所有标签页的本地服务，保留材料和批注；Agent 继续运行。</p>
 <div class="pad" id="batchList"></div></div></div>
 <div id="toast"></div>
-<div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys" data-ae-lang="zh-CN">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要；先改后审的批次分初改、复核两段，可在这里请求复核或直接定稿），P 在报告上标注，C 写批注，K 填技能，G 常驻技能（每条批注按范围都让 Agent 先调用）；Esc 关闭或取消。<br>
-在报告上标注（P）：进入标注后，在左侧报告上<b>单击</b>放一个点，或<b>按住拖动</b>框选一块区域（像截图那样），再写意见。点和框都可以直接拖动，框拖右下角可调大小；点一下弹出这条批注的编辑、标为已处理、去掉标注、删除；鼠标移到右侧批注上，对应标注会高亮。已有的批注在「编辑」里可以补标注或重新标注。<br>
+<div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys" data-ae-lang="zh-CN">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要；先改后审的批次分初改、复核两段，可在这里请求复核或直接定稿），P 在报告上标注，C 写批注，K 填技能，G 常驻技能（每条批注按范围都让 Agent 先调用）；Esc 关闭或取消。<br>布局：[ 切换侧栏，] 切换讲稿，\ 切换底部面板；F 全屏专注。全屏里 C 打开浮动输入框，⌘/Ctrl + ↵ 添加；P 标注，S 风格优化，← → 翻页，选中文字后 D / R / C 照常可用；Esc 先关闭浮层，再退出全屏。输入框聚焦时不触发布局快捷键。<br>
+在报告上标注（P）：进入标注后，在报告上<b>单击</b>放一个点，或<b>按住拖动</b>框选一块区域（像截图那样），再写意见。点和框都可以直接拖动，框拖右下角可调大小；点一下弹出这条批注的编辑、标为已处理、去掉标注、删除；鼠标移到批注列表上，对应标注会高亮。已有的批注在「编辑」里可以补标注或重新标注。<br>
 风格优化（S）：选范围——1 整页、2 标注处（用刚放的点或框；还没有就进入标注）；可写想要的方向（不写也行），再添加批注。<br>
 「技能」：某条批注需要特定技能（skill）才能改好时填上，多个用逗号分隔；Agent 处理这条前会先调用它们。候选来自技能目录和用过的技能，会参考当前审阅和批注给出建议；可查看全部，或按名称、说明搜索，用上下方向键和回车选择；搜不到时会说明没有匹配的技能。技能名称和说明始终用目录里的原文，不随界面语言改写。<br>
 选中报告或讲稿里的文字后：D 删除这段（再按一次 D 或 ↵ 确认，防止打字时误触），R 改为…（在弹出的框里改好按 ↵），C 以它为引用写批注；另一侧同一页有相同或相近的句子时会提示「同时改」（默认勾选，B 切换）。写批注时 ⌘/Ctrl + ↵ 添加。<br>
 批注保存：用本地服务打开（地址是 http://127.0.0.1:端口）时，每次改动自动写入审阅目录的 notes.json，Agent 可直接读取；直接双击打开 HTML 时批注只存在本浏览器，用「复制全部」或「下载」交给 Agent。</div>
-<div class="keys" data-ae-lang="en" hidden>Shortcuts: ← → change page, Home / End for the first and last page; L jumps to the page of the last annotation; H help, N all annotations, A hand to the agent, J processing history (each hand-off counts as one batch: how many it solved and its summary; a draft-then-review batch splits into a draft stage and a review stage, and you can ask for the review or finalize it here), P annotate on the report, C write an annotation, K fill in skills, G standing skills (every annotation asks the agent to call them first, by scope); Esc closes or cancels.<br>
-Annotate on the report (P): once you are in marking mode, <b>click</b> on the report on the left to drop a pin, or <b>hold and drag</b> to select an area (like a screenshot), then write your request. Pins and areas can both be dragged, and an area is resized from its bottom-right corner; click one to edit that annotation, mark it resolved, remove the mark or delete it; hover an annotation on the right and its mark lights up. An existing annotation can be given a mark, or re-annotated, from Edit.<br>
+<div class="keys" data-ae-lang="en" hidden>Shortcuts: ← → change page, Home / End for the first and last page; L jumps to the page of the last annotation; H help, N all annotations, A hand to the agent, J processing history (each hand-off counts as one batch: how many it solved and its summary; a draft-then-review batch splits into a draft stage and a review stage, and you can ask for the review or finalize it here), P annotate on the report, C write an annotation, K fill in skills, G standing skills (every annotation asks the agent to call them first, by scope); Esc closes or cancels.<br>Layout: [ toggles the sidebar, ] toggles speaker notes, and \ toggles the bottom panel; F enters focus mode. In focus mode, C opens the floating composer and ⌘/Ctrl + ↵ adds an annotation; P marks the report, S opens Style, ← → changes page, and D / R / C work on selected text. Esc closes the current overlay before leaving focus mode. Layout shortcuts do not run while typing.<br>
+Annotate on the report (P): once you are in marking mode, <b>click</b> on the report to drop a pin, or <b>hold and drag</b> to select an area (like a screenshot), then write your request. Pins and areas can both be dragged, and an area is resized from its bottom-right corner; click one to edit that annotation, mark it resolved, remove the mark or delete it; hover an annotation in the panel and its mark lights up. An existing annotation can be given a mark, or re-annotated, from Edit.<br>
 Style (S): choose a scope — 1 whole page, 2 at the mark (the pin or area you just placed; if there is none, marking mode starts); you can write the direction you want (or leave it empty), then add the annotation.<br>
 "Skills": when an annotation needs a particular skill to be done well, fill it in and separate several with commas; the agent calls them before handling this annotation. Candidates come from the skill catalog and the skills already used, with suggestions based on the current review and its annotations; you can see them all, or search by name or description, and choose with the arrow keys and Enter; when nothing matches it says so. Skill names and descriptions always stay as the catalog has them and are not rewritten for the interface language.<br>
 After you select text in the report or the speaker notes: D deletes it (press D or ↵ again to confirm, so typing does not trigger it by accident), R replaces it (edit it in the box that opens and press ↵), C writes an annotation quoting it; when the other side has the same or a similar sentence on this page you are offered "change both" (ticked by default, B toggles). While writing an annotation, ⌘/Ctrl + ↵ adds it.<br>
@@ -354,7 +477,7 @@ const $=id=>document.getElementById(id);
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},
   set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}},
   del(k){try{localStorage.removeItem(k)}catch(e){}}};
-const K={notes:`ae.${RID}.notes`,meta:`ae.${RID}.meta`,page:`ae.${RID}.page`,pending:`ae.${RID}.queue`,legacyPending:`ae.${RID}.pending`,failed:`ae.${RID}.failed`,rejected:`ae.${RID}.rejected`,drafts:`ae.${RID}.drafts`,hide:"ae.hideResolved",lang:"ae.exportLang"};
+const K={notes:`ae.${RID}.notes`,meta:`ae.${RID}.meta`,page:`ae.${RID}.page`,pending:`ae.${RID}.queue`,legacyPending:`ae.${RID}.pending`,failed:`ae.${RID}.failed`,rejected:`ae.${RID}.rejected`,drafts:`ae.${RID}.drafts`,layout:`ae.${RID}.layout`,hide:"ae.hideResolved",lang:"ae.exportLang"};
 const SS={get(k,d){try{const v=sessionStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{sessionStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 let i=0;{const s=+LS.get(K.page,0);if(s>0&&s<=N)i=s-1}
 let notes=FILE?LS.get(K.notes,[]):[]; if(!Array.isArray(notes))notes=[];
@@ -453,6 +576,7 @@ function applyMessages(root){
 function applyLocale(){
   uiLocale=resolveUi(activeChoice());
   document.documentElement.lang=uiLocale;
+  $("reviewTitle").textContent=NAME;$("reviewTitle").title=NAME;
   const pick=$("localePick");
   if(pick){
     for(const opt of pick.options){
@@ -501,6 +625,7 @@ function applyLocale(){
   refreshPinPop();
   renderArchiveBanners();
   renderOverview();
+  applyLayout();
 }
 $("localePick").addEventListener("change",()=>{
   try{localStorage.setItem(LOCALE_STORE, $("localePick").value)}catch(e){}
@@ -571,6 +696,71 @@ function toast(t,ms){const e=$("toast");e.textContent=t;e.style.display="block";
 P.forEach((p,k)=>{const o=document.createElement("option");o.value=k;o.textContent=tMsg("viewer.page",{page:p.n});$("jump").appendChild(o)});
 S.forEach(s=>{const b=document.createElement("button");b.textContent=s[0];b.onclick=()=>{const k=P.findIndex(p=>p.n>=s[1]);if(k>=0)go(k)};$("secs").appendChild(b)});
 
+
+// ---------- 布局：只在本浏览器按审阅保存显式选择；未选择的抽屉跟随窄屏默认值 ----------
+const storedLayout=LS.get(K.layout,{}), drawerPrefs={};
+for(const name of ["side","script","panel"]){if(storedLayout&&typeof storedLayout[name]==="boolean")drawerPrefs[name]=storedLayout[name]}
+let focusMode=false,focusComposer=false,nativeFocus=false,keepFocusOnExit=false;
+function drawerOpen(name){return name in drawerPrefs?drawerPrefs[name]:name==="panel"||innerWidth>900}
+function applyLayout(){
+  for(const name of ["side","script","panel"]){
+    const on=drawerOpen(name);document.body.classList.toggle(name+"-off",!on);
+    document.querySelectorAll('[data-layout-toggle="'+name+'"]').forEach(b=>b.setAttribute("aria-expanded",String(on)));
+  }
+  fit();
+}
+function setDrawer(name,on){drawerPrefs[name]=on;LS.set(K.layout,drawerPrefs);applyLayout()}
+document.querySelectorAll("[data-layout-toggle]").forEach(b=>b.addEventListener("click",()=>setDrawer(b.dataset.layoutToggle,!drawerOpen(b.dataset.layoutToggle))));
+function openComposer(input="ntext"){
+  if(focusMode){focusComposer=true;document.body.classList.add("focus-composer")}
+  else if(!drawerOpen("panel"))setDrawer("panel",true);
+  $(input).focus();autoGrow();
+}
+function closeComposer(){saveDraft();focusComposer=false;document.body.classList.remove("focus-composer");if($("nform").contains(document.activeElement))document.activeElement.blur()}
+function applyFocus(on){
+  focusMode=on;document.body.classList.toggle("focus-mode",on);$("focusBtn").setAttribute("aria-pressed",String(on));
+  closeComposer();fit();
+}
+async function toggleFocus(on=!focusMode){
+  if(on){
+    if(overviewShown())return;
+    applyFocus(true);
+    try{if(!document.fullscreenElement&&document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen()}
+    catch(error){/* Fullscreen API 不可用时保留覆盖窗口的 CSS 专注模式。 */}
+    if(!focusMode&&document.fullscreenElement){try{await document.exitFullscreen()}catch(error){}}
+  }else{
+    applyFocus(false);keepFocusOnExit=false;
+    if(document.fullscreenElement){try{await document.exitFullscreen()}catch(error){}}
+  }
+}
+document.addEventListener("fullscreenchange",()=>{
+  if(document.fullscreenElement){nativeFocus=focusMode;return}
+  if(!nativeFocus)return;
+  nativeFocus=false;
+  // 浏览器也可能用 Esc 退出原生全屏；浮层关闭后仍保留 CSS 专注模式，下一次 Esc 再退出。
+  if(keepFocusOnExit||focusLayerOpen()){keepFocusOnExit=false;if(focusLayerOpen())closeFocusLayer();return}
+  applyFocus(false);
+});
+function focusLayerOpen(){return !!document.querySelector(".modal.on,#skillList.on,#selbar.on,#repbox.on,#pinpop.on,#stylemenu.on")||markMode||focusComposer}
+function closeFocusLayer(){
+  if($("skillList").classList.contains("on")){hideSkillList();return}
+  const modal=[...document.querySelectorAll(".modal.on")].pop();
+  if(modal){modal.classList.remove("on");return}
+  if($("selbar").classList.contains("on")||$("repbox").classList.contains("on")){hideSelbar();sel=null;clearSelection();if(document.activeElement)document.activeElement.blur();return}
+  if($("pinpop").classList.contains("on")){closePinPop();return}
+  if($("stylemenu").classList.contains("on")){closeStyleMenu();return}
+  if(markMode){setMarkMode(false);return}
+  if(focusComposer)closeComposer();
+}
+document.addEventListener("keydown",e=>{
+  if(e.key!=="Escape"||!focusMode||e.isComposing||e.keyCode===229)return;
+  e.preventDefault();e.stopImmediatePropagation();
+  keepFocusOnExit=!!document.fullscreenElement&&focusLayerOpen();
+  if(focusLayerOpen())closeFocusLayer();else toggleFocus(false);
+},true);
+$("focusBtn").onclick=()=>toggleFocus();$("focusExit").onclick=()=>toggleFocus(false);
+addEventListener("resize",applyLayout);
+
 // ---------- 报告舞台（Shadow DOM 隔离报告样式） ----------
 $("host").lang=__REPORT_LANG__;   // 保留材料自己的语言；未知时显式阻断界面语言继承
 const sr=$("host").attachShadow({mode:"open"});
@@ -601,7 +791,9 @@ ${RCSS}
 #ae-stage.markmode .ae-pin,#ae-stage.markmode .ae-region{pointer-events:none}
 </style><div class="ae-frame" id="ae-frame"><div id="ae-stage"></div></div>`;
 const stage=sr.getElementById("ae-stage"), frame=sr.getElementById("ae-frame");
-function fit(){const b=$("slide").getBoundingClientRect();const k=Math.max(.1,Math.min((b.width-24)/1280,(b.height-24)/720));
+function fit(){const slide=$("slide"),style=getComputedStyle(slide),b=slide.getBoundingClientRect();
+  const w=b.width-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight),h=b.height-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom);
+  const k=Math.max(.01,Math.min((w-24)/1280,(h-24)/720));
   frame.style.width=1280*k+"px";frame.style.height=720*k+"px";stage.style.transform=`scale(${k})`;
   stage.style.setProperty("--ae-pin",(24/k).toFixed(1)+"px")}   // 标点在屏幕上始终约 24px，缩小了也好点、好拖
 
@@ -949,7 +1141,7 @@ function noteHtml(x){
   return `<div class="note${done?" done":""}${dr?" drafted":""}" data-note="${id}"><div class="meta"><span>${escH(targetShown)}${qe?` · ${tMsg(qe.op==="delete"?"viewer.quickDelete":"viewer.quickReplace")}`:""}${x.style&&x.style.scope?` · ${tMsg("viewer.styleBtn")}${hasMark(x)?"":`·${styleLabel(x.style.scope)}`}`:""}${hasMark(x)?` · ${tMsg(regionOf(x)?"viewer.markKind.region":"viewer.markKind.pin")} ${markNo(x.page,x.id)}`:""}${done?`<span class="chip">${tMsg("viewer.chip.resolved")}${x.resolvedBy&&x.resolvedBy!=="page"?" · "+who(x.resolvedBy):""}</span>`:""}${dr?`<span class="chip dr">${tMsg("viewer.chip.drafted")}${x.draftedBy?" · "+who(x.draftedBy):""}</span>`:""}${fl?`<span class="chip fl" title="${escH(tMsg("viewer.chip.inFlightTitle"))}">${tMsg("viewer.chip.inFlight")}</span>`:""}</span><span class="acts">${acts}</span></div>`
    +(x.quote&&!qe?`<blockquote>${x.quoteFrom?escH(tMsg("viewer.quoteFrom",{side:targetLabel(x.quoteFrom)})):""}${escH(x.quote)}</blockquote>`:"")
    +body
-   +(x.orphan?`<div class="anchor" style="color:#a2412f">${escH(tMsg("viewer.orphanWarning"))}</div>`:"")
+   +(x.orphan?`<div class="anchor" style="color:var(--ae-warning)">${escH(tMsg("viewer.orphanWarning"))}</div>`:"")
    +(ed?`<div class="anchor">${tMsg("viewer.moveTo")} <select id="epage">${P.map(q=>`<option value="${q.n}"${q.n===(editBuf["pg:"+x.id]??x.page)?" selected":""}>${escH(tMsg("viewer.page",{page:q.n}))}</option>`).join("")}</select></div>`:"")
    +(!ed&&x.anchor?`<div class="anchor">${tMsg("viewer.anchorLabel")}${escH(clip(x.anchor,140))}</div>`:"")
    +(()=>{if(ed)return"";const al=done?[]:alwaysFor(x).filter((a,k,arr)=>!sk.includes(a.name)&&arr.findIndex(b=>b.name===a.name)===k);
@@ -971,6 +1163,19 @@ function refreshList(force){
   $("nlist").innerHTML=`<div class="lab"><span>${tMsg("viewer.pageNotes")}${mine.length&&mine.every(isDone)?` · ${tMsg("viewer.allResolved")}`:""}</span>${nDone?`<button data-act="hide">${tMsg(hideDone?"viewer.showResolved":"viewer.hideResolved",{count:nDone})}</button>`:""}</div>`
     +(shown.map(noteHtml).join("")||`<p class="empty">${escH(tMsg("viewer.empty"))}</p>`);
   drawPins();updateCounts()}
+
+let pageTreeHtml="";
+function renderPageTree(){
+  let previous=null;
+  const html=P.map((p,k)=>{
+    const section=secOf(p.n),q=statsOf(p.n),o=$("jump").options[k];
+    const group=section&&section!==previous?'<h2 class="page-group">'+escH(section[0])+'</h2>':"";previous=section;
+    return group+`<button class="page-node" data-page-index="${k}" ${k===i?'aria-current="page"':''} title="${escH(o.textContent+' · '+unH(p.title))}"><span class="page-number">${p.n}</span><span class="page-title">${escH(unH(p.title))}</span>${q.o?`<span class="badge" title="${escH(tMsg("viewer.count.open",{open:q.o,total:q.n}))}">${q.o}</span>`:""}${q.f?`<span class="badge fl" title="${escH(tMsg("viewer.count.inFlight"))}">${q.f}</span>`:""}${q.d?`<span class="badge dr" title="${escH(tMsg("viewer.count.draft"))}">${q.d}</span>`:""}</button>`;
+  }).join("");
+  if(html!==pageTreeHtml){$("pageTree").innerHTML=html;pageTreeHtml=html}
+}
+$("pageTree").onclick=e=>{const b=e.target.closest("[data-page-index]");if(b)go(+b.dataset.pageIndex)};
+
 // 「批注」按钮：红 = 还没交给 Agent 的未处理，蓝 = 处理中（已交给 Agent），琥珀 = 已初改·待复核
 function counts(list){let o=0,f=0,d=0;list.forEach(x=>{if(isDraft(x))d++;else if(inFlight(x))f++;else if(!isDone(x))o++});return{o,f,d}}
 function updateCounts(){const c=allStats,b=$("ncount");
@@ -978,6 +1183,7 @@ function updateCounts(){const c=allStats,b=$("ncount");
   b.title=tMsg("viewer.count.open",{open:c.o,total:notes.length});
   $("nflight").textContent=c.f?tMsg("viewer.jumpInFlight",{count:c.f}):"";$("nflight").title=tMsg("viewer.count.inFlight");
   $("ndraft").textContent=c.d?tMsg("viewer.jumpDraft",{count:c.d}):"";$("ndraft").title=tMsg("viewer.count.draft");
+  $("nflight").dataset.count=c.f;$("ndraft").dataset.count=c.d;
   [...$("jump").options].forEach((o,k)=>{const q=statsOf(P[k].n),parts=[];
     if(q.o)parts.push(tMsg("viewer.jumpNotes",{count:q.o}));
     if(q.f)parts.push(tMsg("viewer.jumpInFlight",{count:q.f}));
@@ -985,7 +1191,7 @@ function updateCounts(){const c=allStats,b=$("ncount");
     const suffix=parts.length?tMsg("viewer.jumpCounts",{parts:parts.join(tMsg("viewer.jumpSep"))})
       :q.n?tMsg("viewer.jumpDone"):"";
     o.textContent=tMsg("viewer.page",{page:P[k].n})+suffix});
-  updateLegacy();renderResume()}
+  renderPageTree();updateLegacy();renderResume()}
 function markBtnLabel(){const b=$("pinBtn"),rn=markMode&&remarkId?notes.find(n=>n.id===remarkId):null;
   const label=b.querySelector("[data-msg]");
   if(label)label.textContent=markMode?(rn?tMsg("viewer.markRehint",{title:clip(noteSummary(rn),12)}):tMsg("viewer.markHint")):tMsg("viewer.markPin")}
@@ -1015,7 +1221,7 @@ function hideSelbar(){$("selbar").classList.remove("on");$("repbox").classList.r
 function armDelete(on){delArmed=on;const b=$("selbar").querySelector('[data-sel="delete"]');
   const label=b.querySelector("[data-msg]");
   label.textContent=on?tMsg("viewer.sel.confirmDelete",{key:"D"}):tMsg("viewer.sel.delete");
-  b.style.background=on?"#fde7e3":""}
+  b.style.background=on?"var(--ae-danger-bg)":""}
 function clearSelection(){try{getSelection().removeAllRanges();if(sr.getSelection)sr.getSelection().removeAllRanges()}catch(e){}}
 document.addEventListener("mousedown",e=>{if(!$("selbar").contains(e.target)&&!$("repbox").contains(e.target))hideSelbar();
   if(!$("pinpop").contains(e.target))closePinPop();
@@ -1060,7 +1266,7 @@ function selAction(a){if(!sel)return;
   if(a==="delete")addEdit("delete");
   else if(a==="replace"){const r=$("repbox"),t=$("repText");$("selbar").classList.remove("on");r.classList.add("on");place(r,sel.x,sel.y);
     t.value=sel.text;t.focus();t.select()}
-  else{hideSelbar();clearSelection();$("ntext").focus()}}
+  else{hideSelbar();clearSelection();openComposer()}}
 $("selbar").addEventListener("click",e=>{const b=e.target.closest("[data-sel]");if(b)selAction(b.dataset.sel)});
 function repOk(){const to=$("repText").value.trim();if(!sel)return hideSelbar();
   if(to===sel.text.trim()){toast(tMsg("viewer.unchanged"));return}addEdit("replace",to)}
@@ -1082,7 +1288,7 @@ function placeMark(mk,rid){
     toast(tMsg(mk.region?"viewer.regionAdded":"viewer.pinAdded"));return}
   pendingPin=mk.pin||null;pendingRegion=mk.region||null;
   if($("ntarget").value==="讲稿")$("ntarget").value="报告";   // 标注在报告上
-  updateStyleChip();drawPins();saveDraft();$("ntext").focus();
+  updateStyleChip();drawPins();saveDraft();openComposer();
   toast(mk.region?tMsg("viewer.markPickedRegion"):tMsg("viewer.markPickedPin"))}
 function addNote(){let text=$("ntext").value.trim();
   if(!text&&!styleOn){toast(tMsg("viewer.writeFirst"));return}
@@ -1096,12 +1302,12 @@ function addNote(){let text=$("ntext").value.trim();
   styleOn=false;pendingRegion=null;updateStyleChip();
   if(quote&&quotePair)note.pair={side:quotePair.side,text:quotePair.text,match:quotePair.match};
   const sk=parseSkills($("nskills").value);if(sk.length)note.skills=sk;$("nskills").value="";
-  quote="";quotePair=null;pendingPin=null;$("ntext").value="";autoGrow();showQuote();delete drafts[p.n];SS.set(K.drafts,drafts);mutate({kind:"add",note});toast(tMsg("viewer.added"))}
-$("script").addEventListener("click",e=>{const b=e.target.closest("[data-act]");if(!b)return;const id=b.dataset.id;
+  quote="";quotePair=null;pendingPin=null;$("ntext").value="";autoGrow();showQuote();delete drafts[p.n];SS.set(K.drafts,drafts);mutate({kind:"add",note});if(focusMode)closeComposer();toast(tMsg("viewer.added"))}
+$("bottomPanel").addEventListener("click",e=>{const b=e.target.closest("[data-act]");if(!b)return;const id=b.dataset.id;
   switch(b.dataset.act){
     case "add":addNote();break;
     case "always":openAlways();break;
-    case "seelist":$("nlist").scrollIntoView({block:"start",behavior:"smooth"});break;
+    case "seelist":setDrawer("panel",true);$("nlist").scrollIntoView({block:"start",behavior:"smooth"});break;
     case "pin":remarkId=null;setMarkMode(!markMode);break;
     case "remark":if(oldGuard())break;stashEdit();remarkId=id;setMarkMode(true);break;
     case "style":openStyleMenu();break;
@@ -1123,16 +1329,16 @@ function autoGrow(){const t=$("ntext");t.style.height="auto";t.style.height=Math
 $("ntext").addEventListener("input",()=>{autoGrow();clearTimeout(saveDraft.h);saveDraft.h=setTimeout(saveDraft,400)});
 addEventListener("pagehide",saveDraft);
 $("ntext").addEventListener("keydown",e=>{if(e.isComposing||e.keyCode===229)return;if(e.key==="Enter"&&(e.metaKey||e.ctrlKey))addNote();else if(e.key==="Escape")e.target.blur()});
-$("script").addEventListener("keydown",e=>{if(e.target.id!=="etext"||e.isComposing)return;
+$("bottomPanel").addEventListener("keydown",e=>{if(e.target.id!=="etext"||e.isComposing)return;
   if(e.key==="Enter"&&(e.metaKey||e.ctrlKey))e.target.closest(".note").querySelector('[data-act="save"]').click();
   else if(e.key==="Escape")e.target.closest(".note").querySelector('[data-act="cancel"]').click()});
 
-// ---------- 标点：拖动移动、点击弹出操作、与右侧批注互相高亮 ----------
+// ---------- 标点：拖动移动、点击弹出操作、与批注列表互相高亮 ----------
 let drag=null;
 function pinEl(id){return [...stage.querySelectorAll(".ae-pin,.ae-region")].find(p=>p.dataset.id===id)}
 function highlightPin(id){stage.querySelectorAll(".ae-pin,.ae-region").forEach(p=>p.classList.toggle("hl",!!id&&p.dataset.id===id))}
 function flash(el){if(!el)return;el.classList.remove("flash");void el.offsetWidth;el.classList.add("flash")}
-function flashCard(id){const c=$("nlist").querySelector(`[data-note="${CSS.escape(id)}"]`);if(c){c.scrollIntoView({block:"nearest",behavior:"smooth"});flash(c)}}
+function flashCard(id){if(focusMode)return;if(!drawerOpen("panel"))setDrawer("panel",true);const c=$("nlist").querySelector(`[data-note="${CSS.escape(id)}"]`);if(c){c.scrollIntoView({block:"nearest",behavior:"smooth"});flash(c)}}
 function closePinPop(){$("pinpop").classList.remove("on")}
 function refreshPinPop(){const pop=$("pinpop");if(!pop.classList.contains("on"))return;
   const el=pop.dataset.id?pinEl(pop.dataset.id):stage.querySelector(pop.dataset.region==="true"?".ae-region.pending":".ae-pin.pending");
@@ -1151,7 +1357,7 @@ function openPinPop(id,el,repaint=false){const pop=$("pinpop"),r=el.getBoundingC
 $("pinpop").addEventListener("click",e=>{const b=e.target.closest("[data-pp]");if(!b)return;const id=b.dataset.id,a=b.dataset.pp;closePinPop();
   if(a==="unpend"){pendingPin=null;updateStyleChip();drawPins();saveDraft()}
   else if(a==="unregion"){pendingRegion=null;updateStyleChip();drawPins();saveDraft()}
-  else if(a==="edit"){endRemark();stashEdit();editingId=id;refreshList(true);flashCard(id);($("etext")||$("eskills")).focus()}
+  else if(a==="edit"){if(focusMode)toggleFocus(false);if(!drawerOpen("panel"))setDrawer("panel",true);endRemark();stashEdit();editingId=id;refreshList(true);flashCard(id);($("etext")||$("eskills")).focus()}
   else if(a==="resolve"||a==="reopen")mutate({kind:"patch",id,body:{status:a==="resolve"?"resolved":"open"}});
   else if(a==="unpin"){mutate({kind:"patch",id,body:{pin:null,region:null}});drawPins()}
   else if(a==="del"){if(confirm(tMsg("viewer.confirmDelete")))mutate({kind:"del",id})}});
@@ -1200,11 +1406,13 @@ $("nlist").addEventListener("mouseleave",()=>highlightPin(null));
 $("nlist").addEventListener("click",e=>{if(e.target.closest("button,textarea,input,a"))return;const c=e.target.closest("[data-note]");if(c)flash(pinEl(c.dataset.note))});
 
 // ---------- 风格优化：范围菜单、框选模式、位置线索 ----------
-function openStyleMenu(){const m=$("stylemenu"),b=$("styleBtn").getBoundingClientRect();m.classList.add("on");place(m,b.left+b.width/2,b.top-m.getBoundingClientRect().height-30)}
+function openStyleMenu(){const m=$("stylemenu"),b=$("styleBtn").getBoundingClientRect();m.classList.add("on");
+  const x=focusMode&&!focusComposer?innerWidth/2:b.left+b.width/2,y=focusMode&&!focusComposer?innerHeight-90:b.top;
+  place(m,x,y-m.getBoundingClientRect().height-30)}
 function closeStyleMenu(){$("stylemenu").classList.remove("on")}
 function chooseStyle(scope){closeStyleMenu();endRemark();styleOn=true;
   if(scope==="page"){if(pendingPin||pendingRegion)toast(tMsg("viewer.styleDroppedMark"));pendingPin=null;pendingRegion=null}
-  updateStyleChip();drawPins();saveDraft();$("ntext").focus();
+  updateStyleChip();drawPins();saveDraft();openComposer();
   if(scope!=="page"&&!pendingPin&&!pendingRegion){remarkId=null;setMarkMode(true)}}
 $("stylemenu").addEventListener("click",e=>{const b=e.target.closest("[data-sm]");if(b)chooseStyle(b.dataset.sm)});
 function updateStyleChip(){const c=$("styleChip"),area=$("ntext");
@@ -1405,15 +1613,20 @@ function handReceiverText(){const changed=(handDestination&&handDestination.bind
 function renderReceiver(){const el=$("receiver");el.textContent=receiverText(receiver);
   el.title=receiver&&receiver.sessionId?tMsg("viewer.receiver.full",{harness:receiver.harness,session:receiver.sessionId}):el.textContent;
   el.className=mode!=="server"||!receiver||["unconfigured","restart-required","error"].includes(receiver.state)?"warn":"";
+  updateStatusBar();
   if($("hand").classList.contains("on"))$("handReceiver").textContent=handReceiverText()}
+function updateStatusBar(){
+  const warning=mode!=="file"&&(mode!=="server"||srvOld||$("receiver").classList.contains("warn")||$("agentDelivery").classList.contains("warn"));
+  $("statusbar").classList.toggle("warn",warning);
+}
 function renderDelivery(){const el=$("agentDelivery"),a=agentDelivery,L=hand&&hand.latest;
-  if(a&&a.adapter==="wait"){el.textContent="";el.title="";return}
+  if(a&&a.adapter==="wait"){el.textContent="";el.title="";el.classList.remove("warn");updateStatusBar();return}
   const event=L&&["review","reviewing"].includes(L.status)?"review":"handoff";
   const matched=a&&L&&a.seq===L.seq&&a.event===event;
   let state=a&&a.adapter==="codex-desktop"?a.state:null;
   if(L&&!matched&&state!=="error")state=["pending","claimed","review","reviewing"].includes(L.status)?"unknown":a&&a.adapter?"bound":null;
   el.textContent=state?tMsg(DELIVERY_LABEL[state]||"viewer.agent.error"):"";
-  el.title=el.textContent;el.style.color=["failed","unconfirmed","error"].includes(state)?"#fcd34d":""}
+  el.title=el.textContent;el.classList.toggle("warn",["failed","unconfirmed","error"].includes(state));updateStatusBar()}
 function renderHand(){renderDelivery();const el=$("handState"),L=hand&&hand.latest;
   if(handQueued){el.className="queued";el.textContent=tMsg("viewer.hand.state.queued");el.title=tMsg("viewer.hand.state.queuedTitle");return}
   if(!L){el.className="";el.textContent="";el.title="";return}
@@ -1789,13 +2002,14 @@ function render(){
   stashEdit();
   editingId=null;if(markMode)setMarkMode(false);closeStyleMenu();hideSelbar();closePinPop();sel=null;loadDraft();refreshList(true);$("script").scrollTop=0;
   LS.set(K.page,i+1)}
-function go(k){k=Math.max(0,Math.min(N-1,k));if(k===i)return;saveDraft();i=k;render()}
+function go(k){k=Math.max(0,Math.min(N-1,k));if(k===i)return;if(focusMode)closeComposer();else saveDraft();i=k;render()}
 $("prev").onclick=()=>go(i-1);$("next").onclick=()=>go(i+1);addEventListener("resize",fit);
 $("jump").onchange=e=>go(+e.target.value);
-$("helpBtn").onclick=()=>$("help").classList.toggle("on");
+$("helpBtn").onclick=$("shortcutsBtn").onclick=()=>$("help").classList.toggle("on");
+$("allTab").onclick=openAll;$("historyBtn").onclick=$("batchesTab").onclick=openBatches;
 document.addEventListener("keydown",e=>{
   if(overviewShown())return;
-  if(["SELECT","TEXTAREA","INPUT"].includes(e.target.tagName)||e.isComposing||e.metaKey||e.ctrlKey||e.altKey)return;
+  if(["SELECT","TEXTAREA","INPUT"].includes(e.target.tagName)||e.target.isContentEditable||e.isComposing||e.metaKey||e.ctrlKey||e.altKey)return;
   const k=e.key.toLowerCase();
   if($("stylemenu").classList.contains("on")){   // 风格优化范围：1 整页、2 标注处（3 是旧版的「标点处」，同 2）
     if(k==="1"||k==="2"||k==="3"){e.preventDefault();chooseStyle(k==="1"?"page":"mark");return}
@@ -1807,14 +2021,16 @@ document.addEventListener("keydown",e=>{
     if(k==="b"&&sel&&sel.pair){e.preventDefault();$("pairOn").checked=!$("pairOn").checked;syncPair();return}
     if(e.key==="Escape"){hideSelbar();sel=null;return}}
   if(document.querySelector(".modal.on")&&e.key!=="Escape")return;
+  if(k==="["||k==="]"||k==="\\"){e.preventDefault();const name=k==="["?"side":k==="]"?"script":"panel";setDrawer(name,!drawerOpen(name));return}
+  if(k==="f"){e.preventDefault();toggleFocus();return}
   if(k==="a"){e.preventDefault();openHand();return}   // 交给 Agent（有待复核的批次时，弹窗顶部可请求复核或定稿）
   if(k==="j"){e.preventDefault();openBatches();return}
   if(k==="g"){e.preventDefault();openAlways();return}
   if(k==="p"){e.preventDefault();remarkId=null;setMarkMode(!markMode);return}
   if(k==="l"){e.preventDefault();goLast();return}
-  if(k==="k"){e.preventDefault();$("nskills").focus();return}
+  if(k==="k"){e.preventDefault();openComposer("nskills");return}
   if(k==="s"){e.preventDefault();openStyleMenu();return}
-  if(k==="c"){e.preventDefault();$("ntext").focus();return}
+  if(k==="c"){e.preventDefault();openComposer();return}
   if(e.key==="n"||e.key==="N"){openAll();return}
   if(e.key==="ArrowRight"||e.key==="PageDown"){go(i+1);e.preventDefault()}
   else if(e.key==="ArrowLeft"||e.key==="PageUp"){go(i-1);e.preventDefault()}
@@ -1944,6 +2160,7 @@ async function loadOverview(){
 }
 function overviewRoute(event){
   const shown=overviewShown();
+  if(shown&&focusMode)toggleFocus(false);
   if(shown&&event){saveDraft();document.querySelectorAll(".modal.on").forEach(el=>el.classList.remove("on"))}
   document.body.classList.toggle("overview-mode",shown);$("overview").hidden=!shown;
   if(shown){renderOverview();loadOverview()}else requestAnimationFrame(fit);
@@ -1961,6 +2178,7 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE)pol
 
 (async function init(){
   applyLocale();
+  applyLayout();
   overviewRoute();
   if(FILE){mirror();updateMode();render();return}
   LS.del(K.notes);                      // 服务模式不在浏览器里留整份批注副本

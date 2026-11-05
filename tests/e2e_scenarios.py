@@ -30,6 +30,20 @@ class Scenario:
 SCENARIOS: list[Scenario] = [
     Scenario(
         parallel_safe=True,
+        id="console-layout",
+        title="控制台分区：抽屉鼠标与快捷键开合、按审阅记忆、双语单行标题栏与窄屏入口",
+        fixture="fixtures/sample 两份独立合成审阅；file:// 模式与服务模式",
+        isolation="独立审阅目录、端口和浏览器上下文；截图只用合成数据",
+    ),
+    Scenario(
+        parallel_safe=True,
+        id="focus-mode",
+        title="全屏专注：复用输入框添加批注、标注与风格、选区操作、翻页、Esc 分层退出及 CSS 退路",
+        fixture="fixtures/sample 合成审阅；原生全屏与强制不可用的 Fullscreen API",
+        isolation="独立临时审阅目录与浏览器上下文",
+    ),
+    Scenario(
+        parallel_safe=True,
         id="receiver-binding",
         title="接收方身份：harness、会话和等待／处理／未等待状态常显，双语与旧服务提示一致",
         fixture="fixtures/sample 合成审阅；显式等待会话绑定；notes.py wait/claim/done 真实子进程",
