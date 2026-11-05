@@ -1,0 +1,44 @@
+{
+  "legacy_allowlist": [
+    "README.md",
+    "README.en.md",
+    "docs/assets/"
+  ],
+  "audited_paths": [
+    "GLOSSARY.md",
+    "docs/adr/"
+  ],
+  "renamed_adr": "docs/adr/0002-renamed.md",
+  "readers": [
+    {
+      "path": "tests/test_consumer.py",
+      "source": "from pathlib import Path\ntext = Path(\"GLOSSARY.md\").read_text()\n"
+    },
+    {
+      "path": "verify_probe.py",
+      "source": "from pathlib import Path\ntext = (Path(\"docs\") / \"adr\" / \"synthetic.md\").read_bytes()\n"
+    },
+    {
+      "path": "tools/read-doc.sh",
+      "source": "#!/bin/sh\ncat docs/adr/*.md\n"
+    },
+    {
+      "path": "skill/annotation-everything/scripts/consumer.py",
+      "source": "with open(\"GLOSSARY.md\") as source:\n    print(source.read())\n"
+    },
+    {
+      "path": "tools/glob_docs.py",
+      "source": "from pathlib import Path\nfor path in (Path(\".\") / \"docs\").rglob(\"*.md\"):\n    print(path.read_text())\n"
+    },
+    {
+      "path": "tools/glob_path.py",
+      "source": "from pathlib import Path\nfor path in Path(\".\").glob(\"docs/**/*.md\"):\n    print(path.read_text())\n"
+    },
+    {
+      "path": "tools/glob-docs.sh",
+      "source": "#!/bin/sh\ncat docs/**/*.md\n"
+    }
+  ],
+  "term_document": "GLOSSARY.md",
+  "decision_document": "docs/adr/0001-synthetic.md"
+}

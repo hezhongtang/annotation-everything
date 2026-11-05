@@ -24,6 +24,8 @@ VERIFY = ROOT / "verify.py"
 sys.path.insert(0, str(ROOT))
 from verify_selection import STRATEGY_VERSION
 
+DOC_FIXTURES = json.loads((ROOT / "fixtures" / "verify-doc-allowlist.json").read_text(encoding="utf-8"))
+
 # 合成 uv：剥掉 run --no-project --with <依赖>，直接执行剩下的命令（浏览器依赖仍只在真入口里导入）
 UV_STUB = '''#!/usr/bin/env python3
 import os
@@ -2868,6 +2870,164 @@ class SelectionBuiltinMapTests(unittest.TestCase):
         problems = vs.validate_builtin_map(repo_root=ROOT)
         self.assertEqual(problems, [], "内置映射的选择器与场景必须在真实仓库里全部可解析")
 
+    def test_glossary_and_adrs_do_not_require_product_tests_for_pr(self):
+        repo = self.builtin_repo("verify-doc-pr-plan-")
+        paths = (DOC_FIXTURES["term_document"], DOC_FIXTURES["decision_document"])
+        for path in paths:
+            repo.write(path, "# 合成说明\n")
+        repo.commit_all("合成说明基线")
+        for path in paths:
+            repo.write(path, "# 合成说明\n补充术语与设计理由。\n")
+        for phase in ("development", "pr"):
+            with self.subTest(phase=phase):
+                result = repo.run_verify("plan", "--phase", phase, "--json")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                selection = json.loads(result.stdout)["selection"]
+                self.assertIsNone(selection["fallback"])
+                self.assertEqual({item["path"] for item in selection["doc_exempt"]}, set(paths))
+                self.assertEqual(selection["suggested"]["groups"], [])
+                self.assertEqual(selection["suggested"]["not_applicable"],
+                                 ["unit", "unit-related", "serve-check", "browser"])
+                if phase == "pr":
+                    self.assertFalse(selection["suggested"]["runs_tests"])
+                    self.assertIn("CI", " ".join(selection["suggested"]["notes"]))
+
+    def test_document_only_pr_records_a_gate_without_executing_product_tests(self):
+        repo = self.builtin_repo("verify-doc-pr-run-")
+        repo.write("README.md", "# 合成说明\n文档 PR。\n")
+        result = repo.run_verify("run", "--group", "all", "--phase", "pr", "--json",
+                                 extra_env={"SYNTH_SERVE_FAILED": "1", "SYNTH_BROWSER_FAILED": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        record = json.loads(result.stdout)
+        self.assertTrue(record["result"]["usable_as_evidence"])
+        self.assertEqual(record["result"]["counts"]["groups"], 0)
+        self.assertEqual(record["result"]["counts"]["cases"], 0)
+        self.assertEqual(record["result"]["counts"]["checks"], 0)
+        self.assertEqual([group["name"] for group in record["groups"]],
+                         ["unit", "serve-check", "browser"])
+        for group in record["groups"]:
+            self.assertEqual(group["outcome"], "not_applicable")
+            self.assertIsNone(group["started_at"])
+        self.assertEqual(record["shadow"]["executed_groups"], [])
+        self.assertEqual(record["evidence"]["logs"], [])
+        self.assertEqual(record["evidence"]["cases"], [])
+        self.assertFalse(list((repo.artifact_dir / "runs" / record["run_id"]).glob("*.log")))
+        report = repo.run_verify("report", "--latest")
+        self.assertEqual(report.returncode, 0, report.stdout + report.stderr)
+        self.assertIn("差异仅在文档允许列表内", report.stdout)
+        self.assertIn("由 CI 兜底", report.stdout)
+        self.assertIn("不适用", report.stdout)
+        summary = json.loads((repo.artifact_dir / "efficiency" / "summary.json").read_text())
+        self.assertEqual(summary["metrics"]["execution_seconds"], 0)
+        self.assertEqual(summary["comparison_groups"], [])
+
+    def test_pr_gate_executes_all_groups_for_every_non_document_change(self):
+        for change in ("mapped-code", "guarded-doc", "untracked", "staged-rename", "committed-rename"):
+            with self.subTest(change=change):
+                repo = self.builtin_repo("verify-doc-pr-mixed-")
+                repo.write("implementation.py", "# 合成源码\n")
+                repo.commit_all("合成改名前基线")
+                baseline = repo.git("rev-parse", "HEAD").stdout.strip()
+                repo.write("README.md", "# 合成说明\n混合改动。\n")
+                if change == "mapped-code":
+                    repo.write("ae.py", "# 合成 CLI 改动\n")
+                    repo.git("add", "ae.py")
+                elif change == "guarded-doc":
+                    repo.write("docs/verify/onboarding.md", "# 合成操作说明\n")
+                elif change == "untracked":
+                    repo.write("unknown.txt", "合成未知文件\n")
+                else:
+                    (repo.path / DOC_FIXTURES["renamed_adr"]).parent.mkdir(parents=True)
+                    repo.git("mv", "implementation.py", DOC_FIXTURES["renamed_adr"])
+                    if change == "committed-rename":
+                        repo.commit_all("合成已提交改名")
+                result = repo.run_verify("run", "--group", "all", "--phase", "pr",
+                                         "--baseline", baseline, "--json")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = json.loads(result.stdout)
+                self.assertEqual([group["outcome"] for group in record["groups"]], ["passed"] * 3)
+                self.assertEqual(record["shadow"]["executed_groups"], ["unit", "serve-check", "browser"])
+                self.assertGreater(record["result"]["counts"]["cases"], 0)
+                self.assertTrue(record["result"]["usable_as_evidence"])
+
+    def test_document_only_exemption_does_not_weaken_other_gates(self):
+        for case in ("development", "ci", "force", "empty", "bad-baseline", "override", "guard"):
+            with self.subTest(case=case):
+                repo = self.builtin_repo("verify-doc-pr-fallback-")
+                if case != "empty":
+                    repo.write("README.md", "# 合成说明\n仅改文档。\n")
+                args = ["run", "--group", "all", "--phase", case if case in ("ci", "development") else "pr"]
+                env = {}
+                if case == "force":
+                    args.append("--no-reuse")
+                elif case == "bad-baseline":
+                    args.extend(["--baseline", "missing-synthetic-ref"])
+                elif case == "override":
+                    mapping = repo.path.parent / "override.json"
+                    mapping.write_text(json.dumps(SELECTION_MAP_OK), encoding="utf-8")
+                    env["AE_SELECTION_MAP"] = str(mapping)
+                elif case == "guard":
+                    target = repo.artifact_dir / "efficiency" / "selection-guard.json"
+                    target.parent.mkdir(parents=True)
+                    target.write_text("{损坏的合成守卫", encoding="utf-8")
+                result = repo.run_verify(*args, "--json", extra_env=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = json.loads(result.stdout)
+                self.assertEqual(record["shadow"]["executed_groups"], ["unit", "serve-check", "browser"])
+                self.assertEqual([group["outcome"] for group in record["groups"]], ["passed"] * 3)
+
+    def test_report_rejects_document_exemption_with_a_non_document_path(self):
+        repo = self.builtin_repo("verify-doc-pr-invalid-")
+        repo.write("README.md", "# 合成文档改动\n")
+        result = repo.run_verify("run", "--group", "all", "--phase", "pr", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = json.loads(result.stdout)
+        record["context"]["selection"]["changes"]["untracked"].append("implementation.py")
+        path = repo.artifact_dir / "runs" / record["run_id"] / "record.json"
+        path.write_text(json.dumps(record), encoding="utf-8")
+        report = repo.run_verify("report", "--latest", "--json")
+        self.assertEqual(report.returncode, 1, report.stderr)
+        self.assertFalse(json.loads(report.stdout)["result"]["usable_as_evidence"])
+
+    def test_pr_plan_and_execution_require_builtin_documents_without_hidden_staged_code(self):
+        for case in ("override", "staged-code-restored-in-worktree"):
+            with self.subTest(case=case):
+                repo = self.builtin_repo("verify-doc-pr-consistent-")
+                repo.write("implementation.py", "# 合成源码基线\n")
+                repo.commit_all("合成源码基线")
+                repo.write("README.md", "# 合成文档改动\n")
+                env = {}
+                if case == "override":
+                    mapping = repo.path.parent / "override.json"
+                    mapping.write_text(json.dumps(SELECTION_MAP_OK), encoding="utf-8")
+                    env["AE_SELECTION_MAP"] = str(mapping)
+                else:
+                    repo.write("implementation.py", "# 只存在于暂存区的改动\n")
+                    repo.git("add", "implementation.py")
+                    repo.write("implementation.py", "# 合成源码基线\n")
+                    self.assertNotIn("implementation.py", repo.git("diff", "HEAD", "--name-only").stdout)
+                plan = repo.run_verify("plan", "--phase", "pr", "--json", extra_env=env)
+                self.assertEqual(plan.returncode, 0, plan.stderr)
+                self.assertEqual(json.loads(plan.stdout)["selection"]["suggested"]["groups"], ["all"])
+                result = repo.run_verify("run", "--group", "all", "--phase", "pr", "--json", extra_env=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["shadow"]["executed_groups"],
+                                 ["unit", "serve-check", "browser"])
+
+    def test_report_still_accepts_executed_records_from_strategy_v10(self):
+        repo = self.builtin_repo("verify-doc-pr-legacy-")
+        result = repo.run_verify("run", "--group", "serve-check", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = json.loads(result.stdout)
+        record["context"]["selection"]["strategy_version"] = 10
+        path = repo.artifact_dir / "runs" / record["run_id"] / "record.json"
+        path.write_text(json.dumps(record), encoding="utf-8")
+        report = repo.run_verify("report", "--latest", "--json")
+        self.assertEqual(report.returncode, 0, report.stderr)
+        current = json.loads(report.stdout)
+        self.assertTrue(current["result"]["usable_as_evidence"])
+        self.assertEqual(current["context"]["selection"]["strategy_version"], 10)
+
     def test_builtin_map_falls_back_safely_in_foreign_repo(self):
         # 不注入映射：内置映射的选择器在合成仓库不存在，必须安全回退而不是崩溃或空建议
         temp = tempfile.TemporaryDirectory(prefix="verify-selection-builtin-")
@@ -3667,38 +3827,62 @@ class ParallelUnitTests(VerifyEntryTestCase):
 
     def test_cancellation_preserves_the_actual_unittest_failure_from_a_worker(self):
         self.prepare_parallel_suite()
-        marker = Path(self.temp.name) / "failure-written"
-        self.repo.write("tests/test_handoff_i18n.py", "import time, unittest\nfrom pathlib import Path\n"
-                        "class PartialTests(unittest.TestCase):\n"
-                        "    def test_a_original_failure(self): self.fail('original synthetic failure')\n"
-                        "    def test_b_wait(self):\n"
-                        "        Path(%r).write_text('ready')\n"
-                        "        deadline = time.monotonic() + 20\n"
-                        "        while time.monotonic() < deadline: time.sleep(.01)\n" % str(marker))
-        env = self.repo.git_env
-        env.pop("AE_HELD_LOCKS", None)
-        env.pop("AE_VERIFY_DIR", None)
-        env.update(AE_LOCK_DIR=str(self.test_lock_dir), AE_HOME=str(Path(self.temp.name) / "ledger"))
-        wrapper = subprocess.Popen([sys.executable, str(self.repo.path / "verify.py"), "run", "--no-reuse"],
-                                   cwd=self.repo.path, env=env, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, text=True, start_new_session=True)
-        self.addCleanup(_reap, wrapper)
-        deadline = time.monotonic() + 10
-        while not marker.exists() and wrapper.poll() is None and time.monotonic() < deadline:
-            time.sleep(.01)
-        self.assertTrue(marker.exists(), "必须先执行原始失败再取消")
-        wrapper.terminate()
-        out, err = wrapper.communicate(timeout=20)
-        self.assertEqual(wrapper.returncode, 143, out + err)
-        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
-        self.assertEqual(record["result"]["outcome"], "interrupted")
-        self.assertFalse(record["result"]["usable_as_evidence"])
-        failure = next((case for case in record["groups"][0]["cases"]
-                        if case["id"].endswith("test_a_original_failure")), None)
-        self.assertIsNotNone(failure, json.dumps(record, ensure_ascii=False))
-        self.assertEqual(failure["status"], "failed")
-        self.assertIn("original synthetic failure", (self.repo.artifact_dir / "runs" /
-                      record["run_id"] / "unit.log").read_text())
+        # 串行任务一直等待取消，避免工作进程结束与入口正常退出之间再次形成竞态。
+        self.repo.write("tests/test_unclassified_0.py", "import time, unittest\n"
+                        "class WaitingTests(unittest.TestCase):\n"
+                        "    def test_wait(self):\n"
+                        "        while True: time.sleep(.01)\n")
+        # 注入调度延迟模拟高负载；同步条件始终是失败记录已落盘，不是等待若干秒。
+        for delay in (0.0, 0.3, 1.0):
+            with self.subTest(worker_delay=delay):
+                self.repo.write("tests/test_handoff_i18n.py", "import time, unittest\n"
+                                "class PartialTests(unittest.TestCase):\n"
+                                "    def test_a_original_failure(self):\n"
+                                "        time.sleep(%r)\n"
+                                "        self.fail('original synthetic failure')\n" % delay)
+                worker_temp = Path(self.temp.name) / ("worker-temp-%s" % delay)
+                worker_temp.mkdir()
+                env = self.repo.git_env
+                env.pop("AE_HELD_LOCKS", None)
+                env.pop("AE_VERIFY_DIR", None)
+                env.update(AE_LOCK_DIR=str(self.test_lock_dir),
+                           AE_HOME=str(Path(self.temp.name) / "ledger"), TMPDIR=str(worker_temp))
+                wrapper = subprocess.Popen(
+                    [sys.executable, str(self.repo.path / "verify.py"), "run", "--no-reuse"],
+                    cwd=self.repo.path, env=env, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, text=True, start_new_session=True)
+                self.addCleanup(_reap, wrapper)
+                persisted_failure = False
+                deadline = time.monotonic() + 30
+                while wrapper.poll() is None and time.monotonic() < deadline:
+                    # 只在本次合成运行的临时目录中观察工作进程已经写出的证据。
+                    for result_path in worker_temp.rglob("*.json"):
+                        try:
+                            payload = json.loads(result_path.read_text())
+                        except (OSError, ValueError):
+                            continue
+                        persisted_failure = any(
+                            case.get("id", "").endswith("test_a_original_failure")
+                            and case.get("status") == "failed" for case in payload.get("cases", []))
+                        if persisted_failure:
+                            break
+                    if persisted_failure:
+                        break
+                    time.sleep(.01)
+                self.assertTrue(persisted_failure, "必须先观察到工作进程已落盘的原始失败再取消")
+                wrapper.terminate()
+                out, err = wrapper.communicate(timeout=30)
+                self.assertEqual(wrapper.returncode, 143, out + err)
+                record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+                self.assertEqual(record["result"]["outcome"], "interrupted")
+                self.assertFalse(record["result"]["usable_as_evidence"])
+                self.assertEqual(record["groups"][0]["execution"]["jobs"], 3)
+                failure = next((case for case in record["groups"][0]["cases"]
+                                if case["id"].endswith("test_a_original_failure")), None)
+                self.assertIsNotNone(failure, json.dumps(record, ensure_ascii=False))
+                self.assertEqual(failure["status"], "failed")
+                self.assertIn("original synthetic failure", (self.repo.artifact_dir / "runs" /
+                              record["run_id"] / "unit.log").read_text())
 
 
 if __name__ == "__main__":

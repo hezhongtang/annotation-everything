@@ -234,6 +234,8 @@ def build_summary(roots, loader, now=None, events=None):
                 verification_intervals.append(window)
         first_group = None
         for group in record["groups"]:
+            if group.get("outcome") == "not_applicable":
+                continue  # 文档 PR 没有产品执行样本，不混入耗时与通过统计。
             if group.get("outcome") == "reused":
                 metrics["evidence_references"] += 1
                 continue
