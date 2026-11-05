@@ -80,7 +80,7 @@ Speaker-note page numbers must match the report sequence. A mismatch lists diffe
 | `pair` | `{side, text, match}`; side uses the same Chinese values; match is `exact` or `similar` |
 | `style` | `{scope}` where scope is `page`, `pin`, or `region`; the target is the report |
 | `skills` | Original skill invocation names |
-| `status` | `open`, `drafted`, or `resolved` |
+| `status` | `open`, `drafted`, `resolved`, or `held` |
 | `resolution` | Original handling explanation, including the initial edit explanation for a draft |
 | `at`, `updatedAt`, `resolvedAt`, `resolvedBy`, `resolvedBatch` | Creation, update, and final handling metadata |
 | `draftedAt`, `draftedBy`, `draftBatch` | Initial edit metadata |
@@ -90,6 +90,18 @@ Speaker-note page numbers must match the report sequence. A mismatch lists diffe
 New annotations use either a point or a region. Older annotations can contain both. Legacy `style.region` is migrated on read. Rebuilds use stable keys to remap annotations and mark missing pages as orphaned. Skill scopes in `skills.json` remain `all`, `报告`, `讲稿`, or `style`.
 
 `notes.jsonl` is an operation log. It includes annotation and submission operations and supports inspection and recovery. It is not an alternate unlocked write interface.
+
+Held annotations use `status: "held"`, a `hold` reason (`分析中` or `结论已变`), and `heldBy` for the related analysis. Revision snapshots include only `open`. `fromAnalysis`, `basis`, and a source annotation's `analysisId` retain analysis links; same-ID updates and imports preserve unrecognized fields. Older importers and pages treat an unknown held status as open. Old services still submit only open annotations. Restart the service, rebuild the page, and refresh after an upgrade.
+
+## Analysis data
+
+`analysis/<analysis-id>/events.jsonl` contains append-only events; its first event carries the schema version. Current state is derived from the log, without batch-history or handling-trail limits on questions and answers. `analysis/counter.json` assigns round numbers unique across the review. `handoff.json` uses shared `submitSeq` / `order` values for revision, review, and analysis submission order, including submissions in the same second.
+
+Analysis, annotations, and batches share `.notes.lock`. Starting an analysis holds the source and removes it from unclaimed snapshots under that lock. An emptied batch becomes `void`. Conclusion drafts stay in analysis events; confirmation adds an open annotation. Stable page keys are mapped again at conversion and confirmation; a deleted or ambiguous page is marked `orphan`.
+
+`GET /api/analysis` returns summaries and queue counts; `?analysis=<id>` adds the full state and round context. Reviewer writes use `/api/analysis/start|answer|submit|convert|confirm|release` with the existing Host, Origin, JSON content type, review identity, and applicable receiver checks. The `analysis` feature declares support; file mode does not provide analysis.
+
+Neither JSON nor Markdown exports contain analysis events, questions, trees, or round queues. Annotation JSON may retain held states and source/basis references but cannot reconstruct the analysis. JSON backs up annotations and standing skills, not the entire review; preserve the review directory for a complete backup. Markdown keeps its existing grammar and omits analysis links and hold reasons, so imported held annotations are interpreted as open.
 
 ## Submissions and stages
 
@@ -118,7 +130,7 @@ The Markdown export begins with `<!-- annotation-everything export v1 lang=en --
 
 Markdown preserves page numbers and titles, targets, content, quotations, marks, edits, pairs, style, skills, status and visible handling explanations, plus standing skills. It does **not** preserve IDs, stable page keys, timestamps, processing trails, or batches. JSON carries the complete annotation structure and review identity. The visible Markdown body is authoritative when edited; there is no hidden snapshot overriding it.
 
-Three legacy grammar limits also apply to English exports: body lines that look like metadata can be read as metadata; blank body lines and trailing newlines are discarded; a body starting with a status marker such as `[Resolved] ` or `[Drafted] ` is interpreted as that status. Multiline quotations fold into one line. Delete/replace operations retain the historical fixed Chinese forms (`删除引用的这段文字` and `改为：...`) for compatibility. Prefer JSON when exact structure or unconstrained text must survive. JSON backs up annotations and standing skills; it is not an archive of the separate submission history and source snapshots.
+Three legacy grammar limits also apply to English exports: body lines that look like metadata can be read as metadata; blank body lines and trailing newlines are discarded; a body starting with a status marker such as `[Resolved] ` or `[Drafted] ` is interpreted as that status. Multiline quotations fold into one line. Delete/replace operations retain the historical fixed Chinese forms (`删除引用的这段文字` and `改为：...`) for compatibility. Prefer JSON when exact structure or unconstrained text must survive. JSON backs up annotations and standing skills; it is not an archive of analysis events, submission history, or source snapshots. Preserve the complete review directory to retain those records.
 
 ```bash
 python3 "$S/notes.py" export "$R" --lang en --all --out annotations.md

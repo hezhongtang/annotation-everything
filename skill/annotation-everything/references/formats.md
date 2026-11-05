@@ -97,7 +97,7 @@ One line per paragraph.
       "quoteFrom": "报告",                  // 引用来自哪一侧
       "pin": {"x": 38.8, "y": 59.8},        // 报告上的标注之一：点（百分比），可为 null
       "region": {"x": 5, "y": 22, "w": 40, "h": 25},  // 报告上的标注之二：框（左上角 + 宽高，百分比）；一条批注只有点或框之一
-      "status": "resolved",                 // open 未处理 / drafted 已初改·待复核（两段流程）/ resolved 已处理
+      "status": "resolved",                 // open 未处理 / drafted 已初改·待复核（两段流程）/ resolved 已处理 / held 搁住
       "at": "2026-10-27T10:19:14.129Z",
       "updatedAt": "…",                     // 编辑过才有
       "resolvedAt": "…", "resolvedBy": "claude", "resolution": "标题与 KPI 已改",
@@ -120,6 +120,8 @@ One line per paragraph.
 }
 ```
 
+- `held` 表示暂不交给 Agent 改稿，`hold` 记录「分析中」或「结论已变」，`heldBy` 记录关联分析。快照只收 `open`。`fromAnalysis`、`basis` 和源批注的 `analysisId` 记录分析关联，同 id 更新与导入保留认不出的扩展字段。
+- 旧版工具导入未知 `held` 时退回 `open`，旧页面也显示为未处理；旧服务的快照仍只收 `open`。升级后重启服务，重新生成并刷新页面，避免旧页面手动改写状态。
 - 快捷修改的 `text` 是固定说法（「删除引用的这段文字」「改为：…」），`quote` 等于 `edit.from`，旧工具照样能看懂。
 - 生成对照页时若审阅目录里已有批注：没有 `key` 的按上一版 review.json 的页码补上，再按 `key` 把 `page` 改成新版的页码；`key` 在新版里找不到的标 `orphan`。所以 `data-key` 要稳定、唯一（重复的键不做校正）。
 - 风格优化的 `target` 固定为报告；`text` 是用户写的方向，没写时为「风格优化：整页 / 框选处 / 标点处」。
@@ -175,6 +177,16 @@ One line per paragraph.
 - 两者都在生成对照页时嵌进页面，本地文件模式同样可见。文件模式下改常驻技能只存本浏览器（之后 Agent 改了名单并重建，以新名单为准）；「复制全部 / 下载 Markdown」的开头一行、「下载 JSON」的 `alwaysSkills` 都会带上，`notes.py import` 或页面「导入…」时随之写入（审阅目录里已有不同的名单时，命令行只提示、页面先询问）。
 - 读 skills.json 时坏项跳过、好项保留（字符串项当「全部批注」）；页面和命令行写入时严格校验：一项里写了几个名字会拆开，超过 20 个报错。命令行同一条命令里先删（`--always-remove`）后加（`--always-add`），改范围就是删了再加。
 
+## 分析数据
+
+分析保存在 `analysis/<分析标识>/events.jsonl`：每行一个只追加事件，首个发起事件带 `schema`，当前状态由日志推导。问答不按批次或处理痕迹的保留上限截断。`analysis/counter.json` 分配审阅内唯一轮次号；`handoff.json` 的 `submitSeq` 为改稿、复核和分析分配共享交出序号 `order`，同秒提交也能区分先后。
+
+分析、批注与批次共用 `.notes.lock`。从批注发起分析会同锁搁住源批注并移出待领取快照；空批次记为 `void`，不再领取。结论草稿只存分析事件，确认后才写入 `notes.json`，不新增批注草稿状态。页面引用保留稳定 `key`，转出和确认时重定位；页面删除或键有歧义时标为 `orphan`。
+
+`GET /api/analysis` 返回摘要和队列计数，传 `?analysis=<标识>` 时追加完整状态和轮次上下文。审阅人写操作为 `/api/analysis/start|answer|submit|convert|confirm|release`，沿用 Host、Origin、JSON Content-Type、审阅身份及相关接收方校验。服务用 `analysis` 能力标记声明支持，文件模式不提供分析。
+
+JSON 与 Markdown 导出都不包含分析事件、问答、问题树或轮次队列。批注 JSON 可保留 `held` 及来源、依据引用，但不能据此恢复分析；JSON 仅备份批注与常驻技能，不是整份审阅归档，完整保留需备份审阅目录。Markdown 沿用旧文法，不保留分析关联和搁住原因，导入后按未处理批注解释。
+
 ## 审阅目录里的文件
 
 | 文件 | 谁写 | 用途 |
@@ -183,7 +195,9 @@ One line per paragraph.
 | `review.json` | build_viewer.py | 审阅标识 `reviewId`（页面据此认服务，重建不变；目录被复制后重建会换新）、审阅名 `name`（`--name`，默认取标题）、导出标签 `namespace`（审阅名 + 标识前 4 位）、`reviewDir`、页码/键/标题、源文件路径（`sources` 相对审阅目录，`sourcesAbs` 绝对路径兜底）、构建参数（`--rebuild` 用） |
 | `notes.json` | 服务 / notes.py | 批注当前状态（以它为准） |
 | `notes.jsonl` | 服务 / notes.py | 操作日志 |
-| `handoff.json` | 服务 / notes.py | 「交给 Agent」的提交与处理状态 |
+| `handoff.json` | 服务 / notes.py | 改稿提交、处理状态与共享交出序号 |
+| `analysis/<分析标识>/events.jsonl` | 服务 / notes.py | 只追加的分析事件，推导问题树、轮次、决策与结论草稿 |
+| `analysis/counter.json` | 服务 / notes.py | 审阅内唯一轮次号分配 |
 | `skills.json` | 生成器 / 服务 / notes.py | 技能目录与常驻技能（可选） |
 | `.skill-sources.json` | 生成器 / notes.py | 技能扫描来源、手工覆盖与排除项（可选） |
 | `.snapshots/batch-N/{base,draft}/` | notes.py | 初改前后的源文件快照，`notes.py diff` 用（含源文件内容，按经营数据对待） |
@@ -278,7 +292,7 @@ Persistent skills (run before every note within scope): humanizer-zh (Script)
 | 常驻技能 | 开头 `常驻技能（…）：` / `Persistent skills (…): ` | 支持，范围还原成 `all` / `报告` / `讲稿` / `style` |
 | 痕迹、孤立页警告、页面键不一致警告、来源标签 | — | **不进交换格式**；它们在 `notes.py show` 的阅读输出里 |
 
-Markdown 不是完整审阅归档：不保存 `id`、时间戳、处理痕迹和批次。要完整结构化备份用 JSON。
+Markdown 不是完整审阅归档：不保存 `id`、时间戳、处理痕迹和批次。JSON 保留完整批注结构，但不包含分析、提交记录或源文件快照；完整审阅需备份审阅目录。
 
 #### 从 0.3 继承下来的三条限制（都有用例钉住，改动要先改测试）
 

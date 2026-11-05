@@ -44,7 +44,7 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
 
 - **意见留在原处**：每条批注都关联到具体的页、引用的原文或报告上的位置。Agent 收到的是带页码和位置的原始批注，不是转述。
 - **报告与讲稿一起改**：报告和讲稿按页对应。在一侧选中句子写修改意见时，如果另一侧同一页有相同或相近的句子，页面会提示两侧一起改。Agent 按页修改后重新生成对照页。
-- **处理过程有记录**：每次「交给 Agent」记为一批。每条批注都有处理状态和处理说明，可以随时回看。
+- **处理过程有记录**：每次「交给 Agent 改稿」记为一批。每条批注都有处理状态和处理说明，可以随时回看。
 - **材料不离开本机**：服务只监听 `127.0.0.1`，不访问网络，也不上报使用数据。批注保存在审阅人指定的审阅目录里。
 
 ## 功能
@@ -65,7 +65,7 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
   <tr>
     <td valign="top">
       <h4>🤖 一键交给 Agent</h4>
-      Agent 先绑定接收会话，再配置等待或事件接收。审阅人点「交给 Agent」后，Agent 按页修改报告和讲稿，重建对照页，并逐条记录处理结果。页面常显 harness、会话短标识和接收状态；绑定后，其他会话不能直接领取批注。
+      Agent 先绑定接收会话，再配置等待或事件接收。审阅人点「交给 Agent 改稿」后，Agent 按页修改报告和讲稿，重建对照页，并逐条记录处理结果。页面常显 harness、会话短标识和接收状态；绑定后，其他会话不能直接领取批注。
     </td>
     <td valign="top">
       <h4>🔍 全量勾稽（检查全文前后一致性）</h4>
@@ -104,7 +104,19 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
   </tr>
 </table>
 
-对照页可以选择简体中文或英文。生成时传入 `--locale auto`、`zh-CN` 或 `en`，页面上也可以切换，选择只保存在本机浏览器。批注原文保持原样，对象的存储值 `报告`、`讲稿`、`报告和讲稿` 不随语言改变。未配置语言时，新审阅保持中文，已有审阅沿用已保存的选择；`AE_LOCALE` 可覆盖已保存配置，显式参数优先。批注的新增、编辑、删除、重开、引用、快捷删除与改写、放点与框选、重新标注、风格优化、页码、讲稿栏、问答标签、编辑帮助、工具提示和无障碍名称都已支持两种语言；删除确认等对话框同样跟随当前语言。技能输入栏、候选与推荐、空结果、常驻技能的范围标签与增删提示，以及 `notes.py skills` 的输出也按当前语言显示；搜索仍按技能目录里的原始名称和原始说明匹配，常驻技能范围的存储值 `all` / `报告` / `讲稿` / `style` 不变。导出的 Markdown 可以选中文或英文（默认跟随界面），页面和命令行都能跨语言导入。「交给 Agent」弹窗、提交状态徽标、处理记录、回到上次提示和服务未连接时的提示也支持两种语言。提交选项（做到定稿还是停在待复核、是否允许派发子代理、是否全量勾稽）与界面语言无关。
+对照页可以选择简体中文或英文。生成时传入 `--locale auto`、`zh-CN` 或 `en`，页面上也可以切换，选择只保存在本机浏览器。批注原文保持原样，对象的存储值 `报告`、`讲稿`、`报告和讲稿` 不随语言改变。未配置语言时，新审阅保持中文，已有审阅沿用已保存的选择；`AE_LOCALE` 可覆盖已保存配置，显式参数优先。批注的新增、编辑、删除、重开、引用、快捷删除与改写、放点与框选、重新标注、风格优化、页码、讲稿栏、问答标签、编辑帮助、工具提示和无障碍名称都已支持两种语言；删除确认等对话框同样跟随当前语言。技能输入栏、候选与推荐、空结果、常驻技能的范围标签与增删提示，以及 `notes.py skills` 的输出也按当前语言显示；搜索仍按技能目录里的原始名称和原始说明匹配，常驻技能范围的存储值 `all` / `报告` / `讲稿` / `style` 不变。导出的 Markdown 可以选中文或英文（默认跟随界面），页面和命令行都能跨语言导入。「交给 Agent 改稿」弹窗、提交状态徽标、处理记录、回到上次提示和服务未连接时的提示也支持两种语言。提交选项（做到定稿还是停在待复核、是否允许派发子代理、是否全量勾稽）与界面语言无关。
+
+### 分析：先问清楚，再改稿
+
+服务模式下，可从未处理批注发起分析。源批注进入「搁住 · 分析中」，不随改稿提交；已交出但未领取时会从批次中移出，正在被 Agent 处理的批注不能发起分析。分析保存源批注原文，之后编辑或删除源批注不影响回看。
+
+标题栏可切换「批注 / 分析」，分析地址为 `/#analysis`，刷新后保持。侧栏显示分析与问题树，主区域显示焦点问题和本轮条目，底部显示轮次记录。确认 Agent 的结构提议后，用推荐答案或选一个选项作答，再点「交给 Agent 分析」。改稿与分析分开排队、共用接收方，按交出先后一次处理一项。
+
+决策由系统根据回答产生。将结论转成批注时，先查看草稿，确认后才进入批注列表，源批注标为已处理并指向分析；新批注仍需显式交给 Agent 改稿。源批注的「分析中」搁住也可手动解除。分析本身不改报告。
+
+等待命令默认只接收改稿，需加 `--events analysis` 才接收分析轮次。Agent 用 `notes.py analysis --round N --json` 读上下文，用带基线版本的 `analysis-writeback` 写回。服务不支持分析时隐藏入口并提示升级；直接打开 HTML 的文件模式不提供分析。
+
+JSON 与 Markdown 导出都不包含分析问答、事件和问题树，JSON 不是整份审阅的完整备份。旧版工具导入「搁住」或旧页面显示该状态时，会把它当作未处理；旧服务的快照仍只收 `open`。升级后应重启服务，重新生成并刷新对照页。详见[格式说明](skill/annotation-everything/references/formats.md#分析数据)。
 
 ### 审阅总览与归档
 
@@ -120,7 +132,7 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
 <summary><b>当前任务与停止本地服务</b></summary>
 <br>
 <p align="center"><img src="docs/assets/batch-controls.zh.png" alt="处理记录中的当前任务详情开关与停止本地服务按钮" width="88%"></p>
-按 `J` 或点击 Agent 状态打开「处理记录」。「当前任务」是最近一次「交给 Agent」的批次，详情默认收起；展开后可查看附言、处理要求、阶段和摘要。轮询刷新或切换语言会保留展开状态，新的一批默认收起。
+按 `J` 或点击 Agent 状态打开「处理记录」。「当前任务」是最近一次「交给 Agent 改稿」的批次，详情默认收起；展开后可查看附言、处理要求、阶段和摘要。轮询刷新或切换语言会保留展开状态，新的一批默认收起。
 
 「停止本地服务」会先补传待保存的改动，保存失败则不停止；旧服务会提示升级。停止后，这份审阅的所有标签页转为离线，材料、批注、提交记录和专属端口仍保留，其他审阅与已运行的 Agent 不受影响。页面会给出重新启动服务的命令。面板右上角的「关闭」只收起处理记录。
 </details>
@@ -166,9 +178,9 @@ Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lan
 flowchart LR
     U(["审阅人"]) --> B["浏览器<br>对照页"]
     B <-->|"HTTP<br>仅 127.0.0.1"| SV["serve.py<br>本机服务"]
-    SV <--> DIR[("审阅目录（每份审阅一个）<br>index.html：对照页<br>review.json：审阅标识、源文件与生成参数<br>notes.json、notes.jsonl：批注与操作日志<br>handoff.json：提交批次与处理状态<br>skills.json：技能目录与常驻技能")]
+    SV <--> DIR[("审阅目录（每份审阅一个）<br>index.html：对照页<br>review.json：审阅标识、源文件与生成参数<br>notes.json、notes.jsonl：批注与操作日志<br>handoff.json：提交批次与处理状态<br>skills.json：技能目录与常驻技能<br>analysis/：只追加的分析问答事件")]
     NP["notes.py<br>批注命令行"] <--> DIR
-    A(["Agent"]) <-->|"wait / show<br>resolve / done"| NP
+    A(["Agent"]) <-->|"wait / show / analysis<br>resolve / done / analysis-writeback"| NP
     A -->|"按批注修改"| SRC["源材料<br>报告：逐页 HTML<br>讲稿：Markdown"]
     SRC --> BV["build_viewer.py<br>生成与重新生成对照页"] --> DIR
     L[("审阅台账<br>~/.annotation-everything/<br>审阅标识 → 审阅目录、专属端口")] -.-> SV
@@ -189,7 +201,7 @@ sequenceDiagram
     A-->>S: 运行 notes.py wait，等待审阅人提交
     U->>P: 按页写批注：改写、引用、放置标点、框选区域
     P->>S: 每条批注自动保存到审阅目录
-    U->>P: 点「交给 Agent」，可同时勾选全量勾稽
+    U->>P: 点「交给 Agent 改稿」，可同时勾选全量勾稽
     S-->>A: 通知 Agent，并交付这一批批注
     A->>A: 按页修改报告和讲稿，重新生成对照页
     A->>S: 运行 notes.py resolve 逐条标为已处理，再运行 notes.py done 结束这一批
@@ -199,7 +211,7 @@ sequenceDiagram
 
 ### 每一批的状态
 
-每次点「交给 Agent」都会生成一个批次。不分两段处理时，批次从「处理中」直接变为「已处理」；选择先改后审时，初改完成后还要经过复核，或者由审阅人直接定稿。
+每次点「交给 Agent 改稿」都会生成一个批次。不分两段处理时，批次从「处理中」直接变为「已处理」；选择先改后审时，初改完成后还要经过复核，或者由审阅人直接定稿。
 
 ```mermaid
 stateDiagram-v2
@@ -211,7 +223,7 @@ stateDiagram-v2
     state "复核中" as reviewing
     state "已处理" as done
 
-    [*] --> pending: 审阅人点「交给 Agent」
+    [*] --> pending: 审阅人点「交给 Agent 改稿」
     pending --> claimed: Agent 接收
     claimed --> done: 不分两段，处理完成
     claimed --> drafted: 初改完成，要求停在待复核
@@ -308,7 +320,7 @@ python3 $S/build_viewer.py --report fixtures/sample/report.html --script fixture
 python3 $S/serve.py /tmp/ae-demo
 ```
 
-浏览器会自动打开对照页。写几条批注，点「交给 Agent」，然后在另一个终端运行：
+浏览器会自动打开对照页。写几条批注，点「交给 Agent 改稿」，然后在另一个终端运行：
 
 ```bash
 python3 $S/notes.py wait /tmp/ae-demo
@@ -342,7 +354,8 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `serve.py forget <短标识>` | 移除确认不再需要的台账记录并释放专属端口；保留审阅目录。总览对失效项提供这条命令，清理仍在命令行执行 |
 | `serve.py check` | 运行服务安全自检 |
 | `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | 绑定接收 harness 与会话、查看身份与状态；Codex 桌面使用事件接收，其他 harness 可用 `--adapter wait`；显式交接用 `bind --replace`，处理中批次先收尾 |
-| `notes.py wait` / `claim` | 等待审阅人提交，或直接接收已有的提交。`wait --locale` 选择交接语言，保留定位、操作与技能要求；`claim` 输出的 JSON 保持原始值 |
+| `notes.py wait` / `claim` | 等待或领取任务；`--events analysis` 显式接收分析，默认不领取分析，也不能越过更早轮次。`--round N` 须带此开关，`--seq N` 只指批次，所有筛选均受全局队首约束 |
+| `notes.py analysis <审阅目录> --round N --json` / `analysis-writeback <审阅目录> --round N --base-rev R --proposals 文件` | 读取轮次上下文 / 写回 JSON 结构提议列表；`-` 从标准输入读取，写回须匹配领取时基线 |
 | `notes.py show` / `resolve` / `reopen` | 列出批注、标为已处理、重新打开。`show --locale` 选择阅读语言，优先于 `AE_LOCALE` 和审阅设置；`show --json` 仍导出原始值 |
 | `notes.py export` / `import` | 导出可再导入的批注摘要（Markdown 带版本与语言标记，或 JSON 结构化备份）／导入页面导出的 JSON 或 Markdown。`export --lang` 与 `show --locale` 同一套优先级，`--format json`、`--all`、`--page N`、`--out 文件` |
 | `notes.py done` / `review` / `diff` | 结束当前阶段、给出复核结论、按页查看初改改动了哪些地方；均可用 `--locale` 选择输出语言 |
@@ -396,6 +409,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── wakeup.py                  接收会话绑定；Codex 事件投递、回执与去重
 │   ├── notes.py                   批注命令行：wait / show / resolve / done / review 等
 │   ├── notes_store.py             批注存储：原子写入、文件锁、操作日志
+│   ├── analysis_store.py          分析存储：只追加事件、轮次推导与批注联动
 │   ├── export_format.py           批注交换格式：带标记的 Markdown 文法与 JSON 备份
 │   ├── ledger.py                  审阅台账：审阅标识、审阅目录和专属端口；服务状态文件与存活判断、复制目录判断
 │   ├── match.py                   在报告与讲稿之间查找对应句子

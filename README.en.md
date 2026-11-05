@@ -44,7 +44,7 @@ annotation-everything moves this whole process into a single page that runs on y
 
 - **Comments stay where they belong.** Every annotation is tied to a specific page, a quoted passage, or a spot on the report. The agent receives the original annotations with their pages and positions, not a retelling.
 - **The report and the notes change together.** Report pages and speaker-note pages are matched one to one. When you select a sentence on one side to request a change, and the same page on the other side has an identical or similar sentence, the page suggests changing both. The agent revises page by page and then regenerates the review page.
-- **Every round is recorded.** Each click on **Hand to the agent** creates a batch. Every annotation has a status and a resolution note that you can look back on at any time.
+- **Revision submissions are recorded.** Each click on **Hand to the agent for revision** creates a batch. Every annotation has a status and a resolution note that you can look back on at any time.
 - **Your material never leaves your machine.** The server listens on `127.0.0.1` only, makes no network requests, and sends no usage data. Annotations are saved in a review directory you choose.
 
 ## Features
@@ -65,7 +65,7 @@ The console layout puts all annotations, processing history, review overview and
   <tr>
     <td valign="top">
       <h4>🤖 Hand off to an agent in one click</h4>
-      The agent binds its receiving session, then configures a waiter or event delivery. When the reviewer clicks <b>Hand off to Agent</b>, it revises the report and speaker notes, rebuilds the page and records each result. The page always shows the receiving harness, short session ID and state; other sessions cannot claim a bound review.
+      The agent binds its receiving session, then configures a waiter or event delivery. When the reviewer clicks <b>Hand to the agent for revision</b>, it revises the report and speaker notes, rebuilds the page and records each result. The page always shows the receiving harness, short session ID and state; other sessions cannot claim a bound review.
     </td>
     <td valign="top">
       <h4>🔍 Full consistency check</h4>
@@ -104,7 +104,19 @@ The console layout puts all annotations, processing history, review overview and
   </tr>
 </table>
 
-The review page can use Simplified Chinese or English. Pass `--locale auto`, `zh-CN`, or `en` when building; the page can switch language too, and the choice stays in this browser. Annotation text stays as written, and the stored target values `报告`, `讲稿`, and `报告和讲稿` do not change with the language. Omitting `--locale` keeps a new review in Chinese and leaves an existing review on its saved choice. Adding, editing, deleting and reopening annotations, quotes, quick delete and replace, pins and area selection, re-annotating, styling, page numbers, the speaker-notes column, Q&A labels, the help text, tooltips and accessible names all follow the current language, as do the confirmation dialogs. So do the skill box, its suggestions and "Suggested" tag, the empty result, the standing-skill scope labels and add/remove prompts, and the output of `notes.py skills`. Search still matches the skill catalog's original name and description, and the stored scope values `all` / `报告` / `讲稿` / `style` stay unchanged. Exported Markdown can be Chinese or English (following the interface by default); both the page and CLI can import either language. The "Hand to the agent" dialog, submission badge, batch history, resume hint and connection guidance also follow the current language. Submission options (finalize or stop at drafted, allow subagents, full check) do not depend on the interface language.
+The review page can use Simplified Chinese or English. Pass `--locale auto`, `zh-CN`, or `en` when building; the page can switch language too, and the choice stays in this browser. Annotation text stays as written, and the stored target values `报告`, `讲稿`, and `报告和讲稿` do not change with the language. Omitting `--locale` keeps a new review in Chinese and leaves an existing review on its saved choice. Adding, editing, deleting and reopening annotations, quotes, quick delete and replace, pins and area selection, re-annotating, styling, page numbers, the speaker-notes column, Q&A labels, the help text, tooltips and accessible names all follow the current language, as do the confirmation dialogs. So do the skill box, its suggestions and "Suggested" tag, the empty result, the standing-skill scope labels and add/remove prompts, and the output of `notes.py skills`. Search still matches the skill catalog's original name and description, and the stored scope values `all` / `报告` / `讲稿` / `style` stay unchanged. Exported Markdown can be Chinese or English (following the interface by default); both the page and CLI can import either language. The "Hand to the agent for revision" dialog, submission badge, batch history, resume hint and connection guidance also follow the current language. Submission options (finalize or stop at drafted, allow subagents, full check) do not depend on the interface language.
+
+### Analysis before revision
+
+In server mode, start an analysis from an open annotation. Its source becomes held for analysis and stays out of revision submissions. It is removed from an unclaimed batch; an annotation already being revised cannot start an analysis. The analysis keeps the original source text even if that annotation is later edited or deleted.
+
+Use the title-bar Annotations / Analysis switch. Analysis uses `/#analysis` and survives a refresh. The sidebar shows analyses and the question tree, the main area shows the focus and current round, and the bottom panel shows round history. Confirm structure proposals, accept a recommended answer or choose an option, then click **Hand to the agent for analysis**. Revision batches and analysis rounds have separate queues, share the receiver, and are claimed one at a time in submission order.
+
+The system creates decisions from the reviewer's answers. Converting a conclusion first creates a draft; confirmation adds an annotation and resolves the source with a link to the analysis. The new annotation still needs an explicit revision submission. You can release the source's analysis hold manually. Analysis itself never changes the report.
+
+Waiters receive revision batches by default; opt in with `--events analysis` to receive analysis rounds. Agents read context with `notes.py analysis --round N --json` and use `analysis-writeback` with the accepted baseline revision. An unsupported service hides analysis and explains how to upgrade. Opening the HTML directly in file mode does not provide analysis.
+
+Neither JSON nor Markdown exports include analysis questions, events, or trees; JSON is not a complete review backup. Older importers and pages treat an unknown held status as open, while old services still submit only `open` annotations. After upgrading, restart the service, rebuild the page, and refresh it. See the [format reference](skill/annotation-everything/references/formats.en.md#analysis-data).
 
 ### Review overview and archiving
 
@@ -166,9 +178,9 @@ Every component runs on your machine. The browser talks only to the local server
 flowchart LR
     U(["Reviewer"]) --> B["Browser<br>review page"]
     B <-->|"HTTP<br>127.0.0.1 only"| SV["serve.py<br>local server"]
-    SV <--> DIR[("Review directory (one per review)<br>index.html: review page<br>review.json: review ID, sources and build options<br>notes.json, notes.jsonl: annotations and change log<br>handoff.json: submitted batches and their status<br>skills.json: skill catalog and standing skills")]
+    SV <--> DIR[("Review directory (one per review)<br>index.html: review page<br>review.json: review ID, sources and build options<br>notes.json, notes.jsonl: annotations and change log<br>handoff.json: submitted batches and their status<br>skills.json: skill catalog and standing skills<br>analysis/: append-only question and answer events")]
     NP["notes.py<br>annotation command line"] <--> DIR
-    A(["Agent"]) <-->|"wait / show<br>resolve / done"| NP
+    A(["Agent"]) <-->|"wait / show / analysis<br>resolve / done / analysis-writeback"| NP
     A -->|"revises per the annotations"| SRC["Source material<br>report: page-by-page HTML<br>speaker notes: Markdown"]
     SRC --> BV["build_viewer.py<br>builds and rebuilds the review page"] --> DIR
     L[("Review ledger<br>~/.annotation-everything/<br>review ID → review directory, dedicated port")] -.-> SV
@@ -189,7 +201,7 @@ sequenceDiagram
     A-->>S: Run notes.py wait to wait for the reviewer's submission
     U->>P: Annotate page by page: rewrite, quote, drop pins, mark regions
     P->>S: Each annotation is saved to the review directory automatically
-    U->>P: Click "Hand off to Agent", optionally with the full consistency check
+    U->>P: Click "Hand to the agent for revision", optionally with the full consistency check
     S-->>A: Notify the agent and deliver this batch
     A->>A: Revise the report and speaker notes page by page, regenerate the review page
     A->>S: Mark each annotation resolved with notes.py resolve, then close the batch with notes.py done
@@ -199,7 +211,7 @@ sequenceDiagram
 
 ### The life of a batch
 
-Each click on **Hand to the agent** creates a batch. Without the two-stage flow, a batch goes straight from "In progress" to "Resolved". With draft first, then review, a finished draft also goes through review, unless the reviewer finalizes it directly.
+Each click on **Hand to the agent for revision** creates a batch. Without the two-stage flow, a batch goes straight from "In progress" to "Resolved". With draft first, then review, a finished draft also goes through review, unless the reviewer finalizes it directly.
 
 ```mermaid
 stateDiagram-v2
@@ -211,7 +223,7 @@ stateDiagram-v2
     state "Under review" as reviewing
     state "Resolved" as done
 
-    [*] --> pending: Reviewer clicks "Hand off to Agent"
+    [*] --> pending: Reviewer clicks "Hand to the agent for revision"
     pending --> claimed: Agent receives it
     claimed --> done: Single stage, finished
     claimed --> drafted: Draft done, asked to stop for review
@@ -308,7 +320,7 @@ python3 $S/build_viewer.py --report fixtures/sample/report.en.html --script fixt
 python3 $S/serve.py /tmp/ae-demo --locale en
 ```
 
-The review page opens in your browser. Add a few annotations, click **Hand to the agent**, then run this in another terminal:
+The review page opens in your browser. Add a few annotations, click **Hand to the agent for revision**, then run this in another terminal:
 
 ```bash
 python3 $S/notes.py wait /tmp/ae-demo --locale en
@@ -342,9 +354,10 @@ See the [English format reference](skill/annotation-everything/references/format
 | `serve.py forget <short-id>` | Remove a ledger entry confirmed unnecessary and release its owned port while keeping the review directory. The overview provides this command for invalid entries; cleanup runs in the CLI |
 | `serve.py check` | Run the server's security self-check |
 | `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | Bind the receiving harness and session and inspect identity and state; Codex desktop uses events, other harnesses can use `--adapter wait`; transfer with `bind --replace` after active batches finish |
-| `notes.py wait` / `claim` | Wait for a submission, or take one that is already waiting. `wait --locale` chooses the handoff language and preserves location, operation and skill requirements; `claim` keeps the original JSON values |
+| `notes.py wait` / `claim` | Wait for or claim work. Opt in with `--events analysis`; default receivers never claim analysis or skip an earlier round. `--round N` requires that opt-in; `--seq N` targets a batch. Every filter respects the shared queue head |
+| `notes.py analysis REVIEW_DIR --round N --json` / `analysis-writeback REVIEW_DIR --round N --base-rev R --proposals FILE` | Read round context / write back a JSON proposal list; `-` reads stdin. Writeback must match the accepted baseline revision |
 | `notes.py show` / `resolve` / `reopen` | List annotations, mark them resolved, reopen them. `show --locale` chooses the reading language and beats `AE_LOCALE` and the review setting; `show --json` still exports the raw values |
-| `notes.py export` / `import` | Export annotations as a re-importable summary (Markdown with a version and language marker, or a structured JSON backup) / import a page export. `export --lang` follows the same priority as `show --locale`, plus `--format json`, `--all`, `--page N` and `--out <file>` |
+| `notes.py export` / `import` | Export annotations as a re-importable summary (Markdown with a version and language marker, or structured annotation JSON) / import a page export. `export --lang` follows the same priority as `show --locale`, plus `--format json`, `--all`, `--page N` and `--out <file>` |
 | `notes.py done` / `review` / `diff` | Close the current stage, record a review verdict, show page by page what the draft changed; all accept `--locale` to choose the output language |
 | `notes.py batches` | Show batch history |
 | `notes.py skills` | Show or set the skill catalog and standing skills. `--locale` chooses the output language and beats `AE_LOCALE` and the review setting; scopes accept `全部` / `报告` / `讲稿` / `风格优化` or `all` / `report` / `script` / `style` |
@@ -396,6 +409,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── wakeup.py                  Receiving session binding; Codex events, receipts and deduplication
 │   ├── notes.py                   annotation command line: wait / show / resolve / done / review and more
 │   ├── notes_store.py             annotation storage: atomic writes, file locks, change log
+│   ├── analysis_store.py          append-only analysis events, round state and annotation links
 │   ├── export_format.py           annotation exchange format: the marked Markdown grammar and the JSON backup
 │   ├── ledger.py                  review ledger: review IDs, review directories and dedicated ports; service status file and liveness check, copied-directory check
 │   ├── match.py                   finds matching sentences between the report and the speaker notes
