@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img alt="版本 0.10.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.10.0-1f3a5f?style=flat-square">
+  <img alt="版本 0.11.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.11.0-1f3a5f?style=flat-square">
   <img alt="Agent Skills 技能" src="https://img.shields.io/badge/Agent_Skills-%E6%8A%80%E8%83%BD-d97757?style=flat-square">
   <img alt="Python 仅标准库" src="https://img.shields.io/badge/Python-%E4%BB%85%E6%A0%87%E5%87%86%E5%BA%93-3776ab?style=flat-square&logo=python&logoColor=white">
   <img alt="只监听 127.0.0.1" src="https://img.shields.io/badge/%E5%8F%AA%E7%9B%91%E5%90%AC-127.0.0.1-2fa36b?style=flat-square">
@@ -410,10 +410,16 @@ verify_parallel.py                验证组内的有界进程调度；保留原�
 host_isolation.py                 同机资源隔离协议：验证参与方按共享资源互斥的锁与声明
 fixtures/sample/                   合成样例（虚构数据）
 fixtures/show-baseline/            notes.py show 中英输出的逐字基线（合成数据）
+fixtures/external-report-skill/    合成外部生成技能，测试外部产物走同一验收
+fixtures/external-report-skill-lite/ 合成外部生成技能的精简变体，验证缺依据时如实列为缺口
 tests/                             单元测试和浏览器端到端测试
 tests/e2e_waits.py                  浏览器条件等待：有界轮询、事件等待与场景级超时诊断
+tests/e2e_scenarios.py              浏览器场景注册表与选择调度（无浏览器依赖）
+tests/e2e_servers.py                端到端测试的服务起停与中断后的兜底清理
 tools/
 ├── setup-dev.sh                   启用仓库自带的 git 钩子
+├── collect_verify_history.py      只读 GitHub 上已有的验证构件与合并事件，不启动测试
+├── grade_iteration.py             给一轮技能评测打分，写出每次运行的 grading.json
 └── git-hooks/                     拒绝在 main 上提交、推送到 main、删除 main
 .github/                           CI、issue 模板和 PR 模板
 docs/                              架构决策记录（ADR）、Agent 协作约定、README 配图
