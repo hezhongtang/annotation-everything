@@ -141,7 +141,8 @@ ACTION_KEY = {"drafted": "cli.batch.trail.action.drafted", "resolved": "cli.batc
 STAGE_KEY = {"draft": "cli.batch.stageName.draft", "review": "cli.batch.stageName.review"}
 # 人读命令遵循同一语言优先级；claim 的原始 JSON 与技能设置另有归属。
 LOCALIZED_CMDS = ("show", "wait", "batches", "done", "review", "diff", "resolve", "reopen", "import", "export",
-                  "analysis", "analysis-writeback", "suggest-analysis", "analysis-check", "analysis-redecide", "analysis-note")
+                  "analysis", "analysis-writeback", "suggest-analysis", "analysis-check", "analysis-redecide", "analysis-note",
+                  "analysis-history", "analysis-line")
 # 常驻技能的范围：存储值 → 界面显示的消息 key（存储值本身不随语言改写）
 ALWAYS_SCOPE_KEY = {"all": "viewer.hand.scope.all", "报告": "viewer.hand.scope.report",
                     "讲稿": "viewer.hand.scope.script", "style": "viewer.hand.scope.style"}
@@ -244,6 +245,9 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
                         "updates-required", "update-not-pending", "update-source-changed", "round-not-answerable")
     if isinstance(error, store.HandoffError) and error.code in protection_codes:
         return cli_text(lang)("cli.analysis.protect.error." + error.code)
+    if isinstance(error, store.HandoffError) and error.code in (
+            "checkpoint-not-found", "line-not-found", "analysis-pending-rounds", "analysis-closed"):
+        return cli_text(lang)("cli.analysis.history.error." + error.code)
     if lang != "en" or not isinstance(error, store.HandoffError) or error.code not in messages:
         return str(error)
     t = cli_text(lang)
@@ -756,6 +760,18 @@ def _main_locked(argv: list[str] | None = None) -> int:
     anote.add_argument("--action", required=True, choices=("update", "keep", "delete"),
                        help=t("cli.analysis.protect.help.action"))
     anote.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
+    history = sub.add_parser("analysis-history", help=t("cli.analysis.history.help.history"))
+    history.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    history.add_argument("--analysis", required=True, help=t("cli.notes.help.analysis.analysis"))
+    history.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
+    line = sub.add_parser("analysis-line", help=t("cli.analysis.history.help.line"))
+    line.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    line.add_argument("--analysis", required=True, help=t("cli.notes.help.analysis.analysis"))
+    line.add_argument("--action", required=True, choices=("seal", "fork", "switch", "close", "reopen"),
+                      help=t("cli.analysis.history.help.action"))
+    line.add_argument("--checkpoint", help=t("cli.analysis.history.help.checkpoint"))
+    line.add_argument("--line", help=t("cli.analysis.history.help.targetLine"))
+    line.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
     sg = sub.add_parser("suggest-analysis", help=t("cli.life.suggestHelp"))
     sg.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     sg.add_argument("id", help=t("cli.life.noteId"))
@@ -792,7 +808,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
     bt.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
     for name, parser in sub.choices.items():
         if name in ("wait", "claim", "resolve", "reopen", "review", "done", "analysis-writeback", "suggest-analysis",
-                    "analysis-redecide", "analysis-note"):
+                    "analysis-redecide", "analysis-note", "analysis-line"):
             parser.add_argument("--harness", help=t("cli.notes.help.receiver.harness"))
             parser.add_argument("--session", help=t("cli.notes.help.receiver.session"))
         parser.add_argument("--locale", default=argparse.SUPPRESS, help=t("cli.notes.localeHelp"))
@@ -969,6 +985,34 @@ def _main_locked(argv: list[str] | None = None) -> int:
             print(json.dumps(context, ensure_ascii=False, indent=2))
         else:
             print(analysis_check_text(context, d, lang))
+        return 0
+    if a.cmd in ("analysis-history", "analysis-line"):
+        try:
+            if a.cmd == "analysis-history":
+                state = analysis_store.load(d, a.analysis)
+            else:
+                operations = {"seal": analysis_store.seal_checkpoint, "fork": analysis_store.fork_line,
+                              "switch": analysis_store.switch_line, "close": analysis_store.close_analysis,
+                              "reopen": analysis_store.reopen_analysis}
+                args = ([a.checkpoint] if a.action in ("seal", "fork") else [a.line] if a.action == "switch" else [])
+                state = operations[a.action](d, a.analysis, *args, by=a.by, authorize=authorize)
+                if a.action in ("fork", "reopen"):
+                    notify_analysis(d, state)
+        except store.NotFound:
+            print(t("cli.analysis.protect.missing"), file=sys.stderr)
+            return 1
+        except store.NoteError as error:
+            print(handoff_error_text(error, lang), file=sys.stderr)
+            return 1
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
+        if a.cmd == "analysis-line":
+            print(json.dumps({"ok": True, "analysis": state}, ensure_ascii=False))
+        elif a.json:
+            print(json.dumps(state, ensure_ascii=False, indent=2))
+        else:
+            print(analysis_history_text(state, lang))
         return 0
     if a.cmd in ("analysis-redecide", "analysis-note"):
         try:
@@ -1443,7 +1487,8 @@ def analysis_context_of(d: Path, *, analysis: str | None, round_no: int | None) 
     if target is None:
         raise store.NotFound(f"analysis#{analysis}")
     state = analysis_store.load(d, target["id"])
-    round_ = next((r for r in reversed(state["rounds"]) if r["status"] in ("open", "submitted", "claimed")), None)
+    round_ = next((r for r in reversed(state["rounds"]) if r.get("line", "main") == state["line"]
+                   and r["status"] in ("open", "submitted", "claimed")), None)
     if round_ is None:
         raise store.NotFound("no-open-round")
     return analysis_store.round_context(d, target["id"], round_["seq"])
@@ -1507,8 +1552,37 @@ def analysis_context_text(ctx: dict[str, Any], lang: str | None = None) -> str:
             out.append(t("cli.analysis.protect.updateRequest", noteId=request["noteId"], text=request["text"],
                          question=request["question"], answer=request["answer"]))
     out.append(t("cli.life.verificationRule"))
-    out.append(t("cli.analysis.writebackHint", round=ctx["round"]))
+    if ctx.get("historical"):
+        if ctx.get("note"):
+            out.append(t("cli.analysis.history.agentNote", text=ctx["note"]))
+        if ctx.get("writeback"):
+            out.append(t("cli.analysis.history.writeback", text=json.dumps(ctx["writeback"], ensure_ascii=False)))
+        out.append(t("cli.analysis.history.readOnly"))
+    else:
+        out.append(t("cli.analysis.writebackHint", round=ctx["round"]))
     return "\n".join(out) + "\n"
+
+
+def analysis_history_text(state: dict[str, Any], lang: str | None = None) -> str:
+    """按自然线名与轮次输出时间线；内部标识保留在JSON读取中。"""
+    t = cli_text(lang)
+    def line_name(line):
+        ordinal = state["lines"][line]["ordinal"]
+        return t("cli.analysis.history.main" if ordinal == 1 else "cli.analysis.history.second") if ordinal < 3 else t(
+            "cli.analysis.history.other", number=ordinal)
+    out = [t("cli.analysis.history.title", focus=state["focus"])]
+    for line in state["lines"].values():
+        out.append(t("cli.analysis.history.lineRow", name=line_name(line["id"]),
+                     current=t("cli.analysis.history.current") if line["id"] == state["line"] else ""))
+    for round_ in state["rounds"]:
+        out.append(t("cli.analysis.history.roundRow", round=round_["seq"], line=line_name(round_["line"]),
+                     status=t("cli.analysis.history.status." + round_["status"])))
+    for checkpoint in state["checkpoints"]:
+        name = t("cli.analysis.history.checkpoint", round=checkpoint["round"]) if checkpoint["round"] is not None else t(
+            "cli.analysis.history.checkpointNow")
+        out.append(t("cli.analysis.history.checkpointRow", name=name, line=line_name(checkpoint["line"]),
+                     state=t("cli.analysis.history.sealed" if checkpoint["sealed"] else "cli.analysis.history.automatic")))
+    return "\n".join(out)
 
 
 def notify_analysis(d: Path, state: dict[str, Any]) -> None:

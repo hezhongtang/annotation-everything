@@ -567,6 +567,8 @@ class Handler(BaseHTTPRequestHandler):
                             "updates-required", "update-not-pending", "update-source-changed", "round-not-answerable")
         if error.code in protection_codes:
             return self._t("cli.analysis.protect.error." + error.code)
+        if error.code in ("checkpoint-not-found", "line-not-found", "analysis-pending-rounds"):
+            return self._t("cli.analysis.history.error." + error.code)
         return self._t(messages[error.code]) if error.code in messages else str(error)
 
     def _analysis_state(self, d: Path, aid: str) -> dict[str, Any]:
@@ -605,6 +607,23 @@ class Handler(BaseHTTPRequestHandler):
                 return analysis_store.activate(d, aid, by="page")
             if op == "pause":
                 return analysis_store.pause(d, aid, by="page")
+            if op in ("seal", "fork", "switch-line", "close", "reopen"):
+                operations = {"seal": analysis_store.seal_checkpoint, "fork": analysis_store.fork_line,
+                              "switch-line": analysis_store.switch_line, "close": analysis_store.close_analysis,
+                              "reopen": analysis_store.reopen_analysis}
+                args = []
+                if op in ("seal", "fork"):
+                    checkpoint = body.get("checkpoint")
+                    if ((op == "fork" and checkpoint is None) or
+                            (checkpoint is not None and (not isinstance(checkpoint, str) or not checkpoint))):
+                        raise Reject(400, "bad-request", self._t("cli.analysis.history.error.checkpoint-not-found"))
+                    args.append(checkpoint)
+                if op == "switch-line":
+                    line = body.get("line")
+                    if not isinstance(line, str) or not line:
+                        raise Reject(400, "bad-request", self._t("cli.analysis.history.error.line-not-found"))
+                    args.append(line)
+                return operations[op](d, aid, *args, by="page", authorize=lambda: self._check_receiver(body))
             if op == "redecide":
                 node, option = body.get("node"), body.get("option")
                 if not isinstance(node, str) or not node:
@@ -683,6 +702,10 @@ class Handler(BaseHTTPRequestHandler):
             ids = params.get("analysis", [])
             if len(ids) > 1 or (ids and not ids[0]):
                 raise Reject(400, "bad-request", self._t("serve.err.noAnalysis"))
+            requested = params.get("round", [])
+            if len(requested) > 1 or (requested and (not ids or re.fullmatch(r"[1-9][0-9]*", requested[0]) is None)):
+                raise Reject(400, "bad-request", self._t("serve.err.noRound"))
+            requested_round = int(requested[0]) if requested else None
             rounds = analysis_store.delivery_items(d)
             result = {"analyses": analysis_store.list_analyses(d),
                       "queue": {status: sum(r["status"] == status for r in rounds)
@@ -691,11 +714,15 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     state = self._analysis_state(d, ids[0])
                     current = next((r for r in reversed(state["rounds"])
-                                    if r["status"] in ("open", "submitted", "claimed")), None)
+                                    if r.get("line", "main") == state["line"]
+                                    and r["status"] in ("open", "submitted", "claimed")), None)
                     result.update(analysis=state,
-                                  context=analysis_store.round_context(d, ids[0], current["seq"]) if current else None)
+                                  context=analysis_store.round_context(d, ids[0], requested_round)
+                                  if requested_round is not None else
+                                  analysis_store.round_context(d, ids[0], current["seq"]) if current else None)
                 except store.NotFound:
-                    raise Reject(404, "no-analysis", self._t("serve.err.noAnalysis"))
+                    raise Reject(404, "no-round" if requested_round is not None else "no-analysis",
+                                 self._t("serve.err.noRound" if requested_round is not None else "serve.err.noAnalysis"))
             self._json(200, {**result, **self._ident()})
         elif path == "/api/analysis/start" and cmd == "POST":
             body = self._expect_obj(self._body())
@@ -722,10 +749,11 @@ class Handler(BaseHTTPRequestHandler):
             state = self._analysis_write(d, body, path.rsplit("/", 1)[-1])
             self._json(200, {"analysis": state, **self._ident()})
         elif path in ("/api/analysis/redecide", "/api/analysis/update-note", "/api/analysis/keep-note",
-                      "/api/analysis/delete-note") and cmd == "POST":
+                      "/api/analysis/delete-note", "/api/analysis/seal", "/api/analysis/fork",
+                      "/api/analysis/switch-line", "/api/analysis/close", "/api/analysis/reopen") and cmd == "POST":
             body = self._expect_obj(self._body())
             state = self._analysis_write(d, body, path.rsplit("/", 1)[-1])
-            if path.endswith(("/redecide", "/update-note")):
+            if path.endswith(("/redecide", "/update-note", "/fork", "/reopen")):
                 for round_ in state["rounds"]:
                     if round_["status"] == "submitted":
                         self.server.run_analysis_hook(round_["seq"])
@@ -1628,7 +1656,8 @@ def check(locale: str | None = None) -> int:
            and analysis_store.load(tmp, second["id"])["status"] == "paused", T("serve.check.lifeSwitch", status=s))
         for headers, expected, label in analysis_guards:
             codes = [_req(port, "POST", "/api/analysis/" + op, headers, {"analysis": first["id"]})[0]
-                     for op in ("activate", "pause", "redecide", "update-note", "keep-note", "delete-note")]
+                     for op in ("activate", "pause", "redecide", "update-note", "keep-note", "delete-note",
+                                "seal", "fork", "switch-line", "close", "reopen")]
             ok(all(code == expected for code in codes), T("serve.check.lifeGuard", guard=label, status=codes[-1]))
         s, _, _ = _req(port, "POST", "/api/server/stop", same, {})
         ok(s == 409, T("serve.check.stopNeedsReview"))
