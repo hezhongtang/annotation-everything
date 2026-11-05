@@ -8,7 +8,7 @@
   （Agent 领取期间审阅人作答不受影响，与「锁整个分析、作答除外」的语义一致）。
 - 问答记录不截断。决策由系统根据审阅人的回答产生，不由 Agent 写入；
   结构提议经审阅人在轮次中确认后才进入问题树（不采纳的提议不再出现）。
-- 稳定标识：分析 id、分析线（本票只有主线 main，后续票分线复用同一命名空间）、
+- 稳定标识：分析 id、分析线（main / line2…）、检查点 cp1…、
   问题节点 n1…、决策 d1…（按事件重放顺序确定，重放同一日志得到同一批标识）、选项 id（Agent 提议内给定）。
 
 与 notes_store 的分工：批注状态的 held / resolved / open 与批次快照的改写都通过
@@ -32,11 +32,11 @@ ANALYSIS_DIR = "analysis"
 EVENTS_FILE = "events.jsonl"
 COUNTER_FILE = "counter.json"
 SCHEMA = 1
-LINE_MAIN = "main"   # 分析线标识：本票只有主线；分线由后续票加入，标识在此命名空间内延续
+LINE_MAIN = "main"   # 主线与后续分析线共用分析内的实体命名空间。
 HOLD_REASON = "分析中"
 # 轮次状态：open 等审阅人作答 → submitted 已交出（在分析队列里）→ claimed Agent 处理中
 #   → done 写回完成；void 作废（结案等后续票使用）
-ROUND_OPEN = ("open", "submitted")   # 审阅人可作答的状态
+ROUND_OPEN = ("open", "submitted")   # 结构变化可作废的未领取轮次
 ROUND_ANSWERABLE = ("open", "submitted", "claimed")
 MAX_PROPOSALS = 50   # 一轮写回最多提出的结构提议数（防误传超大输入；问答文本本身不设上限）
 MAX_ROUND_KEEP = 0   # 0 = 不截断：问答记录全部保留
@@ -127,7 +127,7 @@ def _next_submit_order(review_dir: Path) -> int:
 # ---------- 推导：事件日志 → 当前状态 ----------
 
 def _is_active(state: dict[str, Any], node_id: str) -> bool:
-    """问题节点是否处在当前选择枝上：父节点已决到挂载它的那个选项（原型 isActive，本票无断枝）。"""
+    """问题节点是否处在当前线选择枝上：父节点已决到挂载它的那个选项。"""
     node = state["nodes"].get(node_id)
     if node is None or node.get("status") == "void":
         return False
@@ -141,12 +141,16 @@ def _is_active(state: dict[str, Any], node_id: str) -> bool:
     return bool(decision) and decision["option"] == parent["option"]
 
 
-def _decide(state: dict[str, Any], node: dict[str, Any], option: str, round_no: int) -> dict[str, Any]:
+def _decide(state: dict[str, Any], node: dict[str, Any], option: str, round_no: int | None) -> dict[str, Any]:
     """作答或重裁到某个选项：同一选项有旧决策就复用（同一标识），否则新建。决策由系统产生。"""
-    for did in node["history"]:
-        if state["decisions"][did]["option"] == option:
+    for did, decision in state["decisions"].items():
+        if (decision["node"] == node["id"] and decision["option"] == option
+                and not any((state["assumptions"].get(aid) or {}).get("refuted")
+                            for aid in decision.get("assumptions", []))):
+            if did not in node["history"]:
+                node["history"].append(did)
             node["decision"], node["status"] = did, "decided"
-            return state["decisions"][did]
+            return decision
     did = f"d{state['seq']['decision'] + 1}"
     state["seq"]["decision"] += 1
     decision = {"id": did, "node": node["id"], "option": option, "label": node["options"][option],
@@ -408,6 +412,8 @@ def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
             for aid, assumption in checkpoint["snapshot"]["assumptions"].items():
                 state["assumptions"][aid]["confirmed"][event["line"]] = (
                     assumption["confirmed"].get(checkpoint["line"], "pending"))
+            state["pendingProposals"][event["line"]] = {
+                p["key"]: copy.deepcopy(p) for p in checkpoint["snapshot"].get("pendingProposals", [])}
             current_line = event["line"]
             state["rev"] = event["rev"]
         elif kind == "line-switched":
@@ -471,8 +477,10 @@ def load(review_dir: Path, analysis_id: str) -> dict[str, Any]:
     state = _replay(_read_events(Path(review_dir), analysis_id))
     claimed = next((r for r in state["rounds"] if r["status"] == "claimed"), None)
     state["protection"] = {"locked": claimed is not None, "round": claimed["seq"] if claimed else None}
-    for node in state["nodes"].values():
-        node["branch"] = node_branch(state, node["id"])
+    for line in state["lines"]:
+        view = _line_view(state, line)
+        for node in view["nodes"].values():
+            node["branch"] = node_branch(view, node["id"])
     return state
 
 
@@ -1236,9 +1244,14 @@ def _record(review_dir: Path, analysis_id: str, event_type: str, by: str, **fiel
 
 def _snapshot(state: dict[str, Any]) -> dict[str, Any]:
     """封存领域投影；不递归嵌入轮次、旧检查点或分析线。"""
+    pending = dict(state.get("pendingProposals", {}).get(state["line"], {}))
+    for round_ in state["rounds"]:
+        if round_.get("line", LINE_MAIN) == state["line"] and round_["status"] in ROUND_ANSWERABLE:
+            pending.update({p["key"]: p for p in _unanswered_proposals(round_)})
     return copy.deepcopy({
         "focus": state["focus"], "nodes": state["nodes"], "decisions": state["decisions"],
         "assumptions": state["assumptions"], "facts": state["facts"],
+        "pendingProposals": list(pending.values()),
         "conclusions": [node["decision"] for node in state["nodes"].values()
                         if decision_in_force(state, node.get("decision"))],
         "unresolved": [node["id"] for node in state["nodes"].values()

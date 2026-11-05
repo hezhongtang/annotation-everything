@@ -240,3 +240,32 @@ class AnalysisHistoryTests(unittest.TestCase):
         restored = analysis.switch_line(self.review, self.aid, other)
         self.assertEqual(restored["nodes"]["n1"]["options"][first_option], "新线的自选口径")
 
+    def test_fork_keeps_unconfirmed_structure_proposals_without_creating_nodes(self):
+        result = self.write(self.opening, [question("pending")])
+        checkpoint = result["state"]["checkpoints"][-1]
+        self.assertEqual(result["state"]["nodes"], {})
+        forked = analysis.fork_line(self.review, self.aid, checkpoint["id"])
+        number = next(r["seq"] for r in forked["rounds"] if r["line"] == forked["line"] and r["status"] == "submitted")
+        context = analysis.round_context(self.review, self.aid, number)
+        self.assertEqual([item["key"] for item in context["items"]], ["S:pending"])
+        self.assertEqual(forked["nodes"], {})
+        accepted = analysis.answer(self.review, self.aid, number, "S:pending", {"kind": "accept"})
+        self.assertEqual(len(accepted["nodes"]), 1)
+        self.assertEqual(analysis.switch_line(self.review, self.aid, "main")["nodes"], {})
+
+    def test_answering_the_same_option_on_a_fork_reuses_the_global_decision_and_note(self):
+        number = self.open_questions(1)
+        checkpoint = analysis.seal_checkpoint(self.review, self.aid)["checkpoints"][-1]
+        original = analysis.answer(self.review, self.aid, number, "Q:n1", {"kind": "accept"})
+        did = original["nodes"]["n1"]["decision"]
+        draft = analysis.convert(self.review, self.aid, "n1", text="同一统计口径下的合成修改意见")
+        note = analysis.confirm_convert(self.review, self.aid, draft["id"])
+        forked = analysis.fork_line(self.review, self.aid, checkpoint["id"])
+        self.assertIsNone(forked["nodes"]["n1"]["decision"])
+        self.assertEqual(next(n for n in notes.load(self.review)["notes"] if n["id"] == note["id"])["status"], "held")
+        number = next(r["seq"] for r in forked["rounds"] if r["line"] == forked["line"] and r["status"] == "submitted")
+        answered = analysis.answer(self.review, self.aid, number, "Q:n1", {"kind": "accept"})
+        self.assertEqual(answered["nodes"]["n1"]["decision"], did)
+        self.assertEqual(len(answered["decisions"]), 1)
+        self.assertEqual(next(n for n in notes.load(self.review)["notes"] if n["id"] == note["id"])["status"], "open")
+
