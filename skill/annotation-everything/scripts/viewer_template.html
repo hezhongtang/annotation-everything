@@ -372,6 +372,12 @@ body.analysis-mode #panes,body.analysis-mode #bottomPanel>.panel-tabs,body.analy
 #analysisPanel .pane-head{height:35px}#analysisTimeline{height:var(--ae-panel-height);max-height:35vh;overflow:auto;margin:0;padding:var(--ae-space-lg) var(--ae-gap-28);font-size:var(--ae-text);line-height:1.7}
 #analysisTimeline>li{padding:var(--ae-gap-6) 0}#analysisTimeline p{margin:var(--ae-gap-4) 0;white-space:pre-wrap}
 #analysisTimeline ul{padding-left:var(--ae-gap-20);color:var(--ae-mut)}
+#analysisManage button,#analysisTimeline button{font:inherit;font-size:var(--ae-small);border:1px solid var(--ae-line);border-radius:var(--ae-radius);background:var(--ae-panel);padding:var(--ae-gap-4) var(--ae-space)}
+#analysisTimeline .analysis-history-link{color:var(--ae-navy);border-color:transparent;text-align:left;padding-left:0}
+.analysis-line,.analysis-checkpoint{border-bottom:1px solid var(--ae-line)}
+.analysis-history-detail{max-width:900px}.analysis-history-detail h2{font-size:var(--ae-heading)}.analysis-history-detail h3{font-size:var(--ae-title)}
+.analysis-history-detail blockquote{margin:var(--ae-space) 0;padding:var(--ae-space) var(--ae-space-lg);border-left:2px solid var(--ae-line);white-space:pre-wrap;overflow-wrap:anywhere}
+.analysis-history-question{border-bottom:1px solid var(--ae-line);padding:var(--ae-space) 0}
 #analysisParkedSide{padding:var(--ae-space)}
 #analysisMain textarea{display:block;width:100%;min-height:90px;font:inherit;border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-space);margin:var(--ae-space) 0;background:var(--ae-panel);color:var(--ae-ink)}
 .analysis-text-answer,.analysis-verify{margin-top:var(--ae-space-lg)}.analysis-text-answer summary{cursor:pointer}.analysis-verify label{display:block;font-size:var(--ae-small)}
@@ -2111,9 +2117,75 @@ document.addEventListener("keydown",e=>{
   else if(e.key==="h"||e.key==="H")$("help").classList.toggle("on");
   else if(e.key==="Escape"){document.querySelectorAll(".modal").forEach(m=>m.classList.remove("on"));if(markMode)setMarkMode(false);closePinPop();closeStyleMenu()}});
 // ---------- Analysis view helpers ----------
-function analysisCurrentRound(state){return (state&&state.rounds||[]).slice().reverse().find(r=>["open","submitted","claimed"].includes(r.status))||null}
+function analysisCurrentRound(state){return state&&state.status!=="closed"?(state.rounds||[]).slice().reverse().find(r=>(!r.line||r.line===(state.line||"main"))&&["open","submitted","claimed"].includes(r.status))||null:null}
 function analysisLocked(state){return !!state&&(state.protection?state.protection.locked===true:(state.rounds||[]).some(r=>r.status==="claimed"))}
-function analysisOperationProtected(op){return ["redecide","update-note","keep-note","delete-note","convert","confirm","release"].includes(op)}
+function analysisOperationProtected(op){return ["redecide","update-note","keep-note","delete-note","convert","confirm","release","seal","fork","switch-line","close"].includes(op)}
+function analysisLineName(state,line){
+  const ordinal=(state.lines&&state.lines[line]||{}).ordinal||(line==="main"?1:0);
+  return ordinal===1?tMsg("viewer.analysis.mainLine"):ordinal===2?tMsg("viewer.analysis.history.secondLine"):ordinal?tMsg("viewer.analysis.history.numberedLine",{number:ordinal}):tMsg("viewer.analysis.history.line")
+}
+function analysisCheckpointName(checkpoint){return checkpoint.round?tMsg("viewer.analysis.history.afterRound",{round:checkpoint.round}):tMsg("viewer.analysis.history.currentCheckpoint")}
+function analysisHistoryFor(state){return state&&typeof analysisHistorySelection!=="undefined"&&analysisHistorySelection&&analysisHistorySelection.analysis===state.id?analysisHistorySelection:null}
+function analysisCanSubmit(state){const round=analysisCurrentRound(state);return !!round&&!analysisHistoryFor(state)&&["open","submitted"].includes(round.status)}
+function analysisHistoryQuestionHtml(item){
+  const proposal=item.proposal||item,options=Array.isArray(proposal.options)?proposal.options:Object.entries(proposal.options||{}).map(([id,label])=>({id,label}));
+  return `<h3>${escH(proposal.text||"")}</h3>${proposal.beforeText?`<blockquote>${escH(proposal.beforeText)}</blockquote>`:""}${options.length?`<ul>${options.map(option=>`<li>${escH(option.label)}${option.id===proposal.recommend?` <span class="chip">${tMsg("viewer.analysis.recommended")}</span>`:""}</li>`).join("")}</ul>`:""}${(proposal.replacements||[]).map(replacement=>`<section>${analysisHistoryQuestionHtml(replacement)}</section>`).join("")}`
+}
+function analysisHistoricalAnswer(item,value){
+  if(!value)return tMsg("viewer.analysis.history.unanswered");
+  if(value.kind==="text")return value.text||"";
+  if(value.kind==="park")return tMsg("viewer.life.park");
+  if(value.kind==="verify")return tMsg(value.allowExternal===true?"viewer.analysis.history.verifyExternal":"viewer.analysis.history.verifyLocal");
+  if(item.type!=="question")return tMsg(value.kind==="accept"?"viewer.life.confirm":"viewer.life.reject");
+  const option=value.kind==="accept"?item.recommend:value.option;
+  return (item.options||[]).find(choice=>choice.id===option)?.label||tMsg("viewer.analysis.answerRecorded")
+}
+function analysisRoundHistoryHtml(state,context){
+  if(!context)return `<p class="hint">${tMsg("viewer.analysis.history.loading")}</p>`;
+  const items=new Map();[...(context.items||[]),...(context.answeredItems||[])].forEach(item=>items.set(item.key,item));
+  const questions=Array.from(items.values()).map(item=>{
+    const answer=(context.answers||{})[item.key];
+    return `<article class="analysis-history-question">${analysisHistoryQuestionHtml(item)}<p class="analysis-kind">${tMsg("viewer.analysis.history.answer")}</p><blockquote>${escH(analysisHistoricalAnswer(item,answer))}</blockquote>${answer&&typeof answer.verbatim==="string"?`<blockquote>${escH(answer.verbatim)}</blockquote>`:""}</article>`
+  }).join("");
+  const writeback=context.writeback||{},facts=writeback.facts||[],assumptions=writeback.assumptions||[],updates=writeback.updates||[];
+  return `<section class="analysis-history-detail"><p class="analysis-protection">${tMsg("viewer.analysis.history.readonly")}</p><h2>${escH(tMsg("viewer.analysis.round",{round:context.round}))}</h2><p class="hint">${escH(analysisLineName(state,context.line||"main"))}</p>${questions}${context.note?`<section><h3>${tMsg("viewer.analysis.history.agentNote")}</h3><blockquote>${escH(context.note)}</blockquote></section>`:""}${(writeback.proposals||[]).length?`<section><h3>${tMsg("viewer.analysis.structure")}</h3>${writeback.proposals.map(proposal=>analysisHistoryQuestionHtml(proposal)).join("")}</section>`:""}${assumptions.length?`<section><h3>${tMsg("viewer.life.assumptions")}</h3>${assumptions.map(assumption=>`<blockquote>${escH(assumption.text||"")}</blockquote>`).join("")}</section>`:""}${facts.length?`<section><h3>${tMsg("viewer.life.facts")}</h3>${facts.map(fact=>`<blockquote>${escH(fact.text||"")}</blockquote>${fact.source?`<p class="hint">${escH(tMsg("viewer.life.factSource",{source:fact.source}))}</p>`:""}`).join("")}</section>`:""}${updates.length?`<section><h3>${tMsg("viewer.analysis.protect.update")}</h3>${updates.map(update=>`<blockquote>${escH(update.beforeText||"")}</blockquote><blockquote>${escH(update.text||"")}</blockquote>`).join("")}</section>`:""}</section>`
+}
+function analysisCheckpointHistoryHtml(state,checkpoint){
+  if(!checkpoint)return `<p class="hint">${tMsg("viewer.analysis.history.loading")}</p>`;
+  const snapshot=checkpoint.snapshot||{},decisions=snapshot.decisions||{};
+  const nodes=Object.values(snapshot.nodes||{}).map(node=>{
+    const decision=decisions[node.decision],status=node.status==="parked"?tMsg("viewer.life.park"):node.status==="void"?tMsg("viewer.analysis.roundStatus.void"):!decision?tMsg("viewer.analysis.history.unanswered"):"";
+    return `<article class="analysis-history-question">${analysisHistoryQuestionHtml(node)}${status?`<p class="chip">${escH(status)}</p>`:""}${decision?`<blockquote>${escH(decision.label||"")}</blockquote><p class="hint">${escH(decision.round?tMsg("viewer.analysis.history.decisionRound",{round:decision.round}):tMsg("viewer.analysis.history.manualDecision"))}</p>`:""}</article>`
+  }).join("");
+  const assumptions=Object.values(snapshot.assumptions||{}).map(assumption=>`<li>${escH(assumption.text||"")} <span class="chip">${tMsg("viewer.life.status."+(assumption.refuted?"refuted":assumption.confirmed&&assumption.confirmed[checkpoint.line]||"pending"))}</span></li>`).join("");
+  const proposals=snapshot.pendingProposals||[];
+  const facts=Object.values(snapshot.facts||{}).map(fact=>`<li><blockquote>${escH(fact.text||"")}</blockquote>${fact.source?`<p class="hint">${escH(tMsg("viewer.life.factSource",{source:fact.source}))}</p>`:""}</li>`).join("");
+  return `<section class="analysis-history-detail"><p class="analysis-protection">${tMsg("viewer.analysis.history.readonly")}</p><h2>${escH(analysisCheckpointName(checkpoint))}</h2><p class="hint">${escH(analysisLineName(state,checkpoint.line))} · ${tMsg(checkpoint.sealed?"viewer.analysis.history.sealed":"viewer.analysis.history.automatic")}</p><blockquote>${escH(snapshot.focus||state.focus||"")}</blockquote>${nodes}${proposals.length?`<section><h3>${tMsg("viewer.analysis.history.pendingProposals")}</h3>${proposals.map(proposal=>analysisHistoryQuestionHtml(proposal)).join("")}</section>`:""}${assumptions?`<h3>${tMsg("viewer.life.assumptions")}</h3><ul>${assumptions}</ul>`:""}${facts?`<h3>${tMsg("viewer.life.facts")}</h3><ul>${facts}</ul>`:""}</section>`
+}
+function analysisHistoryHtml(state,selection){return selection.kind==="round"?analysisRoundHistoryHtml(state,selection.context):analysisCheckpointHistoryHtml(state,(state.checkpoints||[]).find(c=>c.id===selection.id))}
+function analysisTimelineHtml(state){
+  const disabled=analysisBusy||analysisLocked(state)||state.status==="closed"?" disabled":"",checkpoints=state.checkpoints||[];
+  const roundHtml=round=>`<li><button class="analysis-history-link" data-history-round="${round.seq}">${escH(tMsg("viewer.analysis.round",{round:round.seq}))}</button> <span>${tMsg("viewer.analysis.roundStatus."+round.status)}</span>${analysisVoidReasonText(round)?`<p>${escH(analysisVoidReasonText(round))}</p>`:""}${round.note?`<p>${escH(round.note)}</p>`:""}</li>`;
+  const checkpointHtml=checkpoint=>`<li class="analysis-checkpoint"><button class="analysis-history-link" data-history-checkpoint="${escH(checkpoint.id)}">${escH(analysisCheckpointName(checkpoint))}</button> <span class="chip">${tMsg(checkpoint.sealed?"viewer.analysis.history.sealed":"viewer.analysis.history.automatic")}</span><div class="analysis-actions"><button data-analysis-history-act="fork" data-checkpoint="${escH(checkpoint.id)}"${disabled}>${tMsg("viewer.analysis.history.fork")}</button>${!checkpoint.sealed?`<button data-analysis-history-act="seal" data-checkpoint="${escH(checkpoint.id)}"${disabled}>${tMsg("viewer.analysis.history.seal")}</button>`:""}</div></li>`;
+  const lines=Object.values(state.lines||{});if(!lines.length)lines.push({id:state.line||"main",ordinal:1});
+  return lines.sort((a,b)=>a.ordinal-b.ordinal).map(line=>{
+    const from=checkpoints.find(c=>c.id===line.from),current=line.id===(state.line||"main"),used=new Set();
+    const rounds=(state.rounds||[]).filter(round=>(round.line||"main")===line.id).map(round=>{
+      const after=checkpoints.filter(checkpoint=>checkpoint.line===line.id&&checkpoint.round===round.seq);after.forEach(checkpoint=>used.add(checkpoint.id));
+      return roundHtml(round)+after.map(checkpointHtml).join("")
+    }).join("");
+    const saved=checkpoints.filter(checkpoint=>checkpoint.line===line.id&&!used.has(checkpoint.id)).map(checkpointHtml).join("");
+    return `<li class="analysis-line"><strong>${escH(analysisLineName(state,line.id))}</strong>${current?` <span class="chip">${tMsg("viewer.analysis.history.currentLine")}</span>`:""}${from?`<p class="hint">${escH(tMsg("viewer.analysis.history.forkedFrom",{checkpoint:analysisCheckpointName(from),line:analysisLineName(state,from.line)}))}</p>`:""}${!current?`<button data-analysis-history-act="switch-line" data-line="${escH(line.id)}"${disabled}>${tMsg("viewer.analysis.history.switchLine")}</button>`:""}<ol>${rounds+saved}</ol></li>`
+  }).join("")
+}
+function analysisManageHtml(state){
+  if(analysisHistoryFor(state))return `<button data-history-current>${tMsg("viewer.analysis.history.backCurrent")}</button>`;
+  if(state.status==="closed")return `<button data-analysis-history-act="reopen"${analysisBusy?" disabled":""}>${tMsg("viewer.analysis.history.reopen")}</button>`;
+  const focus=`<button data-analysis-status="${state.status==="active"?"pause":"activate"}"${analysisBusy?" disabled":""}>${tMsg(state.status==="active"?"viewer.life.pause":"viewer.life.activate")}</button>`;
+  if(analysisLocked(state))return focus;
+  const queued=(state.rounds||[]).some(r=>r.status==="submitted");
+  return focus+`<button data-analysis-history-act="seal"${analysisBusy?" disabled":""}>${tMsg("viewer.analysis.history.seal")}</button><button data-analysis-history-act="close"${analysisBusy||queued?" disabled":""}>${tMsg("viewer.analysis.history.close")}</button>${queued?`<p class="hint">${tMsg("viewer.analysis.history.closePending")}</p>`:""}`
+}
 function analysisProtectionHtml(state){return analysisLocked(state)?`<p class="analysis-protection" role="status">${escH(tMsg("viewer.analysis.protect.locked"))}</p>`:""}
 function analysisVoidReasonText(round){return ["redecided","update-requested","base-rev-mismatch"].includes(round.voidReason)?tMsg("viewer.analysis.protect.reason."+round.voidReason):""}
 function analysisNodeActive(state,id,seen=new Set()){
@@ -2132,7 +2204,7 @@ function analysisDecisionHtml(state,node){
   const branch=analysisNodeBranch(state,node.id),decision=state.decisions&&state.decisions[node.decision];
   if(branch==="void"||!decision&&branch==="current")return "";
   const detached=branch==="detached",disabled=analysisBusy||analysisLocked(state)?" disabled":"";
-  const choices=decision&&!detached?`<details class="analysis-redecide"><summary>${tMsg("viewer.analysis.protect.redecide")}</summary><p class="hint">${tMsg("viewer.analysis.protect.redecideHint")}</p><div class="analysis-actions">${Object.entries(node.options||{}).map(([option,label])=>`<button data-analysis-act="redecide" data-node="${escH(node.id)}" data-option="${escH(option)}" aria-pressed="${option===decision.option}"${disabled||option===decision.option?" disabled":""}>${escH(label)}</button>`).join("")}</div></details><div class="analysis-actions"><button data-analysis-act="convert" data-node="${escH(node.id)}"${disabled}>${tMsg("viewer.analysis.convert")}</button></div>`:"";
+  const choices=decision&&!detached&&state.status!=="closed"?`<details class="analysis-redecide"><summary>${tMsg("viewer.analysis.protect.redecide")}</summary><p class="hint">${tMsg("viewer.analysis.protect.redecideHint")}</p><div class="analysis-actions">${Object.entries(node.options||{}).map(([option,label])=>`<button data-analysis-act="redecide" data-node="${escH(node.id)}" data-option="${escH(option)}" aria-pressed="${option===decision.option}"${disabled||option===decision.option?" disabled":""}>${escH(label)}</button>`).join("")}</div></details><div class="analysis-actions"><button data-analysis-act="convert" data-node="${escH(node.id)}"${disabled}>${tMsg("viewer.analysis.convert")}</button></div>`:"";
   return `<article class="analysis-decision${detached?" analysis-detached":""}" data-analysis-node="${escH(node.id)}"><p class="analysis-kind">${tMsg(detached?"viewer.analysis.protect.detached":"viewer.analysis.protect.current")}</p><h3>${escH(node.short||node.text)}</h3>${node.short&&node.short!==node.text?`<p class="hint">${escH(node.text)}</p>`:""}${decision?`<p>${escH(decision.label)}</p>`:""}${detached?`<p class="hint">${tMsg("viewer.analysis.protect.detachedHint")}</p>`:choices}</article>`
 }
 function analysisUpdateHtml(state,round,item){
@@ -2146,7 +2218,7 @@ function analysisLinkedNotesHtml(state){
   return `<section class="analysis-linked-notes"><h3>${tMsg("viewer.analysis.protect.linkedNotes")}</h3>${notes.map(note=>{
     const changed=note.status==="held"&&note.hold==="结论已变",request=state.updateRequests&&state.updateRequests[note.id];
     const pending=request&&["requested","drafted"].includes(request.status),history=note.analysisHistory||[];
-    const actions=changed&&note.tracking!==false?`<div class="analysis-actions"><button data-analysis-act="update-note" data-note-id="${escH(note.id)}"${disabled||pending?" disabled":""}>${tMsg("viewer.analysis.protect.requestUpdate")}</button><button data-analysis-act="keep-note" data-note-id="${escH(note.id)}"${disabled}>${tMsg("viewer.analysis.protect.keepNote")}</button><button data-analysis-act="delete-note" data-note-id="${escH(note.id)}"${disabled}>${tMsg("viewer.analysis.protect.deleteNote")}</button></div>`:"";
+    const actions=changed&&note.tracking!==false&&state.status!=="closed"?`<div class="analysis-actions"><button data-analysis-act="update-note" data-note-id="${escH(note.id)}"${disabled||pending?" disabled":""}>${tMsg("viewer.analysis.protect.requestUpdate")}</button><button data-analysis-act="keep-note" data-note-id="${escH(note.id)}"${disabled}>${tMsg("viewer.analysis.protect.keepNote")}</button><button data-analysis-act="delete-note" data-note-id="${escH(note.id)}"${disabled}>${tMsg("viewer.analysis.protect.deleteNote")}</button></div>`:"";
     return `<article class="analysis-draft analysis-linked-note" data-analysis-note="${escH(note.id)}">${changed?`<span class="chip held">${tMsg("viewer.analysis.protect.heldChanged")}</span>`:""}${note.page?`<p class="analysis-kind">${escH(tMsg("viewer.page",{page:note.page}))}</p>`:""}<blockquote>${escH(note.text||"")}</blockquote>${note.tracking===false?`<p class="hint">${tMsg("viewer.analysis.protect.trackingStopped")}</p>`:""}${pending?`<p class="hint">${tMsg("viewer.analysis.protect.request."+request.status)}</p>`:""}${actions}${history.length?`<details class="analysis-note-history"><summary>${tMsg("viewer.analysis.protect.history")}</summary>${history.map(previous=>`<blockquote>${escH(previous.text||"")}</blockquote>`).join("")}</details>`:""}</article>`
   }).join("")}</section>`
 }
@@ -2184,6 +2256,8 @@ function analysisQuestionHtml(state,round,item,draft={}){
   return `<article class="analysis-question" data-analysis-item="${escH(item.key)}"${item.node?` data-analysis-node="${escH(item.node)}"`:""}><p class="analysis-kind">${tMsg(structure?"viewer.analysis.structure":assumption?"viewer.life.assumption":"viewer.analysis.question")}</p><h3>${escH(structure?analysisStructureLabel(state,p):p.text)}</h3>${change&&p.text?`<p>${escH(p.text)}</p>`:""}${replacements}${options.length?`<ul class="analysis-options">${options.map(o=>`<li>${escH(o.label)}${o.id===p.recommend?` <span class="chip">${tMsg("viewer.analysis.recommended")}</span>`:""}</li>`).join("")}</ul>`:""}<div class="analysis-actions">${choices}</div>${extra}</article>`
 }
 function analysisErrorText(error){
+  const historyCodes=["checkpoint-not-found","line-not-found","analysis-pending-rounds"];
+  if(error&&!error.mismatch&&error.status!==0&&historyCodes.includes(error.code))return tMsg("viewer.analysis.history.error."+error.code);
   const protectCodes=["analysis-locked","bad-option","draft-basis-changed","note-not-changed","bad-updates","updates-required","update-not-pending","update-source-changed","round-not-answerable"];
   if(error&&!error.mismatch&&error.status!==0&&protectCodes.includes(error.code))return tMsg("viewer.analysis.protect.error."+error.code);
   const messages={"round-not-answerable":"roundChanged","item-not-in-round":"itemChanged","note-in-progress":"noteInProgress",
@@ -2201,6 +2275,7 @@ let analysisSupported=false,analysisChecked=false,analysisBusy=false,analysisLoa
 let analyses=[],analysisState=null,analysisContext=null,analysisQueue={submitted:0,claimed:0};
 let analysisSelected=SS.get("ae."+RID+".analysis",null),analysisRenderKey="",analysisUpgradeShown=false,analysisDraftNode=null;
 const analysisAnswerDrafts=new Map();let analysisPanelTab="timeline";
+let analysisHistorySelection=null,analysisHistoryRequest=0;
 function analysisDraftKey(state,round,key){return [state.id,round.seq,key].join("|")}
 function analysisDraftFor(state,round,key){return analysisAnswerDrafts.get(analysisDraftKey(state,round,key))||{}}
 function stashAnalysisInputs(){const state=analysisState,round=analysisCurrentRound(state);if(!state||!round)return;
@@ -2210,6 +2285,39 @@ function stashAnalysisInputs(){const state=analysisState,round=analysisCurrentRo
     analysisAnswerDrafts.set(key,draft)
   })
 }
+// ---------- Analysis history interactions ----------
+function clearAnalysisHistory(){analysisHistorySelection=null;++analysisHistoryRequest;analysisRenderKey="";renderAnalysis();analysisRouteLabels()}
+async function selectAnalysisHistory(kind,id){
+  if(!analysisState||analysisBusy)return;
+  stashAnalysisInputs();const state=analysisState,analysis=state.id,request=++analysisHistoryRequest;
+  if(kind==="checkpoint"){
+    if(!(state.checkpoints||[]).some(checkpoint=>checkpoint.id===id))return;
+    analysisHistorySelection={analysis,kind,id};analysisRenderKey="";renderAnalysis();analysisRouteLabels();return
+  }
+  const round=(state.rounds||[]).find(round=>round.seq===Number(id));if(!round)return;
+  analysisHistorySelection={analysis,kind:"round",id:round.seq,context:round.context||null};analysisRenderKey="";renderAnalysis();analysisRouteLabels();
+  if(round.context)return;
+  try{
+    const result=await api("GET","/api/analysis?analysis="+encodeURIComponent(analysis)+"&round="+round.seq);
+    if(request!==analysisHistoryRequest||analysisSelected!==analysis||!analysisHistorySelection)return;
+    analysisHistorySelection={analysis,kind:"round",id:round.seq,context:result.context};analysisRenderKey="";renderAnalysis()
+  }catch(error){if(request===analysisHistoryRequest&&analysisSelected===analysis)$("analysisError").textContent=tMsg("viewer.analysis.loadError",{reason:analysisErrorText(error)})}
+}
+async function analysisHistoryClick(event){
+  const button=event.target.closest("[data-history-current],[data-history-round],[data-history-checkpoint],[data-analysis-history-act]");
+  if(!button||button.disabled||analysisBusy)return;
+  const data=button.dataset;
+  if(Object.prototype.hasOwnProperty.call(data,"historyCurrent")){clearAnalysisHistory();return}
+  if(data.historyRound)return selectAnalysisHistory("round",Number(data.historyRound));
+  if(data.historyCheckpoint)return selectAnalysisHistory("checkpoint",data.historyCheckpoint);
+  const op=data.analysisHistoryAct;if(!["seal","fork","switch-line","close","reopen"].includes(op))return;
+  const body={};if(data.checkpoint)body.checkpoint=data.checkpoint;if(data.line)body.line=data.line;
+  return analysisAction(op,body)
+}
+// ---------- Analysis history events ----------
+$("analysisManage").onclick=event=>{const button=event.target.closest("[data-analysis-status]");return button?analysisAction(button.dataset.analysisStatus):analysisHistoryClick(event)};
+$("analysisTimeline").onclick=analysisHistoryClick;
+// ---------- Analysis history events end ----------
 function analysisShown(){return !FILE&&analysisSupported&&location.hash==="#analysis"}
 function analysisRoute(){
   const shown=analysisShown();document.body.classList.toggle("analysis-mode",shown);
@@ -2220,7 +2328,7 @@ function analysisRoute(){
   const label=$("handBtn").querySelector("span"),key=shown?"viewer.analysis.submit":"viewer.hand.btn";
   label.dataset.msg=key;label.textContent=tMsg(key);
   $("handBtn").title=tMsg(shown?"viewer.analysis.submitTitle":"viewer.hand.btnTitle");
-  $("handBtn").disabled=shown&&(analysisBusy||mode!=="server"||!analysisCurrentRound(analysisState)||analysisCurrentRound(analysisState).status==="claimed");
+  $("handBtn").disabled=shown&&(analysisBusy||mode!=="server"||!analysisCanSubmit(analysisState));
   const focusLabel=$("focusHint").querySelector("span");focusLabel.dataset.msg=shown?"viewer.analysis.focusHint":"viewer.layout.focusHint";focusLabel.textContent=tMsg(focusLabel.dataset.msg);
   $("analysisQueue").hidden=FILE||!analysisSupported;$("analysisQueue").textContent=tMsg("viewer.analysis.queue",{waiting:analysisQueue.submitted||0,processing:analysisQueue.claimed||0});
   if(location.hash==="#analysis"&&!shown&&(FILE||analysisChecked)&&!analysisUpgradeShown){analysisUpgradeShown=true;toast(tMsg(FILE?"viewer.analysis.fileUnavailable":"viewer.analysis.upgrade"),7000)}
@@ -2249,30 +2357,31 @@ async function loadAnalyses(){
   finally{analysisLoading=false;if(request!==analysisRequest&&analysisShown()&&!analysisBusy)loadAnalyses()}
 }
 function analysisRouteLabels(){
-  $("analysisDraftCreate").disabled=analysisBusy||analysisLocked(analysisState);$("analysisDraftText").disabled=analysisBusy||analysisLocked(analysisState);
+  $("analysisDraftCreate").disabled=analysisBusy||analysisLocked(analysisState)||analysisState&&analysisState.status==="closed"||!!analysisHistoryFor(analysisState);$("analysisDraftText").disabled=$("analysisDraftCreate").disabled;
   $("analysisNew").disabled=$("pageAnalysisStart").disabled=$("analysisStartCreate").disabled=analysisBusy;
   $("analysisQueue").textContent=tMsg("viewer.analysis.queue",{waiting:analysisQueue.submitted||0,processing:analysisQueue.claimed||0});
-  if(analysisShown())$("handBtn").disabled=analysisBusy||mode!=="server"||!analysisCurrentRound(analysisState)||analysisCurrentRound(analysisState).status==="claimed"
+  if(analysisShown())$("handBtn").disabled=analysisBusy||mode!=="server"||!analysisCanSubmit(analysisState)
 }
 function renderAnalysis(){
   if(!analysisShown())return;
-  const signature=JSON.stringify([analyses,analysisState,analysisBusy,uiLocale]);if(signature===analysisRenderKey)return;analysisRenderKey=signature;
+  const signature=JSON.stringify([analyses,analysisState,analysisBusy,uiLocale,analysisHistoryFor(analysisState)]);if(signature===analysisRenderKey)return;analysisRenderKey=signature;
   $("analysisList").innerHTML=analyses.map(a=>`<button class="analysis-list-item" data-analysis-select="${escH(a.id)}" aria-pressed="${a.id===analysisSelected}">${escH(a.focus)}<small>${tMsg("viewer.analysis.status."+a.status)}</small></button>`).join("");
   const state=analysisState,round=analysisCurrentRound(state);
   if(!state){$("analysisFocus").textContent=tMsg("viewer.analysis.emptyTitle");$("analysisMeta").textContent="";$("analysisBody").innerHTML=`<p class="empty">${tMsg("viewer.analysis.empty")}</p>`;["analysisManage","analysisTree","analysisTimeline","analysisAssumptions","analysisParked","analysisParkedSide","analysisFacts"].forEach(id=>$(id).innerHTML="");return}
-  $("analysisFocus").textContent=state.focus;$("analysisMeta").textContent=tMsg("viewer.analysis.mainLine")+(round?" · "+tMsg("viewer.analysis.round",{round:round.seq})+" · "+tMsg("viewer.analysis.roundStatus."+round.status):" · "+tMsg("viewer.analysis.roundDone"));
+  $("analysisFocus").textContent=state.focus;$("analysisMeta").textContent=analysisLineName(state,state.line||"main")+(round?" · "+tMsg("viewer.analysis.round",{round:round.seq})+" · "+tMsg("viewer.analysis.roundStatus."+round.status):" · "+tMsg("viewer.analysis.roundDone"));
   const visibleNodes=Object.values(state.nodes||{}).filter(n=>analysisNodeBranch(state,n.id)!=="void"),nodes=visibleNodes.filter(n=>analysisNodeBranch(state,n.id)==="current"),detached=visibleNodes.filter(n=>analysisNodeBranch(state,n.id)==="detached");
-  $("analysisManage").innerHTML=`<button data-analysis-status="${state.status==="active"?"pause":"activate"}"${analysisBusy?" disabled":""}>${tMsg(state.status==="active"?"viewer.life.pause":"viewer.life.activate")}</button>`;
+  $("analysisManage").innerHTML=analysisManageHtml(state);
   const treeItems=group=>group.map(n=>`<button class="analysis-tree-node" data-analysis-jump="${escH(n.id)}"><span aria-hidden="true">${n.decision?"✓":"○"}</span> ${escH(n.short||n.text)}</button>`).join("");
   $("analysisTree").innerHTML=`<p class="analysis-kind">${tMsg("viewer.analysis.protect.current")}</p>`+(treeItems(nodes.filter(n=>n.status!=="parked"))||`<p class="empty">${tMsg("viewer.analysis.noTree")}</p>`)+(detached.length?`<details class="analysis-tree-group" open><summary>${tMsg("viewer.analysis.protect.detached")}</summary>${treeItems(detached)}</details>`:"");
   const source=state.sourceCopy||{},released=state.sourceState!=="held";
-  const sourceHtml=`<details class="analysis-source"><summary>${tMsg(state.sourceNote?"viewer.analysis.source":"viewer.life.sourceQuestion")}${source.page?" · "+tMsg("viewer.page",{page:source.page}):""}</summary><blockquote>${escH(source.text||"")}</blockquote>${state.sourceNote&&!released?`<button data-analysis-act="release"${analysisBusy||analysisLocked(state)?" disabled":""}>${tMsg("viewer.analysis.release")}</button>`:""}</details>`;
+  const sourceHtml=`<details class="analysis-source"><summary>${tMsg(state.sourceNote?"viewer.analysis.source":"viewer.life.sourceQuestion")}${source.page?" · "+tMsg("viewer.page",{page:source.page}):""}</summary><blockquote>${escH(source.text||"")}</blockquote>${state.sourceNote&&!released&&state.status!=="closed"?`<button data-analysis-act="release"${analysisBusy||analysisLocked(state)?" disabled":""}>${tMsg("viewer.analysis.release")}</button>`:""}</details>`;
   const questions=round?(round.items||[]).map(item=>analysisQuestionHtml(state,round,item,analysisDraftFor(state,round,item.key))).join(""):"";
   const answers=round?Object.entries(round.answers||{}).map(([key,value])=>`<li>${escH(analysisAnswerLabel(state,round,key,value))}</li>`).join(""):"";
   const decisions=nodes.concat(detached).map(n=>analysisDecisionHtml(state,n)).join("");
-  const drafts=(state.drafts||[]).map(d=>`<article class="analysis-draft"><h3>${tMsg("viewer.analysis.draft")}</h3><p>${escH(d.text)}</p>${d.status==="pending"?`<p class="hint">${tMsg("viewer.analysis.confirmHint")}</p><button data-analysis-act="confirm" data-draft="${escH(d.id)}"${analysisBusy||analysisLocked(state)?" disabled":""}>${tMsg("viewer.analysis.confirm")}</button>`:`<p class="hint">${tMsg("viewer.analysis.confirmed")}</p><button data-analysis-act="annotations">${tMsg("viewer.analysis.backToNotes")}</button>`}</article>`).join("");
+  const drafts=(state.drafts||[]).map(d=>`<article class="analysis-draft"><h3>${tMsg("viewer.analysis.draft")}</h3><p>${escH(d.text)}</p>${d.status==="pending"?`<p class="hint">${tMsg("viewer.analysis.confirmHint")}</p>${state.status!=="closed"?`<button data-analysis-act="confirm" data-draft="${escH(d.id)}"${analysisBusy||analysisLocked(state)?" disabled":""}>${tMsg("viewer.analysis.confirm")}</button>`:""}`:`<p class="hint">${tMsg("viewer.analysis.confirmed")}</p><button data-analysis-act="annotations">${tMsg("viewer.analysis.backToNotes")}</button>`}</article>`).join("");
   $("analysisBody").innerHTML=analysisProtectionHtml(state)+sourceHtml+(questions||`<p class="empty">${tMsg(round&&round.status==="claimed"?"viewer.analysis.agentWorking":round&&round.status==="submitted"?"viewer.analysis.awaitingAgent":"viewer.analysis.noQuestions")}</p>`)+(answers?`<section class="analysis-answers"><h3>${tMsg("viewer.analysis.yourAnswers")}</h3><ul>${answers}</ul></section>`:"")+decisions+drafts+analysisLinkedNotesHtml(state);
-  $("analysisTimeline").innerHTML=(state.rounds||[]).map(r=>`<li><strong>${tMsg("viewer.analysis.round",{round:r.seq})}</strong> <span>${tMsg("viewer.analysis.roundStatus."+r.status)}</span>${analysisVoidReasonText(r)?`<p>${escH(analysisVoidReasonText(r))}</p>`:""}${r.note?`<p>${escH(r.note)}</p>`:""}<ul>${Object.entries(r.answers||{}).map(([key,value])=>`<li>${escH(analysisAnswerLabel(state,r,key,value))}</li>`).join("")}</ul></li>`).join("");
+  const history=analysisHistoryFor(state);if(history)$("analysisBody").innerHTML=analysisHistoryHtml(state,history);
+  $("analysisTimeline").innerHTML=analysisTimelineHtml(state);
   const parked=nodes.filter(n=>n.status==="parked");
   $("analysisParkedSide").innerHTML=parked.map(n=>`<p>${escH(n.short||n.text)}</p>`).join("")||`<p class="empty">${tMsg("viewer.life.noParked")}</p>`;
   $("analysisParked").innerHTML=parked.map(n=>`<li>${escH(n.text)}</li>`).join("")||`<li class="empty">${tMsg("viewer.life.noParked")}</li>`;
@@ -2283,18 +2392,31 @@ function renderAnalysis(){
 async function analysisAction(op,body={}){
   if(analysisBusy)return null;
   if(FILE||!analysisSupported||mode!=="server"){toast(tMsg("viewer.analysis.connectionRequired"),6000);return null}
+  if(analysisHistoryFor(analysisState)&&["answer","submit"].includes(op)){toast(tMsg("viewer.analysis.history.readonly"),6000);return null}
+  if(analysisState&&analysisState.status==="closed"&&!["reopen","start","activate"].includes(op)){toast(analysisErrorText({code:"analysis-closed"}),6000);return null}
+  if(op==="close"&&(analysisState&&analysisState.rounds||[]).some(r=>r.status==="submitted")){toast(analysisErrorText({code:"analysis-pending-rounds"}),6000);return null}
   if(analysisLocked(analysisState)&&analysisOperationProtected(op)){const reason=analysisErrorText({code:"analysis-locked"});$("analysisError").textContent=reason;toast(reason,6000);return null}
   analysisBusy=true;++analysisRequest;analysisRenderKey="";renderAnalysis();analysisRouteLabels();$("analysisError").textContent="";
   try{
     const result=await api("POST","/api/analysis/"+op,{analysis:analysisSelected,...body,receiverBindingId:receiver&&receiver.bindingId});
     if(result.analysis){analysisState=result.analysis;analysisSelected=result.analysis.id;SS.set("ae."+RID+".analysis",analysisSelected)}
     if(result.doc){setDoc(result.doc);refreshList(true)}
-    await resync();toast(tMsg((["redecide","update-note","keep-note","delete-note"].includes(op)?"viewer.analysis.protect.done.":"viewer.analysis.done.")+op),4000);return result
+    if(typeof analysisHistorySelection!=="undefined")analysisHistorySelection=null;
+    if(typeof analysisHistoryRequest!=="undefined")++analysisHistoryRequest;
+    await resync();toast(tMsg((["seal","fork","switch-line","close","reopen"].includes(op)?"viewer.analysis.history.done.":["redecide","update-note","keep-note","delete-note"].includes(op)?"viewer.analysis.protect.done.":"viewer.analysis.done.")+op),4000);return result
   }catch(error){const reason=analysisErrorText(error);$("analysisError").textContent=reason;toast(tMsg("viewer.analysis.actionError",{reason}),7000);return null}
   finally{analysisBusy=false;analysisRenderKey="";renderAnalysis();analysisRouteLabels();await loadAnalyses()}
 }
 async function startAnalysis(noteId){const result=await analysisAction("start",{noteId});if(result){location.hash="#analysis";analysisRoute()}}
-async function openAnalysis(id){const result=await analysisAction("activate",{analysis:id});if(result){location.hash="#analysis";analysisRoute()}}
+async function openAnalysis(id){
+  if(analysisBusy)return;
+  stashAnalysisInputs();
+  if((analyses.find(row=>row.id===id)||{}).status==="closed"){
+    analysisHistorySelection=null;++analysisHistoryRequest;++analysisRequest;analysisSelected=id;analysisState=null;analysisContext=null;analysisRenderKey="";
+    SS.set("ae."+RID+".analysis",id);location.hash="#analysis";analysisRoute();await loadAnalyses();return
+  }
+  const result=await analysisAction("activate",{analysis:id});if(result){location.hash="#analysis";analysisRoute()}
+}
 function openNewAnalysis(page=null){
   $("analysisStartPage").innerHTML=`<option value="">${tMsg("viewer.life.noPage")}</option>`+P.map(p=>`<option value="${p.n}"${p.n===page?" selected":""}>${escH(tMsg("viewer.page",{page:p.n})+" · "+unH(p.title))}</option>`).join("");
   $("analysisStartDialog").classList.add("on");$("analysisStartText").focus()
@@ -2306,14 +2428,13 @@ $("analysisStartCreate").onclick=async()=>{
   if(result){$("analysisStartDialog").classList.remove("on");$("analysisStartText").value="";location.hash="#analysis";analysisRoute()}
 };
 $("analysisStartText").addEventListener("keydown",event=>{if(!event.isComposing&&event.key==="Enter"&&(event.metaKey||event.ctrlKey)){event.preventDefault();$("analysisStartCreate").click()}});
-$("analysisManage").onclick=event=>{const button=event.target.closest("[data-analysis-status]");if(button)analysisAction(button.dataset.analysisStatus)};
 function selectAnalysisPanel(tab){analysisPanelTab=tab;["timeline","assumptions","parked","facts"].forEach(name=>{
   const button=$("analysisPanelTabs").querySelector(`[data-analysis-tab="${name}"]`);button.setAttribute("aria-selected",String(name===tab));button.tabIndex=name===tab?0:-1;
   $("analysis"+name[0].toUpperCase()+name.slice(1)).hidden=name!==tab
 })}
 $("analysisPanelTabs").onclick=event=>{const button=event.target.closest("[data-analysis-tab]");if(button)selectAnalysisPanel(button.dataset.analysisTab)};
 selectAnalysisPanel(analysisPanelTab);
-function submitAnalysis(){const round=analysisCurrentRound(analysisState);if(round&&round.status!=="claimed")return analysisAction("submit",{round:round.seq})}
+function submitAnalysis(){const round=analysisCurrentRound(analysisState);if(analysisCanSubmit(analysisState))return analysisAction("submit",{round:round.seq})}
 $("annotationMode").onclick=()=>{location.hash=""};$("analysisMode").onclick=()=>{location.hash="#analysis"};
 $("analysisSidebar").onclick=event=>{const select=event.target.closest("[data-analysis-select]"),jump=event.target.closest("[data-analysis-jump]");
   if(select){openAnalysis(select.dataset.analysisSelect);return}
