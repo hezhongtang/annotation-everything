@@ -2,6 +2,8 @@
 
 `verify.py` 的选测策略层回答一个问题：**当前改动应该跑哪些验证、为什么、什么时候必须回退完整检查**。策略本体在仓库根 `verify_selection.py`（纯标准库，与 `host_isolation.py` 同级），选测默认工作在**影子模式**：建议范围只记录，不直接裁剪请求组。G 项的证据复用独立判断同一逻辑工作会话内的有效结果，只有复用条件全部成立才引用已有验证；纯文档 `pr` 门禁是唯一例外：全部有效差异位于内置文档允许列表时，本地产品测试不适用，由 CI 兜底；其余 PR 和全部 CI 门禁实际执行，不因选测或复用减少检查。
 
+工作流以 [AGENTS.md「开发与 PR review」](../../AGENTS.md#开发与-pr-review) 为准：issue 实现只做快速相关单元与已配置的 Lint、格式检查，全量留到用户手动发起的 PR review。下文描述现有 CLI 的建议范围，不要求开发 Agent 在开 PR 前执行全部建议；完整回退要求写入 PR 的待验证范围。若效率守卫会强制扩大实际范围，快速阶段只读计划，不绕过守卫。
+
 ## 用法
 
 ```bash
@@ -9,8 +11,8 @@
 python3 verify.py plan --phase development
 python3 verify.py plan --phase development --baseline <SHA> --json   # 结构化计划带 selection 字段
 
-# 影子模式 run：实际执行仍是请求的组；记录里带建议范围与对照结果
-python3 verify.py run --group unit --group serve-check --phase development --issue 55
+# PR review 全量 run：记录建议范围与实际完整验收的对照
+python3 verify.py run --group all --phase pr --pr 50
 
 # 读对照结果（record.json 的 shadow 字段，或独立文件）
 python3 verify.py report --latest
@@ -23,9 +25,10 @@ cat .verify/runs/<run ID>/shadow.json
 
 | 阶段 | 建议范围 | 说明 |
 | --- | --- | --- |
-| `issue` | 不自动启动测试（`runs_tests=false`） | 需求 / 分诊阶段写 issue 不触发测试；缺陷复现显式请求 `run unit-related <选择器>`。这不是「不用测」。 |
-| `development` / `review` / `manual` | 命中映射规则的 `unit-related`（自动附带全局词典契约）+ 命中服务边界时加 `serve-check` + 浏览器场景（计划层） | 有可信映射才给局部建议。 |
-| `pr` | 纯文档允许列表内：产品测试不适用；其余：`all`（unit → serve-check → browser） | 文档 PR 留下可报告的门禁证据，由 CI 兜底；代码 PR 仍完成本地完整验收。 |
+| `issue` | 不自动启动测试（`runs_tests=false`） | CLI 的需求 / 分诊标签；issue 实现阶段的快速测试记录为 `development`。 |
+| `development` | 映射建议仍可能含相关单元、安全自检、浏览器场景或全量回退 | 只从中选择直接相关的快速单元执行；其余要求移交 PR review，不自动扩大开发阶段范围。 |
+| `review` / `manual` | 命中映射规则的 `unit-related`（自动附带全局词典契约）+ 命中服务边界时加 `serve-check` + 浏览器场景（计划层） | PR review 中按疑点补测的建议；不能替代 `pr` 全量门禁。 |
+| `pr` | 纯文档允许列表内：产品测试不适用；其余：`all`（unit → serve-check → browser） | 用户手动发起 PR review 后执行门禁；合格文档 PR 留下不适用证据、由 CI 兜底，其余 PR 实际执行全量。 |
 | `ci` | `unit` + `serve-check` | 与现有 CI 矩阵一致；浏览器不在 CI 矩阵。 |
 
 任何阶段下，映射给不出可信建议时都回退完整检查（见下）。回退是「建议=完整检查」，不是「不测」；回退同时保留已命中规则的信息——命中服务边界时建议仍带 `serve-check`，场景计划（计划层）也一并保留，回退解释的是「为什么要完整检查」，不是「已命中的信息可以丢弃」。

@@ -8,11 +8,20 @@
 
 入口放在仓库根目录，和 `ae.py` 并列，而不是并进 `ae.py`：`ae.py` 是发给用户的产品管理命令，输出走中英双语、围绕技能副本和本机台账；验证入口面向仓库检出，技能副本还没装也能验证，输出只要中文。两者生命周期不同，理由见 [docs/adr/0002-unified-verification-entry.md](../adr/0002-unified-verification-entry.md)。
 
+## 两阶段工作流
+
+执行时机以 [AGENTS.md「开发与 PR review」](../../AGENTS.md#开发与-pr-review) 为准：issue 实现阶段做快速相关单元测试与已配置的 Lint、格式检查，完成后开 PR；用户手动调用 agents 后做全量审查与验证，全部通过后才能合并。
+
+- 快速单元优先选择直接相关的用例或类，单次反馈目标 60 秒。`unit-related` 自动附带的全局词典契约仍保留。选定范围过慢、涉及宿主状态资源，或计划要求全量回退时，记录移交范围，不在实现阶段自动启动完整检查。
+- Lint 与格式化尚未配置，另开 PR 接入；当前记录「未配置」。`git diff --check` 只检查空白。纯协作文档、README 和 PR 模板改动检查文本与 diff，单元测试记录「不适用」；skill 指引、fixture 与执行配置不按文件后缀豁免。
+- 已知快速检查失败先修复；超时、锁等待或环境阻塞如实记录，不能写成通过。开 PR 时列明待验证项，开发 Agent 随后结束交接。
+- PR review 的门禁使用 `--group all --phase pr`：符合内置文档允许列表的纯文档 PR 记录产品测试 `not_applicable`、由 CI 兜底；其余 PR 实际执行完整单元、服务安全自检和完整浏览器。豁免边界见下文「阶段口径」及 [selection-strategy.md](selection-strategy.md)。CLI 的 `review` 阶段只用于补测或报告交接；已有快速检查证据不替代门禁要求的实际执行。CI 保留自动触发，由审查 Agent 跟进失败修复。
+
 ## 快速开始
 
 ```bash
 python3 verify.py plan                      # 将执行哪些组、跑什么命令，不启动测试
-python3 verify.py run                       # 完整单元（缺省组），结束后打印摘要
+python3 verify.py run --group all --phase pr # 用户发起 PR review 后：完整验收
 python3 verify.py report --latest           # 读最近一次记录，不启动测试
 ```
 
@@ -39,14 +48,14 @@ python3 verify.py report --latest           # 读最近一次记录，不启动�
 ## 常用跑法
 
 ```bash
-# 开发中：只跑改动涉及的模块
-python3 verify.py run unit-related tests/test_core.py tests/test_i18n.py
+# issue 实现：选择直接相关的快速单元；以下用语言逻辑模块举例
+python3 verify.py run unit-related tests/test_i18n.py --phase development --timeout 60
 
 # 看当前改动建议跑什么、为什么（不启动测试）
 python3 verify.py plan --phase development
 
-# PR 收敛：纯文档记录不适用，其余实际执行完整单元 + 服务安全自检 + 完整浏览器
-python3 verify.py run --group all --phase pr --pr 50 --reason "PR 收敛前验收"
+# 用户手动发起 PR review 后：符合文档允许列表时记录不适用，其余实际执行全量
+python3 verify.py run --group all --phase pr --pr 50 --reason "PR review 全量验收"
 
 # CI：完整单元 + 服务安全自检（浏览器依赖不进 CI）
 python3 verify.py run --group unit --group serve-check --phase ci
@@ -55,13 +64,15 @@ python3 verify.py run --group unit --group serve-check --phase ci
 python3 verify.py run unit-related tests.test_core.ServerTests --phase review
 
 # 完全独立复测：绕过证据复用，全部组实际执行（原因写进记录）
-python3 verify.py run --no-reuse --reason "独立审查者复测"
+python3 verify.py run --group all --phase pr --no-reuse --reason "PR review 独立复测"
 
 # 某个组设超时，超时按 124 退出并回收子进程
 python3 verify.py run --group browser --timeout 300
 ```
 
 `--issue`、`--pr`、`--phase`、`--reason` 都写进记录，是后续判断「这次为什么跑」的依据。`--phase` 只接受 `issue`、`development`、`review`、`pr`、`ci`、`manual`。
+
+`--timeout 60` 限制该组的执行时间，不代表整次调用连同排队一定在 60 秒内结束。快速阶段选择无宿主资源锁的逻辑用例；若需资源敏感验证，移交 PR review，继续遵守既有互斥协议。
 
 ## 怎么读报告
 
@@ -91,17 +102,17 @@ python3 verify.py run --group browser --timeout 300
 选测回答「这次改动该跑什么、为什么」，影子对照保证它先被证明再被信任。要点：
 
 - `python3 verify.py plan --phase development`（可加 `--baseline`）：解释有效差异（含新增 / 删除 / 重命名两端与未提交文件）、命中的映射规则、未知路径、回退原因与建议范围；不启动任何测试。
-- `run` 默认影子模式：除纯文档 PR 外，实际执行仍是请求的组（缺省完整单元），建议范围写进 `context.selection`；结束时对照写进 `shadow` 字段与 `shadow.json`。候选遗漏（完整检查发现而建议范围没覆盖的失败）保留并归因，不会被丢弃，也不会自动改规则。
-- 未知路径、坏基线、损坏规则、清单缺口、策略自身变化一律回退完整检查并解释原因；空差异不解释成「不用测」。`issue` 阶段不自动启动测试，缺陷复现显式请求相关组。
+- `run` 默认影子模式：除符合内置文档允许列表的 PR 豁免外，实际执行仍是请求的组（缺省完整单元），建议范围写进 `context.selection`；结束时对照写进 `shadow` 字段与 `shadow.json`。候选遗漏（完整检查发现而建议范围没覆盖的失败）保留并归因，不会被丢弃，也不会自动改规则。
+- 未知路径、坏基线、损坏规则、清单缺口、策略自身变化一律建议回退完整检查并解释原因；空差异不解释成「不用测」。需求阶段不自动启动测试；issue 实现按快速检查范围执行，全量回退要求移交 PR review。若效率守卫会强制扩大实际执行范围，实现阶段只读计划并记录待验证项，不绕过守卫。
 - 策略版本、回退情形、允许列表边界与样本清单见 [selection-strategy.md](selection-strategy.md)；影子报告可被 G / H 直接读取（`shadow.json` + `context.selection`）。
 
 ## 证据复用与流程接入（G 项）
 
-有效验证证据可以跨阶段引用：开发者完成验证后，审查和 PR 整理引用当前仍有效的记录，而不是无条件重跑全套。判定策略在仓库根 `verify_evidence.py`（版本化，`POLICY_VERSION` 随判定逻辑递增）。
+有效验证证据可以用于快速检查、PR review 补测与报告交接；PR review 的 `pr` 门禁按下文「阶段口径」执行。判定策略在仓库根 `verify_evidence.py`（版本化，`POLICY_VERSION` 随判定逻辑递增），不因工作流调整而改变。
 
 - **复用判定（从紧，任何一条不满足就实际执行）**：同输入指纹（HEAD + 工作树全部有效输入的内容摘要，含 staged / unstaged / untracked）+ 同环境（OS、Python、CI 标记、配置摘要）+ 范围覆盖（请求组的测试清单 ⊆ 已验证组的清单）+ 来源记录当前校验后 `usable_as_evidence=true`（不信任落盘时的旧标记）+ 未超 24 小时保鲜窗口且结束时间不在未来 + 入口版本、选测策略版本、复用策略版本一致 + 基线一致。唯一放宽：差异被证明仅在文档允许列表内（`README.md`、`README.en.md`、`docs/assets/`、`GLOSSARY.md`、`docs/adr/`，与选测策略同一允许列表；覆盖映射下停用）时仍可复用，复用理由注明「差异仅在文档允许列表内」；无法证明独立性就回退重新验证。
 - **永远不复用的组**：依赖同机宿主机状态的组（`groups[].resources` 非空——完整单元、完整浏览器、命中敏感模块的相关单元直跑）。指纹相同也不复用，必须实际执行或要求隔离证明。
-- **阶段口径**：`issue` / `development` / `review` / `manual` 默认启用复用；`pr` / `ci` 不引用旧证据。PR 的全部有效差异仅在内置文档允许列表内，且没有回退或效率守卫时，本地产品测试记为 `not_applicable`，原因写明「差异仅在文档允许列表内，由 CI 兜底」，可作为本地门禁证据；不计执行、用例、检查或通过数。其余 PR 仍实际执行完整单元、服务安全自检与完整浏览器。CI 始终执行原矩阵，`--no-reuse` 可强制文档 PR 实际执行。PR 整理阶段的引用走 `review` / `manual`。
+- **阶段口径**：CLI 的 `issue` / `development` / `review` / `manual` 保留复用能力；这些标签本身不决定何时运行测试，执行时机服从上文工作流。用户发起 PR review 后，`pr` / `ci` 不引用旧证据。PR 的全部有效差异仅在内置文档允许列表内，且没有回退或效率守卫时，本地产品测试记为 `not_applicable`，原因写明「差异仅在文档允许列表内，由 CI 兜底」，可作为本地门禁证据；不计执行、用例、检查或通过数。其余 PR 仍实际执行完整单元、服务安全自检与完整浏览器。CI 始终执行原矩阵，本地记录不替代 Linux 双 Python CI；`--no-reuse` 可强制文档 PR 实际执行。补测与报告交接可用 `review` / `manual`。
 - **按疑点复测不受限**：`unit-related` 点名到类 / 用例的选择器不复用（如 `python3 verify.py run unit-related tests.test_synth.TouchTests --phase review`）；要完全独立复测用 `--no-reuse`，绕过原因写进记录。
 - **呈现与统计**：被引用的组 `outcome` 为 `reused`（引用已有验证），明确区别于「跳过（空集合）」——后者不是通过；`result.counts` 不累计引用组的组数、用例或检查。报告列出来源 run、时间、指纹、已验证范围、来源环境与理由；`report` 读取时使用与规划相同的有效性和覆盖判断，来源损坏、超期或不再满足条件时，完整性、可用性与影子结论一起降级，返回 1。
 - **迁移与故障恢复**：统一入口 G 之前的记录没有复用策略版本，一律不参与复用；未经统一入口生成的旧日志更不会被当作可信记录。读取错误一律回退为全部实际执行，不把旧记录误判成功。全量回退模式始终可用：`python3 verify.py run --no-reuse`（等价于 G 之前的完整执行行为）。
@@ -114,7 +125,7 @@ python3 verify.py run --group browser --timeout 300
 ```bash
 git clone <仓库地址> && cd annotation-everything
 python3 verify.py plan                      # 1. 看将执行什么
-python3 verify.py run --phase development --issue 50 --reason "复现样本"
+python3 verify.py run --group all --phase pr --pr 50 --reason "PR review 复现样本"
 python3 verify.py report --latest           # 2. 读这次记录
 python3 verify.py report --run <run ID> --json   # 3. 获取当前校验后的 JSON 报告
 ```

@@ -1,5 +1,7 @@
 # 工程提效总验收记录（#49 / #57）
 
+本页保留当时的实验与交接记录；当前开发与 PR review 的执行时机以 [AGENTS.md](../../AGENTS.md#开发与-pr-review) 和 [onboarding.md](onboarding.md) 为准。
+
 本轮补齐总规格剩余的性能与交接证据。完整单元、完整浏览器、清理契约和三个预先固定的局部案例均达到目标；没有删除原有业务断言。最终 PR 的完整门禁、独立审查与 Python 3.9 / 3.12 CI 通过后，随合并关闭 #57 和 #49。
 
 机器可复算的数据见 [最终快照](samples/final-efficiency-acceptance.json)，原始记录、日志、实验计划和失败记录见 [合成证据包](samples/final-efficiency-evidence.tar.gz)。包内 `manifest.json` 保存每个文件的字节数与 SHA-256，快照另存整个包的 SHA-256；接手者不需要原聊天、临时目录或个人技能安装。
@@ -51,7 +53,7 @@
 ## 交接与总规格核对
 
 - A–G 与 H 的持续报告、只读 CI 汇总、周期 / 去重与策略维护已在基线主线中；维护入口见 [onboarding.md](onboarding.md)、[efficiency.md](efficiency.md)、[selection-strategy.md](selection-strategy.md)。报告只读现有记录，不额外启动产品测试；无新样本不重复回顾。
-- 开发先跑相关组；独立审查与 PR 整理读取有效证据，有疑点才点名补测。本轮同会话 `serve-check` 演示实际执行 1 组、跨 development → review → manual 引用 2 次，重复全量为 0；三个 run ID 和引用链保留于快照与证据包。这是纯安全自检的交接演示，host-state 结果仍不自动复用。最终 `pr` 阶段及 Python 3.9 / 3.12 CI 必须实际执行，不能引用本表替代。
+- 当时的流程为开发先跑相关组，独立审查与 PR 整理读取有效证据，有疑点才点名补测。本轮同会话 `serve-check` 演示实际执行 1 组、跨 development → review → manual 引用 2 次，重复全量为 0；三个 run ID 和引用链保留于快照与证据包。这是纯安全自检的历史交接演示，host-state 结果仍不自动复用。当前流程把服务安全自检和全量门禁统一放到 PR review，历史演示不替代 `pr` 阶段及 Python 3.9 / 3.12 CI 的实际执行。
 - 未知路径、未分类新增 / 删除 / 重命名、脏输入变化、过期 / 损坏证据、已确认或无法界定的遗漏继续保守扩大范围；普通影子候选保留待核实，不自动削减门禁。
 - 最终 PR 附实际完整门禁的 run ID、指纹、完整日志、双 Python CI 与独立标准 / 规格审查。中英 README 同步，记录契约已更新到入口 v2 的追加元数据；回退命令为 `AE_VERIFY_SERIAL=1 python3 verify.py run --group all --no-reuse`。
 - 本轮不改 skill 本体、产品版本、已有审阅协议和真实材料；运行时仍只使用标准库。127.0.0.1 监听、Host / Origin / JSON Content-Type、无 CORS 与路由边界继续由原完整安全检查覆盖。

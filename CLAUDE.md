@@ -20,11 +20,11 @@ Single-context: root `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.
 
 ## 验证与效率回顾
 
-阶段验证和证据交接见 `docs/verify/onboarding.md`；排查效率报告缺口、回顾触发或修改策略时，读取 `docs/verify/efficiency.md`。
+按 AGENTS.md「开发与 PR review」执行两阶段流程：issue 实现阶段只做快速相关单元测试与已配置的 Lint、格式检查，开 PR 后交接；用户手动调用 agents 后才做全量审查并执行适用的 PR 门禁。范围选择、纯文档豁免和证据交接见 `docs/verify/onboarding.md`；排查效率报告缺口、回顾触发或修改策略时，读取 `docs/verify/efficiency.md`。
 
 ## PR 的 CI
 
-PR 出现 CI 失败时，立即按 AGENTS.md「分支、issue 与 PR」中的「CI 失败自动修复（auto-fix）」规则处理，无需等待用户再次要求。
+CI 保留自动触发。用户发起 PR review 后，由审查 Agent 按 AGENTS.md「分支、issue 与 PR」中的「CI 失败自动修复（auto-fix）」规则持续处理；开发 Agent 开 PR 后结束交接。
 
 ## README 维护
 

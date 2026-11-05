@@ -363,7 +363,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 | 网络访问范围 | 审阅服务不访问网络；更新检查仅访问安装来源的 Git 远端，不上传审阅数据或遥测。报告中引用的外部资源不加载，本地图片和字体直接嵌入页面 |
 | 数据留在本地 | 批注和对照页都保存在审阅人指定的审阅目录；本机的审阅台账 `~/.annotation-everything/` 只记录审阅标识、目录路径和端口 |
 
-每次修改服务后运行 `serve.py check`，它会逐项检查以上约束。
+PR review 的全量验证包含 `serve.py check`，逐项检查以上约束；实现阶段不单独提前运行服务安全自检。
 
 ## 项目结构
 
@@ -434,19 +434,24 @@ GLOSSARY.md                        术语表
 
 克隆后先运行一次 `tools/setup-dev.sh` 启用 git 钩子。
 
+采用两阶段流程：issue 实现阶段只做直接相关的快速单元测试（单次反馈目标 60 秒）、已配置的 Lint 与格式检查，完成后开 PR 并交接。用户手动调用 agents 后，再做全量代码审查、完整单元、服务安全自检和完整浏览器验证；全量审查、验证与 CI 全部通过后才能合并。
+
+Lint 与格式化工具尚未配置，另开 PR 接入；当前如实记录「未配置」，`git diff --check` 只作空白检查。快速检查范围、纯文档改动、慢项移交及证据要求见 [AGENTS.md](AGENTS.md#开发与-pr-review) 与[验证接入说明](docs/verify/onboarding.md)。
+
 ```bash
 python3 verify.py plan                                            # 统一验证入口：解释将执行哪些组与命令
-python3 verify.py plan --phase development                        # 选测建议：当前改动该跑什么、为什么、何时回退
-python3 verify.py run                                             # 完整单元（缺省组），结束后打印摘要
-python3 verify.py run --group all                                 # 完整验收：单元 + 服务安全自检 + 浏览器
-AE_VERIFY_SERIAL=1 python3 verify.py run --group all               # 恢复串行执行；保留全部验证范围
-python3 verify.py run --no-reuse                                  # 独立复测：绕过证据复用，全部实际执行
+python3 verify.py plan --phase development                        # 只读建议；全量回退要求移交 PR review
+python3 verify.py run unit-related tests/test_i18n.py --phase development --timeout 60 # 快速单元示例；按改动选择用例 / 类
+git diff --check                                                 # 空白检查；Lint / 格式化工具另行接入
+python3 verify.py run --group all --phase pr --pr <编号>           # 用户发起 PR review 后：完整验收
+AE_VERIFY_SERIAL=1 python3 verify.py run --group all --phase pr    # PR review 串行回退；保留全部验证范围
+python3 verify.py run --group all --phase pr --no-reuse            # PR review 独立复测：全部实际执行
 python3 verify.py report --latest                                 # 只读最近一次记录，不启动测试
 python3 verify.py report --efficiency                             # 只读已有记录的持续效率报告
 python3 verify.py report --efficiency --rebuild                   # 重建投影与增量回顾，不启动测试
-python3 -m unittest discover tests                                   # 单元测试（只用标准库）
-uv run --no-project --with playwright python tests/e2e_browser.py   # 浏览器端到端测试（使用本机的 Google Chrome）
-python3 skill/annotation-everything/scripts/serve.py check          # 服务安全自检
+python3 -m unittest discover tests                               # PR review 直接诊断：完整单元（只用标准库）
+uv run --no-project --with playwright python tests/e2e_browser.py   # PR review 直接诊断：浏览器（使用本机的 Google Chrome）
+python3 skill/annotation-everything/scripts/serve.py check          # PR review 直接诊断：服务安全自检
 python3 ae.py install                                               # 同步到 ~/.claude/skills/
 uv run --no-project --with playwright python tests/e2e_browser.py --list            # 浏览器场景清单（ID、行为、fixture、隔离）
 uv run --no-project --with playwright python tests/e2e_browser.py --only skill-i18n # 只跑选定的浏览器场景（逗号分隔、去重；--delivery-only 等旧参数保留为别名）
@@ -456,7 +461,7 @@ uv run --no-project --with playwright python tests/e2e_browser.py --only skill-i
 
 验证组内部最多使用 3 个独立进程。敏感单元模块、执行器测试和未分类的新模块仍在原验证进程串行执行，只有显式允许的模块才并行；完整浏览器场景分别使用独立浏览器、合成 HOME、台账与技能目录。整组继续持有原有资源锁，不会与其他工作区的敏感验证重叠。`AE_VERIFY_SERIAL=1` 恢复串行；执行方式进入环境记录，失败与未完成结果不会被后续成功覆盖。边界与回退见 [docs/verify/parallel-execution.md](docs/verify/parallel-execution.md)。
 
-阶段选测与影子对照默认开启：`run` 依据版本化的映射（`verify_selection.py`）记录「当前改动建议跑什么」，除纯文档 PR 豁免外，实际执行仍是请求的完整门禁；结束时把建议范围与实际结果并列对照，完整检查发现而建议范围没覆盖的失败保留为候选遗漏并归因。未知路径、坏基线、损坏规则、测试清单缺口和策略自身变化一律保守回退完整检查并解释原因。`issue` 阶段不自动启动测试，缺陷复现显式请求相关组。策略、回退情形与对照样本见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md)。
+阶段选测与影子对照默认开启：`run` 依据版本化的映射（`verify_selection.py`）记录「当前改动建议跑什么」，除符合内置文档允许列表的 PR 豁免外，实际执行仍是请求的组；结束时把建议范围与实际结果并列对照，完整检查发现而建议范围没覆盖的失败保留为候选遗漏并归因。未知路径、坏基线、损坏规则、测试清单缺口和策略自身变化一律建议回退完整检查并解释原因。CLI 的 `issue` 标签用于需求阶段，不自动启动测试；issue 实现用 `development` 记录快速单元，全量回退要求移交 PR review。若效率守卫要求扩大实际范围，快速阶段只读计划，不绕过守卫。策略、回退情形与对照样本见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md)。
 
 有效验证证据跨阶段引用（`verify_evidence.py`，判定从紧）：同一逻辑工作会话内，同输入指纹、同环境、请求范围被已验证范围覆盖，且来源记录当前校验后仍可作为通过证据、未超 24 小时保鲜窗口、版本一致时，`run` 在 `issue` / `development` / `review` / `manual` 阶段直接引用已有结果。会话身份只保存摘要，优先使用 `AE_VERIFY_SESSION`，其次继承 `CODEX_THREAD_ID` / `CLAUDE_SESSION_ID`；无法确认身份时实际执行，终端设置方式见[接入说明](docs/verify/onboarding.md)。报告列出来源 run、指纹、范围、环境与理由（差异被证明仅在文档允许列表内时不算输入变化；覆盖映射下停用该放宽）；依赖宿主机状态的组（完整单元、完整浏览器、敏感模块直跑）指纹相同也不复用，`pr` / `ci` 门禁阶段不复用（纯文档 PR 的产品测试不适用，其余门禁实际执行），点名到类 / 用例的补测不复用。被引用的组显示为「引用已有验证」，不重复计入通过数量；来源被篡改、超期或失效时，完整性和影子结论同步降级为不可用。`--no-reuse` 强制全部重跑。
 
@@ -468,6 +473,6 @@ uv run --no-project --with playwright python tests/e2e_browser.py --only skill-i
 
 - 测试会把审阅台账放到临时目录（环境变量 `AE_HOME`）。手动试用或运行技能评测时，也建议先执行 `export AE_HOME=$(mktemp -d)`，避免临时审阅登记进本机真实的台账，或占用真实审阅的专属端口。
 - 验收产物可用 `AE_DELIVERY_ARTIFACTS` 指向 `skill/annotation-everything-workspace/` 下的目录，保留合成源材料、命令输出、批次状态、离线导出和截图。具体命令与评测边界见[交付验收记录](docs/locale-delivery.zh-CN.md)。
-- `main` 只通过 PR 的 squash 合并更新：从 issue 开分支，PR 正文写 `Closes #编号`，CI 通过后合并，issue 随合并自动关闭。完整流程见 [AGENTS.md](AGENTS.md)「分支、issue 与 PR」。
+- `main` 只通过 PR 的 squash 合并更新：从 issue 开分支，PR 正文写 `Closes #编号`，全量审查、验证及 CI 通过后合并，issue 随合并自动关闭。完整流程见 [AGENTS.md](AGENTS.md)「分支、issue 与 PR」。
 - 仓库中只放合成样例。真实材料、批注和审阅目录一律不放进仓库，也不放进技能目录。
 - 术语以 [GLOSSARY.md](GLOSSARY.md) 为准；架构决策记录见 [docs/adr/](docs/adr/)；协作约定见 [AGENTS.md](AGENTS.md)。

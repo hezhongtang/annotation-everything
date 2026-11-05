@@ -363,7 +363,7 @@ See the [English format reference](skill/annotation-everything/references/format
 | Network access | The review server makes no network requests; the updater only contacts the installation's Git remote, sending no review data or telemetry. External resources in reports are not loaded; local images and fonts are embedded in the page |
 | Your data stays local | Annotations and the review page live in the review directory you choose; the local review ledger `~/.annotation-everything/` records only review IDs, directory paths and ports |
 
-Run `serve.py check` after any change to the server; it verifies each of these constraints.
+Full validation during PR review includes `serve.py check` to verify these constraints; server security checks are deferred to that stage during implementation.
 
 ## Project layout
 
@@ -434,19 +434,24 @@ GLOSSARY.md                        glossary
 
 After cloning, run `tools/setup-dev.sh` once to enable the git hooks.
 
+Use two stages: during issue implementation, run only quick unit tests directly related to the change (targeting feedback within 60 seconds), plus configured lint and format checks, then open the PR and hand off. When the user invokes agents, perform the full code review, full unit suite, server security self-check and full browser suite. Full review, validation and CI must pass before merging.
+
+Lint and formatting tools are not configured yet and will be introduced in a separate PR; record them as unconfigured, with `git diff --check` covering whitespace only. For quick-check scope, documentation-only changes, deferred slow checks and evidence requirements, see [AGENTS.md](AGENTS.md#开发与-pr-review) and the [verification onboarding guide](docs/verify/onboarding.md).
+
 ```bash
 python3 verify.py plan                                            # unified verification entry: explains the groups and commands
-python3 verify.py plan --phase development                        # selection advice: what the current changes should run, why, when to fall back
-python3 verify.py run                                             # full unit tests (the default group), then prints a summary
-python3 verify.py run --group all                                 # full acceptance: unit + server self-check + browser
-AE_VERIFY_SERIAL=1 python3 verify.py run --group all               # restore serial execution with the same complete scope
-python3 verify.py run --no-reuse                                  # independent recheck: bypass evidence reuse, run everything
+python3 verify.py plan --phase development                        # read-only advice; defer full fallback requirements to PR review
+python3 verify.py run unit-related tests/test_i18n.py --phase development --timeout 60 # quick unit example; choose related cases / classes
+git diff --check                                                 # whitespace only; lint / formatting tools will follow separately
+python3 verify.py run --group all --phase pr --pr <number>         # full validation after the user invokes PR review
+AE_VERIFY_SERIAL=1 python3 verify.py run --group all --phase pr    # serial fallback during PR review; retain the complete scope
+python3 verify.py run --group all --phase pr --no-reuse            # independent full recheck during PR review
 python3 verify.py report --latest                                 # read the latest record only, start nothing
 python3 verify.py report --efficiency                             # read the efficiency report from existing records
 python3 verify.py report --efficiency --rebuild                   # rebuild derived reports and reviews without tests
-python3 -m unittest discover tests                                   # unit tests (standard library only)
-uv run --no-project --with playwright python tests/e2e_browser.py   # end-to-end browser tests (uses your local Google Chrome)
-python3 skill/annotation-everything/scripts/serve.py check          # server security self-check
+python3 -m unittest discover tests                               # direct PR review diagnostic: full units (standard library only)
+uv run --no-project --with playwright python tests/e2e_browser.py   # direct PR review diagnostic: browser suite (uses local Google Chrome)
+python3 skill/annotation-everything/scripts/serve.py check          # direct PR review diagnostic: server security self-check
 python3 ae.py install                                               # sync to ~/.claude/skills/
 uv run --no-project --with playwright python tests/e2e_browser.py --list            # browser scenario registry (IDs, behavior, fixtures, isolation)
 uv run --no-project --with playwright python tests/e2e_browser.py --only skill-i18n # run only the selected scenarios (comma-separated, deduplicated; legacy flags like --delivery-only remain as aliases)
@@ -456,7 +461,7 @@ uv run --no-project --with playwright python tests/e2e_browser.py --only skill-i
 
 A verification group uses at most 3 isolated processes. Sensitive unit modules, runner tests and unclassified new modules remain in the original verification process; only explicitly approved independent modules run in parallel. Each full-browser scenario has its own browser, synthetic HOME, ledger and skill directories. The group retains its existing resource lock, so sensitive verification in other workspaces still queues. `AE_VERIFY_SERIAL=1` restores serial execution. The execution mode is recorded in the environment, and later successes never erase failed or incomplete results. See [docs/verify/parallel-execution.md](docs/verify/parallel-execution.md) for boundaries and fallback.
 
-Staged selection and shadow comparison are on by default: `run` records what the versioned mapping in `verify_selection.py` suggests for the current changes, except for documentation-only PR exemptions, the groups actually run stay the requested full gate; when the run finishes, the suggestion is compared side by side with the actual result, and any failure the full check found outside the suggested scope is kept as a candidate omission with an attribution. Unknown paths, bad baselines, broken rules, test-manifest gaps and changes to the strategy itself all fall back to the full check with an explanation. The `issue` phase never starts tests automatically; defect reproduction asks for a related group explicitly. See [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) for the strategy, fallback kinds and comparison samples.
+Staged selection and shadow comparison are on by default: `run` records what the versioned mapping in `verify_selection.py` suggests for the current changes, except for PRs that qualify for the built-in documentation allowlist exemption, the groups you actually run stay the requested groups; when the run finishes, the suggestion is compared side by side with the actual result, and any failure the full check found outside the suggested scope is kept as a candidate omission with an attribution. Unknown paths, bad baselines, broken rules, test-manifest gaps and changes to the strategy itself all recommend the full check with an explanation. The CLI's `issue` label covers requirements work without automatic tests; issue implementation records quick unit checks under `development` and defers full fallback requirements to PR review. When an efficiency guard would expand actual execution, the quick stage reads the plan only and never bypasses the guard. See [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) for the strategy, fallback kinds and comparison samples.
 
 Valid verification evidence is referenced across stages (`verify_evidence.py`, deliberately strict): within the same logical work session, when the input fingerprint and environment match, the requested scope is covered by the verified scope, the source record still passes the current checks, it is within the 24-hour freshness window and all versions agree, `run` references the existing result during the `issue` / `development` / `review` / `manual` phases. Only a hash of the session identity is stored: `AE_VERIFY_SESSION` takes precedence over inherited `CODEX_THREAD_ID` / `CLAUDE_SESSION_ID`; an unknown identity requires execution. Terminal setup is described in the [onboarding guide](docs/verify/onboarding.md). The report lists the source run, fingerprint, scope, environment and reason (differences proven to stay inside the documentation allowlist do not count as input changes; the relaxation is disabled under override mappings). Host-state-dependent groups (full unit, full browser, direct runs of sensitive modules) are never reused even with identical fingerprints, `pr` / `ci` gate phases never reuse results (documentation-only PRs mark product tests as not applicable; other gates execute), and class / case-level requests for targeted rechecks never reuse. Referenced groups show up as "reused" and are not counted twice; if the source is tampered with, expired or invalid, evidence integrity and shadow conclusions also degrade to unusable. `--no-reuse` forces a full rerun.
 
@@ -468,6 +473,6 @@ Browser waits observe DOM state, files, network events or server revisions accor
 
 - Tests put the review ledger in a temporary directory (the `AE_HOME` environment variable). When trying things by hand or running skill evaluations, run `export AE_HOME=$(mktemp -d)` first, so throwaway reviews are not registered in your real ledger and do not take ports that belong to real reviews.
 - Set `AE_DELIVERY_ARTIFACTS` to a directory under `skill/annotation-everything-workspace/` to keep synthetic sources, command outputs, batch state, offline exports, and screenshots. See the [delivery evidence](docs/locale-delivery.en.md) for the command and evaluation boundaries.
-- `main` is updated only by squash-merging pull requests: branch from an issue, put `Closes #<number>` in the pull request body, and merge once CI passes; the issue closes automatically on merge. See "分支、issue 与 PR" (branches, issues and pull requests) in [AGENTS.md](AGENTS.md) for the full workflow.
+- `main` is updated only by squash-merging pull requests: branch from an issue, put `Closes #<number>` in the pull request body, and merge once full review, validation and CI pass; the issue closes automatically on merge. See "分支、issue 与 PR" (branches, issues and pull requests) in [AGENTS.md](AGENTS.md) for the full workflow.
 - The repository holds synthetic samples only. Real material, annotations and review directories never go into the repository or the skill directory.
 - [GLOSSARY.md](GLOSSARY.md) defines the terms, [docs/adr/](docs/adr/) holds the architecture decision records, and [AGENTS.md](AGENTS.md) describes the collaboration conventions. All three are in Chinese.
