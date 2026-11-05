@@ -644,7 +644,24 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"doc": {**self._notes_doc(), **self._ident()}, "handoff": self._handoff_state(full=False),
                              "merged": merged, "seq": item["seq"], "acceptedFullCheck": item["fullCheck"]})
         elif path == "/api/analysis" and cmd == "GET":
-            self._json(200, {"analyses": analysis_store.list_analyses(d), **self._ident()})
+            params = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
+            ids = params.get("analysis", [])
+            if len(ids) > 1 or (ids and not ids[0]):
+                raise Reject(400, "bad-request", self._t("serve.err.noAnalysis"))
+            rounds = analysis_store.delivery_items(d)
+            result = {"analyses": analysis_store.list_analyses(d),
+                      "queue": {status: sum(r["status"] == status for r in rounds)
+                                for status in ("submitted", "claimed")}}
+            if ids:
+                try:
+                    state = analysis_store.load(d, ids[0])
+                    current = next((r for r in reversed(state["rounds"])
+                                    if r["status"] in ("open", "submitted", "claimed")), None)
+                    result.update(analysis=state,
+                                  context=analysis_store.round_context(d, ids[0], current["seq"]) if current else None)
+                except store.NotFound:
+                    raise Reject(404, "no-analysis", self._t("serve.err.noAnalysis"))
+            self._json(200, {**result, **self._ident()})
         elif path == "/api/analysis/start" and cmd == "POST":
             body = self._expect_obj(self._body())
             note_id = body.get("noteId")

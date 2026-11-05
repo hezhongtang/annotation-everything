@@ -411,6 +411,17 @@ class AnalysisAgentTests(unittest.TestCase):
         self.assertEqual(started["analysis"]["sourceNote"], note["id"])
         self.assertEqual(started["note"]["status"], "held")
 
+        code, _, raw = serve._req(server.port, "GET", "/api/analysis?analysis=" + started["analysis"]["id"],
+                                 {"Host": f"127.0.0.1:{server.port}"})
+        self.assertEqual(code, 200, raw)
+        detail = json.loads(raw)
+        self.assertEqual(detail["analysis"]["focus"], note["text"])
+        self.assertEqual(detail["context"]["round"], 1)
+        self.assertEqual(detail["queue"], {"submitted": 1, "claimed": 0})
+        code, _, _ = serve._req(server.port, "GET", "/api/analysis?analysis=missing",
+                               {"Host": f"127.0.0.1:{server.port}"})
+        self.assertIn(code, (400, 404))
+
         code, _, raw = serve._req(server.port, "POST", "/api/analysis/start", headers, {"noteId": "missing"})
         self.assertEqual(code, 404)
         self.assertEqual(json.loads(raw)["code"], "no-note")

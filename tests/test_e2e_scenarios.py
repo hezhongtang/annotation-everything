@@ -30,6 +30,7 @@ import e2e_scenarios as reg  # noqa: E402
 # 改造前无参数完整执行的场景顺序（tests/e2e_browser.py 旧 main() 的行为矩阵）。
 # 新增场景时在注册表登记后同步更新这里，保持全量模式可解释。
 FULL_ORDER = (
+    "analysis-smoke",
     "console-layout",
     "focus-mode",
     "receiver-binding",

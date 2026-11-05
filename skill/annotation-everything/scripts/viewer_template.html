@@ -335,16 +335,50 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
 .overview-archived-hidden{display:flex;align-items:center;justify-content:space-between;gap:var(--ae-gap-10);padding:var(--ae-gap-12) var(--ae-gap-14);font-size:var(--ae-text);color:var(--ae-mut);border-bottom:1px solid var(--ae-line)}
 #overviewError{color:var(--ae-warning)}.overview-count{font-weight:400;margin-left:var(--ae-gap-6)}
 @media(max-width:800px){.overview-body{grid-template-columns:minmax(0,1fr);padding:var(--ae-gap-14);gap:var(--ae-gap-14)}.overview-top{padding:var(--ae-gap-12) var(--ae-gap-14);gap:var(--ae-gap-10)}.overview-detail{position:static}.overview-detail dl{grid-template-columns:80px minmax(0,1fr)}}
+
+/* 分析与批注共用控制台的三个区域、抽屉和设计变量。 */
+body.analysis-mode #panes,body.analysis-mode #bottomPanel>.panel-tabs,body.analysis-mode #panelBody,body.analysis-mode #sidebar>:not(#analysisSidebar){display:none}
+#analysisSidebar[hidden],#analysisMain[hidden],#analysisPanel[hidden]{display:none}
+#analysisSidebar{display:flex;flex-direction:column;min-height:0;overflow:auto}
+#analysisList{border-bottom:1px solid var(--ae-line);padding:var(--ae-space)}
+.analysis-list-item,.analysis-tree-node{display:block;width:100%;text-align:left;border:0;background:transparent;border-radius:var(--ae-radius);padding:var(--ae-space);font-size:var(--ae-text);line-height:1.5;overflow-wrap:anywhere}
+.analysis-list-item[aria-pressed=true]{background:var(--ae-selected);color:var(--ae-navy)}
+.analysis-list-item small{display:block;color:var(--ae-mut);font-size:var(--ae-small)}
+.analysis-tree-node:hover{background:var(--ae-line)}
+#analysisTree{padding:var(--ae-space)}
+#analysisMain{display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--ae-panel)}
+.analysis-heading{padding:var(--ae-space-lg) var(--ae-gap-24);border-bottom:1px solid var(--ae-line);flex:none}
+.analysis-heading h2{font-size:var(--ae-heading);line-height:1.5;margin:0;overflow-wrap:anywhere}
+#analysisMeta{color:var(--ae-mut);font-size:var(--ae-small);margin:var(--ae-gap-6) 0 0}
+#analysisError{color:var(--ae-warning);font-size:var(--ae-text);margin:0;padding:0 var(--ae-gap-24);white-space:pre-wrap}
+#analysisError:empty{display:none}
+#analysisBody{overflow:auto;min-height:0;flex:1;padding:var(--ae-space-lg) var(--ae-gap-24);line-height:1.7}
+.analysis-question,.analysis-decision,.analysis-draft{border-bottom:1px solid var(--ae-line);padding:var(--ae-space-lg) 0;max-width:900px;overflow-wrap:anywhere}
+.analysis-question h3,.analysis-decision h3,.analysis-draft h3,.analysis-answers h3{font-size:var(--ae-title);margin:0 0 var(--ae-space)}
+.analysis-kind{color:var(--ae-mut);font-size:var(--ae-small);margin:0 0 var(--ae-gap-4)}
+.analysis-options{margin:var(--ae-space) 0;padding-left:var(--ae-gap-24)}
+.analysis-actions{display:flex;flex-wrap:wrap;gap:var(--ae-space);margin-top:var(--ae-space)}
+#analysisBody button,#analysisDraftDialog button{font:inherit;font-size:var(--ae-text);border:1px solid var(--ae-line);background:var(--ae-panel);border-radius:var(--ae-radius);padding:var(--ae-gap-5) var(--ae-gap-10)}
+.analysis-actions button:first-child,.analysis-draft button{color:var(--ae-navy);border-color:var(--ae-accent-line)}
+.analysis-source{font-size:var(--ae-small);color:var(--ae-mut);padding:var(--ae-space) 0}
+.analysis-source summary{cursor:pointer}.analysis-source blockquote{white-space:pre-wrap;color:var(--ae-ink)}
+#analysisPanel .pane-head{height:35px}#analysisTimeline{height:var(--ae-panel-height);max-height:35vh;overflow:auto;margin:0;padding:var(--ae-space-lg) var(--ae-gap-28);font-size:var(--ae-text);line-height:1.7}
+#analysisTimeline>li{padding:var(--ae-gap-6) 0}#analysisTimeline p{margin:var(--ae-gap-4) 0;white-space:pre-wrap}
+#analysisTimeline ul{padding-left:var(--ae-gap-20);color:var(--ae-mut)}
+body.panel-off #analysisTimeline{display:none}
+body.focus-mode.analysis-mode #analysisMain{display:flex;flex:1;padding:var(--ae-gap-28) 0 48px}
+body.focus-mode.analysis-mode #analysisPanel{display:none}
+@media(max-width:900px){#analysisBody{padding:var(--ae-space)}.analysis-heading{padding:var(--ae-space-lg)}#analysisError{padding:0 var(--ae-space)}#analysisTimeline{height:200px}}
 </style></head><body>
 <header>
   <div class="brand" aria-hidden="true">AE</div><h1 id="reviewTitle">__TITLE__</h1>
   <!-- #111 接入分析能力后显示；主操作始终复用 primaryAction 插槽。 -->
-  <div id="modeSwitch" role="group" data-aria="viewer.layout.mode" hidden><button aria-pressed="true" data-msg="viewer.layout.annotations"></button><button aria-pressed="false" data-msg="viewer.layout.analysis"></button></div>
+  <div id="modeSwitch" role="group" data-aria="viewer.layout.mode" hidden><button id="annotationMode" aria-pressed="true" data-msg="viewer.layout.annotations"></button><button id="analysisMode" aria-pressed="false" data-msg="viewer.layout.analysis"></button></div>
   <div class="layout-controls" role="group" data-aria="viewer.layout.title">
     <button id="sideToggle" class="icon-button" data-layout-toggle="side" data-title="viewer.layout.side" data-aria="viewer.layout.side" data-p-key="[" aria-controls="sidebar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></button><button id="scriptToggle" class="icon-button" data-layout-toggle="script" data-title="viewer.layout.script" data-aria="viewer.layout.script" data-p-key="]" aria-controls="scriptPane"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button><button id="panelToggle" class="icon-button" data-layout-toggle="panel" data-title="viewer.layout.panel" data-aria="viewer.layout.panel" data-p-key="&#92;" aria-controls="panelBody"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/></svg></button>
   </div>
   <button id="focusBtn" data-title="viewer.layout.focusTitle" data-p-key="F"><span data-msg="viewer.layout.focus"></span></button>
-  <div id="primaryAction"><button id="handBtn" data-title="viewer.hand.btnTitle"><span data-msg="viewer.hand.btn">交给 Agent</span></button></div>
+  <div id="primaryAction"><button id="handBtn" data-title="viewer.hand.btnTitle"><span data-msg="viewer.hand.btn">交给 Agent 改稿</span></button></div>
 </header>
 <div id="archiveBanner" class="archive-banner" role="status" hidden>
   <span data-msg="viewer.overview.archiveNotice"></span>
@@ -382,17 +416,20 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
     <button id="helpBtn" data-title="viewer.helpTitle" data-p-key="H" data-aria="viewer.help"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 4 2c-1 .5-1.5 1-1.5 2M12 17h.01"/></svg><span class="sr-only" data-msg="viewer.help"></span></button>
   </nav>
   <aside id="sidebar" data-aria="viewer.layout.pages">
+    <section id="analysisSidebar" hidden><div class="pane-head"><span data-msg="viewer.analysis.list"></span></div><div id="analysisList"></div><div class="pane-head"><span data-msg="viewer.analysis.tree"></span></div><div id="analysisTree"></div></section>
     <div class="pane-head"><span data-msg="viewer.layout.pages"></span><button  class="icon-button" data-layout-toggle="side" data-title="viewer.layout.side" data-aria="viewer.layout.side" data-p-key="[" aria-controls="sidebar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></button></div>
     <div class="page-nav"><button id="prev" data-title="viewer.prevTitle" data-p-key="←" data-aria="viewer.prev"><span class="sr-only" data-msg="viewer.prev">上一页</span><span aria-hidden="true">←</span></button><select id="jump" data-aria="viewer.jumpLabel"></select><button id="next" data-title="viewer.nextTitle" data-p-key="→" data-aria="viewer.next"><span class="sr-only" data-msg="viewer.next">下一页</span><span aria-hidden="true">→</span></button></div>
     <nav id="secs"></nav><div id="pageTree"></div>
   </aside>
   <section id="workspace">
+    <section id="analysisMain" hidden><div class="analysis-heading"><h2 id="analysisFocus"></h2><p id="analysisMeta"></p></div><p id="analysisError" role="alert"></p><div id="analysisBody"></div></section>
     <div id="panes">
       <section id="reportPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.report"></span></div><div class="slide" id="slide"><div id="host"></div></div></section>
       <section id="scriptPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.script"></span><button  class="icon-button" data-layout-toggle="script" data-title="viewer.layout.script" data-aria="viewer.layout.script" data-p-key="]" aria-controls="scriptPane"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button></div><div class="script" id="script"><div id="pageScript"></div></div></section>
       <button id="scriptHandle" data-layout-toggle="script" data-title="viewer.layout.script" data-p-key="]" data-msg="viewer.target.script" aria-controls="scriptPane"></button>
     </div>
     <section id="bottomPanel" data-aria="viewer.layout.panel" data-p-key="&#92;">
+      <section id="analysisPanel" hidden><div class="pane-head"><span data-msg="viewer.analysis.timeline"></span><button data-layout-toggle="panel" data-title="viewer.layout.panel" aria-controls="analysisTimeline" data-msg="viewer.layout.panel"></button></div><ol id="analysisTimeline"></ol></section>
       <div class="panel-tabs">        <button data-act="seelist" id="seeList" data-title="viewer.seeListTitle"><span id="seeListLabel" data-msg="viewer.seeList">本页批注</span> <span id="nhere">0</span></button><button id="allTab" data-msg="viewer.allTitle"></button><button id="batchesTab" data-msg="viewer.batch.title"></button><button  class="icon-button" data-layout-toggle="panel" data-title="viewer.layout.panel" data-aria="viewer.layout.panel" data-p-key="&#92;" aria-controls="panelBody"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/></svg></button></div>
       <div id="panelBody"><div class="notes"><div id="nlist"></div></div>
     <div class="form" id="nform"><div class="quote" id="qbox"></div><span id="styleChip"></span>
@@ -427,6 +464,7 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
   <button id="shortcutsBtn" data-msg="viewer.layout.shortcuts"></button>
 </footer>
 <div id="skillList" role="listbox" data-aria="viewer.skill.candidates"></div>
+<div class="modal" id="analysisDraftDialog"><div class="dlg"><div class="bar"><h2 data-msg="viewer.analysis.draft"></h2><button class="primary" id="analysisDraftCreate" data-msg="viewer.analysis.createDraft"></button><button data-close data-msg="viewer.cancel"></button></div><div class="pad"><p class="hint" data-msg="viewer.analysis.draftHint"></p><textarea id="analysisDraftText" data-aria="viewer.analysis.draft"></textarea></div></div></div>
 <div class="modal" id="allnotes"><div class="dlg"><div class="bar"><h2 data-msg="viewer.allTitle">全部批注</h2>
 <button class="primary" id="copyAll" data-msg="export.copyAll">复制全部（粘贴给 Agent）</button><button id="dlAll" data-msg="export.download">下载 Markdown</button><button id="dlJson" data-msg="export.downloadJson">下载 JSON</button><select id="expLang" data-aria="export.langLabel" aria-label="导出语言"><option value="auto" data-msg="export.langAuto">跟随界面</option><option value="zh-CN">中文</option><option value="en">English</option></select><button id="openImp" data-msg="import.open">导入…</button><button id="dlFailed" style="display:none" data-title="viewer.recovery.failedTitle" data-msg="viewer.recovery.downloadFailed">下载未能保存的改动</button><button id="clearAll" data-msg="viewer.recovery.clear">清空</button><button data-close data-msg="viewer.close">关闭</button></div>
 <div class="pad" id="orphanBox" style="display:none;border-bottom:1px solid var(--ae-line)"></div>
@@ -626,6 +664,7 @@ function applyLocale(){
   renderArchiveBanners();
   renderOverview();
   applyLayout();
+  analysisRenderKey="";analysisRoute();
 }
 $("localePick").addEventListener("change",()=>{
   try{localStorage.setItem(LOCALE_STORE, $("localePick").value)}catch(e){}
@@ -679,6 +718,7 @@ const unH=t=>{const d=document.createElement("textarea");d.innerHTML=t;return d.
 const newId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const okId=x=>typeof x==="string"&&/^[A-Za-z0-9_-]{1,64}$/.test(x);
 const isDone=x=>x.status==="resolved";
+const isHeld=x=>x.status==="held";
 const isDraft=x=>x.status==="drafted";   // 两段流程：初改完成、等复核或用户定稿
 let flight=new Set();                    // 已交给 Agent、还在路上（等待接收 / 处理中 / 等待复核 / 复核中）的批注
 const inFlight=x=>!isDone(x)&&!isDraft(x)&&flight.has(x.id);
@@ -724,6 +764,16 @@ function applyFocus(on){
 async function toggleFocus(on=!focusMode){
   if(on){
     if(overviewShown())return;
+  if(analysisShown()){
+    if(["SELECT","TEXTAREA","INPUT"].includes(e.target.tagName)||e.target.isContentEditable||e.isComposing)return;
+    const key=e.key.toLowerCase();
+    if(document.querySelector(".modal.on")){if(e.key==="Escape")document.querySelectorAll(".modal.on").forEach(el=>el.classList.remove("on"));return}
+    if(key==="f"){e.preventDefault();toggleFocus();return}
+    if(key==="["||key==="\\"){e.preventDefault();const name=key==="["?"side":"panel";setDrawer(name,!drawerOpen(name));return}
+    if(key==="a"){e.preventDefault();submitAnalysis();return}
+    if(e.key==="Escape"&&focusMode){toggleFocus(false);return}
+    if(key==="h")$("help").classList.toggle("on");return
+  }
     applyFocus(true);
     try{if(!document.fullscreenElement&&document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen()}
     catch(error){/* Fullscreen API 不可用时保留覆盖窗口的 CSS 专注模式。 */}
@@ -844,7 +894,9 @@ function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"
 const okRegion=r=>r&&typeof r==="object"&&["x","y","w","h"].every(k=>r[k]!=null&&r[k]!==""&&isFinite(+r[k]))&&+r.w>0&&+r.h>0?{x:+r.x,y:+r.y,w:+r.w,h:+r.h}:null;
 function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:String(x.title||""),target:String(x.target||""),text:String(x.text||""),
     quote:String(x.quote||""),quoteFrom:String(x.quoteFrom||""),pin:x.pin&&x.pin.x!=null?{x:+x.pin.x,y:+x.pin.y}:null,
-    status:x.status==="resolved"||x.status==="drafted"?x.status:"open",at:typeof x.at==="string"?x.at:nowIso()};
+    status:["resolved","drafted","held"].includes(x.status)?x.status:"open",at:typeof x.at==="string"?x.at:nowIso()};
+  ["hold","heldBy","analysisId","fromAnalysis"].forEach(k=>{if(typeof x[k]==="string")n[k]=x[k]});
+  if(x.basis&&typeof x.basis==="object"&&!Array.isArray(x.basis))n.basis=JSON.parse(JSON.stringify(x.basis));
   if(Array.isArray(x.trail))n.trail=x.trail.filter(e=>e&&typeof e==="object"&&typeof e.action==="string").slice(-50);
   [["draftBatch","drafted"],["resolvedBatch","resolved"]].forEach(([k,st])=>{if(n.status===st&&Number.isInteger(x[k])&&x[k]>0)n[k]=x[k]});
   ["draftedAt","draftedBy"].forEach(k=>{if(n.status==="drafted"&&typeof x[k]==="string")n[k]=x[k]});
@@ -962,6 +1014,7 @@ function handPollKeyOf(d){const h=d&&d.handoff||null;
 function applyServer(d,quietHand){
   agentDelivery=d.agentDelivery||null;
   receiver=d.receiver||null;
+  setAnalysisSupport(d);
   if(!archiveBusy)setCurrentArchive(d.archived);
   const old=!hasFeature(d,"marks");if(old&&!srvOld)toast(tMsg("viewer.mode.oldTitle"),9000);srvOld=old;
   srvNoStages=!hasFeature(d,"stages");
@@ -1029,7 +1082,7 @@ function updateMode(){const m=$("mode"),q=pend.get().length,f=failed.get().lengt
   else if(mode==="mismatch"){m.textContent=tMsg("viewer.mode.mismatch",{extra});m.title=tMsg("viewer.mode.mismatchTitle")}
   else{m.textContent=tMsg("viewer.mode.file");m.title=tMsg("viewer.mode.fileTitle")}
   const fb=$("dlFailed");if(fb)fb.style.display=f?"":"none";
-  syncSrvBar();renderServiceControls();renderReceiver()}
+  syncSrvBar();renderServiceControls();renderReceiver();analysisRouteLabels()}
 addEventListener("storage",e=>{
   invalidateExternal();   // 别的标签页改了这些键：外部审阅暂存的解析结果作废
   if(FILE&&e.key===K.notes){const v=LS.get(K.notes,[]);notes=Array.isArray(v)?v:[];refreshList()}   // 别的标签页改了：跟上
@@ -1103,7 +1156,7 @@ function indexNotes(){const stats=new Map(),nos=new Map(),marks=new Map(),seq=ne
   notes.forEach(x=>{let c=stats.get(x.page);
     if(!c)stats.set(x.page,c={o:0,f:0,d:0,n:0});
     c.n++;
-    if(isDraft(x)){c.d++;d++}else if(inFlight(x)){c.f++;f++}else if(!isDone(x)){c.o++;o++}
+    if(isDraft(x)){c.d++;d++}else if(inFlight(x)){c.f++;f++}else if(!isDone(x)&&!isHeld(x)){c.o++;o++}
     if(hasMark(x)){const list=marks.get(x.page);
       if(list)list.push(x);else marks.set(x.page,[x]);
       const k=(seq.get(x.page)||0)+1;seq.set(x.page,k);nos.set(x.page+"\u0000"+x.id,k)}});
@@ -1126,10 +1179,12 @@ function drawPins(){stage.querySelectorAll(".ae-pin,.ae-region").forEach(e=>{if(
 function noteSummary(x){const qe=editOf(x);return qe?(qe.op==="delete"?tMsg("viewer.deleteSummary",{text:qe.from}):tMsg("viewer.replaceSummary",{from:qe.from,to:qe.to})):String(x.text||"")}
 function editOf(x){const e=x.edit;return e&&typeof e==="object"&&(e.op==="delete"||e.op==="replace")?e:null}
 function noteHtml(x){
-  const done=isDone(x), dr=isDraft(x), fl=inFlight(x), ed=editingId===x.id, id=escH(x.id), qe=editOf(x);
+  const done=isDone(x), held=isHeld(x), dr=isDraft(x), fl=inFlight(x), ed=editingId===x.id, id=escH(x.id), qe=editOf(x);
   const acts=ed?`<button data-act="save" data-id="${id}">${tMsg("viewer.save")}</button><button data-act="remark" data-id="${id}" title="${escH(tMsg("viewer.remarkTitle"))}">${tMsg(hasMark(x)?"viewer.remarkAgain":"viewer.remark")}</button>${hasMark(x)?`<button data-act="unpin" data-id="${id}">${tMsg("viewer.unpin")}</button>`:""}<button data-act="cancel">${tMsg("viewer.cancel")}</button>`
     :`<button data-act="edit" data-id="${id}">${tMsg("viewer.edit")}</button>${dr?`<button data-act="resolve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${tMsg("viewer.finalize")}</button><button data-act="reopen" data-id="${id}">${tMsg("viewer.returnForRedo")}</button>`
-      :`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
+      :held?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
+  const analysisLink=x.heldBy||x.analysisId||x.fromAnalysis;
+  const analysisActs=analysisSupported&&!FILE?(analysisLink?`<button data-act="analysis-open" data-analysis="${escH(analysisLink)}">${tMsg("viewer.analysis.open")}</button>`:!done&&!held&&!dr&&!fl?`<button data-act="analysis-start" data-id="${id}">${tMsg("viewer.analysis.start")}</button>`:""):"";
   const sk=Array.isArray(x.skills)?x.skills:[];
   const body=ed?(qe&&qe.op==="delete"?`<div class="body"><span class="op">${tMsg("viewer.quickDelete")}</span><del>${escH(qe.from)}</del></div>`:`<textarea id="etext">${escH(editBuf[x.id]??(qe?qe.to:x.text))}</textarea>`)
       +`<input class="eskills" id="eskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" placeholder="${escH(tMsg("viewer.skill.editPlaceholder"))}" value="${escH(editBuf["sk:"+x.id]??sk.join(", "))}">`
@@ -1138,7 +1193,7 @@ function noteHtml(x){
     :`<div class="body">${escH(x.text).replace(/\n/g,"<br>")}</div>`;
   const who=w=>escH(w==="claude"?"Claude":w);
   const targetShown=targetLabel(x.target);
-  return `<div class="note${done?" done":""}${dr?" drafted":""}" data-note="${id}"><div class="meta"><span>${escH(targetShown)}${qe?` · ${tMsg(qe.op==="delete"?"viewer.quickDelete":"viewer.quickReplace")}`:""}${x.style&&x.style.scope?` · ${tMsg("viewer.styleBtn")}${hasMark(x)?"":`·${styleLabel(x.style.scope)}`}`:""}${hasMark(x)?` · ${tMsg(regionOf(x)?"viewer.markKind.region":"viewer.markKind.pin")} ${markNo(x.page,x.id)}`:""}${done?`<span class="chip">${tMsg("viewer.chip.resolved")}${x.resolvedBy&&x.resolvedBy!=="page"?" · "+who(x.resolvedBy):""}</span>`:""}${dr?`<span class="chip dr">${tMsg("viewer.chip.drafted")}${x.draftedBy?" · "+who(x.draftedBy):""}</span>`:""}${fl?`<span class="chip fl" title="${escH(tMsg("viewer.chip.inFlightTitle"))}">${tMsg("viewer.chip.inFlight")}</span>`:""}</span><span class="acts">${acts}</span></div>`
+  return `<div class="note${done?" done":""}${dr?" drafted":""}" data-note="${id}"><div class="meta"><span>${escH(targetShown)}${qe?` · ${tMsg(qe.op==="delete"?"viewer.quickDelete":"viewer.quickReplace")}`:""}${x.style&&x.style.scope?` · ${tMsg("viewer.styleBtn")}${hasMark(x)?"":`·${styleLabel(x.style.scope)}`}`:""}${hasMark(x)?` · ${tMsg(regionOf(x)?"viewer.markKind.region":"viewer.markKind.pin")} ${markNo(x.page,x.id)}`:""}${done?`<span class="chip">${tMsg("viewer.chip.resolved")}${x.resolvedBy&&x.resolvedBy!=="page"?" · "+who(x.resolvedBy):""}</span>`:""}${dr?`<span class="chip dr">${tMsg("viewer.chip.drafted")}${x.draftedBy?" · "+who(x.draftedBy):""}</span>`:""}${held?`<span class="chip held">${tMsg("viewer.analysis.held")}</span>`:""}${fl?`<span class="chip fl" title="${escH(tMsg("viewer.chip.inFlightTitle"))}">${tMsg("viewer.chip.inFlight")}</span>`:""}</span><span class="acts">${acts}${analysisActs}</span></div>`
    +(x.quote&&!qe?`<blockquote>${x.quoteFrom?escH(tMsg("viewer.quoteFrom",{side:targetLabel(x.quoteFrom)})):""}${escH(x.quote)}</blockquote>`:"")
    +body
    +(x.orphan?`<div class="anchor" style="color:var(--ae-warning)">${escH(tMsg("viewer.orphanWarning"))}</div>`:"")
@@ -1305,6 +1360,8 @@ function addNote(){let text=$("ntext").value.trim();
   quote="";quotePair=null;pendingPin=null;$("ntext").value="";autoGrow();showQuote();delete drafts[p.n];SS.set(K.drafts,drafts);mutate({kind:"add",note});if(focusMode)closeComposer();toast(tMsg("viewer.added"))}
 $("bottomPanel").addEventListener("click",e=>{const b=e.target.closest("[data-act]");if(!b)return;const id=b.dataset.id;
   switch(b.dataset.act){
+    case "analysis-start":startAnalysis(id);break;
+    case "analysis-open":openAnalysis(b.dataset.analysis);break;
     case "add":addNote();break;
     case "always":openAlways();break;
     case "seelist":setDrawer("panel",true);$("nlist").scrollIntoView({block:"start",behavior:"smooth"});break;
@@ -1696,7 +1753,7 @@ function requestReview(seq,message,sub){return batchAction("/api/handoff/review"
 function finalizeBatch(seq){const dn=notes.filter(x=>isDraft(x)&&x.draftBatch===seq).length;
   if(!confirm(tMsg("viewer.hand.toast.confirmFinalize",{seq,n:dn})))return;
   return batchAction("/api/handoff/finalize",{seq},tMsg("viewer.hand.toast.finalized",{seq}))}
-$("handBtn").onclick=()=>openHand();$("handState").onclick=()=>hand&&hand.latest?openBatches():openHand();
+$("handBtn").onclick=()=>analysisShown()?submitAnalysis():openHand();$("handState").onclick=()=>hand&&hand.latest?openBatches():openHand();
 $("handHist").onclick=()=>{$("hand").classList.remove("on");openBatches()};
 // 处理记录：每次「交给 Agent」算一批——提交、接收、收尾，这批解决了哪些批注，处理摘要
 const fmtIso=v=>fmtTime(Date.parse(v||"")||0);
@@ -2037,6 +2094,127 @@ document.addEventListener("keydown",e=>{
   else if(e.key==="Home")go(0);else if(e.key==="End")go(N-1);
   else if(e.key==="h"||e.key==="H")$("help").classList.toggle("on");
   else if(e.key==="Escape"){document.querySelectorAll(".modal").forEach(m=>m.classList.remove("on"));if(markMode)setMarkMode(false);closePinPop();closeStyleMenu()}});
+// ---------- Analysis view helpers ----------
+function analysisCurrentRound(state){return (state&&state.rounds||[]).slice().reverse().find(r=>["open","submitted","claimed"].includes(r.status))||null}
+function analysisNodeActive(state,id,seen=new Set()){
+  const node=state.nodes&&state.nodes[id];if(!node||seen.has(id))return false;seen.add(id);
+  if(!node.parent)return true;
+  const parent=state.nodes[node.parent.node],decision=parent&&state.decisions[parent.decision];
+  return !!decision&&decision.option===node.parent.option&&analysisNodeActive(state,node.parent.node,seen)
+}
+function analysisAnswerLabel(state,round,key,value){
+  if(key.startsWith("S:")){const p=(round.proposals||[]).find(p=>"S:"+p.key===key);
+    return tMsg(value.kind==="accept"?"viewer.analysis.acceptedProposal":"viewer.analysis.rejectedProposal",{question:p&&p.text||""})}
+  const node=state.nodes&&state.nodes[key.slice(2)];if(!node)return tMsg("viewer.analysis.answerRecorded");
+  const option=value.kind==="accept"?node.recommend:value.option;
+  return tMsg("viewer.analysis.answerLine",{question:node.text,answer:node.options&&node.options[option]||""})
+}
+function analysisQuestionHtml(state,round,item){
+  const structure=item.type==="structure",p=structure?item.proposal:state.nodes&&state.nodes[item.node];
+  if(!p)return "";
+  const options=Array.isArray(p.options)?p.options:Object.entries(p.options||{}).map(([id,label])=>({id,label}));
+  const disabled=analysisBusy||!["open","submitted"].includes(round.status)?" disabled":"";
+  const answer=(kind,text,option)=>`<button data-analysis-act="answer" data-key="${escH(item.key)}" data-kind="${kind}"${option?` data-option="${escH(option)}"`:""}${disabled}>${escH(text)}</button>`;
+  return `<article class="analysis-question"${item.node?` data-analysis-node="${escH(item.node)}"`:""}><p class="analysis-kind">${tMsg(structure?"viewer.analysis.structure":"viewer.analysis.question")}</p><h3>${escH(p.text)}</h3><ul class="analysis-options">${options.map(o=>`<li>${escH(o.label)}${o.id===p.recommend?` <span class="chip">${tMsg("viewer.analysis.recommended")}</span>`:""}</li>`).join("")}</ul><div class="analysis-actions">${structure?answer("accept",tMsg("viewer.analysis.accept"))+answer("reject",tMsg("viewer.analysis.reject")):answer("accept",tMsg("viewer.analysis.useRecommended"))+options.map(o=>answer("option",o.label,o.id)).join("")}</div></article>`
+}
+// ---------- Analysis view DOM ----------
+let analysisSupported=false,analysisChecked=false,analysisBusy=false,analysisLoading=false,analysisRequest=0;
+let analyses=[],analysisState=null,analysisContext=null,analysisQueue={submitted:0,claimed:0};
+let analysisSelected=SS.get("ae."+RID+".analysis",null),analysisRenderKey="",analysisUpgradeShown=false,analysisDraftNode=null;
+function analysisShown(){return !FILE&&analysisSupported&&location.hash==="#analysis"}
+function analysisRoute(){
+  const shown=analysisShown();document.body.classList.toggle("analysis-mode",shown);
+  $("modeSwitch").hidden=FILE||!analysisSupported;
+  $("analysisSidebar").hidden=$("analysisMain").hidden=$("analysisPanel").hidden=!shown;
+  $("annotationMode").setAttribute("aria-pressed",String(!shown));$("analysisMode").setAttribute("aria-pressed",String(shown));
+  $("scriptToggle").disabled=shown;
+  const label=$("handBtn").querySelector("span"),key=shown?"viewer.analysis.submit":"viewer.hand.btn";
+  label.dataset.msg=key;label.textContent=tMsg(key);
+  $("handBtn").title=tMsg(shown?"viewer.analysis.submitTitle":"viewer.hand.btnTitle");
+  $("handBtn").disabled=shown&&(analysisBusy||mode!=="server"||!analysisCurrentRound(analysisState)||analysisCurrentRound(analysisState).status==="claimed");
+  const focusLabel=$("focusHint").querySelector("span");focusLabel.dataset.msg=shown?"viewer.analysis.focusHint":"viewer.layout.focusHint";focusLabel.textContent=tMsg(focusLabel.dataset.msg);
+  $("analysisQueue").hidden=FILE||!analysisSupported;$("analysisQueue").textContent=tMsg("viewer.analysis.queue",{waiting:analysisQueue.submitted||0,processing:analysisQueue.claimed||0});
+  if(location.hash==="#analysis"&&!shown&&(FILE||analysisChecked)&&!analysisUpgradeShown){analysisUpgradeShown=true;toast(tMsg(FILE?"viewer.analysis.fileUnavailable":"viewer.analysis.upgrade"),7000)}
+  if(shown){if(markMode)setMarkMode(false);hideSelbar();closeStyleMenu();renderAnalysis();if(!analysisBusy)loadAnalyses()}
+  else requestAnimationFrame(fit)
+}
+function setAnalysisSupport(data){const old=analysisSupported;analysisChecked=true;analysisSupported=hasFeature(data,"analysis");
+  if(old!==analysisSupported){analysisRenderKey="";refreshList(true);if(analysisSupported)analysisUpgradeShown=false}
+  if(!analysisSupported&&mode==="server"&&!analysisUpgradeShown){analysisUpgradeShown=true;toast(tMsg("viewer.analysis.upgrade"),7000)}
+  analysisRoute()
+}
+async function loadAnalyses(){
+  if(FILE||!analysisSupported||mode!=="server"||analysisBusy||analysisLoading)return;
+  analysisLoading=true;const request=++analysisRequest;
+  try{
+    const data=await api("GET","/api/analysis");if(request!==analysisRequest||analysisBusy)return;
+    analyses=Array.isArray(data.analyses)?data.analyses:[];analysisQueue=data.queue||{submitted:0,claimed:0};
+    if(!analyses.some(a=>a.id===analysisSelected))analysisSelected=analyses[0]&&analyses[0].id||null;
+    if(analysisSelected)SS.set("ae."+RID+".analysis",analysisSelected);
+    if(analysisShown()&&analysisSelected){const detail=await api("GET","/api/analysis?analysis="+encodeURIComponent(analysisSelected));
+      if(request!==analysisRequest||analysisBusy)return;analysisState=detail.analysis;analysisContext=detail.context;analysisQueue=detail.queue||analysisQueue}
+    else if(!analysisSelected){analysisState=null;analysisContext=null}
+    renderAnalysis();analysisRouteLabels()
+  }catch(error){if(request===analysisRequest&&analysisShown())$("analysisError").textContent=tMsg("viewer.analysis.loadError",{reason:error.message})}
+  finally{analysisLoading=false;if(request!==analysisRequest&&analysisShown()&&!analysisBusy)loadAnalyses()}
+}
+function analysisRouteLabels(){
+  $("analysisQueue").textContent=tMsg("viewer.analysis.queue",{waiting:analysisQueue.submitted||0,processing:analysisQueue.claimed||0});
+  if(analysisShown())$("handBtn").disabled=analysisBusy||mode!=="server"||!analysisCurrentRound(analysisState)||analysisCurrentRound(analysisState).status==="claimed"
+}
+function renderAnalysis(){
+  if(!analysisShown())return;
+  const signature=JSON.stringify([analyses,analysisState,analysisBusy,uiLocale]);if(signature===analysisRenderKey)return;analysisRenderKey=signature;
+  $("analysisList").innerHTML=analyses.map(a=>`<button class="analysis-list-item" data-analysis-select="${escH(a.id)}" aria-pressed="${a.id===analysisSelected}">${escH(a.focus)}<small>${tMsg("viewer.analysis.status."+a.status)}</small></button>`).join("");
+  const state=analysisState,round=analysisCurrentRound(state);
+  if(!state){$("analysisFocus").textContent=tMsg("viewer.analysis.emptyTitle");$("analysisMeta").textContent="";$("analysisBody").innerHTML=`<p class="empty">${tMsg("viewer.analysis.empty")}</p>`;$("analysisTree").innerHTML="";$("analysisTimeline").innerHTML="";return}
+  $("analysisFocus").textContent=state.focus;$("analysisMeta").textContent=tMsg("viewer.analysis.mainLine")+(round?" · "+tMsg("viewer.analysis.round",{round:round.seq})+" · "+tMsg("viewer.analysis.roundStatus."+round.status):" · "+tMsg("viewer.analysis.roundDone"));
+  const nodes=Object.values(state.nodes||{}).filter(n=>analysisNodeActive(state,n.id));
+  $("analysisTree").innerHTML=nodes.length?nodes.map(n=>`<button class="analysis-tree-node" data-analysis-jump="${escH(n.id)}"><span aria-hidden="true">${n.decision?"✓":"○"}</span> ${escH(n.short||n.text)}</button>`).join(""):`<p class="empty">${tMsg("viewer.analysis.noTree")}</p>`;
+  const source=state.sourceCopy||{},released=state.sourceState!=="held";
+  const sourceHtml=`<details class="analysis-source"><summary>${tMsg("viewer.analysis.source")}${source.page?" · "+tMsg("viewer.page",{page:source.page}):""}</summary><blockquote>${escH(source.text||"")}</blockquote>${!released?`<button data-analysis-act="release"${analysisBusy?" disabled":""}>${tMsg("viewer.analysis.release")}</button>`:""}</details>`;
+  const questions=round?(round.items||[]).map(item=>analysisQuestionHtml(state,round,item)).join(""):"";
+  const answers=round?Object.entries(round.answers||{}).map(([key,value])=>`<li>${escH(analysisAnswerLabel(state,round,key,value))}</li>`).join(""):"";
+  const decisions=nodes.filter(n=>n.decision&&state.decisions[n.decision]).map(n=>{const d=state.decisions[n.decision];
+    return `<article class="analysis-decision" data-analysis-node="${escH(n.id)}"><h3>${escH(n.short||n.text)}</h3><p>${escH(d.label)}</p><button data-analysis-act="convert" data-node="${escH(n.id)}"${analysisBusy?" disabled":""}>${tMsg("viewer.analysis.convert")}</button></article>`}).join("");
+  const drafts=(state.drafts||[]).map(d=>`<article class="analysis-draft"><h3>${tMsg("viewer.analysis.draft")}</h3><p>${escH(d.text)}</p>${d.status==="pending"?`<p class="hint">${tMsg("viewer.analysis.confirmHint")}</p><button data-analysis-act="confirm" data-draft="${escH(d.id)}"${analysisBusy?" disabled":""}>${tMsg("viewer.analysis.confirm")}</button>`:`<p class="hint">${tMsg("viewer.analysis.confirmed")}</p><button data-analysis-act="annotations">${tMsg("viewer.analysis.backToNotes")}</button>`}</article>`).join("");
+  $("analysisBody").innerHTML=sourceHtml+(questions||`<p class="empty">${tMsg(round&&round.status==="claimed"?"viewer.analysis.agentWorking":round&&round.status==="submitted"?"viewer.analysis.awaitingAgent":"viewer.analysis.noQuestions")}</p>`)+(answers?`<section class="analysis-answers"><h3>${tMsg("viewer.analysis.yourAnswers")}</h3><ul>${answers}</ul></section>`:"")+decisions+drafts;
+  $("analysisTimeline").innerHTML=(state.rounds||[]).map(r=>`<li><strong>${tMsg("viewer.analysis.round",{round:r.seq})}</strong> <span>${tMsg("viewer.analysis.roundStatus."+r.status)}</span>${r.note?`<p>${escH(r.note)}</p>`:""}<ul>${Object.entries(r.answers||{}).map(([key,value])=>`<li>${escH(analysisAnswerLabel(state,r,key,value))}</li>`).join("")}</ul></li>`).join("");
+  analysisRouteLabels()
+}
+async function analysisAction(op,body={}){
+  if(analysisBusy)return null;
+  if(FILE||!analysisSupported||mode!=="server"){toast(tMsg("viewer.analysis.connectionRequired"),6000);return null}
+  analysisBusy=true;++analysisRequest;analysisRenderKey="";renderAnalysis();analysisRouteLabels();$("analysisError").textContent="";
+  try{
+    const result=await api("POST","/api/analysis/"+op,{analysis:analysisSelected,...body,receiverBindingId:receiver&&receiver.bindingId});
+    if(result.analysis){analysisState=result.analysis;analysisSelected=result.analysis.id;SS.set("ae."+RID+".analysis",analysisSelected)}
+    if(result.doc){setDoc(result.doc);refreshList(true)}
+    await resync();toast(tMsg("viewer.analysis.done."+op),4000);return result
+  }catch(error){$("analysisError").textContent=error.message;toast(tMsg("viewer.analysis.actionError",{reason:error.message}),7000);return null}
+  finally{analysisBusy=false;analysisRenderKey="";renderAnalysis();analysisRouteLabels();await loadAnalyses()}
+}
+async function startAnalysis(noteId){const result=await analysisAction("start",{noteId});if(result){location.hash="#analysis";analysisRoute()}}
+function openAnalysis(id){++analysisRequest;analysisSelected=id;analysisState=null;analysisRenderKey="";SS.set("ae."+RID+".analysis",id);location.hash="#analysis";analysisRoute()}
+function submitAnalysis(){const round=analysisCurrentRound(analysisState);if(round&&round.status!=="claimed")return analysisAction("submit",{round:round.seq})}
+$("annotationMode").onclick=()=>{location.hash=""};$("analysisMode").onclick=()=>{location.hash="#analysis"};
+$("analysisSidebar").onclick=event=>{const select=event.target.closest("[data-analysis-select]"),jump=event.target.closest("[data-analysis-jump]");
+  if(select){openAnalysis(select.dataset.analysisSelect);return}
+  if(jump){const match=Array.from($("analysisBody").querySelectorAll("[data-analysis-node]")).find(el=>el.dataset.analysisNode===jump.dataset.analysisJump);if(match)match.scrollIntoView({block:"center",behavior:"smooth"})}
+};
+$("analysisBody").onclick=event=>{const button=event.target.closest("[data-analysis-act]");if(!button||analysisBusy)return;
+  const op=button.dataset.analysisAct,round=analysisCurrentRound(analysisState);
+  if(op==="answer"&&round){const value={kind:button.dataset.kind};if(value.kind==="option")value.option=button.dataset.option;analysisAction("answer",{round:round.seq,key:button.dataset.key,value})}
+  else if(op==="release")analysisAction("release");
+  else if(op==="confirm")analysisAction("confirm",{draft:button.dataset.draft});
+  else if(op==="annotations")location.hash="";
+  else if(op==="convert"){analysisDraftNode=button.dataset.node;const node=analysisState.nodes[analysisDraftNode],decision=analysisState.decisions[node.decision];
+    $("analysisDraftText").value=tMsg("viewer.analysis.draftDefault",{question:node.short||node.text,answer:decision.label});$("analysisDraftDialog").classList.add("on");$("analysisDraftText").focus()}
+};
+$("analysisDraftCreate").onclick=async()=>{const text=$("analysisDraftText").value.trim();if(!text||!analysisDraftNode)return;const result=await analysisAction("convert",{node:analysisDraftNode,text});if(result)$("analysisDraftDialog").classList.remove("on")};
+addEventListener("hashchange",analysisRoute);
+setInterval(()=>{if(!document.hidden)loadAnalyses()},4000);
+
 // ---------- 审阅总览（同一个 index.html 的 #overview 视图） ----------
 let overviewData=null,overviewSelected=null,overviewRequest=0,overviewLoading=false;
 const overviewStarting=new Set(),overviewStartFailures=new Map();
@@ -2180,6 +2358,7 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE)pol
   applyLocale();
   applyLayout();
   overviewRoute();
+  analysisRoute();
   if(FILE){mirror();updateMode();render();return}
   LS.del(K.notes);                      // 服务模式不在浏览器里留整份批注副本
   LS.set(K.meta,{title:unH(document.title),name:NAME,ns:NS});   // 只记名称：这个地址以后换给别的审阅时，那边的页面能说出暂存属于谁

@@ -1965,7 +1965,7 @@ def handoff_i18n_checks(browser, tmp: Path):
         ok(wait_until(lambda: page.inner_text("#mode") == "● Connected to the local service", page, 8,
                       condition="两条批注的写请求均已确认（徽标回到已连接）"),
            f"英文服务态徽标（实际 {page.inner_text('#mode')!r}）")
-        ok(page.locator("#handBtn span").first.inner_text() == "Hand to the agent", "英文提交按钮")
+        ok(page.locator("#handBtn span").first.inner_text() == "Hand to the agent for revision", "英文改稿提交按钮")
         page.click("#handBtn")
         ok(page.inner_text("#handTitle") == "Hand to the agent", "英文提交弹窗标题")
         ok(page.inner_text("#doHand").split("⌘")[0] == "Hand to the agent", "英文提交按钮（弹窗内）")
@@ -4755,9 +4755,82 @@ def poll_repaint_checks(browser, tmp: Path):
         ctx.close()
 
 
+def analysis_smoke_checks(browser, tmp: Path):
+    """从源批注发起分析、确认和作答、交出、转出草稿并确认的真实页面闭环。"""
+    review = tmp / "analysis-smoke"
+    build(review, name="合成分析审阅")
+    server = start_server(review, free_port())
+    port = json.loads((review / ".annotation-server.json").read_text())["port"]
+    context = browser.new_context(viewport={"width": 1440, "height": 1000})
+
+    def cli(*args, stdin=None):
+        result = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *args],
+                                input=stdin, capture_output=True, text=True, timeout=15)
+        if result.returncode:
+            raise RuntimeError(result.stderr + result.stdout)
+        return json.loads(result.stdout)
+
+    try:
+        page = context.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server")
+        page.wait_for_function("analysisSupported")
+        add_note(page, "增长主要来自新客，这个结论站得住吗？")
+        page.locator('#nlist [data-act="analysis-start"]').click()
+        page.wait_for_selector("#analysisMain:not([hidden])")
+        ok(page.url.endswith("#analysis"), "从批注发起后切到 #analysis")
+        ok("增长主要来自新客" in page.inner_text("#analysisFocus"), "分析顶部保留焦点问题")
+        ok(disk_notes(review)[0]["status"] == "held", "源批注搁住，不再属于待改稿")
+        page.select_option("#localePick", "en")
+        ok(page.inner_text("#handBtn") == "Hand to the agent for analysis", "分析模式主按钮按英文显示")
+
+        opening = cli("claim", str(review), "--events", "analysis", "--round", "1", "--by", "Synthetic")
+        proposal = [{"key": "caliber", "text": "采用年度还是季度口径？", "short": "核验口径", "recommend": "annual",
+                     "options": [{"id": "annual", "label": "年度"}, {"id": "quarter", "label": "季度"}]}]
+        cli("analysis-writeback", str(review), "--round", "1", "--base-rev", str(opening["baseRev"]),
+            "--proposals", "-", "--note", "先确认核验口径。", stdin=json.dumps(proposal, ensure_ascii=False))
+        page.wait_for_selector('#analysisBody [data-key="S:caliber"][data-kind="accept"]')
+        page.locator('#analysisBody [data-key="S:caliber"][data-kind="accept"]').click()
+        page.wait_for_selector('#analysisBody [data-key^="Q:"][data-kind="accept"]')
+        ok("核验口径" in page.inner_text("#analysisTree"), "确认提议后问题进入树")
+        page.locator('#analysisBody [data-key^="Q:"][data-kind="accept"]').click()
+        page.wait_for_selector("#analysisBody .analysis-answers")
+        page.click("#handBtn")
+        page.wait_for_function("analysisCurrentRound(analysisState)?.status==='submitted'")
+        ok("waiting 1" in page.inner_text("#analysisQueue"), "分析队列独立显示等待轮次")
+        claimed = cli("claim", str(review), "--events", "analysis", "--round", "2", "--by", "Synthetic")
+        cli("analysis-writeback", str(review), "--round", "2", "--base-rev", str(claimed["baseRev"]),
+            "--proposals", "-", "--note", "经核验采用年度口径。", stdin="[]")
+        page.wait_for_function("analysisState?.rounds?.[1]?.status==='done'")
+        page.locator('#analysisBody [data-analysis-act="convert"]').click()
+        page.fill("#analysisDraftText", "将增长结论改为经核验的年度口径。")
+        page.click("#analysisDraftCreate")
+        page.wait_for_selector('#analysisBody [data-analysis-act="confirm"]')
+        ok(len(disk_notes(review)) == 1, "草稿确认前不进入批注存储")
+        page.locator('#analysisBody [data-analysis-act="confirm"]').click()
+        page.wait_for_function("analysisState?.sourceState==='resolved'")
+        notes_after = disk_notes(review)
+        ok(len(notes_after) == 2 and notes_after[0]["status"] == "resolved"
+           and notes_after[1]["status"] == "open", "确认草稿后新增未处理批注并处理源批注")
+        handoff = json.loads((review / "handoff.json").read_text())
+        ok(handoff["items"] == [], "转出批注不自动提交改稿批次")
+        page.reload()
+        page.wait_for_selector("#analysisMain:not([hidden])")
+        page.wait_for_function("analysisState?.sourceState==='resolved'")
+        ok(page.url.endswith("#analysis") and "Round 2" in page.inner_text("#analysisTimeline"),
+           "刷新仍保持分析模式，问答时间线可回看")
+        page.click("#annotationMode")
+        page.wait_for_function("!document.body.classList.contains('analysis-mode')")
+        ok(page.inner_text("#handBtn") == "Hand to the agent for revision", "回到批注后主按钮改为改稿")
+    finally:
+        context.close()
+        stop(server)
+
+
 SCENARIO_RUNNERS = {
     "console-layout": console_layout_checks,
     "focus-mode": focus_mode_checks,
+    "analysis-smoke": analysis_smoke_checks,
     "receiver-binding": receiver_binding_checks,
     "generated-draft-loop": generated_draft_checks,
     "report-verdict-loop": report_verdict_checks,
