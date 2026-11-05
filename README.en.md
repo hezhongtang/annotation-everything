@@ -375,7 +375,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── notes.py                   annotation command line: wait / show / resolve / done / review and more
 │   ├── notes_store.py             annotation storage: atomic writes, file locks, change log
 │   ├── export_format.py           annotation exchange format: the marked Markdown grammar and the JSON backup
-│   ├── ledger.py                  review ledger: review IDs, review directories and dedicated ports
+│   ├── ledger.py                  review ledger: review IDs, review directories and dedicated ports; service status file and liveness check, copied-directory check
 │   ├── match.py                   finds matching sentences between the report and the speaker notes
 │   ├── skill_sources.py           discovers skill directories on this machine
 │   ├── fsutil.py                  shared helper for atomic writes, file locks and CSP script hashes
@@ -389,6 +389,7 @@ verify_report.py                  continuous efficiency reports, comparable grou
 verify_parallel.py                bounded process scheduling inside a verification group; existing locks and failures are preserved
 host_isolation.py                 host isolation protocol: locks and declarations for mutual exclusion by shared resource
 fixtures/sample/                   synthetic sample (fictional data)
+fixtures/show-baseline/            verbatim baselines of notes.py show output in Chinese and English (synthetic data)
 tests/                             unit tests and end-to-end browser tests
 tests/e2e_waits.py                  browser condition waits: bounded polling, events and scenario timeout diagnostics
 tools/
