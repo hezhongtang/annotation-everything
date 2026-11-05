@@ -126,6 +126,8 @@ Refuting an assumption first records a checkpoint and forks when decisions on th
 
 An agent can propose that an option or an entire line is a dead end. Reviewer confirmation in the next round blocks that option, switching into that line and forking from its checkpoints across all lines. Refuting a dependency releases the block and marks it for review. The page explains the reason and assumptions. Reference cards preview the embedded report in an overlay, and each operation explains what changed.
 
+<p align="center"><img src="docs/assets/analysis.en.png" alt="Synthetic analysis: focus question, question tree, candidate assumption, round answers and checkpoint timeline" width="92%"><br><sub>Analysis and annotations share the console layout. All materials, annotations and answers shown here are synthetic.</sub></p>
+
 Waiters receive revision batches by default; opt in with `--events analysis` to receive analysis rounds. Agents read context with `notes.py analysis --round N --json` and use `analysis-writeback` with the accepted baseline revision. An unsupported service hides analysis and explains how to upgrade. Opening the HTML directly in file mode does not provide analysis.
 
 Neither JSON nor Markdown exports include analysis questions, events, or trees; JSON is not a complete review backup. Older importers and pages treat an unknown held status as open, while old services still submit only `open` annotations. After upgrading, restart the service, rebuild the page, and refresh it. See the [format reference](skill/annotation-everything/references/formats.en.md#analysis-data).
