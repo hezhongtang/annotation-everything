@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import html
+from html.parser import HTMLParser
 import json
 import re
 import unittest
 
-from tests.test_analysis_page import interaction_program, render_expression
+from tests.test_analysis_page import SCRIPTS, interaction_program, render_expression
+from tests.test_review_page_i18n import _runtime_source
 from tests.test_analysis_protection_page import protection_state
 
 
@@ -38,6 +40,163 @@ def render_resolution(state, locale="en"):
 
 
 class AnalysisResolutionPageTests(unittest.TestCase):
+    def test_analysis_panel_toggle_renders_its_shortcut_in_text_and_title(self):
+        class PanelButtonParser(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                values = dict(attrs)
+                if tag == "button" and values.get("aria-controls") == "analysisPanelLists":
+                    self.buttons.append(values)
+
+        parser = PanelButtonParser()
+        parser.buttons = []
+        parser.feed((SCRIPTS / "viewer_template.html").read_text())
+        self.assertEqual(len(parser.buttons), 1)
+        for locale, expected in (("en", "Toggle bottom panel (\\)"), ("zh-CN", "切换底部面板（\\）")):
+            setup = "const attributes=" + json.dumps(parser.buttons) + ";const runtime=" + json.dumps(_runtime_source()) + ";"
+            value = interaction_program([
+                ("function msgParams(", "function applyLocale()"),
+            ], setup, r"""
+              const nodes=attributes.map(attrs=>({attrs,dataset:{msg:attrs['data-msg'],title:attrs['data-title'],aria:attrs['data-aria']},
+                attributes:Object.entries(attrs).map(([name,value])=>({name,value})),setAttribute(name,value){this.attrs[name]=value}}));
+              const scope={querySelectorAll:selector=>nodes.filter(node=>Object.hasOwn(node.attrs,selector.slice(1,-1)))};
+              const localize=new Function('CATALOGS','uiLocale','scope',runtime+'\n'+msgParams.toString()+'\n'+applyMessages.toString()+
+                '\napplyMessages(scope);return scope.querySelectorAll("[data-title]").map(node=>({text:node.textContent||node.attrs["aria-label"],title:node.title}));');
+              return localize({[uiLocale]:M},uiLocale,scope)[0];
+            """, locale)
+            self.assertEqual(value, {"text": expected, "title": expected})
+
+    def test_current_round_keeps_all_five_saved_answer_kinds_editable_without_redeciding(self):
+        scenarios = []
+        for status in ("open", "submitted", "claimed"):
+            for kind in ("accept", "option", "text", "park", "verify"):
+                state = protection_state()
+                state["protection"]["locked"] = status == "claimed"
+                round_ = state["rounds"][0]
+                round_.update(status=status, order=47, line="main", items=[])
+                value = {"kind": kind}
+                if kind == "option":
+                    value["option"] = "a"
+                elif kind == "text":
+                    value["text"] = "保存的完整原话 <b>"
+                elif kind == "verify":
+                    value["allowExternal"] = True
+                if kind in ("park", "verify"):
+                    state["nodes"]["n1"].update(status="parked" if kind == "park" else "verifying", decision=None)
+                round_["answers"] = {"Q:n1": value}
+                item = {"key": "Q:n1", "type": "question", "node": "n1", "text": "采用哪个口径？"}
+                context = {"analysis": state["id"], "round": 2, "line": "main", "historical": False,
+                           "answeredItems": [item, item]}
+                scenarios.append({"state": state, "context": context, "kind": kind})
+        for locale in ("en", "zh-CN"):
+            setup = """
+              let analysisState=null,analysisContext=null,analysisBusy=false,analysisRenderKey='',analysisSelected=null;
+              const analyses=[],calls=[],analysisAnswerDrafts=new Map();
+              const analysisShown=()=>true,analysisRouteLabels=()=>{},toast=()=>{};
+              const analysisAction=async(op,body)=>calls.push({op,body});
+              const scenarios=SCENARIOS;
+            """.replace("SCENARIOS", json.dumps(scenarios, ensure_ascii=False))
+            values = interaction_program([
+                ("// ---------- Analysis view helpers ----------", "// ---------- Analysis view DOM ----------"),
+                ("function analysisDraftKey(", "function stashAnalysisInputs("),
+                ("function renderAnalysis(){", "async function analysisAction("),
+                ('$("analysisBody").onclick=', '$("analysisBody").oninput='),
+            ], setup, r"""
+              const results=[];
+              for(const scenario of scenarios){
+                analysisState=scenario.state;analysisContext=null;analysisSelected=analysisState.id;
+                analysisRenderKey='';analysisAnswerDrafts.clear();renderAnalysis();
+                analysisContext=scenario.context;renderAnalysis();
+                const body=$('analysisBody').innerHTML,cards=body.match(/<article[^>]*data-analysis-item="Q:n1"[^>]*>[\s\S]*?<\/article>/g)||[];
+                const card=cards[0]||'',kind=scenario.kind;
+                const tag=(card.match(new RegExp('<button[^>]*data-kind="'+kind+'"[^>]*>'))||[])[0];
+                const dataset={analysisAct:'answer',key:'Q:n1',kind};
+                if(kind==='option')dataset.option='b';
+                if(kind==='text')analysisAnswerDrafts.set(analysisDraftKey(analysisState,analysisState.rounds[0],'Q:n1'),{text:'修改后的完整原话 <b>'});
+                if(kind==='verify')analysisAnswerDrafts.set(analysisDraftKey(analysisState,analysisState.rounds[0],'Q:n1'),{allowExternal:false});
+                const before=calls.length;
+                if(tag)await $('analysisBody').onclick({target:{closest:()=>({dataset,disabled:tag.includes(' disabled')})}});
+                results.push({card,count:cards.length,call:calls.length>before?calls.at(-1):null,
+                  kind,status:analysisState.rounds[0].status,order:analysisState.rounds[0].order});
+              }
+              return results;
+            """, locale)
+            for value in values:
+                self.assertEqual(value["count"], 1, value)
+                expected = {"kind": value["kind"]}
+                if value["kind"] == "option":
+                    expected["option"] = "b"
+                elif value["kind"] == "text":
+                    expected["text"] = "修改后的完整原话 <b>"
+                    self.assertIn("保存的完整原话 &lt;b&gt;", value["card"])
+                elif value["kind"] == "verify":
+                    expected["allowExternal"] = False
+                    self.assertIn(" checked", value["card"])
+                self.assertEqual(value["call"], {"op": "answer", "body": {"round": 2, "key": "Q:n1", "value": expected}})
+                self.assertEqual(value["order"], 47)
+
+    def test_old_line_can_reconfirm_its_same_answer_when_it_needs_review(self):
+        state = resolution_state()
+        state["protection"]["locked"] = False
+        state["rounds"] = []
+        for locale in ("en", "zh-CN"):
+            for needs_review in (False, True):
+                state["nodes"]["n1"]["needsReview"] = needs_review
+                body = render_resolution(state, locale)["analysisBody"]
+                button = re.search(r'<button[^>]*data-analysis-act="redecide"[^>]*data-option="a"[^>]*>', body)
+                self.assertIsNotNone(button)
+                self.assertEqual(not needs_review, " disabled" in button.group())
+        setup = """
+          let analysisState=STATE,analysisBusy=false;const calls=[];
+          const analysisAction=async(op,body)=>calls.push({op,body}),toast=()=>{};
+        """.replace("STATE", json.dumps(state, ensure_ascii=False))
+        value = interaction_program([
+            ("// ---------- Analysis view helpers ----------", "// ---------- Analysis view DOM ----------"),
+            ('$("analysisBody").onclick=', '$("analysisBody").oninput='),
+        ], setup, """
+          const body=analysisDecisionHtml(analysisState,analysisState.nodes.n1);
+          const tag=body.match(/<button[^>]*data-analysis-act="redecide"[^>]*data-option="a"[^>]*>/)[0];
+          await $('analysisBody').onclick({target:{closest:()=>({dataset:{analysisAct:'redecide',node:'n1',option:'a'},disabled:tag.includes(' disabled')})}});
+          return calls;
+        """)
+        self.assertEqual(value, [{"op": "redecide", "body": {"node": "n1", "option": "a"}}])
+
+    def test_saved_round_items_stay_unique_and_confirmed_updates_and_history_stay_readonly(self):
+        state = resolution_state()
+        state["protection"]["locked"] = False
+        state["updates"] = {"u1": {"id": "u1", "text": "已确认的新批注原文", "status": "confirmed"}}
+        state["deadEnds"]["e_private"]["status"] = "confirmed"
+        proposal = {"key": "extra", "text": "合成补充问题", "short": "补充问题",
+                    "options": [{"id": "yes", "label": "补充核验"}], "recommend": "yes"}
+        items = [{"key": "Q:n1", "type": "question", "node": "n1"},
+                 {"key": "A:a_private", "type": "assumption", "assumption": "a_private"},
+                 {**proposal, "key": "S:extra", "type": "structure"},
+                 {"key": "D:e_private", "type": "deadend", "deadEnd": "e_private"},
+                 {"key": "U:u1", "type": "update", "update": "u1"}]
+        round_ = state["rounds"][0]
+        round_.update(status="submitted", proposals=[proposal], items=[items[0]],
+                      answers={item["key"]: {"kind": "accept"} for item in items})
+        context = {"analysis": state["id"], "round": round_["seq"], "line": "main", "answeredItems": items}
+        setup = """
+          let analysisState=STATE,analysisContext=CONTEXT,analysisBusy=false,analysisRenderKey='',analysisHistorySelection=null;
+          const analyses=[],analysisSelected=analysisState.id,analysisShown=()=>true,analysisRouteLabels=()=>{},analysisDraftFor=()=>({});
+        """.replace("STATE", json.dumps(state, ensure_ascii=False)).replace("CONTEXT", json.dumps(context, ensure_ascii=False))
+        value = interaction_program([
+            ("// ---------- Analysis view helpers ----------", "// ---------- Analysis view DOM ----------"),
+            ("function renderAnalysis(){", "async function analysisAction("),
+        ], setup, """
+          renderAnalysis();const current=$('analysisBody').innerHTML;
+          analysisHistorySelection={analysis:analysisState.id,kind:'round',id:2,context:{...analysisContext,historical:true,
+            status:'done',items:[],answers:analysisState.rounds[0].answers,note:'冻结原话',writeback:{}}};
+          renderAnalysis();return {current,history:$('analysisBody').innerHTML};
+        """)
+        for key in ("Q:n1", "A:a_private", "S:extra", "D:e_private"):
+            self.assertEqual(value["current"].count('data-analysis-item="' + key + '"'), 1)
+        self.assertIn("合成补充问题", value["current"])
+        self.assertNotIn('data-key="U:u1"', value["current"])
+        self.assertIn("已确认的新批注原文", value["current"])
+        self.assertIn("冻结原话", value["history"])
+        self.assertNotIn('data-analysis-act=', value["history"])
+
     def test_claimed_dead_end_proposal_shows_reason_dependencies_and_enabled_confirmation(self):
         for locale in ("en", "zh-CN"):
             view = render_resolution(resolution_state(), locale)

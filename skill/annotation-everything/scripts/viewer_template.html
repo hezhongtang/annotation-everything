@@ -456,7 +456,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
       <button id="scriptHandle" data-layout-toggle="script" data-title="viewer.layout.script" data-p-key="]" data-msg="viewer.target.script" aria-controls="scriptPane"></button>
     </div>
     <section id="bottomPanel" data-aria="viewer.layout.panel" data-p-key="&#92;">
-      <section id="analysisPanel" hidden><div class="pane-head"><div id="analysisPanelTabs" role="tablist"><button role="tab" data-analysis-tab="timeline" aria-controls="analysisTimeline" data-msg="viewer.analysis.timeline"></button><button role="tab" data-analysis-tab="assumptions" aria-controls="analysisAssumptions" data-msg="viewer.life.assumptions"></button><button role="tab" data-analysis-tab="parked" aria-controls="analysisParked" data-msg="viewer.life.parked"></button><button role="tab" data-analysis-tab="facts" aria-controls="analysisFacts" data-msg="viewer.life.facts"></button></div><button data-layout-toggle="panel" data-title="viewer.layout.panel" aria-controls="analysisPanelLists" data-msg="viewer.layout.panel"></button></div><div id="analysisPanelLists"><ol id="analysisTimeline" role="tabpanel"></ol><ol id="analysisAssumptions" role="tabpanel" hidden></ol><ol id="analysisParked" role="tabpanel" hidden></ol><ol id="analysisFacts" role="tabpanel" hidden></ol></div></section>
+      <section id="analysisPanel" hidden><div class="pane-head"><div id="analysisPanelTabs" role="tablist"><button role="tab" data-analysis-tab="timeline" aria-controls="analysisTimeline" data-msg="viewer.analysis.timeline"></button><button role="tab" data-analysis-tab="assumptions" aria-controls="analysisAssumptions" data-msg="viewer.life.assumptions"></button><button role="tab" data-analysis-tab="parked" aria-controls="analysisParked" data-msg="viewer.life.parked"></button><button role="tab" data-analysis-tab="facts" aria-controls="analysisFacts" data-msg="viewer.life.facts"></button></div><button data-layout-toggle="panel" data-title="viewer.layout.panel" data-p-key="&#92;" aria-controls="analysisPanelLists" data-msg="viewer.layout.panel"></button></div><div id="analysisPanelLists"><ol id="analysisTimeline" role="tabpanel"></ol><ol id="analysisAssumptions" role="tabpanel" hidden></ol><ol id="analysisParked" role="tabpanel" hidden></ol><ol id="analysisFacts" role="tabpanel" hidden></ol></div></section>
       <div class="panel-tabs">        <button data-act="seelist" id="seeList" data-title="viewer.seeListTitle"><span id="seeListLabel" data-msg="viewer.seeList">本页批注</span> <span id="nhere">0</span></button><button id="allTab" data-msg="viewer.allTitle"></button><button id="batchesTab" data-msg="viewer.batch.title"></button><button  class="icon-button" data-layout-toggle="panel" data-title="viewer.layout.panel" data-aria="viewer.layout.panel" data-p-key="&#92;" aria-controls="panelBody"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/></svg></button></div>
       <div id="panelBody"><div class="notes"><div id="nlist"></div></div>
     <div class="form" id="nform"><div class="quote" id="qbox"></div><span id="styleChip"></span>
@@ -2126,6 +2126,20 @@ document.addEventListener("keydown",e=>{
   else if(e.key==="Escape"){document.querySelectorAll(".modal").forEach(m=>m.classList.remove("on"));if(markMode)setMarkMode(false);closePinPop();closeStyleMenu()}});
 // ---------- Analysis view helpers ----------
 function analysisCurrentRound(state){return state&&state.status!=="closed"?(state.rounds||[]).slice().reverse().find(r=>(!r.line||r.line===(state.line||"main"))&&["open","submitted","claimed"].includes(r.status))||null:null}
+function analysisRoundAnswerItems(state,round){
+  const context=typeof analysisContext!=="undefined"&&analysisContext&&analysisContext.analysis===state.id&&analysisContext.round===round.seq&&!analysisContext.historical?analysisContext:null;
+  const items=[],seen=new Set();
+  for(const item of [...(round.items||[]),...((context&&context.answeredItems)||[])]){
+    if(seen.has(item.key))continue;
+    if(item.type==="question"&&!analysisNodeActive(state,item.node))continue;
+    if(item.type==="assumption"&&(state.assumptions&&state.assumptions[item.assumption]||{}).refuted)continue;
+    if(item.type==="update"&&(state.updates&&state.updates[item.update]||{}).status!=="pending")continue;
+    if(item.type==="deadend"&&(state.deadEnds&&state.deadEnds[item.deadEnd]||{}).status==="review")continue;
+    seen.add(item.key);
+    items.push(item.type==="structure"&&!item.proposal?{...item,proposal:(round.proposals||[]).find(p=>"S:"+p.key===item.key)||{...item,key:item.key.slice(2)}}:item)
+  }
+  return items
+}
 function analysisDeadEndTarget(state,end){
   if(end.kind==="line")return analysisLineName(state.lines&&state.lines[end.targetLine]?state:{lines:{[end.targetLine]:{ordinal:end.targetOrdinal}}},end.targetLine);
   const node=state.nodes&&state.nodes[end.node]||Object.values(state.lines||{}).map(line=>line.nodes&&line.nodes[end.node]).find(Boolean)||{};
@@ -2266,7 +2280,7 @@ function analysisDecisionHtml(state,node){
   const branch=analysisNodeBranch(state,node.id),decision=state.decisions&&state.decisions[node.decision];
   if(branch==="void"||!decision&&branch==="current")return "";
   const detached=branch==="detached",disabled=analysisBusy||analysisLocked(state)?" disabled":"";
-  const choices=decision&&!detached&&state.status!=="closed"?`<details class="analysis-redecide"><summary>${tMsg("viewer.analysis.protect.redecide")}</summary><p class="hint">${tMsg("viewer.analysis.protect.redecideHint")}</p><div class="analysis-actions">${Object.entries(node.options||{}).map(([option,label])=>`<button data-analysis-act="redecide" data-node="${escH(node.id)}" data-option="${escH(option)}" aria-pressed="${option===decision.option}"${disabled||option===decision.option?" disabled":""}>${escH(label)}</button>`).join("")}</div></details>${!node.needsReview?`<div class="analysis-actions"><button data-analysis-act="convert" data-node="${escH(node.id)}"${disabled}>${tMsg("viewer.analysis.convert")}</button></div>`:""}`:"";
+  const choices=decision&&!detached&&state.status!=="closed"?`<details class="analysis-redecide"><summary>${tMsg("viewer.analysis.protect.redecide")}</summary><p class="hint">${tMsg("viewer.analysis.protect.redecideHint")}</p><div class="analysis-actions">${Object.entries(node.options||{}).map(([option,label])=>`<button data-analysis-act="redecide" data-node="${escH(node.id)}" data-option="${escH(option)}" aria-pressed="${option===decision.option}"${disabled||option===decision.option&&!node.needsReview?" disabled":""}>${escH(label)}</button>`).join("")}</div></details>${!node.needsReview?`<div class="analysis-actions"><button data-analysis-act="convert" data-node="${escH(node.id)}"${disabled}>${tMsg("viewer.analysis.convert")}</button></div>`:""}`:"";
   return `<article class="analysis-decision${detached?" analysis-detached":""}${node.needsReview?" analysis-needs-review":""}" data-analysis-node="${escH(node.id)}"><p class="analysis-kind">${tMsg(node.needsReview?"viewer.analysis.resolution.needsReview":detached?"viewer.analysis.protect.detached":"viewer.analysis.protect.current")}</p><h3>${escH(node.short||node.text)}</h3>${node.short&&node.short!==node.text?`<p class="hint">${escH(node.text)}</p>`:""}${decision?`<p>${escH(decision.label)}</p>`:""}${detached?`<p class="hint">${tMsg("viewer.analysis.protect.detachedHint")}</p>`:choices}</article>`
 }
 function analysisUpdateHtml(state,round,item){
@@ -2369,7 +2383,8 @@ ${RCSS}
 // ---------- Analysis page preview interactions end ----------
 addEventListener("resize",fitAnalysisPage);
 function analysisDraftKey(state,round,key){return [state.id,round.seq,key].join("|")}
-function analysisDraftFor(state,round,key){return analysisAnswerDrafts.get(analysisDraftKey(state,round,key))||{}}
+function analysisDraftFor(state,round,key){const answer=round.answers&&round.answers[key]||{};
+  return {...(answer.kind==="text"?{text:answer.text}:{}),...(answer.kind==="verify"?{allowExternal:answer.allowExternal===true}:{}),...analysisAnswerDrafts.get(analysisDraftKey(state,round,key))}}
 function stashAnalysisInputs(){const state=analysisState,round=analysisCurrentRound(state);if(!state||!round)return;
   $("analysisBody").querySelectorAll("[data-analysis-text],[data-analysis-external]").forEach(input=>{
     const key=analysisDraftKey(state,round,input.dataset.analysisKey),draft=analysisAnswerDrafts.get(key)||{};
@@ -2456,7 +2471,7 @@ function analysisRouteLabels(){
 }
 function renderAnalysis(){
   if(!analysisShown())return;
-  const signature=JSON.stringify([analyses,analysisState,analysisBusy,uiLocale,analysisHistoryFor(analysisState)]);if(signature===analysisRenderKey)return;analysisRenderKey=signature;
+  const signature=JSON.stringify([analyses,analysisState,typeof analysisContext==="undefined"?null:analysisContext,analysisBusy,uiLocale,analysisHistoryFor(analysisState)]);if(signature===analysisRenderKey)return;analysisRenderKey=signature;
   $("analysisList").innerHTML=analyses.map(a=>`<button class="analysis-list-item" data-analysis-select="${escH(a.id)}" aria-pressed="${a.id===analysisSelected}">${escH(a.focus)}<small>${tMsg("viewer.analysis.status."+a.status)}</small></button>`).join("");
   const state=analysisState,round=analysisCurrentRound(state);
   $("analysisChanges").innerHTML=analysisChangeHtml(state);
@@ -2468,7 +2483,7 @@ function renderAnalysis(){
   $("analysisTree").innerHTML=`<p class="analysis-kind">${tMsg("viewer.analysis.protect.current")}</p>`+(treeItems(nodes.filter(n=>n.status!=="parked"))||`<p class="empty">${tMsg("viewer.analysis.noTree")}</p>`)+(detached.length?`<details class="analysis-tree-group" open><summary>${tMsg("viewer.analysis.protect.detached")}</summary>${treeItems(detached)}</details>`:"");
   const source=state.sourceCopy||{},released=state.sourceState!=="held";
   const sourceHtml=`<details class="analysis-source"><summary>${tMsg(state.sourceNote?"viewer.analysis.source":"viewer.life.sourceQuestion")}${source.page?" · "+tMsg("viewer.page",{page:source.page}):""}</summary><blockquote>${escH(source.text||"")}</blockquote>${state.sourceNote&&!released&&state.status!=="closed"?`<button data-analysis-act="release"${analysisBusy||analysisLocked(state)?" disabled":""}>${tMsg("viewer.analysis.release")}</button>`:""}</details>`;
-  const questions=round?(round.items||[]).map(item=>analysisQuestionHtml(state,round,item,analysisDraftFor(state,round,item.key))).join(""):"";
+  const questions=round?analysisRoundAnswerItems(state,round).map(item=>analysisQuestionHtml(state,round,item,analysisDraftFor(state,round,item.key))).join(""):"";
   const answers=round?Object.entries(round.answers||{}).map(([key,value])=>`<li>${escH(analysisAnswerLabel(state,round,key,value))}</li>`).join(""):"";
   const decisions=nodes.concat(detached).map(n=>analysisDecisionHtml(state,n)).join("");
   const drafts=(state.drafts||[]).map(d=>`<article class="analysis-draft"><h3>${tMsg("viewer.analysis.draft")}</h3><p>${escH(d.text)}</p>${d.status==="pending"?`<p class="hint">${tMsg("viewer.analysis.confirmHint")}</p>${state.status!=="closed"?`<button data-analysis-act="confirm" data-draft="${escH(d.id)}"${analysisBusy||analysisLocked(state)?" disabled":""}>${tMsg("viewer.analysis.confirm")}</button>`:""}`:`<p class="hint">${tMsg("viewer.analysis.confirmed")}</p><button data-analysis-act="annotations">${tMsg("viewer.analysis.backToNotes")}</button>`}</article>`).join("");
