@@ -439,15 +439,31 @@ def _relevant_paths(changes: dict) -> list:
 
 def documentation_only(selection: dict) -> bool:
     """仅内置允许列表可豁免 PR 产品测试；缺失、回退和覆盖映射均从紧。"""
-    if (not selection.get("available") or selection.get("strategy_source") != "builtin"
-            or selection.get("fallback") is not None
-            or (selection.get("policy_guard") or {}).get("active")):
+    if (not isinstance(selection, dict) or selection.get("available") is not True
+            or selection.get("strategy_source") != "builtin" or selection.get("fallback") is not None):
+        return False
+    guard = selection.get("policy_guard")
+    if guard is not None and (not isinstance(guard, dict) or guard.get("active") is not False):
         return False
     changes = selection.get("changes")
     if not isinstance(changes, dict):
         return False
     # 暂存后又在工作树恢复的源码仍属于待提交改动，不能被净差异掩盖。
-    paths = set(_relevant_paths(changes)) | set(changes.get("staged") or []) | set(changes.get("unstaged") or [])
+    paths = []
+    for key in ("added", "deleted", "modified", "untracked", "staged", "unstaged"):
+        values = changes.get(key)
+        if not isinstance(values, list):
+            return False
+        paths.extend(values)
+    renamed = changes.get("renamed")
+    if not isinstance(renamed, list):
+        return False
+    for entry in renamed:
+        if not isinstance(entry, dict):
+            return False
+        paths.extend((entry.get("from"), entry.get("to")))
+    if any(not isinstance(path, str) or not path for path in paths):
+        return False
     return bool(paths) and all(_allowlist_category(path, DOC_ALLOWLIST) is not None for path in paths)
 
 

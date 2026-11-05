@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import ast
+import fnmatch
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -35,6 +37,54 @@ def executable_strings(node, allow_declaration=False):
         yield from executable_strings(child, allow_declaration)
 
 
+def function_digest(node):
+    def normalize(value):
+        if isinstance(value, ast.AST):
+            # 新版 Python 增加的空字段不改变函数语义，也不应改变核实摘要。
+            return {"node": type(value).__name__, "fields": {
+                key: normalize(item) for key, item in ast.iter_fields(value)
+                if item is not None and not (isinstance(item, list) and not item)}}
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        return value
+
+    canonical = json.dumps(normalize(node), sort_keys=True, ensure_ascii=True,
+                           separators=(",", ":"), default=repr)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def unreviewed_traversals(tree, rel: str, prefixes: list) -> bool:
+    """宽范围扫描缺省需复核；已核实的受限扫描绑定到整个函数的语义摘要。"""
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    probes = [prefix + "synthetic.md" if prefix.endswith("/") else prefix for prefix in prefixes]
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in ("glob", "rglob", "iglob", "walk"):
+            continue
+        if isinstance(node.func.value, ast.Name) and node.func.value.id == "ast":
+            continue  # ast.walk 遍历语法树，不遍历文件。
+        try:
+            pattern = ast.literal_eval(node.args[0])
+        except (ValueError, IndexError):
+            pattern = None
+        if (node.func.attr != "walk" and isinstance(pattern, str)
+                and not pattern.lower().endswith(".md")
+                and not any(fnmatch.fnmatchcase(probe, pattern) or fnmatch.fnmatchcase(Path(probe).name, pattern)
+                            for probe in probes)):
+            continue
+        scope = parents.get(node)
+        while scope is not None and not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            scope = parents.get(scope)
+        if scope is not None and any(
+                entry["path"] == rel and entry["function"] == scope.name
+                and entry["source_sha256"] == function_digest(scope) and entry["basis"]
+                for entry in FIXTURE.get("bounded_traversals", [])):
+            continue
+        return True
+    return False
+
+
 def document_references(root: Path, prefixes: list) -> list:
     patterns = [re.compile(r"(?<![\w-])%s(?![\w-])" % re.escape(Path(prefix.rstrip("/")).stem), re.IGNORECASE)
                 for prefix in prefixes]
@@ -46,16 +96,27 @@ def document_references(root: Path, prefixes: list) -> list:
     for path in sorted(files):
         rel = path.relative_to(root).as_posix()
         text = path.read_text(encoding="utf-8")
-        strings = (list(executable_strings(ast.parse(text), rel == "verify_selection.py"))
-                   if path.suffix == ".py" else
-                   [line for line in text.splitlines() if not line.lstrip().startswith(("#", "//"))])
-        if any(pattern.search(value) or "docs/" in value.lower() and "*" in value
-               for value in strings for pattern in patterns):
+        traversal = False
+        if path.suffix == ".py":
+            tree = ast.parse(text)
+            strings = list(executable_strings(tree, rel == "verify_selection.py"))
+            traversal = unreviewed_traversals(tree, rel, prefixes)
+        else:
+            strings = [line for line in text.splitlines() if not line.lstrip().startswith(("#", "//"))]
+        if traversal or any(pattern.search(value) or "docs/" in value.lower() and "*" in value
+                            for value in strings for pattern in patterns):
             references.append(rel)
     return references
 
 
 class DocumentationAllowlistTests(unittest.TestCase):
+    def test_optional_empty_ast_fields_do_not_invalidate_an_audited_scope(self):
+        scope = ast.parse("def synthetic(): pass").body[0]
+        original = function_digest(scope)
+        scope._fields = (*scope._fields, "future_optional_field")
+        scope.future_optional_field = []
+        self.assertEqual(function_digest(scope), original)
+
     def test_new_allowlist_entries_have_no_executable_consumers(self):
         additions = {entry.prefix for entry in verify_selection.DOC_ALLOWLIST} - set(FIXTURE["legacy_allowlist"])
         self.assertEqual(additions, set(FIXTURE["audited_paths"]), "新增允许项须补齐核实依据与依赖契约")
@@ -71,6 +132,21 @@ class DocumentationAllowlistTests(unittest.TestCase):
                 path.write_text(reader["source"], encoding="utf-8")
             self.assertEqual(document_references(root, FIXTURE["audited_paths"]),
                              sorted(reader["path"] for reader in FIXTURE["readers"]))
+
+    def test_bounded_traversal_requires_the_audited_function_to_stay_unchanged(self):
+        entry = FIXTURE["bounded_traversals"][0]
+        tree = ast.parse((ROOT / entry["path"]).read_text())
+        scope = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+                     and node.name == entry["function"])
+        with tempfile.TemporaryDirectory(prefix="verify-bounded-consumer-") as temp:
+            root = Path(temp)
+            path = root / entry["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(ast.unparse(scope), encoding="utf-8")
+            self.assertEqual(document_references(root, FIXTURE["audited_paths"]), [])
+            scope.body.append(ast.Pass())
+            path.write_text(ast.unparse(ast.fix_missing_locations(scope)), encoding="utf-8")
+            self.assertEqual(document_references(root, FIXTURE["audited_paths"]), [entry["path"]])
 
 
 if __name__ == "__main__":

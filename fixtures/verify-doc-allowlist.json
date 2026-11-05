@@ -37,8 +37,112 @@
     {
       "path": "tools/glob-docs.sh",
       "source": "#!/bin/sh\ncat docs/**/*.md\n"
+    },
+    {
+      "path": "tools/read_root.py",
+      "source": "from pathlib import Path\nROOT = Path(__file__).resolve().parents[1]\nfor path in ROOT.rglob(\"*.md\"):\n    print(path.read_text())\n"
+    },
+    {
+      "path": "tools/read_all_root.py",
+      "source": "from pathlib import Path\nROOT = Path(__file__).resolve().parents[1]\nfor path in ROOT.rglob(\"*\"):\n    if path.is_file(): print(path.read_bytes())\n"
+    },
+    {
+      "path": "tools/walk_root.py",
+      "source": "import os\nfrom pathlib import Path\nfor root, dirs, files in os.walk(Path.cwd()):\n    for name in files:\n        print((Path(root) / name).read_bytes())\n"
     }
   ],
   "term_document": "GLOSSARY.md",
-  "decision_document": "docs/adr/0001-synthetic.md"
+  "decision_document": "docs/adr/0001-synthetic.md",
+  "bounded_traversals": [
+    {
+      "path": "ae.py",
+      "function": "_digests",
+      "source_sha256": "788f212be767b3097621ab0eae4608f848fdf1f97e0366c8d701babfc3d57840",
+      "basis": "安装与修复的技能副本文件哈希；仅记录完整性，不把说明文档作为产品行为输入。"
+    },
+    {
+      "path": "skill/annotation-everything/scripts/notes.py",
+      "function": "_snapshot",
+      "source_sha256": "4338dc47851dd7d2765354765512471ecbe47a32864f29da3a034980b8af81ab",
+      "basis": "只清理审阅目录内旧批次快照，不读取仓库说明文档。"
+    },
+    {
+      "path": "skill/annotation-everything/scripts/serve.py",
+      "function": "read_wait",
+      "source_sha256": "657dd45ee873ef8b525a55756dec2726f1abce3c48225a72c90788d20dc0f3d3",
+      "basis": "仅按 WAIT_PREFIX 查审阅目录中的等待标记 JSON。"
+    },
+    {
+      "path": "skill/annotation-everything/scripts/skill_sources.py",
+      "function": "_skill_files",
+      "source_sha256": "7c3183973727edcb2b711d8fac5e9d05e57946fdf33f26f7e45a8bb24561c787",
+      "basis": "仅扫描已指定的技能安装与缓存目录，产物固定为 SKILL.md。"
+    },
+    {
+      "path": "skill/annotation-everything/scripts/wakeup.py",
+      "function": "waiting_state",
+      "source_sha256": "80c1c5ec3146b78ff8a0112be61d899928bf3e95132045c0429807832aa106ac",
+      "basis": "仅按 WAIT_PREFIX 查审阅目录中的等待标记 JSON。"
+    },
+    {
+      "path": "tests/test_ae_cli.py",
+      "function": "snapshot",
+      "source_sha256": "5e73365a58227a7655195ec4cdfc46d0f84e8a862a2c8be489a01fedbfc1daa9",
+      "basis": "仅对本用例临时技能安装目录或合成用户目录计算快照，不读取真实仓库说明文档。"
+    },
+    {
+      "path": "tests/test_ae_repair.py",
+      "function": "snapshot_all",
+      "source_sha256": "8834d2a34aee47a28425580b75ec528e26c868bd3881b87e72f00eb6f37cd350",
+      "basis": "仅对本用例临时技能安装目录或合成用户目录计算快照，不读取真实仓库说明文档。"
+    },
+    {
+      "path": "tests/test_ae_target.py",
+      "function": "snapshot",
+      "source_sha256": "1bea2e9238d11a3544264e18d7ce1c551e6a4797da4f40acaa4ceca70a7a4493",
+      "basis": "仅对本用例临时技能安装目录或合成用户目录计算快照，不读取真实仓库说明文档。"
+    },
+    {
+      "path": "tests/test_ae_uninstall.py",
+      "function": "snapshot",
+      "source_sha256": "60a445f050b05523b1cc7af83cf61dc16533b557b266a74a88296efb8b222583",
+      "basis": "仅对本用例临时技能安装目录或合成用户目录计算快照，不读取真实仓库说明文档。"
+    },
+    {
+      "path": "tests/test_core.py",
+      "function": "test_wait_detects_submission_whose_stat_signature_is_unchanged",
+      "source_sha256": "7a150b20e3368888e2650bc58cde36390a119f51b8df60be927ca8103c039306",
+      "basis": "仅检查合成审阅目录中的 WAIT_PREFIX 等待标记，不读取仓库说明文档。"
+    },
+    {
+      "path": "tests/test_core.py",
+      "function": "test_wait_exits_when_binding_is_deleted_while_waiting",
+      "source_sha256": "ee5fff4a89abafc7360449b282f8490154ea1502ebe7fd592226795c5a48fb93",
+      "basis": "仅检查合成审阅目录中的 WAIT_PREFIX 等待标记，不读取仓库说明文档。"
+    },
+    {
+      "path": "tests/test_core.py",
+      "function": "test_wait_mark_stays_valid_until_the_waiter_leaves",
+      "source_sha256": "6168133369154b552a2ccbeb32009efa105bb2b0161ca4c4bf68f60d9ec70a51",
+      "basis": "仅检查合成审阅目录中的 WAIT_PREFIX 等待标记，不读取仓库说明文档。"
+    },
+    {
+      "path": "tests/test_core.py",
+      "function": "test_wait_marker_removed_after_handoff_and_stage_aware_unattended",
+      "source_sha256": "b552442593867486a0c17bdd33a1f4ee952b383626fc786ecf79de539bf24411",
+      "basis": "仅检查合成审阅目录中的 WAIT_PREFIX 等待标记，不读取仓库说明文档。"
+    },
+    {
+      "path": "tests/test_verify_doc_allowlist.py",
+      "function": "document_references",
+      "source_sha256": "1e3eafcc0efa3a0ff8e11360dfa297f7d8353c1a2126cbee0acde6b85eb9362b",
+      "basis": "只枚举已列明的程序目录并按可执行源文件后缀过滤，不把 Markdown 文档作为被测输入。"
+    },
+    {
+      "path": "tests/test_verify_efficiency.py",
+      "function": "test_persisted_reports_redact_paths_and_keep_locatable_source_aliases",
+      "source_sha256": "b853d0619b64c8198b72f83095a9d8837817cffea5e04f7f3d0a551b17a3ea28",
+      "basis": "仅检查本用例临时效率产物目录的脱敏结果。"
+    }
+  ]
 }

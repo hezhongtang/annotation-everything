@@ -3028,6 +3028,39 @@ class SelectionBuiltinMapTests(unittest.TestCase):
         self.assertTrue(current["result"]["usable_as_evidence"])
         self.assertEqual(current["context"]["selection"]["strategy_version"], 10)
 
+    def test_report_degrades_malformed_document_selection_without_a_traceback(self):
+        import copy
+        repo = self.builtin_repo("verify-doc-pr-malformed-")
+        repo.write("README.md", "# 合成文档改动\n")
+        result = repo.run_verify("run", "--group", "all", "--phase", "pr", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        original = json.loads(result.stdout)
+        path = repo.artifact_dir / "runs" / original["run_id"] / "record.json"
+        malformed = [
+            (("context", "selection"), [1]),
+            (("context", "selection", "policy_guard"), "broken"),
+            (("context", "selection", "available"), 1),
+            (("context", "selection", "changes", "renamed"), [{}]),
+            (("context", "selection", "changes", "renamed"), ["broken"]),
+            (("context", "selection", "changes", "staged"), [{}]),
+            (("context", "selection", "changes", "modified"), [None]),
+        ]
+        for keys, value in malformed:
+            with self.subTest(keys=keys, value=value):
+                record = copy.deepcopy(original)
+                target = record
+                for key in keys[:-1]:
+                    target = target[key]
+                target[keys[-1]] = value
+                path.write_text(json.dumps(record), encoding="utf-8")
+                report = repo.run_verify("report", "--latest", "--json")
+                self.assertEqual(report.returncode, 1, report.stderr)
+                self.assertNotIn("Traceback", report.stderr)
+                current = json.loads(report.stdout)
+                self.assertFalse(current["result"]["usable_as_evidence"])
+                self.assertEqual(current["evidence"]["integrity"], "degraded")
+                self.assertTrue(current["report_validation"]["problems"])
+
     def test_builtin_map_falls_back_safely_in_foreign_repo(self):
         # 不注入映射：内置映射的选择器在合成仓库不存在，必须安全回退而不是崩溃或空建议
         temp = tempfile.TemporaryDirectory(prefix="verify-selection-builtin-")
@@ -3827,11 +3860,20 @@ class ParallelUnitTests(VerifyEntryTestCase):
 
     def test_cancellation_preserves_the_actual_unittest_failure_from_a_worker(self):
         self.prepare_parallel_suite()
-        # 串行任务一直等待取消，避免工作进程结束与入口正常退出之间再次形成竞态。
+        # 正常路径只按失败证据同步；较长上限仅在夹具故障时防止遗留无限等待。
         self.repo.write("tests/test_unclassified_0.py", "import time, unittest\n"
                         "class WaitingTests(unittest.TestCase):\n"
                         "    def test_wait(self):\n"
-                        "        while True: time.sleep(.01)\n")
+                        "        deadline = time.monotonic() + 60\n"
+                        "        while time.monotonic() < deadline: time.sleep(.01)\n")
+
+        def cancel_run(process):
+            if process.poll() is None:
+                process.terminate()  # 让入口先回收自己登记的子进程。
+            try:
+                process.communicate(timeout=20)
+            except subprocess.TimeoutExpired:
+                _reap(process)
         # 注入调度延迟模拟高负载；同步条件始终是失败记录已落盘，不是等待若干秒。
         for delay in (0.0, 0.3, 1.0):
             with self.subTest(worker_delay=delay):
@@ -3851,7 +3893,7 @@ class ParallelUnitTests(VerifyEntryTestCase):
                     [sys.executable, str(self.repo.path / "verify.py"), "run", "--no-reuse"],
                     cwd=self.repo.path, env=env, stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE, text=True, start_new_session=True)
-                self.addCleanup(_reap, wrapper)
+                self.addCleanup(cancel_run, wrapper)
                 persisted_failure = False
                 deadline = time.monotonic() + 30
                 while wrapper.poll() is None and time.monotonic() < deadline:
