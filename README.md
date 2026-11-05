@@ -375,7 +375,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── notes.py                   批注命令行：wait / show / resolve / done / review 等
 │   ├── notes_store.py             批注存储：原子写入、文件锁、操作日志
 │   ├── export_format.py           批注交换格式：带标记的 Markdown 文法与 JSON 备份
-│   ├── ledger.py                  审阅台账：审阅标识、审阅目录和专属端口
+│   ├── ledger.py                  审阅台账：审阅标识、审阅目录和专属端口；服务状态文件与存活判断、复制目录判断
 │   ├── match.py                   在报告与讲稿之间查找对应句子
 │   ├── skill_sources.py           发现本机的技能目录
 │   ├── fsutil.py                  原子写入、文件锁和 CSP 脚本哈希的公共小工具
@@ -389,6 +389,7 @@ verify_report.py                  持续效率报告、同环境分组、有界�
 verify_parallel.py                验证组内的有界进程调度；保留原资源锁与失败证据
 host_isolation.py                 同机资源隔离协议：验证参与方按共享资源互斥的锁与声明
 fixtures/sample/                   合成样例（虚构数据）
+fixtures/show-baseline/            notes.py show 中英输出的逐字基线（合成数据）
 tests/                             单元测试和浏览器端到端测试
 tests/e2e_waits.py                  浏览器条件等待：有界轮询、事件等待与场景级超时诊断
 tools/
