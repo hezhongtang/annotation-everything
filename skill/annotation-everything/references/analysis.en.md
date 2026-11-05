@@ -19,6 +19,8 @@ Keep `baseRev` from the claim result. The complete context contains the focus qu
 
 When `wait --events analysis` returns a round, it has already claimed it; read its context without claiming again. If an exact claim exits 3, use `claim "$R" --events analysis` to accept the actual queue head and route by the returned `event`. Handle the target round only after a successful claim.
 
+Each round belongs to its own analysis line. Read and write back that round's `line` even when the reviewer is viewing another line; do not switch their current line yourself. `analysis --round N --json` also reads historical questions, options, answers, explanations and writebacks. `historical: true` marks a read-only record that cannot receive more answers or another writeback. New events freeze this history against later decisions or option changes on other lines.
+
 ## Write back
 
 Save question proposals as a JSON list. Each proposal needs a unique `key`, full `text`, a natural `short` name, `options` with stable `id` and `label` values, and a `recommend` that identifies one option. Use `parent: {node, option}` when attaching it to an existing question. A proposal enters the question tree only after the reviewer confirms it in a round. The system derives decisions from answers; the agent does not write decisions.
@@ -44,3 +46,5 @@ An analysis round does not run annotation `resolve` / `done`, edit the upstream 
 When a revision batch requests a full check, read all analyses' effective current-line conclusions with `python3 "$S/notes.py" analysis-check "$R" --json`. This is read-only and works without an open round. Compare the report and speaker notes, then list four categories for confirmation: changed-conclusion annotations, resolved annotations with invalid bases, report contradictions with current conclusions, and contradictions between analyses. This analysis-related check only lists items for review; do not replace annotation text or revert resolved statuses yourself.
 
 With a saved desktop binding, leave the service running and finish the current turn, awaiting the next event. With a verified host completion-notification mechanism, start another waiter with `--events analysis`. A running process or successful claim does not prove chat receipt.
+
+Each writeback records a checkpoint. The reviewer seals, forks, switches lines or closes the analysis. Forking inherits existing identities; returning to a line restores its latest state. Refutation and verified facts are shared across lines, while assumption confirmation belongs to each line. Do not write to a closed analysis; reopening queues a new request. Preserve the event log when an analysis is closed.
