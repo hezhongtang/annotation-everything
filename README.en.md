@@ -387,6 +387,8 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── protocol.md               shared safety, stop conditions, and protocol
 │   ├── workflow.zh-CN.md          Chinese workflow
 │   ├── workflow.en.md             English workflow
+│   ├── analysis.zh-CN.md          Chinese analysis-round receive, read and writeback guide
+│   ├── analysis.en.md             English analysis-round guide
 │   ├── generation.zh-CN.md        Chinese generation guide, checklists and record contract
 │   ├── generation.en.md           English generation guide, checklists and record contract
 │   ├── report-base.css            base stylesheet for page-by-page HTML reports

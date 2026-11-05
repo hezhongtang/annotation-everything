@@ -63,7 +63,7 @@ For automatic handling in Codex desktop, first follow the [persistent binding pr
 
 ```bash
 python3 "$S/serve.py" "$R" --locale en
-python3 "$S/notes.py" wait "$R" --locale en
+python3 "$S/notes.py" wait "$R" --events analysis --locale en
 ```
 
 These are long-running commands. Read [Agent mechanisms](agent-mechanisms.en.md) and select a method that the host supports: background task notifications, bounded polling, or a submission hook. A background process wakes the agent only if the host supplies that notification. `wait --timeout SECONDS` exits 3 when no submission arrives before the timeout. `notes.py claim "$R"` accepts a waiting submission, prints JSON, and exits 0; no waiting batch exits 3. One waiter handles one review. Start the selected waiting mechanism before reporting that the review is ready.
@@ -75,6 +75,8 @@ The page supports ordinary annotations, quotations, exact delete/replace edits, 
 Without a service, open `index.html` directly. Annotations persist in browser storage, and the reviewer can copy or download them. File mode does not perform a live submission; use the import path in section 7.
 
 ## 5. Read the accepted batch and edit sources
+
+For an analysis round, follow the [analysis guide](analysis.en.md) instead of the revision steps below. Analysis proposes questions and explanations; only annotations later confirmed by the reviewer enter revision.
 
 `wait` prints the batch number, original message, structured requirements, applicable skills, and annotations. It also claims the batch. A review request starts the review stage in section 6. Inspect the state at any time:
 

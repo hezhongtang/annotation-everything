@@ -387,6 +387,8 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── protocol.md               共用安全、停止条件与协议约束
 │   ├── workflow.zh-CN.md          中文操作流程
 │   ├── workflow.en.md             英文操作流程
+│   ├── analysis.zh-CN.md          分析轮次：接收、读取与写回
+│   ├── analysis.en.md             英文分析轮次指引
 │   ├── generation.zh-CN.md        中文生成范式、核验清单与记录契约
 │   ├── generation.en.md           英文生成范式、核验清单与记录契约
 │   ├── report-base.css            逐页 HTML 报告的基础样式
