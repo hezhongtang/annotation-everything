@@ -49,6 +49,14 @@
     {
       "path": "tools/walk_root.py",
       "source": "import os\nfrom pathlib import Path\nfor root, dirs, files in os.walk(Path.cwd()):\n    for name in files:\n        print((Path(root) / name).read_bytes())\n"
+    },
+    {
+      "path": "tools/imported_glob.py",
+      "source": "from glob import glob\nfor path in glob(\"**/*.md\", recursive=True):\n    with open(path) as source: print(source.read())\n"
+    },
+    {
+      "path": "tools/aliased_walk.py",
+      "source": "from os import walk as scan\nfrom pathlib import Path\nfor root, dirs, files in scan(Path.cwd()):\n    for name in files: print((Path(root) / name).read_bytes())\n"
     }
   ],
   "term_document": "GLOSSARY.md",

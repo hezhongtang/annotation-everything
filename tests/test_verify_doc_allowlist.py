@@ -57,18 +57,33 @@ def unreviewed_traversals(tree, rel: str, prefixes: list) -> bool:
     """宽范围扫描缺省需复核；已核实的受限扫描绑定到整个函数的语义摘要。"""
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
     probes = [prefix + "synthetic.md" if prefix.endswith("/") else prefix for prefix in prefixes]
+    imported = {}
+    for statement in ast.walk(tree):
+        if isinstance(statement, ast.ImportFrom) and statement.module in ("glob", "os"):
+            operations = ("glob", "iglob") if statement.module == "glob" else ("walk", "fwalk")
+            for alias in statement.names:
+                if alias.name == "*":
+                    imported.update((name, name) for name in operations)
+                elif alias.name in operations:
+                    imported[alias.asname or alias.name] = alias.name
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        if not isinstance(node, ast.Call):
             continue
-        if node.func.attr not in ("glob", "rglob", "iglob", "walk"):
+        if isinstance(node.func, ast.Name):
+            operation = imported.get(node.func.id)
+        elif isinstance(node.func, ast.Attribute):
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == "ast":
+                continue  # ast.walk 遍历语法树，不遍历文件。
+            operation = node.func.attr
+        else:
+            operation = None
+        if operation not in ("glob", "rglob", "iglob", "walk", "fwalk"):
             continue
-        if isinstance(node.func.value, ast.Name) and node.func.value.id == "ast":
-            continue  # ast.walk 遍历语法树，不遍历文件。
         try:
             pattern = ast.literal_eval(node.args[0])
         except (ValueError, IndexError):
             pattern = None
-        if (node.func.attr != "walk" and isinstance(pattern, str)
+        if (operation not in ("walk", "fwalk") and isinstance(pattern, str)
                 and not pattern.lower().endswith(".md")
                 and not any(fnmatch.fnmatchcase(probe, pattern) or fnmatch.fnmatchcase(Path(probe).name, pattern)
                             for probe in probes)):
