@@ -31,9 +31,9 @@
 <br>
 
 <p align="center">
-  <img src="docs/assets/receiver.en.png" alt="Synthetic review page with report, speaker notes and annotations; the header identifies the receiving harness, session and waiting state" width="92%">
+  <img src="docs/assets/receiver.en.png" alt="Synthetic review page: page tree, report and speaker notes, bottom annotation panel and receiver status bar" width="92%">
   <br>
-  <sub>The review page places the report, speaker notes and annotations side by side, with the receiving harness, session and waiting state in the header. Interface labels are in English; material stays in its original language. All data shown is fictional.</sub>
+  <sub>The report and speaker notes sit side by side, with annotations below and the receiving harness, session and waiting state in the status bar. Interface labels are in English; material stays in its original language. All data shown is fictional.</sub>
 </p>
 
 ## Why
@@ -48,6 +48,8 @@ annotation-everything moves this whole process into a single page that runs on y
 - **Your material never leaves your machine.** The server listens on `127.0.0.1` only, makes no network requests, and sends no usage data. Annotations are saved in a review directory you choose.
 
 ## Features
+
+The console layout puts all annotations, processing history, review overview and help in the activity bar. The sidebar groups pages by section and shows annotation counts. Toggle the sidebar, speaker notes and bottom panel with `[`, `]` and `\`; this browser remembers each review's choices. Press `F` for full-screen focus, `C` for the floating composer and `⌘ / Ctrl + ↵` to add an annotation. `P` marking, `S` styling and text-selection shortcuts work in focus mode. `Esc` closes the current overlay before leaving focus mode. Layout shortcuts do not run while typing.
 
 <table>
   <tr>
