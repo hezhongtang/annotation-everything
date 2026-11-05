@@ -43,6 +43,7 @@ import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
 import wakeup  # noqa: E402
+import analysis_store  # noqa: E402
 from build_viewer import (BuildError, FIELD_LABEL, field_name, find_pages, page_heads,  # noqa: E402
                           resolve_sources, strip_tags, write_private)
 import difflib  # noqa: E402
@@ -138,7 +139,8 @@ ACTION_KEY = {"drafted": "cli.batch.trail.action.drafted", "resolved": "cli.batc
               "reopened": "cli.batch.trail.action.reopened", "accepted": "cli.batch.trail.action.accepted"}
 STAGE_KEY = {"draft": "cli.batch.stageName.draft", "review": "cli.batch.stageName.review"}
 # 人读命令遵循同一语言优先级；claim 的原始 JSON 与技能设置另有归属。
-LOCALIZED_CMDS = ("show", "wait", "batches", "done", "review", "diff", "resolve", "reopen", "import", "export")
+LOCALIZED_CMDS = ("show", "wait", "batches", "done", "review", "diff", "resolve", "reopen", "import", "export",
+                  "analysis")
 # 常驻技能的范围：存储值 → 界面显示的消息 key（存储值本身不随语言改写）
 ALWAYS_SCOPE_KEY = {"all": "viewer.hand.scope.all", "报告": "viewer.hand.scope.report",
                     "讲稿": "viewer.hand.scope.script", "style": "viewer.hand.scope.style"}
@@ -221,6 +223,17 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
         "subagents-forbidden": "cli.hand.error.subagentsForbidden",
         "review-not-claimed": "cli.hand.error.reviewNotClaimed",
         "already-done": "cli.hand.error.alreadyDone",
+        "note-not-open": "cli.hand.error.noteNotOpen",
+        "note-in-progress": "cli.hand.error.noteInProgress",
+        "note-held": "cli.hand.error.noteHeld",
+        "round-not-answerable": "cli.hand.error.roundNotAnswerable",
+        "item-not-in-round": "cli.hand.error.itemNotInRound",
+        "round-not-claimed": "cli.hand.error.roundNotClaimed",
+        "base-rev-mismatch": "cli.hand.error.baseRevMismatch",
+        "agent-busy": "cli.hand.error.agentBusy",
+        "node-not-decided": "cli.hand.error.nodeNotDecided",
+        "draft-not-pending": "cli.hand.error.draftNotPending",
+        "source-not-held": "cli.hand.error.sourceNotHeld",
     }
     if lang != "en" or not isinstance(error, store.HandoffError) or error.code not in messages:
         return str(error)
@@ -234,6 +247,8 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
             for seq, status in params["batches"])
     if "status" in params:
         params["status"] = label(t, STATUS_KEY.get(params["status"], ""), params["status"])
+    if error.code == "note-in-progress" and not params.get("by"):
+        params["by"] = t("cli.hand.agentFallback")   # 批次还没记下是谁领的
     if error.code == "note-not-reviewing":
         params["batch"] = (t("cli.hand.error.batchState", seq=params["seq"], status=params["status"])
                            if params["seq"] is not None and params["status"] else t("cli.hand.error.noReviewBatch"))
@@ -680,6 +695,8 @@ def _main_locked(argv: list[str] | None = None) -> int:
     w.add_argument("--by", default=default_agent(), help=t("cli.notes.help.wait.by"))
     w.add_argument("--stage", choices=("any", "draft", "review"), default="any",
                    help=t("cli.notes.help.wait.stage"))
+    w.add_argument("--events", choices=("analysis",), default=None,
+                   help=t("cli.notes.help.wait.events"))
     sk = sub.add_parser("skills", help=t("cli.notes.help.command.skills"))
     sk.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     sk.add_argument("--set", nargs="*", metavar=t("cli.notes.help.skillDescription"), help=t("cli.notes.help.skills.set"))
@@ -696,6 +713,22 @@ def _main_locked(argv: list[str] | None = None) -> int:
     cl.add_argument("--by", default=default_agent())
     cl.add_argument("--stage", choices=("any", "draft", "review"), default="any")
     cl.add_argument("--seq", type=int, help=t("cli.notes.help.claim.seq"))
+    cl.add_argument("--events", choices=("analysis",), default=None,
+                    help=t("cli.notes.help.claim.events"))
+    an = sub.add_parser("analysis", help=t("cli.notes.help.command.analysis"))
+    an.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    an.add_argument("--analysis", help=t("cli.notes.help.analysis.analysis"))
+    an.add_argument("--round", type=int, help=t("cli.notes.help.analysis.round"))
+    an.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
+    aw = sub.add_parser("analysis-writeback", help=t("cli.notes.help.command.analysisWriteback"))
+    aw.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    aw.add_argument("--analysis", help=t("cli.notes.help.analysis.analysis"))
+    aw.add_argument("--round", type=int, required=True, help=t("cli.notes.help.writeback.round"))
+    aw.add_argument("--base-rev", type=int, required=True, help=t("cli.notes.help.writeback.baseRev"))
+    aw.add_argument("--proposals", required=True,
+                    help=t("cli.notes.help.writeback.proposals"))
+    aw.add_argument("--note", default="", help=t("cli.notes.help.writeback.note"))
+    aw.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
     dn = sub.add_parser("done", help=t("cli.notes.help.command.done"))
     dn.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     dn.add_argument("--summary", default="", help=t("cli.notes.help.done.summary"))
@@ -726,7 +759,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
     bt.add_argument("--last", type=int, help=t("cli.notes.help.batches.last"))
     bt.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
     for name, parser in sub.choices.items():
-        if name in ("wait", "claim", "resolve", "reopen", "review", "done"):
+        if name in ("wait", "claim", "resolve", "reopen", "review", "done", "analysis-writeback"):
             parser.add_argument("--harness", help=t("cli.notes.help.receiver.harness"))
             parser.add_argument("--session", help=t("cli.notes.help.receiver.session"))
         parser.add_argument("--locale", default=argparse.SUPPRESS, help=t("cli.notes.localeHelp"))
@@ -882,7 +915,56 @@ def _main_locked(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "wait":
         return wait(d, a.timeout, a.interval, claim=not a.no_claim, by=a.by, stage=a.stage, lang=lang,
-                    harness=a.harness, session=a.session, manifest=manifest)
+                    harness=a.harness, session=a.session, manifest=manifest, events=a.events)
+    if a.cmd == "analysis":
+        try:
+            ctx = analysis_context_of(d, analysis=a.analysis, round_no=a.round)
+        except store.NotFound as e:
+            print(t("cli.analysis.noRound", reason=str(e).strip("'") if str(e).strip("'") else "—"),
+                  file=sys.stderr)
+            return 1
+        if a.json:
+            print(json.dumps(ctx, ensure_ascii=False, indent=2))
+        else:
+            print(analysis_context_text(ctx, lang=lang), end="")
+        return 0
+    if a.cmd == "analysis-writeback":
+        try:
+            authorize()
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
+        raw = sys.stdin.read() if a.proposals == "-" else Path(a.proposals).read_text(encoding="utf-8")
+        try:
+            proposals = json.loads(raw or "[]")
+        except ValueError as e:
+            print(t("cli.analysis.badProposals", reason=e), file=sys.stderr)
+            return 2
+        aid = a.analysis
+        if aid is None:
+            try:
+                aid, _state = analysis_store.find_by_round(d, a.round)
+            except store.NotFound:
+                print(t("cli.analysis.noRound", reason=f"round#{a.round}"), file=sys.stderr)
+                return 1
+        try:
+            result = analysis_store.writeback(d, aid, a.round, a.base_rev, proposals,
+                                              note=a.note, by=a.by)
+        except store.NotFound:
+            print(t("cli.analysis.noRound", reason=f"round#{a.round}"), file=sys.stderr)
+            return 1
+        except store.NoteError as e:
+            print(handoff_error_text(e, lang), file=sys.stderr)
+            return 1
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
+        nxt = result.get("nextRound")
+        print(json.dumps({"ok": True, "round": a.round, "nextRound": nxt,
+                          "analysis": aid}, ensure_ascii=False))
+        print(t("cli.analysis.writebackNoNext" if nxt is None else "cli.analysis.writebackDone",
+                round=nxt), file=sys.stderr)
+        return 0
     if a.cmd == "skills":
         def parse(items: list[str] | None) -> list[dict[str, str]]:
             out = []
@@ -970,8 +1052,29 @@ def _main_locked(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "claim":
         try:
+            if a.events == "analysis":
+                event, item = claim_next(d, by=a.by, stage=a.stage, seq=a.seq,
+                                         include_analysis=True, authorize=authorize)
+                if item is None:
+                    print(json.dumps({"claimed": False}, ensure_ascii=False))
+                    return 3
+                if event == "analysis":
+                    ctx = analysis_store.round_context(d, item["analysis"], item["seq"])
+                    print(json.dumps({"claimed": True, "event": "analysis", "focus": ctx["focus"],
+                                      "round": item["seq"],
+                                      **{k: v for k, v in item.items() if k != "proposals"},
+                                      "items": ctx["items"], "answers": ctx["answers"]}, ensure_ascii=False))
+                    return 0
+                if item["stage"] == "draft":
+                    snapshot(d, item, "base")
+                print(json.dumps({"claimed": True, "event": "handoff",
+                                  **{k: v for k, v in item.items() if k != "openIds"}}, ensure_ascii=False))
+                return 0
             item = store.handoff_claim(d, by=a.by, stage=a.stage, seq=a.seq,
                                        authorize=authorize)
+        except store.HandoffError as error:
+            print(t("cli.hand.doneRefused", why=handoff_error_text(error, lang)), file=sys.stderr)
+            return 2
         except (OSError, ValueError, KeyError) as error:
             print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
             return 2
@@ -1179,6 +1282,115 @@ def _drop_wait_mark(mark: Path | None) -> None:
             mark.unlink()
 
 
+# ---------- 分析轮次：跨队列领取、读上下文、写回 ----------
+def _submitted_before(batch: dict[str, Any], round_: dict[str, Any]) -> bool:
+    """批次是否比轮次交得早：先比审阅内共享的提交序号（同秒也能分出先后）；
+    旧数据没有序号时退回秒级时间戳。"""
+    b, r = batch.get("order"), round_.get("order")
+    if isinstance(b, int) and isinstance(r, int):
+        return b <= r
+    return store._ts(batch.get("at")) <= store._ts(round_.get("at"))
+
+
+def claim_next(d: Path, *, by: str, stage: str = "any", seq: int | None = None,
+               include_analysis: bool = False, authorize: Callable[[], None] | None = None,
+               expected_binding: dict[str, Any] | None = None) -> tuple[str, dict[str, Any] | None]:
+    """领取最早交出的一项：改稿批次（按 --stage）或分析轮次，按交出先后挑。
+
+    Agent 一次只处理一项（两边各自的 claim 都会查「处理中」）；比较在锁外做选路，
+    真正的领取各自原子，被抢或领不到时回退另一边。返回 (事件类型, 领到的项)。"""
+    want = store.CLAIM_STATUSES[stage]
+    if include_analysis and analysis_store.has_claimed_round(d):
+        # 手上已有分析轮次：不许再领批次（轮次侧的检查在 analysis_store.claim 里）
+        raise store.HandoffError("Agent 手上已有分析轮次在处理，一次只处理一项", code="agent-busy")
+    items = store.handoff_load(d)["items"]
+    batch = next((i for i in items if i.get("status") in want
+                  and (seq is None or int(i.get("seq", 0)) == seq)), None)
+    rounds = [r for r in (analysis_store.queue(d) if include_analysis else [])
+              if seq is None or r["seq"] == seq]
+
+    def take_batch():
+        return store.handoff_claim(d, by=by, stage=stage, seq=seq, authorize=authorize)
+
+    def take_round():
+        try:
+            return analysis_store.claim(d, by=by, seq=seq)
+        except store.NotFound:
+            return None
+
+    batch_first = batch is not None and (not rounds or _submitted_before(batch, rounds[0]))
+    if batch_first:
+        item = take_batch()
+        if item is not None:
+            return "handoff", item
+        item = take_round()
+        if item is not None:
+            return "analysis", item
+        return "", None
+    if rounds:
+        try:
+            item = take_round()
+        except store.HandoffError:
+            raise
+        if item is not None:
+            return "analysis", item
+        item = take_batch()
+        if item is not None:
+            return "handoff", item
+        return "", None
+    item = take_batch()
+    return ("handoff", item) if item is not None else ("", None)
+
+
+def analysis_context_of(d: Path, *, analysis: str | None, round_no: int | None) -> dict[str, Any]:
+    """定位要读的那一轮：轮次号在整份审阅内唯一；不给就取该分析当前可作答的一轮。"""
+    rows = analysis_store.list_analyses(d)
+    if not rows:
+        raise store.NotFound("no-analysis")
+    if round_no is not None:
+        aid, _state = analysis_store.find_by_round(d, round_no)
+        if analysis is not None and analysis != aid:
+            raise store.NotFound(f"round#{round_no}")
+        return analysis_store.round_context(d, aid, round_no)
+    target = next((r for r in rows if analysis is None or r["id"] == analysis), None)
+    if target is None:
+        raise store.NotFound(f"analysis#{analysis}")
+    state = analysis_store.load(d, target["id"])
+    round_ = next((r for r in reversed(state["rounds"]) if r["status"] in ("open", "submitted")), None)
+    if round_ is None:
+        raise store.NotFound("no-open-round")
+    return analysis_store.round_context(d, target["id"], round_["seq"])
+
+
+def analysis_context_text(ctx: dict[str, Any], lang: str | None = None) -> str:
+    """一轮上下文的人读输出：焦点问题、当前路径上的决策、本轮条目、审阅人原话回答。"""
+    t = cli_text(lang)
+    out = [t("cli.analysis.heading", focus=ctx["focus"]),
+           t("cli.analysis.meta", round=ctx["round"], status=ctx["status"],
+             kind=t("cli.analysis.kind." + ("opening" if ctx["kind"] == "opening" else "next")),
+             rev=ctx["baseRev"] if ctx["baseRev"] is not None else "—")]
+    if ctx["decisions"]:
+        out.append(t("cli.analysis.decisions"))
+        for dec in ctx["decisions"]:
+            out.append(t("cli.analysis.decisionItem", short=dec["nodeShort"], label=dec["label"],
+                         round=dec["round"]))
+    out.append(t("cli.analysis.items"))
+    for item in ctx["items"]:
+        options = " / ".join(f'{o["id"]}：{o["label"]}' for o in item["options"])
+        if item["type"] == "structure":
+            out.append(t("cli.analysis.structureItem", key=item["key"], text=item["text"],
+                         short=item["short"], options=options, recommend=item["recommend"]))
+        else:
+            out.append(t("cli.analysis.questionItem", key=item["key"], short=item["short"],
+                         text=item["text"], options=options, recommend=item["recommend"]))
+    if ctx["answers"]:
+        out.append(t("cli.analysis.answers"))
+        for key, value in ctx["answers"].items():
+            out.append(t("cli.analysis.answerItem", key=key, value=json.dumps(value, ensure_ascii=False)))
+    out.append(t("cli.analysis.writebackHint", round=ctx["round"]))
+    return "\n".join(out) + "\n"
+
+
 # 等待轮询的强制完整重读周期：文件签名没变就跳过解析，但 inode 号可能被复用、粗粒度 mtime 的
 # 文件系统上四元组可能碰巧相同，所以每这么久仍完整重读一次，最坏只晚一个周期发现变化。
 WAIT_FORCE_READ_SECONDS = 30.0
@@ -1198,12 +1410,15 @@ def _poll_signature(path: Path) -> tuple[int, int, int, int] | None:
 
 def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stage: str = "any",
          lang: str | None = None, harness: str | None = None, session: str | None = None,
-         manifest: dict[str, Any] | None = None) -> int:
+         manifest: dict[str, Any] | None = None, events: str | None = None) -> int:
     """阻塞等待「交给 Agent」提交。已经在等待中的提交（之前没人接收）会立即返回。
 
-    manifest：调用方已读好的 review.json（接收方绑定的校验用它，不重复打开同一份文件）。"""
+    manifest：调用方已读好的 review.json（接收方绑定的校验用它，不重复打开同一份文件）。
+    events="analysis"：同时接收分析轮次（显式声明；默认只等批次，旧进程领不到轮次），
+    改稿批次与分析轮次合在一起按交出先后领取，一次只处理一项。"""
     t = cli_text(lang)
     sep = t("cli.hand.itemSep")
+    include_analysis = events == "analysis"
     binding = None
     if claim:
         try:
@@ -1246,7 +1461,8 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     next_force = time.monotonic() + force_read
     try:
         while True:
-            sig = tuple(_poll_signature(p) for p in poll_paths)
+            watch = poll_paths + (sorted((d / "analysis").glob("*/events.jsonl")) if include_analysis else [])
+            sig = tuple(_poll_signature(p) for p in watch)
             now = time.monotonic()
             if sig != last_sig or now >= next_force:   # 变了、或到了强制重读周期：完整读一次
                 last_sig, next_force = sig, now + force_read
@@ -1269,18 +1485,31 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
                 except (OSError, ValueError, KeyError) as error:
                     print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
                     return 2
-            if any(i.get("status") in want for i in doc["items"]):
+            rounds = analysis_store.queue(d) if include_analysis else []
+            if any(i.get("status") in want for i in doc["items"]) or rounds:
                 if claim:
                     try:
-                        item = store.handoff_claim(d, by=by, stage=stage,
+                        event, item = claim_next(d, by=by, stage=stage,
+                                                  include_analysis=include_analysis,
                             authorize=lambda: wakeup.assert_claim_owner(d, harness, session,
                                 expected_binding=(binding or {}).get("bindingId")))
+                    except store.HandoffError:
+                        event, item = "", None   # 刚被别的 Agent 抢走：继续等，不打断等待
                     except (OSError, ValueError, KeyError) as error:
                         print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
                         return 2
+                    if event == "analysis":
+                        ctx = analysis_store.round_context(d, item["analysis"], item["seq"])
+                        print(analysis_context_text(ctx, lang=lang), end="")
+                        return 0
                 else:
-                    item = next(i for i in doc["items"] if i.get("status") in want)
-                    item = {**item, "stage": "review" if item.get("status") == "review" else "draft"}
+                    if any(i.get("status") in want for i in doc["items"]):
+                        item = next(i for i in doc["items"] if i.get("status") in want)
+                        item = {**item, "stage": "review" if item.get("status") == "review" else "draft"}
+                    else:
+                        ctx = analysis_store.round_context(d, rounds[0]["analysis"], rounds[0]["seq"])
+                        print(analysis_context_text(ctx, lang=lang), end="")
+                        return 0
                 if item is not None:
                     break
             if deadline is not None and time.monotonic() >= deadline:
