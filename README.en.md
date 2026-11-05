@@ -110,7 +110,7 @@ The review page can use Simplified Chinese or English. Pass `--locale auto`, `zh
 
 Choose "Review overview" on any running review page, or open `/#overview` at its address. The default scope is "This workspace"; switch to "All on this machine" to see other registered reviews. The workspace is the review's git repository root, or its parent directory when it is outside a git repository. Paths are relative; other workspace paths start with `~` or show only the review name. If no review is running, start one with `serve.py <review-id>` first.
 
-The list groups Running, Stopped, Archived and Invalid reviews, with the latest activity first within each group. Select a review to see its summary, purpose, audience, core questions and pending receipt/review counts. Choose "Open" for a running review or "Start and open" for a stopped one to open its page in a new tab. Starting uses its owned port; follow the error guidance before retrying a failed start. Invalid entries provide a `serve.py forget <short-id>` cleanup command. "Back to current review" returns to the page hosting the overview.
+The list groups Running, Stopped, Archived and Invalid reviews, with the latest activity first within each group. Select a review to see its summary, purpose, audience, core questions and pending receipt/review counts. Choose "Open" for a running review or "Start and open" for a stopped one to open its page in a new tab. Starting uses its owned port; free an occupied port or refresh the overview when the ledger entry or directory is invalid, then follow the guidance to retry. Invalid entries provide a `serve.py forget <short-id>` cleanup command. "Back to current review" returns to the page hosting the overview.
 
 Archiving hides reviews that are no longer being advanced from the default list. Annotations, submissions and the owned port remain, and the service keeps running. Choose "Expand" or "Show archived" to reveal them, then select a review and choose "Unarchive". An archived current review displays a banner in both views and still accepts annotations and submissions; archiving does not cancel submitted processing requirements. `serve.py list` still includes every review and marks archived entries.
 
@@ -390,12 +390,12 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── content_manifest.py        fingerprints the skill copy's files, directories and links
 │   ├── viewer_template.html       review page and overview template (server mode and local file mode)
 │   ├── serve.py                   local server: serve / status / list / forget / check
-│   ├── review_overview.py         overview scope, report metadata, archiving and starting reviews
+│   ├── review_overview.py         overview scope, report metadata and archive markers
 │   ├── wakeup.py                  Receiving session binding; Codex events, receipts and deduplication
 │   ├── notes.py                   annotation command line: wait / show / resolve / done / review and more
 │   ├── notes_store.py             annotation storage: atomic writes, file locks, change log
 │   ├── export_format.py           annotation exchange format: the marked Markdown grammar and the JSON backup
-│   ├── ledger.py                  review ledger: review IDs, review directories and dedicated ports
+│   ├── ledger.py                  review ledger: review IDs, review directories and dedicated ports; service status file and liveness check, copied-directory check
 │   ├── match.py                   finds matching sentences between the report and the speaker notes
 │   ├── skill_sources.py           discovers skill directories on this machine
 │   ├── fsutil.py                  shared helper for atomic writes, file locks and CSP script hashes
@@ -409,6 +409,7 @@ verify_report.py                  continuous efficiency reports, comparable grou
 verify_parallel.py                bounded process scheduling inside a verification group; existing locks and failures are preserved
 host_isolation.py                 host isolation protocol: locks and declarations for mutual exclusion by shared resource
 fixtures/sample/                   synthetic sample (fictional data)
+fixtures/show-baseline/            verbatim baselines of notes.py show output in Chinese and English (synthetic data)
 tests/                             unit tests and end-to-end browser tests
 tests/e2e_waits.py                  browser condition waits: bounded polling, events and scenario timeout diagnostics
 tools/

@@ -1903,7 +1903,12 @@ async function startOverview(row){
     await loadOverview();
   }catch(error){
     if(!opened.closed)opened.close();
-    overviewStartFailures.set(rid,"viewer.overview.startError");
+    const key={"bad-overview-start":"serve.err.overviewStartBody",
+      "overview-review-unknown":"serve.err.overviewStartUnknown",
+      "overview-review-invalid":"serve.err.overviewStartInvalid",
+      "overview-port-busy":"serve.err.overviewStartBusy",
+      "overview-start-failed":"serve.err.overviewStartFailed"}[error.code];
+    overviewStartFailures.set(rid,key||"viewer.overview.startError");
   }finally{overviewStarting.delete(rid);renderOverview()}
 }
 async function archiveReview(reviewId,archived){

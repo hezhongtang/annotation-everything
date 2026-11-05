@@ -1893,6 +1893,24 @@ class OverviewTests(unittest.TestCase):
         self.assertNotEqual(health["pid"], os.getpid())
         self.assertEqual(ledger.get(rid)["port"], port)
 
+    def test_start_with_relative_ledger_home_uses_same_owned_port(self):
+        directory = self.workspace / "relative-ledger"
+        rid = self.build(directory, "Relative ledger review")["reviewId"]
+        port = free_port()
+        ledger.claim_port(rid, directory, port)
+        self.addCleanup(self.stop_started_review, directory, rid)
+        relative_home = os.path.relpath(ledger.home(), Path.cwd())
+
+        with patch.dict(os.environ, {"AE_HOME": relative_home}):
+            status, result = self.start_request({"reviewId": rid})
+
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["url"], f"http://127.0.0.1:{port}/")
+        health = serve.probe(port)
+        self.assertEqual((health["reviewId"], health["dir"], health["port"]),
+                         (rid, str(directory.resolve()), port))
+        self.assertEqual(ledger.get(rid)["port"], port)
+
     def test_simultaneous_starts_share_one_background_process(self):
         directory = self.workspace / "double-start"
         rid = self.build(directory, "Double start review")["reviewId"]

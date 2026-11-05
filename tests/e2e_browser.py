@@ -290,6 +290,33 @@ def review_overview_checks(browser, tmp: Path):
             ok(wait_until(empty.is_closed, page, 5), "启动失败关闭预留的空白标签页")
             ok(page.locator("#overviewStart").is_enabled()
                and "重试" in page.inner_text("#overviewStartError"), "启动失败提供可重试提示并恢复操作")
+            for status, code, zh, en in (
+                (409, "overview-port-busy", "请释放端口后重试", "Free the port and retry"),
+                (404, "overview-review-unknown", "不在本机台账里", "not in the local ledger"),
+                (409, "overview-review-invalid", "目录或标识已失效", "directory or identity is invalid"),
+            ):
+                with page.expect_popup() as failed_popup:
+                    page.click("#overviewStart")
+                failed = failed_popup.value
+                if not wait_until(lambda: bool(pending), page, 5):
+                    ok(False, "启动请求到达：" + code)
+                    failed.close()
+                    continue
+                pending.pop(0).fulfill(status=status, content_type="application/json",
+                                       body=json.dumps({"app": "annotation-everything", "code": code,
+                                                        "error": "Synthetic recovery guidance"}))
+                ok(wait_until(failed.is_closed, page, 5), "失败关闭空白标签页：" + code)
+                ok(page.locator("#overviewStart").is_enabled()
+                   and zh in page.inner_text("#overviewStartError"), "保留具体启动恢复提示：" + code)
+                page.click("#overviewBack")
+                page.select_option("#localePick", "en")
+                page.click("#overviewBtn")
+                ok(wait_dom(page, "text => document.getElementById('overviewStartError')?.textContent.includes(text)",
+                            5, arg=en, condition="启动错误的英文恢复提示"),
+                   "启动恢复提示随界面切换英文：" + code)
+                page.click("#overviewBack")
+                page.select_option("#localePick", "zh-CN")
+                page.click("#overviewBtn")
             with page.expect_popup() as second_popup:
                 page.click("#overviewStart")
             opened = second_popup.value

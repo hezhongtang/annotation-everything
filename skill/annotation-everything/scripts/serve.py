@@ -779,6 +779,7 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float) -> 
         child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), str(directory),
                                   "--no-open", "--overview-start", rid],
                                  cwd=str(directory), stdin=subprocess.DEVNULL,
+                                 env={**os.environ, "AE_HOME": str(ledger.home())},
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  start_new_session=True)
         while time.monotonic() < deadline:
