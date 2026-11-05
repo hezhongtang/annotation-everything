@@ -3104,6 +3104,26 @@ class SelectionBuiltinMapTests(unittest.TestCase):
                       "对照页规则的场景计划展开为全部注册场景")
 
 
+    def test_analysis_boundaries_select_the_complete_analysis_contracts(self):
+        """#109：分析存储与投递边界必须选到全部分析契约及两个场景。"""
+        expected = {path.relative_to(ROOT).as_posix()
+                    for path in (ROOT / "tests").glob("test_analysis*.py")}
+        for name in ("analysis_store.py", "wakeup.py"):
+            with self.subTest(source=name):
+                repo = self.builtin_repo("verify-selection-analysis-")
+                repo.write("skill/annotation-everything/scripts/" + name, "# 合成分析边界\n")
+                p = repo.run_verify("plan", "--phase", "development", "--json")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                selection = json.loads(p.stdout)["selection"]
+                self.assertIsNone(selection["fallback"])
+                self.assertEqual(selection["unknown_paths"], [])
+                suggested = selection["suggested"]
+                self.assertTrue(expected.issubset(suggested["selectors_effective"]))
+                self.assertIn("tests/test_i18n_catalog_contract.py", suggested["selectors_effective"])
+                self.assertTrue(suggested["serve_check"])
+                self.assertTrue({"analysis-smoke", "analysis-ui"}.issubset(suggested["scenarios"]))
+
+
 # ── 证据复用与流程接入（issue #56） ─────────────────────────────────────────
 
 # 带执行痕迹的合成单元测试：每次真实执行都在 SYNTH_TOUCH 指向的文件（仓库外）追加一行。
