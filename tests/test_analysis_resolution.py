@@ -239,18 +239,38 @@ class AnalysisResolutionTests(unittest.TestCase):
         self.assertEqual(allowed["decisions"][allowed["nodes"]["n3"]["decision"]]["option"], "year")
 
     def test_a_claim_on_any_line_blocks_refutation(self):
-        _number, _first, _second, _linked = self.reasoning()
+        number, _first, _second, linked = self.reasoning()
+        number = self.write(number, [question("open")])["nextRound"]
+        analysis.answer(self.review, self.aid, number, "S:open", {"kind": "accept"})
+        analysis.redecide(self.review, self.aid, "n1", "quarter")
         checkpoint = analysis.seal_checkpoint(self.review, self.aid)["checkpoints"][-1]
         forked = analysis.fork_line(self.review, self.aid, checkpoint["id"])
         number = analysis.queue(self.review)[0]["seq"]
         analysis.switch_line(self.review, self.aid, "main")
         claimed = analysis.claim(self.review, seq=number)
         before = analysis.load(self.review, self.aid)
-        with self.assertRaises(notes.HandoffError) as blocked:
-            analysis.refute_assumption(self.review, self.aid, "a1")
-        self.assertEqual(blocked.exception.code, "analysis-locked")
-        self.assertEqual(analysis.load(self.review, self.aid), before)
+        for action in (
+            lambda: analysis.refute_assumption(self.review, self.aid, "a1"),
+            lambda: analysis.redecide(self.review, self.aid, "n1", "year"),
+            lambda: analysis.seal_checkpoint(self.review, self.aid),
+            lambda: analysis.fork_line(self.review, self.aid, checkpoint["id"]),
+            lambda: analysis.switch_line(self.review, self.aid, forked["line"]),
+            lambda: analysis.request_update(self.review, self.aid, linked[0]["id"]),
+            lambda: analysis.close_analysis(self.review, self.aid),
+        ):
+            with self.assertRaises(notes.HandoffError) as blocked:
+                action()
+            self.assertEqual(blocked.exception.code, "analysis-locked")
+            self.assertEqual(analysis.load(self.review, self.aid), before)
+        answer = {"kind": "text", "text": "合成处理期间原话"}
+        answered = analysis.answer(self.review, self.aid, number, "Q:n3", answer)
+        self.assertEqual(answered["rev"], claimed["baseRev"])
+        self.assertIsNone(answered["nodes"]["n3"]["decision"])
+        self.assertIsNotNone(answered["lines"][forked["line"]]["nodes"]["n3"]["decision"])
         analysis.writeback(self.review, self.aid, number, claimed["baseRev"], [])
+        with self.assertRaises(notes.HandoffError) as old_page:
+            analysis.answer(self.review, self.aid, number, "Q:n3", {"kind": "accept"})
+        self.assertEqual(old_page.exception.code, "round-not-answerable")
         changed = analysis.refute_assumption(self.review, self.aid, "a1")
         self.assertTrue(changed["assumptions"]["a1"]["refuted"])
 
