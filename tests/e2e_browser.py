@@ -1967,8 +1967,8 @@ def handoff_i18n_checks(browser, tmp: Path):
            f"英文服务态徽标（实际 {page.inner_text('#mode')!r}）")
         ok(page.locator("#handBtn span").first.inner_text() == "Hand to the agent for revision", "英文改稿提交按钮")
         page.click("#handBtn")
-        ok(page.inner_text("#handTitle") == "Hand to the agent", "英文提交弹窗标题")
-        ok(page.inner_text("#doHand").split("⌘")[0] == "Hand to the agent", "英文提交按钮（弹窗内）")
+        ok(page.inner_text("#handTitle") == "Hand to the agent for revision", "英文提交弹窗标题")
+        ok(page.inner_text("#doHandLabel") == "Hand to the agent for revision", "英文提交按钮（弹窗内）")
         labels = [page.locator("#hTargetRow label").nth(k).inner_text() for k in range(2)]
         ok(labels == ["be finalized", "stop at drafted, waiting for review"],
            f"英文「这批做到」两个选项（实际 {labels}）")
@@ -2056,7 +2056,7 @@ def handoff_i18n_checks(browser, tmp: Path):
            "切换语言没有新的写请求")
         ok(page.is_checked("#hFullCheck") and page.is_checked("#hSub")
            and page.is_checked('input[name="htarget"][value="review"]'), "切换语言不改变已选选项")
-        ok(page.inner_text("#handTitle") == "交给 Agent", "切换后弹窗标题回到中文")
+        ok(page.inner_text("#handTitle") == "交给 Agent 改稿", "切换后弹窗标题回到中文")
         ok(page.inner_text("#hFullRow") == "全量勾稽（检查全文前后一致性）", "切换后全量勾稽选项回到中文")
         ok(page.inner_text("#mode") == "● 已连接本地服务", "切换后服务态徽标回到中文")
         ok("第 1 批" in page.inner_text("#handState"), "切换后提交状态徽标回到中文")
