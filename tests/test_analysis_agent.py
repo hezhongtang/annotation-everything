@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
@@ -164,6 +165,19 @@ class AnalysisAgentTests(unittest.TestCase):
         result = wakeup.status(self.review)
         self.assertEqual(result["events"]["analysis"]["state"], "received")
 
+    def test_analysis_claim_requires_the_bound_session(self):
+        """分析领取与批次领取共用接收方身份约束。"""
+        wakeup.bind_wait(self.review, "Claude Code", "session-a")
+        note = self.add_note()
+        state, round_no = analysis_store.start(self.review, note["id"])
+        command = ["claim", str(self.review), "--events", "analysis",
+                   "--harness", "Claude Code", "--session", "session-b"]
+        self.assertEqual(notes_cli.main(command), 2)
+        self.assertEqual(analysis_store.load(self.review, state["id"])["rounds"][0]["status"], "submitted")
+        command[-1] = "session-a"
+        claimed = json.loads(_cli_out(*command))
+        self.assertEqual((claimed["event"], claimed["round"]), ("analysis", round_no))
+
     def test_claim_prefers_earlier_batch_across_queues(self):
         """批次交出在先、轮次在后：合在一起领取时先领批次。"""
         first = self.add_note()
@@ -187,6 +201,85 @@ class AnalysisAgentTests(unittest.TestCase):
         self.assertEqual(got["round"], 1)
         # 轮次还在手上：同入口再领取（哪怕批次在等）被拒
         self.assertEqual(notes_cli.main(["claim", str(self.review), "--events", "analysis"]), 2)
+
+    def test_exact_round_claim_does_not_claim_a_same_numbered_batch_or_jump_the_queue(self):
+        """轮次与批次撞号时仍指向指定轮次；更早交出的批次必须先处理。"""
+        first = self.add_note()
+        self.add_note(text="另一条改稿意见")
+        store.handoff_submit(self.review, "先交改稿")
+        state, round_no = analysis_store.start(self.review, first["id"])
+        command = ["claim", str(self.review), "--events", "analysis", "--round", str(round_no)]
+        with redirect_stdout(io.StringIO()) as output:
+            code = notes_cli.main(command)
+        self.assertEqual(code, 3, output.getvalue())
+        self.assertFalse(json.loads(output.getvalue())["claimed"])
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "pending")
+        self.assertEqual(analysis_store.load(self.review, state["id"])["rounds"][0]["status"], "submitted")
+        first_item = json.loads(_cli_out("claim", str(self.review), "--events", "analysis"))
+        self.assertEqual(first_item["event"], "handoff")
+        store.handoff_done(self.review, seq=first_item["seq"], accept_rest=True)
+        result = json.loads(_cli_out(*command))
+        self.assertEqual((result["event"], result["round"]), ("analysis", round_no))
+
+    def test_review_request_queues_after_an_earlier_analysis_round(self):
+        """复核按请求复核的时间排队，不能沿用最初改稿的顺序挤到分析前面。"""
+        self.add_note()
+        store.handoff_submit(self.review, target="review")
+        store.handoff_claim(self.review)
+        store.handoff_done(self.review, seq=1, mode="draft", accept_rest=True)
+        _state, round_no = analysis_store.start(self.review, self.add_note(text="新的分析问题")["id"])
+        store.handoff_request_review(self.review, 1)
+        received = json.loads(_cli_out("claim", str(self.review), "--events", "analysis"))
+        self.assertEqual((received["event"], received["round"]), ("analysis", round_no))
+
+    def test_exact_batch_claim_does_not_skip_an_earlier_round(self):
+        """--seq 只指批次；即便同号分析先交出，也不能误领分析或越序。"""
+        state, round_no = analysis_store.start(self.review, self.add_note()["id"])
+        self.add_note(text="后交改稿")
+        store.handoff_submit(self.review)
+        with redirect_stdout(io.StringIO()) as output:
+            result = notes_cli.main(["claim", str(self.review), "--events", "analysis", "--seq", "1"])
+        self.assertEqual(result, 3)
+        self.assertEqual(json.loads(output.getvalue()), {"claimed": False, "reason": "earlier-item"})
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "pending")
+        self.assertEqual(analysis_store.load(self.review, state["id"])["rounds"][0]["status"], "submitted")
+        received = json.loads(_cli_out("claim", str(self.review), "--events", "analysis"))
+        self.assertEqual((received["event"], received["round"]), ("analysis", round_no))
+
+    def test_concurrent_claims_leave_only_one_item_in_progress(self):
+        """两个并发领取者不能分别接下改稿和分析。"""
+        note = self.add_note()
+        self.add_note(text="同批改稿意见")
+        store.handoff_submit(self.review)
+        analysis_store.start(self.review, note["id"])
+        barrier = threading.Barrier(2)
+
+        def take():
+            barrier.wait(timeout=2)
+            try:
+                event, _item = notes_cli.claim_next(self.review, by="Synthetic", include_analysis=True)
+                return event
+            except store.HandoffError as error:
+                return error.code
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(take) for _ in range(2)]
+            results = [future.result(timeout=5) for future in futures]
+        self.assertCountEqual(results, ["handoff", "agent-busy"])
+        self.assertEqual(len(analysis_store.queue(self.review)), 1)
+
+    def test_claim_refuses_a_second_item_while_a_batch_is_claimed(self):
+        """已有初改批次时，无论另一批还是分析轮次都不能再领。"""
+        self.add_note()
+        store.handoff_submit(self.review, "第一批")
+        store.handoff_claim(self.review)
+        store.handoff_submit(self.review, "第二批")
+        state, _round_no = analysis_store.start(self.review, self.add_note(text="分析问题")["id"])
+        self.assertEqual(notes_cli.main(["claim", str(self.review), "--events", "analysis"]), 2)
+        self.assertEqual(notes_cli.main(["claim", str(self.review)]), 2)
+        self.assertEqual([item["status"] for item in store.handoff_load(self.review)["items"]],
+                         ["claimed", "pending"])
+        self.assertEqual(analysis_store.load(self.review, state["id"])["rounds"][0]["status"], "submitted")
 
     def test_old_waiter_and_plain_claim_cannot_take_analysis_round(self):
         """不带显式参数的等待与领取领不到分析轮次（旧进程不受影响）。"""
@@ -294,6 +387,35 @@ class AnalysisAgentTests(unittest.TestCase):
         code, _, raw = serve._req(server.port, "POST", "/api/analysis/answer", headers,
                                   {"analysis": aid, "round": 99, "key": "S:p1", "value": {"kind": "accept"}})
         self.assertEqual(code, 404)
+
+    def test_http_analysis_submit_checks_the_receiver(self):
+        """旧页面或旧服务不能向替换后的接收方交出分析。"""
+        binding = wakeup.bind_wait(self.review, "Claude Code", "session-a")
+        state, round_no = analysis_store.start(self.review, self.add_note()["id"])
+        claimed = analysis_store.claim(self.review)
+        result = analysis_store.writeback(self.review, state["id"], round_no, claimed["baseRev"],
+                                         [{"key": "p1", "text": "采用哪个口径？", "short": "口径",
+                                           "options": [{"id": "Y", "label": "年度"}], "recommend": "Y"}])
+        server = serve.ReviewServer(self.review, 0, log_to_file=False)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+
+        def close():
+            server.shutdown()
+            server.server_close()
+            worker.join(2)
+        self.addCleanup(close)
+        headers = {"Host": f"127.0.0.1:{server.port}", "Origin": f"http://127.0.0.1:{server.port}",
+                   "Content-Type": "application/json", "X-AE-Review": "synthetic-analysis"}
+        body = {"analysis": state["id"], "round": result["nextRound"], "receiverBindingId": "stale"}
+        code, _, raw = serve._req(server.port, "POST", "/api/analysis/submit", headers, body)
+        self.assertEqual((code, json.loads(raw).get("code")), (409, "receiver-mismatch"))
+        self.assertEqual(analysis_store.queue(self.review), [])
+        body["receiverBindingId"] = binding["bindingId"]
+        wakeup.bind_wait(self.review, "Claude Code", "session-b", replace=True)
+        code, _, raw = serve._req(server.port, "POST", "/api/analysis/submit", headers, body)
+        self.assertEqual((code, json.loads(raw).get("code")), (409, "receiver-restart"))
+        self.assertEqual(analysis_store.queue(self.review), [])
 
     def test_http_analysis_writes_share_origin_and_content_type_gates(self):
         """分析写操作与既有写接口同一套门：伪 Host、跨源 Origin、缺 Origin、非 JSON 一律拒绝。"""

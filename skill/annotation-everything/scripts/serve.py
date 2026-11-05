@@ -572,7 +572,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise Reject(400, "bad-request", self._t("serve.err.noAnswer"))
                 return analysis_store.answer(d, aid, self._analysis_round(body), key, value, by="page")
             if op == "submit":
-                return analysis_store.submit_round(d, aid, self._analysis_round(body), by="page")
+                return analysis_store.submit_round(d, aid, self._analysis_round(body), by="page",
+                                                   authorize=lambda: self._check_receiver(body))
             if op == "convert":
                 node = body.get("node")
                 if not isinstance(node, str) or not node:

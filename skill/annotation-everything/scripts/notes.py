@@ -231,6 +231,7 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
         "round-not-claimed": "cli.hand.error.roundNotClaimed",
         "base-rev-mismatch": "cli.hand.error.baseRevMismatch",
         "agent-busy": "cli.hand.error.agentBusy",
+        "queue-order": "cli.hand.error.queueOrder",
         "node-not-decided": "cli.hand.error.nodeNotDecided",
         "draft-not-pending": "cli.hand.error.draftNotPending",
         "source-not-held": "cli.hand.error.sourceNotHeld",
@@ -712,7 +713,9 @@ def _main_locked(argv: list[str] | None = None) -> int:
     cl.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     cl.add_argument("--by", default=default_agent())
     cl.add_argument("--stage", choices=("any", "draft", "review"), default="any")
-    cl.add_argument("--seq", type=int, help=t("cli.notes.help.claim.seq"))
+    claim_target = cl.add_mutually_exclusive_group()
+    claim_target.add_argument("--seq", type=int, help=t("cli.notes.help.claim.seq"))
+    claim_target.add_argument("--round", type=int, help=t("cli.notes.help.claim.round"))
     cl.add_argument("--events", choices=("analysis",), default=None,
                     help=t("cli.notes.help.claim.events"))
     an = sub.add_parser("analysis", help=t("cli.notes.help.command.analysis"))
@@ -764,6 +767,8 @@ def _main_locked(argv: list[str] | None = None) -> int:
             parser.add_argument("--session", help=t("cli.notes.help.receiver.session"))
         parser.add_argument("--locale", default=argparse.SUPPRESS, help=t("cli.notes.localeHelp"))
     a = ap.parse_args(argv)
+    if a.cmd == "claim" and a.round is not None and a.events != "analysis":
+        ap.error(t("cli.notes.help.claim.roundRequiresEvents"))
     ledger.set_locale(help_lang)
     try:
         d = ledger.resolve_dir(a.dir).resolve()   # 也接受审阅标识（或至少 4 位前缀）：从台账查目录
@@ -1054,7 +1059,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
         try:
             if a.events == "analysis":
                 event, item = claim_next(d, by=a.by, stage=a.stage, seq=a.seq,
-                                         include_analysis=True, authorize=authorize)
+                                         round_no=a.round, include_analysis=True, authorize=authorize)
                 if item is None:
                     print(json.dumps({"claimed": False}, ensure_ascii=False))
                     return 3
@@ -1070,9 +1075,13 @@ def _main_locked(argv: list[str] | None = None) -> int:
                 print(json.dumps({"claimed": True, "event": "handoff",
                                   **{k: v for k, v in item.items() if k != "openIds"}}, ensure_ascii=False))
                 return 0
-            item = store.handoff_claim(d, by=a.by, stage=a.stage, seq=a.seq,
-                                       authorize=authorize)
+            _event, item = claim_next(d, by=a.by, stage=a.stage, seq=a.seq,
+                                      authorize=authorize)
         except store.HandoffError as error:
+            if error.code == "queue-order":
+                print(json.dumps({"claimed": False, "reason": "earlier-item"}, ensure_ascii=False))
+                print(t("cli.hand.error.queueOrder"), file=sys.stderr)
+                return 3
             print(t("cli.hand.doneRefused", why=handoff_error_text(error, lang)), file=sys.stderr)
             return 2
         except (OSError, ValueError, KeyError) as error:
@@ -1289,57 +1298,55 @@ def _submitted_before(batch: dict[str, Any], round_: dict[str, Any]) -> bool:
     b, r = batch.get("order"), round_.get("order")
     if isinstance(b, int) and isinstance(r, int):
         return b <= r
-    return store._ts(batch.get("at")) <= store._ts(round_.get("at"))
+    batch_at = batch.get("reviewRequestedAt") if batch.get("status") == "review" else batch.get("at")
+    round_at = round_.get("reviewRequestedAt") if round_.get("status") == "review" else round_.get("at")
+    return store._ts(batch_at) <= store._ts(round_at)
 
 
 def claim_next(d: Path, *, by: str, stage: str = "any", seq: int | None = None,
+               round_no: int | None = None,
                include_analysis: bool = False, authorize: Callable[[], None] | None = None,
                expected_binding: dict[str, Any] | None = None) -> tuple[str, dict[str, Any] | None]:
     """领取最早交出的一项：改稿批次（按 --stage）或分析轮次，按交出先后挑。
 
-    Agent 一次只处理一项（两边各自的 claim 都会查「处理中」）；比较在锁外做选路，
-    真正的领取各自原子，被抢或领不到时回退另一边。返回 (事件类型, 领到的项)。"""
+    seq 只指批次，round_no 只指分析轮次。精确领取不得跳过更早交出的项。
+    锁外选择目标；锁内重新校验身份、忙闲和队首，然后由对应存储领取。"""
     want = store.CLAIM_STATUSES[stage]
-    if include_analysis and analysis_store.has_claimed_round(d):
-        # 手上已有分析轮次：不许再领批次（轮次侧的检查在 analysis_store.claim 里）
-        raise store.HandoffError("Agent 手上已有分析轮次在处理，一次只处理一项", code="agent-busy")
-    items = store.handoff_load(d)["items"]
-    batch = next((i for i in items if i.get("status") in want
-                  and (seq is None or int(i.get("seq", 0)) == seq)), None)
-    rounds = [r for r in (analysis_store.queue(d) if include_analysis else [])
-              if seq is None or r["seq"] == seq]
 
-    def take_batch():
-        return store.handoff_claim(d, by=by, stage=stage, seq=seq, authorize=authorize)
+    def next_waiting():
+        batches = [item for item in store.handoff_load(d)["items"] if item.get("status") in want]
+        batch = None
+        for candidate in batches:
+            if batch is None or not _submitted_before(batch, candidate):
+                batch = candidate
+        rounds = analysis_store.queue(d) if include_analysis else []
+        if batch is not None and (not rounds or _submitted_before(batch, rounds[0])):
+            return "handoff", int(batch["seq"])
+        return ("analysis", rounds[0]["seq"]) if rounds else None
 
-    def take_round():
-        try:
-            return analysis_store.claim(d, by=by, seq=seq)
-        except store.NotFound:
-            return None
+    selected = next_waiting()
+    requested = ("analysis", round_no) if round_no is not None else ("handoff", seq) if seq is not None else None
 
-    batch_first = batch is not None and (not rounds or _submitted_before(batch, rounds[0]))
-    if batch_first:
-        item = take_batch()
-        if item is not None:
-            return "handoff", item
-        item = take_round()
-        if item is not None:
-            return "analysis", item
+    def check_available():
+        # 两类存储都在同一把审阅目录锁内调用；不能在选择目标后留下换绑/并发领取窗口。
+        if authorize is not None:
+            authorize()
+        if analysis_store.agent_busy(d):
+            raise store.HandoffError("Agent 手上已有一项在处理，一次只处理一项", code="agent-busy")
+        current = next_waiting()
+        if current != selected or (requested is not None and current is not None and requested != current):
+            raise store.HandoffError("有更早交出的项，请先处理后重试", code="queue-order")
+
+    if selected is None or (requested is not None and requested != selected):
+        with store.locked(d):
+            check_available()
         return "", None
-    if rounds:
-        try:
-            item = take_round()
-        except store.HandoffError:
-            raise
-        if item is not None:
-            return "analysis", item
-        item = take_batch()
-        if item is not None:
-            return "handoff", item
-        return "", None
-    item = take_batch()
-    return ("handoff", item) if item is not None else ("", None)
+    event, number = selected
+    if event == "analysis":
+        item = analysis_store.claim(d, by=by, seq=number, authorize=check_available)
+    else:
+        item = store.handoff_claim(d, by=by, stage=stage, seq=number, authorize=check_available)
+    return (event, item) if item is not None else ("", None)
 
 
 def analysis_context_of(d: Path, *, analysis: str | None, round_no: int | None) -> dict[str, Any]:

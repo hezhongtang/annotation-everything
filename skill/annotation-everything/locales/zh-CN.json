@@ -1110,7 +1110,7 @@
     "cli.notes.help.skills.always_remove": "去掉这些常驻技能（所有范围）",
     "cli.notes.help.skills.always_clear": "清空常驻技能",
     "cli.notes.help.command.claim": "不等待：接收最早一个等待中的提交（给自己轮询的代理用，别直接改 handoff.json）",
-    "cli.notes.help.claim.seq": "只接这一批",
+    "cli.notes.help.claim.seq": "只接这一改稿批次；配合 --events analysis 时不能跳过更早交出的项",
     "cli.notes.help.command.done": "收尾当前阶段：初改（按用户要求停在待复核或定稿）或复核（定稿）",
     "cli.notes.help.done.summary": "处理结果：改了几条、哪些留给用户定",
     "cli.notes.help.done.seq": "提交序号；默认最近一个处理中的提交",
@@ -1475,6 +1475,9 @@
     "serve.err.noAnswer": "作答需要题目 key 与回答 value",
     "serve.err.noNode": "缺少问题节点标识 node",
     "serve.err.noDraft": "缺少草稿标识 draft",
-    "serve.err.noRound": "缺少轮次号 round"
+    "serve.err.noRound": "缺少轮次号 round",
+    "cli.notes.help.claim.round": "只接这一分析轮次；需 --events analysis，且不能跳过更早交出的项",
+    "cli.notes.help.claim.roundRequiresEvents": "--round 需同时指定 --events analysis",
+    "cli.hand.error.queueOrder": "有更早交出的项，请先处理后重试"
   }
 }

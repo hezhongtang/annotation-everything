@@ -1227,7 +1227,7 @@
     "cli.notes.help.skills.always_remove": "Remove these standing skills in every scope",
     "cli.notes.help.skills.always_clear": "Clear standing skills",
     "cli.notes.help.command.claim": "Claim the earliest waiting batch without blocking; use this command instead of editing handoff.json",
-    "cli.notes.help.claim.seq": "Claim this batch only",
+    "cli.notes.help.claim.seq": "Claim this revision batch only; with --events analysis, cannot skip an earlier queued item",
     "cli.notes.help.command.done": "Finish the current stage; respect the requested stop after initial edits or finalize an authorized review",
     "cli.notes.help.done.summary": "Summary of changes, checked scope, and decisions left to the user",
     "cli.notes.help.done.seq": "Batch number; defaults to the active batch when unambiguous",
@@ -1593,6 +1593,9 @@
     "serve.err.noAnswer": "An answer needs the item key and the value",
     "serve.err.noNode": "Missing the question node id node",
     "serve.err.noDraft": "Missing the draft id draft",
-    "serve.err.noRound": "Missing the round number round"
+    "serve.err.noRound": "Missing the round number round",
+    "cli.notes.help.claim.round": "Claim this analysis round only; requires --events analysis and cannot skip an earlier queued item",
+    "cli.notes.help.claim.roundRequiresEvents": "--round requires --events analysis",
+    "cli.hand.error.queueOrder": "An earlier item is queued; finish it before retrying"
   }
 }

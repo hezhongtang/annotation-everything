@@ -1331,6 +1331,9 @@ def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "",
                 _finish(item, notes, items, by, summary)
             else:
                 item["status"] = to
+                if to == "review":
+                    doc["submitSeq"] = int(doc.get("submitSeq", 0)) + 1
+                    item.update(order=doc["submitSeq"], reviewRequestedAt=now_iso())
                 item["draftedCount"] = len(mine)
                 if summary:
                     item["summary"] = summary
@@ -1381,6 +1384,9 @@ def handoff_request_review(review_dir: Path, seq: int, message: str = "", *, all
         item = _find_batch(doc["items"], seq)
         if item.get("status") not in ("drafted", "review"):
             raise NoteError(f"第 {seq} 批不在「已初改·待复核」状态")
+        if item["status"] != "review":
+            doc["submitSeq"] = int(doc.get("submitSeq", 0)) + 1
+            item["order"] = doc["submitSeq"]
         item.update({"status": "review", "reviewRequestedAt": now_iso(), "reviewRequestedBy": by,
                      "reviewMessage": fix_text(message)[:MAX_MSG], "allowSubagents": bool(allow_subagents)})
         _handoff_commit(review_dir, doc, {"op": "handoff-review", "by": by, "seq": seq})
