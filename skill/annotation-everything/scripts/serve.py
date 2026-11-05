@@ -60,6 +60,7 @@ from typing import Any
 from urllib.parse import parse_qs
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import analysis_store  # noqa: E402
 import fsutil  # noqa: E402
 import i18n  # noqa: E402
 import ledger  # noqa: E402
@@ -70,7 +71,7 @@ import wakeup  # noqa: E402
 APP = "annotation-everything"
 VERSION = "0.11.0"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
-FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding", "overview"]
+FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding", "overview", "analysis"]
 
 # 界面语言只有进程级一个来源（见 i18n.set_locale）：main() 与 serve() 按共同契约解析后
 # 设置一次，服务与台账等各模块共同遵循；未设置前保持中文（旧调用行为不变）
@@ -275,13 +276,7 @@ class ReviewServer(ThreadingHTTPServer):
         """
         if not self.on_handoff or (merged and not self.agent_binding):
             return
-        try:
-            current = wakeup.load_binding(self.review_dir)
-            if (current or {}).get("bindingId") != (self.agent_binding or {}).get("bindingId"):
-                self.log("error", "code=receiver-restart")
-                return
-        except (OSError, ValueError, KeyError):
-            self.log("error", "code=receiver-invalid")
+        if not self._hook_binding_ok():
             return
         url = f"http://127.0.0.1:{self.port}/"
         user_message = store.handoff_user_message(item)
@@ -296,9 +291,40 @@ class ReviewServer(ThreadingHTTPServer):
                    "notesFile": str(self.review_dir / store.NOTES_FILE),
                    "handoffFile": str(self.review_dir / store.HANDOFF_FILE),
                    "notesCli": str(Path(__file__).resolve().with_name("notes.py"))}
+        self._enqueue_hook(payload, event, item.get("seq"))
+
+    def run_analysis_hook(self, round_no: int) -> None:
+        """分析轮次入队：与改稿批次同一个 hook 命令，事件类型为 analysis（轮次号放在 seq 位置）。
+
+        等待命令要显式声明 --events analysis 才领得到，旧版等待进程不受影响。"""
+        if not self.on_handoff or not self.agent_binding:
+            return
+        if not self._hook_binding_ok():
+            return
+        payload = {"event": "analysis", "app": APP, "reviewId": self.review_id(),
+                   "reviewDir": str(self.review_dir),
+                   "bindingId": (self.agent_binding or {}).get("bindingId"),
+                   "url": f"http://127.0.0.1:{self.port}/", "seq": round_no,
+                   "notesFile": str(self.review_dir / store.NOTES_FILE),
+                   "notesCli": str(Path(__file__).resolve().with_name("notes.py"))}
+        self._enqueue_hook(payload, "analysis", round_no)
+
+    def _hook_binding_ok(self) -> bool:
+        """钩子触发前核对接收方还是触发时那一个（中途换绑就不再投递）。"""
+        try:
+            current = wakeup.load_binding(self.review_dir)
+        except (OSError, ValueError, KeyError):
+            self.log("error", "code=receiver-invalid")
+            return False
+        if (current or {}).get("bindingId") != (self.agent_binding or {}).get("bindingId"):
+            self.log("error", "code=receiver-restart")
+            return False
+        return True
+
+    def _enqueue_hook(self, payload: dict[str, Any], event: str, seq: int | None) -> None:
         env = {**os.environ, "AE_EVENT": event, "AE_REVIEW_DIR": str(self.review_dir),
-               "AE_HANDOFF_SEQ": str(item.get("seq")), "AE_URL": url}
-        job = {"payload": payload, "env": env, "seq": item.get("seq"), "event": event}
+               "AE_HANDOFF_SEQ": str(seq), "AE_URL": payload["url"]}
+        job = {"payload": payload, "env": env, "seq": seq, "event": event}
         with self._hook_lock:
             if self._hook_running:
                 self._hook_queue = [j for j in self._hook_queue if (j["event"], j["seq"]) != (job["event"], job["seq"])] + [job]
@@ -312,6 +338,8 @@ class ReviewServer(ThreadingHTTPServer):
             for item in store.handoff_load(self.review_dir)["items"]:
                 if item.get("status") in ("pending", "review"):
                     self.run_hook(item, False, "review" if item["status"] == "review" else "handoff")
+            for round_ in analysis_store.queue(self.review_dir):
+                self.run_analysis_hook(round_["seq"])
 
     def _hook_worker(self, job: dict[str, Any]) -> None:
         while job is not None:
@@ -525,6 +553,44 @@ class Handler(BaseHTTPRequestHandler):
         if body.get("receiverBindingId") != current:
             raise Reject(409, "receiver-mismatch", self._t("serve.err.receiverMismatch"))
 
+    def _analysis_round(self, body: dict[str, Any]) -> int:
+        round_no = body.get("round")
+        if not isinstance(round_no, int) or isinstance(round_no, bool):
+            raise Reject(400, "bad-request", self._t("serve.err.noRound"))
+        return round_no
+
+    def _analysis_write(self, d: Path, body: dict[str, Any], op: str) -> Any:
+        """审阅人侧的分析写操作（发起以外的五个）：校验入参，存储拒绝映射成 4xx，
+        原因代码随响应给页面（与存储层 HandoffError 的 code 一致）。"""
+        aid = body.get("analysis")
+        if not isinstance(aid, str) or not aid:
+            raise Reject(400, "bad-request", self._t("serve.err.noAnalysis"))
+        try:
+            if op == "answer":
+                key, value = body.get("key"), body.get("value")
+                if not isinstance(key, str) or not isinstance(value, dict):
+                    raise Reject(400, "bad-request", self._t("serve.err.noAnswer"))
+                return analysis_store.answer(d, aid, self._analysis_round(body), key, value, by="page")
+            if op == "submit":
+                return analysis_store.submit_round(d, aid, self._analysis_round(body), by="page")
+            if op == "convert":
+                node = body.get("node")
+                if not isinstance(node, str) or not node:
+                    raise Reject(400, "bad-request", self._t("serve.err.noNode"))
+                return analysis_store.convert(d, aid, node, text=str(body.get("text") or ""), by="page")
+            if op == "confirm":
+                draft = body.get("draft")
+                if not isinstance(draft, str) or not draft:
+                    raise Reject(400, "bad-request", self._t("serve.err.noDraft"))
+                return analysis_store.confirm_convert(d, aid, draft, by="page")
+            if op == "release":
+                return analysis_store.release_source(d, aid, by="page")
+        except store.NotFound:
+            raise Reject(404, "no-round", self._t("serve.err.noRound"))
+        except store.HandoffError as e:
+            raise Reject(400, e.code, str(e))
+        raise Reject(400, "bad-request", self._t("serve.err.noAnalysis"))   # 未覆盖的 op，不可达
+
     def _api(self, path: str) -> None:
         d, m = self.server.review_dir, NOTE_PATH.match(path)
         cmd = "GET" if self.command == "HEAD" else self.command
@@ -576,6 +642,49 @@ class Handler(BaseHTTPRequestHandler):
             self.server.run_hook(item, merged)
             self._json(200, {"doc": {**self._notes_doc(), **self._ident()}, "handoff": self._handoff_state(full=False),
                              "merged": merged, "seq": item["seq"], "acceptedFullCheck": item["fullCheck"]})
+        elif path == "/api/analysis" and cmd == "GET":
+            self._json(200, {"analyses": analysis_store.list_analyses(d), **self._ident()})
+        elif path == "/api/analysis/start" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            note_id = body.get("noteId")
+            if not isinstance(note_id, str) or not note_id:
+                raise Reject(400, "bad-request", self._t("serve.err.noNoteId"))
+            try:
+                state, round_no = analysis_store.start(d, note_id, by="page",
+                                                       authorize=lambda: self._check_receiver(body))
+            except store.NotFound:
+                raise Reject(404, "no-note", self._t("serve.err.noNote"))
+            note = next((n for n in store.load(d)["notes"] if n.get("id") == note_id), None)
+            self.server.log("info", f"analysis start note={note_id} analysis={state['id']} round={round_no}")
+            self.server.run_analysis_hook(round_no)
+            self._json(200, {"round": round_no, "analysis": state, "note": note, **self._ident()})
+        elif path == "/api/analysis/answer" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            self._analysis_write(d, body, "answer")
+            self._json(200, {"analysis": analysis_store.load(d, body["analysis"]), **self._ident()})
+        elif path == "/api/analysis/submit" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            self._analysis_write(d, body, "submit")
+            self.server.run_analysis_hook(self._analysis_round(body))
+            self._json(200, {"analysis": analysis_store.load(d, body["analysis"]), **self._ident()})
+        elif path == "/api/analysis/convert" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            draft = self._analysis_write(d, body, "convert")
+            self.server.log("info", f"analysis convert analysis={body['analysis']} draft={draft['id']}")
+            self._json(200, {"draft": draft, "analysis": analysis_store.load(d, body["analysis"]),
+                             **self._ident()})
+        elif path == "/api/analysis/confirm" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            note = self._analysis_write(d, body, "confirm")
+            self.server.log("info", f"analysis confirm analysis={body['analysis']} note={note['id']}")
+            self._json(200, {"note": note, "analysis": analysis_store.load(d, body["analysis"]),
+                             "doc": {**self._notes_doc(), **self._ident()}})
+        elif path == "/api/analysis/release" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            note = self._analysis_write(d, body, "release")
+            self.server.log("info", f"analysis release analysis={body['analysis']} note={note['id']}")
+            self._json(200, {"note": note, "analysis": analysis_store.load(d, body["analysis"]),
+                             "doc": {**self._notes_doc(), **self._ident()}})
         elif path == "/api/skills/always" and cmd == "POST":
             body = self._expect_obj(self._body())
             if "always" not in body:
@@ -1418,6 +1527,18 @@ def check(locale: str | None = None) -> int:
            T("serve.check.hookRuns"))
         s, _, b = _req(port, "POST", "/api/handoff", same, {"message": "补充"})
         ok(s == 200 and json.loads(b).get("merged") and json.loads(b).get("seq") == 1, T("serve.check.merge"))
+        s, _, b = _req(port, "POST", "/api/notes", same, {"page": 1, "text": "自检：第 1 页的口径对吗"})
+        anid = json.loads(b)["note"]["id"] if s == 201 else ""
+        analysis_guards = [({**same, "Host": f"evil.example:{port}"}, 421, "Host"),
+                           ({**same, "Origin": "http://evil.example"}, 403, "Origin"),
+                           ({k: v for k, v in same.items() if k != "Origin"}, 403, "NoOrigin"),
+                           ({**same, "Content-Type": "text/plain"}, 415, "ContentType")]
+        for headers, expected, label in analysis_guards:
+            s, _, _ = _req(port, "POST", "/api/analysis/start", headers, {"noteId": anid})
+            ok(s == expected, T("serve.check.analysisStart" + label, status=s))
+        s, _, b = _req(port, "POST", "/api/analysis/start", same, {"noteId": anid})
+        ok(s == 200 and json.loads(b).get("note", {}).get("status") == "held"
+           and json.loads(b).get("round") == 1, T("serve.check.analysisStartOk", status=s))
         s, _, _ = _req(port, "POST", "/api/server/stop", same, {})
         ok(s == 409, T("serve.check.stopNeedsReview"))
         s, _, b = _req(port, "POST", "/api/server/stop", {**same, "X-AE-Review": "checkreview"}, {})
