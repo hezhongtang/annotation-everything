@@ -1184,7 +1184,7 @@ function noteHtml(x){
     :`<button data-act="edit" data-id="${id}">${tMsg("viewer.edit")}</button>${dr?`<button data-act="resolve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${tMsg("viewer.finalize")}</button><button data-act="reopen" data-id="${id}">${tMsg("viewer.returnForRedo")}</button>`
       :held?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
   const analysisLink=x.heldBy||x.analysisId||x.fromAnalysis;
-  const analysisActs=analysisSupported&&!FILE?(analysisLink?`<button data-act="analysis-open" data-analysis="${escH(analysisLink)}">${tMsg("viewer.analysis.open")}</button>`:!done&&!held&&!dr&&!fl?`<button data-act="analysis-start" data-id="${id}">${tMsg("viewer.analysis.start")}</button>`:""):"";
+  const analysisActs=analysisSupported&&!FILE?(analysisLink?`<button data-act="analysis-open" data-analysis="${escH(analysisLink)}">${tMsg("viewer.analysis.open")}</button>`:!done&&!held&&!dr?`<button data-act="analysis-start" data-id="${id}">${tMsg("viewer.analysis.start")}</button>`:""):"";
   const sk=Array.isArray(x.skills)?x.skills:[];
   const body=ed?(qe&&qe.op==="delete"?`<div class="body"><span class="op">${tMsg("viewer.quickDelete")}</span><del>${escH(qe.from)}</del></div>`:`<textarea id="etext">${escH(editBuf[x.id]??(qe?qe.to:x.text))}</textarea>`)
       +`<input class="eskills" id="eskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" placeholder="${escH(tMsg("viewer.skill.editPlaceholder"))}" value="${escH(editBuf["sk:"+x.id]??sk.join(", "))}">`

@@ -4776,6 +4776,9 @@ def analysis_smoke_checks(browser, tmp: Path):
         wait_mode(page, "server")
         page.wait_for_function("analysisSupported")
         add_note(page, "增长主要来自新客，这个结论站得住吗？")
+        page.click("#handBtn")
+        page.click("#doHand")
+        page.wait_for_function("hand?.latest?.status==='pending'")
         page.locator('#nlist [data-act="analysis-start"]').click()
         page.wait_for_selector("#analysisMain:not([hidden])")
         ok(page.url.endswith("#analysis"), "从批注发起后切到 #analysis")
@@ -4813,7 +4816,8 @@ def analysis_smoke_checks(browser, tmp: Path):
         ok(len(notes_after) == 2 and notes_after[0]["status"] == "resolved"
            and notes_after[1]["status"] == "open", "确认草稿后新增未处理批注并处理源批注")
         handoff = json.loads((review / "handoff.json").read_text())
-        ok(handoff["items"] == [], "转出批注不自动提交改稿批次")
+        ok(len(handoff["items"]) == 1 and handoff["items"][0]["status"] == "void",
+           "源批注移出空批后批次作废，转出新批注不自动提交改稿")
         page.reload()
         page.wait_for_selector("#analysisMain:not([hidden])")
         page.wait_for_function("analysisState?.sourceState==='resolved'")
