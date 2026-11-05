@@ -140,7 +140,7 @@ ACTION_KEY = {"drafted": "cli.batch.trail.action.drafted", "resolved": "cli.batc
 STAGE_KEY = {"draft": "cli.batch.stageName.draft", "review": "cli.batch.stageName.review"}
 # 人读命令遵循同一语言优先级；claim 的原始 JSON 与技能设置另有归属。
 LOCALIZED_CMDS = ("show", "wait", "batches", "done", "review", "diff", "resolve", "reopen", "import", "export",
-                  "analysis")
+                  "analysis", "analysis-writeback", "suggest-analysis")
 # 常驻技能的范围：存储值 → 界面显示的消息 key（存储值本身不随语言改写）
 ALWAYS_SCOPE_KEY = {"all": "viewer.hand.scope.all", "报告": "viewer.hand.scope.report",
                     "讲稿": "viewer.hand.scope.script", "style": "viewer.hand.scope.style"}
@@ -235,6 +235,9 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
         "node-not-decided": "cli.hand.error.nodeNotDecided",
         "draft-not-pending": "cli.hand.error.draftNotPending",
         "source-not-held": "cli.hand.error.sourceNotHeld",
+        "analysis-invalid-input": "cli.life.invalidInput",
+        "structure-target-changed": "cli.life.structureChanged",
+        "suggest-note-not-open": "cli.life.suggestNotOpen",
     }
     if lang != "en" or not isinstance(error, store.HandoffError) or error.code not in messages:
         return str(error)
@@ -729,9 +732,14 @@ def _main_locked(argv: list[str] | None = None) -> int:
     aw.add_argument("--round", type=int, required=True, help=t("cli.notes.help.writeback.round"))
     aw.add_argument("--base-rev", type=int, required=True, help=t("cli.notes.help.writeback.baseRev"))
     aw.add_argument("--proposals", required=True,
-                    help=t("cli.notes.help.writeback.proposals"))
+                    help=t("cli.life.writebackPayload"))
     aw.add_argument("--note", default="", help=t("cli.notes.help.writeback.note"))
     aw.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
+    sg = sub.add_parser("suggest-analysis", help=t("cli.life.suggestHelp"))
+    sg.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    sg.add_argument("id", help=t("cli.life.noteId"))
+    sg.add_argument("--reason", default="", help=t("cli.life.suggestReason"))
+    sg.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
     dn = sub.add_parser("done", help=t("cli.notes.help.command.done"))
     dn.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     dn.add_argument("--summary", default="", help=t("cli.notes.help.done.summary"))
@@ -762,7 +770,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
     bt.add_argument("--last", type=int, help=t("cli.notes.help.batches.last"))
     bt.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
     for name, parser in sub.choices.items():
-        if name in ("wait", "claim", "resolve", "reopen", "review", "done", "analysis-writeback"):
+        if name in ("wait", "claim", "resolve", "reopen", "review", "done", "analysis-writeback", "suggest-analysis"):
             parser.add_argument("--harness", help=t("cli.notes.help.receiver.harness"))
             parser.add_argument("--session", help=t("cli.notes.help.receiver.session"))
         parser.add_argument("--locale", default=argparse.SUPPRESS, help=t("cli.notes.localeHelp"))
@@ -933,6 +941,20 @@ def _main_locked(argv: list[str] | None = None) -> int:
         else:
             print(analysis_context_text(ctx, lang=lang), end="")
         return 0
+    if a.cmd == "suggest-analysis":
+        try:
+            note = analysis_store.suggest(d, a.id, reason=a.reason, by=a.by, authorize=authorize)
+        except store.NotFound:
+            print(t("cli.life.noteMissing"), file=sys.stderr)
+            return 1
+        except store.NoteError as error:
+            print(handoff_error_text(error, lang), file=sys.stderr)
+            return 1
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
+        print(json.dumps({"ok": True, "note": note}, ensure_ascii=False))
+        return 0
     if a.cmd == "analysis-writeback":
         try:
             authorize()
@@ -953,8 +975,10 @@ def _main_locked(argv: list[str] | None = None) -> int:
                 print(t("cli.analysis.noRound", reason=f"round#{a.round}"), file=sys.stderr)
                 return 1
         try:
-            result = analysis_store.writeback(d, aid, a.round, a.base_rev, proposals,
-                                              note=a.note, by=a.by)
+            payload = proposals if isinstance(proposals, dict) else {"proposals": proposals}
+            result = analysis_store.writeback(d, aid, a.round, a.base_rev, payload.get("proposals", []),
+                                              note=a.note, by=a.by, assumptions=payload.get("assumptions"),
+                                              facts=payload.get("facts"))
         except store.NotFound:
             print(t("cli.analysis.noRound", reason=f"round#{a.round}"), file=sys.stderr)
             return 1
@@ -1360,7 +1384,8 @@ def analysis_context_of(d: Path, *, analysis: str | None, round_no: int | None) 
         if analysis is not None and analysis != aid:
             raise store.NotFound(f"round#{round_no}")
         return analysis_store.round_context(d, aid, round_no)
-    target = next((r for r in rows if analysis is None or r["id"] == analysis), None)
+    target = (next((r for r in rows if r["id"] == analysis), None) if analysis is not None
+              else next((r for r in rows if r["status"] == "active"), rows[0]))
     if target is None:
         raise store.NotFound(f"analysis#{analysis}")
     state = analysis_store.load(d, target["id"])
@@ -1383,18 +1408,43 @@ def analysis_context_text(ctx: dict[str, Any], lang: str | None = None) -> str:
             out.append(t("cli.analysis.decisionItem", short=dec["nodeShort"], label=dec["label"],
                          round=dec["round"]))
     out.append(t("cli.analysis.items"))
-    for item in ctx["items"]:
+    all_items = {item["key"]: item for item in ctx["items"] + ctx.get("answeredItems", [])}
+    for item in all_items.values():
+        if item["type"] == "assumption":
+            out.append(t("cli.life.assumptionItem", text=item["text"],
+                         status=t("viewer.life.status." + item.get("status", "pending"))))
+            continue
+        if item["type"] == "structure" and item.get("op", "add") != "add":
+            out.append(t("cli.life.structureChange", action=t("cli.life.structure." + item["op"]),
+                         questions=" / ".join(item.get("targetNames", []))))
+            if item.get("text"):
+                out.append(item["text"])
+            for replacement in item.get("replacements", []):
+                out.append(t("cli.life.structureItem", item=replacement["key"], text=replacement["text"],
+                             short=replacement["short"], recommend=replacement["recommend"],
+                             options=" / ".join(o["label"] for o in replacement["options"])))
+            continue
         options = " / ".join(f'{o["id"]}：{o["label"]}' for o in item["options"])
         if item["type"] == "structure":
-            out.append(t("cli.analysis.structureItem", key=item["key"], text=item["text"],
+            out.append(t("cli.life.structureItem", item=item["key"], text=item["text"],
                          short=item["short"], options=options, recommend=item["recommend"]))
         else:
-            out.append(t("cli.analysis.questionItem", key=item["key"], short=item["short"],
+            out.append(t("cli.life.questionItem", item=item["key"], short=item["short"],
                          text=item["text"], options=options, recommend=item["recommend"]))
     if ctx["answers"]:
         out.append(t("cli.analysis.answers"))
         for key, value in ctx["answers"].items():
-            out.append(t("cli.analysis.answerItem", key=key, value=json.dumps(value, ensure_ascii=False)))
+            out.append(t("cli.life.answerItem", item=key, value=json.dumps(value, ensure_ascii=False)))
+    if ctx.get("assumptions"):
+        out.append(t("cli.life.assumptions"))
+        for assumption in ctx["assumptions"]:
+            out.append(t("cli.life.assumptionItem", text=assumption["text"],
+                         status=t("viewer.life.status." + assumption["status"])))
+    if ctx.get("facts"):
+        out.append(t("cli.life.facts"))
+        for fact in ctx["facts"]:
+            out.append(t("cli.life.factItem", text=fact["text"], source=fact.get("source", "")))
+    out.append(t("cli.life.verificationRule"))
     out.append(t("cli.analysis.writebackHint", round=ctx["round"]))
     return "\n".join(out) + "\n"
 

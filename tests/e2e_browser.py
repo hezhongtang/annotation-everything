@@ -4826,6 +4826,59 @@ def analysis_smoke_checks(browser, tmp: Path):
         page.click("#annotationMode")
         page.wait_for_function("!document.body.classList.contains('analysis-mode')")
         ok(page.inner_text("#handBtn") == "Hand to the agent for revision", "回到批注后主按钮改为改稿")
+
+        # #112：从页发起无源分析，原话草稿跨语言/轮询保留，查证/假设与搁置区接通。
+        page.click("#pageAnalysisStart")
+        page.fill("#analysisStartText", "本页的合成结论是否可靠？")
+        page.click("#analysisStartCreate")
+        page.wait_for_function("analysisState?.focus==='本页的合成结论是否可靠？'")
+        ok(len(disk_notes(review)) == 2, "从页发起分析不伪造或搁住批注")
+        opening_seq = page.evaluate("analysisCurrentRound(analysisState).seq")
+        opening = cli("claim", str(review), "--events", "analysis", "--round", str(opening_seq), "--by", "Synthetic")
+        proposals = [{"key": key, "text": text, "short": text, "recommend": "a",
+                      "options": [{"id": "a", "label": "合成推荐"}, {"id": "b", "label": "合成备选"}]}
+                     for key, text in (("text", "采用哪个口径？"), ("park", "是否另查旁支？"), ("verify", "原始材料记载多少？"))]
+        cli("analysis-writeback", str(review), "--round", str(opening_seq), "--base-rev", str(opening["baseRev"]),
+            "--proposals", "-", stdin=json.dumps(proposals, ensure_ascii=False))
+        for key in ("text", "park", "verify"):
+            page.wait_for_selector(f'#analysisBody [data-key="S:{key}"][data-kind="accept"]')
+            page.locator(f'#analysisBody [data-key="S:{key}"][data-kind="accept"]').click()
+        text_question = page.locator('[data-analysis-item="Q:n1"]')
+        text_question.locator("summary").click()
+        text_question.locator("textarea").fill("按月核验，保留异常月份。")
+        page.select_option("#localePick", "zh-CN")
+        page.evaluate("analysisRenderKey='';renderAnalysis()")
+        ok(page.input_value('[data-analysis-item="Q:n1"] textarea') == "按月核验，保留异常月份。",
+           "自由文本草稿跨语言切换与重绘保留")
+        page.locator('[data-key="Q:n1"][data-kind="text"]').click()
+        page.wait_for_function("!!analysisState?.nodes?.n1?.decision")
+        page.locator('[data-key="Q:n2"][data-kind="park"]').click()
+        page.wait_for_function("analysisState?.nodes?.n2?.status==='parked'")
+        ok("是否另查旁支" in page.inner_text("#analysisParkedSide"), "旁支进入侧栏搁置区")
+        page.locator('[data-key="Q:n3"][data-kind="verify"]').click()
+        page.wait_for_function("analysisCurrentRound(analysisState)?.answers?.['Q:n3']?.kind==='verify'")
+        ok(page.evaluate("analysisCurrentRound(analysisState).answers['Q:n3'].allowExternal===false"),
+           "页面查证默认不允许外部资料")
+        round_seq = page.evaluate("analysisCurrentRound(analysisState).seq")
+        decision_id = page.evaluate("analysisState.nodes.n1.decision")
+        page.click("#handBtn")
+        page.wait_for_function("analysisCurrentRound(analysisState)?.status==='submitted'")
+        claimed = cli("claim", str(review), "--events", "analysis", "--round", str(round_seq), "--by", "Synthetic")
+        payload = {"proposals": [], "assumptions": [{"key": "scope", "text": "各月统计范围一致。", "decisions": [decision_id]}],
+                   "facts": [{"key": "revenue", "text": "合成底稿记载收入为120。", "source": "合成底稿第2页", "node": "n3"}]}
+        cli("analysis-writeback", str(review), "--round", str(round_seq), "--base-rev", str(claimed["baseRev"]),
+            "--proposals", "-", stdin=json.dumps(payload, ensure_ascii=False))
+        page.wait_for_selector('[data-key="A:a1"][data-kind="accept"]')
+        page.locator('[data-key="A:a1"][data-kind="accept"]').click()
+        page.wait_for_function("analysisState?.assumptions?.a1?.confirmed?.main==='confirmed'")
+        page.click('[data-analysis-tab="facts"]')
+        ok("收入为120" in page.inner_text("#analysisFacts"), "查证事实与出处在底部页签显示")
+        page.click('[data-analysis-tab="assumptions"]')
+        ok("各月统计范围一致" in page.inner_text("#analysisAssumptions"), "假设按线确认并可回看")
+        page.click('[data-analysis-status="pause"]')
+        page.wait_for_function("analysisState?.status==='paused'")
+        page.click('[data-analysis-status="activate"]')
+        page.wait_for_function("analysisState?.status==='active'")
     finally:
         context.close()
         stop(server)

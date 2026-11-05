@@ -227,6 +227,20 @@ class ProtectionTests(unittest.TestCase):
         self.assertEqual(analysis.load(self.review, self.aid)["rev"], claimed["baseRev"])
         analysis.writeback(self.review, self.aid, claimed["seq"], claimed["baseRev"], [])
 
+    def test_structure_void_and_rejection_sync_the_linked_note(self):
+        round_no, note = self.branch_note()
+        original = analysis.load(self.review, self.aid)["nodes"]["n2"]["decision"]
+        analysis.submit_round(self.review, self.aid, round_no)
+        next_round = self.questions([{"key": "remove", "op": "void", "targets": ["n1"]}])
+        notes.handoff_submit(self.review)
+        analysis.answer(self.review, self.aid, next_round, "S:remove", {"kind": "accept"})
+        held = next(n for n in notes.load(self.review)["notes"] if n["id"] == note["id"])
+        self.assertEqual((held["status"], held["hold"]), ("held", "结论已变"))
+        restored = analysis.answer(self.review, self.aid, next_round, "S:remove", {"kind": "reject"})
+        self.assertEqual(restored["nodes"]["n2"]["decision"], original)
+        reopened = next(n for n in notes.load(self.review)["notes"] if n["id"] == note["id"])
+        self.assertEqual(reopened["status"], "open")
+
 
 if __name__ == "__main__":
     unittest.main()
