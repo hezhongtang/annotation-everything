@@ -183,7 +183,7 @@ One line per paragraph.
 
 分析、批注与批次共用 `.notes.lock`。从批注发起分析会同锁搁住源批注并移出待领取快照；空批次记为 `void`，不再领取。结论草稿只存分析事件，确认后才写入 `notes.json`，不新增批注草稿状态。页面引用保留稳定 `key`，转出和确认时重定位；页面删除或键有歧义时标为 `orphan`。
 
-`GET /api/analysis` 返回摘要和队列计数，传 `?analysis=<标识>` 时追加完整状态、关联批注 `linkedNotes` 和当前线轮次上下文；再加 `&round=N` 可只读该分析任意轮次，不切线。审阅人写操作为 `/api/analysis/start|answer|submit|convert|confirm|release|activate|pause|redecide|update-note|keep-note|delete-note|seal|fork|switch-line|close|reopen`，沿用 Host、Origin、JSON Content-Type、审阅身份及相关接收方校验。`start` 接受源 `noteId`，也接受没有源批注的 `focus` 和可选 `page`。服务用 `analysis` 能力标记声明支持，文件模式不提供分析。
+`GET /api/analysis` 返回摘要和队列计数，传 `?analysis=<标识>` 时追加完整状态、关联批注 `linkedNotes` 和当前线轮次上下文；再加 `&round=N` 可只读该分析任意轮次，不切线。审阅人写操作为 `/api/analysis/start|answer|submit|convert|confirm|release|activate|pause|redecide|update-note|keep-note|delete-note|seal|fork|switch-line|close|reopen|refute`，沿用 Host、Origin、JSON Content-Type、审阅身份及相关接收方校验。`start` 接受源 `noteId`，也接受没有源批注的 `focus` 和可选 `page`。服务用 `analysis` 能力标记声明支持，文件模式不提供分析。
 
 轮次的 `line` 标明所属分析线。`assumptions` 保存带稳定标识的假设，`confirmed` 按线记录 `pending`、`confirmed` 或 `rejected`，`refuted` 与不认同分开；决策的 `assumptions` 记录直接依赖。`facts` 保存稳定标识、原文、出处及可选问题引用。`analysis-writeback --proposals` 接受旧问题列表，或含 `proposals`、`assumptions`、`facts` 的对象。新增、拆分、合并和作废均是待确认结构提议；确认前不改树，旧节点和决策保留。详细字段与处理约束见[分析操作指引](analysis.zh-CN.md)。
 
@@ -194,6 +194,10 @@ One line per paragraph.
 从分析转出的批注用 `tracking` 控制是否跟踪依据。依据失效只联动未处理或「结论已变」搁住的批注；已领取/复核批次中的批注不移出，已处理状态不回改。`updateRequests` 保存请求，`updates` 保存 Agent 新文本草稿，轮次的 `U:` 条目确认后才改普通批注，并把旧文和旧依据追加到 `analysisHistory`。写回对象可带 `updates: [{noteId, text, node?}]`；拒绝新文本不会覆盖原文。
 
 `lines` 保存各线的最新节点投影，`nodes` 保持为当前线投影；决策、假设、事实与节点选项身份跨线共享。`checkpoints` 使用稳定 `cpN` 标识，包含 `line`、来源轮次、是否自动/封存及当时快照。快照含焦点、节点、决策、假设、事实、有效结论、未决与搁置问题，不递归嵌入旧检查点。封存已有检查点只改变 `sealed`，不重拍快照；从检查点分线不更换继承实体的身份。
+
+快照的 `pendingProposals` 保留尚未确认的结构提议，分线不预建节点。推翻后节点的 `reopened` 保留原决策、原答案、假设和撤下原因，`needsReview` 包含自身与祖先的失效依赖；旧线的 `basedOnRefuted` 标记相应假设。假设不成立是全局事实，旧快照与冻结上下文仍保留当时判断。
+
+写回对象可追加 `deadEnds`，使用稳定 `key` 提议选项或整线死局，记录完整 `reason` 及已有假设依赖。`state.deadEnds` 分配稳定 `eN` 身份，状态为 `pending`、`confirmed`、`rejected` 或 `review`；依赖推翻时同一条死局转为 `review`，不另建身份。轮次 `D:` 条目仍通过作答确认，不新增单独确认接口。下一轮按 D → U → A → S → Q 组成；死局拒绝只向页面提供理由和假设原文等安全参数，用当前语言呈现。
 
 新轮次在 `done` / `void` 时冻结完整上下文；历史读取带 `historical: true`，保留原 `items`、`answeredItems`、回答、说明及 `writeback`。旧日志没有冻结上下文时仍可兼容推导。轮次所属线与页面当前线分开：后台领取、作答、写回及自动检查点归本轮所属线，批注有效性按页面当前线同步。`closed` 拒绝作答和状态修改，重新打开会排队新请求；没有分析删除操作。
 

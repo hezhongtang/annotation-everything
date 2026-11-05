@@ -122,6 +122,10 @@ Agent 领取期间，这项分析可继续作答，重裁、更新批注和结�
 
 每轮写回自动记录检查点，也可封存当前状态或已有检查点；封存后快照不能修改。从任一检查点分出新线时，继承原问题、决策和假设的身份并切换过去，原线保留，切回可继续其最新状态。批注依据只按当前线判断。时间线可查看每轮完整原话与 Agent 写回、检查点内容和分叉；历史只读，不会重新提交。没有已交出或处理中的轮次时可以结案，结案会封存最后状态；重新打开后自动请求出题。
 
+推翻假设时，若当前选择枝有决策直接依赖它，会先记录检查点、分出新线并撤下这些问题重问，保留原答案和原因；旧线标为建立在已推翻假设上。重选原答案时，未受影响的下游结论可恢复，受影响的旧决策需重新形成。假设不成立和查证事实跨线共享，假设确认按线保存。
+
+Agent 可提议选项或整条线是死局，由审阅人在下一轮确认。确认后，各线都不能再选该选项、切入死局线或从其检查点分线；推翻其依赖假设后自动解除并标为待复核。页面会解释阻断理由和所依赖的假设。点击引用页卡片可在浮层里预览已内嵌的报告，每步操作也会说明带来的变化。
+
 等待命令默认只接收改稿，需加 `--events analysis` 才接收分析轮次。Agent 用 `notes.py analysis --round N --json` 读上下文，用带基线版本的 `analysis-writeback` 写回。服务不支持分析时隐藏入口并提示升级；直接打开 HTML 的文件模式不提供分析。
 
 JSON 与 Markdown 导出都不包含分析问答、事件和问题树，JSON 不是整份审阅的完整备份。旧版工具导入「搁住」或旧页面显示该状态时，会把它当作未处理；旧服务的快照仍只收 `open`。升级后应重启服务，重新生成并刷新对照页。详见[格式说明](skill/annotation-everything/references/formats.md#分析数据)。
@@ -363,12 +367,13 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `serve.py check` | 运行服务安全自检 |
 | `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | 绑定接收 harness 与会话、查看身份与状态；Codex 桌面使用事件接收，其他 harness 可用 `--adapter wait`；显式交接用 `bind --replace`，处理中批次先收尾 |
 | `notes.py wait` / `claim` | 等待或领取任务；`--events analysis` 显式接收分析，默认不领取分析，也不能越过更早轮次。`--round N` 须带此开关，`--seq N` 只指批次，所有筛选均受全局队首约束 |
-| `notes.py analysis <审阅目录> --round N --json` / `analysis-writeback <审阅目录> --round N --base-rev R --proposals 文件` | 读取轮次上下文 / 写回 JSON 结构提议列表或含提议、假设、事实和批注更新的对象；`-` 从标准输入读取，写回须匹配领取时基线 |
+| `notes.py analysis <审阅目录> --round N --json` / `analysis-writeback <审阅目录> --round N --base-rev R --proposals 文件` | 读取轮次上下文 / 写回 JSON 结构提议列表或含提议、假设、事实、批注更新和死局的对象；`-` 从标准输入读取，写回须匹配领取时基线 |
 | `notes.py suggest-analysis <审阅目录> <批注标识> --reason 原因` | 给未处理批注加「建议展开分析」提示，由审阅人决定是否发起 |
 | `notes.py analysis-check <审阅目录> --json` | 只读各分析当前线的有效结论与待确认信息，没有活动轮次也可读取 |
 | `notes.py analysis-redecide <审阅目录> --analysis A --node N --option O` / `analysis-note <审阅目录> --analysis A --note-id N --action update\|keep\|delete` | 重裁答案 / 请求更新、保留原文或删除结论已变的批注；沿用保护与确认规则 |
 | `notes.py analysis-history <审阅目录> --analysis A --json` | 只读分析线、检查点及完整历史，不交出旧轮次 |
 | `notes.py analysis-line <审阅目录> --analysis A --action seal\|fork\|switch\|close\|reopen [--checkpoint CP] [--line L]` | 封存、从检查点分线、切线、结案或重新打开；沿用整分析保护 |
+| `notes.py analysis-refute <审阅目录> --analysis A --assumption AID` | 推翻假设；有当前直接依赖时自动分线重问，整分析被领取期间拒绝 |
 | `notes.py show` / `resolve` / `reopen` | 列出批注、标为已处理、重新打开。`show --locale` 选择阅读语言，优先于 `AE_LOCALE` 和审阅设置；`show --json` 仍导出原始值 |
 | `notes.py export` / `import` | 导出可再导入的批注摘要（Markdown 带版本与语言标记，或 JSON 结构化备份）／导入页面导出的 JSON 或 Markdown。`export --lang` 与 `show --locale` 同一套优先级，`--format json`、`--all`、`--page N`、`--out 文件` |
 | `notes.py done` / `review` / `diff` | 结束当前阶段、给出复核结论、按页查看初改改动了哪些地方；均可用 `--locale` 选择输出语言 |
