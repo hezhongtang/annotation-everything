@@ -42,6 +42,13 @@ PROP_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 OPT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 
+class AnalysisInputError(store.HandoffError):
+    """可本地化的输入错误；内部诊断不直接作为页面文案。"""
+
+    def __init__(self, message: str):
+        super().__init__(message, code="analysis-invalid-input")
+
+
 def _analysis_path(review_dir: Path, *parts: str) -> Path:
     """分析数据只使用当前审阅内的真实路径，不跟随目录或文件符号链接。"""
     root = Path(review_dir).resolve() / ANALYSIS_DIR
@@ -141,7 +148,7 @@ def _decide(state: dict[str, Any], node: dict[str, Any], option: str, round_no: 
     did = f"d{state['seq']['decision'] + 1}"
     state["seq"]["decision"] += 1
     decision = {"id": did, "node": node["id"], "option": option, "label": node["options"][option],
-                "round": round_no, "line": state["line"]}
+                "round": round_no, "line": state["line"], "assumptions": []}
     state["decisions"][did] = decision
     node["history"].append(did)
     node["decision"], node["status"] = did, "decided"
@@ -160,26 +167,82 @@ def _confirm_proposal(state: dict[str, Any], proposal: dict[str, Any]) -> str:
     return nid
 
 
+def _suspend_node(node: dict[str, Any]) -> None:
+    if node["status"] != "void":
+        node["inactiveStatus"] = node["status"]
+        node["status"] = "void"
+
+
+def _restore_node(node: dict[str, Any]) -> None:
+    node["status"] = node.pop("inactiveStatus", "decided" if node.get("decision") else "pending")
+
+
+def _apply_structure_change(state: dict[str, Any], round_: dict[str, Any], key: str,
+                            proposal: dict[str, Any], accepted: bool) -> None:
+    """拆合/作废只改变当前线的投影；旧节点、决策和已确认的新节点标识一直保留。"""
+    created = round_.setdefault("structureNodes", {})
+    if accepted:
+        for target in proposal["targets"]:
+            _suspend_node(state["nodes"][target])
+        if key not in created:
+            created[key] = [_confirm_proposal(state, replacement) for replacement in proposal["replacements"]]
+        else:
+            for nid in created[key]:
+                _restore_node(state["nodes"][nid])
+    elif key in created:
+        for target in proposal["targets"]:
+            _restore_node(state["nodes"][target])
+        for nid in created[key]:
+            _suspend_node(state["nodes"][nid])
+
+
 def _apply_answer(state: dict[str, Any], round_: dict[str, Any], key: str, value: dict[str, Any]) -> None:
     round_["answers"][key] = value
+    if key.startswith("A:"):
+        state["assumptions"][key[2:]]["confirmed"][round_.get("line", LINE_MAIN)] = (
+            "confirmed" if value["kind"] == "accept" else "rejected")
+        return
     if key.startswith("S:"):
+        proposal = next(p for p in round_["proposals"] if "S:" + p["key"] == key)
+        change = proposal.get("op", "add") != "add"
         confirmed = round_.setdefault("proposalNodes", {})
         node_id = confirmed.get(key)
         if value["kind"] == "accept":
             round_["rejected"].discard(key)
-            if node_id is None:
+            state["rejectedProposals"] = [p for p in state["rejectedProposals"] if "S:" + p["key"] != key]
+            if change:
+                _apply_structure_change(state, round_, key, proposal, True)
+            elif node_id is None:
                 confirmed[key] = _confirm_proposal(state, next(p for p in round_["proposals"] if "S:" + p["key"] == key))
             else:
-                node = state["nodes"][node_id]
-                node["status"] = "decided" if node.get("decision") else "pending"
+                _restore_node(state["nodes"][node_id])
         else:
             round_["rejected"].add(key)
-            if node_id is not None:
-                state["nodes"][node_id]["status"] = "void"
+            if proposal not in state["rejectedProposals"]:
+                state["rejectedProposals"].append(proposal)
+            if change:
+                _apply_structure_change(state, round_, key, proposal, False)
+            elif node_id is not None:
+                _suspend_node(state["nodes"][node_id])
         return
     node_id = key[2:]
     node = state["nodes"][node_id]
-    option = node["recommend"] if value["kind"] == "accept" else value["option"]
+    if value["kind"] in ("park", "verify"):
+        node["status"] = "parked" if value["kind"] == "park" else "verifying"
+        node["decision"] = None
+        return
+    if value["kind"] == "text":
+        # 原话也是可重裁的稳定选项；相同原话复用同一选项与决策。
+        option = next((oid for oid, text in node["options"].items()
+                       if oid.startswith("text-") and text == value["text"]), None)
+        if option is None:
+            index = 1
+            while f"text-{index}" in node["options"]:
+                index += 1
+            option = f"text-{index}"
+            node["options"][option] = value["text"]
+    else:
+        option = node["recommend"] if value["kind"] == "accept" else value["option"]
     _decide(state, node, option, round_["seq"])
 
 
@@ -196,9 +259,12 @@ def _round_items(state: dict[str, Any], round_: dict[str, Any]) -> list[dict[str
     问题条目随状态动态出现（确认提议入树后同轮即可作答；没答的问题一直留到下一轮）。"""
     if round_["status"] in ("done", "void"):
         return [{"key": "S:" + p["key"], "type": "structure", "proposal": p} for p in round_["proposals"]]
-    items = [{"key": "S:" + p["key"], "type": "structure", "proposal": p}
+    items = [{"key": "A:" + aid, "type": "assumption", "assumption": aid}
+             for aid, assumption in state["assumptions"].items()
+             if assumption["confirmed"].get(round_.get("line", LINE_MAIN), "pending") == "pending"]
+    items.extend({"key": "S:" + p["key"], "type": "structure", "proposal": p}
              for p in round_["proposals"]
-             if "S:" + p["key"] not in round_["answers"] and "S:" + p["key"] not in round_["rejected"]]
+             if "S:" + p["key"] not in round_["answers"] and "S:" + p["key"] not in round_["rejected"])
     items.extend(_frontier_question_items(state))
     return items
 
@@ -208,17 +274,22 @@ def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
     state: dict[str, Any] = {
         "id": None, "schema": first["schema"], "status": "active", "rev": 0,
         "focus": first.get("focus", ""), "sourceNote": first.get("sourceNote"),
-        "sourceCopy": first.get("sourceCopy") or {}, "sourceState": "held", "sourceResolvedNote": None,
+        "sourceCopy": first.get("sourceCopy") or {},
+        "sourceState": "held" if first.get("sourceNote") else "none", "sourceResolvedNote": None,
         "line": LINE_MAIN, "seq": {"node": 0, "decision": 0, "draft": 0},
         "nodes": {}, "decisions": {}, "rounds": [], "drafts": [],
+        "assumptions": {}, "facts": {}, "rejectedProposals": [],
     }
     for event in events:
         kind = event.get("type")
         if kind == "started":
             state["id"] = event.get("id")
             state["rev"] = event.get("rev", 1)
+        elif kind == "status-changed":
+            state["status"] = event["status"]
         elif kind == "round-requested":
             state["rounds"].append({"seq": event["round"], "kind": event.get("kind", "next"),
+                                    "line": event.get("line", LINE_MAIN),
                                     "status": "open", "proposals": event.get("items") or [],
                                     "answers": {}, "rejected": set(), "at": event.get("at"),
                                     "order": event.get("order"),
@@ -236,6 +307,28 @@ def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
             round_ = _round(state, event["round"])
             round_.update(status="done", note=event.get("note"))
             state["rev"] = event.get("rev", state["rev"] + 1)
+            for key, value in round_["answers"].items():
+                if key.startswith("Q:") and value.get("kind") == "verify":
+                    node = state["nodes"].get(key[2:])
+                    if node and node["status"] == "verifying":
+                        node["status"] = "pending"
+            for candidate in event.get("assumptions", []):
+                assumption = next((a for a in state["assumptions"].values() if a["key"] == candidate["key"]), None)
+                if assumption is None:
+                    aid = f"a{len(state['assumptions']) + 1}"
+                    assumption = {"id": aid, **candidate, "confirmed": {}, "refuted": False}
+                    state["assumptions"][aid] = assumption
+                assumption["confirmed"].setdefault(round_.get("line", LINE_MAIN), "pending")
+                for did in candidate["decisions"]:
+                    if did not in assumption["decisions"]:
+                        assumption["decisions"].append(did)
+                    dependencies = state["decisions"][did].setdefault("assumptions", [])
+                    if assumption["id"] not in dependencies:
+                        dependencies.append(assumption["id"])
+            for fact in event.get("facts", []):
+                if not any(f["key"] == fact["key"] for f in state["facts"].values()):
+                    fid = f"f{len(state['facts']) + 1}"
+                    state["facts"][fid] = {"id": fid, **fact, "round": event["round"]}
         elif kind == "answered":
             _apply_answer(state, _round(state, event["round"]), event["key"], event.get("value") or {})
         elif kind == "source-released":
@@ -246,8 +339,9 @@ def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
             for draft in state["drafts"]:
                 if draft["id"] == event["draft"]:
                     draft["status"], draft["note"] = "confirmed", event.get("note")
-            state["sourceState"] = "resolved"
-            state["sourceResolvedNote"] = event.get("note")
+            if state["sourceNote"]:
+                state["sourceState"] = "resolved"
+                state["sourceResolvedNote"] = event.get("note")
     for round_ in state["rounds"]:
         round_["rejected"] = sorted(round_["rejected"])
         round_["items"] = _round_items(state, round_)
@@ -321,6 +415,92 @@ def _source_location(review_dir: Path, source: dict[str, Any]) -> dict[str, Any]
 
 # ---------- 写操作（都在批注存储的同一把锁内） ----------
 
+def _activate_locked(review_dir: Path, analysis_id: str, *, by: str) -> None:
+    """焦点切换不改变分析内容或基线；暂停分析的轮次仍在共享队列中。"""
+    for row in list_analyses(review_dir):
+        status = "active" if row["id"] == analysis_id else "paused"
+        if row["status"] in ("active", "paused") and row["status"] != status:
+            _append_event(review_dir, row["id"], {"type": "status-changed", "at": store.now_iso(),
+                                                 "by": by, "status": status})
+
+
+def activate(review_dir: Path, analysis_id: str, *, by: str = "page") -> dict[str, Any]:
+    """将审阅焦点切到这项分析，不作废、重排或解锁任何轮次。"""
+    review_dir = Path(review_dir)
+    with store.locked(review_dir):
+        state = load(review_dir, analysis_id)
+        if state["status"] not in ("active", "paused"):
+            raise store.HandoffError("这项分析已经结案，请先重新打开", code="analysis-closed")
+        _activate_locked(review_dir, analysis_id, by=by)
+        return load(review_dir, analysis_id)
+
+
+def pause(review_dir: Path, analysis_id: str, *, by: str = "page") -> dict[str, Any]:
+    """暂停焦点，已交出的轮次照常处理。"""
+    review_dir = Path(review_dir)
+    with store.locked(review_dir):
+        state = load(review_dir, analysis_id)
+        if state["status"] == "active":
+            _append_event(review_dir, analysis_id, {"type": "status-changed", "at": store.now_iso(),
+                                                   "by": by, "status": "paused"})
+        return load(review_dir, analysis_id)
+
+
+def start_question(review_dir: Path, focus: str, *, page: int | None = None, by: str = "page",
+                   authorize: Callable[[], None] | None = None) -> tuple[dict[str, Any], int]:
+    """从页或空白焦点发起；不创建或搁住批注，页面引用保存稳定键。"""
+    review_dir = Path(review_dir)
+    with store.locked(review_dir):
+        if authorize is not None:
+            authorize()
+        if not isinstance(focus, str) or not focus.strip():
+            raise store.HandoffError("请写下要分析的问题", code="focus-required")
+        source = {"text": store.fix_text(focus)}
+        if page is not None:
+            if not isinstance(page, int) or isinstance(page, bool) or page < 1:
+                raise store.HandoffError("请选择审阅中的页面", code="page-not-found")
+            pages = _review_pages(review_dir)
+            entry = next((p for p in pages if p.get("n") == page), None)
+            if entry is None:
+                raise store.HandoffError("请选择审阅中的页面", code="page-not-found")
+            source.update(page=page, title=entry.get("title", ""))
+            if _stable_page(entry) and sum(p.get("key") == entry["key"] for p in pages) == 1:
+                source["key"] = entry["key"]
+        aid = store.new_id()
+        root = _events_path(review_dir, aid).parent
+        _counter(review_dir)
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        seq = _next_round(review_dir)
+        at = store.now_iso()
+        _append_event(review_dir, aid, {"type": "started", "schema": SCHEMA, "at": at, "id": aid,
+                                       "rev": 1, "focus": source["text"], "sourceCopy": source,
+                                       "sourceNote": None, "by": by})
+        _append_event(review_dir, aid, {"type": "round-requested", "at": at, "by": by,
+                                       "round": seq, "kind": "opening", "items": [],
+                                       "queued": True, "order": _next_submit_order(review_dir)})
+        _activate_locked(review_dir, aid, by=by)
+        return load(review_dir, aid), seq
+
+
+def suggest(review_dir: Path, note_id: str, *, reason: str = "", by: str = "agent",
+            authorize: Callable[[], None] | None = None) -> dict[str, Any]:
+    """Agent 仅标记建议；不会创建分析、搁住或交出批注。"""
+    review_dir = Path(review_dir)
+    with store.locked(review_dir):
+        if authorize is not None:
+            authorize()
+        doc = store.load(review_dir)
+        note = store._find(doc, note_id)
+        if note.get("status", "open") != "open":
+            raise store.HandoffError("只能对未处理批注建议展开分析", code="suggest-note-not-open")
+        if not isinstance(reason, str):
+            raise AnalysisInputError("建议原因须为文本")
+        note["analysisSuggestion"] = {"reason": store.fix_text(reason), "at": store.now_iso(), "by": by}
+        note["updatedAt"] = store.now_iso()
+        store._commit(review_dir, doc, {"op": "analysis-suggested", "by": by, "id": note_id})
+        return note
+
+
 def start(review_dir: Path, note_id: str, *, by: str = "page",
           authorize: Callable[[], None] | None = None) -> tuple[dict[str, Any], int]:
     """从未处理批注发起分析：批注搁住（分析中）、从待接收批次移出（整批空了作废），
@@ -381,6 +561,7 @@ def start(review_dir: Path, note_id: str, *, by: str = "page",
         _append_event(review_dir, analysis_id, {"type": "round-requested", "at": at, "by": by,
                                                 "round": round_no, "kind": "opening", "items": [],
                                                 "queued": True, "order": _next_submit_order(review_dir)})
+        _activate_locked(review_dir, analysis_id, by=by)
         return load(review_dir, analysis_id), round_no
 
 
@@ -405,10 +586,21 @@ def answer(review_dir: Path, analysis_id: str, round_no: int, key: str, value: d
                     item = {"key": key, "type": "structure", "proposal": proposal}
             elif key.startswith("Q:") and _is_active(state, key[2:]):
                 item = {"key": key, "type": "question", "node": key[2:]}
+            elif key.startswith("A:") and key[2:] in state["assumptions"]:
+                item = {"key": key, "type": "assumption", "assumption": key[2:]}
         if item is None:
             raise store.HandoffError(f"第 {round_no} 轮里没有 {key} 这一项", code="item-not-in-round",
                                      round=round_no, key=key)
         _check_answer_value(state, item, value)
+        if item["type"] == "structure" and value["kind"] == "accept":
+            proposal = item["proposal"]
+            already = round_["answers"].get(key, {}).get("kind") == "accept"
+            if not already and any(not _is_active(state, nid) for nid in proposal.get("targets", [])):
+                raise store.HandoffError("提议涉及的问题已变化，请刷新后重试", code="structure-target-changed")
+        if value.get("kind") == "verify":
+            value = {**value, "allowExternal": value.get("allowExternal", False)}
+        elif value.get("kind") == "text":
+            value = {**value, "text": store.fix_text(value["text"])}
         if round_["answers"].get(key) == value:
             return state
         _append_event(review_dir, analysis_id, {"type": "answered", "at": store.now_iso(), "by": by,
@@ -418,20 +610,30 @@ def answer(review_dir: Path, analysis_id: str, round_no: int, key: str, value: d
 
 def _check_answer_value(state: dict[str, Any], item: dict[str, Any], value: Any) -> None:
     if not isinstance(value, dict):
-        raise store.NoteError("回答须为 {kind: ...} 对象")
+        raise AnalysisInputError("回答须为 {kind: ...} 对象")
     kind = value.get("kind")
-    if item["type"] == "structure":
+    if item["type"] in ("structure", "assumption"):
         if kind not in ("accept", "reject"):
-            raise store.NoteError("结构提议的回答只能是 accept（同意）或 reject（不采纳）")
+            raise AnalysisInputError("结构提议的回答只能是 accept（同意）或 reject（不采纳）")
+        return
+    if kind == "text":
+        if not isinstance(value.get("text"), str) or not value["text"].strip():
+            raise AnalysisInputError("自由文本回答不能为空")
+        return
+    if kind == "park":
+        return
+    if kind == "verify":
+        if "allowExternal" in value and not isinstance(value["allowExternal"], bool):
+            raise AnalysisInputError("allowExternal 须为明确的布尔值")
         return
     options = state["nodes"][item["node"]]["options"]
     if kind == "accept":
         return
     if kind == "option":
-        if value.get("option") not in options:
-            raise store.NoteError(f"option 须为该题的选项之一（{'、'.join(options)}）")
+        if not isinstance(value.get("option"), str) or value["option"] not in options:
+            raise AnalysisInputError(f"option 须为该题的选项之一（{'、'.join(options)}）")
         return
-    raise store.NoteError("本票的回答方式只有用推荐答案（accept）和选一个选项（option）")
+    raise AnalysisInputError("回答方式须为 accept、option、text、park 或 verify")
 
 
 def submit_round(review_dir: Path, analysis_id: str, round_no: int, *, by: str = "page",
@@ -523,44 +725,73 @@ def claim(review_dir: Path, *, by: str = "agent", seq: int | None = None,
 
 def _clean_proposals(proposals: Any, state: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(proposals, list):
-        raise store.NoteError("proposals 须为结构提议列表")
+        raise AnalysisInputError("proposals 须为结构提议列表")
     if len(proposals) > MAX_PROPOSALS:
-        raise store.NoteError(f"一轮最多提出 {MAX_PROPOSALS} 个结构提议")
-    out, seen = [], set()
+        raise AnalysisInputError(f"一轮最多提出 {MAX_PROPOSALS} 个结构提议")
+    out, seen, targeted = [], set(), set()
     for raw in proposals:
         if not isinstance(raw, dict):
-            raise store.NoteError("结构提议须为对象")
+            raise AnalysisInputError("结构提议须为对象")
         key = raw.get("key")
-        if not isinstance(key, str) or not PROP_KEY_RE.match(key) or key in seen:
-            raise store.NoteError(f"结构提议的 key 须为不重复的 {PROP_KEY_RE.pattern}")
+        if not isinstance(key, str) or not PROP_KEY_RE.fullmatch(key) or key in seen:
+            raise AnalysisInputError(f"结构提议的 key 须为不重复的 {PROP_KEY_RE.pattern}")
         seen.add(key)
+        op = raw.get("op", "add")
+        if op not in ("add", "split", "merge", "void"):
+            raise AnalysisInputError("结构提议 op 须为 add、split、merge 或 void")
+        if op != "add":
+            targets = raw.get("targets")
+            if not isinstance(targets, list) or not targets or any(
+                    not isinstance(nid, str) or not _is_active(state, nid) for nid in targets):
+                raise AnalysisInputError("结构变更须引用当前选择枝上的 targets")
+            if len(set(targets)) != len(targets) or targeted.intersection(targets):
+                raise AnalysisInputError("一轮结构变更不能重复引用同一个问题")
+            targeted.update(targets)
+            replacements = raw.get("replacements", [])
+            if not isinstance(replacements, list) or any(not isinstance(p, dict) or p.get("op", "add") != "add" for p in replacements):
+                raise AnalysisInputError("replacements 须为新增问题提议列表")
+            if ((op == "split" and (len(targets) != 1 or len(replacements) < 2)) or
+                    (op == "merge" and (len(targets) < 2 or len(replacements) != 1)) or
+                    (op == "void" and replacements)):
+                raise AnalysisInputError("拆分须一题变多题，合并须多题变一题，作废不带替代问题")
+            replacements = _clean_proposals(replacements, state)
+            for replacement in replacements:
+                parent = replacement.get("parent")
+                while parent:
+                    if parent["node"] in targets:
+                        raise AnalysisInputError("替代问题不能挂在即将作废的问题枝下")
+                    parent = state["nodes"][parent["node"]].get("parent")
+            out.append({"key": key, "op": op, "targets": targets,
+                        "text": store.fix_text(raw.get("text")), "replacements": replacements,
+                        "targetNames": [state["nodes"][nid]["short"] for nid in targets]})
+            continue
         text = store.fix_text(raw.get("text")).strip()
         if not text:
-            raise store.NoteError("问题文本不能为空")
+            raise AnalysisInputError("问题文本不能为空")
         options_raw = raw.get("options")
         if not isinstance(options_raw, list) or not options_raw:
-            raise store.NoteError("结构提议须带非空 options 列表")
+            raise AnalysisInputError("结构提议须带非空 options 列表")
         options, oids = {}, set()
         for o in options_raw:
-            if not isinstance(o, dict) or not isinstance(o.get("id"), str) or not OPT_ID_RE.match(o.get("id", "")) \
+            if not isinstance(o, dict) or not isinstance(o.get("id"), str) or not OPT_ID_RE.fullmatch(o.get("id", "")) \
                     or not isinstance(o.get("label"), str) or not o.get("label").strip():
-                raise store.NoteError("选项须为 {id, label}，id 只允许字母数字、下划线和连字符")
+                raise AnalysisInputError("选项须为 {id, label}，id 只允许字母数字、下划线和连字符")
             if o["id"] in oids:
-                raise store.NoteError(f"选项 id 重复：{o['id']}")
+                raise AnalysisInputError(f"选项 id 重复：{o['id']}")
             oids.add(o["id"])
             options[o["id"]] = store.fix_text(o["label"]).strip()
         recommend = raw.get("recommend")
-        if recommend not in options:
-            raise store.NoteError("recommend 须为 options 之一")
+        if not isinstance(recommend, str) or recommend not in options:
+            raise AnalysisInputError("recommend 须为 options 之一")
         parent = raw.get("parent")
         if parent is not None:
             if not isinstance(parent, dict) or not isinstance(parent.get("node"), str):
-                raise store.NoteError("parent 须为 {node, option} 或 null")
+                raise AnalysisInputError("parent 须为 {node, option} 或 null")
             pnode = state["nodes"].get(parent["node"])
             if pnode is None:
-                raise store.NoteError(f"挂在的问题 {parent['node']} 还不在问题树上（须先经确认）")
-            if parent.get("option") not in pnode["options"]:
-                raise store.NoteError(f"parent.option 须为 {parent['node']} 的选项之一")
+                raise AnalysisInputError(f"挂在的问题 {parent['node']} 还不在问题树上（须先经确认）")
+            if not isinstance(parent.get("option"), str) or parent["option"] not in pnode["options"]:
+                raise AnalysisInputError(f"parent.option 须为 {parent['node']} 的选项之一")
         out.append({"key": key, "text": text,
                     "short": store.fix_text(raw.get("short")).strip()[:200] or text[:24],
                     "options": [{"id": k, "label": v} for k, v in options.items()],
@@ -568,8 +799,56 @@ def _clean_proposals(proposals: Any, state: dict[str, Any]) -> list[dict[str, An
     return out
 
 
+def _proposal_signature(proposal: dict[str, Any]) -> str:
+    if proposal.get("op", "add") == "add":
+        shape = {k: proposal.get(k) for k in ("text", "options", "recommend", "parent")}
+    else:
+        shape = {k: proposal.get(k) for k in ("op", "targets")}
+        shape["replacements"] = [_proposal_signature(p) for p in proposal.get("replacements", [])]
+    return json.dumps(shape, ensure_ascii=False, sort_keys=True)
+
+
+def _clean_evidence(values: Any, state: dict[str, Any], *, assumptions: bool) -> list[dict[str, Any]]:
+    if values is None:
+        return []
+    if not isinstance(values, list) or len(values) > MAX_PROPOSALS:
+        raise AnalysisInputError("假设或事实须为列表，每轮最多50项")
+    out, seen = [], set()
+    registry = state["assumptions"] if assumptions else state["facts"]
+    for value in values:
+        if not isinstance(value, dict):
+            raise AnalysisInputError("假设或事实须为对象")
+        key, text = value.get("key"), value.get("text")
+        if not isinstance(key, str) or not PROP_KEY_RE.fullmatch(key) or key in seen:
+            raise AnalysisInputError("假设或事实的 key 须为不重复的稳定标识")
+        if not isinstance(text, str) or not text.strip():
+            raise AnalysisInputError("假设或事实的原文不能为空")
+        seen.add(key)
+        clean = {"key": key, "text": store.fix_text(text)}
+        if assumptions:
+            decisions = value.get("decisions")
+            if not isinstance(decisions, list) or not decisions or any(
+                    not isinstance(did, str) or did not in state["decisions"] for did in decisions):
+                raise AnalysisInputError("候选假设须依附已经存在的 decisions")
+            clean["decisions"] = list(dict.fromkeys(decisions))
+        else:
+            for field in ("source", "node"):
+                if field in value:
+                    if not isinstance(value[field], str):
+                        raise AnalysisInputError("事实的来源或问题标识须为文本")
+                    clean[field] = store.fix_text(value[field])
+            if "node" in clean and clean["node"] not in state["nodes"]:
+                raise AnalysisInputError("事实引用的问题不存在")
+        old = next((v for v in registry.values() if v["key"] == key), None)
+        if old and any(old.get(k) != v for k, v in clean.items() if not (assumptions and k == "decisions")):
+            raise AnalysisInputError("同一稳定标识的假设或事实不能改写原文")
+        out.append(clean)
+    return out
+
+
 def writeback(review_dir: Path, analysis_id: str, round_no: int, base_rev: int, proposals: Any, *,
-              note: str = "", by: str = "agent") -> dict[str, Any]:
+              note: str = "", by: str = "agent", assumptions: Any = None,
+              facts: Any = None) -> dict[str, Any]:
     """Agent 写回轮次：校验领取时记录的基线版本，记下这一轮的说明，
     把没答的提议带进下一轮并附上新的结构提议；没有可作答的内容就不再开新轮。"""
     review_dir = Path(review_dir)
@@ -584,19 +863,28 @@ def writeback(review_dir: Path, analysis_id: str, round_no: int, base_rev: int, 
                                      "这次结果作废", code="base-rev-mismatch",
                                      round=round_no, expected=base_rev, actual=state["rev"])
         cleaned = _clean_proposals(proposals, state)
+        cleaned = [p for p in cleaned if not any(p["key"] == old["key"] or
+                   _proposal_signature(p) == _proposal_signature(old)
+                   for old in state["rejectedProposals"])]
+        candidates = _clean_evidence(assumptions, state, assumptions=True)
+        findings = _clean_evidence(facts, state, assumptions=False)
         new_rev = state["rev"] + 1
         _append_event(review_dir, analysis_id, {"type": "round-done", "at": store.now_iso(), "by": by,
                                                 "round": round_no, "note": store.fix_text(note),
-                                                "rev": new_rev})
+                                                "rev": new_rev, "assumptions": candidates, "facts": findings})
         next_round = None
         carried = [p for p in round_["proposals"]
                    if "S:" + p["key"] not in round_["answers"] and "S:" + p["key"] not in set(round_["rejected"])]
         fresh = [p for p in cleaned if p["key"] not in {c["key"] for c in carried}]
-        frontier = _frontier_question_items(load(review_dir, analysis_id))
-        if carried or fresh or frontier:
+        updated = load(review_dir, analysis_id)
+        frontier = _frontier_question_items(updated)
+        pending_assumptions = any(a["confirmed"].get(state["line"], "pending") == "pending"
+                                  for a in updated["assumptions"].values())
+        if carried or fresh or frontier or pending_assumptions:
             next_round = _next_round(review_dir)
             _append_event(review_dir, analysis_id, {"type": "round-requested", "at": store.now_iso(),
                                                     "by": by, "round": next_round, "kind": "next",
+                                                    "line": round_.get("line", LINE_MAIN),
                                                     "items": carried + fresh})
         after = load(review_dir, analysis_id)
         return {"state": after, "nextRound": next_round}
@@ -612,25 +900,52 @@ def round_context(review_dir: Path, analysis_id: str, round_no: int) -> dict[str
                   "round": d["round"], "line": d["line"]}
                  for nid, node in sorted(state["nodes"].items(), key=lambda kv: int(kv[0][1:]))
                  if node.get("decision") and _is_active(state, nid)
-                 for d in [state["decisions"][node["decision"]]]
-                 if state["decisions"][node["decision"]]["line"] == state["line"]]
+                 for d in [state["decisions"][node["decision"]]]]
     items = []
-    for item in round_["items"]:
-        if item["type"] == "structure":
+    current_items = list(round_["items"])
+    missing_answers = []
+    seen = {item["key"] for item in current_items}
+    for key in round_["answers"]:
+        if key in seen:
+            continue
+        if key.startswith("S:"):
+            proposal = next((p for p in round_["proposals"] if "S:" + p["key"] == key), None)
+            if proposal:
+                missing_answers.append({"key": key, "type": "structure", "proposal": proposal})
+        elif key.startswith("Q:") and key[2:] in state["nodes"]:
+            missing_answers.append({"key": key, "type": "question", "node": key[2:]})
+        elif key.startswith("A:") and key[2:] in state["assumptions"]:
+            missing_answers.append({"key": key, "type": "assumption", "assumption": key[2:]})
+    for item in current_items + missing_answers:
+        if item["type"] == "assumption":
+            assumption = state["assumptions"][item["assumption"]]
+            items.append({"key": item["key"], "type": "assumption", "assumption": assumption["id"],
+                          "text": assumption["text"], "decisions": assumption["decisions"]})
+        elif item["type"] == "structure":
             p = item["proposal"]
-            items.append({"key": item["key"], "type": "structure", "text": p["text"], "short": p["short"],
-                          "options": [{"id": o["id"], "label": o["label"]} for o in p["options"]],
-                          "recommend": p["recommend"], "parent": p.get("parent")})
+            items.append({**p, "key": item["key"], "type": "structure", "short": p.get("short", ""),
+                          "options": [{"id": o["id"], "label": o["label"]} for o in p.get("options", [])],
+                          "recommend": p.get("recommend"), "parent": p.get("parent")})
         else:
             node = state["nodes"][item["node"]]
             items.append({"key": item["key"], "type": "question", "node": node["id"], "text": node["text"],
                           "short": node["short"],
                           "options": [{"id": k, "label": v} for k, v in node["options"].items()],
                           "recommend": node["recommend"]})
-    return {"analysis": analysis_id, "focus": state["focus"], "line": state["line"],
+    assumptions = [{**a, "status": a["confirmed"].get(round_.get("line", LINE_MAIN), "pending")}
+                   for a in state["assumptions"].values()]
+    verification = [{"node": key[2:], "question": state["nodes"][key[2:]]["text"],
+                     "allowExternal": value.get("allowExternal") is True}
+                    for key, value in round_["answers"].items()
+                    if key.startswith("Q:") and value.get("kind") == "verify"]
+    return {"analysis": analysis_id, "focus": state["focus"], "line": round_.get("line", LINE_MAIN),
             "round": round_no, "kind": round_["kind"], "status": round_["status"],
-            "baseRev": round_.get("baseRev"), "decisions": decisions, "items": items,
-            "answers": round_["answers"], "sourceCopy": state["sourceCopy"]}
+            "baseRev": round_.get("baseRev"), "decisions": decisions, "items": items[:len(current_items)],
+            "answeredItems": [i for i in items if i["key"] in round_["answers"]],
+            "answers": round_["answers"], "sourceCopy": state["sourceCopy"],
+            "assumptions": assumptions, "facts": list(state["facts"].values()),
+            "verificationRequests": verification,
+            "parked": [n for n in state["nodes"].values() if n["status"] == "parked" and _is_active(state, n["id"])]}
 
 
 def convert(review_dir: Path, analysis_id: str, node_id: str, *, text: str | None = None,

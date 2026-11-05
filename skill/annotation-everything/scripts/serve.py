@@ -559,8 +559,14 @@ class Handler(BaseHTTPRequestHandler):
             raise Reject(400, "bad-request", self._t("serve.err.noRound"))
         return round_no
 
+    def _analysis_error_text(self, error: store.HandoffError) -> str:
+        messages = {"focus-required": "serve.life.focusRequired", "page-not-found": "serve.life.pageMissing",
+                    "analysis-closed": "serve.life.analysisClosed", "analysis-invalid-input": "serve.life.invalidInput",
+                    "structure-target-changed": "serve.life.structureChanged"}
+        return self._t(messages[error.code]) if error.code in messages else str(error)
+
     def _analysis_write(self, d: Path, body: dict[str, Any], op: str) -> Any:
-        """审阅人侧的分析写操作（发起以外的五个）：校验入参，存储拒绝映射成 4xx，
+        """审阅人侧的分析写操作：校验入参，存储拒绝映射成 4xx，
         原因代码随响应给页面（与存储层 HandoffError 的 code 一致）。"""
         aid = body.get("analysis")
         if not isinstance(aid, str) or not aid:
@@ -586,10 +592,14 @@ class Handler(BaseHTTPRequestHandler):
                 return analysis_store.confirm_convert(d, aid, draft, by="page")
             if op == "release":
                 return analysis_store.release_source(d, aid, by="page")
+            if op == "activate":
+                return analysis_store.activate(d, aid, by="page")
+            if op == "pause":
+                return analysis_store.pause(d, aid, by="page")
         except store.NotFound:
             raise Reject(404, "no-round", self._t("serve.err.noRound"))
         except store.HandoffError as e:
-            raise Reject(400, e.code, str(e))
+            raise Reject(400, e.code, self._analysis_error_text(e))
         raise Reject(400, "bad-request", self._t("serve.err.noAnalysis"))   # 未覆盖的 op，不可达
 
     def _api(self, path: str) -> None:
@@ -665,19 +675,27 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/analysis/start" and cmd == "POST":
             body = self._expect_obj(self._body())
             note_id = body.get("noteId")
-            if not isinstance(note_id, str) or not note_id:
-                raise Reject(400, "bad-request", self._t("serve.err.noNoteId"))
             try:
-                state, round_no = analysis_store.start(d, note_id, by="page",
-                                                       authorize=lambda: self._check_receiver(body))
+                if "noteId" in body:
+                    if not isinstance(note_id, str) or not note_id:
+                        raise Reject(400, "bad-request", self._t("serve.err.noNoteId"))
+                    state, round_no = analysis_store.start(d, note_id, by="page",
+                                                           authorize=lambda: self._check_receiver(body))
+                else:
+                    state, round_no = analysis_store.start_question(d, body.get("focus"), page=body.get("page"),
+                                                                    by="page", authorize=lambda: self._check_receiver(body))
             except store.HandoffError as error:
-                raise Reject(400, error.code, str(error))
+                raise Reject(400, error.code, self._analysis_error_text(error))
             except store.NotFound:
                 raise Reject(404, "no-note", self._t("serve.err.noNote"))
             note = next((n for n in store.load(d)["notes"] if n.get("id") == note_id), None)
             self.server.log("info", f"analysis start note={note_id} analysis={state['id']} round={round_no}")
             self.server.run_analysis_hook(round_no)
             self._json(200, {"round": round_no, "analysis": state, "note": note, **self._ident()})
+        elif path in ("/api/analysis/activate", "/api/analysis/pause") and cmd == "POST":
+            body = self._expect_obj(self._body())
+            state = self._analysis_write(d, body, path.rsplit("/", 1)[-1])
+            self._json(200, {"analysis": state, **self._ident()})
         elif path == "/api/analysis/answer" and cmd == "POST":
             body = self._expect_obj(self._body())
             self._analysis_write(d, body, "answer")
@@ -1432,7 +1450,8 @@ def check(locale: str | None = None) -> int:
     os.environ["AE_HOME"] = str(tmp / "ledger")
     try:
         (tmp / "index.html").write_text("<!doctype html><title>check</title><script>var ok=1</script>ok", encoding="utf-8")
-        (tmp / MANIFEST).write_text(json.dumps({"reviewId": "checkreview"}), encoding="utf-8")
+        (tmp / MANIFEST).write_text(json.dumps({"reviewId": "checkreview", "pages": [
+            {"n": 1, "key": "synthetic-summary", "title": "合成概要", "stable": True}]}), encoding="utf-8")
         srv = ReviewServer(tmp, 0, log_to_file=True, locale=i18n.current_locale())
         port = srv.port
         t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
@@ -1559,6 +1578,23 @@ def check(locale: str | None = None) -> int:
         s, _, b = _req(port, "POST", "/api/analysis/start", same, {"noteId": anid})
         ok(s == 200 and json.loads(b).get("note", {}).get("status") == "held"
            and json.loads(b).get("round") == 1, T("serve.check.analysisStartOk", status=s))
+        first = json.loads(b).get("analysis", {})
+        claimed_round = analysis_store.claim(tmp, seq=1)
+        count = len(store.load(tmp)["notes"])
+        s, _, b = _req(port, "POST", "/api/analysis/start", same,
+                       {"focus": "自检：这一页的结论有依据吗？", "page": 1})
+        second = json.loads(b).get("analysis", {})
+        ok(s == 200 and json.loads(b).get("note") is None and second.get("sourceNote") is None
+           and second.get("sourceCopy", {}).get("key") == "synthetic-summary"
+           and len(store.load(tmp)["notes"]) == count, T("serve.check.lifeFocus", status=s))
+        s, _, b = _req(port, "POST", "/api/analysis/activate", same, {"analysis": first["id"]})
+        active = json.loads(b).get("analysis", {})
+        ok(s == 200 and active.get("status") == "active" and active.get("rev") == claimed_round["baseRev"]
+           and analysis_store.load(tmp, second["id"])["status"] == "paused", T("serve.check.lifeSwitch", status=s))
+        for headers, expected, label in analysis_guards:
+            codes = [_req(port, "POST", "/api/analysis/" + op, headers, {"analysis": first["id"]})[0]
+                     for op in ("activate", "pause")]
+            ok(all(code == expected for code in codes), T("serve.check.lifeGuard", guard=label, status=codes[-1]))
         s, _, _ = _req(port, "POST", "/api/server/stop", same, {})
         ok(s == 409, T("serve.check.stopNeedsReview"))
         s, _, b = _req(port, "POST", "/api/server/stop", {**same, "X-AE-Review": "checkreview"}, {})
