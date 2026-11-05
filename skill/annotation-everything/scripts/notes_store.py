@@ -681,6 +681,17 @@ def _new_note(raw: dict[str, Any], fields: dict[str, Any], nid: str) -> dict[str
     return note
 
 
+# _new_note 能写出的全部字段。导入时表外的键是认不出的扩展字段（更高版本写入的），
+# 原样保留、不清洗：本版本降级读写也不能把将来的数据丢掉。
+NOTE_FIELDS = frozenset(EDITABLE) | {"id", "at", "status", "updatedAt", "trail",
+                                     "resolution", "resolvedAt", "resolvedBy",
+                                     "draftedAt", "draftedBy", "draftBatch", "resolvedBatch"}
+
+
+def _extra_fields(source: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in source.items() if k not in NOTE_FIELDS}
+
+
 def add(review_dir: Path, data: dict[str, Any], *, by: str = "page") -> tuple[dict[str, Any], dict[str, Any]]:
     """新增一条。带合法 id 且已存在时视为重复提交（离线补传重试），原样返回、不再写入。"""
     fields = _clean_fields(data, partial=False)
@@ -958,6 +969,7 @@ def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "im
                     if fresh["status"] == "resolved" and cur.get("resolvedBatch") is not None \
                             and fresh.get("resolvedAt") == cur.get("resolvedAt"):
                         fresh["resolvedBatch"] = cur["resolvedBatch"]   # 同一次处理：保留批次号
+                    fresh.update({**_extra_fields(cur), **_extra_fields(raw)})   # 扩展字段：库里的保底，导入方的覆盖
                     cur.clear()
                     cur.update(fresh)
                     updated += 1
@@ -967,7 +979,7 @@ def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "im
             if dedup_key(fields) in keys:
                 skipped += 1
                 continue
-            note = _new_note(raw, fields, nid or new_id())
+            note = {**_extra_fields(raw), **_new_note(raw, fields, nid or new_id())}
             doc["notes"].append(note)
             by_id[note["id"]] = note
             keys.add(dedup_key(note))
