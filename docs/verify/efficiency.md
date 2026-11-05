@@ -1,6 +1,6 @@
 # 持续效率报告与维护
 
-`verify_report.py` 从已有验证记录生成效率投影。报告不启动产品测试、不访问真实审阅材料。日常开发流程见 [onboarding.md](onboarding.md)，总规格的实测与未完成项见 [final-acceptance.md](final-acceptance.md)。
+`verify_report.py` 从已有验证记录生成效率投影。报告不启动产品测试、不访问真实审阅材料。两阶段工作流见 [onboarding.md](onboarding.md)：开发只做快速检查，全量验证和效率问题处理留到用户手动发起的 PR review，不为开 PR 额外采样或重跑。总规格的实测与未完成项见 [final-acceptance.md](final-acceptance.md)。
 
 ## 读取与重建
 
