@@ -19,6 +19,7 @@ notes_store 的不加锁内部函数在本模块的锁内完成（同一次写�
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 import re
 from pathlib import Path
@@ -178,6 +179,20 @@ def _restore_node(node: dict[str, Any]) -> None:
     node["status"] = node.pop("inactiveStatus", "decided" if node.get("decision") else "pending")
 
 
+def _share_options(state: dict[str, Any], node_id: str) -> dict[str, str]:
+    """同一问题的选项身份跨线共享；选择哪个选项仍由各线节点投影保存。"""
+    options: dict[str, str] = {}
+    nodes = [line["nodes"][node_id] for line in state["lines"].values() if node_id in line["nodes"]]
+    for node in nodes:
+        for oid, label in node["options"].items():
+            if oid in options and options[oid] != label:
+                raise ValueError("同一问题的选项标识对应了不同原文")
+            options[oid] = label
+    for node in nodes:
+        node["options"] = options
+    return options
+
+
 def _apply_structure_change(state: dict[str, Any], round_: dict[str, Any], key: str,
                             proposal: dict[str, Any], accepted: bool) -> None:
     """拆合/作废只改变当前线的投影；旧节点、决策和已确认的新节点标识一直保留。"""
@@ -242,6 +257,7 @@ def _apply_answer(state: dict[str, Any], round_: dict[str, Any], key: str, value
         node["decision"] = None
         return
     if value["kind"] == "text":
+        _share_options(state, node_id)
         # 原话也是可重裁的稳定选项；相同原话复用同一选项与决策。
         option = next((oid for oid, text in node["options"].items()
                        if oid.startswith("text-") and text == value["text"]), None)
@@ -297,10 +313,18 @@ def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
         "line": LINE_MAIN, "seq": {"node": 0, "decision": 0, "draft": 0},
         "nodes": {}, "decisions": {}, "rounds": [], "drafts": [],
         "carry": {}, "pendingProposals": {}, "updateRequests": {}, "updates": {}, "rejections": [],
-        "assumptions": {}, "facts": {}, "rejectedProposals": [],
+        "assumptions": {}, "facts": {}, "rejectedProposals": [], "checkpoints": [],
     }
+    state["lines"] = {LINE_MAIN: {"id": LINE_MAIN, "ordinal": 1, "from": None, "nodes": state["nodes"]}}
+    current_line = LINE_MAIN
     for event in events:
         kind = event.get("type")
+        event_line = event.get("line", current_line)
+        if "round" in event and kind != "round-requested":
+            event_line = _round(state, event["round"]).get("line", LINE_MAIN)
+        if event_line in state["lines"]:
+            state["line"] = event_line
+            state["nodes"] = state["lines"][event_line]["nodes"]
         if kind == "started":
             state["id"] = event.get("id")
             state["rev"] = event.get("rev", 1)
@@ -328,6 +352,8 @@ def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
         elif kind == "round-done":
             round_ = _round(state, event["round"])
             round_.update(status="done", note=event.get("note"))
+            if event.get("context") is not None:
+                round_["context"] = copy.deepcopy(event["context"])
             state["rev"] = event.get("rev", state["rev"] + 1)
             for key, value in round_["answers"].items():
                 if key.startswith("Q:") and value.get("kind") == "verify":
@@ -354,6 +380,8 @@ def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
         elif kind == "round-voided":
             round_ = _round(state, event["round"])
             round_.update(status="void", voidReason=event.get("reason"))
+            if event.get("context") is not None:
+                round_["context"] = copy.deepcopy(event["context"])
             state["carry"].setdefault(round_.get("line", LINE_MAIN), {}).update(event.get("carry") or {})
             state["pendingProposals"].setdefault(round_.get("line", LINE_MAIN), {}).update(
                 {p["key"]: p for p in event.get("proposals") or []})
@@ -362,6 +390,35 @@ def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
             state["pendingProposals"].pop(event.get("line", LINE_MAIN), None)
         elif kind == "writeback-rejected":
             state["rejections"].append(event)
+        elif kind == "checkpoint-recorded":
+            state["checkpoints"].append(copy.deepcopy(event["checkpoint"]))
+            state["rev"] = event.get("rev", state["rev"])
+        elif kind == "checkpoint-sealed":
+            next(c for c in state["checkpoints"] if c["id"] == event["checkpoint"])["sealed"] = True
+            state["rev"] = event["rev"]
+        elif kind == "line-forked":
+            checkpoint = next(c for c in state["checkpoints"] if c["id"] == event["checkpoint"])
+            state["lines"][event["line"]] = {
+                "id": event["line"], "ordinal": len(state["lines"]) + 1,
+                "from": checkpoint["id"], "at": event.get("at"),
+                "nodes": copy.deepcopy(checkpoint["snapshot"]["nodes"]),
+            }
+            for nid in state["lines"][event["line"]]["nodes"]:
+                _share_options(state, nid)
+            for aid, assumption in checkpoint["snapshot"]["assumptions"].items():
+                state["assumptions"][aid]["confirmed"][event["line"]] = (
+                    assumption["confirmed"].get(checkpoint["line"], "pending"))
+            current_line = event["line"]
+            state["rev"] = event["rev"]
+        elif kind == "line-switched":
+            current_line = event["line"]
+            state["rev"] = event["rev"]
+        elif kind == "analysis-closed":
+            state["status"] = "closed"
+            state["rev"] = event["rev"]
+        elif kind == "analysis-reopened":
+            state["status"] = "active"
+            state["rev"] = event["rev"]
         elif kind == "redecided":
             _decide(state, state["nodes"][event["node"]], event["option"], None)
             state["rev"] = event["rev"]
@@ -388,11 +445,18 @@ def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
             if state["sourceNote"]:
                 state["sourceState"] = "resolved"
                 state["sourceResolvedNote"] = event.get("note")
+        state["line"] = current_line
+        state["nodes"] = state["lines"][current_line]["nodes"]
     for round_ in state["rounds"]:
         round_["rejected"] = sorted(round_["rejected"])
-        round_["items"] = _round_items(state, round_)
+        round_["items"] = _round_items(_line_view(state, round_.get("line", LINE_MAIN)), round_)
     state.pop("seq", None)   # 内部分配器不外露
     return state
+
+
+def _line_view(state: dict[str, Any], line: str) -> dict[str, Any]:
+    """供本轮规则读取所属线的投影；实体注册表与分析级版本仍共享。"""
+    return {**state, "line": line, "nodes": state["lines"][line]["nodes"]}
 
 
 def _round(state: dict[str, Any], seq: int) -> dict[str, Any]:
@@ -623,8 +687,11 @@ def answer(review_dir: Path, analysis_id: str, round_no: int, key: str, value: d
     回答按题目幂等（改主意就再答一次，取最后一次）；已交出的回答合并进同一轮。"""
     review_dir = Path(review_dir)
     with store.locked(review_dir):
-        state = load(review_dir, analysis_id)
+        displayed = load(review_dir, analysis_id)
+        _guard_open(displayed)
+        state = displayed
         round_ = _round(state, round_no)
+        state = _line_view(state, round_.get("line", LINE_MAIN))
         if round_["status"] not in ROUND_ANSWERABLE:
             raise store.HandoffError(f"第 {round_no} 轮{('已被 ' + str(round_.get('claimedBy')) + ' 接手') if round_['status'] == 'claimed' else '已经处理完了'}"
                                      "，不能再作答", code="round-not-answerable",
@@ -655,7 +722,7 @@ def answer(review_dir: Path, analysis_id: str, round_no: int, key: str, value: d
         elif value.get("kind") == "text":
             value = {**value, "text": store.fix_text(value["text"])}
         if round_["answers"].get(key) == value:
-            return state
+            return displayed
         if item["type"] == "update":
             draft = state["updates"][item["update"]]
             if draft["status"] == "confirmed":
@@ -705,6 +772,7 @@ def submit_round(review_dir: Path, analysis_id: str, round_no: int, *, by: str =
         if authorize is not None:
             authorize()
         state = load(review_dir, analysis_id)
+        _guard_open(state)
         round_ = _round(state, round_no)
         if round_["status"] == "submitted":
             return state   # 已在排队：这次修改合并进去
@@ -922,12 +990,14 @@ def writeback(review_dir: Path, analysis_id: str, round_no: int, base_rev: int, 
         if round_["status"] != "claimed":
             raise store.HandoffError(f"第 {round_no} 轮没有被领取，不能写回（{round_['status']}）",
                                      code="round-not-claimed", round=round_no, status=round_["status"])
+        state = _line_view(state, round_.get("line", LINE_MAIN))
         if base_rev != state["rev"]:
             _record(review_dir, analysis_id, "writeback-rejected", by, round=round_no,
                     expected=base_rev, actual=state["rev"], line=round_.get("line", LINE_MAIN))
             _record(review_dir, analysis_id, "round-voided", by, round=round_no,
                     reason="base-rev-mismatch", carry=_answer_carry(state, round_),
-                    proposals=_unanswered_proposals(round_))
+                    proposals=_unanswered_proposals(round_),
+                    context=_historical_context(review_dir, state, round_, "void", "base-rev-mismatch"))
             refreshed = _enqueue_refresh(review_dir, load(review_dir, analysis_id),
                                           round_.get("line", LINE_MAIN), "refresh", by)
             raise store.HandoffError(f"第 {round_no} 轮接手后分析已被改过（基线 {base_rev} → {state['rev']}），"
@@ -940,10 +1010,15 @@ def writeback(review_dir: Path, analysis_id: str, round_no: int, base_rev: int, 
         candidates = _clean_evidence(assumptions, state, assumptions=True)
         findings = _clean_evidence(facts, state, assumptions=False)
         drafted_updates = _clean_updates(review_dir, state, round_, updates)
+        history = _historical_context(review_dir, state, round_, "done")
+        history["note"] = store.fix_text(note)
+        history["writeback"] = {"proposals": cleaned, "assumptions": candidates,
+                                "facts": findings, "updates": drafted_updates}
         new_rev = state["rev"] + 1
         _append_event(review_dir, analysis_id, {"type": "round-done", "at": store.now_iso(), "by": by,
                                                 "round": round_no, "note": store.fix_text(note),
-                                                "rev": new_rev, "assumptions": candidates, "facts": findings})
+                                                "rev": new_rev, "assumptions": candidates, "facts": findings,
+                                                "context": history})
         for draft in drafted_updates:
             _record(review_dir, analysis_id, "note-update-drafted", by, draft=draft, round=round_no)
         next_round = None
@@ -952,7 +1027,7 @@ def writeback(review_dir: Path, analysis_id: str, round_no: int, base_rev: int, 
                    **{p["key"]: p for p in _unanswered_proposals(round_)}}
         carried = [p for key, p in pending.items() if "S:" + key not in round_["answers"]]
         fresh = [p for p in cleaned if p["key"] not in {c["key"] for c in carried}]
-        current = load(review_dir, analysis_id)
+        current = _line_view(load(review_dir, analysis_id), line)
         frontier = _frontier_question_items(current)
         pending_assumptions = any(a["confirmed"].get(line, "pending") == "pending"
                                   for a in current["assumptions"].values())
@@ -964,6 +1039,7 @@ def writeback(review_dir: Path, analysis_id: str, round_no: int, base_rev: int, 
                                                     "by": by, "round": next_round, "kind": "next",
                                                     "line": line, "items": combined, **prefilled})
         _record(review_dir, analysis_id, "carry-consumed", by, line=line)
+        _checkpoint_locked(review_dir, analysis_id, by, auto=True, round_no=round_no, line=line)
         after = load(review_dir, analysis_id)
         return {"state": after, "nextRound": next_round}
 
@@ -973,6 +1049,14 @@ def round_context(review_dir: Path, analysis_id: str, round_no: int) -> dict[str
     审阅人原话回答、源批注原文副本。"""
     state = load(Path(review_dir), analysis_id)
     round_ = _round(state, round_no)
+    if round_.get("context") is not None and round_["status"] in ("done", "void"):
+        return copy.deepcopy(round_["context"])
+    state = _line_view(state, round_.get("line", LINE_MAIN))
+    return _round_context_data(Path(review_dir), state, round_)
+
+
+def _round_context_data(review_dir: Path, state: dict[str, Any], round_: dict[str, Any]) -> dict[str, Any]:
+    analysis_id, round_no = state["id"], round_["seq"]
     decisions = [{"id": d["id"], "node": d["node"], "nodeShort": state["nodes"][d["node"]]["short"],
                   "question": state["nodes"][d["node"]]["text"], "option": d["option"], "label": d["label"],
                   "round": d["round"], "line": d["line"], "assumptions": d.get("assumptions", [])}
@@ -1026,6 +1110,7 @@ def round_context(review_dir: Path, analysis_id: str, round_no: int) -> dict[str
                     if key.startswith("Q:") and value.get("kind") == "verify"]
     return {"analysis": analysis_id, "focus": state["focus"], "line": round_.get("line", LINE_MAIN),
             "round": round_no, "kind": round_["kind"], "status": round_["status"],
+            "note": round_.get("note"), "historical": False,
             "baseRev": round_.get("baseRev"), "decisions": decisions, "items": items[:len(current_items)],
             "answeredItems": [i for i in items if i["key"] in round_["answers"]],
             "answers": round_["answers"], "sourceCopy": state["sourceCopy"],
@@ -1034,6 +1119,15 @@ def round_context(review_dir: Path, analysis_id: str, round_no: int) -> dict[str
             "assumptions": assumptions, "facts": list(state["facts"].values()),
             "verificationRequests": verification,
             "parked": [n for n in state["nodes"].values() if n["status"] == "parked" and _is_active(state, n["id"])]}
+
+
+def _historical_context(review_dir: Path, state: dict[str, Any], round_: dict[str, Any],
+                        status: str, reason: str | None = None) -> dict[str, Any]:
+    context = _round_context_data(review_dir, _line_view(state, round_["line"]), round_)
+    context.update(status=status, historical=True, protection={"locked": False, "round": None})
+    if reason:
+        context["voidReason"] = reason
+    return copy.deepcopy(context)
 
 
 def convert(review_dir: Path, analysis_id: str, node_id: str, *, text: str | None = None,
@@ -1131,12 +1225,146 @@ def release_source(review_dir: Path, analysis_id: str, *, by: str = "page") -> d
 # ---------- 分析级保护与重裁（与后续分析线扩展共用） ----------
 def guard_unlocked(state: dict[str, Any]) -> None:
     """只锁住这一分析，不影响审阅里其他分析的焦点与数据。调用方须持有审阅目录锁。"""
+    _guard_open(state)
     if any(round_["status"] == "claimed" for round_ in state["rounds"]):
         raise store.HandoffError("Agent 正在处理这一分析；写回前只能查看和作答", code="analysis-locked")
 
 
 def _record(review_dir: Path, analysis_id: str, event_type: str, by: str, **fields: Any) -> None:
     _append_event(review_dir, analysis_id, {"type": event_type, "at": store.now_iso(), "by": by, **fields})
+
+
+def _snapshot(state: dict[str, Any]) -> dict[str, Any]:
+    """封存领域投影；不递归嵌入轮次、旧检查点或分析线。"""
+    return copy.deepcopy({
+        "focus": state["focus"], "nodes": state["nodes"], "decisions": state["decisions"],
+        "assumptions": state["assumptions"], "facts": state["facts"],
+        "conclusions": [node["decision"] for node in state["nodes"].values()
+                        if decision_in_force(state, node.get("decision"))],
+        "unresolved": [node["id"] for node in state["nodes"].values()
+                       if node["status"] in ("pending", "verifying") and _is_active(state, node["id"])],
+        "parked": [node["id"] for node in state["nodes"].values()
+                   if node["status"] == "parked" and _is_active(state, node["id"])],
+    })
+
+
+def _checkpoint_locked(review_dir: Path, analysis_id: str, by: str, *, auto: bool,
+                       round_no: int | None = None, sealed: bool = False,
+                       line: str | None = None) -> dict[str, Any]:
+    state = load(review_dir, analysis_id)
+    state = _line_view(state, line or state["line"])
+    checkpoint = {"id": f"cp{len(state['checkpoints']) + 1}", "line": state["line"],
+                  "round": round_no, "auto": auto, "sealed": sealed,
+                  "at": store.now_iso(), "by": by, "snapshot": _snapshot(state)}
+    _record(review_dir, analysis_id, "checkpoint-recorded", by, checkpoint=checkpoint,
+            rev=state["rev"] if auto else state["rev"] + 1)
+    return checkpoint
+
+
+def _guard_open(state: dict[str, Any]) -> None:
+    if state["status"] == "closed":
+        raise store.HandoffError("这项分析已结案，请先重新打开", code="analysis-closed")
+
+
+def seal_checkpoint(review_dir: Path, analysis_id: str, checkpoint_id: str | None = None, *,
+                    by: str = "page", authorize: Callable[[], None] | None = None) -> dict[str, Any]:
+    """封存当前状态，或把已有自动检查点标为封存；快照内容保持不变。"""
+    review_dir = Path(review_dir)
+    with store.locked(review_dir):
+        if authorize is not None:
+            authorize()
+        state = load(review_dir, analysis_id)
+        _guard_open(state)
+        guard_unlocked(state)
+        if checkpoint_id is None:
+            last = next((r["seq"] for r in reversed(state["rounds"])
+                         if r["line"] == state["line"] and r["status"] == "done"), None)
+            _checkpoint_locked(review_dir, analysis_id, by, auto=False, round_no=last, sealed=True)
+        else:
+            checkpoint = next((c for c in state["checkpoints"] if c["id"] == checkpoint_id), None)
+            if checkpoint is None:
+                raise store.HandoffError("没有找到这个检查点，请刷新后查看", code="checkpoint-not-found")
+            if not checkpoint["sealed"]:
+                _record(review_dir, analysis_id, "checkpoint-sealed", by,
+                        checkpoint=checkpoint_id, rev=state["rev"] + 1)
+        return load(review_dir, analysis_id)
+
+
+def fork_line(review_dir: Path, analysis_id: str, checkpoint_id: str, *, by: str = "page",
+              authorize: Callable[[], None] | None = None) -> dict[str, Any]:
+    """从检查点分线并切换；已有实体保留身份，只复制该线的节点投影。"""
+    review_dir = Path(review_dir)
+    with store.locked(review_dir):
+        if authorize is not None:
+            authorize()
+        state = load(review_dir, analysis_id)
+        _guard_open(state)
+        guard_unlocked(state)
+        checkpoint = next((c for c in state["checkpoints"] if c["id"] == checkpoint_id), None)
+        if checkpoint is None:
+            raise store.HandoffError("没有找到这个检查点，请刷新后查看", code="checkpoint-not-found")
+        line = f"line{len(state['lines']) + 1}"
+        _void_open_rounds(review_dir, state, state["line"], "line-forked", by)
+        _record(review_dir, analysis_id, "line-forked", by, checkpoint=checkpoint_id,
+                line=line, rev=state["rev"] + 1)
+        after = load(review_dir, analysis_id)
+        _sync_notes_locked(review_dir, after, by)
+        _enqueue_refresh(review_dir, after, line, "refresh", by)
+        return load(review_dir, analysis_id)
+
+
+def switch_line(review_dir: Path, analysis_id: str, line: str, *, by: str = "page",
+                authorize: Callable[[], None] | None = None) -> dict[str, Any]:
+    """回到目标线的最新投影，保留其他线已经交出的轮次。"""
+    review_dir = Path(review_dir)
+    with store.locked(review_dir):
+        if authorize is not None:
+            authorize()
+        state = load(review_dir, analysis_id)
+        _guard_open(state)
+        guard_unlocked(state)
+        if not isinstance(line, str) or line not in state["lines"]:
+            raise store.HandoffError("没有找到这条分析线，请刷新后查看", code="line-not-found")
+        if line != state["line"]:
+            _record(review_dir, analysis_id, "line-switched", by, line=line, rev=state["rev"] + 1)
+            _sync_notes_locked(review_dir, load(review_dir, analysis_id), by)
+        return load(review_dir, analysis_id)
+
+
+def close_analysis(review_dir: Path, analysis_id: str, *, by: str = "page",
+                   authorize: Callable[[], None] | None = None) -> dict[str, Any]:
+    """没有排队或处理中轮次时结案，作废未交出轮次并封存最后状态。"""
+    review_dir = Path(review_dir)
+    with store.locked(review_dir):
+        if authorize is not None:
+            authorize()
+        state = load(review_dir, analysis_id)
+        if state["status"] == "closed":
+            return state
+        guard_unlocked(state)
+        if any(r["status"] == "submitted" for r in state["rounds"]):
+            raise store.HandoffError("还有已交出的分析轮次，请等处理完再结案", code="analysis-pending-rounds")
+        for line in state["lines"]:
+            _void_open_rounds(review_dir, _line_view(state, line), line, "analysis-closed", by)
+        _checkpoint_locked(review_dir, analysis_id, by, auto=False, sealed=True)
+        _record(review_dir, analysis_id, "analysis-closed", by, rev=state["rev"] + 1)
+        return load(review_dir, analysis_id)
+
+
+def reopen_analysis(review_dir: Path, analysis_id: str, *, by: str = "page",
+                    authorize: Callable[[], None] | None = None) -> dict[str, Any]:
+    """重新打开已结案分析并自动排队出题；已有请求时不重复。"""
+    review_dir = Path(review_dir)
+    with store.locked(review_dir):
+        if authorize is not None:
+            authorize()
+        state = load(review_dir, analysis_id)
+        if state["status"] != "closed":
+            return state
+        _record(review_dir, analysis_id, "analysis-reopened", by, rev=state["rev"] + 1)
+        _activate_locked(review_dir, analysis_id, by=by)
+        _enqueue_refresh(review_dir, load(review_dir, analysis_id), state["line"], "reopen", by)
+        return load(review_dir, analysis_id)
 
 
 def _answer_carry(state: dict[str, Any], round_: dict[str, Any]) -> dict[str, Any]:
@@ -1160,13 +1388,16 @@ def _answer_carry(state: dict[str, Any], round_: dict[str, Any]) -> dict[str, An
 
 
 def _void_open_rounds(review_dir: Path, state: dict[str, Any], line: str, reason: str, by: str) -> None:
+    state = _line_view(state, line)
     for round_ in state["rounds"]:
         if round_.get("line", LINE_MAIN) == line and round_["status"] in ROUND_OPEN:
             _record(review_dir, state["id"], "round-voided", by, round=round_["seq"], reason=reason,
-                    carry=_answer_carry(state, round_), proposals=_unanswered_proposals(round_))
+                    carry=_answer_carry(state, round_), proposals=_unanswered_proposals(round_),
+                    context=_historical_context(review_dir, state, round_, "void", reason))
 
 
 def _enqueue_refresh(review_dir: Path, state: dict[str, Any], line: str, kind: str, by: str) -> int:
+    state = _line_view(state, line)
     waiting = next((r for r in state["rounds"] if r.get("line", LINE_MAIN) == line
                     and r["status"] == "submitted"), None)
     if waiting is not None:
@@ -1207,6 +1438,7 @@ def _carry_question_valid(state: dict[str, Any], item: dict[str, Any], value: An
 
 def _prefill(state: dict[str, Any], line: str, proposals: list[dict[str, Any]],
              round_: dict[str, Any] | None = None) -> dict[str, Any]:
+    state = _line_view(state, line)
     carried = dict(state.get("carry", {}).get(line, {}))
     if carried and round_ is not None:
         carried.update(_answer_carry(state, round_))   # 领取期间的最后原答优先。
