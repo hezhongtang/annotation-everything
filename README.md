@@ -366,7 +366,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 ├── scripts/
 │   ├── build_viewer.py            生成对照页 index.html 和 review.json
 │   ├── report_check.py            报告产物核验：确定规则、覆盖与交付判定
-│   ├── i18n.py                    读取共享词典，并按所选语言插值
+│   ├── i18n.py                    读取共享词典，并按所选语言插值；持进程级的界面语言状态（入口设置一次，各模块共用）；命令行共用的语言样板（取 --locale、翻译 argparse 报错、报告非法语言）
 │   ├── update.py                  检查正式版本并更新技能副本
 │   ├── content_manifest.py        记录技能副本的文件、目录和链接指纹
 │   ├── viewer_template.html       对照页模板（服务模式和本地文件模式）
@@ -378,7 +378,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── ledger.py                  审阅台账：审阅标识、审阅目录和专属端口
 │   ├── match.py                   在报告与讲稿之间查找对应句子
 │   ├── skill_sources.py           发现本机的技能目录
-│   ├── fsutil.py                  原子写文件的公共小工具
+│   ├── fsutil.py                  原子写入、文件锁和 CSP 脚本哈希的公共小工具
 │   └── check_pptx_fonts.py        PPTX 与 PDF 字体核查
 └── evals/                         技能评测用例，含生成、核验与改稿（供 skill-creator 使用）
 ae.py                             统一管理命令：install 安装技能副本，doctor 体检，repair 修复，uninstall 卸载

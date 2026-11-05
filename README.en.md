@@ -366,7 +366,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 ├── scripts/
 │   ├── build_viewer.py            builds the review page index.html and review.json
 │   ├── report_check.py            report verification: deterministic rules, coverage and delivery verdict
-│   ├── i18n.py                    loads the shared catalogs and fills in the chosen language
+│   ├── i18n.py                    loads the shared catalogs and fills in the chosen language; holds the process-wide interface language state (set once by an entry, shared by every module); the command line boilerplate shared by every entry (reading --locale, translating argparse errors, reporting an unsupported language)
 │   ├── update.py                  checks stable releases and updates the skill copy
 │   ├── content_manifest.py        fingerprints the skill copy's files, directories and links
 │   ├── viewer_template.html       review page template (server mode and local file mode)
@@ -378,7 +378,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── ledger.py                  review ledger: review IDs, review directories and dedicated ports
 │   ├── match.py                   finds matching sentences between the report and the speaker notes
 │   ├── skill_sources.py           discovers skill directories on this machine
-│   ├── fsutil.py                  shared atomic file-write helper
+│   ├── fsutil.py                  shared helper for atomic writes, file locks and CSP script hashes
 │   └── check_pptx_fonts.py        PPTX and PDF font check
 └── evals/                         skill evaluations, including generation, verification and revisions (used with skill-creator)
 ae.py                             unified management command: install the skill copy, doctor checks it, repair fixes it, uninstall removes it
