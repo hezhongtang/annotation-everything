@@ -2138,7 +2138,8 @@ function analysisRoundAnswerItems(state,round){
     seen.add(item.key);
     items.push(item.type==="structure"&&!item.proposal?{...item,proposal:(round.proposals||[]).find(p=>"S:"+p.key===item.key)||{...item,key:item.key.slice(2)}}:item)
   }
-  return items
+  const priority={deadend:0,update:1,assumption:2,structure:3,question:4};
+  return items.sort((a,b)=>priority[a.type]-priority[b.type])
 }
 function analysisDeadEndTarget(state,end){
   if(end.kind==="line")return analysisLineName(state.lines&&state.lines[end.targetLine]?state:{lines:{[end.targetLine]:{ordinal:end.targetOrdinal}}},end.targetLine);

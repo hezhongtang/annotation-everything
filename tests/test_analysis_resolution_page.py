@@ -160,6 +160,51 @@ class AnalysisResolutionPageTests(unittest.TestCase):
         """)
         self.assertEqual(value, [{"op": "redecide", "body": {"node": "n1", "option": "a"}}])
 
+    def test_current_round_renders_pending_and_saved_items_in_stable_type_order(self):
+        state = resolution_state()
+        state.update(nodes={}, decisions={}, assumptions={}, deadEnds={}, updates={}, drafts=[])
+        items, proposals = {}, []
+        for suffix in ("z", "a"):
+            node, assumption, end, update, proposal = [prefix + suffix for prefix in ("n_", "a_", "e_", "u_", "p_")]
+            state["nodes"][node] = {"id": node, "text": "合成待答问题 " + suffix, "status": "pending",
+                                     "options": {"yes": "合成推荐"}, "recommend": "yes"}
+            state["assumptions"][assumption] = {"id": assumption, "text": "合成前提 " + suffix, "refuted": False}
+            state["deadEnds"][end] = {"id": end, "kind": "option", "node": node, "option": "yes",
+                                      "reason": "合成无路可走原因 " + suffix,
+                                      "status": "pending" if suffix == "z" else "confirmed"}
+            state["updates"][update] = {"id": update, "text": "合成批注新文 " + suffix, "status": "pending"}
+            structure = {"key": proposal, "text": "合成结构提议 " + suffix}
+            proposals.append(structure)
+            items[suffix] = [{"key": "Q:" + node, "type": "question", "node": node},
+                             {**structure, "key": "S:" + proposal, "type": "structure"},
+                             {"key": "A:" + assumption, "type": "assumption", "assumption": assumption},
+                             {"key": "U:" + update, "type": "update", "update": update},
+                             {"key": "D:" + end, "type": "deadend", "deadEnd": end}]
+        state["lines"]["main"]["nodes"] = state["nodes"]
+        round_ = state["rounds"][0]
+        round_.update(proposals=proposals, items=items["z"],
+                      answers={item["key"]: {"kind": "reject" if item["type"] == "update" else "accept"}
+                               for item in items["a"]})
+        context = {"analysis": state["id"], "round": round_["seq"], "historical": False,
+                   "answeredItems": items["a"] + items["z"] + items["a"]}
+        setup = """
+          let analysisState=STATE,analysisContext=CONTEXT,analysisBusy=false,analysisRenderKey='';
+          const analyses=[],analysisSelected=analysisState.id,analysisShown=()=>true,analysisRouteLabels=()=>{},analysisDraftFor=()=>({});
+        """.replace("STATE", json.dumps(state, ensure_ascii=False)).replace("CONTEXT", json.dumps(context, ensure_ascii=False))
+        for locale in ("en", "zh-CN"):
+            values = interaction_program([
+                ("// ---------- Analysis view helpers ----------", "// ---------- Analysis view DOM ----------"),
+                ("function renderAnalysis(){", "async function analysisAction("),
+            ], setup, r"""
+              return ['open','submitted','claimed'].map(status=>{
+                analysisState.rounds[0].status=status;analysisState.protection.locked=status==='claimed';
+                renderAnalysis();return [...$('analysisBody').innerHTML.matchAll(/data-analysis-item="([^"]+)"/g)].map(match=>match[1]);
+              });
+            """, locale)
+            for actual in values:
+                self.assertEqual(actual, ["D:e_z", "D:e_a", "U:u_z", "U:u_a", "A:a_z", "A:a_a",
+                                          "S:p_z", "S:p_a", "Q:n_z", "Q:n_a"])
+
     def test_saved_round_items_stay_unique_and_confirmed_updates_and_history_stay_readonly(self):
         state = resolution_state()
         state["protection"]["locked"] = False
