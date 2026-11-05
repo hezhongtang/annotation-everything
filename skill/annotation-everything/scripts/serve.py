@@ -147,9 +147,10 @@ def clean(value: Any, limit: int = 60) -> str:
 class Reject(Exception):
     """拒绝请求。code 是固定的原因代码，msg 是给页面看的说明（不含请求内容）。"""
 
-    def __init__(self, status: int, code: str, msg: str):
+    def __init__(self, status: int, code: str, msg: str, *, params: dict[str, Any] | None = None):
         super().__init__(msg)
         self.status, self.code, self.msg = status, code, msg
+        self.params = params
 
 
 class _RequestReads:
@@ -418,7 +419,8 @@ class Handler(BaseHTTPRequestHandler):
                                   f"path={clean(self.path)} host={clean(self.headers.get('Host'))} "
                                   f"origin={clean(self.headers.get('Origin'))} site={clean(self.headers.get('Sec-Fetch-Site'), 20)}")
         self.close_connection = True
-        self._json(e.status, {"error": e.msg, "code": e.code, "app": APP})
+        self._json(e.status, {"error": e.msg, "code": e.code, "app": APP,
+                              **({"params": e.params} if e.params is not None else {})})
 
     def _t(self, key: str, **params: object) -> str:
         """拒绝说明用的消息：按服务启动时定的语言取，原因代码与状态不走这里。"""
@@ -569,6 +571,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._t("cli.analysis.protect.error." + error.code)
         if error.code in ("checkpoint-not-found", "line-not-found", "analysis-pending-rounds"):
             return self._t("cli.analysis.history.error." + error.code)
+        if error.code in ("assumption-not-found", "bad-dead-ends", "dead-end-option", "dead-end-line", "dead-end-obsolete"):
+            params = dict(error.params)
+            if error.code in ("dead-end-option", "dead-end-line"):
+                params["assumptions"] = " / ".join(params.get("assumptions", [])) or self._t("cli.analysis.resolution.noAssumptions")
+            return self._t("cli.analysis.resolution.error." + error.code, **params)
         return self._t(messages[error.code]) if error.code in messages else str(error)
 
     def _analysis_state(self, d: Path, aid: str) -> dict[str, Any]:
@@ -607,6 +614,12 @@ class Handler(BaseHTTPRequestHandler):
                 return analysis_store.activate(d, aid, by="page")
             if op == "pause":
                 return analysis_store.pause(d, aid, by="page")
+            if op == "refute":
+                assumption = body.get("assumption")
+                if not isinstance(assumption, str) or not assumption:
+                    raise Reject(400, "bad-request", self._t("cli.analysis.resolution.error.assumption-not-found"))
+                return analysis_store.refute_assumption(d, aid, assumption, by="page",
+                                                        authorize=lambda: self._check_receiver(body))
             if op in ("seal", "fork", "switch-line", "close", "reopen"):
                 operations = {"seal": analysis_store.seal_checkpoint, "fork": analysis_store.fork_line,
                               "switch-line": analysis_store.switch_line, "close": analysis_store.close_analysis,
@@ -643,7 +656,9 @@ class Handler(BaseHTTPRequestHandler):
         except store.NotFound:
             raise Reject(404, "no-round", self._t("serve.err.noRound"))
         except store.HandoffError as e:
-            raise Reject(400, e.code, self._analysis_error_text(e))
+            params = ({"reason": e.params["reason"], "assumptions": e.params["assumptions"]}
+                      if e.code in ("dead-end-option", "dead-end-line") else None)
+            raise Reject(400, e.code, self._analysis_error_text(e), params=params)
         raise Reject(400, "bad-request", self._t("serve.err.noAnalysis"))   # 未覆盖的 op，不可达
 
     def _api(self, path: str) -> None:
@@ -750,10 +765,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"analysis": state, **self._ident()})
         elif path in ("/api/analysis/redecide", "/api/analysis/update-note", "/api/analysis/keep-note",
                       "/api/analysis/delete-note", "/api/analysis/seal", "/api/analysis/fork",
-                      "/api/analysis/switch-line", "/api/analysis/close", "/api/analysis/reopen") and cmd == "POST":
+                      "/api/analysis/switch-line", "/api/analysis/close", "/api/analysis/reopen",
+                      "/api/analysis/refute") and cmd == "POST":
             body = self._expect_obj(self._body())
             state = self._analysis_write(d, body, path.rsplit("/", 1)[-1])
-            if path.endswith(("/redecide", "/update-note", "/fork", "/reopen")):
+            if path.endswith(("/redecide", "/update-note", "/fork", "/reopen", "/refute")):
                 for round_ in state["rounds"]:
                     if round_["status"] == "submitted":
                         self.server.run_analysis_hook(round_["seq"])
@@ -1657,7 +1673,7 @@ def check(locale: str | None = None) -> int:
         for headers, expected, label in analysis_guards:
             codes = [_req(port, "POST", "/api/analysis/" + op, headers, {"analysis": first["id"]})[0]
                      for op in ("activate", "pause", "redecide", "update-note", "keep-note", "delete-note",
-                                "seal", "fork", "switch-line", "close", "reopen")]
+                                "seal", "fork", "switch-line", "close", "reopen", "refute")]
             ok(all(code == expected for code in codes), T("serve.check.lifeGuard", guard=label, status=codes[-1]))
         s, _, _ = _req(port, "POST", "/api/server/stop", same, {})
         ok(s == 409, T("serve.check.stopNeedsReview"))

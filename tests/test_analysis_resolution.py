@@ -177,10 +177,14 @@ class AnalysisResolutionTests(unittest.TestCase):
                 analysis.answer(self.review, self.aid, number, "Q:n3", value)
             self.assertEqual(blocked.exception.code, "dead-end-option")
             self.assertEqual(analysis.load(self.review, self.aid), before)
+        parked = analysis.answer(self.review, self.aid, number, "Q:n3", {"kind": "park", "option": "quarter"})
+        self.assertEqual(parked["nodes"]["n3"]["status"], "parked")
+        verifying = analysis.answer(self.review, self.aid, number, "Q:n3", {"kind": "verify", "option": "quarter"})
+        self.assertEqual(verifying["nodes"]["n3"]["status"], "verifying")
         allowed = analysis.answer(self.review, self.aid, number, "Q:n3", {"kind": "option", "option": "year"})
         self.assertEqual(allowed["decisions"][allowed["nodes"]["n3"]["decision"]]["option"], "year")
 
-    def test_a_claim_on_any_line_blocks_refutation_but_allows_answers(self):
+    def test_a_claim_on_any_line_blocks_refutation(self):
         _number, _first, _second, _linked = self.reasoning()
         checkpoint = analysis.seal_checkpoint(self.review, self.aid)["checkpoints"][-1]
         forked = analysis.fork_line(self.review, self.aid, checkpoint["id"])
@@ -195,6 +199,48 @@ class AnalysisResolutionTests(unittest.TestCase):
         analysis.writeback(self.review, self.aid, number, claimed["baseRev"], [])
         changed = analysis.refute_assumption(self.review, self.aid, "a1")
         self.assertTrue(changed["assumptions"]["a1"]["refuted"])
+
+    def test_dead_end_confirmation_during_claim_preserves_baseline_and_history(self):
+        number, _first, _second, _linked = self.reasoning()
+        result = self.write(number, dead_ends=[{
+            "key": "quarter", "kind": "option", "node": "n1", "option": "quarter",
+            "reason": "合成季度路径不可用", "assumptions": ["a1"]}])
+        number = result["nextRound"]
+        analysis.submit_round(self.review, self.aid, number)
+        claimed = analysis.claim(self.review, seq=number)
+        state = analysis.answer(self.review, self.aid, number, "D:e1", {"kind": "accept", "verbatim": "处理期间确认死局"})
+        self.assertEqual(state["rev"], claimed["baseRev"])
+        result = analysis.writeback(self.review, self.aid, number, claimed["baseRev"], [])
+        self.assertIsNone(result["nextRound"])
+        context = analysis.round_context(self.review, self.aid, number)
+        self.assertTrue(context["historical"])
+        self.assertEqual(context["answers"]["D:e1"]["verbatim"], "处理期间确认死局")
+        self.assertEqual(context["answeredItems"][0]["reason"], "合成季度路径不可用")
+
+    def test_rejected_dead_end_does_not_block_and_repeated_writeback_keeps_identity(self):
+        number, _first, _second, _linked = self.reasoning()
+        analysis.submit_round(self.review, self.aid, number)
+        claimed = analysis.claim(self.review, seq=number)
+        before = analysis.load(self.review, self.aid)
+        for proposal in ({"key": "invalid", "kind": "option", "node": "n1", "option": "quarter",
+                          "assumptions": ["a1"]},
+                         {"key": "invalid", "kind": "option", "node": "n1", "option": "quarter",
+                          "reason": "合成理由", "assumptions": ["unknown"]}):
+            with self.assertRaises(notes.HandoffError) as invalid:
+                analysis.writeback(self.review, self.aid, number, claimed["baseRev"], [], dead_ends=[proposal])
+            self.assertEqual(invalid.exception.code, "bad-dead-ends")
+            self.assertEqual(analysis.load(self.review, self.aid), before)
+        proposal = {"key": "quarter", "kind": "option", "node": "n1", "option": "quarter",
+                    "reason": "合成提议理由", "assumptions": ["a1"]}
+        result = analysis.writeback(self.review, self.aid, number, claimed["baseRev"], [], dead_ends=[proposal])
+        number = result["nextRound"]
+        rejected = analysis.answer(self.review, self.aid, number, "D:e1", {"kind": "reject"})
+        self.assertEqual(rejected["deadEnds"]["e1"]["status"], "rejected")
+        state = analysis.redecide(self.review, self.aid, "n1", "quarter")
+        self.assertEqual(state["decisions"][state["nodes"]["n1"]["decision"]]["option"], "quarter")
+        result = self.write(analysis.queue(self.review)[0]["seq"], dead_ends=[proposal])
+        self.assertEqual(set(result["state"]["deadEnds"]), {"e1"})
+        self.assertEqual(result["state"]["deadEnds"]["e1"]["status"], "rejected")
 
     def test_next_round_order_and_carry_preserve_all_valid_answers_once(self):
         number, _first, _second, linked = self.reasoning()

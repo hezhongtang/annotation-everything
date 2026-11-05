@@ -1877,6 +1877,17 @@
     "viewer.analysis.history.done.switch-line": "Switched to this line’s latest state.",
     "viewer.analysis.history.done.close": "Analysis closed and its final state sealed.",
     "viewer.analysis.history.done.reopen": "Analysis reopened; the agent has been asked for new questions.",
-    "viewer.analysis.history.pendingProposals": "Unconfirmed structure proposals"
+    "viewer.analysis.history.pendingProposals": "Unconfirmed structure proposals",
+    "cli.analysis.resolution.help.refute": "Refute an assumption; current direct dependencies start a new analysis line",
+    "cli.analysis.resolution.help.assumption": "Existing assumption ID",
+    "cli.analysis.resolution.help.writebackPayload": "JSON proposal list or object with proposals, assumptions, facts, updates and deadEnds; - reads stdin",
+    "cli.analysis.resolution.noAssumptions": "None",
+    "cli.analysis.resolution.optionTarget": "{question}: {option}",
+    "cli.analysis.resolution.deadItem": "Dead end: {target}\n  Reason: {reason}\n  Assumptions: {assumptions}",
+    "cli.analysis.resolution.error.assumption-not-found": "This assumption is unavailable. Refresh and choose it again.",
+    "cli.analysis.resolution.error.bad-dead-ends": "Provide valid dead-end proposals with a stable key, target, reason and existing unrefuted assumptions.",
+    "cli.analysis.resolution.error.dead-end-option": "This option is a confirmed dead end. Reason: {reason}. Assumptions to reconsider: {assumptions}.",
+    "cli.analysis.resolution.error.dead-end-line": "This analysis line is a confirmed dead end. Reason: {reason}. Assumptions to reconsider: {assumptions}.",
+    "cli.analysis.resolution.error.dead-end-obsolete": "This dead end's assumptions were refuted. Refresh to review it."
   }
 }

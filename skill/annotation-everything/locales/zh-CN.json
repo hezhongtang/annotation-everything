@@ -1759,6 +1759,17 @@
     "viewer.analysis.history.done.switch-line": "已切到这条分析线的最新状态。",
     "viewer.analysis.history.done.close": "分析已结案，最后状态已封存。",
     "viewer.analysis.history.done.reopen": "分析已重新打开，已请 Agent 继续出题。",
-    "viewer.analysis.history.pendingProposals": "尚未确认的结构提议"
+    "viewer.analysis.history.pendingProposals": "尚未确认的结构提议",
+    "cli.analysis.resolution.help.refute": "推翻假设；当前选择有直接依赖时自动分出新分析线",
+    "cli.analysis.resolution.help.assumption": "已有假设标识",
+    "cli.analysis.resolution.help.writebackPayload": "JSON提议列表或含proposals、assumptions、facts、updates和deadEnds的对象；-从标准输入读取",
+    "cli.analysis.resolution.noAssumptions": "无",
+    "cli.analysis.resolution.optionTarget": "{question}：{option}",
+    "cli.analysis.resolution.deadItem": "死局：{target}\n  理由：{reason}\n  依赖假设：{assumptions}",
+    "cli.analysis.resolution.error.assumption-not-found": "找不到这个假设，请刷新后重新选择。",
+    "cli.analysis.resolution.error.bad-dead-ends": "请为死局提议提供稳定标识、目标、理由和已有且未被推翻的假设。",
+    "cli.analysis.resolution.error.dead-end-option": "这个选项已确认为死局。理由：{reason}。需要重新考虑的假设：{assumptions}。",
+    "cli.analysis.resolution.error.dead-end-line": "这条分析线已确认为死局。理由：{reason}。需要重新考虑的假设：{assumptions}。",
+    "cli.analysis.resolution.error.dead-end-obsolete": "这项死局的依据已被推翻，请刷新后复核。"
   }
 }

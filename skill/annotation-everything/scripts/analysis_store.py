@@ -1065,6 +1065,8 @@ def _dead_blocks(state: dict[str, Any], end: dict[str, Any]) -> bool:
 
 
 def _guard_dead_option(state: dict[str, Any], node_id: str, value: dict[str, Any]) -> None:
+    if value.get("kind") not in ("accept", "option", "text"):
+        return
     node = state["nodes"][node_id]
     option = node["recommend"] if value.get("kind") == "accept" else value.get("option")
     for end in state["deadEnds"].values():
@@ -1198,6 +1200,7 @@ def _round_context_data(review_dir: Path, state: dict[str, Any], round_: dict[st
             node = state["nodes"].get(end.get("node")) or {}
             items.append({**end, "key": item["key"], "type": "deadend", "deadEnd": end["id"],
                           "targetText": node.get("short", ""),
+                          "targetOrdinal": (state["lines"].get(end.get("targetLine")) or {}).get("ordinal"),
                           "optionLabel": node.get("options", {}).get(end.get("option"), ""),
                           "assumptionTexts": [state["assumptions"][aid]["text"] for aid in end["assumptions"]]})
         elif item["type"] == "update":

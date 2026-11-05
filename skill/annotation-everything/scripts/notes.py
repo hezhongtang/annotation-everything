@@ -142,7 +142,7 @@ STAGE_KEY = {"draft": "cli.batch.stageName.draft", "review": "cli.batch.stageNam
 # 人读命令遵循同一语言优先级；claim 的原始 JSON 与技能设置另有归属。
 LOCALIZED_CMDS = ("show", "wait", "batches", "done", "review", "diff", "resolve", "reopen", "import", "export",
                   "analysis", "analysis-writeback", "suggest-analysis", "analysis-check", "analysis-redecide", "analysis-note",
-                  "analysis-history", "analysis-line")
+                  "analysis-history", "analysis-line", "analysis-refute")
 # 常驻技能的范围：存储值 → 界面显示的消息 key（存储值本身不随语言改写）
 ALWAYS_SCOPE_KEY = {"all": "viewer.hand.scope.all", "报告": "viewer.hand.scope.report",
                     "讲稿": "viewer.hand.scope.script", "style": "viewer.hand.scope.style"}
@@ -248,6 +248,13 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
     if isinstance(error, store.HandoffError) and error.code in (
             "checkpoint-not-found", "line-not-found", "analysis-pending-rounds", "analysis-closed"):
         return cli_text(lang)("cli.analysis.history.error." + error.code)
+    if isinstance(error, store.HandoffError) and error.code in (
+            "assumption-not-found", "bad-dead-ends", "dead-end-option", "dead-end-line", "dead-end-obsolete"):
+        t = cli_text(lang)
+        params = dict(error.params)
+        if error.code in ("dead-end-option", "dead-end-line"):
+            params["assumptions"] = " / ".join(params.get("assumptions", [])) or t("cli.analysis.resolution.noAssumptions")
+        return t("cli.analysis.resolution.error." + error.code, **params)
     if lang != "en" or not isinstance(error, store.HandoffError) or error.code not in messages:
         return str(error)
     t = cli_text(lang)
@@ -741,7 +748,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
     aw.add_argument("--round", type=int, required=True, help=t("cli.notes.help.writeback.round"))
     aw.add_argument("--base-rev", type=int, required=True, help=t("cli.notes.help.writeback.baseRev"))
     aw.add_argument("--proposals", required=True,
-                    help=t("cli.analysis.protect.help.writebackPayload"))
+                    help=t("cli.analysis.resolution.help.writebackPayload"))
     aw.add_argument("--note", default="", help=t("cli.notes.help.writeback.note"))
     aw.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
     ac = sub.add_parser("analysis-check", help=t("cli.analysis.protect.help.check"))
@@ -772,6 +779,11 @@ def _main_locked(argv: list[str] | None = None) -> int:
     line.add_argument("--checkpoint", help=t("cli.analysis.history.help.checkpoint"))
     line.add_argument("--line", help=t("cli.analysis.history.help.targetLine"))
     line.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
+    refute = sub.add_parser("analysis-refute", help=t("cli.analysis.resolution.help.refute"))
+    refute.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    refute.add_argument("--analysis", required=True, help=t("cli.notes.help.analysis.analysis"))
+    refute.add_argument("--assumption", required=True, help=t("cli.analysis.resolution.help.assumption"))
+    refute.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
     sg = sub.add_parser("suggest-analysis", help=t("cli.life.suggestHelp"))
     sg.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     sg.add_argument("id", help=t("cli.life.noteId"))
@@ -808,7 +820,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
     bt.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
     for name, parser in sub.choices.items():
         if name in ("wait", "claim", "resolve", "reopen", "review", "done", "analysis-writeback", "suggest-analysis",
-                    "analysis-redecide", "analysis-note", "analysis-line"):
+                    "analysis-redecide", "analysis-note", "analysis-line", "analysis-refute"):
             parser.add_argument("--harness", help=t("cli.notes.help.receiver.harness"))
             parser.add_argument("--session", help=t("cli.notes.help.receiver.session"))
         parser.add_argument("--locale", default=argparse.SUPPRESS, help=t("cli.notes.localeHelp"))
@@ -1014,16 +1026,18 @@ def _main_locked(argv: list[str] | None = None) -> int:
         else:
             print(analysis_history_text(state, lang))
         return 0
-    if a.cmd in ("analysis-redecide", "analysis-note"):
+    if a.cmd in ("analysis-redecide", "analysis-note", "analysis-refute"):
         try:
-            if a.cmd == "analysis-redecide":
+            if a.cmd == "analysis-refute":
+                state = analysis_store.refute_assumption(d, a.analysis, a.assumption, by=a.by, authorize=authorize)
+            elif a.cmd == "analysis-redecide":
                 state = analysis_store.redecide(d, a.analysis, a.node, a.option, by=a.by, authorize=authorize)
             else:
                 operation = {"update": analysis_store.request_update, "keep": analysis_store.keep_note,
                              "delete": analysis_store.delete_note}[a.action]
                 operation(d, a.analysis, a.note_id, by=a.by, authorize=authorize)
                 state = analysis_store.load(d, a.analysis)
-            if a.cmd == "analysis-redecide" or a.action == "update":
+            if a.cmd in ("analysis-redecide", "analysis-refute") or a.action == "update":
                 notify_analysis(d, state)
         except store.NotFound:
             print(t("cli.analysis.protect.missing"), file=sys.stderr)
@@ -1074,6 +1088,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
             result = analysis_store.writeback(d, aid, a.round, a.base_rev, payload.get("proposals", []),
                                               note=a.note, by=a.by, assumptions=payload.get("assumptions"),
                                               facts=payload.get("facts"), updates=payload.get("updates"),
+                                              dead_ends=payload.get("deadEnds"),
                                               authorize=authorize)
         except store.NotFound:
             print(t("cli.analysis.noRound", reason=f"round#{a.round}"), file=sys.stderr)
@@ -1509,6 +1524,16 @@ def analysis_context_text(ctx: dict[str, Any], lang: str | None = None) -> str:
     out.append(t("cli.analysis.items"))
     all_items = {item["key"]: item for item in ctx["items"] + ctx.get("answeredItems", [])}
     for item in all_items.values():
+        if item["type"] == "deadend":
+            if item["kind"] == "line":
+                ordinal = item["targetOrdinal"]
+                target = t("cli.analysis.history.main" if ordinal == 1 else "cli.analysis.history.second") if ordinal < 3 else t(
+                    "cli.analysis.history.other", number=ordinal)
+            else:
+                target = t("cli.analysis.resolution.optionTarget", question=item["targetText"], option=item["optionLabel"])
+            out.append(t("cli.analysis.resolution.deadItem", target=target, reason=item["reason"],
+                         assumptions=" / ".join(item["assumptionTexts"]) or t("cli.analysis.resolution.noAssumptions")))
+            continue
         if item["type"] == "update":
             out.append(t("cli.analysis.protect.updateItem", before=item["beforeText"], after=item["text"]))
             continue
