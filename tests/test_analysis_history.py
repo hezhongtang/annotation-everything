@@ -121,6 +121,8 @@ class AnalysisHistoryTests(unittest.TestCase):
         alternative = analysis.redecide(self.review, self.aid, "n1", "quarter")
         number = next(r["seq"] for r in alternative["rounds"] if r["line"] == other and r["status"] == "submitted")
         analysis.switch_line(self.review, self.aid, "main")
+        summary = next(row for row in analysis.list_analyses(self.review) if row["id"] == self.aid)
+        self.assertIsNone(summary["openRound"])
         claimed = analysis.claim(self.review, seq=number)
         context = analysis.round_context(self.review, self.aid, number)
         self.assertEqual(context["line"], other)

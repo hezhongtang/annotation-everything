@@ -503,7 +503,8 @@ def list_analyses(review_dir: Path) -> list[dict[str, Any]]:
                     "sourceNote": state["sourceNote"], "sourceState": state["sourceState"],
                     "rev": state["rev"], "line": state["line"],
                     "rounds": len(state["rounds"]),
-                    "openRound": next((r["seq"] for r in state["rounds"] if r["status"] in ROUND_OPEN), None)})
+                    "openRound": next((r["seq"] for r in state["rounds"]
+                                       if r.get("line", LINE_MAIN) == state["line"] and r["status"] in ROUND_OPEN), None)})
     return out
 
 
