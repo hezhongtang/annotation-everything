@@ -1014,6 +1014,8 @@ def _clean_evidence(values: Any, state: dict[str, Any], *, assumptions: bool) ->
         old = next((v for v in registry.values() if v["key"] == key), None)
         if old and any(old.get(k) != v for k, v in clean.items() if not (assumptions and k == "decisions")):
             raise AnalysisInputError("同一稳定标识的假设或事实不能改写原文")
+        if assumptions and old and old["refuted"] and any(did not in old["decisions"] for did in clean["decisions"]):
+            raise AnalysisInputError("已推翻的假设不能新增决策依赖")
         out.append(clean)
     return out
 

@@ -60,6 +60,37 @@ class AnalysisResolutionTests(unittest.TestCase):
             linked.append(analysis.confirm_convert(self.review, self.aid, draft["id"]))
         return number, first, second, linked
 
+    def test_refuted_assumption_cannot_gain_new_decision_dependencies(self):
+        number = self.write(self.opening, [question("one"), question("two")])["nextRound"]
+        for key in ("one", "two"):
+            analysis.answer(self.review, self.aid, number, "S:" + key, {"kind": "accept"})
+        for node in ("n1", "n2"):
+            state = analysis.answer(self.review, self.aid, number, "Q:" + node, {"kind": "accept"})
+        first, second = (state["nodes"][node]["decision"] for node in ("n1", "n2"))
+        candidate = {"key": "premise", "text": "合成已推翻前提", "decisions": [first]}
+        number = self.write(number, assumptions=[candidate])["nextRound"]
+        analysis.answer(self.review, self.aid, number, "A:a1", {"kind": "accept"})
+        draft = analysis.convert(self.review, self.aid, "n2", text="合成独立结论批注")
+        note = analysis.confirm_convert(self.review, self.aid, draft["id"])
+        state = analysis.refute_assumption(self.review, self.aid, "a1")
+        refresh = next(r for r in state["rounds"] if r["status"] == "submitted")
+        claimed = analysis.claim(self.review, seq=refresh["seq"])
+        before_state = analysis.load(self.review, self.aid)
+        before_notes = notes.load(self.review)
+        with self.assertRaises(notes.HandoffError) as rejected:
+            analysis.writeback(self.review, self.aid, refresh["seq"], claimed["baseRev"], [],
+                               assumptions=[{**candidate, "decisions": [second]}])
+        self.assertEqual(rejected.exception.code, "analysis-invalid-input")
+        self.assertEqual(analysis.load(self.review, self.aid), before_state)
+        self.assertEqual(notes.load(self.review), before_notes)
+        self.assertTrue(analysis.decision_in_force(before_state, second))
+        self.assertEqual(next(n for n in before_notes["notes"] if n["id"] == note["id"])["status"], "open")
+        retried = analysis.writeback(self.review, self.aid, refresh["seq"], claimed["baseRev"], [],
+                                     assumptions=[candidate])["state"]
+        self.assertEqual(retried["assumptions"]["a1"]["decisions"], [first])
+        self.assertTrue(retried["assumptions"]["a1"]["refuted"])
+        self.assertTrue(analysis.decision_in_force(retried, second))
+
     def test_prototype_from_annotation_through_verification_conversion_close_and_reopen(self):
         review = self.review / "from-annotation"
         review.mkdir()
