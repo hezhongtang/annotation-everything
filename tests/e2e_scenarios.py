@@ -30,7 +30,7 @@ class Scenario:
 SCENARIOS: list[Scenario] = [
     Scenario(
         id="analysis-smoke",
-        title="分析最小闭环：从批注发起、确认提议、用推荐答案作答、独立交出轮次、结论草稿确认及刷新保持分析模式",
+        title="分析问答闭环：从批注或页发起、原话回答与搁置、查证事实及假设确认、独立交出轮次、结论草稿确认和暂停继续",
         fixture="fixtures/sample 合成材料、合成问答与 notes.py 真实命令；不读取真实业务材料",
         isolation="独立临时审阅目录、端口、浏览器上下文；服务用后回收，沿用 host-state 锁",
     ),

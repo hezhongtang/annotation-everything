@@ -78,6 +78,61 @@ def render_expression(expression, state, locale="en"):
 
 
 class AnalysisPageTests(unittest.TestCase):
+    def test_free_text_and_external_permission_drafts_survive_poll_and_failed_write(self):
+        state = {"id": "private-analysis", "focus": "合成问题", "status": "active", "line": "main",
+                 "sourceCopy": {}, "nodes": {"n1": {"id": "n1", "text": "口径？", "short": "口径", "status": "pending",
+                 "options": {"a": "全年"}, "recommend": "a"}}, "decisions": {}, "drafts": [],
+                 "rounds": [{"seq": 2, "status": "open", "answers": {}, "items": [{"key": "Q:n1", "type": "question", "node": "n1"}]}]}
+        setup = """
+          let analysisState=STATE,analysisBusy=false,analysisRequest=0,analysisRenderKey='';const analyses=[],analysisSelected=analysisState.id;
+          const FILE=false,analysisSupported=true,mode='server',receiver=null,analysisAnswerDrafts=new Map();
+          const analysisShown=()=>true,analysisRouteLabels=()=>{},resync=async()=>{},loadAnalyses=async()=>{},toast=()=>{};
+          const api=async()=>{throw Object.assign(new Error('网络失败'),{status:0})};
+        """.replace("STATE", json.dumps(state, ensure_ascii=False))
+        for locale in ("en", "zh-CN"):
+            value = interaction_program([
+                ("// ---------- Analysis view helpers ----------", "// ---------- Analysis view DOM ----------"),
+                ("function analysisDraftKey(", "function analysisShown("),
+                ("function renderAnalysis(){", "async function startAnalysis("),
+            ], setup, """
+                $('analysisBody').querySelectorAll=()=>[
+                  {dataset:{analysisKey:'Q:n1'},hasAttribute:()=>true,value:'逐月核对 <b>完整原话</b>'},
+                  {dataset:{analysisKey:'Q:n1'},hasAttribute:()=>false,checked:true}];
+                stashAnalysisInputs();renderAnalysis();const polled=$('analysisBody').innerHTML;
+                await analysisAction('answer',{round:2,key:'Q:n1',value:{kind:'text',text:'逐月核对 <b>完整原话</b>'}});
+                return {polled,failed:$('analysisBody').innerHTML};
+            """, locale)
+            for rendered in value.values():
+                self.assertIn("逐月核对 &lt;b&gt;完整原话&lt;/b&gt;", rendered)
+                self.assertIn("checked", rendered)
+
+    def test_structure_change_is_described_without_internal_ids(self):
+        state = {"nodes": {"n_private": {"short": "统计口径"}}}
+        value = render_expression("analysisQuestionHtml(state,{status:'open'},{key:'S:split',type:'structure',proposal:{key:'split',op:'split',targets:['n_private'],replacements:[{text:'收入口径',options:[{id:'private-option',label:'合成口径'}]}]}})", state)
+        visible = html.unescape(re.sub(r"<[^>]*>", "", value))
+        self.assertIn("Split question: 统计口径", visible)
+        self.assertIn("收入口径", visible)
+        self.assertNotIn("private", visible)
+
+    def test_lifecycle_answers_and_assumptions_show_original_text_safely(self):
+        state = {"nodes": {"n1": {"id": "n1", "text": "合成问题 <script>", "short": "合成问题",
+                                 "options": {"a": "合成推荐"}, "recommend": "a"}},
+                 "assumptions": {"a1": {"id": "a1", "text": "合成前提 <b>", "confirmed": {"main": "pending"}}}}
+        expr = "analysisQuestionHtml(state,{seq:2,status:'open'}, {key:'Q:n1',type:'question',node:'n1'}, {text:'逐月核对 <b>',allowExternal:true})"
+        value = render_expression(expr, state)
+        for kind in ("accept", "option", "text", "park", "verify"):
+            self.assertIn('data-kind="' + kind + '"', value)
+        self.assertIn("逐月核对 &lt;b&gt;", value)
+        self.assertIn('data-analysis-external', value)
+        self.assertIn("checked", value)
+        self.assertNotIn("<script>", value)
+        candidate = render_expression("analysisQuestionHtml(state,{seq:2,status:'open'}, {key:'A:a1',type:'assumption',assumption:'a1'})", state)
+        self.assertIn("Disagree", candidate)
+        self.assertIn("合成前提 &lt;b&gt;", candidate)
+        self.assertNotIn('data-kind="verify"', candidate)
+        label = render_expression("analysisAnswerLabel(state,{},'Q:n1',{kind:'text',text:'完整原话'})", state)
+        self.assertIn("完整原话", label)
+
     def test_analysis_focus_and_actual_shortcuts_do_not_enter_revision(self):
         setup = """
           let focusMode=false,keepFocusOnExit=false;const visible=new Set(),calls={analysis:0,revision:0};
@@ -115,7 +170,8 @@ class AnalysisPageTests(unittest.TestCase):
     def test_action_errors_use_current_language_without_private_identifiers(self):
         parts = [('// ---------- Analysis view helpers ----------', '// ---------- Analysis view DOM ----------'),
                  ('async function analysisAction(', 'async function startAnalysis(')]
-        for code in ["round-not-answerable", "note-in-progress", "item-not-in-round", "future-error"]:
+        for code in ["round-not-answerable", "note-in-progress", "item-not-in-round", "analysis-invalid-input",
+                     "focus-required", "page-not-found", "structure-target-changed", "analysis-closed", "future-error"]:
             with self.subTest(code=code):
                 setup = """
                     let analysisBusy=false,analysisRequest=0,analysisRenderKey='',analysisState=null;
