@@ -37,10 +37,8 @@ AE_HANDOFF_SEQ / AE_URL；运行中又来的事件排队依次补跑；命令输
 from __future__ import annotations
 
 import argparse
-import base64
 import contextlib
 import fcntl
-import hashlib
 import http.client
 import json
 import os
@@ -62,6 +60,7 @@ from typing import Any
 from urllib.parse import parse_qs
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fsutil  # noqa: E402
 import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
@@ -73,19 +72,29 @@ VERSION = "0.10.0"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
 FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding", "overview"]
 
-# 当前界面语言：main() 与 serve() 按共同契约解析后设置；未设置前保持中文（旧调用行为不变）
-_LOCALE = i18n.DEFAULT_LOCALE
+# 界面语言只有进程级一个来源（见 i18n.set_locale）：main() 与 serve() 按共同契约解析后
+# 设置一次，服务与台账等各模块共同遵循；未设置前保持中文（旧调用行为不变）
+
+# 本入口的 CLI 消息 key 表：argparse 报错类别与语言选择问题 → 消息 key
+ERROR_KEYS = {
+    i18n.CLI_ERROR_INVALID_CHOICE: "serve.err.unknownChoice",
+    i18n.CLI_ERROR_MISSING_VALUE: "serve.err.missingValue",
+    i18n.CLI_ERROR_UNKNOWN_ARGUMENT: "serve.err.unknownArgument",
+    i18n.CLI_ERROR_MISSING_ARGUMENT: "serve.err.missingArgument",
+    i18n.CLI_ERROR_GENERIC: "serve.err.generic",
+    i18n.CLI_ERROR_EMPTY_LOCALE: "serve.err.emptyLocale",
+    i18n.CLI_ERROR_INVALID_LOCALE: "serve.err.invalidLocale",
+}
 
 
 def T(key: str, **params: object) -> str:
     """按当前语言取一条消息；缺译时回退另一种语言（见 locales/README.md 的契约）。"""
-    return i18n.Translator(_LOCALE)(key, **params)
+    return i18n.T(key, **params)
 
 
 def set_locale(locale: str) -> None:
-    global _LOCALE
-    _LOCALE = locale
-    ledger.set_locale(locale)   # 台账错误也用同一种语言，免得中英混排
+    """薄转发：定进程级界面语言。台账等模块的错误因此也用同一种语言，不会中英混排。"""
+    i18n.set_locale(locale)
 
 
 def stored_locale(review_dir) -> object:
@@ -109,20 +118,18 @@ class StaleServer(Exception):
     """本目录已有旧版本的服务在跑：复用它会让新页面的改动被静默丢掉。"""
 DEFAULT_PORT = 8765
 PORT_TRIES = 20
-STATUS_FILE = ".annotation-server.json"
+STATUS_FILE = ledger.STATUS_FILE   # 运行状态文件名只在台账模块定义一次；这里是给既有调用方的名字
 LOG_FILE = "server.log"
 MANIFEST = "review.json"
 MAX_BODY = 2 * 1024 * 1024
 HOST = "127.0.0.1"
 NOTE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})$")
-INLINE_SCRIPT = re.compile(r"<script>(.*?)</script>", re.S)
 SAFE_CHARS = re.compile(r"[^A-Za-z0-9._:/?=&%+@-]")
 
 
 def csp_for(html_text: str) -> str:
     """只放行页面里的内联脚本（按内容 sha256），其余脚本、内联事件一律不执行。"""
-    hashes = " ".join("'sha256-" + base64.b64encode(hashlib.sha256(s.encode("utf-8")).digest()).decode() + "'"
-                      for s in INLINE_SCRIPT.findall(html_text))
+    hashes = fsutil.script_hashes(html_text)
     return (f"default-src 'none'; script-src {hashes or chr(39) + 'none' + chr(39)}; style-src 'unsafe-inline'; "
             "img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'self'; "
             "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'")
@@ -142,6 +149,75 @@ class Reject(Exception):
     def __init__(self, status: int, code: str, msg: str):
         super().__init__(msg)
         self.status, self.code, self.msg = status, code, msg
+
+
+class _RequestReads:
+    """一次请求里每个审阅文件只读一次：接收方绑定、批次记录、批注、技能目录。
+
+    读失败也记住结果，同一请求里再要就按当时的异常重放，让公开状态、身份信息和批次摘要各自
+    按自己原有的降级结果处理——复用读取结果不改变任何响应。
+    """
+
+    def __init__(self, server: "ReviewServer"):
+        self.server = server
+        self._done: dict[str, Any] = {}
+
+    def _once(self, name: str, read: Any) -> Any:
+        """读一次并记住；失败时返回当时的异常（不抛），交给消费方按原有降级结果处理。"""
+        if name not in self._done:
+            try:
+                self._done[name] = read()
+            except Exception as exc:   # 记住失败：同一请求里重放同一异常
+                self._done[name] = exc
+        return self._done[name]
+
+    def _read_notes(self) -> dict[str, Any]:
+        return store.load(self.server.review_dir)
+
+    def binding(self) -> Any:
+        """接收方绑定；manifest 取服务已有的缓存（按 mtime 判断，命中不开文件）。"""
+        return self._once("binding", lambda: wakeup.load_binding(
+            self.server.review_dir, manifest=self.server.manifest()))
+
+    def handoff(self) -> Any:
+        """批次记录。"""
+        return self._once("handoff", lambda: store.handoff_load(self.server.review_dir))
+
+    def notes_doc(self) -> dict[str, Any]:
+        """批注文档；读失败就抛（与 store.load 自己读时一样）。"""
+        got = self._once("notes", self._read_notes)
+        if isinstance(got, Exception):
+            raise got
+        return got
+
+    def notes_list(self) -> Any:
+        """批注列表；读失败时返回当时的异常（消费方按同一降级结果处理）。"""
+        got = self._once("notes", self._read_notes)
+        return got["notes"] if isinstance(got, dict) else got
+
+    def skills(self) -> dict[str, Any]:
+        """技能目录。"""
+        return self._once("skills", lambda: store.skills_doc(self.server.review_dir))
+
+    def waiting(self) -> Any:
+        """有没有这个绑定正在等的代理（读等待标记）；还没到读它那一步时返回 None。
+
+        None 的语义是「调用方确认还没到读等待标记那一步」：没有绑定（或读取失败）、有批次在
+        处理中、codex-desktop 三种情况都在读标记之前返回。当前这样是安全的——receiver_status
+        收到 None 时会自己读一次等待标记，而这三种情况它在读之前就先返回了（未配置 / error /
+        processing / event），既不会多开文件也不会漏判。将来新增分支时注意：只有在确认不可能
+        有代理在等时才返回 None，否则要真的去读一次等待标记。
+        """
+        def read():
+            binding, handoff = self.binding(), self.handoff()
+            if isinstance(binding, Exception) or isinstance(handoff, Exception) or not binding:
+                return None
+            if any(b.get("status") in ("claimed", "reviewing") for b in handoff.get("items") or []):
+                return None
+            if binding.get("adapter") == "codex-desktop":
+                return None
+            return wakeup.waiting_state(self.server.review_dir, binding)
+        return self._once("waiting", read)
 
 
 class ReviewServer(ThreadingHTTPServer):
@@ -284,6 +360,7 @@ class Handler(BaseHTTPRequestHandler):
     sys_version = ""
     protocol_version = "HTTP/1.1"
     timeout = 15  # 慢速或不发完请求体的连接 15 秒后断开
+    _reads: "_RequestReads | None" = None
 
     # ---------- 通用 ----------
     def log_message(self, fmt: str, *args: Any) -> None:  # 默认访问日志
@@ -355,6 +432,7 @@ class Handler(BaseHTTPRequestHandler):
             raise Reject(400, "bad-json", self._t("serve.err.badJson")) from e
 
     def _dispatch(self) -> None:
+        self._reads = None   # 长连接复用同一个 handler：每个请求重新读一次审阅文件
         try:
             self._check_host()
             path = self.path.split("?", 1)[0]
@@ -404,12 +482,36 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, body, "text/html; charset=utf-8", {"Content-Security-Policy": csp})
 
     # ---------- API ----------
+    def _request_reads(self) -> "_RequestReads":
+        """本次请求的审阅文件读取：每个文件只读一次。"""
+        if self._reads is None:
+            self._reads = _RequestReads(self.server)
+        return self._reads
+
+    def _receiver(self, active_binding) -> dict[str, Any]:
+        reads = self._request_reads()
+        return wakeup.receiver_status(self.server.review_dir, active_binding, binding=reads.binding(),
+                                      handoff=reads.handoff(), waiting=reads.waiting())
+
+    def _public_status(self) -> dict[str, Any]:
+        reads = self._request_reads()
+        return wakeup.public_status(self.server.review_dir, binding=reads.binding(),
+                                    handoff=reads.handoff(), waiting=reads.waiting())
+
+    def _handoff_state(self, *, full: bool) -> dict[str, Any]:
+        reads = self._request_reads()
+        return store.handoff_state(self.server.review_dir, full=full,
+                                   handoff=reads.handoff(), notes=reads.notes_list())
+
+    def _notes_doc(self) -> dict[str, Any]:
+        return self._request_reads().notes_doc()
+
     def _ident(self) -> dict[str, Any]:
         # name：审阅名。别的审阅的旧标签页连到这个端口时，据此告诉用户「这里现在是哪一份」（无 CORS 头，只有同源页面读得到）
         return {"app": APP, "reviewId": self.server.review_id(), "name": self.server.review_name(),
                 "archived": review_overview.is_archived(self.server.review_dir),
                 "version": VERSION, "features": FEATURES,
-                "receiver": wakeup.receiver_status(self.server.review_dir, self.server.agent_binding)}
+                "receiver": self._receiver(self.server.agent_binding)}
 
     def _check_receiver(self, body: dict[str, Any]) -> None:
         # Called inside the batch lock: a transfer and submission must agree on one binding.
@@ -435,18 +537,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/health" and cmd == "GET":
             self._json(200, {**self._ident(), "dir": str(d), "pid": os.getpid(),
                              "port": self.server.port, "hook": bool(self.server.on_handoff),
-                             "agentDelivery": wakeup.public_status(d)})
+                             "agentDelivery": self._public_status()})
         elif path == "/api/notes" and cmd == "GET":
-            doc = store.load(d)
+            doc = self._notes_doc()
             idx = d / "index.html"
             doc["indexMtime"] = idx.stat().st_mtime if idx.exists() else None  # 页面据此提示「已重建，请刷新」
-            doc["handoff"] = store.handoff_state(d, full=False)   # 轮询只带最新一批；处理记录全量走 GET /api/handoff
-            doc["agentDelivery"] = wakeup.public_status(d)
-            doc["skillCatalog"] = store.skills_catalog(d)
-            doc["alwaysSkills"] = store.always_skills(d)
+            doc["handoff"] = self._handoff_state(full=False)   # 轮询只带最新一批；处理记录全量走 GET /api/handoff
+            doc["agentDelivery"] = self._public_status()
+            skills = self._request_reads().skills()
+            doc["skillCatalog"] = store.skills_catalog(d, doc=skills)
+            doc["alwaysSkills"] = store.always_skills(d, doc=skills)
             self._json(200, {**doc, **self._ident()})
         elif path == "/api/handoff" and cmd == "GET":
-            self._json(200, {**store.handoff_state(d), **self._ident()})
+            self._json(200, {**self._handoff_state(full=True), **self._ident()})
         elif path == "/api/server/stop" and cmd == "POST":
             self._expect_obj(self._body())
             # 停止服务必须明确指向当前审阅；其他旧接口仍兼容不带标识的页面。
@@ -471,7 +574,7 @@ class Handler(BaseHTTPRequestHandler):
                                                     authorize=lambda: self._check_receiver(body))
             self.server.log("info", f"handoff seq={item['seq']} open={item['openCount']} merged={merged} target={item['target']}")
             self.server.run_hook(item, merged)
-            self._json(200, {"doc": {**store.load(d), **self._ident()}, "handoff": store.handoff_state(d, full=False),
+            self._json(200, {"doc": {**self._notes_doc(), **self._ident()}, "handoff": self._handoff_state(full=False),
                              "merged": merged, "seq": item["seq"], "acceptedFullCheck": item["fullCheck"]})
         elif path == "/api/skills/always" and cmd == "POST":
             body = self._expect_obj(self._body())
@@ -494,7 +597,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 item = store.handoff_finalize(d, seq, by="page")
                 self.server.log("info", f"handoff-finalize seq={seq}")
-            self._json(200, {"doc": {**store.load(d), **self._ident()}, "handoff": store.handoff_state(d, full=False),
+            self._json(200, {"doc": {**self._notes_doc(), **self._ident()}, "handoff": self._handoff_state(full=False),
                              "seq": seq, "status": item["status"]})
         elif path == "/api/notes" and cmd == "POST":
             doc, note = store.add(d, self._expect_obj(self._body()), by="page")
@@ -571,21 +674,9 @@ def probe(port: int, timeout: float = 1.0) -> dict[str, Any] | None:
         return {"app": "other"}
 
 
-def pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-
-
 def read_status(review_dir: Path) -> dict[str, Any] | None:
     try:
-        info = json.loads((review_dir / STATUS_FILE).read_text(encoding="utf-8"))
+        info = json.loads(ledger.status_file(review_dir).read_text(encoding="utf-8"))
         return info if isinstance(info, dict) else None
     except (OSError, ValueError):
         return None
@@ -595,7 +686,7 @@ def write_status(server: ReviewServer) -> None:
     info = {"app": APP, "version": VERSION, "pid": os.getpid(), "port": server.port,
             "url": f"http://127.0.0.1:{server.port}/", "dir": str(server.review_dir),
             "hook": bool(server.on_handoff), "startedAt": store.now_iso()}
-    f = server.review_dir / STATUS_FILE
+    f = ledger.status_file(server.review_dir)
     fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(json.dumps(info, ensure_ascii=False, indent=2) + "\n")
@@ -604,7 +695,7 @@ def write_status(server: ReviewServer) -> None:
 def clear_status(review_dir: Path) -> None:
     info = read_status(review_dir)
     if info and info.get("pid") == os.getpid():
-        (review_dir / STATUS_FILE).unlink(missing_ok=True)
+        ledger.status_file(review_dir).unlink(missing_ok=True)
 
 
 def same_dir(found: dict[str, Any], review_dir: Path) -> bool:
@@ -727,7 +818,7 @@ def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
                                 port=p, pid=found.get('pid'), version=VERSION))
 
     info = read_status(review_dir)
-    if info and pid_alive(int(info.get("pid") or 0)) and info.get("port"):
+    if info and ledger.pid_alive(int(info.get("pid") or 0)) and info.get("port"):
         found = probe(int(info["port"]))
         if found and same_dir(found, review_dir):
             check_version(found, int(info["port"]))
@@ -748,7 +839,7 @@ def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
             continue
         try:
             return ReviewServer(review_dir, p, debug=debug, on_handoff=on_handoff,
-                                locale=locale or _LOCALE), None, notes
+                                locale=locale or i18n.current_locale()), None, notes
         except OSError as e:
             notes.append(T("serve.bind.failed", port=p, detail=e.strerror or e))
     return None, None, notes
@@ -809,7 +900,7 @@ def plan_port(review_dir: Path, rid: str | None, port: int | None, claim: int | 
         owned = (ledger.get(rid) or {}).get("port")
         if not owned:
             info = read_status(review_dir)
-            running = int(info["port"]) if info and info.get("port") and pid_alive(int(info.get("pid") or 0)) else None
+            running = int(info["port"]) if info and info.get("port") and ledger.pid_alive(int(info.get("pid") or 0)) else None
 
             def free(p: int) -> bool:
                 found = probe(p, timeout=0.5)
@@ -870,14 +961,9 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         if directory != review_dir or m.get("reviewId") != overview_start or port is not None or claim is not None:
             print(T("serve.err.overviewStartInvalid"), file=sys.stderr)
             return 2
-    try:
-        orig = Path(m["reviewDir"]) if m.get("reviewDir") else None
-        if orig and orig != review_dir and (orig / MANIFEST).exists():
-            om = json.loads((orig / MANIFEST).read_text(encoding="utf-8"))
-            if om.get("reviewId") == m.get("reviewId"):
-                print(T("serve.serve.copiedHint", orig=orig, dir=review_dir), file=sys.stderr)
-    except (OSError, ValueError, AttributeError):
-        pass
+    orig = ledger.copied_from(review_dir, m)
+    if orig is not None:
+        print(T("serve.serve.copiedHint", orig=orig, dir=review_dir), file=sys.stderr)
     rid = m.get("reviewId")
     try:
         first, owned, avoid = plan_port(review_dir, rid, port, claim)
@@ -890,7 +976,7 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
     try:
         server, running_url, trail = bind(review_dir, first, debug, tries=1 if overview_start else PORT_TRIES,
                                           on_handoff=on_handoff, avoid=avoid,
-                                          locale=_LOCALE)
+                                          locale=i18n.current_locale())
     except StaleServer as e:
         print(T("serve.serve.stale", detail=e), file=sys.stderr)
         return 6
@@ -983,7 +1069,7 @@ def status(review_dir: Path, locale: str | None = None) -> int:
     if info is not None:
         pid = int(info.get("pid") or 0)
         out["status_file"] = {k: info.get(k) for k in ("pid", "port", "url", "startedAt", "version")}
-        alive = pid_alive(pid)
+        alive = ledger.pid_alive(pid)
         health = probe(int(info.get("port") or 0)) if info.get("port") else None
         if alive and health and same_dir(health, review_dir) and health.get("pid") == pid:
             out["server"] = T("serve.status.running", url=info.get('url'))
@@ -993,7 +1079,7 @@ def status(review_dir: Path, locale: str | None = None) -> int:
             code = 5
         else:
             out["server"] = T("serve.status.stale")
-            (review_dir / STATUS_FILE).unlink(missing_ok=True)
+            ledger.status_file(review_dir).unlink(missing_ok=True)
             code = 4
     else:
         out["server"] = T("serve.status.notRunning")
@@ -1031,33 +1117,37 @@ def read_wait(review_dir: Path) -> list[str]:
         except (OSError, ValueError):
             continue
         if isinstance(w, dict) and f.name == ledger.wait_file(review_dir, int(w.get("pid") or 0)).name \
-                and pid_alive(int(w.get("pid") or 0)):
+                and ledger.pid_alive(int(w.get("pid") or 0)):
             stages.append(str(w.get("stage") or "any"))
     return stages
 
 
 def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
-    """台账里一份审阅的现场状态。审阅名、运行与提交状态都从审阅目录现读。"""
+    """台账里一份审阅的现场状态。审阅名、运行与提交状态都从审阅目录现读。
+
+    同一份 review.json 只读一次：状态判定、审阅名与接收方绑定的校验共用它；待接收 / 待复核计数
+    直接用批次记录，不为此加载批注。
+    """
     d = Path(e["dir"])
     row: dict[str, Any] = {"reviewId": rid, "dir": str(d), "port": e.get("port"), "name": None, "state": None,
                            "archived": review_overview.is_archived(d),
                            "state_id": None,
                            "running": None, "pending": 0, "review": 0, "waiting": False, "hook": False, "unattended": False,
                            "agentDelivery": None, "receiptConfirmed": None}
-    st = ledger.entry_state(rid, e)
+    m = ledger.read_manifest(d)
+    st = ledger.entry_state(rid, e, m)
     # state 是给脚本读的判定值，恒为中文、不随语言改值；state_id 是语言无关的稳定值；
     # 给人看的那一层由 list_reviews 用 _state_label 按语言显示。
     if st == "missing":
         row["state"], row["state_id"] = "目录不在", "missing"
         return row
-    m = ledger.read_manifest(d)
     row["name"] = ledger.review_name(m) or None
     if st == "mismatch":
         row["state"] = f"标识不符（目录里现在是 {str(m.get('reviewId') or '无')[:8]}）"
         row["state_id"] = "mismatch"
         return row
     info = read_status(d)
-    if info and info.get("port") and pid_alive(int(info.get("pid") or 0)):
+    if info and info.get("port") and ledger.pid_alive(int(info.get("pid") or 0)):
         row["running"] = int(info["port"])
         row["hook"] = bool(info.get("hook"))
         row["state_id"] = "running" if row["running"] == e.get("port") else "running-temp"
@@ -1066,10 +1156,17 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
     else:
         row["state"], row["state_id"] = "已停", "stopped"
     try:
-        hs = store.handoff_state(d, full=False)
-        row["pending"], row["review"] = int(hs.get("pending") or 0), int(hs.get("review") or 0)
-        delivery = row["agentDelivery"] = wakeup.public_status(d)
-        latest = hs.get("latest") or {}
+        try:
+            handoff = store.handoff_load(d)
+        except ValueError as exc:   # 批次记录损坏：计数按 0，投递状态按同一降级结果处理
+            handoff = exc
+        items = handoff["items"] if isinstance(handoff, dict) else []
+        row["pending"] = sum(1 for i in items if i.get("status") == "pending")
+        row["review"] = sum(1 for i in items if i.get("status") == "review")
+        # latest 只取 status / seq 两个字段判断回执，与 handoff_state 的 userMessage 归一无关；
+        # 将来给这里加字段（或改「最新一条」的取法）时，需重新核对取值口径与回执判定。
+        latest = items[-1] if items else {}
+        delivery = row["agentDelivery"] = wakeup.public_status(d, handoff=handoff, manifest=m)
         event = "review" if latest.get("status") in ("review", "reviewing") else "handoff"
         if delivery.get("state") == "received" and delivery.get("seq") == latest.get("seq") and delivery.get("event") == event:
             row["receiptConfirmed"] = True
@@ -1206,7 +1303,7 @@ def check(locale: str | None = None) -> int:
     try:
         (tmp / "index.html").write_text("<!doctype html><title>check</title><script>var ok=1</script>ok", encoding="utf-8")
         (tmp / MANIFEST).write_text(json.dumps({"reviewId": "checkreview"}), encoding="utf-8")
-        srv = ReviewServer(tmp, 0, log_to_file=True, locale=_LOCALE)
+        srv = ReviewServer(tmp, 0, log_to_file=True, locale=i18n.current_locale())
         port = srv.port
         t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
         t.start()
@@ -1328,7 +1425,7 @@ def check(locale: str | None = None) -> int:
            T("serve.check.stopFromPage"))
         srv.shutdown()
         srv.server_close()
-        srv2 = ReviewServer(tmp, 0, log_to_file=True, locale=_LOCALE)
+        srv2 = ReviewServer(tmp, 0, log_to_file=True, locale=i18n.current_locale())
         t2 = threading.Thread(target=srv2.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
         t2.start()
         s, _, b = _req(srv2.port, "GET", "/api/notes", {"Host": f"127.0.0.1:{srv2.port}"})
@@ -1354,31 +1451,6 @@ def check(locale: str | None = None) -> int:
     return 1 if failed else 0
 
 
-class LocalizedParser(argparse.ArgumentParser):
-    """帮助、用法与错误消息都走当前语言的 argparse 解析器；参数名与合法取值保持原文。"""
-
-    def error(self, message: str):
-        self.print_usage(sys.stderr)
-        print(translate_cli_error(message), file=sys.stderr)
-        sys.exit(2)
-
-
-def translate_cli_error(message: str) -> str:
-    text = str(message).strip()
-    match = re.match(r"^(?:argument \S+: )?invalid choice: '([^']*)' \(choose from .*\)$", text)
-    if match:
-        return T("serve.err.unknownChoice", name=match.group(1))
-    match = re.match(r"^argument (\S+): expected one argument$", text)
-    if match:
-        return T("serve.err.missingValue", name=match.group(1))
-    match = re.match(r"^unrecognized arguments: (.+)$", text)
-    if match:
-        return T("serve.err.unknownArgument", detail=match.group(1))
-    if text.startswith("the following arguments are required:"):
-        return T("serve.err.missingArgument")
-    return T("serve.err.generic", detail=text)
-
-
 def _add_help(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-h", "--help", action="help", default=argparse.SUPPRESS,
                         help=T("serve.opt.help"))
@@ -1398,19 +1470,15 @@ def main(argv: list[str] | None = None) -> int:
         set_locale(i18n.cli_locale(locale_choice))
     except i18n.LocaleError as exc:
         set_locale(i18n.DEFAULT_LOCALE)
-        params = getattr(exc, "params", {}) or {}
-        value = params.get("locale") if isinstance(params, dict) else None
-        if isinstance(value, str) and not value.strip():
-            print(T("serve.err.emptyLocale"), file=sys.stderr)
-        else:
-            print(T("serve.err.invalidLocale", name="" if value is None else str(value)), file=sys.stderr)
+        print(i18n.locale_error_message(exc, ERROR_KEYS, T), file=sys.stderr)
         return 2
     # 子命令也可以写在 --locale 之后：认子命令前先剥掉开头这个选项
     rest = argv[2:] if argv[:1] == ["--locale"] else (argv[1:] if argv[:1] and argv[0].startswith("--locale=") else argv)
     if rest[:1] == ["check"]:
-        return check(locale=_LOCALE)
+        return check(locale=i18n.current_locale())
     if rest[:1] == ["status"]:
-        ap = LocalizedParser(prog="serve.py status", add_help=False)
+        ap = i18n.LocalizedParser(prog="serve.py status", add_help=False,
+                                  keys=ERROR_KEYS, translate=T)
         _add_help(ap)
         _add_locale(ap)
         ap.add_argument("dir", type=str, help=T("serve.opt.dirOrId"))
@@ -1418,25 +1486,28 @@ def main(argv: list[str] | None = None) -> int:
         d = resolve_arg(a.dir)
         # 目录解析出来后还有一级兜底：审阅里保存的 locale
         set_locale(cli_locale(locale_choice, d))
-        return status(d, locale=_LOCALE)
+        return status(d, locale=i18n.current_locale())
     if rest[:1] == ["list"]:
-        ap = LocalizedParser(prog="serve.py list", add_help=False, description=T("serve.desc.list"))
+        ap = i18n.LocalizedParser(prog="serve.py list", add_help=False, description=T("serve.desc.list"),
+                                  keys=ERROR_KEYS, translate=T)
         _add_help(ap)
         _add_locale(ap)
-        ap.add_argument("--under", type=Path, metavar="目录" if _LOCALE == "zh-CN" else "DIR",
+        ap.add_argument("--under", type=Path, metavar="目录" if i18n.current_locale() == "zh-CN" else "DIR",
                         help=T("serve.opt.under"))
         ap.add_argument("--json", action="store_true", help=T("serve.opt.json"))
         a = ap.parse_args(rest[1:])
-        return list_reviews(a.under, a.json, locale=_LOCALE)
+        return list_reviews(a.under, a.json, locale=i18n.current_locale())
     if rest[:1] == ["forget"]:
-        ap = LocalizedParser(prog="serve.py forget", add_help=False, description=T("serve.desc.forget"))
+        ap = i18n.LocalizedParser(prog="serve.py forget", add_help=False, description=T("serve.desc.forget"),
+                                  keys=ERROR_KEYS, translate=T)
         _add_help(ap)
         _add_locale(ap)
         ap.add_argument("key", help=T("serve.opt.key"))
         a = ap.parse_args(rest[1:])
-        return forget(a.key, locale=_LOCALE)
+        return forget(a.key, locale=i18n.current_locale())
     argv = rest[1:] if rest[:1] == ["serve"] else rest
-    ap = LocalizedParser(prog="serve.py", add_help=False, description=T("serve.desc"))
+    ap = i18n.LocalizedParser(prog="serve.py", add_help=False, description=T("serve.desc"),
+                              keys=ERROR_KEYS, translate=T)
     _add_help(ap)
     _add_locale(ap)
     ap.add_argument("dir", type=str, help=T("serve.opt.dir"))
@@ -1445,14 +1516,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-open", action="store_true", help=T("serve.opt.noOpen"))
     ap.add_argument("--debug", action="store_true", help=T("serve.opt.debug"))
     ap.add_argument("--overview-start", help=argparse.SUPPRESS)
-    ap.add_argument("--on-handoff", metavar="命令" if _LOCALE == "zh-CN" else "COMMAND",
+    ap.add_argument("--on-handoff", metavar="命令" if i18n.current_locale() == "zh-CN" else "COMMAND",
                     help=T("serve.opt.onHandoff"))
     a = ap.parse_args(argv)
     d = resolve_arg(a.dir)
     # 目录解析出来后还有一级兜底：审阅里保存的 locale
     set_locale(cli_locale(locale_choice, d))
     return serve(d, a.port, not a.no_open, a.debug, parse_hook(a.on_handoff),
-                 claim=a.claim_port, locale=_LOCALE, overview_start=a.overview_start)
+                 claim=a.claim_port, locale=i18n.current_locale(), overview_start=a.overview_start)
 
 
 if __name__ == "__main__":

@@ -1359,7 +1359,7 @@ def locale_checks(browser, tmp: Path):
     zh_chip = page.inner_text("#qbox")
     ok("引用（报告）" in zh_chip and "原句" in zh_chip, f"中文引用来源保持原文格式（实际 {zh_chip}）")
     zh_counts = page.evaluate("() => [0, 1, 2].map(n => tMsg('cli.show.count', {count: n}))")
-    ok(zh_counts == ["0 条批注", "1 条批注", "2 条批注"], f"file:// 中文计数 0/1/2（实际 {zh_counts}）")
+    ok(zh_counts == ["共 0 条", "共 1 条", "共 2 条"], f"file:// 中文计数 0/1/2（实际 {zh_counts}）")
     page.fill("#ntext", "请改标题")
     page.select_option("#ntarget", "报告")
     page.click("#addBtn")
@@ -4291,6 +4291,203 @@ def external_method_checks(browser, tmp: Path):
        "相同缺陷的内置与外部产物判定完全一致（外部方法不放宽也不加严）")
 
 
+# 编号与计数的合成审阅：第 3 页两条未处理 + 一条已处理（都带标注），第 4 页两条未处理（一条带标注），
+# 第 5 页一条待复核。标点与框在同一页统一按出现顺序编号，已处理的不被排除在编号之外。
+POLL_NUMBERING_NOTES = [
+    {"id": "numpin000000001", "page": 3, "title": "结论", "target": "报告", "text": "编号甲（点）",
+     "quote": "", "quoteFrom": "", "pin": {"x": 10, "y": 10}, "status": "open", "at": "2026-10-01T00:00:01Z"},
+    {"id": "numreg000000002", "page": 3, "title": "结论", "target": "报告", "text": "编号乙（框）",
+     "quote": "", "quoteFrom": "", "region": {"x": 20, "y": 20, "w": 30, "h": 30}, "anchor": "table「渠道」",
+     "status": "open", "at": "2026-10-01T00:00:02Z"},
+    {"id": "numres000000003", "page": 3, "title": "结论", "target": "讲稿", "text": "编号丙（已处理）",
+     "quote": "", "quoteFrom": "", "pin": {"x": 40, "y": 40}, "status": "resolved", "resolution": "已改好",
+     "resolvedBy": "claude", "resolvedAt": "2026-10-02T00:00:00Z", "at": "2026-10-01T00:00:03Z"},
+    {"id": "numopen00000004", "page": 4, "title": "成本", "target": "报告", "text": "编号丁",
+     "quote": "", "quoteFrom": "", "status": "open", "at": "2026-10-01T00:00:04Z"},
+    {"id": "numpin000000005", "page": 4, "title": "成本", "target": "报告", "text": "编号戊（点）",
+     "quote": "", "quoteFrom": "", "pin": {"x": 50, "y": 50}, "status": "open", "at": "2026-10-01T00:00:05Z"},
+    {"id": "numdrf000000006", "page": 5, "title": "下一步", "target": "报告", "text": "编号己（待复核）",
+     "quote": "", "quoteFrom": "", "status": "drafted", "draftBatch": 1, "draftedBy": "claude",
+     "draftedAt": "2026-10-02T00:00:00Z", "resolution": "初改说明", "at": "2026-10-01T00:00:06Z"},
+]
+
+# 提交状态与续看提示重画时都会重写这几个节点。用 MutationObserver 数 DOM 改动，
+# 不碰页面内部函数，所以「没有重画」是外部可观察的行为。
+REPAINT_WATCH = """() => {
+  window.__repaint = {handState: 0, agentDelivery: 0, resumeText: 0};
+  const bump = key => () => { window.__repaint[key] += 1; };
+  [['handState', 'handState'], ['agentDelivery', 'agentDelivery'], ['resumeText', 'resumeText']]
+    .forEach(pair => {
+      const el = document.getElementById(pair[0]);
+      if (el) new MutationObserver(bump(pair[1])).observe(el, {childList: true, subtree: true, characterData: true});
+    });
+}"""
+
+
+def read_repaint_counter(page):
+    """读一次重画计数；多让出一个任务边界，排队的微任务（Observer 回调）随之一并跑完。"""
+    return page.evaluate("() => new Promise(r => setTimeout(() => r(window.__repaint), 0))")
+
+
+def write_json_atomic(path: Path, data) -> None:
+    """原子替换 JSON 文件：读者不会看到写了一半的内容。"""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def mark_notes(d: Path, resolved_id: str, drafted_id: str) -> None:
+    """按真实存储操作把两条合成批注标成「已处理」和「已初改·待复核」（notes_store 的同一入口）。"""
+    code = ("import sys;sys.path.insert(0,sys.argv[1]);import notes_store as s;from pathlib import Path;"
+            "d=Path(sys.argv[2]);"
+            "s.set_status(d,sys.argv[3],'resolved',resolution='已改好',by='claude');"
+            "s.set_status(d,sys.argv[4],'drafted',by='claude')")
+    subprocess.run([sys.executable, "-c", code, str(SCRIPTS), str(d), resolved_id, drafted_id],
+                   check=True, capture_output=True)
+
+
+def poll_repaint_numbering(page, d: Path):
+    """跳页选项计数、卡片标注序号与页面标点编号，与改动前在同一合成审阅上逐项一致。"""
+    ok(wait_until(lambda: len(disk_notes(d)) == len(POLL_NUMBERING_NOTES), page, 10,
+                  condition="合成批注已在磁盘上"), "编号：合成批注写入审阅目录")
+    labels = wait_until(lambda: (lambda ls: ls if "）" in ls[2] else None)(
+        page.evaluate("() => [...document.getElementById('jump').options].map(o => o.textContent)")),
+        page, 10, condition="跳页选项带上每页计数")
+    ok(labels == ["第 1 页", "第 2 页", "第 3 页（批注 2）", "第 4 页（批注 2）",
+                  "第 5 页（待复核 1）", "第 6 页"],
+       "跳页选项的计数与改动前一致（%s）" % (labels,))
+    go_page(page, 3)
+    pins = page.evaluate("() => [...document.querySelector('#host').shadowRoot"
+                         ".querySelectorAll('.ae-pin')].map(e => e.textContent)")
+    regions = page.evaluate("() => [...document.querySelector('#host').shadowRoot"
+                            ".querySelectorAll('.ae-region .lbl')].map(e => e.textContent)")
+    ok(pins == ["1", "3"] and regions == ["2"],
+       "第 3 页的标点与框按出现顺序编号，已处理的不跳过（标点 %s、框 %s）" % (pins, regions))
+    metas = page.evaluate("() => Object.fromEntries([...document.querySelectorAll('#nlist [data-note]')]"
+                          ".map(c => [c.dataset.note, c.querySelector('.meta').textContent]))")
+    ok("标点 1" in metas.get("numpin000000001", "") and "框选 2" in metas.get("numreg000000002", "")
+       and "标点 3" in metas.get("numres000000003", ""),
+       "卡片上的标注序号与页面标点编号一致（%s）" % (metas,))
+
+
+def poll_repaint_checks(browser, tmp: Path):
+    """场景 poll-repaint：轮询数据不变不重画，其他触发点照旧立即更新（详见 e2e_scenarios 注册表）。"""
+    # ---------- 编号与计数 ----------
+    ndir = tmp / "poll_repaint_numbering"
+    build(ndir, name="poll-repaint-numbering")
+    write_disk_notes(ndir, POLL_NUMBERING_NOTES)
+    mark_notes(ndir, "numres000000003", "numdrf000000006")
+    port = free_port()
+    srv = start_server(ndir, port)
+    ctx = browser.new_context()
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        ok(wait_mode(page, "server"), "编号：经服务打开")
+        poll_repaint_numbering(page, ndir)
+    finally:
+        ctx.close()
+        stop(srv)
+
+    # ---------- 轮询带来的提交状态与续看提示 ----------
+    d = tmp / "poll_repaint"
+    build(d, name="poll-repaint")
+    port = free_port()
+    srv = start_server(d, port)
+    ctx = browser.new_context()
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        ok(wait_mode(page, "server"), "轮询：经服务打开")
+        go_page(page, 3)
+        add_note(page, "轮询场景的合成批注")
+        ok(wait_until(lambda: any(n["text"] == "轮询场景的合成批注" for n in disk_notes(d)), page, 5,
+                      condition="批注落盘"), "轮询：先写一条合成批注")
+        page.click("#handBtn")
+        page.fill("#handMsg", "合成附言：先改第 3 页")
+        page.click("#doHand")
+        ok(wait_until(lambda: (d / "handoff.json").exists()
+                      and json.loads((d / "handoff.json").read_text())["items"][-1]["message"] == "合成附言：先改第 3 页",
+                      page, 8, condition="提交与附言落盘"), "轮询：交给 Agent 一批")
+        nid = [n for n in disk_notes(d) if n["text"] == "轮询场景的合成批注"][0]["id"]
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "claim", str(d)], check=True, capture_output=True)
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "resolve", str(d), nid,
+                        "--note", "标题缩短了", "--by", "claude"], check=True, capture_output=True)
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "done", str(d), "--summary", "第 3 页已改"],
+                       check=True, capture_output=True)
+        ok(wait_until(lambda: "Agent 已处理 · 第 1 批（解决 1 条）" in page.inner_text("#handState"), page, 10,
+                      condition="轮询应用收尾状态"), "轮询：代理收尾后提交状态经轮询更新")
+        go_page(page, 2)
+        page.evaluate(REPAINT_WATCH)
+        before = read_repaint_counter(page)
+        ok(wait_poll(page, 12, condition="第一次轮询往返") and wait_poll(page, 12, condition="第二次轮询往返"),
+           "轮询：期间发生两次轮询往返")
+        after = read_repaint_counter(page)
+        ok(before == after,
+           "轮询数据不变时不重画提交状态与续看提示（%s → %s）" % (before, after))
+        # 最新一批只改摘要字段：提交状态照旧重画（handSig 那几个字段没变也要画）
+        hand = json.loads((d / "handoff.json").read_text())
+        hand["items"][-1]["summary"] = "改后的合成摘要"
+        write_json_atomic(d / "handoff.json", hand)
+        ok(wait_until(lambda: "改后的合成摘要" in (page.get_attribute("#handState", "title") or ""), page, 12,
+                      condition="轮询应用改后的摘要"), "最新一批只改摘要字段时，提交状态重画")
+        # 本地写批注、翻页、切换界面语言：续看提示仍立即更新（不等下一轮轮询）
+        go_page(page, 4)
+        add_note(page, "轮询后的本地批注")
+        ok("上次批注到第 4 页" in page.inner_text("#resume"),
+           "轮询数据不变时，本地写一条批注后续看提示立即更新")
+        go_page(page, 2)
+        ok("上次批注到第 4 页" in page.inner_text("#resume") and page.is_visible("#resumeGo"),
+           "轮询数据不变时，翻页后续看提示立即更新")
+        page.select_option("#localePick", "en")
+        ok("Last annotation on page 4" in page.inner_text("#resume"),
+           "轮询数据不变时，切换界面语言后续看提示立即更新")
+        page.select_option("#localePick", "zh-CN")
+    finally:
+        ctx.close()
+        stop(srv)
+
+    # ---------- 别的标签页写批注：storage 事件后本页提示更新 ----------
+    fdir = tmp / "poll_repaint_file"
+    build(fdir, name="poll-repaint-file")
+    url = (fdir / "index.html").as_uri()
+    ctx = browser.new_context()
+    try:
+        page = ctx.new_page()
+        page.goto(url)
+        ok("本地文件模式" in page.inner_text("#mode"), "storage：file:// 打开")
+        ok(not page.is_visible("#resume"), "storage：没有批注时不显示续看提示")
+        page2 = ctx.new_page()
+        page2.goto(url)
+        go_page(page2, 4)
+        add_note(page2, "另一个标签页的批注")
+        ok(wait_until(lambda: "上次批注到第 4 页" in page.inner_text("#resume"), page, 10,
+                      condition="storage 事件后续看提示更新"),
+           "storage：别的标签页写批注后，本页的续看提示立即更新")
+        page2.close()
+        legacy = [{"id": "stgold000000001", "page": 4, "title": "成本", "target": "报告",
+                   "text": "旧版批注甲", "quote": "", "quoteFrom": "", "pin": None,
+                   "at": "2026-10-27T01:00:00Z"},
+                  {"id": "stgold000000002", "page": 5, "title": "下一步", "target": "讲稿",
+                   "text": "旧版批注乙", "quote": "", "quoteFrom": "", "pin": None,
+                   "at": "2026-10-27T01:01:00Z"}]
+        page.evaluate("v => localStorage.setItem('v7viewer.notes.viewer_r2', JSON.stringify(v))", legacy)
+        page.reload()
+        ok(wait_until(lambda: page.is_visible("#legacyBtn") and "（2）" in page.inner_text("#legacyBtn"),
+                      page, 10, condition="发现 2 条旧版批注"),
+           "storage：发现旧版对照页的 2 条批注，显示导入按钮")
+        page3 = ctx.new_page()
+        page3.goto(url)
+        go_page(page3, 4)
+        add_note(page3, "旧版批注甲")   # 同页、同对象、同正文：与旧版那条去重键相同
+        ok(wait_until(lambda: not page.is_visible("#legacyBtn") or "（1）" in page.inner_text("#legacyBtn"),
+                      page, 12, condition="storage 事件后旧批注提示更新"),
+           "storage：别的标签页写下同内容批注后，本页的旧批注提示更新")
+        page3.close()
+    finally:
+        ctx.close()
+
+
 SCENARIO_RUNNERS = {
     "receiver-binding": receiver_binding_checks,
     "generated-draft-loop": generated_draft_checks,
@@ -4313,6 +4510,7 @@ SCENARIO_RUNNERS = {
     "review-overview": review_overview_checks,
     "css-fidelity": css_fidelity_checks,
     "server-mode": server_mode_checks,
+    "poll-repaint": poll_repaint_checks,
 }
 
 SCENARIO_STATUS_LABELS = {"passed": "通过", "failed": "失败", "error": "错误",

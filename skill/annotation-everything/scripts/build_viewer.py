@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import html
 import json
 import mimetypes
@@ -41,6 +40,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fsutil  # noqa: E402
 
 PAGE_HEAD = re.compile(r"^###\s*第\s*(\d+)\s*页\s*[｜|]\s*(.*)$", re.M)
 PAGE_HEAD_EN = re.compile(r"^###\s*page\s*(\d+)\s*[｜|]\s*(.*)$", re.M | re.I)
@@ -143,6 +145,12 @@ class ScriptError(Exception):
     def __init__(self, messages: list[str]):
         super().__init__("\n".join(messages))
         self.messages = messages
+
+
+class BuildError(SystemExit):
+    """可复用库函数（报告分页、板块参数、源文件查找）的报错：调用方捕它来降级，
+    不用再捕 SystemExit——那会连调用方自己的 sys.exit 一起吞掉。继承 SystemExit：
+    库函数直接作为命令行跑时，退出码与 stderr 和以前完全一样。"""
 
 
 def page_heads(script: str) -> list[re.Match]:
@@ -287,7 +295,7 @@ def find_pages(doc: str, *, locale: str | None = None) -> list[dict]:
             attrs = attrs_of(doc[m.start():m.end()])
             is_page = "page" in attrs.get("class", "").split() and "data-page" in attrs
             if is_page and any(p for _s, _a, p in stack):
-                raise SystemExit(diag(locale, "build.report.nested", page=attrs["data-page"]))
+                raise BuildError(diag(locale, "build.report.nested", page=attrs["data-page"]))
             stack.append((m.start(), attrs, is_page))
         elif stack:
             start, attrs, is_page = stack.pop()
@@ -295,16 +303,16 @@ def find_pages(doc: str, *, locale: str | None = None) -> list[dict]:
                 pages.append({"attrs": attrs, "html": doc[start:m.end()]})
     unclosed = [a.get("data-page") for _s, a, p in stack if p]
     if unclosed:
-        raise SystemExit(diag(locale, "build.report.unclosed", pages=unclosed))
+        raise BuildError(diag(locale, "build.report.unclosed", pages=unclosed))
     out, seen = [], set()
     for p in pages:
         a = p["attrs"]
         try:
             n = int(a["data-page"].strip())
         except ValueError:
-            raise SystemExit(diag(locale, "build.report.pageNumber", page=repr(a["data-page"]))) from None
+            raise BuildError(diag(locale, "build.report.pageNumber", page=repr(a["data-page"]))) from None
         if n in seen:
-            raise SystemExit(diag(locale, "build.report.duplicate", page=n))
+            raise BuildError(diag(locale, "build.report.duplicate", page=n))
         seen.add(n)
         key = a.get("data-key") or a.get("id", "").removeprefix("page-") or f"p{n}"
         hm = re.search(r"<h[1-3][^>]*>(.*?)</h[1-3]>", p["html"], re.S)
@@ -352,7 +360,7 @@ def parse_sections_arg(arg: str, *, locale: str | None = None) -> list[list]:
             continue
         m = re.match(r"^(.+?)[:：]\s*(\d+)\s*(?:[-–~]\s*(\d+))?$", part)
         if not m:
-            raise SystemExit(diag(locale, "build.report.sections", part=repr(part)))
+            raise BuildError(diag(locale, "build.report.sections", part=repr(part)))
         a = int(m.group(2))
         out.append([m.group(1).strip(), a, int(m.group(3) or a)])
     return out
@@ -585,9 +593,11 @@ def _js(obj: object) -> str:
 
 
 def page_csp(page_html: str) -> str:
-    """与 serve.py 的响应头一致：只放行页面自身的内联脚本（按 sha256）。用于 file:// 打开时。"""
-    hashes = " ".join("'sha256-" + base64.b64encode(hashlib.sha256(s.encode("utf-8")).digest()).decode() + "'"
-                      for s in re.findall(r"<script>(.*?)</script>", page_html, re.S))
+    """与 serve.py 的响应头一致：只放行页面自身的内联脚本（按 sha256）。用于 file:// 打开时。
+
+    哈希算法与 serve.py 的响应头共用一份；这一版不带 frame-ancestors、没有脚本时也不兜底。
+    """
+    hashes = fsutil.script_hashes(page_html)
     return (f"default-src 'none'; script-src {hashes}; style-src 'unsafe-inline'; img-src data: blob:; "
             "font-src data:; media-src data: blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
             "object-src 'none'")
@@ -626,7 +636,7 @@ def resolve_sources(review_dir: Path, manifest: dict | None = None, *, locale: s
         hit = next((c.resolve() for c in cand if c.is_file()), None)
         if hit is None and cand:
             tried = "、".join(str(c) for c in cand)
-            raise SystemExit(diag(locale, "build.source.missing", kind=diag(locale, "cli.show.source." + k), paths=tried))
+            raise BuildError(diag(locale, "build.source.missing", kind=diag(locale, "cli.show.source." + k), paths=tried))
         out[k] = hit
     return out
 
@@ -724,10 +734,9 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     old_keys = {int(pg["n"]): str(pg["key"]) for pg in old.get("pages", [])
                 if isinstance(pg, dict) and "n" in pg and pg.get("key") and pg.get("stable", stable_key(pg["key"]))}
     # 审阅标识：页面据此确认连上的是这份审阅的服务；重建时沿用。目录是从别处复制来的，就换一个新的
-    rid = old.get("reviewId") if re.fullmatch(r"[0-9a-f]{16}", str(old.get("reviewId", ""))) else None
-    orig = Path(old["reviewDir"]) if old.get("reviewDir") else None
+    rid = old.get("reviewId") if ledger.RID.fullmatch(str(old.get("reviewId", ""))) else None
     # 原目录还在、且标识相同才算复制；整个目录被移走（原目录已不在）则沿用标识，浏览器里的暂存不丢
-    copied = bool(rid and orig and orig != out.resolve() and ledger.read_manifest(orig).get("reviewId") == rid)
+    copied = rid is not None and ledger.copied_from(out, old) is not None
     if copied:
         assets.warn(diag(locale_choice, "build.source.copied", path=old["reviewDir"]))
     if rid is None or copied:

@@ -696,14 +696,17 @@ function send(op,fullCheckSupported=true){
     body.receiverBindingId=op.receiverBindingId??null;
     if(op.fullCheck===true){body.userMessage=message;body.message=FULL_CHECK_COMPAT+(message?"\n\n"+message:"")}
     if("fullCheck" in op&&fullCheckSupported)body.fullCheck=op.fullCheck===true;return api("POST","/api/handoff",body)}}
-const pend={get(){const v=LS.get(K.pending,[]);return Array.isArray(v)?v:[]},
-  set(v){if(!LS.set(K.pending,v))toast(tMsg("viewer.recovery.storageFull"),6000)},
+// 一次轮询里队列（待补传 / 未能保存）只从 localStorage 读一次：轮询开始时取好快照，这一轮之内复用；
+// 任何写入都立即作废快照，之后按最新的读（别的标签页在同一轮里写进的改动不会被漏掉）。
+let queueSnap=null;
+const pend={get(){if(queueSnap)return queueSnap.p;const v=LS.get(K.pending,[]);return Array.isArray(v)?v:[]},
+  set(v){queueSnap=null;if(!LS.set(K.pending,v))toast(tMsg("viewer.recovery.storageFull"),6000)},
   push(op){const v=pend.get();v.push(op);pend.set(v)},remove(id){if(!id)return;pend.set(pend.get().filter(o=>o.opId!==id))}};
 // 0.2 版页面用旧键名暂存改动、且没有操作 id：挪到新队列并补上 id（初始化和每次轮询都检查，旧标签页还开着也不丢）
 function migrateLegacyQueue(){const old=LS.get(K.legacyPending,null);if(!Array.isArray(old)||!old.length)return;
   const q=pend.get();old.forEach(o=>{if(o&&o.kind){if(!o.opId)o.opId=newId();q.push(o)}});LS.del(K.legacyPending);pend.set(q)}
-const failed={get(){const v=LS.get(K.failed,[]);return Array.isArray(v)?v:[]},
-  push(op,why){const v=failed.get();v.push({op,why,at:nowIso()});LS.set(K.failed,v)},clear(){LS.del(K.failed)}};
+const failed={get(){if(queueSnap)return queueSnap.f;const v=LS.get(K.failed,[]);return Array.isArray(v)?v:[]},
+  push(op,why){queueSnap=null;const v=failed.get();v.push({op,why,at:nowIso()});LS.set(K.failed,v)},clear(){queueSnap=null;LS.del(K.failed)}};
 async function mutate(op){
   op.opId=newId();
   if(FILE){const cur=LS.get(K.notes,[]);notes=Array.isArray(cur)?cur:[];   // 先读最新再改：多个标签页不互相覆盖
@@ -758,7 +761,13 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
     mode="server";await resync();if(!pend.get().length)break}}
   finally{busy--;updateMode()}}
 async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
-function applyServer(d){
+// 轮询带回的「最新一批（完整内容）+ 投递状态」签名：逐字段相同才认为这次轮询没有新东西可画。
+// 只有摘要类字段（处理摘要、附言、认领时间……）变化时也要重画，所以比 handSig 那几个字段细。
+let handPollKey="";
+function handPollKeyOf(d){const h=d&&d.handoff||null;
+  return JSON.stringify([h&&h.latest||null,h?h.total:null,h&&Array.isArray(h.inFlightIds)?h.inFlightIds:[],
+    d&&d.agentDelivery||null])}
+function applyServer(d,quietHand){
   agentDelivery=d.agentDelivery||null;
   receiver=d.receiver||null;
   if(!archiveBusy)setCurrentArchive(d.archived);
@@ -768,7 +777,7 @@ function applyServer(d){
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
   if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
-  if(d.handoff)setHand(d.handoff);else renderHand();
+  if(d.handoff)setHand(d.handoff,quietHand);else if(!quietHand)renderHand();
   if(idx0==null)idx0=d.indexMtime;else if(d.indexMtime&&d.indexMtime!==idx0)$("reloadBtn").style.display="inline-block";
   if(d.rev!==rev){setDoc(d);pend.get().forEach(op=>{if(op.kind!=="handoff")applyLocal(op)});refreshList()}
   if(!resumeReady){resumeReady=true;renderResume()}}
@@ -781,10 +790,17 @@ async function poll(){
     updateMode();return}
   finally{busy--}
   const was=mode;mode="server";
-  applyServer(d);
-  if(pend.get().length){const before=pend.get().length;await flush();if(mode==="server"&&!pend.get().length&&before)toast(tMsg("viewer.offline.retried"));return}
-  if(was==="offline"&&rev!=null)toast(tMsg("viewer.offline.reconnected"));
-  updateMode()}
+  const key=handPollKeyOf(d),quiet=key===handPollKey;   // 数据没变：不重画提交状态和续看提示
+  handPollKey=key;
+  queueSnap={p:pend.get(),f:failed.get()};   // 这一次轮询里队列只读一次 localStorage
+  try{
+    applyServer(d,quiet);
+    if(pend.get().length){   // 有暂存要补传：补传期间别的标签页可能改队列，之后按最新的读
+      const before=pend.get().length;queueSnap=null;
+      await flush();if(mode==="server"&&!pend.get().length&&before)toast(tMsg("viewer.offline.retried"));return}
+    if(was==="offline"&&rev!=null)toast(tMsg("viewer.offline.reconnected"));
+    updateMode()}
+  finally{queueSnap=null}}
 // ---------- 服务不在时：说清这个端口上现在是谁，给出本审阅的启动命令（按审阅标识，页面里不写本机路径） ----------
 const SERVE_CMD=`python3 ~/.claude/skills/annotation-everything/scripts/serve.py ${RID}`;
 let occupant=null, barShownFor="", barClosedFor="", probedAt=0, firstPolled=false;   // 首次轮询前不显示（打开页面时不闪红条）
@@ -823,27 +839,37 @@ function updateMode(){const m=$("mode"),q=pend.get().length,f=failed.get().lengt
   const fb=$("dlFailed");if(fb)fb.style.display=f?"":"none";
   syncSrvBar();renderServiceControls();renderReceiver()}
 addEventListener("storage",e=>{
+  invalidateExternal();   // 别的标签页改了这些键：外部审阅暂存的解析结果作废
   if(FILE&&e.key===K.notes){const v=LS.get(K.notes,[]);notes=Array.isArray(v)?v:[];refreshList()}   // 别的标签页改了：跟上
   else if(e.key===K.pending||e.key===K.failed)updateMode();
   else if(e.key&&/^ae\.[0-9a-f]{16}\.(queue|pending|failed)$/.test(e.key))updateStray()});
 
-// ---------- 旧批注发现（同一浏览器来源下的其他版本；导入需用户确认） ----------
-function foundSets(){const out=[];try{const have=new Set(notes.map(x=>x.id)),keys=new Set(notes.map(dedupKey)),docTitle=unH(document.title);
-  for(let k=0;k<localStorage.length;k++){const key=localStorage.key(k);
-  const legacy=/^v7viewer\.notes\./.test(key), m=key.match(/^ae\.(.+)\.notes$/);
-  if(!legacy&&!(m&&m[1]!==RID))continue;
-  let arr=[];try{arr=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){}
-  if(!Array.isArray(arr)||!arr.length)continue;
-  const meta=m?LS.get(`ae.${m[1]}.meta`,null):null;
-  const fresh=arr.filter(x=>x&&x.page&&x.text&&!have.has(x.id)&&!keys.has(dedupKey(x)));
-  if(fresh.length)out.push({key,items:fresh,title:meta&&meta.title||"",same:legacy||(meta&&meta.title===docTitle)})}}catch(e){}return out}
-// ---------- 别的审阅留在这个地址下、还没补传的改动（旧标签页留下的）：只能下载后导回那份审阅，不写进本审阅 ----------
-function strays(){const by={};try{for(let k=0;k<localStorage.length;k++){const key=localStorage.key(k);
+// ---------- 同一浏览器来源下的其他版本 / 别的审阅留下的改动 ----------
+// 旧批注发现（同一浏览器来源下的其他版本；导入需用户确认）与别的审阅留在这个地址下、还没补传的改动
+// （旧标签页留下的：只能下载后导回那份审阅，不写进本审阅）都要全量遍历 localStorage。
+// 遍历与解析的结果缓存起来，storage 事件、本页导入或清理旧批注时失效；本页批注的变化只影响过滤，不必作废。
+let foundRaw=null, strayCache=null;
+function invalidateExternal(){foundRaw=null;strayCache=null}
+function foundRawSets(){if(foundRaw)return foundRaw;const out=[];
+  try{for(let k=0;k<localStorage.length;k++){const key=localStorage.key(k);
+    const legacy=/^v7viewer\.notes\./.test(key), m=key&&key.match(/^ae\.(.+)\.notes$/);
+    if(!legacy&&!(m&&m[1]!==RID))continue;
+    let arr=[];try{arr=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){}
+    if(!Array.isArray(arr)||!arr.length)continue;
+    out.push({key,legacy,rid:m?m[1]:"",arr,meta:m?LS.get(`ae.${m[1]}.meta`,null):null})}}catch(e){}
+  return foundRaw=out}
+function foundSets(){const out=[],have=new Set(notes.map(x=>x.id)),keys=new Set(notes.map(dedupKey)),docTitle=unH(document.title);
+  foundRawSets().forEach(s=>{
+    const fresh=s.arr.filter(x=>x&&x.page&&x.text&&!have.has(x.id)&&!keys.has(dedupKey(x)));
+    if(fresh.length)out.push({key:s.key,items:fresh,title:s.meta&&s.meta.title||"",same:s.legacy||(s.meta&&s.meta.title===docTitle)})});
+  return out}
+function strays(){if(strayCache)return strayCache;const by={};
+  try{for(let k=0;k<localStorage.length;k++){const key=localStorage.key(k);
     const m=key&&key.match(/^ae\.([0-9a-f]{16})\.(queue|pending|failed)$/);if(!m||m[1]===RID)continue;
     let v=[];try{v=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){}
     if(!Array.isArray(v))continue;const ops=m[2]==="failed"?v.map(x=>x&&x.op).filter(o=>o&&o.kind):v.filter(o=>o&&o.kind);
     if(!ops.length)continue;const s=by[m[1]]||(by[m[1]]={rid:m[1],keys:[],ops:[]});s.keys.push(key);s.ops.push(...ops)}}catch(e){}
-  return Object.values(by).map(s=>{const meta=LS.get(`ae.${s.rid}.meta`,null)||{};
+  return strayCache=Object.values(by).map(s=>{const meta=LS.get(`ae.${s.rid}.meta`,null)||{};
     // 按顺序回放：新增 / 导入收进来，之后对它们的修改合并进去、删除就移除；对不上的修改、删除、提交只留在 ops 里
     const m=new Map();let other=0;
     s.ops.forEach(op=>{
@@ -870,13 +896,28 @@ function renderStrays(){const list=strays(),box=$("strays");
     s.keys.forEach(k=>{const v=LS.get(k,[]);if(!Array.isArray(v))return;
       const rest=v.filter(x=>{const op=/\.failed$/.test(k)?x&&x.op:x;return !(op&&seen.has(opKey(op)))});
       kept+=rest.length;if(rest.length)LS.set(k,rest);else LS.del(k)});
+    invalidateExternal();   // 刚删掉了别的审阅的暂存条目：解析结果作废
     renderStrays();updateStray();
     if(kept)toast(tMsg("viewer.recovery.kept",{n:kept}),6000)})}
 function updateLegacy(){const n=foundSets().filter(s=>s.same).reduce((a,s)=>a+s.items.length,0);const b=$("legacyBtn");
   b.style.display=n?"inline-block":"none";b.textContent=tMsg("viewer.recovery.legacyButton",{n})}
 
 // ---------- 批注区：列表与输入框分开，刷新列表不碰正在写的内容 ----------
-function markNo(n,id){return notes.filter(x=>x.page===n&&hasMark(x)).findIndex(x=>x.id===id)+1}   // 同一页的点和框统一编号
+// 计数与标注序号都先一次遍历建好映射再填充：不再每页、每张卡片各扫一遍批注。
+// pageStats：页 → {o,f,d,n}（同 counts 的口径，另记本页批注总数）；markNos：页+id → 序号；
+// pageMarks：页 → 该页带标注的批注（按出现顺序，drawPins 直接用它）
+let pageStats=null, markNos=null, pageMarks=null, allStats={o:0,f:0,d:0};
+function indexNotes(){const stats=new Map(),nos=new Map(),marks=new Map(),seq=new Map();let o=0,f=0,d=0;
+  notes.forEach(x=>{let c=stats.get(x.page);
+    if(!c)stats.set(x.page,c={o:0,f:0,d:0,n:0});
+    c.n++;
+    if(isDraft(x)){c.d++;d++}else if(inFlight(x)){c.f++;f++}else if(!isDone(x)){c.o++;o++}
+    if(hasMark(x)){const list=marks.get(x.page);
+      if(list)list.push(x);else marks.set(x.page,[x]);
+      const k=(seq.get(x.page)||0)+1;seq.set(x.page,k);nos.set(x.page+"\u0000"+x.id,k)}});
+  pageStats=stats;markNos=nos;pageMarks=marks;allStats={o,f,d}}
+const statsOf=p=>pageStats&&pageStats.get(p)||{o:0,f:0,d:0,n:0};
+function markNo(n,id){return (markNos&&markNos.get(n+"\u0000"+id))||0}   // 同一页的点和框统一编号
 function drawPins(){stage.querySelectorAll(".ae-pin,.ae-region").forEach(e=>{if(!rdraw||e!==rdraw.box)e.remove()});   // 正在画的框不动
   const put=(x,y,txt,cls,id,tip)=>{const d=document.createElement("div");d.className="ae-pin"+(cls?" "+cls:"");d.textContent=txt;d.style.left=x+"%";d.style.top=y+"%";
     d.dataset.id=id||"";d.title=tip||"";stage.appendChild(d)};
@@ -884,7 +925,7 @@ function drawPins(){stage.querySelectorAll(".ae-pin,.ae-region").forEach(e=>{if(
     Object.assign(d.style,{left:rg.x+"%",top:rg.y+"%",width:rg.w+"%",height:rg.h+"%"});d.dataset.id=id||"";d.title=tip||"";
     const l=document.createElement("span");l.className="lbl";l.textContent=label;d.appendChild(l);
     const z=document.createElement("span");z.className="rz";z.title=tMsg("viewer.markResize");d.appendChild(z);stage.appendChild(d)};
-  notes.filter(x=>x.page===P[i].n&&hasMark(x)).forEach((x,k)=>{if(hideDone&&isDone(x))return;
+  (pageMarks&&pageMarks.get(P[i].n)||[]).forEach((x,k)=>{if(hideDone&&isDone(x))return;
     const cls=[isDone(x)?"done":"",x.style&&x.style.scope?"sty":""].filter(Boolean).join(" "),sum=clip(noteSummary(x),80),rg=regionOf(x);
     if(rg)box(rg,cls,x.id,`${k+1}${x.style&&x.style.scope?" "+tMsg("viewer.styleBtn"):""}`,tMsg("viewer.regionTip",{text:sum}));
     if(x.pin)put(x.pin.x,x.pin.y,k+1,isDone(x)?"done":"",x.id,tMsg("viewer.pinTip",{text:sum}))});
@@ -921,6 +962,7 @@ function stashEdit(){if(!editingId)return;   // 保存或取消后，重绘不�
   const et=$("etext"),es=$("eskills"),ep=$("epage"),card=(et||es)&&(et||es).closest("[data-note]");if(!card)return;
   const id=card.dataset.note;if(et)editBuf[id]=et.value;if(es)editBuf["sk:"+id]=es.value;if(ep)editBuf["pg:"+id]=+ep.value}
 function refreshList(force){
+  indexNotes();   // 计数与标注序号：先一次遍历建好映射，之后按映射填充
   if(!force&&(editingId||composing)){listStale=true;updateCounts();return}   // 正在改某条或正在输入法组字：先不重绘
   listStale=false;
   stashEdit();
@@ -931,17 +973,17 @@ function refreshList(force){
   drawPins();updateCounts()}
 // 「批注」按钮：红 = 还没交给 Agent 的未处理，蓝 = 处理中（已交给 Agent），琥珀 = 已初改·待复核
 function counts(list){let o=0,f=0,d=0;list.forEach(x=>{if(isDraft(x))d++;else if(inFlight(x))f++;else if(!isDone(x))o++});return{o,f,d}}
-function updateCounts(){const c=counts(notes),b=$("ncount");
+function updateCounts(){const c=allStats,b=$("ncount");
   b.textContent=c.o||(c.f||c.d?"":"0");b.classList.toggle("zero",!c.o);
   b.title=tMsg("viewer.count.open",{open:c.o,total:notes.length});
   $("nflight").textContent=c.f?tMsg("viewer.jumpInFlight",{count:c.f}):"";$("nflight").title=tMsg("viewer.count.inFlight");
   $("ndraft").textContent=c.d?tMsg("viewer.jumpDraft",{count:c.d}):"";$("ndraft").title=tMsg("viewer.count.draft");
-  [...$("jump").options].forEach((o,k)=>{const mine=notes.filter(x=>x.page===P[k].n),q=counts(mine),parts=[];
+  [...$("jump").options].forEach((o,k)=>{const q=statsOf(P[k].n),parts=[];
     if(q.o)parts.push(tMsg("viewer.jumpNotes",{count:q.o}));
     if(q.f)parts.push(tMsg("viewer.jumpInFlight",{count:q.f}));
     if(q.d)parts.push(tMsg("viewer.jumpDraft",{count:q.d}));
     const suffix=parts.length?tMsg("viewer.jumpCounts",{parts:parts.join(tMsg("viewer.jumpSep"))})
-      :mine.length?tMsg("viewer.jumpDone"):"";
+      :q.n?tMsg("viewer.jumpDone"):"";
     o.textContent=tMsg("viewer.page",{page:P[k].n})+suffix});
   updateLegacy();renderResume()}
 function markBtnLabel(){const b=$("pinBtn"),rn=markMode&&remarkId?notes.find(n=>n.id===remarkId):null;
@@ -1332,7 +1374,7 @@ $("resumeGo").onclick=goLast;$("resumeClose").onclick=()=>{resumeOff=true;render
 
 // ---------- 交给 Agent ----------
 const handUserMessage=h=>h.userMessage??h.message??"";
-function setHand(h){if(!h||h.error)return;const L=h.latest,prev=hand&&hand.latest;
+function setHand(h,quiet){if(!h||h.error)return;const L=h.latest,prev=hand&&hand.latest;
   if(L&&prev&&prev.seq===L.seq&&prev.status!==L.status){
     if(L.status==="claimed")toast(tMsg("viewer.hand.toast.claimed"),3000);
     if(L.status==="drafted")toast(tMsg("viewer.hand.toast.drafted",{seq:L.seq,n:+L.draftedCount||0}),8000);
@@ -1342,7 +1384,7 @@ function setHand(h){if(!h||h.error)return;const L=h.latest,prev=hand&&hand.lates
   const sig=L?[L.seq,L.status,L.resolvedCount,h.total].join("/"):"";
   hand={...h,history:sig===handSig?hand&&hand.history:undefined};   // 状态变了：旧的完整历史作废，需要时再取
   const fl=Array.isArray(h.inFlightIds)?h.inFlightIds:[],fsig=fl.join(",");
-  renderHand();renderResume();
+  if(!quiet){renderHand();renderResume()}   // 轮询数据没变：跳过这两次重画，其余照旧
   if(fsig!==flightSig){flightSig=fsig;flight=new Set(fl);refreshList()}   // 「处理中」的批注变了才重绘列表
   if($("batches").classList.contains("on")&&sig!==handSig)loadBatches();handSig=sig}
 let handSig="", flightSig="", batchOpen=null;   // 处理记录弹窗：上次的状态签名、用户展开的批次
@@ -1624,6 +1666,7 @@ const expStamp=()=>{const d=new Date(),p=n=>String(n).padStart(2,"0");
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`};
 function expName(suffix){return `${expLang()==="en"?"annotations":"批注"}_${NS}_${stamp12()}.${suffix}`}
 function exportText(){
+  indexNotes();   // 标注序号按映射取：导出和卡片上是同一套编号
   const g=expGrammar(expLang());
   const sorted=notes.slice().sort((a,b)=>a.page-b.page||String(a.at).localeCompare(String(b.at)));
   const by={};sorted.forEach(x=>(by[x.page]=by[x.page]||[]).push(x));
@@ -1681,6 +1724,7 @@ async function runImport(items,label){
   const r=await mutate({kind:"import",notes:items})||{};
   if(FILE)toast(tMsg("import.complete",{label,added:r.added,updated:r.updated,skipped:r.skipped}),3500);
   else toast(mode==="server"?tMsg("import.running"):tMsg("import.held"),3000);
+  invalidateExternal();   // 本页刚导入了批注：旧批注提示要按最新的本页批注重算
   updateLegacy();renderFound()}
 function renderFound(){const f=foundSets();
   $("found").innerHTML=f.length?`<p>${escH(tMsg("viewer.recovery.foundHelp"))}</p>`+f.map((s,k)=>`<div class="found"><span>${escH(tMsg("viewer.recovery.foundRow",{name:s.title||tMsg("viewer.recovery.unknownName"),key:s.key,n:s.items.length}))}</span><button data-found="${k}">${escH(tMsg("viewer.recovery.importFound"))}</button></div>`).join(""):"";

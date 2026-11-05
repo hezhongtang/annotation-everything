@@ -1,17 +1,23 @@
-"""中英 locale 适配层：共享 JSON 词典的定位、读取、查找、插值与受限复数。
+"""中英 locale 适配层：共享 JSON 词典的定位、读取、查找、插值与受限复数，进程级的界面
+语言状态（定住语言 / 按 AE_LOCALE 刷新），以及命令行共用的语言样板（取 --locale、翻译
+argparse 英文报错、报告非法语言选择）。
 
 只用 Python 标准库。浏览器一侧把同一套语义内嵌在 viewer_template.html 的
 tMsg 里，不另开资源路由。tests/test_i18n.py 与 tests/test_review_page_i18n.py
 对照同一批消息核对。
 
 能力边界：语义 key、显式 locale 选择、固定规则兜底、受控命名占位符、
-中英非负整数计数复数。不做 ICU / MessageFormat、消息嵌套、序数或任意表达式。
+中英非负整数计数复数，以及上面那份命令行样板。不做 ICU / MessageFormat、消息
+嵌套、序数或任意表达式。
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
+import sys
+from functools import partial
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
@@ -394,12 +400,113 @@ def explicit_locale(argv) -> object:
     return None
 
 
-class ModuleLocale:
-    """单个模块自己的界面语言状态（每个模块各持一个实例，不跨模块共享）。
+# argparse 按 CPython 的英文原文报错。措辞随 Python 版本变，匹配规则只保留这一份，
+# 各入口不各自抄一份——升级后要改只改这里。
+_INVALID_CHOICE = re.compile(r"^(?:argument \S+: )?invalid choice: '([^']*)' \(choose from .*\)$")
+_MISSING_VALUE = re.compile(r"^argument (\S+): expected one argument$")
+_UNKNOWN_ARGUMENT = re.compile(r"^unrecognized arguments: (.+)$")
 
-    调用方已经把 --locale、AE_LOCALE、审阅 locale 解析完时用 set(具体 locale) 定住，
+# argparse 报错的类别。入口按自己原来认的那几类传消息 key，没列的类别退回通用消息
+CLI_ERROR_INVALID_CHOICE = "invalid-choice"
+CLI_ERROR_MISSING_VALUE = "missing-value"
+CLI_ERROR_UNKNOWN_ARGUMENT = "unknown-argument"
+CLI_ERROR_MISSING_ARGUMENT = "missing-argument"
+CLI_ERROR_GENERIC = "generic"
+# 语言选择本身的问题：空值和非法值分开说明
+CLI_ERROR_EMPTY_LOCALE = "empty-locale"
+CLI_ERROR_INVALID_LOCALE = "invalid-locale"
+
+
+def classify_cli_error(message: str) -> tuple[str, dict]:
+    """把 argparse 的英文报错归成已知类别，并给出该类消息要用的参数。
+
+    返回 (类别, 参数)。认不出来的归到 CLI_ERROR_GENERIC，参数是去掉首尾空白后的
+    原文（detail），由调用方补上下文。
+    """
+    text = str(message).strip()
+    match = _INVALID_CHOICE.match(text)
+    if match:
+        return CLI_ERROR_INVALID_CHOICE, {"name": match.group(1)}
+    match = _MISSING_VALUE.match(text)
+    if match:
+        return CLI_ERROR_MISSING_VALUE, {"name": match.group(1)}
+    match = _UNKNOWN_ARGUMENT.match(text)
+    if match:
+        return CLI_ERROR_UNKNOWN_ARGUMENT, {"detail": match.group(1)}
+    if text.startswith("the following arguments are required:"):
+        return CLI_ERROR_MISSING_ARGUMENT, {}
+    return CLI_ERROR_GENERIC, {"detail": text}
+
+
+def translate_cli_error(message: str, keys: Mapping[str, str],
+                        translate: Callable[..., str]) -> str:
+    """按入口自己的消息 key 表，把 argparse 的英文报错换成本地化的说法。
+
+    keys 把类别（CLI_ERROR_*）映射到消息 key，必须含 CLI_ERROR_GENERIC 一项。
+    某个类别没列出来就退回通用消息、用原文补上下文——入口因此只认自己原来认的
+    类型，输出与逐份抄写时一致。
+    """
+    text = str(message).strip()
+    category, params = classify_cli_error(text)
+    key = keys.get(category)
+    if key is None:
+        return translate(keys[CLI_ERROR_GENERIC], detail=text)
+    return translate(key, **params)
+
+
+class LocalizedParser(argparse.ArgumentParser):
+    """帮助、用法与错误消息都走当前语言的 argparse 解析器；参数名与合法取值保持原文。
+
+    keys 是入口这一侧的消息 key 表（见 translate_cli_error），translate 按当前
+    语言查词典。报错时先打印用法，再打印本地化说明，退出码 2。
+    """
+
+    def __init__(self, *args, keys: Mapping[str, str],
+                 translate: Callable[..., str], **kwargs):
+        super().__init__(*args, **kwargs)
+        self.keys = keys
+        self.translate = translate
+
+    def add_subparsers(self, **kwargs):
+        # add_subparsers 默认用 type(self) 建子解析器；把自己的 key 表与译文一起
+        # 传下去，子命令的报错才不会退回 argparse 的英文原文
+        kwargs.setdefault("parser_class",
+                          partial(type(self), keys=self.keys, translate=self.translate))
+        return super().add_subparsers(**kwargs)
+
+    def error(self, message: str):
+        self.print_usage(sys.stderr)
+        print(translate_cli_error(message, self.keys, self.translate), file=sys.stderr)
+        sys.exit(2)
+
+
+def locale_error_message(exc: Exception, keys: Mapping[str, str],
+                         translate: Callable[..., str], name: object = None) -> str:
+    """语言选择为空或非法时的一句话；按异常里带的值区分空值和非法值。
+
+    keys 需要 CLI_ERROR_EMPTY_LOCALE 与 CLI_ERROR_INVALID_LOCALE 两项。此时没有
+    可用语言，调用方先把界面语言退回默认中文，再打印这里返回的句子。name 缺省时
+    用异常里带的值；调用方另有取值方式（例如按用户原样输入回显）时显式给出。
+    """
+    params = getattr(exc, "params", {}) or {}
+    value = params.get("locale") if isinstance(params, dict) else None
+    if isinstance(value, str) and not value.strip():
+        return translate(keys[CLI_ERROR_EMPTY_LOCALE])
+    if name is None:
+        name = "" if value is None else str(value)
+    return translate(keys[CLI_ERROR_INVALID_LOCALE], name=name)
+
+
+class _ProcessLocale:
+    """进程级界面语言状态：全进程一份，各模块的 T 都从这里取。
+
+    入口已经把 --locale、AE_LOCALE、审阅 locale 解析完时用 set_locale(具体 locale) 定住，
     之后不再被 AE_LOCALE 覆盖——否则同一进程里两种来源不一致，会出现中英混排。
     未定住时 refresh() 按 AE_LOCALE 重新解析；未设置或选择非法时保持中文。
+
+    按模块各持一份并没有带来实际隔离（所有入口本来就把同一种语言逐个传下去），只增加了
+    漏设的机会，所以这里只保留进程级一份。set_locale(None) 因此解除的是整个进程的定住
+    状态，各模块一起回到「按 AE_LOCALE 刷新」；运行时代码不传 None，只有测试会传。
     """
 
     def __init__(self) -> None:
@@ -425,6 +532,33 @@ class ModuleLocale:
     def __call__(self, key: str, **params: object) -> str:
         """按当前语言取一条消息；缺译时回退另一种语言。"""
         return Translator(self.locale)(key, **params)
+
+
+_STATE = _ProcessLocale()
+
+
+def set_locale(locale: object = None) -> None:
+    """定界面语言（进程级，全进程一份）。
+
+    locale 为 None 时解除定住并按 AE_LOCALE 重新解析；给了具体 locale 就定住。
+    各模块的 set_locale 是这里的薄转发，外部调用方不用改。
+    """
+    _STATE.set(locale)
+
+
+def refresh_locale() -> None:
+    """没有外部定过语言时，才按 AE_LOCALE 刷新。"""
+    _STATE.refresh()
+
+
+def current_locale() -> str:
+    """当前界面语言；入口按共同契约解析后设置一次，各模块共用这一份。"""
+    return _STATE.locale
+
+
+def T(key: str, **params: object) -> str:
+    """按当前语言取一条消息；缺译时回退另一种语言（见 locales/README.md 的契约）。"""
+    return _STATE(key, **params)
 
 
 class Translator:

@@ -1107,6 +1107,15 @@ class ReportFormatTests(unittest.TestCase):
         self.assertEqual(check_by_id(payload, "report.parse")["status"], "fail")
         self.assertFalse(payload["verdict"]["draftComplete"])
 
+    def test_parse_failure_detail_is_the_generator_diagnostic(self):
+        """#97：报告解析失败时 detail 仍是生成器那条诊断的原文（捕获点只换成 BuildError）。"""
+        d = tmpdir()
+        dup = REPORT.replace('data-page="2" data-key="next"', 'data-page="1" data-key="next"')
+        paths = write_case(d, report=dup, script=None)
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 1)
+        self.assertEqual(check_by_id(payload, "report.parse")["detail"], "报告结构不对：页码 1 重复")
+
     def test_derived_page_key_warns_but_draft_stands(self):
         d = tmpdir()
         derived = REPORT.replace('data-key="sum" id="page-sum"', 'id="page-sum"') \

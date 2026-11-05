@@ -183,7 +183,7 @@ def check_report_and_script(report_doc: str, script_text: str | None, c: Checks)
     pages: list[dict] = []
     try:
         pages = build_viewer.find_pages(report_doc, locale=c.locale)
-    except SystemExit as exc:
+    except build_viewer.BuildError as exc:
         c.set("report.parse", "fail", detail=str(exc))
         draft_ok = False
     else:

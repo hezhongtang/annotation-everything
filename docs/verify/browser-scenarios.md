@@ -50,6 +50,7 @@ uv run --no-project --with playwright python tests/e2e_browser.py --skills-only 
 | main() 内联段 2（报告样式保真） | `css-fidelity` | — |
 | `review_overview_checks`（#100 审阅总览：分组、详情、返回与双语） | `review-overview` | — |
 | main() 内联段 3–8（服务模式全流程、断线补传、写入失败、服务卡死、同一端口换审阅、恶意网页与导入） | `server-mode` | — |
+| `poll_repaint_checks`（#93 新增：轮询数据不变时不重画，其他触发点照旧立即更新） | `poll-repaint` | — |
 
 对照说明：
 

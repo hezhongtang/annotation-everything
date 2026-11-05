@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import math
 import os
@@ -107,6 +106,18 @@ def empty_doc() -> dict[str, Any]:
     return {"version": SCHEMA_VERSION, "rev": 0, "updatedAt": None, "notes": []}
 
 
+def pre_read(value: Any, missing: Any, read: Callable[[], Any]) -> Any:
+    """预读参数的取值，让「读一次、多方复用」不改变各函数自己的降级结果：
+
+    - 数据（调用方已经读好的）：直接用；
+    - 值为 missing（None 等）：调用方没给，自己读；
+    - 传读取时的异常实例：那次读取失败了，重新抛出——由本函数原有的 except 按同一降级结果处理。
+    """
+    if isinstance(value, Exception):
+        raise value
+    return read() if value is missing else value
+
+
 def _require_dir(review_dir: Path) -> None:
     if not review_dir.is_dir():
         raise FileNotFoundError(f"审阅目录不存在：{review_dir}")
@@ -115,13 +126,8 @@ def _require_dir(review_dir: Path) -> None:
 @contextlib.contextmanager
 def locked(review_dir: Path) -> Iterator[None]:
     _require_dir(review_dir)
-    fd = os.open(review_dir / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
-    with os.fdopen(fd, "r+") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+    with fsutil.flocked(review_dir / LOCK_FILE, exclusive=True):
+        yield
 
 
 def load(review_dir: Path) -> dict[str, Any]:
@@ -262,9 +268,12 @@ def clean_skill_names(v: Any) -> list[str]:
     return out[:MAX_SKILLS]
 
 
-def skills_catalog(review_dir: Path) -> list[dict[str, str]]:
-    """审阅目录里的技能目录（代理写入的可用技能，页面据此给出候选）。读不到就返回空。"""
-    return _catalog_items(_skills_doc(review_dir).get("skills"))
+def skills_catalog(review_dir: Path, *, doc: dict[str, Any] | None = None) -> list[dict[str, str]]:
+    """审阅目录里的技能目录（代理写入的可用技能，页面据此给出候选）。读不到就返回空。
+
+    doc：调用方已读好的 skills.json（一次请求里只读一次时传入）；不传就自己读。
+    """
+    return _catalog_items(skills_doc(review_dir).get("skills") if doc is None else doc.get("skills"))
 
 
 # 常驻技能：对这份审阅的每条批注（按范围）都要先调用的技能，给需要长期约束的代理用。范围：
@@ -274,7 +283,8 @@ ALWAYS_ZH = {"all": "全部批注", "报告": "报告", "讲稿": "讲稿", "sty
 MAX_ALWAYS = 20
 
 
-def _skills_doc(review_dir: Path) -> dict[str, Any]:
+def skills_doc(review_dir: Path) -> dict[str, Any]:
+    """审阅目录里的技能文档（skills.json）；读不到或结构不对就返回空。"""
     try:
         doc = json.loads((review_dir / SKILLS_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -483,8 +493,9 @@ def _updated_always(cur: list[dict[str, str]], *, set_to: Any = None, add: Any =
     return clean_always(out + [x for x in add_items if x not in out])
 
 
-def always_skills(review_dir: Path) -> list[dict[str, str]]:
-    return _always_items(_skills_doc(review_dir).get("always"), strict=False)
+def always_skills(review_dir: Path, *, doc: dict[str, Any] | None = None) -> list[dict[str, str]]:
+    """doc：调用方已读好的 skills.json（一次请求里只读一次时传入）；不传就自己读。"""
+    return _always_items(skills_doc(review_dir).get("always") if doc is None else doc.get("always"), strict=False)
 
 
 def _write_skills_doc(review_dir: Path, *, always: Any = None, update: Any = None) -> list[dict[str, str]]:
@@ -1063,20 +1074,24 @@ def _batch_stats(notes: list[dict[str, Any]], item: dict[str, Any], end: str | N
             "leftOpen": sum(1 for x in item.get("openIds") or [] if x in open_now)}
 
 
-def handoff_state(review_dir: Path, *, full: bool = True) -> dict[str, Any]:
+def handoff_state(review_dir: Path, *, full: bool = True, handoff: Any = None,
+                  notes: Any = None) -> dict[str, Any]:
     """给页面和 status 用的摘要：最近一批、各状态计数，以及（full 时）全部批次 history（处理记录，新的在前，
     不含提交时的批注 id 清单）。页面轮询用 full=False，打开处理记录时再取全量。
 
     已处理的批次带收尾时记下的「这批解决了哪些批注」；0.3 留下的旧批次没有记，按时间窗补算并标 estimated；
     处理中的批次按当前进度实时算（live）。
+
+    handoff / notes：调用方已读好的批次记录与批注（一次请求里只读一次时传入，见 serve.py 的请求快照）；
+    不传就自己读，读取失败时的降级结果与原来一致。
     """
     try:
-        doc = handoff_load(review_dir)
+        doc = pre_read(handoff, None, lambda: handoff_load(review_dir))
     except ValueError:
         return {"error": "handoff.json 无法解析"}
     items = doc["items"]
     try:
-        notes = load(review_dir)["notes"]
+        notes = pre_read(notes, None, lambda: load(review_dir)["notes"])
     except (OSError, ValueError):
         notes = []
     history = []

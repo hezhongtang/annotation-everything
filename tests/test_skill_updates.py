@@ -1,6 +1,8 @@
 """技能更新的命令行行为；仓库、技能副本与审阅数据均为合成环境。"""
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -603,6 +605,58 @@ exec(code, {'__name__': '__main__', '__file__': script})
         out, err = notes.communicate(timeout=15)
         self.assertEqual(notes.returncode, 0, out + err)
         self.assertIn("NEW-NOTES-CODE-LOADED", err)
+
+    def test_running_review_service_defers_update(self):
+        """台账里登记的审阅有活着的服务（状态文件 + 台账条目）时推迟替换。"""
+        self.publish("0.10.0")
+        review = self.root / "review-running"
+        review.mkdir()
+        (review / "index.html").write_text("<title>Synthetic</title>", encoding="utf-8")
+        (review / "review.json").write_text(json.dumps({"app": SKILL, "reviewId": "a" * 16}), encoding="utf-8")
+        ledger_file = self.home / "ledger" / "reviews.json"
+        ledger_file.parent.mkdir(parents=True, exist_ok=True)
+        ledger_file.write_text(json.dumps({"version": 1, "reviews": {
+            "a" * 16: {"dir": str(review), "port": 8765}}}), encoding="utf-8")
+        (review / ".annotation-server.json").write_text(json.dumps(
+            {"app": SKILL, "version": "0.9.0", "pid": os.getpid(), "port": 8765, "dir": str(review)}),
+            encoding="utf-8")
+        result = self.run_command(self.copy / "scripts" / "update.py", "now", "--locale", "en")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("review server or annotation process is running", result.stderr)
+        self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
+
+    def test_cache_lock_reports_busy_and_auto_stays_silent(self):
+        # 更新器按解析后的副本路径算缓存目录，测试也要用解析后的路径才算到同一把锁
+        cache = (Path(self.env["XDG_DATA_HOME"]) / SKILL / "updates"
+                 / hashlib.sha256(os.fsencode(str(self.copy.resolve()))).hexdigest()[:24])
+        cache.mkdir(parents=True, exist_ok=True)
+        held = os.open(cache / "lock", os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(held, fcntl.LOCK_EX)
+        try:
+            busy = self.run_command(self.copy / "scripts" / "update.py", "now", "--locale", "en")
+            self.assertEqual(busy.returncode, 0, busy.stdout + busy.stderr)
+            self.assertIn("Another update check is in progress.", busy.stdout)
+            auto = self.run_command(self.copy / "scripts" / "update.py", "auto", "--locale", "en")
+            self.assertEqual(auto.returncode, 0, auto.stdout + auto.stderr)
+            self.assertEqual(auto.stdout + auto.stderr, "", "auto 模式只静默返回")
+        finally:
+            os.close(held)
+        after = self.run_command(self.copy / "scripts" / "update.py", "check", "--locale", "en")
+        self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+        self.assertIn("0.9.0", after.stdout, "锁释放后照常检查")
+
+    def test_update_refuses_when_the_update_lock_is_a_symlink(self):
+        self.publish("0.10.0")
+        # 协调锁在技能副本的上级目录（与 copy_tracked_skill 的内容指纹无关）
+        lock = self.copy.parent / ".annotation-everything-update.lock"
+        target = self.root / "lock-target"
+        target.write_text("", encoding="utf-8")
+        lock.symlink_to(target)
+        result = self.run_command(self.copy / "scripts" / "update.py", "now", "--locale", "en")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Could not verify review server status", result.stderr)
+        self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
+        self.assertEqual(target.read_text(encoding="utf-8"), "", "没有锁符号链接指向的文件")
 
 
 if __name__ == "__main__":

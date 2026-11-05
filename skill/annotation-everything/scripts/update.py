@@ -2,11 +2,9 @@
 """检查来源仓库的正式标签并更新当前技能副本，不改来源检出或审阅数据。"""
 from __future__ import annotations
 
-import argparse
 import contextlib
 import ctypes
 import datetime
-import fcntl
 import hashlib
 import json
 import os
@@ -24,11 +22,23 @@ import uuid
 import i18n
 import ledger
 import content_manifest
+import fsutil
 
 SKILL = "annotation-everything"
 RECORD = ".install-record.json"
 INTERVAL = 24 * 60 * 60
 VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+
+# 本入口的 CLI 消息 key 表：argparse 报错类别与语言选择问题 → 消息 key
+ERROR_KEYS = {
+    i18n.CLI_ERROR_INVALID_CHOICE: "cli.update.invalidMode",
+    i18n.CLI_ERROR_MISSING_VALUE: "cli.ae.err.missingValue",
+    i18n.CLI_ERROR_UNKNOWN_ARGUMENT: "cli.ae.err.unknownArgument",
+    i18n.CLI_ERROR_MISSING_ARGUMENT: "cli.update.missingMode",
+    i18n.CLI_ERROR_GENERIC: "cli.ae.err.generic",
+    i18n.CLI_ERROR_EMPTY_LOCALE: "cli.ae.err.emptyLocale",
+    i18n.CLI_ERROR_INVALID_LOCALE: "cli.ae.err.invalidLocale",
+}
 
 
 class UpdateError(Exception):
@@ -37,30 +47,6 @@ class UpdateError(Exception):
     def __init__(self, key: str, **params):
         self.key = key
         self.params = params
-
-
-class LocalizedParser(argparse.ArgumentParser):
-    def __init__(self, translate, **kwargs):
-        self.translate = translate
-        super().__init__(**kwargs)
-
-    def error(self, message):
-        self.print_usage(sys.stderr)
-        choice = re.match(r"^argument \S+: invalid choice: '([^']*)'", message)
-        missing = re.match(r"^argument (\S+): expected one argument", message)
-        unknown = re.match(r"^unrecognized arguments: (.+)", message)
-        if choice:
-            detail = self.translate("cli.update.invalidMode", name=choice.group(1))
-        elif missing:
-            detail = self.translate("cli.ae.err.missingValue", name=missing.group(1))
-        elif unknown:
-            detail = self.translate("cli.ae.err.unknownArgument", detail=unknown.group(1))
-        elif message.startswith("the following arguments are required:"):
-            detail = self.translate("cli.update.missingMode")
-        else:
-            detail = self.translate("cli.ae.err.generic", detail=message)
-        print(detail, file=sys.stderr)
-        self.exit(2)
 
 
 def update_storage(copy: Path) -> Path:
@@ -138,7 +124,7 @@ def has_running_review() -> bool:
     except (ledger.LedgerError, OSError):
         raise UpdateError("cli.update.cannotVerifyServices") from None
     for entry in entries.values():
-        status = Path(entry["dir"]) / ".annotation-server.json"
+        status = ledger.status_file(entry["dir"])
         try:
             info = json.loads(status.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -150,13 +136,8 @@ def has_running_review() -> bool:
         pid = info.get("pid")
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
             raise UpdateError("cli.update.cannotVerifyServices")
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            continue
-        except PermissionError:
-            pass
-        return True
+        if ledger.pid_alive(pid):
+            return True
     return False
 
 
@@ -338,13 +319,16 @@ def main(argv=None) -> int:
     choice = i18n.explicit_locale(argv)
     try:
         locale = i18n.cli_locale(choice)
-    except i18n.LocaleError:
+    except i18n.LocaleError as exc:
         default = i18n.Translator(i18n.DEFAULT_LOCALE)
-        print(default("cli.ae.err.invalidLocale", name=choice or ""), file=sys.stderr)
+        # name 按用户原样输入回显（不随解析去掉首尾空白），与从前的输出一致
+        print(i18n.locale_error_message(exc, ERROR_KEYS, default, name=choice or ""),
+              file=sys.stderr)
         return 2
     translate = i18n.Translator(locale)
-    parser = LocalizedParser(translate, prog="update.py", description=translate("cli.update.description"),
-                             add_help=False)
+    parser = i18n.LocalizedParser(keys=ERROR_KEYS, translate=translate, prog="update.py",
+                                  description=translate("cli.update.description"),
+                                  add_help=False)
     parser.add_argument("-h", "--help", action="help", help=translate("cli.ae.opt.help"))
     parser.add_argument("mode", choices=("auto", "check", "now"), metavar="MODE",
                         help=translate("cli.update.modeHelp"))
@@ -361,14 +345,14 @@ def main(argv=None) -> int:
         # 这个检出也是 doctor / repair 的来源，不能放在可能被系统随时清理的缓存目录。
         cache = update_storage(copy)
         cache.mkdir(mode=0o700, parents=True, exist_ok=True)
-        lock_fd = os.open(cache / "lock", os.O_CREAT | os.O_RDWR, 0o600)
-        with os.fdopen(lock_fd, "r+") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                if args.mode != "auto":
-                    print(translate("cli.update.busy"))
-                return 0
+        stack = contextlib.ExitStack()
+        try:
+            stack.enter_context(fsutil.flocked(cache / "lock", exclusive=True, nonblocking=True))
+        except BlockingIOError:
+            if args.mode != "auto":
+                print(translate("cli.update.busy"))
+            return 0
+        with stack:
             state_file = cache / "state.json"
             try:
                 state = json.loads(state_file.read_text(encoding="utf-8"))

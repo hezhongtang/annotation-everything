@@ -171,6 +171,29 @@ class ReviewPageRuntimeTests(unittest.TestCase):
         self.assertEqual(got[1]["text"], "Hello {name}")
         self.assertEqual(got[0]["recorded"], [])
 
+    def test_inline_script_is_valid_javascript(self):
+        """整段内联脚本要能被 JS 引擎解析。
+
+        CSP 的脚本哈希按页面内容动态计算，语法错误会让服务模式和文件模式都放不住这段脚本，
+        页面直接失效；这类错误在静态检查里看不出来，必须有引擎真正解析一遍。
+        """
+        engine = _engine()
+        if engine is None or not engine[0].endswith("node"):
+            self.skipTest("没有 node，跳过整段脚本解析")
+        source = TEMPLATE.read_text(encoding="utf-8")
+        start = source.find("<script>")
+        end = source.rfind("</script>")
+        self.assertGreaterEqual(start, 0, "页面里找不到内联脚本")
+        self.assertGreater(end, start, "页面里的内联脚本没有闭合")
+        script = source[start + len("<script>"):end]
+        path = Path(tempfile.mkstemp(suffix=".js")[1])
+        path.write_text(script, encoding="utf-8")
+        try:
+            proc = subprocess.run([*engine, "--check", str(path)], capture_output=True, text=True, timeout=30)
+        finally:
+            path.unlink(missing_ok=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+
     def test_chinese_catalog_keeps_shipped_composer_labels(self):
         zh = i18n.load_catalog("zh-CN")["messages"]
         self.assertEqual(zh["viewer.target"], "对象")

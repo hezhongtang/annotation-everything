@@ -2840,6 +2840,28 @@ class SelectionSampleReplayTests(unittest.TestCase):
 class SelectionBuiltinMapTests(unittest.TestCase):
     """内置映射自身的清单完整性：策略声明属于外部行为，直接校验。"""
 
+    def builtin_repo(self, prefix: str) -> SynthRepo:
+        """内置映射可解析的合成仓库：真实场景注册表 + 内置规则声明的全部选择器。"""
+        temp = tempfile.TemporaryDirectory(prefix=prefix)
+        self.addCleanup(temp.cleanup)
+        lock_temp = tempfile.TemporaryDirectory(prefix=prefix + "-lock-")
+        self.addCleanup(lock_temp.cleanup)
+        repo = SynthRepo(Path(temp.name))
+        repo.test_lock_dir = Path(lock_temp.name)
+        sys.path.insert(0, str(ROOT))
+        import verify_selection as vs
+        # 真实场景注册表：声明「*」的规则展开结果必须与真实注册表一致
+        repo.write("tests/e2e_scenarios.py",
+                   (ROOT / "tests" / "e2e_scenarios.py").read_text(encoding="utf-8"))
+        for rule in vs.SELECTION_RULES:
+            for selector in rule.selectors:
+                if not (repo.path / selector).exists():
+                    repo.write(selector, UNIT_PASS)
+        # 场景注册表与选择器存根属于测试基建：提交进基线，
+        # 避免被当成新增测试（清单检查）或未分类改动
+        repo.commit_all("内置映射测试基建")
+        return repo
+
     def test_builtin_map_declares_real_repo_manifest(self):
         sys.path.insert(0, str(ROOT))
         import verify_selection as vs
@@ -2860,6 +2882,33 @@ class SelectionBuiltinMapTests(unittest.TestCase):
         selection = json.loads(p.stdout)["selection"]
         self.assertEqual(selection["strategy_source"], "builtin")
         self.assertIsNotNone(selection["fallback"], "外来仓库对内置映射保守回退")
+
+    def test_fsutil_change_selects_the_union_of_its_dependent_rules(self):
+        """#98：只改 fsutil.py 时按依赖方给出三组规则的并集，不再回退完整检查。"""
+        repo = self.builtin_repo("verify-selection-fsutil-")
+        repo.write("skill/annotation-everything/scripts/fsutil.py",
+                   "# 合成 fsutil：#88 新增的共享叶子模块\n")
+        p = repo.run_verify("plan", "--phase", "development", "--json")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        selection = json.loads(p.stdout)["selection"]
+        self.assertEqual(selection["strategy_source"], "builtin")
+        self.assertEqual(selection["strategy_version"], STRATEGY_VERSION,
+                         "内置策略版本随声明透传")
+        self.assertIsNone(selection["fallback"], "fsutil.py 已纳入映射：不需要 unknown_path 回退")
+        self.assertEqual(selection["unknown_paths"], [])
+        self.assertEqual(sorted(item["id"] for item in selection["matched_rules"]),
+                         ["protocol-notes", "serve-page", "skill-updates"],
+                         "台账 / 批注存储、生成器与更新器三条依赖方同时命中，取并集")
+        suggested = selection["suggested"]
+        self.assertEqual(suggested["groups"], ["unit-related", "serve-check"])
+        self.assertTrue(suggested["serve_check"], "存储协议与对照页都带服务安全自检")
+        selectors = suggested["selectors_effective"]
+        self.assertIn("tests/test_skill_updates.py", selectors, "技能更新组的选择器")
+        self.assertIn("tests/test_core.py", selectors, "存储协议与对照页组的选择器")
+        self.assertIn("tests/test_i18n_catalog_contract.py", selectors,
+                      "局部组固定附带全局词典契约")
+        self.assertIn("server-mode", suggested["scenarios"],
+                      "对照页规则的场景计划展开为全部注册场景")
 
 
 # ── 证据复用与流程接入（issue #56） ─────────────────────────────────────────

@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 9
+STRATEGY_VERSION = 10
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -99,7 +99,8 @@ SELECTION_RULES = (
     SelectionRule(
         rid="skill-updates",
         prefixes=("skill/annotation-everything/scripts/update.py",
-                  "skill/annotation-everything/scripts/content_manifest.py"),
+                  "skill/annotation-everything/scripts/content_manifest.py",
+                  "skill/annotation-everything/scripts/fsutil.py"),
         selectors=("tests/test_skill_updates.py", "tests/test_ae_cli.py", "tests/test_ae_target.py"),
         why="更新器与安装记录、副本和运行中的服务共同构成更新边界",
     ),
@@ -108,7 +109,8 @@ SELECTION_RULES = (
         prefixes=("skill/annotation-everything/scripts/notes.py",
                   "skill/annotation-everything/scripts/notes_store.py",
                   "skill/annotation-everything/scripts/ledger.py",
-                  "skill/annotation-everything/scripts/report_check.py"),
+                  "skill/annotation-everything/scripts/report_check.py",
+                  "skill/annotation-everything/scripts/fsutil.py"),
         selectors=("tests/test_notes_exchange_i18n.py", "tests/test_core.py", "tests/test_handoff_i18n.py",
                    "tests/test_locale_loop.py", "tests/test_export_format.py",
                    "tests/test_skill_discovery.py", "tests/test_review_page_skills_i18n.py",
@@ -124,7 +126,8 @@ SELECTION_RULES = (
         rid="serve-page",
         prefixes=("skill/annotation-everything/scripts/serve.py",
                   "skill/annotation-everything/scripts/viewer_template.html",
-                  "skill/annotation-everything/scripts/build_viewer.py"),
+                  "skill/annotation-everything/scripts/build_viewer.py",
+                  "skill/annotation-everything/scripts/fsutil.py"),
         selectors=("tests/test_serve_locale.py", "tests/test_core.py", "tests/test_review_page_i18n.py",
                    "tests/test_review_page_editing_i18n.py", "tests/test_review_page_skills_i18n.py",
                    "tests/test_aux_cli_i18n.py", "tests/test_notes_exchange_i18n.py"),
