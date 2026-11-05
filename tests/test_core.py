@@ -3141,7 +3141,8 @@ class ServeRequestReadsTests(unittest.TestCase):
                 self.assertEqual(code, 200)
                 self.assertEqual(set(notes), {"version", "rev", "updatedAt", "notes", "indexMtime",
                                               "handoff", "agentDelivery", "skillCatalog", "alwaysSkills",
-                                              "app", "reviewId", "name", "features", "receiver"})
+                                              "app", "reviewId", "name", "features", "receiver", "archived"})
+                self.assertFalse(notes["archived"])
                 self.assertEqual(notes["handoff"], store.handoff_state(review, full=False))
                 self.assertEqual(notes["agentDelivery"], wakeup.public_status(review))
                 self.assertEqual(notes["skillCatalog"], store.skills_catalog(review))
@@ -3154,7 +3155,8 @@ class ServeRequestReadsTests(unittest.TestCase):
                 code, health = self.request(path="/api/health")
                 self.assertEqual(code, 200)
                 self.assertEqual(set(health), {"app", "reviewId", "name", "version", "features", "receiver",
-                                               "dir", "pid", "port", "hook", "agentDelivery"})
+                                               "dir", "pid", "port", "hook", "agentDelivery", "archived"})
+                self.assertFalse(health["archived"])
                 self.assertEqual(health["agentDelivery"], wakeup.public_status(review))
                 self.assertEqual(health["receiver"], wakeup.receiver_status(review, srv.agent_binding))
                 self.assertEqual((health["dir"], health["pid"], health["port"], health["hook"]),
@@ -3163,7 +3165,8 @@ class ServeRequestReadsTests(unittest.TestCase):
                 self.assertEqual(code, 200)
                 summary = store.handoff_state(review)
                 self.assertEqual(set(full), set(summary) | {
-                    "app", "reviewId", "name", "version", "features", "receiver"})
+                    "app", "reviewId", "name", "version", "features", "receiver", "archived"})
+                self.assertFalse(full["archived"])
                 self.assertEqual({k: full[k] for k in summary}, summary)
                 self.assertEqual(full["receiver"], wakeup.receiver_status(review, srv.agent_binding))
 
@@ -3199,7 +3202,8 @@ class ServeRequestReadsTests(unittest.TestCase):
                 code, body = self.request("POST", "/api/skills/always", {"always": [{"name": "sk", "scope": "all"}]})
                 self.assertEqual(code, 200)
                 self.assertEqual(set(body), {"alwaysSkills", "app", "reviewId", "name", "version",
-                                             "features", "receiver"})
+                                             "features", "receiver", "archived"})
+                self.assertFalse(body["archived"])
                 self.assertEqual(body["receiver"], wakeup.receiver_status(review, srv.agent_binding))
                 self.assertEqual(body["alwaysSkills"], [{"name": "sk", "scope": "all"}])
                 code, body = self.request("POST", "/api/handoff", {"message": "合成", **receiver})
@@ -3225,18 +3229,19 @@ class ServeRequestReadsTests(unittest.TestCase):
         unbound = {"adapter": None, "state": "unconfigured", "receiver": {"state": "unconfigured"}}
         # 台账里存的是解析后的目录（登记时 resolve）
         self.assertEqual(rows["a" * 16], {"reviewId": "a" * 16, "dir": str(pending.resolve()), "port": None,
-                                          "name": "合成审阅", "state": "已停", "state_id": "stopped",
+                                          "name": "合成审阅", "state": "已停", "state_id": "stopped", "archived": False,
                                           "running": None, "pending": 1, "review": 1, "waiting": False,
                                           "hook": False, "unattended": True, "agentDelivery": unbound,
                                           "receiptConfirmed": None})
         self.assertEqual(rows["b" * 16], {"reviewId": "b" * 16, "dir": str(corrupt.resolve()), "port": None,
-                                          "name": "合成审阅", "state": "已停", "state_id": "stopped",
+                                          "name": "合成审阅", "state": "已停", "state_id": "stopped", "archived": False,
                                           "running": None, "pending": 0, "review": 0, "waiting": False,
                                           "hook": False, "unattended": False, "agentDelivery": unbound,
                                           "receiptConfirmed": None})
         self.assertEqual({k: v for k, v in rows["c" * 16].items() if k != "agentDelivery"},
                          {"reviewId": "c" * 16, "dir": str(waiting.resolve()), "port": None, "name": "合成审阅",
                           "state": "已停", "state_id": "stopped", "running": None, "pending": 0,
+                          "archived": False,
                           "review": 0, "waiting": True, "hook": False, "unattended": False,
                           "receiptConfirmed": None})
         self.assertEqual(rows["c" * 16]["agentDelivery"]["state"], "bound")
