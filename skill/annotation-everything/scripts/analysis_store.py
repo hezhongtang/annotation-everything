@@ -198,6 +198,7 @@ def _apply_structure_change(state: dict[str, Any], round_: dict[str, Any], key: 
 
 
 def _apply_answer(state: dict[str, Any], round_: dict[str, Any], key: str, value: dict[str, Any]) -> None:
+    previous = round_["answers"].get(key)
     round_["answers"][key] = value
     if key.startswith("U:"):
         draft = state["updates"][key[2:]]
@@ -209,6 +210,9 @@ def _apply_answer(state: dict[str, Any], round_: dict[str, Any], key: str, value
             "confirmed" if value["kind"] == "accept" else "rejected")
         return
     if key.startswith("S:"):
+        # 原话允许修订；相同判断不能再次恢复节点，覆盖后来搁置等状态。
+        if previous is not None and previous["kind"] == value["kind"]:
+            return
         proposal = next(p for p in round_["proposals"] if "S:" + p["key"] == key)
         change = proposal.get("op", "add") != "add"
         confirmed = round_.setdefault("proposalNodes", {})
@@ -309,6 +313,7 @@ def _replay(events: list[dict[str, Any]]) -> dict[str, Any]:
                                     "answers": event.get("answers") or {}, "rejected": set(), "at": event.get("at"),
                                     "carriedItems": event.get("carriedItems") or [],
                                     "proposalNodes": event.get("proposalNodes") or {},
+                                    "structureNodes": event.get("structureNodes") or {},
                                     "order": event.get("order"),
                                     "baseRev": None, "claimedBy": None, "note": None})
             if event.get("queued"):
@@ -904,11 +909,14 @@ def _clean_evidence(values: Any, state: dict[str, Any], *, assumptions: bool) ->
 
 def writeback(review_dir: Path, analysis_id: str, round_no: int, base_rev: int, proposals: Any, *,
               note: str = "", by: str = "agent", assumptions: Any = None,
-              facts: Any = None, updates: Any = None) -> dict[str, Any]:
+              facts: Any = None, updates: Any = None,
+              authorize: Callable[[], None] | None = None) -> dict[str, Any]:
     """Agent 写回轮次：校验领取时记录的基线版本，记下这一轮的说明，
     把没答的提议带进下一轮并附上新的结构提议；没有可作答的内容就不再开新轮。"""
     review_dir = Path(review_dir)
     with store.locked(review_dir):
+        if authorize is not None:
+            authorize()
         state = load(review_dir, analysis_id)
         round_ = _round(state, round_no)
         if round_["status"] != "claimed":
@@ -948,12 +956,13 @@ def writeback(review_dir: Path, analysis_id: str, round_no: int, base_rev: int, 
         frontier = _frontier_question_items(current)
         pending_assumptions = any(a["confirmed"].get(line, "pending") == "pending"
                                   for a in current["assumptions"].values())
-        prefilled = _prefill(current, line, carried + fresh, round_)
-        if carried or fresh or frontier or pending_assumptions or prefilled["carriedItems"] or any(_update_valid(current, draft) for draft in current["updates"].values()):
+        combined = carried + fresh
+        prefilled = _prefill(current, line, combined, round_)
+        if combined or frontier or pending_assumptions or prefilled["answers"] or any(_update_valid(current, draft) for draft in current["updates"].values()):
             next_round = _next_round(review_dir)
             _append_event(review_dir, analysis_id, {"type": "round-requested", "at": store.now_iso(),
                                                     "by": by, "round": next_round, "kind": "next",
-                                                    "line": line, "items": carried + fresh, **prefilled})
+                                                    "line": line, "items": combined, **prefilled})
         _record(review_dir, analysis_id, "carry-consumed", by, line=line)
         after = load(review_dir, analysis_id)
         return {"state": after, "nextRound": next_round}
@@ -1138,7 +1147,9 @@ def _answer_carry(state: dict[str, Any], round_: dict[str, Any]) -> dict[str, An
             proposed = next((p for p in round_["proposals"] if "S:" + p["key"] == key), None)
             if proposed is not None:
                 item = {"key": key, "type": "structure", "proposal": proposed,
-                        "confirmedNode": round_.get("proposalNodes", {}).get(key)}
+                        "confirmedNode": round_.get("proposalNodes", {}).get(key),
+                        "structureApplied": key in round_.get("structureNodes", {}),
+                        "structureNodes": round_.get("structureNodes", {}).get(key, [])}
         elif key.startswith("Q:") and key[2:] in state["nodes"]:
             node = state["nodes"][key[2:]]
             item = {"key": key, "type": "question", "node": node["id"],
@@ -1199,19 +1210,40 @@ def _prefill(state: dict[str, Any], line: str, proposals: list[dict[str, Any]],
     carried = dict(state.get("carry", {}).get(line, {}))
     if carried and round_ is not None:
         carried.update(_answer_carry(state, round_))   # 领取期间的最后原答优先。
-    out: dict[str, Any] = {"answers": {}, "carriedItems": [], "proposalNodes": {}}
+    out: dict[str, Any] = {"answers": {}, "carriedItems": [], "proposalNodes": {}, "structureNodes": {}}
     for key, entry in carried.items():
         item, value = entry["item"], entry["value"]
         if _carry_question_valid(state, item, value):
             out["answers"][key] = value
             out["carriedItems"].append(item)
         elif item.get("type") == "structure":
+            if not _carry_structure_valid(state, item, value):
+                continue
             proposed = next((p for p in proposals if "S:" + p["key"] == key), None)
+            if proposed is None:
+                proposed = item["proposal"]
+                proposals.append(proposed)
             if proposed == item.get("proposal"):
                 out["answers"][key] = value
                 if item.get("confirmedNode"):
                     out["proposalNodes"][key] = item["confirmedNode"]
+                if item.get("structureApplied"):
+                    out["structureNodes"][key] = item["structureNodes"]
     return out
+
+
+def _carry_structure_valid(state: dict[str, Any], item: dict[str, Any], value: Any) -> bool:
+    """已确认结构是恢复元数据，不是再次执行的提议；作废目标不能用 isActive 过滤。"""
+    if not isinstance(value, dict) or value.get("kind") != "accept":
+        return False
+    proposed = item["proposal"]
+    if proposed.get("op", "add") == "add":
+        node = state["nodes"].get(item.get("confirmedNode"))
+        return node is not None and node.get("status") != "void"
+    return (item.get("structureApplied") is True
+            and all(state["nodes"].get(nid, {}).get("status") == "void" for nid in proposed.get("targets", []))
+            and all(nid in state["nodes"] and state["nodes"][nid].get("status") != "void"
+                    for nid in item.get("structureNodes", [])))
 
 
 def redecide(review_dir: Path, analysis_id: str, node_id: str, option: str, *, by: str = "page",

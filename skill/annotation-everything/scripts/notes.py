@@ -31,6 +31,7 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import signal
 import sys
 import time
@@ -140,7 +141,7 @@ ACTION_KEY = {"drafted": "cli.batch.trail.action.drafted", "resolved": "cli.batc
 STAGE_KEY = {"draft": "cli.batch.stageName.draft", "review": "cli.batch.stageName.review"}
 # 人读命令遵循同一语言优先级；claim 的原始 JSON 与技能设置另有归属。
 LOCALIZED_CMDS = ("show", "wait", "batches", "done", "review", "diff", "resolve", "reopen", "import", "export",
-                  "analysis", "analysis-writeback", "suggest-analysis")
+                  "analysis", "analysis-writeback", "suggest-analysis", "analysis-check", "analysis-redecide", "analysis-note")
 # 常驻技能的范围：存储值 → 界面显示的消息 key（存储值本身不随语言改写）
 ALWAYS_SCOPE_KEY = {"all": "viewer.hand.scope.all", "报告": "viewer.hand.scope.report",
                     "讲稿": "viewer.hand.scope.script", "style": "viewer.hand.scope.style"}
@@ -239,6 +240,10 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
         "structure-target-changed": "cli.life.structureChanged",
         "suggest-note-not-open": "cli.life.suggestNotOpen",
     }
+    protection_codes = ("analysis-locked", "bad-option", "draft-basis-changed", "note-not-changed", "bad-updates",
+                        "updates-required", "update-not-pending", "update-source-changed", "round-not-answerable")
+    if isinstance(error, store.HandoffError) and error.code in protection_codes:
+        return cli_text(lang)("cli.analysis.protect.error." + error.code)
     if lang != "en" or not isinstance(error, store.HandoffError) or error.code not in messages:
         return str(error)
     t = cli_text(lang)
@@ -732,9 +737,25 @@ def _main_locked(argv: list[str] | None = None) -> int:
     aw.add_argument("--round", type=int, required=True, help=t("cli.notes.help.writeback.round"))
     aw.add_argument("--base-rev", type=int, required=True, help=t("cli.notes.help.writeback.baseRev"))
     aw.add_argument("--proposals", required=True,
-                    help=t("cli.life.writebackPayload"))
+                    help=t("cli.analysis.protect.help.writebackPayload"))
     aw.add_argument("--note", default="", help=t("cli.notes.help.writeback.note"))
     aw.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
+    ac = sub.add_parser("analysis-check", help=t("cli.analysis.protect.help.check"))
+    ac.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    ac.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
+    ar = sub.add_parser("analysis-redecide", help=t("cli.analysis.protect.help.redecide"))
+    ar.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    ar.add_argument("--analysis", required=True, help=t("cli.notes.help.analysis.analysis"))
+    ar.add_argument("--node", required=True, help=t("cli.analysis.protect.help.node"))
+    ar.add_argument("--option", required=True, help=t("cli.analysis.protect.help.option"))
+    ar.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
+    anote = sub.add_parser("analysis-note", help=t("cli.analysis.protect.help.note"))
+    anote.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    anote.add_argument("--analysis", required=True, help=t("cli.notes.help.analysis.analysis"))
+    anote.add_argument("--note-id", required=True, help=t("cli.life.noteId"))
+    anote.add_argument("--action", required=True, choices=("update", "keep", "delete"),
+                       help=t("cli.analysis.protect.help.action"))
+    anote.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
     sg = sub.add_parser("suggest-analysis", help=t("cli.life.suggestHelp"))
     sg.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     sg.add_argument("id", help=t("cli.life.noteId"))
@@ -770,7 +791,8 @@ def _main_locked(argv: list[str] | None = None) -> int:
     bt.add_argument("--last", type=int, help=t("cli.notes.help.batches.last"))
     bt.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
     for name, parser in sub.choices.items():
-        if name in ("wait", "claim", "resolve", "reopen", "review", "done", "analysis-writeback", "suggest-analysis"):
+        if name in ("wait", "claim", "resolve", "reopen", "review", "done", "analysis-writeback", "suggest-analysis",
+                    "analysis-redecide", "analysis-note"):
             parser.add_argument("--harness", help=t("cli.notes.help.receiver.harness"))
             parser.add_argument("--session", help=t("cli.notes.help.receiver.session"))
         parser.add_argument("--locale", default=argparse.SUPPRESS, help=t("cli.notes.localeHelp"))
@@ -941,6 +963,35 @@ def _main_locked(argv: list[str] | None = None) -> int:
         else:
             print(analysis_context_text(ctx, lang=lang), end="")
         return 0
+    if a.cmd == "analysis-check":
+        context = analysis_store.full_check_context(d)
+        if a.json:
+            print(json.dumps(context, ensure_ascii=False, indent=2))
+        else:
+            print(analysis_check_text(context, d, lang))
+        return 0
+    if a.cmd in ("analysis-redecide", "analysis-note"):
+        try:
+            if a.cmd == "analysis-redecide":
+                state = analysis_store.redecide(d, a.analysis, a.node, a.option, by=a.by, authorize=authorize)
+            else:
+                operation = {"update": analysis_store.request_update, "keep": analysis_store.keep_note,
+                             "delete": analysis_store.delete_note}[a.action]
+                operation(d, a.analysis, a.note_id, by=a.by, authorize=authorize)
+                state = analysis_store.load(d, a.analysis)
+            if a.cmd == "analysis-redecide" or a.action == "update":
+                notify_analysis(d, state)
+        except store.NotFound:
+            print(t("cli.analysis.protect.missing"), file=sys.stderr)
+            return 1
+        except store.NoteError as error:
+            print(handoff_error_text(error, lang), file=sys.stderr)
+            return 1
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
+        print(json.dumps({"ok": True, "analysis": state}, ensure_ascii=False))
+        return 0
     if a.cmd == "suggest-analysis":
         try:
             note = analysis_store.suggest(d, a.id, reason=a.reason, by=a.by, authorize=authorize)
@@ -978,11 +1029,14 @@ def _main_locked(argv: list[str] | None = None) -> int:
             payload = proposals if isinstance(proposals, dict) else {"proposals": proposals}
             result = analysis_store.writeback(d, aid, a.round, a.base_rev, payload.get("proposals", []),
                                               note=a.note, by=a.by, assumptions=payload.get("assumptions"),
-                                              facts=payload.get("facts"))
+                                              facts=payload.get("facts"), updates=payload.get("updates"),
+                                              authorize=authorize)
         except store.NotFound:
             print(t("cli.analysis.noRound", reason=f"round#{a.round}"), file=sys.stderr)
             return 1
         except store.NoteError as e:
+            if isinstance(e, store.HandoffError) and e.code == "base-rev-mismatch":
+                notify_analysis(d, analysis_store.load(d, aid))
             print(handoff_error_text(e, lang), file=sys.stderr)
             return 1
         except (OSError, ValueError, KeyError) as error:
@@ -1389,7 +1443,7 @@ def analysis_context_of(d: Path, *, analysis: str | None, round_no: int | None) 
     if target is None:
         raise store.NotFound(f"analysis#{analysis}")
     state = analysis_store.load(d, target["id"])
-    round_ = next((r for r in reversed(state["rounds"]) if r["status"] in ("open", "submitted")), None)
+    round_ = next((r for r in reversed(state["rounds"]) if r["status"] in ("open", "submitted", "claimed")), None)
     if round_ is None:
         raise store.NotFound("no-open-round")
     return analysis_store.round_context(d, target["id"], round_["seq"])
@@ -1410,6 +1464,9 @@ def analysis_context_text(ctx: dict[str, Any], lang: str | None = None) -> str:
     out.append(t("cli.analysis.items"))
     all_items = {item["key"]: item for item in ctx["items"] + ctx.get("answeredItems", [])}
     for item in all_items.values():
+        if item["type"] == "update":
+            out.append(t("cli.analysis.protect.updateItem", before=item["beforeText"], after=item["text"]))
+            continue
         if item["type"] == "assumption":
             out.append(t("cli.life.assumptionItem", text=item["text"],
                          status=t("viewer.life.status." + item.get("status", "pending"))))
@@ -1444,9 +1501,39 @@ def analysis_context_text(ctx: dict[str, Any], lang: str | None = None) -> str:
         out.append(t("cli.life.facts"))
         for fact in ctx["facts"]:
             out.append(t("cli.life.factItem", text=fact["text"], source=fact.get("source", "")))
+    if ctx.get("updateRequests"):
+        out.append(t("cli.analysis.protect.updateRequests"))
+        for request in ctx["updateRequests"]:
+            out.append(t("cli.analysis.protect.updateRequest", noteId=request["noteId"], text=request["text"],
+                         question=request["question"], answer=request["answer"]))
     out.append(t("cli.life.verificationRule"))
     out.append(t("cli.analysis.writebackHint", round=ctx["round"]))
     return "\n".join(out) + "\n"
+
+
+def notify_analysis(d: Path, state: dict[str, Any]) -> None:
+    """桌面绑定的新增轮次即时投递；等待适配器由现有轮询接收。"""
+    binding = wakeup.load_binding(d)
+    if binding and binding["adapter"] == "codex-desktop":
+        for round_ in state["rounds"]:
+            if round_["status"] == "submitted":
+                wakeup.deliver(d, "analysis", round_["seq"], expected_binding=binding["bindingId"])
+
+
+def analysis_check_text(context: dict[str, Any], d: Path, lang: str | None = None) -> str:
+    """无活动轮次也可读取的结论清单；仅供核对，不代替审阅人确认。"""
+    t = cli_text(lang)
+    command = shlex.join(["python3", str(Path(__file__).resolve()), "analysis-check", str(d), "--json"])
+    out = [t("cli.analysis.protect.fullCheck", command=command)]
+    for item in context["checks"]:
+        out.append(t("cli.analysis.protect.check." + item["kind"]))
+        for note in item.get("notes", []):
+            out.append(note["text"])
+    for analysis in context["analyses"]:
+        out.append(analysis["focus"])
+        for conclusion in analysis["conclusions"]:
+            out.append(t("cli.analysis.protect.conclusion", question=conclusion["question"], answer=conclusion["answer"]))
+    return "\n".join(out)
 
 
 # 等待轮询的强制完整重读周期：文件签名没变就跳过解析，但 inode 号可能被复用、粗粒度 mtime 的
@@ -1601,6 +1688,7 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
         print(sub_line)
         if item.get("fullCheck"):
             print(t("cli.hand.fullCheck").lstrip("；;").lstrip())
+            print(analysis_check_text(analysis_store.full_check_context(d), d, lang))
         print(t("cli.hand.reviewerBrief", dir=d, seq=item["seq"]) + "\n")
         doc = store.load(d)
         print(to_markdown(doc, manifest, include_resolved=False, page=None, sources=sources,
@@ -1612,6 +1700,8 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     if message := store.handoff_user_message(item):
         print(t("cli.hand.userMessage", message=message))
     print(t("cli.batch.requirement", target=target_text(item, lang)))
+    if item.get("fullCheck"):
+        print(analysis_check_text(analysis_store.full_check_context(d), d, lang))
     print(sub_line)
     alw = store.always_skills(d)
     if alw:

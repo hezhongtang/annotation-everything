@@ -315,7 +315,10 @@ def prompt(binding, event, seq, message_id):
             "the review. Write question structure proposals (question text, short name, options, recommended "
             "answer, which question and option it hangs under), candidate assumptions tied to decision IDs, "
             "and verified facts with their source. The writeback JSON may be a proposal list or an object "
-            "with proposals, assumptions and facts. The system records decisions from the "
+            "with proposals, assumptions, facts and updates. If context.updateRequests contains annotations, "
+            "draft their replacement text as updates=[{noteId,text,node?}] using the current conclusions. "
+            "Only the reviewer can confirm the replacement; never edit annotation text directly. "
+            "The system records decisions from the "
             "reviewer's answers. Answers marked as needing verification default to the review's own source "
             "material only; external research requires the reviewer's explicit permission on that item.\n"
             "Report completed work, errors or decisions in the user's language.\n"
@@ -326,6 +329,18 @@ def prompt(binding, event, seq, message_id):
     claim = shlex.join(["python3", str(scripts / "notes.py"), "claim", str(review),
                         "--stage", DELIVERY_EVENTS[event]["claimStage"], "--events", "analysis",
                         "--seq", str(seq), "--by", "Codex"])
+    item = next((item for item in store.handoff_load(review)["items"] if item["seq"] == seq), {})
+    check_hint = ""
+    if item.get("fullCheck") is True:
+        check_command = shlex.join(["python3", str(scripts / "notes.py"), "analysis-check", str(review), "--json"])
+        check_hint = (
+            f"Read current analysis conclusions, including analyses with no active round: {check_command}\n"
+            "For this full check, add four lists for reviewer confirmation: changed-notes (annotations whose "
+            "conclusions changed), resolved-changed-basis (completed annotations whose basis changed), "
+            "report-conflicts (report text conflicting with current conclusions), and analysis-conflicts "
+            "(conflicting conclusions between analyses). Do not rewrite annotation text or restore resolved "
+            "status as part of this check. Do not revise a previously processed draft automatically.\n"
+        )
     return (
         "[annotation-everything: authorized review submission]\n"
         "This message was delivered by the local review's saved binding to this chat after the user submitted it.\n"
@@ -333,6 +348,7 @@ def prompt(binding, event, seq, message_id):
         f"Load {scripts.parent / 'SKILL.md'} and its protocol and matching-language workflow.\n"
         f"First acknowledge actual chat receipt: {ack}\nThen claim this exact batch: {claim}\n"
         f"{queue_hint}"
+        f"{check_hint}"
         "Use the accepted batch's userMessage, target, allowSubagents, fullCheck and applicable skills. "
         "Do not process another agent's claimed batch. If already claimed, inspect its ownership and completion "
         "before resuming; never repeat finished work. Edit upstream sources and paired speaker notes, rebuild the "

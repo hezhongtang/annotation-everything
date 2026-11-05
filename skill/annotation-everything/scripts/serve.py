@@ -563,7 +563,16 @@ class Handler(BaseHTTPRequestHandler):
         messages = {"focus-required": "serve.life.focusRequired", "page-not-found": "serve.life.pageMissing",
                     "analysis-closed": "serve.life.analysisClosed", "analysis-invalid-input": "serve.life.invalidInput",
                     "structure-target-changed": "serve.life.structureChanged"}
+        protection_codes = ("analysis-locked", "bad-option", "draft-basis-changed", "note-not-changed", "bad-updates",
+                            "updates-required", "update-not-pending", "update-source-changed", "round-not-answerable")
+        if error.code in protection_codes:
+            return self._t("cli.analysis.protect.error." + error.code)
         return self._t(messages[error.code]) if error.code in messages else str(error)
+
+    def _analysis_state(self, d: Path, aid: str) -> dict[str, Any]:
+        state = analysis_store.load(d, aid)
+        state["linkedNotes"] = analysis_store.linked_notes(d, aid)
+        return state
 
     def _analysis_write(self, d: Path, body: dict[str, Any], op: str) -> Any:
         """审阅人侧的分析写操作：校验入参，存储拒绝映射成 4xx，
@@ -596,6 +605,22 @@ class Handler(BaseHTTPRequestHandler):
                 return analysis_store.activate(d, aid, by="page")
             if op == "pause":
                 return analysis_store.pause(d, aid, by="page")
+            if op == "redecide":
+                node, option = body.get("node"), body.get("option")
+                if not isinstance(node, str) or not node:
+                    raise Reject(400, "bad-request", self._t("cli.analysis.protect.noQuestion"))
+                if not isinstance(option, str) or not option:
+                    raise Reject(400, "bad-request", self._t("cli.analysis.protect.noOption"))
+                return analysis_store.redecide(d, aid, node, option, by="page",
+                                               authorize=lambda: self._check_receiver(body))
+            if op in ("update-note", "keep-note", "delete-note"):
+                note_id = body.get("noteId")
+                if not isinstance(note_id, str) or not note_id:
+                    raise Reject(400, "bad-request", self._t("cli.analysis.protect.noNote"))
+                operation = {"update-note": analysis_store.request_update, "keep-note": analysis_store.keep_note,
+                             "delete-note": analysis_store.delete_note}[op]
+                operation(d, aid, note_id, by="page", authorize=lambda: self._check_receiver(body))
+                return analysis_store.load(d, aid)
         except store.NotFound:
             raise Reject(404, "no-round", self._t("serve.err.noRound"))
         except store.HandoffError as e:
@@ -664,7 +689,7 @@ class Handler(BaseHTTPRequestHandler):
                                 for status in ("submitted", "claimed")}}
             if ids:
                 try:
-                    state = analysis_store.load(d, ids[0])
+                    state = self._analysis_state(d, ids[0])
                     current = next((r for r in reversed(state["rounds"])
                                     if r["status"] in ("open", "submitted", "claimed")), None)
                     result.update(analysis=state,
@@ -696,6 +721,16 @@ class Handler(BaseHTTPRequestHandler):
             body = self._expect_obj(self._body())
             state = self._analysis_write(d, body, path.rsplit("/", 1)[-1])
             self._json(200, {"analysis": state, **self._ident()})
+        elif path in ("/api/analysis/redecide", "/api/analysis/update-note", "/api/analysis/keep-note",
+                      "/api/analysis/delete-note") and cmd == "POST":
+            body = self._expect_obj(self._body())
+            state = self._analysis_write(d, body, path.rsplit("/", 1)[-1])
+            if path.endswith(("/redecide", "/update-note")):
+                for round_ in state["rounds"]:
+                    if round_["status"] == "submitted":
+                        self.server.run_analysis_hook(round_["seq"])
+            self._json(200, {"analysis": self._analysis_state(d, body["analysis"]),
+                             "doc": {**self._notes_doc(), **self._ident()}, **self._ident()})
         elif path == "/api/analysis/answer" and cmd == "POST":
             body = self._expect_obj(self._body())
             self._analysis_write(d, body, "answer")
@@ -1593,7 +1628,7 @@ def check(locale: str | None = None) -> int:
            and analysis_store.load(tmp, second["id"])["status"] == "paused", T("serve.check.lifeSwitch", status=s))
         for headers, expected, label in analysis_guards:
             codes = [_req(port, "POST", "/api/analysis/" + op, headers, {"analysis": first["id"]})[0]
-                     for op in ("activate", "pause")]
+                     for op in ("activate", "pause", "redecide", "update-note", "keep-note", "delete-note")]
             ok(all(code == expected for code in codes), T("serve.check.lifeGuard", guard=label, status=codes[-1]))
         s, _, _ = _req(port, "POST", "/api/server/stop", same, {})
         ok(s == 409, T("serve.check.stopNeedsReview"))

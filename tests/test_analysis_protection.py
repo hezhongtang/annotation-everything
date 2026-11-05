@@ -241,6 +241,61 @@ class ProtectionTests(unittest.TestCase):
         reopened = next(n for n in notes.load(self.review)["notes"] if n["id"] == note["id"])
         self.assertEqual(reopened["status"], "open")
 
+    def test_reissue_carries_applied_structure_answers_without_reapplying_them(self):
+        for operation in ("add", "split", "merge", "void"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
+                review = Path(directory)
+                state, opening = analysis.start_question(review, "合成结构问题")
+                claimed = analysis.claim(review)
+                first, second = proposal("first"), proposal("second")
+                second.update(text="第二个问题", short="第二题")
+                analysis.writeback(review, state["id"], opening, claimed["baseRev"], [first, second])
+                for key in ("first", "second"):
+                    analysis.answer(review, state["id"], 2, "S:" + key, {"kind": "accept"})
+                for node in ("n1", "n2"):
+                    analysis.answer(review, state["id"], 2, "Q:" + node, {"kind": "accept"})
+                analysis.submit_round(review, state["id"], 2)
+                claimed = analysis.claim(review)
+                change = proposal("change")
+                if operation != "add":
+                    change = {"key": "change", "op": operation, "targets": ["n1", "n2"] if operation == "merge" else ["n1"]}
+                    if operation != "void":
+                        replacements = [proposal("replacement-a")]
+                        if operation == "split":
+                            replacements.append({**proposal("replacement-b"), "text": "另一项拆分问题"})
+                        change["replacements"] = replacements
+                written = analysis.writeback(review, state["id"], 2, claimed["baseRev"], [change])
+                round_no = written["nextRound"]
+                original = {"kind": "accept", "verbatim": "确认这项结构提议"}
+                analysis.answer(review, state["id"], round_no, "S:change", original)
+                before = analysis.load(review, state["id"])["nodes"]
+                analysis.submit_round(review, state["id"], round_no)
+                claimed = analysis.claim(review)
+                with self.assertRaises(notes.HandoffError):
+                    analysis.writeback(review, state["id"], round_no, claimed["baseRev"] + 1, [])
+                queued = analysis.load(review, state["id"])["rounds"][-1]
+                self.assertEqual(queued["answers"]["S:change"], original)
+                self.assertEqual(analysis.load(review, state["id"])["nodes"], before)
+                claimed = analysis.claim(review)
+                next_round = analysis.writeback(review, state["id"], claimed["seq"], claimed["baseRev"], [])["nextRound"]
+                context = analysis.round_context(review, state["id"], next_round)
+                self.assertEqual(context["answers"]["S:change"], original)
+                self.assertTrue(any(item["key"] == "S:change" for item in context["answeredItems"]))
+                self.assertEqual(analysis.load(review, state["id"])["nodes"], before)
+                analysis.submit_round(review, state["id"], next_round)
+                claimed = analysis.claim(review)
+                after = analysis.writeback(review, state["id"], claimed["seq"], claimed["baseRev"], [])
+                if after["nextRound"] is not None:
+                    self.assertNotIn("S:change", analysis.round_context(review, state["id"], after["nextRound"])["answers"])
+
+    def test_reaffirming_a_structure_answer_does_not_reset_a_parked_question(self):
+        round_no = self.questions()
+        analysis.answer(self.review, self.aid, round_no, "S:caliber", {"kind": "accept"})
+        analysis.answer(self.review, self.aid, round_no, "Q:n1", {"kind": "park"})
+        current = analysis.answer(self.review, self.aid, round_no, "S:caliber",
+                                  {"kind": "accept", "verbatim": "仍然同意这项结构"})
+        self.assertEqual(current["nodes"]["n1"]["status"], "parked")
+
 
 if __name__ == "__main__":
     unittest.main()
