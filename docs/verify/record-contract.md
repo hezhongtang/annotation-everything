@@ -36,7 +36,7 @@
 | `started_at` / `ended_at` | ISO 8601 字符串 | `started_at` 必填，`ended_at` 未结束时为 `null` | 带本地时区偏移 |
 | `wrapper` | 对象 | 是 | 入口名、版本、schema、实际 argv（已脱敏）、`cwd_mode` 固定 `repo-root`、Python 版本 |
 | `context` | 对象 | 是 | `phase`、`issue`、`pr`、`reason`、`groups_requested`、`groups_selected`、`selectors`、`selectors_effective`、`selection`（F 项起：选测建议，见「影子对照」） |
-| `groups` | 数组 | 是 | 实际执行的组，按执行顺序；每项含命令、结论、计数、计时与用例清单 |
+| `groups` | 数组 | 是 | 计划组，包含实际执行、引用与不适用的判断；按执行顺序；每项含命令、结论、计数、计时与用例清单 |
 | `shadow` | 对象或 `null` | F 项起必填 | 影子对照结果，见「影子对照」；收尾被信号打断等极端情况下可能保持 `null` |
 | `reuse` | 对象或 `null` | G 项起必填 | 证据复用规划：每个请求组「引用已有验证」还是「实际执行」，见「证据复用（G 项）」；先保存「规划尚未完成」状态，完整规划在执行前保存；规划期间取消也会留下 `aborted` 记录 |
 
@@ -119,6 +119,8 @@
 
 组记录另有两个隔离字段（C 项起有值，见 [isolation.md](isolation.md)）：`resources` 是组要求的共享资源名数组（空数组即纯逻辑组）；`lock` 记录本次锁获取——`resources`、`wait_seconds`（等待时长，锁等待不是执行耗时）与可选的 `timeout: true`（等待超时，组没有执行、结论为 `timeout`，note 写明资源与持有者 pid）。
 
+纯文档 PR 自策略 v11 起可将产品组记为 `outcome=not_applicable`：保留请求组，`started_at=null`、`counts=null`、`cases=[]`，执行耗时为 0，不要求本地日志，不计入 `result.counts.groups`、通过数或效率执行样本。`note` 与 `result.notes` 写明「差异仅在文档允许列表内，由 CI 兜底」。整次门禁可为 `passed` 且 `usable_as_evidence=true`，条件仍包括正常结束、起止输入一致、证据完整及可信的内置文档判定；它不构成产品测试通过证据。报告读取时重新检查该判定，旧记录不要求这个新状态。
+
 `groups[].started_at`（F 项起）来自本次子进程登记簿，是实际启动时间；未启动时为 `null`。等锁超时、缺依赖或因中断未启动的计划组不计入 `shadow.executed_groups` 和 `shadow.coverage`，即使它们仍保留在 `groups` 中说明未执行原因。被引用（`reused`）的组同样没有启动子进程，`started_at` 为 `null`，也不计入 `shadow.executed_groups`。
 
 组记录另有一个引用字段（G 项起，仅 `outcome` 为 `reused` 的组）：`reuse` 含 `source_run_id`（被引用的 run）、`source_ended_at`（来源记录结束时间）、`source_fingerprint`（引用时的来源输入指纹，供报告重校验引用链）、`age_hours`（引用时来源记录的年龄）与 `reason`（复用理由）。
@@ -162,6 +164,7 @@ unittest 执行期间捕获中断时，已完成用例保留原结果，中断�
 | `interrupted` | 入口在等锁或组执行期间收到终止信号；子进程被信号终止；或 unittest / 浏览器入口捕获 `SIGINT` / `KeyboardInterrupt` 后以 130 退出。保留已执行用例与场景记录，尚未开始的场景记为 `not_run` |
 | `unavailable` | 命令无法启动，例如找不到 `uv` |
 | `wrapper_error` | 入口自身没能完成登记，例如记录写不进去 |
+| `not_applicable` | 纯文档 PR 的产品测试不适用，由 CI 兜底；没有执行，不计入通过数，不作为产品测试复用来源 |
 | `reused` | 组引用了一条当前仍有效的通过记录而没有重新执行（G 项起）。它不是跳过（空集合 / 全跳过是非成功），也不是新的执行：`counts` 为 `null`，引用链在 `groups[].reuse`；只有实际执行（`passed`）的组能再次被引用，复用不链式传递 |
 
 整次运行的结论按下面的顺序取第一个出现的：`wrapper_error`、`unavailable`、`error`、`failed`、`timeout`、`interrupted`、`skipped`、`empty`、`passed`。计数分开表示，结论只是汇总；一次运行同时有失败和错误时结论是 `error`，两个数都在 `result.counts` 里。`reused` 不参与这条严重度链：它比 `passed` 更不严重，全部组都被引用时整次结论是 `passed`、退出码 0——报告与 `result.notes` 会明确列出哪些组是引用而非执行，`result.counts` 不把引用组的用例 / 检查计入通过数量。

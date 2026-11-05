@@ -505,24 +505,28 @@ class HeaderAndHelpTests(unittest.TestCase):
         self.source = _source()
 
     def test_header_controls_read_from_the_catalog(self):
-        header = _between(self.source, "<header>", "</header>")
-        for key in ("viewer.prev", "viewer.prevTitle", "viewer.next", "viewer.nextTitle",
-                    "viewer.help", "viewer.helpTitle", "viewer.reload",
-                    "viewer.reloadTitle", "viewer.legacy", "viewer.legacyTitle",
-                    "viewer.stray", "viewer.strayTitle"):
-            self.assertTrue(_uses(header, key), key)
+        # 原顶栏控件按 #118 分别移到页面导航、活动栏和状态栏，词典接线不变。
+        navigation = _between(self.source, '<div class="page-nav">', '</div>')
+        activity = _between(self.source, '<nav class="activity"', '</nav>')
+        status = _between(self.source, '<footer id="statusbar"', '</footer>')
+        for part, keys in ((navigation, ("viewer.prev", "viewer.prevTitle", "viewer.next", "viewer.nextTitle")),
+                           (activity, ("viewer.help", "viewer.helpTitle")),
+                           (status, ("viewer.reload", "viewer.reloadTitle", "viewer.legacy", "viewer.legacyTitle",
+                                     "viewer.stray", "viewer.strayTitle"))):
+            for key in keys:
+                self.assertTrue(_uses(part, key), key)
         # 界面语言的名字由 #29 的 applyLocale 显式设置，这里只确认静态标记仍是中文初始值
-        self.assertIn("界面语言", header)
+        self.assertIn("界面语言", status)
         self.assertIn('tMsg("locale.switcher")',
                       _between(self.source, "function applyLocale()", '$("localePick").addEventListener'))
         for literal in ('aria-label="跳到页"', 'title="上一页（←）"', 'title="下一页（→）"',
                         'title="使用说明与快捷键（H）"', 'title="Agent 已按批注重建对照页"',
                         'title="浏览器里发现这份稿件之前版本的批注"',
                         'title="这个地址下还暂存着别的审阅没保存的改动（旧标签页留下的），可下载后导回那份审阅"'):
-            self.assertNotIn(literal, header, f"页头里还写死了 {literal}")
+            self.assertNotIn(literal, navigation + activity + status, f"界面里还写死了 {literal}")
 
     def test_see_list_button_reads_from_the_catalog(self):
-        form = _between(self.source, '<div class="form" id="nform">', '<div id="selbar">')
+        form = _between(self.source, '<section id="bottomPanel"', '<div id="selbar">')
         for key in ("viewer.markPinTitle", "viewer.styleBtnTitle", "viewer.seeList",
                     "viewer.seeListTitle"):
             self.assertTrue(_uses(form, key), key)
@@ -588,7 +592,8 @@ class OfflineHintTests(unittest.TestCase):
 
     def test_every_constant_table_used_is_declared(self):
         """改名后漏改引用只是运行时的 ReferenceError，端到端才暴露，太贵；这里提前查。"""
-        source = _source()
+        # 只扫描脚本；页面的内联 SVG 路径（如 M12）不是 JavaScript 常量。
+        source = _between(_source(), "<script>", "</script>")
         declared: set[str] = set()
         for stmt in re.findall(r"\b(?:const|let|var)\s+([^;]+);", source):
             for part in stmt.split(","):
@@ -599,7 +604,7 @@ class OfflineHintTests(unittest.TestCase):
         declared |= set(re.findall(r"__([A-Z_]+)__", source))
         used = set(re.findall(r"\b([A-Z][A-Z0-9_]{2,})\b", source))
         host = {"JSON", "CSS", "URL", "DOM", "HTML", "HTTP", "GET", "POST", "PATCH",
-                "DELETE", "SELECT", "INPUT", "TEXTAREA", "CJK", "CSP", "ROOTFS"}
+                "DELETE", "SELECT", "INPUT", "TEXTAREA", "CJK", "CSP", "ROOTFS", "API"}
         self.assertEqual(sorted(used - declared - host), [],
                          "页面里用了没声明的常量，跑起来会是 ReferenceError")
 

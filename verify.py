@@ -72,13 +72,14 @@ UNAVAILABLE = "unavailable"
 WRAPPER_ERROR = "wrapper_error"
 # 引用有效证据的组：不是跳过（空集合 / 全跳过是非成功），也不是新的执行（G 项）
 REUSED = "reused"
+NOT_APPLICABLE = "not_applicable"  # 纯文档 PR 的产品测试不适用，不计为实际通过。
 OUTCOME_ORDER = (WRAPPER_ERROR, UNAVAILABLE, ERROR, FAILED, TIMEOUT, INTERRUPTED, SKIPPED, EMPTY, PASSED)
 
 # 结论的人话说法（给人看的报告用；机器可读的仍是英文 outcome）
 VERDICT_LABELS = {PASSED: "完整成功", FAILED: "有用例失败", ERROR: "有用例错误", SKIPPED: "全部用例跳过",
                   EMPTY: "空集合", TIMEOUT: "超时", INTERRUPTED: "被信号中断",
                   UNAVAILABLE: "依赖缺失没有执行", WRAPPER_ERROR: "入口自身失败",
-                  REUSED: "引用已有验证"}
+                  REUSED: "引用已有验证", NOT_APPLICABLE: "产品测试不适用"}
 
 PHASES = ("issue", "development", "review", "pr", "ci", "manual")
 DEFAULT_PHASE = "development"
@@ -1347,6 +1348,9 @@ def worst_outcome(outcomes: list) -> str:
 def summarize(record: dict) -> str:
     parts = []
     for group in record["groups"]:
+        if group.get("outcome") == NOT_APPLICABLE:
+            parts.append("%s not_applicable 产品测试不适用" % group["name"])
+            continue
         if group.get("outcome") == REUSED:
             parts.append("%s reused 引用已有验证（run %s）"
                          % (group["name"], (group.get("reuse") or {}).get("source_run_id")))
@@ -1431,7 +1435,7 @@ def cmd_plan(args) -> int:
                 "gate_phases": list(verify_evidence.GATE_PHASES) if verify_evidence else ["pr", "ci"],
                 "rule": "同输入指纹 + 同环境 + 范围覆盖 + 当前校验有效 + 未超保鲜窗口 + 版本一致"
                         "才复用（差异被证明仅在文档允许列表内不算输入变化）；"
-                        "依赖宿主机状态的组（resources 非空）永远实际执行；"
+                        "依赖宿主机状态的组（resources 非空）不复用；"
                         "--no-reuse 强制全部重跑",
             },
             "groups": [{"name": group.name, "title": group.title, "purpose": group.purpose,
@@ -1448,7 +1452,9 @@ def cmd_plan(args) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return EXIT_OK
     print("验证入口 verify.py（记录 schema %s，入口版本 %d）" % (SCHEMA, WRAPPER_VERSION))
-    print("本次将执行：%s\n" % "、".join(selected))
+    doc_pr = (phase == "pr" and verify_selection is not None
+              and verify_selection.documentation_only(selection or {}))
+    print((verify_selection.DOC_PR_REASON if doc_pr else "本次将执行：%s" % "、".join(selected)) + "\n")
     for group in groups.values():
         print("%s %-12s %s" % ("*" if group.name in selected else " ", group.name, group.title))
         print("    做什么：%s" % group.purpose)
@@ -1479,7 +1485,7 @@ def cmd_plan(args) -> int:
     if verify_evidence is not None:
         print("证据复用：run 在 %s 阶段默认引用同输入、同环境、范围覆盖且当前有效的通过记录"
               % "、".join(verify_evidence.REUSE_PHASES))
-        print("      （保鲜 %.0f 小时，同一检出内）；依赖宿主机状态的组永远实际执行，"
+        print("      （保鲜 %.0f 小时，同一检出内）；依赖宿主机状态的组不复用，"
               "%s 门禁不引用；--no-reuse 强制全部重跑。"
               % (verify_evidence.FRESHNESS_HOURS, "、".join(verify_evidence.GATE_PHASES)))
     else:
@@ -1892,7 +1898,8 @@ def build_record(args, groups: dict, selected: list) -> dict:
 
 def fill_result(record: dict, ctx: RunContext) -> None:
     outcomes = [group.get("outcome") or WRAPPER_ERROR for group in record["groups"]]
-    counts = {"groups": sum(group.get("outcome") != REUSED for group in record["groups"]),
+    counts = {"groups": sum(group.get("outcome") not in (REUSED, NOT_APPLICABLE)
+                            for group in record["groups"]),
               "cases": 0, "checks": 0, "passed": 0, "failed": 0,
               "errors": 0, "skipped": 0, "expected_failures": 0, "unexpected_successes": 0,
               "subtest_failures": 0, "subtest_errors": 0, "subtest_skips": 0, "interrupted": 0,
@@ -1930,8 +1937,8 @@ def fill_evidence(record: dict, ctx: RunContext) -> None:
     logs, cases = [], []
     integrity = "ok"
     for group in record["groups"]:
-        if group.get("outcome") == REUSED:
-            continue  # 引用的组没有本地子进程产物；引用链在 reuse 段与报告里呈现
+        if group.get("outcome") in (REUSED, NOT_APPLICABLE):
+            continue  # 没有启动子进程的组不要求本地执行产物。
         log_path = ctx.run_dir / ("%s.log" % group["name"])
         if log_path.is_file():
             logs.append({"group": group["name"], "path": log_path.name,
@@ -1974,6 +1981,10 @@ def cmd_run(args) -> int:
         record = build_record(args, groups, selected)
         record["result"]["notes"].append("效率守卫扩大实际执行范围到 all：%s" % guard["reason"])
         args.no_reuse = True
+    doc_pr = (args.phase == "pr" and not args.no_reuse and verify_selection is not None
+              and verify_selection.documentation_only(record["context"]["selection"]))
+    if doc_pr:
+        record["result"]["notes"].append(verify_selection.DOC_PR_REASON)
     record["run_id"] = ctx.run_id
     record["reuse"] = {"schema": REUSE_SCHEMA, "policy_version": None, "enabled": False,
                        "reason": "复用规划尚未完成", "freshness_hours": None, "decisions": []}
@@ -2084,14 +2095,25 @@ def cmd_run(args) -> int:
     sealed = False
     try:
         # 规划与保存同样受取消保护；规划耗时单独记入排队时间。
-        record["reuse"] = build_reuse_plan(ctx.artifact_dir, record, groups, selected,
-                                           bypass=bool(args.no_reuse))
+        if doc_pr:
+            record["reuse"].update(reason=verify_selection.DOC_PR_REASON)
+        else:
+            record["reuse"] = build_reuse_plan(ctx.artifact_dir, record, groups, selected,
+                                               bypass=bool(args.no_reuse))
         ctx.save_record(record)
         reuse_decisions = {item["group"]: item for item in record["reuse"]["decisions"]}
         record["timing"]["queue_seconds"] = round(time.monotonic() - queued_at, 6)
         record["timing"]["started_at"] = now_iso()
         started = time.monotonic()
         for name in selected:
+            if doc_pr:
+                results[name] = {"outcome": NOT_APPLICABLE, "exit_status": EXIT_OK,
+                                 "signal": None, "timed_out": False,
+                                 "note": verify_selection.DOC_PR_REASON,
+                                 "counts": None, "cases": [], "seconds": {},
+                                 "timing": {"child_seconds": 0.0},
+                                 "lock": {"resources": list(groups[name].resources), "wait_seconds": 0.0}}
+                continue
             decision = reuse_decisions.get(name)
             if decision is not None and decision.get("decision") == "reuse":
                 # 引用有效证据：不启动子进程，组结果标记 reused（G 项）
@@ -2358,6 +2380,14 @@ def validate_local_evidence(record: dict, run_dir: Path) -> list:
         if not isinstance(group, dict):
             problems.append("分组记录不是对象")
             continue
+        if group.get("outcome") == NOT_APPLICABLE:
+            context = record.get("context") or {}
+            if (context.get("phase") != "pr" or verify_selection is None
+                    or not verify_selection.documentation_only(context.get("selection") or {})):
+                problems.append("产品测试不适用缺少可信的纯文档 PR 判定")
+            if group.get("started_at") is not None or group.get("counts") or group.get("cases"):
+                problems.append("产品测试不适用却带有实际执行结果")
+            continue
         if group.get("outcome") == REUSED:
             continue  # 本地日志不适用于引用组，来源链仍由 validate_reuse_chain 校验。
         actual = group.get("started_at") is not None or group.get("outcome") in (PASSED, FAILED, SKIPPED, EMPTY)
@@ -2532,6 +2562,10 @@ def render_report(record: dict, problems: Optional[list] = None,
         timing.get("unattributed_seconds")))
     lines.append("组：")
     for group in record.get("groups") or []:
+        if group.get("outcome") == NOT_APPLICABLE:
+            lines.append("  %-11s %-11s 产品测试不适用；没有执行" % (
+                group.get("name"), group.get("outcome")))
+            continue
         if group.get("outcome") == REUSED:
             reference = group.get("reuse") or {}
             lines.append("  %-11s %-11s 引用已有验证 ← run %s（%s 结束，%.1f 小时前）" % (

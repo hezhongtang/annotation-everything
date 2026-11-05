@@ -3,7 +3,7 @@
 
 verify.py 的选测策略：把「当前有效差异 + 开发阶段」翻译成建议的验证范围，
 给不出可信建议时保守回退完整检查并解释原因。影子模式下建议只记录不裁剪，
-实际执行仍由调用方决定（缺省完整门禁），本模块不改变任何组的默认行为。
+实际执行仍由调用方决定（缺省完整门禁）；纯文档 PR 可由入口记录产品测试不适用。
 
 设计边界（与 issue #49「选择策略」一致）：
 - 判定只基于受版本控制的显式映射与 git 差异，不用 CodeGraph / AST 索引做依据；
@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 10
+STRATEGY_VERSION = 11
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -84,7 +84,13 @@ DOC_ALLOWLIST = (
     AllowEntry("README.md", "仓库说明（中文）"),
     AllowEntry("README.en.md", "仓库说明（英文）"),
     AllowEntry("docs/assets/", "头图与截图"),
+    # #117：仅供人和 Agent 阅读；测试、验证、工具与运行时均不消费其内容。
+    # 核实范围与防漂移契约见 docs/verify/selection-strategy.md「文档允许列表核实」。
+    AllowEntry("GLOSSARY.md", "领域术语说明"),
+    AllowEntry("docs/adr/", "架构决策说明"),
 )
+
+DOC_PR_REASON = "差异仅在文档允许列表内，由 CI 兜底；本地产品测试不适用。"
 
 SELECTION_RULES = (
     SelectionRule(
@@ -431,6 +437,36 @@ def _relevant_paths(changes: dict) -> list:
     return sorted(set(paths))
 
 
+def documentation_only(selection: dict) -> bool:
+    """仅内置允许列表可豁免 PR 产品测试；缺失、回退和覆盖映射均从紧。"""
+    if (not isinstance(selection, dict) or selection.get("available") is not True
+            or selection.get("strategy_source") != "builtin" or selection.get("fallback") is not None):
+        return False
+    guard = selection.get("policy_guard")
+    if guard is not None and (not isinstance(guard, dict) or guard.get("active") is not False):
+        return False
+    changes = selection.get("changes")
+    if not isinstance(changes, dict):
+        return False
+    # 暂存后又在工作树恢复的源码仍属于待提交改动，不能被净差异掩盖。
+    paths = []
+    for key in ("added", "deleted", "modified", "untracked", "staged", "unstaged"):
+        values = changes.get(key)
+        if not isinstance(values, list):
+            return False
+        paths.extend(values)
+    renamed = changes.get("renamed")
+    if not isinstance(renamed, list):
+        return False
+    for entry in renamed:
+        if not isinstance(entry, dict):
+            return False
+        paths.extend((entry.get("from"), entry.get("to")))
+    if any(not isinstance(path, str) or not path for path in paths):
+        return False
+    return bool(paths) and all(_allowlist_category(path, DOC_ALLOWLIST) is not None for path in paths)
+
+
 def _classify(repo: Path, changes: dict, strategy: dict, scenario_ids: Optional[tuple]) -> dict:
     """逐路径分类：允许列表 -> tests 内建 -> 映射规则 -> 未知。"""
     rules = strategy["rules"]
@@ -680,6 +716,10 @@ def build_selection(snapshot: dict, baseline: dict, phase: str, repo: Path,
                                  "reason": "相对基线没有可用差异；空差异不解释成不用测，保守按完整检查"}
     selection["suggested"] = _suggest_for_phase(phase, classified, changes,
                                                 selection["fallback"], expanded)
+    if phase == "pr" and documentation_only(selection):
+        selection["suggested"].update(runs_tests=False, groups=[],
+                                      not_applicable=["unit", "unit-related", "serve-check", "browser"],
+                                      notes=[DOC_PR_REASON])
     return selection
 
 

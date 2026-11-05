@@ -260,11 +260,17 @@ class DeliveryTests(unittest.TestCase):
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             deadline = time.monotonic() + 3
-            while not (self.review / serve.STATUS_FILE).exists() and time.monotonic() < deadline:
+            state, health = None, None
+            while time.monotonic() < deadline:
+                state = serve.read_status(self.review)
+                if state and state.get("pid") == process.pid:
+                    health = serve.probe(state["port"])
+                    if health and health.get("hook"):
+                        break
                 time.sleep(.02)
-            state = json.loads((self.review / serve.STATUS_FILE).read_text())
+            self.assertIsNotNone(state, "重启服务须写出完整的状态 JSON")
             self.assertEqual(state["pid"], process.pid)
-            self.assertTrue(serve.probe(state["port"])["hook"])
+            self.assertTrue(health and health.get("hook"))
             time.sleep(.1)
             self.assertEqual(len(self.desktop.requests), 1)
         finally:
