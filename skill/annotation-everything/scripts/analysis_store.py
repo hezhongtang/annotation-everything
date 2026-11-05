@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import notes_store as store
+import ledger
 
 ANALYSIS_DIR = "analysis"
 EVENTS_FILE = "events.jsonl"
@@ -41,8 +42,23 @@ PROP_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 OPT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 
+def _analysis_path(review_dir: Path, *parts: str) -> Path:
+    """分析数据只使用当前审阅内的真实路径，不跟随目录或文件符号链接。"""
+    root = Path(review_dir).resolve() / ANALYSIS_DIR
+    path = root.joinpath(*parts)
+    try:
+        safe = root.resolve() == root and path.resolve() == path
+    except (OSError, RuntimeError) as error:
+        raise store.NoteError("分析数据路径不可用") from error
+    if not safe:
+        raise store.NoteError("分析数据路径不能使用符号链接或跨出当前审阅目录")
+    return path
+
+
 def _events_path(review_dir: Path, analysis_id: str) -> Path:
-    return review_dir / ANALYSIS_DIR / analysis_id / EVENTS_FILE
+    if not isinstance(analysis_id, str) or store.ID_RE.fullmatch(analysis_id) is None:
+        raise store.NoteError("分析标识只允许 1–64 个字母、数字、下划线或连字符")
+    return _analysis_path(review_dir, analysis_id, EVENTS_FILE)
 
 
 def _append_event(review_dir: Path, analysis_id: str, event: dict[str, Any]) -> None:
@@ -66,7 +82,7 @@ def _read_events(review_dir: Path, analysis_id: str) -> list[dict[str, Any]]:
 
 
 def _counter(review_dir: Path) -> dict[str, Any]:
-    path = review_dir / ANALYSIS_DIR / COUNTER_FILE
+    path = _analysis_path(review_dir, COUNTER_FILE)
     if path.exists():
         value = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(value, dict) or not isinstance(value.get("roundSeq"), int):
@@ -76,9 +92,9 @@ def _counter(review_dir: Path) -> dict[str, Any]:
 
 
 def _save_counter(review_dir: Path, counter: dict[str, Any]) -> None:
-    root = review_dir / ANALYSIS_DIR
+    root = _analysis_path(review_dir)
     root.mkdir(mode=0o700, exist_ok=True)
-    store._atomic_write(root / COUNTER_FILE, json.dumps(counter, ensure_ascii=False) + "\n")
+    store._atomic_write(_analysis_path(review_dir, COUNTER_FILE), json.dumps(counter, ensure_ascii=False) + "\n")
 
 
 def _next_round(review_dir: Path) -> int:
@@ -104,7 +120,7 @@ def _next_submit_order(review_dir: Path) -> int:
 def _is_active(state: dict[str, Any], node_id: str) -> bool:
     """问题节点是否处在当前选择枝上：父节点已决到挂载它的那个选项（原型 isActive，本票无断枝）。"""
     node = state["nodes"].get(node_id)
-    if node is None:
+    if node is None or node.get("status") == "void":
         return False
     parent = node.get("parent")
     if not parent:
@@ -132,7 +148,7 @@ def _decide(state: dict[str, Any], node: dict[str, Any], option: str, round_no: 
     return decision
 
 
-def _confirm_proposal(state: dict[str, Any], proposal: dict[str, Any]) -> None:
+def _confirm_proposal(state: dict[str, Any], proposal: dict[str, Any]) -> str:
     """结构提议确认后进入问题树：分配稳定节点标识（按确认顺序，重放确定）。"""
     nid = f"n{state['seq']['node'] + 1}"
     state["seq"]["node"] += 1
@@ -141,15 +157,25 @@ def _confirm_proposal(state: dict[str, Any], proposal: dict[str, Any]) -> None:
                            "options": options, "recommend": proposal["recommend"],
                            "parent": proposal.get("parent"), "status": "pending",
                            "decision": None, "history": []}
+    return nid
 
 
 def _apply_answer(state: dict[str, Any], round_: dict[str, Any], key: str, value: dict[str, Any]) -> None:
     round_["answers"][key] = value
     if key.startswith("S:"):
+        confirmed = round_.setdefault("proposalNodes", {})
+        node_id = confirmed.get(key)
         if value["kind"] == "accept":
-            _confirm_proposal(state, next(p for p in round_["proposals"] if "S:" + p["key"] == key))
+            round_["rejected"].discard(key)
+            if node_id is None:
+                confirmed[key] = _confirm_proposal(state, next(p for p in round_["proposals"] if "S:" + p["key"] == key))
+            else:
+                node = state["nodes"][node_id]
+                node["status"] = "decided" if node.get("decision") else "pending"
         else:
             round_["rejected"].add(key)
+            if node_id is not None:
+                state["nodes"][node_id]["status"] = "void"
         return
     node_id = key[2:]
     node = state["nodes"][node_id]
@@ -242,10 +268,13 @@ def load(review_dir: Path, analysis_id: str) -> dict[str, Any]:
 
 
 def _analyses_ids(review_dir: Path) -> list[str]:
-    root = Path(review_dir) / ANALYSIS_DIR
+    root = _analysis_path(review_dir)
     if not root.is_dir():
         return []
-    return sorted(p.parent.name for p in root.glob(f"*/{EVENTS_FILE}"))
+    ids = sorted(p.parent.name for p in root.glob(f"*/{EVENTS_FILE}"))
+    for analysis_id in ids:
+        _events_path(review_dir, analysis_id)
+    return ids
 
 
 def list_analyses(review_dir: Path) -> list[dict[str, Any]]:
@@ -261,6 +290,35 @@ def list_analyses(review_dir: Path) -> list[dict[str, Any]]:
     return out
 
 
+def _review_pages(review_dir: Path) -> list[dict[str, Any]]:
+    pages = ledger.read_manifest(review_dir).get("pages")
+    return [page for page in pages if isinstance(page, dict)] if isinstance(pages, list) else []
+
+
+def _stable_page(page: dict[str, Any]) -> bool:
+    key = page.get("key")
+    return (isinstance(key, str) and bool(key) and page.get("stable") is not False
+            and re.fullmatch(r"(?:p|page)?[-_]?\d+", key, re.I) is None)
+
+
+def _source_location(review_dir: Path, source: dict[str, Any]) -> dict[str, Any]:
+    """转出与确认时按当前页面映射定位，原文副本保持发起时的页码与标题。"""
+    location = {"page": source.get("page", 1), "title": source.get("title", "")}
+    key = source.get("key")
+    if not key:
+        return location
+    location["key"] = key
+    if re.fullmatch(r"(?:p|page)?[-_]?\d+", key, re.I):
+        return location   # 页码生成的键与既有批注一样，不用于重定位。
+    matches = [page for page in _review_pages(review_dir) if page.get("key") == key]
+    if (len(matches) == 1 and _stable_page(matches[0]) and isinstance(matches[0].get("n"), int)
+            and not isinstance(matches[0]["n"], bool) and matches[0]["n"] > 0):
+        location.update(page=matches[0]["n"], title=matches[0].get("title") or location["title"])
+    else:
+        location["orphan"] = True
+    return location
+
+
 # ---------- 写操作（都在批注存储的同一把锁内） ----------
 
 def start(review_dir: Path, note_id: str, *, by: str = "page",
@@ -271,6 +329,9 @@ def start(review_dir: Path, note_id: str, *, by: str = "page",
     with store.locked(review_dir):
         if authorize is not None:
             authorize()
+        analysis_id = store.new_id()
+        root = _events_path(review_dir, analysis_id).parent
+        _counter(review_dir)   # 在改动批注与批次前拒绝越界或损坏的计数器。
         doc = store.load(review_dir)
         note = store._find(doc, note_id)
         status = note.get("status", "open")
@@ -299,17 +360,20 @@ def start(review_dir: Path, note_id: str, *, by: str = "page",
             store._handoff_commit(review_dir, handoff, {"op": "handoff-update", "by": by,
                                                         "seq": removed["seq"], "removed": note_id,
                                                         "voided": removed["voided"]})
-        analysis_id = store.new_id()
         note["status"] = "held"
         note["hold"] = HOLD_REASON
         note["heldBy"] = analysis_id
         note["updatedAt"] = store.now_iso()
         store._commit(review_dir, doc, {"op": "held", "by": by, "id": note_id,
                                         "analysis": analysis_id, "reason": HOLD_REASON})
-        root = review_dir / ANALYSIS_DIR / analysis_id
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
         round_no = _next_round(review_dir)
-        source_copy = {k: note.get(k) for k in ("page", "title", "target", "text", "quote", "quoteFrom") if note.get(k) is not None}
+        source_copy = {k: note.get(k) for k in ("page", "title", "target", "text", "quote", "quoteFrom", "key") if note.get(k) is not None}
+        if not source_copy.get("key"):
+            pages = _review_pages(review_dir)
+            page = next((page for page in pages if page.get("n") == note.get("page") and _stable_page(page)), None)
+            if page is not None and sum(other.get("key") == page["key"] for other in pages) == 1:
+                source_copy["key"] = page["key"]
         at = store.now_iso()
         _append_event(review_dir, analysis_id, {"type": "started", "schema": SCHEMA, "at": at, "id": analysis_id,
                                                 "rev": 1, "focus": note.get("text", ""), "by": by,
@@ -334,10 +398,19 @@ def answer(review_dir: Path, analysis_id: str, round_no: int, key: str, value: d
                                      "，不能再作答", code="round-not-answerable",
                                      round=round_no, status=round_["status"])
         item = next((i for i in round_["items"] if i["key"] == key), None)
+        if item is None and key in round_["answers"]:
+            if key.startswith("S:"):
+                proposal = next((p for p in round_["proposals"] if "S:" + p["key"] == key), None)
+                if proposal is not None:
+                    item = {"key": key, "type": "structure", "proposal": proposal}
+            elif key.startswith("Q:") and _is_active(state, key[2:]):
+                item = {"key": key, "type": "question", "node": key[2:]}
         if item is None:
             raise store.HandoffError(f"第 {round_no} 轮里没有 {key} 这一项", code="item-not-in-round",
                                      round=round_no, key=key)
         _check_answer_value(state, item, value)
+        if round_["answers"].get(key) == value:
+            return state
         _append_event(review_dir, analysis_id, {"type": "answered", "at": store.now_iso(), "by": by,
                                                 "round": round_no, "key": key, "value": value})
         return load(review_dir, analysis_id)
@@ -361,10 +434,13 @@ def _check_answer_value(state: dict[str, Any], item: dict[str, Any], value: Any)
     raise store.NoteError("本票的回答方式只有用推荐答案（accept）和选一个选项（option）")
 
 
-def submit_round(review_dir: Path, analysis_id: str, round_no: int, *, by: str = "page") -> dict[str, Any]:
+def submit_round(review_dir: Path, analysis_id: str, round_no: int, *, by: str = "page",
+                 authorize: Callable[[], None] | None = None) -> dict[str, Any]:
     """交出轮次：open → submitted（进入分析队列）。已交出的重复交出合并，不重复排队。"""
     review_dir = Path(review_dir)
     with store.locked(review_dir):
+        if authorize is not None:
+            authorize()
         state = load(review_dir, analysis_id)
         round_ = _round(state, round_no)
         if round_["status"] == "submitted":
@@ -421,10 +497,13 @@ def agent_busy(review_dir: Path) -> bool:
     return any(item.get("status") in ("claimed", "reviewing") for item in store.handoff_load(review_dir)["items"])
 
 
-def claim(review_dir: Path, *, by: str = "agent", seq: int | None = None) -> dict[str, Any] | None:
+def claim(review_dir: Path, *, by: str = "agent", seq: int | None = None,
+          authorize: Callable[[], None] | None = None) -> dict[str, Any] | None:
     """领取最早一个等着轮次（可指定轮次号）。Agent 一次只处理一项：已有处理中的轮次或批次时拒绝。"""
     review_dir = Path(review_dir)
     with store.locked(review_dir):
+        if authorize is not None:
+            authorize()
         if agent_busy(review_dir):
             raise store.HandoffError("Agent 手上已有一项在处理，一次只处理一项",
                                      code="agent-busy")
@@ -567,7 +646,7 @@ def convert(review_dir: Path, analysis_id: str, node_id: str, *, text: str | Non
         decision = state["decisions"][node["decision"]]
         draft_id = f"c{len(state['drafts']) + 1}"
         draft = {"id": draft_id, "status": "pending",
-                 "page": state["sourceCopy"].get("page", 1),
+                 **_source_location(review_dir, state["sourceCopy"]),
                  "text": store.fix_text(text).strip()
                  or f"按分析结论：{node['short']}用「{decision['label']}」",
                  "basis": {"analysis": analysis_id, "decision": decision["id"], "node": node_id,
@@ -591,10 +670,12 @@ def confirm_convert(review_dir: Path, analysis_id: str, draft_id: str, *, by: st
         nid = store.new_id()
         basis = {"analysis": draft["basis"]["analysis"], "decision": draft["basis"]["decision"],
                  "node": draft["basis"]["node"], "line": draft["basis"]["line"]}
-        note = {"id": nid, "title": state["sourceCopy"].get("title", ""),
+        location = _source_location(review_dir, {**state["sourceCopy"],
+                                    **{key: draft[key] for key in ("page", "title", "key") if key in draft}})
+        note = {"id": nid, **location,
                 "target": state["sourceCopy"].get("target", ""), "text": draft["text"],
                 "quote": "", "quoteFrom": "", "pin": None,
-                "page": draft["page"], "status": "open", "at": store.now_iso(),
+                "status": "open", "at": store.now_iso(),
                 "basis": basis, "fromAnalysis": analysis_id}
         doc["notes"].append(note)
         source = next((n for n in doc["notes"] if n.get("id") == state["sourceNote"]), None)

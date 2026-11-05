@@ -198,6 +198,38 @@ class RoundFlowTests(unittest.TestCase):
         self.assertIsNone(result.get("nextRound"))
         self.assertEqual(analysis_store.load(self.d, self.state["id"])["rounds"][1]["status"], "done")
 
+    def test_answer_retries_are_idempotent_and_changes_keep_the_last_answer(self):
+        """同题重传不重复建节点/决策，接手前改选保留最新原话答案。"""
+        analysis_store.claim(self.d)
+        analysis_store.writeback(self.d, self.state["id"], self.round1, 1, [propose_caliber()])
+        accepted = analysis_store.answer(self.d, self.state["id"], 2, "S:p1", {"kind": "accept"})
+        retried = analysis_store.answer(self.d, self.state["id"], 2, "S:p1", {"kind": "accept"})
+        self.assertEqual(retried, accepted)
+        first = {"kind": "option", "option": "Y", "verbatim": "先用年度"}
+        decided = analysis_store.answer(self.d, self.state["id"], 2, "Q:n1", first)
+        self.assertEqual(analysis_store.answer(self.d, self.state["id"], 2, "Q:n1", first), decided)
+        last = {"kind": "option", "option": "S", "verbatim": "改用季度"}
+        changed = analysis_store.answer(self.d, self.state["id"], 2, "Q:n1", last)
+        self.assertEqual(changed["rounds"][1]["answers"]["Q:n1"], last)
+        self.assertEqual(len(changed["nodes"]), 1)
+        self.assertEqual(len(changed["decisions"]), 2)
+        self.assertEqual(changed["decisions"][changed["nodes"]["n1"]["decision"]]["option"], "S")
+
+    def test_structure_answer_changes_reuse_the_confirmed_node(self):
+        """确认后改为不采纳会撤下该题，再确认复用稳定节点与已有回答。"""
+        analysis_store.claim(self.d)
+        analysis_store.writeback(self.d, self.state["id"], self.round1, 1, [propose_caliber()])
+        analysis_store.answer(self.d, self.state["id"], 2, "S:p1", {"kind": "accept"})
+        analysis_store.answer(self.d, self.state["id"], 2, "Q:n1", {"kind": "accept"})
+        rejected = analysis_store.answer(self.d, self.state["id"], 2, "S:p1", {"kind": "reject"})
+        self.assertEqual(rejected["rounds"][1]["answers"]["S:p1"], {"kind": "reject"})
+        with self.assertRaises(store.HandoffError):
+            analysis_store.convert(self.d, self.state["id"], "n1")
+        restored = analysis_store.answer(self.d, self.state["id"], 2, "S:p1", {"kind": "accept"})
+        self.assertEqual(list(restored["nodes"]), ["n1"])
+        self.assertEqual(restored["nodes"]["n1"]["decision"], "d1")
+        self.assertEqual(restored["rounds"][1]["rejected"], [])
+
     def test_recommend_answer_kind_uses_recommended_option(self):
         """作答「用推荐答案」与选选项等效。"""
         analysis_store.claim(self.d, by="Synthetic")
@@ -432,6 +464,55 @@ class ConvertTests(unittest.TestCase):
         with self.assertRaises(store.HandoffError):
             analysis_store.confirm_convert(self.d, self.state["id"], draft["id"])
 
+    def test_convert_tracks_the_source_page_key_through_reorder_and_deletion(self):
+        """原文副本保持原页，转出批注按当前页面键定位；确认前删页则明确悬空。"""
+        with tempfile.TemporaryDirectory() as directory:
+            review = Path(directory)
+            manifest = review / "review.json"
+            manifest.write_text(json.dumps({"pages": [{"n": 3, "key": "growth", "stable": True,
+                                                       "title": "原来的增长页"}]}))
+            _doc, note = store.add(review, {"page": 3, "text": "增长结论对吗？", "key": "growth"})
+            state, round_no = analysis_store.start(review, note["id"])
+            analysis_store.claim(review)
+            analysis_store.writeback(review, state["id"], round_no, 1, [propose_caliber()])
+            analysis_store.answer(review, state["id"], 2, "S:p1", {"kind": "accept"})
+            analysis_store.answer(review, state["id"], 2, "Q:n1", {"kind": "accept"})
+            manifest.write_text(json.dumps({"pages": [{"n": 7, "key": "growth", "stable": True,
+                                                       "title": "重排后的增长页"}]}))
+            draft = analysis_store.convert(review, state["id"], "n1")
+            self.assertEqual((draft["page"], draft["key"]), (7, "growth"))
+            manifest.write_text(json.dumps({"pages": [{"n": 8, "key": "growth", "stable": True,
+                                                       "title": "再次重排的增长页"}]}))
+            converted = analysis_store.confirm_convert(review, state["id"], draft["id"])
+            self.assertEqual((converted["page"], converted["key"], converted["title"]),
+                             (8, "growth", "再次重排的增长页"))
+            self.assertFalse(converted.get("orphan"))
+            original = analysis_store.load(review, state["id"])["sourceCopy"]
+            self.assertEqual((original["page"], original["key"], original["text"]),
+                             (3, "growth", "增长结论对吗？"))
+            draft = analysis_store.convert(review, state["id"], "n1")
+            manifest.write_text(json.dumps({"pages": [{"n": 8, "key": "other", "stable": True}]}))
+            orphan = analysis_store.confirm_convert(review, state["id"], draft["id"])
+            self.assertTrue(orphan["orphan"])
+            self.assertEqual(orphan["key"], "growth")
+
+    def test_source_key_is_captured_from_manifest_and_ambiguous_pages_are_orphans(self):
+        """旧批注没有键时从发起时的映射补全；同一键重复出现时不猜页面。"""
+        with tempfile.TemporaryDirectory() as directory:
+            review = Path(directory)
+            manifest = review / "review.json"
+            manifest.write_text(json.dumps({"pages": [{"n": 3, "key": "growth", "stable": True}]}))
+            state, round_no = analysis_store.start(review, add_note(review)["id"])
+            self.assertEqual(state["sourceCopy"]["key"], "growth")
+            analysis_store.claim(review)
+            analysis_store.writeback(review, state["id"], round_no, 1, [propose_caliber()])
+            analysis_store.answer(review, state["id"], 2, "S:p1", {"kind": "accept"})
+            analysis_store.answer(review, state["id"], 2, "Q:n1", {"kind": "accept"})
+            manifest.write_text(json.dumps({"pages": [{"n": 7, "key": "growth", "stable": True},
+                                                       {"n": 8, "key": "growth", "stable": False}]}))
+            draft = analysis_store.convert(review, state["id"], "n1")
+            self.assertTrue(draft["orphan"])
+
     def test_convert_refuses_undecided_node(self):
         """没有生效结论的节点不能转成批注。"""
         with self.assertRaises(store.HandoffError) as ctx:
@@ -440,6 +521,47 @@ class ConvertTests(unittest.TestCase):
         self.decide_caliber(option="S")   # 答了「季度」：根节点的结论照样成立
         draft = analysis_store.convert(self.d, self.state["id"], "n1")
         self.assertEqual(draft["basis"]["option"], "S")
+
+
+class AnalysisBoundaryTests(unittest.TestCase):
+    def test_analysis_paths_cannot_escape_the_review_or_follow_foreign_links(self):
+        """分析标识、分析目录和事件文件都不能借绝对路径、父目录或符号链接跨审阅。"""
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            review, other = Path(first), Path(second)
+            foreign, _round_no = analysis_store.start(other, add_note(other)["id"])
+            foreign_dir = other / "analysis" / foreign["id"]
+            original = (foreign_dir / "events.jsonl").read_bytes()
+            for analysis_id in (str(foreign_dir), f"../../{other.name}/analysis/{foreign['id']}",
+                                foreign["id"] + "\n"):
+                with self.subTest(analysis_id=analysis_id), self.assertRaises(store.NoteError):
+                    analysis_store.load(review, analysis_id)
+            (review / "analysis").mkdir()
+            (review / "analysis" / foreign["id"]).symlink_to(foreign_dir, target_is_directory=True)
+            with self.assertRaises(store.NoteError):
+                analysis_store.load(review, foreign["id"])
+            with self.assertRaises(store.NoteError):
+                analysis_store.list_analyses(review)
+            (review / "analysis" / foreign["id"]).unlink()
+            local = review / "analysis" / foreign["id"]
+            local.mkdir()
+            (local / "events.jsonl").symlink_to(foreign_dir / "events.jsonl")
+            with self.assertRaises(store.NoteError):
+                analysis_store.load(review, foreign["id"])
+            (local / "events.jsonl").unlink()
+            local.rmdir()
+            counter = review / "analysis" / "counter.json"
+            counter.symlink_to(other / "analysis" / "counter.json")
+            note = add_note(review)
+            with self.assertRaises(store.NoteError):
+                analysis_store.start(review, note["id"])
+            self.assertEqual(store.load(review)["notes"][0]["status"], "open")
+            counter.unlink()
+            (review / "analysis").rmdir()
+            (review / "analysis").symlink_to(other / "analysis", target_is_directory=True)
+            with self.assertRaises(store.NoteError):
+                analysis_store.start(review, note["id"])
+            self.assertEqual(store.load(review)["notes"][0]["status"], "open")
+            self.assertEqual((foreign_dir / "events.jsonl").read_bytes(), original)
 
 
 class SharedLockTests(unittest.TestCase):
