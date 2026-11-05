@@ -60,6 +60,49 @@ class AnalysisResolutionTests(unittest.TestCase):
             linked.append(analysis.confirm_convert(self.review, self.aid, draft["id"]))
         return number, first, second, linked
 
+    def test_prototype_from_annotation_through_verification_conversion_close_and_reopen(self):
+        review = self.review / "from-annotation"
+        review.mkdir()
+        _doc, source = notes.add(review, {"page": 1, "text": "合成审阅：增长结论是否站得住？"})
+        analysis.suggest(review, source["id"], reason="值得确认统计口径")
+        self.assertEqual(analysis.list_analyses(review), [])
+        state, opening = analysis.start(review, source["id"])
+        aid = state["id"]
+        claimed = analysis.claim(review, seq=opening)
+        number = analysis.writeback(review, aid, opening, claimed["baseRev"], [question("scope")])["nextRound"]
+        analysis.answer(review, aid, number, "S:scope", {"kind": "accept"})
+        analysis.answer(review, aid, number, "Q:n1", {"kind": "verify"})
+        analysis.submit_round(review, aid, number)
+        claimed = analysis.claim(review, seq=number)
+        self.assertFalse(analysis.round_context(review, aid, number)["verificationRequests"][0]["allowExternal"])
+        number = analysis.writeback(review, aid, number, claimed["baseRev"], [], facts=[{
+            "key": "coverage", "text": "合成核查：统计数据覆盖全年", "source": "fixtures/sample"}])["nextRound"]
+        answered = analysis.answer(review, aid, number, "Q:n1", {"kind": "accept", "verbatim": "确认采用全年"})
+        did = answered["nodes"]["n1"]["decision"]
+        analysis.submit_round(review, aid, number)
+        claimed = analysis.claim(review, seq=number)
+        number = analysis.writeback(review, aid, number, claimed["baseRev"], [], assumptions=[{
+            "key": "comparable", "text": "合成数据全年可比", "decisions": [did]}])["nextRound"]
+        analysis.answer(review, aid, number, "A:a1", {"kind": "accept"})
+        before = notes.load(review)
+        draft = analysis.convert(review, aid, "n1", text="合成改稿意见：按全年口径说明增长")
+        self.assertEqual(notes.load(review), before)
+        derived = analysis.confirm_convert(review, aid, draft["id"])
+        original = next(n for n in notes.load(review)["notes"] if n["id"] == source["id"])
+        self.assertEqual((original["status"], original["analysisId"]), ("resolved", aid))
+        notes.handoff_submit(review)
+        batch = notes.handoff_claim(review, by="Synthetic")
+        self.assertEqual(batch["openIds"], [derived["id"]])
+        notes.set_status(review, derived["id"], "resolved", by="Synthetic", seq=batch["seq"])
+        notes.handoff_done(review, seq=batch["seq"])
+        closed = analysis.close_analysis(review, aid)
+        self.assertEqual(closed["status"], "closed")
+        self.assertTrue(closed["checkpoints"][-1]["sealed"])
+        reopened = analysis.reopen_analysis(review, aid)
+        self.assertEqual(reopened["status"], "active")
+        self.assertEqual(analysis.queue(review)[0]["kind"], "reopen")
+        self.assertEqual(reopened["facts"]["f1"]["text"], "合成核查：统计数据覆盖全年")
+
     def test_refuting_a_direct_assumption_forks_and_only_reuses_unaffected_decisions(self):
         number, first, second, linked = self.reasoning()
         before = analysis.load(self.review, self.aid)
@@ -101,6 +144,17 @@ class AnalysisResolutionTests(unittest.TestCase):
         self.assertEqual(next(r for r in refuted["rounds"] if r["seq"] == queued["seq"])["status"], "void")
         self.assertEqual(len(analysis.queue(self.review)), 1)
         self.assertEqual(analysis.refute_assumption(self.review, self.aid, "a1"), refuted)
+
+    def test_reconsidering_the_same_answer_on_the_old_line_creates_a_fresh_direct_decision(self):
+        _number, first, second, linked = self.reasoning()
+        analysis.refute_assumption(self.review, self.aid, "a1")
+        analysis.switch_line(self.review, self.aid, "main")
+        restored = analysis.redecide(self.review, self.aid, "n1", "year")
+        self.assertNotEqual(restored["nodes"]["n1"]["decision"], first)
+        self.assertFalse(restored["nodes"]["n1"]["needsReview"])
+        self.assertEqual(restored["nodes"]["n2"]["decision"], second)
+        statuses = {n["id"]: n["status"] for n in analysis.linked_notes(self.review, self.aid)}
+        self.assertEqual((statuses[linked[0]["id"]], statuses[linked[1]["id"]]), ("held", "open"))
 
     def test_confirmed_option_dead_end_blocks_redecision_across_lines_until_refutation(self):
         number, _first, _second, _linked = self.reasoning()
@@ -277,6 +331,13 @@ class AnalysisResolutionTests(unittest.TestCase):
                          sorted([item["type"] for item in context["items"]],
                                 key={"deadend": 0, "update": 1, "assumption": 2, "structure": 3, "question": 4}.get))
         counts = (len(state["nodes"]), len(state["decisions"]), len(state["deadEnds"]), len(state["updates"]))
+        claimed = analysis.claim(self.review, seq=refreshed)
+        with self.assertRaises(notes.HandoffError) as stale:
+            analysis.writeback(self.review, self.aid, refreshed, claimed["baseRev"] + 1, [])
+        self.assertEqual(stale.exception.code, "base-rev-mismatch")
+        refreshed = analysis.queue(self.review)[0]["seq"]
+        for key, value in answers.items():
+            self.assertEqual(analysis.round_context(self.review, self.aid, refreshed)["answers"].get(key), value, key)
         result = self.write(refreshed)
         self.assertIsNotNone(result["nextRound"])
         final = self.write(result["nextRound"])

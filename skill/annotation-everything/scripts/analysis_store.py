@@ -289,7 +289,7 @@ def _frontier_question_items(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _round_items(state: dict[str, Any], round_: dict[str, Any]) -> list[dict[str, Any]]:
-    """轮次的可作答条目：还没答、没被拒的结构提议，加上前沿上待问的问题。
+    """按死局、更新、假设、结构、前沿问题组合本轮条目，保留有效预填原答。
 
     问题条目随状态动态出现（确认提议入树后同轮即可作答；没答的问题一直留到下一轮）。"""
     if round_["status"] in ("done", "void"):
@@ -1689,7 +1689,9 @@ def redecide(review_dir: Path, analysis_id: str, node_id: str, option: str, *, b
             raise store.HandoffError("只能改选当前选择枝上已经作答的问题", code="node-not-decided")
         if not isinstance(option, str) or option not in node["options"]:
             raise store.HandoffError("请选择这个问题已有的选项", code="bad-option")
-        if state["decisions"][node["decision"]]["option"] == option:
+        previous = state["decisions"][node["decision"]]
+        if previous["option"] == option and not any(state["assumptions"][aid]["refuted"]
+                                                     for aid in previous.get("assumptions", [])):
             return state
         _guard_dead_option(state, node_id, {"kind": "option", "option": option})
         _record(review_dir, analysis_id, "redecided", by, node=node_id, option=option,
