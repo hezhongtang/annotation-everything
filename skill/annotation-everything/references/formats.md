@@ -183,11 +183,15 @@ One line per paragraph.
 
 分析、批注与批次共用 `.notes.lock`。从批注发起分析会同锁搁住源批注并移出待领取快照；空批次记为 `void`，不再领取。结论草稿只存分析事件，确认后才写入 `notes.json`，不新增批注草稿状态。页面引用保留稳定 `key`，转出和确认时重定位；页面删除或键有歧义时标为 `orphan`。
 
-`GET /api/analysis` 返回摘要和队列计数，传 `?analysis=<标识>` 时追加完整状态和轮次上下文。审阅人写操作为 `/api/analysis/start|answer|submit|convert|confirm|release|activate|pause`，沿用 Host、Origin、JSON Content-Type、审阅身份及相关接收方校验。`start` 接受源 `noteId`，也接受没有源批注的 `focus` 和可选 `page`。服务用 `analysis` 能力标记声明支持，文件模式不提供分析。
+`GET /api/analysis` 返回摘要和队列计数，传 `?analysis=<标识>` 时追加完整状态、关联批注 `linkedNotes` 和轮次上下文。审阅人写操作为 `/api/analysis/start|answer|submit|convert|confirm|release|activate|pause|redecide|update-note|keep-note|delete-note`，沿用 Host、Origin、JSON Content-Type、审阅身份及相关接收方校验。`start` 接受源 `noteId`，也接受没有源批注的 `focus` 和可选 `page`。服务用 `analysis` 能力标记声明支持，文件模式不提供分析。
 
 轮次的 `line` 标明所属分析线。`assumptions` 保存带稳定标识的假设，`confirmed` 按线记录 `pending`、`confirmed` 或 `rejected`，`refuted` 与不认同分开；决策的 `assumptions` 记录直接依赖。`facts` 保存稳定标识、原文、出处及可选问题引用。`analysis-writeback --proposals` 接受旧问题列表，或含 `proposals`、`assumptions`、`facts` 的对象。新增、拆分、合并和作废均是待确认结构提议；确认前不改树，旧节点和决策保留。详细字段与处理约束见[分析操作指引](analysis.zh-CN.md)。
 
 自由文本回答保留原话并生成稳定选项；`park` 将问题放入搁置区；`verify` 记录查证请求，`allowExternal` 缺省为布尔值 `false`。暂停和切换分析只改变焦点，不增加基线版本，也不取消已交出或处理中的轮次。`notes.py suggest-analysis` 仅写入批注的 `analysisSuggestion`，不会创建分析。
+
+`protection` 给出本分析是否有领取中的轮次；节点的 `branch` 区分当前选择、断枝与作废。重裁或请求更新会作废本线未领取轮次，基线拒收也会作废原轮；有效原答带入同线重新出题，不重复创建已经确认的实体。已处理或作废轮次不能继续作答，领取中的合法作答不增加基线版本。
+
+从分析转出的批注用 `tracking` 控制是否跟踪依据。依据失效只联动未处理或「结论已变」搁住的批注；已领取/复核批次中的批注不移出，已处理状态不回改。`updateRequests` 保存请求，`updates` 保存 Agent 新文本草稿，轮次的 `U:` 条目确认后才改普通批注，并把旧文和旧依据追加到 `analysisHistory`。写回对象可带 `updates: [{noteId, text, node?}]`；拒绝新文本不会覆盖原文。
 
 JSON 与 Markdown 导出都不包含分析事件、问答、问题树或轮次队列。批注 JSON 可保留 `held` 及来源、依据引用，但不能据此恢复分析；JSON 仅备份批注与常驻技能，不是整份审阅归档，完整保留需备份审阅目录。Markdown 沿用旧文法，不保留分析关联和搁住原因，导入后按未处理批注解释。
 

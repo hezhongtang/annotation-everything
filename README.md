@@ -116,6 +116,10 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
 
 决策由系统根据回答产生。将结论转成批注时，先查看草稿，确认后才进入批注列表，源批注标为已处理并指向分析；新批注仍需显式交给 Agent 改稿。源批注的「分析中」搁住也可手动解除。分析本身不改报告。
 
+改选答案会保留原来的决策和断枝，改回时可恢复。转出的未处理批注若依据不再生效，会进入「搁住 · 结论已变」并移出未领取的改稿批次；依据恢复后回到未处理。也可请求 Agent 按新结论起草更新，确认后替换文本和依据并保留旧文；选择保留原文会停止跟踪，或直接删除该批注。已被领取的改稿批次不会中途抽走批注，已处理状态不会自动回退。
+
+Agent 领取期间，这项分析可继续作答，重裁、更新批注和结论转出等状态操作会被保护。基线不符的写回会被拒收，系统作废旧轮并重新请求出题，带入仍有效的回答。改稿勾选全量勾稽时，Agent 另列分析相关的四类待确认：结论已变的批注、依据失效的已处理批注、报告与当前结论的矛盾、不同分析结论间的矛盾。
+
 等待命令默认只接收改稿，需加 `--events analysis` 才接收分析轮次。Agent 用 `notes.py analysis --round N --json` 读上下文，用带基线版本的 `analysis-writeback` 写回。服务不支持分析时隐藏入口并提示升级；直接打开 HTML 的文件模式不提供分析。
 
 JSON 与 Markdown 导出都不包含分析问答、事件和问题树，JSON 不是整份审阅的完整备份。旧版工具导入「搁住」或旧页面显示该状态时，会把它当作未处理；旧服务的快照仍只收 `open`。升级后应重启服务，重新生成并刷新对照页。详见[格式说明](skill/annotation-everything/references/formats.md#分析数据)。
@@ -357,8 +361,10 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `serve.py check` | 运行服务安全自检 |
 | `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | 绑定接收 harness 与会话、查看身份与状态；Codex 桌面使用事件接收，其他 harness 可用 `--adapter wait`；显式交接用 `bind --replace`，处理中批次先收尾 |
 | `notes.py wait` / `claim` | 等待或领取任务；`--events analysis` 显式接收分析，默认不领取分析，也不能越过更早轮次。`--round N` 须带此开关，`--seq N` 只指批次，所有筛选均受全局队首约束 |
-| `notes.py analysis <审阅目录> --round N --json` / `analysis-writeback <审阅目录> --round N --base-rev R --proposals 文件` | 读取轮次上下文 / 写回 JSON 结构提议列表或含提议、假设和事实的对象；`-` 从标准输入读取，写回须匹配领取时基线 |
+| `notes.py analysis <审阅目录> --round N --json` / `analysis-writeback <审阅目录> --round N --base-rev R --proposals 文件` | 读取轮次上下文 / 写回 JSON 结构提议列表或含提议、假设、事实和批注更新的对象；`-` 从标准输入读取，写回须匹配领取时基线 |
 | `notes.py suggest-analysis <审阅目录> <批注标识> --reason 原因` | 给未处理批注加「建议展开分析」提示，由审阅人决定是否发起 |
+| `notes.py analysis-check <审阅目录> --json` | 只读各分析当前线的有效结论与待确认信息，没有活动轮次也可读取 |
+| `notes.py analysis-redecide <审阅目录> --analysis A --node N --option O` / `analysis-note <审阅目录> --analysis A --note-id N --action update\|keep\|delete` | 重裁答案 / 请求更新、保留原文或删除结论已变的批注；沿用保护与确认规则 |
 | `notes.py show` / `resolve` / `reopen` | 列出批注、标为已处理、重新打开。`show --locale` 选择阅读语言，优先于 `AE_LOCALE` 和审阅设置；`show --json` 仍导出原始值 |
 | `notes.py export` / `import` | 导出可再导入的批注摘要（Markdown 带版本与语言标记，或 JSON 结构化备份）／导入页面导出的 JSON 或 Markdown。`export --lang` 与 `show --locale` 同一套优先级，`--format json`、`--all`、`--page N`、`--out 文件` |
 | `notes.py done` / `review` / `diff` | 结束当前阶段、给出复核结论、按页查看初改改动了哪些地方；均可用 `--locale` 选择输出语言 |
