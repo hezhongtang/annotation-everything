@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import json
 import io
+import os
 import sys
 import tempfile
 import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skill/annotation-everything/scripts"))
@@ -32,6 +34,9 @@ class AnalysisLifecycleTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.d = Path(self.tmp.name)
+        self.env = patch.dict(os.environ, {"AE_HOME": str(self.d / "ledger")})
+        self.env.start()
+        self.addCleanup(self.env.stop)
 
     def start(self, text="合成材料中的结论是否成立？"):
         _, note = store.add(self.d, {"page": 1, "text": text})
@@ -155,6 +160,9 @@ class AnalysisLifecycleTests(unittest.TestCase):
         ctx = analysis.round_context(self.d, aid, seq)
         self.assertEqual([a["status"] for a in ctx["assumptions"]], ["confirmed", "rejected"])
         self.assertEqual(ctx["answers"]["A:a2"], {"kind": "reject"})
+        confirmed_item = next(i for i in ctx["answeredItems"] if i["key"] == "A:a1")
+        self.assertEqual(confirmed_item["status"], "confirmed")
+        self.assertIn("两期合并范围一致。（已确认）", notes_cli.analysis_context_text(ctx, "zh-CN"))
         old_ids = set(state["assumptions"])
         state = analysis.answer(self.d, aid, seq, "Q:n2", {"kind": "accept"})
         other_decision = state["nodes"]["n2"]["decision"]

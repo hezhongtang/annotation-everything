@@ -1623,6 +1623,9 @@
     "serve.life.structureChanged": "提议涉及的问题已变化，请刷新后重试。",
     "viewer.analysis.error.invalidInput": "回答或分析输入不合法，请核对后重试。",
     "cli.life.suggestNotOpen": "只能对未处理批注建议展开分析。",
-    "cli.life.noteMissing": "找不到这条批注，请重新读取批注列表。"
+    "cli.life.noteMissing": "找不到这条批注，请重新读取批注列表。",
+    "cli.life.structureItem": "  - [{item}] 结构提议：{text}（简称「{short}」；选项：{options}；推荐 {recommend}）",
+    "cli.life.questionItem": "  - [{item}] 问题「{short}」：{text}（选项：{options}；推荐 {recommend}）",
+    "cli.life.answerItem": "  - [{item}] {value}"
   }
 }

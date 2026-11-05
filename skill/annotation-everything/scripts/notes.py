@@ -1411,7 +1411,8 @@ def analysis_context_text(ctx: dict[str, Any], lang: str | None = None) -> str:
     all_items = {item["key"]: item for item in ctx["items"] + ctx.get("answeredItems", [])}
     for item in all_items.values():
         if item["type"] == "assumption":
-            out.append(t("cli.life.assumptionItem", text=item["text"], status="pending"))
+            out.append(t("cli.life.assumptionItem", text=item["text"],
+                         status=t("viewer.life.status." + item.get("status", "pending"))))
             continue
         if item["type"] == "structure" and item.get("op", "add") != "add":
             out.append(t("cli.life.structureChange", action=t("cli.life.structure." + item["op"]),
@@ -1419,25 +1420,26 @@ def analysis_context_text(ctx: dict[str, Any], lang: str | None = None) -> str:
             if item.get("text"):
                 out.append(item["text"])
             for replacement in item.get("replacements", []):
-                out.append(t("cli.analysis.structureItem", key=replacement["key"], text=replacement["text"],
+                out.append(t("cli.life.structureItem", item=replacement["key"], text=replacement["text"],
                              short=replacement["short"], recommend=replacement["recommend"],
                              options=" / ".join(o["label"] for o in replacement["options"])))
             continue
         options = " / ".join(f'{o["id"]}：{o["label"]}' for o in item["options"])
         if item["type"] == "structure":
-            out.append(t("cli.analysis.structureItem", key=item["key"], text=item["text"],
+            out.append(t("cli.life.structureItem", item=item["key"], text=item["text"],
                          short=item["short"], options=options, recommend=item["recommend"]))
         else:
-            out.append(t("cli.analysis.questionItem", key=item["key"], short=item["short"],
+            out.append(t("cli.life.questionItem", item=item["key"], short=item["short"],
                          text=item["text"], options=options, recommend=item["recommend"]))
     if ctx["answers"]:
         out.append(t("cli.analysis.answers"))
         for key, value in ctx["answers"].items():
-            out.append(t("cli.analysis.answerItem", key=key, value=json.dumps(value, ensure_ascii=False)))
+            out.append(t("cli.life.answerItem", item=key, value=json.dumps(value, ensure_ascii=False)))
     if ctx.get("assumptions"):
         out.append(t("cli.life.assumptions"))
         for assumption in ctx["assumptions"]:
-            out.append(t("cli.life.assumptionItem", text=assumption["text"], status=assumption["status"]))
+            out.append(t("cli.life.assumptionItem", text=assumption["text"],
+                         status=t("viewer.life.status." + assumption["status"])))
     if ctx.get("facts"):
         out.append(t("cli.life.facts"))
         for fact in ctx["facts"]:

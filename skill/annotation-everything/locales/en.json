@@ -1741,6 +1741,9 @@
     "serve.life.structureChanged": "The questions in this proposal have changed. Refresh and try again.",
     "viewer.analysis.error.invalidInput": "The answer or analysis input is invalid. Check it and try again.",
     "cli.life.suggestNotOpen": "Analysis can only be suggested for an open annotation.",
-    "cli.life.noteMissing": "This annotation could not be found. Read the annotation list again."
+    "cli.life.noteMissing": "This annotation could not be found. Read the annotation list again.",
+    "cli.life.structureItem": "  - [{item}] structure proposal: {text} (short name \"{short}\"; options: {options}; recommended {recommend})",
+    "cli.life.questionItem": "  - [{item}] question \"{short}\": {text} (options: {options}; recommended {recommend})",
+    "cli.life.answerItem": "  - [{item}] {value}"
   }
 }

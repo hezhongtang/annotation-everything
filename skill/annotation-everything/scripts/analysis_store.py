@@ -897,7 +897,7 @@ def round_context(review_dir: Path, analysis_id: str, round_no: int) -> dict[str
     round_ = _round(state, round_no)
     decisions = [{"id": d["id"], "node": d["node"], "nodeShort": state["nodes"][d["node"]]["short"],
                   "question": state["nodes"][d["node"]]["text"], "option": d["option"], "label": d["label"],
-                  "round": d["round"], "line": d["line"]}
+                  "round": d["round"], "line": d["line"], "assumptions": d.get("assumptions", [])}
                  for nid, node in sorted(state["nodes"].items(), key=lambda kv: int(kv[0][1:]))
                  if node.get("decision") and _is_active(state, nid)
                  for d in [state["decisions"][node["decision"]]]]
@@ -920,7 +920,8 @@ def round_context(review_dir: Path, analysis_id: str, round_no: int) -> dict[str
         if item["type"] == "assumption":
             assumption = state["assumptions"][item["assumption"]]
             items.append({"key": item["key"], "type": "assumption", "assumption": assumption["id"],
-                          "text": assumption["text"], "decisions": assumption["decisions"]})
+                          "text": assumption["text"], "decisions": assumption["decisions"],
+                          "status": assumption["confirmed"].get(round_.get("line", LINE_MAIN), "pending")})
         elif item["type"] == "structure":
             p = item["proposal"]
             items.append({**p, "key": item["key"], "type": "structure", "short": p.get("short", ""),
