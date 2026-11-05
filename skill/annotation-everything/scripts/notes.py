@@ -1311,15 +1311,15 @@ def claim_next(d: Path, *, by: str, stage: str = "any", seq: int | None = None,
 
     seq 只指批次，round_no 只指分析轮次。精确领取不得跳过更早交出的项。
     锁外选择目标；锁内重新校验身份、忙闲和队首，然后由对应存储领取。"""
-    want = store.CLAIM_STATUSES[stage]
-
     def next_waiting():
-        batches = [item for item in store.handoff_load(d)["items"] if item.get("status") in want]
+        # 先决定全局队首；阶段与事件参数只能限制能否领取，不能改变排队顺序。
+        batches = [item for item in store.handoff_load(d)["items"]
+                   if item.get("status") in store.CLAIM_STATUSES["any"]]
         batch = None
         for candidate in batches:
             if batch is None or not _submitted_before(batch, candidate):
                 batch = candidate
-        rounds = analysis_store.queue(d) if include_analysis else []
+        rounds = analysis_store.queue(d)
         if batch is not None and (not rounds or _submitted_before(batch, rounds[0])):
             return "handoff", int(batch["seq"])
         return ("analysis", rounds[0]["seq"]) if rounds else None
@@ -1337,7 +1337,8 @@ def claim_next(d: Path, *, by: str, stage: str = "any", seq: int | None = None,
         if current != selected or (requested is not None and current is not None and requested != current):
             raise store.HandoffError("有更早交出的项，请先处理后重试", code="queue-order")
 
-    if selected is None or (requested is not None and requested != selected):
+    if (selected is None or (requested is not None and requested != selected)
+            or (selected[0] == "analysis" and not include_analysis)):
         with store.locked(d):
             check_available()
         return "", None

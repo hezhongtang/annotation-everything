@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shlex
 import socket
 import struct
 import subprocess
@@ -267,6 +268,42 @@ class AnalysisAgentTests(unittest.TestCase):
             results = [future.result(timeout=5) for future in futures]
         self.assertCountEqual(results, ["handoff", "agent-busy"])
         self.assertEqual(len(analysis_store.queue(self.review)), 1)
+
+    def test_plain_claim_and_delivered_batch_command_cannot_skip_an_earlier_round(self):
+        """普通命令和真实桌面提示里的批次命令都不能越过更早交出的分析。"""
+        wakeup.bind(self.review, THREAD, self.desktop.path)
+        state, _round_no = analysis_store.start(self.review, self.add_note()["id"])
+        self.add_note(text="后交的改稿意见")
+        store.handoff_submit(self.review)
+        wakeup.deliver(self.review, "handoff", 1)
+        with redirect_stdout(io.StringIO()) as output:
+            code = notes_cli.main(["claim", str(self.review)])
+        self.assertEqual(code, 3, output.getvalue())
+        prefix = "Then claim this exact batch: "
+        line = next(line for line in self.desktop.prompt().splitlines() if line.startswith(prefix))
+        command = shlex.split(line[len(prefix):])
+        received = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        self.assertEqual(received.returncode, 3, received.stdout + received.stderr)
+        self.assertFalse(json.loads(received.stdout)["claimed"])
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "pending")
+        self.assertEqual(analysis_store.load(self.review, state["id"])["rounds"][0]["status"], "submitted")
+
+    def test_stage_filter_cannot_skip_an_earlier_batch(self):
+        """复核再次交出后排在新批次后面，--stage review 不能越过新批次。"""
+        self.add_note()
+        store.handoff_submit(self.review, target="review")
+        store.handoff_claim(self.review)
+        store.handoff_done(self.review, seq=1, mode="draft")
+        self.add_note(text="第二批新意见")
+        store.handoff_submit(self.review)
+        store.handoff_request_review(self.review, 1)
+        with redirect_stdout(io.StringIO()) as output:
+            code = notes_cli.main(["claim", str(self.review), "--events", "analysis", "--stage", "review"])
+        self.assertEqual(code, 3, output.getvalue())
+        self.assertEqual([item["status"] for item in store.handoff_load(self.review)["items"]],
+                         ["review", "pending"])
+        received = json.loads(_cli_out("claim", str(self.review), "--events", "analysis"))
+        self.assertEqual((received["seq"], received["stage"]), (2, "draft"))
 
     def test_claim_refuses_a_second_item_while_a_batch_is_claimed(self):
         """已有初改批次时，无论另一批还是分析轮次都不能再领。"""
