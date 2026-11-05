@@ -31,6 +31,7 @@ import e2e_scenarios as reg  # noqa: E402
 # 新增场景时在注册表登记后同步更新这里，保持全量模式可解释。
 FULL_ORDER = (
     "analysis-smoke",
+    "analysis-ui",
     "console-layout",
     "focus-mode",
     "receiver-binding",

@@ -30,8 +30,14 @@ class Scenario:
 SCENARIOS: list[Scenario] = [
     Scenario(
         id="analysis-smoke",
-        title="分析问答闭环：从批注或页发起、原话回答与搁置、查证事实及假设确认、独立交出轮次、结论草稿确认和暂停继续",
+        title="分析问答闭环：从批注或页发起、引用页浮层、原话回答与搁置、查证事实及假设确认、独立交出轮次、结论草稿确认和暂停继续",
         fixture="fixtures/sample 合成材料、合成问答与 notes.py 真实命令；不读取真实业务材料",
+        isolation="独立临时审阅目录、端口、浏览器上下文；服务用后回收，沿用 host-state 锁",
+    ),
+    Scenario(
+        id="analysis-ui",
+        title="分析界面：改稿与分析提交按钮的中英文案、可见内容无内部标识、旧服务隐藏分析入口并提示升级",
+        fixture="fixtures/sample 合成材料、合成问题/假设/死局与 notes.py 真实命令；仅拦截合成服务的 analysis 能力声明",
         isolation="独立临时审阅目录、端口、浏览器上下文；服务用后回收，沿用 host-state 锁",
     ),
     Scenario(

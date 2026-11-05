@@ -4786,6 +4786,22 @@ def analysis_smoke_checks(browser, tmp: Path):
         ok(disk_notes(review)[0]["status"] == "held", "源批注搁住，不再属于待改稿")
         page.select_option("#localePick", "en")
         ok(page.inner_text("#handBtn") == "Hand to the agent for analysis", "分析模式主按钮按英文显示")
+        selection = page.evaluate("({page:i,line:analysisState.line})")
+        card = page.locator("#analysisBody [data-analysis-page]").first
+        referenced_page = int(card.get_attribute("data-analysis-page"))
+        expected_page = page.evaluate("""number=>{const copy=document.createElement('div');
+            copy.innerHTML=SECT[P.findIndex(page=>page.n===number)];return copy.innerHTML}""", referenced_page)
+        card.click()
+        page.wait_for_selector("#analysisPageDialog.on")
+        preview = page.locator("#analysisPageHost").evaluate("host=>host.shadowRoot.getElementById('ae-stage').innerHTML")
+        ok(preview == expected_page and page.locator("#analysisPageDialog iframe").count() == 0,
+           "引用页浮层复用正确的内嵌报告页，不创建 iframe")
+        ok(page.evaluate("({page:i,line:analysisState.line})") == selection,
+           "预览引用页不改变报告当前页或分析线")
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#analysisPageDialog.on", state="hidden")
+        ok(page.url.endswith("#analysis") and page.locator("#analysisMain").is_visible(),
+           "Esc 只关闭引用页浮层并留在本轮分析")
 
         opening = cli("claim", str(review), "--events", "analysis", "--round", "1", "--by", "Synthetic")
         proposal = [{"key": "caliber", "text": "采用年度还是季度口径？", "short": "核验口径", "recommend": "annual",
@@ -4884,10 +4900,119 @@ def analysis_smoke_checks(browser, tmp: Path):
         stop(server)
 
 
+def analysis_ui_checks(browser, tmp: Path):
+    """两个模式的提交文案、分析标识隐藏与旧服务退化；只用合成内容。"""
+    review = tmp / "analysis-ui"
+    build(review, name="合成分析界面核对", locale="en")
+    server = start_server(review, free_port())
+    port = json.loads((review / ".annotation-server.json").read_text())["port"]
+    context = browser.new_context(viewport={"width": 1440, "height": 1000}, locale="en-US")
+
+    def cli(*args, stdin=None):
+        result = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *args],
+                                input=stdin, capture_output=True, text=True, timeout=15)
+        if result.returncode:
+            raise RuntimeError(result.stderr + result.stdout)
+        return json.loads(result.stdout)
+
+    def without_analysis(route):
+        response = route.fetch()
+        data = response.json()
+        data["features"] = [feature for feature in data.get("features", []) if feature != "analysis"]
+        route.fulfill(response=response, json=data)
+
+    try:
+        page = context.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server")
+        page.wait_for_function("analysisSupported")
+        add_note(page, "合成待改稿批注，保留在批注模式。")
+        for locale, label in (("en", "Hand to the agent for revision"), ("zh-CN", "交给 Agent 改稿")):
+            page.select_option("#localePick", locale)
+            ok(page.inner_text("#handBtn") == label, f"{locale} 批注模式主按钮明确用于改稿")
+            page.click("#handBtn")
+            page.wait_for_selector("#hand.on")
+            ok(page.inner_text("#doHandLabel") == label, f"{locale} 批注提交窗口保留改稿文案")
+            page.keyboard.press("Escape")
+
+        page.click("#pageAnalysisStart")
+        page.fill("#analysisStartText", "合成增长判断采用哪个口径？")
+        page.click("#analysisStartCreate")
+        page.wait_for_function("analysisState?.focus==='合成增长判断采用哪个口径？'")
+        opening_seq = page.evaluate("analysisCurrentRound(analysisState).seq")
+        opening = cli("claim", str(review), "--events", "analysis", "--round", str(opening_seq), "--by", "Synthetic")
+        proposal = [{"key": "private-ui-question", "text": "采用年度还是季度口径？", "short": "合成口径问题", "recommend": "annual",
+                     "options": [{"id": "annual", "label": "年度"}, {"id": "quarter", "label": "季度"}]}]
+        cli("analysis-writeback", str(review), "--round", str(opening_seq), "--base-rev", str(opening["baseRev"]),
+            "--proposals", "-", stdin=json.dumps(proposal, ensure_ascii=False))
+        page.wait_for_selector('[data-key="S:private-ui-question"][data-kind="accept"]')
+        page.locator('[data-key="S:private-ui-question"][data-kind="accept"]').click()
+        question = page.locator('#analysisBody [data-analysis-item^="Q:"]').first
+        question.wait_for()
+        question_key = question.get_attribute("data-analysis-item")
+        node_id = question_key[2:]
+        question.locator('[data-kind="accept"]').click()
+        page.wait_for_function("id=>!!analysisState?.nodes?.[id]?.decision", arg=node_id)
+        round_seq = page.evaluate("analysisCurrentRound(analysisState).seq")
+        decision = page.evaluate("id=>analysisState.nodes[id].decision", node_id)
+        page.click("#handBtn")
+        page.wait_for_function("analysisCurrentRound(analysisState)?.status==='submitted'")
+        claimed = cli("claim", str(review), "--events", "analysis", "--round", str(round_seq), "--by", "Synthetic")
+        payload = {"proposals": [], "assumptions": [{"key": "private-ui-assumption", "text": "合成两期统计范围一致。", "decisions": [decision]}]}
+        cli("analysis-writeback", str(review), "--round", str(round_seq), "--base-rev", str(claimed["baseRev"]),
+            "--proposals", "-", stdin=json.dumps(payload, ensure_ascii=False))
+        assumption_question = page.locator('#analysisBody [data-analysis-item^="A:"]').first
+        assumption_question.wait_for()
+        assumption_id = assumption_question.get_attribute("data-analysis-item")[2:]
+        assumption_question.locator('[data-kind="accept"]').click()
+        page.wait_for_function("id=>analysisState?.assumptions?.[id]?.confirmed?.main==='confirmed'", arg=assumption_id)
+        round_seq = page.evaluate("analysisCurrentRound(analysisState).seq")
+        page.click("#handBtn")
+        page.wait_for_function("analysisCurrentRound(analysisState)?.status==='submitted'")
+        claimed = cli("claim", str(review), "--events", "analysis", "--round", str(round_seq), "--by", "Synthetic")
+        payload = {"proposals": [], "deadEnds": [{"key": "private-ui-dead-end", "kind": "option", "node": node_id, "option": "quarter",
+                                                 "reason": "合成季度口径缺少可比范围。", "assumptions": [assumption_id]}]}
+        cli("analysis-writeback", str(review), "--round", str(round_seq), "--base-rev", str(claimed["baseRev"]),
+            "--proposals", "-", stdin=json.dumps(payload, ensure_ascii=False))
+        page.wait_for_selector('#analysisBody [data-key^="D:"][data-kind="accept"]')
+        page.click('[data-analysis-tab="assumptions"]')
+        for locale, analysis_label, revision_label in (("en", "Hand to the agent for analysis", "Hand to the agent for revision"),
+                                                        ("zh-CN", "交给 Agent 分析", "交给 Agent 改稿")):
+            page.select_option("#localePick", locale)
+            ok(page.inner_text("#handBtn") == analysis_label, f"{locale} 分析模式主按钮明确用于分析")
+            visible = " ".join(page.inner_text(selector) for selector in ("#analysisSidebar", "#analysisMain", "#analysisPanel"))
+            private_ids = page.evaluate("""() => [analysisState.id,...Object.keys(analysisState.nodes),
+                ...Object.keys(analysisState.decisions),...Object.keys(analysisState.assumptions),...Object.keys(analysisState.deadEnds),
+                ...analysisState.rounds.flatMap(round=>(round.items||[]).map(item=>item.key)),
+                'private-ui-question','private-ui-assumption','private-ui-dead-end']""")
+            ok(all(identifier not in visible for identifier in private_ids), f"{locale} 分析可见内容只显示原话和自然名称")
+            page.click("#annotationMode")
+            page.wait_for_function("!document.body.classList.contains('analysis-mode')")
+            ok(page.inner_text("#handBtn") == revision_label, f"{locale} 回到批注恢复改稿文案")
+            page.click("#analysisMode")
+            page.wait_for_selector("#analysisMain:not([hidden])")
+
+        page.route("**/api/notes", without_analysis)
+        page.reload()
+        wait_mode(page, "server")
+        page.wait_for_function("analysisChecked&&!analysisSupported")
+        ok(page.locator("#modeSwitch").is_hidden() and page.locator("#pageAnalysisStart").is_hidden()
+           and page.locator("#analysisMain").is_hidden(), "旧服务隐藏分析切换与发起入口")
+        ok("本地服务不支持分析" in page.inner_text("#toast") and page.inner_text("#handBtn") == "交给 Agent 改稿",
+           "旧服务安全退回批注模式并给出可读的升级提示")
+        add_note(page, "合成旧服务批注仍可保存。")
+        ok(wait_dom(page, "() => notes.some(note=>note.text==='合成旧服务批注仍可保存。')&&!pend.get().length", 8)
+           and len(disk_notes(review)) == 2, "不支持分析时原批注流程仍可使用")
+    finally:
+        context.close()
+        stop(server)
+
+
 SCENARIO_RUNNERS = {
     "console-layout": console_layout_checks,
     "focus-mode": focus_mode_checks,
     "analysis-smoke": analysis_smoke_checks,
+    "analysis-ui": analysis_ui_checks,
     "receiver-binding": receiver_binding_checks,
     "generated-draft-loop": generated_draft_checks,
     "report-verdict-loop": report_verdict_checks,
