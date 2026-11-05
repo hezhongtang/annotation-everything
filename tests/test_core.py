@@ -2661,10 +2661,11 @@ class LedgerTests(unittest.TestCase):
         def start(*extra):
             p = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), r["reviewId"][:8], "--no-open", *extra],
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-            sf = d / serve.STATUS_FILE
+            self.addCleanup(stop, p)
             for _ in range(80):
-                if sf.exists() and json.loads(sf.read_text()).get("pid") == p.pid:
-                    return p, json.loads(sf.read_text())["port"]
+                info = serve.read_status(d) or {}
+                if info.get("pid") == p.pid:
+                    return p, info["port"]
                 if p.poll() is not None:
                     break
                 time.sleep(0.1)
