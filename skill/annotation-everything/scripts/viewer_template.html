@@ -353,6 +353,8 @@ body.analysis-mode #panes,body.analysis-mode #bottomPanel>.panel-tabs,body.analy
 #analysisMeta{color:var(--ae-mut);font-size:var(--ae-small);margin:var(--ae-gap-6) 0 0}
 #analysisError{color:var(--ae-warning);font-size:var(--ae-text);margin:0;padding:0 var(--ae-gap-24);white-space:pre-wrap}
 #analysisError:empty{display:none}
+#analysisChanges{margin:var(--ae-space) var(--ae-gap-24);padding:var(--ae-space) var(--ae-space-lg);border-left:3px solid var(--ae-accent-line);font-size:var(--ae-small);line-height:1.7;white-space:pre-wrap}
+#analysisChanges:empty{display:none}#analysisChanges h3{font-size:var(--ae-small);margin:0 0 var(--ae-gap-4)}#analysisChanges p{margin:0}
 #analysisBody{overflow:auto;min-height:0;flex:1;padding:var(--ae-space-lg) var(--ae-gap-24);line-height:1.7}
 .analysis-question,.analysis-decision,.analysis-draft{border-bottom:1px solid var(--ae-line);padding:var(--ae-space-lg) 0;max-width:900px;overflow-wrap:anywhere}
 .analysis-question h3,.analysis-decision h3,.analysis-draft h3,.analysis-answers h3{font-size:var(--ae-title);margin:0 0 var(--ae-space)}
@@ -365,6 +367,11 @@ body.analysis-mode #panes,body.analysis-mode #bottomPanel>.panel-tabs,body.analy
 .analysis-source summary{cursor:pointer}.analysis-source blockquote{white-space:pre-wrap;color:var(--ae-ink)}
 .analysis-protection{border-left:3px solid var(--ae-accent-line);padding:var(--ae-space);font-size:var(--ae-small);color:var(--ae-mut)}
 .analysis-detached{border-left:1px dashed var(--ae-line);padding-left:var(--ae-space-lg);color:var(--ae-mut)}
+.analysis-needs-review,.analysis-reopened{border-left:3px solid var(--ae-warning);padding-left:var(--ae-space);color:var(--ae-ink)}
+.analysis-dead-end blockquote{white-space:pre-wrap;margin:var(--ae-space) 0}.analysis-refute{margin:var(--ae-space) 0}
+.analysis-page-cards{display:flex;gap:var(--ae-space);flex-wrap:wrap;margin:var(--ae-space) 0}.analysis-page-card{max-width:360px;text-align:left;white-space:normal}
+#analysisPageDialog .dlg{width:min(1140px,calc(100vw - 32px));max-width:none}#analysisPageWrap{height:min(72vh,720px);width:100%;overflow:hidden;background:var(--ae-stage)}
+#analysisPageHost{width:100%;height:100%}#analysisPageDialog .pad{padding:var(--ae-space)}
 .analysis-redecide{margin-top:var(--ae-space)}.analysis-redecide summary{cursor:pointer;font-size:var(--ae-small)}
 .analysis-update blockquote,.analysis-linked-note blockquote{margin:var(--ae-space) 0;padding:var(--ae-space) var(--ae-space-lg);border-left:2px solid var(--ae-line);white-space:pre-wrap;overflow-wrap:anywhere}
 .analysis-update h4{font-size:var(--ae-text);margin:var(--ae-space) 0}.analysis-note-history{margin-top:var(--ae-space);font-size:var(--ae-small)}.analysis-note-history summary{cursor:pointer}
@@ -442,7 +449,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
     <nav id="secs"></nav><div id="pageTree"></div>
   </aside>
   <section id="workspace">
-    <section id="analysisMain" hidden><div class="analysis-heading"><h2 id="analysisFocus"></h2><p id="analysisMeta"></p><div class="analysis-actions" id="analysisManage"></div></div><p id="analysisError" role="alert"></p><div id="analysisBody"></div></section>
+    <section id="analysisMain" hidden><div class="analysis-heading"><h2 id="analysisFocus"></h2><p id="analysisMeta"></p><div class="analysis-actions" id="analysisManage"></div></div><p id="analysisError" role="alert"></p><section id="analysisChanges" role="status" aria-live="polite"></section><div id="analysisBody"></div></section>
     <div id="panes">
       <section id="reportPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.report"></span><button id="pageAnalysisStart" hidden data-msg="viewer.life.startPage"></button></div><div class="slide" id="slide"><div id="host"></div></div></section>
       <section id="scriptPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.script"></span><button  class="icon-button" data-layout-toggle="script" data-title="viewer.layout.script" data-aria="viewer.layout.script" data-p-key="]" aria-controls="scriptPane"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button></div><div class="script" id="script"><div id="pageScript"></div></div></section>
@@ -485,6 +492,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
 </footer>
 <div id="skillList" role="listbox" data-aria="viewer.skill.candidates"></div>
 <div class="modal" id="analysisDraftDialog"><div class="dlg"><div class="bar"><h2 data-msg="viewer.analysis.draft"></h2><button class="primary" id="analysisDraftCreate" data-msg="viewer.analysis.createDraft"></button><button data-close data-msg="viewer.cancel"></button></div><div class="pad"><p class="hint" data-msg="viewer.analysis.draftHint"></p><textarea id="analysisDraftText" data-aria="viewer.analysis.draft"></textarea></div></div></div>
+<div class="modal" id="analysisPageDialog" role="dialog" aria-modal="true" aria-labelledby="analysisPageTitle"><div class="dlg"><div class="bar"><h2 id="analysisPageTitle" data-msg="viewer.analysis.resolution.pagePreview"></h2><button data-close data-msg="viewer.close"></button></div><div class="pad"><p class="hint" data-msg="viewer.analysis.resolution.pagePreviewHint"></p><div id="analysisPageWrap"><div id="analysisPageHost"></div></div></div></div></div>
 <div class="modal" id="analysisStartDialog"><div class="dlg"><div class="bar"><h2 data-msg="viewer.life.newTitle"></h2><button class="primary" id="analysisStartCreate" data-msg="viewer.life.new"></button><button data-close data-msg="viewer.cancel"></button></div><div class="pad"><label for="analysisStartText" data-msg="viewer.life.focus"></label><textarea id="analysisStartText" data-ph="viewer.life.focusPlaceholder"></textarea><label for="analysisStartPage" data-msg="viewer.life.page"></label><select id="analysisStartPage"></select></div></div></div>
 <div class="modal" id="allnotes"><div class="dlg"><div class="bar"><h2 data-msg="viewer.allTitle">全部批注</h2>
 <button class="primary" id="copyAll" data-msg="export.copyAll">复制全部（粘贴给 Agent）</button><button id="dlAll" data-msg="export.download">下载 Markdown</button><button id="dlJson" data-msg="export.downloadJson">下载 JSON</button><select id="expLang" data-aria="export.langLabel" aria-label="导出语言"><option value="auto" data-msg="export.langAuto">跟随界面</option><option value="zh-CN">中文</option><option value="en">English</option></select><button id="openImp" data-msg="import.open">导入…</button><button id="dlFailed" style="display:none" data-title="viewer.recovery.failedTitle" data-msg="viewer.recovery.downloadFailed">下载未能保存的改动</button><button id="clearAll" data-msg="viewer.recovery.clear">清空</button><button data-close data-msg="viewer.close">关闭</button></div>
@@ -887,7 +895,7 @@ async function api(method,path,body){
     const message=key?tMsg("serve.err."+key):r.status>=500
       ?tMsg("viewer.error.unknown",{status:r.status,code:j.code||"unknown"})
       :detail||tMsg("viewer.error.rejected",{status:r.status,code:j.code||"unknown"});
-    throw Object.assign(new Error(message),{status:r.status,code:j.code})}
+    throw Object.assign(new Error(message),{status:r.status,code:j.code,params:j.params&&typeof j.params==="object"?j.params:{}})}
   if(!ours)throw Object.assign(new Error(tMsg("viewer.error.format")),{status:0,mismatch:true});
   return j}
 // 只认同一份审阅的服务：端口被别的审阅目录或别的程序占用时，不读它、不往里写
@@ -2118,8 +2126,60 @@ document.addEventListener("keydown",e=>{
   else if(e.key==="Escape"){document.querySelectorAll(".modal").forEach(m=>m.classList.remove("on"));if(markMode)setMarkMode(false);closePinPop();closeStyleMenu()}});
 // ---------- Analysis view helpers ----------
 function analysisCurrentRound(state){return state&&state.status!=="closed"?(state.rounds||[]).slice().reverse().find(r=>(!r.line||r.line===(state.line||"main"))&&["open","submitted","claimed"].includes(r.status))||null:null}
+function analysisDeadEndTarget(state,end){
+  if(end.kind==="line")return analysisLineName(state.lines&&state.lines[end.targetLine]?state:{lines:{[end.targetLine]:{ordinal:end.targetOrdinal}}},end.targetLine);
+  const node=state.nodes&&state.nodes[end.node]||Object.values(state.lines||{}).map(line=>line.nodes&&line.nodes[end.node]).find(Boolean)||{};
+  return tMsg("viewer.analysis.resolution.optionTarget",{question:end.targetText||node.short||node.text||tMsg("viewer.analysis.question"),answer:end.optionLabel||node.options&&node.options[end.option]||""})
+}
+function analysisDeadEndHtml(state,end,round=null,item=null){
+  const texts=end.assumptionTexts||(end.assumptions||[]).map(id=>state.assumptions&&state.assumptions[id]&&state.assumptions[id].text||"").filter(Boolean);
+  const disabled=analysisBusy||!round||!["open","submitted","claimed"].includes(round.status)?" disabled":"";
+  const actions=item?`<div class="analysis-actions"><button data-analysis-act="answer" data-key="${escH(item.key)}" data-kind="accept"${disabled}>${tMsg("viewer.analysis.resolution.confirmDeadEnd")}</button><button data-analysis-act="answer" data-key="${escH(item.key)}" data-kind="reject"${disabled}>${tMsg("viewer.life.reject")}</button></div>`:"";
+  return `<article class="analysis-question analysis-dead-end"${item?` data-analysis-item="${escH(item.key)}"`:""}><p class="analysis-kind">${tMsg("viewer.analysis.resolution.deadEnd")} · ${tMsg("viewer.analysis.resolution.deadStatus."+(end.status||"pending"))}</p><h3>${escH(analysisDeadEndTarget(state,end))}</h3><blockquote>${escH(end.reason||"")}</blockquote><p class="hint">${escH(tMsg(texts.length?"viewer.analysis.resolution.dependsOn":"viewer.analysis.resolution.noDependencies",{assumptions:texts.join(tMsg("viewer.life.listSeparator"))}))}</p>${actions}</article>`
+}
+function analysisPageReferences(state){
+  const pages=typeof P!=="undefined"?P:[],seen=new Set(),out=[];
+  for(const ref of [state.sourceCopy||{},...(state.linkedNotes||[])]){
+    if(!ref.key&&!Number.isInteger(ref.page))continue;
+    const matches=ref.key?pages.filter(page=>page.key===ref.key):pages.filter(page=>page.n===ref.page);
+    const page=matches.length===1?matches[0]:null,key=page?"page:"+page.n:ref.key?"key:"+ref.key:"page:"+ref.page;
+    if(seen.has(key))continue;seen.add(key);out.push({page,ref})
+  }
+  return out
+}
+function analysisPageCardsHtml(state){
+  const cards=analysisPageReferences(state).map(({page,ref})=>page?`<button class="analysis-page-card" data-analysis-page="${page.n}">${escH(tMsg("viewer.analysis.resolution.pageCard",{page:page.n,title:typeof unH==="function"?unH(page.title||""):page.title||""}))}</button>`:`<span class="analysis-page-card hint">${tMsg("viewer.analysis.resolution.pageUnavailable")}</span>`).join("");
+  return cards?`<div class="analysis-page-cards">${cards}</div>`:""
+}
+function analysisChangeData(op,before,after,body={}){
+  before=before||{};after=after||before;
+  const node=before.nodes&&before.nodes[body.node||String(body.key||"").slice(2)]||{},decision=after.decisions&&after.nodes&&after.nodes[body.node]&&after.decisions[after.nodes[body.node].decision];
+  const params={focus:after.focus||before.focus||"",question:node.short||node.text||"",answer:decision&&decision.label||node.options&&node.options[body.option]||"",line:analysisLineName(after,body.line||after.line||"main")};
+  let name=op;
+  if(op==="refute"){params.assumption=before.assumptions&&before.assumptions[body.assumption]&&before.assumptions[body.assumption].text||"";name=before.line!==after.line?"refuteFork":"refuteOnly"}
+  if(op==="seal"){const checkpoint=(after.checkpoints||[]).find(c=>c.id===body.checkpoint)||(after.checkpoints||[]).slice(-1)[0];params.checkpoint=checkpoint?analysisCheckpointName(checkpoint):tMsg("viewer.analysis.history.currentCheckpoint")}
+  if(op==="submit"&&(before.rounds||[]).some(round=>round.seq===body.round&&round.status==="submitted"))name="submitAgain";
+  if(op==="confirm"&&before.sourceState!=="resolved"&&after.sourceState==="resolved")name="confirmSource";
+  if(op==="answer"){
+    const value=body.value||{},round=(before.rounds||[]).find(round=>round.seq===body.round)||analysisCurrentRound(before)||{proposals:[]};
+    params.answer=analysisAnswerLabel(before,round,body.key||"",value);
+    name=String(body.key||"").startsWith("D:")?value.kind==="accept"?"deadAccepted":"deadRejected":String(body.key||"").startsWith("U:")?value.kind==="accept"?"updateAccepted":"updateRejected":String(body.key||"").startsWith("A:")?"assumptionAnswered":String(body.key||"").startsWith("S:")?"structureAnswered":value.kind==="park"?"park":value.kind==="verify"?value.allowExternal===true?"verifyExternal":"verifyLocal":"answered"
+  }
+  const oldNotes=new Map((before.linkedNotes||[]).map(note=>[note.id,note.status]));
+  const held=(after.linkedNotes||[]).filter(note=>note.status==="held"&&note.hold==="结论已变"&&oldNotes.get(note.id)==="open").length;
+  const restored=(after.linkedNotes||[]).filter(note=>note.status==="open"&&oldNotes.get(note.id)==="held").length;
+  return {analysis:after.id,key:"viewer.analysis.resolution.change."+name,params,held,restored}
+}
+function analysisChangeText(change){return tMsg(change.key,change.params)+(change.held||change.restored?" "+tMsg("viewer.analysis.resolution.change.effects",{held:change.held,restored:change.restored}):"")}
+function analysisChangeHtml(state){const change=typeof analysisLastChange!=="undefined"?analysisLastChange:null;return change&&state&&change.analysis===state.id?`<h3>${tMsg("viewer.analysis.resolution.changes")}</h3><p>${escH(analysisChangeText(change))}</p>`:""}
 function analysisLocked(state){return !!state&&(state.protection?state.protection.locked===true:(state.rounds||[]).some(r=>r.status==="claimed"))}
-function analysisOperationProtected(op){return ["redecide","update-note","keep-note","delete-note","convert","confirm","release","seal","fork","switch-line","close"].includes(op)}
+function analysisOperationProtected(op){return ["redecide","update-note","keep-note","delete-note","convert","confirm","release","seal","fork","switch-line","close","refute"].includes(op)}
+function analysisAssumptionsHtml(state){
+  const disabled=analysisBusy||analysisLocked(state)||state.status==="closed"||analysisHistoryFor(state)?" disabled":"";
+  const assumptions=Object.entries(state.assumptions||{}).map(([id,a])=>`<li><p>${escH(a.text)} <span class="chip">${tMsg("viewer.life.status."+(a.refuted?"refuted":a.confirmed&&a.confirmed[state.line]||"pending"))}</span></p>${!a.refuted?`<button class="analysis-refute" data-analysis-refute="${escH(id)}"${disabled}>${tMsg("viewer.analysis.resolution.refute")}</button>`:""}</li>`).join("")||`<li class="empty">${tMsg("viewer.life.noAssumptions")}</li>`;
+  const ends=Object.values(state.deadEnds||{});
+  return assumptions+(ends.length?`<li><h3>${tMsg("viewer.analysis.resolution.deadEnds")}</h3>${ends.map(end=>analysisDeadEndHtml(state,end)).join("")}</li>`:"")
+}
 function analysisLineName(state,line){
   const ordinal=(state.lines&&state.lines[line]||{}).ordinal||(line==="main"?1:0);
   return ordinal===1?tMsg("viewer.analysis.mainLine"):ordinal===2?tMsg("viewer.analysis.history.secondLine"):ordinal?tMsg("viewer.analysis.history.numberedLine",{number:ordinal}):tMsg("viewer.analysis.history.line")
@@ -2145,10 +2205,10 @@ function analysisRoundHistoryHtml(state,context){
   const items=new Map();[...(context.items||[]),...(context.answeredItems||[])].forEach(item=>items.set(item.key,item));
   const questions=Array.from(items.values()).map(item=>{
     const answer=(context.answers||{})[item.key];
-    return `<article class="analysis-history-question">${analysisHistoryQuestionHtml(item)}<p class="analysis-kind">${tMsg("viewer.analysis.history.answer")}</p><blockquote>${escH(analysisHistoricalAnswer(item,answer))}</blockquote>${answer&&typeof answer.verbatim==="string"?`<blockquote>${escH(answer.verbatim)}</blockquote>`:""}</article>`
+    return `<article class="analysis-history-question">${item.type==="deadend"?analysisDeadEndHtml(state,item):analysisHistoryQuestionHtml(item)}<p class="analysis-kind">${tMsg("viewer.analysis.history.answer")}</p><blockquote>${escH(analysisHistoricalAnswer(item,answer))}</blockquote>${answer&&typeof answer.verbatim==="string"?`<blockquote>${escH(answer.verbatim)}</blockquote>`:""}</article>`
   }).join("");
-  const writeback=context.writeback||{},facts=writeback.facts||[],assumptions=writeback.assumptions||[],updates=writeback.updates||[];
-  return `<section class="analysis-history-detail"><p class="analysis-protection">${tMsg("viewer.analysis.history.readonly")}</p><h2>${escH(tMsg("viewer.analysis.round",{round:context.round}))}</h2><p class="hint">${escH(analysisLineName(state,context.line||"main"))}</p>${questions}${context.note?`<section><h3>${tMsg("viewer.analysis.history.agentNote")}</h3><blockquote>${escH(context.note)}</blockquote></section>`:""}${(writeback.proposals||[]).length?`<section><h3>${tMsg("viewer.analysis.structure")}</h3>${writeback.proposals.map(proposal=>analysisHistoryQuestionHtml(proposal)).join("")}</section>`:""}${assumptions.length?`<section><h3>${tMsg("viewer.life.assumptions")}</h3>${assumptions.map(assumption=>`<blockquote>${escH(assumption.text||"")}</blockquote>`).join("")}</section>`:""}${facts.length?`<section><h3>${tMsg("viewer.life.facts")}</h3>${facts.map(fact=>`<blockquote>${escH(fact.text||"")}</blockquote>${fact.source?`<p class="hint">${escH(tMsg("viewer.life.factSource",{source:fact.source}))}</p>`:""}`).join("")}</section>`:""}${updates.length?`<section><h3>${tMsg("viewer.analysis.protect.update")}</h3>${updates.map(update=>`<blockquote>${escH(update.beforeText||"")}</blockquote><blockquote>${escH(update.text||"")}</blockquote>`).join("")}</section>`:""}</section>`
+  const writeback=context.writeback||{},facts=writeback.facts||[],assumptions=writeback.assumptions||[],updates=writeback.updates||[],deadEnds=writeback.deadEnds||[];
+  return `<section class="analysis-history-detail"><p class="analysis-protection">${tMsg("viewer.analysis.history.readonly")}</p><h2>${escH(tMsg("viewer.analysis.round",{round:context.round}))}</h2><p class="hint">${escH(analysisLineName(state,context.line||"main"))}</p>${questions}${context.note?`<section><h3>${tMsg("viewer.analysis.history.agentNote")}</h3><blockquote>${escH(context.note)}</blockquote></section>`:""}${(writeback.proposals||[]).length?`<section><h3>${tMsg("viewer.analysis.structure")}</h3>${writeback.proposals.map(proposal=>analysisHistoryQuestionHtml(proposal)).join("")}</section>`:""}${assumptions.length?`<section><h3>${tMsg("viewer.life.assumptions")}</h3>${assumptions.map(assumption=>`<blockquote>${escH(assumption.text||"")}</blockquote>`).join("")}</section>`:""}${facts.length?`<section><h3>${tMsg("viewer.life.facts")}</h3>${facts.map(fact=>`<blockquote>${escH(fact.text||"")}</blockquote>${fact.source?`<p class="hint">${escH(tMsg("viewer.life.factSource",{source:fact.source}))}</p>`:""}`).join("")}</section>`:""}${deadEnds.length?`<section><h3>${tMsg("viewer.analysis.resolution.deadEnds")}</h3>${deadEnds.map(end=>analysisDeadEndHtml(state,end)).join("")}</section>`:""}${updates.length?`<section><h3>${tMsg("viewer.analysis.protect.update")}</h3>${updates.map(update=>`<blockquote>${escH(update.beforeText||"")}</blockquote><blockquote>${escH(update.text||"")}</blockquote>`).join("")}</section>`:""}</section>`
 }
 function analysisCheckpointHistoryHtml(state,checkpoint){
   if(!checkpoint)return `<p class="hint">${tMsg("viewer.analysis.history.loading")}</p>`;
@@ -2175,7 +2235,9 @@ function analysisTimelineHtml(state){
       return roundHtml(round)+after.map(checkpointHtml).join("")
     }).join("");
     const saved=checkpoints.filter(checkpoint=>checkpoint.line===line.id&&!used.has(checkpoint.id)).map(checkpointHtml).join("");
-    return `<li class="analysis-line"><strong>${escH(analysisLineName(state,line.id))}</strong>${current?` <span class="chip">${tMsg("viewer.analysis.history.currentLine")}</span>`:""}${from?`<p class="hint">${escH(tMsg("viewer.analysis.history.forkedFrom",{checkpoint:analysisCheckpointName(from),line:analysisLineName(state,from.line)}))}</p>`:""}${!current?`<button data-analysis-history-act="switch-line" data-line="${escH(line.id)}"${disabled}>${tMsg("viewer.analysis.history.switchLine")}</button>`:""}<ol>${rounds+saved}</ol></li>`
+    const refuted=(line.basedOnRefuted||[]).map(id=>state.assumptions&&state.assumptions[id]&&state.assumptions[id].text||"").filter(Boolean);
+    const dead=Object.values(state.deadEnds||{}).filter(end=>end.kind==="line"&&end.targetLine===line.id&&end.status==="confirmed");
+    return `<li class="analysis-line"><strong>${escH(analysisLineName(state,line.id))}</strong>${current?` <span class="chip">${tMsg("viewer.analysis.history.currentLine")}</span>`:""}${refuted.length?`<p class="analysis-needs-review">${escH(tMsg("viewer.analysis.resolution.basedOnRefuted",{assumptions:refuted.join(tMsg("viewer.life.listSeparator"))}))}</p>`:""}${dead.map(end=>`<p class="analysis-needs-review">${escH(tMsg("viewer.analysis.resolution.lineDeadEnd",{reason:end.reason}))}</p>`).join("")}${from?`<p class="hint">${escH(tMsg("viewer.analysis.history.forkedFrom",{checkpoint:analysisCheckpointName(from),line:analysisLineName(state,from.line)}))}</p>`:""}${!current?`<button data-analysis-history-act="switch-line" data-line="${escH(line.id)}"${disabled}>${tMsg("viewer.analysis.history.switchLine")}</button>`:""}<ol>${rounds+saved}</ol></li>`
   }).join("")
 }
 function analysisManageHtml(state){
@@ -2187,7 +2249,7 @@ function analysisManageHtml(state){
   return focus+`<button data-analysis-history-act="seal"${analysisBusy?" disabled":""}>${tMsg("viewer.analysis.history.seal")}</button><button data-analysis-history-act="close"${analysisBusy||queued?" disabled":""}>${tMsg("viewer.analysis.history.close")}</button>${queued?`<p class="hint">${tMsg("viewer.analysis.history.closePending")}</p>`:""}`
 }
 function analysisProtectionHtml(state){return analysisLocked(state)?`<p class="analysis-protection" role="status">${escH(tMsg("viewer.analysis.protect.locked"))}</p>`:""}
-function analysisVoidReasonText(round){return ["redecided","update-requested","base-rev-mismatch"].includes(round.voidReason)?tMsg("viewer.analysis.protect.reason."+round.voidReason):""}
+function analysisVoidReasonText(round){if(round.voidReason==="assumption-refuted")return tMsg("viewer.analysis.resolution.roundRefuted");return ["redecided","update-requested","base-rev-mismatch"].includes(round.voidReason)?tMsg("viewer.analysis.protect.reason."+round.voidReason):""}
 function analysisNodeActive(state,id,seen=new Set()){
   const node=state.nodes&&state.nodes[id];if(!node||node.status==="void"||seen.has(id))return false;seen.add(id);
   if(node.branch)return node.branch==="current";
@@ -2204,8 +2266,8 @@ function analysisDecisionHtml(state,node){
   const branch=analysisNodeBranch(state,node.id),decision=state.decisions&&state.decisions[node.decision];
   if(branch==="void"||!decision&&branch==="current")return "";
   const detached=branch==="detached",disabled=analysisBusy||analysisLocked(state)?" disabled":"";
-  const choices=decision&&!detached&&state.status!=="closed"?`<details class="analysis-redecide"><summary>${tMsg("viewer.analysis.protect.redecide")}</summary><p class="hint">${tMsg("viewer.analysis.protect.redecideHint")}</p><div class="analysis-actions">${Object.entries(node.options||{}).map(([option,label])=>`<button data-analysis-act="redecide" data-node="${escH(node.id)}" data-option="${escH(option)}" aria-pressed="${option===decision.option}"${disabled||option===decision.option?" disabled":""}>${escH(label)}</button>`).join("")}</div></details><div class="analysis-actions"><button data-analysis-act="convert" data-node="${escH(node.id)}"${disabled}>${tMsg("viewer.analysis.convert")}</button></div>`:"";
-  return `<article class="analysis-decision${detached?" analysis-detached":""}" data-analysis-node="${escH(node.id)}"><p class="analysis-kind">${tMsg(detached?"viewer.analysis.protect.detached":"viewer.analysis.protect.current")}</p><h3>${escH(node.short||node.text)}</h3>${node.short&&node.short!==node.text?`<p class="hint">${escH(node.text)}</p>`:""}${decision?`<p>${escH(decision.label)}</p>`:""}${detached?`<p class="hint">${tMsg("viewer.analysis.protect.detachedHint")}</p>`:choices}</article>`
+  const choices=decision&&!detached&&state.status!=="closed"?`<details class="analysis-redecide"><summary>${tMsg("viewer.analysis.protect.redecide")}</summary><p class="hint">${tMsg("viewer.analysis.protect.redecideHint")}</p><div class="analysis-actions">${Object.entries(node.options||{}).map(([option,label])=>`<button data-analysis-act="redecide" data-node="${escH(node.id)}" data-option="${escH(option)}" aria-pressed="${option===decision.option}"${disabled||option===decision.option?" disabled":""}>${escH(label)}</button>`).join("")}</div></details>${!node.needsReview?`<div class="analysis-actions"><button data-analysis-act="convert" data-node="${escH(node.id)}"${disabled}>${tMsg("viewer.analysis.convert")}</button></div>`:""}`:"";
+  return `<article class="analysis-decision${detached?" analysis-detached":""}${node.needsReview?" analysis-needs-review":""}" data-analysis-node="${escH(node.id)}"><p class="analysis-kind">${tMsg(node.needsReview?"viewer.analysis.resolution.needsReview":detached?"viewer.analysis.protect.detached":"viewer.analysis.protect.current")}</p><h3>${escH(node.short||node.text)}</h3>${node.short&&node.short!==node.text?`<p class="hint">${escH(node.text)}</p>`:""}${decision?`<p>${escH(decision.label)}</p>`:""}${detached?`<p class="hint">${tMsg("viewer.analysis.protect.detachedHint")}</p>`:choices}</article>`
 }
 function analysisUpdateHtml(state,round,item){
   const update=state.updates&&state.updates[item.update]||item;if(typeof update.text!=="string")return "";
@@ -2228,6 +2290,7 @@ function analysisStructureLabel(state,proposal){
   return tMsg("viewer.life.structure."+op,{questions:names.join(tMsg("viewer.life.listSeparator"))})
 }
 function analysisAnswerLabel(state,round,key,value){
+  if(key.startsWith("D:")){const end=state.deadEnds&&state.deadEnds[key.slice(2)];return tMsg(value.kind==="accept"?"viewer.analysis.resolution.deadAccepted":"viewer.analysis.resolution.deadRejected",{target:end?analysisDeadEndTarget(state,end):tMsg("viewer.analysis.resolution.deadEnd")})}
   if(key.startsWith("U:")){const update=state.updates&&state.updates[key.slice(2)];return tMsg("viewer.analysis.protect."+(value.kind==="accept"?"updateAccepted":"updateRejected"),{text:update&&update.text||""})}
   if(key.startsWith("S:")){const p=(round.proposals||[]).find(p=>"S:"+p.key===key);
     return tMsg(value.kind==="accept"?"viewer.analysis.acceptedProposal":"viewer.analysis.rejectedProposal",{question:p?analysisStructureLabel(state,p):""})}
@@ -2240,6 +2303,7 @@ function analysisAnswerLabel(state,round,key,value){
   return tMsg("viewer.analysis.answerLine",{question:node.text,answer:value.kind==="text"?value.text:node.options&&node.options[option]||""})
 }
 function analysisQuestionHtml(state,round,item,draft={}){
+  if(item.type==="deadend"){const end=state.deadEnds&&state.deadEnds[item.deadEnd]||item;return analysisDeadEndHtml(state,end,round,item)}
   if(item.type==="update")return analysisUpdateHtml(state,round,item);
   const structure=item.type==="structure",assumption=item.type==="assumption";
   const p=structure?item.proposal:assumption?state.assumptions&&state.assumptions[item.assumption]:state.nodes&&state.nodes[item.node];
@@ -2251,11 +2315,18 @@ function analysisQuestionHtml(state,round,item,draft={}){
     :assumption?answer("accept",tMsg("viewer.life.confirm"))+answer("reject",tMsg("viewer.life.reject"))
     :answer("accept",tMsg("viewer.analysis.useRecommended"))+options.map(o=>answer("option",o.label,o.id)).join("")+answer("park",tMsg("viewer.life.park"));
   const extra=structure||assumption?"":`<details class="analysis-text-answer"${draft.text?" open":""}><summary>${tMsg("viewer.life.text")}</summary><textarea data-analysis-text data-analysis-key="${escH(item.key)}" placeholder="${escH(tMsg("viewer.life.textPlaceholder"))}"${disabled}>${escH(draft.text||"")}</textarea>${answer("text",tMsg("viewer.life.saveText"))}</details><div class="analysis-verify"><p class="hint">${tMsg("viewer.life.verifyHint")}</p><label><input type="checkbox" data-analysis-external data-analysis-key="${escH(item.key)}"${draft.allowExternal===true?" checked":""}${disabled}> ${tMsg("viewer.life.allowExternal")}</label>${answer("verify",tMsg("viewer.life.verify"))}</div>`;
+  const reopened=!structure&&!assumption&&p.reopened,refuted=reopened&&state.assumptions&&state.assumptions[reopened.assumption];
+  const reopenedHtml=reopened?`<aside class="analysis-reopened"><p>${escH(tMsg("viewer.analysis.resolution.reopenedReason",{assumption:refuted&&refuted.text||""}))}</p><h4>${tMsg("viewer.analysis.resolution.previousAnswer")}</h4><blockquote>${escH(typeof reopened.answer==="string"?reopened.answer:"")}</blockquote></aside>`:"";
   const change=structure&&p.op&&p.op!=="add";
   const replacements=change?(p.replacements||[]).map(n=>`<section><h4>${escH(n.text)}</h4><ul>${(n.options||[]).map(o=>`<li>${escH(o.label)}${o.id===n.recommend?` <span class="chip">${tMsg("viewer.analysis.recommended")}</span>`:""}</li>`).join("")}</ul></section>`).join(""):"";
-  return `<article class="analysis-question" data-analysis-item="${escH(item.key)}"${item.node?` data-analysis-node="${escH(item.node)}"`:""}><p class="analysis-kind">${tMsg(structure?"viewer.analysis.structure":assumption?"viewer.life.assumption":"viewer.analysis.question")}</p><h3>${escH(structure?analysisStructureLabel(state,p):p.text)}</h3>${change&&p.text?`<p>${escH(p.text)}</p>`:""}${replacements}${options.length?`<ul class="analysis-options">${options.map(o=>`<li>${escH(o.label)}${o.id===p.recommend?` <span class="chip">${tMsg("viewer.analysis.recommended")}</span>`:""}</li>`).join("")}</ul>`:""}<div class="analysis-actions">${choices}</div>${extra}</article>`
+  return `<article class="analysis-question" data-analysis-item="${escH(item.key)}"${item.node?` data-analysis-node="${escH(item.node)}"`:""}><p class="analysis-kind">${tMsg(structure?"viewer.analysis.structure":assumption?"viewer.life.assumption":"viewer.analysis.question")}</p><h3>${escH(structure?analysisStructureLabel(state,p):p.text)}</h3>${reopenedHtml}${change&&p.text?`<p>${escH(p.text)}</p>`:""}${replacements}${options.length?`<ul class="analysis-options">${options.map(o=>`<li>${escH(o.label)}${o.id===p.recommend?` <span class="chip">${tMsg("viewer.analysis.recommended")}</span>`:""}</li>`).join("")}</ul>`:""}<div class="analysis-actions">${choices}</div>${extra}</article>`
 }
 function analysisErrorText(error){
+  const resolutionCodes=["assumption-not-found","bad-dead-ends","dead-end-option","dead-end-line","dead-end-obsolete"];
+  if(error&&!error.mismatch&&error.status!==0&&resolutionCodes.includes(error.code)){
+    const params=error.params||{},reason=typeof params.reason==="string"?params.reason:"",assumptions=Array.isArray(params.assumptions)?params.assumptions.filter(value=>typeof value==="string").join(tMsg("viewer.life.listSeparator")):"";
+    return tMsg("viewer.analysis.resolution.error."+error.code)+(reason?" "+tMsg("viewer.analysis.resolution.blockReason",{reason}):"")+(assumptions?" "+tMsg("viewer.analysis.resolution.blockAssumptions",{assumptions}):"")
+  }
   const historyCodes=["checkpoint-not-found","line-not-found","analysis-pending-rounds"];
   if(error&&!error.mismatch&&error.status!==0&&historyCodes.includes(error.code))return tMsg("viewer.analysis.history.error."+error.code);
   const protectCodes=["analysis-locked","bad-option","draft-basis-changed","note-not-changed","bad-updates","updates-required","update-not-pending","update-source-changed","round-not-answerable"];
@@ -2276,6 +2347,27 @@ let analyses=[],analysisState=null,analysisContext=null,analysisQueue={submitted
 let analysisSelected=SS.get("ae."+RID+".analysis",null),analysisRenderKey="",analysisUpgradeShown=false,analysisDraftNode=null;
 const analysisAnswerDrafts=new Map();let analysisPanelTab="timeline";
 let analysisHistorySelection=null,analysisHistoryRequest=0;
+let analysisLastChange=null;
+// ---------- Analysis page preview interactions ----------
+function fitAnalysisPage(){
+  const host=$("analysisPageHost"),root=host.shadowRoot;if(!root||!$("analysisPageDialog").classList.contains("on"))return;
+  const bounds=$("analysisPageWrap").getBoundingClientRect(),scale=Math.max(.01,Math.min(bounds.width/1280,bounds.height/720));
+  const frame=root.getElementById("ae-frame"),preview=root.getElementById("ae-stage");
+  frame.style.width=1280*scale+"px";frame.style.height=720*scale+"px";preview.style.transform=`scale(${scale})`
+}
+function openAnalysisPage(number){
+  const index=P.findIndex(page=>page.n===number);if(index<0){toast(tMsg("viewer.analysis.resolution.pageUnavailable"),6000);return}
+  const host=$("analysisPageHost"),root=host.shadowRoot||host.attachShadow({mode:"open"});host.lang=$("host").lang;
+  root.innerHTML=`<style>:host{all:initial;display:flex;align-items:center;justify-content:center;width:100%;height:100%}
+${RCSS}
+:host{display:flex!important;align-items:center!important;justify-content:center!important;width:100%!important;height:100%!important;margin:0!important;padding:0!important;border:0!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;position:static!important;transform:none!important;overflow:hidden!important}
+.ae-frame{position:relative;overflow:hidden;background:#fff}#ae-stage{display:block!important;margin:0!important;padding:0!important;border:0!important;position:relative!important;inset:auto!important;width:1280px!important;height:720px!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;float:none!important;columns:auto!important;box-sizing:content-box!important;transform-origin:0 0!important;overflow:visible!important}
+</style><div class="ae-frame" id="ae-frame"><div id="ae-stage">${SECT[index]}</div></div>`;
+  const page=P[index];$("analysisPageTitle").textContent=tMsg("viewer.analysis.resolution.pageCard",{page:page.n,title:typeof unH==="function"?unH(page.title||""):page.title||""});
+  $("analysisPageDialog").classList.add("on");fitAnalysisPage()
+}
+// ---------- Analysis page preview interactions end ----------
+addEventListener("resize",fitAnalysisPage);
 function analysisDraftKey(state,round,key){return [state.id,round.seq,key].join("|")}
 function analysisDraftFor(state,round,key){return analysisAnswerDrafts.get(analysisDraftKey(state,round,key))||{}}
 function stashAnalysisInputs(){const state=analysisState,round=analysisCurrentRound(state);if(!state||!round)return;
@@ -2367,11 +2459,12 @@ function renderAnalysis(){
   const signature=JSON.stringify([analyses,analysisState,analysisBusy,uiLocale,analysisHistoryFor(analysisState)]);if(signature===analysisRenderKey)return;analysisRenderKey=signature;
   $("analysisList").innerHTML=analyses.map(a=>`<button class="analysis-list-item" data-analysis-select="${escH(a.id)}" aria-pressed="${a.id===analysisSelected}">${escH(a.focus)}<small>${tMsg("viewer.analysis.status."+a.status)}</small></button>`).join("");
   const state=analysisState,round=analysisCurrentRound(state);
+  $("analysisChanges").innerHTML=analysisChangeHtml(state);
   if(!state){$("analysisFocus").textContent=tMsg("viewer.analysis.emptyTitle");$("analysisMeta").textContent="";$("analysisBody").innerHTML=`<p class="empty">${tMsg("viewer.analysis.empty")}</p>`;["analysisManage","analysisTree","analysisTimeline","analysisAssumptions","analysisParked","analysisParkedSide","analysisFacts"].forEach(id=>$(id).innerHTML="");return}
   $("analysisFocus").textContent=state.focus;$("analysisMeta").textContent=analysisLineName(state,state.line||"main")+(round?" · "+tMsg("viewer.analysis.round",{round:round.seq})+" · "+tMsg("viewer.analysis.roundStatus."+round.status):" · "+tMsg("viewer.analysis.roundDone"));
   const visibleNodes=Object.values(state.nodes||{}).filter(n=>analysisNodeBranch(state,n.id)!=="void"),nodes=visibleNodes.filter(n=>analysisNodeBranch(state,n.id)==="current"),detached=visibleNodes.filter(n=>analysisNodeBranch(state,n.id)==="detached");
   $("analysisManage").innerHTML=analysisManageHtml(state);
-  const treeItems=group=>group.map(n=>`<button class="analysis-tree-node" data-analysis-jump="${escH(n.id)}"><span aria-hidden="true">${n.decision?"✓":"○"}</span> ${escH(n.short||n.text)}</button>`).join("");
+  const treeItems=group=>group.map(n=>`<button class="analysis-tree-node" data-analysis-jump="${escH(n.id)}"><span aria-hidden="true">${n.decision?"✓":"○"}</span> ${escH(n.short||n.text)}${n.needsReview?` <span class="chip">${tMsg("viewer.analysis.resolution.needsReview")}</span>`:""}</button>`).join("");
   $("analysisTree").innerHTML=`<p class="analysis-kind">${tMsg("viewer.analysis.protect.current")}</p>`+(treeItems(nodes.filter(n=>n.status!=="parked"))||`<p class="empty">${tMsg("viewer.analysis.noTree")}</p>`)+(detached.length?`<details class="analysis-tree-group" open><summary>${tMsg("viewer.analysis.protect.detached")}</summary>${treeItems(detached)}</details>`:"");
   const source=state.sourceCopy||{},released=state.sourceState!=="held";
   const sourceHtml=`<details class="analysis-source"><summary>${tMsg(state.sourceNote?"viewer.analysis.source":"viewer.life.sourceQuestion")}${source.page?" · "+tMsg("viewer.page",{page:source.page}):""}</summary><blockquote>${escH(source.text||"")}</blockquote>${state.sourceNote&&!released&&state.status!=="closed"?`<button data-analysis-act="release"${analysisBusy||analysisLocked(state)?" disabled":""}>${tMsg("viewer.analysis.release")}</button>`:""}</details>`;
@@ -2379,23 +2472,24 @@ function renderAnalysis(){
   const answers=round?Object.entries(round.answers||{}).map(([key,value])=>`<li>${escH(analysisAnswerLabel(state,round,key,value))}</li>`).join(""):"";
   const decisions=nodes.concat(detached).map(n=>analysisDecisionHtml(state,n)).join("");
   const drafts=(state.drafts||[]).map(d=>`<article class="analysis-draft"><h3>${tMsg("viewer.analysis.draft")}</h3><p>${escH(d.text)}</p>${d.status==="pending"?`<p class="hint">${tMsg("viewer.analysis.confirmHint")}</p>${state.status!=="closed"?`<button data-analysis-act="confirm" data-draft="${escH(d.id)}"${analysisBusy||analysisLocked(state)?" disabled":""}>${tMsg("viewer.analysis.confirm")}</button>`:""}`:`<p class="hint">${tMsg("viewer.analysis.confirmed")}</p><button data-analysis-act="annotations">${tMsg("viewer.analysis.backToNotes")}</button>`}</article>`).join("");
-  $("analysisBody").innerHTML=analysisProtectionHtml(state)+sourceHtml+(questions||`<p class="empty">${tMsg(round&&round.status==="claimed"?"viewer.analysis.agentWorking":round&&round.status==="submitted"?"viewer.analysis.awaitingAgent":"viewer.analysis.noQuestions")}</p>`)+(answers?`<section class="analysis-answers"><h3>${tMsg("viewer.analysis.yourAnswers")}</h3><ul>${answers}</ul></section>`:"")+decisions+drafts+analysisLinkedNotesHtml(state);
+  $("analysisBody").innerHTML=analysisProtectionHtml(state)+sourceHtml+analysisPageCardsHtml(state)+(questions||`<p class="empty">${tMsg(round&&round.status==="claimed"?"viewer.analysis.agentWorking":round&&round.status==="submitted"?"viewer.analysis.awaitingAgent":"viewer.analysis.noQuestions")}</p>`)+(answers?`<section class="analysis-answers"><h3>${tMsg("viewer.analysis.yourAnswers")}</h3><ul>${answers}</ul></section>`:"")+decisions+drafts+analysisLinkedNotesHtml(state);
   const history=analysisHistoryFor(state);if(history)$("analysisBody").innerHTML=analysisHistoryHtml(state,history);
   $("analysisTimeline").innerHTML=analysisTimelineHtml(state);
   const parked=nodes.filter(n=>n.status==="parked");
   $("analysisParkedSide").innerHTML=parked.map(n=>`<p>${escH(n.short||n.text)}</p>`).join("")||`<p class="empty">${tMsg("viewer.life.noParked")}</p>`;
   $("analysisParked").innerHTML=parked.map(n=>`<li>${escH(n.text)}</li>`).join("")||`<li class="empty">${tMsg("viewer.life.noParked")}</li>`;
-  $("analysisAssumptions").innerHTML=Object.values(state.assumptions||{}).map(a=>`<li>${escH(a.text)} <span class="chip">${tMsg("viewer.life.status."+(a.refuted?"refuted":a.confirmed&&a.confirmed[state.line]||"pending"))}</span></li>`).join("")||`<li class="empty">${tMsg("viewer.life.noAssumptions")}</li>`;
+  $("analysisAssumptions").innerHTML=analysisAssumptionsHtml(state);
   $("analysisFacts").innerHTML=Object.values(state.facts||{}).map(f=>`<li><p>${escH(f.text)}</p>${f.source?`<p class="hint">${escH(tMsg("viewer.life.factSource",{source:f.source}))}</p>`:""}</li>`).join("")||`<li class="empty">${tMsg("viewer.life.noFacts")}</li>`;
   analysisRouteLabels()
 }
 async function analysisAction(op,body={}){
   if(analysisBusy)return null;
   if(FILE||!analysisSupported||mode!=="server"){toast(tMsg("viewer.analysis.connectionRequired"),6000);return null}
-  if(analysisHistoryFor(analysisState)&&["answer","submit"].includes(op)){toast(tMsg("viewer.analysis.history.readonly"),6000);return null}
+  if(analysisHistoryFor(analysisState)&&["answer","submit","refute"].includes(op)){toast(tMsg("viewer.analysis.history.readonly"),6000);return null}
   if(analysisState&&analysisState.status==="closed"&&!["reopen","start","activate"].includes(op)){toast(analysisErrorText({code:"analysis-closed"}),6000);return null}
   if(op==="close"&&(analysisState&&analysisState.rounds||[]).some(r=>r.status==="submitted")){toast(analysisErrorText({code:"analysis-pending-rounds"}),6000);return null}
   if(analysisLocked(analysisState)&&analysisOperationProtected(op)){const reason=analysisErrorText({code:"analysis-locked"});$("analysisError").textContent=reason;toast(reason,6000);return null}
+  const before=analysisState;
   analysisBusy=true;++analysisRequest;analysisRenderKey="";renderAnalysis();analysisRouteLabels();$("analysisError").textContent="";
   try{
     const result=await api("POST","/api/analysis/"+op,{analysis:analysisSelected,...body,receiverBindingId:receiver&&receiver.bindingId});
@@ -2403,7 +2497,8 @@ async function analysisAction(op,body={}){
     if(result.doc){setDoc(result.doc);refreshList(true)}
     if(typeof analysisHistorySelection!=="undefined")analysisHistorySelection=null;
     if(typeof analysisHistoryRequest!=="undefined")++analysisHistoryRequest;
-    await resync();toast(tMsg((["seal","fork","switch-line","close","reopen"].includes(op)?"viewer.analysis.history.done.":["redecide","update-note","keep-note","delete-note"].includes(op)?"viewer.analysis.protect.done.":"viewer.analysis.done.")+op),4000);return result
+    const change=analysisChangeData(op,before,analysisState,body);if(typeof analysisLastChange!=="undefined")analysisLastChange=change;
+    await resync();toast(analysisChangeText(change),5000);return result
   }catch(error){const reason=analysisErrorText(error);$("analysisError").textContent=reason;toast(tMsg("viewer.analysis.actionError",{reason}),7000);return null}
   finally{analysisBusy=false;analysisRenderKey="";renderAnalysis();analysisRouteLabels();await loadAnalyses()}
 }
@@ -2440,7 +2535,8 @@ $("analysisSidebar").onclick=event=>{const select=event.target.closest("[data-an
   if(select){openAnalysis(select.dataset.analysisSelect);return}
   if(jump){const match=Array.from($("analysisBody").querySelectorAll("[data-analysis-node]")).find(el=>el.dataset.analysisNode===jump.dataset.analysisJump);if(match)match.scrollIntoView({block:"center",behavior:"smooth"})}
 };
-$("analysisBody").onclick=event=>{const button=event.target.closest("[data-analysis-act]");if(!button||button.disabled||analysisBusy)return;
+$("analysisBody").onclick=event=>{const button=event.target.closest("[data-analysis-act],[data-analysis-page]");if(!button||button.disabled||analysisBusy)return;
+  if(Object.prototype.hasOwnProperty.call(button.dataset,"analysisPage"))return openAnalysisPage(Number(button.dataset.analysisPage));
   const op=button.dataset.analysisAct,round=analysisCurrentRound(analysisState);
   if(analysisLocked(analysisState)&&analysisOperationProtected(op)){toast(analysisErrorText({code:"analysis-locked"}),6000);return}
   if(op==="answer"&&round){const value={kind:button.dataset.kind},draft=analysisDraftFor(analysisState,round,button.dataset.key);
@@ -2459,6 +2555,14 @@ $("analysisBody").onclick=event=>{const button=event.target.closest("[data-analy
     $("analysisDraftText").value=tMsg("viewer.analysis.draftDefault",{question:node.short||node.text,answer:decision.label});$("analysisDraftDialog").classList.add("on");$("analysisDraftText").focus()}
 };
 $("analysisBody").oninput=stashAnalysisInputs;$("analysisBody").onchange=stashAnalysisInputs;
+function analysisResolutionClick(event){
+  const button=event.target.closest("[data-analysis-refute]");if(!button||button.disabled||analysisBusy)return;
+  if(analysisLocked(analysisState)){toast(analysisErrorText({code:"analysis-locked"}),6000);return}
+  if(analysisState&&analysisState.status==="closed"||analysisHistoryFor(analysisState)){toast(tMsg("viewer.analysis.history.readonly"),6000);return}
+  return analysisAction("refute",{assumption:button.dataset.analysisRefute})
+}
+$("analysisAssumptions").onclick=analysisResolutionClick;
+// ---------- Analysis resolution events end ----------
 $("analysisDraftCreate").onclick=async()=>{const text=$("analysisDraftText").value.trim();if(!text||!analysisDraftNode)return;const result=await analysisAction("convert",{node:analysisDraftNode,text});if(result)$("analysisDraftDialog").classList.remove("on")};
 $("analysisDraftText").addEventListener("keydown",event=>{if(event.isComposing)return;if(event.key==="Escape"){$("analysisDraftDialog").classList.remove("on");event.stopPropagation()}else if(event.key==="Enter"&&(event.metaKey||event.ctrlKey)){event.preventDefault();$("analysisDraftCreate").click()}});
 addEventListener("hashchange",analysisRoute);
