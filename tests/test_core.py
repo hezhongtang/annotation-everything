@@ -191,6 +191,38 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(len(doc["notes"]), 50)
         self.assertEqual(doc["rev"], 50)
 
+    def test_update_and_import_keep_unrecognized_extension_fields(self):
+        """认不出的扩展字段（更高版本写入的）在同 id 更新与导入时原样保留，不丢数据。"""
+        _d, n = store.add(self.d, {"page": 1, "text": "原文"})
+        doc = json.loads((self.d / "notes.json").read_text())
+        doc["notes"][0]["analysisState"] = {"round": 2}
+        (self.d / "notes.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+        store.update(self.d, n["id"], {"text": "改过"})   # 同 id 更新不清扩展字段
+        self.assertEqual(store.load(self.d)["notes"][0]["analysisState"], {"round": 2})
+        newer = {"id": n["id"], "page": 1, "text": "再改", "at": "2030-01-01T00:00:00Z",
+                 "updatedAt": "2030-01-02T00:00:00Z", "analysisMark": "来自导入方"}
+        _d, added, skipped, updated = store.import_notes(self.d, [newer])
+        self.assertEqual((added, skipped, updated), (0, 0, 1))
+        merged = store.load(self.d)["notes"][0]
+        self.assertEqual(merged["analysisState"], {"round": 2}, "导入同 id 更新保留库里的扩展字段")
+        self.assertEqual(merged["analysisMark"], "来自导入方", "导入同 id 更新保留导入方的扩展字段")
+        _d, added, _s, _u = store.import_notes(self.d, [{"id": "ext2", "page": 2, "text": "新增", "analysisTag": "新批注"}])
+        self.assertEqual(added, 1)
+        self.assertEqual(store.load(self.d)["notes"][1]["analysisTag"], "新批注", "导入新增保留扩展字段")
+
+    def test_handoff_snapshot_only_takes_open_notes(self):
+        """提交快照只收「未处理」的批注；已初改 / 已处理的不进快照。"""
+        store.import_notes(self.d, [
+            {"id": "o1", "page": 2, "text": "未处理"},
+            {"id": "r1", "page": 3, "text": "已处理", "status": "resolved", "resolution": "已改",
+             "resolvedAt": "2030-01-01T00:00:00Z"},
+            {"id": "d1", "page": 4, "text": "已初改", "status": "drafted", "draftedAt": "2030-01-01T00:00:00Z"},
+        ])
+        _doc, item, _m = store.handoff_submit(self.d, "synthetic")
+        self.assertEqual(item["openIds"], ["o1"])
+        self.assertEqual(item["openCount"], 1)
+        self.assertEqual(item["pages"], [2])
+
 
 class CliTests(unittest.TestCase):
     def setUp(self):
