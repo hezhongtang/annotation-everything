@@ -1538,6 +1538,20 @@
     "viewer.analysis.done.convert": "批注草稿已保存，请确认后加入批注列表。",
     "viewer.analysis.done.confirm": "批注已加入列表，源批注已处理。",
     "viewer.analysis.done.release": "源批注已回到未处理，可交给 Agent 改稿。",
-    "viewer.analysis.awaitingAgent": "本轮已排队，Agent 接收后会在这里写回分析或新的问题。"
+    "viewer.analysis.awaitingAgent": "本轮已排队，Agent 接收后会在这里写回分析或新的问题。",
+    "viewer.analysis.error.roundChanged": "这一轮已被接手或状态已变化。请刷新后查看当前轮次。",
+    "viewer.analysis.error.itemChanged": "这一题已不在当前轮次。请刷新后查看仍可作答的问题。",
+    "viewer.analysis.error.noteInProgress": "Agent 已在处理这条批注，暂时不能从它发起分析。",
+    "viewer.analysis.error.noteNotOpen": "这条批注已变化或不再是未处理状态。请刷新后重试。",
+    "viewer.analysis.error.noteHeld": "这条批注已搁住。请先查看它关联的分析。",
+    "viewer.analysis.error.agentBusy": "Agent 正在处理另一项工作。请等它完成后再交出。",
+    "viewer.analysis.error.decisionChanged": "这个结论当前未生效。请刷新后查看当前决策。",
+    "viewer.analysis.error.draftChanged": "这份草稿已确认或状态已变化。请刷新批注列表和分析。",
+    "viewer.analysis.error.sourceChanged": "源批注的状态已变化。请刷新后查看。",
+    "viewer.analysis.error.analysisMissing": "分析暂时无法读取。请刷新后重新选择。",
+    "viewer.analysis.error.receiverChanged": "接收会话已变化或不可用。请核对接收方，并按页面提示重启服务或刷新。",
+    "viewer.analysis.error.reviewChanged": "这个地址上已不是当前审阅。请重新打开这份审阅的对照页。",
+    "viewer.analysis.error.notConfirmed": "未能确认操作结果。请恢复连接、刷新状态后再决定是否重试。",
+    "viewer.analysis.error.retry": "操作未完成。请刷新分析状态后重试。"
   }
 }

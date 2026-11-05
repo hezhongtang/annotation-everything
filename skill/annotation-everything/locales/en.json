@@ -1656,6 +1656,20 @@
     "viewer.analysis.done.convert": "Annotation draft saved. Confirm it to add it to annotations.",
     "viewer.analysis.done.confirm": "Annotation added and the source annotation resolved.",
     "viewer.analysis.done.release": "The source annotation is open again and can be submitted for revision.",
-    "viewer.analysis.awaitingAgent": "This round is queued. The agent’s analysis or next questions will appear here."
+    "viewer.analysis.awaitingAgent": "This round is queued. The agent’s analysis or next questions will appear here.",
+    "viewer.analysis.error.roundChanged": "This round has been received or changed. Refresh to view the current round.",
+    "viewer.analysis.error.itemChanged": "This question is no longer in the current round. Refresh to view the available questions.",
+    "viewer.analysis.error.noteInProgress": "The agent is processing this annotation. Analysis cannot start from it yet.",
+    "viewer.analysis.error.noteNotOpen": "This annotation has changed or is no longer open. Refresh before trying again.",
+    "viewer.analysis.error.noteHeld": "This annotation is held. Open its linked analysis first.",
+    "viewer.analysis.error.agentBusy": "The agent is processing another item. Wait for it to finish before sending this round.",
+    "viewer.analysis.error.decisionChanged": "This decision is not currently in effect. Refresh to view the current decisions.",
+    "viewer.analysis.error.draftChanged": "This draft has been confirmed or changed. Refresh the annotations and analysis.",
+    "viewer.analysis.error.sourceChanged": "The source annotation has changed. Refresh to view its current state.",
+    "viewer.analysis.error.analysisMissing": "The analysis cannot be read right now. Refresh and select it again.",
+    "viewer.analysis.error.receiverChanged": "The receiving session has changed or is unavailable. Check the receiver and follow the page’s restart or refresh guidance.",
+    "viewer.analysis.error.reviewChanged": "This address no longer serves the current review. Reopen this review’s page.",
+    "viewer.analysis.error.notConfirmed": "The result could not be confirmed. Restore the connection and refresh the state before retrying.",
+    "viewer.analysis.error.retry": "The action did not complete. Refresh the analysis state before trying again."
   }
 }

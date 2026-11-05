@@ -764,16 +764,6 @@ function applyFocus(on){
 async function toggleFocus(on=!focusMode){
   if(on){
     if(overviewShown())return;
-  if(analysisShown()){
-    if(["SELECT","TEXTAREA","INPUT"].includes(e.target.tagName)||e.target.isContentEditable||e.isComposing)return;
-    const key=e.key.toLowerCase();
-    if(document.querySelector(".modal.on")){if(e.key==="Escape")document.querySelectorAll(".modal.on").forEach(el=>el.classList.remove("on"));return}
-    if(key==="f"){e.preventDefault();toggleFocus();return}
-    if(key==="["||key==="\\"){e.preventDefault();const name=key==="["?"side":"panel";setDrawer(name,!drawerOpen(name));return}
-    if(key==="a"){e.preventDefault();submitAnalysis();return}
-    if(e.key==="Escape"&&focusMode){toggleFocus(false);return}
-    if(key==="h")$("help").classList.toggle("on");return
-  }
     applyFocus(true);
     try{if(!document.fullscreenElement&&document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen()}
     catch(error){/* Fullscreen API 不可用时保留覆盖窗口的 CSS 专注模式。 */}
@@ -2068,6 +2058,14 @@ document.addEventListener("keydown",e=>{
   if(overviewShown())return;
   if(["SELECT","TEXTAREA","INPUT"].includes(e.target.tagName)||e.target.isContentEditable||e.isComposing||e.metaKey||e.ctrlKey||e.altKey)return;
   const k=e.key.toLowerCase();
+  if(analysisShown()){
+    if(document.querySelector(".modal.on")){if(e.key==="Escape")document.querySelectorAll(".modal.on").forEach(el=>el.classList.remove("on"));return}
+    if(k==="f"){e.preventDefault();toggleFocus();return}
+    if(k==="["||k==="\\"){e.preventDefault();const name=k==="["?"side":"panel";setDrawer(name,!drawerOpen(name));return}
+    if(k==="a"){e.preventDefault();submitAnalysis();return}
+    if(e.key==="Escape"&&focusMode){toggleFocus(false);return}
+    if(k==="h")$("help").classList.toggle("on");return
+  }
   if($("stylemenu").classList.contains("on")){   // 风格优化范围：1 整页、2 标注处（3 是旧版的「标点处」，同 2）
     if(k==="1"||k==="2"||k==="3"){e.preventDefault();chooseStyle(k==="1"?"page":"mark");return}
     if(e.key==="Escape"){closeStyleMenu();return}}
@@ -2097,7 +2095,7 @@ document.addEventListener("keydown",e=>{
 // ---------- Analysis view helpers ----------
 function analysisCurrentRound(state){return (state&&state.rounds||[]).slice().reverse().find(r=>["open","submitted","claimed"].includes(r.status))||null}
 function analysisNodeActive(state,id,seen=new Set()){
-  const node=state.nodes&&state.nodes[id];if(!node||seen.has(id))return false;seen.add(id);
+  const node=state.nodes&&state.nodes[id];if(!node||node.status==="void"||seen.has(id))return false;seen.add(id);
   if(!node.parent)return true;
   const parent=state.nodes[node.parent.node],decision=parent&&state.decisions[parent.decision];
   return !!decision&&decision.option===node.parent.option&&analysisNodeActive(state,node.parent.node,seen)
@@ -2116,6 +2114,16 @@ function analysisQuestionHtml(state,round,item){
   const disabled=analysisBusy||!["open","submitted"].includes(round.status)?" disabled":"";
   const answer=(kind,text,option)=>`<button data-analysis-act="answer" data-key="${escH(item.key)}" data-kind="${kind}"${option?` data-option="${escH(option)}"`:""}${disabled}>${escH(text)}</button>`;
   return `<article class="analysis-question"${item.node?` data-analysis-node="${escH(item.node)}"`:""}><p class="analysis-kind">${tMsg(structure?"viewer.analysis.structure":"viewer.analysis.question")}</p><h3>${escH(p.text)}</h3><ul class="analysis-options">${options.map(o=>`<li>${escH(o.label)}${o.id===p.recommend?` <span class="chip">${tMsg("viewer.analysis.recommended")}</span>`:""}</li>`).join("")}</ul><div class="analysis-actions">${structure?answer("accept",tMsg("viewer.analysis.accept"))+answer("reject",tMsg("viewer.analysis.reject")):answer("accept",tMsg("viewer.analysis.useRecommended"))+options.map(o=>answer("option",o.label,o.id)).join("")}</div></article>`
+}
+function analysisErrorText(error){
+  const messages={"round-not-answerable":"roundChanged","item-not-in-round":"itemChanged","note-in-progress":"noteInProgress",
+    "note-not-open":"noteNotOpen","note-held":"noteHeld","round-not-claimed":"roundChanged","base-rev-mismatch":"roundChanged",
+    "agent-busy":"agentBusy","node-not-decided":"decisionChanged","draft-not-pending":"draftChanged","source-not-held":"sourceChanged",
+    "no-round":"roundChanged","no-analysis":"analysisMissing","no-note":"noteNotOpen","receiver-mismatch":"receiverChanged",
+    "receiver-invalid":"receiverChanged","receiver-restart":"receiverChanged"};
+  const mapped=error&&Object.prototype.hasOwnProperty.call(messages,error.code)?messages[error.code]:"retry";
+  const key=error&&error.mismatch?"reviewChanged":error&&error.status===0?"notConfirmed":mapped;
+  return tMsg("viewer.analysis.error."+key)
 }
 // ---------- Analysis view DOM ----------
 let analysisSupported=false,analysisChecked=false,analysisBusy=false,analysisLoading=false,analysisRequest=0;
@@ -2155,7 +2163,7 @@ async function loadAnalyses(){
       if(request!==analysisRequest||analysisBusy)return;analysisState=detail.analysis;analysisContext=detail.context;analysisQueue=detail.queue||analysisQueue}
     else if(!analysisSelected){analysisState=null;analysisContext=null}
     renderAnalysis();analysisRouteLabels()
-  }catch(error){if(request===analysisRequest&&analysisShown())$("analysisError").textContent=tMsg("viewer.analysis.loadError",{reason:error.message})}
+  }catch(error){if(request===analysisRequest&&analysisShown())$("analysisError").textContent=tMsg("viewer.analysis.loadError",{reason:analysisErrorText(error)})}
   finally{analysisLoading=false;if(request!==analysisRequest&&analysisShown()&&!analysisBusy)loadAnalyses()}
 }
 function analysisRouteLabels(){
@@ -2192,7 +2200,7 @@ async function analysisAction(op,body={}){
     if(result.analysis){analysisState=result.analysis;analysisSelected=result.analysis.id;SS.set("ae."+RID+".analysis",analysisSelected)}
     if(result.doc){setDoc(result.doc);refreshList(true)}
     await resync();toast(tMsg("viewer.analysis.done."+op),4000);return result
-  }catch(error){$("analysisError").textContent=error.message;toast(tMsg("viewer.analysis.actionError",{reason:error.message}),7000);return null}
+  }catch(error){const reason=analysisErrorText(error);$("analysisError").textContent=reason;toast(tMsg("viewer.analysis.actionError",{reason}),7000);return null}
   finally{analysisBusy=false;analysisRenderKey="";renderAnalysis();analysisRouteLabels();await loadAnalyses()}
 }
 async function startAnalysis(noteId){const result=await analysisAction("start",{noteId});if(result){location.hash="#analysis";analysisRoute()}}

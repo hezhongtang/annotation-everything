@@ -670,6 +670,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 state, round_no = analysis_store.start(d, note_id, by="page",
                                                        authorize=lambda: self._check_receiver(body))
+            except store.HandoffError as error:
+                raise Reject(400, error.code, str(error))
             except store.NotFound:
                 raise Reject(404, "no-note", self._t("serve.err.noNote"))
             note = next((n for n in store.load(d)["notes"] if n.get("id") == note_id), None)

@@ -422,6 +422,14 @@ class AnalysisAgentTests(unittest.TestCase):
                                {"Host": f"127.0.0.1:{server.port}"})
         self.assertIn(code, (400, 404))
 
+        busy_note = self.add_note(text="已经交给 Agent 改稿的批注")
+        store.handoff_submit(self.review)
+        store.handoff_claim(self.review)
+        code, _, raw = serve._req(server.port, "POST", "/api/analysis/start", headers,
+                                  {"noteId": busy_note["id"]})
+        self.assertEqual(code, 400, raw)
+        self.assertEqual(json.loads(raw)["code"], "note-in-progress")
+
         code, _, raw = serve._req(server.port, "POST", "/api/analysis/start", headers, {"noteId": "missing"})
         self.assertEqual(code, 404)
         self.assertEqual(json.loads(raw)["code"], "no-note")

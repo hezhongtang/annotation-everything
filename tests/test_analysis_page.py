@@ -20,6 +20,35 @@ sys.path.insert(0, str(SCRIPTS))
 import i18n
 
 
+def interaction_program(parts, setup, expression, locale="en"):
+    """执行页面实际交互函数，只替换浏览器提供的 DOM / 网络边界。"""
+    node = shutil.which("node")
+    if not node:
+        raise unittest.SkipTest("没有 JavaScript 引擎")
+    source = (SCRIPTS / "viewer_template.html").read_text()
+    chunks = []
+    for start, end in parts:
+        a, b = source.index(start), source.index(end, source.index(start))
+        chunks.append(source[a:b])
+    messages = i18n.load_catalog(locale)["messages"]
+    program = "\n".join([
+        "const M=" + json.dumps(messages, ensure_ascii=False) + ";",
+        "const uiLocale=" + json.dumps(locale) + ";",
+        "const tMsg=(k,p={})=>String(M[k]??k).replace(/\\{(\\w+)\\}/g,(_,n)=>String(p[n]??''));",
+        "const escH=s=>String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));",
+        "const elements=new Map(); const $=id=>{if(!elements.has(id))elements.set(id,{innerHTML:'',textContent:'',setAttribute(){},classList:{contains(){return false},toggle(){},remove(){}}});return elements.get(id)};",
+        setup, *chunks,
+        "(async()=>{console.log(JSON.stringify(await (async()=>{" + expression + "})()))})().catch(e=>{console.error(e);process.exitCode=1});",
+    ])
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "interaction.js"
+        path.write_text(program)
+        result = subprocess.run([node, str(path)], capture_output=True, text=True, timeout=15)
+    if result.returncode:
+        raise AssertionError(result.stderr)
+    return json.loads(result.stdout)
+
+
 def render_expression(expression, state, locale="en"):
     node = shutil.which("node")
     if not node:
@@ -49,6 +78,57 @@ def render_expression(expression, state, locale="en"):
 
 
 class AnalysisPageTests(unittest.TestCase):
+    def test_analysis_focus_and_actual_shortcuts_do_not_enter_revision(self):
+        setup = """
+          let focusMode=false,keepFocusOnExit=false;const visible=new Set(),calls={analysis:0,revision:0};
+          let handler=null,modalOpen=false;const modalLayer={classList:{remove(){modalOpen=false}}};const document={body:{classList:{toggle(k,on){on?visible.add(k):visible.delete(k)}}},
+            documentElement:{},fullscreenElement:null,querySelector(){return modalOpen?modalLayer:null},querySelectorAll(){return modalOpen?[modalLayer]:[]},
+            addEventListener(type,fn){if(type==='keydown')handler=fn}};
+          const overviewShown=()=>false,analysisShown=()=>true,closeComposer=()=>{},fit=()=>{};
+          const submitAnalysis=()=>calls.analysis++,openHand=()=>calls.revision++,drawerOpen=()=>true,setDrawer=()=>{};
+        """
+        value = interaction_program([
+            ("function applyFocus(on)", 'document.addEventListener("fullscreenchange"'),
+            ('document.addEventListener("keydown",e=>{\n  if(overviewShown())return;', "// ---------- Analysis view helpers ----------"),
+        ], setup, """
+            await toggleFocus(true);const entered=visible.has('focus-mode');await toggleFocus(false);
+            const event=key=>({key,target:{tagName:'BODY'},preventDefault(){}});
+            handler(event('a'));handler(event('c'));handler(event('p'));modalOpen=true;handler(event('Escape'));
+            return {entered,exited:!visible.has('focus-mode'),modalClosed:!modalOpen,...calls};
+        """)
+        self.assertEqual(value, {"entered": True, "exited": True, "modalClosed": True, "analysis": 1, "revision": 0})
+
+    def test_rendered_tree_and_conversion_exclude_void_proposal_descendants(self):
+        state = {"id": "private-analysis", "focus": "最初的问题", "sourceCopy": {}, "sourceState": "released",
+                 "nodes": {"n1": {"id": "n1", "text": "被拒的问题", "short": "已作废提议", "status": "void", "parent": None, "decision": "d1"},
+                           "n2": {"id": "n2", "text": "子问题", "short": "作废提议的子问题", "status": "decided", "parent": {"node": "n1", "option": "a"}, "decision": "d2"}},
+                 "decisions": {"d1": {"option": "a", "label": "旧结论"}, "d2": {"option": "a", "label": "子结论"}}, "rounds": [], "drafts": []}
+        setup = "const analysisBusy=false,analysisState=" + json.dumps(state, ensure_ascii=False) + "; let analysisRenderKey='';const analyses=[],analysisSelected=analysisState.id,analysisShown=()=>true,analysisRouteLabels=()=>{};"
+        value = interaction_program([
+            ("// ---------- Analysis view helpers ----------", "// ---------- Analysis view DOM ----------"),
+            ("function renderAnalysis(){", "async function analysisAction("),
+        ], setup, "renderAnalysis();return {tree:$('analysisTree').innerHTML,body:$('analysisBody').innerHTML};")
+        self.assertNotIn("已作废提议", value["tree"])
+        self.assertNotIn("作废提议的子问题", value["tree"])
+        self.assertNotIn('data-analysis-act="convert"', value["body"])
+
+    def test_action_errors_use_current_language_without_private_identifiers(self):
+        parts = [('// ---------- Analysis view helpers ----------', '// ---------- Analysis view DOM ----------'),
+                 ('async function analysisAction(', 'async function startAnalysis(')]
+        for code in ["round-not-answerable", "note-in-progress", "item-not-in-round", "future-error"]:
+            with self.subTest(code=code):
+                setup = """
+                    let analysisBusy=false,analysisRequest=0,analysisRenderKey='',analysisState=null;
+                    const FILE=false,analysisSupported=true,mode='server',analysisSelected='private-analysis',receiver=null;
+                    let notice=''; const renderAnalysis=()=>{},analysisRouteLabels=()=>{},resync=async()=>{},loadAnalyses=async()=>{},toast=t=>notice=t;
+                    const api=async()=>{throw Object.assign(new Error('内部 private-note n_private analysis_private'),{status:400,code:CODE})};
+                """.replace("CODE", json.dumps(code))
+                value = interaction_program(parts, setup, "await analysisAction('answer',{round:1});return {error:$('analysisError').textContent,notice};")
+                self.assertNotIn("private", value["error"] + value["notice"])
+                self.assertNotIn("内部", value["error"] + value["notice"])
+                self.assertNotIn("viewer.analysis.", value["error"] + value["notice"])
+                self.assertTrue(value["error"])
+
     def test_question_escapes_original_text_and_hides_internal_identifiers(self):
         state = {"nodes": {"n_private": {"id": "n_private", "text": '<img src=x onerror="bad()">口径？',
                   "short": "口径", "recommend": "Y_private", "options": {"Y_private": "年度", "Q": "季度"},
