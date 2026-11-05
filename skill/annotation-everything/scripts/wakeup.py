@@ -31,6 +31,14 @@ SCHEMA = 1
 MAX_FRAME = 16 * 1024 * 1024
 _ANY_BINDING = object()
 
+# 已登记的投递事件类型：去重键、确认命令（wakeup.py ack --event）、批次等待接收的状态（awaiting）
+# 与接收阶段（claimStage，notes.py claim --stage）都按这张表处理，新事件类型登记后即生效。
+# 登记顺序也是状态汇总的优先序：序号相同时靠后的类型优先（review 压过 handoff）。
+DELIVERY_EVENTS = {
+    "handoff": {"awaiting": "pending", "claimStage": "draft"},
+    "review": {"awaiting": "review", "claimStage": "review"},
+}
+
 
 class Rejected(RuntimeError):
     """The desktop explicitly refused a request; delivery is known not to succeed."""
@@ -178,10 +186,20 @@ def binding_identity(binding):
             else identity(binding["harness"], binding["sessionId"]))
 
 
+# 改绑 / 解除接收方前的「处理中」检查来源。现在只有批次一种；将来的分析轮次等来源在这里登记，
+# 每项是 (拒绝原因, 判定函数)，任一来源判定在处理中就拒绝转移或解除。
+TRANSFER_BLOCKS = (
+    ("batch-in-progress: finish the current batch before transferring or unbinding",
+     lambda review: any(item.get("status") in ("claimed", "reviewing")
+                        for item in store.handoff_load(review)["items"])),
+)
+
+
 def assert_transferable(review):
     """Call under the annotation lock so a concurrent claim cannot race a transfer."""
-    if any(item.get("status") in ("claimed", "reviewing") for item in store.handoff_load(review)["items"]):
-        raise ValueError("batch-in-progress: finish the current batch before transferring or unbinding")
+    for reason, in_progress in TRANSFER_BLOCKS:
+        if in_progress(review):
+            raise ValueError(reason)
 
 
 def bind_wait(review, harness, session, replace=False):
@@ -246,7 +264,7 @@ def _deliveries(review):
 
 
 def _key(binding, event, seq):
-    if event not in ("handoff", "review") or isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+    if event not in DELIVERY_EVENTS or isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
         raise ValueError("invalid-delivery-event")
     return f'{binding["bindingId"]}:{event}:{seq}'
 
@@ -266,7 +284,7 @@ def prompt(binding, event, seq, message_id):
     ack = shlex.join(["python3", str(scripts / "wakeup.py"), "ack", str(review),
                       "--event", event, "--seq", str(seq), "--message-id", message_id])
     claim = shlex.join(["python3", str(scripts / "notes.py"), "claim", str(review),
-                        "--stage", "review" if event == "review" else "draft", "--seq", str(seq), "--by", "Codex"])
+                        "--stage", DELIVERY_EVENTS[event]["claimStage"], "--seq", str(seq), "--by", "Codex"])
     metadata = json.dumps({"reviewId": binding["reviewId"], "reviewDir": str(review),
                            "event": event, "seq": seq, "messageId": message_id}, ensure_ascii=False)
     return (
@@ -305,7 +323,7 @@ def deliver(review, event, seq, *, expected_binding=_ANY_BINDING):
         if previous.get("state") == "sending":
             return _record(review, key, {"state": "unconfirmed", "errorCode": "interrupted-after-dispatch"})
         batch = next((b for b in store.handoff_load(review)["items"] if b.get("seq") == seq), None)
-        expected = "pending" if event == "handoff" else "review"
+        expected = DELIVERY_EVENTS[event]["awaiting"]
         if not batch or batch.get("status") != expected:
             return {"state": "skipped", "reason": "batch-not-awaiting-receipt"}
         message_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "annotation-everything:" + key))
@@ -357,6 +375,20 @@ def acknowledge(review, event, seq, message_id, thread):
         return dict(item)
 
 
+def _latest_by_event(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """按事件类型分别取最新（类型内 seq 最大的一条）；未登记的类型不参与统计，也不抢汇总。"""
+    latest: dict[str, dict[str, Any]] = {}
+    for v in items:
+        event = v.get("event")
+        if event in DELIVERY_EVENTS and (event not in latest or v.get("seq", 0) > latest[event].get("seq", 0)):
+            latest[event] = v
+    return {name: latest[name] for name in DELIVERY_EVENTS if name in latest}
+
+
+# 状态输出里跟随投递记录走的字段：汇总条目与 events 分项共用（分项另加 state，事件名就是它的键）
+STATUS_FIELDS = ("seq", "messageId", "acceptedAt", "receivedAt", "errorCode", "turnId")
+
+
 def status(review, *, binding=_ANY_BINDING, handoff=None, manifest=None, waiting=None):
     review = Path(review).resolve()
     binding = store.pre_read(binding, _ANY_BINDING, lambda: load_binding(review, manifest=manifest))
@@ -365,9 +397,14 @@ def status(review, *, binding=_ANY_BINDING, handoff=None, manifest=None, waiting
     if binding["adapter"] == "wait":
         return {"adapter": "wait", "state": "bound", "receiver": receiver_status(review, binding=binding, handoff=handoff, waiting=waiting)}
     items = [v for v in _deliveries(review)["items"].values() if v.get("bindingId") == binding["bindingId"]]
-    latest = max(items, key=lambda v: (v.get("seq", 0), v.get("event") == "review"), default={})
+    by_event = _latest_by_event(items)
+    # 汇总条目从各类型的最新里挑：seq 最大、相同时登记顺序靠后的优先（与只登记两类时的旧口径一致）
+    latest = max(by_event.values(), key=lambda v: (v.get("seq", 0), list(DELIVERY_EVENTS).index(v.get("event"))),
+                 default={})
     return {"adapter": binding["adapter"], "state": latest.get("state", "bound"), "receiver": receiver_status(review, binding=binding, handoff=handoff, waiting=waiting),
-            **{k: latest[k] for k in ("seq", "event", "messageId", "acceptedAt", "receivedAt", "errorCode", "turnId") if k in latest}}
+            **{k: latest[k] for k in ("seq", "event", *STATUS_FIELDS) if k in latest},
+            "events": {event: {k: v[k] for k in ("state", *STATUS_FIELDS) if k in v}
+                       for event, v in by_event.items()}}
 
 
 def public_status(review, *, binding=_ANY_BINDING, handoff=None, manifest=None, waiting=None):
@@ -464,7 +501,7 @@ def main(argv=None):
             p.add_argument("--replace", action="store_true")
         if command == "ack":
             p.add_argument("--seq", type=int, required=True)
-            p.add_argument("--event", choices=["handoff", "review"], required=True)
+            p.add_argument("--event", choices=list(DELIVERY_EVENTS), required=True)
             p.add_argument("--message-id", required=True)
     args = parser.parse_args(argv)
     review = ledger.resolve_dir(args.review)

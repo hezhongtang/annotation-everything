@@ -34,6 +34,8 @@ uv run --no-project --with playwright python tests/e2e_browser.py --skills-only 
 
 | 改造前的段落（tests/e2e_browser.py） | 新场景 ID | 旧局部参数 |
 | --- | --- | --- |
+| `console_layout_checks`（#118 抽屉开合与刷新记忆、双语标题栏、窄屏） | `console-layout` | — |
+| `focus_mode_checks`（#118 全屏批注、快捷键、分层 Esc 与 CSS 退路） | `focus-mode` | — |
 | `installed_delivery_checks`（#36 三种语言组合的安装副本流程） | `installed-delivery` | `--delivery-only` |
 | `locale_live_controls_checks`（同页切语言只改系统标签） | `locale-live-controls` | — |
 | `skill_search_checks`（技能输入栏搜索与选择） | `skill-search` | `--skills-only` |

@@ -31,9 +31,9 @@
 <br>
 
 <p align="center">
-  <img src="docs/assets/receiver.zh.png" alt="合成对照页：报告、讲稿与批注并排，顶部显示接收方 harness、会话与等待状态" width="92%">
+  <img src="docs/assets/receiver.zh.png" alt="合成对照页：侧栏页面树、报告与讲稿分屏、底部批注面板和接收状态栏" width="92%">
   <br>
-  <sub>对照页：报告、讲稿和批注并排，顶部明确接收方 harness、会话与等待状态。图中数据均为虚构样例。</sub>
+  <sub>对照页：报告与讲稿分屏，批注放在底部，状态栏显示接收方 harness、会话与等待状态。图中数据均为虚构样例。</sub>
 </p>
 
 ## 为什么需要它
@@ -48,6 +48,8 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
 - **材料不离开本机**：服务只监听 `127.0.0.1`，不访问网络，也不上报使用数据。批注保存在审阅人指定的审阅目录里。
 
 ## 功能
+
+对照页采用控制台布局：活动栏集中放置全部批注、处理记录、审阅总览和说明；侧栏按章节列出页面及批注数。侧栏、讲稿和底部面板都可以收起，分别用 `[`、`]`、`\` 切换，开合状态按审阅保存在本浏览器。按 `F` 进入全屏专注，只看报告；按 `C` 打开浮动输入框，`⌘ / Ctrl + ↵` 添加批注，`P` 标注、`S` 风格优化和选区快捷键照常可用。`Esc` 先关闭浮层，再退出全屏。输入框聚焦时不触发布局快捷键。
 
 <table>
   <tr>
@@ -410,6 +412,7 @@ verify_parallel.py                验证组内的有界进程调度；保留原�
 host_isolation.py                 同机资源隔离协议：验证参与方按共享资源互斥的锁与声明
 fixtures/sample/                   合成样例（虚构数据）
 fixtures/show-baseline/            notes.py show 中英输出的逐字基线（合成数据）
+fixtures/verify-doc-allowlist.json  文档门禁路径与依赖契约的合成数据
 fixtures/external-report-skill/    合成外部生成技能，测试外部产物走同一验收
 fixtures/external-report-skill-lite/ 合成外部生成技能的精简变体，验证缺依据时如实列为缺口
 tests/                             单元测试和浏览器端到端测试
@@ -454,13 +457,13 @@ uv run --no-project --with playwright python tests/e2e_browser.py --list        
 uv run --no-project --with playwright python tests/e2e_browser.py --only skill-i18n # 只跑选定的浏览器场景（逗号分隔、去重；--delivery-only 等旧参数保留为别名）
 ```
 
-`verify.py` 是统一验证入口：`plan` 解释范围，`run` 执行并把结构化记录和原始日志写进 `.verify/`（已被忽略），`report` 只读记录。输入指纹包含有效输入文件的完整内容；文本与 JSON 报告保留原测试结果，并显示当前校验后的证据可用性。记录还含提交与基线、环境和逐用例耗时，字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，接入说明见 [docs/verify/onboarding.md](docs/verify/onboarding.md)。它不裁剪实际执行的组；原来的直接命令继续有效，完整执行的成功 / 失败退出码语义一致。空集合与全跳过不算通过，新入口返回 1。同机多个工作区并行验证时，资源敏感的组（完整单元、完整浏览器、敏感模块直跑）按共享资源自动互斥排队：跨 worktree 与独立 checkout 生效，锁等待单独计时、超时不算通过，纯逻辑组不受影响；详见[同机资源隔离协议](docs/verify/isolation.md)。
+`verify.py` 是统一验证入口：`plan` 解释范围，`run` 执行并把结构化记录和原始日志写进 `.verify/`（已被忽略），`report` 只读记录。输入指纹包含有效输入文件的完整内容；文本与 JSON 报告保留原测试结果，并显示当前校验后的证据可用性。记录还含提交与基线、环境和逐用例耗时，字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，接入说明见 [docs/verify/onboarding.md](docs/verify/onboarding.md)。纯文档 PR 的全部差异都在内置文档允许列表内时，`run --group all --phase pr` 记录产品测试不适用，由 CI 兜底；其他 PR 仍实际执行全量。其余阶段保留影子模式；原来的直接命令继续有效，完整执行的成功 / 失败退出码语义一致。空集合与全跳过不算通过，新入口返回 1。同机多个工作区并行验证时，资源敏感的组（完整单元、完整浏览器、敏感模块直跑）按共享资源自动互斥排队：跨 worktree 与独立 checkout 生效，锁等待单独计时、超时不算通过，纯逻辑组不受影响；详见[同机资源隔离协议](docs/verify/isolation.md)。
 
 验证组内部最多使用 3 个独立进程。敏感单元模块、执行器测试和未分类的新模块仍在原验证进程串行执行，只有显式允许的模块才并行；完整浏览器场景分别使用独立浏览器、合成 HOME、台账与技能目录。整组继续持有原有资源锁，不会与其他工作区的敏感验证重叠。`AE_VERIFY_SERIAL=1` 恢复串行；执行方式进入环境记录，失败与未完成结果不会被后续成功覆盖。边界与回退见 [docs/verify/parallel-execution.md](docs/verify/parallel-execution.md)。
 
-阶段选测与影子对照默认开启：`run` 依据版本化的映射（`verify_selection.py`）记录「当前改动建议跑什么」，实际执行仍是请求的组；结束时把建议范围与实际结果并列对照，完整检查发现而建议范围没覆盖的失败保留为候选遗漏并归因。未知路径、坏基线、损坏规则、测试清单缺口和策略自身变化一律建议回退完整检查并解释原因。CLI 的 `issue` 标签用于需求阶段，不自动启动测试；issue 实现用 `development` 记录快速单元，全量回退要求移交 PR review。若效率守卫要求扩大实际范围，快速阶段只读计划，不绕过守卫。策略、回退情形与对照样本见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md)。
+阶段选测与影子对照默认开启：`run` 依据版本化的映射（`verify_selection.py`）记录「当前改动建议跑什么」，除符合内置文档允许列表的 PR 豁免外，实际执行仍是请求的组；结束时把建议范围与实际结果并列对照，完整检查发现而建议范围没覆盖的失败保留为候选遗漏并归因。未知路径、坏基线、损坏规则、测试清单缺口和策略自身变化一律建议回退完整检查并解释原因。CLI 的 `issue` 标签用于需求阶段，不自动启动测试；issue 实现用 `development` 记录快速单元，全量回退要求移交 PR review。若效率守卫要求扩大实际范围，快速阶段只读计划，不绕过守卫。策略、回退情形与对照样本见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md)。
 
-有效验证证据跨阶段引用（`verify_evidence.py`，判定从紧）：同一逻辑工作会话内，同输入指纹、同环境、请求范围被已验证范围覆盖，且来源记录当前校验后仍可作为通过证据、未超 24 小时保鲜窗口、版本一致时，`run` 在 `issue` / `development` / `review` / `manual` 阶段直接引用已有结果。会话身份只保存摘要，优先使用 `AE_VERIFY_SESSION`，其次继承 `CODEX_THREAD_ID` / `CLAUDE_SESSION_ID`；无法确认身份时实际执行，终端设置方式见[接入说明](docs/verify/onboarding.md)。报告列出来源 run、指纹、范围、环境与理由（差异被证明仅在文档允许列表内时不算输入变化；覆盖映射下停用该放宽）；依赖宿主机状态的组（完整单元、完整浏览器、敏感模块直跑）指纹相同也不复用，`pr` / `ci` 门禁阶段必须实际执行，点名到类 / 用例的补测不复用。被引用的组显示为「引用已有验证」，不重复计入通过数量；来源被篡改、超期或失效时，完整性和影子结论同步降级为不可用。`--no-reuse` 强制全部重跑。
+有效验证证据跨阶段引用（`verify_evidence.py`，判定从紧）：同一逻辑工作会话内，同输入指纹、同环境、请求范围被已验证范围覆盖，且来源记录当前校验后仍可作为通过证据、未超 24 小时保鲜窗口、版本一致时，`run` 在 `issue` / `development` / `review` / `manual` 阶段直接引用已有结果。会话身份只保存摘要，优先使用 `AE_VERIFY_SESSION`，其次继承 `CODEX_THREAD_ID` / `CLAUDE_SESSION_ID`；无法确认身份时实际执行，终端设置方式见[接入说明](docs/verify/onboarding.md)。报告列出来源 run、指纹、范围、环境与理由（差异被证明仅在文档允许列表内时不算输入变化；覆盖映射下停用该放宽）；依赖宿主机状态的组（完整单元、完整浏览器、敏感模块直跑）指纹相同也不复用，`pr` / `ci` 门禁阶段不复用（纯文档 PR 的产品测试不适用，其余门禁实际执行），点名到类 / 用例的补测不复用。被引用的组显示为「引用已有验证」，不重复计入通过数量；来源被篡改、超期或失效时，完整性和影子结论同步降级为不可用。`--no-reuse` 强制全部重跑。
 
 持续效率报告：自动更新耗时、重复执行、证据引用与失败候选；只读历史用 `python3 verify.py report --efficiency`，重建衍生归档用 `--rebuild`，不启动产品测试。比较、周期回顾、CI 缺口与策略维护见 [docs/verify/efficiency.md](docs/verify/efficiency.md)。工程提效的覆盖对照、性能样本和合成原始证据见[总验收记录](docs/verify/final-acceptance.md)。
 

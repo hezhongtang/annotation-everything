@@ -260,11 +260,17 @@ class DeliveryTests(unittest.TestCase):
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             deadline = time.monotonic() + 3
-            while not (self.review / serve.STATUS_FILE).exists() and time.monotonic() < deadline:
+            state, health = None, None
+            while time.monotonic() < deadline:
+                state = serve.read_status(self.review)
+                if state and state.get("pid") == process.pid:
+                    health = serve.probe(state["port"])
+                    if health and health.get("hook"):
+                        break
                 time.sleep(.02)
-            state = json.loads((self.review / serve.STATUS_FILE).read_text())
+            self.assertIsNotNone(state, "重启服务须写出完整的状态 JSON")
             self.assertEqual(state["pid"], process.pid)
-            self.assertTrue(serve.probe(state["port"])["hook"])
+            self.assertTrue(health and health.get("hook"))
             time.sleep(.1)
             self.assertEqual(len(self.desktop.requests), 1)
         finally:
@@ -286,6 +292,55 @@ class DeliveryTests(unittest.TestCase):
         finally:
             process.terminate()
             process.wait(timeout=5)
+
+    def test_registered_event_types_drive_dedup_and_status(self):
+        """登记的事件类型参与去重与状态汇总；未登记的类型被拒，也不抢已登记类型的汇总。"""
+        self.bind()
+        fake = {"awaiting": "pending", "claimStage": "draft"}
+        with patch.dict(wakeup.DELIVERY_EVENTS, {"fake": fake}):
+            with self.assertRaises(ValueError):   # 未登记的事件类型：去重键拒绝
+                wakeup.deliver(self.review, "analysis", 1)
+            store.handoff_submit(self.review, "synthetic")
+            handoff = wakeup.deliver(self.review, "handoff", 1)
+            other = wakeup.deliver(self.review, "fake", 1)   # 同 seq 不同事件：不互相去重
+            self.assertEqual(len(self.desktop.requests), 2)
+            self.assertNotEqual(handoff["messageId"], other["messageId"])
+            wakeup.acknowledge(self.review, "handoff", 1, handoff["messageId"], THREAD)
+            result = wakeup.status(self.review)
+            self.assertEqual(result["events"]["handoff"]["state"], "received")
+            self.assertEqual(result["events"]["fake"]["state"], "accepted")
+            self.assertEqual((result["event"], result["state"]), ("fake", "accepted"),
+                             "同 seq 时登记顺序靠后的类型优先汇总")
+            with self.assertRaises(ValueError):   # 确认命令接受已登记类型（过了参数解析才到绑定校验）
+                wakeup.main(["ack", str(self.review), "--event", "fake", "--seq", "1", "--message-id", "wrong"])
+            with self.assertRaises(SystemExit):   # 未登记类型过不了参数解析
+                wakeup.main(["ack", str(self.review), "--event", "analysis", "--seq", "1", "--message-id", "x"])
+        binding = wakeup.load_binding(self.review)
+        history = json.loads((self.review / wakeup.DELIVERY_FILE).read_text())
+        history["items"][f'{binding["bindingId"]}:analysis:99'] = {   # 将来版本写下的记录，本版本未登记
+            "bindingId": binding["bindingId"], "seq": 99, "event": "analysis",
+            "messageId": "future-version", "state": "received"}
+        (self.review / wakeup.DELIVERY_FILE).write_text(json.dumps(history, ensure_ascii=False))
+        result = wakeup.status(self.review)
+        self.assertEqual((result["event"], result["seq"]), ("handoff", 1), "未登记类型的记录不抢汇总")
+        self.assertEqual(list(result["events"]), ["handoff"])   # 解除登记后同样不参与统计
+
+    def test_transfer_checks_consult_every_registered_source(self):
+        """改绑 / 解除接收方的前置检查按登记的来源逐个判定；来源可登记多种。"""
+        self.bind()
+        store.handoff_submit(self.review, "synthetic")
+        store.handoff_claim(self.review, by="Synthetic")
+        with self.assertRaises(ValueError) as ctx:
+            wakeup.assert_transferable(self.review)
+        self.assertIn("batch-in-progress", str(ctx.exception))
+        store.handoff_done(self.review, seq=1, by="Synthetic")
+        wakeup.assert_transferable(self.review)   # 批次不在处理中：通过
+        fake = ("fake-in-progress: synthetic source", lambda review: True)
+        with patch.object(wakeup, "TRANSFER_BLOCKS", wakeup.TRANSFER_BLOCKS + (fake,)):
+            with self.assertRaises(ValueError) as ctx:   # 批次之外登记的来源也能拦下
+                wakeup.assert_transferable(self.review)
+        self.assertIn("fake-in-progress", str(ctx.exception))
+        wakeup.assert_transferable(self.review)   # 解除登记后恢复通过
 
     def test_old_delivery_event_cannot_route_to_the_replacement_chat(self):
         old = self.bind()

@@ -223,6 +223,243 @@ def drag_select(page, locator):
     page.mouse.up()
 
 
+def capture_screenshot(page, path):
+    # 视口变化后等字体和布局帧就绪，避免截到 Chrome 尚未更新的合成帧。
+    page.evaluate("""async () => {
+        await document.fonts.ready;
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }""")
+    page.screenshot(path=str(path), animations="disabled")
+
+
+def console_layout_checks(browser, tmp: Path):
+    review, other = tmp / "console", tmp / "console-other"
+    build(review, name="合成布局审阅")
+    build(other)
+    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+    artifacts = os.environ.get("AE_LAYOUT_ARTIFACTS")
+    output = Path(artifacts) if artifacts else None
+    if output:
+        output.mkdir(parents=True, exist_ok=True)
+    try:
+        page = ctx.new_page()
+        page.goto((review / "index.html").as_uri())
+        ready = page.locator("#sideToggle").count() == 1
+        ok(ready, "标题栏提供三个抽屉与全屏入口")
+        if not ready:
+            return
+        ok(page.inner_text("#reviewTitle") == "合成布局审阅", "标题栏显示审阅名")
+        for locale in ("zh-CN", "en"):
+            page.select_option("#localePick", locale)
+            for width, height in ((1280, 800), (1440, 900)):
+                page.set_viewport_size({"width": width, "height": height})
+                metrics = page.evaluate("""() => {
+                    const header = document.querySelector('header'), button = document.getElementById('handBtn');
+                    const h = header.getBoundingClientRect(), b = button.getBoundingClientRect();
+                    return {width: innerWidth, headerHeight: h.height, buttonTop: b.top, buttonBottom: b.bottom,
+                            buttonRight: b.right, labelWidth: button.scrollWidth, buttonWidth: button.clientWidth,
+                            fits: h.height <= 52 && b.top >= h.top && b.bottom <= h.bottom && b.right <= innerWidth
+                                  && button.scrollWidth <= button.clientWidth};
+                }""")
+                ok(metrics["fits"], "%s：%spx 标题栏单行，主按钮完整显示（%s）" % (locale, width, metrics))
+                page.locator("#modeSwitch").evaluate("el => el.hidden = false")
+                ok(page.evaluate("""() => {
+                    const r = document.getElementById('modeSwitch').getBoundingClientRect();
+                    const title = document.getElementById('reviewTitle').getBoundingClientRect();
+                    const controls = document.querySelector('.layout-controls').getBoundingClientRect();
+                    const hand = document.getElementById('handBtn').getBoundingClientRect();
+                    return Math.abs((r.left + r.right) / 2 - innerWidth / 2) < 1
+                           && title.right <= r.left && r.right <= controls.left && hand.right <= innerWidth;
+                }"""), "%s：%spx 分析模式插槽居中，标题与右侧按钮不重叠" % (locale, width))
+                page.locator("#modeSwitch").evaluate("el => el.hidden = true")
+                if output:
+                    stem = "%s.%s" % (width, locale)
+                    (output / (stem + ".json")).write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+                    capture_screenshot(page, output / (stem + ".png"))
+        ok(page.locator("#modeSwitch").is_hidden() and page.locator("#analysisQueue").is_hidden(),
+           "服务未支持分析时，模式切换和分析队列插槽隐藏")
+        page.fill("#ntext", "\n".join("合成的长批注意见" for _ in range(60)))
+        ok(page.evaluate("""() => {
+            const f = document.getElementById('nform').getBoundingClientRect();
+            const p = document.getElementById('panelBody').getBoundingClientRect();
+            const add = document.getElementById('addBtn').getBoundingClientRect();
+            return f.bottom <= p.bottom + 1 && add.bottom <= p.bottom + 1;
+        }"""), "长批注输入不挤出底部面板，添加按钮仍在面板内")
+        page.fill("#ntext", "")
+        for toggle, panel, key in (("sideToggle", "sidebar", "["),
+                                   ("scriptToggle", "scriptPane", "]"),
+                                   ("panelToggle", "panelBody", "\\")):
+            page.click("#" + toggle)
+            ok(page.locator("#" + panel).is_hidden(), "%s：鼠标收起抽屉" % toggle)
+            page.reload()
+            ok(page.locator("#" + panel).is_hidden(), "%s：刷新保留收起状态" % toggle)
+            page.keyboard.press(key)
+            ok(page.locator("#" + panel).is_visible(), "%s：快捷键展开抽屉" % toggle)
+        page.fill("#ntext", "[ ] \\ f")
+        page.keyboard.press("[")
+        ok(page.locator("#sidebar").is_visible(), "输入框聚焦时不触发布局快捷键")
+        page.fill("#ntext", "")
+        page.keyboard.press("Escape")
+        for toggle in ("sideToggle", "scriptToggle", "panelToggle"):
+            page.click("#" + toggle)
+        ok(page.locator("#seeList").is_visible() and page.locator("#scriptHandle").is_visible(),
+           "抽屉收起后保留底部页签和讲稿展开条")
+        if output:
+            capture_screenshot(page, output / "drawers-closed.png")
+        page.goto((other / "index.html").as_uri())
+        ok(page.locator("#sidebar").is_visible() and page.locator("#panelBody").is_visible(),
+           "另一份审阅不继承本审阅的抽屉状态")
+        page.set_viewport_size({"width": 820, "height": 900})
+        page.reload()
+        ok(page.locator("#sidebar").is_hidden() and page.locator("#scriptPane").is_hidden(),
+           "窄屏侧栏和讲稿默认收起")
+        page.click("#scriptHandle")
+        ok(page.evaluate("""() => document.getElementById('scriptPane').getBoundingClientRect().top
+            >= document.getElementById('reportPane').getBoundingClientRect().bottom - 1"""),
+           "窄屏展开讲稿后报告与讲稿上下排列")
+        if output:
+            capture_screenshot(page, output / "narrow.png")
+        page.click("#seeList")
+        add_note(page, "窄屏合成批注")
+        ok("窄屏合成批注" in page.inner_text("#nlist"), "窄屏仍能添加批注")
+        page.click("#notesBtn")
+        ok(page.is_visible("#allnotes"), "窄屏活动栏可打开全部批注")
+        page.keyboard.press("Escape")
+        page.set_viewport_size({"width": 390, "height": 844})
+        mobile = page.evaluate("""() => {
+            const b = document.getElementById('handBtn').getBoundingClientRect();
+            return {fits: b.left >= 0 && b.right <= innerWidth && document.documentElement.scrollWidth === innerWidth,
+                    buttonRight: b.right, documentWidth: document.documentElement.scrollWidth, viewport: innerWidth,
+                    overflow: [...document.querySelectorAll('body *')].filter(el => el.getClientRects().length
+                        && el.getBoundingClientRect().right > innerWidth + 1).slice(0, 8)
+                        .map(el => ({tag: el.tagName, id: el.id, width: el.getBoundingClientRect().width}))};
+        }""")
+        ok(mobile["fits"], "390px 窄屏标题栏分行，主按钮和入口仍在视口内（%s）" % mobile)
+        if output:
+            capture_screenshot(page, output / "narrow-mobile.png")
+    finally:
+        ctx.close()
+
+
+def focus_mode_checks(browser, tmp: Path):
+    review = tmp / "focus"
+    build(review)
+    for fallback in (False, True):
+        ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+        server = None
+        try:
+            if fallback:
+                ctx.add_init_script("Element.prototype.requestFullscreen = () => Promise.reject(new Error('synthetic unavailable'))")
+            page = ctx.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            if fallback:
+                page.goto((review / "index.html").as_uri())
+            else:
+                port = free_port()
+                server = start_server(review, port)
+                page.goto(f"http://127.0.0.1:{port}/")
+                ok(wait_mode(page, "server"), "全屏场景连接真实本地服务")
+            ready = page.locator("#focusBtn").count() == 1
+            ok(ready, "全屏专注入口存在（fallback=%s）" % fallback)
+            if not ready:
+                continue
+            page.click("#focusBtn")
+            ok(wait_dom(page, "() => document.body.classList.contains('focus-mode')", 3),
+               "进入全屏专注（fallback=%s）" % fallback)
+            ok(wait_dom(page, "expected => Boolean(document.fullscreenElement) === expected", 3,
+                        arg=not fallback), "优先原生全屏，不可用时使用 CSS 退路")
+            ok(page.locator("header").is_hidden() and page.locator("#statusbar").is_hidden()
+               and page.locator("#slide").is_visible(), "全屏只显示报告和快捷键提示")
+            page.keyboard.press("c")
+            page.fill("#ntext", "全屏合成批注")
+            ok(page.evaluate("document.activeElement.id") == "ntext", "全屏 C 打开原有输入框")
+            artifacts = os.environ.get("AE_LAYOUT_ARTIFACTS")
+            if artifacts and not fallback:
+                capture_screenshot(page, Path(artifacts) / "focus-composer.png")
+            page.keyboard.press("Control+Enter")
+            ok(wait_dom(page, "() => notes.some(n => n.text === '全屏合成批注')", 3),
+               "全屏 Ctrl+Enter 成功添加批注")
+            if not fallback:
+                ok(wait_until(lambda: any(n["text"] == "全屏合成批注" for n in disk_notes(review)), page, 5),
+                   "全屏添加的批注经服务落盘")
+            page.keyboard.press("c")
+            page.fill("#ntext", "全屏未完成草稿")
+            page.keyboard.press("Escape")
+            ok(page.locator("#nform").is_hidden() and page.evaluate("document.body.classList.contains('focus-mode')"),
+               "Esc 先关闭浮动输入框，仍保留全屏")
+            page.keyboard.press("ArrowRight")
+            page.keyboard.press("c")
+            ok(page.input_value("#ntext") == "", "全屏翻页不把上一页草稿带进空白页")
+            page.fill("#ntext", "第二页自己的草稿")
+            page.keyboard.press("Escape")
+            page.keyboard.press("ArrowLeft")
+            page.keyboard.press("c")
+            ok(page.input_value("#ntext") == "全屏未完成草稿", "全屏返回上一页恢复该页草稿")
+            page.keyboard.press("Escape")
+            page.keyboard.press("ArrowRight")
+            page.keyboard.press("c")
+            ok(page.input_value("#ntext") == "第二页自己的草稿", "全屏翻页保留目的页原有草稿")
+            page.keyboard.press("Escape")
+            page.keyboard.press("ArrowLeft")
+            page.keyboard.press("p")
+            ok(page.evaluate("markMode"), "全屏 P 进入标注")
+            page.keyboard.press("Escape")
+            ok(not page.evaluate("markMode") and page.evaluate("document.body.classList.contains('focus-mode')"),
+               "Esc 先取消标注，仍保留全屏")
+            page.keyboard.press("p")
+            stage_box = page.locator("#host #ae-stage").bounding_box()
+            page.mouse.click(stage_box["x"] + stage_box["width"] * .4,
+                             stage_box["y"] + stage_box["height"] * .5)
+            page.fill("#ntext", "全屏标注批注")
+            page.keyboard.press("Control+Enter")
+            mark = page.locator("#host .ae-pin:not(.pending)").first
+            mark.click()
+            ok(page.is_visible("#pinpop") and page.evaluate("focusMode"), "全屏点击已有标注只预览，保持专注")
+            page.keyboard.press("Escape")
+            ok(page.locator("#pinpop").is_hidden() and page.evaluate("focusMode"), "Esc 只关闭标注预览")
+            mark.click()
+            page.click('#pinpop [data-pp="edit"]')
+            ok(not page.evaluate("focusMode") and page.is_visible("#etext"), "明确编辑标注时退出专注并显示原有编辑卡片")
+            page.click('#nlist [data-act="cancel"]')
+            page.keyboard.press("f")
+            page.keyboard.press("s")
+            ok(page.is_visible("#stylemenu"), "全屏 S 打开风格菜单")
+            page.keyboard.press("1")
+            ok(page.locator("#nform").is_visible(), "选择风格后可在全屏浮层写批注")
+            page.keyboard.press("Escape")
+            # 真实鼠标选中报告文字，沿用原有 D / R / C 与「同时改」的流程。
+            for action in ("d", "r", "c"):
+                drag_select(page, page.locator("#host h1").first)
+                selected = page.is_visible("#selbar")
+                ok(selected, "全屏选区浮层可见（%s）" % action.upper())
+                if not selected:
+                    continue
+                page.keyboard.press(action)
+                if action == "d":
+                    page.keyboard.press("d")
+                    ok(page.evaluate("notes.some(n => n.edit?.op === 'delete')"), "全屏 D 两次确认删除")
+                elif action == "r":
+                    page.fill("#repText", "合成改写标题")
+                    page.keyboard.press("Enter")
+                    ok(page.evaluate("notes.some(n => n.edit?.to === '合成改写标题')"), "全屏 R 改写选区")
+                else:
+                    page.fill("#ntext", "全屏选区引用批注")
+                    page.keyboard.press("Control+Enter")
+                    ok(page.evaluate("notes.some(n => n.text === '全屏选区引用批注' && n.quote)"),
+                       "全屏 C 引用选中文字添加批注")
+            page.keyboard.press("ArrowRight")
+            ok(page.evaluate("i") == 1, "全屏方向键翻页")
+            page.keyboard.press("Escape")
+            ok(wait_dom(page, "() => !document.body.classList.contains('focus-mode')", 3),
+               "没有浮层时 Esc 退出全屏")
+            ok(page.locator("header").is_visible() and not errors, "退出全屏恢复布局，无页面异常")
+        finally:
+            ctx.close()
+            if server:
+                stop(server)
+
+
 def review_overview_checks(browser, tmp: Path):
     workspace = tmp / "overview-workspace"
     workspace.mkdir()
@@ -1256,6 +1493,8 @@ def locale_editing_checks(page, mode, read_notes):
     # ---- 英文长标签在窄窗口下仍可读可操作 ----
     close_overlays(page)
     page.set_viewport_size({"width": 720, "height": 780})
+    page.locator("#sidebar").wait_for(state="hidden")
+    page.click("#sideToggle")
     for sel, want in (("#addBtn", "Add annotation"), ("#pinBtn", "Annotate on the report"),
                       ("#styleBtn", "Style"), ("#prev", "Previous"), ("#next", "Next")):
         box = page.locator(sel).bounding_box()
@@ -1267,11 +1506,11 @@ def locale_editing_checks(page, mode, read_notes):
 
     # ---- 「本页批注」按钮把列表滚进来 ----
     close_overlays(page)
-    scrolled = page.evaluate("() => { const s = document.getElementById('script'); s.scrollTop = 0; return s.scrollHeight > s.clientHeight }")
+    if page.locator("#panelBody").is_visible():
+        page.click("#panelToggle")
     page.click("#seeList")
-    ok(not scrolled or wait_until(lambda: page.evaluate(
-        "() => document.getElementById('script').scrollTop > 0"), page, 5),
-       f"{mode}：点「本页批注」滚到批注列表（内容是否可滚：{scrolled}）")
+    ok(page.locator("#panelBody").is_visible() and page.locator("#nlist").is_visible(),
+       f"{mode}：点「本页批注」展开底部批注列表")
     ok("On this page" in page.inner_text("#seeList"), f"{mode}：英文界面的本页批注按钮")
 
     # ---- 说明正文按语言整段切换 ----
@@ -2494,7 +2733,7 @@ def file_mode_checks(browser, tmp: Path):
     go_page(page, 3)
     add_note(page, "file 模式批注", pin=(0.5, 0.5))
     page.reload()   # 文件模式初始化同步渲染，返回时列表与提示条已就绪
-    ok("file 模式批注" in page.inner_text("#script"), "file:// 刷新后批注仍在（localStorage）")
+    ok("file 模式批注" in page.inner_text("#nlist"), "file:// 刷新后批注仍在（localStorage）")
     ok("上次批注到第 3 页" in page.inner_text("#resume"), "file:// 打开时提示上次批注到哪一页")
     page2 = ctx.new_page()
     page2.goto(url)
@@ -3540,7 +3779,8 @@ def server_mode_checks(browser, tmp: Path):
     page.goto(base)
     wait_mode(page, "server", condition="首次轮询确认服务后徽标进入服务模式")
     ok("已连接本地服务" in page.inner_text("#mode"), "经服务打开显示「已连接本地服务」")
-    ok(page.locator("header kbd").count() >= 5 and "P" in page.inner_text("#pinBtn"), "按钮上显示快捷键")
+    ok(page.locator("header kbd").count() == 0 and "P" in page.get_attribute("#pinBtn", "title")
+       and "Ctrl" in page.get_attribute("#addBtn", "title"), "快捷键显示在工具提示与说明中")
     go_page(page, 3)
     page.evaluate("""() => { const p = document.querySelector('.talk p'); const r = document.createRange();
             r.selectNodeContents(p); const s = getSelection(); s.removeAllRanges(); s.addRange(r);
@@ -3799,7 +4039,7 @@ def server_mode_checks(browser, tmp: Path):
     # 输入框停靠：讲稿很长时不用往下翻
     page.evaluate("() => { const t = document.querySelector('#pageScript'); for (let k = 0; k < 60; k++) t.insertAdjacentHTML('beforeend', '<p>很长的讲稿段落……</p>'); }")
     page.evaluate("document.getElementById('script').scrollTop = 0")
-    box = page.evaluate("""() => { const f = document.getElementById('nform').getBoundingClientRect(), s = document.getElementById('script').getBoundingClientRect();
+    box = page.evaluate("""() => { const f = document.getElementById('nform').getBoundingClientRect(), s = document.getElementById('panelBody').getBoundingClientRect();
             return [f.top >= s.top, f.bottom <= s.bottom + 1]; }""")
     ok(all(box), "讲稿很长时，输入框停靠在面板底部，不用滚动就能写")
     go_page(page, 3)
@@ -4516,6 +4756,8 @@ def poll_repaint_checks(browser, tmp: Path):
 
 
 SCENARIO_RUNNERS = {
+    "console-layout": console_layout_checks,
+    "focus-mode": focus_mode_checks,
     "receiver-binding": receiver_binding_checks,
     "generated-draft-loop": generated_draft_checks,
     "report-verdict-loop": report_verdict_checks,
