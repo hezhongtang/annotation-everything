@@ -2159,6 +2159,7 @@ async function loadAnalyses(){
   finally{analysisLoading=false;if(request!==analysisRequest&&analysisShown()&&!analysisBusy)loadAnalyses()}
 }
 function analysisRouteLabels(){
+  $("analysisDraftCreate").disabled=analysisBusy;$("analysisDraftText").disabled=analysisBusy;
   $("analysisQueue").textContent=tMsg("viewer.analysis.queue",{waiting:analysisQueue.submitted||0,processing:analysisQueue.claimed||0});
   if(analysisShown())$("handBtn").disabled=analysisBusy||mode!=="server"||!analysisCurrentRound(analysisState)||analysisCurrentRound(analysisState).status==="claimed"
 }
@@ -2212,6 +2213,7 @@ $("analysisBody").onclick=event=>{const button=event.target.closest("[data-analy
     $("analysisDraftText").value=tMsg("viewer.analysis.draftDefault",{question:node.short||node.text,answer:decision.label});$("analysisDraftDialog").classList.add("on");$("analysisDraftText").focus()}
 };
 $("analysisDraftCreate").onclick=async()=>{const text=$("analysisDraftText").value.trim();if(!text||!analysisDraftNode)return;const result=await analysisAction("convert",{node:analysisDraftNode,text});if(result)$("analysisDraftDialog").classList.remove("on")};
+$("analysisDraftText").addEventListener("keydown",event=>{if(event.isComposing)return;if(event.key==="Escape"){$("analysisDraftDialog").classList.remove("on");event.stopPropagation()}else if(event.key==="Enter"&&(event.metaKey||event.ctrlKey)){event.preventDefault();$("analysisDraftCreate").click()}});
 addEventListener("hashchange",analysisRoute);
 setInterval(()=>{if(!document.hidden)loadAnalyses()},4000);
 
