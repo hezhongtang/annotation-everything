@@ -987,20 +987,20 @@ function onSent(op,r){
   if(op.kind==="handoff"){if(!pend.get().some(o=>o.kind==="handoff"))handQueued=false;setHand(r.handoff);
     toast(r.merged?tMsg("viewer.hand.toast.merged"):tMsg("viewer.hand.toast.sent"),3500)}
   else if(op.kind==="import")toast(tMsg("import.complete",{label:tMsg("import.saved"),added:r.added,updated:r.updated||0,skipped:r.skipped}),3500)}
-function onRejected(op,e){   // 服务明确不接受（4xx）：不重试
+function onRejected(op,e){   // 服务明确不接受（4xx）：不重试；返回补传结束时显示的提示。
   saveFailures++;LS.set(K.rejected,newId());   // 其他标签页等待补传锁时也能看到保存被拒
   if(op.kind==="handoff"){handQueued=pend.get().some(o=>o.kind==="handoff");renderHand();
     if(e.code&&e.code.startsWith("receiver-")){failed.push(op,e.message);if(!$("handMsg").value.trim())$("handMsg").value=op.message||""}
-    toast(e.status===404||e.status===405?tMsg("viewer.hand.toast.legacy"):tMsg("viewer.hand.toast.failed",{message:e.message}),6000);return}
-  toast(tMsg("viewer.recovery.rejected",{reason:e.message}),6000);
+    return ()=>toast(e.status===404||e.status===405?tMsg("viewer.hand.toast.legacy"):tMsg("viewer.hand.toast.failed",{message:e.message}),6000)}
   if(op.kind==="add"&&!editOf(op.note)&&op.note.page===P[i].n&&!$("ntext").value.trim()){   // 把内容放回输入框
-    $("ntext").value=op.note.text;quote=op.note.quote||"";quoteFrom=op.note.quoteFrom||"";pendingPin=op.note.pin||null;pendingRegion=op.note.region||null;styleOn=!!op.note.style;quotePair=op.note.pair||null;showQuote();updateStyleChip();drawPins()}}
+    $("ntext").value=op.note.text;quote=op.note.quote||"";quoteFrom=op.note.quoteFrom||"";pendingPin=op.note.pin||null;pendingRegion=op.note.region||null;styleOn=!!op.note.style;quotePair=op.note.pair||null;showQuote();updateStyleChip();drawPins()}
+  return ()=>toast(tMsg("viewer.recovery.rejected",{reason:e.message}),6000)}
 const fails={};let flushing=null;
 function flush(){if(FILE)return Promise.resolve();
   if(!flushing)flushing=(navigator.locks?navigator.locks.request(`ae-flush-${RID}`,doFlush):doFlush()).finally(()=>{flushing=null});
   return flushing}
 async function doFlush(){   // 按顺序补传；多个标签页之间用浏览器锁排队，按操作 id 移除
-  busy++;
+  let successful=true,problem=null;busy++;
   try{for(;;){   // 补完一轮再对一次服务端；这期间又有新改动进队列就接着补
     for(let q=pend.get();q.length;q=pend.get()){const op=q[0];
       if(!op.opId){op.opId=newId();pend.set(q)}   // 兜底：没有操作 id 的条目先补上再发，免得移除时误删别的
@@ -1009,24 +1009,27 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
         if(hasFullCheck){const d=await getNotes();fullCheckSupported=hasFeature(d,"full-check");srvNoFullCheck=!fullCheckSupported;
           const latest=d.handoff&&d.handoff.latest,pendingCheck=latest&&latest.status==="pending"&&latest.fullCheck===true;
           if(!fullCheckSupported&&(op.fullCheck===true||pendingCheck)){
-            toast(tMsg("viewer.hand.toast.fullCheckStashed"),6000);return}}
+            problem=()=>toast(tMsg("viewer.hand.toast.fullCheckStashed"),6000);return false}}
         const r=await send(op,fullCheckSupported);
         if(r&&r.doc&&!sameReview(r.doc))throw Object.assign(new Error(tMsg("viewer.error.mismatch")),{status:0,mismatch:true});
         if(hasFullCheck){const latest=r&&r.handoff&&r.handoff.latest,requested=op.fullCheck===true;
           const legacyOff=!requested&&r&&!("acceptedFullCheck" in r)&&latest&&latest.seq===r.seq&&latest.fullCheck!==true;
           if(!r||(r.acceptedFullCheck!==requested&&!legacyOff)){
-            srvNoFullCheck=true;toast(tMsg("viewer.hand.toast.fullCheckUnconfirmed"),9000);return}}
+            srvNoFullCheck=true;problem=()=>toast(tMsg("viewer.hand.toast.fullCheckUnconfirmed"),9000);return false}}
         pend.remove(op.opId);delete fails[op.opId];onSent(op,r||{})}
       catch(e){
-        if(e.mismatch){mode="mismatch";return}
-        if(!e.status){if(mode==="server")toast(tMsg("viewer.offline.stashed"),3500);mode="offline";return}
+        successful=false;
+        if(e.mismatch){mode="mismatch";problem=()=>toast(e.message,6000);return false}
+        if(!e.status){if(mode==="server")problem=()=>toast(tMsg("viewer.offline.stashed"),3500);mode="offline";return false}
         if(e.status>=500){fails[op.opId]=(fails[op.opId]||0)+1;
-          if(fails[op.opId]<MAX_FAILS){toast(e.message,4000);return}
+          if(fails[op.opId]<MAX_FAILS){problem=()=>toast(e.message,4000);return false}
           failed.push(op,e.message);pend.remove(op.opId);   // 同一条连续失败：移到「未能保存」，不再堵住后面的改动
-          toast(tMsg("viewer.recovery.failed"),6000);continue}
-        pend.remove(op.opId);onRejected(op,e)}}
-    mode="server";await resync();if(!pend.get().length)break}}
-  finally{busy--;updateMode()}}
+          problem=()=>toast(tMsg("viewer.recovery.failed"),6000);continue}
+        pend.remove(op.opId);problem=onRejected(op,e)}}
+    mode="server";await resync();if(!pend.get().length)break}
+    return successful}
+  // 最后一个失败或受阻提示优先于后续成功、处理状态等通知。
+  finally{busy--;updateMode();if(problem)problem()}}
 async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 // 轮询带回的「最新一批（完整内容）+ 投递状态」签名：逐字段相同才认为这次轮询没有新东西可画。
 // 只有摘要类字段（处理摘要、附言、认领时间……）变化时也要重画，所以比 handSig 那几个字段细。
@@ -1058,20 +1061,21 @@ async function poll(){
     updateMode();return}
   finally{busy--}
   const was=mode;mode="server";
-  const upgradeAlreadyShown=analysisUpgradeShown;
   const key=handPollKeyOf(d),quiet=key===handPollKey;   // 数据没变：不重画提交状态和续看提示
   handPollKey=key;
   queueSnap={p:pend.get(),f:failed.get()};   // 这一次轮询里队列只读一次 localStorage
+  // 新升级说明等整条链路成功结束后显示，失败或受阻提示优先。
+  const upgradeNotice={key:null,successful:false};analysisUpgradePoll=upgradeNotice;
   try{
     if(was==="offline"&&rev!=null)toast(tMsg("viewer.offline.reconnected"));
     applyServer(d,quiet);
     if(pend.get().length){   // 有暂存要补传：补传期间别的标签页可能改队列，之后按最新的读
       const before=pend.get().length;queueSnap=null;
-      await flush();
-      // 本轮新显示的升级说明优先于通用补传成功提示。
-      if(mode==="server"&&!pend.get().length&&before&&(upgradeAlreadyShown||!analysisUpgradeShown))toast(tMsg("viewer.offline.retried"));return}
-    updateMode()}
-  finally{queueSnap=null}}
+      upgradeNotice.successful=await flush();
+      if(upgradeNotice.successful&&mode==="server"&&!pend.get().length&&before)toast(tMsg("viewer.offline.retried"));return}
+    updateMode();upgradeNotice.successful=true}
+  finally{queueSnap=null;analysisUpgradePoll=null;
+    if(upgradeNotice.successful&&upgradeNotice.key&&!analysisSupported)showAnalysisUpgrade(upgradeNotice.key)}}
 // ---------- 服务不在时：说清这个端口上现在是谁，给出本审阅的启动命令（按审阅标识，页面里不写本机路径） ----------
 const SERVE_CMD=`python3 ~/.claude/skills/annotation-everything/scripts/serve.py ${RID}`;
 let occupant=null, barShownFor="", barClosedFor="", probedAt=0, firstPolled=false;   // 首次轮询前不显示（打开页面时不闪红条）
@@ -2446,14 +2450,20 @@ function analysisRoute(){
   $("handBtn").disabled=shown&&(analysisBusy||mode!=="server"||!analysisCanSubmit(analysisState));
   const focusLabel=$("focusHint").querySelector("span");focusLabel.dataset.msg=shown?"viewer.analysis.focusHint":"viewer.layout.focusHint";focusLabel.textContent=tMsg(focusLabel.dataset.msg);
   $("analysisQueue").hidden=FILE||!analysisSupported;$("analysisQueue").textContent=tMsg("viewer.analysis.queue",{waiting:analysisQueue.submitted||0,processing:analysisQueue.claimed||0});
-  if(location.hash==="#analysis"&&!shown&&(FILE||analysisChecked)&&!analysisUpgradeShown){analysisUpgradeShown=true;toast(tMsg(FILE?"viewer.analysis.fileUnavailable":"viewer.analysis.upgrade"),7000)}
+  if(location.hash==="#analysis"&&!shown&&(FILE||analysisChecked)&&!analysisUpgradeShown)showAnalysisUpgrade(FILE?"viewer.analysis.fileUnavailable":"viewer.analysis.upgrade");
   if(shown){if(markMode)setMarkMode(false);hideSelbar();closeStyleMenu();renderAnalysis();if(!analysisBusy)loadAnalyses()}
   else requestAnimationFrame(fit)
+}
+let analysisUpgradePoll=null;
+function showAnalysisUpgrade(key){
+  if(analysisUpgradeShown)return;
+  if(analysisUpgradePoll){analysisUpgradePoll.key=key;return}
+  analysisUpgradeShown=true;toast(tMsg(key),7000)
 }
 function setAnalysisSupport(data){const old=analysisSupported;analysisChecked=true;analysisSupported=hasFeature(data,"analysis");
   $("pageAnalysisStart").hidden=FILE||!analysisSupported;
   if(old!==analysisSupported){analysisRenderKey="";refreshList(true);if(analysisSupported)analysisUpgradeShown=false}
-  if(!analysisSupported&&mode==="server"&&!analysisUpgradeShown){analysisUpgradeShown=true;toast(tMsg("viewer.analysis.upgrade"),7000)}
+  if(!analysisSupported&&mode==="server"&&!analysisUpgradeShown)showAnalysisUpgrade("viewer.analysis.upgrade");
   analysisRoute()
 }
 async function loadAnalyses(){

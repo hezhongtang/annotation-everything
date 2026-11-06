@@ -93,7 +93,7 @@ class AnalysisPageTests(unittest.TestCase):
         for locale in ("en", "zh-CN"):
             actual = interaction_program([
                 ("let handPollKey=", "// ---------- 服务不在时"),
-                ("function setAnalysisSupport(data){", "async function loadAnalyses("),
+                ("let analysisUpgradePoll=", "async function loadAnalyses("),
             ], setup, """
               const notices=[];
               for(const [base,supported] of [[null,false],[1,false],[1,true]]){
@@ -114,15 +114,25 @@ class AnalysisPageTests(unittest.TestCase):
           const APP='annotation-everything',RID='synthetic-review',FILE=false,navigator={},document={hidden:false};
           const storage=new Map(),copy=value=>JSON.parse(JSON.stringify(value));
           const LS={get:(key,fallback)=>copy(storage.has(key)?storage.get(key):fallback),set:(key,value)=>{storage.set(key,copy(value));return true}};
-          const K={pending:'pending',legacyPending:'legacy',failed:'failed'},MAX_FAILS=3;
+          const K={pending:'pending',legacyPending:'legacy',failed:'failed',rejected:'rejected'},MAX_FAILS=3,FULL_CHECK_COMPAT='合成全量勾稽要求';
           let mode='offline',rev=1,busy=0,agentDelivery=null,receiver=null,archiveBusy=false,srvOld=false;
           let srvNoStages=false,srvNoFullCheck=false,stopServiceSupported=false,idx0=null,resumeReady=false,handQueued=false;
           let analysisSupported=true,analysisChecked=false,analysisUpgradeShown=false,analysisRenderKey='';
-          let notes=[],remote=[],remoteRev=1,supported=false;const writes=[],notices=[];
+          let notes=[],remote=[],remoteRev=1,supported=false,scenario={},remoteHand=null,hand=null,handSig='',flightSig='',flight=new Set(),saveFailures=0;
+          const writes=[],notices=[],submissions=[],imports=[],newId=()=>String(saveFailures);
+          const response=()=>({app:APP,reviewId:RID,notes:copy(remote),rev:remoteRev,handoff:copy(remoteHand),
+            features:[...(scenario.missingMarks?[]:['marks']),'stages',...(scenario.blocked?[]:['full-check']),...(supported?['analysis']:[])]});
           const api=async(method,path,body)=>{
-            if(method==='POST'&&path==='/api/notes'){writes.push(copy(body));remote.push(copy(body));remoteRev++}
-            else if(method!=='GET'||path!=='/api/notes')throw new Error('unexpected network request');
-            return {app:APP,reviewId:RID,notes:copy(remote),rev:remoteRev,features:['marks','stages','full-check',...(supported?['analysis']:[])]};
+            if(method==='GET'&&path==='/api/notes')return response();
+            if(method!=='POST')throw new Error('unexpected network request');
+            writes.push({path,body:copy(body)});
+            if(path==='/api/handoff'&&scenario.errorStatus)throw Object.assign(new Error('合成补传失败'),{status:scenario.errorStatus,code:'synthetic-rejected'});
+            if(path==='/api/notes'){remote.push(copy(body));remoteRev++;return {doc:response()}}
+            if(path==='/api/notes/import'){imports.push(copy(body.notes));remote.push(...copy(body.notes));remoteRev++;
+              return {doc:response(),added:body.notes.length,updated:0,skipped:0}}
+            if(path==='/api/handoff'){submissions.push(copy(body));remoteHand={latest:{seq:1,status:'pending',...copy(body)},total:1,inFlightIds:remote.map(note=>note.id)};
+              return {doc:response(),handoff:copy(remoteHand),seq:1,merged:!!scenario.merged,acceptedFullCheck:body.fullCheck===true}}
+            throw new Error('unexpected network request');
           };
           const toast=text=>{$('toast').textContent=text;notices.push(text)},setDoc=data=>{rev=data.rev;notes=data.notes};
           const updateMode=()=>{},setCurrentArchive=()=>{},refreshList=()=>{},renderHand=()=>{},renderResume=()=>{},analysisRoute=()=>{};
@@ -130,6 +140,20 @@ class AnalysisPageTests(unittest.TestCase):
         pending = [{"kind": "add", "opId": "op" + str(number),
                     "note": {"id": "note" + str(number), "page": 1, "text": text}}
                    for number, text in enumerate(("合成离线原话 <b>完整保留</b>", "第二条合成离线批注"), 1)]
+        handoff = {"kind": "handoff", "opId": "submit1", "message": "合成离线附言 <b>完整保留</b>",
+                   "target": "review", "allowSubagents": True}
+        imported = {"kind": "import", "opId": "import1", "notes": [{"id": "imported1", "page": 1, "text": "合成导入原话 <b>完整保留</b>"}]}
+        scenarios = [{"name": "add", "pending": pending},
+                     {"name": "handoff", "pending": pending + [handoff]},
+                     {"name": "merged", "pending": pending + [handoff], "merged": True},
+                     {"name": "import", "pending": pending + [imported]},
+                     {"name": "mixed", "pending": pending + [handoff, imported]},
+                     {"name": "older", "pending": pending + [handoff, imported], "missingMarks": True},
+                     {"name": "older_empty", "pending": [], "missingMarks": True},
+                     {"name": "error", "pending": pending + [imported, handoff], "errorStatus": 503},
+                     {"name": "rejected", "pending": pending + [imported, handoff], "errorStatus": 400},
+                     {"name": "rejected_then_import", "pending": pending + [handoff, imported], "errorStatus": 400},
+                     {"name": "blocked", "pending": pending + [{**handoff, "fullCheck": True}], "blocked": True}]
         for locale in ("en", "zh-CN"):
             actual = interaction_program([
                 ("const sameReview=", "function mirror()"),
@@ -137,28 +161,66 @@ class AnalysisPageTests(unittest.TestCase):
                 ("function send(op,", "// 一次轮询里队列"),
                 ("let queueSnap=null;", "// 轮询带回的"),
                 ("let handPollKey=", "// ---------- 服务不在时"),
-                ("function setAnalysisSupport(data){", "async function loadAnalyses("),
+                ("let analysisUpgradePoll=", "async function loadAnalyses("),
+                ("function setHand(h,quiet){", "let handSig="),
             ], setup, """
-              const outcomes=[],pending=PENDING;
-              for(const enabled of [false,true]){
-                supported=enabled;mode='offline';rev=1;remoteRev=1;remote=[];notes=[];writes.length=0;notices.length=0;
-                analysisSupported=true;analysisUpgradeShown=false;LS.set(K.pending,pending);
+              const outcomes=[];
+              for(const original of SCENARIOS)for(const enabled of [false,true]){
+                scenario=copy(original);supported=enabled;mode='offline';rev=1;remoteRev=1;remote=[];notes=[];
+                writes.length=0;notices.length=0;submissions.length=0;imports.length=0;
+                remoteHand=null;hand=null;handSig='';flightSig='';srvOld=false;
+                for(const id in fails)delete fails[id];analysisSupported=true;analysisUpgradeShown=false;LS.set(K.pending,scenario.pending);
                 await poll();const afterSync=$('toast').textContent;
+                const pendingAfterSync=pend.get(),upgradeAfterSync=analysisUpgradeShown;
+                scenario.errorStatus=0;scenario.blocked=false;
                 await poll();outcomes.push({supported,afterSync,afterPoll:$('toast').textContent,
-                  pending:pend.get(),writes:copy(writes),remote:copy(remote),notes:copy(notes),notices:copy(notices)});
+                  name:original.name,pendingAfterSync,upgradeAfterSync,pending:pend.get(),writes:copy(writes),
+                  remote:copy(remote),notes:copy(notes),notices:copy(notices),submissions:copy(submissions),hand:copy(hand)});
               }
               return outcomes;
-            """.replace("PENDING", json.dumps(pending, ensure_ascii=False)), locale)
+            """.replace("SCENARIOS", json.dumps(scenarios, ensure_ascii=False)), locale)
             messages = i18n.load_catalog(locale)["messages"]
             for outcome in actual:
-                self.assertEqual(outcome["pending"], [])
-                expected_notes = [item["note"] for item in pending]
-                for key in ("writes", "remote", "notes"):
-                    self.assertEqual(outcome[key], expected_notes)
-                expected = messages["viewer.offline.retried" if outcome["supported"] else "viewer.analysis.upgrade"]
-                self.assertEqual(outcome["afterSync"], expected)
-                self.assertEqual(outcome["afterPoll"], expected)
-                self.assertEqual(outcome["notices"].count(expected), 1)
+                with self.subTest(locale=locale, scenario=outcome["name"], supported=outcome["supported"]):
+                    case = next(case for case in scenarios if case["name"] == outcome["name"])
+                    expected_notes = [note for item in case["pending"]
+                                      for note in ([item["note"]] if item["kind"] == "add" else item.get("notes", []))]
+                    self.assertEqual(outcome["pending"], [])
+                    self.assertEqual(outcome["remote"], expected_notes)
+                    self.assertEqual(outcome["notes"], expected_notes)
+                    posts = [item["body"] for item in outcome["writes"] if item["path"] == "/api/notes"]
+                    self.assertEqual(posts, [item["note"] for item in case["pending"] if item["kind"] == "add"])
+                    imported_posts = [item["body"]["notes"] for item in outcome["writes"] if item["path"] == "/api/notes/import"]
+                    self.assertEqual(imported_posts, [item["notes"] for item in case["pending"] if item["kind"] == "import"])
+                    if any(item["kind"] == "handoff" for item in case["pending"]) and case.get("errorStatus") != 400:
+                        self.assertEqual(len(outcome["submissions"]), 1)
+                        body = outcome["submissions"][0]
+                        self.assertEqual(body.get("userMessage", body["message"]), handoff["message"])
+                        self.assertEqual((body["target"], body["allowSubagents"]), ("review", True))
+                        self.assertEqual(outcome["hand"]["latest"]["seq"], 1)
+                    expected = messages["viewer.offline.retried" if outcome["supported"] else "viewer.analysis.upgrade"]
+                    if case.get("errorStatus"):
+                        self.assertIn("合成补传失败", outcome["afterSync"])
+                        self.assertEqual(sum("合成补传失败" in notice for notice in outcome["notices"]), 1)
+                        self.assertEqual(outcome["pendingAfterSync"], [handoff] if case["errorStatus"] == 503 else [])
+                    elif case.get("blocked"):
+                        self.assertEqual(outcome["afterSync"], messages["viewer.hand.toast.fullCheckStashed"])
+                        self.assertEqual(outcome["pendingAfterSync"], [{**handoff, "fullCheck": True}])
+                    elif outcome["name"] != "older_empty":
+                        self.assertEqual(outcome["afterSync"], expected)
+                    if not outcome["supported"]:
+                        self.assertEqual(outcome["afterPoll"], messages["viewer.analysis.upgrade"])
+                        self.assertEqual(outcome["notices"].count(messages["viewer.analysis.upgrade"]), 1)
+                        if case.get("errorStatus") or case.get("blocked"):
+                            self.assertFalse(outcome["upgradeAfterSync"])
+                    elif outcome["name"] != "older_empty" and case.get("errorStatus") != 400:
+                        self.assertEqual(outcome["afterPoll"], expected)
+                    if outcome["supported"] and not case.get("errorStatus") and not case.get("blocked"):
+                        if any(item["kind"] == "handoff" for item in case["pending"]):
+                            self.assertIn(messages["viewer.hand.toast.merged" if case.get("merged") else "viewer.hand.toast.sent"], outcome["notices"])
+                        if any(item["kind"] == "import" for item in case["pending"]):
+                            self.assertIn(i18n.translate(i18n.load_catalog(locale), "import.complete", label=messages["import.saved"],
+                                                         added=1, updated=0, skipped=0), outcome["notices"])
 
     def test_free_text_and_external_permission_drafts_survive_poll_and_failed_write(self):
         state = {"id": "private-analysis", "focus": "合成问题", "status": "active", "line": "main",
