@@ -48,6 +48,12 @@ SCENARIOS: list[Scenario] = [
         isolation="独立审阅目录、端口和浏览器上下文；截图只用合成数据",
     ),
     Scenario(
+        id="update-notice",
+        title="重建更新提示：顶部常驻横幅、关闭后同版本不重复提示、新版本重新提示、双语窄屏与专注模式可见、手动刷新保留未发送批注",
+        fixture="fixtures/sample 合成材料、真实 build_viewer.py --rebuild 与本地服务；合成的未发送批注",
+        isolation="独立临时审阅目录、端口与浏览器上下文；服务用后回收，沿用 host-state 锁",
+    ),
+    Scenario(
         parallel_safe=True,
         id="focus-mode",
         title="全屏专注：复用输入框添加批注、标注与风格、选区操作、翻页、Esc 分层退出及 CSS 退路",

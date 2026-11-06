@@ -33,6 +33,7 @@ FULL_ORDER = (
     "analysis-smoke",
     "analysis-ui",
     "console-layout",
+    "update-notice",
     "focus-mode",
     "receiver-binding",
     "generated-draft-loop",
