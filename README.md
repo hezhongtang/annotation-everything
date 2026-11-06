@@ -311,6 +311,8 @@ Agent 自动执行修复前，遇到 `--purge`、`--forget-stale`、`--stop-orph
 
 PR review 的全量验证包含 `serve.py check`，逐项检查以上约束；实现阶段不单独提前运行服务安全自检。
 
+报告安全漏洞的方式见 [SECURITY.md](SECURITY.md)。
+
 ## 工作原理
 
 ### 整体架构
@@ -457,11 +459,13 @@ tools/
 ├── setup-dev.sh                   启用仓库自带的 git 钩子
 ├── collect_verify_history.py      只读 GitHub 上已有的验证构件与合并事件，不启动测试
 ├── grade_iteration.py             给一轮技能评测打分，写出每次运行的 grading.json
+├── release.py                     CI 通过后打版本标签、补全 Release 并关闭里程碑
 └── git-hooks/                     拒绝在 main 上提交、推送到 main、删除 main
 .github/                           CI、issue 模板和 PR 模板
 docs/                              架构决策记录（ADR）、Agent 协作约定、README 配图
 docs/verify/                       验证记录字段契约、统一入口接入说明与浏览器场景注册
 LICENSE、NOTICE                    Apache-2.0 许可证与归属声明
+SECURITY.md                        漏洞报告方式与安全范围
 GLOSSARY.md                        术语表
 ```
 

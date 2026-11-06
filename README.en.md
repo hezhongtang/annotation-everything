@@ -311,6 +311,8 @@ Before an agent runs a repair with `--purge`, `--forget-stale`, `--stop-orphans`
 
 Full validation during PR review includes `serve.py check` to verify these constraints; server security checks are deferred to that stage during implementation.
 
+See [SECURITY.md](SECURITY.md) to report a vulnerability.
+
 ## How it works
 
 ### Architecture
@@ -457,11 +459,13 @@ tools/
 ├── setup-dev.sh                   enables the repository's git hooks
 ├── collect_verify_history.py      reads existing verification artifacts and merge events from GitHub without running tests
 ├── grade_iteration.py             grades one round of skill evals and writes grading.json for each run
+├── release.py                     tag a version, backfill Releases and close the milestone after CI passes
 └── git-hooks/                     refuse commits on main, pushes to main and deleting main
 .github/                           CI, issue templates and the pull request template
 docs/                              architecture decision records (ADRs), agent conventions, README images
 docs/verify/                       verification record field contract, the unified entry's onboarding guide and the browser scenario registry
 LICENSE, NOTICE                    Apache-2.0 license and attribution notice
+SECURITY.md                        how to report vulnerabilities, and the security scope
 GLOSSARY.md                        glossary
 ```
 

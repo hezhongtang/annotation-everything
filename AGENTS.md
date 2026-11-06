@@ -33,7 +33,7 @@
 - **开发前先有验收标准**：新 issue 按 `.github/ISSUE_TEMPLATE/` 的模板写（命令行创建时正文也按模板的小节写）并标 `needs-triage`；验收标准和兼容性要求写清楚后改为 `ready-for-agent`，Agent 只领取 `ready-for-agent` 的 issue。
 - **CI 失败自动修复（auto-fix）**：用户发起 PR review 后，由审查 Agent 跟进 CI。出现失败时，读取失败日志、定位原因，在原 PR 分支验证、提交和推送修复，持续跟进至最新提交的 CI 全部通过，无需用户逐次要求。若因权限、凭据或外部服务故障无法继续，明确报告阻塞原因及所需协助。
 - **合并前**：完成「开发与 PR review」的合并门禁，非小改动包含独立审查；合并用 squash，分支在合并后自动删除。
-- **发版**：修改版本号（`skill/annotation-everything/scripts/serve.py` 中的 `VERSION` 常量）的 PR 挂到对应版本的里程碑（如 `v0.9.0`）；合并后在合并提交上打附注标签 `git tag -a v0.9.0 <提交> -m "annotation-everything v0.9.0"` 并推送，再关闭里程碑。
+- **发版**：修改版本号（`skill/annotation-everything/scripts/serve.py` 中的 `VERSION` 常量）的 PR 挂到对应版本的里程碑（如 `v0.9.0`）。合并进 `main` 且该提交的 CI 通过后，`.github/workflows/release.yml` 运行 `tools/release.py`：打附注标签、创建 GitHub Release（说明由 GitHub 按合并的 PR 生成）、补齐历史标签缺失的 Release，并在里程碑没有未完成项时关闭它。不要手动打 `v*` 标签。版本号只能前进，回退或重复不会发布。工作流可重复运行；失败时修复原因后运行 `gh workflow run Release`，只补缺失的部分。
 
 ## README 维护
 
