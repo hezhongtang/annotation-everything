@@ -47,7 +47,16 @@ header #handBtn{background:var(--ae-green);border-color:var(--ae-green);color:va
 header:has(#modeSwitch:not([hidden])) h1{max-width:calc(50% - 160px)}
 #modeSwitch button{border:0;height:26px;background:transparent}
 #modeSwitch [aria-pressed=true]{background:var(--ae-selected)}
-#legacyBtn,#strayBtn,#reloadBtn{display:none}
+#legacyBtn,#strayBtn{display:none}
+.reload-banner{display:flex;align-items:center;flex-wrap:wrap;gap:var(--ae-space) var(--ae-space-lg);flex:none;padding:var(--ae-gap-12) var(--ae-gap-18);background:var(--ae-warm);border-left:4px solid var(--ae-amber);border-bottom:1px solid var(--ae-warm-line);color:var(--ae-ink)}
+.reload-banner[hidden]{display:none}
+.reload-copy{flex:1 1 240px;min-width:0;line-height:1.5;overflow-wrap:anywhere}
+.reload-copy strong{display:block;font-size:var(--ae-title);color:var(--ae-amber)}
+.reload-copy>span{display:block;font-size:var(--ae-text)}
+.reload-actions{display:flex;align-items:center;gap:var(--ae-space);flex:none;margin-left:auto}
+.reload-banner button{min-height:36px;font:inherit;font-size:var(--ae-body);border:1px solid var(--ae-warm-line);border-radius:var(--ae-radius);padding:var(--ae-gap-6) var(--ae-gap-14);background:var(--ae-panel)}
+.reload-banner #reloadBtn{background:var(--ae-navy);border-color:var(--ae-navy);color:var(--ae-panel);font-weight:600}
+.reload-banner #reloadClose{min-width:36px;padding:var(--ae-gap-6);font-size:var(--ae-heading)}
 .resume{display:none;align-items:center;gap:var(--ae-gap-10);flex-wrap:wrap;padding:var(--ae-gap-7) var(--ae-gap-18);background:var(--ae-warm);border-bottom:1px solid var(--ae-warm-line);font-size:var(--ae-text);color:var(--ae-amber)}
 .resume.on{display:flex}
 .resume #resumeText{flex:1 1 auto}
@@ -128,6 +137,7 @@ body.panel-off #panelBody{display:none}
 #focusHint{display:none}
 body.overview-mode>main,body.overview-mode>#statusbar{display:none}
 body.focus-mode>header,body.focus-mode>#statusbar,body.focus-mode>.resume,body.focus-mode>#archiveBanner{display:none}
+body.focus-mode #reloadBanner{position:fixed;inset:0 0 auto;z-index:7}
 body.focus-mode main{position:fixed;inset:0;display:block;background:var(--ae-activity)}
 body.focus-mode .activity,body.focus-mode #sidebar,body.focus-mode #scriptPane,body.focus-mode #scriptHandle,body.focus-mode .pane-head,body.focus-mode .panel-tabs,body.focus-mode .notes{display:none}
 body.focus-mode #workspace,body.focus-mode #panes,body.focus-mode #reportPane{display:flex;height:100%;width:100%;flex-direction:column}
@@ -411,6 +421,10 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
   <button id="focusBtn" data-title="viewer.layout.focusTitle" data-p-key="F"><span data-msg="viewer.layout.focus"></span></button>
   <div id="primaryAction"><button id="handBtn" data-title="viewer.hand.btnTitle"><span data-msg="viewer.hand.btn">交给 Agent 改稿</span></button></div>
 </header>
+<div id="reloadBanner" class="reload-banner" role="status" aria-live="polite" aria-atomic="true" hidden>
+  <span class="reload-copy"><strong data-msg="viewer.reloadNotice"></strong><span data-msg="viewer.reloadHint"></span></span>
+  <span class="reload-actions"><button id="reloadBtn" type="button" data-title="viewer.reloadTitle" data-msg="viewer.reload"></button><button id="reloadClose" type="button" data-title="viewer.reloadClose" data-aria="viewer.reloadClose">×</button></span>
+</div>
 <div id="archiveBanner" class="archive-banner" role="status" hidden>
   <span data-msg="viewer.overview.archiveNotice"></span>
   <button id="archiveUnarchive" type="button" data-msg="viewer.overview.unarchive"></button>
@@ -489,7 +503,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
   <span id="mode" class="file"></span><span id="receiver" role="status" aria-live="polite"></span><button id="handState"></button><span id="agentDelivery" role="status" aria-live="polite"></span>
   <!-- 分析队列由 #111 接入，默认不显示。 -->
   <span id="analysisQueue" hidden></span>
-  <button id="reloadBtn" data-title="viewer.reloadTitle" data-msg="viewer.reload"></button><button id="legacyBtn" data-title="viewer.legacyTitle" data-msg="viewer.legacy"></button><button id="strayBtn" data-title="viewer.strayTitle" data-msg="viewer.stray"></button>
+  <button id="legacyBtn" data-title="viewer.legacyTitle" data-msg="viewer.legacy"></button><button id="strayBtn" data-title="viewer.strayTitle" data-msg="viewer.stray"></button>
   <span class="stat" id="stat"></span>
   <label id="localeLabel"><span id="localeLabelText">界面语言</span><select id="localePick" aria-label="界面语言"><option value="auto">自动</option><option value="zh-CN">简体中文</option><option value="en">English</option></select></label>
   <button id="shortcutsBtn" data-msg="viewer.layout.shortcuts"></button>
@@ -1049,7 +1063,7 @@ function applyServer(d,quietHand){
   if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
   if(d.handoff)setHand(d.handoff,quietHand);else if(!quietHand)renderHand();
-  if(idx0==null)idx0=d.indexMtime;else if(d.indexMtime&&d.indexMtime!==idx0)$("reloadBtn").style.display="inline-block";
+  if(idx0==null)idx0=d.indexMtime;else if(d.indexMtime&&d.indexMtime!==idx0){idx0=d.indexMtime;$("reloadBanner").hidden=false;fit()}
   if(d.rev!==rev){setDoc(d);pend.get().forEach(op=>{if(op.kind!=="handoff")applyLocal(op)});refreshList()}
   if(!resumeReady){resumeReady=true;renderResume()}}
 async function poll(){
@@ -2033,7 +2047,9 @@ function renderFound(){const f=foundSets();
   $("found").innerHTML=f.length?`<p>${escH(tMsg("viewer.recovery.foundHelp"))}</p>`+f.map((s,k)=>`<div class="found"><span>${escH(tMsg("viewer.recovery.foundRow",{name:s.title||tMsg("viewer.recovery.unknownName"),key:s.key,n:s.items.length}))}</span><button data-found="${k}">${escH(tMsg("viewer.recovery.importFound"))}</button></div>`).join(""):"";
   $("found").querySelectorAll("[data-found]").forEach(b=>b.onclick=()=>runImport(f[+b.dataset.found].items,tMsg("import.done")))}
 function openImp(){renderStrays();renderFound();$("imp").classList.add("on")}
-$("openImp").onclick=openImp;$("legacyBtn").onclick=openImp;$("strayBtn").onclick=openImp;$("reloadBtn").onclick=()=>location.reload();
+$("openImp").onclick=openImp;$("legacyBtn").onclick=openImp;$("strayBtn").onclick=openImp;
+$("reloadBtn").onclick=()=>{saveDraft();location.reload()};
+$("reloadClose").onclick=()=>{$("reloadBanner").hidden=true;fit()};
 $("doImp").onclick=async()=>{let items;try{items=parseImport($("impText").value)}catch(e){toast(tMsg("import.parseFailed",{reason:e.message}),3500);return}
   if(!okToImport($("impText").value))return;
   const al=importAlways($("impText").value);await runImport(items,tMsg("import.done"));$("impText").value="";await offerAlways(al)};

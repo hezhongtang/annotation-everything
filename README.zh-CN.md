@@ -204,6 +204,12 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 </details>
 
+### 重建后的更新提示
+
+<p align="center"><img src="docs/assets/update-notice.zh.png" alt="合成审阅重建后，顶部常驻更新横幅提供刷新与关闭操作，未发送批注仍保留在输入框" width="92%"></p>
+
+服务模式下，Agent 重建对照页后，顶部会显示「对照页已更新」横幅，持续保留到手动刷新或关闭。页面不会自动刷新；点击「刷新」会保留各页未发送的批注草稿。关闭后，同一次更新不会重复提示，再次重建会重新提示。窄窗口和专注模式下也可使用，文案随界面语言切换。
+
 ### 审阅总览与归档
 
 <p align="center"><img src="docs/assets/overview.zh.png" alt="合成审阅总览：按状态分组，右侧显示报告摘要、用途、读者、核心问题与启动操作" width="92%"></p>
