@@ -1,119 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 420" width="1280" height="420" role="img" aria-labelledby="t d">
-  <title id="t">annotation-everything</title>
-  <desc id="d">在本机运行的审阅批注工具：逐页写批注，一键交给 Agent，由 Agent 同步修改报告与讲稿。</desc>
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0b1626"/>
-      <stop offset="0.55" stop-color="#15294a"/>
-      <stop offset="1" stop-color="#1d2347"/>
-    </linearGradient>
-    <radialGradient id="glowA" cx="0.82" cy="0.18" r="0.55">
-      <stop offset="0" stop-color="#e0453a" stop-opacity="0.32"/>
-      <stop offset="1" stop-color="#e0453a" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="glowB" cx="0.08" cy="1" r="0.6">
-      <stop offset="0" stop-color="#3d7bd9" stop-opacity="0.28"/>
-      <stop offset="1" stop-color="#3d7bd9" stop-opacity="0"/>
-    </radialGradient>
-    <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
-      <circle cx="1.5" cy="1.5" r="1.1" fill="#ffffff" fill-opacity="0.06"/>
-    </pattern>
-    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#cfdcf2"/>
-    </linearGradient>
-    <linearGradient id="agent" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ff7a59"/>
-      <stop offset="1" stop-color="#d63a31"/>
-    </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
-      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000" flood-opacity="0.45"/>
-    </filter>
-    <clipPath id="card"><rect x="700" y="62" width="520" height="300" rx="16"/></clipPath>
-  </defs>
-
-  <rect width="1280" height="420" rx="24" fill="url(#bg)"/>
-  <rect width="1280" height="420" rx="24" fill="url(#dots)"/>
-  <rect width="1280" height="420" rx="24" fill="url(#glowA)"/>
-  <rect width="1280" height="420" rx="24" fill="url(#glowB)"/>
-
-  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
-    <!-- 左侧文案 -->
-    <g transform="translate(72 0)">
-      <rect x="0" y="92" width="234" height="30" rx="15" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.18"/>
-      <circle cx="18" cy="107" r="4.5" fill="#3ddc84"/>
-      <text x="32" y="112" font-size="13" font-weight="600" letter-spacing="1" fill="#d7e3f7">Agent Skills 技能 · 版本 0.11.0</text>
-      <text x="-3" y="190" font-size="58" font-weight="800" letter-spacing="-1.2" fill="url(#title)">annotation-everything</text>
-      <text x="0" y="240" font-size="27" font-weight="600" fill="#e8eef9">逐页批注，一键交给 Agent 修改</text>
-      <text x="0" y="280" font-size="17" fill="#9fb2d1">报告与讲稿左右对照、同步修改，批注自动保存在本机</text>
-      <g font-size="13.5" font-weight="600" fill="#cfdcf2">
-        <rect x="0" y="312" width="134" height="30" rx="8" fill="#ffffff" fill-opacity="0.07"/>
-        <text x="16" y="332">只监听 127.0.0.1</text>
-        <rect x="144" y="312" width="126" height="30" rx="8" fill="#ffffff" fill-opacity="0.07"/>
-        <text x="160" y="332">不依赖第三方库</text>
-        <rect x="280" y="312" width="126" height="30" rx="8" fill="#ffffff" fill-opacity="0.07"/>
-        <text x="296" y="332">不上报使用数据</text>
-        <rect x="416" y="312" width="126" height="30" rx="8" fill="#ffffff" fill-opacity="0.07"/>
-        <text x="432" y="332">可选初改与复核</text>
-      </g>
-    </g>
-
-    <!-- 右侧：对照页示意 -->
-    <g filter="url(#shadow)">
-      <rect x="700" y="62" width="520" height="300" rx="16" fill="#f6f8fb"/>
-    </g>
-    <g clip-path="url(#card)">
-      <rect x="700" y="62" width="520" height="40" fill="#1f3a5f"/>
-      <circle cx="722" cy="82" r="5" fill="#ff5f57"/><circle cx="740" cy="82" r="5" fill="#febc2e"/><circle cx="758" cy="82" r="5" fill="#28c840"/>
-      <rect x="780" y="75" width="78" height="14" rx="7" fill="#2fa36b"/>
-      <rect x="1090" y="73" width="70" height="18" rx="5" fill="url(#agent)"/>
-      <text x="1125" y="86" font-size="10.5" font-weight="700" fill="#fff" text-anchor="middle">交给 Agent</text>
-      <rect x="1168" y="73" width="38" height="18" rx="5" fill="#ffffff" fill-opacity="0.16"/>
-      <circle cx="1196" cy="82" r="6" fill="#e0453a"/>
-
-      <!-- 报告 -->
-      <rect x="716" y="118" width="300" height="228" rx="10" fill="#273041"/>
-      <rect x="728" y="136" width="276" height="160" rx="4" fill="#ffffff"/>
-      <rect x="744" y="152" width="170" height="13" rx="3" fill="#3b2a1a"/>
-      <rect x="744" y="176" width="44" height="11" rx="3" fill="#a0522d"/>
-      <rect x="744" y="200" width="214" height="8" rx="3" fill="#c7ccd6"/>
-      <rect x="744" y="216" width="186" height="8" rx="3" fill="#c7ccd6"/>
-      <rect x="738" y="193" width="230" height="38" rx="3" fill="#e0453a" fill-opacity="0.07" stroke="#e0453a" stroke-width="1.6" stroke-dasharray="5 4"/>
-      <rect x="732" y="187" width="13" height="12" rx="2" fill="#e0453a"/>
-      <text x="738.5" y="196.5" font-size="8.5" font-weight="700" fill="#fff" text-anchor="middle">2</text>
-      <circle cx="802" cy="181" r="8" fill="#e0453a" stroke="#fff" stroke-width="2"/>
-      <text x="802" y="184.5" font-size="9.5" font-weight="700" fill="#fff" text-anchor="middle">1</text>
-      <rect x="744" y="248" width="120" height="8" rx="3" fill="#dde1e8"/>
-      <rect x="744" y="264" width="150" height="8" rx="3" fill="#dde1e8"/>
-      <rect x="760" y="310" width="90" height="10" rx="5" fill="#ffffff" fill-opacity="0.12"/>
-
-      <!-- 讲稿与批注 -->
-      <rect x="1028" y="118" width="178" height="228" rx="10" fill="#ffffff" stroke="#e3e7ee"/>
-      <rect x="1042" y="134" width="96" height="10" rx="3" fill="#1f3a5f"/>
-      <rect x="1042" y="152" width="40" height="12" rx="4" fill="#fdf3d8" stroke="#ecd9a0"/>
-      <rect x="1042" y="174" width="148" height="7" rx="3" fill="#c7ccd6"/>
-      <rect x="1042" y="187" width="128" height="7" rx="3" fill="#c7ccd6"/>
-      <rect x="1042" y="203" width="3" height="18" fill="#3d7bd9"/>
-      <rect x="1050" y="208" width="110" height="7" rx="3" fill="#c7ccd6"/>
-      <g>
-        <rect x="1040" y="234" width="154" height="30" rx="6" fill="#fdecea" stroke="#f3c2bd"/>
-        <rect x="1050" y="243" width="38" height="6" rx="3" fill="#e0453a" fill-opacity="0.7"/>
-        <rect x="1050" y="253" width="118" height="5" rx="2.5" fill="#b8564e" fill-opacity="0.55"/>
-        <rect x="1040" y="270" width="154" height="30" rx="6" fill="#fdecea" stroke="#f3c2bd"/>
-        <rect x="1050" y="279" width="52" height="6" rx="3" fill="#e0453a" fill-opacity="0.7"/>
-        <rect x="1050" y="289" width="98" height="5" rx="2.5" fill="#b8564e" fill-opacity="0.55"/>
-        <rect x="1040" y="306" width="154" height="30" rx="6" fill="#e8f6ee" stroke="#b9e1c8"/>
-        <path d="M1050 321 l4 4 l8 -8" fill="none" stroke="#2fa36b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-        <rect x="1068" y="318" width="80" height="6" rx="3" fill="#2fa36b" fill-opacity="0.6"/>
-      </g>
-    </g>
-
-    <!-- Agent 徽标 -->
-    <g transform="translate(1170 352)">
-      <circle r="34" fill="url(#agent)" stroke="#ffffff" stroke-opacity="0.9" stroke-width="3"/>
-      <path d="M0 -15 L4 -4 L15 0 L4 4 L0 15 L-4 4 L-15 0 L-4 -4 Z" fill="#fff"/>
-    </g>
-    <path d="M1112 372 C 1090 392, 1040 396, 1010 382" fill="none" stroke="#ff8a6b" stroke-width="2" stroke-dasharray="4 5" stroke-linecap="round"/>
-    <text x="1004" y="400" font-size="12.5" font-weight="600" fill="#ffb59f" text-anchor="end">等待提交 → 修改文稿 → 逐条标为已处理 → 回报结果</text>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="480" viewBox="0 0 1440 480" role="img" aria-labelledby="title description">
+<title id="title">annotation-everything</title>
+<desc id="description">批注改稿与逐轮分析，在同一份材料里保留修改意见、问题、假设与结论。</desc>
+<g font-family="'PingFang SC','Hiragino Sans GB','Microsoft YaHei',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+<rect x="0" y="0" width="1440" height="480" rx="0" fill="#faf9f5" stroke="none" stroke-width="1"/>
+<rect x="0" y="0" width="1440" height="7" rx="0" fill="#243a50" stroke="none" stroke-width="1"/>
+<text x="64" y="68" font-size="29" fill="#253b50" font-weight="700" >annotation-everything</text>
+<text x="64" y="166" font-size="55" fill="#172c3b" font-weight="700" >批注，让修改到位。</text>
+<text x="64" y="245" font-size="55" fill="#172c3b" font-weight="700" >分析，让问题想透。</text>
+<path d="M66 181 Q286 189 504 181" fill="none" stroke="#dd573f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M66 260 Q270 268 508 260" fill="none" stroke="#326bb6" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="64" y="310" font-size="21" fill="#53606a" font-weight="500" >对照报告与讲稿，逐轮问答，确认后交给 Agent。</text>
+<text x="64" y="402" font-size="18" fill="#35434e" font-weight="600" >版本 0.12.0</text>
+<text x="64" y="435" font-size="18" fill="#596773" font-weight="500" >本机审阅，修改与推理都有记录</text>
+<text x="814" y="78" font-size="21" fill="#bc4937" font-weight="600" >批注改稿</text>
+<text x="1190" y="78" font-size="21" fill="#285e9c" font-weight="600" >分析问题</text>
+<rect x="810" y="104" width="276" height="280" rx="7" fill="#fff" stroke="#d6dadd" stroke-width="1"/><rect x="832" y="130" width="198" height="11" rx="3" fill="#243a50" stroke="none" stroke-width="1"/><rect x="832" y="168.0" width="232" height="6" rx="3" fill="#b7bec5" stroke="none" stroke-width="1"/><rect x="832" y="200.66666666666666" width="208" height="6" rx="3" fill="#b7bec5" stroke="none" stroke-width="1"/><rect x="832" y="233.33333333333331" width="232" height="6" rx="3" fill="#b7bec5" stroke="none" stroke-width="1"/><rect x="832" y="266.0" width="198" height="6" rx="3" fill="#b7bec5" stroke="none" stroke-width="1"/><rect x="832" y="298.66666666666663" width="232" height="6" rx="3" fill="#b7bec5" stroke="none" stroke-width="1"/><rect x="832" y="331.3333333333333" width="180" height="6" rx="3" fill="#b7bec5" stroke="none" stroke-width="1"/><rect x="825" y="217.0" width="246" height="40.83333333333333" rx="3" fill="#fff0e8" stroke="#ef7758" stroke-width="1.6"/><path d="M832 245.58333333333331 L1062 245.58333333333331" fill="none" stroke="#e8654b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="1073" cy="217.0" r="13" fill="#c14a34"/><text x="1073" y="222.0" font-size="14" fill="#fff" font-weight="700" text-anchor="middle">1</text>
+<g transform="translate(1175 115) scale(1)"><path d="M80 42 V70 M80 70 H20 V98 M80 70 H160 V98 M20 136 V172 H80 M160 136 V172 H80 V200" fill="none" stroke="#326bb6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="15" y="0" width="132" height="42" rx="5" fill="#326bb6" stroke="none" stroke-width="1"/><text x="81" y="28" font-size="18" fill="#fff" font-weight="600" text-anchor="middle">焦点问题</text><rect x="-35" y="98" width="112" height="38" rx="5" fill="#eef4fb" stroke="#326bb6" stroke-width="1.5"/><text x="21" y="123" font-size="16" fill="#183b63" font-weight="500" text-anchor="middle">推荐答案</text><rect x="112" y="98" width="96" height="38" rx="5" fill="#eef4fb" stroke="#326bb6" stroke-width="1.5"/><text x="160" y="123" font-size="16" fill="#183b63" font-weight="500" text-anchor="middle">查证</text><rect x="19" y="200" width="124" height="40" rx="5" fill="#326bb6" stroke="none" stroke-width="1"/><text x="81" y="226" font-size="18" fill="#fff" font-weight="600" text-anchor="middle">结论</text></g>
+<path d="M1092 282 C1140 282 1120 355 1187 355" fill="none" stroke="#dd573f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 6"/>
+<text x="1098" y="417" font-size="18" fill="#53606a" font-weight="500" >确认结论，再转为批注</text>
+</g></svg>

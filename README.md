@@ -1,55 +1,152 @@
-<p align="center">
-  <b>简体中文</b> · <a href="README.en.md">English</a>
-</p>
+<p align="center"><b>简体中文</b> · <a href="README.en.md">English</a></p>
+
+# annotation-everything
+
+## 安装：把这段交给 Agent
+
+复制下面这段给 Agent，即可安装并体检。需要 Python 3.9 及以上，支持 macOS 和 Linux。
+
+```text
+请从 https://github.com/hezhongtang/annotation-everything 安装 annotation-everything 技能。
+在仓库运行 python3 ae.py install，按当前 Agent 配置 --link；Claude Code 无需链接。
+再运行 python3 ae.py doctor --json，确认安装项通过，报告仍需处理的问题。
+```
+
+默认技能副本位于 `~/.claude/skills/annotation-everything`，链接让其他 Agent 使用同一副本。自定义目录与更新、修复、卸载见[安装与维护](#安装与维护)。
+
+<p align="center"><img src="docs/assets/banner.zh.svg" alt="annotation-everything：批注改稿，分析问题，确认后交给 Agent" width="100%"></p>
 
 <p align="center">
-  <img src="docs/assets/banner.zh.svg" alt="annotation-everything：逐页批注，一键交给 Agent，报告与讲稿同步修改" width="100%">
-</p>
-
-<p align="center">
-  annotation-everything 是一个在本机运行的审阅批注工具，以 Agent Skills 技能的形式提供。任何采纳 Agent Skills 开放标准的 Agent 都能使用它；默认安装到 Claude Code 的技能目录，也能用 <code>--target</code> / <code>--link</code> 装进其他技能目录。<br>它把逐页 HTML 报告和配套讲稿并排放在同一个页面里。审阅人在浏览器中按页写批注，写完一键提交，由 Agent 按批注修改报告和讲稿。
-</p>
-
-<p align="center">
-  <img alt="版本 0.11.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.11.0-1f3a5f?style=flat-square">
+  <img alt="版本 0.12.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.12.0-1f3a5f?style=flat-square">
   <img alt="Agent Skills 技能" src="https://img.shields.io/badge/Agent_Skills-%E6%8A%80%E8%83%BD-d97757?style=flat-square">
   <img alt="Python 仅标准库" src="https://img.shields.io/badge/Python-%E4%BB%85%E6%A0%87%E5%87%86%E5%BA%93-3776ab?style=flat-square&logo=python&logoColor=white">
   <img alt="只监听 127.0.0.1" src="https://img.shields.io/badge/%E5%8F%AA%E7%9B%91%E5%90%AC-127.0.0.1-2fa36b?style=flat-square">
   <img alt="不上报使用数据" src="https://img.shields.io/badge/%E4%BD%BF%E7%94%A8%E6%95%B0%E6%8D%AE-%E4%B8%8D%E4%B8%8A%E6%8A%A5-555?style=flat-square">
 </p>
 
-<p align="center">
-  <a href="#为什么需要它">为什么需要它</a> ·
-  <a href="#功能">功能</a> ·
-  <a href="#工作原理">工作原理</a> ·
-  <a href="#快速开始">快速开始</a> ·
-  <a href="#安全与隐私">安全与隐私</a> ·
-  <a href="#项目结构">项目结构</a> ·
-  <a href="#开发">开发</a>
-</p>
+README 随 `main` 分支更新；自动更新只安装正式版本标签。升级已有审阅时，应停止旧服务、重建对照页、重启服务并刷新浏览器。
 
-<br>
-
-<p align="center">
-  <img src="docs/assets/receiver.zh.png" alt="合成对照页：侧栏页面树、报告与讲稿分屏、底部批注面板和接收状态栏" width="92%">
-  <br>
-  <sub>对照页：报告与讲稿分屏，批注放在底部，状态栏显示接收方 harness、会话与等待状态。图中数据均为虚构样例。</sub>
-</p>
-
-## 为什么需要它
-
-审阅一份几十页的汇报材料，常见做法是截图、标红、发消息，再把每条意见转述给改稿的人或 Agent。这样做有几个问题：意见分散在不同的地方，页码容易对不上；报告改了，讲稿常常忘了改；改到最后，也说不清哪些意见已经处理。
-
-annotation-everything 把这套流程放进一个在本机运行的页面里：
-
-- **意见留在原处**：每条批注都关联到具体的页、引用的原文或报告上的位置。Agent 收到的是带页码和位置的原始批注，不是转述。
-- **报告与讲稿一起改**：报告和讲稿按页对应。在一侧选中句子写修改意见时，如果另一侧同一页有相同或相近的句子，页面会提示两侧一起改。Agent 按页修改后重新生成对照页。
-- **处理过程有记录**：每次「交给 Agent 改稿」记为一批。每条批注都有处理状态和处理说明，可以随时回看。
-- **材料不离开本机**：服务只监听 `127.0.0.1`，不访问网络，也不上报使用数据。批注保存在审阅人指定的审阅目录里。
+<p align="center"><a href="#功能">批注与分析</a> · <a href="#快速开始">快速开始</a> · <a href="#使用参考">使用参考</a> · <a href="#安装与维护">安装与维护</a> · <a href="#工作原理">工作原理</a> · <a href="#开发">开发</a></p>
 
 ## 功能
 
+**批注，把修改意见落到原文；分析，把疑问推进为有依据的结论。** 两种模式围绕同一份报告和讲稿工作，由 Agent 接收改稿批次或分析轮次。
+
+### 批注：指出哪里改，报告与讲稿一起改
+
+- **对着材料写意见**：报告与讲稿按页对照；选中文字即可引用、删除或改写，也能在报告上放点、框选区域。对应句子可提示两侧一起改。
+- **一键交给 Agent 改稿**：批注自动保存。绑定接收会话后，显式提交这一批意见，Agent 同步修改报告和讲稿、重建对照页，并逐条记录处理结果。
+- **按需要检查和复核**：可选择全量勾稽，检查数字、口径和前后表述；也可先初改再复核，或停在待复核，由审阅人决定是否定稿。
+
+<p align="center"><img src="docs/assets/receiver.zh.png" alt="合成批注页：报告与讲稿分屏、原文和位置批注、底部输入面板与接收会话状态" width="92%"><br><sub>在原文和位置上写清意见，按批次交给 Agent；图中材料均为合成样例。</sub></p>
+
+### 分析：逐轮问清楚，再决定怎么改
+
+- **从一条批注、一页材料或一个问题开始**：Agent 把焦点问题拆成可回答的条目，给出推荐答案；可选答案、写自由文本、先搁置，或要求查证。只回答一部分也能交出本轮。
+- **看清结论从哪里来**：问题树、假设、查证事实与完整时间线一起保留。可改选答案、从检查点分出分析线、推翻假设或确认死局，保留原来的推理记录。
+- **确认后才转成修改意见**：结论先形成批注草稿，经审阅人确认后进入批注列表，再显式提交给 Agent 改稿。分析本身不修改报告，外部查证须逐题允许。
+
+<p align="center"><img src="docs/assets/analysis.zh.png" alt="合成分析页：焦点问题、问题树、待确认假设、本轮作答与检查点时间线" width="92%"><br><sub>分析与批注共用控制台布局；图中材料、批注和问答均为合成样例。</sub></p>
+
+<details>
+<summary><b>分析的详细规则、状态保护与兼容性</b></summary>
+
+服务模式下，可从未处理批注、某一页或直接输入焦点问题发起分析。从批注发起时，源批注进入「搁住 · 分析中」，不随改稿提交；已交出但未领取时会从批次中移出，正在被 Agent 处理的批注不能发起分析。分析保存源批注原文，之后编辑或删除源批注不影响回看；从页或焦点问题发起时不创建占位批注。Agent 可以建议展开某条批注，由审阅人决定是否发起。
+
+标题栏可切换「批注 / 分析」，分析地址为 `/#analysis`，刷新后保持。侧栏显示分析、问题树和搁置问题，主区域显示焦点问题和本轮条目，底部可查看时间线、假设、查证事实和搁置区。每题可用推荐答案、选项、自由文本、先搁置或需要查证作答，只答一部分也可「交给 Agent 分析」。外部查证须逐题明确允许，默认只查原始材料。Agent 提议新增、拆分、合并或作废问题，确认后才改变问题树；候选假设也由审阅人确认或不认同。
+
+一份审阅可有多个分析，同一时刻只有一个进行中，切换时其余暂停。暂停分析中已交出的轮次照常排队，切回后可查看结果。改稿与分析分开排队、共用接收方，按交出先后一次处理一项。
+
+决策由系统根据回答产生。将结论转成批注时，先查看草稿，确认后才进入批注列表，源批注标为已处理并指向分析；新批注仍需显式交给 Agent 改稿。源批注的「分析中」搁住也可手动解除。分析本身不改报告。
+
+改选答案会保留原来的决策和断枝，改回时可恢复。转出的未处理批注若依据不再生效，会进入「搁住 · 结论已变」并移出未领取的改稿批次；依据恢复后回到未处理。也可请求 Agent 按新结论起草更新，确认后替换文本和依据并保留旧文；选择保留原文会停止跟踪，或直接删除该批注。已被领取的改稿批次不会中途抽走批注，已处理状态不会自动回退。
+
+Agent 领取期间，这项分析可继续作答，重裁、更新批注和结论转出等状态操作会被保护。基线不符的写回会被拒收，系统作废旧轮并重新请求出题，带入仍有效的回答。改稿勾选全量勾稽时，Agent 另列分析相关的四类待确认：结论已变的批注、依据失效的已处理批注、报告与当前结论的矛盾、不同分析结论间的矛盾。
+
+每轮写回自动记录检查点，也可封存当前状态或已有检查点；封存后快照不能修改。从任一检查点分出新线时，继承原问题、决策和假设的身份并切换过去，原线保留，切回可继续其最新状态。批注依据只按当前线判断。时间线可查看每轮完整原话与 Agent 写回、检查点内容和分叉；历史只读，不会重新提交。没有已交出或处理中的轮次时可以结案，结案会封存最后状态；重新打开后自动请求出题。
+
+推翻假设时，若当前选择枝有决策直接依赖它，会先记录检查点、分出新线并撤下这些问题重问，保留原答案和原因；旧线标为建立在已推翻假设上。重选原答案时，未受影响的下游结论可恢复，受影响的旧决策需重新形成。假设不成立和查证事实跨线共享，假设确认按线保存。
+
+Agent 可提议选项或整条线是死局，由审阅人在下一轮确认。确认后，各线都不能再选该选项、切入死局线或从其检查点分线；推翻其依赖假设后自动解除并标为待复核。页面会解释阻断理由和所依赖的假设。点击引用页卡片可在浮层里预览已内嵌的报告，每步操作也会说明带来的变化。
+
+
+
+等待命令默认只接收改稿，需加 `--events analysis` 才接收分析轮次。Agent 用 `notes.py analysis --round N --json` 读上下文，用带基线版本的 `analysis-writeback` 写回。服务不支持分析时隐藏入口并提示升级；直接打开 HTML 的文件模式不提供分析。
+
+JSON 与 Markdown 导出都不包含分析问答、事件和问题树，JSON 不是整份审阅的完整备份。旧版工具导入「搁住」或旧页面显示该状态时，会把它当作未处理；旧服务的快照仍只收 `open`。升级后应重启服务，重新生成并刷新对照页。详见[格式说明](skill/annotation-everything/references/formats.md#分析数据)。
+
+</details>
+
+## 快速开始
+
+**1. 用合成样例试用**
+
+```bash
+S=skill/annotation-everything/scripts
+export AE_HOME=$(mktemp -d)   # 试用时把审阅台账放到临时目录，不影响本机真实的台账
+python3 $S/build_viewer.py --report fixtures/sample/report.html --script fixtures/sample/script.md --out /tmp/ae-demo
+python3 $S/serve.py /tmp/ae-demo
+```
+
+浏览器会自动打开对照页。写几条批注，点「交给 Agent 改稿」，然后在另一个终端运行：
+
+```bash
+python3 $S/notes.py wait /tmp/ae-demo
+```
+
+命令会输出刚才提交的批注，这就是 Agent 收到的内容。
+
+想试英文材料，把 `--report` 换成 `fixtures/sample/report.en.html`，`--script` 换成 `fixtures/sample/script.en.md`，加 `--locale en` 即可体验英文界面；只换材料时界面语言不变，也可用英文界面审阅原来的中文材料。
+
+**2. 准备自己的材料**
+
+- **报告**：一份 HTML 文件，每一页是一个 `<section class="page" data-page="N" data-key="唯一键">` 元素。
+- **讲稿（可选）**：一份 Markdown 文件，中文用 `### 第 N 页｜标题` 分页，每页写明时长、讲法、过渡和可能被问到的问题；英文讲稿写 `### Page N｜Title` 加 `**Duration**` / `**Talking points**` / `**Transition**` / `**Likely questions**`。两种写法可以在同一份讲稿里混用，认哪种写法与界面语言无关：中文界面能审阅英文讲稿，英文界面能审阅中文讲稿，标题和正文按原文保留、不翻译。页头认不出来、页码重复或字段重复时，生成器按当前语言给出行号与期望写法，不把错输入当成空讲稿。
+
+完整格式见 [references/formats.md](skill/annotation-everything/references/formats.md)。
+
+<details>
+<summary><b>常用命令一览</b></summary>
+
+| 命令 | 作用 |
+|---|---|
+| `ae.py install` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；修复体检发现的问题（先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。四个子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
+| `update.py auto` / `check` / `now` | 在技能副本中检查正式版本并自动更新 / 只检查 / 立即检查并安装；`auto` 由技能入口触发，最多每天一次 |
+| `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照，并把当前仍有效的通过证据跨阶段引用给后续阶段（`--no-reuse` 强制全部重跑）；`report` 只读记录并展示证据链。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
+| `build_viewer.py --report … [--script …] --out 审阅目录` | 生成对照页；讲稿可选；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
+| `report_check.py 报告.html [--script 讲稿.md] [--record report-record.json]` | 公开报告核验入口：输出可读摘要，`--json` 输出结构化结果，`--locale zh-CN` 或 `en` 选择语言。退出码 0 表示程序检查通过，不等于报告可交付；1 表示检查未通过；2 表示输入或用法错误。内容、结构与视觉覆盖及交付阻塞项分别列出 |
+| `serve.py 审阅目录或审阅标识` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
+| `http://127.0.0.1:<端口>/#overview`（浏览器地址） | 打开审阅总览：切换范围、查看详情、打开或代为启动审阅、归档或取消归档；先启动一份本机服务 |
+| `serve.py list [--json]` | 列出本机全部审阅，包含归档项；人读输出和 JSON 都带归档标记 |
+| `serve.py status 审阅目录或审阅标识` | 查看一份审阅的运行状态 |
+| `serve.py forget <短标识>` | 移除确认不再需要的台账记录并释放专属端口；保留审阅目录。总览对失效项提供这条命令，清理仍在命令行执行 |
+| `serve.py check` | 运行服务安全自检 |
+| `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | 绑定接收 harness 与会话、查看身份与状态；Codex 桌面使用事件接收，其他 harness 可用 `--adapter wait`；显式交接用 `bind --replace`，处理中批次先收尾 |
+| `notes.py wait` / `claim` | 等待或领取任务；`--events analysis` 显式接收分析，默认不领取分析，也不能越过更早轮次。`--round N` 须带此开关，`--seq N` 只指批次，所有筛选均受全局队首约束 |
+| `notes.py analysis <审阅目录> --round N --json` / `analysis-writeback <审阅目录> --round N --base-rev R --proposals 文件` | 读取轮次上下文 / 写回 JSON 结构提议列表或含提议、假设、事实、批注更新和死局的对象；`-` 从标准输入读取，写回须匹配领取时基线 |
+| `notes.py suggest-analysis <审阅目录> <批注标识> --reason 原因` | 给未处理批注加「建议展开分析」提示，由审阅人决定是否发起 |
+| `notes.py analysis-check <审阅目录> --json` | 只读各分析当前线的有效结论与待确认信息，没有活动轮次也可读取 |
+| `notes.py analysis-redecide <审阅目录> --analysis A --node N --option O` / `analysis-note <审阅目录> --analysis A --note-id N --action update\|keep\|delete` | 重裁答案 / 请求更新、保留原文或删除结论已变的批注；沿用保护与确认规则 |
+| `notes.py analysis-history <审阅目录> --analysis A --json` | 只读分析线、检查点及完整历史，不交出旧轮次 |
+| `notes.py analysis-line <审阅目录> --analysis A --action seal\|fork\|switch\|close\|reopen [--checkpoint CP] [--line L]` | 封存、从检查点分线、切线、结案或重新打开；沿用整分析保护 |
+| `notes.py analysis-refute <审阅目录> --analysis A --assumption AID` | 推翻假设；有当前直接依赖时自动分线重问，整分析被领取期间拒绝 |
+| `notes.py show` / `resolve` / `reopen` | 列出批注、标为已处理、重新打开。`show --locale` 选择阅读语言，优先于 `AE_LOCALE` 和审阅设置；`show --json` 仍导出原始值 |
+| `notes.py export` / `import` | 导出可再导入的批注摘要（Markdown 带版本与语言标记，或 JSON 结构化备份）／导入页面导出的 JSON 或 Markdown。`export --lang` 与 `show --locale` 同一套优先级，`--format json`、`--all`、`--page N`、`--out 文件` |
+| `notes.py done` / `review` / `diff` | 结束当前阶段、给出复核结论、按页查看初改改动了哪些地方；均可用 `--locale` 选择输出语言 |
+| `notes.py batches` | 查看处理记录 |
+| `notes.py skills` | 查看或设置技能目录和常驻技能。`--locale` 选择输出语言，优先于 `AE_LOCALE` 和审阅设置；范围可写 `全部` / `报告` / `讲稿` / `风格优化` 或 `all` / `report` / `script` / `style` |
+| `check_pptx_fonts.py 原始.pptx [--pdf 转换后.pdf]` | PPTX 转换前后的字体核查；`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选界面语言 |
+
+</details>
+
+## 使用参考
+
+### 版面与快捷键
+
 对照页采用控制台布局：活动栏集中放置全部批注、处理记录、审阅总览和说明；侧栏按章节列出页面及批注数。侧栏、讲稿和底部面板都可以收起，分别用 `[`、`]`、`\` 切换，开合状态按审阅保存在本浏览器。按 `F` 进入全屏专注，只看报告；按 `C` 打开浮动输入框，`⌘ / Ctrl + ↵` 添加批注，`P` 标注、`S` 风格优化和选区快捷键照常可用。`Esc` 先关闭浮层，再退出全屏。输入框聚焦时不触发布局快捷键。
+
+<details>
+<summary><b>批次、复核、技能与其他功能</b></summary>
 
 <table>
   <tr>
@@ -104,33 +201,7 @@ annotation-everything 把这套流程放进一个在本机运行的页面里：
   </tr>
 </table>
 
-对照页可以选择简体中文或英文。生成时传入 `--locale auto`、`zh-CN` 或 `en`，页面上也可以切换，选择只保存在本机浏览器。批注原文保持原样，对象的存储值 `报告`、`讲稿`、`报告和讲稿` 不随语言改变。未配置语言时，新审阅保持中文，已有审阅沿用已保存的选择；`AE_LOCALE` 可覆盖已保存配置，显式参数优先。批注的新增、编辑、删除、重开、引用、快捷删除与改写、放点与框选、重新标注、风格优化、页码、讲稿栏、问答标签、编辑帮助、工具提示和无障碍名称都已支持两种语言；删除确认等对话框同样跟随当前语言。技能输入栏、候选与推荐、空结果、常驻技能的范围标签与增删提示，以及 `notes.py skills` 的输出也按当前语言显示；搜索仍按技能目录里的原始名称和原始说明匹配，常驻技能范围的存储值 `all` / `报告` / `讲稿` / `style` 不变。导出的 Markdown 可以选中文或英文（默认跟随界面），页面和命令行都能跨语言导入。「交给 Agent 改稿」弹窗、提交状态徽标、处理记录、回到上次提示和服务未连接时的提示也支持两种语言。提交选项（做到定稿还是停在待复核、是否允许派发子代理、是否全量勾稽）与界面语言无关。
-
-### 分析：先问清楚，再改稿
-
-服务模式下，可从未处理批注、某一页或直接输入焦点问题发起分析。从批注发起时，源批注进入「搁住 · 分析中」，不随改稿提交；已交出但未领取时会从批次中移出，正在被 Agent 处理的批注不能发起分析。分析保存源批注原文，之后编辑或删除源批注不影响回看；从页或焦点问题发起时不创建占位批注。Agent 可以建议展开某条批注，由审阅人决定是否发起。
-
-标题栏可切换「批注 / 分析」，分析地址为 `/#analysis`，刷新后保持。侧栏显示分析、问题树和搁置问题，主区域显示焦点问题和本轮条目，底部可查看时间线、假设、查证事实和搁置区。每题可用推荐答案、选项、自由文本、先搁置或需要查证作答，只答一部分也可「交给 Agent 分析」。外部查证须逐题明确允许，默认只查原始材料。Agent 提议新增、拆分、合并或作废问题，确认后才改变问题树；候选假设也由审阅人确认或不认同。
-
-一份审阅可有多个分析，同一时刻只有一个进行中，切换时其余暂停。暂停分析中已交出的轮次照常排队，切回后可查看结果。改稿与分析分开排队、共用接收方，按交出先后一次处理一项。
-
-决策由系统根据回答产生。将结论转成批注时，先查看草稿，确认后才进入批注列表，源批注标为已处理并指向分析；新批注仍需显式交给 Agent 改稿。源批注的「分析中」搁住也可手动解除。分析本身不改报告。
-
-改选答案会保留原来的决策和断枝，改回时可恢复。转出的未处理批注若依据不再生效，会进入「搁住 · 结论已变」并移出未领取的改稿批次；依据恢复后回到未处理。也可请求 Agent 按新结论起草更新，确认后替换文本和依据并保留旧文；选择保留原文会停止跟踪，或直接删除该批注。已被领取的改稿批次不会中途抽走批注，已处理状态不会自动回退。
-
-Agent 领取期间，这项分析可继续作答，重裁、更新批注和结论转出等状态操作会被保护。基线不符的写回会被拒收，系统作废旧轮并重新请求出题，带入仍有效的回答。改稿勾选全量勾稽时，Agent 另列分析相关的四类待确认：结论已变的批注、依据失效的已处理批注、报告与当前结论的矛盾、不同分析结论间的矛盾。
-
-每轮写回自动记录检查点，也可封存当前状态或已有检查点；封存后快照不能修改。从任一检查点分出新线时，继承原问题、决策和假设的身份并切换过去，原线保留，切回可继续其最新状态。批注依据只按当前线判断。时间线可查看每轮完整原话与 Agent 写回、检查点内容和分叉；历史只读，不会重新提交。没有已交出或处理中的轮次时可以结案，结案会封存最后状态；重新打开后自动请求出题。
-
-推翻假设时，若当前选择枝有决策直接依赖它，会先记录检查点、分出新线并撤下这些问题重问，保留原答案和原因；旧线标为建立在已推翻假设上。重选原答案时，未受影响的下游结论可恢复，受影响的旧决策需重新形成。假设不成立和查证事实跨线共享，假设确认按线保存。
-
-Agent 可提议选项或整条线是死局，由审阅人在下一轮确认。确认后，各线都不能再选该选项、切入死局线或从其检查点分线；推翻其依赖假设后自动解除并标为待复核。页面会解释阻断理由和所依赖的假设。点击引用页卡片可在浮层里预览已内嵌的报告，每步操作也会说明带来的变化。
-
-<p align="center"><img src="docs/assets/analysis.zh.png" alt="合成分析页：焦点问题、问题树、待确认假设、本轮作答与检查点时间线" width="92%"><br><sub>分析与批注共用控制台布局；图中材料、批注和问答均为合成样例。</sub></p>
-
-等待命令默认只接收改稿，需加 `--events analysis` 才接收分析轮次。Agent 用 `notes.py analysis --round N --json` 读上下文，用带基线版本的 `analysis-writeback` 写回。服务不支持分析时隐藏入口并提示升级；直接打开 HTML 的文件模式不提供分析。
-
-JSON 与 Markdown 导出都不包含分析问答、事件和问题树，JSON 不是整份审阅的完整备份。旧版工具导入「搁住」或旧页面显示该状态时，会把它当作未处理；旧服务的快照仍只收 `open`。升级后应重启服务，重新生成并刷新对照页。详见[格式说明](skill/annotation-everything/references/formats.md#分析数据)。
+</details>
 
 ### 审阅总览与归档
 
@@ -182,6 +253,63 @@ Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lan
 
 [Codex 空闲唤醒验收](docs/codex-delivery.zh-CN.md)记录隔离合成网页的两次真实空闲提交、普通重启恢复及适配限制。
 
+<details>
+<summary><b>双语界面与交换格式的覆盖范围</b></summary>
+
+对照页可以选择简体中文或英文。生成时传入 `--locale auto`、`zh-CN` 或 `en`，页面上也可以切换，选择只保存在本机浏览器。批注原文保持原样，对象的存储值 `报告`、`讲稿`、`报告和讲稿` 不随语言改变。未配置语言时，新审阅保持中文，已有审阅沿用已保存的选择；`AE_LOCALE` 可覆盖已保存配置，显式参数优先。批注的新增、编辑、删除、重开、引用、快捷删除与改写、放点与框选、重新标注、风格优化、页码、讲稿栏、问答标签、编辑帮助、工具提示和无障碍名称都已支持两种语言；删除确认等对话框同样跟随当前语言。技能输入栏、候选与推荐、空结果、常驻技能的范围标签与增删提示，以及 `notes.py skills` 的输出也按当前语言显示；搜索仍按技能目录里的原始名称和原始说明匹配，常驻技能范围的存储值 `all` / `报告` / `讲稿` / `style` 不变。导出的 Markdown 可以选中文或英文（默认跟随界面），页面和命令行都能跨语言导入。「交给 Agent 改稿」弹窗、提交状态徽标、处理记录、回到上次提示和服务未连接时的提示也支持两种语言。提交选项（做到定稿还是停在待复核、是否允许派发子代理、是否全量勾稽）与界面语言无关。
+
+</details>
+
+## 安装与维护
+
+管理命令是仓库根目录的 `ae.py`（只用 Python 标准库），四个子命令：`install` 安装、`doctor` 体检、`repair` 修复、`uninstall` 卸载。本工具是 Agent Skills 技能：任何采纳 Agent Skills 开放标准的 Agent 都能加载 `SKILL.md` 并按它工作。默认装进 Claude Code 的技能目录，其余 Agent 的技能目录用 `--target` 和 `--link` 覆盖（见下）。
+
+### 安装命令与维护选项
+
+前提：Python 3.9 及以上，macOS 或 Linux。
+
+```bash
+python3 ae.py install                            # 安装：把技能复制为技能副本到 ~/.claude/skills/
+python3 ae.py install --target <目录>            # 或装到其他技能目录的根（副本装在 <目录>/annotation-everything）
+python3 ae.py install --link codex,agents,zcode  # 可选：同时为这些 Agent 建指向副本的软链接
+python3 ae.py install --link cursor=~/.cursor/skills  # --link 也接受 名称=路径，为任意技能目录建链接
+python3 ae.py doctor                             # 体检：安装状态、运行状态、可选工具、开发环境
+python3 ae.py repair                             # 修复：先列计划，安全项自动修
+python3 ae.py uninstall                          # 卸载：删除技能副本和链接，默认保留审阅台账
+python3 ae.py doctor --target <目录>             # doctor/repair/uninstall 同样接受 --target，定位自定义位置的副本
+python3 ae.py doctor --locale en                 # 可选：界面语言 auto、zh-CN 或 en（写在子命令前后都认）
+python3 ~/.claude/skills/annotation-everything/scripts/update.py check  # 立即检查正式版本，不安装
+python3 ~/.claude/skills/annotation-everything/scripts/update.py now    # 立即检查并安装新版
+```
+
+- **版本更新**：Agent 按 `SKILL.md` 使用技能时，每份技能副本至多每天检查一次安装来源 `origin` 的正式版本标签（`v主.次.修订`），发现更高版本后自动更新并提示；预发布标签不会自动安装。离线、认证失败、来源不可用时保留当前版本并继续审阅；技能副本有本地改动，或审阅服务、批注进程仍在运行时，先提示并推迟更新。停止后可运行 `update.py now`；自定义安装位置请把命令中的路径换成当前技能副本的路径。设置 `AE_AUTO_UPDATE=0` 可关闭自动检查，手动命令仍可使用。
+- 更新只替换技能副本，保留指向它的软链接、审阅台账与审阅目录，不修改来源仓库的检出。正式版本的本地来源通常保存在 `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`，若与技能副本重叠则存到副本旁的独立目录；这些文件供后续体检、修复和更新使用，不要在仍使用该副本时删除。首次获得更新功能仍需先用包含此功能的版本运行一次 `ae.py install`。升级已有审阅时，停止旧服务、重建对照页、启动新服务并刷新浏览器。
+- 更新需要 Git、来源仓库的访问权限、本机进程枚举权限，以及文件系统支持原子目录交换（macOS 的 `renamex_np`，或 Linux C 库提供的 `renameat2`）。受限环境无法确认或交换时会提示并保留当前版本；可在具备权限的终端手动运行 `update.py now`。成功切换后，旧副本保留在技能目录根下的 `.ae-update-*` 中，便于找回切换期间的并发改动。
+- 体检逐项给出「通过 / 警告 / 失败」；失败项附修复或排障命令。退出码 0 表示全部通过或只有警告，1 表示有失败项，2 表示命令自身出错（`doctor --json` 输出 `error`）。开发环境类别仅在当前工作目录位于来源仓库内时出现。
+- **界面语言**：`ae.py`、`serve.py`（`serve` / `status` / `list` / `forget` / `check`）、`notes.py`、`check_pptx_fonts.py` 都支持 `--locale auto|zh-CN|en`（写在子命令前后都认）和环境变量 `AE_LOCALE`；生成器的帮助、结果与资源诊断也按显式 `--locale`、`AE_LOCALE`、已保存审阅配置的顺序选语言。优先级是显式参数、`AE_LOCALE`，两者都没有则中文；只有 `auto` 才读 `LC_ALL` / `LC_MESSAGES` / `LANG`。`serve.py serve` 和 `serve.py status` 在目录解析出来后还会回落到那份审阅里保存的 `locale`；`list` / `forget` / `check` 不对应单份审阅，只认前两级。语言选择非法时命令以退出码 2 停下并说明原因，不改动任何状态。帮助、参数说明、缺参、非法值和命令失败都用同一种语言；来源路径、命令、字体名、技能名与系统原始错误保持原文。
+- **机器判定与人读文案分开**：`doctor --json` 的 `category`、`level`、`code` 和 `summary` 是旧消费者在读的判定字段，恒为中文、不随语言改值；新增的语言无关判定信息是每项的 `status`（`pass` / `warn` / `fail`）和 `category_id`（`install` / `tools` / `dev` / `runtime`），以及顶层的 `schema`（结构版本）和 `locale`（`message` 用的是哪种语言）。新消费者比较 `status` / `category_id` 即可，不必比较本地化标签；`message`、`fix_command` 里的人读文案按语言变。`serve.py` 的拒绝与错误同理：HTTP 状态和原因代码（`bad-host`、`cross-site`、`bad-origin`、`no-origin`、`bad-content-type`、`chunked`、`bad-length`、`too-large`、`bad-json`、`not-found`、`preflight`、`no-index`、`no-note`、`server-error`、`review-mismatch`、`no-api`）不随语言变，说明按服务启动时定的语言输出；未知错误只说明类型与恢复动作，不回显请求内容。
+- `repair` 里删除台账失效记录（`--forget-stale`）、结束残留服务（`--stop-orphans`）是破坏性操作，要显式加参数；`--dry-run` 只看计划不动手。计划与执行报告都写清楚「本次未执行」，翻译后的提示不弱化后果。
+- `uninstall` 任何情况下都不动审阅目录；`--purge` 才一并删除审阅台账；有 `serve.py` 在运行时会拒绝，`--stop-servers` 先停止再卸。
+- **装到别的技能目录**：`install` 缺省把技能副本装到 `~/.claude/skills/`（`CLAUDE_SKILLS_DIR` 仍可覆盖），`--target <目录>` 改为装到 `<目录>/annotation-everything`；`doctor`、`repair`、`uninstall` 接受同一个 `--target` 对该副本体检、修复、卸载，失败项的修复命令会带上同一 `--target`。`--link` 除内置名称 `codex`、`agents`、`zcode` 外还接受 `名称=路径`（如 `cursor=~/.cursor/skills`），为任意技能目录建指向副本的软链接并记入安装记录；自定义链接同样出现在体检里（悬空时报失败项与修复命令），`repair` 能重建，`uninstall` 会删除。安装记录只存在技能副本里，副本删除后自定义链接无法再被自动发现（内置目录的链接仍有扫描兜底）。
+- 停止服务前会核实正在执行的是本仓库或当前技能副本的脚本，并在发信号前复核进程身份；无法核实时拒绝停止。`--purge` 仅删除已知台账文件；台账损坏、目录内有其他文件或未登记的审阅目录时拒绝清除。
+
+装好后对 Agent 说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」，它就会按这套流程工作。技能怎么被唤醒、批注指定的技能怎么调用，各 Agent 的机制不同，对照见 [SKILL.md](skill/annotation-everything/SKILL.md) 的「各 Agent 的对应机制」一节。
+
+Agent 自动执行修复前，遇到 `--purge`、`--forget-stale`、`--stop-orphans` 或 `--stop-servers`，须先取得用户同意。体检优先比较 `status` / `category_id`；安装项失败时按 `fix_command` 修复并重跑体检，其他运行状态问题和可选工具警告分别报告。
+
+## 安全与隐私
+
+| 约束 | 实现方式 |
+|---|---|
+| 只在本机访问 | 服务只监听 `127.0.0.1`，校验请求的 Host 头，不返回跨域访问（CORS）响应头 |
+| 防止跨站伪造写入 | 写入请求的来源（Origin）必须与页面同源，并且内容类型必须是 JSON |
+| 只开放必要的内容 | 只提供 `index.html` 和 `/api/*` 接口，审阅目录里的其他文件无法通过服务访问 |
+| 不依赖第三方 Python 库 | 运行时只用 Python 标准库；字体核查会调用系统工具 `fc-list` 和 `pdffonts`，缺少时会给出安装提示 |
+| 网络访问范围 | 审阅服务不访问网络；更新检查仅访问安装来源的 Git 远端，不上传审阅数据或遥测。报告中引用的外部资源不加载，本地图片和字体直接嵌入页面 |
+| 数据留在本地 | 批注和对照页都保存在审阅人指定的审阅目录；本机的审阅台账 `~/.annotation-everything/` 只记录审阅标识、目录路径和端口 |
+
+PR review 的全量验证包含 `serve.py check`，逐项检查以上约束；实现阶段不单独提前运行服务安全自检。
+
 ## 工作原理
 
 ### 整体架构
@@ -201,7 +329,7 @@ flowchart LR
     L -.-> NP
 ```
 
-### 一次审阅的完整流程
+### 一次改稿的完整流程
 
 ```mermaid
 sequenceDiagram
@@ -265,138 +393,6 @@ flowchart LR
     RV -->|"复核方直接再改"| F
     RV -->|"退回给审阅人决定"| U["标出待审阅人决定的批注和原因"]
 ```
-
-## 安装与维护
-
-管理命令是仓库根目录的 `ae.py`（只用 Python 标准库），四个子命令：`install` 安装、`doctor` 体检、`repair` 修复、`uninstall` 卸载。本工具是 Agent Skills 技能：任何采纳 Agent Skills 开放标准的 Agent 都能加载 `SKILL.md` 并按它工作。默认装进 Claude Code 的技能目录，其余 Agent 的技能目录用 `--target` 和 `--link` 覆盖（见下）。
-
-### 给人看
-
-前提：Python 3.9 及以上，macOS 或 Linux。
-
-```bash
-python3 ae.py install                            # 安装：把技能复制为技能副本到 ~/.claude/skills/
-python3 ae.py install --target <目录>            # 或装到其他技能目录的根（副本装在 <目录>/annotation-everything）
-python3 ae.py install --link codex,agents,zcode  # 可选：同时为这些 Agent 建指向副本的软链接
-python3 ae.py install --link cursor=~/.cursor/skills  # --link 也接受 名称=路径，为任意技能目录建链接
-python3 ae.py doctor                             # 体检：安装状态、运行状态、可选工具、开发环境
-python3 ae.py repair                             # 修复：先列计划，安全项自动修
-python3 ae.py uninstall                          # 卸载：删除技能副本和链接，默认保留审阅台账
-python3 ae.py doctor --target <目录>             # doctor/repair/uninstall 同样接受 --target，定位自定义位置的副本
-python3 ae.py doctor --locale en                 # 可选：界面语言 auto、zh-CN 或 en（写在子命令前后都认）
-python3 ~/.claude/skills/annotation-everything/scripts/update.py check  # 立即检查正式版本，不安装
-python3 ~/.claude/skills/annotation-everything/scripts/update.py now    # 立即检查并安装新版
-```
-
-- **版本更新**：Agent 按 `SKILL.md` 使用技能时，每份技能副本至多每天检查一次安装来源 `origin` 的正式版本标签（`v主.次.修订`），发现更高版本后自动更新并提示；预发布标签不会自动安装。离线、认证失败、来源不可用时保留当前版本并继续审阅；技能副本有本地改动，或审阅服务、批注进程仍在运行时，先提示并推迟更新。停止后可运行 `update.py now`；自定义安装位置请把命令中的路径换成当前技能副本的路径。设置 `AE_AUTO_UPDATE=0` 可关闭自动检查，手动命令仍可使用。
-- 更新只替换技能副本，保留指向它的软链接、审阅台账与审阅目录，不修改来源仓库的检出。正式版本的本地来源通常保存在 `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`，若与技能副本重叠则存到副本旁的独立目录；这些文件供后续体检、修复和更新使用，不要在仍使用该副本时删除。首次获得更新功能仍需先用包含此功能的版本运行一次 `ae.py install`。升级已有审阅时，停止旧服务、重建对照页、启动新服务并刷新浏览器。
-- 更新需要 Git、来源仓库的访问权限、本机进程枚举权限，以及文件系统支持原子目录交换（macOS 的 `renamex_np`，或 Linux C 库提供的 `renameat2`）。受限环境无法确认或交换时会提示并保留当前版本；可在具备权限的终端手动运行 `update.py now`。成功切换后，旧副本保留在技能目录根下的 `.ae-update-*` 中，便于找回切换期间的并发改动。
-- 体检逐项给出「通过 / 警告 / 失败」；失败项附修复或排障命令。退出码 0 表示全部通过或只有警告，1 表示有失败项，2 表示命令自身出错（`doctor --json` 输出 `error`）。开发环境类别仅在当前工作目录位于来源仓库内时出现。
-- **界面语言**：`ae.py`、`serve.py`（`serve` / `status` / `list` / `forget` / `check`）、`notes.py`、`check_pptx_fonts.py` 都支持 `--locale auto|zh-CN|en`（写在子命令前后都认）和环境变量 `AE_LOCALE`；生成器的帮助、结果与资源诊断也按显式 `--locale`、`AE_LOCALE`、已保存审阅配置的顺序选语言。优先级是显式参数、`AE_LOCALE`，两者都没有则中文；只有 `auto` 才读 `LC_ALL` / `LC_MESSAGES` / `LANG`。`serve.py serve` 和 `serve.py status` 在目录解析出来后还会回落到那份审阅里保存的 `locale`；`list` / `forget` / `check` 不对应单份审阅，只认前两级。语言选择非法时命令以退出码 2 停下并说明原因，不改动任何状态。帮助、参数说明、缺参、非法值和命令失败都用同一种语言；来源路径、命令、字体名、技能名与系统原始错误保持原文。
-- **机器判定与人读文案分开**：`doctor --json` 的 `category`、`level`、`code` 和 `summary` 是旧消费者在读的判定字段，恒为中文、不随语言改值；新增的语言无关判定信息是每项的 `status`（`pass` / `warn` / `fail`）和 `category_id`（`install` / `tools` / `dev` / `runtime`），以及顶层的 `schema`（结构版本）和 `locale`（`message` 用的是哪种语言）。新消费者比较 `status` / `category_id` 即可，不必比较本地化标签；`message`、`fix_command` 里的人读文案按语言变。`serve.py` 的拒绝与错误同理：HTTP 状态和原因代码（`bad-host`、`cross-site`、`bad-origin`、`no-origin`、`bad-content-type`、`chunked`、`bad-length`、`too-large`、`bad-json`、`not-found`、`preflight`、`no-index`、`no-note`、`server-error`、`review-mismatch`、`no-api`）不随语言变，说明按服务启动时定的语言输出；未知错误只说明类型与恢复动作，不回显请求内容。
-- `repair` 里删除台账失效记录（`--forget-stale`）、结束残留服务（`--stop-orphans`）是破坏性操作，要显式加参数；`--dry-run` 只看计划不动手。计划与执行报告都写清楚「本次未执行」，翻译后的提示不弱化后果。
-- `uninstall` 任何情况下都不动审阅目录；`--purge` 才一并删除审阅台账；有 `serve.py` 在运行时会拒绝，`--stop-servers` 先停止再卸。
-- **装到别的技能目录**：`install` 缺省把技能副本装到 `~/.claude/skills/`（`CLAUDE_SKILLS_DIR` 仍可覆盖），`--target <目录>` 改为装到 `<目录>/annotation-everything`；`doctor`、`repair`、`uninstall` 接受同一个 `--target` 对该副本体检、修复、卸载，失败项的修复命令会带上同一 `--target`。`--link` 除内置名称 `codex`、`agents`、`zcode` 外还接受 `名称=路径`（如 `cursor=~/.cursor/skills`），为任意技能目录建指向副本的软链接并记入安装记录；自定义链接同样出现在体检里（悬空时报失败项与修复命令），`repair` 能重建，`uninstall` 会删除。安装记录只存在技能副本里，副本删除后自定义链接无法再被自动发现（内置目录的链接仍有扫描兜底）。
-- 停止服务前会核实正在执行的是本仓库或当前技能副本的脚本，并在发信号前复核进程身份；无法核实时拒绝停止。`--purge` 仅删除已知台账文件；台账损坏、目录内有其他文件或未登记的审阅目录时拒绝清除。
-
-装好后对 Agent 说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」，它就会按这套流程工作。技能怎么被唤醒、批注指定的技能怎么调用，各 Agent 的机制不同，对照见 [SKILL.md](skill/annotation-everything/SKILL.md) 的「各 Agent 的对应机制」一节。
-
-### 给 Agent 看
-
-把下面这段发给你的 Agent，并把 `<仓库路径>` 换成本仓库的绝对路径：
-
-> 在 `<仓库路径>` 安装并体检 annotation-everything 技能，按编号步骤执行，每步先确认成功标志再往下：
->
-> 1. 运行 `python3 <仓库路径>/ae.py doctor --json`。退出码 2 时先查看 JSON 的 `error` 并排障；若提示安装记录损坏，可按第 2 步重新安装。正常输出中，若 `results` 里没有 `category` 为「安装状态」且 `level` 为「失败」的项，说明已装好，跳到第 4 步。
-> 2. 按你是哪种 Agent 决定链接参数：Claude Code 不需要 `--link`；Codex 用 `--link codex`；`~/.agents` 下的 Agent 用 `--link agents`；zcode 用 `--link zcode`；其他 Agent 用 `--link 名称=技能目录`（如 `--link cursor=~/.cursor/skills`）。不把主副本装进 Claude 目录时加 `--target <目录>`（后续 `doctor` / `repair` / `uninstall` 带同一个值）。运行 `python3 <仓库路径>/ae.py install`（需要时加上对应参数）。成功标志：退出码 0。
-> 3. 再次运行 `python3 <仓库路径>/ae.py doctor --json`，以 JSON 判定成败：优先看语言无关的判定字段——`results` 里没有 `status` 为 `fail` 且 `category_id` 为 `install` 的项即安装成功（`category` 为「安装状态」且 `level` 为「失败」的旧写法仍然成立，这两个字段恒为中文）。「运行状态」类的失败（如残留服务、专属端口被占用）不影响安装，记下来在第 5 步报告；`summary.warn` 里的警告（如缺少可选工具 `fc-list`/`pdffonts`）不阻塞使用。「安装状态」类仍有失败时，按该项的 `fix_command` 修复后重跑本步；`fix_command` 含第 4 步列出的破坏性参数时，先征得用户同意再执行。
-> 4. 需要修复时运行 `python3 <仓库路径>/ae.py repair`（`--dry-run` 先看计划）。**`--purge`、`--forget-stale`、`--stop-orphans`、`--stop-servers` 都是破坏性操作，必须先征得用户同意再加。**
-> 5. 完成后向用户报告：安装是否成功、各项体检结果，以及尚未解决的警告。
-
-界面文案默认中文。需要英文输出时，在上面任何一条命令后加 `--locale en`（也可设环境变量 `AE_LOCALE=en`）；机器判定用 `status` / `category_id`，与语言无关。
-
-## 快速开始
-
-**1. 安装技能**
-
-```bash
-python3 ae.py install
-```
-
-技能会被复制到 `~/.claude/skills/annotation-everything`（这份复制称为「技能副本」）；要装到其他技能目录的根，用 `python3 ae.py install --target <目录>`（副本装在 `<目录>/annotation-everything`）。安装、体检、修复、卸载的完整说明见上面「安装与维护」。
-
-**2. 用合成样例试用**
-
-```bash
-S=skill/annotation-everything/scripts
-export AE_HOME=$(mktemp -d)   # 试用时把审阅台账放到临时目录，不影响本机真实的台账
-python3 $S/build_viewer.py --report fixtures/sample/report.html --script fixtures/sample/script.md --out /tmp/ae-demo
-python3 $S/serve.py /tmp/ae-demo
-```
-
-浏览器会自动打开对照页。写几条批注，点「交给 Agent 改稿」，然后在另一个终端运行：
-
-```bash
-python3 $S/notes.py wait /tmp/ae-demo
-```
-
-命令会输出刚才提交的批注，这就是 Agent 收到的内容。
-
-想试英文材料，把 `--report` 换成 `fixtures/sample/report.en.html`，`--script` 换成 `fixtures/sample/script.en.md`，加 `--locale en` 即可体验英文界面；只换材料时界面语言不变，也可用英文界面审阅原来的中文材料。
-
-**3. 准备自己的材料**
-
-- **报告**：一份 HTML 文件，每一页是一个 `<section class="page" data-page="N" data-key="唯一键">` 元素。
-- **讲稿（可选）**：一份 Markdown 文件，中文用 `### 第 N 页｜标题` 分页，每页写明时长、讲法、过渡和可能被问到的问题；英文讲稿写 `### Page N｜Title` 加 `**Duration**` / `**Talking points**` / `**Transition**` / `**Likely questions**`。两种写法可以在同一份讲稿里混用，认哪种写法与界面语言无关：中文界面能审阅英文讲稿，英文界面能审阅中文讲稿，标题和正文按原文保留、不翻译。页头认不出来、页码重复或字段重复时，生成器按当前语言给出行号与期望写法，不把错输入当成空讲稿。
-
-完整格式见 [references/formats.md](skill/annotation-everything/references/formats.md)。
-
-<details>
-<summary><b>常用命令一览</b></summary>
-
-| 命令 | 作用 |
-|---|---|
-| `ae.py install` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；修复体检发现的问题（先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。四个子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
-| `update.py auto` / `check` / `now` | 在技能副本中检查正式版本并自动更新 / 只检查 / 立即检查并安装；`auto` 由技能入口触发，最多每天一次 |
-| `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照，并把当前仍有效的通过证据跨阶段引用给后续阶段（`--no-reuse` 强制全部重跑）；`report` 只读记录并展示证据链。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
-| `build_viewer.py --report … [--script …] --out 审阅目录` | 生成对照页；讲稿可选；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
-| `report_check.py 报告.html [--script 讲稿.md] [--record report-record.json]` | 公开报告核验入口：输出可读摘要，`--json` 输出结构化结果，`--locale zh-CN` 或 `en` 选择语言。退出码 0 表示程序检查通过，不等于报告可交付；1 表示检查未通过；2 表示输入或用法错误。内容、结构与视觉覆盖及交付阻塞项分别列出 |
-| `serve.py 审阅目录或审阅标识` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
-| `http://127.0.0.1:<端口>/#overview`（浏览器地址） | 打开审阅总览：切换范围、查看详情、打开或代为启动审阅、归档或取消归档；先启动一份本机服务 |
-| `serve.py list [--json]` | 列出本机全部审阅，包含归档项；人读输出和 JSON 都带归档标记 |
-| `serve.py status 审阅目录或审阅标识` | 查看一份审阅的运行状态 |
-| `serve.py forget <短标识>` | 移除确认不再需要的台账记录并释放专属端口；保留审阅目录。总览对失效项提供这条命令，清理仍在命令行执行 |
-| `serve.py check` | 运行服务安全自检 |
-| `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | 绑定接收 harness 与会话、查看身份与状态；Codex 桌面使用事件接收，其他 harness 可用 `--adapter wait`；显式交接用 `bind --replace`，处理中批次先收尾 |
-| `notes.py wait` / `claim` | 等待或领取任务；`--events analysis` 显式接收分析，默认不领取分析，也不能越过更早轮次。`--round N` 须带此开关，`--seq N` 只指批次，所有筛选均受全局队首约束 |
-| `notes.py analysis <审阅目录> --round N --json` / `analysis-writeback <审阅目录> --round N --base-rev R --proposals 文件` | 读取轮次上下文 / 写回 JSON 结构提议列表或含提议、假设、事实、批注更新和死局的对象；`-` 从标准输入读取，写回须匹配领取时基线 |
-| `notes.py suggest-analysis <审阅目录> <批注标识> --reason 原因` | 给未处理批注加「建议展开分析」提示，由审阅人决定是否发起 |
-| `notes.py analysis-check <审阅目录> --json` | 只读各分析当前线的有效结论与待确认信息，没有活动轮次也可读取 |
-| `notes.py analysis-redecide <审阅目录> --analysis A --node N --option O` / `analysis-note <审阅目录> --analysis A --note-id N --action update\|keep\|delete` | 重裁答案 / 请求更新、保留原文或删除结论已变的批注；沿用保护与确认规则 |
-| `notes.py analysis-history <审阅目录> --analysis A --json` | 只读分析线、检查点及完整历史，不交出旧轮次 |
-| `notes.py analysis-line <审阅目录> --analysis A --action seal\|fork\|switch\|close\|reopen [--checkpoint CP] [--line L]` | 封存、从检查点分线、切线、结案或重新打开；沿用整分析保护 |
-| `notes.py analysis-refute <审阅目录> --analysis A --assumption AID` | 推翻假设；有当前直接依赖时自动分线重问，整分析被领取期间拒绝 |
-| `notes.py show` / `resolve` / `reopen` | 列出批注、标为已处理、重新打开。`show --locale` 选择阅读语言，优先于 `AE_LOCALE` 和审阅设置；`show --json` 仍导出原始值 |
-| `notes.py export` / `import` | 导出可再导入的批注摘要（Markdown 带版本与语言标记，或 JSON 结构化备份）／导入页面导出的 JSON 或 Markdown。`export --lang` 与 `show --locale` 同一套优先级，`--format json`、`--all`、`--page N`、`--out 文件` |
-| `notes.py done` / `review` / `diff` | 结束当前阶段、给出复核结论、按页查看初改改动了哪些地方；均可用 `--locale` 选择输出语言 |
-| `notes.py batches` | 查看处理记录 |
-| `notes.py skills` | 查看或设置技能目录和常驻技能。`--locale` 选择输出语言，优先于 `AE_LOCALE` 和审阅设置；范围可写 `全部` / `报告` / `讲稿` / `风格优化` 或 `all` / `report` / `script` / `style` |
-| `check_pptx_fonts.py 原始.pptx [--pdf 转换后.pdf]` | PPTX 转换前后的字体核查；`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选界面语言 |
-
-</details>
-
-## 安全与隐私
-
-| 约束 | 实现方式 |
-|---|---|
-| 只在本机访问 | 服务只监听 `127.0.0.1`，校验请求的 Host 头，不返回跨域访问（CORS）响应头 |
-| 防止跨站伪造写入 | 写入请求的来源（Origin）必须与页面同源，并且内容类型必须是 JSON |
-| 只开放必要的内容 | 只提供 `index.html` 和 `/api/*` 接口，审阅目录里的其他文件无法通过服务访问 |
-| 不依赖第三方 Python 库 | 运行时只用 Python 标准库；字体核查会调用系统工具 `fc-list` 和 `pdffonts`，缺少时会给出安装提示 |
-| 网络访问范围 | 审阅服务不访问网络；更新检查仅访问安装来源的 Git 远端，不上传审阅数据或遥测。报告中引用的外部资源不加载，本地图片和字体直接嵌入页面 |
-| 数据留在本地 | 批注和对照页都保存在审阅人指定的审阅目录；本机的审阅台账 `~/.annotation-everything/` 只记录审阅标识、目录路径和端口 |
-
-PR review 的全量验证包含 `serve.py check`，逐项检查以上约束；实现阶段不单独提前运行服务安全自检。
 
 ## 项目结构
 
