@@ -3791,7 +3791,7 @@ def update_notice_checks(browser, tmp: Path):
     build(review)
     port = free_port()
     server = start_server(review, port)
-    context = browser.new_context(viewport={"width": 1366, "height": 900})
+    context = browser.new_context(viewport={"width": 1366, "height": 768})
     page = context.new_page()
     artifacts = os.environ.get("AE_UPDATE_NOTICE_ARTIFACTS")
 
@@ -3833,22 +3833,32 @@ def update_notice_checks(browser, tmp: Path):
         ok(notice_fits() and box and box["y"] < 130 and box["height"] >= 60
            and page.locator("#reloadBtn").bounding_box()["height"] >= 36,
            "更新横幅位于页面顶部，说明与刷新按钮醒目可见")
+        ok(page.evaluate("""() => {
+            const slide = document.getElementById('slide').getBoundingClientRect();
+            const frame = document.getElementById('host').shadowRoot.getElementById('ae-frame').getBoundingClientRect();
+            return frame.top >= slide.top && frame.bottom <= slide.bottom
+                && frame.left >= slide.left && frame.right <= slide.right;
+        }"""), "矮窗口里显示更新横幅后，报告仍完整缩放在可见区域内")
         ok(wait_poll(page) and page.is_visible("#reloadBanner") and not navigations
            and page.input_value("#ntext") == "合成草稿：第 3 页尚未发送",
            "后续轮询不会自动关闭提示、刷新页面或改动正在写的批注")
 
-        page.click("#focusBtn")
-        ok(wait_dom(page, "() => document.body.classList.contains('focus-mode')", 5)
-           and page.is_visible("#reloadBanner") and notice_fits(), "专注模式仍能看到更新横幅")
+        height_with_notice = page.locator("#host").bounding_box()["height"]
         page.click("#reloadClose")
+        ok(page.locator("#host").bounding_box()["height"] > height_with_notice,
+           "关闭更新横幅后立即恢复报告尺寸，无需等待下次轮询")
         ok(not page.is_visible("#reloadBanner") and wait_poll(page)
            and not page.is_visible("#reloadBanner") and not navigations,
            "关闭提示不刷新页面，同一次重建的后续轮询不会重新弹出")
-        page.keyboard.press("Escape")
-        wait_dom(page, "() => !document.body.classList.contains('focus-mode')", 5)
         rebuild()
         ok(wait_until(lambda: page.is_visible("#reloadBanner"), page, 10,
                       condition="再次重建后重新显示更新横幅"), "关闭后再次重建会重新显示提示")
+        page.click("#focusBtn")
+        ok(wait_dom(page, "() => document.body.classList.contains('focus-mode')", 5)
+           and page.is_visible("#reloadBanner") and notice_fits(), "专注模式仍能看到更新横幅")
+        page.keyboard.press("Escape")
+        wait_dom(page, "() => !document.body.classList.contains('focus-mode')", 5)
+        page.set_viewport_size({"width": 1366, "height": 900})
 
         for locale, title, action, close in (
             ("zh-CN", "对照页已更新", "刷新", "关闭更新提示"),

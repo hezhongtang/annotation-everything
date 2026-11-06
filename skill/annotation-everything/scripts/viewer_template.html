@@ -1063,7 +1063,7 @@ function applyServer(d,quietHand){
   if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
   if(d.handoff)setHand(d.handoff,quietHand);else if(!quietHand)renderHand();
-  if(idx0==null)idx0=d.indexMtime;else if(d.indexMtime&&d.indexMtime!==idx0){idx0=d.indexMtime;$("reloadBanner").hidden=false}
+  if(idx0==null)idx0=d.indexMtime;else if(d.indexMtime&&d.indexMtime!==idx0){idx0=d.indexMtime;$("reloadBanner").hidden=false;fit()}
   if(d.rev!==rev){setDoc(d);pend.get().forEach(op=>{if(op.kind!=="handoff")applyLocal(op)});refreshList()}
   if(!resumeReady){resumeReady=true;renderResume()}}
 async function poll(){
@@ -2049,7 +2049,7 @@ function renderFound(){const f=foundSets();
 function openImp(){renderStrays();renderFound();$("imp").classList.add("on")}
 $("openImp").onclick=openImp;$("legacyBtn").onclick=openImp;$("strayBtn").onclick=openImp;
 $("reloadBtn").onclick=()=>{saveDraft();location.reload()};
-$("reloadClose").onclick=()=>$("reloadBanner").hidden=true;
+$("reloadClose").onclick=()=>{$("reloadBanner").hidden=true;fit()};
 $("doImp").onclick=async()=>{let items;try{items=parseImport($("impText").value)}catch(e){toast(tMsg("import.parseFailed",{reason:e.message}),3500);return}
   if(!okToImport($("impText").value))return;
   const al=importAlways($("impText").value);await runImport(items,tMsg("import.done"));$("impText").value="";await offerAlways(al)};
