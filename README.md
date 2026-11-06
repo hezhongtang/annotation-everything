@@ -22,6 +22,7 @@
   <img alt="Python 仅标准库" src="https://img.shields.io/badge/Python-%E4%BB%85%E6%A0%87%E5%87%86%E5%BA%93-3776ab?style=flat-square&logo=python&logoColor=white">
   <img alt="只监听 127.0.0.1" src="https://img.shields.io/badge/%E5%8F%AA%E7%9B%91%E5%90%AC-127.0.0.1-2fa36b?style=flat-square">
   <img alt="不上报使用数据" src="https://img.shields.io/badge/%E4%BD%BF%E7%94%A8%E6%95%B0%E6%8D%AE-%E4%B8%8D%E4%B8%8A%E6%8A%A5-555?style=flat-square">
+  <img alt="许可证 Apache-2.0" src="https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF%E8%AF%81-Apache--2.0-a0522d?style=flat-square">
 </p>
 
 README 随 `main` 分支更新；自动更新只安装正式版本标签。升级已有审阅时，应停止旧服务、重建对照页、重启服务并刷新浏览器。
@@ -399,6 +400,7 @@ flowchart LR
 ```text
 skill/annotation-everything/       技能本体，安装时整体复制
 ├── SKILL.md                       中英文发现入口，按请求语言加载流程
+├── LICENSE、NOTICE                 随技能副本分发的许可证与归属声明
 ├── references/
 │   ├── protocol.md               共用安全、停止条件与协议约束
 │   ├── workflow.zh-CN.md          中文操作流程
@@ -459,6 +461,7 @@ tools/
 .github/                           CI、issue 模板和 PR 模板
 docs/                              架构决策记录（ADR）、Agent 协作约定、README 配图
 docs/verify/                       验证记录字段契约、统一入口接入说明与浏览器场景注册
+LICENSE、NOTICE                    Apache-2.0 许可证与归属声明
 GLOSSARY.md                        术语表
 ```
 
@@ -508,3 +511,7 @@ uv run --no-project --with playwright python tests/e2e_browser.py --only skill-i
 - `main` 只通过 PR 的 squash 合并更新：从 issue 开分支，PR 正文写 `Closes #编号`，全量审查、验证及 CI 通过后合并，issue 随合并自动关闭。完整流程见 [AGENTS.md](AGENTS.md)「分支、issue 与 PR」。
 - 仓库中只放合成样例。真实材料、批注和审阅目录一律不放进仓库，也不放进技能目录。
 - 术语以 [GLOSSARY.md](GLOSSARY.md) 为准；架构决策记录见 [docs/adr/](docs/adr/)；协作约定见 [AGENTS.md](AGENTS.md)。
+
+## 许可证
+
+本项目按 [Apache License 2.0](LICENSE)（`Apache-2.0`）授权。再分发或改编时，请保留许可证、版权声明和 [NOTICE](NOTICE) 中的归属声明。

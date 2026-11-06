@@ -22,6 +22,7 @@ The default skill copy lives at `~/.claude/skills/annotation-everything`; links 
   <img alt="Python standard library only" src="https://img.shields.io/badge/Python-standard_library_only-3776ab?style=flat-square&logo=python&logoColor=white">
   <img alt="listens on 127.0.0.1 only" src="https://img.shields.io/badge/listens_on-127.0.0.1-2fa36b?style=flat-square">
   <img alt="usage data not sent" src="https://img.shields.io/badge/usage_data-not_sent-555?style=flat-square">
+  <img alt="license Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-a0522d?style=flat-square">
 </p>
 
 This README follows `main`; automatic updates install only stable release tags. To upgrade an existing review, stop the old service, rebuild the page, restart the service and refresh the browser.
@@ -399,6 +400,7 @@ flowchart LR
 ```text
 skill/annotation-everything/       the skill itself, copied as a whole on install
 ├── SKILL.md                       bilingual discovery and on-demand workflow entry
+├── LICENSE, NOTICE                 license and attribution notice shipped with the skill copy
 ├── references/
 │   ├── protocol.md               shared safety, stop conditions, and protocol
 │   ├── workflow.zh-CN.md          Chinese workflow
@@ -459,6 +461,7 @@ tools/
 .github/                           CI, issue templates and the pull request template
 docs/                              architecture decision records (ADRs), agent conventions, README images
 docs/verify/                       verification record field contract, the unified entry's onboarding guide and the browser scenario registry
+LICENSE, NOTICE                    Apache-2.0 license and attribution notice
 GLOSSARY.md                        glossary
 ```
 
@@ -508,3 +511,7 @@ Browser waits observe DOM state, files, network events or server revisions accor
 - `main` is updated only by squash-merging pull requests: branch from an issue, put `Closes #<number>` in the pull request body, and merge once full review, validation and CI pass; the issue closes automatically on merge. See "分支、issue 与 PR" (branches, issues and pull requests) in [AGENTS.md](AGENTS.md) for the full workflow.
 - The repository holds synthetic samples only. Real material, annotations and review directories never go into the repository or the skill directory.
 - [GLOSSARY.md](GLOSSARY.md) defines the terms, [docs/adr/](docs/adr/) holds the architecture decision records, and [AGENTS.md](AGENTS.md) describes the collaboration conventions. All three are in Chinese.
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE) (`Apache-2.0`). When you redistribute or adapt it, keep the license, the copyright notices and the attribution in [NOTICE](NOTICE).
