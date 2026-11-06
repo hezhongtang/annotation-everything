@@ -1,55 +1,152 @@
-<p align="center">
-  <a href="README.md">简体中文</a> · <b>English</b>
-</p>
+<p align="center"><a href="README.md">简体中文</a> · <b>English</b></p>
+
+# annotation-everything
+
+## Install: give this to your agent
+
+Copy this prompt to your agent to install the skill and check it. Requires Python 3.9 or later on macOS or Linux.
+
+```text
+Install the annotation-everything skill from https://github.com/hezhongtang/annotation-everything.
+Run python3 ae.py install in the repository. Set --link for the current agent; Claude Code needs no link.
+Then run python3 ae.py doctor --json, confirm installation checks pass, and report any remaining issues.
+```
+
+The default skill copy lives at `~/.claude/skills/annotation-everything`; links let other agents use that same copy. For custom directories, updates, repairs and removal, see [Installation and maintenance](#installation-and-maintenance).
+
+<p align="center"><img src="docs/assets/banner.en.svg" alt="annotation-everything: annotate for revision, analyze questions, confirm before handing to an agent" width="100%"></p>
 
 <p align="center">
-  <img src="docs/assets/banner.en.svg" alt="annotation-everything: annotate pages, then hand off to an agent" width="100%">
-</p>
-
-<p align="center">
-  annotation-everything is a review and annotation tool that runs on your machine, packaged as an Agent Skills skill. Any agent that adopts the open Agent Skills standard can use it. It installs into Claude Code's skill directory by default, and <code>--target</code> / <code>--link</code> put it into other skill directories.<br>It puts a page-by-page HTML report and its speaker notes side by side in one page. Reviewers annotate each page in the browser, submit with one click, and an agent revises the report and the speaker notes accordingly.
-</p>
-
-<p align="center">
-  <img alt="version 0.11.0" src="https://img.shields.io/badge/version-0.11.0-1f3a5f?style=flat-square">
+  <img alt="version 0.12.0" src="https://img.shields.io/badge/version-0.12.0-1f3a5f?style=flat-square">
   <img alt="Agent Skills skill" src="https://img.shields.io/badge/Agent_Skills-skill-d97757?style=flat-square">
   <img alt="Python standard library only" src="https://img.shields.io/badge/Python-standard_library_only-3776ab?style=flat-square&logo=python&logoColor=white">
   <img alt="listens on 127.0.0.1 only" src="https://img.shields.io/badge/listens_on-127.0.0.1-2fa36b?style=flat-square">
   <img alt="usage data not sent" src="https://img.shields.io/badge/usage_data-not_sent-555?style=flat-square">
 </p>
 
-<p align="center">
-  <a href="#why">Why</a> ·
-  <a href="#features">Features</a> ·
-  <a href="#how-it-works">How it works</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#security-and-privacy">Security and privacy</a> ·
-  <a href="#project-layout">Project layout</a> ·
-  <a href="#development">Development</a>
-</p>
+This README follows `main`; automatic updates install only stable release tags. To upgrade an existing review, stop the old service, rebuild the page, restart the service and refresh the browser.
 
-<br>
-
-<p align="center">
-  <img src="docs/assets/receiver.en.png" alt="Synthetic review page: page tree, report and speaker notes, bottom annotation panel and receiver status bar" width="92%">
-  <br>
-  <sub>The report and speaker notes sit side by side, with annotations below and the receiving harness, session and waiting state in the status bar. Interface labels are in English; material stays in its original language. All data shown is fictional.</sub>
-</p>
-
-## Why
-
-Reviewing a presentation of a few dozen pages usually means taking screenshots, marking them up in red, sending messages, and then relaying every comment to whoever revises the material, whether that is a colleague or an agent. That approach has problems: comments end up scattered across places and page numbers get mixed up; the report gets fixed while the speaker notes are forgotten; and by the end, nobody can say which comments have been addressed.
-
-annotation-everything moves this whole process into a single page that runs on your machine:
-
-- **Comments stay where they belong.** Every annotation is tied to a specific page, a quoted passage, or a spot on the report. The agent receives the original annotations with their pages and positions, not a retelling.
-- **The report and the notes change together.** Report pages and speaker-note pages are matched one to one. When you select a sentence on one side to request a change, and the same page on the other side has an identical or similar sentence, the page suggests changing both. The agent revises page by page and then regenerates the review page.
-- **Revision submissions are recorded.** Each click on **Hand to the agent for revision** creates a batch. Every annotation has a status and a resolution note that you can look back on at any time.
-- **Your material never leaves your machine.** The server listens on `127.0.0.1` only, makes no network requests, and sends no usage data. Annotations are saved in a review directory you choose.
+<p align="center"><a href="#features">Annotations and analysis</a> · <a href="#quick-start">Quick start</a> · <a href="#usage-reference">Usage reference</a> · <a href="#installation-and-maintenance">Maintenance</a> · <a href="#how-it-works">How it works</a> · <a href="#development">Development</a></p>
 
 ## Features
 
+**Annotations tie revisions to the source. Analysis turns questions into supported conclusions.** Both modes work with the same report and speaker notes; the agent receives revision batches or analysis rounds.
+
+### Annotate: point to the change, revise both documents
+
+- **Comment directly on the material.** Read report pages and speaker notes side by side. Select text to quote, delete or rewrite it, or place pins and regions on the report. Matching sentences can be marked for changes on both sides.
+- **Hand a batch to the agent for revision.** Annotations save automatically. Bind a receiving session and explicitly submit a batch; the agent revises both documents, rebuilds the page and records the result for each annotation.
+- **Check and review as needed.** Request a full consistency check for figures, metric definitions and wording. Use a draft followed by review, or stop after the draft and let the reviewer decide when to finalize.
+
+<p align="center"><img src="docs/assets/receiver.en.png" alt="Synthetic annotation page: report and speaker notes, text and position annotations, bottom composer and receiving session status" width="92%"><br><sub>Attach changes to their text and position, then hand a batch to the agent. All material shown is synthetic.</sub></p>
+
+### Analyze: work through the question before revising
+
+- **Start from an annotation, a page or a question.** The agent breaks down the focus question and recommends answers. Choose an option, write free text, park an item or request verification. You can hand over a partially answered round.
+- **See where each conclusion comes from.** Keep the question tree, assumptions, verified facts and complete timeline. Change an answer, fork from a checkpoint, refute an assumption or confirm a dead end while preserving the earlier reasoning.
+- **Confirm before creating a revision request.** A conclusion first becomes an annotation draft. Reviewer confirmation adds it to the list, and an explicit revision submission hands it to the agent. Analysis itself never changes the report; outside research requires permission for each question.
+
+<p align="center"><img src="docs/assets/analysis.en.png" alt="Synthetic analysis: focus question, question tree, candidate assumption, round answers and checkpoint timeline" width="92%"><br><sub>Analysis and annotations share the console layout. All materials, annotations and answers shown here are synthetic.</sub></p>
+
+<details>
+<summary><b>Analysis rules, protected operations and compatibility</b></summary>
+
+In server mode, start an analysis from an open annotation, a page, or a focus question. A source annotation becomes held for analysis and stays out of revision submissions. It is removed from an unclaimed batch; an annotation already being revised cannot start an analysis. The analysis keeps the original source text even if that annotation is later edited or deleted. Starting from a page or focus question creates no placeholder annotation. An agent can suggest analysis of an annotation; the reviewer decides whether to start it.
+
+Use the title-bar Annotations / Analysis switch. Analysis uses `/#analysis` and survives a refresh. The sidebar shows analyses, the question tree and parked questions; the main area shows the focus and current round. Bottom tabs show the timeline, assumptions, verified facts and parked questions. Accept the recommendation, choose an option, write free text, park a question or request verification. You can **Hand to the agent for analysis** after answering only part of a round. Outside research requires explicit permission for each question; verification otherwise uses the original material. An agent can propose adding, splitting, merging or voiding questions; only reviewer confirmation changes the tree. The reviewer also confirms or rejects candidate assumptions.
+
+A review can contain several analyses with one active at a time. Switching pauses the others. Submitted rounds of paused analyses stay in the queue, and their results are visible when you return. Revision batches and analysis rounds have separate queues, share the receiver, and are claimed one at a time in submission order.
+
+The system creates decisions from the reviewer's answers. Converting a conclusion first creates a draft; confirmation adds an annotation and resolves the source with a link to the analysis. The new annotation still needs an explicit revision submission. You can release the source's analysis hold manually. Analysis itself never changes the report.
+
+Changing an answer preserves the old decision and detached branch so they can return when you choose that answer again. If an open derived annotation loses its basis, it becomes held for a changed conclusion and leaves unclaimed revision batches. Restoring its basis makes it open again. Ask the agent to draft updated text, then confirm to replace the text and basis while preserving the original. Keeping the original stops tracking; deleting removes the annotation. Claimed batches retain their annotations, and resolved statuses do not revert automatically.
+
+While an agent holds a round, the reviewer can keep answering. Operations such as changing prior decisions, updating annotations and converting conclusions are protected for that analysis. A baseline mismatch rejects the writeback, voids the old round and requests new questions with still-valid answers carried forward. A revision's full check also lists four analysis-related categories for confirmation: changed-conclusion annotations, resolved annotations with invalid bases, report contradictions with current conclusions, and contradictions between analyses.
+
+Each writeback records an automatic checkpoint. You can seal the current state or an existing checkpoint; sealed snapshots cannot change. Fork from any checkpoint to inherit the same question, decision and assumption identities and switch to the new line. The original line remains, and switching back restores its latest state. Annotation bases follow only the current line. The timeline shows complete round questions, answers and agent writebacks, checkpoint contents and forks. History is read-only. Close an analysis when no rounds are submitted or claimed; closing seals the final state. Reopening automatically requests new questions.
+
+Refuting an assumption first records a checkpoint and forks when decisions on the current branch directly depend on it. Those questions reopen with their original answers and reasons preserved; the old line is marked as based on a refuted assumption. Choosing the old answer can restore unaffected downstream conclusions, while affected decisions must be formed again. Refutation and verified facts are shared across lines; confirmation belongs to each line.
+
+An agent can propose that an option or an entire line is a dead end. Reviewer confirmation in the next round blocks that option, switching into that line and forking from its checkpoints across all lines. Refuting a dependency releases the block and marks it for review. The page explains the reason and assumptions. Reference cards preview the embedded report in an overlay, and each operation explains what changed.
+
+
+
+Waiters receive revision batches by default; opt in with `--events analysis` to receive analysis rounds. Agents read context with `notes.py analysis --round N --json` and use `analysis-writeback` with the accepted baseline revision. An unsupported service hides analysis and explains how to upgrade. Opening the HTML directly in file mode does not provide analysis.
+
+Neither JSON nor Markdown exports include analysis questions, events, or trees; JSON is not a complete review backup. Older importers and pages treat an unknown held status as open, while old services still submit only `open` annotations. After upgrading, restart the service, rebuild the page, and refresh it. See the [format reference](skill/annotation-everything/references/formats.en.md#analysis-data).
+
+</details>
+
+## Quick start
+
+**1. Try it on the bundled sample**
+
+```bash
+S=skill/annotation-everything/scripts
+export AE_HOME=$(mktemp -d)   # keep the review ledger in a temporary directory so your real ledger is untouched
+python3 $S/build_viewer.py --report fixtures/sample/report.en.html --script fixtures/sample/script.en.md --out /tmp/ae-demo --locale en
+python3 $S/serve.py /tmp/ae-demo --locale en
+```
+
+The review page opens in your browser. Add a few annotations, click **Hand to the agent for revision**, then run this in another terminal:
+
+```bash
+python3 $S/notes.py wait /tmp/ae-demo --locale en
+```
+
+The command prints the annotations you just submitted, which is exactly what the agent receives.
+
+For Chinese material, use `fixtures/sample/report.html` and `fixtures/sample/script.md`. Keep `--locale en` to review it in English, or choose `--locale zh-CN` for a Chinese interface. Changing the source material alone does not change the interface language.
+
+**2. Prepare your own material**
+
+- **Report**: one HTML file in which every page is a `<section class="page" data-page="N" data-key="unique-key">` element.
+- **Speaker notes (optional)**: one Markdown file split into pages by `### 第 N 页｜标题` headings ("page N | title"), giving the duration, talking points, transition and likely questions for each page. English notes use `### Page N｜Title` with `**Duration**`, `**Talking points**`, `**Transition**` and `**Likely questions**` instead. Both forms may be mixed in one file, and which form is recognized does not depend on the interface language: a Chinese interface reviews English notes and an English interface reviews Chinese notes, with titles and body text kept exactly as written. When a heading cannot be recognized, a page number repeats or a field repeats, the builder reports the line number and the expected form in the current language instead of treating the input as an empty script.
+
+See the [English format reference](skill/annotation-everything/references/formats.en.md) for the full input and output formats.
+
+<details>
+<summary><b>Command reference</b></summary>
+
+| Command | What it does |
+|---|---|
+| `ae.py install` / `doctor` / `repair` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--target <dir>` for another skills root; `--link codex,agents,zcode` or `name=path` symlinks it into other agents' skill directories); check installation, runtime, optional tools and dev environment (`--json` for structured output); repair what the checks find (prints a plan first, fixes safe items automatically, `--forget-stale`/`--stop-orphans` run the destructive ones explicitly, `--dry-run` only prints); uninstall removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first). All four subcommands accept `--target <dir>` to locate a custom copy |
+| `update.py auto` / `check` / `now` | Check and automatically install a release / only check / check and install immediately from the skill copy; the skill entry runs `auto` at most once a day |
+| `verify.py plan` / `run` / `report` | Unified verification entry run from the repository root: `plan` explains the groups and commands without starting anything (`plan --phase development` also shows what the current changes should run, why, and when it falls back to the full check); `run` executes and writes structured records plus raw logs into `.verify/` (git-ignored), records the shadow comparison between the suggested selection and the full gate by default, and lets later stages reference currently valid passing evidence (`--no-reuse` forces a full rerun); `report` only reads records and shows the evidence chain. Groups: `unit` (full unit), `unit-related` (explicitly named cases, always augmented with the global dictionary contract in `tests/test_i18n_catalog_contract.py`), `browser` (full browser), `serve-check` (server security self-check), `all` (runs `unit` → `serve-check` → `browser` in order). Field contract: [docs/verify/record-contract.md](docs/verify/record-contract.md), selection strategy: [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
+| `build_viewer.py --report … [--script …] --out <review-dir>` | Build the review page with optional speaker notes; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
+| `report_check.py report.html [--script script.md] [--record report-record.json]` | Public report verification entry: a readable summary by default, structured results with `--json`, and `--locale en` or `zh-CN` for the language. Exit 0 means program checks passed, not that the report is deliverable; 1 means checks failed; 2 means an input or usage error. Content, structure and visual coverage and delivery blockers are listed separately |
+| `serve.py <review-dir-or-id>` | Start the local server; each review keeps its own dedicated port |
+| `http://127.0.0.1:<port>/#overview` (browser address) | Open the review overview to switch scope, inspect details, open or start reviews, and archive or unarchive them; start a local service first |
+| `serve.py list [--json]` | List every review on this machine, including archived entries; both readable output and JSON include an archive flag |
+| `serve.py status <review-dir-or-id>` | Show one review's running status |
+| `serve.py forget <short-id>` | Remove a ledger entry confirmed unnecessary and release its owned port while keeping the review directory. The overview provides this command for invalid entries; cleanup runs in the CLI |
+| `serve.py check` | Run the server's security self-check |
+| `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | Bind the receiving harness and session and inspect identity and state; Codex desktop uses events, other harnesses can use `--adapter wait`; transfer with `bind --replace` after active batches finish |
+| `notes.py wait` / `claim` | Wait for or claim work. Opt in with `--events analysis`; default receivers never claim analysis or skip an earlier round. `--round N` requires that opt-in; `--seq N` targets a batch. Every filter respects the shared queue head |
+| `notes.py analysis REVIEW_DIR --round N --json` / `analysis-writeback REVIEW_DIR --round N --base-rev R --proposals FILE` | Read round context / write back a JSON proposal list or an object with proposals, assumptions, facts, annotation updates and dead ends; `-` reads stdin. Writeback must match the accepted baseline revision |
+| `notes.py suggest-analysis REVIEW_DIR NOTE_ID --reason REASON` | Suggest analysis of an open annotation; the reviewer decides whether to start it |
+| `notes.py analysis-check REVIEW_DIR --json` | Read current-line conclusions and review items without changing state; works without an open round |
+| `notes.py analysis-redecide REVIEW_DIR --analysis A --node N --option O` / `analysis-note REVIEW_DIR --analysis A --note-id N --action update\|keep\|delete` | Change a prior answer / request an update, keep or delete a changed-conclusion annotation, subject to protection and confirmation rules |
+| `notes.py analysis-history REVIEW_DIR --analysis A --json` | Read analysis lines, checkpoints and complete history without submitting old rounds |
+| `notes.py analysis-line REVIEW_DIR --analysis A --action seal\|fork\|switch\|close\|reopen [--checkpoint CP] [--line L]` | Seal, fork from a checkpoint, switch, close or reopen, subject to analysis-wide protection |
+| `notes.py analysis-refute REVIEW_DIR --analysis A --assumption AID` | Refute an assumption and fork when current decisions directly depend on it; rejected while any round in the analysis is claimed |
+| `notes.py show` / `resolve` / `reopen` | List annotations, mark them resolved, reopen them. `show --locale` chooses the reading language and beats `AE_LOCALE` and the review setting; `show --json` still exports the raw values |
+| `notes.py export` / `import` | Export annotations as a re-importable summary (Markdown with a version and language marker, or structured annotation JSON) / import a page export. `export --lang` follows the same priority as `show --locale`, plus `--format json`, `--all`, `--page N` and `--out <file>` |
+| `notes.py done` / `review` / `diff` | Close the current stage, record a review verdict, show page by page what the draft changed; all accept `--locale` to choose the output language |
+| `notes.py batches` | Show batch history |
+| `notes.py skills` | Show or set the skill catalog and standing skills. `--locale` chooses the output language and beats `AE_LOCALE` and the review setting; scopes accept `全部` / `报告` / `讲稿` / `风格优化` or `all` / `report` / `script` / `style` |
+| `check_pptx_fonts.py original.pptx [--pdf converted.pdf]` | Check fonts before and after converting a PPTX file; `--locale auto\|zh-CN\|en` or `AE_LOCALE` picks the interface language |
+
+</details>
+
+## Usage reference
+
+### Layout and shortcuts
+
 The console layout puts all annotations, processing history, review overview and help in the activity bar. The sidebar groups pages by section and shows annotation counts. Toggle the sidebar, speaker notes and bottom panel with `[`, `]` and `\`; this browser remembers each review's choices. Press `F` for full-screen focus, `C` for the floating composer and `⌘ / Ctrl + ↵` to add an annotation. `P` marking, `S` styling and text-selection shortcuts work in focus mode. `Esc` closes the current overlay before leaving focus mode. Layout shortcuts do not run while typing.
+
+<details>
+<summary><b>Batches, review, skills and other features</b></summary>
 
 <table>
   <tr>
@@ -104,33 +201,7 @@ The console layout puts all annotations, processing history, review overview and
   </tr>
 </table>
 
-The review page can use Simplified Chinese or English. Pass `--locale auto`, `zh-CN`, or `en` when building; the page can switch language too, and the choice stays in this browser. Annotation text stays as written, and the stored target values `报告`, `讲稿`, and `报告和讲稿` do not change with the language. Omitting `--locale` keeps a new review in Chinese and leaves an existing review on its saved choice. Adding, editing, deleting and reopening annotations, quotes, quick delete and replace, pins and area selection, re-annotating, styling, page numbers, the speaker-notes column, Q&A labels, the help text, tooltips and accessible names all follow the current language, as do the confirmation dialogs. So do the skill box, its suggestions and "Suggested" tag, the empty result, the standing-skill scope labels and add/remove prompts, and the output of `notes.py skills`. Search still matches the skill catalog's original name and description, and the stored scope values `all` / `报告` / `讲稿` / `style` stay unchanged. Exported Markdown can be Chinese or English (following the interface by default); both the page and CLI can import either language. The "Hand to the agent for revision" dialog, submission badge, batch history, resume hint and connection guidance also follow the current language. Submission options (finalize or stop at drafted, allow subagents, full check) do not depend on the interface language.
-
-### Analysis before revision
-
-In server mode, start an analysis from an open annotation, a page, or a focus question. A source annotation becomes held for analysis and stays out of revision submissions. It is removed from an unclaimed batch; an annotation already being revised cannot start an analysis. The analysis keeps the original source text even if that annotation is later edited or deleted. Starting from a page or focus question creates no placeholder annotation. An agent can suggest analysis of an annotation; the reviewer decides whether to start it.
-
-Use the title-bar Annotations / Analysis switch. Analysis uses `/#analysis` and survives a refresh. The sidebar shows analyses, the question tree and parked questions; the main area shows the focus and current round. Bottom tabs show the timeline, assumptions, verified facts and parked questions. Accept the recommendation, choose an option, write free text, park a question or request verification. You can **Hand to the agent for analysis** after answering only part of a round. Outside research requires explicit permission for each question; verification otherwise uses the original material. An agent can propose adding, splitting, merging or voiding questions; only reviewer confirmation changes the tree. The reviewer also confirms or rejects candidate assumptions.
-
-A review can contain several analyses with one active at a time. Switching pauses the others. Submitted rounds of paused analyses stay in the queue, and their results are visible when you return. Revision batches and analysis rounds have separate queues, share the receiver, and are claimed one at a time in submission order.
-
-The system creates decisions from the reviewer's answers. Converting a conclusion first creates a draft; confirmation adds an annotation and resolves the source with a link to the analysis. The new annotation still needs an explicit revision submission. You can release the source's analysis hold manually. Analysis itself never changes the report.
-
-Changing an answer preserves the old decision and detached branch so they can return when you choose that answer again. If an open derived annotation loses its basis, it becomes held for a changed conclusion and leaves unclaimed revision batches. Restoring its basis makes it open again. Ask the agent to draft updated text, then confirm to replace the text and basis while preserving the original. Keeping the original stops tracking; deleting removes the annotation. Claimed batches retain their annotations, and resolved statuses do not revert automatically.
-
-While an agent holds a round, the reviewer can keep answering. Operations such as changing prior decisions, updating annotations and converting conclusions are protected for that analysis. A baseline mismatch rejects the writeback, voids the old round and requests new questions with still-valid answers carried forward. A revision's full check also lists four analysis-related categories for confirmation: changed-conclusion annotations, resolved annotations with invalid bases, report contradictions with current conclusions, and contradictions between analyses.
-
-Each writeback records an automatic checkpoint. You can seal the current state or an existing checkpoint; sealed snapshots cannot change. Fork from any checkpoint to inherit the same question, decision and assumption identities and switch to the new line. The original line remains, and switching back restores its latest state. Annotation bases follow only the current line. The timeline shows complete round questions, answers and agent writebacks, checkpoint contents and forks. History is read-only. Close an analysis when no rounds are submitted or claimed; closing seals the final state. Reopening automatically requests new questions.
-
-Refuting an assumption first records a checkpoint and forks when decisions on the current branch directly depend on it. Those questions reopen with their original answers and reasons preserved; the old line is marked as based on a refuted assumption. Choosing the old answer can restore unaffected downstream conclusions, while affected decisions must be formed again. Refutation and verified facts are shared across lines; confirmation belongs to each line.
-
-An agent can propose that an option or an entire line is a dead end. Reviewer confirmation in the next round blocks that option, switching into that line and forking from its checkpoints across all lines. Refuting a dependency releases the block and marks it for review. The page explains the reason and assumptions. Reference cards preview the embedded report in an overlay, and each operation explains what changed.
-
-<p align="center"><img src="docs/assets/analysis.en.png" alt="Synthetic analysis: focus question, question tree, candidate assumption, round answers and checkpoint timeline" width="92%"><br><sub>Analysis and annotations share the console layout. All materials, annotations and answers shown here are synthetic.</sub></p>
-
-Waiters receive revision batches by default; opt in with `--events analysis` to receive analysis rounds. Agents read context with `notes.py analysis --round N --json` and use `analysis-writeback` with the accepted baseline revision. An unsupported service hides analysis and explains how to upgrade. Opening the HTML directly in file mode does not provide analysis.
-
-Neither JSON nor Markdown exports include analysis questions, events, or trees; JSON is not a complete review backup. Older importers and pages treat an unknown held status as open, while old services still submit only `open` annotations. After upgrading, restart the service, rebuild the page, and refresh it. See the [format reference](skill/annotation-everything/references/formats.en.md#analysis-data).
+</details>
 
 ### Review overview and archiving
 
@@ -182,6 +253,63 @@ Service mode accepts real submissions through a running waiter or hook. Automati
 
 [Codex idle-wakeup acceptance](docs/codex-delivery.en.md) records two real idle submissions from an isolated synthetic page, normal restart recovery, and adapter limits.
 
+<details>
+<summary><b>Bilingual interface and exchange-format coverage</b></summary>
+
+The review page can use Simplified Chinese or English. Pass `--locale auto`, `zh-CN`, or `en` when building; the page can switch language too, and the choice stays in this browser. Annotation text stays as written, and the stored target values `报告`, `讲稿`, and `报告和讲稿` do not change with the language. Omitting `--locale` keeps a new review in Chinese and leaves an existing review on its saved choice. Adding, editing, deleting and reopening annotations, quotes, quick delete and replace, pins and area selection, re-annotating, styling, page numbers, the speaker-notes column, Q&A labels, the help text, tooltips and accessible names all follow the current language, as do the confirmation dialogs. So do the skill box, its suggestions and "Suggested" tag, the empty result, the standing-skill scope labels and add/remove prompts, and the output of `notes.py skills`. Search still matches the skill catalog's original name and description, and the stored scope values `all` / `报告` / `讲稿` / `style` stay unchanged. Exported Markdown can be Chinese or English (following the interface by default); both the page and CLI can import either language. The "Hand to the agent for revision" dialog, submission badge, batch history, resume hint and connection guidance also follow the current language. Submission options (finalize or stop at drafted, allow subagents, full check) do not depend on the interface language.
+
+</details>
+
+## Installation and maintenance
+
+The management command is `ae.py` at the repository root (Python standard library only), with four subcommands: `install`, `doctor`, `repair`, `uninstall`. The tool is an Agent Skills skill: any agent that adopts the open Agent Skills standard can load `SKILL.md` and follow it. It installs into Claude Code's skill directory by default. `--target` and `--link` cover every other agent's skill directory (see below).
+
+### Installation commands and maintenance options
+
+Prerequisites: Python 3.9 or later, macOS or Linux.
+
+```bash
+python3 ae.py install                            # install: copy the skill into ~/.claude/skills/ (the skill copy)
+python3 ae.py install --target <dir>             # or into another skills root (the copy lands at <dir>/annotation-everything)
+python3 ae.py install --link codex,agents,zcode  # optional: also symlink the copy into these agents' skill directories
+python3 ae.py install --link cursor=~/.cursor/skills  # --link also accepts name=path to link any skills directory
+python3 ae.py doctor                             # check: installation, runtime, optional tools, dev environment
+python3 ae.py repair                             # repair: prints a plan first, fixes the safe items automatically
+python3 ae.py uninstall                          # uninstall: remove the skill copy and links, keep the review ledger by default
+python3 ae.py doctor --target <dir>              # doctor/repair/uninstall accept the same --target to locate a custom copy
+python3 ae.py doctor --locale en                 # optional: interface language auto, zh-CN or en (before or after the subcommand)
+python3 ~/.claude/skills/annotation-everything/scripts/update.py check  # check releases now without installing
+python3 ~/.claude/skills/annotation-everything/scripts/update.py now    # check now and install a newer release
+```
+
+- **Release updates**: when an agent follows `SKILL.md`, each skill copy checks its install source's `origin` for stable version tags (`vMAJOR.MINOR.PATCH`) at most once a day, and automatically installs and announces a newer release. Prerelease tags are ignored. Offline, authentication, and source errors leave the current version usable. Local changes in the skill copy or a running review server or annotation process defer the update with a notice. Stop them and run `update.py now` to retry. For a custom installation, substitute that skill copy's path in the commands above. Set `AE_AUTO_UPDATE=0` to disable automatic checks; manual commands still work.
+- Updates replace only the skill copy: its symlinks, review ledger, review directories, and source checkout are preserved. The release checkout used for later checks, repairs, and updates normally lives in `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`; if that overlaps the copy, it lives in a separate directory beside it. Keep it while using that skill copy. To get the updater for the first time, run `ae.py install` once from a version that contains it. When upgrading an existing review, stop its old service, rebuild the review page, start the new service, and refresh the browser.
+- Updating requires Git, access to the source repository, permission to enumerate local processes, and filesystem support for atomic directory exchange (`renamex_np` on macOS or a Linux C library that provides `renameat2`). A restricted environment leaves the current version in place and reports the limitation; run `update.py now` in a terminal with the required permissions. After a successful exchange, the old copy stays in `.ae-update-*` beside the installed copy so concurrent changes can be recovered.
+- Each check reports pass / warning / failure; failures include a repair or diagnostic command. Exit code 0 means all passed or only warnings, 1 means there are failures, and 2 means the command itself failed (`doctor --json` outputs `error`). Development checks appear only when the current working directory is inside the source repository.
+- **Interface language**: `ae.py`, `serve.py` (`serve` / `status` / `list` / `forget` / `check`), `notes.py`, `check_pptx_fonts.py` all accept `--locale auto|zh-CN|en` (before or after the subcommand) and the `AE_LOCALE` environment variable; generator help, results, and resource diagnostics follow the explicit `--locale`, then `AE_LOCALE`, then the saved review setting. The order is the explicit flag, then `AE_LOCALE`, and Chinese when neither is set; only `auto` reads `LC_ALL` / `LC_MESSAGES` / `LANG`. `serve.py serve` and `serve.py status` also fall back to the `locale` saved in that review once its directory is resolved; `list`, `forget` and `check` do not map to a single review and only honour the first two levels. An unsupported choice stops the command with exit code 2 and an explanation, changing nothing. Help, option descriptions, missing values, invalid values and command failures all use one language; source paths, commands, font names, skill names and raw system errors stay as they are.
+- **Machine verdicts are separate from human wording**: in `doctor --json`, `category`, `level`, `code` and `summary` are the verdict fields older consumers read and stay in Chinese regardless of language; the language-independent additions are each item's `status` (`pass` / `warn` / `fail`) and `category_id` (`install` / `tools` / `dev` / `runtime`), plus the top-level `schema` (structure version) and `locale` (which language `message` uses). New consumers can compare `status` / `category_id` without comparing localized labels, while `message` and `fix_command` follow the language. `serve.py` works the same way: HTTP statuses and reason codes (`bad-host`, `cross-site`, `bad-origin`, `no-origin`, `bad-content-type`, `chunked`, `bad-length`, `too-large`, `bad-json`, `not-found`, `preflight`, `no-index`, `no-note`, `server-error`, `review-mismatch`, `no-api`) never change with the language, only the explanation does; an unknown error names the type and the recovery step and never echoes request content.
+- In `repair`, deleting stale ledger entries (`--forget-stale`) and stopping orphaned servers (`--stop-orphans`) are destructive and need their explicit flags; `--dry-run` only prints the plan. Plans and execution reports state plainly that nothing was executed this time, in either language.
+- `uninstall` never touches review directories; `--purge` also deletes the review ledger; a running `serve.py` blocks it unless `--stop-servers` stops it first.
+- **Install into another skills directory**: by default `install` copies the skill into `~/.claude/skills/` (`CLAUDE_SKILLS_DIR` still works as an override); `--target <dir>` installs to `<dir>/annotation-everything` instead. `doctor`, `repair` and `uninstall` accept the same `--target` to check, fix and remove that copy, and failing items' fix commands repeat the same `--target`. Besides the built-in names `codex`, `agents` and `zcode`, `--link` accepts `name=path` (e.g. `cursor=~/.cursor/skills`) to symlink the copy into any skills directory and record it in the install record; custom links show up in the checks too (dangling ones fail with a fix command), `repair` rebuilds them and `uninstall` removes them. The install record lives inside the copy, so once the copy is gone custom links can no longer be discovered automatically (links in the built-in directories still have the scan fallback).
+- Before stopping a server, the command verifies that Python is executing the script from this repository or the current skill copy, then checks the process identity again before sending a signal; it refuses to stop an unverified process. `--purge` removes only known ledger files and refuses to proceed if the ledger is corrupt or its directory contains other files or unregistered review directories.
+
+Once installed, tell your agent "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow. How the agent is woken up and how it invokes a skill named on an annotation differ by agent. The [Agent mechanisms reference](skill/annotation-everything/references/agent-mechanisms.en.md) maps the four cases.
+
+Before an agent runs a repair with `--purge`, `--forget-stale`, `--stop-orphans` or `--stop-servers`, it must obtain user consent. Read `status` / `category_id` for machine decisions. Fix failed installation checks using their `fix_command` and rerun the check; report runtime problems and optional-tool warnings separately.
+
+## Security and privacy
+
+| Constraint | How it is enforced |
+|---|---|
+| Reachable from this machine only | The server listens on `127.0.0.1` only, validates the Host header, and never sends cross-origin resource sharing (CORS) headers |
+| No cross-site forged writes | Write requests must come from the same origin as the page and use a JSON content type |
+| Only what is needed is exposed | Only `index.html` and the `/api/*` endpoints are served; no other file in the review directory is reachable through the server |
+| No third-party Python packages | The runtime uses the Python standard library only; the font check calls the system tools `fc-list` and `pdffonts` and explains how to install them if they are missing |
+| Network access | The review server makes no network requests; the updater only contacts the installation's Git remote, sending no review data or telemetry. External resources in reports are not loaded; local images and fonts are embedded in the page |
+| Your data stays local | Annotations and the review page live in the review directory you choose; the local review ledger `~/.annotation-everything/` records only review IDs, directory paths and ports |
+
+Full validation during PR review includes `serve.py check` to verify these constraints; server security checks are deferred to that stage during implementation.
+
 ## How it works
 
 ### Architecture
@@ -201,7 +329,7 @@ flowchart LR
     L -.-> NP
 ```
 
-### One review, end to end
+### One revision, end to end
 
 ```mermaid
 sequenceDiagram
@@ -265,138 +393,6 @@ flowchart LR
     RV -->|"Revise further itself"| F
     RV -->|"Return to the reviewer"| U["Flags the annotations that need the reviewer's decision, with reasons"]
 ```
-
-## Installation and maintenance
-
-The management command is `ae.py` at the repository root (Python standard library only), with four subcommands: `install`, `doctor`, `repair`, `uninstall`. The tool is an Agent Skills skill: any agent that adopts the open Agent Skills standard can load `SKILL.md` and follow it. It installs into Claude Code's skill directory by default. `--target` and `--link` cover every other agent's skill directory (see below).
-
-### For people
-
-Prerequisites: Python 3.9 or later, macOS or Linux.
-
-```bash
-python3 ae.py install                            # install: copy the skill into ~/.claude/skills/ (the skill copy)
-python3 ae.py install --target <dir>             # or into another skills root (the copy lands at <dir>/annotation-everything)
-python3 ae.py install --link codex,agents,zcode  # optional: also symlink the copy into these agents' skill directories
-python3 ae.py install --link cursor=~/.cursor/skills  # --link also accepts name=path to link any skills directory
-python3 ae.py doctor                             # check: installation, runtime, optional tools, dev environment
-python3 ae.py repair                             # repair: prints a plan first, fixes the safe items automatically
-python3 ae.py uninstall                          # uninstall: remove the skill copy and links, keep the review ledger by default
-python3 ae.py doctor --target <dir>              # doctor/repair/uninstall accept the same --target to locate a custom copy
-python3 ae.py doctor --locale en                 # optional: interface language auto, zh-CN or en (before or after the subcommand)
-python3 ~/.claude/skills/annotation-everything/scripts/update.py check  # check releases now without installing
-python3 ~/.claude/skills/annotation-everything/scripts/update.py now    # check now and install a newer release
-```
-
-- **Release updates**: when an agent follows `SKILL.md`, each skill copy checks its install source's `origin` for stable version tags (`vMAJOR.MINOR.PATCH`) at most once a day, and automatically installs and announces a newer release. Prerelease tags are ignored. Offline, authentication, and source errors leave the current version usable. Local changes in the skill copy or a running review server or annotation process defer the update with a notice. Stop them and run `update.py now` to retry. For a custom installation, substitute that skill copy's path in the commands above. Set `AE_AUTO_UPDATE=0` to disable automatic checks; manual commands still work.
-- Updates replace only the skill copy: its symlinks, review ledger, review directories, and source checkout are preserved. The release checkout used for later checks, repairs, and updates normally lives in `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`; if that overlaps the copy, it lives in a separate directory beside it. Keep it while using that skill copy. To get the updater for the first time, run `ae.py install` once from a version that contains it. When upgrading an existing review, stop its old service, rebuild the review page, start the new service, and refresh the browser.
-- Updating requires Git, access to the source repository, permission to enumerate local processes, and filesystem support for atomic directory exchange (`renamex_np` on macOS or a Linux C library that provides `renameat2`). A restricted environment leaves the current version in place and reports the limitation; run `update.py now` in a terminal with the required permissions. After a successful exchange, the old copy stays in `.ae-update-*` beside the installed copy so concurrent changes can be recovered.
-- Each check reports pass / warning / failure; failures include a repair or diagnostic command. Exit code 0 means all passed or only warnings, 1 means there are failures, and 2 means the command itself failed (`doctor --json` outputs `error`). Development checks appear only when the current working directory is inside the source repository.
-- **Interface language**: `ae.py`, `serve.py` (`serve` / `status` / `list` / `forget` / `check`), `notes.py`, `check_pptx_fonts.py` all accept `--locale auto|zh-CN|en` (before or after the subcommand) and the `AE_LOCALE` environment variable; generator help, results, and resource diagnostics follow the explicit `--locale`, then `AE_LOCALE`, then the saved review setting. The order is the explicit flag, then `AE_LOCALE`, and Chinese when neither is set; only `auto` reads `LC_ALL` / `LC_MESSAGES` / `LANG`. `serve.py serve` and `serve.py status` also fall back to the `locale` saved in that review once its directory is resolved; `list`, `forget` and `check` do not map to a single review and only honour the first two levels. An unsupported choice stops the command with exit code 2 and an explanation, changing nothing. Help, option descriptions, missing values, invalid values and command failures all use one language; source paths, commands, font names, skill names and raw system errors stay as they are.
-- **Machine verdicts are separate from human wording**: in `doctor --json`, `category`, `level`, `code` and `summary` are the verdict fields older consumers read and stay in Chinese regardless of language; the language-independent additions are each item's `status` (`pass` / `warn` / `fail`) and `category_id` (`install` / `tools` / `dev` / `runtime`), plus the top-level `schema` (structure version) and `locale` (which language `message` uses). New consumers can compare `status` / `category_id` without comparing localized labels, while `message` and `fix_command` follow the language. `serve.py` works the same way: HTTP statuses and reason codes (`bad-host`, `cross-site`, `bad-origin`, `no-origin`, `bad-content-type`, `chunked`, `bad-length`, `too-large`, `bad-json`, `not-found`, `preflight`, `no-index`, `no-note`, `server-error`, `review-mismatch`, `no-api`) never change with the language, only the explanation does; an unknown error names the type and the recovery step and never echoes request content.
-- In `repair`, deleting stale ledger entries (`--forget-stale`) and stopping orphaned servers (`--stop-orphans`) are destructive and need their explicit flags; `--dry-run` only prints the plan. Plans and execution reports state plainly that nothing was executed this time, in either language.
-- `uninstall` never touches review directories; `--purge` also deletes the review ledger; a running `serve.py` blocks it unless `--stop-servers` stops it first.
-- **Install into another skills directory**: by default `install` copies the skill into `~/.claude/skills/` (`CLAUDE_SKILLS_DIR` still works as an override); `--target <dir>` installs to `<dir>/annotation-everything` instead. `doctor`, `repair` and `uninstall` accept the same `--target` to check, fix and remove that copy, and failing items' fix commands repeat the same `--target`. Besides the built-in names `codex`, `agents` and `zcode`, `--link` accepts `name=path` (e.g. `cursor=~/.cursor/skills`) to symlink the copy into any skills directory and record it in the install record; custom links show up in the checks too (dangling ones fail with a fix command), `repair` rebuilds them and `uninstall` removes them. The install record lives inside the copy, so once the copy is gone custom links can no longer be discovered automatically (links in the built-in directories still have the scan fallback).
-- Before stopping a server, the command verifies that Python is executing the script from this repository or the current skill copy, then checks the process identity again before sending a signal; it refuses to stop an unverified process. `--purge` removes only known ledger files and refuses to proceed if the ledger is corrupt or its directory contains other files or unregistered review directories.
-
-Once installed, tell your agent "review this report and its speaker notes" or "I've finished annotating, apply my notes", and it will follow this workflow. How the agent is woken up and how it invokes a skill named on an annotation differ by agent. The [Agent mechanisms reference](skill/annotation-everything/references/agent-mechanisms.en.md) maps the four cases.
-
-### For agents
-
-Send the following to your agent, replacing `<repo-path>` with the absolute path of this repository:
-
-> Install and check the annotation-everything skill in `<repo-path>`. Follow the numbered steps, confirming the success signal before moving on:
->
-> 1. Run `python3 <repo-path>/ae.py doctor --json`. On exit code 2, inspect the JSON `error` and resolve it; a corrupt installation record can be rebuilt by reinstalling in step 2. In normal output, if no item in `results` has `category` `安装状态` (installation) with `level` `失败` (fail), the skill is already installed — skip to step 4.
-> 2. Pick the link flag by which agent you are: Claude Code needs no `--link`; Codex uses `--link codex`; agents under `~/.agents` use `--link agents`; zcode uses `--link zcode`; other agents use `--link name=skills-dir` (e.g. `--link cursor=~/.cursor/skills`). To keep the primary copy out of the Claude directory, add `--target <dir>` (pass the same value to the later `doctor` / `repair` / `uninstall`). Run `python3 <repo-path>/ae.py install` (adding the flags you need). Success: exit code 0.
-> 3. Run `python3 <repo-path>/ae.py doctor --json` again and judge by the JSON: prefer the language-independent verdict fields — no item with `status` `fail` and `category_id` `install` means the install succeeded (the older reading, `category` `安装状态` with `level` `失败`, still holds: both fields stay in Chinese). Failures in the `运行状态` (runtime) category, such as orphan servers or an owned port held by another process, do not affect the install; note them for the report in step 5. Warnings in `summary.warn` (such as missing optional tools `fc-list`/`pdffonts`) do not block use. If installation failures remain, apply that item's `fix_command` and repeat this step; if a `fix_command` contains a destructive flag listed in step 4, ask the user for consent before running it.
-> 4. When repairs are needed, run `python3 <repo-path>/ae.py repair` (`--dry-run` shows the plan first). **`--purge`, `--forget-stale`, `--stop-orphans`, `--stop-servers` are all destructive — ask the user for consent before adding any of them.**
-> 5. Report back to the user: whether the install succeeded, the check results, and any warnings still unresolved.
-
-Interface text defaults to Chinese. To get English output, append `--locale en` to any command above (or set `AE_LOCALE=en`); judge the result with `status` / `category_id`, which do not depend on the language.
-
-## Quick start
-
-**1. Install the skill**
-
-```bash
-python3 ae.py install
-```
-
-The skill is copied to `~/.claude/skills/annotation-everything` (that copy is the *skill copy*); to install into another skills root, use `python3 ae.py install --target <dir>` (the copy lands at `<dir>/annotation-everything`). See **Installation and maintenance** above for the full install, check, repair and uninstall instructions.
-
-**2. Try it on the bundled sample**
-
-```bash
-S=skill/annotation-everything/scripts
-export AE_HOME=$(mktemp -d)   # keep the review ledger in a temporary directory so your real ledger is untouched
-python3 $S/build_viewer.py --report fixtures/sample/report.en.html --script fixtures/sample/script.en.md --out /tmp/ae-demo --locale en
-python3 $S/serve.py /tmp/ae-demo --locale en
-```
-
-The review page opens in your browser. Add a few annotations, click **Hand to the agent for revision**, then run this in another terminal:
-
-```bash
-python3 $S/notes.py wait /tmp/ae-demo --locale en
-```
-
-The command prints the annotations you just submitted, which is exactly what the agent receives.
-
-For Chinese material, use `fixtures/sample/report.html` and `fixtures/sample/script.md`. Keep `--locale en` to review it in English, or choose `--locale zh-CN` for a Chinese interface. Changing the source material alone does not change the interface language.
-
-**3. Prepare your own material**
-
-- **Report**: one HTML file in which every page is a `<section class="page" data-page="N" data-key="unique-key">` element.
-- **Speaker notes (optional)**: one Markdown file split into pages by `### 第 N 页｜标题` headings ("page N | title"), giving the duration, talking points, transition and likely questions for each page. English notes use `### Page N｜Title` with `**Duration**`, `**Talking points**`, `**Transition**` and `**Likely questions**` instead. Both forms may be mixed in one file, and which form is recognized does not depend on the interface language: a Chinese interface reviews English notes and an English interface reviews Chinese notes, with titles and body text kept exactly as written. When a heading cannot be recognized, a page number repeats or a field repeats, the builder reports the line number and the expected form in the current language instead of treating the input as an empty script.
-
-See the [English format reference](skill/annotation-everything/references/formats.en.md) for the full input and output formats.
-
-<details>
-<summary><b>Command reference</b></summary>
-
-| Command | What it does |
-|---|---|
-| `ae.py install` / `doctor` / `repair` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--target <dir>` for another skills root; `--link codex,agents,zcode` or `name=path` symlinks it into other agents' skill directories); check installation, runtime, optional tools and dev environment (`--json` for structured output); repair what the checks find (prints a plan first, fixes safe items automatically, `--forget-stale`/`--stop-orphans` run the destructive ones explicitly, `--dry-run` only prints); uninstall removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first). All four subcommands accept `--target <dir>` to locate a custom copy |
-| `update.py auto` / `check` / `now` | Check and automatically install a release / only check / check and install immediately from the skill copy; the skill entry runs `auto` at most once a day |
-| `verify.py plan` / `run` / `report` | Unified verification entry run from the repository root: `plan` explains the groups and commands without starting anything (`plan --phase development` also shows what the current changes should run, why, and when it falls back to the full check); `run` executes and writes structured records plus raw logs into `.verify/` (git-ignored), records the shadow comparison between the suggested selection and the full gate by default, and lets later stages reference currently valid passing evidence (`--no-reuse` forces a full rerun); `report` only reads records and shows the evidence chain. Groups: `unit` (full unit), `unit-related` (explicitly named cases, always augmented with the global dictionary contract in `tests/test_i18n_catalog_contract.py`), `browser` (full browser), `serve-check` (server security self-check), `all` (runs `unit` → `serve-check` → `browser` in order). Field contract: [docs/verify/record-contract.md](docs/verify/record-contract.md), selection strategy: [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
-| `build_viewer.py --report … [--script …] --out <review-dir>` | Build the review page with optional speaker notes; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
-| `report_check.py report.html [--script script.md] [--record report-record.json]` | Public report verification entry: a readable summary by default, structured results with `--json`, and `--locale en` or `zh-CN` for the language. Exit 0 means program checks passed, not that the report is deliverable; 1 means checks failed; 2 means an input or usage error. Content, structure and visual coverage and delivery blockers are listed separately |
-| `serve.py <review-dir-or-id>` | Start the local server; each review keeps its own dedicated port |
-| `http://127.0.0.1:<port>/#overview` (browser address) | Open the review overview to switch scope, inspect details, open or start reviews, and archive or unarchive them; start a local service first |
-| `serve.py list [--json]` | List every review on this machine, including archived entries; both readable output and JSON include an archive flag |
-| `serve.py status <review-dir-or-id>` | Show one review's running status |
-| `serve.py forget <short-id>` | Remove a ledger entry confirmed unnecessary and release its owned port while keeping the review directory. The overview provides this command for invalid entries; cleanup runs in the CLI |
-| `serve.py check` | Run the server's security self-check |
-| `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | Bind the receiving harness and session and inspect identity and state; Codex desktop uses events, other harnesses can use `--adapter wait`; transfer with `bind --replace` after active batches finish |
-| `notes.py wait` / `claim` | Wait for or claim work. Opt in with `--events analysis`; default receivers never claim analysis or skip an earlier round. `--round N` requires that opt-in; `--seq N` targets a batch. Every filter respects the shared queue head |
-| `notes.py analysis REVIEW_DIR --round N --json` / `analysis-writeback REVIEW_DIR --round N --base-rev R --proposals FILE` | Read round context / write back a JSON proposal list or an object with proposals, assumptions, facts, annotation updates and dead ends; `-` reads stdin. Writeback must match the accepted baseline revision |
-| `notes.py suggest-analysis REVIEW_DIR NOTE_ID --reason REASON` | Suggest analysis of an open annotation; the reviewer decides whether to start it |
-| `notes.py analysis-check REVIEW_DIR --json` | Read current-line conclusions and review items without changing state; works without an open round |
-| `notes.py analysis-redecide REVIEW_DIR --analysis A --node N --option O` / `analysis-note REVIEW_DIR --analysis A --note-id N --action update\|keep\|delete` | Change a prior answer / request an update, keep or delete a changed-conclusion annotation, subject to protection and confirmation rules |
-| `notes.py analysis-history REVIEW_DIR --analysis A --json` | Read analysis lines, checkpoints and complete history without submitting old rounds |
-| `notes.py analysis-line REVIEW_DIR --analysis A --action seal\|fork\|switch\|close\|reopen [--checkpoint CP] [--line L]` | Seal, fork from a checkpoint, switch, close or reopen, subject to analysis-wide protection |
-| `notes.py analysis-refute REVIEW_DIR --analysis A --assumption AID` | Refute an assumption and fork when current decisions directly depend on it; rejected while any round in the analysis is claimed |
-| `notes.py show` / `resolve` / `reopen` | List annotations, mark them resolved, reopen them. `show --locale` chooses the reading language and beats `AE_LOCALE` and the review setting; `show --json` still exports the raw values |
-| `notes.py export` / `import` | Export annotations as a re-importable summary (Markdown with a version and language marker, or structured annotation JSON) / import a page export. `export --lang` follows the same priority as `show --locale`, plus `--format json`, `--all`, `--page N` and `--out <file>` |
-| `notes.py done` / `review` / `diff` | Close the current stage, record a review verdict, show page by page what the draft changed; all accept `--locale` to choose the output language |
-| `notes.py batches` | Show batch history |
-| `notes.py skills` | Show or set the skill catalog and standing skills. `--locale` chooses the output language and beats `AE_LOCALE` and the review setting; scopes accept `全部` / `报告` / `讲稿` / `风格优化` or `all` / `report` / `script` / `style` |
-| `check_pptx_fonts.py original.pptx [--pdf converted.pdf]` | Check fonts before and after converting a PPTX file; `--locale auto\|zh-CN\|en` or `AE_LOCALE` picks the interface language |
-
-</details>
-
-## Security and privacy
-
-| Constraint | How it is enforced |
-|---|---|
-| Reachable from this machine only | The server listens on `127.0.0.1` only, validates the Host header, and never sends cross-origin resource sharing (CORS) headers |
-| No cross-site forged writes | Write requests must come from the same origin as the page and use a JSON content type |
-| Only what is needed is exposed | Only `index.html` and the `/api/*` endpoints are served; no other file in the review directory is reachable through the server |
-| No third-party Python packages | The runtime uses the Python standard library only; the font check calls the system tools `fc-list` and `pdffonts` and explains how to install them if they are missing |
-| Network access | The review server makes no network requests; the updater only contacts the installation's Git remote, sending no review data or telemetry. External resources in reports are not loaded; local images and fonts are embedded in the page |
-| Your data stays local | Annotations and the review page live in the review directory you choose; the local review ledger `~/.annotation-everything/` records only review IDs, directory paths and ports |
-
-Full validation during PR review includes `serve.py check` to verify these constraints; server security checks are deferred to that stage during implementation.
 
 ## Project layout
 
