@@ -28,4 +28,4 @@ CI 保留自动触发。用户发起 PR review 后，由审查 Agent 按 AGENTS.
 
 ## README 维护
 
-每次提交合并进 `main` 或 PR 合并后，按 AGENTS.md「README 维护」检查并同步更新中英两份 README（`README.md`、`README.en.md`）和两版头图。
+每次提交合并进 `main` 或 PR 合并后，按 AGENTS.md「README 维护」检查并同步更新中英两份 README（`README.md`、`README.zh-CN.md`）和两版头图。

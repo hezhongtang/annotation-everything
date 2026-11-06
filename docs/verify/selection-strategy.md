@@ -38,7 +38,7 @@ cat .verify/runs/<run ID>/shadow.json
 映射是 `verify_selection.py` 里的受版本控制声明，不用 CodeGraph / AST 索引做判定依据。每条规则带 `why`，计划里逐条展示命中：
 
 - `SELECTION_RULES`：路径前缀 → 建议选择器 / 浏览器场景 / 是否带 `serve-check` / 命中即回退的类别。一个路径可命中多条规则，选测取并集：选择器、场景与 `serve-check` 都合并，不会因为多命中而丢掉任何一组的范围。初始覆盖：`ae.py`（CLI）、`notes.py` / `notes_store.py` / `ledger.py`（审阅协议与存储）、`serve.py` / `viewer_template.html` / `build_viewer.py`（服务与页面）、`match.py` / `skill_sources.py`（页面匹配与技能发现）、`i18n.py` 与两处 `locales/`（词典，显式含全局契约模块）、`export_format.py` / `check_pptx_fonts.py`（导出与字体）、`fsutil.py`（共享叶子模块，被台账与批注存储、生成器、更新器共同依赖，同时并入审阅协议与存储、服务与页面、更新器三组）；`skill/annotation-everything/SKILL.md`、`references/`、`evals/`（技能资源，回退）、`fixtures/`（回退）、`verify.py` 等执行配置（回退）、`docs/` 等说明文档（回退）。
-- `DOC_ALLOWLIST`（狭窄允许列表）：`README.md`、`README.en.md`、`docs/assets/`、`GLOSSARY.md`、`docs/adr/`。只有全部有效差异都命中允许列表，且策略、基线、清单与效率守卫均可信时，`pr` 阶段才不执行产品测试；其余阶段继续采用影子模式。`--no-reuse` 可强制实际执行，覆盖映射不获本地门禁豁免。
+- `DOC_ALLOWLIST`（狭窄允许列表）：`README.md`、`README.zh-CN.md`、`docs/assets/`、`GLOSSARY.md`、`docs/adr/`。只有全部有效差异都命中允许列表，且策略、基线、清单与效率守卫均可信时，`pr` 阶段才不执行产品测试；其余阶段继续采用影子模式。`--no-reuse` 可强制实际执行，覆盖映射不获本地门禁豁免。
 - 浏览器场景 `*` 仅在该规则命中时展开为注册场景清单，未命中的规则不会扩大浏览器建议。
 - `STRATEGY_VERSION`：映射或判定逻辑变化时递增；记录里的 `context.selection.strategy_version` 标明计划用的版本。修改映射走普通 PR（受审查的策略变更）。
 - `AE_SELECTION_MAP` 环境变量可指向同结构的 JSON 覆盖映射（测试与实验用）；覆盖映射损坏按 `broken_rules` 回退。路径不进记录。
@@ -84,6 +84,8 @@ cat .verify/runs/<run ID>/shadow.json
 策略 v10 把 `fsutil.py` 按依赖方同时并入存储协议、对照页与技能更新三组规则：只改它时按三组的并集给建议，不再因 `unknown_path` 回退完整检查。策略版本已递增，版本不一致的旧记录不参与复用。改动 `verify_selection.py` 自身仍命中执行配置规则并回退完整检查，这是预期行为。
 
 策略 v12 增加分析规则，覆盖分析存储、批注/台账、CLI、服务、页面、投递与技能词表边界，显式纳入全部分析单元模块、接收方兼容性及 `analysis-smoke` / `analysis-ui` 场景。与既有规则取并集，保留服务安全自检建议；不缩小完整 PR 门禁，也不因策略回退自动扩大开发快速检查。策略自身变更仍建议全量，完整执行移交 PR review。新分析测试未登记时，内置映射契约会失败。
+
+策略 v13 将 README 允许项同步为默认英文的 `README.md` 和中文的 `README.zh-CN.md`，旧英文文件名不再豁免。两份现有 README 各自的纯文档 PR 继续免本地产品测试；旧文件名按未知路径回退完整检查。旧验证记录仍可读取和报告，策略版本不同的证据不参与复用；不能因为旧允许列表下的文档无关等价而沿用它们。本次迁移修改了策略、测试和 fixture，自身仍需实际执行完整 PR 门禁。
 
 
 ## 文档允许列表核实（策略 v11，issue #117）

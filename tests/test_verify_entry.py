@@ -2893,36 +2893,44 @@ class SelectionBuiltinMapTests(unittest.TestCase):
                     self.assertIn("CI", " ".join(selection["suggested"]["notes"]))
 
     def test_document_only_pr_records_a_gate_without_executing_product_tests(self):
-        repo = self.builtin_repo("verify-doc-pr-run-")
-        repo.write("README.md", "# 合成说明\n文档 PR。\n")
-        result = repo.run_verify("run", "--group", "all", "--phase", "pr", "--json",
-                                 extra_env={"SYNTH_SERVE_FAILED": "1", "SYNTH_BROWSER_FAILED": "1"})
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        record = json.loads(result.stdout)
-        self.assertTrue(record["result"]["usable_as_evidence"])
-        self.assertEqual(record["result"]["counts"]["groups"], 0)
-        self.assertEqual(record["result"]["counts"]["cases"], 0)
-        self.assertEqual(record["result"]["counts"]["checks"], 0)
-        self.assertEqual([group["name"] for group in record["groups"]],
-                         ["unit", "serve-check", "browser"])
-        for group in record["groups"]:
-            self.assertEqual(group["outcome"], "not_applicable")
-            self.assertIsNone(group["started_at"])
-        self.assertEqual(record["shadow"]["executed_groups"], [])
-        self.assertEqual(record["evidence"]["logs"], [])
-        self.assertEqual(record["evidence"]["cases"], [])
-        self.assertFalse(list((repo.artifact_dir / "runs" / record["run_id"]).glob("*.log")))
-        report = repo.run_verify("report", "--latest")
-        self.assertEqual(report.returncode, 0, report.stdout + report.stderr)
-        self.assertIn("差异仅在文档允许列表内", report.stdout)
-        self.assertIn("由 CI 兜底", report.stdout)
-        self.assertIn("不适用", report.stdout)
-        summary = json.loads((repo.artifact_dir / "efficiency" / "summary.json").read_text())
-        self.assertEqual(summary["metrics"]["execution_seconds"], 0)
-        self.assertEqual(summary["comparison_groups"], [])
+        for readme in DOC_FIXTURES["readmes"]:
+            with self.subTest(readme=readme):
+                repo = self.builtin_repo("verify-doc-pr-run-")
+                repo.write(readme, "# 合成说明\n文档 PR。\n")
+                plan = repo.run_verify("plan", "--phase", "pr", "--json")
+                self.assertEqual(plan.returncode, 0, plan.stdout + plan.stderr)
+                selection = json.loads(plan.stdout)["selection"]
+                self.assertIsNone(selection["fallback"])
+                self.assertEqual([item["path"] for item in selection["doc_exempt"]], [readme])
+                result = repo.run_verify("run", "--group", "all", "--phase", "pr", "--json",
+                                         extra_env={"SYNTH_SERVE_FAILED": "1", "SYNTH_BROWSER_FAILED": "1"})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                record = json.loads(result.stdout)
+                self.assertTrue(record["result"]["usable_as_evidence"])
+                self.assertEqual(record["result"]["counts"]["groups"], 0)
+                self.assertEqual(record["result"]["counts"]["cases"], 0)
+                self.assertEqual(record["result"]["counts"]["checks"], 0)
+                self.assertEqual([group["name"] for group in record["groups"]],
+                                 ["unit", "serve-check", "browser"])
+                for group in record["groups"]:
+                    self.assertEqual(group["outcome"], "not_applicable")
+                    self.assertIsNone(group["started_at"])
+                self.assertEqual(record["shadow"]["executed_groups"], [])
+                self.assertEqual(record["evidence"]["logs"], [])
+                self.assertEqual(record["evidence"]["cases"], [])
+                self.assertFalse(list((repo.artifact_dir / "runs" / record["run_id"]).glob("*.log")))
+                report = repo.run_verify("report", "--latest")
+                self.assertEqual(report.returncode, 0, report.stdout + report.stderr)
+                self.assertIn("差异仅在文档允许列表内", report.stdout)
+                self.assertIn("由 CI 兜底", report.stdout)
+                self.assertIn("不适用", report.stdout)
+                summary = json.loads((repo.artifact_dir / "efficiency" / "summary.json").read_text())
+                self.assertEqual(summary["metrics"]["execution_seconds"], 0)
+                self.assertEqual(summary["comparison_groups"], [])
 
     def test_pr_gate_executes_all_groups_for_every_non_document_change(self):
-        for change in ("mapped-code", "guarded-doc", "untracked", "staged-rename", "committed-rename"):
+        for change in ("mapped-code", "guarded-doc", "untracked", "staged-rename", "committed-rename",
+                       "retired-readme"):
             with self.subTest(change=change):
                 repo = self.builtin_repo("verify-doc-pr-mixed-")
                 repo.write("implementation.py", "# 合成源码\n")
@@ -2936,6 +2944,8 @@ class SelectionBuiltinMapTests(unittest.TestCase):
                     repo.write("docs/verify/onboarding.md", "# 合成操作说明\n")
                 elif change == "untracked":
                     repo.write("unknown.txt", "合成未知文件\n")
+                elif change == "retired-readme":
+                    repo.write(DOC_FIXTURES["retired_readme"], "# 合成旧英文入口\n")
                 else:
                     (repo.path / DOC_FIXTURES["renamed_adr"]).parent.mkdir(parents=True)
                     repo.git("mv", "implementation.py", DOC_FIXTURES["renamed_adr"])
@@ -3581,6 +3591,25 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         self.assertEqual(self.trace(self.serve_touch), 2)
 
     # -- 版本与范围 -----------------------------------------------------------
+
+    def test_previous_readme_allowlist_evidence_is_readable_but_not_reused(self):
+        first = self.verify("run", "--group", "serve-check", "--phase", "development")
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        path = self.repo.artifact_dir / "runs" / self.repo.latest_run_id() / "record.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["context"]["selection"]["strategy_version"] = DOC_FIXTURES["previous_strategy_version"]
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        report = self.verify("report", "--latest", "--json")
+        self.assertEqual(report.returncode, 0, report.stdout + report.stderr)
+        self.assertTrue(json.loads(report.stdout)["result"]["usable_as_evidence"])
+
+        self.repo.write(DOC_FIXTURES["readmes"][1], "# 合成中文说明\n")
+        second = self.verify("run", "--group", "serve-check", "--phase", "review")
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        item = self.decision(self.record(), "serve-check")
+        self.assertEqual(item["decision"], "run")
+        self.assertIn("策略版本不同", item["reason"])
+        self.assertEqual(self.trace(self.serve_touch), 2)
 
     def test_strategy_version_change_invalidates(self):
         payload_v7 = dict(SELECTION_MAP_OK)
