@@ -1058,6 +1058,7 @@ async function poll(){
     updateMode();return}
   finally{busy--}
   const was=mode;mode="server";
+  const upgradeAlreadyShown=analysisUpgradeShown;
   const key=handPollKeyOf(d),quiet=key===handPollKey;   // 数据没变：不重画提交状态和续看提示
   handPollKey=key;
   queueSnap={p:pend.get(),f:failed.get()};   // 这一次轮询里队列只读一次 localStorage
@@ -1066,7 +1067,9 @@ async function poll(){
     applyServer(d,quiet);
     if(pend.get().length){   // 有暂存要补传：补传期间别的标签页可能改队列，之后按最新的读
       const before=pend.get().length;queueSnap=null;
-      await flush();if(mode==="server"&&!pend.get().length&&before)toast(tMsg("viewer.offline.retried"));return}
+      await flush();
+      // 本轮新显示的升级说明优先于通用补传成功提示。
+      if(mode==="server"&&!pend.get().length&&before&&(upgradeAlreadyShown||!analysisUpgradeShown))toast(tMsg("viewer.offline.retried"));return}
     updateMode()}
   finally{queueSnap=null}}
 // ---------- 服务不在时：说清这个端口上现在是谁，给出本审阅的启动命令（按审阅标识，页面里不写本机路径） ----------

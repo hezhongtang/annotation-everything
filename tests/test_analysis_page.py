@@ -109,6 +109,57 @@ class AnalysisPageTests(unittest.TestCase):
                         messages["viewer.offline.reconnected"]]
             self.assertEqual(actual, [message for message in expected for _ in range(2)])
 
+    def test_pending_annotations_sync_without_overwriting_the_old_service_upgrade_notice(self):
+        setup = """
+          const APP='annotation-everything',RID='synthetic-review',FILE=false,navigator={},document={hidden:false};
+          const storage=new Map(),copy=value=>JSON.parse(JSON.stringify(value));
+          const LS={get:(key,fallback)=>copy(storage.has(key)?storage.get(key):fallback),set:(key,value)=>{storage.set(key,copy(value));return true}};
+          const K={pending:'pending',legacyPending:'legacy',failed:'failed'},MAX_FAILS=3;
+          let mode='offline',rev=1,busy=0,agentDelivery=null,receiver=null,archiveBusy=false,srvOld=false;
+          let srvNoStages=false,srvNoFullCheck=false,stopServiceSupported=false,idx0=null,resumeReady=false,handQueued=false;
+          let analysisSupported=true,analysisChecked=false,analysisUpgradeShown=false,analysisRenderKey='';
+          let notes=[],remote=[],remoteRev=1,supported=false;const writes=[],notices=[];
+          const api=async(method,path,body)=>{
+            if(method==='POST'&&path==='/api/notes'){writes.push(copy(body));remote.push(copy(body));remoteRev++}
+            else if(method!=='GET'||path!=='/api/notes')throw new Error('unexpected network request');
+            return {app:APP,reviewId:RID,notes:copy(remote),rev:remoteRev,features:['marks','stages','full-check',...(supported?['analysis']:[])]};
+          };
+          const toast=text=>{$('toast').textContent=text;notices.push(text)},setDoc=data=>{rev=data.rev;notes=data.notes};
+          const updateMode=()=>{},setCurrentArchive=()=>{},refreshList=()=>{},renderHand=()=>{},renderResume=()=>{},analysisRoute=()=>{};
+        """
+        pending = [{"kind": "add", "opId": "op" + str(number),
+                    "note": {"id": "note" + str(number), "page": 1, "text": text}}
+                   for number, text in enumerate(("合成离线原话 <b>完整保留</b>", "第二条合成离线批注"), 1)]
+        for locale in ("en", "zh-CN"):
+            actual = interaction_program([
+                ("const sameReview=", "function mirror()"),
+                ("function applyLocal(op){", "const FULL_CHECK_COMPAT="),
+                ("function send(op,", "// 一次轮询里队列"),
+                ("let queueSnap=null;", "// 轮询带回的"),
+                ("let handPollKey=", "// ---------- 服务不在时"),
+                ("function setAnalysisSupport(data){", "async function loadAnalyses("),
+            ], setup, """
+              const outcomes=[],pending=PENDING;
+              for(const enabled of [false,true]){
+                supported=enabled;mode='offline';rev=1;remoteRev=1;remote=[];notes=[];writes.length=0;notices.length=0;
+                analysisSupported=true;analysisUpgradeShown=false;LS.set(K.pending,pending);
+                await poll();const afterSync=$('toast').textContent;
+                await poll();outcomes.push({supported,afterSync,afterPoll:$('toast').textContent,
+                  pending:pend.get(),writes:copy(writes),remote:copy(remote),notes:copy(notes),notices:copy(notices)});
+              }
+              return outcomes;
+            """.replace("PENDING", json.dumps(pending, ensure_ascii=False)), locale)
+            messages = i18n.load_catalog(locale)["messages"]
+            for outcome in actual:
+                self.assertEqual(outcome["pending"], [])
+                expected_notes = [item["note"] for item in pending]
+                for key in ("writes", "remote", "notes"):
+                    self.assertEqual(outcome[key], expected_notes)
+                expected = messages["viewer.offline.retried" if outcome["supported"] else "viewer.analysis.upgrade"]
+                self.assertEqual(outcome["afterSync"], expected)
+                self.assertEqual(outcome["afterPoll"], expected)
+                self.assertEqual(outcome["notices"].count(expected), 1)
+
     def test_free_text_and_external_permission_drafts_survive_poll_and_failed_write(self):
         state = {"id": "private-analysis", "focus": "合成问题", "status": "active", "line": "main",
                  "sourceCopy": {}, "nodes": {"n1": {"id": "n1", "text": "口径？", "short": "口径", "status": "pending",
