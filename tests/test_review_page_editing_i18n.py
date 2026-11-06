@@ -124,6 +124,9 @@ EDITING_KEYS = {
     "viewer.helpTitle": False,
     "viewer.reload": False,
     "viewer.reloadTitle": False,
+    "viewer.reloadNotice": False,
+    "viewer.reloadHint": False,
+    "viewer.reloadClose": False,
     "viewer.legacy": False,
     "viewer.legacyTitle": False,
     "viewer.stray": False,
@@ -505,13 +508,16 @@ class HeaderAndHelpTests(unittest.TestCase):
         self.source = _source()
 
     def test_header_controls_read_from_the_catalog(self):
-        # 原顶栏控件按 #118 分别移到页面导航、活动栏和状态栏，词典接线不变。
+        # 导航与活动入口按 #118 分区；#128 的更新提示独立于状态栏。
         navigation = _between(self.source, '<div class="page-nav">', '</div>')
         activity = _between(self.source, '<nav class="activity"', '</nav>')
         status = _between(self.source, '<footer id="statusbar"', '</footer>')
+        reload_notice = _between(self.source, '<div id="reloadBanner"', '</div>')
         for part, keys in ((navigation, ("viewer.prev", "viewer.prevTitle", "viewer.next", "viewer.nextTitle")),
                            (activity, ("viewer.help", "viewer.helpTitle")),
-                           (status, ("viewer.reload", "viewer.reloadTitle", "viewer.legacy", "viewer.legacyTitle",
+                           (reload_notice, ("viewer.reload", "viewer.reloadTitle", "viewer.reloadNotice",
+                                            "viewer.reloadHint", "viewer.reloadClose")),
+                           (status, ("viewer.legacy", "viewer.legacyTitle",
                                      "viewer.stray", "viewer.strayTitle"))):
             for key in keys:
                 self.assertTrue(_uses(part, key), key)

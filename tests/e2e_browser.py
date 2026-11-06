@@ -3785,6 +3785,106 @@ def legacy_report_checks(browser, tmp: Path):
     ok("原始材料不可获得" in gap_summary_run.stdout, "摘要披露缺口登记")
 
 
+def update_notice_checks(browser, tmp: Path):
+    """#128：从真实重建到手动刷新，提示醒目且不打断未发送的批注。"""
+    review = tmp / "update_notice"
+    build(review)
+    port = free_port()
+    server = start_server(review, port)
+    context = browser.new_context(viewport={"width": 1366, "height": 900})
+    page = context.new_page()
+    artifacts = os.environ.get("AE_UPDATE_NOTICE_ARTIFACTS")
+
+    def rebuild():
+        index = review / "index.html"
+        before = index.stat().st_mtime_ns
+        subprocess.run([sys.executable, str(SCRIPTS / "build_viewer.py"), "--rebuild", str(review)],
+                       check=True, capture_output=True)
+        # 显式推进文件系统时间，避免为跨过 mtime 粒度固定睡眠。
+        modified = max(index.stat().st_mtime_ns, before + 2_000_000_000)
+        os.utime(index, ns=(modified, modified))
+
+    def notice_fits():
+        boxes = [page.locator(selector).bounding_box()
+                 for selector in ("#reloadBanner", "#reloadBtn", "#reloadClose")]
+        viewport = page.viewport_size
+        return all(box and box["x"] >= 0 and box["y"] >= 0
+                   and box["x"] + box["width"] <= viewport["width"]
+                   and box["y"] + box["height"] <= viewport["height"] for box in boxes)
+
+    try:
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server")
+        navigations = []
+        page.on("framenavigated", lambda frame: navigations.append(frame.url) if frame == page.main_frame else None)
+        ok(not page.is_visible("#reloadBanner"), "首次打开对照页不显示更新提示")
+        go_page(page, 2)
+        page.fill("#ntext", "合成草稿：第 2 页尚未发送")
+        go_page(page, 3)
+        page.fill("#ntext", "合成草稿：第 3 页尚未发送")
+        page.fill("#nskills", "humanizer-zh")
+        page.select_option("#ntarget", "讲稿")
+        rebuild()
+        shown = wait_until(lambda: page.is_visible("#reloadBanner"), page, 10,
+                           condition="真实重建后轮询显示顶部更新横幅")
+        ok(shown and "对照页已更新" in page.inner_text("#reloadBanner"),
+           "真实重建后，主要工作区顶部明确显示「对照页已更新」")
+        box = page.locator("#reloadBanner").bounding_box()
+        ok(notice_fits() and box and box["y"] < 130 and box["height"] >= 60
+           and page.locator("#reloadBtn").bounding_box()["height"] >= 36,
+           "更新横幅位于页面顶部，说明与刷新按钮醒目可见")
+        ok(wait_poll(page) and page.is_visible("#reloadBanner") and not navigations
+           and page.input_value("#ntext") == "合成草稿：第 3 页尚未发送",
+           "后续轮询不会自动关闭提示、刷新页面或改动正在写的批注")
+
+        page.click("#focusBtn")
+        ok(wait_dom(page, "() => document.body.classList.contains('focus-mode')", 5)
+           and page.is_visible("#reloadBanner") and notice_fits(), "专注模式仍能看到更新横幅")
+        page.click("#reloadClose")
+        ok(not page.is_visible("#reloadBanner") and wait_poll(page)
+           and not page.is_visible("#reloadBanner") and not navigations,
+           "关闭提示不刷新页面，同一次重建的后续轮询不会重新弹出")
+        page.keyboard.press("Escape")
+        wait_dom(page, "() => !document.body.classList.contains('focus-mode')", 5)
+        rebuild()
+        ok(wait_until(lambda: page.is_visible("#reloadBanner"), page, 10,
+                      condition="再次重建后重新显示更新横幅"), "关闭后再次重建会重新显示提示")
+
+        for locale, title, action, close in (
+            ("zh-CN", "对照页已更新", "刷新", "关闭更新提示"),
+            ("en", "Review page updated", "Reload", "Dismiss update notice"),
+        ):
+            page.select_option("#localePick", locale)
+            ok(title in page.inner_text("#reloadBanner") and page.inner_text("#reloadBtn") == action
+               and page.get_attribute("#reloadClose", "aria-label") == close,
+               f"{locale} 的更新说明、刷新与关闭操作均使用对应文案")
+            if artifacts:
+                output = Path(artifacts)
+                output.mkdir(parents=True, exist_ok=True)
+                capture_screenshot(page, output / ("update-notice.%s.png" % ("zh" if locale == "zh-CN" else "en")))
+            page.set_viewport_size({"width": 360, "height": 740})
+            ok(page.is_visible("#reloadBanner") and notice_fits(),
+               f"{locale} 在 360px 窄窗口下仍完整显示更新提示与两个操作")
+            page.set_viewport_size({"width": 1366, "height": 900})
+
+        # 不等 400ms 草稿防抖，直接点击刷新，覆盖最后一次输入。
+        page.fill("#ntext", "合成草稿：点击刷新前的最后一次输入")
+        with page.expect_navigation(wait_until="domcontentloaded"):
+            page.click("#reloadBtn")
+        wait_mode(page, "server")
+        ok(len(navigations) == 1 and not page.is_visible("#reloadBanner"),
+           "只有手动点击才刷新页面，载入新版后更新横幅消失")
+        ok(page.input_value("#ntext") == "合成草稿：点击刷新前的最后一次输入"
+           and page.input_value("#nskills") == "humanizer-zh" and page.input_value("#ntarget") == "讲稿",
+           "手动刷新保留当前页未发送批注的最新文字、技能和对象")
+        go_page(page, 2)
+        ok(page.input_value("#ntext") == "合成草稿：第 2 页尚未发送" and not disk_notes(review),
+           "刷新也保留其他页的未发送批注，不会将草稿自动提交")
+    finally:
+        context.close()
+        stop(server)
+
+
 def server_mode_checks(browser, tmp: Path):
     """场景 server-mode：服务模式全流程与恢复、离线、安全边界（详见 e2e_scenarios 注册表）。"""
     import_md = server_import_export_fixture(tmp)
@@ -4146,7 +4246,7 @@ def server_mode_checks(browser, tmp: Path):
     time.sleep(1.1)   # 保留的固定等待：跨过文件系统 mtime 粒度，保证重建后 indexMtime 可被轮询观察到变化
     subprocess.run([sys.executable, str(SCRIPTS / "build_viewer.py"), "--rebuild", str(sdir)], check=True, capture_output=True)
     ok(wait_until(lambda: page.is_visible("#reloadBtn"), page, 10,
-                  condition="轮询发现对照页更新（提示「点此刷新」）"), "Claude 重建对照页后页面提示「点此刷新」")
+                  condition="轮询发现对照页更新（顶部横幅显示刷新按钮）"), "Claude 重建对照页后顶部横幅显示刷新按钮")
 
     # ---------- 4. 断线暂存与补传 ----------
     stop(srv)
@@ -5033,6 +5133,7 @@ def analysis_ui_checks(browser, tmp: Path):
 
 SCENARIO_RUNNERS = {
     "console-layout": console_layout_checks,
+    "update-notice": update_notice_checks,
     "focus-mode": focus_mode_checks,
     "analysis-smoke": analysis_smoke_checks,
     "analysis-ui": analysis_ui_checks,

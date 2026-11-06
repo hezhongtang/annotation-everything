@@ -204,6 +204,10 @@ The console layout puts all annotations, processing history, review overview and
 
 </details>
 
+### Update notice after a rebuild
+
+In service mode, rebuilding the review page shows a "Review page updated" banner at the top. It stays until you reload or dismiss it. The page never reloads automatically; clicking "Reload" preserves unsent annotation drafts on every page. Dismissing a notice keeps it hidden for that update; another rebuild shows it again. The notice also works in narrow windows and focus mode, and follows the interface language.
+
 ### Review overview and archiving
 
 <p align="center"><img src="docs/assets/overview.en.png" alt="Synthetic review overview: status groups and a detail pane with the report summary, purpose, audience, core questions and start action" width="92%"></p>
