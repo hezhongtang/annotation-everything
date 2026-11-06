@@ -276,6 +276,21 @@ def console_layout_checks(browser, tmp: Path):
                     stem = "%s.%s" % (width, locale)
                     (output / (stem + ".json")).write_text(json.dumps(metrics, indent=2), encoding="utf-8")
                     capture_screenshot(page, output / (stem + ".png"))
+            for width in (720, 960):
+                page.set_viewport_size({"width": width, "height": 780})
+                page.locator("#modeSwitch").evaluate("el => el.hidden = false")
+                metrics = page.evaluate("""() => {
+                    const ids=['annotationMode','analysisMode','sideToggle','scriptToggle','panelToggle','focusBtn','handBtn'];
+                    const targets=ids.map(id=>{
+                        const element=document.getElementById(id),r=element.getBoundingClientRect();
+                        const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
+                        return {id,inside:r.left>=0&&r.right<=innerWidth,hit:hit?.closest('button')?.id||null};
+                    });
+                    return {targets,fits:targets.every(target=>target.inside&&target.hit===target.id)};
+                }""")
+                ok(metrics["fits"], "%s：%spx 模式与抽屉按钮都可见且无遮挡（%s）" % (locale, width, metrics))
+                page.locator("#modeSwitch").evaluate("el => el.hidden = true")
+            page.set_viewport_size({"width": 1440, "height": 900})
         ok(page.locator("#modeSwitch").is_hidden() and page.locator("#analysisQueue").is_hidden(),
            "服务未支持分析时，模式切换和分析队列插槽隐藏")
         page.fill("#ntext", "\n".join("合成的长批注意见" for _ in range(60)))
@@ -908,7 +923,7 @@ def skill_search_checks(browser, tmp: Path):
         ctx = browser.new_context()
         page = ctx.new_page()
         page.goto(f"http://127.0.0.1:{port}/")
-        page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        page.wait_for_function("() => document.getElementById('mode').classList.contains('server')")
         exercise(page, "服务模式")
         ctx.close()
     finally:
@@ -968,7 +983,7 @@ def skill_recommendation_checks(browser, tmp: Path):
         ctx = browser.new_context()
         page = ctx.new_page()
         page.goto(f"http://127.0.0.1:{port}/")
-        page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        page.wait_for_function("() => document.getElementById('mode').classList.contains('server')")
         exercise(page, "服务模式")
         ctx.close()
     finally:
@@ -1107,7 +1122,7 @@ def skill_i18n_checks(browser, tmp: Path):
         ctx = browser.new_context()
         page = ctx.new_page()
         page.goto(f"http://127.0.0.1:{port}/")
-        page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        page.wait_for_function("() => document.getElementById('mode').classList.contains('server')")
         exercise(page, "服务模式")
         disk = json.loads((d / "skills.json").read_text(encoding="utf-8"))
         ok([x for x in disk["always"] if x["name"] == "sample:sample"] == [{"name": "sample:sample", "scope": "style"}],
@@ -1142,7 +1157,7 @@ def full_check_checks(browser, tmp: Path):
     try:
         page = ctx.new_page()
         page.goto(f"http://127.0.0.1:{port}/")
-        page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        page.wait_for_function("() => document.getElementById('mode').classList.contains('server')")
         page.click("#handBtn")
         checkbox = page.locator("#hFullCheck")
         if not checkbox.count():
@@ -1201,7 +1216,12 @@ def full_check_checks(browser, tmp: Path):
         flushed = wait_until(lambda: len(json.loads((d / "handoff.json").read_text())["items"]) == 2, old, 7)
         items = json.loads((d / "handoff.json").read_text())["items"]
         ok(flushed and items[-1].get("fullCheck") is True, "新版服务恢复后，暂存的全量勾稽提交自动补传")
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "done", str(d), "--seq", "1",
+                        "--summary", "首批合成全量勾稽已核对"], capture_output=True, text=True, check=True)
         subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "claim", str(d)], capture_output=True, text=True, check=True)
+        items = json.loads((d / "handoff.json").read_text())["items"]
+        ok([(item["seq"], item["status"]) for item in items] == [(1, "done"), (2, "claimed")],
+           "先收尾第一批再领取第二批，一次只处理一项")
         old.click("#handBtn")
         old.uncheck("#hFullCheck")
         old.click("#doHand")
@@ -1684,7 +1704,7 @@ def locale_checks(browser, tmp: Path):
         net: list[tuple[str, str]] = []
         sp.on("request", lambda req: net.append((req.method, req.url)))
         sp.goto(f"http://127.0.0.1:{port}/")
-        sp.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        sp.wait_for_function("() => document.getElementById('mode').classList.contains('server')")
         ok(sp.inner_text("#addLabel") == "Add annotation", "服务模式沿用审阅默认英文")
         sp.fill("#ntext", "服务里的批注")
         sp.select_option("#ntarget", "讲稿")
@@ -1957,7 +1977,7 @@ def handoff_i18n_checks(browser, tmp: Path):
         page = ctx.new_page()
         page.on("request", lambda req: net.append((req.method, req.url)))
         page.goto(f"http://127.0.0.1:{port}/")
-        page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+        page.wait_for_function("() => document.getElementById('mode').classList.contains('server')")
         add_note(page, "把口径改成同比")
         go_page(page, 4)
         add_note(page, "表格加上单位")
@@ -2064,7 +2084,7 @@ def handoff_i18n_checks(browser, tmp: Path):
            f"切换后恢复提示回到中文（实际 {page.inner_text('#resume')!r}）")
         # 关掉弹窗再切语言：提交按钮是常驻元素，文字也要跟上（不能留着上一种语言）
         page.keyboard.press("Escape")
-        for pick, want in (("en", "Hand to the agent"), ("zh-CN", "交给 Agent")):
+        for pick, want in (("en", "Hand to the agent for revision"), ("zh-CN", "交给 Agent 改稿")):
             page.select_option("#localePick", pick)
             ok(wait_dom(page, "w => document.getElementById('doHandLabel').textContent === w", 5, arg=want,
                         condition=f"提交按钮文字变为「{want}」"),
@@ -2094,7 +2114,7 @@ def handoff_i18n_checks(browser, tmp: Path):
         ok("Batch 1 has 1 annotation drafted and waiting for review" in page.inner_text("#handInfo"),
            f"英文复核说明（实际 {page.inner_text('#handInfo')!r}）")
         ok(page.inner_text("#handTitle") == "Ask the agent to review batch 1", "英文请求复核标题")
-        ok(page.inner_text("#doHand").split("⌘")[0] == "Ask for the review", "英文请求复核按钮")
+        ok(page.inner_text("#doHandLabel") == "Ask for the review", "英文请求复核按钮")
         page.keyboard.press("Escape")
 
         # 复核定稿：跳过复核直接定稿，确认框与结果状态都用当前语言
@@ -2485,7 +2505,7 @@ def installed_delivery_checks(browser, tmp: Path):
         try:
             page = ctx.new_page()
             page.goto(f"http://127.0.0.1:{port}/")
-            page.wait_for_function("document.getElementById('mode').classList.contains('server')")
+            page.wait_for_function("() => document.getElementById('mode').classList.contains('server')")
             check(page.get_attribute("html", "lang") == ui, "页面语言来自生成参数")
             if ui == "en":
                 check(page.inner_text("#notesBtn").startswith("Annotations"), "英文批注入口没有遗漏翻译")
@@ -4379,7 +4399,7 @@ const T = "http://127.0.0.1:{port}";
     rejects_before = log_path.read_text(encoding="utf-8").count("[reject]") if log_path.exists() else 0
     epage = ctx.new_page()
     epage.goto(f"http://localhost:{eport}/")  # 另一个来源
-    epage.wait_for_function("window.results && window.results.done", timeout=10000)
+    epage.wait_for_function("() => window.results && window.results.done", timeout=10000)
     # 先证明恶意请求确实到达服务并被拒绝（server.log 出现新的 [reject]），再核对什么都没写进去
     got_reject = wait_until(lambda: (log_path.read_text(encoding="utf-8").count("[reject]")
                                      if log_path.exists() else 0) > rejects_before,
@@ -4774,11 +4794,11 @@ def analysis_smoke_checks(browser, tmp: Path):
         page = context.new_page()
         page.goto(f"http://127.0.0.1:{port}/")
         wait_mode(page, "server")
-        page.wait_for_function("analysisSupported")
+        page.wait_for_function("() => analysisSupported")
         add_note(page, "增长主要来自新客，这个结论站得住吗？")
         page.click("#handBtn")
         page.click("#doHand")
-        page.wait_for_function("hand?.latest?.status==='pending'")
+        page.wait_for_function("() => hand?.latest?.status==='pending'")
         page.locator('#nlist [data-act="analysis-start"]').click()
         page.wait_for_selector("#analysisMain:not([hidden])")
         ok(page.url.endswith("#analysis"), "从批注发起后切到 #analysis")
@@ -4815,19 +4835,19 @@ def analysis_smoke_checks(browser, tmp: Path):
         page.locator('#analysisBody [data-key^="Q:"][data-kind="accept"]').click()
         page.wait_for_selector("#analysisBody .analysis-answers")
         page.click("#handBtn")
-        page.wait_for_function("analysisCurrentRound(analysisState)?.status==='submitted'")
+        page.wait_for_function("() => analysisCurrentRound(analysisState)?.status==='submitted'")
         ok("waiting 1" in page.inner_text("#analysisQueue"), "分析队列独立显示等待轮次")
         claimed = cli("claim", str(review), "--events", "analysis", "--round", "2", "--by", "Synthetic")
         cli("analysis-writeback", str(review), "--round", "2", "--base-rev", str(claimed["baseRev"]),
             "--proposals", "-", "--note", "经核验采用年度口径。", stdin="[]")
-        page.wait_for_function("analysisState?.rounds?.[1]?.status==='done'")
+        page.wait_for_function("() => analysisState?.rounds?.[1]?.status==='done'")
         page.locator('#analysisBody [data-analysis-act="convert"]').click()
         page.fill("#analysisDraftText", "将增长结论改为经核验的年度口径。")
         page.click("#analysisDraftCreate")
         page.wait_for_selector('#analysisBody [data-analysis-act="confirm"]')
         ok(len(disk_notes(review)) == 1, "草稿确认前不进入批注存储")
         page.locator('#analysisBody [data-analysis-act="confirm"]').click()
-        page.wait_for_function("analysisState?.sourceState==='resolved'")
+        page.wait_for_function("() => analysisState?.sourceState==='resolved'")
         notes_after = disk_notes(review)
         ok(len(notes_after) == 2 and notes_after[0]["status"] == "resolved"
            and notes_after[1]["status"] == "open", "确认草稿后新增未处理批注并处理源批注")
@@ -4836,18 +4856,18 @@ def analysis_smoke_checks(browser, tmp: Path):
            "源批注移出空批后批次作废，转出新批注不自动提交改稿")
         page.reload()
         page.wait_for_selector("#analysisMain:not([hidden])")
-        page.wait_for_function("analysisState?.sourceState==='resolved'")
+        page.wait_for_function("() => analysisState?.sourceState==='resolved'")
         ok(page.url.endswith("#analysis") and "Round 2" in page.inner_text("#analysisTimeline"),
            "刷新仍保持分析模式，问答时间线可回看")
         page.click("#annotationMode")
-        page.wait_for_function("!document.body.classList.contains('analysis-mode')")
+        page.wait_for_function("() => !document.body.classList.contains('analysis-mode')")
         ok(page.inner_text("#handBtn") == "Hand to the agent for revision", "回到批注后主按钮改为改稿")
 
         # #112：从页发起无源分析，原话草稿跨语言/轮询保留，查证/假设与搁置区接通。
         page.click("#pageAnalysisStart")
         page.fill("#analysisStartText", "本页的合成结论是否可靠？")
         page.click("#analysisStartCreate")
-        page.wait_for_function("analysisState?.focus==='本页的合成结论是否可靠？'")
+        page.wait_for_function("() => analysisState?.focus==='本页的合成结论是否可靠？'")
         ok(len(disk_notes(review)) == 2, "从页发起分析不伪造或搁住批注")
         opening_seq = page.evaluate("analysisCurrentRound(analysisState).seq")
         opening = cli("claim", str(review), "--events", "analysis", "--round", str(opening_seq), "--by", "Synthetic")
@@ -4867,18 +4887,18 @@ def analysis_smoke_checks(browser, tmp: Path):
         ok(page.input_value('[data-analysis-item="Q:n1"] textarea') == "按月核验，保留异常月份。",
            "自由文本草稿跨语言切换与重绘保留")
         page.locator('[data-key="Q:n1"][data-kind="text"]').click()
-        page.wait_for_function("!!analysisState?.nodes?.n1?.decision")
+        page.wait_for_function("() => !!analysisState?.nodes?.n1?.decision")
         page.locator('[data-key="Q:n2"][data-kind="park"]').click()
-        page.wait_for_function("analysisState?.nodes?.n2?.status==='parked'")
+        page.wait_for_function("() => analysisState?.nodes?.n2?.status==='parked'")
         ok("是否另查旁支" in page.inner_text("#analysisParkedSide"), "旁支进入侧栏搁置区")
         page.locator('[data-key="Q:n3"][data-kind="verify"]').click()
-        page.wait_for_function("analysisCurrentRound(analysisState)?.answers?.['Q:n3']?.kind==='verify'")
+        page.wait_for_function("() => analysisCurrentRound(analysisState)?.answers?.['Q:n3']?.kind==='verify'")
         ok(page.evaluate("analysisCurrentRound(analysisState).answers['Q:n3'].allowExternal===false"),
            "页面查证默认不允许外部资料")
         round_seq = page.evaluate("analysisCurrentRound(analysisState).seq")
         decision_id = page.evaluate("analysisState.nodes.n1.decision")
         page.click("#handBtn")
-        page.wait_for_function("analysisCurrentRound(analysisState)?.status==='submitted'")
+        page.wait_for_function("() => analysisCurrentRound(analysisState)?.status==='submitted'")
         claimed = cli("claim", str(review), "--events", "analysis", "--round", str(round_seq), "--by", "Synthetic")
         payload = {"proposals": [], "assumptions": [{"key": "scope", "text": "各月统计范围一致。", "decisions": [decision_id]}],
                    "facts": [{"key": "revenue", "text": "合成底稿记载收入为120。", "source": "合成底稿第2页", "node": "n3"}]}
@@ -4886,15 +4906,15 @@ def analysis_smoke_checks(browser, tmp: Path):
             "--proposals", "-", stdin=json.dumps(payload, ensure_ascii=False))
         page.wait_for_selector('[data-key="A:a1"][data-kind="accept"]')
         page.locator('[data-key="A:a1"][data-kind="accept"]').click()
-        page.wait_for_function("analysisState?.assumptions?.a1?.confirmed?.main==='confirmed'")
+        page.wait_for_function("() => analysisState?.assumptions?.a1?.confirmed?.main==='confirmed'")
         page.click('[data-analysis-tab="facts"]')
         ok("收入为120" in page.inner_text("#analysisFacts"), "查证事实与出处在底部页签显示")
         page.click('[data-analysis-tab="assumptions"]')
         ok("各月统计范围一致" in page.inner_text("#analysisAssumptions"), "假设按线确认并可回看")
         page.click('[data-analysis-status="pause"]')
-        page.wait_for_function("analysisState?.status==='paused'")
+        page.wait_for_function("() => analysisState?.status==='paused'")
         page.click('[data-analysis-status="activate"]')
-        page.wait_for_function("analysisState?.status==='active'")
+        page.wait_for_function("() => analysisState?.status==='active'")
     finally:
         context.close()
         stop(server)
@@ -4925,7 +4945,7 @@ def analysis_ui_checks(browser, tmp: Path):
         page = context.new_page()
         page.goto(f"http://127.0.0.1:{port}/")
         wait_mode(page, "server")
-        page.wait_for_function("analysisSupported")
+        page.wait_for_function("() => analysisSupported")
         add_note(page, "合成待改稿批注，保留在批注模式。")
         for locale, label in (("en", "Hand to the agent for revision"), ("zh-CN", "交给 Agent 改稿")):
             page.select_option("#localePick", locale)
@@ -4938,7 +4958,7 @@ def analysis_ui_checks(browser, tmp: Path):
         page.click("#pageAnalysisStart")
         page.fill("#analysisStartText", "合成增长判断采用哪个口径？")
         page.click("#analysisStartCreate")
-        page.wait_for_function("analysisState?.focus==='合成增长判断采用哪个口径？'")
+        page.wait_for_function("() => analysisState?.focus==='合成增长判断采用哪个口径？'")
         opening_seq = page.evaluate("analysisCurrentRound(analysisState).seq")
         opening = cli("claim", str(review), "--events", "analysis", "--round", str(opening_seq), "--by", "Synthetic")
         proposal = [{"key": "private-ui-question", "text": "采用年度还是季度口径？", "short": "合成口径问题", "recommend": "annual",
@@ -4956,7 +4976,7 @@ def analysis_ui_checks(browser, tmp: Path):
         round_seq = page.evaluate("analysisCurrentRound(analysisState).seq")
         decision = page.evaluate("id=>analysisState.nodes[id].decision", node_id)
         page.click("#handBtn")
-        page.wait_for_function("analysisCurrentRound(analysisState)?.status==='submitted'")
+        page.wait_for_function("() => analysisCurrentRound(analysisState)?.status==='submitted'")
         claimed = cli("claim", str(review), "--events", "analysis", "--round", str(round_seq), "--by", "Synthetic")
         payload = {"proposals": [], "assumptions": [{"key": "private-ui-assumption", "text": "合成两期统计范围一致。", "decisions": [decision]}]}
         cli("analysis-writeback", str(review), "--round", str(round_seq), "--base-rev", str(claimed["baseRev"]),
@@ -4968,7 +4988,7 @@ def analysis_ui_checks(browser, tmp: Path):
         page.wait_for_function("id=>analysisState?.assumptions?.[id]?.confirmed?.main==='confirmed'", arg=assumption_id)
         round_seq = page.evaluate("analysisCurrentRound(analysisState).seq")
         page.click("#handBtn")
-        page.wait_for_function("analysisCurrentRound(analysisState)?.status==='submitted'")
+        page.wait_for_function("() => analysisCurrentRound(analysisState)?.status==='submitted'")
         claimed = cli("claim", str(review), "--events", "analysis", "--round", str(round_seq), "--by", "Synthetic")
         payload = {"proposals": [], "deadEnds": [{"key": "private-ui-dead-end", "kind": "option", "node": node_id, "option": "quarter",
                                                  "reason": "合成季度口径缺少可比范围。", "assumptions": [assumption_id]}]}
@@ -4987,7 +5007,7 @@ def analysis_ui_checks(browser, tmp: Path):
                 'private-ui-question','private-ui-assumption','private-ui-dead-end']""")
             ok(all(identifier not in visible for identifier in private_ids), f"{locale} 分析可见内容只显示原话和自然名称")
             page.click("#annotationMode")
-            page.wait_for_function("!document.body.classList.contains('analysis-mode')")
+            page.wait_for_function("() => !document.body.classList.contains('analysis-mode')")
             ok(page.inner_text("#handBtn") == revision_label, f"{locale} 回到批注恢复改稿文案")
             page.click("#analysisMode")
             page.wait_for_selector("#analysisMain:not([hidden])")
@@ -4995,11 +5015,14 @@ def analysis_ui_checks(browser, tmp: Path):
         page.route("**/api/notes", without_analysis)
         page.reload()
         wait_mode(page, "server")
-        page.wait_for_function("analysisChecked&&!analysisSupported")
+        page.wait_for_function("() => analysisChecked&&!analysisSupported")
         ok(page.locator("#modeSwitch").is_hidden() and page.locator("#pageAnalysisStart").is_hidden()
            and page.locator("#analysisMain").is_hidden(), "旧服务隐藏分析切换与发起入口")
-        ok("本地服务不支持分析" in page.inner_text("#toast") and page.inner_text("#handBtn") == "交给 Agent 改稿",
-           "旧服务安全退回批注模式并给出可读的升级提示")
+        page.wait_for_function("() => !busy")
+        page.evaluate("() => poll()")   # 再完成一轮真实轮询，升级提示仍应可读，不能只捕获瞬时文字。
+        upgrade_text, revision_label = page.inner_text("#toast"), page.inner_text("#handBtn")
+        ok("本地服务不支持分析" in upgrade_text and revision_label == "交给 Agent 改稿",
+           f"旧服务安全退回批注模式并给出可读的升级提示（实际提示 {upgrade_text!r}，按钮 {revision_label!r}）")
         add_note(page, "合成旧服务批注仍可保存。")
         ok(wait_dom(page, "() => notes.some(note=>note.text==='合成旧服务批注仍可保存。')&&!pend.get().length", 8)
            and len(disk_notes(review)) == 2, "不支持分析时原批注流程仍可使用")

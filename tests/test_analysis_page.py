@@ -78,6 +78,37 @@ def render_expression(expression, state, locale="en"):
 
 
 class AnalysisPageTests(unittest.TestCase):
+    def test_old_service_upgrade_notice_survives_the_connection_poll(self):
+        setup = """
+          let mode='offline',rev=null,busy=0,agentDelivery=null,receiver=null,archiveBusy=false,srvOld=false;
+          let srvNoStages=false,srvNoFullCheck=false,stopServiceSupported=false,idx0=null,queueSnap=null,resumeReady=false;
+          let analysisSupported=false,analysisChecked=false,analysisUpgradeShown=false,analysisRenderKey='';
+          let features=['marks','stages','full-check'];const FILE=false,document={hidden:false};
+          const pend={get:()=>[]},failed={get:()=>[]},hasFeature=(data,name)=>data.features.includes(name);
+          const getNotes=async()=>({notes:[],rev:1,features}),setDoc=data=>{rev=data.rev};
+          const toast=text=>{$('toast').textContent=text};
+          const migrateLegacyQueue=()=>{},setCurrentArchive=()=>{},updateMode=()=>{},refreshList=()=>{};
+          const renderHand=()=>{},renderResume=()=>{},analysisRoute=()=>{};
+        """
+        for locale in ("en", "zh-CN"):
+            actual = interaction_program([
+                ("let handPollKey=", "// ---------- 服务不在时"),
+                ("function setAnalysisSupport(data){", "async function loadAnalyses("),
+            ], setup, """
+              const notices=[];
+              for(const [base,supported] of [[null,false],[1,false],[1,true]]){
+                rev=base;mode='offline';analysisSupported=true;analysisUpgradeShown=false;
+                features=['marks','stages','full-check',...(supported?['analysis']:[])];
+                $('toast').textContent='';await poll();notices.push($('toast').textContent);
+                await poll();notices.push($('toast').textContent);
+              }
+              return notices;
+            """, locale)
+            messages = i18n.load_catalog(locale)["messages"]
+            expected = [messages["viewer.analysis.upgrade"], messages["viewer.analysis.upgrade"],
+                        messages["viewer.offline.reconnected"]]
+            self.assertEqual(actual, [message for message in expected for _ in range(2)])
+
     def test_free_text_and_external_permission_drafts_survive_poll_and_failed_write(self):
         state = {"id": "private-analysis", "focus": "合成问题", "status": "active", "line": "main",
                  "sourceCopy": {}, "nodes": {"n1": {"id": "n1", "text": "口径？", "short": "口径", "status": "pending",

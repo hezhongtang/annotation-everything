@@ -138,6 +138,10 @@ body.focus-mode.focus-composer #nform{display:flex}
 body.focus-mode #focusHint{position:fixed;display:flex;align-items:center;justify-content:center;gap:var(--ae-space-lg);left:0;right:0;bottom:12px;color:var(--ae-on-dark);font-size:var(--ae-small)}
 body.focus-mode.focus-composer #focusHint{display:none}
 #focusExit{font:inherit;background:transparent;color:inherit;border:1px solid var(--ae-mut);border-radius:var(--ae-radius);padding:var(--ae-gap-4) var(--ae-gap-10)}
+@media(max-width:1100px){
+  #modeSwitch{position:static;transform:none}
+  header:has(#modeSwitch:not([hidden])) h1{max-width:none}
+}
 @media(max-width:900px){
   :root{--ae-rail:42px;--ae-sidebar:200px;--ae-panel-height:240px}
   header{gap:var(--ae-gap-6);padding-right:var(--ae-gap-6)}header .layout-controls{padding-right:var(--ae-gap-4)}header h1{font-size:var(--ae-small)}header button{font-size:var(--ae-small);padding:0 var(--ae-gap-6)}
@@ -1058,11 +1062,11 @@ async function poll(){
   handPollKey=key;
   queueSnap={p:pend.get(),f:failed.get()};   // 这一次轮询里队列只读一次 localStorage
   try{
+    if(was==="offline"&&rev!=null)toast(tMsg("viewer.offline.reconnected"));
     applyServer(d,quiet);
     if(pend.get().length){   // 有暂存要补传：补传期间别的标签页可能改队列，之后按最新的读
       const before=pend.get().length;queueSnap=null;
       await flush();if(mode==="server"&&!pend.get().length&&before)toast(tMsg("viewer.offline.retried"));return}
-    if(was==="offline"&&rev!=null)toast(tMsg("viewer.offline.reconnected"));
     updateMode()}
   finally{queueSnap=null}}
 // ---------- 服务不在时：说清这个端口上现在是谁，给出本审阅的启动命令（按审阅标识，页面里不写本机路径） ----------

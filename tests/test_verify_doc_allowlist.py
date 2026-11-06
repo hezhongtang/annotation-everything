@@ -149,19 +149,20 @@ class DocumentationAllowlistTests(unittest.TestCase):
                              sorted(reader["path"] for reader in FIXTURE["readers"]))
 
     def test_bounded_traversal_requires_the_audited_function_to_stay_unchanged(self):
-        entry = FIXTURE["bounded_traversals"][0]
-        tree = ast.parse((ROOT / entry["path"]).read_text())
-        scope = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
-                     and node.name == entry["function"])
-        with tempfile.TemporaryDirectory(prefix="verify-bounded-consumer-") as temp:
-            root = Path(temp)
-            path = root / entry["path"]
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(ast.unparse(scope), encoding="utf-8")
-            self.assertEqual(document_references(root, FIXTURE["audited_paths"]), [])
-            scope.body.append(ast.Pass())
-            path.write_text(ast.unparse(ast.fix_missing_locations(scope)), encoding="utf-8")
-            self.assertEqual(document_references(root, FIXTURE["audited_paths"]), [entry["path"]])
+        for entry in FIXTURE["bounded_traversals"]:
+            with self.subTest(path=entry["path"], function=entry["function"]):
+                tree = ast.parse((ROOT / entry["path"]).read_text())
+                scope = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+                             and node.name == entry["function"])
+                with tempfile.TemporaryDirectory(prefix="verify-bounded-consumer-") as temp:
+                    root = Path(temp)
+                    path = root / entry["path"]
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(ast.unparse(scope), encoding="utf-8")
+                    self.assertEqual(document_references(root, FIXTURE["audited_paths"]), [])
+                    scope.body.append(ast.Pass())
+                    path.write_text(ast.unparse(ast.fix_missing_locations(scope)), encoding="utf-8")
+                    self.assertEqual(document_references(root, FIXTURE["audited_paths"]), [entry["path"]])
 
 
 if __name__ == "__main__":
