@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 12
+STRATEGY_VERSION = 13
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -81,8 +81,8 @@ class SelectionRule:
 # ── 内置映射（真实仓库；修改走受审查的 PR，并同步 STRATEGY_VERSION） ────────
 
 DOC_ALLOWLIST = (
-    AllowEntry("README.md", "仓库说明（中文）"),
-    AllowEntry("README.en.md", "仓库说明（英文）"),
+    AllowEntry("README.md", "仓库说明（英文）"),
+    AllowEntry("README.zh-CN.md", "仓库说明（中文）"),
     AllowEntry("docs/assets/", "头图与截图"),
     # #117：仅供人和 Agent 阅读；测试、验证、工具与运行时均不消费其内容。
     # 核实范围与防漂移契约见 docs/verify/selection-strategy.md「文档允许列表核实」。

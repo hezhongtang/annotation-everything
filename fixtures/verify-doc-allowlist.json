@@ -1,7 +1,13 @@
 {
+  "readmes": [
+    "README.md",
+    "README.zh-CN.md"
+  ],
+  "retired_readme": "README.en.md",
+  "previous_strategy_version": 12,
   "legacy_allowlist": [
     "README.md",
-    "README.en.md",
+    "README.zh-CN.md",
     "docs/assets/"
   ],
   "audited_paths": [

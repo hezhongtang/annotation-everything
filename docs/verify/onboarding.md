@@ -110,7 +110,7 @@ python3 verify.py run --group browser --timeout 300
 
 有效验证证据可以用于快速检查、PR review 补测与报告交接；PR review 的 `pr` 门禁按下文「阶段口径」执行。判定策略在仓库根 `verify_evidence.py`（版本化，`POLICY_VERSION` 随判定逻辑递增），不因工作流调整而改变。
 
-- **复用判定（从紧，任何一条不满足就实际执行）**：同输入指纹（HEAD + 工作树全部有效输入的内容摘要，含 staged / unstaged / untracked）+ 同环境（OS、Python、CI 标记、配置摘要）+ 范围覆盖（请求组的测试清单 ⊆ 已验证组的清单）+ 来源记录当前校验后 `usable_as_evidence=true`（不信任落盘时的旧标记）+ 未超 24 小时保鲜窗口且结束时间不在未来 + 入口版本、选测策略版本、复用策略版本一致 + 基线一致。唯一放宽：差异被证明仅在文档允许列表内（`README.md`、`README.en.md`、`docs/assets/`、`GLOSSARY.md`、`docs/adr/`，与选测策略同一允许列表；覆盖映射下停用）时仍可复用，复用理由注明「差异仅在文档允许列表内」；无法证明独立性就回退重新验证。
+- **复用判定（从紧，任何一条不满足就实际执行）**：同输入指纹（HEAD + 工作树全部有效输入的内容摘要，含 staged / unstaged / untracked）+ 同环境（OS、Python、CI 标记、配置摘要）+ 范围覆盖（请求组的测试清单 ⊆ 已验证组的清单）+ 来源记录当前校验后 `usable_as_evidence=true`（不信任落盘时的旧标记）+ 未超 24 小时保鲜窗口且结束时间不在未来 + 入口版本、选测策略版本、复用策略版本一致 + 基线一致。唯一放宽：差异被证明仅在文档允许列表内（`README.md`、`README.zh-CN.md`、`docs/assets/`、`GLOSSARY.md`、`docs/adr/`，与选测策略同一允许列表；覆盖映射下停用）时仍可复用，复用理由注明「差异仅在文档允许列表内」；无法证明独立性就回退重新验证。
 - **永远不复用的组**：依赖同机宿主机状态的组（`groups[].resources` 非空——完整单元、完整浏览器、命中敏感模块的相关单元直跑）。指纹相同也不复用，必须实际执行或要求隔离证明。
 - **阶段口径**：CLI 的 `issue` / `development` / `review` / `manual` 保留复用能力；这些标签本身不决定何时运行测试，执行时机服从上文工作流。用户发起 PR review 后，`pr` / `ci` 不引用旧证据。PR 的全部有效差异仅在内置文档允许列表内，且没有回退或效率守卫时，本地产品测试记为 `not_applicable`，原因写明「差异仅在文档允许列表内，由 CI 兜底」，可作为本地门禁证据；不计执行、用例、检查或通过数。其余 PR 仍实际执行完整单元、服务安全自检与完整浏览器。CI 始终执行原矩阵，本地记录不替代 Linux 双 Python CI；`--no-reuse` 可强制文档 PR 实际执行。补测与报告交接可用 `review` / `manual`。
 - **按疑点复测不受限**：`unit-related` 点名到类 / 用例的选择器不复用（如 `python3 verify.py run unit-related tests.test_synth.TouchTests --phase review`）；要完全独立复测用 `--no-reuse`，绕过原因写进记录。

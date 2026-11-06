@@ -51,7 +51,7 @@ class LicenseFilesTests(unittest.TestCase):
                     self.assertTrue((skills / "annotation-everything" / name).is_file())
 
     def test_both_readmes_link_license_and_notice(self):
-        for name in ("README.md", "README.en.md"):
+        for name in ("README.md", "README.zh-CN.md"):
             text = (ROOT / name).read_text(encoding="utf-8")
             with self.subTest(name=name):
                 self.assertIn("Apache-2.0", text)
