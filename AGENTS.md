@@ -24,7 +24,7 @@
 
 ## 分支、issue 与 PR
 
-`main` 只通过 PR 的 squash 合并更新。仓库是免费版私有仓库，GitHub 无法在服务器端锁定 `main`，下面的规则靠本地钩子和这份约定执行。
+`main` 只通过 PR 的 squash 合并更新。GitHub 规则集 `protect-main` 在服务器端要求走 PR、只允许 squash、必须通过两项 CI 检查，并禁止删除和强推 `main`；规则集 `protect-release-tags` 禁止修改和删除 `v*` 标签。本地钩子提前拦截同类操作，其余规则靠这份约定执行。管理员可以在 PR 上越过必需检查，只有用户明确同意时才使用。
 
 - **先启用钩子**：克隆后运行一次 `tools/setup-dev.sh`。钩子会拒绝在 `main` 上提交、推送到 `main` 和删除 `main`，本地 `main` 只能快进到 `origin/main` 上已有的提交。不要用 `--no-verify` 绕过；确需绕过时先征得用户同意。
 - **一个 issue 一个分支、一个 PR**：从 issue 开分支，`gh issue develop <编号> --name <type>/<编号>-<简述> --base main --checkout`，`type` 与提交类型一致（feat / fix / docs / chore 等），不用工具名作前缀。没有 issue 的小改动也要开分支，命名 `<type>/<简述>`。
