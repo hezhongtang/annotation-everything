@@ -299,7 +299,7 @@ class DeliveryTests(unittest.TestCase):
         fake = {"awaiting": "pending", "claimStage": "draft"}
         with patch.dict(wakeup.DELIVERY_EVENTS, {"fake": fake}):
             with self.assertRaises(ValueError):   # 未登记的事件类型：去重键拒绝
-                wakeup.deliver(self.review, "analysis", 1)
+                wakeup.deliver(self.review, "future-analysis", 1)
             store.handoff_submit(self.review, "synthetic")
             handoff = wakeup.deliver(self.review, "handoff", 1)
             other = wakeup.deliver(self.review, "fake", 1)   # 同 seq 不同事件：不互相去重
@@ -314,11 +314,11 @@ class DeliveryTests(unittest.TestCase):
             with self.assertRaises(ValueError):   # 确认命令接受已登记类型（过了参数解析才到绑定校验）
                 wakeup.main(["ack", str(self.review), "--event", "fake", "--seq", "1", "--message-id", "wrong"])
             with self.assertRaises(SystemExit):   # 未登记类型过不了参数解析
-                wakeup.main(["ack", str(self.review), "--event", "analysis", "--seq", "1", "--message-id", "x"])
+                wakeup.main(["ack", str(self.review), "--event", "future-analysis", "--seq", "1", "--message-id", "x"])
         binding = wakeup.load_binding(self.review)
         history = json.loads((self.review / wakeup.DELIVERY_FILE).read_text())
-        history["items"][f'{binding["bindingId"]}:analysis:99'] = {   # 将来版本写下的记录，本版本未登记
-            "bindingId": binding["bindingId"], "seq": 99, "event": "analysis",
+        history["items"][f'{binding["bindingId"]}:future-analysis:99'] = {   # 将来版本写下的记录，本版本未登记
+            "bindingId": binding["bindingId"], "seq": 99, "event": "future-analysis",
             "messageId": "future-version", "state": "received"}
         (self.review / wakeup.DELIVERY_FILE).write_text(json.dumps(history, ensure_ascii=False))
         result = wakeup.status(self.review)

@@ -31,6 +31,7 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import signal
 import sys
 import time
@@ -43,6 +44,7 @@ import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
 import wakeup  # noqa: E402
+import analysis_store  # noqa: E402
 from build_viewer import (BuildError, FIELD_LABEL, field_name, find_pages, page_heads,  # noqa: E402
                           resolve_sources, strip_tags, write_private)
 import difflib  # noqa: E402
@@ -138,7 +140,9 @@ ACTION_KEY = {"drafted": "cli.batch.trail.action.drafted", "resolved": "cli.batc
               "reopened": "cli.batch.trail.action.reopened", "accepted": "cli.batch.trail.action.accepted"}
 STAGE_KEY = {"draft": "cli.batch.stageName.draft", "review": "cli.batch.stageName.review"}
 # 人读命令遵循同一语言优先级；claim 的原始 JSON 与技能设置另有归属。
-LOCALIZED_CMDS = ("show", "wait", "batches", "done", "review", "diff", "resolve", "reopen", "import", "export")
+LOCALIZED_CMDS = ("show", "wait", "batches", "done", "review", "diff", "resolve", "reopen", "import", "export",
+                  "analysis", "analysis-writeback", "suggest-analysis", "analysis-check", "analysis-redecide", "analysis-note",
+                  "analysis-history", "analysis-line", "analysis-refute")
 # 常驻技能的范围：存储值 → 界面显示的消息 key（存储值本身不随语言改写）
 ALWAYS_SCOPE_KEY = {"all": "viewer.hand.scope.all", "报告": "viewer.hand.scope.report",
                     "讲稿": "viewer.hand.scope.script", "style": "viewer.hand.scope.style"}
@@ -221,7 +225,36 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
         "subagents-forbidden": "cli.hand.error.subagentsForbidden",
         "review-not-claimed": "cli.hand.error.reviewNotClaimed",
         "already-done": "cli.hand.error.alreadyDone",
+        "note-not-open": "cli.hand.error.noteNotOpen",
+        "note-in-progress": "cli.hand.error.noteInProgress",
+        "note-held": "cli.hand.error.noteHeld",
+        "round-not-answerable": "cli.hand.error.roundNotAnswerable",
+        "item-not-in-round": "cli.hand.error.itemNotInRound",
+        "round-not-claimed": "cli.hand.error.roundNotClaimed",
+        "base-rev-mismatch": "cli.hand.error.baseRevMismatch",
+        "agent-busy": "cli.hand.error.agentBusy",
+        "queue-order": "cli.hand.error.queueOrder",
+        "node-not-decided": "cli.hand.error.nodeNotDecided",
+        "draft-not-pending": "cli.hand.error.draftNotPending",
+        "source-not-held": "cli.hand.error.sourceNotHeld",
+        "analysis-invalid-input": "cli.life.invalidInput",
+        "structure-target-changed": "cli.life.structureChanged",
+        "suggest-note-not-open": "cli.life.suggestNotOpen",
     }
+    protection_codes = ("analysis-locked", "bad-option", "draft-basis-changed", "note-not-changed", "bad-updates",
+                        "updates-required", "update-not-pending", "update-source-changed", "round-not-answerable")
+    if isinstance(error, store.HandoffError) and error.code in protection_codes:
+        return cli_text(lang)("cli.analysis.protect.error." + error.code)
+    if isinstance(error, store.HandoffError) and error.code in (
+            "checkpoint-not-found", "line-not-found", "analysis-pending-rounds", "analysis-closed"):
+        return cli_text(lang)("cli.analysis.history.error." + error.code)
+    if isinstance(error, store.HandoffError) and error.code in (
+            "assumption-not-found", "bad-dead-ends", "dead-end-option", "dead-end-line", "dead-end-obsolete"):
+        t = cli_text(lang)
+        params = dict(error.params)
+        if error.code in ("dead-end-option", "dead-end-line"):
+            params["assumptions"] = " / ".join(params.get("assumptions", [])) or t("cli.analysis.resolution.noAssumptions")
+        return t("cli.analysis.resolution.error." + error.code, **params)
     if lang != "en" or not isinstance(error, store.HandoffError) or error.code not in messages:
         return str(error)
     t = cli_text(lang)
@@ -234,6 +267,8 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
             for seq, status in params["batches"])
     if "status" in params:
         params["status"] = label(t, STATUS_KEY.get(params["status"], ""), params["status"])
+    if error.code == "note-in-progress" and not params.get("by"):
+        params["by"] = t("cli.hand.agentFallback")   # 批次还没记下是谁领的
     if error.code == "note-not-reviewing":
         params["batch"] = (t("cli.hand.error.batchState", seq=params["seq"], status=params["status"])
                            if params["seq"] is not None and params["status"] else t("cli.hand.error.noReviewBatch"))
@@ -680,6 +715,8 @@ def _main_locked(argv: list[str] | None = None) -> int:
     w.add_argument("--by", default=default_agent(), help=t("cli.notes.help.wait.by"))
     w.add_argument("--stage", choices=("any", "draft", "review"), default="any",
                    help=t("cli.notes.help.wait.stage"))
+    w.add_argument("--events", choices=("analysis",), default=None,
+                   help=t("cli.notes.help.wait.events"))
     sk = sub.add_parser("skills", help=t("cli.notes.help.command.skills"))
     sk.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     sk.add_argument("--set", nargs="*", metavar=t("cli.notes.help.skillDescription"), help=t("cli.notes.help.skills.set"))
@@ -695,7 +732,63 @@ def _main_locked(argv: list[str] | None = None) -> int:
     cl.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     cl.add_argument("--by", default=default_agent())
     cl.add_argument("--stage", choices=("any", "draft", "review"), default="any")
-    cl.add_argument("--seq", type=int, help=t("cli.notes.help.claim.seq"))
+    claim_target = cl.add_mutually_exclusive_group()
+    claim_target.add_argument("--seq", type=int, help=t("cli.notes.help.claim.seq"))
+    claim_target.add_argument("--round", type=int, help=t("cli.notes.help.claim.round"))
+    cl.add_argument("--events", choices=("analysis",), default=None,
+                    help=t("cli.notes.help.claim.events"))
+    an = sub.add_parser("analysis", help=t("cli.notes.help.command.analysis"))
+    an.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    an.add_argument("--analysis", help=t("cli.notes.help.analysis.analysis"))
+    an.add_argument("--round", type=int, help=t("cli.notes.help.analysis.round"))
+    an.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
+    aw = sub.add_parser("analysis-writeback", help=t("cli.notes.help.command.analysisWriteback"))
+    aw.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    aw.add_argument("--analysis", help=t("cli.notes.help.analysis.analysis"))
+    aw.add_argument("--round", type=int, required=True, help=t("cli.notes.help.writeback.round"))
+    aw.add_argument("--base-rev", type=int, required=True, help=t("cli.notes.help.writeback.baseRev"))
+    aw.add_argument("--proposals", required=True,
+                    help=t("cli.analysis.resolution.help.writebackPayload"))
+    aw.add_argument("--note", default="", help=t("cli.notes.help.writeback.note"))
+    aw.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
+    ac = sub.add_parser("analysis-check", help=t("cli.analysis.protect.help.check"))
+    ac.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    ac.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
+    ar = sub.add_parser("analysis-redecide", help=t("cli.analysis.protect.help.redecide"))
+    ar.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    ar.add_argument("--analysis", required=True, help=t("cli.notes.help.analysis.analysis"))
+    ar.add_argument("--node", required=True, help=t("cli.analysis.protect.help.node"))
+    ar.add_argument("--option", required=True, help=t("cli.analysis.protect.help.option"))
+    ar.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
+    anote = sub.add_parser("analysis-note", help=t("cli.analysis.protect.help.note"))
+    anote.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    anote.add_argument("--analysis", required=True, help=t("cli.notes.help.analysis.analysis"))
+    anote.add_argument("--note-id", required=True, help=t("cli.life.noteId"))
+    anote.add_argument("--action", required=True, choices=("update", "keep", "delete"),
+                       help=t("cli.analysis.protect.help.action"))
+    anote.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
+    history = sub.add_parser("analysis-history", help=t("cli.analysis.history.help.history"))
+    history.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    history.add_argument("--analysis", required=True, help=t("cli.notes.help.analysis.analysis"))
+    history.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
+    line = sub.add_parser("analysis-line", help=t("cli.analysis.history.help.line"))
+    line.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    line.add_argument("--analysis", required=True, help=t("cli.notes.help.analysis.analysis"))
+    line.add_argument("--action", required=True, choices=("seal", "fork", "switch", "close", "reopen"),
+                      help=t("cli.analysis.history.help.action"))
+    line.add_argument("--checkpoint", help=t("cli.analysis.history.help.checkpoint"))
+    line.add_argument("--line", help=t("cli.analysis.history.help.targetLine"))
+    line.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
+    refute = sub.add_parser("analysis-refute", help=t("cli.analysis.resolution.help.refute"))
+    refute.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    refute.add_argument("--analysis", required=True, help=t("cli.notes.help.analysis.analysis"))
+    refute.add_argument("--assumption", required=True, help=t("cli.analysis.resolution.help.assumption"))
+    refute.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
+    sg = sub.add_parser("suggest-analysis", help=t("cli.life.suggestHelp"))
+    sg.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
+    sg.add_argument("id", help=t("cli.life.noteId"))
+    sg.add_argument("--reason", default="", help=t("cli.life.suggestReason"))
+    sg.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
     dn = sub.add_parser("done", help=t("cli.notes.help.command.done"))
     dn.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     dn.add_argument("--summary", default="", help=t("cli.notes.help.done.summary"))
@@ -726,11 +819,14 @@ def _main_locked(argv: list[str] | None = None) -> int:
     bt.add_argument("--last", type=int, help=t("cli.notes.help.batches.last"))
     bt.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
     for name, parser in sub.choices.items():
-        if name in ("wait", "claim", "resolve", "reopen", "review", "done"):
+        if name in ("wait", "claim", "resolve", "reopen", "review", "done", "analysis-writeback", "suggest-analysis",
+                    "analysis-redecide", "analysis-note", "analysis-line", "analysis-refute"):
             parser.add_argument("--harness", help=t("cli.notes.help.receiver.harness"))
             parser.add_argument("--session", help=t("cli.notes.help.receiver.session"))
         parser.add_argument("--locale", default=argparse.SUPPRESS, help=t("cli.notes.localeHelp"))
     a = ap.parse_args(argv)
+    if a.cmd == "claim" and a.round is not None and a.events != "analysis":
+        ap.error(t("cli.notes.help.claim.roundRequiresEvents"))
     ledger.set_locale(help_lang)
     try:
         d = ledger.resolve_dir(a.dir).resolve()   # 也接受审阅标识（或至少 4 位前缀）：从台账查目录
@@ -882,7 +978,135 @@ def _main_locked(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "wait":
         return wait(d, a.timeout, a.interval, claim=not a.no_claim, by=a.by, stage=a.stage, lang=lang,
-                    harness=a.harness, session=a.session, manifest=manifest)
+                    harness=a.harness, session=a.session, manifest=manifest, events=a.events)
+    if a.cmd == "analysis":
+        try:
+            ctx = analysis_context_of(d, analysis=a.analysis, round_no=a.round)
+        except store.NotFound as e:
+            print(t("cli.analysis.noRound", reason=str(e).strip("'") if str(e).strip("'") else "—"),
+                  file=sys.stderr)
+            return 1
+        if a.json:
+            print(json.dumps(ctx, ensure_ascii=False, indent=2))
+        else:
+            print(analysis_context_text(ctx, lang=lang), end="")
+        return 0
+    if a.cmd == "analysis-check":
+        context = analysis_store.full_check_context(d)
+        if a.json:
+            print(json.dumps(context, ensure_ascii=False, indent=2))
+        else:
+            print(analysis_check_text(context, d, lang))
+        return 0
+    if a.cmd in ("analysis-history", "analysis-line"):
+        try:
+            if a.cmd == "analysis-history":
+                state = analysis_store.load(d, a.analysis)
+            else:
+                operations = {"seal": analysis_store.seal_checkpoint, "fork": analysis_store.fork_line,
+                              "switch": analysis_store.switch_line, "close": analysis_store.close_analysis,
+                              "reopen": analysis_store.reopen_analysis}
+                args = ([a.checkpoint] if a.action in ("seal", "fork") else [a.line] if a.action == "switch" else [])
+                state = operations[a.action](d, a.analysis, *args, by=a.by, authorize=authorize)
+                if a.action in ("fork", "reopen"):
+                    notify_analysis(d, state)
+        except store.NotFound:
+            print(t("cli.analysis.protect.missing"), file=sys.stderr)
+            return 1
+        except store.NoteError as error:
+            print(handoff_error_text(error, lang), file=sys.stderr)
+            return 1
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
+        if a.cmd == "analysis-line":
+            print(json.dumps({"ok": True, "analysis": state}, ensure_ascii=False))
+        elif a.json:
+            print(json.dumps(state, ensure_ascii=False, indent=2))
+        else:
+            print(analysis_history_text(state, lang))
+        return 0
+    if a.cmd in ("analysis-redecide", "analysis-note", "analysis-refute"):
+        try:
+            if a.cmd == "analysis-refute":
+                state = analysis_store.refute_assumption(d, a.analysis, a.assumption, by=a.by, authorize=authorize)
+            elif a.cmd == "analysis-redecide":
+                state = analysis_store.redecide(d, a.analysis, a.node, a.option, by=a.by, authorize=authorize)
+            else:
+                operation = {"update": analysis_store.request_update, "keep": analysis_store.keep_note,
+                             "delete": analysis_store.delete_note}[a.action]
+                operation(d, a.analysis, a.note_id, by=a.by, authorize=authorize)
+                state = analysis_store.load(d, a.analysis)
+            if a.cmd in ("analysis-redecide", "analysis-refute") or a.action == "update":
+                notify_analysis(d, state)
+        except store.NotFound:
+            print(t("cli.analysis.protect.missing"), file=sys.stderr)
+            return 1
+        except store.NoteError as error:
+            print(handoff_error_text(error, lang), file=sys.stderr)
+            return 1
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
+        print(json.dumps({"ok": True, "analysis": state}, ensure_ascii=False))
+        return 0
+    if a.cmd == "suggest-analysis":
+        try:
+            note = analysis_store.suggest(d, a.id, reason=a.reason, by=a.by, authorize=authorize)
+        except store.NotFound:
+            print(t("cli.life.noteMissing"), file=sys.stderr)
+            return 1
+        except store.NoteError as error:
+            print(handoff_error_text(error, lang), file=sys.stderr)
+            return 1
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
+        print(json.dumps({"ok": True, "note": note}, ensure_ascii=False))
+        return 0
+    if a.cmd == "analysis-writeback":
+        try:
+            authorize()
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
+        raw = sys.stdin.read() if a.proposals == "-" else Path(a.proposals).read_text(encoding="utf-8")
+        try:
+            proposals = json.loads(raw or "[]")
+        except ValueError as e:
+            print(t("cli.analysis.badProposals", reason=e), file=sys.stderr)
+            return 2
+        aid = a.analysis
+        if aid is None:
+            try:
+                aid, _state = analysis_store.find_by_round(d, a.round)
+            except store.NotFound:
+                print(t("cli.analysis.noRound", reason=f"round#{a.round}"), file=sys.stderr)
+                return 1
+        try:
+            payload = proposals if isinstance(proposals, dict) else {"proposals": proposals}
+            result = analysis_store.writeback(d, aid, a.round, a.base_rev, payload.get("proposals", []),
+                                              note=a.note, by=a.by, assumptions=payload.get("assumptions"),
+                                              facts=payload.get("facts"), updates=payload.get("updates"),
+                                              dead_ends=payload.get("deadEnds"),
+                                              authorize=authorize)
+        except store.NotFound:
+            print(t("cli.analysis.noRound", reason=f"round#{a.round}"), file=sys.stderr)
+            return 1
+        except store.NoteError as e:
+            if isinstance(e, store.HandoffError) and e.code == "base-rev-mismatch":
+                notify_analysis(d, analysis_store.load(d, aid))
+            print(handoff_error_text(e, lang), file=sys.stderr)
+            return 1
+        except (OSError, ValueError, KeyError) as error:
+            print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
+            return 2
+        nxt = result.get("nextRound")
+        print(json.dumps({"ok": True, "round": a.round, "nextRound": nxt,
+                          "analysis": aid}, ensure_ascii=False))
+        print(t("cli.analysis.writebackNoNext" if nxt is None else "cli.analysis.writebackDone",
+                round=nxt), file=sys.stderr)
+        return 0
     if a.cmd == "skills":
         def parse(items: list[str] | None) -> list[dict[str, str]]:
             out = []
@@ -970,8 +1194,33 @@ def _main_locked(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "claim":
         try:
-            item = store.handoff_claim(d, by=a.by, stage=a.stage, seq=a.seq,
-                                       authorize=authorize)
+            if a.events == "analysis":
+                event, item = claim_next(d, by=a.by, stage=a.stage, seq=a.seq,
+                                         round_no=a.round, include_analysis=True, authorize=authorize)
+                if item is None:
+                    print(json.dumps({"claimed": False}, ensure_ascii=False))
+                    return 3
+                if event == "analysis":
+                    ctx = analysis_store.round_context(d, item["analysis"], item["seq"])
+                    print(json.dumps({"claimed": True, "event": "analysis", "focus": ctx["focus"],
+                                      "round": item["seq"],
+                                      **{k: v for k, v in item.items() if k != "proposals"},
+                                      "items": ctx["items"], "answers": ctx["answers"]}, ensure_ascii=False))
+                    return 0
+                if item["stage"] == "draft":
+                    snapshot(d, item, "base")
+                print(json.dumps({"claimed": True, "event": "handoff",
+                                  **{k: v for k, v in item.items() if k != "openIds"}}, ensure_ascii=False))
+                return 0
+            _event, item = claim_next(d, by=a.by, stage=a.stage, seq=a.seq,
+                                      authorize=authorize)
+        except store.HandoffError as error:
+            if error.code == "queue-order":
+                print(json.dumps({"claimed": False, "reason": "earlier-item"}, ensure_ascii=False))
+                print(t("cli.hand.error.queueOrder"), file=sys.stderr)
+                return 3
+            print(t("cli.hand.doneRefused", why=handoff_error_text(error, lang)), file=sys.stderr)
+            return 2
         except (OSError, ValueError, KeyError) as error:
             print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
             return 2
@@ -1179,6 +1428,213 @@ def _drop_wait_mark(mark: Path | None) -> None:
             mark.unlink()
 
 
+# ---------- 分析轮次：跨队列领取、读上下文、写回 ----------
+def _submitted_before(batch: dict[str, Any], round_: dict[str, Any]) -> bool:
+    """批次是否比轮次交得早：先比审阅内共享的提交序号（同秒也能分出先后）；
+    旧数据没有序号时退回秒级时间戳。"""
+    b, r = batch.get("order"), round_.get("order")
+    if isinstance(b, int) and isinstance(r, int):
+        return b <= r
+    batch_at = batch.get("reviewRequestedAt") if batch.get("status") == "review" else batch.get("at")
+    round_at = round_.get("reviewRequestedAt") if round_.get("status") == "review" else round_.get("at")
+    return store._ts(batch_at) <= store._ts(round_at)
+
+
+def claim_next(d: Path, *, by: str, stage: str = "any", seq: int | None = None,
+               round_no: int | None = None,
+               include_analysis: bool = False, authorize: Callable[[], None] | None = None,
+               expected_binding: dict[str, Any] | None = None) -> tuple[str, dict[str, Any] | None]:
+    """领取最早交出的一项：改稿批次（按 --stage）或分析轮次，按交出先后挑。
+
+    seq 只指批次，round_no 只指分析轮次。精确领取不得跳过更早交出的项。
+    锁外选择目标；锁内重新校验身份、忙闲和队首，然后由对应存储领取。"""
+    def next_waiting():
+        # 先决定全局队首；阶段与事件参数只能限制能否领取，不能改变排队顺序。
+        batches = [item for item in store.handoff_load(d)["items"]
+                   if item.get("status") in store.CLAIM_STATUSES["any"]]
+        batch = None
+        for candidate in batches:
+            if batch is None or not _submitted_before(batch, candidate):
+                batch = candidate
+        rounds = analysis_store.queue(d)
+        if batch is not None and (not rounds or _submitted_before(batch, rounds[0])):
+            return "handoff", int(batch["seq"])
+        return ("analysis", rounds[0]["seq"]) if rounds else None
+
+    selected = next_waiting()
+    requested = ("analysis", round_no) if round_no is not None else ("handoff", seq) if seq is not None else None
+
+    def check_available():
+        # 两类存储都在同一把审阅目录锁内调用；不能在选择目标后留下换绑/并发领取窗口。
+        if authorize is not None:
+            authorize()
+        if analysis_store.agent_busy(d):
+            raise store.HandoffError("Agent 手上已有一项在处理，一次只处理一项", code="agent-busy")
+        current = next_waiting()
+        if current != selected or (requested is not None and current is not None and requested != current):
+            raise store.HandoffError("有更早交出的项，请先处理后重试", code="queue-order")
+
+    if (selected is None or (requested is not None and requested != selected)
+            or (selected[0] == "analysis" and not include_analysis)):
+        with store.locked(d):
+            check_available()
+        return "", None
+    event, number = selected
+    if event == "analysis":
+        item = analysis_store.claim(d, by=by, seq=number, authorize=check_available)
+    else:
+        item = store.handoff_claim(d, by=by, stage=stage, seq=number, authorize=check_available)
+    return (event, item) if item is not None else ("", None)
+
+
+def analysis_context_of(d: Path, *, analysis: str | None, round_no: int | None) -> dict[str, Any]:
+    """定位要读的那一轮：轮次号在整份审阅内唯一；不给就取该分析当前可作答的一轮。"""
+    rows = analysis_store.list_analyses(d)
+    if not rows:
+        raise store.NotFound("no-analysis")
+    if round_no is not None:
+        aid, _state = analysis_store.find_by_round(d, round_no)
+        if analysis is not None and analysis != aid:
+            raise store.NotFound(f"round#{round_no}")
+        return analysis_store.round_context(d, aid, round_no)
+    target = (next((r for r in rows if r["id"] == analysis), None) if analysis is not None
+              else next((r for r in rows if r["status"] == "active"), rows[0]))
+    if target is None:
+        raise store.NotFound(f"analysis#{analysis}")
+    state = analysis_store.load(d, target["id"])
+    round_ = next((r for r in reversed(state["rounds"]) if r.get("line", "main") == state["line"]
+                   and r["status"] in ("open", "submitted", "claimed")), None)
+    if round_ is None:
+        raise store.NotFound("no-open-round")
+    return analysis_store.round_context(d, target["id"], round_["seq"])
+
+
+def analysis_context_text(ctx: dict[str, Any], lang: str | None = None) -> str:
+    """一轮上下文的人读输出：焦点问题、当前路径上的决策、本轮条目、审阅人原话回答。"""
+    t = cli_text(lang)
+    out = [t("cli.analysis.heading", focus=ctx["focus"]),
+           t("cli.analysis.meta", round=ctx["round"], status=ctx["status"],
+             kind=t("cli.analysis.kind." + ("opening" if ctx["kind"] == "opening" else "next")),
+             rev=ctx["baseRev"] if ctx["baseRev"] is not None else "—")]
+    if ctx["decisions"]:
+        out.append(t("cli.analysis.decisions"))
+        for dec in ctx["decisions"]:
+            out.append(t("cli.analysis.decisionItem", short=dec["nodeShort"], label=dec["label"],
+                         round=dec["round"]))
+    out.append(t("cli.analysis.items"))
+    all_items = {item["key"]: item for item in ctx["items"] + ctx.get("answeredItems", [])}
+    for item in all_items.values():
+        if item["type"] == "deadend":
+            if item["kind"] == "line":
+                ordinal = item["targetOrdinal"]
+                target = t("cli.analysis.history.main" if ordinal == 1 else "cli.analysis.history.second") if ordinal < 3 else t(
+                    "cli.analysis.history.other", number=ordinal)
+            else:
+                target = t("cli.analysis.resolution.optionTarget", question=item["targetText"], option=item["optionLabel"])
+            out.append(t("cli.analysis.resolution.deadItem", target=target, reason=item["reason"],
+                         assumptions=" / ".join(item["assumptionTexts"]) or t("cli.analysis.resolution.noAssumptions")))
+            continue
+        if item["type"] == "update":
+            out.append(t("cli.analysis.protect.updateItem", before=item["beforeText"], after=item["text"]))
+            continue
+        if item["type"] == "assumption":
+            out.append(t("cli.life.assumptionItem", text=item["text"],
+                         status=t("viewer.life.status." + item.get("status", "pending"))))
+            continue
+        if item["type"] == "structure" and item.get("op", "add") != "add":
+            out.append(t("cli.life.structureChange", action=t("cli.life.structure." + item["op"]),
+                         questions=" / ".join(item.get("targetNames", []))))
+            if item.get("text"):
+                out.append(item["text"])
+            for replacement in item.get("replacements", []):
+                out.append(t("cli.life.structureItem", item=replacement["key"], text=replacement["text"],
+                             short=replacement["short"], recommend=replacement["recommend"],
+                             options=" / ".join(o["label"] for o in replacement["options"])))
+            continue
+        options = " / ".join(f'{o["id"]}：{o["label"]}' for o in item["options"])
+        if item["type"] == "structure":
+            out.append(t("cli.life.structureItem", item=item["key"], text=item["text"],
+                         short=item["short"], options=options, recommend=item["recommend"]))
+        else:
+            out.append(t("cli.life.questionItem", item=item["key"], short=item["short"],
+                         text=item["text"], options=options, recommend=item["recommend"]))
+    if ctx["answers"]:
+        out.append(t("cli.analysis.answers"))
+        for key, value in ctx["answers"].items():
+            out.append(t("cli.life.answerItem", item=key, value=json.dumps(value, ensure_ascii=False)))
+    if ctx.get("assumptions"):
+        out.append(t("cli.life.assumptions"))
+        for assumption in ctx["assumptions"]:
+            out.append(t("cli.life.assumptionItem", text=assumption["text"],
+                         status=t("viewer.life.status." + assumption["status"])))
+    if ctx.get("facts"):
+        out.append(t("cli.life.facts"))
+        for fact in ctx["facts"]:
+            out.append(t("cli.life.factItem", text=fact["text"], source=fact.get("source", "")))
+    if ctx.get("updateRequests"):
+        out.append(t("cli.analysis.protect.updateRequests"))
+        for request in ctx["updateRequests"]:
+            out.append(t("cli.analysis.protect.updateRequest", noteId=request["noteId"], text=request["text"],
+                         question=request["question"], answer=request["answer"]))
+    out.append(t("cli.life.verificationRule"))
+    if ctx.get("historical"):
+        if ctx.get("note"):
+            out.append(t("cli.analysis.history.agentNote", text=ctx["note"]))
+        if ctx.get("writeback"):
+            out.append(t("cli.analysis.history.writeback", text=json.dumps(ctx["writeback"], ensure_ascii=False)))
+        out.append(t("cli.analysis.history.readOnly"))
+    else:
+        out.append(t("cli.analysis.writebackHint", round=ctx["round"]))
+    return "\n".join(out) + "\n"
+
+
+def analysis_history_text(state: dict[str, Any], lang: str | None = None) -> str:
+    """按自然线名与轮次输出时间线；内部标识保留在JSON读取中。"""
+    t = cli_text(lang)
+    def line_name(line):
+        ordinal = state["lines"][line]["ordinal"]
+        return t("cli.analysis.history.main" if ordinal == 1 else "cli.analysis.history.second") if ordinal < 3 else t(
+            "cli.analysis.history.other", number=ordinal)
+    out = [t("cli.analysis.history.title", focus=state["focus"])]
+    for line in state["lines"].values():
+        out.append(t("cli.analysis.history.lineRow", name=line_name(line["id"]),
+                     current=t("cli.analysis.history.current") if line["id"] == state["line"] else ""))
+    for round_ in state["rounds"]:
+        out.append(t("cli.analysis.history.roundRow", round=round_["seq"], line=line_name(round_["line"]),
+                     status=t("cli.analysis.history.status." + round_["status"])))
+    for checkpoint in state["checkpoints"]:
+        name = t("cli.analysis.history.checkpoint", round=checkpoint["round"]) if checkpoint["round"] is not None else t(
+            "cli.analysis.history.checkpointNow")
+        out.append(t("cli.analysis.history.checkpointRow", name=name, line=line_name(checkpoint["line"]),
+                     state=t("cli.analysis.history.sealed" if checkpoint["sealed"] else "cli.analysis.history.automatic")))
+    return "\n".join(out)
+
+
+def notify_analysis(d: Path, state: dict[str, Any]) -> None:
+    """桌面绑定的新增轮次即时投递；等待适配器由现有轮询接收。"""
+    binding = wakeup.load_binding(d)
+    if binding and binding["adapter"] == "codex-desktop":
+        for round_ in state["rounds"]:
+            if round_["status"] == "submitted":
+                wakeup.deliver(d, "analysis", round_["seq"], expected_binding=binding["bindingId"])
+
+
+def analysis_check_text(context: dict[str, Any], d: Path, lang: str | None = None) -> str:
+    """无活动轮次也可读取的结论清单；仅供核对，不代替审阅人确认。"""
+    t = cli_text(lang)
+    command = shlex.join(["python3", str(Path(__file__).resolve()), "analysis-check", str(d), "--json"])
+    out = [t("cli.analysis.protect.fullCheck", command=command)]
+    for item in context["checks"]:
+        out.append(t("cli.analysis.protect.check." + item["kind"]))
+        for note in item.get("notes", []):
+            out.append(note["text"])
+    for analysis in context["analyses"]:
+        out.append(analysis["focus"])
+        for conclusion in analysis["conclusions"]:
+            out.append(t("cli.analysis.protect.conclusion", question=conclusion["question"], answer=conclusion["answer"]))
+    return "\n".join(out)
+
+
 # 等待轮询的强制完整重读周期：文件签名没变就跳过解析，但 inode 号可能被复用、粗粒度 mtime 的
 # 文件系统上四元组可能碰巧相同，所以每这么久仍完整重读一次，最坏只晚一个周期发现变化。
 WAIT_FORCE_READ_SECONDS = 30.0
@@ -1198,12 +1654,15 @@ def _poll_signature(path: Path) -> tuple[int, int, int, int] | None:
 
 def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stage: str = "any",
          lang: str | None = None, harness: str | None = None, session: str | None = None,
-         manifest: dict[str, Any] | None = None) -> int:
+         manifest: dict[str, Any] | None = None, events: str | None = None) -> int:
     """阻塞等待「交给 Agent」提交。已经在等待中的提交（之前没人接收）会立即返回。
 
-    manifest：调用方已读好的 review.json（接收方绑定的校验用它，不重复打开同一份文件）。"""
+    manifest：调用方已读好的 review.json（接收方绑定的校验用它，不重复打开同一份文件）。
+    events="analysis"：同时接收分析轮次（显式声明；默认只等批次，旧进程领不到轮次），
+    改稿批次与分析轮次合在一起按交出先后领取，一次只处理一项。"""
     t = cli_text(lang)
     sep = t("cli.hand.itemSep")
+    include_analysis = events == "analysis"
     binding = None
     if claim:
         try:
@@ -1246,7 +1705,8 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     next_force = time.monotonic() + force_read
     try:
         while True:
-            sig = tuple(_poll_signature(p) for p in poll_paths)
+            watch = poll_paths + (sorted((d / "analysis").glob("*/events.jsonl")) if include_analysis else [])
+            sig = tuple(_poll_signature(p) for p in watch)
             now = time.monotonic()
             if sig != last_sig or now >= next_force:   # 变了、或到了强制重读周期：完整读一次
                 last_sig, next_force = sig, now + force_read
@@ -1269,18 +1729,31 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
                 except (OSError, ValueError, KeyError) as error:
                     print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
                     return 2
-            if any(i.get("status") in want for i in doc["items"]):
+            rounds = analysis_store.queue(d) if include_analysis else []
+            if any(i.get("status") in want for i in doc["items"]) or rounds:
                 if claim:
                     try:
-                        item = store.handoff_claim(d, by=by, stage=stage,
+                        event, item = claim_next(d, by=by, stage=stage,
+                                                  include_analysis=include_analysis,
                             authorize=lambda: wakeup.assert_claim_owner(d, harness, session,
                                 expected_binding=(binding or {}).get("bindingId")))
+                    except store.HandoffError:
+                        event, item = "", None   # 刚被别的 Agent 抢走：继续等，不打断等待
                     except (OSError, ValueError, KeyError) as error:
                         print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
                         return 2
+                    if event == "analysis":
+                        ctx = analysis_store.round_context(d, item["analysis"], item["seq"])
+                        print(analysis_context_text(ctx, lang=lang), end="")
+                        return 0
                 else:
-                    item = next(i for i in doc["items"] if i.get("status") in want)
-                    item = {**item, "stage": "review" if item.get("status") == "review" else "draft"}
+                    if any(i.get("status") in want for i in doc["items"]):
+                        item = next(i for i in doc["items"] if i.get("status") in want)
+                        item = {**item, "stage": "review" if item.get("status") == "review" else "draft"}
+                    else:
+                        ctx = analysis_store.round_context(d, rounds[0]["analysis"], rounds[0]["seq"])
+                        print(analysis_context_text(ctx, lang=lang), end="")
+                        return 0
                 if item is not None:
                     break
             if deadline is not None and time.monotonic() >= deadline:
@@ -1314,6 +1787,7 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
         print(sub_line)
         if item.get("fullCheck"):
             print(t("cli.hand.fullCheck").lstrip("；;").lstrip())
+            print(analysis_check_text(analysis_store.full_check_context(d), d, lang))
         print(t("cli.hand.reviewerBrief", dir=d, seq=item["seq"]) + "\n")
         doc = store.load(d)
         print(to_markdown(doc, manifest, include_resolved=False, page=None, sources=sources,
@@ -1325,6 +1799,8 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     if message := store.handoff_user_message(item):
         print(t("cli.hand.userMessage", message=message))
     print(t("cli.batch.requirement", target=target_text(item, lang)))
+    if item.get("fullCheck"):
+        print(analysis_check_text(analysis_store.full_check_context(d), d, lang))
     print(sub_line)
     alw = store.always_skills(d)
     if alw:

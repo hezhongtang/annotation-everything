@@ -80,7 +80,7 @@ Speaker-note page numbers must match the report sequence. A mismatch lists diffe
 | `pair` | `{side, text, match}`; side uses the same Chinese values; match is `exact` or `similar` |
 | `style` | `{scope}` where scope is `page`, `pin`, or `region`; the target is the report |
 | `skills` | Original skill invocation names |
-| `status` | `open`, `drafted`, or `resolved` |
+| `status` | `open`, `drafted`, `resolved`, or `held` |
 | `resolution` | Original handling explanation, including the initial edit explanation for a draft |
 | `at`, `updatedAt`, `resolvedAt`, `resolvedBy`, `resolvedBatch` | Creation, update, and final handling metadata |
 | `draftedAt`, `draftedBy`, `draftBatch` | Initial edit metadata |
@@ -90,6 +90,34 @@ Speaker-note page numbers must match the report sequence. A mismatch lists diffe
 New annotations use either a point or a region. Older annotations can contain both. Legacy `style.region` is migrated on read. Rebuilds use stable keys to remap annotations and mark missing pages as orphaned. Skill scopes in `skills.json` remain `all`, `报告`, `讲稿`, or `style`.
 
 `notes.jsonl` is an operation log. It includes annotation and submission operations and supports inspection and recovery. It is not an alternate unlocked write interface.
+
+Held annotations use `status: "held"`, a `hold` reason (`分析中` or `结论已变`), and `heldBy` for the related analysis. Revision snapshots include only `open`. `fromAnalysis`, `basis`, and a source annotation's `analysisId` retain analysis links; same-ID updates and imports preserve unrecognized fields. Older importers and pages treat an unknown held status as open. Old services still submit only open annotations. Restart the service, rebuild the page, and refresh after an upgrade.
+
+## Analysis data
+
+`analysis/<analysis-id>/events.jsonl` contains append-only events; its first event carries the schema version. Current state is derived from the log, without batch-history or handling-trail limits on questions and answers. `analysis/counter.json` assigns round numbers unique across the review. `handoff.json` uses shared `submitSeq` / `order` values for revision, review, and analysis submission order, including submissions in the same second.
+
+Analysis, annotations, and batches share `.notes.lock`. Starting an analysis holds the source and removes it from unclaimed snapshots under that lock. An emptied batch becomes `void`. Conclusion drafts stay in analysis events; confirmation adds an open annotation. Stable page keys are mapped again at conversion and confirmation; a deleted or ambiguous page is marked `orphan`.
+
+`GET /api/analysis` returns summaries and queue counts; `?analysis=<id>` adds the full state, `linkedNotes` and current-line round context. Add `&round=N` to read any round in that analysis without switching lines. Reviewer writes use `/api/analysis/start|answer|submit|convert|confirm|release|activate|pause|redecide|update-note|keep-note|delete-note|seal|fork|switch-line|close|reopen|refute` with the existing Host, Origin, JSON content type, review identity, and applicable receiver checks. `start` accepts a source `noteId`, or `focus` with optional `page` and no source annotation. The `analysis` feature declares support; file mode does not provide analysis.
+
+A round's `line` identifies its analysis line. `assumptions` stores stable identities and `confirmed` states (`pending`, `confirmed`, or `rejected`) per line; `refuted` is distinct from rejection. A decision's `assumptions` lists its direct dependencies. `facts` preserves stable identities, original text, sources and optional question references. `analysis-writeback --proposals` accepts the legacy question list or an object containing `proposals`, `assumptions` and `facts`. Adding, splitting, merging and voiding are structure proposals: confirmation changes the tree while historical nodes and decisions remain. See the [analysis guide](analysis.en.md) for fields and handling rules.
+
+Free-text answers retain the original words and create stable options. `park` moves a question out of the frontier; `verify` records a verification request with Boolean `allowExternal` defaulting to `false`. Pausing or switching an analysis changes focus without increasing its baseline revision or cancelling submitted or claimed rounds. `notes.py suggest-analysis` only adds an annotation's `analysisSuggestion`; it does not create an analysis.
+
+`protection` reports whether this analysis has a claimed round. A node's `branch` distinguishes the current branch, a detached branch and a void branch. Changing a decision or requesting an update voids unclaimed rounds on that line; a rejected baseline voids its round too. Still-valid answers carry into a new request on the same line without recreating confirmed entities. Done and void rounds reject further answers; valid answers during a claim do not increase the baseline revision.
+
+A derived annotation's `tracking` controls whether it follows its basis. Invalid bases affect only open annotations or those held for changed conclusions. Claimed/reviewing batches keep their annotations, and resolved statuses remain unchanged. `updateRequests` stores requests and `updates` stores the agent's text drafts. Confirming a round's `U:` item changes the ordinary annotation and appends its old text and basis to `analysisHistory`. A writeback object can include `updates: [{noteId, text, node?}]`; rejecting a draft preserves the original text.
+
+`lines` holds each line's latest node projection; `nodes` remains the current line's projection. Decisions, assumptions, facts and node-option identities are shared across lines. `checkpoints` has stable `cpN` identities, a line, source round, automatic/sealed flags and a snapshot. Snapshots include the focus, nodes, decisions, assumptions, facts, effective conclusions, unresolved questions and parked questions without nesting earlier checkpoints. Sealing an existing checkpoint changes only `sealed`; forking preserves inherited identities.
+
+A snapshot's `pendingProposals` retains unconfirmed structure proposals without creating nodes on a fork. After refutation, a node's `reopened` preserves its old decision, answer, assumption and reason. `needsReview` includes invalid dependencies on the node or its ancestors; the old line's `basedOnRefuted` identifies the assumptions. Refutation is global, while snapshots and frozen contexts retain the judgement recorded at that time.
+
+A writeback can include `deadEnds`, using stable `key` values for option or line proposals, full `reason` text and existing assumption dependencies. `state.deadEnds` assigns stable `eN` identities with `pending`, `confirmed`, `rejected` or `review` status. Refuting a dependency changes the same record to `review`. Round `D:` items use the answer operation for confirmation. The next round is ordered D → U → A → S → Q. Dead-end rejections expose only safe details such as the reason and original assumption text for presentation in the current language.
+
+New rounds freeze complete context on `done` / `void`. Historical reads return `historical: true`, original `items`, `answeredItems`, answers, explanations and `writeback`. Old logs without frozen context retain compatible derived reads. A round's line is separate from the page's current line: background claims, answers, writebacks and automatic checkpoints belong to the round, while annotation validity follows the current line. `closed` rejects answers and state changes; reopening queues a new request. There is no analysis-delete operation.
+
+Neither JSON nor Markdown exports contain analysis events, questions, trees, or round queues. Annotation JSON may retain held states and source/basis references but cannot reconstruct the analysis. JSON backs up annotations and standing skills, not the entire review; preserve the review directory for a complete backup. Markdown keeps its existing grammar and omits analysis links and hold reasons, so imported held annotations are interpreted as open.
 
 ## Submissions and stages
 
@@ -118,7 +146,7 @@ The Markdown export begins with `<!-- annotation-everything export v1 lang=en --
 
 Markdown preserves page numbers and titles, targets, content, quotations, marks, edits, pairs, style, skills, status and visible handling explanations, plus standing skills. It does **not** preserve IDs, stable page keys, timestamps, processing trails, or batches. JSON carries the complete annotation structure and review identity. The visible Markdown body is authoritative when edited; there is no hidden snapshot overriding it.
 
-Three legacy grammar limits also apply to English exports: body lines that look like metadata can be read as metadata; blank body lines and trailing newlines are discarded; a body starting with a status marker such as `[Resolved] ` or `[Drafted] ` is interpreted as that status. Multiline quotations fold into one line. Delete/replace operations retain the historical fixed Chinese forms (`删除引用的这段文字` and `改为：...`) for compatibility. Prefer JSON when exact structure or unconstrained text must survive. JSON backs up annotations and standing skills; it is not an archive of the separate submission history and source snapshots.
+Three legacy grammar limits also apply to English exports: body lines that look like metadata can be read as metadata; blank body lines and trailing newlines are discarded; a body starting with a status marker such as `[Resolved] ` or `[Drafted] ` is interpreted as that status. Multiline quotations fold into one line. Delete/replace operations retain the historical fixed Chinese forms (`删除引用的这段文字` and `改为：...`) for compatibility. Prefer JSON when exact structure or unconstrained text must survive. JSON backs up annotations and standing skills; it is not an archive of analysis events, submission history, or source snapshots. Preserve the complete review directory to retain those records.
 
 ```bash
 python3 "$S/notes.py" export "$R" --lang en --all --out annotations.md

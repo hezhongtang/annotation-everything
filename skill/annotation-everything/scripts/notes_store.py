@@ -28,8 +28,11 @@ NOTES_FILE = "notes.json"
 LOG_FILE = "notes.jsonl"
 LOCK_FILE = ".notes.lock"
 SCHEMA_VERSION = 1
-STATUSES = ("open", "drafted", "resolved")
+STATUSES = ("open", "drafted", "resolved", "held")
 # drafted：两段流程（先初改、后复核）里初改已完成、等待复核或用户定稿；页面显示「已初改·待复核」
+# held：搁住（暂不交给 Agent 改稿），hold 记原因（分析中 / 结论已变）、heldBy 记引出分析。
+#   只能由分析存储在发起分析 / 解除搁住时设置，手动改状态走不到这里；
+#   提交快照只收「未处理」，搁住的批注天然不进批次。旧版工具导入时按未知状态退回未处理。
 TRAIL_KEEP = 50   # 每条批注保留的处理痕迹条数（谁、哪个阶段、做了什么、理由）
 # 页面可写的字段；id / at / status 相关字段由存储层或专门操作维护
 EDITABLE = ("page", "title", "target", "text", "quote", "quoteFrom", "pin", "region", "edit", "pair", "skills", "style",
@@ -801,6 +804,8 @@ def set_status(review_dir: Path, note_id: str, status: str, *, resolution: str =
     复核通过或用户定稿后才算已处理。每次都在批注的处理痕迹里追加一条。"""
     if status not in STATUSES:
         raise NoteError(f"status 须为 {STATUSES} 之一")
+    if status == "held":
+        raise NoteError("「搁住」由分析发起时自动设置，不能手动标记；解除走分析的解除入口")
     if status == "drafted" and by == "page":
         raise NoteError("「已初改·待复核」只能由代理在初改时标记")
     with locked(review_dir):
@@ -809,6 +814,9 @@ def set_status(review_dir: Path, note_id: str, status: str, *, resolution: str =
         doc = load(review_dir)
         note = _find(doc, note_id)
         prev = note.get("status", "open")
+        if prev == "held":
+            raise HandoffError(f"{note_id} 已被分析搁住（{note.get('hold')}），不在改稿流程里；"
+                               f"解除搁住或确认结论转出，都走分析的操作", code="note-held", id=note_id)
         items = _items(review_dir) if by != "page" else []
         cur = _batch_for(items, note, seq) if by != "page" else None
         db = note.get("draftBatch")
@@ -1140,9 +1148,10 @@ def handoff_state(review_dir: Path, *, full: bool = True, handoff: Any = None,
 
 
 TARGETS = ("final", "review")   # 这批做到哪一步：定稿 / 已初改·待复核（由用户在「交给 Agent」时选）
-BATCH_STATUSES = ("pending", "claimed", "drafted", "review", "reviewing", "done")
+BATCH_STATUSES = ("pending", "claimed", "drafted", "review", "reviewing", "done", "void")
 # pending 等待接收 → claimed 初改中（或单段流程的处理中）→ drafted 已初改·待复核（停下等用户）
 #   → review 等待复核接收 → reviewing 复核中 → done 已定稿；drafted / review 也可由用户直接定稿
+#   void 作废：批注全部被分析移出后整批作废，不再被领取（分析存储在共用锁内改写）
 
 
 class Unreviewed(HandoffError):
@@ -1190,7 +1199,8 @@ def handoff_submit(review_dir: Path, message: str = "", *, target: str = "final"
             item, merged = latest, True
         else:
             doc["seq"] = int(doc.get("seq", 0)) + 1
-            item, merged = {"seq": doc["seq"], "status": "pending", **snap}, False
+            doc["submitSeq"] = int(doc.get("submitSeq", 0)) + 1
+            item, merged = {"seq": doc["seq"], "status": "pending", "order": doc["submitSeq"], **snap}, False
             doc["items"].append(item)
         _handoff_commit(review_dir, doc, {"op": "handoff-update" if merged else "handoff", "by": by,
                                           "seq": item["seq"], "openCount": item["openCount"], "target": target})
@@ -1321,6 +1331,9 @@ def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "",
                 _finish(item, notes, items, by, summary)
             else:
                 item["status"] = to
+                if to == "review":
+                    doc["submitSeq"] = int(doc.get("submitSeq", 0)) + 1
+                    item.update(order=doc["submitSeq"], reviewRequestedAt=now_iso())
                 item["draftedCount"] = len(mine)
                 if summary:
                     item["summary"] = summary
@@ -1371,6 +1384,9 @@ def handoff_request_review(review_dir: Path, seq: int, message: str = "", *, all
         item = _find_batch(doc["items"], seq)
         if item.get("status") not in ("drafted", "review"):
             raise NoteError(f"第 {seq} 批不在「已初改·待复核」状态")
+        if item["status"] != "review":
+            doc["submitSeq"] = int(doc.get("submitSeq", 0)) + 1
+            item["order"] = doc["submitSeq"]
         item.update({"status": "review", "reviewRequestedAt": now_iso(), "reviewRequestedBy": by,
                      "reviewMessage": fix_text(message)[:MAX_MSG], "allowSubagents": bool(allow_subagents)})
         _handoff_commit(review_dir, doc, {"op": "handoff-review", "by": by, "seq": seq})

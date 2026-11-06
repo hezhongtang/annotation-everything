@@ -138,6 +138,10 @@ body.focus-mode.focus-composer #nform{display:flex}
 body.focus-mode #focusHint{position:fixed;display:flex;align-items:center;justify-content:center;gap:var(--ae-space-lg);left:0;right:0;bottom:12px;color:var(--ae-on-dark);font-size:var(--ae-small)}
 body.focus-mode.focus-composer #focusHint{display:none}
 #focusExit{font:inherit;background:transparent;color:inherit;border:1px solid var(--ae-mut);border-radius:var(--ae-radius);padding:var(--ae-gap-4) var(--ae-gap-10)}
+@media(max-width:1100px){
+  #modeSwitch{position:static;transform:none}
+  header:has(#modeSwitch:not([hidden])) h1{max-width:none}
+}
 @media(max-width:900px){
   :root{--ae-rail:42px;--ae-sidebar:200px;--ae-panel-height:240px}
   header{gap:var(--ae-gap-6);padding-right:var(--ae-gap-6)}header .layout-controls{padding-right:var(--ae-gap-4)}header h1{font-size:var(--ae-small)}header button{font-size:var(--ae-small);padding:0 var(--ae-gap-6)}
@@ -335,16 +339,77 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
 .overview-archived-hidden{display:flex;align-items:center;justify-content:space-between;gap:var(--ae-gap-10);padding:var(--ae-gap-12) var(--ae-gap-14);font-size:var(--ae-text);color:var(--ae-mut);border-bottom:1px solid var(--ae-line)}
 #overviewError{color:var(--ae-warning)}.overview-count{font-weight:400;margin-left:var(--ae-gap-6)}
 @media(max-width:800px){.overview-body{grid-template-columns:minmax(0,1fr);padding:var(--ae-gap-14);gap:var(--ae-gap-14)}.overview-top{padding:var(--ae-gap-12) var(--ae-gap-14);gap:var(--ae-gap-10)}.overview-detail{position:static}.overview-detail dl{grid-template-columns:80px minmax(0,1fr)}}
+
+/* 分析与批注共用控制台的三个区域、抽屉和设计变量。 */
+body.analysis-mode #panes,body.analysis-mode #bottomPanel>.panel-tabs,body.analysis-mode #panelBody,body.analysis-mode #sidebar>:not(#analysisSidebar){display:none}
+#analysisSidebar[hidden],#analysisMain[hidden],#analysisPanel[hidden]{display:none}
+#analysisSidebar{display:flex;flex-direction:column;min-height:0;overflow:auto}
+#analysisList{border-bottom:1px solid var(--ae-line);padding:var(--ae-space)}
+.analysis-list-item,.analysis-tree-node{display:block;width:100%;text-align:left;border:0;background:transparent;border-radius:var(--ae-radius);padding:var(--ae-space);font-size:var(--ae-text);line-height:1.5;overflow-wrap:anywhere}
+.analysis-list-item[aria-pressed=true]{background:var(--ae-selected);color:var(--ae-navy)}
+.analysis-list-item small{display:block;color:var(--ae-mut);font-size:var(--ae-small)}
+.analysis-tree-node:hover{background:var(--ae-line)}
+#analysisTree{padding:var(--ae-space)}
+.analysis-tree-group{margin:var(--ae-space) 0}.analysis-tree-group>summary{cursor:pointer;color:var(--ae-mut);font-size:var(--ae-small)}
+#analysisMain{display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--ae-panel)}
+.analysis-heading{padding:var(--ae-space-lg) var(--ae-gap-24);border-bottom:1px solid var(--ae-line);flex:none}
+.analysis-heading h2{font-size:var(--ae-heading);line-height:1.5;margin:0;overflow-wrap:anywhere}
+#analysisMeta{color:var(--ae-mut);font-size:var(--ae-small);margin:var(--ae-gap-6) 0 0}
+#analysisError{color:var(--ae-warning);font-size:var(--ae-text);margin:0;padding:0 var(--ae-gap-24);white-space:pre-wrap}
+#analysisError:empty{display:none}
+#analysisChanges{margin:var(--ae-space) var(--ae-gap-24);padding:var(--ae-space) var(--ae-space-lg);border-left:3px solid var(--ae-accent-line);font-size:var(--ae-small);line-height:1.7;white-space:pre-wrap}
+#analysisChanges:empty{display:none}#analysisChanges h3{font-size:var(--ae-small);margin:0 0 var(--ae-gap-4)}#analysisChanges p{margin:0}
+#analysisBody{overflow:auto;min-height:0;flex:1;padding:var(--ae-space-lg) var(--ae-gap-24);line-height:1.7}
+.analysis-question,.analysis-decision,.analysis-draft{border-bottom:1px solid var(--ae-line);padding:var(--ae-space-lg) 0;max-width:900px;overflow-wrap:anywhere}
+.analysis-question h3,.analysis-decision h3,.analysis-draft h3,.analysis-answers h3{font-size:var(--ae-title);margin:0 0 var(--ae-space)}
+.analysis-kind{color:var(--ae-mut);font-size:var(--ae-small);margin:0 0 var(--ae-gap-4)}
+.analysis-options{margin:var(--ae-space) 0;padding-left:var(--ae-gap-24)}
+.analysis-actions{display:flex;flex-wrap:wrap;gap:var(--ae-space);margin-top:var(--ae-space)}
+#analysisBody button,#analysisDraftDialog button{font:inherit;font-size:var(--ae-text);border:1px solid var(--ae-line);background:var(--ae-panel);border-radius:var(--ae-radius);padding:var(--ae-gap-5) var(--ae-gap-10)}
+.analysis-actions button:first-child,.analysis-draft button{color:var(--ae-navy);border-color:var(--ae-accent-line)}
+.analysis-source{font-size:var(--ae-small);color:var(--ae-mut);padding:var(--ae-space) 0}
+.analysis-source summary{cursor:pointer}.analysis-source blockquote{white-space:pre-wrap;color:var(--ae-ink)}
+.analysis-protection{border-left:3px solid var(--ae-accent-line);padding:var(--ae-space);font-size:var(--ae-small);color:var(--ae-mut)}
+.analysis-detached{border-left:1px dashed var(--ae-line);padding-left:var(--ae-space-lg);color:var(--ae-mut)}
+.analysis-needs-review,.analysis-reopened{border-left:3px solid var(--ae-warning);padding-left:var(--ae-space);color:var(--ae-ink)}
+.analysis-dead-end blockquote{white-space:pre-wrap;margin:var(--ae-space) 0}.analysis-refute{margin:var(--ae-space) 0}
+.analysis-page-cards{display:flex;gap:var(--ae-space);flex-wrap:wrap;margin:var(--ae-space) 0}.analysis-page-card{max-width:360px;text-align:left;white-space:normal}
+#analysisPageDialog .dlg{width:min(1140px,calc(100vw - 32px));max-width:none}#analysisPageWrap{height:min(72vh,720px);width:100%;overflow:hidden;background:var(--ae-stage)}
+#analysisPageHost{width:100%;height:100%}#analysisPageDialog .pad{padding:var(--ae-space)}
+.analysis-redecide{margin-top:var(--ae-space)}.analysis-redecide summary{cursor:pointer;font-size:var(--ae-small)}
+.analysis-update blockquote,.analysis-linked-note blockquote{margin:var(--ae-space) 0;padding:var(--ae-space) var(--ae-space-lg);border-left:2px solid var(--ae-line);white-space:pre-wrap;overflow-wrap:anywhere}
+.analysis-update h4{font-size:var(--ae-text);margin:var(--ae-space) 0}.analysis-note-history{margin-top:var(--ae-space);font-size:var(--ae-small)}.analysis-note-history summary{cursor:pointer}
+.analysis-linked-notes{margin-top:var(--ae-space-lg)}.analysis-linked-notes>h3{font-size:var(--ae-title)}
+#analysisPanel .pane-head{height:35px}#analysisTimeline{height:var(--ae-panel-height);max-height:35vh;overflow:auto;margin:0;padding:var(--ae-space-lg) var(--ae-gap-28);font-size:var(--ae-text);line-height:1.7}
+#analysisTimeline>li{padding:var(--ae-gap-6) 0}#analysisTimeline p{margin:var(--ae-gap-4) 0;white-space:pre-wrap}
+#analysisTimeline ul{padding-left:var(--ae-gap-20);color:var(--ae-mut)}
+#analysisManage button,#analysisTimeline button{font:inherit;font-size:var(--ae-small);border:1px solid var(--ae-line);border-radius:var(--ae-radius);background:var(--ae-panel);padding:var(--ae-gap-4) var(--ae-space)}
+#analysisTimeline .analysis-history-link{color:var(--ae-navy);border-color:transparent;text-align:left;padding-left:0}
+.analysis-line,.analysis-checkpoint{border-bottom:1px solid var(--ae-line)}
+.analysis-history-detail{max-width:900px}.analysis-history-detail h2{font-size:var(--ae-heading)}.analysis-history-detail h3{font-size:var(--ae-title)}
+.analysis-history-detail blockquote{margin:var(--ae-space) 0;padding:var(--ae-space) var(--ae-space-lg);border-left:2px solid var(--ae-line);white-space:pre-wrap;overflow-wrap:anywhere}
+.analysis-history-question{border-bottom:1px solid var(--ae-line);padding:var(--ae-space) 0}
+#analysisParkedSide{padding:var(--ae-space)}
+#analysisMain textarea{display:block;width:100%;min-height:90px;font:inherit;border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-space);margin:var(--ae-space) 0;background:var(--ae-panel);color:var(--ae-ink)}
+.analysis-text-answer,.analysis-verify{margin-top:var(--ae-space-lg)}.analysis-text-answer summary{cursor:pointer}.analysis-verify label{display:block;font-size:var(--ae-small)}
+#analysisPanelLists>ol:not(#analysisTimeline){height:var(--ae-panel-height);max-height:35vh;overflow:auto;margin:0;padding:var(--ae-space-lg) var(--ae-gap-28);line-height:1.7}
+#analysisPanelLists p,.analysis-question h3,.analysis-decision p{white-space:pre-wrap}
+#analysisPanelTabs{display:flex;gap:var(--ae-space);flex-wrap:wrap}#analysisPanelTabs button[aria-selected=true]{color:var(--ae-navy);border-bottom:2px solid var(--ae-navy)}
+body.panel-off #analysisPanelLists{display:none}
+body.panel-off #analysisTimeline{display:none}
+body.focus-mode.analysis-mode #analysisMain{display:flex;flex:1;padding:var(--ae-gap-28) 0 48px}
+body.focus-mode.analysis-mode #analysisPanel{display:none}
+@media(max-width:900px){#analysisBody{padding:var(--ae-space)}.analysis-heading{padding:var(--ae-space-lg)}#analysisError{padding:0 var(--ae-space)}#analysisTimeline{height:200px}}
 </style></head><body>
 <header>
   <div class="brand" aria-hidden="true">AE</div><h1 id="reviewTitle">__TITLE__</h1>
   <!-- #111 接入分析能力后显示；主操作始终复用 primaryAction 插槽。 -->
-  <div id="modeSwitch" role="group" data-aria="viewer.layout.mode" hidden><button aria-pressed="true" data-msg="viewer.layout.annotations"></button><button aria-pressed="false" data-msg="viewer.layout.analysis"></button></div>
+  <div id="modeSwitch" role="group" data-aria="viewer.layout.mode" hidden><button id="annotationMode" aria-pressed="true" data-msg="viewer.layout.annotations"></button><button id="analysisMode" aria-pressed="false" data-msg="viewer.layout.analysis"></button></div>
   <div class="layout-controls" role="group" data-aria="viewer.layout.title">
     <button id="sideToggle" class="icon-button" data-layout-toggle="side" data-title="viewer.layout.side" data-aria="viewer.layout.side" data-p-key="[" aria-controls="sidebar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></button><button id="scriptToggle" class="icon-button" data-layout-toggle="script" data-title="viewer.layout.script" data-aria="viewer.layout.script" data-p-key="]" aria-controls="scriptPane"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button><button id="panelToggle" class="icon-button" data-layout-toggle="panel" data-title="viewer.layout.panel" data-aria="viewer.layout.panel" data-p-key="&#92;" aria-controls="panelBody"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/></svg></button>
   </div>
   <button id="focusBtn" data-title="viewer.layout.focusTitle" data-p-key="F"><span data-msg="viewer.layout.focus"></span></button>
-  <div id="primaryAction"><button id="handBtn" data-title="viewer.hand.btnTitle"><span data-msg="viewer.hand.btn">交给 Agent</span></button></div>
+  <div id="primaryAction"><button id="handBtn" data-title="viewer.hand.btnTitle"><span data-msg="viewer.hand.btn">交给 Agent 改稿</span></button></div>
 </header>
 <div id="archiveBanner" class="archive-banner" role="status" hidden>
   <span data-msg="viewer.overview.archiveNotice"></span>
@@ -382,17 +447,20 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
     <button id="helpBtn" data-title="viewer.helpTitle" data-p-key="H" data-aria="viewer.help"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 4 2c-1 .5-1.5 1-1.5 2M12 17h.01"/></svg><span class="sr-only" data-msg="viewer.help"></span></button>
   </nav>
   <aside id="sidebar" data-aria="viewer.layout.pages">
+    <section id="analysisSidebar" hidden><div class="pane-head"><span data-msg="viewer.analysis.list"></span><button id="analysisNew" data-msg="viewer.life.new"></button></div><div id="analysisList"></div><div class="pane-head"><span data-msg="viewer.analysis.tree"></span></div><div id="analysisTree"></div><div class="pane-head"><span data-msg="viewer.life.parked"></span></div><div id="analysisParkedSide"></div></section>
     <div class="pane-head"><span data-msg="viewer.layout.pages"></span><button  class="icon-button" data-layout-toggle="side" data-title="viewer.layout.side" data-aria="viewer.layout.side" data-p-key="[" aria-controls="sidebar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></button></div>
     <div class="page-nav"><button id="prev" data-title="viewer.prevTitle" data-p-key="←" data-aria="viewer.prev"><span class="sr-only" data-msg="viewer.prev">上一页</span><span aria-hidden="true">←</span></button><select id="jump" data-aria="viewer.jumpLabel"></select><button id="next" data-title="viewer.nextTitle" data-p-key="→" data-aria="viewer.next"><span class="sr-only" data-msg="viewer.next">下一页</span><span aria-hidden="true">→</span></button></div>
     <nav id="secs"></nav><div id="pageTree"></div>
   </aside>
   <section id="workspace">
+    <section id="analysisMain" hidden><div class="analysis-heading"><h2 id="analysisFocus"></h2><p id="analysisMeta"></p><div class="analysis-actions" id="analysisManage"></div></div><p id="analysisError" role="alert"></p><section id="analysisChanges" role="status" aria-live="polite"></section><div id="analysisBody"></div></section>
     <div id="panes">
-      <section id="reportPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.report"></span></div><div class="slide" id="slide"><div id="host"></div></div></section>
+      <section id="reportPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.report"></span><button id="pageAnalysisStart" hidden data-msg="viewer.life.startPage"></button></div><div class="slide" id="slide"><div id="host"></div></div></section>
       <section id="scriptPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.script"></span><button  class="icon-button" data-layout-toggle="script" data-title="viewer.layout.script" data-aria="viewer.layout.script" data-p-key="]" aria-controls="scriptPane"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button></div><div class="script" id="script"><div id="pageScript"></div></div></section>
       <button id="scriptHandle" data-layout-toggle="script" data-title="viewer.layout.script" data-p-key="]" data-msg="viewer.target.script" aria-controls="scriptPane"></button>
     </div>
     <section id="bottomPanel" data-aria="viewer.layout.panel" data-p-key="&#92;">
+      <section id="analysisPanel" hidden><div class="pane-head"><div id="analysisPanelTabs" role="tablist"><button role="tab" data-analysis-tab="timeline" aria-controls="analysisTimeline" data-msg="viewer.analysis.timeline"></button><button role="tab" data-analysis-tab="assumptions" aria-controls="analysisAssumptions" data-msg="viewer.life.assumptions"></button><button role="tab" data-analysis-tab="parked" aria-controls="analysisParked" data-msg="viewer.life.parked"></button><button role="tab" data-analysis-tab="facts" aria-controls="analysisFacts" data-msg="viewer.life.facts"></button></div><button data-layout-toggle="panel" data-title="viewer.layout.panel" data-p-key="&#92;" aria-controls="analysisPanelLists" data-msg="viewer.layout.panel"></button></div><div id="analysisPanelLists"><ol id="analysisTimeline" role="tabpanel"></ol><ol id="analysisAssumptions" role="tabpanel" hidden></ol><ol id="analysisParked" role="tabpanel" hidden></ol><ol id="analysisFacts" role="tabpanel" hidden></ol></div></section>
       <div class="panel-tabs">        <button data-act="seelist" id="seeList" data-title="viewer.seeListTitle"><span id="seeListLabel" data-msg="viewer.seeList">本页批注</span> <span id="nhere">0</span></button><button id="allTab" data-msg="viewer.allTitle"></button><button id="batchesTab" data-msg="viewer.batch.title"></button><button  class="icon-button" data-layout-toggle="panel" data-title="viewer.layout.panel" data-aria="viewer.layout.panel" data-p-key="&#92;" aria-controls="panelBody"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/></svg></button></div>
       <div id="panelBody"><div class="notes"><div id="nlist"></div></div>
     <div class="form" id="nform"><div class="quote" id="qbox"></div><span id="styleChip"></span>
@@ -427,6 +495,9 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
   <button id="shortcutsBtn" data-msg="viewer.layout.shortcuts"></button>
 </footer>
 <div id="skillList" role="listbox" data-aria="viewer.skill.candidates"></div>
+<div class="modal" id="analysisDraftDialog"><div class="dlg"><div class="bar"><h2 data-msg="viewer.analysis.draft"></h2><button class="primary" id="analysisDraftCreate" data-msg="viewer.analysis.createDraft"></button><button data-close data-msg="viewer.cancel"></button></div><div class="pad"><p class="hint" data-msg="viewer.analysis.draftHint"></p><textarea id="analysisDraftText" data-aria="viewer.analysis.draft"></textarea></div></div></div>
+<div class="modal" id="analysisPageDialog" role="dialog" aria-modal="true" aria-labelledby="analysisPageTitle"><div class="dlg"><div class="bar"><h2 id="analysisPageTitle" data-msg="viewer.analysis.resolution.pagePreview"></h2><button data-close data-msg="viewer.close"></button></div><div class="pad"><p class="hint" data-msg="viewer.analysis.resolution.pagePreviewHint"></p><div id="analysisPageWrap"><div id="analysisPageHost"></div></div></div></div></div>
+<div class="modal" id="analysisStartDialog"><div class="dlg"><div class="bar"><h2 data-msg="viewer.life.newTitle"></h2><button class="primary" id="analysisStartCreate" data-msg="viewer.life.new"></button><button data-close data-msg="viewer.cancel"></button></div><div class="pad"><label for="analysisStartText" data-msg="viewer.life.focus"></label><textarea id="analysisStartText" data-ph="viewer.life.focusPlaceholder"></textarea><label for="analysisStartPage" data-msg="viewer.life.page"></label><select id="analysisStartPage"></select></div></div></div>
 <div class="modal" id="allnotes"><div class="dlg"><div class="bar"><h2 data-msg="viewer.allTitle">全部批注</h2>
 <button class="primary" id="copyAll" data-msg="export.copyAll">复制全部（粘贴给 Agent）</button><button id="dlAll" data-msg="export.download">下载 Markdown</button><button id="dlJson" data-msg="export.downloadJson">下载 JSON</button><select id="expLang" data-aria="export.langLabel" aria-label="导出语言"><option value="auto" data-msg="export.langAuto">跟随界面</option><option value="zh-CN">中文</option><option value="en">English</option></select><button id="openImp" data-msg="import.open">导入…</button><button id="dlFailed" style="display:none" data-title="viewer.recovery.failedTitle" data-msg="viewer.recovery.downloadFailed">下载未能保存的改动</button><button id="clearAll" data-msg="viewer.recovery.clear">清空</button><button data-close data-msg="viewer.close">关闭</button></div>
 <div class="pad" id="orphanBox" style="display:none;border-bottom:1px solid var(--ae-line)"></div>
@@ -626,6 +697,7 @@ function applyLocale(){
   renderArchiveBanners();
   renderOverview();
   applyLayout();
+  analysisRenderKey="";analysisRoute();
 }
 $("localePick").addEventListener("change",()=>{
   try{localStorage.setItem(LOCALE_STORE, $("localePick").value)}catch(e){}
@@ -679,6 +751,7 @@ const unH=t=>{const d=document.createElement("textarea");d.innerHTML=t;return d.
 const newId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const okId=x=>typeof x==="string"&&/^[A-Za-z0-9_-]{1,64}$/.test(x);
 const isDone=x=>x.status==="resolved";
+const isHeld=x=>x.status==="held";
 const isDraft=x=>x.status==="drafted";   // 两段流程：初改完成、等复核或用户定稿
 let flight=new Set();                    // 已交给 Agent、还在路上（等待接收 / 处理中 / 等待复核 / 复核中）的批注
 const inFlight=x=>!isDone(x)&&!isDraft(x)&&flight.has(x.id);
@@ -826,7 +899,7 @@ async function api(method,path,body){
     const message=key?tMsg("serve.err."+key):r.status>=500
       ?tMsg("viewer.error.unknown",{status:r.status,code:j.code||"unknown"})
       :detail||tMsg("viewer.error.rejected",{status:r.status,code:j.code||"unknown"});
-    throw Object.assign(new Error(message),{status:r.status,code:j.code})}
+    throw Object.assign(new Error(message),{status:r.status,code:j.code,params:j.params&&typeof j.params==="object"?j.params:{}})}
   if(!ours)throw Object.assign(new Error(tMsg("viewer.error.format")),{status:0,mismatch:true});
   return j}
 // 只认同一份审阅的服务：端口被别的审阅目录或别的程序占用时，不读它、不往里写
@@ -844,7 +917,9 @@ function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"
 const okRegion=r=>r&&typeof r==="object"&&["x","y","w","h"].every(k=>r[k]!=null&&r[k]!==""&&isFinite(+r[k]))&&+r.w>0&&+r.h>0?{x:+r.x,y:+r.y,w:+r.w,h:+r.h}:null;
 function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:String(x.title||""),target:String(x.target||""),text:String(x.text||""),
     quote:String(x.quote||""),quoteFrom:String(x.quoteFrom||""),pin:x.pin&&x.pin.x!=null?{x:+x.pin.x,y:+x.pin.y}:null,
-    status:x.status==="resolved"||x.status==="drafted"?x.status:"open",at:typeof x.at==="string"?x.at:nowIso()};
+    status:["resolved","drafted","held"].includes(x.status)?x.status:"open",at:typeof x.at==="string"?x.at:nowIso()};
+  ["hold","heldBy","analysisId","fromAnalysis"].forEach(k=>{if(typeof x[k]==="string")n[k]=x[k]});
+  if(x.basis&&typeof x.basis==="object"&&!Array.isArray(x.basis))n.basis=JSON.parse(JSON.stringify(x.basis));
   if(Array.isArray(x.trail))n.trail=x.trail.filter(e=>e&&typeof e==="object"&&typeof e.action==="string").slice(-50);
   [["draftBatch","drafted"],["resolvedBatch","resolved"]].forEach(([k,st])=>{if(n.status===st&&Number.isInteger(x[k])&&x[k]>0)n[k]=x[k]});
   ["draftedAt","draftedBy"].forEach(k=>{if(n.status==="drafted"&&typeof x[k]==="string")n[k]=x[k]});
@@ -912,20 +987,20 @@ function onSent(op,r){
   if(op.kind==="handoff"){if(!pend.get().some(o=>o.kind==="handoff"))handQueued=false;setHand(r.handoff);
     toast(r.merged?tMsg("viewer.hand.toast.merged"):tMsg("viewer.hand.toast.sent"),3500)}
   else if(op.kind==="import")toast(tMsg("import.complete",{label:tMsg("import.saved"),added:r.added,updated:r.updated||0,skipped:r.skipped}),3500)}
-function onRejected(op,e){   // 服务明确不接受（4xx）：不重试
+function onRejected(op,e){   // 服务明确不接受（4xx）：不重试；返回补传结束时显示的提示。
   saveFailures++;LS.set(K.rejected,newId());   // 其他标签页等待补传锁时也能看到保存被拒
   if(op.kind==="handoff"){handQueued=pend.get().some(o=>o.kind==="handoff");renderHand();
     if(e.code&&e.code.startsWith("receiver-")){failed.push(op,e.message);if(!$("handMsg").value.trim())$("handMsg").value=op.message||""}
-    toast(e.status===404||e.status===405?tMsg("viewer.hand.toast.legacy"):tMsg("viewer.hand.toast.failed",{message:e.message}),6000);return}
-  toast(tMsg("viewer.recovery.rejected",{reason:e.message}),6000);
+    return ()=>toast(e.status===404||e.status===405?tMsg("viewer.hand.toast.legacy"):tMsg("viewer.hand.toast.failed",{message:e.message}),6000)}
   if(op.kind==="add"&&!editOf(op.note)&&op.note.page===P[i].n&&!$("ntext").value.trim()){   // 把内容放回输入框
-    $("ntext").value=op.note.text;quote=op.note.quote||"";quoteFrom=op.note.quoteFrom||"";pendingPin=op.note.pin||null;pendingRegion=op.note.region||null;styleOn=!!op.note.style;quotePair=op.note.pair||null;showQuote();updateStyleChip();drawPins()}}
+    $("ntext").value=op.note.text;quote=op.note.quote||"";quoteFrom=op.note.quoteFrom||"";pendingPin=op.note.pin||null;pendingRegion=op.note.region||null;styleOn=!!op.note.style;quotePair=op.note.pair||null;showQuote();updateStyleChip();drawPins()}
+  return ()=>toast(tMsg("viewer.recovery.rejected",{reason:e.message}),6000)}
 const fails={};let flushing=null;
 function flush(){if(FILE)return Promise.resolve();
   if(!flushing)flushing=(navigator.locks?navigator.locks.request(`ae-flush-${RID}`,doFlush):doFlush()).finally(()=>{flushing=null});
   return flushing}
 async function doFlush(){   // 按顺序补传；多个标签页之间用浏览器锁排队，按操作 id 移除
-  busy++;
+  let successful=true,problem=null;busy++;
   try{for(;;){   // 补完一轮再对一次服务端；这期间又有新改动进队列就接着补
     for(let q=pend.get();q.length;q=pend.get()){const op=q[0];
       if(!op.opId){op.opId=newId();pend.set(q)}   // 兜底：没有操作 id 的条目先补上再发，免得移除时误删别的
@@ -934,24 +1009,27 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
         if(hasFullCheck){const d=await getNotes();fullCheckSupported=hasFeature(d,"full-check");srvNoFullCheck=!fullCheckSupported;
           const latest=d.handoff&&d.handoff.latest,pendingCheck=latest&&latest.status==="pending"&&latest.fullCheck===true;
           if(!fullCheckSupported&&(op.fullCheck===true||pendingCheck)){
-            toast(tMsg("viewer.hand.toast.fullCheckStashed"),6000);return}}
+            problem=()=>toast(tMsg("viewer.hand.toast.fullCheckStashed"),6000);return false}}
         const r=await send(op,fullCheckSupported);
         if(r&&r.doc&&!sameReview(r.doc))throw Object.assign(new Error(tMsg("viewer.error.mismatch")),{status:0,mismatch:true});
         if(hasFullCheck){const latest=r&&r.handoff&&r.handoff.latest,requested=op.fullCheck===true;
           const legacyOff=!requested&&r&&!("acceptedFullCheck" in r)&&latest&&latest.seq===r.seq&&latest.fullCheck!==true;
           if(!r||(r.acceptedFullCheck!==requested&&!legacyOff)){
-            srvNoFullCheck=true;toast(tMsg("viewer.hand.toast.fullCheckUnconfirmed"),9000);return}}
+            srvNoFullCheck=true;problem=()=>toast(tMsg("viewer.hand.toast.fullCheckUnconfirmed"),9000);return false}}
         pend.remove(op.opId);delete fails[op.opId];onSent(op,r||{})}
       catch(e){
-        if(e.mismatch){mode="mismatch";return}
-        if(!e.status){if(mode==="server")toast(tMsg("viewer.offline.stashed"),3500);mode="offline";return}
+        successful=false;
+        if(e.mismatch){mode="mismatch";problem=()=>toast(e.message,6000);return false}
+        if(!e.status){if(mode==="server")problem=()=>toast(tMsg("viewer.offline.stashed"),3500);mode="offline";return false}
         if(e.status>=500){fails[op.opId]=(fails[op.opId]||0)+1;
-          if(fails[op.opId]<MAX_FAILS){toast(e.message,4000);return}
+          if(fails[op.opId]<MAX_FAILS){problem=()=>toast(e.message,4000);return false}
           failed.push(op,e.message);pend.remove(op.opId);   // 同一条连续失败：移到「未能保存」，不再堵住后面的改动
-          toast(tMsg("viewer.recovery.failed"),6000);continue}
-        pend.remove(op.opId);onRejected(op,e)}}
-    mode="server";await resync();if(!pend.get().length)break}}
-  finally{busy--;updateMode()}}
+          problem=()=>toast(tMsg("viewer.recovery.failed"),6000);continue}
+        pend.remove(op.opId);problem=onRejected(op,e)}}
+    mode="server";await resync();if(!pend.get().length)break}
+    return successful}
+  // 最后一个失败或受阻提示优先于后续成功、处理状态等通知。
+  finally{busy--;updateMode();if(problem)problem()}}
 async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 // 轮询带回的「最新一批（完整内容）+ 投递状态」签名：逐字段相同才认为这次轮询没有新东西可画。
 // 只有摘要类字段（处理摘要、附言、认领时间……）变化时也要重画，所以比 handSig 那几个字段细。
@@ -962,6 +1040,7 @@ function handPollKeyOf(d){const h=d&&d.handoff||null;
 function applyServer(d,quietHand){
   agentDelivery=d.agentDelivery||null;
   receiver=d.receiver||null;
+  setAnalysisSupport(d);
   if(!archiveBusy)setCurrentArchive(d.archived);
   const old=!hasFeature(d,"marks");if(old&&!srvOld)toast(tMsg("viewer.mode.oldTitle"),9000);srvOld=old;
   srvNoStages=!hasFeature(d,"stages");
@@ -985,14 +1064,18 @@ async function poll(){
   const key=handPollKeyOf(d),quiet=key===handPollKey;   // 数据没变：不重画提交状态和续看提示
   handPollKey=key;
   queueSnap={p:pend.get(),f:failed.get()};   // 这一次轮询里队列只读一次 localStorage
+  // 新升级说明等整条链路成功结束后显示，失败或受阻提示优先。
+  const upgradeNotice={key:null,successful:false};analysisUpgradePoll=upgradeNotice;
   try{
+    if(was==="offline"&&rev!=null)toast(tMsg("viewer.offline.reconnected"));
     applyServer(d,quiet);
     if(pend.get().length){   // 有暂存要补传：补传期间别的标签页可能改队列，之后按最新的读
       const before=pend.get().length;queueSnap=null;
-      await flush();if(mode==="server"&&!pend.get().length&&before)toast(tMsg("viewer.offline.retried"));return}
-    if(was==="offline"&&rev!=null)toast(tMsg("viewer.offline.reconnected"));
-    updateMode()}
-  finally{queueSnap=null}}
+      upgradeNotice.successful=await flush();
+      if(upgradeNotice.successful&&mode==="server"&&!pend.get().length&&before)toast(tMsg("viewer.offline.retried"));return}
+    updateMode();upgradeNotice.successful=true}
+  finally{queueSnap=null;analysisUpgradePoll=null;
+    if(upgradeNotice.successful&&upgradeNotice.key&&!analysisSupported)showAnalysisUpgrade(upgradeNotice.key)}}
 // ---------- 服务不在时：说清这个端口上现在是谁，给出本审阅的启动命令（按审阅标识，页面里不写本机路径） ----------
 const SERVE_CMD=`python3 ~/.claude/skills/annotation-everything/scripts/serve.py ${RID}`;
 let occupant=null, barShownFor="", barClosedFor="", probedAt=0, firstPolled=false;   // 首次轮询前不显示（打开页面时不闪红条）
@@ -1029,7 +1112,7 @@ function updateMode(){const m=$("mode"),q=pend.get().length,f=failed.get().lengt
   else if(mode==="mismatch"){m.textContent=tMsg("viewer.mode.mismatch",{extra});m.title=tMsg("viewer.mode.mismatchTitle")}
   else{m.textContent=tMsg("viewer.mode.file");m.title=tMsg("viewer.mode.fileTitle")}
   const fb=$("dlFailed");if(fb)fb.style.display=f?"":"none";
-  syncSrvBar();renderServiceControls();renderReceiver()}
+  syncSrvBar();renderServiceControls();renderReceiver();analysisRouteLabels()}
 addEventListener("storage",e=>{
   invalidateExternal();   // 别的标签页改了这些键：外部审阅暂存的解析结果作废
   if(FILE&&e.key===K.notes){const v=LS.get(K.notes,[]);notes=Array.isArray(v)?v:[];refreshList()}   // 别的标签页改了：跟上
@@ -1103,7 +1186,7 @@ function indexNotes(){const stats=new Map(),nos=new Map(),marks=new Map(),seq=ne
   notes.forEach(x=>{let c=stats.get(x.page);
     if(!c)stats.set(x.page,c={o:0,f:0,d:0,n:0});
     c.n++;
-    if(isDraft(x)){c.d++;d++}else if(inFlight(x)){c.f++;f++}else if(!isDone(x)){c.o++;o++}
+    if(isDraft(x)){c.d++;d++}else if(inFlight(x)){c.f++;f++}else if(!isDone(x)&&!isHeld(x)){c.o++;o++}
     if(hasMark(x)){const list=marks.get(x.page);
       if(list)list.push(x);else marks.set(x.page,[x]);
       const k=(seq.get(x.page)||0)+1;seq.set(x.page,k);nos.set(x.page+"\u0000"+x.id,k)}});
@@ -1126,10 +1209,14 @@ function drawPins(){stage.querySelectorAll(".ae-pin,.ae-region").forEach(e=>{if(
 function noteSummary(x){const qe=editOf(x);return qe?(qe.op==="delete"?tMsg("viewer.deleteSummary",{text:qe.from}):tMsg("viewer.replaceSummary",{from:qe.from,to:qe.to})):String(x.text||"")}
 function editOf(x){const e=x.edit;return e&&typeof e==="object"&&(e.op==="delete"||e.op==="replace")?e:null}
 function noteHtml(x){
-  const done=isDone(x), dr=isDraft(x), fl=inFlight(x), ed=editingId===x.id, id=escH(x.id), qe=editOf(x);
-  const acts=ed?`<button data-act="save" data-id="${id}">${tMsg("viewer.save")}</button><button data-act="remark" data-id="${id}" title="${escH(tMsg("viewer.remarkTitle"))}">${tMsg(hasMark(x)?"viewer.remarkAgain":"viewer.remark")}</button>${hasMark(x)?`<button data-act="unpin" data-id="${id}">${tMsg("viewer.unpin")}</button>`:""}<button data-act="cancel">${tMsg("viewer.cancel")}</button>`
+  const done=isDone(x), held=isHeld(x), dr=isDraft(x), fl=inFlight(x), id=escH(x.id), qe=editOf(x);
+  const changed=held&&x.hold==="结论已变";
+  const ed=editingId===x.id&&!changed;
+  const acts=changed?(editingId===x.id?`<button data-act="cancel">${tMsg("viewer.cancel")}</button>`:""):ed?`<button data-act="save" data-id="${id}">${tMsg("viewer.save")}</button><button data-act="remark" data-id="${id}" title="${escH(tMsg("viewer.remarkTitle"))}">${tMsg(hasMark(x)?"viewer.remarkAgain":"viewer.remark")}</button>${hasMark(x)?`<button data-act="unpin" data-id="${id}">${tMsg("viewer.unpin")}</button>`:""}<button data-act="cancel">${tMsg("viewer.cancel")}</button>`
     :`<button data-act="edit" data-id="${id}">${tMsg("viewer.edit")}</button>${dr?`<button data-act="resolve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${tMsg("viewer.finalize")}</button><button data-act="reopen" data-id="${id}">${tMsg("viewer.returnForRedo")}</button>`
-      :`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
+      :held?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
+  const analysisLink=x.heldBy||x.analysisId||x.fromAnalysis;
+  const analysisActs=analysisSupported&&!FILE?(analysisLink?`<button data-act="analysis-open" data-analysis="${escH(analysisLink)}">${tMsg("viewer.analysis.open")}</button>`:!done&&!held&&!dr?`<button data-act="analysis-start" data-id="${id}">${tMsg("viewer.analysis.start")}</button>`:""):"";
   const sk=Array.isArray(x.skills)?x.skills:[];
   const body=ed?(qe&&qe.op==="delete"?`<div class="body"><span class="op">${tMsg("viewer.quickDelete")}</span><del>${escH(qe.from)}</del></div>`:`<textarea id="etext">${escH(editBuf[x.id]??(qe?qe.to:x.text))}</textarea>`)
       +`<input class="eskills" id="eskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" placeholder="${escH(tMsg("viewer.skill.editPlaceholder"))}" value="${escH(editBuf["sk:"+x.id]??sk.join(", "))}">`
@@ -1138,9 +1225,10 @@ function noteHtml(x){
     :`<div class="body">${escH(x.text).replace(/\n/g,"<br>")}</div>`;
   const who=w=>escH(w==="claude"?"Claude":w);
   const targetShown=targetLabel(x.target);
-  return `<div class="note${done?" done":""}${dr?" drafted":""}" data-note="${id}"><div class="meta"><span>${escH(targetShown)}${qe?` · ${tMsg(qe.op==="delete"?"viewer.quickDelete":"viewer.quickReplace")}`:""}${x.style&&x.style.scope?` · ${tMsg("viewer.styleBtn")}${hasMark(x)?"":`·${styleLabel(x.style.scope)}`}`:""}${hasMark(x)?` · ${tMsg(regionOf(x)?"viewer.markKind.region":"viewer.markKind.pin")} ${markNo(x.page,x.id)}`:""}${done?`<span class="chip">${tMsg("viewer.chip.resolved")}${x.resolvedBy&&x.resolvedBy!=="page"?" · "+who(x.resolvedBy):""}</span>`:""}${dr?`<span class="chip dr">${tMsg("viewer.chip.drafted")}${x.draftedBy?" · "+who(x.draftedBy):""}</span>`:""}${fl?`<span class="chip fl" title="${escH(tMsg("viewer.chip.inFlightTitle"))}">${tMsg("viewer.chip.inFlight")}</span>`:""}</span><span class="acts">${acts}</span></div>`
+  return `<div class="note${done?" done":""}${dr?" drafted":""}" data-note="${id}"><div class="meta"><span>${escH(targetShown)}${qe?` · ${tMsg(qe.op==="delete"?"viewer.quickDelete":"viewer.quickReplace")}`:""}${x.style&&x.style.scope?` · ${tMsg("viewer.styleBtn")}${hasMark(x)?"":`·${styleLabel(x.style.scope)}`}`:""}${hasMark(x)?` · ${tMsg(regionOf(x)?"viewer.markKind.region":"viewer.markKind.pin")} ${markNo(x.page,x.id)}`:""}${done?`<span class="chip">${tMsg("viewer.chip.resolved")}${x.resolvedBy&&x.resolvedBy!=="page"?" · "+who(x.resolvedBy):""}</span>`:""}${dr?`<span class="chip dr">${tMsg("viewer.chip.drafted")}${x.draftedBy?" · "+who(x.draftedBy):""}</span>`:""}${held?`<span class="chip held">${tMsg(changed?"viewer.analysis.protect.heldChanged":"viewer.analysis.held")}</span>`:""}${fl?`<span class="chip fl" title="${escH(tMsg("viewer.chip.inFlightTitle"))}">${tMsg("viewer.chip.inFlight")}</span>`:""}</span><span class="acts">${acts}${analysisActs}</span></div>`
    +(x.quote&&!qe?`<blockquote>${x.quoteFrom?escH(tMsg("viewer.quoteFrom",{side:targetLabel(x.quoteFrom)})):""}${escH(x.quote)}</blockquote>`:"")
    +body
+   +(x.analysisSuggestion&&!done&&!held?`<aside class="analysis-suggestion"><strong>${tMsg("viewer.life.suggestion")}</strong>${x.analysisSuggestion.reason?`<p>${escH(x.analysisSuggestion.reason)}</p>`:""}</aside>`:"")
    +(x.orphan?`<div class="anchor" style="color:var(--ae-warning)">${escH(tMsg("viewer.orphanWarning"))}</div>`:"")
    +(ed?`<div class="anchor">${tMsg("viewer.moveTo")} <select id="epage">${P.map(q=>`<option value="${q.n}"${q.n===(editBuf["pg:"+x.id]??x.page)?" selected":""}>${escH(tMsg("viewer.page",{page:q.n}))}</option>`).join("")}</select></div>`:"")
    +(!ed&&x.anchor?`<div class="anchor">${tMsg("viewer.anchorLabel")}${escH(clip(x.anchor,140))}</div>`:"")
@@ -1305,6 +1393,8 @@ function addNote(){let text=$("ntext").value.trim();
   quote="";quotePair=null;pendingPin=null;$("ntext").value="";autoGrow();showQuote();delete drafts[p.n];SS.set(K.drafts,drafts);mutate({kind:"add",note});if(focusMode)closeComposer();toast(tMsg("viewer.added"))}
 $("bottomPanel").addEventListener("click",e=>{const b=e.target.closest("[data-act]");if(!b)return;const id=b.dataset.id;
   switch(b.dataset.act){
+    case "analysis-start":startAnalysis(id);break;
+    case "analysis-open":openAnalysis(b.dataset.analysis);break;
     case "add":addNote();break;
     case "always":openAlways();break;
     case "seelist":setDrawer("panel",true);$("nlist").scrollIntoView({block:"start",behavior:"smooth"});break;
@@ -1696,7 +1786,7 @@ function requestReview(seq,message,sub){return batchAction("/api/handoff/review"
 function finalizeBatch(seq){const dn=notes.filter(x=>isDraft(x)&&x.draftBatch===seq).length;
   if(!confirm(tMsg("viewer.hand.toast.confirmFinalize",{seq,n:dn})))return;
   return batchAction("/api/handoff/finalize",{seq},tMsg("viewer.hand.toast.finalized",{seq}))}
-$("handBtn").onclick=()=>openHand();$("handState").onclick=()=>hand&&hand.latest?openBatches():openHand();
+$("handBtn").onclick=()=>analysisShown()?submitAnalysis():openHand();$("handState").onclick=()=>hand&&hand.latest?openBatches():openHand();
 $("handHist").onclick=()=>{$("hand").classList.remove("on");openBatches()};
 // 处理记录：每次「交给 Agent」算一批——提交、接收、收尾，这批解决了哪些批注，处理摘要
 const fmtIso=v=>fmtTime(Date.parse(v||"")||0);
@@ -2011,6 +2101,14 @@ document.addEventListener("keydown",e=>{
   if(overviewShown())return;
   if(["SELECT","TEXTAREA","INPUT"].includes(e.target.tagName)||e.target.isContentEditable||e.isComposing||e.metaKey||e.ctrlKey||e.altKey)return;
   const k=e.key.toLowerCase();
+  if(analysisShown()){
+    if(document.querySelector(".modal.on")){if(e.key==="Escape")document.querySelectorAll(".modal.on").forEach(el=>el.classList.remove("on"));return}
+    if(k==="f"){e.preventDefault();toggleFocus();return}
+    if(k==="["||k==="\\"){e.preventDefault();const name=k==="["?"side":"panel";setDrawer(name,!drawerOpen(name));return}
+    if(k==="a"){e.preventDefault();submitAnalysis();return}
+    if(e.key==="Escape"&&focusMode){toggleFocus(false);return}
+    if(k==="h")$("help").classList.toggle("on");return
+  }
   if($("stylemenu").classList.contains("on")){   // 风格优化范围：1 整页、2 标注处（3 是旧版的「标点处」，同 2）
     if(k==="1"||k==="2"||k==="3"){e.preventDefault();chooseStyle(k==="1"?"page":"mark");return}
     if(e.key==="Escape"){closeStyleMenu();return}}
@@ -2037,6 +2135,472 @@ document.addEventListener("keydown",e=>{
   else if(e.key==="Home")go(0);else if(e.key==="End")go(N-1);
   else if(e.key==="h"||e.key==="H")$("help").classList.toggle("on");
   else if(e.key==="Escape"){document.querySelectorAll(".modal").forEach(m=>m.classList.remove("on"));if(markMode)setMarkMode(false);closePinPop();closeStyleMenu()}});
+// ---------- Analysis view helpers ----------
+function analysisCurrentRound(state){return state&&state.status!=="closed"?(state.rounds||[]).slice().reverse().find(r=>(!r.line||r.line===(state.line||"main"))&&["open","submitted","claimed"].includes(r.status))||null:null}
+function analysisRoundAnswerItems(state,round){
+  const context=typeof analysisContext!=="undefined"&&analysisContext&&analysisContext.analysis===state.id&&analysisContext.round===round.seq&&!analysisContext.historical?analysisContext:null;
+  const items=[],seen=new Set();
+  for(const item of [...(round.items||[]),...((context&&context.answeredItems)||[])]){
+    if(seen.has(item.key))continue;
+    if(item.type==="question"&&!analysisNodeActive(state,item.node))continue;
+    if(item.type==="assumption"&&(state.assumptions&&state.assumptions[item.assumption]||{}).refuted)continue;
+    if(item.type==="update"&&(state.updates&&state.updates[item.update]||{}).status!=="pending")continue;
+    if(item.type==="deadend"&&(state.deadEnds&&state.deadEnds[item.deadEnd]||{}).status==="review")continue;
+    seen.add(item.key);
+    items.push(item.type==="structure"&&!item.proposal?{...item,proposal:(round.proposals||[]).find(p=>"S:"+p.key===item.key)||{...item,key:item.key.slice(2)}}:item)
+  }
+  const priority={deadend:0,update:1,assumption:2,structure:3,question:4};
+  return items.sort((a,b)=>priority[a.type]-priority[b.type])
+}
+function analysisDeadEndTarget(state,end){
+  if(end.kind==="line")return analysisLineName(state.lines&&state.lines[end.targetLine]?state:{lines:{[end.targetLine]:{ordinal:end.targetOrdinal}}},end.targetLine);
+  const node=state.nodes&&state.nodes[end.node]||Object.values(state.lines||{}).map(line=>line.nodes&&line.nodes[end.node]).find(Boolean)||{};
+  return tMsg("viewer.analysis.resolution.optionTarget",{question:end.targetText||node.short||node.text||tMsg("viewer.analysis.question"),answer:end.optionLabel||node.options&&node.options[end.option]||""})
+}
+function analysisDeadEndHtml(state,end,round=null,item=null){
+  const texts=end.assumptionTexts||(end.assumptions||[]).map(id=>state.assumptions&&state.assumptions[id]&&state.assumptions[id].text||"").filter(Boolean);
+  const disabled=analysisBusy||!round||!["open","submitted","claimed"].includes(round.status)?" disabled":"";
+  const actions=item?`<div class="analysis-actions"><button data-analysis-act="answer" data-key="${escH(item.key)}" data-kind="accept"${disabled}>${tMsg("viewer.analysis.resolution.confirmDeadEnd")}</button><button data-analysis-act="answer" data-key="${escH(item.key)}" data-kind="reject"${disabled}>${tMsg("viewer.life.reject")}</button></div>`:"";
+  return `<article class="analysis-question analysis-dead-end"${item?` data-analysis-item="${escH(item.key)}"`:""}><p class="analysis-kind">${tMsg("viewer.analysis.resolution.deadEnd")} · ${tMsg("viewer.analysis.resolution.deadStatus."+(end.status||"pending"))}</p><h3>${escH(analysisDeadEndTarget(state,end))}</h3><blockquote>${escH(end.reason||"")}</blockquote><p class="hint">${escH(tMsg(texts.length?"viewer.analysis.resolution.dependsOn":"viewer.analysis.resolution.noDependencies",{assumptions:texts.join(tMsg("viewer.life.listSeparator"))}))}</p>${actions}</article>`
+}
+function analysisPageReferences(state){
+  const pages=typeof P!=="undefined"?P:[],seen=new Set(),out=[];
+  for(const ref of [state.sourceCopy||{},...(state.linkedNotes||[])]){
+    if(!ref.key&&!Number.isInteger(ref.page))continue;
+    const matches=ref.key?pages.filter(page=>page.key===ref.key):pages.filter(page=>page.n===ref.page);
+    const page=matches.length===1?matches[0]:null,key=page?"page:"+page.n:ref.key?"key:"+ref.key:"page:"+ref.page;
+    if(seen.has(key))continue;seen.add(key);out.push({page,ref})
+  }
+  return out
+}
+function analysisPageCardsHtml(state){
+  const cards=analysisPageReferences(state).map(({page,ref})=>page?`<button class="analysis-page-card" data-analysis-page="${page.n}">${escH(tMsg("viewer.analysis.resolution.pageCard",{page:page.n,title:typeof unH==="function"?unH(page.title||""):page.title||""}))}</button>`:`<span class="analysis-page-card hint">${tMsg("viewer.analysis.resolution.pageUnavailable")}</span>`).join("");
+  return cards?`<div class="analysis-page-cards">${cards}</div>`:""
+}
+function analysisChangeData(op,before,after,body={}){
+  before=before||{};after=after||before;
+  const node=before.nodes&&before.nodes[body.node||String(body.key||"").slice(2)]||{},decision=after.decisions&&after.nodes&&after.nodes[body.node]&&after.decisions[after.nodes[body.node].decision];
+  const params={focus:after.focus||before.focus||"",question:node.short||node.text||"",answer:decision&&decision.label||node.options&&node.options[body.option]||"",line:analysisLineName(after,body.line||after.line||"main")};
+  let name=op;
+  if(op==="refute"){params.assumption=before.assumptions&&before.assumptions[body.assumption]&&before.assumptions[body.assumption].text||"";name=before.line!==after.line?"refuteFork":"refuteOnly"}
+  if(op==="seal"){const checkpoint=(after.checkpoints||[]).find(c=>c.id===body.checkpoint)||(after.checkpoints||[]).slice(-1)[0];params.checkpoint=checkpoint?analysisCheckpointName(checkpoint):tMsg("viewer.analysis.history.currentCheckpoint")}
+  if(op==="submit"&&(before.rounds||[]).some(round=>round.seq===body.round&&round.status==="submitted"))name="submitAgain";
+  if(op==="confirm"&&before.sourceState!=="resolved"&&after.sourceState==="resolved")name="confirmSource";
+  if(op==="answer"){
+    const value=body.value||{},round=(before.rounds||[]).find(round=>round.seq===body.round)||analysisCurrentRound(before)||{proposals:[]};
+    params.answer=analysisAnswerLabel(before,round,body.key||"",value);
+    name=String(body.key||"").startsWith("D:")?value.kind==="accept"?"deadAccepted":"deadRejected":String(body.key||"").startsWith("U:")?value.kind==="accept"?"updateAccepted":"updateRejected":String(body.key||"").startsWith("A:")?"assumptionAnswered":String(body.key||"").startsWith("S:")?"structureAnswered":value.kind==="park"?"park":value.kind==="verify"?value.allowExternal===true?"verifyExternal":"verifyLocal":"answered"
+  }
+  const oldNotes=new Map((before.linkedNotes||[]).map(note=>[note.id,note.status]));
+  const held=(after.linkedNotes||[]).filter(note=>note.status==="held"&&note.hold==="结论已变"&&oldNotes.get(note.id)==="open").length;
+  const restored=(after.linkedNotes||[]).filter(note=>note.status==="open"&&oldNotes.get(note.id)==="held").length;
+  return {analysis:after.id,key:"viewer.analysis.resolution.change."+name,params,held,restored}
+}
+function analysisChangeText(change){return tMsg(change.key,change.params)+(change.held||change.restored?" "+tMsg("viewer.analysis.resolution.change.effects",{held:change.held,restored:change.restored}):"")}
+function analysisChangeHtml(state){const change=typeof analysisLastChange!=="undefined"?analysisLastChange:null;return change&&state&&change.analysis===state.id?`<h3>${tMsg("viewer.analysis.resolution.changes")}</h3><p>${escH(analysisChangeText(change))}</p>`:""}
+function analysisLocked(state){return !!state&&(state.protection?state.protection.locked===true:(state.rounds||[]).some(r=>r.status==="claimed"))}
+function analysisOperationProtected(op){return ["redecide","update-note","keep-note","delete-note","convert","confirm","release","seal","fork","switch-line","close","refute"].includes(op)}
+function analysisAssumptionsHtml(state){
+  const disabled=analysisBusy||analysisLocked(state)||state.status==="closed"||analysisHistoryFor(state)?" disabled":"";
+  const assumptions=Object.entries(state.assumptions||{}).map(([id,a])=>`<li><p>${escH(a.text)} <span class="chip">${tMsg("viewer.life.status."+(a.refuted?"refuted":a.confirmed&&a.confirmed[state.line]||"pending"))}</span></p>${!a.refuted?`<button class="analysis-refute" data-analysis-refute="${escH(id)}"${disabled}>${tMsg("viewer.analysis.resolution.refute")}</button>`:""}</li>`).join("")||`<li class="empty">${tMsg("viewer.life.noAssumptions")}</li>`;
+  const ends=Object.values(state.deadEnds||{});
+  return assumptions+(ends.length?`<li><h3>${tMsg("viewer.analysis.resolution.deadEnds")}</h3>${ends.map(end=>analysisDeadEndHtml(state,end)).join("")}</li>`:"")
+}
+function analysisLineName(state,line){
+  const ordinal=(state.lines&&state.lines[line]||{}).ordinal||(line==="main"?1:0);
+  return ordinal===1?tMsg("viewer.analysis.mainLine"):ordinal===2?tMsg("viewer.analysis.history.secondLine"):ordinal?tMsg("viewer.analysis.history.numberedLine",{number:ordinal}):tMsg("viewer.analysis.history.line")
+}
+function analysisCheckpointName(checkpoint){return checkpoint.round?tMsg("viewer.analysis.history.afterRound",{round:checkpoint.round}):tMsg("viewer.analysis.history.currentCheckpoint")}
+function analysisHistoryFor(state){return state&&typeof analysisHistorySelection!=="undefined"&&analysisHistorySelection&&analysisHistorySelection.analysis===state.id?analysisHistorySelection:null}
+function analysisCanSubmit(state){const round=analysisCurrentRound(state);return !!round&&!analysisHistoryFor(state)&&["open","submitted"].includes(round.status)}
+function analysisHistoryQuestionHtml(item){
+  const proposal=item.proposal||item,options=Array.isArray(proposal.options)?proposal.options:Object.entries(proposal.options||{}).map(([id,label])=>({id,label}));
+  return `<h3>${escH(proposal.text||"")}</h3>${proposal.beforeText?`<blockquote>${escH(proposal.beforeText)}</blockquote>`:""}${options.length?`<ul>${options.map(option=>`<li>${escH(option.label)}${option.id===proposal.recommend?` <span class="chip">${tMsg("viewer.analysis.recommended")}</span>`:""}</li>`).join("")}</ul>`:""}${(proposal.replacements||[]).map(replacement=>`<section>${analysisHistoryQuestionHtml(replacement)}</section>`).join("")}`
+}
+function analysisHistoricalAnswer(item,value){
+  if(!value)return tMsg("viewer.analysis.history.unanswered");
+  if(value.kind==="text")return value.text||"";
+  if(value.kind==="park")return tMsg("viewer.life.park");
+  if(value.kind==="verify")return tMsg(value.allowExternal===true?"viewer.analysis.history.verifyExternal":"viewer.analysis.history.verifyLocal");
+  if(item.type!=="question")return tMsg(value.kind==="accept"?"viewer.life.confirm":"viewer.life.reject");
+  const option=value.kind==="accept"?item.recommend:value.option;
+  return (item.options||[]).find(choice=>choice.id===option)?.label||tMsg("viewer.analysis.answerRecorded")
+}
+function analysisRoundHistoryHtml(state,context){
+  if(!context)return `<p class="hint">${tMsg("viewer.analysis.history.loading")}</p>`;
+  const items=new Map();[...(context.items||[]),...(context.answeredItems||[])].forEach(item=>items.set(item.key,item));
+  const questions=Array.from(items.values()).map(item=>{
+    const answer=(context.answers||{})[item.key];
+    return `<article class="analysis-history-question">${item.type==="deadend"?analysisDeadEndHtml(state,item):analysisHistoryQuestionHtml(item)}<p class="analysis-kind">${tMsg("viewer.analysis.history.answer")}</p><blockquote>${escH(analysisHistoricalAnswer(item,answer))}</blockquote>${answer&&typeof answer.verbatim==="string"?`<blockquote>${escH(answer.verbatim)}</blockquote>`:""}</article>`
+  }).join("");
+  const writeback=context.writeback||{},facts=writeback.facts||[],assumptions=writeback.assumptions||[],updates=writeback.updates||[],deadEnds=writeback.deadEnds||[];
+  return `<section class="analysis-history-detail"><p class="analysis-protection">${tMsg("viewer.analysis.history.readonly")}</p><h2>${escH(tMsg("viewer.analysis.round",{round:context.round}))}</h2><p class="hint">${escH(analysisLineName(state,context.line||"main"))}</p>${questions}${context.note?`<section><h3>${tMsg("viewer.analysis.history.agentNote")}</h3><blockquote>${escH(context.note)}</blockquote></section>`:""}${(writeback.proposals||[]).length?`<section><h3>${tMsg("viewer.analysis.structure")}</h3>${writeback.proposals.map(proposal=>analysisHistoryQuestionHtml(proposal)).join("")}</section>`:""}${assumptions.length?`<section><h3>${tMsg("viewer.life.assumptions")}</h3>${assumptions.map(assumption=>`<blockquote>${escH(assumption.text||"")}</blockquote>`).join("")}</section>`:""}${facts.length?`<section><h3>${tMsg("viewer.life.facts")}</h3>${facts.map(fact=>`<blockquote>${escH(fact.text||"")}</blockquote>${fact.source?`<p class="hint">${escH(tMsg("viewer.life.factSource",{source:fact.source}))}</p>`:""}`).join("")}</section>`:""}${deadEnds.length?`<section><h3>${tMsg("viewer.analysis.resolution.deadEnds")}</h3>${deadEnds.map(end=>analysisDeadEndHtml(state,end)).join("")}</section>`:""}${updates.length?`<section><h3>${tMsg("viewer.analysis.protect.update")}</h3>${updates.map(update=>`<blockquote>${escH(update.beforeText||"")}</blockquote><blockquote>${escH(update.text||"")}</blockquote>`).join("")}</section>`:""}</section>`
+}
+function analysisCheckpointHistoryHtml(state,checkpoint){
+  if(!checkpoint)return `<p class="hint">${tMsg("viewer.analysis.history.loading")}</p>`;
+  const snapshot=checkpoint.snapshot||{},decisions=snapshot.decisions||{};
+  const nodes=Object.values(snapshot.nodes||{}).map(node=>{
+    const decision=decisions[node.decision],status=node.status==="parked"?tMsg("viewer.life.park"):node.status==="void"?tMsg("viewer.analysis.roundStatus.void"):!decision?tMsg("viewer.analysis.history.unanswered"):"";
+    return `<article class="analysis-history-question">${analysisHistoryQuestionHtml(node)}${status?`<p class="chip">${escH(status)}</p>`:""}${decision?`<blockquote>${escH(decision.label||"")}</blockquote><p class="hint">${escH(decision.round?tMsg("viewer.analysis.history.decisionRound",{round:decision.round}):tMsg("viewer.analysis.history.manualDecision"))}</p>`:""}</article>`
+  }).join("");
+  const assumptions=Object.values(snapshot.assumptions||{}).map(assumption=>`<li>${escH(assumption.text||"")} <span class="chip">${tMsg("viewer.life.status."+(assumption.refuted?"refuted":assumption.confirmed&&assumption.confirmed[checkpoint.line]||"pending"))}</span></li>`).join("");
+  const proposals=snapshot.pendingProposals||[];
+  const facts=Object.values(snapshot.facts||{}).map(fact=>`<li><blockquote>${escH(fact.text||"")}</blockquote>${fact.source?`<p class="hint">${escH(tMsg("viewer.life.factSource",{source:fact.source}))}</p>`:""}</li>`).join("");
+  return `<section class="analysis-history-detail"><p class="analysis-protection">${tMsg("viewer.analysis.history.readonly")}</p><h2>${escH(analysisCheckpointName(checkpoint))}</h2><p class="hint">${escH(analysisLineName(state,checkpoint.line))} · ${tMsg(checkpoint.sealed?"viewer.analysis.history.sealed":"viewer.analysis.history.automatic")}</p><blockquote>${escH(snapshot.focus||state.focus||"")}</blockquote>${nodes}${proposals.length?`<section><h3>${tMsg("viewer.analysis.history.pendingProposals")}</h3>${proposals.map(proposal=>analysisHistoryQuestionHtml(proposal)).join("")}</section>`:""}${assumptions?`<h3>${tMsg("viewer.life.assumptions")}</h3><ul>${assumptions}</ul>`:""}${facts?`<h3>${tMsg("viewer.life.facts")}</h3><ul>${facts}</ul>`:""}</section>`
+}
+function analysisHistoryHtml(state,selection){return selection.kind==="round"?analysisRoundHistoryHtml(state,selection.context):analysisCheckpointHistoryHtml(state,(state.checkpoints||[]).find(c=>c.id===selection.id))}
+function analysisTimelineHtml(state){
+  const disabled=analysisBusy||analysisLocked(state)||state.status==="closed"?" disabled":"",checkpoints=state.checkpoints||[];
+  const roundHtml=round=>`<li><button class="analysis-history-link" data-history-round="${round.seq}">${escH(tMsg("viewer.analysis.round",{round:round.seq}))}</button> <span>${tMsg("viewer.analysis.roundStatus."+round.status)}</span>${analysisVoidReasonText(round)?`<p>${escH(analysisVoidReasonText(round))}</p>`:""}${round.note?`<p>${escH(round.note)}</p>`:""}</li>`;
+  const checkpointHtml=checkpoint=>`<li class="analysis-checkpoint"><button class="analysis-history-link" data-history-checkpoint="${escH(checkpoint.id)}">${escH(analysisCheckpointName(checkpoint))}</button> <span class="chip">${tMsg(checkpoint.sealed?"viewer.analysis.history.sealed":"viewer.analysis.history.automatic")}</span><div class="analysis-actions"><button data-analysis-history-act="fork" data-checkpoint="${escH(checkpoint.id)}"${disabled}>${tMsg("viewer.analysis.history.fork")}</button>${!checkpoint.sealed?`<button data-analysis-history-act="seal" data-checkpoint="${escH(checkpoint.id)}"${disabled}>${tMsg("viewer.analysis.history.seal")}</button>`:""}</div></li>`;
+  const lines=Object.values(state.lines||{});if(!lines.length)lines.push({id:state.line||"main",ordinal:1});
+  return lines.sort((a,b)=>a.ordinal-b.ordinal).map(line=>{
+    const from=checkpoints.find(c=>c.id===line.from),current=line.id===(state.line||"main"),used=new Set();
+    const rounds=(state.rounds||[]).filter(round=>(round.line||"main")===line.id).map(round=>{
+      const after=checkpoints.filter(checkpoint=>checkpoint.line===line.id&&checkpoint.round===round.seq);after.forEach(checkpoint=>used.add(checkpoint.id));
+      return roundHtml(round)+after.map(checkpointHtml).join("")
+    }).join("");
+    const saved=checkpoints.filter(checkpoint=>checkpoint.line===line.id&&!used.has(checkpoint.id)).map(checkpointHtml).join("");
+    const refuted=(line.basedOnRefuted||[]).map(id=>state.assumptions&&state.assumptions[id]&&state.assumptions[id].text||"").filter(Boolean);
+    const dead=Object.values(state.deadEnds||{}).filter(end=>end.kind==="line"&&end.targetLine===line.id&&end.status==="confirmed");
+    return `<li class="analysis-line"><strong>${escH(analysisLineName(state,line.id))}</strong>${current?` <span class="chip">${tMsg("viewer.analysis.history.currentLine")}</span>`:""}${refuted.length?`<p class="analysis-needs-review">${escH(tMsg("viewer.analysis.resolution.basedOnRefuted",{assumptions:refuted.join(tMsg("viewer.life.listSeparator"))}))}</p>`:""}${dead.map(end=>`<p class="analysis-needs-review">${escH(tMsg("viewer.analysis.resolution.lineDeadEnd",{reason:end.reason}))}</p>`).join("")}${from?`<p class="hint">${escH(tMsg("viewer.analysis.history.forkedFrom",{checkpoint:analysisCheckpointName(from),line:analysisLineName(state,from.line)}))}</p>`:""}${!current?`<button data-analysis-history-act="switch-line" data-line="${escH(line.id)}"${disabled}>${tMsg("viewer.analysis.history.switchLine")}</button>`:""}<ol>${rounds+saved}</ol></li>`
+  }).join("")
+}
+function analysisManageHtml(state){
+  if(analysisHistoryFor(state))return `<button data-history-current>${tMsg("viewer.analysis.history.backCurrent")}</button>`;
+  if(state.status==="closed")return `<button data-analysis-history-act="reopen"${analysisBusy?" disabled":""}>${tMsg("viewer.analysis.history.reopen")}</button>`;
+  const focus=`<button data-analysis-status="${state.status==="active"?"pause":"activate"}"${analysisBusy?" disabled":""}>${tMsg(state.status==="active"?"viewer.life.pause":"viewer.life.activate")}</button>`;
+  if(analysisLocked(state))return focus;
+  const queued=(state.rounds||[]).some(r=>r.status==="submitted");
+  return focus+`<button data-analysis-history-act="seal"${analysisBusy?" disabled":""}>${tMsg("viewer.analysis.history.seal")}</button><button data-analysis-history-act="close"${analysisBusy||queued?" disabled":""}>${tMsg("viewer.analysis.history.close")}</button>${queued?`<p class="hint">${tMsg("viewer.analysis.history.closePending")}</p>`:""}`
+}
+function analysisProtectionHtml(state){return analysisLocked(state)?`<p class="analysis-protection" role="status">${escH(tMsg("viewer.analysis.protect.locked"))}</p>`:""}
+function analysisVoidReasonText(round){if(round.voidReason==="assumption-refuted")return tMsg("viewer.analysis.resolution.roundRefuted");return ["redecided","update-requested","base-rev-mismatch"].includes(round.voidReason)?tMsg("viewer.analysis.protect.reason."+round.voidReason):""}
+function analysisNodeActive(state,id,seen=new Set()){
+  const node=state.nodes&&state.nodes[id];if(!node||node.status==="void"||seen.has(id))return false;seen.add(id);
+  if(node.branch)return node.branch==="current";
+  if(!node.parent)return true;
+  const parent=state.nodes[node.parent.node],decision=parent&&state.decisions[parent.decision];
+  return !!decision&&decision.option===node.parent.option&&analysisNodeActive(state,node.parent.node,seen)
+}
+function analysisNodeVoid(state,id,seen=new Set()){
+  const node=state.nodes&&state.nodes[id];if(!node||seen.has(id))return true;seen.add(id);
+  return node.status==="void"||node.branch==="void"||!!node.parent&&analysisNodeVoid(state,node.parent.node,seen)
+}
+function analysisNodeBranch(state,id){return analysisNodeVoid(state,id)?"void":analysisNodeActive(state,id)?"current":"detached"}
+function analysisDecisionHtml(state,node){
+  const branch=analysisNodeBranch(state,node.id),decision=state.decisions&&state.decisions[node.decision];
+  if(branch==="void"||!decision&&branch==="current")return "";
+  const detached=branch==="detached",disabled=analysisBusy||analysisLocked(state)?" disabled":"";
+  const choices=decision&&!detached&&state.status!=="closed"?`<details class="analysis-redecide"><summary>${tMsg("viewer.analysis.protect.redecide")}</summary><p class="hint">${tMsg("viewer.analysis.protect.redecideHint")}</p><div class="analysis-actions">${Object.entries(node.options||{}).map(([option,label])=>`<button data-analysis-act="redecide" data-node="${escH(node.id)}" data-option="${escH(option)}" aria-pressed="${option===decision.option}"${disabled||option===decision.option&&!node.needsReview?" disabled":""}>${escH(label)}</button>`).join("")}</div></details>${!node.needsReview?`<div class="analysis-actions"><button data-analysis-act="convert" data-node="${escH(node.id)}"${disabled}>${tMsg("viewer.analysis.convert")}</button></div>`:""}`:"";
+  return `<article class="analysis-decision${detached?" analysis-detached":""}${node.needsReview?" analysis-needs-review":""}" data-analysis-node="${escH(node.id)}"><p class="analysis-kind">${tMsg(node.needsReview?"viewer.analysis.resolution.needsReview":detached?"viewer.analysis.protect.detached":"viewer.analysis.protect.current")}</p><h3>${escH(node.short||node.text)}</h3>${node.short&&node.short!==node.text?`<p class="hint">${escH(node.text)}</p>`:""}${decision?`<p>${escH(decision.label)}</p>`:""}${detached?`<p class="hint">${tMsg("viewer.analysis.protect.detachedHint")}</p>`:choices}</article>`
+}
+function analysisUpdateHtml(state,round,item){
+  const update=state.updates&&state.updates[item.update]||item;if(typeof update.text!=="string")return "";
+  const disabled=analysisBusy||!["open","submitted","claimed"].includes(round.status)?" disabled":"";
+  return `<article class="analysis-question analysis-update" data-analysis-item="${escH(item.key)}"><p class="analysis-kind">${tMsg("viewer.analysis.protect.update")}</p><h3>${tMsg("viewer.analysis.protect.reviewUpdate")}</h3><h4>${tMsg("viewer.analysis.protect.beforeText")}</h4><blockquote>${escH(update.beforeText||"")}</blockquote><h4>${tMsg("viewer.analysis.protect.newText")}</h4><blockquote>${escH(update.text)}</blockquote><p class="hint">${tMsg("viewer.analysis.protect.updateHint")}</p><div class="analysis-actions"><button data-analysis-act="answer" data-key="${escH(item.key)}" data-kind="accept"${disabled}>${tMsg("viewer.analysis.protect.acceptUpdate")}</button><button data-analysis-act="answer" data-key="${escH(item.key)}" data-kind="reject"${disabled}>${tMsg("viewer.analysis.protect.rejectUpdate")}</button></div></article>`
+}
+function analysisLinkedNotesHtml(state){
+  const notes=state.linkedNotes||[];if(!notes.length)return "";
+  const disabled=analysisBusy||analysisLocked(state)?" disabled":"";
+  return `<section class="analysis-linked-notes"><h3>${tMsg("viewer.analysis.protect.linkedNotes")}</h3>${notes.map(note=>{
+    const changed=note.status==="held"&&note.hold==="结论已变",request=state.updateRequests&&state.updateRequests[note.id];
+    const pending=request&&["requested","drafted"].includes(request.status),history=note.analysisHistory||[];
+    const actions=changed&&note.tracking!==false&&state.status!=="closed"?`<div class="analysis-actions"><button data-analysis-act="update-note" data-note-id="${escH(note.id)}"${disabled||pending?" disabled":""}>${tMsg("viewer.analysis.protect.requestUpdate")}</button><button data-analysis-act="keep-note" data-note-id="${escH(note.id)}"${disabled}>${tMsg("viewer.analysis.protect.keepNote")}</button><button data-analysis-act="delete-note" data-note-id="${escH(note.id)}"${disabled}>${tMsg("viewer.analysis.protect.deleteNote")}</button></div>`:"";
+    return `<article class="analysis-draft analysis-linked-note" data-analysis-note="${escH(note.id)}">${changed?`<span class="chip held">${tMsg("viewer.analysis.protect.heldChanged")}</span>`:""}${note.page?`<p class="analysis-kind">${escH(tMsg("viewer.page",{page:note.page}))}</p>`:""}<blockquote>${escH(note.text||"")}</blockquote>${note.tracking===false?`<p class="hint">${tMsg("viewer.analysis.protect.trackingStopped")}</p>`:""}${pending?`<p class="hint">${tMsg("viewer.analysis.protect.request."+request.status)}</p>`:""}${actions}${history.length?`<details class="analysis-note-history"><summary>${tMsg("viewer.analysis.protect.history")}</summary>${history.map(previous=>`<blockquote>${escH(previous.text||"")}</blockquote>`).join("")}</details>`:""}</article>`
+  }).join("")}</section>`
+}
+function analysisStructureLabel(state,proposal){
+  const op=proposal.op||"add";if(op==="add")return proposal.text||"";
+  const names=proposal.targetNames||(proposal.targets||[]).map(id=>state.nodes&&state.nodes[id]&&state.nodes[id].short||"");
+  return tMsg("viewer.life.structure."+op,{questions:names.join(tMsg("viewer.life.listSeparator"))})
+}
+function analysisAnswerLabel(state,round,key,value){
+  if(key.startsWith("D:")){const end=state.deadEnds&&state.deadEnds[key.slice(2)];return tMsg(value.kind==="accept"?"viewer.analysis.resolution.deadAccepted":"viewer.analysis.resolution.deadRejected",{target:end?analysisDeadEndTarget(state,end):tMsg("viewer.analysis.resolution.deadEnd")})}
+  if(key.startsWith("U:")){const update=state.updates&&state.updates[key.slice(2)];return tMsg("viewer.analysis.protect."+(value.kind==="accept"?"updateAccepted":"updateRejected"),{text:update&&update.text||""})}
+  if(key.startsWith("S:")){const p=(round.proposals||[]).find(p=>"S:"+p.key===key);
+    return tMsg(value.kind==="accept"?"viewer.analysis.acceptedProposal":"viewer.analysis.rejectedProposal",{question:p?analysisStructureLabel(state,p):""})}
+  if(key.startsWith("A:")){const assumption=state.assumptions&&state.assumptions[key.slice(2)];
+    return tMsg("viewer.life.assumptionAnswer",{text:assumption&&assumption.text||"",status:tMsg("viewer.life.status."+(value.kind==="accept"?"confirmed":"rejected"))})}
+  const node=state.nodes&&state.nodes[key.slice(2)];if(!node)return tMsg("viewer.analysis.answerRecorded");
+  if(value.kind==="park")return tMsg("viewer.life.parkedAnswer",{question:node.text});
+  if(value.kind==="verify")return tMsg(value.allowExternal===true?"viewer.life.verifyExternalAnswer":"viewer.life.verifyAnswer",{question:node.text});
+  const option=value.kind==="accept"?node.recommend:value.option;
+  return tMsg("viewer.analysis.answerLine",{question:node.text,answer:value.kind==="text"?value.text:node.options&&node.options[option]||""})
+}
+function analysisQuestionHtml(state,round,item,draft={}){
+  if(item.type==="deadend"){const end=state.deadEnds&&state.deadEnds[item.deadEnd]||item;return analysisDeadEndHtml(state,end,round,item)}
+  if(item.type==="update")return analysisUpdateHtml(state,round,item);
+  const structure=item.type==="structure",assumption=item.type==="assumption";
+  const p=structure?item.proposal:assumption?state.assumptions&&state.assumptions[item.assumption]:state.nodes&&state.nodes[item.node];
+  if(!p)return "";
+  const options=Array.isArray(p.options)?p.options:Object.entries(p.options||{}).map(([id,label])=>({id,label}));
+  const disabled=analysisBusy||!["open","submitted","claimed"].includes(round.status)?" disabled":"";
+  const answer=(kind,text,option)=>`<button data-analysis-act="answer" data-key="${escH(item.key)}" data-kind="${kind}"${option?` data-option="${escH(option)}"`:""}${disabled}>${escH(text)}</button>`;
+  const choices=structure?answer("accept",tMsg("viewer.analysis.accept"))+answer("reject",tMsg("viewer.analysis.reject"))
+    :assumption?answer("accept",tMsg("viewer.life.confirm"))+answer("reject",tMsg("viewer.life.reject"))
+    :answer("accept",tMsg("viewer.analysis.useRecommended"))+options.map(o=>answer("option",o.label,o.id)).join("")+answer("park",tMsg("viewer.life.park"));
+  const extra=structure||assumption?"":`<details class="analysis-text-answer"${draft.text?" open":""}><summary>${tMsg("viewer.life.text")}</summary><textarea data-analysis-text data-analysis-key="${escH(item.key)}" placeholder="${escH(tMsg("viewer.life.textPlaceholder"))}"${disabled}>${escH(draft.text||"")}</textarea>${answer("text",tMsg("viewer.life.saveText"))}</details><div class="analysis-verify"><p class="hint">${tMsg("viewer.life.verifyHint")}</p><label><input type="checkbox" data-analysis-external data-analysis-key="${escH(item.key)}"${draft.allowExternal===true?" checked":""}${disabled}> ${tMsg("viewer.life.allowExternal")}</label>${answer("verify",tMsg("viewer.life.verify"))}</div>`;
+  const reopened=!structure&&!assumption&&p.reopened,refuted=reopened&&state.assumptions&&state.assumptions[reopened.assumption];
+  const reopenedHtml=reopened?`<aside class="analysis-reopened"><p>${escH(tMsg("viewer.analysis.resolution.reopenedReason",{assumption:refuted&&refuted.text||""}))}</p><h4>${tMsg("viewer.analysis.resolution.previousAnswer")}</h4><blockquote>${escH(typeof reopened.answer==="string"?reopened.answer:"")}</blockquote></aside>`:"";
+  const change=structure&&p.op&&p.op!=="add";
+  const replacements=change?(p.replacements||[]).map(n=>`<section><h4>${escH(n.text)}</h4><ul>${(n.options||[]).map(o=>`<li>${escH(o.label)}${o.id===n.recommend?` <span class="chip">${tMsg("viewer.analysis.recommended")}</span>`:""}</li>`).join("")}</ul></section>`).join(""):"";
+  return `<article class="analysis-question" data-analysis-item="${escH(item.key)}"${item.node?` data-analysis-node="${escH(item.node)}"`:""}><p class="analysis-kind">${tMsg(structure?"viewer.analysis.structure":assumption?"viewer.life.assumption":"viewer.analysis.question")}</p><h3>${escH(structure?analysisStructureLabel(state,p):p.text)}</h3>${reopenedHtml}${change&&p.text?`<p>${escH(p.text)}</p>`:""}${replacements}${options.length?`<ul class="analysis-options">${options.map(o=>`<li>${escH(o.label)}${o.id===p.recommend?` <span class="chip">${tMsg("viewer.analysis.recommended")}</span>`:""}</li>`).join("")}</ul>`:""}<div class="analysis-actions">${choices}</div>${extra}</article>`
+}
+function analysisErrorText(error){
+  const resolutionCodes=["assumption-not-found","bad-dead-ends","dead-end-option","dead-end-line","dead-end-obsolete"];
+  if(error&&!error.mismatch&&error.status!==0&&resolutionCodes.includes(error.code)){
+    const params=error.params||{},reason=typeof params.reason==="string"?params.reason:"",assumptions=Array.isArray(params.assumptions)?params.assumptions.filter(value=>typeof value==="string").join(tMsg("viewer.life.listSeparator")):"";
+    return tMsg("viewer.analysis.resolution.error."+error.code)+(reason?" "+tMsg("viewer.analysis.resolution.blockReason",{reason}):"")+(assumptions?" "+tMsg("viewer.analysis.resolution.blockAssumptions",{assumptions}):"")
+  }
+  const historyCodes=["checkpoint-not-found","line-not-found","analysis-pending-rounds"];
+  if(error&&!error.mismatch&&error.status!==0&&historyCodes.includes(error.code))return tMsg("viewer.analysis.history.error."+error.code);
+  const protectCodes=["analysis-locked","bad-option","draft-basis-changed","note-not-changed","bad-updates","updates-required","update-not-pending","update-source-changed","round-not-answerable"];
+  if(error&&!error.mismatch&&error.status!==0&&protectCodes.includes(error.code))return tMsg("viewer.analysis.protect.error."+error.code);
+  const messages={"round-not-answerable":"roundChanged","item-not-in-round":"itemChanged","note-in-progress":"noteInProgress",
+    "note-not-open":"noteNotOpen","note-held":"noteHeld","round-not-claimed":"roundChanged","base-rev-mismatch":"roundChanged",
+    "agent-busy":"agentBusy","node-not-decided":"decisionChanged","draft-not-pending":"draftChanged","source-not-held":"sourceChanged",
+    "no-round":"roundChanged","no-analysis":"analysisMissing","no-note":"noteNotOpen","receiver-mismatch":"receiverChanged",
+    "receiver-invalid":"receiverChanged","receiver-restart":"receiverChanged","focus-required":"focusRequired",
+    "page-not-found":"pageMissing","analysis-closed":"analysisClosed","structure-target-changed":"itemChanged","analysis-invalid-input":"invalidInput"};
+  const mapped=error&&Object.prototype.hasOwnProperty.call(messages,error.code)?messages[error.code]:"retry";
+  const key=error&&error.mismatch?"reviewChanged":error&&error.status===0?"notConfirmed":mapped;
+  return tMsg("viewer.analysis.error."+key)
+}
+// ---------- Analysis view DOM ----------
+let analysisSupported=false,analysisChecked=false,analysisBusy=false,analysisLoading=false,analysisRequest=0;
+let analyses=[],analysisState=null,analysisContext=null,analysisQueue={submitted:0,claimed:0};
+let analysisSelected=SS.get("ae."+RID+".analysis",null),analysisRenderKey="",analysisUpgradeShown=false,analysisDraftNode=null;
+const analysisAnswerDrafts=new Map();let analysisPanelTab="timeline";
+let analysisHistorySelection=null,analysisHistoryRequest=0;
+let analysisLastChange=null;
+// ---------- Analysis page preview interactions ----------
+function fitAnalysisPage(){
+  const host=$("analysisPageHost"),root=host.shadowRoot;if(!root||!$("analysisPageDialog").classList.contains("on"))return;
+  const bounds=$("analysisPageWrap").getBoundingClientRect(),scale=Math.max(.01,Math.min(bounds.width/1280,bounds.height/720));
+  const frame=root.getElementById("ae-frame"),preview=root.getElementById("ae-stage");
+  frame.style.width=1280*scale+"px";frame.style.height=720*scale+"px";preview.style.transform=`scale(${scale})`
+}
+function openAnalysisPage(number){
+  const index=P.findIndex(page=>page.n===number);if(index<0){toast(tMsg("viewer.analysis.resolution.pageUnavailable"),6000);return}
+  const host=$("analysisPageHost"),root=host.shadowRoot||host.attachShadow({mode:"open"});host.lang=$("host").lang;
+  root.innerHTML=`<style>:host{all:initial;display:flex;align-items:center;justify-content:center;width:100%;height:100%}
+${RCSS}
+:host{display:flex!important;align-items:center!important;justify-content:center!important;width:100%!important;height:100%!important;margin:0!important;padding:0!important;border:0!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;position:static!important;transform:none!important;overflow:hidden!important}
+.ae-frame{position:relative;overflow:hidden;background:#fff}#ae-stage{display:block!important;margin:0!important;padding:0!important;border:0!important;position:relative!important;inset:auto!important;width:1280px!important;height:720px!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;float:none!important;columns:auto!important;box-sizing:content-box!important;transform-origin:0 0!important;overflow:visible!important}
+</style><div class="ae-frame" id="ae-frame"><div id="ae-stage">${SECT[index]}</div></div>`;
+  const page=P[index];$("analysisPageTitle").textContent=tMsg("viewer.analysis.resolution.pageCard",{page:page.n,title:typeof unH==="function"?unH(page.title||""):page.title||""});
+  $("analysisPageDialog").classList.add("on");fitAnalysisPage()
+}
+// ---------- Analysis page preview interactions end ----------
+addEventListener("resize",fitAnalysisPage);
+function analysisDraftKey(state,round,key){return [state.id,round.seq,key].join("|")}
+function analysisDraftFor(state,round,key){const answer=round.answers&&round.answers[key]||{};
+  return {...(answer.kind==="text"?{text:answer.text}:{}),...(answer.kind==="verify"?{allowExternal:answer.allowExternal===true}:{}),...analysisAnswerDrafts.get(analysisDraftKey(state,round,key))}}
+function stashAnalysisInputs(){const state=analysisState,round=analysisCurrentRound(state);if(!state||!round)return;
+  $("analysisBody").querySelectorAll("[data-analysis-text],[data-analysis-external]").forEach(input=>{
+    const key=analysisDraftKey(state,round,input.dataset.analysisKey),draft=analysisAnswerDrafts.get(key)||{};
+    if(input.hasAttribute("data-analysis-text"))draft.text=input.value;else draft.allowExternal=input.checked===true;
+    analysisAnswerDrafts.set(key,draft)
+  })
+}
+// ---------- Analysis history interactions ----------
+function clearAnalysisHistory(){analysisHistorySelection=null;++analysisHistoryRequest;analysisRenderKey="";renderAnalysis();analysisRouteLabels()}
+async function selectAnalysisHistory(kind,id){
+  if(!analysisState||analysisBusy)return;
+  stashAnalysisInputs();const state=analysisState,analysis=state.id,request=++analysisHistoryRequest;
+  if(kind==="checkpoint"){
+    if(!(state.checkpoints||[]).some(checkpoint=>checkpoint.id===id))return;
+    analysisHistorySelection={analysis,kind,id};analysisRenderKey="";renderAnalysis();analysisRouteLabels();return
+  }
+  const round=(state.rounds||[]).find(round=>round.seq===Number(id));if(!round)return;
+  analysisHistorySelection={analysis,kind:"round",id:round.seq,context:round.context||null};analysisRenderKey="";renderAnalysis();analysisRouteLabels();
+  if(round.context)return;
+  try{
+    const result=await api("GET","/api/analysis?analysis="+encodeURIComponent(analysis)+"&round="+round.seq);
+    if(request!==analysisHistoryRequest||analysisSelected!==analysis||!analysisHistorySelection)return;
+    analysisHistorySelection={analysis,kind:"round",id:round.seq,context:result.context};analysisRenderKey="";renderAnalysis()
+  }catch(error){if(request===analysisHistoryRequest&&analysisSelected===analysis)$("analysisError").textContent=tMsg("viewer.analysis.loadError",{reason:analysisErrorText(error)})}
+}
+async function analysisHistoryClick(event){
+  const button=event.target.closest("[data-history-current],[data-history-round],[data-history-checkpoint],[data-analysis-history-act]");
+  if(!button||button.disabled||analysisBusy)return;
+  const data=button.dataset;
+  if(Object.prototype.hasOwnProperty.call(data,"historyCurrent")){clearAnalysisHistory();return}
+  if(data.historyRound)return selectAnalysisHistory("round",Number(data.historyRound));
+  if(data.historyCheckpoint)return selectAnalysisHistory("checkpoint",data.historyCheckpoint);
+  const op=data.analysisHistoryAct;if(!["seal","fork","switch-line","close","reopen"].includes(op))return;
+  const body={};if(data.checkpoint)body.checkpoint=data.checkpoint;if(data.line)body.line=data.line;
+  return analysisAction(op,body)
+}
+// ---------- Analysis history events ----------
+$("analysisManage").onclick=event=>{const button=event.target.closest("[data-analysis-status]");return button?analysisAction(button.dataset.analysisStatus):analysisHistoryClick(event)};
+$("analysisTimeline").onclick=analysisHistoryClick;
+// ---------- Analysis history events end ----------
+function analysisShown(){return !FILE&&analysisSupported&&location.hash==="#analysis"}
+function analysisRoute(){
+  const shown=analysisShown();document.body.classList.toggle("analysis-mode",shown);
+  $("modeSwitch").hidden=FILE||!analysisSupported;
+  $("analysisSidebar").hidden=$("analysisMain").hidden=$("analysisPanel").hidden=!shown;
+  $("annotationMode").setAttribute("aria-pressed",String(!shown));$("analysisMode").setAttribute("aria-pressed",String(shown));
+  $("scriptToggle").disabled=shown;
+  const label=$("handBtn").querySelector("span"),key=shown?"viewer.analysis.submit":"viewer.hand.btn";
+  label.dataset.msg=key;label.textContent=tMsg(key);
+  $("handBtn").title=tMsg(shown?"viewer.analysis.submitTitle":"viewer.hand.btnTitle");
+  $("handBtn").disabled=shown&&(analysisBusy||mode!=="server"||!analysisCanSubmit(analysisState));
+  const focusLabel=$("focusHint").querySelector("span");focusLabel.dataset.msg=shown?"viewer.analysis.focusHint":"viewer.layout.focusHint";focusLabel.textContent=tMsg(focusLabel.dataset.msg);
+  $("analysisQueue").hidden=FILE||!analysisSupported;$("analysisQueue").textContent=tMsg("viewer.analysis.queue",{waiting:analysisQueue.submitted||0,processing:analysisQueue.claimed||0});
+  if(location.hash==="#analysis"&&!shown&&(FILE||analysisChecked)&&!analysisUpgradeShown)showAnalysisUpgrade(FILE?"viewer.analysis.fileUnavailable":"viewer.analysis.upgrade");
+  if(shown){if(markMode)setMarkMode(false);hideSelbar();closeStyleMenu();renderAnalysis();if(!analysisBusy)loadAnalyses()}
+  else requestAnimationFrame(fit)
+}
+let analysisUpgradePoll=null;
+function showAnalysisUpgrade(key){
+  if(analysisUpgradeShown)return;
+  if(analysisUpgradePoll){analysisUpgradePoll.key=key;return}
+  analysisUpgradeShown=true;toast(tMsg(key),7000)
+}
+function setAnalysisSupport(data){const old=analysisSupported;analysisChecked=true;analysisSupported=hasFeature(data,"analysis");
+  $("pageAnalysisStart").hidden=FILE||!analysisSupported;
+  if(old!==analysisSupported){analysisRenderKey="";refreshList(true);if(analysisSupported)analysisUpgradeShown=false}
+  if(!analysisSupported&&mode==="server"&&!analysisUpgradeShown)showAnalysisUpgrade("viewer.analysis.upgrade");
+  analysisRoute()
+}
+async function loadAnalyses(){
+  if(FILE||!analysisSupported||mode!=="server"||analysisBusy||analysisLoading)return;
+  analysisLoading=true;const request=++analysisRequest;
+  try{
+    const data=await api("GET","/api/analysis");if(request!==analysisRequest||analysisBusy)return;
+    analyses=Array.isArray(data.analyses)?data.analyses:[];analysisQueue=data.queue||{submitted:0,claimed:0};
+    if(!analyses.some(a=>a.id===analysisSelected))analysisSelected=(analyses.find(a=>a.status==="active")||analyses[0]||{}).id||null;
+    if(analysisSelected)SS.set("ae."+RID+".analysis",analysisSelected);
+    if(analysisShown()&&analysisSelected){const detail=await api("GET","/api/analysis?analysis="+encodeURIComponent(analysisSelected));
+      if(request!==analysisRequest||analysisBusy)return;analysisState=detail.analysis;analysisContext=detail.context;analysisQueue=detail.queue||analysisQueue}
+    else if(!analysisSelected){analysisState=null;analysisContext=null}
+    renderAnalysis();analysisRouteLabels()
+  }catch(error){if(request===analysisRequest&&analysisShown())$("analysisError").textContent=tMsg("viewer.analysis.loadError",{reason:analysisErrorText(error)})}
+  finally{analysisLoading=false;if(request!==analysisRequest&&analysisShown()&&!analysisBusy)loadAnalyses()}
+}
+function analysisRouteLabels(){
+  $("analysisDraftCreate").disabled=analysisBusy||analysisLocked(analysisState)||analysisState&&analysisState.status==="closed"||!!analysisHistoryFor(analysisState);$("analysisDraftText").disabled=$("analysisDraftCreate").disabled;
+  $("analysisNew").disabled=$("pageAnalysisStart").disabled=$("analysisStartCreate").disabled=analysisBusy;
+  $("analysisQueue").textContent=tMsg("viewer.analysis.queue",{waiting:analysisQueue.submitted||0,processing:analysisQueue.claimed||0});
+  if(analysisShown())$("handBtn").disabled=analysisBusy||mode!=="server"||!analysisCanSubmit(analysisState)
+}
+function renderAnalysis(){
+  if(!analysisShown())return;
+  const signature=JSON.stringify([analyses,analysisState,typeof analysisContext==="undefined"?null:analysisContext,analysisBusy,uiLocale,analysisHistoryFor(analysisState)]);if(signature===analysisRenderKey)return;analysisRenderKey=signature;
+  $("analysisList").innerHTML=analyses.map(a=>`<button class="analysis-list-item" data-analysis-select="${escH(a.id)}" aria-pressed="${a.id===analysisSelected}">${escH(a.focus)}<small>${tMsg("viewer.analysis.status."+a.status)}</small></button>`).join("");
+  const state=analysisState,round=analysisCurrentRound(state);
+  $("analysisChanges").innerHTML=analysisChangeHtml(state);
+  if(!state){$("analysisFocus").textContent=tMsg("viewer.analysis.emptyTitle");$("analysisMeta").textContent="";$("analysisBody").innerHTML=`<p class="empty">${tMsg("viewer.analysis.empty")}</p>`;["analysisManage","analysisTree","analysisTimeline","analysisAssumptions","analysisParked","analysisParkedSide","analysisFacts"].forEach(id=>$(id).innerHTML="");return}
+  $("analysisFocus").textContent=state.focus;$("analysisMeta").textContent=analysisLineName(state,state.line||"main")+(round?" · "+tMsg("viewer.analysis.round",{round:round.seq})+" · "+tMsg("viewer.analysis.roundStatus."+round.status):" · "+tMsg("viewer.analysis.roundDone"));
+  const visibleNodes=Object.values(state.nodes||{}).filter(n=>analysisNodeBranch(state,n.id)!=="void"),nodes=visibleNodes.filter(n=>analysisNodeBranch(state,n.id)==="current"),detached=visibleNodes.filter(n=>analysisNodeBranch(state,n.id)==="detached");
+  $("analysisManage").innerHTML=analysisManageHtml(state);
+  const treeItems=group=>group.map(n=>`<button class="analysis-tree-node" data-analysis-jump="${escH(n.id)}"><span aria-hidden="true">${n.decision?"✓":"○"}</span> ${escH(n.short||n.text)}${n.needsReview?` <span class="chip">${tMsg("viewer.analysis.resolution.needsReview")}</span>`:""}</button>`).join("");
+  $("analysisTree").innerHTML=`<p class="analysis-kind">${tMsg("viewer.analysis.protect.current")}</p>`+(treeItems(nodes.filter(n=>n.status!=="parked"))||`<p class="empty">${tMsg("viewer.analysis.noTree")}</p>`)+(detached.length?`<details class="analysis-tree-group" open><summary>${tMsg("viewer.analysis.protect.detached")}</summary>${treeItems(detached)}</details>`:"");
+  const source=state.sourceCopy||{},released=state.sourceState!=="held";
+  const sourceHtml=`<details class="analysis-source"><summary>${tMsg(state.sourceNote?"viewer.analysis.source":"viewer.life.sourceQuestion")}${source.page?" · "+tMsg("viewer.page",{page:source.page}):""}</summary><blockquote>${escH(source.text||"")}</blockquote>${state.sourceNote&&!released&&state.status!=="closed"?`<button data-analysis-act="release"${analysisBusy||analysisLocked(state)?" disabled":""}>${tMsg("viewer.analysis.release")}</button>`:""}</details>`;
+  const questions=round?analysisRoundAnswerItems(state,round).map(item=>analysisQuestionHtml(state,round,item,analysisDraftFor(state,round,item.key))).join(""):"";
+  const answers=round?Object.entries(round.answers||{}).map(([key,value])=>`<li>${escH(analysisAnswerLabel(state,round,key,value))}</li>`).join(""):"";
+  const decisions=nodes.concat(detached).map(n=>analysisDecisionHtml(state,n)).join("");
+  const drafts=(state.drafts||[]).map(d=>`<article class="analysis-draft"><h3>${tMsg("viewer.analysis.draft")}</h3><p>${escH(d.text)}</p>${d.status==="pending"?`<p class="hint">${tMsg("viewer.analysis.confirmHint")}</p>${state.status!=="closed"?`<button data-analysis-act="confirm" data-draft="${escH(d.id)}"${analysisBusy||analysisLocked(state)?" disabled":""}>${tMsg("viewer.analysis.confirm")}</button>`:""}`:`<p class="hint">${tMsg("viewer.analysis.confirmed")}</p><button data-analysis-act="annotations">${tMsg("viewer.analysis.backToNotes")}</button>`}</article>`).join("");
+  $("analysisBody").innerHTML=analysisProtectionHtml(state)+sourceHtml+analysisPageCardsHtml(state)+(questions||`<p class="empty">${tMsg(round&&round.status==="claimed"?"viewer.analysis.agentWorking":round&&round.status==="submitted"?"viewer.analysis.awaitingAgent":"viewer.analysis.noQuestions")}</p>`)+(answers?`<section class="analysis-answers"><h3>${tMsg("viewer.analysis.yourAnswers")}</h3><ul>${answers}</ul></section>`:"")+decisions+drafts+analysisLinkedNotesHtml(state);
+  const history=analysisHistoryFor(state);if(history)$("analysisBody").innerHTML=analysisHistoryHtml(state,history);
+  $("analysisTimeline").innerHTML=analysisTimelineHtml(state);
+  const parked=nodes.filter(n=>n.status==="parked");
+  $("analysisParkedSide").innerHTML=parked.map(n=>`<p>${escH(n.short||n.text)}</p>`).join("")||`<p class="empty">${tMsg("viewer.life.noParked")}</p>`;
+  $("analysisParked").innerHTML=parked.map(n=>`<li>${escH(n.text)}</li>`).join("")||`<li class="empty">${tMsg("viewer.life.noParked")}</li>`;
+  $("analysisAssumptions").innerHTML=analysisAssumptionsHtml(state);
+  $("analysisFacts").innerHTML=Object.values(state.facts||{}).map(f=>`<li><p>${escH(f.text)}</p>${f.source?`<p class="hint">${escH(tMsg("viewer.life.factSource",{source:f.source}))}</p>`:""}</li>`).join("")||`<li class="empty">${tMsg("viewer.life.noFacts")}</li>`;
+  analysisRouteLabels()
+}
+async function analysisAction(op,body={}){
+  if(analysisBusy)return null;
+  if(FILE||!analysisSupported||mode!=="server"){toast(tMsg("viewer.analysis.connectionRequired"),6000);return null}
+  if(analysisHistoryFor(analysisState)&&["answer","submit","refute"].includes(op)){toast(tMsg("viewer.analysis.history.readonly"),6000);return null}
+  if(analysisState&&analysisState.status==="closed"&&!["reopen","start","activate"].includes(op)){toast(analysisErrorText({code:"analysis-closed"}),6000);return null}
+  if(op==="close"&&(analysisState&&analysisState.rounds||[]).some(r=>r.status==="submitted")){toast(analysisErrorText({code:"analysis-pending-rounds"}),6000);return null}
+  if(analysisLocked(analysisState)&&analysisOperationProtected(op)){const reason=analysisErrorText({code:"analysis-locked"});$("analysisError").textContent=reason;toast(reason,6000);return null}
+  const before=analysisState;
+  analysisBusy=true;++analysisRequest;analysisRenderKey="";renderAnalysis();analysisRouteLabels();$("analysisError").textContent="";
+  try{
+    const result=await api("POST","/api/analysis/"+op,{analysis:analysisSelected,...body,receiverBindingId:receiver&&receiver.bindingId});
+    if(result.analysis){analysisState=result.analysis;analysisSelected=result.analysis.id;SS.set("ae."+RID+".analysis",analysisSelected)}
+    if(result.doc){setDoc(result.doc);refreshList(true)}
+    if(typeof analysisHistorySelection!=="undefined")analysisHistorySelection=null;
+    if(typeof analysisHistoryRequest!=="undefined")++analysisHistoryRequest;
+    const change=analysisChangeData(op,before,analysisState,body);if(typeof analysisLastChange!=="undefined")analysisLastChange=change;
+    await resync();toast(analysisChangeText(change),5000);return result
+  }catch(error){const reason=analysisErrorText(error);$("analysisError").textContent=reason;toast(tMsg("viewer.analysis.actionError",{reason}),7000);return null}
+  finally{analysisBusy=false;analysisRenderKey="";renderAnalysis();analysisRouteLabels();await loadAnalyses()}
+}
+async function startAnalysis(noteId){const result=await analysisAction("start",{noteId});if(result){location.hash="#analysis";analysisRoute()}}
+async function openAnalysis(id){
+  if(analysisBusy)return;
+  stashAnalysisInputs();
+  if((analyses.find(row=>row.id===id)||{}).status==="closed"){
+    analysisHistorySelection=null;++analysisHistoryRequest;++analysisRequest;analysisSelected=id;analysisState=null;analysisContext=null;analysisRenderKey="";
+    SS.set("ae."+RID+".analysis",id);location.hash="#analysis";analysisRoute();await loadAnalyses();return
+  }
+  const result=await analysisAction("activate",{analysis:id});if(result){location.hash="#analysis";analysisRoute()}
+}
+function openNewAnalysis(page=null){
+  $("analysisStartPage").innerHTML=`<option value="">${tMsg("viewer.life.noPage")}</option>`+P.map(p=>`<option value="${p.n}"${p.n===page?" selected":""}>${escH(tMsg("viewer.page",{page:p.n})+" · "+unH(p.title))}</option>`).join("");
+  $("analysisStartDialog").classList.add("on");$("analysisStartText").focus()
+}
+$("analysisNew").onclick=()=>openNewAnalysis();$("pageAnalysisStart").onclick=()=>openNewAnalysis(P[i].n);
+$("analysisStartCreate").onclick=async()=>{
+  const focus=$("analysisStartText").value,page=$("analysisStartPage").value;if(!focus.trim()){$("analysisStartText").focus();return}
+  const result=await analysisAction("start",{focus,...(page?{page:Number(page)}:{})});
+  if(result){$("analysisStartDialog").classList.remove("on");$("analysisStartText").value="";location.hash="#analysis";analysisRoute()}
+};
+$("analysisStartText").addEventListener("keydown",event=>{if(!event.isComposing&&event.key==="Enter"&&(event.metaKey||event.ctrlKey)){event.preventDefault();$("analysisStartCreate").click()}});
+function selectAnalysisPanel(tab){analysisPanelTab=tab;["timeline","assumptions","parked","facts"].forEach(name=>{
+  const button=$("analysisPanelTabs").querySelector(`[data-analysis-tab="${name}"]`);button.setAttribute("aria-selected",String(name===tab));button.tabIndex=name===tab?0:-1;
+  $("analysis"+name[0].toUpperCase()+name.slice(1)).hidden=name!==tab
+})}
+$("analysisPanelTabs").onclick=event=>{const button=event.target.closest("[data-analysis-tab]");if(button)selectAnalysisPanel(button.dataset.analysisTab)};
+selectAnalysisPanel(analysisPanelTab);
+function submitAnalysis(){const round=analysisCurrentRound(analysisState);if(analysisCanSubmit(analysisState))return analysisAction("submit",{round:round.seq})}
+$("annotationMode").onclick=()=>{location.hash=""};$("analysisMode").onclick=()=>{location.hash="#analysis"};
+$("analysisSidebar").onclick=event=>{const select=event.target.closest("[data-analysis-select]"),jump=event.target.closest("[data-analysis-jump]");
+  if(select){openAnalysis(select.dataset.analysisSelect);return}
+  if(jump){const match=Array.from($("analysisBody").querySelectorAll("[data-analysis-node]")).find(el=>el.dataset.analysisNode===jump.dataset.analysisJump);if(match)match.scrollIntoView({block:"center",behavior:"smooth"})}
+};
+$("analysisBody").onclick=event=>{const button=event.target.closest("[data-analysis-act],[data-analysis-page]");if(!button||button.disabled||analysisBusy)return;
+  if(Object.prototype.hasOwnProperty.call(button.dataset,"analysisPage"))return openAnalysisPage(Number(button.dataset.analysisPage));
+  const op=button.dataset.analysisAct,round=analysisCurrentRound(analysisState);
+  if(analysisLocked(analysisState)&&analysisOperationProtected(op)){toast(analysisErrorText({code:"analysis-locked"}),6000);return}
+  if(op==="answer"&&round){const value={kind:button.dataset.kind},draft=analysisDraftFor(analysisState,round,button.dataset.key);
+    if(value.kind==="option")value.option=button.dataset.option;
+    if(value.kind==="text"){value.text=draft.text||"";if(!value.text.trim())return}
+    if(value.kind==="verify")value.allowExternal=draft.allowExternal===true;
+    return analysisAction("answer",{round:round.seq,key:button.dataset.key,value})}
+  else if(op==="redecide")return analysisAction("redecide",{node:button.dataset.node,option:button.dataset.option});
+  else if(op==="update-note"||op==="keep-note")return analysisAction(op,{noteId:button.dataset.noteId});
+  else if(op==="delete-note"){const note=(analysisState.linkedNotes||[]).find(n=>n.id===button.dataset.noteId);
+    if(note&&confirm(tMsg("viewer.analysis.protect.deleteConfirm",{text:note.text})))return analysisAction("delete-note",{noteId:note.id})}
+  else if(op==="release")return analysisAction("release");
+  else if(op==="confirm")return analysisAction("confirm",{draft:button.dataset.draft});
+  else if(op==="annotations")location.hash="";
+  else if(op==="convert"){analysisDraftNode=button.dataset.node;const node=analysisState.nodes[analysisDraftNode],decision=analysisState.decisions[node.decision];
+    $("analysisDraftText").value=tMsg("viewer.analysis.draftDefault",{question:node.short||node.text,answer:decision.label});$("analysisDraftDialog").classList.add("on");$("analysisDraftText").focus()}
+};
+$("analysisBody").oninput=stashAnalysisInputs;$("analysisBody").onchange=stashAnalysisInputs;
+function analysisResolutionClick(event){
+  const button=event.target.closest("[data-analysis-refute]");if(!button||button.disabled||analysisBusy)return;
+  if(analysisLocked(analysisState)){toast(analysisErrorText({code:"analysis-locked"}),6000);return}
+  if(analysisState&&analysisState.status==="closed"||analysisHistoryFor(analysisState)){toast(tMsg("viewer.analysis.history.readonly"),6000);return}
+  return analysisAction("refute",{assumption:button.dataset.analysisRefute})
+}
+$("analysisAssumptions").onclick=analysisResolutionClick;
+// ---------- Analysis resolution events end ----------
+$("analysisDraftCreate").onclick=async()=>{const text=$("analysisDraftText").value.trim();if(!text||!analysisDraftNode)return;const result=await analysisAction("convert",{node:analysisDraftNode,text});if(result)$("analysisDraftDialog").classList.remove("on")};
+$("analysisDraftText").addEventListener("keydown",event=>{if(event.isComposing)return;if(event.key==="Escape"){$("analysisDraftDialog").classList.remove("on");event.stopPropagation()}else if(event.key==="Enter"&&(event.metaKey||event.ctrlKey)){event.preventDefault();$("analysisDraftCreate").click()}});
+addEventListener("hashchange",analysisRoute);
+setInterval(()=>{if(!document.hidden)loadAnalyses()},4000);
+
 // ---------- 审阅总览（同一个 index.html 的 #overview 视图） ----------
 let overviewData=null,overviewSelected=null,overviewRequest=0,overviewLoading=false;
 const overviewStarting=new Set(),overviewStartFailures=new Map();
@@ -2180,6 +2744,7 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE)pol
   applyLocale();
   applyLayout();
   overviewRoute();
+  analysisRoute();
   if(FILE){mirror();updateMode();render();return}
   LS.del(K.notes);                      // 服务模式不在浏览器里留整份批注副本
   LS.set(K.meta,{title:unH(document.title),name:NAME,ns:NS});   // 只记名称：这个地址以后换给别的审阅时，那边的页面能说出暂存属于谁

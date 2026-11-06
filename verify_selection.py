@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 11
+STRATEGY_VERSION = 12
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -140,6 +140,30 @@ SELECTION_RULES = (
         scenarios=(ALL_SCENARIOS,),
         serve_check=True,
         why="服务与页面模板影响全部浏览器场景与服务安全约束",
+    ),
+    SelectionRule(
+        rid="analysis",
+        prefixes=("skill/annotation-everything/scripts/analysis_store.py",
+                  "skill/annotation-everything/scripts/notes.py",
+                  "skill/annotation-everything/scripts/notes_store.py",
+                  "skill/annotation-everything/scripts/ledger.py",
+                  "skill/annotation-everything/scripts/serve.py",
+                  "skill/annotation-everything/scripts/viewer_template.html",
+                  "skill/annotation-everything/scripts/build_viewer.py",
+                  "skill/annotation-everything/scripts/wakeup.py",
+                  "skill/annotation-everything/scripts/i18n.py",
+                  "skill/annotation-everything/locales/"),
+        selectors=("tests/test_analysis_store.py", "tests/test_analysis_agent.py",
+                   "tests/test_analysis_page.py", "tests/test_analysis_lifecycle.py",
+                   "tests/test_analysis_protection.py", "tests/test_analysis_protection_agent.py",
+                   "tests/test_analysis_protection_page.py", "tests/test_analysis_history.py",
+                   "tests/test_analysis_history_agent.py", "tests/test_analysis_history_page.py",
+                   "tests/test_analysis_resolution.py", "tests/test_analysis_resolution_agent.py",
+                   "tests/test_analysis_resolution_page.py", "tests/test_cli_error_i18n.py",
+                   "tests/test_agent_delivery.py", "tests/test_receiver_binding.py"),
+        scenarios=("analysis-smoke", "analysis-ui", "receiver-binding", "full-check"),
+        serve_check=True,
+        why="分析存储、改稿联动、投递与页面共享协议边界，覆盖全部分析契约及接收方兼容性",
     ),
     SelectionRule(
         rid="review-page",

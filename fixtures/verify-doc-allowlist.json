@@ -69,6 +69,12 @@
       "basis": "安装与修复的技能副本文件哈希；仅记录完整性，不把说明文档作为产品行为输入。"
     },
     {
+      "path": "skill/annotation-everything/scripts/analysis_store.py",
+      "function": "_analyses_ids",
+      "source_sha256": "7c0bf92895d559d8aef0a2dbaef08487e608cc33cd17c58ed02b369fa6048ef2",
+      "basis": "仅单层枚举当前审阅 analysis/<分析标识>/events.jsonl，EVENTS_FILE 固定为 events.jsonl；再逐项校验标识与真实路径，不跟随符号链接，不读取仓库说明文档。"
+    },
+    {
       "path": "skill/annotation-everything/scripts/notes.py",
       "function": "_snapshot",
       "source_sha256": "4338dc47851dd7d2765354765512471ecbe47a32864f29da3a034980b8af81ab",
