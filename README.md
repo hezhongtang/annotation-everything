@@ -17,7 +17,7 @@
 <p align="center"><img src="docs/assets/banner.zh.svg" alt="annotation-everything：批注改稿，分析问题，确认后交给 Agent" width="100%"></p>
 
 <p align="center">
-  <img alt="版本 0.12.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.12.0-1f3a5f?style=flat-square">
+  <img alt="版本 0.12.1" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.12.1-1f3a5f?style=flat-square">
   <img alt="Agent Skills 技能" src="https://img.shields.io/badge/Agent_Skills-%E6%8A%80%E8%83%BD-d97757?style=flat-square">
   <img alt="Python 仅标准库" src="https://img.shields.io/badge/Python-%E4%BB%85%E6%A0%87%E5%87%86%E5%BA%93-3776ab?style=flat-square&logo=python&logoColor=white">
   <img alt="只监听 127.0.0.1" src="https://img.shields.io/badge/%E5%8F%AA%E7%9B%91%E5%90%AC-127.0.0.1-2fa36b?style=flat-square">

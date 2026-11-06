@@ -10,7 +10,7 @@
 <path d="M66 181 Q286 189 504 181" fill="none" stroke="#dd573f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
 <path d="M66 260 Q270 268 508 260" fill="none" stroke="#326bb6" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
 <text x="64" y="310" font-size="21" fill="#53606a" font-weight="500" >对照报告与讲稿，逐轮问答，确认后交给 Agent。</text>
-<text x="64" y="402" font-size="18" fill="#35434e" font-weight="600" >版本 0.12.0</text>
+<text x="64" y="402" font-size="18" fill="#35434e" font-weight="600" >版本 0.12.1</text>
 <text x="64" y="435" font-size="18" fill="#596773" font-weight="500" >本机审阅，修改与推理都有记录</text>
 <text x="814" y="78" font-size="21" fill="#bc4937" font-weight="600" >批注改稿</text>
 <text x="1190" y="78" font-size="21" fill="#285e9c" font-weight="600" >分析问题</text>

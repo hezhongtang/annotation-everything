@@ -17,7 +17,7 @@ The default skill copy lives at `~/.claude/skills/annotation-everything`; links 
 <p align="center"><img src="docs/assets/banner.en.svg" alt="annotation-everything: annotate for revision, analyze questions, confirm before handing to an agent" width="100%"></p>
 
 <p align="center">
-  <img alt="version 0.12.0" src="https://img.shields.io/badge/version-0.12.0-1f3a5f?style=flat-square">
+  <img alt="version 0.12.1" src="https://img.shields.io/badge/version-0.12.1-1f3a5f?style=flat-square">
   <img alt="Agent Skills skill" src="https://img.shields.io/badge/Agent_Skills-skill-d97757?style=flat-square">
   <img alt="Python standard library only" src="https://img.shields.io/badge/Python-standard_library_only-3776ab?style=flat-square&logo=python&logoColor=white">
   <img alt="listens on 127.0.0.1 only" src="https://img.shields.io/badge/listens_on-127.0.0.1-2fa36b?style=flat-square">
