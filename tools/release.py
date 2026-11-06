@@ -65,6 +65,14 @@ def read_version(run: Runner, sha: str) -> str:
     return match.group(1)
 
 
+def require_ci_success(run: Runner, repo: str, sha: str) -> None:
+    """新版本会经自动更新下发，所以目标提交必须有成功的 main push CI。"""
+    query = (f"repos/{repo}/actions/workflows/ci.yml/runs"
+             f"?head_sha={sha}&event=push&status=success&per_page=1")
+    if not int(run(["gh", "api", query, "--jq", ".total_count"]).strip() or 0):
+        raise ReleaseError(f"提交 {sha} 没有成功的 CI 记录，不发布新版本")
+
+
 def create_tag(run: Runner, tag: str, sha: str) -> None:
     run(["git", "-c", f"user.name={BOT[0]}", "-c", f"user.email={BOT[1]}",
          "tag", "-a", tag, sha, "-m", f"annotation-everything {tag}"])
@@ -103,6 +111,8 @@ def execute(run: Runner, repo: str, sha: str, dry_run: bool = False) -> Plan:
                     "--json", "tagName", "--jq", ".[].tagName"]).split()
     plan = make_plan(version, tags, releases)
     print(f"版本 {version}；新标签：{plan.new_tag or '无'}；待建 Release：{[tag for tag, _ in plan.missing]}")
+    if plan.new_tag:
+        require_ci_success(run, repo, sha)
     if dry_run:
         return plan
     if plan.new_tag:

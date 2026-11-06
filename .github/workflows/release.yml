@@ -5,10 +5,11 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
-  # 重跑发版或补全历史 Release；只使用 main 上已有的提交。
+  # 重跑发版或补全历史 Release。打新标签前，脚本会校验目标提交的 CI 已成功。
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: write
   issues: write
 

@@ -48,9 +48,12 @@ class PlanTests(unittest.TestCase):
 class FakeHost:
     """记录写操作，并按合成状态回答查询。"""
 
-    def __init__(self, version="0.12.1", tags=("v0.12.0",), releases=(), milestones=(), on_main=True):
+    def __init__(self, version="0.12.1", tags=("v0.12.0",), releases=(), milestones=(), on_main=True,
+                 ci_success=1):
         self.version, self.tags, self.releases = version, list(tags), list(releases)
         self.milestones, self.on_main = list(milestones), on_main
+        self.ci_success = ci_success
+        self.ci_queries = []
         self.calls = []
 
     def __call__(self, args):
@@ -64,6 +67,9 @@ class FakeHost:
             return ""
         if args[:3] == ["gh", "release", "list"]:
             return "\n".join(self.releases)
+        if args[:2] == ["gh", "api"] and "actions/workflows/ci.yml/runs" in args[2]:
+            self.ci_queries.append(args[2])
+            return str(self.ci_success)
         if args[:2] == ["gh", "api"] and "--method" not in args:
             return json.dumps(self.milestones)
         self.calls.append(args)
@@ -85,6 +91,27 @@ class ExecuteTests(unittest.TestCase):
         self.assertEqual(created[created.index("--notes-start-tag") + 1], "v0.12.0")
         self.assertIn("--latest", created)
         self.assertTrue(any("repos/owner/project/milestones/6" in call for call in joined), joined)
+
+    def test_new_tag_requires_successful_ci_on_the_exact_commit(self):
+        host = FakeHost(releases=["v0.12.0"], ci_success=0)
+        with self.assertRaises(release.ReleaseError):
+            release.execute(host, REPO, SHA)
+        self.assertEqual(host.calls, [], "CI 未成功时不能有任何写操作")
+        self.assertEqual(len(host.ci_queries), 1)
+        query = host.ci_queries[0]
+        for part in (f"head_sha={SHA}", "event=push", "status=success"):
+            self.assertIn(part, query)
+
+    def test_dry_run_also_reports_unverified_ci(self):
+        host = FakeHost(releases=["v0.12.0"], ci_success=0)
+        with self.assertRaises(release.ReleaseError):
+            release.execute(host, REPO, SHA, dry_run=True)
+
+    def test_backfilling_existing_tags_does_not_need_ci(self):
+        host = FakeHost(version="0.12.0", tags=["v0.12.0"], ci_success=0)
+        release.execute(host, REPO, SHA)
+        self.assertEqual(host.ci_queries, [])
+        self.assertEqual(host.calls[0][:4], ["gh", "release", "create", "v0.12.0"])
 
     def test_milestone_with_open_issues_stays_open(self):
         host = FakeHost(releases=["v0.12.0"],
@@ -138,6 +165,7 @@ class WorkflowTests(unittest.TestCase):
     def test_grants_only_the_write_scopes_it_needs(self):
         self.assertIn("contents: write", self.text)
         self.assertIn("issues: write", self.text)
+        self.assertIn("actions: read", self.text)
         self.assertNotIn("write-all", self.text)
         self.assertNotIn("pull_request_target", self.text)
 
