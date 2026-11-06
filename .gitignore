@@ -1,20 +1,39 @@
 # ── 真实材料防护 ───────────────────────────────────────────────
 # 仓库只放合成数据（见 AGENTS.md）。汇报材料常见的办公文档格式一律不入库，
 # 防止把真实报告、讲稿或转换产物误提交；合成样例使用 HTML / Markdown。
+# Office
 *.pptx
 *.ppt
 *.pptm
+*.ppsx
+*.pps
 *.potx
-*.key
-*.pdf
 *.docx
 *.doc
+*.docm
+*.dotx
 *.xlsx
 *.xls
 *.xlsm
-*.csv
+*.xlsb
+*.xltx
+# Apple（*.key 同时覆盖 Keynote 与私钥文件）
+*.key
 *.numbers
 *.pages
+# OpenDocument、WPS 与版式文档
+*.odt
+*.ods
+*.odp
+*.wps
+*.et
+*.dps
+*.ofd
+*.pdf
+*.rtf
+# 表格数据
+*.csv
+*.tsv
 
 # ── 审阅产物 ───────────────────────────────────────────────────
 # 可能含被审阅材料的内容，清单见 references/formats.md「审阅目录里的文件」。
@@ -27,12 +46,19 @@ skills.json
 .annotation-wait.*.json
 .annotation-server.json
 .notes.lock
+.annotation-archived
 server.log
+# 分析事件含问题、回答与材料摘录；只匹配审阅目录形态，不影响 docs/analysis/
+**/analysis/*/events.jsonl
+**/analysis/counter.json
+# 报告核验记录留在受控材料位置
+report-record.json
 # 初改前后的源文件快照（含报告内容）
 .snapshots/
 # eval 用例的合成输入要入库（文件名撞上面的规则，显式放行）
 !skill/annotation-everything/evals/*/files/**/notes.json
 !skill/annotation-everything/evals/*/files/**/notes.jsonl
+!skill/annotation-everything/evals/*/files/**/report-record.json
 
 # ── eval 与测试产物 ────────────────────────────────────────────
 skill/*-workspace/
@@ -53,10 +79,15 @@ skill/.annotation-everything-update.lock
 .env
 .env.*
 !.env.example
+.netrc
+.pypirc
 *.pem
+*.p8
 *.p12
 *.pfx
+*.ppk
 id_rsa*
+id_ecdsa*
 id_ed25519*
 
 # ── Python ────────────────────────────────────────────────────
@@ -78,13 +109,12 @@ Thumbs.db
 *.swp
 *~
 .claude/settings.local.json
+.claude/worktrees/
+.codegraph/
 .worktrees/
-# CodeGraph 索引由 .codegraph/.gitignore 自行忽略
+.zcode/
 
 # ── 临时文件与日志 ─────────────────────────────────────────────
 tmp/
 *.tmp
 *.log
-
-# 本地验证/测试用的隔离台账目录（AE_HOME=$PWD/.ae-home 约定）
-.ae-home/

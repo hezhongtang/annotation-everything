@@ -24,7 +24,7 @@
 
 ## 分支、issue 与 PR
 
-`main` 只通过 PR 的 squash 合并更新。仓库是免费版私有仓库，GitHub 无法在服务器端锁定 `main`，下面的规则靠本地钩子和这份约定执行。
+`main` 只通过 PR 的 squash 合并更新。GitHub 规则集 `protect-main` 在服务器端要求走 PR、只允许 squash、必须通过两项 CI 检查，并禁止删除和强推 `main`；规则集 `protect-release-tags` 禁止修改和删除 `v*` 标签。本地钩子提前拦截同类操作，其余规则靠这份约定执行。管理员可以在 PR 上越过必需检查，只有用户明确同意时才使用。
 
 - **先启用钩子**：克隆后运行一次 `tools/setup-dev.sh`。钩子会拒绝在 `main` 上提交、推送到 `main` 和删除 `main`，本地 `main` 只能快进到 `origin/main` 上已有的提交。不要用 `--no-verify` 绕过；确需绕过时先征得用户同意。
 - **一个 issue 一个分支、一个 PR**：从 issue 开分支，`gh issue develop <编号> --name <type>/<编号>-<简述> --base main --checkout`，`type` 与提交类型一致（feat / fix / docs / chore 等），不用工具名作前缀。没有 issue 的小改动也要开分支，命名 `<type>/<简述>`。
@@ -33,7 +33,7 @@
 - **开发前先有验收标准**：新 issue 按 `.github/ISSUE_TEMPLATE/` 的模板写（命令行创建时正文也按模板的小节写）并标 `needs-triage`；验收标准和兼容性要求写清楚后改为 `ready-for-agent`，Agent 只领取 `ready-for-agent` 的 issue。
 - **CI 失败自动修复（auto-fix）**：用户发起 PR review 后，由审查 Agent 跟进 CI。出现失败时，读取失败日志、定位原因，在原 PR 分支验证、提交和推送修复，持续跟进至最新提交的 CI 全部通过，无需用户逐次要求。若因权限、凭据或外部服务故障无法继续，明确报告阻塞原因及所需协助。
 - **合并前**：完成「开发与 PR review」的合并门禁，非小改动包含独立审查；合并用 squash，分支在合并后自动删除。
-- **发版**：修改版本号（`skill/annotation-everything/scripts/serve.py` 中的 `VERSION` 常量）的 PR 挂到对应版本的里程碑（如 `v0.9.0`）；合并后在合并提交上打附注标签 `git tag -a v0.9.0 <提交> -m "annotation-everything v0.9.0"` 并推送，再关闭里程碑。
+- **发版**：修改版本号（`skill/annotation-everything/scripts/serve.py` 中的 `VERSION` 常量）的 PR 挂到对应版本的里程碑（如 `v0.9.0`）。合并进 `main` 且该提交的 CI 通过后，`.github/workflows/release.yml` 运行 `tools/release.py`：打附注标签、创建 GitHub Release（说明由 GitHub 按合并的 PR 生成）、补齐历史标签缺失的 Release，并在里程碑没有未完成项时关闭它。不要手动打 `v*` 标签。版本号只能前进，回退或重复不会发布。工作流可重复运行；失败时修复原因后运行 `gh workflow run Release`，只补缺失的部分。打新标签前必须查到目标提交在 `main` 上成功的 CI，手动运行也不例外。
 
 ## README 维护
 

@@ -17,7 +17,7 @@ The default skill copy lives at `~/.claude/skills/annotation-everything`; links 
 <p align="center"><img src="docs/assets/banner.en.svg" alt="annotation-everything: annotate for revision, analyze questions, confirm before handing to an agent" width="100%"></p>
 
 <p align="center">
-  <img alt="version 0.12.0" src="https://img.shields.io/badge/version-0.12.0-1f3a5f?style=flat-square">
+  <img alt="version 0.12.1" src="https://img.shields.io/badge/version-0.12.1-1f3a5f?style=flat-square">
   <img alt="Agent Skills skill" src="https://img.shields.io/badge/Agent_Skills-skill-d97757?style=flat-square">
   <img alt="Python standard library only" src="https://img.shields.io/badge/Python-standard_library_only-3776ab?style=flat-square&logo=python&logoColor=white">
   <img alt="listens on 127.0.0.1 only" src="https://img.shields.io/badge/listens_on-127.0.0.1-2fa36b?style=flat-square">
@@ -311,6 +311,8 @@ Before an agent runs a repair with `--purge`, `--forget-stale`, `--stop-orphans`
 
 Full validation during PR review includes `serve.py check` to verify these constraints; server security checks are deferred to that stage during implementation.
 
+See [SECURITY.md](SECURITY.md) to report a vulnerability.
+
 ## How it works
 
 ### Architecture
@@ -457,11 +459,13 @@ tools/
 ├── setup-dev.sh                   enables the repository's git hooks
 ├── collect_verify_history.py      reads existing verification artifacts and merge events from GitHub without running tests
 ├── grade_iteration.py             grades one round of skill evals and writes grading.json for each run
+├── release.py                     tag a version, backfill Releases and close the milestone after CI passes
 └── git-hooks/                     refuse commits on main, pushes to main and deleting main
 .github/                           CI, issue templates and the pull request template
 docs/                              architecture decision records (ADRs), agent conventions, README images
 docs/verify/                       verification record field contract, the unified entry's onboarding guide and the browser scenario registry
 LICENSE, NOTICE                    Apache-2.0 license and attribution notice
+SECURITY.md                        how to report vulnerabilities, and the security scope
 GLOSSARY.md                        glossary
 ```
 

@@ -17,7 +17,7 @@
 <p align="center"><img src="docs/assets/banner.zh.svg" alt="annotation-everything：批注改稿，分析问题，确认后交给 Agent" width="100%"></p>
 
 <p align="center">
-  <img alt="版本 0.12.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.12.0-1f3a5f?style=flat-square">
+  <img alt="版本 0.12.1" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.12.1-1f3a5f?style=flat-square">
   <img alt="Agent Skills 技能" src="https://img.shields.io/badge/Agent_Skills-%E6%8A%80%E8%83%BD-d97757?style=flat-square">
   <img alt="Python 仅标准库" src="https://img.shields.io/badge/Python-%E4%BB%85%E6%A0%87%E5%87%86%E5%BA%93-3776ab?style=flat-square&logo=python&logoColor=white">
   <img alt="只监听 127.0.0.1" src="https://img.shields.io/badge/%E5%8F%AA%E7%9B%91%E5%90%AC-127.0.0.1-2fa36b?style=flat-square">
@@ -311,6 +311,8 @@ Agent 自动执行修复前，遇到 `--purge`、`--forget-stale`、`--stop-orph
 
 PR review 的全量验证包含 `serve.py check`，逐项检查以上约束；实现阶段不单独提前运行服务安全自检。
 
+报告安全漏洞的方式见 [SECURITY.md](SECURITY.md)。
+
 ## 工作原理
 
 ### 整体架构
@@ -457,11 +459,13 @@ tools/
 ├── setup-dev.sh                   启用仓库自带的 git 钩子
 ├── collect_verify_history.py      只读 GitHub 上已有的验证构件与合并事件，不启动测试
 ├── grade_iteration.py             给一轮技能评测打分，写出每次运行的 grading.json
+├── release.py                     CI 通过后打版本标签、补全 Release 并关闭里程碑
 └── git-hooks/                     拒绝在 main 上提交、推送到 main、删除 main
 .github/                           CI、issue 模板和 PR 模板
 docs/                              架构决策记录（ADR）、Agent 协作约定、README 配图
 docs/verify/                       验证记录字段契约、统一入口接入说明与浏览器场景注册
 LICENSE、NOTICE                    Apache-2.0 许可证与归属声明
+SECURITY.md                        漏洞报告方式与安全范围
 GLOSSARY.md                        术语表
 ```
 
