@@ -5272,8 +5272,13 @@ def analysis_ui_checks(browser, tmp: Path):
         ok(wait_dom(page, "() => notes.some(note=>note.text==='合成旧服务批注仍可保存。')&&!pend.get().length", 8)
            and len(disk_notes(review)) == 2, "不支持分析时原批注流程仍可使用")
     finally:
-        context.close()
-        stop(server)
+        try:
+            # 先等拦截响应读完，避免关闭上下文的错误泄漏到下一场景。
+            for routed_page in context.pages:
+                routed_page.unroute_all(behavior="wait")
+        finally:
+            context.close()
+            stop(server)
 
 
 SCENARIO_RUNNERS = {
