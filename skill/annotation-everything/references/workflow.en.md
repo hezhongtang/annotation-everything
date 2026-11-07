@@ -72,6 +72,8 @@ Reuse a matching running service. If the dedicated port is occupied, read the te
 
 The page supports ordinary annotations, quotations, exact delete/replace edits, paired edits, point/region marks, re-annotation, style requests, and skill requirements. Reviewers choose finalization or a stop after the initial edit, subagent permission, and the full check. Processing history shows each batch and its results. Chrome and Edge provide the most reliable report text selection; other browsers can still annotate and mark regions.
 
+After checking the drafts, the reviewer can use **Finalize all (N)** above the annotation list. One confirmation lists the eligible drafts, batches and skipped count. Only drafts in `drafted` or `review` batches are finalized; `claimed` and `reviewing` batches are skipped, including review claims made after confirmation opens. The result uses actual server counts and explains skips. Single-annotation finalization, per-batch finalization and requesting agent review remain available. File mode, disconnection and older services explain how to start, update or restart the service and refresh the page. Agents still stop at the requested stage and must leave this decision to the reviewer.
+
 Without a service, open `index.html` directly. Annotations persist in browser storage, and the reviewer can copy or download them. File mode does not perform a live submission; use the import path in section 7.
 
 ## 5. Read the accepted batch and edit sources

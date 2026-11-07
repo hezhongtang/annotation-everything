@@ -81,7 +81,7 @@ class AnalysisPageTests(unittest.TestCase):
     def test_old_service_upgrade_notice_survives_the_connection_poll(self):
         setup = """
           let mode='offline',rev=null,busy=0,agentDelivery=null,receiver=null,archiveBusy=false,srvOld=false;
-          let srvNoStages=false,srvNoFullCheck=false,stopServiceSupported=false,idx0=null,queueSnap=null,resumeReady=false;
+          let srvNoStages=false,srvNoFullCheck=false,stopServiceSupported=false,finalizeAllSupported=false,idx0=null,queueSnap=null,resumeReady=false;
           let analysisSupported=false,analysisChecked=false,analysisUpgradeShown=false,analysisRenderKey='';
           let features=['marks','stages','full-check'];const FILE=false,document={hidden:false};
           const pend={get:()=>[]},failed={get:()=>[]},hasFeature=(data,name)=>data.features.includes(name);
@@ -116,7 +116,7 @@ class AnalysisPageTests(unittest.TestCase):
           const LS={get:(key,fallback)=>copy(storage.has(key)?storage.get(key):fallback),set:(key,value)=>{storage.set(key,copy(value));return true}};
           const K={pending:'pending',legacyPending:'legacy',failed:'failed',rejected:'rejected'},MAX_FAILS=3,FULL_CHECK_COMPAT='合成全量勾稽要求';
           let mode='offline',rev=1,busy=0,agentDelivery=null,receiver=null,archiveBusy=false,srvOld=false;
-          let srvNoStages=false,srvNoFullCheck=false,stopServiceSupported=false,idx0=null,resumeReady=false,handQueued=false;
+          let srvNoStages=false,srvNoFullCheck=false,stopServiceSupported=false,finalizeAllSupported=false,idx0=null,resumeReady=false,handQueued=false;
           let analysisSupported=true,analysisChecked=false,analysisUpgradeShown=false,analysisRenderKey='';
           let notes=[],remote=[],remoteRev=1,supported=false,scenario={},remoteHand=null,hand=null,handSig='',flightSig='',flight=new Set(),saveFailures=0;
           const writes=[],notices=[],submissions=[],imports=[],newId=()=>String(saveFailures);
@@ -135,7 +135,7 @@ class AnalysisPageTests(unittest.TestCase):
             throw new Error('unexpected network request');
           };
           const toast=text=>{$('toast').textContent=text;notices.push(text)},setDoc=data=>{rev=data.rev;notes=data.notes};
-          const updateMode=()=>{},setCurrentArchive=()=>{},refreshList=()=>{},renderHand=()=>{},renderResume=()=>{},analysisRoute=()=>{};
+          const updateMode=()=>{},setCurrentArchive=()=>{},refreshList=()=>{},renderHand=()=>{},renderResume=()=>{},renderFinalizeAll=()=>{},analysisRoute=()=>{};
         """
         pending = [{"kind": "add", "opId": "op" + str(number),
                     "note": {"id": "note" + str(number), "page": 1, "text": text}}

@@ -2196,6 +2196,141 @@ def handoff_i18n_checks(browser, tmp: Path):
         stop(server)
 
 
+def finalize_all_checks(browser, tmp: Path):
+    """#132：只通过对照页确认定稿；合成状态经真实存储接口准备。"""
+    def seed(directory, *, active=False):
+        code = """
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import notes_store as store
+d = Path(sys.argv[2])
+for state in (['drafted', 'review', 'claimed', 'reviewing'] if sys.argv[3] == 'active' else ['drafted', 'review']):
+    nid = store.add(d, {'page': 1, 'text': 'Synthetic draft'})[1]['id']
+    seq = store.handoff_submit(d, '', target='review')[1]['seq']
+    store.handoff_claim(d, seq=seq)
+    store.set_status(d, nid, 'resolved', by='Synthetic', resolution='Synthetic change')
+    if state != 'claimed':
+        store.handoff_done(d, seq=seq)
+    if state in ('review', 'reviewing'):
+        store.handoff_request_review(d, seq)
+    if state == 'reviewing':
+        store.handoff_claim(d, seq=seq, stage='review')
+"""
+        subprocess.run([sys.executable, "-c", code, str(SCRIPTS), str(directory),
+                        "active" if active else "ready"], check=True, capture_output=True)
+
+    for locale in ("zh-CN", "en"):
+        d = tmp / ("finalize_all_" + locale)
+        build(d, locale=locale, name="Synthetic finalization")
+        seed(d, active=locale == "zh-CN")
+        port = free_port()
+        server = start_server(d, port)
+        ctx = browser.new_context()
+        try:
+            page = ctx.new_page()
+            base = f"http://127.0.0.1:{port}"
+            posts = []
+            page.on("request", lambda req: posts.append(req.url) if req.method == "POST" and req.url.endswith("/api/handoff/finalize-all") else None)
+            page.goto(base)
+            button = page.locator("#finalizeAllBtn")
+            button.wait_for(state="visible")
+            label = "全部定稿（2 条）" if locale == "zh-CN" else "Finalize all (2)"
+            ok(page.get_by_role("button", name=label, exact=True).count() == 1,
+               f"全部定稿按钮显示跨批条数并有无障碍名称（{locale}）")
+            artifacts = os.environ.get("AE_FINALIZE_ARTIFACTS")
+            if artifacts:
+                output = Path(artifacts)
+                output.mkdir(parents=True, exist_ok=True)
+                capture_screenshot(page, output / ("finalize-all." + ("zh" if locale == "zh-CN" else "en") + ".png"))
+            before = page.request.get(base + "/api/notes").json()
+            confirmations = []
+
+            def cancel(dialog):
+                confirmations.append(dialog.message)
+                dialog.dismiss()
+
+            page.once("dialog", cancel)
+            button.focus()
+            button.press("Enter")
+            page.wait_for_function("() => !document.getElementById('finalizeAllBtn').disabled")
+            after = page.request.get(base + "/api/notes").json()
+            ok(len(confirmations) == 1 and not posts and before["notes"] == after["notes"]
+               and before["handoff"] == after["handoff"], f"键盘打开一次确认，取消不改变状态（{locale}）")
+            text = confirmations[0] if confirmations else ""
+            ok(("第 1 批（1 条）" in text and "第 2 批（1 条）" in text and "跳过 2 条" in text)
+               if locale == "zh-CN" else ("Batch 1 (1)" in text and "Batch 2 (1)" in text and "Drafts to skip: 0" in text),
+               f"确认列出将定稿条数、批次和跳过条数（{locale}）")
+            page.once("dialog", lambda dialog: (confirmations.append(dialog.message), dialog.accept()))
+            button.click()
+            expected = "已定稿 2 条初改，完成 2 批；跳过 2 条。" if locale == "zh-CN" else "Drafts finalized: 2; batches completed: 2; skipped: 0."
+            ok(wait_dom(page, "expected => document.getElementById('finalizeAllInfo').textContent.includes(expected)", 8, arg=expected),
+               f"完成提示以实际定稿和跳过条数为准（{locale}）")
+            ok(len(confirmations) == 2 and len(posts) == 1 and not button.is_visible(),
+               f"确认一次写入，完成后按钮和计数自动更新（{locale}）")
+            actual = page.request.get(base + "/api/notes").json()
+            ok(sum(note["status"] == "resolved" for note in actual["notes"]) == 2,
+               f"跨批初改通过服务落盘为已处理（{locale}）")
+            if locale == "zh-CN":
+                info = page.inner_text("#finalizeAllInfo")
+                ok("正在处理" in info and "正在复核" in info, "部分成功说明处理中与复核中的跳过原因")
+                page.select_option("#localePick", "en")
+                ok("Drafts finalized: 2" in page.inner_text("#finalizeAllInfo")
+                   and "being reviewed" in page.inner_text("#finalizeAllInfo"), "切换语言后结果与跳过原因按当前语言显示")
+                continue
+
+            # 确认框已打开时接收其中一批复核：仍只发送一次写请求。
+            seed(d)
+            button.wait_for(state="visible")
+            preview = page.request.get(base + "/api/notes").json()["handoff"]["finalizable"]
+            review_seq = preview["batches"][-1]["seq"]
+
+            def claim_then_accept(dialog):
+                result = notes_cli("claim", str(d), "--stage", "review", "--seq", str(review_seq))
+                if result.returncode:
+                    raise AssertionError(result.stderr)
+                dialog.accept()
+
+            page.once("dialog", claim_then_accept)
+            button.click()
+            ok(wait_dom(page, "() => document.getElementById('finalizeAllInfo').textContent.includes('Drafts finalized: 1; batches completed: 1; skipped: 1.')", 8),
+               "确认期间被接收复核的批次跳过，部分成功不显示全部成功")
+            ok("being reviewed" in page.inner_text("#finalizeAllInfo"), "竞态跳过结果说明正在复核")
+
+            # 功能协商：旧服务即使还有初改，也不会出现可点击的全部定稿按钮。
+            old = ctx.new_page()
+
+            def legacy(route):
+                response = route.fetch()
+                doc = response.json()
+                doc["features"] = [feature for feature in doc.get("features", []) if feature != "finalize-all"]
+                doc.get("handoff", {}).pop("finalizable", None)
+                route.fulfill(response=response, json=doc)
+
+            old.route("**/api/notes", legacy)
+            old.goto(base)
+            ok(wait_dom(old, "() => document.getElementById('finalizeAllInfo').textContent.includes('restart')", 8)
+               and not old.locator("#finalizeAllBtn").is_visible(), "旧服务隐藏按钮并说明更新、重启与刷新方式")
+            old.close()
+
+            snapshot = page.request.get(base + "/api/notes").json()
+            file_page = ctx.new_page()
+            file_page.add_init_script("localStorage.setItem(" + json.dumps("ae." + snapshot["reviewId"] + ".notes") + ", "
+                                      + json.dumps(json.dumps(snapshot["notes"])) + ");")
+            file_page.goto((d / "index.html").as_uri())
+            ok(wait_dom(file_page, "() => document.getElementById('finalizeAllInfo').textContent.includes('File mode')", 5)
+               and not file_page.locator("#finalizeAllBtn").is_visible(), "文件模式说明需启动本地服务，不改变状态")
+            file_page.close()
+            page.route("**/api/notes", lambda route: route.abort())
+            ok(wait_dom(page, "() => document.getElementById('finalizeAllInfo').textContent.includes('requires the local service')", 8)
+               and not button.is_visible(), "断线隐藏定稿入口，说明启动服务与重连方式")
+            ok(page.request.get(base + "/api/notes").json()["notes"] == snapshot["notes"],
+               "旧服务、文件模式与断线均未改变批注")
+        finally:
+            ctx.close()
+            stop(server)
+
+
 def current_task_controls_checks(browser, tmp: Path):
     """当前任务详情通过界面展开、收起；语言与轮询不会重置用户选择。"""
     d = tmp / "current_task_controls"
@@ -3955,8 +4090,8 @@ def server_mode_checks(browser, tmp: Path):
                condition="临时标点批注落盘")
     tid = [n for n in disk_notes(sdir) if n["text"] == "临时标点批注"][0]["id"]
     tpin = page.locator(f'#host .ae-pin[data-id="{tid}"]')
-    bb = tpin.bounding_box()
-    page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
+    # 落盘先于标点重绘；点击动作等待新标点可见后再进行鼠标交互。
+    tpin.click()
     page.click('#pinpop [data-pp="unpin"]')
     ok(wait_until(lambda: [n for n in disk_notes(sdir) if n["id"] == tid][0]["pin"] is None, page, 5,
                   condition="「去掉标注」落盘"), "在标注弹窗里「去掉标注」")
@@ -5137,8 +5272,13 @@ def analysis_ui_checks(browser, tmp: Path):
         ok(wait_dom(page, "() => notes.some(note=>note.text==='合成旧服务批注仍可保存。')&&!pend.get().length", 8)
            and len(disk_notes(review)) == 2, "不支持分析时原批注流程仍可使用")
     finally:
-        context.close()
-        stop(server)
+        try:
+            # 先等拦截响应读完，避免关闭上下文的错误泄漏到下一场景。
+            for routed_page in context.pages:
+                routed_page.unroute_all(behavior="wait")
+        finally:
+            context.close()
+            stop(server)
 
 
 SCENARIO_RUNNERS = {
@@ -5162,6 +5302,7 @@ SCENARIO_RUNNERS = {
     "locale-loop": locale_checks,
     "english-script": english_script_checks,
     "handoff-i18n": handoff_i18n_checks,
+    "finalize-all": finalize_all_checks,
     "current-task-controls": current_task_controls_checks,
     "export-import": export_import_checks,
     "file-mode": file_mode_checks,

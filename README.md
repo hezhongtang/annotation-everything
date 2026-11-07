@@ -173,7 +173,7 @@ The console layout puts all annotations, processing history, review overview and
   <tr>
     <td valign="top">
       <h4>🧭 Draft first, then review (optional)</h4>
-      Handle a batch in two stages: one model drafts the changes, then a more capable model reviews them. You can also stop after the draft and decide whether to request a review or finalize directly. Every annotation keeps a record of what happened at each stage.
+      Handle a batch in two stages: one model drafts the changes, then a more capable model reviews them. You can also stop after the draft and decide whether to request a review or finalize directly. Use “Finalize all” above the annotation list to accept eligible drafts across batches with one confirmation. Every annotation keeps a record of what happened at each stage.
     </td>
     <td valign="top">
       <h4>🧩 Skills and standing skills</h4>
@@ -389,6 +389,10 @@ stateDiagram-v2
 ### Draft first, then review
 
 The reviewing agent gives a verdict on each annotation: approve it, revise it further itself, or return it to the reviewer to decide. It never sends an annotation back to the drafting agent.
+
+**Finalize all** appears above the annotation list when eligible drafts exist, with their count. Confirm once to finalize drafts in batches that are awaiting the reviewer or waiting for agent review. The confirmation lists the batches and skipped count. Batches being drafted or reviewed stay unchanged, including any review claimed after the confirmation opens. The result reports actual finalized and skipped counts and explains skipped drafts. Single-annotation and per-batch finalization remain available. Finalization is a reviewer decision; agents have no bulk-finalization CLI command. File mode, a disconnected service, or an older service shows recovery guidance; update the skill, restart the service and refresh when needed.
+
+<p align="center"><img src="docs/assets/finalize-all.en.png" alt="Finalize all button with the number of eligible drafts above the annotation list" width="88%"></p>
 
 ```mermaid
 flowchart LR

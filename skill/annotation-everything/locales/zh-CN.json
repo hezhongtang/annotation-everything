@@ -1836,6 +1836,27 @@
     "viewer.analysis.resolution.optionTarget": "{question}：{answer}",
     "viewer.analysis.resolution.change.refuteFork": "已推翻「{assumption}」，从此前记录分出{line}，直接依赖它的问题已撤下重问。",
     "viewer.analysis.resolution.deadStatus.pending": "待确认",
-    "viewer.analysis.resolution.change.submit": "本轮已交给 Agent 分析，已保存的回答一并交出，未答问题会在下一轮继续。"
+    "viewer.analysis.resolution.change.submit": "本轮已交给 Agent 分析，已保存的回答一并交出，未答问题会在下一轮继续。",
+    "serve.err.badFinalizeSelection": "定稿范围格式有误。请刷新页面后重新确认。",
+    "viewer.finalizeAll.button": "全部定稿（{count} 条）",
+    "viewer.finalizeAll.working": "正在定稿（{count} 条）…",
+    "viewer.finalizeAll.batch": "第 {seq} 批（{count} 条）",
+    "viewer.finalizeAll.separator": "；",
+    "viewer.finalizeAll.confirm": "将定稿 {count} 条初改，涉及：{batches}。跳过 {skipped} 条初改。确认后，这些初改将标为已处理；如需重改，请逐条重新打开。继续定稿？",
+    "viewer.finalizeAll.result": "已定稿 {count} 条初改，完成 {batches} 批；跳过 {skipped} 条。",
+    "viewer.finalizeAll.none": "本次未定稿任何初改；跳过 {skipped} 条。",
+    "viewer.finalizeAll.skip.claimed": "{count} 条所属批次正在处理，已跳过。",
+    "viewer.finalizeAll.skip.reviewing": "{count} 条所属批次正在复核，已跳过。",
+    "viewer.finalizeAll.skip.unavailable": "{count} 条的批次不在可定稿状态或已不存在，已跳过。",
+    "viewer.finalizeAll.skip.changed": "{count} 条的状态或批次归属已变化，已跳过；请刷新后重新确认。",
+    "viewer.finalizeAll.skip.unconfirmed": "{count} 条不在本次确认范围内，已跳过；请重新确认后定稿。",
+    "viewer.finalizeAll.file": "文件模式不能全部定稿。请启动这份审阅的本地服务，再打开服务地址。",
+    "viewer.finalizeAll.offline": "全部定稿需要连接本地服务。请启动这份审阅的服务并等待重新连接。",
+    "viewer.finalizeAll.legacy": "当前服务不支持全部定稿。请更新技能、重启这份审阅的服务并刷新页面。",
+    "viewer.finalizeAll.unsaved": "还有未保存或未能保存的改动。请先恢复保存，再全部定稿。",
+    "viewer.finalizeAll.empty": "当前没有可定稿的初改。页面已按服务端状态更新。",
+    "viewer.finalizeAll.unknown": "未收到可确认的定稿结果。请恢复连接后刷新并核对处理记录，再决定是否重试。",
+    "serve.check.finalizeAllGuard": "全部定稿接口 {guard} 校验（HTTP {status}）",
+    "serve.check.finalizeAllUnchanged": "全部定稿的被拒请求未改变批注或批次"
   }
 }

@@ -198,6 +198,12 @@ SCENARIOS: list[Scenario] = [
         isolation="独立临时审阅目录、独立端口与浏览器上下文；所有服务和 CLI 子进程用后回收",
     ),
     Scenario(
+        id="finalize-all",
+        title="跨批全部定稿：双语计数、一次确认与取消、键盘操作、实际结果与跳过原因、接收复核竞态、断线和旧服务提示",
+        fixture="fixtures/sample 合成材料；独立合成初改批次与处理中批次；路由模拟旧服务和断线",
+        isolation="独立临时审阅目录、端口、浏览器上下文和合成用户目录；服务用后回收，沿用 host-state 锁",
+    ),
+    Scenario(
         parallel_safe=True,
         id="export-import",
         title="双语导出与跨语言导入：中英文 Markdown 往返、页面与 CLI 互导、解析按格式标记选文法、旧中文格式不退步、认不出的文字有明确提示",
