@@ -1810,6 +1810,9 @@ const FINALIZE_SKIP={claimed:"claimed",reviewing:"reviewing",unavailable:"unavai
 function finalizeSkipText(skipped){const counts={};
   for(const entry of skipped||[]){const reason=FINALIZE_SKIP[entry.reason]||"unavailable";counts[reason]=(counts[reason]||0)+1}
   return Object.entries(counts).map(([reason,count])=>tMsg("viewer.finalizeAll.skip."+reason,{count})).join(tMsg("viewer.finalizeAll.separator"))}
+function finalizeResultText(result){return tMsg(result.finalizedCount?"viewer.finalizeAll.result":"viewer.finalizeAll.none",
+  {count:result.finalizedCount,batches:result.batches.length,skipped:result.skippedCount})
+  +(result.skippedCount?"\n"+finalizeSkipText(result.skipped):"")}
 function finalizeAllProblem(){return FILE?"file":mode!=="server"?"offline":!finalizeAllSupported?"legacy":""}
 function renderFinalizeAll(){const bar=$("finalizeAllBar"),button=$("finalizeAllBtn"),info=$("finalizeAllInfo");if(!bar)return;
   const plan=hand&&hand.finalizable,count=plan&&plan.count||0,problem=finalizeAllProblem();
@@ -1819,9 +1822,7 @@ function renderFinalizeAll(){const bar=$("finalizeAllBar"),button=$("finalizeAll
   let message="";
   if(problem&&(count||notes.some(isDraft)))message=tMsg("viewer.finalizeAll."+problem);
   else if(finalizeAllError)message=tMsg("viewer.finalizeAll."+finalizeAllError);
-  else if(finalizeAllResult){const r=finalizeAllResult;
-    message=tMsg(r.finalizedCount?"viewer.finalizeAll.result":"viewer.finalizeAll.none",{count:r.finalizedCount,batches:r.batches.length,skipped:r.skippedCount});
-    if(r.skippedCount)message+="\n"+finalizeSkipText(r.skipped)}
+  else if(finalizeAllResult)message=finalizeResultText(finalizeAllResult);
   else if(plan&&plan.skipped.length)message=finalizeSkipText(plan.skipped);
   info.textContent=message;bar.hidden=button.hidden&&!message}
 async function finalizeAll(){
@@ -1842,8 +1843,7 @@ async function finalizeAll(){
       ||!Array.isArray(r.batches)||!Array.isArray(r.skipped)||r.skipped.length!==r.skippedCount){finalizeAllError="unknown";return}
     finalizeAllResult=r;applyServer({...r.doc,handoff:r.handoff},true);
     if($("batches").classList.contains("on"))loadBatches();
-    toast(tMsg(r.finalizedCount?"viewer.finalizeAll.result":"viewer.finalizeAll.none",{count:r.finalizedCount,batches:r.batches.length,skipped:r.skippedCount})
-      +(r.skippedCount?"\n"+finalizeSkipText(r.skipped):""),8000);
+    toast(finalizeResultText(r),8000);
   }catch(e){finalizeAllError=e.code==="no-api"?"legacy":"unknown";
     if(!e.status)mode=e.mismatch?"mismatch":"offline";
   }finally{finalizingAll=false;busy--;updateMode()}}
