@@ -4090,8 +4090,8 @@ def server_mode_checks(browser, tmp: Path):
                condition="临时标点批注落盘")
     tid = [n for n in disk_notes(sdir) if n["text"] == "临时标点批注"][0]["id"]
     tpin = page.locator(f'#host .ae-pin[data-id="{tid}"]')
-    bb = tpin.bounding_box()
-    page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
+    # 落盘先于标点重绘；点击动作等待新标点可见后再进行鼠标交互。
+    tpin.click()
     page.click('#pinpop [data-pp="unpin"]')
     ok(wait_until(lambda: [n for n in disk_notes(sdir) if n["id"] == tid][0]["pin"] is None, page, 5,
                   condition="「去掉标注」落盘"), "在标注弹窗里「去掉标注」")
