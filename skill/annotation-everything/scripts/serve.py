@@ -71,7 +71,7 @@ import wakeup  # noqa: E402
 APP = "annotation-everything"
 VERSION = "0.12.1"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
-FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding", "overview", "analysis"]
+FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding", "overview", "analysis", "finalize-all"]
 
 # 界面语言只有进程级一个来源（见 i18n.set_locale）：main() 与 serve() 按共同契约解析后
 # 设置一次，服务与台账等各模块共同遵循；未设置前保持中文（旧调用行为不变）
@@ -809,6 +809,24 @@ class Handler(BaseHTTPRequestHandler):
             items = store.always_save(d, body.get("always"))
             self.server.log("info", f"always-skills count={len(items)}")
             self._json(200, {"alwaysSkills": items, **self._ident()})
+        elif path == "/api/handoff/finalize-all" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            groups = body.get("batches")
+            selections, seen = {}, set()
+            if not isinstance(groups, list):
+                raise Reject(400, "bad-request", self._t("serve.err.badFinalizeSelection"))
+            for group in groups:
+                seq, ids = (group.get("seq"), group.get("ids")) if isinstance(group, dict) else (None, None)
+                if (not isinstance(seq, int) or isinstance(seq, bool) or seq < 1 or seq in selections
+                        or not isinstance(ids, list) or not ids or any(not store.valid_id(nid) for nid in ids)
+                        or len(set(ids)) != len(ids) or seen.intersection(ids)):
+                    raise Reject(400, "bad-request", self._t("serve.err.badFinalizeSelection"))
+                selections[seq] = set(ids)
+                seen.update(ids)
+            result = store.handoff_finalize_all(d, selections)
+            self.server.log("info", f"finalize-all count={result['finalizedCount']} skipped={result['skippedCount']}")
+            self._json(200, {**result, "doc": {**self._notes_doc(), **self._ident()},
+                             "handoff": self._handoff_state(full=False), **self._ident()})
         elif path in ("/api/handoff/review", "/api/handoff/finalize") and cmd == "POST":
             body = self._expect_obj(self._body())
             seq = body.get("seq")
@@ -1566,6 +1584,20 @@ def check(locale: str | None = None) -> int:
         ok(s == 421, T("serve.check.badHostRead", status=s))
         s, _, _ = _req(port, "GET", "/api/overview?scope=all", {"Host": f"evil.example:{port}"})
         ok(s == 421, T("serve.check.overviewHost", status=s))
+        # 新写接口逐项过同一套安全门；被拒请求不能创建或改写状态文件。
+        state_paths = [tmp / store.NOTES_FILE, tmp / store.LOG_FILE, tmp / store.HANDOFF_FILE]
+        before_finalize = [path.read_bytes() if path.exists() else None for path in state_paths]
+        finalize_guards = [({**same, "Host": "evil.example"}, 421, "Host"),
+                           ({**same, "Origin": "http://evil.example"}, 403, "Origin"),
+                           ({k: v for k, v in same.items() if k != "Origin"}, 403, "NoOrigin"),
+                           ({**same, "Content-Type": "text/plain"}, 415, "Content-Type"),
+                           ({**same, "Sec-Fetch-Site": "cross-site"}, 403, "Sec-Fetch-Site")]
+        for headers, expected, guard in finalize_guards:
+            s, h, _ = _req(port, "POST", "/api/handoff/finalize-all", headers, {"batches": []})
+            ok(s == expected and "access-control-allow-origin" not in h,
+               T("serve.check.finalizeAllGuard", guard=guard, status=s))
+        ok([path.read_bytes() if path.exists() else None for path in state_paths] == before_finalize,
+           T("serve.check.finalizeAllUnchanged"))
         # 在进程边界设置拒绝哨兵：失守也不能真的拉起不应启动的服务。
         start_headers = {**same, "X-AE-Review": "checkreview"}
         with patch.object(subprocess, "Popen", side_effect=AssertionError("unexpected overview child")) as spawned:

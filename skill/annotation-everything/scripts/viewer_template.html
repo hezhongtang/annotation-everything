@@ -185,6 +185,9 @@ body.focus-mode.focus-composer #focusHint{display:none}
 #help h2{margin:0 0 var(--ae-space);color:var(--ae-navy);font-size:var(--ae-help-title)}#help h3{margin:var(--ae-space-lg) 0 var(--ae-gap-6);color:var(--ae-navy);font-size:var(--ae-section)}
 .keys{font-size:var(--ae-small);color:var(--ae-mut);margin-top:var(--ae-gap-18)}
 .notes{margin:0}
+.finalize-all{padding:var(--ae-space);border-bottom:1px solid var(--ae-line)}
+.finalize-all[hidden],#finalizeAllBtn[hidden]{display:none}
+#finalizeAllInfo{font-size:var(--ae-small);color:var(--ae-mut);white-space:pre-line}
 .note{border:1px solid var(--ae-danger-line);background:var(--ae-danger-bg);border-radius:var(--ae-radius-md);padding:var(--ae-space) var(--ae-gap-10);margin-bottom:var(--ae-space);font-size:var(--ae-body);line-height:1.65}
 .note.done{background:var(--ae-success-bg);border-color:var(--ae-success-line)}
 .note.done .body{text-decoration:line-through;color:var(--ae-mut)}
@@ -476,7 +479,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
     <section id="bottomPanel" data-aria="viewer.layout.panel" data-p-key="&#92;">
       <section id="analysisPanel" hidden><div class="pane-head"><div id="analysisPanelTabs" role="tablist"><button role="tab" data-analysis-tab="timeline" aria-controls="analysisTimeline" data-msg="viewer.analysis.timeline"></button><button role="tab" data-analysis-tab="assumptions" aria-controls="analysisAssumptions" data-msg="viewer.life.assumptions"></button><button role="tab" data-analysis-tab="parked" aria-controls="analysisParked" data-msg="viewer.life.parked"></button><button role="tab" data-analysis-tab="facts" aria-controls="analysisFacts" data-msg="viewer.life.facts"></button></div><button data-layout-toggle="panel" data-title="viewer.layout.panel" data-p-key="&#92;" aria-controls="analysisPanelLists" data-msg="viewer.layout.panel"></button></div><div id="analysisPanelLists"><ol id="analysisTimeline" role="tabpanel"></ol><ol id="analysisAssumptions" role="tabpanel" hidden></ol><ol id="analysisParked" role="tabpanel" hidden></ol><ol id="analysisFacts" role="tabpanel" hidden></ol></div></section>
       <div class="panel-tabs">        <button data-act="seelist" id="seeList" data-title="viewer.seeListTitle"><span id="seeListLabel" data-msg="viewer.seeList">本页批注</span> <span id="nhere">0</span></button><button id="allTab" data-msg="viewer.allTitle"></button><button id="batchesTab" data-msg="viewer.batch.title"></button><button  class="icon-button" data-layout-toggle="panel" data-title="viewer.layout.panel" data-aria="viewer.layout.panel" data-p-key="&#92;" aria-controls="panelBody"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/></svg></button></div>
-      <div id="panelBody"><div class="notes"><div id="nlist"></div></div>
+      <div id="panelBody"><div class="notes"><div id="finalizeAllBar" class="finalize-all" hidden><button id="finalizeAllBtn" hidden></button><div id="finalizeAllInfo" role="status" aria-live="polite"></div></div><div id="nlist"></div></div>
     <div class="form" id="nform"><div class="quote" id="qbox"></div><span id="styleChip"></span>
       <textarea id="ntext" rows="1" placeholder="写修改意见（C）。可先选中报告或讲稿里的文字：直接删除（D）、改为（R），或作为引用写批注；也可以先「在报告上标注」（单击放点、拖动框选）。"></textarea>
       <div class="row"><span id="targetLabel" class="sr-only">对象</span> <select id="ntarget" aria-labelledby="targetLabel"><option value="报告">报告</option><option value="讲稿">讲稿</option><option value="报告和讲稿">报告和讲稿</option></select>
@@ -568,6 +571,7 @@ let i=0;{const s=+LS.get(K.page,0);if(s>0&&s<=N)i=s-1}
 let notes=FILE?LS.get(K.notes,[]):[]; if(!Array.isArray(notes))notes=[];
 let mode=FILE?"file":"offline", rev=null, idx0=null, busy=0, editingId=null, composing=false, listStale=false, hideDone=!!LS.get(K.hide,false);
 let stopServiceSupported=false, stoppingService=false, saveFailures=0;
+let finalizeAllSupported=false, finalizingAll=false, finalizeAllResult=null, finalizeAllError="";
 let markMode=false, pendingPin=null, quote="", quoteFrom="";   // 标注模式；还没添加的新标注（点）
 const drafts=SS.get(K.drafts,{})||{};   // 各页没写完的批注；存在本标签页的会话存储里，刷新不丢
 const editBuf={};                        // 正在改的已有批注的内容（列表重绘、翻页时不丢）
@@ -1050,7 +1054,7 @@ async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}cat
 let handPollKey="";
 function handPollKeyOf(d){const h=d&&d.handoff||null;
   return JSON.stringify([h&&h.latest||null,h?h.total:null,h&&Array.isArray(h.inFlightIds)?h.inFlightIds:[],
-    d&&d.agentDelivery||null])}
+    h&&h.finalizable||null,d&&d.agentDelivery||null])}
 function applyServer(d,quietHand){
   agentDelivery=d.agentDelivery||null;
   receiver=d.receiver||null;
@@ -1058,7 +1062,8 @@ function applyServer(d,quietHand){
   if(!archiveBusy)setCurrentArchive(d.archived);
   const old=!hasFeature(d,"marks");if(old&&!srvOld)toast(tMsg("viewer.mode.oldTitle"),9000);srvOld=old;
   srvNoStages=!hasFeature(d,"stages");
-  srvNoFullCheck=!hasFeature(d,"full-check");stopServiceSupported=hasFeature(d,"stop-service");updateMode();
+  srvNoFullCheck=!hasFeature(d,"full-check");stopServiceSupported=hasFeature(d,"stop-service");
+  finalizeAllSupported=hasFeature(d,"finalize-all");updateMode();
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
   if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
@@ -1126,7 +1131,7 @@ function updateMode(){const m=$("mode"),q=pend.get().length,f=failed.get().lengt
   else if(mode==="mismatch"){m.textContent=tMsg("viewer.mode.mismatch",{extra});m.title=tMsg("viewer.mode.mismatchTitle")}
   else{m.textContent=tMsg("viewer.mode.file");m.title=tMsg("viewer.mode.fileTitle")}
   const fb=$("dlFailed");if(fb)fb.style.display=f?"":"none";
-  syncSrvBar();renderServiceControls();renderReceiver();analysisRouteLabels()}
+  syncSrvBar();renderServiceControls();renderReceiver();analysisRouteLabels();renderFinalizeAll()}
 addEventListener("storage",e=>{
   invalidateExternal();   // 别的标签页改了这些键：外部审阅暂存的解析结果作废
   if(FILE&&e.key===K.notes){const v=LS.get(K.notes,[]);notes=Array.isArray(v)?v:[];refreshList()}   // 别的标签页改了：跟上
@@ -1293,7 +1298,7 @@ function updateCounts(){const c=allStats,b=$("ncount");
     const suffix=parts.length?tMsg("viewer.jumpCounts",{parts:parts.join(tMsg("viewer.jumpSep"))})
       :q.n?tMsg("viewer.jumpDone"):"";
     o.textContent=tMsg("viewer.page",{page:P[k].n})+suffix});
-  renderPageTree();updateLegacy();renderResume()}
+  renderPageTree();updateLegacy();renderResume();renderFinalizeAll()}
 function markBtnLabel(){const b=$("pinBtn"),rn=markMode&&remarkId?notes.find(n=>n.id===remarkId):null;
   const label=b.querySelector("[data-msg]");
   if(label)label.textContent=markMode?(rn?tMsg("viewer.markRehint",{title:clip(noteSummary(rn),12)}):tMsg("viewer.markHint")):tMsg("viewer.markPin")}
@@ -1695,6 +1700,7 @@ function setHand(h,quiet){if(!h||h.error)return;const L=h.latest,prev=hand&&hand
       summary:L.summary?tMsg("viewer.hand.toast.doneSummary",{summary:String(L.summary).slice(0,80)}):""}),7000)}
   const sig=L?[L.seq,L.status,L.resolvedCount,h.total].join("/"):"";
   hand={...h,history:sig===handSig?hand&&hand.history:undefined};   // 状态变了：旧的完整历史作废，需要时再取
+  renderFinalizeAll();
   const fl=Array.isArray(h.inFlightIds)?h.inFlightIds:[],fsig=fl.join(",");
   if(!quiet){renderHand();renderResume()}   // 轮询数据没变：跳过这两次重画，其余照旧
   if(fsig!==flightSig){flightSig=fsig;flight=new Set(fl);refreshList()}   // 「处理中」的批注变了才重绘列表
@@ -1800,6 +1806,48 @@ function requestReview(seq,message,sub){return batchAction("/api/handoff/review"
 function finalizeBatch(seq){const dn=notes.filter(x=>isDraft(x)&&x.draftBatch===seq).length;
   if(!confirm(tMsg("viewer.hand.toast.confirmFinalize",{seq,n:dn})))return;
   return batchAction("/api/handoff/finalize",{seq},tMsg("viewer.hand.toast.finalized",{seq}))}
+const FINALIZE_SKIP={claimed:"claimed",reviewing:"reviewing",unavailable:"unavailable",changed:"changed",unconfirmed:"unconfirmed"};
+function finalizeSkipText(skipped){const counts={};
+  for(const entry of skipped||[]){const reason=FINALIZE_SKIP[entry.reason]||"unavailable";counts[reason]=(counts[reason]||0)+1}
+  return Object.entries(counts).map(([reason,count])=>tMsg("viewer.finalizeAll.skip."+reason,{count})).join(tMsg("viewer.finalizeAll.separator"))}
+function finalizeAllProblem(){return FILE?"file":mode!=="server"?"offline":!finalizeAllSupported?"legacy":""}
+function renderFinalizeAll(){const bar=$("finalizeAllBar"),button=$("finalizeAllBtn"),info=$("finalizeAllInfo");if(!bar)return;
+  const plan=hand&&hand.finalizable,count=plan&&plan.count||0,problem=finalizeAllProblem();
+  button.hidden=!!problem||!count;button.disabled=finalizingAll;
+  button.textContent=tMsg(finalizingAll?"viewer.finalizeAll.working":"viewer.finalizeAll.button",{count});
+  button.setAttribute("aria-label",button.textContent);
+  let message="";
+  if(problem&&(count||notes.some(isDraft)))message=tMsg("viewer.finalizeAll."+problem);
+  else if(finalizeAllError)message=tMsg("viewer.finalizeAll."+finalizeAllError);
+  else if(finalizeAllResult){const r=finalizeAllResult;
+    message=tMsg(r.finalizedCount?"viewer.finalizeAll.result":"viewer.finalizeAll.none",{count:r.finalizedCount,batches:r.batches.length,skipped:r.skippedCount});
+    if(r.skippedCount)message+="\n"+finalizeSkipText(r.skipped)}
+  else if(plan&&plan.skipped.length)message=finalizeSkipText(plan.skipped);
+  info.textContent=message;bar.hidden=button.hidden&&!message}
+async function finalizeAll(){
+  if(finalizingAll)return;
+  const problem=finalizeAllProblem();if(problem){toast(tMsg("viewer.finalizeAll."+problem),7000);return}
+  finalizingAll=true;finalizeAllError="";busy++;renderFinalizeAll();
+  try{
+    if(!await flush()||pend.get().length||failed.get().length){finalizeAllError="unsaved";return}
+    const d=await getNotes();applyServer(d,true);
+    if(!finalizeAllSupported){finalizeAllError="legacy";return}
+    const plan=d.handoff&&d.handoff.finalizable;
+    if(!plan||!plan.count){finalizeAllError="empty";return}
+    const batches=plan.batches.map(b=>tMsg("viewer.finalizeAll.batch",{seq:b.seq,count:b.ids.length})).join(tMsg("viewer.finalizeAll.separator"));
+    if(!confirm(tMsg("viewer.finalizeAll.confirm",{count:plan.count,batches,skipped:plan.skipped.length})))return;
+    const r=await api("POST","/api/handoff/finalize-all",{batches:plan.batches});
+    if(!sameReview(r.doc)||!Number.isInteger(r.finalizedCount)||!Number.isInteger(r.skippedCount)
+      ||!Array.isArray(r.finalizedIds)||r.finalizedIds.length!==r.finalizedCount
+      ||!Array.isArray(r.batches)||!Array.isArray(r.skipped)||r.skipped.length!==r.skippedCount){finalizeAllError="unknown";return}
+    finalizeAllResult=r;applyServer({...r.doc,handoff:r.handoff},true);
+    if($("batches").classList.contains("on"))loadBatches();
+    toast(tMsg(r.finalizedCount?"viewer.finalizeAll.result":"viewer.finalizeAll.none",{count:r.finalizedCount,batches:r.batches.length,skipped:r.skippedCount})
+      +(r.skippedCount?"\n"+finalizeSkipText(r.skipped):""),8000);
+  }catch(e){finalizeAllError=e.code==="no-api"?"legacy":"unknown";
+    if(!e.status)mode=e.mismatch?"mismatch":"offline";
+  }finally{finalizingAll=false;busy--;updateMode()}}
+$("finalizeAllBtn").onclick=finalizeAll;
 $("handBtn").onclick=()=>analysisShown()?submitAnalysis():openHand();$("handState").onclick=()=>hand&&hand.latest?openBatches():openHand();
 $("handHist").onclick=()=>{$("hand").classList.remove("on");openBatches()};
 // 处理记录：每次「交给 Agent」算一批——提交、接收、收尾，这批解决了哪些批注，处理摘要

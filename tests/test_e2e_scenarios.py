@@ -51,6 +51,7 @@ FULL_ORDER = (
     "english-script",
     "handoff-i18n",
     "current-task-controls",
+    "finalize-all",
     "export-import",
     "file-mode",
     "review-overview",

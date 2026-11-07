@@ -1141,7 +1141,8 @@ def handoff_state(review_dir: Path, *, full: bool = True, handoff: Any = None,
            "open": [{**{k: i.get(k) for k in ("seq", "status", "target", "allowSubagents", "fullCheck", "message")},
                      "userMessage": handoff_user_message(i)}
                     for i in items if i.get("status") in IN_FLIGHT + ("drafted",)],
-           **{st: sum(i.get("status") == st for i in items) for st in BATCH_STATUSES}}
+           **{st: sum(i.get("status") == st for i in items) for st in BATCH_STATUSES},
+           "finalizable": _finalizable(notes, items)}
     if full:
         out["history"] = history
     return out
@@ -1393,6 +1394,40 @@ def handoff_request_review(review_dir: Path, seq: int, message: str = "", *, all
         return item
 
 
+def _finalizable(notes: list[dict[str, Any]], items: list[dict[str, Any]]) -> dict[str, Any]:
+    """跨批初改快照；复用请求内已读数据，不另读文件。"""
+    batches = {item["seq"]: item for item in items}
+    groups: dict[int, list[str]] = {}
+    skipped = []
+    for note in notes:
+        if note.get("status") != "drafted":
+            continue
+        seq = note.get("draftBatch")
+        status = batches.get(seq, {}).get("status")
+        if status in ("drafted", "review"):
+            groups.setdefault(seq, []).append(note["id"])
+        else:
+            skipped.append({"id": note["id"], "batch": seq,
+                            "reason": status if status in ("claimed", "reviewing") else "unavailable"})
+    return {"count": sum(len(ids) for ids in groups.values()),
+            "batches": [{"seq": seq, "ids": ids} for seq, ids in sorted(groups.items())],
+            "skipped": skipped}
+
+
+def _finalize_batch(review_dir: Path, doc: dict[str, Any], ndoc: dict[str, Any],
+                    item: dict[str, Any], mine: list[dict[str, Any]], by: str) -> None:
+    """调用方已持批注锁；单批与跨批定稿共用处理痕迹和阶段记录。"""
+    seq = item["seq"]
+    for note in mine:
+        _mark_resolved(note, by=by, resolution=note.get("resolution", ""), batch=seq)
+        _trail(note, by=by, stage="page", batch=seq, action="accepted")
+    if mine:
+        _commit(review_dir, ndoc, {"op": "finalize", "by": by, "seq": seq, "ids": [n["id"] for n in mine]})
+    item.setdefault("stages", []).append({"stage": "accept", "by": by, "at": now_iso(), "count": len(mine)})
+    _finish(item, ndoc["notes"], doc["items"], by, "")
+    _handoff_commit(review_dir, doc, {"op": "handoff-finalize", "by": by, "seq": seq, "count": len(mine)})
+
+
 def handoff_finalize(review_dir: Path, seq: int, *, by: str = "page") -> dict[str, Any]:
     """用户看过初改觉得可以，跳过复核直接定稿：这批的初改批注全部定为已处理。"""
     with locked(review_dir):
@@ -1402,15 +1437,36 @@ def handoff_finalize(review_dir: Path, seq: int, *, by: str = "page") -> dict[st
             raise NoteError(f"第 {seq} 批不在「已初改·待复核」状态")
         ndoc = load(review_dir)
         mine = [n for n in ndoc["notes"] if n.get("status") == "drafted" and n.get("draftBatch") == seq]
-        for n in mine:
-            _mark_resolved(n, by=by, resolution=n.get("resolution", ""), batch=seq)
-            _trail(n, by=by, stage="page", batch=seq, action="accepted")
-        if mine:
-            _commit(review_dir, ndoc, {"op": "finalize", "by": by, "seq": seq, "ids": [n["id"] for n in mine]})
-        item.setdefault("stages", []).append({"stage": "accept", "by": by, "at": now_iso(), "count": len(mine)})
-        _finish(item, ndoc["notes"], doc["items"], by, "")
-        _handoff_commit(review_dir, doc, {"op": "handoff-finalize", "by": by, "seq": seq, "count": len(mine)})
+        _finalize_batch(review_dir, doc, ndoc, item, mine, by)
         return item
+
+
+def handoff_finalize_all(review_dir: Path, selections: dict[int, set[str]]) -> dict[str, Any]:
+    """只定稿审阅人确认过的初改；与 Agent 接收复核共用同一把写锁。"""
+    with locked(review_dir):
+        doc, ndoc = handoff_load(review_dir), load(review_dir)
+        snapshot = _finalizable(ndoc["notes"], doc["items"])
+        skipped = {entry["id"]: entry for entry in snapshot["skipped"]}
+        notes = {note["id"]: note for note in ndoc["notes"]}
+        items = {item["seq"]: item for item in doc["items"]}
+        finalized, batches = [], []
+        for group in snapshot["batches"]:
+            seq, ids = group["seq"], group["ids"]
+            confirmed = selections.get(seq, set())
+            # 确认后新增的初改不能被顺带定稿，也不能留下已完成批次里的初改。
+            if not set(ids).issubset(confirmed):
+                reason = "changed" if confirmed else "unconfirmed"
+                skipped.update({nid: {"id": nid, "batch": seq, "reason": reason} for nid in ids})
+                continue
+            _finalize_batch(review_dir, doc, ndoc, items[seq], [notes[nid] for nid in ids], "page")
+            finalized.extend(ids)
+            batches.append(seq)
+        for seq, ids in selections.items():
+            for nid in ids:
+                if nid not in finalized and nid not in skipped:
+                    skipped[nid] = {"id": nid, "batch": seq, "reason": "changed"}
+        return {"finalizedCount": len(finalized), "finalizedIds": finalized, "batches": batches,
+                "skippedCount": len(skipped), "skipped": list(skipped.values())}
 
 
 # ---------- 重排页序后按页面键校正页码 ----------

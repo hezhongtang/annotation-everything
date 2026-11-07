@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -575,6 +576,168 @@ class TwoStageTests(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+
+class FinalizeAllTests(unittest.TestCase):
+    """审阅人通过 HTTP 一次定稿多批初改，确认范围由服务端再次核对。"""
+
+    def setUp(self):
+        self.d = tmpdir()
+        self.addCleanup(shutil.rmtree, self.d)
+        build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", self.d)
+        self.server = serve.ReviewServer(self.d, 0, log_to_file=False)
+        self.worker = threading.Thread(target=self.server.serve_forever,
+                                       kwargs={"poll_interval": 0.01}, daemon=True)
+        self.worker.start()
+        self.addCleanup(self.close_server)
+        self.headers = {"Host": f"127.0.0.1:{self.server.port}",
+                        "Origin": f"http://127.0.0.1:{self.server.port}",
+                        "Content-Type": "application/json"}
+
+    def close_server(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.worker.join(2)
+
+    def request(self, method="GET", body=None):
+        path = "/api/notes" if method == "GET" else "/api/handoff/finalize-all"
+        status, _, raw = serve._req(self.server.port, method, path, self.headers, body)
+        self.assertEqual(status, 200, raw)
+        return json.loads(raw)
+
+    def draft_batch(self, *, review=False, processing=False):
+        nid = store.add(self.d, {"page": 1, "text": "合成初改"})[1]["id"]
+        seq = store.handoff_submit(self.d, "", target="review")[0]["seq"]
+        store.handoff_claim(self.d, seq=seq)
+        store.set_status(self.d, nid, "resolved", resolution="合成修改说明", by="agent")
+        if not processing:
+            store.handoff_done(self.d, seq=seq)
+        if review:
+            store.handoff_request_review(self.d, seq)
+        return seq, nid
+
+    def test_finalizes_drafts_across_batches_with_existing_trails(self):
+        first, a = self.draft_batch()
+        second, b = self.draft_batch(review=True)
+        preview = self.request()["handoff"]["finalizable"]
+        self.assertEqual(preview["count"], 2)
+        self.assertEqual([batch["seq"] for batch in preview["batches"]], [first, second])
+        result = self.request("POST", {"batches": preview["batches"]})
+        self.assertEqual((result["finalizedCount"], result["skippedCount"]), (2, 0))
+        self.assertEqual(result["batches"], [first, second])
+        after = self.request()
+        self.assertIn("finalize-all", after["features"])
+        self.assertEqual(after["handoff"]["finalizable"]["count"], 0)
+        for note in after["notes"]:
+            self.assertIn(note["id"], (a, b))
+            self.assertEqual((note["status"], note["resolvedBy"], note["resolution"]),
+                             ("resolved", "page", "合成修改说明"))
+            self.assertEqual(note["trail"][-1]["action"], "accepted")
+        status, _, raw = serve._req(self.server.port, "GET", "/api/handoff", self.headers)
+        self.assertEqual(status, 200)
+        for batch in json.loads(raw)["history"]:
+            self.assertEqual((batch["status"], batch["doneBy"], batch["stages"][-1]["stage"],
+                              batch["stages"][-1]["count"]), ("done", "page", "accept", 1))
+
+    def test_skips_active_batches_and_preserves_other_annotation_states(self):
+        _, ready = self.draft_batch()
+        _, processing = self.draft_batch(processing=True)
+        review_seq, reviewing = self.draft_batch(review=True)
+        store.handoff_claim(self.d, seq=review_seq, stage="review")
+        held = store.add(self.d, {"page": 2, "text": "合成分析"})[1]["id"]
+        serve.analysis_store.start(self.d, held)
+        opened = store.add(self.d, {"page": 2, "text": "合成未处理"})[1]["id"]
+        resolved = store.add(self.d, {"page": 2, "text": "合成已处理"})[1]["id"]
+        store.set_status(self.d, resolved, "resolved", by="page")
+        before = self.request()
+        preview = before["handoff"]["finalizable"]
+        self.assertEqual((preview["count"], len(preview["skipped"])), (1, 2))
+        result = self.request("POST", {"batches": preview["batches"]})
+        self.assertEqual((result["finalizedIds"], result["skippedCount"]), ([ready], 2))
+        self.assertEqual({entry["id"]: entry["reason"] for entry in result["skipped"]},
+                         {processing: "claimed", reviewing: "reviewing"})
+        after = {note["id"]: note for note in self.request()["notes"]}
+        for note in before["notes"]:
+            if note["id"] in (held, opened, resolved, processing, reviewing):
+                self.assertEqual(after[note["id"]], note)
+
+    def test_empty_selection_and_repeated_request_do_not_write(self):
+        before = self.request()
+        result = self.request("POST", {"batches": []})
+        self.assertEqual((result["finalizedCount"], result["skippedCount"]), (0, 0))
+        self.assertEqual(self.request()["rev"], before["rev"])
+        self.assertFalse((self.d / store.HANDOFF_FILE).exists())
+        self.draft_batch()
+        selection = {"batches": self.request()["handoff"]["finalizable"]["batches"]}
+        self.request("POST", selection)
+        before = {path.name: path.read_bytes() for path in self.d.glob("*.json*")}
+        result = self.request("POST", selection)
+        self.assertEqual((result["finalizedCount"], result["skippedCount"]), (0, 1))
+        self.assertEqual({path.name: path.read_bytes() for path in self.d.glob("*.json*")}, before)
+
+    def test_claiming_review_after_confirmation_is_rechecked_under_lock(self):
+        _, ready = self.draft_batch()
+        seq, reviewing = self.draft_batch(review=True)
+        selection = {"batches": self.request()["handoff"]["finalizable"]["batches"]}
+        entered, release = threading.Event(), threading.Event()
+
+        def authorize():
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError("合成接收未释放")
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            claim = pool.submit(store.handoff_claim, self.d, seq=seq, stage="review", authorize=authorize)
+            try:
+                self.assertTrue(entered.wait(5))
+                finalize = pool.submit(self.request, "POST", selection)
+            finally:
+                release.set()
+            self.assertEqual(claim.result()["status"], "reviewing")
+            result = finalize.result()
+        self.assertEqual((result["finalizedIds"], result["skippedCount"]), ([ready], 1))
+        self.assertEqual(result["skipped"], [{"id": reviewing, "batch": seq, "reason": "reviewing"}])
+        notes = {note["id"]: note for note in self.request()["notes"]}
+        self.assertEqual(notes[reviewing]["status"], "drafted")
+
+    def test_drafts_added_after_confirmation_are_not_included(self):
+        _, ready = self.draft_batch()
+        selection = {"batches": self.request()["handoff"]["finalizable"]["batches"]}
+        seq, later = self.draft_batch()
+        result = self.request("POST", selection)
+        self.assertEqual(result["finalizedIds"], [ready])
+        self.assertEqual(result["skipped"], [{"id": later, "batch": seq, "reason": "unconfirmed"}])
+        self.assertEqual(self.request()["handoff"]["finalizable"]["count"], 1)
+
+    def test_invalid_selection_is_rejected_before_any_write(self):
+        seq, nid = self.draft_batch()
+        before = self.request()
+        cases = [{}, {"batches": {}}, {"batches": [{"seq": True, "ids": [nid]}]},
+                 {"batches": [{"seq": seq, "ids": [nid, nid]}]},
+                 {"batches": [{"seq": seq, "ids": [nid]}, {"seq": seq, "ids": [nid]}]}]
+        for body in cases:
+            with self.subTest(body=body):
+                status, _, _ = serve._req(self.server.port, "POST", "/api/handoff/finalize-all",
+                                          self.headers, body)
+                self.assertEqual(status, 400)
+        self.assertEqual(self.request()["notes"], before["notes"])
+
+    def test_write_endpoint_enforces_security_guards(self):
+        self.draft_batch()
+        before = self.request()
+        body = {"batches": before["handoff"]["finalizable"]["batches"]}
+        guards = [({**self.headers, "Host": "evil.example"}, 421),
+                  ({**self.headers, "Origin": "http://evil.example"}, 403),
+                  ({key: value for key, value in self.headers.items() if key != "Origin"}, 403),
+                  ({**self.headers, "Content-Type": "text/plain"}, 415),
+                  ({**self.headers, "Sec-Fetch-Site": "cross-site"}, 403)]
+        for headers, expected in guards:
+            with self.subTest(headers=headers):
+                status, response_headers, _ = serve._req(self.server.port, "POST",
+                                                         "/api/handoff/finalize-all", headers, body)
+                self.assertEqual(status, expected)
+                self.assertNotIn("access-control-allow-origin", response_headers)
+        self.assertEqual(self.request()["notes"], before["notes"])
 
 
 class MultiBatchTests(unittest.TestCase):

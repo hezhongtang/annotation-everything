@@ -163,6 +163,12 @@ One line per paragraph.
 
 页面接口：`POST /api/handoff` `{message, target, allowSubagents, fullCheck, userMessage}` 提交一批；新批次的 `fullCheck` 缺省为 false，合并待接收的批次时缺省表示保留原值，显式传入布尔值才更新；请求复核时保留原批次的要求。勾选时页面在 `message` 开头放勾稽要求，并用 `userMessage` 传原始附言；新服务保存原文并生成兼容旧 Agent 的 `message`。响应中的 `acceptedFullCheck` 确认该批次实际保存的选项。`POST /api/handoff/review` `{seq, message, allowSubagents}` 请求复核；`POST /api/handoff/finalize` `{seq}` 直接定稿。轮询状态里的 `inFlightIds` 是已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」）。服务功能列表中的 `full-check` 表示支持这个选项；页面发送前检查功能，服务未确认保存时保留待补传提交并提醒核对批次状态。若服务在检查后切换到旧版，旧服务可能已经接收提交；其 4,000 字上限包含兼容提示，因此可能截短旧 Agent 首次收到的附言，恢复新版后重试会携带完整原文，也可能形成另一批。旧服务和旧页面共同更新待接收批次时也可能覆盖兼容提示，使用新选项前应升级服务并刷新页面。
 
+全部定稿仅供审阅人在页面确认，不提供 Agent 或 CLI 入口。服务功能列表中的 `finalize-all` 声明支持；不支持时页面隐藏按钮并提示更新技能、重启服务和刷新。`GET /api/notes` 的 `handoff.finalizable` 与 `GET /api/handoff` 的顶层 `finalizable` 提供 `{count, batches: [{seq, ids}], skipped: [{id, batch, reason}]}`：只把 `drafted` 批注且批次为 `drafted` / `review` 的条目列为可定稿，`claimed` / `reviewing` 的初改列为跳过。
+
+`POST /api/handoff/finalize-all` 的 JSON 请求为 `{batches: [{seq, ids}]}`，使用审阅人确认的快照；批次号为正整数，批注 ID 与批次不能重复，空列表不写入。服务在同一把 `.notes.lock` 内重读并核对批次、状态与归属，只定稿已确认的初改。确认后新出现的批次不顺带定稿；同批新增初改时整批跳过，避免完成的批次中遗留初改。响应包含 `finalizedCount`、`finalizedIds`、完成批次号列表 `batches`、`skippedCount` 和 `skipped`，另带更新后的 `doc` 与 `handoff`。跳过原因：`claimed` 正在初改、`reviewing` 正在复核、`unavailable` 批次不可定稿或不存在、`changed` 状态或批次归属变化、`unconfirmed` 不在本次确认范围。页面以实际结果显示部分成功；取消确认不发写请求，断线时不暂存或乐观定稿。
+
+新增摘要和响应字段可被旧页面忽略，磁盘格式与批次状态机不变；批注沿用 `accepted` 痕迹，批次沿用 `accept` 阶段、`done` 状态及既有逐批日志。旧页面连接新服务仍可用原入口；新页面连接旧服务时先做功能协商。写接口与其他写操作共用 Host 校验、同源 Origin、JSON Content-Type、无 CORS 头的安全门。
+
 源文件快照：代理接收初改时把 review.json 里的报告与讲稿源文件存到审阅目录 `.snapshots/batch-N/base/`，初改收尾时存 `draft/`（目录 0700、文件 0600，只留最近 30 批），`notes.py diff` 据此按页对比。审阅目录含经营数据时，快照同样不要外传。
 
 处理记录（页面「处理记录」/ `notes.py batches`）：每次提交算一批。服务返回的状态里 `history` 是全部批次（新的在前，不含 `openIds`）；处理中的批次按当前进度实时统计（`live`），0.3 留下没记 `resolvedIds` 的旧批次按「接收到收尾之间代理标的」推算（`estimated`）。
