@@ -1001,6 +1001,9 @@ function wellFormed(v){if(typeof v==="string")return v.toWellFormed?v.toWellForm
   if(Array.isArray(v))return v.map(wellFormed);
   if(v&&typeof v==="object"){const o={};for(const k of Object.keys(v))o[k]=wellFormed(v[k]);return o}return v}
 async function api(method,path,body){
+  // 统一拦住队列外的定稿、复核和分析写入；停止服务是升级恢复入口，仍可使用。
+  if(method!=="GET"&&path!=="/api/server/stop"&&docxBlocked())
+    throw Object.assign(new Error(tMsg("viewer.docx.oldService")),{status:409,code:"docx-required"});
   const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),REQ_TIMEOUT);
   const opt={method,cache:"no-store",headers:{"X-AE-Review":RID},signal:ctl.signal};
   if(body!==undefined){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(wellFormed(body))}
@@ -1036,7 +1039,10 @@ function stamp(x){const t=Array.isArray(x.trail)&&x.trail.length?x.trail[x.trail
   return Math.max(0,...["updatedAt","resolvedAt","draftedAt","at"].map(k=>Date.parse(x[k]||"")||0),Date.parse((t&&t.at)||"")||0)}
 function pinKey(p){return p&&p.x!=null?`${(+p.x).toFixed(1)},${(+p.y).toFixed(1)}`:""}
 function rgKey(r){return r?["x","y","w","h"].map(k=>(+r[k]||0).toFixed(1)).join(","):""}
-function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),rgKey(regionOf(x)),x.style&&x.style.scope?"s":""].join("\u0001")}
+function docxKey(a){if(!a||typeof a!=="object")return"";
+  const sorted=v=>Array.isArray(v)?v.map(sorted):v&&typeof v==="object"?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;
+  return JSON.stringify(sorted(a))}   // 未知版本也按完整内容区分，不因字段顺序不同而重复导入
+function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),rgKey(regionOf(x)),x.style&&x.style.scope?"s":"",docxKey(x.docx)].join("\u0001")}
 const okRegion=r=>r&&typeof r==="object"&&["x","y","w","h"].every(k=>r[k]!=null&&r[k]!==""&&isFinite(+r[k]))&&+r.w>0&&+r.h>0?{x:+r.x,y:+r.y,w:+r.w,h:+r.h}:null;
 function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:String(x.title||""),target:String(x.target||""),text:String(x.text||""),
     quote:String(x.quote||""),quoteFrom:String(x.quoteFrom||""),pin:x.pin&&x.pin.x!=null?{x:+x.pin.x,y:+x.pin.y}:null,
@@ -1118,7 +1124,8 @@ function onRejected(op,e){   // 服务明确不接受（4xx）：不重试；返
     if(e.code&&e.code.startsWith("receiver-")){failed.push(op,e.message);if(!$("handMsg").value.trim())$("handMsg").value=op.message||""}
     return ()=>toast(e.status===404||e.status===405?tMsg("viewer.hand.toast.legacy"):tMsg("viewer.hand.toast.failed",{message:e.message}),6000)}
   if(op.kind==="add"&&!editOf(op.note)&&op.note.page===P[i].n&&!$("ntext").value.trim()){   // 把内容放回输入框
-    $("ntext").value=op.note.text;quote=op.note.quote||"";quoteFrom=op.note.quoteFrom||"";pendingPin=op.note.pin||null;pendingRegion=op.note.region||null;styleOn=!!op.note.style;quotePair=op.note.pair||null;showQuote();updateStyleChip();drawPins()}
+    $("ntext").value=op.note.text;quote=op.note.quote||"";quoteFrom=op.note.quoteFrom||"";pendingPin=op.note.pin||null;pendingRegion=op.note.region||null;styleOn=!!op.note.style;quotePair=op.note.pair||null;
+    quoteDocx=quote&&op.note.docx?{text:quote,page:op.note.page,a:op.note.docx}:null;showQuote();updateStyleChip();drawPins()}
   return ()=>toast(tMsg("viewer.recovery.rejected",{reason:e.message}),6000)}
 const fails={};let flushing=null;
 function flush(){if(FILE)return Promise.resolve();

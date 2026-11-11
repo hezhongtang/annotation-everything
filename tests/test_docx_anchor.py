@@ -186,6 +186,21 @@ class AnchorFieldTests(unittest.TestCase):
         store.import_notes(d, [{"id": "n1", "page": 1, "text": "x", "docx": a}])
         self.assertEqual(store.load(d)["notes"][0]["docx"], a)
 
+    def test_import_keeps_identical_quotes_at_distinct_paragraphs(self):
+        items = [{"id": "n1", "page": 1, "target": "报告", "text": "改措辞", "quote": "重复段",
+                  "docx": anchor("重复段", 0, pid="0000000A", start=0, end=3)},
+                 {"id": "n2", "page": 1, "target": "报告", "text": "改措辞", "quote": "重复段",
+                  "docx": anchor("重复段", 1, pid="0000000B", start=0, end=3)}]
+        for lang in (None, "zh-CN", "en"):
+            with self.subTest(lang=lang):
+                exported = items if lang is None else ef.parse_markdown(ef.render(items, title="合成", lang=lang))[0]
+                d = review_dir()
+                _doc, added, skipped, _updated = store.import_notes(d, exported)
+                self.assertEqual((added, skipped), (2, 0))
+                self.assertEqual([n["docx"]["para"]["n"] for n in store.load(d)["notes"]], [0, 1])
+                repeated = {**exported[0], "id": "n3", "docx": dict(reversed(list(exported[0]["docx"].items())))}
+                self.assertEqual(store.import_notes(d, [repeated])[1:3], (0, 1), "相同位置的重复导入仍去重")
+
 
 class RemapTests(unittest.TestCase):
     """重建对照页：先按段落把批注归到现在所在的页，页面键只管没有段落定位的批注。"""
