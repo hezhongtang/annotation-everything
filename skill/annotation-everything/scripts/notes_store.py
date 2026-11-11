@@ -1574,6 +1574,8 @@ def _remap_docx(n: dict[str, Any], ctx: dict[str, Any], new_titles: dict[int, st
             n["key"] = ctx["keys"][to]
         n.pop("orphan", None)
         anchor["para"]["n"] = got["para"]["n"]
+        if "endPara" in got:
+            anchor["endPara"]["n"] = got["endPara"]["n"]
         if got["changed"]:
             anchor["changed"] = True     # 段落还在但文字变了：偏移与摘要仍是旧版本的，指纹不更新
         else:

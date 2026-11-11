@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import docx_review  # noqa: E402
 import export_format as ef  # noqa: E402
 import i18n  # noqa: E402
 import ledger  # noqa: E402
@@ -506,7 +507,6 @@ def docx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]
     a = n.get("docx")
     if not isinstance(a, dict):
         return []
-    import docx_review
     if not docx_review.usable_anchor(a):
         return [t("cli.show.docx.unsupported", version=a.get("v"), supported=docx_review.ANCHOR_VERSION)]
     para = a["para"]
@@ -619,10 +619,10 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
                      else t("cli.batch.resolution", text=n["resolution"]))
         if n.get("trail"):
             line += t("cli.batch.trail", text=trail_text(n, lang=lang))
-        if n.get("orphan") and docx_lines(n, manifest, t):
-            pass   # DOCX 段落定位的孤立原因在定位那几行里说（找不到的是段落，不是页面键）
-        elif n.get("orphan"):
-            line += "\n  " + t("cli.show.orphan", pageKey=n.get("key"))
+        if n.get("orphan"):
+            # 只有可读的段落定位会在下方说明孤立原因；未知版本仍需保留页面警告。
+            if not docx_review.usable_anchor(n.get("docx")):
+                line += "\n  " + t("cli.show.orphan", pageKey=n.get("key"))
         elif n.get("key") and keys.get(n.get("page")) and n["key"] != keys[n["page"]]:
             line += "\n  " + t("cli.show.keyMismatch", pageKey=n["key"], page=n["page"], current=keys[n["page"]])
         if n.get("anchor"):

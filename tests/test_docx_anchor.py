@@ -47,8 +47,8 @@ def docx(inner: str, path: Path | None = None) -> Path:
 
 
 def digest(text: str) -> str:
-    """规范里的段落文本摘要：去掉全部空白后取 SHA-1 的前 12 位十六进制。"""
-    return hashlib.sha1("".join(text.split()).encode("utf-8")).hexdigest()[:12]
+    """规范里的段落文本摘要：保留空白的完整正文 SHA-1 前 12 位十六进制。"""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
 
 
 def anchor(text: str, n: int, *, pid: str | None = None, **more) -> dict:
@@ -61,7 +61,7 @@ class ParagraphIndexTests(unittest.TestCase):
         r = dr.render(docx(para("第一段", pid="0000000A") + split))
         self.assertEqual(r["paragraphs"], [
             {"n": 0, "id": "0000000A", "digest": digest("第一段"), "frags": [{"page": 1, "start": 0}]},
-            {"n": 1, "id": "0000000B", "digest": digest("前半后半"),
+            {"n": 1, "id": "0000000B", "digest": digest("前半后 半"),
              "frags": [{"page": 1, "start": 0}, {"page": 2, "start": 2}]},
         ])
 
@@ -253,6 +253,48 @@ class RemapTests(unittest.TestCase):
         self.remap(d, para("目标段已改写", pid="0000000B"))
         a = self.note(d, nid)["docx"]
         self.assertEqual((a["fp"], a["changed"]), (self.OLD_FP, True))
+
+    def test_cross_paragraph_end_follows_inserted_paragraphs(self):
+        d = review_dir()
+        a = anchor("起点", 0, pid="0000000A", start=0, end=2,
+                   endPara={"id": "0000000B", "n": 1, "digest": digest("终点")})
+        nid = self.add(d, 1, "w0000000A", a)
+        self.remap(d, para("新增") + para("起点", pid="0000000A") + para("终点", pid="0000000B"))
+        got = self.note(d, nid)["docx"]
+        self.assertEqual((got["para"]["n"], got["endPara"]["n"], got["fp"]), (1, 2, self.NEW_FP))
+
+    def test_cross_paragraph_range_keeps_old_fingerprint_when_an_end_is_invalid(self):
+        first, last = para("起点", pid="0000000A"), para("终点", pid="0000000B")
+        cases = ((first, True, False),
+                 (first + para("终点已编辑", pid="0000000B"), False, True),
+                 (last + first, True, False))
+        for kind in ("quote", "region"):
+            for inner, orphaned, changed in cases:
+                with self.subTest(kind=kind, inner=inner):
+                    d = review_dir()
+                    a = anchor("起点", 0, pid="0000000A", kind=kind, start=0, end=2,
+                               endPara={"id": "0000000B", "n": 1, "digest": digest("终点")})
+                    nid = self.add(d, 1, "w0000000A", a)
+                    self.remap(d, inner)
+                    got = self.note(d, nid)
+                    self.assertEqual(got["docx"]["fp"], self.OLD_FP)
+                    self.assertEqual(bool(got.get("orphan")), orphaned)
+                    self.assertEqual(bool(got["docx"].get("changed")), changed)
+
+    def test_whitespace_edit_does_not_validate_or_move_a_split_anchor(self):
+        split = ('<w:p w14:paraId="0000000B"><w:r><w:t xml:space="preserve"> 甲</w:t></w:r>'
+                 f'<w:r>{LRPB}<w:t>乙</w:t></w:r></w:p>')
+        for kind, page, offsets in (("quote", 2, {"start": 1, "end": 2}),
+                                    ("pin", 2, {"start": 1}), ("region", 2, {"start": 1}),
+                                    ("pin", 1, {}), ("region", 1, {})):
+            with self.subTest(kind=kind, page=page):
+                d = review_dir()
+                a = anchor("甲乙", 0, pid="0000000B", kind=kind, **offsets)
+                nid = self.add(d, page, "w0000000B", a)
+                self.remap(d, split)
+                got = self.note(d, nid)
+                self.assertEqual((got["page"], got["docx"]["fp"]), (page, self.OLD_FP))
+                self.assertTrue(got.get("orphan"), "旧偏移无法证明落在哪一页，保留待确认状态")
 
     def test_whole_page_note_still_uses_the_page_key(self):
         d = review_dir()
@@ -446,6 +488,14 @@ class ShowTests(unittest.TestCase):
     def test_newer_version_is_marked_unusable_for_writeback(self):
         self.assertIn("不可用于回写", self.show({"v": 2, "x": 1}, "zh-CN"))
         self.assertIn("cannot be used for write-back", self.show({"v": 2, "x": 1}, "en"))
+
+    def test_newer_version_keeps_the_orphan_page_warning(self):
+        doc = {"rev": 1, "notes": [{"id": "n1", "page": 3, "key": "missing", "target": "报告", "text": "改措辞",
+                                    "status": "open", "orphan": True, "docx": {"v": 2, "x": 1}}]}
+        for lang, want in (("zh-CN", "页码可能不对"), ("en", "page number may be wrong")):
+            with self.subTest(lang=lang):
+                text = notes_cli.to_markdown(doc, self.MANIFEST, include_resolved=True, page=None, locale=lang)
+                self.assertIn(want, text)
 
 
 if __name__ == "__main__":

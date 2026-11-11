@@ -1483,8 +1483,8 @@ _PARA_ATTR = re.compile(r'data-docx-p="(\d+)"(?: data-docx-pid="[^"]*")?')
 
 
 def text_digest(text: str) -> str:
-    """段落文本摘要：去掉全部空白后取 SHA-1 的前 12 位十六进制。空白变化（换行、缩进）不影响摘要。"""
-    return hashlib.sha1("".join(text.split()).encode("utf-8", "surrogatepass")).hexdigest()[:12]
+    """段落完整正文的 SHA-1 前 12 位；保留空白，以免把已变化的字符偏移当作仍然有效。"""
+    return hashlib.sha1(text.encode("utf-8", "surrogatepass")).hexdigest()[:12]
 
 
 class _ParaScan(HTMLParser):
@@ -1574,10 +1574,31 @@ def relocate(anchor: dict, paragraphs: list[dict]) -> dict:
 
     paraId 在当前文档里唯一时直接用它；没有 paraId、paraId 重复或已不存在时，用段落序号与文本摘要互证：
     摘要唯一即认定（序号可以因前面增删段落而变），摘要有多处相同时要求序号也一致，否则算不确定。
+    跨段范围独立核对 endPara；任一端失效或起止顺序不再成立时不猜测页码。
     返回 {"status": ok / ambiguous / missing, "how": paraId / digest / ordinal / None,
     "why": None / noId / duplicateId / idGone（为什么没用 paraId）, "para": 索引项或 None,
-    "page": 现在所在页或 None, "changed": 段落文字是否已变（只在按 paraId 找到时可能为 True）}。
+    "page": 现在所在页或 None, "changed": 起止段落文字是否已变（只在按 paraId 找到时可能为 True）}，
+    跨段范围成功时另带 endPara 索引项。
     """
+    got = _relocate_para(anchor, paragraphs)
+    end = anchor.get("endPara")
+    if got["status"] != "ok" or not isinstance(end, dict):
+        return got
+    last = _relocate_para({"para": end, "start": anchor.get("end", 0)}, paragraphs)
+    if last["status"] != "ok":
+        return {**got, "status": last["status"], "page": None, "why": last["why"],
+                "changed": got["changed"] or last["changed"]}
+    if last["para"]["n"] <= got["para"]["n"]:
+        return {**got, "status": "ambiguous", "page": None}
+    got["endPara"] = last["para"]
+    got["changed"] = got["changed"] or last["changed"]
+    if not got["why"] and last["why"]:
+        got["why"], got["how"] = last["why"], last["how"]
+    return got
+
+
+def _relocate_para(anchor: dict, paragraphs: list[dict]) -> dict:
+    """核对一个端点所在的段落；跨段范围的两个端点用同一条匹配规则。"""
     para = anchor["para"]
     pid, n, dg = para.get("id"), para["n"], para["digest"]
     why = None
@@ -1599,6 +1620,9 @@ def relocate(anchor: dict, paragraphs: list[dict]) -> dict:
 
 
 def _located(anchor: dict, para: dict, how: str, why: str | None, changed: bool) -> dict:
+    # 文字已编辑的跨页段落无法再用旧偏移判断是哪一片；首片点/框没有显式 start，也不能猜。
+    if changed and len({frag["page"] for frag in para["frags"]}) > 1:
+        return {"status": "ambiguous", "how": how, "why": why, "para": para, "page": None, "changed": True}
     start = anchor.get("start")
     start = start if isinstance(start, int) and not isinstance(start, bool) and start > 0 else 0
     page = para["frags"][0]["page"]
