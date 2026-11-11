@@ -27,6 +27,7 @@ import posixpath
 import re
 import zipfile
 import zlib
+from contextlib import contextmanager
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -52,6 +53,7 @@ EMU_PX = 96 / 914400         # 1 EMU = 1/914400 英寸
 HEX6 = re.compile(r"[0-9A-Fa-f]{6}")
 PARA_ID = re.compile(r"[0-9A-Fa-f]{1,8}")
 BREAK = "\x00BREAK\x00"
+DIAG_MARK = re.compile(r"\x00DOCX_DIAG:([A-Za-z]+)\x00")
 HIGHLIGHT = {"yellow": "#ffff00", "green": "#00ff00", "cyan": "#00ffff", "magenta": "#ff00ff", "blue": "#0000ff",
              "red": "#ff0000", "darkBlue": "#00008b", "darkCyan": "#008b8b", "darkGreen": "#006400",
              "darkMagenta": "#800080", "darkRed": "#8b0000", "darkYellow": "#808000", "darkGray": "#a9a9a9",
@@ -157,10 +159,14 @@ def own_runs(p: ET.Element):
 def parse_xml(data: bytes, name: str) -> ET.Element:
     if len(data) > MAX_PART:
         raise DocxError("tooLarge", name)
-    if re.search(rb"<!DOCTYPE", data, re.I) or b"<!ENTITY" in data:
-        raise DocxError("dtd", name)
+
+    class NoDTDBuilder(ET.TreeBuilder):
+        def doctype(self, _name, _pubid, _system):
+            # 由 XML 解析器识别编码，并在解析内部子集、展开实体之前拒绝 DTD。
+            raise DocxError("dtd", name)
+
     try:
-        return ET.fromstring(data)
+        return ET.fromstring(data, parser=ET.XMLParser(target=NoDTDBuilder()))
     except ET.ParseError as exc:
         raise DocxError("badXml", f"{name}: {exc}") from None
 
@@ -509,6 +515,8 @@ class Renderer:
         self.part = "body"                     # body / header / footer / textbox
         self.rels = pkg.rels                   # 当前部件的关系表（图片、链接按它找）
         self.block_ro: set[str] = set()        # 块级内容控件等外层结构给段落带来的只读原因
+        self.block_wrap: tuple = ()           # 表格行、单元格修订传给内部文字的样式与提示
+        self.block_notes = ""                  # 跟随各片段、在最终分页后登记的诊断标记
         self.pages: list[dict] = []
         self.media: dict[str, str] = {}        # 部件路径 → CSS 类名（同一张图全文只内联一次）
         self.media_css: list[str] = []
@@ -528,28 +536,29 @@ class Renderer:
         return False
 
     # ---------- 诊断 ----------
-    def note(self, code: str, key: object = None, example: str = "") -> None:
-        """记一条诊断：同一结构（key）只计一次，并记下所在页。"""
+    def note(self, code: str, key: object = None, example: str = "") -> str:
+        """同一结构只计一次；返回随内容分页的内部标记，assemble 再登记页码并移除标记。"""
         d = self.diag.setdefault(code, {"keys": set(), "count": 0, "pages": set(), "examples": []})
         k = key if key is not None else object()
         if k not in d["keys"]:
             d["keys"].add(k)
             d["count"] += 1
-        if self.pages and self.part in ("body", "textbox"):
-            d["pages"].add(len(self.pages))
         ex = (example or "").strip()[:80]
         if ex and ex not in d["examples"] and len(d["examples"]) < 5:
             d["examples"].append(ex)
+        return f"\x00DOCX_DIAG:{code}\x00" if self.part in ("body", "textbox") else ""
 
     # ---------- 分页 ----------
     def new_page(self, opened_by: str) -> None:
-        self.pages.append({"sect": self.sect, "blocks": [], "content": 0, "opened": opened_by, "first": None})
+        self.pages.append({"sect": self.sect, "blocks": [], "notes": "", "content": 0, "opened": opened_by, "first": None})
 
     def brk(self, kind: str) -> None:
-        """遇到分页标记：当前页已有内容才翻页；连续的显式分页符之间保留空白页。"""
+        """硬分页保留空白页；段前分页与渲染标记在空页上不重复翻页。"""
         page = self.pages[-1]
-        if page["content"] or (kind == "explicit" and page["opened"] == "explicit"):
+        if page["content"] or (kind == "explicit" and page["opened"] != "rendered"):
             self.new_page(kind)
+        elif kind == "explicit":
+            page["opened"] = "explicit"   # 渲染标记只抵消同一处的一个硬分页符
 
     def emit(self, block: str, first: dict | None = None) -> None:
         page = self.pages[-1]
@@ -688,38 +697,39 @@ class Renderer:
         pid = para_id(p) if self.part == "body" else None
         started = False
         prefix = ""
+        notes = self.block_notes
         ppr = p.find(W + "pPr")
         for ch in (ppr.iter() if ppr is not None else ()):
             if ch.tag in (W + "pPrChange", W + "sectPrChange"):
-                self.note("formatRevision", id(ch))
+                notes += self.note("formatRevision", id(ch))
             elif ch.tag in (W + "ins", W + "del", W + "moveFrom", W + "moveTo"):   # 段落标记的插入 / 删除
-                self.note("revision", ch.get(W + "id") or id(ch), ch.get(W + "author", ""))
+                notes += self.note("revision", ch.get(W + "id") or id(ch), ch.get(W + "author", ""))
             elif ch.tag == W + "rPrChange":
-                self.note("formatRevision", id(ch))
+                notes += self.note("formatRevision", id(ch))
 
         def flush() -> None:
             nonlocal inline, started
             cont = started
             body = ("" if cont else prefix) + "".join(inline)
             attrs = self.para_attrs(pi, pid, pp, sid, cont, ro)
-            tokens.append(("html", f"<div {attrs}>{body or '<br>'}</div>",
+            tokens.append(("html", f"<div {attrs}>{notes}{body or '<br>'}</div>",
                            {"pi": pi, "pid": pid, "cont": cont, "empty": not inline}))
             inline, started = [], True
 
         if paginate and _on(pp.get("pageBreakBefore")):
-            tokens.append(("break", "explicit"))
+            tokens.append(("break", "before"))
         num = pp.get("numPr")
         if num is not None:
             ilvl_el, nid_el = num.find(W + "ilvl"), num.find(W + "numId")
             text, problem = self.numbering.label(nid_el.get(W + "val", "") if nid_el is not None else "",
                                                  _int(ilvl_el.get(W + "val") if ilvl_el is not None else None, 0, 0, 8))
             if problem:
-                self.note("numbering", problem, problem)
+                notes += self.note("numbering", problem, problem)
             if text:
-                self.note("list", nid_el.get(W + "val", "") if nid_el is not None else "")
+                notes += self.note("list", nid_el.get(W + "val", "") if nid_el is not None else "")
                 prefix = (f'<span class="docx-num" aria-hidden="true">{_esc(text)}</span>'
                           '<span class="docx-tab docx-num" aria-hidden="true">\t</span>')
-        for kind, payload in self.inline(p, base_rp, paginate, ()):
+        for kind, payload in self.inline(p, base_rp, paginate, self.block_wrap):
             if kind == "html":
                 inline.append(payload)
             elif paginate:
@@ -760,7 +770,7 @@ class Renderer:
             attrs.append(f'style="{_esc(style)}"')
         return " ".join(attrs)
 
-    def inline(self, parent: ET.Element, base_rp: dict, paginate: bool, wrap: tuple):
+    def inline(self, parent: ET.Element, base_rp: dict, paginate: bool, wrap: tuple, notes: str = ""):
         """段落内的子元素 → ("html", 片段) / ("break", 种类)。
 
         修订、链接、域不用独立的开闭标签包起来（段内分页会把它们切坏），而是把类名和提示传给每个运行。
@@ -769,43 +779,43 @@ class Renderer:
         for el in parent:
             tag = el.tag
             if tag == W + "r":
-                yield from self.run(el, base_rp, paginate, wrap)
+                yield from self.run(el, base_rp, paginate, wrap, notes)
             elif tag in (W + "ins", W + "moveTo", W + "del", W + "moveFrom"):
                 ins = tag in (W + "ins", W + "moveTo")
-                self.note("revision", el.get(W + "id") or id(el), el.get(W + "author", ""))
+                mark = self.note("revision", el.get(W + "id") or id(el), el.get(W + "author", ""))
                 title = f"{'+' if ins else '−'} {el.get(W + 'author', '')[:80]} {el.get(W + 'date', '')[:40]}".strip()
-                yield from self.inline(el, base_rp, paginate, wrap + (("docx-ins" if ins else "docx-del", title),))
+                yield from self.inline(el, base_rp, paginate, wrap + (("docx-ins" if ins else "docx-del", title),), notes + mark)
             elif tag == W + "hyperlink":
                 rel = self.rels.get(el.get(R + "id", ""), {})
                 title = rel.get("target", "") or el.get(W + "anchor", "")
-                yield from self.inline(el, base_rp, paginate, wrap + (("docx-link", title[:200]),))
+                yield from self.inline(el, base_rp, paginate, wrap + (("docx-link", title[:200]),), notes)
             elif tag == W + "fldSimple":
                 instr = el.get(W + "instr", "")
-                self.note("field", id(el), instr)
+                mark = self.note("field", id(el), instr)
                 special = self.page_field(instr)
                 if special:
-                    yield ("html", special)
+                    yield ("html", notes + mark + special)
                 else:
-                    yield from self.inline(el, base_rp, paginate, wrap + (("docx-field", instr.strip()[:200]),))
+                    yield from self.inline(el, base_rp, paginate, wrap + (("docx-field", instr.strip()[:200]),), notes + mark)
             elif tag in (W + "smartTag", W + "customXml"):
-                yield from self.inline(el, base_rp, paginate, wrap)
+                yield from self.inline(el, base_rp, paginate, wrap, notes)
             elif tag == W + "sdt":
-                self.note("contentControl", id(el))
+                mark = self.note("contentControl", id(el))
                 content = el.find(W + "sdtContent")
                 if content is not None:
-                    yield from self.inline(content, base_rp, paginate, wrap)
+                    yield from self.inline(content, base_rp, paginate, wrap, notes + mark)
             elif tag == W + "commentRangeStart":
                 self.comment_open.append(el.get(W + "id", ""))
             elif tag == W + "commentRangeEnd":
                 self.close_comment(el)
             elif tag in (M + "oMath", M + "oMathPara"):
-                self.note("math", id(el))
+                mark = self.note("math", id(el))
                 text = "".join(t.text or "" for t in el.iter(M + "t"))
-                yield ("html", f'<span class="docx-math" title="OMML">{_esc(text)}</span>')
+                yield ("html", notes + mark + f'<span class="docx-math" title="OMML">{_esc(text)}</span>')
             elif tag in SKIP_INLINE:
                 continue
             else:
-                self.note("unknown", _local(tag), _local(tag))
+                yield ("html", notes + self.note("unknown", _local(tag), _local(tag)))
 
     def close_comment(self, el: ET.Element) -> None:
         cid = el.get(W + "id", "")
@@ -819,24 +829,24 @@ class Renderer:
             return f'<span class="docx-field" data-docx-field="{word}">\x00{word}\x00</span>'
         return None
 
-    def run(self, r: ET.Element, base_rp: dict, paginate: bool, wrap: tuple):
+    def run(self, r: ET.Element, base_rp: dict, paginate: bool, wrap: tuple, notes: str = ""):
         rpr = r.find(W + "rPr")
         rs = rpr.find(W + "rStyle") if rpr is not None else None
         rp = dict(base_rp)
         rp.update(merged([*self.styles.props(rs.get(W + "val") if rs is not None else None, "rPr"), rpr]))
         if rpr is not None and rpr.find(W + "rPrChange") is not None:
-            self.note("formatRevision", id(rpr))
+            notes += self.note("formatRevision", id(rpr))
         hidden = _on(rp.get("vanish")) is True
         css, cls = self.run_style(rp)
         if self.comment_open:
             cls.append("docx-cmt")
             for cid in self.comment_open:
-                self.note("comment", cid)
+                notes += self.note("comment", cid)
         parts: list = []
         in_result = [False]
         self.run_children(list(r), parts, in_result)
-        if hidden and any(k == "text" and v for k, v in parts):
-            self.note("hidden", id(r))
+        if hidden and any(k != "break" and v for k, v in parts):
+            notes += self.note("hidden", id(r))
         ri = self.rindex.get(id(r)) if self.part == "body" else None
         if in_result[0]:
             cls.append("docx-field")
@@ -851,7 +861,7 @@ class Renderer:
             attrs.append("hidden")
         if ri is not None:
             attrs.append(f'data-docx-r="{ri}"')
-        open_tag = f"<span {' '.join(attrs)}>"
+        open_tag = notes + f"<span {' '.join(attrs)}>"
         buf: list[str] = []
         for kind, val in parts:
             if kind == "text":
@@ -869,6 +879,7 @@ class Renderer:
     def run_children(self, children: list, parts: list, in_result: list) -> None:
         for ch in children:
             tag = ch.tag
+            first_part = len(parts)
             if tag == W + "fldChar":
                 t = ch.get(W + "fldCharType")
                 if t == "begin":
@@ -881,7 +892,8 @@ class Renderer:
                     if special:
                         f["phase"] = "replaced"
                         if outer_ok:
-                            parts.append(("html", special))
+                            marks = "".join(self.note("field", x["id"], x["instr"]) for x in self.fields)
+                            parts.append(("html", marks + special))
                     else:
                         f["phase"] = "result"
                 elif t == "end" and self.fields:
@@ -933,42 +945,48 @@ class Renderer:
             elif tag in (W + "footnoteReference", W + "endnoteReference"):
                 kind = "fn" if tag == W + "footnoteReference" else "en"
                 nid = ch.get(W + "id", "")[:12]
-                self.note("footnote", kind + nid)
-                parts.append(("html", f'<sup class="docx-mark" data-docx-note="{kind}{_esc(nid)}">[{_esc(nid)}]</sup>'))
+                mark = self.note("footnote", kind + nid)
+                parts.append(("html", mark + f'<sup class="docx-mark" data-docx-note="{kind}{_esc(nid)}">[{_esc(nid)}]</sup>'))
             elif tag == W + "commentReference":
                 cid = ch.get(W + "id", "")
                 author, text = self.pkg.comments.get(cid, ("", ""))
-                self.note("comment", cid)
+                mark = self.note("comment", cid)
                 tip = (author + "：" if author else "") + text
-                parts.append(("html", f'<sup class="docx-mark docx-comment" title="{_esc(tip)}">[W{_esc(cid[:12])}]</sup>'))
+                parts.append(("html", mark + f'<sup class="docx-mark docx-comment" title="{_esc(tip)}">[W{_esc(cid[:12])}]</sup>'))
             elif tag == W + "object":
-                self.note("object", id(ch))
-                parts.append(("html", '<span class="docx-mark docx-object">[OLE]</span>'))
+                mark = self.note("object", id(ch))
+                parts.append(("html", mark + '<span class="docx-mark docx-object">[OLE]</span>'))
             elif tag == W + "ruby":
                 base = ch.find(W + "rubyBase")
-                parts.append(("text", "".join(t.text or "" for t in (base.iter(W + "t") if base is not None else ()))))
-                self.note("unknown", "ruby", "ruby")
+                text = "".join(t.text or "" for t in (base.iter(W + "t") if base is not None else ()))
+                parts.append(("html", self.note("unknown", "ruby", "ruby") + _esc(text)))
             elif tag in SKIP_RUN:
                 continue
             else:
-                self.note("unknown", _local(tag), _local(tag))
+                parts.append(("html", self.note("unknown", _local(tag), _local(tag))))
+            if self.fields:
+                marks = "".join(self.note("field", f["id"], f["instr"]) for f in self.fields)
+                for i in range(first_part, len(parts)):
+                    kind, value = parts[i]
+                    if kind != "break":
+                        parts[i] = ("html", marks + (_esc(value) if kind == "text" else value))
 
     def drawing(self, d: ET.Element) -> str:
         anchor = d.find(WP + "anchor")
+        notes = ""
         if anchor is not None:
-            self.note("floating", id(d))
+            notes += self.note("floating", id(d))
         box = anchor if anchor is not None else d.find(WP + "inline")
         ext = box.find(WP + "extent") if box is not None else None
         w = _num(ext.get("cx") if ext is not None else None, 0, 0, 1e9) * EMU_PX
         h = _num(ext.get("cy") if ext is not None else None, 0, 0, 1e9) * EMU_PX
         boxes = top_textboxes(d)
         if boxes:
-            return "".join(self.textbox(t, w) for t in boxes)
+            return notes + "".join(self.textbox(t, w) for t in boxes)
         blip = next(d.iter(A + "blip"), None)
         if blip is not None:
-            return self.image(blip.get(R + "embed", ""), w, h)
-        self.note("object", id(d))
-        return '<span class="docx-mark docx-object">[drawing]</span>'
+            return notes + self.image(blip.get(R + "embed", ""), w, h)
+        return notes + self.note("object", id(d)) + '<span class="docx-mark docx-object">[drawing]</span>'
 
     def vml(self, pict: ET.Element) -> str:
         boxes = top_textboxes(pict)
@@ -977,12 +995,11 @@ class Renderer:
         img = next(pict.iter(V + "imagedata"), None)
         if img is not None:
             return self.image(img.get(R + "id", ""), 0, 0)
-        self.note("object", id(pict))
-        return '<span class="docx-mark docx-object">[VML]</span>'
+        return self.note("object", id(pict)) + '<span class="docx-mark docx-object">[VML]</span>'
 
     def textbox(self, txbx: ET.Element, width: float) -> str:
         """文本框：内容在锚点处以内联框显示（位置不保真），只读，不带定位属性。"""
-        self.note("textbox", id(txbx))
+        mark = self.note("textbox", id(txbx))
         outer = self.part
         self.part = "textbox" if outer == "body" else outer
         try:
@@ -990,7 +1007,7 @@ class Renderer:
         finally:
             self.part = outer
         style = f' style="width:{min(width, 2000):.1f}px"' if width else ""
-        return f'<span class="docx-txbx" data-docx-ro="textbox"{style}>{inner}</span>'
+        return mark + f'<span class="docx-txbx" data-docx-ro="textbox"{style}>{inner}</span>'
 
     def image(self, rid: str, w: float, h: float) -> str:
         """图片：按部件路径去重，数据只在 CSS 里出现一次（页眉 logo 不随页数重复内联）。"""
@@ -998,8 +1015,7 @@ class Renderer:
         size = f"width:{min(w, 4000):.1f}px;height:{min(h, 4000):.1f}px" if w and h else "width:96px;height:72px"
         placeholder = f'<span class="docx-mark docx-missing" style="display:inline-block;{size}">[image]</span>'
         if not rel or rel["external"]:
-            self.note("object", rid or "image", "external image" if rel else rid)
-            return placeholder
+            return self.note("object", rid or "image", "external image" if rel else rid) + placeholder
         target = rel["target"]
         cls = self.media.get(target)
         if cls is None:
@@ -1008,17 +1024,14 @@ class Renderer:
             mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif",
                     "bmp": "image/bmp", "webp": "image/webp"}.get(ext)
             if data is None and target in self.pkg.media:
-                self.note("mediaTooLarge", target, target)
-                return placeholder
+                return self.note("mediaTooLarge", target, target) + placeholder
             if data is None or not mime:
-                self.note("object", target, target)
-                return placeholder
+                return self.note("object", target, target) + placeholder
             cls = f"docx-m{len(self.media) + 1}"
             self.media[target] = cls
             uri = f"data:{mime};base64," + base64.b64encode(data).decode()
             self.media_css.append(f'section.docx-page .{cls}{{background-image:url("{uri}")}}')
-        self.note("image", target)
-        return f'<span class="docx-img {cls}" role="img" style="{size}"></span>'
+        return self.note("image", target) + f'<span class="docx-img {cls}" role="img" style="{size}"></span>'
 
     def blocks_inline(self, container: ET.Element) -> str:
         """不分页的块级内容（文本框、页眉页脚、嵌套表格）。"""
@@ -1040,15 +1053,16 @@ class Renderer:
             elif el.tag == W + "tbl":
                 segs[-1].extend(part for part, _ in self.table(el, paginate=False) if part != BREAK)
             elif el.tag == W + "sdt":
-                self.note("contentControl", id(el))
+                mark = self.note("contentControl", id(el))
                 content = el.find(W + "sdtContent")
                 if content is not None:
-                    outer = self.block_ro
-                    self.block_ro = outer | {"contentControl"}
+                    outer = self.block_ro, self.block_notes
+                    self.block_ro = self.block_ro | {"contentControl"}
+                    self.block_notes += mark
                     try:
                         inner = self.blocks(content, paginate=paginate)
                     finally:
-                        self.block_ro = outer
+                        self.block_ro, self.block_notes = outer
                     segs[-1].extend(inner[0])
                     segs.extend(inner[1:])
             elif el.tag == W + "customXml":
@@ -1062,15 +1076,38 @@ class Renderer:
             elif el.tag in SKIP_BLOCK:
                 continue
             else:
-                self.note("unknown", _local(el.tag), _local(el.tag))
+                segs[-1].append(self.note("unknown", _local(el.tag), _local(el.tag)))
         return segs
 
     # ---------- 表格 ----------
+    @contextmanager
+    def structural_revisions(self, *props):
+        """表格属性中的修订作用于内部全部段落、嵌套表格及跨页片段。"""
+        outer = self.block_ro, self.block_wrap, self.block_notes
+        try:
+            for prop in props:
+                for rv in (prop if prop is not None else ()):
+                    tag = _local(rv.tag)
+                    if rv.tag not in {W + name for name in ("ins", "del", "cellIns", "cellDel", "cellMerge",
+                                                            "tcPrChange", "trPrChange", "tblPrChange")}:
+                        continue
+                    code = "formatRevision" if tag.endswith("PrChange") else "revision"
+                    self.block_ro = self.block_ro | {code}
+                    self.block_notes += self.note(code, rv.get(W + "id") or id(rv), rv.get(W + "author", ""))
+                    cls, symbol = {"ins": ("docx-ins", "+"), "cellIns": ("docx-ins", "+"),
+                                   "del": ("docx-del", "−"), "cellDel": ("docx-del", "−")}.get(tag, ("docx-revision", "Δ"))
+                    title = f"{symbol} {rv.get(W + 'author', '')[:80]} {rv.get(W + 'date', '')[:40]}".strip()
+                    self.block_wrap += ((cls, title),)
+            yield
+        finally:
+            self.block_ro, self.block_wrap, self.block_notes = outer
+
     def table(self, tbl: ET.Element, *, paginate: bool):
         """表格 → [(html, 首段信息) | (BREAK, None)]。
 
         跨页的行按单元格里的分页标记切成几段，各段落在各自的页上；表头行（tblHeader）在续表里重复。
         """
+        notes = self.block_notes + self.note("table", id(tbl))
         tpr = tbl.find(W + "tblPr")
         ts = tpr.find(W + "tblStyle") if tpr is not None else None
         sid = ts.get(W + "val") if ts is not None else self.styles.default_table
@@ -1081,9 +1118,6 @@ class Renderer:
         for tr in tbl.findall(W + "tr"):
             trpr = tr.find(W + "trPr")
             header = trpr is not None and _on(trpr.find(W + "tblHeader")) is True
-            for rv in (trpr if trpr is not None else ()):
-                if rv.tag in (W + "ins", W + "del"):
-                    self.note("revision", rv.get(W + "id") or id(rv), rv.get(W + "author", ""))
             cells, col = [], 0
             gb = trpr.find(W + "gridBefore") if trpr is not None else None
             if gb is not None and _int(gb.get(W + "val"), 0, 0, 63):
@@ -1097,11 +1131,6 @@ class Renderer:
                 vm = tcpr.find(W + "vMerge") if tcpr is not None else None
                 vmerge = None if vm is None else ("restart" if vm.get(W + "val") == "restart" else "continue")
                 css = []
-                for cr in (tcpr if tcpr is not None else ()):
-                    if cr.tag in (W + "cellIns", W + "cellDel", W + "cellMerge"):
-                        self.note("revision", id(cr))
-                    elif cr.tag == W + "tcPrChange":
-                        self.note("formatRevision", id(cr))
                 shd = tcpr.find(W + "shd") if tcpr is not None else None
                 if shd is not None and hexcolor(shd.get(W + "fill")):
                     css.append(f"background:{hexcolor(shd.get(W + 'fill'))}")
@@ -1113,8 +1142,10 @@ class Renderer:
                 fp = tc.find(W + "p")
                 first = ({"pi": self.pindex.get(id(fp)), "pid": para_id(fp), "cont": False}
                          if fp is not None and self.part == "body" else None)
+                with self.structural_revisions(tpr, trpr, tcpr):
+                    segs = self.blocks(tc, paginate=paginate)
                 cells.append({"col": col, "span": span, "vmerge": vmerge, "css": ";".join(css),
-                              "segs": self.blocks(tc, paginate=paginate), "first": first})
+                              "segs": segs, "first": first})
                 col += span
             # 行从新页开始：凡有分页标记的单元格，标记都在最前面（第一段是空的）。Word 往往只在第一格
             # 写标记，其余格没有标记，这些格的内容随行一起落到新页上。
@@ -1127,12 +1158,11 @@ class Renderer:
             nseg = max((len(c["segs"]) for c in cells), default=1)
             first = next((c.get("first") for c in cells if c.get("first")), None)
             begin = 1 if starts_new else 0
+            row_note = self.note("rowSplit", id(tr)) if nseg - begin > 1 else ""
             for k in range(begin, nseg):
                 seg_cells = [dict(c, html="".join(c["segs"][k]) if k < len(c["segs"]) else "") for c in cells]
-                rows.append({"cells": seg_cells, "header": header and nseg == 1, "break": k > 0,
+                rows.append({"cells": seg_cells, "header": header and nseg == 1, "break": k > 0, "notes": row_note,
                              "first": first if k == begin or not first else {**first, "cont": True}})
-            if nseg - begin > 1:
-                self.note("rowSplit", id(tr))
         colgroup = ("<colgroup>" + "".join(f'<col style="width:{w:.1f}px">' for w in grid) + "</colgroup>") if grid else ""
         width = sum(grid)
         tstyle = f' style="width:{min(width, 4000):.1f}px"' if width else ""
@@ -1143,7 +1173,7 @@ class Renderer:
         def close():
             if cur:
                 first = next((r["first"] for r in cur if not r.get("repeat")), None)
-                parts.append((f'<table class="docx-table"{tstyle}>{colgroup}<tbody>{rows_html(cur)}</tbody></table>', first))
+                parts.append((notes + f'<table class="docx-table"{tstyle}>{colgroup}<tbody>{rows_html(cur)}</tbody></table>', first))
 
         for row in rows:
             if row["break"] and paginate:
@@ -1195,7 +1225,7 @@ class Renderer:
         self.sect = sections[0]
         self.new_page("start")
         if not self.has_rendered:
-            self.note("estimatedPages", "doc")
+            self.pages[-1]["notes"] += self.note("estimatedPages", "doc")
         for el in self.body_blocks(body):
             if el.tag == W + "p":
                 for tok in self.paragraph(el, paginate=True):
@@ -1215,7 +1245,6 @@ class Renderer:
                         else:
                             self.pages[-1]["sect"] = self.sect
             elif el.tag == W + "tbl":
-                self.note("table", id(el))
                 for part, first in self.table(el, paginate=True):
                     if part == BREAK:
                         self.brk("table")
@@ -1226,7 +1255,7 @@ class Renderer:
             elif el.tag == W + "commentRangeStart":
                 self.comment_open.append(el.get(W + "id", ""))
             else:
-                self.note("unknown", _local(el.tag), _local(el.tag))
+                self.pages[-1]["notes"] += self.note("unknown", _local(el.tag), _local(el.tag))
         while len(self.pages) > 1 and not self.pages[-1]["content"]:
             self.pages.pop()
         return self.assemble()
@@ -1235,15 +1264,16 @@ class Renderer:
         """正文的块级元素；块级内容控件与 customXml 拆开，里面的段落带上只读原因。"""
         for el in container:
             if el.tag == W + "sdt":
-                self.note("contentControl", id(el))
+                mark = self.note("contentControl", id(el))
                 content = el.find(W + "sdtContent")
                 if content is not None:
-                    outer = self.block_ro
-                    self.block_ro = outer | {"contentControl"}
+                    outer = self.block_ro, self.block_notes
+                    self.block_ro = self.block_ro | {"contentControl"}
+                    self.block_notes += mark
                     try:
                         yield from self.body_blocks(content)
                     finally:
-                        self.block_ro = outer
+                        self.block_ro, self.block_notes = outer
             elif el.tag == W + "customXml":
                 yield from self.body_blocks(el)
             elif el.tag in SKIP_BLOCK:
@@ -1268,7 +1298,14 @@ class Renderer:
             in_sect += 1
             shown += 1
             if sect.cols > 1:
-                self.note("columns", id(sect))
+                page["notes"] += self.note("columns", id(sect))
+
+            def locate(match):
+                self.diag[match.group(1)]["pages"].add(n)
+                return ""
+
+            DIAG_MARK.sub(locate, page["notes"])
+            page["blocks"] = [DIAG_MARK.sub(locate, block) for block in page["blocks"]]
             header = self.part_html(sect, "header", in_sect, n)
             footer = self.part_html(sect, "footer", in_sect, n)
             key = page_key(page["first"], page["blocks"])
@@ -1388,7 +1425,7 @@ def rows_html(rows: list[dict]) -> str:
             tds.append(f"<td {' '.join(a)}>{body or '<br>'}</td>")
         cls = (["docx-th"] if row["header"] else []) + (["docx-repeat"] if row.get("repeat") else [])
         attr = f' class="{" ".join(cls)}"' if cls else ""
-        out.append(f"<tr{attr}>{''.join(tds)}</tr>")
+        out.append(row.get("notes", "") + f"<tr{attr}>{''.join(tds)}</tr>")
     return "".join(out)
 
 
@@ -1443,6 +1480,7 @@ section.docx-page .docx-comment{color:#b26b00;cursor:help}
 section.docx-page .docx-cmt{background-image:linear-gradient(transparent 85%,rgba(255,170,0,.55) 85%)}
 section.docx-page .docx-ins{color:#1a6e32;text-decoration-line:underline;text-decoration-color:#1a6e32}
 section.docx-page .docx-del{color:#b42318;text-decoration-line:line-through;text-decoration-color:#b42318}
+section.docx-page .docx-revision{background-color:#fff1c2;text-decoration-line:underline;text-decoration-style:dotted}
 section.docx-page .docx-field{background-color:rgba(0,0,0,.05)}
 section.docx-page .docx-link{color:#0b57d0;text-decoration-line:underline}
 section.docx-page .docx-txbx{display:inline-block;vertical-align:top;border:1px dashed #8a8f98;padding:4px 6px;margin:2px;white-space:normal}

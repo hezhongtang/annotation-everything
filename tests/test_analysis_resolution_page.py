@@ -352,14 +352,16 @@ class AnalysisResolutionPageTests(unittest.TestCase):
         setup = """
           let analysisState=STATE,analysisBusy=false,i=1;const notices=[],toast=text=>notices.push(text);
           const P=[{n:1,key:'other_private',title:'另一合成页'},{n:3,key:'kept_private',title:'保留的合成页'}];
-          const SECT=['<section>另一合成页</section>','<section>正确的内嵌合成报告</section>'],RCSS='.page{color:navy}';
-          const root={innerHTML:'',getElementById(id){this.nodes??={};return this.nodes[id]??=( {style:{}} )}};
-          const host=$('analysisPageHost');host.attachShadow=()=>host.shadowRoot=root;
+          const SECT=['<section>另一合成页</section>','<section>正确的内嵌合成报告</section>'],RCSS='.page{color:navy}',DOCX=null;
+          const root={innerHTML:'',getElementById(id){this.nodes??={};return this.nodes[id]??=(
+            {style:{setProperty(key,value){this[key]=value}},querySelector(){return null}} )}};
+          const host=$('analysisPageHost');host.dataset={};host.attachShadow=()=>host.shadowRoot=root;
           $('analysisPageWrap').getBoundingClientRect=()=>({width:640,height:400});
           $('analysisPageDialog').classList={add(){this.open=true},contains(){return !!this.open},remove(){this.open=false}};
           $('host').lang='zh-CN';
         """.replace("STATE", json.dumps(state, ensure_ascii=False))
         value = interaction_program([
+            ("function pageSize(", "const PAGE_NS="),
             ("// ---------- Analysis view helpers ----------", "// ---------- Analysis view DOM ----------"),
             ("// ---------- Analysis page preview interactions ----------", "// ---------- Analysis page preview interactions end ----------"),
         ], setup, """

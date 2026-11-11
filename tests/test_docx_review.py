@@ -164,6 +164,31 @@ class PaginationEdgeTests(unittest.TestCase):
         self.assertEqual(len(r["pages"]), 2)
         self.assertNotIn("正文", r["pages"][0]["html"])
 
+    def test_leading_inline_hard_breaks_keep_blank_pages(self):
+        for count in (1, 2):
+            with self.subTest(count=count):
+                p = para(runs='<w:r>' + '<w:br w:type="page"/>' * count + '<w:t>正文</w:t></w:r>')
+                r = dr.render(mini(p))
+                self.assertEqual(len(r["pages"]), count + 1)
+                self.assertTrue(all("正文" not in page["html"] for page in r["pages"][:-1]))
+                self.assertIn("正文", r["pages"][-1]["html"])
+
+    def test_initial_page_break_before_does_not_add_a_blank_page(self):
+        r = dr.render(mini(para("正文", ppr='<w:pageBreakBefore/>')))
+        self.assertEqual(len(r["pages"]), 1)
+
+    def test_leading_hard_and_rendered_break_are_not_counted_twice(self):
+        p = para(runs=f'<w:r><w:br w:type="page"/>{LRPB}<w:t>正文</w:t></w:r>')
+        r = dr.render(mini(p))
+        self.assertEqual(len(r["pages"]), 2)
+        self.assertIn("正文", r["pages"][1]["html"])
+
+    def test_rendered_marker_deduplicates_only_one_hard_break(self):
+        p = para(runs=f'<w:r><w:t>首页</w:t>{LRPB}<w:br w:type="page"/><w:br w:type="page"/><w:t>第三页</w:t></w:r>')
+        r = dr.render(mini(p))
+        self.assertEqual(len(r["pages"]), 3)
+        self.assertIn("第三页", r["pages"][2]["html"])
+
     def test_table_row_spanning_three_pages(self):
         cell = (f'<w:tc>{para("上")}<w:p><w:r>{LRPB}<w:t>中</w:t></w:r></w:p>'
                 f'<w:p><w:r>{LRPB}<w:t>下</w:t></w:r></w:p></w:tc>')
@@ -204,6 +229,94 @@ class InlineStructureTests(unittest.TestCase):
             self.assertIn('data-docx-ro="revision"', frag, "只读原因在分页之前就已知道")
         self.assertRegex(r["pages"][1]["html"], r'class="docx-r docx-ins"[^>]*>.*?插入二')
         self.assertEqual(r["pages"][1]["html"].count("<span"), r["pages"][1]["html"].count("</span>"))
+        self.assertEqual(codes(r)["revision"]["pages"], [1, 2])
+        self.assertEqual(codes(r)["revision"]["count"], 1)
+
+    def test_diagnostics_follow_content_after_a_paragraph_break(self):
+        p = para(runs=('<w:r><w:t>首页</w:t></w:r>' + PAGE_BR
+                       + '<w:ins w:id="7" w:author="甲"><w:r><w:t>新增</w:t></w:r></w:ins>'))
+        r = dr.render(mini(p))
+        self.assertEqual(codes(r)["revision"]["pages"], [2])
+        self.assertEqual(codes(r)["revision"]["count"], 1)
+
+    def test_run_diagnostics_follow_content_after_a_break_in_the_same_run(self):
+        p = para(runs=('<w:r><w:t>首页</w:t><w:br w:type="page"/>'
+                       '<w:commentReference w:id="0"/></w:r>'))
+        r = dr.render(mini(p))
+        self.assertEqual(codes(r)["comment"]["pages"], [2])
+
+    def test_table_diagnostics_follow_final_cell_and_row_pages(self):
+        hdr = f'<w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc>{para("表头")}</w:tc></w:tr>'
+        field = '<w:fldSimple w:instr="DATE"><w:r><w:t>日期结果</w:t></w:r></w:fldSimple>'
+        row = (f'<w:tr><w:tc>{para(runs=f"<w:r>{LRPB}<w:t>次页</w:t></w:r>")}</w:tc>'
+               f'<w:tc>{para(runs=field)}</w:tc></w:tr>')
+        comment = para(runs='<w:r><w:commentReference w:id="0"/></w:r>')
+        final = f'<w:tr><w:tc>{comment}</w:tc></w:tr>'
+        r = dr.render(mini(f'<w:tbl>{hdr}{row}{final}</w:tbl>'))
+        self.assertEqual(len(r["pages"]), 2)
+        self.assertEqual(codes(r)["field"]["pages"], [2], "没有分页标记的单元格随整行移动")
+        self.assertEqual(codes(r)["comment"]["pages"], [2], "后续行沿用表格实际页码")
+        self.assertEqual(codes(r)["table"]["pages"], [1, 2])
+
+    def test_table_cell_diagnostics_follow_fragments(self):
+        marked = (f'<w:commentRangeStart w:id="0"/><w:ins w:id="7">'
+                  f'<w:r><w:t>上</w:t>{LRPB}<w:t>下</w:t></w:r></w:ins>'
+                  '<w:commentRangeEnd w:id="0"/>')
+        r = dr.render(mini(f'<w:tbl><w:tr><w:tc>{para(runs=marked)}</w:tc></w:tr></w:tbl>'))
+        for code in ("revision", "comment", "rowSplit", "table"):
+            self.assertEqual(codes(r)[code]["pages"], [1, 2], code)
+            self.assertEqual(codes(r)[code]["count"], 1, code)
+
+    def test_complex_field_diagnostics_follow_each_result_fragment(self):
+        p = para(runs=('<w:r><w:t>前文</w:t><w:br w:type="page"/>'
+                       '<w:fldChar w:fldCharType="begin"/><w:instrText> TOC </w:instrText>'
+                       '<w:fldChar w:fldCharType="separate"/><w:t>目录一</w:t>'
+                       '<w:br w:type="page"/><w:t>目录二</w:t><w:fldChar w:fldCharType="end"/></w:r>'))
+        r = dr.render(mini(p))
+        self.assertEqual(codes(r)["field"]["pages"], [2, 3])
+        self.assertEqual(codes(r)["field"]["count"], 1)
+
+    def test_repeated_header_diagnostics_follow_displayed_pages(self):
+        marked = '<w:ins w:id="7"><w:r><w:t>修订表头</w:t></w:r></w:ins>'
+        hdr = f'<w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc>{para(runs=marked)}</w:tc></w:tr>'
+        cell = para(runs=f'<w:r>{LRPB}<w:t>次页</w:t></w:r>')
+        r = dr.render(mini(f'<w:tbl>{hdr}<w:tr><w:tc>{cell}</w:tc></w:tr></w:tbl>'))
+        self.assertEqual(codes(r)["revision"]["pages"], [1, 2])
+        self.assertEqual(codes(r)["revision"]["count"], 1)
+
+    def test_table_property_revisions_are_visible_and_readonly(self):
+        cases = (("trPr", "ins", "revision", "docx-ins"),
+                 ("trPr", "del", "revision", "docx-del"),
+                 ("tcPr", "cellIns", "revision", "docx-ins"),
+                 ("tcPr", "cellDel", "revision", "docx-del"),
+                 ("tcPr", "cellMerge", "revision", "docx-revision"),
+                 ("tcPr", "tcPrChange", "formatRevision", "docx-revision"))
+        for prop, tag, code, css in cases:
+            with self.subTest(prop=prop, tag=tag):
+                revision = f'<w:{prop}><w:{tag} w:id="9" w:author="审阅人"/></w:{prop}>'
+                p = para(runs=f'<w:r><w:t>上</w:t>{LRPB}<w:t>下</w:t></w:r>')
+                row = (f'<w:tr>{revision if prop == "trPr" else ""}'
+                       f'<w:tc>{revision if prop == "tcPr" else ""}{p}</w:tc></w:tr>')
+                r = dr.render(mini(f'<w:tbl>{row}</w:tbl>{para("普通正文")}'))
+                self.assertEqual(codes(r)[code]["pages"], [1, 2])
+                self.assertEqual(codes(r)[code]["count"], 1)
+                for page in r["pages"]:
+                    self.assertIn(f'data-docx-ro="{code}"', page["html"])
+                    self.assertRegex(page["html"], rf'class="docx-r {css}"[^>]*title="[^"]*审阅人')
+                    self.assertNotIn("\x00", page["html"], "内部诊断标记不能进入输出")
+                plain = re.search(r'<div[^>]*data-docx-p="1"[^>]*>.*?</div>', r["pages"][-1]["html"]).group(0)
+                self.assertNotIn("data-docx-ro", plain, "修订状态不能泄漏到表格之后")
+                self.assertRegex(plain, r'<span class="docx-r"[^>]*>普通正文')
+
+    def test_row_revision_reaches_all_cells_and_nested_tables(self):
+        inner = f'<w:tbl><w:tr><w:tc>{para("嵌套内容")}</w:tc></w:tr></w:tbl>'
+        row = ('<w:tr><w:trPr><w:ins w:id="9"/></w:trPr>'
+               f'<w:tc>{para("第一格")}</w:tc><w:tc>{inner}{para("第二格")}</w:tc></w:tr>')
+        r = dr.render(mini(f'<w:tbl>{row}</w:tbl>'))
+        for text in ("第一格", "嵌套内容", "第二格"):
+            self.assertRegex(r["pages"][0]["html"],
+                             rf'data-docx-ro="revision"[^>]*><span class="docx-r docx-ins"[^>]*>{text}')
+        self.assertEqual(codes(r)["revision"]["count"], 1)
 
     def test_multi_paragraph_field_marks_every_paragraph_readonly(self):
         toc = ('<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> TOC \\o </w:instrText></w:r>'
@@ -309,6 +422,25 @@ class UntrustedInputTests(unittest.TestCase):
         with self.assertRaises(dr.DocxError) as cm:
             dr.render(ms.package(tmp() / "b.docx", bomb))
         self.assertEqual(cm.exception.code, "dtd")
+
+    def test_rejects_utf16_dtd_in_all_xml_parts(self):
+        xml = ('<?xml version="1.0" encoding="UTF-16"?>'
+               '<!DOCTYPE x [<!ENTITY a "合成实体">]><x>&a;</x>')
+        for encoding, bom in (("utf-16-le", b"\xff\xfe"), ("utf-16-be", b"\xfe\xff")):
+            for prefix in (b"", bom):
+                for part in ("word/document.xml", "word/styles.xml", "_rels/.rels"):
+                    with self.subTest(encoding=encoding, bom=bool(prefix), part=part):
+                        source = mini(para("正文"), extra={part: prefix + xml.encode(encoding)})
+                        with self.assertRaises(dr.DocxError) as cm:
+                            dr.render(source)
+                        self.assertEqual(cm.exception.code, "dtd")
+
+    def test_valid_utf16_document_remains_supported(self):
+        xml = ms.body_xml(para("合法正文")).replace('encoding="UTF-8"', 'encoding="UTF-16"')
+        for encoding, bom in (("utf-16-le", b"\xff\xfe"), ("utf-16-be", b"\xfe\xff")):
+            with self.subTest(encoding=encoding):
+                source = mini("", extra={"word/document.xml": bom + xml.encode(encoding)})
+                self.assertIn("合法正文", dr.render(source)["pages"][0]["html"])
 
     def test_oversized_part_is_refused(self):
         from unittest import mock
