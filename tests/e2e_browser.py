@@ -2985,7 +2985,7 @@ def docx_review_checks(browser, tmp: Path):
     banner = page.inner_text("#docxBanner")
     ok("按 Word 保存的分页显示" in banner and "与文档记录的 5 页一致" in banner,
        "横幅标明按 Word 分页显示且与文档记录一致（verified）")
-    ok("自动写回 .docx" in banner, "横幅提示这一版不能写回 .docx")
+    ok("回写 DOCX" in banner and "只读结构" in banner, "横幅说明支持的纯文字可回写，且保留只读结构限制")
     ok(page.locator("#jump option").count() == 5, "页码选择器列出 5 页")
     first = page.locator("#host section.page").first.bounding_box()
     ok(first and first["width"] < first["height"],
@@ -3007,8 +3007,8 @@ def docx_review_checks(browser, tmp: Path):
     ok(page.is_visible("#selbar"), "DOCX 正文文字可选择，拖选弹出操作条")
     page.click("#selbar [data-sel='delete']")
     ok(wait_toast(page, "已记下：删除这段", condition="普通段快捷删除的提示出现")
-       and "改动需在 Word 中完成" in page.inner_text("#toast"),
-       "普通段快捷删除照常记录，提示改稿需在 Word 中完成")
+       and "校验定位并回写" in page.inner_text("#toast"),
+       "普通段快捷删除照常记录，提示交给 Agent 后校验定位并回写")
     go_page(page, 3)
     page3 = page.evaluate(f"() => {STAGE}.textContent")
     ok("货到付款" in page3 and "验收合格后三十日内付款" in page3, "原生修订的删除与插入文字都保留")
@@ -3042,6 +3042,13 @@ def docx_review_checks(browser, tmp: Path):
     ok(fallback["hit"] and fallback["hit"]["via"] == "text" and fallback["hit"]["para"]["n"] == fallback["n"]
        and fallback["none"] is None,
        "拿不到 Shadow DOM 选区时按文本唯一匹配反查段落并记下来源；本页找不到的文字不写定位")
+    readonly_fallback = page.evaluate(f"""() => {{
+        const d = {STAGE}.querySelector('[data-docx-p][data-docx-ro*="revision"]');
+        const original = sr.getSelection;
+        try {{ sr.getSelection = () => null; return docxReadonly(docxTextNodes(d).map(t => t.data).join('')); }}
+        finally {{ if (original) sr.getSelection = original; else delete sr.getSelection; }}
+    }}""")
+    ok("revision" in readonly_fallback, "拿不到 Shadow DOM 选区时，文本反查仍提示原生修订不能回写")
     add_note(page, "DOCX 页点标注", pin=(0.5, 0.1))
     page.click('[data-act="pin"]')   # 框选区域：进入标注模式后按住拖出一块（拖出 6px 以上才算框）
     box = page.locator("#slide").bounding_box()

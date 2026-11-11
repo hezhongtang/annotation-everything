@@ -87,6 +87,8 @@ cat .verify/runs/<run ID>/shadow.json
 
 策略 v13 将 README 允许项同步为默认英文的 `README.md` 和中文的 `README.zh-CN.md`，旧英文文件名不再豁免。两份现有 README 各自的纯文档 PR 继续免本地产品测试；旧文件名按未知路径回退完整检查。旧验证记录仍可读取和报告，策略版本不同的证据不参与复用；不能因为旧允许列表下的文档无关等价而沿用它们。本次迁移修改了策略、测试和 fixture，自身仍需实际执行完整 PR 门禁。
 
+策略 v14 将 `docx_edit.py` 和 `tests/test_docx_edit.py` 并入 `docx-review` 映射，覆盖回写的字节保留、写前闸门与失败恢复；浏览器场景仍为 `docx-review`。修改策略自身继续回退完整 PR 门禁，开发阶段只执行相关快速检查并移交全量要求。
+
 
 ## 文档允许列表核实（策略 v11，issue #117）
 
