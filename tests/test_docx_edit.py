@@ -330,6 +330,27 @@ class WritebackTests(unittest.TestCase):
         self.assert_refused("readonly")
         self.assertIn('data-docx-ro="hidden"', dr.render(self.source)["pages"][0]["html"])
 
+    def test_table_styles_including_inheritance_and_conditions_are_readonly(self):
+        for body in ('<w:rPr><w:vanish/></w:rPr>', '<w:tblStylePr w:type="firstRow"><w:rPr><w:vanish/></w:rPr></w:tblStylePr>'):
+            for explicit in (True, False):
+                with self.subTest(body=body, explicit=explicit):
+                    styles = (f'<w:styles xmlns:w="{dr.W_NS}"><w:style w:type="table" w:styleId="Base">{body}</w:style>'
+                              '<w:style w:type="table" w:styleId="HiddenTable" w:default="1"><w:basedOn w:val="Base"/></w:style></w:styles>')
+                    props = '<w:tblPr><w:tblStyle w:val="HiddenTable"/></w:tblPr>' if explicit else ''
+                    self.document(f'<w:tbl>{props}<w:tr><w:tc>{para("甲乙丙")}</w:tc></w:tr></w:tbl>', extra={"word/styles.xml": styles})
+                    errors = self.assert_refused("readonly")
+                    self.assertEqual(errors[0].detail, "hidden")
+                    self.assertIn('data-docx-ro="hidden"', dr.render(self.source)["pages"][0]["html"])
+
+    def test_nontext_symbols_are_exposed_to_the_page_without_changing_text_offsets(self):
+        for token, visible in (("<w:tab/>", "\t"), ("<w:noBreakHyphen/>", "‑"), ("<w:softHyphen/>", "­"), ('<w:sym w:char="0041"/>', "A")):
+            with self.subTest(token=token):
+                self.document(f'<w:p><w:r><w:t>甲</w:t>{token}<w:t>乙</w:t></w:r></w:p>')
+                result = dr.render(self.source)
+                self.assertEqual(result["paragraphs"][0]["digest"], dr.text_digest("甲" + visible + "乙"))
+                self.assertRegex(result["pages"][0]["html"], r'class="docx-(?:tab|nontext)"')
+                self.assert_refused("range", lambda: self.replace("甲" + visible + "乙"))
+
     def test_dry_run_has_no_output_or_backup(self):
         self.document()
         output = self.root / "preview.docx"
@@ -426,6 +447,35 @@ class WritebackTests(unittest.TestCase):
             self.assertTrue(json.loads(out.getvalue())["dryRun"])
             self.assertIn(phrase, err.getvalue())
         self.assertEqual(self.source.read_bytes(), self.original)
+
+    def test_cli_argument_errors_use_the_shared_language_contract(self):
+        self.document()
+        cases = [(["--locale"], {}, "参数 --locale 需要一个值"),
+                 (["--locale", "en", "apply", str(self.review), "--id"], {}, "Option --id needs a value"),
+                 (["apply", str(self.review), "--id", "missing"], {"AE_LOCALE": "fr"}, "不支持的语言：fr"),
+                 (["apply", str(self.review), "--unknown", "--locale", "en"], {}, "Unrecognized argument: --unknown")]
+        for args, env, expected in cases:
+            with self.subTest(args=args), patch.dict(os.environ, {"AE_LOCALE": "", **env}):
+                out, err = io.StringIO(), io.StringIO()
+                with redirect_stdout(out), redirect_stderr(err):
+                    try:
+                        code = de.main(args)
+                    except SystemExit as exc:
+                        code = exc.code
+                self.assertEqual(code, 2)
+                self.assertIn(expected, err.getvalue())
+                self.assertNotIn("None", err.getvalue())
+        self.assertEqual(self.source.read_bytes(), self.original)
+
+    def test_invalid_stored_locale_reports_its_actual_value(self):
+        self.document()
+        self.manifest["locale"] = "fr"
+        (self.review / "review.json").write_text(json.dumps(self.manifest))
+        err = io.StringIO()
+        with patch.dict(os.environ, {"AE_LOCALE": ""}), redirect_stderr(err):
+            code = de.main(["apply", str(self.review), "--id", "missing"])
+        self.assertEqual(code, 2)
+        self.assertIn("不支持的语言：fr", err.getvalue())
 
 
 if __name__ == "__main__":

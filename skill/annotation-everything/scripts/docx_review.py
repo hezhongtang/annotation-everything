@@ -340,6 +340,7 @@ def merged(props: list[ET.Element | None]) -> dict[str, ET.Element]:
 def writeback_restrictions(root: ET.Element, style_root: ET.Element | None) -> dict[int, set[str]]:
     """页面和回写命令共用的段落限制；包含外层结构、跨段域及从样式继承的隐藏文字。"""
     paragraphs = list(root.iter(W + "p"))
+    styles = Styles(style_root)
     indices = {id(p): n for n, p in enumerate(paragraphs)}
     reasons: dict[int, set[str]] = {n: set() for n in indices.values()}
     kinds = {**{W + t: "revision" for t in ("ins", "del", "moveFrom", "moveTo", "cellIns", "cellDel", "cellMerge")},
@@ -373,6 +374,14 @@ def writeback_restrictions(root: ET.Element, style_root: ET.Element | None) -> d
         # 表格 / 行 / 单元格的修订属性是段落的前置兄弟，仍影响里面的段落。
         prop_tag = {W + "tbl": "tblPr", W + "tr": "trPr", W + "tc": "tcPr"}.get(el.tag)
         props = el.find(W + prop_tag) if prop_tag else None
+        if el.tag == W + "tbl":
+            table_style = props.find(W + "tblStyle") if props is not None else None
+            sid = table_style.get(W + "val") if table_style is not None else styles.default_table
+            # 条件表格样式的实际应用受行列位置等影响；包含隐藏设置时整表保守只读。
+            for style in styles.chain(sid):
+                if any(_local(prop.tag) in ("vanish", "webHidden", "specVanish") and _on(prop) is True
+                       for prop in style.iter()):
+                    own.add("hidden")
         for prop in props.iter() if props is not None else ():
             if prop.tag in kinds:
                 own.add(kinds[prop.tag])
@@ -394,7 +403,6 @@ def writeback_restrictions(root: ET.Element, style_root: ET.Element | None) -> d
             elif mode == "end":
                 field_depth = max(0, field_depth - 1)
         pending.extend((child, own, parents, el.tag) for child in reversed(list(el)))
-    styles = Styles(style_root)
     for n, p in enumerate(paragraphs):
         ppr = p.find(W + "pPr")
         ps = ppr.find(W + "pStyle") if ppr is not None else None
@@ -1013,9 +1021,9 @@ class Renderer:
                 if self.part == "body":
                     parts.append(("break", "rendered"))
             elif tag == W + "noBreakHyphen":
-                parts.append(("text", "‑"))
+                parts.append(("html", '<span class="docx-nontext">‑</span>'))
             elif tag == W + "softHyphen":
-                parts.append(("text", "­"))
+                parts.append(("html", '<span class="docx-nontext">­</span>'))
             elif tag == W + "sym":
                 try:
                     c = chr(int(ch.get(W + "char", ""), 16))
@@ -1023,7 +1031,7 @@ class Renderer:
                     c = ""
                 if 0xD800 <= ord(c) <= 0xDFFF:
                     c = ""   # 孤立代理编码不进 UTF-8，也不出现在页面文字里
-                parts.append(("text", BULLET_MAP.get(c, c)))
+                parts.append(("html", '<span class="docx-nontext">' + _esc(BULLET_MAP.get(c, c)) + '</span>'))
             elif tag == W + "drawing":
                 parts.append(("html", self.drawing(ch)))
             elif tag == W + "pict":

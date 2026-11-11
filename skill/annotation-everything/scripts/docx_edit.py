@@ -7,7 +7,6 @@ replace REVIEW --paragraph N --from OLD --to NEW：Agent 核对自由批注后�
 """
 from __future__ import annotations
 
-import argparse
 import copy
 import hashlib
 import io
@@ -36,6 +35,15 @@ MAX_PACKAGE = 256 * 1024 * 1024
 MAX_EXPANDED = 512 * 1024 * 1024
 W = dr.W_NS + "}"
 W14 = dr.W14[1:]
+ERROR_KEYS = {
+    i18n.CLI_ERROR_INVALID_CHOICE: "docx.edit.cli.invalidChoice",
+    i18n.CLI_ERROR_MISSING_VALUE: "docx.edit.cli.missingValue",
+    i18n.CLI_ERROR_UNKNOWN_ARGUMENT: "docx.edit.cli.unknownArgument",
+    i18n.CLI_ERROR_MISSING_ARGUMENT: "docx.edit.cli.missingArgument",
+    i18n.CLI_ERROR_GENERIC: "docx.edit.cli.arguments",
+    i18n.CLI_ERROR_EMPTY_LOCALE: "docx.edit.cli.emptyLocale",
+    i18n.CLI_ERROR_INVALID_LOCALE: "docx.edit.cli.invalidLocale",
+}
 
 
 class EditError(ValueError):
@@ -531,7 +539,10 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
     if (not manifest or ledger.unsupported_format(manifest)
             or (manifest.get("format") or {}).get("report") != "docx"):
         raise EditError("review")
-    source = resolve_sources(review, manifest)["report"]
+    try:
+        source = resolve_sources(review, manifest)["report"]
+    except BuildError:
+        raise EditError("source") from None
     if source is None:
         raise EditError("source")
     fingerprint = (manifest.get("docx") or {}).get("fingerprint", "")
@@ -583,7 +594,12 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    pre = argparse.ArgumentParser(add_help=False)
+    try:
+        language = i18n.cli_locale(i18n.explicit_locale(argv))
+    except i18n.LocaleError as exc:
+        print(i18n.locale_error_message(exc, ERROR_KEYS, i18n.Translator(i18n.DEFAULT_LOCALE)), file=sys.stderr)
+        return 2
+    pre = i18n.LocalizedParser(add_help=False, keys=ERROR_KEYS, translate=i18n.Translator(language))
     pre.add_argument("command", nargs="?")
     pre.add_argument("review", nargs="?")
     pre.add_argument("--locale")
@@ -591,11 +607,11 @@ def main(argv: list[str] | None = None) -> int:
     manifest = ledger.read_manifest(Path(known.review)) if known.review else {}
     try:
         language = i18n.cli_locale(known.locale, stored=manifest.get("locale"))
-    except i18n.LocaleError:
-        print(i18n.Translator("zh-CN")("cli.notes.invalidLocale", name=known.locale), file=sys.stderr)
+    except i18n.LocaleError as exc:
+        print(i18n.locale_error_message(exc, ERROR_KEYS, i18n.Translator(i18n.DEFAULT_LOCALE)), file=sys.stderr)
         return 2
     t = i18n.Translator(language)
-    ap = argparse.ArgumentParser(prog="docx_edit.py", description=t("docx.edit.help"))
+    ap = i18n.LocalizedParser(prog="docx_edit.py", description=t("docx.edit.help"), keys=ERROR_KEYS, translate=t)
     ap.add_argument("command", choices=("apply", "replace"))
     ap.add_argument("review", type=Path)
     ap.add_argument("--batch", type=int, help=t("docx.edit.batchHelp"))

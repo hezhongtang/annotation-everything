@@ -929,12 +929,14 @@ function renderDocxPage(){if(!DOCX)return;const p=P[i],note=$("docxPageNote");
   note.textContent=bits.join(" · ");note.title=note.textContent;note.hidden=!bits.length}
 // 选区碰到的只读段落（原生修订、域、文本框等）与页眉页脚：快捷修改照样记下，但提示不能自动回写
 function docxReadonly(text=""){if(!DOCX)return"";const s=sr.getSelection&&sr.getSelection();if(!s||!s.rangeCount){
-  const a=docxFromText(text);if(!a)return"";const d=[...stage.querySelectorAll("[data-docx-p]")].find(p=>+p.dataset.docxP===a.para.n);return d&&d.dataset.docxRo||""}
+  const a=docxFromText(text);if(!a)return"";const d=[...stage.querySelectorAll("[data-docx-p]")].find(p=>+p.dataset.docxP===a.para.n);
+  return[d&&d.dataset.docxRo,docxNontextRange(a)?"nonText":""].filter(Boolean).join(",")}
   const r=s.getRangeAt(0),out=new Set();
   [s.anchorNode,s.focusNode].forEach(n=>{const el=n&&(n.nodeType===1?n:n.parentElement);if(!el)return;
     const ro=el.closest("[data-docx-ro]");if(ro)ro.dataset.docxRo.split(",").forEach(x=>out.add(x));
     if(el.closest(".docx-header"))out.add("header");if(el.closest(".docx-footer"))out.add("footer")});
   stage.querySelectorAll("[data-docx-ro]").forEach(e=>{try{if(r.intersectsNode(e))e.dataset.docxRo.split(",").forEach(x=>out.add(x))}catch(_){}});
+  stage.querySelectorAll(".docx-tab:not(.docx-num),.docx-nontext,br").forEach(e=>{try{if(r.intersectsNode(e))out.add("nonText")}catch(_){}});
   return[...out].join(",")}
 // ---------- DOCX 批注定位（docx 字段 v1）：段落 paraId / 序号 / 文本摘要、段落内字符偏移（按码点）、定位来源 ----------
 // 段落属性由 docx_review.py 写在页面上：data-docx-p 序号、data-docx-pid paraId、data-docx-d 摘要、data-docx-o 续片起始偏移。
@@ -968,6 +970,11 @@ function docxFromText(text){const want=String(text||"").replace(/\s+/g,"");if(!w
   if(hits.length!==1)return null;const h=hits[0],out=docxAnchor("quote","text",h.d);
   if(h.once){out.start=h.start;out.end=h.end}return out}
 function docxQuoteAnchor(text){return DOCX?(docxFromSelection()||docxFromText(text)):null}
+// 文本反查时没有 DOM Range，按段落内码点偏移检查不可重写的结构；自动编号不在正文里。
+function docxNontextRange(a){if(!a||!Number.isInteger(a.start)||!Number.isInteger(a.end))return false;
+  const d=[...stage.querySelectorAll("[data-docx-p]")].find(p=>+p.dataset.docxP===a.para.n);if(!d)return false;
+  return[...d.querySelectorAll(".docx-tab:not(.docx-num),.docx-nontext,br")].some(e=>{const start=docxOffset(d,e,0),end=start+cpLen(e.textContent||"");
+    return end===start?a.start<start&&start<a.end:a.start<end&&start<a.end})}
 // 点和框所在的段落：点取落点处的段落（落在空白处取纵向最近的一段），框取它碰到的第一段到最后一段
 function docxMarkAnchor(mk){if(!DOCX||!mk)return null;const paras=[...stage.querySelectorAll("[data-docx-p][data-docx-d]")];if(!paras.length)return null;
   const s=stage.getBoundingClientRect(),X=v=>s.left+s.width*v/100,Y=v=>s.top+s.height*v/100;

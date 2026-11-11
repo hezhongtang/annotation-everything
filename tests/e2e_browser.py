@@ -3090,6 +3090,26 @@ def docx_review_checks(browser, tmp: Path):
     ok(wait_until(lambda: page.evaluate("() => JSON.parse(localStorage.getItem('ae.' + RID + '.notes')).filter(n => n.text === '同文异段批注').length") == 2,
                   page, 5, condition="两个不同段落的同文批注均导入本地存储"),
        "DOCX 同文异段批注在 file:// 导入时不会互相去重")
+    # #137：同段内跨过非 w:t 结构时，页面和回写命令一样明确拒绝自动回写。
+    nd = tmp / "docx_nontext"
+    nd.mkdir()
+    tokens = ("<w:tab/>", "<w:br/>", "<w:noBreakHyphen/>", "<w:softHyphen/>", '<w:sym w:char="0041"/>')
+    paragraphs = ''.join(f'<w:p><w:r><w:t>选区{k}开始</w:t>{token}<w:t>末尾{k}</w:t></w:r></w:p>' for k, token in enumerate(tokens))
+    build(nd, ms.package(nd / "nontext.docx", ms.body_xml(paragraphs)), None)
+    page.goto((nd / "index.html").as_uri())
+    for k, token in enumerate(tokens):
+        target = page.locator("#host [data-docx-p]").nth(k)
+        drag_select(page, target)
+        page.click("#selbar [data-sel='delete']")
+        ok(wait_toast(page, "不能自动回写", condition="非文本结构的快捷修改限制提示出现")
+           and "制表符、符号或换行结构" in page.inner_text("#toast"),
+           f"跨 {token} 的快捷删除说明不能自动回写")
+        fallback_reason = page.evaluate(f"""() => {{
+            const d = [...{STAGE}.querySelectorAll('[data-docx-p]')][{k}], original = sr.getSelection;
+            try {{ sr.getSelection = () => null; return docxReadonly(docxTextNodes(d).map(t => t.data).join('')); }}
+            finally {{ if (original) sr.getSelection = original; else delete sr.getSelection; }}
+        }}""")
+        ok("nonText" in fallback_reason, f"跨 {token} 的文本反查同样识别不能回写的结构")
     ctx.close()
     # #136 服务模式：定位落盘；旧服务（不声明 docx 特性）时阻断写入
     sd = tmp / "docx_server"

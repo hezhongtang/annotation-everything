@@ -2140,6 +2140,14 @@
     "docx.edit.error.review": "This is not a supported DOCX review; build a review page with the current build_viewer.py --report document.docx.",
     "docx.edit.error.arguments": "For apply, choose either --batch or --id. For replace, supply --paragraph, --from, and --to. Batch numbers must be positive integers.",
     "docx.edit.error.io": "Write-back did not complete ({detail}); any original backup already created remains in .snapshots. Check permissions and document integrity.",
-    "viewer.docx.unlocatedEdit": "This selection spans paragraphs or lacks a reliable paragraph location and cannot be written back automatically; quote text within one paragraph again, or edit it in Word."
+    "viewer.docx.unlocatedEdit": "This selection spans paragraphs or lacks a reliable paragraph location and cannot be written back automatically; quote text within one paragraph again, or edit it in Word.",
+    "docx.kind.nonText": "tabs, symbols or line-break structures",
+    "docx.edit.cli.invalidChoice": "Unknown write-back command: {name} (choose apply or replace)",
+    "docx.edit.cli.missingValue": "Option {name} needs a value",
+    "docx.edit.cli.unknownArgument": "Unrecognized argument: {detail}",
+    "docx.edit.cli.missingArgument": "A write-back command or review directory is missing; use --help for usage",
+    "docx.edit.cli.arguments": "Invalid write-back arguments: {detail}",
+    "docx.edit.cli.emptyLocale": "--locale needs a language value (auto, zh-CN or en)",
+    "docx.edit.cli.invalidLocale": "Unsupported language: {name} (choose auto, zh-CN or en)"
   }
 }
