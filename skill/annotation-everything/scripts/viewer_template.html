@@ -985,6 +985,8 @@ function docxMarkAnchor(mk){if(!DOCX||!mk)return null;const paras=[...stage.quer
 function docxPatch(id,mk){if(!DOCX)return{};const x=notes.find(n=>n.id===id);
   if(!x||x.page!==P[i].n||(x.docx&&(x.docx.v!==1||x.docx.kind==="quote")))return{};
   return{docx:mk?docxMarkAnchor(mk):null}}
+// 人工确认归属或挪页：以这次决定为准，读得懂的段落定位不再保留（与 notes_store.update 同一条规则），否则下次重建又按段落挪回去
+const docxDrop=x=>x&&x.docx&&x.docx.v===1?{docx:null}:{};
 // 旧版服务不认 docx 字段、会把定位丢掉：DOCX 审阅连上这样的服务时一律不写入
 let srvNoDocx=false;
 function docxBlocked(){return !!DOCX&&mode==="server"&&srvNoDocx}
@@ -1544,7 +1546,7 @@ $("bottomPanel").addEventListener("click",e=>{const b=e.target.closest("[data-ac
       if(et&&!t&&!qe){toast(tMsg("viewer.emptyNote"));return}delete editBuf[id];delete editBuf["sk:"+id];delete editBuf["pg:"+id];editingId=null;
       const body=qe&&qe.op==="delete"?{skills}:qe?{edit:{...qe,to:t},text:REP_PREFIX+t,skills}:{text:t,skills};
       const np=+(($("epage")||{}).value||x.page),pg=P.find(q=>q.n===np);
-      if(pg&&(np!==x.page||x.orphan))Object.assign(body,{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false});   // 挪到别的页（或确认原页）
+      if(pg&&(np!==x.page||x.orphan))Object.assign(body,{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false,...docxDrop(x)});   // 挪到别的页（或确认原页）
       mutate({kind:"patch",id,body});if(body.page&&body.page!==P[i].n)toast(tMsg("viewer.movedPage",{page:body.page}));break}
     case "unpin":stashEdit();mutate({kind:"patch",id,body:{pin:null,region:null,...docxPatch(id,null)}});drawPins();refreshList(true);break;
     case "resolve":mutate({kind:"patch",id,body:{status:"resolved"}});break;
@@ -2256,7 +2258,7 @@ function renderOrphans(){const box=$("orphanBox"),lost=lostNotes();box.style.dis
     `<div class="found"><span>${escH(tMsg(x.key?"viewer.recovery.oldPageKey":"viewer.recovery.oldPage",{page:+x.page||"?",key:x.key||"",text:clip(noteSummary(x),60)}))}</span><span><select data-mv="${escH(x.id)}">${opts}</select> <button data-mvgo="${escH(x.id)}">${escH(tMsg("viewer.recovery.move"))}</button></span></div>`).join("");
   box.querySelectorAll("select[data-mv]").forEach(el=>{const value=choices.get(el.dataset.mv);if([...el.options].some(o=>o.value===value))el.value=value});
   box.querySelectorAll("[data-mvgo]").forEach(b=>b.onclick=()=>{const id=b.dataset.mvgo,sel=box.querySelector(`select[data-mv="${CSS.escape(id)}"]`),pg=P.find(q=>q.n===+sel.value);
-    if(pg){mutate({kind:"patch",id,body:{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false}});toast(tMsg("viewer.recovery.moved",{page:pg.n}));setTimeout(renderOrphans,300)}})}
+    if(pg){mutate({kind:"patch",id,body:{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false,...docxDrop(notes.find(n=>n.id===id))}});toast(tMsg("viewer.recovery.moved",{page:pg.n}));setTimeout(renderOrphans,300)}})}
 function openAll(){renderOrphans();const sel=$("expLang");if(sel)sel.value=LS.get(K.lang,"auto");
   $("allText").textContent=notes.length?exportText():tMsg("export.empty");$("clearAll").style.display=FILE?"":"none";$("allnotes").classList.add("on")}
 async function copyAll(msg){const t=exportText();try{await navigator.clipboard.writeText(t)}catch(e){const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove()}toast(msg||tMsg("export.copied"),msg?5000:2200)}

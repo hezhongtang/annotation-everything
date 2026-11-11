@@ -805,6 +805,12 @@ def update(review_dir: Path, note_id: str, data: dict[str, Any], *, by: str = "p
                 fields["edit"] = {**ed, "to": fields["text"][len(REPLACE_PREFIX):]}
             elif fields["text"] not in (DELETE_TEXT,) and not fields["text"].startswith(REPLACE_PREFIX):
                 fields["edit"] = None   # 改成了普通意见
+        # 人工确认归属（去掉 orphan）或挪到别的页：以这次决定为准。本版本读得懂的段落定位不再保留，
+        # 否则下次重建又会按段落把批注挪回去或重新标成孤立；之后这条批注按页面键走。
+        moved = "page" in fields and fields["page"] != note.get("page")
+        if "docx" not in fields and (moved or fields.get("orphan") is False) \
+                and docx_review.usable_anchor(note.get("docx")):
+            fields["docx"] = None
         note.update(fields)
         _settle_marks(note, fields)
         if note.get("edit") is None:
@@ -1577,10 +1583,12 @@ def _remap_docx(n: dict[str, Any], ctx: dict[str, Any], new_titles: dict[int, st
     else:
         n["orphan"] = True
         result["orphans"].append({"id": n.get("id"), "page": page, "key": n.get("key"), "reason": got["status"]})
-    if got["status"] != "ok" or got["why"] or got["changed"]:
+    touched = _dumps(n) != before
+    # 需要说明的情况只在这条批注这次确实被改动时说一遍；找不到的每次都说，直到用户确认
+    if got["status"] != "ok" or (touched and (got["why"] or got["changed"])):
         result["docx"].append({"id": n.get("id"), "status": got["status"], "how": got["how"], "why": got["why"],
                                "changed": got["changed"], "page": n.get("page")})
-    return _dumps(n) != before
+    return touched
 
 
 def remap_pages(review_dir: Path, old_keys: dict[int, str], new_pages: dict[str, int], new_titles: dict[int, str],

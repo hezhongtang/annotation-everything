@@ -268,6 +268,36 @@ class RemapTests(unittest.TestCase):
         n = self.note(d, nid)
         self.assertEqual((n["page"], n["docx"]), (2, future))
 
+    def test_user_confirmation_survives_the_next_rebuild(self):
+        # 段落找不到被标孤立 → 用户在页面上确认它属于第 1 页 → 再次重建不能把确认结果撤销
+        d = review_dir()
+        nid = self.add(d, 2, "tabc", anchor("目标段", 5, pid="0000000B"))
+        inner = para("甲", pid="0000000A")
+        self.remap(d, inner)
+        self.assertTrue(self.note(d, nid)["orphan"])
+        key = dr.render(docx(inner))["pages"][0]["key"]
+        store.update(d, nid, {"page": 1, "key": key, "orphan": False})
+        result = self.remap(d, inner, {1: key})
+        n = self.note(d, nid)
+        self.assertEqual((n["page"], result["orphans"]), (1, []))
+        self.assertFalse(n.get("orphan"), "用户已确认归属，不再作为孤立批注处理")
+        self.assertNotIn("docx", n, "用户定了归属：失效的段落定位不再保留，之后按页面键")
+
+    def test_moving_a_note_by_hand_is_not_undone_by_its_paragraph(self):
+        d = review_dir()
+        nid = self.add(d, 1, "w0000000A", anchor("甲", 0, pid="0000000A"))
+        inner = para("甲", pid="0000000A") + PAGE_BR + para("乙", pid="0000000B")
+        store.update(d, nid, {"page": 2, "key": "w0000000B", "orphan": False})
+        self.remap(d, inner, {2: "w0000000B"})
+        self.assertEqual(self.note(d, nid)["page"], 2)
+
+    def test_diagnostics_are_not_repeated_when_nothing_changes(self):
+        d = review_dir()
+        self.add(d, 1, "tabc", anchor("目标段", 0))
+        inner = para("前面插入") + PAGE_BR + para("目标段")
+        self.assertEqual(len(self.remap(d, inner)["docx"]), 1)
+        self.assertEqual(self.remap(d, inner)["docx"], [], "已经说明过、这次没有变化的定位不再重复提示")
+
     def test_second_remap_is_a_no_op(self):
         d = review_dir()
         self.add(d, 1, "tabc", anchor("目标段", 0))
@@ -403,6 +433,15 @@ class ShowTests(unittest.TestCase):
         old = {k: v for k, v in FULL.items() if k != "changed"}
         self.assertIn("另一个版本", self.show(old, "zh-CN"))
         self.assertIn("another version", self.show(old, "en"))
+
+    def test_orphaned_location_points_to_confirmation_not_rebuild(self):
+        doc = {"rev": 1, "notes": [{"id": "n1", "page": 3, "key": "w0000000B", "target": "报告", "text": "改措辞",
+                                    "status": "open", "at": "2026-01-01T00:00:00+08:00", "orphan": True,
+                                    "docx": {k: v for k, v in FULL.items() if k != "changed"}}]}
+        for lang, want, not_want in (("zh-CN", "定位的段落", "先重建对照页"), ("en", "paragraph it points to", "rebuild the review page first")):
+            text = notes_cli.to_markdown(doc, self.MANIFEST, include_resolved=True, page=None, locale=lang)
+            self.assertIn(want, text)
+            self.assertNotIn(not_want, text)
 
     def test_newer_version_is_marked_unusable_for_writeback(self):
         self.assertIn("不可用于回写", self.show({"v": 2, "x": 1}, "zh-CN"))

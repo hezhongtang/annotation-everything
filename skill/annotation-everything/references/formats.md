@@ -51,7 +51,7 @@ python3 $S/build_viewer.py --report 合同.docx --out 合同-review --name "采�
 
   不提供「原页图像」只读模式。
 - **定位**：正文段落带 `data-docx-p`（`document.xml` 里 `w:p` 的文档顺序编号）和 `data-docx-pid`（`w14:paraId`），文字运行带 `data-docx-r`。页面键优先取页首段落的 paraId（从段落中间开始的页加 `~c`），没有 paraId 时取页首正文的摘要；正文段落另带 `data-docx-d`（段落文本摘要：去掉空白后取 SHA-1 的前 12 位），跨页段落的续片带 `data-docx-o`（这一片在段落里的起始字符偏移）。页眉页脚、文本框和续表重复的表头不带定位。
-- **批注定位**：在报告上引用文字、放点或框选时，批注写入带版本号的 `docx` 字段（见下文 `notes.json`），记录所在段落的 paraId、段落序号、文本摘要和选区在段落内的字符偏移。浏览器拿不到 Shadow DOM 里的选区时（非 Chromium），页面在当前页按文本反查：只有一个段落含这段文字才写定位，并把来源记为 `text`。重建时先按段落找回批注现在所在的页，同步 `page`、`key`、`title`：paraId 在文档里唯一时用它；没有 paraId、paraId 重复或已不存在时，用段落序号与文本摘要互证（摘要唯一即认定，摘要有多处相同时要求序号也一致），并在生成器输出里说明。段落找不到或无法确认时标 `orphan`，页码不动。页面键只用于没有段落定位的批注。`review.json` 的 `docx.fingerprint` 记录源文件的 SHA-256；批注的 `docx.fp` 与它相同，表示定位已按当前版本核对。
+- **批注定位**：在报告上引用文字、放点或框选时，批注写入带版本号的 `docx` 字段（见下文 `notes.json`），记录所在段落的 paraId、段落序号、文本摘要和选区在段落内的字符偏移。浏览器拿不到 Shadow DOM 里的选区时（非 Chromium），页面在当前页按文本反查：只有一个段落含这段文字才写定位，并把来源记为 `text`。重建时先按段落找回批注现在所在的页，同步 `page`、`key`、`title`：paraId 在文档里唯一时用它；没有 paraId、paraId 重复或已不存在时，用段落序号与文本摘要互证（摘要唯一即认定，摘要有多处相同时要求序号也一致），并在生成器输出里说明。段落找不到或无法确认时标 `orphan`，页码不动；用户在页面上确认归属或把批注挪到别的页后，这条批注的 `docx` 定位随之去掉，之后按页面键处理。页面键只用于没有段落定位的批注。`review.json` 的 `docx.fingerprint` 记录源文件的 SHA-256；批注的 `docx.fp` 与它相同，表示定位已按当前版本核对。
 - **回写**：这一版还不能把改动写回 `.docx`。对照页横幅和快捷修改的提示都会说明，改稿需在 Word 中完成。
 - **不支持**：旧版二进制 `.doc`、加密文档、Strict Open XML 会直接报错并说明处理办法，不按文本读取。DOCX 按不可信输入处理：颜色、字体名写进样式前会校验，XML 部件限制大小并拒绝 DTD。
 
@@ -188,7 +188,7 @@ One line per paragraph.
 - 0.3 及更早只有风格优化能框选，框存在 `style.region` 里；读入时自动挪到顶层 `region`（下次写盘落成新格式），原来的风格范围和点都保留——所以旧批注可能点和框并存、或「整页」风格优化带一个点。0.3 页面发来的 `{style:{region}}` 改动按顶层 `region` 处理。
 - 批注归哪一批：`resolve` / `review` 不带 `--seq` 时按批注归属找（待复核的初改 → 它的初改批次；提交时包含它的在途批次，复核中优先、同级取最早），不再取「最新一批」；同时有几批处理中时 `done` 必须带 `--seq`。别的批次还在等复核的初改，不能在另一批里处理。
 - 页面新建和「重新标注」时 `pin`、`region` 一起发（另一个为 `null`），所以新批注只有一种标注；拖动只发被拖的那一个，另一个不动。改动动了标注时，风格范围跟着标注走（只拖动、原范围是整页的保持整页）。
-- 页面轮询的 `GET /api/notes` 只带最新一批（`handoff.latest`、计数、`total`）；完整处理记录 `history` 由 `GET /api/handoff` 和 `notes.py batches` 提供。服务响应里带 `version` 与 `features`（含 `marks`、`batches`），页面据此识别旧版服务。DOCX 审阅的页面要求服务声明 `docx` 特性：0.12.1 及更早的服务会丢弃 `docx` 字段，页面连上这样的服务时显示阻断提示并停止写入，重启新版服务并刷新后恢复。
+- 页面轮询的 `GET /api/notes` 只带最新一批（`handoff.latest`、计数、`total`）；完整处理记录 `history` 由 `GET /api/handoff` 和 `notes.py batches` 提供。服务响应里带 `version` 与 `features`（含 `marks`、`batches`），页面据此识别旧版服务。DOCX 审阅的页面要求服务声明 `docx` 特性：没有声明这项特性的旧版服务会丢弃 `docx` 字段，页面连上这样的服务时显示阻断提示并停止写入，重启新版服务并刷新后恢复。
 
 `notes.jsonl` 每行一条操作：`{"ts","rev","op":"add|update|resolve|draft|reopen|review|finalize|delete|import|handoff|handoff-update|handoff-claim|handoff-done|handoff-review|handoff-finalize","by":…,"id"|"seq",…}`。
 

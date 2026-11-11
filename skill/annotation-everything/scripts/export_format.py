@@ -60,7 +60,7 @@ PIN_ZH = "·标点 {no}（x {x}%，y {y}%）"
 REGION_ZH = "·框选 {no}（x {x}%，y {y}%，宽 {w}%，高 {h}%）"
 STYLE_LABEL_ZH = {"page": "整页", "pin": "标点处", "region": "框选处"}
 
-# DOCX 段落定位一行（只有 DOCX 审阅的批注才有；0.12.1 及更早没有 DOCX 审阅，不存在旧工具读这行的情况）。
+# DOCX 段落定位一行（只有 DOCX 审阅的批注才有；已发布的版本都没有 DOCX 审阅，不存在旧工具读这行的情况）。
 # 存储值 → 标签：定位种类与定位来源。更高版本的定位只写版本号，完整内容在 JSON 备份里。
 DOCX_KIND_ZH = {"quote": "引用", "pin": "标点", "region": "框选"}
 DOCX_VIA_ZH = {"selection": "选区", "text": "文本匹配", "point": "标注处"}

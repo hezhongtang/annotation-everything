@@ -509,20 +509,22 @@ def docx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]
     import docx_review
     if not docx_review.usable_anchor(a):
         return [t("cli.show.docx.unsupported", version=a.get("v"), supported=docx_review.ANCHOR_VERSION)]
-    para, sep = a["para"], t("cli.show.docx.sep")
-    parts = [t("cli.show.docx.paraId" if para.get("id") else "cli.show.docx.para", n=para["n"], id=para.get("id") or "")]
+    para = a["para"]
+    # 每项一行、各是词典里的一整句（不拿片段拼）
+    out = [t("cli.show.docx.paraId" if para.get("id") else "cli.show.docx.para", n=para["n"], id=para.get("id") or "")]
     end_para = a.get("endPara") if isinstance(a.get("endPara"), dict) else None
     if a.get("start") is not None and a.get("end") is not None:
-        parts.append(t("cli.show.docx.charsAcross", start=a["start"], end=a["end"], n=end_para.get("n")) if end_para
-                     else t("cli.show.docx.chars", start=a["start"], end=a["end"]))
+        out.append(t("cli.show.docx.charsAcross", start=a["start"], end=a["end"], n=end_para.get("n")) if end_para
+                   else t("cli.show.docx.chars", start=a["start"], end=a["end"]))
     elif a.get("start"):
-        parts.append(t("cli.show.docx.charsFrom", start=a["start"]))
+        out.append(t("cli.show.docx.charsFrom", start=a["start"]))
     if a.get("run") is not None:
-        parts.append(t("cli.show.docx.run", run=a["run"]))
-    parts.append(t(f"cli.show.docx.via.{a.get('via')}"))
-    out = [t("cli.show.docx.line", parts=sep.join(parts))]
+        out.append(t("cli.show.docx.run", run=a["run"]))
+    out.append(t(f"cli.show.docx.via.{a.get('via')}"))
     current = (manifest.get("docx") or {}).get("fingerprint") if isinstance(manifest.get("docx"), dict) else None
-    if a.get("changed"):
+    if n.get("orphan"):
+        out.append(t("cli.show.docx.orphan"))
+    elif a.get("changed"):
         out.append(t("cli.show.docx.changed"))
     elif current and a.get("fp") != current:
         out.append(t("cli.show.docx.outdated"))
@@ -617,7 +619,9 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
                      else t("cli.batch.resolution", text=n["resolution"]))
         if n.get("trail"):
             line += t("cli.batch.trail", text=trail_text(n, lang=lang))
-        if n.get("orphan"):
+        if n.get("orphan") and docx_lines(n, manifest, t):
+            pass   # DOCX 段落定位的孤立原因在定位那几行里说（找不到的是段落，不是页面键）
+        elif n.get("orphan"):
             line += "\n  " + t("cli.show.orphan", pageKey=n.get("key"))
         elif n.get("key") and keys.get(n.get("page")) and n["key"] != keys[n["page"]]:
             line += "\n  " + t("cli.show.keyMismatch", pageKey=n["key"], page=n["page"], current=keys[n["page"]])
