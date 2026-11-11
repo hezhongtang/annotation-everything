@@ -115,7 +115,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `ae.py install` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；修复体检发现的问题（先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。四个子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
 | `update.py auto` / `check` / `now` | 在技能副本中检查正式版本并自动更新 / 只检查 / 立即检查并安装；`auto` 由技能入口触发，最多每天一次 |
 | `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照，并把当前仍有效的通过证据跨阶段引用给后续阶段（`--no-reuse` 强制全部重跑）；`report` 只读记录并展示证据链。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
-| `build_viewer.py --report … [--script …] --out 审阅目录` | 生成对照页；讲稿可选；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
+| `build_viewer.py --report … [--script …] --out 审阅目录` | 从逐页 HTML 或 DOCX 生成对照页；讲稿可选；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
 | `report_check.py 报告.html [--script 讲稿.md] [--record report-record.json]` | 公开报告核验入口：输出可读摘要，`--json` 输出结构化结果，`--locale zh-CN` 或 `en` 选择语言。退出码 0 表示程序检查通过，不等于报告可交付；1 表示检查未通过；2 表示输入或用法错误。内容、结构与视觉覆盖及交付阻塞项分别列出 |
 | `serve.py 审阅目录或审阅标识` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
 | `http://127.0.0.1:<端口>/#overview`（浏览器地址） | 打开审阅总览：切换范围、查看详情、打开或代为启动审阅、归档或取消归档；先启动一份本机服务 |
@@ -432,6 +432,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 ├── locales/                       中英消息（zh-CN.json、en.json）和语言选择契约
 ├── scripts/
 │   ├── build_viewer.py            生成对照页 index.html 和 review.json
+│   ├── docx_review.py             逐页渲染 DOCX，记录分页可信度与结构诊断
 │   ├── report_check.py            报告产物核验：确定规则、覆盖与交付判定
 │   ├── i18n.py                    读取共享词典，并按所选语言插值；持进程级的界面语言状态（入口设置一次，各模块共用）；命令行共用的语言样板（取 --locale、翻译 argparse 报错、报告非法语言）
 │   ├── update.py                  检查正式版本并更新技能副本
@@ -458,11 +459,13 @@ verify_report.py                  持续效率报告、同环境分组、有界�
 verify_parallel.py                验证组内的有界进程调度；保留原资源锁与失败证据
 host_isolation.py                 同机资源隔离协议：验证参与方按共享资源互斥的锁与声明
 fixtures/sample/                   合成样例（虚构数据）
+fixtures/docx/                     合成 DOCX 样例及生成脚本
 fixtures/show-baseline/            notes.py show 中英输出的逐字基线（合成数据）
 fixtures/verify-doc-allowlist.json  文档门禁路径与依赖契约的合成数据
 fixtures/external-report-skill/    合成外部生成技能，测试外部产物走同一验收
 fixtures/external-report-skill-lite/ 合成外部生成技能的精简变体，验证缺依据时如实列为缺口
 tests/                             单元测试和浏览器端到端测试
+tests/test_docx_review.py          DOCX 渲染、分页、不可信输入与集成回归
 tests/e2e_waits.py                  浏览器条件等待：有界轮询、事件等待与场景级超时诊断
 tests/e2e_scenarios.py              浏览器场景注册表与选择调度（无浏览器依赖）
 tests/e2e_servers.py                端到端测试的服务起停与中断后的兜底清理
