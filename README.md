@@ -36,7 +36,7 @@ This README follows `main`; automatic updates install only stable release tags. 
 ### Annotate: point to the change, revise both documents
 
 - **Comment directly on the material.** Read report pages and speaker notes side by side. Select text to quote, delete or rewrite it, or place pins and regions on the report. Matching sentences can be marked for changes on both sides.
-- **Review Word documents directly.** A `.docx` needs no HTML conversion: the review page keeps the pagination and page orientation Word saved. Pagination confidence and approximated structures are shown on the page and in the CLI; this version cannot write revisions back into the `.docx`.
+- **Review Word documents directly.** A `.docx` needs no HTML conversion: the review page keeps the pagination and page orientation Word saved. Pagination confidence and approximated structures are shown on the page and in the CLI; annotations record their paragraph and text position, so they stay with the paragraph when Word reflows the document and the review page is rebuilt; this version cannot write revisions back into the `.docx`.
 - **Hand a batch to the agent for revision.** Annotations save automatically. Bind a receiving session and explicitly submit a batch; the agent revises both documents, rebuilds the page and records the result for each annotation.
 - **Check and review as needed.** Request a full consistency check for figures, metric definitions and wording. Use a draft followed by review, or stop after the draft and let the reviewer decide when to finalize.
 
@@ -432,7 +432,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 ├── locales/                       Chinese and English messages (zh-CN.json, en.json) and the locale contract
 ├── scripts/
 │   ├── build_viewer.py            builds the review page index.html and review.json
-│   ├── docx_review.py             renders DOCX pages and records pagination confidence and structure diagnostics
+│   ├── docx_review.py             renders DOCX pages, records pagination confidence and structure diagnostics, relocates annotations by paragraph
 │   ├── report_check.py            report verification: deterministic rules, coverage and delivery verdict
 │   ├── i18n.py                    loads the shared catalogs and fills in the chosen language; holds the process-wide interface language state (set once by an entry, shared by every module); the command line boilerplate shared by every entry (reading --locale, translating argparse errors, reporting an unsupported language)
 │   ├── update.py                  checks stable releases and updates the skill copy
@@ -466,6 +466,7 @@ fixtures/external-report-skill/    synthetic external generation skill; its outp
 fixtures/external-report-skill-lite/ limited variant of it; proves missing evidence is reported as gaps
 tests/                             unit tests and end-to-end browser tests
 tests/test_docx_review.py          DOCX rendering, pagination, untrusted input and integration regressions
+tests/test_docx_anchor.py          DOCX annotation locations, rebuild remapping, show and export
 tests/e2e_waits.py                  browser condition waits: bounded polling, events and scenario timeout diagnostics
 tests/e2e_scenarios.py              browser scenario registry and selection scheduling (no browser dependency)
 tests/e2e_servers.py                server start/stop for end-to-end tests and cleanup after interruption

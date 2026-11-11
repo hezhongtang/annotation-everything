@@ -36,7 +36,7 @@ README 随 `main` 分支更新；自动更新只安装正式版本标签。升�
 ### 批注：指出哪里改，报告与讲稿一起改
 
 - **对着材料写意见**：报告与讲稿按页对照；选中文字即可引用、删除或改写，也能在报告上放点、框选区域。对应句子可提示两侧一起改。
-- **Word 文档直接审阅**：`.docx` 不用先转 HTML，按 Word 保存的原分页和页面方向生成对照页；分页可信度与只能近似显示的结构在页面和命令行都标明，这一版的修改意见不能自动写回 `.docx`。
+- **Word 文档直接审阅**：`.docx` 不用先转 HTML，按 Word 保存的原分页和页面方向生成对照页；分页可信度与只能近似显示的结构在页面和命令行都标明；批注记录所在段落和文字位置，Word 重排后重建对照页，批注仍跟着原段落，这一版的修改意见不能自动写回 `.docx`。
 - **一键交给 Agent 改稿**：批注自动保存。绑定接收会话后，显式提交这一批意见，Agent 同步修改报告和讲稿、重建对照页，并逐条记录处理结果。
 - **按需要检查和复核**：可选择全量勾稽，检查数字、口径和前后表述；也可先初改再复核，或停在待复核，由审阅人决定是否定稿。
 
@@ -432,7 +432,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 ├── locales/                       中英消息（zh-CN.json、en.json）和语言选择契约
 ├── scripts/
 │   ├── build_viewer.py            生成对照页 index.html 和 review.json
-│   ├── docx_review.py             逐页渲染 DOCX，记录分页可信度与结构诊断
+│   ├── docx_review.py             逐页渲染 DOCX，记录分页可信度与结构诊断，按段落重定位批注
 │   ├── report_check.py            报告产物核验：确定规则、覆盖与交付判定
 │   ├── i18n.py                    读取共享词典，并按所选语言插值；持进程级的界面语言状态（入口设置一次，各模块共用）；命令行共用的语言样板（取 --locale、翻译 argparse 报错、报告非法语言）
 │   ├── update.py                  检查正式版本并更新技能副本
@@ -466,6 +466,7 @@ fixtures/external-report-skill/    合成外部生成技能，测试外部产物
 fixtures/external-report-skill-lite/ 合成外部生成技能的精简变体，验证缺依据时如实列为缺口
 tests/                             单元测试和浏览器端到端测试
 tests/test_docx_review.py          DOCX 渲染、分页、不可信输入与集成回归
+tests/test_docx_anchor.py          DOCX 批注段落定位、重建重映射、show 与导出
 tests/e2e_waits.py                  浏览器条件等待：有界轮询、事件等待与场景级超时诊断
 tests/e2e_scenarios.py              浏览器场景注册表与选择调度（无浏览器依赖）
 tests/e2e_servers.py                端到端测试的服务起停与中断后的兜底清理

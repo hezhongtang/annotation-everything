@@ -50,7 +50,8 @@ python3 $S/build_viewer.py --report 合同.docx --out 合同-review --name "采�
   | `estimated` | 文档没有渲染分页（python-docx、部分在线工具导出） | 只按显式分页符切，页码不是 Word 页码；用 Word 或 WPS 另存一次后重建 |
 
   不提供「原页图像」只读模式。
-- **定位**：正文段落带 `data-docx-p`（`document.xml` 里 `w:p` 的文档顺序编号）和 `data-docx-pid`（`w14:paraId`），文字运行带 `data-docx-r`。页面键优先取页首段落的 paraId（从段落中间开始的页加 `~c`），没有 paraId 时取页首正文的摘要；增删页后重建，批注按页面键跟着原页走。页眉页脚、文本框和续表重复的表头不带定位。
+- **定位**：正文段落带 `data-docx-p`（`document.xml` 里 `w:p` 的文档顺序编号）和 `data-docx-pid`（`w14:paraId`），文字运行带 `data-docx-r`。页面键优先取页首段落的 paraId（从段落中间开始的页加 `~c`），没有 paraId 时取页首正文的摘要；正文段落另带 `data-docx-d`（段落文本摘要：去掉空白后取 SHA-1 的前 12 位），跨页段落的续片带 `data-docx-o`（这一片在段落里的起始字符偏移）。页眉页脚、文本框和续表重复的表头不带定位。
+- **批注定位**：在报告上引用文字、放点或框选时，批注写入带版本号的 `docx` 字段（见下文 `notes.json`），记录所在段落的 paraId、段落序号、文本摘要和选区在段落内的字符偏移。浏览器拿不到 Shadow DOM 里的选区时（非 Chromium），页面在当前页按文本反查：只有一个段落含这段文字才写定位，并把来源记为 `text`。重建时先按段落找回批注现在所在的页，同步 `page`、`key`、`title`：paraId 在文档里唯一时用它；没有 paraId、paraId 重复或已不存在时，用段落序号与文本摘要互证（摘要唯一即认定，摘要有多处相同时要求序号也一致），并在生成器输出里说明。段落找不到或无法确认时标 `orphan`，页码不动。页面键只用于没有段落定位的批注。`review.json` 的 `docx.fingerprint` 记录源文件的 SHA-256；批注的 `docx.fp` 与它相同，表示定位已按当前版本核对。
 - **回写**：这一版还不能把改动写回 `.docx`。对照页横幅和快捷修改的提示都会说明，改稿需在 Word 中完成。
 - **不支持**：旧版二进制 `.doc`、加密文档、Strict Open XML 会直接报错并说明处理办法，不按文本读取。DOCX 按不可信输入处理：颜色、字体名写进样式前会校验，XML 部件限制大小并拒绝 DTD。
 
@@ -161,7 +162,18 @@ One line per paragraph.
       "anchor": "table「渠道 二季度 三季度」",   // 位置线索：点下或框里的元素（拖动标注后重新计算）
       "skills": ["humanizer-zh"],                // 处理这条前要调用的技能
       "key": "sum",                              // 页面键（报告 section 的 data-key），重建时据此校正 page
-      "orphan": true                             // 重建后原页面已不存在（待确认），确认后去掉
+      "orphan": true,                            // 重建后原页面（DOCX：原段落）已找不到（待确认），确认后去掉
+      "docx": {                                  // DOCX 审阅的段落定位（HTML 报告的批注没有）；v 是字段版本
+        "v": 1,
+        "kind": "quote",                         // quote 引用选区 / pin 点 / region 框
+        "via": "selection",                      // 定位来源：selection 浏览器选区 / text 按文本唯一匹配反查 / point 标注处的段落
+        "fp": "<源文件 SHA-256>",                 // 定位按哪个版本的源文件核对过；与 review.json 的 docx.fingerprint 相同即当前版本
+        "para": {"id": "1A000007", "n": 6, "digest": "54f68cf0074a"},   // paraId（没有为 null）、段落序号、文本摘要
+        "start": 12, "end": 30,                  // 选区在段落内的字符偏移（按 Unicode 码点，不含自动编号）；点和框只在跨页段落的续片上带 start
+        "endPara": {"id": null, "n": 7, "digest": "…"},   // 选区或框跨段落时的最后一段；此时 end 是它里面的偏移
+        "run": 1,                                // 文字运行序号，只作提示
+        "changed": true                          // 重建后段落还在但文字已变：偏移与摘要对应旧版本，fp 不更新
+      }
     }
   ]
 }
@@ -170,12 +182,13 @@ One line per paragraph.
 - `held` 表示暂不交给 Agent 改稿，`hold` 记录「分析中」或「结论已变」，`heldBy` 记录关联分析。快照只收 `open`。`fromAnalysis`、`basis` 和源批注的 `analysisId` 记录分析关联，同 id 更新与导入保留认不出的扩展字段。
 - 旧版工具导入未知 `held` 时退回 `open`，旧页面也显示为未处理；旧服务的快照仍只收 `open`。升级后重启服务，重新生成并刷新页面，避免旧页面手动改写状态。
 - 快捷修改的 `text` 是固定说法（「删除引用的这段文字」「改为：…」），`quote` 等于 `edit.from`，旧工具照样能看懂。
-- 生成对照页时若审阅目录里已有批注：没有 `key` 的按上一版 review.json 的页码补上，再按 `key` 把 `page` 改成新版的页码；`key` 在新版里找不到的标 `orphan`。所以 `data-key` 要稳定、唯一（重复的键不做校正）。
+- 生成对照页时若审阅目录里已有批注：没有 `key` 的按上一版 review.json 的页码补上，再按 `key` 把 `page` 改成新版的页码；`key` 在新版里找不到的标 `orphan`。所以 `data-key` 要稳定、唯一（重复的键不做校正）。DOCX 审阅里带 `docx` 定位的批注先按段落校正，不走页面键，规则见上文「批注定位」。
+- `docx.v` 高于当前安装支持的版本时，字段原样保留（上限 4000 字符），不用于重建定位；`notes.py show` 会标明不可用于回写。没有 `docx` 字段的旧批注按原规则读取。
 - 风格优化的 `target` 固定为报告；`text` 是用户写的方向，没写时为「风格优化：整页 / 框选处 / 标点处」。
 - 0.3 及更早只有风格优化能框选，框存在 `style.region` 里；读入时自动挪到顶层 `region`（下次写盘落成新格式），原来的风格范围和点都保留——所以旧批注可能点和框并存、或「整页」风格优化带一个点。0.3 页面发来的 `{style:{region}}` 改动按顶层 `region` 处理。
 - 批注归哪一批：`resolve` / `review` 不带 `--seq` 时按批注归属找（待复核的初改 → 它的初改批次；提交时包含它的在途批次，复核中优先、同级取最早），不再取「最新一批」；同时有几批处理中时 `done` 必须带 `--seq`。别的批次还在等复核的初改，不能在另一批里处理。
 - 页面新建和「重新标注」时 `pin`、`region` 一起发（另一个为 `null`），所以新批注只有一种标注；拖动只发被拖的那一个，另一个不动。改动动了标注时，风格范围跟着标注走（只拖动、原范围是整页的保持整页）。
-- 页面轮询的 `GET /api/notes` 只带最新一批（`handoff.latest`、计数、`total`）；完整处理记录 `history` 由 `GET /api/handoff` 和 `notes.py batches` 提供。服务响应里带 `version` 与 `features`（含 `marks`、`batches`），页面据此识别旧版服务。
+- 页面轮询的 `GET /api/notes` 只带最新一批（`handoff.latest`、计数、`total`）；完整处理记录 `history` 由 `GET /api/handoff` 和 `notes.py batches` 提供。服务响应里带 `version` 与 `features`（含 `marks`、`batches`），页面据此识别旧版服务。DOCX 审阅的页面要求服务声明 `docx` 特性：0.12.1 及更早的服务会丢弃 `docx` 字段，页面连上这样的服务时显示阻断提示并停止写入，重启新版服务并刷新后恢复。
 
 `notes.jsonl` 每行一条操作：`{"ts","rev","op":"add|update|resolve|draft|reopen|review|finalize|delete|import|handoff|handoff-update|handoff-claim|handoff-done|handoff-review|handoff-finalize","by":…,"id"|"seq",…}`。
 
@@ -356,6 +369,7 @@ Persistent skills (run before every note within scope): humanizer-zh (Script)
 | 处理说明 | `处理说明：` / `初改说明：`，英文 `Resolution: ` / `Draft note: ` | 支持 |
 | 风格优化 | `风格优化：整页 / 标点处 / 框选处` / `Style: Whole page / Pin / Region` | 只写范围标签；0.3 那种把坐标写在 `区域（x ..%）` 里的写法只读不写 |
 | 位置线索 | `位置线索：` / `Position hint: ` | 支持 |
+| DOCX 段落定位 | `DOCX 定位：v1 引用 · 段落 6（paraId 1A000007，摘要 54f68cf0074a） · 字符 12–30 · 运行 1 · 来源 选区 · 指纹 …` / `DOCX location: v1 quote · paragraph 6 (paraId 1A000007, digest 54f68cf0074a) · chars 12–30 · run 1 · source selection · fingerprint …` | 支持 v1；更高版本只写版本号，完整内容在 JSON 备份里，导入时略过这一行 |
 | 本条指定的技能 | `技能：` / `Skills: ` | 支持；带 `（常驻·范围）` 来源标签的项不写进单条（常驻技能走开头那一行） |
 | 另一侧对应句 | `↔ 另一侧（报告·相同）：` / `↔ Other side (Report · identical): ` | 支持 |
 | 常驻技能 | 开头 `常驻技能（…）：` / `Persistent skills (…): ` | 支持，范围还原成 `all` / `报告` / `讲稿` / `style` |

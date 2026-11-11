@@ -501,6 +501,34 @@ def _always_head(t, lang: str | None, always: list[dict[str, str]], scope_label:
     return t("cli.hand.alwaysHead", list=always_text(t, always))
 
 
+def docx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]:
+    """批注的 DOCX 段落定位（show / wait 的阅读输出）：段落、偏移、定位来源，以及定位是否对着当前版本。"""
+    a = n.get("docx")
+    if not isinstance(a, dict):
+        return []
+    import docx_review
+    if not docx_review.usable_anchor(a):
+        return [t("cli.show.docx.unsupported", version=a.get("v"), supported=docx_review.ANCHOR_VERSION)]
+    para, sep = a["para"], t("cli.show.docx.sep")
+    parts = [t("cli.show.docx.paraId" if para.get("id") else "cli.show.docx.para", n=para["n"], id=para.get("id") or "")]
+    end_para = a.get("endPara") if isinstance(a.get("endPara"), dict) else None
+    if a.get("start") is not None and a.get("end") is not None:
+        parts.append(t("cli.show.docx.charsAcross", start=a["start"], end=a["end"], n=end_para.get("n")) if end_para
+                     else t("cli.show.docx.chars", start=a["start"], end=a["end"]))
+    elif a.get("start"):
+        parts.append(t("cli.show.docx.charsFrom", start=a["start"]))
+    if a.get("run") is not None:
+        parts.append(t("cli.show.docx.run", run=a["run"]))
+    parts.append(t(f"cli.show.docx.via.{a.get('via')}"))
+    out = [t("cli.show.docx.line", parts=sep.join(parts))]
+    current = (manifest.get("docx") or {}).get("fingerprint") if isinstance(manifest.get("docx"), dict) else None
+    if a.get("changed"):
+        out.append(t("cli.show.docx.changed"))
+    elif current and a.get("fp") != current:
+        out.append(t("cli.show.docx.outdated"))
+    return out
+
+
 def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolved: bool, page: int | None,
                 sources: dict[str, Path | None] | None = None, handoff: dict[str, Any] | None = None,
                 only: set[str] | None = None, always: list[dict[str, str]] | None = None,
@@ -595,6 +623,8 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
             line += "\n  " + t("cli.show.keyMismatch", pageKey=n["key"], page=n["page"], current=keys[n["page"]])
         if n.get("anchor"):
             line += "\n  " + t("cli.show.anchor", text=n["anchor"])
+        for extra in docx_lines(n, manifest, t):
+            line += "\n  " + extra
         active_always = (always or []) if n.get("status") != "resolved" else []
         sources_by_name = {}
         for a in store.always_for(n, active_always):

@@ -71,7 +71,7 @@ import wakeup  # noqa: E402
 APP = "annotation-everything"
 VERSION = "0.12.1"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
-FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding", "overview", "analysis", "finalize-all"]
+FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding", "overview", "analysis", "finalize-all", "docx"]
 
 # 界面语言只有进程级一个来源（见 i18n.set_locale）：main() 与 serve() 按共同契约解析后
 # 设置一次，服务与台账等各模块共同遵循；未设置前保持中文（旧调用行为不变）

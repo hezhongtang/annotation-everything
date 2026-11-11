@@ -9,8 +9,10 @@
   内容比页高时页面向下延伸，不截断。
 - 段落、表格（合并单元格、底纹、边框、重复表头、跨页行）、页眉页脚（PAGE / NUMPAGES / SECTIONPAGES
   按实际页码与 pgNumType）、高亮、删除线、字形、列表编号与图片按原样或近似画出；文字留在 DOM 里，可选中。
-- 正文段落带 data-docx-p（document.xml 里 w:p 的文档先序编号）与 data-docx-pid（w14:paraId），
-  文字运行带 data-docx-r（运行在所属段落里的序号），供批注定位使用。
+- 正文段落带 data-docx-p（document.xml 里 w:p 的文档先序编号）、data-docx-pid（w14:paraId）与
+  data-docx-d（段落文本摘要）；跨页段落的续片另带 data-docx-o（本片在段落里的起始字符偏移）。
+  文字运行带 data-docx-r（运行在所属段落里的序号）。批注定位字段（ANCHOR_VERSION）据此写入，
+  重建时由 relocate() 按段落找回批注现在所在的页。
 - Word 原生修订、批注、文本框、域、脚注、公式、内容控件等结构按支持矩阵（SUPPORT）显示并记诊断，
   涉及它们的段落标为只读（data-docx-ro），不静默丢弃，也不假装能回写。
 
@@ -28,10 +30,12 @@ import re
 import zipfile
 import zlib
 from contextlib import contextmanager
+from html.parser import HTMLParser
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 FORMAT_VERSION = 1           # review.json 的 format.version：DOCX 审阅元数据的版本
+ANCHOR_VERSION = 1           # 批注 docx 定位字段的版本（note["docx"]["v"]）
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 STRICT_NS = "http://purl.oclc.org/ooxml/wordprocessingml/main"
 W = "{%s}" % W_NS
@@ -185,6 +189,14 @@ class Package:
             # OLE 复合文档：旧版 .doc，或者加密的 DOCX（外面套了一层 EncryptedPackage）
             raw = self.path.read_bytes()
             raise DocxError("encrypted" if "EncryptedPackage".encode("utf-16-le") in raw else "legacyDoc")
+        try:
+            sha = hashlib.sha256()
+            with self.path.open("rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    sha.update(chunk)
+        except OSError as exc:
+            raise DocxError("unreadable", str(exc)) from None
+        self.fingerprint = sha.hexdigest()   # 源文件指纹：批注据此判断是不是对着当前版本写的
         try:
             zf = zipfile.ZipFile(self.path)
         except (zipfile.BadZipFile, OSError) as exc:
@@ -1465,6 +1477,137 @@ def page_title(body: str) -> str:
     return visible_text(re.sub(r'<tr class="[^"]*docx-repeat[^"]*">.*?</tr>', " ", body, flags=re.S))[:60]
 
 
+# ---------- 段落索引与批注定位 ----------
+_VOID = frozenset({"br", "img", "hr", "col", "wbr", "input", "meta", "link"})
+_PARA_ATTR = re.compile(r'data-docx-p="(\d+)"(?: data-docx-pid="[^"]*")?')
+
+
+def text_digest(text: str) -> str:
+    """段落文本摘要：去掉全部空白后取 SHA-1 的前 12 位十六进制。空白变化（换行、缩进）不影响摘要。"""
+    return hashlib.sha1("".join(text.split()).encode("utf-8", "surrogatepass")).hexdigest()[:12]
+
+
+class _ParaScan(HTMLParser):
+    """按文档顺序收集一页里各段落片段的正文文字（不含自动编号、标记等不可选中的装饰）。
+
+    与页面里的算法一致：片段文字 = 段落 div 内全部文本节点依次相连，跳过 .docx-num / .docx-mark。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.stack: list[object] = []          # 每个未闭合元素：片段记录（dict）/ "decor" / None
+        self.frags: list[dict] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _VOID:
+            return
+        a = dict(attrs)
+        cls = (a.get("class") or "").split()
+        if tag == "div" and a.get("data-docx-p", "").isdigit():
+            frag = {"n": int(a["data-docx-p"]), "id": a.get("data-docx-pid") or None, "text": []}
+            self.frags.append(frag)
+            self.stack.append(frag)
+        else:
+            self.stack.append("decor" if "docx-num" in cls or "docx-mark" in cls else None)
+
+    def handle_endtag(self, tag):
+        if tag not in _VOID and self.stack:
+            self.stack.pop()
+
+    def handle_data(self, data):
+        if "decor" in self.stack:
+            return
+        for item in reversed(self.stack):
+            if isinstance(item, dict):
+                item["text"].append(data)
+                return
+
+
+def index_paragraphs(pages: list[dict]) -> list[dict]:
+    """给各页的段落片段补上 data-docx-d / data-docx-o，并返回段落索引。
+
+    索引每项 {"n": 段落序号, "id": paraId 或 None, "digest": 文本摘要, "frags": [{"page", "start"}]}，
+    按首次出现的顺序排列；frags 是这段落落在各页上的片段及其起始字符偏移（按 Unicode 码点计）。
+    """
+    scans = []
+    paras: dict[int, dict] = {}
+    for pg in pages:
+        scan = _ParaScan()
+        scan.feed(pg["html"])
+        scan.close()
+        for frag in scan.frags:
+            text = "".join(frag["text"])
+            p = paras.setdefault(frag["n"], {"n": frag["n"], "id": frag["id"], "text": "", "frags": []})
+            frag["start"] = len(p["text"])
+            p["frags"].append({"page": pg["n"], "start": frag["start"]})
+            p["text"] += text
+        scans.append(scan.frags)
+    for p in paras.values():
+        p["digest"] = text_digest(p.pop("text"))
+    for pg, frags in zip(pages, scans):
+        it = iter(frags)
+
+        def mark(m: re.Match) -> str:
+            frag = next(it, None)
+            if frag is None or str(frag["n"]) != m.group(1):   # 与扫描结果对不上：不写属性，不猜
+                return m.group(0)
+            extra = f' data-docx-d="{paras[frag["n"]]["digest"]}"'
+            if frag["start"]:
+                extra += f' data-docx-o="{frag["start"]}"'
+            return m.group(0) + extra
+
+        pg["html"] = _PARA_ATTR.sub(mark, pg["html"])
+    return [{"n": p["n"], "id": p["id"], "digest": p["digest"], "frags": p["frags"]} for p in paras.values()]
+
+
+def usable_anchor(a: object) -> bool:
+    """批注的 docx 定位是不是本版本读得懂、能用来找段落的（版本更高或结构不全的原样保留、不使用）。"""
+    if not isinstance(a, dict) or a.get("v") != ANCHOR_VERSION or isinstance(a.get("v"), bool):
+        return False
+    para = a.get("para")
+    return (isinstance(para, dict) and isinstance(para.get("n"), int) and not isinstance(para.get("n"), bool)
+            and isinstance(para.get("digest"), str))
+
+
+def relocate(anchor: dict, paragraphs: list[dict]) -> dict:
+    """按批注的段落定位，在当前版本的段落索引里找回这段落。
+
+    paraId 在当前文档里唯一时直接用它；没有 paraId、paraId 重复或已不存在时，用段落序号与文本摘要互证：
+    摘要唯一即认定（序号可以因前面增删段落而变），摘要有多处相同时要求序号也一致，否则算不确定。
+    返回 {"status": ok / ambiguous / missing, "how": paraId / digest / ordinal / None,
+    "why": None / noId / duplicateId / idGone（为什么没用 paraId）, "para": 索引项或 None,
+    "page": 现在所在页或 None, "changed": 段落文字是否已变（只在按 paraId 找到时可能为 True）}。
+    """
+    para = anchor["para"]
+    pid, n, dg = para.get("id"), para["n"], para["digest"]
+    why = None
+    if pid:
+        same = [p for p in paragraphs if p["id"] == pid]
+        if len(same) == 1:
+            return _located(anchor, same[0], "paraId", None, same[0]["digest"] != dg)
+        why = "duplicateId" if same else "idGone"
+    else:
+        why = "noId"
+    same = [p for p in paragraphs if p["digest"] == dg]
+    if len(same) == 1:
+        return _located(anchor, same[0], "digest", why, False)
+    hit = next((p for p in same if p["n"] == n), None)
+    if hit is not None:
+        return _located(anchor, hit, "ordinal", why, False)
+    return {"status": "ambiguous" if same else "missing", "how": None, "why": why, "para": None, "page": None,
+            "changed": False}
+
+
+def _located(anchor: dict, para: dict, how: str, why: str | None, changed: bool) -> dict:
+    start = anchor.get("start")
+    start = start if isinstance(start, int) and not isinstance(start, bool) and start > 0 else 0
+    page = para["frags"][0]["page"]
+    for frag in para["frags"]:      # 跨页段落：落在起始偏移所在的那一片上
+        if frag["start"] <= start:
+            page = frag["page"]
+    return {"status": "ok", "how": how, "why": why, "para": para, "page": page, "changed": changed}
+
+
 BASE_CSS = """
 :host{--docx-fallback:"Times New Roman","SimSun","Songti SC",serif}
 section.docx-page{position:relative;box-sizing:border-box;background:#fff;color:#000;font-family:var(--docx-fallback);
@@ -1493,7 +1636,8 @@ section.docx-page .docx-math{font-family:"Cambria Math",serif;font-style:italic}
 
 
 def render(path: Path) -> dict:
-    """渲染 DOCX：{"title", "css", "pages", "diagnostics", "pagination", "appPages", "application", "lang"}。
+    """渲染 DOCX：{"title", "css", "pages", "diagnostics", "pagination", "appPages", "application", "lang",
+    "paragraphs", "fingerprint"}。paragraphs 见 index_paragraphs()；fingerprint 是源文件的 SHA-256。
 
     pagination：verified / unverified / estimated（见模块说明）。diagnostics 按支持矩阵的顺序排列，
     每项 {"code", "count", "display", "writeback", "pages", "examples"}。
@@ -1502,6 +1646,7 @@ def render(path: Path) -> dict:
     try:
         r = Renderer(pkg)
         pages = r.render()
+        paragraphs = index_paragraphs(pages)
     except DocxError:
         raise
     except (RecursionError, MemoryError, ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
@@ -1530,7 +1675,8 @@ def render(path: Path) -> dict:
                       "pages": sorted(d["pages"]), "examples": d["examples"]})
     return {"title": title, "css": BASE_CSS + "\n".join(r.media_css), "pages": pages, "diagnostics": diags,
             "pagination": pagination, "appPages": app_pages, "application": application,
-            "lang": re.sub(r"[^A-Za-z0-9-]", "", lang)[:20]}
+            "lang": re.sub(r"[^A-Za-z0-9-]", "", lang)[:20], "paragraphs": paragraphs,
+            "fingerprint": pkg.fingerprint}
 
 
 def page_texts(path: Path) -> dict[int, str]:

@@ -80,6 +80,8 @@ Without a service, open `index.html` directly. Annotations persist in browser st
 
 ## 5. Read the accepted batch and edit sources
 
+**Locations of DOCX annotations**: `show` prints a `DOCX location` line under the annotation (paragraph number, paraId, character offsets in the paragraph, source). A line starting with ⚠ means the location cannot be used as is: when the paragraph text has changed, check the position against the quoted text; when the location was written against another version of the source file, rebuild the review page first; when its version is newer than this tool supports, it cannot be used for write-back. For an annotation marked orphaned after a rebuild, confirm with the user which paragraph it belongs to.
+
 **DOCX reports cannot be written back in this version**: when the source file is a `.docx`, do not modify it and do not produce a replacement HTML; the page banner likewise states that revisions must be made in Word. For each annotation, write the suggested change (which page, which passage, what to change it to; the quoted text remains the most reliable locator) in your handling notes, and let the user decide which annotations are marked resolved before you run `resolve`. Quick edits (delete / replace) are recorded the same way and are not written back. Pagination confidence and structure limits are in the [format reference](formats.en.md) under "Word documents (DOCX)."
 
 For an analysis round, follow the [analysis guide](analysis.en.md) instead of the revision steps below. Analysis proposes questions and explanations; only annotations later confirmed by the reviewer enter revision.

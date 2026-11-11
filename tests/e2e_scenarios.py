@@ -235,10 +235,13 @@ SCENARIOS: list[Scenario] = [
         id="docx-review",
         title="DOCX 直接审阅：Word 原分页与横向页按原比例显示、verified 横幅与限制清单、"
               "页眉页脚按实际页码、正文可拖选、点标注与快捷删除在 DOCX 页可用、"
-              "选中原生修订提示不能自动回写",
+              "选中原生修订提示不能自动回写；引用、点标注与框选写入段落定位（docx 字段），"
+              "文本反查兜底，旧版服务不认 docx 特性时阻断写入",
         fixture="fixtures/docx/make_sample.py 现场合成的 5 页样例（4 页 A4 纵向 + 1 页横向；"
-                "跨页表格、原生修订、Word 批注、文本框、域）；真实 build_viewer 构建，无讲稿",
-        isolation="独立临时审阅目录与浏览器上下文；file:// 模式，批注只进本地存储",
+                "跨页表格、原生修订、Word 批注、文本框、域）；真实 build_viewer 构建，无讲稿；"
+                "仅拦截合成服务的 docx 能力声明",
+        isolation="独立临时审阅目录、端口与浏览器上下文；先 file:// 模式（批注只进本地存储），"
+                  "再服务模式（服务用后回收）",
     ),
     Scenario(
         parallel_safe=True,
