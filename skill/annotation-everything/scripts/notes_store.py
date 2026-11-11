@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+import docx_review
 import fsutil
 
 NOTES_FILE = "notes.json"
@@ -36,8 +37,10 @@ STATUSES = ("open", "drafted", "resolved", "held")
 TRAIL_KEEP = 50   # 每条批注保留的处理痕迹条数（谁、哪个阶段、做了什么、理由）
 # 页面可写的字段；id / at / status 相关字段由存储层或专门操作维护
 EDITABLE = ("page", "title", "target", "text", "quote", "quoteFrom", "pin", "region", "edit", "pair", "skills", "style",
-            "anchor", "key", "orphan")
+            "anchor", "key", "orphan", "docx")
 # key：页面键（报告 section 的 data-key），重排页序后据此把批注挪回正确的页；orphan：重建后原页面已不存在
+# docx：DOCX 审阅的段落定位（带版本号 v），见 _clean_docx；重建时先按它把批注归到段落现在所在的页，
+#   页面键只用于没有段落定位的批注。HTML 报告的批注没有这个字段。
 # 报告上的标注：pin = 点 {x, y}，region = 框 {x, y, w, h}，都是相对页面的百分比。页面新写的批注只带其中一种
 # （新建、重新标注时两个字段一起发，另一种为 null）；拖动只改被拖的那一种。
 # 风格优化的范围跟着标注走：有框 = region（框选处），有点 = pin（标点处），都没有 = page（整页）。
@@ -548,6 +551,79 @@ def skills_for(note: dict[str, Any], always: list[dict[str, str]]) -> list[tuple
     return out
 
 
+# ---------- DOCX 段落定位 ----------
+DOCX_KINDS = ("quote", "pin", "region")       # 定位的是引用选区、点标注还是框选
+DOCX_VIA = ("selection", "text", "point")     # 定位来源：浏览器选区 / 按文本唯一匹配反查 / 标注坐标处的段落
+MAX_DOCX_RAW = 4000                           # 更高版本的定位原样保留时的大小上限（JSON 字符数）
+_FP_RE = re.compile(r"[0-9a-f]{16,64}")
+_DIGEST_RE = re.compile(r"[0-9a-f]{12}")
+_MAX_OFFSET = 10_000_000
+
+
+def _nat(v: Any, name: str) -> int:
+    if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= _MAX_OFFSET:
+        raise NoteError(f"docx.{name} 须为非负整数")
+    return v
+
+
+def _clean_docx_para(v: Any, name: str) -> dict[str, Any]:
+    if not isinstance(v, dict):
+        raise NoteError(f"docx.{name} 须为对象")
+    pid = v.get("id")
+    if pid in (None, ""):
+        pid = None
+    elif not isinstance(pid, str) or not docx_review.PARA_ID.fullmatch(pid):
+        raise NoteError(f"docx.{name}.id 不是合法的 paraId")
+    else:
+        pid = pid.upper()
+    if not isinstance(v.get("digest"), str) or not _DIGEST_RE.fullmatch(v["digest"]):
+        raise NoteError(f"docx.{name}.digest 不是合法的段落摘要")
+    return {"id": pid, "n": _nat(v.get("n"), f"{name}.n"), "digest": v["digest"]}
+
+
+def _clean_docx(v: Any) -> dict[str, Any] | None:
+    """DOCX 段落定位。v1：{"v", "kind", "via", "fp"?, "para": {"id", "n", "digest"}, "start"?, "end"?,
+    "endPara"?, "run"?, "changed"?}——fp 是写下定位时源文件的指纹；start / end 是选区在段落内的字符偏移
+    （Unicode 码点；跨段落时 end 落在 endPara 里）；run 是文字运行序号，只作提示；changed 表示重建后
+    段落文字已变。版本更高的字段读不懂：原样保留（限大小），不清洗、不用于定位。"""
+    if v in (None, "", {}):
+        return None
+    if not isinstance(v, dict):
+        raise NoteError("docx 须为对象")
+    ver = v.get("v")
+    if isinstance(ver, bool) or not isinstance(ver, int) or ver < 1:
+        raise NoteError("docx.v 须为正整数")
+    if ver > docx_review.ANCHOR_VERSION:
+        raw = _dumps(v)
+        if len(raw) > MAX_DOCX_RAW:
+            raise NoteError("docx 定位过大")
+        return json.loads(raw)
+    if v.get("kind") not in DOCX_KINDS:
+        raise NoteError(f"docx.kind 须为 {DOCX_KINDS} 之一")
+    if v.get("via") not in DOCX_VIA:
+        raise NoteError(f"docx.via 须为 {DOCX_VIA} 之一")
+    out: dict[str, Any] = {"v": ver, "kind": v["kind"], "via": v["via"]}
+    if v.get("fp") not in (None, ""):
+        if not isinstance(v["fp"], str) or not _FP_RE.fullmatch(v["fp"]):
+            raise NoteError("docx.fp 不是合法的源文件指纹")
+        out["fp"] = v["fp"]
+    out["para"] = _clean_docx_para(v.get("para"), "para")
+    for k in ("start", "end"):
+        if v.get(k) is not None:
+            out[k] = _nat(v[k], k)
+    if "end" in out and "start" not in out:
+        raise NoteError("docx.end 须与 docx.start 一起给出")
+    if v.get("endPara") is not None:
+        out["endPara"] = _clean_docx_para(v["endPara"], "endPara")
+    elif "end" in out and out["end"] < out["start"]:
+        raise NoteError("docx.end 不能小于 docx.start")
+    if v.get("run") is not None:
+        out["run"] = _nat(v["run"], "run")
+    if v.get("changed") is True:
+        out["changed"] = True
+    return out
+
+
 def _clean_style(v: Any) -> dict[str, Any] | None:
     if v in (None, "", {}):
         return None
@@ -627,6 +703,8 @@ def _clean_fields(data: dict[str, Any], *, partial: bool) -> dict[str, Any]:
             v = fix_text(v).strip()[:120]
         elif k == "orphan":
             v = bool(v)
+        elif k == "docx":
+            v = _clean_docx(v)
         else:
             v = fix_text(v)
             if k in ("text", "quote"):
@@ -681,6 +759,8 @@ def _new_note(raw: dict[str, Any], fields: dict[str, Any], nid: str) -> dict[str
     if _clean_time(raw.get("updatedAt")):
         note["updatedAt"] = raw["updatedAt"]
     _settle_marks(note)
+    if note.get("docx") is None:
+        note.pop("docx", None)
     return note
 
 
@@ -725,10 +805,18 @@ def update(review_dir: Path, note_id: str, data: dict[str, Any], *, by: str = "p
                 fields["edit"] = {**ed, "to": fields["text"][len(REPLACE_PREFIX):]}
             elif fields["text"] not in (DELETE_TEXT,) and not fields["text"].startswith(REPLACE_PREFIX):
                 fields["edit"] = None   # 改成了普通意见
+        # 人工确认归属（去掉 orphan）或挪到别的页：以这次决定为准。本版本读得懂的段落定位不再保留，
+        # 否则下次重建又会按段落把批注挪回去或重新标成孤立；之后这条批注按页面键走。
+        moved = "page" in fields and fields["page"] != note.get("page")
+        if "docx" not in fields and (moved or fields.get("orphan") is False) \
+                and docx_review.usable_anchor(note.get("docx")):
+            fields["docx"] = None
         note.update(fields)
         _settle_marks(note, fields)
         if note.get("edit") is None:
             note.pop("edit", None)
+        if note.get("docx") is None:
+            note.pop("docx", None)
         note["updatedAt"] = now_iso()
         return _commit(review_dir, doc, {"op": "update", "by": by, "id": note_id, "fields": fields}), note
 
@@ -899,14 +987,15 @@ def delete(review_dir: Path, note_id: str, *, by: str = "page") -> dict[str, Any
 
 
 def dedup_key(n: dict[str, Any]) -> tuple:
-    """内容相同的判定：页码、对象、正文、引用、标注（点 / 框）、是否风格优化都相同。同一页不同位置写同样的话不算重复。"""
+    """内容相同的判定：页码、正文、引用、标注及 DOCX 定位相同。同一页不同位置写同样的话不算重复。"""
     pin = n.get("pin") or None
     pin_t = (round(float(pin["x"]), 1), round(float(pin["y"]), 1)) if isinstance(pin, dict) and "x" in pin else None
     rg = region_of(n)
     rg_t = tuple(round(float(rg.get(k, 0) or 0), 1) for k in ("x", "y", "w", "h")) if rg else None
     st_t = bool(isinstance(n.get("style"), dict) and n["style"].get("scope"))
+    docx_t = _dumps(n["docx"], sort_keys=True) if isinstance(n.get("docx"), dict) else None
     return (int(n.get("page", 0)), str(n.get("target", "")).strip(), str(n.get("text", "")).strip(),
-            str(n.get("quote", "")).strip(), pin_t, rg_t, st_t)
+            str(n.get("quote", "")).strip(), pin_t, rg_t, st_t, docx_t)
 
 
 def _stamp(n: dict[str, Any]) -> float:
@@ -1469,24 +1558,66 @@ def handoff_finalize_all(review_dir: Path, selections: dict[int, set[str]]) -> d
                 "skippedCount": len(skipped), "skipped": list(skipped.values())}
 
 
-# ---------- 重排页序后按页面键校正页码 ----------
+# ---------- 重建后校正页码：DOCX 先按段落，其余按页面键 ----------
+def _remap_docx(n: dict[str, Any], ctx: dict[str, Any], new_titles: dict[int, str], result: dict[str, Any]) -> bool:
+    """按段落定位把一条批注归到段落现在所在的页；返回这条批注有没有被改动。"""
+    anchor, page = n["docx"], int(n.get("page", 0) or 0)
+    got = docx_review.relocate(anchor, ctx["paragraphs"])
+    before = _dumps(n)
+    if got["status"] == "ok":
+        to = got["page"]
+        if to != page:
+            result["moved"].append({"id": n.get("id"), "from": page, "to": to, "key": ctx["keys"].get(to, "")})
+            n["page"] = to
+        if to in new_titles:             # 页码没变，页首也可能换了段：标题与键一起跟上
+            n["title"] = new_titles[to]
+        if ctx["keys"].get(to):
+            n["key"] = ctx["keys"][to]
+        n.pop("orphan", None)
+        anchor["para"]["n"] = got["para"]["n"]
+        if "endPara" in got:
+            anchor["endPara"]["n"] = got["endPara"]["n"]
+        if got["changed"]:
+            anchor["changed"] = True     # 段落还在但文字变了：偏移与摘要仍是旧版本的，指纹不更新
+        else:
+            anchor.pop("changed", None)
+            if ctx.get("fingerprint"):
+                anchor["fp"] = ctx["fingerprint"]
+    else:
+        n["orphan"] = True
+        result["orphans"].append({"id": n.get("id"), "page": page, "key": n.get("key"), "reason": got["status"]})
+    touched = _dumps(n) != before
+    # 需要说明的情况只在这条批注这次确实被改动时说一遍；找不到的每次都说，直到用户确认
+    if got["status"] != "ok" or (touched and (got["why"] or got["changed"])):
+        result["docx"].append({"id": n.get("id"), "status": got["status"], "how": got["how"], "why": got["why"],
+                               "changed": got["changed"], "page": n.get("page")})
+    return touched
+
+
 def remap_pages(review_dir: Path, old_keys: dict[int, str], new_pages: dict[str, int], new_titles: dict[int, str],
-                ambiguous: set[str] | None = None) -> dict[str, Any]:
+                ambiguous: set[str] | None = None, docx: dict[str, Any] | None = None) -> dict[str, Any]:
     """生成对照页时调用：old_keys 是上一版 review.json 的「页码 → 键」，new_pages 是新版的「键 → 页码」。
 
+    DOCX 审阅另传 docx = {"paragraphs": 新版段落索引, "fingerprint": 源文件指纹, "keys": {页码: 键}}：
+    带段落定位（本版本读得懂的 docx 字段）的批注先按段落找回现在所在的页，同步 page / key / title；
+    段落找不到或无法确认时标 orphan、页码不动，不再回落到页面键（页面是排版产物，页首会换段）。
+    其余批注按页面键：
     - 没有 key 的旧批注，按上一版的页码补上 key（批注是对着上一版写的）；
     - 有 key 且新版里还在：页码改成新页码；
     - key 在新版里找不到：标 orphan，页码不动，等用户或代理确认。
-    返回 {"moved": [...], "orphans": [...], "keyed": n}。
+    返回 {"moved": [...], "orphans": [...], "keyed": n, "docx": [按段落定位时需要说明的情况]}。
     """
     ambiguous = ambiguous or set()
-    result: dict[str, Any] = {"moved": [], "orphans": [], "keyed": 0}
+    result: dict[str, Any] = {"moved": [], "orphans": [], "keyed": 0, "docx": []}
     if not (review_dir / NOTES_FILE).exists():
         return result
     with locked(review_dir):
         doc = load(review_dir)
         changed = False
         for n in doc["notes"]:
+            if docx is not None and docx_review.usable_anchor(n.get("docx")):
+                changed = _remap_docx(n, docx, new_titles, result) or changed
+                continue
             page = int(n.get("page", 0) or 0)
             if not n.get("key") and page in old_keys:
                 n["key"] = old_keys[page]

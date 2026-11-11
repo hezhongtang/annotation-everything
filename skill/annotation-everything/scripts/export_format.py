@@ -13,8 +13,8 @@
 - 坐标、页码、编号都是十进制数字，不加千分位、不换算单位。
 
 往返范围（与 `references/formats.md` 一致）：页码与页标题、对象、正文（含多行）、状态、
-点与框的坐标、引用与引用来源、处理说明、风格优化范围、位置线索、本条指定的技能、
-另一侧对应句，以及开头的常驻技能一行。痕迹、孤立页警告、页面键不一致警告、
+点与框的坐标、引用与引用来源、处理说明、风格优化范围、位置线索、DOCX 段落定位（v1）、
+本条指定的技能、另一侧对应句，以及开头的常驻技能一行。痕迹、孤立页警告、页面键不一致警告、
 「常驻·范围」这类来源标签不进交换格式（它们在 `notes.py show` 的阅读输出里）。
 """
 from __future__ import annotations
@@ -60,6 +60,14 @@ PIN_ZH = "·标点 {no}（x {x}%，y {y}%）"
 REGION_ZH = "·框选 {no}（x {x}%，y {y}%，宽 {w}%，高 {h}%）"
 STYLE_LABEL_ZH = {"page": "整页", "pin": "标点处", "region": "框选处"}
 
+# DOCX 段落定位一行（只有 DOCX 审阅的批注才有；已发布的版本都没有 DOCX 审阅，不存在旧工具读这行的情况）。
+# 存储值 → 标签：定位种类与定位来源。更高版本的定位只写版本号，完整内容在 JSON 备份里。
+DOCX_KIND_ZH = {"quote": "引用", "pin": "标点", "region": "框选"}
+DOCX_VIA_ZH = {"selection": "选区", "text": "文本匹配", "point": "标注处"}
+DOCX_VIA_EN = {"selection": "selection", "text": "text match", "point": "mark"}
+_PID = r"([0-9A-Fa-f]{1,8}|-)"
+_DG = r"([0-9a-f]{12})"
+
 # 对象为空时的固定字面量：文法的一部分，两种语言一样，导入时原样成为 target（与 0.3 以来一致）
 UNSET_TARGET = "未指定"
 
@@ -101,6 +109,13 @@ class Grammar:
             self.anchor = re.compile(r"^\s+Position hint: (.*)$")
             self.skills = re.compile(r"^\s+Skills: (.*)$")
             self.pair = re.compile(r"^\s+↔ Other side \((Report|Script)(?: · (identical|similar))?\): (.*)$")
+            self.docx = re.compile(r"^\s+DOCX location: v(\d+)(.*)$")
+            self.docx_body = re.compile(
+                r"^ (quote|pin|region) · paragraph (\d+) \(paraId " + _PID + r", digest " + _DG + r"\)"
+                r"(?: · chars (\d+)(?:–(\d+)| onward))?"
+                r"(?: · ends in paragraph (\d+) \(paraId " + _PID + r", digest " + _DG + r"\))?"
+                r"(?: · run (\d+))?(?: · source (selection|text match|mark))?"
+                r"(?: · fingerprint ([0-9a-f]{16,64}))?( · paragraph changed)?$")
             self.always = re.compile(r"^Persistent skills \([^)]*\): (.+)$", re.M)
             self.always_item = re.compile(r"^(.+?) \((All notes|Report|Script|Style)\)$")
             self.always_sep = ", "
@@ -115,6 +130,13 @@ class Grammar:
             self.anchor = re.compile(r"^\s+位置线索：(.*)$")
             self.skills = re.compile(r"^\s+技能：(.*)$")
             self.pair = re.compile(r"^\s+↔ 另一侧（(报告|讲稿)(?:·(相同|相近))?）：(.*)$")
+            self.docx = re.compile(r"^\s+DOCX 定位：v(\d+)(.*)$")
+            self.docx_body = re.compile(
+                r"^ (引用|标点|框选) · 段落 (\d+)（paraId " + _PID + r"，摘要 " + _DG + r"）"
+                r"(?: · 字符 (\d+)(?:–(\d+)| 起))?"
+                r"(?: · 止于段落 (\d+)（paraId " + _PID + r"，摘要 " + _DG + r"）)?"
+                r"(?: · 运行 (\d+))?(?: · 来源 (选区|文本匹配|标注处))?"
+                r"(?: · 指纹 ([0-9a-f]{16,64}))?( · 段落已改动)?$")
             self.always = re.compile(r"^常驻技能（[^）]*）：(.+)$", re.M)
             self.always_item = re.compile(r"^(.+?)（(全部批注|全部|报告|讲稿|风格优化)）$")
             self.always_sep = "、"
@@ -170,6 +192,11 @@ class Grammar:
             if m := self.anchor.match(line):
                 cur["anchor"] = m.group(1)
                 continue
+            if m := self.docx.match(line):   # 读不懂的（更高版本、被改坏的）整行略过，不并进正文
+                got = self._docx_in(int(m.group(1)), m.group(2))
+                if got:
+                    cur["docx"] = got
+                continue
             if m := self.skills.match(line):
                 body = re.sub(r"(——处理这条前先调用这些技能|（处理这条前先调用这些技能）)$", "", m.group(1).strip())
                 own = [x for x in re.split(r"[,，、;；]+", body) if not re.search(r"（常驻·[^）]*）$", x.strip())]
@@ -184,6 +211,32 @@ class Grammar:
             if line.startswith(self.indent) and line.strip():
                 cur["text"] += "\n" + line[len(self.indent):]
         return items
+
+    def _docx_in(self, version: int, body: str) -> dict[str, Any] | None:
+        m = self.docx_body.match(body) if version == 1 else None
+        if not m:
+            return None
+        kinds = {v: k for k, v in DOCX_KIND_ZH.items()} if self.lang != "en" else {k: k for k in DOCX_KIND_ZH}
+        vias = {v: k for k, v in (DOCX_VIA_EN if self.lang == "en" else DOCX_VIA_ZH).items()}
+
+        def para(n: str, pid: str, dg: str) -> dict[str, Any]:
+            return {"id": None if pid == "-" else pid.upper(), "n": int(n), "digest": dg}
+
+        out: dict[str, Any] = {"v": 1, "kind": kinds[m.group(1)], "via": vias.get(m.group(11) or "", "selection")}
+        if m.group(12):
+            out["fp"] = m.group(12)
+        out["para"] = para(m.group(2), m.group(3), m.group(4))
+        if m.group(5):
+            out["start"] = int(m.group(5))
+        if m.group(6):
+            out["end"] = int(m.group(6))
+        if m.group(7):
+            out["endPara"] = para(m.group(7), m.group(8), m.group(9))
+        if m.group(10):
+            out["run"] = int(m.group(10))
+        if m.group(13):
+            out["changed"] = True
+        return out
 
     def _target_in(self, label: str) -> str:
         return TARGET_ZH.get(label, label) if self.lang == "en" else label
@@ -266,6 +319,37 @@ class Grammar:
 
     def anchor_line(self, anchor: str) -> str:
         return f"   Position hint: {_one_line(anchor)}" if self.lang == "en" else f"   位置线索：{_one_line(anchor)}"
+
+    def docx_line(self, a: dict[str, Any]) -> str:
+        """DOCX 段落定位：v1 逐项写出（可还原）；更高版本只写版本号。"""
+        en = self.lang == "en"
+        lead = "   DOCX location: " if en else "   DOCX 定位："
+        if a.get("v") != 1 or not isinstance(a.get("para"), dict):
+            return lead + (f"v{a.get('v')} · newer than this tool supports; the JSON backup keeps it in full" if en
+                           else f"v{a.get('v')} · 高于本工具支持的版本，完整内容见 JSON 备份")
+
+        def para(p: dict[str, Any]) -> str:
+            pid = p.get("id") or "-"
+            return (f"{p.get('n')} (paraId {pid}, digest {p.get('digest')})" if en
+                    else f"{p.get('n')}（paraId {pid}，摘要 {p.get('digest')}）")
+
+        kind = str(a.get("kind"))
+        parts = [f"v1 {kind if en else DOCX_KIND_ZH.get(kind, kind)}",
+                 ("paragraph " if en else "段落 ") + para(a["para"])]
+        if a.get("start") is not None:
+            tail = f"–{a['end']}" if a.get("end") is not None else (" onward" if en else " 起")
+            parts.append(("chars " if en else "字符 ") + f"{a['start']}{tail}")
+        if isinstance(a.get("endPara"), dict):
+            parts.append(("ends in paragraph " if en else "止于段落 ") + para(a["endPara"]))
+        if a.get("run") is not None:
+            parts.append(("run " if en else "运行 ") + str(a["run"]))
+        via = str(a.get("via"))
+        parts.append(("source " if en else "来源 ") + (DOCX_VIA_EN if en else DOCX_VIA_ZH).get(via, via))
+        if a.get("fp"):
+            parts.append(("fingerprint " if en else "指纹 ") + str(a["fp"]))
+        if a.get("changed"):
+            parts.append("paragraph changed" if en else "段落已改动")
+        return lead + " · ".join(parts)
 
     def skills_line(self, skills: list[str]) -> str:
         sep = ", " if self.lang == "en" else "、"
@@ -404,6 +488,8 @@ def render(notes: list[dict[str, Any]], *, title: str, page_titles: dict[int, st
                 lines.append(g.style_line(st))
             if n.get("anchor"):
                 lines.append(g.anchor_line(str(n["anchor"])))
+            if isinstance(n.get("docx"), dict):
+                lines.append(g.docx_line(n["docx"]))
             if n.get("skills"):
                 lines.append(g.skills_line(list(n["skills"])))
             pr = n.get("pair") if isinstance(n.get("pair"), dict) else None

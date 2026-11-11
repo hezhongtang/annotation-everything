@@ -299,15 +299,17 @@ class AnalysisResolutionPageTests(unittest.TestCase):
         for locale in ("en", "zh-CN"):
             value = interaction_program([
                 ("// ---------- Analysis view helpers ----------", "// ---------- Analysis view DOM ----------"),
+                ("function docxBlocked(){", "function docxBlockToast("),
                 ("async function api(", "// 只认同一份审阅的服务"),
             ], """
-              const APP='annotation-everything',RID='review',REQ_TIMEOUT=5000,wellFormed=value=>value;
+              const APP='annotation-everything',RID='review',REQ_TIMEOUT=5000,DOCX=null,wellFormed=value=>value;
               const fetch=async()=>({ok:false,status:409,json:async()=>({app:APP,code:'dead-end-option',error:'服务内部 private-id',params:{reason:'合成路径缺少可比范围',assumptions:['合成两期口径一致']}})});
             """, """
               try{await api('POST','/api/analysis/redecide',{})}catch(error){
-                return {message:analysisErrorText(error),malformed:analysisErrorText({status:409,code:'dead-end-line',params:{reason:{private:1},assumptions:[42,null]}})}
+                return {code:error.code,message:analysisErrorText(error),malformed:analysisErrorText({status:409,code:'dead-end-line',params:{reason:{private:1},assumptions:[42,null]}})}
               }
             """, locale)
+            self.assertEqual(value["code"], "dead-end-option")
             self.assertIn("合成路径缺少可比范围", value["message"])
             self.assertIn("合成两期口径一致", value["message"])
             self.assertIn("refute" if locale == "en" else "推翻", value["message"].lower())

@@ -123,7 +123,7 @@ SELECTION_RULES = (
                    "tests/test_report_check.py", "tests/test_report_generation_resources.py",
                    "tests/test_report_reading.py", "tests/test_report_structure_visual.py",
                    "tests/test_report_revision.py", "tests/test_report_external_method.py",
-                   "tests/test_docx_review.py"),
+                   "tests/test_docx_review.py", "tests/test_docx_anchor.py"),
         scenarios=("full-check", "locale-loop", "generated-draft-loop", "report-verdict-loop",
                    "revision-update-loop", "legacy-report-compat", "external-method-loop"),
         serve_check=True,
@@ -138,7 +138,7 @@ SELECTION_RULES = (
         selectors=("tests/test_serve_locale.py", "tests/test_core.py", "tests/test_review_page_i18n.py",
                    "tests/test_review_page_editing_i18n.py", "tests/test_review_page_skills_i18n.py",
                    "tests/test_aux_cli_i18n.py", "tests/test_notes_exchange_i18n.py",
-                   "tests/test_docx_review.py"),
+                   "tests/test_docx_review.py", "tests/test_docx_anchor.py"),
         scenarios=(ALL_SCENARIOS,),
         serve_check=True,
         why="服务与页面模板影响全部浏览器场景与服务安全约束",
@@ -170,7 +170,7 @@ SELECTION_RULES = (
     SelectionRule(
         rid="docx-review",
         prefixes=("skill/annotation-everything/scripts/docx_review.py", "fixtures/docx/"),
-        selectors=("tests/test_docx_review.py", "tests/test_core.py", "tests/test_review_page_i18n.py"),
+        selectors=("tests/test_docx_review.py", "tests/test_docx_anchor.py", "tests/test_core.py", "tests/test_review_page_i18n.py"),
         scenarios=("docx-review",),
         why="DOCX 渲染器与合成样例：分页、诊断与对照页接入由 DOCX 用例覆盖；"
             "浏览器场景钉住原分页显示、限制清单、点/框选标注与只读提示（服务安全自检由 pr 门禁覆盖）",

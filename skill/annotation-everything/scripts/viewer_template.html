@@ -108,6 +108,8 @@ main{flex:1;display:grid;grid-template-columns:var(--ae-rail) var(--ae-sidebar) 
 .slide.docx{overflow:auto;align-items:flex-start}
 .docx-banner{display:flex;align-items:flex-start;flex-wrap:wrap;gap:var(--ae-gap-4) var(--ae-gap-14);padding:var(--ae-gap-10) var(--ae-gap-24);background:var(--ae-warm);border-bottom:1px solid var(--ae-warm-line);color:var(--ae-ink);font-size:var(--ae-small);line-height:1.7}
 .docx-banner[hidden]{display:none}
+.docx-block{padding:var(--ae-gap-10) var(--ae-gap-24);background:var(--ae-danger-bg);border-bottom:1px solid var(--ae-red);color:var(--ae-ink);font-size:var(--ae-small);line-height:1.7;font-weight:600}
+.docx-block[hidden]{display:none}
 .docx-banner summary{cursor:pointer;color:var(--ae-amber)}
 .docx-banner ul{margin:var(--ae-gap-4) 0 0;padding-left:1.4em}
 .docx-page-note{font-size:var(--ae-micro);color:var(--ae-amber);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:50%}
@@ -440,6 +442,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
   <span data-msg="viewer.overview.archiveNotice"></span>
   <button id="archiveUnarchive" type="button" data-msg="viewer.overview.unarchive"></button>
 </div>
+<div id="docxBlock" class="docx-block" role="alert" hidden data-msg="viewer.docx.oldService"></div>
 <div id="docxBanner" class="docx-banner" role="status" hidden>
   <span id="docxBannerText"></span>
   <details id="docxDetails"><summary data-msg="viewer.docx.details"></summary><ul id="docxList"></ul></details>
@@ -587,6 +590,7 @@ let notes=FILE?LS.get(K.notes,[]):[]; if(!Array.isArray(notes))notes=[];
 let mode=FILE?"file":"offline", rev=null, idx0=null, busy=0, editingId=null, composing=false, listStale=false, hideDone=!!LS.get(K.hide,false);
 let stopServiceSupported=false, stoppingService=false, saveFailures=0;
 let finalizeAllSupported=false, finalizingAll=false, finalizeAllResult=null, finalizeAllError="";
+let quoteDocx=null;   // 当前引用的 DOCX 段落定位：{text: 引用文字, page: 页码, a: 定位}，引用换了就不再适用
 let markMode=false, pendingPin=null, quote="", quoteFrom="";   // 标注模式；还没添加的新标注（点）
 const drafts=SS.get(K.drafts,{})||{};   // 各页没写完的批注；存在本标签页的会话存储里，刷新不丢
 const editBuf={};                        // 正在改的已有批注的内容（列表重绘、翻页时不丢）
@@ -931,6 +935,63 @@ function docxReadonly(){if(!DOCX||!sr.getSelection)return"";const s=sr.getSelect
     if(el.closest(".docx-header"))out.add("header");if(el.closest(".docx-footer"))out.add("footer")});
   stage.querySelectorAll("[data-docx-ro]").forEach(e=>{try{if(r.intersectsNode(e))e.dataset.docxRo.split(",").forEach(x=>out.add(x))}catch(_){}});
   return[...out].join(",")}
+// ---------- DOCX 批注定位（docx 字段 v1）：段落 paraId / 序号 / 文本摘要、段落内字符偏移（按码点）、定位来源 ----------
+// 段落属性由 docx_review.py 写在页面上：data-docx-p 序号、data-docx-pid paraId、data-docx-d 摘要、data-docx-o 续片起始偏移。
+const DOCX_SKIP=".docx-num,.docx-mark";   // 自动编号、标记不算段落正文（与 docx_review._ParaScan 一致）
+const cpLen=s=>{let n=0;for(const _ of s)n++;return n};
+function docxParaOf(node){const el=node&&(node.nodeType===1?node:node.parentElement);const d=el&&stage.contains(el)?el.closest("[data-docx-p]"):null;return d&&d.dataset.docxD?d:null}
+const docxParaRef=d=>({id:d.dataset.docxPid||null,n:+d.dataset.docxP,digest:d.dataset.docxD});
+const docxBase=d=>+d.dataset.docxO||0;
+function docxTextNodes(d){const out=[],w=/* 4 = 只看文本节点 */document.createTreeWalker(d,4);
+  for(let t=w.nextNode();t;t=w.nextNode())if(!t.parentElement.closest(DOCX_SKIP))out.push(t);return out}
+function docxOffset(d,node,off){let text="";const rg=document.createRange();rg.selectNodeContents(d);rg.setEnd(node,off);
+  for(const t of docxTextNodes(d)){if(t===node){text+=t.data.slice(0,off);break}
+    if(rg.comparePoint(t,t.length)>0)break;text+=t.data}
+  return docxBase(d)+cpLen(text)}
+function docxAnchor(kind,via,d){const a={v:1,kind,via,para:docxParaRef(d)};if(DOCX.fp)a.fp=DOCX.fp;return a}
+// 浏览器给得出 Shadow DOM 里的选区（Chromium）：直接取起止所在的段落与偏移
+function docxFromSelection(){if(!sr.getSelection)return null;const s=sr.getSelection();if(!s||!s.rangeCount||s.isCollapsed)return null;
+  const r=s.getRangeAt(0),a=docxParaOf(r.startContainer),b=docxParaOf(r.endContainer);if(!a)return null;
+  const out=docxAnchor("quote","selection",a);out.start=docxOffset(a,r.startContainer,r.startOffset);
+  if(b){out.end=docxOffset(b,r.endContainer,r.endOffset);if(b.dataset.docxP!==a.dataset.docxP)out.endPara=docxParaRef(b)}
+  const el=r.startContainer.nodeType===1?r.startContainer:r.startContainer.parentElement,run=el&&el.closest("[data-docx-r]");
+  if(run&&a.contains(run))out.run=+run.dataset.docxR;
+  return out}
+// 拿不到选区（非 Chromium）：在当前页按文本反查，只有唯一一个段落含这段文字才认；段落内也只出现一次才写偏移
+function docxFromText(text){const want=String(text||"").replace(/\s+/g,"");if(!want)return null;const hits=[];
+  stage.querySelectorAll("[data-docx-p][data-docx-d]").forEach(d=>{const map=[];let flat="",k=0;
+    for(const ch of docxTextNodes(d).map(t=>t.data).join("")){if(!/\s/.test(ch)){flat+=ch;map.push(k)}k++}
+    const at=flat.indexOf(want);if(at<0)return;
+    const from=cpLen(flat.slice(0,at)),to=from+cpLen(want)-1;
+    hits.push({d,once:flat.indexOf(want,at+1)<0,start:docxBase(d)+map[from],end:docxBase(d)+map[to]+1})});
+  if(hits.length!==1)return null;const h=hits[0],out=docxAnchor("quote","text",h.d);
+  if(h.once){out.start=h.start;out.end=h.end}return out}
+function docxQuoteAnchor(text){return DOCX?(docxFromSelection()||docxFromText(text)):null}
+// 点和框所在的段落：点取落点处的段落（落在空白处取纵向最近的一段），框取它碰到的第一段到最后一段
+function docxMarkAnchor(mk){if(!DOCX||!mk)return null;const paras=[...stage.querySelectorAll("[data-docx-p][data-docx-d]")];if(!paras.length)return null;
+  const s=stage.getBoundingClientRect(),X=v=>s.left+s.width*v/100,Y=v=>s.top+s.height*v/100;
+  const nearest=(cx,cy)=>{const at=(sr.elementsFromPoint?sr.elementsFromPoint(cx,cy):[]).map(e=>docxParaOf(e)).find(Boolean);if(at)return at;
+    let best=null,gap=Infinity;paras.forEach(d=>{const r=d.getBoundingClientRect(),g=cy<r.top?r.top-cy:cy>r.bottom?cy-r.bottom:0;if(g<gap){gap=g;best=d}});return best};
+  let first,last=null,kind="pin";
+  if(mk.region){kind="region";const rg=mk.region,x0=X(rg.x),x1=X(rg.x+rg.w),y0=Y(rg.y),y1=Y(rg.y+rg.h);
+    const inside=paras.filter(d=>{const r=d.getBoundingClientRect();return r.width>0&&r.height>0&&r.left<x1&&r.right>x0&&r.top<y1&&r.bottom>y0});
+    first=inside[0]||nearest((x0+x1)/2,(y0+y1)/2);last=inside.length>1?inside[inside.length-1]:null}
+  else if(mk.pin)first=nearest(X(mk.pin.x),Y(mk.pin.y));
+  if(!first)return null;const out=docxAnchor(kind,"point",first);
+  if(docxBase(first))out.start=docxBase(first);   // 跨页段落的续片：记下这一片的起始偏移，重建时据此落到正确的页
+  if(last&&last.dataset.docxP!==first.dataset.docxP)out.endPara=docxParaRef(last);
+  return out}
+// 改动已有批注的标注（重新标注、拖动、去掉）：段落定位跟着换；引用选区的定位更精确，不动；读不懂的更高版本不动
+function docxPatch(id,mk){if(!DOCX)return{};const x=notes.find(n=>n.id===id);
+  if(!x||x.page!==P[i].n||(x.docx&&(x.docx.v!==1||x.docx.kind==="quote")))return{};
+  return{docx:mk?docxMarkAnchor(mk):null}}
+// 人工确认归属或挪页：以这次决定为准，读得懂的段落定位不再保留（与 notes_store.update 同一条规则），否则下次重建又按段落挪回去
+const docxDrop=x=>x&&x.docx&&x.docx.v===1?{docx:null}:{};
+// 旧版服务不认 docx 字段、会把定位丢掉：DOCX 审阅连上这样的服务时一律不写入
+let srvNoDocx=false;
+function docxBlocked(){return !!DOCX&&mode==="server"&&srvNoDocx}
+function docxBlockToast(){setTimeout(()=>toast(tMsg("viewer.docx.oldService"),9000),0)}   // 排在调用方自己的提示之后，免得被「已添加」盖掉
+function renderDocxBlock(){if(!DOCX)return;const on=docxBlocked();$("docxBlock").hidden=!on;$("bottomPanel").inert=on}
 
 // ---------- 存储：本地服务优先，退回浏览器 ----------
 // 每次改动先记进「待补传」队列再发送（页面中途关闭也不丢），发送时带审阅标识，服务端认错就拒绝写入。
@@ -940,6 +1001,9 @@ function wellFormed(v){if(typeof v==="string")return v.toWellFormed?v.toWellForm
   if(Array.isArray(v))return v.map(wellFormed);
   if(v&&typeof v==="object"){const o={};for(const k of Object.keys(v))o[k]=wellFormed(v[k]);return o}return v}
 async function api(method,path,body){
+  // 统一拦住队列外的定稿、复核和分析写入；停止服务是升级恢复入口，仍可使用。
+  if(method!=="GET"&&path!=="/api/server/stop"&&docxBlocked())
+    throw Object.assign(new Error(tMsg("viewer.docx.oldService")),{status:409,code:"docx-required"});
   const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),REQ_TIMEOUT);
   const opt={method,cache:"no-store",headers:{"X-AE-Review":RID},signal:ctl.signal};
   if(body!==undefined){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(wellFormed(body))}
@@ -975,7 +1039,10 @@ function stamp(x){const t=Array.isArray(x.trail)&&x.trail.length?x.trail[x.trail
   return Math.max(0,...["updatedAt","resolvedAt","draftedAt","at"].map(k=>Date.parse(x[k]||"")||0),Date.parse((t&&t.at)||"")||0)}
 function pinKey(p){return p&&p.x!=null?`${(+p.x).toFixed(1)},${(+p.y).toFixed(1)}`:""}
 function rgKey(r){return r?["x","y","w","h"].map(k=>(+r[k]||0).toFixed(1)).join(","):""}
-function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),rgKey(regionOf(x)),x.style&&x.style.scope?"s":""].join("\u0001")}
+function docxKey(a){if(!a||typeof a!=="object")return"";
+  const sorted=v=>Array.isArray(v)?v.map(sorted):v&&typeof v==="object"?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;
+  return JSON.stringify(sorted(a))}   // 未知版本也按完整内容区分，不因字段顺序不同而重复导入
+function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),rgKey(regionOf(x)),x.style&&x.style.scope?"s":"",docxKey(x.docx)].join("\u0001")}
 const okRegion=r=>r&&typeof r==="object"&&["x","y","w","h"].every(k=>r[k]!=null&&r[k]!==""&&isFinite(+r[k]))&&+r.w>0&&+r.h>0?{x:+r.x,y:+r.y,w:+r.w,h:+r.h}:null;
 function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:String(x.title||""),target:String(x.target||""),text:String(x.text||""),
     quote:String(x.quote||""),quoteFrom:String(x.quoteFrom||""),pin:x.pin&&x.pin.x!=null?{x:+x.pin.x,y:+x.pin.y}:null,
@@ -992,6 +1059,7 @@ function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:Str
   settleMarks(n);
   if(typeof x.anchor==="string"&&x.anchor)n.anchor=clip(x.anchor,300);
   if(typeof x.key==="string"&&x.key)n.key=clip(x.key,120);
+  if(x.docx&&typeof x.docx==="object"&&!Array.isArray(x.docx)&&Number.isInteger(x.docx.v)&&x.docx.v>0)n.docx=JSON.parse(JSON.stringify(x.docx));   // DOCX 段落定位：原样带着（含更高版本）
   if(Array.isArray(x.skills)||typeof x.skills==="string"){const sk=parseSkills(Array.isArray(x.skills)?x.skills.join(","):x.skills);if(sk.length)n.skills=sk}
   const pr=x.pair;if(pr&&(pr.side==="报告"||pr.side==="讲稿")&&String(pr.text||"").trim())n.pair={side:pr.side,text:String(pr.text),match:pr.match==="exact"?"exact":"similar"};
   const e=x.edit;if(e&&(e.op==="delete"||e.op==="replace")&&String(e.from||"").trim())n.edit=e.op==="delete"?{op:"delete",from:String(e.from)}:{op:"replace",from:String(e.from),to:String(e.to??"")};
@@ -1037,6 +1105,7 @@ function migrateLegacyQueue(){const old=LS.get(K.legacyPending,null);if(!Array.i
 const failed={get(){if(queueSnap)return queueSnap.f;const v=LS.get(K.failed,[]);return Array.isArray(v)?v:[]},
   push(op,why){queueSnap=null;const v=failed.get();v.push({op,why,at:nowIso()});LS.set(K.failed,v)},clear(){queueSnap=null;LS.del(K.failed)}};
 async function mutate(op){
+  if(docxBlocked()){docxBlockToast();return}   // 旧服务会丢掉 DOCX 定位：不写入、不进队列
   op.opId=newId();
   if(FILE){const cur=LS.get(K.notes,[]);notes=Array.isArray(cur)?cur:[];   // 先读最新再改：多个标签页不互相覆盖
     const res=applyLocal(op);mirror();refreshList();return res}
@@ -1055,18 +1124,21 @@ function onRejected(op,e){   // 服务明确不接受（4xx）：不重试；返
     if(e.code&&e.code.startsWith("receiver-")){failed.push(op,e.message);if(!$("handMsg").value.trim())$("handMsg").value=op.message||""}
     return ()=>toast(e.status===404||e.status===405?tMsg("viewer.hand.toast.legacy"):tMsg("viewer.hand.toast.failed",{message:e.message}),6000)}
   if(op.kind==="add"&&!editOf(op.note)&&op.note.page===P[i].n&&!$("ntext").value.trim()){   // 把内容放回输入框
-    $("ntext").value=op.note.text;quote=op.note.quote||"";quoteFrom=op.note.quoteFrom||"";pendingPin=op.note.pin||null;pendingRegion=op.note.region||null;styleOn=!!op.note.style;quotePair=op.note.pair||null;showQuote();updateStyleChip();drawPins()}
+    $("ntext").value=op.note.text;quote=op.note.quote||"";quoteFrom=op.note.quoteFrom||"";pendingPin=op.note.pin||null;pendingRegion=op.note.region||null;styleOn=!!op.note.style;quotePair=op.note.pair||null;
+    quoteDocx=quote&&op.note.docx?{text:quote,page:op.note.page,a:op.note.docx}:null;showQuote();updateStyleChip();drawPins()}
   return ()=>toast(tMsg("viewer.recovery.rejected",{reason:e.message}),6000)}
 const fails={};let flushing=null;
 function flush(){if(FILE)return Promise.resolve();
   if(!flushing)flushing=(navigator.locks?navigator.locks.request(`ae-flush-${RID}`,doFlush):doFlush()).finally(()=>{flushing=null});
   return flushing}
 async function doFlush(){   // 按顺序补传；多个标签页之间用浏览器锁排队，按操作 id 移除
-  let successful=true,problem=null;busy++;
+  let successful=true,problem=null,docxOk=!DOCX;busy++;
   try{for(;;){   // 补完一轮再对一次服务端；这期间又有新改动进队列就接着补
     for(let q=pend.get();q.length;q=pend.get()){const op=q[0];
       if(!op.opId){op.opId=newId();pend.set(q)}   // 兜底：没有操作 id 的条目先补上再发，免得移除时误删别的
       try{
+        if(!docxOk){const d=await getNotes();srvNoDocx=!hasFeature(d,"docx");   // 离线暂存的改动补传前先确认服务认得 docx 字段
+          if(srvNoDocx){mode="server";successful=false;problem=()=>toast(tMsg("viewer.docx.oldService"),9000);return false}docxOk=true}
         const hasFullCheck=op.kind==="handoff"&&"fullCheck" in op;let fullCheckSupported=true;
         if(hasFullCheck){const d=await getNotes();fullCheckSupported=hasFeature(d,"full-check");srvNoFullCheck=!fullCheckSupported;
           const latest=d.handoff&&d.handoff.latest,pendingCheck=latest&&latest.status==="pending"&&latest.fullCheck===true;
@@ -1091,7 +1163,7 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
     mode="server";await resync();if(!pend.get().length)break}
     return successful}
   // 最后一个失败或受阻提示优先于后续成功、处理状态等通知。
-  finally{busy--;updateMode();if(problem)problem()}}
+  finally{busy--;updateMode();renderDocxBlock();if(problem)problem()}}
 async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 // 轮询带回的「最新一批（完整内容）+ 投递状态」签名：逐字段相同才认为这次轮询没有新东西可画。
 // 只有摘要类字段（处理摘要、附言、认领时间……）变化时也要重画，所以比 handSig 那几个字段细。
@@ -1107,7 +1179,7 @@ function applyServer(d,quietHand){
   const old=!hasFeature(d,"marks");if(old&&!srvOld)toast(tMsg("viewer.mode.oldTitle"),9000);srvOld=old;
   srvNoStages=!hasFeature(d,"stages");
   srvNoFullCheck=!hasFeature(d,"full-check");stopServiceSupported=hasFeature(d,"stop-service");
-  finalizeAllSupported=hasFeature(d,"finalize-all");updateMode();
+  finalizeAllSupported=hasFeature(d,"finalize-all");srvNoDocx=!!DOCX&&!hasFeature(d,"docx");updateMode();renderDocxBlock();
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
   if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
@@ -1346,7 +1418,8 @@ function updateCounts(){const c=allStats,b=$("ncount");
 function markBtnLabel(){const b=$("pinBtn"),rn=markMode&&remarkId?notes.find(n=>n.id===remarkId):null;
   const label=b.querySelector("[data-msg]");
   if(label)label.textContent=markMode?(rn?tMsg("viewer.markRehint",{title:clip(noteSummary(rn),12)}):tMsg("viewer.markHint")):tMsg("viewer.markPin")}
-function setMarkMode(on){markMode=on;stage.classList.toggle("markmode",on);const b=$("pinBtn");b.classList.toggle("on",on);
+function setMarkMode(on){if(on&&docxBlocked()){docxBlockToast();return}
+  markMode=on;stage.classList.toggle("markmode",on);const b=$("pinBtn");b.classList.toggle("on",on);
   markBtnLabel();
   if(on)toast(remarkId?tMsg("viewer.markRemarkToast"):tMsg("viewer.markToast"),3000);
   else{remarkId=null;if(rdraw){if(rdraw.box)rdraw.box.remove();rdraw=null}}}
@@ -1380,9 +1453,11 @@ document.addEventListener("mousedown",e=>{if(!$("selbar").contains(e.target)&&!$
 document.addEventListener("mouseup",e=>{
   if($("selbar").contains(e.target)||$("repbox").contains(e.target)||markMode)return;
   const got=selectedText(e);if(!got)return;
+  if(docxBlocked()){docxBlockToast();return}
   setQuote(got.text,got.from);
   sel={text:got.text.replace(/\s+/g," "),from:got.from,x:e.clientX,y:e.clientY};
-  if(got.from==="报告")sel.docxRo=docxReadonly();
+  if(got.from==="报告"){sel.docxRo=docxReadonly();sel.docx=docxQuoteAnchor(got.text)}
+  quoteDocx=sel.docx?{text:quote,page:P[i].n,a:sel.docx}:null;
   sel.pair=findCounterpart(sel.text,sel.from);
   const pr=$("pairRow");pr.classList.toggle("on",!!sel.pair);
   if(sel.pair)$("pairOn").checked=true;   // 默认同时改：专注一侧时最容易忘的就是另一侧
@@ -1412,6 +1487,7 @@ function addEdit(op,to){if(!sel)return;const p=P[i],ro=sel.docxRo||"";
   const note={id:newId(),page:p.n,key:p.stable?p.key:undefined,title:unH(p.title),target:both?"报告和讲稿":sel.from,text:op==="delete"?DEL_TEXT:REP_PREFIX+to,
     quote:sel.text,quoteFrom:sel.from,pin:null,edit,status:"open",at:nowIso()};
   if(both)note.pair={side:sel.pair.side,text:sel.pair.text,match:sel.pair.match};
+  if(sel.docx)note.docx=sel.docx;
   hideSelbar();clearSelection();quote="";quotePair=null;showQuote();sel=null;
   mutate({kind:"add",note});
   if(DOCX)toast(tMsg(op==="delete"?"viewer.deleteRecorded":"viewer.replaceRecorded")+" "+(ro?tMsg("viewer.docx.readonlyEdit",{items:docxKinds(ro)}):tMsg("viewer.docx.manualEdit")),7000);
@@ -1437,7 +1513,7 @@ function endRemark(){if(remarkId)setMarkMode(false)}   // 离开「重新标注�
 function placeMark(mk,rid){
   if(rid){if(!notes.some(n=>n.id===rid)){toast(tMsg("viewer.noteDeleted"),3000);return}
     if(oldGuard())return;
-    stashEdit();mutate({kind:"patch",id:rid,body:{pin:mk.pin||null,region:mk.region||null,anchor:markAnchor(mk)}});
+    stashEdit();mutate({kind:"patch",id:rid,body:{pin:mk.pin||null,region:mk.region||null,anchor:markAnchor(mk),...docxPatch(rid,mk)}});
     if(editingId===rid)refreshList(true);else drawPins();   // 编辑中的卡片按钮（重新标注 / 去掉标注）跟着变
     toast(tMsg(mk.region?"viewer.regionAdded":"viewer.pinAdded"));return}
   pendingPin=mk.pin||null;pendingRegion=mk.region||null;
@@ -1453,7 +1529,9 @@ function addNote(){let text=$("ntext").value.trim();
   if(styleOn)note.style={scope};
   const anc=pendingRegion?regionAnchor(pendingRegion):pendingPin?pointAnchor(pendingPin):styleOn?`第 ${p.n} 页「${unH(p.title)}」整页`:"";
   if(anc)note.anchor=anc;
-  styleOn=false;pendingRegion=null;updateStyleChip();
+  if(DOCX){const fromQuote=quote&&quoteFrom==="报告"&&quoteDocx&&quoteDocx.text===quote&&quoteDocx.page===p.n?quoteDocx.a:null;
+    const dx=fromQuote||docxMarkAnchor(pendingRegion?{region:pendingRegion}:pendingPin?{pin:pendingPin}:null);if(dx)note.docx=dx}
+  quoteDocx=null;styleOn=false;pendingRegion=null;updateStyleChip();
   if(quote&&quotePair)note.pair={side:quotePair.side,text:quotePair.text,match:quotePair.match};
   const sk=parseSkills($("nskills").value);if(sk.length)note.skills=sk;$("nskills").value="";
   quote="";quotePair=null;pendingPin=null;$("ntext").value="";autoGrow();showQuote();delete drafts[p.n];SS.set(K.drafts,drafts);mutate({kind:"add",note});if(focusMode)closeComposer();toast(tMsg("viewer.added"))}
@@ -1475,9 +1553,9 @@ $("bottomPanel").addEventListener("click",e=>{const b=e.target.closest("[data-ac
       if(et&&!t&&!qe){toast(tMsg("viewer.emptyNote"));return}delete editBuf[id];delete editBuf["sk:"+id];delete editBuf["pg:"+id];editingId=null;
       const body=qe&&qe.op==="delete"?{skills}:qe?{edit:{...qe,to:t},text:REP_PREFIX+t,skills}:{text:t,skills};
       const np=+(($("epage")||{}).value||x.page),pg=P.find(q=>q.n===np);
-      if(pg&&(np!==x.page||x.orphan))Object.assign(body,{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false});   // 挪到别的页（或确认原页）
+      if(pg&&(np!==x.page||x.orphan))Object.assign(body,{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false,...docxDrop(x)});   // 挪到别的页（或确认原页）
       mutate({kind:"patch",id,body});if(body.page&&body.page!==P[i].n)toast(tMsg("viewer.movedPage",{page:body.page}));break}
-    case "unpin":stashEdit();mutate({kind:"patch",id,body:{pin:null,region:null}});drawPins();refreshList(true);break;
+    case "unpin":stashEdit();mutate({kind:"patch",id,body:{pin:null,region:null,...docxPatch(id,null)}});drawPins();refreshList(true);break;
     case "resolve":mutate({kind:"patch",id,body:{status:"resolved"}});break;
     case "reopen":mutate({kind:"patch",id,body:{status:"open"}});break;
     case "hide":hideDone=!hideDone;LS.set(K.hide,hideDone);refreshList(true);break}});
@@ -1515,7 +1593,7 @@ $("pinpop").addEventListener("click",e=>{const b=e.target.closest("[data-pp]");i
   else if(a==="unregion"){pendingRegion=null;updateStyleChip();drawPins();saveDraft()}
   else if(a==="edit"){if(focusMode)toggleFocus(false);if(!drawerOpen("panel"))setDrawer("panel",true);endRemark();stashEdit();editingId=id;refreshList(true);flashCard(id);($("etext")||$("eskills")).focus()}
   else if(a==="resolve"||a==="reopen")mutate({kind:"patch",id,body:{status:a==="resolve"?"resolved":"open"}});
-  else if(a==="unpin"){mutate({kind:"patch",id,body:{pin:null,region:null}});drawPins()}
+  else if(a==="unpin"){mutate({kind:"patch",id,body:{pin:null,region:null,...docxPatch(id,null)}});drawPins()}
   else if(a==="del"){if(confirm(tMsg("viewer.confirmDelete")))mutate({kind:"del",id})}});
 function pct(e){const r=stage.getBoundingClientRect();return{x:Math.max(0,Math.min(100,(e.clientX-r.left)/r.width*100)),y:Math.max(0,Math.min(100,(e.clientY-r.top)/r.height*100))}}
 stage.addEventListener("mousedown",e=>{const pin=e.target.closest&&e.target.closest(".ae-pin,.ae-region");if(!pin||markMode||e.button!==0)return;
@@ -1551,8 +1629,8 @@ addEventListener("mouseup",e=>{if(!drag)return;e.stopPropagation();   // 不让�
   const d=drag;drag=null;d.pin.classList.remove("drag");
   if(d.moved&&d.pos){
     if(d.isReg&&d.id&&oldGuard()){drawPins();return}
-    if(d.isReg){if(d.id){mutate({kind:"patch",id:d.id,body:{region:d.pos,anchor:regionAnchor(d.pos)}});drawPins();toast(tMsg(d.rz?"viewer.regionResized":"viewer.regionMoved"))}else{pendingRegion=d.pos;saveDraft()}}
-    else if(d.id){mutate({kind:"patch",id:d.id,body:{pin:d.pos,anchor:pointAnchor(d.pos)}});drawPins();toast(tMsg("viewer.pinMoved"))}else{pendingPin=d.pos;saveDraft()}}
+    if(d.isReg){if(d.id){mutate({kind:"patch",id:d.id,body:{region:d.pos,anchor:regionAnchor(d.pos),...docxPatch(d.id,{region:d.pos})}});drawPins();toast(tMsg(d.rz?"viewer.regionResized":"viewer.regionMoved"))}else{pendingRegion=d.pos;saveDraft()}}
+    else if(d.id){mutate({kind:"patch",id:d.id,body:{pin:d.pos,anchor:pointAnchor(d.pos),...docxPatch(d.id,{pin:d.pos})}});drawPins();toast(tMsg("viewer.pinMoved"))}else{pendingPin=d.pos;saveDraft()}}
   else openPinPop(d.id,d.pin)},true);
 stage.addEventListener("mouseover",e=>{const pin=e.target.closest&&e.target.closest(".ae-pin,.ae-region");
   $("nlist").querySelectorAll(".note.hl").forEach(c=>c.classList.remove("hl"));
@@ -2013,6 +2091,10 @@ const EXP_REV={   // 英文可读标签 → 存储值；未知标签原样通过
   side:{Report:"报告",Script:"讲稿"},
   style:{"Whole page":"page",Pin:"pin",Region:"region"}};
 const oneLine=s=>String(s==null?"":s).replace(/\n/g," ");
+// DOCX 段落定位一行的标签（与 export_format.py 里定位种类、定位来源的标签表同一份）
+const G_DOCX={kindZh:{quote:"引用",pin:"标点",region:"框选"},viaZh:{selection:"选区",text:"文本匹配",point:"标注处"},
+  viaEn:{selection:"selection",text:"text match",point:"mark"},
+  kindIn:{引用:"quote",标点:"pin",框选:"region"},viaIn:{选区:"selection",文本匹配:"text",标注处:"point","text match":"text",mark:"point",selection:"selection"}};
 function expGrammar(lang){
   const en=lang==="en";
   const back=(t,v,d)=>en&&t[v]!==undefined?t[v]:d;
@@ -2028,6 +2110,25 @@ function expGrammar(lang){
     anchor:en?/^\s+Position hint: (.*)$/:/^\s+位置线索：(.*)$/,
     skills:en?/^\s+Skills: (.*)$/:/^\s+技能：(.*)$/,
     pair:en?/^\s+↔ Other side \((Report|Script)(?: · (identical|similar))?\): (.*)$/:/^\s+↔ 另一侧（(报告|讲稿)(?:·(相同|相近))?）：(.*)$/,
+    docx:en?/^\s+DOCX location: v(\d+)(.*)$/:/^\s+DOCX 定位：v(\d+)(.*)$/,
+    docxBody:en?/^ (quote|pin|region) · paragraph (\d+) \(paraId ([0-9A-Fa-f]{1,8}|-), digest ([0-9a-f]{12})\)(?: · chars (\d+)(?:–(\d+)| onward))?(?: · ends in paragraph (\d+) \(paraId ([0-9A-Fa-f]{1,8}|-), digest ([0-9a-f]{12})\))?(?: · run (\d+))?(?: · source (selection|text match|mark))?(?: · fingerprint ([0-9a-f]{16,64}))?( · paragraph changed)?$/
+               :/^ (引用|标点|框选) · 段落 (\d+)（paraId ([0-9A-Fa-f]{1,8}|-)，摘要 ([0-9a-f]{12})）(?: · 字符 (\d+)(?:–(\d+)| 起))?(?: · 止于段落 (\d+)（paraId ([0-9A-Fa-f]{1,8}|-)，摘要 ([0-9a-f]{12})）)?(?: · 运行 (\d+))?(?: · 来源 (选区|文本匹配|标注处))?(?: · 指纹 ([0-9a-f]{16,64}))?( · 段落已改动)?$/,
+    docxIn:(ver,body,re)=>{const m=+ver===1?body.match(re):null;if(!m)return null;
+      const para=(n,id,dg)=>({id:id==="-"?null:id.toUpperCase(),n:+n,digest:dg});
+      const out={v:1,kind:G_DOCX.kindIn[m[1]]||m[1],via:G_DOCX.viaIn[m[11]]||"selection"};
+      if(m[12])out.fp=m[12];out.para=para(m[2],m[3],m[4]);if(m[5])out.start=+m[5];if(m[6])out.end=+m[6];
+      if(m[7])out.endPara=para(m[7],m[8],m[9]);if(m[10])out.run=+m[10];if(m[13])out.changed=true;return out},
+    docxLine:a=>{const lead=en?"   DOCX location: ":"   DOCX 定位：";
+      if(a.v!==1||!a.para||typeof a.para!=="object")return lead+(en?`v${a.v} · newer than this tool supports; the JSON backup keeps it in full`:`v${a.v} · 高于本工具支持的版本，完整内容见 JSON 备份`);
+      const para=p=>en?`${p.n} (paraId ${p.id||"-"}, digest ${p.digest})`:`${p.n}（paraId ${p.id||"-"}，摘要 ${p.digest}）`;
+      const parts=[`v1 ${en?a.kind:(G_DOCX.kindZh[a.kind]||a.kind)}`,(en?"paragraph ":"段落 ")+para(a.para)];
+      if(a.start!=null)parts.push((en?"chars ":"字符 ")+a.start+(a.end!=null?`–${a.end}`:(en?" onward":" 起")));
+      if(a.endPara&&typeof a.endPara==="object")parts.push((en?"ends in paragraph ":"止于段落 ")+para(a.endPara));
+      if(a.run!=null)parts.push((en?"run ":"运行 ")+a.run);
+      parts.push((en?"source ":"来源 ")+((en?G_DOCX.viaEn:G_DOCX.viaZh)[a.via]||a.via));
+      if(a.fp)parts.push((en?"fingerprint ":"指纹 ")+a.fp);
+      if(a.changed)parts.push(en?"paragraph changed":"段落已改动");
+      return lead+parts.join(" · ")},
     always:en?/^Persistent skills \([^)]*\): (.+)$/m:/^常驻技能（[^）]*）：(.+)$/m,
     alwaysItem:en?/^(.+?) \((All notes|Report|Script|Style)\)$/:/^(.+?)（(全部批注|全部|报告|讲稿|风格优化)）$/,
     alwaysSep:en?", ":"、",
@@ -2093,6 +2194,7 @@ function exportText(){
       if((isDone(x)||isDraft(x))&&x.resolution)L.push(g.resLine(x.resolution,isDraft(x)?"drafted":"resolved"));
       if(x.style&&x.style.scope)L.push(g.styleLine(x.style));
       if(x.anchor)L.push(g.anchorLine(x.anchor));
+      if(x.docx&&typeof x.docx==="object")L.push(g.docxLine(x.docx));
       if(Array.isArray(x.skills)&&x.skills.length)L.push(g.skillsLine(x.skills));
       if(x.pair&&x.pair.text)L.push(g.pairLine(x.pair))})});
   return L.join("\n")+"\n"}
@@ -2113,6 +2215,7 @@ function parseMdGrammar(text,g){const items=[];let page=null,title="",cur=null;
       if(m[2])cur.region={x:+m[2],y:+m[3],w:+m[4],h:+m[5]};   // 0.3 导出：框写在风格优化这一行
       cur.style={scope:g.styleIn(m[1])};return}
     if((m=line.match(g.anchor))){cur.anchor=m[1];return}
+    if((m=line.match(g.docx))){const a=g.docxIn(m[1],m[2],g.docxBody);if(a)cur.docx=a;return}   // 读不懂的整行略过，不并进正文
     if((m=line.match(g.skills))){   // 与 export_format 一致：去掉尾缀，带「（常驻·…）」来源标签的不写进单条
       const body=m[1].trim().replace(/(——处理这条前先调用这些技能|（处理这条前先调用这些技能）)$/,"");
       cur.skills=parseSkills(body.split(/[,，、;；]+/).filter(x=>!/（常驻·[^）]*）$/.test(x.trim()))
@@ -2131,6 +2234,7 @@ function parseImport(text){const s=String(text||"").trim();if(!s)return[];
   if(!items.length&&!marked)throw new Error(tMsg("export.badFormat"));   // 没标记又不是旧中文格式
   return items}
 async function runImport(items,label){
+  if(docxBlocked()){docxBlockToast();return}
   items=items.filter(x=>x&&+x.page>0&&String(x.text||"").trim()).map(cleanItem);   // 先定好 id，离线补传后与服务端一致
   if(!items.length){toast(tMsg("import.empty"));return}
   const r=await mutate({kind:"import",notes:items})||{};
@@ -2161,7 +2265,7 @@ function renderOrphans(){const box=$("orphanBox"),lost=lostNotes();box.style.dis
     `<div class="found"><span>${escH(tMsg(x.key?"viewer.recovery.oldPageKey":"viewer.recovery.oldPage",{page:+x.page||"?",key:x.key||"",text:clip(noteSummary(x),60)}))}</span><span><select data-mv="${escH(x.id)}">${opts}</select> <button data-mvgo="${escH(x.id)}">${escH(tMsg("viewer.recovery.move"))}</button></span></div>`).join("");
   box.querySelectorAll("select[data-mv]").forEach(el=>{const value=choices.get(el.dataset.mv);if([...el.options].some(o=>o.value===value))el.value=value});
   box.querySelectorAll("[data-mvgo]").forEach(b=>b.onclick=()=>{const id=b.dataset.mvgo,sel=box.querySelector(`select[data-mv="${CSS.escape(id)}"]`),pg=P.find(q=>q.n===+sel.value);
-    if(pg){mutate({kind:"patch",id,body:{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false}});toast(tMsg("viewer.recovery.moved",{page:pg.n}));setTimeout(renderOrphans,300)}})}
+    if(pg){mutate({kind:"patch",id,body:{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false,...docxDrop(notes.find(n=>n.id===id))}});toast(tMsg("viewer.recovery.moved",{page:pg.n}));setTimeout(renderOrphans,300)}})}
 function openAll(){renderOrphans();const sel=$("expLang");if(sel)sel.value=LS.get(K.lang,"auto");
   $("allText").textContent=notes.length?exportText():tMsg("export.empty");$("clearAll").style.display=FILE?"":"none";$("allnotes").classList.add("on")}
 async function copyAll(msg){const t=exportText();try{await navigator.clipboard.writeText(t)}catch(e){const a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove()}toast(msg||tMsg("export.copied"),msg?5000:2200)}
@@ -2183,10 +2287,10 @@ document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{if
 // ---------- 翻页（每页的草稿、引用、标点各自保留） ----------
 function saveDraft(){const n=P[i].n,t=$("ntext").value;
   const skv=$("nskills").value;
-  if(t.trim()||quote||pendingPin||pendingRegion||skv.trim()||styleOn)drafts[n]={text:t,target:$("ntarget").value,quote,quoteFrom,pin:pendingPin,pair:quotePair,skills:skv,style:styleOn,region:pendingRegion};else delete drafts[n];
+  if(t.trim()||quote||pendingPin||pendingRegion||skv.trim()||styleOn)drafts[n]={text:t,target:$("ntarget").value,quote,quoteFrom,pin:pendingPin,pair:quotePair,skills:skv,style:styleOn,region:pendingRegion,docx:quote&&quoteDocx&&quoteDocx.text===quote&&quoteDocx.page===n?quoteDocx:null};else delete drafts[n];
   SS.set(K.drafts,drafts)}
 function loadDraft(){const d=drafts[P[i].n]||{};$("ntext").value=d.text||"";$("ntarget").value=d.target||"报告";
-  quote=d.quote||"";quoteFrom=d.quoteFrom||"";pendingPin=d.pin||null;quotePair=d.pair||null;$("nskills").value=d.skills||"";styleOn=!!d.style;pendingRegion=d.region||null;updateStyleChip();showQuote();autoGrow()}
+  quote=d.quote||"";quoteFrom=d.quoteFrom||"";pendingPin=d.pin||null;quotePair=d.pair||null;quoteDocx=d.docx||null;$("nskills").value=d.skills||"";styleOn=!!d.style;pendingRegion=d.region||null;updateStyleChip();showQuote();autoGrow()}
 function updatePageStat(){const p=P[i];
   $("stat").textContent=tMsg("viewer.pageStat",{page:p.n,total:P[N-1].n})+(total?` · ${tMsg("viewer.timeStat",{at:mmss(cum[i]),total:mmss(total)})}`:"")}
 function render(){

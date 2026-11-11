@@ -1939,6 +1939,26 @@
     "viewer.docx.pageNote": "本页含：{items}",
     "viewer.docx.readonlyEdit": "所选文字涉及{items}，这类内容不能自动回写。",
     "viewer.docx.manualEdit": "改动需在 Word 中完成。",
-    "check.docxUnsupported": "{path} 是 Word 文档。报告检查只针对生成的逐页 HTML 报告；Word 文档请直接用 build_viewer.py --report 进入审阅"
+    "check.docxUnsupported": "{path} 是 Word 文档。报告检查只针对生成的逐页 HTML 报告；Word 文档请直接用 build_viewer.py --report 进入审阅",
+    "build.note.docx.missing": "批注 {id}（第 {page} 页）定位的段落在新版文档里找不到，已标出待确认，页码未改动",
+    "build.note.docx.ambiguous": "批注 {id}（第 {page} 页）定位的段落没有可用的 paraId，新版文档里有多个文字相同的段落且序号对不上，无法确认是哪一段，已标出待确认，页码未改动",
+    "build.note.docx.noId": "批注 {id}：所在段落没有 paraId，已按段落序号与文本摘要互证，定位到第 {page} 页",
+    "build.note.docx.duplicateId": "批注 {id}：所在段落的 paraId 在文档里重复，已按段落序号与文本摘要互证，定位到第 {page} 页",
+    "build.note.docx.idGone": "批注 {id}：原来的 paraId 在新版文档里不存在，已按段落序号与文本摘要互证，定位到第 {page} 页",
+    "build.note.docx.changed": "批注 {id}（第 {page} 页）：所在段落的文字已改动，批注里的字符偏移对应旧版本",
+    "cli.show.docx.para": "DOCX 定位：段落序号 {n}（没有 paraId）",
+    "cli.show.docx.paraId": "DOCX 定位：段落序号 {n}（paraId {id}）",
+    "cli.show.docx.chars": "DOCX 定位：段落内字符 {start}–{end}",
+    "cli.show.docx.charsAcross": "DOCX 定位：段落内字符 {start} 起，到段落序号 {n} 的字符 {end}",
+    "cli.show.docx.charsFrom": "DOCX 定位：段落内字符 {start} 起",
+    "cli.show.docx.run": "DOCX 定位：文字运行 {run}（仅作提示）",
+    "cli.show.docx.via.selection": "DOCX 定位来源：浏览器选区",
+    "cli.show.docx.via.text": "DOCX 定位来源：按文本唯一匹配反查（浏览器拿不到选区）",
+    "cli.show.docx.via.point": "DOCX 定位来源：标注处的段落",
+    "cli.show.docx.changed": "⚠ 重建后这一段落文字已改动：字符偏移对应旧版本，改稿前按引用原文核对位置",
+    "cli.show.docx.outdated": "⚠ 这条定位写于源文件的另一个版本，还没有按当前版本核对：先重建对照页",
+    "cli.show.docx.unsupported": "⚠ DOCX 定位的版本 v{version} 高于本工具支持的 v{supported}：字段原样保留，不可用于回写；请升级工具后再处理",
+    "viewer.docx.oldService": "背后的本地服务是旧版本，不认识 Word 文档的批注定位，保存时会把定位丢掉，所以这份审阅暂时不能写入。请停掉旧服务（它的终端按 Ctrl+C），运行新版 serve.py，然后刷新本页。",
+    "cli.show.docx.orphan": "⚠ 这条批注定位的段落在当前版本的文档里找不到或无法确认，页码可能不对：先向用户确认它对应哪一段"
   }
 }

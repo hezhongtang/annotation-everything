@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import docx_review  # noqa: E402
 import export_format as ef  # noqa: E402
 import i18n  # noqa: E402
 import ledger  # noqa: E402
@@ -501,6 +502,35 @@ def _always_head(t, lang: str | None, always: list[dict[str, str]], scope_label:
     return t("cli.hand.alwaysHead", list=always_text(t, always))
 
 
+def docx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]:
+    """批注的 DOCX 段落定位（show / wait 的阅读输出）：段落、偏移、定位来源，以及定位是否对着当前版本。"""
+    a = n.get("docx")
+    if not isinstance(a, dict):
+        return []
+    if not docx_review.usable_anchor(a):
+        return [t("cli.show.docx.unsupported", version=a.get("v"), supported=docx_review.ANCHOR_VERSION)]
+    para = a["para"]
+    # 每项一行、各是词典里的一整句（不拿片段拼）
+    out = [t("cli.show.docx.paraId" if para.get("id") else "cli.show.docx.para", n=para["n"], id=para.get("id") or "")]
+    end_para = a.get("endPara") if isinstance(a.get("endPara"), dict) else None
+    if a.get("start") is not None and a.get("end") is not None:
+        out.append(t("cli.show.docx.charsAcross", start=a["start"], end=a["end"], n=end_para.get("n")) if end_para
+                   else t("cli.show.docx.chars", start=a["start"], end=a["end"]))
+    elif a.get("start"):
+        out.append(t("cli.show.docx.charsFrom", start=a["start"]))
+    if a.get("run") is not None:
+        out.append(t("cli.show.docx.run", run=a["run"]))
+    out.append(t(f"cli.show.docx.via.{a.get('via')}"))
+    current = (manifest.get("docx") or {}).get("fingerprint") if isinstance(manifest.get("docx"), dict) else None
+    if n.get("orphan"):
+        out.append(t("cli.show.docx.orphan"))
+    elif a.get("changed"):
+        out.append(t("cli.show.docx.changed"))
+    elif current and a.get("fp") != current:
+        out.append(t("cli.show.docx.outdated"))
+    return out
+
+
 def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolved: bool, page: int | None,
                 sources: dict[str, Path | None] | None = None, handoff: dict[str, Any] | None = None,
                 only: set[str] | None = None, always: list[dict[str, str]] | None = None,
@@ -590,11 +620,15 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
         if n.get("trail"):
             line += t("cli.batch.trail", text=trail_text(n, lang=lang))
         if n.get("orphan"):
-            line += "\n  " + t("cli.show.orphan", pageKey=n.get("key"))
+            # 只有可读的段落定位会在下方说明孤立原因；未知版本仍需保留页面警告。
+            if not docx_review.usable_anchor(n.get("docx")):
+                line += "\n  " + t("cli.show.orphan", pageKey=n.get("key"))
         elif n.get("key") and keys.get(n.get("page")) and n["key"] != keys[n["page"]]:
             line += "\n  " + t("cli.show.keyMismatch", pageKey=n["key"], page=n["page"], current=keys[n["page"]])
         if n.get("anchor"):
             line += "\n  " + t("cli.show.anchor", text=n["anchor"])
+        for extra in docx_lines(n, manifest, t):
+            line += "\n  " + extra
         active_always = (always or []) if n.get("status") != "resolved" else []
         sources_by_name = {}
         for a in store.always_for(n, active_always):

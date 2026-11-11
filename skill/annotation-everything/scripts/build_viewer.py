@@ -654,7 +654,9 @@ def docx_parts(report: Path, locale: str | None) -> tuple[str, str, list[dict], 
     sects = [{"n": pg["n"], "key": pg["key"], "stable": True, "html": pg["html"], "title": pg["title"],
               "w": pg["w"], "h": pg["h"], "orient": pg["orient"], "label": pg["label"]} for pg in r["pages"]]
     meta = {"pagination": r["pagination"], "appPages": r["appPages"], "application": r["application"],
-            "pages": len(sects), "diagnostics": r["diagnostics"]}
+            "pages": len(sects), "diagnostics": r["diagnostics"], "fingerprint": r["fingerprint"],
+            "anchorVersion": docx_review.ANCHOR_VERSION,
+            "_paragraphs": r["paragraphs"]}   # 只给本次重建的重映射用，不写进 review.json
     return r["title"], shadow_css(r["css"]), sects, meta, r["lang"]
 
 
@@ -702,11 +704,13 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     assets.root_fs = None
     import docx_review
     docx_meta: dict | None = None
+    docx_paragraphs: list[dict] = []
     docx_lang = ""
     if docx_review.is_word_like(report):
         # Word 文档直接渲染：不按 UTF-8 文本读，也不过 HTML 资源内联（正文里的 url(...) 只是文字）
         doc = ""
         rtitle, rcss, sects, docx_meta, docx_lang = docx_parts(report, locale_choice)
+        docx_paragraphs = docx_meta.pop("_paragraphs")
         for w in docx_warnings(docx_meta, locale_choice):
             assets.warn(w)
     else:
@@ -856,12 +860,26 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     if (out / "notes.json").exists():
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import notes_store
+        # DOCX：带段落定位的批注先按段落找回现在所在的页（页首会随 Word 重排换段，页面键管不住）
+        docx_ctx = None if docx_meta is None else {
+            "paragraphs": docx_paragraphs, "fingerprint": docx_meta["fingerprint"],
+            "keys": {pg["n"]: pg["key"] for pg in pages if pg["key"] not in dup}}
         remap = notes_store.remap_pages(out, old_keys, {pg["key"]: pg["n"] for pg in pages if pg["stable"]},
-                                        {pg["n"]: html.unescape(pg["title"]) for pg in pages}, dup)
+                                        {pg["n"]: html.unescape(pg["title"]) for pg in pages}, dup, docx=docx_ctx)
         for mv in remap["moved"]:
             assets.warn(diag(locale_choice, "build.note.moved", id=mv["id"], pageKey=mv["key"], old=mv["from"], new=mv["to"]))
         for o in remap["orphans"]:
+            if o.get("reason"):   # 按段落定位没找到：原因在下面的 DOCX 诊断里说
+                continue
             assets.warn(diag(locale_choice, "build.note.orphan", id=o["id"], page=o["page"], pageKey=o["key"]))
+        for x in remap.get("docx", []):
+            if x["status"] != "ok":
+                assets.warn(diag(locale_choice, f"build.note.docx.{x['status']}", id=x["id"], page=x["page"]))
+                continue
+            if x["why"]:
+                assets.warn(diag(locale_choice, f"build.note.docx.{x['why']}", id=x["id"], page=x["page"]))
+            if x["changed"]:
+                assets.warn(diag(locale_choice, "build.note.docx.changed", id=x["id"], page=x["page"]))
     register_review(rid, out, review_name, assets)
     if assets.total > 40 * 1024 * 1024:
         assets.warn(diag(locale_choice, "build.asset.total", size=assets.total // 1024 // 1024))
@@ -876,6 +894,8 @@ def docx_view(meta: dict | None) -> dict | None:
         return None
     import docx_review
     return {"v": docx_review.FORMAT_VERSION, "pagination": meta["pagination"], "appPages": meta.get("appPages"),
+            # 批注定位：页面写入的定位字段版本，以及写下定位时的源文件指纹
+            "anchor": docx_review.ANCHOR_VERSION, "fp": meta.get("fingerprint") or "",
             "application": meta.get("application") or "",
             "diags": [{k: d[k] for k in ("code", "count", "pages", "display", "writeback")}
                       for d in meta["diagnostics"] if d["code"] not in docx_review.INFO_KINDS]}

@@ -2998,6 +2998,11 @@ def docx_review_checks(browser, tmp: Path):
     limits = page.inner_text("#docxList")
     ok(all(word in limits for word in ("原生修订", "Word 批注", "文本框", "域")),
        "限制清单列出原生修订、Word 批注、文本框与域")
+    first_para = page.evaluate(f"""() => {{
+        const d = {STAGE}.querySelector('section.page [data-docx-p]');
+        return {{n: +d.dataset.docxP, pid: d.dataset.docxPid || null, digest: d.dataset.docxD,
+                 text: docxTextNodes(d).map(t => t.data).join('')}};
+    }}""")
     drag_select(page, page.locator("#host section.page [data-docx-p]").first)
     ok(page.is_visible("#selbar"), "DOCX 正文文字可选择，拖选弹出操作条")
     page.click("#selbar [data-sel='delete']")
@@ -3019,6 +3024,24 @@ def docx_review_checks(browser, tmp: Path):
     dels = [n for n in notes if (n.get("edit") or {}).get("op") == "delete"]
     ok(len(dels) == 2 and all(n.get("quote") for n in dels),
        "两条快捷删除都记成批注并带选中文本（file:// 存本地存储）")
+    # #136：引用选区写入段落定位（paraId、序号、摘要、段落内字符偏移），指纹与 review.json 一致
+    quoted = (dels[0].get("docx") or {})
+    ok(quoted.get("v") == 1 and quoted.get("kind") == "quote" and quoted.get("via") == "selection"
+       and quoted.get("fp") == meta["docx"]["fingerprint"],
+       "引用批注带 docx 定位 v1：来源为浏览器选区，指纹等于 review.json 记录的源文件指纹")
+    ok(quoted.get("para") == {"id": first_para["pid"], "n": first_para["n"], "digest": first_para["digest"]},
+       "引用批注定位到所选段落（paraId、段落序号、文本摘要与页面一致）")
+    picked = "".join(first_para["text"][quoted.get("start", 0):quoted.get("end", 0)].split())
+    ok(picked and "".join(dels[0]["quote"].split()).startswith(picked[:280]) and isinstance(quoted.get("run"), int),
+       "字符偏移切出的段落文字就是引用的文字，并带文字运行序号作提示")
+    fallback = page.evaluate(f"""() => {{
+        const d = [...{STAGE}.querySelectorAll('[data-docx-p][data-docx-d]')].find(x => x.textContent.trim().length > 12);
+        const text = docxTextNodes(d).map(t => t.data).join('').trim();
+        return {{hit: docxFromText(text), n: +d.dataset.docxP, none: docxFromText('这段文字不在本页 zqxj')}};
+    }}""")
+    ok(fallback["hit"] and fallback["hit"]["via"] == "text" and fallback["hit"]["para"]["n"] == fallback["n"]
+       and fallback["none"] is None,
+       "拿不到 Shadow DOM 选区时按文本唯一匹配反查段落并记下来源；本页找不到的文字不写定位")
     add_note(page, "DOCX 页点标注", pin=(0.5, 0.1))
     page.click('[data-act="pin"]')   # 框选区域：进入标注模式后按住拖出一块（拖出 6px 以上才算框）
     box = page.locator("#slide").bounding_box()
@@ -3032,6 +3055,15 @@ def docx_review_checks(browser, tmp: Path):
                   condition="区域标注卡片出现在列表里")
        and page.locator("#host .ae-region").count() >= 1,
        "框选区域标注落在 DOCX 页上并记成批注")
+    marked = {n["text"]: n.get("docx") or {} for n in
+              page.evaluate("() => JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")}
+    page_paras = set(page.evaluate(f"() => [...{STAGE}.querySelectorAll('[data-docx-p]')].map(d => +d.dataset.docxP)"))
+    pin_a, region_a = marked.get("DOCX 页点标注", {}), marked.get("DOCX 页框选区域", {})
+    ok(pin_a.get("kind") == "pin" and pin_a.get("via") == "point" and pin_a.get("para", {}).get("n") in page_paras,
+       "点标注定位到落点所在的段落")
+    ok(region_a.get("kind") == "region" and region_a.get("para", {}).get("n") in page_paras
+       and region_a.get("endPara", region_a.get("para"))["n"] >= region_a["para"]["n"],
+       "框选定位到框内的段落（首段到末段）")
     page.reload()
     texts = page.inner_text("#nlist")
     ok("DOCX 页点标注" in texts and "DOCX 页框选区域" in texts,
@@ -3040,7 +3072,100 @@ def docx_review_checks(browser, tmp: Path):
     fifth = page.locator("#host section.page").first.bounding_box()
     ok(fifth and fifth["width"] > fifth["height"],
        "横向附件页按原比例显示（%.0f×%.0f）" % (fifth["width"], fifth["height"]))
+    imported = [{"id": f"docx-import-{n}", "page": 1, "target": "报告", "text": "同文异段批注", "quote": "重复段",
+                 "docx": {"v": 1, "kind": "quote", "via": "selection",
+                          "para": {"id": None, "n": n, "digest": "0123456789ab"}, "start": 0, "end": 3}}
+                for n in (0, 1)]
+    page.click("#notesBtn")
+    page.click("#openImp")
+    page.fill("#impText", json.dumps({"reviewId": meta["reviewId"], "notes": imported}, ensure_ascii=False))
+    page.click("#doImp")
+    ok(wait_until(lambda: page.evaluate("() => JSON.parse(localStorage.getItem('ae.' + RID + '.notes')).filter(n => n.text === '同文异段批注').length") == 2,
+                  page, 5, condition="两个不同段落的同文批注均导入本地存储"),
+       "DOCX 同文异段批注在 file:// 导入时不会互相去重")
     ctx.close()
+    # #136 服务模式：定位落盘；旧服务（不声明 docx 特性）时阻断写入
+    sd = tmp / "docx_server"
+    sd.mkdir()
+    build(sd, ms.build_docx(sd / "sample.docx"), None)
+    port = free_port()
+    server = start_server(sd, port)
+    sctx = browser.new_context()
+    try:
+        base = f"http://127.0.0.1:{port}/"
+        spage = sctx.new_page()
+        spage.goto(base)
+        ok("docx" in spage.request.get(base + "api/notes").json()["features"], "服务声明 docx 特性")
+        drag_select(spage, spage.locator("#host section.page [data-docx-p]").first)
+        spage.click("#selbar [data-sel='delete']")
+        ok(wait_until(lambda: any((n.get("docx") or {}).get("kind") == "quote" for n in disk_notes(sd)), spage, 8,
+                      condition="带 docx 定位的批注写进 notes.json"),
+           "服务模式下引用批注的 docx 定位落盘")
+        ok(spage.locator("#docxBlock").is_hidden(), "新版服务下不显示阻断提示")
+        drag_select(spage, spage.locator("#host section.page [data-docx-p]").first)
+        spage.click("#selbar [data-sel='comment']")
+        spage.fill("#ntext", "X" * 20001)
+        spage.click("[data-act='add']")
+        ok(wait_until(lambda: len(spage.input_value("#ntext")) == 20001 and "20000" in spage.inner_text("#toast"),
+                      spage, 8, condition="超长引用批注被服务拒绝并恢复输入"),
+           "服务拒绝超长引用批注后保留原输入")
+        spage.fill("#ntext", "缩短后重试引用")
+        spage.click("[data-act='add']")
+        ok(wait_until(lambda: any(n["text"] == "缩短后重试引用" and (n.get("docx") or {}).get("kind") == "quote"
+                                 for n in disk_notes(sd)), spage, 8, condition="引用批注重试后仍带 DOCX 定位"),
+           "保存被拒后修改正文重试仍保留原段落定位")
+        # 合成待定稿批次，验证顶栏处理记录中的直接写入口同样受旧服务阻断。
+        seed = """
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import notes_store as store
+d = Path(sys.argv[2])
+seq = store.handoff_submit(d, '', target='review')[1]['seq']
+store.handoff_claim(d, seq=seq)
+for note in store.load(d)['notes']:
+    store.set_status(d, note['id'], 'resolved', by='Synthetic', resolution='Synthetic change')
+store.handoff_done(d, seq=seq)
+"""
+        subprocess.run([sys.executable, "-c", seed, str(SCRIPTS), str(sd)], check=True, capture_output=True)
+        old = sctx.new_page()
+
+        def legacy(route):
+            response = route.fetch()
+            doc = response.json()
+            doc["features"] = [feature for feature in doc.get("features", []) if feature != "docx"]
+            route.fulfill(response=response, json=doc)
+
+        old.route("**/api/notes", legacy)
+        old.goto(base)
+        ok(wait_dom(old, "() => !document.getElementById('docxBlock').hidden", 8)
+           and "旧版本" in old.inner_text("#docxBlock"), "旧版服务不认 docx 字段时显示阻断提示")
+        before = len(disk_notes(sd))
+        drag_select(old, old.locator("#host section.page [data-docx-p]").nth(1))
+        ok(wait_toast(old, "不能写入", condition="阻断提示出现") and not old.is_visible("#selbar"),
+           "阻断期间选中文字不弹操作条，提示不能写入")
+        ok(old.evaluate("() => document.getElementById('bottomPanel').inert") and len(disk_notes(sd)) == before,
+           "阻断期间批注面板不可操作，notes.json 没有新增")
+        posts = []
+        old.on("request", lambda req: posts.append(req.url) if req.method == "POST" else None)
+        old.click("#historyBtn")
+        old.locator("#currentTaskToggle").check()
+        old.locator('[data-bfinal="1"]').wait_for(state="visible")
+        old.once("dialog", lambda dialog: dialog.accept())
+        old.click('[data-bfinal="1"]')
+        ok(wait_toast(old, "不能写入", condition="处理记录定稿操作也显示旧服务阻断")
+           and not any(url.endswith("/api/handoff/finalize") for url in posts)
+           and all(n["status"] == "drafted" for n in disk_notes(sd)),
+           "旧服务阻断顶栏处理记录的直接写接口")
+        old.once("dialog", lambda dialog: dialog.accept())
+        old.click("#stopServiceBtn")
+        ok(wait_until(lambda: server.poll() is not None, old, 8, condition="旧服务仍能通过恢复入口停止")
+           and any(url.endswith("/api/server/stop") for url in posts),
+           "旧服务阻断内容写入时仍允许停止服务以便升级")
+        old.close()
+    finally:
+        sctx.close()
+        stop(server)
 
 
 
