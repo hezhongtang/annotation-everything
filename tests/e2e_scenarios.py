@@ -232,6 +232,15 @@ SCENARIOS: list[Scenario] = [
         isolation="独立临时审阅目录与浏览器上下文",
     ),
     Scenario(
+        id="docx-review",
+        title="DOCX 直接审阅：Word 原分页与横向页按原比例显示、verified 横幅与限制清单、"
+              "页眉页脚按实际页码、正文可拖选、点标注与快捷删除在 DOCX 页可用、"
+              "选中原生修订提示不能自动回写",
+        fixture="fixtures/docx/make_sample.py 现场合成的 5 页样例（4 页 A4 纵向 + 1 页横向；"
+                "跨页表格、原生修订、Word 批注、文本框、域）；真实 build_viewer 构建，无讲稿",
+        isolation="独立临时审阅目录与浏览器上下文；file:// 模式，批注只进本地存储",
+    ),
+    Scenario(
         parallel_safe=True,
         id="server-mode",
         title="服务模式全流程：落盘与编辑、标点 / 区域交互、快捷删除与改写、风格优化、常驻技能、轮询不打断草稿、交给 Agent 唤醒等待命令，随后断线补传、写入失败、服务卡死、同一端口换审阅、恶意网页与恶意导入",

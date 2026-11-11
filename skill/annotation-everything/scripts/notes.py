@@ -395,10 +395,17 @@ def side_texts(sources: dict[str, Path | None] | None) -> dict[str, dict[int, st
     out: dict[str, dict[int, str]] = {"报告": {}, "讲稿": {}}
     if not sources:
         return out
-    try:
+    try:   # 报告与讲稿分开容错：一侧读不了，另一侧照样给出对应句
         if sources.get("report"):
-            for sct in find_pages(sources["report"].read_text(encoding="utf-8")):
-                out["报告"][sct["n"]] = strip_tags(re.sub(r"<(script|style)\b.*?</\1\s*>", " ", sct["html"], flags=re.S | re.I))
+            import docx_review
+            if docx_review.is_word_like(sources["report"]):
+                out["报告"] = docx_review.page_texts(sources["report"])
+            else:
+                for sct in find_pages(sources["report"].read_text(encoding="utf-8")):
+                    out["报告"][sct["n"]] = strip_tags(re.sub(r"<(script|style)\b.*?</\1\s*>", " ", sct["html"], flags=re.S | re.I))
+    except (OSError, ValueError, BuildError):
+        out["报告"] = {}
+    try:
         if sources.get("script"):
             md = sources["script"].read_text(encoding="utf-8")
             heads = page_heads(md)   # 中英页头都认，与界面语言无关
@@ -877,6 +884,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
             print(json.dumps({**doc, "notes": notes, "handoff": store.handoff_state(d), "alwaysSkills": store.always_skills(d)},
                              ensure_ascii=False, indent=2))
         else:
+            _refuse_newer_format(manifest)
             try:
                 sources = resolve_sources(d, manifest, locale=lang) if manifest else None
             except BuildError as e:
@@ -1308,8 +1316,19 @@ SNAP_DIR = ".snapshots"
 SNAP_KEEP = 30
 
 
+def _refuse_newer_format(manifest) -> None:
+    """报告格式版本高于本版本时明确报错（与 --rebuild、serve.py 同口径）；源文件丢失仍按原样容错。"""
+    if not manifest:
+        return
+    import ledger
+    problem = ledger.unsupported_format(manifest)
+    if problem:
+        raise BuildError(problem)
+
+
 def _sources(d: Path) -> dict[str, Path | None] | None:
     manifest = load_manifest(d)
+    _refuse_newer_format(manifest)
     try:
         return resolve_sources(d, manifest) if manifest else None
     except BuildError:
@@ -1346,13 +1365,35 @@ def _snapshot(d: Path, seq: int, label: str) -> Path | None:
         if src and src.is_file():
             if src.stat().st_size > SNAP_MAX:
                 raise ValueError(f"{src} 超过 {SNAP_MAX // 1024 // 1024} MB")
-            write_private(out / kind, src.read_text(encoding="utf-8"))
+            if kind == "report" and _is_word(src):   # Word 文档（.docx/.docm/.dotx）按原字节保存，不按文本读
+                _write_private_bytes(out / kind, src.read_bytes())
+            else:
+                write_private(out / kind, src.read_text(encoding="utf-8"))
     olds = sorted((p for p in root.glob("batch-*") if p.name[6:].isdigit()), key=lambda p: int(p.name[6:]))
     for p in olds[:-SNAP_KEEP]:   # 只留最近几十批
         for f in sorted(p.rglob("*"), reverse=True):
             f.unlink() if f.is_file() else f.rmdir()
         p.rmdir()
     return out
+
+
+def _is_word(src: Path) -> bool:
+    import docx_review
+    return docx_review.is_word_like(src)
+
+
+def _write_private_bytes(path: Path, data: bytes) -> None:
+    """二进制版 write_private：同目录临时文件（mkstemp 出来就是 0600）+ os.replace，diff 不会读到写了一半的快照。"""
+    import tempfile
+    fd, tmp = tempfile.mkstemp(prefix="." + path.name + "-", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
 
 
 def _parts(kind: str, text: str) -> list[tuple[str, int, str]]:
@@ -1367,6 +1408,16 @@ def _parts(kind: str, text: str) -> list[tuple[str, int, str]]:
     except (BuildError, ValueError):
         pass
     return [("all", 0, text)]
+
+
+def _load_parts(kind: str, path: Path) -> list[tuple[str, int, str]]:
+    """快照或源文件按页切开；DOCX（zip 包）先按原分页渲染，再逐段取文字比较。"""
+    with path.open("rb") as fh:
+        is_zip = fh.read(2) == b"PK"
+    if kind == "report" and is_zip:
+        import docx_review
+        return [(f"k:{pg['key']}", pg["n"], docx_review.page_lines(pg["html"])) for pg in docx_review.render(path)["pages"]]
+    return _parts(kind, path.read_text(encoding="utf-8"))
 
 
 def diff_cmd(d: Path, seq: int | None, to: str, page: int | None, lang: str | None = None) -> int:
@@ -1392,16 +1443,19 @@ def diff_cmd(d: Path, seq: int | None, to: str, page: int | None, lang: str | No
     for kind in ("report", "script"):
         if not (base / kind).is_file():
             continue
-        before = (base / kind).read_text(encoding="utf-8")
         src = sources.get(kind) if use_current else after_dir / kind
         if not src or not Path(src).is_file():
             print(t("cli.batch.diffMissing", side=label(t, side[kind], kind)))
             continue
-        after = Path(src).read_text(encoding="utf-8")
-        if before == after:
+        if (base / kind).read_bytes() == Path(src).read_bytes():
             continue
-        old = {k: (n, t) for k, n, t in _parts(kind, before)}
-        for key, n, text in _parts(kind, after):
+        try:
+            old_parts, new_parts = _load_parts(kind, base / kind), _load_parts(kind, Path(src))
+        except (OSError, ValueError) as exc:   # Word 文档读不了：说明原因，不中断另一侧
+            print(t("cli.notes.warning", reason=exc), file=sys.stderr)
+            continue
+        old = {k: (n, t) for k, n, t in old_parts}
+        for key, n, text in new_parts:
             if page is not None and n != page:
                 continue
             prev = old.pop(key, (n, ""))[1]
@@ -1768,6 +1822,7 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
             with contextlib.suppress(ValueError, OSError):
                 signal.signal(sig, h)
     manifest = load_manifest(d)
+    _refuse_newer_format(manifest)
     try:
         sources = resolve_sources(d, manifest, locale=lang) if manifest else None
     except BuildError as e:

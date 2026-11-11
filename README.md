@@ -36,6 +36,7 @@ This README follows `main`; automatic updates install only stable release tags. 
 ### Annotate: point to the change, revise both documents
 
 - **Comment directly on the material.** Read report pages and speaker notes side by side. Select text to quote, delete or rewrite it, or place pins and regions on the report. Matching sentences can be marked for changes on both sides.
+- **Review Word documents directly.** A `.docx` needs no HTML conversion: the review page keeps the pagination and page orientation Word saved. Pagination confidence and approximated structures are shown on the page and in the CLI; this version cannot write revisions back into the `.docx`.
 - **Hand a batch to the agent for revision.** Annotations save automatically. Bind a receiving session and explicitly submit a batch; the agent revises both documents, rebuilds the page and records the result for each annotation.
 - **Check and review as needed.** Request a full consistency check for figures, metric definitions and wording. Use a draft followed by review, or stop after the draft and let the reviewer decide when to finalize.
 
@@ -114,7 +115,7 @@ See the [English format reference](skill/annotation-everything/references/format
 | `ae.py install` / `doctor` / `repair` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--target <dir>` for another skills root; `--link codex,agents,zcode` or `name=path` symlinks it into other agents' skill directories); check installation, runtime, optional tools and dev environment (`--json` for structured output); repair what the checks find (prints a plan first, fixes safe items automatically, `--forget-stale`/`--stop-orphans` run the destructive ones explicitly, `--dry-run` only prints); uninstall removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first). All four subcommands accept `--target <dir>` to locate a custom copy |
 | `update.py auto` / `check` / `now` | Check and automatically install a release / only check / check and install immediately from the skill copy; the skill entry runs `auto` at most once a day |
 | `verify.py plan` / `run` / `report` | Unified verification entry run from the repository root: `plan` explains the groups and commands without starting anything (`plan --phase development` also shows what the current changes should run, why, and when it falls back to the full check); `run` executes and writes structured records plus raw logs into `.verify/` (git-ignored), records the shadow comparison between the suggested selection and the full gate by default, and lets later stages reference currently valid passing evidence (`--no-reuse` forces a full rerun); `report` only reads records and shows the evidence chain. Groups: `unit` (full unit), `unit-related` (explicitly named cases, always augmented with the global dictionary contract in `tests/test_i18n_catalog_contract.py`), `browser` (full browser), `serve-check` (server security self-check), `all` (runs `unit` → `serve-check` → `browser` in order). Field contract: [docs/verify/record-contract.md](docs/verify/record-contract.md), selection strategy: [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
-| `build_viewer.py --report … [--script …] --out <review-dir>` | Build the review page with optional speaker notes; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
+| `build_viewer.py --report … [--script …] --out <review-dir>` | Build the review page from paginated HTML or DOCX, with optional speaker notes; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
 | `report_check.py report.html [--script script.md] [--record report-record.json]` | Public report verification entry: a readable summary by default, structured results with `--json`, and `--locale en` or `zh-CN` for the language. Exit 0 means program checks passed, not that the report is deliverable; 1 means checks failed; 2 means an input or usage error. Content, structure and visual coverage and delivery blockers are listed separately |
 | `serve.py <review-dir-or-id>` | Start the local server; each review keeps its own dedicated port |
 | `http://127.0.0.1:<port>/#overview` (browser address) | Open the review overview to switch scope, inspect details, open or start reviews, and archive or unarchive them; start a local service first |
@@ -431,6 +432,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 ├── locales/                       Chinese and English messages (zh-CN.json, en.json) and the locale contract
 ├── scripts/
 │   ├── build_viewer.py            builds the review page index.html and review.json
+│   ├── docx_review.py             renders DOCX pages and records pagination confidence and structure diagnostics
 │   ├── report_check.py            report verification: deterministic rules, coverage and delivery verdict
 │   ├── i18n.py                    loads the shared catalogs and fills in the chosen language; holds the process-wide interface language state (set once by an entry, shared by every module); the command line boilerplate shared by every entry (reading --locale, translating argparse errors, reporting an unsupported language)
 │   ├── update.py                  checks stable releases and updates the skill copy
@@ -457,11 +459,13 @@ verify_report.py                  continuous efficiency reports, comparable grou
 verify_parallel.py                bounded process scheduling inside a verification group; existing locks and failures are preserved
 host_isolation.py                 host isolation protocol: locks and declarations for mutual exclusion by shared resource
 fixtures/sample/                   synthetic sample (fictional data)
+fixtures/docx/                     synthetic DOCX sample and its generator
 fixtures/show-baseline/            verbatim baselines of notes.py show output in Chinese and English (synthetic data)
 fixtures/verify-doc-allowlist.json  synthetic document-gate paths and dependency-contract examples
 fixtures/external-report-skill/    synthetic external generation skill; its output goes through the same acceptance
 fixtures/external-report-skill-lite/ limited variant of it; proves missing evidence is reported as gaps
 tests/                             unit tests and end-to-end browser tests
+tests/test_docx_review.py          DOCX rendering, pagination, untrusted input and integration regressions
 tests/e2e_waits.py                  browser condition waits: bounded polling, events and scenario timeout diagnostics
 tests/e2e_scenarios.py              browser scenario registry and selection scheduling (no browser dependency)
 tests/e2e_servers.py                server start/stop for end-to-end tests and cleanup after interruption

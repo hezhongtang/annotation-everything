@@ -104,6 +104,14 @@ main{flex:1;display:grid;grid-template-columns:var(--ae-rail) var(--ae-sidebar) 
 #scriptPane{border-left:1px solid var(--ae-line)}
 .slide{background:var(--ae-stage);display:flex;align-items:center;justify-content:center;flex:1;min-height:0;overflow:hidden;position:relative}
 #host{display:block}
+/* DOCX：按页宽适配、纵向滚动（A4 纵向页按宽高同时缩放会小到看不清） */
+.slide.docx{overflow:auto;align-items:flex-start}
+.docx-banner{display:flex;align-items:flex-start;flex-wrap:wrap;gap:var(--ae-gap-4) var(--ae-gap-14);padding:var(--ae-gap-10) var(--ae-gap-24);background:var(--ae-warm);border-bottom:1px solid var(--ae-warm-line);color:var(--ae-ink);font-size:var(--ae-small);line-height:1.7}
+.docx-banner[hidden]{display:none}
+.docx-banner summary{cursor:pointer;color:var(--ae-amber)}
+.docx-banner ul{margin:var(--ae-gap-4) 0 0;padding-left:1.4em}
+.docx-page-note{font-size:var(--ae-micro);color:var(--ae-amber);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:50%}
+.docx-page-note[hidden]{display:none}
 .script{background:var(--ae-panel);overflow-y:auto;padding:var(--ae-gap-20) var(--ae-gap-24) var(--ae-gap-28);flex:1;min-height:0}
 #scriptHandle{display:none;border:0;border-left:1px solid var(--ae-line);background:var(--ae-bg);color:var(--ae-mut);writing-mode:vertical-rl;font-size:var(--ae-small);padding:var(--ae-gap-12) var(--ae-space)}
 #bottomPanel{border-top:1px solid var(--ae-line);min-width:0;background:var(--ae-panel)}
@@ -432,6 +440,10 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
   <span data-msg="viewer.overview.archiveNotice"></span>
   <button id="archiveUnarchive" type="button" data-msg="viewer.overview.unarchive"></button>
 </div>
+<div id="docxBanner" class="docx-banner" role="status" hidden>
+  <span id="docxBannerText"></span>
+  <details id="docxDetails"><summary data-msg="viewer.docx.details"></summary><ul id="docxList"></ul></details>
+</div>
 <section id="overview" hidden data-aria="viewer.overview.title">
   <div class="overview-top">
     <h1 id="overviewTitle" data-msg="viewer.overview.title"></h1>
@@ -472,7 +484,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
   <section id="workspace">
     <section id="analysisMain" hidden><div class="analysis-heading"><h2 id="analysisFocus"></h2><p id="analysisMeta"></p><div class="analysis-actions" id="analysisManage"></div></div><p id="analysisError" role="alert"></p><section id="analysisChanges" role="status" aria-live="polite"></section><div id="analysisBody"></div></section>
     <div id="panes">
-      <section id="reportPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.report"></span><button id="pageAnalysisStart" hidden data-msg="viewer.life.startPage"></button></div><div class="slide" id="slide"><div id="host"></div></div></section>
+      <section id="reportPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.report"></span><span id="docxPageNote" class="docx-page-note" hidden></span><button id="pageAnalysisStart" hidden data-msg="viewer.life.startPage"></button></div><div class="slide" id="slide"><div id="host"></div></div></section>
       <section id="scriptPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.script"></span><button  class="icon-button" data-layout-toggle="script" data-title="viewer.layout.script" data-aria="viewer.layout.script" data-p-key="]" aria-controls="scriptPane"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button></div><div class="script" id="script"><div id="pageScript"></div></div></section>
       <button id="scriptHandle" data-layout-toggle="script" data-title="viewer.layout.script" data-p-key="]" data-msg="viewer.target.script" aria-controls="scriptPane"></button>
     </div>
@@ -558,6 +570,9 @@ Where annotations are kept: when you open it through the local service (the addr
 const P=__PAGES__, S=__SECTIONS__, NS=__NS__, NAME=__NAME__, RID=__RID__, N=P.length;
 const SKILL_CONTEXT=__SKILL_CONTEXT__;
 const SECT=__SECT__, RCSS=__RCSS__, SECT_KEYS=P.map(p=>"page-"+p.key);
+// DOCX 审阅：分页可信度与有限制的结构（null 表示逐页 HTML 报告）。页尺寸在 P[k].w / h，缺省 1280×720
+const DOCX=__DOCX__;
+function pageSize(k){const p=P[k]||{};return{w:+p.w>0?+p.w:1280,h:+p.h>0?+p.h:720}}
 const PAGE_NS=new Set(P.map(q=>q.n));   // 报告页码：页面生命周期内不变，找失页批注时直接查
 const APP="annotation-everything", FILE=location.protocol==="file:";
 const CATALOGS=__CATALOGS__, REVIEW_LOCALE=__LOCALE__;
@@ -698,6 +713,7 @@ function applyLocale(){
   if(typeof armDelete==="function") armDelete(delArmed);
   if(typeof updateStyleChip==="function") updateStyleChip();
   if(typeof updateMode==="function") updateMode();
+  if(typeof renderDocx==="function") renderDocx();
   if(typeof showQuote==="function") showQuote();
   updatePageStat();
   updatePairText();
@@ -884,9 +900,37 @@ ${RCSS}
 const stage=sr.getElementById("ae-stage"), frame=sr.getElementById("ae-frame");
 function fit(){const slide=$("slide"),style=getComputedStyle(slide),b=slide.getBoundingClientRect();
   const w=b.width-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight),h=b.height-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom);
-  const k=Math.max(.01,Math.min((w-24)/1280,(h-24)/720));
-  frame.style.width=1280*k+"px";frame.style.height=720*k+"px";stage.style.transform=`scale(${k})`;
+  const sz=pageSize(i),sec=DOCX&&stage.querySelector("section.page");
+  // DOCX 页内容比页高时向下延伸（不截断）：舞台高度取实测；宽度适配，纵向滚动
+  const H=sec?Math.max(sz.h,sec.offsetHeight):sz.h;
+  const k=DOCX?Math.max(.05,Math.min(1.6,(w-24)/sz.w)):Math.max(.01,Math.min((w-24)/sz.w,(h-24)/sz.h));
+  stage.style.setProperty("width",sz.w+"px","important");stage.style.setProperty("height",H+"px","important");
+  frame.style.width=sz.w*k+"px";frame.style.height=H*k+"px";frame.style.margin=DOCX?"12px 0":"";stage.style.transform=`scale(${k})`;
   stage.style.setProperty("--ae-pin",(24/k).toFixed(1)+"px")}   // 标点在屏幕上始终约 24px，缩小了也好点、好拖
+
+// ---------- DOCX：分页可信度、限制清单、本页结构、只读段落 ----------
+function docxKinds(codes){return String(codes).split(",").filter(Boolean).map(c=>tMsg("docx.kind."+c)).join(uiLocale==="en"?", ":"、")}
+function renderDocx(){if(!DOCX)return;$("slide").classList.add("docx");$("docxBanner").hidden=false;
+  const parts=[tMsg("viewer.docx.pagination."+DOCX.pagination,{app:DOCX.appPages==null?"?":DOCX.appPages,pages:N}),tMsg("viewer.docx.writeback")];
+  const diags=DOCX.diags.filter(d=>d.code!=="estimatedPages");   // 估算分页横幅已说明，不重复列为限制（与命令行同口径）
+  if(diags.length)parts.push(tMsg("viewer.docx.limits",{count:diags.length}));
+  $("docxBannerText").textContent=parts.join(" ");
+  $("docxList").innerHTML=diags.map(d=>`<li>${escH(tMsg("docx.diag."+d.code))} ${escH(tMsg("viewer.docx.diagWhere",{count:d.count,pages:(d.pages||[]).join(", ")||"-"}))}</li>`).join("");
+  $("docxDetails").hidden=!diags.length;renderDocxPage()}
+function renderDocxPage(){if(!DOCX)return;const p=P[i],note=$("docxPageNote");
+  const here=DOCX.diags.filter(d=>(d.pages||[]).includes(p.n)).map(d=>d.code);
+  const bits=[];if(p.label&&String(p.label)!==String(p.n))bits.push(tMsg("viewer.docx.wordPage",{label:p.label}));
+  if(DOCX.pagination==="estimated")bits.push(tMsg("viewer.docx.estimatedPage"));
+  if(here.length)bits.push(tMsg("viewer.docx.pageNote",{items:docxKinds(here.join(","))}));
+  note.textContent=bits.join(" · ");note.title=note.textContent;note.hidden=!bits.length}
+// 选区碰到的只读段落（原生修订、域、文本框等）与页眉页脚：快捷修改照样记下，但提示不能自动回写
+function docxReadonly(){if(!DOCX||!sr.getSelection)return"";const s=sr.getSelection();if(!s||!s.rangeCount)return"";
+  const r=s.getRangeAt(0),out=new Set();
+  [s.anchorNode,s.focusNode].forEach(n=>{const el=n&&(n.nodeType===1?n:n.parentElement);if(!el)return;
+    const ro=el.closest("[data-docx-ro]");if(ro)ro.dataset.docxRo.split(",").forEach(x=>out.add(x));
+    if(el.closest(".docx-header"))out.add("header");if(el.closest(".docx-footer"))out.add("footer")});
+  stage.querySelectorAll("[data-docx-ro]").forEach(e=>{try{if(r.intersectsNode(e))e.dataset.docxRo.split(",").forEach(x=>out.add(x))}catch(_){}});
+  return[...out].join(",")}
 
 // ---------- 存储：本地服务优先，退回浏览器 ----------
 // 每次改动先记进「待补传」队列再发送（页面中途关闭也不丢），发送时带审阅标识，服务端认错就拒绝写入。
@@ -1338,6 +1382,7 @@ document.addEventListener("mouseup",e=>{
   const got=selectedText(e);if(!got)return;
   setQuote(got.text,got.from);
   sel={text:got.text.replace(/\s+/g," "),from:got.from,x:e.clientX,y:e.clientY};
+  if(got.from==="报告")sel.docxRo=docxReadonly();
   sel.pair=findCounterpart(sel.text,sel.from);
   const pr=$("pairRow");pr.classList.toggle("on",!!sel.pair);
   if(sel.pair)$("pairOn").checked=true;   // 默认同时改：专注一侧时最容易忘的就是另一侧
@@ -1361,14 +1406,16 @@ function syncPair(){const on=!!(sel&&sel.pair&&$("pairOn").checked);quotePair=on
 function updatePairText(){const pair=sel&&sel.pair;
   $("pairText").textContent=pair?tMsg(pair.match==="exact"?"viewer.pairPrompt.same":"viewer.pairPrompt.similar",{side:targetLabel(pair.side),text:clip(pair.text,46)+(Array.from(pair.text).length>46?"…":"")}):tMsg("viewer.pairLabel")}
 $("pairOn").addEventListener("change",syncPair);
-function addEdit(op,to){if(!sel)return;const p=P[i];
+function addEdit(op,to){if(!sel)return;const p=P[i],ro=sel.docxRo||"";
   const edit=op==="delete"?{op,from:sel.text}:{op,from:sel.text,to};
   const both=!!(sel.pair&&$("pairOn").checked);
   const note={id:newId(),page:p.n,key:p.stable?p.key:undefined,title:unH(p.title),target:both?"报告和讲稿":sel.from,text:op==="delete"?DEL_TEXT:REP_PREFIX+to,
     quote:sel.text,quoteFrom:sel.from,pin:null,edit,status:"open",at:nowIso()};
   if(both)note.pair={side:sel.pair.side,text:sel.pair.text,match:sel.pair.match};
   hideSelbar();clearSelection();quote="";quotePair=null;showQuote();sel=null;
-  mutate({kind:"add",note});toast(tMsg(op==="delete"?"viewer.deleteRecorded":"viewer.replaceRecorded"))}
+  mutate({kind:"add",note});
+  if(DOCX)toast(tMsg(op==="delete"?"viewer.deleteRecorded":"viewer.replaceRecorded")+" "+(ro?tMsg("viewer.docx.readonlyEdit",{items:docxKinds(ro)}):tMsg("viewer.docx.manualEdit")),7000);
+  else toast(tMsg(op==="delete"?"viewer.deleteRecorded":"viewer.replaceRecorded"))}
 function selAction(a){if(!sel)return;
   if(a==="delete")addEdit("delete");
   else if(a==="replace"){const r=$("repbox"),t=$("repText");$("selbar").classList.remove("on");r.classList.add("on");place(r,sel.x,sel.y);
@@ -2145,6 +2192,7 @@ function updatePageStat(){const p=P[i];
 function render(){
   const p=P[i], s=secOf(p.n);
   stage.innerHTML=SECT[i]; fit();
+  if(DOCX){$("slide").scrollTop=0;renderDocxPage()}
   $("jump").value=i;
   updatePageStat();
   [...$("secs").children].forEach((b,k)=>b.classList.toggle("on",S[k]===s));
@@ -2158,6 +2206,7 @@ function render(){
   LS.set(K.page,i+1)}
 function go(k){k=Math.max(0,Math.min(N-1,k));if(k===i)return;if(focusMode)closeComposer();else saveDraft();i=k;render()}
 $("prev").onclick=()=>go(i-1);$("next").onclick=()=>go(i+1);addEventListener("resize",fit);
+if(DOCX){renderDocx();if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit)}   // 字体就绪后页高可能变，重量一次
 $("jump").onchange=e=>go(+e.target.value);
 $("helpBtn").onclick=$("shortcutsBtn").onclick=()=>$("help").classList.toggle("on");
 $("allTab").onclick=openAll;$("historyBtn").onclick=$("batchesTab").onclick=openBatches;
@@ -2441,13 +2490,15 @@ let analysisLastChange=null;
 // ---------- Analysis page preview interactions ----------
 function fitAnalysisPage(){
   const host=$("analysisPageHost"),root=host.shadowRoot;if(!root||!$("analysisPageDialog").classList.contains("on"))return;
-  const bounds=$("analysisPageWrap").getBoundingClientRect(),scale=Math.max(.01,Math.min(bounds.width/1280,bounds.height/720));
-  const frame=root.getElementById("ae-frame"),preview=root.getElementById("ae-stage");
-  frame.style.width=1280*scale+"px";frame.style.height=720*scale+"px";preview.style.transform=`scale(${scale})`
+  const frame=root.getElementById("ae-frame"),preview=root.getElementById("ae-stage"),sz=pageSize(+host.dataset.index||0);
+  const sec=preview.querySelector("section.page"),H=sec&&DOCX?Math.max(sz.h,sec.offsetHeight):sz.h;
+  const bounds=$("analysisPageWrap").getBoundingClientRect(),scale=Math.max(.01,Math.min(bounds.width/sz.w,bounds.height/H));
+  preview.style.setProperty("width",sz.w+"px","important");preview.style.setProperty("height",H+"px","important");
+  frame.style.width=sz.w*scale+"px";frame.style.height=H*scale+"px";preview.style.transform=`scale(${scale})`
 }
 function openAnalysisPage(number){
   const index=P.findIndex(page=>page.n===number);if(index<0){toast(tMsg("viewer.analysis.resolution.pageUnavailable"),6000);return}
-  const host=$("analysisPageHost"),root=host.shadowRoot||host.attachShadow({mode:"open"});host.lang=$("host").lang;
+  const host=$("analysisPageHost"),root=host.shadowRoot||host.attachShadow({mode:"open"});host.lang=$("host").lang;host.dataset.index=index;
   root.innerHTML=`<style>:host{all:initial;display:flex;align-items:center;justify-content:center;width:100%;height:100%}
 ${RCSS}
 :host{display:flex!important;align-items:center!important;justify-content:center!important;width:100%!important;height:100%!important;margin:0!important;padding:0!important;border:0!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;position:static!important;transform:none!important;overflow:hidden!important}
