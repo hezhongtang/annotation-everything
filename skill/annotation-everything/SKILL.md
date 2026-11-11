@@ -1,6 +1,6 @@
 ---
 name: annotation-everything
-description: 从原始材料生成逐页报告初稿、本机逐页审阅、批注、分析和改稿。生成走内置默认范式（需求澄清、材料读取登记、逐页 HTML、可选讲稿、核验记录、公开核验入口）；审阅将 HTML 报告与讲稿并排展示，收集引用、删除、改写、点或区域标注，接收提交后按批注同步修改报告和讲稿。用户说「帮我生成一份报告」「从这份材料做汇报」「审阅这份报告」「讲稿对照」「看我的批注」「按批注改」「交给你了」，或报告对照页打不开、批注未保存时使用。Use when the user asks to generate a report draft from raw material, review a slide-style HTML report with speaker notes, collect page annotations, apply annotations, revise an annotated report, receive a submission or analysis round, or recover a local review page. Triggers include “generate a report”, “turn this material into a briefing”, “review this report”, “set up a review”, “I finished annotating”, “apply my annotations”, and “the review page cannot save”.
+description: 从原始材料生成逐页报告初稿、本机逐页审阅、批注、分析和改稿。生成走内置默认范式（需求澄清、材料读取登记、逐页 HTML、可选讲稿、核验记录、公开核验入口）；审阅将 HTML 报告（或 Word/DOCX 文档，按原分页直接审阅）与讲稿并排展示，收集引用、删除、改写、点或区域标注，接收提交后按批注同步修改报告和讲稿。用户说「帮我生成一份报告」「从这份材料做汇报」「审阅这份报告」「审阅这份 Word / DOCX」「讲稿对照」「看我的批注」「按批注改」「交给你了」，或报告对照页打不开、批注未保存时使用。Use when the user asks to generate a report draft from raw material, review a slide-style HTML report or a Word (DOCX) document with speaker notes, collect page annotations, apply annotations, revise an annotated report, receive a submission or analysis round, or recover a local review page. Triggers include “generate a report”, “turn this material into a briefing”, “review this report”, “review this Word document”, “set up a review”, “I finished annotating”, “apply my annotations”, and “the review page cannot save”.
 license: Apache-2.0
 ---
 

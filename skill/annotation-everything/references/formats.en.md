@@ -23,7 +23,54 @@ Local images, fonts, audio, video, and CSS assets within the report directory ar
 
 Links to `#page-KEY` navigate within the review. For section navigation, links can use `data-range-start="KEY"` and `data-range-end="KEY"`. If `.toc-label` links exist, they define the main sections; nested ranges are omitted. Use `--sections` to override inference.
 
-Convert other source formats to this page structure first. Each section may contain a converted slide image. For PPTX, check declared fonts before conversion, compare PDF embedding afterwards, and inspect every page visually. `fc-list` (fontconfig) and `pdffonts` (poppler) provide evidence; missing tools, fallback fonts, script-specific fonts, outlines, and images can leave unknowns. A successful name comparison does not prove glyph-level rendering.
+Convert other source formats (except Word documents; see the next section) to this page structure first. Each section may contain a converted slide image. For PPTX, check declared fonts before conversion, compare PDF embedding afterwards, and inspect every page visually. `fc-list` (fontconfig) and `pdffonts` (poppler) provide evidence; missing tools, fallback fonts, script-specific fonts, outlines, and images can leave unknowns. A successful name comparison does not prove glyph-level rendering.
+
+## Word documents (DOCX)
+
+`--report` also accepts a `.docx` directly; no conversion to page-by-page HTML is needed:
+
+```bash
+python3 "$S/build_viewer.py" --report contract.docx --out contract-review --name "Purchase contract"
+```
+
+- **Pagination** follows the breaks Word saved (`w:lastRenderedPageBreak`), hard page breaks, page-break-before and section breaks. Page size, orientation and margins come from each section, so an A4 portrait page is shown at 794 × 1123 px instead of the landscape stage. Content longer than a page extends downward and is never cut off. The review page fits each page to the pane width and scrolls vertically.
+- **Pagination confidence** appears in the generator output, in `review.json` (`docx.pagination`) and in the review page banner:
+
+  | Value | Meaning | What to do |
+  |---|---|---|
+  | `verified` | Word's saved breaks match the page count in `docProps/app.xml` | Treat as Word's original pagination |
+  | `unverified` | Saved breaks exist but the page count differs or is missing | The pagination may be stale; save once in Word and rebuild |
+  | `estimated` | No saved breaks (python-docx and some online exports) | Split only at explicit breaks; pages are not Word page numbers. Save once in Word or WPS and rebuild |
+
+  There is no read-only page-image mode.
+- **Locators**: body paragraphs carry `data-docx-p` (document order of `w:p` in `document.xml`) and `data-docx-pid` (`w14:paraId`); runs carry `data-docx-r`. Page keys use the paraId of the first paragraph on the page (with `~c` when the page starts mid-paragraph), or a digest of the page's opening text when paraIds are missing. After pages are added or removed, rebuilt reviews move annotations with their page keys. Headers, footers, text boxes and repeated table headers carry no locators.
+- **Write-back**: this version cannot write changes back to the `.docx`. The banner and the quick-edit messages say that revisions must be made in Word.
+- **Not supported**: legacy binary `.doc`, encrypted documents and Strict Open XML stop with a specific error and a fix; they are never read as text. DOCX files are treated as untrusted: colors and font names are validated before they reach styles, XML parts are size-limited and DTDs are rejected.
+
+Support matrix (the generator lists structures that are approximated, placeholders, hidden or read-only, with their pages; the review page shows the same list under "Show limitations"):
+
+| Structure | Display | Paragraph write-back |
+|---|---|---|
+| Body text, highlighting, strikethrough, bold, italic, underline, size, color | As written | Yes |
+| Tables (column widths, merged cells, shading, borders, repeated headers) | Approximate: conditional table-style formatting is not reproduced; rows spanning pages are split at break markers | Yes |
+| List numbering | Approximate: computed with Word's rules, not selectable | Yes (numbers themselves are not written) |
+| Headers and footers | Approximate: per section, first-page and odd/even settings; PAGE / NUMPAGES / SECTIONPAGES use actual numbers | Not applicable |
+| Images | Approximate: inline at original size, each image embedded once; over 10 MB shows a placeholder | Not applicable |
+| Floating images and shapes | Approximate: shown at the anchor, without original position | Not applicable |
+| Tracked changes (insertions, deletions, moves, table row/cell changes) | Approximate: green underline / red strikethrough; neither accepted nor rejected | No |
+| Formatting changes | Approximate: current formatting only | No |
+| Word comments | Placeholder: `[W id]` marker with hover text and a tinted range; not imported as AE annotations | Yes |
+| Text boxes | Approximate: inline dashed box at the anchor | No (and not locatable) |
+| Fields (TOC, dates, cross-references) | Approximate: result saved by Word | No |
+| Footnotes and endnotes | Placeholder: reference marks only | Not applicable |
+| Equations | Approximate: plain text | No |
+| Content controls | Approximate: their content | No |
+| Hidden text | Hidden (as in Word by default) | No |
+| Embedded OLE objects, linked images, unsupported image formats | Placeholder | No |
+| Multiple columns | Approximate: single column | Not applicable |
+| Unrecognized structures | Hidden; the diagnostic lists element names | No |
+
+`review.json` records `format` as `{"report": "docx", "version": 1}`. When the version is newer than the installed copy supports, `--rebuild`, `serve.py` and `notes.py` stop with a clear error instead of reading the file as text. Older reviews have no `format` field and are treated as page-by-page HTML.
 
 ## Markdown speaker notes
 

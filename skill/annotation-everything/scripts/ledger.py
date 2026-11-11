@@ -277,6 +277,28 @@ def read_manifest(review_dir: Path) -> dict[str, Any]:
         return {}
 
 
+# 报告格式 → 本版本支持到的元数据版本。review.json 没有 format 时是逐页 HTML 报告（旧审阅都是这样）。
+REPORT_FORMATS = {"html": 0, "docx": 1}
+
+
+def report_format(manifest: dict[str, Any]) -> tuple[str, int]:
+    """审阅的报告格式与元数据版本：("html", 0) 或 ("docx", 1) 等。"""
+    f = manifest.get("format") if isinstance(manifest, dict) else None
+    if not isinstance(f, dict):
+        return "html", 0
+    kind = str(f.get("report") or "html")[:20]
+    v = f.get("version")
+    return kind, (v if isinstance(v, int) and not isinstance(v, bool) else 0)
+
+
+def unsupported_format(manifest: dict[str, Any]) -> str | None:
+    """本版本处理不了的报告格式（更高版本写下的 DOCX 元数据、未知格式）：返回给用户的说明，能处理返回 None。"""
+    kind, version = report_format(manifest)
+    if kind in REPORT_FORMATS and version <= REPORT_FORMATS[kind]:
+        return None
+    return T("ledger.err.format", kind=kind, version=version)
+
+
 def copied_from(review_dir: Path, manifest: dict[str, Any] | None = None, *,
                 origin: Path | None = None) -> Path | None:
     """这个目录是从哪份审阅复制来的：候选原目录还在、不是它自己、且那份里还是同一个审阅标识。

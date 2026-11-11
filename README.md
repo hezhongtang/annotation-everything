@@ -36,6 +36,7 @@ This README follows `main`; automatic updates install only stable release tags. 
 ### Annotate: point to the change, revise both documents
 
 - **Comment directly on the material.** Read report pages and speaker notes side by side. Select text to quote, delete or rewrite it, or place pins and regions on the report. Matching sentences can be marked for changes on both sides.
+- **Review Word documents directly.** A `.docx` needs no HTML conversion: the review page keeps the pagination and page orientation Word saved. Pagination confidence and approximated structures are shown on the page and in the CLI; this version cannot write revisions back into the `.docx`.
 - **Hand a batch to the agent for revision.** Annotations save automatically. Bind a receiving session and explicitly submit a batch; the agent revises both documents, rebuilds the page and records the result for each annotation.
 - **Check and review as needed.** Request a full consistency check for figures, metric definitions and wording. Use a draft followed by review, or stop after the draft and let the reviewer decide when to finalize.
 

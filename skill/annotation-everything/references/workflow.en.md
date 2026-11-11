@@ -42,6 +42,8 @@ Name the directory after the material, such as `q3-review/`. The report uses one
 
 For PPTX inputs, run `check_pptx_fonts.py input.pptx --locale en` before conversion and add `--pdf converted.pdf` afterwards. Exit codes are 0 for no detected difference, 1 for discrepancies or unknowns, and 2 for input or tool errors. Verify wrapping, spacing, and overlap on every converted page; matching font names do not prove correct glyph rendering.
 
+`--report` also accepts a Word document (`.docx`) directly: the review page is generated with the pagination, page size, and orientation Word saved — no HTML conversion step. The generator prints the **pagination confidence** (verified / unverified / estimated) and records it in the page banner; estimated page numbers are not Word page numbers, and the page suggests saving the document once in Word or WPS and rebuilding. Structure and write-back limits, including the support matrix, are in the [format reference](formats.en.md) under "Word documents (DOCX)." **Read the pagination and limits warnings before delivery.**
+
 Rebuilding retains identity and annotations and remaps pages by stable keys. A copied review gets a new identity. An annotation whose page disappeared is marked orphaned; confirm its destination. Only the report and notes source files enter batch snapshots; upstream renderer changes need their own source-control review.
 
 ## 3. Skills and standing requirements
@@ -77,6 +79,8 @@ After checking the drafts, the reviewer can use **Finalize all (N)** above the a
 Without a service, open `index.html` directly. Annotations persist in browser storage, and the reviewer can copy or download them. File mode does not perform a live submission; use the import path in section 7.
 
 ## 5. Read the accepted batch and edit sources
+
+**DOCX reports cannot be written back in this version**: when the source file is a `.docx`, do not modify it and do not produce a replacement HTML; the page banner likewise states that revisions must be made in Word. For each annotation, write the suggested change (which page, which passage, what to change it to; the quoted text remains the most reliable locator) in your handling notes, and let the user decide which annotations are marked resolved before you run `resolve`. Quick edits (delete / replace) are recorded the same way and are not written back. Pagination confidence and structure limits are in the [format reference](formats.en.md) under "Word documents (DOCX)."
 
 For an analysis round, follow the [analysis guide](analysis.en.md) instead of the revision steps below. Analysis proposes questions and explanations; only annotations later confirmed by the reviewer enter revision.
 

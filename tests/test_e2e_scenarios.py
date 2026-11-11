@@ -56,6 +56,7 @@ FULL_ORDER = (
     "file-mode",
     "review-overview",
     "css-fidelity",
+    "docx-review",
     "server-mode",
     "poll-repaint",
 )

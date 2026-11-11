@@ -1197,6 +1197,10 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         print(T("serve.serve.badNotes", detail=e), file=sys.stderr)
         return 2
     m = ledger.read_manifest(review_dir)   # 读不了或不是 JSON 对象都返回 {}：不提示复制
+    problem = ledger.unsupported_format(m)
+    if problem:   # 更高版本的报告格式（如新版 DOCX 元数据）：不启动，免得旧服务读写它
+        print(problem, file=sys.stderr)
+        return 2
     if overview_start is not None:
         try:
             directory, _entry = overview_start_target(overview_start, T)

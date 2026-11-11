@@ -3568,11 +3568,12 @@ class BuildErrorContractTests(unittest.TestCase):
                 self.assertIn(message, r.stderr)
 
     def test_capture_points_only_catch_build_error(self):
-        """6 个捕获点只捕 BuildError；notes 导入命令捕自己 read_import 的那一处不在此列。"""
+        """7 个捕获点只捕 BuildError（对应句提取的报告侧与讲稿侧分开容错，各算一处）；
+        notes 导入命令捕自己 read_import 的那一处不在此列。"""
         notes = _except_handlers(SCRIPTS / "notes.py")
         system_exits = [reads for names, reads in notes if "SystemExit" in names]
         self.assertEqual(system_exits, [True], "只剩导入命令捕自己的 SystemExit 这一处")
-        self.assertEqual(sum("BuildError" in names for names, _r in notes), 5)
+        self.assertEqual(sum("BuildError" in names for names, _r in notes), 6)
         check = _except_handlers(SCRIPTS / "report_check.py")
         self.assertEqual([names for names, _r in check if "SystemExit" in names], [])
         self.assertEqual(sum("BuildError" in names for names, _r in check), 1)

@@ -625,6 +625,9 @@ def resolve_sources(review_dir: Path, manifest: dict | None = None, *, locale: s
     """按 review.json 找源文件：先用相对审阅目录的路径（目录树整体复制后仍指向副本），再用绝对路径。"""
     import ledger
     m = manifest if manifest is not None else ledger.read_manifest(review_dir)
+    problem = ledger.unsupported_format(m)
+    if problem:   # 更高版本写下的报告格式：明确拒绝，不按普通文本读
+        raise BuildError(problem)
     if "sourcesRel" in m:  # 0.1 版格式：sources 是绝对路径
         rel, absolute = m.get("sourcesRel") or {}, m.get("sources") or {}
     else:
@@ -638,6 +641,38 @@ def resolve_sources(review_dir: Path, manifest: dict | None = None, *, locale: s
             tried = "、".join(str(c) for c in cand)
             raise BuildError(diag(locale, "build.source.missing", kind=diag(locale, "cli.show.source." + k), paths=tried))
         out[k] = hit
+    return out
+
+
+def docx_parts(report: Path, locale: str | None) -> tuple[str, str, list[dict], dict, str]:
+    """DOCX 报告 → (标题, 样式, 逐页 section, DOCX 元数据, 文档语言)。读不了时报明确的原因，不按文本读。"""
+    import docx_review
+    try:
+        r = docx_review.render(report)
+    except docx_review.DocxError as exc:
+        raise BuildError(diag(locale, f"build.docx.{exc.code}", path=report, detail=exc.detail)) from None
+    sects = [{"n": pg["n"], "key": pg["key"], "stable": True, "html": pg["html"], "title": pg["title"],
+              "w": pg["w"], "h": pg["h"], "orient": pg["orient"], "label": pg["label"]} for pg in r["pages"]]
+    meta = {"pagination": r["pagination"], "appPages": r["appPages"], "application": r["application"],
+            "pages": len(sects), "diagnostics": r["diagnostics"]}
+    return r["title"], shadow_css(r["css"]), sects, meta, r["lang"]
+
+
+def docx_warnings(meta: dict, locale: str | None) -> list[str]:
+    """DOCX 的分页可信度与支持矩阵诊断 → 当前语言的提示（只列有限制的结构，正常显示的不刷屏）。"""
+    import docx_review
+    out = []
+    if meta["pagination"] != "verified":
+        out.append(diag(locale, f"build.docx.pagination.{meta['pagination']}", pages=meta["pages"],
+                        app=meta.get("appPages") or "?", application=meta.get("application") or "?"))
+    sep = ", " if ui_locale(locale) == "en" else "、"
+    for d in meta["diagnostics"]:
+        if d["code"] in docx_review.INFO_KINDS or d["code"] == "estimatedPages":
+            continue
+        pages = sep.join(str(x) for x in d["pages"][:8]) + ("…" if len(d["pages"]) > 8 else "")
+        extra = (" · " + sep.join(d["examples"][:3])) if d["code"] in ("unknown", "numbering", "object") and d["examples"] else ""
+        out.append(diag(locale, "build.docx.diagLine", text=diag(locale, f"docx.diag.{d['code']}"), count=d["count"],
+                        pages=pages or "-") + extra)
     return out
 
 
@@ -663,10 +698,23 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     # 生成侧的提示按本次选择的语言写；没选就是中文（旧审阅、旧调用）。auto 在这里定成具体语言
     warn_catalog = i18n.catalog(
         i18n.resolve_locale(locale_choice, system_languages=i18n.system_languages()))
-    doc = report.read_text(encoding="utf-8")
     assets = Assets(asset_root or report.resolve().parent, locale=locale_choice)
     assets.root_fs = None
-    rtitle, rcss, sects = report_parts(doc, report, assets)
+    import docx_review
+    docx_meta: dict | None = None
+    docx_lang = ""
+    if docx_review.is_word_like(report):
+        # Word 文档直接渲染：不按 UTF-8 文本读，也不过 HTML 资源内联（正文里的 url(...) 只是文字）
+        doc = ""
+        rtitle, rcss, sects, docx_meta, docx_lang = docx_parts(report, locale_choice)
+        for w in docx_warnings(docx_meta, locale_choice):
+            assets.warn(w)
+    else:
+        try:
+            doc = report.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raise BuildError(diag(locale_choice, "build.report.notText", path=report)) from None
+        rtitle, rcss, sects = report_parts(doc, report, assets)
     if not sects:
         raise SystemExit(diag(locale_choice, "build.report.noPages", path=report))
     h1, intro, spages = ("", "", [])
@@ -700,11 +748,16 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     pages = []
     for s in sects:
         p = by_n.get(s["n"]) or {"n": s["n"], "title": esc(s["title"]), "dur": "", "sec": 0, "talk": "", "next": "", "qa": []}
-        pages.append({**p, "key": s["key"], "stable": s["stable"]})
+        pg = {**p, "key": s["key"], "stable": s["stable"]}
+        if docx_meta is not None:   # 每页自己的尺寸与 Word 页码：舞台按它显示，不套 1280×720
+            pg.update(w=s["w"], h=s["h"], label=s["label"], orient=s["orient"])
+        pages.append(pg)
     if no_sections:
         sections: list[list] = []
     elif sections_arg:
         sections = parse_sections_arg(sections_arg, locale=locale_choice)
+    elif docx_meta is not None:
+        sections = []
     else:
         sections = infer_sections(doc, sects)
     final_title = title or rtitle or h1 or report.stem
@@ -746,19 +799,21 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     ns = file_label(review_name, rid)
     image_pages = sum(bool(re.search(r"<img\b", s["html"], re.I)) for s in sects)
     skill_context = {"report": report.name, "script": script.name if script else "",
-                     "kind": "图片 幻灯片" if image_pages >= (len(sects) + 1) // 2 else "HTML 报告"}
+                     "kind": "Word 文档" if docx_meta is not None else
+                     "图片 幻灯片" if image_pages >= (len(sects) + 1) // 2 else "HTML 报告"}
     import notes_store
     import i18n
     catalogs = {tag: i18n.catalog(tag)["messages"] for tag in i18n.SUPPORTED}
     report_html = re.search(r"<html\b[^>]*>", doc, re.I)
-    report_language = attrs_of(report_html.group()).get("lang", "") if report_html else ""
+    report_language = attrs_of(report_html.group()).get("lang", "") if report_html else docx_lang
     values = {"TITLE": html.escape(final_title), "INTRO": intro, "PAGES": _js(pages), "SECTIONS": _js(sections),
               "NS": _js(ns), "NAME": _js(review_name), "RID": _js(rid), "RCSS": _js(rcss), "SECT": _js([s["html"] for s in sects]),
               "ROOTFS": assets.root_fs or "100%", "SKILLS": _js(read_skills(out)), "ALWAYS": _js(read_always(out)),
               "SKILL_CONTEXT": _js(skill_context), "FULL_CHECK_COMPAT": _js("【本批提交选项】" + notes_store.FULL_CHECK_TEXT),
-              "CATALOGS": _js(catalogs), "LOCALE": _js(locale_choice), "REPORT_LANG": _js(report_language)}
+              "CATALOGS": _js(catalogs), "LOCALE": _js(locale_choice), "REPORT_LANG": _js(report_language),
+              "DOCX": _js(docx_view(docx_meta))}
     # 一次性替换，避免内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
-    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG)__", lambda m: values[m.group(1)],
+    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX)__", lambda m: values[m.group(1)],
                        TEMPLATE.read_text(encoding="utf-8"))
     page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
     write_private(out / "index.html", page_html)
@@ -776,8 +831,13 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
                   "noScanSkills": no_scan_skills},
         "sections": sections,
         "pages": [{"n": p["n"], "key": p["key"], "stable": p["stable"], "title": html.unescape(p["title"]),
-                   "section": next((s[0] for s in sections if s[1] <= p["n"] <= s[2]), "")} for p in pages],
+                   "section": next((s[0] for s in sections if s[1] <= p["n"] <= s[2]), ""),
+                   **({"w": p["w"], "h": p["h"], "orient": p["orient"], "label": p["label"]} if "w" in p else {})}
+                  for p in pages],
     }
+    if docx_meta is not None:
+        manifest["format"] = {"report": "docx", "version": docx_review.FORMAT_VERSION}
+        manifest["docx"] = docx_meta
     if locale_choice is not None:
         manifest["locale"] = locale_choice
         manifest["build"]["locale"] = locale_choice
@@ -807,7 +867,18 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         assets.warn(diag(locale_choice, "build.asset.total", size=assets.total // 1024 // 1024))
     return {"pages": len(pages), "sections": len(sections), "seconds": sum(p["sec"] for p in pages),
             "title": final_title, "name": review_name, "warnings": assets.warnings, "reviewId": rid, "remap": remap,
-            "locale": locale_choice}
+            "locale": locale_choice, "docx": docx_meta}
+
+
+def docx_view(meta: dict | None) -> dict | None:
+    """对照页用的 DOCX 摘要：分页可信度与有限制的结构（文案由页面按当前语言取词典）。"""
+    if meta is None:
+        return None
+    import docx_review
+    return {"v": docx_review.FORMAT_VERSION, "pagination": meta["pagination"], "appPages": meta.get("appPages"),
+            "application": meta.get("application") or "",
+            "diags": [{k: d[k] for k in ("code", "count", "pages", "display", "writeback")}
+                      for d in meta["diagnostics"] if d["code"] not in docx_review.INFO_KINDS]}
 
 
 def register_review(rid: str, out: Path, review_name: str, assets: Assets) -> None:
@@ -894,7 +965,9 @@ def main(argv: list[str] | None = None) -> int:
     print(t("build.cli.success", path=a.out / "index.html", pages=r["pages"], sections=r["sections"])
           + (t("build.cli.duration", minutes=mins) if r["seconds"] else "")
           + "\n" + t("build.cli.identity", name=r["name"], id=r["reviewId"])
-          + ("\n" + t("build.cli.language", locale=r["locale"]) if r.get("locale") else ""))
+          + ("\n" + t("build.cli.language", locale=r["locale"]) if r.get("locale") else "")
+          + ("\n" + t("build.cli.docx", pagination=t(f"docx.pagination.{r['docx']['pagination']}"))
+             if r.get("docx") else ""))
     return 0
 
 

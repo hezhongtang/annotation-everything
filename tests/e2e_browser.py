@@ -2961,6 +2961,90 @@ def css_fidelity_checks(browser, tmp: Path):
 
 
 
+def docx_review_checks(browser, tmp: Path):
+    """场景 docx-review：DOCX 直接审阅（详见 e2e_scenarios 注册表）。
+
+    只用现场合成的样例文档（仓库不放真实材料）：4 页 A4 纵向 + 1 页横向，
+    覆盖 #135 的浏览器验收——原分页显示、verified 横幅与限制清单、正文可拖选、
+    点标注与快捷删除在 DOCX 页上可用、选中原生修订时提示不能自动回写。
+    """
+    sys.path.insert(0, str(ROOT / "fixtures" / "docx"))
+    import make_sample as ms
+    d = tmp / "docx_review"
+    d.mkdir()
+    build(d, ms.build_docx(d / "sample.docx"), None)
+    meta = json.loads((d / "review.json").read_text(encoding="utf-8"))
+    ok(meta["format"] == {"report": "docx", "version": 1}, "review.json 标记 DOCX 格式版本 1")
+    ok(meta["docx"]["pagination"] == "verified" and len(meta["pages"]) == 5,
+       "分页可信度 verified，共 5 页")
+    ok(meta["pages"][0]["w"] < meta["pages"][0]["h"] and meta["pages"][4]["w"] > meta["pages"][4]["h"],
+       "第 1 页纵向、第 5 页横向的页面尺寸进了 review.json")
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.goto((d / "index.html").as_uri())
+    banner = page.inner_text("#docxBanner")
+    ok("按 Word 保存的分页显示" in banner and "与文档记录的 5 页一致" in banner,
+       "横幅标明按 Word 分页显示且与文档记录一致（verified）")
+    ok("自动写回 .docx" in banner, "横幅提示这一版不能写回 .docx")
+    ok(page.locator("#jump option").count() == 5, "页码选择器列出 5 页")
+    first = page.locator("#host section.page").first.bounding_box()
+    ok(first and first["width"] < first["height"],
+       "A4 纵向页按原比例显示，无横向拉伸（%.0f×%.0f）" % (first["width"], first["height"]))
+    stage_text = page.evaluate(f"() => {STAGE}.textContent")
+    ok("第 1 页 / 共 5 页" in stage_text and "合成示例 · 仅供测试" in stage_text,
+       "页脚 PAGE / NUMPAGES 按实际页码，页眉按页显示")
+    ok("关键条款已用黄色高亮" in stage_text and "删除线文字" in stage_text, "高亮与删除线的文字可辨认")
+    page.click("#docxDetails summary")
+    limits = page.inner_text("#docxList")
+    ok(all(word in limits for word in ("原生修订", "Word 批注", "文本框", "域")),
+       "限制清单列出原生修订、Word 批注、文本框与域")
+    drag_select(page, page.locator("#host section.page [data-docx-p]").first)
+    ok(page.is_visible("#selbar"), "DOCX 正文文字可选择，拖选弹出操作条")
+    page.click("#selbar [data-sel='delete']")
+    ok(wait_toast(page, "已记下：删除这段", condition="普通段快捷删除的提示出现")
+       and "改动需在 Word 中完成" in page.inner_text("#toast"),
+       "普通段快捷删除照常记录，提示改稿需在 Word 中完成")
+    go_page(page, 3)
+    page3 = page.evaluate(f"() => {STAGE}.textContent")
+    ok("货到付款" in page3 and "验收合格后三十日内付款" in page3, "原生修订的删除与插入文字都保留")
+    revision = page.locator("#host [data-docx-ro*='revision']").first
+    revision.scroll_into_view_if_needed()   # 修订段在续表之下，先滚进视口再拖选
+    drag_select(page, revision)
+    ok(page.is_visible("#selbar"), "修订段同样可以选择")
+    page.click("#selbar [data-sel='delete']")
+    ok(wait_toast(page, "不能自动回写", condition="只读结构的提示出现")
+       and "原生修订" in page.inner_text("#toast"),
+       "选中原生修订时快捷删除提示涉及原生修订、不能自动回写")
+    notes = page.evaluate("() => JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")
+    dels = [n for n in notes if (n.get("edit") or {}).get("op") == "delete"]
+    ok(len(dels) == 2 and all(n.get("quote") for n in dels),
+       "两条快捷删除都记成批注并带选中文本（file:// 存本地存储）")
+    add_note(page, "DOCX 页点标注", pin=(0.5, 0.1))
+    page.click('[data-act="pin"]')   # 框选区域：进入标注模式后按住拖出一块（拖出 6px 以上才算框）
+    box = page.locator("#slide").bounding_box()
+    page.mouse.move(box["x"] + box["width"] * 0.25, box["y"] + box["height"] * 0.18)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] * 0.55, box["y"] + box["height"] * 0.28, steps=4)
+    page.mouse.up()
+    page.fill("#ntext", "DOCX 页框选区域")
+    page.click("[data-act='add']")
+    ok(wait_until(lambda: "DOCX 页框选区域" in page.inner_text("#nlist"), page, 5,
+                  condition="区域标注卡片出现在列表里")
+       and page.locator("#host .ae-region").count() >= 1,
+       "框选区域标注落在 DOCX 页上并记成批注")
+    page.reload()
+    texts = page.inner_text("#nlist")
+    ok("DOCX 页点标注" in texts and "DOCX 页框选区域" in texts,
+       "file:// 刷新后 DOCX 页上的点标注与框选区域仍在")
+    go_page(page, 5)
+    fifth = page.locator("#host section.page").first.bounding_box()
+    ok(fifth and fifth["width"] > fifth["height"],
+       "横向附件页按原比例显示（%.0f×%.0f）" % (fifth["width"], fifth["height"]))
+    ctx.close()
+
+
+
+
 def generated_draft_checks(browser, tmp: Path):
     """场景 generated-draft-loop：默认范式初稿闭环（详见 e2e_scenarios 注册表）。
 
@@ -5308,6 +5392,7 @@ SCENARIO_RUNNERS = {
     "file-mode": file_mode_checks,
     "review-overview": review_overview_checks,
     "css-fidelity": css_fidelity_checks,
+    "docx-review": docx_review_checks,
     "server-mode": server_mode_checks,
     "poll-repaint": poll_repaint_checks,
 }
