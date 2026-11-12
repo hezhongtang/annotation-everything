@@ -240,5 +240,113 @@ class CompatibilityTests(ControlledRenderMixin, unittest.TestCase):
         self.assertIn("pptxBlocked", page, "旧服务写入阻断逻辑进入页面")
 
 
+class RenderPipelineTests(unittest.TestCase):
+    """真实工具管线的错误路径：伪造 soffice / pdftoppm 脚本注入 PATH（先例 test_pptx_fonts）。
+
+    不依赖本机是否装了 LibreOffice；成功路径的集成验证留待 PR review 与 #153 的真实渲染。
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ae-pptx-render-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.pptx = mp.build_sample(self.root / "deck.pptx")
+        self.workdir = self.root / "work"
+        self.workdir.mkdir()
+
+    def tool(self, name: str, script: str):
+        path = self.bin / name
+        path.write_text("#!/bin/sh\n" + script + "\n", encoding="utf-8")
+        path.chmod(0o755)
+
+    def isolated(self):
+        """PATH 只保留伪造 bin 与系统 defpath（cp 等可用）；LibreOffice 的候选安装路径一并屏蔽。"""
+        patcher = mock.patch.dict(os.environ, {"PATH": str(self.bin) + os.pathsep + os.defpath})
+        candidates = mock.patch.object(pp, "SOFFICE_CANDIDATES", ())
+        patcher.start()
+        candidates.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(candidates.stop)
+
+    def fake_soffice(self):
+        """伪造 soffice：按 --outdir 参数（第 6 个）把合成 PDF 复制到输出目录。"""
+        self.tool("soffice", 'cp "%s" "$6/deck.pdf"' % self.fake_pdf())
+
+    def fake_pdf(self, pages: int = 2) -> Path:
+        objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                   b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 960 540] >>"]
+        raw = bytearray(b"%PDF-1.4\n")
+        for number, obj in enumerate(objects, 1):
+            raw.extend(f"{number} 0 obj\n".encode() + obj + b"\nendobj\n")
+        raw.extend(b"trailer\n<< /Size 4 /Root 1 0 R >>\n%%EOF\n")
+        pdf = self.root / f"synthetic-{pages}.pdf"
+        pdf.write_bytes(bytes(raw))
+        return pdf
+
+    def test_missing_tools_have_actionable_codes(self):
+        self.isolated()
+        for code in ("noRenderer", "noRasterizer"):
+            with self.subTest(code=code):
+                if code == "noRasterizer":
+                    self.fake_soffice()
+                with self.assertRaises(pp.PptxReportError) as caught:
+                    pp.render_slides(self.pptx, self.workdir)
+                self.assertEqual(caught.exception.code, code)
+
+    def test_conversion_failure_and_empty_output_are_distinct(self):
+        self.isolated()
+        self.tool("soffice", "echo boom >&2; exit 1")
+        with self.assertRaises(pp.PptxReportError) as caught:
+            pp.render_slides(self.pptx, self.workdir)
+        self.assertEqual(caught.exception.code, "convertFailed")
+        self.assertIn("boom", caught.exception.detail)
+
+        self.tool("soffice", "exit 0")   # 成功但不产出 PDF：同样按转换失败报
+        with self.assertRaises(pp.PptxReportError) as caught:
+            pp.render_slides(self.pptx, self.workdir)
+        self.assertEqual(caught.exception.code, "convertFailed")
+
+        self.fake_soffice()
+        self.tool("pdftoppm", "exit 0")
+        with self.assertRaises(pp.PptxReportError) as caught:
+            pp.render_slides(self.pptx, self.workdir)
+        self.assertEqual(caught.exception.code, "emptyOutput", "pdftoppm 没产出页面图像时报空输出")
+
+    def test_raster_failure_reports_tool_stderr(self):
+        self.isolated()
+        self.fake_soffice()
+        self.tool("pdftoppm", "echo raster-boom >&2; exit 3")
+        with self.assertRaises(pp.PptxReportError) as caught:
+            pp.render_slides(self.pptx, self.workdir)
+        self.assertEqual(caught.exception.code, "rasterFailed")
+        self.assertIn("raster-boom", caught.exception.detail)
+
+    def test_timeout_is_reported_not_hung(self):
+        self.isolated()
+        self.tool("soffice", "sleep 5")
+        with mock.patch.object(pp, "SOFFICE_TIMEOUT", 0.3):
+            with self.assertRaises(pp.PptxReportError) as caught:
+                pp.render_slides(self.pptx, self.workdir)
+        self.assertEqual(caught.exception.code, "timeout")
+
+    def test_pipeline_returns_rasterized_pages_in_order(self):
+        self.isolated()
+        self.fake_soffice()
+        self.tool("pdftoppm", 'out=""; n=1; for a in "$@"; do case "$a" in -*) ;; *) out="$a";; esac; done; '
+                              'prefix="${out%.pdf}"; while [ $n -le 2 ]; do printf PDFPAGE > "$prefix-$n.png"; n=$((n+1)); done')
+        images = pp.render_slides(self.pptx, self.workdir)
+        self.assertEqual(images, [b"PDFPAGE", b"PDFPAGE"])
+
+    def test_page_count_mismatch_stops_the_build(self):
+        images = [PNG_1PX]   # 只有 1 张渲染图，源里有 2 张幻灯片
+        with mock.patch.object(pp, "render_slides", lambda p, w: images), \
+                mock.patch.object(pp, "font_evidence", lambda p, d: None):
+            with self.assertRaises(pp.PptxReportError) as caught:
+                pp.parts(self.pptx)
+        self.assertEqual(caught.exception.code, "pageCount")
+
+
 if __name__ == "__main__":
     unittest.main()
