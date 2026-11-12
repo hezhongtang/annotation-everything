@@ -40,7 +40,7 @@ This README follows `main`; automatic updates install only stable release tags. 
 - **Hand a batch to the agent for revision.** Annotations save automatically. Bind a receiving session and explicitly submit a batch; the agent revises both documents, rebuilds the page and records the result for each annotation.
 - **Check and review as needed.** Request a full consistency check for figures, metric definitions and wording. Use a draft followed by review, or stop after the draft and let the reviewer decide when to finalize.
 
-<p align="center"><img src="docs/assets/receiver.en.png" alt="Synthetic annotation page: report and speaker notes, text and position annotations, bottom composer and receiving session status" width="92%"><br><sub>Attach changes to their text and position, then hand a batch to the agent. All material shown is synthetic.</sub></p>
+<p align="center"><img src="docs/assets/receiver.en.png" alt="Synthetic review page showing the report, speaker notes, annotation, receiving session and top-bar Stop review button" width="92%"><br><sub>Attach changes to their text and position, then hand a batch to the agent. All material shown is synthetic.</sub></p>
 
 ### Analyze: work through the question before revising
 
@@ -215,7 +215,7 @@ In service mode, rebuilding the review page shows a "Review page updated" banner
 
 ### Review overview and archiving
 
-<p align="center"><img src="docs/assets/overview.en.png" alt="Synthetic review overview: status groups and a detail pane with the report summary, purpose, audience, core questions and start action" width="92%"></p>
+<p align="center"><img src="docs/assets/overview.en.png" alt="Synthetic review overview with a stop button for the selected review and a stop-all button for three running reviews in this workspace" width="92%"></p>
 
 Choose "Review overview" on any running review page, or open `/#overview` at its address. The default scope is "This workspace"; switch to "All on this machine" to see other registered reviews. The workspace is the review's git repository root, or its parent directory when it is outside a git repository. Paths are relative; other workspace paths start with `~` or show only the review name. If no review is running, start one with `serve.py <review-id>` first.
 
@@ -323,7 +323,7 @@ Before an agent runs a repair with `--purge`, `--forget-stale`, `--stop-orphans`
 | No cross-site forged writes | Write requests must come from the same origin as the page and use a JSON content type |
 | Only what is needed is exposed | Only `index.html` and the `/api/*` endpoints are served; no other file in the review directory is reachable through the server |
 | No third-party Python packages | The runtime uses the Python standard library only; the font check calls the system tools `fc-list` and `pdffonts` and explains how to install them if they are missing |
-| Network access | The review server makes no network requests; the updater only contacts the installation's Git remote, sending no review data or telemetry. External resources in reports are not loaded; local images and fonts are embedded in the page |
+| Network access | Review servers coordinate through the local loopback interface. The updater contacts the installation's Git remote without sending review data or telemetry. The page embeds local images and fonts and blocks external report resources |
 | Your data stays local | Annotations and the review page live in the review directory you choose; the local review ledger `~/.annotation-everything/` records only review IDs, directory paths and ports |
 
 Full validation during PR review includes `serve.py check` to verify these constraints; server security checks are deferred to that stage during implementation.
