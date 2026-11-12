@@ -902,6 +902,10 @@ def _main_locked(argv: list[str] | None = None) -> int:
     def authorize():
         wakeup.assert_claim_owner(d, getattr(a, "harness", None), getattr(a, "session", None))
 
+    def authorize_new_work():
+        review_stop.assert_accepts_work(d, manifest=manifest)
+        authorize()
+
     if a.cmd in ("resolve", "reopen", "review", "done"):
         try:
             authorize()
@@ -1050,8 +1054,10 @@ def _main_locked(argv: list[str] | None = None) -> int:
                               "switch": analysis_store.switch_line, "close": analysis_store.close_analysis,
                               "reopen": analysis_store.reopen_analysis}
                 args = ([a.checkpoint] if a.action in ("seal", "fork") else [a.line] if a.action == "switch" else [])
-                state = operations[a.action](d, a.analysis, *args, by=a.by, authorize=authorize)
-                if a.action in ("fork", "reopen"):
+                submits = a.action in ("fork", "reopen")
+                state = operations[a.action](d, a.analysis, *args, by=a.by,
+                                             authorize=authorize_new_work if submits else authorize)
+                if submits:
                     notify_analysis(d, state)
         except store.NotFound:
             print(t("cli.analysis.protect.missing"), file=sys.stderr)
@@ -1072,13 +1078,14 @@ def _main_locked(argv: list[str] | None = None) -> int:
     if a.cmd in ("analysis-redecide", "analysis-note", "analysis-refute"):
         try:
             if a.cmd == "analysis-refute":
-                state = analysis_store.refute_assumption(d, a.analysis, a.assumption, by=a.by, authorize=authorize)
+                state = analysis_store.refute_assumption(d, a.analysis, a.assumption, by=a.by, authorize=authorize_new_work)
             elif a.cmd == "analysis-redecide":
-                state = analysis_store.redecide(d, a.analysis, a.node, a.option, by=a.by, authorize=authorize)
+                state = analysis_store.redecide(d, a.analysis, a.node, a.option, by=a.by, authorize=authorize_new_work)
             else:
                 operation = {"update": analysis_store.request_update, "keep": analysis_store.keep_note,
                              "delete": analysis_store.delete_note}[a.action]
-                operation(d, a.analysis, a.note_id, by=a.by, authorize=authorize)
+                operation(d, a.analysis, a.note_id, by=a.by,
+                          authorize=authorize_new_work if a.action == "update" else authorize)
                 state = analysis_store.load(d, a.analysis)
             if a.cmd in ("analysis-redecide", "analysis-refute") or a.action == "update":
                 notify_analysis(d, state)
@@ -1132,7 +1139,8 @@ def _main_locked(argv: list[str] | None = None) -> int:
                                               note=a.note, by=a.by, assumptions=payload.get("assumptions"),
                                               facts=payload.get("facts"), updates=payload.get("updates"),
                                               dead_ends=payload.get("deadEnds"),
-                                              authorize=authorize)
+                                              authorize=authorize,
+                                              authorize_refresh=lambda: review_stop.assert_accepts_work(d, manifest=manifest))
         except store.NotFound:
             print(t("cli.analysis.noRound", reason=f"round#{a.round}"), file=sys.stderr)
             return 1
@@ -1781,7 +1789,11 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     # 有效期只对带绑定的标记有意义（只有它会按有效期重写）；没有绑定的标记格式不变
     first = {**wait_info, "expiresAt": mark_expires} if claim and binding else wait_info
     try:
-        write_private(mark, json.dumps(first) + "\n")
+        with store.locked(d):
+            if not review_stop.accepts_work(d, manifest=manifest):
+                print(t("cli.hand.reviewStopped"), file=sys.stderr)
+                return 4
+            write_private(mark, json.dumps(first) + "\n")
     except OSError:
         mark = None
 

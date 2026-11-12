@@ -1008,11 +1008,11 @@ const clip=(s,n)=>Array.from(String(s)).slice(0,n).join("");            // 按�
 function wellFormed(v){if(typeof v==="string")return v.toWellFormed?v.toWellFormed():v;
   if(Array.isArray(v))return v.map(wellFormed);
   if(v&&typeof v==="object"){const o={};for(const k of Object.keys(v))o[k]=wellFormed(v[k]);return o}return v}
-async function api(method,path,body){
+async function api(method,path,body,timeout=REQ_TIMEOUT){
   // 统一拦住队列外的定稿、复核和分析写入；停止服务是升级恢复入口，仍可使用。
   if(method!=="GET"&&path!=="/api/server/stop"&&docxBlocked())
     throw Object.assign(new Error(tMsg("viewer.docx.oldService")),{status:409,code:"docx-required"});
-  const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),REQ_TIMEOUT);
+  const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),timeout);
   const opt={method,cache:"no-store",headers:{"X-AE-Review":RID},signal:ctl.signal};
   if(body!==undefined){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(wellFormed(body))}
   let r;
@@ -2004,7 +2004,8 @@ async function stopLocalService(){
     if(pend.get().length||failed.get().length||saveFailures!==rejectedBefore
         ||LS.get(K.rejected,null)!==sharedRejectedBefore||mode!=="server"){
       toast(tMsg("viewer.batch.stopUnsaved"),8000);return}
-    const r=await api("POST","/api/server/stop",{});
+    const timeout=10;
+    const r=await api("POST","/api/server/stop",{timeout},(timeout+2)*1000);
     if(r.reviewId!==RID)throw new Error(tMsg("viewer.error.format"));
     if(typeof r.state!=="string"){const e=new Error(tMsg("viewer.error.format"));e.code="no-api";e.status=200;throw e}
     if(r.state==="incomplete"||r.stopping!==true){

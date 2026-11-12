@@ -464,6 +464,8 @@
     "serve.err.reviewMismatch": "The page belongs to another review (review ids differ)",
     "serve.err.badStopTimeout": "The stop timeout must be between 0 and 60 seconds",
     "serve.err.reviewStopped": "This review is stopped or stopping; start it explicitly before submitting new work",
+    "serve.err.reviewLifecycleBusy": "This review is already starting or stopping. Try again when that operation finishes.",
+    "serve.err.resumeFailed": "Could not reopen the running review service. Check its status and try starting it again.",
     "serve.err.fullCheck": "fullCheck must be a boolean",
     "serve.err.userMessage": "userMessage must be a string",
     "serve.err.noAlways": "Missing always (send an empty list to clear it)",

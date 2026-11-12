@@ -1,6 +1,7 @@
 """Persistent, review-scoped stop coordination."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -15,8 +16,29 @@ import wakeup
 
 STATE_FILE = ".annotation-stop.json"
 LOCK_FILE = ".annotation-stop.lock"
+OPERATION_LOCK = ".annotation-stop-operation.lock"
 SCHEMA = 1
 COMPONENTS = ("gate", "save", "waiters", "hooks", "agent", "http")
+
+
+class OperationBusy(Exception):
+    """Another process is coordinating this review's start or stop."""
+
+
+@contextlib.contextmanager
+def operation(review, *, deadline=None):
+    # Keep the state lock short so queries and hook registration can proceed during a stop.
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(fsutil.flocked(Path(review) / OPERATION_LOCK, exclusive=True,
+                                               nofollow=True, deadline=deadline))
+        except BlockingIOError:
+            raise OperationBusy from None
+        yield
+
+
+def remaining(deadline):
+    return max(0.0, deadline - time.monotonic())
 
 
 def _now():
@@ -120,16 +142,15 @@ def begin(review, *, http=None):
         if running.get("state") != "stopped":
             value["components"]["http"] = {**running, "state": "stopping"}
         return value
-    result = _edit(review, change)
-    with wakeup.dispatch_lock(review):
-        pass
-    return result
+    return _edit(review, change)
 
 
-def mark(review, name, state, error=None, **details):
+def mark(review, name, state, error=None, *, stop_id=None, **details):
     if name not in COMPONENTS or state not in ("stopping", "stopped", "incomplete"):
         raise ValueError("invalid-stop-transition")
     def change(value):
+        if stop_id is not None and value["stopId"] != stop_id:
+            return value
         if value["state"] == "active":
             raise ValueError("stop-not-requested")
         component = {**value["components"][name], **details, "state": state}
@@ -223,76 +244,89 @@ def _live_waiters(review):
 def _protect_save(review, deadline):
     if load(review)["components"]["save"]["state"] == "stopped":
         return
-    while True:
-        try:
-            with fsutil.flocked(Path(review) / store.LOCK_FILE, exclusive=True, nonblocking=True):
-                pass
+    mark(review, "save", "stopping")
+    try:
+        with fsutil.flocked(Path(review) / store.LOCK_FILE, exclusive=True, deadline=deadline):
             mark(review, "save", "stopped", protectedAt=_now())
-            return
-        except BlockingIOError:
-            if time.monotonic() >= deadline:
-                mark(review, "save", "incomplete", "save-protection-timeout")
-                return
-            mark(review, "save", "stopping")
-            time.sleep(.02)
-        except OSError as error:
-            mark(review, "save", "incomplete", "save-protection-unavailable", detail=type(error).__name__)
-            return
+    except BlockingIOError:
+        mark(review, "save", "incomplete", "save-protection-timeout")
+    except OSError as error:
+        mark(review, "save", "incomplete", "save-protection-unavailable", detail=type(error).__name__)
 
 
-def _coordinate_orphan_hooks(review, deadline):
+def _coordinate_hooks(review, server, deadline):
     component = load(review)["components"]["hooks"]
     if component["state"] == "stopped":
         return
     if component.get("configured") and not component.get("tracked"):
         mark(review, "hooks", "incomplete", "background-hooks-unconfirmed")
         return
+    if server is not None and not server.wait_for_hooks(remaining(deadline)):
+        mark(review, "hooks", "incomplete", "background-hook-timeout")
+        return
     while True:
         workers = load(review)["components"]["hooks"].get("workers", [])
         pids = sorted({worker.get("pid") for worker in workers
-                       if isinstance(worker.get("pid"), int) and ledger.pid_alive(worker["pid"])})
+                       if type(worker.get("pid")) is int and worker["pid"] > 0 and ledger.pid_alive(worker["pid"])})
         if not pids:
-            mark(review, "hooks", "stopped")
+            mark(review, "hooks", "stopped", pids=[], workers=[])
             return
-        if time.monotonic() >= deadline:
+        left = remaining(deadline)
+        if not left:
             mark(review, "hooks", "incomplete", "background-hook-running", pids=pids)
             return
         mark(review, "hooks", "stopping", pids=pids)
-        time.sleep(.05)
+        time.sleep(min(.05, left))
 
 
-def coordinate(review, *, server=None, timeout=10.0):
-    deadline = time.monotonic() + max(0.0, timeout)
+def _coordinate_waiters(review, deadline):
+    if load(review)["components"]["waiters"]["state"] == "stopped":
+        return
+    while True:
+        waiters = _live_waiters(review)
+        if not waiters:
+            mark(review, "waiters", "stopped", pids=[])
+            return
+        left = remaining(deadline)
+        if not left:
+            mark(review, "waiters", "incomplete", "waiter-exit-timeout", pids=waiters)
+            return
+        mark(review, "waiters", "stopping", pids=waiters)
+        time.sleep(min(.05, left))
+
+
+def _coordinate_agent(review, deadline):
+    if load(review)["components"]["agent"]["state"] == "stopped":
+        return
+    try:
+        with wakeup.dispatch_lock(review, deadline=deadline):
+            result = wakeup.cancel_review(review, deadline=deadline)
+    except BlockingIOError:
+        result = {"state": "incomplete", "error": "agent-dispatch-timeout"}
+    except Exception as error:
+        result = {"state": "incomplete", "error": "agent-cancel-unconfirmed",
+                  "detail": type(error).__name__}
+    mark(review, "agent", result["state"], result.get("error"),
+         **{k: v for k, v in result.items() if k not in ("state", "error")})
+
+
+def coordinate(review, *, deadline, server=None):
+    """Drain admitted work while the caller holds the review's operation lock."""
     state = load(review)
     if state["state"] == "stopped":
         return state
-    _protect_save(review, deadline)
-    while time.monotonic() <= deadline:
-        waiters = _live_waiters(review)
-        if not waiters:
-            mark(review, "waiters", "stopped")
-            break
-        mark(review, "waiters", "stopping", pids=waiters)
-        time.sleep(.05)
+    if server is not None and not server.wait_for_writes(remaining(deadline)):
+        mark(review, "save", "incomplete", "save-protection-timeout")
     else:
-        mark(review, "waiters", "incomplete", "waiter-exit-timeout", pids=_live_waiters(review))
-    if server is None:
-        _coordinate_orphan_hooks(review, deadline)
-    elif server.wait_for_hooks(max(0.0, deadline - time.monotonic())):
-        mark(review, "hooks", "stopped")
-    else:
-        mark(review, "hooks", "incomplete", "background-hook-timeout")
-    if load(review)["components"]["agent"]["state"] != "stopped":
-        remaining = max(0.0, deadline - time.monotonic())
-        try:
-            result = wakeup.cancel_review(review, timeout=remaining)
-        except Exception as error:
-            result = {"state": "incomplete", "error": "agent-cancel-unconfirmed",
-                      "detail": type(error).__name__}
-        mark(review, "agent", result["state"], result.get("error"),
-             **{k: v for k, v in result.items() if k not in ("state", "error")})
+        _protect_save(review, deadline)
+    save_protected = load(review)["components"]["save"]["state"] == "stopped"
+    if save_protected:
+        _coordinate_waiters(review, deadline)
+    _coordinate_hooks(review, server, deadline)
+    if save_protected:
+        _coordinate_agent(review, deadline)
     return load(review)
 
 
-def http_stopped(review):
-    return mark(review, "http", "stopped")
+def http_stopped(review, stop_id):
+    return mark(review, "http", "stopped", stop_id=stop_id)

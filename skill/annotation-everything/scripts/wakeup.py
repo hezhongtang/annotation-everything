@@ -48,7 +48,7 @@ class Rejected(RuntimeError):
 
 
 class DesktopIPC:
-    def __init__(self, path, timeout=15):
+    def __init__(self, path, timeout=15, *, deadline=None):
         path = Path(path)
         info, parent = path.lstat(), path.parent.stat()
         if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
@@ -56,10 +56,11 @@ class DesktopIPC:
         if parent.st_uid != os.getuid() or parent.st_mode & 0o022:
             raise ValueError("desktop-socket-directory")
         self.connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.connection.settimeout(timeout)
         self.timeout = timeout
+        self.deadline = deadline
         self.client = "initializing-client"
         try:
+            self.connection.settimeout(self._time_left(self._request_deadline()))
             self.connection.connect(str(path))
             self.client = self.request("initialize", {"clientType": "annotation-everything"})["result"]["clientId"]
         except BaseException:
@@ -69,9 +70,21 @@ class DesktopIPC:
     def close(self):
         self.connection.close()
 
-    def read(self, count):
+    def _request_deadline(self):
+        deadline = time.monotonic() + self.timeout
+        return min(self.deadline, deadline) if self.deadline is not None else deadline
+
+    @staticmethod
+    def _time_left(deadline):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("desktop-timeout")
+        return remaining
+
+    def read(self, count, deadline):
         data = b""
         while len(data) < count:
+            self.connection.settimeout(self._time_left(deadline))
             part = self.connection.recv(count - len(data))
             if not part:
                 raise ConnectionError("desktop-disconnected")
@@ -80,25 +93,24 @@ class DesktopIPC:
 
     def request(self, method, params, version=0, target=None):
         request_id = str(uuid.uuid4())
+        deadline = self._request_deadline()
         message = {"type": "request", "requestId": request_id, "sourceClientId": self.client,
                    "method": method, "version": version, "params": params,
-                   "timeoutMs": int(self.timeout * 1000)}
+                   "timeoutMs": int(self._time_left(deadline) * 1000)}
         if target:
             message["targetClientId"] = target
         body = json.dumps(message, ensure_ascii=False).encode()
+        self.connection.settimeout(self._time_left(deadline))
         self.connection.sendall(struct.pack("<I", len(body)) + body)
-        deadline = time.monotonic() + self.timeout
-        while time.monotonic() < deadline:
-            self.connection.settimeout(max(.01, deadline - time.monotonic()))
-            size = struct.unpack("<I", self.read(4))[0]
+        while True:
+            size = struct.unpack("<I", self.read(4, deadline))[0]
             if not 0 < size <= MAX_FRAME:
                 raise ValueError("desktop-frame-size")
-            reply = json.loads(self.read(size))
+            reply = json.loads(self.read(size, deadline))
             if reply.get("type") == "response" and reply.get("requestId") == request_id:
                 if reply.get("resultType") != "success":
                     raise Rejected("desktop-rejected:" + method)
                 return reply
-        raise TimeoutError("desktop-timeout")
 
     def owner(self, thread):
         result = self.request("thread-owner-discovery", {"hostId": "local", "conversationId": thread}, 1)
@@ -140,8 +152,8 @@ def _write(path, value):
 
 
 @contextlib.contextmanager
-def dispatch_lock(review):
-    with fsutil.flocked(Path(review) / DISPATCH_LOCK, exclusive=True):
+def dispatch_lock(review, *, deadline=None):
+    with fsutil.flocked(Path(review) / DISPATCH_LOCK, exclusive=True, deadline=deadline):
         yield
 
 
@@ -202,6 +214,8 @@ TRANSFER_BLOCKS = (
                         for item in store.handoff_load(review)["items"])),
     ("analysis-in-progress: finish the claimed analysis round before transferring or unbinding",
      lambda review: analysis_store.has_claimed_round(review)),
+    ("delivery-in-progress: stop the review and confirm cancellation before transferring or unbinding",
+     lambda review: any(item.get("cancelState") != "confirmed" for item in _active_deliveries(review))),
 )
 
 
@@ -565,31 +579,36 @@ def assert_claim_owner(review, harness=None, session=None, *, expected_binding=_
         raise ValueError("review-bound-to-another-session: use the bound session or explicitly transfer")
 
 
-def active_work(review):
-    """Work that still needs an explicit cancellation confirmation before stopping."""
-    review = Path(review).resolve()
-    batches = [item for item in store.handoff_load(review)["items"]
-               if item.get("status") in ("claimed", "reviewing")]
-    analyses = [item for item in analysis_store.delivery_items(review)
-                if item.get("status") == "claimed"]
+def _active_deliveries(review):
+    """Include accepted work from older bindings even when it has lost its route."""
     deliveries = []
-    binding = load_binding(review)
-    if binding and binding["adapter"] == "codex-desktop":
-        for key, item in _deliveries(review)["items"].items():
-            if item.get("bindingId") != binding["bindingId"] \
-                    or item.get("state") not in ("connecting", "sending", "accepted", "received", "unconfirmed"):
-                continue
-            event, seq = item.get("event"), item.get("seq")
-            if event not in DELIVERY_EVENTS:
-                continue
+    queues = {}
+    for key, item in _deliveries(review)["items"].items():
+        if item.get("state") not in ("connecting", "sending", "accepted", "received", "unconfirmed"):
+            continue
+        event, seq = item.get("event"), item.get("seq")
+        if event not in DELIVERY_EVENTS:
+            continue
+        if event not in queues:
             entry = DELIVERY_EVENTS[event]
             finder = entry.get("items")
             candidates = finder(review) if finder else store.handoff_load(review)["items"]
-            target = next((candidate for candidate in candidates if candidate.get("seq") == seq), None)
             active_statuses = {entry["awaiting"], "claimed", "reviewing"}
-            if target and target.get("status") in active_statuses:
-                deliveries.append({"key": key, **item})
-    return {"batches": batches, "analyses": analyses, "deliveries": deliveries}
+            queues[event] = {candidate.get("seq") for candidate in candidates if candidate.get("status") in active_statuses}
+        if seq in queues[event]:
+            deliveries.append({**item, "key": key})
+    return deliveries
+
+
+def active_work(review):
+    """Work that still needs an explicit cancellation confirmation before stopping."""
+    review = Path(review).resolve()
+    return {
+        "batches": [item for item in store.handoff_load(review)["items"]
+                    if item.get("status") in ("claimed", "reviewing")],
+        "analyses": [item for item in analysis_store.delivery_items(review) if item.get("status") == "claimed"],
+        "deliveries": _active_deliveries(review),
+    }
 
 
 def _cancel_confirmed(reply, turn_id):
@@ -600,29 +619,34 @@ def _cancel_confirmed(reply, turn_id):
             and turn.get("status") in ("cancelled", "canceled", "interrupted", "completed"))
 
 
-def cancel_review(review, *, timeout=10.0):
+def cancel_review(review, *, deadline):
     review = Path(review).resolve()
     active = active_work(review)
     if not any(active.values()):
         return {"state": "stopped", "confirmed": True}
     binding = load_binding(review)
     deliveries = active["deliveries"]
-    covered = {(item.get("event"), item.get("seq")) for item in deliveries}
+    binding_id = (binding or {}).get("bindingId")
+    covered = {(item.get("event"), item.get("seq")) for item in deliveries
+               if item.get("bindingId") == binding_id}
     untracked = ([("review" if item.get("status") == "reviewing" else "handoff", item.get("seq"))
                   for item in active["batches"]
                   if ("review" if item.get("status") == "reviewing" else "handoff", item.get("seq")) not in covered]
                  + [("analysis", item.get("seq")) for item in active["analyses"]
                     if ("analysis", item.get("seq")) not in covered])
-    if not binding or binding["adapter"] != "codex-desktop":
+    if (not binding or binding["adapter"] != "codex-desktop") and (
+            untracked or any(item.get("cancelState") != "confirmed" for item in deliveries)):
         return {"state": "incomplete", "error": "agent-cancellation-unsupported",
                 "capabilityGap": "confirmed-review-scoped-cancellation",
                 "active": {name: len(items) for name, items in active.items()}}
     failures, confirmed = [], []
-    deadline = time.monotonic() + max(0.0, timeout)
     for item in deliveries:
         key, turn_id = item["key"], item.get("turnId")
         if item.get("cancelState") == "confirmed":
             confirmed.append(turn_id)
+            continue
+        if item.get("bindingId") != binding_id:
+            failures.append({"event": item.get("event"), "seq": item.get("seq"), "code": "agent-binding-unavailable"})
             continue
         if not turn_id:
             code = ("agent-delivery-in-flight" if item.get("state") in ("connecting", "sending")
@@ -636,9 +660,8 @@ def cancel_review(review, *, timeout=10.0):
             remaining = max(0.0, deadline - time.monotonic())
             if remaining <= 0:
                 raise TimeoutError("agent-cancel-timeout")
-            with contextlib.closing(DesktopIPC(binding["socketPath"], timeout=remaining)) as ipc:
+            with contextlib.closing(DesktopIPC(binding["socketPath"], timeout=remaining, deadline=deadline)) as ipc:
                 owner = ipc.owner(binding["threadId"])
-                ipc.timeout = max(.01, deadline - time.monotonic())
                 reply = ipc.cancel(binding, owner, turn_id)
             if not _cancel_confirmed(reply, turn_id):
                 raise ValueError("agent-cancel-confirmation-required")

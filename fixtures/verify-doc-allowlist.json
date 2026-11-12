@@ -87,6 +87,12 @@
       "basis": "DOCX 二进制保存只处理已解析的审阅源；递归遍历仍仅清理审阅目录内旧批次快照，不读取仓库说明文档。"
     },
     {
+      "path": "skill/annotation-everything/scripts/review_stop.py",
+      "function": "_live_waiters",
+      "source_sha256": "50d64bde4f278c837d378f1f0b9a8402f619b18db9776be2c315f9d071b4ae89",
+      "basis": "仅在当前审阅目录单层枚举 WAIT_PREFIX 等待标记 JSON，并核对文件名和进程号，不读取仓库说明文档。"
+    },
+    {
       "path": "skill/annotation-everything/scripts/serve.py",
       "function": "read_wait",
       "source_sha256": "657dd45ee873ef8b525a55756dec2726f1abce3c48225a72c90788d20dc0f3d3",

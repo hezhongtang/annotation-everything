@@ -47,6 +47,7 @@ skills.json
 .annotation-server.json
 .annotation-stop.json
 .annotation-stop.lock
+.annotation-stop-operation.lock
 .annotation-stop-*.tmp
 .notes.lock
 .annotation-archived

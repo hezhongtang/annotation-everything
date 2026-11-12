@@ -38,6 +38,8 @@ class Desktop:
         self.cancelled = []
         self.turns = {}
         self.cancel_mode = "confirm"
+        self.cancel_hold = None
+        self.rejected_turns = set()
         self.start_hold = None
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(path))
@@ -81,6 +83,8 @@ class Desktop:
                     elif method == "thread-follower-cancel-turn":
                         turn_id = request["params"]["turnId"]
                         self.cancelled.append(request["params"])
+                        if self.cancel_hold is not None:
+                            self.cancel_hold.wait(3)
                         if self.cancel_mode == "accept":
                             result = {"accepted": True}
                         elif self.cancel_mode == "timeout":
@@ -88,7 +92,8 @@ class Desktop:
                             continue
                         else:
                             result = {"result": {"turn": {"id": turn_id, "status": "cancelled"}}}
-                    rejected = method == "thread-follower-cancel-turn" and self.cancel_mode == "reject"
+                    rejected = method == "thread-follower-cancel-turn" and (
+                        self.cancel_mode == "reject" or request["params"]["turnId"] in self.rejected_turns)
                     reply = {"type": "response", "requestId": request["requestId"],
                              "resultType": "error" if rejected else "success",
                              "error": "cancel-rejected" if rejected else None,
@@ -104,7 +109,7 @@ class Desktop:
 
 class ReviewStopTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="ae-review-stop-")
+        self.temp = tempfile.TemporaryDirectory(prefix="ae-stop-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.env_patch = patch.dict(os.environ, {"AE_HOME": str(self.root / "ledger")})
@@ -139,8 +144,9 @@ class ReviewStopTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(SCRIPTS / script), *args], env=self.env,
                               capture_output=True, text=True, timeout=timeout)
 
-    def start(self, directory, on_handoff=None):
-        command = [sys.executable, str(SCRIPTS / "serve.py"), str(directory), "--no-open"]
+    def start_server(self, directory, on_handoff=None, *, program=None, args=()):
+        command = ([sys.executable, "-c", program, str(SCRIPTS), str(directory), *map(str, args)]
+                   if program else [sys.executable, str(SCRIPTS / "serve.py"), str(directory), "--no-open"])
         if on_handoff:
             command += ["--on-handoff", on_handoff]
         process = subprocess.Popen(command, env=self.env, stdin=subprocess.DEVNULL,
@@ -168,6 +174,21 @@ class ReviewStopTests(unittest.TestCase):
         status, response_headers, raw = serve._req(port, method, path, headers, body)
         return status, response_headers, json.loads(raw)
 
+    def wait_until(self, predicate, timeout=5):
+        deadline = time.monotonic() + timeout
+        while not predicate() and time.monotonic() < deadline:
+            time.sleep(.02)
+        return predicate()
+
+    def bind_desktop(self, directory, desktop):
+        result = self.cli("wakeup.py", "bind", str(directory), "--adapter", "codex-desktop",
+                          "--thread", THREAD, "--socket", str(desktop.path))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def deliver_analysis(self, directory, focus):
+        _, seq = analysis_store.start_question(directory, focus, by="fixture")
+        return wakeup.deliver(directory, "analysis", seq)
+
     def test_cli_stop_without_background_work_preserves_review_and_other_service(self):
         rid, other_rid = "1a" * 8, "2b" * 8
         directory, other = self.review("target", rid), self.review("other", other_rid)
@@ -175,8 +196,8 @@ class ReviewStopTests(unittest.TestCase):
                          "--harness", "Claude Code", "--session", "shared-session")
         self.assertEqual(bound.returncode, 0, bound.stdout + bound.stderr)
         binding_before = (directory / ".agent-binding.json").read_bytes()
-        info, _ = self.start(directory)
-        other_info, _ = self.start(other)
+        info, _ = self.start_server(directory)
+        other_info, _ = self.start_server(other)
         owned_port = ledger.get(rid)["port"]
         status, _, saved = self.request(info, "POST", "/api/notes",
                                         {"page": 1, "text": "Synthetic annotation"}, rid)
@@ -217,7 +238,7 @@ class ReviewStopTests(unittest.TestCase):
         bound = self.cli("wakeup.py", "bind", str(directory), "--adapter", "wait",
                          "--harness", "Claude Code", "--session", "shared-session")
         self.assertEqual(bound.returncode, 0, bound.stdout + bound.stderr)
-        info, _ = self.start(directory)
+        info, _ = self.start_server(directory)
         waiter_env = {**self.env, "AE_HARNESS": "Claude Code", "AE_SESSION_ID": "shared-session"}
         waiter = subprocess.Popen([sys.executable, str(SCRIPTS / "notes.py"), "wait", str(directory),
                                    "--timeout", "30", "--interval", ".05"],
@@ -241,7 +262,7 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(rewait.returncode, 4, rewait.stdout + rewait.stderr)
         self.assertFalse(marker.exists())
 
-        restarted_info, restarted_health = self.start(directory)
+        restarted_info, restarted_health = self.start_server(directory)
         state = self.cli("serve.py", "stop", rid, "--status")
         self.assertEqual(json.loads(state.stdout)["state"], "active")
         status, _, submitted = self.request(restarted_info, "POST", "/api/handoff",
@@ -261,8 +282,8 @@ class ReviewStopTests(unittest.TestCase):
             bound = self.cli("wakeup.py", "bind", str(directory), "--adapter", "codex-desktop",
                              "--thread", THREAD, "--socket", str(desktop.path))
             self.assertEqual(bound.returncode, 0, bound.stdout + bound.stderr)
-        target_info, target_health = self.start(target)
-        other_info, other_health = self.start(other)
+        target_info, target_health = self.start_server(target)
+        other_info, other_health = self.start_server(other)
         for rid, info, health in ((target_rid, target_info, target_health),
                                   (other_rid, other_info, other_health)):
             status, _, submitted = self.request(info, "POST", "/api/handoff",
@@ -295,7 +316,7 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
         self.assertEqual(len(desktop.cancelled), 1, "an already confirmed turn must not be cancelled again")
 
-        restarted_info, restarted_health = self.start(target)
+        restarted_info, restarted_health = self.start_server(target)
         self.assertEqual(restarted_health["receiver"]["bindingId"], target_health["receiver"]["bindingId"])
         deadline = time.monotonic() + 5
         while len([r for r in desktop.requests if r["method"] == "thread-follower-start-turn"]) < 3 \
@@ -317,7 +338,11 @@ class ReviewStopTests(unittest.TestCase):
         bound = self.cli("wakeup.py", "bind", str(directory), "--adapter", "codex-desktop",
                          "--thread", THREAD, "--socket", str(desktop.path))
         self.assertEqual(bound.returncode, 0, bound.stdout + bound.stderr)
-        info, health = self.start(directory)
+        info, health = self.start_server(directory)
+        status, _, created = self.request(info, "POST", "/api/notes",
+                                          {"page": 1, "text": "keep this saved note"}, rid)
+        self.assertEqual(status, 201, created)
+        note = created["note"]
         status, _, submitted = self.request(info, "POST", "/api/handoff",
                                             {"message": "work to reject cancellation",
                                              "receiverBindingId": health["receiver"]["bindingId"]}, rid)
@@ -342,6 +367,16 @@ class ReviewStopTests(unittest.TestCase):
                                             "receiverBindingId": health["receiver"]["bindingId"]}, rid)
         self.assertEqual(status, 409, rejected)
         self.assertEqual(rejected["code"], "review-stopped")
+        note_path = "/api/notes/" + note["id"]
+        for method, path, body in (
+            ("POST", "/api/notes", {"page": 1, "text": "late save"}),
+            ("POST", "/api/notes/import", {"notes": [{"page": 1, "text": "late import"}]}),
+            ("PATCH", note_path, {"text": "late edit"}),
+            ("DELETE", note_path, {}),
+        ):
+            status, _, late_note = self.request(info, method, path, body, rid)
+            self.assertEqual((status, late_note.get("code")), (409, "review-stopped"), late_note)
+        self.assertEqual(self.request(info, "GET", "/api/notes")[2]["notes"], [note])
         _, _, batches = self.request(info, "GET", "/api/handoff")
         self.assertEqual(batches["total"], 1)
         queried = self.cli("serve.py", "stop", rid, "--status")
@@ -357,6 +392,75 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(batches["latest"]["status"], "pending")
         self.assertEqual(len(desktop.cancelled), 2)
 
+    def test_concurrent_stops_share_a_single_cancellation(self):
+        desktop = Desktop(self.root / "desktop-concurrent.sock")
+        self.addCleanup(desktop.close)
+        desktop.cancel_hold = threading.Event()
+        rid = "71" * 8
+        directory = self.review("concurrent", rid)
+        self.bind_desktop(directory, desktop)
+        self.deliver_analysis(directory, "Synthetic pending turn")
+        command = [sys.executable, str(SCRIPTS / "serve.py"), "stop", rid, "--timeout", "3"]
+        first = subprocess.Popen(command, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.processes.append(first)
+        try:
+            self.assertTrue(self.wait_until(lambda: len(desktop.cancelled) == 1))
+            state_file = directory / ".annotation-stop.json"
+            second = subprocess.Popen(command, env=self.env, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, text=True)
+            self.processes.append(second)
+            # The original race starts the second attempt before the first confirmation.
+            self.wait_until(lambda: json.loads(state_file.read_text())["attempts"] > 1, timeout=.6)
+        finally:
+            desktop.cancel_hold.set()
+        results = []
+        for process in (first, second):
+            stdout, stderr = process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 0, stdout + stderr)
+            results.append(json.loads(stdout))
+        self.assertEqual(results[0]["stopId"], results[1]["stopId"])
+        self.assertEqual(len(desktop.cancelled), 1)
+
+    def test_transfer_waits_for_confirmation_of_unclaimed_desktop_turn(self):
+        desktop = Desktop(self.root / "desktop-transfer.sock")
+        self.addCleanup(desktop.close)
+        rid = "72" * 8
+        directory = self.review("transfer", rid)
+        self.bind_desktop(directory, desktop)
+        delivered = self.deliver_analysis(directory, "Accepted, still unclaimed")
+        command = ("wakeup.py", "bind", str(directory), "--adapter", "wait", "--replace",
+                   "--harness", "Claude Code", "--session", "replacement")
+
+        early = self.cli(*command)
+        self.assertEqual(early.returncode, 2, early.stdout + early.stderr)
+        self.assertIn("delivery-in-progress", early.stderr)
+        self.assertEqual(self.cli("wakeup.py", "unbind", str(directory)).returncode, 2)
+        stopped = self.cli("serve.py", "stop", rid)
+        self.assertEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
+        self.assertEqual([item["turnId"] for item in desktop.cancelled], [delivered["turnId"]])
+        replaced = self.cli(*command)
+        self.assertEqual(replaced.returncode, 0, replaced.stdout + replaced.stderr)
+
+    def test_explicit_reuse_recovers_a_cancelled_unclaimed_turn_after_partial_stop(self):
+        desktop = Desktop(self.root / "desktop-reuse.sock")
+        self.addCleanup(desktop.close)
+        rid = "73" * 8
+        directory = self.review("reuse-delivery", rid)
+        self.bind_desktop(directory, desktop)
+        first = self.deliver_analysis(directory, "Cancel this turn")
+        second = self.deliver_analysis(directory, "Reject cancellation of this turn")
+        desktop.rejected_turns.add(second["turnId"])
+        info, _ = self.start_server(directory)
+        stopped = self.cli("serve.py", "stop", rid)
+        self.assertEqual(stopped.returncode, 1, stopped.stdout + stopped.stderr)
+        self.assertEqual(json.loads(stopped.stdout)["components"]["agent"]["confirmedTurns"], [first["turnId"]])
+
+        reused = self.cli("serve.py", str(directory), "--no-open")
+        self.assertEqual(reused.returncode, 0, reused.stdout + reused.stderr)
+        self.assertEqual(serve.read_status(directory)["pid"], info["pid"])
+        self.assertTrue(self.wait_until(lambda: len(desktop.turns) == 3),
+                        "reusing the service should redeliver the cancelled turn")
+
     def test_accept_only_and_timeout_are_capability_gaps_not_stop_confirmations(self):
         for rid, mode, expected in (("7a" * 8, "accept", "agent-cancel-confirmation-required"),
                                     ("8a" * 8, "timeout", "agent-cancel-timeout")):
@@ -367,7 +471,7 @@ class ReviewStopTests(unittest.TestCase):
                 bound = self.cli("wakeup.py", "bind", str(directory), "--adapter", "codex-desktop",
                                  "--thread", THREAD, "--socket", str(desktop.path))
                 self.assertEqual(bound.returncode, 0, bound.stdout + bound.stderr)
-                info, health = self.start(directory)
+                info, health = self.start_server(directory)
                 status, _, submitted = self.request(info, "POST", "/api/handoff",
                                                     {"message": "cancellation " + mode,
                                                      "receiverBindingId": health["receiver"]["bindingId"]}, rid)
@@ -400,7 +504,7 @@ class ReviewStopTests(unittest.TestCase):
         bound = self.cli("wakeup.py", "bind", str(directory), "--adapter", "wait",
                          "--harness", "Claude Code", "--session", "shared-session")
         self.assertEqual(bound.returncode, 0, bound.stdout + bound.stderr)
-        info, health = self.start(directory)
+        info, health = self.start_server(directory)
         status, _, submitted = self.request(info, "POST", "/api/handoff",
                                             {"message": "claimed work",
                                              "receiverBindingId": health["receiver"]["bindingId"]}, rid)
@@ -427,7 +531,7 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(recovered["stopId"], initial["stopId"])
         self.assertEqual(recovered["components"]["http"]["state"], "stopped")
         self.assertEqual(recovered["components"]["agent"]["state"], "incomplete")
-        _, restarted_health = self.start(directory)
+        _, restarted_health = self.start_server(directory)
         self.assertEqual(restarted_health["receiver"]["bindingId"], health["receiver"]["bindingId"])
         self.assertEqual(self.cli("notes.py", "batches", str(directory), "--json").returncode, 0)
         batches = json.loads(self.cli("notes.py", "batches", str(directory), "--json").stdout)
@@ -442,7 +546,7 @@ class ReviewStopTests(unittest.TestCase):
     def test_stop_waits_for_the_review_write_lock_before_http_shutdown(self):
         rid = "ab" * 8
         directory = self.review("save-protection", rid)
-        info, _ = self.start(directory)
+        info, _ = self.start_server(directory)
         with fsutil.flocked(directory / ".notes.lock", exclusive=True):
             stopped = self.cli("serve.py", "stop", rid, "--timeout", ".1")
             self.assertEqual(stopped.returncode, 1, stopped.stdout + stopped.stderr)
@@ -451,6 +555,9 @@ class ReviewStopTests(unittest.TestCase):
             self.assertEqual(result["components"]["save"]["error"], "save-protection-timeout")
             status, _, _ = self.request(info, "GET", "/api/health")
             self.assertEqual(status, 200)
+        status, _, rejected = self.request(info, "POST", "/api/notes",
+                                           {"page": 1, "text": "late save"}, rid)
+        self.assertEqual((status, rejected.get("code")), (409, "review-stopped"), rejected)
         retried = self.cli("serve.py", "stop", rid, "--timeout", "2")
         self.assertEqual(retried.returncode, 0, retried.stdout + retried.stderr)
         self.assertEqual(json.loads(retried.stdout)["stopId"], result["stopId"])
@@ -458,7 +565,7 @@ class ReviewStopTests(unittest.TestCase):
     def test_unresponsive_live_http_process_is_not_reported_stopped(self):
         rid = "cd" * 8
         directory = self.review("unresponsive", rid)
-        info, _ = self.start(directory)
+        info, _ = self.start_server(directory)
         os.kill(info["pid"], signal.SIGSTOP)
         try:
             stopped = self.cli("serve.py", "stop", rid, "--timeout", ".1")
@@ -530,17 +637,26 @@ class ReviewStopTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 rid = ("e" + str(index)) * 8
                 directory = self.review("restart-" + mode, rid)
-                info, _ = self.start(directory)
+                info, _ = self.start_server(directory)
                 with fsutil.flocked(directory / ".notes.lock", exclusive=True):
                     stopped = self.cli("serve.py", "stop", rid, "--timeout", ".1")
                     self.assertEqual(stopped.returncode, 1, stopped.stdout + stopped.stderr)
+                self.assertEqual(self.request(info, "POST", "/api/server/resume", {})[0], 409)
+                port = info["port"]
+                headers = {"Host": f"127.0.0.1:{port}", "X-AE-Review": rid, "Content-Type": "application/json"}
+                self.assertEqual(serve._req(port, "POST", "/api/server/resume", headers, {})[0], 403)
+                headers.update(Origin=f"http://127.0.0.1:{port}")
+                headers["Content-Type"] = "text/plain"
+                self.assertEqual(serve._req(port, "POST", "/api/server/resume", headers, {})[0], 415)
+                self.assertEqual(json.loads(self.cli("serve.py", "stop", rid, "--status").stdout)["state"],
+                                 "incomplete")
                 if mode == "cli":
                     started = self.cli("serve.py", str(directory), "--no-open")
                     self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
                 else:
                     host_rid = "f0" * 8
                     host = self.review("overview-host", host_rid)
-                    host_info, _ = self.start(host)
+                    host_info, _ = self.start_server(host)
                     status, _, started = self.request(host_info, "POST", "/api/overview/start",
                                                       {"reviewId": rid}, host_rid)
                     self.assertEqual(status, 200, started)
@@ -602,6 +718,52 @@ class ReviewStopTests(unittest.TestCase):
         final = json.loads(self.cli("serve.py", "stop", rid, "--status").stdout)
         self.assertEqual(final["state"], "stopped")
 
+    def test_start_waits_for_shutdown_even_when_the_stop_client_disconnects(self):
+        rid = "a1" * 8
+        directory = self.review("disconnect", rid)
+        replying, release = self.root / "replying", self.root / "release"
+        program = """
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import serve
+
+class DisconnectOnStop(serve.Handler):
+    def _json(self, status, body):
+        if self.path == "/api/server/stop" and body.get("stopping"):
+            Path(sys.argv[3]).touch()
+            deadline = time.monotonic() + 5
+            while not Path(sys.argv[4]).exists() and time.monotonic() < deadline:
+                time.sleep(.02)
+            raise BrokenPipeError("synthetic disconnected client")
+        super()._json(status, body)
+
+serve.Handler = DisconnectOnStop
+sys.exit(serve.serve(Path(sys.argv[2]), None, False, False))
+"""
+        info, _ = self.start_server(directory, program=program, args=(replying, release))
+        original = self.processes[-1]
+        stopper = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), "stop", rid, "--timeout", "3"],
+                                   env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.processes.append(stopper)
+        try:
+            self.assertTrue(self.wait_until(replying.exists), "server did not reach the stop response")
+            stopping = json.loads(self.cli("serve.py", "stop", rid, "--status").stdout)
+            self.assertEqual(stopping["state"], "stopping")
+            starter = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), str(directory), "--no-open"],
+                                       env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.processes.append(starter)
+            self.assertFalse(self.wait_until(lambda: starter.poll() is not None, timeout=.6),
+                             "start reused a service with shutdown pending")
+        finally:
+            release.touch()
+
+        self.assertEqual(original.wait(timeout=5), 0)
+        stopper.wait(timeout=5)
+        self.assertTrue(self.wait_until(lambda: (serve.probe(info["port"], timeout=.1) or {}).get("pid") == starter.pid))
+        restarted = json.loads(self.cli("serve.py", "stop", rid, "--status").stdout)
+        self.assertEqual((restarted["state"], restarted["previousStopId"]), ("active", stopping["stopId"]))
+
     def test_independent_hook_must_exit_before_no_service_stop_can_complete(self):
         rid = "b0" * 8
         directory = self.review("orphan-hook", rid)
@@ -613,7 +775,7 @@ class ReviewStopTests(unittest.TestCase):
             "deadline=time.monotonic()+5\n"
             f"while not Path({str(release)!r}).exists() and time.monotonic()<deadline: time.sleep(.02)\n",
             encoding="utf-8")
-        info, _ = self.start(directory, f"{sys.executable} {hook}")
+        info, _ = self.start_server(directory, f"{sys.executable} {hook}")
         status, _, submitted = self.request(info, "POST", "/api/handoff", {"message": "long hook"}, rid)
         self.assertEqual(status, 200, submitted)
         deadline = time.monotonic() + 5
@@ -632,6 +794,13 @@ class ReviewStopTests(unittest.TestCase):
             self.assertEqual(result["state"], "incomplete")
             self.assertEqual(result["components"]["hooks"]["error"], "background-hook-running")
             self.assertIn(hook_pid, result["components"]["hooks"]["pids"])
+            restarted_info, _ = self.start_server(directory)
+            stopped = self.cli("serve.py", "stop", rid, "--timeout", ".1")
+            self.assertEqual(stopped.returncode, 1, stopped.stdout + stopped.stderr)
+            result = json.loads(stopped.stdout)
+            self.assertEqual(result["components"]["hooks"]["error"], "background-hook-running")
+            self.assertIn(hook_pid, result["components"]["hooks"]["pids"])
+            self.assertEqual(self.request(restarted_info, "GET", "/api/health")[0], 200)
         finally:
             release.write_text("release")
         deadline = time.monotonic() + 6
@@ -644,6 +813,47 @@ class ReviewStopTests(unittest.TestCase):
         self.assertIsNotNone(final)
         self.assertEqual(final.returncode, 0, final.stdout + final.stderr)
         self.assertEqual(json.loads(final.stdout)["state"], "stopped")
+
+    def test_zero_timeout_stops_idle_review(self):
+        rid = "b1" * 8
+        self.review("idle", rid)
+        stopped = self.cli("serve.py", "stop", rid, "--timeout", "0")
+        self.assertEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
+        self.assertEqual(json.loads(stopped.stdout)["state"], "stopped")
+
+    def test_stop_times_out_while_a_delivery_owns_the_dispatch_lock(self):
+        rid = "b2" * 8
+        directory = self.review("dispatch-timeout", rid)
+        with wakeup.dispatch_lock(directory):
+            stopped = self.cli("serve.py", "stop", rid, "--timeout", ".1", timeout=2)
+        self.assertEqual(stopped.returncode, 1, stopped.stdout + stopped.stderr)
+        state = json.loads(stopped.stdout)
+        self.assertEqual(state["state"], "incomplete")
+        self.assertEqual(state["components"]["agent"]["error"], "agent-dispatch-timeout")
+        retried = self.cli("serve.py", "stop", rid, "--timeout", "2")
+        self.assertEqual(retried.returncode, 0, retried.stdout + retried.stderr)
+        self.assertEqual(json.loads(retried.stdout)["stopId"], state["stopId"])
+
+    def test_stopped_review_rejects_analysis_fork_before_committing_a_round(self):
+        rid = "b3" * 8
+        directory = self.review("analysis-fork", rid)
+        bound = self.cli("wakeup.py", "bind", str(directory), "--adapter", "wait",
+                         "--harness", "Claude Code", "--session", "owner")
+        self.assertEqual(bound.returncode, 0, bound.stdout + bound.stderr)
+        state, _ = analysis_store.start_question(directory, "Synthetic focus", by="fixture")
+        aid = state["id"]
+        checkpoint = analysis_store.seal_checkpoint(directory, aid)["checkpoints"][-1]["id"]
+        stopped = self.cli("serve.py", "stop", rid)
+        self.assertEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
+        history_before = analysis_store.load(directory, aid)
+
+        result = self.cli("notes.py", "analysis-line", str(directory), "--analysis", aid,
+                          "--action", "fork", "--checkpoint", checkpoint,
+                          "--harness", "Claude Code", "--session", "owner")
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("review-stopped", result.stderr)
+        self.assertEqual(analysis_store.load(directory, aid), history_before)
 
     def test_inflight_delivery_is_settled_and_cancelled_before_stop_completes(self):
         desktop = Desktop(self.root / "desktop-inflight.sock")

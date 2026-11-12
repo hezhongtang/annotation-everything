@@ -422,6 +422,8 @@
     "serve.err.reviewMismatch": "页面属于另一份审阅（审阅标识不一致）",
     "serve.err.badStopTimeout": "停止等待时间须为 0 到 60 秒",
     "serve.err.reviewStopped": "这份审阅已停止或正在停止；请显式启动后再提交新工作",
+    "serve.err.reviewLifecycleBusy": "这份审阅正在启动或停止，请等当前操作结束后重试。",
+    "serve.err.resumeFailed": "无法重新打开正在运行的审阅服务，请检查服务状态后重新启动。",
     "serve.err.fullCheck": "fullCheck 须为布尔值",
     "serve.err.userMessage": "userMessage 须为字符串",
     "serve.err.noAlways": "缺少 always（要清空请传空列表）",

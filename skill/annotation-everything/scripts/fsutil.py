@@ -8,6 +8,7 @@ import hashlib
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -35,11 +36,11 @@ def atomic_write(path: Path, text: str, *, prefix: str, fsync: bool = True) -> N
 
 @contextlib.contextmanager
 def flocked(path: Path, *, exclusive: bool = False, nonblocking: bool = False,
-            nofollow: bool = False) -> Iterator[int]:
+            nofollow: bool = False, deadline: float | None = None) -> Iterator[int]:
     """打开锁文件、按模式 flock、退出时解锁：文件锁只有一个实现，各处只差显式参数。
 
     exclusive：独占（LOCK_EX）还是共享（LOCK_SH）；nonblocking：拿不到锁立刻抛
-    BlockingIOError，否则等待；nofollow：拒绝跟随符号链接（O_NOFOLLOW）——按各处原来的
+    BlockingIOError，否则等到 deadline（monotonic 时间）或获得锁；nofollow：拒绝跟随符号链接（O_NOFOLLOW）——按各处原来的
     行为，只有台账的更新协调锁为真，其余为假（放行符号链接的兼容问题另行评估）。
     锁文件以 0600 新建；yield 文件描述符，调用方不需要时可以忽略。
     锁的粒度与持有范围由调用方的 with 块决定，这里不加也不减。
@@ -48,7 +49,18 @@ def flocked(path: Path, *, exclusive: bool = False, nonblocking: bool = False,
     fd = os.open(path, flags, 0o600)
     with os.fdopen(fd, "r+") as fh:
         mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-        fcntl.flock(fh, mode | (fcntl.LOCK_NB if nonblocking else 0))
+        if deadline is None or nonblocking:
+            fcntl.flock(fh, mode | (fcntl.LOCK_NB if nonblocking else 0))
+        else:
+            while True:
+                try:
+                    fcntl.flock(fh, mode | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise
+                    time.sleep(min(.02, remaining))
         try:
             yield fh.fileno()
         finally:

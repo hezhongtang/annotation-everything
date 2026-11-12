@@ -2447,6 +2447,29 @@ def current_task_controls_checks(browser, tmp: Path):
            "停止服务：不会停止不匹配的服务")
         page.unroute("**/api/notes", wrong_review)
         ok(wait_mode(page, "server"), "停止服务：恢复本审阅连接")
+
+        slow_stop = []
+        hold_slow_stop = slow_stop.append
+        page.route("**/api/server/stop", hold_slow_stop)
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.get_by_role("button", name="Stop review", exact=True).click()
+        if not wait_until(lambda: bool(slow_stop), page, 5):
+            ok(False, "停止服务：发送慢停止请求")
+            return
+        # The normal API timer is 8 seconds, while stop can wait 10 seconds for background work.
+        page.wait_for_timeout(8250)
+        waiting_for_stop = page.is_disabled("#stopServiceBtn")
+        ok(waiting_for_stop, "停止服务：超过普通请求时限仍等待后台组件结果")
+        if not waiting_for_stop:
+            return
+        slow_stop[0].fulfill(status=200, json={
+            "app": "annotation-everything", "reviewId": json.loads((d / "review.json").read_text())["reviewId"],
+            "stopping": False, "state": "incomplete", "stop": {"incompleteReasons": {"hooks": "background-hook-timeout"}},
+        })
+        ok(wait_toast(page, "background-hook-timeout") and wait_mode(page, "server"),
+           "停止服务：收到后台组件超时结果，页面保持连接")
+        page.unroute("**/api/server/stop", hold_slow_stop)
+        requests.clear()
         page.locator("#batches [data-close]").click()
         pending_saves = []
 
