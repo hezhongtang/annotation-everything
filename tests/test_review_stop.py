@@ -18,9 +18,11 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill/annotation-everything/scripts"
 sys.path.insert(0, str(SCRIPTS))
+import analysis_store
 import fsutil
 import ledger
 import serve
+import wakeup
 
 sys.path.insert(0, str(ROOT))
 import host_isolation
@@ -36,6 +38,7 @@ class Desktop:
         self.cancelled = []
         self.turns = {}
         self.cancel_mode = "confirm"
+        self.start_hold = None
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(path))
         path.chmod(0o600)
@@ -69,6 +72,8 @@ class Desktop:
                     method = request["method"]
                     result = {"clientId": "fixture"} if method == "initialize" else {}
                     if method == "thread-follower-start-turn":
+                        if self.start_hold is not None:
+                            self.start_hold.wait(3)
                         message_id = request["params"]["turnStart"]["request"]["clientUserMessageId"]
                         turn_id = "turn-" + message_id
                         self.turns[message_id] = turn_id
@@ -134,9 +139,11 @@ class ReviewStopTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(SCRIPTS / script), *args], env=self.env,
                               capture_output=True, text=True, timeout=timeout)
 
-    def start(self, directory):
-        process = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), str(directory), "--no-open"],
-                                   env=self.env, stdin=subprocess.DEVNULL,
+    def start(self, directory, on_handoff=None):
+        command = [sys.executable, str(SCRIPTS / "serve.py"), str(directory), "--no-open"]
+        if on_handoff:
+            command += ["--on-handoff", on_handoff]
+        process = subprocess.Popen(command, env=self.env, stdin=subprocess.DEVNULL,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.processes.append(process)
         deadline = time.monotonic() + 8
@@ -517,6 +524,204 @@ class ReviewStopTests(unittest.TestCase):
         self.assertIsNone(process.poll())
         status, _, current = self.request(info, "GET", "/api/health")
         self.assertEqual(status, 200, current)
+
+    def test_explicit_start_reopens_incomplete_review_even_when_reusing_service(self):
+        for index, mode in enumerate(("cli", "overview")):
+            with self.subTest(mode=mode):
+                rid = ("e" + str(index)) * 8
+                directory = self.review("restart-" + mode, rid)
+                info, _ = self.start(directory)
+                with fsutil.flocked(directory / ".notes.lock", exclusive=True):
+                    stopped = self.cli("serve.py", "stop", rid, "--timeout", ".1")
+                    self.assertEqual(stopped.returncode, 1, stopped.stdout + stopped.stderr)
+                if mode == "cli":
+                    started = self.cli("serve.py", str(directory), "--no-open")
+                    self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+                else:
+                    host_rid = "f0" * 8
+                    host = self.review("overview-host", host_rid)
+                    host_info, _ = self.start(host)
+                    status, _, started = self.request(host_info, "POST", "/api/overview/start",
+                                                      {"reviewId": rid}, host_rid)
+                    self.assertEqual(status, 200, started)
+                state = json.loads(self.cli("serve.py", "stop", rid, "--status").stdout)
+                self.assertEqual(state["state"], "active")
+                status, _, submitted = self.request(info, "POST", "/api/handoff",
+                                                    {"message": "explicit reuse start"}, rid)
+                self.assertEqual(status, 200, submitted)
+                final = self.cli("serve.py", "stop", rid, "--timeout", "2")
+                self.assertEqual(final.returncode, 0, final.stdout + final.stderr)
+
+    def test_http_is_not_confirmed_stopped_until_server_close_finishes(self):
+        rid = "a0" * 8
+        directory = self.review("slow-close", rid)
+        closing, release = self.root / "closing", self.root / "release-close"
+        program = (
+            "import sys,time;from pathlib import Path;sys.path.insert(0,sys.argv[1]);"
+            "import serve\n"
+            "class SlowClose(serve.ReviewServer):\n"
+            "    def server_close(self):\n"
+            "        Path(sys.argv[2]).write_text('closing')\n"
+            "        deadline=time.monotonic()+5\n"
+            "        while not Path(sys.argv[3]).exists() and time.monotonic()<deadline: time.sleep(.02)\n"
+            "        super().server_close()\n"
+            "serve.ReviewServer=SlowClose\n"
+            "sys.exit(serve.serve(Path(sys.argv[4]),None,False,False))\n"
+        )
+        process = subprocess.Popen([sys.executable, "-c", program, str(SCRIPTS), str(closing),
+                                    str(release), str(directory)], env=self.env,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.processes.append(process)
+        info = None
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            candidate = serve.read_status(directory)
+            if candidate and candidate.get("pid") == process.pid and serve.probe(candidate["port"], timeout=.2):
+                info = candidate
+                break
+            time.sleep(.03)
+        self.assertIsNotNone(info)
+        stopper = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), "stop", rid, "--timeout", "3"],
+                                   env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        deadline = time.monotonic() + 5
+        while not closing.exists() and time.monotonic() < deadline:
+            time.sleep(.03)
+        self.assertTrue(closing.exists(), "server did not enter server_close")
+        try:
+            state = json.loads(self.cli("serve.py", "stop", rid, "--status").stdout)
+            self.assertNotEqual(state["state"], "stopped")
+            self.assertIsNone(process.poll())
+            with socket.socket() as probe:
+                probe.settimeout(.2)
+                probe.connect(("127.0.0.1", info["port"]))
+        finally:
+            release.write_text("close")
+        stdout, stderr = stopper.communicate(timeout=8)
+        self.assertEqual(stopper.returncode, 0, stdout + stderr)
+        process.wait(timeout=5)
+        final = json.loads(self.cli("serve.py", "stop", rid, "--status").stdout)
+        self.assertEqual(final["state"], "stopped")
+
+    def test_independent_hook_must_exit_before_no_service_stop_can_complete(self):
+        rid = "b0" * 8
+        directory = self.review("orphan-hook", rid)
+        pid_file, release = self.root / "hook.pid", self.root / "release-hook"
+        hook = self.root / "hook.py"
+        hook.write_text(
+            "import os,time\nfrom pathlib import Path\n"
+            f"Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+            "deadline=time.monotonic()+5\n"
+            f"while not Path({str(release)!r}).exists() and time.monotonic()<deadline: time.sleep(.02)\n",
+            encoding="utf-8")
+        info, _ = self.start(directory, f"{sys.executable} {hook}")
+        status, _, submitted = self.request(info, "POST", "/api/handoff", {"message": "long hook"}, rid)
+        self.assertEqual(status, 200, submitted)
+        deadline = time.monotonic() + 5
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(.03)
+        self.assertTrue(pid_file.exists(), "hook did not start")
+        hook_pid = int(pid_file.read_text())
+        server_process = next(process for process in self.processes if process.pid == info["pid"])
+        server_process.terminate()
+        server_process.wait(timeout=5)
+        self.assertTrue(ledger.pid_alive(hook_pid))
+        try:
+            stopped = self.cli("serve.py", "stop", rid, "--timeout", ".1")
+            self.assertEqual(stopped.returncode, 1, stopped.stdout + stopped.stderr)
+            result = json.loads(stopped.stdout)
+            self.assertEqual(result["state"], "incomplete")
+            self.assertEqual(result["components"]["hooks"]["error"], "background-hook-running")
+            self.assertIn(hook_pid, result["components"]["hooks"]["pids"])
+        finally:
+            release.write_text("release")
+        deadline = time.monotonic() + 6
+        final = None
+        while time.monotonic() < deadline:
+            final = self.cli("serve.py", "stop", rid, "--timeout", ".2")
+            if final.returncode == 0:
+                break
+            time.sleep(.05)
+        self.assertIsNotNone(final)
+        self.assertEqual(final.returncode, 0, final.stdout + final.stderr)
+        self.assertEqual(json.loads(final.stdout)["state"], "stopped")
+
+    def test_inflight_delivery_is_settled_and_cancelled_before_stop_completes(self):
+        desktop = Desktop(self.root / "desktop-inflight.sock")
+        desktop.start_hold = threading.Event()
+        self.addCleanup(desktop.close)
+        rid = "c0" * 8
+        directory = self.review("inflight", rid)
+        bound = self.cli("wakeup.py", "bind", str(directory), "--adapter", "codex-desktop",
+                         "--thread", THREAD, "--socket", str(desktop.path))
+        self.assertEqual(bound.returncode, 0, bound.stdout + bound.stderr)
+        _state, round_no = analysis_store.start_question(directory, "inflight delivery", by="synthetic")
+        binding = json.loads((directory / ".agent-binding.json").read_text())
+        payload = {"app": "annotation-everything", "reviewId": rid, "reviewDir": str(directory),
+                   "bindingId": binding["bindingId"], "event": "analysis", "seq": round_no}
+        delivery = subprocess.Popen([sys.executable, str(SCRIPTS / "wakeup.py"), "deliver", str(directory)],
+                                    env=self.env, stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.processes.append(delivery)
+        delivery.stdin.write(json.dumps(payload))
+        delivery.stdin.close()
+        history_path = directory / ".agent-deliveries.json"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            history = json.loads(history_path.read_text()) if history_path.exists() else {"items": {}}
+            if any(item.get("state") == "sending" for item in history["items"].values()):
+                break
+            time.sleep(.03)
+        self.assertTrue(any(item.get("state") == "sending" for item in history["items"].values()))
+        stopper = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), "stop", rid, "--timeout", "3"],
+                                   env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.processes.append(stopper)
+        try:
+            deadline = time.monotonic() + 1
+            while stopper.poll() is None and time.monotonic() < deadline:
+                time.sleep(.02)
+            self.assertIsNone(stopper.poll(), "stop completed while start-turn was still in flight")
+        finally:
+            desktop.start_hold.set()
+        stdout, stderr = stopper.communicate(timeout=8)
+        self.assertEqual(stopper.returncode, 0, stdout + stderr)
+        self.assertEqual(json.loads(stdout)["state"], "stopped")
+        self.assertEqual(len(desktop.cancelled), 1)
+
+    def test_direct_delivery_cannot_start_after_cancellation_snapshot(self):
+        desktop = Desktop(self.root / "desktop-race.sock")
+        self.addCleanup(desktop.close)
+        rid = "d0" * 8
+        directory = self.review("delivery-race", rid)
+        bound = self.cli("wakeup.py", "bind", str(directory), "--adapter", "codex-desktop",
+                         "--thread", THREAD, "--socket", str(desktop.path))
+        self.assertEqual(bound.returncode, 0, bound.stdout + bound.stderr)
+        _state, round_no = analysis_store.start_question(directory, "delivery race", by="synthetic")
+        program = ("import sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);"
+                   "import notes;notes.notify_analysis(Path(sys.argv[2]),"
+                   "{'rounds':[{'seq':int(sys.argv[3]),'status':'submitted'}]})")
+        with wakeup.dispatch_lock(directory):
+            delivery = subprocess.Popen([sys.executable, "-c", program, str(SCRIPTS), str(directory), str(round_no)],
+                                        env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.processes.append(delivery)
+            time.sleep(.2)
+            stopper = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), "stop", rid,
+                                        "--timeout", "3"], env=self.env,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.processes.append(stopper)
+            deadline = time.monotonic() + 1
+            while stopper.poll() is None and time.monotonic() < deadline:
+                time.sleep(.02)
+            self.assertIsNone(stopper.poll(), "stop completed before the admitted delivery was settled")
+        delivery_out, delivery_err = delivery.communicate(timeout=8)
+        stdout, stderr = stopper.communicate(timeout=8)
+        self.assertIn(delivery.returncode, (0, 1, 2), delivery_out + delivery_err)
+        if delivery.returncode != 0:
+            self.assertIn("review-stopped", delivery_err)
+        self.assertEqual(stopper.returncode, 0, stdout + stderr)
+        self.assertEqual(json.loads(stdout)["state"], "stopped")
+        starts = [request for request in desktop.requests if request["method"] == "thread-follower-start-turn"]
+        self.assertEqual(len(desktop.cancelled), len(starts),
+                         "every direct delivery admitted before cancellation must be confirmed stopped")
 
 
 if __name__ == "__main__":

@@ -2004,7 +2004,7 @@ async function stopLocalService(){
     if(pend.get().length||failed.get().length||saveFailures!==rejectedBefore
         ||LS.get(K.rejected,null)!==sharedRejectedBefore||mode!=="server"){
       toast(tMsg("viewer.batch.stopUnsaved"),8000);return}
-    const r=await api("POST","/api/server/stop",{saveProtected:true});
+    const r=await api("POST","/api/server/stop",{});
     if(r.reviewId!==RID)throw new Error(tMsg("viewer.error.format"));
     if(typeof r.state!=="string"){const e=new Error(tMsg("viewer.error.format"));e.code="no-api";e.status=200;throw e}
     if(r.state==="incomplete"||r.stopping!==true){
