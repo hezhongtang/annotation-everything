@@ -575,6 +575,8 @@ const SKILL_CONTEXT=__SKILL_CONTEXT__;
 const SECT=__SECT__, RCSS=__RCSS__, SECT_KEYS=P.map(p=>"page-"+p.key);
 // DOCX 审阅：分页可信度与有限制的结构（null 表示逐页 HTML 报告）。页尺寸在 P[k].w / h，缺省 1280×720
 const DOCX=__DOCX__;
+// PPT 审阅：渲染信息、字体证据与未核验项（null 表示非 PPTX 报告）。视觉由每页内联渲染图负责
+const PPTX=__PPTX__;
 function pageSize(k){const p=P[k]||{};return{w:+p.w>0?+p.w:1280,h:+p.h>0?+p.h:720}}
 const PAGE_NS=new Set(P.map(q=>q.n));   // 报告页码：页面生命周期内不变，找失页批注时直接查
 const APP="annotation-everything", FILE=location.protocol==="file:";
