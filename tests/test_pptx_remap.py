@@ -600,13 +600,23 @@ class ExchangeTests(unittest.TestCase):
                     items, _always = ef.parse_markdown(ef.render(self.notes(a), title="合成", lang=lang))
                     self.assertEqual(items[0]["pptx"], self.portable(a))
 
-    def test_newer_version_is_named_but_not_parsed_back(self):
+    def test_newer_version_keeps_version_info_and_warns_on_import(self):
+        """未知的新版本定位不当作无定位静默导入（Decision 17）：md 行只带版本号，
+        保留版本信息（完整内容在 JSON 备份里），导入存储后 show 列出需升级提示。"""
         for lang, word in (("zh-CN", "PPT 定位：v2"), ("en", "PPT location: v2")):
             text = ef.render(self.notes({"v": 2, "slide": "s260", "x": 1}), title="合成", lang=lang)
             self.assertIn(word, text)
             items, _always = ef.parse_markdown(text)
-            self.assertNotIn("pptx", items[0])
-            self.assertEqual(items[0]["text"], "改措辞")
+            self.assertEqual(items[0]["pptx"], {"v": 2}, "保留原始版本信息，不静默丢弃")
+            self.assertEqual(items[0]["text"], "改措辞", "定位行不并进正文")
+            d = review_dir()
+            store.import_notes(d, items)
+            saved = store.load(d)["notes"][0]
+            self.assertEqual(saved.get("pptx"), {"v": 2}, "存储层高版本原样保留，导入不丢")
+            shown = notes_cli.to_markdown(store.load(d), {"title": "合成", "pages": [{"n": 2, "key": "s260", "title": "元素页"}]},
+                                          include_resolved=True, page=None, locale=lang)
+            self.assertIn("不可用于回写" if lang == "zh-CN" else "cannot be used for write-back", shown,
+                          "需升级提示可见，不是无定位文本")
 
     def test_notes_without_anchor_export_as_before(self):
         note = self.notes(self.PAGE)[0]
