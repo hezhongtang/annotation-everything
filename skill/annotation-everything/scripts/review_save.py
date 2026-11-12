@@ -63,6 +63,10 @@ class BrowserSaves:
             self._pages = registered_pages(self.directory, review_id)
         return self._pages
 
+    def has_registered_pages(self, review_id):
+        with self._condition:
+            return bool(self._load(review_id))
+
     def _store(self, review_id, pages):
         fsutil.atomic_write(self.directory / REGISTRY,
                             json.dumps({"reviewId": review_id, "pages": pages}) + "\n",

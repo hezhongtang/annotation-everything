@@ -40,7 +40,7 @@ def workspace_for(review_dir: Path) -> Path:
 
 
 def in_scope(directory: Path, workspace: Path, scope: str) -> bool:
-    return scope == "all" or directory == workspace or workspace in directory.parents
+    return scope == "all" or workspace_for(directory) == workspace
 
 
 def display_path(directory: Path, workspace: Path) -> str:

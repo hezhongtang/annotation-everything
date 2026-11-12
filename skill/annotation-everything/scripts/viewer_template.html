@@ -1211,19 +1211,15 @@ async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}cat
 
 // 总览和 CLI 通过目标服务请求保存回执。浏览器只访问同源服务。
 const SAVE_PATH="/api/server/save-protection";
-const saveClientKey=`ae.${RID}.saveClient`,savePageKey=`ae.${RID}.savePage`;
-const browserSaveId=()=>crypto.randomUUID().replaceAll("-","");
+const saveClientKey=`ae.${RID}.saveClient`;
+const browserSaveId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,"0")).join("");
 const validSaveId=id=>typeof id==="string"&&/^[0-9a-f]{32}$/.test(id);
 let savePage=null,savePagePolling=false,savePageSupported=true,savePageRegistered=false,savePageReceipt=false;
 let savePageCanReadStorage=false;
 function initSavePage(){
-  const oldPage=SS.get(savePageKey,null);
-  const reload=performance.getEntriesByType("navigation")[0]?.type==="reload";
-  const pageId=reload&&validSaveId(oldPage)?oldPage:browserSaveId();
   const oldClient=LS.get(saveClientKey,null),clientId=validSaveId(oldClient)?oldClient:browserSaveId();
   savePageCanReadStorage=LS.set(saveClientKey,clientId);
-  SS.set(savePageKey,pageId);
-  savePage={pageId,clientId};
+  savePage={pageId:browserSaveId(),clientId};   // 旧文档的 pagehide 只注销自己的登记
   addEventListener("pagehide",()=>{
     if(!savePageRegistered||!savePageCanReadStorage||flushing||savePageReceipt||!savePageQueueEmpty())return;
     fetch(SAVE_PATH,{method:"POST",keepalive:true,
@@ -1272,6 +1268,7 @@ async function pollSavePage(){
 // 轮询带回的「最新一批（完整内容）+ 投递状态」签名：逐字段相同才认为这次轮询没有新东西可画。
 // 只有摘要类字段（处理摘要、附言、认领时间……）变化时也要重画，所以比 handSig 那几个字段细。
 let handPollKey="";
+const supportsReviewStop=d=>["stop-review","stop-review-status","stop-save-protection"].every(name=>hasFeature(d,name));
 function handPollKeyOf(d){const h=d&&d.handoff||null;
   return JSON.stringify([h&&h.latest||null,h?h.total:null,h&&Array.isArray(h.inFlightIds)?h.inFlightIds:[],
     h&&h.finalizable||null,d&&d.agentDelivery||null])}
@@ -1284,7 +1281,7 @@ function applyServer(d,quietHand){
   srvNoStages=!hasFeature(d,"stages");
   srvNoFullCheck=!hasFeature(d,"full-check");
   savePageSupported=hasFeature(d,"stop-save-protection");
-  stopServiceSupported=hasFeature(d,"stop-review")&&hasFeature(d,"stop-review-status");
+  stopServiceSupported=supportsReviewStop(d);
   if(stopServiceSupported&&d.stop){
     rememberReviewStop(d.stop,true);
     if(stopSnapshot?.state==="stopped")mode="offline";
@@ -2111,9 +2108,13 @@ function validReviewStop(value,rid){
     &&Object.keys(STOP_COMPONENTS).every(name=>Object.hasOwn(STOP_COMPONENT_STATES,value.components?.[name]?.state)
       &&(value.state!=="stopped"||value.components[name].state==="stopped"));
 }
+function newerReviewStop(value,known){
+  return !known||(value.revision??-1)>(known.revision??-1)
+    ||(value.revision===known.revision&&known.state==="stopping"&&value.incompleteReasons?.request==="stop-interrupted");
+}
 function rememberReviewStop(value,share=false){
   if(!validReviewStop(value,RID))return false;
-  if(stopSnapshot&&stopSnapshot.revision>=value.revision){
+  if(!newerReviewStop(value,stopSnapshot)){
     if(stopSnapshot.state==="stopping")watchReviewStop(stopSnapshot.stopId);
     return true
   }
@@ -2123,7 +2124,7 @@ function rememberReviewStop(value,share=false){
   if(reopened||value.state==="stopped"||value.state==="incomplete")stopProblem="";
   if(share){
     const cached=LS.get(REVIEW_STOP_KEY,null);
-    if(!cached||cached.revision<value.revision)LS.set(REVIEW_STOP_KEY,value)
+    if(newerReviewStop(value,cached))LS.set(REVIEW_STOP_KEY,value)
   }
   if(value.state==="stopping")watchReviewStop(value.stopId);
   return true
@@ -2156,7 +2157,7 @@ function renderReviewStop(){
   const snapshot=legacy?null:stopSnapshot;
   const state=snapshot?.state||"active",retry=state==="incomplete"||(state==="stopping"&&stopProblem==="unconfirmed");
   const notice=stopPhase||stopProblem||(legacy?"legacy":"");
-  const key=JSON.stringify([uiLocale,mode,state,notice,snapshot?.components]);
+  const key=JSON.stringify([uiLocale,mode,state,notice,snapshot?.components,snapshot?.incompleteReasons?.request]);
   if(key===stopRenderKey)return;
   stopRenderKey=key;
   btn.hidden=FILE;
@@ -2177,7 +2178,8 @@ function renderReviewStop(){
   else if(notice==="gated")info=tMsg("viewer.stop.gated");
   else if(notice==="unconfirmed"||(mode!=="server"&&state!=="active")){
     info=tMsg("viewer.stop.checkStatus");command=STOP_STATUS_CMD
-  }else if(state==="incomplete")info=tMsg("viewer.stop.incompleteHint");
+  }else if(state==="incomplete")info=snapshot.incompleteReasons?.request?
+    reviewStopReason(snapshot.incompleteReasons.request):tMsg("viewer.stop.incompleteHint");
   $("stopInfo").textContent=info;$("stopInfo").hidden=!info;
   $("stopCommand").textContent=command;$("stopRecovery").hidden=!command;
   const details=$("stopDetails");
@@ -2198,22 +2200,23 @@ async function prepareCurrentReviewStop(){
   const rejectedBefore=saveFailures,sharedRejectedBefore=LS.get(K.rejected,null);
   try{
     const before=await getNotes();
-    stopServiceSupported=hasFeature(before,"stop-review")&&hasFeature(before,"stop-review-status");
+    stopServiceSupported=supportsReviewStop(before);
     if(!stopServiceSupported)return stopPreflightProblem("legacy");
     if(!rememberReviewStop(before.stop,true))return stopPreflightProblem("unconfirmed");
+    if(stopSnapshot.state==="stopping"||stopSnapshot.state==="stopped")return false;
     saveDraft();stashEdit();stashAnalysisInputs();migrateLegacyQueue();
-    const saved=before.stop.state==="active"?await flush():flushing?await flushing:true;
+    const saved=before.stop.state!=="active"||await flush();
     const after=await getNotes();
-    stopServiceSupported=hasFeature(after,"stop-review")&&hasFeature(after,"stop-review-status");
+    stopServiceSupported=supportsReviewStop(after);
     if(!stopServiceSupported)return stopPreflightProblem("legacy");
     if(!rememberReviewStop(after.stop,true))return stopPreflightProblem("unconfirmed");
-    const retryingSave=after.stop.state==="incomplete"&&after.stop.components.save.state==="incomplete"
-      &&hasFeature(after,"stop-save-protection");
-    if(retryingSave)await registerSavePage();
+    if(stopSnapshot.state==="stopping"||stopSnapshot.state==="stopped")return false;
+    const retryingSave=stopSnapshot.state==="incomplete";
+    await registerSavePage();
     // 核对最后一次身份读取期间发生的其他标签页补传与拒绝。
-    if(!saved||(!retryingSave&&(pend.get().length||failed.get().length))||saveFailures!==rejectedBefore
+    if((!retryingSave&&(!saved||pend.get().length||failed.get().length))||saveFailures!==rejectedBefore
         ||LS.get(K.rejected,null)!==sharedRejectedBefore){
-      return stopPreflightProblem(after.stop.state==="active"?"unsaved":"gated")
+      return stopPreflightProblem(retryingSave?"gated":"unsaved")
     }
     return true
   }catch(e){
@@ -2236,7 +2239,7 @@ async function requestCurrentReviewStop(){
     const expectedStop={stopId:stopSnapshot.stopId,attempts:stopSnapshot.attempts};
     stopPhase="requesting";updateMode();
     progressTimer=setInterval(queryReviewStop,400);
-    const r=await api("POST",REVIEW_STOP_PATH,{timeout:10,waitForExit:true,expectedStop},13000);
+    const r=await api("POST",REVIEW_STOP_PATH,{timeout:10,waitForExit:true,requirePageSave:true,expectedStop},13000);
     if(r.reviewId!==RID||r.state!==r.stop?.state||!rememberReviewStop(r.stop,true)){
       stopProblem="unconfirmed";return
     }
@@ -3097,7 +3100,7 @@ function overviewStateLabel(row){
 function overviewStopStatus(row){
   const local=overviewStopResults.get(row.reviewId),saved=row.stop;
   if(overviewStopping.has(row.reviewId))return saved?.state==="stopping"?saved:{state:"stopping"};
-  if(local&&(!saved||!Number.isInteger(saved.revision)||saved.revision<=(local.revision??-1)))return local;
+  if(local&&(!saved||!newerReviewStop(saved,local)))return local;
   return saved||null;
 }
 function overviewStopEligible(row){
@@ -3136,6 +3139,9 @@ function overviewStopFeedback(row,label){
 function overviewStopFailure(rid,revision,code){
   return {reviewId:rid,state:"incomplete",stopId:null,revision,incompleteReasons:{request:code}};
 }
+function overviewStopUnconfirmed(status){
+  return status?.state==="incomplete"&&Object.values(status.incompleteReasons||{}).includes("stop-status-unconfirmed");
+}
 async function stopOverviewReview(row,scope){
   if(!overviewStopEligible(row)||overviewStopping.has(row.reviewId)||!["workspace","all"].includes(scope))return null;
   const rid=row.reviewId,revision=row.stop?.revision;
@@ -3144,7 +3150,7 @@ async function stopOverviewReview(row,scope){
   let result;
   try{
     if(row.current&&!await prepareCurrentReviewStop())
-      result=failure("stop-preflight-failed");
+      result=["stopping","stopped"].includes(stopSnapshot?.state)?stopSnapshot:failure("stop-preflight-failed");
     else{
       const reply=await api("POST","/api/overview/stop",{reviewId:rid,scope},13000);
       if(reply.reviewId!==rid||reply.stop?.reviewId!==rid||reply.state!==reply.stop.state||
@@ -3252,11 +3258,11 @@ function reconcileOverviewBatch(batch,data){
   for(const target of batch.targets){
     const {reviewId,status}=target;
     const pending=status.state==="stopping";
-    if(overviewStopping.has(reviewId)||!(pending||
-        status.incompleteReasons?.request==="stop-status-unconfirmed"))continue;
+    if(overviewStopping.has(reviewId)||!(pending||overviewStopUnconfirmed(status)))continue;
     const reported=rows.get(reviewId)?.stop||(reviewId===RID?stopSnapshot:null);
     if(validReviewStop(reported,reviewId)&&reported.state!=="active"&&(pending||reported.state!=="stopping")&&
-        reported.revision>(status.revision??target.revision??-1)&&(!status.stopId||status.stopId===reported.stopId)){
+        newerReviewStop(reported,{state:status.state,revision:status.revision??target.revision})&&
+        (!status.stopId||status.stopId===reported.stopId)){
       target.status=reported;
       changed=true;
     }
@@ -3293,7 +3299,7 @@ async function stopOverviewBatchTarget(batch,target,row){
   target.until=Date.now()+OVERVIEW_BATCH_WAIT;
   saveOverviewBatch();
   const result=await stopOverviewReview(row,batch.scope);
-  if(result&&result.incompleteReasons?.request!=="stop-status-unconfirmed")target.status=result;
+  if(result&&!overviewStopUnconfirmed(result))target.status=result;
   if(target.status.state==="stopping")target.until=Date.now()+OVERVIEW_BATCH_WAIT;
   saveOverviewBatch();
 }
@@ -3448,7 +3454,7 @@ async function loadOverview(){
     if(request!==overviewRequest||archiveBusy)return;
     for(const row of data.reviews){
       const local=overviewStopResults.get(row.reviewId);
-      if(local&&row.stop?.revision>(local.revision??-1))overviewStopResults.delete(row.reviewId)
+      if(local&&row.stop&&newerReviewStop(row.stop,local))overviewStopResults.delete(row.reviewId)
     }
     const changed=!$("overviewError").hidden||JSON.stringify(overviewData)!==JSON.stringify(data);
     const current=data.reviews.find(row=>row.current);if(current)setCurrentArchive(current.archived);

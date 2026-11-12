@@ -897,6 +897,7 @@
     "viewer.stop.reason.agent-turn-id-unavailable": "无法确认要取消的 Agent 轮次",
     "viewer.stop.reason.agent-record-timeout": "记录取消确认超时",
     "viewer.stop.reason.http-status-unconfirmed": "本地服务是否退出待核实",
+    "viewer.stop.reason.stop-interrupted": "上次停止已中断。请选择「重试停止」继续处理未确认的组件。",
     "viewer.stop.reason.upgrade-required": "需要升级本地服务",
     "viewer.stop.reason.unknown": "请核对组件状态（{code}）",
     "viewer.batch.loading": "正在读取处理记录…",
