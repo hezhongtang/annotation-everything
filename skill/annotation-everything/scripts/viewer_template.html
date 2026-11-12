@@ -337,7 +337,7 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
 .overview-top h1{font-size:var(--ae-dialog-title);line-height:1.5;margin:0;flex:1 1 220px;color:var(--ae-navy);overflow-wrap:anywhere}
 #overview button,#overview select,#overview .overview-open{font:inherit;font-size:var(--ae-text);border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-7) var(--ae-gap-12);background:var(--ae-panel);color:var(--ae-ink);cursor:pointer}
 #overview button:disabled{opacity:.55;cursor:default}
-#overviewStop{color:var(--ae-warning);border-color:var(--ae-danger-line)}
+#overview #overviewStop,#overview #overviewStopAll{color:var(--ae-warning);border-color:var(--ae-danger-line)}
 .overview-top select{max-width:100%}
 .overview-archive-toggle{display:flex;align-items:center;gap:var(--ae-gap-6);font-size:var(--ae-text);white-space:nowrap}
 .overview-archive-toggle input{margin:0;accent-color:var(--ae-accent)}
@@ -369,8 +369,16 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
 .overview-command{display:block;max-width:100%;padding:var(--ae-gap-9) var(--ae-gap-12);border:1px solid var(--ae-line);border-radius:var(--ae-radius);background:var(--ae-qa);font-size:var(--ae-text);user-select:all;overflow-wrap:anywhere}
 .overview-message{color:var(--ae-mut);padding:var(--ae-gap-18);font-size:var(--ae-body);line-height:1.7;margin:0}
 .overview-archived-hidden{display:flex;align-items:center;justify-content:space-between;gap:var(--ae-gap-10);padding:var(--ae-gap-12) var(--ae-gap-14);font-size:var(--ae-text);color:var(--ae-mut);border-bottom:1px solid var(--ae-line)}
+.overview-batch{width:calc(100% - 2 * var(--ae-gap-24));max-width:1192px;margin:var(--ae-gap-14) auto 0;padding:var(--ae-gap-14);border:1px solid var(--ae-line);border-radius:var(--ae-radius-lg);background:var(--ae-panel);font-size:var(--ae-text);line-height:1.7;overflow-wrap:anywhere}
+.overview-batch p{margin:0}
+.overview-batch ul{margin:var(--ae-gap-7) 0;padding-inline-start:var(--ae-gap-22)}
+.overview-batch small{display:block;color:var(--ae-mut)}
+.overview-batch [data-state=incomplete]{color:var(--ae-warning)}
+#overviewBatchStatus{font-weight:600}
+#overviewBatchRetry:not([hidden]){margin-top:var(--ae-gap-7)}
+#overviewBatchRecovery:not([hidden]){margin-top:var(--ae-gap-7)}
 #overviewError{color:var(--ae-warning)}.overview-count{font-weight:400;margin-left:var(--ae-gap-6)}
-@media(max-width:800px){.overview-body{grid-template-columns:minmax(0,1fr);padding:var(--ae-gap-14);gap:var(--ae-gap-14)}.overview-top{padding:var(--ae-gap-12) var(--ae-gap-14);gap:var(--ae-gap-10)}.overview-detail{position:static}.overview-detail dl{grid-template-columns:80px minmax(0,1fr)}}
+@media(max-width:800px){.overview-body{grid-template-columns:minmax(0,1fr);padding:var(--ae-gap-14);gap:var(--ae-gap-14)}.overview-top{padding:var(--ae-gap-12) var(--ae-gap-14);gap:var(--ae-gap-10)}.overview-batch{width:calc(100% - 2 * var(--ae-gap-14))}.overview-detail{position:static}.overview-detail dl{grid-template-columns:80px minmax(0,1fr)}}
 
 /* 分析与批注共用控制台的三个区域、抽屉和设计变量。 */
 body.analysis-mode #panes,body.analysis-mode #bottomPanel>.panel-tabs,body.analysis-mode #panelBody,body.analysis-mode #sidebar>:not(#analysisSidebar){display:none}
@@ -471,6 +479,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
       <option value="all" data-msg="viewer.overview.all"></option>
     </select>
     <label class="overview-archive-toggle"><input id="overviewShowArchived" type="checkbox"><span data-msg="viewer.overview.showArchived"></span></label>
+    <button id="overviewStopAll" type="button" hidden></button>
     <button id="overviewRefresh" data-msg="viewer.overview.refresh"></button>
     <button id="overviewBack" data-msg="viewer.overview.back"></button>
   </div>
@@ -479,6 +488,12 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
     <button id="overviewUnarchive" type="button" data-msg="viewer.overview.unarchive"></button>
   </div>
   <p id="overviewError" class="overview-message" role="alert" hidden></p>
+  <section id="overviewBatch" class="overview-batch" aria-labelledby="overviewBatchStatus" hidden>
+    <p id="overviewBatchStatus" role="status"></p>
+    <ul id="overviewBatchTargets"></ul>
+    <button id="overviewBatchRetry" type="button" data-msg="viewer.overview.batch.retry" hidden></button>
+    <p id="overviewBatchRecovery" hidden></p>
+  </section>
   <div class="overview-body">
     <div id="overviewList" class="overview-list" data-aria="viewer.overview.list"></div>
     <section id="overviewDetail" class="overview-detail" aria-live="polite" data-aria="viewer.overview.detail"></section>
@@ -2089,13 +2104,16 @@ const STOP_COMPONENT_STATES={
   stopped:"viewer.stop.component.stopped",incomplete:"viewer.stop.component.incomplete"
 };
 let stopSnapshot=null,stopPhase="",stopProblem="",stopWatchId=null,stopReadPending=false,stopRenderKey="",lastStopState="";
+function validReviewStop(value,rid){
+  return !!value&&value.reviewId===rid&&Number.isSafeInteger(value.revision)&&value.revision>=0
+    &&Number.isSafeInteger(value.attempts)&&value.attempts>=0
+    &&(value.state==="active"||Object.hasOwn(STOP_STATES,value.state))
+    &&(value.state==="active"?value.stopId===null:typeof value.stopId==="string")
+    &&Object.keys(STOP_COMPONENTS).every(name=>Object.hasOwn(STOP_COMPONENT_STATES,value.components?.[name]?.state)
+      &&(value.state!=="stopped"||value.components[name].state==="stopped"));
+}
 function rememberReviewStop(value,share=false){
-  if(!value||value.reviewId!==RID||!Number.isSafeInteger(value.revision)||value.revision<0
-      ||!Number.isSafeInteger(value.attempts)||value.attempts<0
-      ||(value.state!=="active"&&!Object.hasOwn(STOP_STATES,value.state))
-      ||(value.state==="active"?value.stopId!==null:typeof value.stopId!=="string")
-      ||!Object.keys(STOP_COMPONENTS).every(name=>Object.hasOwn(STOP_COMPONENT_STATES,value.components?.[name]?.state)
-        &&(value.state!=="stopped"||value.components[name].state==="stopped")))return false;
+  if(!validReviewStop(value,RID))return false;
   if(stopSnapshot&&stopSnapshot.revision>=value.revision){
     if(stopSnapshot.state==="stopping")watchReviewStop(stopSnapshot.stopId);
     return true
@@ -3054,6 +3072,9 @@ setInterval(()=>{if(!document.hidden)loadAnalyses()},4000);
 let overviewData=null,overviewSelected=null,overviewRequest=0,overviewLoading=false;
 const overviewStarting=new Set(),overviewStartFailures=new Map();
 const overviewStopping=new Set(),overviewStopResults=new Map();
+const OVERVIEW_BATCH_KEY="ae."+RID+".overview-stop-batch";
+const OVERVIEW_BATCH_WAIT=15000;
+let overviewBatch=restoreOverviewBatch(),overviewBatchBusy=false,overviewBatchRetryError=false,overviewBatchListHtml="";
 let currentArchived=false,archiveBusy=false;
 function renderArchiveBanners(){
   ["archiveBanner","overviewArchiveBanner"].forEach(id=>{$(id).hidden=!currentArchived});
@@ -3091,6 +3112,7 @@ function overviewStopIssue(code){
     "http-status-unconfirmed":"httpUnconfirmed","overview-review-out-of-scope":"outOfScope",
     "overview-review-unknown":"unavailable","overview-review-invalid":"unavailable",
     "overview-review-not-running":"unavailable","stop-status-unconfirmed":"statusUnconfirmed",
+    "overview-batch-interrupted":"batchInterrupted",
     "stop-preflight-failed":"saveUnconfirmed"
   }[code];
   return key?tMsg("viewer.overview.stopIssue."+key):reviewStopReason(code);
@@ -3112,10 +3134,13 @@ function overviewStopFeedback(row,label){
     ${requestError?`<p>${escH(overviewStopIssue(requestError))}</p>`:""}
     ${row.current&&status.state==="stopped"?`<p>${escH(tMsg("viewer.overview.stopCurrentStopped"))}</p>`:""}</div>`;
 }
+function overviewStopFailure(rid,revision,code){
+  return {reviewId:rid,state:"incomplete",stopId:null,revision,incompleteReasons:{request:code}};
+}
 async function stopOverviewReview(row,scope){
   if(!overviewStopEligible(row)||overviewStopping.has(row.reviewId)||!["workspace","all"].includes(scope))return null;
   const rid=row.reviewId,revision=row.stop?.revision;
-  const failure=code=>({reviewId:rid,state:"incomplete",stopId:null,revision,incompleteReasons:{request:code}});
+  const failure=code=>overviewStopFailure(rid,revision,code);
   overviewStopping.add(rid);overviewStopResults.delete(rid);renderOverview();
   let result;
   try{
@@ -3124,7 +3149,8 @@ async function stopOverviewReview(row,scope){
     else{
       const reply=await api("POST","/api/overview/stop",{reviewId:rid,scope},13000);
       if(reply.reviewId!==rid||reply.stop?.reviewId!==rid||reply.state!==reply.stop.state||
-          !["stopping","stopped","incomplete"].includes(reply.state))throw new Error("overview-stop-format");
+          !["stopping","stopped","incomplete"].includes(reply.state)||
+          (reply.state==="stopped"&&!validReviewStop(reply.stop,rid)))throw new Error("overview-stop-format");
       result=reply.stop;
       if(row.current&&rememberReviewStop(result,true))updateMode();
     }
@@ -3141,7 +3167,7 @@ async function stopOverviewReview(row,scope){
 }
 function confirmOverviewStop(row){
   const scope=overviewData?.scope;
-  if(!overviewStopEligible(row)||!hasFeature(overviewData,"overview-stop")||!scope)return;
+  if(overviewBatchOwnsStop(row)||!overviewStopEligible(row)||!hasFeature(overviewData,"overview-stop")||!scope)return;
   const work=["waiters","batches","analysis","hooks"].filter(name=>row.stopWork?.[name])
     .map(name=>tMsg("viewer.overview.stopWork."+name)).join(tMsg("viewer.overview.stopWorkSeparator"));
   const message=tMsg("viewer.overview.stopConfirm",{name:row.name||row.reviewId,id:row.reviewId.slice(0,8),
@@ -3149,12 +3175,178 @@ function confirmOverviewStop(row){
   const warning=row.current?"\n\n"+tMsg("viewer.overview.stopCurrentConfirm"):"";
   if(confirm(message+warning))void stopOverviewReview(row,scope);
 }
+function restoreOverviewBatch(){
+  const batch=SS.get(OVERVIEW_BATCH_KEY,null);
+  if(!["workspace","all"].includes(batch?.scope)||!Array.isArray(batch.targets)||!batch.targets.length||
+     !batch.targets.every(target=>/^[0-9a-f]{16}$/.test(target?.reviewId)&&typeof target.name==="string"&&
+       ["queued","stopping","incomplete","stopped"].includes(target.status?.state)&&
+       (target.status.state!=="stopped"||validReviewStop(target.status,target.reviewId))))return null;
+  for(const target of batch.targets){
+    if(target.status.state==="queued"){
+      target.status=overviewStopFailure(target.reviewId,target.revision,"overview-batch-interrupted");
+    }
+  }
+  SS.set(OVERVIEW_BATCH_KEY,batch);
+  return batch;
+}
+function overviewBatchPending(target){return ["queued","stopping"].includes(target.status.state)}
+function overviewBatchActive(){return overviewBatchBusy||overviewBatch?.targets.some(overviewBatchPending)}
+function overviewBatchOwnsStop(row){
+  return overviewBatchActive()&&(row.current||overviewBatch.targets.some(target=>
+    target.reviewId===row.reviewId&&overviewBatchPending(target)));
+}
+function overviewBatchScope(batch){
+  const label=tMsg("viewer.overview."+batch.scope);
+  return batch.scope==="workspace"&&batch.workspace?label+" · "+batch.workspace:label;
+}
+function overviewConnected(){
+  return !!overviewData&&$("overviewError").hidden&&overviewStopResults.get(RID)?.state!=="stopped";
+}
+function renderOverviewBatch(){
+  const rows=(overviewData?.reviews||[]).filter(overviewStopEligible);
+  const stopAll=$("overviewStopAll");
+  stopAll.hidden=!overviewData||!hasFeature(overviewData,"overview-stop");
+  stopAll.disabled=!overviewConnected()||!rows.length||overviewBatchActive()||
+    rows.some(row=>row.current&&overviewStopStatus(row)?.state==="stopping");
+  if(!stopAll.hidden){
+    stopAll.textContent=tMsg("viewer.overview.batch.action."+overviewData.scope,{total:rows.length});
+  }
+  const batch=overviewBatch;
+  $("overviewBatch").hidden=!batch;
+  if(!batch)return;
+  const count=batch.targets.length,stopped=batch.targets.filter(target=>target.status.state==="stopped").length;
+  const active=overviewBatchActive(),failed=batch.targets.filter(target=>target.status.state==="incomplete").length;
+  const state=active?"stopping":stopped===count?"stopped":"incomplete";
+  const summary=tMsg("viewer.overview.batch."+(state==="incomplete"&&stopped?"partial":state),
+    {scope:overviewBatchScope(batch),total:count,stopped});
+  const status=$("overviewBatchStatus");
+  status.dataset.state=state;
+  if(status.textContent!==summary)status.textContent=summary;
+  const targetList=batch.targets.map(({reviewId,name,status})=>{
+    const {state}=status;
+    const label=tMsg(state==="queued"?"viewer.overview.batch.queued":"viewer.overview.stopState."+state);
+    const codes=[...Object.values(status.incompleteReasons||{}),
+      ...Object.values(status.components||{}).flatMap(component=>component.causes||[])];
+    const reasons=[...new Set(codes)].map(overviewStopIssue);
+    return `<li data-batch-review="${escH(reviewId)}" data-state="${state}"><span lang="">${escH(name)}</span>
+      <small>${escH(reviewId.slice(0,8))} · ${escH(label)}</small>
+      ${reasons.map(reason=>`<small>${escH(reason)}</small>`).join("")}</li>`;
+  }).join("");
+  if(overviewBatchListHtml!==targetList){
+    $("overviewBatchTargets").innerHTML=targetList;overviewBatchListHtml=targetList;
+  }
+  const retry=$("overviewBatchRetry");
+  retry.hidden=!failed;retry.disabled=active||!overviewConnected()||!hasFeature(overviewData,"overview-stop");
+  const hostStopped=batch.targets.some(target=>target.reviewId===RID&&target.status.state==="stopped");
+  const recovery=$("overviewBatchRecovery");
+  recovery.hidden=!overviewBatchRetryError&&!(failed&&hostStopped&&!overviewConnected());
+  recovery.textContent=overviewBatchRetryError?tMsg("viewer.overview.loadError"):
+    tMsg("viewer.overview.batch.recover",{command:SERVE_CMD});
+}
+function saveOverviewBatch(){
+  SS.set(OVERVIEW_BATCH_KEY,overviewBatch);
+  renderOverviewBatch();
+}
+function reconcileOverviewBatch(batch,data){
+  const rows=new Map((data?.reviews||[]).map(row=>[row.reviewId,row]));
+  let changed=false;
+  for(const target of batch.targets){
+    const {reviewId,status}=target;
+    const pending=status.state==="stopping";
+    if(overviewStopping.has(reviewId)||!(pending||
+        status.incompleteReasons?.request==="stop-status-unconfirmed"))continue;
+    const reported=rows.get(reviewId)?.stop||(reviewId===RID?stopSnapshot:null);
+    if(validReviewStop(reported,reviewId)&&reported.state!=="active"&&(pending||reported.state!=="stopping")&&
+        reported.revision>(status.revision??target.revision??-1)&&(!status.stopId||status.stopId===reported.stopId)){
+      target.status=reported;
+      changed=true;
+    }
+    if(target.status.state==="stopping"&&Date.now()>=(target.until||0)){
+      const {stopId,revision}=target.status;
+      target.status={...overviewStopFailure(reviewId,revision??target.revision,"stop-status-unconfirmed"),stopId};
+      changed=true;
+    }
+  }
+  if(changed){saveOverviewBatch();renderOverview()}
+}
+async function checkOverviewBatch(batch){
+  let data=null;
+  try{data=await readOverview(batch.scope,2500)}catch(e){}
+  if(batch===overviewBatch)reconcileOverviewBatch(batch,data);
+}
+async function waitForOverviewBatch(batch){
+  while(batch.targets.some(target=>target.status.state==="stopping")){
+    await checkOverviewBatch(batch);
+    if(batch.targets.some(target=>target.status.state==="stopping"))await new Promise(resolve=>setTimeout(resolve,1000));
+  }
+}
+async function stopOverviewBatchTarget(batch,target,row){
+  const {reviewId}=target;
+  const saved=row&&overviewStopStatus(row);
+  if(!overviewStopEligible(row)){
+    target.status=saved?.state==="stopped"&&validReviewStop(saved,reviewId)?saved:
+      overviewStopFailure(reviewId,target.revision,"overview-review-not-running");
+    saveOverviewBatch();
+    return;
+  }
+  target.revision=row.stop?.revision;
+  target.status={state:"stopping"};
+  target.until=Date.now()+OVERVIEW_BATCH_WAIT;
+  saveOverviewBatch();
+  const result=await stopOverviewReview(row,batch.scope);
+  if(result&&result.incompleteReasons?.request!=="stop-status-unconfirmed")target.status=result;
+  if(target.status.state==="stopping")target.until=Date.now()+OVERVIEW_BATCH_WAIT;
+  saveOverviewBatch();
+}
+async function runOverviewBatch(batch,rows=null){
+  const retry=rows===null;
+  overviewBatchBusy=true;overviewBatchRetryError=false;saveOverviewBatch();
+  try{
+    if(retry){
+      const data=await readOverview(batch.scope);
+      if(!hasFeature(data,"overview-stop"))throw new Error("overview-stop-unavailable");
+      reconcileOverviewBatch(batch,data);
+      rows=data.reviews;
+    }
+    const targets=batch.targets.filter(target=>target.status.state===(retry?"incomplete":"queued"));
+    const byId=new Map(rows.map(row=>[row.reviewId,row]));
+    for(const target of targets)target.status={state:"queued"};
+    saveOverviewBatch();
+    const send=target=>stopOverviewBatchTarget(batch,target,byId.get(target.reviewId));
+    const peers=targets.filter(target=>target.reviewId!==RID);
+    // Leave connections available for overview reads and target pages' save confirmations.
+    for(let i=0;i<peers.length;i+=3)await Promise.all(peers.slice(i,i+3).map(send));
+    await waitForOverviewBatch(batch);
+    // The host can still report on peers up to the moment it closes its own port.
+    const current=targets.find(target=>target.reviewId===RID);
+    if(current){await send(current);await waitForOverviewBatch(batch)}
+  }catch(e){
+    overviewBatchRetryError=true;
+    for(const target of batch.targets){
+      if(target.status.state==="queued"){
+        target.status=overviewStopFailure(target.reviewId,target.revision,"overview-batch-interrupted");
+      }
+    }
+  }
+  finally{overviewBatchBusy=false;saveOverviewBatch();renderOverview()}
+}
+function confirmOverviewBatch(){
+  if($("overviewStopAll").disabled)return;
+  const {scope,workspace}=overviewData;
+  const rows=overviewData.reviews.filter(overviewStopEligible);
+  const targets=rows.map(row=>({reviewId:row.reviewId,name:row.name||row.reviewId,revision:row.stop?.revision,status:{state:"queued"}}));
+  const batch={scope,workspace,targets};
+  const message=tMsg("viewer.overview.batch.confirm",{scope:overviewBatchScope(batch),count:targets.length});
+  const warning=rows.some(row=>row.current)?"\n\n"+tMsg("viewer.overview.stopCurrentConfirm"):"";
+  if(confirm(message+warning)){overviewBatch=batch;void runOverviewBatch(batch,rows)}
+}
 function overviewTime(value){
   if(typeof value!=="number"||!Number.isFinite(value)||value<=0)return tMsg("viewer.overview.noActivity");
   const date=new Date(value*1000);return Number.isFinite(date.getTime())?date.toLocaleString(uiLocale):tMsg("viewer.overview.noActivity");
 }
 function renderOverview(){
   if(!overviewShown())return;
+  renderOverviewBatch();
   const title=tMsg("viewer.overview.title");
   $("overviewTitle").textContent=title+(overviewData?" · "+overviewData.workspace:"");
   if(!overviewData){$("overviewList").innerHTML=`<p class="overview-message">${escH(tMsg(FILE?"viewer.overview.needService":"viewer.overview.loading"))}</p>`;$("overviewDetail").textContent="";return}
@@ -3189,7 +3381,7 @@ function renderOverview(){
   const metadata=`<section class="overview-metadata"><h3>${escH(tMsg("viewer.overview.summary"))}</h3><p class="overview-summary">${summary}</p>${problems?`<dl>${problems}</dl>`:""}</section>`;
   const archive=invalid?"":`<button id="overviewArchive"${archiveBusy?" disabled":""}>${escH(tMsg(archiveBusy?"viewer.overview.archiveUpdating":row.archived?"viewer.overview.unarchive":"viewer.overview.archive"))}</button>`;
   const canStop=overviewStopEligible(row),supported=hasFeature(overviewData,"overview-stop");
-  const stopAction=canStop&&supported?`<button id="overviewStop"${stopState==="stopping"?" disabled":""}>${escH(tMsg(stopState==="stopping"?"viewer.overview.stopState.stopping":stopState==="incomplete"?"viewer.overview.stopRetry":"viewer.overview.stopAction"))}</button>`:"";
+  const stopAction=canStop&&supported?`<button id="overviewStop"${stopState==="stopping"||overviewBatchOwnsStop(row)?" disabled":""}>${escH(tMsg(stopState==="stopping"?"viewer.overview.stopState.stopping":stopState==="incomplete"?"viewer.overview.stopRetry":"viewer.overview.stopAction"))}</button>`:"";
   const label=overviewStateLabel(row),status=overviewStopFeedback(row,label)||escH(label);
   const stopUpgrade=canStop&&!supported?`<p class="overview-message">${escH(tMsg("viewer.overview.stopIssue.upgrade"))}</p>`:"";
   $("overviewDetail").innerHTML=`<h2>${escH(row.name||row.reviewId.slice(0,8))}</h2><div class="overview-identity"><span>${escH(row.reviewId.slice(0,8))}</span><br><span>${escH(row.path||"")}</span></div>
@@ -3241,6 +3433,11 @@ async function archiveReview(reviewId,archived){
   finally{archiveBusy=false;renderArchiveBanners();renderOverview()}
   await loadOverview();
 }
+async function readOverview(scope,timeout=REQ_TIMEOUT){
+  const data=await api("GET","/api/overview?scope="+encodeURIComponent(scope),undefined,timeout);
+  if(data.reviewId!==RID||data.scope!==scope||!Array.isArray(data.reviews))throw new Error("overview-format");
+  return data;
+}
 async function loadOverview(){
   if(FILE){renderOverview();return}
   if(archiveBusy)return;
@@ -3248,21 +3445,25 @@ async function loadOverview(){
   overviewLoading=true;
   $("overviewRefresh").disabled=true;
   try{
-    const data=await api("GET","/api/overview?scope="+encodeURIComponent($("overviewScope").value));
+    const data=await readOverview($("overviewScope").value);
     if(request!==overviewRequest||archiveBusy)return;
-    if(data.reviewId!==RID||!Array.isArray(data.reviews))throw new Error("overview-format");
     for(const row of data.reviews){
       const local=overviewStopResults.get(row.reviewId);
       if(local&&row.stop?.revision>(local.revision??-1))overviewStopResults.delete(row.reviewId)
     }
-    const changed=JSON.stringify(overviewData)!==JSON.stringify(data);
+    const changed=!$("overviewError").hidden||JSON.stringify(overviewData)!==JSON.stringify(data);
     const current=data.reviews.find(row=>row.current);if(current)setCurrentArchive(current.archived);
     overviewData=data;$("overviewError").hidden=true;if(changed)renderOverview();
+    const batch=overviewBatch;
+    if(batch?.scope===data.scope)reconcileOverviewBatch(batch,data);
+    else if(batch&&!overviewBatchBusy&&batch.targets.some(target=>target.status.state==="stopping"))await checkOverviewBatch(batch);
   }catch(error){
     if(request!==overviewRequest)return;
     const hostStopped=overviewStopResults.get(RID)?.state==="stopped";
     $("overviewError").textContent=tMsg(hostStopped?"viewer.overview.stopCurrentStopped":"viewer.overview.loadError");$("overviewError").hidden=false;
     if(!overviewData){$("overviewList").textContent="";$("overviewDetail").textContent=""}
+    if(overviewBatch)reconcileOverviewBatch(overviewBatch,null);
+    renderOverviewBatch();
   }finally{if(request===overviewRequest){overviewLoading=false;$("overviewRefresh").disabled=false}}
 }
 function overviewRoute(event){
@@ -3274,6 +3475,8 @@ function overviewRoute(event){
 }
 $("overviewBack").onclick=()=>{location.hash=""};
 $("overviewRefresh").onclick=loadOverview;
+$("overviewStopAll").onclick=confirmOverviewBatch;
+$("overviewBatchRetry").onclick=()=>{if(!$("overviewBatchRetry").disabled)void runOverviewBatch(overviewBatch)};
 $("overviewShowArchived").onchange=renderOverview;
 $("archiveUnarchive").onclick=$("overviewUnarchive").onclick=()=>archiveReview(RID,false);
 $("overviewScope").onchange=()=>{overviewData=null;overviewSelected=null;renderOverview();loadOverview()};

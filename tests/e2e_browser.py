@@ -950,6 +950,195 @@ def review_overview_stop_checks(browser, tmp: Path):
             stop(process)
 
 
+def review_overview_stop_scope_checks(browser, tmp: Path):
+    workspace, outside = tmp / "batch-workspace", tmp / "batch-outside"
+    for root in (workspace, outside):
+        subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+    host, archived, peer, late, stopped, invalid = [
+        workspace / name for name in ("host", "archived", "peer", "late", "stopped", "invalid")
+    ]
+    other = outside / "other"
+    directories = (host, archived, peer, late, stopped, invalid, other)
+    for directory in directories:
+        build(directory, name="Synthetic " + directory.name, locale="zh-CN")
+    ids = {directory: json.loads((directory / "review.json").read_text())["reviewId"] for directory in directories}
+    shutil.rmtree(invalid)
+    services, ports = {}, {}
+
+    def start(directory):
+        if directory in services:
+            stop(services[directory])
+        if directory not in ports:
+            ports[directory] = free_port()
+        services[directory] = start_server(directory, ports[directory])
+        return f"http://127.0.0.1:{ports[directory]}"
+
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    try:
+        host_url = start(host)
+        archived_url = start(archived)
+        start(peer)
+        start(other)
+        before_manifest = (archived / "review.json").read_bytes()
+        protected = ctx.new_page()
+        with protected.expect_response(lambda r: r.url.endswith("/api/server/save-protection") and r.ok):
+            protected.goto(archived_url)
+        wait_mode(protected, "server")
+        page = ctx.new_page()
+        page.goto(host_url + "/#overview")
+        wait_mode(page, "server")
+        scope, button = page.locator("#overviewScope"), page.locator("#overviewStopAll")
+        status, retry = page.locator("#overviewBatchStatus"), page.locator("#overviewBatchRetry")
+        requests = []
+
+        def observe_request(request):
+            if request.method == "POST" and request.url.endswith("/api/overview/stop"):
+                body = request.post_data_json
+                requests.append((body["reviewId"], body["scope"]))
+
+        page.on("request", observe_request)
+
+        def lose_peer_reply(route):
+            if route.request.post_data_json["reviewId"] == ids[peer]:
+                route.fetch()
+                route.abort("connectionfailed")
+            else:
+                route.continue_()
+
+        page.route("**/api/overview/stop", lose_peer_reply)
+
+        def result(directory):
+            return page.locator('[data-batch-review="%s"]' % ids[directory])
+
+        def batch_state(state, seconds=8):
+            return wait_dom(page, "s => document.getElementById('overviewBatchStatus').dataset.state === s",
+                            seconds, arg=state, condition="批量停止结果 " + state)
+
+        def count(number):
+            return wait_dom(page, "n => document.getElementById('overviewStopAll').textContent.includes(n)",
+                            5, arg=str(number), condition="停止入口目标数 " + str(number))
+
+        def confirm_batch(accept=True):
+            messages = []
+
+            def confirm(dialog):
+                messages.append(dialog.message)
+                dialog.accept() if accept else dialog.dismiss()
+
+            page.once("dialog", confirm)
+            button.click()
+            return messages[0]
+
+        page.locator('[data-review-id="%s"]' % ids[archived]).click()
+        page.locator("#overviewArchive").click()
+        page.locator("#overviewHiddenArchived").wait_for()
+        ok(count(3) and "本工作区" in button.inner_text()
+           and page.locator('[data-review-id="%s"]' % ids[archived]).count() == 0,
+           "本工作区入口计入隐藏的归档运行中审阅，排除已停、失效和范围外审阅")
+        message = confirm_batch(False)
+        ok("本工作区" in message and "3 份" in message and "已归档" in message
+           and not requests and page.locator("#overviewBatch").is_hidden(),
+           "确认说明目标范围、数量和归档规则，取消后保持服务运行")
+
+        held = []
+
+        def delay_save(route):
+            if route.request.method != "POST":
+                route.continue_()
+            elif route.request.headers.get("x-ae-save-token"):
+                held.append(route)
+            else:
+                route.abort("connectionfailed")
+
+        protected.route("**/api/notes", delay_save)
+        annotation = "合成批注：批量停止前补传"
+        add_note(protected, annotation)
+        wait_mode(protected, "offline")
+        confirm_batch()
+        if not wait_until(lambda: bool(held), page, 8, condition="归档审阅收到批量保存挑战"):
+            ok(False, "归档审阅收到批量保存挑战")
+            return
+        ok(batch_state("stopping") and button.is_disabled()
+           and result(archived).get_attribute("data-state") == "stopping",
+           "目标等保存回执时显示停止中并阻止重复批量停止")
+        button.evaluate("button => button.click()")
+        ok(wait_until(lambda: services[peer].poll() is not None
+                      and result(peer).get_attribute("data-state") == "stopped", page, 5,
+                      condition="响应断开后从总览核对另一份审阅已停止")
+           and services[host].poll() is None and (ids[host], "workspace") not in requests,
+           "停止响应断开后凭目标终态确认成功，托管总览的审阅最后请求")
+        start(late)
+        page.locator("#overviewRefresh").click()
+        page.locator('[data-review-id="%s"]' % ids[late]).wait_for()
+        scope.select_option("all")
+        page.locator('[data-review-id="%s"]' % ids[other]).wait_for()
+        ok("本工作区" in status.inner_text() and result(late).count() == 0
+           and result(other).count() == 0, "刷新与切换范围后保留原批量的目标和范围")
+        page.locator("#overviewBack").click()
+        page.select_option("#localePick", "en")
+        page.locator("#overviewBtn").click()
+        ok("Batch stop in progress" in status.inner_text() and "This workspace" in status.inner_text(),
+           "进行中的结果随界面切换英文")
+        held.pop(0).fulfill(status=400, json={"app": "annotation-everything", "code": "bad-note",
+                                            "error": "Synthetic save rejection"})
+        protected.unroute("**/api/notes", delay_save)
+        if not batch_state("incomplete", 13):
+            ok(False, "批量停止部分完成")
+            return
+        ok("partially complete" in status.inner_text() and "2/3 stopped" in status.inner_text()
+           and "could not save all queued changes" in result(archived).inner_text()
+           and wait_until(lambda: services[host].poll() is not None, page, 5)
+           and services[archived].poll() is None and services[late].poll() is None and services[other].poll() is None,
+           "部分失败保留逐项原因，已确认结果保留在原总览，新增和范围外审阅不受影响")
+        ok(sorted(requests) == sorted((ids[d], "workspace") for d in (host, archived, peer))
+           and retry.is_disabled() and str(ids[host]) in page.inner_text("#overviewBatchRecovery"),
+           "同一批每个目标只请求一次，托管服务停止后显示恢复方式")
+        start(host)
+        page.reload()
+        if not wait_until(retry.is_enabled, page, 8, condition="重启托管审阅并刷新后可重试"):
+            ok(False, "重启托管审阅并刷新后可重试")
+            return
+        ok("2/3 stopped" in status.inner_text()
+           and result(archived).get_attribute("data-state") == "incomplete",
+           "刷新原标签页后恢复同一批的失败项和已确认结果")
+        scope.select_option("all")
+        page.locator('[data-review-id="%s"]' % ids[other]).wait_for()
+        retry.click()
+        if not batch_state("stopped", 13):
+            ok(False, "仅重试失败项后全部确认停止")
+            return
+        ok(requests[-1:] == [(ids[archived], "workspace")] and len(requests) == 4
+           and wait_until(lambda: services[archived].poll() is not None, page, 5)
+           and services[host].poll() is None and not protected.is_closed()
+           and [note["text"] for note in disk_notes(archived)] == [annotation],
+           "失败重试仍用原范围，只停止失败项并完成保存保护")
+        entry = json.loads((Path(os.environ["AE_HOME"]) / "reviews.json").read_text())["reviews"][ids[archived]]
+        ok(entry["port"] == ports[archived] and (archived / "review.json").read_bytes() == before_manifest
+           and (archived / ".annotation-archived").is_file(), "批量停止保留台账、专属端口、审阅和归档标记")
+
+        ok(count(3) and "on this machine" in button.inner_text(), "本机全部包含跨工作区审阅和后来启动的审阅")
+        message = confirm_batch()
+        ok("All on this machine" in message and "3 running reviews" in message,
+           "本机全部确认显示所选范围和重新核对后的数量")
+        ok(batch_state("stopped", 13) and "3/3 stopped" in status.inner_text()
+           and all(wait_until(lambda: services[d].poll() is not None, page, 5) for d in (host, late, other))
+           and sorted(requests[4:]) == sorted((ids[d], "all") for d in (host, late, other)),
+           "本机全部停止逐份确认，完成后不会重复停止前一批的目标")
+        ok(count(0) and button.is_disabled(), "没有运行中的审阅时禁用批量入口")
+
+        lone_url = start(other)
+        page.goto(lone_url + "/#overview")
+        ok(count(1) and button.is_enabled(), "工作区只有一份运行中审阅时仍可批量停止")
+        confirm_batch()
+        ok(batch_state("stopped", 13) and "1/1" in status.inner_text()
+           and wait_until(lambda: services[other].poll() is not None, page, 5),
+           "单份批量也在确认实际退出后才报告全部停止")
+    finally:
+        ctx.close()
+        for process in services.values():
+            stop(process)
+
+
 def skill_search_checks(browser, tmp: Path):
     """通过真实浏览器验证技能输入；目录内容均为合成数据。"""
     d = tmp / "skill_search"
@@ -5750,6 +5939,7 @@ SCENARIO_RUNNERS = {
     "file-mode": file_mode_checks,
     "review-overview": review_overview_checks,
     "review-overview-stop": review_overview_stop_checks,
+    "review-overview-stop-scope": review_overview_stop_scope_checks,
     "css-fidelity": css_fidelity_checks,
     "docx-review": docx_review_checks,
     "server-mode": server_mode_checks,

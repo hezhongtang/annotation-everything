@@ -196,6 +196,8 @@ Source snapshots are stored in `.snapshots/batch-N/base/` when an initial edit i
 
 The overview sends `{reviewId, scope}` to `POST /api/overview/stop`. Use the full target review ID and either `workspace` or `all` for `scope`. `X-AE-Review` identifies the review hosting the overview. The response `reviewId` identifies the target, and `stop` contains its lifecycle state and component results. Each `GET /api/overview` row also includes a `stop` snapshot from the target's persisted state. `overview-stop` advertises overview stopping and `stop-save-protection` advertises browser save receipts.
 
+Batch stop captures the scope and target review IDs at confirmation. The overview uses the same stop request for each target and keeps the latest batch in the original tab's session storage. A target counts as stopped after its response or persisted snapshot confirms the lifecycle completed.
+
 Target pages register their browser storage context using same-origin JSON `POST /api/server/save-protection`. During a stop, the target service issues a save request with a `stopId` and an attempt token. The page flushes its local queue and returns a receipt for that request. The private `.annotation-save-pages.json` file keeps random registration IDs and loopback origins in the review directory. The target service stays available for retry if a registered page is unreachable or reports a failed save.
 
 ## Markdown exchange and JSON backup
