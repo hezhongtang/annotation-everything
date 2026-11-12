@@ -147,7 +147,7 @@ See the [English format reference](skill/annotation-everything/references/format
 
 ### Layout and shortcuts
 
-The console layout puts all annotations, processing history, review overview and help in the activity bar. The sidebar groups pages by section and shows annotation counts. Toggle the sidebar, speaker notes and bottom panel with `[`, `]` and `\`; this browser remembers each review's choices. Press `F` for full-screen focus, `C` for the floating composer and `⌘ / Ctrl + ↵` to add an annotation. `P` marking, `S` styling and text-selection shortcuts work in focus mode. `Esc` closes the current overlay before leaving focus mode. Layout shortcuts do not run while typing.
+The console layout puts all annotations, processing history, review overview and help in the activity bar. The sidebar groups pages by section and shows annotation counts. In service mode, use “Stop review” in the top bar. Press `Esc` to cancel confirmation. Toggle the sidebar, speaker notes and bottom panel with `[`, `]` and `\`; this browser remembers each review's choices. Press `F` for full-screen focus, `C` for the floating composer and `⌘ / Ctrl + ↵` to add an annotation. `P` marking, `S` styling and text-selection shortcuts work in focus mode. `Esc` closes the current overlay before leaving focus mode. Layout shortcuts do not run while typing.
 
 <details>
 <summary><b>Batches, review, skills and other features</b></summary>
@@ -226,12 +226,14 @@ Archiving hides reviews that are no longer being advanced from the default list.
 <details>
 <summary><b>Current task and stopping a review</b></summary>
 <br>
-<p align="center"><img src="docs/assets/batch-controls.en.png" alt="Current task details switch and Stop review button in processing history" width="88%"></p>
+<p align="center"><img src="docs/assets/batch-controls.en.png" alt="Current task details switch in processing history" width="88%"></p>
 Press `J` or click the agent status to open "Processing history". The current task is the latest batch handed to the agent. Its details start collapsed; expand them to see the note, requirements, stages and summary. Polling and language changes preserve the expanded state; a new batch starts collapsed.
 
-"Stop review" sends held changes first and starts stopping only after they are saved. The service then rejects new annotation and analysis writes from the page and new work submissions. It waits for admitted writes, waiters and background hooks to finish, confirms cancellation of the review's event turns by binding, and closes HTTP last. A component rejection, timeout or missing host capability reports `incomplete`. A running service remains available for status and retry. The legacy endpoint uses the same lifecycle. New pages show an upgrade hint when the service lacks `stop-review`.
+Choose “Stop review” in the top bar. The confirmation describes the scope of active agent work and how to reopen the review. The page sends pending changes first. If saving fails, recover the changes and try again. If the service lacks stop status support, follow the upgrade guidance. [Review workflow](skill/annotation-everything/references/workflow.en.md#4-start-the-service-and-wait)
 
-Stopping preserves materials, annotations, batches, receiver binding and the owned port. Other reviews and the shared agent session keep running. Before replacing or removing the binding, confirm cancellation of desktop turns that were delivered and are still awaiting claim. Use `serve.py stop <review-id> --status` to query and `serve.py <review-id>` to explicitly reopen the review. Reopening also redelivers work whose cancellation was confirmed and that is still awaiting claim, including when reusing a running service. "Close" in the top right only closes the history panel.
+The page and other tabs at the same review address show “Stopping review”, “Review stopped”, or “Review not fully stopped”. Expand “Stop components” to see the results. After addressing an incomplete component, choose “Retry stop”. If the connection drops before the page confirms the result, run `serve.py stop <review-id> --status` for the persisted status.
+
+Stopping preserves materials, annotations, submissions, processing history, the receiver binding, the owned port, and open tabs. Other reviews and the shared agent session keep running. Use the displayed `serve.py <review-id>` command to reopen this review explicitly.
 </details>
 
 <details>

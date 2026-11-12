@@ -25,6 +25,7 @@
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -2332,7 +2333,7 @@ for state in (['drafted', 'review', 'claimed', 'reviewing'] if sys.argv[3] == 'a
 
 
 def current_task_controls_checks(browser, tmp: Path):
-    """当前任务详情通过界面展开、收起；语言与轮询不会重置用户选择。"""
+    """当前任务详情与顶部停止入口保持双语、保存和生命周期行为。"""
     d = tmp / "current_task_controls"
     d.mkdir()
     build(d, locale="en", name="current-task-controls")
@@ -2411,28 +2412,55 @@ def current_task_controls_checks(browser, tmp: Path):
             page.screenshot(path=str(output / "batch-controls.zh.png"))
             page.select_option("#localePick", "en")
 
+        ok(page.locator("#batches").get_by_role("button", name="Stop review", exact=True).count() == 0,
+           "停止审阅：处理记录不再有停止入口")
+        page.locator("#batches [data-close]").click()
+        for locale, stop_label in (("en", "Stop review"), ("zh-CN", "停止审阅")):
+            page.select_option("#localePick", locale)
+            ok(page.locator("header").get_by_role("button", name=stop_label, exact=True).is_visible(),
+               f"停止审阅：{locale} 顶部直接提供入口")
+            for width in (420, 720, 1120, 1280):
+                page.set_viewport_size({"width": width, "height": 1000})
+                ok(page.evaluate("""() => ['stopReviewBtn','handBtn','focusBtn','analysisMode'].every(id => {
+                    const button = document.getElementById(id);
+                    const r = button.getBoundingClientRect();
+                    const hit = document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
+                    return r.left>=0 && r.right<=innerWidth && hit?.closest('button')===button;
+                })"""), f"停止审阅：{locale} {width}px 时停止、提交、全屏和分析入口都可点击")
+            page.set_viewport_size({"width": 1440, "height": 1000})
+        page.select_option("#localePick", "en")
+
         requests = []
         page.on("request", lambda req: requests.append((req.method, req.url)))
         stop_requests = lambda: [r for r in requests if r[0] == "POST" and r[1].endswith("/api/server/stop")]
+        button = page.locator("header #stopReviewBtn")
+
+        def stop_info_contains(tab, text, seconds=5):
+            return wait_dom(tab, "text => document.getElementById('stopInfo').textContent.includes(text)",
+                            seconds, arg=text, condition=f"停止说明包含 {text!r}")
+
+        def stop_state(tab, text, seconds=5):
+            return wait_dom(tab, "text => document.getElementById('stopState').textContent===text",
+                            seconds, arg=text, condition=f"停止状态为 {text!r}")
+
         page.once("dialog", lambda dialog: dialog.dismiss())
-        page.get_by_role("button", name="Stop review", exact=True).click()
-        ok(server.poll() is None and not stop_requests(), "停止服务：取消确认不发送停止请求")
+        button.click()
+        ok(server.poll() is None and not stop_requests() and not page.is_visible("#stopPanel"),
+           "停止审阅：取消确认保持原状态")
 
         def legacy_service(route):
             response = route.fetch()
             body = response.json()
-            body["features"] = [f for f in body.get("features", []) if f != "stop-review"]
+            body["features"] = [f for f in body.get("features", []) if f != "stop-review-status"]
             route.fulfill(response=response, json=body)
 
         page.route("**/api/notes", legacy_service)
-        ok(wait_until(lambda: "does not support review-scoped stopping" in page.inner_text("#stopServiceInfo"),
-                      page, 8), "停止服务：旧服务显示升级指引")
-        page.get_by_role("button", name="Stop review", exact=True).click()
-        ok(wait_toast(page, "Run the new serve.py") and not stop_requests() and server.poll() is None,
-           "停止服务：旧服务不发送不支持的停止请求")
+        ok(stop_state(page, "Update the local service", 8), "停止审阅：旧服务显示升级指引")
+        button.click()
+        ok(stop_info_contains(page, "Run the new serve.py") and not stop_requests() and server.poll() is None,
+           "停止审阅：旧服务不发送停止请求")
         page.unroute("**/api/notes", legacy_service)
-        ok(wait_until(lambda: "does not support review-scoped stopping" not in page.inner_text("#stopServiceInfo"),
-                      page, 8), "停止服务：恢复新服务能力")
+        ok(wait_dom(page, "() => document.getElementById('stopPanel').hidden", 8), "停止审阅：恢复新服务能力")
 
         def wrong_review(route):
             response = route.fetch()
@@ -2441,39 +2469,13 @@ def current_task_controls_checks(browser, tmp: Path):
             route.fulfill(response=response, json=body)
 
         page.route("**/api/notes", wrong_review)
-        ok(wait_mode(page, "mismatch"), "停止服务：检测服务审阅不匹配")
-        page.get_by_role("button", name="Stop review", exact=True).click()
-        ok(wait_toast(page, "not connected to its review") and not stop_requests() and server.poll() is None,
-           "停止服务：不会停止不匹配的服务")
+        ok(wait_mode(page, "mismatch"), "停止审阅：检测服务审阅不匹配")
+        button.click()
+        ok(stop_info_contains(page, "does not match this review") and not stop_requests() and server.poll() is None,
+           "停止审阅：不停止不匹配的服务")
         page.unroute("**/api/notes", wrong_review)
-        ok(wait_mode(page, "server"), "停止服务：恢复本审阅连接")
+        ok(wait_mode(page, "server"), "停止审阅：恢复本审阅连接")
 
-        slow_stop = []
-
-        def hold_slow_stop(route):
-            slow_stop.append(route)
-
-        page.route("**/api/server/stop", hold_slow_stop)
-        page.once("dialog", lambda dialog: dialog.accept())
-        page.get_by_role("button", name="Stop review", exact=True).click()
-        if not wait_until(lambda: bool(slow_stop), page, 5):
-            ok(False, "停止服务：发送慢停止请求")
-            return
-        # The normal API timer is 8 seconds, while stop can wait 10 seconds for background work.
-        page.wait_for_timeout(8250)
-        waiting_for_stop = page.is_disabled("#stopServiceBtn")
-        ok(waiting_for_stop, "停止服务：超过普通请求时限仍等待后台组件结果")
-        if not waiting_for_stop:
-            return
-        slow_stop[0].fulfill(status=200, json={
-            "app": "annotation-everything", "reviewId": json.loads((d / "review.json").read_text())["reviewId"],
-            "stopping": False, "state": "incomplete", "stop": {"incompleteReasons": {"hooks": "background-hook-timeout"}},
-        })
-        ok(wait_toast(page, "background-hook-timeout") and wait_mode(page, "server"),
-           "停止服务：收到后台组件超时结果，页面保持连接")
-        page.unroute("**/api/server/stop", hold_slow_stop)
-        requests.clear()
-        page.locator("#batches [data-close]").click()
         pending_saves = []
 
         def reject_save(route):
@@ -2485,34 +2487,26 @@ def current_task_controls_checks(browser, tmp: Path):
         page.route("**/api/notes", reject_save)
         add_note(page, "synthetic saved before stop")
         ok(wait_until(lambda: "held for sending" in page.inner_text("#mode"), page, 5),
-           "停止服务：等待响应的改动仍在待补传队列")
-        page.keyboard.press("j")
-        wait_batches(page, "Batch 2")
+           "停止审阅：等待响应的改动仍在待补传队列")
 
         def stop_after_failed_save(status):
             page.once("dialog", lambda dialog: dialog.accept())
-            page.get_by_role("button", name="Stop review", exact=True).click()
-            if not wait_until(lambda: bool(pending_saves), page, 5,
-                              condition=f"停止操作等待补传响应（{status}）"):
+            button.click()
+            if not wait_until(lambda: bool(pending_saves), page, 5, condition=f"等待补传响应（{status}）"):
                 return False
-            waiting = page.is_disabled("#stopServiceBtn")
+            waiting = button.is_disabled() and not stop_requests()
             pending_saves.pop(0).fulfill(status=status, json={"app": "annotation-everything", "code": "bad-note",
                                                             "error": "synthetic save failure"})
-            settled = wait_until(lambda: page.is_enabled("#stopServiceBtn")
-                                 and "Some changes have not been saved" in page.inner_text("#toast"),
-                                 page, 5, condition=f"本次停止操作因保存失败结束（{status}）")
-            return waiting and settled and not stop_requests() and server.poll() is None
+            return (waiting and stop_info_contains(page, "Some changes have not been saved")
+                    and button.is_enabled() and not stop_requests() and server.poll() is None)
 
-        ok(stop_after_failed_save(503), "停止服务：补传 5xx 失败时保持服务运行")
-        ok(stop_after_failed_save(400), "停止服务：明确拒绝保存时也不停止")
+        ok(stop_after_failed_save(503), "停止审阅：补传 5xx 失败时保持服务运行")
+        ok(stop_after_failed_save(400), "停止审阅：明确拒绝保存时也保持服务运行")
         page.unroute("**/api/notes", reject_save)
-        page.locator("#batches [data-close]").click()
         add_note(page, "synthetic saved before stop")
-        page.keyboard.press("j")
-        wait_batches(page, "Batch 2")
         other_tab = ctx.new_page()
         other_tab.goto(f"http://127.0.0.1:{port}/")
-        ok(wait_mode(other_tab, "server"), "停止服务：同一审阅的第二个标签页已连接")
+        ok(wait_mode(other_tab, "server"), "停止审阅：同一审阅的第二个标签页已连接")
         held_saves = []
 
         def hold_other_save(route):
@@ -2523,20 +2517,20 @@ def current_task_controls_checks(browser, tmp: Path):
 
         other_tab.route("**/api/notes", hold_other_save)
         add_note(other_tab, "synthetic rejected in another tab")
-        ok(wait_until(lambda: bool(held_saves), other_tab, 5), "停止服务：另一标签页补传正在等待响应")
+        ok(wait_until(lambda: bool(held_saves), other_tab, 5), "停止审阅：另一标签页补传正在等待响应")
         page.bring_to_front()
         page.once("dialog", lambda dialog: dialog.accept())
-        page.get_by_role("button", name="Stop review", exact=True).click()
-        ok(page.get_by_role("button", name="Saving and stopping the review…", exact=True).is_disabled()
-           and not stop_requests(), "停止服务：等待另一标签页的补传完成")
+        button.click()
+        ok(stop_state(page, "Saving pending changes…") and button.is_disabled() and not stop_requests(),
+           "停止审阅：等待另一标签页的补传完成")
         held_saves[0].fulfill(status=400, json={"app": "annotation-everything", "code": "bad-note",
                                               "error": "synthetic rejection in another tab"})
-        cross_tab_blocked = (wait_toast(page, "Some changes have not been saved", seconds=5)
+        cross_tab_blocked = (stop_info_contains(page, "Some changes have not been saved")
                              and server.poll() is None and not stop_requests())
-        ok(cross_tab_blocked, "停止服务：另一标签页保存被拒时也保持服务运行")
+        ok(cross_tab_blocked, "停止审阅：另一标签页保存被拒时保持服务运行")
+        other_tab.unroute("**/api/notes", hold_other_save)
         if not cross_tab_blocked:
             return
-        other_tab.unroute("**/api/notes", hold_other_save)
         held_reads = []
         read_count = 0
 
@@ -2544,73 +2538,120 @@ def current_task_controls_checks(browser, tmp: Path):
             nonlocal read_count
             if route.request.method == "GET":
                 read_count += 1
-                if read_count == 2:
+                if read_count == 3:  # 初次身份读取、补传后同步、最终身份读取
                     held_reads.append((route, route.fetch()))
                     return
             route.continue_()
 
-        # 补传结束后的身份预检也可能让出执行；在响应回来前让另一标签页保存被拒。
         page.route("**/api/notes", hold_final_read)
         held_saves.clear()
         other_tab.route("**/api/notes", hold_other_save)
         page.once("dialog", lambda dialog: dialog.accept())
-        page.get_by_role("button", name="Stop review", exact=True).click()
-        ok(wait_until(lambda: bool(held_reads), page, 5), "停止服务：最终身份预检正在等待响应")
+        button.click()
+        if not wait_until(lambda: bool(held_reads), page, 5, condition="最终身份预检正在等待响应"):
+            ok(False, "停止审阅：最终身份预检正在等待响应")
+            return
         other_tab.bring_to_front()
         add_note(other_tab, "synthetic rejection during final service check")
-        ok(wait_until(lambda: bool(held_saves), other_tab, 5), "停止服务：最终预检期间另一标签页正在补传")
+        if not wait_until(lambda: bool(held_saves), other_tab, 5, condition="最终预检期间另一标签页正在补传"):
+            ok(False, "停止审阅：最终预检期间另一标签页正在补传")
+            return
         held_saves[0].fulfill(status=400, json={"app": "annotation-everything", "code": "bad-note",
                                               "error": "synthetic rejection during final service check"})
         ok(wait_toast(other_tab, "synthetic rejection during final service check", seconds=5),
-           "停止服务：最终预检期间另一标签页保存被拒")
+           "停止审阅：最终预检期间另一标签页保存被拒")
         page.bring_to_front()
         held_reads[0][0].fulfill(response=held_reads[0][1])
-        final_read_blocked = (wait_toast(page, "Some changes have not been saved", seconds=5)
+        final_read_blocked = (stop_info_contains(page, "Some changes have not been saved")
                               and server.poll() is None and not stop_requests())
-        ok(final_read_blocked, "停止服务：最终预检期间保存被拒仍保持服务运行")
+        ok(final_read_blocked, "停止审阅：最终预检期间保存被拒时保持服务运行")
         page.unroute("**/api/notes", hold_final_read)
         other_tab.unroute("**/api/notes", hold_other_save)
         if not final_read_blocked:
             return
-        # The first batch was claimed to exercise polling. Finish it before expecting a full stop.
-        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "done", str(d), "--seq", "1"],
-                       check=True, capture_output=True)
-        page.bring_to_front()
+
         saved_before_stop = []
         page.on("request", lambda req: saved_before_stop.append(
             any(n["text"] == "synthetic saved before stop" for n in disk_notes(d)))
             if req.method == "POST" and req.url.endswith("/api/server/stop") else None)
         confirmations = []
         page.once("dialog", lambda dialog: (confirmations.append(dialog.message), dialog.accept()))
+        with (d / ".notes.lock").open("r+b") as write_lock:
+            # Hold a real review write boundary so the stop remains observable during reload and disconnection.
+            fcntl.flock(write_lock, fcntl.LOCK_EX)
+            button.click()
+            if not stop_state(page, "Stopping review"):
+                ok(False, "停止审阅：页面观察到服务确认的停止中状态")
+                return
+            ok(button.is_disabled() and len(stop_requests()) == 1 and server.poll() is None,
+               "停止审阅：协调期间阻止重复停止，服务仍在运行")
+            page.select_option("#localePick", "zh-CN")
+            ok(stop_state(page, "停止中"), "停止审阅：切换中文保留停止中状态")
+            page.select_option("#localePick", "en")
+            other_tab.bring_to_front()
+            other_tab.reload()
+            ok(stop_state(other_tab, "Stopping review"), "停止审阅：第二个标签页刷新后仍显示停止中")
+            other_tab.route("**/api/notes", lambda route: route.abort())
+            ok(wait_mode(other_tab, "offline", 6) and stop_state(other_tab, "Stopping review")
+               and stop_info_contains(other_tab, "cannot verify the latest stop result"),
+               "停止审阅：断线保留最后确认的状态，并提供终端查询命令")
+            other_tab.unroute("**/api/notes")
+
+        page.bring_to_front()
+        if not stop_state(page, "Review not fully stopped", 12):
+            ok(False, "停止审阅：有已领取批次时报告部分失败")
+            return
+        ok(button.is_enabled() and button.inner_text() == "Retry stop" and server.poll() is None
+           and page.get_by_text("This host cannot confirm cancellation for one review", exact=False).is_visible(),
+           "停止审阅：在线展示 Agent 组件能力缺口与重试入口")
+        ok(len(confirmations) == 1 and "active agent work" in confirmations[0] and "receiver binding" in confirmations[0]
+           and "Pending changes" in confirmations[0] and "serve.py" in confirmations[0],
+           "停止审阅：英文确认说明活动工作、保存、保留和恢复范围")
+        stop_status = [sys.executable, str(SCRIPTS / "serve.py"), "stop", str(d), "--status"]
+        partial = json.loads(subprocess.run(stop_status, check=True, capture_output=True, text=True).stdout)
+        ok(partial["state"] == "incomplete" and partial["components"]["agent"]["state"] == "incomplete",
+           "停止审阅：页面与持久状态一致")
+        other_tab.bring_to_front()
+        ok(stop_state(other_tab, "Review not fully stopped"), "停止审阅：其他标签页同步部分失败")
+        page.bring_to_front()
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "done", str(d), "--seq", "1"],
+                       check=True, capture_output=True)
         page.select_option("#localePick", "zh-CN")
+        ok(stop_state(page, "未完全停止") and button.inner_text() == "重试停止",
+           "停止审阅：切换中文保留失败结果和重试入口")
+        page.once("dialog", lambda dialog: (confirmations.append(dialog.message), dialog.accept()))
         status_before = json.loads(subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "status", str(d)],
                                                  check=True, capture_output=True, text=True).stdout)
         history_before = json.loads((d / "handoff.json").read_text())
-        page.get_by_role("button", name="停止审阅", exact=True).click()
-        ok(wait_until(lambda: server.poll() is not None, page, 8), "停止服务：真实服务进程正常退出")
+        button.click()
+        ok(wait_until(lambda: server.poll() is not None, page, 12), "停止审阅：重试后真实服务进程正常退出")
+        final = json.loads(subprocess.run(stop_status, check=True, capture_output=True, text=True).stdout)
+        ok(final["state"] == "stopped" and final["stopId"] == partial["stopId"] and final["attempts"] == 2,
+           "停止审阅：重试沿用操作标识，服务退出后才确认停止")
         ok(server.returncode == 0 and not (d / ".annotation-server.json").exists(),
-           "停止服务：退出码为零，运行状态文件清理")
-        ok(saved_before_stop == [True] and len(stop_requests()) == 1,
-           "停止服务：确认改动已落盘后只发送一次停止请求")
-        ok(len(confirmations) == 1 and "所有标签页" in confirmations[0] and "共享 Agent 会话" in confirmations[0],
-           "停止服务：中文确认说明停止范围、保留数据与 Agent 行为")
+           "停止审阅：正常退出并清理服务运行状态")
+        ok(saved_before_stop == [True, True] and len(stop_requests()) == 2,
+           "停止审阅：两次请求均在确认改动落盘后发出")
+        ok(len(confirmations) == 2 and "浏览器标签页" in confirmations[1] and "共享 Agent 会话" in confirmations[1],
+           "停止审阅：中文确认说明保留标签页与共享 Agent 会话")
         other_tab.bring_to_front()
-        ok(wait_mode(other_tab, "offline"), "停止服务：同一审阅其他标签页转离线")
+        ok(wait_mode(other_tab, "offline") and stop_state(other_tab, "Review stopped"),
+           "停止审阅：同一审阅其他标签页收到确认的终态")
         page.bring_to_front()
-        ok(wait_mode(page, "offline") and wait_until(lambda: "serve.py" in page.inner_text("#srvBar"), page, 8),
-           "停止服务：页面转离线并给出重启命令")
+        ok(wait_mode(page, "offline") and stop_state(page, "已停止") and "serve.py" in page.inner_text("#stopCommand"),
+           "停止审阅：顶部显示已确认的终态并给出重新启动命令")
         status_after = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "status", str(d)],
                                       capture_output=True, text=True)
         ok(status_after.returncode == 3 and isinstance(status_before["owned_port"], int)
            and json.loads(status_after.stdout)["owned_port"] == status_before["owned_port"],
-           "停止服务：专属端口仍保留")
+           "停止审阅：专属端口仍保留")
         stop(server)
         server = start_server(d, port)
         page.reload()
-        ok(wait_mode(page, "server")
+        ok(wait_mode(page, "server") and button.is_enabled() and not page.is_visible("#stopPanel")
            and "synthetic saved before stop" in page.inner_text("#nlist")
            and json.loads((d / "handoff.json").read_text()) == history_before,
-           "停止服务：重启后批注与提交记录恢复")
+           "停止审阅：显式重新启动后恢复入口，保留批注与提交记录")
     finally:
         ctx.close()
         stop(server)
