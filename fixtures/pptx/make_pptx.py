@@ -55,6 +55,27 @@ def element_slide_xml() -> str:
 {table}{picture}{group}{chart}{smartart}{media}{ole}{unknown}</p:spTree></p:cSld></p:sld>'''
 
 
+def styled_slide_xml() -> str:
+    """带既有填充/线条/run 样式、占位符与无 xfrm 形状的合成页：几何与样式回写矩阵用。
+
+    id 2：自带 solidFill、a:ln（含 prstDash）与带 rPr 的 run；id 3：带 xfrm 的占位符；
+    id 4：没有 xfrm（几何继承自布局，不可写）。
+    """
+    return f'''<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}"><p:cSld><p:spTree>
+<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
+<p:sp><p:nvSpPr><p:cNvPr id="2" name="合成标题"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
+<p:spPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="5486400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="4477AA"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="112233"/></a:solidFill><a:prstDash val="dash"/></a:ln></p:spPr>
+<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr b="1" sz="1800"><a:solidFill><a:srgbClr val="AA0000"/></a:solidFill><a:latin typeface="Synthetic Sans"/></a:rPr><a:t>标题甲</a:t></a:r><a:r><a:t>标题乙</a:t></a:r></a:p></p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr id="3" name="合成占位符"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
+<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="3000000" cy="600000"/></a:xfrm></p:spPr>
+<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>占位</a:t></a:r></a:p></p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr id="4" name="无变换"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
+<p:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>没有变换</a:t></a:r></a:p></p:txBody></p:sp>
+</p:spTree></p:cSld></p:sld>'''
+
+
 def sample_parts(portrait: bool = False) -> dict[str, str | bytes]:
     rich = ("<a:p>" + text_run("相同", '<a:rPr b="1"><a:latin typeface="Synthetic Sans"/></a:rPr>')
             + text_run("😀&<", '<a:rPr i="1" sz="1800"/>') + "</a:p><a:p>" + text_run("相同") + "</a:p>")
