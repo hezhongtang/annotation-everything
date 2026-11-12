@@ -1124,7 +1124,7 @@ function applyLocal(op){
 const FULL_CHECK_COMPAT=__FULL_CHECK_COMPAT__;
 function send(op,fullCheckSupported=true,saveRequest=null){
   const headers=saveRequest?{"X-AE-Page":savePage.pageId,"X-AE-Save-Token":saveRequest.token}:{};
-  const write=(method,path,body)=>api(method,path,body,REQ_TIMEOUT,headers);
+  const write=(method,path,body)=>api(method,path,body,undefined,headers);
   if(op.kind==="add")return write("POST","/api/notes",op.note);      // 同 id 重复提交，服务端按已存在处理
   if(op.kind==="patch")return write("PATCH","/api/notes/"+encodeURIComponent(op.id),op.body);
   if(op.kind==="del")return write("DELETE","/api/notes/"+encodeURIComponent(op.id),saveRequest?{}:undefined);
@@ -1207,6 +1207,7 @@ async function doFlush(saveRequest=null){   // 按顺序补传；多个标签页
     return successful}
   // 最后一个失败或受阻提示优先于后续成功、处理状态等通知。
   finally{busy--;updateMode();renderDocxBlock();if(problem)problem()}}
+async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 
 // 总览和 CLI 通过目标服务请求保存回执。浏览器只访问同源服务。
 const SAVE_PATH="/api/server/save-protection";
@@ -1223,6 +1224,13 @@ function initSavePage(){
   savePageCanReadStorage=LS.set(saveClientKey,clientId);
   SS.set(savePageKey,pageId);
   savePage={pageId,clientId};
+  addEventListener("pagehide",()=>{
+    if(!savePageRegistered||!savePageCanReadStorage||flushing||savePageReceipt||!savePageQueueEmpty())return;
+    fetch(SAVE_PATH,{method:"POST",keepalive:true,
+      headers:{"Content-Type":"application/json","X-AE-Review":RID},
+      body:JSON.stringify({...savePage,closing:true})}).catch(()=>{});
+  });
+  addEventListener("pageshow",event=>{if(event.persisted)pollSavePage()});
 }
 function savePageQueueEmpty(){
   queueSnap=null;
@@ -1261,15 +1269,6 @@ async function pollSavePage(){
     if(error.code==="no-api")savePageSupported=false;
   }finally{savePagePolling=false;savePageReceipt=false}
 }
-addEventListener("pagehide",()=>{
-  if(!savePageRegistered||!savePageCanReadStorage||flushing||savePageReceipt||!savePageQueueEmpty())return;
-  fetch(SAVE_PATH,{method:"POST",keepalive:true,
-    headers:{"Content-Type":"application/json","X-AE-Review":RID},
-    body:JSON.stringify({...savePage,closing:true})}).catch(()=>{});
-});
-addEventListener("pageshow",event=>{if(event.persisted)pollSavePage()});
-
-async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 // 轮询带回的「最新一批（完整内容）+ 投递状态」签名：逐字段相同才认为这次轮询没有新东西可画。
 // 只有摘要类字段（处理摘要、附言、认领时间……）变化时也要重画，所以比 handSig 那几个字段细。
 let handPollKey="";
