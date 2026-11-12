@@ -800,6 +800,8 @@ def _clean_pptx(v: Any) -> dict[str, Any] | None:
         raise NoteError("元素定位须携带元素目标列表")
     if kind == "text" and "elements" not in out:
         raise NoteError("文本定位须携带所在元素")
+    if v.get("changed") is True:   # 重建后元素文字已变的标记（偏移与指纹仍是旧版本的），与 docx.changed 同义
+        out["changed"] = True
     return out
 
 
@@ -1782,27 +1784,70 @@ def _remap_docx(n: dict[str, Any], ctx: dict[str, Any], new_titles: dict[int, st
     return touched
 
 
+def _remap_pptx(n: dict[str, Any], ctx: dict[str, Any], new_titles: dict[int, str], result: dict[str, Any]) -> bool:
+    """按幻灯片定位把一条批注归到目标现在所在的页；返回这条批注有没有被改动。"""
+    anchor, page = n["pptx"], int(n.get("page", 0) or 0)
+    got = pptx_reader.relocate(anchor, ctx["slides"])
+    before = _dumps(n)
+    if got["status"] == "ok":
+        to = got["page"]
+        if to != page:
+            result["moved"].append({"id": n.get("id"), "from": page, "to": to, "key": ctx["keys"].get(to, "")})
+            n["page"] = to
+        if to in new_titles:             # 页码没变，标题也可能换了
+            n["title"] = new_titles[to]
+        if ctx["keys"].get(to):
+            n["key"] = ctx["keys"][to]
+        n.pop("orphan", None)
+        if got["targets"]:               # 元素身份刷新成当前版本（重命名、顺序与文本变化后仍指同一对象）
+            anchor["elements"] = got["targets"]
+        if got["text"] is not None:
+            anchor["text"]["para"] = got["text"]["para"]
+        if got["changed"]:
+            anchor["changed"] = True     # 元素还在但文字变了：偏移与指纹仍是旧版本的
+        else:
+            anchor.pop("changed", None)
+            if ctx.get("fingerprint"):
+                anchor["fp"] = ctx["fingerprint"]
+    else:
+        n["orphan"] = True
+        result["orphans"].append({"id": n.get("id"), "page": page, "key": n.get("key"), "reason": got["why"]})
+    touched = _dumps(n) != before
+    # 需要说明的情况只在这条批注这次确实被改动时说一遍；找不到的每次都说，直到用户确认
+    if got["status"] != "ok" or (touched and got["changed"]):
+        result["pptx"].append({"id": n.get("id"), "status": got["status"], "why": got["why"],
+                               "changed": got["changed"], "page": n.get("page")})
+    return touched
+
+
 def remap_pages(review_dir: Path, old_keys: dict[int, str], new_pages: dict[str, int], new_titles: dict[int, str],
-                ambiguous: set[str] | None = None, docx: dict[str, Any] | None = None) -> dict[str, Any]:
+                ambiguous: set[str] | None = None, docx: dict[str, Any] | None = None,
+                pptx: dict[str, Any] | None = None) -> dict[str, Any]:
     """生成对照页时调用：old_keys 是上一版 review.json 的「页码 → 键」，new_pages 是新版的「键 → 页码」。
 
     DOCX 审阅另传 docx = {"paragraphs": 新版段落索引, "fingerprint": 源文件指纹, "keys": {页码: 键}}：
     带段落定位（本版本读得懂的 docx 字段）的批注先按段落找回现在所在的页，同步 page / key / title；
     段落找不到或无法确认时标 orphan、页码不动，不再回落到页面键（页面是排版产物，页首会换段）。
+    PPT 审阅另传 pptx = {"slides": 新版幻灯片模型, "fingerprint": 源文件指纹, "keys": {页码: 键}}：
+    带幻灯片定位（本版本读得懂的 pptx 字段）的批注按稳定幻灯片和元素身份找回目标（元素重命名、
+    顺序与文本变化后仍指同一对象），目标消失或证据冲突时标 orphan、页码不动，不猜相近对象。
     其余批注按页面键：
     - 没有 key 的旧批注，按上一版的页码补上 key（批注是对着上一版写的）；
     - 有 key 且新版里还在：页码改成新页码；
     - key 在新版里找不到：标 orphan，页码不动，等用户或代理确认。
-    返回 {"moved": [...], "orphans": [...], "keyed": n, "docx": [按段落定位时需要说明的情况]}。
+    返回 {"moved": [...], "orphans": [...], "keyed": n, "docx": [...], "pptx": [按幻灯片定位时需要说明的情况]}。
     """
     ambiguous = ambiguous or set()
-    result: dict[str, Any] = {"moved": [], "orphans": [], "keyed": 0, "docx": []}
+    result: dict[str, Any] = {"moved": [], "orphans": [], "keyed": 0, "docx": [], "pptx": []}
     if not (review_dir / NOTES_FILE).exists():
         return result
     with locked(review_dir):
         doc = load(review_dir)
         changed = False
         for n in doc["notes"]:
+            if pptx is not None and usable_pptx_anchor(n.get("pptx")):
+                changed = _remap_pptx(n, pptx, new_titles, result) or changed
+                continue
             if docx is not None and docx_review.usable_anchor(n.get("docx")):
                 changed = _remap_docx(n, docx, new_titles, result) or changed
                 continue

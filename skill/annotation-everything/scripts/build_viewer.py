@@ -790,6 +790,18 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
                                                               locale_choice, str(script))
         except ScriptError as exc:
             raise SystemExit("\n".join(exc.messages)) from None
+    if pptx_meta is not None and script is None:
+        # 无外部讲稿：已有演讲者备注逐页进讲稿侧（两个事实源不混用；本版本不回写 PPT 备注）
+        notes_by_n = pptx_report.notes_by_slide(report)
+        if notes_by_n:
+            spages = [{"n": pg["n"], "title": esc(pg["title"]), "dur": "", "sec": 0,
+                       "talk": "".join(f"<p>{inline(ln)}</p>"
+                                       for ln in notes_by_n.get(pg["n"], "").splitlines() if ln.strip()),
+                       "next": "", "qa": []} for pg in sects]
+            assets.warn(diag(locale_choice, "build.pptx.notesScript"))
+    elif pptx_meta is not None:
+        # 显式外部讲稿优先：PPT 备注不参与合并，也不是回写目标；讲稿修改走既有文本流程
+        assets.warn(diag(locale_choice, "build.pptx.notesNotMerged"))
     rnums = [s["n"] for s in sects]
     if script is not None:
         snums = [p["n"] for p in spages]
@@ -933,12 +945,17 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         docx_ctx = None if docx_meta is None else {
             "paragraphs": docx_paragraphs, "fingerprint": docx_meta["fingerprint"],
             "keys": {pg["n"]: pg["key"] for pg in pages if pg["key"] not in dup}}
+        # PPT：带幻灯片定位的批注按稳定幻灯片和元素身份找回（重命名、顺序与文本变化后仍指同一对象）
+        pptx_ctx = None if pptx_meta is None else {
+            "slides": pptx_meta["slides"], "fingerprint": pptx_meta["fingerprint"],
+            "keys": {pg["n"]: pg["key"] for pg in pages if pg["key"] not in dup}}
         remap = notes_store.remap_pages(out, old_keys, {pg["key"]: pg["n"] for pg in pages if pg["stable"]},
-                                        {pg["n"]: html.unescape(pg["title"]) for pg in pages}, dup, docx=docx_ctx)
+                                        {pg["n"]: html.unescape(pg["title"]) for pg in pages}, dup,
+                                        docx=docx_ctx, pptx=pptx_ctx)
         for mv in remap["moved"]:
             assets.warn(diag(locale_choice, "build.note.moved", id=mv["id"], pageKey=mv["key"], old=mv["from"], new=mv["to"]))
         for o in remap["orphans"]:
-            if o.get("reason"):   # 按段落定位没找到：原因在下面的 DOCX 诊断里说
+            if o.get("reason"):   # 按段落/幻灯片定位没找到：原因在下面的 DOCX / PPT 诊断里说
                 continue
             assets.warn(diag(locale_choice, "build.note.orphan", id=o["id"], page=o["page"], pageKey=o["key"]))
         for x in remap.get("docx", []):
@@ -949,6 +966,12 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
                 assets.warn(diag(locale_choice, f"build.note.docx.{x['why']}", id=x["id"], page=x["page"]))
             if x["changed"]:
                 assets.warn(diag(locale_choice, "build.note.docx.changed", id=x["id"], page=x["page"]))
+        for x in remap.get("pptx", []):
+            if x["status"] != "ok":
+                assets.warn(diag(locale_choice, f"build.note.pptx.{x['status']}", id=x["id"], page=x["page"]))
+                continue
+            if x["changed"]:
+                assets.warn(diag(locale_choice, "build.note.pptx.changed", id=x["id"], page=x["page"]))
     register_review(rid, out, review_name, assets)
     if assets.total > 40 * 1024 * 1024:
         assets.warn(diag(locale_choice, "build.asset.total", size=assets.total // 1024 // 1024))
