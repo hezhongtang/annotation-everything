@@ -187,5 +187,58 @@ class BuildIntegrationTests(ControlledRenderMixin, unittest.TestCase):
         self.assertNotIn("Traceback", stderr)
 
 
+class CompatibilityTests(ControlledRenderMixin, unittest.TestCase):
+    """格式版本契约与服务能力：旧版本机制面对 pptx 明确拒绝，本版本声明能力。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ae-pptx-compat-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def build_one(self, out: Path) -> Path:
+        self.controlled(slides=2)
+        code = 0
+        o, e = io.StringIO(), io.StringIO()
+        with redirect_stdout(o), redirect_stderr(e):
+            try:
+                code = build_viewer.main(["--report", str(mp.build_sample(self.root / "deck.pptx")),
+                                          "--out", str(out), "--no-scan-skills", "--locale", "zh-CN"])
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+        assert code == 0, e.getvalue()
+        return out / "review.json"
+
+    def test_ledger_accepts_pptx_v1_and_refuses_future_versions(self):
+        manifest_path = self.build_one(self.root / "rv")
+        m = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertIsNone(ledger.unsupported_format(m), "本版本认得 pptx v1")
+        m["format"]["version"] = pp.FORMAT_VERSION + 1
+        manifest_path.write_text(json.dumps(m, ensure_ascii=False), encoding="utf-8")
+        self.assertIn("不支持", ledger.unsupported_format(m), "更高版本元数据明确拒绝")
+
+        old_style = dict(m)
+        old_style.pop("format")
+        old_style.pop("pptx")
+        self.assertIsNone(ledger.unsupported_format(old_style), "旧 HTML 审阅继续按无 format 处理")
+
+    def test_legacy_manifest_without_pptx_support_is_refused_not_read_as_html(self):
+        # 旧版本的 REPORT_FORMATS 没有 pptx：模拟旧代码视角，未知格式必须明确拒绝
+        with mock.patch.object(ledger, "REPORT_FORMATS", {"html": 0, "docx": 1}):
+            problem = ledger.unsupported_format({"format": {"report": "pptx", "version": 1}})
+        self.assertIsNotNone(problem)
+        self.assertIn("pptx", problem)
+
+    def test_service_declares_pptx_feature(self):
+        import serve
+        self.assertIn("pptx", serve.FEATURES)
+
+    def test_page_embeds_pptx_summary_and_old_service_block(self):
+        self.build_one(self.root / "rv")
+        page = (self.root / "rv" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('const PPTX={"v": 1,', page)
+        self.assertIn("viewer.pptx.oldService", page, "页面带旧服务阻断提示的词典 key")
+        self.assertIn("pptxBlocked", page, "旧服务写入阻断逻辑进入页面")
+
+
 if __name__ == "__main__":
     unittest.main()
