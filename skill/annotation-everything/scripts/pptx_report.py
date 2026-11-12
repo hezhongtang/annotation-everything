@@ -125,20 +125,21 @@ def font_evidence(pptx: Path, pdf: Path | None) -> dict:
         evidence["installed"] = "failed"
         evidence["warning"] = True
         evidence["error"] = str(exc)
+    installed = None
     try:
         installed, warning = fonts.installed_fonts()
     except fonts.CheckError as exc:
-        installed, evidence["installed"] = None, "failed"
+        evidence["installed"] = "failed"
         evidence["warning"] = True
         evidence["error"] = str(exc)
     else:
         if warning:
             evidence["warning"] = True
-        by_name = {fonts.normal(name): name for name in declared}
-        evidence["declared"] = [{"font": name, "found": fonts.normal(name) in installed}
-                                for name in declared]
-        evidence["missing"] = [name for name in declared if fonts.normal(name) not in installed]
     evidence["fallbacks"] = fallbacks
+    evidence["declared"] = [{"font": name, "found": installed is not None and fonts.normal(name) in installed}
+                            for name in declared]
+    if installed is not None:
+        evidence["missing"] = [name for name in declared if fonts.normal(name) not in installed]
     if evidence["missing"] or evidence["unresolved"] or not declared or evidence["installed"] != "ok":
         evidence["review"] = True
     if pdf is not None:

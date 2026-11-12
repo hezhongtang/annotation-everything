@@ -348,5 +348,118 @@ class RenderPipelineTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "pageCount")
 
 
+class FontEvidenceTests(unittest.TestCase):
+    """转换前声明字体与转换后 PDF 字体证据：受控 fc-list / pdffonts 输出（先例 test_pptx_fonts）。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ae-pptx-fonts-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.pptx = mp.build_sample(self.root / "deck.pptx")
+        self.pdf = self.root / "rendered.pdf"
+        self.pdf.write_bytes(b"%PDF synthetic")
+        patcher = mock.patch.dict(os.environ, {"PATH": str(self.bin) + os.pathsep + os.defpath})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tool(self, name: str, script: str):
+        path = self.bin / name
+        path.write_text("#!/bin/sh\n" + script + "\n", encoding="utf-8")
+        path.chmod(0o755)
+
+    def evidence(self, pdf: Path | None | object = ...) -> dict:
+        # Ellipsis 表示默认用渲染 PDF；显式传 None 才是不做转换后对照
+        return pp.font_evidence(self.pptx, self.pdf if pdf is ... else pdf)
+
+    def explicit_font_deck(self, name: str = "explicit.pptx") -> Path:
+        """单页 deck：全部 run 显式声明同一字体，unresolved 与主题备选为空。"""
+        run = ('<a:r><a:rPr lang="en-US"><a:latin typeface="Synthetic Sans"/></a:rPr>'
+               '<a:t>explicit text</a:t></a:r>')
+        parts = {
+            "[Content_Types].xml": '<?xml version="1.0" encoding="UTF-8"?>\n'
+                f'<Types xmlns="{mp.CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                '<Default Extension="xml" ContentType="application/xml"/>'
+                '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>'
+                '<Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>',
+            "_rels/.rels": '<?xml version="1.0" encoding="UTF-8"?>\n'
+                f'<Relationships xmlns="{mp.PKG_REL}"><Relationship Id="rIdDeck" Type="{mp.R}/officeDocument" Target="ppt/presentation.xml"/></Relationships>',
+            "ppt/presentation.xml": '<?xml version="1.0" encoding="UTF-8"?>\n'
+                f'<p:presentation xmlns:p="{mp.P}" xmlns:r="{mp.R}"><p:sldIdLst><p:sldId id="257" r:id="rIdFirst"/></p:sldIdLst>'
+                '<p:sldSz cx="12192000" cy="6858000"/></p:presentation>',
+            "ppt/_rels/presentation.xml.rels": '<?xml version="1.0" encoding="UTF-8"?>\n'
+                f'<Relationships xmlns="{mp.PKG_REL}"><Relationship Id="rIdFirst" Type="{mp.R}/slide" Target="slides/slide1.xml"/></Relationships>',
+            "ppt/slides/slide1.xml": '<?xml version="1.0" encoding="UTF-8"?>\n'
+                f'<p:sld xmlns:p="{mp.P}" xmlns:a="{mp.A}" xmlns:r="{mp.R}"><p:cSld><p:spTree>'
+                '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>'
+                '<p:sp><p:nvSpPr><p:cNvPr id="2" name="显式字体页"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
+                '<p:spPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="5486400" cy="914400"/></a:xfrm></p:spPr>'
+                f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p>{run}</a:p></p:txBody></p:sp>'
+                '</p:spTree></p:cSld></p:sld>',
+        }
+        return mp.write_package(self.root / name, parts)
+
+    def test_missing_and_found_declared_fonts_are_recorded(self):
+        self.tool("fc-list", "printf '%s\\n' '完全无关的字体'")
+        evidence = self.evidence(pdf=None)
+        self.assertEqual([d["font"] for d in evidence["declared"]], ["Synthetic Sans"])
+        self.assertEqual(evidence["missing"], ["Synthetic Sans"], "声明字体未检出按缺失记录")
+        self.assertEqual(evidence["installed"], "ok")
+        self.assertTrue(evidence["review"], "有缺失就要人工核查")
+
+        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans, Synthetic Sans Regular'")
+        self.pptx = self.explicit_font_deck()
+        evidence = self.evidence(pdf=None)
+        self.assertEqual(evidence["missing"], [])
+        self.assertFalse(evidence["review"], "声明齐全、全部显式且枚举正常时清单层面不触发核查")
+
+    def test_fc_list_failure_keeps_declarations_and_marks_unknown(self):
+        self.tool("fc-list", "exit 7")
+        evidence = self.evidence(pdf=None)
+        self.assertEqual(evidence["installed"], "failed")
+        self.assertEqual([d["font"] for d in evidence["declared"]], ["Synthetic Sans"],
+                         "枚举失败时声明清单仍然可见")
+        self.assertEqual(evidence["missing"], [], "枚举失败不误报缺失：是无法确认，不是缺失")
+        self.assertTrue(evidence["warning"])
+
+    def test_unresolved_theme_references_stay_unknown(self):
+        parts = mp.sample_parts()
+        parts["ppt/slides/slide10.xml"] = parts["ppt/slides/slide10.xml"].replace(
+            '<a:rPr b="1"><a:latin typeface="Synthetic Sans"/></a:rPr>',
+            '<a:rPr b="1"><a:latin typeface="+mn-lt"/></a:rPr>')
+        self.pptx = mp.write_package(self.root / "theme.pptx", parts)
+        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        evidence = self.evidence(pdf=None)
+        self.assertTrue(evidence["unresolved"], "主题引用无法解析：按未知记录")
+        self.assertTrue(evidence["review"])
+
+    def test_pdf_evidence_with_unembedded_font_requires_review(self):
+        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        self.tool("pdffonts", "printf '%s\\n' "
+                  "'name                                 type              encoding         emb sub uni object ID' "
+                  "'------------------------------------ ----------------- ---------------- --- --- --- ---------' "
+                  "'Synthetic Sans                       TrueType          WinAnsi          no  no  no       5  0'")
+        evidence = self.evidence()
+        self.assertEqual(evidence["pdf"]["rows"][0]["name"], "Synthetic Sans")
+        self.assertEqual(evidence["pdf"]["rows"][0]["emb"], "no")
+        self.assertTrue(evidence["review"], "渲染 PDF 里字体未嵌入：需要人工核查")
+
+    def test_matching_names_never_mark_visual_verified(self):
+        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        self.tool("pdffonts", "printf '%s\\n' "
+                  "'name                                 type              encoding         emb sub uni object ID' "
+                  "'------------------------------------ ----------------- ---------------- --- --- --- ---------' "
+                  "'Synthetic Sans                       TrueType          WinAnsi          yes yes yes      5  0'")
+        self.pptx = self.explicit_font_deck()
+        evidence = self.evidence()
+        self.assertFalse(evidence["review"], "名称一致且嵌入：字体清单层面不触发核查")
+        with mock.patch.object(pp, "render_slides", lambda p, w: [PNG_1PX]), \
+                mock.patch.object(pp, "font_evidence", lambda p, d: evidence):
+            result = pp.parts(self.pptx)
+        self.assertIn("visual", result["meta"]["unverified"],
+                      "字体名称一致也不自动标记视觉核验通过")
+
+
 if __name__ == "__main__":
     unittest.main()
