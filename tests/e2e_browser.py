@@ -25,6 +25,7 @@
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -2961,6 +2962,138 @@ def css_fidelity_checks(browser, tmp: Path):
 
 
 
+def pptx_review_checks(browser, tmp: Path):
+    """场景 pptx-review：PPTX 直接审阅（详见 e2e_scenarios 注册表）。
+
+    只用现场合成的 deck（仓库不放真实材料）；渲染走伪造 soffice/pdftoppm 脚本产出的
+    受控合成 PDF/PNG——真实 LibreOffice/Poppler 的集成验证按父规格 Testing Decision 6
+    留待 PR review 与 #153。
+    """
+    sys.path.insert(0, str(ROOT / "fixtures" / "pptx"))
+    import make_pptx as mp
+
+    # 受控渲染工具：合成 PDF 与 1x1 PNG 由场景现场生成，工具脚本按参数约定产出
+    tools = tmp / "pptx_tools"
+    tools.mkdir()
+    pdf = tmp / "synthetic.pptx-render.pdf"
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+               b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 960 540] >>"]
+    raw = bytearray(b"%PDF-1.4\n")
+    for number, obj in enumerate(objects, 1):
+        raw.extend(f"{number} 0 obj\n".encode() + obj + b"\nendobj\n")
+    raw.extend(b"trailer\n<< /Size 4 /Root 1 0 R >>\n%%EOF\n")
+    pdf.write_bytes(bytes(raw))
+    png = tmp / "synthetic.png"
+    png.write_bytes(base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQAB"
+        "h6FO1AAAAABJRU5ErkJggg=="))
+    soffice = tools / "soffice"
+    soffice.write_text("#!%s\n" % sys.executable + """\
+import os, sys
+from pathlib import Path
+args = sys.argv[1:]
+out, src = Path(args[5]), Path(args[6])
+(out / (src.stem + ".pdf")).write_bytes(Path(os.environ["AE_FAKE_PDF"]).read_bytes())
+""", encoding="utf-8")
+    soffice.chmod(0o755)
+    raster = tools / "pdftoppm"
+    raster.write_text("#!%s\n" % sys.executable + """\
+import os, sys
+from pathlib import Path
+prefix = Path(sys.argv[-1])
+image = Path(os.environ["AE_FAKE_PNG"]).read_bytes()
+for n in (1, 2):
+    Path(f"{prefix}-{n}.png").write_bytes(image)
+""", encoding="utf-8")
+    raster.chmod(0o755)
+    env = {**os.environ, "PATH": str(tools) + os.pathsep + os.defpath,
+           "AE_FAKE_PDF": str(pdf), "AE_FAKE_PNG": str(png)}
+
+    def pptx_build(out: Path, name: str):
+        out.mkdir(parents=True, exist_ok=True)
+        cmd = [sys.executable, str(SCRIPTS / "build_viewer.py"), "--report",
+               str(mp.build_sample(tmp / name)), "--out", str(out), "--no-scan-skills"]
+        subprocess.run(cmd, check=True, capture_output=True, env=env)
+
+    d = tmp / "pptx_review"
+    pptx_build(d, "deck.pptx")
+    meta = json.loads((d / "review.json").read_text(encoding="utf-8"))
+    ok(meta["format"] == {"report": "pptx", "version": 1}, "review.json 标记 PPTX 格式版本 1")
+    ok([p["key"] for p in meta["pages"]] == ["s260", "s257"], "页面键按持久幻灯片标识登记，页序正确")
+    ok(meta["pptx"]["renderer"]["status"] == "ok" and meta["pptx"]["renderer"]["pages"] == 2,
+       "渲染器信息进入审阅清单")
+    ok("visual" in meta["pptx"]["unverified"], "未核验项保留逐页视觉核验")
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.goto((d / "index.html").as_uri())
+    banner = page.inner_text("#pptxBanner")
+    ok("PPT 按本机渲染显示" in banner and "未核验" in banner,
+       "横幅说明按渲染显示并保留未核验项")
+    ok(page.locator("#jump option").count() == 2, "页码选择器列出 2 页")
+    first = page.locator("#host section.page").first.bounding_box()
+    ok(first and first["width"] > first["height"] and abs(first["width"] / first["height"] - 16 / 9) < 0.05,
+       "横版幻灯片按原始 16:9 比例显示（%.0f×%.0f）" % (first["width"], first["height"]))
+    ok(page.locator("#host section.page img.pptx-render").count() == 1,
+       "每页以内联渲染图负责视觉")
+    add_note(page, "PPT 整页批注")
+    add_note(page, "PPT 页点标注", pin=(0.5, 0.1))
+    page.click('[data-act="pin"]')   # 框选区域：进入标注模式后按住拖出一块（拖出 6px 以上才算框）
+    box = page.locator("#slide").bounding_box()
+    page.mouse.move(box["x"] + box["width"] * 0.25, box["y"] + box["height"] * 0.18)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] * 0.55, box["y"] + box["height"] * 0.28, steps=4)
+    page.mouse.up()
+    page.fill("#ntext", "PPT 页框选区域")
+    page.click("[data-act='add']")
+    ok(wait_until(lambda: "PPT 页框选区域" in page.inner_text("#nlist"), page, 5,
+                  condition="区域标注卡片出现在列表里")
+       and page.locator("#host .ae-region").count() >= 1,
+       "框选区域标注落在 PPT 页上并记成批注")
+    page.reload()
+    texts = page.inner_text("#nlist")
+    ok(all(word in texts for word in ("PPT 整页批注", "PPT 页点标注", "PPT 页框选区域")),
+       "file:// 刷新后整页、点标注与区域标注仍在")
+    ctx.close()
+
+    # 服务模式：批注落盘；旧服务（不声明 pptx 特性）时阻断写入
+    sd = tmp / "pptx_server"
+    pptx_build(sd, "server.pptx")
+    port = free_port()
+    server = start_server(sd, port)
+    sctx = browser.new_context()
+    try:
+        base = f"http://127.0.0.1:{port}/"
+        spage = sctx.new_page()
+        spage.goto(base)
+        ok("pptx" in spage.request.get(base + "api/notes").json()["features"], "服务声明 pptx 特性")
+        add_note(spage, "PPT 服务模式批注", pin=(0.4, 0.2))
+        ok(wait_until(lambda: any(n["text"] == "PPT 服务模式批注" for n in disk_notes(sd)), spage, 8,
+                      condition="批注写进 notes.json"),
+           "服务模式下 PPT 页批注落盘")
+        ok(spage.locator("#pptxBlock").is_hidden(), "新版服务下不显示阻断提示")
+        old = sctx.new_page()
+
+        def legacy(route):
+            response = route.fetch()
+            doc = response.json()
+            doc["features"] = [feature for feature in doc.get("features", []) if feature != "pptx"]
+            route.fulfill(response=response, json=doc)
+
+        old.route("**/api/notes", legacy)
+        old.goto(base)
+        ok(wait_dom(old, "() => !document.getElementById('pptxBlock').hidden", 8)
+           and "旧版本" in old.inner_text("#pptxBlock"), "旧版服务不认 pptx 特性时显示阻断提示")
+        before = len(disk_notes(sd))
+        # 面板整体 inert（与 DOCX 旧服务阻断同一条规则）：不能操作批注输入，服务端也没有新增
+        ok(old.evaluate("() => document.getElementById('bottomPanel').inert") and len(disk_notes(sd)) == before,
+           "阻断期间批注面板不可操作，notes.json 没有新增")
+        old.close()
+    finally:
+        sctx.close()
+        stop(server)
+
+
 def docx_review_checks(browser, tmp: Path):
     """场景 docx-review：DOCX 直接审阅（详见 e2e_scenarios 注册表）。
 
@@ -5562,6 +5695,7 @@ SCENARIO_RUNNERS = {
     "file-mode": file_mode_checks,
     "review-overview": review_overview_checks,
     "css-fidelity": css_fidelity_checks,
+    "pptx-review": pptx_review_checks,
     "docx-review": docx_review_checks,
     "server-mode": server_mode_checks,
     "poll-repaint": poll_repaint_checks,

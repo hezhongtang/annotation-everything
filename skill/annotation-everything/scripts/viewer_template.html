@@ -106,6 +106,9 @@ main{flex:1;display:grid;grid-template-columns:var(--ae-rail) var(--ae-sidebar) 
 #host{display:block}
 /* DOCX：按页宽适配、纵向滚动（A4 纵向页按宽高同时缩放会小到看不清） */
 .slide.docx{overflow:auto;align-items:flex-start}
+.pptx-page{display:block;background:#fff}
+.pptx-page img.pptx-render{display:block;width:100%;height:100%;object-fit:contain}
+.pptx-page img.pptx-render::-moz-selection{background:transparent}
 .docx-banner{display:flex;align-items:flex-start;flex-wrap:wrap;gap:var(--ae-gap-4) var(--ae-gap-14);padding:var(--ae-gap-10) var(--ae-gap-24);background:var(--ae-warm);border-bottom:1px solid var(--ae-warm-line);color:var(--ae-ink);font-size:var(--ae-small);line-height:1.7}
 .docx-banner[hidden]{display:none}
 .docx-block{padding:var(--ae-gap-10) var(--ae-gap-24);background:var(--ae-danger-bg);border-bottom:1px solid var(--ae-red);color:var(--ae-ink);font-size:var(--ae-small);line-height:1.7;font-weight:600}
