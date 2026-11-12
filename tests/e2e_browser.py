@@ -2985,7 +2985,7 @@ def docx_review_checks(browser, tmp: Path):
     banner = page.inner_text("#docxBanner")
     ok("按 Word 保存的分页显示" in banner and "与文档记录的 5 页一致" in banner,
        "横幅标明按 Word 分页显示且与文档记录一致（verified）")
-    ok("自动写回 .docx" in banner, "横幅提示这一版不能写回 .docx")
+    ok("回写 DOCX" in banner and "只读结构" in banner, "横幅说明支持的纯文字可回写，且保留只读结构限制")
     ok(page.locator("#jump option").count() == 5, "页码选择器列出 5 页")
     first = page.locator("#host section.page").first.bounding_box()
     ok(first and first["width"] < first["height"],
@@ -3007,8 +3007,8 @@ def docx_review_checks(browser, tmp: Path):
     ok(page.is_visible("#selbar"), "DOCX 正文文字可选择，拖选弹出操作条")
     page.click("#selbar [data-sel='delete']")
     ok(wait_toast(page, "已记下：删除这段", condition="普通段快捷删除的提示出现")
-       and "改动需在 Word 中完成" in page.inner_text("#toast"),
-       "普通段快捷删除照常记录，提示改稿需在 Word 中完成")
+       and "校验定位并回写" in page.inner_text("#toast"),
+       "普通段快捷删除照常记录，提示交给 Agent 后校验定位并回写")
     go_page(page, 3)
     page3 = page.evaluate(f"() => {STAGE}.textContent")
     ok("货到付款" in page3 and "验收合格后三十日内付款" in page3, "原生修订的删除与插入文字都保留")
@@ -3042,6 +3042,13 @@ def docx_review_checks(browser, tmp: Path):
     ok(fallback["hit"] and fallback["hit"]["via"] == "text" and fallback["hit"]["para"]["n"] == fallback["n"]
        and fallback["none"] is None,
        "拿不到 Shadow DOM 选区时按文本唯一匹配反查段落并记下来源；本页找不到的文字不写定位")
+    readonly_fallback = page.evaluate(f"""() => {{
+        const d = {STAGE}.querySelector('[data-docx-p][data-docx-ro*="revision"]');
+        const original = sr.getSelection;
+        try {{ sr.getSelection = () => null; return docxReadonly(docxTextNodes(d).map(t => t.data).join('')); }}
+        finally {{ if (original) sr.getSelection = original; else delete sr.getSelection; }}
+    }}""")
+    ok("revision" in readonly_fallback, "拿不到 Shadow DOM 选区时，文本反查仍提示原生修订不能回写")
     add_note(page, "DOCX 页点标注", pin=(0.5, 0.1))
     page.click('[data-act="pin"]')   # 框选区域：进入标注模式后按住拖出一块（拖出 6px 以上才算框）
     box = page.locator("#slide").bounding_box()
@@ -3083,6 +3090,44 @@ def docx_review_checks(browser, tmp: Path):
     ok(wait_until(lambda: page.evaluate("() => JSON.parse(localStorage.getItem('ae.' + RID + '.notes')).filter(n => n.text === '同文异段批注').length") == 2,
                   page, 5, condition="两个不同段落的同文批注均导入本地存储"),
        "DOCX 同文异段批注在 file:// 导入时不会互相去重")
+    # #137：同段内跨过非 w:t 结构时，页面和回写命令一样明确拒绝自动回写。
+    nd = tmp / "docx_nontext"
+    nd.mkdir()
+    tokens = ("<w:tab/>", "<w:br/>", "<w:noBreakHyphen/>", "<w:softHyphen/>", '<w:sym w:char="0041"/>')
+    paragraphs = ''.join(f'<w:p><w:r><w:t>选区{k}开始</w:t>{token}<w:t>末尾{k}</w:t></w:r></w:p>' for k, token in enumerate(tokens))
+    build(nd, ms.package(nd / "nontext.docx", ms.body_xml(paragraphs)), None)
+    page.goto((nd / "index.html").as_uri())
+    for k, token in enumerate(tokens):
+        target = page.locator("#host [data-docx-p]").nth(k)
+        # 本场景须跨过结构两侧的正文；通用 drag_select 仅沿第一行拖动，碰到 br 会漏掉末行。
+        target.scroll_into_view_if_needed()
+        points = target.evaluate("""d => {
+            const nodes = docxTextNodes(d), r = document.createRange();
+            r.selectNodeContents(nodes[0]);
+            const first = r.getClientRects()[0];
+            r.selectNodeContents(nodes[nodes.length - 1]);
+            const rects = r.getClientRects(), last = rects[rects.length - 1];
+            return {start: [first.left + 1, first.top + first.height / 2],
+                    end: [last.right - 1, last.top + last.height / 2]};
+        }""")
+        page.mouse.move(*points["start"])
+        page.mouse.down()
+        page.mouse.move(*points["end"], steps=8)
+        page.mouse.up()
+        ok(target.evaluate("""(d, k) => !!sel && sel.text.includes(`选区${k}开始`)
+            && sel.text.includes(`末尾${k}`) && sel.docx?.start === 0
+            && sel.docx.end === cpLen(docxTextNodes(d).map(t => t.data).join(''))""", k),
+           f"跨 {token} 的真实拖选覆盖前后正文及完整字符范围")
+        page.click("#selbar [data-sel='delete']")
+        ok(wait_toast(page, "不能自动回写", condition="非文本结构的快捷修改限制提示出现")
+           and "制表符、符号或换行结构" in page.inner_text("#toast"),
+           f"跨 {token} 的快捷删除说明不能自动回写")
+        fallback_reason = page.evaluate(f"""() => {{
+            const d = [...{STAGE}.querySelectorAll('[data-docx-p]')][{k}], original = sr.getSelection;
+            try {{ sr.getSelection = () => null; return docxReadonly(docxTextNodes(d).map(t => t.data).join('')); }}
+            finally {{ if (original) sr.getSelection = original; else delete sr.getSelection; }}
+        }}""")
+        ok("nonText" in fallback_reason, f"跨 {token} 的文本反查同样识别不能回写的结构")
     ctx.close()
     # #136 服务模式：定位落盘；旧服务（不声明 docx 特性）时阻断写入
     sd = tmp / "docx_server"

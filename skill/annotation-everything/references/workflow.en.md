@@ -82,7 +82,21 @@ Without a service, open `index.html` directly. Annotations persist in browser st
 
 **Locations of DOCX annotations**: `show` prints a `DOCX location` line under the annotation (paragraph number, paraId, character offsets in the paragraph, source). A line starting with ⚠ means the location cannot be used as is: when the paragraph text has changed, check the position against the quoted text; when the location was written against another version of the source file, rebuild the review page first; when its version is newer than this tool supports, it cannot be used for write-back. For an annotation marked orphaned after a rebuild, confirm with the user which paragraph it belongs to.
 
-**DOCX reports cannot be written back in this version**: when the source file is a `.docx`, do not modify it and do not produce a replacement HTML; the page banner likewise states that revisions must be made in Word. For each annotation, write the suggested change (which page, which passage, what to change it to; the quoted text remains the most reliable locator) in your handling notes, and let the user decide which annotations are marked resolved before you run `resolve`. Quick edits (delete / replace) are recorded the same way and are not written back. Pagination confidence and structure limits are in the [format reference](formats.en.md) under "Word documents (DOCX)."
+**DOCX write-back**: use `show` to check the accepted batch requirements, original text and paragraph locations, then follow this branch. Supported content and refusal reasons are in [Formats](formats.en.md), under “Word documents (DOCX)”.
+
+```bash
+python3 "$S/docx_edit.py" apply "$R" --batch N --dry-run --locale en
+python3 "$S/docx_edit.py" apply "$R" --batch N --locale en
+# To apply selected quick edits, replace --batch N with --id ID (repeatable).
+# For a free-form annotation, check the zero-based paragraph number and original text.
+# After a successful preview, remove --dry-run to execute the same replacement.
+python3 "$S/docx_edit.py" replace "$R" --paragraph 12 --from "Original text" --to "Revised text" --batch N --dry-run --locale en
+```
+
+- Quick edits are checked as a whole: an ambiguous location, overlapping edit or read-only structure prevents the entire selection from being written. Use the per-annotation reasons to adjust the selection. Handle speaker-note edits through the existing workflow; free-form replacements must follow the user's intent.
+- The default updates the source DOCX after saving a binary original (0600) in `.snapshots/batch-N/docx-writeback/`. ID-based edits and replacements without a batch use `batch-0`. `--output new.docx` keeps the source and requires a new output path; create a separate review from that output. `--dry-run` writes neither document nor backup.
+- Resolve Word owner files, fingerprint mismatches, signatures and editing protection as instructed by the error. Track Changes is refused by default; use `--allow-untracked` only when the user explicitly allows untracked edits, and explain that AE writes untracked changes. Paragraphs containing native revisions still require Word. A table style with hidden-text properties, including conditional styles, makes the entire table read-only.
+- After each successful write, rebuild the review page, check the revised text and `notes.py diff`, then record each result with `resolve` and finish with `done` according to the batch requirements. The command never resolves annotations automatically. Rebuild and recheck locations before another write; stale quotes or unconfirmed locations cannot be forced. Write-back retains the pagination markers and does not calculate Word's new layout; to verify actual pagination, open and save in Word/WPS, then rebuild again.
 
 For an analysis round, follow the [analysis guide](analysis.en.md) instead of the revision steps below. Analysis proposes questions and explanations; only annotations later confirmed by the reviewer enter revision.
 

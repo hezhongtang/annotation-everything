@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 13
+STRATEGY_VERSION = 14
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -169,10 +169,10 @@ SELECTION_RULES = (
     ),
     SelectionRule(
         rid="docx-review",
-        prefixes=("skill/annotation-everything/scripts/docx_review.py", "fixtures/docx/"),
-        selectors=("tests/test_docx_review.py", "tests/test_docx_anchor.py", "tests/test_core.py", "tests/test_review_page_i18n.py"),
+        prefixes=("skill/annotation-everything/scripts/docx_review.py", "skill/annotation-everything/scripts/docx_edit.py", "fixtures/docx/"),
+        selectors=("tests/test_docx_review.py", "tests/test_docx_anchor.py", "tests/test_docx_edit.py", "tests/test_core.py", "tests/test_review_page_i18n.py"),
         scenarios=("docx-review",),
-        why="DOCX 渲染器与合成样例：分页、诊断与对照页接入由 DOCX 用例覆盖；"
+        why="DOCX 渲染器、回写与合成样例：分页、诊断、字节保留、写前闸门及失败恢复由 DOCX 用例覆盖；"
             "浏览器场景钉住原分页显示、限制清单、点/框选标注与只读提示（服务安全自检由 pr 门禁覆盖）",
     ),
     SelectionRule(

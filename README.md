@@ -36,7 +36,7 @@ This README follows `main`; automatic updates install only stable release tags. 
 ### Annotate: point to the change, revise both documents
 
 - **Comment directly on the material.** Read report pages and speaker notes side by side. Select text to quote, delete or rewrite it, or place pins and regions on the report. Matching sentences can be marked for changes on both sides.
-- **Review Word documents directly.** A `.docx` needs no HTML conversion: the review page keeps the pagination and page orientation Word saved. Pagination confidence and approximated structures are shown on the page and in the CLI; annotations record their paragraph and text position, so they stay with the paragraph when Word reflows the document and the review page is rebuilt; this version cannot write revisions back into the `.docx`.
+- **Review Word documents directly.** A `.docx` needs no HTML conversion: the review page keeps the pagination and page orientation Word saved. Pagination confidence and approximated structures are shown on the page and in the CLI; annotations record their paragraph and text position, so they stay with the paragraph when Word reflows the document and the review page is rebuilt. Supported plain-text deletions and replacements can be written back by batch or annotation, with validation, backup and atomic replacement; read-only structures explain their limits.
 - **Hand a batch to the agent for revision.** Annotations save automatically. Bind a receiving session and explicitly submit a batch; the agent revises both documents, rebuilds the page and records the result for each annotation.
 - **Check and review as needed.** Request a full consistency check for figures, metric definitions and wording. Use a draft followed by review, or stop after the draft and let the reviewer decide when to finalize.
 
@@ -116,6 +116,7 @@ See the [English format reference](skill/annotation-everything/references/format
 | `update.py auto` / `check` / `now` | Check and automatically install a release / only check / check and install immediately from the skill copy; the skill entry runs `auto` at most once a day |
 | `verify.py plan` / `run` / `report` | Unified verification entry run from the repository root: `plan` explains the groups and commands without starting anything (`plan --phase development` also shows what the current changes should run, why, and when it falls back to the full check); `run` executes and writes structured records plus raw logs into `.verify/` (git-ignored), records the shadow comparison between the suggested selection and the full gate by default, and lets later stages reference currently valid passing evidence (`--no-reuse` forces a full rerun); `report` only reads records and shows the evidence chain. Groups: `unit` (full unit), `unit-related` (explicitly named cases, always augmented with the global dictionary contract in `tests/test_i18n_catalog_contract.py`), `browser` (full browser), `serve-check` (server security self-check), `all` (runs `unit` → `serve-check` → `browser` in order). Field contract: [docs/verify/record-contract.md](docs/verify/record-contract.md), selection strategy: [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
 | `build_viewer.py --report … [--script …] --out <review-dir>` | Build the review page from paginated HTML or DOCX, with optional speaker notes; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
+| `docx_edit.py apply REVIEW --batch N` / `replace REVIEW --paragraph N --from ORIGINAL --to REPLACEMENT` | Write DOCX quick edits or a single free-form replacement; repeat `--id ID` to select annotations, preview with `--dry-run`, or save a new file with `--output NEW_PATH`. The default backs up then edits in place; annotation statuses are unchanged |
 | `report_check.py report.html [--script script.md] [--record report-record.json]` | Public report verification entry: a readable summary by default, structured results with `--json`, and `--locale en` or `zh-CN` for the language. Exit 0 means program checks passed, not that the report is deliverable; 1 means checks failed; 2 means an input or usage error. Content, structure and visual coverage and delivery blockers are listed separately |
 | `serve.py <review-dir-or-id>` | Start the local server; each review keeps its own dedicated port |
 | `http://127.0.0.1:<port>/#overview` (browser address) | Open the review overview to switch scope, inspect details, open or start reviews, and archive or unarchive them; start a local service first |
@@ -433,6 +434,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 ├── scripts/
 │   ├── build_viewer.py            builds the review page index.html and review.json
 │   ├── docx_review.py             renders DOCX pages, records pagination confidence and structure diagnostics, relocates annotations by paragraph
+│   ├── docx_edit.py               writes DOCX annotation edits at byte level, with validation, backup and atomic replacement
 │   ├── report_check.py            report verification: deterministic rules, coverage and delivery verdict
 │   ├── i18n.py                    loads the shared catalogs and fills in the chosen language; holds the process-wide interface language state (set once by an entry, shared by every module); the command line boilerplate shared by every entry (reading --locale, translating argparse errors, reporting an unsupported language)
 │   ├── update.py                  checks stable releases and updates the skill copy
@@ -467,6 +469,7 @@ fixtures/external-report-skill-lite/ limited variant of it; proves missing evide
 tests/                             unit tests and end-to-end browser tests
 tests/test_docx_review.py          DOCX rendering, pagination, untrusted input and integration regressions
 tests/test_docx_anchor.py          DOCX annotation locations, rebuild remapping, show and export
+tests/test_docx_edit.py            DOCX write-back, byte preservation, preflight gates, failure recovery and CLI
 tests/e2e_waits.py                  browser condition waits: bounded polling, events and scenario timeout diagnostics
 tests/e2e_scenarios.py              browser scenario registry and selection scheduling (no browser dependency)
 tests/e2e_servers.py                server start/stop for end-to-end tests and cleanup after interruption

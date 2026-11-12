@@ -51,7 +51,7 @@ uv run --no-project --with playwright python tests/e2e_browser.py --skills-only 
 | main() 内联段 1（file:// 退回模式） | `file-mode` | — |
 | main() 内联段 2（报告样式保真） | `css-fidelity` | — |
 | `review_overview_checks`（#100 审阅总览：分组、详情、返回与双语） | `review-overview` | — |
-| `docx_review_checks`（#135 新增：DOCX 直接审阅——原分页、限制清单、点标注与框选、修订只读提示；#136 增补：引用 / 点 / 框的段落定位、文本反查、保存被拒后重试、同文异段导入、旧服务阻断内容写入并保留停止服务入口） | `docx-review` | — |
+| `docx_review_checks`（#135：DOCX 原分页、限制清单、点 / 框与只读提示；#136：段落定位、文本反查、保存重试、同文异段导入、旧服务阻断；#137：可回写提示及选区不可读时的只读结构提示） | `docx-review` | — |
 | main() 内联段 3–8（服务模式全流程、断线补传、写入失败、服务卡死、同一端口换审阅、恶意网页与导入） | `server-mode` | — |
 | `poll_repaint_checks`（#93 新增：轮询数据不变时不重画，其他触发点照旧立即更新） | `poll-repaint` | — |
 

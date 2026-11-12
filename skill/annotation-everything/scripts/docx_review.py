@@ -337,6 +337,102 @@ def merged(props: list[ET.Element | None]) -> dict[str, ET.Element]:
     return out
 
 
+def run_properties(styles: Styles, base: dict, rpr: ET.Element | None) -> dict:
+    """合并运行属性；字符样式中的 vanish 是开关，直接格式则指定最终状态。"""
+    rs = rpr.find(W + "rStyle") if rpr is not None else None
+    char_props = styles.props(rs.get(W + "val") if rs is not None else None, "rPr")
+    result = {**base, **merged([*char_props, rpr])}
+    hidden = _on(base.get("vanish")) is True
+    for props in char_props:
+        if _on(props.find(W + "vanish")) is True:
+            hidden = not hidden
+    direct = _on(rpr.find(W + "vanish")) if rpr is not None else None
+    if direct is not None:
+        hidden = direct
+    if "vanish" in result:
+        # 新建计算后的属性，不修改源 XML 或 Styles 缓存里的元素。
+        result["vanish"] = ET.Element(W + "vanish", {W + "val": "1" if hidden else "0"})
+    return result
+
+
+def writeback_restrictions(root: ET.Element, style_root: ET.Element | None) -> dict[int, set[str]]:
+    """页面和回写命令共用的段落限制；包含外层结构、跨段域及从样式继承的隐藏文字。"""
+    paragraphs = list(root.iter(W + "p"))
+    styles = Styles(style_root)
+    indices = {id(p): n for n, p in enumerate(paragraphs)}
+    reasons: dict[int, set[str]] = {n: set() for n in indices.values()}
+    kinds = {**{W + t: "revision" for t in ("ins", "del", "moveFrom", "moveTo", "cellIns", "cellDel", "cellMerge")},
+             **{W + t: "field" for t in ("fldChar", "fldSimple", "instrText")},
+             W + "txbxContent": "textbox", W + "sdt": "contentControl", W + "object": "object",
+             M + "oMath": "math", M + "oMathPara": "math"}
+    field_depth = 0
+    revision_ranges: set[str] = set()
+    inline_parents = {W + t for t in ("p", "hyperlink", "smartTag", "customXml", "sdtContent", "ins", "del", "moveFrom", "moveTo")}
+    inline_known = SKIP_INLINE | {W + t for t in ("r", "hyperlink", "smartTag", "customXml", "sdt", "ins", "del", "moveFrom", "moveTo", "fldSimple", "commentRangeStart", "commentRangeEnd", "p")} | {M + "oMath", M + "oMathPara"}
+    run_known = SKIP_RUN | {W + t for t in ("t", "delText", "instrText", "fldChar", "tab", "ptab", "br", "cr", "lastRenderedPageBreak", "noBreakHyphen", "softHyphen", "sym", "drawing", "pict", "footnoteReference", "endnoteReference", "commentReference")}
+    pending = [(root, set(), (), None)]
+    while pending:
+        el, inherited, parents, parent_tag = pending.pop()
+        own = set(inherited)
+        kind = kinds.get(el.tag)
+        if el.tag.startswith(W) and _local(el.tag).endswith("Change"):
+            kind = "formatRevision"
+        if el.tag.startswith(W) and re.fullmatch(r"(?:moveFrom|moveTo|customXml(?:Ins|Del|MoveFrom|MoveTo))Range(?:Start|End)", _local(el.tag)):
+            kind = "revision"
+            key = _local(el.tag).removesuffix("Start").removesuffix("End") + el.get(W + "id", "")
+            if _local(el.tag).endswith("Start"):
+                revision_ranges.add(key)
+            else:
+                revision_ranges.discard(key)
+        if ((parent_tag in inline_parents and el.tag not in inline_known)
+                or (parent_tag == W + "r" and el.tag not in run_known)):
+            own.add("unknown")
+        if kind:
+            own.add(kind)
+        # 表格 / 行 / 单元格的修订属性是段落的前置兄弟，仍影响里面的段落。
+        prop_tag = {W + "tbl": "tblPr", W + "tr": "trPr", W + "tc": "tcPr"}.get(el.tag)
+        props = el.find(W + prop_tag) if prop_tag else None
+        if el.tag == W + "tbl":
+            table_style = props.find(W + "tblStyle") if props is not None else None
+            sid = table_style.get(W + "val") if table_style is not None else styles.default_table
+            # 条件表格样式的实际应用受行列位置等影响；包含隐藏设置时整表保守只读。
+            for style in styles.chain(sid):
+                if any(_local(prop.tag) in ("vanish", "webHidden", "specVanish") and _on(prop) is True
+                       for prop in style.iter()):
+                    own.add("hidden")
+        for prop in props.iter() if props is not None else ():
+            if prop.tag in kinds:
+                own.add(kinds[prop.tag])
+            if prop.tag.startswith(W) and _local(prop.tag).endswith("Change"):
+                own.add("formatRevision")
+        if el.tag == W + "p":
+            n = indices[id(el)]
+            parents = (*parents, n)
+            if field_depth:
+                reasons[n].add("field")
+            if revision_ranges:
+                reasons[n].add("revision")
+        for n in parents:
+            reasons[n].update(own)
+        if el.tag == W + "fldChar":
+            mode = el.get(W + "fldCharType")
+            if mode == "begin":
+                field_depth += 1
+            elif mode == "end":
+                field_depth = max(0, field_depth - 1)
+        pending.extend((child, own, parents, el.tag) for child in reversed(list(el)))
+    for n, p in enumerate(paragraphs):
+        ppr = p.find(W + "pPr")
+        ps = ppr.find(W + "pStyle") if ppr is not None else None
+        sid = ps.get(W + "val") if ps is not None else styles.default_para
+        base = merged([*styles.doc_rpr, *styles.props(sid, "rPr")])
+        for r in own_runs(p):
+            rp = run_properties(styles, base, r.find(W + "rPr"))
+            if any(_on(rp.get(k)) is True for k in ("vanish", "webHidden", "specVanish")):
+                reasons[n].add("hidden")
+    return {n: codes for n, codes in reasons.items() if codes}
+
+
 def roman(n: int) -> str:
     vals = ((1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"), (50, "l"), (40, "xl"),
             (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"))
@@ -512,6 +608,7 @@ class Renderer:
     def __init__(self, pkg: Package):
         self.pkg = pkg
         self.styles = Styles(pkg.styles)
+        self.writeback_ro = writeback_restrictions(pkg.root, pkg.styles)
         self.numbering = Numbering(pkg.numbering, self.styles)
         self.even_odd = pkg.settings is not None and _on(pkg.settings.find(W + "evenAndOddHeaders")) is True
         self.diag: dict[str, dict] = {}       # 代码 → {"keys", "count", "pages", "examples"}
@@ -583,6 +680,7 @@ class Renderer:
     def ro_scan(self, p: ET.Element) -> set[str]:
         """整段扫一遍：段落里只要有修订、域、文本框、公式等结构，所有片段都只读（不等渲染到那里才知道）。"""
         out = set(self.block_ro)
+        out.update(self.writeback_ro.get(self.pindex.get(id(p)), ()))
         if self.fields:
             out.add("field")                      # 跨段的域（目录等）还没结束
         for el in p.iter():
@@ -843,9 +941,7 @@ class Renderer:
 
     def run(self, r: ET.Element, base_rp: dict, paginate: bool, wrap: tuple, notes: str = ""):
         rpr = r.find(W + "rPr")
-        rs = rpr.find(W + "rStyle") if rpr is not None else None
-        rp = dict(base_rp)
-        rp.update(merged([*self.styles.props(rs.get(W + "val") if rs is not None else None, "rPr"), rpr]))
+        rp = run_properties(self.styles, base_rp, rpr)
         if rpr is not None and rpr.find(W + "rPrChange") is not None:
             notes += self.note("formatRevision", id(rpr))
         hidden = _on(rp.get("vanish")) is True
@@ -939,9 +1035,9 @@ class Renderer:
                 if self.part == "body":
                     parts.append(("break", "rendered"))
             elif tag == W + "noBreakHyphen":
-                parts.append(("text", "‑"))
+                parts.append(("html", '<span class="docx-nontext">‑</span>'))
             elif tag == W + "softHyphen":
-                parts.append(("text", "­"))
+                parts.append(("html", '<span class="docx-nontext">­</span>'))
             elif tag == W + "sym":
                 try:
                     c = chr(int(ch.get(W + "char", ""), 16))
@@ -949,7 +1045,7 @@ class Renderer:
                     c = ""
                 if 0xD800 <= ord(c) <= 0xDFFF:
                     c = ""   # 孤立代理编码不进 UTF-8，也不出现在页面文字里
-                parts.append(("text", BULLET_MAP.get(c, c)))
+                parts.append(("html", '<span class="docx-nontext">' + _esc(BULLET_MAP.get(c, c)) + '</span>'))
             elif tag == W + "drawing":
                 parts.append(("html", self.drawing(ch)))
             elif tag == W + "pict":
