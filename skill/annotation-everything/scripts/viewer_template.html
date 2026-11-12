@@ -552,8 +552,8 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
 <div class="modal" id="always"><div class="dlg"><div class="bar"><h2 data-msg="viewer.always.dialogTitle">常驻技能</h2><button class="primary" id="alwaysSave"><span data-msg="viewer.always.save">保存</span><kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close><span data-msg="viewer.cancel">取消</span><kbd>Esc</kbd></button></div>
 <div class="pad"><p class="hint" data-msg="viewer.always.dialogHint">这份审阅里，范围内的每一条批注都会要求 Agent 处理前先调用这些技能——适合需要长期约束、不会主动想到用技能的 Agent。只对当前这份审阅生效；单条批注的「技能」照常可加。名称框按 Enter 添加下一项（有高亮候选时先选择），按 Ctrl/Cmd+Enter 保存。</p>
 <div id="alwaysRows"></div><p><button id="alwaysAdd" data-title="viewer.always.addTitle"><span data-msg="viewer.always.add">添加一个</span><kbd>↵</kbd></button></p></div></div></div>
-<div class="modal" id="batches"><div class="dlg"><div class="bar"><h2 data-msg="viewer.batch.title">处理记录</h2><span class="hint" id="batchSum"></span><label id="currentTaskToggleRow" hidden><input type="checkbox" role="switch" id="currentTaskToggle" aria-controls="batchCurrentDetail"><span data-msg="viewer.batch.currentToggle">当前任务详情</span></label><button id="stopServiceBtn" aria-describedby="stopServiceInfo" data-msg="viewer.batch.stop">停止本地服务</button><button data-close><span data-msg="viewer.batch.close">关闭</span><kbd>Esc</kbd></button></div>
-<p id="stopServiceInfo" data-msg="viewer.batch.stopHint">停止本审阅所有标签页的本地服务，保留材料和批注；Agent 继续运行。</p>
+<div class="modal" id="batches"><div class="dlg"><div class="bar"><h2 data-msg="viewer.batch.title">处理记录</h2><span class="hint" id="batchSum"></span><label id="currentTaskToggleRow" hidden><input type="checkbox" role="switch" id="currentTaskToggle" aria-controls="batchCurrentDetail"><span data-msg="viewer.batch.currentToggle">当前任务详情</span></label><button id="stopServiceBtn" aria-describedby="stopServiceInfo" data-msg="viewer.batch.stop">停止审阅</button><button data-close><span data-msg="viewer.batch.close">关闭</span><kbd>Esc</kbd></button></div>
+<p id="stopServiceInfo" data-msg="viewer.batch.stopHint">先保存待补传改动，再停止本审阅的等待者、后台工作和本地服务；材料、批注、提交记录、接收方绑定和专属端口保留。</p>
 <div class="pad" id="batchList"></div></div></div>
 <div id="toast"></div>
 <div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys" data-ae-lang="zh-CN">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要；先改后审的批次分初改、复核两段，可在这里请求复核或直接定稿），P 在报告上标注，C 写批注，K 填技能，G 常驻技能（每条批注按范围都让 Agent 先调用）；Esc 关闭或取消。<br>布局：[ 切换侧栏，] 切换讲稿，\ 切换底部面板；F 全屏专注。全屏里 C 打开浮动输入框，⌘/Ctrl + ↵ 添加；P 标注，S 风格优化，← → 翻页，选中文字后 D / R / C 照常可用；Esc 先关闭浮层，再退出全屏。输入框聚焦时不触发布局快捷键。<br>
@@ -1008,11 +1008,11 @@ const clip=(s,n)=>Array.from(String(s)).slice(0,n).join("");            // 按�
 function wellFormed(v){if(typeof v==="string")return v.toWellFormed?v.toWellFormed():v;
   if(Array.isArray(v))return v.map(wellFormed);
   if(v&&typeof v==="object"){const o={};for(const k of Object.keys(v))o[k]=wellFormed(v[k]);return o}return v}
-async function api(method,path,body){
+async function api(method,path,body,timeout=REQ_TIMEOUT){
   // 统一拦住队列外的定稿、复核和分析写入；停止服务是升级恢复入口，仍可使用。
   if(method!=="GET"&&path!=="/api/server/stop"&&docxBlocked())
     throw Object.assign(new Error(tMsg("viewer.docx.oldService")),{status:409,code:"docx-required"});
-  const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),REQ_TIMEOUT);
+  const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),timeout);
   const opt={method,cache:"no-store",headers:{"X-AE-Review":RID},signal:ctl.signal};
   if(body!==undefined){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(wellFormed(body))}
   let r;
@@ -1186,7 +1186,7 @@ function applyServer(d,quietHand){
   if(!archiveBusy)setCurrentArchive(d.archived);
   const old=!hasFeature(d,"marks");if(old&&!srvOld)toast(tMsg("viewer.mode.oldTitle"),9000);srvOld=old;
   srvNoStages=!hasFeature(d,"stages");
-  srvNoFullCheck=!hasFeature(d,"full-check");stopServiceSupported=hasFeature(d,"stop-service");
+  srvNoFullCheck=!hasFeature(d,"full-check");stopServiceSupported=hasFeature(d,"stop-review");
   finalizeAllSupported=hasFeature(d,"finalize-all");srvNoDocx=!!DOCX&&!hasFeature(d,"docx");updateMode();renderDocxBlock();
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
   if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
@@ -1999,18 +1999,25 @@ async function stopLocalService(){
   try{
     await flush();
     const d=await getNotes();
-    if(!hasFeature(d,"stop-service")){stopServiceSupported=false;toast(tMsg("viewer.batch.stopLegacy"),8000);return}
+    if(!hasFeature(d,"stop-review")){stopServiceSupported=false;toast(tMsg("viewer.batch.stopLegacy"),8000);return}
     // 所有等待都结束后再核对保存结果，避免身份预检期间其他标签页保存失败仍继续停止。
     if(pend.get().length||failed.get().length||saveFailures!==rejectedBefore
         ||LS.get(K.rejected,null)!==sharedRejectedBefore||mode!=="server"){
       toast(tMsg("viewer.batch.stopUnsaved"),8000);return}
-    const r=await api("POST","/api/server/stop",{});
-    if(r.reviewId!==RID||r.stopping!==true)throw new Error(tMsg("viewer.error.format"));
+    const timeout=10;
+    const r=await api("POST","/api/server/stop",{timeout},(timeout+2)*1000);
+    if(r.reviewId!==RID)throw new Error(tMsg("viewer.error.format"));
+    if(typeof r.state!=="string"){const e=new Error(tMsg("viewer.error.format"));e.code="no-api";e.status=200;throw e}
+    if(r.state==="incomplete"||r.stopping!==true){
+      const reason=Object.values((r.stop||{}).incompleteReasons||{}).filter(Boolean).join(", ")||"incomplete";
+      const e=new Error(tMsg("viewer.batch.stopIncomplete",{message:reason}));e.code="stop-incomplete";e.status=200;throw e}
+    if(!["stopping","stopped"].includes(r.state))throw new Error(tMsg("viewer.error.format"));
     mode="offline";occupant=null;barClosedFor="";firstPolled=true;
     toast(tMsg("viewer.batch.stopSent"),8000);
   }catch(e){
     if(e.mismatch)mode="mismatch";else if(!e.status)mode="offline";
-    toast(e.code==="no-api"?tMsg("viewer.batch.stopLegacy"):tMsg("viewer.batch.stopFailed",{message:e.message}),8000);
+    toast(e.code==="no-api"?tMsg("viewer.batch.stopLegacy"):
+      e.code==="stop-incomplete"?e.message:tMsg("viewer.batch.stopFailed",{message:e.message}),8000);
   }finally{stoppingService=false;busy--;updateMode()}}
 $("stopServiceBtn").onclick=stopLocalService;
 $("currentTaskToggle").onchange=()=>{currentTaskOpen=$("currentTaskToggle").checked;

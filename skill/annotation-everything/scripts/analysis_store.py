@@ -1089,7 +1089,8 @@ def _guard_dead_line(state: dict[str, Any], line: str) -> None:
 def writeback(review_dir: Path, analysis_id: str, round_no: int, base_rev: int, proposals: Any, *,
               note: str = "", by: str = "agent", assumptions: Any = None,
               facts: Any = None, updates: Any = None, dead_ends: Any = None,
-              authorize: Callable[[], None] | None = None) -> dict[str, Any]:
+              authorize: Callable[[], None] | None = None,
+              authorize_refresh: Callable[[], None] | None = None) -> dict[str, Any]:
     """Agent 写回轮次：校验领取时记录的基线版本，记下这一轮的说明，
     把没答的提议带进下一轮并附上新的结构提议；没有可作答的内容就不再开新轮。"""
     review_dir = Path(review_dir)
@@ -1103,6 +1104,8 @@ def writeback(review_dir: Path, analysis_id: str, round_no: int, base_rev: int, 
                                      code="round-not-claimed", round=round_no, status=round_["status"])
         state = _line_view(state, round_.get("line", LINE_MAIN))
         if base_rev != state["rev"]:
+            if authorize_refresh is not None:
+                authorize_refresh()
             _record(review_dir, analysis_id, "writeback-rejected", by, round=round_no,
                     expected=base_rev, actual=state["rev"], line=round_.get("line", LINE_MAIN))
             _record(review_dir, analysis_id, "round-voided", by, round=round_no,

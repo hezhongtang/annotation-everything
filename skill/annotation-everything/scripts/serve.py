@@ -7,6 +7,7 @@
   python3 serve.py <审阅目录> --claim-port 8800              # 把专属端口改成 8800 再启动
   python3 serve.py <审阅目录> --on-handoff "命令 参数"   # 可选：用户点「交给 Agent」时运行这条命令
   python3 serve.py status <审阅目录>          # 查看服务是否在跑、实际端口、拒绝/错误计数（给 Claude 排障用）
+  python3 serve.py stop <审阅目录或标识> [--timeout 秒]  # 停止整份审阅；--status 只查询持久状态
   python3 serve.py list [--under 目录] [--json]   # 审阅台账：本机有哪些审阅、端口、状态、待接收的提交、有没有代理在等
   python3 serve.py forget <标识前缀>            # 从台账移除一份审阅，释放它的专属端口（不动审阅目录）
   python3 serve.py check                      # 自检：回环绑定、伪造 Host/Origin 被拒、落盘与重启恢复
@@ -66,12 +67,22 @@ import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
 import review_overview  # noqa: E402
+import review_stop  # noqa: E402
 import wakeup  # noqa: E402
 
 APP = "annotation-everything"
 VERSION = "0.12.1"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
-FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding", "overview", "analysis", "finalize-all", "docx"]
+FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "stop-review", "resume-review", "receiver-binding", "overview", "analysis", "finalize-all", "docx"]
+
+# Read one byte without buffering the hook's JSON input. EOF before registration exits
+# without running the hook. exec preserves the registered PID and stdin for the command.
+_HOOK_EXEC = """
+import os
+import sys
+if os.read(0, 1) == b"1":
+    os.execvp(sys.argv[1], sys.argv[1:])
+"""
 
 # 界面语言只有进程级一个来源（见 i18n.set_locale）：main() 与 serve() 按共同契约解析后
 # 设置一次，服务与台账等各模块共同遵循；未设置前保持中文（旧调用行为不变）
@@ -239,6 +250,12 @@ class ReviewServer(ThreadingHTTPServer):
         self._hook_lock = threading.Lock()
         self._hook_running = False
         self._hook_queue: list[dict[str, Any]] = []   # 钩子运行中又来的事件：按到达顺序排队，同一批同一事件只留最新
+        self._writes = threading.Condition()
+        self._active_writes = 0
+        self._close_lock = threading.Lock()
+        self.closing = False
+        self.stop_id: str | None = None
+        self.shutdown_complete: threading.Event | None = None
         self.log_to_file = log_to_file
         self._log_lock = threading.Lock()
         self._cache: dict[str, tuple[float, Any]] = {}
@@ -327,6 +344,8 @@ class ReviewServer(ThreadingHTTPServer):
                "AE_HANDOFF_SEQ": str(seq), "AE_URL": payload["url"]}
         job = {"payload": payload, "env": env, "seq": seq, "event": event}
         with self._hook_lock:
+            if not review_stop.accepts_work(self.review_dir):
+                return
             if self._hook_running:
                 self._hook_queue = [j for j in self._hook_queue if (j["event"], j["seq"]) != (job["event"], job["seq"])] + [job]
                 return
@@ -344,20 +363,79 @@ class ReviewServer(ThreadingHTTPServer):
 
     def _hook_worker(self, job: dict[str, Any]) -> None:
         while job is not None:
-            try:
-                proc = subprocess.Popen(list(self.on_handoff), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                        stderr=subprocess.DEVNULL, cwd=self.hook_cwd, env=job["env"], start_new_session=True)
-                proc.communicate(json.dumps(job["payload"], ensure_ascii=False).encode("utf-8"))
-                if proc.returncode == 0:
-                    self.log("info", f"hook seq={job['seq']} exit=0")
-                else:
-                    self.log("error", f"code=hook-failed seq={job['seq']} exit={proc.returncode}")
-            except OSError as e:
-                self.log("error", f"code=hook-failed seq={job['seq']} {type(e).__name__}: {e}")
+            if not review_stop.accepts_work(self.review_dir):
+                self.log("info", f"hook seq={job['seq']} skipped=review-stopped")
+            else:
+                proc = None
+                try:
+                    payload = b"1" + json.dumps(job["payload"], ensure_ascii=False).encode("utf-8")
+                    command = [sys.executable, "-I", "-S", "-c", _HOOK_EXEC, *self.on_handoff]
+                    proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL, cwd=self.hook_cwd, env=job["env"], start_new_session=True)
+                    try:
+                        review_stop.hook_started(self.review_dir, proc.pid, job["seq"], job["event"])
+                    except BaseException:
+                        proc.terminate()
+                        proc.wait()
+                        raise
+                    try:
+                        proc.communicate(payload)
+                    finally:
+                        try:
+                            review_stop.hook_finished(self.review_dir, proc.pid)
+                        except (OSError, ValueError) as e:
+                            self.log("error", f"code=hook-tracking-failed seq={job['seq']} {type(e).__name__}: {e}")
+                    if proc.returncode == 0:
+                        self.log("info", f"hook seq={job['seq']} exit=0")
+                    else:
+                        self.log("error", f"code=hook-failed seq={job['seq']} exit={proc.returncode}")
+                except (OSError, ValueError) as e:
+                    self.log("error", f"code=hook-failed seq={job['seq']} {type(e).__name__}: {e}")
             with self._hook_lock:
                 job = self._hook_queue.pop(0) if self._hook_queue else None
                 if job is None:
                     self._hook_running = False
+
+    def wait_for_hooks(self, timeout: float) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            with self._hook_lock:
+                if not self._hook_running and not self._hook_queue:
+                    return True
+            left = review_stop.remaining(deadline)
+            if not left:
+                return False
+            time.sleep(min(.02, left))
+
+    @contextlib.contextmanager
+    def write_request(self):
+        # Admission and draining share this condition. The persisted gate also applies to CLI work.
+        with self._writes:
+            if not review_stop.accepts_work(self.review_dir):
+                raise Reject(409, "review-stopped", i18n.Translator(self.locale)("serve.err.reviewStopped"))
+            self._active_writes += 1
+        try:
+            yield
+        finally:
+            with self._writes:
+                self._active_writes -= 1
+                self._writes.notify_all()
+
+    def wait_for_writes(self, timeout: float) -> bool:
+        with self._writes:
+            return self._writes.wait_for(lambda: self._active_writes == 0, timeout)
+
+    def commit_stop(self, stop_id: str) -> bool:
+        with self._close_lock:
+            if self.closing:
+                return False
+            self.stop_id = stop_id
+            return True
+
+    def begin_close(self) -> str | None:
+        with self._close_lock:
+            self.closing = True
+            return self.stop_id
 
     def manifest(self) -> dict[str, Any]:
         def read(f: Path | None) -> dict[str, Any]:
@@ -467,8 +545,16 @@ class Handler(BaseHTTPRequestHandler):
             self._check_host()
             path = self.path.split("?", 1)[0]
             if path.startswith("/api/"):
-                self._check_api_origin(mutating=self.command not in ("GET", "HEAD"))
-                self._api(path)
+                mutating = self.command not in ("GET", "HEAD")
+                self._check_api_origin(mutating=mutating)
+                # Overview actions address the review named in their body. Archiving changes
+                # an atomic metadata marker and is also available for already stopped reviews.
+                if mutating and path not in ("/api/server/stop", "/api/server/resume",
+                                             "/api/overview/start", "/api/overview/archive"):
+                    with self.server.write_request():
+                        self._api(path)
+                else:
+                    self._api(path)
             elif self.command in ("GET", "HEAD") and path in ("/", "/index.html"):
                 self._index()
             elif self.command in ("GET", "HEAD") and path == "/favicon.ico":
@@ -543,8 +629,57 @@ class Handler(BaseHTTPRequestHandler):
                 "version": VERSION, "features": FEATURES,
                 "receiver": self._receiver(self.server.agent_binding)}
 
+    def _stop_review(self, body: dict[str, Any]) -> None:
+        try:
+            timeout = review_stop.validate_timeout(body.get("timeout", 10.0))
+        except ValueError:
+            raise Reject(400, "bad-request", self._t("serve.err.badStopTimeout")) from None
+        deadline = time.monotonic() + timeout
+        d = self.server.review_dir
+        try:
+            with review_stop.operation(d, deadline=deadline):
+                if self.server.closing or self.server.stop_id is not None:
+                    raise review_stop.OperationBusy
+                self.server.log("info", "review stop requested")
+                review_stop.begin(d, http={"pid": os.getpid(), "port": self.server.port})
+                result = review_stop.coordinate(d, server=self.server, deadline=deadline)
+                ready = review_stop.ready_for_http(result) and self.server.commit_stop(result["stopId"])
+                try:
+                    self._json(200, {**self._ident(), "stopping": ready,
+                                     "state": result["state"], "stop": result})
+                    self.wfile.flush()
+                except ConnectionError:
+                    if not ready:
+                        raise
+                finally:
+                    if ready:
+                        self.server.shutdown()
+                        if self.server.shutdown_complete is not None:
+                            # Keep the operation lock until the serving thread has closed the port and
+                            # recorded this stopId. A concurrent start will then probe the new reality.
+                            self.server.shutdown_complete.wait()
+        except review_stop.OperationBusy:
+            raise Reject(409, "review-stop-busy", self._t("serve.err.reviewLifecycleBusy")) from None
+
+    def _resume_review(self) -> None:
+        d = self.server.review_dir
+        try:
+            with review_stop.operation(d, deadline=time.monotonic() + 5):
+                if self.server.closing or self.server.stop_id is not None:
+                    raise review_stop.OperationBusy
+                if not review_stop.accepts_work(d):
+                    if not self.server._hook_binding_ok():
+                        raise Reject(409, "receiver-restart", self._t("serve.err.receiverRestart"))
+                    review_stop.start(d)
+                    self.server.recover_deliveries()
+        except review_stop.OperationBusy:
+            raise Reject(409, "review-stop-busy", self._t("serve.err.reviewLifecycleBusy")) from None
+        self._json(200, {"app": APP, "reviewId": self.server.review_id()})
+
     def _check_receiver(self, body: dict[str, Any]) -> None:
-        # Called inside the batch lock: a transfer and submission must agree on one binding.
+        # Called inside the batch lock: stop gating, transfer and submission share one authorization point.
+        if not review_stop.accepts_work(self.server.review_dir):
+            raise Reject(409, "review-stopped", self._t("serve.err.reviewStopped"))
         try:
             binding = wakeup.load_binding(self.server.review_dir)
         except (OSError, ValueError, KeyError):
@@ -686,16 +821,15 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {**doc, **self._ident()})
         elif path == "/api/handoff" and cmd == "GET":
             self._json(200, {**self._handoff_state(full=True), **self._ident()})
-        elif path == "/api/server/stop" and cmd == "POST":
-            self._expect_obj(self._body())
-            # 停止服务必须明确指向当前审阅；其他旧接口仍兼容不带标识的页面。
+        elif path in ("/api/server/stop", "/api/server/resume") and cmd == "POST":
+            body = self._expect_obj(self._body())
+            # 启停必须明确指向当前审阅；旧停止入口也进入完整生命周期。
             if not claimed or claimed != self.server.review_id():
                 raise Reject(409, "review-mismatch", self._t("serve.err.reviewMismatch"))
-            self.server.log("info", "stop requested from review page")
-            self._json(200, {**self._ident(), "stopping": True})
-            self.wfile.flush()
-            # 当前请求在工作线程处理，shutdown 等主循环退出后由 serve() 正常清理。
-            self.server.shutdown()
+            if path == "/api/server/stop":
+                self._stop_review(body)
+            else:
+                self._resume_review()
         elif path == "/api/handoff" and cmd == "POST":
             body = self._expect_obj(self._body())
             if "fullCheck" in body and not isinstance(body["fullCheck"], bool):
@@ -967,6 +1101,26 @@ def overview_health(found: dict[str, Any] | None, rid: str, directory: Path, por
                 and found.get("port") == port)
 
 
+def _review_request(port: int, rid: str, path: str, body: dict[str, Any], timeout: float):
+    headers = {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}",
+               "Content-Type": "application/json", "X-AE-Review": rid}
+    return _req(port, "POST", path, headers, body, timeout=timeout)
+
+
+def resume_running_review(directory: Path, rid: str, port: int, found: dict[str, Any],
+                          timeout: float = 6.0) -> bool:
+    if not overview_health(found, rid, directory, port):
+        return False
+    if "resume-review" not in (found.get("features") or []):
+        return review_stop.accepts_work(directory)
+    try:
+        code, _, raw = _review_request(port, rid, "/api/server/resume", {}, timeout)
+        result = json.loads(raw)
+        return code == 200 and result.get("app") == APP and result.get("reviewId") == rid
+    except (OSError, ValueError, http.client.HTTPException):
+        return False
+
+
 def stop_overview_child(child: subprocess.Popen) -> None:
     """失败只回收本次 Popen 持有的进程，从不按状态文件 PID 停服务。"""
     if child.poll() is None:
@@ -1009,8 +1163,12 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float) -> 
     candidates = (entry.get("port"), info.get("port"))
     for port in candidates:
         if isinstance(port, int) and not isinstance(port, bool) and 1024 <= port <= 65535:
-            if overview_health(probe(port, timeout=0.2), rid, directory, port):
-                return f"http://127.0.0.1:{port}/"
+            found = probe(port, timeout=0.2)
+            if overview_health(found, rid, directory, port):
+                if resume_running_review(directory, rid, port, found, max(.1, review_stop.remaining(deadline))):
+                    return f"http://127.0.0.1:{port}/"
+                if probe(port, timeout=0.2) is not None:
+                    raise Reject(503, "overview-start-failed", translate("serve.err.resumeFailed"))
     port = ledger.assign_port(rid, directory,
                               is_free=lambda candidate: probe(candidate, timeout=0.2) is None)
     if probe(port, timeout=0.2) is not None:
@@ -1031,6 +1189,9 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float) -> 
             if overview_health(found, rid, directory, port):
                 if found.get("pid") != child.pid:
                     stop_overview_child(child)
+                    if not resume_running_review(directory, rid, port, found,
+                                                 max(.1, review_stop.remaining(deadline))):
+                        raise Reject(503, "overview-start-failed", translate("serve.err.resumeFailed"))
                 else:
                     threading.Thread(target=child.wait, daemon=True).start()
                 ready = True
@@ -1214,29 +1375,48 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
     if orig is not None:
         print(T("serve.serve.copiedHint", orig=orig, dir=review_dir), file=sys.stderr)
     rid = m.get("reviewId")
-    try:
-        first, owned, avoid = plan_port(review_dir, rid, port, claim)
-    except ClaimRefused as e:
-        print(T("serve.serve.claimRefused", port=claim, detail=e), file=sys.stderr)
-        return 2
-    if overview_start is not None and (not owned or first != owned):
-        print(T("serve.err.overviewStartFailed"), file=sys.stderr)
-        return 3
-    try:
-        server, running_url, trail = bind(review_dir, first, debug, tries=1 if overview_start else PORT_TRIES,
-                                          on_handoff=on_handoff, avoid=avoid,
-                                          locale=i18n.current_locale())
-    except StaleServer as e:
-        print(T("serve.serve.stale", detail=e), file=sys.stderr)
-        return 6
-    for t in trail:
-        print(T("serve.port.trail", detail=t), file=sys.stderr)
-    if overview_start is not None and running_url and running_url != f"http://127.0.0.1:{owned}/":
-        print(T("serve.err.overviewStartFailed"), file=sys.stderr)
-        return 3
+    with review_stop.operation(review_dir) if rid else contextlib.nullcontext():
+        try:
+            first, owned, avoid = plan_port(review_dir, rid, port, claim)
+        except ClaimRefused as e:
+            print(T("serve.serve.claimRefused", port=claim, detail=e), file=sys.stderr)
+            return 2
+        if overview_start is not None and (not owned or first != owned):
+            print(T("serve.err.overviewStartFailed"), file=sys.stderr)
+            return 3
+        try:
+            server, running_url, trail = bind(review_dir, first, debug, tries=1 if overview_start else PORT_TRIES,
+                                              on_handoff=on_handoff, avoid=avoid,
+                                              locale=i18n.current_locale())
+        except StaleServer as e:
+            print(T("serve.serve.stale", detail=e), file=sys.stderr)
+            return 6
+        for t in trail:
+            print(T("serve.port.trail", detail=t), file=sys.stderr)
+        if overview_start is not None and running_url and running_url != f"http://127.0.0.1:{owned}/":
+            print(T("serve.err.overviewStartFailed"), file=sys.stderr)
+            return 3
+        if not running_url:
+            if server is None:
+                print(T("serve.serve.noPort", first=first, last=first + PORT_TRIES - 1), file=sys.stderr)
+                return 3
+            url = f"http://127.0.0.1:{server.port}/"
+            if owned and server.port != owned:
+                why = T("serve.serve.whyTemp", port=server.port) if port \
+                    else T("serve.serve.whyOccupied", owned=owned, port=server.port)
+                print(T("serve.serve.tempPortNote", why=why, owned=owned), file=sys.stderr)
+            elif not owned and server.port != first:
+                print(T("serve.port.firstBusy", first=first, port=server.port), file=sys.stderr)
+            if rid:
+                server.shutdown_complete = threading.Event()
+                review_stop.start(review_dir)
+                review_stop.configure_hooks(review_dir, bool(server.on_handoff))
+            write_status(server)
+            server.recover_deliveries()
     if running_url:
         binding = wakeup.load_binding(review_dir)
-        found = probe(int(running_url.rstrip("/").rsplit(":", 1)[1])) or {}
+        running_port = int(running_url.rstrip("/").rsplit(":", 1)[1])
+        found = probe(running_port) or {}
         receiver = found.get("receiver") or {}
         needs_restart = receiver.get("state") == "restart-required"
         if binding:
@@ -1246,6 +1426,9 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         if needs_restart:
             print(T("serve.serve.agentRestart"), file=sys.stderr)
             return 6
+        if rid and not resume_running_review(review_dir, rid, running_port, found):
+            print(T("serve.err.resumeFailed"), file=sys.stderr)
+            return 6
         if claim and f":{claim}/" not in running_url:
             print(T("serve.port.claimButRunning", port=claim), file=sys.stderr)
         print(T("serve.serve.running", url=running_url)
@@ -1253,18 +1436,6 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         if open_browser:
             webbrowser.open(running_url)
         return 0
-    if server is None:
-        print(T("serve.serve.noPort", first=first, last=first + PORT_TRIES - 1), file=sys.stderr)
-        return 3
-    url = f"http://127.0.0.1:{server.port}/"
-    if owned and server.port != owned:
-        why = T("serve.serve.whyTemp", port=server.port) if port \
-            else T("serve.serve.whyOccupied", owned=owned, port=server.port)
-        print(T("serve.serve.tempPortNote", why=why, owned=owned), file=sys.stderr)
-    elif not owned and server.port != first:
-        print(T("serve.port.firstBusy", first=first, port=server.port), file=sys.stderr)
-    write_status(server)
-    server.recover_deliveries()
     server.log("info", f"启动 {APP} {VERSION}：{url} 托管 {review_dir}（pid {os.getpid()}）")
     print(T("serve.serve.ready", url=url, path=review_dir / store.NOTES_FILE)
           + (T("serve.serve.hookLine", command=shlex.join(on_handoff)) if on_handoff else "")
@@ -1281,9 +1452,18 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
     except KeyboardInterrupt:
         pass
     finally:
+        stop_id = server.begin_close()
         server.log("info", T("serve.serve.stoppedLog"))
-        server.server_close()
-        clear_status(review_dir)
+        try:
+            # A coordinated stop already owns the lifecycle lock in the request thread.
+            with review_stop.operation(review_dir) if rid and stop_id is None else contextlib.nullcontext():
+                server.server_close()
+                clear_status(review_dir)
+                if stop_id is not None:
+                    review_stop.http_stopped(review_dir, stop_id)
+        finally:
+            if server.shutdown_complete is not None:
+                server.shutdown_complete.set()
     return 0
 
 
@@ -1511,8 +1691,8 @@ def resolve_arg(arg: str) -> Path:
 
 # ---------- 自检 ----------
 def _req(port: int, method: str, path: str, headers: dict[str, str], body: Any = None,
-         raw: bytes | None = None) -> tuple[int, dict[str, str], bytes]:
-    c = http.client.HTTPConnection(HOST, port, timeout=3)
+         raw: bytes | None = None, timeout: float = 3) -> tuple[int, dict[str, str], bytes]:
+    c = http.client.HTTPConnection(HOST, port, timeout=timeout)
     data = raw if raw is not None else (None if body is None else json.dumps(body).encode())
     c.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
     for k, v in headers.items():
@@ -1711,6 +1891,7 @@ def check(locale: str | None = None) -> int:
                      for op in ("activate", "pause", "redecide", "update-note", "keep-note", "delete-note",
                                 "seal", "fork", "switch-line", "close", "reopen", "refute")]
             ok(all(code == expected for code in codes), T("serve.check.lifeGuard", guard=label, status=codes[-1]))
+        analysis_store.writeback(tmp, first["id"], 1, claimed_round["baseRev"], [])
         s, _, _ = _req(port, "POST", "/api/server/stop", same, {})
         ok(s == 409, T("serve.check.stopNeedsReview"))
         s, _, b = _req(port, "POST", "/api/server/stop", {**same, "X-AE-Review": "checkreview"}, {})
@@ -1743,6 +1924,64 @@ def check(locale: str | None = None) -> int:
     failed = sum(not p for p, _ in results)
     print(T("serve.check.summary", passed=len(results) - failed, total=len(results)))
     return 1 if failed else 0
+
+
+def _stop_review_from_cli(review_dir: Path, timeout: float) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    try:
+        with review_stop.operation(review_dir, deadline=deadline):
+            state = review_stop.load(review_dir)
+            if state["state"] == "stopped":
+                return state
+            info = read_status(review_dir) or {}
+            alive = ledger.pid_alive(int(info.get("pid") or 0))
+            port = int(info.get("port") or 0)
+            probe_timeout = min(.5, max(.05, review_stop.remaining(deadline)))
+            health = probe(port, timeout=probe_timeout) if alive and port else None
+            running = (overview_health(health, state["reviewId"], review_dir, port)
+                       and health.get("pid") == info.get("pid"))
+            if not running or "stop-review" not in (health.get("features") or []):
+                http = {"pid": info["pid"], "port": port} if alive else {"state": "stopped"}
+                review_stop.begin(review_dir, http=http)
+                if running:
+                    return review_stop.mark(review_dir, "http", "incomplete", "upgrade-required")
+                if not alive:
+                    review_stop.mark(review_dir, "http", "stopped")
+                    return review_stop.coordinate(review_dir, deadline=deadline)
+                review_stop.coordinate(review_dir, deadline=deadline)
+                review_stop.mark(review_dir, "hooks", "incomplete", "background-hooks-unconfirmed")
+                return review_stop.mark(review_dir, "http", "incomplete", "http-status-unconfirmed")
+    except review_stop.OperationBusy:
+        return review_stop.load(review_dir)
+
+    # The live server owns coordination, including the last state write after the socket closes.
+    try:
+        remaining = review_stop.remaining(deadline)
+        code, _, raw = _review_request(port, state["reviewId"], "/api/server/stop",
+                                       {"timeout": remaining}, remaining + 1)
+        response = json.loads(raw)
+        if code == 200 and response.get("stopping") is True:
+            stop_id = response["stop"]["stopId"]
+            state = review_stop.load(review_dir)
+            while state["stopId"] == stop_id and state["state"] == "stopping" \
+                    and time.monotonic() < deadline + 1:
+                time.sleep(.03)
+                state = review_stop.load(review_dir)
+            return state
+    except (OSError, ValueError, http.client.HTTPException):
+        pass
+    return review_stop.load(review_dir)
+
+
+def stop_review_command(review_dir: Path, *, query: bool, timeout: float) -> int:
+    review_dir = review_dir.resolve()
+    try:
+        timeout = review_stop.validate_timeout(timeout)
+    except ValueError:
+        raise ValueError(T("serve.err.badStopTimeout")) from None
+    result = review_stop.load(review_dir) if query else _stop_review_from_cli(review_dir, timeout)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if query or result["state"] == "stopped" else 1
 
 
 def _add_help(parser: argparse.ArgumentParser) -> None:
@@ -1781,6 +2020,22 @@ def main(argv: list[str] | None = None) -> int:
         # 目录解析出来后还有一级兜底：审阅里保存的 locale
         set_locale(cli_locale(locale_choice, d))
         return status(d, locale=i18n.current_locale())
+    if rest[:1] in (["stop"], ["stop-status"]):
+        ap = i18n.LocalizedParser(prog="serve.py stop", add_help=False, description=T("serve.desc.stop"),
+                                  keys=ERROR_KEYS, translate=T)
+        _add_help(ap)
+        _add_locale(ap)
+        ap.add_argument("dir", type=str, help=T("serve.opt.dirOrId"))
+        ap.add_argument("--status", action="store_true", help=T("serve.opt.stopStatus"))
+        ap.add_argument("--timeout", type=float, default=10.0, help=T("serve.opt.stopTimeout"))
+        a = ap.parse_args(rest[1:])
+        try:
+            d = ledger.resolve_dir(a.dir).resolve()
+            set_locale(cli_locale(locale_choice, d))
+            return stop_review_command(d, query=a.status or rest[0] == "stop-status", timeout=a.timeout)
+        except (ledger.LedgerError, OSError, ValueError) as error:
+            print(T("serve.msg.error", detail=error), file=sys.stderr)
+            return 2
     if rest[:1] == ["list"]:
         ap = i18n.LocalizedParser(prog="serve.py list", add_help=False, description=T("serve.desc.list"),
                                   keys=ERROR_KEYS, translate=T)

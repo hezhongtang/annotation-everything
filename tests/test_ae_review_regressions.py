@@ -184,7 +184,7 @@ class SecondReviewRegressionTests(RegressionCase):
         serve = lambda *args: shlex.join([sys.executable, str(SERVE), *args])
         self.assertEqual(ae.serve_dir_argument(serve("serve", str(review), "--no-open")), str(review))
         self.assertEqual(ae.serve_dir_argument(serve("--no-open", "list")), "list")  # 选项在前时 list 是目录
-        for sub in ("check", "status", "list", "forget"):
+        for sub in ("check", "status", "stop", "stop-status", "list", "forget"):
             with self.subTest(sub=sub):
                 self.assertIsNone(ae.serve_dir_argument(serve(sub, str(review))))
         self.assertEqual(ae.find_orphan_servers(
@@ -193,7 +193,7 @@ class SecondReviewRegressionTests(RegressionCase):
     def test_locale_flag_does_not_turn_maintenance_commands_into_servers(self):
         processes = []
         for prefix in (("--locale", "en"), ("--locale=en",)):
-            for sub in ("check", "status", "list", "forget"):
+            for sub in ("check", "status", "stop", "stop-status", "list", "forget"):
                 cmd = shlex.join([sys.executable, str(SERVE), *prefix, sub])
                 processes.append((4300 + len(processes), cmd))
         self.assertEqual(ae.running_servers(lister=lambda: processes), [])
