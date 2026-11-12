@@ -49,6 +49,8 @@ skills.json
 .annotation-stop.lock
 .annotation-stop-operation.lock
 .annotation-stop-*.tmp
+.annotation-save-pages.json
+.annotation-save-pages-*.tmp
 .notes.lock
 .annotation-archived
 server.log

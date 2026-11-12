@@ -831,6 +831,124 @@ def receiver_binding_checks(browser, tmp: Path):
         stop(srv)
 
 
+def review_overview_stop_checks(browser, tmp: Path):
+    workspace, external = tmp / "stop-workspace", tmp / "stop-external"
+    workspace.mkdir()
+    external.mkdir()
+    for directory in (workspace, external):
+        subprocess.run(["git", "init", "-q", str(directory)], check=True, capture_output=True)
+    host, peer, other = workspace / "host", workspace / "peer", external / "other"
+    reviews = ((host, "Synthetic overview host"), (peer, "Synthetic archived peer"),
+               (other, "Synthetic external review"))
+    for directory, name in reviews:
+        build(directory, name=name)
+    ids = {directory: json.loads((directory / "review.json").read_text())["reviewId"]
+           for directory, _ in reviews}
+    services = {directory: start_server(directory, free_port()) for directory, _ in reviews}
+    bases = {directory: "http://127.0.0.1:" + str(json.loads(
+        (directory / ".annotation-server.json").read_text())["port"]) for directory, _ in reviews}
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    try:
+        target = ctx.new_page()
+        with target.expect_response(lambda r: r.url.endswith("/api/server/save-protection") and r.ok):
+            target.goto(bases[peer])
+        wait_mode(target, "server")
+        page = ctx.new_page()
+        page.goto(bases[host] + "/#overview")
+        wait_mode(page, "server")
+
+        def row(directory):
+            return page.locator('[data-review-id="%s"]' % ids[directory])
+
+        def stop_state(state, seconds=8):
+            return wait_dom(page, "state => document.getElementById('overviewStopStatus')?.dataset.state === state",
+                            seconds, arg=state, condition="总览停止状态 " + state)
+
+        def accept_stop():
+            messages = []
+
+            def accept(dialog):
+                messages.append(dialog.message)
+                dialog.accept()
+
+            page.once("dialog", accept)
+            page.locator("#overviewStop").click()
+            return messages[0]
+
+        row(peer).click()
+        page.locator("#overviewArchive").click()
+        page.locator("#overviewShowArchived").check()
+        row(peer).click()
+        ok(row(peer).locator("xpath=ancestor::section[@data-overview-group='archived']").count() == 1
+           and page.locator("#overviewStop").is_enabled(), "归档但运行中的审阅可停止")
+        ok(row(other).count() == 0 and services[other].poll() is None, "本工作区不列出范围外的运行中审阅")
+
+        held = []
+
+        def delay_save(route):
+            if route.request.method != "POST":
+                route.continue_()
+            elif route.request.headers.get("x-ae-save-token"):
+                held.append(route)
+            else:
+                route.abort("connectionfailed")
+
+        target.route("**/api/notes", delay_save)
+        annotation = "合成批注：停止前需补传"
+        add_note(target, annotation)
+        ok(wait_mode(target, "offline"), "目标断线时将改动暂存到浏览器")
+        page.once("dialog", lambda dialog: dialog.dismiss())
+        page.locator("#overviewStop").click()
+        ok(services[peer].poll() is None and page.locator("#overviewStopStatus").count() == 0,
+           "取消确认时不停止目标审阅")
+        message = accept_stop()
+        ok("Synthetic archived peer" in message and ids[peer][:8] in message
+           and "后台活动" in message and "专属端口" in message, "停止前明确目标、后台活动和保留范围")
+        if not wait_until(lambda: bool(held), page, 8, condition="异源目标页收到挑战并补传"):
+            ok(False, "目标页补传请求未到达")
+            return
+        ok(stop_state("stopping") and page.locator("#overviewStop").is_disabled()
+           and services[host].poll() is None and services[peer].poll() is None,
+           "等待保存回执期间显示停止中并保留两份服务")
+        held.pop(0).fulfill(status=400, json={"app": "annotation-everything", "code": "bad-note",
+                                            "error": "Synthetic save rejection"})
+        ok(stop_state("incomplete") and "未能补传" in page.inner_text("#overviewStopStatus")
+           and services[peer].poll() is None and annotation not in [n["text"] for n in disk_notes(peer)],
+           "目标补传被拒后报告未完全停止，保留目标服务")
+        target.unroute("**/api/notes", delay_save)
+
+        page.locator("#overviewBack").click()
+        add_note(page, "合成批注：托管总览的审阅仍可写入")
+        ok(wait_until(lambda: len(disk_notes(host)) == 1, page, 5), "其他审阅部分失败后托管审阅仍可保存")
+        page.select_option("#localePick", "en")
+        page.locator("#overviewBtn").click()
+        row(peer).click()
+        ok("Stop incomplete" in page.inner_text("#overviewStopStatus")
+           and page.locator("#overviewStop").inner_text() == "Retry stop",
+           "切换语言后对应审阅仍显示失败和重试")
+        accept_stop()
+        ok(stop_state("stopped") and wait_until(lambda: services[peer].poll() is not None, page, 5)
+           and [n["text"] for n in disk_notes(peer)] == [annotation] and not target.is_closed(),
+           "重试补传同一改动后确认目标停止，原标签页仍在")
+        ok(page.locator("#overviewStop").count() == 0 and page.locator("#overviewStart").is_enabled(),
+           "已停止审阅提供显式启动，不再显示停止操作")
+
+        page.select_option("#overviewScope", "all")
+        row(other).click()
+        accept_stop()
+        ok(stop_state("stopped") and wait_until(lambda: services[other].poll() is not None, page, 5)
+           and services[host].poll() is None, "本机全部可以停止范围内另一工作区的审阅，无需打开其对照页")
+        row(host).click()
+        message = accept_stop()
+        ok("hosts the overview" in message and stop_state("stopped")
+           and wait_until(lambda: services[host].poll() is not None, page, 5),
+           "明确选择托管总览的审阅后，页面收到真实停止结果")
+    finally:
+        ctx.close()
+        for process in services.values():
+            stop(process)
+
+
 def skill_search_checks(browser, tmp: Path):
     """通过真实浏览器验证技能输入；目录内容均为合成数据。"""
     d = tmp / "skill_search"
@@ -5590,6 +5708,7 @@ SCENARIO_RUNNERS = {
     "export-import": export_import_checks,
     "file-mode": file_mode_checks,
     "review-overview": review_overview_checks,
+    "review-overview-stop": review_overview_stop_checks,
     "css-fidelity": css_fidelity_checks,
     "docx-review": docx_review_checks,
     "server-mode": server_mode_checks,

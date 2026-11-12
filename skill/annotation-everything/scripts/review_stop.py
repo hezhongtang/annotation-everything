@@ -12,6 +12,7 @@ import uuid
 import fsutil
 import ledger
 import notes_store as store
+import review_save
 import wakeup
 
 STATE_FILE = ".annotation-stop.json"
@@ -241,16 +242,30 @@ def _live_waiters(review):
     return sorted(set(live))
 
 
-def _protect_save(review, deadline):
-    if load(review)["components"]["save"]["state"] == "stopped":
+def _protect_save(review, deadline, server, browser_protocol_required):
+    state = load(review)
+    if state["components"]["save"]["state"] == "stopped":
         return
     mark(review, "save", "stopping")
     try:
+        if server is None:
+            if review_save.registered_pages(review, state["reviewId"]):
+                mark(review, "save", "incomplete", "save-protection-unconfirmed")
+                return
+        else:
+            error = server.protect_browser_saves(state["stopId"], remaining(deadline),
+                                                 require_protocol=browser_protocol_required)
+            if error is not None:
+                mark(review, "save", "incomplete", error)
+                return
+            if not server.wait_for_writes(remaining(deadline)):
+                mark(review, "save", "incomplete", "save-protection-timeout")
+                return
         with fsutil.flocked(Path(review) / store.LOCK_FILE, exclusive=True, deadline=deadline):
             mark(review, "save", "stopped", protectedAt=_now())
     except BlockingIOError:
         mark(review, "save", "incomplete", "save-protection-timeout")
-    except OSError as error:
+    except (OSError, ValueError) as error:
         mark(review, "save", "incomplete", "save-protection-unavailable", detail=type(error).__name__)
 
 
@@ -310,15 +325,12 @@ def _coordinate_agent(review, deadline):
          **{k: v for k, v in result.items() if k not in ("state", "error")})
 
 
-def coordinate(review, *, deadline, server=None):
+def coordinate(review, *, deadline, server=None, browser_protocol_required=False):
     """Drain admitted work while the caller holds the review's operation lock."""
     state = load(review)
     if state["state"] == "stopped":
         return state
-    if server is not None and not server.wait_for_writes(remaining(deadline)):
-        mark(review, "save", "incomplete", "save-protection-timeout")
-    else:
-        _protect_save(review, deadline)
+    _protect_save(review, deadline, server, browser_protocol_required)
     save_protected = load(review)["components"]["save"]["state"] == "stopped"
     if save_protected:
         _coordinate_waiters(review, deadline)

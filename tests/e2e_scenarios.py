@@ -226,6 +226,13 @@ SCENARIOS: list[Scenario] = [
     ),
     Scenario(
         parallel_safe=True,
+        id="review-overview-stop",
+        title="总览单项停止：工作区范围、归档运行中、异源补传失败和重试、当前审阅确认退出",
+        fixture="fixtures/sample 构建的两个独立工作区；真实回环服务与目标对照页；合成批注保存被拒",
+        isolation="独立审阅目录、端口与浏览器上下文，场景结束时回收三个服务",
+    ),
+    Scenario(
+        parallel_safe=True,
         id="css-fidelity",
         title="报告样式保真：报告 :root 变量在 Shadow DOM 里生效、外壳同名变量不渗入、body 布局不把幻灯片挤偏、rem 按报告根字号",
         fixture="自带样式的合成报告页（内联 :root、body flex 与 rem 用例）",

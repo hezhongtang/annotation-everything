@@ -119,7 +119,7 @@ See the [English format reference](skill/annotation-everything/references/format
 | `docx_edit.py apply REVIEW --batch N` / `replace REVIEW --paragraph N --from ORIGINAL --to REPLACEMENT` | Write DOCX quick edits or a single free-form replacement; repeat `--id ID` to select annotations, preview with `--dry-run`, or save a new file with `--output NEW_PATH`. The default backs up then edits in place; annotation statuses are unchanged |
 | `report_check.py report.html [--script script.md] [--record report-record.json]` | Public report verification entry: a readable summary by default, structured results with `--json`, and `--locale en` or `zh-CN` for the language. Exit 0 means program checks passed, not that the report is deliverable; 1 means checks failed; 2 means an input or usage error. Content, structure and visual coverage and delivery blockers are listed separately |
 | `serve.py <review-dir-or-id>` | Start the local server; each review keeps its own dedicated port |
-| `http://127.0.0.1:<port>/#overview` (browser address) | Open the review overview to switch scope, inspect details, open or start reviews, and archive or unarchive them; start a local service first |
+| `http://127.0.0.1:<port>/#overview` (browser address) | Open the review overview to switch scope, inspect details, open, start or stop reviews, and change their archive status. Start a local service first |
 | `serve.py list [--json]` | List every review on this machine, including archived entries; both readable output and JSON include an archive flag |
 | `serve.py status <review-dir-or-id>` | Show one review's running status |
 | `serve.py stop <review-dir-or-id> [--timeout N]` / `stop <review-dir-or-id> --status` | Coordinate one review's save protection, waiters, agent turns and HTTP service to stop, or query its persistent state. JSON states are `stopping`, `stopped` and `incomplete`; exit 0 means fully stopped, 1 means incomplete, 2 means an invalid or ambiguous target. `stop-status` is an alias for `--status` |
@@ -220,6 +220,8 @@ In service mode, rebuilding the review page shows a "Review page updated" banner
 Choose "Review overview" on any running review page, or open `/#overview` at its address. The default scope is "This workspace"; switch to "All on this machine" to see other registered reviews. The workspace is the review's git repository root, or its parent directory when it is outside a git repository. Paths are relative; other workspace paths start with `~` or show only the review name. If no review is running, start one with `serve.py <review-id>` first.
 
 The list groups Running, Stopped, Archived and Invalid reviews, with the latest activity first within each group. Select a review to see its summary, purpose, audience, core questions and pending receipt/review counts. Choose "Open" for a running review or "Start and open" for a stopped one to open its page in a new tab. Starting uses its owned port; free an occupied port or refresh the overview when the ledger entry or directory is invalid, then follow the guidance to retry. Invalid entries provide a `serve.py forget <short-id>` cleanup command. "Back to current review" returns to the page hosting the overview.
+
+Choose "Stop review" in the details of a running review, including one in the Archived group. The confirmation names the review and the background activity visible in the overview. The target page tries to save queued changes before the service closes. For "Stop incomplete", check the reason on that review and choose "Retry stop" after recovery. A review can be restarted from "Start and open". Stopping the review that hosts the overview ends its connection. Open the overview from a running review to refresh it.
 
 Archiving hides reviews that are no longer being advanced from the default list. Annotations, submissions and the owned port remain, and the service keeps running. Choose "Expand" or "Show archived" to reveal them, then select a review and choose "Unarchive". An archived current review displays a banner in both views and still accepts annotations and submissions; archiving does not cancel submitted processing requirements. `serve.py list` still includes every review and marks archived entries.
 
@@ -445,6 +447,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── viewer_template.html       review page and overview template (server mode and local file mode)
 │   ├── serve.py                   local server: serve / status / stop / list / forget / check
 │   ├── review_overview.py         overview scope, report metadata and archive markers
+│   ├── review_save.py             save receipts from the target review's browser
 │   ├── review_stop.py             persistent review stop state and coordinated component shutdown
 │   ├── wakeup.py                  Receiving session binding; Codex events, receipts, cancellation and deduplication
 │   ├── notes.py                   annotation command line: wait / show / resolve / done / review and more

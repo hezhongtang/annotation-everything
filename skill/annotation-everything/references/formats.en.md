@@ -190,6 +190,12 @@ The summary and response fields are additive; older pages can ignore them. Store
 
 Source snapshots are stored in `.snapshots/batch-N/base/` when an initial edit is accepted and `draft/` when it finishes. They cover only the report and speaker-notes source paths, retain the latest 30 batches, and share the review's data protections. Processing history retains the latest 200 batches. `notes.py diff` compares pages against those snapshots.
 
+## Stopping a review from the overview
+
+The overview sends `{reviewId, scope}` to `POST /api/overview/stop`. Use the full target review ID and either `workspace` or `all` for `scope`. `X-AE-Review` identifies the review hosting the overview. The response `reviewId` identifies the target, and `stop` contains its lifecycle state and component results. Each `GET /api/overview` row also includes a `stop` snapshot from the target's persisted state. `overview-stop` advertises overview stopping and `stop-save-protection` advertises browser save receipts.
+
+Target pages register their browser storage context using same-origin JSON `POST /api/server/save-protection`. During a stop, the target service issues a save request with a `stopId` and an attempt token. The page flushes its local queue and returns a receipt for that request. The private `.annotation-save-pages.json` file keeps random registration IDs and loopback origins in the review directory. The target service stays available for retry if a registered page is unreachable or reports a failed save.
+
 ## Markdown exchange and JSON backup
 
 The Markdown export begins with `<!-- annotation-everything export v1 lang=en -->` or `lang=zh-CN`. The declared language selects the grammar in either interface. Unmarked legacy Chinese Markdown remains readable. Unsupported versions, languages, and unrecognized text produce errors rather than a guessed empty import. Old tools require an upgrade to read the new English format.
