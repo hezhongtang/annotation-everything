@@ -3099,7 +3099,25 @@ def docx_review_checks(browser, tmp: Path):
     page.goto((nd / "index.html").as_uri())
     for k, token in enumerate(tokens):
         target = page.locator("#host [data-docx-p]").nth(k)
-        drag_select(page, target)
+        # 本场景须跨过结构两侧的正文；通用 drag_select 仅沿第一行拖动，碰到 br 会漏掉末行。
+        target.scroll_into_view_if_needed()
+        points = target.evaluate("""d => {
+            const nodes = docxTextNodes(d), r = document.createRange();
+            r.selectNodeContents(nodes[0]);
+            const first = r.getClientRects()[0];
+            r.selectNodeContents(nodes[nodes.length - 1]);
+            const rects = r.getClientRects(), last = rects[rects.length - 1];
+            return {start: [first.left + 1, first.top + first.height / 2],
+                    end: [last.right - 1, last.top + last.height / 2]};
+        }""")
+        page.mouse.move(*points["start"])
+        page.mouse.down()
+        page.mouse.move(*points["end"], steps=8)
+        page.mouse.up()
+        ok(target.evaluate("""(d, k) => !!sel && sel.text.includes(`选区${k}开始`)
+            && sel.text.includes(`末尾${k}`) && sel.docx?.start === 0
+            && sel.docx.end === cpLen(docxTextNodes(d).map(t => t.data).join(''))""", k),
+           f"跨 {token} 的真实拖选覆盖前后正文及完整字符范围")
         page.click("#selbar [data-sel='delete']")
         ok(wait_toast(page, "不能自动回写", condition="非文本结构的快捷修改限制提示出现")
            and "制表符、符号或换行结构" in page.inner_text("#toast"),
