@@ -507,7 +507,7 @@ def _always_head(t, lang: str | None, always: list[dict[str, str]], scope_label:
     return t("cli.hand.alwaysHead", list=always_text(t, always))
 
 
-def pptx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any, lang: str | None = None) -> list[str]:
+def pptx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]:
     """批注的 PPT 幻灯片定位（show / wait 的阅读输出）：版本、幻灯片与元素身份、文本选区或
     归一化坐标、只读限制，以及定位是否对着当前版本的源文件。"""
     a = n.get("pptx")
@@ -515,8 +515,7 @@ def pptx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any, lang: str | 
         return []
     if not store.usable_pptx_anchor(a):
         return [t("cli.show.pptx.unsupported", version=a.get("v"), supported=pptx_reader.ANCHOR_VERSION)]
-    zh = lang != "en"
-    sep = "、" if zh else ", "
+    sep = t("cli.show.pptx.listSep")
     # 每项一行、各是词典里的一整句（不拿片段拼）
     out = [t("cli.show.pptx.head", v=a["v"], kind=t(f"cli.show.pptx.kind.{a['kind']}"), slide=a["slide"])]
     elements = a.get("elements") or []
@@ -681,7 +680,7 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
             line += "\n  " + t("cli.show.anchor", text=n["anchor"])
         for extra in docx_lines(n, manifest, t):
             line += "\n  " + extra
-        for extra in pptx_lines(n, manifest, t, lang):
+        for extra in pptx_lines(n, manifest, t):
             line += "\n  " + extra
         active_always = (always or []) if n.get("status") != "resolved" else []
         sources_by_name = {}

@@ -2139,6 +2139,7 @@
     "build.note.pptx.changed": "批注 {id}（第 {page} 页）：定位元素里的文字已改动，批注里的字符偏移对应旧版本",
     "cli.show.pptx.unsupported": "⚠ PPT 幻灯片定位的版本 v{version} 高于本工具支持的 v{supported}：字段原样保留，不可用于回写；请升级工具后再处理",
     "cli.show.pptx.head": "幻灯片定位 v{v}：{kind}，幻灯片 {slide}",
+    "cli.show.pptx.listSep": "、",
     "cli.show.pptx.kind.page": "整页",
     "cli.show.pptx.kind.elements": "元素目标",
     "cli.show.pptx.kind.text": "文本选区",
