@@ -541,5 +541,93 @@ class ShowTests(unittest.TestCase):
         self.assertIn("cannot be used for write-back", self.show({"v": 2, "slide": "s260", "x": 1}, "en"))
 
 
+class ExchangeTests(unittest.TestCase):
+    """批注交换的 PPT 定位：导出与导入同一版本化格式，中英文法都完整还原；同文不同元素不误去重。"""
+
+    PAGE = anchor("page", "thumb", "s260", fp="ab" * 32)
+    ELEMENTS = anchor("elements", "click", "s257", fp="ab" * 32, elements=[
+        {"key": "e11", "id": "11", "name": "合成图片", "kind": "picture", "z": 1, "digest": "d" * 64,
+         "ro": ["text", "geometry", "style"]},
+        {"key": "e12", "id": "12", "name": "合成组合", "kind": "group", "z": 2, "digest": "e" * 64}])
+    TEXT = anchor("text", "selection", "s260", fp="ab" * 32, elements=[
+        {"key": "e2", "id": "2", "name": "合成标题", "kind": "shape", "z": 0, "digest": "f" * 64}],
+        text={"para": 0, "paraDigest": "a" * 64, "start": 1, "end": 4, "quote": "相同😀",
+              "runs": [{"start": 0, "end": 2}, {"start": 2, "end": 4}]})
+    POINT = anchor("point", "point", "s260", fp="ab" * 32, point={"x": 0.5, "y": 0.1})
+    REGION = anchor("region", "region", "s260", fp="ab" * 32, region={"x": 0.25, "y": 0.1, "w": 0.3, "h": 0.2})
+    CHANGED = dict(TEXT, changed=True)
+
+    def notes(self, a: dict) -> list[dict]:
+        return [{"id": "n1", "page": 2, "title": "元素页", "target": "报告", "text": "改措辞", "status": "open",
+                 "at": "2026-01-01T00:00:00+08:00", "pptx": a}]
+
+    @staticmethod
+    def portable(a: dict) -> dict:
+        """交换行不携带展示名（元素名会变、不是身份，重定位时刷新成当前版本；与 DOCX 段落定位
+        不携带段落文本同理）：比对往返结果前把 name 清成空串。"""
+        out = dict(a)
+        if a.get("elements"):
+            out["elements"] = [{**e, "name": ""} for e in a["elements"]]
+        return out
+
+    def test_both_languages_carry_the_location(self):
+        zh = ef.render(self.notes(self.ELEMENTS), title="合成", lang="zh-CN")
+        en = ef.render(self.notes(self.ELEMENTS), title="合成", lang="en")
+        self.assertIn("   PPT 定位：v1 元素 · 幻灯片 s257"
+                      " · 目标 e11（标识 11，picture，第 1 层，摘要 " + "d" * 64 + "，只读 文本、几何、样式）"
+                      "、e12（标识 12，group，第 2 层，摘要 " + "e" * 64 + "）"
+                      " · 来源 点选 · 指纹 " + "ab" * 32, zh)
+        self.assertIn("   PPT location: v1 elements · slide s257"
+                      " · targets e11 (id 11, picture, z 1, digest " + "d" * 64 + ", read-only text, geometry, style)"
+                      "; e12 (id 12, group, z 2, digest " + "e" * 64 + ")"
+                      " · source click · fingerprint " + "ab" * 32, en)
+        text = ef.render(self.notes(self.TEXT), title="合成", lang="zh-CN")
+        self.assertIn(" · 段落 0（摘要 " + "a" * 64 + "） · 字符 1–4 · 运行 0–2、2–4 · 来源 选区"
+                      " · 指纹 " + "ab" * 32 + " · 引用 相同😀", text)
+
+    def test_page_point_region_and_changed_round_trip(self):
+        for lang in ("zh-CN", "en"):
+            for a in (self.PAGE, self.POINT, self.REGION, self.CHANGED):
+                with self.subTest(lang=lang, kind=a["kind"]):
+                    items, _always = ef.parse_markdown(ef.render(self.notes(a), title="合成", lang=lang))
+                    self.assertEqual(items[0]["pptx"], self.portable(a))
+                    self.assertEqual(items[0]["text"], "改措辞", "定位行不并进正文")
+
+    def test_elements_and_text_round_trip_in_both_languages(self):
+        for lang in ("zh-CN", "en"):
+            for a in (self.ELEMENTS, self.TEXT):
+                with self.subTest(lang=lang, kind=a["kind"]):
+                    items, _always = ef.parse_markdown(ef.render(self.notes(a), title="合成", lang=lang))
+                    self.assertEqual(items[0]["pptx"], self.portable(a))
+
+    def test_newer_version_is_named_but_not_parsed_back(self):
+        for lang, word in (("zh-CN", "PPT 定位：v2"), ("en", "PPT location: v2")):
+            text = ef.render(self.notes({"v": 2, "slide": "s260", "x": 1}), title="合成", lang=lang)
+            self.assertIn(word, text)
+            items, _always = ef.parse_markdown(text)
+            self.assertNotIn("pptx", items[0])
+            self.assertEqual(items[0]["text"], "改措辞")
+
+    def test_notes_without_anchor_export_as_before(self):
+        note = self.notes(self.PAGE)[0]
+        del note["pptx"]
+        self.assertNotIn("PPT 定位", ef.render([note], title="合成", lang="zh-CN"))
+
+    def test_same_text_on_different_elements_is_not_deduped(self):
+        """同页、同文、同引用、元素目标不同：不是同一条批注，导入不去重（引用相同不等于目标相同）。"""
+        d = review_dir()
+
+        def anchor_for(digest: str) -> dict:
+            return {"v": 1, "slide": "s257", "kind": "elements", "via": "click", "fp": OLD_FP,
+                    "elements": [{"key": "e11", "id": "11", "name": "", "kind": "picture", "z": 1,
+                                  "digest": digest}]}
+
+        first = {"id": "n1", "page": 2, "key": "s257", "target": "报告", "text": "同样的话",
+                 "quote": "相同", "pptx": anchor_for("d" * 64)}
+        second = {**first, "id": "n2", "pptx": anchor_for("e" * 64)}
+        _doc, added, skipped, _updated = store.import_notes(d, [first, second])
+        self.assertEqual((added, skipped), (2, 0), "同文不同元素：两条都留下")
+
+
 if __name__ == "__main__":
     unittest.main()

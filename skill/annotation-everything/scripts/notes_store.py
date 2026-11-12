@@ -1177,15 +1177,17 @@ def delete(review_dir: Path, note_id: str, *, by: str = "page") -> dict[str, Any
 
 
 def dedup_key(n: dict[str, Any]) -> tuple:
-    """内容相同的判定：页码、正文、引用、标注及 DOCX 定位相同。同一页不同位置写同样的话不算重复。"""
+    """内容相同的判定：页码、正文、引用、标注及 DOCX / PPT 定位相同。同一页不同位置（不同元素）
+    写同样的话不算重复——引用相同不等于目标相同。"""
     pin = n.get("pin") or None
     pin_t = (round(float(pin["x"]), 1), round(float(pin["y"]), 1)) if isinstance(pin, dict) and "x" in pin else None
     rg = region_of(n)
     rg_t = tuple(round(float(rg.get(k, 0) or 0), 1) for k in ("x", "y", "w", "h")) if rg else None
     st_t = bool(isinstance(n.get("style"), dict) and n["style"].get("scope"))
     docx_t = _dumps(n["docx"], sort_keys=True) if isinstance(n.get("docx"), dict) else None
+    pptx_t = _dumps(n["pptx"], sort_keys=True) if isinstance(n.get("pptx"), dict) else None
     return (int(n.get("page", 0)), str(n.get("target", "")).strip(), str(n.get("text", "")).strip(),
-            str(n.get("quote", "")).strip(), pin_t, rg_t, st_t, docx_t)
+            str(n.get("quote", "")).strip(), pin_t, rg_t, st_t, docx_t, pptx_t)
 
 
 def _stamp(n: dict[str, Any]) -> float:
