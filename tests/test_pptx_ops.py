@@ -172,6 +172,106 @@ class PptxOpsTests(unittest.TestCase):
         self.assertIn(b'<a:off x="1714500" y="1524000"/>', xml)
         self.assertIn(b'<a:ext cx="3429000" cy="3048000"/>', xml)
 
+    # ---------- 切片3：几何拒绝矩阵 ----------
+    def test_geometry_out_of_bounds_and_illegal_values_are_refused(self):
+        self.build()
+        cases = [
+            ({"set": {"x": -0.1, "y": 0.1}}, "bounds"),
+            ({"set": {"x": 0.9, "y": 0.1, "width": 0.2}}, "bounds"),
+            ({"set": {"x": 0.1, "y": 0.9, "height": 0.2}}, "bounds"),
+            ({"set": {"x": 0.1, "y": 0.1, "width": 1.0002 - 0.1}}, "bounds"),
+            ({"set": {"x": 0.1, "y": 0.1, "width": 0, "height": 0.1}}, "value"),
+            ({"set": {"x": 0.1, "y": 0.1, "height": -1}}, "value"),
+            ({"set": {"x": 0.1, "y": 0.1, "width": 1e-9, "height": 0.1}}, "value"),
+            ({"set": {"x": "0.1", "y": 0.1, "width": 0.2, "height": 0.1}}, "value"),
+            ({"set": {"x": float("nan"), "width": 0.2, "height": 0.1}}, "value"),
+        ]
+        for over, code in cases:
+            with self.subTest(over=over, code=code):
+                set_values = over.pop("set")
+                self.assert_refused(code, [self.op(geometry(**set_values), **over)])
+
+    def test_geometry_unit_is_explicit_and_normalized_only(self):
+        self.build()
+        set_values = {"x": 0.25, "y": 0.1}
+        self.assert_refused("unit", [self.op({"set": set_values})])   # 缺 unit
+        self.assert_refused("unit", [self.op({"unit": "emu", "set": set_values})])
+        self.assert_refused("unit", [self.op({"unit": "px", "set": set_values})])
+
+    def test_geometry_unknown_fields_and_properties_are_refused(self):
+        self.build()
+        self.assert_refused("property", [self.op(geometry(x=0.2, y=0.2, left=0.1))])
+        self.assert_refused("ops", [self.op(geometry(x=0.2), extra=True)])
+        self.assert_refused("ops", [{"slide": self.model["slides"][0]["key"], "aspect": "geometry",
+                                     "unit": "normalized", "target": self.target()}])
+        self.assert_refused("version", {"v": pe.OPS_VERSION + 1,
+                                        "ops": [self.op(geometry(x=0.2, y=0.2))]})
+
+    def test_geometry_targets_outside_the_whitelist_are_refused(self):
+        self.build()
+        for slide_n, elem_id, kind in ((1, "4", "shape"), (2, "13", "shape"),
+                                       (2, "11", "picture"), (2, "10", "table")):
+            with self.subTest(elem_id=elem_id, kind=kind):
+                errors = self.assert_refused(
+                    "readonlyGeometry",
+                    [self.op(geometry(x=0.1, y=0.1, width=0.2, height=0.1), slide_n=slide_n, elem_id=elem_id)])
+                self.assertEqual(errors[0].detail, kind)
+
+    def test_geometry_duplicate_shape_id_stays_readonly(self):
+        parts = styled_parts()
+        shape = ('<p:sp><p:nvSpPr><p:cNvPr id="9" name="重复"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
+                 '<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr>'
+                 '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>重复</a:t></a:r></a:p></p:txBody></p:sp>')
+        parts["ppt/slides/slide10.xml"] = parts["ppt/slides/slide10.xml"].replace(
+            "</p:spTree>", shape + shape.replace('x="0"', 'x="2000000"') + "</p:spTree>")
+        self.build(parts)
+        model = pr.read(self.source)
+        el = next(e for e in model["slides"][0]["elements"] if str(e["id"]) == "9")
+        target = {"key": el["key"], "id": "9", "name": el.get("name", ""), "kind": el["kind"],
+                  "z": el.get("z", 0), "digest": el["evidenceDigest"]}
+        # 标识重复但证据可消歧：目标能按证据找回，可重复标识的能力已被清空，保持只读
+        self.assert_refused("readonlyGeometry", [{"slide": model["slides"][0]["key"], "target": target,
+                                                  "aspect": "geometry", "unit": "normalized",
+                                                  "set": {"x": 0.1, "y": 0.1}}])
+
+    def test_geometry_duplicate_shape_id_with_conflicting_evidence_is_ambiguous(self):
+        parts = styled_parts()
+        parts["ppt/slides/slide10.xml"] = parts["ppt/slides/slide10.xml"].replace(
+            "</p:spTree>",
+            '<p:sp><p:nvSpPr><p:cNvPr id="9" name="重复"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
+            '<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr>'
+            '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>重复</a:t></a:r></a:p></p:txBody></p:sp>'
+            '<p:sp><p:nvSpPr><p:cNvPr id="9" name="重复"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
+            '<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr>'
+            '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>重复</a:t></a:r></a:p></p:txBody></p:sp></p:spTree>')
+        self.build(parts)
+        model = pr.read(self.source)
+        el = next(e for e in model["slides"][0]["elements"] if str(e["id"]) == "9")
+        target = {"key": el["key"], "id": "9", "name": el.get("name", ""), "kind": el["kind"],
+                  "z": el.get("z", 0), "digest": el["evidenceDigest"]}
+        self.assert_refused("ambiguous", [{"slide": model["slides"][0]["key"], "target": target,
+                                           "aspect": "geometry", "unit": "normalized",
+                                           "set": {"x": 0.1, "y": 0.1}}])
+
+    def test_same_element_claimed_by_two_ops_refuses_the_whole_group(self):
+        self.build()
+        one = self.op(geometry(x=0.2, y=0.2), id="one")
+        two = self.op(geometry(width=0.3, height=0.3), id="two")
+        errors = self.assert_refused("conflict", [one, two])
+        self.assertEqual(errors[0].item, "two")
+        self.assertEqual(errors[0].detail, "one")
+
+    def test_geometry_no_change_is_refused(self):
+        self.build()
+        self.assert_refused("noChange", [self.op(geometry(x=0.075))])
+
+    def test_bad_target_identity_is_refused(self):
+        self.build()
+        self.assert_refused("ops", [self.op(geometry(x=0.2, y=0.2),
+                                            target=self.target(digest="not-a-digest"))])
+        self.assert_refused("anchor", [self.op(geometry(x=0.2, y=0.2),
+                                               slide="s0000000000000000000000000000000000000000000000000000000000000000")])
+
 
 if __name__ == "__main__":
     unittest.main()
