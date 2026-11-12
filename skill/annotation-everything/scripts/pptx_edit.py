@@ -1265,37 +1265,6 @@ def _validate(path: Path | io.BytesIO, original: bytes, changed: dict[str, bytes
             check(_member_bytes(old, part), changed[part])
 
 
-def _source_check(source: Path, fingerprint: str) -> bytes:
-    if source.is_symlink() or not source.is_file():
-        raise EditError("source")
-    # PowerPoint 的 owner file 与 Word 一样可能截去原文件名开头两个字符，两种都检查。
-    for name in ("~$" + source.name, "~$" + source.name[2:]):
-        if source.with_name(name).exists():
-            raise EditError("locked")
-    if source.stat().st_size > de.MAX_PACKAGE:
-        raise EditError("size")
-    raw = source.read_bytes()
-    if not fingerprint or hashlib.sha256(raw).hexdigest() != fingerprint:
-        raise EditError("fingerprint")
-    return raw
-
-
-def _backup(review: Path, batch: int, raw: bytes) -> Path:
-    directory = review
-    for name in (".snapshots", f"batch-{batch}", "pptx-writeback"):
-        directory = directory / name
-        if directory.is_symlink():
-            raise EditError("source", str(directory))
-        directory.mkdir(exist_ok=True, mode=0o700)
-        os.chmod(directory, 0o700)
-    fd, name = tempfile.mkstemp(prefix="original-", suffix=".pptx", dir=directory)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(raw)
-        fh.flush()
-        os.fsync(fh.fileno())
-    return Path(name)
-
-
 def _slide_key_of(note: dict, manifest: dict) -> str:
     key = note.get("key")
     if isinstance(key, str) and key:
@@ -1379,7 +1348,7 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
         raise EditError("source")
     fingerprint = (manifest.get("pptx") or {}).get("fingerprint", "")
     with store.locked(review):
-        raw = _source_check(source, fingerprint)
+        raw = de._source_check(source, fingerprint)
         if ops is not None:
             if batch is not None or ids:
                 raise EditError("arguments")
@@ -1422,7 +1391,7 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
             _validate(io.BytesIO(packed), raw, changed, checkers)
             return result
         # 先留下可靠原件；后续写入、fsync、校验或 replace 失败都不删除备份。
-        result["backup"] = str(_backup(review, batch or 0, raw))
+        result["backup"] = str(de._backup(review, batch or 0, raw, writeback="pptx-writeback", suffix=".pptx"))
         fd, temp_name = tempfile.mkstemp(prefix="." + destination.name + "-", suffix=".tmp", dir=destination.parent)
         temp = Path(temp_name)
         try:
@@ -1433,7 +1402,7 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
                 fh.flush()
                 os.fsync(fh.fileno())
             _validate(temp, raw, changed, checkers)
-            _source_check(source, fingerprint)   # PowerPoint 或别的进程在准备期间动过源文件就拒绝提交
+            de._source_check(source, fingerprint)   # PowerPoint 或别的进程在准备期间动过源文件就拒绝提交
             if separate and destination.exists():
                 raise EditError("output", str(destination))
             os.replace(temp, destination)

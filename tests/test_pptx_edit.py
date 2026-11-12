@@ -173,6 +173,12 @@ class PptxEditTests(unittest.TestCase):
         self.assertEqual(backup.read_bytes(), self.original)
         self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
         self.assertIn("batch-1/pptx-writeback", str(backup))
+        # 快照目录逐级建并锁 0700：.snapshots、batch-N 与 writeback 层都要断言
+        self.assertEqual(backup.parent.name, "pptx-writeback")
+        self.assertEqual(backup.parent.parent.name, "batch-1")
+        self.assertEqual(backup.parent.parent.parent.name, ".snapshots")
+        for directory in (backup.parent.parent.parent, backup.parent.parent, backup.parent):
+            self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700, str(directory))
 
     def test_cross_run_replacement_keeps_run_properties(self):
         self.build()

@@ -468,9 +468,10 @@ def _validate(path: Path | io.BytesIO, original: bytes, main: str, document: byt
 
 
 def _source_check(source: Path, fingerprint: str) -> bytes:
+    """源文件安全检查（DOCX 与 PPTX 回写共用）：符号链接、owner file、包大小与指纹。"""
     if source.is_symlink() or not source.is_file():
         raise EditError("source")
-    # Word 的 owner file 按平台可能截去原文件名开头的两个字符，两种都检查。
+    # Word 与 PowerPoint 的 owner file 按平台可能截去原文件名开头的两个字符，两种都检查。
     for name in ("~$" + source.name, "~$" + source.name[2:]):
         if source.with_name(name).exists():
             raise EditError("locked")
@@ -482,15 +483,17 @@ def _source_check(source: Path, fingerprint: str) -> bytes:
     return raw
 
 
-def _backup(review: Path, batch: int, raw: bytes) -> Path:
+def _backup(review: Path, batch: int, raw: bytes, *, writeback: str, suffix: str) -> Path:
+    """快照目录与原件备份（DOCX 与 PPTX 回写共用）：逐级建 .snapshots/batch-N/{writeback}，
+    每级 0700 且拒绝符号链接；原件写临时文件并 fsync，路径交给调用方做原子替换。"""
     directory = review
-    for name in (".snapshots", f"batch-{batch}", "docx-writeback"):
+    for name in (".snapshots", f"batch-{batch}", writeback):
         directory = directory / name
         if directory.is_symlink():
             raise EditError("source", str(directory))
         directory.mkdir(exist_ok=True, mode=0o700)
         os.chmod(directory, 0o700)
-    fd, name = tempfile.mkstemp(prefix="original-", suffix=".docx", dir=directory)
+    fd, name = tempfile.mkstemp(prefix="original-", suffix=suffix, dir=directory)
     with os.fdopen(fd, "wb") as fh:
         fh.write(raw)
         fh.flush()
@@ -572,7 +575,7 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
             _validate(io.BytesIO(packed), raw, main, document, expected)
             return result
         # 先留下可靠原件；后续写入、fsync、校验或 replace 失败都不删除备份。
-        result["backup"] = str(_backup(review, batch or 0, raw))
+        result["backup"] = str(_backup(review, batch or 0, raw, writeback="docx-writeback", suffix=".docx"))
         fd, temp_name = tempfile.mkstemp(prefix="." + destination.name + "-", suffix=".tmp", dir=destination.parent)
         temp = Path(temp_name)
         try:

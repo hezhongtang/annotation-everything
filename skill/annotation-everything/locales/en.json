@@ -2289,6 +2289,7 @@
     "build.note.pptx.changed": "Annotation {id} (page {page}): the text in the located element has changed; the character offsets in the annotation refer to the old version",
     "cli.show.pptx.unsupported": "⚠ Slide location version v{version} is newer than the supported v{supported}: the field is kept as is and cannot be used for write-back; upgrade the tool before handling this annotation",
     "cli.show.pptx.head": "Slide location v{v}: {kind}, slide {slide}",
+    "cli.show.pptx.listSep": ", ",
     "cli.show.pptx.kind.page": "whole page",
     "cli.show.pptx.kind.elements": "element targets",
     "cli.show.pptx.kind.text": "text selection",

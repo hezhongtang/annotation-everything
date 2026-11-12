@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import notes_store as store
+import pptx_reader
 
 FORMAT_VERSION = 1
 LANGS = ("zh-CN", "en")
@@ -243,10 +244,16 @@ class Grammar:
                 if got:
                     cur["docx"] = got
                 continue
-            if m := self.pptx.match(line):   # 同上：读不懂的整行略过，不并进正文
-                got = self._pptx_in(int(m.group(1)), m.group(2))
+            if m := self.pptx.match(line):
+                version = int(m.group(1))
+                got = self._pptx_in(version, m.group(2))
                 if got:
                     cur["pptx"] = got
+                elif version > pptx_reader.ANCHOR_VERSION:
+                    # 未知的新版本定位：保留版本信息，不当作无定位静默导入（与存储层高版本
+                    # 保留语义一致）。md 行只带版本号，完整内容在 JSON 备份里；show 据此列出
+                    # 「不可用于回写、请升级工具」的提示。读不懂的其他整行仍略过，不并进正文。
+                    cur["pptx"] = {"v": version}
                 continue
             if m := self.skills.match(line):
                 body = re.sub(r"(——处理这条前先调用这些技能|（处理这条前先调用这些技能）)$", "", m.group(1).strip())
