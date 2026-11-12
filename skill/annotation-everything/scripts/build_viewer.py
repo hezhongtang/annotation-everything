@@ -669,14 +669,29 @@ def pptx_warnings(meta: dict, locale: str | None) -> list[str]:
     return out
 
 
+def _pptx_view_element(e: dict) -> dict:
+    """元素模型瘦身到交互与定位所需：身份、几何、能力、文本段落与 run 边界（样式细节不进页面）。"""
+    paragraphs = [{"n": p["index"], "text": p["text"], "digest": p["digest"],
+                   "runs": [{"start": r["start"], "end": r["end"]} for r in p["runs"]]}
+                  for p in e.get("paragraphs") or [] if p.get("text")]
+    out = {"key": e["key"], "id": str(e.get("id") or ""), "name": e.get("name") or "", "kind": e["kind"],
+           "z": e.get("z", 0), "geo": (e.get("geometry") or {}).get("normalized"), "cap": e["capabilities"],
+           "digest": e.get("evidenceDigest") or ""}
+    if paragraphs:
+        out["paragraphs"] = paragraphs
+    return out
+
+
 def pptx_view(meta: dict | None) -> dict | None:
-    """对照页用的 PPTX 摘要：渲染信息、字体证据与未核验项（文案由页面按当前语言取词典）。"""
+    """对照页用的 PPTX 摘要：渲染信息、字体证据、未核验项与逐页元素模型（交互与幻灯片定位的依据）。"""
     import pptx_report
     if meta is None:
         return None
     return {"v": pptx_report.FORMAT_VERSION, "fp": meta.get("fingerprint") or "",
             "renderer": meta.get("renderer") or {}, "fonts": meta.get("fonts") or {},
-            "slides": [{"key": s["key"], "n": s["n"], "notes": bool(s.get("notes"))} for s in meta.get("slides", [])],
+            "slides": [{"key": s["key"], "n": s["n"], "notes": bool(s.get("notes")),
+                        "elements": [_pptx_view_element(e) for e in s.get("elements") or []]}
+                       for s in meta.get("slides", [])],
             "unverified": meta.get("unverified") or []}
 
 

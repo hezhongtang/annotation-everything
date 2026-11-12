@@ -94,6 +94,11 @@ main{flex:1;display:grid;grid-template-columns:var(--ae-rail) var(--ae-sidebar) 
 #pageTree{overflow:auto;padding:0 var(--ae-gap-6) var(--ae-space);min-height:0}
 .page-group{font-size:var(--ae-small);font-weight:600;color:var(--ae-mut);padding:var(--ae-gap-12) var(--ae-space) var(--ae-gap-4);margin:0}
 .page-node{display:flex;align-items:center;gap:var(--ae-space);width:100%;border:0;background:none;padding:var(--ae-gap-7) var(--ae-space);border-radius:var(--ae-radius);font-size:var(--ae-text);text-align:left}
+.page-item{position:relative}
+.page-item .page-node{padding-right:var(--ae-gap-16)}
+.page-pick{position:absolute;right:var(--ae-gap-4);top:50%;transform:translateY(-50%);visibility:hidden;border:1px solid var(--ae-line);background:var(--ae-panel);color:var(--ae-navy);border-radius:var(--ae-radius);font-size:var(--ae-micro);line-height:1.6;padding:2px 6px;cursor:pointer}
+.page-item:hover .page-pick,.page-pick:focus-visible{visibility:visible}
+.page-pick:hover{background:var(--ae-selected)}
 .page-node:hover{background:var(--ae-line)}.page-node[aria-current=page]{background:var(--ae-selected)}
 .page-node .page-number{color:var(--ae-mut);font-size:var(--ae-small);font-variant-numeric:tabular-nums;min-width:16px;text-align:right}
 .page-node .page-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -290,6 +295,9 @@ header kbd{border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.12)}
 #styleChip{display:none;align-self:flex-start;font-size:var(--ae-compact);background:var(--ae-selected);color:var(--ae-accent);border:1px solid var(--ae-accent-line);border-radius:var(--ae-radius-pill);padding:var(--ae-gap-2) var(--ae-gap-4) var(--ae-gap-2) var(--ae-gap-10)}
 #styleChip.on{display:inline-flex;align-items:center;gap:var(--ae-gap-6)}
 #styleChip button{border:none;background:none;cursor:pointer;color:var(--ae-accent);font-size:var(--ae-body);line-height:1;padding:0 var(--ae-gap-4)}
+#pptxChip{display:none;align-self:flex-start;font-size:var(--ae-compact);background:var(--ae-selected);color:var(--ae-navy);border:1px solid var(--ae-line);border-radius:var(--ae-radius-pill);padding:var(--ae-gap-2) var(--ae-gap-4) var(--ae-gap-2) var(--ae-gap-10);max-width:100%}
+#pptxChip.on{display:inline-flex;align-items:center;gap:var(--ae-gap-6)}
+#pptxChip button{border:none;background:none;cursor:pointer;color:var(--ae-navy);font-size:var(--ae-body);line-height:1;padding:0 var(--ae-gap-4)}
 .note .anchor{font-size:var(--ae-small);color:var(--ae-mut);margin-top:var(--ae-gap-3)}
 #pinpop{position:fixed;display:none;z-index:8;width:min(340px,90vw);background:var(--ae-panel);border:1px solid var(--ae-line);border-radius:var(--ae-radius-lg);box-shadow:var(--ae-shadow);padding:var(--ae-gap-10) var(--ae-gap-12);font-size:var(--ae-body-small);line-height:1.6}
 #pinpop.on{display:block}
@@ -502,7 +510,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
       <section id="analysisPanel" hidden><div class="pane-head"><div id="analysisPanelTabs" role="tablist"><button role="tab" data-analysis-tab="timeline" aria-controls="analysisTimeline" data-msg="viewer.analysis.timeline"></button><button role="tab" data-analysis-tab="assumptions" aria-controls="analysisAssumptions" data-msg="viewer.life.assumptions"></button><button role="tab" data-analysis-tab="parked" aria-controls="analysisParked" data-msg="viewer.life.parked"></button><button role="tab" data-analysis-tab="facts" aria-controls="analysisFacts" data-msg="viewer.life.facts"></button></div><button data-layout-toggle="panel" data-title="viewer.layout.panel" data-p-key="&#92;" aria-controls="analysisPanelLists" data-msg="viewer.layout.panel"></button></div><div id="analysisPanelLists"><ol id="analysisTimeline" role="tabpanel"></ol><ol id="analysisAssumptions" role="tabpanel" hidden></ol><ol id="analysisParked" role="tabpanel" hidden></ol><ol id="analysisFacts" role="tabpanel" hidden></ol></div></section>
       <div class="panel-tabs">        <button data-act="seelist" id="seeList" data-title="viewer.seeListTitle"><span id="seeListLabel" data-msg="viewer.seeList">本页批注</span> <span id="nhere">0</span></button><button id="allTab" data-msg="viewer.allTitle"></button><button id="batchesTab" data-msg="viewer.batch.title"></button><button  class="icon-button" data-layout-toggle="panel" data-title="viewer.layout.panel" data-aria="viewer.layout.panel" data-p-key="&#92;" aria-controls="panelBody"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/></svg></button></div>
       <div id="panelBody"><div class="notes"><div id="finalizeAllBar" class="finalize-all" hidden><button id="finalizeAllBtn" hidden></button><div id="finalizeAllInfo" role="status" aria-live="polite"></div></div><div id="nlist"></div></div>
-    <div class="form" id="nform"><div class="quote" id="qbox"></div><span id="styleChip"></span>
+    <div class="form" id="nform"><div class="quote" id="qbox"></div><span id="styleChip"></span><span id="pptxChip"></span>
       <textarea id="ntext" rows="1" placeholder="写修改意见（C）。可先选中报告或讲稿里的文字：直接删除（D）、改为（R），或作为引用写批注；也可以先「在报告上标注」（单击放点、拖动框选）。"></textarea>
       <div class="row"><span id="targetLabel" class="sr-only">对象</span> <select id="ntarget" aria-labelledby="targetLabel"><option value="报告">报告</option><option value="讲稿">讲稿</option><option value="报告和讲稿">报告和讲稿</option></select>
         <label class="sk" data-title="viewer.skill.labelTitle" data-p-key="K"><span data-msg="viewer.skill.label">技能</span><input id="nskills" role="combobox" aria-autocomplete="list" aria-controls="skillList" aria-expanded="false" autocomplete="off" data-ph="viewer.skill.placeholder"></label>
@@ -600,7 +608,9 @@ let mode=FILE?"file":"offline", rev=null, idx0=null, busy=0, editingId=null, com
 let stopServiceSupported=false, stoppingService=false, saveFailures=0;
 let finalizeAllSupported=false, finalizingAll=false, finalizeAllResult=null, finalizeAllError="";
 let quoteDocx=null;   // 当前引用的 DOCX 段落定位：{text: 引用文字, page: 页码, a: 定位}，引用换了就不再适用
+let quotePptx=null;   // 当前引用的 PPT 幻灯片定位：{text: 引用文字, page: 页码, a: 定位}，引用换了就不再适用
 let markMode=false, pendingPin=null, quote="", quoteFrom="";   // 标注模式；还没添加的新标注（点）
+let pptxSel=[], pptxPageOn=false, pptxDown=null;   // PPT 元素目标（按选择顺序的有序列表）、整页目标、区分点击与拖动
 const drafts=SS.get(K.drafts,{})||{};   // 各页没写完的批注；存在本标签页的会话存储里，刷新不丢
 const editBuf={};                        // 正在改的已有批注的内容（列表重绘、翻页时不丢）
 const DEL_TEXT="删除引用的这段文字", REP_PREFIX="改为：";   // 快捷修改的固定说法（导出/导入据此还原）
@@ -910,6 +920,18 @@ ${RCSS}
 .ae-region.flash{animation:aereg 1.2s ease}
 @keyframes aereg{30%{background:rgba(42,120,214,.3)}}
 #ae-stage.markmode .ae-pin,#ae-stage.markmode .ae-region{pointer-events:none}
+/* PPT 元素覆盖层与文本选择层：结构模型负责定位与选择，渲染图负责视觉 */
+.pptx-page{position:relative;display:block;background:#fff}
+.pptx-page img.pptx-render{display:block;width:100%;height:100%;object-fit:contain}
+.pptx-layer{position:absolute;inset:0;z-index:1;pointer-events:none}
+.pptx-el{position:absolute;pointer-events:auto;cursor:pointer}
+.pptx-el:hover{box-shadow:inset 0 0 0 2px rgba(42,120,214,.5)}
+.pptx-el.on{box-shadow:inset 0 0 0 3px rgba(42,120,214,.95);background:rgba(42,120,214,.12)}
+.pptx-text{position:absolute;pointer-events:auto;overflow:hidden;color:transparent;font:16px/1.45 sans-serif;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text;cursor:text}
+.pptx-text p{margin:0;min-height:1.2em}
+.pptx-text span::selection{background:rgba(42,120,214,.35);color:transparent}
+.pptx-text span::-moz-selection{background:rgba(42,120,214,.35);color:transparent}
+#ae-stage.markmode .pptx-layer *{pointer-events:none}
 </style><div class="ae-frame" id="ae-frame"><div id="ae-stage"></div></div>`;
 const stage=sr.getElementById("ae-stage"), frame=sr.getElementById("ae-frame");
 function fit(){const slide=$("slide"),style=getComputedStyle(slide),b=slide.getBoundingClientRect();
@@ -1009,18 +1031,175 @@ const docxDrop=x=>x&&x.docx&&x.docx.v===1?{docx:null}:{};
 let srvNoDocx=false;
 function docxBlocked(){return !!DOCX&&mode==="server"&&srvNoDocx}
 function docxBlockToast(){setTimeout(()=>toast(tMsg("viewer.docx.oldService"),9000),0)}   // 排在调用方自己的提示之后，免得被「已添加」盖掉
+function pptxBlockToast(){setTimeout(()=>toast(tMsg("viewer.pptx.oldService"),9000),0)}
 function renderDocxBlock(){if(!DOCX)return;const on=docxBlocked();$("docxBlock").hidden=!on;$("bottomPanel").inert=on||pptxBlocked()}
 // ---------- PPT：渲染证据、字体与未核验项；旧服务没有 pptx 能力时同样阻断写入 ----------
 let srvNoPptx=false;
 function pptxBlocked(){return !!PPTX&&mode==="server"&&srvNoPptx}
 function renderPptxBlock(){if(!PPTX)return;const on=pptxBlocked();$("pptxBlock").hidden=!on;$("bottomPanel").inert=on||docxBlocked()}
 function renderPptx(){if(!PPTX)return;
+  const layer=stage.querySelector(".pptx-layer");if(layer)layer.remove();pptxBuildLayer();   // 语言切换后重建：元素提示跟当前语言
   const parts=[tMsg("viewer.pptx.rendered",{tool:PPTX.renderer&&PPTX.renderer.tool||"?",pages:PPTX.renderer&&PPTX.renderer.pages||0})];
   const unv=PPTX.unverified||[];
   if(unv.length)parts.push(tMsg("viewer.pptx.unverified",{items:unv.map(k=>tMsg("build.pptx.unverified."+k)).join(uiLocale==="en"?", ":"、")}));
   const fonts=PPTX.fonts||{};
   if(fonts.installed!=="ok"||fonts.warning||fonts.review)parts.push(tMsg("viewer.pptx.fonts"));
   $("pptxBannerText").textContent=parts.join(" ");$("pptxBanner").hidden=false}
+
+// ---------- PPT 幻灯片定位（pptx 字段 v1）：元素身份、文本选区、归一化坐标与只读限制 ----------
+function pptxSlide(){if(!PPTX||!P[i])return null;
+  return (PPTX.slides||[]).find(s=>s.key===P[i].key)||null}
+function pptxElName(el){return el.name||el.key||""}
+// 能力矩阵里声明不可自动回写的方面（只读元素）：select/locate 只是可选中可定位，不代表可改
+function pptxRoList(el){const c=el.cap||{};
+  return ["text","geometry","style"].filter(k=>!c[k+"Write"])}
+// 元素目标：读取层的持久身份（幻灯片键 + 形状标识 + 证据摘要）+ 写入时的只读限制快照
+function pptxTargetOf(el){const out={key:el.key,id:String(el.id||""),name:String(el.name||"").slice(0,200),kind:el.kind,z:+el.z||0,digest:el.digest||""};
+  const ro=pptxRoList(el);if(ro.length)out.ro=ro;return out}
+function pptxAnchor(kind,via,extra){const slide=pptxSlide();
+  const out={v:1,slide:slide?slide.key:(P[i]&&P[i].key),kind,via};
+  if(PPTX.fp)out.fp=PPTX.fp;return Object.assign(out,extra||{})}
+// 命中测试：按能力矩阵可选择的元素里取最上层（z 大者、同 z 取面积小者）；坐标是画布分数
+function pptxHit(slide,fx,fy){let hit=null;
+  (slide.elements||[]).forEach(el=>{const g=el.geo;
+    if(!g||!(el.cap||{}).select||g.width<=0||g.height<=0)return;
+    if(fx>=g.x&&fx<=g.x+g.width&&fy>=g.y&&fy<=g.y+g.height){
+      if(!hit||el.z>hit.z||(el.z===hit.z&&g.width*g.height<hit.geo.width*hit.geo.height))hit=el}});
+  return hit}
+// 拿不到 Shadow DOM 选区（非 Chromium）时按文本反查：只有唯一元素唯一段落才认；
+// 段内只出现一次才写字符偏移与样式边界，否则只记元素与逻辑段落
+function pptxFromText(text,slideRef){
+  const slide=slideRef||pptxSlide();if(!slide)return null;
+  const want=String(text||"").replace(/\s+/g,"");if(!want)return null;
+  const hits=[];
+  (slide.elements||[]).forEach(el=>(el.paragraphs||[]).forEach(p=>{
+    // 归一化字符 → 原文码点下标的映射；比较与偏移一律按 Unicode 码点（emoji 不算两个）
+    const chars=[...p.text],kept=[],map=[];
+    chars.forEach((ch,idx)=>{if(!/\s/.test(ch)){kept.push(ch);map.push(idx)}});
+    const flat=kept.join(""),at16=flat.indexOf(want);if(at16<0)return;
+    const at=cpLen(flat.slice(0,at16)),len=cpLen(want);
+    const from=map[at],to=map[at+len-1];
+    hits.push({el,p,once:flat.indexOf(want,at16+1)<0,
+      start:Number.isInteger(from)?from:null,
+      end:Number.isInteger(to)?to+1:null})}));
+  if(hits.length!==1)return null;   // 同页多处出现相同文字：只匹配文字会选错目标，不写定位
+  const {el,p,once,start,end}=hits[0];
+  const t={para:p.n,paraDigest:p.digest,quote:clip(text,300)};
+  if(once){t.start=start;t.end=end;
+    t.runs=(p.runs||[]).filter(r=>r.start<end&&r.end>start)}
+  return pptxAnchor("text","text",{elements:[pptxTargetOf(el)],text:t})}
+// 卡片与提示用的定位摘要：目标类型 + 引用 / 目标 / 坐标（坐标按画布百分比展示）
+function pptxLocText(a){let body="";
+  const els=a.elements||[];
+  if(a.kind==="page")body=tMsg("viewer.pptx.loc.page");
+  else if(a.kind==="elements")body=tMsg("viewer.pptx.loc.elements",{count:els.length,names:clip(els.map(e=>e.name||e.key).join("、"),120)});
+  else if(a.kind==="text"){const t=a.text||{};
+    body=tMsg("viewer.pptx.loc.text",{quote:t.quote||"",name:(els[0]&&els[0].name)||els[0].key||"",para:(t.para||0)+1,
+      start:t.start!=null?t.start:"-",end:t.end!=null?t.end:"-"})}
+  else if(a.kind==="point"&&a.point)body=tMsg("viewer.pptx.loc.point",{x:Math.round(a.point.x*100),y:Math.round(a.point.y*100)});
+  else if(a.kind==="region"&&a.region)body=tMsg("viewer.pptx.loc.region",{x:Math.round(a.region.x*100),y:Math.round(a.region.y*100),
+    w:Math.round(a.region.w*100),h:Math.round(a.region.h*100)});
+  const ro=els.some(e=>e.ro&&e.ro.length);
+  return tMsg("viewer.pptx.locLabel")+" "+body+(ro?` · ${tMsg("viewer.pptx.ro")}`:"")}
+// ---------- PPT 幻灯片定位结束 ----------
+// 元素覆盖层 + 文本选择层：结构模型定位到画布（渲染图负责视觉）；标注模式下让位给点/框
+function pptxBuildLayer(){const sec=stage.querySelector("section.page");if(!sec)return;
+  if(sec.querySelector(".pptx-layer"))return;
+  const slide=pptxSlide();if(!slide)return;
+  const layer=document.createElement("div");layer.className="pptx-layer";
+  (slide.elements||[]).forEach(el=>{
+    if(el.geo&&(el.cap||{}).select&&el.geo.width>0&&el.geo.height>0){
+      const box=document.createElement("div");box.className="pptx-el";box.dataset.key=el.key;
+      Object.assign(box.style,{left:(el.geo.x*100)+"%",top:(el.geo.y*100)+"%",
+        width:(el.geo.width*100)+"%",height:(el.geo.height*100)+"%"});
+      const ro=pptxRoList(el);
+      box.title=ro.length?tMsg("viewer.pptx.elTitleRo",{name:pptxElName(el),kind:tMsg("viewer.pptx.kind."+el.kind)})
+        :tMsg("viewer.pptx.elTitle",{name:pptxElName(el),kind:tMsg("viewer.pptx.kind."+el.kind)});
+      layer.appendChild(box)}
+    if(el.paragraphs&&el.paragraphs.length&&el.geo){   // 普通文本形状：透明文字层，可拖选出逻辑段落与字符偏移
+      const t=document.createElement("div");t.className="pptx-text";t.dataset.key=el.key;
+      Object.assign(t.style,{left:(el.geo.x*100)+"%",top:(el.geo.y*100)+"%",
+        width:(el.geo.width*100)+"%",height:(el.geo.height*100)+"%"});
+      el.paragraphs.forEach(p=>{const pp=document.createElement("p");
+        pp.dataset.pptxP=p.n;pp.dataset.pptxD=p.digest;
+        (p.runs||[]).forEach(r=>{const sp=document.createElement("span");
+          sp.dataset.pptxRs=r.start;sp.dataset.pptxRe=r.end;
+          sp.textContent=[...p.text].slice(r.start,r.end).join("");   // run 边界是码点偏移：emoji 不算两个
+          pp.appendChild(sp)});
+        t.appendChild(pp)});
+      layer.appendChild(t)}});
+  sec.appendChild(layer);pptxPaintSelection()}
+function pptxPaintSelection(){stage.querySelectorAll(".pptx-el").forEach(b=>{
+  b.classList.toggle("on",pptxSel.some(el=>el.key===b.dataset.key))})}
+function pptxInStage(e){const path=e.composedPath?e.composedPath():[];
+  return path.some(n=>n===stage)}
+// 点击选元素：单击选中并打开输入区；⌘/Ctrl+点击加选或移除（有序目标列表）；点空白清除选择
+function pptxClickSelect(e){
+  if(e.button!==0||!pptxInStage(e))return;
+  if(swallowClick)return;   // 刚放完点/框标注的那次松开不选元素
+  if(pptxDown&&Math.abs(e.clientX-pptxDown.x)+Math.abs(e.clientY-pptxDown.y)>6)return;
+  if(e.composedPath&&e.composedPath().some(n=>n.classList&&(n.classList.contains("ae-pin")||n.classList.contains("ae-region"))))return;
+  const slide=pptxSlide();if(!slide)return;
+  const s=stage.getBoundingClientRect(),fx=(e.clientX-s.left)/s.width,fy=(e.clientY-s.top)/s.height;
+  const hit=pptxHit(slide,fx,fy),multi=e.metaKey||e.ctrlKey;
+  if(multi&&hit){const at=pptxSel.findIndex(el=>el.key===hit.key);
+    if(at>=0){pptxSel.splice(at,1);toast(tMsg("viewer.pptx.pickedOff",{name:pptxElName(hit)}),2500)}
+    else{pptxSel.push(hit);toast(tMsg("viewer.pptx.pickedMore",{count:pptxSel.length}),2500)}
+    pptxPageOn=false;pptxTargetChanged();return}
+  if(hit){pptxSel=[hit];pptxPageOn=false;pptxTargetChanged(true);
+    const ro=pptxRoList(hit);
+    if(ro.length)toast(tMsg("viewer.pptx.readonlyPick",{name:pptxElName(hit),kind:tMsg("viewer.pptx.kind."+hit.kind)}),8000);
+    else toast(tMsg("viewer.pptx.picked",{name:pptxElName(hit)}),3500);
+    return}
+  if(pptxSel.length||pptxPageOn){pptxSel=[];pptxPageOn=false;pptxTargetChanged()}}
+function pptxTargetChanged(open){updatePptxChip();pptxPaintSelection();saveDraft();
+  if(open)openComposer()}
+function pptxChipText(){if(pptxPageOn)return tMsg("viewer.pptx.chipPage");
+  if(!pptxSel.length)return"";
+  const names=pptxSel.map(pptxElName).join("、");
+  return tMsg("viewer.pptx.chip",{count:pptxSel.length,names:clip(names,120)})}
+function updatePptxChip(){const c=$("pptxChip");if(!c)return;
+  const text=pptxChipText();c.classList.toggle("on",!!text);
+  c.innerHTML=text?`${escH(text)}<button title="${escH(tMsg("viewer.pptx.chipOff"))}" aria-label="${escH(tMsg("viewer.pptx.chipOff"))}">×</button>`:"";
+  const b=c.querySelector("button");if(b)b.onclick=()=>{pptxSel=[];pptxPageOn=false;pptxTargetChanged()}}
+// 页缩略图选整页：目标就是这张幻灯片（kind page），不经元素覆盖层
+function pptxPickPage(k){if(docxBlocked()||pptxBlocked()){docxBlocked()?docxBlockToast():pptxBlockToast();return}
+  if(k!==i)go(k);
+  pptxSel=[];pptxPageOn=true;pptxTargetChanged(true);toast(tMsg("viewer.pptx.pagePicked"))}
+// 浏览器选区 → 文本定位：段内码点偏移 + 选区覆盖的样式边界（run 边界）；跨段落选区不写定位
+function pptxParaOf(node){const el=node&&(node.nodeType===1?node:node.parentElement);
+  return el&&el.closest?el.closest("[data-pptx-p]"):null}
+function pptxOffset(para,node,off){let text="";const rg=document.createRange();rg.selectNodeContents(para);rg.setEnd(node,off);
+  const w=document.createTreeWalker(para,4);
+  for(let t=w.nextNode();t;t=w.nextNode()){if(t===node){text+=t.data.slice(0,off);break}
+    try{if(rg.comparePoint(t,t.length)>0)break}catch(_){break}
+    text+=t.data}
+  return cpLen(text)}
+function pptxQuoteAnchor(text){
+  const s=sr.getSelection?sr.getSelection():null;
+  if(s&&s.rangeCount&&!s.isCollapsed){
+    const r=s.getRangeAt(0),para=pptxParaOf(r.startContainer);
+    const endPara=pptxParaOf(r.endContainer);
+    if(para&&endPara&&endPara.dataset.pptxP===para.dataset.pptxP){
+      const host=para.closest(".pptx-text"),slide=pptxSlide();
+      const el=slide&&(slide.elements||[]).find(x=>x.key===host.dataset.key);
+      if(el){const start=pptxOffset(para,r.startContainer,r.startOffset),end=pptxOffset(endPara,r.endContainer,r.endOffset);
+        if(end>=start){const runs=[];
+          para.querySelectorAll("span[data-pptx-rs]").forEach(sp=>{
+            const rs=+sp.dataset.pptxRs,re=+sp.dataset.pptxRe;
+            if(rs<end&&re>start)runs.push({start:rs,end:re})});
+          return pptxAnchor("text","selection",{elements:[pptxTargetOf(el)],
+            text:{para:+para.dataset.pptxP,paraDigest:para.dataset.pptxD,start,end,
+                  quote:clip(s.toString(),300),runs}})}}}}
+  return pptxFromText(text)}
+// 改动已有批注的标注（重新标注、拖动、去掉）：幻灯片定位跟着换；引用文本的定位更精确，不动
+function pptxPatch(id,mk){if(!PPTX)return{};const x=notes.find(n=>n.id===id);
+  if(!x||x.page!==P[i].n||(x.pptx&&(x.pptx.v!==1||x.pptx.kind==="text")))return{};
+  const a=mk?(mk.region?pptxAnchor("region","region",{region:{x:mk.region.x/100,y:mk.region.y/100,w:mk.region.w/100,h:mk.region.h/100}})
+    :mk.pin?pptxAnchor("point","point",{point:{x:mk.pin.x/100,y:mk.pin.y/100}}):null):null;
+  return{pptx:a}}
+// 人工确认归属或挪页：以这次决定为准，读得懂的幻灯片定位不再保留（与 notes_store.update 同一条规则）
+const pptxDrop=x=>x&&x.pptx&&x.pptx.v===1?{pptx:null}:{};
 
 // ---------- 存储：本地服务优先，退回浏览器 ----------
 // 每次改动先记进「待补传」队列再发送（页面中途关闭也不丢），发送时带审阅标识，服务端认错就拒绝写入。
@@ -1135,7 +1314,7 @@ function migrateLegacyQueue(){const old=LS.get(K.legacyPending,null);if(!Array.i
 const failed={get(){if(queueSnap)return queueSnap.f;const v=LS.get(K.failed,[]);return Array.isArray(v)?v:[]},
   push(op,why){queueSnap=null;const v=failed.get();v.push({op,why,at:nowIso()});LS.set(K.failed,v)},clear(){queueSnap=null;LS.del(K.failed)}};
 async function mutate(op){
-  if(docxBlocked()){docxBlockToast();return}   // 旧服务会丢掉 DOCX 定位：不写入、不进队列
+  if(docxBlocked()||pptxBlocked()){docxBlocked()?docxBlockToast():pptxBlockToast();return}   // 旧服务会丢掉 DOCX / PPT 定位：不写入、不进队列
   op.opId=newId();
   if(FILE){const cur=LS.get(K.notes,[]);notes=Array.isArray(cur)?cur:[];   // 先读最新再改：多个标签页不互相覆盖
     const res=applyLocal(op);mirror();refreshList();return res}
@@ -1155,7 +1334,13 @@ function onRejected(op,e){   // 服务明确不接受（4xx）：不重试；返
     return ()=>toast(e.status===404||e.status===405?tMsg("viewer.hand.toast.legacy"):tMsg("viewer.hand.toast.failed",{message:e.message}),6000)}
   if(op.kind==="add"&&!editOf(op.note)&&op.note.page===P[i].n&&!$("ntext").value.trim()){   // 把内容放回输入框
     $("ntext").value=op.note.text;quote=op.note.quote||"";quoteFrom=op.note.quoteFrom||"";pendingPin=op.note.pin||null;pendingRegion=op.note.region||null;styleOn=!!op.note.style;quotePair=op.note.pair||null;
-    quoteDocx=quote&&op.note.docx?{text:quote,page:op.note.page,a:op.note.docx}:null;showQuote();updateStyleChip();drawPins()}
+    quoteDocx=quote&&op.note.docx?{text:quote,page:op.note.page,a:op.note.docx}:null;
+    quotePptx=quote&&op.note.pptx&&op.note.pptx.kind==="text"?{text:quote,page:op.note.page,a:op.note.pptx}:null;
+    const pa=op.note.pptx;
+    if(pa&&pa.kind==="page")pptxPageOn=true;
+    else if(pa&&pa.kind==="elements"){const slide=pptxSlide();
+      pptxSel=(pa.elements||[]).map(t=>slide&&(slide.elements||[]).find(e=>e.key===t.key)).filter(Boolean)}
+    showQuote();updateStyleChip();updatePptxChip();pptxPaintSelection();drawPins()}
   return ()=>toast(tMsg("viewer.recovery.rejected",{reason:e.message}),6000)}
 const fails={};let flushing=null;
 function flush(){if(FILE)return Promise.resolve();
@@ -1399,6 +1584,7 @@ function noteHtml(x){
    +(x.orphan?`<div class="anchor" style="color:var(--ae-warning)">${escH(tMsg("viewer.orphanWarning"))}</div>`:"")
    +(ed?`<div class="anchor">${tMsg("viewer.moveTo")} <select id="epage">${P.map(q=>`<option value="${q.n}"${q.n===(editBuf["pg:"+x.id]??x.page)?" selected":""}>${escH(tMsg("viewer.page",{page:q.n}))}</option>`).join("")}</select></div>`:"")
    +(!ed&&x.anchor?`<div class="anchor">${tMsg("viewer.anchorLabel")}${escH(clip(x.anchor,140))}</div>`:"")
+   +(!ed&&x.pptx&&x.pptx.v===1?`<div class="anchor">${escH(pptxLocText(x.pptx))}</div>`:"")
    +(()=>{if(ed)return"";const al=done?[]:alwaysFor(x).filter((a,k,arr)=>!sk.includes(a.name)&&arr.findIndex(b=>b.name===a.name)===k);
       return sk.length||al.length?`<div class="skills">${al.map(a=>`<span class="skill al" title="${escH(tMsg("viewer.skill.alwaysChipTitle",{scope:alwaysLabel(a.scope)}))}">${escH(tMsg("viewer.skill.alwaysChip",{name:a.name}))}</span>`).join("")}${sk.map(n=>`<span class="skill" title="${escH(tMsg("viewer.skill.noteTitle"))}">⚙ ${escH(n)}</span>`).join("")}</div>`:""})()
    +(x.pair&&x.pair.text?`<div class="pair">${escH(tMsg("viewer.pairLine",{side:targetLabel(x.pair.side),match:tMsg(x.pair.match==="exact"?"viewer.pairSame":"viewer.pairSimilar"),text:clip(x.pair.text,120)}))}</div>`:"")
@@ -1425,11 +1611,14 @@ function renderPageTree(){
   const html=P.map((p,k)=>{
     const section=secOf(p.n),q=statsOf(p.n),o=$("jump").options[k];
     const group=section&&section!==previous?'<h2 class="page-group">'+escH(section[0])+'</h2>':"";previous=section;
-    return group+`<button class="page-node" data-page-index="${k}" ${k===i?'aria-current="page"':''} title="${escH(o.textContent+' · '+unH(p.title))}"><span class="page-number">${p.n}</span><span class="page-title">${escH(unH(p.title))}</span>${q.o?`<span class="badge" title="${escH(tMsg("viewer.count.open",{open:q.o,total:q.n}))}">${q.o}</span>`:""}${q.f?`<span class="badge fl" title="${escH(tMsg("viewer.count.inFlight"))}">${q.f}</span>`:""}${q.d?`<span class="badge dr" title="${escH(tMsg("viewer.count.draft"))}">${q.d}</span>`:""}</button>`;
+    const pick=PPTX?`<button class="page-pick" data-pick="${k}" title="${escH(tMsg("viewer.pptx.pickPage"))}" aria-label="${escH(tMsg("viewer.pptx.pickPage",{page:p.n}))}">▣</button>`:"";
+    return group+`<div class="page-item"><button class="page-node" data-page-index="${k}" ${k===i?'aria-current="page"':''} title="${escH(o.textContent+' · '+unH(p.title))}"><span class="page-number">${p.n}</span><span class="page-title">${escH(unH(p.title))}</span>${q.o?`<span class="badge" title="${escH(tMsg("viewer.count.open",{open:q.o,total:q.n}))}">${q.o}</span>`:""}${q.f?`<span class="badge fl" title="${escH(tMsg("viewer.count.inFlight"))}">${q.f}</span>`:""}${q.d?`<span class="badge dr" title="${escH(tMsg("viewer.count.draft"))}">${q.d}</span>`:""}</button>${pick}</div>`;
   }).join("");
   if(html!==pageTreeHtml){$("pageTree").innerHTML=html;pageTreeHtml=html}
 }
-$("pageTree").onclick=e=>{const b=e.target.closest("[data-page-index]");if(b)go(+b.dataset.pageIndex)};
+$("pageTree").onclick=e=>{const pick=e.target.closest("[data-pick]");
+  if(pick){e.preventDefault();e.stopPropagation();if(PPTX)pptxPickPage(+pick.dataset.pick);return}
+  const b=e.target.closest("[data-page-index]");if(b)go(+b.dataset.pageIndex)};
 
 // 「批注」按钮：红 = 还没交给 Agent 的未处理，蓝 = 处理中（已交给 Agent），琥珀 = 已初改·待复核
 function counts(list){let o=0,f=0,d=0;list.forEach(x=>{if(isDraft(x))d++;else if(inFlight(x))f++;else if(!isDone(x))o++});return{o,f,d}}
@@ -1450,7 +1639,7 @@ function updateCounts(){const c=allStats,b=$("ncount");
 function markBtnLabel(){const b=$("pinBtn"),rn=markMode&&remarkId?notes.find(n=>n.id===remarkId):null;
   const label=b.querySelector("[data-msg]");
   if(label)label.textContent=markMode?(rn?tMsg("viewer.markRehint",{title:clip(noteSummary(rn),12)}):tMsg("viewer.markHint")):tMsg("viewer.markPin")}
-function setMarkMode(on){if(on&&docxBlocked()){docxBlockToast();return}
+function setMarkMode(on){if(on&&(docxBlocked()||pptxBlocked())){docxBlocked()?docxBlockToast():pptxBlockToast();return}
   markMode=on;stage.classList.toggle("markmode",on);const b=$("pinBtn");b.classList.toggle("on",on);
   markBtnLabel();
   if(on)toast(remarkId?tMsg("viewer.markRemarkToast"):tMsg("viewer.markToast"),3000);
@@ -1482,14 +1671,18 @@ function clearSelection(){try{getSelection().removeAllRanges();if(sr.getSelectio
 document.addEventListener("mousedown",e=>{if(!$("selbar").contains(e.target)&&!$("repbox").contains(e.target))hideSelbar();
   if(!$("pinpop").contains(e.target))closePinPop();
   if(!$("stylemenu").contains(e.target)&&e.target.id!=="styleBtn"&&!e.target.closest("#styleBtn"))closeStyleMenu()});
+document.addEventListener("mousedown",e=>{pptxDown=e.button===0?{x:e.clientX,y:e.clientY}:null});   // PPT 元素点击：区分单击与拖动/拖选
 document.addEventListener("mouseup",e=>{
   if($("selbar").contains(e.target)||$("repbox").contains(e.target)||markMode)return;
-  const got=selectedText(e);if(!got)return;
-  if(docxBlocked()){docxBlockToast();return}
+  const got=selectedText(e);
+  if(!got){if(PPTX)pptxClickSelect(e);return}
+  if(docxBlocked()||pptxBlocked()){docxBlocked()?docxBlockToast():pptxBlockToast();return}
   setQuote(got.text,got.from);
   sel={text:got.text.replace(/\s+/g," "),from:got.from,x:e.clientX,y:e.clientY};
-  if(got.from==="报告"){sel.docxRo=docxReadonly(got.text);sel.docx=docxQuoteAnchor(got.text)}
+  if(got.from==="报告"){sel.docxRo=docxReadonly(got.text);sel.docx=docxQuoteAnchor(got.text);
+    if(PPTX){sel.pptx=pptxQuoteAnchor(got.text);sel.pptxRo=sel.pptx?sel.pptx.elements[0].ro||[]:null}}
   quoteDocx=sel.docx?{text:quote,page:P[i].n,a:sel.docx}:null;
+  quotePptx=sel.pptx?{text:quote,page:P[i].n,a:sel.pptx}:null;
   sel.pair=findCounterpart(sel.text,sel.from);
   const pr=$("pairRow");pr.classList.toggle("on",!!sel.pair);
   if(sel.pair)$("pairOn").checked=true;   // 默认同时改：专注一侧时最容易忘的就是另一侧
@@ -1513,17 +1706,23 @@ function syncPair(){const on=!!(sel&&sel.pair&&$("pairOn").checked);quotePair=on
 function updatePairText(){const pair=sel&&sel.pair;
   $("pairText").textContent=pair?tMsg(pair.match==="exact"?"viewer.pairPrompt.same":"viewer.pairPrompt.similar",{side:targetLabel(pair.side),text:clip(pair.text,46)+(Array.from(pair.text).length>46?"…":"")}):tMsg("viewer.pairLabel")}
 $("pairOn").addEventListener("change",syncPair);
-function addEdit(op,to){if(!sel)return;const p=P[i],ro=sel.docxRo||"",docxReport=!!DOCX&&sel.from==="报告",location=sel.docx;
+function addEdit(op,to){if(!sel)return;const p=P[i],ro=sel.docxRo||"",docxReport=!!DOCX&&sel.from==="报告",pptxReport=!!PPTX&&sel.from==="报告",location=sel.docx,
+    pptxRo=(sel.pptx&&sel.pptx.elements&&sel.pptx.elements[0]&&sel.pptx.elements[0].ro)||[];
   const edit=op==="delete"?{op,from:sel.text}:{op,from:sel.text,to};
   const both=!!(sel.pair&&$("pairOn").checked);
   const note={id:newId(),page:p.n,key:p.stable?p.key:undefined,title:unH(p.title),target:both?"报告和讲稿":sel.from,text:op==="delete"?DEL_TEXT:REP_PREFIX+to,
     quote:sel.text,quoteFrom:sel.from,pin:null,edit,status:"open",at:nowIso()};
   if(both)note.pair={side:sel.pair.side,text:sel.pair.text,match:sel.pair.match};
   if(sel.docx)note.docx=sel.docx;
+  if(sel.pptx)note.pptx=sel.pptx;
   hideSelbar();clearSelection();quote="";quotePair=null;showQuote();sel=null;
   mutate({kind:"add",note});
-  if(docxReport)toast(tMsg(op==="delete"?"viewer.deleteRecorded":"viewer.replaceRecorded")+" "+(ro?tMsg("viewer.docx.readonlyEdit",{items:docxKinds(ro)}):tMsg(!location||location.endPara?"viewer.docx.unlocatedEdit":"viewer.docx.manualEdit")),7000);
-  else toast(tMsg(op==="delete"?"viewer.deleteRecorded":"viewer.replaceRecorded"))}
+  const done=tMsg(op==="delete"?"viewer.deleteRecorded":"viewer.replaceRecorded");
+  if(docxReport)toast(done+" "+(ro?tMsg("viewer.docx.readonlyEdit",{items:docxKinds(ro)}):tMsg(!location||location.endPara?"viewer.docx.unlocatedEdit":"viewer.docx.manualEdit")),7000);
+  else if(pptxReport)toast(done+" "+(pptxRo.length
+    ?tMsg("viewer.pptx.readonlyEdit",{items:pptxRo.map(k=>tMsg("viewer.pptx.ro."+k)).join(uiLocale==="en"?", ":"、")})
+    :tMsg("viewer.pptx.manualEdit")),7000);
+  else toast(done)}
 function selAction(a){if(!sel)return;
   if(a==="delete")addEdit("delete");
   else if(a==="replace"){const r=$("repbox"),t=$("repText");$("selbar").classList.remove("on");r.classList.add("on");place(r,sel.x,sel.y);
@@ -1545,7 +1744,7 @@ function endRemark(){if(remarkId)setMarkMode(false)}   // 离开「重新标注�
 function placeMark(mk,rid){
   if(rid){if(!notes.some(n=>n.id===rid)){toast(tMsg("viewer.noteDeleted"),3000);return}
     if(oldGuard())return;
-    stashEdit();mutate({kind:"patch",id:rid,body:{pin:mk.pin||null,region:mk.region||null,anchor:markAnchor(mk),...docxPatch(rid,mk)}});
+    stashEdit();mutate({kind:"patch",id:rid,body:{pin:mk.pin||null,region:mk.region||null,anchor:markAnchor(mk),...docxPatch(rid,mk),...pptxPatch(rid,mk)}});
     if(editingId===rid)refreshList(true);else drawPins();   // 编辑中的卡片按钮（重新标注 / 去掉标注）跟着变
     toast(tMsg(mk.region?"viewer.regionAdded":"viewer.pinAdded"));return}
   pendingPin=mk.pin||null;pendingRegion=mk.region||null;
@@ -1563,7 +1762,15 @@ function addNote(){let text=$("ntext").value.trim();
   if(anc)note.anchor=anc;
   if(DOCX){const fromQuote=quote&&quoteFrom==="报告"&&quoteDocx&&quoteDocx.text===quote&&quoteDocx.page===p.n?quoteDocx.a:null;
     const dx=fromQuote||docxMarkAnchor(pendingRegion?{region:pendingRegion}:pendingPin?{pin:pendingPin}:null);if(dx)note.docx=dx}
-  quoteDocx=null;styleOn=false;pendingRegion=null;updateStyleChip();
+  if(PPTX){   // 幻灯片定位：引用文本 > 整页/元素选择 > 点/区域标注；都没有定位就不写字段
+    const fromQuote=quote&&quoteFrom==="报告"&&quotePptx&&quotePptx.text===quote&&quotePptx.page===p.n?quotePptx.a:null;
+    let px=fromQuote;
+    if(!px&&pptxPageOn)px=pptxAnchor("page","thumb");
+    else if(!px&&pptxSel.length)px=pptxAnchor("elements","click",{elements:pptxSel.map(pptxTargetOf)});
+    else if(!px&&pendingRegion)px=pptxAnchor("region","region",{region:{x:pendingRegion.x/100,y:pendingRegion.y/100,w:pendingRegion.w/100,h:pendingRegion.h/100}});
+    else if(!px&&pendingPin)px=pptxAnchor("point","point",{point:{x:pendingPin.x/100,y:pendingPin.y/100}});
+    if(px)note.pptx=px}
+  quoteDocx=null;quotePptx=null;pptxSel=[];pptxPageOn=false;updatePptxChip();styleOn=false;pendingRegion=null;updateStyleChip();
   if(quote&&quotePair)note.pair={side:quotePair.side,text:quotePair.text,match:quotePair.match};
   const sk=parseSkills($("nskills").value);if(sk.length)note.skills=sk;$("nskills").value="";
   quote="";quotePair=null;pendingPin=null;$("ntext").value="";autoGrow();showQuote();delete drafts[p.n];SS.set(K.drafts,drafts);mutate({kind:"add",note});if(focusMode)closeComposer();toast(tMsg("viewer.added"))}
@@ -1585,9 +1792,9 @@ $("bottomPanel").addEventListener("click",e=>{const b=e.target.closest("[data-ac
       if(et&&!t&&!qe){toast(tMsg("viewer.emptyNote"));return}delete editBuf[id];delete editBuf["sk:"+id];delete editBuf["pg:"+id];editingId=null;
       const body=qe&&qe.op==="delete"?{skills}:qe?{edit:{...qe,to:t},text:REP_PREFIX+t,skills}:{text:t,skills};
       const np=+(($("epage")||{}).value||x.page),pg=P.find(q=>q.n===np);
-      if(pg&&(np!==x.page||x.orphan))Object.assign(body,{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false,...docxDrop(x)});   // 挪到别的页（或确认原页）
+      if(pg&&(np!==x.page||x.orphan))Object.assign(body,{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false,...docxDrop(x),...pptxDrop(x)});   // 挪到别的页（或确认原页）
       mutate({kind:"patch",id,body});if(body.page&&body.page!==P[i].n)toast(tMsg("viewer.movedPage",{page:body.page}));break}
-    case "unpin":stashEdit();mutate({kind:"patch",id,body:{pin:null,region:null,...docxPatch(id,null)}});drawPins();refreshList(true);break;
+    case "unpin":stashEdit();mutate({kind:"patch",id,body:{pin:null,region:null,...docxPatch(id,null),...pptxPatch(id,null)}});drawPins();refreshList(true);break;
     case "resolve":mutate({kind:"patch",id,body:{status:"resolved"}});break;
     case "reopen":mutate({kind:"patch",id,body:{status:"open"}});break;
     case "hide":hideDone=!hideDone;LS.set(K.hide,hideDone);refreshList(true);break}});
@@ -1625,7 +1832,7 @@ $("pinpop").addEventListener("click",e=>{const b=e.target.closest("[data-pp]");i
   else if(a==="unregion"){pendingRegion=null;updateStyleChip();drawPins();saveDraft()}
   else if(a==="edit"){if(focusMode)toggleFocus(false);if(!drawerOpen("panel"))setDrawer("panel",true);endRemark();stashEdit();editingId=id;refreshList(true);flashCard(id);($("etext")||$("eskills")).focus()}
   else if(a==="resolve"||a==="reopen")mutate({kind:"patch",id,body:{status:a==="resolve"?"resolved":"open"}});
-  else if(a==="unpin"){mutate({kind:"patch",id,body:{pin:null,region:null,...docxPatch(id,null)}});drawPins()}
+  else if(a==="unpin"){mutate({kind:"patch",id,body:{pin:null,region:null,...docxPatch(id,null),...pptxPatch(id,null)}});drawPins()}
   else if(a==="del"){if(confirm(tMsg("viewer.confirmDelete")))mutate({kind:"del",id})}});
 function pct(e){const r=stage.getBoundingClientRect();return{x:Math.max(0,Math.min(100,(e.clientX-r.left)/r.width*100)),y:Math.max(0,Math.min(100,(e.clientY-r.top)/r.height*100))}}
 stage.addEventListener("mousedown",e=>{const pin=e.target.closest&&e.target.closest(".ae-pin,.ae-region");if(!pin||markMode||e.button!==0)return;
@@ -1661,8 +1868,8 @@ addEventListener("mouseup",e=>{if(!drag)return;e.stopPropagation();   // 不让�
   const d=drag;drag=null;d.pin.classList.remove("drag");
   if(d.moved&&d.pos){
     if(d.isReg&&d.id&&oldGuard()){drawPins();return}
-    if(d.isReg){if(d.id){mutate({kind:"patch",id:d.id,body:{region:d.pos,anchor:regionAnchor(d.pos),...docxPatch(d.id,{region:d.pos})}});drawPins();toast(tMsg(d.rz?"viewer.regionResized":"viewer.regionMoved"))}else{pendingRegion=d.pos;saveDraft()}}
-    else if(d.id){mutate({kind:"patch",id:d.id,body:{pin:d.pos,anchor:pointAnchor(d.pos),...docxPatch(d.id,{pin:d.pos})}});drawPins();toast(tMsg("viewer.pinMoved"))}else{pendingPin=d.pos;saveDraft()}}
+    if(d.isReg){if(d.id){mutate({kind:"patch",id:d.id,body:{region:d.pos,anchor:regionAnchor(d.pos),...docxPatch(d.id,{region:d.pos}),...pptxPatch(d.id,{region:d.pos})}});drawPins();toast(tMsg(d.rz?"viewer.regionResized":"viewer.regionMoved"))}else{pendingRegion=d.pos;saveDraft()}}
+    else if(d.id){mutate({kind:"patch",id:d.id,body:{pin:d.pos,anchor:pointAnchor(d.pos),...docxPatch(d.id,{pin:d.pos}),...pptxPatch(d.id,{pin:d.pos})}});drawPins();toast(tMsg("viewer.pinMoved"))}else{pendingPin=d.pos;saveDraft()}}
   else openPinPop(d.id,d.pin)},true);
 stage.addEventListener("mouseover",e=>{const pin=e.target.closest&&e.target.closest(".ae-pin,.ae-region");
   $("nlist").querySelectorAll(".note.hl").forEach(c=>c.classList.remove("hl"));
@@ -1689,10 +1896,21 @@ function updateStyleChip(){const c=$("styleChip"),area=$("ntext");
 function describe(el){const tag=el.tagName.toLowerCase(),cls=String(el.getAttribute("class")||"").trim().split(/\s+/)[0];
   const t=clip(String(el.innerText||el.textContent||"").replace(/\s+/g," ").trim(),40);return `${tag}${cls?"."+cls:""}${t?`「${t}」`:""}`}
 function stageRect(el){const s=stage.getBoundingClientRect(),r=el.getBoundingClientRect();return{x:(r.left-s.left)/s.width*100,y:(r.top-s.top)/s.height*100,w:r.width/s.width*100,h:r.height/s.height*100}}
-function pointAnchor(pt){const s=stage.getBoundingClientRect(),cx=s.left+s.width*pt.x/100,cy=s.top+s.height*pt.y/100;
+function pointAnchor(pt){if(PPTX){const slide=pptxSlide();   // PPT：位置线索直接说命中的元素，DOM 描述对渲染图没有意义
+    if(slide){const hit=pptxHit(slide,pt.x/100,pt.y/100);
+      return hit?`${tMsg("viewer.pptx.anchorEl",{name:pptxElName(hit),kind:tMsg("viewer.pptx.kind."+hit.kind)})}`:tMsg("viewer.pptx.anchorBlank",{page:P[i].n})}}
+  const s=stage.getBoundingClientRect(),cx=s.left+s.width*pt.x/100,cy=s.top+s.height*pt.y/100;
   const els=(sr.elementsFromPoint?sr.elementsFromPoint(cx,cy):[]).filter(e=>stage.contains(e)&&e!==stage&&!e.closest(".ae-pin,.ae-region")&&!e.matches("section.page"));
   return els.length?describe(els[0]):""}
-function regionAnchor(rg){const sec=stage.querySelector("section.page");if(!sec||!rg)return"";const picked=[];
+function regionAnchor(rg){if(PPTX){const slide=pptxSlide();
+    if(slide){const names=[];
+      (slide.elements||[]).forEach(el=>{const g=el.geo;
+        if(!g||!(el.cap||{}).select||g.width<=0||g.height<=0)return;
+        const ix=Math.max(0,Math.min(g.x+g.width,rg.x/100+rg.w/100)-Math.max(g.x,rg.x/100)),
+              iy=Math.max(0,Math.min(g.y+g.height,rg.y/100+rg.h/100)-Math.max(g.y,rg.y/100));
+        if(ix*iy>=.6*g.width*g.height)names.push(pptxElName(el))});
+      if(names.length)return tMsg("viewer.pptx.anchorEls",{names:clip(names.join("、"),140)})}}
+  const sec=stage.querySelector("section.page");if(!sec||!rg)return"";const picked=[];
   sec.querySelectorAll("*").forEach(el=>{if(picked.some(p=>p.contains(el)))return;const r=stageRect(el);if(r.w<=0||r.h<=0)return;
     const ix=Math.max(0,Math.min(r.x+r.w,rg.x+rg.w)-Math.max(r.x,rg.x)),iy=Math.max(0,Math.min(r.y+r.h,rg.y+rg.h)-Math.max(r.y,rg.y));
     if(ix*iy>=.6*r.w*r.h)picked.push(el)});
@@ -2266,7 +2484,7 @@ function parseImport(text){const s=String(text||"").trim();if(!s)return[];
   if(!items.length&&!marked)throw new Error(tMsg("export.badFormat"));   // 没标记又不是旧中文格式
   return items}
 async function runImport(items,label){
-  if(docxBlocked()){docxBlockToast();return}
+  if(docxBlocked()||pptxBlocked()){docxBlocked()?docxBlockToast():pptxBlockToast();return}
   items=items.filter(x=>x&&+x.page>0&&String(x.text||"").trim()).map(cleanItem);   // 先定好 id，离线补传后与服务端一致
   if(!items.length){toast(tMsg("import.empty"));return}
   const r=await mutate({kind:"import",notes:items})||{};
@@ -2319,15 +2537,21 @@ document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{if
 // ---------- 翻页（每页的草稿、引用、标点各自保留） ----------
 function saveDraft(){const n=P[i].n,t=$("ntext").value;
   const skv=$("nskills").value;
-  if(t.trim()||quote||pendingPin||pendingRegion||skv.trim()||styleOn)drafts[n]={text:t,target:$("ntarget").value,quote,quoteFrom,pin:pendingPin,pair:quotePair,skills:skv,style:styleOn,region:pendingRegion,docx:quote&&quoteDocx&&quoteDocx.text===quote&&quoteDocx.page===n?quoteDocx:null};else delete drafts[n];
+  if(t.trim()||quote||pendingPin||pendingRegion||skv.trim()||styleOn||pptxSel.length||pptxPageOn)drafts[n]={text:t,target:$("ntarget").value,quote,quoteFrom,pin:pendingPin,pair:quotePair,skills:skv,style:styleOn,region:pendingRegion,docx:quote&&quoteDocx&&quoteDocx.text===quote&&quoteDocx.page===n?quoteDocx:null,
+    pptx:{page:pptxPageOn,keys:pptxSel.map(e=>e.key),quote:quote&&quotePptx&&quotePptx.text===quote&&quotePptx.page===n?quotePptx:null}};else delete drafts[n];
   SS.set(K.drafts,drafts)}
 function loadDraft(){const d=drafts[P[i].n]||{};$("ntext").value=d.text||"";$("ntarget").value=d.target||"报告";
-  quote=d.quote||"";quoteFrom=d.quoteFrom||"";pendingPin=d.pin||null;quotePair=d.pair||null;quoteDocx=d.docx||null;$("nskills").value=d.skills||"";styleOn=!!d.style;pendingRegion=d.region||null;updateStyleChip();showQuote();autoGrow()}
+  quote=d.quote||"";quoteFrom=d.quoteFrom||"";pendingPin=d.pin||null;quotePair=d.pair||null;quoteDocx=d.docx||null;$("nskills").value=d.skills||"";styleOn=!!d.style;pendingRegion=d.region||null;updateStyleChip();showQuote();autoGrow();
+  const dp=d.pptx||{},slide=pptxSlide();   // PPT 目标跟随草稿：元素按键回查当前模型，模型里没有的不再保留
+  pptxPageOn=!!dp.page;
+  pptxSel=(dp.keys||[]).map(k=>slide&&(slide.elements||[]).find(e=>e.key===k)).filter(Boolean);
+  quotePptx=dp.quote||null;updatePptxChip();pptxPaintSelection()}
 function updatePageStat(){const p=P[i];
   $("stat").textContent=tMsg("viewer.pageStat",{page:p.n,total:P[N-1].n})+(total?` · ${tMsg("viewer.timeStat",{at:mmss(cum[i]),total:mmss(total)})}`:"")}
 function render(){
   const p=P[i], s=secOf(p.n);
   stage.innerHTML=SECT[i]; fit();
+  if(PPTX)pptxBuildLayer();
   if(DOCX){$("slide").scrollTop=0;renderDocxPage()}
   $("jump").value=i;
   updatePageStat();

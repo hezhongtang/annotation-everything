@@ -234,9 +234,13 @@ SCENARIOS: list[Scenario] = [
     Scenario(
         id="pptx-review",
         title="PPTX 直接审阅：幻灯片按原始尺寸方向与页序显示、渲染与未核验横幅、"
-              "整页批注、点标注与框选区域在 PPT 页可用；服务模式批注落盘，"
+              "元素覆盖层点选单元素与 ⌘/Ctrl 多选（有序目标、只读元素限制提示）、"
+              "页缩略图选整页、普通文本选择（逻辑段落 + 字符偏移 + run 样式边界）、"
+              "整页批注、点标注与框选区域在 PPT 页可用且坐标按画布归一化；"
+              "保存被拒后重试保留完整 pptx 定位，file:// 暂存与服务模式落盘都不丢字段，"
               "旧版服务不认 pptx 特性时阻断内容写入，保留停止服务入口",
-        fixture="fixtures/pptx/make_pptx.py 现场合成的 2 页样例（横版）；真实 build_viewer 构建，"
+        fixture="fixtures/pptx/make_pptx.py 现场合成的 2 页样例（横版；元素页含表格、图片、"
+                "组合形状、媒体与未知结构，文本页含跨 run 样式与重复文字）；真实 build_viewer 构建，"
                 "渲染走伪造 soffice/pdftoppm 工具脚本注入的受控合成 PDF/PNG（不依赖本机 LibreOffice）；"
                 "仅拦截合成服务的 pptx 能力声明",
         isolation="独立临时审阅目录、端口与浏览器上下文；先 file:// 模式（批注只进本地存储），"

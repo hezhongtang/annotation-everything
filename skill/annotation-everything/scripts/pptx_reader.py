@@ -12,6 +12,8 @@ import zlib
 
 FORMAT_VERSION = 1
 CAPABILITY_VERSION = 1
+# 批注 pptx 定位字段的版本（note["pptx"]["v"]）：幻灯片定位以这里的元素身份模型为事实源
+ANCHOR_VERSION = 1
 P = "http://schemas.openxmlformats.org/presentationml/2006/main"
 A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
