@@ -261,6 +261,11 @@ class PptxOpsTests(unittest.TestCase):
                                            "aspect": "geometry", "unit": "normalized",
                                            "set": {"x": 0.1, "y": 0.1}}])
 
+    def test_region_coordinates_never_serve_as_target_identity(self):
+        self.build()
+        # 写回目标只认元素身份；把区域坐标当成多对象共同定位的操作按未知键拒绝
+        self.assert_refused("ops", [self.op(geometry(x=0.2, y=0.2), region={"x": 0.1, "y": 0.1})])
+
     def test_same_element_claimed_by_two_ops_refuses_the_whole_group(self):
         self.build()
         one = self.op(geometry(x=0.2, y=0.2), id="one")
