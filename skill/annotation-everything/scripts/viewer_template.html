@@ -158,7 +158,7 @@ body.focus-mode.focus-composer #nform{display:flex}
 body.focus-mode #focusHint{position:fixed;display:flex;align-items:center;justify-content:center;gap:var(--ae-space-lg);left:0;right:0;bottom:12px;color:var(--ae-on-dark);font-size:var(--ae-small)}
 body.focus-mode.focus-composer #focusHint{display:none}
 #focusExit{font:inherit;background:transparent;color:inherit;border:1px solid var(--ae-mut);border-radius:var(--ae-radius);padding:var(--ae-gap-4) var(--ae-gap-10)}
-@media(max-width:1100px){
+@media(max-width:1200px){
   #modeSwitch{position:static;transform:none}
   header:has(#modeSwitch:not([hidden])) h1{max-width:none}
 }
@@ -239,8 +239,16 @@ body.focus-mode.focus-composer #focusHint{display:none}
 #batchSum{flex:1 0 100%;order:1}
 #currentTaskToggleRow{font-size:var(--ae-text);display:flex;align-items:center;gap:var(--ae-gap-6);cursor:pointer}
 #currentTaskToggleRow[hidden]{display:none}
-#stopServiceBtn{color:var(--ae-warning);border-color:var(--ae-danger-line)}
-#stopServiceInfo{margin:0;padding:var(--ae-gap-10) var(--ae-gap-20);background:var(--ae-qa);font-size:var(--ae-compact);color:var(--ae-mut)}
+#stopReviewBtn{color:var(--ae-warning);border-color:var(--ae-danger-line)}
+.stop-panel{flex:none;max-height:32vh;overflow:auto;padding:var(--ae-gap-10) var(--ae-gap-20);background:var(--ae-warm);border-bottom:1px solid var(--ae-warm-line);font-size:var(--ae-text);line-height:1.5}
+.stop-panel[hidden],body.focus-mode>.stop-panel,body.overview-mode>.stop-panel{display:none}
+.stop-panel[data-state="stopped"]{background:var(--ae-success-bg);border-color:var(--ae-line)}
+.stop-panel[data-state="incomplete"]{background:var(--ae-danger-bg);border-color:var(--ae-danger-line)}
+#stopInfo{margin:var(--ae-gap-3) 0;color:var(--ae-mut)}
+#stopDetails summary{cursor:pointer}
+#stopComponents{margin:var(--ae-gap-4) 0;padding-inline-start:var(--ae-gap-20)}
+#stopCommand{font-size:var(--ae-compact);overflow-wrap:anywhere;user-select:all}
+#stopCopy{font:inherit;border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-3) var(--ae-gap-7);background:var(--ae-panel)}
 .batch{border:1px solid var(--ae-line);border-left:4px solid var(--ae-mut);border-radius:var(--ae-radius-md);padding:var(--ae-space) var(--ae-gap-12);margin:0 0 var(--ae-gap-10)}
 .batch.done{border-left-color:var(--ae-green)}.batch.claimed{border-left-color:var(--ae-accent)}.batch.pending{border-left-color:var(--ae-amber)}
 .batch .bh{display:flex;gap:var(--ae-gap-10);align-items:baseline;flex-wrap:wrap}.batch .bh b{color:var(--ae-navy)}
@@ -432,8 +440,15 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
     <button id="sideToggle" class="icon-button" data-layout-toggle="side" data-title="viewer.layout.side" data-aria="viewer.layout.side" data-p-key="[" aria-controls="sidebar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></button><button id="scriptToggle" class="icon-button" data-layout-toggle="script" data-title="viewer.layout.script" data-aria="viewer.layout.script" data-p-key="]" aria-controls="scriptPane"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button><button id="panelToggle" class="icon-button" data-layout-toggle="panel" data-title="viewer.layout.panel" data-aria="viewer.layout.panel" data-p-key="&#92;" aria-controls="panelBody"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/></svg></button>
   </div>
   <button id="focusBtn" data-title="viewer.layout.focusTitle" data-p-key="F"><span data-msg="viewer.layout.focus"></span></button>
+  <button id="stopReviewBtn" type="button" aria-controls="stopPanel">停止审阅</button>
   <div id="primaryAction"><button id="handBtn" data-title="viewer.hand.btnTitle"><span data-msg="viewer.hand.btn">交给 Agent 改稿</span></button></div>
 </header>
+<section id="stopPanel" class="stop-panel" aria-labelledby="stopState" hidden>
+  <strong id="stopState" role="status" aria-live="polite"></strong>
+  <p id="stopInfo"></p>
+  <details id="stopDetails" hidden><summary data-msg="viewer.stop.components"></summary><ul id="stopComponents"></ul></details>
+  <div id="stopRecovery" hidden><code id="stopCommand"></code> <button id="stopCopy" type="button" data-msg="viewer.stop.copyCommand"></button></div>
+</section>
 <div id="reloadBanner" class="reload-banner" role="status" aria-live="polite" aria-atomic="true" hidden>
   <span class="reload-copy"><strong data-msg="viewer.reloadNotice"></strong><span data-msg="viewer.reloadHint"></span></span>
   <span class="reload-actions"><button id="reloadBtn" type="button" data-title="viewer.reloadTitle" data-msg="viewer.reload"></button><button id="reloadClose" type="button" data-title="viewer.reloadClose" data-aria="viewer.reloadClose">×</button></span>
@@ -552,17 +567,16 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
 <div class="modal" id="always"><div class="dlg"><div class="bar"><h2 data-msg="viewer.always.dialogTitle">常驻技能</h2><button class="primary" id="alwaysSave"><span data-msg="viewer.always.save">保存</span><kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close><span data-msg="viewer.cancel">取消</span><kbd>Esc</kbd></button></div>
 <div class="pad"><p class="hint" data-msg="viewer.always.dialogHint">这份审阅里，范围内的每一条批注都会要求 Agent 处理前先调用这些技能——适合需要长期约束、不会主动想到用技能的 Agent。只对当前这份审阅生效；单条批注的「技能」照常可加。名称框按 Enter 添加下一项（有高亮候选时先选择），按 Ctrl/Cmd+Enter 保存。</p>
 <div id="alwaysRows"></div><p><button id="alwaysAdd" data-title="viewer.always.addTitle"><span data-msg="viewer.always.add">添加一个</span><kbd>↵</kbd></button></p></div></div></div>
-<div class="modal" id="batches"><div class="dlg"><div class="bar"><h2 data-msg="viewer.batch.title">处理记录</h2><span class="hint" id="batchSum"></span><label id="currentTaskToggleRow" hidden><input type="checkbox" role="switch" id="currentTaskToggle" aria-controls="batchCurrentDetail"><span data-msg="viewer.batch.currentToggle">当前任务详情</span></label><button id="stopServiceBtn" aria-describedby="stopServiceInfo" data-msg="viewer.batch.stop">停止审阅</button><button data-close><span data-msg="viewer.batch.close">关闭</span><kbd>Esc</kbd></button></div>
-<p id="stopServiceInfo" data-msg="viewer.batch.stopHint">先保存待补传改动，再停止本审阅的等待者、后台工作和本地服务；材料、批注、提交记录、接收方绑定和专属端口保留。</p>
+<div class="modal" id="batches"><div class="dlg"><div class="bar"><h2 data-msg="viewer.batch.title">处理记录</h2><span class="hint" id="batchSum"></span><label id="currentTaskToggleRow" hidden><input type="checkbox" role="switch" id="currentTaskToggle" aria-controls="batchCurrentDetail"><span data-msg="viewer.batch.currentToggle">当前任务详情</span></label><button data-close><span data-msg="viewer.batch.close">关闭</span><kbd>Esc</kbd></button></div>
 <div class="pad" id="batchList"></div></div></div>
 <div id="toast"></div>
-<div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys" data-ae-lang="zh-CN">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要；先改后审的批次分初改、复核两段，可在这里请求复核或直接定稿），P 在报告上标注，C 写批注，K 填技能，G 常驻技能（每条批注按范围都让 Agent 先调用）；Esc 关闭或取消。<br>布局：[ 切换侧栏，] 切换讲稿，\ 切换底部面板；F 全屏专注。全屏里 C 打开浮动输入框，⌘/Ctrl + ↵ 添加；P 标注，S 风格优化，← → 翻页，选中文字后 D / R / C 照常可用；Esc 先关闭浮层，再退出全屏。输入框聚焦时不触发布局快捷键。<br>
+<div class="modal" id="help"><div class="dlg"><div class="pad">__INTRO__<div class="keys" data-ae-lang="zh-CN">快捷键：← → 翻页，Home / End 首末页；L 跳到上次批注的页；H 说明，N 全部批注，A 交给 Agent，J 处理记录（每次交给 Agent 算一批：解决了几条、处理摘要；先改后审的批次分初改、复核两段，可在这里请求复核或直接定稿），P 在报告上标注，C 写批注，K 填技能，G 常驻技能（每条批注按范围都让 Agent 先调用）；Esc 关闭或取消。<br>通过顶部按钮停止审阅，按 Esc 取消确认。<br>布局：[ 切换侧栏，] 切换讲稿，\ 切换底部面板；F 全屏专注。全屏里 C 打开浮动输入框，⌘/Ctrl + ↵ 添加；P 标注，S 风格优化，← → 翻页，选中文字后 D / R / C 照常可用；Esc 先关闭浮层，再退出全屏。输入框聚焦时不触发布局快捷键。<br>
 在报告上标注（P）：进入标注后，在报告上<b>单击</b>放一个点，或<b>按住拖动</b>框选一块区域（像截图那样），再写意见。点和框都可以直接拖动，框拖右下角可调大小；点一下弹出这条批注的编辑、标为已处理、去掉标注、删除；鼠标移到批注列表上，对应标注会高亮。已有的批注在「编辑」里可以补标注或重新标注。<br>
 风格优化（S）：选范围——1 整页、2 标注处（用刚放的点或框；还没有就进入标注）；可写想要的方向（不写也行），再添加批注。<br>
 「技能」：某条批注需要特定技能（skill）才能改好时填上，多个用逗号分隔；Agent 处理这条前会先调用它们。候选来自技能目录和用过的技能，会参考当前审阅和批注给出建议；可查看全部，或按名称、说明搜索，用上下方向键和回车选择；搜不到时会说明没有匹配的技能。技能名称和说明始终用目录里的原文，不随界面语言改写。<br>
 选中报告或讲稿里的文字后：D 删除这段（再按一次 D 或 ↵ 确认，防止打字时误触），R 改为…（在弹出的框里改好按 ↵），C 以它为引用写批注；另一侧同一页有相同或相近的句子时会提示「同时改」（默认勾选，B 切换）。写批注时 ⌘/Ctrl + ↵ 添加。<br>
 批注保存：用本地服务打开（地址是 http://127.0.0.1:端口）时，每次改动自动写入审阅目录的 notes.json，Agent 可直接读取；直接双击打开 HTML 时批注只存在本浏览器，用「复制全部」或「下载」交给 Agent。</div>
-<div class="keys" data-ae-lang="en" hidden>Shortcuts: ← → change page, Home / End for the first and last page; L jumps to the page of the last annotation; H help, N all annotations, A hand to the agent, J processing history (each hand-off counts as one batch: how many it solved and its summary; a draft-then-review batch splits into a draft stage and a review stage, and you can ask for the review or finalize it here), P annotate on the report, C write an annotation, K fill in skills, G standing skills (every annotation asks the agent to call them first, by scope); Esc closes or cancels.<br>Layout: [ toggles the sidebar, ] toggles speaker notes, and \ toggles the bottom panel; F enters focus mode. In focus mode, C opens the floating composer and ⌘/Ctrl + ↵ adds an annotation; P marks the report, S opens Style, ← → changes page, and D / R / C work on selected text. Esc closes the current overlay before leaving focus mode. Layout shortcuts do not run while typing.<br>
+<div class="keys" data-ae-lang="en" hidden>Shortcuts: ← → change page, Home / End for the first and last page; L jumps to the page of the last annotation; H help, N all annotations, A hand to the agent, J processing history (each hand-off counts as one batch: how many it solved and its summary; a draft-then-review batch splits into a draft stage and a review stage, and you can ask for the review or finalize it here), P annotate on the report, C write an annotation, K fill in skills, G standing skills (every annotation asks the agent to call them first, by scope); Esc closes or cancels.<br>Use the top button to stop the review. Press Esc to cancel the confirmation.<br>Layout: [ toggles the sidebar, ] toggles speaker notes, and \ toggles the bottom panel; F enters focus mode. In focus mode, C opens the floating composer and ⌘/Ctrl + ↵ adds an annotation; P marks the report, S opens Style, ← → changes page, and D / R / C work on selected text. Esc closes the current overlay before leaving focus mode. Layout shortcuts do not run while typing.<br>
 Annotate on the report (P): once you are in marking mode, <b>click</b> on the report to drop a pin, or <b>hold and drag</b> to select an area (like a screenshot), then write your request. Pins and areas can both be dragged, and an area is resized from its bottom-right corner; click one to edit that annotation, mark it resolved, remove the mark or delete it; hover an annotation in the panel and its mark lights up. An existing annotation can be given a mark, or re-annotated, from Edit.<br>
 Style (S): choose a scope — 1 whole page, 2 at the mark (the pin or area you just placed; if there is none, marking mode starts); you can write the direction you want (or leave it empty), then add the annotation.<br>
 "Skills": when an annotation needs a particular skill to be done well, fill it in and separate several with commas; the agent calls them before handling this annotation. Candidates come from the skill catalog and the skills already used, with suggestions based on the current review and its annotations; you can see them all, or search by name or description, and choose with the arrow keys and Enter; when nothing matches it says so. Skill names and descriptions always stay as the catalog has them and are not rewritten for the interface language.<br>
@@ -588,7 +602,7 @@ const SS={get(k,d){try{const v=sessionStorage.getItem(k);return v==null?d:JSON.p
 let i=0;{const s=+LS.get(K.page,0);if(s>0&&s<=N)i=s-1}
 let notes=FILE?LS.get(K.notes,[]):[]; if(!Array.isArray(notes))notes=[];
 let mode=FILE?"file":"offline", rev=null, idx0=null, busy=0, editingId=null, composing=false, listStale=false, hideDone=!!LS.get(K.hide,false);
-let stopServiceSupported=false, stoppingService=false, saveFailures=0;
+let stopServiceSupported=false, saveFailures=0;
 let finalizeAllSupported=false, finalizingAll=false, finalizeAllResult=null, finalizeAllError="";
 let quoteDocx=null;   // 当前引用的 DOCX 段落定位：{text: 引用文字, page: 页码, a: 定位}，引用换了就不再适用
 let markMode=false, pendingPin=null, quote="", quoteFrom="";   // 标注模式；还没添加的新标注（点）
@@ -1119,7 +1133,7 @@ async function mutate(op){
     const res=applyLocal(op);mirror();refreshList();return res}
   const res=applyLocal(op);refreshList();
   pend.push(op);updateMode();
-  if(mode==="server")flush();
+  if(mode==="server"&&(!stopServiceSupported||!stopSnapshot||stopSnapshot.state==="active"))flush();
   else if(op.kind==="handoff")toast(mode==="mismatch"?tMsg("viewer.hand.toast.queuedMismatch"):tMsg("viewer.hand.toast.queuedOffline"),4000);
   return res}
 function onSent(op,r){
@@ -1163,6 +1177,7 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
         successful=false;
         if(e.mismatch){mode="mismatch";problem=()=>toast(e.message,6000);return false}
         if(!e.status){if(mode==="server")problem=()=>toast(tMsg("viewer.offline.stashed"),3500);mode="offline";return false}
+        if(e.code==="review-stopped")return false;  // 等显式重新启动后再补传
         if(e.status>=500){fails[op.opId]=(fails[op.opId]||0)+1;
           if(fails[op.opId]<MAX_FAILS){problem=()=>toast(e.message,4000);return false}
           failed.push(op,e.message);pend.remove(op.opId);   // 同一条连续失败：移到「未能保存」，不再堵住后面的改动
@@ -1186,7 +1201,13 @@ function applyServer(d,quietHand){
   if(!archiveBusy)setCurrentArchive(d.archived);
   const old=!hasFeature(d,"marks");if(old&&!srvOld)toast(tMsg("viewer.mode.oldTitle"),9000);srvOld=old;
   srvNoStages=!hasFeature(d,"stages");
-  srvNoFullCheck=!hasFeature(d,"full-check");stopServiceSupported=hasFeature(d,"stop-review");
+  srvNoFullCheck=!hasFeature(d,"full-check");
+  stopServiceSupported=hasFeature(d,"stop-review")&&hasFeature(d,"stop-review-status");
+  if(stopServiceSupported&&d.stop){
+    rememberReviewStop(d.stop,true);
+    if(stopSnapshot?.state==="stopped")mode="offline";
+    else if(["legacy","offline","mismatch"].includes(stopProblem))stopProblem=""
+  }
   finalizeAllSupported=hasFeature(d,"finalize-all");srvNoDocx=!!DOCX&&!hasFeature(d,"docx");updateMode();renderDocxBlock();
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
   if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
@@ -1200,7 +1221,7 @@ async function poll(){
   migrateLegacyQueue();
   let d;busy++;
   try{d=await getNotes()}
-  catch(e){if(e.mismatch)mode="mismatch";else if(!e.status){if(mode==="server")toast(tMsg("viewer.offline.newStashed"),3000);mode="offline"}
+  catch(e){if(e.mismatch)mode="mismatch";else if(!e.status){if(mode==="server"&&(!stopServiceSupported||!stopSnapshot||stopSnapshot.state==="active"))toast(tMsg("viewer.offline.newStashed"),3000);mode="offline"}
     updateMode();return}
   finally{busy--}
   const was=mode;mode="server";
@@ -1212,7 +1233,7 @@ async function poll(){
   try{
     if(was==="offline"&&rev!=null)toast(tMsg("viewer.offline.reconnected"));
     applyServer(d,quiet);
-    if(pend.get().length){   // 有暂存要补传：补传期间别的标签页可能改队列，之后按最新的读
+    if(mode==="server"&&pend.get().length&&(!d.stop||d.stop.state==="active")){   // 暂存只在审阅重新接收工作后补传
       const before=pend.get().length;queueSnap=null;
       upgradeNotice.successful=await flush();
       if(upgradeNotice.successful&&mode==="server"&&!pend.get().length&&before)toast(tMsg("viewer.offline.retried"));return}
@@ -1230,7 +1251,7 @@ async function whoIsHere(){   // 读 /api/health：任何本服务都会应答�
   finally{clearTimeout(t);probedAt=Date.now()}
   renderSrvBar()}
 function renderSrvBar(){const bar=$("srvBar");
-  if(FILE||!firstPolled||(mode!=="mismatch"&&mode!=="offline")||barClosedFor===mode){bar.classList.remove("on");return}
+  if(FILE||!firstPolled||(mode==="offline"&&stopSnapshot?.state==="stopped")||(mode!=="mismatch"&&mode!=="offline")||barClosedFor===mode){bar.classList.remove("on");return}
   const port=location.port||"80",q=pend.get().length,o=occupant;
   const head=mode==="mismatch"
     ?(o&&o.rid&&o.rid!==RID?tMsg("viewer.mode.barOtherReview",{port,name:o.name||o.rid.slice(0,8)}):tMsg("viewer.mode.barOtherProgram",{port}))
@@ -1255,10 +1276,13 @@ function updateMode(){const m=$("mode"),q=pend.get().length,f=failed.get().lengt
   else if(mode==="mismatch"){m.textContent=tMsg("viewer.mode.mismatch",{extra});m.title=tMsg("viewer.mode.mismatchTitle")}
   else{m.textContent=tMsg("viewer.mode.file");m.title=tMsg("viewer.mode.fileTitle")}
   const fb=$("dlFailed");if(fb)fb.style.display=f?"":"none";
-  syncSrvBar();renderServiceControls();renderReceiver();analysisRouteLabels();renderFinalizeAll()}
+  syncSrvBar();renderReviewStop();renderReceiver();analysisRouteLabels();renderFinalizeAll()}
 addEventListener("storage",e=>{
   invalidateExternal();   // 别的标签页改了这些键：外部审阅暂存的解析结果作废
   if(FILE&&e.key===K.notes){const v=LS.get(K.notes,[]);notes=Array.isArray(v)?v:[];refreshList()}   // 别的标签页改了：跟上
+  else if(!FILE&&e.key===REVIEW_STOP_KEY){
+    if(rememberReviewStop(LS.get(REVIEW_STOP_KEY,null)))updateMode()
+  }
   else if(e.key===K.pending||e.key===K.failed)updateMode();
   else if(e.key&&/^ae\.[0-9a-f]{16}\.(queue|pending|failed)$/.test(e.key))updateStray()});
 
@@ -1983,43 +2007,163 @@ async function finalizeAll(){
 $("finalizeAllBtn").onclick=finalizeAll;
 $("handBtn").onclick=()=>analysisShown()?submitAnalysis():openHand();$("handState").onclick=()=>hand&&hand.latest?openBatches():openHand();
 $("handHist").onclick=()=>{$("hand").classList.remove("on");openBatches()};
-// 处理记录：每次「交给 Agent」算一批——提交、接收、收尾，这批解决了哪些批注，处理摘要
-const fmtIso=v=>fmtTime(Date.parse(v||"")||0);
-function renderServiceControls(){
-  $("stopServiceBtn").disabled=stoppingService||FILE;
-  $("stopServiceBtn").textContent=tMsg(stoppingService?"viewer.batch.stopping":"viewer.batch.stop");
-  $("stopServiceInfo").textContent=tMsg(mode==="server"&&!stopServiceSupported?"viewer.batch.stopLegacy":"viewer.batch.stopHint")}
-async function stopLocalService(){
-  if(stoppingService)return;
-  if(mode!=="server"){toast(tMsg("viewer.batch.stopOffline"),6000);return}
-  if(!stopServiceSupported){toast(tMsg("viewer.batch.stopLegacy"),8000);return}
-  if(!confirm(tMsg("viewer.batch.stopConfirm")))return;
-  stoppingService=true;busy++;renderServiceControls();
+// ---------- 停止审阅 ----------
+const REVIEW_STOP_KEY="ae."+RID+".stop";
+const REVIEW_STOP_PATH="/api/server/stop";
+const STOP_STATUS_CMD=`python3 ~/.claude/skills/annotation-everything/scripts/serve.py stop ${RID} --status`;
+const STOP_COMPONENTS={
+  gate:"viewer.stop.component.gate",save:"viewer.stop.component.save",waiters:"viewer.stop.component.waiters",
+  hooks:"viewer.stop.component.hooks",agent:"viewer.stop.component.agent",http:"viewer.stop.component.http"
+};
+const STOP_STATES={stopping:"viewer.stop.stopping",stopped:"viewer.stop.stopped",incomplete:"viewer.stop.incomplete"};
+const STOP_COMPONENT_STATES={
+  active:"viewer.stop.component.active",pending:"viewer.stop.component.pending",stopping:"viewer.stop.component.stopping",
+  stopped:"viewer.stop.component.stopped",incomplete:"viewer.stop.component.incomplete"
+};
+let stopSnapshot=null,stopPhase="",stopProblem="",stopWatchId=null,stopReadPending=false,stopRenderKey="",lastStopState="";
+function rememberReviewStop(value,share=false){
+  if(!value||value.reviewId!==RID||!Number.isSafeInteger(value.revision)||value.revision<0
+      ||!Number.isSafeInteger(value.attempts)||value.attempts<0
+      ||(value.state!=="active"&&!Object.hasOwn(STOP_STATES,value.state))
+      ||(value.state==="active"?value.stopId!==null:typeof value.stopId!=="string")
+      ||!Object.keys(STOP_COMPONENTS).every(name=>Object.hasOwn(STOP_COMPONENT_STATES,value.components?.[name]?.state)
+        &&(value.state!=="stopped"||value.components[name].state==="stopped")))return false;
+  if(stopSnapshot&&stopSnapshot.revision>=value.revision){
+    if(stopSnapshot.state==="stopping")watchReviewStop(stopSnapshot.stopId);
+    return true
+  }
+  const reopened=value.state==="active"&&stopSnapshot?.state!=="active";
+  stopSnapshot=value;
+  if(value.state==="stopped"&&mode!=="mismatch"){mode="offline";firstPolled=true}
+  if(reopened||value.state==="stopped"||value.state==="incomplete")stopProblem="";
+  if(share){
+    const cached=LS.get(REVIEW_STOP_KEY,null);
+    if(!cached||cached.revision<value.revision)LS.set(REVIEW_STOP_KEY,value)
+  }
+  if(value.state==="stopping")watchReviewStop(value.stopId);
+  return true
+}
+async function watchReviewStop(stopId){
+  if(!stopId||stopWatchId===stopId)return;
+  stopWatchId=stopId;
+  try{
+    const d=await api("GET",REVIEW_STOP_PATH+"?wait="+encodeURIComponent(stopId),undefined,14000);
+    if(d.reviewId===RID&&rememberReviewStop(d.stop,true))updateMode()
+  }catch(e){/* A lost connection does not confirm that the stop finished. */}
+  finally{if(stopWatchId===stopId)stopWatchId=null}
+}
+async function queryReviewStop(){
+  if(stopReadPending)return;
+  stopReadPending=true;
+  try{
+    const d=await api("GET",REVIEW_STOP_PATH);
+    if(d.reviewId===RID&&rememberReviewStop(d.stop,true))updateMode()
+  }catch(e){}
+  finally{stopReadPending=false}
+}
+function reviewStopReason(code){
+  const key="viewer.stop.reason."+code;
+  return Object.hasOwn(CATALOGS[uiLocale]||{},key)?tMsg(key):tMsg("viewer.stop.reason.unknown",{code})
+}
+function renderReviewStop(){
+  const btn=$("stopReviewBtn"),panel=$("stopPanel");
+  const legacy=mode==="server"&&firstPolled&&!stopServiceSupported;
+  const snapshot=legacy?null:stopSnapshot;
+  const state=snapshot?.state||"active",retry=state==="incomplete"||(state==="stopping"&&stopProblem==="unconfirmed");
+  const notice=stopPhase||stopProblem||(legacy?"legacy":"");
+  const key=JSON.stringify([uiLocale,mode,state,notice,snapshot?.components]);
+  if(key===stopRenderKey)return;
+  stopRenderKey=key;
+  btn.hidden=FILE;
+  btn.disabled=!!stopPhase||state==="stopped"||(state==="stopping"&&!retry);
+  btn.textContent=tMsg(retry?"viewer.stop.retry":"viewer.stop.action");
+  panel.hidden=FILE||(!notice&&state==="active");
+  panel.dataset.state=state;
+  const stateKey=STOP_STATES[state]||(notice==="saving"?"viewer.stop.saving":
+    notice==="requesting"?"viewer.stop.requesting":notice==="legacy"?"viewer.stop.upgrade":
+    notice==="unconfirmed"?"viewer.stop.unconfirmed":"viewer.stop.notStarted");
+  $("stopState").textContent=panel.hidden?"":tMsg(stateKey);
+  let info="",command="";
+  if(state==="stopped"){info=tMsg("viewer.stop.restart");command=SERVE_CMD}
+  else if(notice==="legacy")info=tMsg("viewer.stop.legacy");
+  else if(notice==="mismatch")info=tMsg("viewer.stop.mismatch");
+  else if(notice==="offline")info=tMsg("viewer.stop.offline");
+  else if(notice==="unsaved")info=tMsg("viewer.stop.unsaved");
+  else if(notice==="gated")info=tMsg("viewer.stop.gated");
+  else if(notice==="unconfirmed"||(mode!=="server"&&state!=="active")){
+    info=tMsg("viewer.stop.checkStatus");command=STOP_STATUS_CMD
+  }else if(state==="incomplete")info=tMsg("viewer.stop.incompleteHint");
+  $("stopInfo").textContent=info;$("stopInfo").hidden=!info;
+  $("stopCommand").textContent=command;$("stopRecovery").hidden=!command;
+  const details=$("stopDetails");
+  details.hidden=state==="active";
+  if(state!==lastStopState){details.open=state==="incomplete";lastStopState=state}
+  $("stopComponents").innerHTML=details.hidden?"":Object.entries(STOP_COMPONENTS).map(([name,label])=>{
+    const item=snapshot.components[name],reasons=[item.error,...(Array.isArray(item.causes)?item.causes:[])]
+      .filter(code=>typeof code==="string").map(reviewStopReason);
+    return "<li>"+escH(tMsg("viewer.stop.component.line",{name:tMsg(label),state:tMsg(STOP_COMPONENT_STATES[item.state])}))
+      +(reasons.length?" · "+escH(reasons.join(" · ")):"")+"</li>"
+  }).join("")
+}
+function stopPreflightProblem(problem){
+  stopProblem=problem;renderReviewStop();
+  return false
+}
+async function prepareCurrentReviewStop(){
   const rejectedBefore=saveFailures,sharedRejectedBefore=LS.get(K.rejected,null);
   try{
-    await flush();
-    const d=await getNotes();
-    if(!hasFeature(d,"stop-review")){stopServiceSupported=false;toast(tMsg("viewer.batch.stopLegacy"),8000);return}
-    // 所有等待都结束后再核对保存结果，避免身份预检期间其他标签页保存失败仍继续停止。
-    if(pend.get().length||failed.get().length||saveFailures!==rejectedBefore
-        ||LS.get(K.rejected,null)!==sharedRejectedBefore||mode!=="server"){
-      toast(tMsg("viewer.batch.stopUnsaved"),8000);return}
-    const timeout=10;
-    const r=await api("POST","/api/server/stop",{timeout},(timeout+2)*1000);
-    if(r.reviewId!==RID)throw new Error(tMsg("viewer.error.format"));
-    if(typeof r.state!=="string"){const e=new Error(tMsg("viewer.error.format"));e.code="no-api";e.status=200;throw e}
-    if(r.state==="incomplete"||r.stopping!==true){
-      const reason=Object.values((r.stop||{}).incompleteReasons||{}).filter(Boolean).join(", ")||"incomplete";
-      const e=new Error(tMsg("viewer.batch.stopIncomplete",{message:reason}));e.code="stop-incomplete";e.status=200;throw e}
-    if(!["stopping","stopped"].includes(r.state))throw new Error(tMsg("viewer.error.format"));
-    mode="offline";occupant=null;barClosedFor="";firstPolled=true;
-    toast(tMsg("viewer.batch.stopSent"),8000);
+    const before=await getNotes();
+    stopServiceSupported=hasFeature(before,"stop-review")&&hasFeature(before,"stop-review-status");
+    if(!stopServiceSupported)return stopPreflightProblem("legacy");
+    if(!rememberReviewStop(before.stop,true))return stopPreflightProblem("unconfirmed");
+    saveDraft();stashEdit();stashAnalysisInputs();migrateLegacyQueue();
+    const saved=before.stop.state==="active"?await flush():flushing?await flushing:true;
+    const after=await getNotes();
+    stopServiceSupported=hasFeature(after,"stop-review")&&hasFeature(after,"stop-review-status");
+    if(!stopServiceSupported)return stopPreflightProblem("legacy");
+    if(!rememberReviewStop(after.stop,true))return stopPreflightProblem("unconfirmed");
+    // 核对最后一次身份读取期间发生的其他标签页补传与拒绝。
+    if(!saved||pend.get().length||failed.get().length||saveFailures!==rejectedBefore
+        ||LS.get(K.rejected,null)!==sharedRejectedBefore){
+      return stopPreflightProblem(after.stop.state==="active"?"unsaved":"gated")
+    }
+    return true
   }catch(e){
     if(e.mismatch)mode="mismatch";else if(!e.status)mode="offline";
-    toast(e.code==="no-api"?tMsg("viewer.batch.stopLegacy"):
-      e.code==="stop-incomplete"?e.message:tMsg("viewer.batch.stopFailed",{message:e.message}),8000);
-  }finally{stoppingService=false;busy--;updateMode()}}
-$("stopServiceBtn").onclick=stopLocalService;
+    return stopPreflightProblem(e.mismatch?"mismatch":!e.status?"offline":"unconfirmed")
+  }
+}
+async function requestCurrentReviewStop(){
+  if(stopPhase||FILE)return;
+  if(mode!=="server"){stopPreflightProblem(mode==="mismatch"?"mismatch":"offline");return}
+  if(!stopServiceSupported){stopPreflightProblem("legacy");return}
+  if(stopSnapshot?.state==="stopped"||(stopSnapshot?.state==="stopping"&&stopProblem!=="unconfirmed"))return;
+  const expected=stopSnapshot;
+  if(!confirm(tMsg("viewer.stop.confirm",{name:NAME,command:SERVE_CMD})))return;
+  stopPhase="saving";stopProblem="";busy++;updateMode();
+  let progressTimer=null;
+  try{
+    if(!await prepareCurrentReviewStop())return;
+    if(expected&&(expected.stopId!==stopSnapshot.stopId||expected.attempts!==stopSnapshot.attempts))return;
+    const expectedStop={stopId:stopSnapshot.stopId,attempts:stopSnapshot.attempts};
+    stopPhase="requesting";updateMode();
+    progressTimer=setInterval(queryReviewStop,400);
+    const r=await api("POST",REVIEW_STOP_PATH,{timeout:10,waitForExit:true,expectedStop},13000);
+    if(r.reviewId!==RID||r.state!==r.stop?.state||!rememberReviewStop(r.stop,true)){
+      stopProblem="unconfirmed";return
+    }
+    if(r.state==="stopping")watchReviewStop(r.stop.stopId)
+  }catch(e){
+    if(e.mismatch)mode="mismatch";else if(!e.status&&stopSnapshot?.state!=="stopped")mode="offline";
+    if(stopSnapshot?.state!=="stopped")stopProblem=e.mismatch?"mismatch":"unconfirmed";
+    queryReviewStop()
+  }finally{clearInterval(progressTimer);stopPhase="";busy--;updateMode()}
+}
+$("stopReviewBtn").onclick=requestCurrentReviewStop;
+$("stopCopy").onclick=async()=>{await copyText($("stopCommand").textContent);toast(tMsg("viewer.mode.barCopied"),3000)};
+
+// 处理记录：每次「交给 Agent」算一批——提交、接收、收尾，这批解决了哪些批注，处理摘要
+const fmtIso=v=>fmtTime(Date.parse(v||"")||0);
 $("currentTaskToggle").onchange=()=>{currentTaskOpen=$("currentTaskToggle").checked;
   const detail=$("batchCurrentDetail");if(detail)detail.hidden=!currentTaskOpen};
 $("batches").addEventListener("keydown",e=>{if(e.key==="Escape"&&!e.isComposing){
@@ -2030,7 +2174,6 @@ async function loadBatches(){   // 全量处理记录只在弹窗打开时取（
   else hand={...(hand||{}),history:hand&&hand.latest?[hand.latest]:[]};   // 旧版服务没有历史：至少显示最近一批
   renderBatches()}
 function renderBatches(){
-  renderServiceControls();
   if(!hand||!Array.isArray(hand.history)){$("batchList").innerHTML=`<p class="empty">${tMsg("viewer.batch.loading")}</p>`;$("batchSum").textContent="";$("currentTaskToggleRow").hidden=true;return}
   const H=hand.history,byId=new Map(notes.map(x=>[x.id,x])),who=w=>w==="claude"?"Claude":w==="page"?tMsg("viewer.batch.whoPage"):w;
   const seq=H.length?+(hand.latest||H[0]).seq:null;
@@ -2084,6 +2227,7 @@ $("batchList").addEventListener("click",e=>{
 $("handMsg").addEventListener("keydown",e=>{if(!e.isComposing&&e.key==="Enter"&&(e.metaKey||e.ctrlKey))$("doHand").click();else if(e.key==="Escape")$("hand").classList.remove("on")});
 $("doHand").onclick=()=>{const message=$("handMsg").value.trim(),sub=$("hSub").checked,fullCheck=$("hFullCheck").checked,
     target=(document.querySelector('input[name="htarget"]:checked')||{}).value==="review"?"review":"final";
+  if(stopSnapshot&&stopSnapshot.state!=="active"){toast(tMsg("viewer.stop.workBlocked"),6000);return}
   if((handDestination&&handDestination.bindingId)!==(receiver&&receiver.bindingId)||receiver&&["error","restart-required"].includes(receiver.state)){
     toast(tMsg("viewer.receiver.changed"),6000);return}
   if(!handMode&&fullCheck&&mode==="server"&&srvNoFullCheck){toast(tMsg("viewer.hand.toast.fullCheckOld"),6000);return}
@@ -2983,11 +3127,12 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE)pol
   LS.del(K.notes);                      // 服务模式不在浏览器里留整份批注副本
   LS.set(K.meta,{title:unH(document.title),name:NAME,ns:NS});   // 只记名称：这个地址以后换给别的审阅时，那边的页面能说出暂存属于谁
   migrateLegacyQueue();
+  rememberReviewStop(LS.get(REVIEW_STOP_KEY,null));
   pend.get().forEach(op=>applyLocal(op)); // 先显示还没补传的改动
   updateMode();render();
   await poll();
   firstPolled=true;updateMode();
-  if(mode==="offline")toast(tMsg("viewer.offline.noServer"),4000);
+  if(mode==="offline"&&(!stopSnapshot||stopSnapshot.state==="active"))toast(tMsg("viewer.offline.noServer"),4000);
   if(mode==="mismatch")toast(tMsg("viewer.mode.mismatchTitle"),9000);
   updateStray();
   setInterval(poll,4000)})();
