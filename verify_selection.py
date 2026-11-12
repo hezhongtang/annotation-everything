@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 14
+STRATEGY_VERSION = 15
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -174,6 +174,20 @@ SELECTION_RULES = (
         scenarios=("docx-review",),
         why="DOCX 渲染器、回写与合成样例：分页、诊断、字节保留、写前闸门及失败恢复由 DOCX 用例覆盖；"
             "浏览器场景钉住原分页显示、限制清单、点/框选标注与只读提示（服务安全自检由 pr 门禁覆盖）",
+    ),
+    SelectionRule(
+        rid="pptx-review",
+        prefixes=("skill/annotation-everything/scripts/pptx_reader.py",
+                  "skill/annotation-everything/scripts/pptx_report.py",
+                  "skill/annotation-everything/scripts/pptx_edit.py",
+                  "fixtures/pptx/"),
+        selectors=("tests/test_pptx_reader.py", "tests/test_pptx_report.py",
+                   "tests/test_pptx_annotations.py", "tests/test_pptx_remap.py",
+                   "tests/test_pptx_edit.py", "tests/test_pptx_ops.py",
+                   "tests/test_core.py", "tests/test_review_page_i18n.py"),
+        scenarios=("pptx-review",),
+        why="PPTX 读取、构建、回写与合成样例：包读取、能力矩阵、渲染诊断、幻灯片定位、重映射与白名单回写由 PPT 用例覆盖；"
+            "浏览器场景钉住直接审阅、元素/文本/区域批注、只读元素、旧服务阻断与改后重建（服务安全自检由 pr 门禁覆盖）",
     ),
     SelectionRule(
         rid="review-page",
