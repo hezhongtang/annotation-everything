@@ -39,6 +39,7 @@ class Desktop:
         self.turns = {}
         self.cancel_mode = "confirm"
         self.cancel_hold = None
+        self.owner_hold = None
         self.rejected_turns = set()
         self.start_hold = None
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -73,6 +74,8 @@ class Desktop:
                     self.requests.append(request)
                     method = request["method"]
                     result = {"clientId": "fixture"} if method == "initialize" else {}
+                    if method == "thread-owner-discovery" and self.owner_hold is not None:
+                        self.owner_hold.wait(3)
                     if method == "thread-follower-start-turn":
                         if self.start_hold is not None:
                             self.start_hold.wait(3)
@@ -99,7 +102,10 @@ class Desktop:
                              "error": "cancel-rejected" if rejected else None,
                              "result": result, "handledByClientId": "owner"}
                     raw = json.dumps(reply).encode()
-                    client.sendall(struct.pack("<I", len(raw)) + raw)
+                    try:
+                        client.sendall(struct.pack("<I", len(raw)) + raw)
+                    except ConnectionError:
+                        break
 
     def close(self):
         self.stopped.set()
@@ -377,6 +383,14 @@ class ReviewStopTests(unittest.TestCase):
             status, _, late_note = self.request(info, method, path, body, rid)
             self.assertEqual((status, late_note.get("code")), (409, "review-stopped"), late_note)
         self.assertEqual(self.request(info, "GET", "/api/notes")[2]["notes"], [note])
+        other_rid = "74" * 8
+        other = self.review("archive-other", other_rid)
+        for archived in (True, False):
+            status, _, result = self.request(info, "POST", "/api/overview/archive",
+                                             {"reviewId": other_rid, "archived": archived}, rid)
+            self.assertEqual((status, result.get("reviewId"), result.get("archived")),
+                             (200, other_rid, archived), result)
+            self.assertEqual((other / ".annotation-archived").exists(), archived)
         _, _, batches = self.request(info, "GET", "/api/handoff")
         self.assertEqual(batches["total"], 1)
         queried = self.cli("serve.py", "stop", rid, "--status")
@@ -440,6 +454,79 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual([item["turnId"] for item in desktop.cancelled], [delivered["turnId"]])
         replaced = self.cli(*command)
         self.assertEqual(replaced.returncode, 0, replaced.stdout + replaced.stderr)
+
+    def test_stop_confirms_the_desktop_turn_of_a_voided_analysis_round(self):
+        desktop = Desktop(self.root / "desktop.sock")
+        self.addCleanup(desktop.close)
+        rid = "75" * 8
+        directory = self.review("voided-turn", rid)
+        self.bind_desktop(directory, desktop)
+        delivered = self.deliver_analysis(directory, "Voided after desktop delivery")
+        aid, _ = analysis_store.find_by_round(directory, delivered["seq"])
+        checkpoint = analysis_store.seal_checkpoint(directory, aid)["checkpoints"][-1]["id"]
+        state = analysis_store.fork_line(directory, aid, checkpoint)
+        self.assertEqual(state["rounds"][0]["status"], "void")
+        self.assertEqual(self.cli("wakeup.py", "unbind", str(directory)).returncode, 2)
+
+        stopped = self.cli("serve.py", "stop", rid)
+        self.assertEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
+        self.assertEqual([item["turnId"] for item in desktop.cancelled], [delivered["turnId"]])
+
+    def test_interrupted_connection_does_not_leave_an_active_turn(self):
+        desktop = Desktop(self.root / "desktop.sock")
+        self.addCleanup(desktop.close)
+        rid = "76" * 8
+        directory = self.review("connecting", rid)
+        self.bind_desktop(directory, desktop)
+        _, seq = analysis_store.start_question(directory, "Interrupted before dispatch", by="fixture")
+        binding = wakeup.load_binding(directory)
+        desktop.owner_hold = threading.Event()
+        delivery = subprocess.Popen([sys.executable, str(SCRIPTS / "wakeup.py"), "deliver", str(directory)],
+                                    env=self.env, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, text=True)
+        self.processes.append(delivery)
+        delivery.stdin.write(json.dumps({"app": "annotation-everything", "reviewId": rid,
+                                         "reviewDir": str(directory), "bindingId": binding["bindingId"],
+                                         "event": "analysis", "seq": seq}))
+        delivery.stdin.close()
+        history = directory / ".agent-deliveries.json"
+        try:
+            self.assertTrue(self.wait_until(history.exists))
+            self.assertEqual(next(iter(json.loads(history.read_text())["items"].values()))["state"], "connecting")
+            delivery.terminate()
+            delivery.wait(timeout=3)
+        finally:
+            desktop.owner_hold.set()
+
+        stopped = self.cli("serve.py", "stop", rid)
+        self.assertEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
+        self.assertEqual(self.cli("wakeup.py", "unbind", str(directory)).returncode, 0)
+        self.assertFalse(desktop.turns)
+
+    def test_stop_timeout_includes_persisting_cancellation_confirmation(self):
+        desktop = Desktop(self.root / "desktop.sock")
+        self.addCleanup(desktop.close)
+        desktop.cancel_hold = threading.Event()
+        rid = "77" * 8
+        directory = self.review("cancel-record", rid)
+        self.bind_desktop(directory, desktop)
+        self.deliver_analysis(directory, "Cancel while an existing worker holds the write lock")
+        stopper = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), "stop", rid, "--timeout", "1"],
+                                   env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.processes.append(stopper)
+        try:
+            self.assertTrue(self.wait_until(lambda: len(desktop.cancelled) == 1))
+            with fsutil.flocked(directory / ".notes.lock", exclusive=True):
+                desktop.cancel_hold.set()
+                stdout, stderr = stopper.communicate(timeout=3)
+                self.assertEqual(stopper.returncode, 1, stdout + stderr)
+                state = json.loads(stdout)
+                self.assertEqual(state["components"]["agent"]["failures"][0]["code"], "agent-record-timeout")
+        finally:
+            desktop.cancel_hold.set()
+        retried = self.cli("serve.py", "stop", rid)
+        self.assertEqual(retried.returncode, 0, retried.stdout + retried.stderr)
+        self.assertEqual(json.loads(retried.stdout)["stopId"], state["stopId"])
 
     def test_explicit_reuse_recovers_a_cancelled_unclaimed_turn_after_partial_stop(self):
         desktop = Desktop(self.root / "desktop-reuse.sock")
@@ -813,6 +900,38 @@ sys.exit(serve.serve(Path(sys.argv[2]), None, False, False))
         self.assertIsNotNone(final)
         self.assertEqual(final.returncode, 0, final.stdout + final.stderr)
         self.assertEqual(json.loads(final.stdout)["state"], "stopped")
+
+    def test_hook_does_not_execute_if_server_exits_before_registering_it(self):
+        rid = "b4" * 8
+        directory = self.review("unregistered-hook", rid)
+        registering, ran = self.root / "registering", self.root / "ran"
+        hook = self.root / "hook.py"
+        hook.write_text("import sys\nfrom pathlib import Path\nPath(sys.argv[1]).touch()\n")
+        program = """
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import serve
+
+def hold_registration(*args):
+    Path(sys.argv[3]).touch()
+    time.sleep(5)
+
+serve.review_stop.hook_started = hold_registration
+sys.exit(serve.serve(Path(sys.argv[2]), None, False, False,
+                     on_handoff=[sys.executable, sys.argv[4], sys.argv[5]]))
+"""
+        info, _ = self.start_server(directory, program=program, args=(registering, hook, ran))
+        process = self.processes[-1]
+        status, _, submitted = self.request(info, "POST", "/api/handoff", {"message": "synthetic hook"}, rid)
+        self.assertEqual(status, 200, submitted)
+        self.assertTrue(self.wait_until(registering.exists), "hook registration was never reached")
+        ran_before_registration = self.wait_until(ran.exists, timeout=.35)
+        process.terminate()
+        process.wait(timeout=5)
+        self.assertFalse(ran_before_registration or self.wait_until(ran.exists, timeout=.2))
+        stopped = self.cli("serve.py", "stop", rid)
+        self.assertEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
 
     def test_zero_timeout_stops_idle_review(self):
         rid = "b1" * 8

@@ -130,9 +130,9 @@ def _require_dir(review_dir: Path) -> None:
 
 
 @contextlib.contextmanager
-def locked(review_dir: Path) -> Iterator[None]:
+def locked(review_dir: Path, *, deadline: float | None = None) -> Iterator[None]:
     _require_dir(review_dir)
-    with fsutil.flocked(review_dir / LOCK_FILE, exclusive=True):
+    with fsutil.flocked(review_dir / LOCK_FILE, exclusive=True, deadline=deadline):
         yield
 
 

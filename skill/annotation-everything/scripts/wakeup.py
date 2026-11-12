@@ -293,8 +293,8 @@ def _key(binding, event, seq):
     return f'{binding["bindingId"]}:{event}:{seq}'
 
 
-def _record(review, key, changes):
-    with store.locked(review):
+def _record(review, key, changes, *, deadline=None):
+    with store.locked(review, deadline=deadline):
         history = _deliveries(review)
         item = history["items"].setdefault(key, {})
         item.update(changes)
@@ -584,7 +584,8 @@ def _active_deliveries(review):
     deliveries = []
     queues = {}
     for key, item in _deliveries(review)["items"].items():
-        if item.get("state") not in ("connecting", "sending", "accepted", "received", "unconfirmed"):
+        # Callers hold the dispatch lock. A leftover connecting record never sent a start-turn.
+        if item.get("state") not in ("sending", "accepted", "received", "unconfirmed"):
             continue
         event, seq = item.get("event"), item.get("seq")
         if event not in DELIVERY_EVENTS:
@@ -594,6 +595,9 @@ def _active_deliveries(review):
             finder = entry.get("items")
             candidates = finder(review) if finder else store.handoff_load(review)["items"]
             active_statuses = {entry["awaiting"], "claimed", "reviewing"}
+            if event == "analysis":
+                # Voiding a submitted round in the analysis log does not stop its desktop turn.
+                active_statuses.add("void")
             queues[event] = {candidate.get("seq") for candidate in candidates if candidate.get("status") in active_statuses}
         if seq in queues[event]:
             deliveries.append({**item, "key": key})
@@ -649,14 +653,14 @@ def cancel_review(review, *, deadline):
             failures.append({"event": item.get("event"), "seq": item.get("seq"), "code": "agent-binding-unavailable"})
             continue
         if not turn_id:
-            code = ("agent-delivery-in-flight" if item.get("state") in ("connecting", "sending")
+            code = ("agent-delivery-in-flight" if item.get("state") == "sending"
                     else "agent-turn-id-unavailable")
             failures.append({"event": item.get("event"), "seq": item.get("seq"), "code": code})
             continue
-        _record(review, key, {"cancelState": "cancelling", "cancelRequestedAt": store.now_iso(),
-                              "cancelReviewId": binding["reviewId"], "cancelBindingId": binding["bindingId"],
-                              "cancelError": None})
         try:
+            _record(review, key, {"cancelState": "cancelling", "cancelRequestedAt": store.now_iso(),
+                                  "cancelReviewId": binding["reviewId"], "cancelBindingId": binding["bindingId"],
+                                  "cancelError": None}, deadline=deadline)
             remaining = max(0.0, deadline - time.monotonic())
             if remaining <= 0:
                 raise TimeoutError("agent-cancel-timeout")
@@ -666,14 +670,20 @@ def cancel_review(review, *, deadline):
             if not _cancel_confirmed(reply, turn_id):
                 raise ValueError("agent-cancel-confirmation-required")
             _record(review, key, {"cancelState": "confirmed", "cancelConfirmedAt": store.now_iso(),
-                                  "cancelError": None})
+                                  "cancelError": None}, deadline=deadline)
             confirmed.append(turn_id)
         except Exception as error:
-            code = ("agent-cancel-rejected" if isinstance(error, Rejected) else
-                    "agent-cancel-timeout" if isinstance(error, (TimeoutError, socket.timeout)) else
-                    str(error) if str(error).startswith("agent-cancel-") else "agent-cancel-unconfirmed")
-            _record(review, key, {"cancelState": "unconfirmed", "cancelError": code,
-                                  "cancelFailedAt": store.now_iso()})
+            if isinstance(error, BlockingIOError):
+                code = "agent-record-timeout"
+            else:
+                code = ("agent-cancel-rejected" if isinstance(error, Rejected) else
+                        "agent-cancel-timeout" if isinstance(error, (TimeoutError, socket.timeout)) else
+                        str(error) if str(error).startswith("agent-cancel-") else "agent-cancel-unconfirmed")
+                try:
+                    _record(review, key, {"cancelState": "unconfirmed", "cancelError": code,
+                                          "cancelFailedAt": store.now_iso()}, deadline=deadline)
+                except BlockingIOError:
+                    code = "agent-record-timeout"
             failures.append({"event": item.get("event"), "seq": item.get("seq"), "code": code})
     if failures or untracked:
         return {"state": "incomplete",

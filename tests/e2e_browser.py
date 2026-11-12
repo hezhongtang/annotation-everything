@@ -2428,7 +2428,7 @@ def current_task_controls_checks(browser, tmp: Path):
         ok(wait_until(lambda: "does not support review-scoped stopping" in page.inner_text("#stopServiceInfo"),
                       page, 8), "停止服务：旧服务显示升级指引")
         page.get_by_role("button", name="Stop review", exact=True).click()
-        ok(wait_toast(page, "run the new serve.py") and not stop_requests() and server.poll() is None,
+        ok(wait_toast(page, "Run the new serve.py") and not stop_requests() and server.poll() is None,
            "停止服务：旧服务不发送不支持的停止请求")
         page.unroute("**/api/notes", legacy_service)
         ok(wait_until(lambda: "does not support review-scoped stopping" not in page.inner_text("#stopServiceInfo"),
@@ -2449,7 +2449,10 @@ def current_task_controls_checks(browser, tmp: Path):
         ok(wait_mode(page, "server"), "停止服务：恢复本审阅连接")
 
         slow_stop = []
-        hold_slow_stop = slow_stop.append
+
+        def hold_slow_stop(route):
+            slow_stop.append(route)
+
         page.route("**/api/server/stop", hold_slow_stop)
         page.once("dialog", lambda dialog: dialog.accept())
         page.get_by_role("button", name="Stop review", exact=True).click()
@@ -2569,6 +2572,9 @@ def current_task_controls_checks(browser, tmp: Path):
         other_tab.unroute("**/api/notes", hold_other_save)
         if not final_read_blocked:
             return
+        # The first batch was claimed to exercise polling. Finish it before expecting a full stop.
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "done", str(d), "--seq", "1"],
+                       check=True, capture_output=True)
         page.bring_to_front()
         saved_before_stop = []
         page.on("request", lambda req: saved_before_stop.append(

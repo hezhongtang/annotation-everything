@@ -75,6 +75,15 @@ VERSION = "0.12.1"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
 FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "stop-review", "resume-review", "receiver-binding", "overview", "analysis", "finalize-all", "docx"]
 
+# Read one byte without buffering the hook's JSON input. EOF before registration exits
+# without running the hook. exec preserves the registered PID and stdin for the command.
+_HOOK_EXEC = """
+import os
+import sys
+if os.read(0, 1) == b"1":
+    os.execvp(sys.argv[1], sys.argv[1:])
+"""
+
 # 界面语言只有进程级一个来源（见 i18n.set_locale）：main() 与 serve() 按共同契约解析后
 # 设置一次，服务与台账等各模块共同遵循；未设置前保持中文（旧调用行为不变）
 
@@ -359,7 +368,9 @@ class ReviewServer(ThreadingHTTPServer):
             else:
                 proc = None
                 try:
-                    proc = subprocess.Popen(list(self.on_handoff), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    payload = b"1" + json.dumps(job["payload"], ensure_ascii=False).encode("utf-8")
+                    command = [sys.executable, "-I", "-S", "-c", _HOOK_EXEC, *self.on_handoff]
+                    proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                                             stderr=subprocess.DEVNULL, cwd=self.hook_cwd, env=job["env"], start_new_session=True)
                     try:
                         review_stop.hook_started(self.review_dir, proc.pid, job["seq"], job["event"])
@@ -368,7 +379,7 @@ class ReviewServer(ThreadingHTTPServer):
                         proc.wait()
                         raise
                     try:
-                        proc.communicate(json.dumps(job["payload"], ensure_ascii=False).encode("utf-8"))
+                        proc.communicate(payload)
                     finally:
                         try:
                             review_stop.hook_finished(self.review_dir, proc.pid)
@@ -536,7 +547,10 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/"):
                 mutating = self.command not in ("GET", "HEAD")
                 self._check_api_origin(mutating=mutating)
-                if mutating and path not in ("/api/server/stop", "/api/server/resume", "/api/overview/start"):
+                # Overview actions address the review named in their body. Archiving changes
+                # an atomic metadata marker and is also available for already stopped reviews.
+                if mutating and path not in ("/api/server/stop", "/api/server/resume",
+                                             "/api/overview/start", "/api/overview/archive"):
                     with self.server.write_request():
                         self._api(path)
                 else:
