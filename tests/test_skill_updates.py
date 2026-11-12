@@ -168,6 +168,15 @@ class SkillUpdateTests(unittest.TestCase):
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
         self.assertTrue((self.copy / "scripts" / "review_overview.py").is_file())
 
+    def test_auto_rejects_a_release_missing_the_stop_runtime(self):
+        self.git("-C", str(self.repo), "rm", "--quiet", f"skill/{SKILL}/scripts/review_stop.py")
+        self.publish("0.10.0")
+        result = self.run_command(self.copy / "scripts" / "update.py", "auto", "--locale", "en")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("do not match", result.stderr)
+        self.assertEqual((self.copy / "release-marker.txt").read_text(), "0.9.0")
+        self.assertTrue((self.copy / "scripts" / "review_stop.py").is_file())
+
     def test_daily_limit_does_not_prevent_manual_update(self):
         first = self.run_command(self.copy / "scripts" / "update.py", "auto")
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)

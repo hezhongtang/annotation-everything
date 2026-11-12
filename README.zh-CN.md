@@ -122,6 +122,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `http://127.0.0.1:<端口>/#overview`（浏览器地址） | 打开审阅总览：切换范围、查看详情、打开或代为启动审阅、归档或取消归档；先启动一份本机服务 |
 | `serve.py list [--json]` | 列出本机全部审阅，包含归档项；人读输出和 JSON 都带归档标记 |
 | `serve.py status 审阅目录或审阅标识` | 查看一份审阅的运行状态 |
+| `serve.py stop 审阅目录或审阅标识 [--timeout 秒]` / `stop 审阅目录或审阅标识 --status` | 按审阅标识协调保存保护、等待者、Agent 轮次与 HTTP 服务停止，或查询持久状态。JSON 状态为 `stopping` / `stopped` / `incomplete`；退出码 0 表示全部停止，1 表示未完全停止，2 表示目标无效或有歧义。`stop-status` 是 `--status` 的别名 |
 | `serve.py forget <短标识>` | 移除确认不再需要的台账记录并释放专属端口；保留审阅目录。总览对失效项提供这条命令，清理仍在命令行执行 |
 | `serve.py check` | 运行服务安全自检 |
 | `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | 绑定接收 harness 与会话、查看身份与状态；Codex 桌面使用事件接收，其他 harness 可用 `--adapter wait`；显式交接用 `bind --replace`，处理中批次先收尾 |
@@ -223,12 +224,12 @@ python3 $S/notes.py wait /tmp/ae-demo
 归档把不再推进的审阅从默认列表里收起，保留批注、提交和专属端口，服务继续运行。点击「展开」或勾选「显示已归档」可取消归档。当前审阅已归档时，两种视图都显示横幅，批注和提交照常可用；归档不取消已经提交的处理要求。`serve.py list` 仍列出全部审阅，并标出已归档项。
 
 <details>
-<summary><b>当前任务与停止本地服务</b></summary>
+<summary><b>当前任务与停止审阅</b></summary>
 <br>
-<p align="center"><img src="docs/assets/batch-controls.zh.png" alt="处理记录中的当前任务详情开关与停止本地服务按钮" width="88%"></p>
+<p align="center"><img src="docs/assets/batch-controls.zh.png" alt="处理记录中的当前任务详情开关与停止审阅按钮" width="88%"></p>
 按 `J` 或点击 Agent 状态打开「处理记录」。「当前任务」是最近一次「交给 Agent 改稿」的批次，详情默认收起；展开后可查看附言、处理要求、阶段和摘要。轮询刷新或切换语言会保留展开状态，新的一批默认收起。
 
-「停止本地服务」会先补传待保存的改动，保存失败则不停止；旧服务会提示升级。停止后，这份审阅的所有标签页转为离线，材料、批注、提交记录和专属端口仍保留，其他审阅与已运行的 Agent 不受影响。页面会给出重新启动服务的命令。面板右上角的「关闭」只收起处理记录。
+「停止审阅」先补传待保存的改动，保存失败则不开始停止；随后阻止新提交和后台工作，保护写入中的改动，退出等待者，按审阅与绑定取消事件轮次并确认，最后关闭 HTTP。拒绝、超时或宿主能力缺口都显示 `incomplete`，不假报成功；服务保持在线供查询和重试。旧停止入口进入同一生命周期，新页面遇到不具备 `stop-review` 的旧服务会提示升级，不回退成只停 HTTP。材料、批注、批次、接收方绑定和专属端口均保留，其他审阅与共享 Agent 会话不受影响。用 `serve.py stop <审阅标识> --status` 查询，用 `serve.py <审阅标识>` 显式重新启动。面板右上角的「关闭」只收起处理记录。
 </details>
 
 <details>
@@ -295,7 +296,7 @@ python3 ~/.claude/skills/annotation-everything/scripts/update.py now    # 立即
 - 更新只替换技能副本，保留指向它的软链接、审阅台账与审阅目录，不修改来源仓库的检出。正式版本的本地来源通常保存在 `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`，若与技能副本重叠则存到副本旁的独立目录；这些文件供后续体检、修复和更新使用，不要在仍使用该副本时删除。首次获得更新功能仍需先用包含此功能的版本运行一次 `ae.py install`。升级已有审阅时，停止旧服务、重建对照页、启动新服务并刷新浏览器。
 - 更新需要 Git、来源仓库的访问权限、本机进程枚举权限，以及文件系统支持原子目录交换（macOS 的 `renamex_np`，或 Linux C 库提供的 `renameat2`）。受限环境无法确认或交换时会提示并保留当前版本；可在具备权限的终端手动运行 `update.py now`。成功切换后，旧副本保留在技能目录根下的 `.ae-update-*` 中，便于找回切换期间的并发改动。
 - 体检逐项给出「通过 / 警告 / 失败」；失败项附修复或排障命令。退出码 0 表示全部通过或只有警告，1 表示有失败项，2 表示命令自身出错（`doctor --json` 输出 `error`）。开发环境类别仅在当前工作目录位于来源仓库内时出现。
-- **界面语言**：`ae.py`、`serve.py`（`serve` / `status` / `list` / `forget` / `check`）、`notes.py`、`check_pptx_fonts.py` 都支持 `--locale auto|zh-CN|en`（写在子命令前后都认）和环境变量 `AE_LOCALE`；生成器的帮助、结果与资源诊断也按显式 `--locale`、`AE_LOCALE`、已保存审阅配置的顺序选语言。优先级是显式参数、`AE_LOCALE`，两者都没有则中文；只有 `auto` 才读 `LC_ALL` / `LC_MESSAGES` / `LANG`。`serve.py serve` 和 `serve.py status` 在目录解析出来后还会回落到那份审阅里保存的 `locale`；`list` / `forget` / `check` 不对应单份审阅，只认前两级。语言选择非法时命令以退出码 2 停下并说明原因，不改动任何状态。帮助、参数说明、缺参、非法值和命令失败都用同一种语言；来源路径、命令、字体名、技能名与系统原始错误保持原文。
+- **界面语言**：`ae.py`、`serve.py`（`serve` / `status` / `stop` / `list` / `forget` / `check`）、`notes.py`、`check_pptx_fonts.py` 都支持 `--locale auto|zh-CN|en`（写在子命令前后都认）和环境变量 `AE_LOCALE`；生成器的帮助、结果与资源诊断也按显式 `--locale`、`AE_LOCALE`、已保存审阅配置的顺序选语言。优先级是显式参数、`AE_LOCALE`，两者都没有则中文；只有 `auto` 才读 `LC_ALL` / `LC_MESSAGES` / `LANG`。`serve.py serve`、`serve.py status` 和 `serve.py stop` 在目录解析出来后还会回落到那份审阅里保存的 `locale`；`list` / `forget` / `check` 不对应单份审阅，只认前两级。语言选择非法时命令以退出码 2 停下并说明原因，不改动任何状态。帮助、参数说明、缺参、非法值和命令失败都用同一种语言；来源路径、命令、字体名、技能名与系统原始错误保持原文。
 - **机器判定与人读文案分开**：`doctor --json` 的 `category`、`level`、`code` 和 `summary` 是旧消费者在读的判定字段，恒为中文、不随语言改值；新增的语言无关判定信息是每项的 `status`（`pass` / `warn` / `fail`）和 `category_id`（`install` / `tools` / `dev` / `runtime`），以及顶层的 `schema`（结构版本）和 `locale`（`message` 用的是哪种语言）。新消费者比较 `status` / `category_id` 即可，不必比较本地化标签；`message`、`fix_command` 里的人读文案按语言变。`serve.py` 的拒绝与错误同理：HTTP 状态和原因代码（`bad-host`、`cross-site`、`bad-origin`、`no-origin`、`bad-content-type`、`chunked`、`bad-length`、`too-large`、`bad-json`、`not-found`、`preflight`、`no-index`、`no-note`、`server-error`、`review-mismatch`、`no-api`）不随语言变，说明按服务启动时定的语言输出；未知错误只说明类型与恢复动作，不回显请求内容。
 - `repair` 里删除台账失效记录（`--forget-stale`）、结束残留服务（`--stop-orphans`）是破坏性操作，要显式加参数；`--dry-run` 只看计划不动手。计划与执行报告都写清楚「本次未执行」，翻译后的提示不弱化后果。
 - `uninstall` 任何情况下都不动审阅目录；`--purge` 才一并删除审阅台账；有 `serve.py` 在运行时会拒绝，`--stop-servers` 先停止再卸。
@@ -440,9 +441,10 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── update.py                  检查正式版本并更新技能副本
 │   ├── content_manifest.py        记录技能副本的文件、目录和链接指纹
 │   ├── viewer_template.html       对照页与审阅总览模板（服务模式和本地文件模式）
-│   ├── serve.py                   本机服务：serve / status / list / forget / check
+│   ├── serve.py                   本机服务：serve / status / stop / list / forget / check
 │   ├── review_overview.py         总览范围、报告摘要与归档标记
-│   ├── wakeup.py                  接收会话绑定；Codex 事件投递、回执与去重
+│   ├── review_stop.py             审阅级持久停止状态与各组件停止协调
+│   ├── wakeup.py                  接收会话绑定；Codex 事件投递、回执、取消与去重
 │   ├── notes.py                   批注命令行：wait / show / resolve / done / review 等
 │   ├── notes_store.py             批注存储：原子写入、文件锁、操作日志
 │   ├── analysis_store.py          分析存储：只追加事件、轮次推导与批注联动

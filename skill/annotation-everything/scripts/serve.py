@@ -7,6 +7,7 @@
   python3 serve.py <审阅目录> --claim-port 8800              # 把专属端口改成 8800 再启动
   python3 serve.py <审阅目录> --on-handoff "命令 参数"   # 可选：用户点「交给 Agent」时运行这条命令
   python3 serve.py status <审阅目录>          # 查看服务是否在跑、实际端口、拒绝/错误计数（给 Claude 排障用）
+  python3 serve.py stop <审阅目录或标识> [--timeout 秒]  # 停止整份审阅；--status 只查询持久状态
   python3 serve.py list [--under 目录] [--json]   # 审阅台账：本机有哪些审阅、端口、状态、待接收的提交、有没有代理在等
   python3 serve.py forget <标识前缀>            # 从台账移除一份审阅，释放它的专属端口（不动审阅目录）
   python3 serve.py check                      # 自检：回环绑定、伪造 Host/Origin 被拒、落盘与重启恢复
@@ -66,12 +67,13 @@ import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
 import review_overview  # noqa: E402
+import review_stop  # noqa: E402
 import wakeup  # noqa: E402
 
 APP = "annotation-everything"
 VERSION = "0.12.1"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
-FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "receiver-binding", "overview", "analysis", "finalize-all", "docx"]
+FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "stop-review", "receiver-binding", "overview", "analysis", "finalize-all", "docx"]
 
 # 界面语言只有进程级一个来源（见 i18n.set_locale）：main() 与 serve() 按共同契约解析后
 # 设置一次，服务与台账等各模块共同遵循；未设置前保持中文（旧调用行为不变）
@@ -323,6 +325,8 @@ class ReviewServer(ThreadingHTTPServer):
         return True
 
     def _enqueue_hook(self, payload: dict[str, Any], event: str, seq: int | None) -> None:
+        if not review_stop.accepts_work(self.review_dir):
+            return
         env = {**os.environ, "AE_EVENT": event, "AE_REVIEW_DIR": str(self.review_dir),
                "AE_HANDOFF_SEQ": str(seq), "AE_URL": payload["url"]}
         job = {"payload": payload, "env": env, "seq": seq, "event": event}
@@ -344,20 +348,33 @@ class ReviewServer(ThreadingHTTPServer):
 
     def _hook_worker(self, job: dict[str, Any]) -> None:
         while job is not None:
-            try:
-                proc = subprocess.Popen(list(self.on_handoff), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                        stderr=subprocess.DEVNULL, cwd=self.hook_cwd, env=job["env"], start_new_session=True)
-                proc.communicate(json.dumps(job["payload"], ensure_ascii=False).encode("utf-8"))
-                if proc.returncode == 0:
-                    self.log("info", f"hook seq={job['seq']} exit=0")
-                else:
-                    self.log("error", f"code=hook-failed seq={job['seq']} exit={proc.returncode}")
-            except OSError as e:
-                self.log("error", f"code=hook-failed seq={job['seq']} {type(e).__name__}: {e}")
+            if not review_stop.accepts_work(self.review_dir):
+                self.log("info", f"hook seq={job['seq']} skipped=review-stopped")
+            else:
+                try:
+                    proc = subprocess.Popen(list(self.on_handoff), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL, cwd=self.hook_cwd, env=job["env"], start_new_session=True)
+                    proc.communicate(json.dumps(job["payload"], ensure_ascii=False).encode("utf-8"))
+                    if proc.returncode == 0:
+                        self.log("info", f"hook seq={job['seq']} exit=0")
+                    else:
+                        self.log("error", f"code=hook-failed seq={job['seq']} exit={proc.returncode}")
+                except OSError as e:
+                    self.log("error", f"code=hook-failed seq={job['seq']} {type(e).__name__}: {e}")
             with self._hook_lock:
                 job = self._hook_queue.pop(0) if self._hook_queue else None
                 if job is None:
                     self._hook_running = False
+
+    def wait_for_hooks(self, timeout: float) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            with self._hook_lock:
+                if not self._hook_running and not self._hook_queue:
+                    return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(.02)
 
     def manifest(self) -> dict[str, Any]:
         def read(f: Path | None) -> dict[str, Any]:
@@ -544,7 +561,9 @@ class Handler(BaseHTTPRequestHandler):
                 "receiver": self._receiver(self.server.agent_binding)}
 
     def _check_receiver(self, body: dict[str, Any]) -> None:
-        # Called inside the batch lock: a transfer and submission must agree on one binding.
+        # Called inside the batch lock: stop gating, transfer and submission share one authorization point.
+        if not review_stop.accepts_work(self.server.review_dir):
+            raise Reject(409, "review-stopped", self._t("serve.err.reviewStopped"))
         try:
             binding = wakeup.load_binding(self.server.review_dir)
         except (OSError, ValueError, KeyError):
@@ -687,15 +706,25 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/handoff" and cmd == "GET":
             self._json(200, {**self._handoff_state(full=True), **self._ident()})
         elif path == "/api/server/stop" and cmd == "POST":
-            self._expect_obj(self._body())
-            # 停止服务必须明确指向当前审阅；其他旧接口仍兼容不带标识的页面。
+            body = self._expect_obj(self._body())
+            # 停止必须明确指向当前审阅；旧入口也进入完整的审阅级生命周期。
             if not claimed or claimed != self.server.review_id():
                 raise Reject(409, "review-mismatch", self._t("serve.err.reviewMismatch"))
-            self.server.log("info", "stop requested from review page")
-            self._json(200, {**self._ident(), "stopping": True})
+            timeout = body.get("timeout", 10.0)
+            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 <= timeout <= 60:
+                raise Reject(400, "bad-request", self._t("serve.err.badStopTimeout"))
+            self.server.log("info", "review stop requested")
+            review_stop.begin(d, http={"pid": os.getpid(), "port": self.server.port})
+            result = review_stop.coordinate(d, server=self.server, timeout=float(timeout))
+            ready = all(result["components"][name]["state"] == "stopped"
+                        for name in review_stop.COMPONENTS if name != "http")
+            self._json(200, {**self._ident(), "stopping": ready,
+                             "state": result["state"], "stop": result})
             self.wfile.flush()
-            # 当前请求在工作线程处理，shutdown 等主循环退出后由 serve() 正常清理。
-            self.server.shutdown()
+            if ready:
+                # 当前请求在工作线程处理；主循环退出后才确认 HTTP 组件已经停止。
+                self.server.shutdown()
+                review_stop.http_stopped(d)
         elif path == "/api/handoff" and cmd == "POST":
             body = self._expect_obj(self._body())
             if "fullCheck" in body and not isinstance(body["fullCheck"], bool):
@@ -1263,6 +1292,8 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         print(T("serve.serve.tempPortNote", why=why, owned=owned), file=sys.stderr)
     elif not owned and server.port != first:
         print(T("serve.port.firstBusy", first=first, port=server.port), file=sys.stderr)
+    if rid:
+        review_stop.start(review_dir)
     write_status(server)
     server.recover_deliveries()
     server.log("info", f"启动 {APP} {VERSION}：{url} 托管 {review_dir}（pid {os.getpid()}）")
@@ -1284,6 +1315,11 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         server.log("info", T("serve.serve.stoppedLog"))
         server.server_close()
         clear_status(review_dir)
+        if rid:
+            state = review_stop.load(review_dir)
+            if state["state"] != "active" and all(state["components"][name]["state"] == "stopped"
+                                                  for name in review_stop.COMPONENTS if name != "http"):
+                review_stop.http_stopped(review_dir)
     return 0
 
 
@@ -1511,8 +1547,8 @@ def resolve_arg(arg: str) -> Path:
 
 # ---------- 自检 ----------
 def _req(port: int, method: str, path: str, headers: dict[str, str], body: Any = None,
-         raw: bytes | None = None) -> tuple[int, dict[str, str], bytes]:
-    c = http.client.HTTPConnection(HOST, port, timeout=3)
+         raw: bytes | None = None, timeout: float = 3) -> tuple[int, dict[str, str], bytes]:
+    c = http.client.HTTPConnection(HOST, port, timeout=timeout)
     data = raw if raw is not None else (None if body is None else json.dumps(body).encode())
     c.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
     for k, v in headers.items():
@@ -1711,6 +1747,7 @@ def check(locale: str | None = None) -> int:
                      for op in ("activate", "pause", "redecide", "update-note", "keep-note", "delete-note",
                                 "seal", "fork", "switch-line", "close", "reopen", "refute")]
             ok(all(code == expected for code in codes), T("serve.check.lifeGuard", guard=label, status=codes[-1]))
+        analysis_store.writeback(tmp, first["id"], 1, claimed_round["baseRev"], [])
         s, _, _ = _req(port, "POST", "/api/server/stop", same, {})
         ok(s == 409, T("serve.check.stopNeedsReview"))
         s, _, b = _req(port, "POST", "/api/server/stop", {**same, "X-AE-Review": "checkreview"}, {})
@@ -1743,6 +1780,55 @@ def check(locale: str | None = None) -> int:
     failed = sum(not p for p, _ in results)
     print(T("serve.check.summary", passed=len(results) - failed, total=len(results)))
     return 1 if failed else 0
+
+
+def stop_review_command(review_dir: Path, *, query: bool, timeout: float) -> int:
+    review_dir = review_dir.resolve()
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 <= timeout <= 60:
+        raise ValueError(T("serve.err.badStopTimeout"))
+    if query:
+        print(json.dumps(review_stop.load(review_dir), ensure_ascii=False, indent=2))
+        return 0
+    info = read_status(review_dir)
+    health = None
+    alive = bool(info and ledger.pid_alive(int(info.get("pid") or 0)))
+    if alive and info.get("port"):
+        health = probe(int(info["port"]), timeout=.5)
+    running = bool(info and health and same_dir(health, review_dir)
+                   and health.get("pid") == info.get("pid"))
+    unconfirmed = alive and not running
+    http = ({"pid": info["pid"], "port": info.get("port")} if running or unconfirmed else {"state": "stopped"})
+    review_stop.begin(review_dir, http=http)
+    if unconfirmed:
+        result = review_stop.coordinate(review_dir, timeout=timeout)
+        review_stop.mark(review_dir, "hooks", "incomplete", "background-hooks-unconfirmed")
+        result = review_stop.mark(review_dir, "http", "incomplete", "http-status-unconfirmed")
+    elif not running:
+        review_stop.mark(review_dir, "http", "stopped")
+        result = review_stop.coordinate(review_dir, timeout=timeout)
+    elif "stop-review" not in (health.get("features") or []):
+        result = review_stop.mark(review_dir, "http", "incomplete", "upgrade-required")
+    else:
+        port = int(info["port"])
+        headers = {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}",
+                   "Content-Type": "application/json", "X-AE-Review": review_stop.load(review_dir)["reviewId"]}
+        try:
+            code, _, raw = _req(port, "POST", "/api/server/stop", headers, {"timeout": timeout},
+                                timeout=max(3.0, timeout + 2))
+            if code != 200:
+                raise ValueError("stop-request-rejected")
+            result = review_stop.load(review_dir)
+            deadline = time.monotonic() + max(1.0, timeout + 1)
+            while result["state"] == "stopping" and time.monotonic() < deadline:
+                time.sleep(.03)
+                result = review_stop.load(review_dir)
+            if result["state"] == "stopping":
+                result = review_stop.mark(review_dir, "http", "incomplete", "http-stop-timeout")
+        except (OSError, ValueError, http.client.HTTPException) as error:
+            result = review_stop.mark(review_dir, "http", "incomplete", "stop-request-unconfirmed",
+                                      detail=type(error).__name__)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result["state"] == "stopped" else 1
 
 
 def _add_help(parser: argparse.ArgumentParser) -> None:
@@ -1781,6 +1867,22 @@ def main(argv: list[str] | None = None) -> int:
         # 目录解析出来后还有一级兜底：审阅里保存的 locale
         set_locale(cli_locale(locale_choice, d))
         return status(d, locale=i18n.current_locale())
+    if rest[:1] in (["stop"], ["stop-status"]):
+        ap = i18n.LocalizedParser(prog="serve.py stop", add_help=False, description=T("serve.desc.stop"),
+                                  keys=ERROR_KEYS, translate=T)
+        _add_help(ap)
+        _add_locale(ap)
+        ap.add_argument("dir", type=str, help=T("serve.opt.dirOrId"))
+        ap.add_argument("--status", action="store_true", help=T("serve.opt.stopStatus"))
+        ap.add_argument("--timeout", type=float, default=10.0, help=T("serve.opt.stopTimeout"))
+        a = ap.parse_args(rest[1:])
+        try:
+            d = ledger.resolve_dir(a.dir).resolve()
+            set_locale(cli_locale(locale_choice, d))
+            return stop_review_command(d, query=a.status or rest[0] == "stop-status", timeout=a.timeout)
+        except (ledger.LedgerError, OSError, ValueError) as error:
+            print(T("serve.msg.error", detail=error), file=sys.stderr)
+            return 2
     if rest[:1] == ["list"]:
         ap = i18n.LocalizedParser(prog="serve.py list", add_help=False, description=T("serve.desc.list"),
                                   keys=ERROR_KEYS, translate=T)

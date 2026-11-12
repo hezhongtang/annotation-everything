@@ -20,7 +20,7 @@
 
 <审阅目录> 处也可以写审阅标识（或至少 4 位前缀），从本机审阅台账查目录。
 
-退出码：0 成功（wait：收到提交）；1 部分 id 不存在；2 参数或目录不对；3 wait 超时。
+退出码：0 成功（wait：收到提交）；1 部分 id 不存在；2 参数或目录不对；3 wait 超时；4 审阅停止（不要重新挂起）。
 处理人默认记为 claude（在 Claude Code 里运行时）或 agent，可用 --by 指定。
 """
 from __future__ import annotations
@@ -44,6 +44,7 @@ import export_format as ef  # noqa: E402
 import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
+import review_stop  # noqa: E402
 import wakeup  # noqa: E402
 import analysis_store  # noqa: E402
 from build_viewer import (BuildError, FIELD_LABEL, field_name, find_pages, page_heads,  # noqa: E402
@@ -1553,7 +1554,8 @@ def claim_next(d: Path, *, by: str, stage: str = "any", seq: int | None = None,
     requested = ("analysis", round_no) if round_no is not None else ("handoff", seq) if seq is not None else None
 
     def check_available():
-        # 两类存储都在同一把审阅目录锁内调用；不能在选择目标后留下换绑/并发领取窗口。
+        # 两类存储都在同一把审阅目录锁内调用；停止门闩与换绑/并发领取也在此闭环。
+        review_stop.assert_accepts_work(d)
         if authorize is not None:
             authorize()
         if analysis_store.agent_busy(d):
@@ -1751,6 +1753,9 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     t = cli_text(lang)
     sep = t("cli.hand.itemSep")
     include_analysis = events == "analysis"
+    if not review_stop.accepts_work(d, manifest=manifest):
+        print(t("cli.hand.reviewStopped"), file=sys.stderr)
+        return 4
     binding = None
     if claim:
         try:
@@ -1786,8 +1791,9 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     for sig in (signal.SIGTERM, signal.SIGHUP):
         with contextlib.suppress(ValueError, OSError):   # 不在主线程时设不了，靠 pid 存活判断兜底
             old_handlers[sig] = signal.signal(sig, _stop)
-    # 轮询只盯着这几个文件；claim 时绑定与 review.json 也每次都读（绑定的归属校验要它们）
-    poll_paths = [d / store.HANDOFF_FILE] + ([d / wakeup.BINDING_FILE, d / "review.json"] if claim else [])
+    # 停止状态参与每次签名检查；claim 时绑定与 review.json 也在完整重读时校验。
+    poll_paths = [d / store.HANDOFF_FILE, d / review_stop.STATE_FILE] + \
+                 ([d / wakeup.BINDING_FILE, d / "review.json"] if claim else [])
     force_read = WAIT_FORCE_READ_SECONDS
     last_sig: tuple[tuple[int, int, int, int] | None, ...] | None = None   # None = 还没读过，首轮必读
     next_force = time.monotonic() + force_read
@@ -1798,6 +1804,9 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
             now = time.monotonic()
             if sig != last_sig or now >= next_force:   # 变了、或到了强制重读周期：完整读一次
                 last_sig, next_force = sig, now + force_read
+                if not review_stop.accepts_work(d, manifest=manifest):
+                    print(t("cli.hand.reviewStopped"), file=sys.stderr)
+                    return 4
                 if claim:
                     try:
                         wakeup.assert_claim_owner(d, harness, session,
