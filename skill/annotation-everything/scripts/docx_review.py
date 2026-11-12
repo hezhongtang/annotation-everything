@@ -337,6 +337,24 @@ def merged(props: list[ET.Element | None]) -> dict[str, ET.Element]:
     return out
 
 
+def run_properties(styles: Styles, base: dict, rpr: ET.Element | None) -> dict:
+    """合并运行属性；字符样式中的 vanish 是开关，直接格式则指定最终状态。"""
+    rs = rpr.find(W + "rStyle") if rpr is not None else None
+    char_props = styles.props(rs.get(W + "val") if rs is not None else None, "rPr")
+    result = {**base, **merged([*char_props, rpr])}
+    hidden = _on(base.get("vanish")) is True
+    for props in char_props:
+        if _on(props.find(W + "vanish")) is True:
+            hidden = not hidden
+    direct = _on(rpr.find(W + "vanish")) if rpr is not None else None
+    if direct is not None:
+        hidden = direct
+    if "vanish" in result:
+        # 新建计算后的属性，不修改源 XML 或 Styles 缓存里的元素。
+        result["vanish"] = ET.Element(W + "vanish", {W + "val": "1" if hidden else "0"})
+    return result
+
+
 def writeback_restrictions(root: ET.Element, style_root: ET.Element | None) -> dict[int, set[str]]:
     """页面和回写命令共用的段落限制；包含外层结构、跨段域及从样式继承的隐藏文字。"""
     paragraphs = list(root.iter(W + "p"))
@@ -409,9 +427,7 @@ def writeback_restrictions(root: ET.Element, style_root: ET.Element | None) -> d
         sid = ps.get(W + "val") if ps is not None else styles.default_para
         base = merged([*styles.doc_rpr, *styles.props(sid, "rPr")])
         for r in own_runs(p):
-            rpr = r.find(W + "rPr")
-            rs = rpr.find(W + "rStyle") if rpr is not None else None
-            rp = {**base, **merged([*styles.props(rs.get(W + "val") if rs is not None else None, "rPr"), rpr])}
+            rp = run_properties(styles, base, r.find(W + "rPr"))
             if any(_on(rp.get(k)) is True for k in ("vanish", "webHidden", "specVanish")):
                 reasons[n].add("hidden")
     return {n: codes for n, codes in reasons.items() if codes}
@@ -925,9 +941,7 @@ class Renderer:
 
     def run(self, r: ET.Element, base_rp: dict, paginate: bool, wrap: tuple, notes: str = ""):
         rpr = r.find(W + "rPr")
-        rs = rpr.find(W + "rStyle") if rpr is not None else None
-        rp = dict(base_rp)
-        rp.update(merged([*self.styles.props(rs.get(W + "val") if rs is not None else None, "rPr"), rpr]))
+        rp = run_properties(self.styles, base_rp, rpr)
         if rpr is not None and rpr.find(W + "rPrChange") is not None:
             notes += self.note("formatRevision", id(rpr))
         hidden = _on(rp.get("vanish")) is True

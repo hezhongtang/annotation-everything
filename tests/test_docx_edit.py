@@ -330,6 +330,34 @@ class WritebackTests(unittest.TestCase):
         self.assert_refused("readonly")
         self.assertIn('data-docx-ro="hidden"', dr.render(self.source)["pages"][0]["html"])
 
+    def test_character_style_false_preserves_inherited_hidden_text(self):
+        styles = (f'<w:styles xmlns:w="{dr.W_NS}">'
+                  '<w:style w:type="character" w:styleId="BaseChar"><w:rPr><w:vanish/></w:rPr></w:style>'
+                  '<w:style w:type="character" w:styleId="DerivedChar"><w:basedOn w:val="BaseChar"/>'
+                  '<w:rPr><w:vanish w:val="0"/></w:rPr></w:style></w:styles>')
+        self.document('<w:p><w:r><w:rPr><w:rStyle w:val="DerivedChar"/></w:rPr>'
+                      '<w:t>甲乙丙</w:t></w:r></w:p>', extra={"word/styles.xml": styles})
+        nid = self.note(pid=None)
+        self.assert_refused("readonly")
+        self.assert_refused("readonly", lambda: de.writeback(self.review, ids=[nid]))
+        rendered = dr.render(self.source)
+        self.assertIn('data-docx-ro="hidden"', rendered["pages"][0]["html"])
+        self.assertRegex(rendered["pages"][0]["html"], r'<span [^>]*\bhidden[^>]*>甲乙丙</span>')
+        self.assertIn("hidden", [item["code"] for item in rendered["diagnostics"]])
+
+    def test_character_style_toggle_and_direct_format_can_unhide_text(self):
+        for derived, direct in (("1", ""), ("0", '<w:vanish w:val="0"/>')):
+            with self.subTest(derived=derived, direct=direct):
+                styles = (f'<w:styles xmlns:w="{dr.W_NS}">'
+                          '<w:style w:type="character" w:styleId="BaseChar"><w:rPr><w:vanish/></w:rPr></w:style>'
+                          '<w:style w:type="character" w:styleId="DerivedChar"><w:basedOn w:val="BaseChar"/>'
+                          f'<w:rPr><w:vanish w:val="{derived}"/></w:rPr></w:style></w:styles>')
+                self.document('<w:p><w:r><w:rPr><w:rStyle w:val="DerivedChar"/>' + direct
+                              + '</w:rPr><w:t>甲乙丙</w:t></w:r></w:p>', extra={"word/styles.xml": styles})
+                self.assertNotIn('data-docx-ro="hidden"', dr.render(self.source)["pages"][0]["html"])
+                self.replace()
+                self.assertIn("甲新丙".encode(), member(self.source.read_bytes()))
+
     def test_table_styles_including_inheritance_and_conditions_are_readonly(self):
         for body in ('<w:rPr><w:vanish/></w:rPr>', '<w:tblStylePr w:type="firstRow"><w:rPr><w:vanish/></w:rPr></w:tblStylePr>'):
             for explicit in (True, False):
