@@ -375,9 +375,9 @@ def prompt(binding, event, seq, message_id):
 def deliver(review, event, seq, *, expected_binding=_ANY_BINDING):
     review = Path(review).resolve()
     import review_stop
-    review_stop.assert_accepts_work(review)
     # Network operations use their own short-lived lock, not the annotation data lock.
     with dispatch_lock(review):
+        review_stop.assert_accepts_work(review)
         binding = load_binding(review)
         if not binding:
             raise ValueError("no-agent-binding")
@@ -411,6 +411,7 @@ def deliver(review, event, seq, *, expected_binding=_ANY_BINDING):
         try:
             with contextlib.closing(DesktopIPC(binding["socketPath"])) as ipc:
                 owner = ipc.owner(binding["threadId"])
+                review_stop.assert_accepts_work(review)
                 _record(review, key, {"state": "sending"})
                 dispatched = True
                 reply = ipc.start(binding["threadId"], owner, prompt(binding, event, seq, message_id), message_id)
@@ -576,7 +577,7 @@ def active_work(review):
     if binding and binding["adapter"] == "codex-desktop":
         for key, item in _deliveries(review)["items"].items():
             if item.get("bindingId") != binding["bindingId"] \
-                    or item.get("state") not in ("accepted", "received", "unconfirmed"):
+                    or item.get("state") not in ("connecting", "sending", "accepted", "received", "unconfirmed"):
                 continue
             event, seq = item.get("event"), item.get("seq")
             if event not in DELIVERY_EVENTS:
@@ -624,8 +625,9 @@ def cancel_review(review, *, timeout=10.0):
             confirmed.append(turn_id)
             continue
         if not turn_id:
-            failures.append({"event": item.get("event"), "seq": item.get("seq"),
-                             "code": "agent-turn-id-unavailable"})
+            code = ("agent-delivery-in-flight" if item.get("state") in ("connecting", "sending")
+                    else "agent-turn-id-unavailable")
+            failures.append({"event": item.get("event"), "seq": item.get("seq"), "code": code})
             continue
         _record(review, key, {"cancelState": "cancelling", "cancelRequestedAt": store.now_iso(),
                               "cancelReviewId": binding["reviewId"], "cancelBindingId": binding["bindingId"],

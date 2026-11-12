@@ -87,14 +87,26 @@ def assert_accepts_work(review, *, manifest=None):
         raise ValueError("review-stopped: explicit start required")
 
 
+def validate_timeout(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 60:
+        raise ValueError("invalid-stop-timeout")
+    return float(value)
+
+
+def ready_for_http(state):
+    return all(state["components"][name]["state"] == "stopped" for name in COMPONENTS if name != "http")
+
+
 def begin(review, *, http=None):
     def change(value):
         if value["state"] == "stopped":
             return value
         if value["state"] == "active":
+            hook_runtime = dict(value["components"]["hooks"])
             value.update(stopId=str(uuid.uuid4()), requestedAt=_now(), attempts=0)
             for name in COMPONENTS:
                 value["components"][name] = {"state": "pending"}
+            value["components"]["hooks"] = {**hook_runtime, "state": "pending"}
             value["components"]["gate"] = {"state": "stopped", "stoppedAt": _now()}
         value["attempts"] = int(value.get("attempts", 0)) + 1
         value["state"] = "stopping"
@@ -108,7 +120,10 @@ def begin(review, *, http=None):
         if running.get("state") != "stopped":
             value["components"]["http"] = {**running, "state": "stopping"}
         return value
-    return _edit(review, change)
+    result = _edit(review, change)
+    with wakeup.dispatch_lock(review):
+        pass
+    return result
 
 
 def mark(review, name, state, error=None, **details):
@@ -143,11 +158,46 @@ def mark(review, name, state, error=None, **details):
 def start(review):
     def change(value):
         previous = value.get("stopId")
+        hook_runtime = dict(value["components"]["hooks"])
         value.update(state="active", stopId=None, previousStopId=previous, startedAt=_now())
         value.pop("requestedAt", None)
         value.pop("stoppedAt", None)
         value.pop("incompleteReasons", None)
         value["components"] = {name: {"state": "active"} for name in COMPONENTS}
+        value["components"]["hooks"] = {**hook_runtime, "state": "active"}
+        return value
+    return _edit(review, change)
+
+
+def configure_hooks(review, configured):
+    def change(value):
+        component = value["components"]["hooks"]
+        component.update(configured=bool(configured), tracked=True)
+        component.setdefault("workers", [])
+        return value
+    return _edit(review, change)
+
+
+def hook_started(review, pid, seq, event):
+    if not ledger.read_manifest(review).get("reviewId"):
+        return
+    def change(value):
+        component = value["components"]["hooks"]
+        component.update(configured=True, tracked=True)
+        workers = [worker for worker in component.get("workers", []) if worker.get("pid") != pid]
+        workers.append({"pid": pid, "seq": seq, "event": event})
+        component["workers"] = workers
+        return value
+    return _edit(review, change)
+
+
+def hook_finished(review, pid):
+    if not ledger.read_manifest(review).get("reviewId"):
+        return
+    def change(value):
+        component = value["components"]["hooks"]
+        component["workers"] = [worker for worker in component.get("workers", [])
+                                if worker.get("pid") != pid]
         return value
     return _edit(review, change)
 
@@ -156,8 +206,8 @@ def _live_waiters(review):
     live = []
     for path in Path(review).glob(ledger.WAIT_PREFIX + "*.json"):
         try:
-            mark = json.loads(path.read_text(encoding="utf-8"))
-            pid = mark.get("pid")
+            wait_mark = json.loads(path.read_text(encoding="utf-8"))
+            pid = wait_mark.get("pid")
             if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 \
                     or path.name != ledger.wait_file(Path(review), pid).name:
                 continue
@@ -190,6 +240,27 @@ def _protect_save(review, deadline):
             return
 
 
+def _coordinate_orphan_hooks(review, deadline):
+    component = load(review)["components"]["hooks"]
+    if component["state"] == "stopped":
+        return
+    if component.get("configured") and not component.get("tracked"):
+        mark(review, "hooks", "incomplete", "background-hooks-unconfirmed")
+        return
+    while True:
+        workers = load(review)["components"]["hooks"].get("workers", [])
+        pids = sorted({worker.get("pid") for worker in workers
+                       if isinstance(worker.get("pid"), int) and ledger.pid_alive(worker["pid"])})
+        if not pids:
+            mark(review, "hooks", "stopped")
+            return
+        if time.monotonic() >= deadline:
+            mark(review, "hooks", "incomplete", "background-hook-running", pids=pids)
+            return
+        mark(review, "hooks", "stopping", pids=pids)
+        time.sleep(.05)
+
+
 def coordinate(review, *, server=None, timeout=10.0):
     deadline = time.monotonic() + max(0.0, timeout)
     state = load(review)
@@ -206,7 +277,7 @@ def coordinate(review, *, server=None, timeout=10.0):
     else:
         mark(review, "waiters", "incomplete", "waiter-exit-timeout", pids=_live_waiters(review))
     if server is None:
-        mark(review, "hooks", "stopped")
+        _coordinate_orphan_hooks(review, deadline)
     elif server.wait_for_hooks(max(0.0, deadline - time.monotonic())):
         mark(review, "hooks", "stopped")
     else:
