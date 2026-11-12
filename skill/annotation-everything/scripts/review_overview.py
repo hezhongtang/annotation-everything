@@ -4,11 +4,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+import analysis_store
 import build_viewer
 import fsutil
 import ledger
 import notes_store as store
 import report_check
+import review_stop
 
 STATE_ORDER = {"running": 0, "running-temp": 0, "stopped": 1, "missing": 3, "mismatch": 3}
 ARCHIVE_FILE = ".annotation-archived"
@@ -35,6 +37,10 @@ def workspace_for(review_dir: Path) -> Path:
         if (candidate / ".git").exists():
             return candidate
     return directory.parent
+
+
+def in_scope(directory: Path, workspace: Path, scope: str) -> bool:
+    return scope == "all" or directory == workspace or workspace in directory.parents
 
 
 def display_path(directory: Path, workspace: Path) -> str:
@@ -121,16 +127,31 @@ def snapshot(review_dir: Path, review_id: str | None, scope: str,
     rows = []
     for rid, entry in ledger.entries().items():
         directory = Path(entry["dir"]).resolve()
-        if scope == "workspace" and directory != workspace and workspace not in directory.parents:
+        if not in_scope(directory, workspace, scope):
             continue
         source = row_builder(rid, entry)
         state = source["state_id"]
         running = source["running"] if state in ("running", "running-temp") else None
+        stop = None
+        if state not in ("missing", "mismatch"):
+            try:
+                stop = review_stop.public_status(directory)
+            except (OSError, ValueError):
+                pass
+        work = {}
+        if running:
+            work = {"waiters": source["waiting"], "batches": source.get("processing", False),
+                    "hooks": source["hook"]}
+            try:
+                work["analysis"] = analysis_store.has_claimed_round(directory)
+            except (OSError, ValueError, store.NotFound):
+                pass
         rows.append({
             "reviewId": rid, "name": source["name"] or directory.name,
             "path": display_path(directory, workspace), "state": state,
             "archived": source["archived"],
             "port": source["port"], "running": running,
+            "stop": stop, "stopWork": work,
             "pending": source["pending"], "review": source["review"],
             "lastActivity": last_activity(directory), "current": rid == review_id,
             "url": f"http://127.0.0.1:{running}/" if running else None,

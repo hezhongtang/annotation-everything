@@ -337,6 +337,7 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
 .overview-top h1{font-size:var(--ae-dialog-title);line-height:1.5;margin:0;flex:1 1 220px;color:var(--ae-navy);overflow-wrap:anywhere}
 #overview button,#overview select,#overview .overview-open{font:inherit;font-size:var(--ae-text);border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-7) var(--ae-gap-12);background:var(--ae-panel);color:var(--ae-ink);cursor:pointer}
 #overview button:disabled{opacity:.55;cursor:default}
+#overviewStop{color:var(--ae-warning);border-color:var(--ae-danger-line)}
 .overview-top select{max-width:100%}
 .overview-archive-toggle{display:flex;align-items:center;gap:var(--ae-gap-6);font-size:var(--ae-text);white-space:nowrap}
 .overview-archive-toggle input{margin:0;accent-color:var(--ae-accent)}
@@ -1022,12 +1023,12 @@ const clip=(s,n)=>Array.from(String(s)).slice(0,n).join("");            // 按�
 function wellFormed(v){if(typeof v==="string")return v.toWellFormed?v.toWellFormed():v;
   if(Array.isArray(v))return v.map(wellFormed);
   if(v&&typeof v==="object"){const o={};for(const k of Object.keys(v))o[k]=wellFormed(v[k]);return o}return v}
-async function api(method,path,body,timeout=REQ_TIMEOUT){
+async function api(method,path,body,timeout=REQ_TIMEOUT,headers={}){
   // 统一拦住队列外的定稿、复核和分析写入；停止服务是升级恢复入口，仍可使用。
-  if(method!=="GET"&&path!=="/api/server/stop"&&docxBlocked())
+  if(method!=="GET"&&!["/api/server/stop","/api/server/save-protection","/api/overview/stop"].includes(path)&&docxBlocked())
     throw Object.assign(new Error(tMsg("viewer.docx.oldService")),{status:409,code:"docx-required"});
   const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),timeout);
-  const opt={method,cache:"no-store",headers:{"X-AE-Review":RID},signal:ctl.signal};
+  const opt={method,cache:"no-store",headers:{"X-AE-Review":RID,...headers},signal:ctl.signal};
   if(body!==undefined){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(wellFormed(body))}
   let r;
   try{r=await fetch(path,opt)}
@@ -1106,11 +1107,13 @@ function applyLocal(op){
   else if(op.kind==="import")return mergeLocal(op.notes);
   else if(op.kind==="handoff"){handQueued=true;renderHand()}}
 const FULL_CHECK_COMPAT=__FULL_CHECK_COMPAT__;
-function send(op,fullCheckSupported=true){
-  if(op.kind==="add")return api("POST","/api/notes",op.note);      // 同 id 重复提交，服务端按已存在处理
-  if(op.kind==="patch")return api("PATCH","/api/notes/"+encodeURIComponent(op.id),op.body);
-  if(op.kind==="del")return api("DELETE","/api/notes/"+encodeURIComponent(op.id));
-  if(op.kind==="import")return api("POST","/api/notes/import",{notes:op.notes});
+function send(op,fullCheckSupported=true,saveRequest=null){
+  const headers=saveRequest?{"X-AE-Page":savePage.pageId,"X-AE-Save-Token":saveRequest.token}:{};
+  const write=(method,path,body)=>api(method,path,body,REQ_TIMEOUT,headers);
+  if(op.kind==="add")return write("POST","/api/notes",op.note);      // 同 id 重复提交，服务端按已存在处理
+  if(op.kind==="patch")return write("PATCH","/api/notes/"+encodeURIComponent(op.id),op.body);
+  if(op.kind==="del")return write("DELETE","/api/notes/"+encodeURIComponent(op.id),saveRequest?{}:undefined);
+  if(op.kind==="import")return write("POST","/api/notes/import",{notes:op.notes});
   if(op.kind==="handoff"){const message=op.message||"",body={message,target:op.target||"final",allowSubagents:!!op.allowSubagents};
     body.receiverBindingId=op.receiverBindingId??null;
     if(op.fullCheck===true){body.userMessage=message;body.message=FULL_CHECK_COMPAT+(message?"\n\n"+message:"")}
@@ -1151,12 +1154,13 @@ function onRejected(op,e){   // 服务明确不接受（4xx）：不重试；返
   return ()=>toast(tMsg("viewer.recovery.rejected",{reason:e.message}),6000)}
 const fails={};let flushing=null;
 function flush(){if(FILE)return Promise.resolve();
-  if(!flushing)flushing=(navigator.locks?navigator.locks.request(`ae-flush-${RID}`,doFlush):doFlush()).finally(()=>{flushing=null});
+  if(!flushing)flushing=(navigator.locks?navigator.locks.request(`ae-flush-${RID}`,()=>doFlush()):doFlush()).finally(()=>{flushing=null});
   return flushing}
-async function doFlush(){   // 按顺序补传；多个标签页之间用浏览器锁排队，按操作 id 移除
+async function doFlush(saveRequest=null){   // 按顺序补传；多个标签页之间用浏览器锁排队，按操作 id 移除
   let successful=true,problem=null,docxOk=!DOCX;busy++;
   try{for(;;){   // 补完一轮再对一次服务端；这期间又有新改动进队列就接着补
     for(let q=pend.get();q.length;q=pend.get()){const op=q[0];
+      if(saveRequest&&op.kind==="handoff")return false;
       if(!op.opId){op.opId=newId();pend.set(q)}   // 兜底：没有操作 id 的条目先补上再发，免得移除时误删别的
       try{
         if(!docxOk){const d=await getNotes();srvNoDocx=!hasFeature(d,"docx");   // 离线暂存的改动补传前先确认服务认得 docx 字段
@@ -1166,8 +1170,8 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
           const latest=d.handoff&&d.handoff.latest,pendingCheck=latest&&latest.status==="pending"&&latest.fullCheck===true;
           if(!fullCheckSupported&&(op.fullCheck===true||pendingCheck)){
             problem=()=>toast(tMsg("viewer.hand.toast.fullCheckStashed"),6000);return false}}
-        const r=await send(op,fullCheckSupported);
-        if(r&&r.doc&&!sameReview(r.doc))throw Object.assign(new Error(tMsg("viewer.error.mismatch")),{status:0,mismatch:true});
+        const r=await send(op,fullCheckSupported,saveRequest);
+        if((saveRequest||r?.doc)&&!sameReview(r?.doc))throw Object.assign(new Error(tMsg("viewer.error.mismatch")),{status:0,mismatch:true});
         if(hasFullCheck){const latest=r&&r.handoff&&r.handoff.latest,requested=op.fullCheck===true;
           const legacyOff=!requested&&r&&!("acceptedFullCheck" in r)&&latest&&latest.seq===r.seq&&latest.fullCheck!==true;
           if(!r||(r.acceptedFullCheck!==requested&&!legacyOff)){
@@ -1177,6 +1181,7 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
         successful=false;
         if(e.mismatch){mode="mismatch";problem=()=>toast(e.message,6000);return false}
         if(!e.status){if(mode==="server")problem=()=>toast(tMsg("viewer.offline.stashed"),3500);mode="offline";return false}
+        if(saveRequest){problem=()=>toast(e.message,4000);return false}
         if(e.code==="review-stopped")return false;  // 等显式重新启动后再补传
         if(e.status>=500){fails[op.opId]=(fails[op.opId]||0)+1;
           if(fails[op.opId]<MAX_FAILS){problem=()=>toast(e.message,4000);return false}
@@ -1187,6 +1192,68 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
     return successful}
   // 最后一个失败或受阻提示优先于后续成功、处理状态等通知。
   finally{busy--;updateMode();renderDocxBlock();if(problem)problem()}}
+
+// 总览和 CLI 通过目标服务请求保存回执。浏览器只访问同源服务。
+const SAVE_PATH="/api/server/save-protection";
+const saveClientKey=`ae.${RID}.saveClient`,savePageKey=`ae.${RID}.savePage`;
+const browserSaveId=()=>crypto.randomUUID().replaceAll("-","");
+const validSaveId=id=>typeof id==="string"&&/^[0-9a-f]{32}$/.test(id);
+let savePage=null,savePagePolling=false,savePageSupported=true,savePageRegistered=false,savePageReceipt=false;
+let savePageCanReadStorage=false;
+function initSavePage(){
+  const oldPage=SS.get(savePageKey,null);
+  const reload=performance.getEntriesByType("navigation")[0]?.type==="reload";
+  const pageId=reload&&validSaveId(oldPage)?oldPage:browserSaveId();
+  const oldClient=LS.get(saveClientKey,null),clientId=validSaveId(oldClient)?oldClient:browserSaveId();
+  savePageCanReadStorage=LS.set(saveClientKey,clientId);
+  SS.set(savePageKey,pageId);
+  savePage={pageId,clientId};
+}
+function savePageQueueEmpty(){
+  queueSnap=null;
+  try{
+    return [K.pending,K.legacyPending,K.failed].every(key=>{
+      const value=JSON.parse(localStorage.getItem(key)??"[]");
+      return Array.isArray(value)&&value.length===0;
+    })
+  }catch(error){return false}
+}
+async function registerSavePage(){
+  const data=await api("POST",SAVE_PATH,savePage,2000);
+  if(data.reviewId!==RID)throw new Error("save-protection-identity");
+  savePageRegistered=true;
+  return data.request;
+}
+async function pollSavePage(){
+  if(!savePage||savePagePolling||!savePageSupported)return;
+  savePagePolling=true;
+  try{
+    const request=await registerSavePage();
+    if(!request||typeof request.stopId!=="string"||!validSaveId(request.token))return;
+    savePageReceipt=true;
+    watchReviewStop(request.stopId);
+    const rejected=LS.get(K.rejected,null),localFailures=saveFailures;
+    const protect=async()=>{
+      migrateLegacyQueue();queueSnap=null;
+      const flushed=savePageCanReadStorage&&await doFlush(request);
+      const saved=flushed&&mode==="server"&&savePageQueueEmpty()&&rejected===LS.get(K.rejected,null)&&localFailures===saveFailures;
+      const receipt=await api("POST",SAVE_PATH,{...savePage,...request,saved},2000);
+      if(receipt.reviewId!==RID)throw new Error("save-protection-identity");
+    };
+    if(navigator.locks)await navigator.locks.request(`ae-flush-${RID}`,protect);
+    else{await flushing;await protect()}
+  }catch(error){
+    if(error.code==="no-api")savePageSupported=false;
+  }finally{savePagePolling=false;savePageReceipt=false}
+}
+addEventListener("pagehide",()=>{
+  if(!savePageRegistered||!savePageCanReadStorage||flushing||savePageReceipt||!savePageQueueEmpty())return;
+  fetch(SAVE_PATH,{method:"POST",keepalive:true,
+    headers:{"Content-Type":"application/json","X-AE-Review":RID},
+    body:JSON.stringify({...savePage,closing:true})}).catch(()=>{});
+});
+addEventListener("pageshow",event=>{if(event.persisted)pollSavePage()});
+
 async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 // 轮询带回的「最新一批（完整内容）+ 投递状态」签名：逐字段相同才认为这次轮询没有新东西可画。
 // 只有摘要类字段（处理摘要、附言、认领时间……）变化时也要重画，所以比 handSig 那几个字段细。
@@ -1202,6 +1269,7 @@ function applyServer(d,quietHand){
   const old=!hasFeature(d,"marks");if(old&&!srvOld)toast(tMsg("viewer.mode.oldTitle"),9000);srvOld=old;
   srvNoStages=!hasFeature(d,"stages");
   srvNoFullCheck=!hasFeature(d,"full-check");
+  savePageSupported=hasFeature(d,"stop-save-protection");
   stopServiceSupported=hasFeature(d,"stop-review")&&hasFeature(d,"stop-review-status");
   if(stopServiceSupported&&d.stop){
     rememberReviewStop(d.stop,true);
@@ -2122,8 +2190,11 @@ async function prepareCurrentReviewStop(){
     stopServiceSupported=hasFeature(after,"stop-review")&&hasFeature(after,"stop-review-status");
     if(!stopServiceSupported)return stopPreflightProblem("legacy");
     if(!rememberReviewStop(after.stop,true))return stopPreflightProblem("unconfirmed");
+    const retryingSave=after.stop.state==="incomplete"&&after.stop.components.save.state==="incomplete"
+      &&hasFeature(after,"stop-save-protection");
+    if(retryingSave)await registerSavePage();
     // 核对最后一次身份读取期间发生的其他标签页补传与拒绝。
-    if(!saved||pend.get().length||failed.get().length||saveFailures!==rejectedBefore
+    if(!saved||(!retryingSave&&(pend.get().length||failed.get().length))||saveFailures!==rejectedBefore
         ||LS.get(K.rejected,null)!==sharedRejectedBefore){
       return stopPreflightProblem(after.stop.state==="active"?"unsaved":"gated")
     }
@@ -2982,6 +3053,7 @@ setInterval(()=>{if(!document.hidden)loadAnalyses()},4000);
 // ---------- 审阅总览（同一个 index.html 的 #overview 视图） ----------
 let overviewData=null,overviewSelected=null,overviewRequest=0,overviewLoading=false;
 const overviewStarting=new Set(),overviewStartFailures=new Map();
+const overviewStopping=new Set(),overviewStopResults=new Map();
 let currentArchived=false,archiveBusy=false;
 function renderArchiveBanners(){
   ["archiveBanner","overviewArchiveBanner"].forEach(id=>{$(id).hidden=!currentArchived});
@@ -2994,9 +3066,89 @@ function setCurrentArchive(value){
 function overviewShown(){return location.hash==="#overview"}
 function overviewState(row){
   if(!["running","running-temp","stopped"].includes(row.state))return "invalid";
-  return row.archived?"archived":row.state==="stopped"?"stopped":"running";
+  return row.archived?"archived":row.state==="stopped"||overviewStopStatus(row)?.state==="stopped"?"stopped":"running";
 }
-function overviewStateLabel(row){return tMsg("viewer.overview."+overviewState(row))}
+function overviewStateLabel(row){
+  const state=overviewState(row),stop=overviewStopStatus(row)?.state;
+  const lifecycle=["stopping","stopped","incomplete"].includes(stop)?tMsg("viewer.overview.stopState."+stop):"";
+  if(!lifecycle||state==="invalid")return tMsg("viewer.overview."+state);
+  return row.archived?tMsg("viewer.overview.archived")+" · "+lifecycle:lifecycle;
+}
+function overviewStopStatus(row){
+  const local=overviewStopResults.get(row.reviewId),saved=row.stop;
+  if(overviewStopping.has(row.reviewId))return saved?.state==="stopping"?saved:{state:"stopping"};
+  if(local&&(!saved||!Number.isInteger(saved.revision)||saved.revision<=(local.revision??-1)))return local;
+  return saved||null;
+}
+function overviewStopEligible(row){
+  return !!row&&["running","running-temp"].includes(row.state)&&overviewStopStatus(row)?.state!=="stopped";
+}
+function overviewStopIssue(code){
+  const key={
+    "save-protection-failed":"saveFailed","save-protection-unconfirmed":"saveUnconfirmed",
+    "save-protection-timeout":"saveUnconfirmed","save-protection-unavailable":"saveUnconfirmed",
+    "save-protection-upgrade-required":"pageUpgrade","upgrade-required":"upgrade",
+    "http-status-unconfirmed":"httpUnconfirmed","overview-review-out-of-scope":"outOfScope",
+    "overview-review-unknown":"unavailable","overview-review-invalid":"unavailable",
+    "overview-review-not-running":"unavailable","stop-status-unconfirmed":"statusUnconfirmed",
+    "stop-preflight-failed":"saveUnconfirmed"
+  }[code];
+  return key?tMsg("viewer.overview.stopIssue."+key):reviewStopReason(code);
+}
+function overviewStopFeedback(row,label){
+  const status=overviewStopStatus(row);
+  if(!status||!["stopping","stopped","incomplete"].includes(status.state))return "";
+  const components=Object.entries(status.components||{}).map(([name,item])=>{
+    const state=STOP_COMPONENT_STATES[item.state],component=STOP_COMPONENTS[name];
+    if(!component||!state)return "";
+    const text=tMsg("viewer.stop.component.line",{name:tMsg(component),state:tMsg(state)});
+    const reasons=[item.error,...(item.causes||[])].filter(Boolean).map(overviewStopIssue);
+    return `<li>${escH([text,...reasons].join(" · "))}</li>`;
+  });
+  const requestError=status.incompleteReasons?.request;
+  return `<div id="overviewStopStatus" role="status" data-state="${status.state}">
+    ${escH(label)}
+    ${components.length?`<details${status.state==="incomplete"?" open":""}><summary>${escH(tMsg("viewer.stop.components"))}</summary><ul>${components.join("")}</ul></details>`:""}
+    ${requestError?`<p>${escH(overviewStopIssue(requestError))}</p>`:""}
+    ${row.current&&status.state==="stopped"?`<p>${escH(tMsg("viewer.overview.stopCurrentStopped"))}</p>`:""}</div>`;
+}
+async function stopOverviewReview(row,scope){
+  if(!overviewStopEligible(row)||overviewStopping.has(row.reviewId)||!["workspace","all"].includes(scope))return null;
+  const rid=row.reviewId,revision=row.stop?.revision;
+  const failure=code=>({reviewId:rid,state:"incomplete",stopId:null,revision,incompleteReasons:{request:code}});
+  overviewStopping.add(rid);overviewStopResults.delete(rid);renderOverview();
+  let result;
+  try{
+    if(row.current&&!await prepareCurrentReviewStop())
+      result=failure("stop-preflight-failed");
+    else{
+      const reply=await api("POST","/api/overview/stop",{reviewId:rid,scope},13000);
+      if(reply.reviewId!==rid||reply.stop?.reviewId!==rid||reply.state!==reply.stop.state||
+          !["stopping","stopped","incomplete"].includes(reply.state))throw new Error("overview-stop-format");
+      result=reply.stop;
+      if(row.current&&rememberReviewStop(result,true))updateMode();
+    }
+  }catch(error){
+    result=failure(["overview-review-out-of-scope","overview-review-unknown","overview-review-invalid",
+      "overview-review-not-running"].includes(error.code)?error.code:"stop-status-unconfirmed");
+  }finally{
+    overviewStopping.delete(rid);
+    if(result)overviewStopResults.set(rid,result);
+    renderOverview();
+  }
+  if(!row.current||result?.state!=="stopped")void loadOverview();
+  return result;
+}
+function confirmOverviewStop(row){
+  const scope=overviewData?.scope;
+  if(!overviewStopEligible(row)||!hasFeature(overviewData,"overview-stop")||!scope)return;
+  const work=["waiters","batches","analysis","hooks"].filter(name=>row.stopWork?.[name])
+    .map(name=>tMsg("viewer.overview.stopWork."+name)).join(tMsg("viewer.overview.stopWorkSeparator"));
+  const message=tMsg("viewer.overview.stopConfirm",{name:row.name||row.reviewId,id:row.reviewId.slice(0,8),
+    work:work||tMsg("viewer.overview.stopWork.none")});
+  const warning=row.current?"\n\n"+tMsg("viewer.overview.stopCurrentConfirm"):"";
+  if(confirm(message+warning))void stopOverviewReview(row,scope);
+}
 function overviewTime(value){
   if(typeof value!=="number"||!Number.isFinite(value)||value<=0)return tMsg("viewer.overview.noActivity");
   const date=new Date(value*1000);return Number.isFinite(date.getTime())?date.toLocaleString(uiLocale):tMsg("viewer.overview.noActivity");
@@ -3013,16 +3165,18 @@ function renderOverview(){
     if(!group.length)return "";
     if(state==="archived"&&!$("overviewShowArchived").checked)return `<section class="overview-archived-hidden" data-overview-group="archived"><span id="overviewHiddenArchived">${escH(tMsg("viewer.overview.hiddenArchived",{count:group.length}))}</span><button id="overviewExpandArchived">${escH(tMsg("viewer.overview.expandArchived"))}</button></section>`;
     return `<section class="overview-group" data-overview-group="${state}"><h2>${escH(tMsg("viewer.overview."+state))}<span class="overview-count">${group.length}</span></h2>`+group.map(row=>
-      `<button class="overview-row" data-review-id="${escH(row.reviewId)}" aria-pressed="${row.reviewId===overviewSelected}"><span class="overview-row-title"><span class="overview-dot ${state}" aria-hidden="true"></span><span>${escH(row.name||row.reviewId.slice(0,8))}</span>${row.current?`<span class="overview-current">${escH(tMsg("viewer.overview.current"))}</span>`:""}</span><span class="overview-row-meta"><span>${escH(overviewTime(row.lastActivity))}</span><span>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}</span><span>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</span></span></button>`).join("")+"</section>";
+      `<button class="overview-row" data-review-id="${escH(row.reviewId)}" aria-pressed="${row.reviewId===overviewSelected}"><span class="overview-row-title"><span class="overview-dot ${state}" aria-hidden="true"></span><span>${escH(row.name||row.reviewId.slice(0,8))}</span>${row.current?`<span class="overview-current">${escH(tMsg("viewer.overview.current"))}</span>`:""}</span><span class="overview-row-meta"><span>${escH(overviewTime(row.lastActivity))}</span><span>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}</span><span>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</span>${overviewStopStatus(row)?.state==="incomplete"?`<span>${escH(tMsg("viewer.overview.stopState.incomplete"))}</span>`:""}</span></button>`).join("")+"</section>";
   }).join("")||`<p class="overview-message">${escH(tMsg("viewer.overview.empty"))}</p>`;
   const expand=$("overviewExpandArchived");if(expand)expand.onclick=()=>{$("overviewShowArchived").checked=true;renderOverview()};
   const row=rows.find(row=>row.reviewId===overviewSelected);
   if(!row){$("overviewDetail").innerHTML=`<p class="overview-message">${escH(tMsg("viewer.overview.select"))}</p>`;return}
   const invalid=overviewState(row)==="invalid";
+  const stopState=overviewStopStatus(row)?.state;
+  const stopped=row.state==="stopped"||stopState==="stopped";
   const starting=overviewStarting.has(row.reviewId),startFailure=overviewStartFailures.get(row.reviewId);
   const url=typeof row.url==="string"&&/^http:\/\/127\.0\.0\.1:\d+\/$/.test(row.url)?row.url:null;
   const action=row.current?`<button class="overview-open" disabled>${escH(tMsg("viewer.overview.open"))}</button>`
-    :!invalid&&row.state==="stopped"?`<button id="overviewStart" class="overview-open" ${starting?"disabled":""}>${escH(tMsg(starting?"viewer.overview.starting":"viewer.overview.start"))}</button>`
+    :!invalid&&stopped?`<button id="overviewStart" class="overview-open" ${starting?"disabled":""}>${escH(tMsg(starting?"viewer.overview.starting":"viewer.overview.start"))}</button>`
     :!invalid&&url?`<a class="overview-open" href="${escH(url)}" target="_blank" rel="noopener noreferrer">${escH(tMsg("viewer.overview.open"))}</a>`:"";
   const forget=invalid&&typeof row.forgetCommand==="string"?`<code class="overview-command">${escH(row.forgetCommand)}</code><button id="overviewForgetCopy">${escH(tMsg("viewer.overview.copyCommand"))}</button>`:"";
   const summary=typeof row.summary==="string"&&row.summary.trim()?`<span lang="">${escH(row.summary)}</span>`
@@ -3034,13 +3188,18 @@ function renderOverview(){
     +(questions.length?`<dt>${escH(tMsg("viewer.overview.coreQuestions"))}</dt><dd lang=""><ul class="overview-questions">${questions.map(q=>`<li>${escH(q)}</li>`).join("")}</ul></dd>`:"");
   const metadata=`<section class="overview-metadata"><h3>${escH(tMsg("viewer.overview.summary"))}</h3><p class="overview-summary">${summary}</p>${problems?`<dl>${problems}</dl>`:""}</section>`;
   const archive=invalid?"":`<button id="overviewArchive"${archiveBusy?" disabled":""}>${escH(tMsg(archiveBusy?"viewer.overview.archiveUpdating":row.archived?"viewer.overview.unarchive":"viewer.overview.archive"))}</button>`;
+  const canStop=overviewStopEligible(row),supported=hasFeature(overviewData,"overview-stop");
+  const stopAction=canStop&&supported?`<button id="overviewStop"${stopState==="stopping"?" disabled":""}>${escH(tMsg(stopState==="stopping"?"viewer.overview.stopState.stopping":stopState==="incomplete"?"viewer.overview.stopRetry":"viewer.overview.stopAction"))}</button>`:"";
+  const label=overviewStateLabel(row),status=overviewStopFeedback(row,label)||escH(label);
+  const stopUpgrade=canStop&&!supported?`<p class="overview-message">${escH(tMsg("viewer.overview.stopIssue.upgrade"))}</p>`:"";
   $("overviewDetail").innerHTML=`<h2>${escH(row.name||row.reviewId.slice(0,8))}</h2><div class="overview-identity"><span>${escH(row.reviewId.slice(0,8))}</span><br><span>${escH(row.path||"")}</span></div>
     ${metadata}
-    <dl><dt>${escH(tMsg("viewer.overview.status"))}</dt><dd>${escH(overviewStateLabel(row))}</dd><dt>${escH(tMsg("viewer.overview.submissions"))}</dt><dd>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}<br>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</dd><dt>${escH(tMsg("viewer.overview.activity"))}</dt><dd>${escH(overviewTime(row.lastActivity))}</dd><dt>${escH(tMsg("viewer.overview.port"))}</dt><dd>${escH(row.port||"—")}${row.running&&row.running!==row.port?" · "+escH(tMsg("viewer.overview.actualPort",{port:row.running})):""}</dd></dl>
-    <div class="overview-actions">${invalid?forget:action+archive}</div>${startFailure?`<p id="overviewStartError" class="overview-message" role="alert">${escH(tMsg(startFailure))}</p>`:""}`;
+    <dl><dt>${escH(tMsg("viewer.overview.status"))}</dt><dd>${status}</dd><dt>${escH(tMsg("viewer.overview.submissions"))}</dt><dd>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}<br>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</dd><dt>${escH(tMsg("viewer.overview.activity"))}</dt><dd>${escH(overviewTime(row.lastActivity))}</dd><dt>${escH(tMsg("viewer.overview.port"))}</dt><dd>${escH(row.port||"—")}${row.running&&row.running!==row.port?" · "+escH(tMsg("viewer.overview.actualPort",{port:row.running})):""}</dd></dl>
+    <div class="overview-actions">${invalid?forget:action+archive+stopAction}</div>${stopUpgrade}${startFailure?`<p id="overviewStartError" class="overview-message" role="alert">${escH(tMsg(startFailure))}</p>`:""}`;
   const copy=$("overviewForgetCopy");if(copy)copy.onclick=async()=>{await copyText(row.forgetCommand);toast(tMsg("viewer.overview.copied"))};
   const archiveButton=$("overviewArchive");if(archiveButton)archiveButton.onclick=()=>archiveReview(row.reviewId,!row.archived);
   const start=$("overviewStart");if(start)start.onclick=()=>startOverview(row);
+  const stop=$("overviewStop");if(stop)stop.onclick=()=>confirmOverviewStop(row);
 }
 async function startOverview(row){
   const rid=row.reviewId;
@@ -3056,7 +3215,8 @@ async function startOverview(row){
     const data=await api("POST","/api/overview/start",{reviewId:rid});
     if(typeof data.url!=="string"||!/^http:\/\/127\.0\.0\.1:\d+\/$/.test(data.url))throw new Error("overview-start-format");
     const selected=(overviewData&&overviewData.reviews||[]).find(review=>review.reviewId===rid);
-    if(selected){const port=Number(new URL(data.url).port);Object.assign(selected,{url:data.url,running:port,state:port===selected.port?"running":"running-temp"})}
+    overviewStopResults.delete(rid);
+    if(selected){const port=Number(new URL(data.url).port);Object.assign(selected,{url:data.url,running:port,state:port===selected.port?"running":"running-temp",stop:null})}
     if(!opened.closed)opened.location.replace(data.url);
     await loadOverview();
   }catch(error){
@@ -3091,12 +3251,17 @@ async function loadOverview(){
     const data=await api("GET","/api/overview?scope="+encodeURIComponent($("overviewScope").value));
     if(request!==overviewRequest||archiveBusy)return;
     if(data.reviewId!==RID||!Array.isArray(data.reviews))throw new Error("overview-format");
+    for(const row of data.reviews){
+      const local=overviewStopResults.get(row.reviewId);
+      if(local&&row.stop?.revision>(local.revision??-1))overviewStopResults.delete(row.reviewId)
+    }
     const changed=JSON.stringify(overviewData)!==JSON.stringify(data);
     const current=data.reviews.find(row=>row.current);if(current)setCurrentArchive(current.archived);
     overviewData=data;$("overviewError").hidden=true;if(changed)renderOverview();
   }catch(error){
     if(request!==overviewRequest)return;
-    $("overviewError").textContent=tMsg("viewer.overview.loadError");$("overviewError").hidden=false;
+    const hostStopped=overviewStopResults.get(RID)?.state==="stopped";
+    $("overviewError").textContent=tMsg(hostStopped?"viewer.overview.stopCurrentStopped":"viewer.overview.loadError");$("overviewError").hidden=false;
     if(!overviewData){$("overviewList").textContent="";$("overviewDetail").textContent=""}
   }finally{if(request===overviewRequest){overviewLoading=false;$("overviewRefresh").disabled=false}}
 }
@@ -3116,7 +3281,7 @@ $("overviewList").onclick=event=>{const row=event.target.closest("[data-review-i
 addEventListener("hashchange",overviewRoute);
 setInterval(()=>{if(overviewShown()&&!document.hidden&&!overviewLoading)loadOverview()},4000);
 
-document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE)poll()});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE){pollSavePage();poll()}});
 
 (async function init(){
   applyLocale();
@@ -3124,6 +3289,9 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE)pol
   overviewRoute();
   analysisRoute();
   if(FILE){mirror();updateMode();render();return}
+  initSavePage();
+  await pollSavePage();
+  setInterval(pollSavePage,1800);
   LS.del(K.notes);                      // 服务模式不在浏览器里留整份批注副本
   LS.set(K.meta,{title:unH(document.title),name:NAME,ns:NS});   // 只记名称：这个地址以后换给别的审阅时，那边的页面能说出暂存属于谁
   migrateLegacyQueue();

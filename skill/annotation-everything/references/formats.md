@@ -312,6 +312,12 @@ JSON 与 Markdown 导出都不包含分析事件、问答、问题树或轮次�
 - 写入在 `~/.annotation-everything/.reviews.lock` 文件锁下读改写，原子替换；读不加锁。文件损坏时不会被覆盖，相关命令只警告、照常干活。**不要手改**，用 `list` / `forget` / `--claim-port`。
 - 复制出来的审阅目录（原目录还在、标识相同）不会顶替原条目，`--rebuild` 换了新标识后才登记。
 
+## 审阅总览停止
+
+总览客户端用 `POST /api/overview/stop` 提交 `{reviewId, scope}`，其中 `reviewId` 是目标审阅的完整标识，`scope` 取 `workspace` 或 `all`。`X-AE-Review` 仍指托管总览的审阅。成功响应中的 `reviewId` 指目标，`stop` 包含操作状态和组件结果。`GET /api/overview` 的每行也提供 `stop`，按目标持久状态刷新。`overview-stop` 声明总览停止能力，`stop-save-protection` 声明保存回执能力。
+
+目标页面用同源 JSON `POST /api/server/save-protection` 登记浏览器存储来源。停止期间，目标服务返回带 `stopId` 和尝试令牌的保存请求。页面在本机浏览器补传队列后提交同一请求的回执。`.annotation-save-pages.json` 在审阅目录内私有写入登记信息，包含随机标识和本机来源。页面失联或回执失败时，目标服务保持可用，便于重试。
+
 ## 导出与导入（批注摘要）
 
 页面「批注 → 复制全部 / 下载 Markdown / 下载 JSON」与 `notes.py export` 输出同一种文法；页面「导入…」与 `notes.py import` 读它。页面和命令行各有一份实现，遵守同一份规范（Python 实现在 `scripts/export_format.py`，页面在 `viewer_template.html` 的「导出 / 导入」一节）。
