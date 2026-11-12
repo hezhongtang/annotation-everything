@@ -241,3 +241,24 @@ def parts(report: Path) -> dict:
 def _rendered_pdf(workdir: Path, stem: str) -> Path | None:
     pdf = workdir / (stem + ".pdf")
     return pdf if pdf.is_file() else None
+
+
+def slide_texts(path: Path) -> dict[int, str]:
+    """逐页纯文本（元素名与文字，供对应句与 diff 用）：结构模型取文，不经渲染图。"""
+    model = pr.read(Path(path))
+    out: dict[int, str] = {}
+    for slide in model["slides"]:
+        lines = []
+        for element in slide["elements"]:
+            for value in (element.get("name"), element.get("text")):
+                if value and str(value).strip():
+                    lines.append(str(value))
+        out[slide["n"]] = "\n".join(lines)
+    return out
+
+
+def slide_parts(path: Path) -> list[tuple[str, int, str]]:
+    """按幻灯片稳定键切页：[(k:页面键, 页码, 文本)]（notes 的 diff / 快照切分口径）。"""
+    model = pr.read(Path(path))
+    texts = slide_texts(Path(path))
+    return [(f"k:{s['key']}", s["n"], texts[s["n"]]) for s in model["slides"]]

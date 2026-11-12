@@ -461,5 +461,50 @@ class FontEvidenceTests(unittest.TestCase):
                       "字体名称一致也不自动标记视觉核验通过")
 
 
+class NotesSupportTests(ControlledRenderMixin, unittest.TestCase):
+    """现有提交链路对 PPT 审阅的最小支撑：快照按原字节、diff 按页切分、报告侧文本可读。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ae-pptx-notes-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        import notes as notes_cli
+        self.notes_cli = notes_cli
+
+    def build_review(self) -> tuple[Path, Path]:
+        self.controlled(slides=2)
+        src = mp.build_sample(self.root / "deck.pptx")
+        out = self.root / "rv"
+        o, e = io.StringIO(), io.StringIO()
+        with redirect_stdout(o), redirect_stderr(e):
+            code = build_viewer.main(["--report", str(src), "--out", str(out),
+                                      "--no-scan-skills", "--locale", "zh-CN"])
+        assert code == 0, e.getvalue()
+        return src, out
+
+    def test_snapshot_keeps_pptx_bytes(self):
+        src, out = self.build_review()
+        snap = self.notes_cli._snapshot(out, 1, "base")
+        self.assertIsNotNone(snap, "PPTX 报告的快照要成功，不能按文本读炸掉")
+        saved = (snap / "report").read_bytes()
+        self.assertEqual(saved, src.read_bytes(), "PPTX 按原字节保存进快照")
+
+    def test_load_parts_splits_pptx_by_slide_key(self):
+        _src, out = self.build_review()
+        source = self.notes_cli._sources(out)
+        parts = self.notes_cli._load_parts("report", source["report"])
+        self.assertEqual([(k, n) for k, n, _t in parts], [("k:s260", 1), ("k:s257", 2)],
+                         "PPT 报告按幻灯片稳定键切页，不交给 DOCX 渲染器")
+        self.assertIn("合成标题", parts[0][2])
+        self.assertIn("合成单元格", parts[1][2])
+
+    def test_side_texts_read_pptx_report_pages(self):
+        src, _out = self.build_review()
+        texts = self.notes_cli.side_texts({"report": src, "script": None})
+        self.assertEqual(sorted(texts["报告"]), [1, 2])
+        self.assertIn("合成标题", texts["报告"][1])
+        self.assertIn("合成单元格", texts["报告"][2])
+
+
 if __name__ == "__main__":
     unittest.main()

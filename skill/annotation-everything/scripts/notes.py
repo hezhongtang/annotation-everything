@@ -399,8 +399,11 @@ def side_texts(sources: dict[str, Path | None] | None) -> dict[str, dict[int, st
     try:   # 报告与讲稿分开容错：一侧读不了，另一侧照样给出对应句
         if sources.get("report"):
             import docx_review
+            import pptx_report
             if docx_review.is_word_like(sources["report"]):
                 out["报告"] = docx_review.page_texts(sources["report"])
+            elif pptx_report.is_pptx(sources["report"]):
+                out["报告"] = pptx_report.slide_texts(sources["report"])
             else:
                 for sct in find_pages(sources["report"].read_text(encoding="utf-8")):
                     out["报告"][sct["n"]] = strip_tags(re.sub(r"<(script|style)\b.*?</\1\s*>", " ", sct["html"], flags=re.S | re.I))
@@ -1399,7 +1402,7 @@ def _snapshot(d: Path, seq: int, label: str) -> Path | None:
         if src and src.is_file():
             if src.stat().st_size > SNAP_MAX:
                 raise ValueError(f"{src} 超过 {SNAP_MAX // 1024 // 1024} MB")
-            if kind == "report" and _is_word(src):   # Word 文档（.docx/.docm/.dotx）按原字节保存，不按文本读
+            if kind == "report" and (_is_word(src) or _is_pptx(src)):   # Word / PPT 二进制包按原字节保存，不按文本读
                 _write_private_bytes(out / kind, src.read_bytes())
             else:
                 write_private(out / kind, src.read_text(encoding="utf-8"))
@@ -1414,6 +1417,11 @@ def _snapshot(d: Path, seq: int, label: str) -> Path | None:
 def _is_word(src: Path) -> bool:
     import docx_review
     return docx_review.is_word_like(src)
+
+
+def _is_pptx(src: Path) -> bool:
+    import pptx_report
+    return pptx_report.is_pptx(src)
 
 
 def _write_private_bytes(path: Path, data: bytes) -> None:
@@ -1449,6 +1457,9 @@ def _load_parts(kind: str, path: Path) -> list[tuple[str, int, str]]:
     with path.open("rb") as fh:
         is_zip = fh.read(2) == b"PK"
     if kind == "report" and is_zip:
+        if _is_pptx(path):   # PPTX 也是 zip 包：按幻灯片键切页，不交给 DOCX 渲染器
+            import pptx_report
+            return pptx_report.slide_parts(path)
         import docx_review
         return [(f"k:{pg['key']}", pg["n"], docx_review.page_lines(pg["html"])) for pg in docx_review.render(path)["pages"]]
     return _parts(kind, path.read_text(encoding="utf-8"))
