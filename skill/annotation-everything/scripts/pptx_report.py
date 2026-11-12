@@ -262,3 +262,11 @@ def slide_parts(path: Path) -> list[tuple[str, int, str]]:
     model = pr.read(Path(path))
     texts = slide_texts(Path(path))
     return [(f"k:{s['key']}", s["n"], texts[s["n"]]) for s in model["slides"]]
+
+
+def notes_by_slide(path: Path) -> dict[int, str]:
+    """逐页演讲者备注正文（未提供外部讲稿时进讲稿侧）；没有备注的页不在结果里。"""
+    model = pr.read(Path(path))
+    return {s["n"]: s["notes"]["text"] for s in model["slides"]
+            if isinstance(s.get("notes"), dict) and s["notes"].get("status") == "available"
+            and s["notes"].get("text")}

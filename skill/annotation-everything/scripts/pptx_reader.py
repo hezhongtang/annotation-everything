@@ -508,6 +508,103 @@ def _notes(archive: zipfile.ZipFile, relations: dict[str, dict[str, object]], sl
                              "textWrite": True, "geometryWrite": False, "styleWrite": False}}
 
 
+# ---------- 重建重定位：按幻灯片定位在当前版本的元素模型里找回目标 ----------
+def _ro_of(element: dict) -> list[str]:
+    """能力矩阵里不可自动回写的方面（只读限制快照，与页面的 pptxTargetOf 同一套语义）。"""
+    return [k for k in ("text", "geometry", "style") if not element["capabilities"][k + "Write"]]
+
+
+def _target_of(element: dict) -> dict:
+    out = {"key": element["key"], "id": str(element.get("id") or ""), "name": element.get("name") or "",
+           "kind": element["kind"], "z": element.get("z", 0), "digest": element.get("evidenceDigest") or ""}
+    ro = _ro_of(element)
+    if ro:
+        out["ro"] = ro
+    return out
+
+
+def _relocate_text(selection: dict, element: dict) -> dict:
+    """元素内文本选区：先按逻辑段落摘要找回段落；文字已变时引用原文在段内唯一出现才算找回。"""
+    paragraphs = [p for p in element.get("paragraphs") or [] if isinstance(p.get("digest"), str)]
+    want = selection.get("paraDigest")
+    same = [p for p in paragraphs if p["digest"] == want] if want else []
+    if len(same) == 1:
+        return {"para": same[0]["index"], "changed": False, "why": None}
+    hit = next((p for p in same if p["index"] == selection.get("para")), None)
+    if hit is not None:   # 摘要撞车（重复段落）：序号一致才认
+        return {"para": hit["index"], "changed": False, "why": None}
+    quote = str(selection.get("quote") or "")
+    hits = [p for p in paragraphs if quote and p.get("text", "").count(quote) == 1]
+    if len(same) > 1 or not quote:
+        return {"para": None, "changed": False, "why": "textAmbiguous"}
+    if len(hits) == 1:
+        return {"para": hits[0]["index"], "changed": True, "why": None}
+    return {"para": None, "changed": False, "why": "textAmbiguous" if hits else "textGone"}
+
+
+def _relocate_element(target: dict, elements: list[dict]) -> dict:
+    """在一个幻灯片的元素里找回一个目标：形状标识唯一即认；缺失或重复时用证据摘要消歧。"""
+    eid = str(target.get("id") or "")
+    digest = str(target.get("digest") or "")
+    candidates = [e for e in elements if str(e.get("id") or "") == eid] if eid else []
+    why = None
+    if len(candidates) == 1:
+        return {"element": candidates[0], "how": "shapeId", "why": None}
+    if len(candidates) > 1:
+        why = "duplicateShapeId"
+    elif eid:
+        why = "idGone"
+    else:
+        why = "noShapeId"
+    by_digest = [e for e in elements if digest and e.get("evidenceDigest") == digest]
+    if len(by_digest) == 1:
+        return {"element": by_digest[0], "how": "evidence", "why": why}
+    if why == "duplicateShapeId":   # 重复标识且证据对不上：证据冲突，不猜其中一个
+        return {"element": None, "how": None, "why": why}
+    if by_digest:                   # 证据撞车（复制出的同内容形状）：标需确认
+        return {"element": None, "how": None, "why": "duplicateEvidence"}
+    return {"element": None, "how": None, "why": "elementGone"}
+
+
+def relocate(anchor: dict, slides: list[dict]) -> dict:
+    """按批注的幻灯片定位，在当前版本的幻灯片模型里找回目标。
+
+    幻灯片按持久幻灯片键找回；带元素目标的定位再按形状标识找回元素——标识在幻灯片内唯一时直接认
+    （重命名、顺序与文本变化不改变身份），标识缺失或重复时用证据摘要（名称、类型、几何与文本摘要
+    的组合）消歧：唯一命中才认，证据冲突标 ambiguous，不猜相近对象。文本选区另按逻辑段落摘要核对，
+    段落文字已变时引用原文在段内唯一出现才算找回并标 changed。
+    返回 {"status": ok / ambiguous / missing, "how": 找回方式, "why": 没有按上一级证据认的原因,
+    "slide": 幻灯片或 None, "page": 现在的页码或 None, "changed": 文本是否已变,
+    "targets": 刷新后的元素目标或 None, "text": {"para", "changed"} 或 None}。
+    """
+    slide = next((s for s in slides if s.get("key") == anchor.get("slide")), None)
+    if slide is None:
+        return {"status": "missing", "how": None, "why": "slideGone", "slide": None, "page": None,
+                "changed": False, "targets": None, "text": None}
+    elements = anchor.get("elements") or []
+    targets, how, why = [], "slideKey", None
+    matched = None
+    for target in elements:
+        got = _relocate_element(target, slide["elements"])
+        if got["element"] is None:
+            return {"status": "ambiguous" if got["why"] in ("duplicateShapeId", "duplicateEvidence")
+                    else "missing", "how": None, "why": got["why"], "slide": slide, "page": None,
+                    "changed": False, "targets": None, "text": None}
+        targets.append(_target_of(got["element"]))
+        matched = got["element"]
+        how, why = got["how"], got["why"]
+    text = None
+    if isinstance(anchor.get("text"), dict):
+        got = _relocate_text(anchor["text"], matched or {})
+        if got["para"] is None:
+            return {"status": "ambiguous" if got["why"] == "textAmbiguous" else "missing",
+                    "how": how, "why": got["why"], "slide": slide, "page": None,
+                    "changed": False, "targets": None, "text": None}
+        text = {"para": got["para"], "changed": got["changed"]}
+    return {"status": "ok", "how": how, "why": why, "slide": slide, "page": slide["n"],
+            "changed": bool(text and text["changed"]), "targets": targets or None, "text": text}
+
+
 def read(path: Path) -> dict:
     """读取源 PPTX，返回版本化的幻灯片结构；输入错误统一抛出 PptxError。"""
     path = Path(path)

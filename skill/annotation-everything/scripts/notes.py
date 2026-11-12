@@ -44,6 +44,7 @@ import export_format as ef  # noqa: E402
 import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
+import pptx_reader  # noqa: E402
 import wakeup  # noqa: E402
 import analysis_store  # noqa: E402
 from build_viewer import (BuildError, FIELD_LABEL, field_name, find_pages, page_heads,  # noqa: E402
@@ -505,6 +506,53 @@ def _always_head(t, lang: str | None, always: list[dict[str, str]], scope_label:
     return t("cli.hand.alwaysHead", list=always_text(t, always))
 
 
+def pptx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any, lang: str | None = None) -> list[str]:
+    """批注的 PPT 幻灯片定位（show / wait 的阅读输出）：版本、幻灯片与元素身份、文本选区或
+    归一化坐标、只读限制，以及定位是否对着当前版本的源文件。"""
+    a = n.get("pptx")
+    if not isinstance(a, dict):
+        return []
+    if not store.usable_pptx_anchor(a):
+        return [t("cli.show.pptx.unsupported", version=a.get("v"), supported=pptx_reader.ANCHOR_VERSION)]
+    zh = lang != "en"
+    sep = "、" if zh else ", "
+    # 每项一行、各是词典里的一整句（不拿片段拼）
+    out = [t("cli.show.pptx.head", v=a["v"], kind=t(f"cli.show.pptx.kind.{a['kind']}"), slide=a["slide"])]
+    elements = a.get("elements") or []
+    if elements:
+        items = [t("cli.show.pptx.element", name=e.get("name") or e.get("key") or "",
+                   kind=t(f"viewer.pptx.kind.{e['kind']}"), id=e.get("id") or "") for e in elements]
+        out.append(t("cli.show.pptx.elements", count=len(items), list=sep.join(items)))
+        limited = [e for e in elements if e.get("ro")]
+        if limited:
+            ro_items = [t("cli.show.pptx.roItem", name=e.get("name") or e.get("key") or "",
+                          ro=sep.join(t(f"viewer.pptx.ro.{x}") for x in e["ro"])) for e in limited]
+            out.append(t("cli.show.pptx.ro", list=sep.join(ro_items)))
+    text = a.get("text") if isinstance(a.get("text"), dict) else None
+    if text is not None:
+        if text.get("start") is not None and text.get("end") is not None:
+            out.append(t("cli.show.pptx.text", para=text.get("para", 0) + 1, start=text["start"],
+                         end=text["end"], quote=text.get("quote", "")))
+        else:
+            out.append(t("cli.show.pptx.textPara", para=text.get("para", 0) + 1, quote=text.get("quote", "")))
+    if isinstance(a.get("point"), dict):
+        out.append(t("cli.show.pptx.point", x=round(a["point"].get("x", 0) * 100),
+                     y=round(a["point"].get("y", 0) * 100)))
+    if isinstance(a.get("region"), dict):
+        rg = a["region"]
+        out.append(t("cli.show.pptx.region", x=round(rg.get("x", 0) * 100), y=round(rg.get("y", 0) * 100),
+                     w=round(rg.get("w", 0) * 100), h=round(rg.get("h", 0) * 100)))
+    out.append(t(f"cli.show.pptx.via.{a.get('via')}"))
+    current = (manifest.get("pptx") or {}).get("fingerprint") if isinstance(manifest.get("pptx"), dict) else None
+    if n.get("orphan"):
+        out.append(t("cli.show.pptx.orphan"))
+    elif a.get("changed"):
+        out.append(t("cli.show.pptx.changed"))
+    elif current and a.get("fp") != current:
+        out.append(t("cli.show.pptx.outdated"))
+    return out
+
+
 def docx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]:
     """批注的 DOCX 段落定位（show / wait 的阅读输出）：段落、偏移、定位来源，以及定位是否对着当前版本。"""
     a = n.get("docx")
@@ -623,14 +671,16 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
         if n.get("trail"):
             line += t("cli.batch.trail", text=trail_text(n, lang=lang))
         if n.get("orphan"):
-            # 只有可读的段落定位会在下方说明孤立原因；未知版本仍需保留页面警告。
-            if not docx_review.usable_anchor(n.get("docx")):
+            # 只有可读的段落/幻灯片定位会在下方说明孤立原因；未知版本仍需保留页面警告。
+            if not docx_review.usable_anchor(n.get("docx")) and not store.usable_pptx_anchor(n.get("pptx")):
                 line += "\n  " + t("cli.show.orphan", pageKey=n.get("key"))
         elif n.get("key") and keys.get(n.get("page")) and n["key"] != keys[n["page"]]:
             line += "\n  " + t("cli.show.keyMismatch", pageKey=n["key"], page=n["page"], current=keys[n["page"]])
         if n.get("anchor"):
             line += "\n  " + t("cli.show.anchor", text=n["anchor"])
         for extra in docx_lines(n, manifest, t):
+            line += "\n  " + extra
+        for extra in pptx_lines(n, manifest, t, lang):
             line += "\n  " + extra
         active_always = (always or []) if n.get("status") != "resolved" else []
         sources_by_name = {}
