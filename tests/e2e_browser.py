@@ -3050,10 +3050,86 @@ for n in (1, 2):
                   condition="区域标注卡片出现在列表里")
        and page.locator("#host .ae-region").count() >= 1,
        "框选区域标注落在 PPT 页上并记成批注")
+
+    # #149：元素覆盖层 —— 点选单元素、⌘/Ctrl 加选多元素（有序目标）、点空白清除
+    def slide_point(p, fx, fy):
+        return p.evaluate(f"() => {{const s={STAGE}.getBoundingClientRect();"
+                          f"return {{x:s.left+s.width*{fx},y:s.top+s.height*{fy}}}}}")
+
+    def local_notes(p):
+        return p.evaluate("() => JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")
+
+    go_page(page, 2)
+    picture = slide_point(page, 0.12, 0.07)      # 合成图片（只读元素）
+    page.mouse.click(picture["x"], picture["y"])
+    ok(wait_until(lambda: page.locator("#pptxChip.on").count() == 1, page, 5,
+                  condition="元素目标 chip 出现")
+       and "合成图片" in page.inner_text("#pptxChip"),
+       "点选元素后输入区显示元素目标")
+    ok(wait_toast(page, "只读元素", condition="只读元素提示出现"),
+       "选中只读元素时提示不能自动回写")
+    group = slide_point(page, 0.15, 0.5)         # 组合形状（组合内文本之外）
+    page.mouse.click(group["x"], group["y"], modifiers=["Control"])
+    page.fill("#ntext", "PPT 多元素批注")
+    page.click("[data-act='add']")
+    ok(wait_until(lambda: any(n["text"] == "PPT 多元素批注" for n in local_notes(page)), page, 5,
+                  condition="多元素批注进入本地存储"), "多元素批注可创建")
+    multi = next(n for n in local_notes(page) if n["text"] == "PPT 多元素批注")["pptx"]
+    ok(multi["kind"] == "elements" and multi["via"] == "click" and multi["slide"] == "s257"
+       and [e["key"] for e in multi["elements"]] == ["e11", "e12"],
+       "多元素批注保存每个目标的稳定身份，顺序就是点选顺序（不用一个区域坐标代替）")
+    ok(multi["elements"][0]["ro"] == ["text", "geometry", "style"] and "ro" in multi["elements"][1],
+       "图片与组合按能力矩阵带只读限制")
+    blank = slide_point(page, 0.95, 0.9)
+    page.mouse.click(blank["x"], blank["y"])
+    ok(wait_until(lambda: page.locator("#pptxChip.on").count() == 0, page, 5,
+                  condition="元素目标清除"), "点幻灯片空白处清除元素目标")
+
+    # 页缩略图选整页：目标就是这张幻灯片（kind page），不经元素覆盖层
+    page.locator("#pageTree .page-item").nth(0).hover()
+    page.locator('[data-pick="0"]').click()
+    ok(wait_until(lambda: "整页" in page.inner_text("#pptxChip"), page, 5,
+                  condition="整页目标 chip 出现"), "页缩略图可把整页选为批注目标")
+    page.fill("#ntext", "PPT 页树整页批注")
+    page.click("[data-act='add']")
+    ok(wait_until(lambda: any(n["text"] == "PPT 页树整页批注" for n in local_notes(page)), page, 5,
+                  condition="整页批注进入本地存储"), "整页批注可创建")
+    whole = next(n for n in local_notes(page) if n["text"] == "PPT 页树整页批注")["pptx"]
+    ok(whole["kind"] == "page" and whole["via"] == "thumb" and whole["slide"] == "s260",
+       "整页批注记录幻灯片身份与定位来源（页缩略图）")
+
+    # 普通文本选择：透明文本层可拖选，引用批注带逻辑段落、码点偏移与 run 样式边界
+    drag_select(page, page.locator("#host section.page .pptx-text p").first)
+    ok(page.is_visible("#selbar"), "PPT 文本层可选择，拖选弹出操作条")
+    page.click("#selbar [data-sel='comment']")
+    page.fill("#ntext", "PPT 文字引用批注")
+    page.click("[data-act='add']")
+    ok(wait_until(lambda: any(n["text"] == "PPT 文字引用批注" for n in local_notes(page)), page, 5,
+                  condition="文字引用批注进入本地存储"), "文字引用批注可创建")
+    quoted = next(n for n in local_notes(page) if n["text"] == "PPT 文字引用批注")
+    a = quoted.get("pptx") or {}
+    ok(a.get("kind") == "text" and a.get("via") == "selection" and a.get("slide") == "s260"
+       and [e["key"] for e in a.get("elements", [])] == ["e2"],
+       "文本批注定位到所选元素与幻灯片")
+    text_anchor = a.get("text") or {}
+    ok(text_anchor.get("para") == 0 and text_anchor.get("start") == 0 and text_anchor.get("end") == 5
+       and text_anchor.get("runs") == [{"start": 0, "end": 2}, {"start": 2, "end": 5}]
+       and quoted.get("quote"),
+       "跨 run 选区保留逻辑段落、码点偏移、引用原文与样式边界（😀 按 1 个码点计）")
+    ok("幻灯片定位" in page.inner_text("#nlist"), "批注卡片显示幻灯片定位行")
+
     page.reload()
     texts = page.inner_text("#nlist")
-    ok(all(word in texts for word in ("PPT 整页批注", "PPT 页点标注", "PPT 页框选区域")),
-       "file:// 刷新后整页、点标注与区域标注仍在")
+    ok(all(word in texts for word in ("PPT 整页批注", "PPT 页点标注", "PPT 页框选区域",
+                                      "PPT 多元素批注", "PPT 页树整页批注", "PPT 文字引用批注")),
+       "file:// 刷新后整页、点、区域、多元素、页树整页与文字引用批注仍在")
+    reloaded = {n["text"]: n.get("pptx") or {} for n in local_notes(page)}
+    pin_a, region_a = reloaded.get("PPT 页点标注", {}), reloaded.get("PPT 页框选区域", {})
+    ok(pin_a.get("kind") == "point" and abs(pin_a.get("point", {}).get("x", -1) - 0.5) < 0.001
+       and abs(pin_a.get("point", {}).get("y", -1) - 0.1) < 0.001,
+       "点标注的 pptx 定位按画布归一化（0.5, 0.1）")
+    ok(region_a.get("kind") == "region" and abs(region_a.get("region", {}).get("w", -1) - 0.3) < 0.002,
+       "区域标注的 pptx 定位按画布归一化（宽 0.3）")
     ctx.close()
 
     # 服务模式：批注落盘；旧服务（不声明 pptx 特性）时阻断写入
@@ -3071,7 +3147,39 @@ for n in (1, 2):
         ok(wait_until(lambda: any(n["text"] == "PPT 服务模式批注" for n in disk_notes(sd)), spage, 8,
                       condition="批注写进 notes.json"),
            "服务模式下 PPT 页批注落盘")
+        ok(next(n for n in disk_notes(sd) if n["text"] == "PPT 服务模式批注")["pptx"]["kind"] == "point",
+           "服务端接受并落盘 pptx 定位字段")
+        go_page(spage, 2)
+        media = slide_point(spage, 0.45, 0.07)
+        spage.mouse.click(media["x"], media["y"])
+        spage.fill("#ntext", "PPT 服务模式元素批注")
+        spage.click("[data-act='add']")
+        ok(wait_until(lambda: any(n["text"] == "PPT 服务模式元素批注" for n in disk_notes(sd)), spage, 8,
+                      condition="元素批注写进 notes.json"),
+           "服务模式下元素批注落盘")
+        element_note = next(n for n in disk_notes(sd) if n["text"] == "PPT 服务模式元素批注")
+        ok(element_note["pptx"]["kind"] == "elements"
+           and [e["key"] for e in element_note["pptx"]["elements"]] == ["e16"],
+           "服务端保存元素目标的稳定身份与只读限制")
         ok(spage.locator("#pptxBlock").is_hidden(), "新版服务下不显示阻断提示")
+        # 保存被拒后重试：完整 pptx 定位（文本选区 + run 边界）仍在
+        go_page(spage, 1)
+        drag_select(spage, spage.locator("#host section.page .pptx-text p").first)
+        spage.click("#selbar [data-sel='comment']")
+        spage.fill("#ntext", "X" * 20001)
+        spage.click("[data-act='add']")
+        ok(wait_until(lambda: len(spage.input_value("#ntext")) == 20001 and "20000" in spage.inner_text("#toast"),
+                      spage, 8, condition="超长引用批注被服务拒绝并恢复输入"),
+           "服务拒绝超长引用批注后保留原输入")
+        spage.fill("#ntext", "PPT 服务模式文字批注")
+        spage.click("[data-act='add']")
+        ok(wait_until(lambda: any(n["text"] == "PPT 服务模式文字批注" for n in disk_notes(sd)), spage, 8,
+                      condition="缩短后的文字批注写进 notes.json"),
+           "保存被拒后重试成功")
+        retry = next(n for n in disk_notes(sd) if n["text"] == "PPT 服务模式文字批注")
+        ok(retry["pptx"]["kind"] == "text" and retry["pptx"]["text"]["runs"]
+           and retry["pptx"]["text"]["end"] > retry["pptx"]["text"]["start"],
+           "重试后的批注仍保留完整 pptx 定位（段落、偏移与 run 边界）")
         old = sctx.new_page()
 
         def legacy(route):
@@ -3085,6 +3193,9 @@ for n in (1, 2):
         ok(wait_dom(old, "() => !document.getElementById('pptxBlock').hidden", 8)
            and "旧版本" in old.inner_text("#pptxBlock"), "旧版服务不认 pptx 特性时显示阻断提示")
         before = len(disk_notes(sd))
+        drag_select(old, old.locator("#host section.page .pptx-text p").first)
+        ok(wait_toast(old, "不能写入", condition="阻断提示出现") and not old.is_visible("#selbar"),
+           "阻断期间选中文字不弹操作条，提示不能写入（多目标与文本定位不会被静默丢掉）")
         # 面板整体 inert（与 DOCX 旧服务阻断同一条规则）：不能操作批注输入，服务端也没有新增
         ok(old.evaluate("() => document.getElementById('bottomPanel').inert") and len(disk_notes(sd)) == before,
            "阻断期间批注面板不可操作，notes.json 没有新增")

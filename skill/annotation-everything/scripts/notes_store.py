@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import docx_review
+import pptx_reader
 import fsutil
 
 NOTES_FILE = "notes.json"
@@ -37,10 +38,13 @@ STATUSES = ("open", "drafted", "resolved", "held")
 TRAIL_KEEP = 50   # 每条批注保留的处理痕迹条数（谁、哪个阶段、做了什么、理由）
 # 页面可写的字段；id / at / status 相关字段由存储层或专门操作维护
 EDITABLE = ("page", "title", "target", "text", "quote", "quoteFrom", "pin", "region", "edit", "pair", "skills", "style",
-            "anchor", "key", "orphan", "docx")
+            "anchor", "key", "orphan", "docx", "pptx")
 # key：页面键（报告 section 的 data-key），重排页序后据此把批注挪回正确的页；orphan：重建后原页面已不存在
 # docx：DOCX 审阅的段落定位（带版本号 v），见 _clean_docx；重建时先按它把批注归到段落现在所在的页，
 #   页面键只用于没有段落定位的批注。HTML 报告的批注没有这个字段。
+# pptx：PPT 审阅的幻灯片定位（带版本号 v），见 _clean_pptx：幻灯片键 + 有序元素目标 / 文本选区 /
+#   归一化点或区域坐标 + 源文件指纹 + 定位来源与只读限制。与 docx 并列、互不影响；
+#   PPT 页的页面键就是幻灯片键，重建按页面键找回。HTML / DOCX 批注没有这个字段。
 # 报告上的标注：pin = 点 {x, y}，region = 框 {x, y, w, h}，都是相对页面的百分比。页面新写的批注只带其中一种
 # （新建、重新标注时两个字段一起发，另一种为 null）；拖动只改被拖的那一种。
 # 风格优化的范围跟着标注走：有框 = region（框选处），有点 = pin（标点处），都没有 = page（整页）。
@@ -624,6 +628,181 @@ def _clean_docx(v: Any) -> dict[str, Any] | None:
     return out
 
 
+# ---------- PPT 幻灯片定位（与 DOCX 段落定位并列的字段，见 GLOSSARY「幻灯片定位」） ----------
+PPTX_KINDS = ("page", "elements", "text", "point", "region")   # 定位整页、元素（可多选）、文本选区、点或区域
+PPTX_VIA = {"page": ("thumb",), "elements": ("click",), "text": ("selection", "text"),
+            "point": ("point",), "region": ("region",)}
+# 定位来源：页缩略图选整页 / 元素点选（含多选）/ 浏览器选区 / 按文本唯一匹配反查 / 标注坐标
+PPTX_EL_KINDS = ("shape", "group", "connector", "picture", "media", "table", "chart", "smartArt", "ole", "unknown")
+PPTX_RO = ("text", "geometry", "style")     # 能力矩阵里声明不可自动回写的方面（只读元素）
+MAX_PPTX_ELEMENTS = 32                      # 一次批注最多指向的元素目标数
+MAX_PPTX_RUNS = 64                          # 文本选区保留的样式边界（run 边界）条数
+MAX_PPTX_QUOTE = 600                        # 文本选区引用原文的长度上限（字符）
+MAX_PPTX_RAW = 8000                         # 更高版本的定位原样保留时的大小上限（JSON 字符数）
+_PPTX_DIGEST_RE = re.compile(r"[0-9a-f]{64}")   # pptx_reader 的摘要一律是 SHA-256 十六进制全串
+
+
+def usable_pptx_anchor(a: object) -> bool:
+    """本版本读得懂的 pptx 定位：v1 且带幻灯片键与 kind。更高版本的原样保留但不参与重定位。"""
+    return (isinstance(a, dict) and not isinstance(a.get("v"), bool)
+            and a.get("v") == pptx_reader.ANCHOR_VERSION
+            and isinstance(a.get("slide"), str) and bool(a["slide"])
+            and a.get("kind") in PPTX_KINDS)
+
+
+def _pptx_nat(v: Any, name: str) -> int:
+    if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= _MAX_OFFSET:
+        raise NoteError(f"pptx.{name} 须为非负整数")
+    return v
+
+
+def _pptx_unit(v: Any, name: str) -> float:
+    """相对幻灯片画布的归一化坐标分量：0..1 的有限数。"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1:
+        raise NoteError(f"pptx.{name} 须为 0 到 1 之间的归一化坐标")
+    return round(float(v), 4)
+
+
+def _clean_pptx_element(v: Any) -> dict[str, Any]:
+    if not isinstance(v, dict):
+        raise NoteError("pptx.elements[] 须为对象")
+    key, eid, name = v.get("key"), v.get("id"), v.get("name", "")
+    if not isinstance(key, str) or not 0 < len(key.strip()) <= 120:
+        raise NoteError("pptx.elements[].key 须为元素键")
+    if not isinstance(eid, str) or not 0 < len(eid.strip()) <= 120:
+        raise NoteError("pptx.elements[].id 须为形状标识")
+    if name in (None, ""):
+        name = ""
+    elif not isinstance(name, str):
+        raise NoteError("pptx.elements[].name 须为字符串")
+    if v.get("kind") not in PPTX_EL_KINDS:
+        raise NoteError(f"pptx.elements[].kind 须为 {PPTX_EL_KINDS} 之一")
+    if not isinstance(v.get("digest"), str) or not _PPTX_DIGEST_RE.fullmatch(v["digest"]):
+        raise NoteError("pptx.elements[].digest 不是合法的证据摘要")
+    out = {"key": key.strip(), "id": eid.strip(), "name": name[:MAX_SHORT], "kind": v["kind"],
+           "z": _pptx_nat(v.get("z"), "elements[].z"), "digest": v["digest"]}
+    ro = v.get("ro")
+    if ro not in (None, "", []):
+        if (not isinstance(ro, list) or not ro or len(ro) > len(PPTX_RO)
+                or any(x not in PPTX_RO for x in ro) or len(set(ro)) != len(ro)):
+            raise NoteError(f"pptx.elements[].ro 须为 {PPTX_RO} 的非空子集")
+        out["ro"] = ro
+    return out
+
+
+def _clean_pptx_text(v: Any) -> dict[str, Any]:
+    if not isinstance(v, dict):
+        raise NoteError("pptx.text 须为对象")
+    quote = v.get("quote", "")
+    if not isinstance(quote, str) or not quote.strip():
+        raise NoteError("pptx.text.quote 须为引用原文")
+    if not isinstance(v.get("paraDigest"), str) or not _PPTX_DIGEST_RE.fullmatch(v["paraDigest"]):
+        raise NoteError("pptx.text.paraDigest 不是合法的段落摘要")
+    out = {"para": _pptx_nat(v.get("para"), "text.para"), "paraDigest": v["paraDigest"],
+           "quote": quote[:MAX_PPTX_QUOTE]}
+    # start / end / runs 成对给出：选区与段内唯一反查带字符偏移与样式边界；
+    # 段内重复文字反查只记元素与逻辑段落，不猜偏移
+    has_range = any(k in v for k in ("start", "end"))
+    if has_range:
+        if "start" not in v or "end" not in v:
+            raise NoteError("pptx.text.start 与 pptx.text.end 须一起给出")
+        start, end = _pptx_nat(v["start"], "text.start"), _pptx_nat(v["end"], "text.end")
+        if end < start:
+            raise NoteError("pptx.text.end 不能小于 pptx.text.start")
+        out["start"], out["end"] = start, end
+        runs = v.get("runs")
+        if runs in (None, []):
+            raise NoteError("pptx.text.runs 须与字符偏移一起给出")
+        if not isinstance(runs, list) or len(runs) > MAX_PPTX_RUNS:
+            raise NoteError(f"pptx.text.runs 最多 {MAX_PPTX_RUNS} 条")
+        cleaned = []
+        for r in runs:
+            if not isinstance(r, dict):
+                raise NoteError("pptx.text.runs[] 须为对象")
+            rs, re_ = _pptx_nat(r.get("start"), "text.runs[].start"), _pptx_nat(r.get("end"), "text.runs[].end")
+            if re_ < rs:
+                raise NoteError("pptx.text.runs[].end 不能小于 start")
+            cleaned.append({"start": rs, "end": re_})
+        out["runs"] = cleaned
+    elif v.get("runs") is not None:
+        raise NoteError("pptx.text.runs 须与字符偏移一起给出")
+    return out
+
+
+def _clean_pptx(v: Any) -> dict[str, Any] | None:
+    """PPT 幻灯片定位。v1：{"v", "slide", "kind", "via", "fp"?, "elements"?, "text"?, "point"?, "region"?}——
+    slide 是持久幻灯片键；elements 是有序元素目标列表（每个带读取层的稳定身份与只读限制），
+    多元素批注不可以用一个区域坐标代替目标身份；text 是元素内逻辑段落的 Unicode 码点选区，
+    run 边界只用于保留样式，不作为唯一定位；point / region 是相对幻灯片画布的归一化坐标。
+    版本更高的字段读不懂：原样保留（限大小），不清洗、不用于定位。"""
+    if v in (None, "", {}):
+        return None
+    if not isinstance(v, dict):
+        raise NoteError("pptx 须为对象")
+    ver = v.get("v")
+    if isinstance(ver, bool) or not isinstance(ver, int) or ver < 1:
+        raise NoteError("pptx.v 须为正整数")
+    if ver > pptx_reader.ANCHOR_VERSION:
+        raw = _dumps(v)
+        if len(raw) > MAX_PPTX_RAW:
+            raise NoteError("pptx 定位过大")
+        return json.loads(raw)
+    kind, via = v.get("kind"), v.get("via")
+    if kind not in PPTX_KINDS:
+        raise NoteError(f"pptx.kind 须为 {PPTX_KINDS} 之一")
+    if via not in PPTX_VIA[kind]:
+        raise NoteError(f"pptx.via 须为 {PPTX_VIA[kind]} 之一")
+    slide = v.get("slide")
+    if not isinstance(slide, str) or not 0 < len(slide.strip()) <= 120:
+        raise NoteError("pptx.slide 须为幻灯片键")
+    out: dict[str, Any] = {"v": ver, "slide": slide.strip(), "kind": kind, "via": via}
+    if v.get("fp") not in (None, ""):
+        if not isinstance(v["fp"], str) or not _FP_RE.fullmatch(v["fp"]):
+            raise NoteError("pptx.fp 不是合法的源文件指纹")
+        out["fp"] = v["fp"]
+    elements = v.get("elements")
+    if elements not in (None, "", []):
+        if not isinstance(elements, list) or not 1 <= len(elements) <= MAX_PPTX_ELEMENTS:
+            raise NoteError(f"pptx.elements 须为 1 到 {MAX_PPTX_ELEMENTS} 个目标的有序列表")
+        out["elements"] = [_clean_pptx_element(e) for e in elements]
+    if v.get("text") is not None:
+        if kind != "text" or len(out.get("elements") or []) != 1:
+            raise NoteError("pptx.text 只属于落在一个元素上的文本定位")
+        out["text"] = _clean_pptx_text(v["text"])
+    elif kind == "text":
+        raise NoteError("pptx.text 须与文本定位一起给出")
+    if v.get("point") is not None:
+        if kind != "point":
+            raise NoteError("pptx.point 只属于点定位")
+        p = v["point"]
+        if not isinstance(p, dict) or set(p) != {"x", "y"}:
+            raise NoteError("pptx.point 须为 {{x, y}}")
+        out["point"] = {"x": _pptx_unit(p.get("x"), "point.x"), "y": _pptx_unit(p.get("y"), "point.y")}
+    elif kind == "point":
+        raise NoteError("pptx.point 须与点定位一起给出")
+    if v.get("region") is not None:
+        if kind != "region":
+            raise NoteError("pptx.region 只属于区域定位")
+        rg = v["region"]
+        if not isinstance(rg, dict) or set(rg) - {"x", "y", "w", "h"}:
+            raise NoteError("pptx.region 须为 {{x, y, w, h}}")
+        region = {k: _pptx_unit(rg.get(k), f"region.{k}") for k in ("x", "y", "w", "h")}
+        if region["w"] <= 0 or region["h"] <= 0:
+            raise NoteError("pptx.region 的宽高须为正")
+        if region["x"] + region["w"] > 1.0001 or region["y"] + region["h"] > 1.0001:
+            raise NoteError("pptx.region 不能超出幻灯片画布")
+        out["region"] = region
+    elif kind == "region":
+        raise NoteError("pptx.region 须与区域定位一起给出")
+    if kind == "page" and "elements" in out:
+        raise NoteError("整页定位不携带元素目标列表")
+    if kind == "elements" and "elements" not in out:
+        raise NoteError("元素定位须携带元素目标列表")
+    if kind == "text" and "elements" not in out:
+        raise NoteError("文本定位须携带所在元素")
+    return out
+
+
 def _clean_style(v: Any) -> dict[str, Any] | None:
     if v in (None, "", {}):
         return None
@@ -705,6 +884,8 @@ def _clean_fields(data: dict[str, Any], *, partial: bool) -> dict[str, Any]:
             v = bool(v)
         elif k == "docx":
             v = _clean_docx(v)
+        elif k == "pptx":
+            v = _clean_pptx(v)
         else:
             v = fix_text(v)
             if k in ("text", "quote"):
@@ -761,6 +942,8 @@ def _new_note(raw: dict[str, Any], fields: dict[str, Any], nid: str) -> dict[str
     _settle_marks(note)
     if note.get("docx") is None:
         note.pop("docx", None)
+    if note.get("pptx") is None:
+        note.pop("pptx", None)
     return note
 
 
@@ -806,17 +989,22 @@ def update(review_dir: Path, note_id: str, data: dict[str, Any], *, by: str = "p
             elif fields["text"] not in (DELETE_TEXT,) and not fields["text"].startswith(REPLACE_PREFIX):
                 fields["edit"] = None   # 改成了普通意见
         # 人工确认归属（去掉 orphan）或挪到别的页：以这次决定为准。本版本读得懂的段落定位不再保留，
-        # 否则下次重建又会按段落把批注挪回去或重新标成孤立；之后这条批注按页面键走。
+        # 否则下次重建又会按段落把批注挪回去或重新标为孤立；之后这条批注按页面键走。
         moved = "page" in fields and fields["page"] != note.get("page")
         if "docx" not in fields and (moved or fields.get("orphan") is False) \
                 and docx_review.usable_anchor(note.get("docx")):
             fields["docx"] = None
+        if "pptx" not in fields and (moved or fields.get("orphan") is False) \
+                and usable_pptx_anchor(note.get("pptx")):
+            fields["pptx"] = None
         note.update(fields)
         _settle_marks(note, fields)
         if note.get("edit") is None:
             note.pop("edit", None)
         if note.get("docx") is None:
             note.pop("docx", None)
+        if note.get("pptx") is None:
+            note.pop("pptx", None)
         note["updatedAt"] = now_iso()
         return _commit(review_dir, doc, {"op": "update", "by": by, "id": note_id, "fields": fields}), note
 
