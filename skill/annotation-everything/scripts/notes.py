@@ -35,6 +35,7 @@ import shlex
 import signal
 import sys
 import time
+import zipfile
 from pathlib import Path
 from typing import Any, Callable
 
@@ -1471,7 +1472,14 @@ def _is_word(src: Path) -> bool:
 
 def _is_pptx(src: Path) -> bool:
     import pptx_report
-    return pptx_report.is_pptx(src)
+    if pptx_report.is_pptx(src):
+        return True
+    # 快照按原字节保存时没有扩展名：按包内容认 PPTX（有主演示文稿部件），不误交给 DOCX 渲染器
+    try:
+        with zipfile.ZipFile(src) as zf:
+            return "ppt/presentation.xml" in zf.namelist()
+    except (OSError, zipfile.BadZipFile):
+        return False
 
 
 def _write_private_bytes(path: Path, data: bytes) -> None:

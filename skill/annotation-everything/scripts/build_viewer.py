@@ -791,7 +791,7 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         except ScriptError as exc:
             raise SystemExit("\n".join(exc.messages)) from None
     if pptx_meta is not None and script is None:
-        # 无外部讲稿：已有演讲者备注逐页进讲稿侧（两个事实源不混用；本版本不回写 PPT 备注）
+        # 无外部讲稿：已有演讲者备注逐页进讲稿侧（两个事实源不混用；讲稿侧快捷修改由 pptx_edit.py 写回备注）
         notes_by_n = pptx_report.notes_by_slide(report)
         if notes_by_n:
             spages = [{"n": pg["n"], "title": esc(pg["title"]), "dur": "", "sec": 0,
