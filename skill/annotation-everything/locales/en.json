@@ -2084,6 +2084,7 @@
     "viewer.docx.limits.one": "{count} kind of structure is only approximated or shown as a placeholder.",
     "viewer.docx.limits.other": "{count} kinds of structure are only approximated or shown as placeholders.",
     "check.docxUnsupported": "{path} is a Word document. Report checks apply only to generated page-by-page HTML reports; open a Word document for review directly with build_viewer.py --report",
+    "check.pptxUnsupported": "{path} is a presentation. Report checks apply only to generated page-by-page HTML reports; open a PPTX for review directly with build_viewer.py --report",
     "build.note.docx.missing": "Annotation {id} (page {page}): its paragraph is missing from the rebuilt document; marked for confirmation and the page number was left unchanged",
     "build.note.docx.ambiguous": "Annotation {id} (page {page}): its paragraph has no usable paraId, and the rebuilt document has several paragraphs with the same text at other positions; marked for confirmation and the page number was left unchanged",
     "build.note.docx.noId": "Annotation {id}: its paragraph has no paraId; matched by paragraph number and text digest and placed on page {page}",

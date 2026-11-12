@@ -239,6 +239,13 @@ class CompatibilityTests(ControlledRenderMixin, unittest.TestCase):
         self.assertIn("viewer.pptx.oldService", page, "页面带旧服务阻断提示的词典 key")
         self.assertIn("pptxBlocked", page, "旧服务写入阻断逻辑进入页面")
 
+    def test_report_check_refuses_pptx_explicitly(self):
+        import report_check
+        with self.assertRaises(report_check.UsageError) as caught:
+            report_check.check_report(mp.build_sample(self.root / "deck.pptx"), locale="zh-CN")
+        self.assertIn("演示文稿", str(caught.exception))
+        self.assertNotIn("UnicodeDecodeError", str(caught.exception))
+
 
 class RenderPipelineTests(unittest.TestCase):
     """真实工具管线的错误路径：伪造 soffice / pdftoppm 脚本注入 PATH（先例 test_pptx_fonts）。

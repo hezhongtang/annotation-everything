@@ -1940,6 +1940,7 @@
     "viewer.docx.readonlyEdit": "所选文字涉及{items}，这类内容不能自动回写。",
     "viewer.docx.manualEdit": "交给 Agent 后将校验定位并回写；不支持的结构需在 Word 中修改。",
     "check.docxUnsupported": "{path} 是 Word 文档。报告检查只针对生成的逐页 HTML 报告；Word 文档请直接用 build_viewer.py --report 进入审阅",
+    "check.pptxUnsupported": "{path} 是演示文稿。报告检查只针对生成的逐页 HTML 报告；PPTX 请直接用 build_viewer.py --report 进入审阅",
     "build.note.docx.missing": "批注 {id}（第 {page} 页）定位的段落在新版文档里找不到，已标出待确认，页码未改动",
     "build.note.docx.ambiguous": "批注 {id}（第 {page} 页）定位的段落没有可用的 paraId，新版文档里有多个文字相同的段落且序号对不上，无法确认是哪一段，已标出待确认，页码未改动",
     "build.note.docx.noId": "批注 {id}：所在段落没有 paraId，已按段落序号与文本摘要互证，定位到第 {page} 页",
