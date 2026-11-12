@@ -969,6 +969,7 @@
     "viewer.stop.reason.agent-turn-id-unavailable": "Could not identify the agent turn to cancel",
     "viewer.stop.reason.agent-record-timeout": "Timed out recording the cancellation confirmation",
     "viewer.stop.reason.http-status-unconfirmed": "The local service exit is unconfirmed",
+    "viewer.stop.reason.stop-interrupted": "The previous stop was interrupted. Choose “Retry stop” to continue with the remaining components.",
     "viewer.stop.reason.upgrade-required": "The local service needs an update",
     "viewer.stop.reason.unknown": "Check this component’s status ({code})",
     "viewer.batch.loading": "Reading the processing history…",

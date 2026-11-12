@@ -20,6 +20,7 @@ LOCK_FILE = ".annotation-stop.lock"
 OPERATION_LOCK = ".annotation-stop-operation.lock"
 SCHEMA = 1
 COMPONENTS = ("gate", "save", "waiters", "hooks", "agent", "http")
+STOP_INTERRUPTED = "stop-interrupted"
 
 
 class OperationBusy(Exception):
@@ -36,6 +37,20 @@ def operation(review, *, deadline=None):
         except BlockingIOError:
             raise OperationBusy from None
         yield
+
+
+@contextlib.contextmanager
+def stop_attempt(review, *, deadline):
+    """An overlapping stop waits for the current result without starting another attempt."""
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(operation(review, deadline=time.monotonic()))
+        except OperationBusy:
+            with contextlib.suppress(OperationBusy):
+                stack.enter_context(operation(review, deadline=deadline))
+            yield False
+        else:
+            yield True
 
 
 def remaining(deadline):
@@ -99,12 +114,29 @@ def load(review):
         return _read(review)
 
 
+def status(review):
+    """Distinguish an interrupted stop from a coordinator that still holds its lock."""
+    value = _read(review)
+    if value["state"] != "stopping":
+        return value
+    try:
+        with operation(review, deadline=time.monotonic()):
+            value = _read(review)
+            if value["state"] == "stopping":
+                value.update(state="incomplete", incompleteReasons={"request": STOP_INTERRUPTED})
+            return value
+    except OperationBusy:
+        return _read(review)
+
+
 def public_snapshot(value):
     """Lifecycle state for a page, excluding process and receiver metadata."""
     components = {}
     for name in COMPONENTS:
         component = value["components"][name]
         public = components[name] = {"state": component["state"]}
+        if component["state"] == "stopped":
+            continue
         error = component.get("error")
         if isinstance(error, str):
             public["error"] = error
@@ -114,15 +146,17 @@ def public_snapshot(value):
                                         if isinstance(item, dict) and isinstance(item.get("code"), str)))
             if causes:
                 public["causes"] = causes
+    reasons = {name: item["error"] for name, item in components.items() if "error" in item}
+    if value.get("incompleteReasons", {}).get("request") == STOP_INTERRUPTED:
+        reasons["request"] = STOP_INTERRUPTED
     return {"reviewId": value["reviewId"], "state": value["state"], "stopId": value["stopId"],
             "attempts": value.get("attempts", 0) if value["stopId"] else 0,
             "revision": value.get("revision", 0), "components": components,
-            "incompleteReasons": {name: item["error"] for name, item in components.items() if "error" in item}}
+            "incompleteReasons": reasons}
 
 
 def public_status(review):
-    # The state file is replaced atomically. A status read need not create a lock file.
-    return public_snapshot(_read(review))
+    return public_snapshot(status(review))
 
 
 def accepts_work(review, *, manifest=None):
@@ -187,6 +221,8 @@ def mark(review, name, state, error=None, *, stop_id=None, **details):
         else:
             component.pop("error", None)
         if state == "stopped":
+            component.pop("failures", None)
+            component.pop("detail", None)
             component["stoppedAt"] = component.get("stoppedAt") or _now()
         value["components"][name] = component
         components = value["components"]
@@ -271,17 +307,23 @@ def _live_waiters(review):
 
 def _protect_save(review, deadline, server, browser_protocol_required):
     state = load(review)
-    if state["components"]["save"]["state"] == "stopped":
-        return
-    mark(review, "save", "stopping")
     try:
+        rid = state["reviewId"]
+        if server is not None and browser_protocol_required and not server.browser_save_protocol_available():
+            mark(review, "save", "incomplete", "save-protection-upgrade-required")
+            return
+        registered = (bool(review_save.registered_pages(review, rid)) if server is None
+                      else server.browser_saves.has_registered_pages(rid))
+        # A browser can queue more changes while an incomplete stop leaves HTTP running.
+        if state["components"]["save"]["state"] == "stopped" and not registered:
+            return
+        mark(review, "save", "stopping")
         if server is None:
-            if review_save.registered_pages(review, state["reviewId"]):
+            if registered:
                 mark(review, "save", "incomplete", "save-protection-unconfirmed")
                 return
         else:
-            error = server.protect_browser_saves(state["stopId"], remaining(deadline),
-                                                 require_protocol=browser_protocol_required)
+            error = server.browser_saves.protect(rid, state["stopId"], remaining(deadline))
             if error is not None:
                 mark(review, "save", "incomplete", error)
                 return

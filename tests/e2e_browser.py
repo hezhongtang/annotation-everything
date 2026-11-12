@@ -850,10 +850,31 @@ def review_overview_stop_checks(browser, tmp: Path):
         (directory / ".annotation-server.json").read_text())["port"]) for directory, _ in reviews}
     ctx = browser.new_context(viewport={"width": 1280, "height": 900})
     try:
+        ctx.add_init_script("Object.defineProperty(crypto, 'randomUUID', {value: undefined})")
         target = ctx.new_page()
-        with target.expect_response(lambda r: r.url.endswith("/api/server/save-protection") and r.ok):
+
+        def registration(response):
+            return (response.url.endswith("/api/server/save-protection") and response.ok
+                    and set(response.request.post_data_json or {}) == {"pageId", "clientId"})
+
+        with target.expect_response(registration) as opened:
             target.goto(bases[peer])
         wait_mode(target, "server")
+        with target.expect_response(registration) as reloaded:
+            target.reload()
+        wait_mode(target, "server")
+        previous = opened.value.request.post_data_json
+        current = reloaded.value.request.post_data_json
+        delayed_close = target.evaluate("""async ({reviewId, page}) => {
+            const reply = await fetch('/api/server/save-protection', {method: 'POST',
+              headers: {'Content-Type': 'application/json', 'X-AE-Review': reviewId},
+              body: JSON.stringify({...page, closing: true})});
+            return reply.status;
+        }""", {"reviewId": ids[peer], "page": previous})
+        registrations = json.loads((peer / ".annotation-save-pages.json").read_text())["pages"]
+        ok(previous["pageId"] != current["pageId"] and previous["clientId"] == current["clientId"]
+           and delayed_close == 200 and current["pageId"] in registrations,
+           "无 randomUUID 时可登记，刷新后旧文档延迟关闭不注销新文档")
         page = ctx.new_page()
         page.goto(bases[host] + "/#overview")
         wait_mode(page, "server")
@@ -980,6 +1001,8 @@ def review_overview_stop_scope_checks(browser, tmp: Path):
         start(peer)
         start(other)
         before_manifest = (archived / "review.json").read_bytes()
+        ledger_path = Path(os.environ["AE_HOME"]) / "reviews.json"
+        owned_port = json.loads(ledger_path.read_text())["reviews"][ids[archived]]["port"]
         protected = ctx.new_page()
         with protected.expect_response(lambda r: r.url.endswith("/api/server/save-protection") and r.ok):
             protected.goto(archived_url)
@@ -998,14 +1021,24 @@ def review_overview_stop_scope_checks(browser, tmp: Path):
 
         page.on("request", observe_request)
 
-        def lose_peer_reply(route):
-            if route.request.post_data_json["reviewId"] == ids[peer]:
+        def unconfirmed_reply(route):
+            rid = route.request.post_data_json["reviewId"]
+            if rid == ids[peer]:
                 route.fetch()
                 route.abort("connectionfailed")
+            elif rid == ids[other]:
+                before = json.loads((other / ".annotation-stop.json").read_text())["revision"]
+                route.fetch()
+                route.fulfill(status=200, json={"app": "annotation-everything", "reviewId": rid,
+                                               "state": "incomplete", "stop": {
+                    "reviewId": rid, "state": "incomplete", "stopId": None, "revision": before,
+                    "components": {"http": {"state": "incomplete", "error": "stop-status-unconfirmed"}},
+                    "incompleteReasons": {"http": "stop-status-unconfirmed"},
+                }})
             else:
                 route.continue_()
 
-        page.route("**/api/overview/stop", lose_peer_reply)
+        page.route("**/api/overview/stop", unconfirmed_reply)
 
         def result(directory):
             return page.locator('[data-batch-review="%s"]' % ids[directory])
@@ -1112,8 +1145,8 @@ def review_overview_stop_scope_checks(browser, tmp: Path):
            and services[host].poll() is None and not protected.is_closed()
            and [note["text"] for note in disk_notes(archived)] == [annotation],
            "失败重试仍用原范围，只停止失败项并完成保存保护")
-        entry = json.loads((Path(os.environ["AE_HOME"]) / "reviews.json").read_text())["reviews"][ids[archived]]
-        ok(entry["port"] == ports[archived] and (archived / "review.json").read_bytes() == before_manifest
+        entry = json.loads(ledger_path.read_text())["reviews"][ids[archived]]
+        ok(entry["port"] == owned_port and (archived / "review.json").read_bytes() == before_manifest
            and (archived / ".annotation-archived").is_file(), "批量停止保留台账、专属端口、审阅和归档标记")
 
         ok(count(3) and "on this machine" in button.inner_text(), "本机全部包含跨工作区审阅和后来启动的审阅")
@@ -1123,7 +1156,7 @@ def review_overview_stop_scope_checks(browser, tmp: Path):
         ok(batch_state("stopped", 13) and "3/3 stopped" in status.inner_text()
            and all(wait_until(lambda: services[d].poll() is not None, page, 5) for d in (host, late, other))
            and sorted(requests[4:]) == sorted((ids[d], "all") for d in (host, late, other)),
-           "本机全部停止逐份确认，完成后不会重复停止前一批的目标")
+           "本机全部核对 HTTP 未确认项的终态，且不重复停止前一批的目标")
         ok(count(0) and button.is_disabled(), "没有运行中的审阅时禁用批量入口")
 
         lone_url = start(other)
@@ -2926,6 +2959,26 @@ def current_task_controls_checks(browser, tmp: Path):
         page.select_option("#localePick", "zh-CN")
         ok(stop_state(page, "未完全停止") and button.inner_text() == "重试停止",
            "停止审阅：切换中文保留失败结果和重试入口")
+        late_annotation = "合成批注：部分停止期间保留"
+        add_note(page, late_annotation)
+        ok(all(note["text"] != late_annotation for note in disk_notes(d)), "未完全停止时保留新的待补传批注")
+        # Simulate the coordinator exiting while its persisted save stage was still in progress.
+        state_path = d / ".annotation-stop.json"
+        interrupted = json.loads(state_path.read_text())
+        interrupted.update(state="stopping", revision=interrupted["revision"] + 1)
+        interrupted.pop("incompleteReasons", None)
+        interrupted["components"]["save"] = {"state": "stopping"}
+        interrupted["components"]["agent"] = {"state": "pending"}
+        fixture_state = d / ".fixture-stop-state.json"
+        fixture_state.write_text(json.dumps(interrupted))
+        fixture_state.chmod(0o600)
+        fixture_state.replace(state_path)
+        ok(stop_info_contains(page, "上次停止已中断", 8) and button.is_enabled(), "孤立停止状态可从顶部重试")
+        page.locator("#overviewBtn").click()
+        page.locator('[data-review-id="%s"]' % partial["reviewId"]).click()
+        ok(page.locator("#overviewStop").is_enabled() and page.locator("#overviewStopAll").is_enabled(),
+           "孤立停止状态可从总览单项或批量重试")
+        page.locator("#overviewBack").click()
         page.once("dialog", lambda dialog: (confirmations.append(dialog.message), dialog.accept()))
         status_before = json.loads(subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "status", str(d)],
                                                  check=True, capture_output=True, text=True).stdout)
@@ -2938,7 +2991,8 @@ def current_task_controls_checks(browser, tmp: Path):
         ok(server.returncode == 0 and not (d / ".annotation-server.json").exists(),
            "停止审阅：正常退出并清理服务运行状态")
         ok(saved_before_stop == [True, True] and len(stop_requests()) == 2,
-           "停止审阅：两次请求均在确认改动落盘后发出")
+           "停止审阅：两次请求发出前最初的批注均已落盘")
+        ok(any(note["text"] == late_annotation for note in disk_notes(d)), "停止重试补传中断期间保留的批注")
         ok(len(confirmations) == 2 and "浏览器标签页" in confirmations[1] and "共享 Agent 会话" in confirmations[1],
            "停止审阅：中文确认说明保留标签页与共享 Agent 会话")
         other_tab.bring_to_front()

@@ -230,6 +230,30 @@ class ReviewStopTests(unittest.TestCase):
         code, _, duplicate = request_stop("all")
         self.assertEqual((code, duplicate["stop"]["stopId"]), (200, result["stop"]["stopId"]))
 
+    def test_overview_workspace_excludes_nested_reviews_in_a_different_workspace(self):
+        for git_workspace, host_rid, target_rid in ((False, "1a" * 8, "2b" * 8),
+                                                     (True, "3c" * 8, "4d" * 8)):
+            with self.subTest(git_workspace=git_workspace):
+                workspace = self.root / f"workspace-{git_workspace}"
+                nested = workspace / "nested"
+                nested.mkdir(parents=True)
+                if git_workspace:
+                    (workspace / ".git").mkdir()
+                    (nested / ".git").mkdir()
+                host = self.review(workspace.relative_to(self.root) / "host", host_rid)
+                target = self.review(nested.relative_to(self.root) / "target", target_rid)
+                host_info, _ = self.start_server(host)
+                target_info, _ = self.start_server(target)
+                code, _, overview = self.request(host_info, "GET", "/api/overview?scope=workspace", rid=host_rid)
+                self.assertEqual((code, [row["reviewId"] for row in overview["reviews"]]), (200, [host_rid]))
+                code, _, stop = self.request(host_info, "POST", "/api/overview/stop",
+                                             {"reviewId": target_rid, "scope": "workspace"}, host_rid)
+                self.assertEqual((code, stop.get("code")), (404, "overview-review-out-of-scope"), stop)
+                self.assertEqual(serve.probe(target_info["port"])["reviewId"], target_rid)
+                code, _, stop = self.request(host_info, "POST", "/api/overview/stop",
+                                             {"reviewId": target_rid, "scope": "all"}, host_rid)
+                self.assertEqual((code, stop.get("reviewId"), stop.get("state")), (200, target_rid, "stopped"), stop)
+
     def test_overview_keeps_the_target_running_until_its_page_confirms_save(self):
         host_rid, target_rid = "1a" * 8, "2b" * 8
         host, target = self.review("host", host_rid), self.review("target", target_rid)
@@ -269,6 +293,10 @@ class ReviewStopTests(unittest.TestCase):
                                            {"reviewId": target_rid, "scope": "workspace"}, host_rid)
         self.assertEqual((code, duplicate["state"], duplicate["stop"]["stopId"]),
                          (200, "stopping", first["stopId"]), duplicate)
+        code, _, duplicate = self.request(target_info, "POST", "/api/server/stop",
+                                           {"waitForExit": True, "timeout": .1}, target_rid)
+        self.assertEqual((code, duplicate["state"], duplicate["stop"]["stopId"], duplicate["stop"]["attempts"]),
+                         (200, "stopping", first["stopId"], 1), duplicate)
         code, _, status = self.request(host_info, "GET", "/api/overview?scope=workspace", rid=host_rid)
         row = next(row for row in status["reviews"] if row["reviewId"] == target_rid)
         self.assertEqual((code, row["stop"]["state"]), (200, "stopping"), row)
@@ -279,6 +307,9 @@ class ReviewStopTests(unittest.TestCase):
                          (200, "incomplete", "save-protection-failed"), result)
         self.assertEqual(serve.probe(target_info["port"]).get("reviewId"), target_rid)
 
+        # A new document can acknowledge the older registration's shared browser storage.
+        page = {**page, "pageId": "5e" * 16}
+        self.assertEqual(page_save()[0], 200)
         second_thread, second_results, second = begin_stop()
         self.assertEqual(second["stopId"], first["stopId"])
         self.assertNotEqual(second["token"], first["token"])
@@ -342,6 +373,53 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual((stop.returncode, result["state"], result["components"]["save"]["error"]),
                          (1, "incomplete", "save-protection-unconfirmed"), result)
         self.assertEqual(serve.probe(restarted["port"]).get("reviewId"), rid)
+
+    def test_interrupted_stop_can_be_observed_and_retried_while_service_is_running(self):
+        host_rid, target_rid = "1a" * 8, "2b" * 8
+        host, target = self.review("host", host_rid), self.review("target", target_rid)
+        host_info, _ = self.start_server(host)
+        target_info, _ = self.start_server(target)
+        page = {"pageId": "3c" * 16, "clientId": "4d" * 16}
+        save_path = "/api/server/save-protection"
+        self.assertEqual(self.request(target_info, "POST", save_path, page, target_rid)[0], 200)
+        stop_path = target / ".annotation-stop.json"
+        overview_body = {"reviewId": target_rid, "scope": "workspace"}
+        stop_from_overview = lambda: self.request(host_info, "POST", "/api/overview/stop",
+                                                  overview_body, host_rid, timeout=12)
+
+        def challenge():
+            return self.request(target_info, "POST", save_path, page, target_rid)[2]["request"]
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            stop = executor.submit(stop_from_overview)
+            self.assertTrue(self.wait_until(challenge))
+            interrupted = stop_path.read_bytes()
+            live = self.request(target_info, "GET", "/api/server/stop", rid=target_rid)[2]["stop"]
+            self.assertEqual(live["state"], "stopping")
+            self.assertEqual(self.request(target_info, "POST", save_path,
+                                          {**page, **challenge(), "saved": False}, target_rid)[0], 200)
+            self.assertEqual(stop.result()[2]["state"], "incomplete")
+
+            # Restore the persisted state captured before the coordinator returned its result.
+            with fsutil.flocked(target / ".annotation-stop-operation.lock", exclusive=True):
+                fsutil.atomic_write(stop_path, interrupted.decode(), prefix=".fixture-")
+            status = self.request(target_info, "GET", "/api/server/stop", rid=target_rid)[2]["stop"]
+            self.assertEqual((status["state"], status["incompleteReasons"].get("request"), status["stopId"]),
+                             ("incomplete", "stop-interrupted", live["stopId"]), status)
+            overview = self.request(host_info, "GET", "/api/overview?scope=workspace", rid=host_rid)[2]
+            row = next(row for row in overview["reviews"] if row["reviewId"] == target_rid)
+            self.assertEqual(row["stop"], status)
+            queried = self.cli("serve.py", "stop", target_rid, "--status")
+            self.assertEqual(json.loads(queried.stdout)["state"], "incomplete")
+            self.assertEqual(stop_path.read_bytes(), interrupted)
+
+            retry = executor.submit(stop_from_overview)
+            self.assertTrue(self.wait_until(challenge))
+            self.assertEqual(self.request(target_info, "POST", save_path,
+                                          {**page, **challenge(), "saved": True}, target_rid)[0], 200)
+            status = retry.result()[2]["stop"]
+            self.assertEqual((status["state"], status["stopId"], status["attempts"]),
+                             ("stopped", live["stopId"], 2), status)
 
     def test_overview_can_stop_its_own_service_and_confirm_the_socket_closed(self):
         rid = "2b" * 8
@@ -542,6 +620,7 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(self.request(info, "GET", "/api/notes")[2]["notes"], [note])
         other_rid = "74" * 8
         other = self.review("archive-other", other_rid)
+        other_info, _ = self.start_server(other)
         for archived in (True, False):
             status, _, result = self.request(info, "POST", "/api/overview/archive",
                                              {"reviewId": other_rid, "archived": archived}, rid)
@@ -560,8 +639,64 @@ class ReviewStopTests(unittest.TestCase):
         final = json.loads(retried.stdout)
         self.assertEqual(final["state"], "stopped")
         self.assertEqual(final["stopId"], initial["stopId"])
+        _, _, overview = self.request(other_info, "GET", "/api/overview?scope=workspace", rid=other_rid)
+        stopped = next(row["stop"] for row in overview["reviews"] if row["reviewId"] == rid)
+        self.assertEqual(stopped["components"]["agent"], {"state": "stopped"})
         self.assertEqual(batches["latest"]["status"], "pending")
         self.assertEqual(len(desktop.cancelled), 2)
+
+    def test_retry_protects_browser_changes_after_the_first_save_was_confirmed(self):
+        desktop = Desktop(self.root / "desktop-retry-save.sock")
+        self.addCleanup(desktop.close)
+        host_rid, target_rid = "1a" * 8, "2b" * 8
+        host, target = self.review("host", host_rid), self.review("target", target_rid)
+        self.bind_desktop(target, desktop)
+        self.deliver_analysis(target, "Synthetic pending turn")
+        host_info, _ = self.start_server(host)
+        target_info, _ = self.start_server(target)
+        desktop.cancel_mode = "reject"
+
+        first = self.cli("serve.py", "stop", target_rid, "--timeout", "2")
+        initial = json.loads(first.stdout)
+        self.assertEqual((first.returncode, initial["state"], initial["components"]["save"]["state"]),
+                         (1, "incomplete", "stopped"), initial)
+        page = {"pageId": "3c" * 16, "clientId": "4d" * 16}
+        save_path = "/api/server/save-protection"
+        self.assertEqual(self.request(target_info, "POST", save_path, page, target_rid)[0], 200)
+
+        desktop.cancel_mode = "confirm"
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            retry = executor.submit(self.request, host_info, "POST", "/api/overview/stop",
+                                    {"reviewId": target_rid, "scope": "workspace"}, host_rid, timeout=12)
+            requests = []
+
+            def challenged():
+                if retry.done():
+                    return False
+                try:
+                    request = self.request(target_info, "POST", save_path, page, target_rid)[2]["request"]
+                except OSError:
+                    return False
+                if request:
+                    requests.append(request)
+                return bool(request)
+
+            self.assertTrue(self.wait_until(challenged, timeout=2), "the new browser changes need a fresh receipt")
+            request = requests[0]
+            self.assertEqual(request["stopId"], initial["stopId"])
+            self.assertEqual(len(desktop.cancelled), 1)
+            headers = {"X-AE-Page": page["pageId"], "X-AE-Save-Token": request["token"]}
+            annotation = {"page": 1, "text": "Synthetic annotation queued after partial stop"}
+            self.assertEqual(self.request(target_info, "POST", "/api/notes", annotation,
+                                          target_rid, headers)[0], 201)
+            self.assertEqual(self.request(target_info, "POST", save_path,
+                                          {**page, **request, "saved": True}, target_rid)[0], 200)
+            code, _, stopped = retry.result()
+            self.assertEqual((code, stopped["state"]), (200, "stopped"), stopped)
+
+        restarted, _ = self.start_server(target)
+        code, _, doc = self.request(restarted, "GET", "/api/notes", rid=target_rid)
+        self.assertEqual((code, [note["text"] for note in doc["notes"]]), (200, [annotation["text"]]))
 
     def test_concurrent_stops_share_a_single_cancellation(self):
         desktop = Desktop(self.root / "desktop-concurrent.sock")
