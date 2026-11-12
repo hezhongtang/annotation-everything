@@ -9,12 +9,14 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skill/annotation-everything/scripts"))
@@ -106,6 +108,12 @@ class PptxOpsTests(unittest.TestCase):
 
     def geometry(self, unit="normalized", **set_values):
         return {"unit": unit, "set": set_values}
+
+    def refresh_fp(self):
+        """真实写入后源文件变化：按新字节同步 manifest 指纹（等价重建对照页后的重锚定）。"""
+        self.fp = hashlib.sha256(self.source.read_bytes()).hexdigest()
+        self.manifest["pptx"]["fingerprint"] = self.fp
+        (self.review / "review.json").write_text(json.dumps(self.manifest), encoding="utf-8")
 
     def writeback(self, ops, **kwargs):
         if isinstance(ops, list):
@@ -271,6 +279,267 @@ class PptxOpsTests(unittest.TestCase):
                                             target=self.target(digest="not-a-digest"))])
         self.assert_refused("anchor", [self.op(geometry(x=0.2, y=0.2),
                                                slide="s0000000000000000000000000000000000000000000000000000000000000000")])
+
+    # ---------- 切片4：文本样式回写 ----------
+    def test_text_style_updates_existing_and_missing_rpr(self):
+        self.build()
+        result = self.writeback([self.op(text_style(bold=True, size=24, color="00AA00", underline=True),
+                                         aspect="style")], dry_run=True)
+        props = {p["name"]: p for p in result["changes"][0]["props"]}
+        self.assertEqual(props["bold"], {"name": "bold", "unit": None, "from": "mixed", "to": True})
+        self.assertEqual(props["size"], {"name": "size", "unit": "pt", "from": "mixed", "to": 24.0})
+        self.assertEqual(props["color"], {"name": "color", "unit": "srgb", "from": "mixed", "to": "00AA00"})
+        self.assertEqual(self.source.read_bytes(), self.original)
+        result = self.writeback([self.op(text_style(bold=True, size=24, color="00AA00", underline=True),
+                                         aspect="style")])
+        xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml")
+        self.assertIn(b'<a:rPr b="1" sz="2400" u="sng"><a:solidFill><a:srgbClr val="00AA00"/></a:solidFill>'
+                      b'<a:latin typeface="Synthetic Sans"/></a:rPr>', xml,
+                      "已有 rPr 保留未触及属性，仅改白名单字段")
+        self.assertIn('<a:r><a:rPr b="1" u="sng" sz="2400">'
+                      '<a:solidFill><a:srgbClr val="00AA00"/></a:solidFill></a:rPr>'
+                      "<a:t>标题乙</a:t></a:r>".encode("utf-8"), xml, "无 rPr 的 run 合成最小 rPr")
+        model = pr.read(self.source)
+        runs = model["slides"][0]["elements"][0]["paragraphs"][0]["runs"]
+        self.assertEqual(runs[0]["style"]["color"], "00AA00")
+        self.assertTrue(runs[0]["style"]["bold"] and runs[1]["style"]["bold"])
+        self.assertEqual(runs[0]["text"] + runs[1]["text"], "标题甲标题乙", "文字内容不变")
+
+    def test_text_style_false_values_write_explicit_off(self):
+        self.build()
+        self.writeback([self.op(text_style(bold=False, underline=False), aspect="style")])
+        xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml")
+        self.assertIn(b'<a:rPr b="0" u="none"', xml)
+        model = pr.read(self.source)
+        runs = model["slides"][0]["elements"][0]["paragraphs"][0]["runs"]
+        self.assertFalse(runs[1]["style"]["bold"])
+        self.assertEqual(runs[1]["style"]["underline"], "none")
+
+    def test_text_style_value_and_property_guards(self):
+        self.build()
+        self.assert_refused("property", [self.op(text_style(fontname="Synthetic Sans"), aspect="style")])
+        for props, code in (({"size": 0.5}, "value"), ({"size": 4000.5}, "value"),
+                            ({"color": "XYZ123"}, "value"), ({"bold": "yes"}, "value"),
+                            ({"width": 2}, "property")):
+            with self.subTest(props=props):
+                self.assert_refused(code, [self.op(text_style(**props), aspect="style")])
+
+    def test_text_style_no_change_is_refused(self):
+        parts = styled_parts()
+        parts["ppt/slides/slide10.xml"] = parts["ppt/slides/slide10.xml"].replace(
+            "<a:rPr b=\"1\" sz=\"1800\">", "<a:rPr b=\"1\" sz=\"1800\" i=\"0\" u=\"none\">")
+        parts["ppt/slides/slide10.xml"] = parts["ppt/slides/slide10.xml"].replace(
+            "<a:r><a:t>标题乙</a:t></a:r>",
+            "<a:r><a:rPr b=\"1\" sz=\"1800\" i=\"0\" u=\"none\"/><a:t>标题乙</a:t></a:r>")
+        self.build(parts)
+        self.assert_refused("noChange", [self.op(text_style(bold=True, italic=False, underline=False),
+                                                 aspect="style")])
+
+    # ---------- 切片5：填充与线条回写 ----------
+    def test_fill_replaces_existing_and_inserts_when_absent(self):
+        self.build()
+        result = self.writeback([self.op(fill_style(color="FF8800"), aspect="style")], dry_run=True)
+        self.assertEqual(result["changes"][0]["props"],
+                         [{"name": "color", "unit": "srgb", "from": "4477AA", "to": "FF8800"}])
+        self.writeback([self.op(fill_style(color="FF8800"), aspect="style")])
+        xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml")
+        self.assertIn(b'<a:solidFill><a:srgbClr val="FF8800"/></a:solidFill>'
+                      b'<a:ln w="19050">', xml, "替换原填充，a:ln 原样保留")
+        self.refresh_fp()
+        self.writeback([self.op(fill_style(color="00BB00"), aspect="style", slide_n=1, elem_id="3")])
+        xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml")
+        self.assertIn(b'<a:ext cx="3000000" cy="600000"/></a:xfrm><a:solidFill>'
+                      b'<a:srgbClr val="00BB00"/></a:solidFill></p:spPr>', xml,
+                      "无填充的形状按子元素顺序插入")
+
+    def test_fill_no_change_is_refused(self):
+        self.build()
+        self.assert_refused("noChange", [self.op(fill_style(color="4477AA"), aspect="style")])
+
+    def test_line_updates_width_and_color_keeping_other_children(self):
+        self.build()
+        result = self.writeback([self.op(line_style(width=2, color="00FF00"), aspect="style")], dry_run=True)
+        props = {p["name"]: p for p in result["changes"][0]["props"]}
+        self.assertEqual(props["width"]["from"], 1.5)
+        self.assertEqual(props["width"]["to"], 2.0)
+        self.assertEqual(props["color"], {"name": "color", "unit": "srgb", "from": "112233", "to": "00FF00"})
+        self.writeback([self.op(line_style(width=2, color="00FF00"), aspect="style")])
+        xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml")
+        self.assertIn(b'<a:ln w="25400"><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill>'
+                      b'<a:prstDash val="dash"/></a:ln>', xml, "prstDash 等未触及子元素保留")
+        self.refresh_fp()
+        self.writeback([self.op(line_style(color="123456"), aspect="style", slide_n=1, elem_id="3")])
+        xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml")
+        self.assertIn(b'</a:xfrm><a:ln><a:solidFill><a:srgbClr val="123456"/></a:solidFill></a:ln></p:spPr>',
+                      xml, "无线条的形状按子元素顺序插入 a:ln")
+        self.refresh_fp()
+        self.writeback([self.op(line_style(width=0.5), aspect="style", slide_n=1, elem_id="3")])
+        xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml")
+        self.assertIn(b'<a:ln w="6350"><a:solidFill><a:srgbClr val="123456"/></a:solidFill></a:ln>', xml)
+
+    def test_line_no_change_is_refused(self):
+        self.build()
+        self.assert_refused("noChange", [self.op(line_style(width=1.5, color="112233"), aspect="style")])
+
+    def test_structure_outside_whitelist_is_refused(self):
+        parts = styled_parts()
+        parts["ppt/slides/slide10.xml"] = parts["ppt/slides/slide10.xml"].replace(
+            '<a:ln w="19050">', '<a:weird/><a:ln w="19050">')
+        self.build(parts)
+        self.assert_refused("structure", [self.op(fill_style(color="FF8800"), aspect="style")])
+        parts = styled_parts()
+        parts["ppt/slides/slide10.xml"] = parts["ppt/slides/slide10.xml"].replace(
+            "<a:prstDash val=\"dash\"/></a:ln>", "<a:prstDash val=\"dash\"/><a:mystery/></a:ln>")
+        self.build(parts)
+        self.assert_refused("structure", [self.op(line_style(color="00FF00"), aspect="style")])
+        parts = styled_parts()
+        parts["ppt/slides/slide10.xml"] = parts["ppt/slides/slide10.xml"].replace(
+            '<a:latin typeface="Synthetic Sans"/>', '<a:latin typeface="Synthetic Sans"/><a:mystery/>')
+        self.build(parts)
+        self.assert_refused("structure", [self.op(text_style(color="00AA00"), aspect="style")])
+
+    # ---------- 切片6：占位符与多元素整组预检 ----------
+    def test_placeholder_geometry_and_style_are_writable_with_explicit_xfrm(self):
+        self.build()
+        self.writeback([self.op(geometry(x=0.5, y=0.06), slide_n=1, elem_id="3")])
+        self.refresh_fp()
+        # 同一元素的多类修改按契约拆成多次操作：一次回写里同一元素只允许一个操作
+        current = self.source.read_bytes()
+        with self.assertRaises(pe.EditError) as caught:
+            self.writeback([self.op(geometry(x=0.4, y=0.06), slide_n=1, elem_id="3"),
+                            self.op(text_style(bold=True), aspect="style", slide_n=1, elem_id="3")])
+        self.assertIn("conflict", [e.code for e in caught.exception.errors])
+        self.assertEqual(self.source.read_bytes(), current, "冲突时整组不写入")
+        self.writeback([self.op(text_style(bold=True), aspect="style", slide_n=1, elem_id="3")])
+        xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml")
+        self.assertIn(b'<a:off x="6096000" y="411480"/>', xml)
+        self.assertIn('<a:r><a:rPr b="1"/><a:t>占位</a:t></a:r>'.encode("utf-8"), xml)
+        model = pr.read(self.source)
+        el = next(e for e in model["slides"][0]["elements"] if str(e["id"]) == "3")
+        self.assertEqual(el["kind"], "shape", "占位符仍按普通形状参与能力矩阵")
+
+    def test_mixed_group_refuses_everything_when_one_target_is_unsafe(self):
+        self.build()
+        safe = self.op(geometry(x=0.2, y=0.2), id="safe")
+        unsafe = self.op(geometry(x=0.5, y=0.5), slide_n=2, elem_id="13", id="unsafe")
+        errors = self.assert_refused("readonlyGeometry", [safe, unsafe])
+        self.assertEqual([e.item for e in errors], ["unsafe"])
+        xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml")
+        self.assertIn(b'<a:off x="914400" y="914400"/>', xml, "安全目标的字节同样不写入")
+
+    def test_multi_element_group_writes_each_target(self):
+        self.build()
+        one = self.op(geometry(x=0.2, y=0.2), id="one")
+        two = self.op(geometry(x=0.6, y=0.6), slide_n=1, elem_id="3", id="two")
+        three = self.op(text_style(bold=True), aspect="style", slide_n=1, elem_id="4", id="three")
+        result = self.writeback([one, two, three])
+        self.assertEqual(result["ids"], ["one", "two", "three"])
+        self.assertEqual(result["pages"], [1])
+        xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml")
+        self.assertIn(b'<a:off x="2438400" y="1371600"/>', xml)
+        self.assertIn(b'<a:off x="7315200" y="4114800"/>', xml)
+        self.assertIn('<a:r><a:rPr b="1"/><a:t>没有变换</a:t></a:r>'.encode("utf-8"), xml)
+
+    # ---------- 切片7：警告与视觉核验分离 ----------
+    def test_automatic_warnings_are_recorded_separately_from_visual(self):
+        self.build()
+        result = self.writeback([self.op(geometry(x=0.05, y=0.02, width=0.2, height=0.06))])
+        codes = [w["code"] for w in result["warnings"]]
+        self.assertIn("overlap", codes)
+        self.assertIn("shrink", codes)
+        overlap = next(w for w in result["warnings"] if w["code"] == "overlap")
+        self.assertEqual(overlap["with"], [k for k in
+                        (e["key"] for e in self.model["slides"][0]["elements"]
+                         if str(e["id"]) == "3")])
+        self.assertEqual(result["visual"], {"status": "notRun", "pages": [1]})
+        self.assertEqual(result["warnings"] == [], False)
+
+    def test_out_of_canvas_tolerance_warns_instead_of_refusing(self):
+        self.build()
+        result = self.writeback([self.op(geometry(x=0.99999, y=0.1, width=0.00002, height=0.1))])
+        self.assertIn("outOfCanvas", [w["code"] for w in result["warnings"]])
+        xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml")
+        self.assertIn(b'<a:off x="12191878" y="685800"/>', xml)
+
+    def test_text_apply_result_has_no_visual_field(self):
+        # 既有文本回写契约保持不变（无 ops 时 result 不新增 visual 字段）
+        self.build()
+        import notes_store as store
+        _slide, el = self.element(1, "3")
+        para = el["paragraphs"][0]
+        doc, note = store.add(self.review, {
+            "page": 1, "target": "报告", "quoteFrom": "报告", "quote": "占位",
+            "text": "改为：新文",
+            "pptx": {"v": 1, "slide": _slide["key"], "kind": "text", "via": "selection",
+                     "fp": self.fp, "elements": [self.target(slide_n=1, elem_id="3")],
+                     "text": {"para": 0, "paraDigest": para["digest"], "quote": "占位"}},
+            "edit": {"op": "replace", "from": "占位", "to": "新文"}})
+        result = pe.writeback(self.review, ids=[note["id"]])
+        self.assertNotIn("visual", result)
+        self.assertEqual(result["warnings"], [])
+
+    # ---------- 切片8：未触及保留、回滚与 CLI ----------
+    def test_untouched_members_and_slices_stay_byte_identical(self):
+        self.build()
+        self.writeback([self.op(geometry(x=0.3, y=0.3)),
+                        self.op(text_style(color="00AA00"), aspect="style", slide_n=1, elem_id="3")])
+        before, after = local_records(self.original), local_records(self.source.read_bytes())
+        self.assertEqual(sorted(before), sorted(after))
+        for name in before:
+            if name != "ppt/slides/slide10.xml":
+                self.assertEqual(after[name], before[name], name)
+        old_xml = member(self.original, "ppt/slides/slide10.xml").decode("utf-8")
+        new_xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml").decode("utf-8")
+        for fragment in ('<p:sp><p:nvSpPr><p:cNvPr id="3"', '<a:t>标题乙</a:t>'):
+            self.assertEqual(old_xml.count(fragment), new_xml.count(fragment), fragment)
+        untouched_before = old_xml[old_xml.index('<p:cNvPr id="3"'):]
+        self.assertIn(untouched_before[:200], new_xml, "未触及形状起始片段不变")
+
+    def test_write_failure_rolls_back_and_keeps_backup(self):
+        self.build()
+        with patch.object(pe.os, "fsync", side_effect=[None, OSError("disk full")]), \
+                self.assertRaises(OSError):
+            self.writeback([self.op(geometry(x=0.3, y=0.3))])
+        self.assertEqual(self.source.read_bytes(), self.original)
+        backups = list((self.review / ".snapshots").rglob("*.pptx"))
+        self.assertTrue(backups and all(p.read_bytes() == self.original for p in backups))
+        self.assertFalse(list(self.root.glob("*.tmp")))
+
+    def test_cli_ops_json_locales_and_argument_guards(self):
+        self.build()
+        ops_file = self.root / "ops.json"
+        ops_file.write_text(json.dumps({"v": 1, "ops": [self.op(geometry(x=0.25, y=0.25), id="move")]},
+                                       ensure_ascii=False), encoding="utf-8")
+        for lang, phrase in (("zh-CN", "预演通过"), ("en", "Preview passed")):
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                code = pe.main(["ops", str(self.review), "--ops", str(ops_file),
+                                "--dry-run", "--json", "--locale", lang])
+            self.assertEqual(code, 0, err.getvalue())
+            self.assertTrue(json.loads(out.getvalue())["dryRun"])
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                code = pe.main(["ops", str(self.review), "--ops", str(ops_file), "--dry-run",
+                                "--locale", lang])
+            self.assertEqual(code, 0, err.getvalue())
+            self.assertIn(phrase, out.getvalue())
+            self.assertIn("move", out.getvalue())
+        self.assertEqual(self.source.read_bytes(), self.original)
+        # apply 与 ops 的参数互斥
+        for args in (["apply", str(self.review), "--ops", str(ops_file)],
+                     ["ops", str(self.review)],
+                     ["ops", str(self.review), "--ops", str(ops_file), "--batch", "1"],
+                     ["ops", str(self.review), "--ops", str(ops_file), "--id", "x"]):
+            with self.subTest(args=args), patch.dict(os.environ, {"AE_LOCALE": "zh-CN"}):
+                out, err = io.StringIO(), io.StringIO()
+                with redirect_stdout(out), redirect_stderr(err):
+                    try:
+                        code = pe.main(args)
+                    except SystemExit as exc:
+                        code = exc.code
+                self.assertEqual(code, 2)
+                self.assertIn("apply", err.getvalue())
+        self.assertEqual(self.source.read_bytes(), self.original)
 
 
 if __name__ == "__main__":

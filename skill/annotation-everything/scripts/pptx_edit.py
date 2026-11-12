@@ -498,6 +498,12 @@ class _PropsParser:
         if name in (AR, AFLD) and depth == self.run_depth:
             self.run_depth = None
             self.run = None
+        if name == XFRM and depth == self.xfrm_depth:
+            self.xfrm_depth = None
+        if name == LN and depth == self.ln_depth:
+            self.ln_depth = None
+        if name == SPPR and depth == self.sp_depth:
+            self.sp_depth = self.xfrm_depth = self.ln_depth = None
         if name == PTXBODY and depth == self.txbody_depth:
             self.txbody_depth = None
         if name == PSP and self.shape is not None and depth == self.shape_depth:
