@@ -116,6 +116,12 @@ class DesktopIPC:
                 "context": {"inheritThreadSettings": True}},
         }, 2, owner)
 
+    def cancel(self, binding, owner, turn_id):
+        return self.request("thread-follower-cancel-turn", {
+            "conversationId": binding["threadId"], "turnId": turn_id,
+            "reviewId": binding["reviewId"], "bindingId": binding["bindingId"],
+        }, 2, owner)
+
 
 def _read(path):
     info = path.lstat()
@@ -368,6 +374,8 @@ def prompt(binding, event, seq, message_id):
 
 def deliver(review, event, seq, *, expected_binding=_ANY_BINDING):
     review = Path(review).resolve()
+    import review_stop
+    review_stop.assert_accepts_work(review)
     # Network operations use their own short-lived lock, not the annotation data lock.
     with dispatch_lock(review):
         binding = load_binding(review)
@@ -386,13 +394,19 @@ def deliver(review, event, seq, *, expected_binding=_ANY_BINDING):
         if not target or target.get("status") != expected:
             return {"state": "skipped", "reason": "batch-not-awaiting-receipt"}
         previous = _deliveries(review)["items"].get(key, {})
-        if previous.get("state") in ("accepted", "received", "unconfirmed"):
+        if previous.get("state") in ("accepted", "received", "unconfirmed") \
+                and previous.get("cancelState") != "confirmed":
             return previous
         if previous.get("state") == "sending":
             return _record(review, key, {"state": "unconfirmed", "errorCode": "interrupted-after-dispatch"})
-        message_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "annotation-everything:" + key))
+        attempt = int(previous.get("deliveryAttempt", 1)) + 1 if previous else 1
+        message_id = str(uuid.uuid5(uuid.NAMESPACE_URL,
+                                    "annotation-everything:" + key + (f":attempt:{attempt}" if attempt > 1 else "")))
         _record(review, key, {"bindingId": binding["bindingId"], "seq": seq, "event": event,
-                              "messageId": message_id, "state": "connecting", "attemptAt": store.now_iso()})
+                              "messageId": message_id, "state": "connecting", "attemptAt": store.now_iso(),
+                              "deliveryAttempt": attempt, "acceptedAt": None, "receivedAt": None, "turnId": None,
+                              "cancelState": None, "cancelRequestedAt": None, "cancelConfirmedAt": None,
+                              "cancelFailedAt": None, "cancelError": None, "errorCode": None})
         dispatched = False
         try:
             with contextlib.closing(DesktopIPC(binding["socketPath"])) as ipc:
@@ -548,6 +562,100 @@ def assert_claim_owner(review, harness=None, session=None, *, expected_binding=_
         raise ValueError("agent-binding-changed: restart the waiter in the bound session")
     if binding and caller_identity(harness, session) != binding_identity(binding):
         raise ValueError("review-bound-to-another-session: use the bound session or explicitly transfer")
+
+
+def active_work(review):
+    """Work that still needs an explicit cancellation confirmation before stopping."""
+    review = Path(review).resolve()
+    batches = [item for item in store.handoff_load(review)["items"]
+               if item.get("status") in ("claimed", "reviewing")]
+    analyses = [item for item in analysis_store.delivery_items(review)
+                if item.get("status") == "claimed"]
+    deliveries = []
+    binding = load_binding(review)
+    if binding and binding["adapter"] == "codex-desktop":
+        for key, item in _deliveries(review)["items"].items():
+            if item.get("bindingId") != binding["bindingId"] \
+                    or item.get("state") not in ("accepted", "received", "unconfirmed"):
+                continue
+            event, seq = item.get("event"), item.get("seq")
+            if event not in DELIVERY_EVENTS:
+                continue
+            entry = DELIVERY_EVENTS[event]
+            finder = entry.get("items")
+            candidates = finder(review) if finder else store.handoff_load(review)["items"]
+            target = next((candidate for candidate in candidates if candidate.get("seq") == seq), None)
+            active_statuses = {entry["awaiting"], "claimed", "reviewing"}
+            if target and target.get("status") in active_statuses:
+                deliveries.append({"key": key, **item})
+    return {"batches": batches, "analyses": analyses, "deliveries": deliveries}
+
+
+def _cancel_confirmed(reply, turn_id):
+    result = reply.get("result", {})
+    payload = result.get("result", result) if isinstance(result, dict) else {}
+    turn = payload.get("turn", {}) if isinstance(payload, dict) else {}
+    return (isinstance(turn, dict) and turn.get("id") == turn_id
+            and turn.get("status") in ("cancelled", "canceled", "interrupted", "completed"))
+
+
+def cancel_review(review, *, timeout=10.0):
+    review = Path(review).resolve()
+    active = active_work(review)
+    if not any(active.values()):
+        return {"state": "stopped", "confirmed": True}
+    binding = load_binding(review)
+    deliveries = active["deliveries"]
+    covered = {(item.get("event"), item.get("seq")) for item in deliveries}
+    untracked = ([("review" if item.get("status") == "reviewing" else "handoff", item.get("seq"))
+                  for item in active["batches"]
+                  if ("review" if item.get("status") == "reviewing" else "handoff", item.get("seq")) not in covered]
+                 + [("analysis", item.get("seq")) for item in active["analyses"]
+                    if ("analysis", item.get("seq")) not in covered])
+    if not binding or binding["adapter"] != "codex-desktop":
+        return {"state": "incomplete", "error": "agent-cancellation-unsupported",
+                "capabilityGap": "confirmed-review-scoped-cancellation",
+                "active": {name: len(items) for name, items in active.items()}}
+    failures, confirmed = [], []
+    deadline = time.monotonic() + max(0.0, timeout)
+    for item in deliveries:
+        key, turn_id = item["key"], item.get("turnId")
+        if item.get("cancelState") == "confirmed":
+            confirmed.append(turn_id)
+            continue
+        if not turn_id:
+            failures.append({"event": item.get("event"), "seq": item.get("seq"),
+                             "code": "agent-turn-id-unavailable"})
+            continue
+        _record(review, key, {"cancelState": "cancelling", "cancelRequestedAt": store.now_iso(),
+                              "cancelReviewId": binding["reviewId"], "cancelBindingId": binding["bindingId"],
+                              "cancelError": None})
+        try:
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining <= 0:
+                raise TimeoutError("agent-cancel-timeout")
+            with contextlib.closing(DesktopIPC(binding["socketPath"], timeout=remaining)) as ipc:
+                owner = ipc.owner(binding["threadId"])
+                ipc.timeout = max(.01, deadline - time.monotonic())
+                reply = ipc.cancel(binding, owner, turn_id)
+            if not _cancel_confirmed(reply, turn_id):
+                raise ValueError("agent-cancel-confirmation-required")
+            _record(review, key, {"cancelState": "confirmed", "cancelConfirmedAt": store.now_iso(),
+                                  "cancelError": None})
+            confirmed.append(turn_id)
+        except Exception as error:
+            code = ("agent-cancel-rejected" if isinstance(error, Rejected) else
+                    "agent-cancel-timeout" if isinstance(error, (TimeoutError, socket.timeout)) else
+                    str(error) if str(error).startswith("agent-cancel-") else "agent-cancel-unconfirmed")
+            _record(review, key, {"cancelState": "unconfirmed", "cancelError": code,
+                                  "cancelFailedAt": store.now_iso()})
+            failures.append({"event": item.get("event"), "seq": item.get("seq"), "code": code})
+    if failures or untracked:
+        return {"state": "incomplete",
+                "error": "agent-work-untracked" if untracked and not failures else "agent-cancel-unconfirmed",
+                "capabilityGap": "confirmed-review-scoped-cancellation",
+                "failures": failures, "untracked": untracked, "confirmedTurns": confirmed}
+    return {"state": "stopped", "confirmed": True, "confirmedTurns": confirmed}
 
 
 def main(argv=None):

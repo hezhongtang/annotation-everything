@@ -45,6 +45,9 @@ skills.json
 .skill-sources.json
 .annotation-wait.*.json
 .annotation-server.json
+.annotation-stop.json
+.annotation-stop.lock
+.annotation-stop-*.tmp
 .notes.lock
 .annotation-archived
 server.log

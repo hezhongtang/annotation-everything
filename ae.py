@@ -725,7 +725,7 @@ STATUS_FILE = ".annotation-server.json"   # 与技能本体 serve.py 的运行�
 HOST = "127.0.0.1"
 # serve.py 的这些命令行选项各带一个值，解析目录参数时要连值一起跳过
 SERVE_OPTIONS_WITH_VALUE = ("--port", "--claim-port", "--on-handoff", "--locale")
-SERVE_MAINTENANCE_COMMANDS = ("check", "status", "list", "forget")   # 不起服务的 serve.py 子命令
+SERVE_MAINTENANCE_COMMANDS = ("check", "status", "stop", "stop-status", "list", "forget")   # 不起服务的 serve.py 子命令
 
 
 def skill_ledger_module():
