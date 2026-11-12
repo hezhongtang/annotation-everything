@@ -106,6 +106,9 @@ main{flex:1;display:grid;grid-template-columns:var(--ae-rail) var(--ae-sidebar) 
 #host{display:block}
 /* DOCX：按页宽适配、纵向滚动（A4 纵向页按宽高同时缩放会小到看不清） */
 .slide.docx{overflow:auto;align-items:flex-start}
+.pptx-page{display:block;background:#fff}
+.pptx-page img.pptx-render{display:block;width:100%;height:100%;object-fit:contain}
+.pptx-page img.pptx-render::-moz-selection{background:transparent}
 .docx-banner{display:flex;align-items:flex-start;flex-wrap:wrap;gap:var(--ae-gap-4) var(--ae-gap-14);padding:var(--ae-gap-10) var(--ae-gap-24);background:var(--ae-warm);border-bottom:1px solid var(--ae-warm-line);color:var(--ae-ink);font-size:var(--ae-small);line-height:1.7}
 .docx-banner[hidden]{display:none}
 .docx-block{padding:var(--ae-gap-10) var(--ae-gap-24);background:var(--ae-danger-bg);border-bottom:1px solid var(--ae-red);color:var(--ae-ink);font-size:var(--ae-small);line-height:1.7;font-weight:600}
@@ -447,6 +450,10 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
   <span id="docxBannerText"></span>
   <details id="docxDetails"><summary data-msg="viewer.docx.details"></summary><ul id="docxList"></ul></details>
 </div>
+<div id="pptxBlock" class="docx-block" role="alert" hidden data-msg="viewer.pptx.oldService"></div>
+<div id="pptxBanner" class="docx-banner" role="status" hidden>
+  <span id="pptxBannerText"></span>
+</div>
 <section id="overview" hidden data-aria="viewer.overview.title">
   <div class="overview-top">
     <h1 id="overviewTitle" data-msg="viewer.overview.title"></h1>
@@ -575,6 +582,8 @@ const SKILL_CONTEXT=__SKILL_CONTEXT__;
 const SECT=__SECT__, RCSS=__RCSS__, SECT_KEYS=P.map(p=>"page-"+p.key);
 // DOCX 审阅：分页可信度与有限制的结构（null 表示逐页 HTML 报告）。页尺寸在 P[k].w / h，缺省 1280×720
 const DOCX=__DOCX__;
+// PPT 审阅：渲染信息、字体证据与未核验项（null 表示非 PPTX 报告）。视觉由每页内联渲染图负责
+const PPTX=__PPTX__;
 function pageSize(k){const p=P[k]||{};return{w:+p.w>0?+p.w:1280,h:+p.h>0?+p.h:720}}
 const PAGE_NS=new Set(P.map(q=>q.n));   // 报告页码：页面生命周期内不变，找失页批注时直接查
 const APP="annotation-everything", FILE=location.protocol==="file:";
@@ -718,6 +727,7 @@ function applyLocale(){
   if(typeof updateStyleChip==="function") updateStyleChip();
   if(typeof updateMode==="function") updateMode();
   if(typeof renderDocx==="function") renderDocx();
+  if(typeof renderPptx==="function") renderPptx();
   if(typeof showQuote==="function") showQuote();
   updatePageStat();
   updatePairText();
@@ -999,7 +1009,18 @@ const docxDrop=x=>x&&x.docx&&x.docx.v===1?{docx:null}:{};
 let srvNoDocx=false;
 function docxBlocked(){return !!DOCX&&mode==="server"&&srvNoDocx}
 function docxBlockToast(){setTimeout(()=>toast(tMsg("viewer.docx.oldService"),9000),0)}   // 排在调用方自己的提示之后，免得被「已添加」盖掉
-function renderDocxBlock(){if(!DOCX)return;const on=docxBlocked();$("docxBlock").hidden=!on;$("bottomPanel").inert=on}
+function renderDocxBlock(){if(!DOCX)return;const on=docxBlocked();$("docxBlock").hidden=!on;$("bottomPanel").inert=on||pptxBlocked()}
+// ---------- PPT：渲染证据、字体与未核验项；旧服务没有 pptx 能力时同样阻断写入 ----------
+let srvNoPptx=false;
+function pptxBlocked(){return !!PPTX&&mode==="server"&&srvNoPptx}
+function renderPptxBlock(){if(!PPTX)return;const on=pptxBlocked();$("pptxBlock").hidden=!on;$("bottomPanel").inert=on||docxBlocked()}
+function renderPptx(){if(!PPTX)return;
+  const parts=[tMsg("viewer.pptx.rendered",{tool:PPTX.renderer&&PPTX.renderer.tool||"?",pages:PPTX.renderer&&PPTX.renderer.pages||0})];
+  const unv=PPTX.unverified||[];
+  if(unv.length)parts.push(tMsg("viewer.pptx.unverified",{items:unv.map(k=>tMsg("build.pptx.unverified."+k)).join(uiLocale==="en"?", ":"、")}));
+  const fonts=PPTX.fonts||{};
+  if(fonts.installed!=="ok"||fonts.warning||fonts.review)parts.push(tMsg("viewer.pptx.fonts"));
+  $("pptxBannerText").textContent=parts.join(" ");$("pptxBanner").hidden=false}
 
 // ---------- 存储：本地服务优先，退回浏览器 ----------
 // 每次改动先记进「待补传」队列再发送（页面中途关闭也不丢），发送时带审阅标识，服务端认错就拒绝写入。
@@ -1010,8 +1031,9 @@ function wellFormed(v){if(typeof v==="string")return v.toWellFormed?v.toWellForm
   if(v&&typeof v==="object"){const o={};for(const k of Object.keys(v))o[k]=wellFormed(v[k]);return o}return v}
 async function api(method,path,body){
   // 统一拦住队列外的定稿、复核和分析写入；停止服务是升级恢复入口，仍可使用。
-  if(method!=="GET"&&path!=="/api/server/stop"&&docxBlocked())
-    throw Object.assign(new Error(tMsg("viewer.docx.oldService")),{status:409,code:"docx-required"});
+  if(method!=="GET"&&path!=="/api/server/stop"&&(docxBlocked()||pptxBlocked()))
+    throw Object.assign(new Error(tMsg(docxBlocked()?"viewer.docx.oldService":"viewer.pptx.oldService")),
+      {status:409,code:docxBlocked()?"docx-required":"pptx-required"});
   const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),REQ_TIMEOUT);
   const opt={method,cache:"no-store",headers:{"X-AE-Review":RID},signal:ctl.signal};
   if(body!==undefined){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(wellFormed(body))}
@@ -1140,13 +1162,15 @@ function flush(){if(FILE)return Promise.resolve();
   if(!flushing)flushing=(navigator.locks?navigator.locks.request(`ae-flush-${RID}`,doFlush):doFlush()).finally(()=>{flushing=null});
   return flushing}
 async function doFlush(){   // 按顺序补传；多个标签页之间用浏览器锁排队，按操作 id 移除
-  let successful=true,problem=null,docxOk=!DOCX;busy++;
+  let successful=true,problem=null,docxOk=!DOCX,pptxOk=!PPTX;busy++;
   try{for(;;){   // 补完一轮再对一次服务端；这期间又有新改动进队列就接着补
     for(let q=pend.get();q.length;q=pend.get()){const op=q[0];
       if(!op.opId){op.opId=newId();pend.set(q)}   // 兜底：没有操作 id 的条目先补上再发，免得移除时误删别的
       try{
         if(!docxOk){const d=await getNotes();srvNoDocx=!hasFeature(d,"docx");   // 离线暂存的改动补传前先确认服务认得 docx 字段
           if(srvNoDocx){mode="server";successful=false;problem=()=>toast(tMsg("viewer.docx.oldService"),9000);return false}docxOk=true}
+        if(!pptxOk){const d=await getNotes();srvNoPptx=!hasFeature(d,"pptx");   // PPT 审阅同样先确认服务声明了 pptx 能力
+          if(srvNoPptx){mode="server";successful=false;problem=()=>toast(tMsg("viewer.pptx.oldService"),9000);return false}pptxOk=true}
         const hasFullCheck=op.kind==="handoff"&&"fullCheck" in op;let fullCheckSupported=true;
         if(hasFullCheck){const d=await getNotes();fullCheckSupported=hasFeature(d,"full-check");srvNoFullCheck=!fullCheckSupported;
           const latest=d.handoff&&d.handoff.latest,pendingCheck=latest&&latest.status==="pending"&&latest.fullCheck===true;
@@ -1171,7 +1195,7 @@ async function doFlush(){   // 按顺序补传；多个标签页之间用浏览�
     mode="server";await resync();if(!pend.get().length)break}
     return successful}
   // 最后一个失败或受阻提示优先于后续成功、处理状态等通知。
-  finally{busy--;updateMode();renderDocxBlock();if(problem)problem()}}
+  finally{busy--;updateMode();renderDocxBlock();renderPptxBlock();if(problem)problem()}}
 async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 // 轮询带回的「最新一批（完整内容）+ 投递状态」签名：逐字段相同才认为这次轮询没有新东西可画。
 // 只有摘要类字段（处理摘要、附言、认领时间……）变化时也要重画，所以比 handSig 那几个字段细。
@@ -1187,7 +1211,7 @@ function applyServer(d,quietHand){
   const old=!hasFeature(d,"marks");if(old&&!srvOld)toast(tMsg("viewer.mode.oldTitle"),9000);srvOld=old;
   srvNoStages=!hasFeature(d,"stages");
   srvNoFullCheck=!hasFeature(d,"full-check");stopServiceSupported=hasFeature(d,"stop-service");
-  finalizeAllSupported=hasFeature(d,"finalize-all");srvNoDocx=!!DOCX&&!hasFeature(d,"docx");updateMode();renderDocxBlock();
+  finalizeAllSupported=hasFeature(d,"finalize-all");srvNoDocx=!!DOCX&&!hasFeature(d,"docx");srvNoPptx=!!PPTX&&!hasFeature(d,"pptx");updateMode();renderDocxBlock();renderPptxBlock();
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
   if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
@@ -2319,6 +2343,7 @@ function render(){
 function go(k){k=Math.max(0,Math.min(N-1,k));if(k===i)return;if(focusMode)closeComposer();else saveDraft();i=k;render()}
 $("prev").onclick=()=>go(i-1);$("next").onclick=()=>go(i+1);addEventListener("resize",fit);
 if(DOCX){renderDocx();if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit)}   // 字体就绪后页高可能变，重量一次
+if(PPTX)renderPptx()
 $("jump").onchange=e=>go(+e.target.value);
 $("helpBtn").onclick=$("shortcutsBtn").onclick=()=>$("help").classList.toggle("on");
 $("allTab").onclick=openAll;$("historyBtn").onclick=$("batchesTab").onclick=openBatches;

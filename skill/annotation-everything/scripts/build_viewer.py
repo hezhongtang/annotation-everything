@@ -644,6 +644,42 @@ def resolve_sources(review_dir: Path, manifest: dict | None = None, *, locale: s
     return out
 
 
+def pptx_parts(report: Path, locale: str | None) -> tuple[str, str, list[dict], dict]:
+    """PPTX 报告 → (标题, 样式, 逐页 section, PPTX 元数据)。渲染走本机工具，缺工具或
+    转换失败时报明确的原因，不按文本读，也不静默给空白页。"""
+    import pptx_report
+    try:
+        r = pptx_report.parts(report)
+    except pptx_report.PptxReportError as exc:
+        raise BuildError(diag(locale, f"build.pptx.{exc.code}", path=report, detail=exc.detail)) from None
+    sects = [{"n": pg["n"], "key": pg["key"], "stable": True, "html": pg["html"], "title": pg["title"],
+              "w": pg["w"], "h": pg["h"], "orient": pg["orient"]} for pg in r["pages"]]
+    return r["title"], r["css"], sects, r["meta"]
+
+
+def pptx_warnings(meta: dict, locale: str | None) -> list[str]:
+    """PPT 构建诊断 → 当前语言的提示（渲染证据、字体与未核验项）。"""
+    out = [diag(locale, "build.pptx.rendered", pages=meta["renderer"]["pages"])]
+    if meta.get("fonts", {}).get("warning") or meta.get("fonts", {}).get("installed") != "ok":
+        out.append(diag(locale, "build.pptx.fonts"))
+    unverified = meta.get("unverified") or []
+    if unverified:
+        out.append(diag(locale, "build.pptx.unverified", items="、".join(
+            diag(locale, f"build.pptx.unverified.{k}") for k in unverified)))
+    return out
+
+
+def pptx_view(meta: dict | None) -> dict | None:
+    """对照页用的 PPTX 摘要：渲染信息、字体证据与未核验项（文案由页面按当前语言取词典）。"""
+    import pptx_report
+    if meta is None:
+        return None
+    return {"v": pptx_report.FORMAT_VERSION, "fp": meta.get("fingerprint") or "",
+            "renderer": meta.get("renderer") or {}, "fonts": meta.get("fonts") or {},
+            "slides": [{"key": s["key"], "n": s["n"], "notes": bool(s.get("notes"))} for s in meta.get("slides", [])],
+            "unverified": meta.get("unverified") or []}
+
+
 def docx_parts(report: Path, locale: str | None) -> tuple[str, str, list[dict], dict, str]:
     """DOCX 报告 → (标题, 样式, 逐页 section, DOCX 元数据, 文档语言)。读不了时报明确的原因，不按文本读。"""
     import docx_review
@@ -703,10 +739,20 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     assets = Assets(asset_root or report.resolve().parent, locale=locale_choice)
     assets.root_fs = None
     import docx_review
+    import pptx_report
     docx_meta: dict | None = None
     docx_paragraphs: list[dict] = []
     docx_lang = ""
-    if docx_review.is_word_like(report):
+    pptx_meta: dict | None = None
+    if pptx_report.is_pptx(report):
+        # PPTX 直接审阅：渲染图负责视觉、结构化元素模型负责定位；不按 UTF-8 文本读
+        doc = ""
+        rtitle, rcss, sects, pptx_meta = pptx_parts(report, locale_choice)
+        for w in pptx_warnings(pptx_meta, locale_choice):
+            assets.warn(w)
+    elif pptx_report.is_ppt(report):
+        raise BuildError(diag(locale_choice, "build.pptx.legacyPpt", path=report))
+    elif docx_review.is_word_like(report):
         # Word 文档直接渲染：不按 UTF-8 文本读，也不过 HTML 资源内联（正文里的 url(...) 只是文字）
         doc = ""
         rtitle, rcss, sects, docx_meta, docx_lang = docx_parts(report, locale_choice)
@@ -755,12 +801,14 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         pg = {**p, "key": s["key"], "stable": s["stable"]}
         if docx_meta is not None:   # 每页自己的尺寸与 Word 页码：舞台按它显示，不套 1280×720
             pg.update(w=s["w"], h=s["h"], label=s["label"], orient=s["orient"])
+        if pptx_meta is not None:   # PPT 页同样按幻灯片原始尺寸与方向显示
+            pg.update(w=s["w"], h=s["h"], orient=s["orient"])
         pages.append(pg)
     if no_sections:
         sections: list[list] = []
     elif sections_arg:
         sections = parse_sections_arg(sections_arg, locale=locale_choice)
-    elif docx_meta is not None:
+    elif docx_meta is not None or pptx_meta is not None:
         sections = []
     else:
         sections = infer_sections(doc, sects)
@@ -803,7 +851,8 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     ns = file_label(review_name, rid)
     image_pages = sum(bool(re.search(r"<img\b", s["html"], re.I)) for s in sects)
     skill_context = {"report": report.name, "script": script.name if script else "",
-                     "kind": "Word 文档" if docx_meta is not None else
+                     "kind": "PPT 幻灯片" if pptx_meta is not None else
+                     "Word 文档" if docx_meta is not None else
                      "图片 幻灯片" if image_pages >= (len(sects) + 1) // 2 else "HTML 报告"}
     import notes_store
     import i18n
@@ -815,9 +864,9 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
               "ROOTFS": assets.root_fs or "100%", "SKILLS": _js(read_skills(out)), "ALWAYS": _js(read_always(out)),
               "SKILL_CONTEXT": _js(skill_context), "FULL_CHECK_COMPAT": _js("【本批提交选项】" + notes_store.FULL_CHECK_TEXT),
               "CATALOGS": _js(catalogs), "LOCALE": _js(locale_choice), "REPORT_LANG": _js(report_language),
-              "DOCX": _js(docx_view(docx_meta))}
+              "DOCX": _js(docx_view(docx_meta)), "PPTX": _js(pptx_view(pptx_meta))}
     # 一次性替换，避免内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
-    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX)__", lambda m: values[m.group(1)],
+    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX|PPTX)__", lambda m: values[m.group(1)],
                        TEMPLATE.read_text(encoding="utf-8"))
     page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
     write_private(out / "index.html", page_html)
@@ -836,12 +885,17 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         "sections": sections,
         "pages": [{"n": p["n"], "key": p["key"], "stable": p["stable"], "title": html.unescape(p["title"]),
                    "section": next((s[0] for s in sections if s[1] <= p["n"] <= s[2]), ""),
-                   **({"w": p["w"], "h": p["h"], "orient": p["orient"], "label": p["label"]} if "w" in p else {})}
+                   **({"w": p["w"], "h": p["h"], "orient": p["orient"],
+                       "label": p["label"]} if "w" in p and "label" in p else
+                      {"w": p["w"], "h": p["h"], "orient": p["orient"]} if "w" in p else {})}
                   for p in pages],
     }
     if docx_meta is not None:
         manifest["format"] = {"report": "docx", "version": docx_review.FORMAT_VERSION}
         manifest["docx"] = docx_meta
+    if pptx_meta is not None:
+        manifest["format"] = {"report": "pptx", "version": pptx_report.FORMAT_VERSION}
+        manifest["pptx"] = pptx_meta
     if locale_choice is not None:
         manifest["locale"] = locale_choice
         manifest["build"]["locale"] = locale_choice

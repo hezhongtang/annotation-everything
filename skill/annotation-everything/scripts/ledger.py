@@ -278,7 +278,7 @@ def read_manifest(review_dir: Path) -> dict[str, Any]:
 
 
 # 报告格式 → 本版本支持到的元数据版本。review.json 没有 format 时是逐页 HTML 报告（旧审阅都是这样）。
-REPORT_FORMATS = {"html": 0, "docx": 1}
+REPORT_FORMATS = {"html": 0, "docx": 1, "pptx": 1}
 
 
 def report_format(manifest: dict[str, Any]) -> tuple[str, int]:

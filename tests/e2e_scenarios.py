@@ -232,6 +232,17 @@ SCENARIOS: list[Scenario] = [
         isolation="独立临时审阅目录与浏览器上下文",
     ),
     Scenario(
+        id="pptx-review",
+        title="PPTX 直接审阅：幻灯片按原始尺寸方向与页序显示、渲染与未核验横幅、"
+              "整页批注、点标注与框选区域在 PPT 页可用；服务模式批注落盘，"
+              "旧版服务不认 pptx 特性时阻断内容写入，保留停止服务入口",
+        fixture="fixtures/pptx/make_pptx.py 现场合成的 2 页样例（横版）；真实 build_viewer 构建，"
+                "渲染走伪造 soffice/pdftoppm 工具脚本注入的受控合成 PDF/PNG（不依赖本机 LibreOffice）；"
+                "仅拦截合成服务的 pptx 能力声明",
+        isolation="独立临时审阅目录、端口与浏览器上下文；先 file:// 模式（批注只进本地存储），"
+                  "再服务模式（服务用后回收）",
+    ),
+    Scenario(
         id="docx-review",
         title="DOCX 直接审阅：Word 原分页与横向页按原比例显示、verified 横幅与限制清单、"
               "页眉页脚按实际页码、正文可拖选、点标注与快捷删除在 DOCX 页可用、"
