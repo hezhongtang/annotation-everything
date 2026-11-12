@@ -316,6 +316,8 @@ JSON 与 Markdown 导出都不包含分析事件、问答、问题树或轮次�
 
 总览客户端用 `POST /api/overview/stop` 提交 `{reviewId, scope}`，其中 `reviewId` 是目标审阅的完整标识，`scope` 取 `workspace` 或 `all`。`X-AE-Review` 仍指托管总览的审阅。成功响应中的 `reviewId` 指目标，`stop` 包含操作状态和组件结果。`GET /api/overview` 的每行也提供 `stop`，按目标持久状态刷新。`overview-stop` 声明总览停止能力，`stop-save-protection` 声明保存回执能力。
 
+批量停止在确认时记录范围和目标审阅标识。总览逐份发送同一停止请求，并在原标签页的会话存储中保留最近一次批量结果。请求响应或持久状态确认停止过程完成后，总览才将目标计为已停止。
+
 目标页面用同源 JSON `POST /api/server/save-protection` 登记浏览器存储来源。停止期间，目标服务返回带 `stopId` 和尝试令牌的保存请求。页面在本机浏览器补传队列后提交同一请求的回执。`.annotation-save-pages.json` 在审阅目录内私有写入登记信息，包含随机标识和本机来源。页面失联或回执失败时，目标服务保持可用，便于重试。
 
 ## 导出与导入（批注摘要）
