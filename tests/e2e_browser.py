@@ -3024,7 +3024,7 @@ for n in (1, 2):
        "渲染器信息进入审阅清单")
     ok("visual" in meta["pptx"]["unverified"], "未核验项保留逐页视觉核验")
 
-    ctx = browser.new_context()
+    ctx = browser.new_context(viewport={"width": 1680, "height": 1050})   # 讲稿侧随备注占宽：加宽视口保证幻灯片与文本层可拖选
     page = ctx.new_page()
     page.goto((d / "index.html").as_uri())
     banner = page.inner_text("#pptxBanner")
@@ -3036,10 +3036,29 @@ for n in (1, 2):
        "横版幻灯片按原始 16:9 比例显示（%.0f×%.0f）" % (first["width"], first["height"]))
     ok(page.locator("#host section.page img.pptx-render").count() == 1,
        "每页以内联渲染图负责视觉")
+    # PPT 页的标注与点选都按幻灯片画布取坐标：section 就是画布（原始尺寸按视口缩放显示），
+    # #slide 容器带页间留白，比例和画布不一致
+    def slide_point(p, fx, fy):
+        return p.evaluate(f"() => {{const s={STAGE}.getBoundingClientRect();"
+                          f"return {{x:s.left+s.width*{fx},y:s.top+s.height*{fy}}}}}")
+
+    def local_notes(p):
+        return p.evaluate("() => JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")
+
+    def canvas_box(p):
+        return p.evaluate(f"() => {{const s={STAGE}.querySelector('section.page').getBoundingClientRect();"
+                          f"return {{x:s.left,y:s.top,width:s.width,height:s.height}}}}")
+
     add_note(page, "PPT 整页批注")
-    add_note(page, "PPT 页点标注", pin=(0.5, 0.1))
-    page.click('[data-act="pin"]')   # 框选区域：进入标注模式后按住拖出一块（拖出 6px 以上才算框）
-    box = page.locator("#slide").bounding_box()
+    page.click('[data-act="pin"]')   # 点标注：进入标注模式后在画布 (0.5, 0.1) 落点
+    pin_at = canvas_box(page)
+    page.mouse.click(pin_at["x"] + pin_at["width"] * 0.5, pin_at["y"] + pin_at["height"] * 0.1)
+    page.fill("#ntext", "PPT 页点标注")
+    page.click("[data-act='add']")
+    ok(wait_until(lambda: any(n["text"] == "PPT 页点标注" for n in local_notes(page)), page, 5,
+                  condition="点标注进入本地存储"), "点标注可创建")
+    page.click('[data-act="pin"]')   # 框选区域：进入标注模式后在画布上按住拖出一块（拖出 6px 以上才算框）
+    box = canvas_box(page)
     page.mouse.move(box["x"] + box["width"] * 0.25, box["y"] + box["height"] * 0.18)
     page.mouse.down()
     page.mouse.move(box["x"] + box["width"] * 0.55, box["y"] + box["height"] * 0.28, steps=4)
@@ -3052,12 +3071,6 @@ for n in (1, 2):
        "框选区域标注落在 PPT 页上并记成批注")
 
     # #149：元素覆盖层 —— 点选单元素、⌘/Ctrl 加选多元素（有序目标）、点空白清除
-    def slide_point(p, fx, fy):
-        return p.evaluate(f"() => {{const s={STAGE}.getBoundingClientRect();"
-                          f"return {{x:s.left+s.width*{fx},y:s.top+s.height*{fy}}}}}")
-
-    def local_notes(p):
-        return p.evaluate("() => JSON.parse(localStorage.getItem('ae.' + RID + '.notes'))")
 
     go_page(page, 2)
     picture = slide_point(page, 0.12, 0.07)      # 合成图片（只读元素）
@@ -3069,7 +3082,9 @@ for n in (1, 2):
     ok(wait_toast(page, "只读元素", condition="只读元素提示出现"),
        "选中只读元素时提示不能自动回写")
     group = slide_point(page, 0.15, 0.5)         # 组合形状（组合内文本之外）
-    page.mouse.click(group["x"], group["y"], modifiers=["Control"])
+    page.keyboard.down("Control")                # Mouse.click 不带 modifiers：修饰键经键盘按下再点
+    page.mouse.click(group["x"], group["y"])
+    page.keyboard.up("Control")
     page.fill("#ntext", "PPT 多元素批注")
     page.click("[data-act='add']")
     ok(wait_until(lambda: any(n["text"] == "PPT 多元素批注" for n in local_notes(page)), page, 5,
@@ -3098,8 +3113,20 @@ for n in (1, 2):
     ok(whole["kind"] == "page" and whole["via"] == "thumb" and whole["slide"] == "s260",
        "整页批注记录幻灯片身份与定位来源（页缩略图）")
 
-    # 普通文本选择：透明文本层可拖选，引用批注带逻辑段落、码点偏移与 run 样式边界
-    drag_select(page, page.locator("#host section.page .pptx-text p").first)
+    # 普通文本选择：透明文本层可拖选，引用批注带逻辑段落、码点偏移与 run 样式边界。
+    # 拖选沿第一段文字的实际矩形（Range 矩形）：p 是块级元素，宽度大于文字，
+    # 拖出文字右侧会把浏览器选区延伸到后续段落（跨段选区不写文本定位）
+    line = page.evaluate("""() => {
+        const sr = document.getElementById('host').shadowRoot;
+        const p = sr.querySelector('section.page .pptx-text p');
+        const r = document.createRange(); r.selectNodeContents(p);
+        const b = r.getBoundingClientRect();
+        return {x: b.x, y: b.y, width: b.width, height: b.height};
+    }""")
+    page.mouse.move(line["x"] + 2, line["y"] + line["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(line["x"] + line["width"] - 2, line["y"] + line["height"] / 2, steps=8)
+    page.mouse.up()
     ok(page.is_visible("#selbar"), "PPT 文本层可选择，拖选弹出操作条")
     page.click("#selbar [data-sel='comment']")
     page.fill("#ntext", "PPT 文字引用批注")
@@ -3119,14 +3146,16 @@ for n in (1, 2):
     ok("幻灯片定位" in page.inner_text("#nlist"), "批注卡片显示幻灯片定位行")
 
     page.reload()
-    texts = page.inner_text("#nlist")
+    texts = page.inner_text("#nlist")   # 列表只显示当前页（第 1 页）；多元素批注在第 2 页，由 local_notes 另行核对
     ok(all(word in texts for word in ("PPT 整页批注", "PPT 页点标注", "PPT 页框选区域",
-                                      "PPT 多元素批注", "PPT 页树整页批注", "PPT 文字引用批注")),
-       "file:// 刷新后整页、点、区域、多元素、页树整页与文字引用批注仍在")
+                                      "PPT 页树整页批注", "PPT 文字引用批注")),
+       "file:// 刷新后第 1 页的整页、点、区域、页树整页与文字引用批注仍在")
     reloaded = {n["text"]: n.get("pptx") or {} for n in local_notes(page)}
+    ok((reloaded.get("PPT 多元素批注") or {}).get("slide") == "s257",
+       "刷新后第 2 页的多元素批注仍带幻灯片定位")
     pin_a, region_a = reloaded.get("PPT 页点标注", {}), reloaded.get("PPT 页框选区域", {})
-    ok(pin_a.get("kind") == "point" and abs(pin_a.get("point", {}).get("x", -1) - 0.5) < 0.001
-       and abs(pin_a.get("point", {}).get("y", -1) - 0.1) < 0.001,
+    ok(pin_a.get("kind") == "point" and abs(pin_a.get("point", {}).get("x", -1) - 0.5) < 0.002
+       and abs(pin_a.get("point", {}).get("y", -1) - 0.1) < 0.002,
        "点标注的 pptx 定位按画布归一化（0.5, 0.1）")
     ok(region_a.get("kind") == "region" and abs(region_a.get("region", {}).get("w", -1) - 0.3) < 0.002,
        "区域标注的 pptx 定位按画布归一化（宽 0.3）")
@@ -3137,7 +3166,7 @@ for n in (1, 2):
     pptx_build(sd, "server.pptx")
     port = free_port()
     server = start_server(sd, port)
-    sctx = browser.new_context()
+    sctx = browser.new_context(viewport={"width": 1680, "height": 1050})
     try:
         base = f"http://127.0.0.1:{port}/"
         spage = sctx.new_page()
@@ -3180,6 +3209,43 @@ for n in (1, 2):
         ok(retry["pptx"]["kind"] == "text" and retry["pptx"]["text"]["runs"]
            and retry["pptx"]["text"]["end"] > retry["pptx"]["text"]["start"],
            "重试后的批注仍保留完整 pptx 定位（段落、偏移与 run 边界）")
+
+        # 改后重建：Agent 经公开回写入口修改源 PPTX 后重建对照页，页面提示更新、
+        # 批注按幻灯片键跟随，元素模型读到回写后的几何
+        def sd_cli(tool, *args, expect=0):
+            done = subprocess.run([sys.executable, str(SCRIPTS / tool), *map(str, args)],
+                                  env=env, capture_output=True, text=True, timeout=300)
+            if expect is not None:
+                assert done.returncode == expect, \
+                    f"{tool} 退出码 {done.returncode}（期望 {expect}）：{done.stderr or done.stdout}"
+            return done
+
+        sd_meta = json.loads((sd / "review.json").read_text(encoding="utf-8"))
+        sd_e2 = next(e for e in sd_meta["pptx"]["slides"][0]["elements"] if e["key"] == "e2")
+        ops_path = sd / "e2e-ops.json"
+        ops_path.write_text(json.dumps({"v": 1, "ops": [
+            {"id": "e2e-move", "slide": "s260", "aspect": "geometry", "unit": "normalized",
+             "set": {"x": 0.3, "y": 0.35},
+             "target": {"key": "e2", "id": sd_e2["id"], "digest": sd_e2["evidenceDigest"]}}]},
+            ensure_ascii=False), encoding="utf-8")
+        sd_cli("pptx_edit.py", "ops", str(sd), "--ops", str(ops_path))
+        sd_cli("build_viewer.py", "--rebuild", str(sd))
+        after = json.loads((sd / "review.json").read_text(encoding="utf-8"))
+        ok(after["pptx"]["fingerprint"] != sd_meta["pptx"]["fingerprint"],
+           "回写并重建后 review.json 记录了新的源文件指纹")
+        e2_after = next(e for e in after["pptx"]["slides"][0]["elements"] if e["key"] == "e2")
+        ok(abs(e2_after["geometry"]["normalized"]["x"] - 0.3) < 0.001,
+           "重建后的元素模型读到回写后的几何")
+        ok(all((n.get("pptx") or {}).get("slide") for n in disk_notes(sd)),
+           "重建后全部 PPT 批注仍带幻灯片定位（页面键跟随，页码同步）")
+        ok(wait_dom(spage, "() => !document.getElementById('reloadBanner').hidden", 15,
+                    condition="重建后页面显示「对照页已更新」提示")
+           and "对照页已更新" in spage.inner_text("#reloadBanner"),
+           "回写后重建，运行中的页面顶部出现更新提示")
+        spage.reload()
+        ok(wait_mode(spage, "server", condition="重建后页面回到服务模式")
+           and "PPT 服务模式批注" in spage.inner_text("#nlist"),
+           "刷新后批注卡片仍在（定位随幻灯片键恢复）")
         old = sctx.new_page()
 
         def legacy(route):
