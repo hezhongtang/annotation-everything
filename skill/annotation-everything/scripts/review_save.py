@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 
 import fsutil
+import ledger
 
 PAGE_ID = re.compile(r"[0-9a-f]{32}")
 REGISTRY = ".annotation-save-pages.json"
@@ -27,8 +28,12 @@ def registered_pages(directory: Path, review_id: str) -> dict[str, tuple[str, st
             or info.st_mode & 0o077 or info.st_size > 256 * 1024):
         raise ValueError("invalid-save-pages")
     value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or value.get("reviewId") != review_id:
+    if (not isinstance(value, dict) or not isinstance(value.get("reviewId"), str)
+            or not ledger.RID.fullmatch(value["reviewId"])):
         raise ValueError("invalid-save-pages")
+    if value["reviewId"] != review_id:
+        # A rebuilt copy has a different browser queue and no registered pages.
+        return {}
     pages = value.get("pages")
     if not isinstance(pages, dict) or len(pages) > MAX_PAGES:
         raise ValueError("invalid-save-pages")

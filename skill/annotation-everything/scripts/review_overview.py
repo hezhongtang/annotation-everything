@@ -43,15 +43,6 @@ def in_scope(directory: Path, workspace: Path, scope: str) -> bool:
     return scope == "all" or directory == workspace or workspace in directory.parents
 
 
-def stop_summary(state: dict[str, Any]) -> dict[str, Any]:
-    """Expose lifecycle outcomes without process identifiers or receiver details."""
-    return {key: state[key] for key in ("reviewId", "state", "stopId")} | {
-        "components": {name: {key: value[key] for key in ("state", "error") if key in value}
-                       for name, value in state["components"].items()},
-        "incompleteReasons": state.get("incompleteReasons", {}),
-    }
-
-
 def display_path(directory: Path, workspace: Path) -> str:
     """工作区内显示相对路径；其他位置显示 ~ 路径或目录名。"""
     try:
@@ -144,7 +135,7 @@ def snapshot(review_dir: Path, review_id: str | None, scope: str,
         stop = None
         if state not in ("missing", "mismatch"):
             try:
-                stop = stop_summary(review_stop.load(directory))
+                stop = review_stop.public_status(directory)
             except (OSError, ValueError):
                 pass
         work = {}

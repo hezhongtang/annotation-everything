@@ -74,7 +74,11 @@ import wakeup  # noqa: E402
 APP = "annotation-everything"
 VERSION = "0.12.1"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
-FEATURES = ["notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery", "stop-service", "stop-review", "stop-save-protection", "resume-review", "receiver-binding", "overview", "overview-stop", "analysis", "finalize-all", "docx"]
+FEATURES = [
+    "notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery",
+    "stop-service", "stop-review", "stop-review-status", "stop-save-protection", "resume-review",
+    "receiver-binding", "overview", "overview-stop", "analysis", "finalize-all", "docx",
+]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
 # without running the hook. exec preserves the registered PID and stdin for the command.
@@ -258,6 +262,8 @@ class ReviewServer(ThreadingHTTPServer):
         self.closing = False
         self.stop_id: str | None = None
         self.shutdown_complete: threading.Event | None = None
+        self._stop_replies = threading.Condition()
+        self._stop_reply_count = 0
         self.log_to_file = log_to_file
         self._log_lock = threading.Lock()
         self._cache: dict[str, tuple[float, Any]] = {}
@@ -449,6 +455,22 @@ class ReviewServer(ThreadingHTTPServer):
         with self._close_lock:
             self.closing = True
             return self.stop_id
+
+    @contextlib.contextmanager
+    def stop_reply(self):
+        with self._stop_replies:
+            self._stop_reply_count += 1
+        try:
+            yield
+        finally:
+            with self._stop_replies:
+                self._stop_reply_count -= 1
+                self._stop_replies.notify_all()
+
+    def wait_for_stop_replies(self) -> None:
+        # The listener is closed. Give already accepted requests time to send the final state.
+        with self._stop_replies:
+            self._stop_replies.wait_for(lambda: self._stop_reply_count == 0, timeout=1.0)
 
     def manifest(self) -> dict[str, Any]:
         def read(f: Path | None) -> dict[str, Any]:
@@ -651,36 +673,90 @@ class Handler(BaseHTTPRequestHandler):
                 "version": VERSION, "features": FEATURES,
                 "receiver": self._receiver(self.server.agent_binding)}
 
+    def _stop_status(self) -> None:
+        d = self.server.review_dir
+        wait_id = parse_qs(self.path.partition("?")[2]).get("wait", [None])[0]
+        closed = self.server.shutdown_complete
+        if not wait_id or closed is None:
+            self._json(200, {"app": APP, "reviewId": self.server.review_id(),
+                             "stop": review_stop.public_status(d)})
+            return
+        # Status watchers use the existing connection to receive the final state after
+        # shutdown closes the listener. A disconnected or slow observer cannot delay exit.
+        self.close_connection = True
+        deadline = time.monotonic() + 12
+        with self.server.stop_reply():
+            state = review_stop.public_status(d)
+            while state["stopId"] == wait_id and state["state"] == "stopping":
+                remaining = review_stop.remaining(deadline)
+                if not remaining:
+                    break
+                ended = closed.wait(min(.15, remaining))
+                state = review_stop.public_status(d)
+                if ended:
+                    break
+            try:
+                self._json(200, {"app": APP, "reviewId": self.server.review_id(), "stop": state})
+            except ConnectionError:
+                pass
+
+    def _stop_response(self, result: dict[str, Any], *, closing=False, legacy=False) -> None:
+        ident = self._ident() if legacy else {"app": APP, "reviewId": self.server.review_id()}
+        self._json(200, {**ident, "stopping": closing, "state": result["state"],
+                         "stop": result if legacy else review_stop.public_snapshot(result)})
+        self.wfile.flush()
+
     def _stop_review(self, body: dict[str, Any]) -> None:
         try:
             timeout = review_stop.validate_timeout(body.get("timeout", 10.0))
         except ValueError:
             raise Reject(400, "bad-request", self._t("serve.err.badStopTimeout")) from None
+        expected = body.get("expectedStop")
+        if expected is not None and (not isinstance(expected, dict)
+                                     or set(expected) != {"stopId", "attempts"}
+                                     or expected["stopId"] is not None and not isinstance(expected["stopId"], str)
+                                     or type(expected["attempts"]) is not int or expected["attempts"] < 0):
+            raise Reject(400, "bad-request", self._t("serve.err.badStopState"))
+        closed = self.server.shutdown_complete
+        wait_for_exit = body.get("waitForExit") is True and closed is not None
         deadline = time.monotonic() + timeout
         d = self.server.review_dir
         try:
-            with review_stop.operation(d, deadline=deadline):
+            with (self.server.stop_reply() if wait_for_exit else contextlib.nullcontext()), \
+                    review_stop.operation(d, deadline=deadline):
                 if self.server.closing or self.server.stop_id is not None:
+                    if wait_for_exit and self.server.stop_id is not None:
+                        self._stop_response(review_stop.load(d))
+                        return
                     raise review_stop.OperationBusy
+                if expected is not None:
+                    current = review_stop.load(d)
+                    stop_id = current["stopId"]
+                    if expected != {"stopId": stop_id, "attempts": current.get("attempts", 0) if stop_id else 0}:
+                        self._stop_response(current, legacy=not wait_for_exit)
+                        return
                 self.server.log("info", "review stop requested")
                 review_stop.begin(d, http={"pid": os.getpid(), "port": self.server.port})
                 result = review_stop.coordinate(d, server=self.server, deadline=deadline,
                                                 browser_protocol_required=body.get("requirePageSave") is True)
                 ready = review_stop.ready_for_http(result) and self.server.commit_stop(result["stopId"])
+                if ready and wait_for_exit:
+                    self.close_connection = True
+                    self.server.shutdown()
+                    closed.wait()
+                    result = review_stop.load(d)
                 try:
-                    self._json(200, {**self._ident(), "stopping": ready,
-                                     "state": result["state"], "stop": result})
-                    self.wfile.flush()
+                    self._stop_response(result, closing=ready and not wait_for_exit, legacy=not wait_for_exit)
                 except ConnectionError:
                     if not ready:
                         raise
                 finally:
-                    if ready:
+                    if ready and not wait_for_exit:
                         self.server.shutdown()
-                        if self.server.shutdown_complete is not None:
+                        if closed is not None:
                             # Keep the operation lock until the serving thread has closed the port and
                             # recorded this stopId. A concurrent start will then probe the new reality.
-                            self.server.shutdown_complete.wait()
+                            closed.wait()
         except review_stop.OperationBusy:
             raise Reject(409, "review-stop-busy", self._t("serve.err.reviewLifecycleBusy")) from None
 
@@ -841,6 +917,11 @@ class Handler(BaseHTTPRequestHandler):
             skills = self._request_reads().skills()
             doc["skillCatalog"] = store.skills_catalog(d, doc=skills)
             doc["alwaysSkills"] = store.always_skills(d, doc=skills)
+            if self.server.review_id() and "stop-review-status" in FEATURES:
+                try:
+                    doc["stop"] = review_stop.public_status(d)
+                except (OSError, ValueError):
+                    pass  # Keep annotations readable if lifecycle state cannot be read.
             self._json(200, {**doc, **self._ident()})
         elif path == "/api/handoff" and cmd == "GET":
             self._json(200, {**self._handoff_state(full=True), **self._ident()})
@@ -848,6 +929,10 @@ class Handler(BaseHTTPRequestHandler):
             if not claimed:
                 raise Reject(409, "review-mismatch", self._t("serve.err.reviewMismatch"))
             self._save_protection(claimed)
+        elif path == "/api/server/stop" and cmd == "GET":
+            if not claimed or claimed != self.server.review_id():
+                raise Reject(409, "review-mismatch", self._t("serve.err.reviewMismatch"))
+            self._stop_status()
         elif path in ("/api/server/stop", "/api/server/resume") and cmd == "POST":
             body = self._expect_obj(self._body())
             # 启停必须明确指向当前审阅；旧停止入口也进入完整生命周期。
@@ -1049,9 +1134,18 @@ class Handler(BaseHTTPRequestHandler):
             if rid == claimed:
                 if target != d:
                     raise Reject(409, "overview-review-invalid", self._t("serve.err.overviewStartInvalid"))
-                self._stop_review({"waitForExit": True, "requirePageSave": True})
+                current = review_stop.public_status(d)
+                if current["state"] == "stopping":
+                    try:
+                        with review_stop.operation(d, deadline=time.monotonic()):
+                            current = review_stop.public_status(d)
+                    except review_stop.OperationBusy:
+                        self._json(200, {"app": APP, "reviewId": rid, "state": current["state"], "stop": current})
+                        return
+                self._stop_review({"waitForExit": True, "requirePageSave": True,
+                                   "expectedStop": {"stopId": current["stopId"], "attempts": current["attempts"]}})
             else:
-                result = review_overview.stop_summary(stop_overview_review(target, rid, self._t))
+                result = review_stop.public_snapshot(stop_overview_review(target, rid, self._t))
                 self._json(200, {"app": APP, "reviewId": rid, "state": result["state"], "stop": result})
         elif path == "/api/overview/start" and cmd == "POST":
             body = self._body()
@@ -1096,8 +1190,7 @@ class Handler(BaseHTTPRequestHandler):
             result = self.server.browser_saves.update(rid, self.headers["Origin"].lower(), body)
         except review_save.SaveConflict:
             raise Reject(409, "save-protection-conflict", self._t("serve.err.saveProtectionConflict")) from None
-        self._json(200, {"app": APP, "reviewId": rid, "request": result,
-                         "active": review_stop.accepts_work(self.server.review_dir)})
+        self._json(200, {"app": APP, "reviewId": rid, "request": result})
 
 
 # ---------- 端口与状态文件 ----------
@@ -1172,6 +1265,8 @@ def stop_overview_review(directory: Path, rid: str, translate: Any) -> dict[str,
     """Only dispatch to the live service verified for this ledger entry."""
     deadline = time.monotonic() + 10.0
     state = review_stop.load(directory)
+    if state["reviewId"] != rid:
+        raise Reject(409, "overview-review-invalid", translate("serve.err.overviewStartInvalid"))
     if state["state"] == "stopped":
         return state
 
@@ -1190,9 +1285,16 @@ def stop_overview_review(directory: Path, rid: str, translate: Any) -> dict[str,
     if not overview_health(found, rid, directory, port) or found.get("pid") != pid:
         return unconfirmed("http", "http-status-unconfirmed")
     features = found.get("features")
-    if not isinstance(features, list) or not all(name in features for name in ("stop-review", "stop-save-protection")):
+    required = ("stop-review", "stop-review-status", "stop-save-protection")
+    if not isinstance(features, list) or not all(name in features for name in required):
         return unconfirmed("http", "upgrade-required")
-    state = _request_live_review_stop(directory, port, state, deadline)
+    if state["state"] == "stopping":
+        try:
+            with review_stop.operation(directory, deadline=time.monotonic()):
+                state = review_stop.load(directory)
+        except review_stop.OperationBusy:
+            return state
+    state = _request_live_review_stop(directory, port, state, deadline, wait_for_exit=True)
     if state["state"] == "active":
         return unconfirmed("http", "stop-status-unconfirmed")
     return state
@@ -1561,6 +1663,7 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         finally:
             if server.shutdown_complete is not None:
                 server.shutdown_complete.set()
+                server.wait_for_stop_replies()
     return 0
 
 
@@ -1672,9 +1775,10 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
         row["state"] = f"标识不符（目录里现在是 {str(m.get('reviewId') or '无')[:8]}）"
         row["state_id"] = "mismatch"
         return row
-    info = read_status(d)
-    if info and info.get("port") and ledger.pid_alive(int(info.get("pid") or 0)):
-        row["running"] = int(info["port"])
+    info = read_status(d) or {}
+    port, pid = info.get("port"), info.get("pid")
+    if type(port) is int and 1024 <= port <= 65535 and type(pid) is int and ledger.pid_alive(pid):
+        row["running"] = port
         row["hook"] = bool(info.get("hook"))
         row["state_id"] = "running" if row["running"] == e.get("port") else "running-temp"
         row["state"] = ("运行中" if row["running"] == e.get("port")
@@ -2077,12 +2181,16 @@ def _stop_review_from_cli(review_dir: Path, timeout: float) -> dict[str, Any]:
 
 
 def _request_live_review_stop(review_dir: Path, port: int, state: dict[str, Any],
-                              deadline: float) -> dict[str, Any]:
+                              deadline: float, *, wait_for_exit: bool = False) -> dict[str, Any]:
     # The live server owns coordination, including the last state write after the socket closes.
     try:
         remaining = review_stop.remaining(deadline)
-        code, _, raw = _review_request(port, state["reviewId"], "/api/server/stop",
-                                       {"timeout": remaining, "requirePageSave": True}, remaining + 1)
+        body = {"timeout": remaining, "requirePageSave": True}
+        if wait_for_exit:
+            stop_id = state["stopId"]
+            body.update(waitForExit=True,
+                        expectedStop={"stopId": stop_id, "attempts": state.get("attempts", 0) if stop_id else 0})
+        code, _, raw = _review_request(port, state["reviewId"], "/api/server/stop", body, remaining + 1)
         response = json.loads(raw)
         stop = response.get("stop") if isinstance(response, dict) else None
         if (code == 200 and isinstance(stop, dict) and response.get("app") == APP

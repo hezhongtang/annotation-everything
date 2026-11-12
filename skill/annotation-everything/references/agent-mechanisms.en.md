@@ -33,6 +33,8 @@ Set an explicit name such as `--by initial-editor` or `--by reviewer`. The page 
 
 `python3 $S/serve.py stop REVIEW_ID --timeout N` returns persistent JSON; `stop REVIEW_ID --status` only queries it. Exit 0 means the service, waiters and this review's background work have all confirmed stopping; 1 means incomplete; 2 means an invalid or ambiguous target. Retries keep the same `stopId` and handle only unfinished components. Only an explicit `serve.py REVIEW_ID` start accepts work again; stopping never archives, unbinds, finalizes or releases the port.
 
+Before replacing or removing the binding, confirm cancellation of delivered desktop turns that are still awaiting claim. An explicit start redelivers work that is still awaiting claim and whose cancellation was confirmed, including when it reuses a running service.
+
 A `notes.py wait` stopped by this lifecycle exits 4 and removes its marker; never re-suspend it as though it had timed out. Event cancellation is routed by review id, receiver binding and turn id. Desktop acceptance, owner discovery and signal delivery are not turn-stop confirmations. Rejection, timeout or a missing terminal turn state keeps `incomplete` with a capability gap; never end the shared session or kill a process whose ownership is unverified. Synthetic IPC covers the cancellation protocol; actual desktop-host cancellation has not been verified automatically.
 
 See [workflow section 4](workflow.en.md#4-start-the-service-and-wait) for hook inputs, the working directory, and snapshot handling. Follow [section 6](workflow.en.md#6-initial-edit-review-and-delegation) when passing the accepted requirements, sequence, and skills to workers. Keep its main-session completion duties and user-controlled stage boundaries.

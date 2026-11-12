@@ -193,8 +193,8 @@ SCENARIOS: list[Scenario] = [
     Scenario(
         parallel_safe=True,
         id="current-task-controls",
-        title="当前任务详情的展开与收起、双语与轮询保持状态，以及安全停止本审阅服务并保留数据",
-        fixture="fixtures/sample 合成材料生成的审阅；独立批次、待补传改动与服务重启",
+        title="当前任务详情的展开与收起、双语与轮询保持状态。顶部停止审阅覆盖保存、部分失败、重试、跨标签页和重启",
+        fixture="fixtures/sample 合成材料生成的审阅、已领取批次、待补传批注、多个标签页与真实服务重启",
         isolation="独立临时审阅目录、独立端口与浏览器上下文；所有服务和 CLI 子进程用后回收",
     ),
     Scenario(

@@ -1,6 +1,8 @@
 """Review-scoped stop lifecycle through real CLI, process and HTTP boundaries."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import json
 import os
 from pathlib import Path
@@ -263,6 +265,10 @@ class ReviewStopTests(unittest.TestCase):
 
         first_thread, first_results, first = begin_stop()
         self.assertEqual(page_save(**{**first, "token": "0" * 32}, saved=True)[0], 409)
+        code, _, duplicate = self.request(host_info, "POST", "/api/overview/stop",
+                                           {"reviewId": target_rid, "scope": "workspace"}, host_rid)
+        self.assertEqual((code, duplicate["state"], duplicate["stop"]["stopId"]),
+                         (200, "stopping", first["stopId"]), duplicate)
         code, _, status = self.request(host_info, "GET", "/api/overview?scope=workspace", rid=host_rid)
         row = next(row for row in status["reviews"] if row["reviewId"] == target_rid)
         self.assertEqual((code, row["stop"]["state"]), (200, "stopping"), row)
@@ -796,6 +802,11 @@ class ReviewStopTests(unittest.TestCase):
         status, _, rejected = self.request(info, "POST", "/api/notes",
                                            {"page": 1, "text": "late save"}, rid)
         self.assertEqual((status, rejected.get("code")), (409, "review-stopped"), rejected)
+        status, _, stale = self.request(info, "POST", "/api/server/stop",
+                                         {"waitForExit": True,
+                                          "expectedStop": {"stopId": None, "attempts": 0}}, rid)
+        self.assertEqual((status, stale["state"], stale["stop"]["attempts"]), (200, "incomplete", 1))
+        self.assertEqual(stale["stop"]["stopId"], result["stopId"])
         retried = self.cli("serve.py", "stop", rid, "--timeout", "2")
         self.assertEqual(retried.returncode, 0, retried.stdout + retried.stderr)
         self.assertEqual(json.loads(retried.stdout)["stopId"], result["stopId"])
@@ -955,6 +966,52 @@ class ReviewStopTests(unittest.TestCase):
         process.wait(timeout=5)
         final = json.loads(self.cli("serve.py", "stop", rid, "--status").stdout)
         self.assertEqual(final["state"], "stopped")
+
+    def test_page_stop_response_confirms_the_listener_has_closed(self):
+        rid = "a4" * 8
+        directory = self.review("page-stop", rid)
+        closing, release = self.root / "closing", self.root / "release-close"
+        program = """
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import serve
+
+class SlowClose(serve.ReviewServer):
+    def server_close(self):
+        Path(sys.argv[3]).touch()
+        deadline = time.monotonic() + 3
+        while not Path(sys.argv[4]).exists() and time.monotonic() < deadline:
+            time.sleep(.02)
+        super().server_close()
+
+serve.ReviewServer = SlowClose
+sys.exit(serve.serve(Path(sys.argv[2]), None, False, False))
+"""
+        info, health = self.start_server(directory, program=program, args=(closing, release))
+        self.assertIn("stop-review-status", health["features"])
+        self.assertEqual(self.request(info, "GET", "/api/server/stop")[0], 409)
+        self.assertEqual(self.request(info, "GET", "/api/server/stop", rid="fe" * 8)[0], 409)
+        status, _, body = self.request(info, "GET", "/api/server/stop", rid=rid)
+        self.assertEqual(status, 200, body)
+        self.assertEqual((body["reviewId"], body["stop"]["state"]), (rid, "active"))
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            stop = executor.submit(self.request, info, "POST", "/api/server/stop",
+                                   {"timeout": 2, "waitForExit": True,
+                                    "expectedStop": {"stopId": None, "attempts": 0}}, rid)
+            try:
+                self.assertTrue(self.wait_until(closing.exists, timeout=2))
+                self.assertFalse(stop.done(), "browser saw a response while the listener was open")
+            finally:
+                release.touch()
+            status, _, body = stop.result(timeout=4)
+        self.assertEqual(status, 200, body)
+        self.assertEqual((body["state"], body["stop"]["components"]["http"]["state"]),
+                         ("stopped", "stopped"))
+        self.assertNotIn("pid", body["stop"]["components"]["http"])
+        with socket.socket() as probe:
+            self.assertNotEqual(probe.connect_ex(("127.0.0.1", info["port"])), 0)
+        self.assertEqual(self.processes[-1].wait(timeout=5), 0)
 
     def test_start_waits_for_shutdown_even_when_the_stop_client_disconnects(self):
         rid = "a1" * 8

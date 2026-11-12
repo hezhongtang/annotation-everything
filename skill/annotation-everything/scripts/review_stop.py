@@ -80,6 +80,7 @@ def _read(review, manifest=None):
 
 def _write(review, value):
     value["updatedAt"] = _now()
+    value["revision"] = value.get("revision", 0) + 1
     fsutil.atomic_write(Path(review) / STATE_FILE,
                         json.dumps(value, ensure_ascii=False, indent=2) + "\n",
                         prefix=".annotation-stop-")
@@ -96,6 +97,32 @@ def _edit(review, change):
 def load(review):
     with fsutil.flocked(Path(review) / LOCK_FILE, exclusive=False):
         return _read(review)
+
+
+def public_snapshot(value):
+    """Lifecycle state for a page, excluding process and receiver metadata."""
+    components = {}
+    for name in COMPONENTS:
+        component = value["components"][name]
+        public = components[name] = {"state": component["state"]}
+        error = component.get("error")
+        if isinstance(error, str):
+            public["error"] = error
+        failures = component.get("failures")
+        if isinstance(failures, list):
+            causes = list(dict.fromkeys(item["code"] for item in failures
+                                        if isinstance(item, dict) and isinstance(item.get("code"), str)))
+            if causes:
+                public["causes"] = causes
+    return {"reviewId": value["reviewId"], "state": value["state"], "stopId": value["stopId"],
+            "attempts": value.get("attempts", 0) if value["stopId"] else 0,
+            "revision": value.get("revision", 0), "components": components,
+            "incompleteReasons": {name: item["error"] for name, item in components.items() if "error" in item}}
+
+
+def public_status(review):
+    # The state file is replaced atomically. A status read need not create a lock file.
+    return public_snapshot(_read(review))
 
 
 def accepts_work(review, *, manifest=None):
