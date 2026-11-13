@@ -2915,6 +2915,189 @@ class OverviewHomeTests(unittest.TestCase):
         self.assertEqual(self.state_snapshot(), before)
 
 
+class OverviewHomeCliTests(unittest.TestCase):
+    """serve.py overview 子命令：退出码、实例复用、并发首启、保留端口策略与退出清理，全部用临时台账。"""
+
+    def setUp(self):
+        previous = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+        self.addCleanup(os.environ.__setitem__, "AE_HOME", previous)
+        self.tree = tmpdir()
+        self.workspace = self.tree / "workspace"
+        self.workspace.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.workspace)], check=True, capture_output=True)
+        self.review_dir = self.workspace / "review"
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.rid = build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md",
+                                          self.review_dir, name="Cli review")["reviewId"]
+
+    def run_overview(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "overview", *args],
+                              capture_output=True, text=True, timeout=60)
+
+    def spawn(self, *args):
+        return subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), "overview", *args],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    @staticmethod
+    def terminate(proc, timeout=10):
+        if proc.poll() is None:
+            proc.terminate()
+        try:
+            return proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return proc.communicate()
+
+    def wait_ready(self, timeout=15) -> int:
+        """运行状态文件 + pid 探活 + /api/health 宿主核对：不依赖任何审阅目录。"""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            status = serve.read_home_status()
+            if status and type(status.get("port")) is int:
+                found = serve.probe(status["port"], timeout=0.3)
+                if found and found.get("hostKind") == serve.HOST_KIND_OVERVIEW \
+                        and found.get("hostId") == ledger.HOME_HOST_ID \
+                        and found.get("pid") == status.get("pid"):
+                    return status["port"]
+            time.sleep(0.05)
+        raise AssertionError("总览首页没有就绪")
+
+    def reserved_port(self) -> int:
+        record = json.loads((ledger.home() / ledger.OVERVIEW_PORT_FILE).read_text())
+        return record["port"]
+
+    def test_overview_serves_index_and_is_not_registered(self):
+        proc = self.spawn("--no-open")
+        self.addCleanup(self.terminate, proc)
+        port = self.wait_ready()
+        for path in ("/", "/index.html"):
+            status, _, raw = serve._req(port, "GET", path, {"Host": f"127.0.0.1:{port}"})
+            self.assertEqual(status, 200, raw)
+        with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+            code = serve.list_reviews(None, True)
+        self.assertEqual(code, 0)
+        rows = json.loads(out.getvalue())["reviews"]
+        self.assertEqual([r["reviewId"] for r in rows], [self.rid], "总览首页不出现在 serve.py list --json")
+        self.assertEqual(ledger.entries()[self.rid]["dir"], str(self.review_dir.resolve()), "台账不新增审阅记录")
+        out_txt, err_txt = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out_txt + err_txt)
+        self.assertIsNone(serve.read_home_status(), "退出时清理运行状态")
+        self.assertEqual(self.reserved_port(), port, "退出后保留端口记录仍在")
+
+    def test_reuse_same_config_and_conflict_on_different(self):
+        proc = self.spawn("--no-open")
+        self.addCleanup(self.terminate, proc)
+        port = self.wait_ready()
+        again = self.run_overview("--no-open")
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn(f"http://127.0.0.1:{port}/", again.stdout, "相同配置复用同一实例与地址")
+        for label, extra in (("port", ("--port", str(free_port()))), ("under", ("--under", str(self.tree)))):
+            with self.subTest(config=label):
+                conflict = self.run_overview("--no-open", *extra)
+                self.assertEqual(conflict.returncode, 2, conflict.stdout + conflict.stderr)
+                self.assertIn(f"http://127.0.0.1:{port}/", conflict.stderr, "提示先退出当前首页")
+        self.assertEqual(serve.probe(port)["pid"], proc.pid, "冲突调用不另起实例")
+
+    def test_no_open_controls_browser_on_reuse(self):
+        proc = self.spawn("--no-open")
+        self.addCleanup(self.terminate, proc)
+        port = self.wait_ready()
+        with patch.object(serve.webbrowser, "open") as open_browser:
+            code = serve.overview_home(None, None, False, False, None, locale="zh-CN")
+            self.assertEqual(code, 0)
+            self.assertEqual(open_browser.call_count, 0, "复用实例时 --no-open 也遵守")
+            code = serve.overview_home(None, None, True, False, None, locale="zh-CN")
+            self.assertEqual(code, 0)
+            self.assertEqual(open_browser.call_count, 1)
+            self.assertEqual(open_browser.call_args[0][0], f"http://127.0.0.1:{port}/")
+
+    def test_port_policy_across_restarts(self):
+        explicit = free_port()
+        proc = self.spawn("--no-open", "--port", str(explicit))
+        self.addCleanup(self.terminate, proc)
+        port = self.wait_ready()
+        self.assertEqual(port, explicit, "显式 --port 影响当次地址")
+        self.assertFalse((ledger.home() / ledger.OVERVIEW_PORT_FILE).exists(),
+                         "显式端口的首启不建立保留记录（只影响当次地址）")
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+
+        proc = self.spawn("--no-open")
+        port = self.wait_ready()
+        self.assertEqual(self.reserved_port(), port, "无显式端口的首启分配保留端口")
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+
+        blocker = socket.socket()
+        blocker.bind(("127.0.0.1", port))
+        blocker.listen()
+        try:
+            proc = self.spawn("--no-open")
+            displaced = self.wait_ready()
+            self.assertNotEqual(displaced, port, "保留端口被其他程序占用时临时顺延")
+        finally:
+            blocker.close()
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+        self.assertIn(str(port), err, "顺延要在标准错误警告")
+        self.assertEqual(self.reserved_port(), port, "顺延保留原记录")
+
+        proc = self.spawn("--no-open")
+        self.assertEqual(self.wait_ready(), port, "下次无显式端口时再次尝试保留地址")
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+
+        another = free_port()
+        proc = self.spawn("--no-open", "--port", str(another))
+        self.assertEqual(self.wait_ready(), another, "显式端口只影响当次地址")
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+        self.assertEqual(self.reserved_port(), port, "显式端口不改保留记录")
+
+    def test_concurrent_first_starts_share_one_instance(self):
+        a, b = self.spawn("--no-open"), self.spawn("--no-open")
+        self.addCleanup(self.terminate, a)
+        self.addCleanup(self.terminate, b)
+        end = time.monotonic() + 40
+        while time.monotonic() < end and a.poll() is None and b.poll() is None:
+            time.sleep(0.05)
+        exited, running = (a, b) if a.poll() is not None else (b, a)
+        self.assertIsNotNone(exited.poll(), "并发首启后恰好一个调用复用退出")
+        out, err = exited.communicate(timeout=10)
+        self.assertEqual(exited.returncode, 0, out + err)
+        port = self.wait_ready()
+        self.assertIn(f"http://127.0.0.1:{port}/", out, "两个调用得到同一地址")
+        self.assertIsNone(running.poll(), "只创建一个前台实例")
+        found = serve.probe(port)
+        self.assertEqual(found["pid"], running.pid)
+        self.assertEqual(self.reserved_port(), port, "并发首启只创建一份保留端口记录")
+
+    def test_review_cannot_claim_reserved_port_after_exit(self):
+        proc = self.spawn("--no-open")
+        self.addCleanup(self.terminate, proc)
+        port = self.wait_ready()
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+        claim = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), str(self.review_dir),
+                                "--claim-port", str(port), "--no-open", "--port", str(free_port())],
+                               capture_output=True, text=True, timeout=30)
+        self.assertEqual(claim.returncode, 2, claim.stdout + claim.stderr)
+        self.assertIn(str(port), claim.stderr)
+        self.assertEqual(ledger.get(self.rid)["port"], None, "认领失败且原有登记不变")
+        self.assertIsNone(serve.read_status(self.review_dir), "不拉起审阅服务")
+
+    def test_help_lists_overview_and_missing_dir_still_fails(self):
+        help_out = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "--help"],
+                                  capture_output=True, text=True, timeout=30)
+        self.assertEqual(help_out.returncode, 0, help_out.stdout + help_out.stderr)
+        self.assertIn("overview", help_out.stdout, "新版 --help 列出 overview 子命令")
+        missing = subprocess.run([sys.executable, str(SCRIPTS / "serve.py")],
+                                 capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(missing.returncode, 0, "缺目录参数仍是缺参报错并非零退出")
+        self.assertTrue(missing.stderr.strip())
+
+
 class LedgerTests(unittest.TestCase):
     """审阅台账、审阅名、专属端口。每个用例用自己的台账目录。"""
 

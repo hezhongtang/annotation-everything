@@ -10,6 +10,7 @@
   python3 serve.py stop <审阅目录或标识> [--timeout 秒]  # 停止整份审阅；--status 只查询持久状态
   python3 serve.py list [--under 目录] [--json]   # 审阅台账：本机有哪些审阅、端口、状态、待接收的提交、有没有代理在等
   python3 serve.py forget <标识前缀>            # 从台账移除一份审阅，释放它的专属端口（不动审阅目录）
+  python3 serve.py overview [--under 目录]     # 无审阅目录的总览首页：独立地址（台账保留端口），列出并代操作本机审阅
   python3 serve.py check                      # 自检：回环绑定、伪造 Host/Origin 被拒、落盘与重启恢复
 
 安全做法：
@@ -1351,6 +1352,239 @@ def clear_status(review_dir: Path) -> None:
         ledger.status_file(review_dir).unlink(missing_ok=True)
 
 
+# ---------- 总览首页宿主：运行状态、实例判定与启动 ----------
+def read_home_status() -> dict[str, Any] | None:
+    """台账目录里的首页运行状态（pid/端口/宿主标识/启动配置）；读不了返回 None。"""
+    try:
+        info = json.loads((ledger.home() / OVERVIEW_STATUS_FILE).read_text(encoding="utf-8"))
+        return info if isinstance(info, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def write_home_status(server: ReviewServer, config: dict[str, Any]) -> None:
+    # config 的键与运行字段错开（显式端口记 explicitPort，实际端口才叫 port），避免展开覆盖
+    info = {"app": APP, "version": VERSION, "hostKind": HOST_KIND_OVERVIEW,
+            "hostId": ledger.HOME_HOST_ID, **config,
+            "pid": os.getpid(), "port": server.port,
+            "url": f"http://127.0.0.1:{server.port}/", "startedAt": store.now_iso()}
+    fsutil.atomic_write(ledger.home() / OVERVIEW_STATUS_FILE,
+                        json.dumps(info, ensure_ascii=False, indent=2) + "\n",
+                        prefix=".overview-home-status-")
+
+
+def clear_home_status() -> None:
+    info = read_home_status()
+    if info and info.get("pid") == os.getpid():
+        (ledger.home() / OVERVIEW_STATUS_FILE).unlink(missing_ok=True)
+
+
+def overview_running() -> dict[str, Any] | None:
+    """不依赖审阅目录判断总览首页是否在运行：运行状态文件 + pid 探活 + /api/health 宿主核对。
+
+    测试辅助与现有工具共用同一判据；返回运行状态（含本次启动配置），没有运行返回 None。
+    """
+    info = read_home_status()
+    if not info:
+        return None
+    pid, port = info.get("pid"), info.get("port")
+    if type(pid) is not int or not ledger.pid_alive(pid):
+        return None
+    found = probe(port, timeout=.5) if type(port) is int and 1024 <= port <= 65535 else None
+    if found and found.get("hostKind") == HOST_KIND_OVERVIEW \
+            and found.get("hostId") == ledger.HOME_HOST_ID and found.get("pid") == pid:
+        return info
+    return None
+
+
+def bind_home(port: int, tries: int = PORT_TRIES, debug: bool = False,
+              on_handoff: list[str] | None = None, avoid: dict[int, str] | None = None,
+              locale: str | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
+    """总览首页宿主的绑定：返回 (服务, 已在运行的 URL, 过程记录)，语义与审阅的 bind() 一致。
+
+    avoid 是要跳过的端口（审阅专属地址）；已有首页在跑时按宿主种类与标识核对并复用，
+    版本不一致抛 StaleServer（不静默复用）。
+    """
+    avoid = avoid or {}
+    notes: list[str] = []
+
+    def check_version(found: dict[str, Any], p: int) -> None:
+        if found.get("version") != VERSION:
+            raise StaleServer(T("serve.stale.detail", old=found.get('version') or T("serve.stale.oldWord"),
+                                port=p, pid=found.get('pid'), version=VERSION))
+
+    for p in range(port, port + tries):
+        if p in avoid:
+            if avoid[p] == ledger.HOME_HOST_ID:
+                notes.append(T("serve.bind.skipReservedHome", port=p))
+            else:
+                notes.append(T("serve.bind.skipReserved", port=p, rid=avoid[p][:8]))
+            continue
+        found = probe(p)
+        if found is not None:
+            if found.get("hostKind") == HOST_KIND_OVERVIEW and found.get("hostId") == ledger.HOME_HOST_ID:
+                check_version(found, p)
+                notes.append(T("serve.bind.runningThere", port=p, pid=found.get('pid')))
+                return None, f"http://127.0.0.1:{p}/", notes
+            who = T("serve.bind.otherReview") if found.get("app") == APP else T("serve.bind.otherProgram")
+            notes.append(T("serve.bind.busy", port=p, who=who))
+            continue
+        try:
+            return ReviewServer(None, p, debug=debug, on_handoff=on_handoff,
+                                home_id=ledger.HOME_HOST_ID, locale=locale or i18n.current_locale()), None, notes
+        except OSError as e:
+            notes.append(T("serve.bind.failed", port=p, detail=e.strerror or e))
+    return None, None, notes
+
+
+def _overview_config(under: Path | None, port: int | None, on_handoff: list[str] | None) -> dict[str, Any]:
+    """实例复用的配置比较：规范化 --under、显式临时端口、默认界面语言、钩子参数与启用钩子时的工作目录。"""
+    return {"under": str(under.expanduser().resolve()) if under else None,
+            "explicitPort": port, "locale": i18n.current_locale(),
+            "hook": list(on_handoff) if on_handoff else None,
+            "hookCwd": os.getcwd() if on_handoff else None}
+
+
+def _overview_config_diff(existing: dict[str, Any], requested: dict[str, Any]) -> str:
+    labels = {"under": "--under", "explicitPort": "--port", "locale": "--locale",
+              "hook": "--on-handoff", "hookCwd": "钩子工作目录"}
+    return "；".join(f"{labels[k]}：{existing.get(k)} → {requested.get(k)}"
+                     for k in requested if existing.get(k) != requested.get(k))
+
+
+def _reuse_overview_home(running: dict[str, Any], config: dict[str, Any], open_browser: bool) -> int:
+    existing = {k: running.get(k) for k in config}
+    if existing != config:
+        detail = _overview_config_diff(existing, config)
+        print(T("serve.overview.configConflict", url=running.get("url"), detail=detail), file=sys.stderr)
+        return 2
+    print(T("serve.overview.reused", url=running.get("url")))
+    if open_browser:
+        webbrowser.open(running.get("url"))
+    return 0
+
+
+def _prepare_overview_home(under: Path | None, port: int | None, debug: bool,
+                           on_handoff: list[str] | None, config: dict[str, Any]):
+    """持首页启动锁后的准备路径：构建页面、决定地址、绑定并写运行状态。
+
+    返回 (server, url)（可以启动）、("reuse", url)（并发窗口里对方已就绪）或退出码 int。
+    只做有界工作，绝不在这里进入服务循环——启动锁必须在本进程开始服务前释放。
+    """
+    import build_viewer
+    build_viewer.build_overview_home(ledger.home(), host_id=ledger.HOME_HOST_ID, locale=i18n.current_locale())
+    owned = ledger.overview_reserved_port()
+    # 首页有权用自己的保留地址，避让清单只含审阅专属端口
+    avoid = {pt: k for pt, k in _others_ports(None).items() if k != ledger.HOME_HOST_ID}
+    first = port
+    if port is None:
+        if owned is not None and owned not in avoid:
+            first = owned
+        elif owned is not None:
+            # 旧副本已把同号端口登记成审阅专属地址：当次顺延并告警，双方记录都保留
+            print(T("serve.overview.portConflict", port=owned, rid=avoid[owned][:8]), file=sys.stderr)
+            first = None
+        else:
+            reserved = ledger.assign_overview_port(is_free=lambda p: probe(p, timeout=0.5) is None)
+            if reserved is None:
+                print(T("serve.overview.noPort"), file=sys.stderr)
+                return 3
+            print(T("serve.overview.portOwned", port=reserved), file=sys.stderr)
+            first, owned = reserved, reserved
+    try:
+        server, running_url, trail = bind_home(first if first is not None else DEFAULT_PORT,
+                                               debug=debug, on_handoff=on_handoff, avoid=avoid)
+    except StaleServer as e:
+        print(T("serve.serve.stale", detail=e), file=sys.stderr)
+        return 6
+    for t in trail:
+        print(T("serve.port.trail", detail=t), file=sys.stderr)
+    if running_url:
+        return ("reuse", running_url)
+    if server is None:
+        print(T("serve.overview.noPortFree", first=first), file=sys.stderr)
+        return 3
+    url = f"http://127.0.0.1:{server.port}/"
+    if port is not None:
+        # 显式 --port 只影响当次地址：保留记录不动，下次无显式端口仍回到保留地址
+        if owned is not None:
+            print(T("serve.overview.portExplicit", port=server.port, owned=owned), file=sys.stderr)
+    elif owned is not None and server.port != owned:
+        print(T("serve.overview.portOccupied", port=owned, port2=server.port), file=sys.stderr)
+    write_home_status(server, config)
+    return (server, url)
+
+
+def _serve_overview_home(server: ReviewServer, url: str, on_handoff: list[str] | None,
+                         open_browser: bool) -> int:
+    """锁外的服务循环：前台跑到 Ctrl+C / SIGTERM，退出时只清运行状态（保留端口记录不动）。"""
+    server.log("info", f"启动 {APP} {VERSION}：{url} 托管总览首页（pid {os.getpid()}）")
+    print(T("serve.overview.ready", url=url)
+          + (T("serve.serve.hookLine", command=shlex.join(on_handoff)) if on_handoff else "")
+          + T("serve.serve.stopHint"), flush=True)
+
+    def _term(*_a: Any) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _term)
+    if open_browser:
+        threading.Timer(0.3, webbrowser.open, args=(url,)).start()
+    try:
+        server.serve_forever(poll_interval=0.3)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.log("info", T("serve.serve.stoppedLog"))
+        server.server_close()
+        clear_home_status()
+    return 0
+
+
+def overview_home(under: Path | None, port: int | None, open_browser: bool, debug: bool,
+                  on_handoff: list[str] | None, locale: str | None) -> int:
+    """总览首页：无审阅目录的宿主，列出本机（或 --under 目录下）的审阅，占一个台账保留端口。"""
+    set_locale(locale or cli_locale(None))
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(ledger.update_lock())   # 运行期间沿用服务的更新锁，技能更新可识别该占用
+        except OSError:
+            print(T("serve.serve.updateLockUnavailable"), file=sys.stderr)
+        try:
+            source = Path(__file__).resolve().read_text(encoding="utf-8")
+            match = re.search(r'^VERSION = "([^"]+)"', source, re.M)
+            if match is None or match.group(1) != VERSION:
+                print(T("serve.serve.updateRestart"), file=sys.stderr)
+                return 6
+        except OSError:
+            print(T("serve.serve.updateRestart"), file=sys.stderr)
+            return 6
+        config = _overview_config(under, port, on_handoff)
+        running = overview_running()
+        if running is None:
+            # 并发首次启动：拿启动锁后重新判定——先到的在锁内绑定并写状态（锁在服务开始前释放），
+            # 后到的复用同一实例；等不到锁说明另一方还在启动，提示稍候重试而不是再开一个实例。
+            try:
+                with fsutil.flocked(ledger.home() / OVERVIEW_START_LOCK_FILE, exclusive=True,
+                                    deadline=time.monotonic() + 20):
+                    running = overview_running()
+                    if running is not None:
+                        return _reuse_overview_home(running, config, open_browser)
+                    outcome = _prepare_overview_home(under, port, debug, on_handoff, config)
+            except BlockingIOError:
+                print(T("serve.overview.startupBusy"), file=sys.stderr)
+                return 3
+            if isinstance(outcome, int):
+                return outcome
+            if outcome[0] == "reuse":
+                print(T("serve.overview.reused", url=outcome[1]))
+                if open_browser:
+                    webbrowser.open(outcome[1])
+                return 0
+            server, url = outcome
+            return _serve_overview_home(server, url, on_handoff, open_browser)
+        return _reuse_overview_home(running, config, open_browser)
+
+
 def same_dir(found: dict[str, Any], review_dir: Path) -> bool:
     try:
         return found.get("app") == APP and Path(found.get("dir", "")).resolve() == review_dir.resolve()
@@ -2403,8 +2637,24 @@ def main(argv: list[str] | None = None) -> int:
         ap.add_argument("key", help=T("serve.opt.key"))
         a = ap.parse_args(rest[1:])
         return forget(a.key, locale=i18n.current_locale())
+    if rest[:1] == ["overview"]:
+        ap = i18n.LocalizedParser(prog="serve.py overview", add_help=False, description=T("serve.desc.overview"),
+                                  keys=ERROR_KEYS, translate=T)
+        _add_help(ap)
+        _add_locale(ap)
+        ap.add_argument("--under", type=Path, metavar="目录" if i18n.current_locale() == "zh-CN" else "DIR",
+                        help=T("serve.opt.under"))
+        ap.add_argument("--port", type=int, help=T("serve.opt.overviewPort"))
+        ap.add_argument("--no-open", action="store_true", help=T("serve.opt.noOpen"))
+        ap.add_argument("--debug", action="store_true", help=T("serve.opt.debug"))
+        ap.add_argument("--on-handoff", metavar="命令" if i18n.current_locale() == "zh-CN" else "COMMAND",
+                        help=T("serve.opt.onHandoff"))
+        a = ap.parse_args(rest[1:])
+        return overview_home(a.under, a.port, not a.no_open, a.debug, parse_hook(a.on_handoff),
+                             locale=i18n.current_locale())
     argv = rest[1:] if rest[:1] == ["serve"] else rest
-    ap = i18n.LocalizedParser(prog="serve.py", add_help=False, description=T("serve.desc"),
+    ap = i18n.LocalizedParser(prog="serve.py", add_help=False,
+                              description=T("serve.desc") + "\n\n" + T("serve.desc.subcommands"),
                               keys=ERROR_KEYS, translate=T)
     _add_help(ap)
     _add_locale(ap)
