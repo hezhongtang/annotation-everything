@@ -2673,6 +2673,44 @@ class OverviewTests(unittest.TestCase):
         self.assertEqual(status, 404, "总览仍是 index.html 内的视图，不新增可访问路径")
 
 
+class OverviewHomeBuildTests(unittest.TestCase):
+    """总览首页页面构建：只注入宿主种类与宿主标识；不登记台账、不写审阅清单。"""
+
+    def setUp(self):
+        self._home = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+
+    def tearDown(self):
+        os.environ["AE_HOME"] = self._home
+
+    def build(self, **kw) -> Path:
+        out = tmpdir()
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            build_viewer.build_overview_home(out, host_id=ledger.HOME_HOST_ID, **kw)
+        return out
+
+    def test_page_contains_host_identity_and_no_review_data(self):
+        out = self.build(locale="zh-CN")
+        page = (out / ledger.OVERVIEW_PAGE_FILE).read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r"__[A-Z_]+__", page), "没有未替换的占位符")
+        self.assertIn('"kind": "overview-home"', page, "注入宿主种类")
+        self.assertIn(f'"id": "{ledger.HOME_HOST_ID}"', page, "注入宿主标识")
+        self.assertIn("sha256-", page, "CSP 哈希按最终脚本内容计算")
+        for mark in ("示例咖啡", "三季度收入同比增长", "全程控制在 8 分钟内"):
+            self.assertNotIn(mark, page, f"页面不注入报告或讲稿：{mark}")
+        self.assertIn("const P=[]", page, "不注入报告页数据")
+        self.assertIn("RID=null", page, "不注入审阅标识")
+        self.assertNotIn('"notes":[', page, "不注入批注状态")
+        self.assertEqual(oct((out / ledger.OVERVIEW_PAGE_FILE).stat().st_mode & 0o777), "0o600")
+        self.assertEqual(ledger.entries(), {}, "这种构建不登记台账")
+        self.assertEqual([p.name for p in out.iterdir()], [ledger.OVERVIEW_PAGE_FILE], "不写审阅清单（review.json）")
+
+    def test_default_view_is_overview_only(self):
+        page = (self.build(locale="en") / ledger.OVERVIEW_PAGE_FILE).read_text(encoding="utf-8")
+        self.assertIn("const OVERVIEW_HOME={", page)
+        self.assertIn("body.overview-mode", page, "沿用总览视图的显示开关")
+
+
 class OverviewHomeTests(unittest.TestCase):
     """总览首页宿主：无审阅目录的服务，只服务总览视图与它的写接口；审阅专属路由显式拒绝。"""
 
@@ -2696,9 +2734,8 @@ class OverviewHomeTests(unittest.TestCase):
             return build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", directory, name=name)
 
     def write_page(self):
-        # 循环 3 之前的最小页面：行为测试只关心服务端不注入审阅数据
-        (ledger.home() / serve.OVERVIEW_PAGE_FILE).write_text(
-            "<!doctype html><title>overview-home</title><script>var ok=1</script>", encoding="utf-8")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            build_viewer.build_overview_home(ledger.home(), host_id=self.host_id)
 
     def start_home(self, under=None):
         self.write_page()
@@ -2759,9 +2796,11 @@ class OverviewHomeTests(unittest.TestCase):
             self.assertEqual(status, 200, raw)
             self.assertNotIn("access-control-allow-origin", headers)
             self.assertIn("content-security-policy", headers)
+            self.assertIn('"kind": "overview-home"', raw.decode("utf-8"), "页面注入宿主种类与标识")
             self.assertNotIn(self.rid_inside.encode(), raw, "页面不注入审阅标识")
             self.assertNotIn(self.rid_outside.encode(), raw)
-            self.assertNotIn(b"notes.json", raw, "页面不注入批注状态")
+            self.assertIn(b"const P=[]", raw, "页面不注入报告页数据")
+            self.assertNotIn(b'"notes":[', raw, "页面不注入批注状态")
         for path in ("/review.json", "/notes.json", "/server.log", "/overview-home.json",
                      "/.overview-home.html", "/../review.json"):
             status, _, _ = self.request(path)

@@ -631,6 +631,8 @@ const SECT=__SECT__, RCSS=__RCSS__, SECT_KEYS=P.map(p=>"page-"+p.key);
 const DOCX=__DOCX__;
 // PPT 审阅：渲染信息、字体证据与未核验项（null 表示非 PPTX 报告）。视觉由每页内联渲染图负责
 const PPTX=__PPTX__;
+// 总览首页宿主（null 表示对照页）：这个页面由台账目录的服务提供，只服务总览视图，没有批注与对照页
+const OVERVIEW_HOME=__OVERVIEW_HOME__;
 function pageSize(k){const p=P[k]||{};return{w:+p.w>0?+p.w:1280,h:+p.h>0?+p.h:720}}
 const PAGE_NS=new Set(P.map(q=>q.n));   // 报告页码：页面生命周期内不变，找失页批注时直接查
 const APP="annotation-everything", FILE=location.protocol==="file:";
@@ -653,7 +655,7 @@ let pptxSel=[], pptxPageOn=false, pptxDown=null;   // PPT 元素目标（按选�
 const drafts=SS.get(K.drafts,{})||{};   // 各页没写完的批注；存在本标签页的会话存储里，刷新不丢
 const editBuf={};                        // 正在改的已有批注的内容（列表重绘、翻页时不丢）
 const DEL_TEXT="删除引用的这段文字", REP_PREFIX="改为：";   // 快捷修改的固定说法（导出/导入据此还原）
-const LOCALE_STORE="ae-locale:"+RID;
+const LOCALE_STORE="ae-locale:"+(OVERVIEW_HOME?OVERVIEW_HOME.id:RID);
 let uiLocale="zh-CN";
 function normLocale(tag){
   if(typeof tag!=="string") return null;
@@ -1251,7 +1253,7 @@ async function api(method,path,body,timeout=REQ_TIMEOUT,headers={}){
     throw Object.assign(new Error(tMsg(docxBlocked()?"viewer.docx.oldService":"viewer.pptx.oldService")),
       {status:409,code:docxBlocked()?"docx-required":"pptx-required"});
   const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),timeout);
-  const opt={method,cache:"no-store",headers:{"X-AE-Review":RID,...headers},signal:ctl.signal};
+  const opt={method,cache:"no-store",headers:{...(OVERVIEW_HOME?{"X-AE-Host":OVERVIEW_HOME.id}:{"X-AE-Review":RID}),...headers},signal:ctl.signal};
   if(body!==undefined){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(wellFormed(body))}
   let r;
   try{r=await fetch(path,opt)}
@@ -3396,7 +3398,7 @@ function setCurrentArchive(value){
   const archived=value===true;
   if(currentArchived!==archived){currentArchived=archived;renderArchiveBanners()}
 }
-function overviewShown(){return location.hash==="#overview"}
+function overviewShown(){return OVERVIEW_HOME!==null||location.hash==="#overview"}
 function overviewState(row){
   if(!["running","running-temp","stopped"].includes(row.state))return "invalid";
   return row.archived?"archived":row.state==="stopped"||overviewStopStatus(row)?.state==="stopped"?"stopped":"running";
@@ -3750,7 +3752,10 @@ async function archiveReview(reviewId,archived){
 }
 async function readOverview(scope,timeout=REQ_TIMEOUT){
   const data=await api("GET","/api/overview?scope="+encodeURIComponent(scope),undefined,timeout);
-  if(data.reviewId!==RID||data.scope!==scope||!Array.isArray(data.reviews))throw new Error("overview-format");
+  if(OVERVIEW_HOME){
+    // 首页宿主：按宿主种类与标识核对；范围由服务端按启动配置决定，页面只发 all
+    if(data.hostKind!=="overview-home"||data.hostId!==OVERVIEW_HOME.id||!Array.isArray(data.reviews))throw new Error("overview-format")
+  }else if(data.reviewId!==RID||data.scope!==scope||!Array.isArray(data.reviews))throw new Error("overview-format");
   return data;
 }
 async function loadOverview(){
@@ -3803,6 +3808,14 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE){po
 
 (async function init(){
   applyLocale();
+  if(OVERVIEW_HOME){
+    // 总览首页：只有总览视图。没有对照页，就没有批注轮询、保存通道与「返回当前审阅」；列表自动刷新沿用 overviewRoute 里的定时器
+    const scope=$("overviewScope"),workspaceOption=scope.querySelector('option[value="workspace"]');
+    scope.value="all";
+    if(workspaceOption)workspaceOption.hidden=true;
+    $("overviewBack").hidden=true;
+    overviewRoute();
+    return}
   applyLayout();
   overviewRoute();
   analysisRoute();

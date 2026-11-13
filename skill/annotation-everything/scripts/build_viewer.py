@@ -981,6 +981,36 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
             "locale": locale_choice, "docx": docx_meta}
 
 
+def build_overview_home(out: Path, *, host_id: str, locale: str | None = None) -> dict:
+    """总览首页页面：只注入宿主种类、宿主标识与界面语言，不注入报告、讲稿、审阅标识、批注状态与技能清单。
+
+    这种构建不登记台账、不写 review.json（没有审阅），产物是 out 下的单个 ledger.OVERVIEW_PAGE_FILE，
+    位置由调用方决定——首页宿主放台账目录。语言解析与 build() 相同：--locale > AE_LOCALE > 默认中文。
+    """
+    import i18n
+    import ledger
+    try:
+        choice = i18n.canonical_choice(i18n.effective_choice(locale, os.environ.get("AE_LOCALE"), None))
+    except i18n.LocaleError as exc:
+        raise SystemExit(f"错误：{exc}") from exc
+    ui = i18n.resolve_locale(choice, system_languages=i18n.system_languages())
+    ui_catalog = i18n.catalog(ui)
+    title = i18n.translate(ui_catalog, "viewer.overview.title")
+    values = {"TITLE": html.escape(title),
+              "OVERVIEW_HOME": _js({"kind": ledger.HOST_KIND_OVERVIEW, "id": host_id}),
+              "INTRO": "", "PAGES": _js([]), "SECTIONS": _js([]), "NS": _js(""), "NAME": _js(None),
+              "RID": _js(None), "RCSS": _js(""), "SECT": _js([]), "ROOTFS": "100%",
+              "SKILLS": _js([]), "ALWAYS": _js([]), "SKILL_CONTEXT": _js({}),
+              "FULL_CHECK_COMPAT": _js(""), "CATALOGS": _js({tag: i18n.catalog(tag)["messages"] for tag in i18n.SUPPORTED}),
+              "LOCALE": _js(ui), "REPORT_LANG": _js(""), "DOCX": _js(None), "PPTX": _js(None)}
+    # 一次性替换，避免注入内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
+    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX|PPTX|OVERVIEW_HOME)__",
+                       lambda m: values[m.group(1)], TEMPLATE.read_text(encoding="utf-8"))
+    page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
+    write_private(out / ledger.OVERVIEW_PAGE_FILE, page_html)
+    return {"title": title, "locale": ui, "page": out / ledger.OVERVIEW_PAGE_FILE}
+
+
 def docx_view(meta: dict | None) -> dict | None:
     """对照页用的 DOCX 摘要：分页可信度与有限制的结构（文案由页面按当前语言取词典）。"""
     if meta is None:

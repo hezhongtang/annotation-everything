@@ -142,12 +142,12 @@ MAX_BODY = 2 * 1024 * 1024
 HOST = "127.0.0.1"
 NOTE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})$")
 SAFE_CHARS = re.compile(r"[^A-Za-z0-9._:/?=&%+@-]")
-# 总览首页宿主：页面、运行状态、日志与启动锁都在台账目录，不写进任何审阅目录
-HOST_KIND_OVERVIEW = "overview-home"          # /api/health 的宿主种类；审阅宿主不带宿主种类字段（行为不变）
-OVERVIEW_PAGE_FILE = ".overview-home.html"    # 仅总览视图的首页页面（由 build_overview_home 生成）
-OVERVIEW_LOG_FILE = "overview-home.log"       # 首页服务日志
-OVERVIEW_STATUS_FILE = ".overview-home-status.json"   # 首页运行状态（pid/端口/宿主标识），退出时删除
-OVERVIEW_START_LOCK_FILE = ".overview-home-start.lock"   # 并发首次启动的串行化锁（台账目录）
+# 总览首页宿主：页面、运行状态、日志与启动锁都在台账目录，不写进任何审阅目录（文件名只在 ledger 定义一次）
+HOST_KIND_OVERVIEW = ledger.HOST_KIND_OVERVIEW          # /api/health 的宿主种类；审阅宿主不带宿主种类字段（行为不变）
+OVERVIEW_PAGE_FILE = ledger.OVERVIEW_PAGE_FILE          # 仅总览视图的首页页面（由 build_overview_home 生成）
+OVERVIEW_LOG_FILE = ledger.OVERVIEW_LOG_FILE            # 首页服务日志
+OVERVIEW_STATUS_FILE = ledger.OVERVIEW_STATUS_FILE      # 首页运行状态（pid/端口/宿主标识），退出时删除
+OVERVIEW_START_LOCK_FILE = ledger.OVERVIEW_START_LOCK_FILE   # 并发首次启动的串行化锁（台账目录）
 
 
 def csp_for(html_text: str) -> str:

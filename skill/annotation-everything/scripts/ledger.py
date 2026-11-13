@@ -42,6 +42,11 @@ RID_PREFIX = re.compile(r"[0-9a-f]{4,16}")
 # 总览首页宿主：保留端口记录与运行状态都放在台账目录，独立于审阅条目（不登记成审阅、不改台账结构）
 OVERVIEW_PORT_FILE = "overview-home.json"       # 保留端口记录：{"version": 1, "port": N}
 HOME_HOST_ID = "overview-home"                  # 同一台账稳定的首页宿主标识；与审阅标识（16 位十六进制）格式不同
+HOST_KIND_OVERVIEW = "overview-home"            # /api/health 与页面注入的宿主种类；审阅宿主不带宿主种类字段
+OVERVIEW_PAGE_FILE = ".overview-home.html"      # 仅总览视图的首页页面（build_overview_home 生成）
+OVERVIEW_LOG_FILE = "overview-home.log"         # 首页服务日志
+OVERVIEW_STATUS_FILE = ".overview-home-status.json"   # 首页运行状态（pid/端口/宿主标识），退出时删除
+OVERVIEW_START_LOCK_FILE = ".overview-home-start.lock"   # 并发首次启动的串行化锁
 
 
 def overview_port_file() -> Path:
