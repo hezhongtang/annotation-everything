@@ -114,19 +114,19 @@ def load(review):
         return _read(review)
 
 
-def status(review):
+def status(review, *, manifest=None):
     """Distinguish an interrupted stop from a coordinator that still holds its lock."""
-    value = _read(review)
+    value = _read(review, manifest)
     if value["state"] != "stopping":
         return value
     try:
         with operation(review, deadline=time.monotonic()):
-            value = _read(review)
+            value = _read(review, manifest)
             if value["state"] == "stopping":
                 value.update(state="incomplete", incompleteReasons={"request": STOP_INTERRUPTED})
             return value
     except OperationBusy:
-        return _read(review)
+        return _read(review, manifest)
 
 
 def public_snapshot(value):
@@ -155,8 +155,8 @@ def public_snapshot(value):
             "incompleteReasons": reasons}
 
 
-def public_status(review):
-    return public_snapshot(status(review))
+def public_status(review, *, manifest=None):
+    return public_snapshot(status(review, manifest=manifest))
 
 
 def accepts_work(review, *, manifest=None):

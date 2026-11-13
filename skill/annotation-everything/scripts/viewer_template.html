@@ -1209,7 +1209,7 @@ async function doFlush(saveRequest=null){   // 按顺序补传；多个标签页
   finally{busy--;updateMode();renderDocxBlock();if(problem)problem()}}
 async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 
-// 总览和 CLI 通过目标服务请求保存回执。浏览器只访问同源服务。
+// 总览和命令行通过目标服务请求保存回执。浏览器只访问同源服务。
 const SAVE_PATH="/api/server/save-protection";
 const saveClientKey=`ae.${RID}.saveClient`;
 const browserSaveId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,"0")).join("");

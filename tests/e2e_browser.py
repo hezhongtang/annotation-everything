@@ -3633,8 +3633,9 @@ store.handoff_done(d, seq=seq)
            and not any(url.endswith("/api/handoff/finalize") for url in posts)
            and all(n["status"] == "drafted" for n in disk_notes(sd)),
            "旧服务阻断顶栏处理记录的直接写接口")
+        old.locator("#batches [data-close]").click()
         old.once("dialog", lambda dialog: dialog.accept())
-        old.click("#stopServiceBtn")
+        old.click("header #stopReviewBtn")
         ok(wait_until(lambda: server.poll() is not None, old, 8, condition="旧服务仍能通过恢复入口停止")
            and any(url.endswith("/api/server/stop") for url in posts),
            "旧服务阻断内容写入时仍允许停止服务以便升级")

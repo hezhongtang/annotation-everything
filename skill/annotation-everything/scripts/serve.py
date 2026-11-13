@@ -922,7 +922,7 @@ class Handler(BaseHTTPRequestHandler):
             doc["alwaysSkills"] = store.always_skills(d, doc=skills)
             if self.server.review_id() and "stop-review-status" in FEATURES:
                 try:
-                    doc["stop"] = review_stop.public_status(d)
+                    doc["stop"] = review_stop.public_status(d, manifest=self.server.manifest())
                 except (OSError, ValueError):
                     pass  # Keep annotations readable if lifecycle state cannot be read.
             self._json(200, {**doc, **self._ident()})

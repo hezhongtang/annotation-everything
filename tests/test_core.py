@@ -1975,7 +1975,8 @@ class ServerTests(unittest.TestCase):
             ("POST", headers, b"[]", 400, "bad-note"),
             ("POST", {k: v for k, v in headers.items() if k != "X-AE-Review"}, b"{}", 409, "review-mismatch"),
             ("POST", {**headers, "X-AE-Review": "bbbbbbbbbbbbbbbb"}, b"{}", 409, "review-mismatch"),
-            ("GET", headers, None, 404, "no-api"),
+            ("GET", {k: v for k, v in headers.items() if k != "X-AE-Review"}, None, 409, "review-mismatch"),
+            ("GET", {**headers, "X-AE-Review": "bbbbbbbbbbbbbbbb"}, None, 409, "review-mismatch"),
             ("DELETE", headers, b"{}", 405, "no-api"),
             ("OPTIONS", headers, None, 405, "preflight"),
         ]
@@ -1988,6 +1989,10 @@ class ServerTests(unittest.TestCase):
                     self.assertFalse(any(k.lower().startswith("access-control-") for k in response_headers))
                     status, _, _ = serve._req(srv.port, "GET", "/api/health", headers)
                     self.assertEqual(status, 200, "拒绝请求后服务继续运行")
+            status, _, body = serve._req(srv.port, "GET", "/api/server/stop", headers)
+            self.assertEqual((status, json.loads(body)["stop"]["state"]), (200, "active"))
+            status, _, _ = serve._req(srv.port, "GET", "/api/health", headers)
+            self.assertEqual(status, 200, "查询停止状态不会停止服务")
         finally:
             srv.shutdown()
             srv.server_close()
@@ -2630,11 +2635,12 @@ class OverviewTests(unittest.TestCase):
             self.assertEqual((actual["pending"], actual["review"]), (row["pending"], row["review"]))
         self.assertEqual((by_id[older_id]["pending"], by_id[recent_id]["review"]), (1, 1))
 
-    def test_non_git_review_uses_parent_without_including_prefix_siblings(self):
+    def test_non_git_review_uses_exact_parent_workspace(self):
         loose = self.tree / "loose"
         current = loose / "current"
         self.build(current, "Loose current")
-        self.build(loose / "nested" / "peer", "Loose peer")
+        self.build(loose / "peer", "Loose peer")
+        self.build(loose / "nested" / "peer", "Nested workspace")
         self.build(self.tree / "loose-extra" / "outside", "Prefix sibling")
         server = serve.ReviewServer(current, 0, log_to_file=False)
         threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
@@ -2645,7 +2651,7 @@ class OverviewTests(unittest.TestCase):
         self.assertEqual(status, 200, raw)
         result = json.loads(raw)
         self.assertEqual(result["workspace"], "loose")
-        self.assertEqual({row["path"] for row in result["reviews"]}, {"current", "nested/peer"})
+        self.assertEqual({row["path"] for row in result["reviews"]}, {"current", "peer"})
 
     def test_overview_keeps_host_origin_identity_and_scope_guards(self):
         for headers, expected in (({"Host": "evil.example"}, 421),
@@ -3337,8 +3343,9 @@ class ServeRequestReadsTests(unittest.TestCase):
                 self.assertEqual(code, 200)
                 self.assertEqual(set(notes), {"version", "rev", "updatedAt", "notes", "indexMtime",
                                               "handoff", "agentDelivery", "skillCatalog", "alwaysSkills",
-                                              "app", "reviewId", "name", "features", "receiver", "archived"})
+                                              "app", "reviewId", "name", "features", "receiver", "archived", "stop"})
                 self.assertFalse(notes["archived"])
+                self.assertEqual(notes["stop"], serve.review_stop.public_status(review))
                 self.assertEqual(notes["handoff"], store.handoff_state(review, full=False))
                 self.assertEqual(notes["agentDelivery"], wakeup.public_status(review))
                 self.assertEqual(notes["skillCatalog"], store.skills_catalog(review))
@@ -3428,18 +3435,18 @@ class ServeRequestReadsTests(unittest.TestCase):
                                           "name": "合成审阅", "state": "已停", "state_id": "stopped", "archived": False,
                                           "running": None, "pending": 1, "review": 1, "waiting": False,
                                           "hook": False, "unattended": True, "agentDelivery": unbound,
-                                          "receiptConfirmed": None})
+                                          "receiptConfirmed": None, "processing": False})
         self.assertEqual(rows["b" * 16], {"reviewId": "b" * 16, "dir": str(corrupt.resolve()), "port": None,
                                           "name": "合成审阅", "state": "已停", "state_id": "stopped", "archived": False,
                                           "running": None, "pending": 0, "review": 0, "waiting": False,
                                           "hook": False, "unattended": False, "agentDelivery": unbound,
-                                          "receiptConfirmed": None})
+                                          "receiptConfirmed": None, "processing": False})
         self.assertEqual({k: v for k, v in rows["c" * 16].items() if k != "agentDelivery"},
                          {"reviewId": "c" * 16, "dir": str(waiting.resolve()), "port": None, "name": "合成审阅",
                           "state": "已停", "state_id": "stopped", "running": None, "pending": 0,
                           "archived": False,
                           "review": 0, "waiting": True, "hook": False, "unattended": False,
-                          "receiptConfirmed": None})
+                          "receiptConfirmed": None, "processing": False})
         self.assertEqual(rows["c" * 16]["agentDelivery"]["state"], "bound")
         self.assertEqual(rows["c" * 16]["agentDelivery"]["receiver"]["state"], "waiting")
         with redirect_stdout(io.StringIO()) as out:
