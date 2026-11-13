@@ -3087,6 +3087,18 @@ class OverviewHomeCliTests(unittest.TestCase):
         self.assertEqual(ledger.get(self.rid)["port"], None, "认领失败且原有登记不变")
         self.assertIsNone(serve.read_status(self.review_dir), "不拉起审阅服务")
 
+    def test_update_lock_is_shared_while_home_runs(self):
+        proc = self.spawn("--no-open")
+        self.addCleanup(self.terminate, proc)
+        self.wait_ready()
+        with self.assertRaises(BlockingIOError, msg="首页运行期间沿用服务的更新锁，技能更新可识别该占用"):
+            with serve.fsutil.flocked(ledger.update_lock_path(), exclusive=True, nonblocking=True):
+                pass
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+        with serve.fsutil.flocked(ledger.update_lock_path(), exclusive=True, nonblocking=True):
+            pass   # 退出后更新器可以拿到排他锁
+
     def test_help_lists_overview_and_missing_dir_still_fails(self):
         help_out = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "--help"],
                                   capture_output=True, text=True, timeout=30)

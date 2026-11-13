@@ -67,6 +67,11 @@ def overview_reserved_port() -> int | None:
     return _read_overview_port(overview_port_file())
 
 
+def ensure_home() -> Path:
+    """台账目录（不存在就按 0700 创建）：首页的启动锁、页面、运行状态与保留记录都写在这里。"""
+    return _ensure_home()
+
+
 # 界面语言只有进程级一个来源（见 i18n.set_locale）：入口设置一次，台账与技能发现等各模块
 # 共同遵循。定住后不再被 AE_LOCALE 覆盖——否则同一进程里两种来源不一致，会出现中英混排
 

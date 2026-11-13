@@ -725,7 +725,8 @@ STATUS_FILE = ".annotation-server.json"   # 与技能本体 serve.py 的运行�
 HOST = "127.0.0.1"
 # serve.py 的这些命令行选项各带一个值，解析目录参数时要连值一起跳过
 SERVE_OPTIONS_WITH_VALUE = ("--port", "--claim-port", "--on-handoff", "--locale")
-SERVE_MAINTENANCE_COMMANDS = ("check", "status", "stop", "stop-status", "list", "forget")   # 不起服务的 serve.py 子命令
+# 不起审阅服务的 serve.py 子命令；overview 起总览首页宿主（无审阅目录），由 serve_overview_home_cmdline 单独识别
+SERVE_MAINTENANCE_COMMANDS = ("check", "status", "stop", "stop-status", "list", "forget", "overview")
 
 
 def skill_ledger_module():
@@ -840,6 +841,24 @@ def serve_script_index(cmdline: str, pid: Optional[int] = None,
         return index if any(script.resolve() == path.resolve() for path in trusted) else None
     except (OSError, ValueError):
         return None
+
+
+def serve_overview_home_cmdline(cmdline: str, pid: Optional[int] = None,
+                                extra_copy: Optional[Path] = None) -> bool:
+    """这是不是总览首页进程（serve.py overview）：核脚本、剥 --locale，再认 overview 子命令。
+
+    overview 在 SERVE_MAINTENANCE_COMMANDS 里，serve_dir_argument 对它返回 None——体检的
+    审阅服务计数与孤儿审阅修复因此天然跳过首页；卸载用本函数把首页单独识别出来。
+    """
+    index = serve_script_index(cmdline, pid, extra_copy)
+    if index is None:
+        return False
+    args = command_tokens(cmdline)[index + 1:]
+    if args[:1] == ["--locale"]:
+        args = args[2:]
+    elif args[:1] and args[0].startswith("--locale="):
+        args = args[1:]
+    return bool(args) and args[0] == "overview"
 
 
 def serve_dir_argument(cmdline: str, pid: Optional[int] = None,
@@ -1492,6 +1511,15 @@ def running_servers(lister: Optional[Callable[[], list]] = None,
             if serve_dir_argument(command, pid, extra_copy) is not None]
 
 
+def running_home_servers(lister: Optional[Callable[[], list]] = None,
+                         extra_copy: Optional[Path] = None) -> list:
+    """正在运行的总览首页进程：[(pid, 命令行), ...]。识别规则与 running_servers 同源（同一脚本信任清单）。"""
+    if lister is None:
+        lister = list_processes
+    return [(pid, command) for pid, command in lister()
+            if serve_overview_home_cmdline(command, pid, extra_copy)]
+
+
 def _process_stopped(pid: int) -> bool:
     """进程是否已停止（查不到，或只剩僵尸）；无法查询时不宣称已停止。"""
     try:
@@ -1507,7 +1535,11 @@ def _process_stopped(pid: int) -> bool:
 
 def server_identity(pid: int, command: str, extra_copy: Optional[Path] = None) -> Optional[tuple]:
     index = serve_script_index(command, pid, extra_copy)
-    if index is None or serve_dir_argument(command, pid, extra_copy) is None:
+    if index is None:
+        return None
+    # 首页进程没有审阅目录参数：按 overview 子命令识别，才能纳入卸载的身份核对与停止
+    if serve_dir_argument(command, pid, extra_copy) is None \
+            and not serve_overview_home_cmdline(command, pid, extra_copy):
         return None
     tokens = command_tokens(command)
     script = Path(tokens[index])
@@ -1623,9 +1655,13 @@ def purge_guard(home_dir: Path) -> Optional[str]:
 
 
 def is_ledger_file(name: str) -> bool:
-    """台账目录里的已知文件：台账、锁，以及写入中断时留下的临时文件（ledger.py 的 mkstemp）。"""
-    return name in ("reviews.json", ".reviews.lock") or \
-        (name.startswith(".reviews-") and name.endswith(".tmp"))
+    """台账目录里的已知文件：审阅台账与锁、总览首页的保留端口/运行状态/页面/日志/启动锁，
+    以及写入中断时留下的临时文件（名单与技能本体 ledger.py 的首页文件常量同步维护）。"""
+    return name in ("reviews.json", ".reviews.lock",
+                    "overview-home.json", ".overview-home-status.json", ".overview-home.html",
+                    "overview-home.log", ".overview-home-start.lock") or \
+        (name.startswith(".reviews-") and name.endswith(".tmp")) or \
+        (name.startswith(".overview-home-") and name.endswith(".tmp"))
 
 
 def purge_ledger(home_dir: Path) -> None:
@@ -1693,7 +1729,7 @@ def cmd_uninstall(args) -> int:
         if problem:
             print(problem, file=sys.stderr)
             return 2
-    servers = running_servers(extra_copy=skill_copy)
+    servers = running_servers(extra_copy=skill_copy) + running_home_servers(extra_copy=skill_copy)
     if servers:
         print(T("cli.ae.uninstall.running"))
         for pid, command in servers:

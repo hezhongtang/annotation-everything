@@ -1563,6 +1563,7 @@ def overview_home(under: Path | None, port: int | None, open_browser: bool, debu
         if running is None:
             # 并发首次启动：拿启动锁后重新判定——先到的在锁内绑定并写状态（锁在服务开始前释放），
             # 后到的复用同一实例；等不到锁说明另一方还在启动，提示稍候重试而不是再开一个实例。
+            ledger.ensure_home()   # 台账目录还不存在（零审阅的机器）时也能落启动锁与首页文件
             try:
                 with fsutil.flocked(ledger.home() / OVERVIEW_START_LOCK_FILE, exclusive=True,
                                     deadline=time.monotonic() + 20):
