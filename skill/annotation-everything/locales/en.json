@@ -628,6 +628,7 @@
     "serve.overview.ready": "Overview home: {url}",
     "serve.overview.reused": "Overview home already running: {url}",
     "serve.overview.configConflict": "An overview home is already running: {url}; this configuration differs ({detail}). Exit the current home (Ctrl+C) before starting with a new one.",
+    "serve.overview.diffHookCwd": "hook working directory",
     "serve.overview.startupBusy": "An overview home is starting up; retry in a moment.",
     "serve.overview.portOwned": "Overview home reserved port: {port} (recorded in the ledger, kept after exit)",
     "serve.overview.portOccupied": "Reserved port {port} is used by another program; this run temporarily uses {port2}. The reservation is unchanged.",

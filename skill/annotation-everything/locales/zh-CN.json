@@ -576,6 +576,7 @@
     "serve.overview.ready": "总览首页：{url}",
     "serve.overview.reused": "总览首页已在运行：{url}",
     "serve.overview.configConflict": "已有总览首页在运行：{url}；本次配置不同（{detail}）。请先退出当前首页（Ctrl+C）再以新配置启动。",
+    "serve.overview.diffHookCwd": "钩子工作目录",
     "serve.overview.startupBusy": "已有总览首页正在启动，请稍候重试。",
     "serve.overview.portOwned": "总览首页保留端口：{port}（记录在台账，退出后仍保留）",
     "serve.overview.portOccupied": "保留端口 {port} 被其他程序占用，本次临时用 {port2}；保留记录不变。",
