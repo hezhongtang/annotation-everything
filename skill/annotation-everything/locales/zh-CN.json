@@ -1534,6 +1534,7 @@
     "serve.err.overviewStartBody": "启动参数必须只包含完整的审阅标识 reviewId。",
     "serve.err.overviewStartUnknown": "这份审阅不在本机台账里，请刷新总览。",
     "serve.err.overviewStartInvalid": "这份审阅的目录或标识已失效，请刷新总览。",
+    "serve.err.overviewHookConflict": "这份审阅已保存了接收方绑定，与「交给 Agent」钩子冲突。要沿用绑定就不要带 --on-handoff 启动总览首页；要改用钩子先按技能指引解除绑定。",
     "serve.err.overviewStartBusy": "这份审阅的专属端口正被占用，请释放端口后重试。",
     "serve.err.overviewStartFailed": "未能在专属端口上启动这份审阅，请重试。",
     "viewer.overview.start": "启动并打开",

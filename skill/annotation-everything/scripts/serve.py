@@ -1180,8 +1180,8 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
             if not isinstance(body, dict) or set(body) != {"reviewId"}:
                 raise Reject(400, "bad-overview-start", self._t("serve.err.overviewStartBody"))
-            url = start_overview_review(body["reviewId"], self._t)
-            self._json(200, {"app": APP, "url": url})
+            result = start_overview_review(body["reviewId"], self._t)
+            self._json(200, {"app": APP, **result})
         elif path == "/api/overview/archive" and cmd == "POST":
             body = self._expect_obj(self._body())
             target, archived = body.get("reviewId"), body.get("archived")
@@ -1247,8 +1247,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._overview_in_scope(target):
                 raise Reject(404, "overview-review-out-of-scope",
                              self._t("serve.err.overviewTargetScope", under=str(server.overview_under)))
-            url = start_overview_review(rid, self._t)
-            self._json(200, {"app": APP, "url": url})
+            result = start_overview_review(rid, self._t, hook=server.on_handoff, hook_cwd=server.hook_cwd)
+            self._json(200, {"app": APP, **result})
             return
         if path == "/api/overview/archive":
             body = self._expect_obj(self._body())
@@ -1679,7 +1679,43 @@ def stop_overview_child(child: subprocess.Popen) -> None:
         child.wait()
 
 
-def start_overview_review(rid: Any, translate: Any) -> str:
+def _binding_conflicts_with_hook(directory: Path) -> bool:
+    """已保存的接收方绑定与自定义钩子互斥（wakeup.hook_command 的同一规则）；绑定存在但核对失败时同样拒绝。"""
+    try:
+        return wakeup.load_binding(directory) is not None
+    except (OSError, ValueError, KeyError, TypeError):
+        return True
+
+
+def _overview_start_result(directory: Path, rid: str, url: str, *,
+                           hook: list[str] | None, reused: dict[str, Any] | None) -> dict[str, Any]:
+    """启动结果的公开字段：地址、该服务实际加载的接收方式、可复制的等待命令与一次性的提示键。
+
+    reused 非 None 表示复用了已在运行的服务；它的接收方式取该进程健康响应里的实际值。
+    只含公开接收方字段，不回显钩子命令、工作目录、套接字地址或启动日志。
+    """
+    receiver = reused.get("agentDelivery") if isinstance(reused, dict) else None
+    if not isinstance(receiver, dict):
+        receiver = wakeup.public_status(directory)
+    hook_configured = hook is not None
+    if reused is not None and hook_configured:
+        note = "hook-not-applied"
+    elif not hook_configured and receiver.get("state") == "unconfigured":
+        note = "no-receiver"
+    else:
+        note = None
+    return {"url": url, "agentDelivery": receiver,
+            "waitCommand": review_overview.wait_command(rid, hook=hook_configured, receiver=receiver),
+            "hookConfigured": hook_configured, "note": note}
+
+
+def start_overview_review(rid: Any, translate: Any, hook: list[str] | None = None,
+                          hook_cwd: str | None = None) -> dict[str, Any]:
+    """代启动一份台账审阅，返回公开的启动结果。
+
+    hook：启动本服务的命令行解析后的钩子参数（只来自首页启动命令，绝不来自 HTTP），
+    只在新建服务时继承；复用已在运行的服务时不替换进程，结果里以 note=hook-not-applied 提示。
+    """
     overview_start_target(rid, translate)
     deadline = time.monotonic() + 5
     # 每份审阅一把启动锁，跨托管服务串行化；不能持台账写锁等子进程登记。
@@ -1696,14 +1732,16 @@ def start_overview_review(rid: Any, translate: Any) -> str:
                         raise Reject(503, "overview-start-failed", translate("serve.err.overviewStartFailed"))
                     time.sleep(0.05)
             try:
-                return _start_overview_review_locked(rid, translate, deadline)
+                return _start_overview_review_locked(rid, translate, deadline, hook, hook_cwd)
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
     except OSError:
         raise Reject(503, "overview-start-failed", translate("serve.err.overviewStartFailed")) from None
 
 
-def _start_overview_review_locked(rid: str, translate: Any, deadline: float) -> str:
+def _start_overview_review_locked(rid: str, translate: Any, deadline: float,
+                                  hook: list[str] | None = None,
+                                  hook_cwd: str | None = None) -> dict[str, Any]:
     directory, entry = overview_start_target(rid, translate)
     # 状态文件只提供候选端口；旧版服务也要实际核对健康响应中的身份。
     info = read_status(directory) or {}
@@ -1713,9 +1751,12 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float) -> 
             found = probe(port, timeout=0.2)
             if overview_health(found, rid, directory, port):
                 if resume_running_review(directory, rid, port, found, max(.1, review_stop.remaining(deadline))):
-                    return f"http://127.0.0.1:{port}/"
+                    return _overview_start_result(directory, rid, f"http://127.0.0.1:{port}/",
+                                                  hook=hook, reused=found)
                 if probe(port, timeout=0.2) is not None:
                     raise Reject(503, "overview-start-failed", translate("serve.err.resumeFailed"))
+    if hook is not None and _binding_conflicts_with_hook(directory):
+        raise Reject(409, "overview-hook-conflict", translate("serve.err.overviewHookConflict"))
     port = ledger.assign_port(rid, directory,
                               is_free=lambda candidate: probe(candidate, timeout=0.2) is None)
     if probe(port, timeout=0.2) is not None:
@@ -1725,9 +1766,14 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float) -> 
     child = None
     ready = False
     try:
-        child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), str(directory),
-                                  "--no-open", "--overview-start", rid],
-                                 cwd=str(directory), stdin=subprocess.DEVNULL,
+        command = [sys.executable, str(Path(__file__).resolve()), str(directory),
+                   "--no-open", "--overview-start", rid]
+        if hook is not None:
+            # 解析后的钩子参数按 shell 规则拼回一个参数交给子进程（不经 shell）；子进程 parse_hook 拆回同一列表
+            command += ["--on-handoff", shlex.join(hook)]
+            if hook_cwd:
+                command += ["--overview-hook-cwd", os.path.abspath(hook_cwd)]
+        child = subprocess.Popen(command, cwd=str(directory), stdin=subprocess.DEVNULL,
                                  env={**os.environ, "AE_HOME": str(ledger.home())},
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  start_new_session=True)
@@ -1739,10 +1785,12 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float) -> 
                     if not resume_running_review(directory, rid, port, found,
                                                  max(.1, review_stop.remaining(deadline))):
                         raise Reject(503, "overview-start-failed", translate("serve.err.resumeFailed"))
-                else:
-                    threading.Thread(target=child.wait, daemon=True).start()
+                    return _overview_start_result(directory, rid, f"http://127.0.0.1:{port}/",
+                                                  hook=hook, reused=found)
+                threading.Thread(target=child.wait, daemon=True).start()
                 ready = True
-                return f"http://127.0.0.1:{port}/"
+                return _overview_start_result(directory, rid, f"http://127.0.0.1:{port}/",
+                                              hook=hook, reused=None)
             if child.poll() is not None:
                 break
             time.sleep(0.05)
@@ -1757,7 +1805,8 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float) -> 
 def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
          on_handoff: list[str] | None = None,
          avoid: dict[int, str] | None = None,
-         locale: str | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
+         locale: str | None = None,
+         hook_cwd: str | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
     """返回 (服务, 已在运行的 URL, 过程记录)。本目录已有旧版本服务在跑时抛 StaleServer（不静默复用）。
 
     avoid：别的审阅的专属端口（端口 → 标识）。顺延时跳过它们，免得占了别人的地址。
@@ -1792,7 +1841,7 @@ def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
             continue
         try:
             return ReviewServer(review_dir, p, debug=debug, on_handoff=on_handoff,
-                                locale=locale or i18n.current_locale()), None, notes
+                                locale=locale or i18n.current_locale(), hook_cwd=hook_cwd), None, notes
         except OSError as e:
             notes.append(T("serve.bind.failed", port=p, detail=e.strerror or e))
     return None, None, notes
@@ -1874,7 +1923,8 @@ def plan_port(review_dir: Path, rid: str | None, port: int | None, claim: int | 
 
 
 def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, on_handoff: list[str] | None = None,
-          claim: int | None = None, locale: str | None = None, overview_start: str | None = None) -> int:
+          claim: int | None = None, locale: str | None = None, overview_start: str | None = None,
+          hook_cwd: str | None = None) -> int:
     set_locale(locale or cli_locale(None, review_dir))
     # 启动期间和整个服务生命周期持共享锁；更新只在没有服务时原子切换。
     with contextlib.ExitStack() as stack:
@@ -1892,12 +1942,14 @@ def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, o
         except OSError:
             print(T("serve.serve.updateRestart"), file=sys.stderr)
             return 6
-        return _serve_locked(review_dir, port, open_browser, debug, on_handoff, claim, locale, overview_start)
+        return _serve_locked(review_dir, port, open_browser, debug, on_handoff, claim, locale, overview_start,
+                             hook_cwd)
 
 
 def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug: bool,
                   on_handoff: list[str] | None = None, claim: int | None = None,
-                  locale: str | None = None, overview_start: str | None = None) -> int:
+                  locale: str | None = None, overview_start: str | None = None,
+                  hook_cwd: str | None = None) -> int:
     review_dir = review_dir.resolve()
     set_locale(locale or cli_locale(None, review_dir))
     if not (review_dir / "index.html").is_file():
@@ -1938,7 +1990,7 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         try:
             server, running_url, trail = bind(review_dir, first, debug, tries=1 if overview_start else PORT_TRIES,
                                               on_handoff=on_handoff, avoid=avoid,
-                                              locale=i18n.current_locale())
+                                              locale=i18n.current_locale(), hook_cwd=hook_cwd)
         except StaleServer as e:
             print(T("serve.serve.stale", detail=e), file=sys.stderr)
             return 6
@@ -2733,6 +2785,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-open", action="store_true", help=T("serve.opt.noOpen"))
     ap.add_argument("--debug", action="store_true", help=T("serve.opt.debug"))
     ap.add_argument("--overview-start", help=argparse.SUPPRESS)
+    ap.add_argument("--overview-hook-cwd", help=argparse.SUPPRESS)
     ap.add_argument("--on-handoff", metavar="命令" if i18n.current_locale() == "zh-CN" else "COMMAND",
                     help=T("serve.opt.onHandoff"))
     a = ap.parse_args(argv)
@@ -2740,7 +2793,8 @@ def main(argv: list[str] | None = None) -> int:
     # 目录解析出来后还有一级兜底：审阅里保存的 locale
     set_locale(cli_locale(locale_choice, d))
     return serve(d, a.port, not a.no_open, a.debug, parse_hook(a.on_handoff),
-                 claim=a.claim_port, locale=i18n.current_locale(), overview_start=a.overview_start)
+                 claim=a.claim_port, locale=i18n.current_locale(), overview_start=a.overview_start,
+                 hook_cwd=a.overview_hook_cwd)
 
 
 if __name__ == "__main__":

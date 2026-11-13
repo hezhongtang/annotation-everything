@@ -1654,6 +1654,7 @@
     "serve.err.overviewStartBody": "The start request must contain only a full reviewId.",
     "serve.err.overviewStartUnknown": "This review is not in the local ledger. Refresh the overview.",
     "serve.err.overviewStartInvalid": "The review directory or identity is invalid. Refresh the overview.",
+    "serve.err.overviewHookConflict": "This review already has a saved receiver binding, which conflicts with the handoff hook. Start the overview without --on-handoff to keep the binding, or unbind it first as the skill guide describes.",
     "serve.err.overviewStartBusy": "The owned port is occupied. Free the port and retry.",
     "serve.err.overviewStartFailed": "Unable to start this review on its owned port. Please retry.",
     "viewer.overview.start": "Start and open",
