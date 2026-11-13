@@ -130,6 +130,16 @@ class WorkflowOverviewHomeDocsTests(unittest.TestCase):
             text = read(SKILL / "references" / name)
             self.assertIn("agent-mechanisms", text, f"{name} 的首页钩子规则要链到机制文档")
 
+    def test_exit_bullet_keeps_the_reserved_port_record(self):
+        """退出语义与英文版、ADR 0008 一致：只清运行状态，保留端口记录留下。"""
+        zh = read(SKILL / "references" / "workflow.zh-CN.md")
+        en = read(SKILL / "references" / "workflow.en.md")
+        self.assertIn("退出时清理运行状态，保留端口记录", zh,
+                      "中文退出语义要与英文版、ADR 0008 一致：保留端口记录不清理")
+        self.assertNotIn("清理运行状态、保留端口记录", zh,
+                         "顿号连接会读成连端口记录一起清理，与 serve.py 行为相反")
+        self.assertIn("keeps the reserved-port record", en)
+
 
 class AgentMechanismsProbeTests(unittest.TestCase):
     """双语 agent-mechanisms 指向能力探测，并沿用 #159 的接收规则。"""
