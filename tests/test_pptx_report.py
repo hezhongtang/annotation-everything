@@ -232,6 +232,15 @@ class CompatibilityTests(ControlledRenderMixin, unittest.TestCase):
         import serve
         self.assertIn("pptx", serve.FEATURES)
 
+    def test_pptx_warning_list_separator_follows_locale(self):
+        # 未核验项列表的分隔符进词典：英文逗号空格、中文顿号，不带语言判断的硬编码
+        meta = {"renderer": {"pages": 3}, "unverified": ["visual", "fonts"]}
+        en = build_viewer.pptx_warnings(meta, "en")
+        zh = build_viewer.pptx_warnings(meta, "zh-CN")
+        self.assertIn("page-by-page visual verification, font evidence", "".join(en))
+        self.assertNotIn("、", "".join(en), "英文警告不得混入中文顿号")
+        self.assertIn("逐页视觉核验、字体证据", "".join(zh))
+
     def test_page_embeds_pptx_summary_and_old_service_block(self):
         self.build_one(self.root / "rv")
         page = (self.root / "rv" / "index.html").read_text(encoding="utf-8")

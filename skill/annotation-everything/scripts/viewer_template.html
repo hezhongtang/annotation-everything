@@ -1041,7 +1041,7 @@ function renderPptx(){if(!PPTX)return;
   const layer=stage.querySelector(".pptx-layer");if(layer)layer.remove();pptxBuildLayer();   // 语言切换后重建：元素提示跟当前语言
   const parts=[tMsg("viewer.pptx.rendered",{tool:PPTX.renderer&&PPTX.renderer.tool||"?",pages:PPTX.renderer&&PPTX.renderer.pages||0})];
   const unv=PPTX.unverified||[];
-  if(unv.length)parts.push(tMsg("viewer.pptx.unverified",{items:unv.map(k=>tMsg("build.pptx.unverified."+k)).join(uiLocale==="en"?", ":"、")}));
+  if(unv.length)parts.push(tMsg("viewer.pptx.unverified",{items:unv.map(k=>tMsg("build.pptx.unverified."+k)).join(tMsg("viewer.pptx.listSep"))}));
   const fonts=PPTX.fonts||{};
   if(fonts.installed!=="ok"||fonts.warning||fonts.review)parts.push(tMsg("viewer.pptx.fonts"));
   $("pptxBannerText").textContent=parts.join(" ");$("pptxBanner").hidden=false}

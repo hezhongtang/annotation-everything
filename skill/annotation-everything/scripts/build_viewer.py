@@ -664,7 +664,8 @@ def pptx_warnings(meta: dict, locale: str | None) -> list[str]:
         out.append(diag(locale, "build.pptx.fonts"))
     unverified = meta.get("unverified") or []
     if unverified:
-        out.append(diag(locale, "build.pptx.unverified", items="、".join(
+        sep = diag(locale, "build.pptx.listSep")
+        out.append(diag(locale, "build.pptx.unverified", items=sep.join(
             diag(locale, f"build.pptx.unverified.{k}") for k in unverified)))
     return out
 
