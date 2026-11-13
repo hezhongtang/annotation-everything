@@ -309,6 +309,42 @@ class PptxSecurityTests(unittest.TestCase):
         overlap.write_bytes(raw)
         self.assert_error(overlap, "badCompression", "ppt/presentation.xml")
 
+    def test_encrypted_member_is_refused_before_any_read(self):
+        import struct
+        import zipfile
+
+        source = mp.build_sample(self.root / "source.pptx")
+        with zipfile.ZipFile(source) as archive:
+            header_offset = archive.getinfo("ppt/presentation.xml").header_offset
+        raw = bytearray(source.read_bytes())
+        struct.pack_into("<H", raw, header_offset + 6, 0x0001)      # local header：置加密位
+        position = raw.find(b"PK\x01\x02")
+        while position >= 0:
+            name_length, extra_length, comment_length = struct.unpack_from("<HHH", raw, position + 28)
+            if bytes(raw[position + 46:position + 46 + name_length]).decode("utf-8") == "ppt/presentation.xml":
+                struct.pack_into("<H", raw, position + 8, 0x0001)   # 中央目录同步置位
+                break
+            position = raw.find(b"PK\x01\x02", position + 46 + name_length + extra_length + comment_length)
+        encrypted = self.root / "encrypted.pptx"
+        encrypted.write_bytes(raw)
+        self.assert_error(encrypted, "encrypted", "ppt/presentation.xml")
+
+    def test_unsupported_compression_and_member_cap_are_refused(self):
+        import zipfile
+
+        bzip = self.root / "bzip2.pptx"
+        with zipfile.ZipFile(bzip, "w") as archive:
+            for name, content in mp.sample_parts().items():
+                archive.writestr(name, content)
+            archive.writestr("ppt/media/blob.bin", b"bzip2 payload", compress_type=zipfile.ZIP_BZIP2)
+        self.assert_error(bzip, "unsupportedCompression", "ppt/media/blob.bin")
+
+        capped = self.root / "member-cap.pptx"
+        with zipfile.ZipFile(capped, "w") as archive:
+            for index in range(pr.MAX_MEMBERS + 1):
+                archive.writestr(f"ppt/media/pad-{index}.bin", b"")
+        self.assert_error(capped, "tooLarge")
+
 
 if __name__ == "__main__":
     unittest.main()

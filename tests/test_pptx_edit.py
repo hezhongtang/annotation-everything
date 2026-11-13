@@ -425,6 +425,34 @@ class PptxEditTests(unittest.TestCase):
                 self.assertEqual((a.extra, a.comment, a.external_attr, a.date_time),
                                  (b.extra, b.comment, b.external_attr, b.date_time))
 
+    def test_data_descriptor_members_survive_writeback_byte_identical(self):
+        # 第三方工具（Keynote / LibreOffice）导出的包可能带 data descriptor（flag 0x08）。
+        # repack 按「成员头到下一成员头」切片，descriptor 应随未触及成员原样保留；
+        # 此前所有回写测试的源包都不含 descriptor，字节保留结论在该输入上未证实过。
+        self.build()
+        sink = io.BytesIO()
+        with zipfile.ZipFile(sink, "w") as archive:
+            archive._seekable = False   # 模拟流式目标：zipfile 转入 descriptor 写法
+            with zipfile.ZipFile(io.BytesIO(self.original)) as old:
+                for info in old.infolist():
+                    archive.writestr(info, old.read(info.filename))
+        descriptor_raw = sink.getvalue()
+        with zipfile.ZipFile(io.BytesIO(descriptor_raw)) as check:
+            self.assertTrue(all(info.flag_bits & 0x8 for info in check.infolist()),
+                            "夹具必须真的构造出 data descriptor")
+        self.assertGreater(descriptor_raw.count(b"PK\x07\x08"), 0)
+        self.source.write_bytes(descriptor_raw)
+        self.original = descriptor_raw
+        self.fp = hashlib.sha256(descriptor_raw).hexdigest()
+        self.manifest["pptx"]["fingerprint"] = self.fp
+        (self.review / "review.json").write_text(json.dumps(self.manifest), encoding="utf-8")
+
+        self.writeback(ids=[self.shape_note("相同", "新", para=1)])
+        before, after = local_records(self.original), local_records(self.source.read_bytes())
+        for name in before:
+            if name != "ppt/slides/slide10.xml":
+                self.assertEqual(before[name], after[name])
+
     # ---------- 失败回滚 ----------
     def test_fsync_or_replace_failure_leaves_original_and_usable_backup(self):
         for method in ("fsync", "replace"):
@@ -479,9 +507,38 @@ class PptxEditTests(unittest.TestCase):
         with patch.object(pe.os, "fsync", side_effect=change_source), \
                 self.assertRaises(pe.EditError) as caught:
             self.writeback(ids=[nid])
-        self.assertEqual(caught.exception.code, "fingerprint")
-        self.assertEqual(self.source.read_bytes(), self.original + b"external change")
+            self.assertEqual(caught.exception.code, "fingerprint")
+            self.assertEqual(self.source.read_bytes(), self.original + b"external change")
+            self.assertEqual(next((self.review / ".snapshots").rglob("*.pptx")).read_bytes(), self.original)
+
+    def test_tampered_repack_output_is_rejected_by_postwrite_validation(self):
+        # 写后校验此前只见过「正常通过」的对称输入：repack 输出里未触及成员的目录 CRC
+        # 被改动时必须整组拒绝、不留任何写入——防线的拒绝分支首次被反向触发。
+        import struct
+
+        self.build()
+        nid = self.shape_note("相同", "新", para=1)
+        real_repack = pe.de.repack
+
+        def tamper_crc(raw, main, document):
+            out = bytearray(real_repack(raw, main, document))
+            position = out.find(b"PK\x01\x02")
+            while position >= 0:
+                name_length, extra_length, comment_length = struct.unpack_from("<HHH", out, position + 28)
+                if bytes(out[position + 46:position + 46 + name_length]).decode("utf-8") == "ppt/presentation.xml":
+                    struct.pack_into("<I", out, position + 16, 0xDEADBEEF)   # 未触及成员的目录 CRC
+                    break
+                position = out.find(b"PK\x01\x02", position + 46 + name_length + extra_length + comment_length)
+            return bytes(out)
+
+        with patch.object(pe.de, "repack", side_effect=tamper_crc), \
+                self.assertRaises(pe.EditError) as caught:
+            self.writeback(ids=[nid])
+        self.assertEqual(caught.exception.code, "validation")
+        self.assertEqual(caught.exception.detail, "ppt/presentation.xml")
+        self.assertEqual(self.source.read_bytes(), self.original)
         self.assertEqual(next((self.review / ".snapshots").rglob("*.pptx")).read_bytes(), self.original)
+        self.assertFalse(list(self.root.glob("*.tmp")))
 
     # ---------- 改后闭环 ----------
     def test_binary_snapshot_and_page_diff_work_after_writeback(self):
