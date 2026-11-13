@@ -1446,10 +1446,14 @@ def _overview_config(under: Path | None, port: int | None, on_handoff: list[str]
 
 
 def _overview_config_diff(existing: dict[str, Any], requested: dict[str, Any]) -> str:
+    """差异明细：旗标名两侧通用，非旗标标签走词典；分隔与赋值标点跟随当前语言。"""
     labels = {"under": "--under", "explicitPort": "--port", "locale": "--locale",
-              "hook": "--on-handoff", "hookCwd": "钩子工作目录"}
-    return "；".join(f"{labels[k]}：{existing.get(k)} → {requested.get(k)}"
-                     for k in requested if existing.get(k) != requested.get(k))
+              "hook": "--on-handoff", "hookCwd": T("serve.overview.diffHookCwd")}
+    zh = i18n.current_locale() == "zh-CN"
+    sep = "；" if zh else "; "
+    assign = "：" if zh else ": "
+    return sep.join(f"{labels[k]}{assign}{existing.get(k)} → {requested.get(k)}"
+                    for k in requested if existing.get(k) != requested.get(k))
 
 
 def _reuse_overview_home(running: dict[str, Any], config: dict[str, Any], open_browser: bool) -> int:
