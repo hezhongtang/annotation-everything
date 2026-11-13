@@ -1473,9 +1473,13 @@ class ClaimRefused(Exception):
 
 
 def _others_ports(rid: str | None) -> dict[int, str]:
-    """别的审阅的专属端口（台账读不了就只能空着）。复制来的副本连原审阅（同一标识）的端口也要避开，所以 rid 传 None。"""
+    """别的审阅的专属端口与首页保留端口（台账读不了就只能空着）。复制来的副本连原审阅（同一标识）的端口也要避开，所以 rid 传 None。"""
     try:
-        return {pt: k for pt, k in ledger.owners().items() if k != rid}
+        avoid = {pt: k for pt, k in ledger.owners().items() if k != rid}
+        reserved = ledger.overview_reserved_port()
+        if reserved is not None:
+            avoid.setdefault(reserved, ledger.HOME_HOST_ID)
+        return avoid
     except (ledger.LedgerError, OSError):
         return {}
 

@@ -39,6 +39,27 @@ BASE_PORT = 8765
 MAX_SCAN = 500          # 分配专属端口时最多往后找多少个
 RID = re.compile(r"[0-9a-f]{16}")
 RID_PREFIX = re.compile(r"[0-9a-f]{4,16}")
+# 总览首页宿主：保留端口记录与运行状态都放在台账目录，独立于审阅条目（不登记成审阅、不改台账结构）
+OVERVIEW_PORT_FILE = "overview-home.json"       # 保留端口记录：{"version": 1, "port": N}
+HOME_HOST_ID = "overview-home"                  # 同一台账稳定的首页宿主标识；与审阅标识（16 位十六进制）格式不同
+
+
+def overview_port_file() -> Path:
+    return home() / OVERVIEW_PORT_FILE
+
+
+def _read_overview_port(path: Path) -> int | None:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    port = doc.get("port") if isinstance(doc, dict) else None
+    return port if isinstance(port, int) and not isinstance(port, bool) and 1024 <= port <= 65535 else None
+
+
+def overview_reserved_port() -> int | None:
+    """保留端口记录里的端口；没有记录或记录不合法返回 None（读失败不挡主流程，与台账读取同款降级）。"""
+    return _read_overview_port(overview_port_file())
 
 
 # 界面语言只有进程级一个来源（见 i18n.set_locale）：入口设置一次，台账与技能发现等各模块
@@ -200,6 +221,7 @@ def assign_port(rid: str, review_dir: Path, *, prefer: int | None = None,
 
     prefer：已在运行的审阅第一次登记时，认领它正在用的端口（没被别的审阅认领的话）；
     否则从 8765 起，挑台账里没人认领、此刻也没被占用的最小端口。
+    首页保留端口不算空闲：无论首页在不在运行，审阅的专属端口都不落在它上面。
     """
     d = str(Path(review_dir).resolve())
     with _edit() as doc:
@@ -208,6 +230,9 @@ def assign_port(rid: str, review_dir: Path, *, prefer: int | None = None,
         if e.get("port"):
             return int(e["port"])
         taken = {x["port"] for k, x in reviews.items() if k != rid and x.get("port")}
+        reserved = _read_overview_port(overview_port_file())
+        if reserved is not None:
+            taken.add(reserved)
         if prefer and 1024 <= prefer <= 65535 and prefer not in taken:
             e["port"] = prefer
             return prefer
@@ -220,15 +245,42 @@ def assign_port(rid: str, review_dir: Path, *, prefer: int | None = None,
 
 
 def claim_port(rid: str, review_dir: Path, port: int) -> None:
-    """把专属端口改成 port。端口归别的审阅时拒绝（先 forget 那一份）。"""
+    """把专属端口改成 port。端口归别的审阅或已保留给总览首页时拒绝（先 forget 那一份）。"""
     if not 1024 <= port <= 65535:
         raise LedgerError(T("ledger.err.portRange", port=port))
     d = str(Path(review_dir).resolve())
     with _edit() as doc:
+        if _read_overview_port(overview_port_file()) == port:
+            raise LedgerError(T("ledger.err.overviewPortTaken", port=port))
         for k, x in doc["reviews"].items():
             if k != rid and x.get("port") == port:
                 raise LedgerError(T("ledger.err.portTaken", port=port, rid=k, short=k[:8]))
         _set_dir(doc["reviews"], rid, d)["port"] = port
+
+
+def assign_overview_port(*, prefer: int | None = None,
+                         is_free: Callable[[int], bool] = lambda p: True) -> int | None:
+    """总览首页的保留端口：记录已有就直接用；没有才在台账写锁内挑一个写进独立记录。
+
+    prefer：首次分配时优先考虑的端口（缺省从 8765 起）。候选避开台账里审阅已认领的专属端口
+    与调用方 is_free 判为占用的端口；记录落盘与审阅条目的分配共用同一把台账写锁。
+    记录里的端口已被某个审阅认领（旧副本登记过同号专属端口）时返回 None：当次顺延，
+    双方记录都保留，下次无显式端口时再次尝试保留地址。挑不到可用端口也返回 None。
+    """
+    with _edit() as doc:
+        taken = {x["port"] for x in doc["reviews"].values() if x.get("port")}
+        path = overview_port_file()
+        current = _read_overview_port(path)
+        if current is not None:
+            return None if current in taken else current
+        candidates = ([prefer] if prefer and 1024 <= prefer <= 65535 else []) \
+            + list(range(BASE_PORT, BASE_PORT + MAX_SCAN))
+        for p in candidates:
+            if p not in taken and is_free(p):
+                fsutil.atomic_write(path, json.dumps({"version": 1, "port": p}, ensure_ascii=False) + "\n",
+                                    prefix=".overview-home-")
+                return p
+        return None
 
 
 def match(key: str) -> str:

@@ -3072,6 +3072,58 @@ def run_notes_cli(*args: str) -> str:
     return buf.getvalue()
 
 
+class LedgerOverviewHomeTests(unittest.TestCase):
+    """总览首页宿主：保留端口记录独立于审阅条目，分配与认领共用台账写锁。"""
+
+    def setUp(self):
+        self._home = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+
+    def tearDown(self):
+        os.environ["AE_HOME"] = self._home
+
+    def test_reserved_port_recorded_outside_review_entries(self):
+        port = ledger.assign_overview_port(is_free=lambda p: p % 2 == 1)
+        record = json.loads((ledger.home() / ledger.OVERVIEW_PORT_FILE).read_text())
+        self.assertEqual(record, {"version": 1, "port": port})
+        self.assertEqual(ledger.entries(), {}, "保留端口不登记成审阅")
+        self.assertEqual(ledger.overview_reserved_port(), port)
+        self.assertEqual(ledger.assign_overview_port(), port, "已有记录：直接复用")
+
+    def test_reserved_port_assignment_avoids_review_owned_ports(self):
+        d = tmpdir()
+        rid = "a" * 16
+        ledger.register(rid, d)
+        ledger.claim_port(rid, d, 8765)
+        self.assertEqual(ledger.assign_overview_port(), 8766, "首页选端口时避开已登记的审阅专属端口")
+
+    def test_review_auto_assign_and_claim_respect_reserved_port(self):
+        reserved = ledger.assign_overview_port()
+        d, other = tmpdir(), tmpdir()
+        rid = "b" * 16
+        self.assertNotEqual(ledger.assign_port(rid, d), reserved, "审阅自动分配避开首页保留端口")
+        with self.assertRaises(ledger.LedgerError):
+            ledger.claim_port("c" * 16, other, reserved)
+        self.assertEqual(ledger.get("c" * 16), None, "认领失败不落半个条目（原有登记不变）")
+
+    def test_conflicting_reserved_port_defers_and_keeps_both_records(self):
+        d = tmpdir()
+        rid = "d" * 16
+        ledger.register(rid, d)
+        ledger.claim_port(rid, d, 8765)   # 旧副本已把 8765 登记成审阅专属端口
+        f = ledger.home() / ledger.OVERVIEW_PORT_FILE
+        f.write_text(json.dumps({"version": 1, "port": 8765}) + "\n", encoding="utf-8")
+        self.assertEqual(ledger.overview_reserved_port(), 8765)
+        self.assertIsNone(ledger.assign_overview_port(), "保留端口与审阅专属端口冲突：当次顺延（返回 None）")
+        self.assertEqual(json.loads(f.read_text()), {"version": 1, "port": 8765}, "双方记录都保留")
+        self.assertEqual(ledger.get(rid)["port"], 8765)
+
+    def test_others_ports_includes_reserved_port_for_trailing(self):
+        reserved = ledger.assign_overview_port()
+        avoid = serve._others_ports("e" * 16)
+        self.assertEqual(avoid[reserved], ledger.HOME_HOST_ID, "顺延避让的清单里带首页保留端口")
+
+
 class ShowBaselineTests(unittest.TestCase):
     """中英 show 输出与改动前生成的基线逐字相同（三种筛选同样比对）。"""
 

@@ -309,6 +309,7 @@
     "ledger.err.portsExhausted": "端口 {base}–{end} 都已被别的审阅认领或占用；用 serve.py forget 清掉不用的审阅后再试",
     "ledger.err.portRange": "端口 {port} 不在 1024–65535 范围内",
     "ledger.err.portTaken": "端口 {port} 已归另一份审阅（标识 {rid}）。确认那份不用了，先 serve.py forget {short}",
+    "ledger.err.overviewPortTaken": "端口 {port} 已保留给总览首页；换一个端口，或先用 --port 让审阅临时走别的地址",
     "ledger.err.badKey": "{value} 不是审阅标识（16 位十六进制，可只写前 4 位以上）",
     "ledger.err.noSuchKey": "审阅台账里没有标识以 {prefix} 开头的审阅（serve.py list 查看全部）",
     "ledger.err.ambiguousKey": "标识前缀 {prefix} 对应多份审阅：{hits}，请多写几位",

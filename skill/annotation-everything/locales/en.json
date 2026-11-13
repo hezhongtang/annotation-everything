@@ -347,6 +347,7 @@
     "ledger.err.portsExhausted": "Ports {base}–{end} are all claimed or occupied by other reviews; run serve.py forget to clear unused reviews and retry",
     "ledger.err.portRange": "Port {port} is outside 1024–65535",
     "ledger.err.portTaken": "Port {port} already belongs to another review (id {rid}). If that one is unused, run serve.py forget {short} first",
+    "ledger.err.overviewPortTaken": "Port {port} is reserved for the overview home; pick another port, or use --port to run this review on a temporary one",
     "ledger.err.badKey": "{value} is not a review id (16 hex digits; the first 4 or more are enough)",
     "ledger.err.noSuchKey": "No review in the ledger starts with {prefix} (serve.py list shows them all)",
     "ledger.err.ambiguousKey": "The id prefix {prefix} matches several reviews: {hits}; write more digits",
