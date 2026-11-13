@@ -46,6 +46,18 @@ class BuildLocaleTests(unittest.TestCase):
         self.assertIn('value="报告"', html)
         self.assertIn("ae-locale:", html)
 
+    def test_review_stop_is_available_from_the_generated_header(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / "review"
+            build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", out, no_scan_skills=True)
+            html = (out / "index.html").read_text(encoding="utf-8")
+
+        header = html.split("<header>", 1)[1].split("</header>", 1)[0]
+        history = html.split('id="batches"', 1)[1].split('id="toast"', 1)[0]
+        self.assertRegex(header, r"<button[^>]*>停止审阅</button>")
+        self.assertNotIn("停止审阅", history)
+        self.assertIn('"Stop review"', html)
+
     def test_explicit_locale_is_stored_and_survives_rebuild(self):
         out = tmpdir() / "review"
         first = build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", out,
