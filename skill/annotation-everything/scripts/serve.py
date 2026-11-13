@@ -2482,6 +2482,74 @@ def check(locale: str | None = None) -> int:
         ok(any(n["id"] == nid and n["status"] == "resolved" for n in notes), T("serve.check.restartKeeps"))
         srv2.shutdown()
         srv2.server_close()
+
+        # ---------- 总览首页：同一套安全门落在无审阅目录的宿主上 ----------
+        import build_viewer
+        home_srv = None
+        try:
+            build_viewer.build_overview_home(ledger.home(), host_id=ledger.HOME_HOST_ID,
+                                             locale=i18n.current_locale())
+            home_srv = ReviewServer(None, 0, home_id=ledger.HOME_HOST_ID, log_to_file=False,
+                                    locale=i18n.current_locale())
+            home_port = home_srv.port
+            ht = threading.Thread(target=home_srv.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
+            ht.start()
+            ok(home_srv.server_address[0] == "127.0.0.1", T("serve.check.overviewLoopback",
+                                                            host=home_srv.server_address[0]))
+            hg = {"Host": f"127.0.0.1:{home_port}"}
+            s, hh, _ = _req(home_port, "GET", "/", hg)
+            ok(s == 200 and "content-security-policy" in hh, T("serve.check.overviewIndex"))
+            s, _, raw = _req(home_port, "GET", "/api/health", hg)
+            body = json.loads(raw) if s == 200 else {}
+            ok(s == 200 and body.get("hostKind") == "overview-home"
+               and body.get("hostId") == ledger.HOME_HOST_ID, T("serve.check.overviewHealth"))
+            s, _, _ = _req(home_port, "GET", "/", {"Host": f"evil.example:{home_port}"})
+            ok(s == 421, T("serve.check.overviewBadHost", status=s))
+            s, _, raw = _req(home_port, "GET", "/api/overview?scope=workspace", hg)
+            ok(s == 400 and json.loads(raw).get("code") == "bad-scope",
+               T("serve.check.overviewWorkspaceScope", status=s))
+            s, _, raw = _req(home_port, "GET", "/api/overview", hg)
+            body = json.loads(raw) if s == 200 else {}
+            ok(s == 200 and body.get("hostKind") == "overview-home", T("serve.check.overviewSnapshot"))
+            # 伪造请求不得创建或改写任何状态文件（台账与审阅目录一起核对）
+            home_paths = [ledger.home() / ledger.LEDGER_FILE, ledger.home() / ledger.OVERVIEW_PORT_FILE,
+                          ledger.home() / OVERVIEW_STATUS_FILE, tmp / store.NOTES_FILE, tmp / store.LOG_FILE]
+            home_before = [p.read_bytes() if p.exists() else None for p in home_paths]
+            same_home = {**hg, "Origin": f"http://127.0.0.1:{home_port}", "Content-Type": "application/json",
+                         "X-AE-Host": ledger.HOME_HOST_ID}
+            start_guards = [({"Host": f"evil.example:{home_port}"}, 421, "Host"),
+                            ({**same_home, "Origin": "http://evil.example"}, 403, "Origin"),
+                            ({k: v for k, v in same_home.items() if k != "Origin"}, 403, "NoOrigin"),
+                            ({**same_home, "Content-Type": "text/plain"}, 415, "ContentType"),
+                            ({**same_home, "Sec-Fetch-Site": "cross-site"}, 403, "SecFetchSite"),
+                            ({**same_home, "X-AE-Host": "other-home"}, 409, "HostId")]
+            for headers, expected, guard in start_guards:
+                s, h, _ = _req(home_port, "POST", "/api/overview/start", headers, {"reviewId": "0" * 16})
+                ok(s == expected and "access-control-allow-origin" not in h,
+                   T("serve.check.overviewGuard", guard=guard, status=s))
+            # 审阅专属路由与台账外标识：稳定原因码；进程创建哨兵在进程边界兜底
+            with patch.object(subprocess, "Popen",
+                              side_effect=AssertionError("unexpected overview child")) as spawned:
+                s, _, raw = _req(home_port, "GET", "/api/notes", hg)
+                ok(s == 404 and json.loads(raw).get("code") == "review-only-api",
+                   T("serve.check.overviewReviewOnly", status=s))
+                s, _, _ = _req(home_port, "POST", "/api/notes", same_home, {"page": 1, "text": "x"})
+                ok(s == 405, T("serve.check.overviewReviewWrite", status=s))
+                s, _, raw = _req(home_port, "POST", "/api/overview/start", same_home, {"reviewId": "0" * 16})
+                ok(s == 404 and json.loads(raw).get("code") == "overview-review-unknown",
+                   T("serve.check.overviewStartUnknown", status=s))
+                ok(spawned.call_count == 0, T("serve.check.overviewStartNoProcess"))
+            ok([p.read_bytes() if p.exists() else None for p in home_paths] == home_before,
+               T("serve.check.overviewUnchanged"))
+            s, _, _ = _req(home_port, "GET", "/../reviews.json", hg)
+            ok(s == 404, T("serve.check.overviewOtherFiles", status=s))
+        except Exception as e:
+            results.append((False, T("serve.check.overviewCrashed", type=type(e).__name__, detail=e)))
+        finally:
+            if home_srv is not None:
+                home_srv.shutdown()
+                home_srv.server_close()
+
         log_text = (tmp / LOG_FILE).read_text(encoding="utf-8")
         ok(log_text.count("[reject]") >= 10, T("serve.check.rejectsLogged", count=log_text.count("[reject]")))
         ok("evil.example" in log_text and "<" not in log_text, T("serve.check.logFiltered"))
