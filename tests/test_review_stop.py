@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
+import http.client
 import json
 import os
 from pathlib import Path
@@ -198,6 +199,39 @@ class ReviewStopTests(unittest.TestCase):
         _, seq = analysis_store.start_question(directory, focus, by="fixture")
         return wakeup.deliver(directory, "analysis", seq)
 
+    def test_delete_consumes_optional_body_before_next_keep_alive_write(self):
+        rid = "2b" * 8
+        target = self.review("target", rid)
+        info, _ = self.start_server(target)
+        headers = {"Origin": f"http://127.0.0.1:{info['port']}", "X-AE-Review": rid}
+        connection = http.client.HTTPConnection("127.0.0.1", info["port"], timeout=3)
+        self.addCleanup(connection.close)
+
+        for body, extra_headers in ((b"{}", {"Content-Type": "application/json"}),
+                                    (None, {}), (None, {"Content-Length": "0"})):
+            with self.subTest(body=body, headers=extra_headers):
+                code, _, created = self.request(info, "POST", "/api/notes",
+                                                 {"page": 1, "text": "synthetic deletion"}, rid)
+                self.assertEqual(code, 201, created)
+                note_id = created["note"]["id"]
+                connection.request("DELETE", "/api/notes/" + note_id, body=body,
+                                   headers={**headers, **extra_headers})
+                response = connection.getresponse()
+                raw = response.read()
+                self.assertEqual(response.status, 200, raw)
+                self.assertNotIn(note_id, [n["id"] for n in json.loads(raw)["doc"]["notes"]])
+                socket_after_delete = connection.sock
+                self.assertIsNotNone(socket_after_delete)
+
+                connection.request("POST", "/api/notes",
+                                   body=json.dumps({"page": 1, "text": "saved after delete"}),
+                                   headers={**headers, "Content-Type": "application/json"})
+                response = connection.getresponse()
+                raw = response.read()
+                self.assertEqual(response.status, 201, raw)
+                self.assertEqual(json.loads(raw)["note"]["text"], "saved after delete")
+                self.assertIs(connection.sock, socket_after_delete)
+
     def test_overview_stops_an_archived_review_only_in_the_selected_scope(self):
         host_rid, target_rid = "1a" * 8, "2b" * 8
         (self.root / "workspace").mkdir()
@@ -318,6 +352,31 @@ class ReviewStopTests(unittest.TestCase):
                                      {"page": 1, "text": "synthetic recovered annotation"}, target_rid,
                                      {"X-AE-Save-Token": second["token"], "X-AE-Page": page["pageId"]})
         self.assertEqual(code, 201, note)
+        save_headers = {"Origin": f"http://127.0.0.1:{target_info['port']}",
+                        "Content-Type": "application/json", "X-AE-Review": target_rid,
+                        "X-AE-Save-Token": second["token"], "X-AE-Page": page["pageId"]}
+        code, _, discarded = self.request(target_info, "POST", "/api/notes",
+                                          {"page": 1, "text": "synthetic discarded annotation"},
+                                          target_rid, save_headers)
+        self.assertEqual(code, 201, discarded)
+        connection = http.client.HTTPConnection("127.0.0.1", target_info["port"], timeout=3)
+        try:
+            connection.request("DELETE", "/api/notes/" + discarded["note"]["id"],
+                               body=b"{}", headers=save_headers)
+            response = connection.getresponse()
+            raw = response.read()
+            self.assertEqual(response.status, 200, raw)
+            socket_after_delete = connection.sock
+            self.assertIsNotNone(socket_after_delete)
+            connection.request("PATCH", "/api/notes/" + note["note"]["id"],
+                               body=json.dumps({"text": "synthetic saved after delete"}), headers=save_headers)
+            response = connection.getresponse()
+            raw = response.read()
+            self.assertEqual(response.status, 200, raw)
+            self.assertEqual(json.loads(raw)["note"]["text"], "synthetic saved after delete")
+            self.assertIs(connection.sock, socket_after_delete)
+        finally:
+            connection.close()
         code, _, blocked = self.request(target_info, "POST", "/api/handoff", {}, target_rid)
         self.assertEqual((code, blocked.get("code")), (409, "review-stopped"), blocked)
         self.assertEqual(page_save(**second, saved=True)[0], 200)
@@ -328,7 +387,7 @@ class ReviewStopTests(unittest.TestCase):
         new_info, _ = self.start_server(target)
         code, _, doc = self.request(new_info, "GET", "/api/notes", rid=target_rid)
         self.assertEqual((code, [n["text"] for n in doc["notes"]]),
-                         (200, ["synthetic recovered annotation"]))
+                         (200, ["synthetic saved after delete"]))
 
     def test_overview_refuses_an_unverified_or_incompatible_target_service(self):
         host_rid, target_rid = "1a" * 8, "2b" * 8

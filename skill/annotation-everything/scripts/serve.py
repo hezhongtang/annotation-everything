@@ -1112,6 +1112,10 @@ class Handler(BaseHTTPRequestHandler):
             self.server.log("info", f"update {m.group(1)}")
             self._json(200, {"doc": {**doc, **self._ident()}, "note": note})
         elif m and cmd == "DELETE":
+            # 保存保护会携带 JSON 请求体；先读取，避免残留内容污染下一次长连接请求。
+            # 旧页面的无请求体 DELETE 仍可省略 Content-Type。
+            if self.headers.get("Content-Length", "0") != "0" or self.headers.get("Transfer-Encoding"):
+                self._body()
             doc = store.delete(d, m.group(1), by="page")
             self.server.log("info", f"delete {m.group(1)}")
             self._json(200, {"doc": {**doc, **self._ident()}})
