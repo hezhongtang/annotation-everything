@@ -1672,7 +1672,7 @@ function drawPins(){stage.querySelectorAll(".ae-pin,.ae-region").forEach(e=>{if(
     Object.assign(d.style,{left:rg.x+"%",top:rg.y+"%",width:rg.w+"%",height:rg.h+"%"});d.dataset.id=id||"";d.title=tip||"";
     const l=document.createElement("span");l.className="lbl";l.textContent=label;d.appendChild(l);
     const z=document.createElement("span");z.className="rz";z.title=tMsg("viewer.markResize");d.appendChild(z);stage.appendChild(d)};
-  (pageMarks&&pageMarks.get(P[i].n)||[]).forEach((x,k)=>{if(hideDone&&isDone(x))return;
+  (pageMarks&&P[i]&&pageMarks.get(P[i].n)||[]).forEach((x,k)=>{if(hideDone&&isDone(x))return;
     const cls=[isDone(x)?"done":"",x.style&&x.style.scope?"sty":""].filter(Boolean).join(" "),sum=clip(noteSummary(x),80),rg=regionOf(x);
     if(rg)box(rg,cls,x.id,`${k+1}${x.style&&x.style.scope?" "+tMsg("viewer.styleBtn"):""}`,tMsg("viewer.regionTip",{text:sum}));
     if(x.pin)put(x.pin.x,x.pin.y,k+1,isDone(x)?"done":"",x.id,tMsg("viewer.pinTip",{text:sum}))});
@@ -1719,7 +1719,7 @@ function refreshList(force){
   if(!force&&(editingId||composing)){listStale=true;updateCounts();return}   // 正在改某条或正在输入法组字：先不重绘
   listStale=false;
   stashEdit();
-  const mine=notes.filter(x=>x.page===P[i].n), nDone=mine.filter(isDone).length, shown=mine.filter(x=>!(hideDone&&isDone(x)));   // 待复核的不算已处理，不隐藏
+  const cur=P[i], mine=cur?notes.filter(x=>x.page===cur.n):[], nDone=mine.filter(isDone).length, shown=mine.filter(x=>!(hideDone&&isDone(x)));   // 待复核的不算已处理，不隐藏；总览首页没有报告页（P 为空），列表按空处理
   $("nhere").textContent=mine.length;
   $("nlist").innerHTML=`<div class="lab"><span>${tMsg("viewer.pageNotes")}${mine.length&&mine.every(isDone)?` · ${tMsg("viewer.allResolved")}`:""}</span>${nDone?`<button data-act="hide">${tMsg(hideDone?"viewer.showResolved":"viewer.hideResolved",{count:nDone})}</button>`:""}</div>`
     +(shown.map(noteHtml).join("")||`<p class="empty">${escH(tMsg("viewer.empty"))}</p>`);
@@ -2851,7 +2851,7 @@ function loadDraft(){const d=drafts[P[i].n]||{};$("ntext").value=d.text||"";$("n
   pptxPageOn=!!dp.page;
   pptxSel=(dp.keys||[]).map(k=>slide&&(slide.elements||[]).find(e=>e.key===k)).filter(Boolean);
   quotePptx=dp.quote||null;updatePptxChip();pptxPaintSelection()}
-function updatePageStat(){const p=P[i];
+function updatePageStat(){if(!P.length)return;const p=P[i];
   $("stat").textContent=tMsg("viewer.pageStat",{page:p.n,total:P[N-1].n})+(total?` · ${tMsg("viewer.timeStat",{at:mmss(cum[i]),total:mmss(total)})}`:"")}
 function render(){
   const p=P[i], s=secOf(p.n);
@@ -3681,7 +3681,7 @@ function renderOverview(){
   if(!overviewShown())return;
   renderOverviewBatch();
   const title=tMsg("viewer.overview.title");
-  $("overviewTitle").textContent=title+(overviewData?" · "+overviewData.workspace:"");
+  $("overviewTitle").textContent=title+(overviewData&&overviewData.workspace?" · "+overviewData.workspace:"");
   if(!overviewData){$("overviewList").innerHTML=`<p class="overview-message">${escH(tMsg(FILE?"viewer.overview.needService":"viewer.overview.loading"))}</p>`;$("overviewDetail").textContent="";return}
   const rows=overviewData.reviews||[];
   if(!rows.some(row=>row.reviewId===overviewSelected))overviewSelected=(rows.find(row=>row.current)||rows[0]||{}).reviewId;

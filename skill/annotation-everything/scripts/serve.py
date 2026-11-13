@@ -1399,11 +1399,11 @@ def overview_running() -> dict[str, Any] | None:
 
 def bind_home(port: int, tries: int = PORT_TRIES, debug: bool = False,
               on_handoff: list[str] | None = None, avoid: dict[int, str] | None = None,
-              locale: str | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
+              locale: str | None = None, under: Path | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
     """总览首页宿主的绑定：返回 (服务, 已在运行的 URL, 过程记录)，语义与审阅的 bind() 一致。
 
     avoid 是要跳过的端口（审阅专属地址）；已有首页在跑时按宿主种类与标识核对并复用，
-    版本不一致抛 StaleServer（不静默复用）。
+    版本不一致抛 StaleServer（不静默复用）。under 是启动时确定的 --under 范围，随宿主落到服务上。
     """
     avoid = avoid or {}
     notes: list[str] = []
@@ -1430,7 +1430,7 @@ def bind_home(port: int, tries: int = PORT_TRIES, debug: bool = False,
             notes.append(T("serve.bind.busy", port=p, who=who))
             continue
         try:
-            return ReviewServer(None, p, debug=debug, on_handoff=on_handoff,
+            return ReviewServer(None, p, debug=debug, on_handoff=on_handoff, overview_under=under,
                                 home_id=ledger.HOME_HOST_ID, locale=locale or i18n.current_locale()), None, notes
         except OSError as e:
             notes.append(T("serve.bind.failed", port=p, detail=e.strerror or e))
@@ -1493,7 +1493,7 @@ def _prepare_overview_home(under: Path | None, port: int | None, debug: bool,
             first, owned = reserved, reserved
     try:
         server, running_url, trail = bind_home(first if first is not None else DEFAULT_PORT,
-                                               debug=debug, on_handoff=on_handoff, avoid=avoid)
+                                               debug=debug, on_handoff=on_handoff, avoid=avoid, under=under)
     except StaleServer as e:
         print(T("serve.serve.stale", detail=e), file=sys.stderr)
         return 6
