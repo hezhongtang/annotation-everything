@@ -29,6 +29,17 @@ Commands, files, and exit codes are the same for every agent. Use this table whe
 
 Set an explicit name such as `--by initial-editor` or `--by reviewer`. The page and processing trail show it, so the roles remain distinguishable.
 
+## Overview-home delegated starts
+
+`python3 $S/serve.py overview` (optionally `--under DIR`) opens the standalone overview home; choosing "Start and open" for a stopped review delegates the start to it. Agent-relevant behavior:
+
+- The handoff hook comes only from the overview's command line, `serve.py overview --on-handoff "command arguments"`—never from a web page. The newly started review service inherits the parsed arguments and runs the hook in the overview's starting directory (no shell; relative paths in the arguments resolve there).
+- A saved receiver binding conflicts with a custom hook and blocks the start (reason code `overview-hook-conflict`); the binding stays untouched. To keep the binding, start the overview without `--on-handoff`; to switch to a hook, unbind first per [receiver binding and handoff](receiver-binding.en.md).
+- Without a custom hook, the start loads a saved binding under the normal rules: the start only reads the binding—it never creates, rewrites or removes one—and does not suspend a waiter on the agent's behalf.
+- The start result and review details show the receiver and binding state. A wait-type binding shows its harness, session and waiting state, plus a copyable `notes.py wait <short-id>`—run it from the bound session, whose arguments or environment carry the identity. A desktop event binding shows its delivery state and session and omits the claim-style wait command. A custom hook shows "configured".
+- When an already-running review service is reused, the result shows what that process actually loaded; if this start's hook was not applied, it says so explicitly—no need to replace the running process.
+- Desktop backfill and dedup on start, and the trigger timing of an inherited hook, follow the existing rules: batches pending before the start stay queued for `notes.py wait` or `notes.py claim` and are not replayed through the hook.
+
 ## Stopping a review and cancellation boundaries
 
 `python3 $S/serve.py stop REVIEW_ID --timeout N` returns persistent JSON; `stop REVIEW_ID --status` only queries it. Exit 0 means the service, waiters and this review's background work have all confirmed stopping; 1 means incomplete; 2 means an invalid or ambiguous target. Retries keep the same `stopId` and handle only unfinished components. Only an explicit `serve.py REVIEW_ID` start accepts work again; stopping never archives, unbinds, finalizes or releases the port.
