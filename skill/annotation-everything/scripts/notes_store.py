@@ -1185,7 +1185,12 @@ def dedup_key(n: dict[str, Any]) -> tuple:
     rg_t = tuple(round(float(rg.get(k, 0) or 0), 1) for k in ("x", "y", "w", "h")) if rg else None
     st_t = bool(isinstance(n.get("style"), dict) and n["style"].get("scope"))
     docx_t = _dumps(n["docx"], sort_keys=True) if isinstance(n.get("docx"), dict) else None
-    pptx_t = _dumps(n["pptx"], sort_keys=True) if isinstance(n.get("pptx"), dict) else None
+    pptx = n.get("pptx")
+    if isinstance(pptx, dict) and pptx.get("v") == 1 and isinstance(pptx.get("elements"), list):
+        # 展示名不属于元素身份，Markdown 也不携带；未知版本仍按完整内容比较。
+        pptx = {**pptx, "elements": [{k: v for k, v in e.items() if k != "name"}
+                                    if isinstance(e, dict) else e for e in pptx["elements"]]}
+    pptx_t = _dumps(pptx, sort_keys=True) if isinstance(pptx, dict) else None
     return (int(n.get("page", 0)), str(n.get("target", "")).strip(), str(n.get("text", "")).strip(),
             str(n.get("quote", "")).strip(), pin_t, rg_t, st_t, docx_t, pptx_t)
 

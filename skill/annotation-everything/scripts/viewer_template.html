@@ -1288,7 +1288,14 @@ function rgKey(r){return r?["x","y","w","h"].map(k=>(+r[k]||0).toFixed(1)).join(
 function docxKey(a){if(!a||typeof a!=="object")return"";
   const sorted=v=>Array.isArray(v)?v.map(sorted):v&&typeof v==="object"?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;
   return JSON.stringify(sorted(a))}   // 未知版本也按完整内容区分，不因字段顺序不同而重复导入
-function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),rgKey(regionOf(x)),x.style&&x.style.scope?"s":"",docxKey(x.docx),docxKey(x.pptx)].join("\u0001")}
+function pptxKey(a){if(!a||a.v!==1)return docxKey(a);
+  const portable={...a};
+  if(Array.isArray(a.elements))portable.elements=a.elements.map(e=>{const target={...e};delete target.name;return target});
+  // 本地坐标的二进制浮点尾数按存储契约归一化；不修改原批注或未知版本。
+  for(const field of ["point","region"])if(a[field]&&typeof a[field]==="object")
+    portable[field]=Object.fromEntries(Object.entries(a[field]).map(([k,v])=>[k,typeof v==="number"?Math.round(v*10000)/10000:v]));
+  return docxKey(portable)}
+function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),rgKey(regionOf(x)),x.style&&x.style.scope?"s":"",docxKey(x.docx),pptxKey(x.pptx)].join("\u0001")}
 const okRegion=r=>r&&typeof r==="object"&&["x","y","w","h"].every(k=>r[k]!=null&&r[k]!==""&&isFinite(+r[k]))&&+r.w>0&&+r.h>0?{x:+r.x,y:+r.y,w:+r.w,h:+r.h}:null;
 function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:String(x.title||""),target:String(x.target||""),text:String(x.text||""),
     quote:String(x.quote||""),quoteFrom:String(x.quoteFrom||""),pin:x.pin&&x.pin.x!=null?{x:+x.pin.x,y:+x.pin.y}:null,

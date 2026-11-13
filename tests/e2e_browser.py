@@ -3628,6 +3628,17 @@ for n in (1, 2):
                   for key, value in expected.items() if actual.get(key) != value}, ensure_ascii=False))
         ok(actual == expected,
            f"{lang} 浏览器 Markdown 往返保留五类 PPT 定位、SmartArt、小区域与未知版本")
+        page.evaluate("items => {notes=items;mirror()}", exchange)
+        original_ids = [n["id"] for n in local_notes(page)]
+        page.click("#openImp")
+        page.fill("#impText", md)
+        page.click("#doImp")
+        ok(wait_until(lambda: page.input_value("#impText") == "", page, 5,
+                      condition="原审阅回导完成")
+           and [n["id"] for n in local_notes(page)] == original_ids,
+           f"{lang} 保留原批注回导 Markdown，不因展示名或浮点尾数产生重复批注")
+        page.keyboard.press("Escape")
+        page.click("#notesBtn")
         destination = tmp / ("pptx_exchange_" + lang)
         destination.mkdir()
         (destination / "review.json").write_text((d / "review.json").read_text(), encoding="utf-8")
@@ -3655,6 +3666,10 @@ for n in (1, 2):
     saved = page.evaluate("async items => {notes=[];mirror();await runImport(items,'test');return notes}", distinct)
     ok(len(saved) == 2 and [n["pptx"]["elements"][0]["key"] for n in saved] == ["e11", "e12"],
        "浏览器导入同文不同元素的批注时不会误去重")
+    future = [{"page": 1, "text": "未来定位", "pptx": {"v": 2, "elements": [{"name": name}]}}
+              for name in ("甲", "乙")]
+    saved = page.evaluate("async items => {notes=[];mirror();await runImport(items,'test');return notes}", future)
+    ok(len(saved) == 2, "未知版本定位仍按完整内容去重，不丢弃展示名字段")
     page.keyboard.press("Escape")
     page.select_option("#localePick", "en")
     ok(page.inner_text("#pptxTextTitle") == "Element text", "元素文本区随界面切换为英文")

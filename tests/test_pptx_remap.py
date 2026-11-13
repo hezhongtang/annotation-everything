@@ -644,6 +644,25 @@ class ExchangeTests(unittest.TestCase):
             self.assertIn("不可用于回写" if lang == "zh-CN" else "cannot be used for write-back", shown,
                           "需升级提示可见，不是无定位文本")
 
+    def test_named_targets_reimport_into_the_same_review_without_duplicates(self):
+        for lang in ("zh-CN", "en"):
+            for a in (self.ELEMENTS, self.TEXT):
+                with self.subTest(lang=lang, kind=a["kind"]):
+                    d = review_dir()
+                    store.import_notes(d, self.notes(a))
+                    original = store.load(d)["notes"]
+                    items, _ = ef.parse_markdown(ef.render(original, title="合成", lang=lang))
+                    _doc, added, skipped, updated = store.import_notes(d, items)
+                    self.assertEqual((added, skipped, updated), (0, 1, 0))
+                    self.assertEqual(store.load(d)["notes"], original, "去重不改已有批注的展示名")
+
+    def test_future_location_names_are_not_discarded_from_dedup(self):
+        d = review_dir()
+        notes = [dict(self.notes({"v": 2, "elements": [{"name": name}]})[0], id="future" + str(i))
+                 for i, name in enumerate(("甲", "乙"))]
+        _doc, added, skipped, _updated = store.import_notes(d, notes)
+        self.assertEqual((added, skipped), (2, 0), "未知版本的字段含义未知，保持完整比较")
+
     def test_notes_without_anchor_export_as_before(self):
         note = self.notes(self.PAGE)[0]
         del note["pptx"]
