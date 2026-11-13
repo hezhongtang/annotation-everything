@@ -3195,6 +3195,35 @@ class OverviewHandoffTests(unittest.TestCase):
             self.assertEqual(spawned.call_count, 1, "并发点击同一审阅只拉起一个服务")
         self.assertEqual({body["url"] for _, body in results}, {f"http://127.0.0.1:{port}/"})
 
+    RECEIVER_PAGE_KEYS = (
+        "viewer.overview.receiverLabel",
+        "viewer.overview.receiver.unconfigured",
+        "viewer.overview.receiver.waiting",
+        "viewer.overview.receiver.idle",
+        "viewer.overview.receiver.event",
+        "viewer.overview.receiver.processing",
+        "viewer.overview.receiver.restartRequired",
+        "viewer.overview.receiver.error",
+        "viewer.overview.receiverHook",
+        "viewer.overview.copyWait",
+        "viewer.overview.waitHint",
+        "viewer.overview.startNote.hookNotApplied",
+        "viewer.overview.startNote.noReceiver",
+    )
+
+    def test_overview_page_wires_receiver_state_and_wait_command(self):
+        """总览首页页面：冲突原因码有映射，接收方式与等待命令有渲染接线，模板引用的键双语入库。"""
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            page = build_viewer.build_overview_home(ledger.home(), host_id=self.host_id, locale="zh-CN")
+        text = page["page"].read_text(encoding="utf-8")
+        self.assertIn('"overview-hook-conflict"', text, "冲突拒绝在页面上有稳定文案")
+        for needle in ("overviewReceiverText", "overviewStartNotes", "waitCommand", "overviewWaitCopy"):
+            self.assertIn(needle, text, f"页面缺接收方式接线：{needle}")
+        for locale in ("zh-CN", "en"):
+            catalog = json.loads((SCRIPTS.parent / "locales" / f"{locale}.json").read_text(encoding="utf-8"))
+            for key in self.RECEIVER_PAGE_KEYS:
+                self.assertIn(key, catalog["messages"], f"{locale} 缺 {key}")
+
 
 class OverviewHomeCliTests(unittest.TestCase):
     """serve.py overview 子命令：退出码、实例复用、并发首启、保留端口策略与退出清理，全部用临时台账。"""

@@ -3384,7 +3384,7 @@ setInterval(()=>{if(!document.hidden)loadAnalyses()},4000);
 
 // ---------- 审阅总览（同一个 index.html 的 #overview 视图） ----------
 let overviewData=null,overviewSelected=null,overviewRequest=0,overviewLoading=false;
-const overviewStarting=new Set(),overviewStartFailures=new Map();
+const overviewStarting=new Set(),overviewStartFailures=new Map(),overviewStartNotes=new Map();
 const overviewStopping=new Set(),overviewStopResults=new Map();
 const OVERVIEW_BATCH_KEY="ae."+RID+".overview-stop-batch";
 const OVERVIEW_BATCH_WAIT=15000;
@@ -3661,6 +3661,22 @@ function overviewTime(value){
   if(typeof value!=="number"||!Number.isFinite(value)||value<=0)return tMsg("viewer.overview.noActivity");
   const date=new Date(value*1000);return Number.isFinite(date.getTime())?date.toLocaleString(uiLocale):tMsg("viewer.overview.noActivity");
 }
+function overviewReceiverText(row){
+  // 接收方式一行文案：只读展示，不在此处新建或改写绑定；数据来自行里的公开接收方字段
+  const d=row.agentDelivery;
+  if(row.hook&&(!d||d.state==="unconfigured"))return tMsg("viewer.overview.receiverHook");
+  if(!d||typeof d.state!=="string")return tMsg("viewer.overview.receiver.unconfigured");
+  const inner=d.receiver&&d.receiver.state?d.receiver.state:null;
+  const who=d.receiver&&d.receiver.harness?{harness:d.receiver.harness,session:d.receiver.sessionId||""}:null;
+  if(d.state==="processing")return tMsg("viewer.overview.receiver.processing");
+  if(d.state==="restart-required")return tMsg("viewer.overview.receiver.restartRequired");
+  if(d.state==="error")return tMsg("viewer.overview.receiver.error");
+  if(d.state==="unconfigured")return tMsg("viewer.overview.receiver.unconfigured");
+  if(d.adapter==="codex-desktop")return tMsg("viewer.overview.receiver.event",who||{harness:"",session:""});
+  if(inner==="waiting")return tMsg("viewer.overview.receiver.waiting",who||{harness:"",session:""});
+  if(inner==="idle")return tMsg("viewer.overview.receiver.idle",who||{harness:"",session:""});
+  return tMsg("viewer.overview.receiver.bound");
+}
 function renderOverview(){
   if(!overviewShown())return;
   renderOverviewBatch();
@@ -3703,9 +3719,11 @@ function renderOverview(){
   const stopUpgrade=canStop&&!supported?`<p class="overview-message">${escH(tMsg("viewer.overview.stopIssue.upgrade"))}</p>`:"";
   $("overviewDetail").innerHTML=`<h2>${escH(row.name||row.reviewId.slice(0,8))}</h2><div class="overview-identity"><span>${escH(row.reviewId.slice(0,8))}</span><br><span>${escH(row.path||"")}</span></div>
     ${metadata}
-    <dl><dt>${escH(tMsg("viewer.overview.status"))}</dt><dd>${status}</dd><dt>${escH(tMsg("viewer.overview.submissions"))}</dt><dd>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}<br>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</dd><dt>${escH(tMsg("viewer.overview.activity"))}</dt><dd>${escH(overviewTime(row.lastActivity))}</dd><dt>${escH(tMsg("viewer.overview.port"))}</dt><dd>${escH(row.port||"—")}${row.running&&row.running!==row.port?" · "+escH(tMsg("viewer.overview.actualPort",{port:row.running})):""}</dd></dl>
-    <div class="overview-actions">${invalid?forget:action+archive+stopAction}</div>${stopUpgrade}${startFailure?`<p id="overviewStartError" class="overview-message" role="alert">${escH(tMsg(startFailure))}</p>`:""}`;
+    <dl><dt>${escH(tMsg("viewer.overview.status"))}</dt><dd>${status}</dd><dt>${escH(tMsg("viewer.overview.receiverLabel"))}</dt><dd>${escH(overviewReceiverText(row))}</dd><dt>${escH(tMsg("viewer.overview.submissions"))}</dt><dd>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}<br>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</dd><dt>${escH(tMsg("viewer.overview.activity"))}</dt><dd>${escH(overviewTime(row.lastActivity))}</dd><dt>${escH(tMsg("viewer.overview.port"))}</dt><dd>${escH(row.port||"—")}${row.running&&row.running!==row.port?" · "+escH(tMsg("viewer.overview.actualPort",{port:row.running})):""}</dd></dl>
+    ${typeof row.waitCommand==="string"&&row.waitCommand?`<div class="overview-wait"><code class="overview-command">${escH(row.waitCommand)}</code><button id="overviewWaitCopy">${escH(tMsg("viewer.overview.copyWait"))}</button><span class="overview-hint">${escH(tMsg("viewer.overview.waitHint"))}</span></div>`:""}
+    <div class="overview-actions">${invalid?forget:action+archive+stopAction}</div>${stopUpgrade}${startFailure?`<p id="overviewStartError" class="overview-message" role="alert">${escH(tMsg(startFailure))}</p>`:""}${overviewStartNotes.get(row.reviewId)?`<p id="overviewStartNote" class="overview-message" role="status">${escH(tMsg(overviewStartNotes.get(row.reviewId)))}</p>`:""}`;
   const copy=$("overviewForgetCopy");if(copy)copy.onclick=async()=>{await copyText(row.forgetCommand);toast(tMsg("viewer.overview.copied"))};
+  const waitCopy=$("overviewWaitCopy");if(waitCopy)waitCopy.onclick=async()=>{await copyText(row.waitCommand);toast(tMsg("viewer.overview.copied"))};
   const archiveButton=$("overviewArchive");if(archiveButton)archiveButton.onclick=()=>archiveReview(row.reviewId,!row.archived);
   const start=$("overviewStart");if(start)start.onclick=()=>startOverview(row);
   const stop=$("overviewStop");if(stop)stop.onclick=()=>confirmOverviewStop(row);
@@ -3719,12 +3737,14 @@ async function startOverview(row){
   opened.opener=null;
   opened.document.title=tMsg("viewer.overview.starting");
   opened.document.body.textContent=tMsg("viewer.overview.starting");
-  overviewStarting.add(rid);overviewStartFailures.delete(rid);renderOverview();
+  overviewStarting.add(rid);overviewStartFailures.delete(rid);overviewStartNotes.delete(rid);renderOverview();
   try{
     const data=await api("POST","/api/overview/start",{reviewId:rid});
     if(typeof data.url!=="string"||!/^http:\/\/127\.0\.0\.1:\d+\/$/.test(data.url))throw new Error("overview-start-format");
     const selected=(overviewData&&overviewData.reviews||[]).find(review=>review.reviewId===rid);
     overviewStopResults.delete(rid);
+    if(data.note==="hook-not-applied")overviewStartNotes.set(rid,"viewer.overview.startNote.hookNotApplied");
+    else if(data.note==="no-receiver")overviewStartNotes.set(rid,"viewer.overview.startNote.noReceiver");
     if(selected){const port=Number(new URL(data.url).port);Object.assign(selected,{url:data.url,running:port,state:port===selected.port?"running":"running-temp",stop:null})}
     if(!opened.closed)opened.location.replace(data.url);
     await loadOverview();
@@ -3734,6 +3754,7 @@ async function startOverview(row){
       "overview-review-unknown":"serve.err.overviewStartUnknown",
       "overview-review-invalid":"serve.err.overviewStartInvalid",
       "overview-port-busy":"serve.err.overviewStartBusy",
+      "overview-hook-conflict":"serve.err.overviewHookConflict",
       "overview-start-failed":"serve.err.overviewStartFailed"}[error.code];
     overviewStartFailures.set(rid,key||"viewer.overview.startError");
   }finally{overviewStarting.delete(rid);renderOverview()}
