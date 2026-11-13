@@ -13,6 +13,7 @@ import re
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -2927,6 +2928,56 @@ class OverviewHomeTests(unittest.TestCase):
         self.assertEqual(self.state_snapshot(), before)
 
 
+class FakeDesktop:
+    """合成 Codex 桌面 IPC：记录 start-turn 请求并回一个进行中的回合，供投递链路端到端验证。"""
+
+    def __init__(self, path):
+        self.requests = []
+        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.listener.bind(str(path))
+        path.chmod(0o600)
+        self.listener.listen()
+        self.listener.settimeout(0.1)
+        self.stopped = threading.Event()
+        self.worker = threading.Thread(target=self.run, daemon=True)
+        self.worker.start()
+
+    def run(self):
+        while not self.stopped.is_set():
+            try:
+                client, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            with client:
+                def exact(n):
+                    data = b""
+                    while len(data) < n:
+                        part = client.recv(n - len(data))
+                        if not part:
+                            return None
+                        data += part
+                    return data
+                while True:
+                    head = exact(4)
+                    if not head:
+                        break
+                    request = json.loads(exact(struct.unpack("<I", head)[0]))
+                    method = request["method"]
+                    result = {"clientId": "fixture"} if method == "initialize" else {}
+                    if method == "thread-follower-start-turn":
+                        self.requests.append(request)
+                        result = {"result": {"turn": {"id": "fixture-turn", "status": "inProgress"}}}
+                    reply = {"type": "response", "requestId": request["requestId"], "resultType": "success",
+                             "error": None, "result": result, "handledByClientId": "owner"}
+                    raw = json.dumps(reply).encode()
+                    client.sendall(struct.pack("<I", len(raw)) + raw)
+
+    def close(self):
+        self.stopped.set()
+        self.worker.join(2)
+        self.listener.close()
+
+
 class OverviewHandoffTests(unittest.TestCase):
     """总览首页代启动审阅并接上 Agent 接收：钩子继承、接收方式展示、冲突拒绝与积压保留。
 
@@ -3204,6 +3255,7 @@ class OverviewHandoffTests(unittest.TestCase):
         "viewer.overview.receiver.processing",
         "viewer.overview.receiver.restartRequired",
         "viewer.overview.receiver.error",
+        "viewer.overview.receiver.bound",
         "viewer.overview.receiverHook",
         "viewer.overview.copyWait",
         "viewer.overview.waitHint",
@@ -3223,6 +3275,57 @@ class OverviewHandoffTests(unittest.TestCase):
             catalog = json.loads((SCRIPTS.parent / "locales" / f"{locale}.json").read_text(encoding="utf-8"))
             for key in self.RECEIVER_PAGE_KEYS:
                 self.assertIn(key, catalog["messages"], f"{locale} 缺 {key}")
+
+    def kill_started(self):
+        """直接终止代启动的子服务：带已投递的桌面事件时，HTTP 停止会等取消确认，测试清理不走那条路。"""
+        info = serve.read_status(self.review)
+        if info and ledger.pid_alive(info["pid"]):
+            os.kill(info["pid"], signal.SIGTERM)
+            end = time.monotonic() + 5
+            while time.monotonic() < end and ledger.pid_alive(info["pid"]):
+                time.sleep(0.02)
+        self.assertFalse(ledger.pid_alive(info.get("pid") or 0) if info else False, "子服务应已退出")
+
+    def wait_delivery_state(self, state, timeout=6.0):
+        deadline = time.monotonic() + timeout
+        last = None
+        while time.monotonic() < deadline:
+            try:
+                last = wakeup.status(self.review)
+                if last.get("state") == state:
+                    return last
+            except (OSError, ValueError, KeyError):
+                pass
+            time.sleep(0.05)
+        self.fail(f"投递状态未到 {state}: {last}")
+
+    def test_desktop_binding_backlog_recovers_once_across_starts(self):
+        """桌面事件绑定的启动补投沿用现有规则：待接收批次补投一次，重启按同键去重不再重放。"""
+        thread = "15915915-9159-4159-8159-159159159159"
+        desktop = FakeDesktop(self.tree / "desktop.sock")
+        self.addCleanup(desktop.close)
+        wakeup.bind(self.review, thread, self.tree / "desktop.sock")
+        store.handoff_submit(self.review, "启动前的积压")
+        self.start_home()
+        port = self.claim_port()
+        self.addCleanup(self.stop_started)
+        status, body = self.start_request()
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["agentDelivery"]["adapter"], "codex-desktop",
+                         "桌面事件绑定在启动结果里可见")
+        self.assertIsNone(body["waitCommand"], "桌面事件绑定省略认领型等待命令")
+        row = self.overview_row()
+        self.assertEqual(row["agentDelivery"]["adapter"], "codex-desktop")
+        self.assertIsNone(row["waitCommand"])
+        self.wait_delivery_state("accepted")
+        self.assertEqual(len(desktop.requests), 1, "启动补投把待接收批次投给绑定的桌面会话")
+        self.kill_started()
+        status, body = self.start_request()
+        self.assertEqual(status, 200, body)
+        time.sleep(1.5)   # 第二次补投若违反去重会在这个窗口里发出新请求
+        self.assertEqual(len(desktop.requests), 1, "恢复沿用现有去重规则：同一批次不重复投递")
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "pending",
+                         "投递只改变接收记录，批次仍待领取")
 
 
 class OverviewHomeCliTests(unittest.TestCase):
