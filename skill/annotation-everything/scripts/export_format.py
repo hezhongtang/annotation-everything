@@ -133,7 +133,7 @@ class Grammar:
                 r"(?: · fingerprint ([0-9a-f]{16,64}))?( · paragraph changed)?$")
             self.pptx = re.compile(r"^\s+PPT location: v(\d+)(.*)$")
             self.pptx_el = re.compile(
-                r"([\w~][^\s(,;]*) \(id ([^,()]+), ([a-z]+), z (\d+), digest ([0-9a-f]{64})"
+                r"([\w~][^\s(,;]*) \(id ([^,()]+), ([A-Za-z]+), z (\d+), digest ([0-9a-f]{64})"
                 r"(?:, read-only ([a-z]+(?:, [a-z]+)*))?\)")
             self.pptx_body = re.compile(
                 r"^ (?P<kind>page|elements|text|point|region) · slide (?P<slide>\S+)"
@@ -170,7 +170,7 @@ class Grammar:
                 r"(?: · 指纹 ([0-9a-f]{16,64}))?( · 段落已改动)?$")
             self.pptx = re.compile(r"^\s+PPT 定位：v(\d+)(.*)$")
             self.pptx_el = re.compile(
-                r"([\w~][^\s（、]*)（标识 ([^，()]+)，([a-z]+)，第 (\d+) 层，摘要 ([0-9a-f]{64})"
+                r"([\w~][^\s（、]*)（标识 ([^，()]+)，([A-Za-z]+)，第 (\d+) 层，摘要 ([0-9a-f]{64})"
                 r"(?:，只读 ([^）]+))?" + r"）")
             self.pptx_body = re.compile(
                 r"^ (?P<kind>整页|元素|文本|点|区域) · 幻灯片 (?P<slide>\S+)"
@@ -489,11 +489,13 @@ class Grammar:
                     parts.append(("runs " if en else "运行 ") + joined)
         if isinstance(a.get("point"), dict):
             p = a["point"]
-            px, py = round(p.get("x", 0) * 100), round(p.get("y", 0) * 100)
+            px, py = (format(round(p.get(k, 0) * 100, 2), ".2f").rstrip("0").rstrip(".")
+                      for k in ("x", "y"))
             parts.append(f"point x {px}%, y {py}%" if en else f"点 x {px}%，y {py}%")
         if isinstance(a.get("region"), dict):
             rg = a["region"]
-            vals = {k: round(rg.get(k, 0) * 100) for k in ("x", "y", "w", "h")}
+            vals = {k: format(round(rg.get(k, 0) * 100, 2), ".2f").rstrip("0").rstrip(".")
+                    for k in ("x", "y", "w", "h")}
             parts.append((f"region x {vals['x']}%, y {vals['y']}%, width {vals['w']}%, height {vals['h']}%" if en
                           else f"区域 x {vals['x']}%，y {vals['y']}%，宽 {vals['w']}%，高 {vals['h']}%"))
         via = str(a.get("via"))

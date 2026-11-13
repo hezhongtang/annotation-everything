@@ -602,6 +602,30 @@ class ExchangeTests(unittest.TestCase):
                     items, _always = ef.parse_markdown(ef.render(self.notes(a), title="合成", lang=lang))
                     self.assertEqual(items[0]["pptx"], self.portable(a))
 
+    def test_smartart_and_mixed_targets_round_trip_without_loss(self):
+        smartart = {"key": "e15", "id": "15", "name": "合成流程图", "kind": "smartArt",
+                    "z": 4, "digest": "c" * 64, "ro": ["text", "geometry", "style"]}
+        for lang in ("zh-CN", "en"):
+            for targets in ([smartart], [self.ELEMENTS["elements"][0], smartart]):
+                with self.subTest(lang=lang, count=len(targets)):
+                    a = dict(self.ELEMENTS, elements=targets)
+                    items, _ = ef.parse_markdown(ef.render(self.notes(a), title="合成", lang=lang))
+                    self.assertEqual(items[0]["pptx"], self.portable(a))
+                    d = review_dir()
+                    store.import_notes(d, items)
+                    self.assertEqual(store.load(d)["notes"][0]["pptx"], self.portable(a))
+
+    def test_point_and_thin_region_keep_storage_precision(self):
+        for lang in ("zh-CN", "en"):
+            for a in (dict(self.POINT, point={"x": 0.1234, "y": 0.9999}),
+                      dict(self.REGION, region={"x": 0.1234, "y": 0.5678, "w": 0.004, "h": 0.0001})):
+                with self.subTest(lang=lang, kind=a["kind"]):
+                    items, _ = ef.parse_markdown(ef.render(self.notes(a), title="合成", lang=lang))
+                    self.assertEqual(items[0]["pptx"], a)
+                    d = review_dir()
+                    store.import_notes(d, items)
+                    self.assertEqual(store.load(d)["notes"][0]["pptx"], a)
+
     def test_newer_version_keeps_version_info_and_warns_on_import(self):
         """未知的新版本定位不当作无定位静默导入（Decision 17）：md 行只带版本号，
         保留版本信息（完整内容在 JSON 备份里），导入存储后 show 列出需升级提示。"""

@@ -114,6 +114,15 @@ main{flex:1;display:grid;grid-template-columns:var(--ae-rail) var(--ae-sidebar) 
 .pptx-page{display:block;background:#fff}
 .pptx-page img.pptx-render{display:block;width:100%;height:100%;object-fit:contain}
 .pptx-page img.pptx-render::-moz-selection{background:transparent}
+#pptxTextPanel{flex:0 1 auto;max-height:32%;overflow:auto;border-top:1px solid var(--ae-line);padding:var(--ae-space) var(--ae-space-lg);background:var(--ae-panel)}
+#pptxTextPanel[hidden]{display:none}
+#pptxTextPanel h3,#pptxTextPanel h4{font-size:var(--ae-small);margin:0 0 var(--ae-gap-4);user-select:none}
+#pptxTextHint{font-size:var(--ae-small);color:var(--ae-mut);margin:0 0 var(--ae-space);user-select:none}
+.pptx-text{padding:var(--ae-space);border:1px solid var(--ae-line);border-radius:var(--ae-radius);margin-bottom:var(--ae-space);color:var(--ae-ink);background:var(--ae-panel);font:var(--ae-body)/1.5 sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text;cursor:text}
+.pptx-text.on{border-color:var(--ae-accent)}
+.pptx-text h4{color:var(--ae-mut)}
+.pptx-text p{margin:0;min-height:1.5em}
+.pptx-text span::selection{background:var(--ae-selected)}
 .docx-banner{display:flex;align-items:flex-start;flex-wrap:wrap;gap:var(--ae-gap-4) var(--ae-gap-14);padding:var(--ae-gap-10) var(--ae-gap-24);background:var(--ae-warm);border-bottom:1px solid var(--ae-warm-line);color:var(--ae-ink);font-size:var(--ae-small);line-height:1.7}
 .docx-banner[hidden]{display:none}
 .docx-block{padding:var(--ae-gap-10) var(--ae-gap-24);background:var(--ae-danger-bg);border-bottom:1px solid var(--ae-red);color:var(--ae-ink);font-size:var(--ae-small);line-height:1.7;font-weight:600}
@@ -533,7 +542,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
   <section id="workspace">
     <section id="analysisMain" hidden><div class="analysis-heading"><h2 id="analysisFocus"></h2><p id="analysisMeta"></p><div class="analysis-actions" id="analysisManage"></div></div><p id="analysisError" role="alert"></p><section id="analysisChanges" role="status" aria-live="polite"></section><div id="analysisBody"></div></section>
     <div id="panes">
-      <section id="reportPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.report"></span><span id="docxPageNote" class="docx-page-note" hidden></span><button id="pageAnalysisStart" hidden data-msg="viewer.life.startPage"></button></div><div class="slide" id="slide"><div id="host"></div></div></section>
+      <section id="reportPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.report"></span><span id="docxPageNote" class="docx-page-note" hidden></span><button id="pageAnalysisStart" hidden data-msg="viewer.life.startPage"></button></div><div class="slide" id="slide"><div id="host"></div></div><section id="pptxTextPanel" aria-labelledby="pptxTextTitle" hidden><h3 id="pptxTextTitle" data-msg="viewer.pptx.textTitle"></h3><p id="pptxTextHint" data-msg="viewer.pptx.textHint"></p><div id="pptxTextList"></div></section></section>
       <section id="scriptPane" class="pane"><div class="pane-head"><span data-msg="viewer.target.script"></span><button  class="icon-button" data-layout-toggle="script" data-title="viewer.layout.script" data-aria="viewer.layout.script" data-p-key="]" aria-controls="scriptPane"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button></div><div class="script" id="script"><div id="pageScript"></div></div></section>
       <button id="scriptHandle" data-layout-toggle="script" data-title="viewer.layout.script" data-p-key="]" data-msg="viewer.target.script" aria-controls="scriptPane"></button>
     </div>
@@ -957,10 +966,6 @@ ${RCSS}
 .pptx-el{position:absolute;pointer-events:auto;cursor:pointer}
 .pptx-el:hover{box-shadow:inset 0 0 0 2px rgba(42,120,214,.5)}
 .pptx-el.on{box-shadow:inset 0 0 0 3px rgba(42,120,214,.95);background:rgba(42,120,214,.12)}
-.pptx-text{position:absolute;pointer-events:auto;overflow:hidden;color:transparent;font:16px/1.45 sans-serif;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text;cursor:text}
-.pptx-text p{margin:0;min-height:1.2em}
-.pptx-text span::selection{background:rgba(42,120,214,.35);color:transparent}
-.pptx-text span::-moz-selection{background:rgba(42,120,214,.35);color:transparent}
 #ae-stage.markmode .pptx-layer *{pointer-events:none}
 </style><div class="ae-frame" id="ae-frame"><div id="ae-stage"></div></div>`;
 const stage=sr.getElementById("ae-stage"), frame=sr.getElementById("ae-frame");
@@ -1132,11 +1137,12 @@ function pptxLocText(a){let body="";
   const ro=els.some(e=>e.ro&&e.ro.length);
   return tMsg("viewer.pptx.locLabel")+" "+body+(ro?` · ${tMsg("viewer.pptx.ro")}`:"")}
 // ---------- PPT 幻灯片定位结束 ----------
-// 元素覆盖层 + 文本选择层：结构模型定位到画布（渲染图负责视觉）；标注模式下让位给点/框
+// 画布只覆盖元素命中框；文字在可见的元素文本区选择，避免用浏览器排版猜测渲染图中的字符位置。
 function pptxBuildLayer(){const sec=stage.querySelector("section.page");if(!sec)return;
   if(sec.querySelector(".pptx-layer"))return;
   const slide=pptxSlide();if(!slide)return;
   const layer=document.createElement("div");layer.className="pptx-layer";
+  const textList=$("pptxTextList");textList.replaceChildren();
   (slide.elements||[]).forEach(el=>{
     if(el.geo&&(el.cap||{}).select&&el.geo.width>0&&el.geo.height>0){
       const box=document.createElement("div");box.className="pptx-el";box.dataset.key=el.key;
@@ -1146,10 +1152,9 @@ function pptxBuildLayer(){const sec=stage.querySelector("section.page");if(!sec)
       box.title=ro.length?tMsg("viewer.pptx.elTitleRo",{name:pptxElName(el),kind:tMsg("viewer.pptx.kind."+el.kind)})
         :tMsg("viewer.pptx.elTitle",{name:pptxElName(el),kind:tMsg("viewer.pptx.kind."+el.kind)});
       layer.appendChild(box)}
-    if(el.paragraphs&&el.paragraphs.length&&el.geo){   // 普通文本形状：透明文字层，可拖选出逻辑段落与字符偏移
+    if(el.paragraphs&&el.paragraphs.some(p=>p.text)){   // 可见的源文本；按元素与逻辑段落保留精确偏移
       const t=document.createElement("div");t.className="pptx-text";t.dataset.key=el.key;
-      Object.assign(t.style,{left:(el.geo.x*100)+"%",top:(el.geo.y*100)+"%",
-        width:(el.geo.width*100)+"%",height:(el.geo.height*100)+"%"});
+      const title=document.createElement("h4");title.textContent=pptxElName(el);t.appendChild(title);
       el.paragraphs.forEach(p=>{const pp=document.createElement("p");
         pp.dataset.pptxP=p.n;pp.dataset.pptxD=p.digest;
         (p.runs||[]).forEach(r=>{const sp=document.createElement("span");
@@ -1157,9 +1162,10 @@ function pptxBuildLayer(){const sec=stage.querySelector("section.page");if(!sec)
           sp.textContent=[...p.text].slice(r.start,r.end).join("");   // run 边界是码点偏移：emoji 不算两个
           pp.appendChild(sp)});
         t.appendChild(pp)});
-      layer.appendChild(t)}});
-  sec.appendChild(layer);pptxPaintSelection()}
-function pptxPaintSelection(){stage.querySelectorAll(".pptx-el").forEach(b=>{
+      textList.appendChild(t)}});
+  $("pptxTextPanel").hidden=!textList.childElementCount;
+  sec.appendChild(layer);pptxPaintSelection();fit()}
+function pptxPaintSelection(){[...stage.querySelectorAll(".pptx-el"),...$("pptxTextList").querySelectorAll(".pptx-text")].forEach(b=>{
   b.classList.toggle("on",pptxSel.some(el=>el.key===b.dataset.key))})}
 function pptxInStage(e){const path=e.composedPath?e.composedPath():[];
   return path.some(n=>n===stage)}
@@ -1206,11 +1212,12 @@ function pptxOffset(para,node,off){let text="";const rg=document.createRange();r
     text+=t.data}
   return cpLen(text)}
 function pptxQuoteAnchor(text){
-  const s=sr.getSelection?sr.getSelection():null;
+  const ws=window.getSelection();
+  const s=ws&&$("pptxTextPanel").contains(ws.anchorNode)?ws:(sr.getSelection?sr.getSelection():null);
   if(s&&s.rangeCount&&!s.isCollapsed){
     const r=s.getRangeAt(0),para=pptxParaOf(r.startContainer);
     const endPara=pptxParaOf(r.endContainer);
-    if(para&&endPara&&endPara.dataset.pptxP===para.dataset.pptxP){
+    if(para&&para===endPara){
       const host=para.closest(".pptx-text"),slide=pptxSlide();
       const el=slide&&(slide.elements||[]).find(x=>x.key===host.dataset.key);
       if(el){const start=pptxOffset(para,r.startContainer,r.startOffset),end=pptxOffset(endPara,r.endContainer,r.endOffset);
@@ -1281,7 +1288,7 @@ function rgKey(r){return r?["x","y","w","h"].map(k=>(+r[k]||0).toFixed(1)).join(
 function docxKey(a){if(!a||typeof a!=="object")return"";
   const sorted=v=>Array.isArray(v)?v.map(sorted):v&&typeof v==="object"?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;
   return JSON.stringify(sorted(a))}   // 未知版本也按完整内容区分，不因字段顺序不同而重复导入
-function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),rgKey(regionOf(x)),x.style&&x.style.scope?"s":"",docxKey(x.docx)].join("\u0001")}
+function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),rgKey(regionOf(x)),x.style&&x.style.scope?"s":"",docxKey(x.docx),docxKey(x.pptx)].join("\u0001")}
 const okRegion=r=>r&&typeof r==="object"&&["x","y","w","h"].every(k=>r[k]!=null&&r[k]!==""&&isFinite(+r[k]))&&+r.w>0&&+r.h>0?{x:+r.x,y:+r.y,w:+r.w,h:+r.h}:null;
 function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:String(x.title||""),target:String(x.target||""),text:String(x.text||""),
     quote:String(x.quote||""),quoteFrom:String(x.quoteFrom||""),pin:x.pin&&x.pin.x!=null?{x:+x.pin.x,y:+x.pin.y}:null,
@@ -1299,6 +1306,7 @@ function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:Str
   if(typeof x.anchor==="string"&&x.anchor)n.anchor=clip(x.anchor,300);
   if(typeof x.key==="string"&&x.key)n.key=clip(x.key,120);
   if(x.docx&&typeof x.docx==="object"&&!Array.isArray(x.docx)&&Number.isInteger(x.docx.v)&&x.docx.v>0)n.docx=JSON.parse(JSON.stringify(x.docx));   // DOCX 段落定位：原样带着（含更高版本）
+  if(x.pptx&&typeof x.pptx==="object"&&!Array.isArray(x.pptx)&&Number.isInteger(x.pptx.v)&&x.pptx.v>0)n.pptx=JSON.parse(JSON.stringify(x.pptx));   // PPT 定位也须经过本地导入与补传清洗保留
   if(Array.isArray(x.skills)||typeof x.skills==="string"){const sk=parseSkills(Array.isArray(x.skills)?x.skills.join(","):x.skills);if(sk.length)n.skills=sk}
   const pr=x.pair;if(pr&&(pr.side==="报告"||pr.side==="讲稿")&&String(pr.text||"").trim())n.pair={side:pr.side,text:String(pr.text),match:pr.match==="exact"?"exact":"similar"};
   const e=x.edit;if(e&&(e.op==="delete"||e.op==="replace")&&String(e.from||"").trim())n.edit=e.op==="delete"?{op:"delete",from:String(e.from)}:{op:"replace",from:String(e.from),to:String(e.to??"")};
@@ -1756,6 +1764,9 @@ document.addEventListener("compositionstart",()=>{composing=true},true);
 document.addEventListener("compositionend",()=>{composing=false;if(listStale&&!editingId)refreshList()},true);
 // ---------- 选中文字：引用、快捷删除 / 改为 ----------
 function selectedText(e){
+  const ps=window.getSelection();
+  if(PPTX&&ps&&$("pptxTextPanel").contains(ps.anchorNode)&&$("pptxTextPanel").contains(ps.focusNode)&&ps.toString().trim())
+    return{text:ps.toString().trim(),from:"报告"};
   if(sr.getSelection){const rs=sr.getSelection();if(rs&&rs.anchorNode&&sr.contains(rs.anchorNode)){const t=rs.toString().trim();if(t)return{text:t,from:"报告"}}}
   else if($("slide").contains(e.target)){const s=getSelection();const t=s?s.toString().trim():"";if(t)return{text:t,from:"报告"}}   // 非 Chromium 浏览器的退路
   const ws=window.getSelection();const t=ws?ws.toString().trim():"";
@@ -1796,7 +1807,7 @@ const PUNCT={"，":",","。":".","．":".","：":":","；":";","（":"(","）":"
 const mnorm=s=>String(s).replace(/\s+/g,"").replace(/[，。．：；（）“”「」『』‘’％！？]/g,c=>PUNCT[c]).toLowerCase();
 const mnums=s=>mnorm(s).match(/\d+(?:\.\d+)?(?:%|个百分点|百分点|元|万|亿|倍|家|人|分钟|秒|页|个)?/g)||[];
 function mgrams(s){const t=mnorm(s).replace(/[^\p{L}\p{N}_%.]/gu,"");const o=new Set();for(let k=0;k<t.length-1;k++)o.add(t.slice(k,k+2));return o}
-function sideText(side){return side==="报告"?(stage.innerText||""):($("pageScript").innerText||"")}
+function sideText(side){return side==="报告"?(PPTX?[...$("pptxTextList").querySelectorAll("p")].map(p=>p.textContent).join("\n"):(stage.innerText||"")):($("pageScript").innerText||"")}
 function findCounterpart(text,from){const other=from==="报告"?"讲稿":"报告",hay=sideText(other);if(!text||!hay.trim())return null;
   const nt=mnorm(text);if(nt.length>=4&&mnorm(hay).includes(nt))return{side:other,text,match:"exact"};
   const A=mgrams(text),na=mnums(text);if(A.size<2)return null;let best=null;
@@ -2587,10 +2598,51 @@ const oneLine=s=>String(s==null?"":s).replace(/\n/g," ");
 const G_DOCX={kindZh:{quote:"引用",pin:"标点",region:"框选"},viaZh:{selection:"选区",text:"文本匹配",point:"标注处"},
   viaEn:{selection:"selection",text:"text match",point:"mark"},
   kindIn:{引用:"quote",标点:"pin",框选:"region"},viaIn:{选区:"selection",文本匹配:"text",标注处:"point","text match":"text",mark:"point",selection:"selection"}};
+// PPT 定位交换与 Python 文法一致，展示名不作为身份，百分比保留归一化坐标的四位小数精度。
+const G_PPTX={kindZh:{page:"整页",elements:"元素",text:"文本",point:"点",region:"区域"},
+  viaZh:{thumb:"页缩略图",click:"点选",selection:"选区",text:"文本匹配",point:"标注点",region:"框选"},
+  viaEn:{thumb:"thumbnail",click:"click",selection:"selection",text:"text match",point:"point",region:"region"},
+  roZh:{text:"文本",geometry:"几何",style:"样式"}};
+function pptxExchangeGrammar(en){
+  const reverse=map=>Object.fromEntries(Object.entries(map).map(([k,v])=>[v,k]));
+  const kindIn=reverse(G_PPTX.kindZh),viaIn=reverse(en?G_PPTX.viaEn:G_PPTX.viaZh),roIn=reverse(G_PPTX.roZh);
+  const pct=v=>String(Math.round((v||0)*10000)/100),norm=v=>Math.round(+v*100)/10000;
+  const pptx=new RegExp(en?"^\\s+PPT location: v(\\d+)(.*)$":"^\\s+PPT 定位：v(\\d+)(.*)$"),pptxBody=new RegExp(en?"^ (?<kind>page|elements|text|point|region) · slide (?<slide>\\S+)(?: · targets (?<targets>.+?))?(?: · paragraph (?<para>\\d+) \\(digest (?<paraDigest>[0-9a-f]{64})\\))?(?: · chars (?<start>\\d+)–(?<end>\\d+))?(?: · runs (?<runs>\\d+–\\d+(?:, \\d+–\\d+)*))?(?: · point x (?<px>[\\d.]+)%, y (?<py>[\\d.]+)%)?(?: · region x (?<rx>[\\d.]+)%, y (?<ry>[\\d.]+)%, width (?<rw>[\\d.]+)%, height (?<rh>[\\d.]+)%)? · source (?<via>thumbnail|click|selection|text match|point|region)(?: · fingerprint (?<fp>([0-9a-f]{16,64})))?(?<changed> · text changed)?(?: · quote (?<quote>.*))?$":"^ (?<kind>整页|元素|文本|点|区域) · 幻灯片 (?<slide>\\S+)(?: · 目标 (?<targets>.+?))?(?: · 段落 (?<para>\\d+)（摘要 (?<paraDigest>[0-9a-f]{64})）)?(?: · 字符 (?<start>\\d+)–(?<end>\\d+))?(?: · 运行 (?<runs>\\d+–\\d+(?:、\\d+–\\d+)*))?(?: · 点 x (?<px>[\\d.]+)%，y (?<py>[\\d.]+)%)?(?: · 区域 x (?<rx>[\\d.]+)%，y (?<ry>[\\d.]+)%，宽 (?<rw>[\\d.]+)%，高 (?<rh>[\\d.]+)%)? · 来源 (?<via>页缩略图|点选|选区|文本匹配|标注点|框选)(?: · 指纹 (?<fp>([0-9a-f]{16,64})))?(?<changed> · 文字已改动)?(?: · 引用 (?<quote>.*))?$"),pptxEl=new RegExp(en?"([\\w~][^\\s(,;]*) \\(id ([^,()]+), ([A-Za-z]+), z (\\d+), digest ([0-9a-f]{64})(?:, read-only ([a-z]+(?:, [a-z]+)*))?\\)":"([\\w~][^\\s（、]*)（标识 ([^，()]+)，([A-Za-z]+)，第 (\\d+) 层，摘要 ([0-9a-f]{64})(?:，只读 ([^）]+))?）","g");
+  return {pptx,pptxIn:(version,body)=>{
+    if(+version>1)return {v:+version};
+    const match=+version===1?body.match(pptxBody):null;if(!match)return null;
+    const m=match.groups,out={v:1,kind:kindIn[m.kind]||m.kind,slide:m.slide};
+    if(m.targets)out.elements=Array.from(m.targets.matchAll(pptxEl),e=>{
+      const el={key:e[1],id:e[2],name:"",kind:e[3],z:+e[4],digest:e[5]};
+      if(e[6])el.ro=e[6].split(en?",":"、").map(x=>x.trim()).filter(Boolean).map(x=>roIn[x]||x);return el});
+    if(m.para!==undefined){const t={para:+m.para,paraDigest:m.paraDigest,quote:m.quote||""};
+      if(m.start!==undefined){t.start=+m.start;t.end=+m.end;
+        t.runs=(m.runs||"").split(en?",":"、").filter(x=>x.includes("–")).map(x=>{const [start,end]=x.split("–").map(Number);return {start,end}})}
+      out.text=t}
+    if(m.px!==undefined)out.point={x:norm(m.px),y:norm(m.py)};
+    if(m.rx!==undefined)out.region={x:norm(m.rx),y:norm(m.ry),w:norm(m.rw),h:norm(m.rh)};
+    if(m.via)out.via=viaIn[m.via];if(m.fp)out.fp=m.fp;if(m.changed)out.changed=true;return out},
+    pptxLine:a=>{const lead=en?"   PPT location: ":"   PPT 定位：";
+      if(a.v!==1||typeof a.slide!=="string"||!a.slide)return lead+(en?`v${a.v} · newer than this tool supports; the JSON backup keeps it in full`:`v${a.v} · 高于本工具支持的版本，完整内容见 JSON 备份`);
+      const parts=[`v1 ${en?a.kind:G_PPTX.kindZh[a.kind]||a.kind}`,(en?"slide ":"幻灯片 ")+a.slide];
+      if((a.elements||[]).length)parts.push((en?"targets ":"目标 ")+a.elements.map(e=>{
+        let b=en?`${e.key} (id ${e.id}, ${e.kind}, z ${e.z||0}, digest ${e.digest}`:`${e.key}（标识 ${e.id}，${e.kind}，第 ${e.z||0} 层，摘要 ${e.digest}`;
+        if((e.ro||[]).length)b+=(en?", read-only ":"，只读 ")+e.ro.map(x=>en?x:G_PPTX.roZh[x]||x).join(en?", ":"、");
+        return b+(en?")":"）")}).join(en?"; ":"、"));
+      const t=a.text&&typeof a.text==="object"?a.text:null;
+      if(t){parts.push(en?`paragraph ${t.para||0} (digest ${t.paraDigest||""})`:`段落 ${t.para||0}（摘要 ${t.paraDigest||""}）`);
+        if(t.start!=null&&t.end!=null){parts.push((en?"chars ":"字符 ")+`${t.start}–${t.end}`);
+          if((t.runs||[]).length)parts.push((en?"runs ":"运行 ")+t.runs.map(r=>`${r.start||0}–${r.end||0}`).join(en?", ":"、"))}}
+      if(a.point){const p=a.point;parts.push(en?`point x ${pct(p.x)}%, y ${pct(p.y)}%`:`点 x ${pct(p.x)}%，y ${pct(p.y)}%`)}
+      if(a.region){const r=a.region;parts.push(en?`region x ${pct(r.x)}%, y ${pct(r.y)}%, width ${pct(r.w)}%, height ${pct(r.h)}%`:`区域 x ${pct(r.x)}%，y ${pct(r.y)}%，宽 ${pct(r.w)}%，高 ${pct(r.h)}%`)}
+      parts.push((en?"source ":"来源 ")+((en?G_PPTX.viaEn:G_PPTX.viaZh)[a.via]||a.via));
+      if(a.fp)parts.push((en?"fingerprint ":"指纹 ")+a.fp);if(a.changed)parts.push(en?"text changed":"文字已改动");
+      return lead+parts.join(" · ")+(t&&t.quote?(en?" · quote ":" · 引用 ")+oneLine(t.quote):"")}}
+}
 function expGrammar(lang){
   const en=lang==="en";
   const back=(t,v,d)=>en&&t[v]!==undefined?t[v]:d;
-  return {lang,en,
+  return {lang,en,...pptxExchangeGrammar(en),
     marker:`<!-- annotation-everything export v${EXP_VERSION} lang=${lang} -->`,
     page:en?/^##\s*Page\s+(\d+)\s*\|\s*(.*)$/:/^## 第 (\d+) 页｜(.*)$/,
     item:en?/^(\d+)\. \[([^\]·]*)(?: · Pin \d+ \(x ([\d.]+)%, y ([\d.]+)%\))?(?: · Region \d+ \(x ([\d.]+)%, y ([\d.]+)%, w ([\d.]+)%, h ([\d.]+)%\))?\]\s?(.*)$/
@@ -2687,6 +2739,7 @@ function exportText(){
       if(x.style&&x.style.scope)L.push(g.styleLine(x.style));
       if(x.anchor)L.push(g.anchorLine(x.anchor));
       if(x.docx&&typeof x.docx==="object")L.push(g.docxLine(x.docx));
+      if(x.pptx&&typeof x.pptx==="object")L.push(g.pptxLine(x.pptx));
       if(Array.isArray(x.skills)&&x.skills.length)L.push(g.skillsLine(x.skills));
       if(x.pair&&x.pair.text)L.push(g.pairLine(x.pair))})});
   return L.join("\n")+"\n"}
@@ -2708,6 +2761,7 @@ function parseMdGrammar(text,g){const items=[];let page=null,title="",cur=null;
       cur.style={scope:g.styleIn(m[1])};return}
     if((m=line.match(g.anchor))){cur.anchor=m[1];return}
     if((m=line.match(g.docx))){const a=g.docxIn(m[1],m[2],g.docxBody);if(a)cur.docx=a;return}   // 读不懂的整行略过，不并进正文
+    if((m=line.match(g.pptx))){const a=g.pptxIn(m[1],m[2]);if(a)cur.pptx=a;return}
     if((m=line.match(g.skills))){   // 与 export_format 一致：去掉尾缀，带「（常驻·…）」来源标签的不写进单条
       const body=m[1].trim().replace(/(——处理这条前先调用这些技能|（处理这条前先调用这些技能）)$/,"");
       cur.skills=parseSkills(body.split(/[,，、;；]+/).filter(x=>!/（常驻·[^）]*）$/.test(x.trim()))

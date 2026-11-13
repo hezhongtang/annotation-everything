@@ -88,6 +88,8 @@ python3 $S/build_viewer.py --report 合同.docx --out 合同-review --name "采�
 
 `--report` 直接接受 `.pptx`；一张幻灯片生成一页对照页，页面保留原始尺寸、方向与顺序。幻灯片按本机 LibreOffice（`soffice`）+ Poppler（`pdftoppm`）渲染成图：macOS 安装 LibreOffice.app、Linux 安装 `libreoffice` 与 `poppler-utils` 后即可构建，工具缺失、转换失败、页数不符或输出为空时构建明确报错，不自动下载安装，也不把文字预览冒充视觉审阅。旧版二进制 `.ppt`（以及 `.pptm`、`.potx`、`.ppsx`）不受支持，先在 PowerPoint/WPS 中另存为 `.pptx`。字体核查在转换前后各做一次：PPTX 转图前先运行 `python3 $S/check_pptx_fonts.py 原始.pptx`，转出 PDF 后再加 `--pdf 转换后.pdf` 对照字体证据；逐页视觉核验仍不可省略，字体名称一致也不能证明逐字形渲染正确。
 
+在幻灯片下方的「元素文本」区拖选普通文本，批注保留元素身份、段落和字符偏移；画布上的元素点选、标点和框选保持可用。元素文本区按内容排版，幻灯片的视觉核对以渲染图为准。
+
 **文本与备注回写**：`python3 $S/pptx_edit.py apply 审阅目录 --batch N`（或重复 `--id ID`）回写未处理的报告侧快捷替换／删除与讲稿侧已有备注修改。报告侧按批注的幻灯片定位（幻灯片键 + 元素身份 + 逻辑段落 + 码点偏移）落到具体 `a:t`，跨 run 选区保留未触及文本及其属性；讲稿侧只在未使用外部讲稿时回写已有备注部件，按引用原文唯一命中定位。只重写目标幻灯片/备注部件，其余部件与 ZIP 元数据按原字节保留；先保存 0600 二进制备份（`.snapshots/batch-N/pptx-writeback/`），再经临时文件原子替换，写后重开核对全部成员 CRC 与文本模型。写前拒绝 PowerPoint 锁文件（`~$`）与源指纹变化；`--dry-run` 只预演；`--output 新路径` 写到尚不存在的新文件；回写不改批注状态，成功后须重建对照页并重新渲染受影响页面核对。
 
 **几何与样式回写（白名单契约 v1）**：Agent 通过 `python3 $S/pptx_edit.py ops 审阅目录 --ops 操作文件` 下发明确的元素级修改；操作文件是 UTF-8 JSON `{"v": 1, "ops": [...]}`，`v` 高于实现支持的版本时整体拒绝。每个操作形如：

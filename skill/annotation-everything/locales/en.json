@@ -2310,6 +2310,8 @@
     "viewer.pptx.chip": "Target: {count} elements ({names})",
     "viewer.pptx.chip.one": "Target: {count} element ({names})",
     "viewer.pptx.chip.other": "Target: {count} elements ({names})",
+    "viewer.pptx.textTitle": "Element text",
+    "viewer.pptx.textHint": "Select text below to quote or edit it. Click elements or place point and region marks on the slide.",
     "viewer.pptx.chipPage": "Target: whole slide",
     "viewer.pptx.chipOff": "Clear element target",
     "viewer.pptx.readonlyPick": "\"{name}\" ({kind}) is a read-only element: it can be annotated but not written back automatically; change it in PowerPoint/WPS.",

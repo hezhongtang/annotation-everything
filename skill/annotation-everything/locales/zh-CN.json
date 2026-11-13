@@ -2158,6 +2158,8 @@
     "viewer.pptx.pagePicked": "已选择整页作为批注目标",
     "viewer.pptx.pickPage": "把第 {page} 页整页作为批注目标",
     "viewer.pptx.chip": "目标：{count} 个元素（{names}）",
+    "viewer.pptx.textTitle": "元素文本",
+    "viewer.pptx.textHint": "在下方文字中拖选以引用或修改；幻灯片上可点选元素、标点或框选。",
     "viewer.pptx.chipPage": "目标：整页",
     "viewer.pptx.chipOff": "清除元素目标",
     "viewer.pptx.readonlyPick": "「{name}」（{kind}）是只读元素：可以批注，但不支持自动回写，需在 PowerPoint/WPS 中修改。",

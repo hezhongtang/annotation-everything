@@ -3544,21 +3544,28 @@ for n in (1, 2):
     ok(whole["kind"] == "page" and whole["via"] == "thumb" and whole["slide"] == "s260",
        "整页批注记录幻灯片身份与定位来源（页缩略图）")
 
-    # 普通文本选择：透明文本层可拖选，引用批注带逻辑段落、码点偏移与 run 样式边界。
-    # 拖选沿第一段文字的实际矩形（Range 矩形）：p 是块级元素，宽度大于文字，
-    # 拖出文字右侧会把浏览器选区延伸到后续段落（跨段选区不写文本定位）
-    line = page.evaluate("""() => {
-        const sr = document.getElementById('host').shadowRoot;
-        const p = sr.querySelector('section.page .pptx-text p');
-        const r = document.createRange(); r.selectNodeContents(p);
-        const b = r.getBoundingClientRect();
-        return {x: b.x, y: b.y, width: b.width, height: b.height};
-    }""")
-    page.mouse.move(line["x"] + 2, line["y"] + line["height"] / 2)
-    page.mouse.down()
-    page.mouse.move(line["x"] + line["width"] - 2, line["y"] + line["height"] / 2, steps=8)
-    page.mouse.up()
-    ok(page.is_visible("#selbar"), "PPT 文本层可选择，拖选弹出操作条")
+    # 文本从可见的元素文本区选择，不在渲染图上覆盖与原稿排版不同的透明字。
+    ok(page.locator("#pptxTextPanel").is_visible()
+       and page.locator("#host .pptx-text").count() == 0,
+       "元素文本可见，幻灯片上没有错位的透明文字层")
+    visible = page.locator("#pptxTextList .pptx-text").first.evaluate("el => getComputedStyle(el).color")
+    ok(visible not in ("transparent", "rgba(0, 0, 0, 0)"), "用户按可见字符选择，选择位置与显示位置一致")
+
+    def select_pptx_text(p):
+        para = p.locator("#pptxTextList .pptx-text p").first
+        para.scroll_into_view_if_needed()
+        line = para.evaluate("""el => {
+            const r = document.createRange(); r.selectNodeContents(el);
+            const b = r.getBoundingClientRect();
+            return {x:b.x,y:b.y,width:b.width,height:b.height};
+        }""")
+        p.mouse.move(line["x"] + 1, line["y"] + line["height"] / 2)
+        p.mouse.down()
+        p.mouse.move(line["x"] + line["width"] - 1, line["y"] + line["height"] / 2, steps=8)
+        p.mouse.up()
+
+    select_pptx_text(page)
+    ok(page.is_visible("#selbar"), "PPT 元素文本可选择，拖选弹出操作条")
     page.click("#selbar [data-sel='comment']")
     page.fill("#ntext", "PPT 文字引用批注")
     page.click("[data-act='add']")
@@ -3590,6 +3597,67 @@ for n in (1, 2):
        "点标注的 pptx 定位按画布归一化（0.5, 0.1）")
     ok(region_a.get("kind") == "region" and abs(region_a.get("region", {}).get("w", -1) - 0.3) < 0.002,
        "区域标注的 pptx 定位按画布归一化（宽 0.3）")
+    exchange = local_notes(page)
+    extra = [
+        {"v": 1, "kind": "point", "via": "point", "slide": "s260", "point": {"x": 0.1234, "y": 0.9999}},
+        {"v": 1, "kind": "region", "via": "region", "slide": "s260",
+         "region": {"x": 0.1234, "y": 0.5678, "w": 0.004, "h": 0.0001}},
+        {"v": 1, "kind": "elements", "via": "click", "slide": "s257", "elements": [
+            {"key": "e15", "id": "15", "name": "合成流程图", "kind": "smartArt", "z": 4,
+             "digest": "c" * 64, "ro": ["text", "geometry", "style"]}]},
+        {"v": 2},
+    ]
+    exchange += [{"id": "pptx-exchange-" + str(n), "page": 1, "text": "交换精度 " + str(n),
+                  "target": "报告", "status": "open", "pptx": a} for n, a in enumerate(extra)]
+    expected = {n["text"]: json.loads(json.dumps(n.get("pptx"))) for n in exchange}
+    for a in expected.values():
+        for el in (a or {}).get("elements", []):
+            el["name"] = ""   # 展示名不属于交换身份
+        for field in ("point", "region"):
+            if a and field in a:
+                a[field] = {k: round(v, 4) for k, v in a[field].items()}   # 存储契约为四位小数
+    page.evaluate("items => {notes=items}", exchange)
+    for lang in ("zh-CN", "en"):
+        page.click("#notesBtn")
+        page.select_option("#expLang", lang)
+        md = page.evaluate("exportText()")
+        browser_back = page.evaluate("md => parseImport(md)", md)
+        actual = {n["text"]: n.get("pptx") for n in browser_back}
+        if actual != expected:
+            print("PPT exchange mismatch:", json.dumps({key: {"expected": value, "actual": actual.get(key)}
+                  for key, value in expected.items() if actual.get(key) != value}, ensure_ascii=False))
+        ok(actual == expected,
+           f"{lang} 浏览器 Markdown 往返保留五类 PPT 定位、SmartArt、小区域与未知版本")
+        destination = tmp / ("pptx_exchange_" + lang)
+        destination.mkdir()
+        (destination / "review.json").write_text((d / "review.json").read_text(), encoding="utf-8")
+        md_file = tmp / ("pptx_exchange_" + lang + ".md")
+        md_file.write_text(md, encoding="utf-8")
+        result = notes_cli("import", str(destination), str(md_file))
+        ok(result.returncode == 0 and {n["text"]: n.get("pptx") for n in disk_notes(destination)} == expected,
+           f"{lang} 浏览器导出经 CLI 导入不丢定位或精度")
+        result = notes_cli("export", str(destination), "--all", "--lang", lang)
+        cli_back = page.evaluate("md => parseImport(md)", result.stdout)
+        ok(result.returncode == 0 and {n["text"]: n.get("pptx") for n in cli_back} == expected,
+           f"{lang} CLI 导出经浏览器导入保留定位，定位行不并入正文")
+        page.evaluate("() => {notes=[];mirror()}")
+        page.click("#openImp")
+        page.fill("#impText", result.stdout)
+        page.click("#doImp")
+        ok(wait_until(lambda: len(local_notes(page)) == len(expected), page, 5,
+                      condition="PPT Markdown 导入写入本地存储")
+           and {n["text"]: n.get("pptx") for n in local_notes(page)} == expected,
+           f"{lang} 实际导入按钮经过清洗和本地保存仍保留完整 PPT 定位")
+        page.keyboard.press("Escape")
+    distinct = [{"page": 2, "target": "报告", "text": "同文不同元素", "pptx": {
+        "v": 1, "kind": "elements", "via": "click", "slide": "s257", "elements": [el]}}
+        for el in multi["elements"]]
+    saved = page.evaluate("async items => {notes=[];mirror();await runImport(items,'test');return notes}", distinct)
+    ok(len(saved) == 2 and [n["pptx"]["elements"][0]["key"] for n in saved] == ["e11", "e12"],
+       "浏览器导入同文不同元素的批注时不会误去重")
+    page.keyboard.press("Escape")
+    page.select_option("#localePick", "en")
+    ok(page.inner_text("#pptxTextTitle") == "Element text", "元素文本区随界面切换为英文")
     ctx.close()
 
     # 服务模式：批注落盘；旧服务（不声明 pptx 特性）时阻断写入
@@ -3624,7 +3692,7 @@ for n in (1, 2):
         ok(spage.locator("#pptxBlock").is_hidden(), "新版服务下不显示阻断提示")
         # 保存被拒后重试：完整 pptx 定位（文本选区 + run 边界）仍在
         go_page(spage, 1)
-        drag_select(spage, spage.locator("#host section.page .pptx-text p").first)
+        select_pptx_text(spage)
         spage.click("#selbar [data-sel='comment']")
         spage.fill("#ntext", "X" * 20001)
         spage.click("[data-act='add']")
@@ -3690,7 +3758,7 @@ for n in (1, 2):
         ok(wait_dom(old, "() => !document.getElementById('pptxBlock').hidden", 8)
            and "旧版本" in old.inner_text("#pptxBlock"), "旧版服务不认 pptx 特性时显示阻断提示")
         before = len(disk_notes(sd))
-        drag_select(old, old.locator("#host section.page .pptx-text p").first)
+        select_pptx_text(old)
         ok(wait_toast(old, "不能写入", condition="阻断提示出现") and not old.is_visible("#selbar"),
            "阻断期间选中文字不弹操作条，提示不能写入（多目标与文本定位不会被静默丢掉）")
         # 面板整体 inert（与 DOCX 旧服务阻断同一条规则）：不能操作批注输入，服务端也没有新增

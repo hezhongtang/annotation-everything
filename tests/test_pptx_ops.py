@@ -278,6 +278,47 @@ class PptxOpsTests(unittest.TestCase):
         self.build()
         self.assert_refused("noChange", [self.op(geometry(x=0.075))])
 
+    def test_same_shape_id_on_different_slides_can_be_changed_together(self):
+        parts = styled_parts()
+        parts["ppt/slides/slide2.xml"] = mp.styled_slide_xml()
+        self.build(parts)
+        ops = [self.op(geometry(x=0.2), slide_n=1, id="first"),
+               self.op(geometry(x=0.3), slide_n=2, id="second")]
+        self.assertEqual(len(self.writeback(ops, dry_run=True)["changes"]), 2)
+        self.assertEqual(self.source.read_bytes(), self.original)
+        self.writeback(ops)
+        model = pr.read(self.source)
+        for slide, x in zip(model["slides"], (0.2, 0.3)):
+            el = next(e for e in slide["elements"] if e["id"] == "2")
+            self.assertAlmostEqual(el["geometry"]["normalized"]["x"], x)
+
+    def test_self_closing_style_nodes_keep_adjacent_xml_and_attributes(self):
+        cases = [
+            ('<a:rPr b="1" sz="1800"><a:solidFill><a:srgbClr val="AA0000"/></a:solidFill>'
+             '<a:latin typeface="Synthetic Sans"/></a:rPr>', '<a:rPr lang="zh-CN"/>',
+             text_style(color="00AA00", bold=True),
+             '<a:rPr lang="zh-CN" b="1"><a:solidFill><a:srgbClr val="00AA00"/></a:solidFill></a:rPr><a:t>标题甲</a:t>'),
+            ('<a:solidFill><a:srgbClr val="4477AA"/></a:solidFill>', '<a:noFill/>',
+             fill_style(color="00AA00"),
+             '<a:solidFill><a:srgbClr val="00AA00"/></a:solidFill><a:ln w="19050">'),
+            ('<a:ln w="19050"><a:solidFill><a:srgbClr val="112233"/></a:solidFill>'
+             '<a:prstDash val="dash"/></a:ln>', '<a:ln w="19050"/>',
+             line_style(color="00AA00", width=2),
+             '<a:ln w="25400"><a:solidFill><a:srgbClr val="00AA00"/></a:solidFill></a:ln></p:spPr>'),
+        ]
+        for original, replacement, props, expected in cases:
+            with self.subTest(scope=props["scope"]):
+                parts = styled_parts()
+                parts["ppt/slides/slide10.xml"] = parts["ppt/slides/slide10.xml"].replace(original, replacement)
+                self.build(parts)
+                ops = [self.op(props, aspect="style")]
+                self.writeback(ops, dry_run=True)
+                self.assertEqual(self.source.read_bytes(), self.original)
+                self.writeback(ops)
+                self.assertIn(expected.encode(), member(self.source.read_bytes(), "ppt/slides/slide10.xml"))
+                self.assertEqual(pr.read(self.source)["slides"][0]["elements"][0]["paragraphs"][0]["text"],
+                                 "标题甲标题乙")
+
     def test_bad_target_identity_is_refused(self):
         self.build()
         self.assert_refused("ops", [self.op(geometry(x=0.2, y=0.2),

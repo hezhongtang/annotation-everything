@@ -488,7 +488,7 @@ class _PropsParser:
         at = self.parser.CurrentByteIndex
         node = self.frames.pop()
         self.stack.pop()
-        if node is not None:
+        if node is not None and not node["empty"]:
             node["content_end"] = at
             node["stop"] = de._tag_end(self.raw, at)
         if name == AT:
@@ -1010,7 +1010,7 @@ def _style_edits(op: dict, oid: str, raw: bytes, shape: dict, prefix: bytes)    
                 continue
             new_attrs = dict(rpr["attrs"])
             new_attrs.update(wanted)
-            if new_attrs != rpr["attrs"]:
+            if new_attrs != rpr["attrs"] and not (rpr["empty"] and color is not None):
                 spans.append(_tag_rewrite(raw, rpr, new_attrs))
             new_color = _srgb_of(rpr["fill"]) if rpr["fill"] and rpr["fill"]["local"] == "solidFill" else None
             if color is not None and (rpr["fill"] is None or rpr["fill"]["local"] != "solidFill"
@@ -1021,7 +1021,8 @@ def _style_edits(op: dict, oid: str, raw: bytes, shape: dict, prefix: bytes)    
                     spans.append((rpr["fill"]["start"], rpr["fill"]["stop"], piece))
                 else:
                     start, stop, whole = _insert_point(rpr["children"], RPR_BEFORE_FILL, rpr)
-                    spans.append((start, stop, _with_children(raw, rpr, piece) if whole else piece))
+                    spans.append((start, stop, _with_children(raw, {**rpr, "attrs": new_attrs}, piece)
+                                  if whole else piece))
                 new_color = color
             expected_runs.append((tuple(sorted(new_attrs.items())), new_color, run["text"]))
         if not spans:
@@ -1073,7 +1074,8 @@ def _style_edits(op: dict, oid: str, raw: bytes, shape: dict, prefix: bytes)    
         lattrs = dict(ln["attrs"])
         if width is not None and lattrs.get("w") != str(width):
             lattrs["w"] = str(width)
-            spans.append(_tag_rewrite(raw, ln, lattrs))
+            if not (ln["empty"] and color is not None):
+                spans.append(_tag_rewrite(raw, ln, lattrs))
         if color is not None and (ln["fill"] is None or ln["fill"]["local"] != "solidFill"
                                   or _srgb_of(ln["fill"]) != color):
             _check_children(ln["children"], LN_ALLOWED, "a:ln", oid)
@@ -1082,7 +1084,8 @@ def _style_edits(op: dict, oid: str, raw: bytes, shape: dict, prefix: bytes)    
                 spans.append((ln["fill"]["start"], ln["fill"]["stop"], piece))
             else:
                 start, stop, whole = _insert_point(ln["children"], LN_BEFORE_FILL, ln)
-                spans.append((start, stop, _with_children(raw, ln, piece) if whole else piece))
+                spans.append((start, stop, _with_children(raw, {**ln, "attrs": lattrs}, piece)
+                              if whole else piece))
         new_ln = (width if width is not None else old[0],
                   "solidFill" if color is not None else old[1],
                   color if color is not None else old[2])
@@ -1106,7 +1109,7 @@ def _run_ops(raw: bytes, spec: object, model: dict):
     """
     op_list = _validate_ops(spec)
     resolved, errors = [], []
-    claimed: dict[str, str] = {}
+    claimed: dict[tuple[str, str], str] = {}
     for op in op_list:
         oid = op["id"]
         try:
@@ -1119,13 +1122,14 @@ def _run_ops(raw: bytes, spec: object, model: dict):
             el = next((x for x in slide["elements"] if tgt and x["key"] == tgt.get("key")), None)
             if el is None:
                 raise EditError("anchor", item=oid)
-            if el["key"] in claimed:
-                raise EditError("conflict", claimed[el["key"]], item=oid)
+            identity = (slide["part"], el["key"])
+            if identity in claimed:
+                raise EditError("conflict", claimed[identity], item=oid)
             if op["aspect"] == "geometry" and not el["capabilities"]["geometryWrite"]:
                 raise EditError("readonlyGeometry", el["kind"], item=oid)
             if op["aspect"] == "style" and not el["capabilities"]["styleWrite"]:
                 raise EditError("readonlyStyle", el["kind"], item=oid)
-            claimed[el["key"]] = oid
+            claimed[identity] = oid
             resolved.append((op, slide, el))
         except EditError as exc:
             if not exc.item:
