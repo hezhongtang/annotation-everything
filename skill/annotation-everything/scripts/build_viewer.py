@@ -892,9 +892,10 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
               "ROOTFS": assets.root_fs or "100%", "SKILLS": _js(read_skills(out)), "ALWAYS": _js(read_always(out)),
               "SKILL_CONTEXT": _js(skill_context), "FULL_CHECK_COMPAT": _js("【本批提交选项】" + notes_store.FULL_CHECK_TEXT),
               "CATALOGS": _js(catalogs), "LOCALE": _js(locale_choice), "REPORT_LANG": _js(report_language),
-              "DOCX": _js(docx_view(docx_meta)), "PPTX": _js(pptx_view(pptx_meta))}
+              "DOCX": _js(docx_view(docx_meta)), "PPTX": _js(pptx_view(pptx_meta)),
+              "OVERVIEW_HOME": _js(None)}   # 对照页不是总览首页宿主；总览视图按 hash 路由照旧
     # 一次性替换，避免内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
-    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX|PPTX)__", lambda m: values[m.group(1)],
+    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX|PPTX|OVERVIEW_HOME)__", lambda m: values[m.group(1)],
                        TEMPLATE.read_text(encoding="utf-8"))
     page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
     write_private(out / "index.html", page_html)

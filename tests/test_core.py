@@ -1637,7 +1637,8 @@ class BuildTests(unittest.TestCase):
         self.assertRegex(m["reviewId"], r"^[0-9a-f]{16}$")
         self.assertFalse(os.path.isabs(m["sources"]["report"]))
         html = (self.out / "index.html").read_text()
-        self.assertNotRegex(html, r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|CSP)__")
+        self.assertNotRegex(html, r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|CSP|OVERVIEW_HOME)__")
+        self.assertIn("const OVERVIEW_HOME=null", html, "对照页宿主为空：总览首页常量必须被替换成 null")
         self.assertNotIn(str(self.out.resolve()), html, "对照页里不写本机路径")
         self.assertIn("外卖套餐提价 1 元", html)
         self.assertEqual(r["seconds"], 20 + 30 + 90 + 120 + 120 + 90)
@@ -2712,6 +2713,12 @@ class OverviewHomeBuildTests(unittest.TestCase):
         self.assertIn("const OVERVIEW_HOME={", page)
         self.assertIn("body.overview-mode", page, "沿用总览视图的显示开关")
 
+    def test_home_keeps_locale_switcher_inside_the_overview_view(self):
+        """语言可达（#157）：首页没有可返回的对照页，语言选择器必须在总览视图内。"""
+        page = (self.build(locale="en") / ledger.OVERVIEW_PAGE_FILE).read_text(encoding="utf-8")
+        self.assertIn('querySelector(".overview-top").appendChild($("localeLabel"))', page,
+                      "HOME 初始化把语言选择器搬进总览顶栏")
+
     def test_build_creates_missing_ledger_home(self):
         previous = os.environ["AE_HOME"]
         missing = Path(previous) / "not-yet"
@@ -3411,6 +3418,26 @@ class OverviewHomeCliTests(unittest.TestCase):
                 self.assertEqual(conflict.returncode, 2, conflict.stdout + conflict.stderr)
                 self.assertIn(f"http://127.0.0.1:{port}/", conflict.stderr, "提示先退出当前首页")
         self.assertEqual(serve.probe(port)["pid"], proc.pid, "冲突调用不另起实例")
+
+    def test_under_reaches_the_started_home_and_filters_the_list(self):
+        """--under 经真实启动命令落到首页宿主上：列表只含范围内审阅，范围名随启动目录（issue #160 前的回归）。"""
+        outside = self.tree / "outside"
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            outside_rid = build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md",
+                                             outside, name="Outside review")["reviewId"]
+        explicit = free_port()
+        proc = self.spawn("--no-open", "--port", str(explicit), "--under", str(self.workspace))
+        self.addCleanup(self.terminate, proc)
+        port = self.wait_ready()
+        found = serve.probe(port)
+        self.assertEqual(found.get("under"), str(self.workspace.resolve()),
+                         "健康检查报告启动时确定的 --under 范围")
+        status, _, raw = serve._req(port, "GET", "/api/overview", {"Host": f"127.0.0.1:{port}"})
+        self.assertEqual(status, 200, raw)
+        body = json.loads(raw)
+        self.assertEqual(body["workspace"], self.workspace.name, "总览数据带启动时确定的范围名")
+        self.assertEqual([row["reviewId"] for row in body["reviews"]], [self.rid],
+                         "列表只含 --under 目录内的审阅，范围外审阅不出现")
 
     def test_no_open_controls_browser_on_reuse(self):
         proc = self.spawn("--no-open")

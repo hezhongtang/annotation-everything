@@ -290,6 +290,19 @@ SCENARIOS: list[Scenario] = [
                 "notes.py claim/resolve/done 真实子进程；file:// 阶段用同一上下文的第二个标签页",
         isolation="每阶段独立临时审阅目录、端口与浏览器上下文；服务与 CLI 子进程全部登记回收",
     ),
+    Scenario(
+        id="overview-home",
+        title="总览首页：零运行审阅直接打开、默认范围覆盖台账、运行中/已停/归档/失效按组排序显示、"
+              "无「返回当前审阅」与顶栏停止按钮、视图内双语切换、失效清理命令、运行中与已停审阅"
+              "在新标签页打开对照页、无接收方提示与可复制等待命令、桌面事件绑定显示接收方式、"
+              "--under 过滤列表与批量停止（含范围内归档运行中）、范围外服务不受影响、全部服务回收",
+        fixture="入口临时台账（AE_HOME）按 fixtures/sample 构建七份合成审阅：运行中、两份已停"
+                "（一份经对照页写入真实批注）、归档（总览页内归档）、失效（目录删除）、桌面事件绑定"
+                "（wakeup.py bind 真实路径 + 合成桌面套接字）与 --under 范围外审阅；首页由 "
+                "serve.py overview 真实子进程提供（默认与 --under 各启一次）",
+        isolation="独立浏览器上下文与审阅目录；台账为入口的临时 AE_HOME（与同进程场景共享同一临时目录），"
+                  "首页与审阅服务（含代启动的）按运行状态文件核对后在场景结束全部回收，沿用 host-state 锁",
+    ),
 ]
 
 SCENARIO_IDS: tuple[str, ...] = tuple(scenario.id for scenario in SCENARIOS)
