@@ -114,5 +114,32 @@ class CheckFunctionTests(unittest.TestCase):
             {"code", "category", "level", "message", "fix_command"})
 
 
+class OverviewHomeDoctorTests(unittest.TestCase):
+    """体检跳过总览首页：首页进程不进审阅服务计数，也不算孤儿审阅。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ae-home-doctor-")
+        self.addCleanup(self.temp.cleanup)
+        self.ae_home = Path(self.temp.name) / "ledger"
+        self.ae_home.mkdir(parents=True)
+        (self.ae_home / "reviews.json").write_text(json.dumps({"version": 1, "reviews": {}}), encoding="utf-8")
+        self.serve = ROOT / "skill" / "annotation-everything" / "scripts" / "serve.py"
+        self.home_line = f"python3 {self.serve} overview --no-open"
+
+    def ctx(self, lister):
+        return ae.DoctorContext(skill_copy=Path(self.temp.name) / "copy", repo=None, record=None,
+                                ledger_home=self.ae_home, process_lister=lister,
+                                port_probe=lambda port: None)
+
+    def test_find_orphan_servers_skips_overview_home(self):
+        self.assertEqual(ae.find_orphan_servers({}, lambda: [(99, self.home_line)], probe=lambda port: None), [],
+                         "总览首页不是孤儿审阅，孤儿修复也不该碰它")
+
+    def test_check_orphan_servers_skips_overview_home_in_count(self):
+        result = ae.check_orphan_servers(self.ctx(lambda: [(99, self.home_line)]))
+        self.assertEqual(result.level, PASS, result.message)
+        self.assertNotIn("99", result.message, "首页进程不进审阅服务计数")
+
+
 if __name__ == "__main__":
     unittest.main()

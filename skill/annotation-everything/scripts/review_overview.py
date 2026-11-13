@@ -43,15 +43,17 @@ def in_scope(directory: Path, workspace: Path, scope: str) -> bool:
     return scope == "all" or workspace_for(directory) == workspace
 
 
-def display_path(directory: Path, workspace: Path) -> str:
-    """工作区内显示相对路径；其他位置显示 ~ 路径或目录名。"""
-    try:
-        return directory.relative_to(workspace).as_posix()
-    except ValueError:
+def display_path(directory: Path, workspace: Path | None) -> str:
+    """工作区内显示相对路径；其他位置显示 ~ 路径或目录名。workspace 传 None（总览首页的全台账范围）直接按 ~ 路径显示。"""
+    if workspace is not None:
         try:
-            return "~/" + directory.relative_to(Path.home().resolve()).as_posix()
+            return directory.relative_to(workspace).as_posix()
         except ValueError:
-            return directory.name
+            pass
+    try:
+        return "~/" + directory.relative_to(Path.home().resolve()).as_posix()
+    except ValueError:
+        return directory.name
 
 
 def last_activity(directory: Path) -> float | None:
@@ -120,13 +122,26 @@ def report_metadata(directory: Path, review_id: str) -> dict[str, Any]:
     return metadata
 
 
-def snapshot(review_dir: Path, review_id: str | None, scope: str,
-             row_builder: Callable[[str, dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
-    """台账是索引，审阅名、计数和运行状态由 list 的同一份逻辑现读。"""
-    workspace = workspace_for(review_dir)
+def snapshot(review_dir: Path | None, review_id: str | None, scope: str,
+             row_builder: Callable[[str, dict[str, Any]], dict[str, Any]], *,
+             workspace_dir: Path | None = None, under_dir: Path | None = None) -> dict[str, Any]:
+    """台账是索引，审阅名、计数和运行状态由 list 的同一份逻辑现读。
+
+    workspace_dir / under_dir：总览首页宿主没有审阅目录，显式传显示用工作区与 --under 范围
+    （沿用 list --under 的目录包含关系，不是 git 根推断）；不传时行为与审阅宿主一致。
+    """
+    if workspace_dir is not None:
+        workspace = workspace_dir
+    elif review_dir is not None:
+        workspace = workspace_for(review_dir)
+    else:
+        workspace = None   # 总览首页的全台账范围：没有工作区，显示路径全部走 ~/ 或目录名
+    under = under_dir.resolve() if under_dir is not None else None
     rows = []
     for rid, entry in ledger.entries().items():
         directory = Path(entry["dir"]).resolve()
+        if under is not None and not (directory == under or under in directory.parents):
+            continue
         if not in_scope(directory, workspace, scope):
             continue
         source = row_builder(rid, entry)
@@ -161,4 +176,4 @@ def snapshot(review_dir: Path, review_id: str | None, scope: str,
     rows.sort(key=lambda row: (2 if row["archived"] and row["state"] not in ("missing", "mismatch")
                               else STATE_ORDER.get(row["state"], 3), -(row["lastActivity"] or 0),
                                row["name"].casefold(), row["reviewId"]))
-    return {"workspace": workspace.name, "scope": scope, "reviews": rows}
+    return {"workspace": workspace.name if workspace is not None else None, "scope": scope, "reviews": rows}

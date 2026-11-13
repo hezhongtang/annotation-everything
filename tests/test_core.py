@@ -46,6 +46,8 @@ import export_format as ef  # noqa: E402
 import notes as notes_cli  # noqa: E402
 import notes_store as store  # noqa: E402
 import ledger  # noqa: E402
+import review_overview  # noqa: E402
+import review_stop  # noqa: E402
 import serve  # noqa: E402
 import wakeup  # noqa: E402
 
@@ -2671,6 +2673,454 @@ class OverviewTests(unittest.TestCase):
         self.assertEqual(status, 404, "总览仍是 index.html 内的视图，不新增可访问路径")
 
 
+class OverviewHomeBuildTests(unittest.TestCase):
+    """总览首页页面构建：只注入宿主种类与宿主标识；不登记台账、不写审阅清单。"""
+
+    def setUp(self):
+        self._home = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+
+    def tearDown(self):
+        os.environ["AE_HOME"] = self._home
+
+    def build(self, **kw) -> Path:
+        out = tmpdir()
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            build_viewer.build_overview_home(out, host_id=ledger.HOME_HOST_ID, **kw)
+        return out
+
+    def test_page_contains_host_identity_and_no_review_data(self):
+        out = self.build(locale="zh-CN")
+        page = (out / ledger.OVERVIEW_PAGE_FILE).read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r"__[A-Z_]+__", page), "没有未替换的占位符")
+        self.assertIn('"kind": "overview-home"', page, "注入宿主种类")
+        self.assertIn(f'"id": "{ledger.HOME_HOST_ID}"', page, "注入宿主标识")
+        self.assertIn("sha256-", page, "CSP 哈希按最终脚本内容计算")
+        for mark in ("示例咖啡", "三季度收入同比增长", "全程控制在 8 分钟内"):
+            self.assertNotIn(mark, page, f"页面不注入报告或讲稿：{mark}")
+        self.assertIn("const P=[]", page, "不注入报告页数据")
+        self.assertIn("RID=null", page, "不注入审阅标识")
+        self.assertNotIn('"notes":[', page, "不注入批注状态")
+        self.assertEqual(oct((out / ledger.OVERVIEW_PAGE_FILE).stat().st_mode & 0o777), "0o600")
+        self.assertEqual(ledger.entries(), {}, "这种构建不登记台账")
+        self.assertEqual([p.name for p in out.iterdir()], [ledger.OVERVIEW_PAGE_FILE], "不写审阅清单（review.json）")
+
+    def test_default_view_is_overview_only(self):
+        page = (self.build(locale="en") / ledger.OVERVIEW_PAGE_FILE).read_text(encoding="utf-8")
+        self.assertIn("const OVERVIEW_HOME={", page)
+        self.assertIn("body.overview-mode", page, "沿用总览视图的显示开关")
+
+    def test_build_creates_missing_ledger_home(self):
+        previous = os.environ["AE_HOME"]
+        missing = Path(previous) / "not-yet"
+        os.environ["AE_HOME"] = str(missing)
+        self.addCleanup(os.environ.__setitem__, "AE_HOME", previous)
+        out = tmpdir()
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            build_viewer.build_overview_home(out, host_id=ledger.HOME_HOST_ID)
+        self.assertTrue((out / ledger.OVERVIEW_PAGE_FILE).exists())
+        self.assertTrue(missing.is_dir(), "台账目录还不存在时由构建自动创建（零审阅的机器也能起首页）")
+
+
+class OverviewHomeTests(unittest.TestCase):
+    """总览首页宿主：无审阅目录的服务，只服务总览视图与它的写接口；审阅专属路由显式拒绝。"""
+
+    def setUp(self):
+        previous = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+        self.addCleanup(os.environ.__setitem__, "AE_HOME", previous)
+        self.tree = tmpdir()
+        self.workspace = self.tree / "workspace"
+        self.workspace.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.workspace)], check=True, capture_output=True)
+        self.inside = self.workspace / "inside"
+        self.outside = self.tree / "outside"   # 同一台账但不在 workspace 下
+        self.rid_inside = self.build(self.inside, "Inside review")["reviewId"]
+        self.rid_outside = self.build(self.outside, "Outside review")["reviewId"]
+        self.host_id = ledger.HOME_HOST_ID
+        self.start_home()
+
+    def build(self, directory, name):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", directory, name=name)
+
+    def write_page(self):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            build_viewer.build_overview_home(ledger.home(), host_id=self.host_id)
+
+    def start_home(self, under=None):
+        self.write_page()
+        self.srv = serve.ReviewServer(None, 0, home_id=self.host_id, overview_under=under, log_to_file=False)
+        thread = threading.Thread(target=self.srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread.start()
+        self.addCleanup(self.srv.server_close)
+        self.addCleanup(self.srv.shutdown)
+        self.port = self.srv.port
+        self.good = {"Host": f"127.0.0.1:{self.port}"}
+        self.same = {**self.good, "Origin": f"http://127.0.0.1:{self.port}", "Content-Type": "application/json",
+                     "X-AE-Host": self.host_id}
+
+    def restart_home(self, under):
+        self.srv.shutdown()
+        self.srv.server_close()
+        self.start_home(under=under)
+
+    def state_snapshot(self):
+        """首页请求前后的状态文件字节：审阅专属路由被拒时一个都不能变。"""
+        paths = [ledger.home() / ledger.LEDGER_FILE, ledger.home() / ledger.OVERVIEW_PORT_FILE,
+                 self.inside / store.NOTES_FILE, self.inside / store.HANDOFF_FILE, self.inside / serve.STATUS_FILE,
+                 self.outside / store.NOTES_FILE, self.outside / store.HANDOFF_FILE,
+                 self.outside / review_stop.STATE_FILE]
+        return [(p.name, str(p.parent), p.read_bytes() if p.exists() else None) for p in paths]
+
+    def request(self, path, headers=None):
+        return serve._req(self.port, "GET", path, headers or self.good)
+
+    def stop_started(self, directory, rid):
+        info = serve.read_status(directory)
+        if not info:
+            return
+        port = info["port"]
+        found = serve.probe(port, timeout=0.2)
+        if found and found.get("reviewId") == rid and serve.same_dir(found, directory):
+            serve._req(port, "POST", "/api/server/stop",
+                       {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}",
+                        "Content-Type": "application/json", "X-AE-Review": rid}, {})
+            end = time.monotonic() + 5
+            while time.monotonic() < end and ledger.pid_alive(info["pid"]):
+                time.sleep(0.02)
+
+    def test_health_reports_host_kind_and_stable_id(self):
+        status, headers, raw = self.request("/api/health")
+        body = json.loads(raw)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual((body["app"], body["hostKind"], body["hostId"]), (serve.APP, "overview-home", self.host_id))
+        self.assertEqual(body["pid"], os.getpid())
+        self.assertNotIn("agentDelivery", body, "首页不注入批注接收状态")
+        self.assertNotIn("receiver", body)
+        self.assertIsNone(body.get("reviewId"), "不注入审阅标识")
+        self.assertNotIn("access-control-allow-origin", headers)
+
+    def test_index_serves_overview_page_without_review_data(self):
+        for path in ("/", "/index.html"):
+            status, headers, raw = self.request(path)
+            self.assertEqual(status, 200, raw)
+            self.assertNotIn("access-control-allow-origin", headers)
+            self.assertIn("content-security-policy", headers)
+            self.assertIn('"kind": "overview-home"', raw.decode("utf-8"), "页面注入宿主种类与标识")
+            self.assertNotIn(self.rid_inside.encode(), raw, "页面不注入审阅标识")
+            self.assertNotIn(self.rid_outside.encode(), raw)
+            self.assertIn(b"const P=[]", raw, "页面不注入报告页数据")
+            self.assertNotIn(b'"notes":[', raw, "页面不注入批注状态")
+        for path in ("/review.json", "/notes.json", "/server.log", "/overview-home.json",
+                     "/.overview-home.html", "/../review.json"):
+            status, _, _ = self.request(path)
+            self.assertEqual(status, 404, f"{path} 不暴露本机文件")
+
+    def test_review_only_routes_rejected_without_state_writes(self):
+        before = self.state_snapshot()
+        cases = [("GET", "/api/notes", 404), ("POST", "/api/notes", 405),
+                 ("PATCH", "/api/notes/note0001", 405), ("DELETE", "/api/notes/note0001", 405),
+                 ("GET", "/api/handoff", 404), ("POST", "/api/handoff", 405),
+                 ("POST", "/api/handoff/finalize-all", 405),
+                 ("GET", "/api/analysis", 404), ("POST", "/api/analysis/start", 405),
+                 ("POST", "/api/analysis/submit", 405),
+                 ("GET", "/api/server/stop", 404), ("POST", "/api/server/stop", 405),
+                 ("POST", "/api/server/resume", 405), ("POST", "/api/server/save-protection", 405)]
+        for method, path, expected in cases:
+            with self.subTest(method=method, path=path):
+                status, headers, raw = serve._req(self.port, method, path, self.same)
+                self.assertEqual(status, expected, raw)
+                self.assertEqual(json.loads(raw)["code"], "review-only-api", raw)
+                self.assertNotIn("access-control-allow-origin", headers)
+        self.assertEqual(self.state_snapshot(), before, "被拒请求不创建或改写任何状态文件")
+
+    def test_overview_scope_defaults_to_full_ledger_and_rejects_workspace(self):
+        status, headers, raw = self.request("/api/overview")
+        body = json.loads(raw)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(body["hostKind"], "overview-home")
+        self.assertIsNone(body["reviewId"])
+        self.assertEqual({r["reviewId"] for r in body["reviews"]}, {self.rid_inside, self.rid_outside})
+        status, _, raw = self.request("/api/overview?scope=all")
+        self.assertEqual(status, 200, raw)
+        self.assertEqual({r["reviewId"] for r in json.loads(raw)["reviews"]}, {self.rid_inside, self.rid_outside})
+        for path in ("/api/overview?scope=workspace",):
+            status, _, raw = self.request(path)
+            self.assertEqual(status, 400, raw)
+            self.assertEqual(json.loads(raw)["code"], "bad-scope")
+
+    def test_under_scope_fixed_and_all_does_not_widen(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        self.start_home(under=self.workspace)
+        for query in ("", "?scope=all"):
+            status, _, raw = self.request("/api/overview" + query)
+            body = json.loads(raw)
+            self.assertEqual(status, 200, raw)
+            self.assertEqual({r["reviewId"] for r in body["reviews"]}, {self.rid_inside},
+                             "传入 --under 时 scope=all 不扩大范围")
+        status, _, raw = self.request("/api/overview?scope=workspace")
+        self.assertEqual(status, 400, raw)
+        self.assertEqual(json.loads(raw)["code"], "bad-scope")
+
+    def test_start_refuses_outside_ledger_or_scope_without_process(self):
+        self.restart_home(self.workspace)
+        before = self.state_snapshot()
+        with patch.object(subprocess, "Popen", side_effect=AssertionError("unexpected overview child")) as spawned:
+            for headers, rid, expected, code in (
+                    (self.same, "0" * 16, 404, "overview-review-unknown"),
+                    (self.same, self.rid_outside, 404, "overview-review-out-of-scope"),
+                    ({k: v for k, v in self.same.items() if k != "X-AE-Host"}, self.rid_inside, 409, "host-mismatch"),
+                    ({**self.same, "X-AE-Host": "other-host"}, self.rid_inside, 409, "host-mismatch")):
+                with self.subTest(rid=rid[:8], code=code):
+                    status, _, raw = serve._req(self.port, "POST", "/api/overview/start", headers, {"reviewId": rid})
+                    self.assertEqual(status, expected, raw)
+                    self.assertEqual(json.loads(raw)["code"], code, raw)
+            self.assertEqual(spawned.call_count, 0, "台账外或范围外的标识不拉起任何进程")
+        self.assertEqual(self.state_snapshot(), before, "被拒的启动不改变目标审阅状态")
+
+    def test_start_inside_scope_launches_review_on_owned_port(self):
+        port = free_port()
+        ledger.claim_port(self.rid_inside, self.inside, port)
+        status, _, raw = serve._req(self.port, "POST", "/api/overview/start", self.same, {"reviewId": self.rid_inside})
+        body = json.loads(raw)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(body["url"], f"http://127.0.0.1:{port}/")
+        found = serve.probe(port)
+        self.assertEqual((found["reviewId"], found["dir"]), (self.rid_inside, str(self.inside.resolve())))
+        self.stop_started(self.inside, self.rid_inside)
+
+    def test_archive_respects_scope_and_host_header(self):
+        self.restart_home(self.workspace)
+        status, headers, raw = serve._req(self.port, "POST", "/api/overview/archive", self.same,
+                                          {"reviewId": self.rid_inside, "archived": True})
+        self.assertEqual(status, 200, raw)
+        self.assertTrue((self.inside / review_overview.ARCHIVE_FILE).exists())
+        self.assertNotIn("access-control-allow-origin", headers)
+        self.addCleanup((self.inside / review_overview.ARCHIVE_FILE).unlink)
+        before = self.state_snapshot()
+        for headers_, rid, expected, code in (
+                (self.same, self.rid_outside, 404, "overview-review-out-of-scope"),
+                ({k: v for k, v in self.same.items() if k != "X-AE-Host"}, self.rid_outside, 409, "host-mismatch")):
+            with self.subTest(rid=rid[:8]):
+                status, _, raw = serve._req(self.port, "POST", "/api/overview/archive", headers_,
+                                            {"reviewId": rid, "archived": True})
+                self.assertEqual(status, expected, raw)
+                self.assertEqual(json.loads(raw)["code"], code, raw)
+        self.assertFalse((self.outside / review_overview.ARCHIVE_FILE).exists(), "范围外的目标不改归档标记")
+        self.assertEqual(self.state_snapshot(), before)
+
+    def test_stop_respects_scope_and_rejects_workspace(self):
+        self.restart_home(self.workspace)
+        before = self.state_snapshot()
+        for headers, body, expected, code in (
+                (self.same, {"reviewId": self.rid_outside, "scope": "all"}, 404, "overview-review-out-of-scope"),
+                (self.same, {"reviewId": self.rid_outside, "scope": "workspace"}, 400, "bad-scope"),
+                (self.same, {"reviewId": "0" * 16, "scope": "all"}, 404, "overview-review-unknown")):
+            with self.subTest(code=code):
+                status, _, raw = serve._req(self.port, "POST", "/api/overview/stop", headers, body)
+                self.assertEqual(status, expected, raw)
+                self.assertEqual(json.loads(raw)["code"], code, raw)
+        self.assertFalse((self.outside / review_stop.STATE_FILE).exists(), "范围外的停止不创建停止状态文件")
+        self.assertEqual(self.state_snapshot(), before)
+
+
+class OverviewHomeCliTests(unittest.TestCase):
+    """serve.py overview 子命令：退出码、实例复用、并发首启、保留端口策略与退出清理，全部用临时台账。"""
+
+    def setUp(self):
+        previous = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+        self.addCleanup(os.environ.__setitem__, "AE_HOME", previous)
+        self.tree = tmpdir()
+        self.workspace = self.tree / "workspace"
+        self.workspace.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.workspace)], check=True, capture_output=True)
+        self.review_dir = self.workspace / "review"
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.rid = build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md",
+                                          self.review_dir, name="Cli review")["reviewId"]
+
+    def run_overview(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "overview", *args],
+                              capture_output=True, text=True, timeout=60)
+
+    def spawn(self, *args):
+        return subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), "overview", *args],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    @staticmethod
+    def terminate(proc, timeout=10):
+        if proc.poll() is None:
+            proc.terminate()
+        try:
+            return proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return proc.communicate()
+
+    def wait_ready(self, timeout=15) -> int:
+        """运行状态文件 + pid 探活 + /api/health 宿主核对：不依赖任何审阅目录。"""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            status = serve.read_home_status()
+            if status and type(status.get("port")) is int:
+                found = serve.probe(status["port"], timeout=0.3)
+                if found and found.get("hostKind") == serve.HOST_KIND_OVERVIEW \
+                        and found.get("hostId") == ledger.HOME_HOST_ID \
+                        and found.get("pid") == status.get("pid"):
+                    return status["port"]
+            time.sleep(0.05)
+        raise AssertionError("总览首页没有就绪")
+
+    def reserved_port(self) -> int:
+        record = json.loads((ledger.home() / ledger.OVERVIEW_PORT_FILE).read_text())
+        return record["port"]
+
+    def test_overview_serves_index_and_is_not_registered(self):
+        proc = self.spawn("--no-open")
+        self.addCleanup(self.terminate, proc)
+        port = self.wait_ready()
+        for path in ("/", "/index.html"):
+            status, _, raw = serve._req(port, "GET", path, {"Host": f"127.0.0.1:{port}"})
+            self.assertEqual(status, 200, raw)
+        with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+            code = serve.list_reviews(None, True)
+        self.assertEqual(code, 0)
+        rows = json.loads(out.getvalue())["reviews"]
+        self.assertEqual([r["reviewId"] for r in rows], [self.rid], "总览首页不出现在 serve.py list --json")
+        self.assertEqual(ledger.entries()[self.rid]["dir"], str(self.review_dir.resolve()), "台账不新增审阅记录")
+        out_txt, err_txt = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out_txt + err_txt)
+        self.assertIsNone(serve.read_home_status(), "退出时清理运行状态")
+        self.assertEqual(self.reserved_port(), port, "退出后保留端口记录仍在")
+
+    def test_reuse_same_config_and_conflict_on_different(self):
+        proc = self.spawn("--no-open")
+        self.addCleanup(self.terminate, proc)
+        port = self.wait_ready()
+        again = self.run_overview("--no-open")
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn(f"http://127.0.0.1:{port}/", again.stdout, "相同配置复用同一实例与地址")
+        for label, extra in (("port", ("--port", str(free_port()))), ("under", ("--under", str(self.tree)))):
+            with self.subTest(config=label):
+                conflict = self.run_overview("--no-open", *extra)
+                self.assertEqual(conflict.returncode, 2, conflict.stdout + conflict.stderr)
+                self.assertIn(f"http://127.0.0.1:{port}/", conflict.stderr, "提示先退出当前首页")
+        self.assertEqual(serve.probe(port)["pid"], proc.pid, "冲突调用不另起实例")
+
+    def test_no_open_controls_browser_on_reuse(self):
+        proc = self.spawn("--no-open")
+        self.addCleanup(self.terminate, proc)
+        port = self.wait_ready()
+        with patch.object(serve.webbrowser, "open") as open_browser:
+            code = serve.overview_home(None, None, False, False, None, locale="zh-CN")
+            self.assertEqual(code, 0)
+            self.assertEqual(open_browser.call_count, 0, "复用实例时 --no-open 也遵守")
+            code = serve.overview_home(None, None, True, False, None, locale="zh-CN")
+            self.assertEqual(code, 0)
+            self.assertEqual(open_browser.call_count, 1)
+            self.assertEqual(open_browser.call_args[0][0], f"http://127.0.0.1:{port}/")
+
+    def test_port_policy_across_restarts(self):
+        explicit = free_port()
+        proc = self.spawn("--no-open", "--port", str(explicit))
+        self.addCleanup(self.terminate, proc)
+        port = self.wait_ready()
+        self.assertEqual(port, explicit, "显式 --port 影响当次地址")
+        self.assertFalse((ledger.home() / ledger.OVERVIEW_PORT_FILE).exists(),
+                         "显式端口的首启不建立保留记录（只影响当次地址）")
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+
+        proc = self.spawn("--no-open")
+        port = self.wait_ready()
+        self.assertEqual(self.reserved_port(), port, "无显式端口的首启分配保留端口")
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+
+        blocker = socket.socket()
+        blocker.bind(("127.0.0.1", port))
+        blocker.listen()
+        try:
+            proc = self.spawn("--no-open")
+            displaced = self.wait_ready()
+            self.assertNotEqual(displaced, port, "保留端口被其他程序占用时临时顺延")
+        finally:
+            blocker.close()
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+        self.assertIn(str(port), err, "顺延要在标准错误警告")
+        self.assertEqual(self.reserved_port(), port, "顺延保留原记录")
+
+        proc = self.spawn("--no-open")
+        self.assertEqual(self.wait_ready(), port, "下次无显式端口时再次尝试保留地址")
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+
+        another = free_port()
+        proc = self.spawn("--no-open", "--port", str(another))
+        self.assertEqual(self.wait_ready(), another, "显式端口只影响当次地址")
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+        self.assertEqual(self.reserved_port(), port, "显式端口不改保留记录")
+
+    def test_concurrent_first_starts_share_one_instance(self):
+        a, b = self.spawn("--no-open"), self.spawn("--no-open")
+        self.addCleanup(self.terminate, a)
+        self.addCleanup(self.terminate, b)
+        end = time.monotonic() + 40
+        while time.monotonic() < end and a.poll() is None and b.poll() is None:
+            time.sleep(0.05)
+        exited, running = (a, b) if a.poll() is not None else (b, a)
+        self.assertIsNotNone(exited.poll(), "并发首启后恰好一个调用复用退出")
+        out, err = exited.communicate(timeout=10)
+        self.assertEqual(exited.returncode, 0, out + err)
+        port = self.wait_ready()
+        self.assertIn(f"http://127.0.0.1:{port}/", out, "两个调用得到同一地址")
+        self.assertIsNone(running.poll(), "只创建一个前台实例")
+        found = serve.probe(port)
+        self.assertEqual(found["pid"], running.pid)
+        self.assertEqual(self.reserved_port(), port, "并发首启只创建一份保留端口记录")
+
+    def test_review_cannot_claim_reserved_port_after_exit(self):
+        proc = self.spawn("--no-open")
+        self.addCleanup(self.terminate, proc)
+        port = self.wait_ready()
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+        claim = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), str(self.review_dir),
+                                "--claim-port", str(port), "--no-open", "--port", str(free_port())],
+                               capture_output=True, text=True, timeout=30)
+        self.assertEqual(claim.returncode, 2, claim.stdout + claim.stderr)
+        self.assertIn(str(port), claim.stderr)
+        self.assertEqual(ledger.get(self.rid)["port"], None, "认领失败且原有登记不变")
+        self.assertIsNone(serve.read_status(self.review_dir), "不拉起审阅服务")
+
+    def test_update_lock_is_shared_while_home_runs(self):
+        proc = self.spawn("--no-open")
+        self.addCleanup(self.terminate, proc)
+        self.wait_ready()
+        with self.assertRaises(BlockingIOError, msg="首页运行期间沿用服务的更新锁，技能更新可识别该占用"):
+            with serve.fsutil.flocked(ledger.update_lock_path(), exclusive=True, nonblocking=True):
+                pass
+        out, err = self.terminate(proc)
+        self.assertEqual(proc.returncode, 0, out + err)
+        with serve.fsutil.flocked(ledger.update_lock_path(), exclusive=True, nonblocking=True):
+            pass   # 退出后更新器可以拿到排他锁
+
+    def test_help_lists_overview_and_missing_dir_still_fails(self):
+        help_out = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "--help"],
+                                  capture_output=True, text=True, timeout=30)
+        self.assertEqual(help_out.returncode, 0, help_out.stdout + help_out.stderr)
+        self.assertIn("overview", help_out.stdout, "新版 --help 列出 overview 子命令")
+        missing = subprocess.run([sys.executable, str(SCRIPTS / "serve.py")],
+                                 capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(missing.returncode, 0, "缺目录参数仍是缺参报错并非零退出")
+        self.assertTrue(missing.stderr.strip())
+
+
 class LedgerTests(unittest.TestCase):
     """审阅台账、审阅名、专属端口。每个用例用自己的台账目录。"""
 
@@ -3070,6 +3520,58 @@ def run_notes_cli(*args: str) -> str:
     assert err.getvalue() == "", "命令不该往 stderr 写东西"
     assert code == 0, code
     return buf.getvalue()
+
+
+class LedgerOverviewHomeTests(unittest.TestCase):
+    """总览首页宿主：保留端口记录独立于审阅条目，分配与认领共用台账写锁。"""
+
+    def setUp(self):
+        self._home = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+
+    def tearDown(self):
+        os.environ["AE_HOME"] = self._home
+
+    def test_reserved_port_recorded_outside_review_entries(self):
+        port = ledger.assign_overview_port(is_free=lambda p: p % 2 == 1)
+        record = json.loads((ledger.home() / ledger.OVERVIEW_PORT_FILE).read_text())
+        self.assertEqual(record, {"version": 1, "port": port})
+        self.assertEqual(ledger.entries(), {}, "保留端口不登记成审阅")
+        self.assertEqual(ledger.overview_reserved_port(), port)
+        self.assertEqual(ledger.assign_overview_port(), port, "已有记录：直接复用")
+
+    def test_reserved_port_assignment_avoids_review_owned_ports(self):
+        d = tmpdir()
+        rid = "a" * 16
+        ledger.register(rid, d)
+        ledger.claim_port(rid, d, 8765)
+        self.assertEqual(ledger.assign_overview_port(), 8766, "首页选端口时避开已登记的审阅专属端口")
+
+    def test_review_auto_assign_and_claim_respect_reserved_port(self):
+        reserved = ledger.assign_overview_port()
+        d, other = tmpdir(), tmpdir()
+        rid = "b" * 16
+        self.assertNotEqual(ledger.assign_port(rid, d), reserved, "审阅自动分配避开首页保留端口")
+        with self.assertRaises(ledger.LedgerError):
+            ledger.claim_port("c" * 16, other, reserved)
+        self.assertEqual(ledger.get("c" * 16), None, "认领失败不落半个条目（原有登记不变）")
+
+    def test_conflicting_reserved_port_defers_and_keeps_both_records(self):
+        d = tmpdir()
+        rid = "d" * 16
+        ledger.register(rid, d)
+        ledger.claim_port(rid, d, 8765)   # 旧副本已把 8765 登记成审阅专属端口
+        f = ledger.home() / ledger.OVERVIEW_PORT_FILE
+        f.write_text(json.dumps({"version": 1, "port": 8765}) + "\n", encoding="utf-8")
+        self.assertEqual(ledger.overview_reserved_port(), 8765)
+        self.assertIsNone(ledger.assign_overview_port(), "保留端口与审阅专属端口冲突：当次顺延（返回 None）")
+        self.assertEqual(json.loads(f.read_text()), {"version": 1, "port": 8765}, "双方记录都保留")
+        self.assertEqual(ledger.get(rid)["port"], 8765)
+
+    def test_others_ports_includes_reserved_port_for_trailing(self):
+        reserved = ledger.assign_overview_port()
+        avoid = serve._others_ports("e" * 16)
+        self.assertEqual(avoid[reserved], ledger.HOME_HOST_ID, "顺延避让的清单里带首页保留端口")
 
 
 class ShowBaselineTests(unittest.TestCase):
