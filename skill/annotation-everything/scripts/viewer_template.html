@@ -3830,7 +3830,9 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE){po
 (async function init(){
   applyLocale();
   if(OVERVIEW_HOME){
-    // 总览首页：只有总览视图。没有对照页，就没有批注轮询、保存通道与「返回当前审阅」；列表自动刷新沿用 overviewRoute 里的定时器
+    // 总览首页：只有总览视图。没有对照页，就没有批注轮询、保存通道与「返回当前审阅」；列表自动刷新沿用 overviewRoute 里的定时器。
+    // 没有可返回的对照页，语言切换必须留在总览视图内：把状态栏的语言选择器搬进总览顶栏（#157）
+    document.querySelector(".overview-top").appendChild($("localeLabel"));
     const scope=$("overviewScope"),workspaceOption=scope.querySelector('option[value="workspace"]');
     scope.value="all";
     if(workspaceOption)workspaceOption.hidden=true;
