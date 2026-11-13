@@ -110,6 +110,7 @@ class DeliveryTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             worker.join(2)
+            self.assertTrue(server.wait_for_hooks(5), "hook workers must finish before removing the review fixture")
         return server, close
 
     def submit(self, server):
