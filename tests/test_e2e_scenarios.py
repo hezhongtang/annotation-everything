@@ -62,6 +62,7 @@ FULL_ORDER = (
     "docx-review",
     "server-mode",
     "poll-repaint",
+    "overview-home",
 )
 
 # 旧局部参数的原定目标：只跑各自的场景组，不再附带安装交付与语言控件。

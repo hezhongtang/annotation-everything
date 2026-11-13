@@ -33,6 +33,8 @@ import os
 import platform
 import shutil
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -1171,6 +1173,329 @@ def review_overview_stop_scope_checks(browser, tmp: Path):
         ctx.close()
         for process in services.values():
             stop(process)
+
+
+class DesktopStub:
+    """合成 Codex 桌面 IPC 套接字：只回答 initialize 与 owner 探测，让 wakeup.py bind 走真实绑定路径。
+
+    与单元测试里的 Desktop 夹具同一套帧协议（4 字节小端长度 + JSON）；绑定落盘后即关闭，
+    展示验证只读绑定文件，不再依赖这个进程。
+    """
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.listener.bind(str(self.path))
+        self.path.chmod(0o600)
+        self.listener.listen()
+        self.listener.settimeout(0.1)
+        self.stopped = threading.Event()
+        self.worker = threading.Thread(target=self.run, daemon=True)
+        self.worker.start()
+
+    def run(self):
+        while not self.stopped.is_set():
+            try:
+                client, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            with client:
+                def exact(n):
+                    data = b""
+                    while len(data) < n:
+                        part = client.recv(n - len(data))
+                        if not part:
+                            return None
+                        data += part
+                    return data
+                while True:
+                    head = exact(4)
+                    if not head:
+                        break
+                    request = json.loads(exact(struct.unpack("<I", head)[0]))
+                    result = {"clientId": "synthetic-desktop"} if request["method"] == "initialize" else {}
+                    reply = {"type": "response", "requestId": request["requestId"], "resultType": "success",
+                             "result": result, "handledByClientId": "synthetic-owner"}
+                    raw = json.dumps(reply).encode()
+                    client.sendall(struct.pack("<I", len(raw)) + raw)
+
+    def close(self):
+        self.stopped.set()
+        self.worker.join(2)
+        self.listener.close()
+
+
+def overview_home_checks(browser, tmp: Path):
+    """总览首页（issue #160）：临时台账 + 合成审阅，零运行打开、默认与 --under 范围、
+    分组与排序、无返回按钮与顶栏停止、视图内双语、失效清理命令、新标签页打开对照页、
+    接收提示与等待命令、事件绑定展示、过滤后的批量停止与全部服务回收。"""
+    workspace, outside_root = tmp / "overview-home-ws", tmp / "overview-home-out"
+    outside_root.mkdir()
+    running, stopped_a, stopped_b, archived_dir, invalid_dir, event_dir, outside = [
+        workspace / name for name in ("running", "stopped-a", "stopped-b", "archived", "invalid", "event")
+    ] + [outside_root / "outside"]
+    directories = (running, stopped_a, stopped_b, archived_dir, invalid_dir, event_dir, outside)
+    for directory in directories:
+        build(directory, name="首页样例 " + directory.name, locale="zh-CN")
+    ids = {directory: json.loads((directory / "review.json").read_text())["reviewId"] for directory in directories}
+    shutil.rmtree(invalid_dir)   # 台账登记仍在、目录已消失：进入失效分组
+    ledger_path = Path(os.environ["AE_HOME"]) / "reviews.json"
+    status_file = Path(os.environ["AE_HOME"]) / ".overview-home-status.json"
+    thread = "16016016-0160-4160-8160-160160160160"
+    desktop = DesktopStub(tmp / "overview-home-desktop.sock")
+    subprocess.run([sys.executable, str(SCRIPTS / "wakeup.py"), "bind", str(event_dir),
+                    "--adapter", "codex-desktop", "--thread", thread, "--socket", str(desktop.path)],
+                   check=True, capture_output=True)
+    desktop.close()   # 绑定已落盘：接收展示只读绑定文件，桌面进程不再参与
+
+    homes: list[subprocess.Popen] = []
+
+    def start_home(*extra) -> int:
+        """真实 serve.py overview 子进程：运行状态文件出现且端口一致才算就绪。"""
+        port = free_port()
+        proc = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), "overview", "--no-open",
+                                 "--port", str(port), *extra],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        CLEANUP.add(proc)
+        end = time.monotonic() + 15
+        while time.monotonic() < end and proc.poll() is None:
+            if status_file.exists():
+                try:
+                    if json.loads(status_file.read_text()).get("port") == port:
+                        homes.append(proc)
+                        return port
+                except (OSError, ValueError):
+                    pass
+            time.sleep(0.05)
+        _, err = stop(proc)
+        raise RuntimeError("总览首页没有就绪：" + (err or ""))
+
+    def stop_home(page):
+        while homes:
+            stop(homes.pop(0))
+        return wait_until(lambda: not status_file.exists(), page, 8,
+                          condition="总览首页退出并清理运行状态")
+
+    def stop_service(ctx, page, directory):
+        """按运行状态文件核对身份后停止审阅服务；HTTP 通道不可用时按 pid 兜底。"""
+        info_path = Path(directory) / ".annotation-server.json"
+        if not info_path.exists():
+            return
+        info = json.loads(info_path.read_text())
+        url = f"http://127.0.0.1:{info['port']}"
+        try:
+            response = ctx.request.post(url + "/api/server/stop", data={},
+                                        headers={"Origin": url, "X-AE-Review": info["reviewId"],
+                                                 "Content-Type": "application/json"})
+        except Exception:
+            response = None
+        if response is not None and response.ok and wait_until(lambda: not info_path.exists(), page, 6,
+                                                              condition="回收审阅服务 " + Path(directory).name):
+            return
+        pid = info.get("pid")
+        if type(pid) is int:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
+            end = time.monotonic() + 6
+            while time.monotonic() < end and info_path.exists():
+                time.sleep(0.05)
+
+    ctx = browser.new_context(viewport={"width": 1440, "height": 1000})
+    services: dict[Path, subprocess.Popen] = {}
+    page = None
+    try:
+        # 已停审阅要有一份带真实批注（最近活动有据可依）：经对照页 UI 写入，再停服务
+        services[stopped_a] = start_server(stopped_a, free_port())
+        note_page = ctx.new_page()
+        note_page.goto(f"http://127.0.0.1:{json.loads((stopped_a / '.annotation-server.json').read_text())['port']}/")
+        wait_mode(note_page, "server")
+        add_note(note_page, "合成批注：总览首页排序样例")
+        ok(wait_until(lambda: "合成批注：总览首页排序样例" in [n["text"] for n in disk_notes(stopped_a)],
+                      note_page, 8, condition="批注写入审阅目录的 notes.json"),
+           "已停样例的批注经对照页真实落盘")
+        stop_service(ctx, note_page, stopped_a)
+        note_page.close()
+        ok(not (stopped_a / ".annotation-server.json").exists(), "已停样例的服务已停")
+
+        # 阶段一：零运行审阅打开默认范围首页
+        port = start_home()
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        ready = wait_dom(page, "() => document.getElementById('overviewList')?.querySelector('[data-review-id]') != null", 10,
+                         condition="零运行审阅时总览首页显示台账列表")
+        ok(ready, "没有审阅服务运行时总览首页也能直接打开")
+        if not ready:
+            return
+        shape = page.evaluate("""() => ({
+            overviewMode: document.body.classList.contains('overview-mode'),
+            backHidden: document.getElementById('overviewBack').hidden,
+            headerGone: !document.querySelector('header') || getComputedStyle(document.querySelector('header')).display === 'none',
+            stopBtnGone: (() => { const b = document.getElementById('stopReviewBtn');
+                return !b || getComputedStyle(b).display === 'none' || b.offsetParent === null; })(),
+            scopeValue: document.getElementById('overviewScope').value,
+            workspaceOptionHidden: document.getElementById('overviewScope')
+                .querySelector('option[value=\"workspace\"]')?.hidden ?? false,
+            title: document.getElementById('overviewTitle').textContent,
+            pickInTop: !!document.querySelector('.overview-top #localePick'),
+            pickVisible: (() => { const p = document.getElementById('localePick'); return !!p && p.offsetParent !== null; })(),
+        })""")
+        ok(shape["overviewMode"] and shape["backHidden"] and shape["headerGone"] and shape["stopBtnGone"],
+           "首页只有总览视图：没有「返回当前审阅」也没有顶栏停止按钮")
+        ok(shape["scopeValue"] == "all" and shape["workspaceOptionHidden"] and shape["title"] == "审阅总览",
+           "默认范围首页显示本机全部（无工作区后缀）：" + shape["title"])
+        ok(shape["pickInTop"] and shape["pickVisible"], "语言选择器留在总览视图内（总览顶栏）")
+        ok(page.locator('[data-overview-group="running"]').count() == 0, "打开首页时没有任何运行中分组")
+        ok(page.locator(f'[data-review-id="{ids[outside]}"]').count() == 1, "默认范围覆盖台账里工作区之外的审阅")
+        stopped_rows = page.locator('[data-overview-group="stopped"] [data-review-id]').evaluate_all(
+            "els => els.map(el => el.dataset.reviewId)")
+        # 带批注的样例有最近活动，必须排在该组最前；从未活动的样例并列时按名称序（stopped-b 在 event/outside 之后）
+        ok(stopped_rows[0] == ids[stopped_a] and stopped_rows.index(ids[stopped_b]) == len(stopped_rows) - 1,
+           "已停分组最近活动在前：带批注的样例排在从未活动的样例之前")
+        page.click(f'[data-review-id="{ids[invalid_dir]}"]')
+        detail = page.inner_text("#overviewDetail")
+        ok(f"serve.py forget {ids[invalid_dir][:8]}" in detail and page.locator("#overviewForgetCopy").count() == 1,
+           "失效登记给出可复制的清理命令文案")
+        page.click(f'[data-review-id="{ids[event_dir]}"]')
+        detail = page.inner_text("#overviewDetail")
+        ok(f"Codex 会话 {thread} 经桌面事件接收提交" in detail and page.locator("#overviewWaitCopy").count() == 0,
+           "桌面事件绑定显示接收方式、harness 与会话，省略认领型等待命令")
+        page.click(f'[data-review-id="{ids[archived_dir]}"]')
+        page.click("#overviewArchive")
+        hidden_hint = wait_dom(page, "() => { const el = document.getElementById('overviewHiddenArchived');"
+                                      " return el != null && !el.hidden; }", 8,
+                               condition="归档后已归档分组默认隐藏")
+        ok(hidden_hint, "总览页内归档后进入已归档分组且默认隐藏")
+        page.click("#overviewExpandArchived")
+        expanded = wait_dom(page, "rid => document.querySelector(`[data-overview-group=\"archived\"]"
+                                  " [data-review-id=\"${rid}\"]`) != null", 8, arg=ids[archived_dir],
+                            condition="展开后显示已归档分组")
+        ok(expanded, "展开提示打开开关并显示已归档分组")
+        services[running] = start_server(running, free_port())
+        page.click("#overviewRefresh")
+        running_row = wait_dom(page, "rid => document.querySelector(`[data-overview-group=\"running\"]"
+                                     " [data-review-id=\"${rid}\"]`) != null", 8, arg=ids[running],
+                               condition="运行中审阅进入运行中分组")
+        ok(running_row, "启动运行中样例后列表出现运行中分组")
+        page.select_option("#localePick", "en")
+        english = wait_dom(page, """() => document.querySelector('[data-overview-group="running"] h2')?.textContent.includes('Running')
+                   && document.querySelector('[data-overview-group="stopped"] h2')?.textContent.includes('Stopped')
+                   && Array.from(document.querySelectorAll('#overviewDetail dt')).some(el => el.textContent === 'Status')""", 8,
+                           condition="英文界面的分组与系统标签重绘")
+        ok(english and "首页样例 " in page.inner_text("#overviewList")
+           and "示例咖啡" in page.inner_text("#overviewDetail"),
+           "中英切换只改系统标签，审阅名称与内容语言不变")
+        page.select_option("#localePick", "zh-CN")
+        ok(wait_dom(page, "() => document.querySelector('[data-overview-group=\"running\"] h2')?.textContent.includes('运行中')", 8,
+                    condition="切回中文后分组标题恢复"), "切回中文后系统标签恢复")
+        ok(stop_home(page), "退出默认范围首页并清理运行状态")
+        page.close()
+
+        # 阶段二：同一临时台账以 --under 启动
+        services[archived_dir] = start_server(archived_dir, free_port())   # 范围内仍在运行的归档审阅
+        services[outside] = start_server(outside, free_port())             # 范围外：批量停止不得触及
+        port = start_home("--under", str(workspace))
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        ready = wait_dom(page, "() => document.getElementById('overviewList')?.querySelector('[data-review-id]') != null", 10,
+                         condition="--under 首页显示过滤后的列表")
+        ok(ready, "--under 重新启动同一台账的总览首页")
+        if not ready:
+            return
+        ok(page.inner_text("#overviewTitle") == "审阅总览 · overview-home-ws",
+           "首页显示启动时确定的 --under 范围：" + page.inner_text("#overviewTitle"))
+        ok(page.locator(f'[data-review-id="{ids[outside]}"]').count() == 0
+           and "首页样例 outside" not in page.inner_text("#overviewList"),
+           "只显示过滤目录内的审阅，范围外审阅不出现")
+        ok(page.locator(f'[data-overview-group="running"] [data-review-id="{ids[running]}"]').count() == 1,
+           "范围内的运行中审阅出现在运行中分组")
+
+        running_url = f"http://127.0.0.1:{json.loads((running / '.annotation-server.json').read_text())['port']}/"
+        page.click(f'[data-review-id="{ids[running]}"]')
+        link = page.locator("#overviewDetail a.overview-open")
+        ok(link.count() == 1, "运行中审阅详情提供打开对照页的入口")
+        with page.expect_popup() as running_popup:
+            link.click()
+        opened = running_popup.value
+        ok(wait_until(lambda: opened.url == running_url, page, 10)
+           and opened.evaluate("window.opener === null"), "点运行中的审阅在新标签页打开其对照页")
+        ok(wait_mode(opened, "server"), "新标签页是运行中审阅的服务模式对照页")
+        opened.close()
+
+        page.click(f'[data-review-id="{ids[stopped_b]}"]')
+        with page.expect_response(lambda r: r.url.endswith("/api/overview/start")
+                                  and r.request.method == "POST") as start_response, \
+                page.expect_popup() as start_popup:
+            page.click("#overviewStart")
+        start_body = start_response.value.json()
+        started = start_popup.value
+        ok(wait_until(lambda: started.url == start_body.get("url"), page, 20,
+                      condition="启动并打开后新标签页落在启动结果给的地址")
+           and wait_mode(started, "server"), "点已停的审阅「启动并打开」在新标签页打开启动结果地址的对照页")
+        owned_after = json.loads(ledger_path.read_text())["reviews"][ids[stopped_b]]["port"]
+        ok(start_body.get("url") == f"http://127.0.0.1:{owned_after}/",
+           "启动地址就是台账登记的专属端口")
+        started.close()
+        note_visible = wait_dom(page, "() => document.getElementById('overviewStartNote')?.textContent"
+                                      ".includes('暂无接收方式')", 8,
+                                condition="启动结果显示需要接收方的提示")
+        wait_text = page.locator("#overviewDetail .overview-wait .overview-command").first.inner_text() \
+            if page.locator("#overviewDetail .overview-wait").count() else ""
+        ok(note_visible and f"notes.py wait {ids[stopped_b][:8]}" in wait_text
+           and page.locator("#overviewWaitCopy").count() == 1,
+           "无接收方的审阅启动后立即提示，并提供可复制的 notes.py wait 命令")
+        stop_service(ctx, page, stopped_b)   # 演示用的服务收掉，让批量停止的目标回到 2 份
+        page.click("#overviewRefresh")
+        ok(wait_dom(page, "rid => document.querySelector(`[data-overview-group=\"running\"]"
+                          " [data-review-id=\"${rid}\"]`) === null", 8, arg=ids[stopped_b],
+           condition="演示服务停止后回到已停分组"), "「启动并打开」的样例服务回收后列表回到已停分组")
+
+        requests: list[tuple[str, str]] = []
+
+        def observe_stop(request):
+            if request.method == "POST" and request.url.endswith("/api/overview/stop"):
+                body = request.post_data_json
+                requests.append((body["reviewId"], body["scope"]))
+
+        page.on("request", observe_stop)
+        button = page.locator("#overviewStopAll")
+        ok(wait_dom(page, "() => document.getElementById('overviewStopAll').textContent.includes('（2 份）')", 8,
+                    condition="批量停止入口计入运行中与隐藏的归档运行中审阅"),
+           "批量停止入口只计范围内的 2 份运行目标（含归档运行中）")
+        messages = []
+
+        def confirm(dialog):
+            messages.append(dialog.message)
+            dialog.accept()
+
+        page.once("dialog", confirm)
+        button.click()
+        ok("2 份" in messages[0] and "已归档" in messages[0] and ids[outside] not in messages[0],
+           "确认说明目标数量与归档规则，范围外审阅不在确认里")
+        stopped_batch = wait_dom(page, "s => document.getElementById('overviewBatchStatus').dataset.state === 'stopped'",
+                                 20, condition="批量停止全部完成")
+        ok(stopped_batch and "2/2 份已停止" in page.inner_text("#overviewBatchStatus"),
+           "批量停止结果只包含范围内的目标：" + page.inner_text("#overviewBatchStatus"))
+        targets = page.locator("#overviewBatchTargets [data-batch-review]").evaluate_all(
+            "els => els.map(el => el.dataset.batchReview)")
+        ok(sorted(targets) == sorted([ids[running], ids[archived_dir]])
+           and sorted(requests) == sorted([(ids[running], "all"), (ids[archived_dir], "all")]),
+           "停止请求与结果逐项只含范围内的运行中与归档运行中审阅")
+        ok(wait_until(lambda: services[running].poll() is not None
+                      and services[archived_dir].poll() is not None, page, 8,
+                      condition="批量停止后目标服务进程实际退出")
+           and services[outside].poll() is None and page.is_visible("#overviewBatch"),
+           "范围外审阅服务继续运行，首页仍可查看停止结果")
+        ok(stop_home(page), "--under 首页退出并清理运行状态")
+        page.close()
+    finally:
+        for directory in directories:
+            stop_service(ctx, page, directory)
+        while homes:
+            stop(homes.pop(0))
+        ctx.close()
+        desktop.close()
 
 
 def skill_search_checks(browser, tmp: Path):
@@ -6393,6 +6718,7 @@ SCENARIO_RUNNERS = {
     "docx-review": docx_review_checks,
     "server-mode": server_mode_checks,
     "poll-repaint": poll_repaint_checks,
+    "overview-home": overview_home_checks,
 }
 
 SCENARIO_STATUS_LABELS = {"passed": "通过", "failed": "失败", "error": "错误",
