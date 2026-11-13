@@ -1139,9 +1139,13 @@ def check_report(report_path: Path, script_path: Path | None = None,
     loc = i18n.resolve_locale(locale, system_languages=i18n.system_languages())
     c = Checks(loc)
     import docx_review
+    import pptx_report
     if docx_review.is_word_like(report_path):
         # 报告检查针对生成的逐页 HTML；Word 文档直接审阅时不按文本解码，明确拒绝
         raise UsageError(t(loc, "check.docxUnsupported", path=report_path))
+    if pptx_report.is_pptx(report_path) or pptx_report.is_ppt(report_path):
+        # PPT 同理：直接审阅走 build_viewer，本入口不按文本解码演示文稿
+        raise UsageError(t(loc, "check.pptxUnsupported", path=report_path))
     try:
         report_bytes = report_path.read_bytes()
     except OSError as exc:

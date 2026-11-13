@@ -14,8 +14,9 @@
 
 往返范围（与 `references/formats.md` 一致）：页码与页标题、对象、正文（含多行）、状态、
 点与框的坐标、引用与引用来源、处理说明、风格优化范围、位置线索、DOCX 段落定位（v1）、
-本条指定的技能、另一侧对应句，以及开头的常驻技能一行。痕迹、孤立页警告、页面键不一致警告、
-「常驻·范围」这类来源标签不进交换格式（它们在 `notes.py show` 的阅读输出里）。
+PPT 幻灯片定位（v1）、本条指定的技能、另一侧对应句，以及开头的常驻技能一行。
+痕迹、孤立页警告、页面键不一致警告、「常驻·范围」这类来源标签不进交换格式（它们在
+`notes.py show` 的阅读输出里）。
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import notes_store as store
+import pptx_reader
 
 FORMAT_VERSION = 1
 LANGS = ("zh-CN", "en")
@@ -67,6 +69,19 @@ DOCX_VIA_ZH = {"selection": "选区", "text": "文本匹配", "point": "标注�
 DOCX_VIA_EN = {"selection": "selection", "text": "text match", "point": "mark"}
 _PID = r"([0-9A-Fa-f]{1,8}|-)"
 _DG = r"([0-9a-f]{12})"
+
+# PPT 幻灯片定位一行（只有 PPT 审阅的批注才有；与 DOCX 段落定位同层并列）。
+# 存储值 → 标签：定位种类与定位来源；元素目标只写身份（key、形状标识、类型、层序、证据摘要、
+# 只读限制），不写元素名——名称会变、不是身份，重定位时刷新成当前版本，与 DOCX 段落定位
+# 不携带段落文本同理。更高版本的定位只写版本号，完整内容在 JSON 备份里。
+PPTX_KIND_ZH = {"page": "整页", "elements": "元素", "text": "文本", "point": "点", "region": "区域"}
+PPTX_VIA_ZH = {"thumb": "页缩略图", "click": "点选", "selection": "选区", "text": "文本匹配",
+               "point": "标注点", "region": "框选"}
+PPTX_VIA_EN = {"thumb": "thumbnail", "click": "click", "selection": "selection", "text": "text match",
+               "point": "point", "region": "region"}
+PPTX_RO_ZH = {"text": "文本", "geometry": "几何", "style": "样式"}
+PPTX_RO_ZH_REV = {v: k for k, v in PPTX_RO_ZH.items()}
+_PPTX_FP = r"([0-9a-f]{16,64})"
 
 # 对象为空时的固定字面量：文法的一部分，两种语言一样，导入时原样成为 target（与 0.3 以来一致）
 UNSET_TARGET = "未指定"
@@ -116,6 +131,22 @@ class Grammar:
                 r"(?: · ends in paragraph (\d+) \(paraId " + _PID + r", digest " + _DG + r"\))?"
                 r"(?: · run (\d+))?(?: · source (selection|text match|mark))?"
                 r"(?: · fingerprint ([0-9a-f]{16,64}))?( · paragraph changed)?$")
+            self.pptx = re.compile(r"^\s+PPT location: v(\d+)(.*)$")
+            self.pptx_el = re.compile(
+                r"([\w~][^\s(,;]*) \(id ([^,()]+), ([A-Za-z]+), z (\d+), digest ([0-9a-f]{64})"
+                r"(?:, read-only ([a-z]+(?:, [a-z]+)*))?\)")
+            self.pptx_body = re.compile(
+                r"^ (?P<kind>page|elements|text|point|region) · slide (?P<slide>\S+)"
+                r"(?: · targets (?P<targets>.+?))?"
+                r"(?: · paragraph (?P<para>\d+) \(digest (?P<paraDigest>[0-9a-f]{64})\))?"
+                r"(?: · chars (?P<start>\d+)–(?P<end>\d+))?"
+                r"(?: · runs (?P<runs>\d+–\d+(?:, \d+–\d+)*))?"
+                r"(?: · point x (?P<px>[\d.]+)%, y (?P<py>[\d.]+)%)?"
+                r"(?: · region x (?P<rx>[\d.]+)%, y (?P<ry>[\d.]+)%, width (?P<rw>[\d.]+)%, height (?P<rh>[\d.]+)%)?"
+                r" · source (?P<via>thumbnail|click|selection|text match|point|region)"
+                r"(?: · fingerprint (?P<fp>" + _PPTX_FP + r"))?"
+                r"(?P<changed> · text changed)?"
+                r"(?: · quote (?P<quote>.*))?$")
             self.always = re.compile(r"^Persistent skills \([^)]*\): (.+)$", re.M)
             self.always_item = re.compile(r"^(.+?) \((All notes|Report|Script|Style)\)$")
             self.always_sep = ", "
@@ -137,6 +168,22 @@ class Grammar:
                 r"(?: · 止于段落 (\d+)（paraId " + _PID + r"，摘要 " + _DG + r"）)?"
                 r"(?: · 运行 (\d+))?(?: · 来源 (选区|文本匹配|标注处))?"
                 r"(?: · 指纹 ([0-9a-f]{16,64}))?( · 段落已改动)?$")
+            self.pptx = re.compile(r"^\s+PPT 定位：v(\d+)(.*)$")
+            self.pptx_el = re.compile(
+                r"([\w~][^\s（、]*)（标识 ([^，()]+)，([A-Za-z]+)，第 (\d+) 层，摘要 ([0-9a-f]{64})"
+                r"(?:，只读 ([^）]+))?" + r"）")
+            self.pptx_body = re.compile(
+                r"^ (?P<kind>整页|元素|文本|点|区域) · 幻灯片 (?P<slide>\S+)"
+                r"(?: · 目标 (?P<targets>.+?))?"
+                r"(?: · 段落 (?P<para>\d+)（摘要 (?P<paraDigest>[0-9a-f]{64})）)?"
+                r"(?: · 字符 (?P<start>\d+)–(?P<end>\d+))?"
+                r"(?: · 运行 (?P<runs>\d+–\d+(?:、\d+–\d+)*))?"
+                r"(?: · 点 x (?P<px>[\d.]+)%，y (?P<py>[\d.]+)%)?"
+                r"(?: · 区域 x (?P<rx>[\d.]+)%，y (?P<ry>[\d.]+)%，宽 (?P<rw>[\d.]+)%，高 (?P<rh>[\d.]+)%)?"
+                r" · 来源 (?P<via>页缩略图|点选|选区|文本匹配|标注点|框选)"
+                r"(?: · 指纹 (?P<fp>" + _PPTX_FP + r"))?"
+                r"(?P<changed> · 文字已改动)?"
+                r"(?: · 引用 (?P<quote>.*))?$")
             self.always = re.compile(r"^常驻技能（[^）]*）：(.+)$", re.M)
             self.always_item = re.compile(r"^(.+?)（(全部批注|全部|报告|讲稿|风格优化)）$")
             self.always_sep = "、"
@@ -197,6 +244,17 @@ class Grammar:
                 if got:
                     cur["docx"] = got
                 continue
+            if m := self.pptx.match(line):
+                version = int(m.group(1))
+                got = self._pptx_in(version, m.group(2))
+                if got:
+                    cur["pptx"] = got
+                elif version > pptx_reader.ANCHOR_VERSION:
+                    # 未知的新版本定位：保留版本信息，不当作无定位静默导入（与存储层高版本
+                    # 保留语义一致）。md 行只带版本号，完整内容在 JSON 备份里；show 据此列出
+                    # 「不可用于回写、请升级工具」的提示。读不懂的其他整行仍略过，不并进正文。
+                    cur["pptx"] = {"v": version}
+                continue
             if m := self.skills.match(line):
                 body = re.sub(r"(——处理这条前先调用这些技能|（处理这条前先调用这些技能）)$", "", m.group(1).strip())
                 own = [x for x in re.split(r"[,，、;；]+", body) if not re.search(r"（常驻·[^）]*）$", x.strip())]
@@ -235,6 +293,51 @@ class Grammar:
         if m.group(10):
             out["run"] = int(m.group(10))
         if m.group(13):
+            out["changed"] = True
+        return out
+
+    def _pptx_in(self, version: int, body: str) -> dict[str, Any] | None:
+        m = self.pptx_body.match(body) if version == 1 else None
+        if not m:
+            return None
+        zh = self.lang != "en"
+        kinds = {v: k for k, v in PPTX_KIND_ZH.items()} if zh else {k: k for k in PPTX_KIND_ZH}
+        vias = {v: k for k, v in (PPTX_VIA_EN if self.lang == "en" else PPTX_VIA_ZH).items()}
+        out: dict[str, Any] = {"v": 1, "kind": kinds[m.group("kind")], "slide": m.group("slide")}
+        raw = m.group("targets")
+        if raw:
+            els = []
+            for em in self.pptx_el.finditer(raw):
+                el: dict[str, Any] = {"key": em.group(1), "id": em.group(2), "name": "", "kind": em.group(3),
+                                      "z": int(em.group(4)), "digest": em.group(5)}
+                if em.group(6):
+                    ro_rev = {} if self.lang == "en" else PPTX_RO_ZH_REV
+                    el["ro"] = [ro_rev.get(x.strip(), x.strip())
+                                for x in em.group(6).split("," if self.lang == "en" else "、") if x.strip()]
+                els.append(el)
+            out["elements"] = els
+        if m.group("para") is not None:
+            text: dict[str, Any] = {"para": int(m.group("para")), "paraDigest": m.group("paraDigest"),
+                                    "quote": m.group("quote") or ""}
+            if m.group("start") is not None:
+                text["start"], text["end"] = int(m.group("start")), int(m.group("end"))
+                runs = []
+                for piece in (m.group("runs") or "").split("," if self.lang == "en" else "、"):
+                    if "–" in piece:
+                        s, e = piece.split("–", 1)
+                        runs.append({"start": int(s), "end": int(e)})
+                text["runs"] = runs
+            out["text"] = text
+        if m.group("px") is not None:
+            out["point"] = {"x": round(float(m.group("px")) / 100, 4), "y": round(float(m.group("py")) / 100, 4)}
+        if m.group("rx") is not None:
+            out["region"] = {k: round(float(m.group(g)) / 100, 4)
+                             for k, g in (("x", "rx"), ("y", "ry"), ("w", "rw"), ("h", "rh"))}
+        if m.group("via"):
+            out["via"] = vias[m.group("via")]
+        if m.group("fp"):
+            out["fp"] = m.group("fp")
+        if m.group("changed"):
             out["changed"] = True
         return out
 
@@ -350,6 +453,61 @@ class Grammar:
         if a.get("changed"):
             parts.append("paragraph changed" if en else "段落已改动")
         return lead + " · ".join(parts)
+
+    def pptx_line(self, a: dict[str, Any]) -> str:
+        """PPT 幻灯片定位：v1 逐项写出（可还原）；更高版本只写版本号。
+        元素目标只写身份不写名称（名称会变、不是身份，重定位时刷新），引用原文放行尾。"""
+        en = self.lang == "en"
+        lead = "   PPT location: " if en else "   PPT 定位："
+        if a.get("v") != 1 or not isinstance(a.get("slide"), str) or not a.get("slide"):
+            return lead + (f"v{a.get('v')} · newer than this tool supports; the JSON backup keeps it in full" if en
+                           else f"v{a.get('v')} · 高于本工具支持的版本，完整内容见 JSON 备份")
+        parts = [f"v1 {a['kind'] if en else PPTX_KIND_ZH.get(a['kind'], a['kind'])}",
+                 ("slide " if en else "幻灯片 ") + str(a["slide"])]
+        els = a.get("elements") or []
+        if els:
+            items = []
+            for e in els:
+                body = (f"{e.get('key')} (id {e.get('id')}, {e.get('kind')}, z {e.get('z', 0)},"
+                        f" digest {e.get('digest')}" if en else
+                        f"{e.get('key')}（标识 {e.get('id')}，{e.get('kind')}，第 {e.get('z', 0)} 层，"
+                        f"摘要 {e.get('digest')}")
+                if e.get("ro"):
+                    ro = (", " if en else "、").join(x if en else PPTX_RO_ZH.get(x, x) for x in e["ro"])
+                    body += (f", read-only {ro}" if en else f"，只读 {ro}")
+                items.append(body + (")" if en else "）"))
+            parts.append(("targets " if en else "目标 ") + ("; " if en else "、").join(items))
+        text = a.get("text") if isinstance(a.get("text"), dict) else None
+        if text is not None:
+            parts.append((f"paragraph {text.get('para', 0)} (digest {text.get('paraDigest', '')})" if en
+                          else f"段落 {text.get('para', 0)}（摘要 {text.get('paraDigest', '')}）"))
+            if text.get("start") is not None and text.get("end") is not None:
+                parts.append(("chars " if en else "字符 ") + f"{text['start']}–{text['end']}")
+                runs = [r for r in (text.get("runs") or []) if isinstance(r, dict)]
+                if runs:
+                    joined = (", " if en else "、").join(f"{r.get('start', 0)}–{r.get('end', 0)}" for r in runs)
+                    parts.append(("runs " if en else "运行 ") + joined)
+        if isinstance(a.get("point"), dict):
+            p = a["point"]
+            px, py = (format(round(p.get(k, 0) * 100, 2), ".2f").rstrip("0").rstrip(".")
+                      for k in ("x", "y"))
+            parts.append(f"point x {px}%, y {py}%" if en else f"点 x {px}%，y {py}%")
+        if isinstance(a.get("region"), dict):
+            rg = a["region"]
+            vals = {k: format(round(rg.get(k, 0) * 100, 2), ".2f").rstrip("0").rstrip(".")
+                    for k in ("x", "y", "w", "h")}
+            parts.append((f"region x {vals['x']}%, y {vals['y']}%, width {vals['w']}%, height {vals['h']}%" if en
+                          else f"区域 x {vals['x']}%，y {vals['y']}%，宽 {vals['w']}%，高 {vals['h']}%"))
+        via = str(a.get("via"))
+        parts.append(("source " if en else "来源 ") + (PPTX_VIA_EN if en else PPTX_VIA_ZH).get(via, via))
+        if a.get("fp"):
+            parts.append(("fingerprint " if en else "指纹 ") + str(a["fp"]))
+        if a.get("changed"):
+            parts.append("text changed" if en else "文字已改动")
+        line = lead + " · ".join(parts)
+        if text is not None and text.get("quote"):
+            line += (" · quote " if en else " · 引用 ") + _one_line(text["quote"])
+        return line
 
     def skills_line(self, skills: list[str]) -> str:
         sep = ", " if self.lang == "en" else "、"
@@ -490,6 +648,8 @@ def render(notes: list[dict[str, Any]], *, title: str, page_titles: dict[int, st
                 lines.append(g.anchor_line(str(n["anchor"])))
             if isinstance(n.get("docx"), dict):
                 lines.append(g.docx_line(n["docx"]))
+            if isinstance(n.get("pptx"), dict):
+                lines.append(g.pptx_line(n["pptx"]))
             if n.get("skills"):
                 lines.append(g.skills_line(list(n["skills"])))
             pr = n.get("pair") if isinstance(n.get("pair"), dict) else None

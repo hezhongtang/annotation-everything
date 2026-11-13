@@ -610,7 +610,8 @@ class OfflineHintTests(unittest.TestCase):
         declared |= set(re.findall(r"__([A-Z_]+)__", source))
         used = set(re.findall(r"\b([A-Z][A-Z0-9_]{2,})\b", source))
         host = {"JSON", "CSS", "URL", "DOM", "HTML", "HTTP", "GET", "POST", "PATCH",
-                "DELETE", "SELECT", "INPUT", "TEXTAREA", "CJK", "CSP", "ROOTFS", "API"}
+                "DELETE", "SELECT", "INPUT", "TEXTAREA", "CJK", "CSP", "ROOTFS", "API",
+                "PPT"}   # PPT 是格式名，只出现在注释与样式字符串里；页面常量是已声明的 PPTX
         self.assertEqual(sorted(used - declared - host), [],
                          "页面里用了没声明的常量，跑起来会是 ReferenceError")
 

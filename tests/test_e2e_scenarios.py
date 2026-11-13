@@ -58,6 +58,7 @@ FULL_ORDER = (
     "review-overview-stop",
     "review-overview-stop-scope",
     "css-fidelity",
+    "pptx-review",
     "docx-review",
     "server-mode",
     "poll-repaint",

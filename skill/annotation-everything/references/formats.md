@@ -84,6 +84,34 @@ python3 $S/build_viewer.py --report 合同.docx --out 合同-review --name "采�
 
 `review.json` 里 `format` 为 `{"report": "docx", "version": 1}`。版本高于当前安装能处理的版本时，`--rebuild`、`serve.py` 和 `notes.py` 都会明确报错，不按普通文本读取。旧审阅没有 `format` 字段，仍按逐页 HTML 处理。
 
+## PPTX（直接审阅与白名单回写）
+
+`--report` 直接接受 `.pptx`；一张幻灯片生成一页对照页，页面保留原始尺寸、方向与顺序。幻灯片按本机 LibreOffice（`soffice`）+ Poppler（`pdftoppm`）渲染成图：macOS 安装 LibreOffice.app、Linux 安装 `libreoffice` 与 `poppler-utils` 后即可构建，工具缺失、转换失败、页数不符或输出为空时构建明确报错，不自动下载安装，也不把文字预览冒充视觉审阅。旧版二进制 `.ppt`（以及 `.pptm`、`.potx`、`.ppsx`）不受支持，先在 PowerPoint/WPS 中另存为 `.pptx`。字体核查在转换前后各做一次：PPTX 转图前先运行 `python3 $S/check_pptx_fonts.py 原始.pptx`，转出 PDF 后再加 `--pdf 转换后.pdf` 对照字体证据；逐页视觉核验仍不可省略，字体名称一致也不能证明逐字形渲染正确。
+
+在幻灯片下方的「元素文本」区拖选普通文本，批注保留元素身份、段落和字符偏移；画布上的元素点选、标点和框选保持可用。元素文本区按内容排版，幻灯片的视觉核对以渲染图为准。
+
+**文本与备注回写**：`python3 $S/pptx_edit.py apply 审阅目录 --batch N`（或重复 `--id ID`）回写未处理的报告侧快捷替换／删除与讲稿侧已有备注修改。报告侧按批注的幻灯片定位（幻灯片键 + 元素身份 + 逻辑段落 + 码点偏移）落到具体 `a:t`，跨 run 选区保留未触及文本及其属性；讲稿侧只在未使用外部讲稿时回写已有备注部件，按引用原文唯一命中定位。只重写目标幻灯片/备注部件，其余部件与 ZIP 元数据按原字节保留；先保存 0600 二进制备份（`.snapshots/batch-N/pptx-writeback/`），再经临时文件原子替换，写后重开核对全部成员 CRC 与文本模型。写前拒绝 PowerPoint 锁文件（`~$`）与源指纹变化；`--dry-run` 只预演；`--output 新路径` 写到尚不存在的新文件；回写不改批注状态，成功后须重建对照页并重新渲染受影响页面核对。
+
+**几何与样式回写（白名单契约 v1）**：Agent 通过 `python3 $S/pptx_edit.py ops 审阅目录 --ops 操作文件` 下发明确的元素级修改；操作文件是 UTF-8 JSON `{"v": 1, "ops": [...]}`，`v` 高于实现支持的版本时整体拒绝。每个操作形如：
+
+```json
+{"v": 1, "ops": [
+  {"id": "move-title", "slide": "s260", "aspect": "geometry", "unit": "normalized",
+   "set": {"x": 0.25, "y": 0.125, "width": 0.5, "height": 0.25},
+   "target": {"key": "e2", "id": "2", "digest": "64位证据摘要"}},
+  {"id": "recolor", "slide": "s260", "aspect": "style", "scope": "fill",
+   "props": {"color": "FF8800"},
+   "target": {"key": "e2", "id": "2", "digest": "64位证据摘要"}}
+]}
+```
+
+- **目标**：`slide` 是持久幻灯片键，`target` 与批注交换的元素目标同一形状（`key`/`id`/`digest` 必填）。回写先按身份找回元素：形状标识在幻灯片内唯一即认，否则用证据摘要消歧；找回失败、证据冲突或重复标识一律拒绝，不猜相近对象。同一元素在一次操作组里只能命中一个操作。
+- **能力边界**：只有读取层能力矩阵声明 `geometryWrite` / `styleWrite` 的元素可写——顶层普通形状（含带显式 `a:xfrm` 的占位符）。组合形状内部、图片、图表、SmartArt、媒体、OLE、含扩展或字段的形状保持只读；没有自身 `a:xfrm`（几何继承自布局）的元素不能写几何。
+- **几何（aspect=geometry）**：`unit` 必须是 `normalized`（归一化坐标，0 到 1，相对幻灯片画布）；其他单位拒绝。`set` 给出 `x`、`y`、`width`、`height` 的非空子集，按画布尺寸换算为源文件 EMU（`a:off` 的 x/y 与 `a:ext` 的 cx/cy），未设置的维度保持原值。位置为负、尺寸非正、超出画布（容差 0.0001）或换算后退化拒绝。
+- **样式（aspect=style）**：`scope` 为 `text`（作用于形状内全部文字 run）、`fill`（形状填充）或 `line`（线条）。允许的属性只有——text：`bold`、`italic`、`underline`（布尔；false 写显式关闭）、`size`（磅，1 到 4000，写为百分之一磅）、`color`（6 位 sRGB 十六进制）；fill：`color`；line：`color`、`width`（磅，大于 0 且不超过 1584，写为 EMU）。写入一律是直接格式：改 run 的 `a:rPr` 属性与填充、`p:spPr` 里的填充、`a:ln` 的宽度与填充；未触及属性、子元素（如 `a:prstDash`）与元素字节原样保留，新元素按 ECMA-376 子元素顺序插入。未知属性、白名单外的子元素结构、超范围的取值与「与当前直接格式完全一致」的空操作都拒绝；无法证明改写安全的结构保持只读，不猜测继承结果。
+- **预检与闭环**：多元素修改逐目标预检，任一目标不安全整组不写入；与文本回写共用同一套指纹、快照与原子替换闭环。结果 JSON 的 `changes` 逐操作列出实际属性变化（`from`/`to`，几何为 EMU，样式为契约单位；`from` 为 `null` 表示原来没有直接格式，文本属性跨 run 不一致时为 `mixed`）。`warnings` 是自动几何提示（新矩形与其他元素重叠、尺寸缩小可能文字溢出、EMU 取整后边缘略出画布），只提示不阻塞；`visual` 恒为 `{"status": "notRun"}`——视觉核验在重建对照页并逐页核对前未执行，不得视为通过。
+- **不支持**：任意 XML 路径或属性写入、图表数据、SmartArt、动画、媒体、母版/主题改写、整份换风格或自动重排；这些请在 PowerPoint/WPS 中完成。
+
 ## 讲稿 Markdown
 
 中文与英文两种页头、字段写法都认，同一份讲稿里还能混用。认哪种写法与界面语言无关：中文界面可以审阅英文讲稿，英文界面可以审阅中文讲稿；标题和正文按原文进页面，不翻译。合成样例见 `fixtures/sample/script.md`（中文）与 `fixtures/sample/script.en.md`（英文），两份结构与内容一一对应。

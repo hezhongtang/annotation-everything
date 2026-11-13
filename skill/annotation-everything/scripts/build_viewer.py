@@ -644,6 +644,58 @@ def resolve_sources(review_dir: Path, manifest: dict | None = None, *, locale: s
     return out
 
 
+def pptx_parts(report: Path, locale: str | None) -> tuple[str, str, list[dict], dict]:
+    """PPTX 报告 → (标题, 样式, 逐页 section, PPTX 元数据)。渲染走本机工具，缺工具或
+    转换失败时报明确的原因，不按文本读，也不静默给空白页。"""
+    import pptx_report
+    try:
+        r = pptx_report.parts(report)
+    except pptx_report.PptxReportError as exc:
+        raise BuildError(diag(locale, f"build.pptx.{exc.code}", path=report, detail=exc.detail)) from None
+    sects = [{"n": pg["n"], "key": pg["key"], "stable": True, "html": pg["html"], "title": pg["title"],
+              "w": pg["w"], "h": pg["h"], "orient": pg["orient"]} for pg in r["pages"]]
+    return r["title"], r["css"], sects, r["meta"]
+
+
+def pptx_warnings(meta: dict, locale: str | None) -> list[str]:
+    """PPT 构建诊断 → 当前语言的提示（渲染证据、字体与未核验项）。"""
+    out = [diag(locale, "build.pptx.rendered", pages=meta["renderer"]["pages"])]
+    if meta.get("fonts", {}).get("warning") or meta.get("fonts", {}).get("installed") != "ok":
+        out.append(diag(locale, "build.pptx.fonts"))
+    unverified = meta.get("unverified") or []
+    if unverified:
+        sep = diag(locale, "build.pptx.listSep")
+        out.append(diag(locale, "build.pptx.unverified", items=sep.join(
+            diag(locale, f"build.pptx.unverified.{k}") for k in unverified)))
+    return out
+
+
+def _pptx_view_element(e: dict) -> dict:
+    """元素模型瘦身到交互与定位所需：身份、几何、能力、文本段落与 run 边界（样式细节不进页面）。"""
+    paragraphs = [{"n": p["index"], "text": p["text"], "digest": p["digest"],
+                   "runs": [{"start": r["start"], "end": r["end"]} for r in p["runs"]]}
+                  for p in e.get("paragraphs") or [] if p.get("text")]
+    out = {"key": e["key"], "id": str(e.get("id") or ""), "name": e.get("name") or "", "kind": e["kind"],
+           "z": e.get("z", 0), "geo": (e.get("geometry") or {}).get("normalized"), "cap": e["capabilities"],
+           "digest": e.get("evidenceDigest") or ""}
+    if paragraphs:
+        out["paragraphs"] = paragraphs
+    return out
+
+
+def pptx_view(meta: dict | None) -> dict | None:
+    """对照页用的 PPTX 摘要：渲染信息、字体证据、未核验项与逐页元素模型（交互与幻灯片定位的依据）。"""
+    import pptx_report
+    if meta is None:
+        return None
+    return {"v": pptx_report.FORMAT_VERSION, "fp": meta.get("fingerprint") or "",
+            "renderer": meta.get("renderer") or {}, "fonts": meta.get("fonts") or {},
+            "slides": [{"key": s["key"], "n": s["n"], "notes": bool(s.get("notes")),
+                        "elements": [_pptx_view_element(e) for e in s.get("elements") or []]}
+                       for s in meta.get("slides", [])],
+            "unverified": meta.get("unverified") or []}
+
+
 def docx_parts(report: Path, locale: str | None) -> tuple[str, str, list[dict], dict, str]:
     """DOCX 报告 → (标题, 样式, 逐页 section, DOCX 元数据, 文档语言)。读不了时报明确的原因，不按文本读。"""
     import docx_review
@@ -703,10 +755,20 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     assets = Assets(asset_root or report.resolve().parent, locale=locale_choice)
     assets.root_fs = None
     import docx_review
+    import pptx_report
     docx_meta: dict | None = None
     docx_paragraphs: list[dict] = []
     docx_lang = ""
-    if docx_review.is_word_like(report):
+    pptx_meta: dict | None = None
+    if pptx_report.is_pptx(report):
+        # PPTX 直接审阅：渲染图负责视觉、结构化元素模型负责定位；不按 UTF-8 文本读
+        doc = ""
+        rtitle, rcss, sects, pptx_meta = pptx_parts(report, locale_choice)
+        for w in pptx_warnings(pptx_meta, locale_choice):
+            assets.warn(w)
+    elif pptx_report.is_ppt(report):
+        raise BuildError(diag(locale_choice, "build.pptx.legacyPpt", path=report))
+    elif docx_review.is_word_like(report):
         # Word 文档直接渲染：不按 UTF-8 文本读，也不过 HTML 资源内联（正文里的 url(...) 只是文字）
         doc = ""
         rtitle, rcss, sects, docx_meta, docx_lang = docx_parts(report, locale_choice)
@@ -729,6 +791,18 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
                                                               locale_choice, str(script))
         except ScriptError as exc:
             raise SystemExit("\n".join(exc.messages)) from None
+    if pptx_meta is not None and script is None:
+        # 无外部讲稿：已有演讲者备注逐页进讲稿侧（两个事实源不混用；讲稿侧快捷修改由 pptx_edit.py 写回备注）
+        notes_by_n = pptx_report.notes_by_slide(report)
+        if notes_by_n:
+            spages = [{"n": pg["n"], "title": esc(pg["title"]), "dur": "", "sec": 0,
+                       "talk": "".join(f"<p>{inline(ln)}</p>"
+                                       for ln in notes_by_n.get(pg["n"], "").splitlines() if ln.strip()),
+                       "next": "", "qa": []} for pg in sects]
+            assets.warn(diag(locale_choice, "build.pptx.notesScript"))
+    elif pptx_meta is not None:
+        # 显式外部讲稿优先：PPT 备注不参与合并，也不是回写目标；讲稿修改走既有文本流程
+        assets.warn(diag(locale_choice, "build.pptx.notesNotMerged"))
     rnums = [s["n"] for s in sects]
     if script is not None:
         snums = [p["n"] for p in spages]
@@ -755,12 +829,14 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         pg = {**p, "key": s["key"], "stable": s["stable"]}
         if docx_meta is not None:   # 每页自己的尺寸与 Word 页码：舞台按它显示，不套 1280×720
             pg.update(w=s["w"], h=s["h"], label=s["label"], orient=s["orient"])
+        if pptx_meta is not None:   # PPT 页同样按幻灯片原始尺寸与方向显示
+            pg.update(w=s["w"], h=s["h"], orient=s["orient"])
         pages.append(pg)
     if no_sections:
         sections: list[list] = []
     elif sections_arg:
         sections = parse_sections_arg(sections_arg, locale=locale_choice)
-    elif docx_meta is not None:
+    elif docx_meta is not None or pptx_meta is not None:
         sections = []
     else:
         sections = infer_sections(doc, sects)
@@ -803,7 +879,8 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     ns = file_label(review_name, rid)
     image_pages = sum(bool(re.search(r"<img\b", s["html"], re.I)) for s in sects)
     skill_context = {"report": report.name, "script": script.name if script else "",
-                     "kind": "Word 文档" if docx_meta is not None else
+                     "kind": "PPT 幻灯片" if pptx_meta is not None else
+                     "Word 文档" if docx_meta is not None else
                      "图片 幻灯片" if image_pages >= (len(sects) + 1) // 2 else "HTML 报告"}
     import notes_store
     import i18n
@@ -815,9 +892,9 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
               "ROOTFS": assets.root_fs or "100%", "SKILLS": _js(read_skills(out)), "ALWAYS": _js(read_always(out)),
               "SKILL_CONTEXT": _js(skill_context), "FULL_CHECK_COMPAT": _js("【本批提交选项】" + notes_store.FULL_CHECK_TEXT),
               "CATALOGS": _js(catalogs), "LOCALE": _js(locale_choice), "REPORT_LANG": _js(report_language),
-              "DOCX": _js(docx_view(docx_meta))}
+              "DOCX": _js(docx_view(docx_meta)), "PPTX": _js(pptx_view(pptx_meta))}
     # 一次性替换，避免内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
-    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX)__", lambda m: values[m.group(1)],
+    page_html = re.sub(r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX|PPTX)__", lambda m: values[m.group(1)],
                        TEMPLATE.read_text(encoding="utf-8"))
     page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
     write_private(out / "index.html", page_html)
@@ -836,12 +913,17 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         "sections": sections,
         "pages": [{"n": p["n"], "key": p["key"], "stable": p["stable"], "title": html.unescape(p["title"]),
                    "section": next((s[0] for s in sections if s[1] <= p["n"] <= s[2]), ""),
-                   **({"w": p["w"], "h": p["h"], "orient": p["orient"], "label": p["label"]} if "w" in p else {})}
+                   **({"w": p["w"], "h": p["h"], "orient": p["orient"],
+                       "label": p["label"]} if "w" in p and "label" in p else
+                      {"w": p["w"], "h": p["h"], "orient": p["orient"]} if "w" in p else {})}
                   for p in pages],
     }
     if docx_meta is not None:
         manifest["format"] = {"report": "docx", "version": docx_review.FORMAT_VERSION}
         manifest["docx"] = docx_meta
+    if pptx_meta is not None:
+        manifest["format"] = {"report": "pptx", "version": pptx_report.FORMAT_VERSION}
+        manifest["pptx"] = pptx_meta
     if locale_choice is not None:
         manifest["locale"] = locale_choice
         manifest["build"]["locale"] = locale_choice
@@ -864,12 +946,17 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
         docx_ctx = None if docx_meta is None else {
             "paragraphs": docx_paragraphs, "fingerprint": docx_meta["fingerprint"],
             "keys": {pg["n"]: pg["key"] for pg in pages if pg["key"] not in dup}}
+        # PPT：带幻灯片定位的批注按稳定幻灯片和元素身份找回（重命名、顺序与文本变化后仍指同一对象）
+        pptx_ctx = None if pptx_meta is None else {
+            "slides": pptx_meta["slides"], "fingerprint": pptx_meta["fingerprint"],
+            "keys": {pg["n"]: pg["key"] for pg in pages if pg["key"] not in dup}}
         remap = notes_store.remap_pages(out, old_keys, {pg["key"]: pg["n"] for pg in pages if pg["stable"]},
-                                        {pg["n"]: html.unescape(pg["title"]) for pg in pages}, dup, docx=docx_ctx)
+                                        {pg["n"]: html.unescape(pg["title"]) for pg in pages}, dup,
+                                        docx=docx_ctx, pptx=pptx_ctx)
         for mv in remap["moved"]:
             assets.warn(diag(locale_choice, "build.note.moved", id=mv["id"], pageKey=mv["key"], old=mv["from"], new=mv["to"]))
         for o in remap["orphans"]:
-            if o.get("reason"):   # 按段落定位没找到：原因在下面的 DOCX 诊断里说
+            if o.get("reason"):   # 按段落/幻灯片定位没找到：原因在下面的 DOCX / PPT 诊断里说
                 continue
             assets.warn(diag(locale_choice, "build.note.orphan", id=o["id"], page=o["page"], pageKey=o["key"]))
         for x in remap.get("docx", []):
@@ -880,6 +967,12 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
                 assets.warn(diag(locale_choice, f"build.note.docx.{x['why']}", id=x["id"], page=x["page"]))
             if x["changed"]:
                 assets.warn(diag(locale_choice, "build.note.docx.changed", id=x["id"], page=x["page"]))
+        for x in remap.get("pptx", []):
+            if x["status"] != "ok":
+                assets.warn(diag(locale_choice, f"build.note.pptx.{x['status']}", id=x["id"], page=x["page"]))
+                continue
+            if x["changed"]:
+                assets.warn(diag(locale_choice, "build.note.pptx.changed", id=x["id"], page=x["page"]))
     register_review(rid, out, review_name, assets)
     if assets.total > 40 * 1024 * 1024:
         assets.warn(diag(locale_choice, "build.asset.total", size=assets.total // 1024 // 1024))

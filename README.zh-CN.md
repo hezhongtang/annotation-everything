@@ -37,6 +37,7 @@ README 随 `main` 分支更新；自动更新只安装正式版本标签。升�
 
 - **对着材料写意见**：报告与讲稿按页对照；选中文字即可引用、删除或改写，也能在报告上放点、框选区域。对应句子可提示两侧一起改。
 - **Word 文档直接审阅**：`.docx` 不用先转 HTML，按 Word 保存的原分页和页面方向生成对照页；分页可信度与只能近似显示的结构在页面和命令行都标明；批注记录所在段落和文字位置，Word 重排后重建对照页，批注仍跟着原段落。支持的纯文字删除／替换可按批次或批注回写 `.docx`，先校验和备份，再原子替换；只读结构会说明限制。
+- **PPT 演示文稿直接审阅**：`.pptx` 也不用先转图，一张幻灯片生成一页对照页，保留原始尺寸、方向与顺序；幻灯片由本机 LibreOffice 与 Poppler 渲染成图（缺工具、转换失败给出明确诊断，不会拿文字预览冒充视觉审阅）；演讲者备注进讲稿侧。在幻灯片下方的「元素文本」区拖选普通文本，批注保留元素身份、段落和字符偏移；画布上的元素点选、标点和框选保持可用。元素文本区按内容排版，幻灯片的视觉核对以渲染图为准。批注带幻灯片定位——幻灯片身份、元素目标、逻辑段落与码点偏移、归一化区域坐标——重建和页面重排后仍指向原来的幻灯片与元素。图表、SmartArt、图片、组合内部、媒体等只读结构可以选中批注，但明确标为只读元素。支持的文本与备注修改以及白名单内的几何、样式修改经整组预检回写，先存 0600 快照再原子替换；转换前后的字体证据与逐页视觉核验始终显式记录，不以结构成功代替视觉通过。[查看文本选择示例](docs/assets/pptx-text.zh.png)。
 - **一键交给 Agent 改稿**：批注自动保存。绑定接收会话后，显式提交这一批意见，Agent 同步修改报告和讲稿、重建对照页，并逐条记录处理结果。
 - **按需要检查和复核**：可选择全量勾稽，检查数字、口径和前后表述；也可先初改再复核，或停在待复核，由审阅人决定是否定稿。
 
@@ -115,8 +116,9 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `ae.py install` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；修复体检发现的问题（先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。四个子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
 | `update.py auto` / `check` / `now` | 在技能副本中检查正式版本并自动更新 / 只检查 / 立即检查并安装；`auto` 由技能入口触发，最多每天一次 |
 | `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照，并把当前仍有效的通过证据跨阶段引用给后续阶段（`--no-reuse` 强制全部重跑）；`report` 只读记录并展示证据链。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
-| `build_viewer.py --report … [--script …] --out 审阅目录` | 从逐页 HTML 或 DOCX 生成对照页；讲稿可选；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
+| `build_viewer.py --report … [--script …] --out 审阅目录` | 从逐页 HTML、DOCX 或 PPTX 生成对照页；讲稿可选；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
 | `docx_edit.py apply 审阅目录 --batch N` / `replace 审阅目录 --paragraph N --from 原文 --to 新文` | 回写 DOCX 快捷修改／自由批注的单条替换；`--id ID` 可重复选择批注，`--dry-run` 预演，`--output 新路径` 另存；默认备份后原地写入，不自动处理批注状态 |
+| `pptx_edit.py apply 审阅目录 --batch N` / `ops 审阅目录 --ops 操作文件` | 按幻灯片定位回写 PPTX 文本与备注快捷修改，或用 JSON 操作文件下发白名单内的元素几何与样式修改；`--id ID` 选择批注，`--dry-run` 预演，`--output 新路径` 另存；整组预检、0600 快照、原子替换，只读结构明确拒绝 |
 | `report_check.py 报告.html [--script 讲稿.md] [--record report-record.json]` | 公开报告核验入口：输出可读摘要，`--json` 输出结构化结果，`--locale zh-CN` 或 `en` 选择语言。退出码 0 表示程序检查通过，不等于报告可交付；1 表示检查未通过；2 表示输入或用法错误。内容、结构与视觉覆盖及交付阻塞项分别列出 |
 | `serve.py 审阅目录或审阅标识` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
 | `http://127.0.0.1:<端口>/#overview`（浏览器地址） | 打开审阅总览，切换范围、查看详情、打开、启动或归档审阅，并可逐份或按范围停止审阅。先启动一份本机服务 |
@@ -444,6 +446,9 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── build_viewer.py            生成对照页 index.html 和 review.json
 │   ├── docx_review.py             逐页渲染 DOCX，记录分页可信度与结构诊断，按段落重定位批注
 │   ├── docx_edit.py               按批注字节级回写 DOCX，校验、备份与原子替换
+│   ├── pptx_reader.py             PPTX 包安全读取：OOXML 元素模型、能力矩阵与幻灯片身份
+│   ├── pptx_report.py             PPTX 对照页构建：本机 LibreOffice/Poppler 渲染与字体证据
+│   ├── pptx_edit.py               回写 PPTX 文本、备注与白名单几何/样式：预检、快照与原子替换
 │   ├── report_check.py            报告产物核验：确定规则、覆盖与交付判定
 │   ├── i18n.py                    读取共享词典，并按所选语言插值；持进程级的界面语言状态（入口设置一次，各模块共用）；命令行共用的语言样板（取 --locale、翻译 argparse 报错、报告非法语言）
 │   ├── update.py                  检查正式版本并更新技能副本
@@ -473,6 +478,7 @@ verify_parallel.py                验证组内的有界进程调度；保留原�
 host_isolation.py                 同机资源隔离协议：验证参与方按共享资源互斥的锁与声明
 fixtures/sample/                   合成样例（虚构数据）
 fixtures/docx/                     合成 DOCX 样例及生成脚本
+fixtures/pptx/                     合成 PPTX 样例生成器（多页、跨 run 样式、备注、只读结构）
 fixtures/show-baseline/            notes.py show 中英输出的逐字基线（合成数据）
 fixtures/verify-doc-allowlist.json  文档门禁路径与依赖契约的合成数据
 fixtures/external-report-skill/    合成外部生成技能，测试外部产物走同一验收
@@ -481,6 +487,12 @@ tests/                             单元测试和浏览器端到端测试
 tests/test_docx_review.py          DOCX 渲染、分页、不可信输入与集成回归
 tests/test_docx_anchor.py          DOCX 批注段落定位、重建重映射、show 与导出
 tests/test_docx_edit.py            DOCX 回写、字节保留、写前闸门、失败恢复与命令行
+tests/test_pptx_reader.py          PPTX 包读取、元素模型、能力矩阵与不可信输入
+tests/test_pptx_report.py          PPTX 对照页构建、渲染诊断、字体证据与格式路由
+tests/test_pptx_annotations.py     PPTX 幻灯片定位：存储契约与整页/元素/文本/点/区域字段
+tests/test_pptx_remap.py           PPTX 重建重映射、批注交换与演讲者备注处理
+tests/test_pptx_edit.py            PPTX 文本与备注回写、字节保留、写前闸门与命令行
+tests/test_pptx_ops.py             PPTX 白名单几何/样式回写、拒绝矩阵与自动警告
 tests/e2e_waits.py                  浏览器条件等待：有界轮询、事件等待与场景级超时诊断
 tests/e2e_scenarios.py              浏览器场景注册表与选择调度（无浏览器依赖）
 tests/e2e_servers.py                端到端测试的服务起停与中断后的兜底清理

@@ -77,6 +77,34 @@ Support matrix (the generator lists structures that are approximated, placeholde
 
 `review.json` records `format` as `{"report": "docx", "version": 1}`. When the version is newer than the installed copy supports, `--rebuild`, `serve.py` and `notes.py` stop with a clear error instead of reading the file as text. Older reviews have no `format` field and are treated as page-by-page HTML.
 
+## PPTX (direct review and whitelisted write-back)
+
+`--report` accepts a `.pptx` directly; each slide becomes one review page that keeps the original size, orientation and order. Slides are rendered to images with local LibreOffice (`soffice`) and Poppler (`pdftoppm`): on macOS install LibreOffice.app, on Linux install the `libreoffice` and `poppler-utils` packages, and the build then works without any manual conversion. A missing tool, a failed conversion, a page-count mismatch, or empty output fails the build with a clear diagnostic; nothing is downloaded or installed automatically, and a text preview never stands in for visual review. The legacy binary `.ppt` (as well as `.pptm`, `.potx`, `.ppsx`) is not supported; save it as `.pptx` in PowerPoint or WPS first. Run `python3 $S/check_pptx_fonts.py deck.pptx` before conversion and add `--pdf converted.pdf` afterwards for font evidence; page-by-page visual inspection stays mandatory, and matching font names do not prove correct glyph rendering.
+
+Select ordinary text in the Element text panel below the slide; annotations retain the element identity, paragraph and character offsets. Element selection and point/region marks remain available on the canvas. The text panel uses its own layout; use the rendered slide for visual checks.
+
+**Text and notes write-back**: `python3 $S/pptx_edit.py apply REVIEW --batch N` (or repeated `--id ID`) applies pending report-side quick replacements/deletions and existing speaker-notes edits. Report-side edits follow the annotation's slide location (slide key + element identity + logical paragraph + code-point offsets) down to the exact `a:t`; cross-run ranges keep untouched text and its properties. The script side is written only when no external script is used, matching the quoted text uniquely. Only the target slide/notes parts are rewritten; all other parts and ZIP metadata keep their original bytes. A 0600 binary backup is saved first (`.snapshots/batch-N/pptx-writeback/`), then the package is written to a temporary file and atomically replaced; after writing, every member CRC and the text model are re-checked. PowerPoint owner files (`~$`) and source fingerprint changes are refused before writing. `--dry-run` previews; `--output NEW` writes to a file that does not exist yet. Write-back never changes annotation status; rebuild the review page and re-render the affected slides afterwards.
+
+**Geometry and style write-back (whitelist contract v1)**: agents issue explicit element-level changes through `python3 $S/pptx_edit.py ops REVIEW --ops OPSFILE`. The operations file is UTF-8 JSON `{"v": 1, "ops": [...]}`; a `v` newer than the supported version is rejected as a whole. Each operation looks like:
+
+```json
+{"v": 1, "ops": [
+  {"id": "move-title", "slide": "s260", "aspect": "geometry", "unit": "normalized",
+   "set": {"x": 0.25, "y": 0.125, "width": 0.5, "height": 0.25},
+   "target": {"key": "e2", "id": "2", "digest": "64-hex evidence digest"}},
+  {"id": "recolor", "slide": "s260", "aspect": "style", "scope": "fill",
+   "props": {"color": "FF8800"},
+   "target": {"key": "e2", "id": "2", "digest": "64-hex evidence digest"}}
+]}
+```
+
+- **Target**: `slide` is the persistent slide key; `target` has the same shape as an element target in the annotation exchange (`key`/`id`/`digest` required). The element is resolved by identity first: a unique shape id is accepted, otherwise the evidence digest disambiguates. Failed resolution, conflicting evidence and duplicate ids are refused; a nearby look-alike is never guessed. One element can be hit by at most one operation per group.
+- **Capability boundary**: only elements whose capability matrix declares `geometryWrite` / `styleWrite` are writable - top-level ordinary shapes (including placeholders with an explicit `a:xfrm`). Group interiors, pictures, charts, SmartArt, media, OLE, shapes with extensions or fields stay read-only; elements without their own `a:xfrm` (geometry inherited from the layout) cannot have geometry written.
+- **Geometry (aspect=geometry)**: `unit` must be `normalized` (0 to 1 relative to the slide canvas); other units are refused. `set` takes a non-empty subset of `x`, `y`, `width`, `height`, converted to source EMU per the canvas size (`a:off` x/y, `a:ext` cx/cy); dimensions that are not set keep their current values. Negative positions, non-positive sizes, values beyond the canvas (tolerance 0.0001) and degenerate conversions are refused.
+- **Style (aspect=style)**: `scope` is `text` (applies to every text run in the shape), `fill` (shape fill) or `line` (outline). The only allowed properties are - text: `bold`, `italic`, `underline` (booleans; false writes an explicit off), `size` (points, 1 to 4000, written as hundredths of a point), `color` (6-digit sRGB hex); fill: `color`; line: `color`, `width` (points, greater than 0 and at most 1584, written as EMU). Writes are always direct formatting: run `a:rPr` attributes and fill, the fill inside `p:spPr`, and the width and fill of `a:ln`. Untouched attributes and child elements (such as `a:prstDash`) keep their bytes, and new elements are inserted in ECMA-376 child order. Unknown properties, child structures outside the whitelist, out-of-range values and no-op operations that match the current direct formatting are refused; structures whose safety cannot be proven stay read-only instead of guessing inheritance.
+- **Preflight and closed loop**: multi-element changes are preflighted target by target; if any target is unsafe nothing is written. The fingerprint, snapshot and atomic-replacement loop is shared with the text path. The result JSON lists actual property changes per operation in `changes` (`from`/`to`: EMU for geometry, contract units for style; `from` is `null` when no direct formatting existed and `mixed` when runs disagree). `warnings` are automatic geometric hints (new rectangle overlapping other elements, reduced size that may overflow text, edges slightly outside the canvas after EMU rounding) - advisory only; `visual` is always `{"status": "notRun"}` - visual verification has not run until the review page is rebuilt and the slides are inspected one by one, and the write-back must not be treated as passed before that.
+- **Not supported**: arbitrary XML path or attribute writes, chart data, SmartArt, animations, media, master/theme rewrites, one-click restyling or auto-layout; do these in PowerPoint/WPS.
+
 ## Markdown speaker notes
 
 ```markdown

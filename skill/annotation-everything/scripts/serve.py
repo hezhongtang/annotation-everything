@@ -77,7 +77,7 @@ VERSION = "0.12.1"
 FEATURES = [
     "notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery",
     "stop-service", "stop-review", "stop-review-status", "stop-save-protection", "resume-review",
-    "receiver-binding", "overview", "overview-stop", "analysis", "finalize-all", "docx",
+    "receiver-binding", "overview", "overview-stop", "analysis", "finalize-all", "docx", "pptx",
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits

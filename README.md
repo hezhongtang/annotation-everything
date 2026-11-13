@@ -37,6 +37,7 @@ This README follows `main`; automatic updates install only stable release tags. 
 
 - **Comment directly on the material.** Read report pages and speaker notes side by side. Select text to quote, delete or rewrite it, or place pins and regions on the report. Matching sentences can be marked for changes on both sides.
 - **Review Word documents directly.** A `.docx` needs no HTML conversion: the review page keeps the pagination and page orientation Word saved. Pagination confidence and approximated structures are shown on the page and in the CLI; annotations record their paragraph and text position, so they stay with the paragraph when Word reflows the document and the review page is rebuilt. Supported plain-text deletions and replacements can be written back by batch or annotation, with validation, backup and atomic replacement; read-only structures explain their limits.
+- **Review PowerPoint decks directly.** A `.pptx` needs no image conversion either: each slide becomes one review page at its original size, orientation and order, rendered locally with LibreOffice and Poppler (missing tools and failed conversions produce clear diagnostics, never a silent text preview). Speaker notes appear on the script side. Select ordinary text in the Element text panel below the slide; annotations retain the element identity, paragraph and character offsets. Element selection and point/region marks remain available on the canvas. The text panel uses its own layout; use the rendered slide for visual checks. Annotations carry slide locations — slide identity, element targets, logical paragraph and code-point offsets, normalized region coordinates — so they follow the right slide and element across rebuilds and page reordering. Read-only structures (charts, SmartArt, pictures, group interiors, media) are selectable and annotatable but clearly marked as read-only elements. Supported text and notes edits, plus whitelisted geometry and style changes, go through preflighted write-back with 0600 snapshots and atomic replacement; font evidence before and after conversion and page-by-page visual checks stay explicit and are never implied by structural success. [Text-selection example](docs/assets/pptx-text.en.png).
 - **Hand a batch to the agent for revision.** Annotations save automatically. Bind a receiving session and explicitly submit a batch; the agent revises both documents, rebuilds the page and records the result for each annotation.
 - **Check and review as needed.** Request a full consistency check for figures, metric definitions and wording. Use a draft followed by review, or stop after the draft and let the reviewer decide when to finalize.
 
@@ -117,6 +118,7 @@ See the [English format reference](skill/annotation-everything/references/format
 | `verify.py plan` / `run` / `report` | Unified verification entry run from the repository root: `plan` explains the groups and commands without starting anything (`plan --phase development` also shows what the current changes should run, why, and when it falls back to the full check); `run` executes and writes structured records plus raw logs into `.verify/` (git-ignored), records the shadow comparison between the suggested selection and the full gate by default, and lets later stages reference currently valid passing evidence (`--no-reuse` forces a full rerun); `report` only reads records and shows the evidence chain. Groups: `unit` (full unit), `unit-related` (explicitly named cases, always augmented with the global dictionary contract in `tests/test_i18n_catalog_contract.py`), `browser` (full browser), `serve-check` (server security self-check), `all` (runs `unit` → `serve-check` → `browser` in order). Field contract: [docs/verify/record-contract.md](docs/verify/record-contract.md), selection strategy: [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
 | `build_viewer.py --report … [--script …] --out <review-dir>` | Build the review page from paginated HTML or DOCX, with optional speaker notes; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
 | `docx_edit.py apply REVIEW --batch N` / `replace REVIEW --paragraph N --from ORIGINAL --to REPLACEMENT` | Write DOCX quick edits or a single free-form replacement; repeat `--id ID` to select annotations, preview with `--dry-run`, or save a new file with `--output NEW_PATH`. The default backs up then edits in place; annotation statuses are unchanged |
+| `pptx_edit.py apply REVIEW --batch N` / `ops REVIEW --ops OPSFILE` | Write PPTX quick text/notes edits by slide location, or issue whitelisted element geometry and style changes from a JSON operations file; `--id ID` selects annotations, `--dry-run` previews, `--output NEW_PATH` saves a new file. Whole-group preflight, 0600 binary snapshots, atomic replacement; read-only elements are refused |
 | `report_check.py report.html [--script script.md] [--record report-record.json]` | Public report verification entry: a readable summary by default, structured results with `--json`, and `--locale en` or `zh-CN` for the language. Exit 0 means program checks passed, not that the report is deliverable; 1 means checks failed; 2 means an input or usage error. Content, structure and visual coverage and delivery blockers are listed separately |
 | `serve.py <review-dir-or-id>` | Start the local server; each review keeps its own dedicated port |
 | `http://127.0.0.1:<port>/#overview` (browser address) | Open the review overview to switch scope, inspect details, open, start or archive reviews, and stop reviews individually or by scope. Start a local service first |
@@ -444,6 +446,9 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── build_viewer.py            builds the review page index.html and review.json
 │   ├── docx_review.py             renders DOCX pages, records pagination confidence and structure diagnostics, relocates annotations by paragraph
 │   ├── docx_edit.py               writes DOCX annotation edits at byte level, with validation, backup and atomic replacement
+│   ├── pptx_reader.py             safe PPTX package reader: OOXML element model, capability matrix and slide identity
+│   ├── pptx_report.py             builds PPTX review pages: local LibreOffice/Poppler rendering and font evidence
+│   ├── pptx_edit.py               writes PPTX text, notes, and whitelisted geometry/style edits with preflight, snapshot and atomic replacement
 │   ├── report_check.py            report verification: deterministic rules, coverage and delivery verdict
 │   ├── i18n.py                    loads the shared catalogs and fills in the chosen language; holds the process-wide interface language state (set once by an entry, shared by every module); the command line boilerplate shared by every entry (reading --locale, translating argparse errors, reporting an unsupported language)
 │   ├── update.py                  checks stable releases and updates the skill copy
@@ -473,6 +478,7 @@ verify_parallel.py                bounded process scheduling inside a verificati
 host_isolation.py                 host isolation protocol: locks and declarations for mutual exclusion by shared resource
 fixtures/sample/                   synthetic sample (fictional data)
 fixtures/docx/                     synthetic DOCX sample and its generator
+fixtures/pptx/                     synthetic PPTX sample generator (multi-page, styled runs, notes, read-only structures)
 fixtures/show-baseline/            verbatim baselines of notes.py show output in Chinese and English (synthetic data)
 fixtures/verify-doc-allowlist.json  synthetic document-gate paths and dependency-contract examples
 fixtures/external-report-skill/    synthetic external generation skill; its output goes through the same acceptance
@@ -481,6 +487,12 @@ tests/                             unit tests and end-to-end browser tests
 tests/test_docx_review.py          DOCX rendering, pagination, untrusted input and integration regressions
 tests/test_docx_anchor.py          DOCX annotation locations, rebuild remapping, show and export
 tests/test_docx_edit.py            DOCX write-back, byte preservation, preflight gates, failure recovery and CLI
+tests/test_pptx_reader.py          PPTX package reading, element model, capability matrix and untrusted input
+tests/test_pptx_report.py          PPTX review-page build, rendering diagnostics, font evidence and format routing
+tests/test_pptx_annotations.py     PPTX slide locations: storage contract, page/element/text/point/region fields
+tests/test_pptx_remap.py           PPTX rebuild remapping, annotation exchange and speaker-notes handling
+tests/test_pptx_edit.py            PPTX text and notes write-back, byte preservation, preflight gates and CLI
+tests/test_pptx_ops.py             PPTX whitelisted geometry/style write-back, refusal matrix and warnings
 tests/e2e_waits.py                  browser condition waits: bounded polling, events and scenario timeout diagnostics
 tests/e2e_scenarios.py              browser scenario registry and selection scheduling (no browser dependency)
 tests/e2e_servers.py                server start/stop for end-to-end tests and cleanup after interruption
