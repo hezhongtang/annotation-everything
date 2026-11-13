@@ -66,6 +66,18 @@ def last_activity(directory: Path) -> float | None:
     return max(times) if times else None
 
 
+def wait_command(review_id: str, *, hook: bool, receiver: Any) -> str | None:
+    """可复制的等待命令：等待型绑定提示从绑定会话运行；未绑定且未配置自定义钩子时也提供。
+
+    Codex 桌面事件绑定按现有协议投递与接手，省略认领型等待命令；已配置自定义钩子时
+    显示「已配置」，不另给等待命令。adapter 只认公开接收方状态里的值。
+    """
+    if hook:
+        return None
+    adapter = (receiver or {}).get("adapter") if isinstance(receiver, dict) else None
+    return f"notes.py wait {review_id[:8]}" if adapter in (None, "wait") else None
+
+
 def report_metadata(directory: Path, review_id: str) -> dict[str, Any]:
     """顺着报告来源读取可展示的核验信息；损坏记录不影响其他审阅。"""
     metadata: dict[str, Any] = {"summary": "", "purpose": "", "audience": "",
@@ -168,6 +180,9 @@ def snapshot(review_dir: Path | None, review_id: str | None, scope: str,
             "port": source["port"], "running": running,
             "stop": stop, "stopWork": work,
             "pending": source["pending"], "review": source["review"],
+            # 公开接收方字段：绑定状态与接收方式（不含钩子命令、工作目录、套接字地址或日志）
+            "hook": source["hook"], "agentDelivery": source["agentDelivery"],
+            "waitCommand": wait_command(rid, hook=source["hook"], receiver=source["agentDelivery"]),
             "lastActivity": last_activity(directory), "current": rid == review_id,
             "url": f"http://127.0.0.1:{running}/" if running else None,
             "forgetCommand": f"serve.py forget {rid[:8]}" if state in ("missing", "mismatch") else None,

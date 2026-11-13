@@ -11,7 +11,9 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -2924,6 +2926,406 @@ class OverviewHomeTests(unittest.TestCase):
                 self.assertEqual(json.loads(raw)["code"], code, raw)
         self.assertFalse((self.outside / review_stop.STATE_FILE).exists(), "范围外的停止不创建停止状态文件")
         self.assertEqual(self.state_snapshot(), before)
+
+
+class FakeDesktop:
+    """合成 Codex 桌面 IPC：记录 start-turn 请求并回一个进行中的回合，供投递链路端到端验证。"""
+
+    def __init__(self, path):
+        self.requests = []
+        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.listener.bind(str(path))
+        path.chmod(0o600)
+        self.listener.listen()
+        self.listener.settimeout(0.1)
+        self.stopped = threading.Event()
+        self.worker = threading.Thread(target=self.run, daemon=True)
+        self.worker.start()
+
+    def run(self):
+        while not self.stopped.is_set():
+            try:
+                client, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            with client:
+                def exact(n):
+                    data = b""
+                    while len(data) < n:
+                        part = client.recv(n - len(data))
+                        if not part:
+                            return None
+                        data += part
+                    return data
+                while True:
+                    head = exact(4)
+                    if not head:
+                        break
+                    request = json.loads(exact(struct.unpack("<I", head)[0]))
+                    method = request["method"]
+                    result = {"clientId": "fixture"} if method == "initialize" else {}
+                    if method == "thread-follower-start-turn":
+                        self.requests.append(request)
+                        result = {"result": {"turn": {"id": "fixture-turn", "status": "inProgress"}}}
+                    reply = {"type": "response", "requestId": request["requestId"], "resultType": "success",
+                             "error": None, "result": result, "handledByClientId": "owner"}
+                    raw = json.dumps(reply).encode()
+                    client.sendall(struct.pack("<I", len(raw)) + raw)
+
+    def close(self):
+        self.stopped.set()
+        self.worker.join(2)
+        self.listener.close()
+
+
+class OverviewHandoffTests(unittest.TestCase):
+    """总览首页代启动审阅并接上 Agent 接收：钩子继承、接收方式展示、冲突拒绝与积压保留。
+
+    全部走外部可观察行为：HTTP 状态与响应体、钩子进程的工作目录与输入、绑定与状态文件字节。
+    """
+
+    def setUp(self):
+        previous = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+        self.addCleanup(os.environ.__setitem__, "AE_HOME", previous)
+        self.tree = tmpdir()
+        self.home_cwd = self.tree / "home-start-dir"   # 模拟首页启动命令的工作目录（与审阅目录不同）
+        self.home_cwd.mkdir()
+        self.workspace = self.tree / "workspace"
+        self.workspace.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.workspace)], check=True, capture_output=True)
+        self.review = self.workspace / "review"
+        self.rid = self.build(self.review, "Handoff review")["reviewId"]
+        self.host_id = ledger.HOME_HOST_ID
+
+    def build(self, directory, name):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", directory, name=name)
+
+    def write_hook(self):
+        """记录调用的合成钩子：cwd、argv、事件环境变量与标准输入 JSON，另读一个相对路径参数。"""
+        hook_py = self.tree / "record_hook.py"
+        hook_py.write_text(
+            "import json, os, sys\n"
+            "record = {'cwd': os.getcwd(), 'argv': sys.argv[1:],\n"
+            "          'env': {k: os.environ.get(k) for k in ('AE_EVENT', 'AE_REVIEW_DIR', 'AE_HANDOFF_SEQ', 'AE_URL')}}\n"
+            "raw = sys.stdin.buffer.read()\n"
+            "if raw.strip():\n"   # 启动器已消费注册字节，钩子的标准输入从提交 JSON 开始
+            "    record['payload'] = json.loads(raw.decode('utf-8'))\n"
+            "try:\n"
+            "    record['relative'] = open(sys.argv[2], encoding='utf-8').read()\n"
+            "except OSError:\n"
+            "    record['relative'] = None\n"
+            "with open(sys.argv[1], 'a', encoding='utf-8') as fh:\n"
+            "    fh.write(json.dumps(record, ensure_ascii=False) + chr(10))\n", encoding="utf-8")
+        return hook_py
+
+    def hook_argv(self, hook_py, hook_log):
+        marker = self.home_cwd / "rel-marker.txt"
+        marker.write_text("from-home-cwd", encoding="utf-8")
+        return serve.parse_hook(f"{sys.executable} {hook_py} {hook_log} rel-marker.txt")
+
+    def start_home(self, on_handoff=None, hook_cwd=None):
+        self.srv = serve.ReviewServer(None, 0, home_id=self.host_id, on_handoff=on_handoff,
+                                      hook_cwd=hook_cwd, log_to_file=False)
+        thread = threading.Thread(target=self.srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread.start()
+        self.addCleanup(self.srv.server_close)
+        self.addCleanup(self.srv.shutdown)
+        self.port = self.srv.port
+        self.same = {"Host": f"127.0.0.1:{self.port}", "Origin": f"http://127.0.0.1:{self.port}",
+                     "Content-Type": "application/json", "X-AE-Host": self.host_id}
+
+    def restart_home(self, **kwargs):
+        self.srv.shutdown()
+        self.srv.server_close()
+        self.start_home(**kwargs)
+
+    def start_request(self, rid=None, headers=None, body=None):
+        status, _, raw = serve._req(self.port, "POST", "/api/overview/start",
+                                    headers or self.same, body if body is not None else {"reviewId": rid or self.rid})
+        return status, json.loads(raw)
+
+    def claim_port(self):
+        port = free_port()
+        ledger.claim_port(self.rid, self.review, port)
+        return port
+
+    def stop_started(self):
+        info = serve.read_status(self.review)
+        if not info:
+            return
+        port, pid = info["port"], info["pid"]
+        found = serve.probe(port, timeout=0.2)
+        if found and found.get("reviewId") == self.rid and serve.same_dir(found, self.review):
+            serve._req(port, "POST", "/api/server/stop",
+                       {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}",
+                        "Content-Type": "application/json", "X-AE-Review": self.rid}, {})
+        end = time.monotonic() + 5
+        while time.monotonic() < end and ledger.pid_alive(pid):
+            time.sleep(0.02)
+        if ledger.pid_alive(pid):
+            # 已领取的批次让 HTTP 停止停在「等 Agent 取消确认」的生命周期步；测试清理直接终止服务进程
+            os.kill(pid, signal.SIGTERM)
+            end = time.monotonic() + 5
+            while time.monotonic() < end and ledger.pid_alive(pid):
+                time.sleep(0.02)
+
+    def overview_row(self):
+        status, _, raw = serve._req(self.port, "GET", "/api/overview", {"Host": f"127.0.0.1:{self.port}"})
+        self.assertEqual(status, 200, raw)
+        return next(r for r in json.loads(raw)["reviews"] if r["reviewId"] == self.rid)
+
+    def wait_hook_records(self, hook_log, count, timeout=6.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if hook_log.exists():
+                lines = [ln for ln in hook_log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+                if len(lines) >= count:
+                    return [json.loads(ln) for ln in lines]
+            time.sleep(0.05)
+        self.fail(f"钩子在 {timeout}s 内没有被调用 {count} 次")
+
+    def test_hooked_start_inherits_parsed_command_and_home_cwd(self):
+        hook_py, hook_log = self.write_hook(), self.tree / "hook-log.jsonl"
+        self.start_home(on_handoff=self.hook_argv(hook_py, hook_log), hook_cwd=str(self.home_cwd))
+        port = self.claim_port()
+        self.addCleanup(self.stop_started)
+        status, body = self.start_request()
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["url"], f"http://127.0.0.1:{port}/")
+        self.assertTrue(body["hookConfigured"], "启动结果标明本次指定了钩子")
+        self.assertIsNone(body["waitCommand"], "已配置自定义钩子时不再给等待命令")
+        headers = {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}",
+                   "Content-Type": "application/json", "X-AE-Review": self.rid}
+        status, _, raw = serve._req(port, "POST", "/api/handoff", headers, {"message": "第一批"})
+        self.assertEqual(status, 200, raw)
+        records = self.wait_hook_records(hook_log, 1)
+        self.assertEqual(len(records), 1, "一批提交钩子恰好调用一次")
+        record = records[0]
+        self.assertEqual(record["cwd"], str(self.home_cwd.resolve()), "钩子从首页启动时的工作目录运行")
+        self.assertEqual(record["relative"], "from-home-cwd", "相对参数仍从首页启动目录解析")
+        self.assertEqual(record["argv"], [str(hook_log), "rel-marker.txt"], "钩子收到解析后的命令参数")
+        self.assertEqual((record["env"]["AE_EVENT"], record["env"]["AE_HANDOFF_SEQ"]), ("handoff", "1"))
+        self.assertEqual(record["env"]["AE_REVIEW_DIR"], str(self.review.resolve()))
+        self.assertEqual(record["env"]["AE_URL"], f"http://127.0.0.1:{port}/")
+        self.assertEqual((record["payload"]["event"], record["payload"]["seq"]), ("handoff", 1))
+        self.assertEqual(record["payload"]["userMessage"], "第一批")
+        self.assertEqual(record["payload"]["reviewDir"], str(self.review.resolve()))
+
+    def test_hooked_start_rejects_saved_binding_without_a_process(self):
+        wakeup.bind_wait(self.review, "claude", "session-159")
+        binding_before = (self.review / wakeup.BINDING_FILE).read_bytes()
+        self.start_home(on_handoff=serve.parse_hook(f"{sys.executable} -c pass"), hook_cwd=str(self.home_cwd))
+        port = self.claim_port()
+        with patch.object(subprocess, "Popen", side_effect=AssertionError("冲突时不得拉起进程")) as spawned:
+            status, body = self.start_request()
+        self.assertEqual(status, 409, body)
+        self.assertEqual(body["code"], "overview-hook-conflict", body)
+        self.assertEqual(spawned.call_count, 0)
+        self.assertEqual((self.review / wakeup.BINDING_FILE).read_bytes(), binding_before, "原绑定保持原样")
+        self.assertIsNone(serve.read_status(self.review), "不留下半启动的运行状态文件")
+        self.assertIsNone(serve.probe(port, timeout=0.2), "不留下监听进程")
+        row = self.overview_row()
+        self.assertEqual((row["agentDelivery"]["adapter"], row["agentDelivery"]["receiver"]["harness"],
+                          row["agentDelivery"]["receiver"]["sessionId"]),
+                         ("wait", "Claude Code", "session-159"), "拒绝不影响绑定状态的展示")
+
+    def test_hooked_start_rejects_extra_fields_and_forged_requests_without_a_process(self):
+        self.start_home(on_handoff=serve.parse_hook(f"{sys.executable} -c pass"), hook_cwd=str(self.home_cwd))
+        port = self.claim_port()
+        with patch.object(subprocess, "Popen", side_effect=AssertionError("伪造请求不拉起任何进程")) as spawned:
+            status, body = self.start_request(body={"reviewId": self.rid, "onHandoff": f"{sys.executable} -c pass"})
+            self.assertEqual((status, body["code"]), (400, "bad-overview-start"), body)
+            forged = [({"Host": "evil.example"}, {"reviewId": self.rid}),
+                      ({**self.same, "Origin": "http://evil.example"}, {"reviewId": self.rid}),
+                      ({**self.same, "Content-Type": "text/plain"}, {"reviewId": self.rid}),
+                      ({**self.same, "Sec-Fetch-Site": "cross-site"}, {"reviewId": self.rid}),
+                      ({k: v for k, v in self.same.items() if k != "X-AE-Host"}, {"reviewId": self.rid})]
+            for headers, request_body in forged:
+                with self.subTest(host=headers.get("Host"), origin=headers.get("Origin")):
+                    status, response_headers, raw = serve._req(self.port, "POST", "/api/overview/start",
+                                                               headers, request_body)
+                    self.assertIn(status, (400, 403, 409, 415, 421), raw)
+                    self.assertNotIn("access-control-allow-origin", response_headers)
+            self.assertEqual(spawned.call_count, 0, "钩子命令绝不从 HTTP 传入，伪造请求不拉起任何进程")
+        self.assertIsNone(serve.read_status(self.review))
+
+    def test_plain_start_loads_saved_binding_readonly_and_reports_wait_command(self):
+        wakeup.bind_wait(self.review, "claude", "session-159")
+        binding_before = (self.review / wakeup.BINDING_FILE).read_bytes()
+        self.start_home()
+        port = self.claim_port()
+        self.addCleanup(self.stop_started)
+        status, body = self.start_request()
+        self.assertEqual((status, body["url"]), (200, f"http://127.0.0.1:{port}/"), body)
+        self.assertFalse(body["hookConfigured"])
+        self.assertEqual((body["agentDelivery"]["adapter"], body["agentDelivery"]["state"]), ("wait", "bound"))
+        self.assertEqual((body["agentDelivery"]["receiver"]["harness"],
+                          body["agentDelivery"]["receiver"]["sessionId"], body["agentDelivery"]["receiver"]["state"]),
+                         ("Claude Code", "session-159", "idle"))
+        self.assertEqual(body["waitCommand"], f"notes.py wait {self.rid[:8]}")
+        self.assertEqual((self.review / wakeup.BINDING_FILE).read_bytes(), binding_before, "启动只读绑定")
+        self.assertEqual(list(self.review.glob(ledger.WAIT_PREFIX + "*.json")), [], "启动不代挂等待进程")
+        row = self.overview_row()
+        self.assertEqual((row["agentDelivery"]["adapter"], row["agentDelivery"]["receiver"]["state"]),
+                         ("wait", "idle"))
+        self.assertEqual(row["waitCommand"], f"notes.py wait {self.rid[:8]}")
+        self.assertFalse(row["hook"])
+
+    def test_start_without_receiver_notes_how_to_receive(self):
+        self.start_home()
+        port = self.claim_port()
+        self.addCleanup(self.stop_started)
+        status, body = self.start_request()
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["agentDelivery"]["state"], "unconfigured", "无可确认的接收方式")
+        self.assertEqual(body["note"], "no-receiver", "启动结果立即提示如何接收批注")
+        self.assertEqual(body["waitCommand"], f"notes.py wait {self.rid[:8]}")
+        row = self.overview_row()
+        self.assertEqual(row["agentDelivery"]["state"], "unconfigured")
+        self.assertEqual(row["waitCommand"], f"notes.py wait {self.rid[:8]}")
+
+    def test_resume_keeps_running_service_and_notes_unapplied_hook(self):
+        self.start_home()
+        port = self.claim_port()
+        self.addCleanup(self.stop_started)
+        status, first = self.start_request()
+        self.assertEqual((status, first["note"]), (200, "no-receiver"), first)
+        self.restart_home(on_handoff=serve.parse_hook(f"{sys.executable} -c pass"), hook_cwd=str(self.home_cwd))
+        with patch.object(subprocess, "Popen", side_effect=AssertionError("恢复不替换正在运行的进程")) as spawned:
+            status, body = self.start_request()
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["url"], first["url"], "沿用已核对通过的服务")
+        self.assertEqual(spawned.call_count, 0)
+        self.assertTrue(body["hookConfigured"])
+        self.assertEqual(body["note"], "hook-not-applied", "明确提示本次指定的钩子未应用")
+        self.assertEqual((body["agentDelivery"]["adapter"], body["agentDelivery"]["state"]),
+                         (None, "unconfigured"), "显示该进程实际加载的接收方式")
+        self.assertIsNone(body["waitCommand"], "本次指定了钩子，不再重复给等待命令")
+
+    def test_hooked_start_keeps_backlog_for_claim_without_replay(self):
+        store.handoff_submit(self.review, "启动前的积压")
+        hook_py, hook_log = self.write_hook(), self.tree / "hook-log.jsonl"
+        self.start_home(on_handoff=self.hook_argv(hook_py, hook_log), hook_cwd=str(self.home_cwd))
+        port = self.claim_port()
+        self.addCleanup(self.stop_started)
+        status, body = self.start_request()
+        self.assertEqual(status, 200, body)
+        self.assertFalse(hook_log.exists(), "启动前已待接收的批次不用自定义钩子重放")
+        self.assertEqual([i["status"] for i in store.handoff_load(self.review)["items"]], ["pending"], "积压保留")
+        run = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "claim", str(self.review), "--by", "agent"],
+                             capture_output=True, text=True, cwd=str(self.home_cwd))
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout)["seq"], 1, "积压可由 notes.py claim 领取")
+        self.assertFalse(hook_log.exists())
+
+    def test_concurrent_hooked_starts_share_one_process(self):
+        hook_py, hook_log = self.write_hook(), self.tree / "hook-log.jsonl"
+        self.start_home(on_handoff=self.hook_argv(hook_py, hook_log), hook_cwd=str(self.home_cwd))
+        port = self.claim_port()
+        self.addCleanup(self.stop_started)
+        barrier = threading.Barrier(2)
+        results, errors = [], []
+
+        def start():
+            try:
+                barrier.wait(timeout=5)
+                results.append(self.start_request())
+            except Exception as error:
+                errors.append(error)
+
+        with patch.object(subprocess, "Popen", wraps=subprocess.Popen) as spawned:
+            threads = [threading.Thread(target=start) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=15)
+            self.assertFalse(errors, errors)
+            self.assertEqual([status for status, _ in results], [200, 200], results)
+            self.assertEqual(spawned.call_count, 1, "并发点击同一审阅只拉起一个服务")
+        self.assertEqual({body["url"] for _, body in results}, {f"http://127.0.0.1:{port}/"})
+
+    RECEIVER_PAGE_KEYS = (
+        "viewer.overview.receiverLabel",
+        "viewer.overview.receiver.unconfigured",
+        "viewer.overview.receiver.waiting",
+        "viewer.overview.receiver.idle",
+        "viewer.overview.receiver.event",
+        "viewer.overview.receiver.processing",
+        "viewer.overview.receiver.restartRequired",
+        "viewer.overview.receiver.error",
+        "viewer.overview.receiver.bound",
+        "viewer.overview.receiverHook",
+        "viewer.overview.copyWait",
+        "viewer.overview.waitHint",
+        "viewer.overview.startNote.hookNotApplied",
+        "viewer.overview.startNote.noReceiver",
+    )
+
+    def test_overview_page_wires_receiver_state_and_wait_command(self):
+        """总览首页页面：冲突原因码有映射，接收方式与等待命令有渲染接线，模板引用的键双语入库。"""
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            page = build_viewer.build_overview_home(ledger.home(), host_id=self.host_id, locale="zh-CN")
+        text = page["page"].read_text(encoding="utf-8")
+        self.assertIn('"overview-hook-conflict"', text, "冲突拒绝在页面上有稳定文案")
+        for needle in ("overviewReceiverText", "overviewStartNotes", "waitCommand", "overviewWaitCopy"):
+            self.assertIn(needle, text, f"页面缺接收方式接线：{needle}")
+        for locale in ("zh-CN", "en"):
+            catalog = json.loads((SCRIPTS.parent / "locales" / f"{locale}.json").read_text(encoding="utf-8"))
+            for key in self.RECEIVER_PAGE_KEYS:
+                self.assertIn(key, catalog["messages"], f"{locale} 缺 {key}")
+
+    def kill_started(self):
+        """直接终止代启动的子服务：带已投递的桌面事件时，HTTP 停止会等取消确认，测试清理不走那条路。"""
+        info = serve.read_status(self.review)
+        if info and ledger.pid_alive(info["pid"]):
+            os.kill(info["pid"], signal.SIGTERM)
+            end = time.monotonic() + 5
+            while time.monotonic() < end and ledger.pid_alive(info["pid"]):
+                time.sleep(0.02)
+        self.assertFalse(ledger.pid_alive(info.get("pid") or 0) if info else False, "子服务应已退出")
+
+    def wait_delivery_state(self, state, timeout=6.0):
+        deadline = time.monotonic() + timeout
+        last = None
+        while time.monotonic() < deadline:
+            try:
+                last = wakeup.status(self.review)
+                if last.get("state") == state:
+                    return last
+            except (OSError, ValueError, KeyError):
+                pass
+            time.sleep(0.05)
+        self.fail(f"投递状态未到 {state}: {last}")
+
+    def test_desktop_binding_backlog_recovers_once_across_starts(self):
+        """桌面事件绑定的启动补投沿用现有规则：待接收批次补投一次，重启按同键去重不再重放。"""
+        thread = "15915915-9159-4159-8159-159159159159"
+        desktop = FakeDesktop(self.tree / "desktop.sock")
+        self.addCleanup(desktop.close)
+        wakeup.bind(self.review, thread, self.tree / "desktop.sock")
+        store.handoff_submit(self.review, "启动前的积压")
+        self.start_home()
+        port = self.claim_port()
+        self.addCleanup(self.stop_started)
+        status, body = self.start_request()
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["agentDelivery"]["adapter"], "codex-desktop",
+                         "桌面事件绑定在启动结果里可见")
+        self.assertIsNone(body["waitCommand"], "桌面事件绑定省略认领型等待命令")
+        row = self.overview_row()
+        self.assertEqual(row["agentDelivery"]["adapter"], "codex-desktop")
+        self.assertIsNone(row["waitCommand"])
+        self.wait_delivery_state("accepted")
+        self.assertEqual(len(desktop.requests), 1, "启动补投把待接收批次投给绑定的桌面会话")
+        self.kill_started()
+        status, body = self.start_request()
+        self.assertEqual(status, 200, body)
+        time.sleep(1.5)   # 第二次补投若违反去重会在这个窗口里发出新请求
+        self.assertEqual(len(desktop.requests), 1, "恢复沿用现有去重规则：同一批次不重复投递")
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "pending",
+                         "投递只改变接收记录，批次仍待领取")
 
 
 class OverviewHomeCliTests(unittest.TestCase):
