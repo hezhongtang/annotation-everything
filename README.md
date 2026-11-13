@@ -40,7 +40,7 @@ This README follows `main`; automatic updates install only stable release tags. 
 - **Hand a batch to the agent for revision.** Annotations save automatically. Bind a receiving session and explicitly submit a batch; the agent revises both documents, rebuilds the page and records the result for each annotation.
 - **Check and review as needed.** Request a full consistency check for figures, metric definitions and wording. Use a draft followed by review, or stop after the draft and let the reviewer decide when to finalize.
 
-<p align="center"><img src="docs/assets/receiver.en.png" alt="Synthetic annotation page: report and speaker notes, text and position annotations, bottom composer and receiving session status" width="92%"><br><sub>Attach changes to their text and position, then hand a batch to the agent. All material shown is synthetic.</sub></p>
+<p align="center"><img src="docs/assets/receiver.en.png" alt="Synthetic review page showing the report, speaker notes, annotation, receiving session and top-bar Stop review button" width="92%"><br><sub>Attach changes to their text and position, then hand a batch to the agent. All material shown is synthetic.</sub></p>
 
 ### Analyze: work through the question before revising
 
@@ -119,7 +119,7 @@ See the [English format reference](skill/annotation-everything/references/format
 | `docx_edit.py apply REVIEW --batch N` / `replace REVIEW --paragraph N --from ORIGINAL --to REPLACEMENT` | Write DOCX quick edits or a single free-form replacement; repeat `--id ID` to select annotations, preview with `--dry-run`, or save a new file with `--output NEW_PATH`. The default backs up then edits in place; annotation statuses are unchanged |
 | `report_check.py report.html [--script script.md] [--record report-record.json]` | Public report verification entry: a readable summary by default, structured results with `--json`, and `--locale en` or `zh-CN` for the language. Exit 0 means program checks passed, not that the report is deliverable; 1 means checks failed; 2 means an input or usage error. Content, structure and visual coverage and delivery blockers are listed separately |
 | `serve.py <review-dir-or-id>` | Start the local server; each review keeps its own dedicated port |
-| `http://127.0.0.1:<port>/#overview` (browser address) | Open the review overview to switch scope, inspect details, open or start reviews, and archive or unarchive them; start a local service first |
+| `http://127.0.0.1:<port>/#overview` (browser address) | Open the review overview to switch scope, inspect details, open, start or archive reviews, and stop reviews individually or by scope. Start a local service first |
 | `serve.py list [--json]` | List every review on this machine, including archived entries; both readable output and JSON include an archive flag |
 | `serve.py status <review-dir-or-id>` | Show one review's running status |
 | `serve.py stop <review-dir-or-id> [--timeout N]` / `stop <review-dir-or-id> --status` | Coordinate one review's save protection, waiters, agent turns and HTTP service to stop, or query its persistent state. JSON states are `stopping`, `stopped` and `incomplete`; exit 0 means fully stopped, 1 means incomplete, 2 means an invalid or ambiguous target. `stop-status` is an alias for `--status` |
@@ -147,7 +147,7 @@ See the [English format reference](skill/annotation-everything/references/format
 
 ### Layout and shortcuts
 
-The console layout puts all annotations, processing history, review overview and help in the activity bar. The sidebar groups pages by section and shows annotation counts. Toggle the sidebar, speaker notes and bottom panel with `[`, `]` and `\`; this browser remembers each review's choices. Press `F` for full-screen focus, `C` for the floating composer and `⌘ / Ctrl + ↵` to add an annotation. `P` marking, `S` styling and text-selection shortcuts work in focus mode. `Esc` closes the current overlay before leaving focus mode. Layout shortcuts do not run while typing.
+The console layout puts all annotations, processing history, review overview and help in the activity bar. The sidebar groups pages by section and shows annotation counts. In service mode, use “Stop review” in the top bar. Press `Esc` to cancel confirmation. Toggle the sidebar, speaker notes and bottom panel with `[`, `]` and `\`; this browser remembers each review's choices. Press `F` for full-screen focus, `C` for the floating composer and `⌘ / Ctrl + ↵` to add an annotation. `P` marking, `S` styling and text-selection shortcuts work in focus mode. `Esc` closes the current overlay before leaving focus mode. Layout shortcuts do not run while typing.
 
 <details>
 <summary><b>Batches, review, skills and other features</b></summary>
@@ -186,7 +186,7 @@ The console layout puts all annotations, processing history, review overview and
   <tr>
     <td valign="top">
       <h4>🗂️ Batch history</h4>
-      See, for each submission, how many annotations were resolved, who handled each stage, and what was done. The "Current task details" switch expands or collapses the latest batch, and you can stop this review's local service here. When you reopen the page, it tells you which page you were last annotating and whether the agent has finished.
+      See, for each submission, how many annotations were resolved, who handled each stage, and what was done. The "Current task details" switch expands or collapses the latest batch. When you reopen the page, it tells you which page you were last annotating and whether the agent has finished.
     </td>
     <td valign="top">
       <h4>🔤 PPTX font check</h4>
@@ -196,7 +196,7 @@ The console layout puts all annotations, processing history, review overview and
   <tr>
     <td valign="top">
       <h4>📚 Review overview and archiving</h4>
-      Browse reviews in this workspace or across the machine, find material by status and activity, and inspect summaries and pending submissions. Open, start or archive a review in the browser.
+      Browse reviews in this workspace or across the machine, find material by status and activity, and inspect summaries and pending submissions. Open, start or archive a review, or stop reviews individually or by scope.
     </td>
     <td valign="top">
       <h4>🔄 Automatic release updates</h4>
@@ -215,23 +215,29 @@ In service mode, rebuilding the review page shows a "Review page updated" banner
 
 ### Review overview and archiving
 
-<p align="center"><img src="docs/assets/overview.en.png" alt="Synthetic review overview: status groups and a detail pane with the report summary, purpose, audience, core questions and start action" width="92%"></p>
+<p align="center"><img src="docs/assets/overview.en.png" alt="Synthetic review overview with a stop button for the selected review and a stop-all button for three running reviews in this workspace" width="92%"></p>
 
 Choose "Review overview" on any running review page, or open `/#overview` at its address. The default scope is "This workspace"; switch to "All on this machine" to see other registered reviews. The workspace is the review's git repository root, or its parent directory when it is outside a git repository. Paths are relative; other workspace paths start with `~` or show only the review name. If no review is running, start one with `serve.py <review-id>` first.
 
 The list groups Running, Stopped, Archived and Invalid reviews, with the latest activity first within each group. Select a review to see its summary, purpose, audience, core questions and pending receipt/review counts. Choose "Open" for a running review or "Start and open" for a stopped one to open its page in a new tab. Starting uses its owned port; free an occupied port or refresh the overview when the ledger entry or directory is invalid, then follow the guidance to retry. Invalid entries provide a `serve.py forget <short-id>` cleanup command. "Back to current review" returns to the page hosting the overview.
+
+Choose "Stop review" in the details of a running review, including one in the Archived group. The confirmation names the review and the background activity visible in the overview. The target page tries to save queued changes before the service closes. For "Stop incomplete", check the reason on that review and choose "Retry stop" after recovery. A review can be restarted from "Start and open". Stopping the review that hosts the overview ends its connection. Open the overview from a running review to refresh it.
+
+Use "Stop all running reviews" after checking the scope and count in the confirmation. The count includes archived reviews that are still running. Confirmation fixes the targets for that batch. To stop reviews started later, check the scope and count again before starting another batch. The overview displays each result and reports "All stopped" after every target confirms its stop. For a partial result, resolve the issues shown and choose "Retry failures only". If the review hosting the overview has stopped, start it using the command shown in the result and refresh the same tab to retry. The restarted host keeps its confirmed result for that batch.
 
 Archiving hides reviews that are no longer being advanced from the default list. Annotations, submissions and the owned port remain, and the service keeps running. Choose "Expand" or "Show archived" to reveal them, then select a review and choose "Unarchive". An archived current review displays a banner in both views and still accepts annotations and submissions; archiving does not cancel submitted processing requirements. `serve.py list` still includes every review and marks archived entries.
 
 <details>
 <summary><b>Current task and stopping a review</b></summary>
 <br>
-<p align="center"><img src="docs/assets/batch-controls.en.png" alt="Current task details switch and Stop review button in processing history" width="88%"></p>
+<p align="center"><img src="docs/assets/batch-controls.en.png" alt="Current task details switch in processing history" width="88%"></p>
 Press `J` or click the agent status to open "Processing history". The current task is the latest batch handed to the agent. Its details start collapsed; expand them to see the note, requirements, stages and summary. Polling and language changes preserve the expanded state; a new batch starts collapsed.
 
-"Stop review" sends held changes first and starts stopping only after they are saved. The service then rejects new annotation and analysis writes from the page and new work submissions. It waits for admitted writes, waiters and background hooks to finish, confirms cancellation of the review's event turns by binding, and closes HTTP last. A component rejection, timeout or missing host capability reports `incomplete`. A running service remains available for status and retry. The legacy endpoint uses the same lifecycle. New pages show an upgrade hint when the service lacks `stop-review`.
+Choose “Stop review” in the top bar. The confirmation describes the scope of active agent work and how to reopen the review. The page sends pending changes first. If saving fails, recover the changes and try again. If the service lacks stop status support, follow the upgrade guidance. [Review workflow](skill/annotation-everything/references/workflow.en.md#4-start-the-service-and-wait)
 
-Stopping preserves materials, annotations, batches, receiver binding and the owned port. Other reviews and the shared agent session keep running. Before replacing or removing the binding, confirm cancellation of desktop turns that were delivered and are still awaiting claim. Use `serve.py stop <review-id> --status` to query and `serve.py <review-id>` to explicitly reopen the review. Reopening also redelivers work whose cancellation was confirmed and that is still awaiting claim, including when reusing a running service. "Close" in the top right only closes the history panel.
+The page and other tabs at the same review address show “Stopping review”, “Review stopped”, or “Review not fully stopped”. Expand “Stop components” to see the results. After addressing an incomplete component, choose “Retry stop”. If the connection drops before the page confirms the result, run `serve.py stop <review-id> --status` for the persisted status.
+
+Stopping preserves materials, annotations, submissions, processing history, the receiver binding, the owned port, and open tabs. Other reviews and the shared agent session keep running. Use the displayed `serve.py <review-id>` command to reopen this review explicitly.
 </details>
 
 <details>
@@ -317,7 +323,7 @@ Before an agent runs a repair with `--purge`, `--forget-stale`, `--stop-orphans`
 | No cross-site forged writes | Write requests must come from the same origin as the page and use a JSON content type |
 | Only what is needed is exposed | Only `index.html` and the `/api/*` endpoints are served; no other file in the review directory is reachable through the server |
 | No third-party Python packages | The runtime uses the Python standard library only; the font check calls the system tools `fc-list` and `pdffonts` and explains how to install them if they are missing |
-| Network access | The review server makes no network requests; the updater only contacts the installation's Git remote, sending no review data or telemetry. External resources in reports are not loaded; local images and fonts are embedded in the page |
+| Network access | Review servers coordinate through the local loopback interface. The updater contacts the installation's Git remote without sending review data or telemetry. The page embeds local images and fonts and blocks external report resources |
 | Your data stays local | Annotations and the review page live in the review directory you choose; the local review ledger `~/.annotation-everything/` records only review IDs, directory paths and ports |
 
 Full validation during PR review includes `serve.py check` to verify these constraints; server security checks are deferred to that stage during implementation.
@@ -445,6 +451,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── viewer_template.html       review page and overview template (server mode and local file mode)
 │   ├── serve.py                   local server: serve / status / stop / list / forget / check
 │   ├── review_overview.py         overview scope, report metadata and archive markers
+│   ├── review_save.py             save receipts from the target review's browser
 │   ├── review_stop.py             persistent review stop state and coordinated component shutdown
 │   ├── wakeup.py                  Receiving session binding; Codex events, receipts, cancellation and deduplication
 │   ├── notes.py                   annotation command line: wait / show / resolve / done / review and more

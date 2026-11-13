@@ -193,8 +193,8 @@ SCENARIOS: list[Scenario] = [
     Scenario(
         parallel_safe=True,
         id="current-task-controls",
-        title="当前任务详情的展开与收起、双语与轮询保持状态，以及安全停止本审阅服务并保留数据",
-        fixture="fixtures/sample 合成材料生成的审阅；独立批次、待补传改动与服务重启",
+        title="当前任务详情的展开与收起、双语与轮询保持状态。顶部停止审阅覆盖保存、部分失败、重试、跨标签页和重启",
+        fixture="fixtures/sample 合成材料生成的审阅、已领取批次、待补传批注、多个标签页与真实服务重启",
         isolation="独立临时审阅目录、独立端口与浏览器上下文；所有服务和 CLI 子进程用后回收",
     ),
     Scenario(
@@ -223,6 +223,20 @@ SCENARIOS: list[Scenario] = [
         title="审阅总览：工作区分组、选中详情、当前审阅与双语界面、返回对照页",
         fixture="fixtures/sample 构建的独立合成 git 工作区，运行中、已停和目录失效的审阅",
         isolation="独立工作区、审阅目录、端口与浏览器上下文，服务登记并在场景结束回收",
+    ),
+    Scenario(
+        parallel_safe=True,
+        id="review-overview-stop",
+        title="总览单项停止：工作区范围、归档运行中、异源补传失败和重试、当前审阅确认退出",
+        fixture="fixtures/sample 构建的两个独立工作区；真实回环服务与目标对照页；合成批注保存被拒",
+        isolation="独立审阅目录、端口与浏览器上下文，场景结束时回收三个服务",
+    ),
+    Scenario(
+        parallel_safe=True,
+        id="review-overview-stop-scope",
+        title="总览批量停止：范围与固定目标、逐项结果、刷新与双语、部分完成后只重试失败项",
+        fixture="fixtures/sample 构建的两个独立工作区；真实回环服务与合成保存失败；停止期间另启动审阅",
+        isolation="独立台账、审阅目录、端口与浏览器上下文，服务在场景结束时回收",
     ),
     Scenario(
         parallel_safe=True,

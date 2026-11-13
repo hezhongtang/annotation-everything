@@ -227,7 +227,9 @@ One line per paragraph.
 
 页面接口：`POST /api/handoff` `{message, target, allowSubagents, fullCheck, userMessage}` 提交一批；新批次的 `fullCheck` 缺省为 false，合并待接收的批次时缺省表示保留原值，显式传入布尔值才更新；请求复核时保留原批次的要求。勾选时页面在 `message` 开头放勾稽要求，并用 `userMessage` 传原始附言；新服务保存原文并生成兼容旧 Agent 的 `message`。响应中的 `acceptedFullCheck` 确认该批次实际保存的选项。`POST /api/handoff/review` `{seq, message, allowSubagents}` 请求复核；`POST /api/handoff/finalize` `{seq}` 直接定稿。轮询状态里的 `inFlightIds` 是已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」）。服务功能列表中的 `full-check` 表示支持这个选项；页面发送前检查功能，服务未确认保存时保留待补传提交并提醒核对批次状态。若服务在检查后切换到旧版，旧服务可能已经接收提交；其 4,000 字上限包含兼容提示，因此可能截短旧 Agent 首次收到的附言，恢复新版后重试会携带完整原文，也可能形成另一批。旧服务和旧页面共同更新待接收批次时也可能覆盖兼容提示，使用新选项前应升级服务并刷新页面。
 
-`POST /api/server/stop` 对旧页面同样进入审阅级停止生命周期。先拒绝新提交和后台工作，完成保存保护、等待者退出与轮次取消确认，最后停止 HTTP；HTTP 只有在 `server_close()` 返回后才记为停止。`.annotation-stop.json` 私有原子记录停止标识、`stopping` / `stopped` / `incomplete`、各组件确认以及 hook 配置与进程号。独立 hook 在服务消失后仍须实际退出；`connecting` / `sending` 投递属于活动工作，停止与直接投递由同一分发锁协调，取消快照后不能再开始新轮次。普通命令行或总览的显式启动即使复用运行中的服务也会解除停止状态，批次、绑定和专属端口不变。`stop-review` 声明该能力，新页面连接旧服务时提示升级，不退回只停 HTTP。
+`POST /api/server/stop` 对旧页面同样进入审阅级停止生命周期。先拒绝新提交和后台工作，完成保存保护、等待者退出与轮次取消确认，最后停止 HTTP；HTTP 只有在 `server_close()` 返回后才记为停止。`.annotation-stop.json` 私有原子记录停止标识、`stopping` / `stopped` / `incomplete`、各组件确认以及 hook 配置与进程号。独立 hook 在服务消失后仍须实际退出；`connecting` / `sending` 投递属于活动工作，停止与直接投递由同一分发锁协调，取消快照后不能再开始新轮次。普通命令行或总览的显式启动即使复用运行中的服务也会解除停止状态，批次、绑定和专属端口不变。`stop-review` 声明审阅级停止能力。
+
+`stop-review-status` 声明对照页的状态协议。`GET /api/server/stop` 需要匹配本审阅的 `X-AE-Review`，返回 `{app, reviewId, stop}`。`GET /api/notes` 带相同的 `stop` 快照。快照包含 `reviewId`、`stopId`、`state`、`attempts`、递增的 `revision` 及各组件的状态和原因码。添加 `?wait=<stopId>` 可在该次停止进行期间等候结果。新对照页在确认保存后发送 `POST /api/server/stop`，附 `waitForExit: true` 和从快照读取的 `expectedStop: {stopId, attempts}`。如果已经开始其他尝试，服务返回当前快照。成功时在监听端口关闭并写入持久终态后回复。旧页面仍可使用原请求。新页面连接缺少该能力的服务时提示升级。
 
 全部定稿仅供审阅人在页面确认，不提供 Agent 或 CLI 入口。服务功能列表中的 `finalize-all` 声明支持；不支持时页面隐藏按钮并提示更新技能、重启服务和刷新。`GET /api/notes` 的 `handoff.finalizable` 与 `GET /api/handoff` 的顶层 `finalizable` 提供 `{count, batches: [{seq, ids}], skipped: [{id, batch, reason}]}`：只把 `drafted` 批注且批次为 `drafted` / `review` 的条目列为可定稿，`claimed` / `reviewing` 的初改列为跳过。
 
@@ -309,6 +311,14 @@ JSON 与 Markdown 导出都不包含分析事件、问答、问题树或轮次�
 - 生成对照页、启动服务、运行 notes.py 时登记；目录搬家后按标识更新路径。专属端口第一次 `serve` 时分配，只有 `serve.py forget` 才释放。
 - 写入在 `~/.annotation-everything/.reviews.lock` 文件锁下读改写，原子替换；读不加锁。文件损坏时不会被覆盖，相关命令只警告、照常干活。**不要手改**，用 `list` / `forget` / `--claim-port`。
 - 复制出来的审阅目录（原目录还在、标识相同）不会顶替原条目，`--rebuild` 换了新标识后才登记。
+
+## 审阅总览停止
+
+总览客户端用 `POST /api/overview/stop` 提交 `{reviewId, scope}`，其中 `reviewId` 是目标审阅的完整标识，`scope` 取 `workspace` 或 `all`。`X-AE-Review` 仍指托管总览的审阅。成功响应中的 `reviewId` 指目标，`stop` 包含操作状态和组件结果。`GET /api/overview` 的每行也提供 `stop`，按目标持久状态刷新。`overview-stop` 声明总览停止能力，`stop-save-protection` 声明保存回执能力。
+
+批量停止在确认时记录范围和目标审阅标识。总览逐份发送同一停止请求，并在原标签页的会话存储中保留最近一次批量结果。请求响应或持久状态确认停止过程完成后，总览才将目标计为已停止。
+
+目标页面用同源 JSON `POST /api/server/save-protection` 登记浏览器存储来源。停止期间，目标服务返回带 `stopId` 和尝试令牌的保存请求。页面在本机浏览器补传队列后提交同一请求的回执。`.annotation-save-pages.json` 在审阅目录内私有写入登记信息，包含随机标识和本机来源。页面失联或回执失败时，目标服务保持可用，便于重试。
 
 ## 导出与导入（批注摘要）
 

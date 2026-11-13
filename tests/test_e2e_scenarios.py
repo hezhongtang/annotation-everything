@@ -55,6 +55,8 @@ FULL_ORDER = (
     "export-import",
     "file-mode",
     "review-overview",
+    "review-overview-stop",
+    "review-overview-stop-scope",
     "css-fidelity",
     "docx-review",
     "server-mode",

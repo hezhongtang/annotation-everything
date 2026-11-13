@@ -12,6 +12,7 @@ import uuid
 import fsutil
 import ledger
 import notes_store as store
+import review_save
 import wakeup
 
 STATE_FILE = ".annotation-stop.json"
@@ -19,6 +20,7 @@ LOCK_FILE = ".annotation-stop.lock"
 OPERATION_LOCK = ".annotation-stop-operation.lock"
 SCHEMA = 1
 COMPONENTS = ("gate", "save", "waiters", "hooks", "agent", "http")
+STOP_INTERRUPTED = "stop-interrupted"
 
 
 class OperationBusy(Exception):
@@ -35,6 +37,20 @@ def operation(review, *, deadline=None):
         except BlockingIOError:
             raise OperationBusy from None
         yield
+
+
+@contextlib.contextmanager
+def stop_attempt(review, *, deadline):
+    """An overlapping stop waits for the current result without starting another attempt."""
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(operation(review, deadline=time.monotonic()))
+        except OperationBusy:
+            with contextlib.suppress(OperationBusy):
+                stack.enter_context(operation(review, deadline=deadline))
+            yield False
+        else:
+            yield True
 
 
 def remaining(deadline):
@@ -79,6 +95,7 @@ def _read(review, manifest=None):
 
 def _write(review, value):
     value["updatedAt"] = _now()
+    value["revision"] = value.get("revision", 0) + 1
     fsutil.atomic_write(Path(review) / STATE_FILE,
                         json.dumps(value, ensure_ascii=False, indent=2) + "\n",
                         prefix=".annotation-stop-")
@@ -95,6 +112,51 @@ def _edit(review, change):
 def load(review):
     with fsutil.flocked(Path(review) / LOCK_FILE, exclusive=False):
         return _read(review)
+
+
+def status(review, *, manifest=None):
+    """Distinguish an interrupted stop from a coordinator that still holds its lock."""
+    value = _read(review, manifest)
+    if value["state"] != "stopping":
+        return value
+    try:
+        with operation(review, deadline=time.monotonic()):
+            value = _read(review, manifest)
+            if value["state"] == "stopping":
+                value.update(state="incomplete", incompleteReasons={"request": STOP_INTERRUPTED})
+            return value
+    except OperationBusy:
+        return _read(review, manifest)
+
+
+def public_snapshot(value):
+    """Lifecycle state for a page, excluding process and receiver metadata."""
+    components = {}
+    for name in COMPONENTS:
+        component = value["components"][name]
+        public = components[name] = {"state": component["state"]}
+        if component["state"] == "stopped":
+            continue
+        error = component.get("error")
+        if isinstance(error, str):
+            public["error"] = error
+        failures = component.get("failures")
+        if isinstance(failures, list):
+            causes = list(dict.fromkeys(item["code"] for item in failures
+                                        if isinstance(item, dict) and isinstance(item.get("code"), str)))
+            if causes:
+                public["causes"] = causes
+    reasons = {name: item["error"] for name, item in components.items() if "error" in item}
+    if value.get("incompleteReasons", {}).get("request") == STOP_INTERRUPTED:
+        reasons["request"] = STOP_INTERRUPTED
+    return {"reviewId": value["reviewId"], "state": value["state"], "stopId": value["stopId"],
+            "attempts": value.get("attempts", 0) if value["stopId"] else 0,
+            "revision": value.get("revision", 0), "components": components,
+            "incompleteReasons": reasons}
+
+
+def public_status(review, *, manifest=None):
+    return public_snapshot(status(review, manifest=manifest))
 
 
 def accepts_work(review, *, manifest=None):
@@ -159,6 +221,8 @@ def mark(review, name, state, error=None, *, stop_id=None, **details):
         else:
             component.pop("error", None)
         if state == "stopped":
+            component.pop("failures", None)
+            component.pop("detail", None)
             component["stoppedAt"] = component.get("stoppedAt") or _now()
         value["components"][name] = component
         components = value["components"]
@@ -241,16 +305,36 @@ def _live_waiters(review):
     return sorted(set(live))
 
 
-def _protect_save(review, deadline):
-    if load(review)["components"]["save"]["state"] == "stopped":
-        return
-    mark(review, "save", "stopping")
+def _protect_save(review, deadline, server, browser_protocol_required):
+    state = load(review)
     try:
+        rid = state["reviewId"]
+        if server is not None and browser_protocol_required and not server.browser_save_protocol_available():
+            mark(review, "save", "incomplete", "save-protection-upgrade-required")
+            return
+        registered = (bool(review_save.registered_pages(review, rid)) if server is None
+                      else server.browser_saves.has_registered_pages(rid))
+        # A browser can queue more changes while an incomplete stop leaves HTTP running.
+        if state["components"]["save"]["state"] == "stopped" and not registered:
+            return
+        mark(review, "save", "stopping")
+        if server is None:
+            if registered:
+                mark(review, "save", "incomplete", "save-protection-unconfirmed")
+                return
+        else:
+            error = server.browser_saves.protect(rid, state["stopId"], remaining(deadline))
+            if error is not None:
+                mark(review, "save", "incomplete", error)
+                return
+            if not server.wait_for_writes(remaining(deadline)):
+                mark(review, "save", "incomplete", "save-protection-timeout")
+                return
         with fsutil.flocked(Path(review) / store.LOCK_FILE, exclusive=True, deadline=deadline):
             mark(review, "save", "stopped", protectedAt=_now())
     except BlockingIOError:
         mark(review, "save", "incomplete", "save-protection-timeout")
-    except OSError as error:
+    except (OSError, ValueError) as error:
         mark(review, "save", "incomplete", "save-protection-unavailable", detail=type(error).__name__)
 
 
@@ -310,15 +394,12 @@ def _coordinate_agent(review, deadline):
          **{k: v for k, v in result.items() if k not in ("state", "error")})
 
 
-def coordinate(review, *, deadline, server=None):
+def coordinate(review, *, deadline, server=None, browser_protocol_required=False):
     """Drain admitted work while the caller holds the review's operation lock."""
     state = load(review)
     if state["state"] == "stopped":
         return state
-    if server is not None and not server.wait_for_writes(remaining(deadline)):
-        mark(review, "save", "incomplete", "save-protection-timeout")
-    else:
-        _protect_save(review, deadline)
+    _protect_save(review, deadline, server, browser_protocol_required)
     save_protected = load(review)["components"]["save"]["state"] == "stopped"
     if save_protected:
         _coordinate_waiters(review, deadline)
