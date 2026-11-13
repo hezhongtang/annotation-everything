@@ -142,6 +142,12 @@ MAX_BODY = 2 * 1024 * 1024
 HOST = "127.0.0.1"
 NOTE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})$")
 SAFE_CHARS = re.compile(r"[^A-Za-z0-9._:/?=&%+@-]")
+# 总览首页宿主：页面、运行状态、日志与启动锁都在台账目录，不写进任何审阅目录
+HOST_KIND_OVERVIEW = "overview-home"          # /api/health 的宿主种类；审阅宿主不带宿主种类字段（行为不变）
+OVERVIEW_PAGE_FILE = ".overview-home.html"    # 仅总览视图的首页页面（由 build_overview_home 生成）
+OVERVIEW_LOG_FILE = "overview-home.log"       # 首页服务日志
+OVERVIEW_STATUS_FILE = ".overview-home-status.json"   # 首页运行状态（pid/端口/宿主标识），退出时删除
+OVERVIEW_START_LOCK_FILE = ".overview-home-start.lock"   # 并发首次启动的串行化锁（台账目录）
 
 
 def csp_for(html_text: str) -> str:
@@ -241,14 +247,22 @@ class _RequestReads:
 class ReviewServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, review_dir: Path, port: int, debug: bool = False, log_to_file: bool = True,
+    def __init__(self, review_dir: Path | None, port: int, debug: bool = False, log_to_file: bool = True,
                  on_handoff: list[str] | None = None, hook_cwd: str | None = None,
-                 locale: str | None = None):
+                 locale: str | None = None, *, home_id: str | None = None,
+                 overview_under: Path | None = None):
+        self.home_id = home_id   # 非 None：总览首页宿主（无审阅目录）；None：审阅宿主，行为与从前一致
+        self.overview_under = Path(overview_under).expanduser().resolve() if overview_under else None
         self.review_dir = review_dir
         self.debug = debug
-        # Capture identity and route from one atomic metadata read without changing an untouched review.
-        self.agent_binding = wakeup.load_binding(review_dir)
-        self.on_handoff = wakeup.hook_command(review_dir, on_handoff, binding=self.agent_binding)
+        if home_id is not None:
+            # 首页宿主没有审阅：不读接收方绑定、不建保存保护登记；钩子参数只随配置记录，由 #159 的代启动继承。
+            self.agent_binding = None
+            self.on_handoff = list(on_handoff) if on_handoff else None
+        else:
+            # Capture identity and route from one atomic metadata read without changing an untouched review.
+            self.agent_binding = wakeup.load_binding(review_dir)
+            self.on_handoff = wakeup.hook_command(review_dir, on_handoff, binding=self.agent_binding)
         self.hook_cwd = hook_cwd or os.getcwd()
         # 诊断说明用的语言；None 时保持中文（旧调用行为不变）
         self.locale = locale or i18n.DEFAULT_LOCALE
@@ -257,7 +271,7 @@ class ReviewServer(ThreadingHTTPServer):
         self._hook_queue: list[dict[str, Any]] = []   # 钩子运行中又来的事件：按到达顺序排队，同一批同一事件只留最新
         self._writes = threading.Condition()
         self._active_writes = 0
-        self.browser_saves = review_save.BrowserSaves(review_dir)
+        self.browser_saves = None if home_id is not None else review_save.BrowserSaves(review_dir)
         self._close_lock = threading.Lock()
         self.closing = False
         self.stop_id: str | None = None
@@ -277,13 +291,15 @@ class ReviewServer(ThreadingHTTPServer):
         with self._log_lock:
             print(line, file=sys.stderr, flush=True)
             if self.log_to_file:
+                # 首页宿主的日志在台账目录；审阅宿主的照旧在审阅目录
+                target = (ledger.home() / OVERVIEW_LOG_FILE) if self.home_id is not None else (self.review_dir / LOG_FILE)
                 try:
-                    store.append_private(self.review_dir / LOG_FILE, line)
+                    store.append_private(target, line)
                 except OSError:
                     pass
 
     def _cached(self, name: str, build: Any) -> Any:
-        f = self.review_dir / name
+        f = (ledger.home() / OVERVIEW_PAGE_FILE) if self.home_id is not None else (self.review_dir / name)
         try:
             mtime = f.stat().st_mtime
         except OSError:
@@ -470,6 +486,8 @@ class ReviewServer(ThreadingHTTPServer):
             self._stop_replies.wait_for(lambda: self._stop_reply_count == 0, timeout=1.0)
 
     def manifest(self) -> dict[str, Any]:
+        if self.home_id is not None:
+            return {}   # 首页宿主没有审阅清单；页面与路由都不注入审阅标识
         def read(f: Path | None) -> dict[str, Any]:
             try:
                 m = json.loads(f.read_text(encoding="utf-8")) if f else {}
@@ -582,6 +600,10 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/"):
                 mutating = self.command not in ("GET", "HEAD")
                 self._check_api_origin(mutating=mutating)
+                if self.server.home_id is not None:
+                    # 首页宿主没有审阅写路径：不进保存保护写门闩，审阅专属路由在 _api_home 里显式拒绝。
+                    self._api(path)
+                    return
                 # Overview actions address the review named in their body. Archiving changes
                 # an atomic metadata marker and is also available for already stopped reviews.
                 if mutating and path not in ("/api/server/stop", "/api/server/resume",
@@ -899,8 +921,11 @@ class Handler(BaseHTTPRequestHandler):
         raise Reject(400, "bad-request", self._t("serve.err.noAnalysis"))   # 未覆盖的 op，不可达
 
     def _api(self, path: str) -> None:
-        d, m = self.server.review_dir, NOTE_PATH.match(path)
         cmd = "GET" if self.command == "HEAD" else self.command
+        if self.server.home_id is not None:
+            self._api_home(path, cmd)
+            return
+        d, m = self.server.review_dir, NOTE_PATH.match(path)
         # 页面带上自己的审阅标识：端口上换成了另一份审阅的服务时，先拒绝，绝不写进别人的 notes.json
         claimed = self.headers.get("X-AE-Review")
         if claimed is not None and path != "/api/health":
@@ -1170,6 +1195,93 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"app": APP, "reviewId": target, "archived": archived})
         else:
             raise Reject(404 if cmd == "GET" else 405, "no-api", self._t("serve.err.noApi"))
+
+    # ---------- 总览首页宿主 ----------
+    def _api_home(self, path: str, cmd: str) -> None:
+        """总览首页宿主的 API：健康检查与总览家族之外一律显式拒绝，不创建或改写任何状态文件。"""
+        server = self.server
+        if path == "/api/health" and cmd == "GET":
+            self._json(200, {"app": APP, "version": VERSION, "features": FEATURES,
+                             "hostKind": HOST_KIND_OVERVIEW, "hostId": server.home_id,
+                             "pid": os.getpid(), "port": server.port,
+                             "under": str(server.overview_under) if server.overview_under else None,
+                             "hook": bool(server.on_handoff)})
+            return
+        if path == "/api/overview" and cmd == "GET":
+            scopes = parse_qs(self.path.partition("?")[2], keep_blank_values=True).get("scope", [None])
+            if len(scopes) != 1 or (scopes[0] is not None and scopes[0] not in ("workspace", "all")):
+                raise Reject(400, "bad-scope", self._t("serve.err.overviewScope"))
+            if scopes[0] == "workspace":
+                raise Reject(400, "bad-scope", self._t("serve.err.overviewScopeHome"))
+            under = server.overview_under
+            self._json(200, {"app": APP, "reviewId": None, "features": FEATURES,
+                             "hostKind": HOST_KIND_OVERVIEW, "hostId": server.home_id,
+                             **review_overview.snapshot(None, None, "all", review_row,
+                                                        workspace_dir=under, under_dir=under)})
+            return
+        if cmd != "GET" and path in ("/api/overview/start", "/api/overview/archive", "/api/overview/stop"):
+            # 首页写操作要求请求头里的宿主标识与本服务一致（对照页的 X-AE-Review 只对审阅宿主有意义）
+            if self.headers.get("X-AE-Host") != server.home_id:
+                raise Reject(409, "host-mismatch", self._t("serve.err.hostMismatch"))
+            self._overview_write(path)
+            return
+        raise Reject(404 if cmd == "GET" else 405, "review-only-api", self._t("serve.err.reviewOnlyApi"))
+
+    def _overview_in_scope(self, target: Path) -> bool:
+        """首页唯一的有效范围判定：列表、代启动、归档与停止共用；--under 沿用 list --under 的目录包含关系。"""
+        under = self.server.overview_under
+        if under is None:
+            return True
+        directory = Path(target).resolve()
+        return directory == under or under in directory.parents
+
+    def _overview_write(self, path: str) -> None:
+        server = self.server
+        if path == "/api/overview/start":
+            body = self._body()
+            if not isinstance(body, dict) or set(body) != {"reviewId"}:
+                raise Reject(400, "bad-overview-start", self._t("serve.err.overviewStartBody"))
+            rid = body["reviewId"]
+            target, _entry = overview_start_target(rid, self._t)   # 台账外标识在这里就拒绝，不拉起进程
+            if not self._overview_in_scope(target):
+                raise Reject(404, "overview-review-out-of-scope",
+                             self._t("serve.err.overviewTargetScope", under=str(server.overview_under)))
+            url = start_overview_review(rid, self._t)
+            self._json(200, {"app": APP, "url": url})
+            return
+        if path == "/api/overview/archive":
+            body = self._expect_obj(self._body())
+            target, archived = body.get("reviewId"), body.get("archived")
+            if not isinstance(target, str) or not ledger.RID.fullmatch(target) or not isinstance(archived, bool):
+                raise Reject(400, "bad-archive", self._t("serve.err.archivePayload"))
+            entry = ledger.get(target)
+            if entry is None:
+                raise Reject(404, "archive-unknown", self._t("serve.err.archiveUnknown"))
+            if ledger.entry_state(target, entry) != "ok":
+                raise Reject(409, "archive-unavailable", self._t("serve.err.archiveUnavailable"))
+            directory = Path(entry["dir"]).resolve()
+            if not self._overview_in_scope(directory):
+                raise Reject(404, "overview-review-out-of-scope",
+                             self._t("serve.err.overviewTargetScope", under=str(server.overview_under)))
+            review_overview.set_archived(directory, archived)
+            self._json(200, {"app": APP, "reviewId": target, "archived": archived})
+            return
+        # /api/overview/stop
+        body = self._body()
+        if (not isinstance(body, dict) or set(body) != {"reviewId", "scope"}
+                or not isinstance(body["reviewId"], str) or not ledger.RID.fullmatch(body["reviewId"])):
+            raise Reject(400, "bad-overview-stop", self._t("serve.err.overviewStopBody"))
+        rid, scope = body["reviewId"], body["scope"]
+        if scope not in ("workspace", "all"):
+            raise Reject(400, "bad-scope", self._t("serve.err.overviewScope"))
+        if scope == "workspace":
+            raise Reject(400, "bad-scope", self._t("serve.err.overviewScopeHome"))
+        target, _entry = overview_start_target(rid, self._t)
+        if not self._overview_in_scope(target):
+            raise Reject(404, "overview-review-out-of-scope",
+                         self._t("serve.err.overviewTargetScope", under=str(server.overview_under)))
+        result = review_stop.public_snapshot(stop_overview_review(target, rid, self._t))
+        self._json(200, {"app": APP, "reviewId": rid, "state": result["state"], "stop": result})
 
     def _expect_obj(self, body: Any) -> dict[str, Any]:
         if not isinstance(body, dict):

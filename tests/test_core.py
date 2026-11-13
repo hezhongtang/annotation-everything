@@ -46,6 +46,8 @@ import export_format as ef  # noqa: E402
 import notes as notes_cli  # noqa: E402
 import notes_store as store  # noqa: E402
 import ledger  # noqa: E402
+import review_overview  # noqa: E402
+import review_stop  # noqa: E402
 import serve  # noqa: E402
 import wakeup  # noqa: E402
 
@@ -2669,6 +2671,209 @@ class OverviewTests(unittest.TestCase):
                 self.assertEqual(json.loads(raw)["code"], "bad-scope")
         status, _, _ = serve._req(self.srv.port, "GET", "/overview", self.good)
         self.assertEqual(status, 404, "总览仍是 index.html 内的视图，不新增可访问路径")
+
+
+class OverviewHomeTests(unittest.TestCase):
+    """总览首页宿主：无审阅目录的服务，只服务总览视图与它的写接口；审阅专属路由显式拒绝。"""
+
+    def setUp(self):
+        previous = os.environ["AE_HOME"]
+        os.environ["AE_HOME"] = str(tmpdir())
+        self.addCleanup(os.environ.__setitem__, "AE_HOME", previous)
+        self.tree = tmpdir()
+        self.workspace = self.tree / "workspace"
+        self.workspace.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.workspace)], check=True, capture_output=True)
+        self.inside = self.workspace / "inside"
+        self.outside = self.tree / "outside"   # 同一台账但不在 workspace 下
+        self.rid_inside = self.build(self.inside, "Inside review")["reviewId"]
+        self.rid_outside = self.build(self.outside, "Outside review")["reviewId"]
+        self.host_id = ledger.HOME_HOST_ID
+        self.start_home()
+
+    def build(self, directory, name):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", directory, name=name)
+
+    def write_page(self):
+        # 循环 3 之前的最小页面：行为测试只关心服务端不注入审阅数据
+        (ledger.home() / serve.OVERVIEW_PAGE_FILE).write_text(
+            "<!doctype html><title>overview-home</title><script>var ok=1</script>", encoding="utf-8")
+
+    def start_home(self, under=None):
+        self.write_page()
+        self.srv = serve.ReviewServer(None, 0, home_id=self.host_id, overview_under=under, log_to_file=False)
+        thread = threading.Thread(target=self.srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread.start()
+        self.addCleanup(self.srv.server_close)
+        self.addCleanup(self.srv.shutdown)
+        self.port = self.srv.port
+        self.good = {"Host": f"127.0.0.1:{self.port}"}
+        self.same = {**self.good, "Origin": f"http://127.0.0.1:{self.port}", "Content-Type": "application/json",
+                     "X-AE-Host": self.host_id}
+
+    def restart_home(self, under):
+        self.srv.shutdown()
+        self.srv.server_close()
+        self.start_home(under=under)
+
+    def state_snapshot(self):
+        """首页请求前后的状态文件字节：审阅专属路由被拒时一个都不能变。"""
+        paths = [ledger.home() / ledger.LEDGER_FILE, ledger.home() / ledger.OVERVIEW_PORT_FILE,
+                 self.inside / store.NOTES_FILE, self.inside / store.HANDOFF_FILE, self.inside / serve.STATUS_FILE,
+                 self.outside / store.NOTES_FILE, self.outside / store.HANDOFF_FILE,
+                 self.outside / review_stop.STATE_FILE]
+        return [(p.name, str(p.parent), p.read_bytes() if p.exists() else None) for p in paths]
+
+    def request(self, path, headers=None):
+        return serve._req(self.port, "GET", path, headers or self.good)
+
+    def stop_started(self, directory, rid):
+        info = serve.read_status(directory)
+        if not info:
+            return
+        port = info["port"]
+        found = serve.probe(port, timeout=0.2)
+        if found and found.get("reviewId") == rid and serve.same_dir(found, directory):
+            serve._req(port, "POST", "/api/server/stop",
+                       {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}",
+                        "Content-Type": "application/json", "X-AE-Review": rid}, {})
+            end = time.monotonic() + 5
+            while time.monotonic() < end and ledger.pid_alive(info["pid"]):
+                time.sleep(0.02)
+
+    def test_health_reports_host_kind_and_stable_id(self):
+        status, headers, raw = self.request("/api/health")
+        body = json.loads(raw)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual((body["app"], body["hostKind"], body["hostId"]), (serve.APP, "overview-home", self.host_id))
+        self.assertEqual(body["pid"], os.getpid())
+        self.assertNotIn("agentDelivery", body, "首页不注入批注接收状态")
+        self.assertNotIn("receiver", body)
+        self.assertIsNone(body.get("reviewId"), "不注入审阅标识")
+        self.assertNotIn("access-control-allow-origin", headers)
+
+    def test_index_serves_overview_page_without_review_data(self):
+        for path in ("/", "/index.html"):
+            status, headers, raw = self.request(path)
+            self.assertEqual(status, 200, raw)
+            self.assertNotIn("access-control-allow-origin", headers)
+            self.assertIn("content-security-policy", headers)
+            self.assertNotIn(self.rid_inside.encode(), raw, "页面不注入审阅标识")
+            self.assertNotIn(self.rid_outside.encode(), raw)
+            self.assertNotIn(b"notes.json", raw, "页面不注入批注状态")
+        for path in ("/review.json", "/notes.json", "/server.log", "/overview-home.json",
+                     "/.overview-home.html", "/../review.json"):
+            status, _, _ = self.request(path)
+            self.assertEqual(status, 404, f"{path} 不暴露本机文件")
+
+    def test_review_only_routes_rejected_without_state_writes(self):
+        before = self.state_snapshot()
+        cases = [("GET", "/api/notes", 404), ("POST", "/api/notes", 405),
+                 ("PATCH", "/api/notes/note0001", 405), ("DELETE", "/api/notes/note0001", 405),
+                 ("GET", "/api/handoff", 404), ("POST", "/api/handoff", 405),
+                 ("POST", "/api/handoff/finalize-all", 405),
+                 ("GET", "/api/analysis", 404), ("POST", "/api/analysis/start", 405),
+                 ("POST", "/api/analysis/submit", 405),
+                 ("GET", "/api/server/stop", 404), ("POST", "/api/server/stop", 405),
+                 ("POST", "/api/server/resume", 405), ("POST", "/api/server/save-protection", 405)]
+        for method, path, expected in cases:
+            with self.subTest(method=method, path=path):
+                status, headers, raw = serve._req(self.port, method, path, self.same)
+                self.assertEqual(status, expected, raw)
+                self.assertEqual(json.loads(raw)["code"], "review-only-api", raw)
+                self.assertNotIn("access-control-allow-origin", headers)
+        self.assertEqual(self.state_snapshot(), before, "被拒请求不创建或改写任何状态文件")
+
+    def test_overview_scope_defaults_to_full_ledger_and_rejects_workspace(self):
+        status, headers, raw = self.request("/api/overview")
+        body = json.loads(raw)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(body["hostKind"], "overview-home")
+        self.assertIsNone(body["reviewId"])
+        self.assertEqual({r["reviewId"] for r in body["reviews"]}, {self.rid_inside, self.rid_outside})
+        status, _, raw = self.request("/api/overview?scope=all")
+        self.assertEqual(status, 200, raw)
+        self.assertEqual({r["reviewId"] for r in json.loads(raw)["reviews"]}, {self.rid_inside, self.rid_outside})
+        for path in ("/api/overview?scope=workspace",):
+            status, _, raw = self.request(path)
+            self.assertEqual(status, 400, raw)
+            self.assertEqual(json.loads(raw)["code"], "bad-scope")
+
+    def test_under_scope_fixed_and_all_does_not_widen(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        self.start_home(under=self.workspace)
+        for query in ("", "?scope=all"):
+            status, _, raw = self.request("/api/overview" + query)
+            body = json.loads(raw)
+            self.assertEqual(status, 200, raw)
+            self.assertEqual({r["reviewId"] for r in body["reviews"]}, {self.rid_inside},
+                             "传入 --under 时 scope=all 不扩大范围")
+        status, _, raw = self.request("/api/overview?scope=workspace")
+        self.assertEqual(status, 400, raw)
+        self.assertEqual(json.loads(raw)["code"], "bad-scope")
+
+    def test_start_refuses_outside_ledger_or_scope_without_process(self):
+        self.restart_home(self.workspace)
+        before = self.state_snapshot()
+        with patch.object(subprocess, "Popen", side_effect=AssertionError("unexpected overview child")) as spawned:
+            for headers, rid, expected, code in (
+                    (self.same, "0" * 16, 404, "overview-review-unknown"),
+                    (self.same, self.rid_outside, 404, "overview-review-out-of-scope"),
+                    ({k: v for k, v in self.same.items() if k != "X-AE-Host"}, self.rid_inside, 409, "host-mismatch"),
+                    ({**self.same, "X-AE-Host": "other-host"}, self.rid_inside, 409, "host-mismatch")):
+                with self.subTest(rid=rid[:8], code=code):
+                    status, _, raw = serve._req(self.port, "POST", "/api/overview/start", headers, {"reviewId": rid})
+                    self.assertEqual(status, expected, raw)
+                    self.assertEqual(json.loads(raw)["code"], code, raw)
+            self.assertEqual(spawned.call_count, 0, "台账外或范围外的标识不拉起任何进程")
+        self.assertEqual(self.state_snapshot(), before, "被拒的启动不改变目标审阅状态")
+
+    def test_start_inside_scope_launches_review_on_owned_port(self):
+        port = free_port()
+        ledger.claim_port(self.rid_inside, self.inside, port)
+        status, _, raw = serve._req(self.port, "POST", "/api/overview/start", self.same, {"reviewId": self.rid_inside})
+        body = json.loads(raw)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(body["url"], f"http://127.0.0.1:{port}/")
+        found = serve.probe(port)
+        self.assertEqual((found["reviewId"], found["dir"]), (self.rid_inside, str(self.inside.resolve())))
+        self.stop_started(self.inside, self.rid_inside)
+
+    def test_archive_respects_scope_and_host_header(self):
+        self.restart_home(self.workspace)
+        status, headers, raw = serve._req(self.port, "POST", "/api/overview/archive", self.same,
+                                          {"reviewId": self.rid_inside, "archived": True})
+        self.assertEqual(status, 200, raw)
+        self.assertTrue((self.inside / review_overview.ARCHIVE_FILE).exists())
+        self.assertNotIn("access-control-allow-origin", headers)
+        self.addCleanup((self.inside / review_overview.ARCHIVE_FILE).unlink)
+        before = self.state_snapshot()
+        for headers_, rid, expected, code in (
+                (self.same, self.rid_outside, 404, "overview-review-out-of-scope"),
+                ({k: v for k, v in self.same.items() if k != "X-AE-Host"}, self.rid_outside, 409, "host-mismatch")):
+            with self.subTest(rid=rid[:8]):
+                status, _, raw = serve._req(self.port, "POST", "/api/overview/archive", headers_,
+                                            {"reviewId": rid, "archived": True})
+                self.assertEqual(status, expected, raw)
+                self.assertEqual(json.loads(raw)["code"], code, raw)
+        self.assertFalse((self.outside / review_overview.ARCHIVE_FILE).exists(), "范围外的目标不改归档标记")
+        self.assertEqual(self.state_snapshot(), before)
+
+    def test_stop_respects_scope_and_rejects_workspace(self):
+        self.restart_home(self.workspace)
+        before = self.state_snapshot()
+        for headers, body, expected, code in (
+                (self.same, {"reviewId": self.rid_outside, "scope": "all"}, 404, "overview-review-out-of-scope"),
+                (self.same, {"reviewId": self.rid_outside, "scope": "workspace"}, 400, "bad-scope"),
+                (self.same, {"reviewId": "0" * 16, "scope": "all"}, 404, "overview-review-unknown")):
+            with self.subTest(code=code):
+                status, _, raw = serve._req(self.port, "POST", "/api/overview/stop", headers, body)
+                self.assertEqual(status, expected, raw)
+                self.assertEqual(json.loads(raw)["code"], code, raw)
+        self.assertFalse((self.outside / review_stop.STATE_FILE).exists(), "范围外的停止不创建停止状态文件")
+        self.assertEqual(self.state_snapshot(), before)
 
 
 class LedgerTests(unittest.TestCase):
