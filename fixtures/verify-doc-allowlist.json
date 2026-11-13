@@ -83,8 +83,8 @@
     {
       "path": "skill/annotation-everything/scripts/notes.py",
       "function": "_snapshot",
-      "source_sha256": "92632870dd8f4a7e7f2232925a08c3e75a40292d718f9539eb9208c69552197a",
-      "basis": "DOCX 二进制保存只处理已解析的审阅源；递归遍历仍仅清理审阅目录内旧批次快照，不读取仓库说明文档。"
+      "source_sha256": "cca4b1a4d8d89bc60c4221341ed5edc5f045966ef06d3734f14942418b1f2f3b",
+      "basis": "DOCX / PPT 二进制保存只处理已解析的审阅源；递归遍历仍仅清理审阅目录内旧批次快照，不读取仓库说明文档。"
     },
     {
       "path": "skill/annotation-everything/scripts/review_stop.py",
