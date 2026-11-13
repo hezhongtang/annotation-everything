@@ -242,8 +242,10 @@ class RelocateTests(unittest.TestCase):
 
     def test_paragraph_inserted_before_moves_the_index(self):
         parts = mp.sample_parts()
+        # run 属性提到 f-string 外定义：3.9 及更早不允许表达式里出现反斜杠或同种引号
+        marked_rpr = '<a:rPr b="1"/>'
         parts["ppt/slides/slide10.xml"] = mp.slide_xml(
-            paragraphs=f'<a:p>{mp.text_run("新插入段")}</a:p><a:p>{mp.text_run("相同", "<a:rPr b=\"1\"/>")}'
+            paragraphs=f'<a:p>{mp.text_run("新插入段")}</a:p><a:p>{mp.text_run("相同", marked_rpr)}'
                        + mp.text_run("😀&<", "<a:rPr i=\"1\"/>") + f'</a:p><a:p>{mp.text_run("相同")}</a:p>')
         a, model = self.text_anchor(parts)
         got = pr.relocate(a, model["slides"])
