@@ -989,6 +989,7 @@ def build_overview_home(out: Path, *, host_id: str, locale: str | None = None) -
     """
     import i18n
     import ledger
+    ledger.ensure_home()   # 首页页面按约定放台账目录（首页宿主场景 out 就是台账目录），目录还不存在时先建
     try:
         choice = i18n.canonical_choice(i18n.effective_choice(locale, os.environ.get("AE_LOCALE"), None))
     except i18n.LocaleError as exc:

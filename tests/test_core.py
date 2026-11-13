@@ -2710,6 +2710,17 @@ class OverviewHomeBuildTests(unittest.TestCase):
         self.assertIn("const OVERVIEW_HOME={", page)
         self.assertIn("body.overview-mode", page, "沿用总览视图的显示开关")
 
+    def test_build_creates_missing_ledger_home(self):
+        previous = os.environ["AE_HOME"]
+        missing = Path(previous) / "not-yet"
+        os.environ["AE_HOME"] = str(missing)
+        self.addCleanup(os.environ.__setitem__, "AE_HOME", previous)
+        out = tmpdir()
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            build_viewer.build_overview_home(out, host_id=ledger.HOME_HOST_ID)
+        self.assertTrue((out / ledger.OVERVIEW_PAGE_FILE).exists())
+        self.assertTrue(missing.is_dir(), "台账目录还不存在时由构建自动创建（零审阅的机器也能起首页）")
+
 
 class OverviewHomeTests(unittest.TestCase):
     """总览首页宿主：无审阅目录的服务，只服务总览视图与它的写接口；审阅专属路由显式拒绝。"""
