@@ -2,6 +2,8 @@
 
 Read [Shared safety and protocol](protocol.md) before acting. `$S` is the `scripts/` directory in the loaded skill copy. `$R` is the chosen review directory. Use absolute paths when invoking commands from another directory.
 
+**Activation without a task**. If the user only activates the skill (for example, by entering `/annotation-everything`) and this turn contains no material, task, or handoff event, follow [Start the overview home](#start-the-overview-home) to open the standalone overview home.
+
 Pick the entry point by request: **generate a new report from raw material** (the user supplies material and a request; no report exists yet) — read [Report generation: default paradigm](generation.en.md) first, then continue from section 2 below once the draft and its verification are done; **review an existing report** starts at section 1; **apply annotations** starts at section 3; for an **explicitly requested full verification** run `report_check.py` on the complete artifact set (see step 5 of the generation guide), and never treat annotation-processing status as the report's quality verdict. The generation entry uses the built-in paradigm by default; when the user names an external generation skill, see "Generation method: built-in paradigm and external generation skills" in the generation guide for the selection and integration rules.
 
 ## 1. Find the review and select a language
@@ -9,11 +11,9 @@ Pick the entry point by request: **generate a new report from raw material** (th
 ```bash
 python3 "$S/serve.py" list --locale en
 python3 "$S/serve.py" list --under /path/to/project --locale en
-python3 "$S/serve.py" overview --locale en   # overview home: open the overview without binding a review
-python3 "$S/serve.py" overview --under /path/to/project --locale en  # list and operate reviews under that directory only
 ```
 
-If the user asks to apply annotations without naming a review, match the review name and directory before editing. Each review has its own `reviewId` and dedicated port. Most `serve.py` and `notes.py` commands accept a unique ID prefix of at least four characters instead of a directory; `build_viewer.py` needs a directory. A missing or mismatched ledger entry keeps its port until the user confirms it can be forgotten.
+If the user asks to apply annotations without naming a review, run `serve.py list` and match the review name and directory before editing. Each review has its own `reviewId` and dedicated port. Most `serve.py` and `notes.py` commands accept a unique ID prefix of at least four characters instead of a directory; `build_viewer.py` needs a directory. A missing or mismatched ledger entry keeps its port until the user confirms it can be forgotten.
 
 Choose `--locale en`, `zh-CN`, or `auto` explicitly when requested. The page's saved browser preference overrides the review default. `auto` matches browser languages in preference order and falls back to English. A new review with no locale option stays Chinese; rebuilding retains its saved setting. The display language does not choose the material language.
 
@@ -21,7 +21,7 @@ CLI commands accept `--locale` and `AE_LOCALE`. An explicit option wins, then th
 
 ### Use the review overview in the browser
 
-Start a local review service first. If none is running, use `python3 "$S/serve.py" <review-id>`, or open the overview home directly with `python3 "$S/serve.py" overview` — no review has to be running. Then choose "Review overview" on its review page, or open `/#overview` at that review's address. The overview can also stay open in a separate tab.
+To enter from a specific review, start its service with `python3 "$S/serve.py" <review-id>` and choose "Review overview" on its review page or open `/#overview` at its address. Follow [Start the overview home](#start-the-overview-home) to open the standalone overview directly.
 
 - The default scope is "This workspace"; choose "All on this machine" to see other reviews in the same ledger. The workspace is the current review's git repository root, or the review directory's parent when it is outside a git repository. Paths are relative to the workspace; paths in other workspaces start with `~` or show only the review name.
 - Reviews are grouped as Running, Stopped, Archived and Invalid, with the latest activity first within each group. Select a review to see its summary, purpose, audience, core questions and pending receipt/review counts. A missing summary shows "(No summary)" with the cover title. Material text retains its original language.
@@ -35,10 +35,36 @@ Start a local review service first. If none is running, use `python3 "$S/serve.p
 
 ### Overview home: open the overview without a review
 
-```bash
-python3 "$S/serve.py" overview --locale en
-python3 "$S/serve.py" overview --under /path/to/project --locale en
-```
+#### Start the overview home
+
+1. After following the `update.py auto` instructions in `SKILL.md`, run the help probe in the current skill copy. Run it as shown for a bare activation. The conversation language selects the workflow and update messages. Pass `--locale` to the probe and launch only when the user explicitly chooses the browser page language, for example “Show the overview page in English”. Keep the CLI display setting in all other cases.
+
+   ```bash
+   overview_help=$(python3 "$S/serve.py" --help) || exit $?
+   printf '%s\n' "$overview_help" | grep -qw overview || {
+     echo 'The help for this skill copy does not list the overview subcommand. Follow the upgrade instructions to update or reinstall, then retry.' >&2
+     exit 1
+   }
+   ```
+
+   If the help command fails, report the CLI error and end this launch attempt. If help prints successfully without listing the subcommand, end this attempt and tell the user [how to upgrade the skill copy](#upgrade-the-skill-copy).
+
+2. When the check passes, run the following command in the host's background execution mechanism. Confirm the home address in the startup output.
+
+   ```bash
+   python3 "$S/serve.py" overview
+   ```
+
+   Add `--under /path/to/project` if the user has specified a directory scope.
+
+#### Upgrade the skill copy
+
+- If a stable release includes `overview` and the current copy has the updater, run `python3 "$S/update.py" now`.
+- If no stable release includes `overview` yet, you can wait for one that does. [Stable releases](https://github.com/hezhongtang/annotation-everything/releases)
+- If the current copy lacks the updater or you need the home before a stable release is available, run `python3 ae.py install` from a checkout that includes the standalone overview home. For a custom location, reuse the original `--target`. [Installation and maintenance](https://github.com/hezhongtang/annotation-everything/blob/main/README.md#installation-and-maintenance)
+- After updating or reinstalling, reload the `SKILL.md` in use and check `serve.py --help` in the same copy again. To open the home with a bare activation, install a copy that includes this routing rule.
+
+#### Overview home behavior
 
 - Entry and host: one command opens the standalone overview home — **no review has to be running**. The old path, entering the overview from any running review page, stays as is. The home serves only the overview view under the same local security gates (loopback binding, Host and same-origin write checks); review-only APIs (annotations, analysis, handoff, stop lifecycle) are explicitly refused there with stable reason codes.
 - Reserved address: the home's reserved port is recorded in the review ledger directory and shares the ledger write lock with review-owned ports. After quitting, a restart returns the same reserved address you can bookmark. The home avoids reviews' owned ports, and new review services avoid the home's reserved port when assigning, claiming or falling back — also after the home quits.
@@ -46,16 +72,7 @@ python3 "$S/serve.py" overview --under /path/to/project --locale en
 - Temporary fallback: when the reserved port is taken, or an older registered port conflicts, this run falls back temporarily with a warning; the reserved-port record stays, and `--port N` affects only this run's address.
 - `--under` scope: the same directory-containment rule as `serve.py list --under`. Listing, starting, archiving and unarchiving, individual or batch stopping, and failure retries are all validated server-side against the same effective scope; the workspace scope (`scope=workspace`) is unavailable on the home (HTTP 400) — pass `--under` to limit the directory.
 - Exit and maintenance: the home has no stop lifecycle. Press `Ctrl+C` in the terminal that started it. Quitting clears run state and keeps the reserved-port record; the page, log and status files live in the ledger directory. While the home runs it holds the copy's update lock, so `update.py` reports a running service and defers; quit the home before updating. `ae.py uninstall` recognizes a running home and refuses; `--stop-servers` verifies the process identity and stops it first (the same path as review servers). Review directories are never touched.
-- Capability probe: the actually invoked skill copy may predate the `overview` subcommand. Run a command-style check before opening the home; it exits non-zero when the capability is missing, and the upgrade guidance swaps in a copy that has the feature (`python3 "$S/update.py" now` updates the current copy, or reinstall per the repository instructions):
-
-  ```bash
-  python3 "$S/serve.py" --help | grep -q overview || {
-    echo "This skill copy has no overview subcommand: update the copy with update.py first, then retry" >&2
-    exit 1
-  }
-  ```
-
-  Receiver rules for delegated starts from the home (hook inheritance, binding conflicts, backlog claiming) are in [the matching mechanisms per agent](agent-mechanisms.en.md).
+- Receiver rules for delegated starts from the home (hook inheritance, binding conflicts, backlog claiming) are in [the matching mechanisms per agent](agent-mechanisms.en.md).
 
 When generating a new report, write a one- or two-sentence `summary` in its verification record so the overview can identify it. This optional field requires no backfill for older records. See [step 4, "Write the verification record," in the generation guide](generation.en.md).
 

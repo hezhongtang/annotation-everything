@@ -122,6 +122,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `report_check.py 报告.html [--script 讲稿.md] [--record report-record.json]` | 公开报告核验入口：输出可读摘要，`--json` 输出结构化结果，`--locale zh-CN` 或 `en` 选择语言。退出码 0 表示程序检查通过，不等于报告可交付；1 表示检查未通过；2 表示输入或用法错误。内容、结构与视觉覆盖及交付阻塞项分别列出 |
 | `serve.py 审阅目录或审阅标识` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
 | `serve.py overview [--under 目录]` | 打开独立总览首页，不用先运行任何审阅。默认列出本机全部审阅，`--under` 限定目录范围（列表、启动、归档与逐份或批量停止都按该范围核对）。同一台账只运行一个首页，相同启动配置复用当前实例与保留地址，端口冲突时本次临时顺延。`Ctrl+C` 退出 |
+| `/annotation-everything`（调用技能） | 在支持技能斜杠命令的 Agent 中单独输入，打开独立总览首页。需使用包含此路由规则的技能副本。[安装与维护](#安装与维护) |
 | `http://127.0.0.1:<端口>/#overview`（浏览器地址） | 打开审阅总览，切换范围、查看详情、打开、启动或归档审阅，并可逐份或按范围停止审阅。先启动一份本机服务，或用 `serve.py overview` 打开总览首页 |
 | `serve.py list [--json]` | 列出本机全部审阅，包含归档项；人读输出和 JSON 都带归档标记 |
 | `serve.py status 审阅目录或审阅标识` | 查看一份审阅的运行状态 |
@@ -199,7 +200,7 @@ python3 $S/notes.py wait /tmp/ae-demo
   <tr>
     <td valign="top">
       <h4>📚 审阅总览与归档</h4>
-      在浏览器里查看本工作区或本机全部审阅，按状态和最近活动找到材料，查看摘要与待处理提交。可直接打开、代为启动或归档审阅，也可逐份或按范围停止审阅。<code>serve.py overview</code> 不用先运行任何审阅，<code>--under</code> 可限定目录范围。
+      在浏览器里查看本工作区或本机全部审阅，按状态和最近活动找到材料，查看摘要与待处理提交。可直接打开、代为启动或归档审阅，也可逐份或按范围停止审阅。<code>serve.py overview</code> 不用先运行任何审阅，<code>--under</code> 可限定目录范围。使用包含总览首页路由规则的技能副本时，单独输入 <code>/annotation-everything</code> 也可打开。
     </td>
     <td valign="top">
       <h4>🔄 正式版本自动更新</h4>
@@ -318,7 +319,7 @@ python3 ~/.claude/skills/annotation-everything/scripts/update.py now    # 立即
 - **装到别的技能目录**：`install` 缺省把技能副本装到 `~/.claude/skills/`（`CLAUDE_SKILLS_DIR` 仍可覆盖），`--target <目录>` 改为装到 `<目录>/annotation-everything`；`doctor`、`repair`、`uninstall` 接受同一个 `--target` 对该副本体检、修复、卸载，失败项的修复命令会带上同一 `--target`。`--link` 除内置名称 `codex`、`agents`、`zcode` 外还接受 `名称=路径`（如 `cursor=~/.cursor/skills`），为任意技能目录建指向副本的软链接并记入安装记录；自定义链接同样出现在体检里（悬空时报失败项与修复命令），`repair` 能重建，`uninstall` 会删除。安装记录只存在技能副本里，副本删除后自定义链接无法再被自动发现（内置目录的链接仍有扫描兜底）。
 - 停止服务前会核实正在执行的是本仓库或当前技能副本的脚本，并在发信号前复核进程身份；无法核实时拒绝停止。`--purge` 仅删除已知台账文件；台账损坏、目录内有其他文件或未登记的审阅目录时拒绝清除。
 
-装好后对 Agent 说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」，它就会按这套流程工作。技能怎么被唤醒、批注指定的技能怎么调用，各 Agent 的机制不同，对照见 [SKILL.md](skill/annotation-everything/SKILL.md) 的「各 Agent 的对应机制」一节。
+从含总览首页路由规则的仓库源码安装技能副本后，可在支持技能斜杠命令的 Agent 中单独输入 `/annotation-everything` 打开首页。有具体任务时，可以说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」。唤醒和技能调用方式因 Agent 而异。[各 Agent 的对应机制](skill/annotation-everything/references/agent-mechanisms.zh-CN.md)
 
 Agent 自动执行修复前，遇到 `--purge`、`--forget-stale`、`--stop-orphans` 或 `--stop-servers`，须先取得用户同意。体检优先比较 `status` / `category_id`；安装项失败时按 `fix_command` 修复并重跑体检，其他运行状态问题和可选工具警告分别报告。
 

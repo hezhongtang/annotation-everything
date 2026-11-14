@@ -31,7 +31,7 @@
 
 ## 总览首页代启动的接收
 
-`python3 $S/serve.py overview`（可选 `--under 目录` 限定范围）打开独立的总览首页；对已停审阅点「启动并打开」由首页代为启动。首次打开首页前，先按[中文流程第 0 节](workflow.zh-CN.md#0-开工前看本机有哪些审阅)的能力探测确认实际调用的副本提供 `overview`，缺失时按升级指引更新技能副本。Agent 接收相关：
+`python3 $S/serve.py overview`（可选 `--under 目录` 限定范围）打开独立的总览首页；对已停审阅点「启动并打开」由首页代为启动。首次打开首页前，按[启动总览首页](workflow.zh-CN.md#启动总览首页)完成能力探测。Agent 接收相关：
 
 - 「交给 Agent」钩子只来自首页启动命令 `serve.py overview --on-handoff "命令 参数"`，绝不来自网页。新启动的审阅服务继承解析后的命令参数，并在首页启动时的工作目录下运行（不经 shell，参数里的相对路径按那个目录解析）。
 - 已保存的接收方绑定与自定义钩子冲突时拒绝启动（原因码 `overview-hook-conflict`），绑定保持原样。要沿用绑定就不要带 `--on-handoff` 启动首页；要改用钩子先按[接收方绑定与交接](receiver-binding.zh-CN.md)解除绑定。
