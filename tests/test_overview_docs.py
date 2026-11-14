@@ -5,6 +5,7 @@
 不是实现细节；改文档时同步维护这里的锚点。
 """
 
+import json
 import re
 import unittest
 from pathlib import Path
@@ -129,6 +130,33 @@ class WorkflowOverviewHomeDocsTests(unittest.TestCase):
         for name in ("workflow.zh-CN.md", "workflow.en.md"):
             text = read(SKILL / "references" / name)
             self.assertIn("agent-mechanisms", text, f"{name} 的首页钩子规则要链到机制文档")
+
+    def test_bare_activation_links_to_probe_before_launch(self):
+        skill = read(SKILL / "SKILL.md")
+        for language, heading, anchor in (
+            ("zh-CN", "启动总览首页", "启动总览首页"),
+            ("en", "Start the overview home", "start-the-overview-home"),
+        ):
+            with self.subTest(language=language):
+                reference = f"references/workflow.{language}.md"
+                self.assertIn(f"({reference}#{anchor})", skill)
+                workflow = read(SKILL / reference)
+                entry, launch = workflow.split(f"#### {heading}\n", 1)
+                self.assertIn(f"(#{anchor})", entry.split("\n## ", 1)[0])
+                launch = launch.split("\n#### ", 1)[0]
+                self.assertLess(launch.index("update.py auto"), launch.index("grep -q overview"))
+                self.assertLess(launch.index("exit 1"), launch.index('python3 "$S/serve.py" overview'))
+
+    def test_discovery_cases_cover_bare_activation_in_both_languages(self):
+        cases = json.loads(read(SKILL / "evals" / "discovery-cases.json"))["cases"]
+        routes = [
+            (case.get("conversation_language"), case["workflow"], case["action"])
+            for case in cases if case["request"] == "/annotation-everything"
+        ]
+        self.assertCountEqual(routes, [
+            ("zh-CN", "references/workflow.zh-CN.md", "open-overview-home"),
+            ("en", "references/workflow.en.md", "open-overview-home"),
+        ])
 
     def test_exit_bullet_keeps_the_reserved_port_record(self):
         """退出语义与英文版、ADR 0008 一致：只清运行状态，保留端口记录留下。"""

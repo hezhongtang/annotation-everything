@@ -318,7 +318,7 @@ python3 ~/.claude/skills/annotation-everything/scripts/update.py now    # 立即
 - **装到别的技能目录**：`install` 缺省把技能副本装到 `~/.claude/skills/`（`CLAUDE_SKILLS_DIR` 仍可覆盖），`--target <目录>` 改为装到 `<目录>/annotation-everything`；`doctor`、`repair`、`uninstall` 接受同一个 `--target` 对该副本体检、修复、卸载，失败项的修复命令会带上同一 `--target`。`--link` 除内置名称 `codex`、`agents`、`zcode` 外还接受 `名称=路径`（如 `cursor=~/.cursor/skills`），为任意技能目录建指向副本的软链接并记入安装记录；自定义链接同样出现在体检里（悬空时报失败项与修复命令），`repair` 能重建，`uninstall` 会删除。安装记录只存在技能副本里，副本删除后自定义链接无法再被自动发现（内置目录的链接仍有扫描兜底）。
 - 停止服务前会核实正在执行的是本仓库或当前技能副本的脚本，并在发信号前复核进程身份；无法核实时拒绝停止。`--purge` 仅删除已知台账文件；台账损坏、目录内有其他文件或未登记的审阅目录时拒绝清除。
 
-装好后对 Agent 说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」，它就会按这套流程工作。技能怎么被唤醒、批注指定的技能怎么调用，各 Agent 的机制不同，对照见 [SKILL.md](skill/annotation-everything/SKILL.md) 的「各 Agent 的对应机制」一节。
+在支持用斜杠命令调用技能的 Agent 中单独输入 `/annotation-everything`，即可打开独立总览首页。有具体任务时，可以说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」。唤醒和技能调用方式因 Agent 而异。[各 Agent 的对应机制](skill/annotation-everything/references/agent-mechanisms.zh-CN.md)
 
 Agent 自动执行修复前，遇到 `--purge`、`--forget-stale`、`--stop-orphans` 或 `--stop-servers`，须先取得用户同意。体检优先比较 `status` / `category_id`；安装项失败时按 `fix_command` 修复并重跑体检，其他运行状态问题和可选工具警告分别报告。
 

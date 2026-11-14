@@ -2,6 +2,18 @@
   "description": "Model discovery and routing cases. Inspect the actual skill-loading trace; literal keyword matching is not a model evaluation.",
   "cases": [
     {
+      "request": "/annotation-everything",
+      "conversation_language": "zh-CN",
+      "workflow": "references/workflow.zh-CN.md",
+      "action": "open-overview-home"
+    },
+    {
+      "request": "/annotation-everything",
+      "conversation_language": "en",
+      "workflow": "references/workflow.en.md",
+      "action": "open-overview-home"
+    },
+    {
       "request": "帮我把这份报告和讲稿做成可逐页批注的页面。",
       "workflow": "references/workflow.zh-CN.md",
       "action": "generate"
