@@ -53,6 +53,7 @@ uv run --no-project --with playwright python tests/e2e_browser.py --skills-only 
 | `review_overview_checks`（#100 审阅总览：分组、详情、返回与双语） | `review-overview` | — |
 | `review_overview_stop_checks`（#144 总览单项停止、保存保护和实际退出确认） | `review-overview-stop` | — |
 | `review_overview_stop_scope_checks`（#145 总览按范围批量停止、固定目标、部分完成和失败重试） | `review-overview-stop-scope` | — |
+| `overview_home_checks`（#160 总览首页：零运行审阅直接打开、默认与 `--under` 范围、按组排序、无返回与顶栏停止、视图内双语、失效清理命令、新标签页打开对照页、接收提示与可复制等待命令、桌面事件绑定展示、过滤后的批量停止与全部回收） | `overview-home` | — |
 | `docx_review_checks`（#135：DOCX 原分页、限制清单、点 / 框与只读提示；#136：段落定位、文本反查、保存重试、同文异段导入、旧服务阻断；#137：可回写提示及选区不可读时的只读结构提示） | `docx-review` | — |
 | main() 内联段 3–8（服务模式全流程、断线补传、写入失败、服务卡死、同一端口换审阅、恶意网页与导入） | `server-mode` | — |
 | `poll_repaint_checks`（#93 新增：轮询数据不变时不重画，其他触发点照旧立即更新） | `poll-repaint` | — |
@@ -68,6 +69,7 @@ uv run --no-project --with playwright python tests/e2e_browser.py --skills-only 
 - 旧局部参数的行为修正：改造前所有旧参数都会先执行 `installed-delivery` 与
   `locale-live-controls` 再判断参数；现在别名只执行原定目标场景，目标行为本身不变。
 - #53 改造保留原有检查；后续新增的 `current-task-controls` 在全量模式中执行，也可通过 `--only current-task-controls` 单独运行。不能用通过数下降证明性能。
+- `overview-home`（#160）随总览首页功能加入：临时台账（入口的临时 `AE_HOME`）加七份合成审阅（运行中、两份已停、归档、失效、桌面事件绑定与 `--under` 范围外），首页由 `serve.py overview` 真实子进程提供，默认与 `--under` 各启一次；场景结束回收首页与全部审阅服务（含代启动的）。该场景可在总览首页工单的验证交付里单独运行（`--only overview-home`），等待全部基于可观察状态。
 
 ## 新增场景的接入规则
 

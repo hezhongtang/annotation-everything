@@ -147,6 +147,22 @@ class UninstallCliTests(unittest.TestCase):
             proc.kill()
             proc.communicate(timeout=10)
 
+    def spawn_home(self):
+        """启动真实的总览首页子进程（无显式端口：走保留地址）并等它写出运行状态文件。"""
+        argv = [sys.executable, str(SERVE), "overview", "--no-open"]
+        proc = subprocess.Popen(argv, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        status = self.ae_home / ".overview-home-status.json"
+        for _ in range(100):
+            if status.exists():
+                break
+            exited = proc.poll()
+            if exited is not None:
+                out, err = proc.communicate(timeout=10)
+                self.fail(f"首页进程提前退出（{exited}）：{err}{out}")
+            time.sleep(0.1)
+        self.assertTrue(status.exists(), "等不到首页运行状态文件")
+        return proc, " ".join(argv)
+
     def test_uninstall_removes_copy_and_links_keeps_ledger_and_review_dir(self):
         self.assertEqual(self.run_ae("install", "--link", "codex,agents,zcode").returncode, 0)
         review = self.make_review_dir()
@@ -258,6 +274,39 @@ class UninstallCliTests(unittest.TestCase):
         self.assertTrue((self.ae_home / "reviews.json").exists(), "默认保留台账")
         self.assertEqual(self.snapshot(review, ignore=RUNTIME_FILES), review_before, "审阅目录应逐字节不变")
 
+    def test_uninstall_refuses_while_overview_home_running(self):
+        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        proc, line = self.spawn_home()
+        self.addCleanup(self.stop_server, proc)
+        self.ps_table.write_text(f"{proc.pid} {line}\n", encoding="utf-8")
+        p = self.run_ae("uninstall")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("--stop-servers", p.stdout + p.stderr, "运行中的首页沿用存在运行服务时的卸载规则")
+        self.assertTrue(self.copy_dir.exists(), "拒绝卸载时不动技能副本")
+
+    def test_uninstall_stop_servers_stops_overview_home(self):
+        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        proc, line = self.spawn_home()
+        self.addCleanup(self.stop_server, proc)
+        self.ps_table.write_text(f"{proc.pid} {line}\n", encoding="utf-8")
+        p = self.run_ae("uninstall", "--stop-servers")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIsNotNone(proc.poll(), "核对首页进程身份后应结束它")
+        self.assertFalse((self.ae_home / ".overview-home-status.json").exists(), "优雅退出应清理首页运行状态")
+        self.assertFalse(self.copy_dir.exists(), "停服务后应删除技能副本")
+
+    def test_uninstall_purge_cleans_overview_home_files(self):
+        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        proc, _line = self.spawn_home()
+        self.stop_server(proc)
+        self.assertEqual(proc.returncode, 0, "首页应优雅退出并清理运行状态")
+        for name in ("overview-home.json", ".overview-home.html", "overview-home.log", ".overview-home-start.lock"):
+            self.assertTrue((self.ae_home / name).exists(), f"启动并退出首页后应留下已知文件 {name}")
+        p = self.run_ae("uninstall", "--purge")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(self.ae_home.exists(), "首页生成的已知文件都应可清理，台账目录才删得掉")
+        self.assertFalse(self.copy_dir.exists())
+
 
 class RemoveLinksTests(unittest.TestCase):
     """remove_links 的取舍规则：只删指向技能副本的软链接。"""
@@ -326,6 +375,22 @@ class RunningServersTests(unittest.TestCase):
 
     def test_running_servers_empty_when_no_processes(self):
         self.assertEqual(ae.running_servers(lister=lambda: []), [])
+
+    def test_running_home_servers_matches_only_overview_subcommand(self):
+        fake = [(1, f"python3 {SERVE} overview --no-open"),
+                (2, f"python3 {SERVE} /r"),
+                (3, f"python3 {SERVE} overview --locale=en"),
+                (4, "grep overview notes.txt")]
+        self.assertEqual([pid for pid, _command in ae.running_home_servers(lister=lambda: fake)], [1, 3])
+        self.assertEqual([pid for pid, _command in ae.running_servers(lister=lambda: fake)], [2],
+                         "overview 进程不算审阅服务：体检的审阅服务计数与孤儿修复跳过它")
+        self.assertIsNone(ae.serve_dir_argument(fake[0][1], fake[0][0]))
+
+    def test_server_identity_accepts_overview_home_process(self):
+        line = f"python3 {SERVE} overview --no-open"
+        identity = ae.server_identity(None, line)
+        self.assertIsNotNone(identity, "卸载要能核对正在运行的首页进程身份")
+        self.assertEqual(identity[0], str(SERVE.resolve()))
 
     def test_stop_servers_refuses_unrelated_real_process(self):
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])

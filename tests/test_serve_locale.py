@@ -366,3 +366,31 @@ class StderrPurityTests(unittest.TestCase):
                                env=env, capture_output=True, text=True, timeout=60)
             self.assertEqual(p.returncode, 3)
             self.assertEqual(json.loads(p.stdout)["dir"], str(d.resolve()))
+
+
+class OverviewConfigDiffLanguageTests(unittest.TestCase):
+    """配置冲突明细按当前语言排版：标签走双语词典，标点不夹另一种语言的写法。
+
+    明细拼进 serve.overview.configConflict 的 {detail}，两种语言的词典句各自
+    定标点；这里只测纯函数 _overview_config_diff，不起服务。
+    """
+
+    EXISTING = {"under": "/tmp/old", "explicitPort": None, "locale": "zh-CN",
+                "hook": ["x"], "hookCwd": "/tmp/hook-old"}
+    REQUESTED = {"under": "/tmp/new", "explicitPort": 1234, "locale": "en",
+                 "hook": ["y"], "hookCwd": "/tmp/hook-new"}
+
+    def test_diff_follows_the_interface_language(self):
+        self.addCleanup(i18n.set_locale, None)
+        i18n.set_locale("en")
+        en = serve._overview_config_diff(self.EXISTING, self.REQUESTED)
+        self.assertNotRegex(en, r"[\u4e00-\u9fff\uff1b\uff1a]",
+                            "英文明细里不夹中文标签与全角标点")
+        self.assertIn("hook working directory", en, "非旗标标签走双语词典")
+        self.assertIn("--under: /tmp/old → /tmp/new", en)
+        self.assertIn("; ", en, "英文分隔符是半角分号加空格")
+        i18n.set_locale("zh-CN")
+        zh = serve._overview_config_diff(self.EXISTING, self.REQUESTED)
+        self.assertIn("钩子工作目录", zh)
+        self.assertIn("--under：/tmp/old → /tmp/new", zh)
+        self.assertIn("；", zh)

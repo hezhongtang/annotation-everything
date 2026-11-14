@@ -135,7 +135,8 @@ class DocumentationAllowlistTests(unittest.TestCase):
     def test_new_allowlist_entries_have_no_executable_consumers(self):
         additions = {entry.prefix for entry in verify_selection.DOC_ALLOWLIST} - set(FIXTURE["legacy_allowlist"])
         self.assertEqual(additions, set(FIXTURE["audited_paths"]), "新增允许项须补齐核实依据与依赖契约")
-        self.assertEqual(document_references(ROOT, sorted(additions)), [],
+        # 无新增豁免项时没有需要保护的路径：docs 通配遍历的保守启发式不构成消费判定。
+        self.assertEqual(document_references(ROOT, sorted(additions)) if additions else [], [],
                          "程序开始引用这些文档：先撤销豁免或重新核实 docs/verify/selection-strategy.md")
 
     def test_contract_detects_readers_in_tests_verification_tools_and_runtime(self):
@@ -145,7 +146,7 @@ class DocumentationAllowlistTests(unittest.TestCase):
                 path = root / reader["path"]
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(reader["source"], encoding="utf-8")
-            self.assertEqual(document_references(root, FIXTURE["audited_paths"]),
+            self.assertEqual(document_references(root, FIXTURE["probe_prefixes"]),
                              sorted(reader["path"] for reader in FIXTURE["readers"]))
 
     def test_bounded_traversal_requires_the_audited_function_to_stay_unchanged(self):
@@ -159,10 +160,10 @@ class DocumentationAllowlistTests(unittest.TestCase):
                     path = root / entry["path"]
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_text(ast.unparse(scope), encoding="utf-8")
-                    self.assertEqual(document_references(root, FIXTURE["audited_paths"]), [])
+                    self.assertEqual(document_references(root, FIXTURE["probe_prefixes"]), [])
                     scope.body.append(ast.Pass())
                     path.write_text(ast.unparse(ast.fix_missing_locations(scope)), encoding="utf-8")
-                    self.assertEqual(document_references(root, FIXTURE["audited_paths"]), [entry["path"]])
+                    self.assertEqual(document_references(root, FIXTURE["probe_prefixes"]), [entry["path"]])
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@
   python3 serve.py stop <审阅目录或标识> [--timeout 秒]  # 停止整份审阅；--status 只查询持久状态
   python3 serve.py list [--under 目录] [--json]   # 审阅台账：本机有哪些审阅、端口、状态、待接收的提交、有没有代理在等
   python3 serve.py forget <标识前缀>            # 从台账移除一份审阅，释放它的专属端口（不动审阅目录）
+  python3 serve.py overview [--under 目录]     # 无审阅目录的总览首页：独立地址（台账保留端口），列出并代操作本机审阅
   python3 serve.py check                      # 自检：回环绑定、伪造 Host/Origin 被拒、落盘与重启恢复
 
 安全做法：
@@ -39,7 +40,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
 import http.client
 import json
 import os
@@ -142,6 +142,12 @@ MAX_BODY = 2 * 1024 * 1024
 HOST = "127.0.0.1"
 NOTE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})$")
 SAFE_CHARS = re.compile(r"[^A-Za-z0-9._:/?=&%+@-]")
+# 总览首页宿主：页面、运行状态、日志与启动锁都在台账目录，不写进任何审阅目录（文件名只在 ledger 定义一次）
+HOST_KIND_OVERVIEW = ledger.HOST_KIND_OVERVIEW          # /api/health 的宿主种类；审阅宿主不带宿主种类字段（行为不变）
+OVERVIEW_PAGE_FILE = ledger.OVERVIEW_PAGE_FILE          # 仅总览视图的首页页面（由 build_overview_home 生成）
+OVERVIEW_LOG_FILE = ledger.OVERVIEW_LOG_FILE            # 首页服务日志
+OVERVIEW_STATUS_FILE = ledger.OVERVIEW_STATUS_FILE      # 首页运行状态（pid/端口/宿主标识），退出时删除
+OVERVIEW_START_LOCK_FILE = ledger.OVERVIEW_START_LOCK_FILE   # 并发首次启动的串行化锁（台账目录）
 
 
 def csp_for(html_text: str) -> str:
@@ -241,14 +247,22 @@ class _RequestReads:
 class ReviewServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, review_dir: Path, port: int, debug: bool = False, log_to_file: bool = True,
+    def __init__(self, review_dir: Path | None, port: int, debug: bool = False, log_to_file: bool = True,
                  on_handoff: list[str] | None = None, hook_cwd: str | None = None,
-                 locale: str | None = None):
+                 locale: str | None = None, *, home_id: str | None = None,
+                 overview_under: Path | None = None):
+        self.home_id = home_id   # 非 None：总览首页宿主（无审阅目录）；None：审阅宿主，行为与从前一致
+        self.overview_under = Path(overview_under).expanduser().resolve() if overview_under else None
         self.review_dir = review_dir
         self.debug = debug
-        # Capture identity and route from one atomic metadata read without changing an untouched review.
-        self.agent_binding = wakeup.load_binding(review_dir)
-        self.on_handoff = wakeup.hook_command(review_dir, on_handoff, binding=self.agent_binding)
+        if home_id is not None:
+            # 首页宿主没有审阅：不读接收方绑定、不建保存保护登记；钩子参数只随配置记录，由 #159 的代启动继承。
+            self.agent_binding = None
+            self.on_handoff = list(on_handoff) if on_handoff else None
+        else:
+            # Capture identity and route from one atomic metadata read without changing an untouched review.
+            self.agent_binding = wakeup.load_binding(review_dir)
+            self.on_handoff = wakeup.hook_command(review_dir, on_handoff, binding=self.agent_binding)
         self.hook_cwd = hook_cwd or os.getcwd()
         # 诊断说明用的语言；None 时保持中文（旧调用行为不变）
         self.locale = locale or i18n.DEFAULT_LOCALE
@@ -257,7 +271,7 @@ class ReviewServer(ThreadingHTTPServer):
         self._hook_queue: list[dict[str, Any]] = []   # 钩子运行中又来的事件：按到达顺序排队，同一批同一事件只留最新
         self._writes = threading.Condition()
         self._active_writes = 0
-        self.browser_saves = review_save.BrowserSaves(review_dir)
+        self.browser_saves = None if home_id is not None else review_save.BrowserSaves(review_dir)
         self._close_lock = threading.Lock()
         self.closing = False
         self.stop_id: str | None = None
@@ -277,13 +291,15 @@ class ReviewServer(ThreadingHTTPServer):
         with self._log_lock:
             print(line, file=sys.stderr, flush=True)
             if self.log_to_file:
+                # 首页宿主的日志在台账目录；审阅宿主的照旧在审阅目录
+                target = (ledger.home() / OVERVIEW_LOG_FILE) if self.home_id is not None else (self.review_dir / LOG_FILE)
                 try:
-                    store.append_private(self.review_dir / LOG_FILE, line)
+                    store.append_private(target, line)
                 except OSError:
                     pass
 
     def _cached(self, name: str, build: Any) -> Any:
-        f = self.review_dir / name
+        f = (ledger.home() / OVERVIEW_PAGE_FILE) if self.home_id is not None else (self.review_dir / name)
         try:
             mtime = f.stat().st_mtime
         except OSError:
@@ -470,6 +486,8 @@ class ReviewServer(ThreadingHTTPServer):
             self._stop_replies.wait_for(lambda: self._stop_reply_count == 0, timeout=1.0)
 
     def manifest(self) -> dict[str, Any]:
+        if self.home_id is not None:
+            return {}   # 首页宿主没有审阅清单；页面与路由都不注入审阅标识
         def read(f: Path | None) -> dict[str, Any]:
             try:
                 m = json.loads(f.read_text(encoding="utf-8")) if f else {}
@@ -582,6 +600,12 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/"):
                 mutating = self.command not in ("GET", "HEAD")
                 self._check_api_origin(mutating=mutating)
+                if mutating and self.server.home_id is None and "X-AE-Host" in self.headers:
+                    raise Reject(409, "host-mismatch", self._t("serve.err.hostMismatch"))
+                if self.server.home_id is not None:
+                    # 首页宿主没有审阅写路径：不进保存保护写门闩，审阅专属路由在 _api_home 里显式拒绝。
+                    self._api(path)
+                    return
                 # Overview actions address the review named in their body. Archiving changes
                 # an atomic metadata marker and is also available for already stopped reviews.
                 if mutating and path not in ("/api/server/stop", "/api/server/resume",
@@ -899,8 +923,11 @@ class Handler(BaseHTTPRequestHandler):
         raise Reject(400, "bad-request", self._t("serve.err.noAnalysis"))   # 未覆盖的 op，不可达
 
     def _api(self, path: str) -> None:
-        d, m = self.server.review_dir, NOTE_PATH.match(path)
         cmd = "GET" if self.command == "HEAD" else self.command
+        if self.server.home_id is not None:
+            self._api_home(path, cmd)
+            return
+        d, m = self.server.review_dir, NOTE_PATH.match(path)
         # 页面带上自己的审阅标识：端口上换成了另一份审阅的服务时，先拒绝，绝不写进别人的 notes.json
         claimed = self.headers.get("X-AE-Review")
         if claimed is not None and path != "/api/health":
@@ -910,6 +937,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/health" and cmd == "GET":
             self._json(200, {**self._ident(), "dir": str(d), "pid": os.getpid(),
                              "port": self.server.port, "hook": bool(self.server.on_handoff),
+                             "customHook": bool(self.server.on_handoff and self.server.agent_binding is None),
                              "agentDelivery": self._public_status()})
         elif path == "/api/notes" and cmd == "GET":
             doc = self._notes_doc()
@@ -1154,8 +1182,8 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
             if not isinstance(body, dict) or set(body) != {"reviewId"}:
                 raise Reject(400, "bad-overview-start", self._t("serve.err.overviewStartBody"))
-            url = start_overview_review(body["reviewId"], self._t)
-            self._json(200, {"app": APP, "url": url})
+            result = start_overview_review(body["reviewId"], self._t)
+            self._json(200, {"app": APP, **result})
         elif path == "/api/overview/archive" and cmd == "POST":
             body = self._expect_obj(self._body())
             target, archived = body.get("reviewId"), body.get("archived")
@@ -1170,6 +1198,77 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"app": APP, "reviewId": target, "archived": archived})
         else:
             raise Reject(404 if cmd == "GET" else 405, "no-api", self._t("serve.err.noApi"))
+
+    # ---------- 总览首页宿主 ----------
+    def _api_home(self, path: str, cmd: str) -> None:
+        """总览首页宿主的 API：健康检查与总览家族之外一律显式拒绝，不创建或改写任何状态文件。"""
+        server = self.server
+        if path == "/api/health" and cmd == "GET":
+            self._json(200, {"app": APP, "version": VERSION, "features": FEATURES,
+                             "hostKind": HOST_KIND_OVERVIEW, "hostId": server.home_id,
+                             "pid": os.getpid(), "port": server.port,
+                             "under": str(server.overview_under) if server.overview_under else None,
+                             "hook": bool(server.on_handoff)})
+            return
+        if path == "/api/overview" and cmd == "GET":
+            scopes = parse_qs(self.path.partition("?")[2], keep_blank_values=True).get("scope", [None])
+            if len(scopes) != 1 or (scopes[0] is not None and scopes[0] not in ("workspace", "all")):
+                raise Reject(400, "bad-scope", self._t("serve.err.overviewScope"))
+            if scopes[0] == "workspace":
+                raise Reject(400, "bad-scope", self._t("serve.err.overviewScopeHome"))
+            under = server.overview_under
+            self._json(200, {"app": APP, "reviewId": None, "features": FEATURES,
+                             "hostKind": HOST_KIND_OVERVIEW, "hostId": server.home_id,
+                             "under": str(under) if under is not None else None,
+                             **review_overview.snapshot(None, None, "all", review_row,
+                                                        workspace_dir=under, under_dir=under)})
+            return
+        if cmd != "GET" and path in ("/api/overview/start", "/api/overview/archive", "/api/overview/stop"):
+            # 首页写操作要求请求头里的宿主标识与本服务一致（对照页的 X-AE-Review 只对审阅宿主有意义）
+            if self.headers.get("X-AE-Host") != server.home_id:
+                raise Reject(409, "host-mismatch", self._t("serve.err.hostMismatch"))
+            self._overview_write(path)
+            return
+        raise Reject(404 if cmd == "GET" else 405, "review-only-api", self._t("serve.err.reviewOnlyApi"))
+
+    def _overview_write(self, path: str) -> None:
+        server = self.server
+        if path == "/api/overview/start":
+            body = self._body()
+            if not isinstance(body, dict) or set(body) != {"reviewId"}:
+                raise Reject(400, "bad-overview-start", self._t("serve.err.overviewStartBody"))
+            result = start_overview_review(body["reviewId"], self._t, hook=server.on_handoff,
+                                           hook_cwd=server.hook_cwd, under=server.overview_under)
+            self._json(200, {"app": APP, **result})
+            return
+        if path == "/api/overview/archive":
+            body = self._expect_obj(self._body())
+            target, archived = body.get("reviewId"), body.get("archived")
+            if not isinstance(target, str) or not ledger.RID.fullmatch(target) or not isinstance(archived, bool):
+                raise Reject(400, "bad-archive", self._t("serve.err.archivePayload"))
+            entry = ledger.get(target)
+            if entry is None:
+                raise Reject(404, "archive-unknown", self._t("serve.err.archiveUnknown"))
+            if ledger.entry_state(target, entry) != "ok":
+                raise Reject(409, "archive-unavailable", self._t("serve.err.archiveUnavailable"))
+            directory = Path(entry["dir"]).resolve()
+            _check_overview_under(directory, server.overview_under, self._t)
+            review_overview.set_archived(directory, archived)
+            self._json(200, {"app": APP, "reviewId": target, "archived": archived})
+            return
+        # /api/overview/stop
+        body = self._body()
+        if (not isinstance(body, dict) or set(body) != {"reviewId", "scope"}
+                or not isinstance(body["reviewId"], str) or not ledger.RID.fullmatch(body["reviewId"])):
+            raise Reject(400, "bad-overview-stop", self._t("serve.err.overviewStopBody"))
+        rid, scope = body["reviewId"], body["scope"]
+        if scope not in ("workspace", "all"):
+            raise Reject(400, "bad-scope", self._t("serve.err.overviewScope"))
+        if scope == "workspace":
+            raise Reject(400, "bad-scope", self._t("serve.err.overviewScopeHome"))
+        target, _entry = overview_start_target(rid, self._t, under=server.overview_under)
+        result = review_stop.public_snapshot(stop_overview_review(target, rid, self._t))
+        self._json(200, {"app": APP, "reviewId": rid, "state": result["state"], "stop": result})
 
     def _expect_obj(self, body: Any) -> dict[str, Any]:
         if not isinstance(body, dict):
@@ -1239,14 +1338,238 @@ def clear_status(review_dir: Path) -> None:
         ledger.status_file(review_dir).unlink(missing_ok=True)
 
 
+# ---------- 总览首页宿主：运行状态、实例判定与启动 ----------
+def read_home_status() -> dict[str, Any] | None:
+    """台账目录里的首页运行状态（pid/端口/宿主标识/启动配置）；读不了返回 None。"""
+    try:
+        info = json.loads((ledger.home() / OVERVIEW_STATUS_FILE).read_text(encoding="utf-8"))
+        return info if isinstance(info, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def write_home_status(server: ReviewServer, config: dict[str, Any]) -> None:
+    # config 的键与运行字段错开（显式端口记 explicitPort，实际端口才叫 port），避免展开覆盖
+    info = {"app": APP, "version": VERSION, "hostKind": HOST_KIND_OVERVIEW,
+            "hostId": server.home_id, **config,
+            "pid": os.getpid(), "port": server.port,
+            "url": f"http://127.0.0.1:{server.port}/", "startedAt": store.now_iso()}
+    fsutil.atomic_write(ledger.home() / OVERVIEW_STATUS_FILE,
+                        json.dumps(info, ensure_ascii=False, indent=2) + "\n",
+                        prefix=".overview-home-status-")
+
+
+def clear_home_status() -> None:
+    info = read_home_status()
+    if info and info.get("pid") == os.getpid():
+        (ledger.home() / OVERVIEW_STATUS_FILE).unlink(missing_ok=True)
+
+
+def overview_running() -> dict[str, Any] | None:
+    """不依赖审阅目录判断总览首页是否在运行：运行状态文件 + pid 探活 + /api/health 宿主核对。
+
+    测试辅助与现有工具共用同一判据；返回运行状态（含本次启动配置），没有运行返回 None。
+    """
+    info = read_home_status()
+    if not info or info.get("hostId") != ledger.overview_host_id():
+        return None
+    pid, port = info.get("pid"), info.get("port")
+    if type(pid) is not int or not ledger.pid_alive(pid):
+        return None
+    found = probe(port, timeout=.5) if type(port) is int and 1 <= port <= 65535 else None
+    if (found and found.get("hostKind") == HOST_KIND_OVERVIEW and found.get("hostId") == info["hostId"]
+            and found.get("pid") == pid and found.get("port") == port):
+        return {**info, "version": found.get("version"), "url": f"http://127.0.0.1:{port}/"}
+    return None
+
+
+def bind_home(port: int, *, home_id: str, debug: bool, on_handoff: list[str] | None,
+              avoid: dict[int, str], under: Path | None) -> tuple[ReviewServer | None, list[str]]:
+    """绑定空闲地址。实例复用统一由当前台账的运行状态与健康检查决定。"""
+    notes: list[str] = []
+    for p in range(port, min(port + PORT_TRIES, 65536)):
+        if p in avoid:
+            notes.append(T("serve.bind.skipReserved", port=p, rid=avoid[p][:8]))
+            continue
+        found = probe(p)
+        if found is not None:
+            who = T("serve.bind.otherProgram") if found.get("app") != APP else T(
+                "serve.bind.otherHome" if found.get("hostKind") == HOST_KIND_OVERVIEW else "serve.bind.otherReview")
+            notes.append(T("serve.bind.busy", port=p, who=who))
+            continue
+        try:
+            return ReviewServer(None, p, debug=debug, on_handoff=on_handoff, overview_under=under,
+                                home_id=home_id, locale=i18n.current_locale()), notes
+        except OSError as e:
+            notes.append(T("serve.bind.failed", port=p, detail=e.strerror or e))
+    return None, notes
+
+
+def _overview_config(under: Path | None, port: int | None, on_handoff: list[str] | None) -> dict[str, Any]:
+    """实例复用的配置比较：规范化 --under、显式临时端口、默认界面语言、钩子参数与启用钩子时的工作目录。"""
+    return {"under": str(under.expanduser().resolve()) if under else None,
+            "explicitPort": port, "locale": i18n.current_locale(),
+            "hook": list(on_handoff) if on_handoff else None,
+            "hookCwd": os.getcwd() if on_handoff else None}
+
+
+def _overview_config_diff(existing: dict[str, Any], requested: dict[str, Any]) -> str:
+    """差异明细：旗标名两侧通用，非旗标标签走词典；分隔与赋值标点跟随当前语言。"""
+    labels = {"under": "--under", "explicitPort": "--port", "locale": "--locale",
+              "hook": "--on-handoff", "hookCwd": T("serve.overview.diffHookCwd")}
+    zh = i18n.current_locale() == "zh-CN"
+    sep = "；" if zh else "; "
+    assign = "：" if zh else ": "
+    return sep.join(f"{labels[k]}{assign}{existing.get(k)} → {requested.get(k)}"
+                    for k in requested if existing.get(k) != requested.get(k))
+
+
+def _reuse_overview_home(running: dict[str, Any], config: dict[str, Any], open_browser: bool) -> int:
+    if running.get("version") != VERSION:
+        detail = T("serve.stale.detail", old=running.get("version") or T("serve.stale.oldWord"),
+                   port=running["port"], pid=running["pid"], version=VERSION)
+        print(T("serve.serve.stale", detail=detail), file=sys.stderr)
+        return 6
+    existing = {k: running.get(k) for k in config}
+    if existing != config:
+        detail = _overview_config_diff(existing, config)
+        print(T("serve.overview.configConflict", url=running.get("url"), detail=detail), file=sys.stderr)
+        return 2
+    print(T("serve.overview.reused", url=running.get("url")))
+    if open_browser:
+        webbrowser.open(running.get("url"))
+    return 0
+
+
+def _prepare_overview_home(under: Path | None, port: int | None, debug: bool,
+                           on_handoff: list[str] | None,
+                           config: dict[str, Any]) -> tuple[ReviewServer, str] | int:
+    """持首页启动锁构建页面、决定地址、绑定并写运行状态。"""
+    import build_viewer
+    home_id = ledger.overview_host_id()
+    build_viewer.build_overview_home(ledger.home(), host_id=home_id, locale=i18n.current_locale())
+    owned = ledger.overview_reserved_port()
+    # 首页有权用自己的保留地址，避让清单只含审阅专属端口
+    avoid = {pt: k for pt, k in _others_ports(None).items() if k != HOST_KIND_OVERVIEW}
+    first = port
+    if port is None:
+        if owned is not None and owned not in avoid:
+            first = owned
+        elif owned is not None:
+            # 旧副本已把同号端口登记成审阅专属地址：当次顺延并告警，双方记录都保留
+            print(T("serve.overview.portConflict", port=owned, rid=avoid[owned][:8]), file=sys.stderr)
+            first = None
+        else:
+            reserved = ledger.assign_overview_port(is_free=lambda p: probe(p, timeout=0.5) is None)
+            if reserved is None:
+                print(T("serve.overview.noPort"), file=sys.stderr)
+                return 3
+            print(T("serve.overview.portOwned", port=reserved), file=sys.stderr)
+            first, owned = reserved, reserved
+    server, trail = bind_home(first if first is not None else DEFAULT_PORT, home_id=home_id,
+                              debug=debug, on_handoff=on_handoff, avoid=avoid, under=under)
+    for t in trail:
+        print(T("serve.port.trail", detail=t), file=sys.stderr)
+    if server is None:
+        print(T("serve.overview.noPortFree", first=first), file=sys.stderr)
+        return 3
+    url = f"http://127.0.0.1:{server.port}/"
+    if port is not None:
+        # 显式 --port 只影响当次地址：保留记录不动，下次无显式端口仍回到保留地址
+        if owned is not None:
+            print(T("serve.overview.portExplicit", port=server.port, owned=owned), file=sys.stderr)
+    elif owned is not None and server.port != owned:
+        print(T("serve.overview.portOccupied", port=owned, port2=server.port), file=sys.stderr)
+    try:
+        write_home_status(server, config)
+    except BaseException:
+        server.server_close()
+        raise
+    return (server, url)
+
+
+def _serve_overview_home(server: ReviewServer, url: str, on_handoff: list[str] | None,
+                         open_browser: bool) -> int:
+    """前台跑到 Ctrl+C / SIGTERM，关闭监听后清理运行状态。"""
+    try:
+        def _term(*_a: Any) -> None:
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGTERM, _term)
+        server.log("info", f"启动 {APP} {VERSION}：{url} 托管总览首页（pid {os.getpid()}）")
+        print(T("serve.overview.ready", url=url)
+              + (T("serve.serve.hookLine", command=shlex.join(on_handoff)) if on_handoff else "")
+              + T("serve.overview.stopHint"), flush=True)
+        if open_browser:
+            threading.Timer(0.3, webbrowser.open, args=(url,)).start()
+        server.serve_forever(poll_interval=0.3)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.log("info", T("serve.serve.stoppedLog"))
+        server.server_close()
+        clear_home_status()
+    return 0
+
+
+def overview_home(under: Path | None, port: int | None, open_browser: bool, debug: bool,
+                  on_handoff: list[str] | None, locale: str | None) -> int:
+    """总览首页：无审阅目录的宿主，列出本机（或 --under 目录下）的审阅，占一个台账保留端口。"""
+    set_locale(locale or cli_locale(None))
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(ledger.update_lock())   # 运行期间沿用服务的更新锁，技能更新可识别该占用
+        except OSError:
+            print(T("serve.serve.updateLockUnavailable"), file=sys.stderr)
+        try:
+            source = Path(__file__).resolve().read_text(encoding="utf-8")
+            match = re.search(r'^VERSION = "([^"]+)"', source, re.M)
+            if match is None or match.group(1) != VERSION:
+                print(T("serve.serve.updateRestart"), file=sys.stderr)
+                return 6
+        except OSError:
+            print(T("serve.serve.updateRestart"), file=sys.stderr)
+            return 6
+        config = _overview_config(under, port, on_handoff)
+        lock = ledger.ensure_home() / OVERVIEW_START_LOCK_FILE
+        deadline = time.monotonic() + 20
+        # 启动者整个监听期间持锁。后来者能核对健康响应就复用，否则等就绪或等到锁释放再启动。
+        while True:
+            running = overview_running()
+            if running is not None:
+                return _reuse_overview_home(running, config, open_browser)
+            try:
+                stack.enter_context(fsutil.flocked(lock, exclusive=True, nonblocking=True))
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    print(T("serve.overview.startupBusy"), file=sys.stderr)
+                    return 3
+                time.sleep(min(.05, remaining))
+            else:
+                break
+        outcome = _prepare_overview_home(under, port, debug, on_handoff, config)
+        if isinstance(outcome, int):
+            return outcome
+        server, url = outcome
+        return _serve_overview_home(server, url, on_handoff, open_browser)
+
+
 def same_dir(found: dict[str, Any], review_dir: Path) -> bool:
     try:
-        return found.get("app") == APP and Path(found.get("dir", "")).resolve() == review_dir.resolve()
+        directory = found.get("dir")
+        return (found.get("app") == APP and isinstance(directory, str) and bool(directory)
+                and Path(directory).resolve() == review_dir.resolve())
     except (OSError, TypeError):
         return False
 
 
-def overview_start_target(rid: Any, translate: Any) -> tuple[Path, dict[str, Any]]:
+def _check_overview_under(directory: Path, under: Path | None, translate: Any) -> None:
+    if under is not None and not directory.is_relative_to(under):
+        raise Reject(404, "overview-review-out-of-scope", translate("serve.err.overviewTargetScope", under=str(under)))
+
+
+def overview_start_target(rid: Any, translate: Any, *, under: Path | None = None) -> tuple[Path, dict[str, Any]]:
     """只按完整台账标识找目标；路径和目录中的身份必须仍然有效。"""
     if not isinstance(rid, str) or not ledger.RID.fullmatch(rid):
         raise Reject(400, "bad-overview-start", translate("serve.err.overviewStartBody"))
@@ -1256,6 +1579,7 @@ def overview_start_target(rid: Any, translate: Any) -> tuple[Path, dict[str, Any
     directory = Path(entry["dir"]).resolve()
     if ledger.entry_state(rid, entry) != "ok" or not (directory / "index.html").is_file():
         raise Reject(409, "overview-review-invalid", translate("serve.err.overviewStartInvalid"))
+    _check_overview_under(directory, under, translate)
     return directory, entry
 
 
@@ -1332,32 +1656,62 @@ def stop_overview_child(child: subprocess.Popen) -> None:
         child.wait()
 
 
-def start_overview_review(rid: Any, translate: Any) -> str:
-    overview_start_target(rid, translate)
+def _binding_conflicts_with_hook(directory: Path) -> bool:
+    """已保存的接收方绑定与自定义钩子互斥（wakeup.hook_command 的同一规则）；绑定存在但核对失败时同样拒绝。"""
+    try:
+        return wakeup.load_binding(directory) is not None
+    except (OSError, ValueError, KeyError, TypeError):
+        return True
+
+
+def _overview_start_result(directory: Path, rid: str, url: str, *,
+                           health: dict[str, Any], hook_not_applied: bool = False) -> dict[str, Any]:
+    """启动结果的公开字段：地址、该服务实际加载的接收方式、可复制的等待命令与一次性的提示键。
+
+    用实际服务的健康响应，兼容还没有 customHook 字段的旧副本。
+    只含公开接收方字段，不回显钩子命令、工作目录、套接字地址或启动日志。
+    """
+    receiver = health.get("agentDelivery")
+    if not isinstance(receiver, dict):
+        receiver = wakeup.public_status(directory)
+    hook_configured = health.get("customHook")
+    if not isinstance(hook_configured, bool):
+        active_receiver = health.get("receiver")
+        adapter = active_receiver.get("adapter") if isinstance(active_receiver, dict) else receiver.get("adapter")
+        hook_configured = bool(health.get("hook")) and adapter != "codex-desktop"
+    if hook_not_applied:
+        note = "hook-not-applied"
+    elif not hook_configured and receiver.get("state") == "unconfigured":
+        note = "no-receiver"
+    else:
+        note = None
+    return {"url": url, "agentDelivery": receiver,
+            "waitCommand": review_overview.wait_command(rid, hook=hook_configured, receiver=receiver),
+            "hookConfigured": hook_configured, "note": note}
+
+
+def start_overview_review(rid: Any, translate: Any, hook: list[str] | None = None,
+                          hook_cwd: str | None = None, *, under: Path | None = None) -> dict[str, Any]:
+    """代启动一份台账审阅，返回公开的启动结果。
+
+    hook：启动本服务的命令行解析后的钩子参数（只来自首页启动命令，绝不来自 HTTP），
+    只在新建服务时继承；复用已在运行的服务时不替换进程，结果里以 note=hook-not-applied 提示。
+    """
+    overview_start_target(rid, translate, under=under)
     deadline = time.monotonic() + 5
     # 每份审阅一把启动锁，跨托管服务串行化；不能持台账写锁等子进程登记。
     try:
-        fd = os.open(ledger.home() / f".overview-start.{rid}.lock",
-                     os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        with os.fdopen(fd, "r+") as lock:
-            while True:
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise Reject(503, "overview-start-failed", translate("serve.err.overviewStartFailed"))
-                    time.sleep(0.05)
-            try:
-                return _start_overview_review_locked(rid, translate, deadline)
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        with fsutil.flocked(ledger.home() / f".overview-start.{rid}.lock",
+                            exclusive=True, nofollow=True, deadline=deadline):
+            return _start_overview_review_locked(rid, translate, deadline, hook, hook_cwd, under=under)
     except OSError:
         raise Reject(503, "overview-start-failed", translate("serve.err.overviewStartFailed")) from None
 
 
-def _start_overview_review_locked(rid: str, translate: Any, deadline: float) -> str:
-    directory, entry = overview_start_target(rid, translate)
+def _start_overview_review_locked(rid: str, translate: Any, deadline: float,
+                                  hook: list[str] | None = None,
+                                  hook_cwd: str | None = None, *, under: Path | None = None) -> dict[str, Any]:
+    directory, entry = overview_start_target(rid, translate, under=under)
     # 状态文件只提供候选端口；旧版服务也要实际核对健康响应中的身份。
     info = read_status(directory) or {}
     candidates = (entry.get("port"), info.get("port"))
@@ -1366,9 +1720,12 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float) -> 
             found = probe(port, timeout=0.2)
             if overview_health(found, rid, directory, port):
                 if resume_running_review(directory, rid, port, found, max(.1, review_stop.remaining(deadline))):
-                    return f"http://127.0.0.1:{port}/"
+                    return _overview_start_result(directory, rid, f"http://127.0.0.1:{port}/",
+                                                  health=found, hook_not_applied=hook is not None)
                 if probe(port, timeout=0.2) is not None:
                     raise Reject(503, "overview-start-failed", translate("serve.err.resumeFailed"))
+    if hook is not None and _binding_conflicts_with_hook(directory):
+        raise Reject(409, "overview-hook-conflict", translate("serve.err.overviewHookConflict"))
     port = ledger.assign_port(rid, directory,
                               is_free=lambda candidate: probe(candidate, timeout=0.2) is None)
     if probe(port, timeout=0.2) is not None:
@@ -1378,9 +1735,16 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float) -> 
     child = None
     ready = False
     try:
-        child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), str(directory),
-                                  "--no-open", "--overview-start", rid],
-                                 cwd=str(directory), stdin=subprocess.DEVNULL,
+        command = [sys.executable, str(Path(__file__).resolve()), str(directory),
+                   "--no-open", "--overview-start", rid]
+        if under is not None:
+            command += ["--overview-under", str(under)]
+        if hook is not None:
+            # 解析后的钩子参数按 shell 规则拼回一个参数交给子进程（不经 shell）；子进程 parse_hook 拆回同一列表
+            command += ["--on-handoff", shlex.join(hook)]
+            if hook_cwd:
+                command += ["--overview-hook-cwd", os.path.abspath(hook_cwd)]
+        child = subprocess.Popen(command, cwd=str(directory), stdin=subprocess.DEVNULL,
                                  env={**os.environ, "AE_HOME": str(ledger.home())},
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  start_new_session=True)
@@ -1392,10 +1756,11 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float) -> 
                     if not resume_running_review(directory, rid, port, found,
                                                  max(.1, review_stop.remaining(deadline))):
                         raise Reject(503, "overview-start-failed", translate("serve.err.resumeFailed"))
-                else:
-                    threading.Thread(target=child.wait, daemon=True).start()
+                    return _overview_start_result(directory, rid, f"http://127.0.0.1:{port}/",
+                                                  health=found, hook_not_applied=hook is not None)
+                threading.Thread(target=child.wait, daemon=True).start()
                 ready = True
-                return f"http://127.0.0.1:{port}/"
+                return _overview_start_result(directory, rid, f"http://127.0.0.1:{port}/", health=found)
             if child.poll() is not None:
                 break
             time.sleep(0.05)
@@ -1410,7 +1775,8 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float) -> 
 def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
          on_handoff: list[str] | None = None,
          avoid: dict[int, str] | None = None,
-         locale: str | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
+         locale: str | None = None,
+         hook_cwd: str | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
     """返回 (服务, 已在运行的 URL, 过程记录)。本目录已有旧版本服务在跑时抛 StaleServer（不静默复用）。
 
     avoid：别的审阅的专属端口（端口 → 标识）。顺延时跳过它们，免得占了别人的地址。
@@ -1432,7 +1798,10 @@ def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
             return None, f"http://127.0.0.1:{info['port']}/", notes
     for p in range(port, port + tries):
         if p in avoid:
-            notes.append(T("serve.bind.skipReserved", port=p, rid=avoid[p][:8]))
+            if avoid[p] == HOST_KIND_OVERVIEW:
+                notes.append(T("serve.bind.skipReservedHome", port=p))
+            else:
+                notes.append(T("serve.bind.skipReserved", port=p, rid=avoid[p][:8]))
             continue
         found = probe(p)
         if found is not None:
@@ -1445,7 +1814,7 @@ def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
             continue
         try:
             return ReviewServer(review_dir, p, debug=debug, on_handoff=on_handoff,
-                                locale=locale or i18n.current_locale()), None, notes
+                                locale=locale or i18n.current_locale(), hook_cwd=hook_cwd), None, notes
         except OSError as e:
             notes.append(T("serve.bind.failed", port=p, detail=e.strerror or e))
     return None, None, notes
@@ -1462,10 +1831,11 @@ def parse_hook(cmd: str | None) -> list[str] | None:
     if not argv:
         return None
     exe = argv[0]
-    full = os.path.abspath(exe) if os.sep in exe else shutil.which(exe)
+    full = exe if os.sep in exe else shutil.which(exe)
     if not full or not os.access(full, os.X_OK):
         raise SystemExit(T("serve.err.hookMissing", command=exe))
-    return [full, *argv[1:]]   # 钩子在启动 serve.py 的目录下运行，参数里的相对路径按这个目录解析
+    # 相对 PATH 也可能找到相对路径。固定可执行文件，其他参数仍按钩子的工作目录解析。
+    return [os.path.abspath(full), *argv[1:]]
 
 
 class ClaimRefused(Exception):
@@ -1473,9 +1843,14 @@ class ClaimRefused(Exception):
 
 
 def _others_ports(rid: str | None) -> dict[int, str]:
-    """别的审阅的专属端口（台账读不了就只能空着）。复制来的副本连原审阅（同一标识）的端口也要避开，所以 rid 传 None。"""
+    """别的审阅的专属端口与首页保留端口（台账读不了就只能空着）。复制来的副本连原审阅（同一标识）的端口也要避开，所以 rid 传 None。"""
     try:
-        return {pt: k for pt, k in ledger.owners().items() if k != rid}
+        owners = ledger.owners()
+        reserved = ledger.overview_reserved_port()
+        # 旧副本的同号登记优先于首页保留记录，当前审阅拥有该端口时也一样。
+        if reserved is not None:
+            owners.setdefault(reserved, HOST_KIND_OVERVIEW)
+        return {pt: k for pt, k in owners.items() if k != rid}
     except (ledger.LedgerError, OSError):
         return {}
 
@@ -1523,7 +1898,8 @@ def plan_port(review_dir: Path, rid: str | None, port: int | None, claim: int | 
 
 
 def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, on_handoff: list[str] | None = None,
-          claim: int | None = None, locale: str | None = None, overview_start: str | None = None) -> int:
+          claim: int | None = None, locale: str | None = None, overview_start: str | None = None,
+          hook_cwd: str | None = None, overview_under: Path | None = None) -> int:
     set_locale(locale or cli_locale(None, review_dir))
     # 启动期间和整个服务生命周期持共享锁；更新只在没有服务时原子切换。
     with contextlib.ExitStack() as stack:
@@ -1541,12 +1917,14 @@ def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, o
         except OSError:
             print(T("serve.serve.updateRestart"), file=sys.stderr)
             return 6
-        return _serve_locked(review_dir, port, open_browser, debug, on_handoff, claim, locale, overview_start)
+        return _serve_locked(review_dir, port, open_browser, debug, on_handoff, claim, locale, overview_start,
+                             hook_cwd, overview_under)
 
 
 def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug: bool,
                   on_handoff: list[str] | None = None, claim: int | None = None,
-                  locale: str | None = None, overview_start: str | None = None) -> int:
+                  locale: str | None = None, overview_start: str | None = None,
+                  hook_cwd: str | None = None, overview_under: Path | None = None) -> int:
     review_dir = review_dir.resolve()
     set_locale(locale or cli_locale(None, review_dir))
     if not (review_dir / "index.html").is_file():
@@ -1564,7 +1942,7 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         return 2
     if overview_start is not None:
         try:
-            directory, _entry = overview_start_target(overview_start, T)
+            directory, _entry = overview_start_target(overview_start, T, under=overview_under)
         except (Reject, ledger.LedgerError, OSError):
             print(T("serve.err.overviewStartInvalid"), file=sys.stderr)
             return 2
@@ -1587,7 +1965,7 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         try:
             server, running_url, trail = bind(review_dir, first, debug, tries=1 if overview_start else PORT_TRIES,
                                               on_handoff=on_handoff, avoid=avoid,
-                                              locale=i18n.current_locale())
+                                              locale=i18n.current_locale(), hook_cwd=hook_cwd)
         except StaleServer as e:
             print(T("serve.serve.stale", detail=e), file=sys.stderr)
             return 6
@@ -2131,6 +2509,75 @@ def check(locale: str | None = None) -> int:
         ok(any(n["id"] == nid and n["status"] == "resolved" for n in notes), T("serve.check.restartKeeps"))
         srv2.shutdown()
         srv2.server_close()
+
+        # ---------- 总览首页：同一套安全门落在无审阅目录的宿主上 ----------
+        import build_viewer
+        home_srv = None
+        try:
+            home_id = ledger.overview_host_id()
+            build_viewer.build_overview_home(ledger.home(), host_id=home_id,
+                                             locale=i18n.current_locale())
+            home_srv = ReviewServer(None, 0, home_id=home_id, log_to_file=False,
+                                    locale=i18n.current_locale())
+            home_port = home_srv.port
+            ht = threading.Thread(target=home_srv.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
+            ht.start()
+            ok(home_srv.server_address[0] == "127.0.0.1", T("serve.check.overviewLoopback",
+                                                            host=home_srv.server_address[0]))
+            hg = {"Host": f"127.0.0.1:{home_port}"}
+            s, hh, _ = _req(home_port, "GET", "/", hg)
+            ok(s == 200 and "content-security-policy" in hh, T("serve.check.overviewIndex"))
+            s, _, raw = _req(home_port, "GET", "/api/health", hg)
+            body = json.loads(raw) if s == 200 else {}
+            ok(s == 200 and body.get("hostKind") == "overview-home"
+               and body.get("hostId") == home_id, T("serve.check.overviewHealth"))
+            s, _, _ = _req(home_port, "GET", "/", {"Host": f"evil.example:{home_port}"})
+            ok(s == 421, T("serve.check.overviewBadHost", status=s))
+            s, _, raw = _req(home_port, "GET", "/api/overview?scope=workspace", hg)
+            ok(s == 400 and json.loads(raw).get("code") == "bad-scope",
+               T("serve.check.overviewWorkspaceScope", status=s))
+            s, _, raw = _req(home_port, "GET", "/api/overview", hg)
+            body = json.loads(raw) if s == 200 else {}
+            ok(s == 200 and body.get("hostKind") == "overview-home", T("serve.check.overviewSnapshot"))
+            # 伪造请求不得创建或改写任何状态文件（台账与审阅目录一起核对）
+            home_paths = [ledger.home() / ledger.LEDGER_FILE, ledger.home() / ledger.OVERVIEW_PORT_FILE,
+                          ledger.home() / OVERVIEW_STATUS_FILE, tmp / store.NOTES_FILE, tmp / store.LOG_FILE]
+            home_before = [p.read_bytes() if p.exists() else None for p in home_paths]
+            same_home = {**hg, "Origin": f"http://127.0.0.1:{home_port}", "Content-Type": "application/json",
+                         "X-AE-Host": home_id}
+            start_guards = [({"Host": f"evil.example:{home_port}"}, 421, "Host"),
+                            ({**same_home, "Origin": "http://evil.example"}, 403, "Origin"),
+                            ({k: v for k, v in same_home.items() if k != "Origin"}, 403, "NoOrigin"),
+                            ({**same_home, "Content-Type": "text/plain"}, 415, "ContentType"),
+                            ({**same_home, "Sec-Fetch-Site": "cross-site"}, 403, "SecFetchSite"),
+                            ({**same_home, "X-AE-Host": "other-home"}, 409, "HostId")]
+            for headers, expected, guard in start_guards:
+                s, h, _ = _req(home_port, "POST", "/api/overview/start", headers, {"reviewId": "0" * 16})
+                ok(s == expected and "access-control-allow-origin" not in h,
+                   T("serve.check.overviewGuard", guard=guard, status=s))
+            # 审阅专属路由与台账外标识：稳定原因码；进程创建哨兵在进程边界兜底
+            with patch.object(subprocess, "Popen",
+                              side_effect=AssertionError("unexpected overview child")) as spawned:
+                s, _, raw = _req(home_port, "GET", "/api/notes", hg)
+                ok(s == 404 and json.loads(raw).get("code") == "review-only-api",
+                   T("serve.check.overviewReviewOnly", status=s))
+                s, _, _ = _req(home_port, "POST", "/api/notes", same_home, {"page": 1, "text": "x"})
+                ok(s == 405, T("serve.check.overviewReviewWrite", status=s))
+                s, _, raw = _req(home_port, "POST", "/api/overview/start", same_home, {"reviewId": "0" * 16})
+                ok(s == 404 and json.loads(raw).get("code") == "overview-review-unknown",
+                   T("serve.check.overviewStartUnknown", status=s))
+                ok(spawned.call_count == 0, T("serve.check.overviewStartNoProcess"))
+            ok([p.read_bytes() if p.exists() else None for p in home_paths] == home_before,
+               T("serve.check.overviewUnchanged"))
+            s, _, _ = _req(home_port, "GET", "/../reviews.json", hg)
+            ok(s == 404, T("serve.check.overviewOtherFiles", status=s))
+        except Exception as e:
+            results.append((False, T("serve.check.overviewCrashed", type=type(e).__name__, detail=e)))
+        finally:
+            if home_srv is not None:
+                home_srv.shutdown()
+                home_srv.server_close()
+
         log_text = (tmp / LOG_FILE).read_text(encoding="utf-8")
         ok(log_text.count("[reject]") >= 10, T("serve.check.rejectsLogged", count=log_text.count("[reject]")))
         ok("evil.example" in log_text and "<" not in log_text, T("serve.check.logFiltered"))
@@ -2287,8 +2734,24 @@ def main(argv: list[str] | None = None) -> int:
         ap.add_argument("key", help=T("serve.opt.key"))
         a = ap.parse_args(rest[1:])
         return forget(a.key, locale=i18n.current_locale())
+    if rest[:1] == ["overview"]:
+        ap = i18n.LocalizedParser(prog="serve.py overview", add_help=False, description=T("serve.desc.overview"),
+                                  keys=ERROR_KEYS, translate=T)
+        _add_help(ap)
+        _add_locale(ap)
+        ap.add_argument("--under", type=Path, metavar="目录" if i18n.current_locale() == "zh-CN" else "DIR",
+                        help=T("serve.opt.under"))
+        ap.add_argument("--port", type=int, help=T("serve.opt.overviewPort"))
+        ap.add_argument("--no-open", action="store_true", help=T("serve.opt.noOpen"))
+        ap.add_argument("--debug", action="store_true", help=T("serve.opt.debug"))
+        ap.add_argument("--on-handoff", metavar="命令" if i18n.current_locale() == "zh-CN" else "COMMAND",
+                        help=T("serve.opt.onHandoff"))
+        a = ap.parse_args(rest[1:])
+        return overview_home(a.under, a.port, not a.no_open, a.debug, parse_hook(a.on_handoff),
+                             locale=i18n.current_locale())
     argv = rest[1:] if rest[:1] == ["serve"] else rest
-    ap = i18n.LocalizedParser(prog="serve.py", add_help=False, description=T("serve.desc"),
+    ap = i18n.LocalizedParser(prog="serve.py", add_help=False,
+                              description=T("serve.desc") + "\n\n" + T("serve.desc.subcommands"),
                               keys=ERROR_KEYS, translate=T)
     _add_help(ap)
     _add_locale(ap)
@@ -2298,6 +2761,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-open", action="store_true", help=T("serve.opt.noOpen"))
     ap.add_argument("--debug", action="store_true", help=T("serve.opt.debug"))
     ap.add_argument("--overview-start", help=argparse.SUPPRESS)
+    ap.add_argument("--overview-hook-cwd", help=argparse.SUPPRESS)
+    ap.add_argument("--overview-under", type=Path, help=argparse.SUPPRESS)
     ap.add_argument("--on-handoff", metavar="命令" if i18n.current_locale() == "zh-CN" else "COMMAND",
                     help=T("serve.opt.onHandoff"))
     a = ap.parse_args(argv)
@@ -2305,7 +2770,8 @@ def main(argv: list[str] | None = None) -> int:
     # 目录解析出来后还有一级兜底：审阅里保存的 locale
     set_locale(cli_locale(locale_choice, d))
     return serve(d, a.port, not a.no_open, a.debug, parse_hook(a.on_handoff),
-                 claim=a.claim_port, locale=i18n.current_locale(), overview_start=a.overview_start)
+                 claim=a.claim_port, locale=i18n.current_locale(), overview_start=a.overview_start,
+                 hook_cwd=a.overview_hook_cwd, overview_under=a.overview_under)
 
 
 if __name__ == "__main__":

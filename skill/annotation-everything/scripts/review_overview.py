@@ -43,15 +43,17 @@ def in_scope(directory: Path, workspace: Path, scope: str) -> bool:
     return scope == "all" or workspace_for(directory) == workspace
 
 
-def display_path(directory: Path, workspace: Path) -> str:
-    """工作区内显示相对路径；其他位置显示 ~ 路径或目录名。"""
-    try:
-        return directory.relative_to(workspace).as_posix()
-    except ValueError:
+def display_path(directory: Path, workspace: Path | None) -> str:
+    """工作区内显示相对路径；其他位置显示 ~ 路径或目录名。workspace 传 None（总览首页的全台账范围）直接按 ~ 路径显示。"""
+    if workspace is not None:
         try:
-            return "~/" + directory.relative_to(Path.home().resolve()).as_posix()
+            return directory.relative_to(workspace).as_posix()
         except ValueError:
-            return directory.name
+            pass
+    try:
+        return "~/" + directory.relative_to(Path.home().resolve()).as_posix()
+    except ValueError:
+        return directory.name
 
 
 def last_activity(directory: Path) -> float | None:
@@ -62,6 +64,18 @@ def last_activity(directory: Path) -> float | None:
         except OSError:
             pass
     return max(times) if times else None
+
+
+def wait_command(review_id: str, *, hook: bool, receiver: Any) -> str | None:
+    """可复制的等待命令：等待型绑定提示从绑定会话运行；未绑定且未配置自定义钩子时也提供。
+
+    Codex 桌面事件绑定按现有协议投递与接手，省略认领型等待命令；已配置自定义钩子时
+    显示「已配置」，不另给等待命令。adapter 只认公开接收方状态里的值。
+    """
+    if hook:
+        return None
+    adapter = (receiver or {}).get("adapter") if isinstance(receiver, dict) else None
+    return f"notes.py wait {review_id[:8]}" if adapter in (None, "wait") else None
 
 
 def report_metadata(directory: Path, review_id: str) -> dict[str, Any]:
@@ -120,13 +134,26 @@ def report_metadata(directory: Path, review_id: str) -> dict[str, Any]:
     return metadata
 
 
-def snapshot(review_dir: Path, review_id: str | None, scope: str,
-             row_builder: Callable[[str, dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
-    """台账是索引，审阅名、计数和运行状态由 list 的同一份逻辑现读。"""
-    workspace = workspace_for(review_dir)
+def snapshot(review_dir: Path | None, review_id: str | None, scope: str,
+             row_builder: Callable[[str, dict[str, Any]], dict[str, Any]], *,
+             workspace_dir: Path | None = None, under_dir: Path | None = None) -> dict[str, Any]:
+    """台账是索引，审阅名、计数和运行状态由 list 的同一份逻辑现读。
+
+    workspace_dir / under_dir：总览首页宿主没有审阅目录，显式传显示用工作区与 --under 范围
+    （沿用 list --under 的目录包含关系，不是 git 根推断）；不传时行为与审阅宿主一致。
+    """
+    if workspace_dir is not None:
+        workspace = workspace_dir
+    elif review_dir is not None:
+        workspace = workspace_for(review_dir)
+    else:
+        workspace = None   # 总览首页的全台账范围：没有工作区，显示路径全部走 ~/ 或目录名
+    under = under_dir.resolve() if under_dir is not None else None
     rows = []
     for rid, entry in ledger.entries().items():
         directory = Path(entry["dir"]).resolve()
+        if under is not None and not directory.is_relative_to(under):
+            continue
         if not in_scope(directory, workspace, scope):
             continue
         source = row_builder(rid, entry)
@@ -153,6 +180,9 @@ def snapshot(review_dir: Path, review_id: str | None, scope: str,
             "port": source["port"], "running": running,
             "stop": stop, "stopWork": work,
             "pending": source["pending"], "review": source["review"],
+            # 公开接收方字段：绑定状态与接收方式（不含钩子命令、工作目录、套接字地址或日志）
+            "hook": source["hook"], "agentDelivery": source["agentDelivery"],
+            "waitCommand": wait_command(rid, hook=source["hook"], receiver=source["agentDelivery"]),
             "lastActivity": last_activity(directory), "current": rid == review_id,
             "url": f"http://127.0.0.1:{running}/" if running else None,
             "forgetCommand": f"serve.py forget {rid[:8]}" if state in ("missing", "mismatch") else None,
@@ -161,4 +191,4 @@ def snapshot(review_dir: Path, review_id: str | None, scope: str,
     rows.sort(key=lambda row: (2 if row["archived"] and row["state"] not in ("missing", "mismatch")
                               else STATE_ORDER.get(row["state"], 3), -(row["lastActivity"] or 0),
                                row["name"].casefold(), row["reviewId"]))
-    return {"workspace": workspace.name, "scope": scope, "reviews": rows}
+    return {"workspace": workspace.name if workspace is not None else None, "scope": scope, "reviews": rows}

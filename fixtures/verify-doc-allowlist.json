@@ -10,7 +10,8 @@
     "README.zh-CN.md",
     "docs/assets/"
   ],
-  "audited_paths": [
+  "audited_paths": [],
+  "probe_prefixes": [
     "GLOSSARY.md",
     "docs/adr/"
   ],

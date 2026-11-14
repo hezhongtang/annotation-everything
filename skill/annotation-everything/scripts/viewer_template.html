@@ -631,6 +631,8 @@ const SECT=__SECT__, RCSS=__RCSS__, SECT_KEYS=P.map(p=>"page-"+p.key);
 const DOCX=__DOCX__;
 // PPT 审阅：渲染信息、字体证据与未核验项（null 表示非 PPTX 报告）。视觉由每页内联渲染图负责
 const PPTX=__PPTX__;
+// 总览首页宿主（null 表示对照页）：这个页面由台账目录的服务提供，只服务总览视图，没有批注与对照页
+const OVERVIEW_HOME=__OVERVIEW_HOME__;
 function pageSize(k){const p=P[k]||{};return{w:+p.w>0?+p.w:1280,h:+p.h>0?+p.h:720}}
 const PAGE_NS=new Set(P.map(q=>q.n));   // 报告页码：页面生命周期内不变，找失页批注时直接查
 const APP="annotation-everything", FILE=location.protocol==="file:";
@@ -653,7 +655,7 @@ let pptxSel=[], pptxPageOn=false, pptxDown=null;   // PPT 元素目标（按选�
 const drafts=SS.get(K.drafts,{})||{};   // 各页没写完的批注；存在本标签页的会话存储里，刷新不丢
 const editBuf={};                        // 正在改的已有批注的内容（列表重绘、翻页时不丢）
 const DEL_TEXT="删除引用的这段文字", REP_PREFIX="改为：";   // 快捷修改的固定说法（导出/导入据此还原）
-const LOCALE_STORE="ae-locale:"+RID;
+const LOCALE_STORE="ae-locale:"+(OVERVIEW_HOME?OVERVIEW_HOME.id:RID);
 let uiLocale="zh-CN";
 function normLocale(tag){
   if(typeof tag!=="string") return null;
@@ -1251,7 +1253,9 @@ async function api(method,path,body,timeout=REQ_TIMEOUT,headers={}){
     throw Object.assign(new Error(tMsg(docxBlocked()?"viewer.docx.oldService":"viewer.pptx.oldService")),
       {status:409,code:docxBlocked()?"docx-required":"pptx-required"});
   const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),timeout);
-  const opt={method,cache:"no-store",headers:{"X-AE-Review":RID,...headers},signal:ctl.signal};
+  // 旧版审阅宿主只核对 X-AE-Review，用首页标识让它同样拒绝误发的请求。
+  const identity=OVERVIEW_HOME?{"X-AE-Host":OVERVIEW_HOME.id,"X-AE-Review":OVERVIEW_HOME.id}:{"X-AE-Review":RID};
+  const opt={method,cache:"no-store",headers:{...identity,...headers},signal:ctl.signal};
   if(body!==undefined){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(wellFormed(body))}
   let r;
   try{r=await fetch(path,opt)}
@@ -1260,12 +1264,14 @@ async function api(method,path,body,timeout=REQ_TIMEOUT,headers={}){
   let j=null;try{j=await r.json()}catch(e){}
   const ours=!!j&&typeof j==="object"&&(j.app===APP||(j.doc&&j.doc.app===APP));   // 只认带本服务标记的应答
   if(!r.ok){
+    if(OVERVIEW_HOME&&ours&&j.code==="review-mismatch")
+      throw Object.assign(new Error(tMsg("serve.err.hostMismatch")),{status:r.status,code:"host-mismatch"});
     // 不是本服务格式的错误（端口上是别的程序），或本服务明确说审阅不匹配：按「服务不匹配」处理，改动留在队列
     if(!ours||j.code==="review-mismatch")throw Object.assign(new Error(tMsg("viewer.error.mismatch")),{status:0,mismatch:true});
     const key={"bad-host":"badHost","cross-site":"crossSite","bad-origin":"badOrigin","no-origin":"noOrigin",
       "bad-content-type":"badContentType","chunked":"chunked","bad-length":"badLength","too-large":"tooLarge",
       "bad-json":"badJson","not-found":"notFound","preflight":"preflight","no-index":"noIndex","no-note":"noNote",
-      "review-mismatch":"reviewMismatch","no-api":"noApi"}[j.code];
+      "review-mismatch":"reviewMismatch","host-mismatch":"hostMismatch","no-api":"noApi"}[j.code];
     const detail=j.code==="bad-note"&&j.reason==="text-too-long"&&j.params
       ?tMsg("serve.err.textTooLong",j.params):(typeof j.error==="string"?j.error.trim():"");
     const message=key?tMsg("serve.err."+key):r.status>=500
@@ -1670,7 +1676,7 @@ function drawPins(){stage.querySelectorAll(".ae-pin,.ae-region").forEach(e=>{if(
     Object.assign(d.style,{left:rg.x+"%",top:rg.y+"%",width:rg.w+"%",height:rg.h+"%"});d.dataset.id=id||"";d.title=tip||"";
     const l=document.createElement("span");l.className="lbl";l.textContent=label;d.appendChild(l);
     const z=document.createElement("span");z.className="rz";z.title=tMsg("viewer.markResize");d.appendChild(z);stage.appendChild(d)};
-  (pageMarks&&pageMarks.get(P[i].n)||[]).forEach((x,k)=>{if(hideDone&&isDone(x))return;
+  (pageMarks&&P[i]&&pageMarks.get(P[i].n)||[]).forEach((x,k)=>{if(hideDone&&isDone(x))return;
     const cls=[isDone(x)?"done":"",x.style&&x.style.scope?"sty":""].filter(Boolean).join(" "),sum=clip(noteSummary(x),80),rg=regionOf(x);
     if(rg)box(rg,cls,x.id,`${k+1}${x.style&&x.style.scope?" "+tMsg("viewer.styleBtn"):""}`,tMsg("viewer.regionTip",{text:sum}));
     if(x.pin)put(x.pin.x,x.pin.y,k+1,isDone(x)?"done":"",x.id,tMsg("viewer.pinTip",{text:sum}))});
@@ -1717,7 +1723,7 @@ function refreshList(force){
   if(!force&&(editingId||composing)){listStale=true;updateCounts();return}   // 正在改某条或正在输入法组字：先不重绘
   listStale=false;
   stashEdit();
-  const mine=notes.filter(x=>x.page===P[i].n), nDone=mine.filter(isDone).length, shown=mine.filter(x=>!(hideDone&&isDone(x)));   // 待复核的不算已处理，不隐藏
+  const cur=P[i], mine=cur?notes.filter(x=>x.page===cur.n):[], nDone=mine.filter(isDone).length, shown=mine.filter(x=>!(hideDone&&isDone(x)));   // 待复核的不算已处理，不隐藏；总览首页没有报告页（P 为空），列表按空处理
   $("nhere").textContent=mine.length;
   $("nlist").innerHTML=`<div class="lab"><span>${tMsg("viewer.pageNotes")}${mine.length&&mine.every(isDone)?` · ${tMsg("viewer.allResolved")}`:""}</span>${nDone?`<button data-act="hide">${tMsg(hideDone?"viewer.showResolved":"viewer.hideResolved",{count:nDone})}</button>`:""}</div>`
     +(shown.map(noteHtml).join("")||`<p class="empty">${escH(tMsg("viewer.empty"))}</p>`);
@@ -2849,7 +2855,7 @@ function loadDraft(){const d=drafts[P[i].n]||{};$("ntext").value=d.text||"";$("n
   pptxPageOn=!!dp.page;
   pptxSel=(dp.keys||[]).map(k=>slide&&(slide.elements||[]).find(e=>e.key===k)).filter(Boolean);
   quotePptx=dp.quote||null;updatePptxChip();pptxPaintSelection()}
-function updatePageStat(){const p=P[i];
+function updatePageStat(){if(!P.length)return;const p=P[i];
   $("stat").textContent=tMsg("viewer.pageStat",{page:p.n,total:P[N-1].n})+(total?` · ${tMsg("viewer.timeStat",{at:mmss(cum[i]),total:mmss(total)})}`:"")}
 function render(){
   const p=P[i], s=secOf(p.n);
@@ -3382,9 +3388,9 @@ setInterval(()=>{if(!document.hidden)loadAnalyses()},4000);
 
 // ---------- 审阅总览（同一个 index.html 的 #overview 视图） ----------
 let overviewData=null,overviewSelected=null,overviewRequest=0,overviewLoading=false;
-const overviewStarting=new Set(),overviewStartFailures=new Map();
+const overviewStarting=new Set(),overviewStartFailures=new Map(),overviewStartNotes=new Map();
 const overviewStopping=new Set(),overviewStopResults=new Map();
-const OVERVIEW_BATCH_KEY="ae."+RID+".overview-stop-batch";
+const OVERVIEW_BATCH_KEY="ae."+(OVERVIEW_HOME?.id||RID)+".overview-stop-batch";
 const OVERVIEW_BATCH_WAIT=15000;
 let overviewBatch=restoreOverviewBatch(),overviewBatchBusy=false,overviewBatchRetryError=false,overviewBatchListHtml="";
 let currentArchived=false,archiveBusy=false;
@@ -3396,7 +3402,7 @@ function setCurrentArchive(value){
   const archived=value===true;
   if(currentArchived!==archived){currentArchived=archived;renderArchiveBanners()}
 }
-function overviewShown(){return location.hash==="#overview"}
+function overviewShown(){return OVERVIEW_HOME!==null||location.hash==="#overview"}
 function overviewState(row){
   if(!["running","running-temp","stopped"].includes(row.state))return "invalid";
   return row.archived?"archived":row.state==="stopped"||overviewStopStatus(row)?.state==="stopped"?"stopped":"running";
@@ -3511,6 +3517,7 @@ function overviewBatchOwnsStop(row){
     target.reviewId===row.reviewId&&overviewBatchPending(target)));
 }
 function overviewBatchScope(batch){
+  if(typeof batch.under==="string")return batch.under;
   const label=tMsg("viewer.overview."+batch.scope);
   return batch.scope==="workspace"&&batch.workspace?label+" · "+batch.workspace:label;
 }
@@ -3524,7 +3531,10 @@ function renderOverviewBatch(){
   stopAll.disabled=!overviewConnected()||!rows.length||overviewBatchActive()||
     rows.some(row=>row.current&&overviewStopStatus(row)?.state==="stopping");
   if(!stopAll.hidden){
-    stopAll.textContent=tMsg("viewer.overview.batch.action."+overviewData.scope,{total:rows.length});
+    const {scope,under,workspace}=overviewData;
+    stopAll.textContent=typeof under==="string"
+      ?tMsg("viewer.overview.batch.action.under",{directory:workspace||under,total:rows.length})
+      :tMsg("viewer.overview.batch.action."+scope,{total:rows.length});
   }
   const batch=overviewBatch;
   $("overviewBatch").hidden=!batch;
@@ -3619,7 +3629,8 @@ async function runOverviewBatch(batch,rows=null){
   try{
     if(retry){
       const data=await readOverview(batch.scope);
-      if(!hasFeature(data,"overview-stop"))throw new Error("overview-stop-unavailable");
+      if(!hasFeature(data,"overview-stop")||(data.under??null)!==(batch.under??null))
+        throw new Error("overview-stop-unavailable");
       reconcileOverviewBatch(batch,data);
       rows=data.reviews;
     }
@@ -3647,10 +3658,10 @@ async function runOverviewBatch(batch,rows=null){
 }
 function confirmOverviewBatch(){
   if($("overviewStopAll").disabled)return;
-  const {scope,workspace}=overviewData;
+  const {scope,workspace,under}=overviewData;
   const rows=overviewData.reviews.filter(overviewStopEligible);
   const targets=rows.map(row=>({reviewId:row.reviewId,name:row.name||row.reviewId,revision:row.stop?.revision,status:{state:"queued"}}));
-  const batch={scope,workspace,targets};
+  const batch={scope,workspace,under,targets};
   const message=tMsg("viewer.overview.batch.confirm",{scope:overviewBatchScope(batch),count:targets.length});
   const warning=rows.some(row=>row.current)?"\n\n"+tMsg("viewer.overview.stopCurrentConfirm"):"";
   if(confirm(message+warning)){overviewBatch=batch;void runOverviewBatch(batch,rows)}
@@ -3659,11 +3670,27 @@ function overviewTime(value){
   if(typeof value!=="number"||!Number.isFinite(value)||value<=0)return tMsg("viewer.overview.noActivity");
   const date=new Date(value*1000);return Number.isFinite(date.getTime())?date.toLocaleString(uiLocale):tMsg("viewer.overview.noActivity");
 }
+function overviewReceiverText(row){
+  // 接收方式一行文案：只读展示，不在此处新建或改写绑定；数据来自行里的公开接收方字段
+  const d=row.agentDelivery;
+  if(row.hook&&(!d||d.state==="unconfigured"))return tMsg("viewer.overview.receiverHook");
+  if(!d||typeof d.state!=="string")return tMsg("viewer.overview.receiver.unconfigured");
+  const inner=d.receiver&&d.receiver.state?d.receiver.state:null;
+  const who=d.receiver&&d.receiver.harness?{harness:d.receiver.harness,session:d.receiver.sessionId||""}:null;
+  if(d.state==="processing")return tMsg("viewer.overview.receiver.processing");
+  if(d.state==="restart-required")return tMsg("viewer.overview.receiver.restartRequired");
+  if(d.state==="error")return tMsg("viewer.overview.receiver.error");
+  if(d.state==="unconfigured")return tMsg("viewer.overview.receiver.unconfigured");
+  if(d.adapter==="codex-desktop")return tMsg("viewer.overview.receiver.event",who||{harness:"",session:""});
+  if(inner==="waiting")return tMsg("viewer.overview.receiver.waiting",who||{harness:"",session:""});
+  if(inner==="idle")return tMsg("viewer.overview.receiver.idle",who||{harness:"",session:""});
+  return tMsg("viewer.overview.receiver.bound");
+}
 function renderOverview(){
   if(!overviewShown())return;
   renderOverviewBatch();
   const title=tMsg("viewer.overview.title");
-  $("overviewTitle").textContent=title+(overviewData?" · "+overviewData.workspace:"");
+  $("overviewTitle").textContent=title+(overviewData&&overviewData.workspace?" · "+overviewData.workspace:"");
   if(!overviewData){$("overviewList").innerHTML=`<p class="overview-message">${escH(tMsg(FILE?"viewer.overview.needService":"viewer.overview.loading"))}</p>`;$("overviewDetail").textContent="";return}
   const rows=overviewData.reviews||[];
   if(!rows.some(row=>row.reviewId===overviewSelected))overviewSelected=(rows.find(row=>row.current)||rows[0]||{}).reviewId;
@@ -3701,9 +3728,11 @@ function renderOverview(){
   const stopUpgrade=canStop&&!supported?`<p class="overview-message">${escH(tMsg("viewer.overview.stopIssue.upgrade"))}</p>`:"";
   $("overviewDetail").innerHTML=`<h2>${escH(row.name||row.reviewId.slice(0,8))}</h2><div class="overview-identity"><span>${escH(row.reviewId.slice(0,8))}</span><br><span>${escH(row.path||"")}</span></div>
     ${metadata}
-    <dl><dt>${escH(tMsg("viewer.overview.status"))}</dt><dd>${status}</dd><dt>${escH(tMsg("viewer.overview.submissions"))}</dt><dd>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}<br>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</dd><dt>${escH(tMsg("viewer.overview.activity"))}</dt><dd>${escH(overviewTime(row.lastActivity))}</dd><dt>${escH(tMsg("viewer.overview.port"))}</dt><dd>${escH(row.port||"—")}${row.running&&row.running!==row.port?" · "+escH(tMsg("viewer.overview.actualPort",{port:row.running})):""}</dd></dl>
-    <div class="overview-actions">${invalid?forget:action+archive+stopAction}</div>${stopUpgrade}${startFailure?`<p id="overviewStartError" class="overview-message" role="alert">${escH(tMsg(startFailure))}</p>`:""}`;
+    <dl><dt>${escH(tMsg("viewer.overview.status"))}</dt><dd>${status}</dd><dt>${escH(tMsg("viewer.overview.receiverLabel"))}</dt><dd>${escH(overviewReceiverText(row))}</dd><dt>${escH(tMsg("viewer.overview.submissions"))}</dt><dd>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}<br>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</dd><dt>${escH(tMsg("viewer.overview.activity"))}</dt><dd>${escH(overviewTime(row.lastActivity))}</dd><dt>${escH(tMsg("viewer.overview.port"))}</dt><dd>${escH(row.port||"—")}${row.running&&row.running!==row.port?" · "+escH(tMsg("viewer.overview.actualPort",{port:row.running})):""}</dd></dl>
+    ${typeof row.waitCommand==="string"&&row.waitCommand?`<div class="overview-wait"><code class="overview-command">${escH(row.waitCommand)}</code><button id="overviewWaitCopy">${escH(tMsg("viewer.overview.copyWait"))}</button><span class="overview-hint">${escH(tMsg("viewer.overview.waitHint"))}</span></div>`:""}
+    <div class="overview-actions">${invalid?forget:action+archive+stopAction}</div>${stopUpgrade}${startFailure?`<p id="overviewStartError" class="overview-message" role="alert">${escH(tMsg(startFailure))}</p>`:""}${overviewStartNotes.get(row.reviewId)?`<p id="overviewStartNote" class="overview-message" role="status">${escH(tMsg(overviewStartNotes.get(row.reviewId)))}</p>`:""}`;
   const copy=$("overviewForgetCopy");if(copy)copy.onclick=async()=>{await copyText(row.forgetCommand);toast(tMsg("viewer.overview.copied"))};
+  const waitCopy=$("overviewWaitCopy");if(waitCopy)waitCopy.onclick=async()=>{await copyText(row.waitCommand);toast(tMsg("viewer.overview.copied"))};
   const archiveButton=$("overviewArchive");if(archiveButton)archiveButton.onclick=()=>archiveReview(row.reviewId,!row.archived);
   const start=$("overviewStart");if(start)start.onclick=()=>startOverview(row);
   const stop=$("overviewStop");if(stop)stop.onclick=()=>confirmOverviewStop(row);
@@ -3717,13 +3746,17 @@ async function startOverview(row){
   opened.opener=null;
   opened.document.title=tMsg("viewer.overview.starting");
   opened.document.body.textContent=tMsg("viewer.overview.starting");
-  overviewStarting.add(rid);overviewStartFailures.delete(rid);renderOverview();
+  overviewStarting.add(rid);overviewStartFailures.delete(rid);overviewStartNotes.delete(rid);renderOverview();
   try{
     const data=await api("POST","/api/overview/start",{reviewId:rid});
     if(typeof data.url!=="string"||!/^http:\/\/127\.0\.0\.1:\d+\/$/.test(data.url))throw new Error("overview-start-format");
     const selected=(overviewData&&overviewData.reviews||[]).find(review=>review.reviewId===rid);
     overviewStopResults.delete(rid);
-    if(selected){const port=Number(new URL(data.url).port);Object.assign(selected,{url:data.url,running:port,state:port===selected.port?"running":"running-temp",stop:null})}
+    if(data.note==="hook-not-applied")overviewStartNotes.set(rid,"viewer.overview.startNote.hookNotApplied");
+    else if(data.note==="no-receiver")overviewStartNotes.set(rid,"viewer.overview.startNote.noReceiver");
+    if(selected){const port=Number(new URL(data.url).port);Object.assign(selected,{url:data.url,running:port,
+      state:port===selected.port?"running":"running-temp",stop:null,hook:data.hookConfigured,
+      agentDelivery:data.agentDelivery,waitCommand:data.waitCommand})}
     if(!opened.closed)opened.location.replace(data.url);
     await loadOverview();
   }catch(error){
@@ -3731,7 +3764,10 @@ async function startOverview(row){
     const key={"bad-overview-start":"serve.err.overviewStartBody",
       "overview-review-unknown":"serve.err.overviewStartUnknown",
       "overview-review-invalid":"serve.err.overviewStartInvalid",
+      "overview-review-out-of-scope":"viewer.overview.stopIssue.outOfScope",
+      "host-mismatch":"serve.err.hostMismatch",
       "overview-port-busy":"serve.err.overviewStartBusy",
+      "overview-hook-conflict":"serve.err.overviewHookConflict",
       "overview-start-failed":"serve.err.overviewStartFailed"}[error.code];
     overviewStartFailures.set(rid,key||"viewer.overview.startError");
   }finally{overviewStarting.delete(rid);renderOverview()}
@@ -3750,7 +3786,12 @@ async function archiveReview(reviewId,archived){
 }
 async function readOverview(scope,timeout=REQ_TIMEOUT){
   const data=await api("GET","/api/overview?scope="+encodeURIComponent(scope),undefined,timeout);
-  if(data.reviewId!==RID||data.scope!==scope||!Array.isArray(data.reviews))throw new Error("overview-format");
+  if(OVERVIEW_HOME){
+    // 首页宿主：按宿主种类与标识核对；范围由服务端按启动配置决定，页面只发 all
+    if(data.hostKind!=="overview-home"||data.hostId!==OVERVIEW_HOME.id)
+      throw Object.assign(new Error(tMsg("serve.err.hostMismatch")),{code:"host-mismatch"});
+    if(!Array.isArray(data.reviews))throw new Error("overview-format");
+  }else if(data.reviewId!==RID||data.scope!==scope||!Array.isArray(data.reviews))throw new Error("overview-format");
   return data;
 }
 async function loadOverview(){
@@ -3775,7 +3816,9 @@ async function loadOverview(){
   }catch(error){
     if(request!==overviewRequest)return;
     const hostStopped=overviewStopResults.get(RID)?.state==="stopped";
-    $("overviewError").textContent=tMsg(hostStopped?"viewer.overview.stopCurrentStopped":"viewer.overview.loadError");$("overviewError").hidden=false;
+    const wrongHost=error.code==="host-mismatch";
+    $("overviewError").textContent=tMsg(wrongHost?"serve.err.hostMismatch":hostStopped?"viewer.overview.stopCurrentStopped":"viewer.overview.loadError");$("overviewError").hidden=false;
+    if(wrongHost)overviewData=null;
     if(!overviewData){$("overviewList").textContent="";$("overviewDetail").textContent=""}
     if(overviewBatch)reconcileOverviewBatch(overviewBatch,null);
     renderOverviewBatch();
@@ -3803,6 +3846,16 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE){po
 
 (async function init(){
   applyLocale();
+  if(OVERVIEW_HOME){
+    // 总览首页：只有总览视图。没有对照页，就没有批注轮询、保存通道与「返回当前审阅」；列表自动刷新沿用 overviewRoute 里的定时器。
+    // 没有可返回的对照页，语言切换必须留在总览视图内：把状态栏的语言选择器搬进总览顶栏（#157）
+    document.querySelector(".overview-top").appendChild($("localeLabel"));
+    const scope=$("overviewScope");
+    scope.value="all";
+    scope.hidden=true; // 首页范围由启动命令固定，标题显示 --under 的目录名。
+    $("overviewBack").hidden=true;
+    overviewRoute();
+    return}
   applyLayout();
   overviewRoute();
   analysisRoute();

@@ -2870,8 +2870,9 @@ class SelectionBuiltinMapTests(unittest.TestCase):
         problems = vs.validate_builtin_map(repo_root=ROOT)
         self.assertEqual(problems, [], "内置映射的选择器与场景必须在真实仓库里全部可解析")
 
-    def test_glossary_and_adrs_do_not_require_product_tests_for_pr(self):
-        repo = self.builtin_repo("verify-doc-pr-plan-")
+    def test_glossary_and_adrs_have_consumers_and_are_no_longer_doc_exempt(self):
+        """GLOSSARY 与 ADR 自 #162 起被文档契约测试消费，差异被保守回退（未分类/防护文档），不再豁免。"""
+        repo = self.builtin_repo("verify-doc-consumers-")
         paths = (DOC_FIXTURES["term_document"], DOC_FIXTURES["decision_document"])
         for path in paths:
             repo.write(path, "# 合成说明\n")
@@ -2883,14 +2884,10 @@ class SelectionBuiltinMapTests(unittest.TestCase):
                 result = repo.run_verify("plan", "--phase", phase, "--json")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 selection = json.loads(result.stdout)["selection"]
-                self.assertIsNone(selection["fallback"])
-                self.assertEqual({item["path"] for item in selection["doc_exempt"]}, set(paths))
-                self.assertEqual(selection["suggested"]["groups"], [])
-                self.assertEqual(selection["suggested"]["not_applicable"],
-                                 ["unit", "unit-related", "serve-check", "browser"])
-                if phase == "pr":
-                    self.assertFalse(selection["suggested"]["runs_tests"])
-                    self.assertIn("CI", " ".join(selection["suggested"]["notes"]))
+                self.assertIsNotNone(selection["fallback"])
+                self.assertIn(selection["fallback"]["kind"], ("unknown_path", "guarded_doc"))
+                self.assertEqual({item["path"] for item in selection["doc_exempt"]} & set(paths), set())
+                self.assertTrue(selection["suggested"]["runs_tests"])
 
     def test_document_only_pr_records_a_gate_without_executing_product_tests(self):
         for readme in DOC_FIXTURES["readmes"]:

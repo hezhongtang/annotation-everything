@@ -121,7 +121,8 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `pptx_edit.py apply 审阅目录 --batch N` / `ops 审阅目录 --ops 操作文件` | 按幻灯片定位回写 PPTX 文本与备注快捷修改，或用 JSON 操作文件下发白名单内的元素几何与样式修改；`--id ID` 选择批注，`--dry-run` 预演，`--output 新路径` 另存；整组预检、0600 快照、原子替换，只读结构明确拒绝 |
 | `report_check.py 报告.html [--script 讲稿.md] [--record report-record.json]` | 公开报告核验入口：输出可读摘要，`--json` 输出结构化结果，`--locale zh-CN` 或 `en` 选择语言。退出码 0 表示程序检查通过，不等于报告可交付；1 表示检查未通过；2 表示输入或用法错误。内容、结构与视觉覆盖及交付阻塞项分别列出 |
 | `serve.py 审阅目录或审阅标识` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
-| `http://127.0.0.1:<端口>/#overview`（浏览器地址） | 打开审阅总览，切换范围、查看详情、打开、启动或归档审阅，并可逐份或按范围停止审阅。先启动一份本机服务 |
+| `serve.py overview [--under 目录]` | 打开独立总览首页，不用先运行任何审阅。默认列出本机全部审阅，`--under` 限定目录范围（列表、启动、归档与逐份或批量停止都按该范围核对）。同一台账只运行一个首页，相同启动配置复用当前实例与保留地址，端口冲突时本次临时顺延。`Ctrl+C` 退出 |
+| `http://127.0.0.1:<端口>/#overview`（浏览器地址） | 打开审阅总览，切换范围、查看详情、打开、启动或归档审阅，并可逐份或按范围停止审阅。先启动一份本机服务，或用 `serve.py overview` 打开总览首页 |
 | `serve.py list [--json]` | 列出本机全部审阅，包含归档项；人读输出和 JSON 都带归档标记 |
 | `serve.py status 审阅目录或审阅标识` | 查看一份审阅的运行状态 |
 | `serve.py stop 审阅目录或审阅标识 [--timeout 秒]` / `stop 审阅目录或审阅标识 --status` | 按审阅标识协调保存保护、等待者、Agent 轮次与 HTTP 服务停止，或查询持久状态。JSON 状态为 `stopping` / `stopped` / `incomplete`；退出码 0 表示全部停止，1 表示未完全停止，2 表示目标无效或有歧义。`stop-status` 是 `--status` 的别名 |
@@ -198,7 +199,7 @@ python3 $S/notes.py wait /tmp/ae-demo
   <tr>
     <td valign="top">
       <h4>📚 审阅总览与归档</h4>
-      在浏览器里查看本工作区或本机全部审阅，按状态和最近活动找到材料，查看摘要与待处理提交。可直接打开、代为启动或归档审阅，也可逐份或按范围停止审阅。
+      在浏览器里查看本工作区或本机全部审阅，按状态和最近活动找到材料，查看摘要与待处理提交。可直接打开、代为启动或归档审阅，也可逐份或按范围停止审阅。<code>serve.py overview</code> 不用先运行任何审阅，<code>--under</code> 可限定目录范围。
     </td>
     <td valign="top">
       <h4>🔄 正式版本自动更新</h4>
@@ -219,7 +220,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 <p align="center"><img src="docs/assets/overview.zh.png" alt="合成审阅总览，可停止选中的审阅或停止本工作区内全部 3 份运行中的审阅" width="92%"></p>
 
-从任一正在运行的对照页点击「审阅总览」，或打开它的 `/#overview` 地址。默认显示「本工作区」，也可切到「本机全部」。工作区取审阅所在的 git 仓库根目录；不在 git 仓库里时，取审阅目录的上一级。总览显示相对路径，其他工作区的路径用 `~` 开头或只显示审阅名。没有任何审阅运行时，先用 `serve.py <审阅标识>` 启动一份。
+从任一正在运行的对照页点击「审阅总览」，或打开它的 `/#overview` 地址。默认显示「本工作区」，也可切到「本机全部」。工作区取审阅所在的 git 仓库根目录；不在 git 仓库里时，取审阅目录的上一级。总览显示相对路径，其他工作区的路径用 `~` 开头或只显示审阅名。没有任何审阅运行时，可以用 `serve.py overview` 直接打开独立总览首页，也可以先用 `serve.py <审阅标识>` 启动一份。
 
 左侧按「运行中 / 已停 / 已归档 / 失效」分组，组内按最近活动时间倒序；选中后可看摘要、用途、读者、核心问题、待接收和待复核数。运行中的点「打开」，已停的点「启动并打开」，在新标签页打开目标对照页。代为启动使用专属端口；端口被占用时先释放端口，台账条目或目录失效时先刷新总览，再按提示重试。失效条目提供 `serve.py forget <短标识>` 清理命令。总览里的「回到当前审阅」返回托管它的对照页。
 
@@ -228,6 +229,10 @@ python3 $S/notes.py wait /tmp/ae-demo
 选择「停止本工作区内全部运行中审阅」或「停止本机全部运行中审阅」，核对范围和数量后确认。数量包含已归档且仍在运行的审阅。确认时固定目标，后来启动的审阅可在核对范围和数量后另行停止。总览逐份显示结果，所有目标确认停止后显示「全部已停止」。部分完成时，按显示的原因处理后选择「只重试失败项」。如果托管总览的审阅已停止，按结果中的命令重新启动，再刷新原标签页继续重试。重启的托管审阅在本轮结果中仍记为已停止。
 
 归档把不再推进的审阅从默认列表里收起，保留批注、提交和专属端口，服务继续运行。点击「展开」或勾选「显示已归档」可取消归档。当前审阅已归档时，两种视图都显示横幅，批注和提交照常可用；归档不取消已经提交的处理要求。`serve.py list` 仍列出全部审阅，并标出已归档项。
+
+总览首页（`serve.py overview [--under 目录]`）是总览的另一种宿主：没有审阅运行时也能打开，从任一对照页进入总览的老路子不变。首页的保留地址记在审阅台账目录里，退出重启后回到同一地址；同一台账只运行一个首页，相同启动配置（规范化的 `--under`、显式 `--port`、`--locale`、钩子参数与钩子工作目录）复用当前实例，配置不同则非零退出并提示先退出。首页避开审阅专属端口，审阅服务的分配、认领与顺延也避开首页保留端口；保留端口被占用时本次临时顺延并警告。`--under` 沿用 `serve.py list --under` 的目录包含关系，列表、启动、归档与逐份或批量停止都在服务端核对同一范围。首页用 `Ctrl+C` 退出；首页运行期间 `update.py` 推迟更新，`ae.py uninstall` 会先拒绝，`--stop-servers` 核对进程身份后停止。实际调用的技能副本缺少 `overview` 时，用 `serve.py --help` 检查并按提示升级技能副本。
+
+<p align="center"><img src="docs/assets/overview-home.zh.png" alt="限定在合成样例目录内的独立总览首页，批量停止按钮显示范围内有 2 份运行中审阅" width="92%"></p>
 
 <details>
 <summary><b>当前任务与停止审阅</b></summary>
@@ -306,7 +311,7 @@ python3 ~/.claude/skills/annotation-everything/scripts/update.py now    # 立即
 - 更新只替换技能副本，保留指向它的软链接、审阅台账与审阅目录，不修改来源仓库的检出。正式版本的本地来源通常保存在 `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`，若与技能副本重叠则存到副本旁的独立目录；这些文件供后续体检、修复和更新使用，不要在仍使用该副本时删除。首次获得更新功能仍需先用包含此功能的版本运行一次 `ae.py install`。升级已有审阅时，停止旧服务、重建对照页、启动新服务并刷新浏览器。
 - 更新需要 Git、来源仓库的访问权限、本机进程枚举权限，以及文件系统支持原子目录交换（macOS 的 `renamex_np`，或 Linux C 库提供的 `renameat2`）。受限环境无法确认或交换时会提示并保留当前版本；可在具备权限的终端手动运行 `update.py now`。成功切换后，旧副本保留在技能目录根下的 `.ae-update-*` 中，便于找回切换期间的并发改动。
 - 体检逐项给出「通过 / 警告 / 失败」；失败项附修复或排障命令。退出码 0 表示全部通过或只有警告，1 表示有失败项，2 表示命令自身出错（`doctor --json` 输出 `error`）。开发环境类别仅在当前工作目录位于来源仓库内时出现。
-- **界面语言**：`ae.py`、`serve.py`（`serve` / `status` / `stop` / `list` / `forget` / `check`）、`notes.py`、`check_pptx_fonts.py` 都支持 `--locale auto|zh-CN|en`（写在子命令前后都认）和环境变量 `AE_LOCALE`；生成器的帮助、结果与资源诊断也按显式 `--locale`、`AE_LOCALE`、已保存审阅配置的顺序选语言。优先级是显式参数、`AE_LOCALE`，两者都没有则中文；只有 `auto` 才读 `LC_ALL` / `LC_MESSAGES` / `LANG`。`serve.py serve`、`serve.py status` 和 `serve.py stop` 在目录解析出来后还会回落到那份审阅里保存的 `locale`；`list` / `forget` / `check` 不对应单份审阅，只认前两级。语言选择非法时命令以退出码 2 停下并说明原因，不改动任何状态。帮助、参数说明、缺参、非法值和命令失败都用同一种语言；来源路径、命令、字体名、技能名与系统原始错误保持原文。
+- **界面语言**：`ae.py`、`serve.py`（`serve` / `status` / `stop` / `list` / `forget` / `check` / `overview`）、`notes.py`、`check_pptx_fonts.py` 都支持 `--locale auto|zh-CN|en`（写在子命令前后都认）和环境变量 `AE_LOCALE`；生成器的帮助、结果与资源诊断也按显式 `--locale`、`AE_LOCALE`、已保存审阅配置的顺序选语言。优先级是显式参数、`AE_LOCALE`，两者都没有则中文；只有 `auto` 才读 `LC_ALL` / `LC_MESSAGES` / `LANG`。`serve.py serve`、`serve.py status` 和 `serve.py stop` 在目录解析出来后还会回落到那份审阅里保存的 `locale`；`list` / `forget` / `check` / `overview` 不对应单份审阅，只认前两级。语言选择非法时命令以退出码 2 停下并说明原因，不改动任何状态。帮助、参数说明、缺参、非法值和命令失败都用同一种语言；来源路径、命令、字体名、技能名与系统原始错误保持原文。
 - **机器判定与人读文案分开**：`doctor --json` 的 `category`、`level`、`code` 和 `summary` 是旧消费者在读的判定字段，恒为中文、不随语言改值；新增的语言无关判定信息是每项的 `status`（`pass` / `warn` / `fail`）和 `category_id`（`install` / `tools` / `dev` / `runtime`），以及顶层的 `schema`（结构版本）和 `locale`（`message` 用的是哪种语言）。新消费者比较 `status` / `category_id` 即可，不必比较本地化标签；`message`、`fix_command` 里的人读文案按语言变。`serve.py` 的拒绝与错误同理：HTTP 状态和原因代码（`bad-host`、`cross-site`、`bad-origin`、`no-origin`、`bad-content-type`、`chunked`、`bad-length`、`too-large`、`bad-json`、`not-found`、`preflight`、`no-index`、`no-note`、`server-error`、`review-mismatch`、`no-api`）不随语言变，说明按服务启动时定的语言输出；未知错误只说明类型与恢复动作，不回显请求内容。
 - `repair` 里删除台账失效记录（`--forget-stale`）、结束残留服务（`--stop-orphans`）是破坏性操作，要显式加参数；`--dry-run` 只看计划不动手。计划与执行报告都写清楚「本次未执行」，翻译后的提示不弱化后果。
 - `uninstall` 任何情况下都不动审阅目录；`--purge` 才一并删除审阅台账；有 `serve.py` 在运行时会拒绝，`--stop-servers` 先停止再卸。
@@ -454,7 +459,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── update.py                  检查正式版本并更新技能副本
 │   ├── content_manifest.py        记录技能副本的文件、目录和链接指纹
 │   ├── viewer_template.html       对照页与审阅总览模板（服务模式和本地文件模式）
-│   ├── serve.py                   本机服务：serve / status / stop / list / forget / check
+│   ├── serve.py                   本机服务：serve / status / stop / list / forget / check / overview
 │   ├── review_overview.py         总览范围、报告摘要与归档标记
 │   ├── review_save.py             目标审阅浏览器的保存回执
 │   ├── review_stop.py             审阅级持久停止状态与各组件停止协调
@@ -463,7 +468,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── notes_store.py             批注存储：原子写入、文件锁、操作日志
 │   ├── analysis_store.py          分析存储：只追加事件、轮次推导与批注联动
 │   ├── export_format.py           批注交换格式：带标记的 Markdown 文法与 JSON 备份
-│   ├── ledger.py                  审阅台账：审阅标识、审阅目录和专属端口；服务状态文件与存活判断、复制目录判断
+│   ├── ledger.py                  审阅台账：审阅标识、审阅目录和专属端口（含总览首页的保留端口）；服务状态文件与存活判断、复制目录判断
 │   ├── match.py                   在报告与讲稿之间查找对应句子
 │   ├── skill_sources.py           发现本机的技能目录
 │   ├── fsutil.py                  原子写入、文件锁和 CSP 脚本哈希的公共小工具
