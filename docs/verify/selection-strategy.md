@@ -38,7 +38,7 @@ cat .verify/runs/<run ID>/shadow.json
 映射是 `verify_selection.py` 里的受版本控制声明，不用 CodeGraph / AST 索引做判定依据。每条规则带 `why`，计划里逐条展示命中：
 
 - `SELECTION_RULES`：路径前缀 → 建议选择器 / 浏览器场景 / 是否带 `serve-check` / 命中即回退的类别。一个路径可命中多条规则，选测取并集：选择器、场景与 `serve-check` 都合并，不会因为多命中而丢掉任何一组的范围。初始覆盖：`ae.py`（CLI）、`notes.py` / `notes_store.py` / `ledger.py`（审阅协议与存储）、`serve.py` / `viewer_template.html` / `build_viewer.py`（服务与页面）、`match.py` / `skill_sources.py`（页面匹配与技能发现）、`i18n.py` 与两处 `locales/`（词典，显式含全局契约模块）、`export_format.py` / `check_pptx_fonts.py`（导出与字体）、`docx_review.py` / `docx_edit.py` / `fixtures/docx/`（DOCX 渲染与回写）、`pptx_reader.py` / `pptx_report.py` / `pptx_edit.py` / `fixtures/pptx/`（PPTX 读取、构建与白名单回写）、`fsutil.py`（共享叶子模块，被台账与批注存储、生成器、更新器共同依赖，同时并入审阅协议与存储、服务与页面、更新器三组）；`skill/annotation-everything/SKILL.md`、`references/`、`evals/`（技能资源，回退）、`fixtures/`（回退）、`verify.py` 等执行配置（回退）、`docs/` 等说明文档（回退）。
-- `DOC_ALLOWLIST`（狭窄允许列表）：`README.md`、`README.zh-CN.md`、`docs/assets/`、`GLOSSARY.md`、`docs/adr/`。只有全部有效差异都命中允许列表，且策略、基线、清单与效率守卫均可信时，`pr` 阶段才不执行产品测试；其余阶段继续采用影子模式。`--no-reuse` 可强制实际执行，覆盖映射不获本地门禁豁免。
+- `DOC_ALLOWLIST`（狭窄允许列表）：`README.md`、`README.zh-CN.md`、`docs/assets/`。`GLOSSARY.md` 与 `docs/adr/` 曾在策略 v11–v15 豁免，自 #162 起被测试消费，按防漂移契约撤销（见「文档允许列表核实」）。只有全部有效差异都命中允许列表，且策略、基线、清单与效率守卫均可信时，`pr` 阶段才不执行产品测试；其余阶段继续采用影子模式。`--no-reuse` 可强制实际执行，覆盖映射不获本地门禁豁免。
 - 浏览器场景 `*` 仅在该规则命中时展开为注册场景清单，未命中的规则不会扩大浏览器建议。
 - `STRATEGY_VERSION`：映射或判定逻辑变化时递增；记录里的 `context.selection.strategy_version` 标明计划用的版本。修改映射走普通 PR（受审查的策略变更）。
 - `AE_SELECTION_MAP` 环境变量可指向同结构的 JSON 覆盖映射（测试与实验用）；覆盖映射损坏按 `broken_rules` 回退。路径不进记录。
@@ -90,14 +90,11 @@ cat .verify/runs/<run ID>/shadow.json
 策略 v14 将 `docx_edit.py` 和 `tests/test_docx_edit.py` 并入 `docx-review` 映射，覆盖回写的字节保留、写前闸门与失败恢复；浏览器场景仍为 `docx-review`。修改策略自身继续回退完整 PR 门禁，开发阶段只执行相关快速检查并移交全量要求。
 
 
-## 文档允许列表核实（策略 v11，issue #117）
+## 文档允许列表核实（策略 v11，issue #117；策略 v16 起 GLOSSARY 与 ADR 撤销豁免，#162）
 
 新增允许项只用于术语和设计决策说明。核实覆盖根目录的 `ae.py`、`verify*.py`、`host_isolation.py`，以及 `tests/`、`tools/`、`.github/` 和 `skill/annotation-everything/scripts/` 下的程序。技能指引、运行协议、安装资源、词典、fixture 和其他 `docs/` 文档继续按原规则处理。
 
-| 新增条目 | 测试 | 验证脚本 | 工具 | 运行时脚本 |
-| --- | --- | --- | --- | --- |
-| `GLOSSARY.md` | 不作为测试输入或断言来源 | 不据此选择或执行验证 | 不用于构建、评估或历史采集 | 不在技能副本中，安装器和服务不消费 |
-| `docs/adr/` | 不作为测试输入或断言来源 | 不据此选择或执行验证 | 不用于构建、评估或历史采集 | 不在技能副本中，安装器和服务不消费 |
+策略 v11（#117）曾豁免 `GLOSSARY.md` 与 `docs/adr/`。策略 v16（#162）起，`tests/test_overview_docs.py` 读取 `GLOSSARY.md` 并遍历 `docs/adr/`（总览首页文档契约），按「开始消费文档内容时应先撤销豁免，不能用契约例外掩盖新依赖」的规则，这两条从允许列表撤销：它们的差异不再豁免产品测试，其契约测试由常规选测覆盖。
 
 `AGENTS.md` 和 `docs/agents/domain.md` 指引 Agent 阅读这两处说明；这种人工或 Agent 阅读不属于程序依赖。统一入口仍对所有有效改动计算完整内容指纹，通用文件哈希仅用来确认门禁覆盖最终输入，不把文档内容作为产品行为输入。
 
