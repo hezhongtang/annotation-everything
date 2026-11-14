@@ -1302,6 +1302,21 @@ def overview_home_checks(browser, tmp: Path):
             while time.monotonic() < end and info_path.exists():
                 time.sleep(0.05)
 
+    def capture_home(page, output):
+        output.mkdir(parents=True, exist_ok=True)
+        capture_screenshot(page, output / "overview-home.zh.png")
+        names = {
+            running: "Sample Coffee · Q3 review", stopped_a: "Sample Coffee · Cost review",
+            stopped_b: "Sample Coffee · Operating plan", archived_dir: "Sample Coffee · Previous review",
+            event_dir: "Sample Coffee · Delivery review",
+        }
+        for directory, name in names.items():
+            build(directory, report=FIXTURE / "report.en.html", script=FIXTURE / "script.en.md", name=name, locale="en")
+        page.select_option("#localePick", "en")
+        page.click("#overviewRefresh")
+        page.get_by_role("heading", name=names[running], exact=True).wait_for()
+        capture_screenshot(page, output / "overview-home.en.png")
+
     ctx = browser.new_context(viewport={"width": 1440, "height": 1000})
     services: dict[Path, subprocess.Popen] = {}
     page = None
@@ -1335,15 +1350,14 @@ def overview_home_checks(browser, tmp: Path):
             stopBtnGone: (() => { const b = document.getElementById('stopReviewBtn');
                 return !b || getComputedStyle(b).display === 'none' || b.offsetParent === null; })(),
             scopeValue: document.getElementById('overviewScope').value,
-            workspaceOptionHidden: document.getElementById('overviewScope')
-                .querySelector('option[value=\"workspace\"]')?.hidden ?? false,
             title: document.getElementById('overviewTitle').textContent,
             pickInTop: !!document.querySelector('.overview-top #localePick'),
             pickVisible: (() => { const p = document.getElementById('localePick'); return !!p && p.offsetParent !== null; })(),
         })""")
         ok(shape["overviewMode"] and shape["backHidden"] and shape["headerGone"] and shape["stopBtnGone"],
            "首页只有总览视图：没有「返回当前审阅」也没有顶栏停止按钮")
-        ok(shape["scopeValue"] == "all" and shape["workspaceOptionHidden"] and shape["title"] == "审阅总览",
+        ok(shape["scopeValue"] == "all" and shape["title"] == "审阅总览"
+           and not page.is_visible("#overviewScope"),
            "默认范围首页显示本机全部（无工作区后缀）：" + shape["title"])
         ok(shape["pickInTop"] and shape["pickVisible"], "语言选择器留在总览视图内（总览顶栏）")
         ok(page.locator('[data-overview-group="running"]').count() == 0, "打开首页时没有任何运行中分组")
@@ -1463,6 +1477,13 @@ def overview_home_checks(browser, tmp: Path):
         ok(wait_dom(page, "() => document.getElementById('overviewStopAll').textContent.includes('（2 份）')", 8,
                     condition="批量停止入口计入运行中与隐藏的归档运行中审阅"),
            "批量停止入口只计范围内的 2 份运行目标（含归档运行中）")
+        ok(workspace.name in button.inner_text() and "本机全部" not in button.inner_text(),
+           "批量停止入口标出实际目录范围：" + button.inner_text())
+        artifacts = os.environ.get("AE_OVERVIEW_HOME_ARTIFACTS")
+        if artifacts:
+            page.click(f'[data-review-id="{ids[running]}"]')
+            capture_home(page, Path(artifacts))
+            page.select_option("#localePick", "zh-CN")
         messages = []
 
         def confirm(dialog):
@@ -1471,12 +1492,14 @@ def overview_home_checks(browser, tmp: Path):
 
         page.once("dialog", confirm)
         button.click()
-        ok("2 份" in messages[0] and "已归档" in messages[0] and ids[outside] not in messages[0],
-           "确认说明目标数量与归档规则，范围外审阅不在确认里")
+        ok(workspace.name in messages[0] and "本机全部" not in messages[0]
+           and "2 份" in messages[0] and "已归档" in messages[0],
+           "确认说明实际目录、目标数量和归档规则")
         stopped_batch = wait_dom(page, "s => document.getElementById('overviewBatchStatus').dataset.state === 'stopped'",
                                  20, condition="批量停止全部完成")
-        ok(stopped_batch and "2/2 份已停止" in page.inner_text("#overviewBatchStatus"),
-           "批量停止结果只包含范围内的目标：" + page.inner_text("#overviewBatchStatus"))
+        summary = page.inner_text("#overviewBatchStatus")
+        ok(stopped_batch and workspace.name in summary and "本机全部" not in summary and "2/2 份已停止" in summary,
+           "批量停止结果标明实际目录和目标数量：" + summary)
         targets = page.locator("#overviewBatchTargets [data-batch-review]").evaluate_all(
             "els => els.map(el => el.dataset.batchReview)")
         ok(sorted(targets) == sorted([ids[running], ids[archived_dir]])
@@ -1487,7 +1510,21 @@ def overview_home_checks(browser, tmp: Path):
                       condition="批量停止后目标服务进程实际退出")
            and services[outside].poll() is None and page.is_visible("#overviewBatch"),
            "范围外审阅服务继续运行，首页仍可查看停止结果")
+        page.reload()
+        ok(workspace.name in page.inner_text("#overviewBatchStatus"), "刷新后仍显示批量停止原来的目录范围")
+        page.select_option("#localePick", "en")
+        summary = page.inner_text("#overviewBatchStatus")
+        ok(workspace.name in summary and "All on this machine" not in summary and "2/2 stopped" in summary,
+           "切换界面语言后，结果仍标出原来的目录范围")
+        page.select_option("#localePick", "zh-CN")
         ok(stop_home(page), "--under 首页退出并清理运行状态")
+
+        services[running] = start_server(running, port)
+        page.click("#overviewRefresh")
+        ok(wait_dom(page, "() => document.getElementById('overviewError').textContent.includes('宿主标识不一致')"
+                          " && !document.querySelector('#overviewDetail button')", 8,
+                    condition="端口改由审阅服务使用后，旧首页清除写入控件"),
+           "旧首页提示宿主变化并清除操作控件")
         page.close()
     finally:
         for directory in directories:

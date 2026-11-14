@@ -232,6 +232,8 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 总览首页（`serve.py overview [--under 目录]`）是总览的另一种宿主：没有审阅运行时也能打开，从任一对照页进入总览的老路子不变。首页的保留地址记在审阅台账目录里，退出重启后回到同一地址；同一台账只运行一个首页，相同启动配置（规范化的 `--under`、显式 `--port`、`--locale`、钩子参数与钩子工作目录）复用当前实例，配置不同则非零退出并提示先退出。首页避开审阅专属端口，审阅服务的分配、认领与顺延也避开首页保留端口；保留端口被占用时本次临时顺延并警告。`--under` 沿用 `serve.py list --under` 的目录包含关系，列表、启动、归档与逐份或批量停止都在服务端核对同一范围。首页用 `Ctrl+C` 退出；首页运行期间 `update.py` 推迟更新，`ae.py uninstall` 会先拒绝，`--stop-servers` 核对进程身份后停止。实际调用的技能副本缺少 `overview` 时，用 `serve.py --help` 检查并按提示升级技能副本。
 
+<p align="center"><img src="docs/assets/overview-home.zh.png" alt="限定在合成样例目录内的独立总览首页，批量停止按钮显示范围内有 2 份运行中审阅" width="92%"></p>
+
 <details>
 <summary><b>当前任务与停止审阅</b></summary>
 <br>

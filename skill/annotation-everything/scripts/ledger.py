@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -41,7 +42,6 @@ RID = re.compile(r"[0-9a-f]{16}")
 RID_PREFIX = re.compile(r"[0-9a-f]{4,16}")
 # 总览首页宿主：保留端口记录与运行状态都放在台账目录，独立于审阅条目（不登记成审阅、不改台账结构）
 OVERVIEW_PORT_FILE = "overview-home.json"       # 保留端口记录：{"version": 1, "port": N}
-HOME_HOST_ID = "overview-home"                  # 同一台账稳定的首页宿主标识；与审阅标识（16 位十六进制）格式不同
 HOST_KIND_OVERVIEW = "overview-home"            # /api/health 与页面注入的宿主种类；审阅宿主不带宿主种类字段
 OVERVIEW_PAGE_FILE = ".overview-home.html"      # 仅总览视图的首页页面（build_overview_home 生成）
 OVERVIEW_LOG_FILE = "overview-home.log"         # 首页服务日志
@@ -102,6 +102,12 @@ class CopiedDir(LedgerError):
 def home() -> Path:
     env = os.environ.get("AE_HOME")
     return Path(env).expanduser().resolve() if env else Path.home() / ".annotation-everything"
+
+
+def overview_host_id() -> str:
+    """同一台账目录的首页标识固定，不把台账路径放进页面或健康响应。"""
+    digest = hashlib.sha256(os.fsencode(home().resolve())).hexdigest()
+    return f"{HOST_KIND_OVERVIEW}-{digest}"
 
 
 def update_lock_path() -> Path:

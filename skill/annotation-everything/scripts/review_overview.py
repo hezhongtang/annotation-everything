@@ -152,7 +152,7 @@ def snapshot(review_dir: Path | None, review_id: str | None, scope: str,
     rows = []
     for rid, entry in ledger.entries().items():
         directory = Path(entry["dir"]).resolve()
-        if under is not None and not (directory == under or under in directory.parents):
+        if under is not None and not directory.is_relative_to(under):
             continue
         if not in_scope(directory, workspace, scope):
             continue

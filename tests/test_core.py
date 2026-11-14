@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -2689,7 +2690,7 @@ class OverviewHomeBuildTests(unittest.TestCase):
     def build(self, **kw) -> Path:
         out = tmpdir()
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            build_viewer.build_overview_home(out, host_id=ledger.HOME_HOST_ID, **kw)
+            build_viewer.build_overview_home(out, host_id=ledger.overview_host_id(), **kw)
         return out
 
     def test_page_contains_host_identity_and_no_review_data(self):
@@ -2697,7 +2698,7 @@ class OverviewHomeBuildTests(unittest.TestCase):
         page = (out / ledger.OVERVIEW_PAGE_FILE).read_text(encoding="utf-8")
         self.assertIsNone(re.search(r"__[A-Z_]+__", page), "没有未替换的占位符")
         self.assertIn('"kind": "overview-home"', page, "注入宿主种类")
-        self.assertIn(f'"id": "{ledger.HOME_HOST_ID}"', page, "注入宿主标识")
+        self.assertIn(f'"id": "{ledger.overview_host_id()}"', page, "注入宿主标识")
         self.assertIn("sha256-", page, "CSP 哈希按最终脚本内容计算")
         for mark in ("示例咖啡", "三季度收入同比增长", "全程控制在 8 分钟内"):
             self.assertNotIn(mark, page, f"页面不注入报告或讲稿：{mark}")
@@ -2726,7 +2727,7 @@ class OverviewHomeBuildTests(unittest.TestCase):
         self.addCleanup(os.environ.__setitem__, "AE_HOME", previous)
         out = tmpdir()
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            build_viewer.build_overview_home(out, host_id=ledger.HOME_HOST_ID)
+            build_viewer.build_overview_home(out, host_id=ledger.overview_host_id())
         self.assertTrue((out / ledger.OVERVIEW_PAGE_FILE).exists())
         self.assertTrue(missing.is_dir(), "台账目录还不存在时由构建自动创建（零审阅的机器也能起首页）")
 
@@ -2746,7 +2747,7 @@ class OverviewHomeTests(unittest.TestCase):
         self.outside = self.tree / "outside"   # 同一台账但不在 workspace 下
         self.rid_inside = self.build(self.inside, "Inside review")["reviewId"]
         self.rid_outside = self.build(self.outside, "Outside review")["reviewId"]
-        self.host_id = ledger.HOME_HOST_ID
+        self.host_id = ledger.overview_host_id()
         self.start_home()
 
     def build(self, directory, name):
@@ -2849,6 +2850,7 @@ class OverviewHomeTests(unittest.TestCase):
         body = json.loads(raw)
         self.assertEqual(status, 200, raw)
         self.assertEqual(body["hostKind"], "overview-home")
+        self.assertIsNone(body["under"])
         self.assertIsNone(body["reviewId"])
         self.assertEqual({r["reviewId"] for r in body["reviews"]}, {self.rid_inside, self.rid_outside})
         status, _, raw = self.request("/api/overview?scope=all")
@@ -2867,6 +2869,7 @@ class OverviewHomeTests(unittest.TestCase):
             status, _, raw = self.request("/api/overview" + query)
             body = json.loads(raw)
             self.assertEqual(status, 200, raw)
+            self.assertEqual(body["under"], str(self.workspace.resolve()))
             self.assertEqual({r["reviewId"] for r in body["reviews"]}, {self.rid_inside},
                              "传入 --under 时 scope=all 不扩大范围")
         status, _, raw = self.request("/api/overview?scope=workspace")
@@ -2899,6 +2902,67 @@ class OverviewHomeTests(unittest.TestCase):
         found = serve.probe(port)
         self.assertEqual((found["reviewId"], found["dir"]), (self.rid_inside, str(self.inside.resolve())))
         self.stop_started(self.inside, self.rid_inside)
+
+    def test_start_rechecks_scope_after_the_ledger_path_changes(self):
+        self.restart_home(self.workspace)
+        moved = self.tree / "moved"
+        resolve = serve.overview_start_target
+
+        def resolve_then_move(rid, translate, **kwargs):
+            target, entry = resolve(rid, translate, **kwargs)
+            if target == self.inside.resolve():
+                self.inside.rename(moved)
+                ledger.register(rid, moved)
+            return target, entry
+
+        with patch.object(serve, "overview_start_target", side_effect=resolve_then_move), \
+                patch.object(subprocess, "Popen", side_effect=AssertionError("范围外不拉起进程")) as spawned:
+            status, _, raw = serve._req(self.port, "POST", "/api/overview/start", self.same,
+                                        {"reviewId": self.rid_inside})
+            self.assertEqual(spawned.call_count, 0)
+        self.assertEqual((status, json.loads(raw)["code"]), (404, "overview-review-out-of-scope"), raw)
+        self.assertEqual(ledger.get(self.rid_inside)["dir"], str(moved.resolve()))
+        self.assertIsNone(serve.read_status(moved))
+
+    def test_review_host_rejects_writes_from_an_old_home_tab(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        with serve.ReviewServer(self.inside, self.port, log_to_file=False) as review_host:
+            thread = threading.Thread(target=review_host.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+            thread.start()
+            try:
+                with patch.object(serve, "start_overview_review") as start:
+                    for action, payload in (("start", {}), ("archive", {"archived": True}), ("stop", {"scope": "all"})):
+                        with self.subTest(action=action):
+                            status, _, raw = serve._req(self.port, "POST", f"/api/overview/{action}", self.same,
+                                                        {"reviewId": self.rid_outside, **payload})
+                            self.assertEqual((status, json.loads(raw).get("code")), (409, "host-mismatch"), raw)
+                    start.assert_not_called()
+            finally:
+                review_host.shutdown()
+        self.assertFalse(review_overview.is_archived(self.outside))
+
+    def test_start_rechecks_scope_in_child_before_binding(self):
+        self.restart_home(self.workspace)
+        port = free_port()
+        ledger.claim_port(self.rid_inside, self.inside, port)
+        popen = subprocess.Popen
+        moved = (self.tree / "moved").resolve()
+
+        def move_before_spawn(command, **kwargs):
+            # 模拟父进程校验后，原目录成为指向范围外新位置的链接。
+            self.inside.rename(moved)
+            ledger.register(self.rid_inside, moved)
+            self.inside.symlink_to(moved, target_is_directory=True)
+            return popen(command, **kwargs)
+
+        self.addCleanup(self.stop_started, moved, self.rid_inside)
+        with patch.object(subprocess, "Popen", side_effect=move_before_spawn):
+            status, _, raw = serve._req(self.port, "POST", "/api/overview/start", self.same,
+                                        {"reviewId": self.rid_inside})
+        self.assertEqual((status, json.loads(raw).get("code")), (503, "overview-start-failed"), raw)
+        self.assertIsNone(serve.read_status(moved))
+        self.assertIsNone(serve.probe(port))
 
     def test_archive_respects_scope_and_host_header(self):
         self.restart_home(self.workspace)
@@ -3003,7 +3067,7 @@ class OverviewHandoffTests(unittest.TestCase):
         subprocess.run(["git", "init", "-q", str(self.workspace)], check=True, capture_output=True)
         self.review = self.workspace / "review"
         self.rid = self.build(self.review, "Handoff review")["reviewId"]
-        self.host_id = ledger.HOME_HOST_ID
+        self.host_id = ledger.overview_host_id()
 
     def build(self, directory, name):
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
@@ -3027,10 +3091,10 @@ class OverviewHandoffTests(unittest.TestCase):
             "    fh.write(json.dumps(record, ensure_ascii=False) + chr(10))\n", encoding="utf-8")
         return hook_py
 
-    def hook_argv(self, hook_py, hook_log):
+    def hook_argv(self, hook_py, hook_log, *, exe=sys.executable):
         marker = self.home_cwd / "rel-marker.txt"
         marker.write_text("from-home-cwd", encoding="utf-8")
-        return serve.parse_hook(f"{sys.executable} {hook_py} {hook_log} rel-marker.txt")
+        return serve.parse_hook(shlex.join([exe, str(hook_py), str(hook_log), "rel-marker.txt"]))
 
     def start_home(self, on_handoff=None, hook_cwd=None):
         self.srv = serve.ReviewServer(None, 0, home_id=self.host_id, on_handoff=on_handoff,
@@ -3095,7 +3159,17 @@ class OverviewHandoffTests(unittest.TestCase):
 
     def test_hooked_start_inherits_parsed_command_and_home_cwd(self):
         hook_py, hook_log = self.write_hook(), self.tree / "hook-log.jsonl"
-        self.start_home(on_handoff=self.hook_argv(hook_py, hook_log), hook_cwd=str(self.home_cwd))
+        bin_dir = self.home_cwd / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "ae-test-hook").symlink_to(sys.executable)
+        cwd = Path.cwd()
+        with patch.dict(os.environ, {"PATH": "bin"}):
+            try:
+                os.chdir(self.home_cwd)
+                hook = self.hook_argv(hook_py, hook_log, exe="ae-test-hook")
+            finally:
+                os.chdir(cwd)
+        self.start_home(on_handoff=hook, hook_cwd=str(self.home_cwd))
         port = self.claim_port()
         self.addCleanup(self.stop_started)
         status, body = self.start_request()
@@ -3205,11 +3279,38 @@ class OverviewHandoffTests(unittest.TestCase):
         self.assertEqual(status, 200, body)
         self.assertEqual(body["url"], first["url"], "沿用已核对通过的服务")
         self.assertEqual(spawned.call_count, 0)
-        self.assertTrue(body["hookConfigured"])
+        self.assertFalse(body["hookConfigured"], "目标进程实际没有加载钩子")
         self.assertEqual(body["note"], "hook-not-applied", "明确提示本次指定的钩子未应用")
         self.assertEqual((body["agentDelivery"]["adapter"], body["agentDelivery"]["state"]),
                          (None, "unconfigured"), "显示该进程实际加载的接收方式")
-        self.assertIsNone(body["waitCommand"], "本次指定了钩子，不再重复给等待命令")
+        self.assertEqual(body["waitCommand"], f"notes.py wait {self.rid[:8]}")
+
+    def test_reuse_keeps_the_running_service_custom_hook(self):
+        self.start_home(on_handoff=self.hook_argv(self.write_hook(), self.tree / "hook-log.jsonl"),
+                        hook_cwd=str(self.home_cwd))
+        port = self.claim_port()
+        self.addCleanup(self.stop_started)
+        status, first = self.start_request()
+        self.assertEqual((status, first["url"]), (200, f"http://127.0.0.1:{port}/"), first)
+        self.restart_home()
+        with patch.object(subprocess, "Popen", side_effect=AssertionError("恢复不替换正在运行的进程")):
+            status, body = self.start_request()
+        self.assertEqual((status, body["url"]), (200, first["url"]), body)
+        self.assertTrue(body["hookConfigured"])
+        self.assertIsNone(body["waitCommand"])
+        self.assertIsNone(body["note"])
+
+    def test_start_uses_legacy_owned_port_that_conflicts_with_home_reservation(self):
+        port = self.claim_port()
+        record = ledger.overview_port_file()
+        record.write_text(json.dumps({"version": 1, "port": port}), encoding="utf-8")
+        self.start_home()
+        self.addCleanup(self.stop_started)
+        status, body = self.start_request()
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["url"], f"http://127.0.0.1:{port}/")
+        self.assertEqual(ledger.overview_reserved_port(), port)
+        self.assertEqual(ledger.get(self.rid)["port"], port)
 
     def test_hooked_start_keeps_backlog_for_claim_without_replay(self):
         store.handoff_submit(self.review, "启动前的积压")
@@ -3320,6 +3421,7 @@ class OverviewHandoffTests(unittest.TestCase):
         self.assertEqual(status, 200, body)
         self.assertEqual(body["agentDelivery"]["adapter"], "codex-desktop",
                          "桌面事件绑定在启动结果里可见")
+        self.assertFalse(body["hookConfigured"], "桌面事件绑定不会标为自定义钩子")
         self.assertIsNone(body["waitCommand"], "桌面事件绑定省略认领型等待命令")
         row = self.overview_row()
         self.assertEqual(row["agentDelivery"]["adapter"], "codex-desktop")
@@ -3369,15 +3471,18 @@ class OverviewHomeCliTests(unittest.TestCase):
             proc.kill()
             return proc.communicate()
 
-    def wait_ready(self, timeout=15) -> int:
+    def wait_ready(self, timeout=15, *, proc=None) -> int:
         """运行状态文件 + pid 探活 + /api/health 宿主核对：不依赖任何审阅目录。"""
         end = time.monotonic() + timeout
         while time.monotonic() < end:
+            if proc is not None and proc.poll() is not None:
+                out, err = proc.communicate()
+                self.fail(f"总览首页未启动（退出码 {proc.returncode}）：{out}{err}")
             status = serve.read_home_status()
             if status and type(status.get("port")) is int:
                 found = serve.probe(status["port"], timeout=0.3)
                 if found and found.get("hostKind") == serve.HOST_KIND_OVERVIEW \
-                        and found.get("hostId") == ledger.HOME_HOST_ID \
+                        and found.get("hostId") == ledger.overview_host_id() \
                         and found.get("pid") == status.get("pid"):
                     return status["port"]
             time.sleep(0.05)
@@ -3418,6 +3523,32 @@ class OverviewHomeCliTests(unittest.TestCase):
                 self.assertEqual(conflict.returncode, 2, conflict.stdout + conflict.stderr)
                 self.assertIn(f"http://127.0.0.1:{port}/", conflict.stderr, "提示先退出当前首页")
         self.assertEqual(serve.probe(port)["pid"], proc.pid, "冲突调用不另起实例")
+
+    def test_same_port_in_another_ledger_does_not_reuse_the_first_home(self):
+        preferred = free_port()
+        args = ("--no-open", "--port", str(preferred), "--under", str(self.workspace))
+        first = self.spawn(*args)
+        self.addCleanup(self.terminate, first)
+        first_port = self.wait_ready(proc=first)
+        first_id = serve.probe(first_port)["hostId"]
+        with patch.dict(os.environ, {"AE_HOME": str(tmpdir())}):
+            second = self.spawn(*args)
+            self.addCleanup(self.terminate, second)
+            second_port = self.wait_ready(proc=second)
+            second_health = serve.probe(second_port)
+            self.assertNotEqual(second_port, first_port)
+            self.assertNotEqual(second_health["hostId"], first_id)
+            self.assertEqual(second_health["pid"], second.pid)
+            status, _, raw = serve._req(second_port, "GET", "/api/overview",
+                                        {"Host": f"127.0.0.1:{second_port}"})
+            self.assertEqual(status, 200, raw)
+            self.assertEqual(json.loads(raw)["reviews"], [], "第二份台账只显示自己的登记")
+            headers = {"Host": f"127.0.0.1:{second_port}", "Origin": f"http://127.0.0.1:{second_port}",
+                       "Content-Type": "application/json", "X-AE-Host": first_id}
+            status, _, raw = serve._req(second_port, "POST", "/api/overview/archive", headers,
+                                        {"reviewId": self.rid, "archived": True})
+            self.assertEqual((status, json.loads(raw)["code"]), (409, "host-mismatch"), raw)
+            self.terminate(second)
 
     def test_under_reaches_the_started_home_and_filters_the_list(self):
         """--under 经真实启动命令落到首页宿主上：列表只含范围内审阅，范围名随启动目录（issue #160 前的回归）。"""
@@ -3512,6 +3643,21 @@ class OverviewHomeCliTests(unittest.TestCase):
         found = serve.probe(port)
         self.assertEqual(found["pid"], running.pid)
         self.assertEqual(self.reserved_port(), port, "并发首启只创建一份保留端口记录")
+
+    def test_startup_lock_covers_bound_listener_before_it_serves(self):
+        lock = ledger.home() / ledger.OVERVIEW_START_LOCK_FILE
+
+        def before_serving(server, *_args):
+            self.addCleanup(serve.clear_home_status)
+            self.addCleanup(server.server_close)
+            self.assertEqual(serve.read_home_status()["port"], server.port)
+            self.assertIsNone(serve.overview_running(), "尚未开始响应健康检查")
+            self.assertFalse(try_exclusive(lock), "此时其他端口的启动仍需等待同一台账的锁")
+            return 0
+
+        with patch.object(serve, "_serve_overview_home", side_effect=before_serving):
+            self.assertEqual(serve.overview_home(None, free_port(), False, False, None, locale="zh-CN"), 0)
+        self.assertTrue(try_exclusive(lock), "服务返回后释放启动锁")
 
     def test_review_cannot_claim_reserved_port_after_exit(self):
         proc = self.spawn("--no-open")
@@ -4000,7 +4146,7 @@ class LedgerOverviewHomeTests(unittest.TestCase):
     def test_others_ports_includes_reserved_port_for_trailing(self):
         reserved = ledger.assign_overview_port()
         avoid = serve._others_ports("e" * 16)
-        self.assertEqual(avoid[reserved], ledger.HOME_HOST_ID, "顺延避让的清单里带首页保留端口")
+        self.assertEqual(avoid[reserved], ledger.HOST_KIND_OVERVIEW, "顺延避让的清单里带首页保留端口")
 
 
 class ShowBaselineTests(unittest.TestCase):
@@ -4289,7 +4435,8 @@ class ServeRequestReadsTests(unittest.TestCase):
                 code, health = self.request(path="/api/health")
                 self.assertEqual(code, 200)
                 self.assertEqual(set(health), {"app", "reviewId", "name", "version", "features", "receiver",
-                                               "dir", "pid", "port", "hook", "agentDelivery", "archived"})
+                                               "dir", "pid", "port", "hook", "customHook", "agentDelivery", "archived"})
+                self.assertFalse(health["customHook"])
                 self.assertFalse(health["archived"])
                 self.assertEqual(health["agentDelivery"], wakeup.public_status(review))
                 self.assertEqual(health["receiver"], wakeup.receiver_status(review, srv.agent_binding))

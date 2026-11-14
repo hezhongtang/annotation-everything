@@ -1253,7 +1253,9 @@ async function api(method,path,body,timeout=REQ_TIMEOUT,headers={}){
     throw Object.assign(new Error(tMsg(docxBlocked()?"viewer.docx.oldService":"viewer.pptx.oldService")),
       {status:409,code:docxBlocked()?"docx-required":"pptx-required"});
   const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),timeout);
-  const opt={method,cache:"no-store",headers:{...(OVERVIEW_HOME?{"X-AE-Host":OVERVIEW_HOME.id}:{"X-AE-Review":RID}),...headers},signal:ctl.signal};
+  // 旧版审阅宿主只核对 X-AE-Review，用首页标识让它同样拒绝误发的请求。
+  const identity=OVERVIEW_HOME?{"X-AE-Host":OVERVIEW_HOME.id,"X-AE-Review":OVERVIEW_HOME.id}:{"X-AE-Review":RID};
+  const opt={method,cache:"no-store",headers:{...identity,...headers},signal:ctl.signal};
   if(body!==undefined){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(wellFormed(body))}
   let r;
   try{r=await fetch(path,opt)}
@@ -1262,12 +1264,14 @@ async function api(method,path,body,timeout=REQ_TIMEOUT,headers={}){
   let j=null;try{j=await r.json()}catch(e){}
   const ours=!!j&&typeof j==="object"&&(j.app===APP||(j.doc&&j.doc.app===APP));   // 只认带本服务标记的应答
   if(!r.ok){
+    if(OVERVIEW_HOME&&ours&&j.code==="review-mismatch")
+      throw Object.assign(new Error(tMsg("serve.err.hostMismatch")),{status:r.status,code:"host-mismatch"});
     // 不是本服务格式的错误（端口上是别的程序），或本服务明确说审阅不匹配：按「服务不匹配」处理，改动留在队列
     if(!ours||j.code==="review-mismatch")throw Object.assign(new Error(tMsg("viewer.error.mismatch")),{status:0,mismatch:true});
     const key={"bad-host":"badHost","cross-site":"crossSite","bad-origin":"badOrigin","no-origin":"noOrigin",
       "bad-content-type":"badContentType","chunked":"chunked","bad-length":"badLength","too-large":"tooLarge",
       "bad-json":"badJson","not-found":"notFound","preflight":"preflight","no-index":"noIndex","no-note":"noNote",
-      "review-mismatch":"reviewMismatch","no-api":"noApi"}[j.code];
+      "review-mismatch":"reviewMismatch","host-mismatch":"hostMismatch","no-api":"noApi"}[j.code];
     const detail=j.code==="bad-note"&&j.reason==="text-too-long"&&j.params
       ?tMsg("serve.err.textTooLong",j.params):(typeof j.error==="string"?j.error.trim():"");
     const message=key?tMsg("serve.err."+key):r.status>=500
@@ -3386,7 +3390,7 @@ setInterval(()=>{if(!document.hidden)loadAnalyses()},4000);
 let overviewData=null,overviewSelected=null,overviewRequest=0,overviewLoading=false;
 const overviewStarting=new Set(),overviewStartFailures=new Map(),overviewStartNotes=new Map();
 const overviewStopping=new Set(),overviewStopResults=new Map();
-const OVERVIEW_BATCH_KEY="ae."+RID+".overview-stop-batch";
+const OVERVIEW_BATCH_KEY="ae."+(OVERVIEW_HOME?.id||RID)+".overview-stop-batch";
 const OVERVIEW_BATCH_WAIT=15000;
 let overviewBatch=restoreOverviewBatch(),overviewBatchBusy=false,overviewBatchRetryError=false,overviewBatchListHtml="";
 let currentArchived=false,archiveBusy=false;
@@ -3513,6 +3517,7 @@ function overviewBatchOwnsStop(row){
     target.reviewId===row.reviewId&&overviewBatchPending(target)));
 }
 function overviewBatchScope(batch){
+  if(typeof batch.under==="string")return batch.under;
   const label=tMsg("viewer.overview."+batch.scope);
   return batch.scope==="workspace"&&batch.workspace?label+" · "+batch.workspace:label;
 }
@@ -3526,7 +3531,10 @@ function renderOverviewBatch(){
   stopAll.disabled=!overviewConnected()||!rows.length||overviewBatchActive()||
     rows.some(row=>row.current&&overviewStopStatus(row)?.state==="stopping");
   if(!stopAll.hidden){
-    stopAll.textContent=tMsg("viewer.overview.batch.action."+overviewData.scope,{total:rows.length});
+    const {scope,under,workspace}=overviewData;
+    stopAll.textContent=typeof under==="string"
+      ?tMsg("viewer.overview.batch.action.under",{directory:workspace||under,total:rows.length})
+      :tMsg("viewer.overview.batch.action."+scope,{total:rows.length});
   }
   const batch=overviewBatch;
   $("overviewBatch").hidden=!batch;
@@ -3621,7 +3629,8 @@ async function runOverviewBatch(batch,rows=null){
   try{
     if(retry){
       const data=await readOverview(batch.scope);
-      if(!hasFeature(data,"overview-stop"))throw new Error("overview-stop-unavailable");
+      if(!hasFeature(data,"overview-stop")||(data.under??null)!==(batch.under??null))
+        throw new Error("overview-stop-unavailable");
       reconcileOverviewBatch(batch,data);
       rows=data.reviews;
     }
@@ -3649,10 +3658,10 @@ async function runOverviewBatch(batch,rows=null){
 }
 function confirmOverviewBatch(){
   if($("overviewStopAll").disabled)return;
-  const {scope,workspace}=overviewData;
+  const {scope,workspace,under}=overviewData;
   const rows=overviewData.reviews.filter(overviewStopEligible);
   const targets=rows.map(row=>({reviewId:row.reviewId,name:row.name||row.reviewId,revision:row.stop?.revision,status:{state:"queued"}}));
-  const batch={scope,workspace,targets};
+  const batch={scope,workspace,under,targets};
   const message=tMsg("viewer.overview.batch.confirm",{scope:overviewBatchScope(batch),count:targets.length});
   const warning=rows.some(row=>row.current)?"\n\n"+tMsg("viewer.overview.stopCurrentConfirm"):"";
   if(confirm(message+warning)){overviewBatch=batch;void runOverviewBatch(batch,rows)}
@@ -3745,7 +3754,9 @@ async function startOverview(row){
     overviewStopResults.delete(rid);
     if(data.note==="hook-not-applied")overviewStartNotes.set(rid,"viewer.overview.startNote.hookNotApplied");
     else if(data.note==="no-receiver")overviewStartNotes.set(rid,"viewer.overview.startNote.noReceiver");
-    if(selected){const port=Number(new URL(data.url).port);Object.assign(selected,{url:data.url,running:port,state:port===selected.port?"running":"running-temp",stop:null})}
+    if(selected){const port=Number(new URL(data.url).port);Object.assign(selected,{url:data.url,running:port,
+      state:port===selected.port?"running":"running-temp",stop:null,hook:data.hookConfigured,
+      agentDelivery:data.agentDelivery,waitCommand:data.waitCommand})}
     if(!opened.closed)opened.location.replace(data.url);
     await loadOverview();
   }catch(error){
@@ -3753,6 +3764,8 @@ async function startOverview(row){
     const key={"bad-overview-start":"serve.err.overviewStartBody",
       "overview-review-unknown":"serve.err.overviewStartUnknown",
       "overview-review-invalid":"serve.err.overviewStartInvalid",
+      "overview-review-out-of-scope":"viewer.overview.stopIssue.outOfScope",
+      "host-mismatch":"serve.err.hostMismatch",
       "overview-port-busy":"serve.err.overviewStartBusy",
       "overview-hook-conflict":"serve.err.overviewHookConflict",
       "overview-start-failed":"serve.err.overviewStartFailed"}[error.code];
@@ -3775,7 +3788,9 @@ async function readOverview(scope,timeout=REQ_TIMEOUT){
   const data=await api("GET","/api/overview?scope="+encodeURIComponent(scope),undefined,timeout);
   if(OVERVIEW_HOME){
     // 首页宿主：按宿主种类与标识核对；范围由服务端按启动配置决定，页面只发 all
-    if(data.hostKind!=="overview-home"||data.hostId!==OVERVIEW_HOME.id||!Array.isArray(data.reviews))throw new Error("overview-format")
+    if(data.hostKind!=="overview-home"||data.hostId!==OVERVIEW_HOME.id)
+      throw Object.assign(new Error(tMsg("serve.err.hostMismatch")),{code:"host-mismatch"});
+    if(!Array.isArray(data.reviews))throw new Error("overview-format");
   }else if(data.reviewId!==RID||data.scope!==scope||!Array.isArray(data.reviews))throw new Error("overview-format");
   return data;
 }
@@ -3801,7 +3816,9 @@ async function loadOverview(){
   }catch(error){
     if(request!==overviewRequest)return;
     const hostStopped=overviewStopResults.get(RID)?.state==="stopped";
-    $("overviewError").textContent=tMsg(hostStopped?"viewer.overview.stopCurrentStopped":"viewer.overview.loadError");$("overviewError").hidden=false;
+    const wrongHost=error.code==="host-mismatch";
+    $("overviewError").textContent=tMsg(wrongHost?"serve.err.hostMismatch":hostStopped?"viewer.overview.stopCurrentStopped":"viewer.overview.loadError");$("overviewError").hidden=false;
+    if(wrongHost)overviewData=null;
     if(!overviewData){$("overviewList").textContent="";$("overviewDetail").textContent=""}
     if(overviewBatch)reconcileOverviewBatch(overviewBatch,null);
     renderOverviewBatch();
@@ -3833,9 +3850,9 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!FILE){po
     // 总览首页：只有总览视图。没有对照页，就没有批注轮询、保存通道与「返回当前审阅」；列表自动刷新沿用 overviewRoute 里的定时器。
     // 没有可返回的对照页，语言切换必须留在总览视图内：把状态栏的语言选择器搬进总览顶栏（#157）
     document.querySelector(".overview-top").appendChild($("localeLabel"));
-    const scope=$("overviewScope"),workspaceOption=scope.querySelector('option[value="workspace"]');
+    const scope=$("overviewScope");
     scope.value="all";
-    if(workspaceOption)workspaceOption.hidden=true;
+    scope.hidden=true; // 首页范围由启动命令固定，标题显示 --under 的目录名。
     $("overviewBack").hidden=true;
     overviewRoute();
     return}

@@ -232,6 +232,8 @@ Archiving hides reviews that are no longer being advanced from the default list.
 
 The overview home (`serve.py overview [--under DIR]`) is the overview's other host: it opens with no review running, and the old path into the overview from any review page stays the same. Its reserved address is recorded in the review ledger, and a restart after quitting returns to the same address. One home runs per ledger; the same start configuration (normalized `--under`, an explicit `--port`, `--locale`, hook arguments and the hook working directory) reuses the running instance, and a different configuration exits non-zero, asking you to quit first. The home avoids reviews' owned ports, and review services avoid the home's reserved port when assigning, claiming or falling back; an occupied reserved port falls back temporarily for that run with a warning. `--under` follows the same directory-containment rule as `serve.py list --under`, and listing, starting, archiving and individual or batch stops are validated server-side against that scope. Quit the home with `Ctrl+C`; while it runs, `update.py` defers updates, and `ae.py uninstall` refuses until `--stop-servers` verifies the process identity and stops it. When the invoked skill copy lacks `overview`, check `serve.py --help` and upgrade the copy following the guidance.
 
+<p align="center"><img src="docs/assets/overview-home.en.png" alt="Standalone overview home limited to a sample directory, with a batch stop button for its two running reviews" width="92%"></p>
+
 <details>
 <summary><b>Current task and stopping a review</b></summary>
 <br>
