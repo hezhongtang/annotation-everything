@@ -149,7 +149,7 @@ class WorkflowOverviewHomeDocsTests(unittest.TestCase):
                     'overview_help=$(python3 "$S/serve.py" --help) || exit $?',
                     "grep -qw overview || {",
                     "exit 1",
-                    'python3 "$S/serve.py" overview`',
+                    '\n   python3 "$S/serve.py" overview\n',
                 )
                 positions = [launch.index(step) for step in steps]
                 self.assertEqual(positions, sorted(positions))

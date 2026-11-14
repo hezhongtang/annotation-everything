@@ -8,7 +8,7 @@ license: Apache-2.0
 
 Generate a report draft or a local review page → bind its receiving session → start its service → receive work. Revision batches follow the source-editing workflow; analysis rounds follow the matching-language analysis guide and produce questions instead of report edits.
 
-按用户请求的语言选择工作流。Choose the workflow from the user's request language, independently of the material language or the page's display language. For a bare activation such as `/annotation-everything`, use the current conversation language. If the conversation gives no language cue, use Chinese (`zh-CN`).
+按用户请求的语言选择工作流。Choose the workflow from the user's request language, independently of the material language or the page's display language. For a bare activation such as `/annotation-everything`, use the current conversation language for the workflow and update check. If the conversation gives no language cue, use Chinese (`zh-CN`). Leave the overview display locale to the CLI defaults unless the user explicitly chose the page language.
 
 Before loading the selected workflow, resolve `$S` to the `scripts/` directory beside this loaded `SKILL.md` and run `python3 "$S/update.py" auto --locale LANG`, using `zh-CN` or `en` for `LANG`. The check runs at most once per day and allows the workflow to continue offline. If it installs an update, reload this `SKILL.md` and its references; before resuming an existing review, stop any old service, rebuild the review page, start the new service, and ask the user to refresh the browser. Briefly tell the user about an installed update or a warning from the command. If the copy lacks `update.py`, continue to the selected workflow.
 
