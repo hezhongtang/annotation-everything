@@ -37,16 +37,19 @@ To enter from a specific review, start its service with `python3 "$S/serve.py" <
 
 #### Start the overview home
 
-1. After the `update.py auto` check in `SKILL.md`, check that `serve.py --help` in the current skill copy lists the `overview` subcommand. If the check fails, end this launch attempt and tell the user [how to upgrade the skill copy](#upgrade-the-skill-copy).
+1. After following the `update.py auto` instructions in `SKILL.md`, check that `serve.py --help` in the current skill copy lists the `overview` subcommand. If the user specified a display language, pass the same `--locale` to both the probe and the launch. Otherwise, let the CLI use `AE_LOCALE` and its default.
 
    ```bash
-   python3 "$S/serve.py" --help | grep -q overview || {
+   overview_help=$(python3 "$S/serve.py" --help) || exit $?
+   printf '%s\n' "$overview_help" | grep -qw overview || {
      echo 'The help for this skill copy does not list the overview subcommand. Follow the upgrade instructions to update or reinstall, then retry.' >&2
      exit 1
    }
    ```
 
-2. When the check passes, use the host's background execution mechanism to run `python3 "$S/serve.py" overview --locale en` to open the browser. Confirm the home address in the startup output. Use the existing `--locale` option if the user has specified a different display language. Add `--under /path/to/project` if the user has specified a directory scope.
+   If the help command fails, report the CLI error and end this launch attempt. If help prints successfully without listing the subcommand, end this attempt and tell the user [how to upgrade the skill copy](#upgrade-the-skill-copy).
+
+2. When the check passes, use the host's background execution mechanism to run `python3 "$S/serve.py" overview` to open the browser. Confirm the home address in the startup output. Add `--under /path/to/project` if the user has specified a directory scope.
 
 #### Upgrade the skill copy
 

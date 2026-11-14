@@ -49,16 +49,19 @@ python3 $S/serve.py list --under 项目目录  # 只看某个项目里的
 
 #### 启动总览首页
 
-1. 完成 `SKILL.md` 的 `update.py auto` 检查后，用当前技能副本检查 `serve.py --help` 是否列出 `overview` 子命令。检查失败时，结束本次启动并向用户说明[如何升级技能副本](#升级技能副本)。
+1. 按 `SKILL.md` 处理 `update.py auto` 后，用当前副本检查 `serve.py --help` 是否列出 `overview` 子命令。用户指定界面语言时，探测和启动都传同一个 `--locale`。其余情况由 CLI 按 `AE_LOCALE` 和默认值选择界面语言。
 
    ```bash
-   python3 "$S/serve.py" --help | grep -q overview || {
+   overview_help=$(python3 "$S/serve.py" --help) || exit $?
+   printf '%s\n' "$overview_help" | grep -qw overview || {
      echo '当前技能副本的帮助未列出 overview 子命令。请按升级指引更新或重新安装后重试。' >&2
      exit 1
    }
    ```
 
-2. 检查通过后，用宿主支持的后台运行方式执行 `python3 "$S/serve.py" overview` 打开浏览器，从启动输出确认首页地址。用户指定显示语言时，沿用现有的 `--locale` 选项。用户指定目录范围时，加 `--under 项目目录`。
+   帮助命令运行失败时，向用户说明 CLI 返回的错误，结束本次启动。帮助正常输出但未列出子命令时，结束本次启动并向用户说明[如何升级技能副本](#升级技能副本)。
+
+2. 检查通过后，用宿主支持的后台运行方式执行 `python3 "$S/serve.py" overview` 打开浏览器，从启动输出确认首页地址。用户指定目录范围时，加 `--under 项目目录`。
 
 #### 升级技能副本
 

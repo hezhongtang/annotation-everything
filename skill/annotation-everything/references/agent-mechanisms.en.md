@@ -31,7 +31,7 @@ Set an explicit name such as `--by initial-editor` or `--by reviewer`. The page 
 
 ## Overview-home delegated starts
 
-`python3 $S/serve.py overview` (optionally `--under DIR`) opens the standalone overview home; choosing "Start and open" for a stopped review delegates the start to it. Before opening the home for the first time, run the capability probe in [the English workflow, section 1](workflow.en.md#1-find-the-review-and-select-a-language) to confirm the invoked copy provides `overview`, and follow the upgrade guidance when it is missing. Agent-relevant behavior:
+`python3 $S/serve.py overview` (optionally `--under DIR`) opens the standalone overview home; choosing "Start and open" for a stopped review delegates the start to it. Before opening the home for the first time, run the capability probe in [Start the overview home](workflow.en.md#start-the-overview-home). Agent-relevant behavior:
 
 - The handoff hook comes only from the overview's command line, `serve.py overview --on-handoff "command arguments"`—never from a web page. The newly started review service inherits the parsed arguments and runs the hook in the overview's starting directory (no shell; relative paths in the arguments resolve there).
 - A saved receiver binding conflicts with a custom hook and blocks the start (reason code `overview-hook-conflict`); the binding stays untouched. To keep the binding, start the overview without `--on-handoff`; to switch to a hook, unbind first per [receiver binding and handoff](receiver-binding.en.md).
