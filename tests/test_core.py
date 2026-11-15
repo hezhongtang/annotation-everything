@@ -4865,6 +4865,20 @@ class ServiceStateTests(unittest.TestCase):
         d = tmpdir()
         self.assertEqual(ledger.status_file(d), d / ".annotation-server.json")
 
+    def test_clear_status_on_a_missing_directory_remains_a_noop(self):
+        d = tmpdir()
+        shutil.rmtree(d)
+        self.assertIsNone(serve.clear_status(d))
+
+    def test_stale_status_cleanup_tolerates_the_directory_disappearing(self):
+        d = tmpdir()
+        (d / serve.STATUS_FILE).write_text(json.dumps({"pid": 0, "port": 12345}), encoding="utf-8")
+        with patch.object(ledger, "metadata_lock", side_effect=FileNotFoundError), \
+                redirect_stdout(io.StringIO()) as output:
+            code = serve.status(d, locale="en")
+        self.assertEqual(code, 4, output.getvalue())
+        self.assertIn("stale", json.loads(output.getvalue())["server"])
+
     def test_pid_alive_treats_another_users_process_as_alive(self):
         """探活契约：进程存在但不属于当前用户（发信号 0 得 EPERM）时按活着算。
 

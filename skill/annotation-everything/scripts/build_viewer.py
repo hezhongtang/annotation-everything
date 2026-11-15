@@ -928,7 +928,8 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     if locale_choice is not None:
         manifest["locale"] = locale_choice
         manifest["build"]["locale"] = locale_choice
-    write_private(out / "review.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+    with ledger.metadata_lock(out, exclusive=True):
+        write_private(out / "review.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     # 已有批注：按页面键校正页码（重排、增删页之后批注跟着原来的页走）
     key_count: dict[str, int] = {}
     for pg in pages:

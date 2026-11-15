@@ -1227,7 +1227,7 @@ class DesktopStub:
 
 def overview_home_checks(browser, tmp: Path):
     """总览首页（issue #160）：临时台账 + 合成审阅，零运行打开、默认与 --under 范围、
-    分组与排序、无返回按钮与顶栏停止、视图内双语、失效清理命令、新标签页打开对照页、
+    分组与排序、无返回按钮与顶栏停止、视图内双语、失效清理命令与批量清理确认、
     接收提示与等待命令、事件绑定展示、过滤后的批量停止与全部服务回收。"""
     workspace, outside_root = tmp / "overview-home-ws", tmp / "overview-home-out"
     outside_root.mkdir()
@@ -1371,6 +1371,14 @@ def overview_home_checks(browser, tmp: Path):
         detail = page.inner_text("#overviewDetail")
         ok(f"serve.py forget {ids[invalid_dir][:8]}" in detail and page.locator("#overviewForgetCopy").count() == 1,
            "失效登记给出可复制的清理命令文案")
+        ok(page.locator('[data-overview-prune="temp"]').count() == 1
+           and page.locator('[data-overview-prune="all"]').count() == 1
+           and page.locator("#overviewCopyPath").count() == 1,
+           "失效分组提供批量清理与完整路径备份入口")
+        page.once("dialog", lambda dialog: dialog.dismiss())
+        page.click('[data-overview-prune="temp"]')
+        ok(ids[invalid_dir] in json.loads(ledger_path.read_text())["reviews"],
+           "取消批量清理确认后台账保持不变")
         page.click(f'[data-review-id="{ids[event_dir]}"]')
         detail = page.inner_text("#overviewDetail")
         ok(f"Codex 会话 {thread} 经桌面事件接收提交" in detail and page.locator("#overviewWaitCopy").count() == 0,
@@ -1484,6 +1492,12 @@ def overview_home_checks(browser, tmp: Path):
             page.click(f'[data-review-id="{ids[running]}"]')
             capture_home(page, Path(artifacts))
             page.select_option("#localePick", "zh-CN")
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.click('[data-overview-prune="temp"]')
+        pruned = wait_dom(page, "rid => document.querySelector(`[data-review-id=\"${rid}\"]`) == null", 8,
+                          arg=ids[invalid_dir], condition="确认批量清理后失效条目即时消失")
+        ok(pruned and ids[invalid_dir] not in json.loads(ledger_path.read_text())["reviews"],
+           "确认后批量清理失效条目并立即刷新总览")
         messages = []
 
         def confirm(dialog):

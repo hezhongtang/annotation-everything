@@ -10,6 +10,7 @@
   python3 serve.py stop <审阅目录或标识> [--timeout 秒]  # 停止整份审阅；--status 只查询持久状态
   python3 serve.py list [--under 目录] [--json]   # 审阅台账：本机有哪些审阅、端口、状态、待接收的提交、有没有代理在等
   python3 serve.py forget <标识前缀>            # 从台账移除一份审阅，释放它的专属端口（不动审阅目录）
+  python3 serve.py prune --stale [--list] [--under 目录 | --all]  # 批量预览或清理失效台账条目
   python3 serve.py overview [--under 目录]     # 无审阅目录的总览首页：独立地址（台账保留端口），列出并代操作本机审阅
   python3 serve.py check                      # 自检：回环绑定、伪造 Host/Origin 被拒、落盘与重启恢复
 
@@ -77,7 +78,7 @@ VERSION = "0.12.1"
 FEATURES = [
     "notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery",
     "stop-service", "stop-review", "stop-review-status", "stop-save-protection", "resume-review",
-    "receiver-binding", "overview", "overview-stop", "analysis", "finalize-all", "docx", "pptx",
+    "receiver-binding", "overview", "overview-stop", "overview-prune", "analysis", "finalize-all", "docx", "pptx",
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
@@ -1223,7 +1224,8 @@ class Handler(BaseHTTPRequestHandler):
                              **review_overview.snapshot(None, None, "all", review_row,
                                                         workspace_dir=under, under_dir=under)})
             return
-        if cmd != "GET" and path in ("/api/overview/start", "/api/overview/archive", "/api/overview/stop"):
+        if cmd != "GET" and path in ("/api/overview/start", "/api/overview/archive", "/api/overview/stop",
+                                     "/api/overview/prune", "/api/overview/reveal"):
             # 首页写操作要求请求头里的宿主标识与本服务一致（对照页的 X-AE-Review 只对审阅宿主有意义）
             if self.headers.get("X-AE-Host") != server.home_id:
                 raise Reject(409, "host-mismatch", self._t("serve.err.hostMismatch"))
@@ -1255,6 +1257,48 @@ class Handler(BaseHTTPRequestHandler):
             _check_overview_under(directory, server.overview_under, self._t)
             review_overview.set_archived(directory, archived)
             self._json(200, {"app": APP, "reviewId": target, "archived": archived})
+            return
+        if path == "/api/overview/reveal":
+            body = self._expect_obj(self._body())
+            target = body.get("reviewId")
+            if set(body) != {"reviewId"} or not isinstance(target, str) or not ledger.RID.fullmatch(target):
+                raise Reject(400, "bad-overview-reveal", self._t("serve.err.revealPayload"))
+            entry = ledger.get(target)
+            if entry is None:
+                raise Reject(404, "overview-review-unknown", self._t("serve.err.overviewStartUnknown"))
+            directory = Path(entry["dir"]).resolve()
+            _check_overview_under(directory, server.overview_under, self._t)
+            if ledger.entry_state(target, entry) != "mismatch":
+                raise Reject(409, "overview-reveal-unavailable", self._t("serve.err.revealUnavailable"))
+            try:
+                if os.name == "nt":
+                    os.startfile(str(directory))   # Windows 资源管理器；仅用户显式点击触发
+                else:
+                    command = ["open" if sys.platform == "darwin" else "xdg-open", str(directory)]
+                    child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                             stderr=subprocess.DEVNULL, start_new_session=True)
+                    threading.Thread(target=child.wait, daemon=True).start()
+            except OSError:
+                raise Reject(500, "overview-reveal-failed", self._t("serve.err.revealFailed")) from None
+            self._json(200, {"app": APP, "reviewId": target})
+            return
+        if path == "/api/overview/prune":
+            body = self._expect_obj(self._body())
+            ids = body.get("reviewIds")
+            if (set(body) != {"reviewIds", "allStale", "deleteMetadata"}
+                    or not isinstance(ids, list)
+                    or any(not isinstance(rid, str) or not ledger.RID.fullmatch(rid) for rid in ids)
+                    or not isinstance(body["allStale"], bool) or not isinstance(body["deleteMetadata"], bool)
+                    or (body["deleteMetadata"] and not body["allStale"])):
+                raise Reject(400, "bad-overview-prune", self._t("serve.err.prunePayload"))
+            try:
+                result = ledger.prune_stale(all_stale=body["allStale"], under=server.overview_under,
+                                            review_ids=list(dict.fromkeys(ids)),
+                                            delete_metadata=body["deleteMetadata"])
+            except (ledger.LedgerError, OSError) as error:
+                raise Reject(500, "overview-prune-failed",
+                             self._t("serve.err.pruneFailed", detail=error)) from None
+            self._json(200, {"app": APP, **result})
             return
         # /api/overview/stop
         body = self._body()
@@ -1327,15 +1371,20 @@ def write_status(server: ReviewServer) -> None:
             "url": f"http://127.0.0.1:{server.port}/", "dir": str(server.review_dir),
             "hook": bool(server.on_handoff), "startedAt": store.now_iso()}
     f = ledger.status_file(server.review_dir)
-    fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(info, ensure_ascii=False, indent=2) + "\n")
+    with ledger.metadata_lock(server.review_dir, exclusive=True):
+        fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(info, ensure_ascii=False, indent=2) + "\n")
 
 
 def clear_status(review_dir: Path) -> None:
-    info = read_status(review_dir)
-    if info and info.get("pid") == os.getpid():
-        ledger.status_file(review_dir).unlink(missing_ok=True)
+    try:
+        with ledger.metadata_lock(review_dir, exclusive=True):
+            info = read_status(review_dir)
+            if info and info.get("pid") == os.getpid():
+                ledger.status_file(review_dir).unlink(missing_ok=True)
+    except FileNotFoundError:
+        pass   # 审阅目录已删除时与原实现一样无需清理
 
 
 # ---------- 总览首页宿主：运行状态、实例判定与启动 ----------
@@ -2087,7 +2136,12 @@ def status(review_dir: Path, locale: str | None = None) -> int:
             code = 5
         else:
             out["server"] = T("serve.status.stale")
-            ledger.status_file(review_dir).unlink(missing_ok=True)
+            try:
+                with ledger.metadata_lock(review_dir, exclusive=True):
+                    if read_status(review_dir) == info:
+                        ledger.status_file(review_dir).unlink(missing_ok=True)
+            except FileNotFoundError:
+                pass   # 读取后目录消失：与 unlink(missing_ok=True) 的旧行为一致
             code = 4
     else:
         out["server"] = T("serve.status.notRunning")
@@ -2259,6 +2313,38 @@ def forget(key: str, locale: str | None = None) -> int:
     print(T("serve.msg.forgetDone", rid=rid, dir=e['dir'])
           + (T("serve.msg.forgetPort", port=e['port']) if e.get("port") else "")
           + T("serve.msg.forgetTail"))
+    return 0
+
+
+def prune(*, all_stale: bool, under: Path | None, delete_metadata: bool,
+          dry_run: bool, locale: str | None = None) -> int:
+    set_locale(locale or cli_locale(None))
+    try:
+        result = ledger.prune_stale(all_stale=all_stale or under is not None, under=under,
+                                    delete_metadata=delete_metadata, dry_run=dry_run)
+    except (ledger.LedgerError, OSError) as err:
+        print(T("serve.msg.error", detail=err), file=sys.stderr)
+        return 2
+    rows = result["candidates"] if dry_run else result["removed"]
+    print(T("serve.msg.prunePreview" if dry_run else "serve.msg.pruneDone", count=len(rows)))
+    for row in rows:
+        print(T("serve.msg.pruneRow", rid=row["reviewId"], dir=row["dir"]))
+    if result["metadataDeleted"]:
+        print(T("serve.msg.pruneMetadataDone", count=len(result["metadataDeleted"])))
+    owned = [row for row in result["metadataPreserved"] if row["reason"] == "owned-by-other-review"]
+    unconfirmed = [row for row in result["metadataPreserved"] if row["reason"] != "owned-by-other-review"]
+    if owned:
+        print(T("serve.msg.pruneMetadataPreserved", count=len(owned)))
+    if unconfirmed:
+        print(T("serve.msg.pruneMetadataProtected", count=len(unconfirmed)))
+    if result["skipped"]:
+        print(T("serve.msg.pruneSkipped", count=len(result["skipped"])))
+    if result["metadataErrors"]:
+        print(T("serve.msg.pruneMetadataErrors", count=len(result["metadataErrors"])))
+        for row in result["metadataErrors"]:
+            print(T("serve.msg.pruneMetadataErrorRow", rid=row["reviewId"],
+                    quarantine=row["quarantine"], detail=row["detail"]))
+        return 1
     return 0
 
 
@@ -2734,6 +2820,23 @@ def main(argv: list[str] | None = None) -> int:
         ap.add_argument("key", help=T("serve.opt.key"))
         a = ap.parse_args(rest[1:])
         return forget(a.key, locale=i18n.current_locale())
+    if rest[:1] == ["prune"]:
+        ap = i18n.LocalizedParser(prog="serve.py prune", add_help=False, description=T("serve.desc.prune"),
+                                  keys=ERROR_KEYS, translate=T)
+        _add_help(ap)
+        _add_locale(ap)
+        ap.add_argument("--stale", action="store_true", help=T("serve.opt.pruneStale"))
+        ap.add_argument("--list", action="store_true", help=T("serve.opt.pruneList"))
+        scope = ap.add_mutually_exclusive_group()
+        scope.add_argument("--under", type=Path, metavar="目录" if i18n.current_locale() == "zh-CN" else "DIR",
+                           help=T("serve.opt.pruneUnder"))
+        scope.add_argument("--all", action="store_true", help=T("serve.opt.pruneAll"))
+        ap.add_argument("--delete-metadata", action="store_true", help=T("serve.opt.pruneDeleteMetadata"))
+        a = ap.parse_args(rest[1:])
+        if a.delete_metadata and not (a.all or a.under):
+            ap.error(T("serve.err.pruneMetadataScope"))
+        return prune(all_stale=a.all, under=a.under, delete_metadata=a.delete_metadata,
+                     dry_run=a.list, locale=i18n.current_locale())
     if rest[:1] == ["overview"]:
         ap = i18n.LocalizedParser(prog="serve.py overview", add_help=False, description=T("serve.desc.overview"),
                                   keys=ERROR_KEYS, translate=T)
