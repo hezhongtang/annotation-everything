@@ -29,6 +29,9 @@ host_isolation.require_for_module(__name__)
 import analysis_store  # noqa: E402
 import notes as notes_cli  # noqa: E402
 import notes_store as store  # noqa: E402
+
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+
 import serve  # noqa: E402
 import wakeup  # noqa: E402
 

@@ -21,6 +21,8 @@ TEMPLATE = SCRIPTS / "viewer_template.html"
 FIXTURE = ROOT / "fixtures" / "sample"
 sys.path.insert(0, str(SCRIPTS))
 
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+
 import build_viewer  # noqa: E402
 import i18n  # noqa: E402
 import notes_store as store  # noqa: E402

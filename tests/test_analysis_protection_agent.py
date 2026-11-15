@@ -20,6 +20,9 @@ host_isolation.require_for_module(__name__)
 import analysis_store as analysis
 import notes as cli
 import notes_store as store
+
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+
 import serve
 import wakeup
 

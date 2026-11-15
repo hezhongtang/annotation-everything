@@ -34,6 +34,9 @@ sys.path.insert(0, str(SCRIPTS))
 
 import check_pptx_fonts  # noqa: E402
 import i18n  # noqa: E402
+
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+
 import ledger  # noqa: E402
 import serve  # noqa: E402
 import skill_sources  # noqa: E402
