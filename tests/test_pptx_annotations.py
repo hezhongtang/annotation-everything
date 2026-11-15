@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT / "fixtures" / "pptx"))
-os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))   # 测试不碰用户真实的审阅台账
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
 os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="ae-test-user-"))
 
 import pptx_reader as pr  # noqa: E402
