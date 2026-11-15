@@ -25,6 +25,9 @@ SCRIPTS = SERVE_PY.parent
 sys.path.insert(0, str(SCRIPTS))
 
 import i18n  # noqa: E402
+
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+
 import serve  # noqa: E402
 sys.path.insert(0, str(ROOT))
 import host_isolation  # noqa: E402
