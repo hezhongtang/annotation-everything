@@ -1555,6 +1555,45 @@ def _prepare_overview_home(under: Path | None, port: int | None, debug: bool,
     return (server, url)
 
 
+@contextlib.contextmanager
+def _windows_stop_event(server: ReviewServer):
+    """Windows 下创建进程专属停止事件，让已核验身份的停止命令触发优雅退出并清理状态文件。"""
+    if os.name != "nt":
+        yield
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.CreateEventW.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.CreateEventW(None, True, False, f"Local\\ae-stop-{os.getpid()}")
+    if not handle:
+        yield
+        return
+    done = threading.Event()
+
+    def watch() -> None:
+        while not done.is_set():
+            if kernel32.WaitForSingleObject(handle, 200) == 0:
+                server.shutdown()
+                return
+
+    thread = threading.Thread(target=watch, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        done.set()
+        thread.join(timeout=1.0)
+        kernel32.CloseHandle(handle)
+
+
 def _serve_overview_home(server: ReviewServer, url: str, on_handoff: list[str] | None,
                          open_browser: bool) -> int:
     """前台跑到 Ctrl+C / SIGTERM，关闭监听后清理运行状态。"""
@@ -1572,7 +1611,8 @@ def _serve_overview_home(server: ReviewServer, url: str, on_handoff: list[str] |
               + T("serve.overview.stopHint"), flush=True)
         if open_browser:
             threading.Timer(0.3, webbrowser.open, args=(url,)).start()
-        server.serve_forever(poll_interval=0.3)
+        with _windows_stop_event(server):
+            server.serve_forever(poll_interval=0.3)
     except KeyboardInterrupt:
         pass
     finally:
@@ -2099,7 +2139,8 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
     if open_browser:
         threading.Timer(0.3, webbrowser.open, args=(url,)).start()
     try:
-        server.serve_forever(poll_interval=0.3)
+        with _windows_stop_event(server):
+            server.serve_forever(poll_interval=0.3)
     except KeyboardInterrupt:
         pass
     finally:

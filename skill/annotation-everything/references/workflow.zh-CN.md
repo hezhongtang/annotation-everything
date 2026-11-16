@@ -21,7 +21,7 @@
 
 - **PowerShell 引用与编码**：Windows PowerShell 中把含空格或中文的路径用双引号包住（如 `python "$S\build_viewer.py" --report "D:\材料 目录\报告.html" --out "C:\工作目录\审阅"`）；若控制台输出中文乱码，先执行 `$env:PYTHONUTF8 = "1"`（必要时先运行 `chcp 65001`）。跨盘符路径（例如材料在 `D:\`、审阅目录在 `C:\`）可正常生成与 `--rebuild`。
 - **同步盘与共享位置边界**：首期只支持**本机固定磁盘目录**上的活动审阅。不要直接在 OneDrive、SharePoint、iCloud、Dropbox 等同步文件夹、网络共享盘、映射盘或 `\\server\share` UNC 路径里运行审阅；本工具不承诺自动识别所有第三方同步服务。若材料位于同步盘或共享位置，请先复制到本机工作目录（例如在 PowerShell 执行 `Copy-Item "C:\Users\<用户>\OneDrive\材料\*" -Destination "D:\work\材料\" -Recurse`）再生成对照页，改稿完成后再按需手工放回。
-- **首期手动维护**：Windows 首期不执行 `update.py` 自动原地更新（`update.py auto` 仅提示手动维护、不阻断审阅）；需要升级时从来源仓库手动运行 `python ae.py install`（自定义位置加 `--target <目录>`）。
+- **首期手动维护**：Windows 首期不执行 `update.py` 自动原地更新（`update.py auto` 仅提示手动维护、不阻断审阅；`update.py check` 可检查是否有新正式版）。需要升级时按顺序执行：先停止运行中的审阅服务、等待者与总览首页，再在来源仓库拉取新版后手动运行 `python ae.py upgrade`（自定义位置加 `--target <目录>`；存在未保留的本地改动且确认覆盖时加 `--force`，或首次安装用 `python ae.py install`）。升级期间不改动审阅目录、批注、历史、台账与接收方绑定。
 
 ## 0. 开工前：看本机有哪些审阅
 

@@ -51,7 +51,11 @@ class UpdateError(Exception):
 
 def update_storage(copy: Path) -> Path:
     key = hashlib.sha256(os.fsencode(str(copy))).hexdigest()[:24]
-    data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share").expanduser()
+    if _is_windows():
+        base = os.environ.get("XDG_DATA_HOME") or os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
+    data = Path(base).expanduser()
     preferred = (data / SKILL / "updates" / key).resolve()
     if preferred == copy or copy in preferred.parents or preferred in copy.parents:
         # --target 可以指向任意目录，包括 XDG_DATA_HOME。
@@ -123,13 +127,14 @@ def remote_url(repo: Path) -> str:
 
 
 def has_running_review() -> bool:
-    """已有审阅服务仍在运行时推迟替换，避免旧进程读到新版资源。"""
+    """已有审阅服务或总览首页仍在运行时推迟替换，避免旧进程读到新版资源。"""
     try:
         entries = ledger.entries()
     except (ledger.LedgerError, OSError):
         raise UpdateError("cli.update.cannotVerifyServices") from None
-    for entry in entries.values():
-        status = ledger.status_file(entry["dir"])
+    status_paths = [ledger.status_file(entry["dir"]) for entry in entries.values()]
+    status_paths.append(ledger.home() / ledger.OVERVIEW_STATUS_FILE)
+    for status in status_paths:
         try:
             info = json.loads(status.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -146,11 +151,130 @@ def has_running_review() -> bool:
     return False
 
 
+def _windows_powershell():
+    for name in ("powershell", "powershell.exe", "pwsh", "pwsh.exe"):
+        found = shutil.which(name)
+        if found:
+            return found
+    sysroot = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    candidate = Path(sysroot) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    return str(candidate) if candidate.is_file() else None
+
+
+def _windows_list_processes():
+    shell = _windows_powershell()
+    if not shell:
+        raise UpdateError("cli.update.cannotVerifyServices")
+    script = (
+        "$ErrorActionPreference = 'Stop'; "
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+        "$items = @(Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine); "
+        "ConvertTo-Json -InputObject $items -Compress"
+    )
+    try:
+        done = subprocess.run(
+            [shell, "-NoProfile", "-NonInteractive", "-Command", script],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise UpdateError("cli.update.cannotVerifyServices") from None
+    if done.returncode:
+        raise UpdateError("cli.update.cannotVerifyServices")
+    raw = done.stdout.strip()
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        raise UpdateError("cli.update.cannotVerifyServices") from None
+    rows = [parsed] if isinstance(parsed, dict) else parsed
+    if not isinstance(rows, list):
+        raise UpdateError("cli.update.cannotVerifyServices")
+    procs = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        pid = row.get("ProcessId")
+        if type(pid) is not int or pid <= 0:
+            continue
+        cmd = row.get("CommandLine")
+        procs.append((pid, cmd if isinstance(cmd, str) else ""))
+    return procs
+
+
+def _windows_process_cwd(pid: int):
+    if pid <= 0:
+        return None
+    if pid == os.getpid():
+        try:
+            return os.getcwd()
+        except OSError:
+            return None
+    from ctypes import wintypes
+
+    if ctypes.sizeof(ctypes.c_void_p) != 8:
+        return None
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    handle = kernel32.OpenProcess(0x0410, False, pid)
+    if not handle:
+        return None
+    try:
+        wow64 = wintypes.BOOL(False)
+        if hasattr(kernel32, "IsWow64Process") and kernel32.IsWow64Process(handle, ctypes.byref(wow64)) and wow64.value:
+            return None
+
+        class _PBI(ctypes.Structure):
+            _fields_ = [
+                ("Reserved1", ctypes.c_void_p),
+                ("PebBaseAddress", ctypes.c_void_p),
+                ("Reserved2", ctypes.c_void_p * 2),
+                ("UniqueProcessId", ctypes.c_void_p),
+                ("Reserved3", ctypes.c_void_p),
+            ]
+
+        pbi = _PBI()
+        ret_len = wintypes.ULONG()
+        if ntdll.NtQueryInformationProcess(handle, 0, ctypes.byref(pbi), ctypes.sizeof(pbi), ctypes.byref(ret_len)) != 0:
+            return None
+        if not pbi.PebBaseAddress:
+            return None
+        val = ctypes.c_uint64()
+        read = ctypes.c_size_t()
+        if not kernel32.ReadProcessMemory(handle, ctypes.c_void_p(pbi.PebBaseAddress + 0x20),
+                                          ctypes.byref(val), 8, ctypes.byref(read)):
+            return None
+        params_addr = val.value
+        if not params_addr:
+            return None
+
+        class _UnicodeString(ctypes.Structure):
+            _fields_ = [("Length", ctypes.c_ushort), ("MaximumLength", ctypes.c_ushort), ("Buffer", ctypes.c_uint64)]
+
+        us = _UnicodeString()
+        if not kernel32.ReadProcessMemory(handle, ctypes.c_void_p(params_addr + 0x38),
+                                          ctypes.byref(us), ctypes.sizeof(us), ctypes.byref(read)):
+            return None
+        if not us.Length or not us.Buffer or us.Length > 65534:
+            return None
+        buf = ctypes.create_string_buffer(us.Length)
+        if not kernel32.ReadProcessMemory(handle, ctypes.c_void_p(us.Buffer), buf, us.Length, ctypes.byref(read)):
+            return None
+        return buf.raw[:read.value].decode("utf-16-le", errors="replace").rstrip("\x00") or None
+    except OSError:
+        return None
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def process_cwd(pid: int):
+    if _is_windows():
+        return _windows_process_cwd(pid)
     if sys.platform == "darwin":
         try:
             result = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
-                                    capture_output=True, text=True, timeout=10)
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         except (OSError, subprocess.TimeoutExpired):
             return None
         return next((line[1:] for line in result.stdout.splitlines() if line.startswith("n")), None)
@@ -160,17 +284,30 @@ def process_cwd(pid: int):
         return None
 
 
-def has_legacy_process(copy: Path, record: dict) -> bool:
-    """检查没有新版共享锁的旧服务与批注进程；命令只在本机读取，不回显。"""
+def _list_processes():
+    if _is_windows():
+        return _windows_list_processes()
     try:
         done = subprocess.run(["ps", "-ww", "-eo", "pid=,command="], stdin=subprocess.DEVNULL,
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         raise UpdateError("cli.update.cannotVerifyServices") from None
     if done.returncode:
         raise UpdateError("cli.update.cannotVerifyServices")
+    procs = []
+    for line in done.stdout.splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) == 2 and fields[0].isdigit():
+            procs.append((int(fields[0]), fields[1]))
+    return procs
+
+
+def has_legacy_process(copy: Path, record: dict) -> bool:
+    """检查没有新版共享锁的旧服务与批注进程；命令只在本机读取，不回显。"""
+    procs = _list_processes()
     names = ("serve.py", "notes.py")
     target_paths = {copy / "scripts" / name for name in names}
+    target_norm = {os.path.normcase(str(path.resolve())) for path in target_paths}
     roots = [Path(__file__).parent.parent]
     links = record.get("links", [])
     if isinstance(links, list):
@@ -178,18 +315,21 @@ def has_legacy_process(copy: Path, record: dict) -> bool:
                      if isinstance(item, dict) and isinstance(item.get("path"), str))
     aliases = {str(root / "scripts" / name) for root in [copy, *roots] for name in names}
     aliases |= {path.removeprefix("/private") for path in aliases if path.startswith("/private/var/")}
-    for line in done.stdout.splitlines():
-        fields = line.strip().split(None, 1)
-        if len(fields) != 2 or not fields[0].isdigit() or int(fields[0]) == os.getpid():
+    win = _is_windows()
+    for pid, command in procs:
+        if pid == os.getpid() or not command:
             continue
-        command = fields[1]
         try:
-            words = shlex.split(command)
+            words = fsutil.split_cli(command) if win else shlex.split(command)
         except ValueError:
-            if any(alias in command for alias in aliases):
+            haystack = command.lower() if win else command
+            if any((alias.lower() if win else alias) in haystack for alias in aliases):
                 return True
             continue
-        if not words or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?|pypy\d*", Path(words[0]).name.lower()):
+        if not words:
+            continue
+        exe_name = words[0].rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if not re.fullmatch(r"(?:python(?:\d+(?:\.\d+)*)?|pypy\d*|py)(?:\.exe)?", exe_name):
             continue
         index = 1
         while index < len(words) and words[index].startswith("-"):
@@ -198,17 +338,19 @@ def has_legacy_process(copy: Path, record: dict) -> bool:
             index += 2 if words[index] in ("-W", "-X") else 1
         if index >= len(words) or words[index].startswith("-"):
             continue
-        if any(re.search(r"(?:^|\s)" + re.escape(alias) + r"(?:\s|$)", command) for alias in aliases):
+        if any(re.search(r"(?:^|\s)" + re.escape(alias) + r"(?:\s|$)", command, re.I if win else 0)
+               for alias in aliases):
             return True
         script = Path(words[index])
         if script.name not in names:
             continue
         if not script.is_absolute():
-            cwd = process_cwd(int(fields[0]))
+            cwd = process_cwd(pid)
             if cwd is None:
                 raise UpdateError("cli.update.cannotVerifyServices")
             script = Path(cwd) / script
-        if script.resolve() in target_paths:
+        resolved = script.resolve()
+        if (os.path.normcase(str(resolved)) in target_norm) if win else (resolved in target_paths):
             return True
     return False
 
@@ -382,7 +524,8 @@ def main(argv=None) -> int:
                     print(translate("cli.update.current", version=record["version"]))
                 return 0
             if args.mode == "check":
-                print(translate("cli.update.available", installed=record["version"], latest=tag[1:]))
+                msg_key = "cli.update.availableWindowsManual" if _is_windows() else "cli.update.available"
+                print(translate(msg_key, installed=record["version"], latest=tag[1:]))
                 return 0
             release = clone_release(repo, cache, tag, commit)
             with contextlib.ExitStack() as stack:
