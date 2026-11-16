@@ -122,6 +122,16 @@ SCENARIOS: list[Scenario] = [
     ),
     Scenario(
         parallel_safe=True,
+        id="alignment-navigation-loop",
+        title="对齐与导航闭环：多板块目录与边栏导航、结论 → 证据/补充页 → 对应分析双向跳转"
+              "与对照页返回上一浏览页、重排与 rebuild 后保持章节范围与稳定页面键、"
+              "1280×720 Shadow DOM 视觉渲染无溢出及补充页计数",
+        fixture="ae.py install 临时安装副本；含目录、核心分析、证据、data-kind=\"supplement\" 补充页与"
+                "request.alignment / request.lengthSpec / request.qa 的合成报告与可选讲稿；独立 AE_HOME",
+        isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
+    ),
+    Scenario(
+        parallel_safe=True,
         id="installed-delivery",
         title="从唯一的临时安装副本完成英文、中文、中英混合三种语言组合的真实审阅流程",
         fixture="ae.py install 装进合成 HOME 的临时副本；fixtures/sample 合成报告与讲稿；"

@@ -557,12 +557,12 @@ class ChecksOrderContractTests(unittest.TestCase):
     """检查项只追加：record.method 进入固定顺序，既有检查 id 不变。"""
 
     def test_method_check_appended_after_existing_ids(self):
-        """检查项只追加：method 在 revision（#75）之前进入固定顺序，既有 id 不变。"""
-        self.assertEqual(rc.Checks.ORDER[-2], "record.method")
+        """检查项只追加：method 与后续检查进入固定顺序，既有前 15 项 id 不变。"""
+        self.assertEqual(rc.Checks.ORDER[13], "record.method")
         for cid in ("report.parse", "record.checks", "record.claims", "record.reading",
                     "record.sources", "record.visual", "record.length"):
             self.assertIn(cid, rc.Checks.ORDER)
-        self.assertEqual(len(rc.Checks.ORDER), 15)
+        self.assertEqual(len(rc.Checks.ORDER), 17)
 
     def test_method_kinds_closed_enum(self):
         self.assertEqual(rc.METHOD_KINDS, ("builtin", "external"))

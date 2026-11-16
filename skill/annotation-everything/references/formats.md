@@ -24,8 +24,9 @@
 - 所有 `<style>` 和本地 `<link rel="stylesheet">` 按出现顺序收进对照页（Shadow DOM 隔离，不影响外壳；注释掉的不算）；样式里的 `:root`、`html` 改写成 `:host`，`body` 改写成页面舞台：变量、文字、颜色、背景照常生效，`body` 上的布局属性（padding、flex、grid、min-height 等）会被复位，免得幻灯片被挤偏；`html` 上的字号会搬到外层，`rem` 照常。`vw`/`vh` 与 `@media` 按浏览器窗口而不是幻灯片计算，依赖它们的版式可能和单独打开时不同。`<script>` 与内联事件（`onclick` 等）不执行。
 - 本地相对路径的图片、字体、音视频（`src`、`srcset`、`poster`、CSS `url()`）会内联成 data URI，单个上限 10 MB；只收报告所在目录之内的文件（`--asset-root` 可放宽），其他类型或目录外的文件跳过并警告；外链（http/https）不加载，生成时打印警告。
 - section 可以嵌套别的 section（卡片等），按层级识别；class 必须含独立的 `page`（`page-wrapper` 之类不算页）。页码重复或不是整数会报错。
-- 页内链接写 `href="#page-<key>"` 时，在对照页里点击会跳到那一页。
-- 板块导航推断规则：取带 `data-range-start` / `data-range-end`（值为页面键）的链接；有 `.toc-label` 的链接时只取这些主条目；嵌套在别的范围里的子范围不进导航条。
+- 页内链接写 `href="#page-<key>"` 时，在对照页里点击会跳到那一页（同时支持 `data-page-ref="<key>"` 兜底）；顶栏另带「返回上一浏览页」控件，作为报告显式双向返回链接的补充（不替代结论与证据页之间的显式 `<a href="#page-<key>">` 返回链接）。
+- 补充页在 `<section class="page" ...>` 上标 `data-kind="supplement"`；是否计入篇幅约束由 `report-record.json` 的 `request.lengthSpec.includeSupplements` 决定。
+- 板块导航推断规则：取带 `data-range-start` / `data-range-end`（值为页面键）的链接；有 `.toc-label` 的链接时只取这些主条目；嵌套在别的范围里的子范围不进导航条。`--rebuild` 在页面重排后按当前页面键重新推断范围。
 - 缺 `data-key` 时用 `id` 去掉 `page-` 前缀，再不行用 `p<页码>`。没有讲稿时，页标题取该页第一个 h1–h3。
 
 不是这种结构的材料（PPT、PDF、普通网页；Word 文档见下一节）：先转成逐页 section 结构再用本 skill（例如每页一张图片放进 section，也能在上面标注）。

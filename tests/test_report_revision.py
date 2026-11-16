@@ -210,7 +210,7 @@ class RevisionEntryTests(unittest.TestCase):
     """切片 1：record.revision 检查存在；没有 revision 的旧记录不受影响。"""
 
     def test_check_order_appends_revision_at_tail(self):
-        self.assertEqual(rc.Checks.ORDER[-1], "record.revision")
+        self.assertEqual(rc.Checks.ORDER[:15][-1], "record.revision")
         self.assertIn("record.revision", rc.Checks.ORDER)
 
     def test_legacy_record_without_revision_is_not_applicable(self):

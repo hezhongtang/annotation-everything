@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: align-missing-qa
+expected_outcome: |
+  只提供合成经营笔记，没有说明信息密度、视觉风格、导航设计与讲稿偏好。
+  Agent 按九维度核对清单发现上述缺项后，在生成前实际调用宿主可用的问答工具，
+  整合成一轮提问、给出推荐选项与简短理由；在 report-record.json 的
+  request.alignment 与 request.qa 中分别记录信息密度、视觉风格、导航与推断建议来源
+  （不把推断伪装成 user），并在得到答复或超时后连续完成初稿、运行 report_check.py。
+context:
+  scaffold_script: place-files.sh

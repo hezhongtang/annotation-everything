@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: align-reuse-and-delegation
+expected_outcome: |
+  materials/brief-aligned.md 明确覆盖了九维度需求，包含独立阅读模式、4 页硬上限
+  （补充页不计入）、具体配色字体与边距、以及「导航与首次审阅重点由 Agent 决定」的委派。
+  Agent 直接复用已有约束与委派（不重复追问已有项），在 request.alignment 中分别记为
+  reused/user 与 delegated（带 basis），在 request.lengthSpec 记录 nature=hard、
+  includeSupplements=false，并在正文+补充页（data-kind="supplement"）正确计数下通过 report_check.py。
+context:
+  scaffold_script: place-files.sh

@@ -6278,6 +6278,218 @@ def external_method_checks(browser, tmp: Path):
        "相同缺陷的内置与外部产物判定完全一致（外部方法不放宽也不加严）")
 
 
+def alignment_navigation_checks(browser, tmp: Path):
+    """场景 alignment-navigation-loop：对齐记录、补充页篇幅与跨页双向导航闭环（issue #169）。
+
+    真实安装副本 + 真实服务 + Chrome Playwright 端到端检验：
+    - 多板块目录推断与边栏 #secs / #pageTree 跳转；
+    - 结论 → 证据页 → 对应分析双向 href=\"#page-<key>\" 跳转、data-page-ref 兜底与 #prevBack 返回；
+    - 1280×720 Shadow DOM 实际渲染无溢出与遮挡、data-kind=\"supplement\" 补充页不计入主篇幅；
+    - 页面重排后 --rebuild 保持稳定 data-key、更新目录板块范围并迁回批注。
+    """
+    installed = tmp / "installed-skills" / "annotation-everything"
+    env = {**os.environ, "CLAUDE_SKILLS_DIR": str(installed.parent)}
+    subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"],
+                   env=env, check=True, capture_output=True, text=True, timeout=60)
+    scripts = installed / "scripts"
+    base_css = (scripts.parent / "references" / "report-base.css").read_text(encoding="utf-8")
+
+    case = tmp / "align-nav-case"
+    case.mkdir(parents=True)
+    (case / "materials").mkdir()
+    material = case / "materials" / "q3-notes.md"
+    material.write_text("# 三季度经营笔记（合成）\n\n三季度收入 112 万元，上年同期 100 万元。\n", encoding="utf-8")
+
+    def build_html(*, swapped: bool = False) -> str:
+        toc_range_1 = 'data-range-start="ev-detail" data-range-end="sum"' if swapped \
+            else 'data-range-start="sum" data-range-end="ev-detail"'
+        sec_toc = (
+            '<section class="page" data-page="1" data-key="toc" id="page-toc">'
+            '<h2>目录</h2>'
+            f'<a class="toc-row" href="#page-{"ev-detail" if swapped else "sum"}" {toc_range_1}>'
+            '<span class="toc-label">一</span><span class="toc-title">结论与证据</span></a>'
+            '<a class="toc-row" href="#page-sup-method" data-range-start="sup-method" data-range-end="sup-method">'
+            '<span class="toc-label">附</span><span class="toc-title">补充口径</span></a>'
+            '</section>'
+        )
+        p_sum, p_ev = (3, 2) if swapped else (2, 3)
+        sec_sum = (
+            f'<section class="page" data-page="{p_sum}" data-key="sum" id="page-sum">'
+            '<h2>核心结论</h2><p class="ae-kpi">+12%</p>'
+            '<p>收入同比增加 12 万元（三季度 112 万元对上年 100 万元）。</p>'
+            '<p class="ae-source">materials/q3-notes.md 第 3 行</p>'
+            '<p><a id="to-ev" href="#page-ev-detail">查看证据详情</a> · '
+            '<a id="to-sup" data-page-ref="sup-method" href="#page-sup-method">补充计算口径</a></p>'
+            '</section>'
+        )
+        sec_ev = (
+            f'<section class="page" data-page="{p_ev}" data-key="ev-detail" id="page-ev-detail">'
+            '<h2>关键证据</h2>'
+            '<table><tr><th>时期</th><th>收入</th></tr><tr><td>2025Q3</td><td>112 万元</td></tr></table>'
+            '<p><a id="back-sum" class="ae-back-link" href="#page-sum">返回对应结论</a></p>'
+            '</section>'
+        )
+        sec_sup = (
+            '<section class="page" data-page="4" data-key="sup-method" id="page-sup-method" data-kind="supplement">'
+            '<h2>补充口径说明</h2><p>按同比百分比法复算（b - a）/ a。</p>'
+            '<p><a id="sup-back" class="ae-back-link" href="#page-sum">返回对应分析</a></p>'
+            '</section>'
+        )
+        pages = [sec_toc, sec_ev, sec_sum, sec_sup] if swapped else [sec_toc, sec_sum, sec_ev, sec_sup]
+        return ('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+                '<title>对齐与导航闭环（合成）</title><style>' + base_css + '</style></head><body>'
+                + "".join(pages) + '</body></html>')
+
+    def build_script(*, swapped: bool = False) -> str:
+        mid = ("### 第 2 页｜关键证据\n**讲法**：先看证据。\n"
+               "### 第 3 页｜核心结论\n**讲法**：再给结论。\n") if swapped else (
+               "### 第 2 页｜核心结论\n**讲法**：先说核心结论。\n"
+               "### 第 3 页｜关键证据\n**讲法**：说明关键证据。\n")
+        return ("# 讲稿：对齐与导航闭环（合成）\n\n"
+                "### 第 1 页｜目录\n**讲法**：总览结构。\n" + mid
+                + "### 第 4 页｜补充口径说明\n**讲法**：说明口径细节。\n")
+
+    report, script = case / "report.html", case / "script.md"
+    report.write_text(build_html(), encoding="utf-8")
+    script.write_text(build_script(), encoding="utf-8")
+
+    def sha_file(p: Path) -> str:
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+
+    def cli(tool, *args, expect=0):
+        done = subprocess.run([sys.executable, str(scripts / tool), *map(str, args)],
+                              env=env, capture_output=True, text=True, timeout=60)
+        if expect is not None:
+            assert done.returncode == expect, \
+                f"{tool} 退出码 {done.returncode}（期望 {expect}）：{done.stderr or done.stdout}"
+        return done
+
+    record_path = case / "report-record.json"
+    record = {
+        "schema": "ae-report-record/1",
+        "generatedAt": "2026-11-16T10:00:00+08:00",
+        "summary": "合成季度汇报：验证生成前对齐、补充页排除与双向导航闭环。",
+        "request": {
+            "purpose": "管理层季度汇报", "audience": "管理层",
+            "coreQuestions": ["三季度收入是否增长"], "length": "3 页", "script": "yes",
+            "lengthSpec": {"nature": "hard", "includeSupplements": False},
+            "qa": {"used": True, "tool": "ask_question",
+                   "asked": ["density", "visual", "navigation"], "unanswered": []},
+            "alignment": {
+                "density": {"value": "standalone", "source": "user", "status": "confirmed"},
+                "visual": {"value": "report-base 默认版式", "source": "delegated",
+                           "status": "confirmed", "basis": "委派 Agent 按默认基础样式排版"},
+                "navigation": {"value": "summary-toc + bidirectional", "source": "user",
+                               "status": "confirmed"},
+            },
+        },
+        "sources": [{"path": "materials/q3-notes.md", "status": "read", "coverage": "全文",
+                     "sha256": sha_file(material), "note": ""}],
+        "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
+                   "version": "0.9.0", "unavailable": []},
+        "links": {"report": "report.html", "script": "script.md",
+                  "sha256": {"report": sha_file(report), "script": sha_file(script)},
+                  "sourceNote": "materials/q3-notes.md"},
+        "findings": [{
+            "claim": "三季度收入同比增长 12%", "type": "calculation",
+            "sources": ["materials/q3-notes.md"], "pages": ["sum"],
+            "refs": [{"path": "materials/q3-notes.md", "locator": "第 3 行",
+                      "quote": "三季度收入 112 万元，上年同期 100 万元", "found": True}],
+            "support": "supported",
+            "basis": "对比材料原文两期收入并复算 percent-change",
+            "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 112},
+                            "expected": 12, "unit": "万元", "period": "2025Q3 对 2024Q3",
+                            "definition": "对上年同期增长百分比",
+                            "inputLocations": {"a": "materials/q3-notes.md 第 3 行：100",
+                                               "b": "materials/q3-notes.md 第 3 行：112"}},
+        }],
+        "gaps": [],
+        "checks": (
+            [{"id": cid, "kind": "content", "status": "pass", "scope": "全部", "note": "合成闭环"}
+             for cid in ("content.requirements", "content.claims", "content.fact-vs-inference",
+                         "content.units-dates", "content.numbers-charts", "content.cross-page",
+                         "content.script-consistency", "content.open-questions")]
+            + [{"id": cid, "kind": "structure", "status": "pass", "scope": "全部", "note": "合成闭环"}
+               for cid in ("structure.flow", "structure.headings", "structure.claim-support",
+                           "structure.dup-gaps", "structure.length")]
+            + [{"id": "visual.pages", "kind": "visual", "status": "pass", "scope": "全部 4 页",
+                "note": "合成渲染检查",
+                "pages": [{"page": n, "checked": True, "issues": [], "viewport": "1280x720"}
+                          for n in (1, 2, 3, 4)]}]),
+        "openItems": [],
+        "verdict": {"draftComplete": True, "deliverable": True},
+    }
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    checked = json.loads(cli("report_check.py", str(report), "--script", str(script),
+                             "--record", str(record_path), "--locale", "zh-CN", "--json").stdout)
+    ok(checked["verdict"]["deliverable"] is True
+       and checked["record"]["length"]["countedPages"] == 3
+       and checked["record"]["length"]["supplementPages"] == 1,
+       "排除补充页后硬上限 3 页检查通过且 record.alignment / report.navigation 通过")
+
+    review = case / "align-review"
+    cli("build_viewer.py", "--report", str(report), "--script", str(script),
+        "--out", str(review), "--name", "对齐与导航闭环", "--no-scan-skills")
+
+    port = free_port()
+    server = start_server(review, port, scripts=scripts)
+    ctx = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page = ctx.new_page()
+        page.goto(f"http://127.0.0.1:{port}/")
+        wait_mode(page, "server", condition="对齐与导航场景进入服务模式")
+        sec_btns = page.locator("#secs button")
+        ok(sec_btns.count() == 2, f"多板块目录推断出 2 个板块按钮（实际 {sec_btns.count()}）")
+        sec_btns.nth(1).click()
+        wait_dom(page, JS_PAGE_IS, 5, arg=4, condition="点击补充材料板块跳到第 4 页")
+        ok(not page.locator("#prevBack").is_disabled(), "跨页跳转后「返回上一浏览页」按钮启用")
+        page.click("#prevBack")
+        wait_dom(page, JS_PAGE_IS, 5, arg=1, condition="点击返回上一浏览页回到第 1 页")
+        go_page(page, 2)
+        page.locator('#host #to-ev').click()
+        wait_dom(page, JS_PAGE_IS, 5, arg=3, condition="结论页点击 #page-ev-detail 跳到证据页")
+        page.locator('#host #back-sum').click()
+        wait_dom(page, JS_PAGE_IS, 5, arg=2, condition="证据页双向链接返回对应结论页")
+        overflow = []
+        for n in (1, 2, 3, 4):
+            go_page(page, n)
+            m = page.evaluate(
+                "() => { const r = document.getElementById('host').shadowRoot;"
+                "  const s = r.querySelector('section.page');"
+                "  return s.scrollWidth > s.clientWidth || s.scrollHeight > s.clientHeight; }")
+            if m:
+                overflow.append(n)
+        ok(not overflow, f"1280×720 Shadow DOM 4 页均无溢出（溢出页：{overflow}）")
+        go_page(page, 2)
+        add_note(page, "保留结论跳转与口径说明", pin=(0.5, 0.4))
+        ok(wait_until(lambda: len(disk_notes(review)) == 1, page, 5), "重排前批注落盘")
+    finally:
+        stop(server)
+        ctx.close()
+
+    # 重排页面顺序并 rebuild：验证页面键与批注随页面搬迁，双向链接与板块导航继续准确
+    report.write_text(build_html(swapped=True), encoding="utf-8")
+    script.write_text(build_script(swapped=True), encoding="utf-8")
+    cli("build_viewer.py", "--rebuild", str(review), "--no-scan-skills")
+    moved = disk_notes(review)[0]
+    ok(moved["key"] == "sum" and moved["page"] == 3,
+       f"重排 rebuild 后批注跟随稳定页面键 sum 到第 3 页（actual page={moved['page']}）")
+    port2 = free_port()
+    server2 = start_server(review, port2, scripts=scripts)
+    ctx2 = browser.new_context(locale="zh-CN", viewport={"width": 1440, "height": 1000})
+    try:
+        page2 = ctx2.new_page()
+        page2.goto(f"http://127.0.0.1:{port2}/")
+        wait_mode(page2, "server", condition="rebuild 后对齐场景重新进入服务模式")
+        go_page(page2, 3)
+        page2.locator('#host #to-ev').click()
+        wait_dom(page2, JS_PAGE_IS, 5, arg=2, condition="重排后 #page-ev-detail 跳到新第 2 页")
+        ok(True, "重排并 rebuild 后跨页双向跳转准确到达目标页")
+    finally:
+        stop(server2)
+        ctx2.close()
+
+
 # 编号与计数的合成审阅：第 3 页两条未处理 + 一条已处理（都带标注），第 4 页两条未处理（一条带标注），
 # 第 5 页一条待复核。标点与框在同一页统一按出现顺序编号，已处理的不被排除在编号之外。
 POLL_NUMBERING_NOTES = [
@@ -6748,6 +6960,7 @@ SCENARIO_RUNNERS = {
     "revision-update-loop": revision_update_checks,
     "legacy-report-compat": legacy_report_checks,
     "external-method-loop": external_method_checks,
+    "alignment-navigation-loop": alignment_navigation_checks,
     "installed-delivery": installed_delivery_checks,
     "locale-live-controls": locale_live_controls_checks,
     "skill-search": skill_search_checks,

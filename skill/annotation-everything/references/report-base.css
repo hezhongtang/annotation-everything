@@ -107,3 +107,42 @@
   font-size: 15px;
   color: var(--ae-muted);
 }
+
+/* 补充页、任务导向回跳链接与卡片栅格 */
+.page .ae-supplement,
+.page[data-kind="supplement"]::before {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ae-muted);
+  background: var(--ae-soft);
+  border: 1px solid var(--ae-line);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+.page[data-kind="supplement"]::before {
+  content: "补充页";
+  display: inline-block;
+  margin-bottom: 10px;
+}
+.page .ae-nav-return,
+.page a.ae-back-link {
+  display: inline-block;
+  font-size: 16px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: 1px solid var(--ae-line);
+  border-radius: 999px;
+  background: var(--ae-soft);
+  color: var(--ae-accent);
+}
+.page .ae-cols-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.page .ae-card {
+  background: var(--ae-soft);
+  border: 1px solid var(--ae-line);
+  border-radius: 8px;
+  padding: 16px 20px;
+}

@@ -260,9 +260,13 @@ Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lan
 
 ### 从材料生成初稿与报告核验
 
-还没有报告时，可将原始材料与需求交给 Agent，按随技能安装的[内置生成范式](skill/annotation-everything/references/generation.zh-CN.md)生成逐页 HTML 报告和可选讲稿。已明确的需求直接沿用，只补问影响结果的缺项；默认提供[报告基础样式](skill/annotation-everything/references/report-base.css)。用户指定可用的外部生成技能，或任务需要扩展时，可以采用外部方法，产物接受相同核验，并记录实际采用的方法。
+还没有报告时，可将原始材料与需求交给 Agent，按随技能安装的[内置生成范式](skill/annotation-everything/references/generation.zh-CN.md)在生成前核对九维度需求清单，并对缺失的信息密度、视觉风格或导航偏好通过宿主问答工具一轮对齐（问答工具不可用时先说明原因再文本提问，异步超时未回复则按明确默认方案继续并标为「待确认」）。
 
-材料读取依赖宿主实际可用的能力。Agent 登记已读、部分读取或无法读取的范围与原因，保留关键结论、数值的引用和计算口径；缺口如实披露，全部实质材料不可读时不能宣布初稿完成。报告、所需讲稿与 `report-record.json` 核验记录保存在受控材料位置，记录契约和操作步骤见生成指引。
+- **可执行的信息密度与篇幅规则**：围绕`演示为主`、`独立阅读`、`深入审阅`组织内容，有讲稿和无讲稿时都保持正文完整可读，并记录篇幅约束属于硬上限还是参考目标、以及 `data-kind="supplement"` 补充页是否计入总数（`request.lengthSpec`）；需求内部冲突时先提醒取舍，未解决前保留未完成状态。
+- **具象视觉约定与任务导向导航**：将参考样张或抽象风格词转成可核对的变量、字号层级、栅格、留白与图表规则，在报告与对照页 `1280×720` Shadow DOM 渲染下实查可读性、溢出与遮挡；报告支持概览把握、按板块定位与 `结论 → 证据或补充页 → 对应分析` 的双向跳转（`href="#page-<key>"`，对照页额外支持 `data-page-ref` 兜底与「返回上一浏览页」，重排重建后仍准确）。
+- **共用验收与旧记录兼容**：外部生成技能同样遵守对齐与偏差披露约定（`record.alignment`、`report.navigation`、扩展后的 `record.length`，以及 `ae-report-record/1` 可选的 `request.alignment`、`request.qa`、`request.lengthSpec`、`deviations`）；未包含新增字段的旧记录继续兼容并如实标注未记录偏好。
+
+默认提供[报告基础样式](skill/annotation-everything/references/report-base.css)。材料读取依赖宿主实际可用的能力。Agent 登记已读、部分读取或无法读取的范围与原因，保留关键结论、数值的引用和计算口径；缺口与偏离项如实披露，全部实质材料不可读时不能宣布初稿完成。报告、所需讲稿与 `report-record.json` 核验记录保存在受控材料位置，记录契约和操作步骤见生成指引。
 
 新生成的报告在核验记录里写一两句 `summary`，供总览识别。字段可选，旧记录仍合法；没有摘要时，总览显示「（无摘要）」和封面页标题。摘要不替代报告核验结论，写法见[生成指引第 4 步「写核验记录」](skill/annotation-everything/references/generation.zh-CN.md)。
 
@@ -491,6 +495,7 @@ fixtures/verify-doc-allowlist.json  文档门禁路径与依赖契约的合成�
 fixtures/external-report-skill/    合成外部生成技能，测试外部产物走同一验收
 fixtures/external-report-skill-lite/ 合成外部生成技能的精简变体，验证缺依据时如实列为缺口
 tests/                             单元测试和浏览器端到端测试
+tests/test_report_alignment.py     初稿九维度对齐、信息密度与篇幅、视觉与任务导向导航契约
 tests/test_docx_review.py          DOCX 渲染、分页、不可信输入与集成回归
 tests/test_docx_anchor.py          DOCX 批注段落定位、重建重映射、show 与导出
 tests/test_docx_edit.py            DOCX 回写、字节保留、写前闸门、失败恢复与命令行

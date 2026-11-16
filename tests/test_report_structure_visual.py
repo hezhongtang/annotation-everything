@@ -708,13 +708,14 @@ class DisclosureTests(unittest.TestCase):
         self.assertEqual(zh["verdict"]["deliverable"], en["verdict"]["deliverable"])
 
     def test_check_order_stays_stable(self):
-        """新程序检查追加在尾部，既有检查项的顺序不回退（#74/#75 追加 method、revision）。"""
+        """新程序检查追加在尾部，既有检查项的顺序不回退（#74/#75/#169 依次追加）。"""
         d = tmpdir()
         paths = write_case(d, record=make_record())
         _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         ids = [c["id"] for c in payload["checks"]]
         self.assertEqual(len(ids), len(rc.Checks.ORDER))
-        self.assertEqual(ids[-3:], ["record.length", "record.method", "record.revision"])
+        self.assertEqual(ids[-5:], ["record.length", "record.method", "record.revision",
+                                    "record.alignment", "report.navigation"])
 
 
 if __name__ == "__main__":
