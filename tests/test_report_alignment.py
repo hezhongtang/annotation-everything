@@ -356,6 +356,36 @@ class TestRecordAlignment(unittest.TestCase):
         self.assertNotEqual(p2["coverage"]["content"], "covered")
         self.assertFalse(p2["verdict"]["deliverable"])
 
+    def test_unanswered_qa_blocks_delivery_without_pending_dimension(self):
+        for alignment in (None, {
+            "visual": {"value": "clean", "source": "user", "status": "confirmed"},
+        }):
+            with self.subTest(alignment=alignment):
+                rec = make_record()
+                if alignment is not None:
+                    rec["request"]["alignment"] = alignment
+                rec["request"]["qa"] = {
+                    "used": True, "asked": ["visual"], "unanswered": ["visual", "visual"],
+                }
+                paths = write_case(tmpdir(), record=rec)
+                code, payload, _, _ = run_check(paths)
+                self.assertEqual(code, 0)
+                self.assertTrue(payload["verdict"]["draftComplete"])
+                self.assertFalse(payload["verdict"]["deliverable"])
+                self.assertEqual(payload["record"]["alignment"]["pending"], ["visual"])
+                for locale, label in (("zh-CN", "待确认"), ("en", "pending")):
+                    _, _, summary, _ = run_check(paths, locale=locale, json_out=False)
+                    pending_lines = [line for line in summary.splitlines()
+                                     if label in line.lower()]
+                    self.assertTrue(any("visual" in line for line in pending_lines), summary)
+
+    def test_answered_qa_without_dimensions_does_not_block_delivery(self):
+        rec = make_record()
+        rec["request"]["qa"] = {"used": True, "asked": ["visual"], "unanswered": []}
+        code, payload, _, _ = run_check(write_case(tmpdir(), record=rec))
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["verdict"]["deliverable"])
+
     def test_deviations_disclosed_and_block_full_satisfaction(self):
         rec = make_record()
         rec["request"]["alignment"] = {
@@ -418,6 +448,39 @@ SCRIPT_3 = """# 讲稿：含补充页报告
 
 
 class TestLengthSpecAndSupplements(unittest.TestCase):
+    def test_hard_upper_bound_accepts_fewer_pages_and_rejects_excess(self):
+        for length in ("最多 6 页", "6 页", "at most 6 pages", "6 pages"):
+            for count, passes in ((4, True), (6, True), (7, False)):
+                with self.subTest(length=length, count=count):
+                    rec = make_record()
+                    rec["request"].update({
+                        "length": length,
+                        "lengthSpec": {"nature": "hard", "includeSupplements": False},
+                    })
+                    pages = [{"kind": ""} for _ in range(count)] + [{"kind": "supplement"}]
+                    checks = rc.Checks("zh-CN")
+                    info = rc.check_record_length(rec, pages, checks)
+                    self.assertEqual(info["inRange"], passes)
+                    self.assertEqual(info["countedPages"], count)
+                    self.assertEqual(info["expected"], "≤6")
+
+    def test_length_override_range_and_legacy_exact_constraints(self):
+        cases = (
+            ("6 页", None, False),
+            ("6 页", {"nature": "hard", "pages": "最多 4 页"}, True),
+            ("6 页", {"nature": "hard", "pages": "5–6 页"}, False),
+            ("6 页", {"nature": "hard", "pages": "4–6 页"}, True),
+            ("6 页", {"nature": "reference"}, False),
+        )
+        for length, spec, in_range in cases:
+            with self.subTest(spec=spec):
+                rec = make_record()
+                rec["request"]["length"] = length
+                if spec is not None:
+                    rec["request"]["lengthSpec"] = spec
+                info = rc.check_record_length(rec, [{"kind": ""}] * 4, rc.Checks("zh-CN"))
+                self.assertEqual(info["inRange"], in_range)
+
     def test_hard_limit_excluding_supplements_passes_when_main_pages_fit(self):
         rec = make_record(report=REPORT_WITH_SUPPLEMENTS, script=SCRIPT_3,
                           checks=all_checks("pass", page_count=3))
@@ -506,6 +569,34 @@ NAV_SCRIPT_OK = """# 讲稿：导航闭环报告
 
 
 class TestReportNavigation(unittest.TestCase):
+    def test_non_rendered_anchor_text_is_ignored(self):
+        anchor = '<a href="#page-removed" data-page-ref="ghost" data-range-start="ghost">old</a>'
+        fragments = (
+            f"<!-- {anchor} -->",
+            f"<script>const oldLink = '{anchor}';</script>",
+            f"<style>.note::before {{ content: '{anchor}'; }}</style>",
+            f"<textarea>{anchor}</textarea>",
+            f"<template><template>{anchor}</template>{anchor}</template>",
+        )
+        for fragment in fragments:
+            with self.subTest(fragment=fragment):
+                for real_link, expected in (("", "not_applicable"),
+                                            ('<a href="#page-ev">Evidence</a>', "pass")):
+                    report = REPORT.replace("</section>", fragment + real_link + "</section>", 1)
+                    rec = make_record(report=report)
+                    code, payload, _, _ = run_check(write_case(tmpdir(), report=report, record=rec))
+                    self.assertEqual(code, 0)
+                    self.assertEqual(by_id(payload, "report.navigation")["status"], expected)
+                    self.assertTrue(payload["verdict"]["deliverable"])
+
+    def test_anchor_attributes_with_greater_than_character_are_parsed(self):
+        report = REPORT.replace("</section>",
+                                '<a title="A > B" href="#page-missing">Evidence</a></section>', 1)
+        rec = make_record(report=report)
+        code, payload, _, _ = run_check(write_case(tmpdir(), report=report, record=rec))
+        self.assertEqual(code, 1)
+        self.assertEqual(by_id(payload, "report.navigation")["code"], "report.nav-broken-link")
+
     def test_bidirectional_links_and_toc_ranges_pass(self):
         rec = make_record(report=NAV_REPORT_OK, script=NAV_SCRIPT_OK,
                           checks=all_checks("pass", page_count=4))

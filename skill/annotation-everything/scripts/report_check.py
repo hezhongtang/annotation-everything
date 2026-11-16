@@ -29,6 +29,7 @@ import json
 import math
 import re
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -904,6 +905,10 @@ def check_record_length(record: dict | None, pages: list[dict], c: Checks) -> di
         return None
     lo, hi = constraint
     expected = str(lo) if lo == hi else f"{lo}–{hi}"
+    # 新字段将单一页数声明为硬上限；显式区间保留下限，旧记录仍精确比对。
+    if spec is not None and nature == "hard" and not LENGTH_RANGE_RE.search(raw_pages):
+        lo = 0
+        expected = f"≤{hi}"
     in_range = lo <= counted <= hi
     info = {
         "totalPages": len(pages),
@@ -1168,6 +1173,8 @@ def check_record_alignment(record: dict | None, c: Checks) -> dict | None:
         return None
     conflicts = [k for k, v in dimensions.items() if v["status"] == "conflict"]
     pending = [k for k, v in dimensions.items() if v["status"] == "pending"]
+    if qa_info:
+        pending = list(dict.fromkeys(pending + qa_info["unanswered"]))
     align_info = {"recorded": bool(dimensions), "dimensions": dimensions, "pending": pending,
                   "conflicts": conflicts, "deviations": deviations, "qa": qa_info}
     by_id = {x.get("id"): x for x in record["checks"] if isinstance(x, dict)}
@@ -1194,7 +1201,25 @@ def _alignment_deviation_pairs(deviations: list[dict] | None,
     return out
 
 
-ANCHOR_TAG_RE = re.compile(r"<a\b([^>]*)>", re.I | re.S)
+class _NavigationLinkParser(HTMLParser):
+    """仅收集实际锚点，忽略注释、原始文本元素和未实例化的模板。"""
+
+    CDATA_CONTENT_ELEMENTS = ("script", "style", "textarea", "title")
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.links: list[dict[str, str | None]] = []
+        self.template_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "template":
+            self.template_depth += 1
+        elif tag == "a" and not self.template_depth:
+            self.links.append(dict(attrs))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "template" and self.template_depth:
+            self.template_depth -= 1
 
 
 def check_report_navigation(pages: list[dict], c: Checks) -> None:
@@ -1210,8 +1235,10 @@ def check_report_navigation(pages: list[dict], c: Checks) -> None:
     broken_refs: list[str] = []
     bad_ranges: list[str] = []
     for p in pages:
-        for m in ANCHOR_TAG_RE.finditer(p["html"]):
-            attrs = build_viewer.attrs_of(m.group(1))
+        parser = _NavigationLinkParser()
+        parser.feed(p["html"])
+        parser.close()
+        for attrs in parser.links:
             href = (attrs.get("href") or "").strip()
             if href.lower().startswith("#page-"):
                 found_nav = True
@@ -1220,13 +1247,13 @@ def check_report_navigation(pages: list[dict], c: Checks) -> None:
                     broken_refs.append(href)
             if "data-page-ref" in attrs:
                 found_nav = True
-                page_ref = attrs["data-page-ref"].strip()
+                page_ref = (attrs["data-page-ref"] or "").strip()
                 if not page_ref or page_ref not in pos_by_key:
                     broken_refs.append(f"data-page-ref={page_ref or '?'}")
             if "data-range-start" in attrs or "data-range-end" in attrs:
                 found_nav = True
-                start_k = attrs.get("data-range-start", "").strip()
-                end_k = attrs.get("data-range-end", "").strip()
+                start_k = (attrs.get("data-range-start") or "").strip()
+                end_k = (attrs.get("data-range-end") or "").strip()
                 if not start_k or not end_k or start_k not in pos_by_key \
                         or end_k not in pos_by_key or pos_by_key[start_k] > pos_by_key[end_k]:
                     bad_ranges.append(f"{start_k or '?'}..{end_k or '?'}")
@@ -1529,7 +1556,7 @@ def _render_alignment_summary(loc: str, al: dict) -> list[str]:
         out.append("  " + t(loc, "check.alignment.qaUnavailableLine",
                             reason=qa["unavailableReason"]))
     if al.get("pending"):
-        pairs = [(k, dims[k].get("reason", "")) for k in al["pending"] if k in dims]
+        pairs = [(k, dims.get(k, {}).get("reason", "")) for k in al["pending"]]
         out.append("  " + t(loc, "check.alignment.pendingLine",
                             items=_format_labeled_reasons(loc, pairs)))
     if al.get("conflicts"):

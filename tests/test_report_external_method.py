@@ -449,6 +449,25 @@ class SyntheticExternalSkillTests(unittest.TestCase):
         self.assertTrue(any("sha256" in w or "哈希" in w for w in payload["warnings"]),
                         f"缺哈希要有警告：{payload['warnings']}")
 
+    def test_alignment_eval_materials_work_with_bundled_external_generator(self):
+        files = (ROOT / "skill" / "annotation-everything" / "evals"
+                 / "align-navigation-visual-external" / "files")
+        out = self.tmp / "case-alignment-eval"
+        shutil.copytree(files / "materials", out / "materials")
+        generator = files / "installed-skills" / "synthetic-brief-kit" / "scripts" / "make_report.py"
+        done = subprocess.run(
+            [sys.executable, str(generator), "--materials", str(out / "materials" / "q3-notes.md"),
+             "--out", str(out)], env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        paths = {"report": out / "report.html", "script": out / "script.md",
+                 "record": out / "report-record.json"}
+        record = json.loads(paths["record"].read_text(encoding="utf-8"))
+        self.assertEqual(record["findings"][0]["calculation"]["inputs"], {"a": 100, "b": 112})
+        code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
+        self.assertEqual(code, 0, json.dumps(payload["checks"], ensure_ascii=False))
+        self.assertTrue(payload["verdict"]["draftComplete"])
+        self.assertFalse(payload["verdict"]["deliverable"])
+
     def test_parity_twin_of_lite_record_is_identical(self):
         """lite 记录换成 builtin 方法声明（其余字段相同）判定完全一致。"""
         out = self.tmp / "case-lite"
