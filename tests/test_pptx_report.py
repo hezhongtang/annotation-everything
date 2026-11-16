@@ -22,7 +22,9 @@ SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT / "fixtures" / "pptx"))
 os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))
-os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="ae-test-user-"))
+_test_user = tempfile.mkdtemp(prefix="ae-test-user-")
+os.environ.setdefault("HOME", _test_user)
+os.environ.setdefault("USERPROFILE", _test_user)
 
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
 
@@ -258,6 +260,19 @@ class CompatibilityTests(ControlledRenderMixin, unittest.TestCase):
         self.assertNotIn("UnicodeDecodeError", str(caught.exception))
 
 
+def _write_py_tool(bin_dir: Path, name: str, body: str) -> None:
+    """跨平台假工具脚本：POSIX 直接 shebang，Windows 用 .cmd 调 sys.executable。"""
+    if os.name == "nt":
+        py_path = bin_dir / f"{name}.py"
+        py_path.write_text(body + "\n", encoding="utf-8")
+        cmd_path = bin_dir / f"{name}.cmd"
+        cmd_path.write_text(f'@echo off\r\n"{sys.executable}" "%~dp0{name}.py" %*\r\n', encoding="utf-8")
+    else:
+        path = bin_dir / name
+        path.write_text(f"#!{sys.executable}\n{body}\n", encoding="utf-8")
+        path.chmod(0o755)
+
+
 class RenderPipelineTests(unittest.TestCase):
     """真实工具管线的错误路径：伪造 soffice / pdftoppm 脚本注入 PATH（先例 test_pptx_fonts）。
 
@@ -274,14 +289,21 @@ class RenderPipelineTests(unittest.TestCase):
         self.workdir = self.root / "work"
         self.workdir.mkdir()
 
-    def tool(self, name: str, script: str):
-        path = self.bin / name
-        path.write_text("#!/bin/sh\n" + script + "\n", encoding="utf-8")
-        path.chmod(0o755)
+    def tool(self, name: str, body: str):
+        _write_py_tool(self.bin, name, body)
 
     def isolated(self):
-        """PATH 只保留伪造 bin 与系统 defpath（cp 等可用）；LibreOffice 的候选安装路径一并屏蔽。"""
-        patcher = mock.patch.dict(os.environ, {"PATH": str(self.bin) + os.pathsep + os.defpath})
+        """PATH 只保留伪造 bin 与系统 defpath；屏蔽各平台 LibreOffice / Poppler 默认候选位置。"""
+        empty = str(self.root / "no-such-install")
+        patcher = mock.patch.dict(os.environ, {
+            "PATH": str(self.bin) + os.pathsep + os.defpath,
+            "ProgramFiles": empty,
+            "ProgramFiles(x86)": empty,
+            "ProgramW6432": empty,
+            "LOCALAPPDATA": empty,
+            "USERPROFILE": empty,
+            "ProgramData": empty,
+        })
         candidates = mock.patch.object(pp, "SOFFICE_CANDIDATES", ())
         patcher.start()
         candidates.start()
@@ -289,8 +311,15 @@ class RenderPipelineTests(unittest.TestCase):
         self.addCleanup(candidates.stop)
 
     def fake_soffice(self):
-        """伪造 soffice：按 --outdir 参数（第 6 个）把合成 PDF 复制到输出目录。"""
-        self.tool("soffice", 'cp "%s" "$6/deck.pdf"' % self.fake_pdf())
+        """伪造 soffice：按 --outdir 参数把合成 PDF 复制到输出目录。"""
+        pdf = self.fake_pdf()
+        self.tool("soffice", (
+            "import shutil, sys\n"
+            "from pathlib import Path\n"
+            "outdir = Path(sys.argv[sys.argv.index('--outdir') + 1])\n"
+            "stem = Path(sys.argv[-1]).stem\n"
+            f"shutil.copyfile({str(pdf)!r}, outdir / (stem + '.pdf'))\n"
+        ))
 
     def fake_pdf(self, pages: int = 2) -> Path:
         objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -315,19 +344,19 @@ class RenderPipelineTests(unittest.TestCase):
 
     def test_conversion_failure_and_empty_output_are_distinct(self):
         self.isolated()
-        self.tool("soffice", "echo boom >&2; exit 1")
+        self.tool("soffice", "import sys\nsys.stderr.write('boom\\n')\nsys.exit(1)")
         with self.assertRaises(pp.PptxReportError) as caught:
             pp.render_slides(self.pptx, self.workdir)
         self.assertEqual(caught.exception.code, "convertFailed")
         self.assertIn("boom", caught.exception.detail)
 
-        self.tool("soffice", "exit 0")   # 成功但不产出 PDF：同样按转换失败报
+        self.tool("soffice", "import sys\nsys.exit(0)")   # 成功但不产出 PDF：同样按转换失败报
         with self.assertRaises(pp.PptxReportError) as caught:
             pp.render_slides(self.pptx, self.workdir)
         self.assertEqual(caught.exception.code, "convertFailed")
 
         self.fake_soffice()
-        self.tool("pdftoppm", "exit 0")
+        self.tool("pdftoppm", "import sys\nsys.exit(0)")
         with self.assertRaises(pp.PptxReportError) as caught:
             pp.render_slides(self.pptx, self.workdir)
         self.assertEqual(caught.exception.code, "emptyOutput", "pdftoppm 没产出页面图像时报空输出")
@@ -335,7 +364,7 @@ class RenderPipelineTests(unittest.TestCase):
     def test_raster_failure_reports_tool_stderr(self):
         self.isolated()
         self.fake_soffice()
-        self.tool("pdftoppm", "echo raster-boom >&2; exit 3")
+        self.tool("pdftoppm", "import sys\nsys.stderr.write('raster-boom\\n')\nsys.exit(3)")
         with self.assertRaises(pp.PptxReportError) as caught:
             pp.render_slides(self.pptx, self.workdir)
         self.assertEqual(caught.exception.code, "rasterFailed")
@@ -343,7 +372,7 @@ class RenderPipelineTests(unittest.TestCase):
 
     def test_timeout_is_reported_not_hung(self):
         self.isolated()
-        self.tool("soffice", "sleep 5")
+        self.tool("soffice", "import time\ntime.sleep(5)")
         with mock.patch.object(pp, "SOFFICE_TIMEOUT", 0.3):
             with self.assertRaises(pp.PptxReportError) as caught:
                 pp.render_slides(self.pptx, self.workdir)
@@ -352,10 +381,83 @@ class RenderPipelineTests(unittest.TestCase):
     def test_pipeline_returns_rasterized_pages_in_order(self):
         self.isolated()
         self.fake_soffice()
-        self.tool("pdftoppm", 'out=""; n=1; for a in "$@"; do case "$a" in -*) ;; *) out="$a";; esac; done; '
-                              'prefix="${out%.pdf}"; while [ $n -le 2 ]; do printf PDFPAGE > "$prefix-$n.png"; n=$((n+1)); done')
+        self.tool("pdftoppm", (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "prefix = Path(sys.argv[-1])\n"
+            "for n in (1, 2):\n"
+            "    Path(f'{prefix}-{n}.png').write_bytes(b'PDFPAGE')\n"
+        ))
         images = pp.render_slides(self.pptx, self.workdir)
         self.assertEqual(images, [b"PDFPAGE", b"PDFPAGE"])
+
+    def test_windows_tool_discovery_handles_spaces_and_chinese_paths(self):
+        pf = self.root / "Program Files"
+        la = self.root / "Users" / "张伟 办公" / "AppData" / "Local"
+        soffice_exe = pf / "LibreOffice" / "program" / "soffice.exe"
+        soffice_com = pf / "LibreOffice" / "program" / "soffice.com"
+        soffice_exe.parent.mkdir(parents=True)
+        soffice_exe.write_bytes(b"exe")
+        soffice_com.write_bytes(b"com")
+        pdftoppm_exe = pf / "poppler-24.08.0" / "Library" / "bin" / "pdftoppm.exe"
+        pdftoppm_exe.parent.mkdir(parents=True)
+        pdftoppm_exe.write_bytes(b"ppm")
+
+        env = {
+            "PATH": "",
+            "ProgramFiles": str(pf),
+            "ProgramFiles(x86)": str(self.root / "no-x86"),
+            "ProgramW6432": str(self.root / "no-w64"),
+            "LOCALAPPDATA": str(la),
+            "USERPROFILE": str(self.root / "Users" / "张伟 办公"),
+            "ProgramData": str(self.root / "no-pd"),
+        }
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(pp, "SOFFICE_CANDIDATES", ()), \
+                mock.patch.object(pp, "_is_windows", return_value=True):
+            self.assertEqual(pp.find_soffice(), str(soffice_com))
+            self.assertEqual(pp.find_rasterizer(), str(pdftoppm_exe))
+
+        # ProgramFiles 不存在时回退到含中文用户名的 LOCALAPPDATA\Programs
+        local_soffice = la / "Programs" / "LibreOffice" / "program" / "soffice.exe"
+        local_soffice.parent.mkdir(parents=True)
+        local_soffice.write_bytes(b"exe")
+        local_ppm = la / "Programs" / "poppler" / "bin" / "pdftoppm.exe"
+        local_ppm.parent.mkdir(parents=True)
+        local_ppm.write_bytes(b"ppm")
+        env["ProgramFiles"] = str(self.root / "missing-pf")
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(pp, "SOFFICE_CANDIDATES", ()), \
+                mock.patch.object(pp, "_is_windows", return_value=True):
+            self.assertEqual(pp.find_soffice(), str(local_soffice))
+            self.assertEqual(pp.find_rasterizer(), str(local_ppm))
+
+    def test_render_slides_handles_chinese_paths_spaces_and_utf8_stderr(self):
+        self.isolated()
+        cjk_dir = self.root / "张伟 汇报"
+        cjk_dir.mkdir()
+        cjk_pptx = mp.build_sample(cjk_dir / "季度 演示.pptx")
+        cjk_work = cjk_dir / "渲染 输出"
+        cjk_work.mkdir()
+        self.fake_soffice()
+        self.tool("pdftoppm", (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "prefix = Path(sys.argv[-1])\n"
+            "for n in (1, 2):\n"
+            "    Path(f'{prefix}-{n}.png').write_bytes(b'CJKPAGE')\n"
+        ))
+        self.assertEqual(pp.render_slides(cjk_pptx, cjk_work), [b"CJKPAGE", b"CJKPAGE"])
+
+        self.tool("soffice", (
+            "import sys\n"
+            "sys.stderr.buffer.write('中文错误：路径含空格\\n'.encode('utf-8'))\n"
+            "sys.exit(1)\n"
+        ))
+        with self.assertRaises(pp.PptxReportError) as caught:
+            pp.render_slides(cjk_pptx, cjk_work)
+        self.assertEqual(caught.exception.code, "convertFailed")
+        self.assertIn("中文错误：路径含空格", caught.exception.detail)
 
     def test_page_count_mismatch_stops_the_build(self):
         images = [PNG_1PX]   # 只有 1 张渲染图，源里有 2 张幻灯片
@@ -382,10 +484,8 @@ class FontEvidenceTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def tool(self, name: str, script: str):
-        path = self.bin / name
-        path.write_text("#!/bin/sh\n" + script + "\n", encoding="utf-8")
-        path.chmod(0o755)
+    def tool(self, name: str, body: str):
+        _write_py_tool(self.bin, name, body)
 
     def evidence(self, pdf: Path | None | object = ...) -> dict:
         # Ellipsis 表示默认用渲染 PDF；显式传 None 才是不做转换后对照
@@ -419,21 +519,21 @@ class FontEvidenceTests(unittest.TestCase):
         return mp.write_package(self.root / name, parts)
 
     def test_missing_and_found_declared_fonts_are_recorded(self):
-        self.tool("fc-list", "printf '%s\\n' '完全无关的字体'")
+        self.tool("fc-list", "import sys\nsys.stdout.buffer.write('完全无关的字体\\n'.encode('utf-8'))")
         evidence = self.evidence(pdf=None)
         self.assertEqual([d["font"] for d in evidence["declared"]], ["Synthetic Sans"])
         self.assertEqual(evidence["missing"], ["Synthetic Sans"], "声明字体未检出按缺失记录")
         self.assertEqual(evidence["installed"], "ok")
         self.assertTrue(evidence["review"], "有缺失就要人工核查")
 
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans, Synthetic Sans Regular'")
+        self.tool("fc-list", "print('Synthetic Sans, Synthetic Sans Regular')")
         self.pptx = self.explicit_font_deck()
         evidence = self.evidence(pdf=None)
         self.assertEqual(evidence["missing"], [])
         self.assertFalse(evidence["review"], "声明齐全、全部显式且枚举正常时清单层面不触发核查")
 
     def test_fc_list_failure_keeps_declarations_and_marks_unknown(self):
-        self.tool("fc-list", "exit 7")
+        self.tool("fc-list", "import sys\nsys.exit(7)")
         evidence = self.evidence(pdf=None)
         self.assertEqual(evidence["installed"], "failed")
         self.assertEqual([d["font"] for d in evidence["declared"]], ["Synthetic Sans"],
@@ -447,28 +547,30 @@ class FontEvidenceTests(unittest.TestCase):
             '<a:rPr b="1"><a:latin typeface="Synthetic Sans"/></a:rPr>',
             '<a:rPr b="1"><a:latin typeface="+mn-lt"/></a:rPr>')
         self.pptx = mp.write_package(self.root / "theme.pptx", parts)
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        self.tool("fc-list", "print('Synthetic Sans')")
         evidence = self.evidence(pdf=None)
         self.assertTrue(evidence["unresolved"], "主题引用无法解析：按未知记录")
         self.assertTrue(evidence["review"])
 
     def test_pdf_evidence_with_unembedded_font_requires_review(self):
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
-        self.tool("pdffonts", "printf '%s\\n' "
-                  "'name                                 type              encoding         emb sub uni object ID' "
-                  "'------------------------------------ ----------------- ---------------- --- --- --- ---------' "
-                  "'Synthetic Sans                       TrueType          WinAnsi          no  no  no       5  0'")
+        self.tool("fc-list", "print('Synthetic Sans')")
+        self.tool("pdffonts", (
+            "print('name                                 type              encoding         emb sub uni object ID')\n"
+            "print('------------------------------------ ----------------- ---------------- --- --- --- ---------')\n"
+            "print('Synthetic Sans                       TrueType          WinAnsi          no  no  no       5  0')"
+        ))
         evidence = self.evidence()
         self.assertEqual(evidence["pdf"]["rows"][0]["name"], "Synthetic Sans")
         self.assertEqual(evidence["pdf"]["rows"][0]["emb"], "no")
         self.assertTrue(evidence["review"], "渲染 PDF 里字体未嵌入：需要人工核查")
 
     def test_matching_names_never_mark_visual_verified(self):
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
-        self.tool("pdffonts", "printf '%s\\n' "
-                  "'name                                 type              encoding         emb sub uni object ID' "
-                  "'------------------------------------ ----------------- ---------------- --- --- --- ---------' "
-                  "'Synthetic Sans                       TrueType          WinAnsi          yes yes yes      5  0'")
+        self.tool("fc-list", "print('Synthetic Sans')")
+        self.tool("pdffonts", (
+            "print('name                                 type              encoding         emb sub uni object ID')\n"
+            "print('------------------------------------ ----------------- ---------------- --- --- --- ---------')\n"
+            "print('Synthetic Sans                       TrueType          WinAnsi          yes yes yes      5  0')"
+        ))
         self.pptx = self.explicit_font_deck()
         evidence = self.evidence()
         self.assertFalse(evidence["review"], "名称一致且嵌入：字体清单层面不触发核查")
@@ -477,6 +579,21 @@ class FontEvidenceTests(unittest.TestCase):
             result = pp.parts(self.pptx)
         self.assertIn("visual", result["meta"]["unverified"],
                       "字体名称一致也不自动标记视觉核验通过")
+
+    def test_missing_pdffonts_keeps_fonts_unverified_even_when_installed_fonts_ok(self):
+        self.tool("fc-list", "print('Synthetic Sans')")
+        self.pptx = self.explicit_font_deck()
+        with mock.patch.dict(os.environ, {"PATH": str(self.bin)}), \
+                mock.patch.object(pp, "render_slides", lambda p, w: [PNG_1PX]):
+            # 模拟 render_slides 之外仍产生了 PDF（字体核对要查 pdffonts）
+            evidence = pp.font_evidence(self.pptx, self.pdf)
+        self.assertEqual(evidence["installed"], "ok")
+        self.assertTrue(evidence["warning"])
+        self.assertTrue(evidence["review"])
+        with mock.patch.object(pp, "render_slides", lambda p, w: [PNG_1PX]), \
+                mock.patch.object(pp, "font_evidence", lambda p, d: evidence):
+            result = pp.parts(self.pptx)
+        self.assertEqual(result["meta"]["unverified"], ["visual", "fonts"])
 
 
 class NotesSupportTests(ControlledRenderMixin, unittest.TestCase):

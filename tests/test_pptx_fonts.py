@@ -23,13 +23,21 @@ class FontCheckTests(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.pptx = self.root / "synthetic.pptx"
-        self.env = {**os.environ, "HOME": str(self.root / "home"), "PATH": str(self.bin) + os.pathsep + os.defpath,
+        self.home = self.root / "home"
+        self.home.mkdir()
+        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
+                    "PATH": str(self.bin) + os.pathsep + os.defpath,
                     "PYTHONDONTWRITEBYTECODE": "1"}
 
-    def tool(self, name: str, script: str):
-        path = self.bin / name
-        path.write_text("#!/bin/sh\n" + script + "\n", encoding="utf-8")
-        path.chmod(0o755)
+    def tool(self, name: str, body: str):
+        if os.name == "nt":
+            (self.bin / f"{name}.py").write_text(body + "\n", encoding="utf-8")
+            (self.bin / f"{name}.cmd").write_text(
+                f'@echo off\r\n"{sys.executable}" "%~dp0{name}.py" %*\r\n', encoding="utf-8")
+        else:
+            path = self.bin / name
+            path.write_text(f"#!{sys.executable}\n{body}\n", encoding="utf-8")
+            path.chmod(0o755)
 
     def pptx_with(self, files: dict[str, str]):
         with zipfile.ZipFile(self.pptx, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -38,13 +46,13 @@ class FontCheckTests(unittest.TestCase):
 
     def run_check(self, *args: str):
         return subprocess.run([sys.executable, str(CHECKER), str(self.pptx), *map(str, args)], env=self.env,
-                              capture_output=True, text=True, timeout=30)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
 
     def test_lists_declared_fonts_found_and_not_found_without_extracting(self):
         self.pptx_with({"ppt/slides/slide1.xml": '''<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
           <a:r><a:rPr><a:latin typeface="Synthetic Sans"/><a:ea typeface="Missing Family"/></a:rPr></a:r>
         </p:sld>'''})
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans,Synthetic Sans Regular'")
+        self.tool("fc-list", "print('Synthetic Sans,Synthetic Sans Regular')")
         p = self.run_check()
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("Synthetic Sans", p.stdout)
@@ -59,7 +67,7 @@ class FontCheckTests(unittest.TestCase):
           <a:r><a:rPr/><a:t>合成文本</a:t></a:r><a:latin typeface="Synthetic Sans"/>
           <a:ea typeface="+mn-ea"/>
         </p:sld>'''})
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        self.tool("fc-list", "print('Synthetic Sans')")
         p = self.run_check()
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("+mn-ea", p.stdout)
@@ -68,7 +76,7 @@ class FontCheckTests(unittest.TestCase):
 
     def test_failed_font_enumeration_keeps_declarations_visible(self):
         self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="Synthetic Sans"/></p:sld>'})
-        self.tool("fc-list", "exit 7")
+        self.tool("fc-list", "import sys\nsys.exit(7)")
         p = self.run_check()
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn("Synthetic Sans", p.stdout)
@@ -78,7 +86,7 @@ class FontCheckTests(unittest.TestCase):
     def test_found_family_alias_returns_zero_with_rendering_caveat(self):
         self.pptx_with({"ppt/slideMasters/slideMaster1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="合成无衬线"/></p:sld>',
                         "ppt/slideLayouts/slideLayout1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="Synthetic Sans"/></p:sld>'})
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans,合成无衬线'")
+        self.tool("fc-list", "import sys\nsys.stdout.buffer.write('Synthetic Sans,合成无衬线\\n'.encode('utf-8'))")
         p = self.run_check()
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("合成无衬线：本次枚举找到", p.stdout)
@@ -98,7 +106,7 @@ class FontCheckTests(unittest.TestCase):
         self.pptx_with({"ppt/theme/theme1.xml": self.THEME_WITH_SCRIPT_FALLBACKS,
                         "ppt/slides/slide1.xml": '''<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
           <a:r><a:rPr><a:latin typeface="Synthetic Sans"/><a:ea typeface="Synthetic Sans"/></a:rPr><a:t>合成文本</a:t></a:r></p:sld>'''})
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans' 'Synthetic Hans Fallback'")
+        self.tool("fc-list", "print('Synthetic Sans\\nSynthetic Hans Fallback')")
         p = self.run_check()
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("Synthetic Sans：本次枚举找到", p.stdout)
@@ -110,14 +118,15 @@ class FontCheckTests(unittest.TestCase):
         self.pptx_with({"ppt/theme/theme1.xml": self.THEME_WITH_SCRIPT_FALLBACKS,
                         "ppt/slides/slide1.xml": '''<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
           <a:r><a:rPr><a:latin typeface="Synthetic Sans"/><a:ea typeface="Synthetic Sans"/></a:rPr><a:t>合成文本</a:t></a:r></p:sld>'''})
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans' 'Synthetic Hans Fallback'")
+        self.tool("fc-list", "print('Synthetic Sans\\nSynthetic Hans Fallback')")
         pdf = self.root / "synthetic.pdf"
         pdf.write_bytes(b"%PDF synthetic")
-        self.tool("pdffonts", "cat <<'EOF'\n"
-                  "name                                 type              encoding         emb sub uni object ID\n"
-                  "------------------------------------ ----------------- ---------------- --- --- --- ---------\n"
-                  "ABCDEF+Synthetic Sans                TrueType          WinAnsi          yes yes yes      1  0\n"
-                  "GHIJKL+Synthetic Hans Fallback       TrueType          Identity-H       yes yes yes      2  0\nEOF")
+        self.tool("pdffonts", (
+            "print('name                                 type              encoding         emb sub uni object ID')\n"
+            "print('------------------------------------ ----------------- ---------------- --- --- --- ---------')\n"
+            "print('ABCDEF+Synthetic Sans                TrueType          WinAnsi          yes yes yes      1  0')\n"
+            "print('GHIJKL+Synthetic Hans Fallback       TrueType          Identity-H       yes yes yes      2  0')"
+        ))
         p = self.run_check("--pdf", pdf)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("GHIJKL+Synthetic Hans Fallback", p.stdout)
@@ -128,13 +137,13 @@ class FontCheckTests(unittest.TestCase):
                         "ppt/slides/slide1.xml": '''<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
           <a:r><a:rPr><a:latin typeface="Synthetic Sans"/></a:rPr><a:t>Synthetic 合成文本</a:t></a:r>
           <a:r><a:rPr><a:latin typeface="Synthetic Sans"/></a:rPr><a:t>Latin only – “quoted”</a:t></a:r></p:sld>'''})
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        self.tool("fc-list", "print('Synthetic Sans')")
         p = self.run_check()
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("部分非拉丁文字依赖主题的东亚或复杂文种字体", p.stdout)
 
     def test_each_script_needs_its_own_explicit_slot(self):
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        self.tool("fc-list", "print('Synthetic Sans')")
         for props, text in (('<a:ea typeface="Synthetic Sans"/>', "مرحبا"), ('<a:cs typeface="Synthetic Sans"/>', "合成")):
             self.pptx_with({"ppt/theme/theme1.xml": self.THEME_WITH_SCRIPT_FALLBACKS,
                             "ppt/slides/slide1.xml": f'''<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
@@ -147,13 +156,13 @@ class FontCheckTests(unittest.TestCase):
         self.pptx_with({"ppt/theme/theme1.xml": self.THEME_WITH_SCRIPT_FALLBACKS,
                         "ppt/slides/slide1.xml": '''<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
           <a:r><a:rPr><a:latin typeface="Synthetic Sans"/></a:rPr><a:t>Launch \U0001F680 \uF0A7 ✓</a:t></a:r></p:sld>'''})
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        self.tool("fc-list", "print('Synthetic Sans')")
         p = self.run_check()
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
     def test_oversized_or_unsafe_xml_is_rejected(self):
         self.pptx_with({"ppt/slides/slide1.xml": "<slide>" + " " * (8 * 1024 * 1024) + "</slide>"})
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        self.tool("fc-list", "print('Synthetic Sans')")
         p = self.run_check()
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn("过大", p.stderr)
@@ -170,6 +179,22 @@ class FontCheckTests(unittest.TestCase):
     def test_missing_font_tool_is_reported_without_hiding_declarations(self):
         self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="Synthetic Sans"/></p:sld>'})
         self.env["PATH"] = str(self.bin)
+        if os.name == "nt":
+            # Windows 在缺少 fc-list 时会回退系统字体注册表，需单独测试回退与双双缺失两条路径
+            run = '''
+import sys
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+import check_pptx_fonts
+with patch.object(check_pptx_fonts, "_windows_registry_fonts", side_effect=check_pptx_fonts.CheckError("找不到 fc-list 且注册表无可用字体")):
+    sys.exit(check_pptx_fonts.main([sys.argv[2]]))
+'''
+            p = subprocess.run([sys.executable, "-c", run, str(CHECKER.parent), str(self.pptx)],
+                               env=self.env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+            self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+            self.assertIn("Synthetic Sans：无法确认", p.stdout)
+            self.assertIn("找不到 fc-list", p.stderr)
+            return
         p = self.run_check()
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn("Synthetic Sans：无法确认", p.stdout)
@@ -177,14 +202,15 @@ class FontCheckTests(unittest.TestCase):
 
     def test_pdf_font_evidence_shows_subset_embedding_and_uncertainty(self):
         self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
-        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
+        self.tool("fc-list", "print('SyntheticSans')")
         pdf = self.root / "synthetic.pdf"
         pdf.write_bytes(b"%PDF synthetic")
-        self.tool("pdffonts", "cat <<'EOF'\n"
-                  "name                                 type              encoding         emb sub uni object ID\n"
-                  "------------------------------------ ----------------- ---------------- --- --- --- ---------\n"
-                  "ABCDEF+SyntheticSans                 TrueType          WinAnsi          yes yes yes      1  0\n"
-                  "MysteryFallback                      TrueType          WinAnsi          no  no  yes      2  0\nEOF")
+        self.tool("pdffonts", (
+            "print('name                                 type              encoding         emb sub uni object ID')\n"
+            "print('------------------------------------ ----------------- ---------------- --- --- --- ---------')\n"
+            "print('ABCDEF+SyntheticSans                 TrueType          WinAnsi          yes yes yes      1  0')\n"
+            "print('MysteryFallback                      TrueType          WinAnsi          no  no  yes      2  0')"
+        ))
         p = self.run_check("--pdf", pdf)
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("ABCDEF+SyntheticSans", p.stdout)
@@ -198,7 +224,7 @@ class FontCheckTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("pdffonts"), "未安装 pdffonts")
     def test_real_pdffonts_reads_a_synthetic_pdf(self):
         self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="Helvetica"/></p:sld>'})
-        self.tool("fc-list", "printf '%s\\n' 'Helvetica'")
+        self.tool("fc-list", "print('Helvetica')")
         stream = b"BT /F1 12 Tf 72 720 Td (Synthetic) Tj ET\n"
         objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
                    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
@@ -224,8 +250,11 @@ class FontCheckTests(unittest.TestCase):
 
     def test_pdf_without_font_resources_requires_manual_review(self):
         self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
-        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
-        self.tool("pdffonts", "printf '%s\\n' 'name                                 type              encoding         emb sub uni object ID' '------------------------------------ ----------------- ---------------- --- --- --- ---------'")
+        self.tool("fc-list", "print('SyntheticSans')")
+        self.tool("pdffonts", (
+            "print('name                                 type              encoding         emb sub uni object ID')\n"
+            "print('------------------------------------ ----------------- ---------------- --- --- --- ---------')"
+        ))
         pdf = self.root / "synthetic.pdf"
         pdf.write_bytes(b"%PDF synthetic")
         p = self.run_check("--pdf", pdf)
@@ -236,7 +265,7 @@ class FontCheckTests(unittest.TestCase):
 
     def test_missing_pdf_tool_returns_error_after_font_enumeration(self):
         self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
-        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
+        self.tool("fc-list", "print('SyntheticSans')")
         self.env["PATH"] = str(self.bin)
         pdf = self.root / "synthetic.pdf"
         pdf.write_bytes(b"%PDF synthetic")
@@ -247,11 +276,12 @@ class FontCheckTests(unittest.TestCase):
 
     def test_style_name_difference_is_not_claimed_as_an_exact_match(self):
         self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
-        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
-        self.tool("pdffonts", "cat <<'EOF'\n"
-                  "name                                 type              encoding         emb sub uni object ID\n"
-                  "------------------------------------ ----------------- ---------------- --- --- --- ---------\n"
-                  "ABCDEF+SyntheticSans-Bold            TrueType          WinAnsi          yes yes yes      1  0\nEOF")
+        self.tool("fc-list", "print('SyntheticSans')")
+        self.tool("pdffonts", (
+            "print('name                                 type              encoding         emb sub uni object ID')\n"
+            "print('------------------------------------ ----------------- ---------------- --- --- --- ---------')\n"
+            "print('ABCDEF+SyntheticSans-Bold            TrueType          WinAnsi          yes yes yes      1  0')"
+        ))
         pdf = self.root / "synthetic.pdf"
         pdf.write_bytes(b"%PDF synthetic")
         p = self.run_check("--pdf", pdf)
@@ -262,36 +292,38 @@ class FontCheckTests(unittest.TestCase):
 
     def test_pdf_tool_timeout_is_reported(self):
         self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
-        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
+        self.tool("fc-list", "print('SyntheticSans')")
         pdf = self.root / "synthetic.pdf"
         pdf.write_bytes(b"%PDF synthetic")
         # 只让 PDF 工具超时；全局缩短 TOOL_TIMEOUT 会在高负载下误伤 fc-list。
         run = '''
 import sys
+from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, sys.argv[1])
 import check_pptx_fonts
 real_run = check_pptx_fonts.subprocess.run
 def run_tool(command, **kwargs):
-    if command[0] == "pdffonts":
+    if Path(command[0]).stem.lower() == "pdffonts":
         raise check_pptx_fonts.subprocess.TimeoutExpired(command, kwargs["timeout"])
     return real_run(command, **kwargs)
 with patch.object(check_pptx_fonts.subprocess, "run", side_effect=run_tool):
     sys.exit(check_pptx_fonts.main([sys.argv[2], "--pdf", sys.argv[3]]))
 '''
         p = subprocess.run([sys.executable, "-c", run, str(CHECKER.parent), str(self.pptx), str(pdf)],
-                           env=self.env, capture_output=True, text=True, timeout=10)
+                           env=self.env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn("SyntheticSans：本次枚举找到", p.stdout)
         self.assertIn("PDF 字体检查失败或超时", p.stderr)
 
     def test_subset_prefix_is_not_removed_when_subsetting_is_not_confirmed(self):
         self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
-        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
-        self.tool("pdffonts", "cat <<'EOF'\n"
-                  "name                                 type              encoding         emb sub uni object ID\n"
-                  "------------------------------------ ----------------- ---------------- --- --- --- ---------\n"
-                  "ABCDEF+SyntheticSans                 TrueType          WinAnsi          yes no  yes      1  0\nEOF")
+        self.tool("fc-list", "print('SyntheticSans')")
+        self.tool("pdffonts", (
+            "print('name                                 type              encoding         emb sub uni object ID')\n"
+            "print('------------------------------------ ----------------- ---------------- --- --- --- ---------')\n"
+            "print('ABCDEF+SyntheticSans                 TrueType          WinAnsi          yes no  yes      1  0')"
+        ))
         pdf = self.root / "synthetic.pdf"
         pdf.write_bytes(b"%PDF synthetic")
         p = self.run_check("--pdf", pdf)
@@ -301,12 +333,14 @@ with patch.object(check_pptx_fonts.subprocess, "run", side_effect=run_tool):
 
     def test_pdf_tool_warning_prevents_a_clean_result(self):
         self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
-        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'")
-        self.tool("pdffonts", "cat <<'EOF'\n"
-                  "name                                 type              encoding         emb sub uni object ID\n"
-                  "------------------------------------ ----------------- ---------------- --- --- --- ---------\n"
-                  "ABCDEF+SyntheticSans                 TrueType          WinAnsi          yes yes yes      1  0\nEOF\n"
-                  "printf '%s\\n' 'synthetic warning' >&2")
+        self.tool("fc-list", "print('SyntheticSans')")
+        self.tool("pdffonts", (
+            "import sys\n"
+            "print('name                                 type              encoding         emb sub uni object ID')\n"
+            "print('------------------------------------ ----------------- ---------------- --- --- --- ---------')\n"
+            "print('ABCDEF+SyntheticSans                 TrueType          WinAnsi          yes yes yes      1  0')\n"
+            "sys.stderr.write('synthetic warning\\n')"
+        ))
         pdf = self.root / "synthetic.pdf"
         pdf.write_bytes(b"%PDF synthetic")
         p = self.run_check("--pdf", pdf)
@@ -316,11 +350,71 @@ with patch.object(check_pptx_fonts.subprocess, "run", side_effect=run_tool):
 
     def test_font_enumeration_warning_prevents_a_clean_result(self):
         self.pptx_with({"ppt/slides/slide1.xml": '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:latin typeface="SyntheticSans"/></p:sld>'})
-        self.tool("fc-list", "printf '%s\\n' 'SyntheticSans'; printf '%s\\n' 'synthetic warning' >&2")
+        self.tool("fc-list", "import sys\nprint('SyntheticSans')\nsys.stderr.buffer.write('中文警告\\n'.encode('utf-8'))")
         p = self.run_check()
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("警告", p.stderr)
         self.assertIn("待人工核查", p.stderr)
+
+    def test_windows_registry_fallback_when_fc_list_absent(self):
+        sys.path.insert(0, str(CHECKER.parent))
+        import check_pptx_fonts as cpf
+        from unittest import mock
+
+        hklm_entries = [
+            ("Microsoft YaHei & Microsoft YaHei UI (TrueType)", "msyh.ttc", 1),
+            ("Synthetic Sans Bold (TrueType)", "synbold.ttf", 1),
+        ]
+        hkcu_entries = [
+            ("Arial Black (TrueType)", "ariblk.ttf", 1),
+        ]
+
+        class FakeKey:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class FakeWinreg:
+            HKEY_LOCAL_MACHINE = object()
+            HKEY_CURRENT_USER = object()
+
+            def OpenKey(self, hive, subkey):
+                if hive is self.HKEY_LOCAL_MACHINE:
+                    return FakeKey(hklm_entries)
+                return FakeKey(hkcu_entries)
+
+            def QueryInfoKey(self, key):
+                return (0, len(key.rows), 0)
+
+            def EnumValue(self, key, index):
+                return key.rows[index]
+
+        with mock.patch.object(cpf, "_is_windows", return_value=True), \
+                mock.patch.object(cpf.subprocess, "run", side_effect=FileNotFoundError("fc-list")), \
+                mock.patch.dict(sys.modules, {"winreg": FakeWinreg()}):
+            fonts, warn = cpf.installed_fonts()
+        self.assertFalse(warn)
+        self.assertIn(cpf.normal("Microsoft YaHei"), fonts)
+        self.assertIn(cpf.normal("微软雅黑"), fonts)
+        self.assertIn(cpf.normal("Synthetic Sans"), fonts)
+        self.assertIn(cpf.normal("Arial Black"), fonts)
+        self.assertNotIn(cpf.normal("Missing Family"), fonts)
+
+        # 注册表也空时明确报错，不伪装通过
+        class EmptyWinreg(FakeWinreg):
+            def OpenKey(self, hive, subkey):
+                return FakeKey([])
+
+        with mock.patch.object(cpf, "_is_windows", return_value=True), \
+                mock.patch.object(cpf.subprocess, "run", side_effect=FileNotFoundError("fc-list")), \
+                mock.patch.dict(sys.modules, {"winreg": EmptyWinreg()}):
+            with self.assertRaises(cpf.CheckError):
+                cpf.installed_fonts()
 
 
 if __name__ == "__main__":

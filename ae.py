@@ -1187,25 +1187,77 @@ def check_orphan_servers(ctx: DoctorContext) -> CheckResult:
 
 
 def tool_fix(package: str) -> str:
-    """可选工具缺失时的安装提示：按平台给出包管理器命令。"""
+    """可选工具缺失时的安装提示：按平台给出包管理器命令或路径说明。"""
+    if _is_windows():
+        win_hints = {
+            "python3.12": "winget install Python.Python.3.12",
+            "libreoffice": "winget install TheDocumentFoundation.LibreOffice",
+            "poppler": "winget install oschwartz10612.Poppler  # add poppler bin to PATH if needed",
+            "poppler-utils": "winget install oschwartz10612.Poppler  # add poppler bin to PATH if needed",
+            "fontconfig": "Optional on Windows (system font registry is used); install fontconfig on PATH if fc-list is needed",
+        }
+        return win_hints.get(package, f"winget install {package}")
     if sys.platform == "darwin":
-        return f"brew install {package}"
+        return f"brew install --cask {package}" if package == "libreoffice" else f"brew install {package}"
     return f"sudo apt install {package}"
+
+
+def _find_pdffonts_tool() -> Optional[str]:
+    try:
+        mod = skill_module("check_pptx_fonts")
+    except ImportError:
+        return shutil.which("pdffonts")
+    found = mod.find_pdffonts()
+    return found if (shutil.which(found) or Path(found).is_file()) else None
+
+
+def _find_soffice_tool() -> Optional[str]:
+    try:
+        mod = skill_module("pptx_report")
+    except ImportError:
+        return shutil.which("soffice")
+    return mod.find_soffice()
+
+
+def _find_pdftoppm_tool() -> Optional[str]:
+    try:
+        mod = skill_module("pptx_report")
+    except ImportError:
+        return shutil.which("pdftoppm")
+    return mod.find_rasterizer()
 
 
 def check_fc_list(ctx: DoctorContext) -> CheckResult:
     if shutil.which("fc-list"):
         return CheckResult("fc-list", CATEGORY_TOOLS, LEVEL_PASS, T("doctor.fcList.ok"))
+    msg_key = "doctor.fcList.winWarn" if _is_windows() else "doctor.fcList.warn"
     return CheckResult("fc-list", CATEGORY_TOOLS, LEVEL_WARN,
-                       T("doctor.fcList.warn"), tool_fix("fontconfig"))
+                       T(msg_key), tool_fix("fontconfig"))
 
 
 def check_pdffonts(ctx: DoctorContext) -> CheckResult:
-    if shutil.which("pdffonts"):
+    if _find_pdffonts_tool():
         return CheckResult("pdffonts", CATEGORY_TOOLS, LEVEL_PASS, T("doctor.pdffonts.ok"))
-    package = "poppler" if sys.platform == "darwin" else "poppler-utils"
+    package = "poppler" if sys.platform == "darwin" or _is_windows() else "poppler-utils"
     return CheckResult("pdffonts", CATEGORY_TOOLS, LEVEL_WARN,
                        T("doctor.pdffonts.warn"), tool_fix(package))
+
+
+def check_libreoffice(ctx: DoctorContext) -> CheckResult:
+    found = _find_soffice_tool()
+    if found:
+        return CheckResult("libreoffice", CATEGORY_TOOLS, LEVEL_PASS, T("doctor.libreoffice.ok", path=found))
+    return CheckResult("libreoffice", CATEGORY_TOOLS, LEVEL_WARN,
+                       T("doctor.libreoffice.warn"), tool_fix("libreoffice"))
+
+
+def check_pdftoppm(ctx: DoctorContext) -> CheckResult:
+    found = _find_pdftoppm_tool()
+    if found:
+        return CheckResult("pdftoppm", CATEGORY_TOOLS, LEVEL_PASS, T("doctor.pdftoppm.ok", path=found))
+    package = "poppler" if sys.platform == "darwin" or _is_windows() else "poppler-utils"
+    return CheckResult("pdftoppm", CATEGORY_TOOLS, LEVEL_WARN,
+                       T("doctor.pdftoppm.warn"), tool_fix(package))
 
 
 # ── 开发环境（仅在仓库内运行时执行，见 REPO_CHECKS） ─────────────
@@ -1273,7 +1325,7 @@ def check_chrome(ctx: DoctorContext) -> CheckResult:
 # 全部检查项：doctor 按此顺序执行；后续工单在元组里追加新检查项函数
 CHECKS = (check_python, check_copy_present, check_copy_sync, check_copy_version, check_links,
           check_ledger_readable, check_ledger_stale, check_port_pool, check_orphan_servers,
-          check_fc_list, check_pdffonts)
+          check_fc_list, check_pdffonts, check_libreoffice, check_pdftoppm)
 
 # 仅在当前工作目录位于来源仓库内时运行；能定位来源仓库不等于正在仓库内运行。
 REPO_CHECKS = (check_git_hooks, check_chrome)

@@ -17,6 +17,10 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skill/annotation-everything/scripts"))
 sys.path.insert(0, str(ROOT / "fixtures/pptx"))
+os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))
+_test_user = tempfile.mkdtemp(prefix="ae-test-user-")
+os.environ.setdefault("HOME", _test_user)
+os.environ.setdefault("USERPROFILE", _test_user)
 import make_pptx as mp
 import notes as notes_cli
 import notes_store as store
@@ -171,14 +175,15 @@ class PptxEditTests(unittest.TestCase):
         self.assertEqual([p["text"] for p in notes_model["paragraphs"]], ["合成备注😀", "讲稿改后"])
         backup = Path(result["backup"])
         self.assertEqual(backup.read_bytes(), self.original)
-        self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
-        self.assertIn("batch-1/pptx-writeback", str(backup))
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
         # 快照目录逐级建并锁 0700：.snapshots、batch-N 与 writeback 层都要断言
         self.assertEqual(backup.parent.name, "pptx-writeback")
         self.assertEqual(backup.parent.parent.name, "batch-1")
         self.assertEqual(backup.parent.parent.parent.name, ".snapshots")
-        for directory in (backup.parent.parent.parent, backup.parent.parent, backup.parent):
-            self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700, str(directory))
+        if os.name != "nt":
+            for directory in (backup.parent.parent.parent, backup.parent.parent, backup.parent):
+                self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700, str(directory))
 
     def test_cross_run_replacement_keeps_run_properties(self):
         self.build()
@@ -395,7 +400,12 @@ class PptxEditTests(unittest.TestCase):
         self.assert_refused("output", lambda: self.writeback(
             ids=[self.shape_note("相同", "新", para=1)], output=output))
         link = self.root / "link.pptx"
-        link.symlink_to(output)
+        try:
+            link.symlink_to(output)
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                return
+            raise
         self.assert_refused("output", lambda: self.writeback(
             ids=[self.shape_note("相同", "新", para=1)], output=link))
 
@@ -602,6 +612,68 @@ class PptxEditTests(unittest.TestCase):
             code = pe.main(["apply", str(self.review), "--id", "missing"])
         self.assertEqual(code, 2)
         self.assertIn("不支持的语言：fr", err.getvalue())
+
+    def test_sharing_violation_on_replace_preserves_state_and_allows_safe_retry(self):
+        cjk_dir = self.root / "张伟 汇报"
+        cjk_dir.mkdir()
+        self.review = cjk_dir / "review"
+        self.review.mkdir()
+        self.source = cjk_dir / "季度 演示.pptx"
+        self.build()
+        self.manifest["sources"] = {"report": "../季度 演示.pptx"}
+        (self.review / "review.json").write_text(json.dumps(self.manifest), encoding="utf-8")
+        one = self.shape_note("相同", "新文一", para=1)
+        two = self.notes_note("第二段", "讲稿改后")
+        _doc, batch, _merged = store.handoff_submit(self.review)
+        notes_before = (self.review / "notes.json").read_bytes()
+        handoff_before = (self.review / "handoff.json").read_bytes()
+
+        err_in_use = PermissionError(13, "sharing violation")
+        err_in_use.winerror = 32
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(pe.de.os, "replace", side_effect=err_in_use), \
+                redirect_stdout(out), redirect_stderr(err):
+            code = pe.main(["apply", str(self.review), "--batch", str(batch["seq"]), "--locale", "zh-CN"])
+        self.assertEqual(code, 2)
+        self.assertIn("关闭", err.getvalue())
+        self.assertEqual(self.source.read_bytes(), self.original)
+        self.assertEqual((self.review / "notes.json").read_bytes(), notes_before)
+        self.assertEqual((self.review / "handoff.json").read_bytes(), handoff_before)
+        self.assertFalse(list(cjk_dir.glob("*.tmp")))
+        backups = list((self.review / ".snapshots").rglob("*.pptx"))
+        self.assertTrue(backups)
+        self.assertEqual(backups[0].read_bytes(), self.original)
+
+        # 模拟其中一条已在别处标记完成，关闭 PowerPoint 后重试只处理剩余项
+        store.set_status(self.review, one, "resolved", resolution="已手工处理", by="agent")
+        out2, err2 = io.StringIO(), io.StringIO()
+        with redirect_stdout(out2), redirect_stderr(err2):
+            code2 = pe.main(["apply", str(self.review), "--batch", str(batch["seq"]), "--json", "--locale", "zh-CN"])
+        self.assertEqual(code2, 0, err2.getvalue())
+        res = json.loads(out2.getvalue())
+        self.assertEqual(res["ids"], [two])
+        notes_model = pr.read(self.source)["slides"][0]["notes"]
+        self.assertEqual([p["text"] for p in notes_model["paragraphs"]], ["合成备注😀", "讲稿改后"])
+
+    def test_sharing_violation_on_source_read_and_external_edit_on_retry(self):
+        self.build()
+        nid = self.shape_note("相同", "新", para=1)
+        notes_before = (self.review / "notes.json").read_bytes()
+        err_in_use = PermissionError(13, "locked by powerpoint")
+        err_in_use.winerror = 32
+        with patch.object(Path, "read_bytes", side_effect=err_in_use), \
+                self.assertRaises(pe.EditError) as caught_lock:
+            pe.writeback(self.review, ids=[nid])
+        self.assertEqual(caught_lock.exception.code, "locked")
+        self.assertEqual(self.source.read_bytes(), self.original)
+        self.assertEqual((self.review / "notes.json").read_bytes(), notes_before)
+
+        saved_by_other = self.original + b"other-user-save"
+        self.source.write_bytes(saved_by_other)
+        with self.assertRaises(pe.EditError) as caught:
+            pe.writeback(self.review, ids=[nid])
+        self.assertEqual(caught.exception.code, "fingerprint")
+        self.assertEqual(self.source.read_bytes(), saved_by_other)
 
 
 if __name__ == "__main__":
