@@ -15,7 +15,13 @@
 
 回路：**生成对照页 → 起本地服务 → 启动等待机制 → 用户在浏览器批注、点「交给 Agent」→ 代理接收提交 → 读批注改稿（两侧同步）→ 重建 → 逐条标已处理 → 收尾回报 → 再等待下一批**。
 所有东西都在本机：服务只绑 127.0.0.1，不联网、无遥测；批注和对照页都放在用户指定的审阅目录里。唯一例外是本机的**审阅台账**（`~/.annotation-everything/`），只记审阅标识、审阅目录路径和专属端口。
-脚本在本 skill 的 `scripts/` 下，只用 Python 标准库（`python3` 即可运行）。下文 `$S` 指这个目录。协议是文件 + 命令行，不依赖某个具体代理。
+脚本在本 skill 的 `scripts/` 下，只用 Python 标准库（macOS / Linux 用 `python3`，Windows PowerShell 用 `python`）。下文 `$S` 指这个目录。协议是文件 + 命令行，不依赖某个具体代理。
+
+### Windows PowerShell 与本机工作目录说明（首期）
+
+- **PowerShell 引用与编码**：Windows PowerShell 中把含空格或中文的路径用双引号包住（如 `python "$S\build_viewer.py" --report "D:\材料 目录\报告.html" --out "C:\工作目录\审阅"`）；若控制台输出中文乱码，先执行 `$env:PYTHONUTF8 = "1"`（必要时先运行 `chcp 65001`）。跨盘符路径（例如材料在 `D:\`、审阅目录在 `C:\`）可正常生成与 `--rebuild`。
+- **同步盘与共享位置边界**：首期只支持**本机固定磁盘目录**上的活动审阅。不要直接在 OneDrive、SharePoint、iCloud、Dropbox 等同步文件夹、网络共享盘、映射盘或 `\\server\share` UNC 路径里运行审阅；本工具不承诺自动识别所有第三方同步服务。若材料位于同步盘或共享位置，请先复制到本机工作目录（例如在 PowerShell 执行 `Copy-Item "C:\Users\<用户>\OneDrive\材料\*" -Destination "D:\work\材料\" -Recurse`）再生成对照页，改稿完成后再按需手工放回。
+- **首期手动维护**：Windows 首期不执行 `update.py` 自动原地更新（`update.py auto` 仅提示手动维护、不阻断审阅）；需要升级时从来源仓库手动运行 `python ae.py install`（自定义位置加 `--target <目录>`）。
 
 ## 0. 开工前：看本机有哪些审阅
 

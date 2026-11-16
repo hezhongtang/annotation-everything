@@ -2301,8 +2301,10 @@ def list_reviews(under: Path | None, as_json: bool, locale: str | None = None) -
                 state=state, sub=sub, who=who))
         print(T("serve.msg.reviewDir", dir=r['dir']))
         if r["unattended"]:
+            notes_py = fsutil.quote_cli(str(Path(__file__).resolve().with_name("notes.py")))
+            review_arg = fsutil.quote_cli(str(r["dir"]))
             print(T("serve.msg.unattended",
-                    command=f"python3 {Path(__file__).resolve().with_name('notes.py')} wait {r['dir']}"))
+                    command=f"{fsutil.python_cli()} {notes_py} wait {review_arg}"))
         print()
     stale = [r for r in rows if r["state_id"] in ("missing", "mismatch")]
     if stale:

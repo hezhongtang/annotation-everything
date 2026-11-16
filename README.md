@@ -4,12 +4,12 @@
 
 ## Install: give this to your agent
 
-Copy this prompt to your agent to install the skill and check it. Requires Python 3.9 or later on macOS or Linux.
+Copy this prompt to your agent to install the skill and check it. Formal support currently covers Python 3.9 or later on macOS or Linux (Windows 11 native support is being rolled out incrementally and awaits full acceptance).
 
 ```text
 Install the annotation-everything skill from https://github.com/hezhongtang/annotation-everything.
-Run python3 ae.py install in the repository. Set --link for the current agent; Claude Code needs no link.
-Then run python3 ae.py doctor --json, confirm installation checks pass, and report any remaining issues.
+Run python3 ae.py install in the repository (or python ae.py install in Windows PowerShell; use --target <agent-skills-dir> if symlinks are unavailable). Set --link for the current agent; Claude Code needs no link.
+Then run python3 ae.py doctor --json (or python ae.py doctor --json on Windows), confirm installation checks pass, and report any remaining issues.
 ```
 
 The default skill copy lives at `~/.claude/skills/annotation-everything`; links let other agents use that same copy. For custom directories, updates, repairs and removal, see [Installation and maintenance](#installation-and-maintenance).
@@ -100,6 +100,24 @@ python3 $S/notes.py wait /tmp/ae-demo --locale en
 The command prints the annotations you just submitted, which is exactly what the agent receives.
 
 For Chinese material, use `fixtures/sample/report.html` and `fixtures/sample/script.md`. Keep `--locale en` to review it in English, or choose `--locale zh-CN` for a Chinese interface. Changing the source material alone does not change the interface language.
+
+<details>
+<summary><b>Windows PowerShell quick start & local-disk boundary (Phase 1 preview)</b></summary>
+
+No administrator privilege, Developer Mode, symlinks, or WSL are required for basic installation and HTML review. Use standard Windows PowerShell and quote paths containing spaces or non-ASCII characters:
+
+```powershell
+$env:PYTHONUTF8 = "1"
+$env:AE_HOME = "$env:TEMP\ae-demo-ledger"   # keep the demo review ledger isolated
+$S = "skill\annotation-everything\scripts"
+python "$S\build_viewer.py" --report "fixtures\sample\report.en.html" --script "fixtures\sample\script.en.md" --out "$env:TEMP\ae-demo" --locale en
+python "$S\serve.py" "$env:TEMP\ae-demo" --locale en
+```
+
+- **Sync and shared drives**: Active review directories must reside on a local fixed disk (different drives such as `C:\` and `D:\` are supported). Do not run active reviews directly in OneDrive, SharePoint, iCloud, Dropbox, mapped network drives, or UNC paths (`\\server\share`); the tool does not claim automatic detection of third-party sync services. Copy materials to a local folder first (e.g., `Copy-Item "C:\Users\<user>\OneDrive\Deck\*" -Destination "D:\work\deck\" -Recurse`), review locally, and copy updated files back manually.
+- **Manual upgrades**: Phase 1 Windows skips automatic in-place updates (`update.py auto` is non-blocking); upgrade manually from the source repository with `python ae.py install` (or `python ae.py install --target <dir>`).
+
+</details>
 
 **2. Prepare your own material**
 
@@ -297,7 +315,7 @@ The management command is `ae.py` at the repository root (Python standard librar
 
 ### Installation commands and maintenance options
 
-Prerequisites: Python 3.9 or later, macOS or Linux.
+Prerequisites: Python 3.9 or later; formal support currently covers macOS or Linux (Windows 11 PowerShell direct install and basic HTML review are available in staged rollout pending full acceptance).
 
 ```bash
 python3 ae.py install                            # install: copy the skill into ~/.claude/skills/ (the skill copy)
@@ -312,6 +330,17 @@ python3 ae.py doctor --locale en                 # optional: interface language 
 python3 ~/.claude/skills/annotation-everything/scripts/update.py check  # check releases now without installing
 python3 ~/.claude/skills/annotation-everything/scripts/update.py now    # check now and install a newer release
 ```
+
+On Windows PowerShell (ordinary user permissions; no admin, Developer Mode, symlinks, or WSL needed):
+
+```powershell
+$env:PYTHONUTF8 = "1"
+python ae.py install                            # install to %USERPROFILE%\.claude\skills\annotation-everything
+python ae.py install --target "D:\AgentSkills"  # or install directly into any agent skills root without symlinks
+python ae.py doctor --target "D:\AgentSkills" --json
+```
+
+If `--link` fails on Windows because the account lacks symlink privilege, no elevation is attempted and the command exits non-zero with the exact `--target <agent-skills-dir>` install command; Phase 1 Windows uses manual `python ae.py install` upgrades instead of automatic in-place updates.
 
 - **Release updates**: when an agent follows `SKILL.md`, each skill copy checks its install source's `origin` for stable version tags (`vMAJOR.MINOR.PATCH`) at most once a day, and automatically installs and announces a newer release. Prerelease tags are ignored. Offline, authentication, and source errors leave the current version usable. Local changes in the skill copy or a running review server or annotation process defer the update with a notice. Stop them and run `update.py now` to retry. For a custom installation, substitute that skill copy's path in the commands above. Set `AE_AUTO_UPDATE=0` to disable automatic checks; manual commands still work.
 - Updates replace only the skill copy: its symlinks, review ledger, review directories, and source checkout are preserved. The release checkout used for later checks, repairs, and updates normally lives in `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`; if that overlaps the copy, it lives in a separate directory beside it. Keep it while using that skill copy. To get the updater for the first time, run `ae.py install` once from a version that contains it. When upgrading an existing review, stop its old service, rebuild the review page, start the new service, and refresh the browser.

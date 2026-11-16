@@ -49,15 +49,17 @@ class AeLocaleTestCase(unittest.TestCase):
         # 真实盘点与清理边界仍由 test_ae_checks_runtime / test_host_interference 覆盖。
         self.host_bin = self.root / "host-bin"
         self.host_bin.mkdir()
-        ps = self.host_bin / "ps"
-        ps.write_text('#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  exit 0\n'
-                      'else\n  exec /bin/ps "$@"\nfi\n', encoding="utf-8")
-        ps.chmod(0o755)
+        if os.name != "nt":
+            ps = self.host_bin / "ps"
+            ps.write_text('#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  exit 0\n'
+                          'else\n  exec /bin/ps "$@"\nfi\n', encoding="utf-8")
+            ps.chmod(0o755)
 
     def env(self, **extra) -> dict:
         base = {k: v for k, v in os.environ.items()
                 if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
-        base.update({"HOME": str(self.home), "CLAUDE_SKILLS_DIR": str(self.skills),
+        base.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
+                     "CLAUDE_SKILLS_DIR": str(self.skills),
                      "AE_HOME": str(self.root / "ledger"), "PYTHONDONTWRITEBYTECODE": "1",
                      "PATH": str(self.host_bin) + os.pathsep + os.environ.get("PATH", os.defpath)})
         base.update(extra)
@@ -407,6 +409,7 @@ class CommandMessageTests(AeLocaleTestCase):
         self.assertEqual(p.returncode, 2)
         self.assertIn("拒绝删除", p.stderr)
 
+    @unittest.skipIf(os.name == "nt", "Windows 进程枚举由 #176 接入")
     def test_uninstall_refuses_running_servers_in_both_languages(self):
         """检测到 serve.py 运行时拒绝卸载；两种语言都拒绝，且都不暗示已停止。"""
         self.install()

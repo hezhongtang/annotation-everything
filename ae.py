@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import datetime
 import hashlib
@@ -349,11 +350,37 @@ def read_version(repo: Path) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _python_cli() -> str:
+    return "python" if _is_windows() else "python3"
+
+
+_PS_UNSAFE_RE = re.compile(r"[^A-Za-z0-9_./:\\-]")
+
+
+def _quote_cli(arg: str) -> str:
+    """按当前平台 shell 习惯引用命令行参数：POSIX 用 shlex.quote，Windows 用 PowerShell/cmd 兼容写法。"""
+    if not _is_windows():
+        return shlex.quote(arg)
+    if arg and not _PS_UNSAFE_RE.search(arg):
+        return arg
+    if not any(ch in arg for ch in ('"', "$", "`")):
+        return f'"{arg}"'
+    return "'" + arg.replace("'", "''") + "'"
+
+
+def _is_symlink_privilege_error(exc: OSError) -> bool:
+    return _is_windows() and (getattr(exc, "winerror", None) == 1314 or isinstance(exc, PermissionError))
+
+
 def read_commit(repo: Path) -> str:
     """读来源仓库当前提交号；不在 git 仓库里时为空字符串。"""
     try:
         done = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return done.stdout.strip() if done.returncode == 0 else ""
@@ -437,7 +464,7 @@ def create_link(name: str, directory: Path, copy_dir: Path) -> dict:
     if link.is_symlink():
         link.unlink()
     link.parent.mkdir(parents=True, exist_ok=True)
-    os.symlink(str(copy_dir.resolve()), str(link))
+    os.symlink(str(copy_dir.resolve()), str(link), target_is_directory=True)
     return {"agent": name, "path": str(link)}
 
 
@@ -492,8 +519,23 @@ def cmd_install(args) -> int:
     except CommandError:
         # 重装可以修复损坏记录；已知位置的链接仍通过扫描保留。
         previous = {"links": scan_links(dst)}
+    existed_before = dst.exists()
     copy_skill(src, dst)
-    created = [create_link(name, directory, dst) for name, directory in agents]
+    created = []
+    try:
+        for name, directory in agents:
+            created.append(create_link(name, directory, dst))
+    except OSError as exc:
+        if not _is_symlink_privilege_error(exc):
+            raise
+        for entry in created:
+            with contextlib.suppress(OSError):
+                Path(entry["path"]).unlink()
+        if not existed_before:
+            shutil.rmtree(dst, ignore_errors=True)
+        commands = join(install_fix(repo, directory) for _name, directory in agents)
+        print(T("cli.ae.install.linkPrivilege", commands=commands), file=sys.stderr)
+        return 2
     links = merged_links(previous, dst, created)
     write_record(dst, repo, links)
     print(T("cli.ae.install.done", path=dst))
@@ -546,12 +588,12 @@ def resolve_repo(record: Optional[dict]) -> Optional[Path]:
 
 def _target_flag(target: Optional[Path]) -> str:
     """修复命令里的 --target 片段：只在用户显式指定过位置时带上。"""
-    return f" --target {shlex.quote(str(target))}" if target is not None else ""
+    return f" --target {_quote_cli(str(target))}" if target is not None else ""
 
 
 def install_fix(repo: Optional[Path], target: Optional[Path] = None) -> str:
     script = repo / "ae.py" if repo else Path("ae.py")
-    return f"python3 {shlex.quote(str(script))} install{_target_flag(target)}"
+    return f"{_python_cli()} {_quote_cli(str(script))} install{_target_flag(target)}"
 
 
 def _excluded_rel(rel: Path) -> bool:
@@ -672,7 +714,7 @@ def link_fix_spec(entry: dict) -> Optional[str]:
 
 def install_link_fix(repo: Optional[Path], specs: list, target: Optional[Path] = None) -> str:
     script = repo / "ae.py" if repo else Path("ae.py")
-    return f"python3 {shlex.quote(str(script))} install --link {shlex.quote(','.join(specs))}{_target_flag(target)}"
+    return f"{_python_cli()} {_quote_cli(str(script))} install --link {_quote_cli(','.join(specs))}{_target_flag(target)}"
 
 
 def known_links(ctx: DoctorContext) -> list:
@@ -753,7 +795,7 @@ def load_ledger(ctx: DoctorContext):
 
 def repair_fix(repo: Optional[Path], *flags: str, target: Optional[Path] = None) -> str:
     script = repo / "ae.py" if repo else Path("ae.py")
-    return f"python3 {shlex.quote(str(script))} repair " + " ".join(flags) + _target_flag(target)
+    return f"{_python_cli()} {_quote_cli(str(script))} repair " + " ".join(flags) + _target_flag(target)
 
 
 def probe_port(port: int, timeout: float = 1.0):
@@ -782,7 +824,7 @@ def list_processes():
     """本机全部进程的 (pid, 命令行)；ps 不可用时返回空列表（检查项按「未发现」处理）。"""
     try:
         done = subprocess.run(["ps", "-ww", "-eo", "pid=,command="],   # -ww 不按终端宽度截断；格式须合并成一个参数
-                              capture_output=True, text=True, timeout=15)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
     except (OSError, subprocess.TimeoutExpired):
         return []
     procs = []
@@ -793,7 +835,53 @@ def list_processes():
     return procs
 
 
+def _split_windows_cmdline(cmdline: str) -> list:
+    """按 Win32 CommandLineToArgvW 规则切分命令行，保留 Windows 反斜杠路径。"""
+    tokens, current = [], []
+    in_quotes, has_token = False, False
+    i, n = 0, len(cmdline)
+    while i < n:
+        ch = cmdline[i]
+        if ch in (" ", "\t") and not in_quotes:
+            if has_token:
+                tokens.append("".join(current))
+                current, has_token = [], False
+            i += 1
+            continue
+        has_token = True
+        if ch == "\\":
+            bs = 0
+            while i < n and cmdline[i] == "\\":
+                bs += 1
+                i += 1
+            if i < n and cmdline[i] == '"':
+                current.append("\\" * (bs // 2))
+                if bs % 2 == 1:
+                    current.append('"')
+                    i += 1
+                else:
+                    in_quotes = not in_quotes
+                    i += 1
+            else:
+                current.append("\\" * bs)
+        elif ch == '"':
+            if in_quotes and i + 1 < n and cmdline[i + 1] == '"':
+                current.append('"')
+                i += 2
+            else:
+                in_quotes = not in_quotes
+                i += 1
+        else:
+            current.append(ch)
+            i += 1
+    if has_token:
+        tokens.append("".join(current))
+    return tokens
+
+
 def command_tokens(cmdline: str) -> list:
+    if _is_windows():
+        return _split_windows_cmdline(cmdline)
     try:
         return shlex.split(cmdline)
     except ValueError:
@@ -808,8 +896,10 @@ def serve_script_index(cmdline: str, pid: Optional[int] = None,
     serve.py 同样算本工具的进程，缺省只信任仓库本体与缺省位置的副本。
     """
     tokens = command_tokens(cmdline)
-    if not tokens or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?|pypy\d*",
-                                      Path(tokens[0]).name.lower()):
+    if not tokens:
+        return None
+    exe_name = tokens[0].rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    if not re.fullmatch(r"(?:python(?:\d+(?:\.\d+)*)?|pypy\d*|py)(?:\.exe)?", exe_name):
         return None
     index = 1
     while index < len(tokens):
@@ -897,7 +987,7 @@ def process_cwd(pid: int) -> Optional[str]:
     if sys.platform == "darwin":
         try:
             done = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
-                                  capture_output=True, text=True, timeout=10)
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         except (OSError, subprocess.TimeoutExpired):
             return None
         for line in done.stdout.splitlines():
@@ -925,7 +1015,7 @@ def listening_port_of(pid: int) -> Optional[int]:
             pass
     try:
         done = subprocess.run(["lsof", "-a", "-P", "-n", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         for line in done.stdout.splitlines():
             if line.startswith("n") and ":" in line:
                 port = int(line.rsplit(":", 1)[1])
@@ -988,7 +1078,7 @@ def check_ledger_readable(ctx: DoctorContext) -> CheckResult:
     if error is not None:
         home = Path(ctx.ledger_home) if ctx.ledger_home is not None else ledger_home()
         return CheckResult("ledger-readable", CATEGORY_RUNTIME, LEVEL_FAIL, error,
-                           f"python3 -m json.tool {shlex.quote(str(home / 'reviews.json'))}")
+                           f"{_python_cli()} -m json.tool {_quote_cli(str(home / 'reviews.json'))}")
     return CheckResult("ledger-readable", CATEGORY_RUNTIME, LEVEL_PASS,
                        T("doctor.ledgerReadable.ok", count=len(entries)))
 
@@ -1027,9 +1117,14 @@ def check_port_pool(ctx: DoctorContext) -> CheckResult:
     foreign = [port for port in assigned
                if (found := probe(port)) is not None and found.get("app") != APP]
     if foreign:
+        fix = (
+            "Get-NetTCPConnection -LocalPort " + ",".join(map(str, foreign))
+            if _is_windows()
+            else "lsof -nP -iTCP:" + ",".join(map(str, foreign)) + " -sTCP:LISTEN"
+        )
         return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_FAIL,
                            T("doctor.portPool.foreign", ports=join(foreign)),
-                           "lsof -nP -iTCP:" + ",".join(map(str, foreign)) + " -sTCP:LISTEN")
+                           fix)
     return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS,
                        T("doctor.portPool.ok", count=len(assigned)))
 
@@ -1120,7 +1215,7 @@ def git_config(repo: Path, key: str) -> Optional[str]:
     """读仓库的 git 配置；git 不可用或未设置时返回 None。"""
     try:
         done = subprocess.run(["git", "-C", str(repo), "config", "--get", key],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return None
     value = done.stdout.strip() if done.returncode == 0 else ""
@@ -1136,9 +1231,14 @@ def check_git_hooks(ctx: DoctorContext) -> CheckResult:
             hooks = ctx.repo / hooks
         if Path(os.path.normpath(hooks)) == Path(os.path.normpath(expected)) and expected.is_dir():
             return CheckResult("git-hooks", CATEGORY_DEV, LEVEL_PASS, T("doctor.gitHooks.ok"))
+    fix = (
+        f"git -C {_quote_cli(str(ctx.repo))} config core.hooksPath tools/git-hooks"
+        if _is_windows()
+        else f"sh {ctx.repo / 'tools' / 'setup-dev.sh'}"
+    )
     return CheckResult("git-hooks", CATEGORY_DEV, LEVEL_WARN,
                        T("doctor.gitHooks.warn"),
-                       f"sh {ctx.repo / 'tools' / 'setup-dev.sh'}")
+                       fix)
 
 
 def find_chrome() -> Optional[str]:
@@ -1294,7 +1394,7 @@ def recreate_link(link: Path, copy_dir: Path) -> None:
     if link.is_symlink():
         link.unlink()
     link.parent.mkdir(parents=True, exist_ok=True)
-    os.symlink(str(copy_dir.resolve()), str(link))
+    os.symlink(str(copy_dir.resolve()), str(link), target_is_directory=True)
 
 
 def repair_links(ctx: DoctorContext) -> tuple:
@@ -1314,7 +1414,13 @@ def repair_links(ctx: DoctorContext) -> tuple:
                            agent=entry.get("agent") or T("doctor.links.unknownAgent"),
                            path=entry["path"]))
             continue
-        recreate_link(link, ctx.skill_copy)
+        try:
+            recreate_link(link, ctx.skill_copy)
+        except OSError as exc:
+            if _is_symlink_privilege_error(exc):
+                stuck.append(T("cli.ae.install.linkPrivilege", commands=install_fix(ctx.repo, link.parent)))
+                continue
+            raise
         created.append({"agent": entry.get("agent", ""), "path": entry["path"]})
     return created, stuck
 
@@ -1434,7 +1540,8 @@ def _enable_git_hooks(repo: Optional[Path]) -> list:
         return [T("cli.ae.repair.hooksNoScript", path=script)]
     try:
         # 脚本带 bash 语法（set -o pipefail），显式用 bash 执行
-        done = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=60)
+        done = subprocess.run(["bash", str(script)], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         return [T("cli.ae.repair.hooksFailed", detail=e)]
     if done.returncode == 0:
@@ -1524,7 +1631,7 @@ def _process_stopped(pid: int) -> bool:
     """进程是否已停止（查不到，或只剩僵尸）；无法查询时不宣称已停止。"""
     try:
         done = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return False
     if done.returncode != 0:
@@ -1558,7 +1665,7 @@ def same_server_process(pid: int, command: str, extra_copy: Optional[Path] = Non
         return False
     try:
         current = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "command="],
-                                 capture_output=True, text=True, timeout=10)
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return False
     return current.returncode == 0 and server_identity(pid, current.stdout.strip(), extra_copy) == expected

@@ -4,12 +4,12 @@
 
 ## 安装：把这段交给 Agent
 
-复制下面这段给 Agent，即可安装并体检。需要 Python 3.9 及以上，支持 macOS 和 Linux。
+复制下面这段给 Agent，即可安装并体检。需要 Python 3.9 及以上；当前正式支持范围为 macOS 和 Linux（原生 Windows 11 支持正在分阶段推进，整体正式支持声明待完整验收后更新）。
 
 ```text
 请从 https://github.com/hezhongtang/annotation-everything 安装 annotation-everything 技能。
-在仓库运行 python3 ae.py install，按当前 Agent 配置 --link；Claude Code 无需链接。
-再运行 python3 ae.py doctor --json，确认安装项通过，报告仍需处理的问题。
+在仓库运行 python3 ae.py install（Windows PowerShell 用 python ae.py install；无软链接权限时改用 --target <目标技能目录>），按当前 Agent 配置 --link；Claude Code 无需链接。
+再运行 python3 ae.py doctor --json（Windows 用 python ae.py doctor --json），确认安装项通过，报告仍需处理的问题。
 ```
 
 默认技能副本位于 `~/.claude/skills/annotation-everything`，链接让其他 Agent 使用同一副本。自定义目录与更新、修复、卸载见[安装与维护](#安装与维护)。
@@ -100,6 +100,24 @@ python3 $S/notes.py wait /tmp/ae-demo
 命令会输出刚才提交的批注，这就是 Agent 收到的内容。
 
 想试英文材料，把 `--report` 换成 `fixtures/sample/report.en.html`，`--script` 换成 `fixtures/sample/script.en.md`，加 `--locale en` 即可体验英文界面；只换材料时界面语言不变，也可用英文界面审阅原来的中文材料。
+
+<details>
+<summary><b>Windows PowerShell 快速上手与本机工作目录边界（首期）</b></summary>
+
+基础安装与 HTML 审阅使用普通用户权限即可，不要求管理员、开发者模式、符号链接或 WSL。在 PowerShell 中用双引号包裹带空格或中文的路径：
+
+```powershell
+$env:PYTHONUTF8 = "1"
+$env:AE_HOME = "$env:TEMP\ae-demo-ledger"   # 试用时把审阅台账放到临时目录，不影响真实台账
+$S = "skill\annotation-everything\scripts"
+python "$S\build_viewer.py" --report "fixtures\sample\report.html" --script "fixtures\sample\script.md" --out "$env:TEMP\ae-demo"
+python "$S\serve.py" "$env:TEMP\ae-demo"
+```
+
+- **同步盘与共享位置边界**：活动审阅目录必须位于本机固定磁盘（支持材料与审阅目录分处 `C:\`、`D:\` 等不同盘符）。不要直接在 OneDrive、SharePoint、iCloud、Dropbox、映射盘或 `\\server\share` UNC 路径内审阅；本工具不承诺自动识别所有第三方同步服务。请先复制到本机工作目录（例如 `Copy-Item "C:\Users\<用户>\OneDrive\材料\*" -Destination "D:\work\材料\" -Recurse`），完成审阅后再手工放回。
+- **首期手动维护**：Windows 首期不自动原地更新（`update.py auto` 不阻断审阅）；需要升级时从来源仓库手动运行 `python ae.py install`（自定义目录加 `--target <目录>`）。
+
+</details>
 
 **2. 准备自己的材料**
 
@@ -297,7 +315,7 @@ Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lan
 
 ### 安装命令与维护选项
 
-前提：Python 3.9 及以上，macOS 或 Linux。
+前提：Python 3.9 及以上；当前正式支持范围为 macOS 或 Linux（Windows 11 PowerShell 直接安装与基础 HTML 审阅已分阶段接入，整体正式支持声明待最终验收）。
 
 ```bash
 python3 ae.py install                            # 安装：把技能复制为技能副本到 ~/.claude/skills/
@@ -312,6 +330,17 @@ python3 ae.py doctor --locale en                 # 可选：界面语言 auto、
 python3 ~/.claude/skills/annotation-everything/scripts/update.py check  # 立即检查正式版本，不安装
 python3 ~/.claude/skills/annotation-everything/scripts/update.py now    # 立即检查并安装新版
 ```
+
+Windows PowerShell 用法（普通用户权限，不要求管理员、开发者模式、符号链接或 WSL）：
+
+```powershell
+$env:PYTHONUTF8 = "1"
+python ae.py install                            # 安装到 %USERPROFILE%\.claude\skills\annotation-everything
+python ae.py install --target "D:\AgentSkills"  # 或直接安装到任意 Agent 技能目录，无需软链接
+python ae.py doctor --target "D:\AgentSkills" --json
+```
+
+若账户没有符号链接权限导致 `--link` 失败，工具不会静默提权，而是非零退出并给出对应的 `--target <Agent 技能目录>` 直接安装命令；Windows 首期不执行自动原地更新，升级请手动从来源仓库重新运行 `python ae.py install`。
 
 - **版本更新**：Agent 按 `SKILL.md` 使用技能时，每份技能副本至多每天检查一次安装来源 `origin` 的正式版本标签（`v主.次.修订`），发现更高版本后自动更新并提示；预发布标签不会自动安装。离线、认证失败、来源不可用时保留当前版本并继续审阅；技能副本有本地改动，或审阅服务、批注进程仍在运行时，先提示并推迟更新。停止后可运行 `update.py now`；自定义安装位置请把命令中的路径换成当前技能副本的路径。设置 `AE_AUTO_UPDATE=0` 可关闭自动检查，手动命令仍可使用。
 - 更新只替换技能副本，保留指向它的软链接、审阅台账与审阅目录，不修改来源仓库的检出。正式版本的本地来源通常保存在 `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`，若与技能副本重叠则存到副本旁的独立目录；这些文件供后续体检、修复和更新使用，不要在仍使用该副本时删除。首次获得更新功能仍需先用包含此功能的版本运行一次 `ae.py install`。升级已有审阅时，停止旧服务、重建对照页、启动新服务并刷新浏览器。

@@ -55,7 +55,8 @@ class AeCliTests(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
-        self.env = {**os.environ, "HOME": str(self.home), "CLAUDE_SKILLS_DIR": str(self.skills),
+        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
+                    "CLAUDE_SKILLS_DIR": str(self.skills),
                     "AE_HOME": str(self.root / "ledger"),     # 运行状态检查读台账：指向临时目录，不碰真实台账
                     "PYTHONDONTWRITEBYTECODE": "1"}
 
@@ -196,11 +197,59 @@ class AeCliTests(unittest.TestCase):
         self.assertIn("运行状态", p.stdout)
         self.assertIn("汇总", p.stdout)
 
+    def test_install_and_doctor_with_chinese_and_space_target_path(self):
+        target = self.root / "中文 用户名" / "技能 目标"
+        p = self.run_ae("install", "--target", str(target))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        copy = target / "annotation-everything"
+        self.assertTrue((copy / "SKILL.md").is_file())
+        d, doc = self.doctor_json("--target", str(target))
+        install = [r for r in doc["results"] if r["category_id"] == "install"]
+        self.assertTrue(install and all(r["status"] == "pass" for r in install), doc["results"])
+
 
 
 def _rmtree(path: Path):
     import shutil
     shutil.rmtree(path, ignore_errors=True)
+
+
+class WindowsUpdateNoticeTests(unittest.TestCase):
+    """Windows 首期不执行自动原地更新：auto 不阻断且提示手动维护，now 明确说明手动路径。"""
+
+    def test_windows_auto_update_is_non_blocking_and_points_to_manual_install(self):
+        import contextlib, io, unittest.mock
+        sys.path.insert(0, str(SKILL_SRC / "scripts"))
+        import update
+
+        for locale, needle in (("zh-CN", "手动"), ("en", "manual")):
+            out, err = io.StringIO(), io.StringIO()
+            with unittest.mock.patch.object(update, "_is_windows", return_value=True, create=True), \
+                    unittest.mock.patch("update.has_legacy_process", side_effect=AssertionError("should not run ps")), \
+                    unittest.mock.patch("update.exchange_directories", side_effect=AssertionError("should not swap")), \
+                    contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = update.main(["auto", "--locale", locale])
+            self.assertEqual(code, 0, out.getvalue() + err.getvalue())
+            self.assertEqual(err.getvalue(), "")
+            self.assertIn(needle, out.getvalue().lower() if locale == "en" else out.getvalue())
+            self.assertIn("ae.py install", out.getvalue())
+
+        out_quiet, err_quiet = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {"AE_AUTO_UPDATE": "0"}), \
+                unittest.mock.patch.object(update, "_is_windows", return_value=True, create=True), \
+                contextlib.redirect_stdout(out_quiet), contextlib.redirect_stderr(err_quiet):
+            code = update.main(["auto", "--locale", "en"])
+        self.assertEqual(code, 0)
+        self.assertEqual(out_quiet.getvalue() + err_quiet.getvalue(), "")
+
+        out_now, err_now = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.object(update, "_is_windows", return_value=True, create=True), \
+                unittest.mock.patch("update.has_legacy_process", side_effect=AssertionError("should not run ps")), \
+                contextlib.redirect_stdout(out_now), contextlib.redirect_stderr(err_now):
+            code_now = update.main(["now", "--locale", "en"])
+        self.assertEqual(code_now, 1)
+        self.assertIn("manual", err_now.getvalue().lower())
+        self.assertIn("ae.py install", err_now.getvalue())
 
 
 if __name__ == "__main__":

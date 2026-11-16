@@ -22,6 +22,7 @@ import os
 import re
 import stat
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Collection, Iterator
@@ -146,9 +147,32 @@ def _metadata_lock_fd(directory_fd: int):
 
 
 def pid_alive(pid: int) -> bool:
-    """这个 pid 的进程还在不在：发信号 0 探活；没权限（别人的进程）时按活着算。"""
+    """这个 pid 的进程还在不在：POSIX 发信号 0，Windows 查 OpenProcess + 退出码；没权限时按活着算。"""
     if pid <= 0:
         return False
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        # PROCESS_QUERY_LIMITED_INFORMATION = 0x1000, ERROR_ACCESS_DENIED = 5, STILL_ACTIVE = 259
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == 5
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == 259
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
         return True
@@ -353,9 +377,17 @@ PRUNE_METADATA_FILES = (".annotation-archived", ".agent-binding.json", ".agent-d
                         ".annotation-stop.json")
 
 
+def _temp_roots() -> tuple[Path, ...]:
+    roots = list(TEMP_ROOTS)
+    for candidate in (tempfile.gettempdir(), os.environ.get("TEMP"), os.environ.get("TMP")):
+        if candidate:
+            roots.append(Path(candidate))
+    return tuple(roots)
+
+
 def in_temp_area(directory: Path) -> bool:
     resolved = directory.resolve()
-    return any(directory.is_relative_to(root) or resolved.is_relative_to(root.resolve()) for root in TEMP_ROOTS)
+    return any(directory.is_relative_to(root) or resolved.is_relative_to(root.resolve()) for root in _temp_roots())
 
 
 class _MetadataUnsafe(Exception):

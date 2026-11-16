@@ -136,11 +136,12 @@ class DesktopIPC:
 
 
 def _read(path):
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError("private-file-required:" + path.name)
-    if info.st_size > 4 * 1024 * 1024:
-        raise ValueError("metadata-too-large")
+    fsutil.check_private_regular_file(
+        path,
+        max_bytes=4 * 1024 * 1024,
+        private_error="private-file-required:" + path.name,
+        size_error="metadata-too-large",
+    )
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("version") != SCHEMA:
         raise ValueError("unsupported-agent-metadata")

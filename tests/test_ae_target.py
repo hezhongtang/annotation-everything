@@ -57,7 +57,8 @@ class TargetCliTests(unittest.TestCase):
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
         self.target = self.root / "custom-skills"
-        self.env = {**os.environ, "HOME": str(self.home), "CLAUDE_SKILLS_DIR": str(self.skills),
+        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
+                    "CLAUDE_SKILLS_DIR": str(self.skills),
                     "CODEX_HOME": str(self.home / ".codex"),
                     "AE_HOME": str(self.root / "ledger"),     # 运行状态检查读台账：指向临时目录
                     "PYTHONDONTWRITEBYTECODE": "1"}
@@ -146,6 +147,12 @@ class TargetCliTests(unittest.TestCase):
         self.assertTrue(all(r["level"] == "通过" for r in self.install_results(doc2)), doc2["results"])
 
     def test_uninstall_removes_copy_and_links_at_target(self):
+        try:
+            probe_src = self.root / "probe-src"
+            probe_src.mkdir()
+            os.symlink(str(probe_src), str(self.root / "probe-link"), target_is_directory=True)
+        except OSError:
+            self.skipTest("当前 Windows 账户无符号链接权限；--target 直接安装无需链接")
         self.install_at_target("--link", "codex")
         codex_link = self.home / ".codex" / "skills" / SKILL
         self.assertTrue(codex_link.is_symlink(), "内置 --link 指向自定义位置的副本")
@@ -169,7 +176,7 @@ class TargetCliTests(unittest.TestCase):
 class TargetUnitTests(unittest.TestCase):
     """单元行为：副本位置解析、修复命令、--target 进入体检上下文与 serve.py 识别。"""
 
-    KEYS = ("HOME", "CLAUDE_SKILLS_DIR")
+    KEYS = ("HOME", "USERPROFILE", "CLAUDE_SKILLS_DIR")
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ae-target-unit-")
@@ -178,7 +185,8 @@ class TargetUnitTests(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self._saved = {key: os.environ.get(key) for key in self.KEYS}
-        os.environ.update({"HOME": str(self.home), "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills")})
+        os.environ.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
+                           "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills")})
 
     def tearDown(self):
         for key, value in self._saved.items():
@@ -198,16 +206,19 @@ class TargetUnitTests(unittest.TestCase):
                          self.home / "ae-target-fixture" / SKILL)
 
     def test_install_fix_appends_target_only_when_given(self):
-        self.assertEqual(ae.install_fix(None), "python3 ae.py install")
-        self.assertEqual(ae.install_fix(Path("/repo")), "python3 /repo/ae.py install")
-        self.assertEqual(ae.install_fix(Path("/repo"), Path("/dir with space")),
-                         "python3 /repo/ae.py install --target '/dir with space'")
+        py = ae._python_cli()
+        self.assertEqual(ae.install_fix(None), f"{py} ae.py install")
+        repo = Path("/repo")
+        self.assertEqual(ae.install_fix(repo), f"{py} {ae._quote_cli(str(repo / 'ae.py'))} install")
+        target = Path("/dir with space")
+        self.assertEqual(ae.install_fix(repo, target),
+                         f"{py} {ae._quote_cli(str(repo / 'ae.py'))} install --target {ae._quote_cli(str(target))}")
 
     def test_install_fix_preserves_script_and_target_shell_arguments(self):
         repo = self.root / "repo with space & 'quote'"
         target = self.root / "target with space"
-        self.assertEqual(shlex.split(ae.install_fix(repo, target)),
-                         ["python3", str(repo / "ae.py"), "install", "--target", str(target)])
+        tokens = ae.command_tokens(ae.install_fix(repo, target)) if os.name == "nt" else shlex.split(ae.install_fix(repo, target))
+        self.assertEqual(tokens, [ae._python_cli(), str(repo / "ae.py"), "install", "--target", str(target)])
 
     def test_orphan_fix_command_preserves_custom_target(self):
         target = self.root / "custom target"
@@ -216,7 +227,7 @@ class TargetUnitTests(unittest.TestCase):
         scripts.mkdir(parents=True)
         serve = scripts / "serve.py"
         serve.write_text("# 合成脚本\n", encoding="utf-8")
-        command = shlex.join(["python3", str(serve), str(self.root / "missing-review")])
+        command = subprocess.list2cmdline([sys.executable, str(serve), str(self.root / "missing-review")]) if os.name == "nt" else shlex.join(["python3", str(serve), str(self.root / "missing-review")])
         ctx = ae.DoctorContext(skill_copy=copy, target=target, repo=ROOT, record=None,
                                ledger_home=self.root / "ledger",
                                process_lister=lambda: [(424242, command)], port_probe=lambda port: None)
@@ -224,7 +235,8 @@ class TargetUnitTests(unittest.TestCase):
                 patch.object(ae, "server_port_of", return_value=None):
             result = ae.check_orphan_servers(ctx)
         self.assertEqual(result.level, ae.LEVEL_FAIL)
-        args = ae.build_parser().parse_args(shlex.split(result.fix_command)[2:])
+        tokens = ae.command_tokens(result.fix_command) if os.name == "nt" else shlex.split(result.fix_command)
+        args = ae.build_parser().parse_args(tokens[2:])
         self.assertTrue(args.stop_orphans)
         self.assertEqual(ae.resolve_copy_dir(args.target), copy)
 
@@ -255,6 +267,27 @@ class TargetUnitTests(unittest.TestCase):
         fake = [(4321, cmdline)]
         self.assertEqual(ae.running_servers(lister=lambda: fake, extra_copy=custom_scripts.parent), fake)
         self.assertEqual(ae.running_servers(lister=lambda: fake), [], "缺省不把自定义副本的 serve.py 当本工具进程")
+
+    def test_windows_fix_commands_and_exe_command_tokens(self):
+        from pathlib import PureWindowsPath
+        with patch.object(ae, "_is_windows", return_value=True, create=True):
+            fix = ae.install_fix(PureWindowsPath(r"C:\repo with space\ae"), PureWindowsPath(r"D:\中文 用户\skills"))
+            self.assertTrue(fix.startswith("python "), fix)
+            self.assertIn("--target ", fix)
+            self.assertIn(r'"D:\中文 用户\skills"', fix)
+            link_fix = ae.install_link_fix(PureWindowsPath(r"C:\repo\ae"), ["codex"], PureWindowsPath(r"D:\my dir"))
+            self.assertTrue(link_fix.startswith("python "), link_fix)
+            self.assertIn("--link codex", link_fix)
+
+            custom_scripts = self.root / "custom win" / SKILL / "scripts"
+            custom_scripts.mkdir(parents=True)
+            serve = custom_scripts / "serve.py"
+            serve.write_text("# 合成脚本\n", encoding="utf-8")
+            win_cmd = f'"C:\\Python312\\python.exe" "{serve}" "D:\\审阅 目录\\r1"'
+            tokens = ae.command_tokens(win_cmd)
+            self.assertEqual(tokens[0], r"C:\Python312\python.exe")
+            self.assertEqual(tokens[1], str(serve))
+            self.assertEqual(ae.serve_script_index(win_cmd, extra_copy=custom_scripts.parent), 1)
 
 
 if __name__ == "__main__":
