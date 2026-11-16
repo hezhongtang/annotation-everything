@@ -193,16 +193,25 @@ def _write(path: Path, doc: dict[str, Any]) -> None:
 
 
 @contextlib.contextmanager
-def _edit() -> Iterator[dict[str, Any]]:
-    _refresh_locale()
+def _edit(*, rollback: Callable[[], None] | None = None) -> Iterator[dict[str, Any]]:
     """在台账文件锁下读改写：多个 serve / build 同时分配端口也不会撞号。"""
+    _refresh_locale()
     h = _ensure_home()
     with fsutil.flocked(h / LOCK_FILE, exclusive=True):
-        doc = _read(h / LEDGER_FILE)
+        path = h / LEDGER_FILE
+        doc = _read(path)
         before = json.dumps(doc, sort_keys=True)
-        yield doc
-        if json.dumps(doc, sort_keys=True) != before:
-            _write(h / LEDGER_FILE, doc)
+        writing = False
+        try:
+            yield doc
+            if json.dumps(doc, sort_keys=True) != before:
+                writing = True
+                _write(path, doc)
+        except BaseException:
+            # 中断可能发生在原子替换之后。提交状态以锁内读到的台账为准。
+            if rollback is not None and (not writing or json.dumps(_read(path), sort_keys=True) == before):
+                rollback()
+            raise
 
 
 def load() -> dict[str, Any]:
@@ -345,8 +354,8 @@ PRUNE_METADATA_FILES = (".annotation-archived", ".agent-binding.json", ".agent-d
 
 
 def in_temp_area(directory: Path) -> bool:
-    candidates = (directory, directory.resolve())
-    return any(candidate.is_relative_to(root) for candidate in candidates for root in TEMP_ROOTS)
+    resolved = directory.resolve()
+    return any(directory.is_relative_to(root) or resolved.is_relative_to(root.resolve()) for root in TEMP_ROOTS)
 
 
 class _MetadataUnsafe(Exception):
@@ -355,14 +364,12 @@ class _MetadataUnsafe(Exception):
         self.reason = reason
 
 
-def _read_metadata_json(fd: int, name: str, *, missing_ok: bool) -> Any:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+def _read_metadata_json(fd: int, name: str, *, missing: Any) -> Any:
+    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
     try:
         raw = os.open(name, flags, dir_fd=fd)
     except FileNotFoundError:
-        if missing_ok:
-            return None
-        raise _MetadataUnsafe("identity-unconfirmed") from None
+        return missing
     except OSError:
         raise _MetadataUnsafe("identity-unconfirmed") from None
     try:
@@ -396,20 +403,18 @@ def _open_metadata_dir(directory: Path, root: Path | None) -> tuple[int, Path]:
         if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
             raise _MetadataUnsafe("directory-changed")
         return fd, confirmed
-    except Exception:
+    except BaseException:
         os.close(fd)
         raise
 
 
 def _metadata_plan(fd: int, rid: str) -> tuple[str, str | None]:
     try:
-        manifest = _read_metadata_json(fd, "review.json", missing_ok=True)
+        manifest = _read_metadata_json(fd, "review.json", missing=None)
     except _MetadataUnsafe:
         manifest = None
     try:
-        status = _read_metadata_json(fd, STATUS_FILE, missing_ok=True)
-        if status is None:
-            status = {}
+        status = _read_metadata_json(fd, STATUS_FILE, missing={})
     except _MetadataUnsafe:
         status = None
     status_valid = isinstance(status, dict) and ("pid" not in status
@@ -458,31 +463,23 @@ def _restore_metadata_file(fd: int, quarantine: str, name: str) -> None:
     source = f"{quarantine}/{name}"
     try:
         os.link(source, name, src_dir_fd=fd, dst_dir_fd=fd, follow_symlinks=False)
+    except FileNotFoundError:
+        # 尚未隔离或已经恢复的文件不需要再移动。
+        return
     except FileExistsError:
         raise OSError(f"rollback target exists; quarantine kept: {source}") from None
     os.unlink(source, dir_fd=fd)
 
 
-def _quarantine_metadata(fd: int, names: list[str], directory: Path) -> tuple[str, list[str]]:
-    if not names:
-        return "", []
+def _quarantine_metadata(item: dict[str, Any]) -> None:
+    if not item["names"]:
+        return
+    fd = item["fd"]
     quarantine = f".annotation-prune-{uuid.uuid4().hex}"
     os.mkdir(quarantine, mode=0o700, dir_fd=fd)
-    moved = []
-    try:
-        for name in names:
-            os.rename(name, f"{quarantine}/{name}", src_dir_fd=fd, dst_dir_fd=fd)
-            moved.append(name)
-    except Exception as original:
-        try:
-            for name in reversed(moved):
-                _restore_metadata_file(fd, quarantine, name)
-            os.rmdir(quarantine, dir_fd=fd)
-        except Exception as rollback_error:
-            raise LedgerError(T("ledger.err.pruneRollback",
-                                detail=f"{directory / quarantine}: {rollback_error}")) from original
-        raise
-    return quarantine, moved
+    item["quarantine"] = quarantine
+    for name in item["names"]:
+        os.rename(name, f"{quarantine}/{name}", src_dir_fd=fd, dst_dir_fd=fd)
 
 
 def _rollback_quarantines(prepared: list[dict[str, Any]]) -> None:
@@ -498,6 +495,8 @@ def _rollback_quarantines(prepared: list[dict[str, Any]]) -> None:
                 errors.append(f"{item['directory'] / quarantine / name}: {error}")
         try:
             os.rmdir(quarantine, dir_fd=fd)
+        except FileNotFoundError:
+            pass
         except OSError as error:
             errors.append(f"{item['directory'] / quarantine}: {error}")
     if errors:
@@ -545,6 +544,30 @@ def _prune_candidates(doc: dict[str, Any], *, all_stale: bool, root: Path | None
     return candidates
 
 
+def _preview_metadata_prune(
+    candidates: list[dict[str, Any]], root: Path | None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    preview, skipped = [], []
+    for row in candidates:
+        if row["state"] == "missing":
+            preview.append(row)
+            continue
+        try:
+            fd, _ = _open_metadata_dir(Path(row["dir"]), root)
+        except _MetadataUnsafe as error:
+            skipped.append({**row, "reason": error.reason})
+            continue
+        try:
+            action, reason = _metadata_plan(fd, row["reviewId"])
+        finally:
+            os.close(fd)
+        if action == "skip":
+            skipped.append({**row, "reason": reason})
+        else:
+            preview.append(row)
+    return preview, skipped
+
+
 def prune_stale(*, all_stale: bool = False, under: Path | None = None,
                 review_ids: Collection[str] | None = None, delete_metadata: bool = False,
                 dry_run: bool = False) -> dict[str, list[dict[str, Any]]]:
@@ -559,72 +582,67 @@ def prune_stale(*, all_stale: bool = False, under: Path | None = None,
     targets = set(review_ids) if review_ids is not None else None
     if dry_run:
         preview = _prune_candidates(_read(home() / LEDGER_FILE), all_stale=all_stale, root=root, targets=targets)
+        if delete_metadata:
+            preview, skipped = _preview_metadata_prune(preview, root)
         return {"candidates": preview, "removed": [], "metadataDeleted": [],
-                "metadataPreserved": [], "metadataErrors": [], "skipped": []}
+                "metadataPreserved": [], "metadataErrors": [], "skipped": skipped}
     with contextlib.ExitStack() as stack:
-        try:
-            with _edit() as doc:
-                candidates = _prune_candidates(doc, all_stale=all_stale, root=root, targets=targets)
-                for row in candidates:
-                    rid = row["reviewId"]
-                    entry = doc["reviews"].get(rid)
-                    if entry is None:
-                        skipped.append({**row, "reason": "gone"})
-                        continue
-                    directory = Path(entry["dir"])
-                    state = entry_state(rid, entry)
-                    if state == "ok" or (not all_stale and state != "missing"):
-                        skipped.append({**row, "reason": "recovered"})
-                        continue
-                    row = {"reviewId": rid, "state": state, **entry}
-                    if not delete_metadata or state == "missing":
-                        removed.append(row)
-                        continue
-                    try:
-                        fd, confirmed = _open_metadata_dir(directory, root)
-                    except _MetadataUnsafe as error:
-                        skipped.append({**row, "reason": error.reason})
-                        continue
-                    stack.callback(os.close, fd)
-                    action, reason = _metadata_plan(fd, rid)
-                    if action == "preserve":
-                        metadata_preserved.append({**row, "reason": reason})
-                        removed.append(row)
-                        continue
-                    if action == "skip":
-                        skipped.append({**row, "reason": reason})
-                        continue
-                    identity = (os.fstat(fd).st_dev, os.fstat(fd).st_ino)
+        with _edit(rollback=lambda: _rollback_quarantines(prepared)) as doc:
+            candidates = _prune_candidates(doc, all_stale=all_stale, root=root, targets=targets)
+            for row in candidates:
+                rid = row["reviewId"]
+                entry = doc["reviews"].get(rid)
+                if entry is None:
+                    skipped.append({**row, "reason": "gone"})
+                    continue
+                directory = Path(entry["dir"])
+                state = entry_state(rid, entry)
+                if state == "ok" or (not all_stale and state != "missing"):
+                    skipped.append({**row, "reason": "recovered"})
+                    continue
+                row = {"reviewId": rid, "state": state, **entry}
+                if not delete_metadata or state == "missing":
+                    removed.append(row)
+                    continue
+                try:
+                    fd, confirmed = _open_metadata_dir(directory, root)
+                except _MetadataUnsafe as error:
+                    skipped.append({**row, "reason": error.reason})
+                    continue
+                stack.callback(os.close, fd)
+                action, reason = _metadata_plan(fd, rid)
+                if action == "delete":
+                    info = os.fstat(fd)
+                    identity = (info.st_dev, info.st_ino)
                     if identity not in locked_directories:
                         stack.enter_context(_metadata_lock_fd(fd))
                         locked_directories.add(identity)
                     action, reason = _metadata_plan(fd, rid)
+                if action == "preserve":
+                    metadata_preserved.append({**row, "reason": reason})
+                    removed.append(row)
+                    continue
+                if action == "skip":
+                    skipped.append({**row, "reason": reason})
+                    continue
+                item = {"row": row, "fd": fd, "directory": confirmed,
+                        "quarantine": "", "names": _metadata_names(fd)}
+                # 先记录所有计划移动的文件，覆盖系统调用已经成功、Python 随即中断的情况。
+                prepared.append(item)
+                _quarantine_metadata(item)
+                action, reason = _metadata_plan(fd, rid)
+                if action != "delete":
+                    _rollback_quarantines([item])
+                    prepared.pop()
                     if action == "preserve":
                         metadata_preserved.append({**row, "reason": reason})
                         removed.append(row)
-                        continue
-                    if action == "skip":
+                    else:
                         skipped.append({**row, "reason": reason})
-                        continue
-                    item = {"row": row, "fd": fd, "directory": confirmed, "quarantine": "", "names": []}
-                    item["quarantine"], item["names"] = _quarantine_metadata(fd, _metadata_names(fd), confirmed)
-                    prepared.append(item)
-                    action, reason = _metadata_plan(fd, rid)
-                    if action != "delete":
-                        _rollback_quarantines([item])
-                        prepared.pop()
-                        if action == "preserve":
-                            metadata_preserved.append({**row, "reason": reason})
-                            removed.append(row)
-                        else:
-                            skipped.append({**row, "reason": reason})
-                        continue
-                    removed.append(row)
-                for row in removed:
-                    doc["reviews"].pop(row["reviewId"], None)
-        except Exception:
-            _rollback_quarantines(prepared)
-            raise
+                    continue
+                removed.append(row)
+            for row in removed:
+                doc["reviews"].pop(row["reviewId"], None)
         metadata_deleted, metadata_errors = _cleanup_quarantines(prepared)
     return {"candidates": candidates, "removed": removed, "metadataDeleted": metadata_deleted,
             "metadataPreserved": metadata_preserved, "metadataErrors": metadata_errors, "skipped": skipped}

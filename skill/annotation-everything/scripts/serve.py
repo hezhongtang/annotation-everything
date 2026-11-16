@@ -1277,8 +1277,15 @@ class Handler(BaseHTTPRequestHandler):
                     command = ["open" if sys.platform == "darwin" else "xdg-open", str(directory)]
                     child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                              stderr=subprocess.DEVNULL, start_new_session=True)
-                    threading.Thread(target=child.wait, daemon=True).start()
-            except OSError:
+                    try:
+                        exit_code = child.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        # 某些 xdg-open 处理程序会在前台继续运行，保留进程并后台回收。
+                        threading.Thread(target=child.wait, daemon=True).start()
+                        raise
+                    if exit_code != 0:
+                        raise subprocess.CalledProcessError(exit_code, command)
+            except (OSError, subprocess.SubprocessError):
                 raise Reject(500, "overview-reveal-failed", self._t("serve.err.revealFailed")) from None
             self._json(200, {"app": APP, "reviewId": target})
             return

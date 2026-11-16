@@ -342,9 +342,9 @@ JSON 与 Markdown 导出都不包含分析事件、问答、问题树或轮次�
 
 ## 失效台账清理
 
-`serve.py prune --stale [--list] [--under 目录 | --all]` 实际清理时使用一次台账排他锁，预览只读一个快照。默认只选 `/tmp/`、`/private/tmp/`、`/var/folders/` 下目录不在的条目；`--under` 选范围内全部失效条目，`--all` 选全部失效条目。`--list` 不改台账或元数据，空 `AE_HOME` 也不会在预览时创建。
+`serve.py prune --stale [--list] [--under 目录 | --all]` 实际清理时使用一次台账排他锁，预览读取台账快照。默认只选 `/tmp/`、`/private/tmp/`、`/var/folders/`（包括符号链接解析后的路径）下目录不在的条目。`--under` 选范围内全部失效条目，`--all` 选全部失效条目。`--list` 不改台账或元数据，空 `AE_HOME` 也不会在预览时创建。与 `--delete-metadata` 同用时，预览会检查当前运行状态，跳过运行中的审阅。
 
-总览首页用 `POST /api/overview/prune` 提交 `{reviewIds, allStale, deleteMetadata}`。服务端套用启动时的 `--under` 范围，在台账锁内复核每个目标。`reviewIds` 固定确认框里的目标。响应包含 `removed`、`metadataDeleted`、`metadataPreserved`、`metadataErrors` 和 `skipped`。打开目录用 `POST /api/overview/reveal` 提交 `{reviewId}`，只接受范围内目录仍存在的标识不符条目。
+总览首页用 `POST /api/overview/prune` 提交 `{reviewIds, allStale, deleteMetadata}`。服务端套用启动时的 `--under` 范围，在台账锁内复核每个目标。`reviewIds` 固定确认框里的目标。响应包含 `removed`、`metadataDeleted`、`metadataPreserved`、`metadataErrors` 和 `skipped`。打开目录用 `POST /api/overview/reveal` 提交 `{reviewId}`，只接受范围内目录仍存在的标识不符条目。系统文件管理器启动失败、返回非零退出码或超时未确认时，接口返回 `500 overview-reveal-failed`，总览提示复制完整路径并手动打开。
 
 `--delete-metadata` 必须配合 `--under` 或 `--all`。该选项和总览对应动作只删除归档、接收方绑定、投递、等待和停止状态文件，不删除审阅目录、批注或材料。目录含另一个有效 `reviewId` 时保留元数据并报告 `owned-by-other-review`；manifest 不可读、缺失或结构无效时也保留元数据。运行状态结构无效时保留元数据；有存活服务时同时跳过元数据删除和台账移除。删除前用目录文件描述符固定目标，并持有 `.annotation-metadata.lock`；manifest 和运行状态写入方使用同一把锁，最终检查、台账提交和隔离区清理都在临界区内。目标文件先移入私有隔离区再提交台账，提交前失败用 no-replace 硬链接恢复；冲突同时保留新文件和隔离区旧文件并报告路径。提交后清理失败在 `metadataErrors` 返回隔离路径。总览提供复制完整路径和打开目录的备份入口。
 
