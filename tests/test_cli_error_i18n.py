@@ -167,7 +167,8 @@ class CliErrorMatrixTests(unittest.TestCase):
     def env(self, **extra) -> dict:
         base = {k: v for k, v in os.environ.items()
                 if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
-        base.update({"HOME": str(self.home), "AE_HOME": str(self.ledger),
+        base.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
+                     "AE_HOME": str(self.ledger),
                      "PATH": str(self.bin), "PYTHONDONTWRITEBYTECODE": "1"})
         base.update(extra)
         return base
@@ -259,7 +260,8 @@ class OldSkillCopyFallbackTests(unittest.TestCase):
     def run_ae(self, *args: str):
         env = {k: v for k, v in os.environ.items()
                if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
-        env.update({"HOME": str(self.home), "AE_HOME": str(self.ledger),
+        env.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
+                    "AE_HOME": str(self.ledger),
                     "CLAUDE_SKILLS_DIR": str(self.skills),
                     "PYTHONDONTWRITEBYTECODE": "1"})
         return subprocess.run([sys.executable, str(self.outside / "ae.py"), *args],

@@ -1,7 +1,6 @@
 """技能发现的命令行测试；所有技能和审阅均为合成数据。"""
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -16,6 +15,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 FIXTURE = ROOT / "fixtures" / "sample"
+sys.path.insert(0, str(SCRIPTS))
+import fsutil  # noqa: E402
 
 
 class SkillDiscoveryTests(unittest.TestCase):
@@ -28,7 +29,8 @@ class SkillDiscoveryTests(unittest.TestCase):
         self.sources = self.root / "sources"
         self.sources.mkdir()
         self.review = self.root / "review"
-        self.env = {**os.environ, "HOME": str(self.home), "AE_HOME": str(self.root / "ledger"),
+        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
+                    "AE_HOME": str(self.root / "ledger"),
                     "CODEX_HOME": str(self.home / ".codex"), "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills")}
 
     def skill(self, folder: str, name: str, description: str):
@@ -56,7 +58,8 @@ class SkillDiscoveryTests(unittest.TestCase):
         self.assertNotIn(str(self.sources), page, "页面不包含本机扫描路径")
         self.assertNotIn("合成技能正文", page, "页面只包含名称和说明")
         state = self.review / ".skill-sources.json"
-        self.assertEqual(state.stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(state.stat().st_mode & 0o777, 0o600)
         self.assertNotIn(str(self.sources), state.read_text(encoding="utf-8"))
 
     def test_rebuild_preserves_manual_override_and_removal(self):
@@ -157,13 +160,13 @@ class SkillDiscoveryTests(unittest.TestCase):
             ["notes.py", "skills", str(self.review), "--always", "manual=讲稿"],
         ]
         with (self.review / ".notes.lock").open("r+") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            fsutil.lock_fd(lock.fileno(), exclusive=True)
             processes = [subprocess.Popen([sys.executable, str(SCRIPTS / cmd[0]), *cmd[1:]], env=self.env,
                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                          for cmd in commands]
             time.sleep(0.2)
             self.assertTrue(all(p.poll() is None for p in processes), "各操作同时等待审阅目录锁")
-            fcntl.flock(lock, fcntl.LOCK_UN)
+            fsutil.unlock_fd(lock.fileno())
         for process in processes:
             stdout, stderr = process.communicate(timeout=30)
             self.assertEqual(process.returncode, 0, stdout + stderr)
@@ -271,8 +274,13 @@ class SkillDiscoveryTests(unittest.TestCase):
 
     def test_symlink_aliases_and_cycles_do_not_duplicate_or_recurse(self):
         self.skill("writer", "writer", "文字校对")
-        (self.sources / "alias").symlink_to(self.sources / "writer", target_is_directory=True)
-        (self.sources / "cycle").symlink_to(self.sources, target_is_directory=True)
+        try:
+            (self.sources / "alias").symlink_to(self.sources / "writer", target_is_directory=True)
+            (self.sources / "cycle").symlink_to(self.sources, target_is_directory=True)
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                self.skipTest("Windows 当前账户无符号链接权限")
+            raise
         p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
                          "--skills-from", self.sources)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -345,7 +353,12 @@ sys.exit(notes.main(["skills", sys.argv[2], "--remove", "writer"]))
         other.mkdir(parents=True)
         (other / "SKILL.md").write_text("---\nname: writer\ndescription: 新位置\n---\n", encoding="utf-8")
         alias = self.root / "current-skills"
-        alias.symlink_to(self.sources, target_is_directory=True)
+        try:
+            alias.symlink_to(self.sources, target_is_directory=True)
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                self.skipTest("Windows 当前账户无符号链接权限")
+            raise
         p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
                          "--skills-from", alias)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)

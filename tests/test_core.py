@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import ast
 import base64
-import fcntl
 import hashlib
 import http.client
 import io
@@ -40,12 +39,14 @@ host_isolation.require_for_module(__name__)
 
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
 os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-test-user-")      # 技能扫描只使用合成目录
+os.environ["USERPROFILE"] = os.environ["HOME"]
 os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
 os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")
 os.environ.pop("AE_LOCALE", None)   # 界面语言由各用例显式给定，不跟随开发者的 shell
 
 import build_viewer  # noqa: E402
 import export_format as ef  # noqa: E402
+import fsutil  # noqa: E402
 import notes as notes_cli  # noqa: E402
 import notes_store as store  # noqa: E402
 import ledger  # noqa: E402
@@ -1643,7 +1644,8 @@ class BuildTests(unittest.TestCase):
         self.assertNotIn(str(self.out.resolve()), html, "对照页里不写本机路径")
         self.assertIn("外卖套餐提价 1 元", html)
         self.assertEqual(r["seconds"], 20 + 30 + 90 + 120 + 120 + 90)
-        self.assertEqual((self.out / "index.html").stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual((self.out / "index.html").stat().st_mode & 0o777, 0o600)
 
     def test_meta_csp_hash_matches_script(self):
         build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", self.out)
@@ -1807,12 +1809,34 @@ class BuildTests(unittest.TestCase):
             (tree / f).write_bytes((FIXTURE / f).read_bytes())
         build_viewer.build(tree / "report.html", tree / "script.md", tree / "v1")
         rid1 = json.loads((tree / "v1" / "review.json").read_text())["reviewId"]
-        subprocess.run(["cp", "-R", str(tree / "v1"), str(tree / "v2")], check=True)
+        shutil.copytree(tree / "v1", tree / "v2")
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             build_viewer.main(["--rebuild", str(tree / "v2")])
         m2 = json.loads((tree / "v2" / "review.json").read_text())
         self.assertNotEqual(m2["reviewId"], rid1)
         self.assertEqual(m2["reviewDir"], str((tree / "v2").resolve()))
+
+    def test_cross_drive_sources_fall_back_to_absolute_paths_and_rebuild(self):
+        src_dir = tmpdir() / "材料 目录"
+        src_dir.mkdir(parents=True)
+        report = src_dir / "中文 报告.html"
+        script = src_dir / "中文 讲稿.md"
+        report.write_bytes((FIXTURE / "report.html").read_bytes())
+        script.write_bytes((FIXTURE / "script.md").read_bytes())
+        out = tmpdir() / "审阅 输出"
+        with patch("build_viewer.os.path.relpath", side_effect=ValueError("path is on mount 'D:', start on mount 'C:'")):
+            built = build_viewer.build(report, script, out)
+        manifest = json.loads((out / "review.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["sources"], {"report": None, "script": None})
+        self.assertEqual(manifest["sourcesAbs"], {"report": str(report.resolve()), "script": str(script.resolve())})
+        resolved = build_viewer.resolve_sources(out)
+        self.assertEqual(resolved["report"], report.resolve())
+        self.assertEqual(resolved["script"], script.resolve())
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            code = build_viewer.main(["--rebuild", str(out)])
+        self.assertEqual(code, 0)
+        rebuilt = json.loads((out / "review.json").read_text(encoding="utf-8"))
+        self.assertEqual(rebuilt["reviewId"], built["reviewId"])
 
 
 def free_port() -> int:
@@ -1822,6 +1846,7 @@ def free_port() -> int:
 
 
 class ServerTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "serve.py check 的文件权限与钩子自检由 #174/#177 纳入")
     def test_self_check_passes(self):
         p = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "check"], capture_output=True, text=True, timeout=60)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -1829,7 +1854,7 @@ class ServerTests(unittest.TestCase):
 
     def test_port_fallback_status_and_reuse(self):
         d = tmpdir()
-        build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", d)
+        manifest = build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", d)
         port = free_port()
         blocker = socket.socket()
         blocker.bind(("127.0.0.1", port))
@@ -1853,7 +1878,12 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(again.returncode, 0)
             self.assertIn(f"已在运行：http://127.0.0.1:{info['port']}/", again.stdout)
         finally:
-            proc.terminate()
+            if os.name == "nt":
+                headers = {"Host": f"127.0.0.1:{info['port']}", "Origin": f"http://127.0.0.1:{info['port']}",
+                           "Content-Type": "application/json", "X-AE-Review": manifest["reviewId"]}
+                serve._req(info["port"], "POST", "/api/server/stop", headers, {})
+            else:
+                proc.terminate()
             _out, err = proc.communicate(timeout=10)
             blocker.close()
         self.assertIn("顺延", err)
@@ -1888,7 +1918,8 @@ class ServerTests(unittest.TestCase):
             srv.server_close()
         log = (d / serve.LOG_FILE).read_text()
         self.assertNotIn("<script>", log)
-        self.assertEqual((d / serve.LOG_FILE).stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual((d / serve.LOG_FILE).stat().st_mode & 0o777, 0o600)
         st = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), "status", str(d)],
                             capture_output=True, text=True, timeout=30)
         self.assertNotIn("NOTE-TO-CLAUDE", st.stdout)
@@ -2002,6 +2033,93 @@ class ServerTests(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+    def test_two_reviews_with_chinese_paths_keep_isolated_ports_notes_and_security_gates(self):
+        base = tmpdir() / "中文 用户名"
+        base.mkdir(parents=True)
+        r1 = base / "审阅 一"
+        r2 = base / "审阅 二"
+        b1 = build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", r1, name="审阅一")
+        b2 = build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", r2, name="审阅二")
+        rid1, rid2 = b1["reviewId"], b2["reviewId"]
+        self.assertNotEqual(rid1, rid2)
+        p1 = ledger.assign_port(rid1, r1, is_free=lambda _p: True)
+        p2 = ledger.assign_port(rid2, r2, is_free=lambda _p: True)
+        self.assertNotEqual(p1, p2)
+
+        srv1 = serve.ReviewServer(r1, 0, log_to_file=False)
+        srv2 = serve.ReviewServer(r2, 0, log_to_file=False)
+        t1 = threading.Thread(target=srv1.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        t2 = threading.Thread(target=srv2.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        t1.start()
+        t2.start()
+        try:
+            self.assertEqual(srv1.server_address[0], "127.0.0.1")
+            h1 = {"Host": f"127.0.0.1:{srv1.port}", "Origin": f"http://127.0.0.1:{srv1.port}",
+                  "Content-Type": "application/json", "X-AE-Review": rid1}
+            h2 = {"Host": f"127.0.0.1:{srv2.port}", "Origin": f"http://127.0.0.1:{srv2.port}",
+                  "Content-Type": "application/json", "X-AE-Review": rid2}
+
+            # 安全底线：只开放 index.html 与 /api/*，无 CORS，跨站/非 JSON 写请求拒绝
+            st, resp_h, _ = serve._req(srv1.port, "GET", "/review.json", {"Host": f"127.0.0.1:{srv1.port}"})
+            self.assertEqual(st, 404)
+            self.assertFalse(any(k.lower().startswith("access-control-") for k in resp_h))
+            st, _, _ = serve._req(srv1.port, "POST", "/api/notes", {**h1, "Origin": "http://evil.example"},
+                                  {"page": 1, "text": "x"})
+            self.assertEqual(st, 403)
+            st, _, _ = serve._req(srv1.port, "POST", "/api/notes", {**h1, "Content-Type": "text/plain"},
+                                  raw=b'{"page":1,"text":"x"}')
+            self.assertEqual(st, 415)
+
+            # 新增、编辑、删除与双审阅隔离
+            st, _, raw = serve._req(srv1.port, "POST", "/api/notes", h1, {"page": 1, "text": "第一条"})
+            self.assertEqual(st, 201)
+            nid1 = json.loads(raw)["note"]["id"]
+            st, _, raw_del = serve._req(srv1.port, "POST", "/api/notes", h1, {"page": 1, "text": "待删除"})
+            self.assertEqual(st, 201)
+            nid_del = json.loads(raw_del)["note"]["id"]
+            st, _, _ = serve._req(srv1.port, "PATCH", f"/api/notes/{nid1}", h1, {"text": "改后第一条"})
+            self.assertEqual(st, 200)
+            st, _, _ = serve._req(srv1.port, "DELETE", f"/api/notes/{nid_del}", h1, {})
+            self.assertEqual(st, 200)
+            st, _, _ = serve._req(srv2.port, "POST", "/api/notes", h2, {"page": 2, "text": "审阅二批注"})
+            self.assertEqual(st, 201)
+
+            # 导出与导入保持语义，重建与停止重启后保留批注、reviewId 与专属端口
+            json_file = base / "export.json"
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(notes_cli.main(["export", str(r1), "--format", "json", "--out", str(json_file)]), 0)
+            imported = base / "imported-review"
+            build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", imported)
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(notes_cli.main(["import", str(imported), str(json_file), "--force"]), 0)
+            self.assertEqual([n["text"] for n in store.load(imported)["notes"]], ["改后第一条"])
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(build_viewer.main(["--rebuild", str(r1)]), 0)
+            st, _, _ = serve._req(srv1.port, "POST", "/api/server/stop", h1, {})
+            self.assertEqual(st, 200)
+            t1.join(timeout=3)
+        finally:
+            srv1.shutdown()
+            srv1.server_close()
+            srv2.shutdown()
+            srv2.server_close()
+
+        restarted = serve.ReviewServer(r1, 0, log_to_file=False)
+        threading.Thread(target=restarted.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+        try:
+            st, _, raw = serve._req(restarted.port, "GET", "/api/notes", {"Host": f"127.0.0.1:{restarted.port}"})
+            self.assertEqual(st, 200)
+            doc1 = json.loads(raw)
+            self.assertEqual(doc1["reviewId"], rid1)
+            self.assertEqual([n["text"] for n in doc1["notes"]], ["改后第一条"])
+        finally:
+            restarted.shutdown()
+            restarted.server_close()
+        self.assertEqual([n["text"] for n in store.load(r2)["notes"]], ["审阅二批注"])
+        self.assertEqual(ledger.get(rid1)["port"], p1)
+        self.assertEqual(ledger.get(rid2)["port"], p2)
 
     def test_cli_and_server_share_lock(self):
         """服务开着时 CLI 标已处理，页面再写也不会覆盖掉（按操作合并，而不是整份覆盖）。"""
@@ -3760,7 +3878,8 @@ class LedgerTests(unittest.TestCase):
         rid, e = ledger.forget("bbbb")
         self.assertEqual((rid, e["port"]), (rb, 8765))
         self.assertEqual(ledger.assign_port("e" * 16, tmpdir()), 8765, "forget 之后端口才释放")
-        self.assertEqual(oct(Path(os.environ["AE_HOME"], ledger.LEDGER_FILE).stat().st_mode & 0o777), "0o600")
+        if os.name != "nt":
+            self.assertEqual(oct(Path(os.environ["AE_HOME"], ledger.LEDGER_FILE).stat().st_mode & 0o777), "0o600")
 
     def test_resolve_dir_by_prefix(self):
         d = tmpdir() / "r"
@@ -3827,6 +3946,20 @@ class LedgerTests(unittest.TestCase):
             serve.list_reviews(None, False)
         self.assertIn("目录不在", out.getvalue())
         self.assertIsNotNone(ledger.get(r["reviewId"]), "失效条目不自动删")
+
+    def test_unattended_wait_command_quotes_spaces_and_uses_windows_hint(self):
+        import fsutil
+        d = tmpdir() / "中文 审阅 目录"
+        self.build(d, name="带空格审阅")
+        store.add(d, {"page": 1, "text": "改"})
+        store.handoff_submit(d, "", by="page")
+        with patch.object(fsutil, "is_windows", return_value=True, create=True), redirect_stdout(io.StringIO()) as out:
+            serve.list_reviews(None, False)
+        text = out.getvalue()
+        self.assertIn("python ", text)
+        self.assertIn(f'"{d.resolve()}"', text)
+        html = (d / "index.html").read_text(encoding="utf-8")
+        self.assertIn(r"$HOME\\.claude\\skills\\annotation-everything\\scripts\\serve.py", html)
 
     def test_wait_leaves_and_removes_marker(self):
         d = tmpdir() / "r"
@@ -4714,9 +4847,11 @@ class BuildErrorContractTests(unittest.TestCase):
 
 def try_exclusive(path: Path) -> bool:
     """试着独占锁住 path（不等待）：拿得到返回 True，被任何锁挡着返回 False。用完即释放。"""
-    fd = os.open(path, os.O_RDWR)
+    flags = os.O_RDWR | getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fsutil.lock_fd(fd, exclusive=True, nonblocking=True)
+        fsutil.unlock_fd(fd)
         return True
     except BlockingIOError:
         return False
@@ -4724,8 +4859,17 @@ def try_exclusive(path: Path) -> bool:
         os.close(fd)
 
 
+def _skip_if_no_symlink(case: unittest.TestCase, link_path: Path, target: Path, *, is_dir: bool = False) -> None:
+    try:
+        link_path.symlink_to(target, target_is_directory=is_dir)
+    except OSError as exc:
+        if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+            case.skipTest("Windows 当前账户无符号链接权限")
+        raise
+
+
 class FileLockTests(unittest.TestCase):
-    """「打开锁文件、flock、释放」五个调用点的对外行为：加锁、非阻塞失败、释放、锁文件是符号链接时。"""
+    """「打开锁文件、加锁、释放」五个调用点的对外行为：加锁、非阻塞失败、释放、锁文件是符号链接时。"""
 
     def setUp(self):
         self._home = os.environ["AE_HOME"]
@@ -4738,7 +4882,8 @@ class FileLockTests(unittest.TestCase):
         d = tmpdir()
         store.add(d, {"page": 1, "text": "锁"})
         lock = d / store.LOCK_FILE
-        self.assertEqual(oct(lock.stat().st_mode & 0o777), "0o600", "锁文件只允许本人读写")
+        if os.name != "nt":
+            self.assertEqual(oct(lock.stat().st_mode & 0o777), "0o600", "锁文件只允许本人读写")
         with store.locked(d):
             self.assertFalse(try_exclusive(lock), "持锁期间别人拿不到这把锁")
         self.assertTrue(try_exclusive(lock), "退出后释放")
@@ -4752,7 +4897,7 @@ class FileLockTests(unittest.TestCase):
         d = tmpdir()
         target = tmpdir() / "lock-target"
         target.write_text("", encoding="utf-8")
-        (d / store.LOCK_FILE).symlink_to(target)
+        _skip_if_no_symlink(self, d / store.LOCK_FILE, target)
         with store.locked(d):
             self.assertFalse(try_exclusive(target), "符号链接被跟随：锁落在目标文件上")
 
@@ -4783,7 +4928,7 @@ class FileLockTests(unittest.TestCase):
         path = tmpdir() / ".annotation-everything-update.lock"
         target = tmpdir() / "lock-target"
         target.write_text("", encoding="utf-8")
-        path.symlink_to(target)
+        _skip_if_no_symlink(self, path, target)
         original = ledger.update_lock_path
         ledger.update_lock_path = lambda: path
         try:
@@ -4797,15 +4942,17 @@ class FileLockTests(unittest.TestCase):
     def test_ledger_lock_is_exclusive_and_released(self):
         ledger.register("a" * 16, tmpdir())
         lock = Path(os.environ["AE_HOME"]) / ledger.LOCK_FILE
-        self.assertEqual(oct(lock.stat().st_mode & 0o777), "0o600")
+        if os.name != "nt":
+            self.assertEqual(oct(lock.stat().st_mode & 0o777), "0o600")
         self.assertTrue(try_exclusive(lock), "退出后释放")
         held, release, done = threading.Event(), threading.Event(), threading.Event()
 
         def holder():
-            fd = os.open(lock, os.O_RDWR)
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            fd = os.open(lock, os.O_RDWR | getattr(os, "O_BINARY", 0))
+            fsutil.lock_fd(fd, exclusive=True)
             held.set()
             release.wait(10)
+            fsutil.unlock_fd(fd)
             os.close(fd)
 
         def writer():
@@ -4826,7 +4973,7 @@ class FileLockTests(unittest.TestCase):
         home.mkdir(parents=True, exist_ok=True)
         target = tmpdir() / "lock-target"
         target.write_text("", encoding="utf-8")
-        (home / ledger.LOCK_FILE).symlink_to(target)
+        _skip_if_no_symlink(self, home / ledger.LOCK_FILE, target)
         ledger.register("c" * 16, tmpdir())
         self.assertIn("c" * 16, ledger.entries(), "符号链接被跟随：登记照常完成")
 
@@ -4834,7 +4981,8 @@ class FileLockTests(unittest.TestCase):
         d = tmpdir()
         lock = d / wakeup.DISPATCH_LOCK
         with wakeup.dispatch_lock(d):
-            self.assertEqual(oct(lock.stat().st_mode & 0o777), "0o600")
+            if os.name != "nt":
+                self.assertEqual(oct(lock.stat().st_mode & 0o777), "0o600")
             self.assertFalse(try_exclusive(lock), "投递期间别人拿不到这把锁")
         self.assertTrue(try_exclusive(lock), "退出后释放")
 
@@ -4842,7 +4990,7 @@ class FileLockTests(unittest.TestCase):
         d = tmpdir()
         target = tmpdir() / "lock-target"
         target.write_text("", encoding="utf-8")
-        (d / wakeup.DISPATCH_LOCK).symlink_to(target)
+        _skip_if_no_symlink(self, d / wakeup.DISPATCH_LOCK, target)
         with wakeup.dispatch_lock(d):
             self.assertFalse(try_exclusive(target), "符号链接被跟随：锁落在目标文件上")
 
@@ -4892,10 +5040,44 @@ class ServiceStateTests(unittest.TestCase):
         p = subprocess.Popen([sys.executable, "-c", "pass"])
         p.wait()
         self.assertFalse(ledger.pid_alive(p.pid), "已回收的 pid 不在")
-        with patch("os.kill", side_effect=PermissionError(1, "operation not permitted")):
-            self.assertTrue(ledger.pid_alive(4242), "EPERM：进程存在，只是属于别的用户")
-        with patch("os.kill", side_effect=ProcessLookupError(3, "no such process")):
-            self.assertFalse(ledger.pid_alive(4242), "ESRCH：进程不在")
+        if os.name != "nt":
+            with patch("os.kill", side_effect=PermissionError(1, "operation not permitted")):
+                self.assertTrue(ledger.pid_alive(4242), "EPERM：进程存在，只是属于别的用户")
+            with patch("os.kill", side_effect=ProcessLookupError(3, "no such process")):
+                self.assertFalse(ledger.pid_alive(4242), "ESRCH：进程不在")
+
+    def test_pid_alive_windows_contract_and_temp_roots(self):
+        import ctypes
+        self.assertTrue(ledger.in_temp_area(Path(tempfile.gettempdir()) / "ae-synth-review"))
+        with patch("tempfile.gettempdir", return_value=str(tmpdir())):
+            synthetic_tmp = Path(tempfile.gettempdir())
+            self.assertTrue(ledger.in_temp_area(synthetic_tmp / "r1"))
+
+        fake_codes = iter([259, 0])
+        fake_errors = iter([5, 87])
+
+        class FakeKernel32:
+            def __init__(self, handles):
+                it = iter(handles)
+                self.closed = []
+                self.OpenProcess = unittest.mock.MagicMock(side_effect=lambda *_a: next(it))
+
+                def get_exit_code(_handle, out_ptr):
+                    out_ptr._obj.value = next(fake_codes)
+                    return 1
+
+                self.GetExitCodeProcess = unittest.mock.MagicMock(side_effect=get_exit_code)
+                self.CloseHandle = unittest.mock.MagicMock(side_effect=lambda h: self.closed.append(h) or 1)
+
+        fake_k32 = FakeKernel32([101, 102, 0, 0])
+        with patch("ledger.os.name", "nt"), \
+                patch.object(ctypes, "WinDLL", return_value=fake_k32, create=True), \
+                patch.object(ctypes, "get_last_error", side_effect=lambda: next(fake_errors), create=True):
+            self.assertTrue(ledger.pid_alive(1001), "STILL_ACTIVE (259) -> alive")
+            self.assertFalse(ledger.pid_alive(1002), "exited (0) -> dead")
+            self.assertTrue(ledger.pid_alive(1003), "ERROR_ACCESS_DENIED (5) -> alive")
+            self.assertFalse(ledger.pid_alive(1004), "ERROR_INVALID_PARAMETER (87) -> dead")
+        self.assertEqual(fake_k32.closed, [101, 102])
 
 
 class CspPolicyTests(unittest.TestCase):
@@ -5311,6 +5493,88 @@ class WaitPollReadsTests(unittest.TestCase):
         self.assertIn("agent-binding-changed", err)
         self.assertLess(elapsed, 7, "一个轮询周期内发现绑定没了")
         self.assertEqual(list(review.glob(ledger.WAIT_PREFIX + "*")), [], "报错退出也删掉标记")
+
+
+class FsutilTests(unittest.TestCase):
+    """公共文件锁、原子替换重试与私有文件校验的跨平台契约。"""
+
+    def test_atomic_write_retries_transient_permission_error_and_cleans_temp_on_failure(self):
+        import fsutil
+        d = tmpdir()
+        target = d / "notes.json"
+        target.write_text('{"old": true}\n', encoding="utf-8")
+        real_replace = os.replace
+        calls = {"count": 0}
+
+        def flaky_replace(src, dst):
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise PermissionError(13, "sharing violation")
+            return real_replace(src, dst)
+
+        with patch("fsutil.os.name", "nt"), patch("fsutil.os.replace", side_effect=flaky_replace):
+            fsutil.atomic_write(target, '{"new": true}\n', prefix=".notes-")
+        self.assertEqual(calls["count"], 3)
+        self.assertEqual(target.read_text(encoding="utf-8"), '{"new": true}\n')
+        self.assertEqual([p.name for p in d.iterdir() if p.suffix == ".tmp"], [], "重试成功后不留临时文件")
+
+        with patch("fsutil.os.name", "nt"), \
+                patch("fsutil.os.replace", side_effect=PermissionError(13, "still locked")), \
+                patch("fsutil.time.sleep", return_value=None):
+            with self.assertRaises(PermissionError):
+                fsutil.atomic_write(target, '{"broken": true}\n', prefix=".notes-")
+        self.assertEqual(target.read_text(encoding="utf-8"), '{"new": true}\n', "持久占用不覆盖旧文件内容")
+        self.assertEqual([p.name for p in d.iterdir() if p.suffix == ".tmp"], [], "失败时清理临时文件")
+
+    def test_check_private_regular_file_enforces_identity_across_platforms(self):
+        import fsutil
+        d = tmpdir()
+        regular = d / "state.json"
+        regular.write_text('{"ok": true}\n', encoding="utf-8")
+        os.chmod(regular, 0o600)
+        info = fsutil.check_private_regular_file(regular, max_bytes=1024, error_prefix="state")
+        self.assertEqual(info.st_size, regular.stat().st_size)
+
+        with self.assertRaises(ValueError):
+            fsutil.check_private_regular_file(regular, max_bytes=4, error_prefix="state")
+
+        if os.name != "nt":
+            os.chmod(regular, 0o644)
+            with self.assertRaises(ValueError):
+                fsutil.check_private_regular_file(regular, max_bytes=1024, error_prefix="state")
+            os.chmod(regular, 0o600)
+
+        # 模拟 Windows：NTFS 合成权限位包含 0o066，常规文件应放行，重解析点（符号链接）仍应拒绝
+        fake_win_stat = os.stat_result((0o100666, 1, 1, 1, 0, 0, 12, 0, 0, 0))
+        with patch("fsutil.os.name", "nt"), \
+                patch.object(Path, "lstat", return_value=fake_win_stat):
+            checked = fsutil.check_private_regular_file(regular, max_bytes=1024, error_prefix="state")
+            self.assertEqual(checked.st_size, 12)
+
+        class FakeReparseStat:
+            st_mode = 0o100666
+            st_size = 12
+            st_file_attributes = 0x0400  # FILE_ATTRIBUTE_REPARSE_POINT
+
+        with patch("fsutil.os.name", "nt"), \
+                patch.object(Path, "lstat", return_value=FakeReparseStat()):
+            with self.assertRaises(ValueError):
+                fsutil.check_private_regular_file(regular, max_bytes=1024, error_prefix="state")
+
+    def test_notes_module_imports_without_fcntl(self):
+        probe = (
+            "import builtins, sys\n"
+            "real_import = builtins.__import__\n"
+            "def no_fcntl(name, *a, **kw):\n"
+            "    if name == 'fcntl': raise ModuleNotFoundError('No module named fcntl')\n"
+            "    return real_import(name, *a, **kw)\n"
+            "builtins.__import__ = no_fcntl\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "import notes\n"
+        )
+        p = subprocess.run([sys.executable, "-c", probe, str(SCRIPTS)],
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
 
 
 if __name__ == "__main__":

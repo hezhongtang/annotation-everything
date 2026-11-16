@@ -916,12 +916,22 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
     write_private(out / "index.html", page_html)
     rr, rs = report.resolve(), (script.resolve() if script else None)
+    out_resolved = out.resolve()
+
+    def _rel_or_none(target: Path | None) -> str | None:
+        if target is None:
+            return None
+        try:
+            return os.path.relpath(target, out_resolved)
+        except ValueError:
+            return None
+
     manifest = {
-        "app": APP, "kind": "deck", "reviewId": rid, "reviewDir": str(out.resolve()), "title": final_title, "name": review_name,
+        "app": APP, "kind": "deck", "reviewId": rid, "reviewDir": str(out_resolved), "title": final_title, "name": review_name,
         "namespace": ns,
         "builtAt": datetime.now().astimezone().isoformat(timespec="seconds"),
-        # 相对审阅目录的路径优先：整棵目录树被移动或复制后仍指向同一处的源文件
-        "sources": {"report": os.path.relpath(rr, out.resolve()), "script": os.path.relpath(rs, out.resolve()) if rs else None},
+        # 相对审阅目录的路径优先：整棵目录树被移动或复制后仍指向同一处的源文件；Windows 跨盘符回退 sourcesAbs
+        "sources": {"report": _rel_or_none(rr), "script": _rel_or_none(rs)},
         "sourcesAbs": {"report": str(rr), "script": str(rs) if rs else None},
         "build": {"title": title, "name": (name or "").strip() or None, "sections": sections_arg, "noSections": no_sections, "lenient": lenient,
                   "assetRoot": str(asset_root.resolve()) if asset_root else None,

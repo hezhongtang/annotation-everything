@@ -19,6 +19,12 @@ Choose `--locale en`, `zh-CN`, or `auto` explicitly when requested. The page's s
 
 CLI commands accept `--locale` and `AE_LOCALE`. An explicit option wins, then the environment, then the review setting for review-specific commands. Unconfigured calls remain Chinese. Only `auto` follows the system language. The repository's `ae.py` has no review default. Use `notes.py export --lang en` to select the export wrapper language. Commands and raw JSON values stay unchanged. Inspect `--help` for the command's arguments.
 
+### Windows PowerShell and local-disk boundary (Phase 1)
+
+- **PowerShell quoting and encoding**: On Windows PowerShell, invoke scripts with `python` and wrap paths containing spaces or non-ASCII characters in double quotes (for example, `python "$S\build_viewer.py" --report "D:\Materials\report.html" --out "C:\Work\my-review"`). Set `$env:PYTHONUTF8 = "1"` (and `chcp 65001` if needed) if console text is garbled. Cross-drive builds (such as source material on `D:\` and review directory on `C:\`) work and rebuild cleanly.
+- **Sync and shared drive boundary**: Phase 1 supports active reviews only on **local fixed disks**. Do not run active reviews directly inside OneDrive, SharePoint, iCloud, Dropbox, mapped network drives, or `\\server\share` UNC paths (the tool does not promise automatic detection of every third-party sync service). Copy the material to a local working folder first (for example, `Copy-Item "C:\Users\<user>\OneDrive\Deck\*" -Destination "D:\work\deck\" -Recurse`), run `build_viewer.py` there, and copy finalized files back manually.
+- **Manual upgrades in Phase 1**: `update.py auto` does not perform automatic in-place replacement on Windows and never blocks review; upgrade manually from the source repository with `python ae.py install` (or `--target <dir>` for a custom skills directory).
+
 ### Use the review overview in the browser
 
 To enter from a specific review, start its service with `python3 "$S/serve.py" <review-id>` and choose "Review overview" on its review page or open `/#overview` at its address. Follow [Start the overview home](#start-the-overview-home) to open the standalone overview directly.

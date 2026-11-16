@@ -64,11 +64,16 @@ def version(value):
     return tuple(int(part) for part in match.groups()) if match else None
 
 
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
 def git(repo: Path, *args: str, timeout: int = 15) -> str:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     try:
         result = subprocess.run(["git", "-C", str(repo), *args], stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, timeout=timeout, env=env)
+                                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                timeout=timeout, env=env)
     except (OSError, subprocess.TimeoutExpired):
         raise UpdateError("cli.update.network") from None
     if result.returncode:
@@ -338,6 +343,12 @@ def main(argv=None) -> int:
     copy = Path(__file__).resolve().parent.parent
     if args.mode == "auto" and os.environ.get("AE_AUTO_UPDATE") == "0":
         return 0
+    if _is_windows() and args.mode in ("auto", "now"):
+        if args.mode == "auto":
+            print(translate("cli.update.windowsManual"))
+            return 0
+        print(translate("cli.update.windowsManual"), file=sys.stderr)
+        return 1
     try:
         record = read_record(copy)
         repo = Path(record["repo"])

@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
 import json
 import os
 import re
@@ -42,6 +41,7 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import docx_review  # noqa: E402
 import export_format as ef  # noqa: E402
+import fsutil  # noqa: E402
 import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
@@ -63,7 +63,7 @@ def _inherited_update_lock(value: str | None) -> bool:
         current = ledger.update_lock_path().stat()
         if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
             return False
-        fcntl.flock(fd, fcntl.LOCK_SH)
+        fsutil.lock_fd(fd, exclusive=False)
         return True
     except (OSError, ValueError):
         return False

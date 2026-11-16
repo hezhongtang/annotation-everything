@@ -21,12 +21,14 @@ MAX_PAGES = 1024
 def registered_pages(directory: Path, review_id: str) -> dict[str, tuple[str, str]]:
     path = directory / REGISTRY
     try:
-        info = path.lstat()
+        fsutil.check_private_regular_file(
+            path,
+            max_bytes=256 * 1024,
+            private_error="invalid-save-pages",
+            size_error="invalid-save-pages",
+        )
     except FileNotFoundError:
         return {}
-    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-            or info.st_mode & 0o077 or info.st_size > 256 * 1024):
-        raise ValueError("invalid-save-pages")
     value = json.loads(path.read_text(encoding="utf-8"))
     if (not isinstance(value, dict) or not isinstance(value.get("reviewId"), str)
             or not ledger.RID.fullmatch(value["reviewId"])):
