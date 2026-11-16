@@ -726,7 +726,7 @@ HOST = "127.0.0.1"
 # serve.py 的这些命令行选项各带一个值，解析目录参数时要连值一起跳过
 SERVE_OPTIONS_WITH_VALUE = ("--port", "--claim-port", "--on-handoff", "--locale")
 # 不起审阅服务的 serve.py 子命令；overview 起总览首页宿主（无审阅目录），由 serve_overview_home_cmdline 单独识别
-SERVE_MAINTENANCE_COMMANDS = ("check", "status", "stop", "stop-status", "list", "forget", "overview")
+SERVE_MAINTENANCE_COMMANDS = ("check", "status", "stop", "stop-status", "list", "forget", "prune", "overview")
 
 
 def skill_ledger_module():

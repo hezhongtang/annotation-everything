@@ -363,7 +363,11 @@ body.overview-mode>header,body.overview-mode>#archiveBanner,body.overview-mode>#
 .overview-archive-toggle input{margin:0;accent-color:var(--ae-accent)}
 .overview-body{width:100%;max-width:1240px;margin:0 auto;padding:var(--ae-gap-24);display:grid;grid-template-columns:340px minmax(0,1fr);gap:var(--ae-gap-22);align-items:start}
 .overview-list{border:1px solid var(--ae-line);border-radius:var(--ae-radius-lg);overflow:hidden;background:var(--ae-panel)}
-.overview-group h2{margin:0;background:var(--ae-qa);border-bottom:1px solid var(--ae-line);padding:var(--ae-gap-10) var(--ae-gap-14);font-size:var(--ae-small);font-weight:600;color:var(--ae-mut)}
+.overview-group h2{margin:0;background:var(--ae-qa);border-bottom:1px solid var(--ae-line);padding:var(--ae-gap-10) var(--ae-gap-14);font-size:var(--ae-small);font-weight:600;color:var(--ae-mut);display:flex;align-items:center;gap:var(--ae-gap-7);flex-wrap:wrap}
+.overview-group-heading{flex:1 1 90px}
+.overview-prune-actions{display:flex;gap:var(--ae-gap-5);flex-wrap:wrap}
+#overview .overview-prune-actions button{padding:var(--ae-gap-3) var(--ae-gap-6);font-size:var(--ae-micro);background:var(--ae-panel)}
+#overview .overview-prune-actions [data-overview-prune="metadata"]{color:var(--ae-warning);border-color:var(--ae-danger-line)}
 #overview .overview-row{display:block;width:100%;border:0;border-radius:0;border-bottom:1px solid var(--ae-line);padding:13px var(--ae-gap-14);text-align:left;background:var(--ae-panel)}
 #overview .overview-row:last-child{border-bottom:0}
 #overview .overview-row:hover{background:var(--ae-bg)}
@@ -3387,7 +3391,7 @@ addEventListener("hashchange",analysisRoute);
 setInterval(()=>{if(!document.hidden)loadAnalyses()},4000);
 
 // ---------- 审阅总览（同一个 index.html 的 #overview 视图） ----------
-let overviewData=null,overviewSelected=null,overviewRequest=0,overviewLoading=false;
+let overviewData=null,overviewSelected=null,overviewRequest=0,overviewLoading=false,overviewPruneBusy=false;
 const overviewStarting=new Set(),overviewStartFailures=new Map(),overviewStartNotes=new Map();
 const overviewStopping=new Set(),overviewStopResults=new Map();
 const OVERVIEW_BATCH_KEY="ae."+(OVERVIEW_HOME?.id||RID)+".overview-stop-batch";
@@ -3686,6 +3690,45 @@ function overviewReceiverText(row){
   if(inner==="idle")return tMsg("viewer.overview.receiver.idle",who||{harness:"",session:""});
   return tMsg("viewer.overview.receiver.bound");
 }
+function overviewTempStale(row){
+  return row.defaultPruneEligible===true;
+}
+function overviewPruneActions(group){
+  if(!OVERVIEW_HOME||!hasFeature(overviewData,"overview-prune"))return "";
+  const temp=group.filter(overviewTempStale).length,mismatch=group.filter(row=>row.state==="mismatch").length;
+  const button=(kind,count,enabled)=>`<button type="button" data-overview-prune="${kind}" ${overviewPruneBusy||!enabled?"disabled":""}>${escH(tMsg("viewer.overview.prune."+kind,{count}))}</button>`;
+  return `<span class="overview-prune-actions">${button("temp",temp,temp)}${button("all",group.length,group.length)}${button("metadata",group.length,mismatch)}</span>`;
+}
+async function pruneOverview(kind){
+  const invalid=(overviewData?.reviews||[]).filter(row=>overviewState(row)==="invalid");
+  const rows=kind==="temp"?invalid.filter(overviewTempStale):invalid;
+  if(overviewPruneBusy||!["temp","all","metadata"].includes(kind)||!rows.length||
+     (kind==="metadata"&&!invalid.some(row=>row.state==="mismatch")))return;
+  const message=tMsg("viewer.overview.prune.confirm."+kind,{count:rows.length});
+  if(!confirm(message))return;
+  overviewPruneBusy=true;renderOverview();
+  try{
+    const result=await api("POST","/api/overview/prune",{reviewIds:rows.map(row=>row.reviewId),
+      allStale:kind!=="temp",deleteMetadata:kind==="metadata"});
+    if(!Array.isArray(result.removed))throw new Error("overview-prune-format");
+    let feedback=tMsg("viewer.overview.prune.done",{count:result.removed.length});
+    if(result.metadataDeleted?.length)feedback+=" "+tMsg("viewer.overview.prune.metadataDone",{count:result.metadataDeleted.length});
+    const owned=(result.metadataPreserved||[]).filter(row=>row.reason==="owned-by-other-review");
+    const unconfirmed=(result.metadataPreserved||[]).filter(row=>row.reason!=="owned-by-other-review");
+    if(owned.length)feedback+=" "+tMsg("viewer.overview.prune.metadataPreserved",{count:owned.length});
+    if(unconfirmed.length)feedback+=" "+tMsg("viewer.overview.prune.metadataProtected",{count:unconfirmed.length});
+    if(result.skipped?.length)feedback+=" "+tMsg("viewer.overview.prune.skipped",{count:result.skipped.length});
+    if(result.metadataErrors?.length)feedback+=" "+tMsg("viewer.overview.prune.metadataErrors",
+      {count:result.metadataErrors.length,path:result.metadataErrors[0].quarantine||""});
+    toast(feedback,result.metadataErrors?.length?12000:result.metadataPreserved?.length?8000:5000);
+    await loadOverview();
+  }catch(error){toast(tMsg("viewer.overview.prune.error"),6000)}
+  finally{overviewPruneBusy=false;renderOverview()}
+}
+async function revealOverviewDirectory(row){
+  try{await api("POST","/api/overview/reveal",{reviewId:row.reviewId})}
+  catch(error){toast(tMsg("viewer.overview.revealError"),5000)}
+}
 function renderOverview(){
   if(!overviewShown())return;
   renderOverviewBatch();
@@ -3698,7 +3741,7 @@ function renderOverview(){
     const group=rows.filter(row=>overviewState(row)===state).sort((a,b)=>(b.lastActivity||0)-(a.lastActivity||0));
     if(!group.length)return "";
     if(state==="archived"&&!$("overviewShowArchived").checked)return `<section class="overview-archived-hidden" data-overview-group="archived"><span id="overviewHiddenArchived">${escH(tMsg("viewer.overview.hiddenArchived",{count:group.length}))}</span><button id="overviewExpandArchived">${escH(tMsg("viewer.overview.expandArchived"))}</button></section>`;
-    return `<section class="overview-group" data-overview-group="${state}"><h2>${escH(tMsg("viewer.overview."+state))}<span class="overview-count">${group.length}</span></h2>`+group.map(row=>
+    return `<section class="overview-group" data-overview-group="${state}"><h2><span class="overview-group-heading">${escH(tMsg("viewer.overview."+state))}<span class="overview-count">${group.length}</span></span>${state==="invalid"?overviewPruneActions(group):""}</h2>`+group.map(row=>
       `<button class="overview-row" data-review-id="${escH(row.reviewId)}" aria-pressed="${row.reviewId===overviewSelected}"><span class="overview-row-title"><span class="overview-dot ${state}" aria-hidden="true"></span><span>${escH(row.name||row.reviewId.slice(0,8))}</span>${row.current?`<span class="overview-current">${escH(tMsg("viewer.overview.current"))}</span>`:""}</span><span class="overview-row-meta"><span>${escH(overviewTime(row.lastActivity))}</span><span>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}</span><span>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</span>${overviewStopStatus(row)?.state==="incomplete"?`<span>${escH(tMsg("viewer.overview.stopState.incomplete"))}</span>`:""}</span></button>`).join("")+"</section>";
   }).join("")||`<p class="overview-message">${escH(tMsg("viewer.overview.empty"))}</p>`;
   const expand=$("overviewExpandArchived");if(expand)expand.onclick=()=>{$("overviewShowArchived").checked=true;renderOverview()};
@@ -3713,6 +3756,8 @@ function renderOverview(){
     :!invalid&&stopped?`<button id="overviewStart" class="overview-open" ${starting?"disabled":""}>${escH(tMsg(starting?"viewer.overview.starting":"viewer.overview.start"))}</button>`
     :!invalid&&url?`<a class="overview-open" href="${escH(url)}" target="_blank" rel="noopener noreferrer">${escH(tMsg("viewer.overview.open"))}</a>`:"";
   const forget=invalid&&typeof row.forgetCommand==="string"?`<code class="overview-command">${escH(row.forgetCommand)}</code><button id="overviewForgetCopy">${escH(tMsg("viewer.overview.copyCommand"))}</button>`:"";
+  const inspect=invalid&&OVERVIEW_HOME&&typeof row.directory==="string"?
+    `<button id="overviewCopyPath">${escH(tMsg("viewer.overview.copyPath"))}</button>${row.state==="mismatch"?`<button id="overviewReveal">${escH(tMsg("viewer.overview.reveal"))}</button>`:""}`:"";
   const summary=typeof row.summary==="string"&&row.summary.trim()?`<span lang="">${escH(row.summary)}</span>`
     :`<span class="overview-empty-summary">${escH(tMsg("viewer.overview.noSummary"))}</span>${typeof row.coverTitle==="string"&&row.coverTitle?` <span lang="">${escH(row.coverTitle)}</span>`:""}`;
   const purpose=typeof row.purpose==="string"?row.purpose:"",audience=typeof row.audience==="string"?row.audience:"";
@@ -3730,8 +3775,10 @@ function renderOverview(){
     ${metadata}
     <dl><dt>${escH(tMsg("viewer.overview.status"))}</dt><dd>${status}</dd><dt>${escH(tMsg("viewer.overview.receiverLabel"))}</dt><dd>${escH(overviewReceiverText(row))}</dd><dt>${escH(tMsg("viewer.overview.submissions"))}</dt><dd>${escH(tMsg("viewer.overview.pending",{count:row.pending||0}))}<br>${escH(tMsg("viewer.overview.review",{count:row.review||0}))}</dd><dt>${escH(tMsg("viewer.overview.activity"))}</dt><dd>${escH(overviewTime(row.lastActivity))}</dd><dt>${escH(tMsg("viewer.overview.port"))}</dt><dd>${escH(row.port||"—")}${row.running&&row.running!==row.port?" · "+escH(tMsg("viewer.overview.actualPort",{port:row.running})):""}</dd></dl>
     ${typeof row.waitCommand==="string"&&row.waitCommand?`<div class="overview-wait"><code class="overview-command">${escH(row.waitCommand)}</code><button id="overviewWaitCopy">${escH(tMsg("viewer.overview.copyWait"))}</button><span class="overview-hint">${escH(tMsg("viewer.overview.waitHint"))}</span></div>`:""}
-    <div class="overview-actions">${invalid?forget:action+archive+stopAction}</div>${stopUpgrade}${startFailure?`<p id="overviewStartError" class="overview-message" role="alert">${escH(tMsg(startFailure))}</p>`:""}${overviewStartNotes.get(row.reviewId)?`<p id="overviewStartNote" class="overview-message" role="status">${escH(tMsg(overviewStartNotes.get(row.reviewId)))}</p>`:""}`;
+    <div class="overview-actions">${invalid?forget+inspect:action+archive+stopAction}</div>${stopUpgrade}${startFailure?`<p id="overviewStartError" class="overview-message" role="alert">${escH(tMsg(startFailure))}</p>`:""}${overviewStartNotes.get(row.reviewId)?`<p id="overviewStartNote" class="overview-message" role="status">${escH(tMsg(overviewStartNotes.get(row.reviewId)))}</p>`:""}`;
   const copy=$("overviewForgetCopy");if(copy)copy.onclick=async()=>{await copyText(row.forgetCommand);toast(tMsg("viewer.overview.copied"))};
+  const copyPath=$("overviewCopyPath");if(copyPath)copyPath.onclick=async()=>{await copyText(row.directory);toast(tMsg("viewer.overview.pathCopied"))};
+  const reveal=$("overviewReveal");if(reveal)reveal.onclick=()=>revealOverviewDirectory(row);
   const waitCopy=$("overviewWaitCopy");if(waitCopy)waitCopy.onclick=async()=>{await copyText(row.waitCommand);toast(tMsg("viewer.overview.copied"))};
   const archiveButton=$("overviewArchive");if(archiveButton)archiveButton.onclick=()=>archiveReview(row.reviewId,!row.archived);
   const start=$("overviewStart");if(start)start.onclick=()=>startOverview(row);
@@ -3838,7 +3885,7 @@ $("overviewBatchRetry").onclick=()=>{if(!$("overviewBatchRetry").disabled)void r
 $("overviewShowArchived").onchange=renderOverview;
 $("archiveUnarchive").onclick=$("overviewUnarchive").onclick=()=>archiveReview(RID,false);
 $("overviewScope").onchange=()=>{overviewData=null;overviewSelected=null;renderOverview();loadOverview()};
-$("overviewList").onclick=event=>{const row=event.target.closest("[data-review-id]");if(row){overviewSelected=row.dataset.reviewId;renderOverview();const selected=$("overviewList").querySelector('[aria-pressed="true"]');if(selected)selected.focus({preventScroll:true})}};
+$("overviewList").onclick=event=>{const prune=event.target.closest("[data-overview-prune]");if(prune){void pruneOverview(prune.dataset.overviewPrune);return}const row=event.target.closest("[data-review-id]");if(row){overviewSelected=row.dataset.reviewId;renderOverview();const selected=$("overviewList").querySelector('[aria-pressed="true"]');if(selected)selected.focus({preventScroll:true})}};
 addEventListener("hashchange",overviewRoute);
 setInterval(()=>{if(overviewShown()&&!document.hidden&&!overviewLoading)loadOverview()},4000);
 

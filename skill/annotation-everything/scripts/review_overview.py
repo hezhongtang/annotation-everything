@@ -176,6 +176,8 @@ def snapshot(review_dir: Path | None, review_id: str | None, scope: str,
         rows.append({
             "reviewId": rid, "name": source["name"] or directory.name,
             "path": display_path(directory, workspace), "state": state,
+            "directory": str(directory) if state in ("missing", "mismatch") else None,
+            "defaultPruneEligible": state == "missing" and ledger.in_temp_area(Path(entry["dir"])),
             "archived": source["archived"],
             "port": source["port"], "running": running,
             "stop": stop, "stopWork": work,
