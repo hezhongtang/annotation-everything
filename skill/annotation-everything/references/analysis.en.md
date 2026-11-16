@@ -2,11 +2,11 @@
 
 Follow [Shared safety and protocol](protocol.md) first. Analysis uses the review's receiving-session binding and a separate queue. The reviewer starts an analysis; the agent opens the topic and asks follow-up questions. Analysis does not revise the report directly.
 
-Here, `$S` is this skill's `scripts` directory and `$R` is the current review directory. The reviewer can start from an annotation, a page, or a blank focus question. An analysis without a source annotation does not create a placeholder annotation. To suggest analysis of an open annotation, use `notes.py suggest-analysis "$R" NOTE_ID --reason "Reason"`; the reviewer decides whether to start it.
+Here, `$S` is this skill's `scripts` directory and `$R` is the current review directory (invoke with `python "$S\notes.py"` in Windows PowerShell or `python3 "$S/notes.py"` on POSIX). The reviewer can start from an annotation, a page, or a blank focus question. An analysis without a source annotation does not create a placeholder annotation. To suggest analysis of an open annotation, use `notes.py suggest-analysis "$R" NOTE_ID --reason "Reason"`; the reviewer decides whether to start it.
 
 ## Receive and read
 
-When the host supplies completion notifications, use `python3 "$S/notes.py" wait "$R" --events analysis --locale en`. Without the explicit option, a waiter receives revision batches only. Both queues follow submission order, with one item in progress at a time. An exact claim returns 3 when an earlier item is at the head; finish that item first instead of bypassing it.
+When the host supplies completion notifications and keeps background waiters alive across turns, use `notes.py wait "$R" --events analysis --locale en`; otherwise choose bounded waiting, `claim` polling, or `--on-handoff` per [Agent mechanisms](agent-mechanisms.en.md) and tell the reviewer when to keep the session running or return to chat. Without the explicit option, a waiter receives revision batches only. Both queues follow submission order, with one item in progress at a time. An exact claim returns 3 when an earlier item is at the head; finish that item first instead of bypassing it.
 
 On a desktop event, run the supplied `wakeup.py ack ...` command first, then its matching claim command. Analysis uses a review-wide round number; revision uses a batch sequence. Keep them distinct:
 
@@ -49,7 +49,7 @@ An analysis round does not run annotation `resolve` / `done`, edit the upstream 
 
 When a revision batch requests a full check, read all analyses' effective current-line conclusions with `python3 "$S/notes.py" analysis-check "$R" --json`. This is read-only and works without an open round. Compare the report and speaker notes, then list four categories for confirmation: changed-conclusion annotations, resolved annotations with invalid bases, report contradictions with current conclusions, and contradictions between analyses. This analysis-related check only lists items for review; do not replace annotation text or revert resolved statuses yourself.
 
-With a saved desktop binding, leave the service running and finish the current turn, awaiting the next event. With a verified host completion-notification mechanism, start another waiter with `--events analysis`. A running process or successful claim does not prove chat receipt.
+With a saved, verified event binding on a supported platform, leave the service running and finish the current turn, awaiting the next event. With a verified host completion-notification mechanism and persistent background survival, start another waiter with `--events analysis`; otherwise ask the user to keep the session open or return to chat after submitting their next round. A running process, exit 0, or successful claim does not prove chat receipt.
 
 Each writeback records a checkpoint. The reviewer seals, forks, switches lines or closes the analysis. Forking inherits existing identities; returning to a line restores its latest state. Refutation and verified facts are shared across lines, while assumption confirmation belongs to each line. Do not write to a closed analysis; reopening queues a new request. Preserve the event log when an analysis is closed.
 

@@ -30,7 +30,6 @@ import contextlib
 import json
 import os
 import re
-import shlex
 import signal
 import sys
 import time
@@ -1492,16 +1491,7 @@ def _is_pptx(src: Path) -> bool:
 
 def _write_private_bytes(path: Path, data: bytes) -> None:
     """二进制版 write_private：同目录临时文件（mkstemp 出来就是 0600）+ os.replace，diff 不会读到写了一半的快照。"""
-    import tempfile
-    fd, tmp = tempfile.mkstemp(prefix="." + path.name + "-", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(tmp)
-        raise
+    fsutil.atomic_write_bytes(path, data, prefix="." + path.name + "-")
 
 
 def _parts(kind: str, text: str) -> list[tuple[str, int, str]]:
@@ -1788,7 +1778,7 @@ def notify_analysis(d: Path, state: dict[str, Any]) -> None:
 def analysis_check_text(context: dict[str, Any], d: Path, lang: str | None = None) -> str:
     """无活动轮次也可读取的结论清单；仅供核对，不代替审阅人确认。"""
     t = cli_text(lang)
-    command = shlex.join(["python3", str(Path(__file__).resolve()), "analysis-check", str(d), "--json"])
+    command = fsutil.join_cli([fsutil.python_cli(), str(Path(__file__).resolve()), "analysis-check", str(d), "--json"])
     out = [t("cli.analysis.protect.fullCheck", command=command)]
     for item in context["checks"]:
         out.append(t("cli.analysis.protect.check." + item["kind"]))
@@ -1865,10 +1855,13 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     except OSError:
         mark = None
 
-    def _stop(*_a: Any) -> None:   # 后台任务被杀（SIGTERM / SIGHUP）也要走 finally 删标记
+    def _stop(*_a: Any) -> None:   # 后台任务被杀（SIGTERM / SIGHUP / SIGBREAK）也要走 finally 删标记
         raise KeyboardInterrupt
     old_handlers = {}
-    for sig in (signal.SIGTERM, signal.SIGHUP):
+    for sig_name in ("SIGTERM", "SIGHUP", "SIGBREAK"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
         with contextlib.suppress(ValueError, OSError):   # 不在主线程时设不了，靠 pid 存活判断兜底
             old_handlers[sig] = signal.signal(sig, _stop)
     # 停止状态参与每次签名检查；claim 时绑定与 review.json 也在完整重读时校验。

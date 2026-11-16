@@ -6,16 +6,26 @@ Read this page before configuring a receiver or changing its harness or session.
 
 ## Configure the receiving session
 
-Run `python3 $S/wakeup.py status REVIEW_DIR` first. Check that any existing binding belongs to this session; never copy another session's saved ID and use it as your own.
+Run `wakeup.py status REVIEW_DIR` first (`python3 "$S/wakeup.py"` on POSIX, `python "$S\wakeup.py"` in Windows PowerShell). Check that any existing binding belongs to this session; never copy another session's saved ID and use it as your own.
 
-- **Codex desktop events**: follow [Agent mechanisms](agent-mechanisms.en.md#codex-desktop-review-scoped-event-delivery). Run `wakeup.py bind` using the current `CODEX_THREAD_ID` or the confirmed current chat ID. Keep event delivery and actual chat acknowledgement; do not start a claiming `wait`.
+- **Event delivery on verified platforms**: only when the host supports a verified local event IPC (macOS Codex desktop; unavailable in Windows Phase 1, where `bind` returns `desktop-ipc-unavailable`), follow [Agent mechanisms](agent-mechanisms.en.md#event-delivery-flow-verified-platforms-only). Run `wakeup.py bind` using the current `CODEX_THREAD_ID` or the confirmed current chat ID. Keep event delivery and actual chat acknowledgement; do not start a claiming `wait`.
 - **Waiting or active claiming**: use the current harness's stable session ID. If the host provides none, generate one random ID for this session and keep it for subsequent operations; use a new ID in a new session. A service PID, `--by` signature or temporary waiter process is not a session identity.
 
 ```bash
-python3 $S/wakeup.py bind REVIEW_DIR --adapter wait --harness 'Claude Code' --session CURRENT_SESSION_ID
-python3 $S/serve.py REVIEW_DIR
-python3 $S/notes.py wait REVIEW_DIR --harness 'Claude Code' --session CURRENT_SESSION_ID
+# POSIX (bash / zsh)
+python3 "$S/wakeup.py" bind REVIEW_DIR --adapter wait --harness "<HARNESS>" --session CURRENT_SESSION_ID
+python3 "$S/serve.py" REVIEW_DIR
+python3 "$S/notes.py" wait REVIEW_DIR --events analysis --harness "<HARNESS>" --session CURRENT_SESSION_ID
 ```
+
+```powershell
+# Windows PowerShell
+python "$S\wakeup.py" bind REVIEW_DIR --adapter wait --harness "<HARNESS>" --session CURRENT_SESSION_ID
+python "$S\serve.py" REVIEW_DIR
+python "$S\notes.py" wait REVIEW_DIR --events analysis --harness "<HARNESS>" --session CURRENT_SESSION_ID
+```
+
+If the host reclaims background processes across turns/sandboxes or lacks completion notifications, ask the user to run `serve.py` in a persistent terminal and explain clearly when they must keep the session open or return to chat to trigger `notes.py claim` or a bounded `wait --timeout 30`; never promise automatic wake-up of an arbitrary idle or closed chat.
 
 `claim`, `resolve`, `reopen`, `review` and `done` also accept `--harness` / `--session`. The current process's `AE_HARNESS` / `AE_SESSION_ID` can supply them instead; explicit arguments take precedence. When neither is provided, only a known `CODEX_THREAD_ID` identifies a Codex session. Missing or mismatched identity returns exit code 2 without claiming or updating the batch. The receiving session coordinates permitted workers under the existing protocol. A separate session can take over review after drafting finishes and an explicit transfer is made.
 

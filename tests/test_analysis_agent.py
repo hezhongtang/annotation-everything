@@ -4,7 +4,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import shlex
 import socket
 import struct
 import subprocess
@@ -27,6 +26,7 @@ import host_isolation
 host_isolation.require_for_module(__name__)
 
 import analysis_store  # noqa: E402
+import fsutil  # noqa: E402
 import notes as notes_cli  # noqa: E402
 import notes_store as store  # noqa: E402
 
@@ -36,6 +36,7 @@ import serve  # noqa: E402
 import wakeup  # noqa: E402
 
 THREAD = "11111111-1111-4111-8111-111111111111"
+_HAS_UNIX_DESKTOP_IPC = os.name != "nt" and hasattr(socket, "AF_UNIX") and hasattr(os, "getuid")
 
 
 class Desktop:
@@ -119,7 +120,13 @@ class AnalysisAgentTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="ae-analysis-agent-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.env = patch.dict(os.environ, {"AE_HOME": str(self.root / "ledger"), "CODEX_THREAD_ID": THREAD})
+        home_dir = str(self.root / "home")
+        self.env = patch.dict(os.environ, {
+            "AE_HOME": str(self.root / "ledger"),
+            "HOME": home_dir,
+            "USERPROFILE": home_dir,
+            "CODEX_THREAD_ID": THREAD,
+        })
         self.env.start()
         self.addCleanup(self.env.stop)
         self.review = self.root / "review"
@@ -127,15 +134,23 @@ class AnalysisAgentTests(unittest.TestCase):
         (self.review / "review.json").write_text(
             json.dumps({"reviewId": "synthetic-analysis", "reviewDir": str(self.review)}))
         (self.review / "index.html").write_text("<!doctype html><title>Synthetic</title>")
+        self.desktop = None
+
+    def make_desktop(self):
+        if not _HAS_UNIX_DESKTOP_IPC:
+            self.skipTest("Unix domain socket desktop IPC is POSIX-only")
         self.desktop = Desktop(self.root / "desktop.sock")
         self.addCleanup(self.desktop.close)
+        return self.desktop
 
     def add_note(self, text="第 3 页「增长主要来自新客」站得住吗", page=3):
         _doc, note = store.add(self.review, {"page": page, "text": text})
         return note
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_analysis_event_registered_with_dedicated_prompt_and_dedup(self):
         """analysis 是登记的投递事件：专门提示（不改稿、不重建对照页、默认只查原始材料），同轮次不重复投递。"""
+        self.make_desktop()
         wakeup.bind(self.review, THREAD, self.desktop.path)
         note = self.add_note()
         _state, round_no = analysis_store.start(self.review, note["id"])
@@ -160,7 +175,9 @@ class AnalysisAgentTests(unittest.TestCase):
         skipped = wakeup.deliver(self.review, "analysis", round_no)
         self.assertEqual(skipped["state"], "skipped")
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_acknowledge_accepts_analysis_events(self):
+        self.make_desktop()
         wakeup.bind(self.review, THREAD, self.desktop.path)
         note = self.add_note()
         _state, round_no = analysis_store.start(self.review, note["id"])
@@ -272,8 +289,10 @@ class AnalysisAgentTests(unittest.TestCase):
         self.assertCountEqual(results, ["handoff", "agent-busy"])
         self.assertEqual(len(analysis_store.queue(self.review)), 1)
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_plain_claim_and_delivered_batch_command_cannot_skip_an_earlier_round(self):
         """普通命令和真实桌面提示里的批次命令都不能越过更早交出的分析。"""
+        self.make_desktop()
         wakeup.bind(self.review, THREAD, self.desktop.path)
         state, _round_no = analysis_store.start(self.review, self.add_note()["id"])
         self.add_note(text="后交的改稿意见")
@@ -284,7 +303,7 @@ class AnalysisAgentTests(unittest.TestCase):
         self.assertEqual(code, 3, output.getvalue())
         prefix = "Then claim this exact batch: "
         line = next(line for line in self.desktop.prompt().splitlines() if line.startswith(prefix))
-        command = shlex.split(line[len(prefix):])
+        command = fsutil.split_cli(line[len(prefix):])
         received = subprocess.run(command, capture_output=True, text=True, timeout=10)
         self.assertEqual(received.returncode, 3, received.stdout + received.stderr)
         self.assertFalse(json.loads(received.stdout)["claimed"])
@@ -500,6 +519,16 @@ class AnalysisAgentTests(unittest.TestCase):
         code, _, _raw = serve._req(server.port, "POST", "/api/analysis/start", same, {"noteId": note["id"]})
         self.assertEqual(code, 200)
         self.assertEqual(store.load(self.review)["notes"][0]["status"], "held")
+
+    def test_analysis_check_text_uses_windows_cli_quoting(self):
+        spaced = self.root / "My Analysis Review"
+        spaced.mkdir()
+        (spaced / "review.json").write_text(json.dumps({"reviewId": "synthetic-analysis-win"}), encoding="utf-8")
+        with patch("fsutil.is_windows", return_value=True):
+            text = notes_cli.analysis_check_text({"checks": [], "analyses": []}, spaced, lang="en")
+        self.assertNotIn("python3 ", text)
+        self.assertIn("python ", text)
+        self.assertIn(f'"{spaced}"', text)
 
 
 if __name__ == "__main__":

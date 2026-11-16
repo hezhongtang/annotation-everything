@@ -4,16 +4,20 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill/annotation-everything/scripts"
 sys.path.insert(0, str(SCRIPTS))
+import ledger
+import notes as notes_cli
 import notes_store as store
 
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
@@ -31,7 +35,9 @@ class ReceiverCliTests(unittest.TestCase):
         (self.review / "review.json").write_text(json.dumps({"reviewId": "1" * 16}), encoding="utf-8")
         self.env = {k: v for k, v in os.environ.items()
                     if k not in ("CODEX_THREAD_ID", "CODEX_SESSION_ID", "CLAUDECODE", "AE_HARNESS", "AE_SESSION_ID", "AE_LOCALE")}
-        self.env.update(AE_HOME=str(self.root / "ledger"), PYTHONDONTWRITEBYTECODE="1")
+        home_dir = str(self.root / "home")
+        self.env.update(AE_HOME=str(self.root / "ledger"), HOME=home_dir, USERPROFILE=home_dir,
+                        PYTHONDONTWRITEBYTECODE="1")
 
     def cli(self, script, *args, **env):
         return subprocess.run([sys.executable, str(SCRIPTS / script), *args],
@@ -247,6 +253,52 @@ class ReceiverCliTests(unittest.TestCase):
         self.assertEqual(self.cli("notes.py", "claim", str(self.review), **owner).returncode, 2)
         self.assertEqual(self.cli("notes.py", "claim", str(self.review), AE_HARNESS="Codex", AE_SESSION_ID="session-b").returncode, 0)
         self.assertEqual(self.cli("wakeup.py", "unbind", str(self.review)).returncode, 2)
+
+    def test_wait_without_sighup_handles_sigbreak_and_cleans_marker(self):
+        self.bind()
+        if os.name == "nt":
+            process = subprocess.Popen(
+                [sys.executable, str(SCRIPTS / "notes.py"), "wait", str(self.review),
+                 "--timeout", "10", "--interval", ".1", "--harness", "Claude Code", "--session", "session-a"],
+                env=self.env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+            try:
+                mark = ledger.wait_file(self.review, process.pid)
+                deadline = time.monotonic() + 5
+                while not mark.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(mark.exists(), "wait marker was not created")
+                process.send_signal(signal.CTRL_BREAK_EVENT)
+                out, err = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 130, out + err)
+                self.assertFalse(mark.exists(), "SIGBREAK cancellation must remove wait marker")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
+            return
+
+        # Simulate Windows signal module (no SIGHUP, has SIGBREAK) in-process.
+        fake_sig = signal.SIGUSR1
+        timer = threading.Timer(0.15, lambda: os.kill(os.getpid(), fake_sig))
+        timer.start()
+        self.addCleanup(timer.cancel)
+        orig_sighup = getattr(signal, "SIGHUP", None)
+        with patch.object(notes_cli.signal, "SIGBREAK", fake_sig, create=True):
+            if orig_sighup is not None:
+                delattr(notes_cli.signal, "SIGHUP")
+            try:
+                code = notes_cli.wait(self.review, 5.0, 0.05, claim=True, by="agent",
+                                      harness="Claude Code", session="session-a")
+            finally:
+                if orig_sighup is not None:
+                    notes_cli.signal.SIGHUP = orig_sighup
+        self.assertEqual(code, 130)
+        self.assertEqual(list(self.review.glob(ledger.WAIT_PREFIX + "*")), [])
 
 
 if __name__ == "__main__":

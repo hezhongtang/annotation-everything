@@ -60,6 +60,9 @@ def tmpdir() -> Path:
     return Path(tempfile.mkdtemp())
 
 
+_HAS_UNIX_DESKTOP_IPC = os.name != "nt" and hasattr(socket, "AF_UNIX") and hasattr(os, "getuid")
+
+
 # 文件打开计数（规格 #89 为服务请求快照指定的唯一新接缝）：审计钩子装上就不能移除，
 # 整个进程只装一次，靠开关只在测量窗口内计数；只统计审阅目录下的文件，按文件名归类。
 _OPEN_COUNTS = {"on": False, "root": None, "files": {}}
@@ -1551,19 +1554,38 @@ class ReviewRound3Tests(unittest.TestCase):
     def test_hook_path_resolution_and_no_rerun_on_merge(self):
         d = tmpdir()
         (d / "index.html").write_text("x")
-        script = d / "hook.sh"
         log = d / "hook.log"
-        script.write_text(f"#!/bin/sh\ncat >> {log}\necho >> {log}\n", encoding="utf-8")
-        script.chmod(0o700)
+        if os.name == "nt":
+            runner = d / "hook_runner.py"
+            runner.write_text(
+                "import pathlib, sys\n"
+                "pathlib.Path(sys.argv[1]).open('a', encoding='utf-8').write(sys.stdin.read() + '\\n')\n",
+                encoding="utf-8",
+            )
+            script = d / "hook.cmd"
+            script.write_text(f'@echo off\n"{sys.executable}" "{runner}" "{log}"\n', encoding="utf-8")
+            rel_cmd = ".\\hook.cmd"
+        else:
+            script = d / "hook.sh"
+            script.write_text(f"#!/bin/sh\ncat >> {log}\necho >> {log}\n", encoding="utf-8")
+            script.chmod(0o700)
+            rel_cmd = "./hook.sh"
         old = os.getcwd()
         os.chdir(d)
         try:
-            argv = serve.parse_hook("./hook.sh")
+            argv = serve.parse_hook(rel_cmd)
         finally:
             os.chdir(old)
         self.assertEqual(argv[0], str(script.resolve()))
         with self.assertRaises(SystemExit):
             serve.parse_hook('"unclosed')
+        win_cmd = r'"C:\Program Files\Hook Dir\run.cmd" "C:\My Reviews\r1" --flag'
+        with patch("fsutil.is_windows", return_value=True), \
+                patch("serve.shutil.which", return_value=r"C:\Program Files\Hook Dir\run.cmd"), \
+                patch("serve.os.path.abspath", side_effect=lambda p: p), \
+                patch("serve.os.path.isdir", return_value=False):
+            parsed_win = serve.parse_hook(win_cmd)
+        self.assertEqual(parsed_win, [r"C:\Program Files\Hook Dir\run.cmd", r"C:\My Reviews\r1", "--flag"])
         srv = serve.ReviewServer(d, 0, log_to_file=False, on_handoff=argv, hook_cwd=str(d))
         threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         try:
@@ -1589,6 +1611,32 @@ class ReviewRound3Tests(unittest.TestCase):
         self.assertEqual(payload["userMessage"], "m0")
         self.assertIn("全量勾稽", payload["message"], "旧版钩子只读 message 时也能看到勾稽要求")
 
+    def test_hook_exec_windows_branch_waits_passes_stdin_and_propagates_exit_code(self):
+        d = tmpdir()
+        out = d / "hook-out.txt"
+        child_code = (
+            "import pathlib, sys, time\n"
+            "data = sys.stdin.read()\n"
+            "time.sleep(0.08)\n"
+            "pathlib.Path(sys.argv[1]).write_text(data, encoding='utf-8')\n"
+            "raise SystemExit(7)\n"
+        )
+        wrapper = (
+            "import os\n"
+            "os.name = 'nt'\n"
+            "os.execvp = lambda *a, **kw: (_ for _ in ()).throw(AssertionError('must not execvp on Windows'))\n"
+            + serve._HOOK_EXEC
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-I", "-S", "-c", wrapper, sys.executable, "-c", child_code, str(out)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        proc.communicate(b'1{"seq":42}', timeout=10)
+        self.assertEqual(proc.returncode, 7)
+        self.assertEqual(out.read_text(encoding="utf-8"), '{"seq":42}')
+
     def test_numeric_keys_not_remapped_and_move_keeps_id(self):
         tree = tmpdir()
         body = "".join(f'<section class="page" data-page="{k}"><h2>第{k}页</h2></section>' for k in (1, 2, 3))
@@ -1605,7 +1653,7 @@ class ReviewRound3Tests(unittest.TestCase):
         self.assertEqual((n["page"], n.get("orphan"), n.get("key")), (2, None, None), "页码生成的键不参与校正，也不误标")
         rid = json.loads((out / "review.json").read_text())["reviewId"]
         moved = tmpdir() / "moved"
-        subprocess.run(["mv", str(tree), str(moved)], check=True)
+        shutil.move(str(tree), str(moved))
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             build_viewer.main(["--rebuild", str(moved / "review")])
         self.assertEqual(json.loads((moved / "review" / "review.json").read_text())["reviewId"], rid, "整个目录移走不算复制，标识不变")
@@ -3212,7 +3260,7 @@ class OverviewHandoffTests(unittest.TestCase):
     def hook_argv(self, hook_py, hook_log, *, exe=sys.executable):
         marker = self.home_cwd / "rel-marker.txt"
         marker.write_text("from-home-cwd", encoding="utf-8")
-        return serve.parse_hook(shlex.join([exe, str(hook_py), str(hook_log), "rel-marker.txt"]))
+        return serve.parse_hook(fsutil.join_cli([exe, str(hook_py), str(hook_log), "rel-marker.txt"]))
 
     def start_home(self, on_handoff=None, hook_cwd=None):
         self.srv = serve.ReviewServer(None, 0, home_id=self.host_id, on_handoff=on_handoff,
@@ -3279,7 +3327,10 @@ class OverviewHandoffTests(unittest.TestCase):
         hook_py, hook_log = self.write_hook(), self.tree / "hook-log.jsonl"
         bin_dir = self.home_cwd / "bin"
         bin_dir.mkdir()
-        (bin_dir / "ae-test-hook").symlink_to(sys.executable)
+        if os.name == "nt":
+            (bin_dir / "ae-test-hook.cmd").write_text(f'@"{sys.executable}" %*\n', encoding="utf-8")
+        else:
+            (bin_dir / "ae-test-hook").symlink_to(sys.executable)
         cwd = Path.cwd()
         with patch.dict(os.environ, {"PATH": "bin"}):
             try:
@@ -3315,7 +3366,8 @@ class OverviewHandoffTests(unittest.TestCase):
     def test_hooked_start_rejects_saved_binding_without_a_process(self):
         wakeup.bind_wait(self.review, "claude", "session-159")
         binding_before = (self.review / wakeup.BINDING_FILE).read_bytes()
-        self.start_home(on_handoff=serve.parse_hook(f"{sys.executable} -c pass"), hook_cwd=str(self.home_cwd))
+        self.start_home(on_handoff=serve.parse_hook(fsutil.join_cli([sys.executable, "-c", "pass"])),
+                        hook_cwd=str(self.home_cwd))
         port = self.claim_port()
         with patch.object(subprocess, "Popen", side_effect=AssertionError("冲突时不得拉起进程")) as spawned:
             status, body = self.start_request()
@@ -3525,6 +3577,7 @@ class OverviewHandoffTests(unittest.TestCase):
             time.sleep(0.05)
         self.fail(f"投递状态未到 {state}: {last}")
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_desktop_binding_backlog_recovers_once_across_starts(self):
         """桌面事件绑定的启动补投沿用现有规则：待接收批次补投一次，重启按同键去重不再重放。"""
         thread = "15915915-9159-4159-8159-159159159159"
@@ -5575,6 +5628,50 @@ class FsutilTests(unittest.TestCase):
         p = subprocess.run([sys.executable, "-c", probe, str(SCRIPTS)],
                            capture_output=True, text=True, timeout=30)
         self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_join_and_split_cli_roundtrip_on_windows_and_posix(self):
+        with patch("fsutil.os.name", "nt"):
+            self.assertEqual(fsutil.python_cli(), "python")
+            self.assertEqual(
+                fsutil.split_cli(r'C:\Users\Alice\hook.cmd --dir "C:\My Reviews\r1" --note "a \"b\""'),
+                [r"C:\Users\Alice\hook.cmd", "--dir", r"C:\My Reviews\r1", "--note", 'a "b"'],
+            )
+            self.assertEqual(fsutil.split_cli(r'"C:\dir\\" next'), ["C:\\dir\\", "next"])
+            argv = [
+                r"C:\Program Files\Python\python.exe",
+                r"C:\Users\张三\hook.py",
+                "--msg",
+                "hello $world 'single' \"double\"",
+                "",
+            ]
+            self.assertEqual(fsutil.split_cli(fsutil.join_cli(argv)), argv)
+            for broken in ('"unclosed', "'unclosed"):
+                with self.assertRaises(ValueError):
+                    fsutil.split_cli(broken)
+
+        with patch("fsutil.os.name", "posix"):
+            self.assertEqual(fsutil.python_cli(), "python3")
+            argv = ["python3", "/tmp/my hooks/run.py", "--msg", "a 'b' \"c\""]
+            self.assertEqual(fsutil.split_cli(fsutil.join_cli(argv)), argv)
+
+    def test_atomic_write_bytes_retries_transient_permission_error(self):
+        d = tmpdir()
+        target = d / "snap.bin"
+        target.write_bytes(b"old")
+        real_replace = os.replace
+        calls = {"count": 0}
+
+        def flaky_replace(src, dst):
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise PermissionError(13, "sharing violation")
+            return real_replace(src, dst)
+
+        with patch("fsutil.os.name", "nt"), patch("fsutil.os.replace", side_effect=flaky_replace):
+            fsutil.atomic_write_bytes(target, b"new\x00bytes", prefix=".snap-")
+        self.assertEqual(calls["count"], 3)
+        self.assertEqual(target.read_bytes(), b"new\x00bytes")
+        self.assertEqual([p.name for p in d.iterdir() if p.suffix == ".tmp"], [])
 
 
 if __name__ == "__main__":

@@ -45,7 +45,6 @@ import http.client
 import json
 import os
 import re
-import shlex
 import shutil
 import signal
 import socket
@@ -82,11 +81,23 @@ FEATURES = [
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
-# without running the hook. exec preserves the registered PID and stdin for the command.
+# without running the hook. POSIX exec preserves the registered PID and stdin; Windows
+# CRT execvp spawns asynchronously, so the wrapper waits on the child synchronously instead.
 _HOOK_EXEC = """
 import os
+import signal
+import subprocess
 import sys
 if os.read(0, 1) == b"1":
+    if os.name == "nt":
+        child = subprocess.Popen(sys.argv[1:], stdin=0, stdout=1, stderr=2)
+        def _stop(*_a):
+            child.terminate()
+        for _name in ("SIGTERM", "SIGBREAK", "SIGINT"):
+            _sig = getattr(signal, _name, None)
+            if _sig is not None:
+                signal.signal(_sig, _stop)
+        raise SystemExit(child.wait())
     os.execvp(sys.argv[1], sys.argv[1:])
 """
 
@@ -1551,10 +1562,13 @@ def _serve_overview_home(server: ReviewServer, url: str, on_handoff: list[str] |
         def _term(*_a: Any) -> None:
             raise KeyboardInterrupt
 
-        signal.signal(signal.SIGTERM, _term)
+        for sig_name in ("SIGTERM", "SIGBREAK"):
+            sig = getattr(signal, sig_name, None)
+            if sig is not None:
+                signal.signal(sig, _term)
         server.log("info", f"启动 {APP} {VERSION}：{url} 托管总览首页（pid {os.getpid()}）")
         print(T("serve.overview.ready", url=url)
-              + (T("serve.serve.hookLine", command=shlex.join(on_handoff)) if on_handoff else "")
+              + (T("serve.serve.hookLine", command=fsutil.join_cli(on_handoff)) if on_handoff else "")
               + T("serve.overview.stopHint"), flush=True)
         if open_browser:
             threading.Timer(0.3, webbrowser.open, args=(url,)).start()
@@ -1796,8 +1810,8 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float,
         if under is not None:
             command += ["--overview-under", str(under)]
         if hook is not None:
-            # 解析后的钩子参数按 shell 规则拼回一个参数交给子进程（不经 shell）；子进程 parse_hook 拆回同一列表
-            command += ["--on-handoff", shlex.join(hook)]
+            # 解析后的钩子参数按当前平台规则拼回一个参数交给子进程（不经 shell）；子进程 parse_hook 拆回同一列表
+            command += ["--on-handoff", fsutil.join_cli(hook)]
             if hook_cwd:
                 command += ["--overview-hook-cwd", os.path.abspath(hook_cwd)]
         child = subprocess.Popen(command, cwd=str(directory), stdin=subprocess.DEVNULL,
@@ -1881,14 +1895,14 @@ def parse_hook(cmd: str | None) -> list[str] | None:
     if not cmd:
         return None
     try:
-        argv = shlex.split(cmd)
+        argv = fsutil.split_cli(cmd)
     except ValueError as e:
         raise SystemExit(T("serve.err.hookSyntax", detail=e)) from None
     if not argv:
         return None
     exe = argv[0]
-    full = exe if os.sep in exe else shutil.which(exe)
-    if not full or not os.access(full, os.X_OK):
+    full = shutil.which(exe)
+    if not full or os.path.isdir(full) or (not fsutil.is_windows() and not os.access(full, os.X_OK)):
         raise SystemExit(T("serve.err.hookMissing", command=exe))
     # 相对 PATH 也可能找到相对路径。固定可执行文件，其他参数仍按钩子的工作目录解析。
     return [os.path.abspath(full), *argv[1:]]
@@ -2072,13 +2086,16 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         return 0
     server.log("info", f"启动 {APP} {VERSION}：{url} 托管 {review_dir}（pid {os.getpid()}）")
     print(T("serve.serve.ready", url=url, path=review_dir / store.NOTES_FILE)
-          + (T("serve.serve.hookLine", command=shlex.join(on_handoff)) if on_handoff else "")
+          + (T("serve.serve.hookLine", command=fsutil.join_cli(on_handoff)) if on_handoff else "")
           + T("serve.serve.stopHint"), flush=True)
 
     def _term(*_a: Any) -> None:
         raise KeyboardInterrupt
 
-    signal.signal(signal.SIGTERM, _term)
+    for sig_name in ("SIGTERM", "SIGBREAK"):
+        sig = getattr(signal, sig_name, None)
+        if sig is not None:
+            signal.signal(sig, _term)
     if open_browser:
         threading.Timer(0.3, webbrowser.open, args=(url,)).start()
     try:
