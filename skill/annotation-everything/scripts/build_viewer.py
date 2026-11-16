@@ -317,13 +317,29 @@ def find_pages(doc: str, *, locale: str | None = None) -> list[dict]:
         key = a.get("data-key") or a.get("id", "").removeprefix("page-") or f"p{n}"
         hm = re.search(r"<h[1-3][^>]*>(.*?)</h[1-3]>", p["html"], re.S)
         out.append({"n": n, "key": key, "stable": stable_key(key, bool(a.get("data-key"))), "html": p["html"],
-                    "title": strip_tags(hm.group(1)) if hm else key})
+                    "title": strip_tags(hm.group(1)) if hm else key,
+                    "kind": a.get("data-kind", "").strip().lower()})
     return out
 
 
 def stable_key(key: str, explicit: bool = True) -> bool:
     """页面键能不能用来在重排页序后找回原页：由页码生成的（p3、page-3、3）不算。"""
     return explicit and not re.fullmatch(r"(?:p|page)?[-_]?\d+", str(key), re.I)
+
+
+def _extract_class_text(fragment: str, cls: str) -> str:
+    """提取指定 class 元素的内部纯文本（兼容 <strong> 等嵌套子标签）。"""
+    m = re.search(rf'<([a-zA-Z0-9]+)\b[^>]*\bclass="[^"]*\b{re.escape(cls)}\b[^"]*"[^>]*>', fragment, re.S)
+    if not m:
+        return ""
+    tag = m.group(1).lower()
+    depth = 1
+    pos = m.end()
+    for tm in re.finditer(rf'<(/?){re.escape(tag)}\b[^>]*>', fragment[pos:], re.I | re.S):
+        depth += -1 if tm.group(1) else 1
+        if depth == 0:
+            return strip_tags(fragment[pos:pos + tm.start()])
+    return strip_tags(fragment[pos:].split("<", 1)[0])
 
 
 def infer_sections(doc: str, sects: list[dict]) -> list[list]:
@@ -335,14 +351,14 @@ def infer_sections(doc: str, sects: list[dict]) -> list[list]:
         a, b = by_key.get(attrs.get("data-range-start", "")), by_key.get(attrs.get("data-range-end", ""))
         if a is None or b is None:
             continue
-        label = re.search(r'class="[^"]*\btoc-label\b[^"]*"[^>]*>(.*?)<', m.group(2), re.S)
-        title = re.search(r'class="[^"]*\btoc-title\b[^"]*"[^>]*>(.*?)<', m.group(2), re.S)
-        name = " ".join(strip_tags(x.group(1)) for x in (label, title) if x) or strip_tags(m.group(2))[:20]
+        label_text = _extract_class_text(m.group(2), "toc-label")
+        title_text = _extract_class_text(m.group(2), "toc-title")
+        name = " ".join(x for x in (label_text, title_text) if x) or strip_tags(m.group(2))[:20]
         lo, hi = min(a, b), max(a, b)
         if (lo, hi) in seen:
             continue
         seen.add((lo, hi))
-        cands.append({"name": name, "lo": lo, "hi": hi, "labelled": bool(label)})
+        cands.append({"name": name, "lo": lo, "hi": hi, "labelled": bool(label_text)})
     # 目录页的主条目带 .toc-label；板块导航页里的子链接不带，有主条目时只取主条目
     if any(c["labelled"] for c in cands):
         cands = [c for c in cands if c["labelled"]]

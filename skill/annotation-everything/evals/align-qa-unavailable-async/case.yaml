@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: align-qa-unavailable-async
+expected_outcome: |
+  在无 AskUserQuestion 工具的非交互上下文下，Agent 先用纯文本向用户说明为何无法调用
+  宿主问答工具，随后给出简洁的缺项补充选项与推荐；若没有等到回答，不阻塞生成，
+  在 request.qa（available=false 且写明 unavailableReason）和 request.alignment
+  （source=default, status=pending）中如实登记默认方案后连续生成初稿，
+  摘要和审阅清单显式提示待确认偏好。
+context:
+  scaffold_script: place-files.sh

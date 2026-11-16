@@ -41,6 +41,7 @@ FULL_ORDER = (
     "revision-update-loop",
     "legacy-report-compat",
     "external-method-loop",
+    "alignment-navigation-loop",
     "installed-delivery",
     "locale-live-controls",
     "skill-search",

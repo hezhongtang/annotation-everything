@@ -7,21 +7,37 @@ With only AE installed, start here to turn raw material into a reviewable draft.
 ## Generation method: built-in paradigm and external generation skills
 
 - **No designation and no extension need**: use this guide (the built-in paradigm) and record `method` as `{"kind": "builtin", "name": "annotation-everything default paradigm", "version": "<AE version>", "unavailable": []}`.
-- **The user explicitly names a generation skill and it is available**: **actually invoke that skill** (locate and run it via the skill-invocation mechanisms in [Agent mechanisms](agent-mechanisms.en.md)) and follow its process; the artifacts must still follow the step 2–4 conventions (per-page `<section class="page">`, stable `data-key`, optional script, the `ae-report-record/1` record) and go through the same check entry (step 5) under the same acceptance. **A scanned candidate or a mentioned name is not an invocation**: claiming a designated skill was used means it was really invoked — record `method.invocation` stating how it was invoked and where the artifacts came from; the check entry verifies this declaration (`record.method`), and a missing basis surfaces as a program failure.
+- **The user explicitly names a generation skill and it is available**: **actually invoke that skill** (locate and run it via the skill-invocation mechanisms in [Agent mechanisms](agent-mechanisms.en.md)) and follow its process; external skills **remain subject to the step 0 alignment contract and step 2–5 artifact rules** (nine-dimension alignment and Q&A before drafting, density modes, concrete visual rules, task-oriented navigation, supplement markers, per-page `<section class="page">`, stable `data-key`, optional script, and `ae-report-record/1`), and go through the same check entry (step 5) under the same acceptance. **A scanned candidate or a mentioned name is not an invocation**: claiming a designated skill was used means it was really invoked — record `method.invocation` stating how it was invoked and where the artifacts came from; the check entry verifies this declaration (`record.method`), and a missing basis surfaces as a program failure.
 - **The designated skill is unavailable, disabled, or the invocation failed**: say so explicitly; never claim the skill was used or that its capabilities were met. When continuing with the built-in paradigm instead, record `method.requested` for the user-specified method and `note` for the reason; ask the user first if unsure whether to continue.
-- **Capability gaps**: when an external skill lacks reading, layout, or verification capability, record the gaps in `method.unavailable`; missing sources, calculation definitions, or check evidence in the artifacts are disclosed as gaps (`gaps`) — **the acceptance is not relaxed**: identical defects receive identical verdicts for built-in and external products.
+- **Capability gaps**: when an external skill lacks reading, layout, alignment, or verification capability, record the gaps in `method.unavailable`; missing sources, calculation definitions, deviations, or check evidence are disclosed in `gaps` and `deviations` — **the acceptance is not relaxed**: identical defects receive identical verdicts for built-in and external products.
 - **Additional delivery formats** (PPTX / PDF / Word etc.): provided by external capabilities; AE's core ships no generic exporter. Record what was actually produced (e.g. `links.extras`) and what remains unmet in `gaps`; the core reviewable HTML still enters AE via step 6, and an extra format never replaces the shared acceptance evidence.
 - **Never automatically search for or install remote skills**: generation skills are installed by the user in controlled locations; do not search, download, or install generation skills over the network, and do not widen the service boundary to admit external skills.
 
-## 0. Clarify the request: only ask what is missing
+## 0. Clarify the request: nine dimensions and pre-draft Q&A alignment
 
-Six things must be clear: **purpose, audience, core questions, length or duration, material scope, and whether a script is wanted**.
+Check and clarify the following nine dimensions before drafting (ask only for missing items that affect the output):
 
-- Reuse anything already said in the conversation; do not ask again.
-- Ask only for missing items that affect the result; bundle them into a single round of questions, asked once.
-- **If the script choice was not stated, ask first** (yes / no); it decides whether step 3 happens.
-- Once the request is clear, generate continuously. There is **no outline approval or visual mock-up approval** step; unresolved items go into the record's `gaps` instead of blocking on confirmation.
-- If all six have reasonable defaults (for example, the material is already a complete briefing), reuse them, note the source in the record, and ask nothing.
+| Dimension | What must be clear | Where recorded / default handling |
+|---|---|---|
+| 1. **Purpose & expected action** | Decision, judgment, or next step expected from readers | `request.purpose` |
+| 2. **Audience & reading mode** | Who reads it; live presentation vs standalone read vs thorough audit | Drives tone and items 5 / 7 |
+| 3. **Core questions & content priority** | Which questions must be answered first vs moved to supplements | `request.coreQuestions` |
+| 4. **Material scope & evidence standards** | Included files; period, unit, and citation rules | Registered per file in step 1 |
+| 5. **Information density & length constraints** | `presentation-led` / `standalone reading` / `deep review`; `hard` vs `reference` limit, and whether supplements count | `request.length`, `request.lengthSpec`, `request.alignment.density` |
+| 6. **Visual style & references** | Template, brand guide, or concrete palette, type hierarchy, whitespace, chart rules | `request.alignment.visual` (abstract terms translated to verifiable rules) |
+| 7. **Navigation & lookup tasks** | Support for overview comprehension, section-topic lookup, and bidirectional conclusion <-> evidence jumps | `request.alignment.navigation` |
+| 8. **Runtime environment & delivery format** | Standalone HTML and AE review viewer (`1280×720` Shadow DOM scaling), plus extra formats | `request.alignment.environment` |
+| 9. **Speaker script & initial review focus** | Whether a script is wanted (`yes` / `no`) and what reviewers should check first | Decides step 3; recorded in `request.script` / `alignment.script` |
+
+### Q&A alignment and source tracking rules
+
+- **Reuse and delegation first**: reuse explicit requirements, traceable references (templates, brand specs, self-contained material structure), or explicit delegations ("let the Agent decide") without re-asking; record the basis (`reused` / `delegated` + `basis`). If all nine have clear evidence or delegations, ask nothing.
+- **Must call an interactive Q&A tool when preferences are missing**: whenever density, visual style, navigation, script choice, or other output-affecting items lack clear reusable evidence or delegation, **call the host's available Q&A tool** before drafting (see [Agent mechanisms](agent-mechanisms.en.md)). Bundle missing items into **one round** (grouped within the host's per-call limits), giving user-friendly choices, a **recommended option with a short reason**, and free-text space.
+- **Record sources and status separately**: record `density`, `visual`, and `navigation` in `request.alignment` with `value`, `source` (`user` / `reused` / `delegated` / `default` / `inferred`), and `status` (`confirmed` / `pending` / `conflict` / `deviated`). **Inferred preferences must never be marked as `user`** — label them `inferred` or `default` with a short `reason`; `delegated` entries must state the chosen plan in `basis`.
+- **When no Q&A tool is available**: state the specific reason first, then ask in plain text, and record `available: false` plus non-empty `unavailableReason` in `request.qa`.
+- **Async Q&A wait and non-blocking default**: while waiting for a reply, run independent prep work (e.g. material reading registration) and give the user a reasonable reply window; if still unanswered, preference items do **not** block drafting — pick explicit defaults tailored to the materials and goal, mark them `source: "default"`, `status: "pending"`, generate continuously, and surface `pending` defaults prominently in the summary and review checklist.
+- **Detect internal conflicts and keep unresolved items incomplete**: when requirements contradict internally (e.g. heavy multi-table detail vs strict low hard page cap, or minimal whitespace vs packed single-page comparison), flag the tradeoff to the user. Keep any **unresolved conflict** as `status: "conflict"` and leave `content.requirements` incomplete (never `pass` or fully satisfied).
+- **Continuous generation and optional inner-page calibration**: once aligned, generate continuously with **no outline approval or visual mock-up approval** gate. Trigger optional **representative inner-page calibration** (one typical body page and one typical chart page first) only when the user explicitly requests sample confirmation before expanding all pages.
 
 ## 1. Read the material and register coverage
 
@@ -44,7 +60,14 @@ Six things must be clear: **purpose, audience, core questions, length or duratio
 ## 2. Organize the report as page-per-section HTML
 
 - Organize sections by purpose; the report must answer the user's core questions, and anything it cannot answer is listed as a gap.
-- Follow the review page convention: `<section class="page" data-page="N" data-key="key">`, page numbers continuous from 1, and **`data-key` must be a stable, unique semantic key** (like `sum`, `rev`) — not `p3`-style page keys; re-annotation after rebuilds depends on them.
+- **Apply the aligned information density**:
+  - `presentation-led`: one core takeaway per page with lean, large-type bullets; place supporting detail in speaker notes or marked supplement pages;
+  - `standalone reading`: self-contained pages with full subject-predicate conclusions, context, definitions, and `.ae-source` so the report reads clearly without speaker notes within one viewport;
+  - `deep review`: structured evidence comparisons, edge conditions, and calculation derivations organized in zoned cards and clear hierarchy (`.ae-cols-2`, `.ae-card`, `.ae-supplement` in `report-base.css`), readable without overflow.
+  - **Keep standalone readability with or without a script**; mark supplementary pages with **`data-kind="supplement"`** on `<section class="page">`, and match `request.lengthSpec` (`hard` vs `reference` nature and `includeSupplements`).
+- **Enforce concrete visual agreements**: extract verifiable visual rules (color variables, type scale, grid columns, whitespace baseline, chart and image style) from user templates/brand specs/references, translating abstract terms ("professional", "clean") into checkable rules; record explicit defaults when delegated to the Agent.
+- **Design navigation around the three reader tasks**: (1) summary plus TOC (`.toc-row` with `data-range-start`/`data-range-end`, `.toc-label`/`.toc-title`) for **overview comprehension**; (2) recognizable section labels and page headings for **topic lookup**; (3) **bidirectional round-trip jumping (`conclusion -> evidence or supplement -> back to corresponding analysis`)** via `<a href="#page-<key>">` at claims and explicit return links on evidence/supplement pages (with `data-page-ref` and the viewer's visited-page back button as supplements). Keep anchors bound to stable `data-key` values so reordering and `--rebuild` preserve accuracy.
+- Follow the review page convention: `<section class="page" data-page="N" data-key="key">`, page numbers continuous from 1, and **`data-key` must be a stable, unique semantic key** (like `sum`, `rev`, `sup-method`) — not `p3`-style page keys; re-annotation and cross-page links across rebuilds depend on them.
 - Layout is designed for 1280×720. **The base style ships with the skill**: inline the contents of `references/report-base.css` from the installed skill copy into the report's `<style>` (the review page collects styles into a Shadow DOM; `$S` is the skill copy's `scripts/`, the style file sits one level up in `references/`). Adjust variables to taste, but keep the semantic classes `.ae-source`, `.ae-gap`, `.ae-todo`.
 - Keep evidence next to key claims, figures, and impact judgments (`.ae-source` names the source location); mark unverified content with `.ae-todo`; write reading gaps as `.ae-gap` blocks or a dedicated gaps page.
 - Numbers keep their dates, units, definitions, and calculation basis; computed results must be reproducible from the material, and the four definition elements (unit, period, definition, input locations) go into the record's `calculation` (see step 4).
@@ -65,7 +88,18 @@ Save `report-record.json` next to the report (same directory, i.e. beside the ma
   "generatedAt": "2026-11-02T09:00:00+08:00",
   "summary": "New stores drove third-quarter revenue growth, while delivery mix and higher ingredient costs reduced margins. The fourth quarter should prioritize productivity at existing stores.",
   "request": {"purpose": "Quarterly business review", "audience": "Management",
-              "coreQuestions": ["Why did revenue grow"], "length": "6 pages", "script": "yes"},
+              "coreQuestions": ["Why did revenue grow"], "length": "6 pages", "script": "yes",
+              "lengthSpec": {"nature": "hard", "includeSupplements": false},
+              "qa": {"used": true, "tool": "ask_question",
+                     "asked": ["density", "visual", "navigation"], "unanswered": []},
+              "alignment": {
+                "density": {"value": "standalone", "source": "user", "status": "confirmed"},
+                "visual": {"value": "report-base readable layout (22px body, 64x72px padding)",
+                           "source": "delegated", "status": "confirmed",
+                           "basis": "User delegated visual choices to Agent; applied base readable variables"},
+                "navigation": {"value": "summary-toc + conclusion-to-evidence",
+                               "source": "reused", "status": "confirmed",
+                               "reason": "Reused management QBR three-task navigation pattern"}}},
   "sources": [{"path": "materials/q3.md", "status": "read", "coverage": "full text",
                "sha256": "<sha256 of the material file>",
                "locations": ["q3.md paragraphs 1–3"], "note": ""},
@@ -128,7 +162,11 @@ Save `report-record.json` next to the report (same directory, i.e. beside the ma
 Field semantics:
 
 - `summary`: write one or two sentences for every newly generated report, describing its content and the problem it addresses so readers can identify it in the review overview. The value must be a string; older records may omit it, and the schema remains `ae-report-record/1`. The overview also shows `request.purpose`, `request.audience`, and `request.coreQuestions`; without a summary it shows “(No summary)” and the cover-page title.
-- `request`: the clarified request from step 0, including what was asked and what was reused.
+- `request`: the clarified request from step 0, including what was asked and what was reused. Optional alignment extensions keep `ae-report-record/1` backward compatible (older records omitting them remain valid and report unrecorded preferences):
+  - `request.alignment`: per-dimension records (`density`, `visual`, `navigation`, etc.) with `value`, `source` (`user` / `reused` / `delegated` / `default` / `inferred`), `status` (`confirmed` / `pending` / `conflict` / `deviated`), and `basis` / `reason`.
+  - `request.lengthSpec`: `{"nature": "hard" | "reference", "includeSupplements": true | false, "pages"?: "..."}`, declaring hard limit vs reference target and whether `data-kind="supplement"` pages count. A single page count under `hard` (such as `6 pages` or `at most 6 pages`) is an upper bound; an explicit range (such as `4–6 pages`) retains both bounds. Legacy records without `lengthSpec` retain exact-count or range comparisons.
+  - `request.qa`: `{"used": bool, "available"?: bool, "tool"?: str, "unavailableReason"?: str, "asked": [...], "unanswered": [...]}`. Every `unanswered` item remains pending and blocks delivery, even without a corresponding `alignment` dimension; remove resolved items and update dimension statuses when answers arrive.
+- `deviations` (optional): `[{"item": "...", "reason": "...", "impact"?: "..."}]`, honestly recording items that could not follow aligned constraints instead of claiming full compliance.
 - `sources`: the reading registrations from step 1; `status` is `read` / `partial` / `unreadable`; `coverage` states the range actually read, and `partial` must state both the read and unread parts; `partial` / `unreadable` must include `reason`; **`path` is resolved relative to the directory containing the report** — the check entry looks material files up next to the report to verify hashes; `locations` lists locators (PDF pages, Word paragraphs, worksheets and cells); `sha256` is the material content hash (`shasum -a 256` or equivalent) — the check entry uses it to detect later material changes, and a changed material invalidates old verification results. **When all substantive materials are `unreadable`, the draft does not count as complete**; the check entry fails `record.reading`.
 - `method`: what actually generated the output; `kind` is the closed enum `builtin` / `external`, `name` records the method actually used, and `version` any version information available. An external skill must carry `invocation` (how it was invoked and where the artifacts came from — a scanned candidate or a mentioned name is not an invocation; without it the check entry fails `record.method`); a user-specified method that was NOT the one used goes into `requested` with `note` (the reason); capability gaps go into `unavailable`. The check entry verifies these declarations and surfaces the method information in the summary and the structured result. External example: `{"kind": "external", "name": "synthetic-brief-kit", "version": "1.4.2", "invocation": "ran its scripts/make_report.py to generate", "unavailable": []}`.
 - `links`: artifact association and sha256 (via `shasum -a 256` or equivalent); the check entry uses this to decide whether the record matches the current artifacts.
@@ -169,19 +207,19 @@ Field semantics:
 
 ### Visual verification (`visual.pages`: render every page, evidence ships with the declaration)
 
-- Inspect every page under **actual rendering** (open the report in a browser, or screenshot page by page at 1280×720), checking five problem classes per page: **overflow** (content beyond the canvas), **occlusion** (elements overlapping), **text and chart readability** (font size, contrast), **fonts** (rendered with the base style), and **missing content** (blank pages, dropped paragraphs, charts without data).
+- Inspect every page under **actual rendering** covering both standalone HTML report display and AE's `1280×720` Shadow DOM review scaling, checking five problem classes per page: **overflow** (content beyond the canvas), **occlusion** (elements overlapping), **text and chart readability** (font size, contrast, legibility of text/tables/legends), **fonts** (rendered with the base style), and **missing content** (blank pages, dropped paragraphs, charts without data).
 - Write the results into the `pages` evidence of the `visual.pages` declaration, one entry per page:
 
 ```json
 {"id": "visual.pages", "status": "pass",
- "scope": "all 3 pages (rendered at 1280×720)", "note": "page-by-page render check",
+ "scope": "all 3 pages (rendered in report & AE 1280×720 Shadow DOM)", "note": "page-by-page render check",
  "pages": [{"page": 1, "checked": true, "issues": [], "viewport": "1280x720"},
            {"page": 2, "checked": true, "issues": []},
            {"page": 3, "checked": true, "issues": []}]}
 ```
 
 - Declaring `pass` requires evidence covering **every report page**: missing pages, a page with `checked: false`, or declaring pass while unresolved issues remain are all rejected by the check entry (`record.visual`).
-- When pages cannot be rendered or viewing capability is missing, declare `unavailable` (`note` says what is missing); when a check is interrupted, record the interrupted pages honestly as `checked: false` and set the overall status to `not_run`; record found problems in `issues` and set the status to `fail` — a passing program check never substitutes for a passing visual check, and unresolved issues block the deliverable verdict.
+- When pages cannot be rendered or viewing capability is missing, declare `unavailable` (`note` says what is missing); when a check is interrupted, record the interrupted/affected pages honestly as `checked: false` and set the overall status to `not_run`; record found problems in `issues` and set the status to `fail` — a passing program check never substitutes for a passing visual check, and unresolved issues block the deliverable verdict.
 - Counterexamples must fail: **declaring a page-by-page pass while the record misses page coverage**, or **declaring pass with an unresolved overflow**, cannot pass the overall deliverable acceptance.
 
 ## 5. Run the public check entry
@@ -191,7 +229,7 @@ python3 $S/report_check.py report.html --script script.md --record report-record
 ```
 
 - `--json` emits the `ae-report-check/1` structured result; exit code 0 means all program checks passed (**not deliverable**), 1 means some check failed, 2 means bad input or usage.
-- Program checks cover: report parses, page keys unique, script matches page-for-page, record structure and version, record matches the current artifacts, referenced pages exist, calculations reproduce, check set complete, reading registration and gap disclosure, claim support mapping (support consistent with refs, no unsupported claims), material association (registration mapping and sha256 freshness), visual evidence consistency (a declared page-by-page pass requires evidence covering every report page), the length constraint (compared against the report page count when `request.length` states one), and the revision declaration (`revision.rechecked` consistent with the record's check results, `pending` fully disclosed). The program does not execute code from the material, does not render pages, and does not infer business definitions. The summary shows the reading totals (read / partially read / unread), the specific unread ranges, the gaps disclosed by the record, and the checked scope; for maintained records it also lists the rechecked scope and the pending scope.
+- Program checks cover: report parses, page keys unique, script matches page-for-page, record structure and version, record matches the current artifacts, referenced pages exist, calculations reproduce, check set complete, reading registration and gap disclosure, claim support mapping (support consistent with refs, no unsupported claims), material association (registration mapping and sha256 freshness), visual evidence consistency (a declared page-by-page pass requires evidence covering every report page), the length constraint (`record.length`, including `request.lengthSpec` hard vs reference targets and `data-kind="supplement"` counting), the revision declaration (`revision.rechecked` consistent with the record's check results, `pending` fully disclosed), alignment/Q&A/deviations validation (`record.alignment`, checking sources, delegation basis, Q&A unavailability reasons, pending/conflicting items, and deviations), and cross-page navigation (`report.navigation`, verifying `#page-<key>`, `data-page-ref`, and `data-range-start`/`data-range-end`). The program does not execute code from the material, does not render pages, and does not infer business definitions. The summary shows reading totals, unread ranges, disclosed gaps, alignment pending/conflict/deviation details (or unrecorded preferences on legacy records), and checked scope; maintained records also list rechecked and pending scope.
 - Fix whatever `fail`s and re-run; the summary's content / structure / visual coverage comes from the record, and not-run is never shown as passed. Missing claim support, pending calculations, unhashed materials, or changed materials downgrade the coverage and say why.
 - When reporting to the user, quote this summary: draft status, coverage, gaps and open items, and the record file location. **Do not claim the report is deliverable before the record supports it.**
 

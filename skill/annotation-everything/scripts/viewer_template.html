@@ -86,7 +86,7 @@ main{flex:1;display:grid;grid-template-columns:var(--ae-rail) var(--ae-sidebar) 
 .pane-head .icon-button{width:26px;height:26px;padding:0}
 .page-nav{display:flex;gap:var(--ae-gap-4);align-items:center;padding:var(--ae-space)}
 .page-nav button,.page-nav select{border:1px solid var(--ae-line);background:var(--ae-panel);border-radius:var(--ae-radius);height:28px;font-size:var(--ae-small);min-width:0}
-.page-nav button{position:relative;width:28px;flex:none}.page-nav select{flex:1;width:0}
+.page-nav button{position:relative;width:28px;flex:none}.page-nav button:disabled{opacity:.38;cursor:default}.page-nav select{flex:1;width:0}
 #secs{display:flex;gap:var(--ae-gap-4);overflow:auto;flex:none;padding:0 var(--ae-space) var(--ae-space)}
 #secs:empty{display:none}
 #secs button{font:inherit;font-size:var(--ae-small);white-space:nowrap;border:1px solid var(--ae-line);background:var(--ae-panel);border-radius:var(--ae-radius);padding:var(--ae-gap-3) var(--ae-space)}
@@ -540,7 +540,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
   <aside id="sidebar" data-aria="viewer.layout.pages">
     <section id="analysisSidebar" hidden><div class="pane-head"><span data-msg="viewer.analysis.list"></span><button id="analysisNew" data-msg="viewer.life.new"></button></div><div id="analysisList"></div><div class="pane-head"><span data-msg="viewer.analysis.tree"></span></div><div id="analysisTree"></div><div class="pane-head"><span data-msg="viewer.life.parked"></span></div><div id="analysisParkedSide"></div></section>
     <div class="pane-head"><span data-msg="viewer.layout.pages"></span><button  class="icon-button" data-layout-toggle="side" data-title="viewer.layout.side" data-aria="viewer.layout.side" data-p-key="[" aria-controls="sidebar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></button></div>
-    <div class="page-nav"><button id="prev" data-title="viewer.prevTitle" data-p-key="←" data-aria="viewer.prev"><span class="sr-only" data-msg="viewer.prev">上一页</span><span aria-hidden="true">←</span></button><select id="jump" data-aria="viewer.jumpLabel"></select><button id="next" data-title="viewer.nextTitle" data-p-key="→" data-aria="viewer.next"><span class="sr-only" data-msg="viewer.next">下一页</span><span aria-hidden="true">→</span></button></div>
+    <div class="page-nav"><button id="prevBack" disabled data-title="viewer.navBackTitle" data-aria="viewer.navBack"><span class="sr-only" data-msg="viewer.navBack">返回上一浏览页</span><span aria-hidden="true">↩</span></button><button id="prev" data-title="viewer.prevTitle" data-p-key="←" data-aria="viewer.prev"><span class="sr-only" data-msg="viewer.prev">上一页</span><span aria-hidden="true">←</span></button><select id="jump" data-aria="viewer.jumpLabel"></select><button id="next" data-title="viewer.nextTitle" data-p-key="→" data-aria="viewer.next"><span class="sr-only" data-msg="viewer.next">下一页</span><span aria-hidden="true">→</span></button></div>
     <nav id="secs"></nav><div id="pageTree"></div>
   </aside>
   <section id="workspace">
@@ -1867,7 +1867,7 @@ $("repText").addEventListener("keydown",e=>{e.stopPropagation();if(e.isComposing
   if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();repOk()}else if(e.key==="Escape"){hideSelbar();sel=null}});
 stage.addEventListener("click",e=>{
   if(swallowClick){swallowClick=false;e.preventDefault();return}   // 刚放完标注：这次点击不再当成点链接
-  const a=e.target.closest("a");if(a&&!markMode){e.preventDefault();const h=(a.getAttribute("href")||"").replace(/^#/,"");const k=SECT_KEYS.indexOf(h);if(k>=0)go(k);return}
+  const a=e.target.closest("a");if(a&&!markMode){e.preventDefault();const h=(a.getAttribute("href")||"").replace(/^#/,""),ref=(a.getAttribute("data-page-ref")||"").trim();let k=SECT_KEYS.indexOf(h);if(k<0&&ref)k=P.findIndex(p=>p.key===ref);if(k>=0)go(k);return}
   if(markMode)e.preventDefault()});
 const markAnchor=mk=>mk.region?regionAnchor(mk.region):mk.pin?pointAnchor(mk.pin):"";
 // 放好一个标注：给正在写的新批注，或替换某条已有批注的标注
@@ -2876,9 +2876,12 @@ function render(){
     ${p.next?`<div class="lab" data-msg="viewer.scriptNext">${tMsg("viewer.scriptNext")}</div><div class="next" lang="">${p.next}</div>`:""}${qa}`;
   stashEdit();
   editingId=null;if(markMode)setMarkMode(false);closeStyleMenu();hideSelbar();closePinPop();sel=null;loadDraft();refreshList(true);$("script").scrollTop=0;
-  LS.set(K.page,i+1)}
-function go(k){k=Math.max(0,Math.min(N-1,k));if(k===i)return;if(focusMode)closeComposer();else saveDraft();i=k;render()}
-$("prev").onclick=()=>go(i-1);$("next").onclick=()=>go(i+1);addEventListener("resize",fit);
+  LS.set(K.page,i+1);updateNavBack()}
+const navHistory=[];let skipNavHistory=false;
+function updateNavBack(){const b=$("prevBack");if(b)b.disabled=!navHistory.length}
+function go(k){k=Math.max(0,Math.min(N-1,k));if(k===i)return;if(!skipNavHistory&&P[i]){if(navHistory[navHistory.length-1]!==i)navHistory.push(i);if(navHistory.length>40)navHistory.shift()}if(focusMode)closeComposer();else saveDraft();i=k;render()}
+function goBackVisited(){if(!navHistory.length)return;skipNavHistory=true;try{go(navHistory.pop())}finally{skipNavHistory=false}}
+$("prevBack").onclick=goBackVisited;$("prev").onclick=()=>go(i-1);$("next").onclick=()=>go(i+1);addEventListener("resize",fit);
 if(DOCX){renderDocx();if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit)}   // 字体就绪后页高可能变，重量一次
 if(PPTX)renderPptx()
 $("jump").onchange=e=>go(+e.target.value);

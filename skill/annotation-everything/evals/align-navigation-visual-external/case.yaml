@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: align-navigation-visual-external
+expected_outcome: |
+  用户指定外部生成技能 synthetic-brief-kit 并附带视觉风格参考 brief（materials/brand-spec.md），
+  但信息密度与导航任务未指定。Agent 不因选用外部技能而跳过第 0 步：先调用问答工具
+  对齐缺失维度，提取 brand-spec.md 中的具体视觉规则；实际调用 synthetic-brief-kit 后，
+  对外部技能默认模板未能覆盖的对齐约束（如双向导航或自定义网格/配色），如实补齐或写入
+  method.unavailable 与 deviations，在 report.html 与 AE 1280×720 Shadow DOM 中完成渲染检查。
+context:
+  scaffold_script: place-files.sh

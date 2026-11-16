@@ -29,6 +29,7 @@ import json
 import math
 import re
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -63,6 +64,8 @@ SCRIPT_SCOPED_CHECKS = ("content.script-consistency", "structure.length")
 # 记录 method.kind 的封闭取值（#74 决策 14）：实际生成方法必须声明类别与名称；
 # 外部方法还须写实际调用依据（invocation）——扫描到候选或名字出现不算已采用。
 METHOD_KINDS = ("builtin", "external")
+ALIGNMENT_SOURCES = ("user", "reused", "delegated", "default", "inferred")
+ALIGNMENT_STATUSES = ("confirmed", "pending", "conflict", "deviated")
 CHECK_STATUSES = ("pass", "fail", "not_run", "unavailable")
 # sources[].status 的封闭取值：材料读取登记（#69 决策 4）——格式被接受不等于内容
 # 已读完，按实际读到的范围登记（#71 读取登记、#72 材料关联共用）。
@@ -101,7 +104,8 @@ class Checks:
     ORDER = ("report.parse", "report.pageKeys", "script.pages", "record.structure",
              "record.freshness", "record.pageRefs", "record.calculations", "record.checks",
              "record.claims", "record.reading", "record.sources",
-             "record.visual", "record.length", "record.method", "record.revision")
+             "record.visual", "record.length", "record.method", "record.revision",
+             "record.alignment", "report.navigation")
 
     def __init__(self, locale: str):
         self.locale = locale
@@ -155,8 +159,9 @@ class Checks:
                                  "record.visual-issue": "check.err.visualIssue",
                                  "record.visual-bad": "check.err.visualBad"}.get(
                                      code, "check.err.visualBad"),
-               "record.length": {"record.length-mismatch": "check.err.lengthMismatch"}.get(
-                   code, "check.err.lengthMismatch"),
+               "record.length": {"record.length-mismatch": "check.err.lengthMismatch",
+                                 "record.length-bad": "check.err.lengthBad"}.get(
+                                     code, "check.err.lengthMismatch"),
                "record.method": {"record.method-unknown": "check.err.methodUnknown",
                                  "record.method-missing": "check.err.methodMissing",
                                  "record.method-bad": "check.err.methodBad",
@@ -167,6 +172,13 @@ class Checks:
                                     "record.revision-unrechecked": "check.err.revisionUnrechecked",
                                     "record.revision-pending": "check.err.revisionPending"}.get(
                                         code, "check.err.revisionBad"),
+               "record.alignment": {"record.alignment-bad": "check.err.alignmentBad",
+                                    "record.alignment-qa-bad": "check.err.alignmentQaBad",
+                                    "record.alignment-conflict-pass": "check.err.alignmentConflictPass"}.get(
+                                        code, "check.err.alignmentBad"),
+               "report.navigation": {"report.nav-broken-link": "check.err.navBrokenLink",
+                                     "report.nav-bad-range": "check.err.navBadRange"}.get(
+                                         code, "check.err.navBrokenLink"),
                }[cid]
         detail = t(self.locale, key, **params) if params else ""
         self.items[cid] = {"id": cid, "status": state, "code": code, "detail": detail}
@@ -848,26 +860,75 @@ def parse_length_pages(text: object) -> tuple[int, int] | None:
     return None
 
 
-def check_record_length(record: dict | None, pages: list[dict], c: Checks) -> None:
-    """篇幅约束（#73）：request.length 可解析为页数时与报告页数比对。
+def check_record_length(record: dict | None, pages: list[dict], c: Checks) -> dict | None:
+    """篇幅约束（#73 / #169）：支持硬上限与参考目标、补充页是否计入。
 
-    可解析且不一致是程序检查失败（需求与产物的确定矛盾）；只有时长约束或没有
-    记录时判不适用，不虚假比较，也不把无法解析的约束当成失败。"""
+    可解析且硬约束不一致是程序检查失败（需求与产物的确定矛盾）；参考目标超出仅
+    警告且结构化披露；只有时长约束或没有记录时判不适用。"""
     if record is None or not pages:
         c.set("record.length", "not_applicable")
-        return
-    constraint = parse_length_pages(record["request"].get("length"))
+        return None
+    req = record["request"]
+    spec = req.get("lengthSpec")
+    nature = "hard"
+    include_supplements = True
+    raw_pages = req.get("length")
+    if "lengthSpec" in req:
+        if not isinstance(spec, dict):
+            c.set("record.length", "fail", code="record.length-bad",
+                  detail="lengthSpec must be an object")
+            return None
+        if "nature" in spec:
+            if spec["nature"] not in ("hard", "reference"):
+                c.set("record.length", "fail", code="record.length-bad",
+                      detail=f"unsupported nature {spec['nature']!r}")
+                return None
+            nature = spec["nature"]
+        if "includeSupplements" in spec:
+            if not isinstance(spec["includeSupplements"], bool):
+                c.set("record.length", "fail", code="record.length-bad",
+                      detail="includeSupplements must be boolean")
+                return None
+            include_supplements = spec["includeSupplements"]
+        if "pages" in spec:
+            if not isinstance(spec["pages"], str):
+                c.set("record.length", "fail", code="record.length-bad",
+                      detail="lengthSpec.pages must be string")
+                return None
+            raw_pages = spec["pages"]
+    supp_count = sum(1 for p in pages if p.get("kind") == "supplement")
+    main_count = len(pages) - supp_count
+    counted = len(pages) if include_supplements else main_count
+    constraint = parse_length_pages(raw_pages)
     if constraint is None:
         c.set("record.length", "not_applicable")
-        return
-    n = len(pages)
+        return None
     lo, hi = constraint
-    if lo <= n <= hi:
-        c.set("record.length", "pass")
-        return
     expected = str(lo) if lo == hi else f"{lo}–{hi}"
-    c.set("record.length", "fail", code="record.length-mismatch",
-          actual=n, expected=expected)
+    # 新字段将单一页数声明为硬上限；显式区间保留下限，旧记录仍精确比对。
+    if spec is not None and nature == "hard" and not LENGTH_RANGE_RE.search(raw_pages):
+        lo = 0
+        expected = f"≤{hi}"
+    in_range = lo <= counted <= hi
+    info = {
+        "totalPages": len(pages),
+        "mainPages": main_count,
+        "supplementPages": supp_count,
+        "countedPages": counted,
+        "nature": nature,
+        "includeSupplements": include_supplements,
+        "expected": expected,
+        "inRange": in_range,
+    }
+    if in_range:
+        c.set("record.length", "pass")
+    elif nature == "reference":
+        c.add_warning("check.warn.lengthReferenceDrift", actual=counted, expected=expected)
+        c.set("record.length", "pass")
+    else:
+        c.set("record.length", "fail", code="record.length-mismatch",
+              actual=counted, expected=expected)
+    return info
 
 
 def check_record_revision(record: dict | None, c: Checks) -> dict | None:
@@ -973,6 +1034,259 @@ def check_record_method(record: dict | None, c: Checks) -> None:
     c.set("record.method", "pass")
 
 
+def _text(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _non_empty_val(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    return isinstance(value, bool) or (isinstance(value, (dict, list)) and bool(value))
+
+
+def _normalize_dimensions(raw: object) -> tuple[dict[str, dict], str | None]:
+    if not isinstance(raw, dict):
+        return {}, "request.alignment must be an object"
+    out: dict[str, dict] = {}
+    for key, entry in raw.items():
+        if not isinstance(key, str) or not key.strip() or not isinstance(entry, dict):
+            return {}, f"invalid alignment entry for {key!r}"
+        value = entry.get("value")
+        source = entry.get("source")
+        status = entry.get("status")
+        if not _non_empty_val(value):
+            return {}, f"{key}: missing value"
+        if source not in ALIGNMENT_SOURCES:
+            return {}, f"{key}: unsupported source {source!r}"
+        if status not in ALIGNMENT_STATUSES:
+            return {}, f"{key}: unsupported status {status!r}"
+        basis = _text(entry.get("basis"))
+        note = _text(entry.get("note"))
+        reason = _text(entry.get("reason"))
+        if source == "delegated" and not (basis or note):
+            return {}, f"{key}: delegated alignment requires basis or note"
+        if (source in ("inferred", "default") or status in ("pending", "conflict", "deviated")) \
+                and not (reason or basis or note):
+            return {}, f"{key}: {source}/{status} alignment requires reason"
+        norm: dict = {"value": value, "source": source, "status": status}
+        for fname, fval in (("reason", reason), ("basis", basis), ("note", note)):
+            if fval:
+                norm[fname] = fval
+        out[key.strip()] = norm
+    return out, None
+
+
+def _normalize_qa(raw: object) -> tuple[dict | None, str | None]:
+    if not isinstance(raw, dict):
+        return None, "request.qa must be an object"
+    used = raw.get("used")
+    if not isinstance(used, bool):
+        return None, "request.qa.used must be boolean"
+    available = raw.get("available")
+    if available is not None and not isinstance(available, bool):
+        return None, "request.qa.available must be boolean"
+    tool = raw.get("tool")
+    if tool is not None and not isinstance(tool, str):
+        return None, "request.qa.tool must be string"
+    unavailable_reason = raw.get("unavailableReason")
+    if unavailable_reason is not None and not isinstance(unavailable_reason, str):
+        return None, "request.qa.unavailableReason must be string"
+    lists: dict[str, list[str]] = {}
+    for key in ("asked", "unanswered"):
+        val = raw.get(key)
+        if val is not None and (not isinstance(val, list)
+                                or not all(isinstance(x, str) and x.strip() for x in val)):
+            return None, f"request.qa.{key} must be a list of non-empty strings"
+        lists[key] = [x.strip() for x in val] if isinstance(val, list) else []
+    reason_text = _text(unavailable_reason)
+    if available is False and not reason_text:
+        return None, "unavailable Q&A tool requires non-empty unavailableReason"
+    return {
+        "used": used,
+        "available": available,
+        "tool": _text(tool) or None,
+        "unavailableReason": reason_text or None,
+        "asked": lists["asked"],
+        "unanswered": lists["unanswered"],
+    }, None
+
+
+def _normalize_deviations(raw: object) -> tuple[list[dict], str | None]:
+    if not isinstance(raw, list):
+        return [], "deviations must be a list"
+    out: list[dict] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            return [], "each deviation entry must be an object"
+        item = _text(entry.get("item"))
+        reason = _text(entry.get("reason"))
+        if not item or not reason:
+            return [], "deviation entry requires non-empty item and reason"
+        impact = entry.get("impact")
+        if impact is not None and not isinstance(impact, str):
+            return [], "deviation impact must be string"
+        norm = {"item": item, "reason": reason}
+        if _text(impact):
+            norm["impact"] = _text(impact)
+        out.append(norm)
+    return out, None
+
+
+def check_record_alignment(record: dict | None, c: Checks) -> dict | None:
+    """生成前对齐偏好、问答使用与偏离披露核验（issue #169）。
+
+    历史记录未包含 request.alignment / request.qa / deviations 时判不适用并如实
+    返回 recorded=False，保持向后兼容；声明后校验来源与状态字段，未解决冲突
+    不能与 content.requirements=pass 并存。"""
+    if record is None:
+        c.set("record.alignment", "not_applicable")
+        return None
+    req = record["request"]
+    if "alignment" not in req and "qa" not in req and "deviations" not in record:
+        c.set("record.alignment", "not_applicable")
+        return {"recorded": False, "dimensions": {}, "pending": [],
+                "conflicts": [], "deviations": [], "qa": None}
+    dimensions: dict[str, dict] = {}
+    if "alignment" in req:
+        dimensions, err = _normalize_dimensions(req["alignment"])
+        if err:
+            c.set("record.alignment", "fail", code="record.alignment-bad", detail=err)
+            return None
+    qa_info = None
+    if "qa" in req:
+        qa_info, qa_err = _normalize_qa(req["qa"])
+        if qa_err:
+            c.set("record.alignment", "fail", code="record.alignment-qa-bad", detail=qa_err)
+            return None
+    deviations: list[dict] = []
+    if "deviations" in record:
+        deviations, dev_err = _normalize_deviations(record["deviations"])
+        if dev_err:
+            c.set("record.alignment", "fail", code="record.alignment-bad", detail=dev_err)
+            return None
+    needs_qa = any(d["source"] in ("default", "inferred") or d["status"] == "pending"
+                   for d in dimensions.values())
+    if qa_info is not None and qa_info["used"] is False \
+            and not qa_info.get("unavailableReason") and needs_qa:
+        c.set("record.alignment", "fail", code="record.alignment-qa-bad",
+              detail="Q&A skipped without unavailableReason despite inferred/default preferences")
+        return None
+    conflicts = [k for k, v in dimensions.items() if v["status"] == "conflict"]
+    pending = [k for k, v in dimensions.items() if v["status"] == "pending"]
+    if qa_info:
+        pending = list(dict.fromkeys(pending + qa_info["unanswered"]))
+    align_info = {"recorded": bool(dimensions), "dimensions": dimensions, "pending": pending,
+                  "conflicts": conflicts, "deviations": deviations, "qa": qa_info}
+    by_id = {x.get("id"): x for x in record["checks"] if isinstance(x, dict)}
+    if conflicts and by_id.get("content.requirements", {}).get("status") == "pass":
+        c.set("record.alignment", "fail", code="record.alignment-conflict-pass",
+              items="、".join(conflicts))
+        return align_info
+    dev_pairs = _alignment_deviation_pairs(deviations, dimensions)
+    if dev_pairs:
+        c.add_warning("check.warn.alignmentDeviated", items="、".join(k for k, _ in dev_pairs))
+    c.set("record.alignment", "pass")
+    return align_info
+
+
+def _alignment_deviation_pairs(deviations: list[dict] | None,
+                               dimensions: dict | None) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = [(d["item"], d["reason"]) for d in (deviations or [])]
+    seen = {k for k, _ in out}
+    for dim, info in (dimensions or {}).items():
+        if info.get("status") == "deviated" and dim not in seen:
+            reason = info.get("reason") or info.get("basis") or info.get("note") or ""
+            out.append((dim, reason))
+            seen.add(dim)
+    return out
+
+
+class _NavigationLinkParser(HTMLParser):
+    """仅收集实际锚点，忽略注释、原始文本元素和未实例化的模板。"""
+
+    CDATA_CONTENT_ELEMENTS = ("script", "style", "textarea", "title")
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.links: list[dict[str, str | None]] = []
+        self.anchors: set[str] = set()
+        self.template_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "template":
+            self.template_depth += 1
+        if self.template_depth:
+            return
+        attributes = dict(attrs)
+        if attributes.get("id"):
+            self.anchors.add(attributes["id"])
+        if tag == "a":
+            self.links.append(attributes)
+            if attributes.get("name"):
+                self.anchors.add(attributes["name"])
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "template" and self.template_depth:
+            self.template_depth -= 1
+
+
+def check_report_navigation(pages: list[dict], c: Checks) -> None:
+    """跨页导航与目录章节范围核验（issue #169）。
+
+    检查 #page-<key>、data-page-ref 与 data-range-start/end：引用缺失页面键、
+    href 的真实锚点不在对应页面，或目录起始页晚于结束页时判定程序检查失败；
+    完全未声明此类链接时判不适用。"""
+    if not pages:
+        c.set("report.navigation", "not_applicable")
+        return
+    pos_by_key = {p["key"]: idx for idx, p in enumerate(pages)}
+    found_nav = False
+    broken_refs: list[str] = []
+    bad_ranges: list[str] = []
+    parsed_pages: list[_NavigationLinkParser] = []
+    anchor_pages: dict[str, set[str]] = {}
+    for p in pages:
+        parser = _NavigationLinkParser()
+        parser.feed(p["html"])
+        parser.close()
+        parsed_pages.append(parser)
+        for anchor in parser.anchors:
+            anchor_pages.setdefault(anchor, set()).add(p["key"])
+    for parser in parsed_pages:
+        for attrs in parser.links:
+            href = (attrs.get("href") or "").strip()
+            if href.lower().startswith("#page-"):
+                found_nav = True
+                target_key = href[6:].strip()
+                if not target_key or target_key not in pos_by_key \
+                        or anchor_pages.get(href[1:]) != {target_key}:
+                    broken_refs.append(href)
+            if "data-page-ref" in attrs:
+                found_nav = True
+                page_ref = (attrs["data-page-ref"] or "").strip()
+                if not page_ref or page_ref not in pos_by_key:
+                    broken_refs.append(f"data-page-ref={page_ref or '?'}")
+            if "data-range-start" in attrs or "data-range-end" in attrs:
+                found_nav = True
+                start_k = (attrs.get("data-range-start") or "").strip()
+                end_k = (attrs.get("data-range-end") or "").strip()
+                if not start_k or not end_k or start_k not in pos_by_key \
+                        or end_k not in pos_by_key or pos_by_key[start_k] > pos_by_key[end_k]:
+                    bad_ranges.append(f"{start_k or '?'}..{end_k or '?'}")
+    if not found_nav:
+        c.set("report.navigation", "not_applicable")
+        return
+    if broken_refs:
+        c.set("report.navigation", "fail", code="report.nav-broken-link",
+              refs="、".join(dict.fromkeys(broken_refs)))
+        return
+    if bad_ranges:
+        c.set("report.navigation", "fail", code="report.nav-bad-range",
+              items="、".join(dict.fromkeys(bad_ranges)))
+        return
+    c.set("report.navigation", "pass")
+
+
 def coverage_for(record: dict | None, fresh: bool, kind: str,
                  script_present: bool = True) -> tuple[str, int, int, int]:
     """汇总一类核验的覆盖情况；状态语义语言无关，返回 (状态, 通过数, 总数, 失败数)。
@@ -1004,11 +1318,19 @@ def coverage_for(record: dict | None, fresh: bool, kind: str,
 
 # ── 汇总判定 ────────────────────────────────────────────────────────────────
 
+def _alignment_dev_names(alignment: dict | None) -> list[str]:
+    if not alignment:
+        return []
+    return [k for k, _ in _alignment_deviation_pairs(
+        alignment.get("deviations"), alignment.get("dimensions"))]
+
+
 def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
               record_ok: bool, claims_info: dict | None = None,
               calc_pending: list[str] | None = None, source_stale: bool = False,
               reading: dict | None = None, script_present: bool = True,
-              revision: dict | None = None) -> dict:
+              revision: dict | None = None, alignment: dict | None = None,
+              length_info: dict | None = None) -> dict:
     reasons: list[str] = []
     failed_program = checks.failed()
     # 全部实质材料不可读：空结构或虚构内容不能当作初稿生成完成（issue #71）。
@@ -1032,6 +1354,11 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
         if cap is not None and CAP_SEVERITY[cap] > CAP_SEVERITY[coverage[kind]]:
             capped[kind] = True
             coverage[kind] = cap
+    dev_names = _alignment_dev_names(alignment)
+    if alignment and (alignment.get("conflicts") or dev_names):
+        if CAP_SEVERITY["partial"] > CAP_SEVERITY[coverage["content"]]:
+            capped["content"] = True
+            coverage["content"] = "partial"
     declared = None if record is None else record["verdict"].get("deliverable")
     declared = declared if isinstance(declared, bool) else None
     # 记录声明了讲稿哈希而核验未收到讲稿（#69 审查 P2-1）：讲稿检查缺席，
@@ -1052,6 +1379,10 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
                                  items="；".join(blocking)))
             # 改稿待核验项（#75 决策 8）：影响范围没有确认之前，不沿用可交付判定。
             if deliverable and revision and revision.get("pending"):
+                deliverable = False
+            # 对齐待确认、内部冲突或偏离未关闭（#169）：确认前不判可交付。
+            if deliverable and alignment and (
+                    alignment.get("pending") or alignment.get("conflicts") or dev_names):
                 deliverable = False
             # 声明讲稿哈希而未收到讲稿：已声明产物的检查未执行，拦可交付。
             if deliverable and script_missing:
@@ -1085,6 +1416,17 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
                          else f"{x['scope']} ({x['reason']})"
                          for x in revision["pending"])
         reasons.append(t(checks.locale, "check.reason.revisionPending", items=items))
+    if alignment:
+        sep = "；" if checks.locale == "zh-CN" else "; "
+        if alignment.get("conflicts"):
+            reasons.append(t(checks.locale, "check.reason.alignmentConflict",
+                             items=sep.join(alignment["conflicts"])))
+        if alignment.get("pending"):
+            reasons.append(t(checks.locale, "check.reason.alignmentPending",
+                             items=sep.join(alignment["pending"])))
+        if dev_names:
+            reasons.append(t(checks.locale, "check.reason.alignmentDeviated",
+                             items=sep.join(dev_names)))
     scopes: list[dict] = []
     if record is not None:
         for item in record["checks"]:
@@ -1119,7 +1461,9 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
                          "blocking": sum(1 for x in record["openItems"]
                                          if isinstance(x, dict) and x.get("blocking") is True)},
                    "scopes": scopes,
-                   "revision": revision},
+                   "revision": revision,
+                   "alignment": alignment,
+                   "length": length_info},
         "coverage": coverage,
         "coverageCounts": coverage_counts,
         "coverageCapped": capped,
@@ -1163,6 +1507,7 @@ def check_report(report_path: Path, script_path: Path | None = None,
     pages, draft_ok = check_report_and_script(report_doc, script_text, c)
     if script_text is not None and c.items["script.pages"]["status"] == "not_applicable":
         c.set("script.pages", "pass")   # 能解析且页序一致时已 set(pass)，这里兜底
+    check_report_navigation(pages, c)
     record, record_ok = load_record(record_path, c)
     report_sha = sha256_bytes(report_bytes)
     script_sha = None if script_bytes is None else sha256_bytes(script_bytes)
@@ -1172,6 +1517,8 @@ def check_report(report_path: Path, script_path: Path | None = None,
     source_stale = False
     reading = None
     revision = None
+    alignment = None
+    length_info = None
     if record is not None:
         claims_info = analyze_claims(record)
         check_page_refs(record, pages, c)
@@ -1182,13 +1529,15 @@ def check_report(report_path: Path, script_path: Path | None = None,
         check_record_checks(record, c, script_present=script_text is not None)
         reading = check_reading(record, c)
         check_record_visual(record, pages, c)
-        check_record_length(record, pages, c)
+        length_info = check_record_length(record, pages, c)
         revision = check_record_revision(record, c)
+        alignment = check_record_alignment(record, c)
         if script_declared_but_missing(record, script_text is not None):
             c.add_warning("check.warn.scriptDeclaredMissing")
     result = summarize(record, fresh, c, draft_ok, record_ok, claims_info=claims_info,
                        calc_pending=calc_pending, source_stale=source_stale, reading=reading,
-                       script_present=script_text is not None, revision=revision)
+                       script_present=script_text is not None, revision=revision,
+                       alignment=alignment, length_info=length_info)
     result["schema"] = RESULT_SCHEMA
     result["inputs"] = {
         "report": {"path": report_path.name, "sha256": report_sha},
@@ -1199,6 +1548,42 @@ def check_report(report_path: Path, script_path: Path | None = None,
     }
     result["locale"] = loc
     return result
+
+
+def _format_labeled_reasons(loc: str, pairs: list[tuple[str, str]]) -> str:
+    sep = "；" if loc == "zh-CN" else "; "
+    return sep.join(
+        f"{k}（{r}）" if (loc == "zh-CN" and r) else (f"{k} ({r})" if r else k)
+        for k, r in pairs)
+
+
+def _render_alignment_summary(loc: str, al: dict) -> list[str]:
+    out: list[str] = []
+    if not al.get("recorded") and not al.get("deviations") and not al.get("qa"):
+        out.append(t(loc, "check.alignment.unrecorded"))
+        return out
+    sep = "、" if loc == "zh-CN" else ", "
+    dims = al.get("dimensions") or {}
+    if dims:
+        summary = sep.join(f"{k}:{v['source']}/{v['status']}" for k, v in dims.items())
+        out.append(t(loc, "check.alignment.line", items=summary))
+    qa = al.get("qa") or {}
+    if qa.get("unavailableReason"):
+        out.append("  " + t(loc, "check.alignment.qaUnavailableLine",
+                            reason=qa["unavailableReason"]))
+    if al.get("pending"):
+        pairs = [(k, dims.get(k, {}).get("reason", "")) for k in al["pending"]]
+        out.append("  " + t(loc, "check.alignment.pendingLine",
+                            items=_format_labeled_reasons(loc, pairs)))
+    if al.get("conflicts"):
+        pairs = [(k, dims[k].get("reason", "")) for k in al["conflicts"] if k in dims]
+        out.append("  " + t(loc, "check.alignment.conflictLine",
+                            items=_format_labeled_reasons(loc, pairs)))
+    dev_pairs = _alignment_deviation_pairs(al.get("deviations"), dims)
+    if dev_pairs:
+        out.append("  " + t(loc, "check.alignment.deviationsLine",
+                            items=_format_labeled_reasons(loc, dev_pairs)))
+    return out
 
 
 def render_summary(result: dict) -> str:
@@ -1221,7 +1606,12 @@ def render_summary(result: dict) -> str:
             lines.append("  ✗ " + t(loc, "check.line.fail", item=t(loc, "check.item." + c["id"]),
                                     detail=c["detail"]))
         else:
-            reason = t(loc, "check.na") if c["id"] == "script.pages" else t(loc, "check.naRecord")
+            if c["id"] == "script.pages":
+                reason = t(loc, "check.na")
+            elif c["id"] == "report.navigation":
+                reason = t(loc, "check.naNav")
+            else:
+                reason = t(loc, "check.naRecord")
             lines.append("  — " + t(loc, "check.line.na", item=t(loc, "check.item." + c["id"]),
                                     reason=reason))
     for w in result["warnings"]:
@@ -1287,6 +1677,19 @@ def render_summary(result: dict) -> str:
             lines.append("  " + t(loc, "check.method.unavailable",
                                   items="；".join(rec_method["unavailable"])))
     rec = result["record"]
+    rec_align = rec.get("alignment")
+    if rec_align is not None:
+        lines.extend(_render_alignment_summary(loc, rec_align))
+    rec_len = rec.get("length")
+    if rec_len and (rec_len["supplementPages"] > 0 or rec_len["nature"] != "hard"
+                    or not rec_len["includeSupplements"]):
+        lines.append("  " + t(loc, "check.length.line",
+                              counted=rec_len["countedPages"],
+                              total=rec_len["totalPages"],
+                              main=rec_len["mainPages"],
+                              supplement=rec_len["supplementPages"],
+                              expected=rec_len["expected"],
+                              nature=t(loc, "check.length.nature." + rec_len["nature"])))
     rec_input = (result.get("inputs") or {}).get("record")
     if rec_input:
         lines.append(t(loc, "check.record.path", path=rec_input["path"]))
