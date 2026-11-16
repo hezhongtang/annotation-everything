@@ -82,7 +82,9 @@ import time
 total = int(os.environ.get("SYNTH_BROWSER_TOTAL", "3"))
 failed = int(os.environ.get("SYNTH_BROWSER_FAILED", "0"))
 seconds = float(os.environ.get("SYNTH_BROWSER_SECONDS", "0.2"))
-time.sleep(seconds)
+deadline = time.monotonic() + seconds
+while time.monotonic() < deadline:
+    time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 for index in range(total - failed):
     print("PASS  合成场景 %d" % index)
 for index in range(failed):
@@ -414,7 +416,9 @@ import unittest
 
 class SlowTests(unittest.TestCase):
     def test_sleeps(self):
-        time.sleep(30)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            time.sleep(0.05)
 '''
 
 UNIT_FIXTURE = '''import time
@@ -710,7 +714,9 @@ for name in ("SIGTERM", "SIGBREAK"):
     if s is not None:
         signal.signal(s, cleanup)
 print("ready", flush=True)
-time.sleep(30)
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    time.sleep(0.05)
 '''], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                  encoding="utf-8", errors="replace", **popen_kwargs)
         self.addCleanup(_reap, child)
@@ -817,7 +823,9 @@ if {ready!r} is not None:
         time.sleep(0.01)
     if not Path({ready!r}).exists():
         raise RuntimeError("verification entry did not finish planning")
-time.sleep({hold!r})
+deadline = time.monotonic() + float({hold!r})
+while time.monotonic() < deadline:
+    time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 hi.release(handle)
 '''
 
@@ -839,6 +847,14 @@ class IsolationLockTests(VerifyEntryTestCase):
         env.update(extra)
         return env
 
+    def _holder_env(self, lock_dir: Path | None = None) -> dict:
+        # Windows 子进程需要 SYSTEMROOT / PATH 等基础系统变量才能正常加载运行库与 ctypes。
+        env = dict(os.environ)
+        env.pop("AE_HELD_LOCKS", None)
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["AE_LOCK_DIR"] = str(lock_dir or self.lock_root)
+        return env
+
     def start_holder(self, hold: float, resource: str = "host-state", ready: Path | None = None) -> subprocess.Popen:
         """合成占用者：持锁 sleep 后自行退出。放在仓库外的临时目录，不污染输入指纹。"""
         holder_dir = Path(tempfile.mkdtemp(prefix="verify-holder-"))
@@ -846,7 +862,7 @@ class IsolationLockTests(VerifyEntryTestCase):
         script = holder_dir / "holder.py"
         script.write_text(LOCK_HOLDER.format(root=str(ROOT), resource=resource, hold=hold, ready=str(ready) if ready else None),
                           encoding="utf-8")
-        proc = subprocess.Popen([sys.executable, str(script)], env=self.lock_env(),
+        proc = subprocess.Popen([sys.executable, str(script)], env=self._holder_env(),
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(_reap, proc)
         self.assertEqual(proc.stdout.readline().strip(), "held", "占用者没拿到锁")
@@ -1016,7 +1032,9 @@ for _name in ("SIGTERM", "SIGBREAK"):
     if _sig is not None:
         signal.signal(_sig, cleanup)
 Path(%r).write_text("started", encoding="utf-8")
-time.sleep(30)
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    time.sleep(0.05)
 ''' % (str(cleaning), str(finished), str(started)))
         wrapper = self.start_wrapper()
         self.wait_for_marker(started)
@@ -1137,7 +1155,7 @@ while not Path(%r).exists():
         script.write_text(LOCK_HOLDER.format(root=str(ROOT), resource="host-state", hold=45, ready=None),
                           encoding="utf-8")
         holder = subprocess.Popen([sys.executable, str(script)],
-                                  env={"AE_LOCK_DIR": str(hostile_dir)},
+                                  env=self._holder_env(hostile_dir),
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(_reap, holder)
         self.assertEqual(holder.stdout.readline().strip(), "held", "占用者没拿到锁")
@@ -1238,7 +1256,9 @@ def snapshot_with_barrier():
         expected_sig = getattr(signal, "SIGBREAK", signal.SIGTERM) if os.name == "nt" else signal.SIGTERM
         assert callable(signal.getsignal(expected_sig))
         Path(os.environ["SYNTH_FINALIZE_READY"]).write_text("ready")
-        time.sleep(30)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            time.sleep(0.05)
     return original_snapshot()
 
 verify.snapshot_input = snapshot_with_barrier
@@ -1585,7 +1605,9 @@ for _name in ("SIGTERM", "SIGBREAK"):
         signal.signal(_sig, cancel)
 try:
     Path(os.environ["SYNTH_READY"]).write_text("ready")
-    time.sleep(30)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        time.sleep(0.05)
 except KeyboardInterrupt:
     Path(os.environ["SYNTH_CLEANING"]).write_text("cleaning")
     time.sleep(0.3)
@@ -1654,9 +1676,11 @@ except KeyboardInterrupt:
         wrapper_path = self.repo.path / "verify.py"
         source = wrapper_path.read_text(encoding="utf-8")
         # 在合成入口的日志排空边界注入一次真实信号，避免依赖调度速度碰竞态。
-        source = source.replace("reader.join(timeout=5)",
+        boundary = "_join_thread(reader, timeout=5)"
+        self.assertIn(boundary, source)
+        source = source.replace(boundary,
                                 "signal.raise_signal(signal.SIGINT)\n"
-                                "                reader.join(timeout=5)", 1)
+                                "                " + boundary, 1)
         wrapper_path.write_text(source, encoding="utf-8")
         self.repo.commit_all("合成日志排空期间取消")
         p = self.repo.run_verify("run", "--group", "browser", "--group", "serve-check")
@@ -4127,6 +4151,112 @@ class WindowsVerificationContractTests(VerifyEntryTestCase):
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         expected = "win32-share-lock" if os.name == "nt" else "flock"
         self.assertEqual(record["environment"]["isolation"]["mechanism"], expected)
+
+    def test_e2e_servers_tolerates_missing_sighup_and_pthread_sigmask(self):
+        probe = (
+            "import signal, sys\n"
+            "for attr in ('SIGHUP', 'pthread_sigmask'):\n"
+            "    if hasattr(signal, attr):\n"
+            "        delattr(signal, attr)\n"
+            "sys.path.insert(0, %r)\n"
+            "import e2e_servers\n"
+            "cleanup = e2e_servers.TestCleanup()\n"
+            "e2e_servers.install(cleanup)\n"
+            "with e2e_servers._signals_deferred():\n"
+            "    pass\n"
+        ) % str(ROOT / "tests")
+        result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_windows_command_resolution_expands_bare_tool_name(self):
+        import unittest.mock as mock
+        import verify
+
+        with mock.patch.object(verify.os, "name", "nt"), \
+             mock.patch.object(verify.shutil, "which", return_value=r"C:\synth\bin\uv.cmd") as which_mock:
+            argv = verify._resolve_command_argv(["uv", "run", "tests/e2e_browser.py"], {"PATH": r"C:\synth\bin"})
+        self.assertEqual(argv, [r"C:\synth\bin\uv.cmd", "run", "tests/e2e_browser.py"])
+        which_mock.assert_called_once_with("uv", path=r"C:\synth\bin")
+
+    def test_windows_interruptible_wait_polls_in_bounded_slices(self):
+        import unittest.mock as mock
+        import verify
+
+        calls = []
+
+        class FakeProc:
+            args = ["uv"]
+
+            def wait(self, timeout=None):
+                calls.append(timeout)
+                if len(calls) < 3:
+                    raise subprocess.TimeoutExpired(self.args, timeout)
+                return 0
+
+            def poll(self):
+                return None
+
+        with mock.patch.object(verify.os, "name", "nt"):
+            code = verify._wait_process(FakeProc(), timeout=None)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(t is not None and t <= 0.15 for t in calls))
+
+        class StuckProc:
+            args = ["uv"]
+
+            def wait(self, timeout=None):
+                raise subprocess.TimeoutExpired(self.args, timeout)
+
+            def poll(self):
+                return None
+
+        with mock.patch.object(verify.os, "name", "nt"):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                verify._wait_process(StuckProc(), timeout=0.05)
+
+    def test_artifact_root_resolves_nonexistent_relative_path_to_absolute(self):
+        import unittest.mock as mock
+        import verify
+
+        old_cwd = os.getcwd()
+        outside = Path(self.temp.name) / "outside-rel"
+        outside.mkdir()
+        os.chdir(outside)
+        try:
+            real_resolve = Path.resolve
+
+            def python39_win_resolve(path_self, strict=False):
+                # 模拟 Windows Python 3.9 Path.resolve() 对不存在路径返回相对路径的缺陷
+                if not path_self.exists():
+                    return path_self
+                return real_resolve(path_self, strict=strict)
+
+            with mock.patch.object(Path, "resolve", python39_win_resolve):
+                resolved = verify.artifact_root("evidence-out")
+            self.assertTrue(resolved.is_absolute())
+            self.assertEqual(resolved, outside.resolve() / "evidence-out")
+        finally:
+            os.chdir(old_cwd)
+
+    def test_render_report_formats_record_dir_with_os_sep(self):
+        import verify
+
+        outside = Path(self.temp.name) / "outside-report" / "evidence-out"
+        record = {
+            "schema": verify.SCHEMA,
+            "run_id": "20261116T000000Z-abc123",
+            "result": {"outcome": "passed", "exit_status": 0, "usable_as_evidence": True, "notes": []},
+            "context": {"phase": "development", "issue": None, "pr": None, "reason": None},
+            "git": {},
+            "input": {},
+            "environment": {},
+            "timing": {},
+            "groups": [],
+            "evidence": {"integrity": "ok", "record_path": "record.json", "logs": [], "cases": []},
+        }
+        rendered = verify.render_report(record, root=outside)
+        self.assertIn(str(outside / "runs" / record["run_id"]) + os.sep, rendered)
 
 
 if __name__ == "__main__":

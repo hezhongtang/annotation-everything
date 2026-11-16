@@ -1028,10 +1028,55 @@ def parse_browser_environment(text: str) -> Optional[dict]:
 # ── 执行 ──────────────────────────────────────────────────────────────────
 
 _TERMINATION_SIGNALS = ("SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK")
+_WINDOWS_WAIT_SLICE = 0.1
 
 
 def _termination_signals() -> tuple:
     return tuple(sig for sig in (getattr(signal, name, None) for name in _TERMINATION_SIGNALS) if sig is not None)
+
+
+def _resolve_command_argv(argv: list, env: dict) -> list:
+    """在 Windows 上把裸工具名（如 uv）解析成 shutil.which 找到的 .cmd/.exe 完整路径。"""
+    resolved_argv = list(argv)
+    if os.name == "nt" and resolved_argv and not os.path.isabs(resolved_argv[0]):
+        resolved = shutil.which(resolved_argv[0], path=env.get("PATH"))
+        if resolved:
+            resolved_argv[0] = resolved
+    return resolved_argv
+
+
+def _wait_process(proc, timeout: Optional[float] = None) -> int:
+    """Windows CPython 下 WaitForSingleObject 不被 SIGBREAK 打断；用短时间片轮询以及时响应控制台信号。"""
+    if os.name != "nt":
+        return proc.wait(timeout=timeout)
+    deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+    while True:
+        if deadline is None:
+            slice_timeout = _WINDOWS_WAIT_SLICE
+        else:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                code = proc.poll()
+                if code is not None:
+                    return code
+                raise subprocess.TimeoutExpired(proc.args, timeout)
+            slice_timeout = min(remaining, _WINDOWS_WAIT_SLICE)
+        try:
+            return proc.wait(timeout=slice_timeout)
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _join_thread(thread, timeout: float = 5.0) -> None:
+    if os.name != "nt":
+        thread.join(timeout=timeout)
+        return
+    deadline = time.monotonic() + max(0.0, timeout)
+    while thread.is_alive():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        thread.join(timeout=min(remaining, _WINDOWS_WAIT_SLICE))
 
 
 def _assign_win32_job(proc):
@@ -1209,11 +1254,11 @@ class RunContext:
         for entry in self.registry.live():
             remaining = max(0.0, deadline - time.monotonic())
             try:
-                entry["proc"].wait(timeout=remaining)
+                _wait_process(entry["proc"], timeout=remaining)
             except subprocess.TimeoutExpired:
                 signal_group(entry["proc"], hard_kill, job_handle=entry.get("job"))
                 try:
-                    entry["proc"].wait(timeout=KILL_GRACE_SECONDS)
+                    _wait_process(entry["proc"], timeout=KILL_GRACE_SECONDS)
                 except subprocess.TimeoutExpired:
                     pass
             code = entry["proc"].poll()
@@ -1314,6 +1359,7 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
                 else:
                     popen_kwargs["start_new_session"] = True
                     popen_kwargs["pass_fds"] = lock_fds
+                child_argv = _resolve_command_argv(child_argv, child_env)
                 try:
                     proc = subprocess.Popen(child_argv, cwd=str(REPO), env=child_env,
                                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -1332,17 +1378,17 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
                                           args=(proc.stdout, log_fh, None if ctx.quiet else ctx.echo), daemon=True)
                 reader.start()
                 try:
-                    code = proc.wait(timeout=ctx.timeout)
+                    code = _wait_process(proc, timeout=ctx.timeout)
                 except subprocess.TimeoutExpired:
                     timed_out = True
                     hard_kill = getattr(signal, "SIGKILL", -1)
                     signal_group(proc, signal.SIGTERM, job_handle=job_handle)
                     try:
-                        code = proc.wait(timeout=KILL_GRACE_SECONDS)
+                        code = _wait_process(proc, timeout=KILL_GRACE_SECONDS)
                     except subprocess.TimeoutExpired:
                         signal_group(proc, hard_kill, job_handle=job_handle)
-                        code = proc.wait()
-                reader.join(timeout=5)
+                        code = _wait_process(proc)
+                _join_thread(reader, timeout=5)
             except Interrupted as exc:
                 # 先让子进程在原日志流上完成中断摘要，再关闭文件。否则读线程会
                 # 写入已关闭的文件，父入口也拿不到已经完成 / 中断 / 未运行的场景。
@@ -1353,7 +1399,7 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
                 ctx.abort(exc.signum)
                 code = proc.poll() if proc is not None else None
                 if reader is not None and reader.ident is not None:
-                    reader.join(timeout=5)
+                    _join_thread(reader, timeout=5)
             except Exception:
                 # 记录写入等入口错误也须在日志关闭、资源锁释放之前回收自己的子进程。
                 cleanup_guard.enter_context(shield_termination())
@@ -1361,7 +1407,7 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
                     registry_entry = ctx.registry.register(proc, group.name, job=job_handle)
                 ctx.abort(signal.SIGTERM)
                 if reader is not None and reader.ident is not None:
-                    reader.join(timeout=5)
+                    _join_thread(reader, timeout=5)
                 raise
             # 正常组收尾收到的首次取消要保留；已在回收中则仍屏蔽二次信号。
             # 捕获器直接写入待返回结果，既不丢已完成证据，也不吞掉用户取消。
@@ -1536,14 +1582,31 @@ def trim_cases(cases: list) -> list:
 
 # ── 子命令 ────────────────────────────────────────────────────────────────
 
+def _resolve_path(raw: str) -> Path:
+    """规避 Windows Python 3.9 Path.resolve() 对尚未创建路径返回相对路径的缺陷。"""
+    candidate = Path(os.path.abspath(raw))
+    suffix = []
+    probe = candidate
+    while not probe.exists():
+        parent = probe.parent
+        if parent == probe:
+            return candidate
+        suffix.append(probe.name)
+        probe = parent
+    resolved = probe.resolve()
+    for part in reversed(suffix):
+        resolved = resolved / part
+    return resolved
+
+
 def artifact_root(out_dir: Optional[str]) -> Path:
     """产物根目录。相对路径先绝对化：主进程按调用方 cwd 解析，子进程固定在仓库根，
     不统一锚定的话计时证据会分裂成两处。"""
     if out_dir:
-        return Path(out_dir).resolve()
+        return _resolve_path(out_dir)
     override = os.environ.get("AE_VERIFY_DIR")
     if override:
-        return Path(override).resolve()
+        return _resolve_path(override)
     return REPO / ARTIFACT_DIRNAME
 
 
@@ -2804,8 +2867,8 @@ def render_report(record: dict, problems: Optional[list] = None,
         len(evidence.get("cases") or [])))
     for note in list(result.get("notes") or []) + problems:
         lines.append("  - %s" % note)
-    lines.append("记录目录：%s/runs/%s/" % (
-        _show(Path(root) if root is not None else REPO / ARTIFACT_DIRNAME), record.get("run_id")))
+    run_dir = (Path(root) if root is not None else REPO / ARTIFACT_DIRNAME) / "runs" / str(record.get("run_id") or "")
+    lines.append("记录目录：%s%s" % (_show(run_dir), os.sep))
     return "\n".join(lines)
 
 
