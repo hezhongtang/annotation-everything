@@ -1113,7 +1113,11 @@ def review_overview_stop_scope_checks(browser, tmp: Path):
         page.locator("#overviewBack").click()
         page.select_option("#localePick", "en")
         page.locator("#overviewBtn").click()
-        ok("Batch stop in progress" in status.inner_text() and "This workspace" in status.inner_text(),
+        # 返回总览会异步刷新；等本次语言重绘完成，不能读取隐藏期间留下的旧文本。
+        ok(wait_dom(page, """() => {
+            const text = document.getElementById('overviewBatchStatus').textContent;
+            return text.includes('Batch stop in progress') && text.includes('This workspace');
+        }""", 5, condition="批量停止结果按英文重绘并保留原工作区范围"),
            "进行中的结果随界面切换英文")
         held.pop(0).fulfill(status=400, json={"app": "annotation-everything", "code": "bad-note",
                                             "error": "Synthetic save rejection"})
