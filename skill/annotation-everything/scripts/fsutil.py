@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 try:
     import fcntl
@@ -26,6 +26,17 @@ _WIN_LOCKFILE_EXCLUSIVE_LOCK = 0x00000002
 _WIN_ERROR_LOCK_VIOLATION = 33
 _WIN_REPARSE_POINT_ATTR = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
 _WIN_REPLACE_DELAYS = (0.01, 0.02, 0.04, 0.08, 0.1, 0.1, 0.1)
+
+
+def _replace_with_retry(src: str | Path, dst: Path) -> None:
+    if is_windows():
+        for delay in _WIN_REPLACE_DELAYS:
+            try:
+                os.replace(src, dst)
+                return
+            except PermissionError:
+                time.sleep(delay)
+    os.replace(src, dst)
 
 
 def atomic_write(path: Path, text: str, *, prefix: str, fsync: bool = True) -> None:
@@ -43,17 +54,20 @@ def atomic_write(path: Path, text: str, *, prefix: str, fsync: bool = True) -> N
             if fsync:
                 fh.flush()
                 os.fsync(fh.fileno())
-        if os.name == "nt":
-            for delay in _WIN_REPLACE_DELAYS:
-                try:
-                    os.replace(tmp, path)
-                    break
-                except PermissionError:
-                    time.sleep(delay)
-            else:
-                os.replace(tmp, path)
-        else:
-            os.replace(tmp, path)
+        _replace_with_retry(tmp, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+
+
+def atomic_write_bytes(path: Path, data: bytes, *, prefix: str) -> None:
+    """原子写入二进制：同目录临时文件（0600）+ os.replace（Windows 共享冲突有限次重试）。"""
+    fd, tmp = tempfile.mkstemp(prefix=prefix, suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        _replace_with_retry(tmp, path)
     except BaseException:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp)
@@ -208,7 +222,7 @@ def check_private_regular_file(
     size_msg = size_error or f"{error_prefix}-too-large"
     if not stat.S_ISREG(info.st_mode) or _is_reparse_or_symlink(info):
         raise ValueError(priv_msg)
-    if os.name == "nt":
+    if is_windows():
         if not _win_same_owner(path):
             raise ValueError(priv_msg)
     else:
@@ -286,9 +300,71 @@ def quote_cli(arg: str) -> str:
         return shlex.quote(arg)
     if arg and not _PS_UNSAFE_RE.search(arg):
         return arg
-    if not any(ch in arg for ch in ('"', "$", "`")):
+    if not any(ch in arg for ch in ('"', "$", "`")) and not arg.endswith("\\"):
         return f'"{arg}"'
     return "'" + arg.replace("'", "''") + "'"
+
+
+def join_cli(argv: Iterable[str]) -> str:
+    """将命令行参数列表拼接成当前平台可直接复制执行的命令串。"""
+    return " ".join(quote_cli(str(arg)) for arg in argv)
+
+
+def split_cli(cmd: str) -> list[str]:
+    """按当前平台规则拆分命令行字符串，保留 Windows 路径反斜杠并兼容 PowerShell 单引号。"""
+    if not is_windows():
+        return shlex.split(cmd)
+    args: list[str] = []
+    i, n = 0, len(cmd)
+    while i < n:
+        while i < n and cmd[i] in " \t\r\n":
+            i += 1
+        if i >= n:
+            break
+        buf: list[str] = []
+        in_double = False
+        while i < n:
+            ch = cmd[i]
+            if not in_double and ch in " \t\r\n":
+                break
+            if not in_double and not buf and ch == "'":
+                i += 1
+                while i < n:
+                    if cmd[i] == "'":
+                        if i + 1 < n and cmd[i + 1] == "'":
+                            buf.append("'")
+                            i += 2
+                            continue
+                        i += 1
+                        break
+                    buf.append(cmd[i])
+                    i += 1
+                else:
+                    raise ValueError("No closing quotation")
+                continue
+            if ch == "\\":
+                bs = 0
+                while i < n and cmd[i] == "\\":
+                    bs += 1
+                    i += 1
+                if i < n and cmd[i] == '"':
+                    buf.append("\\" * (bs // 2))
+                    if bs % 2 == 1:
+                        buf.append('"')
+                        i += 1
+                    continue
+                buf.append("\\" * bs)
+                continue
+            if ch == '"':
+                in_double = not in_double
+                i += 1
+                continue
+            buf.append(ch)
+            i += 1
+        if in_double:
+            raise ValueError("No closing quotation")
+        args.append("".join(buf))
+    return args
 
 
 INLINE_SCRIPT = re.compile(r"<script>(.*?)</script>", re.S)

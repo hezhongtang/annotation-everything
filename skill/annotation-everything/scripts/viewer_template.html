@@ -2240,9 +2240,9 @@ function renderDelivery(){const el=$("agentDelivery"),a=agentDelivery,L=hand&&ha
   if(a&&a.adapter==="wait"){el.textContent="";el.title="";el.classList.remove("warn");updateStatusBar();return}
   const event=L&&["review","reviewing"].includes(L.status)?"review":"handoff";
   const matched=a&&L&&a.seq===L.seq&&a.event===event;
-  let state=a&&a.adapter==="codex-desktop"?a.state:null;
-  if(L&&!matched&&state!=="error")state=["pending","claimed","review","reviewing"].includes(L.status)?"unknown":a&&a.adapter?"bound":null;
-  el.textContent=state?tMsg(DELIVERY_LABEL[state]||"viewer.agent.error"):"";
+  let state=a&&a.adapter==="codex-desktop"?a.state:(a&&a.adapter?(a.state==="error"?"error":"unknown"):null);
+  if(L&&!matched&&state!=="error")state=["pending","claimed","review","reviewing"].includes(L.status)?"unknown":a&&a.adapter==="codex-desktop"?"bound":state;
+  el.textContent=state?tMsg(DELIVERY_LABEL[state]||"viewer.agent.unknown"):"";
   el.title=el.textContent;el.classList.toggle("warn",["failed","unconfirmed","error"].includes(state));updateStatusBar()}
 function renderHand(){renderDelivery();const el=$("handState"),L=hand&&hand.latest;
   if(handQueued){el.className="queued";el.textContent=tMsg("viewer.hand.state.queued");el.title=tMsg("viewer.hand.state.queuedTitle");return}
@@ -3685,9 +3685,9 @@ function overviewReceiverText(row){
   if(!d||typeof d.state!=="string")return tMsg("viewer.overview.receiver.unconfigured");
   const inner=d.receiver&&d.receiver.state?d.receiver.state:null;
   const who=d.receiver&&d.receiver.harness?{harness:d.receiver.harness,session:d.receiver.sessionId||""}:null;
-  if(d.state==="processing")return tMsg("viewer.overview.receiver.processing");
-  if(d.state==="restart-required")return tMsg("viewer.overview.receiver.restartRequired");
-  if(d.state==="error")return tMsg("viewer.overview.receiver.error");
+  if(d.state==="processing"||inner==="processing")return tMsg("viewer.overview.receiver.processing");
+  if(d.state==="restart-required"||inner==="restart-required")return tMsg("viewer.overview.receiver.restartRequired");
+  if(d.state==="error"||inner==="error")return tMsg("viewer.overview.receiver.error");
   if(d.state==="unconfigured")return tMsg("viewer.overview.receiver.unconfigured");
   if(d.adapter==="codex-desktop")return tMsg("viewer.overview.receiver.event",who||{harness:"",session:""});
   if(inner==="waiting")return tMsg("viewer.overview.receiver.waiting",who||{harness:"",session:""});

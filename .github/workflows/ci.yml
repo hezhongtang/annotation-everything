@@ -69,16 +69,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      # 首期 Windows 验证基础、安装审阅与办公材料范围（#172 + #173 + #175）：
-      # 只运行已适配的共享资源隔离、统一验证入口、纯逻辑、安装与基础审阅/存储/HTTP 安全及办公材料/工具检查；
-      # 未适配的接手/完整维护/浏览器检查（#174, #176, #177）尚未纳入，不代表全量通过。
-      - name: 验证基础、安装审阅与办公材料检查（Windows 当前已适配范围）
+      # 首期 Windows 验证基础、安装审阅、接手分析与办公材料范围（#172 + #173 + #174 + #175）：
+      # 只运行已适配的共享资源隔离、统一验证入口、纯逻辑、安装、基础审阅/存储/HTTP 安全、接手/分析/停止与办公材料/工具检查；
+      # 未适配的完整维护/浏览器检查（#176, #177）尚未纳入，不代表全量通过。
+      - name: 验证基础、安装审阅、接手分析与办公材料检查（Windows 当前已适配范围）
         shell: pwsh
         run: |
           $env:AE_HOME = "$env:RUNNER_TEMP\ae-home"
           $env:PYTHONUTF8 = "1"
           python verify.py run --group unit-related --phase ci `
-            --reason "CI Windows 验证基础、安装审阅与办公材料范围（${{ github.event_name }} ${{ github.ref_name }} Python ${{ matrix.python-version }}）" `
+            --reason "CI Windows 验证基础、审阅、接手分析与办公材料范围（${{ github.event_name }} ${{ github.ref_name }} Python ${{ matrix.python-version }}）" `
             tests/test_host_isolation.py `
             tests/test_verify_entry.py `
             tests/test_verify_parallel.py `
@@ -97,6 +97,10 @@ jobs:
             tests/test_ae_checks_tools.py `
             tests/test_cli_error_i18n.py `
             tests/test_skill_discovery.py `
+            tests/test_agent_delivery.py `
+            tests/test_receiver_binding.py `
+            tests/test_analysis_agent.py `
+            tests/test_review_stop.py `
             tests/test_docx_anchor.py `
             tests/test_docx_review.py `
             tests/test_docx_edit.py `
@@ -114,7 +118,10 @@ jobs:
             tests.test_core.CopiedReviewTests `
             tests.test_core.BuildTests `
             tests.test_core.LedgerTests `
-            tests.test_core.ServerTests
+            tests.test_core.ServerTests `
+            tests.test_core.ReviewRound3Tests `
+            tests.test_core.OverviewHandoffTests `
+            tests.test_core.WaitPollReadsTests
       - name: 保存 Windows 验证构件
         if: always()
         uses: actions/upload-artifact@v4
