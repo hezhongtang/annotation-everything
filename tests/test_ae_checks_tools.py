@@ -203,7 +203,8 @@ class GitHooksCheckTests(unittest.TestCase):
         result = ae.check_git_hooks(self.ctx(repo))
         self.assertEqual(result.level, WARN)
         self.assertEqual(result.code, "git-hooks")
-        self.assertIn("setup-dev.sh", result.fix_command)
+        expected_fix = "core.hooksPath" if os.name == "nt" else "setup-dev.sh"
+        self.assertIn(expected_fix, result.fix_command)
 
     def test_warns_when_pointing_elsewhere(self):
         repo = self.make_repo()
@@ -216,7 +217,8 @@ class GitHooksCheckTests(unittest.TestCase):
         repo = self.make_repo(git_init=False)
         result = ae.check_git_hooks(self.ctx(repo))
         self.assertEqual(result.level, WARN)
-        self.assertIn("setup-dev.sh", result.fix_command)
+        expected_fix = "core.hooksPath" if os.name == "nt" else "setup-dev.sh"
+        self.assertIn(expected_fix, result.fix_command)
 
     def test_warns_when_hooks_directory_missing(self):
         repo = self.make_repo(hooks_dir=False)

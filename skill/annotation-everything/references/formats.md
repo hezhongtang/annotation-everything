@@ -343,7 +343,7 @@ JSON 与 Markdown 导出都不包含分析事件、问答、问题树或轮次�
 
 ## 失效台账清理
 
-`serve.py prune --stale [--list] [--under 目录 | --all]` 实际清理时使用一次台账排他锁，预览读取台账快照。默认只选 `/tmp/`、`/private/tmp/`、`/var/folders/`（包括符号链接解析后的路径）下目录不在的条目。`--under` 选范围内全部失效条目，`--all` 选全部失效条目。`--list` 不改台账或元数据，空 `AE_HOME` 也不会在预览时创建。与 `--delete-metadata` 同用时，预览会检查当前运行状态，跳过运行中的审阅。
+`serve.py prune --stale [--list] [--under 目录 | --all]` 实际清理时使用一次台账排他锁，预览读取台账快照。默认只选 `/tmp/`、`/private/tmp/`、`/var/folders/`（Windows 上为 `tempfile.gettempdir()`、`%TEMP%`、`%TMP%`，包括符号链接解析后的路径）下目录不在的条目。`--under` 选范围内全部失效条目，`--all` 选全部失效条目。`--list` 不改台账或元数据，空 `AE_HOME` 也不会在预览时创建。与 `--delete-metadata` 同用时，预览会检查当前运行状态，跳过运行中的审阅。
 
 总览首页用 `POST /api/overview/prune` 提交 `{reviewIds, allStale, deleteMetadata}`。服务端套用启动时的 `--under` 范围，在台账锁内复核每个目标。`reviewIds` 固定确认框里的目标。响应包含 `removed`、`metadataDeleted`、`metadataPreserved`、`metadataErrors` 和 `skipped`。打开目录用 `POST /api/overview/reveal` 提交 `{reviewId}`，只接受范围内目录仍存在的标识不符条目。系统文件管理器启动失败、返回非零退出码或超时未确认时，接口返回 `500 overview-reveal-failed`，总览提示复制完整路径并手动打开。
 

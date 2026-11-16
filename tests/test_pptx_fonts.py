@@ -416,6 +416,25 @@ with patch.object(check_pptx_fonts.subprocess, "run", side_effect=run_tool):
             with self.assertRaises(cpf.CheckError):
                 cpf.installed_fonts()
 
+    def test_installed_fonts_resolves_fc_list_via_which_before_windows_fallback(self):
+        sys.path.insert(0, str(CHECKER.parent))
+        import check_pptx_fonts as cpf
+        from unittest import mock
+
+        seen = []
+
+        def fake_run(cmd, **_kw):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="Synthetic Sans\n", stderr="")
+
+        with mock.patch.object(cpf, "_is_windows", return_value=True), \
+                mock.patch.object(cpf, "which", return_value=r"C:\fake\bin\fc-list.cmd"), \
+                mock.patch.object(cpf.subprocess, "run", side_effect=fake_run):
+            fonts, warn = cpf.installed_fonts()
+        self.assertFalse(warn)
+        self.assertEqual(seen[0][0], r"C:\fake\bin\fc-list.cmd")
+        self.assertIn(cpf.normal("Synthetic Sans"), fonts)
+
 
 if __name__ == "__main__":
     unittest.main()

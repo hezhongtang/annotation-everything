@@ -891,7 +891,12 @@ class MultiBatchTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("快照没存成", r.stderr)
         (self.d / ".snapshots").mkdir(exist_ok=True)
-        os.symlink(tmpdir(), self.d / ".snapshots" / "batch-9")
+        try:
+            os.symlink(tmpdir(), self.d / ".snapshots" / "batch-9", target_is_directory=True)
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                return
+            raise
         r = run("done", str(self.d), "--seq", "2")
         self.assertEqual(r.returncode, 0)
 
@@ -1576,7 +1581,7 @@ class ReviewRound3Tests(unittest.TestCase):
             argv = serve.parse_hook(rel_cmd)
         finally:
             os.chdir(old)
-        self.assertEqual(argv[0], str(script.resolve()))
+        self.assertEqual(Path(argv[0]).resolve(), script.resolve())
         with self.assertRaises(SystemExit):
             serve.parse_hook('"unclosed')
         win_cmd = r'"C:\Program Files\Hook Dir\run.cmd" "C:\My Reviews\r1" --flag'
@@ -3113,6 +3118,14 @@ class OverviewHomeTests(unittest.TestCase):
         self.assertFalse(review_overview.is_archived(self.outside))
 
     def test_start_rechecks_scope_in_child_before_binding(self):
+        probe_link = self.tree / "probe-symlink"
+        try:
+            probe_link.symlink_to(self.inside, target_is_directory=True)
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                self.skipTest("当前 Windows 账户无符号链接权限")
+            raise
+        probe_link.unlink()
         self.restart_home(self.workspace)
         port = free_port()
         ledger.claim_port(self.rid_inside, self.inside, port)
@@ -3357,7 +3370,7 @@ class OverviewHandoffTests(unittest.TestCase):
         records = self.wait_hook_records(hook_log, 1)
         self.assertEqual(len(records), 1, "一批提交钩子恰好调用一次")
         record = records[0]
-        self.assertEqual(record["cwd"], str(self.home_cwd.resolve()), "钩子从首页启动时的工作目录运行")
+        self.assertEqual(Path(record["cwd"]).resolve(), self.home_cwd.resolve(), "钩子从首页启动时的工作目录运行")
         self.assertEqual(record["relative"], "from-home-cwd", "相对参数仍从首页启动目录解析")
         self.assertEqual(record["argv"], [str(hook_log), "rel-marker.txt"], "钩子收到解析后的命令参数")
         self.assertEqual((record["env"]["AE_EVENT"], record["env"]["AE_HANDOFF_SEQ"]), ("handoff", "1"))
@@ -5105,15 +5118,20 @@ class ServiceStateTests(unittest.TestCase):
 
     def test_pid_alive_windows_contract_and_temp_roots(self):
         import ctypes
+        from pathlib import PureWindowsPath
         self.assertTrue(ledger.in_temp_area(Path(tempfile.gettempdir()) / "ae-synth-review"))
         with patch("tempfile.gettempdir", return_value=str(tmpdir())):
             synthetic_tmp = Path(tempfile.gettempdir())
             self.assertTrue(ledger.in_temp_area(synthetic_tmp / "r1"))
         with patch("ledger.os.name", "nt"), \
+                patch("ledger.Path", PureWindowsPath), \
                 patch("ledger.tempfile.gettempdir", return_value="C:/Users/runner/AppData/Local/Temp"), \
                 patch.dict("ledger.os.environ", {"TEMP": "C:/Users/runner/AppData/Local/Temp", "TMP": "D:/AltTemp"}, clear=False):
             win_roots = ledger._default_temp_roots()
-            self.assertEqual([str(p) for p in win_roots], [str(Path("C:/Users/runner/AppData/Local/Temp")), str(Path("D:/AltTemp"))])
+            self.assertEqual(
+                [str(p) for p in win_roots],
+                [str(PureWindowsPath("C:/Users/runner/AppData/Local/Temp")), str(PureWindowsPath("D:/AltTemp"))],
+            )
         with patch.object(ledger, "TEMP_ROOTS", (tmpdir() / "nonexistent-root", tmpdir())):
             self.assertFalse(ledger.in_temp_area(tmpdir() / "outside"))
 
@@ -5615,6 +5633,16 @@ class FsutilTests(unittest.TestCase):
             checked = fsutil.check_private_regular_file(regular, max_bytes=1024, error_prefix="state")
             self.assertEqual(checked.st_size, 12)
 
+        class FakeNoneAttrStat:
+            st_mode = 0o100666
+            st_size = 12
+            st_file_attributes = None
+
+        with patch("fsutil.os.name", "nt"), \
+                patch.object(Path, "lstat", return_value=FakeNoneAttrStat()):
+            checked = fsutil.check_private_regular_file(regular, max_bytes=1024, error_prefix="state")
+            self.assertEqual(checked.st_size, 12)
+
         class FakeReparseStat:
             st_mode = 0o100666
             st_size = 12
@@ -5803,6 +5831,38 @@ class FsutilTests(unittest.TestCase):
         self.assertEqual(calls["count"], 3)
         self.assertEqual(target.read_bytes(), b"new\x00bytes")
         self.assertEqual([p.name for p in d.iterdir() if p.suffix == ".tmp"], [])
+
+    def test_notes_main_skips_execve_reexec_on_windows(self):
+        import contextlib
+        d = tmpdir()
+        (d / "index.html").write_text("x", encoding="utf-8")
+        real_main_locked = notes_cli._main_locked
+        host_os = os.name
+
+        @contextlib.contextmanager
+        def fake_update_lock():
+            yield 0
+
+        def run_with_host_os(args):
+            with patch("notes.os.name", host_os):
+                return real_main_locked(args)
+
+        with patch.object(notes_cli, "__name__", "__main__"), \
+                patch.object(ledger, "update_lock", fake_update_lock), \
+                patch.object(notes_cli, "_main_locked", side_effect=run_with_host_os), \
+                patch("notes.os.name", "nt"), \
+                patch("notes.os.execve", side_effect=AssertionError("Windows must not os.execve")), \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            code = notes_cli.main(["show", str(d)])
+        self.assertEqual(code, 0)
+
+    def test_atomic_write_preserves_exact_newlines(self):
+        import fsutil
+        d = tmpdir()
+        target = d / "crlf.json"
+        payload = '{\r\n  "ok": true\r\n}\r\n'
+        fsutil.atomic_write(target, payload, prefix=".crlf-")
+        self.assertEqual(target.read_bytes(), payload.encode("utf-8"))
 
 
 if __name__ == "__main__":

@@ -120,6 +120,7 @@ def write_package(out: Path, parts: dict[str, str | bytes]) -> Path:
         for name, content in parts.items():
             data = content.encode("utf-8") if isinstance(content, str) else content
             info = zipfile.ZipInfo(name, FIXED_TIME)
+            info.filename = name   # 保留原始成员名（如反斜杠路径）以覆盖非规范 ZIP 输入测试
             info.external_attr = 0o600 << 16
             archive.writestr(info, data, zipfile.ZIP_DEFLATED)
     return out

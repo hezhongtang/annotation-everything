@@ -746,8 +746,9 @@ def main(argv: list[str] | None = None) -> int:
         except OSError:
             print(cli_text(i18n.DEFAULT_LOCALE)("cli.notes.updateLockUnavailable"), file=sys.stderr)
             return _main_locked(argv)
-        if __name__ == "__main__":
-            # 锁可能在导入旧代码后才拿到。持锁重新执行入口，保证载入的是切换后的整套代码。
+        if __name__ == "__main__" and os.name != "nt":
+            # Windows 首期不允许在服务/等待者持锁期间原地替换目录；且 Windows os.execve 会异步派生子进程并立即退出父进程。
+            # 锁可能在导入旧代码后才拿到。POSIX 下持锁重新执行入口，保证载入的是切换后的整套代码。
             args = list(sys.argv[1:] if argv is None else argv)
             try:
                 os.set_inheritable(fd, True)

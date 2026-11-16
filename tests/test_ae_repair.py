@@ -31,7 +31,10 @@ import host_isolation  # noqa: E402
 host_isolation.require_for_module(__name__)
 
 import ae  # noqa: E402
-from test_ae_checks_runtime import ServeProcess, make_review_dir, write_ledger  # noqa: E402
+try:
+    from test_ae_checks_runtime import ServeProcess, make_review_dir, write_ledger  # noqa: E402
+except ModuleNotFoundError:
+    from tests.test_ae_checks_runtime import ServeProcess, make_review_dir, write_ledger  # noqa: E402
 
 PASS, WARN, FAIL = ae.LEVEL_PASS, ae.LEVEL_WARN, ae.LEVEL_FAIL
 RID_STALE, RID_VALID = "1111111111111111", "2222222222222222"

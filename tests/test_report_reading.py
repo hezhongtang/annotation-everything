@@ -192,7 +192,7 @@ def installed_copy() -> Path:
     temp = tempfile.mkdtemp(prefix="ae-read-res-")
     home = Path(temp) / "home"
     skills = home / ".claude" / "skills"
-    env = {**os.environ, "HOME": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
     done = subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stdout + done.stderr

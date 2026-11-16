@@ -674,7 +674,8 @@ class BuildWarningTests(unittest.TestCase):
         (self.sources / "writer" / "SKILL.md").write_text(
             "---\nname: writer\ndescription: 合成说明\n---\n", encoding="utf-8")
         self.review = self.root / "review"
-        self.env = {**os.environ, "HOME": str(self.home), "AE_HOME": str(self.root / "ledger"),
+        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
+                    "AE_HOME": str(self.root / "ledger"),
                     "CODEX_HOME": str(self.home / ".codex"),
                     "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills")}
 

@@ -57,9 +57,9 @@ jobs:
           python3 verify.py report --efficiency | tee -a "$GITHUB_STEP_SUMMARY"
 
   windows-foundation:
-    name: 纯逻辑与验证基础检查（Windows Python ${{ matrix.python-version }}）
+    name: 单元测试与服务安全自检（Windows Python ${{ matrix.python-version }}）
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -69,64 +69,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      # 首期 Windows 验证基础、安装审阅、接手分析、办公材料与维护升级范围（#172 + #173 + #174 + #175 + #176）：
-      # 只运行已适配的共享资源隔离、统一验证入口、纯逻辑、安装、基础审阅/存储/HTTP 安全、接手/分析/停止、办公材料/工具与维护升级检查；
-      # 未适配的完整浏览器检查（#177）尚未纳入，不代表全量通过。
-      - name: 验证基础、安装审阅、接手分析、办公材料与维护升级检查（Windows 当前已适配范围）
+      # 统一验证入口：Windows 首期串行执行完整单元 + 服务安全自检；
+      # 完整浏览器检查（e2e_browser.py，Edge/Chrome）与真实 Windows 11 x64 桌面交互验收仍需真实桌面环境。
+      - name: 单元测试与服务安全自检（Windows 统一验证入口）
         shell: pwsh
         run: |
           $env:AE_HOME = "$env:RUNNER_TEMP\ae-home"
           $env:PYTHONUTF8 = "1"
-          python verify.py run --group unit-related --phase ci `
-            --reason "CI Windows 验证基础、审阅、接手分析、办公材料与维护升级范围（${{ github.event_name }} ${{ github.ref_name }} Python ${{ matrix.python-version }}）" `
-            tests/test_host_isolation.py `
-            tests/test_verify_entry.py `
-            tests/test_verify_parallel.py `
-            tests/test_verify_doc_allowlist.py `
-            tests/test_i18n.py `
-            tests/test_i18n_catalog_contract.py `
-            tests/test_review_page_editing_i18n.py `
-            tests/test_overview_docs.py `
-            tests/test_release.py `
-            tests/test_gitignore.py `
-            tests/test_e2e_waits.py `
-            tests/test_ae_cli.py `
-            tests/test_ae_link.py `
-            tests/test_ae_target.py `
-            tests/test_ae_cli_i18n.py `
-            tests/test_ae_checks_tools.py `
-            tests/test_ae_checks_runtime.py `
-            tests/test_ae_repair.py `
-            tests/test_ae_uninstall.py `
-            tests/test_prune.py `
-            tests/test_skill_updates.py `
-            tests/test_cli_error_i18n.py `
-            tests/test_skill_discovery.py `
-            tests/test_agent_delivery.py `
-            tests/test_receiver_binding.py `
-            tests/test_analysis_agent.py `
-            tests/test_review_stop.py `
-            tests/test_docx_anchor.py `
-            tests/test_docx_review.py `
-            tests/test_docx_edit.py `
-            tests/test_pptx_reader.py `
-            tests/test_pptx_annotations.py `
-            tests/test_pptx_remap.py `
-            tests/test_pptx_report.py `
-            tests/test_pptx_edit.py `
-            tests/test_pptx_ops.py `
-            tests/test_pptx_fonts.py `
-            tests.test_core.FsutilTests `
-            tests.test_core.FileLockTests `
-            tests.test_core.ServiceStateTests `
-            tests.test_core.CspPolicyTests `
-            tests.test_core.CopiedReviewTests `
-            tests.test_core.BuildTests `
-            tests.test_core.LedgerTests `
-            tests.test_core.ServerTests `
-            tests.test_core.ReviewRound3Tests `
-            tests.test_core.OverviewHandoffTests `
-            tests.test_core.WaitPollReadsTests
+          python verify.py run --group unit --group serve-check --phase ci `
+            --reason "CI Windows ${{ github.event_name }} ${{ github.ref_name }} Python ${{ matrix.python-version }}"
       - name: 保存 Windows 验证构件
         if: always()
         uses: actions/upload-artifact@v4
@@ -136,11 +87,12 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
-      - name: Windows 初始验证摘要
+      - name: Windows 验证摘要
         if: always()
         continue-on-error: true
         shell: pwsh
         run: |
           $env:PYTHONUTF8 = "1"
-          "构件：verify-windows-python${{ matrix.python-version }}（仅验证基础与纯逻辑初始范围；未适配的产品检查尚未纳入，不代表全量通过）" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "构件：verify-windows-python${{ matrix.python-version }}（已运行 Windows CI 完整单元 unit + 服务安全自检 serve-check；browser 组与真实 Windows 11 x64 桌面交互验收仍需真实桌面环境）" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           python verify.py report --latest | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          python verify.py report --efficiency | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
