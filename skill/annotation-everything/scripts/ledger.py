@@ -372,22 +372,41 @@ def forget(key: str) -> tuple[str, dict[str, Any]]:
     return rid, e
 
 
-TEMP_ROOTS = (Path("/tmp"), Path("/private/tmp"), Path("/var/folders"))
+def _default_temp_roots() -> tuple[Path, ...]:
+    if os.name != "nt":
+        return (Path("/tmp"), Path("/private/tmp"), Path("/var/folders"))
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for candidate in (tempfile.gettempdir(), os.environ.get("TEMP"), os.environ.get("TMP")):
+        if not candidate:
+            continue
+        path = Path(candidate)
+        key = os.path.normcase(str(path))
+        if key not in seen:
+            seen.add(key)
+            roots.append(path)
+    return tuple(roots)
+
+
+TEMP_ROOTS = _default_temp_roots()
 PRUNE_METADATA_FILES = (".annotation-archived", ".agent-binding.json", ".agent-deliveries.json",
                         ".annotation-stop.json")
 
 
-def _temp_roots() -> tuple[Path, ...]:
-    roots = list(TEMP_ROOTS)
-    for candidate in (tempfile.gettempdir(), os.environ.get("TEMP"), os.environ.get("TMP")):
-        if candidate:
-            roots.append(Path(candidate))
-    return tuple(roots)
-
-
 def in_temp_area(directory: Path) -> bool:
     resolved = directory.resolve()
-    return any(directory.is_relative_to(root) or resolved.is_relative_to(root.resolve()) for root in _temp_roots())
+    for root in TEMP_ROOTS:
+        try:
+            if directory.is_relative_to(root):
+                return True
+        except ValueError:
+            pass
+        try:
+            if resolved.is_relative_to(root.resolve()):
+                return True
+        except (OSError, ValueError):
+            pass
+    return False
 
 
 class _MetadataUnsafe(Exception):
