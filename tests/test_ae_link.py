@@ -47,6 +47,13 @@ def _can_symlink() -> bool:
 CAN_SYMLINK = _can_symlink()
 
 
+def _resolved_link_target(link: Path) -> Path:
+    raw = os.readlink(link)
+    if raw.startswith("\\\\?\\") and not raw.startswith("\\\\?\\UNC\\"):
+        raw = raw[4:]
+    return Path(raw).resolve()
+
+
 class AeLinkCliTests(unittest.TestCase):
     """命令行行为：子进程运行 ae.py，HOME 与各技能目录全部指向临时目录。"""
 
@@ -200,8 +207,8 @@ class AeLinkCliTests(unittest.TestCase):
         link = self.home.resolve() / custom / SKILL   # 子进程的 cwd 是解析后的真实路径
         self.assertTrue(link.is_symlink(), "相对路径按运行目录解析并记为绝对路径")
         self.assertEqual(os.path.realpath(str(link)), str(self.copy_dir.resolve()))
-        recorded = [entry["path"] for entry in self.read_record()["links"]]
-        self.assertEqual(recorded, [str(link)])
+        recorded = [Path(entry["path"]).resolve() for entry in self.read_record()["links"]]
+        self.assertEqual(recorded, [link.resolve()])
 
     @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_link_name_path_repeated_keeps_single_entry(self):
@@ -257,7 +264,7 @@ class AeLinkCliTests(unittest.TestCase):
         os.symlink(str(self.home / "missing"), str(nested / SKILL), target_is_directory=True)
         p = self.run_ae("install", "--link", f"inner={nested}")
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
-        self.assertEqual(os.readlink(nested / SKILL), str(self.home / "missing"))
+        self.assertEqual(_resolved_link_target(nested / SKILL), (self.home / "missing").resolve())
 
     @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_nested_link_locations_with_existing_parent_link_are_refused(self):
@@ -272,7 +279,7 @@ class AeLinkCliTests(unittest.TestCase):
                 p = self.run_ae("install", "--link", ",".join(ordered))
                 self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
                 self.assertFalse(self.copy_dir.exists(), "路径重叠时不能先复制")
-                self.assertEqual(os.readlink(outer / SKILL), str(previous))
+                self.assertEqual(_resolved_link_target(outer / SKILL), previous.resolve())
                 self.assertEqual(list(previous.iterdir()), [], "不能在旧链接目标内创建子链接")
 
     @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
@@ -493,12 +500,12 @@ class ParseLinkAgentsTests(unittest.TestCase):
     def test_name_path_maps_to_given_dir(self):
         pairs = ae.parse_link_agents("cursor=~/.cursor/skills, my-agent=/opt/skills ")
         self.assertEqual(pairs, [("cursor", self.home / ".cursor" / "skills"),
-                                 ("my-agent", Path("/opt/skills"))])
+                                 ("my-agent", Path(os.path.abspath("/opt/skills")))])
 
     def test_dedup_keeps_first_occurrence(self):
         pairs = ae.parse_link_agents("cursor=/a, codex, cursor=/b")
         self.assertEqual([name for name, _dir in pairs], ["cursor", "codex"])
-        self.assertEqual(pairs[0][1], Path("/a"))
+        self.assertEqual(pairs[0][1], Path(os.path.abspath("/a")))
 
     def test_blank_parts_skipped(self):
         self.assertEqual(ae.parse_link_agents(" codex ,, "), [("codex", ae.link_target_dir("codex"))])

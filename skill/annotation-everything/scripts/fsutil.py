@@ -165,7 +165,7 @@ def _is_reparse_or_symlink(info: os.stat_result) -> bool:
 
 
 def _win_same_owner(path: Path) -> bool:
-    """Windows 真实环境核对文件属主 SID 与当前进程令牌用户是否一致。"""
+    """Windows 真实环境核对文件属主 SID 与当前进程令牌用户或默认属主是否一致。"""
     if sys.platform != "win32":
         return True
     import ctypes
@@ -174,32 +174,76 @@ def _win_same_owner(path: Path) -> bool:
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel32.LocalFree.restype = wintypes.HLOCAL
+
+    advapi32.OpenProcessToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+    advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+    advapi32.GetNamedSecurityInfoW.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+        wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    advapi32.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    advapi32.EqualSid.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    advapi32.EqualSid.restype = wintypes.BOOL
+
     token = wintypes.HANDLE()
     # TOKEN_QUERY = 0x0008
     if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)):
         return False
     owner_sd = ctypes.c_void_p()
-    try:
+
+    def _query_token_sid(info_class: int) -> tuple[int, object] | None:
         needed = wintypes.DWORD(0)
-        # TokenUser = 1
-        advapi32.GetTokenInformation(token, 1, None, 0, ctypes.byref(needed))
+        advapi32.GetTokenInformation(token, info_class, None, 0, ctypes.byref(needed))
         if not needed.value:
-            return False
+            return None
         buf = ctypes.create_string_buffer(needed.value)
-        if not advapi32.GetTokenInformation(token, 1, buf, needed.value, ctypes.byref(needed)):
+        if not advapi32.GetTokenInformation(token, info_class, buf, needed.value, ctypes.byref(needed)):
+            return None
+        sid = ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p))[0]
+        if not sid:
+            return None
+        return sid, buf
+
+    try:
+        # Administrators 组用户新建文件属主为 TokenOwner(4)，而非 TokenUser(1)
+        allowed_sids = [entry for cls in (1, 4) if (entry := _query_token_sid(cls)) is not None]
+        if not allowed_sids:
             return False
-        user_sid = ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p))[0]
 
         file_sid = ctypes.c_void_p()
         # SE_FILE_OBJECT = 1, OWNER_SECURITY_INFORMATION = 1
         rc = advapi32.GetNamedSecurityInfoW(
             str(path), 1, 1, ctypes.byref(file_sid), None, None, None, ctypes.byref(owner_sd)
         )
-        if rc != 0 or not file_sid:
+        if rc != 0 or not file_sid.value:
             return False
-        return bool(advapi32.EqualSid(file_sid, user_sid))
+        return any(bool(advapi32.EqualSid(file_sid, sid)) for sid, _buf in allowed_sids)
     finally:
-        if owner_sd:
+        if owner_sd.value:
             kernel32.LocalFree(owner_sd)
         kernel32.CloseHandle(token)
 

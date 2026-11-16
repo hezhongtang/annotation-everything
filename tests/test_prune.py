@@ -37,6 +37,7 @@ class LedgerPruneTests(unittest.TestCase):
         self.addCleanup(self._restore_home)
         import ledger
         self.ledger = ledger
+        self.addCleanup(ledger.set_locale, None)
         self.reviews = {}
         self.temp_missing = self.root / "missing-in-temp"
         self.external_missing = Path("/Volumes") / f"ae-prune-test-{uuid.uuid4().hex}" / "review"

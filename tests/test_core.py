@@ -1685,7 +1685,11 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(m["name"], m["title"], "审阅名默认取标题")
         self.assertEqual(m["namespace"], f"示例咖啡_2030_年三季度经营回顾_{m['reviewId'][:4]}", "导出标签：审阅名 + 标识前 4 位")
         self.assertRegex(m["reviewId"], r"^[0-9a-f]{16}$")
-        self.assertFalse(os.path.isabs(m["sources"]["report"]))
+        if m["sources"]["report"] is None:
+            self.assertEqual(os.name, "nt")
+            self.assertTrue(Path(m["sourcesAbs"]["report"]).is_absolute())
+        else:
+            self.assertFalse(os.path.isabs(m["sources"]["report"]))
         html = (self.out / "index.html").read_text()
         self.assertNotRegex(html, r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|CSP|OVERVIEW_HOME)__")
         self.assertIn("const OVERVIEW_HOME=null", html, "对照页宿主为空：总览首页常量必须被替换成 null")
@@ -4012,7 +4016,7 @@ class LedgerTests(unittest.TestCase):
         self.assertIn("python ", text)
         self.assertIn(f'"{d.resolve()}"', text)
         html = (d / "index.html").read_text(encoding="utf-8")
-        self.assertIn(r"$HOME\\.claude\\skills\\annotation-everything\\scripts\\serve.py", html)
+        self.assertIn(r"python ~\\.claude\\skills\\annotation-everything\\scripts\\serve.py", html)
 
     def test_wait_leaves_and_removes_marker(self):
         d = tmpdir() / "r"
@@ -5105,6 +5109,13 @@ class ServiceStateTests(unittest.TestCase):
         with patch("tempfile.gettempdir", return_value=str(tmpdir())):
             synthetic_tmp = Path(tempfile.gettempdir())
             self.assertTrue(ledger.in_temp_area(synthetic_tmp / "r1"))
+        with patch("ledger.os.name", "nt"), \
+                patch("ledger.tempfile.gettempdir", return_value="C:/Users/runner/AppData/Local/Temp"), \
+                patch.dict("ledger.os.environ", {"TEMP": "C:/Users/runner/AppData/Local/Temp", "TMP": "D:/AltTemp"}, clear=False):
+            win_roots = ledger._default_temp_roots()
+            self.assertEqual([str(p) for p in win_roots], [str(Path("C:/Users/runner/AppData/Local/Temp")), str(Path("D:/AltTemp"))])
+        with patch.object(ledger, "TEMP_ROOTS", (tmpdir() / "nonexistent-root", tmpdir())):
+            self.assertFalse(ledger.in_temp_area(tmpdir() / "outside"))
 
         fake_codes = iter([259, 0])
         fake_errors = iter([5, 87])
@@ -5613,6 +5624,126 @@ class FsutilTests(unittest.TestCase):
                 patch.object(Path, "lstat", return_value=FakeReparseStat()):
             with self.assertRaises(ValueError):
                 fsutil.check_private_regular_file(regular, max_bytes=1024, error_prefix="state")
+
+    def test_check_private_regular_file_windows_owner_check_sets_argtypes_and_accepts_token_owner(self):
+        import ctypes
+        from ctypes import wintypes
+        import fsutil
+
+        d = tmpdir()
+        regular = d / "state.json"
+        regular.write_text('{"ok": true}\n', encoding="utf-8")
+        fake_win_stat = os.stat_result((0o100666, 1, 1, 1, 0, 0, 12, 0, 0, 0))
+
+        ptr_size = ctypes.sizeof(ctypes.c_void_p)
+        user_sid_addr = 0x1001
+        token_owner_sid_addr = 0x2002
+        other_sid_addr = 0x9999
+
+        expected_specs = {
+            "GetCurrentProcess": ([], wintypes.HANDLE),
+            "CloseHandle": ([wintypes.HANDLE], wintypes.BOOL),
+            "LocalFree": ([wintypes.HLOCAL], wintypes.HLOCAL),
+            "OpenProcessToken": (
+                [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)],
+                wintypes.BOOL,
+            ),
+            "GetTokenInformation": (
+                [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)],
+                wintypes.BOOL,
+            ),
+            "GetNamedSecurityInfoW": (
+                [
+                    wintypes.LPCWSTR,
+                    ctypes.c_int,
+                    wintypes.DWORD,
+                    ctypes.POINTER(ctypes.c_void_p),
+                    ctypes.POINTER(ctypes.c_void_p),
+                    ctypes.POINTER(ctypes.c_void_p),
+                    ctypes.POINTER(ctypes.c_void_p),
+                    ctypes.POINTER(ctypes.c_void_p),
+                ],
+                wintypes.DWORD,
+            ),
+            "EqualSid": ([ctypes.c_void_p, ctypes.c_void_p], wintypes.BOOL),
+        }
+
+        class FakeWinFn:
+            def __init__(self, name, impl):
+                self.name = name
+                self.impl = impl
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                exp_args, exp_res = expected_specs[self.name]
+                if self.argtypes != exp_args or self.restype != exp_res:
+                    raise AssertionError(f"{self.name} 缺少精确 argtypes/restype: {self.argtypes!r}, {self.restype!r}")
+                return self.impl(*args)
+
+        for file_sid_addr, should_pass in (
+            (user_sid_addr, True),
+            (token_owner_sid_addr, True),
+            (other_sid_addr, False),
+        ):
+            with self.subTest(file_sid=hex(file_sid_addr), should_pass=should_pass):
+                freed = []
+                closed = []
+
+                class FakeKernel32:
+                    GetCurrentProcess = FakeWinFn("GetCurrentProcess", lambda: 0x1111)
+                    CloseHandle = FakeWinFn("CloseHandle", lambda h: closed.append(h.value if hasattr(h, "value") else h) or 1)
+                    LocalFree = FakeWinFn("LocalFree", lambda p: freed.append(p.value if hasattr(p, "value") else p) or 0)
+
+                def fake_open_process_token(_proc, _access, token_ptr):
+                    token_ptr._obj.value = 0x2222
+                    return 1
+
+                def fake_get_token_info(_tok, info_class, buf, _buf_len, needed_ptr):
+                    needed_ptr._obj.value = ptr_size
+                    if buf is None:
+                        return 0
+                    sid_map = {1: user_sid_addr, 4: token_owner_sid_addr}
+                    if info_class not in sid_map:
+                        return 0
+                    ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p))[0] = sid_map[info_class]
+                    return 1
+
+                def fake_get_named_sec(_path, _obj_type, _sec_info, file_sid_ptr, _g, _d, _s, owner_sd_ptr):
+                    file_sid_ptr._obj.value = file_sid_addr
+                    owner_sd_ptr._obj.value = 0x3333
+                    return 0
+
+                def fake_equal_sid(a, b):
+                    va = a.value if hasattr(a, "value") else a
+                    vb = b.value if hasattr(b, "value") else b
+                    return 1 if va == vb else 0
+
+                class FakeAdvapi32:
+                    OpenProcessToken = FakeWinFn("OpenProcessToken", fake_open_process_token)
+                    GetTokenInformation = FakeWinFn("GetTokenInformation", fake_get_token_info)
+                    GetNamedSecurityInfoW = FakeWinFn("GetNamedSecurityInfoW", fake_get_named_sec)
+                    EqualSid = FakeWinFn("EqualSid", fake_equal_sid)
+
+                def fake_windll(name, use_last_error=False):
+                    if name == "kernel32":
+                        return FakeKernel32()
+                    if name == "advapi32":
+                        return FakeAdvapi32()
+                    raise AssertionError(f"unexpected DLL: {name}")
+
+                with patch("fsutil.os.name", "nt"), \
+                        patch("fsutil.sys.platform", "win32"), \
+                        patch("ctypes.WinDLL", side_effect=fake_windll, create=True), \
+                        patch.object(Path, "lstat", return_value=fake_win_stat):
+                    if should_pass:
+                        checked = fsutil.check_private_regular_file(regular, max_bytes=1024, error_prefix="state")
+                        self.assertEqual(checked.st_size, 12)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "private-state-required"):
+                            fsutil.check_private_regular_file(regular, max_bytes=1024, error_prefix="state")
+                self.assertEqual(freed, [0x3333])
+                self.assertEqual(closed, [0x2222])
 
     def test_notes_module_imports_without_fcntl(self):
         probe = (
