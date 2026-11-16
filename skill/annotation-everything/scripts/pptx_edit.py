@@ -1400,7 +1400,7 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
         temp = Path(temp_name)
         try:
             with os.fdopen(fd, "wb") as fh:
-                if not separate:
+                if not separate and hasattr(os, "fchmod"):
                     os.fchmod(fh.fileno(), stat.S_IMODE(source.stat().st_mode))
                 fh.write(packed)
                 fh.flush()
@@ -1409,7 +1409,7 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
             de._source_check(source, fingerprint)   # PowerPoint 或别的进程在准备期间动过源文件就拒绝提交
             if separate and destination.exists():
                 raise EditError("output", str(destination))
-            os.replace(temp, destination)
+            de._replace_file(temp, destination)
         finally:
             temp.unlink(missing_ok=True)
         return result

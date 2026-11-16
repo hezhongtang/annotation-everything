@@ -21,7 +21,9 @@ SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT / "fixtures" / "docx"))
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
-os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-test-user-")
+_test_user = tempfile.mkdtemp(prefix="ae-test-user-")
+os.environ["HOME"] = _test_user
+os.environ["USERPROFILE"] = _test_user
 
 import build_viewer  # noqa: E402
 import docx_review as dr  # noqa: E402

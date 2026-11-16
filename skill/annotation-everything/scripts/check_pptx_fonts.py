@@ -7,8 +7,10 @@ LC_ALL / LC_MESSAGES / LANG。字体名、来源路径与系统原始错误保�
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import re
+from shutil import which
 import subprocess
 import sys
 import unicodedata
@@ -130,11 +132,94 @@ def normal(name: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", name).casefold().split())
 
 
+_WIN_FONT_TAG_RE = re.compile(r"\s*\([^)]*\)\s*$")
+_WIN_STYLE_SUFFIX_RE = re.compile(r"\s+(?:Regular|Bold(?:\s+(?:Italic|Oblique))?|Italic|Oblique)$", re.I)
+_WIN_FONT_ALIASES = {
+    "simsun": ("宋体",),
+    "nsimsun": ("新宋体",),
+    "simhei": ("黑体",),
+    "kaiti": ("楷体",),
+    "fangsong": ("仿宋",),
+    "dengxian": ("等线",),
+    "microsoft yahei": ("微软雅黑",),
+    "microsoft jhenghei": ("微軟正黑體", "微软正黑体"),
+    "malgun gothic": ("맑은 고딕",),
+}
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _parse_windows_registry_fonts(names: list[str]) -> set[str]:
+    fonts: set[str] = set()
+    for raw_name in names:
+        cleaned = _WIN_FONT_TAG_RE.sub("", str(raw_name)).strip()
+        if not cleaned:
+            continue
+        for face in cleaned.split(" & "):
+            face = face.strip()
+            if not face:
+                continue
+            key = normal(face)
+            if key:
+                fonts.add(key)
+                for alias in _WIN_FONT_ALIASES.get(key, ()):
+                    fonts.add(normal(alias))
+            base = _WIN_STYLE_SUFFIX_RE.sub("", face).strip()
+            if base and base != face:
+                bkey = normal(base)
+                if bkey:
+                    fonts.add(bkey)
+                    for alias in _WIN_FONT_ALIASES.get(bkey, ()):
+                        fonts.add(normal(alias))
+    return fonts
+
+
+def _windows_registry_fonts() -> set[str]:
+    try:
+        import winreg
+    except ImportError as e:
+        raise CheckError(T("font.err.noFcList")) from e
+    subkey = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+    raw_names: list[str] = []
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                _subkeys, values_count, _mtime = winreg.QueryInfoKey(key)
+                for idx in range(values_count):
+                    val_name, _val_data, _val_type = winreg.EnumValue(key, idx)
+                    if isinstance(val_name, str) and val_name.strip():
+                        raw_names.append(val_name)
+        except OSError:
+            continue
+    fonts = _parse_windows_registry_fonts(raw_names)
+    if not fonts:
+        raise CheckError(T("font.err.noWinFonts"))
+    return fonts
+
+
+def find_pdffonts() -> str:
+    found = which("pdffonts")
+    if found:
+        return found
+    if _is_windows():
+        from pptx_report import windows_poppler_dirs
+
+        for directory in windows_poppler_dirs():
+            candidate = directory / "pdffonts.exe"
+            if candidate.is_file():
+                return str(candidate)
+    return "pdffonts"
+
+
 def installed_fonts() -> tuple[set[str], bool]:
     try:
         result = subprocess.run(["fc-list", "--format=%{family}\\n"], capture_output=True, text=True,
-                                errors="replace", timeout=TOOL_TIMEOUT, check=False)
+                                encoding="utf-8", errors="replace", timeout=TOOL_TIMEOUT, check=False)
     except FileNotFoundError as e:
+        if _is_windows():
+            return _windows_registry_fonts(), False
         raise CheckError(T("font.err.noFcList")) from e
     except (OSError, subprocess.TimeoutExpired) as e:
         raise CheckError(T("font.err.fcListFailed", detail=e)) from e
@@ -150,8 +235,8 @@ def pdf_fonts(path: Path) -> tuple[list[dict[str, str]], bool]:
     if not path.is_file():
         raise CheckError(T("font.err.pdfMissing"))
     try:
-        result = subprocess.run(["pdffonts", str(path.resolve())], capture_output=True, text=True,
-                                errors="replace", timeout=TOOL_TIMEOUT, check=False)
+        result = subprocess.run([find_pdffonts(), str(path.resolve())], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=TOOL_TIMEOUT, check=False)
     except FileNotFoundError as e:
         raise CheckError(T("font.err.noPdffonts")) from e
     except (OSError, subprocess.TimeoutExpired) as e:
