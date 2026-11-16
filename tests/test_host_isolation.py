@@ -93,14 +93,26 @@ class AcquireReleaseTests(TemporaryLockDirTestCase):
             hi.acquire(["no-such-resource"], timeout=1.0)
 
     def test_shared_tmp_fallback_keeps_each_users_lock_directory_separate(self):
+        if hasattr(os, "getuid"):
+            with mock.patch.object(hi.tempfile, "gettempdir", return_value="/tmp"):
+                with mock.patch.object(hi.os, "getuid", return_value=1001):
+                    first = hi.lock_root({})
+                with mock.patch.object(hi.os, "getuid", return_value=1002):
+                    second = hi.lock_root({})
+            self.assertEqual(first.parent, Path("/tmp"))
+            self.assertEqual(second.parent, Path("/tmp"))
+            self.assertNotEqual(first, second, "共享 /tmp 下不同用户不得争用私有锁目录")
+
+    def test_non_posix_user_lock_directory_separates_users_and_handles_unicode(self):
         with mock.patch.object(hi.tempfile, "gettempdir", return_value="/tmp"):
-            with mock.patch.object(hi.os, "getuid", return_value=1001):
-                first = hi.lock_root({})
-            with mock.patch.object(hi.os, "getuid", return_value=1002):
-                second = hi.lock_root({})
+            with mock.patch.object(hi.os, "getuid", None, create=True):
+                first = hi.lock_root({"USERNAME": "alice"})
+                second = hi.lock_root({"USERNAME": "bob"})
+                unicode_user = hi.lock_root({"USERNAME": "测试用户"})
         self.assertEqual(first.parent, Path("/tmp"))
-        self.assertEqual(second.parent, Path("/tmp"))
-        self.assertNotEqual(first, second, "共享 /tmp 下不同用户不得争用私有锁目录")
+        self.assertNotEqual(first, second)
+        self.assertIn("annotation-everything-locks-", unicode_user.name)
+        self.assertTrue(unicode_user.name.isascii(), "锁目录名应保持 ASCII 安全")
 
     def test_release_keeps_ancestor_marks_for_partially_borrowed_handle(self):
         """混合获取（部分借入 + 部分新拿）：release 只撤销新拿部分的豁免标记。
@@ -169,7 +181,8 @@ class WorkerScript:
         proc = subprocess.Popen(
             [sys.executable, str(script), payload, str(marker), str(self.hold)],
             env=env or self.test.child_env(),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            encoding="utf-8", errors="replace")
         self.test.addCleanup(reap, proc)
         return proc, marker
 
@@ -348,7 +361,8 @@ class LegacyEntryIntegrationTests(TemporaryLockDirTestCase):
     def test_discover_import_of_sensitive_module_holds_host_state(self):
         proc = subprocess.Popen(
             [sys.executable, "-c", self.IMPORT_PROBE.format(root=str(ROOT))],
-            env=self.child_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            env=self.child_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace")
         self.addCleanup(reap, proc)
         first = proc.stdout.readline().strip()
         self.assertEqual(first, "imported", "敏感模块导入失败：%s" % first)
@@ -385,7 +399,8 @@ class RealEntryIntegrationTests(TemporaryLockDirTestCase):
              "unit-related", "tests.test_ae_cli.AeCliTests.test_missing_subcommand_is_command_error",
              "--quiet", "--out-dir", str(out_dir), "--phase", "development", "--reason",
              "issue 52 隔离协议端到端"],
-            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            encoding="utf-8", errors="replace")
         self.addCleanup(reap, process)
         wait_for_file(out_dir / "latest.json")
         run_id = json.loads((out_dir / "latest.json").read_text(encoding="utf-8"))["run_id"]
@@ -408,14 +423,15 @@ class RealEntryIntegrationTests(TemporaryLockDirTestCase):
         self.assertLess(time.monotonic() - started, 60)
 
     def test_interrupted_entry_releases_its_lock(self):
-        """入口被信号中断并回收子进程后，锁立即可用（内核回收 flock，无残留占用）。"""
+        """入口被信号中断并回收子进程后，锁立即可用（内核回收锁句柄，无残留占用）。"""
         out_dir = Path(tempfile.mkdtemp(prefix="ae-verify-out-"))
         self.addCleanup(shutil_rmtree, out_dir)
         env = self.child_env(AE_VERIFY_DIR=str(out_dir))
+        popen_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
         wrapper = subprocess.Popen(
             [sys.executable, str(ROOT / "verify.py"), "run", "--group", "unit",
              "--out-dir", str(out_dir), "--quiet"],
-            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **popen_kwargs)
         try:
             pointer = out_dir / "latest.json"
             deadline = time.monotonic() + 30
@@ -429,8 +445,13 @@ class RealEntryIntegrationTests(TemporaryLockDirTestCase):
             while time.monotonic() < deadline and not children.is_file():
                 time.sleep(0.05)
             self.assertTrue(children.is_file(), "入口没有进入组执行（没拿到锁？）")
-            wrapper.send_signal(signal.SIGTERM)
-            self.assertEqual(wrapper.wait(timeout=30), 128 + signal.SIGTERM)
+            if os.name == "nt":
+                wrapper.send_signal(signal.CTRL_BREAK_EVENT)
+                expected_code = 128 + signal.SIGBREAK
+            else:
+                wrapper.send_signal(signal.SIGTERM)
+                expected_code = 128 + signal.SIGTERM
+            self.assertEqual(wrapper.wait(timeout=30), expected_code)
         finally:
             reap(wrapper)
         started = time.monotonic()
@@ -526,7 +547,7 @@ class ModuleRequirementTests(TemporaryLockDirTestCase):
         """loader.discover 真实加载敏感模块：导入即取 host-state 锁（R1 回归）。"""
         probe = self.DISCOVER_PROBE.format(root=str(ROOT), tests_dir=str(ROOT / "tests"))
         proc = subprocess.run([sys.executable, "-c", probe], env=self.child_env(),
-                              capture_output=True, text=True, timeout=120)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         report = json.loads(proc.stdout.strip().splitlines()[-1])
         self.assertEqual(report["errors"], [])

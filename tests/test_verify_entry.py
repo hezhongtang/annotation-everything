@@ -29,6 +29,8 @@ DOC_FIXTURES = json.loads((ROOT / "fixtures" / "verify-doc-allowlist.json").read
 # 合成 uv：剥掉 run --no-project --with <依赖>，直接执行剩下的命令（浏览器依赖仍只在真入口里导入）
 UV_STUB = '''#!/usr/bin/env python3
 import os
+import signal
+import subprocess
 import sys
 
 args = sys.argv[1:]
@@ -43,6 +45,16 @@ while index < len(args):
         break
 if args[index] == "python":
     args[index] = sys.executable
+if os.name == "nt":
+    for name in ("SIGINT", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            try:
+                signal.signal(sig, signal.SIG_IGN)
+            except (OSError, ValueError):
+                pass
+    proc = subprocess.Popen(args[index:])
+    sys.exit(proc.wait())
 os.execvp(args[index], args[index:])
 '''
 
@@ -178,6 +190,9 @@ class SynthRepo:
         (self.path / "skill" / "annotation-everything" / "scripts").mkdir(parents=True)
         (self.path / "bin").mkdir(parents=True)
         self.write("bin/uv", UV_STUB, executable=True)
+        if os.name == "nt":
+            self.write("bin/uv_stub.py", UV_STUB)
+            self.write("bin/uv.cmd", f'@echo off\r\n"{sys.executable}" "%~dp0uv_stub.py" %*\r\n')
         self.write(".gitignore", ".verify/\n__pycache__/\n*.pyc\n*.log\n")
         self.write("README.md", "# 合成仓库\n")
         self.write("tests/test_synth.py", UNIT_PASS)
@@ -208,7 +223,7 @@ class SynthRepo:
 
     def git(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(["git", *args], cwd=self.path, capture_output=True, text=True,
-                              env=self.git_env, timeout=60)
+                              encoding="utf-8", errors="replace", env=self.git_env, timeout=60)
 
     @property
     def git_env(self) -> dict:
@@ -235,6 +250,7 @@ class SynthRepo:
         env["GIT_CONFIG_GLOBAL"] = os.devnull
         env["GIT_CONFIG_SYSTEM"] = os.devnull
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
         env["AE_VERIFY_SESSION"] = "synthetic-verification-session"
         env.pop("AE_VERIFY_DIR", None)
         env.pop("AE_LOCALE", None)
@@ -249,7 +265,8 @@ class SynthRepo:
             env.update(extra_env)
         return subprocess.run([sys.executable, str((self.path / "verify.py").resolve()), *args],
                               cwd=str(cwd or self.path), env=env,
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout)
 
     def latest_run_id(self) -> str:
         return json.loads((self.artifact_dir / "latest.json").read_text(encoding="utf-8"))["run_id"]
@@ -474,6 +491,28 @@ class ChurnTests(unittest.TestCase):
 
 
 def pid_alive(pid: int) -> bool:
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -481,6 +520,40 @@ def pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _kill_pid(pid: int) -> None:
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel32.TerminateProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        handle = kernel32.OpenProcess(0x0001, False, pid)
+        if handle:
+            try:
+                kernel32.TerminateProcess(handle, 1)
+            finally:
+                kernel32.CloseHandle(handle)
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _send_interrupt(proc: subprocess.Popen) -> int:
+    if os.name == "nt":
+        proc.send_signal(signal.CTRL_BREAK_EVENT)
+        return 128 + int(signal.SIGBREAK)
+    proc.send_signal(signal.SIGTERM)
+    return 128 + int(signal.SIGTERM)
 
 
 class OutcomeTests(VerifyEntryTestCase):
@@ -622,23 +695,32 @@ class ProcessLifecycleTests(VerifyEntryTestCase):
         ctx = verify.RunContext("cleanup-probe", self.repo.artifact_dir,
                                 None, sys.stdout, True)
         ctx.run_dir.mkdir(parents=True)
+        popen_kwargs = (
+            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+            if os.name == "nt"
+            else {"start_new_session": True}
+        )
+        sig = signal.SIGBREAK if os.name == "nt" else signal.SIGTERM
         child = subprocess.Popen([sys.executable, "-c", '''import signal, sys, time
 def cleanup(signum, frame):
     time.sleep(0.2)
     sys.exit(128 + signum)
-signal.signal(signal.SIGTERM, cleanup)
+for name in ("SIGTERM", "SIGBREAK"):
+    s = getattr(signal, name, None)
+    if s is not None:
+        signal.signal(s, cleanup)
 print("ready", flush=True)
 time.sleep(30)
 '''], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                 start_new_session=True)
+                                 encoding="utf-8", errors="replace", **popen_kwargs)
         self.addCleanup(_reap, child)
         self.assertEqual(child.stdout.readline().strip(), "ready")
         ctx.registry.register(child, "synthetic")
-        ctx.abort(signal.SIGTERM)
+        ctx.abort(sig)
         first_cleanup = ctx.cleanup_seconds
         self.assertGreaterEqual(first_cleanup, 0.15, "第一次回收包含子进程的实际清理")
-        self.assertEqual(child.returncode, 143)
-        ctx.abort(signal.SIGTERM)  # 外层收尾再次调用：已经没有活跃子进程
+        self.assertEqual(child.returncode, 128 + sig)
+        ctx.abort(sig)  # 外层收尾再次调用：已经没有活跃子进程
         self.assertGreaterEqual(ctx.cleanup_seconds, first_cleanup,
                                 "第二次空回收不得抹去已经发生的清理耗时")
 
@@ -668,17 +750,19 @@ time.sleep(30)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env.pop("AE_HELD_LOCKS", None)
         env["AE_LOCK_DIR"] = str(self.test_lock_dir)
+        popen_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
         wrapper = subprocess.Popen([sys.executable, "verify.py", "run", "--group", "unit"],
                                    cwd=str(self.repo.path), env=env,
-                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                   encoding="utf-8", errors="replace", **popen_kwargs)
         run_id, children = self._wait_for_children()
         self.assertEqual(len(children), 1, "本次登记的子进程只有一个")
         child_pid = children[0]["pid"]
         decoy = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
         try:
-            wrapper.send_signal(signal.SIGTERM)
+            expected_code = _send_interrupt(wrapper)
             code = wrapper.wait(timeout=30)
-            self.assertEqual(code, 143, "入口按 128+SIGTERM 退出")
+            self.assertEqual(code, expected_code, "入口按 128+信号 退出")
             deadline = time.time() + 5
             while time.time() < deadline and pid_alive(child_pid):
                 time.sleep(0.1)
@@ -867,12 +951,14 @@ def acquire(resources, timeout=None, env=None):
         env = dict(os.environ)
         env["PATH"] = "%s%s%s" % (self.repo.path / "bin", os.pathsep, env["PATH"])
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
         env.pop("AE_HELD_LOCKS", None)
         env.update(self.lock_env())
+        popen_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
         proc = subprocess.Popen(
             [sys.executable, "verify.py", "run", "--group", group, "--quiet"],
             cwd=str(self.repo.path), env=env, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True)
+            stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", **popen_kwargs)
         self.addCleanup(_reap, proc)
         return proc
 
@@ -890,9 +976,9 @@ def acquire(resources, timeout=None, env=None):
         self.wait_for_marker(self.repo.artifact_dir / "latest.json")
         # 外部占用者一直持锁，确保取消落在等待阶段，而不是产品执行阶段。
         time.sleep(0.3)
-        wrapper.send_signal(signal.SIGTERM)
+        expected_code = _send_interrupt(wrapper)
         output, _ = wrapper.communicate(timeout=15)
-        self.assertEqual(wrapper.returncode, 143, output)
+        self.assertEqual(wrapper.returncode, expected_code, output)
         run_id = self.repo.latest_run_id()
         record = read_record(self.repo.artifact_dir, run_id)
         group = record["groups"][0]
@@ -925,13 +1011,16 @@ def cleanup(signum, frame):
     print("1/1 通过", flush=True)
     sys.exit(128 + signum)
 
-signal.signal(signal.SIGTERM, cleanup)
+for _name in ("SIGTERM", "SIGBREAK"):
+    _sig = getattr(signal, _name, None)
+    if _sig is not None:
+        signal.signal(_sig, cleanup)
 Path(%r).write_text("started", encoding="utf-8")
 time.sleep(30)
 ''' % (str(cleaning), str(finished), str(started)))
         wrapper = self.start_wrapper()
         self.wait_for_marker(started)
-        wrapper.send_signal(signal.SIGTERM)
+        expected_code = _send_interrupt(wrapper)
         try:
             self.wait_for_marker(cleaning)
             with self.assertRaises(hi.LockTimeoutError,
@@ -941,7 +1030,7 @@ time.sleep(30)
         finally:
             finished.write_text("exit", encoding="utf-8")
             output, _ = wrapper.communicate(timeout=15)
-        self.assertEqual(wrapper.returncode, 143, output)
+        self.assertEqual(wrapper.returncode, expected_code, output)
         handle = hi.acquire(["host-state"], timeout=0.2, env=self.lock_env())
         hi.release(handle)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
@@ -957,10 +1046,12 @@ time.sleep(30)
         env.update(self.lock_env(SYNTH_BROWSER_SECONDS="1.0"))
         command = [sys.executable, "verify.py", "run", "--group", "browser", "--quiet"]
         first = subprocess.Popen(command, cwd=str(self.repo.path), env=env,
-                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                 encoding="utf-8", errors="replace")
         self.addCleanup(_reap, first)
         second = subprocess.Popen(command, cwd=str(self.repo.path), env=env,
-                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                  encoding="utf-8", errors="replace")
         self.addCleanup(_reap, second)
         self.assertEqual(first.wait(timeout=60), 0, "并发敏感组出现假失败（第一个）")
         self.assertEqual(second.wait(timeout=60), 0, "并发敏感组出现假失败（第二个）")
@@ -997,7 +1088,7 @@ while not Path(%r).exists():
             while pid_alive(child_pid) and time.monotonic() < deadline:
                 time.sleep(0.01)
             if pid_alive(child_pid):
-                os.kill(child_pid, signal.SIGKILL)
+                _kill_pid(child_pid)
         handle = hi.acquire(["host-state"], timeout=2, env=self.lock_env())
         hi.release(handle)
 
@@ -1085,14 +1176,17 @@ class SignalDuringFinalizeTests(VerifyEntryTestCase):
         env = dict(os.environ)
         env["PATH"] = "%s%s%s" % (self.repo.path / "bin", os.pathsep, env["PATH"])
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
         env.pop("AE_VERIFY_DIR", None)
         env.pop("AE_HELD_LOCKS", None)
         env.setdefault("AE_LOCK_DIR", str(self.test_lock_dir))
         if extra_env:
             env.update(extra_env)
         command = [sys.executable, "-c", launcher] if launcher else [sys.executable, "verify.py"]
+        popen_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
         return subprocess.Popen([*command, *args], cwd=str(self.repo.path),
-                                env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                                env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, encoding="utf-8", errors="replace", **popen_kwargs)
 
     def wait_latest_run(self, timeout: float = 30) -> str:
         pointer = self.repo.artifact_dir / "latest.json"
@@ -1141,7 +1235,8 @@ def snapshot_with_barrier():
     global snapshot_calls
     snapshot_calls += 1
     if snapshot_calls == 2:
-        assert callable(signal.getsignal(signal.SIGTERM))
+        expected_sig = getattr(signal, "SIGBREAK", signal.SIGTERM) if os.name == "nt" else signal.SIGTERM
+        assert callable(signal.getsignal(expected_sig))
         Path(os.environ["SYNTH_FINALIZE_READY"]).write_text("ready")
         time.sleep(30)
     return original_snapshot()
@@ -1158,17 +1253,17 @@ sys.exit(verify.main())
             while not marker.exists() and wrapper.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.01)
             self.assertTrue(marker.exists(), "入口已进入最终输入快照，等待取消信号")
-            wrapper.send_signal(signal.SIGTERM)  # 组已完成，信号落在收尾段
+            expected_code = _send_interrupt(wrapper)  # 组已完成，信号落在收尾段
             output, _ = wrapper.communicate(timeout=15)
             code = wrapper.returncode
         finally:
             wrapper.stdout.close()
-        self.assertEqual(code, 143, "入口按 128+SIGTERM 退出\n" + output)
+        self.assertEqual(code, expected_code, "入口按 128+信号 退出\n" + output)
         self.assertNotIn("Traceback", output, "收尾段被打断也不留裸 traceback")
         record = read_record(self.repo.artifact_dir, run_id)
         self.assertEqual(record["state"], "aborted", "最终记录落成 aborted，不停在 running")
         self.assertEqual(record["result"]["outcome"], "interrupted")
-        self.assertEqual(record["result"]["exit_status"], 143)
+        self.assertEqual(record["result"]["exit_status"], expected_code)
         self.assertFalse(record["result"]["usable_as_evidence"])
         self.assertEqual(record["groups"][0]["outcome"], "passed", "已完成的组保留真实结果")
         self.assertEqual(record["shadow"]["run_outcome"], "interrupted",
@@ -1184,7 +1279,7 @@ sys.exit(verify.main())
         boundary = "cleanup_guard.enter_context(capture_termination(result))"
         self.assertIn(boundary, source)
         source = source.replace(boundary, boundary + "\n"
-                                "                os.kill(os.getpid(), signal.SIGTERM)", 1)
+                                "                signal.raise_signal(signal.SIGTERM)", 1)
         wrapper_path.write_text(source, encoding="utf-8")
         self.repo.commit_all("合成组证据收尾首次取消")
         p = self.repo.run_verify("run", "--group", "unit", "--group", "serve-check")
@@ -1216,12 +1311,12 @@ sys.exit(verify.main())
             self.assertEqual([entry["group"] for entry in children],
                              ["unit", "serve-check", "browser"])
             self.assertFalse(children[2]["reaped"], "browser 还在跑：前两组已完整执行")
-            wrapper.send_signal(signal.SIGTERM)
+            expected_code = _send_interrupt(wrapper)
             code = wrapper.wait(timeout=30)
             output = wrapper.stdout.read()
         finally:
             wrapper.stdout.close()
-        self.assertEqual(code, 143, "入口按 128+SIGTERM 退出\n" + output)
+        self.assertEqual(code, expected_code, "入口按 128+信号 退出\n" + output)
         self.assertNotIn("Traceback", output)
         record = read_record(self.repo.artifact_dir, run_id)
         self.assertEqual(record["state"], "aborted")
@@ -1351,9 +1446,9 @@ class EfficiencyIntegrationTests(VerifyEntryTestCase):
         self.assertEqual(reference["evidence"]["logs"], [])
         self.assertEqual(self.repo.run_verify("report", "--run", reference["run_id"]).returncode, 0)
         path = self.repo.artifact_dir / "runs" / source["run_id"] / "record.json"
-        damaged = json.loads(path.read_text())
+        damaged = json.loads(path.read_text(encoding="utf-8"))
         del damaged["evidence"]
-        path.write_text(json.dumps(damaged))
+        path.write_text(json.dumps(damaged, ensure_ascii=False), encoding="utf-8")
         self.assertEqual(self.repo.run_verify("report", "--run", reference["run_id"]).returncode, 1)
         retried = self.repo.run_verify("run", "--group", "serve-check", "--phase", "manual", "--json")
         self.assertEqual(retried.returncode, 0, retried.stdout + retried.stderr)
@@ -1390,7 +1485,7 @@ class EfficiencyIntegrationTests(VerifyEntryTestCase):
         self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
             "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": STRATEGY_VERSION,
             "reason": "old reviewed policy", "evidence": ["synthetic"]}))
-        policy = (self.repo.path / "verify_selection.py").read_text()
+        policy = (self.repo.path / "verify_selection.py").read_text(encoding="utf-8")
         upgraded = policy.replace("STRATEGY_VERSION = %d" % STRATEGY_VERSION,
                                   "STRATEGY_VERSION = %d" % (STRATEGY_VERSION + 1))
         self.assertNotEqual(upgraded, policy, "合成升级必须实际修改策略版本")
@@ -1484,7 +1579,10 @@ import signal
 def cancel(signum, frame):
     raise KeyboardInterrupt
 
-signal.signal(signal.SIGTERM, cancel)
+for _name in ("SIGTERM", "SIGBREAK"):
+    _sig = getattr(signal, _name, None)
+    if _sig is not None:
+        signal.signal(_sig, cancel)
 try:
     Path(os.environ["SYNTH_READY"]).write_text("ready")
     time.sleep(30)
@@ -1495,43 +1593,48 @@ except KeyboardInterrupt:
 ''')
         self.repo.write("tests/e2e_browser.py", script, executable=True)
         self.repo.commit_all("合成父入口取消与场景摘要")
-        for signum in (signal.SIGINT, signal.SIGTERM):
-            with self.subTest(signum=signum):
-                ready = Path(self.temp.name) / ("ready-%s" % signum)
-                cleaning = Path(self.temp.name) / ("cleaning-%s" % signum)
+        cases = ([(signal.CTRL_BREAK_EVENT, signal.SIGBREAK)] if os.name == "nt"
+                 else [(signal.SIGINT, signal.SIGINT), (signal.SIGTERM, signal.SIGTERM)])
+        for send_sig, expected_sig in cases:
+            with self.subTest(signum=expected_sig):
+                ready = Path(self.temp.name) / ("ready-%s" % expected_sig)
+                cleaning = Path(self.temp.name) / ("cleaning-%s" % expected_sig)
                 env = dict(os.environ)
                 env.update(PATH=str(self.repo.path / "bin") + os.pathsep + env["PATH"],
+                           PYTHONIOENCODING="utf-8",
                            SYNTH_READY=str(ready), SYNTH_CLEANING=str(cleaning),
                            AE_LOCK_DIR=str(self.test_lock_dir))
                 env.pop("AE_HELD_LOCKS", None)
+                popen_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
                 wrapper = subprocess.Popen(
                     [sys.executable, "verify.py", "run", "--group", "browser",
                      "--group", "serve-check"], cwd=self.repo.path, env=env,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    encoding="utf-8", errors="replace", **popen_kwargs)
                 try:
                     deadline = time.monotonic() + 10
                     while not ready.exists() and wrapper.poll() is None and time.monotonic() < deadline:
                         time.sleep(0.02)
                     self.assertTrue(ready.exists(), "浏览器子进程已就绪")
-                    wrapper.send_signal(signum)
+                    wrapper.send_signal(send_sig)
                     while not cleaning.exists() and wrapper.poll() is None and time.monotonic() < deadline:
                         time.sleep(0.02)
                     self.assertTrue(cleaning.exists(), "子进程正在处理取消并准备摘要")
-                    wrapper.send_signal(signum)
+                    wrapper.send_signal(send_sig)
                     output, _ = wrapper.communicate(timeout=15)
                 finally:
                     if wrapper.poll() is None:
                         wrapper.kill()
                         wrapper.wait()
                     wrapper.stdout.close()
-                self.assertEqual(wrapper.returncode, 128 + signum, output)
+                self.assertEqual(wrapper.returncode, 128 + expected_sig, output)
                 run_id = self.repo.latest_run_id()
                 record = read_record(self.repo.artifact_dir, run_id)
                 self.assertEqual(record["state"], "aborted")
                 group = record["groups"][0]
                 self.assertEqual(group["outcome"], "interrupted")
-                self.assertEqual(group["exit_status"], 128 + signum)
-                self.assertEqual(group["signal"], signal.Signals(signum).name)
+                self.assertEqual(group["exit_status"], 128 + expected_sig)
+                self.assertEqual(group["signal"], signal.Signals(expected_sig).name)
                 self.assertEqual(group["granularity"], "scenario")
                 self.assertEqual(group["counts"], {"total": 3, "passed": 3, "failed": 0})
                 self.assertEqual({item["id"]: item["status"] for item in group["scenarios"]},
@@ -1539,8 +1642,8 @@ except KeyboardInterrupt:
                                   "css-fidelity": "not_run"})
                 self.assertFalse(record["result"]["usable_as_evidence"])
                 run_dir = self.repo.artifact_dir / "runs" / run_id
-                self.assertIn("AE-SCENARIOS:", (run_dir / "browser.log").read_text())
-                children = json.loads((run_dir / "children.json").read_text())
+                self.assertIn("AE-SCENARIOS:", (run_dir / "browser.log").read_text(encoding="utf-8"))
+                children = json.loads((run_dir / "children.json").read_text(encoding="utf-8"))
                 self.assertEqual(len(children), 1, "取消后不再执行后续组")
                 self.assertTrue(children[0]["reaped"])
                 self.assertFalse(pid_alive(children[0]["pid"]))
@@ -1552,7 +1655,7 @@ except KeyboardInterrupt:
         source = wrapper_path.read_text(encoding="utf-8")
         # 在合成入口的日志排空边界注入一次真实信号，避免依赖调度速度碰竞态。
         source = source.replace("reader.join(timeout=5)",
-                                "os.kill(os.getpid(), signal.SIGINT)\n"
+                                "signal.raise_signal(signal.SIGINT)\n"
                                 "                reader.join(timeout=5)", 1)
         wrapper_path.write_text(source, encoding="utf-8")
         self.repo.commit_all("合成日志排空期间取消")
@@ -2019,7 +2122,7 @@ class InterruptTests(unittest.TestCase):
         self.assertTrue(True)
 
     def test_b_interrupt(self):
-        os.kill(os.getpid(), signal.SIGINT)
+        signal.raise_signal(signal.SIGINT)
 
     def test_c_not_started(self):
         self.fail("中断后的用例不能执行")
@@ -2055,7 +2158,7 @@ from pathlib import Path
 original_replace = os.replace
 
 def replace_with_registry_failure(source, target):
-    if str(target).endswith("/children.json"):
+    if Path(target).name == "children.json":
         entries = json.loads(Path(source).read_text(encoding="utf-8"))
         Path(os.environ["SYNTH_CHILD_PID"]).write_text(str(entries[0]["pid"]), encoding="utf-8")
         raise OSError(errno.ENOSPC, "synthetic registry disk full")
@@ -2084,10 +2187,7 @@ os.replace = replace_with_registry_failure
             if child_pid is None and pid_file.is_file():
                 child_pid = int(pid_file.read_text(encoding="utf-8"))
             if child_pid and pid_alive(child_pid):
-                try:
-                    os.kill(child_pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                _kill_pid(child_pid)
             decoy.kill()
             decoy.wait(timeout=5)
 
@@ -2143,10 +2243,9 @@ class BAvailableTests(unittest.TestCase):
                          ["test_shipped_catalogs_stay_consistent", "test_pass"])
 
     def test_sigint_during_explicit_module_import_is_interrupted(self):
-        record = self.run_body('''import os
-import signal
+        record = self.run_body('''import signal
 
-os.kill(os.getpid(), signal.SIGINT)
+signal.raise_signal(signal.SIGINT)
 ''', 130, "unit-related", "tests/test_synth.py")
         self.assertEqual(record["result"]["outcome"], "interrupted")
         self.assertEqual(record["result"]["exit_status"], 130)
@@ -2921,7 +3020,7 @@ class SelectionBuiltinMapTests(unittest.TestCase):
                 self.assertIn("差异仅在文档允许列表内", report.stdout)
                 self.assertIn("由 CI 兜底", report.stdout)
                 self.assertIn("不适用", report.stdout)
-                summary = json.loads((repo.artifact_dir / "efficiency" / "summary.json").read_text())
+                summary = json.loads((repo.artifact_dir / "efficiency" / "summary.json").read_text(encoding="utf-8"))
                 self.assertEqual(summary["metrics"]["execution_seconds"], 0)
                 self.assertEqual(summary["comparison_groups"], [])
 
@@ -3787,7 +3886,7 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         marker = '    context = record.get("context") or {}\n'
         self.assertIn(marker, source)
         policy.write_text(source.replace(marker,
-            '    __import__("os").kill(__import__("os").getpid(), __import__("signal").SIGTERM)\n' + marker),
+            '    __import__("signal").raise_signal(__import__("signal").SIGTERM)\n' + marker),
             encoding="utf-8")
         self.repo.commit_all("合成规划期间取消")
         p = self.verify("run", "--group", "serve-check", "--phase", "review")
@@ -3844,6 +3943,7 @@ class ParallelUnitTests(VerifyEntryTestCase):
         self.repo.write("tests/test_handoff_i18n.py", UNIT_PASS + extra)
         self.repo.commit_all("合成并行验证集合")
 
+    @unittest.skipUnless(hasattr(os, "fork"), "Windows 首期串行执行，不启动 fork 并行 worker")
     def test_complete_scope_and_unknown_modules_are_preserved(self):
         self.prepare_parallel_suite()
         result = self.repo.run_verify("run", "--no-reuse")
@@ -3859,10 +3959,11 @@ class ParallelUnitTests(VerifyEntryTestCase):
         serial_ids = [case["id"] for case in group["cases"] if "unclassified" in case["id"]]
         self.assertEqual(len(serial_ids), 21, "新模块全部进入串行任务，不能漏掉")
 
+    @unittest.skipUnless(hasattr(os, "fork"), "Windows 首期串行执行，不启动 fork 并行 worker")
     def test_failed_worker_preserves_original_failure_and_counts(self):
         self.prepare_parallel_suite()
         path = self.repo.path / "tests/test_handoff_i18n.py"
-        path.write_text(UNIT_PASS.replace("1 + 1, 2", "1 + 1, 3"))
+        path.write_text(UNIT_PASS.replace("1 + 1, 2", "1 + 1, 3"), encoding="utf-8")
         result = self.repo.run_verify("run", "--no-reuse")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
@@ -3870,6 +3971,7 @@ class ParallelUnitTests(VerifyEntryTestCase):
         self.assertEqual(record["groups"][0]["counts"]["failed"], 1)
         self.assertEqual(record["groups"][0]["counts"]["passed"], 27)
 
+    @unittest.skipUnless(hasattr(os, "fork"), "Windows 首期串行执行，不启动 fork 并行 worker")
     def test_killed_worker_leaves_unusable_evidence_instead_of_false_success(self):
         self.prepare_parallel_suite()
         self.repo.write("tests/test_handoff_i18n.py", "import unittest, os, signal\n"
@@ -3890,9 +3992,10 @@ class ParallelUnitTests(VerifyEntryTestCase):
         self.assertNotIn("execution", record["groups"][0])
         self.assertEqual(record["environment"]["config_summary"]["verification_execution"], "serial")
 
-
     def test_browser_signal_exit_codes_keep_the_actual_signal(self):
-        for sig in (signal.SIGTERM, signal.SIGHUP):
+        signals = [sig for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None),
+                                   getattr(signal, "SIGBREAK", None)) if sig is not None]
+        for sig in signals:
             with self.subTest(signal=sig):
                 stub = BROWSER_STUB.replace("sys.exit(1 if failed else 0)",
                                             "sys.exit(%s)" % (128 + sig))
@@ -3904,6 +4007,7 @@ class ParallelUnitTests(VerifyEntryTestCase):
                 self.assertEqual(record["groups"][0]["signal"], signal.Signals(sig).name)
                 self.assertFalse(record["result"]["usable_as_evidence"])
 
+    @unittest.skipUnless(hasattr(os, "fork"), "Windows 首期串行执行，不启动 fork 并行 worker")
     def test_cancellation_preserves_the_actual_unittest_failure_from_a_worker(self):
         self.prepare_parallel_suite()
         # 正常路径只按失败证据同步；较长上限仅在夹具故障时防止遗留无限等待。
@@ -3970,7 +4074,59 @@ class ParallelUnitTests(VerifyEntryTestCase):
                 self.assertIsNotNone(failure, json.dumps(record, ensure_ascii=False))
                 self.assertEqual(failure["status"], "failed")
                 self.assertIn("original synthetic failure", (self.repo.artifact_dir / "runs" /
-                              record["run_id"] / "unit.log").read_text())
+                              record["run_id"] / "unit.log").read_text(encoding="utf-8"))
+
+
+class WindowsVerificationContractTests(VerifyEntryTestCase):
+    """验证入口在无 fork / 非 POSIX 信号环境下保持串行执行、准确环境摘要与正常收尾。"""
+
+    def test_missing_fork_forces_serial_execution_and_records_serial_summary(self):
+        for index in range(7):
+            self.repo.write("tests/test_serial_extra_%s.py" % index,
+                            UNIT_PASS.replace("AlphaTests", "SerialExtra%sTests" % index))
+        self.repo.write("tests/test_handoff_i18n.py", UNIT_PASS)
+        self.repo.commit_all("合成无 fork 串行验证集合")
+        injection = Path(self.temp.name) / "no-fork"
+        injection.mkdir()
+        (injection / "sitecustomize.py").write_text(
+            "import os\nif hasattr(os, 'fork'):\n    delattr(os, 'fork')\n",
+            encoding="utf-8",
+        )
+        p = self.repo.run_verify("run", "--no-reuse", extra_env={"PYTHONPATH": str(injection)})
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        self.assertEqual(record["environment"]["config_summary"]["verification_execution"], "serial")
+        self.assertNotIn("execution", record["groups"][0])
+        self.assertEqual(record["groups"][0]["counts"]["cases"], 28)
+        self.assertEqual(record["groups"][0]["counts"]["passed"], 28)
+
+    def test_classify_group_tolerates_missing_sighup(self):
+        import unittest.mock as mock
+        import verify
+
+        group = verify.build_groups()["browser"]
+        original = getattr(signal, "SIGHUP", None)
+        if original is not None:
+            with mock.patch.object(verify.signal, "SIGHUP", None, create=True):
+                # 触发 hasattr/getattr 保护，不应因 SIGHUP 为 None 报 TypeError/AttributeError
+                outcome, code = verify.classify_group(
+                    group, 128 + int(signal.SIGINT), False, {"total": 1, "passed": 0, "failed": 0},
+                    None, None, False,
+                )
+        else:
+            outcome, code = verify.classify_group(
+                group, 128 + int(signal.SIGINT), False, {"total": 1, "passed": 0, "failed": 0},
+                None, None, False,
+            )
+        self.assertEqual(outcome, verify.INTERRUPTED)
+        self.assertEqual(code, 128 + int(signal.SIGINT))
+
+    def test_isolation_mechanism_matches_platform(self):
+        p = self.repo.run_verify("run", "--group", "serve-check", "--quiet")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        expected = "win32-share-lock" if os.name == "nt" else "flock"
+        self.assertEqual(record["environment"]["isolation"]["mechanism"], expected)
 
 
 if __name__ == "__main__":

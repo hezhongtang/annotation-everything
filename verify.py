@@ -135,9 +135,21 @@ def new_run_id() -> str:
     return "%s-%s" % (stamp, os.urandom(3).hex())
 
 
+def _configure_windows_stdio() -> None:
+    if os.name != "nt":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def display_argv(argv: list) -> list:
     """路径参数只记仓库相对位置；仓库外路径使用占位符。"""
     out = []
+    repo_resolved = REPO.resolve()
     for token in argv:
         if token == sys.executable:
             out.append("python3")
@@ -148,7 +160,7 @@ def display_argv(argv: list) -> list:
             path = Path(value).expanduser() if value.startswith("~/") else Path(value)
             if path.is_absolute():
                 try:
-                    value = str(path.resolve().relative_to(REPO))
+                    value = path.resolve().relative_to(repo_resolved).as_posix()
                 except (OSError, ValueError):
                     value = "<external-path>"
             out.append(option + separator + value)
@@ -162,7 +174,15 @@ def write_json_atomic(path: Path, payload) -> None:
         with os.fdopen(handle, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, ensure_ascii=False, indent=2)
             fh.write("\n")
-        os.replace(tmp_name, path)
+        attempts = 5 if os.name == "nt" else 1
+        for attempt in range(attempts):
+            try:
+                os.replace(tmp_name, path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt + 1 >= attempts:
+                    raise
+                time.sleep(0.01 * (attempt + 1))
     except BaseException:
         try:
             os.unlink(tmp_name)
@@ -212,7 +232,8 @@ def _doc_exempt_path(path: str) -> bool:
 
 def git_output(args: list) -> tuple:
     try:
-        proc = subprocess.run(["git", *args], cwd=str(REPO), capture_output=True, text=True, timeout=120)
+        proc = subprocess.run(["git", *args], cwd=str(REPO), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=120)
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, str(exc)
     return proc.returncode, proc.stdout
@@ -389,11 +410,14 @@ def environment_summary() -> dict:
             "ae_home_set": bool(os.environ.get("AE_HOME")),
             "ae_locale": os.environ.get("AE_LOCALE"),
             "ae_verify_dir_set": bool(os.environ.get("AE_VERIFY_DIR")),
-            "verification_execution": "serial" if os.environ.get("AE_VERIFY_SERIAL") == "1" else "isolated-processes/1",
+            "verification_execution": (
+                "serial" if (os.environ.get("AE_VERIFY_SERIAL") == "1" or not hasattr(os, "fork"))
+                else "isolated-processes/1"
+            ),
         },
         # 环境隔离方式（issue #52）：锁在哪类共享位置、覆盖哪些资源；不记本机绝对路径
         "isolation": {
-            "mechanism": "flock",
+            "mechanism": "win32-share-lock" if os.name == "nt" else "flock",
             "lock_dir_source": ("AE_LOCK_DIR" if os.environ.get("AE_LOCK_DIR")
                                 else "XDG_RUNTIME_DIR" if os.environ.get("XDG_RUNTIME_DIR")
                                 else "tmpdir"),
@@ -488,7 +512,7 @@ def selector_modules(selectors: Optional[list]) -> set:
     modules = set()
     for selector in selectors or []:
         prefix = _selector_module_prefix(selector)
-        if not prefix or "/" in prefix:
+        if not prefix or "/" in prefix or ":" in prefix:
             continue   # 空选择器或指到仓库外：没有可归一的模块名
         module = prefix.split(".")[0]
         if module:
@@ -840,7 +864,8 @@ def cmd_unit_runner(argv: list) -> int:
             return [node]
         raise TypeError("自定义测试套件保持串行")
 
-    if suite is not None and not load_error and not interrupted and os.environ.get("AE_VERIFY_SERIAL") != "1":
+    if (suite is not None and not load_error and not interrupted
+            and os.environ.get("AE_VERIFY_SERIAL") != "1" and hasattr(os, "fork")):
         try:
             cases = flatten(suite)
         except TypeError as exc:
@@ -1002,6 +1027,76 @@ def parse_browser_environment(text: str) -> Optional[dict]:
 
 # ── 执行 ──────────────────────────────────────────────────────────────────
 
+_TERMINATION_SIGNALS = ("SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK")
+
+
+def _termination_signals() -> tuple:
+    return tuple(sig for sig in (getattr(signal, name, None) for name in _TERMINATION_SIGNALS) if sig is not None)
+
+
+def _assign_win32_job(proc):
+    """为受控子进程创建无关闭强杀限制的 Win32 Job Object，仅用于主动回收整棵受控进程树。"""
+    if os.name != "nt":
+        return None
+    proc_handle = getattr(proc, "_handle", None)
+    if not proc_handle:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+        if not kernel32.AssignProcessToJobObject(job, int(proc_handle)):
+            kernel32.CloseHandle(job)
+            return None
+        return job
+    except Exception:
+        return None
+
+
+def _terminate_win32_job(job_handle) -> bool:
+    if os.name != "nt" or not job_handle:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel32.TerminateJobObject.restype = wintypes.BOOL
+        return bool(kernel32.TerminateJobObject(job_handle, 1))
+    except Exception:
+        return False
+
+
+def _close_win32_job(entry: Optional[dict]) -> None:
+    if not entry:
+        return
+    job_handle = entry.pop("job", None)
+    if not job_handle or os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle(job_handle)
+    except Exception:
+        pass
+
+
 def _pgid_of(proc) -> Optional[int]:
     try:
         return os.getpgid(proc.pid)
@@ -1009,7 +1104,29 @@ def _pgid_of(proc) -> Optional[int]:
         return None
 
 
-def signal_group(proc, sig: int) -> None:
+def signal_group(proc, sig: int, job_handle=None) -> None:
+    if os.name == "nt":
+        hard_kill = getattr(signal, "SIGKILL", -1)
+        if sig == hard_kill or sig == -1:
+            _terminate_win32_job(job_handle)
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            return
+        ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", None)
+        if ctrl_break is not None and sig in _termination_signals():
+            try:
+                os.kill(proc.pid, ctrl_break)
+                return
+            except OSError:
+                pass
+        _terminate_win32_job(job_handle)
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+        return
     try:
         os.killpg(os.getpgid(proc.pid), sig)
         return
@@ -1044,10 +1161,10 @@ class ChildRegistry:
     def __init__(self):
         self.entries: list = []
 
-    def register(self, proc, group_name: str) -> dict:
+    def register(self, proc, group_name: str, job=None) -> dict:
         entry = {"group": group_name, "pid": proc.pid, "pgid": _pgid_of(proc),
                  "started_at": now_iso(), "reaped": False, "exit_status": None, "signal": None,
-                 "proc": proc}
+                 "proc": proc, "job": job}
         self.entries.append(entry)
         return entry
 
@@ -1055,7 +1172,8 @@ class ChildRegistry:
         return [entry for entry in self.entries if not entry["reaped"]]
 
     def public(self) -> list:
-        return [{key: value for key, value in entry.items() if key != "proc"} for entry in self.entries]
+        return [{key: value for key, value in entry.items() if key not in ("proc", "job")}
+                for entry in self.entries]
 
 
 class RunContext:
@@ -1083,23 +1201,26 @@ class RunContext:
     def abort(self, signum: int) -> None:
         """回收本次登记的子进程：先原信号，宽限期后升级；未登记的进程一律不动。"""
         cleanup_started = time.monotonic()
+        hard_kill = getattr(signal, "SIGKILL", -1)
         for entry in self.registry.live():
             if entry["proc"].poll() is None:
-                signal_group(entry["proc"], signum)
+                signal_group(entry["proc"], signum, job_handle=entry.get("job"))
         deadline = time.monotonic() + KILL_GRACE_SECONDS
         for entry in self.registry.live():
             remaining = max(0.0, deadline - time.monotonic())
             try:
                 entry["proc"].wait(timeout=remaining)
             except subprocess.TimeoutExpired:
-                signal_group(entry["proc"], signal.SIGKILL)
+                signal_group(entry["proc"], hard_kill, job_handle=entry.get("job"))
                 try:
                     entry["proc"].wait(timeout=KILL_GRACE_SECONDS)
                 except subprocess.TimeoutExpired:
                     pass
             code = entry["proc"].poll()
             entry.update(reaped=code is not None, exit_status=code, signal=signal_name(code))
-            if code is None:
+            if code is not None:
+                _close_win32_job(entry)
+            else:
                 self.note("登记的 %s 子进程未能在宽限期内退出" % entry["group"])
         try:
             self.save_children()
@@ -1173,14 +1294,39 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
 
         interrupted_signum = None
         with open(log_path, "w", encoding="utf-8") as log_fh:
-            proc, reader, registry_entry = None, None, None
+            proc, reader, registry_entry, job_handle = None, None, None, None
             timed_out = False
             try:
-                proc = subprocess.Popen(child_argv, cwd=str(REPO), env=dict(os.environ),
-                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                        text=True, encoding="utf-8", errors="replace", start_new_session=True,
-                                        pass_fds=lock_fds)
-                registry_entry = ctx.registry.register(proc, group.name)
+                child_env = dict(os.environ)
+                popen_kwargs = {}
+                if os.name == "nt":
+                    child_env.setdefault("PYTHONIOENCODING", "utf-8")
+                    popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+                    if lock_fds:
+                        import msvcrt
+                        os_handles = []
+                        for fd in lock_fds:
+                            os.set_inheritable(fd, True)
+                            os_handles.append(msvcrt.get_osfhandle(fd))
+                        popen_kwargs["startupinfo"] = subprocess.STARTUPINFO(
+                            lpAttributeList={"handle_list": os_handles}
+                        )
+                else:
+                    popen_kwargs["start_new_session"] = True
+                    popen_kwargs["pass_fds"] = lock_fds
+                try:
+                    proc = subprocess.Popen(child_argv, cwd=str(REPO), env=child_env,
+                                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                            text=True, encoding="utf-8", errors="replace", **popen_kwargs)
+                finally:
+                    if os.name == "nt" and lock_fds:
+                        for fd in lock_fds:
+                            try:
+                                os.set_inheritable(fd, False)
+                            except OSError:
+                                pass
+                job_handle = _assign_win32_job(proc)
+                registry_entry = ctx.registry.register(proc, group.name, job=job_handle)
                 ctx.save_children()
                 reader = threading.Thread(target=pump,
                                           args=(proc.stdout, log_fh, None if ctx.quiet else ctx.echo), daemon=True)
@@ -1189,11 +1335,12 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
                     code = proc.wait(timeout=ctx.timeout)
                 except subprocess.TimeoutExpired:
                     timed_out = True
-                    signal_group(proc, signal.SIGTERM)
+                    hard_kill = getattr(signal, "SIGKILL", -1)
+                    signal_group(proc, signal.SIGTERM, job_handle=job_handle)
                     try:
                         code = proc.wait(timeout=KILL_GRACE_SECONDS)
                     except subprocess.TimeoutExpired:
-                        signal_group(proc, signal.SIGKILL)
+                        signal_group(proc, hard_kill, job_handle=job_handle)
                         code = proc.wait()
                 reader.join(timeout=5)
             except Interrupted as exc:
@@ -1202,7 +1349,7 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
                 interrupted_signum = exc.signum
                 cleanup_guard.enter_context(shield_termination())
                 if proc is not None and registry_entry is None:
-                    registry_entry = ctx.registry.register(proc, group.name)
+                    registry_entry = ctx.registry.register(proc, group.name, job=job_handle)
                 ctx.abort(exc.signum)
                 code = proc.poll() if proc is not None else None
                 if reader is not None and reader.ident is not None:
@@ -1210,6 +1357,8 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
             except Exception:
                 # 记录写入等入口错误也须在日志关闭、资源锁释放之前回收自己的子进程。
                 cleanup_guard.enter_context(shield_termination())
+                if proc is not None and registry_entry is None:
+                    registry_entry = ctx.registry.register(proc, group.name, job=job_handle)
                 ctx.abort(signal.SIGTERM)
                 if reader is not None and reader.ident is not None:
                     reader.join(timeout=5)
@@ -1220,6 +1369,8 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
                 cleanup_guard.enter_context(capture_termination(result))
             if registry_entry is not None:
                 registry_entry.update(reaped=code is not None, exit_status=code, signal=signal_name(code))
+                if code is not None:
+                    _close_win32_job(registry_entry)
             ctx.save_children()
         child_seconds = round(time.monotonic() - started_wall, 6)
 
@@ -1297,8 +1448,7 @@ def classify_group(group: Group, code: Optional[int], timed_out: bool, counts: O
         return UNAVAILABLE, None
     if code < 0:
         return INTERRUPTED, EXIT_INTERRUPTED_BASE + (-code)
-    if code in tuple(EXIT_INTERRUPTED_BASE + int(sig) for sig in
-                     (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)):
+    if code in tuple(EXIT_INTERRUPTED_BASE + int(sig) for sig in _termination_signals()):
         # 子进程没有被信号击杀，而是按 128+SIGINT 约定自行退出（浏览器脚本的中断路径）：
         # 与被击杀同样视为中断，不冒充失败，更不冒充通过
         return INTERRUPTED, code
@@ -2226,10 +2376,7 @@ def install_signal_handlers() -> None:
     def handler(signum, frame):
         raise Interrupted(signum)
 
-    for name in ("SIGINT", "SIGTERM", "SIGHUP"):
-        sig = getattr(signal, name, None)
-        if sig is None:
-            continue
+    for sig in _termination_signals():
         try:
             signal.signal(sig, handler)
         except (OSError, ValueError):
@@ -2248,10 +2395,7 @@ def capture_termination(result: dict):
             result["interrupted_signum"] = signum
 
     installed = []
-    for name in ("SIGINT", "SIGTERM", "SIGHUP"):
-        sig = getattr(signal, name, None)
-        if sig is None:
-            continue
+    for sig in _termination_signals():
         try:
             previous = signal.signal(sig, handler)
         except (OSError, ValueError):
@@ -2275,10 +2419,7 @@ def shield_termination():
     如果回收的宽限等待或落盘本身能被第二个信号打断，这条承诺就守不住。
     """
     installed = []
-    for name in ("SIGINT", "SIGTERM", "SIGHUP"):
-        sig = getattr(signal, name, None)
-        if sig is None:
-            continue
+    for sig in _termination_signals():
         try:
             previous = signal.signal(sig, signal.SIG_IGN)
         except (OSError, ValueError):
@@ -2729,6 +2870,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    _configure_windows_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "_unit-runner":
         return cmd_unit_runner(argv[1:])

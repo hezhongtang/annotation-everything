@@ -6,24 +6,31 @@ tests/e2e_browser.py。它们在启动资源敏感的验证前先取锁，结束
 锁只协调参与者。外部进程（用户真实服务、别的程序）不参与协议，锁既看不到
 它们，也绝不会去停止它们——这是与「清理登记子进程」并列的安全边界。
 
-机制：fcntl.flock 排他锁。锁文件放在同一用户共享的位置（XDG_RUNTIME_DIR 或
-系统临时目录），跨 worktree、跨独立 checkout 生效；进程无论正常退出、失败还
-是被 SIGKILL，内核都会在最后一个持有该文件描述符的进程退出后释放锁。验证入口
-把锁描述符传给执行中的组，入口被杀时不会让仍运行的组失去保护。锁文件内容只是
-持有者诊断信息，所有权判断以
-flock 为准。只用 Python 标准库，语法兼容 Python 3.9；依赖 POSIX flock
-（macOS 与 Linux 均支持，Windows 不在支持范围）。
+机制：POSIX 使用 fcntl.flock 排他锁；Windows 使用 Win32 共享模式排他写锁
+（CreateFileW 不授予 FILE_SHARE_WRITE，同文件句柄由子进程继承）。锁文件放在
+同一用户共享的位置（POSIX 为 XDG_RUNTIME_DIR 或系统临时目录，Windows 为用户
+临时目录），跨 worktree、跨独立 checkout 生效；进程无论正常退出、失败还是被
+强行终止，操作系统都会在最后一个持有该句柄的进程退出后释放锁。验证入口把锁
+描述符传给执行中的组，入口先退出时不会让仍运行的组失去保护。锁文件内容只是
+持有者诊断信息，所有权以操作系统锁句柄为准。只用 Python 标准库，语法兼容
+Python 3.9。
 """
 from __future__ import annotations
 
 import datetime
-import fcntl
+import getpass
+import hashlib
 import json
 import os
 import tempfile
 import time
 from pathlib import Path
 from typing import Optional
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
 
 # 嵌套参与者的重入豁免：祖先已持有的资源集合经环境变量传给子进程。
 # verify.py 持锁后拉起的测试子进程看到它，就不再对同一资源重复 flock
@@ -141,13 +148,30 @@ def resource_order() -> list:
     return sorted(_all_resources())
 
 
+def _lock_user_token(env) -> str:
+    """同一用户在不同检出间得到相同标识，不同用户彼此隔离。"""
+    getuid = getattr(os, "getuid", None)
+    if callable(getuid):
+        return str(getuid())
+    user = env.get("USERNAME") or env.get("USER")
+    if not user:
+        try:
+            user = getpass.getuser()
+        except Exception:
+            user = "unknown"
+    domain = env.get("USERDOMAIN") or ""
+    raw = f"{domain}\\{user}" if domain else user
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def lock_root(env=None) -> Path:
     """锁文件根目录：同一用户在同一台机器上共享，不依赖某个人的绝对目录。
 
     AE_LOCK_DIR 可覆盖（测试与特殊环境用）。缺省依次取 XDG_RUNTIME_DIR（Linux
-    用户运行时目录，每用户独立）与系统临时目录（macOS 的 TMPDIR 同样每用户
-    独立）。目录名包含用户 UID，Linux 回退到共享 /tmp 时不同用户也不会争用
-    同一目录的写权限。两个检出无论是不是同一个仓库的 worktree，解析结果都相同。
+    用户运行时目录，每用户独立）与系统临时目录（macOS TMPDIR / Windows TEMP
+    同样每用户独立）。目录名按用户 UID（POSIX）或用户摘要（Windows）区分，
+    回退到共享临时目录时不同用户也不会争用同一目录的写权限。两个检出无论是不是
+    同一个仓库的 worktree，解析结果都相同。
     """
     env = os.environ if env is None else env
     override = env.get("AE_LOCK_DIR")
@@ -155,7 +179,7 @@ def lock_root(env=None) -> Path:
         return Path(override)
     runtime = env.get("XDG_RUNTIME_DIR")
     base = Path(runtime) if runtime else Path(tempfile.gettempdir())
-    return base / ("annotation-everything-locks-%s" % os.getuid())
+    return base / ("annotation-everything-locks-%s" % _lock_user_token(env))
 
 
 def wait_limit(env=None) -> float:
@@ -219,14 +243,18 @@ class LockHandle:
         return tuple(handle.fileno() for _name, handle in self._files)
 
 
-def _write_holder_note(path: Path, resource: str) -> None:
-    """把持有者诊断信息写进锁文件。只用于观测（报告谁在持有），所有权以 flock 为准。"""
+def _write_holder_note(handle, resource: str) -> None:
+    """把持有者诊断信息写进已持有的锁句柄。只用于观测，所有权以操作系统锁为准。"""
+    payload = json.dumps({
+        "pid": os.getpid(),
+        "resource": resource,
+        "at": datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="seconds"),
+    }, ensure_ascii=False) + "\n"
     try:
-        path.write_text(json.dumps({
-            "pid": os.getpid(),
-            "resource": resource,
-            "at": datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="seconds"),
-        }, ensure_ascii=False) + "\n", encoding="utf-8")
+        handle.seek(0)
+        handle.truncate(0)
+        handle.write(payload)
+        handle.flush()
     except OSError:
         pass
 
@@ -238,6 +266,85 @@ def read_holder_note(resource: str, env=None) -> Optional[dict]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def _open_posix_lock(path: Path, resource: str, timeout: float, started: float):
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        handle = os.fdopen(fd, "r+", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
+    try:
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return handle
+            except OSError:
+                if time.monotonic() - started >= timeout:
+                    raise LockTimeoutError(resource, time.monotonic() - started)
+                time.sleep(_RETRY_INTERVAL)
+    except BaseException:
+        try:
+            handle.close()
+        except OSError:
+            pass
+        raise
+
+
+def _open_windows_lock(path: Path, resource: str, timeout: float, started: float):
+    """Windows 排他写锁：不授予 FILE_SHARE_WRITE，同句柄可由子进程继承。"""
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+
+    generic_rw = 0x80000000 | 0x40000000
+    share_read_delete = 0x00000001 | 0x00000004
+    open_always = 4
+    attr_normal = 0x00000080
+    invalid_handle = ctypes.c_void_p(-1).value
+    busy_errors = (32, 33)  # ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION
+
+    while True:
+        raw_handle = create_file(
+            str(path), generic_rw, share_read_delete, None,
+            open_always, attr_normal, None,
+        )
+        if raw_handle not in (None, 0, invalid_handle):
+            break
+        err = ctypes.get_last_error()
+        if err not in busy_errors:
+            raise ctypes.WinError(err)
+        if time.monotonic() - started >= timeout:
+            raise LockTimeoutError(resource, time.monotonic() - started)
+        time.sleep(_RETRY_INTERVAL)
+
+    try:
+        fd = msvcrt.open_osfhandle(raw_handle, os.O_RDWR)
+    except BaseException:
+        kernel32.CloseHandle(raw_handle)
+        raise
+    try:
+        return os.fdopen(fd, "r+", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _acquire_resource_handle(path: Path, resource: str, timeout: float, started: float):
+    if fcntl is not None:
+        return _open_posix_lock(path, resource, timeout, started)
+    if os.name == "nt":
+        return _open_windows_lock(path, resource, timeout, started)
+    raise RuntimeError("当前平台缺少可用的共享资源锁实现")
 
 
 def acquire(resources, timeout: Optional[float] = None, env=None):
@@ -263,18 +370,9 @@ def acquire(resources, timeout: Optional[float] = None, env=None):
         for name in to_lock:
             root.mkdir(parents=True, exist_ok=True, mode=0o700)
             path = root / ("%s.lock" % name)
-            handle = open(path, "a+", encoding="utf-8")
+            handle = _acquire_resource_handle(path, name, timeout, started)
             files.append((name, handle))
-            while True:
-                try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except OSError:
-                    if time.monotonic() - started >= timeout:
-                        waited = time.monotonic() - started
-                        raise LockTimeoutError(name, waited)
-                    time.sleep(_RETRY_INTERVAL)
-            _write_holder_note(path, name)
+            _write_holder_note(handle, name)
     except BaseException:
         for _name, handle in files:
             try:

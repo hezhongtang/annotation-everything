@@ -396,7 +396,8 @@ def load_scenario_ids(repo: Path) -> tuple:
 
 def git_output(repo: Path, args: list) -> tuple:
     try:
-        proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=120)
+        proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=120)
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, str(exc)
     return proc.returncode, proc.stdout

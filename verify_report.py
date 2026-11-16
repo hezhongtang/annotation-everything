@@ -513,12 +513,22 @@ def selection_guard(selection, root):
 
 
 def _write(path, value):
+    import time
+
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=".efficiency-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(value)
-        os.replace(temporary, path)
+        attempts = 5 if os.name == "nt" else 1
+        for attempt in range(attempts):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt + 1 >= attempts:
+                    raise
+                time.sleep(0.01 * (attempt + 1))
     finally:
         try:
             os.unlink(temporary)

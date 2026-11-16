@@ -55,3 +55,55 @@ jobs:
           echo "构件：verify-python${{ matrix.python-version }}（.verify/ 全部内容，含 record.json 与各组原始日志）"
           python3 verify.py report --latest | tee -a "$GITHUB_STEP_SUMMARY"
           python3 verify.py report --efficiency | tee -a "$GITHUB_STEP_SUMMARY"
+
+  windows-foundation:
+    name: 纯逻辑与验证基础检查（Windows Python ${{ matrix.python-version }}）
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # 首期 Windows 验证基础范围（#172）：
+      # 只运行已适配的共享资源隔离、统一验证入口与纯逻辑检查，不代表产品全量通过；
+      # 未适配的产品运行期检查（serve-check、browser、fsutil/notes/ledger/ae 等）留待 #173-#177 逐步纳入。
+      - name: 验证基础与纯逻辑检查（Windows 初始范围）
+        shell: pwsh
+        run: |
+          $env:AE_HOME = "$env:RUNNER_TEMP\ae-home"
+          $env:PYTHONUTF8 = "1"
+          python verify.py run --group unit-related --phase ci `
+            --reason "CI Windows 初始验证基础（${{ github.event_name }} ${{ github.ref_name }} Python ${{ matrix.python-version }}）" `
+            tests/test_host_isolation.py `
+            tests/test_verify_entry.py `
+            tests/test_verify_parallel.py `
+            tests/test_verify_doc_allowlist.py `
+            tests/test_i18n.py `
+            tests/test_i18n_catalog_contract.py `
+            tests/test_review_page_editing_i18n.py `
+            tests/test_overview_docs.py `
+            tests/test_release.py `
+            tests/test_gitignore.py `
+            tests/test_e2e_waits.py
+      - name: 保存 Windows 验证构件
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-windows-python${{ matrix.python-version }}
+          path: .verify/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Windows 初始验证摘要
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $env:PYTHONUTF8 = "1"
+          "构件：verify-windows-python${{ matrix.python-version }}（仅验证基础与纯逻辑初始范围；未适配的产品检查尚未纳入，不代表全量通过）" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          python verify.py report --latest | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

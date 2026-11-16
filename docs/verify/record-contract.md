@@ -72,8 +72,8 @@
 | `environment.python` | 对象 | 是 | `version`、`implementation`、`matches_wrapper`（子进程与入口同一解释器时为 `true`） |
 | `environment.host` | 对象 | 是 | `cpu_count`、`timezone` |
 | `environment.ci` | 对象 | 是 | `is_ci`、`provider`、`runner_os`；非 CI 时后两个为 `null` |
-| `environment.config_summary` | 对象 | 是 | 只记 `ae_home_set`、`ae_locale`、`ae_verify_dir_set` 与 `verification_execution`；后者区分 `serial` 和 `isolated-processes/1` |
-| `environment.isolation` | 对象 | 是 | 环境隔离方式（C 项起有值）：`mechanism`（`flock`）、`lock_dir_source`（`AE_LOCK_DIR` / `XDG_RUNTIME_DIR` / `tmpdir`，只记来源类别不记路径）、`resources`、`note`。协议详情见 [isolation.md](isolation.md) |
+| `environment.config_summary` | 对象 | 是 | 只记 `ae_home_set`、`ae_locale`、`ae_verify_dir_set` 与 `verification_execution`；后者区分 `serial`（Windows 首期或 `AE_VERIFY_SERIAL=1`）和 `isolated-processes/1`（POSIX 并行策略） |
+| `environment.isolation` | 对象 | 是 | 环境隔离方式（C 项起有值）：`mechanism`（POSIX 为 `flock`，Windows 为 `win32-share-lock`）、`lock_dir_source`（`AE_LOCK_DIR` / `XDG_RUNTIME_DIR` / `tmpdir`，只记来源类别不记路径）、`resources`、`note`。协议详情见 [isolation.md](isolation.md) |
 
 环境里不记任意环境变量原值、本机路径或凭据。浏览器组由专用测试入口输出实际 `browser_environment`，包含 `schema=ae-browser-environment/1`、`browser`、`channel`、浏览器 `version` 与 `playwright` 版本；统一入口只解析日志，不导入 Playwright。旧记录或无法确认版本时保持缺失，不能把两个未知版本当作相同环境。
 
@@ -175,7 +175,7 @@ unittest 执行期间捕获中断时，已完成用例保留原结果，中断�
 
 - `running`：入口已启动并写下记录，但还没有结束记录。父进程被 `SIGKILL` 或写记录中途被打断时，记录停在这个状态。
 - `complete`：正常跑完，无论结论是通过还是失败。
-- `aborted`：入口收到 `SIGINT` / `SIGTERM` / `SIGHUP`，已回收登记的子进程后写下记录。
+- `aborted`：入口收到 `SIGINT` / `SIGTERM` / `SIGHUP` / `SIGBREAK`（Windows 控制台中断），已回收登记的子进程后写下记录。
 
 只有 `complete` 且结论 `passed` 且覆盖最终输入且证据完整的记录才算可用的通过证据。`running` 与 `aborted` 都不是通过，也不会被后来的运行改写成通过。
 

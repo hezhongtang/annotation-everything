@@ -9,3 +9,5 @@ fork 子进程继承实际锁描述符，并各自建立登记的进程组，父
 本决定替代 [ADR 0002](0002-unified-verification-entry.md) 中「不把纯逻辑测试拆成独立进程」的执行细节；统一入口独立于产品 CLI、只使用标准库、保留证据和退出码的决定继续适用。
 
 异常任务退出后，父级仍回收登记进程组中的受控服务；取消收尾保留任务已写出的部分记录。敏感单元在原进程执行，使用分离会话的执行器测试不进入独立任务。
+
+Windows 首期（#172）没有 `os.fork()`，因此 `verify.py` 在 Windows 上以单进程串行执行各组（`environment.config_summary.verification_execution = "serial"`），继续遵守同一 `host-state` 共享资源互斥（Win32 共享写锁 + 显式句柄继承）与登记子进程树受控收尾协议；POSIX 上的有界 3 进程 `fork()` 策略保持不变。
