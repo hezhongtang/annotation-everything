@@ -23,6 +23,9 @@ SCRIPTS = ROOT / "skill/annotation-everything/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import analysis_store
 import fsutil
+
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+
 import ledger
 import serve
 import wakeup

@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 SKILL_SRC = ROOT / "skill" / "annotation-everything"
 sys.path.insert(0, str(SCRIPTS))
-os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")
 os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-test-user-")
 os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
 os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")

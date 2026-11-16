@@ -15,6 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill/annotation-everything/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import notes_store as store
+
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+
 import serve
 
 

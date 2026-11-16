@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "skill" / "annotation-everything" / "scripts" / "check_pptx_fonts.py"
 SCRIPTS = CHECKER.parent
 sys.path.insert(0, str(SCRIPTS))
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
 
 import ledger  # noqa: E402
 import skill_sources  # noqa: E402

@@ -24,6 +24,8 @@ sys.path.insert(0, str(ROOT / "fixtures" / "pptx"))
 os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))
 os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="ae-test-user-"))
 
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+
 import build_viewer  # noqa: E402
 import ledger  # noqa: E402
 import make_pptx as mp  # noqa: E402
