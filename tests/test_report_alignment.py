@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")
 os.environ.pop("AE_LOCALE", None)
 
 import report_check as rc  # noqa: E402
@@ -569,6 +569,38 @@ NAV_SCRIPT_OK = """# 讲稿：导航闭环报告
 
 
 class TestReportNavigation(unittest.TestCase):
+    def test_href_requires_anchor_in_the_corresponding_target_page(self):
+        link = '<a href="#page-ev">Evidence</a>'
+        linked = REPORT.replace("</section>", link + "</section>", 1)
+        cases = (
+            (linked.replace(' id="page-ev"', ""), "fail"),
+            (linked.replace('id="page-ev"', 'id="wrong-id"'), "fail"),
+            (linked.replace(' id="page-ev"', "").replace(
+                "</section>", '<span id="page-ev"></span></section>', 1), "fail"),
+            (linked.replace('id="page-sum"', 'id="page-ev"'), "fail"),
+            (linked.replace('id="page-ev"', 'id="wrong-id"').replace(
+                "<h2>关键证据</h2>", '<!-- <span id="page-ev"></span> --><h2>关键证据</h2>'), "fail"),
+            (linked.replace(' id="page-ev"', "").replace(
+                "<h2>关键证据</h2>", '<h2 id="page-ev">关键证据</h2>'), "pass"),
+            (linked.replace(' id="page-ev"', "").replace(
+                "<h2>关键证据</h2>", '<a name="page-ev"></a><h2>关键证据</h2>'), "pass"),
+        )
+        for report, expected in cases:
+            with self.subTest(report=report):
+                rec = make_record(report=report)
+                code, payload, _, _ = run_check(write_case(tmpdir(), report=report, record=rec))
+                self.assertEqual(code, 1 if expected == "fail" else 0)
+                self.assertEqual(by_id(payload, "report.navigation")["status"], expected)
+                self.assertEqual(payload["verdict"]["deliverable"], expected == "pass")
+
+    def test_data_page_ref_fallback_does_not_require_html_fragment(self):
+        report = REPORT.replace(' id="page-ev"', "").replace(
+            "</section>", '<a data-page-ref="ev">Evidence</a></section>', 1)
+        rec = make_record(report=report)
+        code, payload, _, _ = run_check(write_case(tmpdir(), report=report, record=rec))
+        self.assertEqual(code, 0)
+        self.assertEqual(by_id(payload, "report.navigation")["status"], "pass")
+
     def test_non_rendered_anchor_text_is_ignored(self):
         anchor = '<a href="#page-removed" data-page-ref="ghost" data-range-start="ghost">old</a>'
         fragments = (

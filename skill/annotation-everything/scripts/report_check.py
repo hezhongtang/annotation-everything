@@ -1209,13 +1209,21 @@ class _NavigationLinkParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.links: list[dict[str, str | None]] = []
+        self.anchors: set[str] = set()
         self.template_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag == "template":
             self.template_depth += 1
-        elif tag == "a" and not self.template_depth:
-            self.links.append(dict(attrs))
+        if self.template_depth:
+            return
+        attributes = dict(attrs)
+        if attributes.get("id"):
+            self.anchors.add(attributes["id"])
+        if tag == "a":
+            self.links.append(attributes)
+            if attributes.get("name"):
+                self.anchors.add(attributes["name"])
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "template" and self.template_depth:
@@ -1225,8 +1233,9 @@ class _NavigationLinkParser(HTMLParser):
 def check_report_navigation(pages: list[dict], c: Checks) -> None:
     """跨页导航与目录章节范围核验（issue #169）。
 
-    检查 #page-<key>、data-page-ref 与 data-range-start/end：引用缺失页面键或
-    目录起始页晚于结束页时判定程序检查失败；完全未声明此类链接时判不适用。"""
+    检查 #page-<key>、data-page-ref 与 data-range-start/end：引用缺失页面键、
+    href 的真实锚点不在对应页面，或目录起始页晚于结束页时判定程序检查失败；
+    完全未声明此类链接时判不适用。"""
     if not pages:
         c.set("report.navigation", "not_applicable")
         return
@@ -1234,16 +1243,23 @@ def check_report_navigation(pages: list[dict], c: Checks) -> None:
     found_nav = False
     broken_refs: list[str] = []
     bad_ranges: list[str] = []
+    parsed_pages: list[_NavigationLinkParser] = []
+    anchor_pages: dict[str, set[str]] = {}
     for p in pages:
         parser = _NavigationLinkParser()
         parser.feed(p["html"])
         parser.close()
+        parsed_pages.append(parser)
+        for anchor in parser.anchors:
+            anchor_pages.setdefault(anchor, set()).add(p["key"])
+    for parser in parsed_pages:
         for attrs in parser.links:
             href = (attrs.get("href") or "").strip()
             if href.lower().startswith("#page-"):
                 found_nav = True
                 target_key = href[6:].strip()
-                if not target_key or target_key not in pos_by_key:
+                if not target_key or target_key not in pos_by_key \
+                        or anchor_pages.get(href[1:]) != {target_key}:
                     broken_refs.append(href)
             if "data-page-ref" in attrs:
                 found_nav = True
