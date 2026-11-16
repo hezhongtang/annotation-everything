@@ -234,12 +234,21 @@ class EfficiencyCliTests(unittest.TestCase):
         self.assertIn("内容冲突", result.stdout)
         self.assertEqual(json.loads(original.read_text())["result"]["outcome"], "passed")
 
+    @staticmethod
+    def _write_fake_gh(fake_bin: Path, body: str) -> None:
+        if os.name == "nt":
+            (fake_bin / "gh.py").write_text(body, encoding="utf-8")
+            (fake_bin / "gh.cmd").write_text(
+                f'@echo off\r\n"{sys.executable}" "%~dp0gh.py" %*\r\n', encoding="utf-8")
+        else:
+            gh = fake_bin / "gh"
+            gh.write_text(f"#!{sys.executable}\n{body}", encoding="utf-8")
+            gh.chmod(0o755)
+
     def test_ci_collection_failure_is_an_explicit_gap(self):
         fake_bin = Path(self.tmp.name) / "bin"
         fake_bin.mkdir()
-        gh = fake_bin / "gh"
-        gh.write_text("#!/usr/bin/env python3\nimport sys\nprint('HTTP 403 permission denied', file=sys.stderr)\nsys.exit(1)\n")
-        gh.chmod(0o755)
+        self._write_fake_gh(fake_bin, "import sys\nprint('HTTP 403 permission denied', file=sys.stderr)\nsys.exit(1)\n")
         env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"])
         result = subprocess.run([sys.executable, str(ROOT / "tools" / "collect_verify_history.py"),
                                  "--repo", "synthetic/repo", "--out-dir", str(self.root)],
@@ -258,8 +267,7 @@ class EfficiencyCliTests(unittest.TestCase):
         shutil.rmtree(self.root / "runs")
         fake_bin = Path(self.tmp.name) / "bin"
         fake_bin.mkdir()
-        script = """#!/usr/bin/env python3
-import base64, json, sys
+        script = """import base64, json, sys
 endpoint = sys.argv[-1]
 if '/pulls?' in endpoint:
     print(json.dumps([{'number': 1, 'merged_at': 'synthetic'}]))
@@ -272,9 +280,7 @@ elif endpoint.endswith('/1/zip'):
 else:
     sys.exit(1)
 """.replace("BYTES", repr(base64.b64encode(buffer.getvalue()).decode()))
-        gh = fake_bin / "gh"
-        gh.write_text(script)
-        gh.chmod(0o755)
+        self._write_fake_gh(fake_bin, script)
         env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"])
         result = subprocess.run([sys.executable, str(ROOT / "tools" / "collect_verify_history.py"),
                                  "--repo", "synthetic/repo", "--out-dir", str(self.root)],
@@ -311,8 +317,7 @@ else:
         fake_bin.mkdir()
         command = [sys.executable, str(ROOT / "verify.py"), "report", "--efficiency", "--rebuild",
                    "--out-dir", str(self.root), "--now", stamp(3600), "--json"]
-        script = """#!/usr/bin/env python3
-import base64, json, pathlib, subprocess, sys
+        script = """import base64, json, pathlib, subprocess, sys
 endpoint = sys.argv[-1]
 if '/pulls?' in endpoint:
     print('[]')
@@ -335,9 +340,7 @@ else:
 """.replace("COMMAND", repr(command)).replace("EXPECTED", repr(str(expected))).replace(
             "STATE", repr(str(self.root / "efficiency" / "state.json"))).replace(
             "BYTES", repr(base64.b64encode(buffer.getvalue()).decode()))
-        gh = fake_bin / "gh"
-        gh.write_text(script)
-        gh.chmod(0o755)
+        self._write_fake_gh(fake_bin, script)
         env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"],
                    AE_LOCK_DIR=str(Path(self.tmp.name) / "locks"))
         env.pop("AE_HELD_LOCKS", None)

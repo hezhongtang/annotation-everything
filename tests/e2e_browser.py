@@ -26,7 +26,6 @@
 from __future__ import annotations
 
 import base64
-import fcntl
 import hashlib
 import json
 import os
@@ -56,10 +55,13 @@ SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 FIXTURE = ROOT / "fixtures" / "sample"
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-e2e-home-")   # 测试不碰用户真实的审阅台账；子进程继承
 os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-e2e-user-")       # 技能扫描只使用合成目录
+os.environ["USERPROFILE"] = os.environ["HOME"]
 os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
 os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")
+sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT))
 
+import fsutil
 import host_isolation
 
 # 直跑本脚本（uv run …）与 verify.py 的浏览器组共用同一隔离协议：启动任何真实服务前先取宿主机资源锁；
@@ -1246,11 +1248,17 @@ def overview_home_checks(browser, tmp: Path):
     ledger_path = Path(os.environ["AE_HOME"]) / "reviews.json"
     status_file = Path(os.environ["AE_HOME"]) / ".overview-home-status.json"
     thread = "16016016-0160-4160-8160-160160160160"
-    desktop = DesktopStub(tmp / "overview-home-desktop.sock")
-    subprocess.run([sys.executable, str(SCRIPTS / "wakeup.py"), "bind", str(event_dir),
-                    "--adapter", "codex-desktop", "--thread", thread, "--socket", str(desktop.path)],
-                   check=True, capture_output=True)
-    desktop.close()   # 绑定已落盘：接收展示只读绑定文件，桌面进程不再参与
+    has_desktop_ipc = os.name != "nt" and hasattr(socket, "AF_UNIX")
+    if has_desktop_ipc:
+        desktop = DesktopStub(tmp / "overview-home-desktop.sock")
+        subprocess.run([sys.executable, str(SCRIPTS / "wakeup.py"), "bind", str(event_dir),
+                        "--adapter", "codex-desktop", "--thread", thread, "--socket", str(desktop.path)],
+                       check=True, capture_output=True)
+        desktop.close()   # 绑定已落盘：接收展示只读绑定文件，桌面进程不再参与
+    else:
+        subprocess.run([sys.executable, str(SCRIPTS / "wakeup.py"), "bind", str(event_dir),
+                        "--adapter", "wait", "--harness", "Codex", "--session", thread],
+                       check=True, capture_output=True)
 
     homes: list[subprocess.Popen] = []
 
@@ -1385,8 +1393,12 @@ def overview_home_checks(browser, tmp: Path):
            "取消批量清理确认后台账保持不变")
         page.click(f'[data-review-id="{ids[event_dir]}"]')
         detail = page.inner_text("#overviewDetail")
-        ok(f"Codex 会话 {thread} 经桌面事件接收提交" in detail and page.locator("#overviewWaitCopy").count() == 0,
-           "桌面事件绑定显示接收方式、harness 与会话，省略认领型等待命令")
+        if has_desktop_ipc:
+            ok(f"Codex 会话 {thread} 经桌面事件接收提交" in detail and page.locator("#overviewWaitCopy").count() == 0,
+               "桌面事件绑定显示接收方式、harness 与会话，省略认领型等待命令")
+        else:
+            ok(f"Codex 会话 {thread}" in detail and page.locator("#overviewWaitCopy").count() == 1,
+               "Windows 无桌面事件 IPC 时回退等待型绑定，展示会话并保留等待命令")
         page.click(f'[data-review-id="{ids[archived_dir]}"]')
         page.click("#overviewArchive")
         hidden_hint = wait_dom(page, "() => { const el = document.getElementById('overviewHiddenArchived');"
@@ -3297,9 +3309,8 @@ def current_task_controls_checks(browser, tmp: Path):
             if req.method == "POST" and req.url.endswith("/api/server/stop") else None)
         confirmations = []
         page.once("dialog", lambda dialog: (confirmations.append(dialog.message), dialog.accept()))
-        with (d / ".notes.lock").open("r+b") as write_lock:
+        with fsutil.flocked(d / ".notes.lock", exclusive=True):
             # Hold a real review write boundary so the stop remains observable during reload and disconnection.
-            fcntl.flock(write_lock, fcntl.LOCK_EX)
             button.click()
             if not stop_state(page, "Stopping review"):
                 ok(False, "停止审阅：页面观察到服务确认的停止中状态")
@@ -3798,25 +3809,33 @@ def pptx_review_checks(browser, tmp: Path):
     png.write_bytes(base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQAB"
         "h6FO1AAAAABJRU5ErkJggg=="))
-    soffice = tools / "soffice"
-    soffice.write_text("#!%s\n" % sys.executable + """\
+    soffice_body = """\
 import os, sys
 from pathlib import Path
 args = sys.argv[1:]
 out, src = Path(args[5]), Path(args[6])
 (out / (src.stem + ".pdf")).write_bytes(Path(os.environ["AE_FAKE_PDF"]).read_bytes())
-""", encoding="utf-8")
-    soffice.chmod(0o755)
-    raster = tools / "pdftoppm"
-    raster.write_text("#!%s\n" % sys.executable + """\
+"""
+    raster_body = """\
 import os, sys
 from pathlib import Path
 prefix = Path(sys.argv[-1])
 image = Path(os.environ["AE_FAKE_PNG"]).read_bytes()
 for n in (1, 2):
     Path(f"{prefix}-{n}.png").write_bytes(image)
-""", encoding="utf-8")
-    raster.chmod(0o755)
+"""
+    if os.name == "nt":
+        for tool_name, body in (("soffice", soffice_body), ("pdftoppm", raster_body)):
+            (tools / f"{tool_name}.py").write_text(body, encoding="utf-8")
+            (tools / f"{tool_name}.cmd").write_text(
+                f'@echo off\r\n"{sys.executable}" "%~dp0{tool_name}.py" %*\r\n', encoding="utf-8")
+    else:
+        soffice = tools / "soffice"
+        soffice.write_text("#!%s\n" % sys.executable + soffice_body, encoding="utf-8")
+        soffice.chmod(0o755)
+        raster = tools / "pdftoppm"
+        raster.write_text("#!%s\n" % sys.executable + raster_body, encoding="utf-8")
+        raster.chmod(0o755)
     env = {**os.environ, "PATH": str(tools) + os.pathsep + os.defpath,
            "AE_FAKE_PDF": str(pdf), "AE_FAKE_PNG": str(png)}
 
@@ -5992,7 +6011,11 @@ def server_mode_checks(browser, tmp: Path):
     page.keyboard.press("Escape")
 
     # ---------- 5. 写入失败与坏字符 ----------
-    os.chmod(sdir, 0o500)
+    if os.name == "nt":
+        notes_path = sdir / "notes.json"
+        os.chmod(notes_path, 0o444)
+    else:
+        os.chmod(sdir, 0o500)
     try:
         add_note(page, "写盘失败时的批注")
         ok(wait_until(lambda: "写盘失败时的批注" in page.inner_text("#nlist")
@@ -6000,7 +6023,10 @@ def server_mode_checks(browser, tmp: Path):
                       condition="写入失败后批注留在页面并计入待补传"),
            "服务端写入失败（5xx）时批注仍在页面上并进入待补传")
     finally:
-        os.chmod(sdir, 0o700)
+        if os.name == "nt":
+            os.chmod(sdir / "notes.json", 0o600)
+        else:
+            os.chmod(sdir, 0o700)
     ok(wait_until(lambda: any(n["text"] == "写盘失败时的批注" for n in disk_notes(sdir))
                   and "待补传" not in page.inner_text("#mode"), page, 10,
                   condition="恢复可写后轮询补传落盘并清空待补传"), "目录恢复可写后自动补传")
@@ -6014,14 +6040,39 @@ def server_mode_checks(browser, tmp: Path):
        "引用含 emoji 被截断时照常保存，不卡住后面的批注")
 
     # ---------- 6. 服务卡死 ----------
-    os.kill(srv.pid, signal.SIGSTOP)
+    if hasattr(signal, "SIGSTOP"):
+        os.kill(srv.pid, signal.SIGSTOP)
+    else:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        ntdll = ctypes.WinDLL("ntdll")
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        ntdll.NtSuspendProcess.argtypes = [wintypes.HANDLE]
+        ntdll.NtSuspendProcess.restype = wintypes.LONG
+        handle = kernel32.OpenProcess(0x0800, False, srv.pid)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            status = ntdll.NtSuspendProcess(handle)
+            if status != 0:
+                raise RuntimeError(f"NtSuspendProcess failed: {status:#x}")
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         add_note(page, "服务卡住时写的批注")
         # 时间边界：页面 8 秒请求超时真正走完，批注才转待补传——以模式变化为超时发生的证据
         ok(wait_until(lambda: "待补传" in page.inner_text("#mode"), page, 14,
                       condition="请求超时（页面 8 秒上限）后转入待补传"), "服务卡住时请求超时，批注转入待补传")
     finally:
-        os.kill(srv.pid, signal.SIGKILL)
+        if hasattr(signal, "SIGKILL"):
+            os.kill(srv.pid, signal.SIGKILL)
+        else:
+            srv.kill()
         srv.communicate()
     (sdir / ".annotation-server.json").unlink(missing_ok=True)
     srv = start_server(sdir, port)
@@ -6156,7 +6207,7 @@ def external_method_checks(browser, tmp: Path):
     """
     base = tmp / "external-loop"
     installed = base / "installed-skills" / "annotation-everything"
-    env = {**os.environ, "HOME": str(base / "home"),
+    env = {**os.environ, "HOME": str(base / "home"), "USERPROFILE": str(base / "home"),
            "CLAUDE_SKILLS_DIR": str(base / "installed-skills"),
            "AE_HOME": str(base / "ae-home")}
     subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"],
@@ -7081,7 +7132,7 @@ def main(argv=None, *, allow_parallel=True) -> int:
         return 0
     print(scenarios.format_plan(request) + "\n", flush=True)
 
-    if (allow_parallel and request.mode == "full" and os.environ.get("AE_VERIFY_SERIAL") != "1"
+    if (allow_parallel and hasattr(os, "fork") and request.mode == "full" and os.environ.get("AE_VERIFY_SERIAL") != "1"
             and all(scenarios.scenario_by_id(sid).parallel_safe for sid in request.plan)):
         return run_parallel_browser(request)
 
@@ -7097,13 +7148,14 @@ def main(argv=None, *, allow_parallel=True) -> int:
         interrupted = True
         signal.default_int_handler(signum, frame)
 
+    channel = os.environ.get("AE_E2E_BROWSER_CHANNEL", "chrome").strip() or "chrome"
     previous_sigint = signal.signal(signal.SIGINT, record_sigint)
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(channel="chrome", headless=True)
+            browser = pw.chromium.launch(channel=channel, headless=True)
             try:
                 import importlib.metadata
-                browser_environment = {"schema": "ae-browser-environment/1", "browser": "chromium", "channel": "chrome",
+                browser_environment = {"schema": "ae-browser-environment/1", "browser": "chromium", "channel": channel,
                                        "version": browser.version, "playwright": importlib.metadata.version("playwright")}
             except Exception as exc:
                 # 采集不改变场景行为；无法确认版本时保留缺口，不用于性能比较。

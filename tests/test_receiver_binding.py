@@ -16,13 +16,12 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill/annotation-everything/scripts"
 sys.path.insert(0, str(SCRIPTS))
-import ledger
-import notes as notes_cli
-import notes_store as store
-
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
 
-import serve
+import ledger  # noqa: E402
+import notes as notes_cli  # noqa: E402
+import notes_store as store  # noqa: E402
+import serve  # noqa: E402
 
 
 class ReceiverCliTests(unittest.TestCase):

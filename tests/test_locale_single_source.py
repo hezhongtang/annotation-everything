@@ -177,13 +177,29 @@ class EntryLanguageTests(unittest.TestCase):
         # PATH 只留一个空目录：字体检查与 ps 的输出不随机器变
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        ps = self.bin / "ps"
-        ps.write_text('#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  exit 0\n'
-                      'else\n  exec /bin/ps "$@"\nfi\n', encoding="utf-8")
-        ps.chmod(0o755)
+        if os.name == "nt":
+            sysroot = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+            real_ps = str(Path(sysroot) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+            helper = self.bin / "_ps_shim.py"
+            helper.write_text(
+                "import subprocess, sys\n"
+                "args = sys.argv[1:]\n"
+                "if '-Filter' in ' '.join(args):\n"
+                f"    sys.exit(subprocess.run([{real_ps!r}, *args]).returncode)\n"
+                "print('[]')\n",
+                encoding="utf-8",
+            )
+            ps = self.bin / "powershell.cmd"
+            ps.write_text(f'@echo off\r\n"{sys.executable}" "{helper}" %*\r\n', encoding="utf-8")
+        else:
+            ps = self.bin / "ps"
+            ps.write_text('#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  exit 0\n'
+                          'else\n  exec /bin/ps "$@"\nfi\n', encoding="utf-8")
+            ps.chmod(0o755)
         self.env = {k: v for k, v in os.environ.items()
                     if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
-        self.env.update({"HOME": str(self.home), "AE_HOME": str(self.ledger_home),
+        self.env.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
+                         "AE_HOME": str(self.ledger_home),
                          "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills"),
                          "CODEX_HOME": str(self.home / ".codex"),
                          "PATH": str(self.bin) + os.pathsep + os.defpath,

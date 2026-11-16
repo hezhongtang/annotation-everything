@@ -71,6 +71,29 @@ CHILD = textwrap.dedent("""
 
 
 def alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == 5
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == 259
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -154,6 +177,7 @@ class CleanupTests(unittest.TestCase):
         reg.stop_all()
         self.assertTrue(wait_dead(p.pid), "登记过的服务没被回收")
 
+    @unittest.skipUnless(hasattr(signal, "SIGSTOP"), "POSIX SIGSTOP required")
     def test_stop_all_reaps_a_stopped_service(self):
         """被 SIGSTOP 卡住的服务也要回收（macOS 上 SIGTERM 即可，别的平台靠 SIGKILL 升级）。"""
         p = sleeper()
@@ -164,6 +188,29 @@ class CleanupTests(unittest.TestCase):
         reg.stop_all()
         self.assertTrue(wait_dead(p.pid), "被 SIGSTOP 卡住的服务没被回收")
 
+    def test_reap_escalates_to_kill_when_terminate_times_out(self):
+        """terminate 超时时，reap 升级调用 kill 并回收进程（跨平台通用契约）。"""
+        p = sleeper()
+        self.addCleanup(self.kill, p)
+        original_terminate = p.terminate
+        terminate_calls = []
+
+        def ignored_terminate():
+            terminate_calls.append(True)
+
+        p.terminate = ignored_terminate
+        try:
+            started = time.monotonic()
+            e2e_servers.reap(p, timeout=SHORT_TERMINATE)
+            elapsed = time.monotonic() - started
+        finally:
+            p.terminate = original_terminate
+        self.assertEqual(terminate_calls, [True])
+        self.assertGreaterEqual(elapsed, SHORT_TERMINATE)
+        self.assertIsNotNone(p.poll(), "超时后应通过 kill 结束子进程")
+        self.assertTrue(wait_dead(p.pid))
+
+    @unittest.skipIf(os.name == "nt", "Windows 上 SIGTERM 即 TerminateProcess，无法被子进程忽略")
     def test_stop_all_escalates_to_sigkill_when_a_service_ignores_sigterm(self):
         """等满注入的终止超时才升级 SIGKILL；以注入值和实际退出状态为断言。"""
         ready = self.root / "ready"
@@ -284,8 +331,8 @@ class AbnormalExitTests(unittest.TestCase):
 
     def kill_pid(self, pid):
         try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+        except (ProcessLookupError, OSError):
             pass
 
     def _salvage(self, probe: Path) -> None:
@@ -387,6 +434,7 @@ class AbnormalExitTests(unittest.TestCase):
     def test_keyboard_interrupt_still_cleans_up(self):
         self.assert_cleaned_up("raise KeyboardInterrupt", expect_failure=True)
 
+    @unittest.skipIf(os.name == "nt", "Windows os.kill(SIGINT) 会波及父控制台进程组，且无法忽略 SIGTERM")
     def test_ctrl_c_during_stop_does_not_leave_services_behind(self):
         """正常 stop 等待退出时被打断，仍由 atexit 回收尚未结束的服务。"""
         sent = self.root / "sent"
@@ -461,9 +509,11 @@ class AbnormalExitTests(unittest.TestCase):
         self.assertTrue(wait_dead(int(probe.read_text())), "启动失败后留下残留服务")
         self.assertFalse(d.exists(), "启动失败后临时目录未清理")
 
+    @unittest.skipIf(os.name == "nt", "Windows 上 TerminateProcess 不可被子进程忽略")
     def test_start_timeout_escalates_when_the_service_ignores_sigterm(self):
         self.assert_start_timeout_cleans_up()
 
+    @unittest.skipIf(os.name == "nt", "Windows 上 TerminateProcess 不可被子进程忽略")
     def test_ctrl_c_during_start_timeout_does_not_leave_services_behind(self):
         self.assert_start_timeout_cleans_up(interrupt=True)
 
@@ -473,16 +523,19 @@ class AbnormalExitTests(unittest.TestCase):
     def test_normal_exit_without_stop_still_cleans_up(self):
         self.assert_cleaned_up("pass")
 
+    @unittest.skipIf(os.name == "nt", "Windows os.kill(SIGTERM) 直接 TerminateProcess，不触发信号处理器")
     def test_sigterm_still_cleans_up(self):
         """SIGTERM 不触发 atexit，只能靠 install() 装的处理器回收。"""
         self.assert_cleaned_up("import os, signal; os.kill(os.getpid(), signal.SIGTERM)",
                                returncode=-15)
 
+    @unittest.skipUnless(hasattr(signal, "SIGHUP"), "POSIX SIGHUP required")
     def test_sighup_still_cleans_up(self):
         """关终端发的是 SIGHUP，同样不触发 atexit。"""
         self.assert_cleaned_up("import os, signal; os.kill(os.getpid(), signal.SIGHUP)",
                                returncode=-1)
 
+    @unittest.skipIf(os.name == "nt", "Windows os.kill(SIGTERM) 不可被处理器拦截或二次重入")
     def test_second_sigterm_during_cleanup_does_not_leave_services_behind(self):
         """清理耗时期间又补一个 SIGTERM，不该把还没收完的进程留下。"""
         sent = self.root / "sent"
@@ -492,6 +545,7 @@ class AbnormalExitTests(unittest.TestCase):
                                ignore_sigterm=True,
                                terminate_timeout=HANDSHAKE_TERMINATE, sent=sent)
 
+    @unittest.skipIf(os.name == "nt", "Windows 上 TerminateProcess 不可被子进程忽略")
     def test_second_ctrl_c_during_cleanup_does_not_leave_services_behind(self):
         """atexit 清理期间再按一次 Ctrl-C，同样不该留下残留服务。"""
         sent = self.root / "sent"

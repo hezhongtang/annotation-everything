@@ -49,7 +49,7 @@ def atomic_write(path: Path, text: str, *, prefix: str, fsync: bool = True) -> N
     """
     fd, tmp = tempfile.mkstemp(prefix=prefix, suffix=".tmp", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
             fh.write(text)
             if fsync:
                 fh.flush()
@@ -161,7 +161,7 @@ def unlock_fd(fd: int) -> None:
 def _is_reparse_or_symlink(info: os.stat_result) -> bool:
     if stat.S_ISLNK(info.st_mode):
         return True
-    return bool(getattr(info, "st_file_attributes", 0) & _WIN_REPARSE_POINT_ATTR)
+    return bool((getattr(info, "st_file_attributes", 0) or 0) & _WIN_REPARSE_POINT_ATTR)
 
 
 def _win_same_owner(path: Path) -> bool:

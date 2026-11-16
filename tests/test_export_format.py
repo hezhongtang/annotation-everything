@@ -23,6 +23,7 @@ FIXTURE = ROOT / "fixtures" / "sample"
 sys.path.insert(0, str(SCRIPTS))
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
 os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-test-user-")      # 技能扫描只使用合成目录
+os.environ["USERPROFILE"] = os.environ["HOME"]
 os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
 os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")
 

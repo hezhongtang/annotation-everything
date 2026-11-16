@@ -33,7 +33,7 @@ class RegressionCase(unittest.TestCase):
         self.ledger = self.root / "ledger"
         self.copy = self.root / "skills" / ae.SKILL_NAME
         self.copy.mkdir(parents=True)
-        self.env = {"HOME": str(self.home), "AE_HOME": str(self.ledger),
+        self.env = {"HOME": str(self.home), "USERPROFILE": str(self.home), "AE_HOME": str(self.ledger),
                     "CLAUDE_SKILLS_DIR": str(self.copy.parent),
                     "CODEX_HOME": str(self.home / ".codex"), "PYTHONDONTWRITEBYTECODE": "1"}
         self.env_patch = patch.dict(os.environ, self.env)
@@ -288,7 +288,12 @@ class SecondReviewRegressionTests(RegressionCase):
     def test_copy_skill_refuses_destination_under_symlink_into_source(self):
         src = self.root / "repo" / "skill" / ae.SKILL_NAME
         (src / "scripts").mkdir(parents=True)
-        (self.root / "skills-link").symlink_to(src / "scripts")
+        try:
+            (self.root / "skills-link").symlink_to(src / "scripts", target_is_directory=True)
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                self.skipTest("当前 Windows 账户无符号链接权限")
+            raise
         with self.assertRaises(ae.CommandError):
             ae.copy_skill(src, self.root / "skills-link" / ae.SKILL_NAME)   # 目标尚不存在
         self.assertFalse((src / "scripts" / ae.SKILL_NAME).exists())
@@ -311,7 +316,12 @@ class SecondReviewRegressionTests(RegressionCase):
         (src / "SKILL.md").write_text("synthetic skill", encoding="utf-8")
         link = self.home / ".codex" / "skills" / ae.SKILL_NAME
         link.parent.mkdir(parents=True)
-        link.symlink_to(src)
+        try:
+            link.symlink_to(src, target_is_directory=True)
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                self.skipTest("当前 Windows 账户无符号链接权限")
+            raise
         with patch.object(ae, "__file__", str(repo / "ae.py")), \
                 patch.dict(os.environ, {"CLAUDE_SKILLS_DIR": str(src.parent)}), \
                 patch.object(ae, "running_servers", return_value=[]), \

@@ -49,7 +49,21 @@ class AeLocaleTestCase(unittest.TestCase):
         # 真实盘点与清理边界仍由 test_ae_checks_runtime / test_host_interference 覆盖。
         self.host_bin = self.root / "host-bin"
         self.host_bin.mkdir()
-        if os.name != "nt":
+        if os.name == "nt":
+            sysroot = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+            real_ps = str(Path(sysroot) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+            helper = self.host_bin / "_ps_shim.py"
+            helper.write_text(
+                "import subprocess, sys\n"
+                "args = sys.argv[1:]\n"
+                "if '-Filter' in ' '.join(args):\n"
+                f"    sys.exit(subprocess.run([{real_ps!r}, *args]).returncode)\n"
+                "print('[]')\n",
+                encoding="utf-8",
+            )
+            ps = self.host_bin / "powershell.cmd"
+            ps.write_text(f'@echo off\r\n"{sys.executable}" "{helper}" %*\r\n', encoding="utf-8")
+        else:
             ps = self.host_bin / "ps"
             ps.write_text('#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  exit 0\n'
                           'else\n  exec /bin/ps "$@"\nfi\n', encoding="utf-8")
@@ -409,22 +423,43 @@ class CommandMessageTests(AeLocaleTestCase):
         self.assertEqual(p.returncode, 2)
         self.assertIn("拒绝删除", p.stderr)
 
-    @unittest.skipIf(os.name == "nt", "Windows 进程枚举由 #176 接入")
     def test_uninstall_refuses_running_servers_in_both_languages(self):
         """检测到 serve.py 运行时拒绝卸载；两种语言都拒绝，且都不暗示已停止。"""
         self.install()
         copy = self.skills / "annotation-everything"
-        # 假 ps：全表查询只上报这一个合成 serve.py 进程，绝不枚举本机真实进程
+        # 假 ps/powershell：全表查询只上报这一个合成 serve.py 进程，绝不枚举本机真实进程
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.ps_table = self.root / "ps-table.txt"
-        self.ps_table.write_text(f"4242 {sys.executable} {copy / 'scripts' / 'serve.py'} review\n",
-                                 encoding="utf-8")
-        real_ps = shutil.which("ps") or "/bin/ps"
-        shim = self.bin / "ps"
-        shim.write_text(f'#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  cat "{self.ps_table}"\n'
-                        f'else\n  exec "{real_ps}" "$@"\nfi\n', encoding="utf-8")
-        shim.chmod(0o755)
+        cmd_line = f'"{sys.executable}" "{copy / "scripts" / "serve.py"}" review' if os.name == "nt" \
+            else f"{sys.executable} {copy / 'scripts' / 'serve.py'} review"
+        self.ps_table.write_text(f"4242 {cmd_line}\n", encoding="utf-8")
+        if os.name == "nt":
+            sysroot = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+            real_ps = str(Path(sysroot) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+            helper = self.bin / "_ps_shim.py"
+            helper.write_text(
+                "import json, subprocess, sys\n"
+                "from pathlib import Path\n"
+                "args = sys.argv[1:]\n"
+                "if '-Filter' in ' '.join(args):\n"
+                f"    sys.exit(subprocess.run([{real_ps!r}, *args]).returncode)\n"
+                "rows = []\n"
+                f"for line in Path({str(self.ps_table)!r}).read_text(encoding='utf-8').splitlines():\n"
+                "    parts = line.strip().split(None, 1)\n"
+                "    if len(parts) == 2 and parts[0].isdigit():\n"
+                "        rows.append({'ProcessId': int(parts[0]), 'CommandLine': parts[1]})\n"
+                "print(json.dumps(rows))\n",
+                encoding="utf-8",
+            )
+            shim = self.bin / "powershell.cmd"
+            shim.write_text(f'@echo off\r\n"{sys.executable}" "{helper}" %*\r\n', encoding="utf-8")
+        else:
+            real_ps = shutil.which("ps") or "/bin/ps"
+            shim = self.bin / "ps"
+            shim.write_text(f'#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  cat "{self.ps_table}"\n'
+                            f'else\n  exec "{real_ps}" "$@"\nfi\n', encoding="utf-8")
+            shim.chmod(0o755)
         env = {**self.env(), "PATH": str(self.bin) + os.pathsep + os.environ.get("PATH", os.defpath)}
         for locale, needle in ((None, "请先停止服务"), ("en", "Stop the services first")):
             p = subprocess.run([sys.executable, str(AE), "uninstall",

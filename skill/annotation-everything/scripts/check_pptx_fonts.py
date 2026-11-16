@@ -214,8 +214,9 @@ def find_pdffonts() -> str:
 
 
 def installed_fonts() -> tuple[set[str], bool]:
+    fc_list = which("fc-list")
     try:
-        result = subprocess.run(["fc-list", "--format=%{family}\\n"], capture_output=True, text=True,
+        result = subprocess.run([fc_list or "fc-list", "--format=%{family}\\n"], capture_output=True, text=True,
                                 encoding="utf-8", errors="replace", timeout=TOOL_TIMEOUT, check=False)
     except FileNotFoundError as e:
         if _is_windows():

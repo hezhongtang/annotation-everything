@@ -23,6 +23,7 @@ SKILL_SRC = ROOT / "skill" / "annotation-everything"
 sys.path.insert(0, str(SCRIPTS))
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")
 os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-test-user-")
+os.environ["USERPROFILE"] = os.environ["HOME"]
 os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
 os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")
 os.environ.pop("AE_LOCALE", None)
@@ -44,7 +45,7 @@ def installed_copy() -> Path:
     temp = tempfile.mkdtemp(prefix="ae-gen-res-")
     home = Path(temp) / "home"
     skills = home / ".claude" / "skills"
-    env = {**os.environ, "HOME": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
     done = subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stdout + done.stderr

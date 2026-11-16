@@ -366,12 +366,13 @@ def installed_ae_copy(tmp: Path) -> tuple[Path, dict]:
     """ae.py install 装进合成 HOME 的临时副本，返回 (scripts 目录, 环境变量)。"""
     home = tmp / "home"
     skills = home / ".claude" / "skills"
-    env = {**os.environ, "HOME": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
     done = subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stdout + done.stderr
     installed = skills / "annotation-everything"
     return installed / "scripts", {**os.environ, "HOME": str(home),
+                                   "USERPROFILE": str(home),
                                    "CLAUDE_SKILLS_DIR": str(skills),
                                    "AE_HOME": str(tmp / "ae-home")}
 
