@@ -17,6 +17,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -118,9 +119,10 @@ class ServeProcess:
     def __init__(self, review_dir: Path, ledger_home: Path):
         self.review_dir = review_dir
         self.port = free_pool_port()
-        self.cmdline = f"{sys.executable} {SERVE_PY} {review_dir} --port {self.port} --no-open"
+        argv = [sys.executable, str(SERVE_PY), str(review_dir), "--port", str(self.port), "--no-open"]
+        self.cmdline = subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(argv)
         self.proc = subprocess.Popen(
-            [sys.executable, str(SERVE_PY), str(review_dir), "--port", str(self.port), "--no-open"],
+            argv,
             env={**os.environ, "AE_HOME": str(ledger_home), "PYTHONDONTWRITEBYTECODE": "1"},
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
@@ -258,7 +260,7 @@ class PortPoolTests(TempRootTestCase):
         self.assertEqual(result.level, FAIL)
         self.assertIn(str(port), result.message)
         self.assertIn(str(port), result.fix_command)
-        self.assertIn("lsof", result.fix_command)
+        self.assertIn("Get-NetTCPConnection" if os.name == "nt" else "lsof", result.fix_command)
 
     def test_passes_when_pool_port_used_by_own_serve(self):
         d = make_review_dir(self.root, self.rid)
@@ -355,12 +357,45 @@ class OrphanServerTests(TempRootTestCase):
         result = ae.check_orphan_servers(self.ctx(process_lister=lister))
         self.assertEqual(result.level, PASS)
 
+    def test_list_processes_raises_when_enumeration_fails(self):
+        with mock.patch.object(ae.subprocess, "run", side_effect=OSError("access denied")):
+            with self.assertRaises(ae.ProcessEnumerationError):
+                ae.list_processes()
+
+    def test_check_orphan_servers_fails_explicitly_when_enumeration_fails(self):
+        def failing_lister():
+            raise ae.ProcessEnumerationError("enumeration failed")
+
+        result = ae.check_orphan_servers(self.ctx(process_lister=failing_lister))
+        self.assertEqual(result.level, FAIL)
+        self.assertEqual(result.code, "orphan-servers")
+        self.assertIn("enumeration failed", result.message)
+
+    def test_windows_process_enumeration_handles_inaccessible_command_lines(self):
+        payload = json.dumps([
+            {"ProcessId": 101, "Name": "System", "CommandLine": None},
+            {"ProcessId": 202, "Name": "python.exe", "CommandLine": None},
+            {"ProcessId": 303, "Name": "python.exe",
+             "CommandLine": f'"C:\\Users\\Test User\\python.exe" "{SERVE_PY}" "C:\\Users\\Test User\\review"'},
+        ])
+        done = subprocess.CompletedProcess([], 0, stdout=payload, stderr="")
+        with mock.patch.object(ae, "_is_windows", return_value=True), \
+                mock.patch.object(ae, "_windows_powershell", return_value="powershell.exe"), \
+                mock.patch.object(ae.subprocess, "run", return_value=done):
+            procs = ae.list_processes()
+        self.assertEqual(dict(procs)[101], "")
+        self.assertEqual(dict(procs)[202], "")
+        self.assertIn("serve.py", dict(procs)[303])
+        found = ae.running_servers(lister=lambda: procs)
+        self.assertEqual([pid for pid, _ in found], [303])
+
 
 class DoctorCliTests(TempRootTestCase):
     """命令行体检把运行状态检查并入 --json 输出；台账经 AE_HOME 指向临时目录。"""
 
     def run_doctor(self, ledger_home: Path):
-        env = {**os.environ, "HOME": str(self.root / "home"), "AE_HOME": str(ledger_home),
+        home = str(self.root / "home")
+        env = {**os.environ, "HOME": home, "USERPROFILE": home, "AE_HOME": str(ledger_home),
                "CLAUDE_SKILLS_DIR": str(self.root / "skills"), "PYTHONDONTWRITEBYTECODE": "1"}
         proc = subprocess.run([sys.executable, str(ROOT / "ae.py"), "doctor", "--json"],
                               env=env, capture_output=True, text=True, timeout=120)

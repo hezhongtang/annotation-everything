@@ -252,5 +252,134 @@ class WindowsUpdateNoticeTests(unittest.TestCase):
         self.assertIn("ae.py install", err_now.getvalue())
 
 
+class AeUpgradeTests(unittest.TestCase):
+    """ae.py upgrade 的手动升级契约：前置安全检查、拒绝不破坏旧副本、可恢复替换与数据保留。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ae-upgrade-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
+        self.skills = self.home / ".claude" / "skills"
+        self.ledger = self.root / "ledger"
+        self.repo = self.root / "repo"
+        import shutil
+        shutil.copy2(AE, self.repo / "ae.py") if (self.repo.mkdir(), True) else None
+        shutil.copytree(SKILL_SRC, self.repo / "skill" / "annotation-everything",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"))
+        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
+                    "CLAUDE_SKILLS_DIR": str(self.skills), "AE_HOME": str(self.ledger),
+                    "PYTHONDONTWRITEBYTECODE": "1"}
+        self.copy = self.skills / "annotation-everything"
+
+    def run_repo_ae(self, *args: str):
+        return subprocess.run([sys.executable, str(self.repo / "ae.py"), *args],
+                              env=self.env, capture_output=True, text=True, timeout=60)
+
+    def bump_repo_version(self, version: str = "9.9.9") -> None:
+        serve = self.repo / "skill" / "annotation-everything" / "scripts" / "serve.py"
+        text = serve.read_text(encoding="utf-8")
+        serve.write_text(re.sub(r'^VERSION = "[^"]+"', f'VERSION = "{version}"', text, flags=re.M), encoding="utf-8")
+        (self.repo / "skill" / "annotation-everything" / "upgrade-marker.txt").write_text(version, encoding="utf-8")
+
+    def test_upgrade_updates_clean_copy_and_preserves_review_and_ledger_data(self):
+        self.assertEqual(self.run_repo_ae("install", "--locale", "en").returncode, 0)
+        review_dir = self.root / "synthetic-review"
+        review_dir.mkdir()
+        (review_dir / "notes.json").write_text('{"notes": [{"id": "n1", "text": "keep"}]}', encoding="utf-8")
+        (review_dir / ".agent-binding.json").write_text('{"bindingId": "b1", "adapter": "wait"}', encoding="utf-8")
+        self.ledger.mkdir(parents=True, exist_ok=True)
+        ledger_file = self.ledger / "reviews.json"
+        ledger_file.write_text(json.dumps({"version": 1, "reviews": {
+            "0123456789abcdef": {"dir": str(review_dir), "port": 8805}}}), encoding="utf-8")
+
+        self.bump_repo_version("9.9.9")
+        p = self.run_repo_ae("upgrade", "--locale", "en")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual((self.copy / "upgrade-marker.txt").read_text(encoding="utf-8"), "9.9.9")
+        record = json.loads((self.copy / RECORD_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(record["version"], "9.9.9")
+        self.assertEqual(json.loads((review_dir / "notes.json").read_text(encoding="utf-8"))["notes"][0]["id"], "n1")
+        self.assertEqual(json.loads((review_dir / ".agent-binding.json").read_text(encoding="utf-8"))["bindingId"], "b1")
+        self.assertEqual(json.loads(ledger_file.read_text(encoding="utf-8"))["reviews"]["0123456789abcdef"]["port"], 8805)
+
+    def test_upgrade_refuses_when_local_modifications_exist_without_touching_copy(self):
+        self.assertEqual(self.run_repo_ae("install").returncode, 0)
+        (self.copy / "local-custom.txt").write_text("do not overwrite", encoding="utf-8")
+        self.bump_repo_version("9.9.9")
+        p = self.run_repo_ae("upgrade", "--locale", "en")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("local", p.stderr.lower())
+        self.assertEqual((self.copy / "local-custom.txt").read_text(encoding="utf-8"), "do not overwrite")
+        self.assertFalse((self.copy / "upgrade-marker.txt").exists())
+
+    def test_upgrade_refuses_when_overview_or_enumeration_unsafe_and_recovers_on_swap_failure(self):
+        import contextlib, io, unittest.mock
+        self.assertEqual(self.run_repo_ae("install").returncode, 0)
+        self.bump_repo_version("9.9.9")
+        old_version = json.loads((self.copy / RECORD_NAME).read_text(encoding="utf-8"))["version"]
+
+        sys.path.insert(0, str(self.root / "unused"))
+        import ae
+        self.addCleanup(ae.set_locale, ae.current_locale())
+
+        with unittest.mock.patch.dict(os.environ, self.env), \
+                unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")), \
+                unittest.mock.patch.object(ae, "list_processes", side_effect=ae.ProcessEnumerationError("denied")), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            code = ae.main(["upgrade", "--locale", "en"])
+        self.assertEqual(code, 1)
+        self.assertIn("denied", err.getvalue())
+        self.assertFalse((self.copy / "upgrade-marker.txt").exists())
+
+        # 模拟移入新版时失败：自动回滚保留旧副本，不报告半更新为完成
+        real_replace = ae.os.replace
+        calls = 0
+
+        def fail_second_replace(src, dst):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise PermissionError("file in use")
+            return real_replace(src, dst)
+
+        with unittest.mock.patch.dict(os.environ, self.env), \
+                unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")), \
+                unittest.mock.patch.object(ae, "list_processes", return_value=[]), \
+                unittest.mock.patch.object(ae.os, "replace", side_effect=fail_second_replace), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            code = ae.main(["upgrade", "--locale", "en"])
+        self.assertEqual(code, 1)
+        self.assertFalse((self.copy / "upgrade-marker.txt").exists(), "失败回滚后不得留半更新版本")
+        self.assertEqual(json.loads((self.copy / RECORD_NAME).read_text(encoding="utf-8"))["version"], old_version)
+
+        # 模拟运行中审阅服务/总览首页拒绝升级（不碰旧副本）
+        self.ledger.mkdir(parents=True, exist_ok=True)
+        (self.ledger / ".overview-home-status.json").write_text(
+            json.dumps({"app": "annotation-everything", "pid": os.getpid()}), encoding="utf-8")
+        with unittest.mock.patch.dict(os.environ, self.env), \
+                unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")), \
+                unittest.mock.patch.object(ae, "list_processes", return_value=[]), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            code = ae.main(["upgrade", "--locale", "en"])
+        self.assertEqual(code, 1)
+        self.assertIn("overview-home", err.getvalue())
+        self.assertFalse((self.copy / "upgrade-marker.txt").exists())
+        (self.ledger / ".overview-home-status.json").unlink()
+
+        # 模拟旧副本被占用导致第一步移动失败：旧副本原样保留，不留下半更新
+        with unittest.mock.patch.dict(os.environ, self.env), \
+                unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")), \
+                unittest.mock.patch.object(ae, "list_processes", return_value=[]), \
+                unittest.mock.patch.object(ae.os, "replace", side_effect=PermissionError("locked by explorer")), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            code = ae.main(["upgrade", "--locale", "en"])
+        self.assertEqual(code, 1)
+        self.assertIn("locked", err.getvalue().lower())
+        self.assertFalse((self.copy / "upgrade-marker.txt").exists())
+        self.assertEqual(json.loads((self.copy / RECORD_NAME).read_text(encoding="utf-8"))["version"], old_version)
+
+
 if __name__ == "__main__":
     unittest.main()

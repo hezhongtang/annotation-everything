@@ -1519,6 +1519,105 @@ sys.exit(serve.serve(Path(sys.argv[2]), None, False, False,
         self.assertEqual(len(desktop.cancelled), len(starts),
                          "every direct delivery admitted before cancellation must be confirmed stopped")
 
+    def _start_overview_home(self):
+        proc = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), "overview", "--no-open"],
+                                env=self.env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.processes.append(proc)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            info = serve.read_home_status()
+            if info and info.get("pid") == proc.pid:
+                health = serve.probe(info["port"], timeout=.2)
+                if health and health.get("hostKind") == "overview-home":
+                    return proc, info, health
+            if proc.poll() is not None:
+                self.fail(f"overview home exited early: {proc.returncode}")
+            time.sleep(.03)
+        self.fail("overview home did not become ready")
+
+    def test_overview_home_stop_all_and_restart_preserves_port_binding_and_claimed_work(self):
+        rid1, rid2 = "e1" * 8, "e2" * 8
+        d1 = self.review("home-r1", rid1)
+        d2 = self.review("home-r2", rid2)
+
+        def cleanup_overview_children() -> None:
+            for d in (d1, d2):
+                info = serve.read_status(d) or {}
+                pid = info.get("pid")
+                if type(pid) is int and pid > 0 and ledger.pid_alive(pid):
+                    with contextlib.suppress(OSError):
+                        os.kill(pid, signal.SIGTERM)
+
+        self.addCleanup(cleanup_overview_children)
+        for d, sess in ((d1, "sess-1"), (d2, "sess-2")):
+            bound = self.cli("wakeup.py", "bind", str(d), "--adapter", "wait",
+                             "--harness", "Claude Code", "--session", sess)
+            self.assertEqual(bound.returncode, 0, bound.stdout + bound.stderr)
+        b1_before = json.loads((d1 / ".agent-binding.json").read_text(encoding="utf-8"))["bindingId"]
+        b2_before = json.loads((d2 / ".agent-binding.json").read_text(encoding="utf-8"))["bindingId"]
+
+        home_proc, home_info, home_health = self._start_overview_home()
+        host_headers = {"X-AE-Host": home_health["hostId"]}
+        s1, _, start1 = self.request(home_info, "POST", "/api/overview/start", {"reviewId": rid1},
+                                     extra_headers=host_headers, timeout=8)
+        s2, _, start2 = self.request(home_info, "POST", "/api/overview/start", {"reviewId": rid2},
+                                     extra_headers=host_headers, timeout=8)
+        self.assertEqual((s1, s2), (200, 200), (start1, start2))
+        port1 = int(start1["url"].rstrip("/").rsplit(":", 1)[1])
+        port2 = int(start2["url"].rstrip("/").rsplit(":", 1)[1])
+
+        # 提交并领取 r1 批次；停止全部时未完成的停止不会误报已停止，完成并停止后总览仍可列出与重启
+        code, _, handed = serve._req(port1, "POST", "/api/handoff",
+                                      {"Host": f"127.0.0.1:{port1}", "Origin": f"http://127.0.0.1:{port1}",
+                                       "Content-Type": "application/json", "X-AE-Review": rid1},
+                                      {"message": "batch 1", "receiverBindingId": b1_before})
+        self.assertEqual(code, 200, handed)
+        owner_env = {**self.env, "AE_HARNESS": "Claude Code", "AE_SESSION_ID": "sess-1"}
+        claimed = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "claim", str(d1)],
+                                 env=owner_env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(claimed.returncode, 0, claimed.stdout + claimed.stderr)
+
+        _, _, stopped2 = self.request(home_info, "POST", "/api/overview/stop",
+                                      {"reviewId": rid2, "scope": "all"}, extra_headers=host_headers, timeout=10)
+        self.assertEqual(stopped2["state"], "stopped")
+        done1 = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "done", str(d1), "--seq", "1"],
+                               env=owner_env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(done1.returncode, 0, done1.stdout + done1.stderr)
+        _, _, stopped1 = self.request(home_info, "POST", "/api/overview/stop",
+                                      {"reviewId": rid1, "scope": "all"}, extra_headers=host_headers, timeout=10)
+        self.assertEqual(stopped1["state"], "stopped")
+
+        # 全部停掉后重开总览首页，应回到同一保留端口并保留两份审阅、专属端口与接收方绑定
+        home_proc.terminate()
+        home_proc.wait(timeout=5)
+        home_proc2, home_info2, home_health2 = self._start_overview_home()
+        self.addCleanup(lambda: home_proc2.poll() is None and home_proc2.terminate())
+        self.assertEqual(home_info2["port"], home_info["port"])
+        self.assertEqual(home_health2["hostId"], home_health["hostId"])
+
+        code, _, listed = self.request(home_info2, "GET", "/api/overview?scope=all")
+        self.assertEqual(code, 200)
+        by_id = {row["reviewId"]: row for row in listed["reviews"]}
+        self.assertEqual({rid1, rid2}, set(by_id))
+        self.assertEqual((by_id[rid1]["port"], by_id[rid2]["port"]), (port1, port2))
+
+        host_headers2 = {"X-AE-Host": home_health2["hostId"]}
+        code, _, restarted1 = self.request(home_info2, "POST", "/api/overview/start", {"reviewId": rid1},
+                                           extra_headers=host_headers2, timeout=8)
+        self.assertEqual(code, 200, restarted1)
+        self.assertEqual(int(restarted1["url"].rstrip("/").rsplit(":", 1)[1]), port1)
+        self.assertEqual(restarted1["agentDelivery"]["adapter"], "wait")
+        self.assertEqual(serve.probe(port1)["receiver"]["bindingId"], b1_before)
+        self.assertEqual(json.loads((d1 / ".agent-binding.json").read_text(encoding="utf-8"))["bindingId"], b1_before)
+        self.assertEqual(json.loads((d2 / ".agent-binding.json").read_text(encoding="utf-8"))["bindingId"], b2_before)
+        restarted_pid = (serve.read_status(d1) or {}).get("pid")
+        code, _, stop_after = self.request(home_info2, "POST", "/api/overview/stop",
+                                           {"reviewId": rid1, "scope": "all"}, extra_headers=host_headers2, timeout=10)
+        self.assertEqual((code, stop_after.get("state")), (200, "stopped"), stop_after)
+        if type(restarted_pid) is int and restarted_pid > 0:
+            self.assertTrue(self.wait_until(lambda: not ledger.pid_alive(restarted_pid), timeout=5))
+
 
 if __name__ == "__main__":
     unittest.main()

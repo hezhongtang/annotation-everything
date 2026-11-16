@@ -112,7 +112,12 @@ class LedgerPruneTests(unittest.TestCase):
         real_temp = self.root / "real-temp"
         real_temp.mkdir()
         temp_alias = self.root / "temp-alias"
-        temp_alias.symlink_to(real_temp, target_is_directory=True)
+        try:
+            temp_alias.symlink_to(real_temp, target_is_directory=True)
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                self.skipTest("当前 Windows 账户无符号链接权限")
+            raise
         rid = "5000000000000000"
         self.add(rid, (temp_alias / "missing").resolve(), 9105)
         self.write_ledger()
@@ -252,7 +257,7 @@ class LedgerPruneTests(unittest.TestCase):
 
         @contextlib.contextmanager
         def interrupt_second_lock(fd):
-            if os.fstat(fd).st_ino == second.stat().st_ino:
+            if self.ledger._dir_identity(fd) == (second.stat().st_dev, second.stat().st_ino):
                 self.assertFalse((first / ".agent-binding.json").exists(), "第一份审阅已进入隔离区")
                 raise KeyboardInterrupt
             with original_lock(fd) as lock:
@@ -331,7 +336,7 @@ class LedgerPruneTests(unittest.TestCase):
         original = self.ledger.os.rename
 
         def fail_third_move(src, dst, **kwargs):
-            if src == ".annotation-archived":
+            if Path(src).name == ".annotation-archived":
                 (directory / ".agent-deliveries.json").write_text("new deliveries", encoding="utf-8")
                 raise OSError("injected move failure")
             return original(src, dst, **kwargs)
@@ -414,6 +419,7 @@ class LedgerPruneTests(unittest.TestCase):
                 self.assertEqual((directory / ".agent-binding.json").read_text(encoding="utf-8"), "binding")
                 self.assertNotIn(rid, self.ledger.entries())
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO required")
     def test_metadata_prune_treats_a_non_regular_status_file_as_unconfirmed(self):
         directory = self.root / "status-not-regular"
         directory.mkdir()
@@ -526,7 +532,13 @@ class LedgerPruneTests(unittest.TestCase):
             if not swapped:
                 moved = self.root / "moved-inside"
                 directory.rename(moved)
-                directory.symlink_to(outside, target_is_directory=True)
+                try:
+                    directory.symlink_to(outside, target_is_directory=True)
+                except OSError as exc:
+                    if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                        moved.rename(directory)
+                        self.skipTest("当前 Windows 账户无符号链接权限")
+                    raise
                 swapped = True
             return original(fd, review_id)
 
@@ -733,8 +745,90 @@ class OverviewPruneTests(unittest.TestCase):
         self.assertEqual(status, 200, raw)
         self.assertEqual(json.loads(raw)["reviews"], [], "清理后的总览快照立即不再返回该条目")
 
+    def test_metadata_prune_treats_directory_status_file_and_locked_manifest_as_unconfirmed(self):
+        bad_status = self.root / "status-is-dir"
+        bad_status.mkdir()
+        (bad_status / "review.json").write_text("{}", encoding="utf-8")
+        (bad_status / ".annotation-server.json").mkdir()
+        (bad_status / ".agent-binding.json").write_text("binding", encoding="utf-8")
+
+        locked = self.root / "locked-manifest"
+        locked.mkdir()
+        (locked / "review.json").write_text("{}", encoding="utf-8")
+        (locked / ".agent-binding.json").write_text("binding", encoding="utf-8")
+
+        ids = {"5000000000000000": bad_status, "6000000000000000": locked}
+        for rid, directory in ids.items():
+            self.add(rid, directory)
+        self.write_ledger()
+
+        res_dir_status = self.ledger.prune_stale(all_stale=True, review_ids=["5000000000000000"], delete_metadata=True)
+        real_os_open = self.ledger.os.open
+
+        def fail_locked_manifest(path, *args, **kwargs):
+            if Path(str(path)).name == "review.json":
+                raise PermissionError("file in use")
+            return real_os_open(path, *args, **kwargs)
+
+        with unittest.mock.patch.object(self.ledger.os, "open", side_effect=fail_locked_manifest):
+            res_locked = self.ledger.prune_stale(all_stale=True, review_ids=["6000000000000000"], delete_metadata=True)
+
+        self.assertEqual(res_dir_status["metadataDeleted"], [])
+        self.assertEqual(res_dir_status["metadataPreserved"][0]["reason"], "status-unconfirmed")
+        self.assertEqual(res_locked["metadataDeleted"], [])
+        self.assertEqual(res_locked["metadataPreserved"][0]["reason"], "identity-unconfirmed")
+        self.assertEqual((bad_status / ".agent-binding.json").read_text(encoding="utf-8"), "binding")
+        self.assertEqual((locked / ".agent-binding.json").read_text(encoding="utf-8"), "binding")
+
+    def test_windows_metadata_dir_quarantine_rollback_and_cleanup_without_dir_fd(self):
+        orphan = self.scope / "win-orphan"
+        orphan.mkdir()
+        (orphan / "review.json").write_text("{}", encoding="utf-8")
+        (orphan / ".agent-binding.json").write_text("binding", encoding="utf-8")
+        (orphan / "notes.json").write_text("keep-notes", encoding="utf-8")
+        rid = "7000000000000000"
+        self.add(rid, orphan)
+        self.write_ledger()
+
+        class FakeWinDir(self.ledger._WinMetadataDir):
+            def current_path(self) -> Path:
+                return self.initial_path
+
+            def close(self) -> None:
+                self.closed = True
+
+        def fake_open(directory: Path, root: Path | None):
+            resolved = directory.resolve()
+            if root is not None and not resolved.is_relative_to(root):
+                raise self.ledger._MetadataUnsafe("out-of-scope")
+            info = resolved.lstat()
+            return FakeWinDir(resolved, root, 1, (info.st_dev, info.st_ino)), resolved
+
+        with unittest.mock.patch.object(self.ledger, "_open_metadata_dir", side_effect=fake_open):
+            result = self.ledger.prune_stale(all_stale=True, under=self.scope, review_ids=[rid], delete_metadata=True)
+
+        self.assertEqual([row["reviewId"] for row in result["metadataDeleted"]], [rid])
+        self.assertFalse((orphan / ".agent-binding.json").exists())
+        self.assertEqual((orphan / "notes.json").read_text(encoding="utf-8"), "keep-notes")
+        self.assertEqual(list(orphan.glob(".annotation-prune-*")), [])
+
     def test_snapshot_computes_default_prune_eligibility_from_the_ledger_path(self):
         import review_overview
+        if os.name == "nt":
+            outside = self.root / "outside-target"
+            outside.mkdir()
+            temp_dir = Path(tempfile.gettempdir()) / f"ae-prune-temp-{uuid.uuid4().hex}"
+            rid_temp = "3000000000000000"
+            rid_outside = "4000000000000000"
+            self.add(rid_temp, temp_dir)
+            self.add(rid_outside, outside / "missing")
+            self.write_ledger()
+
+            data = review_overview.snapshot(None, None, "all", self.serve.review_row)
+            by_id = {row["reviewId"]: row for row in data["reviews"]}
+            self.assertTrue(by_id[rid_temp]["defaultPruneEligible"])
+            self.assertFalse(by_id[rid_outside]["defaultPruneEligible"])
+            return
         with tempfile.TemporaryDirectory(prefix="ae-prune-target-", dir="/var/tmp") as target:
             link = Path("/tmp") / f"ae-prune-link-{uuid.uuid4().hex}"
             link.symlink_to(target, target_is_directory=True)

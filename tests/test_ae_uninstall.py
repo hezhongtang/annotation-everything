@@ -48,6 +48,20 @@ def agent_link(home: Path, agent: str) -> Path:
     return home / ".zcode" / "skills" / SKILL
 
 
+def _can_symlink(root: Path) -> bool:
+    if os.name != "nt":
+        return True
+    src = root / "_sym_probe_src"
+    dst = root / "_sym_probe_dst"
+    src.mkdir(exist_ok=True)
+    try:
+        os.symlink(str(src), str(dst), target_is_directory=True)
+    except OSError:
+        return False
+    dst.unlink()
+    return True
+
+
 class UninstallCliTests(unittest.TestCase):
     """命令行行为：子进程运行 ae.py，HOME、各技能目录、台账目录全部指向临时目录。"""
 
@@ -59,18 +73,42 @@ class UninstallCliTests(unittest.TestCase):
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
         self.ae_home = self.root / "ledger"
-        # 假 ps：全表查询（-ww -eo）输出测试指定的进程表；其余转交真 ps
-        real_ps = shutil.which("ps") or "/bin/ps"
+        self.can_symlink = _can_symlink(self.root)
+        # 假进程表：POSIX 用假 ps，Windows 用假 powershell.cmd；单 PID 查询转交真工具
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.ps_table = self.root / "ps-table.txt"
         self.ps_table.write_text("", encoding="utf-8")
-        shim = self.bin / "ps"
-        shim.write_text(
-            f'#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  cat "{self.ps_table}"\nelse\n  exec "{real_ps}" "$@"\nfi\n',
-            encoding="utf-8")
-        shim.chmod(0o755)
-        self.env = {**os.environ, "HOME": str(self.home),
+        if os.name == "nt":
+            sysroot = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+            real_ps = str(Path(sysroot) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+            helper = self.bin / "_ps_shim.py"
+            helper.write_text(
+                "import json, subprocess, sys\n"
+                "from pathlib import Path\n"
+                "args = sys.argv[1:]\n"
+                "cmd_text = ' '.join(args)\n"
+                "if '-Filter' in cmd_text:\n"
+                f"    done = subprocess.run([{real_ps!r}, *args])\n"
+                "    sys.exit(done.returncode)\n"
+                "rows = []\n"
+                f"for line in Path({str(self.ps_table)!r}).read_text(encoding='utf-8').splitlines():\n"
+                "    parts = line.strip().split(None, 1)\n"
+                "    if len(parts) == 2 and parts[0].isdigit():\n"
+                "        rows.append({'ProcessId': int(parts[0]), 'CommandLine': parts[1]})\n"
+                "print(json.dumps(rows))\n",
+                encoding="utf-8",
+            )
+            shim = self.bin / "powershell.cmd"
+            shim.write_text(f'@echo off\r\n"{sys.executable}" "{helper}" %*\r\n', encoding="utf-8")
+        else:
+            real_ps = shutil.which("ps") or "/bin/ps"
+            shim = self.bin / "ps"
+            shim.write_text(
+                f'#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  cat "{self.ps_table}"\nelse\n  exec "{real_ps}" "$@"\nfi\n',
+                encoding="utf-8")
+            shim.chmod(0o755)
+        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
                     "CLAUDE_SKILLS_DIR": str(self.skills),
                     "CODEX_HOME": str(self.home / ".codex"),
                     "AE_HOME": str(self.ae_home),
@@ -135,7 +173,7 @@ class UninstallCliTests(unittest.TestCase):
                 self.fail(f"服务进程提前退出（{exited}）：{err}{out}")
             time.sleep(0.1)
         self.assertTrue(status.exists(), "等不到状态文件，服务没起来")
-        return proc, " ".join(argv)
+        return proc, subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(argv)
 
     def stop_server(self, proc) -> None:
         """兜底清理：先 SIGTERM，超时再 SIGKILL，最后收尸。"""
@@ -161,9 +199,27 @@ class UninstallCliTests(unittest.TestCase):
                 self.fail(f"首页进程提前退出（{exited}）：{err}{out}")
             time.sleep(0.1)
         self.assertTrue(status.exists(), "等不到首页运行状态文件")
-        return proc, " ".join(argv)
+        return proc, subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(argv)
+
+    def _require_symlink(self) -> None:
+        if not self.can_symlink:
+            self.skipTest("当前 Windows 账户无符号链接权限（无需管理员/开发者模式的直接安装路径由独立用例覆盖）")
+
+    def test_uninstall_direct_install_without_links_keeps_ledger_and_review_dir(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        review = self.make_review_dir()
+        ledger = self.write_ledger(review)
+        ledger_before = ledger.read_bytes()
+        review_before = self.snapshot(review)
+        p = self.run_ae("uninstall")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(self.copy_dir.exists(), "技能副本应删除")
+        self.assertEqual(ledger.read_bytes(), ledger_before, "台账应逐字节保留")
+        self.assertTrue(self.ae_home.is_dir(), "台账目录应保留")
+        self.assertEqual(self.snapshot(review), review_before, "审阅目录应逐字节不变")
 
     def test_uninstall_removes_copy_and_links_keeps_ledger_and_review_dir(self):
+        self._require_symlink()
         self.assertEqual(self.run_ae("install", "--link", "codex,agents,zcode").returncode, 0)
         review = self.make_review_dir()
         ledger = self.write_ledger(review)
@@ -179,7 +235,8 @@ class UninstallCliTests(unittest.TestCase):
         self.assertEqual(self.snapshot(review), review_before, "审阅目录应逐字节不变")
 
     def test_uninstall_purge_removes_ledger_home_but_not_review_dir(self):
-        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        link_args = ("--link", "codex") if self.can_symlink else ()
+        self.assertEqual(self.run_ae("install", *link_args).returncode, 0)
         review = self.make_review_dir()
         self.write_ledger(review)
         review_before = self.snapshot(review)
@@ -187,7 +244,8 @@ class UninstallCliTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertFalse(self.ae_home.exists(), "--purge 应删除台账目录")
         self.assertFalse(self.copy_dir.exists())
-        self.assertFalse(agent_link(self.home, "codex").exists())
+        if self.can_symlink:
+            self.assertFalse(agent_link(self.home, "codex").exists())
         self.assertEqual(self.snapshot(review), review_before, "审阅目录应逐字节不变")
 
     def test_uninstall_purge_refuses_when_review_dir_inside_ledger_home(self):
@@ -218,6 +276,7 @@ class UninstallCliTests(unittest.TestCase):
         self.assertTrue((review / "index.html").is_file(), "审阅目录不动")
 
     def test_uninstall_removes_dangling_links_found_by_scan(self):
+        self._require_symlink()
         self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
         shutil.rmtree(self.copy_dir)  # 副本与安装记录一起消失 → 只能靠扫描发现悬空链接
         p = self.run_ae("uninstall")
@@ -225,6 +284,7 @@ class UninstallCliTests(unittest.TestCase):
         self.assertFalse(agent_link(self.home, "codex").exists(), "扫描发现的悬空链接也应删除")
 
     def test_uninstall_keeps_unrelated_link_and_non_link_content(self):
+        self._require_symlink()
         self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
         elsewhere = self.root / "elsewhere"
         elsewhere.mkdir()
@@ -243,7 +303,8 @@ class UninstallCliTests(unittest.TestCase):
         self.assertTrue((occupied / "keep.txt").is_file(), "非链接内容不删")
 
     def test_uninstall_refuses_while_server_running(self):
-        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        link_args = ("--link", "codex") if self.can_symlink else ()
+        self.assertEqual(self.run_ae("install", *link_args).returncode, 0)
         review = self.make_review_dir()
         ledger = self.write_ledger(review)
         proc, _line = self.spawn_server(review)
@@ -253,12 +314,14 @@ class UninstallCliTests(unittest.TestCase):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("--stop-servers", p.stdout + p.stderr, "要提示先停止或加 --stop-servers")
         self.assertTrue(self.copy_dir.exists(), "拒绝卸载时不动技能副本")
-        self.assertTrue(agent_link(self.home, "codex").exists(), "拒绝卸载时不动链接")
+        if self.can_symlink:
+            self.assertTrue(agent_link(self.home, "codex").exists(), "拒绝卸载时不动链接")
         self.assertTrue(ledger.exists(), "拒绝卸载时不动台账")
         self.assertEqual(self.snapshot(review, ignore=RUNTIME_FILES), review_before)
 
     def test_uninstall_stop_servers_stops_then_uninstalls(self):
-        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        link_args = ("--link", "codex") if self.can_symlink else ()
+        self.assertEqual(self.run_ae("install", *link_args).returncode, 0)
         review = self.make_review_dir()
         self.write_ledger(review)
         proc, line = self.spawn_server(review)
@@ -270,12 +333,13 @@ class UninstallCliTests(unittest.TestCase):
         self.assertIsNotNone(proc.poll(), "服务进程应已被结束")
         self.assertFalse((review / ".annotation-server.json").exists(), "优雅停止后状态文件应清理")
         self.assertFalse(self.copy_dir.exists(), "停服务后应删除技能副本")
-        self.assertFalse(agent_link(self.home, "codex").exists())
+        if self.can_symlink:
+            self.assertFalse(agent_link(self.home, "codex").exists())
         self.assertTrue((self.ae_home / "reviews.json").exists(), "默认保留台账")
         self.assertEqual(self.snapshot(review, ignore=RUNTIME_FILES), review_before, "审阅目录应逐字节不变")
 
     def test_uninstall_refuses_while_overview_home_running(self):
-        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        self.assertEqual(self.run_ae("install").returncode, 0)
         proc, line = self.spawn_home()
         self.addCleanup(self.stop_server, proc)
         self.ps_table.write_text(f"{proc.pid} {line}\n", encoding="utf-8")
@@ -285,7 +349,7 @@ class UninstallCliTests(unittest.TestCase):
         self.assertTrue(self.copy_dir.exists(), "拒绝卸载时不动技能副本")
 
     def test_uninstall_stop_servers_stops_overview_home(self):
-        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        self.assertEqual(self.run_ae("install").returncode, 0)
         proc, line = self.spawn_home()
         self.addCleanup(self.stop_server, proc)
         self.ps_table.write_text(f"{proc.pid} {line}\n", encoding="utf-8")
@@ -296,7 +360,8 @@ class UninstallCliTests(unittest.TestCase):
         self.assertFalse(self.copy_dir.exists(), "停服务后应删除技能副本")
 
     def test_uninstall_purge_cleans_overview_home_files(self):
-        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        link_args = ("--link", "codex") if self.can_symlink else ()
+        self.assertEqual(self.run_ae("install", *link_args).returncode, 0)
         proc, _line = self.spawn_home()
         self.stop_server(proc)
         self.assertEqual(proc.returncode, 0, "首页应优雅退出并清理运行状态")
@@ -315,6 +380,8 @@ class RemoveLinksTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="ae-remove-links-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        if not _can_symlink(self.root):
+            self.skipTest("当前 Windows 账户无符号链接权限")
         self.copy = self.root / "skills" / SKILL
         self.copy.mkdir(parents=True)
         (self.copy / "SKILL.md").write_text("合成技能", encoding="utf-8")
@@ -398,6 +465,40 @@ class RunningServersTests(unittest.TestCase):
         stuck = ae.stop_servers([(proc.pid, "python3 -c import time")])
         self.assertEqual([pid for pid, _ in stuck], [proc.pid], "无关进程应拒绝停止")
         self.assertIsNone(proc.poll(), "无关进程应保持运行")
+
+    def test_windows_stop_servers_refuses_unconfirmed_identity_without_sigkill(self):
+        import unittest.mock as mock
+
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        self.addCleanup(self.stop, proc)
+        cmd = f'"{sys.executable}" "{SERVE}" "{Path.cwd() / "review"}"'
+        with mock.patch.object(ae, "_is_windows", return_value=True), \
+                mock.patch.object(ae, "_process_stopped", return_value=False), \
+                mock.patch.object(ae, "_read_process_cmdline", return_value=None), \
+                mock.patch.object(ae, "_win_terminate_process") as term:
+            stuck = ae.stop_servers([(proc.pid, cmd)], wait_seconds=0)
+        term.assert_not_called()
+        self.assertEqual([pid for pid, _ in stuck], [proc.pid])
+
+    def test_uninstall_refuses_when_process_enumeration_fails(self):
+        import contextlib
+        import io
+        import unittest.mock as mock
+
+        with tempfile.TemporaryDirectory(prefix="ae-enum-fail-") as td:
+            root = Path(td)
+            skills = root / "skills"
+            copy_dir = skills / SKILL
+            copy_dir.mkdir(parents=True)
+            (copy_dir / "SKILL.md").write_text("合成技能", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"HOME": str(root), "USERPROFILE": str(root),
+                                             "CLAUDE_SKILLS_DIR": str(skills), "AE_HOME": str(root / "ledger")}), \
+                    mock.patch.object(ae, "list_processes", side_effect=ae.ProcessEnumerationError("access denied")), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+                code = ae.main(["uninstall"])
+            self.assertEqual(code, 1)
+            self.assertTrue((copy_dir / "SKILL.md").is_file(), "枚举失败时不得删除技能副本")
+            self.assertIn("access denied", err.getvalue())
 
     def stop(self, proc) -> None:
         if proc.poll() is None:
