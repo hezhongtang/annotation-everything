@@ -21,7 +21,9 @@ SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT / "fixtures" / "pptx"))
 os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))   # 测试不碰用户真实的审阅台账
-os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="ae-test-user-"))
+_test_user = tempfile.mkdtemp(prefix="ae-test-user-")
+os.environ.setdefault("HOME", _test_user)
+os.environ.setdefault("USERPROFILE", _test_user)
 
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
 

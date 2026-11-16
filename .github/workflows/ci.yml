@@ -69,16 +69,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      # 首期 Windows 验证基础与基础安装/审阅范围（#172 + #173）：
-      # 只运行已适配的共享资源隔离、统一验证入口、纯逻辑、安装与基础审阅/存储/HTTP 安全检查；
-      # 未适配的接手/Office/完整维护/浏览器检查（#174-#177）尚未纳入，不代表全量通过。
-      - name: 验证基础、安装与基础审阅检查（Windows 当前已适配范围）
+      # 首期 Windows 验证基础、安装审阅与办公材料范围（#172 + #173 + #175）：
+      # 只运行已适配的共享资源隔离、统一验证入口、纯逻辑、安装与基础审阅/存储/HTTP 安全及办公材料/工具检查；
+      # 未适配的接手/完整维护/浏览器检查（#174, #176, #177）尚未纳入，不代表全量通过。
+      - name: 验证基础、安装审阅与办公材料检查（Windows 当前已适配范围）
         shell: pwsh
         run: |
           $env:AE_HOME = "$env:RUNNER_TEMP\ae-home"
           $env:PYTHONUTF8 = "1"
           python verify.py run --group unit-related --phase ci `
-            --reason "CI Windows 验证基础与安装审阅范围（${{ github.event_name }} ${{ github.ref_name }} Python ${{ matrix.python-version }}）" `
+            --reason "CI Windows 验证基础、安装审阅与办公材料范围（${{ github.event_name }} ${{ github.ref_name }} Python ${{ matrix.python-version }}）" `
             tests/test_host_isolation.py `
             tests/test_verify_entry.py `
             tests/test_verify_parallel.py `
@@ -94,8 +94,19 @@ jobs:
             tests/test_ae_link.py `
             tests/test_ae_target.py `
             tests/test_ae_cli_i18n.py `
+            tests/test_ae_checks_tools.py `
             tests/test_cli_error_i18n.py `
             tests/test_skill_discovery.py `
+            tests/test_docx_anchor.py `
+            tests/test_docx_review.py `
+            tests/test_docx_edit.py `
+            tests/test_pptx_reader.py `
+            tests/test_pptx_annotations.py `
+            tests/test_pptx_remap.py `
+            tests/test_pptx_report.py `
+            tests/test_pptx_edit.py `
+            tests/test_pptx_ops.py `
+            tests/test_pptx_fonts.py `
             tests.test_core.FsutilTests `
             tests.test_core.FileLockTests `
             tests.test_core.ServiceStateTests `
