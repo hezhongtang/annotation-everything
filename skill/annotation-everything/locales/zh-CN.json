@@ -289,6 +289,7 @@
     "cli.ae.repair.copyReplaceKept": "未替换 {path}：{detail}",
     "cli.ae.repair.copyReplaceNotDir": "未替换 {path}，它已不是实目录。",
     "cli.ae.repair.copyReplaceSame": "未替换 {path}，这就是正在检查的正本。",
+    "cli.ae.repair.copyReplaceSource": "未替换 {path}，该目录与技能源码 {source} 重叠。请使用源码目录之外的安装副本。",
     "cli.ae.repair.copyReplaceNoBackup": "未替换 {path}，旁边没有可用的备份目录名。",
     "cli.ae.repair.copyReplaceNoCopy": "正本不是目录，未改动 {path}。请改用：{command}",
     "cli.ae.repair.linkPrivilege": "没有建立软链接的权限，未删除 {path}。请改用：{command}",

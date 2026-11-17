@@ -366,9 +366,10 @@ def _norm_key(path: Path) -> str:
     return os.path.normcase(os.path.abspath(os.path.normpath(str(path))))
 
 
-def known_skill_roots() -> list:
-    """已登记宿主技能目录：[(名称, 目录), ...]。按路径去重，先出现的名称保留。
+def known_skill_roots(*, deduplicate: bool = True) -> list:
+    """已登记宿主技能目录：[(名称, 目录), ...]。默认按路径去重，先出现的名称保留。
 
+    名称解析时保留共享路径的所有名称；扫描时每个路径只查一次。
     不缓存：测试会在同一进程里改 HOME。不调用 link_target_dir，避免互相递归。
     """
     home = Path.home()
@@ -377,7 +378,7 @@ def known_skill_roots() -> list:
     def add(name: str, path: Path) -> None:
         path = Path(path).expanduser()
         key = _norm_key(path)
-        if key in seen:
+        if deduplicate and key in seen:
             return
         seen.add(key)
         found.append((name, path))
@@ -401,7 +402,7 @@ def link_target_dir(agent: str) -> Optional[Path]:
     """已登记 Agent 的技能目录；未知名称返回 None。同名多条路径时取第一条。"""
     if agent not in LINK_AGENTS:
         return None
-    for name, path in known_skill_roots():
+    for name, path in known_skill_roots(deduplicate=False):
         if name == agent:
             return path
     return None
@@ -2391,6 +2392,12 @@ def replace_independent_copy(path: Path, copy_dir: Path, repo: Optional[Path]) -
         return T("cli.ae.repair.copyReplaceNotDir", path=path)
     if _same_copy(path, copy_dir) or paths_overlap(path, copy_dir):
         return T("cli.ae.repair.copyReplaceSame", path=path)
+    sources = [Path(__file__).resolve().parent / SKILL_SRC]
+    if repo is not None:
+        sources.append(repo / SKILL_SRC)
+    for source in sources:
+        if paths_overlap(path, source):
+            return T("cli.ae.repair.copyReplaceSource", path=path, source=source)
     try:
         usable = copy_dir.is_dir()
     except OSError:
@@ -2405,7 +2412,7 @@ def replace_independent_copy(path: Path, copy_dir: Path, repo: Optional[Path]) -
     except OSError as exc:
         return T("cli.ae.repair.copyReplaceKept", path=path, detail=exc)
     try:
-        os.symlink(str(copy_dir.resolve()), str(path))
+        os.symlink(str(copy_dir.resolve()), str(path), target_is_directory=True)
     except OSError as exc:
         restored = _restore_replaced_dir(backup, path)
         if restored is _RESTORE_OCCUPIED:
@@ -2469,7 +2476,9 @@ def _remember_created_links(skill_copy: Path, created: list) -> None:
     if not isinstance(record, dict):
         return
     existing = record.get("links")
-    record["links"] = _kept_link_entries(existing if isinstance(existing, list) else [], skill_copy, created)
+    if not isinstance(existing, list):
+        existing = scan_links(skill_copy)
+    record["links"] = _kept_link_entries(existing, skill_copy, created)
     record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 

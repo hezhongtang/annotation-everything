@@ -337,6 +337,7 @@
     "cli.ae.repair.copyReplaceKept": "Left {path} unchanged: {detail}",
     "cli.ae.repair.copyReplaceNotDir": "{path} was left unchanged because it is no longer a real directory.",
     "cli.ae.repair.copyReplaceSame": "{path} was left unchanged because it is the copy being checked.",
+    "cli.ae.repair.copyReplaceSource": "{path} was left unchanged because it overlaps the skill source at {source}. Use an installed copy outside the source directory.",
     "cli.ae.repair.copyReplaceNoBackup": "{path} was left unchanged because no backup name was free beside it.",
     "cli.ae.repair.copyReplaceNoCopy": "The canonical copy is not a directory, so {path} was left unchanged. Use: {command}",
     "cli.ae.repair.linkPrivilege": "No permission to create a symlink; {path} was not deleted. Use: {command}",

@@ -701,6 +701,15 @@ class ParseLinkAgentsTests(unittest.TestCase):
         for name, directory in pairs:
             self.assertEqual(directory, ae.link_target_dir(name))
 
+    def test_shared_directory_keeps_all_registered_names(self):
+        shared = self.home / ".agents" / "skills"
+        with mock.patch.dict(os.environ, {
+                "CODEX_HOME": str(shared.parent), "CLAUDE_SKILLS_DIR": str(shared)}):
+            self.assertEqual(ae.parse_link_agents("codex,claude-code,agents"),
+                             [(name, shared) for name in ("codex", "claude-code", "agents")])
+            scanned = [(name, path) for name, path in ae.known_skill_roots() if path == shared]
+        self.assertEqual(scanned, [("codex", shared)], "扫描同一路径仍只做一次")
+
     def test_unknown_bare_name_keeps_none_dir(self):
         pairs = ae.parse_link_agents("foo")
         self.assertEqual(pairs, [("foo", None)], "未知名称交给调用方报错")
@@ -907,8 +916,8 @@ class IndependentCopyTests(unittest.TestCase):
         self.assertIn(str(antigravity), result["message"])
         self.assertIn(str(gemini), result["message"])
         self.assertIn("--replace-with-links", result["fix_command"])
-        self.assertIn(f"install --target {shlex.quote(str(antigravity.parent))}", result["fix_command"])
-        self.assertIn(f"install --target {shlex.quote(str(gemini.parent))}", result["fix_command"])
+        self.assertIn(f"install --target {ae._quote_cli(str(antigravity.parent))}", result["fix_command"])
+        self.assertIn(f"install --target {ae._quote_cli(str(gemini.parent))}", result["fix_command"])
         links = self.doctor_result("skill-links")
         self.assertEqual(links["level"], "通过")
         self.assertIn("未发现指向技能副本的链接", links["message"])
@@ -926,6 +935,7 @@ class IndependentCopyTests(unittest.TestCase):
         self.assertIn("symlink", result["message"].lower())
         self.assertIn("--replace-with-links", result["fix_command"])
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_symlink_to_canonical_copy_passes(self):
         self.assertEqual(self.run_ae("install", "--link", "antigravity,gemini-cli").returncode, 0)
         for parts in ((".gemini", "config", "skills"), (".gemini", "skills")):
@@ -943,6 +953,36 @@ class IndependentCopyTests(unittest.TestCase):
         result = self.doctor_result("independent-copies", "--target", str(gemini_root))
         self.assertIn(str(codex), result["message"])
         self.assertNotIn(str(gemini_root / SKILL), result["message"])
+
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
+    def test_install_link_accepts_name_when_codex_shares_its_directory(self):
+        self.env["CODEX_HOME"] = str(self.home / ".agents")
+        p = self.run_ae("install", "--link", "agents")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        link = self.home / ".agents" / "skills" / SKILL
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(link.resolve(), self.copy_dir.resolve())
+
+    def test_replace_refuses_source_and_overlapping_directories(self):
+        repo = self.home / "source-repo"
+        source = repo / ae.SKILL_SRC
+        nested = source / "nested"
+        nested.mkdir(parents=True)
+        marker = nested / "uncommitted.txt"
+        marker.write_text("合成未提交改动", encoding="utf-8")
+        self.copy_dir.mkdir(parents=True)
+        # 同时保护显式来源仓库，以及没有来源记录时执行脚本所在的仓库。
+        for script_repo, recorded_repo in ((self.home / "runner", repo), (repo, None)):
+            with mock.patch.object(ae, "__file__", str(script_repo / "ae.py")):
+                for occupied in (source, source.parent, nested):
+                    with self.subTest(script_repo=script_repo, occupied=occupied):
+                        with mock.patch.object(ae.os, "replace") as move:
+                            message = ae.replace_independent_copy(occupied, self.copy_dir, recorded_repo)
+                        move.assert_not_called()
+                        self.assertIsNotNone(message)
+                        self.assertIn(str(source), message)
+                        self.assertFalse(occupied.is_symlink())
+                        self.assertEqual(marker.read_text(encoding="utf-8"), "合成未提交改动")
 
     def test_every_registered_root_is_checked_together(self):
         self.assertEqual(self.run_ae("install").returncode, 0)
@@ -1020,6 +1060,43 @@ class IndependentCopyTests(unittest.TestCase):
         self.assertIn(str(custom), links["message"])
         self.assertIn("已不是链接", links["message"])
         self.assertIn("install --link", links["fix_command"])
+
+    @unittest.skipUnless(CAN_SYMLINK, "当前账户无符号链接权限")
+    def test_replace_preserves_scanned_links_from_legacy_record(self):
+        p = self.run_ae("install", "--link", "codex")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        original_link = self.home / ".codex" / "skills" / SKILL
+        record_path = self.copy_dir / RECORD_NAME
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        del record["links"]
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+        replaced = self.plant(".gemini", "config", "skills")
+        p = self.run_ae("repair", "--replace-with-links")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        updated = json.loads(record_path.read_text(encoding="utf-8"))
+        self.assertEqual({entry["path"] for entry in updated["links"]},
+                         {str(original_link), str(replaced)})
+        self.assertEqual(updated.get("tree"), record.get("tree"))
+        self.assertEqual(updated.get("version"), record.get("version"))
+        p = self.run_ae("uninstall")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        for link in (original_link, replaced):
+            self.assertFalse(link.exists())
+            self.assertFalse(link.is_symlink(), "卸载不得留下悬空链接")
+
+    @unittest.skipUnless(CAN_SYMLINK, "当前账户无符号链接权限")
+    def test_replace_does_not_scan_when_record_explicitly_has_no_links(self):
+        p = self.run_ae("install", "--link", "codex")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record_path = self.copy_dir / RECORD_NAME
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["links"] = []
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+        replaced = self.plant(".gemini", "config", "skills")
+        p = self.run_ae("repair", "--replace-with-links")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        updated = json.loads(record_path.read_text(encoding="utf-8"))
+        self.assertEqual([entry["path"] for entry in updated["links"]], [str(replaced)])
 
     @unittest.skipUnless(CAN_SYMLINK, "当前账户无符号链接权限")
     def test_dry_run_with_flag_does_not_replace(self):
