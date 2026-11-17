@@ -410,7 +410,9 @@ class DoctorCliTests(TempRootTestCase):
     def run_doctor(self, ledger_home: Path):
         home = str(self.root / "home")
         env = {**os.environ, "HOME": home, "USERPROFILE": home, "AE_HOME": str(ledger_home),
-               "CLAUDE_SKILLS_DIR": str(self.root / "skills"), "PYTHONDONTWRITEBYTECODE": "1"}
+               "CLAUDE_SKILLS_DIR": str(self.root / "skills"),
+               "CODEX_HOME": str(self.root / "home" / ".codex"),
+               "PYTHONDONTWRITEBYTECODE": "1"}
         proc = subprocess.run([sys.executable, str(ROOT / "ae.py"), "doctor", "--json"],
                               env=env, capture_output=True, text=True, timeout=120)
         return proc, json.loads(proc.stdout)

@@ -133,7 +133,7 @@ python "$S\serve.py" "$env:TEMP\ae-demo"
 
 | 命令 | 作用 |
 |---|---|
-| `ae.py install` / `upgrade` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；`upgrade` 先检查并拒绝/停止运行中的服务后从仓库可靠手动升级（Windows 首期专用升级入口）；`doctor` 体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；`repair` 先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划；`uninstall` 删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。各子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
+| `ae.py install` / `upgrade` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；`upgrade` 先检查并拒绝/停止运行中的服务后从仓库可靠手动升级（Windows 首期专用升级入口）；`doctor` 体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；`repair` 先列计划，安全项自动修，`--forget-stale`/`--stop-orphans`/`--replace-with-links` 显式执行破坏性操作，`--dry-run` 只看计划；`uninstall` 删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。各子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
 | `update.py auto` / `check` / `now` | 在 macOS/Linux 技能副本中检查正式版本并自动更新 / 只检查 / 立即检查并安装（Windows 首期跳过自动原地更新并引导改用 `ae.py upgrade`）；`auto` 由技能入口触发，最多每天一次 |
 | `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照，并把当前仍有效的通过证据跨阶段引用给后续阶段（`--no-reuse` 强制全部重跑）；`report` 只读记录并展示证据链。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
 | `build_viewer.py --report … [--script …] --out 审阅目录` | 从逐页 HTML、DOCX 或 PPTX 生成对照页；讲稿可选；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
@@ -327,6 +327,7 @@ Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lan
 python3 ae.py install                            # 安装：把技能复制为技能副本到 ~/.claude/skills/
 python3 ae.py install --target <目录>            # 或装到其他技能目录的根（副本装在 <目录>/annotation-everything）
 python3 ae.py install --link codex,agents,zcode  # 可选：同时为这些 Agent 建指向副本的软链接
+python3 ae.py install --link antigravity,gemini-cli  # 可选：Antigravity 与 Gemini CLI 各有自己的技能目录
 python3 ae.py install --link cursor=~/.cursor/skills  # --link 也接受 名称=路径，为任意技能目录建链接
 python3 ae.py doctor                             # 体检：安装状态、运行状态、可选工具、开发环境
 python3 ae.py repair                             # 修复：先列计划，安全项自动修
@@ -351,20 +352,21 @@ python ae.py doctor --target "D:\AgentSkills" --json
 
 `install --link` 与 `upgrade --link` 会保留已经指向所选技能副本的链接。后续链接创建失败时，命令恢复本次替换的旧链接，并仅移除本次新建的链接；恢复旧链接不需要创建符号链接的权限。
 
-- **版本更新**：Agent 按 `SKILL.md` 使用技能时，每份技能副本至多每天检查一次安装来源 `origin` 的正式版本标签（`v主.次.修订`），发现更高版本后自动更新并提示；预发布标签不会自动安装。离线、认证失败、来源不可用时保留当前版本并继续审阅；技能副本有本地改动，或审阅服务、批注进程仍在运行时，先提示并推迟更新。停止后可运行 `update.py now`；自定义安装位置请把命令中的路径换成当前技能副本的路径。设置 `AE_AUTO_UPDATE=0` 可关闭自动检查，手动命令仍可使用。
+- **版本更新**：Agent 按 `SKILL.md` 使用技能时，每份技能副本至多每天检查一次安装来源 `origin` 的正式版本标签（`v主.次.修订`），发现更高版本后自动更新并提示；预发布标签不会自动安装。自动更新只替换正在执行更新脚本的那一份副本，不扫描其他宿主目录，也不安装尚未发布的本地提交。离线、认证失败、来源不可用时保留当前版本并继续审阅；技能副本有本地改动，或审阅服务、批注进程仍在运行时，先提示并推迟更新。停止后可运行 `update.py now`；自定义安装位置请把命令中的路径换成当前技能副本的路径。设置 `AE_AUTO_UPDATE=0` 可关闭自动检查，手动命令仍可使用。
 - 更新只替换技能副本，保留指向它的软链接、审阅台账与审阅目录，不修改来源仓库的检出。正式版本的本地来源通常保存在 `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`，若与技能副本重叠则存到副本旁的独立目录；这些文件供后续体检、修复和更新使用，不要在仍使用该副本时删除。首次获得更新功能仍需先用包含此功能的版本运行一次 `ae.py install`。升级已有审阅时，停止旧服务、重建对照页、启动新服务并刷新浏览器。
 - 更新需要 Git、来源仓库的访问权限、本机进程枚举权限，以及文件系统支持原子目录交换（macOS 的 `renamex_np`，或 Linux C 库提供的 `renameat2`）。受限环境无法确认或交换时会提示并保留当前版本；可在具备权限的终端手动运行 `update.py now`。成功切换后，旧副本保留在技能目录根下的 `.ae-update-*` 中，便于找回切换期间的并发改动。
 - 体检逐项给出「通过 / 警告 / 失败」；失败项附修复或排障命令。退出码 0 表示全部通过或只有警告，1 表示有失败项，2 表示命令自身出错（`doctor --json` 输出 `error`）。开发环境类别仅在当前工作目录位于来源仓库内时出现。
 - **界面语言**：`ae.py`、`serve.py`（`serve` / `status` / `stop` / `list` / `forget` / `check` / `overview`）、`notes.py`、`check_pptx_fonts.py` 都支持 `--locale auto|zh-CN|en`（写在子命令前后都认）和环境变量 `AE_LOCALE`；生成器的帮助、结果与资源诊断也按显式 `--locale`、`AE_LOCALE`、已保存审阅配置的顺序选语言。优先级是显式参数、`AE_LOCALE`，两者都没有则中文；只有 `auto` 才读 `LC_ALL` / `LC_MESSAGES` / `LANG`。`serve.py serve`、`serve.py status` 和 `serve.py stop` 在目录解析出来后还会回落到那份审阅里保存的 `locale`；`list` / `forget` / `check` / `overview` 不对应单份审阅，只认前两级。语言选择非法时命令以退出码 2 停下并说明原因，不改动任何状态。帮助、参数说明、缺参、非法值和命令失败都用同一种语言；来源路径、命令、字体名、技能名与系统原始错误保持原文。
 - **机器判定与人读文案分开**：`doctor --json` 的 `category`、`level`、`code` 和 `summary` 是旧消费者在读的判定字段，恒为中文、不随语言改值；新增的语言无关判定信息是每项的 `status`（`pass` / `warn` / `fail`）和 `category_id`（`install` / `tools` / `dev` / `runtime`），以及顶层的 `schema`（结构版本）和 `locale`（`message` 用的是哪种语言）。新消费者比较 `status` / `category_id` 即可，不必比较本地化标签；`message`、`fix_command` 里的人读文案按语言变。`serve.py` 的拒绝与错误同理：HTTP 状态和原因代码（`bad-host`、`cross-site`、`bad-origin`、`no-origin`、`bad-content-type`、`chunked`、`bad-length`、`too-large`、`bad-json`、`not-found`、`preflight`、`no-index`、`no-note`、`server-error`、`review-mismatch`、`no-api`）不随语言变，说明按服务启动时定的语言输出；未知错误只说明类型与恢复动作，不回显请求内容。
-- `repair` 里删除台账失效记录（`--forget-stale`）、结束残留服务（`--stop-orphans`）是破坏性操作，要显式加参数；`--dry-run` 只看计划不动手。计划与执行报告都写清楚「本次未执行」，翻译后的提示不弱化后果。
+- `repair` 里删除台账失效记录（`--forget-stale`）、结束残留服务（`--stop-orphans`）、把实目录副本换成软链接（`--replace-with-links`）是破坏性操作，要显式加参数；`--dry-run` 只看计划不动手。计划与执行报告都写清楚「本次未执行」，翻译后的提示不弱化后果。
+- `repair --replace-with-links` 拒绝替换技能源码目录及其父目录、子目录。保护范围包括当前 `ae.py` 所在仓库和解析出的来源仓库；即使 `--target` 指向另一份安装副本，也会保留源码与未提交改动。
 - `uninstall` 任何情况下都不动审阅目录；`--purge` 才一并删除审阅台账；有 `serve.py` 在运行时会拒绝，`--stop-servers` 先停止再卸。
-- **装到别的技能目录**：`install` 缺省把技能副本装到 `~/.claude/skills/`（`CLAUDE_SKILLS_DIR` 仍可覆盖），`--target <目录>` 改为装到 `<目录>/annotation-everything`；`doctor`、`repair`、`uninstall` 接受同一个 `--target` 对该副本体检、修复、卸载，失败项的修复命令会带上同一 `--target`。`--link` 除内置名称 `codex`、`agents`、`zcode` 外还接受 `名称=路径`（如 `cursor=~/.cursor/skills`），为任意技能目录建指向副本的软链接并记入安装记录；自定义链接同样出现在体检里（悬空时报失败项与修复命令），`repair` 能重建，`uninstall` 会删除。安装记录只存在技能副本里，副本删除后自定义链接无法再被自动发现（内置目录的链接仍有扫描兜底）。
+- **装到别的技能目录**：`install` 缺省把技能副本装到 `~/.claude/skills/`（`CLAUDE_SKILLS_DIR` 仍可覆盖），`--target <目录>` 改为装到 `<目录>/annotation-everything`；`doctor`、`repair`、`uninstall` 接受同一个 `--target` 对该副本体检、修复、卸载，失败项的修复命令会带上同一 `--target`。`--link` 接受已登记的宿主名称（如 `codex`、`agents`、`zcode`、`antigravity`、`gemini-cli`），也接受 `名称=路径`（如 `cursor=~/.cursor/skills`），为任意技能目录建指向副本的软链接并记入安装记录。已登记名称来自 skills CLI 的全局目录表（2026-11-17），其中包括 Antigravity 的 `~/.gemini/config/skills` 与 Gemini CLI 的 `~/.gemini/skills`。`doctor` 会一起检查这些目录：若其中有名为 annotation-everything 的实目录，且不是指向当前正本的软链接，体检给出警告和两条命令，`repair --replace-with-links`（显式参数，把实目录换成指向正本的软链接）和 `install --target <该目录>`（就地升级那一份副本）。没有该参数时不删除、不替换实目录。指向主目录以外的环境变量位置不在登记范围内，不会被扫描。自定义链接同样出现在体检里（悬空时报失败项与修复命令），`repair` 能重建，`uninstall` 会删除。安装记录只存在技能副本里，副本删除后未登记的自定义链接无法再被自动发现；已登记目录里的链接仍有扫描兜底。
 - 停止服务前会核实正在执行的是本仓库或当前技能副本的脚本，并在发信号前复核进程身份；无法核实时拒绝停止。`--purge` 仅删除已知台账文件；台账损坏、目录内有其他文件或未登记的审阅目录时拒绝清除。
 
 从含总览首页路由规则的仓库源码安装技能副本后，可在支持技能斜杠命令的 Agent 中单独输入 `/annotation-everything` 打开首页。有具体任务时，可以说「帮我审阅这份报告和讲稿」或「我批注完了，按批注改」。唤醒和技能调用方式因 Agent 而异。[各 Agent 的对应机制](skill/annotation-everything/references/agent-mechanisms.zh-CN.md)
 
-Agent 自动执行修复前，遇到 `--purge`、`--forget-stale`、`--stop-orphans` 或 `--stop-servers`，须先取得用户同意。体检优先比较 `status` / `category_id`；安装项失败时按 `fix_command` 修复并重跑体检，其他运行状态问题和可选工具警告分别报告。
+Agent 自动执行修复前，遇到 `--purge`、`--forget-stale`、`--stop-orphans`、`--stop-servers` 或 `--replace-with-links`，须先取得用户同意。体检优先比较 `status` / `category_id`；安装项失败时按 `fix_command` 修复并重跑体检，其他运行状态问题和可选工具警告分别报告。
 
 ## 安全与隐私
 

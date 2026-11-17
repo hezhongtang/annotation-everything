@@ -176,7 +176,7 @@ class TargetCliTests(unittest.TestCase):
 class TargetUnitTests(unittest.TestCase):
     """单元行为：副本位置解析、修复命令、--target 进入体检上下文与 serve.py 识别。"""
 
-    KEYS = ("HOME", "USERPROFILE", "CLAUDE_SKILLS_DIR")
+    KEYS = ("HOME", "USERPROFILE", "CLAUDE_SKILLS_DIR", "CODEX_HOME")
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ae-target-unit-")
@@ -186,7 +186,8 @@ class TargetUnitTests(unittest.TestCase):
         self.home.mkdir()
         self._saved = {key: os.environ.get(key) for key in self.KEYS}
         os.environ.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
-                           "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills")})
+                           "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills"),
+                           "CODEX_HOME": str(self.home / ".codex")})
 
     def tearDown(self):
         for key, value in self._saved.items():

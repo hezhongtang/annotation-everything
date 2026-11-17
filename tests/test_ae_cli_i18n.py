@@ -74,6 +74,7 @@ class AeLocaleTestCase(unittest.TestCase):
                 if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
         base.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
                      "CLAUDE_SKILLS_DIR": str(self.skills),
+                     "CODEX_HOME": str(self.home / ".codex"),
                      "AE_HOME": str(self.root / "ledger"), "PYTHONDONTWRITEBYTECODE": "1",
                      "PATH": str(self.host_bin) + os.pathsep + os.environ.get("PATH", os.defpath)})
         base.update(extra)

@@ -260,11 +260,29 @@ class DoctorScopeTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="ae-scope-test-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
         self.repo = self.root / "repo"
         skill = self.repo / "skill" / "annotation-everything"
         skill.mkdir(parents=True)
         (skill / "SKILL.md").write_text("---\nname: annotation-everything\n---\n合成技能\n",
                                         encoding="utf-8")
+        # 体检会扫描已登记的宿主技能目录。家目录必须留在临时目录里，不能读到用户的技能目录。
+        self._saved = {key: os.environ.get(key) for key in (
+            "HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_SKILLS_DIR")}
+        os.environ.update({
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "CODEX_HOME": str(self.home / ".codex"),
+            "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills"),
+        })
+
+    def tearDown(self):
+        for key, value in self._saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
     def test_dev_checks_absent_outside_repo(self):
         ctx = ae.DoctorContext(skill_copy=self.root / "skills" / "annotation-everything",
@@ -303,7 +321,9 @@ class DoctorCliTests(unittest.TestCase):
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
         self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
-                    "CLAUDE_SKILLS_DIR": str(self.skills), "PYTHONDONTWRITEBYTECODE": "1"}
+                    "CLAUDE_SKILLS_DIR": str(self.skills),
+                    "CODEX_HOME": str(self.home / ".codex"),
+                    "PYTHONDONTWRITEBYTECODE": "1"}
 
     @property
     def copy_dir(self) -> Path:
