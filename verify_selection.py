@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 16
+STRATEGY_VERSION = 17
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -119,7 +119,7 @@ SELECTION_RULES = (
                    "tests/test_report_check.py", "tests/test_report_generation_resources.py",
                    "tests/test_report_reading.py", "tests/test_report_structure_visual.py",
                    "tests/test_report_revision.py", "tests/test_report_external_method.py",
-                   "tests/test_report_alignment.py",
+                   "tests/test_report_alignment.py", "tests/test_report_check_deliverables.py",
                    "tests/test_docx_review.py", "tests/test_docx_anchor.py"),
         scenarios=("full-check", "locale-loop", "generated-draft-loop", "report-verdict-loop",
                    "revision-update-loop", "legacy-report-compat", "external-method-loop",
@@ -187,6 +187,17 @@ SELECTION_RULES = (
         scenarios=("pptx-review",),
         why="PPTX 读取、构建、回写与合成样例：包读取、能力矩阵、渲染诊断、幻灯片定位、重映射与白名单回写由 PPT 用例覆盖；"
             "浏览器场景钉住直接审阅、元素/文本/区域批注、只读元素、旧服务阻断与改后重建（服务安全自检由 pr 门禁覆盖）",
+    ),
+    SelectionRule(
+        rid="pptx-generation",
+        prefixes=("skill/annotation-everything/scripts/pptx_build.py",
+                  "skill/annotation-everything/scripts/pptx_check.py",
+                  "skill/annotation-everything/scripts/pptx_render.py"),
+        selectors=("tests/test_pptx_build.py", "tests/test_pptx_check.py",
+                   "tests/test_pptx_render.py", "tests/test_report_check_deliverables.py"),
+        scenarios=(),
+        why="内置 PPTX 制作与文件/渲染检查（issue #180）：deck 规格、OOXML 部件、图表结构、"
+            "证据链判定与反例由单元用例覆盖；逐页视觉检查与 PowerPoint 实机兼容由 PR review 门禁覆盖",
     ),
     SelectionRule(
         rid="review-page",

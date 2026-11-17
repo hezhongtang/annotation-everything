@@ -165,6 +165,9 @@ python "$S\serve.py" "$env:TEMP\ae-demo"
 | `notes.py batches` | 查看处理记录 |
 | `notes.py skills` | 查看或设置技能目录和常驻技能。`--locale` 选择输出语言，优先于 `AE_LOCALE` 和审阅设置；范围可写 `全部` / `报告` / `讲稿` / `风格优化` 或 `all` / `report` / `script` / `style` |
 | `check_pptx_fonts.py 原始.pptx [--pdf 转换后.pdf]` | PPTX 转换前后的字体核查；`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选界面语言 |
+| `pptx_build.py --deck deck.json --out deck.pptx [--json]` | 内置 PPTX 制作器：按 `ae-pptx-deck/1` 规格写出可编辑演示文稿——命名版式、主题色与字体、章节、原生图表（内嵌可编辑数据）、备注讲稿；确定性输出，规格错误退出码 2 |
+| `pptx_check.py deck.pptx [--json]` | 生成类 PPTX 的文件层检查：部件与关系目标、内容类型、版式引用与占位符、原生图表关键结构、主题部件、章节覆盖；结果结构 `ae-pptx-check/1` |
+| `pptx_render.py deck.pptx --out-dir pages/ [--json]` | 可选工具渲染（LibreOffice `soffice` + poppler `pdftoppm`，可用 `AE_SOFFICE` / `AE_PDFTOPPM` 覆盖）：逐页 PNG 与带工具版本、页图哈希的 `ae-pptx-render/1` 清单 |
 
 </details>
 
@@ -285,6 +288,7 @@ Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lan
 - **可执行的信息密度与篇幅规则**：围绕`演示为主`、`独立阅读`、`深入审阅`组织内容，有讲稿和无讲稿时都保持正文完整可读，并记录篇幅约束属于硬上限还是参考目标、以及 `data-kind="supplement"` 补充页是否计入总数（`request.lengthSpec`）。`hard` 的单一页数表示上限，旧记录保留精确页数检查；需求内部冲突时先提醒取舍，未解决的冲突或未回答的问答项会阻止交付。
 - **具象视觉约定与任务导向导航**：将参考样张或抽象风格词转成可核对的变量、字号层级、栅格、留白与图表规则，在报告与对照页 `1280×720` Shadow DOM 渲染下实查可读性、溢出与遮挡；报告支持概览把握、按板块定位与 `结论 → 证据或补充页 → 对应分析` 的双向跳转（`href="#page-<key>"`，对照页额外支持 `data-page-ref` 兜底与「返回上一浏览页」，重排重建后仍准确）。
 - **共用验收与旧记录兼容**：外部生成技能同样遵守对齐与偏差披露约定（`record.alignment`、`report.navigation`、扩展后的 `record.length`，以及 `ae-report-record/1` 可选的 `request.alignment`、`request.qa`、`request.lengthSpec`、`deviations`）；未包含新增字段的旧记录继续兼容并如实标注未记录偏好。
+- **内置 PPTX 额外交付**：使用者要求演示文稿时，AE 随技能提供标准库制作器、文件层检查、可选工具渲染与逐页证据规则（[generation-pptx 指引](skill/annotation-everything/references/generation-pptx.zh-CN.md)）；PPTX 登记在 `ae-report-record/1` 的可选 `deliverables[]` 里，含调用依据、文件哈希、逐页渲染证据、跨格式数字一致性与如实披露的 PowerPoint 实测状态。网页版报告流程不变，审阅回写白名单不变；没有该字段的旧记录继续有效。
 
 默认提供[报告基础样式](skill/annotation-everything/references/report-base.css)。材料读取依赖宿主实际可用的能力。Agent 登记已读、部分读取或无法读取的范围与原因，保留关键结论、数值的引用和计算口径；缺口与偏离项如实披露，全部实质材料不可读时不能宣布初稿完成。报告、所需讲稿与 `report-record.json` 核验记录保存在受控材料位置，记录契约和操作步骤见生成指引。
 
@@ -494,6 +498,9 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── pptx_reader.py             PPTX 包安全读取：OOXML 元素模型、能力矩阵与幻灯片身份
 │   ├── pptx_report.py             PPTX 对照页构建：本机 LibreOffice/Poppler 渲染与字体证据
 │   ├── pptx_edit.py               回写 PPTX 文本、备注与白名单几何/样式：预检、快照与原子替换
+│   ├── pptx_build.py              内置 PPTX 制作器：按 ae-pptx-deck/1 规格确定性写出可编辑文稿（版式、主题、章节、原生图表、备注）
+│   ├── pptx_check.py              生成类 PPTX 的文件层检查：部件、关系、版式、图表结构与章节
+│   ├── pptx_render.py             经可选 LibreOffice/poppler 把 PPTX 渲染成逐页 PNG，并写带哈希的渲染清单
 │   ├── report_check.py            报告产物核验：确定规则、覆盖与交付判定
 │   ├── i18n.py                    读取共享词典，并按所选语言插值；持进程级的界面语言状态（入口设置一次，各模块共用）；命令行共用的语言样板（取 --locale、翻译 argparse 报错、报告非法语言）
 │   ├── update.py                  检查正式版本并更新技能副本
@@ -534,6 +541,10 @@ tests/test_docx_review.py          DOCX 渲染、分页、不可信输入与集�
 tests/test_docx_anchor.py          DOCX 批注段落定位、重建重映射、show 与导出
 tests/test_docx_edit.py            DOCX 回写、字节保留、写前闸门、失败恢复与命令行
 tests/test_pptx_reader.py          PPTX 包读取、元素模型、能力矩阵与不可信输入
+tests/test_pptx_build.py           内置 PPTX 制作器：deck 规格校验、可编辑包、主题/版式/图表/备注与确定性
+tests/test_pptx_check.py           PPTX 文件层检查与合成反例（关系缺失、图表结构、证据陈旧）
+tests/test_pptx_render.py          假工具下的渲染探测：缺失诊断与清单哈希绑定
+tests/test_report_check_deliverables.py  额外交付判定：哈希绑定、页面覆盖、跨格式一致性与实测披露
 tests/test_pptx_report.py          PPTX 对照页构建、渲染诊断、字体证据与格式路由
 tests/test_pptx_annotations.py     PPTX 幻灯片定位：存储契约与整页/元素/文本/点/区域字段
 tests/test_pptx_remap.py           PPTX 重建重映射、批注交换与演讲者备注处理
