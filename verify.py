@@ -1344,23 +1344,23 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
             try:
                 child_env = dict(os.environ)
                 popen_kwargs = {}
-                if os.name == "nt":
-                    child_env.setdefault("PYTHONIOENCODING", "utf-8")
-                    popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-                    if lock_fds:
-                        import msvcrt
-                        os_handles = []
-                        for fd in lock_fds:
-                            os.set_inheritable(fd, True)
-                            os_handles.append(msvcrt.get_osfhandle(fd))
-                        popen_kwargs["startupinfo"] = subprocess.STARTUPINFO(
-                            lpAttributeList={"handle_list": os_handles}
-                        )
-                else:
-                    popen_kwargs["start_new_session"] = True
-                    popen_kwargs["pass_fds"] = lock_fds
-                child_argv = _resolve_command_argv(child_argv, child_env)
                 try:
+                    if os.name == "nt":
+                        child_env.setdefault("PYTHONIOENCODING", "utf-8")
+                        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+                        if lock_fds:
+                            import msvcrt
+                            os_handles = []
+                            for fd in lock_fds:
+                                os.set_inheritable(fd, True)
+                                os_handles.append(msvcrt.get_osfhandle(fd))
+                            popen_kwargs["startupinfo"] = subprocess.STARTUPINFO(
+                                lpAttributeList={"handle_list": os_handles}
+                            )
+                    else:
+                        popen_kwargs["start_new_session"] = True
+                        popen_kwargs["pass_fds"] = lock_fds
+                    child_argv = _resolve_command_argv(child_argv, child_env)
                     proc = subprocess.Popen(child_argv, cwd=str(REPO), env=child_env,
                                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                             text=True, encoding="utf-8", errors="replace", **popen_kwargs)

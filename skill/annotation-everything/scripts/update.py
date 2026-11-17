@@ -51,7 +51,7 @@ class UpdateError(Exception):
 
 def update_storage(copy: Path) -> Path:
     key = hashlib.sha256(os.fsencode(str(copy))).hexdigest()[:24]
-    if _is_windows():
+    if fsutil.is_windows():
         base = os.environ.get("XDG_DATA_HOME") or os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
     else:
         base = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
@@ -66,10 +66,6 @@ def update_storage(copy: Path) -> Path:
 def version(value):
     match = VERSION.fullmatch(value) if isinstance(value, str) else None
     return tuple(int(part) for part in match.groups()) if match else None
-
-
-def _is_windows() -> bool:
-    return os.name == "nt"
 
 
 def git(repo: Path, *args: str, timeout: int = 15) -> str:
@@ -217,6 +213,23 @@ def _windows_process_cwd(pid: int):
         return None
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    if hasattr(kernel32, "IsWow64Process"):
+        kernel32.IsWow64Process.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+        kernel32.IsWow64Process.restype = wintypes.BOOL
+    kernel32.ReadProcessMemory.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ]
+    kernel32.ReadProcessMemory.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    ntdll.NtQueryInformationProcess.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+        wintypes.ULONG, ctypes.POINTER(wintypes.ULONG),
+    ]
+    ntdll.NtQueryInformationProcess.restype = ctypes.c_long
     handle = kernel32.OpenProcess(0x0410, False, pid)
     if not handle:
         return None
@@ -269,7 +282,7 @@ def _windows_process_cwd(pid: int):
 
 
 def process_cwd(pid: int):
-    if _is_windows():
+    if fsutil.is_windows():
         return _windows_process_cwd(pid)
     if sys.platform == "darwin":
         try:
@@ -285,7 +298,7 @@ def process_cwd(pid: int):
 
 
 def _list_processes():
-    if _is_windows():
+    if fsutil.is_windows():
         return _windows_list_processes()
     try:
         done = subprocess.run(["ps", "-ww", "-eo", "pid=,command="], stdin=subprocess.DEVNULL,
@@ -315,7 +328,7 @@ def has_legacy_process(copy: Path, record: dict) -> bool:
                      if isinstance(item, dict) and isinstance(item.get("path"), str))
     aliases = {str(root / "scripts" / name) for root in [copy, *roots] for name in names}
     aliases |= {path.removeprefix("/private") for path in aliases if path.startswith("/private/var/")}
-    win = _is_windows()
+    win = fsutil.is_windows()
     for pid, command in procs:
         if pid == os.getpid() or not command:
             continue
@@ -485,7 +498,7 @@ def main(argv=None) -> int:
     copy = Path(__file__).resolve().parent.parent
     if args.mode == "auto" and os.environ.get("AE_AUTO_UPDATE") == "0":
         return 0
-    if _is_windows() and args.mode in ("auto", "now"):
+    if fsutil.is_windows() and args.mode in ("auto", "now"):
         if args.mode == "auto":
             print(translate("cli.update.windowsManual"))
             return 0
@@ -524,7 +537,7 @@ def main(argv=None) -> int:
                     print(translate("cli.update.current", version=record["version"]))
                 return 0
             if args.mode == "check":
-                msg_key = "cli.update.availableWindowsManual" if _is_windows() else "cli.update.available"
+                msg_key = "cli.update.availableWindowsManual" if fsutil.is_windows() else "cli.update.available"
                 print(translate(msg_key, installed=record["version"], latest=tag[1:]))
                 return 0
             release = clone_release(repo, cache, tag, commit)

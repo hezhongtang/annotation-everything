@@ -681,6 +681,32 @@ class LedgerPruneTests(unittest.TestCase):
         self.assertIn("requires --under or --all", result.stderr)
         self.assertIn("1000000000000000", self.ledger.entries())
 
+    def test_win_metadata_dir_close_configures_closehandle_argtypes_and_restype(self):
+        import ctypes
+        from ctypes import wintypes
+
+        seen = {}
+
+        class CheckedClose:
+            argtypes = None
+            restype = None
+
+            def __call__(self, handle):
+                seen["argtypes"] = self.argtypes
+                seen["restype"] = self.restype
+                seen["handle"] = handle
+                return 1
+
+        class FakeKernel32:
+            CloseHandle = CheckedClose()
+
+        ref = self.ledger._WinMetadataDir(self.root, self.root, (1 << 40) + 7, (1, 2))
+        with unittest.mock.patch.object(ctypes, "WinDLL", return_value=FakeKernel32(), create=True):
+            ref.close()
+        self.assertEqual(seen["argtypes"], [wintypes.HANDLE])
+        self.assertEqual(seen["restype"], wintypes.BOOL)
+        self.assertEqual(seen["handle"], (1 << 40) + 7)
+
 
 class OverviewPruneTests(unittest.TestCase):
     def setUp(self):
@@ -811,6 +837,48 @@ class OverviewPruneTests(unittest.TestCase):
         self.assertFalse((orphan / ".agent-binding.json").exists())
         self.assertEqual((orphan / "notes.json").read_text(encoding="utf-8"), "keep-notes")
         self.assertEqual(list(orphan.glob(".annotation-prune-*")), [])
+
+    def test_win_metadata_dir_current_path_unsafe_never_escapes_prune_stale(self):
+        # 每次 current_path() 调用分别对应：plan(2次), _metadata_lock_fd(1次), plan复核(2次),
+        # _metadata_names(1次), _quarantine_metadata(1次), plan再复核(2次), _cleanup_quarantines(1次)
+        ledger_mod = self.ledger
+        for fail_at in (3, 6, 7, 10):
+            rid = f"70000000000000{fail_at:02d}"
+            orphan = self.scope / f"win-unsafe-{fail_at}"
+            orphan.mkdir(exist_ok=True)
+            (orphan / "review.json").write_text("{}", encoding="utf-8")
+            (orphan / ".agent-binding.json").write_text("binding", encoding="utf-8")
+            (orphan / "notes.json").write_text("keep-notes", encoding="utf-8")
+            self.add(rid, orphan)
+            self.write_ledger()
+            calls = {"n": 0}
+
+            class FlakyWinDir(ledger_mod._WinMetadataDir):
+                def current_path(self) -> Path:
+                    calls["n"] += 1
+                    if calls["n"] == fail_at:
+                        raise ledger_mod._MetadataUnsafe("directory-changed")
+                    return self.initial_path
+
+                def close(self) -> None:
+                    self.closed = True
+
+            def fake_open(directory: Path, root: Path | None):
+                resolved = directory.resolve()
+                info = resolved.lstat()
+                return FlakyWinDir(resolved, root, 1, (info.st_dev, info.st_ino)), resolved
+
+            with self.subTest(fail_at=fail_at):
+                with unittest.mock.patch.object(ledger_mod, "_open_metadata_dir", side_effect=fake_open):
+                    result = ledger_mod.prune_stale(all_stale=True, under=self.scope, review_ids=[rid], delete_metadata=True)
+                if fail_at in (3, 6, 7):
+                    self.assertEqual([(r["reviewId"], r["reason"]) for r in result["skipped"]], [(rid, "directory-changed")])
+                    self.assertEqual(result["removed"], [])
+                    self.assertTrue((orphan / ".agent-binding.json").is_file())
+                else:
+                    self.assertEqual(len(result["metadataErrors"]), 1, result)
+                    self.assertEqual(result["metadataErrors"][0]["reviewId"], rid)
+                    self.assertEqual(result["metadataErrors"][0]["detail"], "directory-changed")
 
     def test_snapshot_computes_default_prune_eligibility_from_the_ledger_path(self):
         import review_overview

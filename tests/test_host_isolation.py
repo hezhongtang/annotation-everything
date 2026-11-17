@@ -557,6 +557,38 @@ class ModuleRequirementTests(TemporaryLockDirTestCase):
         self.assertIn("host-state", report["held"],
                       "discover 加载的敏感模块没有取 host-state 锁")
 
+    def test_open_windows_lock_configures_closehandle_argtypes_and_restype(self):
+        import ctypes
+        from ctypes import wintypes
+
+        seen = {}
+
+        class CheckedFn:
+            def __init__(self, name, impl):
+                self.name = name
+                self.impl = impl
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                seen[self.name] = (self.argtypes, self.restype)
+                return self.impl(*args)
+
+        class FakeKernel32:
+            CreateFileW = CheckedFn("CreateFileW", lambda *_a: (1 << 40) + 9)
+            CloseHandle = CheckedFn("CloseHandle", lambda _h: 1)
+
+        class FakeMsvcrt:
+            @staticmethod
+            def open_osfhandle(_h, _flags):
+                raise OSError("synthetic osfhandle failure")
+
+        with mock.patch.object(ctypes, "WinDLL", return_value=FakeKernel32(), create=True), \
+                mock.patch.dict(sys.modules, {"msvcrt": FakeMsvcrt}):
+            with self.assertRaises(OSError):
+                hi._open_windows_lock(self.lock_root / "x.lock", "host-state", 1.0, 0.0)
+        self.assertEqual(seen["CloseHandle"], ([wintypes.HANDLE], wintypes.BOOL))
+
 
 if __name__ == "__main__":
     unittest.main()

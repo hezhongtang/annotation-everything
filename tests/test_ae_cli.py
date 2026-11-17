@@ -224,7 +224,7 @@ class WindowsUpdateNoticeTests(unittest.TestCase):
 
         for locale, needle in (("zh-CN", "手动"), ("en", "manual")):
             out, err = io.StringIO(), io.StringIO()
-            with unittest.mock.patch.object(update, "_is_windows", return_value=True, create=True), \
+            with unittest.mock.patch.object(update.fsutil, "is_windows", return_value=True), \
                     unittest.mock.patch("update.has_legacy_process", side_effect=AssertionError("should not run ps")), \
                     unittest.mock.patch("update.exchange_directories", side_effect=AssertionError("should not swap")), \
                     contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -236,14 +236,14 @@ class WindowsUpdateNoticeTests(unittest.TestCase):
 
         out_quiet, err_quiet = io.StringIO(), io.StringIO()
         with unittest.mock.patch.dict(os.environ, {"AE_AUTO_UPDATE": "0"}), \
-                unittest.mock.patch.object(update, "_is_windows", return_value=True, create=True), \
+                unittest.mock.patch.object(update.fsutil, "is_windows", return_value=True), \
                 contextlib.redirect_stdout(out_quiet), contextlib.redirect_stderr(err_quiet):
             code = update.main(["auto", "--locale", "en"])
         self.assertEqual(code, 0)
         self.assertEqual(out_quiet.getvalue() + err_quiet.getvalue(), "")
 
         out_now, err_now = io.StringIO(), io.StringIO()
-        with unittest.mock.patch.object(update, "_is_windows", return_value=True, create=True), \
+        with unittest.mock.patch.object(update.fsutil, "is_windows", return_value=True), \
                 unittest.mock.patch("update.has_legacy_process", side_effect=AssertionError("should not run ps")), \
                 contextlib.redirect_stdout(out_now), contextlib.redirect_stderr(err_now):
             code_now = update.main(["now", "--locale", "en"])
@@ -378,6 +378,33 @@ class AeUpgradeTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("locked", err.getvalue().lower())
         self.assertFalse((self.copy / "upgrade-marker.txt").exists())
+        self.assertEqual(json.loads((self.copy / RECORD_NAME).read_text(encoding="utf-8"))["version"], old_version)
+
+    def test_upgrade_rolls_back_when_post_install_verification_fails(self):
+        import contextlib, io, unittest.mock
+        self.assertEqual(self.run_repo_ae("install").returncode, 0)
+        self.bump_repo_version("9.9.9")
+        old_version = json.loads((self.copy / RECORD_NAME).read_text(encoding="utf-8"))["version"]
+
+        import ae
+        self.addCleanup(ae.set_locale, ae.current_locale())
+        real_write_record = ae.write_record
+
+        def corrupt_write_record(dst, repo, links=None):
+            path = real_write_record(dst, repo, links)
+            if ".ae-upgrade-stage-" in str(dst):
+                (dst / "SKILL.md").unlink()
+            return path
+
+        with unittest.mock.patch.dict(os.environ, self.env), \
+                unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")), \
+                unittest.mock.patch.object(ae, "list_processes", return_value=[]), \
+                unittest.mock.patch.object(ae, "write_record", side_effect=corrupt_write_record), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = ae.main(["upgrade", "--locale", "en"])
+        self.assertNotEqual(code, 0)
+        self.assertTrue((self.copy / "SKILL.md").is_file(), "后置校验失败后必须回滚旧副本")
+        self.assertFalse((self.copy / "upgrade-marker.txt").exists(), "不得留下失败的新版文件")
         self.assertEqual(json.loads((self.copy / RECORD_NAME).read_text(encoding="utf-8"))["version"], old_version)
 
 

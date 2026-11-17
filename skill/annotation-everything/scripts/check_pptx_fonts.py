@@ -19,6 +19,7 @@ import zlib
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fsutil  # noqa: E402
 import i18n  # noqa: E402
 
 PART = re.compile(r"^ppt/(?:slides/slide\d+|slideMasters/slideMaster\d+|slideLayouts/slideLayout\d+|theme/theme\d+)\.xml$")
@@ -147,10 +148,6 @@ _WIN_FONT_ALIASES = {
 }
 
 
-def _is_windows() -> bool:
-    return os.name == "nt"
-
-
 def _parse_windows_registry_fonts(names: list[str]) -> set[str]:
     fonts: set[str] = set()
     for raw_name in names:
@@ -203,7 +200,7 @@ def find_pdffonts() -> str:
     found = which("pdffonts")
     if found:
         return found
-    if _is_windows():
+    if fsutil.is_windows():
         from pptx_report import windows_poppler_dirs
 
         for directory in windows_poppler_dirs():
@@ -219,7 +216,7 @@ def installed_fonts() -> tuple[set[str], bool]:
         result = subprocess.run([fc_list or "fc-list", "--format=%{family}\\n"], capture_output=True, text=True,
                                 encoding="utf-8", errors="replace", timeout=TOOL_TIMEOUT, check=False)
     except FileNotFoundError as e:
-        if _is_windows():
+        if fsutil.is_windows():
             return _windows_registry_fonts(), False
         raise CheckError(T("font.err.noFcList")) from e
     except (OSError, subprocess.TimeoutExpired) as e:

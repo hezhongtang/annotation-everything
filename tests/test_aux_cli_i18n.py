@@ -25,7 +25,7 @@ class FontCliLanguageTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="font-i18n-test-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.pptx = self.root / "synthetic.pptx"
@@ -162,7 +162,7 @@ class SkillScanLanguageTests(unittest.TestCase):
         # 别的测试可能在进程内定过语言（set_locale 会定住）；先解开，AE_LOCALE 才说得上话
         self.addCleanup(skill_sources.set_locale, None)
         skill_sources.set_locale(None)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.source = self.root / "skills"
         (self.source / "broken").mkdir(parents=True)
         (self.source / "broken" / "SKILL.md").write_text("没有 frontmatter\n", encoding="utf-8")
@@ -247,7 +247,7 @@ class LedgerErrorLanguageTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ledger-i18n-test-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.home = self.root / "ledger"
         self.home.mkdir()
         self.saved = os.environ.get("AE_HOME")

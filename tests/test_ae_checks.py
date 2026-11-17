@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -45,13 +46,21 @@ class CheckFunctionTests(unittest.TestCase):
         values.update(overrides)
         return ae.DoctorContext(**values)
 
+    def assert_fix_install(self, fix_command: str):
+        tokens = ae.command_tokens(fix_command)
+        self.assertGreaterEqual(len(tokens), 3, fix_command)
+        self.assertEqual(Path(tokens[1]).name, "ae.py", fix_command)
+        self.assertEqual(tokens[2:], ["install"], fix_command)
+        if os.name != "nt":
+            self.assertTrue(fix_command.rstrip().endswith(FIX_INSTALL), fix_command)
+
     def test_python_version_passes_on_modern_interpreter(self):
         self.assertEqual(ae.check_python(self.ctx()).level, PASS)
 
     def test_copy_present_fails_without_fix_when_missing(self):
         result = ae.check_copy_present(self.ctx())
         self.assertEqual(result.level, FAIL)
-        self.assertTrue(result.fix_command.rstrip().endswith(FIX_INSTALL), result.fix_command)
+        self.assert_fix_install(result.fix_command)
         self.assertEqual(result.code, "skill-copy-present")
         self.assertEqual(result.category, "安装状态")
 
@@ -69,7 +78,7 @@ class CheckFunctionTests(unittest.TestCase):
         result = ae.check_copy_sync(self.ctx())
         self.assertEqual(result.level, FAIL)
         self.assertEqual(result.code, "skill-copy-sync")
-        self.assertTrue(result.fix_command.rstrip().endswith(FIX_INSTALL), result.fix_command)
+        self.assert_fix_install(result.fix_command)
 
     def test_copy_sync_fails_on_extra_file_in_copy(self):
         self.install_copy()
@@ -100,7 +109,7 @@ class CheckFunctionTests(unittest.TestCase):
         result = ae.check_copy_version(self.ctx(record={**self.record, "version": "0.1.0"}))
         self.assertEqual(result.level, FAIL)
         self.assertEqual(result.code, "skill-copy-version")
-        self.assertTrue(result.fix_command.rstrip().endswith(FIX_INSTALL), result.fix_command)
+        self.assert_fix_install(result.fix_command)
 
     def test_copy_version_skips_comparison_without_record_or_repo(self):
         self.install_copy()

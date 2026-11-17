@@ -266,10 +266,19 @@ def skill_copy_dir() -> Path:
     return Path(skills_root).expanduser() / SKILL_NAME
 
 
+def _reject_unc_path(raw) -> None:
+    s = os.fspath(raw).strip().replace("\\", "/")
+    if len(s) > 2 and s.startswith("//") and s[2] != "/":
+        if len(s) >= 7 and s[:4] == "//?/" and s[4].isalpha() and s[5] == ":" and s[6] == "/":
+            return
+        raise CommandError(f"Unsupported UNC or device path: {raw}")
+
+
 def resolve_copy_dir(target) -> Path:
     """技能副本的位置：--target 显式给出时用 <目录>/技能名，否则用缺省位置（skill_copy_dir）。"""
     if target is None:
         return skill_copy_dir()
+    _reject_unc_path(target)
     return Path(target).expanduser() / SKILL_NAME
 
 
@@ -308,6 +317,7 @@ def parse_link_agents(spec: str) -> list:
         if sep:
             if not name or not raw.strip():
                 raise CommandError(T("cli.ae.install.badLinkSpec", spec=token))
+            _reject_unc_path(raw.strip())
             directory = Path(raw.strip()).expanduser()
             if not directory.is_absolute():
                 directory = Path(os.path.abspath(str(directory)))
@@ -372,7 +382,7 @@ def _quote_cli(arg: str) -> str:
         return shlex.quote(arg)
     if arg and not _PS_UNSAFE_RE.search(arg):
         return arg
-    if not any(ch in arg for ch in ('"', "$", "`")):
+    if not any(ch in arg for ch in ('"', "$", "`")) and not arg.endswith("\\"):
         return f'"{arg}"'
     return "'" + arg.replace("'", "''") + "'"
 
@@ -473,9 +483,56 @@ def create_link(name: str, directory: Path, copy_dir: Path) -> dict:
     return {"agent": name, "path": str(link)}
 
 
+def _strip_win_device_prefix(raw: str) -> str:
+    if raw.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + raw[8:]
+    if raw.startswith("\\\\?\\"):
+        return raw[4:]
+    return raw
+
+
+def _canon_link_target(raw: str) -> str:
+    cleaned = _strip_win_device_prefix(raw)
+    resolved = _strip_win_device_prefix(os.path.realpath(cleaned))
+    norm = os.path.normpath(resolved)
+    return os.path.normcase(norm) if _is_windows() else norm
+
+
+def _link_targets_copy(link: Path, skill_copy: Path) -> bool:
+    """链接是否为指向技能副本的软链接（兼容 Windows \\\\?\\ 前缀、大小写、短路径与悬空链接）。"""
+    if not link.is_symlink():
+        return False
+    norm_fn = os.path.normcase if _is_windows() else (lambda s: s)
+    expected = {
+        _canon_link_target(str(skill_copy)),
+        norm_fn(os.path.normpath(_strip_win_device_prefix(str(skill_copy)))),
+    }
+    if _canon_link_target(str(link)) in expected:
+        return True
+    try:
+        raw_target = os.readlink(str(link))
+    except OSError:
+        return False
+    stripped = _strip_win_device_prefix(raw_target)
+    if not os.path.isabs(stripped):
+        stripped = os.path.join(str(link.parent), stripped)
+    return _canon_link_target(stripped) in expected or norm_fn(os.path.normpath(stripped)) in expected
+
+
+def _link_agent_spec(name: str, directory: Path) -> str:
+    if name in LINK_AGENTS and link_target_dir(name) == directory:
+        return name
+    return f"{name}={directory}"
+
+
+def _privilege_error_message(repo: Optional[Path], specs: list, target: Optional[Path]) -> str:
+    direct = install_fix(repo, target)
+    retry = install_link_fix(repo, specs, target) if specs else direct
+    return T("cli.ae.install.linkPrivilege", commands=direct, retry=retry)
+
+
 def merged_links(previous: Optional[dict], copy_dir: Path, created: list) -> list:
     """合并历史记录与本次新建的链接：只保留仍是链接且指向技能副本的条目，按路径去重。"""
-    target = os.path.realpath(str(copy_dir))
     entries = []
     if isinstance(previous, dict) and isinstance(previous.get("links"), list):
         entries.extend(entry for entry in previous["links"] if isinstance(entry, dict))
@@ -485,7 +542,7 @@ def merged_links(previous: Optional[dict], copy_dir: Path, created: list) -> lis
         path = entry.get("path")
         if not isinstance(path, str) or path in seen:
             continue
-        if Path(path).is_symlink() and os.path.realpath(path) == target:
+        if _link_targets_copy(Path(path), copy_dir):
             merged.append({"agent": entry.get("agent", ""), "path": path})
             seen.add(path)
     return merged
@@ -538,8 +595,8 @@ def cmd_install(args) -> int:
                 Path(entry["path"]).unlink()
         if not existed_before:
             shutil.rmtree(dst, ignore_errors=True)
-        commands = join(install_fix(repo, directory) for _name, directory in agents)
-        print(T("cli.ae.install.linkPrivilege", commands=commands), file=sys.stderr)
+        specs = [_link_agent_spec(name, directory) for name, directory in agents]
+        print(_privilege_error_message(repo, specs, getattr(args, "target", None)), file=sys.stderr)
         return 2
     links = merged_links(previous, dst, created)
     write_record(dst, repo, links)
@@ -751,7 +808,6 @@ def cmd_upgrade(args) -> int:
                 return 1
             try:
                 os.replace(stage, dst)
-                installed_new = True
             except BaseException as exc:
                 try:
                     os.replace(backup, dst)
@@ -781,20 +837,33 @@ def cmd_upgrade(args) -> int:
                         print(T("cli.ae.upgrade.recoveryNeeded", backup=backup, target=dst,
                                 detail=f"{exc}; rollback: {rb_exc}"), file=sys.stderr)
                         return 2
-                    commands = join(install_fix(repo, directory) for _name, directory in agents)
-                    print(T("cli.ae.install.linkPrivilege", commands=commands), file=sys.stderr)
+                    specs = [_link_agent_spec(name, directory) for name, directory in agents]
+                    print(_privilege_error_message(repo, specs, target), file=sys.stderr)
                     return 2
                 write_record(dst, repo, merged_links(record, dst, created))
             if not (dst / RECORD_NAME).is_file() or not (dst / "SKILL.md").is_file():
-                raise CommandError(T("cli.ae.upgrade.rolledBack", path=dst, detail="verification-failed"))
+                try:
+                    if dst.exists():
+                        os.replace(dst, stage)
+                    os.replace(backup, dst)
+                except OSError as rb_exc:
+                    keep_backup = True
+                    print(T("cli.ae.upgrade.recoveryNeeded", backup=backup, target=dst,
+                            detail=f"verification-failed; rollback: {rb_exc}"), file=sys.stderr)
+                    return 1
+                print(T("cli.ae.upgrade.rolledBack", path=dst, detail="verification-failed"), file=sys.stderr)
+                return 1
+            installed_new = True
             print(T("cli.ae.upgrade.done", installed=old_version, version=new_version, path=dst))
             if created:
                 print(T("cli.ae.install.links",
                         list=join(f"{entry['agent']}（{entry['path']}）" for entry in created)))
             return 0
         finally:
-            if moved_old and not installed_new and not keep_backup and backup.exists() and not dst.exists():
+            if moved_old and not installed_new and not keep_backup and backup.exists():
                 try:
+                    if dst.exists():
+                        os.replace(dst, stage)
                     os.replace(backup, dst)
                 except OSError:
                     keep_backup = True
@@ -932,13 +1001,10 @@ def scan_links(skill_copy: Path) -> list:
 
     返回条目与安装记录 links 同构：{"agent": 名称, "path": 链接绝对路径}。
     """
-    target = os.path.realpath(str(skill_copy))
     found = []
     for agent in LINK_AGENTS:
         link = link_path(agent)
-        if not link.is_symlink():
-            continue
-        if os.path.realpath(str(link)) == target or os.readlink(str(link)) == target:
+        if _link_targets_copy(link, skill_copy):
             found.append({"agent": agent, "path": str(link)})
     return found
 
@@ -948,7 +1014,7 @@ def _link_status(link: Path, skill_copy: Path) -> str:
     if link.is_symlink():
         if not link.exists():
             return "悬空"
-        if os.path.realpath(str(link)) != os.path.realpath(str(skill_copy)):
+        if not _link_targets_copy(link, skill_copy):
             return "指向别处"
         return "正常"
     if link.exists():
@@ -1298,6 +1364,43 @@ def serve_dir_argument(cmdline: str, pid: Optional[int] = None,
     return None
 
 
+def _win32_process_apis(*, include_ntdll: bool = False):
+    """配置 Win32 kernel32/ntdll 进程与事件 API 的 argtypes/restype，避免 64 位句柄截断。"""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    if hasattr(kernel32, "IsWow64Process"):
+        kernel32.IsWow64Process.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+        kernel32.IsWow64Process.restype = wintypes.BOOL
+    kernel32.ReadProcessMemory.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ]
+    kernel32.ReadProcessMemory.restype = wintypes.BOOL
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateProcess.restype = wintypes.BOOL
+    kernel32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.OpenEventW.restype = wintypes.HANDLE
+    kernel32.SetEvent.argtypes = [wintypes.HANDLE]
+    kernel32.SetEvent.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    if not include_ntdll:
+        return ctypes, wintypes, kernel32
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    ntdll.NtQueryInformationProcess.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+        wintypes.ULONG, ctypes.POINTER(wintypes.ULONG),
+    ]
+    ntdll.NtQueryInformationProcess.restype = ctypes.c_long
+    return ctypes, wintypes, kernel32, ntdll
+
+
 def _windows_process_cwd(pid: int) -> Optional[str]:
     """通过 Win32 PEB 读取同架构/同权限进程的当前工作目录；受限或跨架构时返回 None。"""
     if pid <= 0:
@@ -1308,12 +1411,10 @@ def _windows_process_cwd(pid: int) -> Optional[str]:
         except OSError:
             return None
     import ctypes
-    from ctypes import wintypes
 
     if ctypes.sizeof(ctypes.c_void_p) != 8:
         return None
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    ctypes, wintypes, kernel32, ntdll = _win32_process_apis(include_ntdll=True)
     # PROCESS_QUERY_INFORMATION (0x0400) | PROCESS_VM_READ (0x0010)
     handle = kernel32.OpenProcess(0x0410, False, pid)
     if not handle:
@@ -1950,7 +2051,8 @@ def repair_links(ctx: DoctorContext) -> tuple:
             recreate_link(link, ctx.skill_copy)
         except OSError as exc:
             if _is_symlink_privilege_error(exc):
-                stuck.append(T("cli.ae.install.linkPrivilege", commands=install_fix(ctx.repo, link.parent)))
+                spec = link_fix_spec(entry)
+                stuck.append(_privilege_error_message(ctx.repo, [spec] if spec else [], ctx.target))
                 continue
             raise
         created.append({"agent": entry.get("agent", ""), "path": entry["path"]})
@@ -2181,10 +2283,7 @@ def _process_stopped(pid: int) -> bool:
     if pid <= 0:
         return True
     if _is_windows():
-        import ctypes
-        from ctypes import wintypes
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        ctypes, wintypes, kernel32 = _win32_process_apis()
         # PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         handle = kernel32.OpenProcess(0x1000, False, pid)
         if not handle:
@@ -2278,10 +2377,7 @@ def same_server_process(pid: int, command: str, extra_copy: Optional[Path] = Non
 
 
 def _win_signal_stop_event(pid: int) -> bool:
-    import ctypes
-    from ctypes import wintypes
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _ctypes, _wintypes, kernel32 = _win32_process_apis()
     # EVENT_MODIFY_STATE = 0x0002
     handle = kernel32.OpenEventW(0x0002, False, f"Local\\ae-stop-{int(pid)}")
     if not handle:
@@ -2293,9 +2389,7 @@ def _win_signal_stop_event(pid: int) -> bool:
 
 
 def _win_terminate_process(pid: int) -> bool:
-    import ctypes
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _ctypes, _wintypes, kernel32 = _win32_process_apis()
     # PROCESS_TERMINATE = 0x0001
     handle = kernel32.OpenProcess(0x0001, False, int(pid))
     if not handle:
@@ -2357,7 +2451,10 @@ def stop_servers(servers: list, wait_seconds: float = 5.0,
 def ledger_home() -> Path:
     """审阅台账目录：与 skill/annotation-everything/scripts/ledger.py 的 home() 同一约定。"""
     env = os.environ.get("AE_HOME")
-    return Path(env).expanduser().resolve() if env else Path.home() / ".annotation-everything"
+    if env:
+        _reject_unc_path(env)
+        return Path(env).expanduser().resolve()
+    return Path.home() / ".annotation-everything"
 
 
 def ledger_review_dirs(home_dir: Path) -> list:
@@ -2427,12 +2524,11 @@ def remove_links(entries: list, skill_copy: Path) -> list:
     只删软链接：指向别处的不动，已变成普通文件/目录或已消失的不动。
     返回 [(路径, 处理说明), ...] 供输出。
     """
-    target = os.path.realpath(str(skill_copy))
     report = []
     for entry in entries:
         link = Path(entry["path"])
         if link.is_symlink():
-            if os.path.realpath(str(link)) == target or os.readlink(str(link)) == target:
+            if _link_targets_copy(link, skill_copy):
                 link.unlink()
                 report.append((str(link), T("cli.ae.uninstall.linkRemoved")))
             else:

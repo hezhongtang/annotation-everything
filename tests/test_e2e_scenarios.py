@@ -309,7 +309,7 @@ class RunnerOutcomeTests(unittest.TestCase):
         def interrupt(results):
             results.append((True, "completed check"))
             try:
-                os.kill(os.getpid(), signal.SIGINT)
+                signal.raise_signal(signal.SIGINT)
             except KeyboardInterrupt:
                 raise RuntimeError("synthetic disconnected driver")
         code, scenes, _ = self.run_main(interrupt, connected=False)

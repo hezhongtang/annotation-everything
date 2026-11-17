@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import fsutil
 import pptx_reader as pr
 
 # review.json 的 format.version：PPT 审阅元数据的版本
@@ -44,10 +45,6 @@ def is_pptx(path: Path) -> bool:
 def is_ppt(path: Path) -> bool:
     """旧版二进制 .ppt：不进 PPT 分支，提示先转换为 .pptx。"""
     return Path(path).suffix.lower() == ".ppt"
-
-
-def _is_windows() -> bool:
-    return os.name == "nt"
 
 
 def _windows_env_dirs(*names: str) -> list[Path]:
@@ -118,7 +115,7 @@ def find_soffice() -> str | None:
     for candidate in SOFFICE_CANDIDATES:
         if Path(candidate).is_file():
             return candidate
-    if _is_windows():
+    if fsutil.is_windows():
         for candidate in _windows_soffice_candidates():
             if candidate.is_file():
                 return str(candidate)
@@ -131,7 +128,7 @@ def find_rasterizer() -> str | None:
     found = which("pdftoppm")
     if found:
         return found
-    if _is_windows():
+    if fsutil.is_windows():
         for directory in windows_poppler_dirs():
             candidate = directory / "pdftoppm.exe"
             if candidate.is_file():

@@ -4258,6 +4258,53 @@ class WindowsVerificationContractTests(VerifyEntryTestCase):
         rendered = verify.render_report(record, root=outside)
         self.assertIn(str(outside / "runs" / record["run_id"]) + os.sep, rendered)
 
+    def test_execute_group_restores_inheritable_false_when_startup_setup_fails(self):
+        import types
+        import unittest.mock as mock
+        import verify
+
+        artifact_dir = Path(self.temp.name) / "artifacts"
+        ctx = verify.RunContext(
+            run_id="20261116T000000Z-abc123",
+            artifact_dir=artifact_dir,
+            timeout=10,
+            echo=lambda _line: None,
+            quiet=True,
+        )
+        ctx.run_dir.mkdir(parents=True)
+        group = verify.Group(
+            name="unit",
+            title="Unit",
+            purpose="Synthetic",
+            argv=[sys.executable, "-c", "pass"],
+            equivalent="python3 -m unittest",
+            counter="none",
+            requires=(),
+        )
+        calls = []
+
+        class FakeMsvcrt:
+            @staticmethod
+            def get_osfhandle(fd):
+                if fd == 102:
+                    raise OSError("synthetic get_osfhandle failure")
+                return fd
+
+        fake_subprocess = mock.MagicMock()
+        fake_subprocess.CREATE_NEW_PROCESS_GROUP = 0x200
+        fake_subprocess.DEVNULL = subprocess.DEVNULL
+        fake_subprocess.PIPE = subprocess.PIPE
+        fake_subprocess.STDOUT = subprocess.STDOUT
+        fake_subprocess.STARTUPINFO = mock.MagicMock()
+
+        with mock.patch("verify.os.name", "nt"), \
+                mock.patch("verify.os.set_inheritable", side_effect=lambda fd, flag: calls.append((fd, flag))), \
+                mock.patch.dict(sys.modules, {"msvcrt": FakeMsvcrt}), \
+                mock.patch.object(verify, "subprocess", fake_subprocess):
+            with self.assertRaises(OSError):
+                verify._execute_group_body(group, ctx, lock_fds=(101, 102))
+        self.assertEqual(calls, [(101, True), (102, True), (101, False), (102, False)])
+
 
 if __name__ == "__main__":
     unittest.main()

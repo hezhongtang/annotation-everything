@@ -21,6 +21,11 @@ import ae
 SERVE = ROOT / ae.SERVE_PY
 
 
+def _join_cmd(argv) -> str:
+    items = [str(item) for item in argv]
+    return subprocess.list2cmdline(items) if os.name == "nt" else shlex.join(items)
+
+
 class RegressionCase(unittest.TestCase):
     """公共夹具：HOME、台账、技能副本都指向临时目录。"""
 
@@ -59,7 +64,7 @@ class RegressionCase(unittest.TestCase):
 class ReviewRegressionTests(RegressionCase):
     def test_failed_checks_always_include_a_diagnostic_command(self):
         self.ledger.mkdir()
-        cmd = shlex.join([sys.executable, str(SERVE), str(self.root / "gone"), "--port", "18900"])
+        cmd = _join_cmd([sys.executable, SERVE, self.root / "gone", "--port", "18900"])
         ctx = self.ctx(port_probe=lambda port: {"app": "other"} if port == 8765 else None,
                        process_lister=lambda: [(4242, cmd)])
         assigned = json.dumps({"version": 1, "reviews": {
@@ -77,7 +82,7 @@ class ReviewRegressionTests(RegressionCase):
         self.assertLessEqual({"ledger-readable", "port-pool", "orphan-servers"}, failed)
 
     def test_deleted_review_reports_port_from_command_line(self):
-        cmd = shlex.join([sys.executable, str(SERVE), str(self.root / "gone"), "--port=18900"])
+        cmd = _join_cmd([sys.executable, SERVE, self.root / "gone", "--port=18900"])
         result = ae.check_orphan_servers(self.ctx(process_lister=lambda: [(4242, cmd)]))
         self.assertEqual(result.level, ae.LEVEL_FAIL)
         self.assertIn("4242", result.message)
@@ -145,10 +150,10 @@ class ReviewRegressionTests(RegressionCase):
                 self.assertTrue(path.exists())
 
     def test_service_detection_ignores_mentions_and_unrelated_scripts(self):
-        own = shlex.join([sys.executable, str(SERVE), str(self.root / "review")])
+        own = _join_cmd([sys.executable, SERVE, self.root / "review"])
         fake = [(41001, "grep serve.py notes.txt"),
-                (41002, f"python3 {self.root}/other/serve.py /review"),
-                (41003, shlex.join([sys.executable, "-c", "pass", str(SERVE), "/review"])),
+                (41002, _join_cmd(["python3", self.root / "other" / "serve.py", "/review"])),
+                (41003, _join_cmd([sys.executable, "-c", "pass", SERVE, "/review"])),
                 (41004, own)]
         self.assertEqual([pid for pid, _ in ae.running_servers(lister=lambda: fake)], [41004])
 
@@ -181,7 +186,7 @@ class SecondReviewRegressionTests(RegressionCase):
 
     def test_serve_subcommand_mirrors_serve_py_main(self):
         review, entries = self.registered_review()
-        serve = lambda *args: shlex.join([sys.executable, str(SERVE), *args])
+        serve = lambda *args: _join_cmd([sys.executable, SERVE, *args])
         self.assertEqual(ae.serve_dir_argument(serve("serve", str(review), "--no-open")), str(review))
         self.assertEqual(ae.serve_dir_argument(serve("--no-open", "list")), "list")  # 选项在前时 list 是目录
         for sub in ("check", "status", "stop", "stop-status", "list", "forget", "prune"):
@@ -194,7 +199,7 @@ class SecondReviewRegressionTests(RegressionCase):
         processes = []
         for prefix in (("--locale", "en"), ("--locale=en",)):
             for sub in ("check", "status", "stop", "stop-status", "list", "forget", "prune"):
-                cmd = shlex.join([sys.executable, str(SERVE), *prefix, sub])
+                cmd = _join_cmd([sys.executable, SERVE, *prefix, sub])
                 processes.append((4300 + len(processes), cmd))
         self.assertEqual(ae.running_servers(lister=lambda: processes), [])
         with patch.object(ae, "served_review_dir") as probe:
@@ -212,7 +217,7 @@ class SecondReviewRegressionTests(RegressionCase):
             [str(review), "--locale", "en"],
         ]
         for args in invocations:
-            cmd = shlex.join([sys.executable, str(SERVE), *args, "--no-open"])
+            cmd = _join_cmd([sys.executable, SERVE, *args, "--no-open"])
             processes = [(4300, cmd)]
             with self.subTest(args=args), patch.object(ae, "served_review_dir", return_value=None):
                 self.assertEqual(ae.running_servers(lister=lambda: processes), processes)
@@ -220,7 +225,7 @@ class SecondReviewRegressionTests(RegressionCase):
 
     def test_rid_like_relative_dir_resolves_against_process_cwd(self):
         review, entries = self.registered_review("20241029")
-        cmd = shlex.join([sys.executable, str(SERVE), "20241029", "--no-open"])
+        cmd = _join_cmd([sys.executable, SERVE, "20241029", "--no-open"])
         with patch.object(ae, "process_cwd", return_value=str(self.root)):
             self.assertEqual(ae.find_orphan_servers(entries, lambda: [(4301, cmd)], lambda port: None), [])
 
@@ -343,7 +348,7 @@ class SecondReviewRegressionTests(RegressionCase):
     def test_purge_guard_runs_before_stopping_servers(self):
         self.ledger.mkdir()
         (self.ledger / "reviews.json").write_text("{invalid", encoding="utf-8")
-        server = [(4302, shlex.join([sys.executable, str(SERVE), str(self.root / "r")]))]
+        server = [(4302, _join_cmd([sys.executable, SERVE, self.root / "r"]))]
         with patch.object(ae, "running_servers", return_value=server), \
                 patch.object(ae, "stop_servers", return_value=[]) as stop, \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -360,9 +365,139 @@ class SecondReviewRegressionTests(RegressionCase):
 
     def test_process_listing_requests_untruncated_command_lines(self):
         done = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-        with patch.object(ae.subprocess, "run", return_value=done) as run:
+        with patch.object(ae, "_is_windows", return_value=False), \
+                patch.object(ae.subprocess, "run", return_value=done) as run:
             ae.list_processes()
         self.assertIn("-ww", run.call_args[0][0])
+
+        with patch.object(ae, "_is_windows", return_value=True), \
+                patch.object(ae, "_windows_powershell", return_value="powershell.exe"), \
+                patch.object(ae.subprocess, "run", return_value=done) as run_win:
+            ae.list_processes()
+        self.assertIn("Get-CimInstance", " ".join(run_win.call_args[0][0]))
+
+
+class Win32CtypesSafetyTests(RegressionCase):
+    """Win32 ctypes 句柄与指针 FFI 必须显式配置 argtypes/restype（防止 64 位截断）。"""
+
+    def test_ae_win32_apis_configure_exact_argtypes_and_restypes(self):
+        import ctypes
+        from ctypes import wintypes
+
+        expected = {
+            "OpenProcess": ([wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
+            "IsWow64Process": ([wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)], wintypes.BOOL),
+            "ReadProcessMemory": (
+                [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)],
+                wintypes.BOOL,
+            ),
+            "GetExitCodeProcess": ([wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)], wintypes.BOOL),
+            "TerminateProcess": ([wintypes.HANDLE, wintypes.UINT], wintypes.BOOL),
+            "OpenEventW": ([wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR], wintypes.HANDLE),
+            "SetEvent": ([wintypes.HANDLE], wintypes.BOOL),
+            "CloseHandle": ([wintypes.HANDLE], wintypes.BOOL),
+            "NtQueryInformationProcess": (
+                [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.ULONG, ctypes.POINTER(wintypes.ULONG)],
+                ctypes.c_long,
+            ),
+        }
+
+        class CheckedFn:
+            def __init__(self, name, impl):
+                self.name = name
+                self.impl = impl
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                exp_args, exp_res = expected[self.name]
+                if self.argtypes != exp_args or self.restype != exp_res:
+                    raise AssertionError(f"{self.name} 缺少精确 argtypes/restype: {self.argtypes!r}, {self.restype!r}")
+                return self.impl(*args)
+
+        closed = []
+        high_handle = (1 << 40) + 0x1234
+        cwd_bytes = "C:\\synthetic\\dir".encode("utf-16-le")
+        peb_addr = 0x10000
+        params_addr = 0x20000
+        buf_addr = 0x30000
+
+        def fake_read_mem(_h, addr, out_buf, size, read_ptr):
+            raw_addr = addr.value if hasattr(addr, "value") else addr
+            if raw_addr == peb_addr + 0x20:
+                out_buf._obj.value = params_addr
+                read_ptr._obj.value = 8
+            elif raw_addr == params_addr + 0x38:
+                us = out_buf._obj
+                us.Length = len(cwd_bytes)
+                us.MaximumLength = len(cwd_bytes)
+                us.Buffer = buf_addr
+                read_ptr._obj.value = size
+            elif raw_addr == buf_addr:
+                ctypes.memmove(out_buf, cwd_bytes, len(cwd_bytes))
+                read_ptr._obj.value = len(cwd_bytes)
+            else:
+                return 0
+            return 1
+
+        def fake_nt_query(_h, _cls, out_pbi, size, ret_len):
+            out_pbi._obj.PebBaseAddress = peb_addr
+            ret_len._obj.value = size
+            return 0
+
+        def fake_get_exit(_h, code_ptr):
+            code_ptr._obj.value = 259
+            return 1
+
+        class FakeKernel32:
+            OpenProcess = CheckedFn("OpenProcess", lambda *_a: high_handle)
+            IsWow64Process = CheckedFn("IsWow64Process", lambda _h, ptr: 1)
+            ReadProcessMemory = CheckedFn("ReadProcessMemory", fake_read_mem)
+            GetExitCodeProcess = CheckedFn("GetExitCodeProcess", fake_get_exit)
+            TerminateProcess = CheckedFn("TerminateProcess", lambda _h, _c: 1)
+            OpenEventW = CheckedFn("OpenEventW", lambda *_a: high_handle)
+            SetEvent = CheckedFn("SetEvent", lambda _h: 1)
+            CloseHandle = CheckedFn("CloseHandle", lambda h: closed.append(h) or 1)
+
+        class FakeNtdll:
+            NtQueryInformationProcess = CheckedFn("NtQueryInformationProcess", fake_nt_query)
+
+        def fake_windll(name, use_last_error=False):
+            return FakeKernel32() if name == "kernel32" else FakeNtdll()
+
+        with patch.object(ctypes, "WinDLL", side_effect=fake_windll, create=True), \
+                patch.object(ae, "_is_windows", return_value=True):
+            self.assertEqual(ae._windows_process_cwd(999999), "C:\\synthetic\\dir")
+            self.assertFalse(ae._process_stopped(999999))
+            self.assertTrue(ae._win_signal_stop_event(999999))
+            self.assertTrue(ae._win_terminate_process(999999))
+        self.assertEqual(len(closed), 4)
+
+    def test_ae_cli_rejects_unc_target_and_link_paths_before_resolution(self):
+        for unc in (r"\\evil-smb\share\skills", "//evil-smb/share/skills", r"\\?\UNC\evil-smb\share\skills"):
+            with self.subTest(unc=unc):
+                with self.assertRaises(ae.CommandError):
+                    ae.resolve_copy_dir(unc)
+                with self.assertRaises(ae.CommandError):
+                    ae.parse_link_agents(f"custom={unc}")
+                with patch.dict(os.environ, {"AE_HOME": unc}):
+                    with self.assertRaises(ae.CommandError):
+                        ae.ledger_home()
+
+    def test_quote_cli_trailing_backslash_uses_single_quotes_on_windows(self):
+        with patch.object(ae, "_is_windows", return_value=True):
+            self.assertEqual(ae._quote_cli("C:\\dir with space\\"), "'C:\\dir with space\\'")
+
+    def test_link_targets_copy_handles_windows_prefix_and_case(self):
+        copy_dir = self.root / "CustomSkills" / ae.SKILL_NAME
+        copy_dir.mkdir(parents=True)
+        link = self.root / "agent" / ae.SKILL_NAME
+        link.parent.mkdir(parents=True)
+        os.symlink(str(copy_dir), str(link))
+        with patch.object(ae, "_is_windows", return_value=True), \
+                patch.object(ae.os, "readlink", return_value="\\\\?\\" + str(copy_dir).upper()), \
+                patch.object(ae.os.path, "realpath", side_effect=lambda p: p.upper()):
+            self.assertTrue(ae._link_targets_copy(link, copy_dir))
 
 
 if __name__ == "__main__":

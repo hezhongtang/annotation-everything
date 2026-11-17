@@ -305,6 +305,8 @@ def _open_windows_lock(path: Path, resource: str, timeout: float, started: float
         wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
     ]
     create_file.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
 
     generic_rw = 0x80000000 | 0x40000000
     share_read_delete = 0x00000001 | 0x00000004

@@ -394,7 +394,7 @@ with patch.object(check_pptx_fonts.subprocess, "run", side_effect=run_tool):
             def EnumValue(self, key, index):
                 return key.rows[index]
 
-        with mock.patch.object(cpf, "_is_windows", return_value=True), \
+        with mock.patch.object(cpf.fsutil, "is_windows", return_value=True), \
                 mock.patch.object(cpf.subprocess, "run", side_effect=FileNotFoundError("fc-list")), \
                 mock.patch.dict(sys.modules, {"winreg": FakeWinreg()}):
             fonts, warn = cpf.installed_fonts()
@@ -410,7 +410,7 @@ with patch.object(check_pptx_fonts.subprocess, "run", side_effect=run_tool):
             def OpenKey(self, hive, subkey):
                 return FakeKey([])
 
-        with mock.patch.object(cpf, "_is_windows", return_value=True), \
+        with mock.patch.object(cpf.fsutil, "is_windows", return_value=True), \
                 mock.patch.object(cpf.subprocess, "run", side_effect=FileNotFoundError("fc-list")), \
                 mock.patch.dict(sys.modules, {"winreg": EmptyWinreg()}):
             with self.assertRaises(cpf.CheckError):
@@ -427,7 +427,7 @@ with patch.object(check_pptx_fonts.subprocess, "run", side_effect=run_tool):
             seen.append(cmd)
             return subprocess.CompletedProcess(cmd, 0, stdout="Synthetic Sans\n", stderr="")
 
-        with mock.patch.object(cpf, "_is_windows", return_value=True), \
+        with mock.patch.object(cpf.fsutil, "is_windows", return_value=True), \
                 mock.patch.object(cpf, "which", return_value=r"C:\fake\bin\fc-list.cmd"), \
                 mock.patch.object(cpf.subprocess, "run", side_effect=fake_run):
             fonts, warn = cpf.installed_fonts()

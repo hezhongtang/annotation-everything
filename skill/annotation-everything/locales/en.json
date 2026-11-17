@@ -230,7 +230,7 @@
     "cli.ae.install.occupied": "A non-link item with the same name already sits in the {agent} skills directory; left untouched: {path}",
     "cli.ae.install.badLinkSpec": "Unrecognized --link item: {spec} (use name or name=path)",
     "cli.ae.install.linkOverlap": "The link location {path} for \"{agent}\" overlaps another installation path ({other}); refusing to create the link",
-    "cli.ae.install.linkPrivilege": "This Windows account does not have symlink privilege, so the --link installation did not complete (no elevation was attempted). Install directly without symlinks: {commands}; if you specifically need symlinks, enable Developer Mode in Windows Settings and retry.",
+    "cli.ae.install.linkPrivilege": "This Windows account does not have symlink privilege, so the --link installation did not complete (no elevation was attempted). Install directly without symlinks: {commands}; if you specifically need symlinks, enable Developer Mode in Windows Settings and retry: {retry}.",
     "cli.ae.install.done": "Installed the skill copy at {path}",
     "cli.ae.install.links": "Created links: {list}",
     "cli.ae.upgrade.notInstalled": "No installed skill copy was found at {path}; nothing was changed. Run {command} for an initial install",

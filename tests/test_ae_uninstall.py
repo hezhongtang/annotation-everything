@@ -185,6 +185,20 @@ class UninstallCliTests(unittest.TestCase):
             proc.kill()
             proc.communicate(timeout=10)
 
+    def graceful_stop_server(self, proc) -> None:
+        if proc.poll() is None and os.name == "nt":
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                if ae._win_signal_stop_event(proc.pid) or proc.poll() is not None:
+                    break
+                time.sleep(0.05)
+            try:
+                proc.communicate(timeout=10)
+                return
+            except subprocess.TimeoutExpired:
+                pass
+        self.stop_server(proc)
+
     def spawn_home(self):
         """启动真实的总览首页子进程（无显式端口：走保留地址）并等它写出运行状态文件。"""
         argv = [sys.executable, str(SERVE), "overview", "--no-open"]
@@ -363,7 +377,7 @@ class UninstallCliTests(unittest.TestCase):
         link_args = ("--link", "codex") if self.can_symlink else ()
         self.assertEqual(self.run_ae("install", *link_args).returncode, 0)
         proc, _line = self.spawn_home()
-        self.stop_server(proc)
+        self.graceful_stop_server(proc)
         self.assertEqual(proc.returncode, 0, "首页应优雅退出并清理运行状态")
         for name in ("overview-home.json", ".overview-home.html", "overview-home.log", ".overview-home-start.lock"):
             self.assertTrue((self.ae_home / name).exists(), f"启动并退出首页后应留下已知文件 {name}")
@@ -457,7 +471,8 @@ class RunningServersTests(unittest.TestCase):
         line = f"python3 {SERVE} overview --no-open"
         identity = ae.server_identity(None, line)
         self.assertIsNotNone(identity, "卸载要能核对正在运行的首页进程身份")
-        self.assertEqual(identity[0], str(SERVE.resolve()))
+        expected = os.path.normcase(str(SERVE.resolve())) if os.name == "nt" else str(SERVE.resolve())
+        self.assertEqual(identity[0], expected)
 
     def test_stop_servers_refuses_unrelated_real_process(self):
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])

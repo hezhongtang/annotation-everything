@@ -186,7 +186,7 @@
     "cli.ae.install.occupied": "{agent} 的技能目录里已有同名非链接内容，未覆盖：{path}",
     "cli.ae.install.badLinkSpec": "无法识别的 --link 写法：{spec}（写法：名称 或 名称=路径）",
     "cli.ae.install.linkOverlap": "「{agent}」的链接位置 {path} 与其他安装路径重叠（{other}），拒绝创建链接",
-    "cli.ae.install.linkPrivilege": "当前 Windows 账户没有创建符号链接的权限，--link 安装未完成（未尝试静默提权）。若无需软链接，请改用直接安装：{commands}；如确需符号链接，可在系统设置中开启「开发人员模式」后重试。",
+    "cli.ae.install.linkPrivilege": "当前 Windows 账户没有创建符号链接的权限，--link 安装未完成（未尝试静默提权）。若无需软链接，请改用直接安装：{commands}；如确需符号链接，可在系统设置中开启「开发人员模式」后重试：{retry}。",
     "cli.ae.install.done": "已安装技能副本到 {path}",
     "cli.ae.install.links": "已建立链接：{list}",
     "cli.ae.upgrade.notInstalled": "未找到已安装的技能副本（{path}），未改动任何内容；首次安装请运行：{command}",

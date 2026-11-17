@@ -115,7 +115,10 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(ops, ["add", "update", "resolve", "reopen", "delete"])
         self.assertEqual(store.load(self.d)["notes"], [])
         for f in ("notes.json", "notes.jsonl", ".notes.lock"):
-            self.assertEqual((self.d / f).stat().st_mode & 0o777, 0o600, f)
+            if os.name == "nt":
+                serve.fsutil.check_private_regular_file(self.d / f, error_prefix="notes")
+            else:
+                self.assertEqual((self.d / f).stat().st_mode & 0o777, 0o600, f)
 
     def test_validation(self):
         with self.assertRaises(store.NoteError):
@@ -518,8 +521,12 @@ class TwoStageTests(unittest.TestCase):
         self.assertIn("允许派发子代理：否——由你（当前会话的主代理）亲自处理", out)
         base = self.d / ".snapshots" / "batch-1" / "base"
         self.assertTrue((base / "report").is_file() and (base / "script").is_file(), "接收初改时存了源文件快照")
-        self.assertEqual((base / "report").stat().st_mode & 0o777, 0o600)
-        self.assertEqual(base.stat().st_mode & 0o777, 0o700)
+        if os.name == "nt":
+            serve.fsutil.check_private_regular_file(base / "report", error_prefix="snapshot")
+            self.assertFalse(serve.fsutil._is_reparse_or_symlink(base.lstat()))
+        else:
+            self.assertEqual((base / "report").stat().st_mode & 0o777, 0o600)
+            self.assertEqual(base.stat().st_mode & 0o777, 0o700)
         src = FIXTURE / "report.html"
         work = Path(json.loads((self.d / "review.json").read_text())["sourcesAbs"]["report"])
         self.assertEqual(work, src.resolve())   # 夹具源文件：改它会污染仓库，改用临时副本
@@ -1053,7 +1060,10 @@ class HandoffTests(unittest.TestCase):
         self.assertNotIn("openIds", st["latest"])
         ops = [json.loads(x)["op"] for x in (self.d / "notes.jsonl").read_text().splitlines()]
         self.assertIn("handoff-claim", ops)
-        self.assertEqual((self.d / store.HANDOFF_FILE).stat().st_mode & 0o777, 0o600)
+        if os.name == "nt":
+            serve.fsutil.check_private_regular_file(self.d / store.HANDOFF_FILE, error_prefix="handoff")
+        else:
+            self.assertEqual((self.d / store.HANDOFF_FILE).stat().st_mode & 0o777, 0o600)
 
     def test_wait_wakes_on_submit(self):
         store.add(self.d, {"page": 4, "text": "表格加一列"})
@@ -2280,17 +2290,21 @@ class OverviewTests(unittest.TestCase):
         port = free_port()
         ledger.claim_port(rid, directory, port)
         self.addCleanup(self.stop_started_review, directory, rid)
-        relative_home = os.path.relpath(ledger.home(), Path.cwd())
+        old_cwd = Path.cwd()
+        os.chdir(ledger.home().parent)
+        try:
+            relative_home = os.path.relpath(ledger.home(), Path.cwd())
+            with patch.dict(os.environ, {"AE_HOME": relative_home}):
+                status, result = self.start_request({"reviewId": rid})
 
-        with patch.dict(os.environ, {"AE_HOME": relative_home}):
-            status, result = self.start_request({"reviewId": rid})
-
-        self.assertEqual(status, 200, result)
-        self.assertEqual(result["url"], f"http://127.0.0.1:{port}/")
-        health = serve.probe(port)
-        self.assertEqual((health["reviewId"], health["dir"], health["port"]),
-                         (rid, str(directory.resolve()), port))
-        self.assertEqual(ledger.get(rid)["port"], port)
+            self.assertEqual(status, 200, result)
+            self.assertEqual(result["url"], f"http://127.0.0.1:{port}/")
+            health = serve.probe(port)
+            self.assertEqual((health["reviewId"], health["dir"], health["port"]),
+                             (rid, str(directory.resolve()), port))
+            self.assertEqual(ledger.get(rid)["port"], port)
+        finally:
+            os.chdir(old_cwd)
 
     def test_simultaneous_starts_share_one_background_process(self):
         directory = self.workspace / "double-start"
@@ -2880,7 +2894,10 @@ class OverviewHomeBuildTests(unittest.TestCase):
         self.assertIn("const P=[]", page, "不注入报告页数据")
         self.assertIn("RID=null", page, "不注入审阅标识")
         self.assertNotIn('"notes":[', page, "不注入批注状态")
-        self.assertEqual(oct((out / ledger.OVERVIEW_PAGE_FILE).stat().st_mode & 0o777), "0o600")
+        if os.name == "nt":
+            serve.fsutil.check_private_regular_file(out / ledger.OVERVIEW_PAGE_FILE, error_prefix="overview")
+        else:
+            self.assertEqual(oct((out / ledger.OVERVIEW_PAGE_FILE).stat().st_mode & 0o777), "0o600")
         self.assertEqual(ledger.entries(), {}, "这种构建不登记台账")
         self.assertEqual([p.name for p in out.iterdir()], [ledger.OVERVIEW_PAGE_FILE], "不写审阅清单（review.json）")
 
@@ -3659,6 +3676,21 @@ class OverviewHomeCliTests(unittest.TestCase):
             proc.kill()
             return proc.communicate()
 
+    @classmethod
+    def graceful_stop(cls, proc, timeout=10):
+        if proc.poll() is None and os.name == "nt":
+            import ae
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                if ae._win_signal_stop_event(proc.pid) or proc.poll() is not None:
+                    break
+                time.sleep(0.05)
+            try:
+                return proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                pass
+        return cls.terminate(proc, timeout=timeout)
+
     def wait_ready(self, timeout=15, *, proc=None) -> int:
         """运行状态文件 + pid 探活 + /api/health 宿主核对：不依赖任何审阅目录。"""
         end = time.monotonic() + timeout
@@ -3693,7 +3725,7 @@ class OverviewHomeCliTests(unittest.TestCase):
         rows = json.loads(out.getvalue())["reviews"]
         self.assertEqual([r["reviewId"] for r in rows], [self.rid], "总览首页不出现在 serve.py list --json")
         self.assertEqual(ledger.entries()[self.rid]["dir"], str(self.review_dir.resolve()), "台账不新增审阅记录")
-        out_txt, err_txt = self.terminate(proc)
+        out_txt, err_txt = self.graceful_stop(proc)
         self.assertEqual(proc.returncode, 0, out_txt + err_txt)
         self.assertIsNone(serve.read_home_status(), "退出时清理运行状态")
         self.assertEqual(self.reserved_port(), port, "退出后保留端口记录仍在")
@@ -3779,13 +3811,13 @@ class OverviewHomeCliTests(unittest.TestCase):
         self.assertEqual(port, explicit, "显式 --port 影响当次地址")
         self.assertFalse((ledger.home() / ledger.OVERVIEW_PORT_FILE).exists(),
                          "显式端口的首启不建立保留记录（只影响当次地址）")
-        out, err = self.terminate(proc)
+        out, err = self.graceful_stop(proc)
         self.assertEqual(proc.returncode, 0, out + err)
 
         proc = self.spawn("--no-open")
         port = self.wait_ready()
         self.assertEqual(self.reserved_port(), port, "无显式端口的首启分配保留端口")
-        out, err = self.terminate(proc)
+        out, err = self.graceful_stop(proc)
         self.assertEqual(proc.returncode, 0, out + err)
 
         blocker = socket.socket()
@@ -3797,20 +3829,20 @@ class OverviewHomeCliTests(unittest.TestCase):
             self.assertNotEqual(displaced, port, "保留端口被其他程序占用时临时顺延")
         finally:
             blocker.close()
-        out, err = self.terminate(proc)
+        out, err = self.graceful_stop(proc)
         self.assertEqual(proc.returncode, 0, out + err)
         self.assertIn(str(port), err, "顺延要在标准错误警告")
         self.assertEqual(self.reserved_port(), port, "顺延保留原记录")
 
         proc = self.spawn("--no-open")
         self.assertEqual(self.wait_ready(), port, "下次无显式端口时再次尝试保留地址")
-        out, err = self.terminate(proc)
+        out, err = self.graceful_stop(proc)
         self.assertEqual(proc.returncode, 0, out + err)
 
         another = free_port()
         proc = self.spawn("--no-open", "--port", str(another))
         self.assertEqual(self.wait_ready(), another, "显式端口只影响当次地址")
-        out, err = self.terminate(proc)
+        out, err = self.graceful_stop(proc)
         self.assertEqual(proc.returncode, 0, out + err)
         self.assertEqual(self.reserved_port(), port, "显式端口不改保留记录")
 
@@ -3851,7 +3883,7 @@ class OverviewHomeCliTests(unittest.TestCase):
         proc = self.spawn("--no-open")
         self.addCleanup(self.terminate, proc)
         port = self.wait_ready()
-        out, err = self.terminate(proc)
+        out, err = self.graceful_stop(proc)
         self.assertEqual(proc.returncode, 0, out + err)
         claim = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), str(self.review_dir),
                                 "--claim-port", str(port), "--no-open", "--port", str(free_port())],
@@ -3868,7 +3900,7 @@ class OverviewHomeCliTests(unittest.TestCase):
         with self.assertRaises(BlockingIOError, msg="首页运行期间沿用服务的更新锁，技能更新可识别该占用"):
             with serve.fsutil.flocked(ledger.update_lock_path(), exclusive=True, nonblocking=True):
                 pass
-        out, err = self.terminate(proc)
+        out, err = self.graceful_stop(proc)
         self.assertEqual(proc.returncode, 0, out + err)
         with serve.fsutil.flocked(ledger.update_lock_path(), exclusive=True, nonblocking=True):
             pass   # 退出后更新器可以拿到排他锁
@@ -4363,7 +4395,8 @@ class ShowBaselineTests(unittest.TestCase):
                 sections = []
                 for name, args in SHOW_VARIANTS:
                     out = run_notes_cli(*[a.format(d=d, bare=bare) for a in args], "--locale", locale)
-                    sections.append(f"===== {name} =====\n{out.replace(str(tree.resolve()), '<TREE>')}")
+                    normalized = out.replace(f"{tree.resolve()}{os.sep}", "<TREE>/").replace(str(tree.resolve()), "<TREE>")
+                    sections.append(f"===== {name} =====\n{normalized}")
                 expected = (SHOW_BASELINE_DIR / f"{locale}.txt").read_text(encoding="utf-8")
                 self.assertEqual("\n".join(sections), expected)
 
@@ -5863,6 +5896,177 @@ class FsutilTests(unittest.TestCase):
         payload = '{\r\n  "ok": true\r\n}\r\n'
         fsutil.atomic_write(target, payload, prefix=".crlf-")
         self.assertEqual(target.read_bytes(), payload.encode("utf-8"))
+
+    def test_is_unc_or_device_path_detects_unc_and_device_paths_but_allows_local_paths(self):
+        import fsutil
+
+        for bad in (
+            r"\\server\share\img.png",
+            "//server/share/img.png",
+            r"\\?\UNC\server\share\x",
+            "//?/UNC/server/share/x",
+            r"\\.\pipe\ae",
+            r"\\?\C:\local\file.txt",
+        ):
+            with self.subTest(bad=bad):
+                self.assertTrue(fsutil.is_unc_or_device_path(bad))
+        self.assertFalse(fsutil.is_unc_or_device_path(r"\\?\C:\local\file.txt", allow_local_extended=True))
+        self.assertTrue(fsutil.is_unc_or_device_path(r"\\?\UNC\server\share", allow_local_extended=True))
+        self.assertTrue(fsutil.is_unc_or_device_path(r"\\.\pipe\ae", allow_local_extended=True))
+        for ok in ("assets/logo.png", "/tmp/report.html", "///tmp/report.html", r"C:\Users\alice\r.html",
+                   "https://example.com/a.png"):
+            with self.subTest(ok=ok):
+                self.assertFalse(fsutil.is_unc_or_device_path(ok))
+
+    def test_build_viewer_rejects_unc_and_device_assets_before_resolve(self):
+        root = tmpdir()
+        report = root / "report.html"
+        assets_local = build_viewer.Assets(root, locale="en")
+        assets_uri = build_viewer.Assets(root, locale="en")
+        unc_refs = (
+            r"\\evil-smb\share\logo.png",
+            "//evil-smb/share/logo.png",
+            r"\\?\UNC\evil-smb\share\logo.png",
+            r"\\?\C:\Windows\win.ini",
+            r"\\.\pipe\secret",
+            "%5c%5cevil-smb%5cshare%5clogo.png",
+        )
+        real_resolve = Path.resolve
+
+        def guarded_resolve(path_obj, *args, **kwargs):
+            s = str(path_obj)
+            if "evil-smb" in s or s.startswith(("\\\\", "//")):
+                raise AssertionError(f"must not resolve UNC/device path: {s}")
+            return real_resolve(path_obj, *args, **kwargs)
+
+        with patch.object(Path, "resolve", guarded_resolve):
+            for ref in unc_refs:
+                with self.subTest(ref=ref):
+                    before = len(assets_local.warnings)
+                    self.assertIsNone(assets_local.local(ref, root))
+                    self.assertGreater(len(assets_local.warnings), before)
+                    self.assertIn("External resources do not load", assets_local.warnings[-1])
+
+                    before_uri = len(assets_uri.warnings)
+                    self.assertIsNone(assets_uri.uri(ref, root))
+                    self.assertGreater(len(assets_uri.warnings), before_uri)
+                    self.assertIn("External resources do not load", assets_uri.warnings[-1])
+
+            doc = (
+                '<!doctype html><html><head><title>Synthetic</title>'
+                r'<link rel="stylesheet" href="\\evil-smb\share\theme.css">'
+                '<link rel="stylesheet" href="//evil-smb/share/other.css">'
+                r'<link rel="stylesheet" href="\\?\UNC\evil-smb\share\u.css">'
+                r'<link rel="stylesheet" href="\\.\pipe\x.css">'
+                '</head><body><section class="page" data-page="1"><h2>P1</h2>'
+                r'<img src="\\evil-smb\share\a.png">'
+                '</section></body></html>'
+            )
+            assets_css = build_viewer.Assets(root, locale="en")
+            _title, _css, _sects = build_viewer.report_parts(doc, report, assets_css)
+            css_warnings = [w for w in assets_css.warnings if "External stylesheet does not load" in w]
+            self.assertEqual(len(css_warnings), 4, assets_css.warnings)
+            self.assertTrue(any("External resources do not load" in w for w in assets_css.warnings), assets_css.warnings)
+
+    def test_cli_and_ledger_reject_unc_paths_before_resolution(self):
+        real_resolve = Path.resolve
+        real_exists = Path.exists
+
+        def no_unc_resolve(path_obj, *args, **kwargs):
+            s = str(path_obj)
+            if "evil-smb" in s or s.startswith(("\\\\", "//")):
+                raise AssertionError(f"must not resolve UNC path: {s}")
+            return real_resolve(path_obj, *args, **kwargs)
+
+        def no_unc_exists(path_obj):
+            s = str(path_obj)
+            if "evil-smb" in s or s.startswith(("\\\\", "//")):
+                raise AssertionError(f"must not stat UNC path: {s}")
+            return real_exists(path_obj)
+
+        unc_inputs = (r"\\evil-smb\share\review", "//evil-smb/share/review", r"\\?\UNC\evil-smb\share\review")
+        with patch.object(Path, "resolve", no_unc_resolve), patch.object(Path, "exists", no_unc_exists):
+            for unc in unc_inputs:
+                with self.subTest(unc=unc):
+                    with self.assertRaises(ledger.LedgerError):
+                        ledger.resolve_dir(unc)
+                    with self.assertRaises(build_viewer.BuildError):
+                        build_viewer.build(Path(unc), None, tmpdir())
+                    with self.assertRaises(SystemExit):
+                        serve.resolve_arg(unc)
+                    with redirect_stderr(io.StringIO()) as err:
+                        code = notes_cli.main(["show", unc])
+                    self.assertEqual(code, 2)
+                    self.assertTrue(err.getvalue().strip())
+
+        # Local extended-length canonical paths returned by OS APIs remain supported after stripping.
+        self.assertEqual(ledger._WinMetadataDir._strip_device_prefix(r"\\?\C:\Users\runner\review"), r"C:\Users\runner\review")
+
+    def test_flocked_closes_fd_when_fdopen_fails(self):
+        import fsutil
+
+        lock_path = tmpdir() / ".test.lock"
+        opened_fds = []
+        closed_fds = []
+        real_open = os.open
+        real_close = os.close
+
+        def spy_open(path, flags, mode=0o777, *args, **kwargs):
+            fd = real_open(path, flags, mode, *args, **kwargs)
+            opened_fds.append(fd)
+            return fd
+
+        def spy_close(fd):
+            closed_fds.append(fd)
+            real_close(fd)
+
+        with patch("fsutil.os.open", side_effect=spy_open), \
+                patch("fsutil.os.fdopen", side_effect=OSError("synthetic fdopen failure")), \
+                patch("fsutil.os.close", side_effect=spy_close):
+            with self.assertRaises(OSError):
+                with fsutil.flocked(lock_path, exclusive=True):
+                    pass
+        self.assertEqual(len(opened_fds), 1)
+        self.assertEqual(closed_fds, opened_fds)
+
+    def test_hook_worker_terminates_spawned_child_on_exception(self):
+        d = tmpdir()
+        (d / "index.html").write_text("<!doctype html><title>T</title>", encoding="utf-8")
+        (d / "review.json").write_text(json.dumps({"reviewId": "a" * 16}), encoding="utf-8")
+        srv = serve.ReviewServer(d, 0, log_to_file=False)
+        self.addCleanup(srv.server_close)
+        srv.on_handoff = ["echo", "hi"]
+        srv._hook_running = True
+
+        fake_proc = unittest.mock.MagicMock()
+        fake_proc.pid = 424242
+        fake_proc.poll.return_value = None
+        fake_proc.communicate.side_effect = RuntimeError("synthetic communicate crash")
+        job = {"seq": 1, "event": "handoff", "payload": {"seq": 1}, "env": {}}
+
+        with patch.object(serve.subprocess, "Popen", return_value=fake_proc), \
+                patch.object(serve.review_stop, "accepts_work", return_value=True), \
+                patch.object(serve.review_stop, "hook_started"), \
+                patch.object(serve.review_stop, "hook_finished"):
+            with self.assertRaises(RuntimeError):
+                srv._hook_worker(job)
+        fake_proc.terminate.assert_called()
+        fake_proc.wait.assert_called()
+
+    def test_serve_check_uses_check_private_regular_file_on_windows(self):
+        checked = []
+
+        def spy_private(path, **kwargs):
+            checked.append((Path(path).name, kwargs.get("error_prefix")))
+            return Path(path).lstat()
+
+        with patch.object(serve.fsutil, "is_windows", return_value=True), \
+                patch.object(serve.fsutil, "check_private_regular_file", side_effect=spy_private), \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            rc = serve.check(locale="en")
+        self.assertEqual(rc, 0)
+        self.assertIn((serve.store.NOTES_FILE, "notes"), checked)
+        self.assertIn((serve.store.LOG_FILE, "log"), checked)
 
 
 if __name__ == "__main__":

@@ -414,7 +414,7 @@ class RenderPipelineTests(unittest.TestCase):
         }
         with mock.patch.dict(os.environ, env), \
                 mock.patch.object(pp, "SOFFICE_CANDIDATES", ()), \
-                mock.patch.object(pp, "_is_windows", return_value=True):
+                mock.patch.object(pp.fsutil, "is_windows", return_value=True):
             self.assertEqual(pp.find_soffice(), str(soffice_com))
             self.assertEqual(pp.find_rasterizer(), str(pdftoppm_exe))
 
@@ -428,7 +428,7 @@ class RenderPipelineTests(unittest.TestCase):
         env["ProgramFiles"] = str(self.root / "missing-pf")
         with mock.patch.dict(os.environ, env), \
                 mock.patch.object(pp, "SOFFICE_CANDIDATES", ()), \
-                mock.patch.object(pp, "_is_windows", return_value=True):
+                mock.patch.object(pp.fsutil, "is_windows", return_value=True):
             self.assertEqual(pp.find_soffice(), str(local_soffice))
             self.assertEqual(pp.find_rasterizer(), str(local_ppm))
 

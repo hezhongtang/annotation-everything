@@ -213,6 +213,14 @@ class LedgerReadableTests(TempRootTestCase):
 
 class LedgerStaleTests(TempRootTestCase):
 
+    def assert_fix_repair(self, fix_command: str, flag: str, posix_suffix: str):
+        tokens = ae.command_tokens(fix_command)
+        self.assertGreaterEqual(len(tokens), 4, fix_command)
+        self.assertEqual(Path(tokens[1]).name, "ae.py", fix_command)
+        self.assertEqual(tokens[2:], ["repair", flag], fix_command)
+        if os.name != "nt":
+            self.assertTrue(fix_command.rstrip().endswith(posix_suffix), fix_command)
+
     def test_warns_when_review_dir_is_gone(self):
         write_ledger(self.ledger_home, {self.rid: {"dir": str(self.root / "gone"), "port": 8800}})
         result = ae.check_ledger_stale(self.ctx())
@@ -220,7 +228,7 @@ class LedgerStaleTests(TempRootTestCase):
         self.assertEqual(result.code, "ledger-stale")
         self.assertIn(self.rid[:8], result.message)          # 审阅标识前缀
         self.assertIn("8800", result.message)                # 占用的专属端口
-        self.assertTrue(result.fix_command.rstrip().endswith(FIX_FORGET_STALE), result.fix_command)
+        self.assert_fix_repair(result.fix_command, "--forget-stale", FIX_FORGET_STALE)
 
     def test_warns_when_review_id_mismatches(self):
         d = make_review_dir(self.root, "ffffffffffffffff")
@@ -228,7 +236,7 @@ class LedgerStaleTests(TempRootTestCase):
         result = ae.check_ledger_stale(self.ctx())
         self.assertEqual(result.level, WARN)
         self.assertIn("8801", result.message)
-        self.assertTrue(result.fix_command.rstrip().endswith(FIX_FORGET_STALE), result.fix_command)
+        self.assert_fix_repair(result.fix_command, "--forget-stale", FIX_FORGET_STALE)
 
     def test_passes_when_entry_matches_dir(self):
         d = make_review_dir(self.root, self.rid)
@@ -294,7 +302,10 @@ class OrphanServerTests(TempRootTestCase):
         self.assertEqual(result.category, "运行状态")
         self.assertIn(str(server.proc.pid), result.message)
         self.assertIn(str(server.port), result.message)
-        self.assertTrue(result.fix_command.rstrip().endswith(FIX_STOP_ORPHANS), result.fix_command)
+        tokens = ae.command_tokens(result.fix_command)
+        self.assertEqual((Path(tokens[1]).name, tokens[2:]), ("ae.py", ["repair", "--stop-orphans"]), result.fix_command)
+        if os.name != "nt":
+            self.assertTrue(result.fix_command.rstrip().endswith(FIX_STOP_ORPHANS), result.fix_command)
 
     def test_fails_when_serving_dir_deleted(self):
         d = make_review_dir(self.root, self.rid)
@@ -304,7 +315,10 @@ class OrphanServerTests(TempRootTestCase):
         self.assertEqual(result.level, FAIL)
         self.assertIn(str(server.proc.pid), result.message)
         self.assertIn(str(server.port), result.message)
-        self.assertTrue(result.fix_command.rstrip().endswith(FIX_STOP_ORPHANS), result.fix_command)
+        tokens = ae.command_tokens(result.fix_command)
+        self.assertEqual((Path(tokens[1]).name, tokens[2:]), ("ae.py", ["repair", "--stop-orphans"]), result.fix_command)
+        if os.name != "nt":
+            self.assertTrue(result.fix_command.rstrip().endswith(FIX_STOP_ORPHANS), result.fix_command)
 
     def test_passes_when_serving_ledgered_review(self):
         d = make_review_dir(self.root, self.rid)

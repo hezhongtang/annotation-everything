@@ -300,7 +300,12 @@ def flocked(path: Path, *, exclusive: bool = False, nonblocking: bool = False,
             raise OSError(errno.ELOOP, "Too many levels of symbolic links", str(target))
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0) | (getattr(os, "O_NOFOLLOW", 0) if nofollow else 0)
     fd = os.open(target, flags, 0o600) if dir_fd is None else os.open(target, flags, 0o600, dir_fd=dir_fd)
-    with os.fdopen(fd, "r+") as fh:
+    try:
+        fh = os.fdopen(fd, "r+")
+    except BaseException:
+        os.close(fd)
+        raise
+    with fh:
         if nofollow and os.name == "nt":
             try:
                 cur = target.lstat()
@@ -332,6 +337,19 @@ _PS_UNSAFE_RE = re.compile(r"[^A-Za-z0-9_./:\\-]")
 
 def is_windows() -> bool:
     return os.name == "nt"
+
+
+def is_unc_or_device_path(raw: str | os.PathLike[str], *, allow_local_extended: bool = False) -> bool:
+    """检测 UNC 共享路径（\\\\server\\share、//server/share、\\\\?\\UNC\\...）或 Windows 设备路径（\\\\.\\...、\\\\?\\...）。
+
+    allow_local_extended=True 时放行本地驱动器规范前缀（如系统 API 返回的 \\\\?\\C:\\...），仍拦截 UNC 与 \\\\.\\ 设备路径。
+    """
+    s = os.fspath(raw).strip().replace("\\", "/")
+    if not (len(s) > 2 and s.startswith("//") and s[2] != "/"):
+        return False
+    if allow_local_extended and len(s) >= 7 and s[:4] == "//?/" and s[4].isalpha() and s[5] == ":" and s[6] == "/":
+        return False
+    return True
 
 
 def python_cli() -> str:

@@ -924,6 +924,9 @@ def _main_locked(argv: list[str] | None = None) -> int:
         ap.error(t("cli.notes.help.claim.roundRequiresEvents"))
     ledger.set_locale(help_lang)
     try:
+        for extra in (getattr(a, "file", None), getattr(a, "out", None)):
+            if extra is not None and fsutil.is_unc_or_device_path(extra, allow_local_extended=True):
+                raise ledger.LedgerError(f"Unsupported UNC or device path: {extra}")
         d = ledger.resolve_dir(a.dir).resolve()   # 也接受审阅标识（或至少 4 位前缀）：从台账查目录
     except (ledger.LedgerError, OSError) as e:
         print(t("cli.notes.error", reason=e), file=sys.stderr)

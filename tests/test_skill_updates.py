@@ -722,7 +722,7 @@ exec(code, {'__name__': '__main__', '__file__': script})
         update = self._import_repo_update()
 
         local_app = self.home / "AppData" / "Local"
-        with mock.patch.object(update, "_is_windows", return_value=True), \
+        with mock.patch.object(update.fsutil, "is_windows", return_value=True), \
                 mock.patch.dict(os.environ, {"LOCALAPPDATA": str(local_app)}, clear=False):
             os.environ.pop("XDG_DATA_HOME", None)
             path = update.update_storage(self.copy)
@@ -733,12 +733,12 @@ exec(code, {'__name__': '__main__', '__file__': script})
 
         record = json.loads((self.copy / ".install-record.json").read_text(encoding="utf-8"))
         serve_path = self.copy / "scripts" / "serve.py"
-        with mock.patch.object(update, "_is_windows", return_value=True), \
+        with mock.patch.object(update.fsutil, "is_windows", return_value=True), \
                 mock.patch.object(update, "_list_processes",
                                   return_value=[(101, ""), (202, f'python.exe "{serve_path}" "r"')]):
             self.assertTrue(update.has_legacy_process(self.copy, record))
 
-        with mock.patch.object(update, "_is_windows", return_value=True), \
+        with mock.patch.object(update.fsutil, "is_windows", return_value=True), \
                 mock.patch.object(update, "_list_processes",
                                   side_effect=update.UpdateError("cli.update.cannotVerifyServices")):
             with self.assertRaises(update.UpdateError) as caught:
@@ -760,7 +760,7 @@ exec(code, {'__name__': '__main__', '__file__': script})
             "import sys, unittest.mock\n"
             "sys.path.insert(0, sys.argv[1])\n"
             "import update\n"
-            "with unittest.mock.patch.object(update, '_is_windows', return_value=True):\n"
+            "with unittest.mock.patch.object(update.fsutil, 'is_windows', return_value=True):\n"
             "    sys.exit(update.main(['check', '--locale', 'en']))\n"
         )
         result = subprocess.run([sys.executable, "-c", runner, str(self.copy / "scripts")],
@@ -769,6 +769,84 @@ exec(code, {'__name__': '__main__', '__file__': script})
         self.assertIn("0.10.0", result.stdout)
         self.assertIn("ae.py upgrade", result.stdout)
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
+
+    def test_windows_process_cwd_configures_ctypes_argtypes_and_restype(self):
+        import ctypes
+        from ctypes import wintypes
+
+        update = self._import_repo_update()
+        expected = {
+            "OpenProcess": ([wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
+            "IsWow64Process": ([wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)], wintypes.BOOL),
+            "ReadProcessMemory": (
+                [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)],
+                wintypes.BOOL,
+            ),
+            "CloseHandle": ([wintypes.HANDLE], wintypes.BOOL),
+            "NtQueryInformationProcess": (
+                [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.ULONG, ctypes.POINTER(wintypes.ULONG)],
+                ctypes.c_long,
+            ),
+        }
+
+        class CheckedFn:
+            def __init__(self, name, impl):
+                self.name = name
+                self.impl = impl
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                exp_args, exp_res = expected[self.name]
+                if self.argtypes != exp_args or self.restype != exp_res:
+                    raise AssertionError(f"{self.name} 缺少精确 argtypes/restype: {self.argtypes!r}, {self.restype!r}")
+                return self.impl(*args)
+
+        closed = []
+        high_handle = (1 << 40) + 0x42
+        cwd_bytes = "D:\\synthetic\\cwd".encode("utf-16-le")
+
+        def fake_read_mem(_h, addr, out_buf, size, read_ptr):
+            raw_addr = addr.value if hasattr(addr, "value") else addr
+            if raw_addr == 0x10020:
+                out_buf._obj.value = 0x20000
+                read_ptr._obj.value = 8
+            elif raw_addr == 0x20038:
+                out_buf._obj.Length = len(cwd_bytes)
+                out_buf._obj.MaximumLength = len(cwd_bytes)
+                out_buf._obj.Buffer = 0x30000
+                read_ptr._obj.value = size
+            elif raw_addr == 0x30000:
+                ctypes.memmove(out_buf, cwd_bytes, len(cwd_bytes))
+                read_ptr._obj.value = len(cwd_bytes)
+            else:
+                return 0
+            return 1
+
+        def fake_nt_query(_h, _cls, out_pbi, size, ret_len):
+            out_pbi._obj.PebBaseAddress = 0x10000
+            ret_len._obj.value = size
+            return 0
+
+        class FakeKernel32:
+            OpenProcess = CheckedFn("OpenProcess", lambda *_a: high_handle)
+            IsWow64Process = CheckedFn("IsWow64Process", lambda _h, _p: 1)
+            ReadProcessMemory = CheckedFn("ReadProcessMemory", fake_read_mem)
+            CloseHandle = CheckedFn("CloseHandle", lambda h: closed.append(h) or 1)
+
+        class FakeNtdll:
+            NtQueryInformationProcess = CheckedFn("NtQueryInformationProcess", fake_nt_query)
+
+        def fake_windll(name, use_last_error=False):
+            return FakeKernel32() if name == "kernel32" else FakeNtdll()
+
+        with mock.patch.object(ctypes, "WinDLL", side_effect=fake_windll, create=True):
+            self.assertEqual(update._windows_process_cwd(999999), "D:\\synthetic\\cwd")
+        self.assertEqual(closed, [high_handle])
+
+    def test_update_uses_fsutil_is_windows(self):
+        update = self._import_repo_update()
+        self.assertFalse(hasattr(update, "_is_windows"))
 
 
 if __name__ == "__main__":

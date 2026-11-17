@@ -103,9 +103,17 @@ class CopiedDir(LedgerError):
     """这个目录是从台账里登记的那份审阅复制来的（原目录还在、标识相同）：不让副本顶替原审阅的条目和专属端口。"""
 
 
+def _reject_unc_path(raw: str | Path) -> None:
+    if fsutil.is_unc_or_device_path(raw, allow_local_extended=True):
+        raise LedgerError(f"Unsupported UNC or device path: {raw}")
+
+
 def home() -> Path:
     env = os.environ.get("AE_HOME")
-    return Path(env).expanduser().resolve() if env else Path.home() / ".annotation-everything"
+    if env:
+        _reject_unc_path(env)
+        return Path(env).expanduser().resolve()
+    return Path.home() / ".annotation-everything"
 
 
 def overview_host_id() -> str:
@@ -276,6 +284,7 @@ def register(rid: str, review_dir: Path) -> dict[str, Any]:
     _refresh_locale()   # 标识非法的报错也可能先于任何读写发生，语言要已经定好
     if not RID.fullmatch(str(rid or "")):
         raise LedgerError(T("ledger.err.badRid", rid=rid))
+    _reject_unc_path(review_dir)
     d = str(Path(review_dir).resolve())
     with _edit() as doc:
         return dict(_set_dir(doc["reviews"], rid, d))
@@ -294,6 +303,7 @@ def assign_port(rid: str, review_dir: Path, *, prefer: int | None = None,
     否则从 8765 起，挑台账里没人认领、此刻也没被占用的最小端口。
     首页保留端口不算空闲：无论首页在不在运行，审阅的专属端口都不落在它上面。
     """
+    _reject_unc_path(review_dir)
     d = str(Path(review_dir).resolve())
     with _edit() as doc:
         reviews = doc["reviews"]
@@ -319,6 +329,7 @@ def claim_port(rid: str, review_dir: Path, port: int) -> None:
     """把专属端口改成 port。端口归别的审阅或已保留给总览首页时拒绝（先 forget 那一份）。"""
     if not 1024 <= port <= 65535:
         raise LedgerError(T("ledger.err.portRange", port=port))
+    _reject_unc_path(review_dir)
     d = str(Path(review_dir).resolve())
     with _edit() as doc:
         if _read_overview_port(overview_port_file()) == port:
@@ -474,8 +485,11 @@ class _WinMetadataDir:
             return
         self.closed = True
         import ctypes
+        from ctypes import wintypes
 
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
         kernel32.CloseHandle(self.handle)
         self.handle = 0
 
@@ -728,12 +742,17 @@ def _rollback_quarantines(prepared: list[dict[str, Any]]) -> None:
         if not item["quarantine"]:
             continue
         fd, quarantine = item["fd"], item["quarantine"]
-        win_dir = fd.current_path() if isinstance(fd, _WinMetadataDir) else None
+        try:
+            win_dir = fd.current_path() if isinstance(fd, _WinMetadataDir) else None
+        except _MetadataUnsafe as error:
+            errors.append(f"{item['directory'] / quarantine}: {error.reason}")
+            continue
         for name in reversed(item["names"]):
             try:
                 _restore_metadata_file(fd, quarantine, name)
-            except OSError as error:
-                errors.append(f"{item['directory'] / quarantine / name}: {error}")
+            except (OSError, _MetadataUnsafe) as error:
+                detail = error.reason if isinstance(error, _MetadataUnsafe) else str(error)
+                errors.append(f"{item['directory'] / quarantine / name}: {detail}")
         try:
             if win_dir is not None:
                 os.rmdir(win_dir / quarantine)
@@ -753,7 +772,12 @@ def _cleanup_quarantines(prepared: list[dict[str, Any]]) -> tuple[list[dict[str,
         if not item["quarantine"]:
             continue
         fd, quarantine = item["fd"], item["quarantine"]
-        win_dir = fd.current_path() if isinstance(fd, _WinMetadataDir) else None
+        try:
+            win_dir = fd.current_path() if isinstance(fd, _WinMetadataDir) else None
+        except _MetadataUnsafe as error:
+            errors.append({**item["row"], "reason": "metadata-cleanup-failed",
+                           "quarantine": str(item["directory"] / quarantine), "detail": error.reason})
+            continue
         failure = None
         for name in item["names"]:
             try:
@@ -829,6 +853,8 @@ def prune_stale(*, all_stale: bool = False, under: Path | None = None,
     skipped: list[dict[str, Any]] = []
     prepared: list[dict[str, Any]] = []
     locked_directories: set[tuple[int, int]] = set()
+    if under is not None:
+        _reject_unc_path(under)
     root = under.expanduser().resolve() if under is not None else None
     targets = set(review_ids) if review_ids is not None else None
     if dry_run:
@@ -865,7 +891,11 @@ def prune_stale(*, all_stale: bool = False, under: Path | None = None,
                 if action == "delete":
                     identity = _dir_identity(fd)
                     if identity not in locked_directories:
-                        stack.enter_context(_metadata_lock_fd(fd))
+                        try:
+                            stack.enter_context(_metadata_lock_fd(fd))
+                        except _MetadataUnsafe as error:
+                            skipped.append({**row, "reason": error.reason})
+                            continue
                         locked_directories.add(identity)
                     action, reason = _metadata_plan(fd, rid)
                 if action == "preserve":
@@ -875,12 +905,22 @@ def prune_stale(*, all_stale: bool = False, under: Path | None = None,
                 if action == "skip":
                     skipped.append({**row, "reason": reason})
                     continue
+                try:
+                    names = _metadata_names(fd)
+                except _MetadataUnsafe as error:
+                    skipped.append({**row, "reason": error.reason})
+                    continue
                 item = {"row": row, "fd": fd, "directory": confirmed,
-                        "quarantine": "", "names": _metadata_names(fd)}
+                        "quarantine": "", "names": names}
                 # 先记录所有计划移动的文件，覆盖系统调用已经成功、Python 随即中断的情况。
                 prepared.append(item)
                 try:
                     _quarantine_metadata(item)
+                except _MetadataUnsafe as error:
+                    _rollback_quarantines([item])
+                    prepared.pop()
+                    skipped.append({**row, "reason": error.reason})
+                    continue
                 except PermissionError:
                     _rollback_quarantines([item])
                     prepared.pop()
@@ -912,6 +952,7 @@ def resolve_dir(arg: str | Path) -> Path:
     带路径分隔符、以 . 或 ~ 开头的一律按路径处理，打错目录时不会悄悄换成另一份审阅。
     """
     raw = str(arg)
+    _reject_unc_path(raw)
     p = Path(raw).expanduser()
     if p.exists() or os.sep in raw or "/" in raw or raw.startswith((".", "~")) \
             or not RID_PREFIX.fullmatch(raw.strip().lower()):

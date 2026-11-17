@@ -334,8 +334,9 @@ class AeLinkCliTests(unittest.TestCase):
             code = ae.main(["install", "--link", f"cursor={custom}"])
         self.assertEqual(code, 2, out.getvalue() + err.getvalue())
         self.assertEqual(out.getvalue(), "", "未完成链接时不能输出安装成功")
-        self.assertIn("--target", err.getvalue())
+        self.assertIn("--link", err.getvalue())
         self.assertIn(str(custom), err.getvalue())
+        self.assertNotIn("--target", err.getvalue())
         self.assertFalse(self.copy_dir.exists(), "全新 --link 失败时不留下部分安装副本")
         self.assertFalse((custom / SKILL).exists())
 
@@ -357,7 +358,67 @@ class AeLinkCliTests(unittest.TestCase):
             code2 = ae.main(["install", "--link", f"codex,cursor={custom}"])
         self.assertEqual(code2, 2)
         self.assertFalse(agent_link(self.home, "codex").exists(), "部分建出的链接应回滚")
-        self.assertIn("--target", err2.getvalue())
+        self.assertIn("--link", err2.getvalue())
+
+    def test_windows_privilege_error_preserves_target_and_link_intent_across_commands(self):
+        import contextlib, io, unittest.mock
+        previous = ae.current_locale()
+        self.addCleanup(ae.set_locale, previous)
+        custom_target = self.home.parent / "real-target"
+        custom_link = self.custom_dir("cursor-dir")
+        win_err = OSError(1314, "A required privilege is not held by the client")
+        win_err.winerror = 1314
+
+        with unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True):
+            expected_target = f"--target {ae._quote_cli(str(custom_target))}"
+            expected_link = f"--link {ae._quote_cli(f'cursor={custom_link}')}"
+            unexpected_target = f"--target {ae._quote_cli(str(custom_link))}"
+
+        # 1) cmd_install: preserves real --target and --link intent, never passes link dir as --target
+        out, err = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "en"}), \
+                unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
+                unittest.mock.patch("ae.os.symlink", side_effect=win_err), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = ae.main(["install", "--target", str(custom_target), "--link", f"cursor={custom_link}"])
+        self.assertEqual(code, 2)
+        msg = err.getvalue()
+        self.assertIn(expected_target, msg)
+        self.assertIn(expected_link, msg)
+        self.assertNotIn(unexpected_target, msg)
+        self.assertNotIn(f"--target {custom_link}", msg)
+
+        # 2) cmd_upgrade: install directly first, then fail symlink in upgrade
+        with unittest.mock.patch.dict(os.environ, self.env), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ae.main(["install", "--target", str(custom_target)]), 0)
+        out_up, err_up = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "en"}), \
+                unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
+                unittest.mock.patch.object(ae, "list_processes", return_value=[]), \
+                unittest.mock.patch("ae.os.symlink", side_effect=win_err), \
+                contextlib.redirect_stdout(out_up), contextlib.redirect_stderr(err_up):
+            code_up = ae.main(["upgrade", "--target", str(custom_target), "--link", f"cursor={custom_link}"])
+        self.assertEqual(code_up, 2)
+        msg_up = err_up.getvalue()
+        self.assertIn(expected_target, msg_up)
+        self.assertIn(expected_link, msg_up)
+        self.assertNotIn(unexpected_target, msg_up)
+        self.assertNotIn(f"--target {custom_link}", msg_up)
+
+        # 3) repair_links: preserves ctx.target and link spec
+        copy_dir = custom_target / SKILL
+        record = {"links": [{"agent": "cursor", "path": str(custom_link / SKILL)}]}
+        ctx = ae.DoctorContext(skill_copy=copy_dir, repo=ROOT, record=record, target=custom_target)
+        with unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
+                unittest.mock.patch("ae.os.symlink", side_effect=win_err):
+            created, stuck = ae.repair_links(ctx)
+        self.assertEqual(created, [])
+        self.assertEqual(len(stuck), 1)
+        self.assertIn(expected_target, stuck[0])
+        self.assertIn(expected_link, stuck[0])
+        self.assertNotIn(unexpected_target, stuck[0])
+        self.assertNotIn(f"--target {custom_link}", stuck[0])
 
 
 class LinkCheckTests(unittest.TestCase):
