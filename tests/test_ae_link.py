@@ -434,6 +434,33 @@ class AeLinkCliTests(unittest.TestCase):
             self.assertEqual(list(self.home.rglob(".ae-link-backup-*")), [])
 
     @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
+    def test_link_rollback_does_not_replace_an_existing_directory_symlink(self):
+        import unittest.mock as mock
+        original = self.home / "original-skill"
+        replacement = self.home / "replacement-skill"
+        original.mkdir()
+        replacement.mkdir()
+        directory = self.custom_dir("rollback")
+        directory.mkdir()
+        link = directory / SKILL
+        link.symlink_to(original, target_is_directory=True)
+        old_target = os.readlink(link)
+        real_replace = os.replace
+
+        def windows_replace(src, dst):
+            if Path(dst).is_symlink() and Path(dst).is_dir():
+                raise PermissionError("Windows cannot replace a directory symlink")
+            return real_replace(src, dst)
+
+        with mock.patch("ae.os.replace", side_effect=windows_replace):
+            with ae.LinkTransaction() as changes:
+                changes.create("synthetic", directory, replacement)
+                self.assertEqual(link.resolve(), replacement.resolve())
+                # 未提交事务：模拟后续链接或安装核验失败。
+        self.assertEqual(os.readlink(link), old_target)
+        self.assertEqual(list(directory.glob(".ae-link-backup-*")), [])
+
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_upgrade_post_verification_failure_rolls_back_link_changes(self):
         import contextlib, io, unittest.mock as mock
         self.addCleanup(ae.set_locale, ae.current_locale())

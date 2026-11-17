@@ -520,6 +520,9 @@ class LinkTransaction:
             try:
                 if not self.committed:
                     if backup_root is not None:
+                        # Windows 不允许用 MoveFileExW 覆盖现存的目录符号链接。
+                        if link.is_symlink():
+                            link.unlink()
                         os.replace(backup_root / SKILL_NAME, link)
                     else:
                         link.unlink(missing_ok=True)
