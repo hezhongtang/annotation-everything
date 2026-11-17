@@ -1476,6 +1476,14 @@ class LintVersionLockTests(unittest.TestCase):
         self.assertEqual(verify.RUFF_VERSION, match.group(1),
                          "verify.RUFF_VERSION 与 pyproject.toml 锁定的 ruff 版本必须完全一致")
 
+    def test_module_docstring_usage_tracks_ruff_version(self):
+        # 顶部用法文档里的「uv tool run --from ruff==x.y.z」是第三处版本硬编码，
+        # 无动态拼接，靠本断言防止升级时静默过期（issue #183）
+        import verify
+
+        self.assertIn("ruff==" + verify.RUFF_VERSION, verify.__doc__ or "",
+                      "模块顶部用法文档里的 ruff 版本必须与 RUFF_VERSION 同步更新")
+
 
 class LintGroupTests(VerifyEntryTestCase):
     """lint 组（counter=log）：通过与失败两条路径的记录契约（issue #183）。"""

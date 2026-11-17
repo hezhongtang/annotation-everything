@@ -98,8 +98,10 @@ jobs:
           python verify.py report --efficiency | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
   lint:
-    # 固定名称（无 matrix）：便于 protect-main 规则集绑定单一 status check context
-    name: Lint 与格式检查
+    # 固定名称（无 matrix）：便于 protect-main 规则集绑定单一 status check context。
+    # 名称只涵盖 ruff check：格式检查（ruff format --check）待一次性格式化 PR 合并后
+    # 在 cmd_lint_runner 的 steps 里追加，追加时无需改此名称，也就无需重新绑定。
+    name: Lint 静态检查
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -109,7 +111,7 @@ jobs:
           python-version: "3.12"
       # lint 组经 uv tool run --from ruff==0.17.5 ruff check . 执行，uv 在此提供
       - uses: astral-sh/setup-uv@v5
-      - name: Lint 与格式检查（统一验证入口）
+      - name: Lint 静态检查（统一验证入口）
         run: |
           # 验证记录与日志写在 .verify/（已忽略），CI 里作为构件上传；lint 是纯逻辑组，不跑产品测试。
           # job 级 env 不允许 runner 上下文，AE_HOME 用运行器的 RUNNER_TEMP 在脚本内展开。
