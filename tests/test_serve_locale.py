@@ -166,7 +166,8 @@ class ServeCliLanguageTests(unittest.TestCase):
         self.ledger.mkdir()
         self.env = {k: v for k, v in os.environ.items()
                     if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
-        self.env.update({"HOME": str(self.home), "AE_HOME": str(self.ledger),
+        self.env.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
+                         "AE_HOME": str(self.ledger),
                          "PYTHONDONTWRITEBYTECODE": "1"})
 
     def run_serve(self, *args: str, script: Path = SERVE_PY, **env):

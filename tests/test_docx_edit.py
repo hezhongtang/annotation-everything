@@ -18,6 +18,10 @@ from xml.etree import ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skill/annotation-everything/scripts"))
 sys.path.insert(0, str(ROOT / "fixtures/docx"))
+os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))
+_test_user = tempfile.mkdtemp(prefix="ae-test-user-")
+os.environ.setdefault("HOME", _test_user)
+os.environ.setdefault("USERPROFILE", _test_user)
 import docx_edit as de
 import docx_review as dr
 import make_sample as ms
@@ -98,8 +102,10 @@ class WritebackTests(unittest.TestCase):
                 self.assertEqual(after[name], before[name], name)
         backup = Path(result["backup"])
         self.assertEqual(backup.read_bytes(), self.original)
-        self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
-        self.assertIn("batch-1/docx-writeback", str(backup))
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
+        self.assertEqual(backup.parent.name, "docx-writeback")
+        self.assertEqual(backup.parent.parent.name, "batch-1")
 
     def test_cross_run_replacement_keeps_run_properties_and_paragraphs(self):
         self.document('<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>合同金</w:t></w:r>'
@@ -504,6 +510,70 @@ class WritebackTests(unittest.TestCase):
             code = de.main(["apply", str(self.review), "--id", "missing"])
         self.assertEqual(code, 2)
         self.assertIn("不支持的语言：fr", err.getvalue())
+
+    def test_sharing_violation_on_replace_preserves_state_and_allows_safe_retry(self):
+        cjk_dir = self.root / "张伟 审阅"
+        cjk_dir.mkdir()
+        self.review = cjk_dir / "review"
+        self.review.mkdir()
+        self.source = cjk_dir / "合同 草案.docx"
+        self.document(para("甲乙丙") + para("第二段", "0000000B"))
+        self.manifest["sources"] = {"report": "../合同 草案.docx"}
+        (self.review / "review.json").write_text(json.dumps(self.manifest), encoding="utf-8")
+        one = self.note(after="")
+        two = self.note(before="第二", after="新", n=1, full="第二段", pid="0000000B")
+        _doc, batch, _merged = store.handoff_submit(self.review)
+        notes_before = (self.review / "notes.json").read_bytes()
+        handoff_before = (self.review / "handoff.json").read_bytes()
+
+        err_in_use = PermissionError(13, "sharing violation")
+        err_in_use.winerror = 32
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(de.os, "replace", side_effect=err_in_use), \
+                redirect_stdout(out), redirect_stderr(err):
+            code = de.main(["apply", str(self.review), "--batch", str(batch["seq"]), "--locale", "zh-CN"])
+        self.assertEqual(code, 2)
+        self.assertIn("关闭", err.getvalue())
+        self.assertEqual(self.source.read_bytes(), self.original)
+        self.assertEqual((self.review / "notes.json").read_bytes(), notes_before)
+        self.assertEqual((self.review / "handoff.json").read_bytes(), handoff_before)
+        self.assertFalse(list(cjk_dir.glob("*.tmp")))
+        backups = list((self.review / ".snapshots").rglob("*.docx"))
+        self.assertTrue(backups)
+        self.assertEqual(backups[0].read_bytes(), self.original)
+
+        # 模拟其中一条批注已在别处完成，关闭 Word 后重试：只应用剩余未处理项
+        store.set_status(self.review, one, "resolved", resolution="已手工处理", by="agent")
+        out2, err2 = io.StringIO(), io.StringIO()
+        with redirect_stdout(out2), redirect_stderr(err2):
+            code2 = de.main(["apply", str(self.review), "--batch", str(batch["seq"]), "--json", "--locale", "zh-CN"])
+        self.assertEqual(code2, 0, err2.getvalue())
+        res = json.loads(out2.getvalue())
+        self.assertEqual(res["ids"], [two])
+        xml = member(self.source.read_bytes())
+        self.assertIn("甲乙丙".encode(), xml)
+        self.assertIn("新段".encode(), xml)
+
+    def test_sharing_violation_on_source_read_and_external_edit_on_retry(self):
+        self.document()
+        nid = self.note()
+        notes_before = (self.review / "notes.json").read_bytes()
+        err_in_use = PermissionError(13, "locked by office")
+        err_in_use.winerror = 32
+        with patch.object(Path, "read_bytes", side_effect=err_in_use), \
+                self.assertRaises(de.EditError) as caught_lock:
+            de.writeback(self.review, ids=[nid])
+        self.assertEqual(caught_lock.exception.code, "locked")
+        self.assertEqual(self.source.read_bytes(), self.original)
+        self.assertEqual((self.review / "notes.json").read_bytes(), notes_before)
+
+        # 关闭前他人在 Word 中保存了新内容：重试必须按指纹拒绝，不能覆盖新内容
+        saved_by_other = self.original + b"other-user-save"
+        self.source.write_bytes(saved_by_other)
+        with self.assertRaises(de.EditError) as caught:
+            de.writeback(self.review, ids=[nid])
+        self.assertEqual(caught.exception.code, "fingerprint")
+        self.assertEqual(self.source.read_bytes(), saved_by_other)
 
 
 if __name__ == "__main__":

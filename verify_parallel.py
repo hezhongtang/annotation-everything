@@ -23,9 +23,12 @@ class InterruptedRun(KeyboardInterrupt):
 def isolate_environment(root: Path) -> None:
     home = root / "home"
     home.mkdir(parents=True)
-    os.environ.update(HOME=str(home), AE_HOME=str(root / "ledger"),
-                      CLAUDE_SKILLS_DIR=str(home / ".claude" / "skills"),
-                      CODEX_HOME=str(home / ".codex"), XDG_DATA_HOME=str(home / ".local" / "share"))
+    updates = dict(HOME=str(home), AE_HOME=str(root / "ledger"),
+                   CLAUDE_SKILLS_DIR=str(home / ".claude" / "skills"),
+                   CODEX_HOME=str(home / ".codex"), XDG_DATA_HOME=str(home / ".local" / "share"))
+    if os.name == "nt":
+        updates["USERPROFILE"] = str(home)
+    os.environ.update(updates)
 
 
 def _signal_family(pid, signum):

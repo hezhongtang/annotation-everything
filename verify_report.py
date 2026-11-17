@@ -37,12 +37,23 @@ def redact_paths(value, roots=()):
             alias = "local" + ("/" + relative.as_posix() if relative.parts else "")
         except ValueError:
             alias = "source-" + digest(str(absolute))[:12]
-        replacements.append((str(absolute), alias))
+        for variant in dict.fromkeys((str(absolute), absolute.as_posix())):
+            replacements.append((variant, alias))
     replacements.sort(key=lambda item: -len(item[0]))
+    compiled = []
+    for path, alias in replacements:
+        tail = (r"[^\s\"'<>，；：,;\]\[{}()]*" if path.endswith(("/", "\\"))
+                else r"(?:[\\/][^\s\"'<>，；：,;\]\[{}()]*)?")
+        compiled.append((path, alias, re.compile(re.escape(path) + tail)))
 
     def text_value(text):
-        for path, alias in replacements:
-            text = text.replace(path, alias)
+        for path, alias, pattern in compiled:
+            def _replace(match, _prefix=path, _alias=alias):
+                suffix = match.group(0)[len(_prefix):].replace("\\", "/")
+                if _prefix.endswith(("/", "\\")) and suffix and not _alias.endswith("/"):
+                    return _alias + "/" + suffix
+                return _alias + suffix
+            text = pattern.sub(_replace, text)
         return _ABSOLUTE_PATH.sub(lambda match: match.group("url") or "<external-path>", text)
 
     def visit(item):
@@ -513,12 +524,22 @@ def selection_guard(selection, root):
 
 
 def _write(path, value):
+    import time
+
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=".efficiency-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(value)
-        os.replace(temporary, path)
+        attempts = 5 if os.name == "nt" else 1
+        for attempt in range(attempts):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt + 1 >= attempts:
+                    raise
+                time.sleep(0.01 * (attempt + 1))
     finally:
         try:
             os.unlink(temporary)

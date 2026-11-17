@@ -33,6 +33,7 @@ from xml.parsers import expat
 from xml.sax.saxutils import escape as _attr_escape_raw
 
 import docx_edit as de   # 与 DOCX 回写共用同一套字节级 ZIP 重封装、转义与空白折叠匹配
+import fsutil
 import i18n
 import ledger
 import notes_store as store
@@ -1400,7 +1401,7 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
         temp = Path(temp_name)
         try:
             with os.fdopen(fd, "wb") as fh:
-                if not separate:
+                if not separate and hasattr(os, "fchmod"):
                     os.fchmod(fh.fileno(), stat.S_IMODE(source.stat().st_mode))
                 fh.write(packed)
                 fh.flush()
@@ -1409,7 +1410,7 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
             de._source_check(source, fingerprint)   # PowerPoint 或别的进程在准备期间动过源文件就拒绝提交
             if separate and destination.exists():
                 raise EditError("output", str(destination))
-            os.replace(temp, destination)
+            de._replace_file(temp, destination)
         finally:
             temp.unlink(missing_ok=True)
         return result
@@ -1451,6 +1452,7 @@ def _load_ops_file(path: Path) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    fsutil.configure_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
         language = i18n.cli_locale(i18n.explicit_locale(argv))

@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
 import socket
 import stat
 import struct
@@ -49,6 +48,8 @@ class Rejected(RuntimeError):
 
 class DesktopIPC:
     def __init__(self, path, timeout=15, *, deadline=None):
+        if fsutil.is_windows() or not hasattr(socket, "AF_UNIX") or not hasattr(os, "getuid"):
+            raise ValueError("desktop-ipc-unavailable")
         path = Path(path)
         info, parent = path.lstat(), path.parent.stat()
         if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
@@ -136,11 +137,12 @@ class DesktopIPC:
 
 
 def _read(path):
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError("private-file-required:" + path.name)
-    if info.st_size > 4 * 1024 * 1024:
-        raise ValueError("metadata-too-large")
+    fsutil.check_private_regular_file(
+        path,
+        max_bytes=4 * 1024 * 1024,
+        private_error="private-file-required:" + path.name,
+        size_error="metadata-too-large",
+    )
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("version") != SCHEMA:
         raise ValueError("unsupported-agent-metadata")
@@ -305,8 +307,9 @@ def _record(review, key, changes, *, deadline=None):
 def prompt(binding, event, seq, message_id):
     review = Path(binding["reviewDir"])
     scripts = Path(__file__).resolve().parent
-    ack = shlex.join(["python3", str(scripts / "wakeup.py"), "ack", str(review),
-                      "--event", event, "--seq", str(seq), "--message-id", message_id])
+    py = fsutil.python_cli()
+    ack = fsutil.join_cli([py, str(scripts / "wakeup.py"), "ack", str(review),
+                           "--event", event, "--seq", str(seq), "--message-id", message_id])
     metadata = json.dumps({"reviewId": binding["reviewId"], "reviewDir": str(review),
                            "event": event, "seq": seq, "messageId": message_id}, ensure_ascii=False)
     queue_hint = (
@@ -315,12 +318,12 @@ def prompt(binding, event, seq, message_id):
         "and an analysis round with the same number as the same item.\n"
     )
     if event == "analysis":
-        claim = shlex.join(["python3", str(scripts / "notes.py"), "claim", str(review),
-                            "--events", "analysis", "--round", str(seq), "--by", "Codex"])
-        context = shlex.join(["python3", str(scripts / "notes.py"), "analysis", str(review),
-                              "--round", str(seq), "--json"])
-        writeback = shlex.join(["python3", str(scripts / "notes.py"), "analysis-writeback", str(review),
-                                "--round", str(seq)])
+        claim = fsutil.join_cli([py, str(scripts / "notes.py"), "claim", str(review),
+                                 "--events", "analysis", "--round", str(seq), "--by", "Codex"])
+        context = fsutil.join_cli([py, str(scripts / "notes.py"), "analysis", str(review),
+                                   "--round", str(seq), "--json"])
+        writeback = fsutil.join_cli([py, str(scripts / "notes.py"), "analysis-writeback", str(review),
+                                     "--round", str(seq)])
         return (
             "[annotation-everything: analysis round]\n"
             "This message was delivered by the local review's saved binding to this chat after the reviewer "
@@ -351,13 +354,13 @@ def prompt(binding, event, seq, message_id):
             "create a scheduler, change Codex configuration, or start another CLI agent.\n"
             f"Delivery marker: ae:{binding['reviewId']}:{event}:{seq}:{message_id}"
         )
-    claim = shlex.join(["python3", str(scripts / "notes.py"), "claim", str(review),
-                        "--stage", DELIVERY_EVENTS[event]["claimStage"], "--events", "analysis",
-                        "--seq", str(seq), "--by", "Codex"])
+    claim = fsutil.join_cli([py, str(scripts / "notes.py"), "claim", str(review),
+                             "--stage", DELIVERY_EVENTS[event]["claimStage"], "--events", "analysis",
+                             "--seq", str(seq), "--by", "Codex"])
     item = next((item for item in store.handoff_load(review)["items"] if item["seq"] == seq), {})
     check_hint = ""
     if item.get("fullCheck") is True:
-        check_command = shlex.join(["python3", str(scripts / "notes.py"), "analysis-check", str(review), "--json"])
+        check_command = fsutil.join_cli([py, str(scripts / "notes.py"), "analysis-check", str(review), "--json"])
         check_hint = (
             f"Read current analysis conclusions, including analyses with no active round: {check_command}\n"
             "For this full check, add four lists for reviewer confirmation: changed-notes (annotations whose "
@@ -694,6 +697,7 @@ def cancel_review(review, *, deadline):
 
 
 def main(argv=None):
+    fsutil.configure_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("bind", "check", "status", "ack", "deliver", "unbind"):
@@ -743,7 +747,7 @@ def main(argv=None):
     elif args.command == "unbind":
         with dispatch_lock(review), store.locked(review):
             assert_transferable(review)
-            if (review / BINDING_FILE).exists():
+            if (review / BINDING_FILE).exists() or (review / BINDING_FILE).is_symlink():
                 _read(review / BINDING_FILE)
             (review / BINDING_FILE).unlink(missing_ok=True)
         result = {"state": "unconfigured", "restartRequired": True}

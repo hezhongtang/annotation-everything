@@ -119,12 +119,11 @@ def make_reading_record(sources: list | None = None, gaps: list | None = None,
 def write_case(d: Path, record: dict | None = None) -> dict:
     d.mkdir(parents=True, exist_ok=True)
     paths = {"report": d / "report.html", "script": d / "script.md"}
-    paths["report"].write_text(REPORT, encoding="utf-8")
-    paths["script"].write_text(SCRIPT, encoding="utf-8")
+    paths["report"].write_bytes(REPORT.encode("utf-8"))
+    paths["script"].write_bytes(SCRIPT.encode("utf-8"))
     if record is not None:
         paths["record"] = d / "report-record.json"
-        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-                                   encoding="utf-8")
+        paths["record"].write_bytes((json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     return paths
 
 
@@ -192,7 +191,7 @@ def installed_copy() -> Path:
     temp = tempfile.mkdtemp(prefix="ae-read-res-")
     home = Path(temp) / "home"
     skills = home / ".claude" / "skills"
-    env = {**os.environ, "HOME": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
     done = subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stdout + done.stderr

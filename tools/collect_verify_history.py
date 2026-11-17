@@ -26,8 +26,9 @@ MAX_EXPANDED = 60 * 1024 * 1024
 
 
 def gh_api(endpoint, binary=False):
+    gh_exe = shutil.which("gh") or "gh"
     try:
-        result = subprocess.run(["gh", "api", endpoint], capture_output=True, timeout=30)
+        result = subprocess.run([gh_exe, "api", endpoint], capture_output=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ValueError("远端不可用或网络超时（%s）" % type(exc).__name__) from exc
     if result.returncode:
@@ -110,8 +111,9 @@ def collect(repository, out_dir, limit):
                 source = target if (target / "runs").is_dir() else target / ".verify"
                 if not (source / "runs").is_dir():
                     raise ValueError("构件缺少结构化 runs 目录；旧日志不能当作验证成功")
-                sources.append(str(source.relative_to(out_dir)))
-                locations.append({"source": str(source.relative_to(out_dir)), "artifact_id": aid,
+                rel_source = source.relative_to(out_dir).as_posix()
+                sources.append(rel_source)
+                locations.append({"source": rel_source, "artifact_id": aid,
                                   "url": "https://github.com/%s/actions/runs/%s" % (
                                       repository, (artifact.get("workflow_run") or {}).get("id", "unknown"))})
             except (ValueError, OSError, zipfile.BadZipFile) as exc:

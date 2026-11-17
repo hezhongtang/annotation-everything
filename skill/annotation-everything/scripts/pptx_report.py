@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import base64
 import html
+import os
 import re
 import subprocess
 import tempfile
 from pathlib import Path
 
+import fsutil
 import pptx_reader as pr
 
 # review.json 的 format.version：PPT 审阅元数据的版本
@@ -45,6 +47,65 @@ def is_ppt(path: Path) -> bool:
     return Path(path).suffix.lower() == ".ppt"
 
 
+def _windows_env_dirs(*names: str) -> list[Path]:
+    dirs: list[Path] = []
+    seen: set[str] = set()
+    for name in names:
+        val = (os.environ.get(name) or "").strip()
+        if not val or val in seen:
+            continue
+        seen.add(val)
+        dirs.append(Path(val))
+    return dirs
+
+
+def _windows_soffice_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    for base in _windows_env_dirs("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+        for exe in ("soffice.com", "soffice.exe"):
+            candidates.append(base / "LibreOffice" / "program" / exe)
+    for base in _windows_env_dirs("LOCALAPPDATA"):
+        for sub in ("Programs/LibreOffice/program", "LibreOffice/program"):
+            for exe in ("soffice.com", "soffice.exe"):
+                candidates.append(base / sub / exe)
+    return candidates
+
+
+def windows_poppler_dirs() -> list[Path]:
+    """Windows 常见 Poppler 可执行目录探测（只看已知路径与单层 poppler* 目录，不做全盘扫描）。"""
+    dirs: list[Path] = []
+    seen: set[Path] = set()
+
+    def add(path: Path) -> None:
+        if path not in seen:
+            seen.add(path)
+            dirs.append(path)
+
+    roots = _windows_env_dirs("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432")
+    for base in _windows_env_dirs("LOCALAPPDATA"):
+        roots.extend([base / "Programs", base])
+    for root in roots:
+        for rel in ("poppler/Library/bin", "poppler/bin", "poppler"):
+            add(root / rel)
+        try:
+            children = sorted(root.iterdir(), key=lambda p: p.name.casefold(), reverse=True)
+        except OSError:
+            children = []
+        for child in children:
+            if child.name.lower().startswith("poppler") and child.is_dir():
+                for sub in ("Library/bin", "bin", ""):
+                    add(child / sub if sub else child)
+    for base in _windows_env_dirs("LOCALAPPDATA"):
+        add(base / "Microsoft" / "WinGet" / "Links")
+    for base in _windows_env_dirs("USERPROFILE"):
+        add(base / "scoop" / "apps" / "poppler" / "current" / "Library" / "bin")
+        add(base / "scoop" / "apps" / "poppler" / "current" / "bin")
+        add(base / "scoop" / "shims")
+    for base in _windows_env_dirs("ProgramData"):
+        add(base / "chocolatey" / "bin")
+    return dirs
+
+
 def find_soffice() -> str | None:
     """本机 LibreOffice 可执行文件：先看 PATH，再试常见安装位置；没有返回 None。"""
     from shutil import which
@@ -54,12 +115,25 @@ def find_soffice() -> str | None:
     for candidate in SOFFICE_CANDIDATES:
         if Path(candidate).is_file():
             return candidate
+    if fsutil.is_windows():
+        for candidate in _windows_soffice_candidates():
+            if candidate.is_file():
+                return str(candidate)
     return None
 
 
 def find_rasterizer() -> str | None:
+    """本机 Poppler pdftoppm：先看 PATH，Windows 再探测常见 Poppler 安装目录。"""
     from shutil import which
-    return which("pdftoppm")
+    found = which("pdftoppm")
+    if found:
+        return found
+    if fsutil.is_windows():
+        for directory in windows_poppler_dirs():
+            candidate = directory / "pdftoppm.exe"
+            if candidate.is_file():
+                return str(candidate)
+    return None
 
 
 def render_slides(pptx: Path, workdir: Path) -> list[bytes]:
@@ -74,7 +148,7 @@ def render_slides(pptx: Path, workdir: Path) -> list[bytes]:
     try:
         done = subprocess.run(
             [soffice, "--headless", "--norestore", "--convert-to", "pdf", "--outdir", str(workdir), str(pptx)],
-            capture_output=True, text=True, errors="replace", timeout=SOFFICE_TIMEOUT, check=False)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=SOFFICE_TIMEOUT, check=False)
     except subprocess.TimeoutExpired:
         raise PptxReportError("timeout", "soffice") from None
     except OSError as exc:
@@ -89,7 +163,7 @@ def render_slides(pptx: Path, workdir: Path) -> list[bytes]:
     prefix = workdir / "slide"
     try:
         done = subprocess.run([rasterizer, "-png", "-r", "96", str(pdf), str(prefix)],
-                              capture_output=True, text=True, errors="replace",
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
                               timeout=RASTER_TIMEOUT, check=False)
     except subprocess.TimeoutExpired:
         raise PptxReportError("timeout", "pdftoppm") from None

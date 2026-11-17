@@ -101,8 +101,8 @@ def main() -> int:
     report_path = out / "report.html"
     script_path = out / "script.md"
     record_path = out / "report-record.json"
-    report_path.write_text(report, encoding="utf-8")
-    script_path.write_text(script_md, encoding="utf-8")
+    report_path.write_bytes(report.encode("utf-8"))
+    script_path.write_bytes(script_md.encode("utf-8"))
 
     rel = src.name
     record = {
@@ -130,8 +130,7 @@ def main() -> int:
         "openItems": [],
         "verdict": {"draftComplete": True, "deliverable": None},
     }
-    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-                           encoding="utf-8")
+    record_path.write_bytes((json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     print(f"{SKILL_NAME} v{SKILL_VERSION}: wrote report.html script.md report-record.json "
           f"(style marker: xs-lite)")
     return 0

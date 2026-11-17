@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -43,11 +44,27 @@ def _engine() -> list[str] | None:
     return None
 
 
+def _is_node(engine: list[str] | None) -> bool:
+    return bool(engine and Path(engine[0]).stem.lower() == "node")
+
+
+def _run_temp_js(command: list[str], source: str) -> subprocess.CompletedProcess:
+    fd, raw = tempfile.mkstemp(suffix=".js")
+    os.close(fd)
+    path = Path(raw)
+    path.write_bytes(source.encode("utf-8"))
+    try:
+        return subprocess.run([*command, str(path)], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=30)
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def _run_js(catalogs: dict, cases: list[dict]) -> list[dict]:
     engine = _engine()
     if engine is None:
         raise unittest.SkipTest("没有 JS 引擎，跳过页面函数执行")
-    epilogue = "console.log(JSON.stringify(__out));" if engine[0].endswith("node") else "__out"
+    epilogue = "console.log(JSON.stringify(__out));" if _is_node(engine) else "__out"
     source = "\n".join([
         "const CATALOGS = " + json.dumps(catalogs, ensure_ascii=False) + ";",
         "let uiLocale = 'zh-CN';",
@@ -61,12 +78,7 @@ def _run_js(catalogs: dict, cases: list[dict]) -> list[dict]:
         "});",
         epilogue,
     ])
-    path = Path(tempfile.mkstemp(suffix=".js")[1])
-    path.write_text(source, encoding="utf-8")
-    try:
-        proc = subprocess.run([*engine, str(path)], capture_output=True, text=True, timeout=30)
-    finally:
-        path.unlink(missing_ok=True)
+    proc = _run_temp_js(engine, source)
     if proc.returncode != 0:
         raise AssertionError(proc.stderr or proc.stdout)
     return json.loads(proc.stdout.strip())
@@ -178,7 +190,7 @@ class ReviewPageRuntimeTests(unittest.TestCase):
         页面直接失效；这类错误在静态检查里看不出来，必须有引擎真正解析一遍。
         """
         engine = _engine()
-        if engine is None or not engine[0].endswith("node"):
+        if not _is_node(engine):
             self.skipTest("没有 node，跳过整段脚本解析")
         source = TEMPLATE.read_text(encoding="utf-8")
         start = source.find("<script>")
@@ -186,12 +198,7 @@ class ReviewPageRuntimeTests(unittest.TestCase):
         self.assertGreaterEqual(start, 0, "页面里找不到内联脚本")
         self.assertGreater(end, start, "页面里的内联脚本没有闭合")
         script = source[start + len("<script>"):end]
-        path = Path(tempfile.mkstemp(suffix=".js")[1])
-        path.write_text(script, encoding="utf-8")
-        try:
-            proc = subprocess.run([*engine, "--check", str(path)], capture_output=True, text=True, timeout=30)
-        finally:
-            path.unlink(missing_ok=True)
+        proc = _run_temp_js([*engine, "--check"], script)
         self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
 
     def test_chinese_catalog_keeps_shipped_composer_labels(self):

@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import datetime
 import errno
@@ -48,6 +49,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -331,16 +333,32 @@ class CommandError(Exception):
     """命令的输入或本机元数据损坏；由统一入口报告并返回 2。"""
 
 
+class ProcessEnumerationError(CommandError):
+    """进程枚举失败或权限不足，无法确认本机运行中的服务。"""
+
+
 def skill_copy_dir() -> Path:
     """缺省的技能副本位置：CLAUDE_SKILLS_DIR 可覆盖，默认 ~/.claude/skills。"""
-    skills_root = os.environ.get("CLAUDE_SKILLS_DIR") or Path.home() / ".claude" / "skills"
+    env_root = os.environ.get("CLAUDE_SKILLS_DIR")
+    if env_root:
+        _reject_unc_path(env_root)
+    skills_root = env_root or Path.home() / ".claude" / "skills"
     return Path(skills_root).expanduser() / SKILL_NAME
+
+
+def _reject_unc_path(raw) -> None:
+    s = os.fspath(raw).strip().replace("\\", "/")
+    if len(s) > 2 and s.startswith("//") and s[2] != "/":
+        if len(s) >= 7 and s[:4] == "//?/" and s[4].isalpha() and s[5] == ":" and s[6] == "/":
+            return
+        raise CommandError(f"Unsupported UNC or device path: {raw}")
 
 
 def resolve_copy_dir(target) -> Path:
     """技能副本的位置：--target 显式给出时用 <目录>/技能名，否则用缺省位置（skill_copy_dir）。"""
     if target is None:
         return skill_copy_dir()
+    _reject_unc_path(target)
     return Path(target).expanduser() / SKILL_NAME
 
 
@@ -364,7 +382,10 @@ def known_skill_roots() -> list:
         seen.add(key)
         found.append((name, path))
 
-    add("codex", Path(os.environ.get("CODEX_HOME") or home / ".codex").expanduser() / "skills")
+    env_codex = os.environ.get("CODEX_HOME")
+    if env_codex:
+        _reject_unc_path(env_codex)
+    add("codex", Path(env_codex or home / ".codex").expanduser() / "skills")
     claude = Path(os.environ.get("CLAUDE_SKILLS_DIR") or home / ".claude" / "skills").expanduser()
     add("claude-code", claude)
     add("claude-code", home / ".claude" / "skills")
@@ -409,6 +430,7 @@ def parse_link_agents(spec: str) -> list:
         if sep:
             if not name or not raw.strip():
                 raise CommandError(T("cli.ae.install.badLinkSpec", spec=token))
+            _reject_unc_path(raw.strip())
             directory = Path(raw.strip()).expanduser()
             if not directory.is_absolute():
                 directory = Path(os.path.abspath(str(directory)))
@@ -456,11 +478,37 @@ def read_version(repo: Path) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _python_cli() -> str:
+    return "python" if _is_windows() else "python3"
+
+
+_PS_UNSAFE_RE = re.compile(r"[^A-Za-z0-9_./:\\-]")
+
+
+def _quote_cli(arg: str) -> str:
+    """按当前平台 shell 习惯引用命令行参数：POSIX 用 shlex.quote，Windows 用 PowerShell/cmd 兼容写法。"""
+    if not _is_windows():
+        return shlex.quote(arg)
+    if arg and not _PS_UNSAFE_RE.search(arg):
+        return arg
+    if not any(ch in arg for ch in ('"', "$", "`")) and not arg.endswith("\\"):
+        return f'"{arg}"'
+    return "'" + arg.replace("'", "''") + "'"
+
+
+def _is_symlink_privilege_error(exc: OSError) -> bool:
+    return _is_windows() and (getattr(exc, "winerror", None) == 1314 or isinstance(exc, PermissionError))
+
+
 def read_commit(repo: Path) -> str:
     """读来源仓库当前提交号；不在 git 仓库里时为空字符串。"""
     try:
         done = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return done.stdout.strip() if done.returncode == 0 else ""
@@ -544,13 +592,106 @@ def create_link(name: str, directory: Path, copy_dir: Path) -> dict:
     if link.is_symlink():
         link.unlink()
     link.parent.mkdir(parents=True, exist_ok=True)
-    os.symlink(str(copy_dir.resolve()), str(link))
+    os.symlink(str(copy_dir.resolve()), str(link), target_is_directory=True)
     return {"agent": name, "path": str(link)}
+
+
+class LinkTransaction:
+    """保留正确链接，替换前用重命名备份；失败回滚不依赖创建符号链接的权限。"""
+
+    def __init__(self):
+        self.changes = []
+        self.committed = False
+
+    def __enter__(self):
+        return self
+
+    def create(self, name: str, directory: Path, copy_dir: Path) -> dict:
+        link = Path(directory) / SKILL_NAME
+        if _link_targets_copy(link, copy_dir):
+            return {"agent": name, "path": str(link)}
+        backup_root = None
+        if link.is_symlink():
+            backup_root = Path(tempfile.mkdtemp(prefix=".ae-link-backup-", dir=link.parent))
+            try:
+                os.replace(link, backup_root / SKILL_NAME)
+            except BaseException:
+                backup_root.rmdir()
+                raise
+        self.changes.append((link, backup_root))
+        return create_link(name, directory, copy_dir)
+
+    def __exit__(self, exc_type, exc, tb):
+        errors = []
+        for link, backup_root in reversed(self.changes):
+            try:
+                if not self.committed:
+                    if backup_root is not None:
+                        # Windows 不允许用 MoveFileExW 覆盖现存的目录符号链接。
+                        if link.is_symlink():
+                            link.unlink()
+                        os.replace(backup_root / SKILL_NAME, link)
+                    else:
+                        link.unlink(missing_ok=True)
+                if backup_root is not None:
+                    shutil.rmtree(backup_root)
+            except OSError as error:
+                # 恢复失败的备份留在原位置，继续恢复其他链接。
+                errors.append(error)
+        if errors:
+            raise errors[0]
+
+
+def _strip_win_device_prefix(raw: str) -> str:
+    if raw.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + raw[8:]
+    if raw.startswith("\\\\?\\"):
+        return raw[4:]
+    return raw
+
+
+def _canon_link_target(raw: str) -> str:
+    cleaned = _strip_win_device_prefix(raw)
+    resolved = _strip_win_device_prefix(os.path.realpath(cleaned))
+    norm = os.path.normpath(resolved)
+    return os.path.normcase(norm) if _is_windows() else norm
+
+
+def _link_targets_copy(link: Path, skill_copy: Path) -> bool:
+    """链接是否为指向技能副本的软链接（兼容 Windows \\\\?\\ 前缀、大小写、短路径与悬空链接）。"""
+    if not link.is_symlink():
+        return False
+    norm_fn = os.path.normcase if _is_windows() else (lambda s: s)
+    expected = {
+        _canon_link_target(str(skill_copy)),
+        norm_fn(os.path.normpath(_strip_win_device_prefix(str(skill_copy)))),
+    }
+    if _canon_link_target(str(link)) in expected:
+        return True
+    try:
+        raw_target = os.readlink(str(link))
+    except OSError:
+        return False
+    stripped = _strip_win_device_prefix(raw_target)
+    if not os.path.isabs(stripped):
+        stripped = os.path.join(str(link.parent), stripped)
+    return _canon_link_target(stripped) in expected or norm_fn(os.path.normpath(stripped)) in expected
+
+
+def _link_agent_spec(name: str, directory: Path) -> str:
+    if name in LINK_AGENTS and link_target_dir(name) == directory:
+        return name
+    return f"{name}={directory}"
+
+
+def _privilege_error_message(repo: Optional[Path], specs: list, target: Optional[Path]) -> str:
+    direct = install_fix(repo, target)
+    retry = install_link_fix(repo, specs, target) if specs else direct
+    return T("cli.ae.install.linkPrivilege", commands=direct, retry=retry)
 
 
 def merged_links(previous: Optional[dict], copy_dir: Path, created: list) -> list:
     """合并历史记录与本次新建的链接：只保留仍是链接且指向技能副本的条目，按路径去重。"""
-    target = os.path.realpath(str(copy_dir))
     entries = []
     if isinstance(previous, dict) and isinstance(previous.get("links"), list):
         entries.extend(entry for entry in previous["links"] if isinstance(entry, dict))
@@ -560,7 +701,7 @@ def merged_links(previous: Optional[dict], copy_dir: Path, created: list) -> lis
         path = entry.get("path")
         if not isinstance(path, str) or path in seen:
             continue
-        if Path(path).is_symlink() and os.path.realpath(path) == target:
+        if _link_targets_copy(Path(path), copy_dir):
             merged.append({"agent": entry.get("agent", ""), "path": path})
             seen.add(path)
     return merged
@@ -599,15 +740,309 @@ def cmd_install(args) -> int:
     except CommandError:
         # 重装可以修复损坏记录；已知位置的链接仍通过扫描保留。
         previous = {"links": scan_links(dst)}
-    copy_skill(src, dst)
-    created = [create_link(name, directory, dst) for name, directory in agents]
-    links = merged_links(previous, dst, created)
-    write_record(dst, repo, links)
+    if paths_overlap(src, dst):
+        raise CommandError(T("cli.ae.copy.overlap", copy=dst, source=src))
+    existed_before = dst.exists()
+    backup_root: Optional[Path] = None
+    backup: Optional[Path] = None
+    with LinkTransaction() as link_changes:
+        try:
+            if existed_before and agents and dst.is_dir() and not dst.is_symlink():
+                backup_root = Path(tempfile.mkdtemp(prefix=".ae-install-backup-", dir=dst.parent))
+                backup = backup_root / SKILL_NAME
+                shutil.copytree(dst, backup, symlinks=True)
+            copy_skill(src, dst)
+            created = []
+            try:
+                for name, directory in agents:
+                    created.append(link_changes.create(name, directory, dst))
+            except OSError as exc:
+                if not _is_symlink_privilege_error(exc):
+                    raise
+                if backup is not None and backup.exists():
+                    if dst.exists():
+                        shutil.rmtree(dst)
+                    os.replace(backup, dst)
+                elif not existed_before:
+                    shutil.rmtree(dst, ignore_errors=True)
+                specs = [_link_agent_spec(name, directory) for name, directory in agents]
+                print(_privilege_error_message(repo, specs, getattr(args, "target", None)), file=sys.stderr)
+                return 2
+            links = merged_links(previous, dst, created)
+            write_record(dst, repo, links)
+            link_changes.committed = True
+        finally:
+            if backup_root is not None:
+                shutil.rmtree(backup_root, ignore_errors=True)
     print(T("cli.ae.install.done", path=dst))
     if created:
         print(T("cli.ae.install.links",
                 list=join(f"{entry['agent']}（{entry['path']}）" for entry in created)))
     return 0
+
+
+def _notes_processes(procs: list, extra_copy: Optional[Path] = None) -> list:
+    """识别正在运行本仓库或技能副本 notes.py（如 wait）的进程。"""
+    trusted = [Path(__file__).resolve().parent / SKILL_SRC / "scripts" / "notes.py",
+               skill_copy_dir() / "scripts" / "notes.py"]
+    if extra_copy is not None:
+        trusted.append(Path(extra_copy) / "scripts" / "notes.py")
+    trusted_resolved = [p.resolve() for p in trusted]
+    found = []
+    for pid, cmdline in procs:
+        tokens = command_tokens(cmdline)
+        if not tokens:
+            continue
+        exe_name = tokens[0].rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if not re.fullmatch(r"(?:python(?:\d+(?:\.\d+)*)?|pypy\d*|py)(?:\.exe)?", exe_name):
+            continue
+        idx = 1
+        while idx < len(tokens):
+            tok = tokens[idx]
+            if tok.startswith(("-c", "-m")) or tok == "-":
+                idx = len(tokens)
+                break
+            if tok == "--":
+                idx += 1
+                break
+            if tok in ("-W", "-X"):
+                idx += 2
+            elif tok.startswith("-"):
+                idx += 1
+            else:
+                break
+        if idx >= len(tokens):
+            continue
+        script = Path(tokens[idx])
+        if not script.is_absolute():
+            cwd = process_cwd(pid) if pid is not None else str(Path.cwd())
+            if cwd is None:
+                continue
+            script = Path(cwd) / script
+        try:
+            resolved = script.resolve()
+        except (OSError, ValueError):
+            continue
+        match = any(
+            (os.path.normcase(str(resolved)) == os.path.normcase(str(path))) if _is_windows() else (resolved == path)
+            for path in trusted_resolved
+        )
+        if match:
+            found.append((pid, cmdline))
+    return found
+
+
+def _active_review_or_home_services(mod) -> list[str]:
+    """检查台账里是否有运行中的审阅服务、等待者或总览首页（无法确认状态时抛 CommandError）。"""
+    active = []
+    home_dir = ledger_home()
+    if (home_dir / mod.LEDGER_FILE).exists():
+        entries = mod.entries()
+    else:
+        entries = {}
+    for rid, entry in entries.items():
+        review_dir = Path(entry["dir"])
+        status_path = mod.status_file(review_dir)
+        try:
+            info = json.loads(status_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            info = None
+        except (OSError, ValueError) as exc:
+            raise CommandError(T("cli.ae.upgrade.serviceStateError", detail=exc)) from None
+        if info is not None:
+            if not isinstance(info, dict) or info.get("app") != APP:
+                raise CommandError(T("cli.ae.upgrade.serviceStateError", detail=str(status_path)))
+            pid = info.get("pid")
+            if type(pid) is not int or pid <= 0:
+                raise CommandError(T("cli.ae.upgrade.serviceStateError", detail=str(status_path)))
+            if mod.pid_alive(pid):
+                active.append(f"review {rid[:8]} (pid {pid})")
+        if review_dir.is_dir():
+            for mark in review_dir.glob(mod.WAIT_PREFIX + "*.json"):
+                try:
+                    w = json.loads(mark.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                wpid = w.get("pid") if isinstance(w, dict) else None
+                if type(wpid) is int and wpid > 0 and mark.name == mod.wait_file(review_dir, wpid).name and mod.pid_alive(wpid):
+                    active.append(f"waiter {rid[:8]} (pid {wpid})")
+    overview_status = home_dir / mod.OVERVIEW_STATUS_FILE
+    try:
+        oinfo = json.loads(overview_status.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        oinfo = None
+    except (OSError, ValueError) as exc:
+        raise CommandError(T("cli.ae.upgrade.serviceStateError", detail=exc)) from None
+    if oinfo is not None:
+        if not isinstance(oinfo, dict) or oinfo.get("app") != APP:
+            raise CommandError(T("cli.ae.upgrade.serviceStateError", detail=str(overview_status)))
+        opid = oinfo.get("pid")
+        if type(opid) is not int or opid <= 0:
+            raise CommandError(T("cli.ae.upgrade.serviceStateError", detail=str(overview_status)))
+        if mod.pid_alive(opid):
+            active.append(f"overview-home (pid {opid})")
+    return active
+
+
+def cmd_upgrade(args) -> int:
+    """可靠手动升级：前置核对运行中服务/等待者/总览与副本本地改动，再经暂存与可回滚备份替换。"""
+    repo = Path(__file__).resolve().parent
+    src = repo / SKILL_SRC
+    if not src.is_dir():
+        print(T("cli.ae.install.missingSource", path=src), file=sys.stderr)
+        return 2
+    target = getattr(args, "target", None)
+    dst = resolve_copy_dir(target)
+    ensure_not_skill_source(dst)
+    if dst.is_symlink() or not dst.is_dir():
+        print(T("cli.ae.upgrade.notInstalled", path=dst, command=install_fix(repo, target)), file=sys.stderr)
+        return 1
+    agents = parse_link_agents(getattr(args, "link", "") or "")
+    unknown = [name for name, directory in agents if directory is None]
+    if unknown:
+        print(T("cli.ae.install.unknownAgent", names=join(unknown), options=join(LINK_AGENTS)), file=sys.stderr)
+        return 2
+    locations = [(name, directory / SKILL_NAME) for name, directory in agents]
+    for name, link in locations:
+        other = _link_overlap(link, src, dst)
+        if other is None:
+            other = next((cand for _a, cand in locations if cand != link and _link_locations_overlap(link, cand)), None)
+        if other is not None:
+            print(T("cli.ae.install.linkOverlap", agent=name, path=link, other=other), file=sys.stderr)
+            return 2
+        if link.exists() and not link.is_symlink():
+            print(T("cli.ae.install.occupied", agent=name, path=link), file=sys.stderr)
+            return 2
+
+    force = bool(getattr(args, "force", False))
+    try:
+        record = read_record(dst, target)
+    except CommandError as exc:
+        if not force:
+            print(str(exc), file=sys.stderr)
+            return 1
+        record = None
+    if record is None and not force:
+        print(T("cli.ae.upgrade.noRecord", path=dst, command=install_fix(repo, target)), file=sys.stderr)
+        return 1
+    manifest_mod = skill_module("content_manifest")
+    if not force:
+        expected = record.get("tree") if isinstance(record, dict) else None
+        if not isinstance(expected, dict):
+            print(T("cli.ae.upgrade.unverifiedCopy", path=dst, command=install_fix(repo, target)), file=sys.stderr)
+            return 1
+        if manifest_mod.snapshot(dst) != expected:
+            print(T("cli.ae.upgrade.modified", path=dst), file=sys.stderr)
+            return 1
+
+    old_version = (record.get("version") if isinstance(record, dict) else None) or T("doctor.copyVersion.unknown")
+    new_version = read_version(repo) or T("doctor.copyVersion.unknown")
+    fsutil_mod = skill_module("fsutil")
+    ledger_mod = skill_ledger_module()
+    lock_path = dst.parent / ".annotation-everything-update.lock"
+    with contextlib.ExitStack() as lock_stack:
+        try:
+            lock_stack.enter_context(fsutil_mod.flocked(lock_path, exclusive=True, nonblocking=True, nofollow=True))
+        except BlockingIOError:
+            print(T("cli.ae.upgrade.running", detail="update-lock"), file=sys.stderr)
+            return 1
+        except OSError as exc:
+            print(T("cli.ae.upgrade.cannotVerifyServices", detail=exc), file=sys.stderr)
+            return 1
+        try:
+            active_items = _active_review_or_home_services(ledger_mod)
+            procs = list_processes()
+        except (ledger_mod.LedgerError, CommandError, OSError) as exc:
+            print(T("cli.ae.upgrade.cannotVerifyServices", detail=exc), file=sys.stderr)
+            return 1
+        active_procs = (running_servers(lister=lambda: procs, extra_copy=dst)
+                        + running_home_servers(lister=lambda: procs, extra_copy=dst)
+                        + _notes_processes(procs, extra_copy=dst))
+        if active_items or active_procs:
+            details = [*active_items, *(f"pid {pid}" for pid, _cmd in active_procs)]
+            print(T("cli.ae.upgrade.running", detail=join(details)), file=sys.stderr)
+            return 1
+
+        link_changes = lock_stack.enter_context(LinkTransaction())
+        stage_root = Path(tempfile.mkdtemp(prefix=".ae-upgrade-stage-", dir=dst.parent))
+        backup_root = Path(tempfile.mkdtemp(prefix=".ae-upgrade-backup-", dir=dst.parent))
+        stage = stage_root / SKILL_NAME
+        backup = backup_root / SKILL_NAME
+        keep_backup = False
+        moved_old = False
+        installed_new = False
+        try:
+            copy_skill(src, stage)
+            existing_links = merged_links(record, dst, [])
+            write_record(stage, repo, existing_links)
+            try:
+                os.replace(dst, backup)
+                moved_old = True
+            except OSError as exc:
+                print(T("cli.ae.upgrade.lockedPreserved", path=dst, detail=exc), file=sys.stderr)
+                return 1
+            try:
+                os.replace(stage, dst)
+            except BaseException as exc:
+                try:
+                    os.replace(backup, dst)
+                except OSError as rb_exc:
+                    keep_backup = True
+                    print(T("cli.ae.upgrade.recoveryNeeded", backup=backup, target=dst,
+                            detail=f"{exc}; rollback: {rb_exc}"), file=sys.stderr)
+                    return 1
+                print(T("cli.ae.upgrade.rolledBack", path=dst, detail=exc), file=sys.stderr)
+                return 1
+            created = []
+            if agents:
+                try:
+                    for name, directory in agents:
+                        created.append(link_changes.create(name, directory, dst))
+                except OSError as exc:
+                    if not _is_symlink_privilege_error(exc):
+                        raise
+                    try:
+                        os.replace(dst, stage)
+                        os.replace(backup, dst)
+                    except OSError as rb_exc:
+                        keep_backup = True
+                        print(T("cli.ae.upgrade.recoveryNeeded", backup=backup, target=dst,
+                                detail=f"{exc}; rollback: {rb_exc}"), file=sys.stderr)
+                        return 2
+                    specs = [_link_agent_spec(name, directory) for name, directory in agents]
+                    print(_privilege_error_message(repo, specs, target), file=sys.stderr)
+                    return 2
+                write_record(dst, repo, merged_links(record, dst, created))
+            if not (dst / RECORD_NAME).is_file() or not (dst / "SKILL.md").is_file():
+                try:
+                    if dst.exists():
+                        os.replace(dst, stage)
+                    os.replace(backup, dst)
+                except OSError as rb_exc:
+                    keep_backup = True
+                    print(T("cli.ae.upgrade.recoveryNeeded", backup=backup, target=dst,
+                            detail=f"verification-failed; rollback: {rb_exc}"), file=sys.stderr)
+                    return 1
+                print(T("cli.ae.upgrade.rolledBack", path=dst, detail="verification-failed"), file=sys.stderr)
+                return 1
+            installed_new = True
+            link_changes.committed = True
+            print(T("cli.ae.upgrade.done", installed=old_version, version=new_version, path=dst))
+            if created:
+                print(T("cli.ae.install.links",
+                        list=join(f"{entry['agent']}（{entry['path']}）" for entry in created)))
+            return 0
+        finally:
+            if moved_old and not installed_new and not keep_backup and backup.exists():
+                try:
+                    if dst.exists():
+                        os.replace(dst, stage)
+                    os.replace(backup, dst)
+                except OSError:
+                    keep_backup = True
+            shutil.rmtree(stage_root, ignore_errors=True)
+            if not keep_backup:
+                shutil.rmtree(backup_root, ignore_errors=True)
 
 
 # ── 体检 ───────────────────────────────────────────────────────
@@ -653,12 +1088,12 @@ def resolve_repo(record: Optional[dict]) -> Optional[Path]:
 
 def _target_flag(target: Optional[Path]) -> str:
     """修复命令里的 --target 片段：只在用户显式指定过位置时带上。"""
-    return f" --target {shlex.quote(str(target))}" if target is not None else ""
+    return f" --target {_quote_cli(str(target))}" if target is not None else ""
 
 
 def install_fix(repo: Optional[Path], target: Optional[Path] = None) -> str:
     script = repo / "ae.py" if repo else Path("ae.py")
-    return f"python3 {shlex.quote(str(script))} install{_target_flag(target)}"
+    return f"{_python_cli()} {_quote_cli(str(script))} install{_target_flag(target)}"
 
 
 def _excluded_rel(rel: Path) -> bool:
@@ -740,17 +1175,10 @@ def scan_links(skill_copy: Path) -> list:
     返回条目与安装记录 links 同构：{"agent": 名称, "path": 链接绝对路径}。
     记录缺失时才会走到这里；记录里的 links 是空列表时不回退。
     """
-    target = os.path.realpath(str(skill_copy))
     found = []
     for agent, root in known_skill_roots():
         link = Path(root) / SKILL_NAME
-        try:
-            if not link.is_symlink():
-                continue
-            points_here = os.path.realpath(str(link)) == target or os.readlink(str(link)) == target
-        except OSError:
-            continue
-        if points_here:
+        if _link_targets_copy(link, skill_copy):
             found.append({"agent": agent, "path": str(link)})
     return found
 
@@ -760,7 +1188,7 @@ def _link_status(link: Path, skill_copy: Path) -> str:
     if link.is_symlink():
         if not link.exists():
             return "悬空"
-        if os.path.realpath(str(link)) != os.path.realpath(str(skill_copy)):
+        if not _link_targets_copy(link, skill_copy):
             return "指向别处"
         return "正常"
     if link.exists():
@@ -784,7 +1212,7 @@ def link_fix_spec(entry: dict) -> Optional[str]:
 
 def install_link_fix(repo: Optional[Path], specs: list, target: Optional[Path] = None) -> str:
     script = repo / "ae.py" if repo else Path("ae.py")
-    return f"python3 {shlex.quote(str(script))} install --link {shlex.quote(','.join(specs))}{_target_flag(target)}"
+    return f"{_python_cli()} {_quote_cli(str(script))} install --link {_quote_cli(','.join(specs))}{_target_flag(target)}"
 
 
 def known_links(ctx: DoctorContext) -> list:
@@ -919,7 +1347,7 @@ def load_ledger(ctx: DoctorContext):
 
 def repair_fix(repo: Optional[Path], *flags: str, target: Optional[Path] = None) -> str:
     script = repo / "ae.py" if repo else Path("ae.py")
-    return f"python3 {shlex.quote(str(script))} repair " + " ".join(flags) + _target_flag(target)
+    return f"{_python_cli()} {_quote_cli(str(script))} repair " + " ".join(flags) + _target_flag(target)
 
 
 def probe_port(port: int, timeout: float = 1.0):
@@ -944,13 +1372,71 @@ def probe_port(port: int, timeout: float = 1.0):
         return {"app": "other"}
 
 
+def _windows_powershell() -> Optional[str]:
+    for name in ("powershell", "powershell.exe", "pwsh", "pwsh.exe"):
+        found = shutil.which(name)
+        if found:
+            return found
+    sysroot = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    candidate = Path(sysroot) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    return str(candidate) if candidate.is_file() else None
+
+
+def _windows_list_processes() -> list:
+    shell = _windows_powershell()
+    if not shell:
+        raise ProcessEnumerationError(T("cli.ae.processEnumUnavailable"))
+    script = (
+        "$ErrorActionPreference = 'Stop'; "
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+        "$items = @(Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine); "
+        "ConvertTo-Json -InputObject $items -Compress"
+    )
+    try:
+        done = subprocess.run(
+            [shell, "-NoProfile", "-NonInteractive", "-Command", script],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ProcessEnumerationError(T("cli.ae.processEnumFailed", detail=exc)) from None
+    if done.returncode != 0:
+        detail = (done.stderr or done.stdout or "").strip() or f"exit {done.returncode}"
+        raise ProcessEnumerationError(T("cli.ae.processEnumFailed", detail=detail))
+    raw = done.stdout.strip()
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except ValueError as exc:
+        raise ProcessEnumerationError(T("cli.ae.processEnumFailed", detail=exc)) from None
+    rows = [parsed] if isinstance(parsed, dict) else parsed
+    if not isinstance(rows, list):
+        raise ProcessEnumerationError(T("cli.ae.processEnumFailed", detail="unexpected-json"))
+    procs = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        pid = row.get("ProcessId")
+        if type(pid) is not int or pid <= 0:
+            continue
+        cmd = row.get("CommandLine")
+        procs.append((pid, cmd if isinstance(cmd, str) else ""))
+    return procs
+
+
 def list_processes():
-    """本机全部进程的 (pid, 命令行)；ps 不可用时返回空列表（检查项按「未发现」处理）。"""
+    """本机全部进程的 (pid, 命令行)；枚举失败或权限不足时显式抛 ProcessEnumerationError。"""
+    if _is_windows():
+        return _windows_list_processes()
     try:
         done = subprocess.run(["ps", "-ww", "-eo", "pid=,command="],   # -ww 不按终端宽度截断；格式须合并成一个参数
-                              capture_output=True, text=True, timeout=15)
-    except (OSError, subprocess.TimeoutExpired):
-        return []
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ProcessEnumerationError(T("cli.ae.processEnumFailed", detail=exc)) from None
+    if done.returncode != 0:
+        detail = (done.stderr or done.stdout or "").strip() or f"exit {done.returncode}"
+        raise ProcessEnumerationError(T("cli.ae.processEnumFailed", detail=detail))
     procs = []
     for line in done.stdout.splitlines():
         head = line.strip().split(None, 1)
@@ -959,7 +1445,53 @@ def list_processes():
     return procs
 
 
+def _split_windows_cmdline(cmdline: str) -> list:
+    """按 Win32 CommandLineToArgvW 规则切分命令行，保留 Windows 反斜杠路径。"""
+    tokens, current = [], []
+    in_quotes, has_token = False, False
+    i, n = 0, len(cmdline)
+    while i < n:
+        ch = cmdline[i]
+        if ch in (" ", "\t") and not in_quotes:
+            if has_token:
+                tokens.append("".join(current))
+                current, has_token = [], False
+            i += 1
+            continue
+        has_token = True
+        if ch == "\\":
+            bs = 0
+            while i < n and cmdline[i] == "\\":
+                bs += 1
+                i += 1
+            if i < n and cmdline[i] == '"':
+                current.append("\\" * (bs // 2))
+                if bs % 2 == 1:
+                    current.append('"')
+                    i += 1
+                else:
+                    in_quotes = not in_quotes
+                    i += 1
+            else:
+                current.append("\\" * bs)
+        elif ch == '"':
+            if in_quotes and i + 1 < n and cmdline[i + 1] == '"':
+                current.append('"')
+                i += 2
+            else:
+                in_quotes = not in_quotes
+                i += 1
+        else:
+            current.append(ch)
+            i += 1
+    if has_token:
+        tokens.append("".join(current))
+    return tokens
+
+
 def command_tokens(cmdline: str) -> list:
+    if _is_windows():
+        return _split_windows_cmdline(cmdline)
     try:
         return shlex.split(cmdline)
     except ValueError:
@@ -974,8 +1506,10 @@ def serve_script_index(cmdline: str, pid: Optional[int] = None,
     serve.py 同样算本工具的进程，缺省只信任仓库本体与缺省位置的副本。
     """
     tokens = command_tokens(cmdline)
-    if not tokens or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?|pypy\d*",
-                                      Path(tokens[0]).name.lower()):
+    if not tokens:
+        return None
+    exe_name = tokens[0].rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    if not re.fullmatch(r"(?:python(?:\d+(?:\.\d+)*)?|pypy\d*|py)(?:\.exe)?", exe_name):
         return None
     index = 1
     while index < len(tokens):
@@ -1004,7 +1538,12 @@ def serve_script_index(cmdline: str, pid: Optional[int] = None,
     if extra_copy is not None:
         trusted.append(Path(extra_copy) / "scripts" / "serve.py")
     try:
-        return index if any(script.resolve() == path.resolve() for path in trusted) else None
+        resolved = script.resolve()
+        return index if any(
+            (os.path.normcase(str(resolved)) == os.path.normcase(str(path.resolve())))
+            if _is_windows() else (resolved == path.resolve())
+            for path in trusted
+        ) else None
     except (OSError, ValueError):
         return None
 
@@ -1058,12 +1597,125 @@ def serve_dir_argument(cmdline: str, pid: Optional[int] = None,
     return None
 
 
+def _win32_process_apis(*, include_ntdll: bool = False):
+    """配置 Win32 kernel32/ntdll 进程与事件 API 的 argtypes/restype，避免 64 位句柄截断。"""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    if hasattr(kernel32, "IsWow64Process"):
+        kernel32.IsWow64Process.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+        kernel32.IsWow64Process.restype = wintypes.BOOL
+    kernel32.ReadProcessMemory.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ]
+    kernel32.ReadProcessMemory.restype = wintypes.BOOL
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateProcess.restype = wintypes.BOOL
+    kernel32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.OpenEventW.restype = wintypes.HANDLE
+    kernel32.SetEvent.argtypes = [wintypes.HANDLE]
+    kernel32.SetEvent.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    if not include_ntdll:
+        return ctypes, wintypes, kernel32
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    ntdll.NtQueryInformationProcess.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+        wintypes.ULONG, ctypes.POINTER(wintypes.ULONG),
+    ]
+    ntdll.NtQueryInformationProcess.restype = ctypes.c_long
+    return ctypes, wintypes, kernel32, ntdll
+
+
+def _windows_process_cwd(pid: int) -> Optional[str]:
+    """通过 Win32 PEB 读取同架构/同权限进程的当前工作目录；受限或跨架构时返回 None。"""
+    if pid <= 0:
+        return None
+    if pid == os.getpid():
+        try:
+            return os.getcwd()
+        except OSError:
+            return None
+    import ctypes
+
+    if ctypes.sizeof(ctypes.c_void_p) != 8:
+        return None
+    ctypes, wintypes, kernel32, ntdll = _win32_process_apis(include_ntdll=True)
+    # PROCESS_QUERY_INFORMATION (0x0400) | PROCESS_VM_READ (0x0010)
+    handle = kernel32.OpenProcess(0x0410, False, pid)
+    if not handle:
+        return None
+    try:
+        # 64 位进程检查 WoW64：32 位子进程 PEB 布局不同，不猜
+        wow64 = wintypes.BOOL(False)
+        if hasattr(kernel32, "IsWow64Process") and kernel32.IsWow64Process(handle, ctypes.byref(wow64)) and wow64.value:
+            return None
+
+        class _PBI(ctypes.Structure):
+            _fields_ = [
+                ("Reserved1", ctypes.c_void_p),
+                ("PebBaseAddress", ctypes.c_void_p),
+                ("Reserved2", ctypes.c_void_p * 2),
+                ("UniqueProcessId", ctypes.c_void_p),
+                ("Reserved3", ctypes.c_void_p),
+            ]
+
+        pbi = _PBI()
+        ret_len = wintypes.ULONG()
+        # ProcessBasicInformation = 0
+        if ntdll.NtQueryInformationProcess(handle, 0, ctypes.byref(pbi), ctypes.sizeof(pbi), ctypes.byref(ret_len)) != 0:
+            return None
+        if not pbi.PebBaseAddress:
+            return None
+
+        def read_ptr(addr: int) -> Optional[int]:
+            val = ctypes.c_uint64()
+            read = ctypes.c_size_t()
+            if not kernel32.ReadProcessMemory(handle, ctypes.c_void_p(addr), ctypes.byref(val), 8, ctypes.byref(read)):
+                return None
+            return val.value
+
+        params_addr = read_ptr(pbi.PebBaseAddress + 0x20)
+        if not params_addr:
+            return None
+
+        class _UnicodeString(ctypes.Structure):
+            _fields_ = [("Length", ctypes.c_ushort), ("MaximumLength", ctypes.c_ushort), ("Buffer", ctypes.c_uint64)]
+
+        us = _UnicodeString()
+        read = ctypes.c_size_t()
+        # RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath 位于 x64 +0x38
+        if not kernel32.ReadProcessMemory(handle, ctypes.c_void_p(params_addr + 0x38),
+                                          ctypes.byref(us), ctypes.sizeof(us), ctypes.byref(read)):
+            return None
+        if not us.Length or not us.Buffer or us.Length > 65534:
+            return None
+        buf = ctypes.create_string_buffer(us.Length)
+        if not kernel32.ReadProcessMemory(handle, ctypes.c_void_p(us.Buffer), buf, us.Length, ctypes.byref(read)):
+            return None
+        cwd = buf.raw[:read.value].decode("utf-16-le", errors="replace").rstrip("\x00")
+        return cwd or None
+    except OSError:
+        return None
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def process_cwd(pid: int) -> Optional[str]:
     """进程的当前目录（解析相对的目录参数用）；拿不到返回 None。"""
+    if _is_windows():
+        return _windows_process_cwd(pid)
     if sys.platform == "darwin":
         try:
             done = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
-                                  capture_output=True, text=True, timeout=10)
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         except (OSError, subprocess.TimeoutExpired):
             return None
         for line in done.stdout.splitlines():
@@ -1076,8 +1728,72 @@ def process_cwd(pid: int) -> Optional[str]:
         return None
 
 
+def _windows_listening_port_of(pid: int) -> Optional[int]:
+    """只读 Windows TCP 监听表（iphlpapi.GetExtendedTcpTable），目录已删时仍可定位端口。"""
+    if pid <= 0:
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        iphlpapi = ctypes.WinDLL("iphlpapi", use_last_error=True)
+        # TCP_TABLE_OWNER_PID_LISTENER = 3, AF_INET = 2, AF_INET6 = 23
+        get_table = iphlpapi.GetExtendedTcpTable
+        get_table.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL,
+                              wintypes.ULONG, ctypes.c_int, wintypes.ULONG]
+        get_table.restype = wintypes.DWORD
+
+        class _TcpRow4(ctypes.Structure):
+            _fields_ = [("dwState", wintypes.DWORD), ("dwLocalAddr", wintypes.DWORD),
+                        ("dwLocalPort", wintypes.DWORD), ("dwRemoteAddr", wintypes.DWORD),
+                        ("dwRemotePort", wintypes.DWORD), ("dwOwningPid", wintypes.DWORD)]
+
+        class _TcpRow6(ctypes.Structure):
+            _fields_ = [("ucLocalAddr", ctypes.c_ubyte * 16), ("dwLocalScopeId", wintypes.DWORD),
+                        ("dwLocalPort", wintypes.DWORD), ("ucRemoteAddr", ctypes.c_ubyte * 16),
+                        ("dwRemoteScopeId", wintypes.DWORD), ("dwRemotePort", wintypes.DWORD),
+                        ("dwState", wintypes.DWORD), ("dwOwningPid", wintypes.DWORD)]
+
+        for family, row_cls in ((socket.AF_INET, _TcpRow4), (socket.AF_INET6, _TcpRow6)):
+            size = wintypes.DWORD(0)
+            rc = get_table(None, ctypes.byref(size), False, family, 3, 0)
+            if rc not in (0, 122) or size.value < 4:  # ERROR_INSUFFICIENT_BUFFER = 122
+                continue
+            buf = ctypes.create_string_buffer(size.value)
+            if get_table(buf, ctypes.byref(size), False, family, 3, 0) != 0:
+                continue
+            count = wintypes.DWORD.from_buffer_copy(buf.raw[:4]).value
+            row_size = ctypes.sizeof(row_cls)
+            base = ctypes.addressof(buf) + 4
+            for idx in range(count):
+                if 4 + (idx + 1) * row_size > size.value:
+                    break
+                row = row_cls.from_address(base + idx * row_size)
+                if row.dwOwningPid == pid and row.dwState == 2:  # MIB_TCP_STATE_LISTEN = 2
+                    port = socket.ntohs(row.dwLocalPort & 0xFFFF)
+                    if 1 <= port <= 65535:
+                        return port
+    except (OSError, AttributeError, ValueError):
+        pass
+    try:
+        done = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=10)
+        for line in done.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 5 and parts[0].upper() == "TCP" and parts[3].upper() == "LISTENING" \
+                    and parts[4].isdigit() and int(parts[4]) == pid and ":" in parts[1]:
+                port = int(parts[1].rsplit(":", 1)[1])
+                if 1 <= port <= 65535:
+                    return port
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
 def listening_port_of(pid: int) -> Optional[int]:
     """只读进程的 TCP 监听元数据，目录已删时仍可获得实际端口。"""
+    if _is_windows():
+        return _windows_listening_port_of(pid)
     if sys.platform.startswith("linux"):
         try:
             inodes = {os.readlink(fd)[8:-1] for fd in Path(f"/proc/{pid}/fd").iterdir()
@@ -1091,7 +1807,7 @@ def listening_port_of(pid: int) -> Optional[int]:
             pass
     try:
         done = subprocess.run(["lsof", "-a", "-P", "-n", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         for line in done.stdout.splitlines():
             if line.startswith("n") and ":" in line:
                 port = int(line.rsplit(":", 1)[1])
@@ -1154,7 +1870,7 @@ def check_ledger_readable(ctx: DoctorContext) -> CheckResult:
     if error is not None:
         home = Path(ctx.ledger_home) if ctx.ledger_home is not None else ledger_home()
         return CheckResult("ledger-readable", CATEGORY_RUNTIME, LEVEL_FAIL, error,
-                           f"python3 -m json.tool {shlex.quote(str(home / 'reviews.json'))}")
+                           f"{_python_cli()} -m json.tool {_quote_cli(str(home / 'reviews.json'))}")
     return CheckResult("ledger-readable", CATEGORY_RUNTIME, LEVEL_PASS,
                        T("doctor.ledgerReadable.ok", count=len(entries)))
 
@@ -1193,9 +1909,14 @@ def check_port_pool(ctx: DoctorContext) -> CheckResult:
     foreign = [port for port in assigned
                if (found := probe(port)) is not None and found.get("app") != APP]
     if foreign:
+        fix = (
+            "Get-NetTCPConnection -LocalPort " + ",".join(map(str, foreign))
+            if _is_windows()
+            else "lsof -nP -iTCP:" + ",".join(map(str, foreign)) + " -sTCP:LISTEN"
+        )
         return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_FAIL,
                            T("doctor.portPool.foreign", ports=join(foreign)),
-                           "lsof -nP -iTCP:" + ",".join(map(str, foreign)) + " -sTCP:LISTEN")
+                           fix)
     return CheckResult("port-pool", CATEGORY_RUNTIME, LEVEL_PASS,
                        T("doctor.portPool.ok", count=len(assigned)))
 
@@ -1239,7 +1960,12 @@ def check_orphan_servers(ctx: DoctorContext) -> CheckResult:
     if error is not None:
         return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_PASS, T("doctor.orphans.skip"))
     lister = ctx.process_lister if ctx.process_lister is not None else list_processes
-    orphans = find_orphan_servers(entries, lister, ctx.port_probe, extra_copy=ctx.skill_copy)
+    try:
+        processes = lister()
+    except ProcessEnumerationError as exc:
+        return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_FAIL,
+                           T("doctor.orphans.unverified", detail=exc))
+    orphans = find_orphan_servers(entries, lambda: processes, ctx.port_probe, extra_copy=ctx.skill_copy)
     if orphans:
         detail = join([T("doctor.orphanItem" if port else "doctor.orphanItemNoPort",
                         pid=pid, port=port) for pid, port, _dir in orphans],
@@ -1247,7 +1973,7 @@ def check_orphan_servers(ctx: DoctorContext) -> CheckResult:
         return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_FAIL,
                            T("doctor.orphans.found", count=len(orphans), detail=detail),
                            repair_fix(ctx.repo, "--stop-orphans", target=ctx.target))
-    running = sum(1 for pid, cmdline in lister()
+    running = sum(1 for pid, cmdline in processes
                   if serve_dir_argument(cmdline, pid, ctx.skill_copy) is not None)
     suffix = T("doctor.orphans.noneRunning", count=running) if running else ""
     return CheckResult("orphan-servers", CATEGORY_RUNTIME, LEVEL_PASS,
@@ -1258,25 +1984,77 @@ def check_orphan_servers(ctx: DoctorContext) -> CheckResult:
 
 
 def tool_fix(package: str) -> str:
-    """可选工具缺失时的安装提示：按平台给出包管理器命令。"""
+    """可选工具缺失时的安装提示：按平台给出包管理器命令或路径说明。"""
+    if _is_windows():
+        win_hints = {
+            "python3.12": "winget install Python.Python.3.12",
+            "libreoffice": "winget install TheDocumentFoundation.LibreOffice",
+            "poppler": "winget install oschwartz10612.Poppler  # add poppler bin to PATH if needed",
+            "poppler-utils": "winget install oschwartz10612.Poppler  # add poppler bin to PATH if needed",
+            "fontconfig": "Optional on Windows (system font registry is used); install fontconfig on PATH if fc-list is needed",
+        }
+        return win_hints.get(package, f"winget install {package}")
     if sys.platform == "darwin":
-        return f"brew install {package}"
+        return f"brew install --cask {package}" if package == "libreoffice" else f"brew install {package}"
     return f"sudo apt install {package}"
+
+
+def _find_pdffonts_tool() -> Optional[str]:
+    try:
+        mod = skill_module("check_pptx_fonts")
+    except (ImportError, AttributeError):
+        return shutil.which("pdffonts")
+    found = mod.find_pdffonts()
+    return found if (shutil.which(found) or Path(found).is_file()) else None
+
+
+def _find_soffice_tool() -> Optional[str]:
+    try:
+        mod = skill_module("pptx_report")
+    except (ImportError, AttributeError):
+        return shutil.which("soffice")
+    return mod.find_soffice()
+
+
+def _find_pdftoppm_tool() -> Optional[str]:
+    try:
+        mod = skill_module("pptx_report")
+    except (ImportError, AttributeError):
+        return shutil.which("pdftoppm")
+    return mod.find_rasterizer()
 
 
 def check_fc_list(ctx: DoctorContext) -> CheckResult:
     if shutil.which("fc-list"):
         return CheckResult("fc-list", CATEGORY_TOOLS, LEVEL_PASS, T("doctor.fcList.ok"))
+    msg_key = "doctor.fcList.winWarn" if _is_windows() else "doctor.fcList.warn"
     return CheckResult("fc-list", CATEGORY_TOOLS, LEVEL_WARN,
-                       T("doctor.fcList.warn"), tool_fix("fontconfig"))
+                       T(msg_key), tool_fix("fontconfig"))
 
 
 def check_pdffonts(ctx: DoctorContext) -> CheckResult:
-    if shutil.which("pdffonts"):
+    if _find_pdffonts_tool():
         return CheckResult("pdffonts", CATEGORY_TOOLS, LEVEL_PASS, T("doctor.pdffonts.ok"))
-    package = "poppler" if sys.platform == "darwin" else "poppler-utils"
+    package = "poppler" if sys.platform == "darwin" or _is_windows() else "poppler-utils"
     return CheckResult("pdffonts", CATEGORY_TOOLS, LEVEL_WARN,
                        T("doctor.pdffonts.warn"), tool_fix(package))
+
+
+def check_libreoffice(ctx: DoctorContext) -> CheckResult:
+    found = _find_soffice_tool()
+    if found:
+        return CheckResult("libreoffice", CATEGORY_TOOLS, LEVEL_PASS, T("doctor.libreoffice.ok", path=found))
+    return CheckResult("libreoffice", CATEGORY_TOOLS, LEVEL_WARN,
+                       T("doctor.libreoffice.warn"), tool_fix("libreoffice"))
+
+
+def check_pdftoppm(ctx: DoctorContext) -> CheckResult:
+    found = _find_pdftoppm_tool()
+    if found:
+        return CheckResult("pdftoppm", CATEGORY_TOOLS, LEVEL_PASS, T("doctor.pdftoppm.ok", path=found))
+    package = "poppler" if sys.platform == "darwin" or _is_windows() else "poppler-utils"
+    return CheckResult("pdftoppm", CATEGORY_TOOLS, LEVEL_WARN,
+                       T("doctor.pdftoppm.warn"), tool_fix(package))
 
 
 # ── 开发环境（仅在仓库内运行时执行，见 REPO_CHECKS） ─────────────
@@ -1286,7 +2064,7 @@ def git_config(repo: Path, key: str) -> Optional[str]:
     """读仓库的 git 配置；git 不可用或未设置时返回 None。"""
     try:
         done = subprocess.run(["git", "-C", str(repo), "config", "--get", key],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return None
     value = done.stdout.strip() if done.returncode == 0 else ""
@@ -1302,13 +2080,35 @@ def check_git_hooks(ctx: DoctorContext) -> CheckResult:
             hooks = ctx.repo / hooks
         if Path(os.path.normpath(hooks)) == Path(os.path.normpath(expected)) and expected.is_dir():
             return CheckResult("git-hooks", CATEGORY_DEV, LEVEL_PASS, T("doctor.gitHooks.ok"))
+    fix = (
+        f"git -C {_quote_cli(str(ctx.repo))} config core.hooksPath tools/git-hooks"
+        if _is_windows()
+        else f"sh {ctx.repo / 'tools' / 'setup-dev.sh'}"
+    )
     return CheckResult("git-hooks", CATEGORY_DEV, LEVEL_WARN,
                        T("doctor.gitHooks.warn"),
-                       f"sh {ctx.repo / 'tools' / 'setup-dev.sh'}")
+                       fix)
 
 
 def find_chrome() -> Optional[str]:
-    """定位端到端测试用的 Chrome：与 tests/e2e_browser.py 的 playwright channel="chrome" 同一目标。"""
+    """定位端到端测试用的 Chrome/Edge：Windows 探测 Chrome 与 Edge，POSIX 探测 Chrome。"""
+    if _is_windows():
+        for name in ("chrome", "chrome.exe", "msedge", "msedge.exe"):
+            found = shutil.which(name)
+            if found:
+                return found
+        roots = [Path(os.environ[k]) for k in ("ProgramFiles", "ProgramFiles(x86)", "LocalAppData")
+                 if os.environ.get(k)]
+        suffixes = (
+            Path("Google") / "Chrome" / "Application" / "chrome.exe",
+            Path("Microsoft") / "Edge" / "Application" / "msedge.exe",
+        )
+        for root in roots:
+            for suffix in suffixes:
+                candidate = root / suffix
+                if candidate.is_file():
+                    return str(candidate)
+        return None
     if sys.platform == "darwin":
         candidates = (
             Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
@@ -1340,7 +2140,7 @@ def check_chrome(ctx: DoctorContext) -> CheckResult:
 CHECKS = (check_python, check_copy_present, check_copy_sync, check_copy_version, check_links,
           check_independent_copies,
           check_ledger_readable, check_ledger_stale, check_port_pool, check_orphan_servers,
-          check_fc_list, check_pdffonts)
+          check_fc_list, check_pdffonts, check_libreoffice, check_pdftoppm)
 
 # 仅在当前工作目录位于来源仓库内时运行；能定位来源仓库不等于正在仓库内运行。
 REPO_CHECKS = (check_git_hooks, check_chrome)
@@ -1467,7 +2267,7 @@ def recreate_link(link: Path, copy_dir: Path) -> None:
     if link.is_symlink():
         link.unlink()
     link.parent.mkdir(parents=True, exist_ok=True)
-    os.symlink(str(copy_dir.resolve()), str(link))
+    os.symlink(str(copy_dir.resolve()), str(link), target_is_directory=True)
 
 
 def repair_links(ctx: DoctorContext) -> tuple:
@@ -1487,7 +2287,14 @@ def repair_links(ctx: DoctorContext) -> tuple:
                            agent=entry.get("agent") or T("doctor.links.unknownAgent"),
                            path=entry["path"]))
             continue
-        recreate_link(link, ctx.skill_copy)
+        try:
+            recreate_link(link, ctx.skill_copy)
+        except OSError as exc:
+            if _is_symlink_privilege_error(exc):
+                spec = link_fix_spec(entry)
+                stuck.append(_privilege_error_message(ctx.repo, [spec] if spec else [], ctx.target))
+                continue
+            raise
         created.append({"agent": entry.get("agent", ""), "path": entry["path"]})
     return created, stuck
 
@@ -1716,7 +2523,12 @@ def execute_plan(plan: list, ctx: DoctorContext,
                 lines.append(T("cli.ae.repair.noStop", detail=error))
                 continue
             lister = ctx.process_lister if ctx.process_lister is not None else list_processes
-            for pid, port, note in stop_orphan_servers(entries, lister, extra_copy=ctx.skill_copy):
+            try:
+                stopped = stop_orphan_servers(entries, lister, extra_copy=ctx.skill_copy)
+            except ProcessEnumerationError as exc:
+                lines.append(T("cli.ae.repair.noStop", detail=exc))
+                continue
+            for pid, port, note in stopped:
                 detail = T("cli.ae.repair.portDetail", port=port) if port else ""
                 lines.append(T("cli.ae.repair.stopped", pid=pid, detail=detail) if note is None
                              else T("cli.ae.repair.stopNote", pid=pid, detail=detail, note=note))
@@ -1754,13 +2566,26 @@ def _link_report(created: list, stuck: list) -> list:
 
 
 def _enable_git_hooks(repo: Optional[Path]) -> list:
-    """启用 git 钩子：执行仓库自带的 tools/setup-dev.sh（与其修复命令同一脚本）。"""
+    """启用 git 钩子：POSIX 执行 tools/setup-dev.sh，Windows 直接写 core.hooksPath（不依赖 bash）。"""
     script = repo / "tools" / "setup-dev.sh" if repo is not None else None
     if script is None or not script.is_file():
         return [T("cli.ae.repair.hooksNoScript", path=script)]
+    if _is_windows():
+        hooks_dir = repo / "tools" / "git-hooks"
+        if not hooks_dir.is_dir():
+            return [T("cli.ae.repair.hooksNoScript", path=hooks_dir)]
+        try:
+            done = subprocess.run(["git", "-C", str(repo), "config", "core.hooksPath", "tools/git-hooks"],
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return [T("cli.ae.repair.hooksFailed", detail=e)]
+        if done.returncode == 0:
+            return [T("cli.ae.repair.hooksDone")]
+        return [T("cli.ae.repair.hooksFailed", detail=(done.stderr or done.stdout).strip())]
     try:
         # 脚本带 bash 语法（set -o pipefail），显式用 bash 执行
-        done = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=60)
+        done = subprocess.run(["bash", str(script)], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         return [T("cli.ae.repair.hooksFailed", detail=e)]
     if done.returncode == 0:
@@ -1850,9 +2675,25 @@ def running_home_servers(lister: Optional[Callable[[], list]] = None,
 
 def _process_stopped(pid: int) -> bool:
     """进程是否已停止（查不到，或只剩僵尸）；无法查询时不宣称已停止。"""
+    if pid <= 0:
+        return True
+    if _is_windows():
+        ctypes, wintypes, kernel32 = _win32_process_apis()
+        # PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            # ERROR_INVALID_PARAMETER (87) 表示进程不存在；ERROR_ACCESS_DENIED (5) 表示存在但无权限
+            return ctypes.get_last_error() == 87
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value != 259  # STILL_ACTIVE = 259
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         done = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return False
     if done.returncode != 0:
@@ -1861,7 +2702,44 @@ def _process_stopped(pid: int) -> bool:
     return not state or state.startswith("Z")
 
 
-def server_identity(pid: int, command: str, extra_copy: Optional[Path] = None) -> Optional[tuple]:
+def _read_process_cmdline(pid: int) -> Optional[str]:
+    """读取单个 PID 的当前命令行；不可读、权限不足或进程不存在时返回 None。"""
+    if pid <= 0:
+        return None
+    if _is_windows():
+        shell = _windows_powershell()
+        if not shell:
+            return None
+        script = (
+            "$ErrorActionPreference = 'Stop'; "
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+            f"$p = Get-CimInstance Win32_Process -Filter 'ProcessId = {int(pid)}'; "
+            "if ($null -eq $p) { '' } else { $p.CommandLine }"
+        )
+        try:
+            done = subprocess.run(
+                [shell, "-NoProfile", "-NonInteractive", "-Command", script],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if done.returncode != 0:
+            return None
+        cmd = done.stdout.strip()
+        return cmd or None
+    try:
+        done = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "command="],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if done.returncode != 0:
+        return None
+    cmd = done.stdout.strip()
+    return cmd or None
+
+
+def server_identity(pid: Optional[int], command: str, extra_copy: Optional[Path] = None) -> Optional[tuple]:
     index = serve_script_index(command, pid, extra_copy)
     if index is None:
         return None
@@ -1872,11 +2750,14 @@ def server_identity(pid: int, command: str, extra_copy: Optional[Path] = None) -
     tokens = command_tokens(command)
     script = Path(tokens[index])
     if not script.is_absolute():
-        cwd = process_cwd(pid)
+        cwd = process_cwd(pid) if pid is not None else str(Path.cwd())
         if cwd is None:
             return None
         script = Path(cwd) / script
-    return (str(script.resolve()), *tokens[index + 1:])
+    resolved = str(script.resolve())
+    if _is_windows():
+        resolved = os.path.normcase(resolved)
+    return (resolved, *tokens[index + 1:])
 
 
 def same_server_process(pid: int, command: str, extra_copy: Optional[Path] = None) -> bool:
@@ -1884,17 +2765,39 @@ def same_server_process(pid: int, command: str, extra_copy: Optional[Path] = Non
     expected = server_identity(pid, command, extra_copy)
     if expected is None or pid <= 0 or pid == os.getpid():
         return False
-    try:
-        current = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "command="],
-                                 capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
+    current = _read_process_cmdline(pid)
+    if not current:
         return False
-    return current.returncode == 0 and server_identity(pid, current.stdout.strip(), extra_copy) == expected
+    return server_identity(pid, current, extra_copy) == expected
+
+
+def _win_signal_stop_event(pid: int) -> bool:
+    _ctypes, _wintypes, kernel32 = _win32_process_apis()
+    # EVENT_MODIFY_STATE = 0x0002
+    handle = kernel32.OpenEventW(0x0002, False, f"Local\\ae-stop-{int(pid)}")
+    if not handle:
+        return False
+    try:
+        return bool(kernel32.SetEvent(handle))
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _win_terminate_process(pid: int) -> bool:
+    _ctypes, _wintypes, kernel32 = _win32_process_apis()
+    # PROCESS_TERMINATE = 0x0001
+    handle = kernel32.OpenProcess(0x0001, False, int(pid))
+    if not handle:
+        return False
+    try:
+        return bool(kernel32.TerminateProcess(handle, 1))
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def stop_servers(servers: list, wait_seconds: float = 5.0,
                  extra_copy: Optional[Path] = None) -> list:
-    """结束 serve.py 进程：先 SIGTERM（serve.py 收到后优雅退出），等不到再 SIGKILL。
+    """结束 serve.py 进程：先优雅停止（POSIX SIGTERM / Windows 命名停止事件），超时再核验身份后强制终止。
 
     extra_copy 是当前操作的技能副本（--target 时的自定义位置），身份核实同样信任它。
     返回未能确认停止的 [(pid, 命令行), ...]。
@@ -1906,12 +2809,16 @@ def stop_servers(servers: list, wait_seconds: float = 5.0,
         if not same_server_process(pid, command, extra_copy):
             refused.append((pid, command))
             continue
-        try:
-            os.kill(pid, signal.SIGTERM)
+        if _is_windows():
+            _win_signal_stop_event(pid)
             remaining.append((pid, command))
-        except OSError:
-            if not _process_stopped(pid):
-                refused.append((pid, command))
+        else:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                remaining.append((pid, command))
+            except OSError:
+                if not _process_stopped(pid):
+                    refused.append((pid, command))
     deadline = time.monotonic() + wait_seconds
     while remaining and time.monotonic() < deadline:
         time.sleep(0.1)
@@ -1920,10 +2827,13 @@ def stop_servers(servers: list, wait_seconds: float = 5.0,
         if not same_server_process(pid, command, extra_copy):
             refused.append((pid, command))
             continue
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+        if _is_windows():
+            _win_terminate_process(pid)
+        else:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
     if remaining:
         time.sleep(0.2)
         remaining = [(pid, command) for pid, command in remaining if not _process_stopped(pid)]
@@ -1936,7 +2846,10 @@ def stop_servers(servers: list, wait_seconds: float = 5.0,
 def ledger_home() -> Path:
     """审阅台账目录：与 skill/annotation-everything/scripts/ledger.py 的 home() 同一约定。"""
     env = os.environ.get("AE_HOME")
-    return Path(env).expanduser().resolve() if env else Path.home() / ".annotation-everything"
+    if env:
+        _reject_unc_path(env)
+        return Path(env).expanduser().resolve()
+    return Path.home() / ".annotation-everything"
 
 
 def ledger_review_dirs(home_dir: Path) -> list:
@@ -2006,12 +2919,11 @@ def remove_links(entries: list, skill_copy: Path) -> list:
     只删软链接：指向别处的不动，已变成普通文件/目录或已消失的不动。
     返回 [(路径, 处理说明), ...] 供输出。
     """
-    target = os.path.realpath(str(skill_copy))
     report = []
     for entry in entries:
         link = Path(entry["path"])
         if link.is_symlink():
-            if os.path.realpath(str(link)) == target or os.readlink(str(link)) == target:
+            if _link_targets_copy(link, skill_copy):
                 link.unlink()
                 report.append((str(link), T("cli.ae.uninstall.linkRemoved")))
             else:
@@ -2057,7 +2969,11 @@ def cmd_uninstall(args) -> int:
         if problem:
             print(problem, file=sys.stderr)
             return 2
-    servers = running_servers(extra_copy=skill_copy) + running_home_servers(extra_copy=skill_copy)
+    try:
+        servers = running_servers(extra_copy=skill_copy) + running_home_servers(extra_copy=skill_copy)
+    except ProcessEnumerationError as exc:
+        print(T("cli.ae.uninstall.unverified", detail=exc), file=sys.stderr)
+        return 1
     if servers:
         print(T("cli.ae.uninstall.running"))
         for pid, command in servers:
@@ -2118,6 +3034,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("--link", default="", metavar="AGENTS",
                            help=T("cli.ae.cmd.install.link"))
     p_install.set_defaults(handler=cmd_install)
+    p_upgrade = sub.add_parser("upgrade", add_help=False, help=T("cli.ae.cmd.upgrade"))
+    _add_help(p_upgrade)
+    _add_locale(p_upgrade)
+    _add_target(p_upgrade)
+    p_upgrade.add_argument("--link", default="", metavar="AGENTS",
+                           help=T("cli.ae.cmd.install.link"))
+    p_upgrade.add_argument("--force", action="store_true",
+                           help=T("cli.ae.cmd.upgrade.force"))
+    p_upgrade.set_defaults(handler=cmd_upgrade)
     p_doctor = sub.add_parser("doctor", add_help=False, help=T("cli.ae.cmd.doctor"))
     _add_help(p_doctor)
     _add_locale(p_doctor)
@@ -2151,6 +3076,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
         module = i18n_module()

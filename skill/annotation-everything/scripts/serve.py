@@ -45,7 +45,6 @@ import http.client
 import json
 import os
 import re
-import shlex
 import shutil
 import signal
 import socket
@@ -82,11 +81,32 @@ FEATURES = [
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
-# without running the hook. exec preserves the registered PID and stdin for the command.
+# without running the hook. POSIX exec preserves the registered PID and stdin; Windows
+# CRT execvp spawns asynchronously, so the wrapper waits on the child synchronously instead.
 _HOOK_EXEC = """
 import os
+import signal
+import subprocess
 import sys
 if os.read(0, 1) == b"1":
+    if os.name == "nt":
+        child = subprocess.Popen(sys.argv[1:], stdin=0, stdout=1, stderr=2)
+        try:
+            def _stop(*_a):
+                child.terminate()
+            for _name in ("SIGTERM", "SIGBREAK", "SIGINT"):
+                _sig = getattr(signal, _name, None)
+                if _sig is not None:
+                    signal.signal(_sig, _stop)
+            raise SystemExit(child.wait())
+        finally:
+            if child.poll() is None:
+                child.terminate()
+                try:
+                    child.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait()
     os.execvp(sys.argv[1], sys.argv[1:])
 """
 
@@ -399,17 +419,21 @@ class ReviewServer(ThreadingHTTPServer):
                                             stderr=subprocess.DEVNULL, cwd=self.hook_cwd, env=job["env"], start_new_session=True)
                     try:
                         review_stop.hook_started(self.review_dir, proc.pid, job["seq"], job["event"])
-                    except BaseException:
-                        proc.terminate()
-                        proc.wait()
-                        raise
-                    try:
-                        proc.communicate(payload)
-                    finally:
                         try:
-                            review_stop.hook_finished(self.review_dir, proc.pid)
-                        except (OSError, ValueError) as e:
-                            self.log("error", f"code=hook-tracking-failed seq={job['seq']} {type(e).__name__}: {e}")
+                            proc.communicate(payload)
+                        finally:
+                            try:
+                                review_stop.hook_finished(self.review_dir, proc.pid)
+                            except (OSError, ValueError) as e:
+                                self.log("error", f"code=hook-tracking-failed seq={job['seq']} {type(e).__name__}: {e}")
+                    finally:
+                        if proc.poll() is None:
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                proc.kill()
+                                proc.wait()
                     if proc.returncode == 0:
                         self.log("info", f"hook seq={job['seq']} exit=0")
                     else:
@@ -1544,6 +1568,45 @@ def _prepare_overview_home(under: Path | None, port: int | None, debug: bool,
     return (server, url)
 
 
+@contextlib.contextmanager
+def _windows_stop_event(server: ReviewServer):
+    """Windows 下创建进程专属停止事件，让已核验身份的停止命令触发优雅退出并清理状态文件。"""
+    if os.name != "nt":
+        yield
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.CreateEventW.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.CreateEventW(None, True, False, f"Local\\ae-stop-{os.getpid()}")
+    if not handle:
+        yield
+        return
+    done = threading.Event()
+
+    def watch() -> None:
+        while not done.is_set():
+            if kernel32.WaitForSingleObject(handle, 200) == 0:
+                server.shutdown()
+                return
+
+    thread = threading.Thread(target=watch, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        done.set()
+        thread.join(timeout=1.0)
+        kernel32.CloseHandle(handle)
+
+
 def _serve_overview_home(server: ReviewServer, url: str, on_handoff: list[str] | None,
                          open_browser: bool) -> int:
     """前台跑到 Ctrl+C / SIGTERM，关闭监听后清理运行状态。"""
@@ -1551,14 +1614,18 @@ def _serve_overview_home(server: ReviewServer, url: str, on_handoff: list[str] |
         def _term(*_a: Any) -> None:
             raise KeyboardInterrupt
 
-        signal.signal(signal.SIGTERM, _term)
+        for sig_name in ("SIGTERM", "SIGBREAK"):
+            sig = getattr(signal, sig_name, None)
+            if sig is not None:
+                signal.signal(sig, _term)
         server.log("info", f"启动 {APP} {VERSION}：{url} 托管总览首页（pid {os.getpid()}）")
         print(T("serve.overview.ready", url=url)
-              + (T("serve.serve.hookLine", command=shlex.join(on_handoff)) if on_handoff else "")
+              + (T("serve.serve.hookLine", command=fsutil.join_cli(on_handoff)) if on_handoff else "")
               + T("serve.overview.stopHint"), flush=True)
         if open_browser:
             threading.Timer(0.3, webbrowser.open, args=(url,)).start()
-        server.serve_forever(poll_interval=0.3)
+        with _windows_stop_event(server):
+            server.serve_forever(poll_interval=0.3)
     except KeyboardInterrupt:
         pass
     finally:
@@ -1572,6 +1639,8 @@ def overview_home(under: Path | None, port: int | None, open_browser: bool, debu
                   on_handoff: list[str] | None, locale: str | None) -> int:
     """总览首页：无审阅目录的宿主，列出本机（或 --under 目录下）的审阅，占一个台账保留端口。"""
     set_locale(locale or cli_locale(None))
+    if under is not None and fsutil.is_unc_or_device_path(under, allow_local_extended=True):
+        raise SystemExit(T("serve.msg.error", detail=f"Unsupported UNC or device path: {under}"))
     with contextlib.ExitStack() as stack:
         try:
             stack.enter_context(ledger.update_lock())   # 运行期间沿用服务的更新锁，技能更新可识别该占用
@@ -1796,8 +1865,8 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float,
         if under is not None:
             command += ["--overview-under", str(under)]
         if hook is not None:
-            # 解析后的钩子参数按 shell 规则拼回一个参数交给子进程（不经 shell）；子进程 parse_hook 拆回同一列表
-            command += ["--on-handoff", shlex.join(hook)]
+            # 解析后的钩子参数按当前平台规则拼回一个参数交给子进程（不经 shell）；子进程 parse_hook 拆回同一列表
+            command += ["--on-handoff", fsutil.join_cli(hook)]
             if hook_cwd:
                 command += ["--overview-hook-cwd", os.path.abspath(hook_cwd)]
         child = subprocess.Popen(command, cwd=str(directory), stdin=subprocess.DEVNULL,
@@ -1881,14 +1950,14 @@ def parse_hook(cmd: str | None) -> list[str] | None:
     if not cmd:
         return None
     try:
-        argv = shlex.split(cmd)
+        argv = fsutil.split_cli(cmd)
     except ValueError as e:
         raise SystemExit(T("serve.err.hookSyntax", detail=e)) from None
     if not argv:
         return None
     exe = argv[0]
-    full = exe if os.sep in exe else shutil.which(exe)
-    if not full or not os.access(full, os.X_OK):
+    full = shutil.which(exe)
+    if not full or os.path.isdir(full) or (not fsutil.is_windows() and not os.access(full, os.X_OK)):
         raise SystemExit(T("serve.err.hookMissing", command=exe))
     # 相对 PATH 也可能找到相对路径。固定可执行文件，其他参数仍按钩子的工作目录解析。
     return [os.path.abspath(full), *argv[1:]]
@@ -1956,6 +2025,10 @@ def plan_port(review_dir: Path, rid: str | None, port: int | None, claim: int | 
 def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, on_handoff: list[str] | None = None,
           claim: int | None = None, locale: str | None = None, overview_start: str | None = None,
           hook_cwd: str | None = None, overview_under: Path | None = None) -> int:
+    if fsutil.is_unc_or_device_path(review_dir, allow_local_extended=True):
+        raise SystemExit(T("serve.msg.error", detail=f"Unsupported UNC or device path: {review_dir}"))
+    if overview_under is not None and fsutil.is_unc_or_device_path(overview_under, allow_local_extended=True):
+        raise SystemExit(T("serve.msg.error", detail=f"Unsupported UNC or device path: {overview_under}"))
     set_locale(locale or cli_locale(None, review_dir))
     # 启动期间和整个服务生命周期持共享锁；更新只在没有服务时原子切换。
     with contextlib.ExitStack() as stack:
@@ -2072,17 +2145,21 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         return 0
     server.log("info", f"启动 {APP} {VERSION}：{url} 托管 {review_dir}（pid {os.getpid()}）")
     print(T("serve.serve.ready", url=url, path=review_dir / store.NOTES_FILE)
-          + (T("serve.serve.hookLine", command=shlex.join(on_handoff)) if on_handoff else "")
+          + (T("serve.serve.hookLine", command=fsutil.join_cli(on_handoff)) if on_handoff else "")
           + T("serve.serve.stopHint"), flush=True)
 
     def _term(*_a: Any) -> None:
         raise KeyboardInterrupt
 
-    signal.signal(signal.SIGTERM, _term)
+    for sig_name in ("SIGTERM", "SIGBREAK"):
+        sig = getattr(signal, sig_name, None)
+        if sig is not None:
+            signal.signal(sig, _term)
     if open_browser:
         threading.Timer(0.3, webbrowser.open, args=(url,)).start()
     try:
-        server.serve_forever(poll_interval=0.3)
+        with _windows_stop_event(server):
+            server.serve_forever(poll_interval=0.3)
     except KeyboardInterrupt:
         pass
     finally:
@@ -2270,6 +2347,9 @@ def _state_label(r: dict[str, Any]) -> str:
 
 def list_reviews(under: Path | None, as_json: bool, locale: str | None = None) -> int:
     set_locale(locale or cli_locale(None))
+    if under is not None and fsutil.is_unc_or_device_path(under, allow_local_extended=True):
+        print(T("serve.msg.error", detail=f"Unsupported UNC or device path: {under}"), file=sys.stderr)
+        return 2
     try:
         items = ledger.entries()
     except (ledger.LedgerError, OSError) as e:
@@ -2301,8 +2381,10 @@ def list_reviews(under: Path | None, as_json: bool, locale: str | None = None) -
                 state=state, sub=sub, who=who))
         print(T("serve.msg.reviewDir", dir=r['dir']))
         if r["unattended"]:
+            notes_py = fsutil.quote_cli(str(Path(__file__).resolve().with_name("notes.py")))
+            review_arg = fsutil.quote_cli(str(r["dir"]))
             print(T("serve.msg.unattended",
-                    command=f"python3 {Path(__file__).resolve().with_name('notes.py')} wait {r['dir']}"))
+                    command=f"{fsutil.python_cli()} {notes_py} wait {review_arg}"))
         print()
     stale = [r for r in rows if r["state_id"] in ("missing", "mismatch")]
     if stale:
@@ -2534,8 +2616,17 @@ def check(locale: str | None = None) -> int:
         ok(any(n["id"] == nid for n in disk["notes"]), T("serve.check.noteOnDisk"))
         log_lines = (tmp / store.LOG_FILE).read_text(encoding="utf-8").strip().splitlines()
         ok(log_lines and json.loads(log_lines[-1])["op"] == "add", T("serve.check.logAppended"))
-        ok(oct((tmp / store.NOTES_FILE).stat().st_mode & 0o777) == "0o600"
-           and oct((tmp / store.LOG_FILE).stat().st_mode & 0o777) == "0o600", T("serve.check.fileMode"))
+        if fsutil.is_windows():
+            try:
+                fsutil.check_private_regular_file(tmp / store.NOTES_FILE, error_prefix="notes")
+                fsutil.check_private_regular_file(tmp / store.LOG_FILE, error_prefix="log")
+                file_mode_ok = True
+            except (OSError, ValueError):
+                file_mode_ok = False
+        else:
+            file_mode_ok = (oct((tmp / store.NOTES_FILE).stat().st_mode & 0o777) == "0o600"
+                            and oct((tmp / store.LOG_FILE).stat().st_mode & 0o777) == "0o600")
+        ok(file_mode_ok, T("serve.check.fileMode"))
         s, _, _ = _req(port, "PATCH", f"/api/notes/{nid}", same, {"status": "resolved", "resolution": "已改"})
         ok(s == 200, T("serve.check.markResolved", status=s))
         hook_out = tmp / "hook.json"
@@ -2769,6 +2860,7 @@ def _add_locale(parser: argparse.ArgumentParser) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    fsutil.configure_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     locale_choice = i18n.explicit_locale(argv)
     # 先按共同契约定语言，再建解析器：帮助、参数说明与错误消息才能用同一种语言

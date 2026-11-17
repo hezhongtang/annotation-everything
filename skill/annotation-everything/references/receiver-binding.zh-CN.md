@@ -6,16 +6,26 @@
 
 ## 配置接收会话
 
-先执行 `python3 $S/wakeup.py status 审阅目录`。已有绑定时核对它是否属于当前会话；不得把另一会话的标识读出来当成自己的身份。
+先执行 `wakeup.py status 审阅目录`（POSIX 用 `python3 "$S/wakeup.py"`，Windows PowerShell 用 `python "$S\wakeup.py"`）。已有绑定时核对它是否属于当前会话；不得把另一会话的标识读出来当成自己的身份。
 
-- **Codex 桌面事件接收**：按[Agent 机制](agent-mechanisms.zh-CN.md#codex-桌面审阅级事件接入)执行 `wakeup.py bind`，使用当前 `CODEX_THREAD_ID` 或已确认的当前聊天标识。沿用事件投递和实际接手确认，不另开认领型 `wait`。
-- **等待或主动领取**：使用当前 harness 的稳定会话标识。宿主不能提供标识时，为当前会话生成一次随机标识并在本会话后续操作中保持一致；新会话使用新标识。不要用服务 PID、`--by` 或临时等待进程冒充会话。
+- **已验证平台的桌面事件接收**：仅在宿主支持且已验证本机事件 IPC 时（macOS Codex 桌面；Windows 首期未提供/未验证，会报 `desktop-ipc-unavailable`），按[Agent 机制](agent-mechanisms.zh-CN.md#事件接入流程仅在已验证平台可用)执行 `wakeup.py bind`，使用当前 `CODEX_THREAD_ID` 或已确认的当前聊天标识。沿用事件投递和实际接手确认，不另开认领型 `wait`。
+- **等待或主动领取**：使用当前 harness 的稳定会话标识（如环境变量提供，否则生成一次随机标识并在本会话后续操作中保持一致；新会话使用新标识）。不要用服务 PID、`--by` 或临时等待进程冒充会话。
 
 ```bash
-python3 $S/wakeup.py bind 审阅目录 --adapter wait --harness 'Claude Code' --session 当前会话标识
-python3 $S/serve.py 审阅目录
-python3 $S/notes.py wait 审阅目录 --harness 'Claude Code' --session 当前会话标识
+# POSIX (bash / zsh)
+python3 "$S/wakeup.py" bind 审阅目录 --adapter wait --harness "<HARNESS>" --session CURRENT_SESSION_ID
+python3 "$S/serve.py" 审阅目录
+python3 "$S/notes.py" wait 审阅目录 --events analysis --harness "<HARNESS>" --session CURRENT_SESSION_ID
 ```
+
+```powershell
+# Windows PowerShell
+python "$S\wakeup.py" bind 审阅目录 --adapter wait --harness "<HARNESS>" --session CURRENT_SESSION_ID
+python "$S\serve.py" 审阅目录
+python "$S\notes.py" wait 审阅目录 --events analysis --harness "<HARNESS>" --session CURRENT_SESSION_ID
+```
+
+若当前宿主无法在回合外保持后台进程或没有后台完成通知，改由用户在持久终端启动 `serve.py` 并说明保持会话/返回聊天触发 `notes.py claim` 或限时 `wait --timeout 30`；不承诺任意空闲或已关闭聊天的自动唤醒。
 
 `claim`、`resolve`、`reopen`、`review` 和 `done` 也接受 `--harness` / `--session`，可以用当前进程环境的 `AE_HARNESS` / `AE_SESSION_ID` 代替。显式参数优先；两者均未提供时只使用已知的 `CODEX_THREAD_ID` 识别 Codex 会话。身份缺失或与绑定不符时退出码为 2，不领取或写回批次。子代理的处理按原协议由接收会话协调；单独会话接手复核时须先完成初改，再显式交接。
 

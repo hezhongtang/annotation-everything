@@ -1,7 +1,6 @@
 """技能更新的命令行行为；仓库、技能副本与审阅数据均为合成环境。"""
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -14,6 +13,9 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
+
+_POSIX_AUTO_UPDATE = unittest.skipIf(os.name == "nt", "Windows 首期不执行自动原地更新")
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,12 +36,14 @@ class SkillUpdateTests(unittest.TestCase):
         self.remote = self.root / "remote.git"
         self.skills = self.root / "custom-skills"
         self.copy = self.skills / SKILL
-        self.env = {**os.environ, "HOME": str(self.home),
+        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
+                    "LOCALAPPDATA": str(self.home / "AppData" / "Local"),
                     "AE_HOME": str(self.home / "ledger"),
                     "XDG_DATA_HOME": str(self.home / "data"),
                     "CODEX_HOME": str(self.home / ".codex"),
                     "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
                     "GIT_TERMINAL_PROMPT": "0", "PYTHONDONTWRITEBYTECODE": "1"}
+        self.can_symlink = self._probe_symlink()
         self.git("init", "--bare", str(self.remote))
         self.repo.mkdir()
         self.git("init", str(self.repo))
@@ -51,9 +55,22 @@ class SkillUpdateTests(unittest.TestCase):
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"))
         self.git("-C", str(self.repo), "remote", "add", "origin", str(self.remote))
         self.publish("0.9.0")
+        link_args = ("--link", "codex") if self.can_symlink else ()
         installed = self.run_command(self.repo / "ae.py", "install", "--target", str(self.skills),
-                                     "--link", "codex")
+                                     *link_args)
         self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+
+    def _probe_symlink(self) -> bool:
+        if os.name != "nt":
+            return True
+        src, dst = self.root / "_sym_src", self.root / "_sym_dst"
+        src.mkdir(exist_ok=True)
+        try:
+            os.symlink(str(src), str(dst), target_is_directory=True)
+        except OSError:
+            return False
+        dst.unlink()
+        return True
 
     def git(self, *args):
         return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", *args],
@@ -75,6 +92,7 @@ class SkillUpdateTests(unittest.TestCase):
         self.git("-C", str(self.repo), "tag", "-a", f"v{version}", "-m", f"Release {version}")
         self.git("-C", str(self.repo), "push", "origin", "HEAD", "--tags")
 
+    @_POSIX_AUTO_UPDATE
     def test_auto_installs_new_release_and_preserves_link_and_review_data(self):
         review = self.home / "ledger" / "reviews.json"
         review.parent.mkdir(parents=True)
@@ -112,6 +130,7 @@ class SkillUpdateTests(unittest.TestCase):
         self.assertIn("0.9.0", result.stdout)
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
 
+    @_POSIX_AUTO_UPDATE
     def test_installed_skill_entry_runs_auto_check_and_explains_reload(self):
         self.publish("0.10.0")
         entry = (self.copy / "SKILL.md").read_text(encoding="utf-8")
@@ -124,6 +143,7 @@ class SkillUpdateTests(unittest.TestCase):
         self.assertIn("0.10.0", result.stdout)
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.10.0")
 
+    @_POSIX_AUTO_UPDATE
     def test_auto_preserves_local_changes_and_reports_available_update(self):
         self.publish("0.10.0")
         local = self.copy / "local-notes.txt"
@@ -134,6 +154,7 @@ class SkillUpdateTests(unittest.TestCase):
         self.assertEqual(local.read_text(encoding="utf-8"), "keep local changes")
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
 
+    @_POSIX_AUTO_UPDATE
     def test_auto_offline_keeps_installed_version_and_does_not_block_work(self):
         self.git("-C", str(self.repo), "remote", "set-url", "origin", str(self.root / "missing.git"))
         result = self.run_command(self.copy / "scripts" / "update.py", "auto", "--locale", "en")
@@ -141,6 +162,7 @@ class SkillUpdateTests(unittest.TestCase):
         self.assertIn("keeping the current version", result.stderr)
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
 
+    @_POSIX_AUTO_UPDATE
     def test_auto_rejects_a_tag_with_the_wrong_bundled_version(self):
         self.publish("0.9.1")
         self.git("-C", str(self.repo), "tag", "-a", "v9.0.0", "-m", "invalid release")
@@ -150,6 +172,7 @@ class SkillUpdateTests(unittest.TestCase):
         self.assertIn("do not match", result.stderr)
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
 
+    @_POSIX_AUTO_UPDATE
     def test_auto_rejects_a_release_missing_a_module_update_imports(self):
         self.git("-C", str(self.repo), "rm", "--quiet", f"skill/{SKILL}/scripts/fsutil.py")
         self.publish("0.10.0")
@@ -159,6 +182,7 @@ class SkillUpdateTests(unittest.TestCase):
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
         self.assertTrue((self.copy / "scripts" / "fsutil.py").is_file())
 
+    @_POSIX_AUTO_UPDATE
     def test_auto_rejects_a_release_missing_the_overview_runtime(self):
         self.git("-C", str(self.repo), "rm", "--quiet", f"skill/{SKILL}/scripts/review_overview.py")
         self.publish("0.10.0")
@@ -168,6 +192,7 @@ class SkillUpdateTests(unittest.TestCase):
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
         self.assertTrue((self.copy / "scripts" / "review_overview.py").is_file())
 
+    @_POSIX_AUTO_UPDATE
     def test_auto_rejects_a_release_missing_the_stop_runtime(self):
         self.git("-C", str(self.repo), "rm", "--quiet", f"skill/{SKILL}/scripts/review_stop.py")
         self.publish("0.10.0")
@@ -177,6 +202,7 @@ class SkillUpdateTests(unittest.TestCase):
         self.assertEqual((self.copy / "release-marker.txt").read_text(), "0.9.0")
         self.assertTrue((self.copy / "scripts" / "review_stop.py").is_file())
 
+    @_POSIX_AUTO_UPDATE
     def test_daily_limit_does_not_prevent_manual_update(self):
         first = self.run_command(self.copy / "scripts" / "update.py", "auto")
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
@@ -188,6 +214,7 @@ class SkillUpdateTests(unittest.TestCase):
         self.assertEqual(manual.returncode, 0, manual.stdout + manual.stderr)
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.10.0")
 
+    @_POSIX_AUTO_UPDATE
     def test_auto_does_not_downgrade_or_install_prereleases(self):
         self.git("-C", str(self.repo), "tag", "v9.0.0-rc.1")
         self.git("-C", str(self.repo), "push", "origin", "v9.0.0-rc.1")
@@ -229,10 +256,33 @@ class SkillUpdateTests(unittest.TestCase):
         for command in ([sys.executable, "-I", script, "--help"],
                         [sys.executable, "-I", "-c", fallback, script]):
             with self.subTest(command=command[:3]):
-                result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=45)
+                result = subprocess.run(command, env=env, capture_output=True, text=True,
+                                        encoding="utf-8", errors="replace", timeout=45)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertFalse(marker.exists(), "restarting notes.py must preserve -I")
 
+    def test_configure_stdio_reconfigures_text_streams_to_utf8(self):
+        import io
+        scripts_dir = str(self.copy / "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        import fsutil
+
+        out = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
+        err = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
+        string_stream = io.StringIO()
+        with mock.patch.object(sys, "stdout", out), \
+                mock.patch.object(sys, "stderr", err):
+            fsutil.configure_stdio()
+            print("中文输出", file=sys.stdout, flush=True)
+            print("中文错误", file=sys.stderr, flush=True)
+        self.assertEqual(out.encoding.lower(), "utf-8")
+        self.assertEqual(err.encoding.lower(), "utf-8")
+        with mock.patch.object(sys, "stdout", string_stream), \
+                mock.patch.object(sys, "stderr", string_stream):
+            fsutil.configure_stdio()
+
+    @_POSIX_AUTO_UPDATE
     def test_failed_atomic_exchange_keeps_previous_copy(self):
         self.publish("0.10.0")
         runner = """
@@ -251,6 +301,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
         self.assertTrue((self.home / ".codex" / "skills" / SKILL).is_symlink())
 
+    @_POSIX_AUTO_UPDATE
     def test_process_killed_after_atomic_exchange_leaves_new_copy_available(self):
         self.publish("0.10.0")
         runner = """
@@ -270,6 +321,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.10.0")
         self.assertTrue((self.home / ".codex" / "skills" / SKILL / "SKILL.md").is_file())
 
+    @_POSIX_AUTO_UPDATE
     def test_local_directories_links_and_nested_records_are_not_deleted(self):
         self.publish("0.10.0")
         (self.copy / "empty-dir").mkdir()
@@ -283,6 +335,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         self.assertTrue((self.copy / "directory-link").is_symlink())
         self.assertEqual((self.copy / "custom" / ".install-record.json").read_text(), "keep")
 
+    @_POSIX_AUTO_UPDATE
     def test_local_permission_change_is_not_overwritten(self):
         self.publish("0.10.0")
         marker = self.copy / "release-marker.txt"
@@ -293,6 +346,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         self.assertEqual(marker.stat().st_mode, mode)
         self.assertEqual(marker.read_text(encoding="utf-8"), "0.9.0")
 
+    @_POSIX_AUTO_UPDATE
     def test_skill_root_permission_change_is_not_overwritten(self):
         self.publish("0.10.0")
         self.copy.chmod(self.copy.stat().st_mode ^ 0o010)
@@ -302,6 +356,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         self.assertEqual(self.copy.stat().st_mode, mode)
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
 
+    @_POSIX_AUTO_UPDATE
     def test_update_keeps_a_private_skill_root_private(self):
         (self.repo / "skill" / SKILL).chmod(0o700)
         installed = self.run_command(self.repo / "ae.py", "install", "--target", str(self.skills))
@@ -311,6 +366,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.copy.stat().st_mode & 0o777, 0o700)
 
+    @_POSIX_AUTO_UPDATE
     def test_concurrent_edit_during_exchange_is_backed_up_and_reported(self):
         self.publish("0.10.0")
         runner = """
@@ -334,6 +390,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         self.assertEqual(len(backup), 1, result.stderr)
         self.assertEqual(backup[0].read_text(), "keep this change")
 
+    @_POSIX_AUTO_UPDATE
     def test_unreadable_previous_copy_after_exchange_still_reports_update(self):
         self.publish("0.10.0")
         runner = """
@@ -363,6 +420,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.10.0")
         self.assertTrue(list(self.skills.glob(".ae-update-*/annotation-everything/release-marker.txt")))
 
+    @_POSIX_AUTO_UPDATE
     def test_install_target_can_equal_xdg_data_home(self):
         target = Path(self.env["XDG_DATA_HOME"])
         installed = self.run_command(self.repo / "ae.py", "install", "--target", str(target))
@@ -376,6 +434,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         checks = json.loads(doctor.stdout)["results"]
         self.assertEqual(next(c["status"] for c in checks if c["code"] == "skill-copy-sync"), "pass")
 
+    @_POSIX_AUTO_UPDATE
     def test_legacy_process_in_a_path_with_spaces_defers_update(self):
         target = self.root / "custom skills with spaces"
         installed = self.run_command(self.repo / "ae.py", "install", "--target", str(target))
@@ -403,6 +462,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         process.terminate()
         process.wait(timeout=10)
 
+    @_POSIX_AUTO_UPDATE
     def test_unrelated_relative_serve_script_does_not_block_update(self):
         self.publish("0.10.0")
         other = self.root / "unrelated"
@@ -425,6 +485,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         process.terminate()
         process.wait(timeout=10)
 
+    @_POSIX_AUTO_UPDATE
     def test_ignored_files_in_previous_cache_are_not_installed_or_deleted(self):
         self.publish("0.10.0")
         local = self.copy / "local.txt"
@@ -441,6 +502,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         self.assertFalse((self.copy / "ignored-data.txt").exists())
         self.assertEqual(ignored.read_text(encoding="utf-8"), "keep")
 
+    @_POSIX_AUTO_UPDATE
     def test_running_service_defers_update_until_it_stops(self):
         self.publish("0.10.0")
         review = self.root / "review"
@@ -472,6 +534,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         self.assertEqual(manual.returncode, 0, manual.stdout + manual.stderr)
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.10.0")
 
+    @_POSIX_AUTO_UPDATE
     def test_waiter_with_different_ledger_defers_update(self):
         self.publish("0.10.0")
         review = self.root / "waiting-review"
@@ -495,6 +558,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         waiter.terminate()
         waiter.wait(timeout=10)
 
+    @_POSIX_AUTO_UPDATE
     def test_service_started_during_exchange_refuses_stale_code(self):
         self.publish("0.10.0")
         ready = self.root / "exchange-ready"
@@ -554,6 +618,7 @@ sys.exit(serve.serve(Path(sys.argv[3]), None, False, False, locale='en'))
         self.assertEqual(server.returncode, 6, out + err)
         self.assertIn("skill was just updated", err)
 
+    @_POSIX_AUTO_UPDATE
     def test_notes_started_during_exchange_reloads_the_new_code(self):
         notes_source = self.repo / "skill" / SKILL / "scripts" / "notes.py"
         source = notes_source.read_text(encoding="utf-8")
@@ -615,6 +680,7 @@ exec(code, {'__name__': '__main__', '__file__': script})
         self.assertEqual(notes.returncode, 0, out + err)
         self.assertIn("NEW-NOTES-CODE-LOADED", err)
 
+    @_POSIX_AUTO_UPDATE
     def test_running_review_service_defers_update(self):
         """台账里登记的审阅有活着的服务（状态文件 + 台账条目）时推迟替换。"""
         self.publish("0.10.0")
@@ -634,26 +700,26 @@ exec(code, {'__name__': '__main__', '__file__': script})
         self.assertIn("review server or annotation process is running", result.stderr)
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
 
+    @_POSIX_AUTO_UPDATE
     def test_cache_lock_reports_busy_and_auto_stays_silent(self):
         # 更新器按解析后的副本路径算缓存目录，测试也要用解析后的路径才算到同一把锁
         cache = (Path(self.env["XDG_DATA_HOME"]) / SKILL / "updates"
                  / hashlib.sha256(os.fsencode(str(self.copy.resolve()))).hexdigest()[:24])
         cache.mkdir(parents=True, exist_ok=True)
-        held = os.open(cache / "lock", os.O_CREAT | os.O_RDWR, 0o600)
-        fcntl.flock(held, fcntl.LOCK_EX)
-        try:
+        sys.path.insert(0, str(self.copy / "scripts"))
+        import fsutil
+        with fsutil.flocked(cache / "lock", exclusive=True):
             busy = self.run_command(self.copy / "scripts" / "update.py", "now", "--locale", "en")
             self.assertEqual(busy.returncode, 0, busy.stdout + busy.stderr)
             self.assertIn("Another update check is in progress.", busy.stdout)
             auto = self.run_command(self.copy / "scripts" / "update.py", "auto", "--locale", "en")
             self.assertEqual(auto.returncode, 0, auto.stdout + auto.stderr)
             self.assertEqual(auto.stdout + auto.stderr, "", "auto 模式只静默返回")
-        finally:
-            os.close(held)
         after = self.run_command(self.copy / "scripts" / "update.py", "check", "--locale", "en")
         self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
         self.assertIn("0.9.0", after.stdout, "锁释放后照常检查")
 
+    @_POSIX_AUTO_UPDATE
     def test_update_refuses_when_the_update_lock_is_a_symlink(self):
         self.publish("0.10.0")
         # 协调锁在技能副本的上级目录（与 copy_tracked_skill 的内容指纹无关）
@@ -666,6 +732,143 @@ exec(code, {'__name__': '__main__', '__file__': script})
         self.assertIn("Could not verify review server status", result.stderr)
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
         self.assertEqual(target.read_text(encoding="utf-8"), "", "没有锁符号链接指向的文件")
+
+    def _import_repo_update(self):
+        scripts_dir = str(ROOT / "skill" / SKILL / "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        import update
+        return update
+
+    def test_windows_update_storage_uses_localappdata_when_xdg_unset(self):
+        update = self._import_repo_update()
+
+        local_app = self.home / "AppData" / "Local"
+        with mock.patch.object(update.fsutil, "is_windows", return_value=True), \
+                mock.patch.dict(os.environ, {"LOCALAPPDATA": str(local_app)}, clear=False):
+            os.environ.pop("XDG_DATA_HOME", None)
+            path = update.update_storage(self.copy)
+        self.assertTrue(path.is_relative_to(local_app.resolve()), path)
+
+    def test_windows_has_legacy_process_detects_exe_and_reports_enum_failure(self):
+        update = self._import_repo_update()
+
+        record = json.loads((self.copy / ".install-record.json").read_text(encoding="utf-8"))
+        serve_path = self.copy / "scripts" / "serve.py"
+        with mock.patch.object(update.fsutil, "is_windows", return_value=True), \
+                mock.patch.object(update, "_list_processes",
+                                  return_value=[(101, ""), (202, f'python.exe "{serve_path}" "r"')]):
+            self.assertTrue(update.has_legacy_process(self.copy, record))
+
+        with mock.patch.object(update.fsutil, "is_windows", return_value=True), \
+                mock.patch.object(update, "_list_processes",
+                                  side_effect=update.UpdateError("cli.update.cannotVerifyServices")):
+            with self.assertRaises(update.UpdateError) as caught:
+                update.has_legacy_process(self.copy, record)
+            self.assertEqual(caught.exception.key, "cli.update.cannotVerifyServices")
+
+    def test_has_running_review_detects_overview_home(self):
+        update = self._import_repo_update()
+
+        status_path = self.home / "ledger" / ".overview-home-status.json"
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        status_path.write_text(json.dumps({"app": SKILL, "pid": os.getpid()}), encoding="utf-8")
+        with mock.patch.dict(os.environ, self.env):
+            self.assertTrue(update.has_running_review())
+
+    def test_windows_check_mode_points_to_manual_upgrade(self):
+        self.publish("0.10.0")
+        runner = (
+            "import sys, unittest.mock\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "import update\n"
+            "with unittest.mock.patch.object(update.fsutil, 'is_windows', return_value=True):\n"
+            "    sys.exit(update.main(['check', '--locale', 'en']))\n"
+        )
+        result = subprocess.run([sys.executable, "-c", runner, str(self.copy / "scripts")],
+                                env=self.env, capture_output=True, text=True, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("0.10.0", result.stdout)
+        self.assertIn("ae.py upgrade", result.stdout)
+        self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
+
+    def test_windows_process_cwd_configures_ctypes_argtypes_and_restype(self):
+        import ctypes
+        from ctypes import wintypes
+
+        update = self._import_repo_update()
+        expected = {
+            "OpenProcess": ([wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
+            "IsWow64Process": ([wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)], wintypes.BOOL),
+            "ReadProcessMemory": (
+                [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)],
+                wintypes.BOOL,
+            ),
+            "CloseHandle": ([wintypes.HANDLE], wintypes.BOOL),
+            "NtQueryInformationProcess": (
+                [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.ULONG, ctypes.POINTER(wintypes.ULONG)],
+                ctypes.c_long,
+            ),
+        }
+
+        class CheckedFn:
+            def __init__(self, name, impl):
+                self.name = name
+                self.impl = impl
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                exp_args, exp_res = expected[self.name]
+                if self.argtypes != exp_args or self.restype != exp_res:
+                    raise AssertionError(f"{self.name} 缺少精确 argtypes/restype: {self.argtypes!r}, {self.restype!r}")
+                return self.impl(*args)
+
+        closed = []
+        high_handle = (1 << 40) + 0x42
+        cwd_bytes = "D:\\synthetic\\cwd".encode("utf-16-le")
+
+        def fake_read_mem(_h, addr, out_buf, size, read_ptr):
+            raw_addr = addr.value if hasattr(addr, "value") else addr
+            if raw_addr == 0x10020:
+                out_buf._obj.value = 0x20000
+                read_ptr._obj.value = 8
+            elif raw_addr == 0x20038:
+                out_buf._obj.Length = len(cwd_bytes)
+                out_buf._obj.MaximumLength = len(cwd_bytes)
+                out_buf._obj.Buffer = 0x30000
+                read_ptr._obj.value = size
+            elif raw_addr == 0x30000:
+                ctypes.memmove(out_buf, cwd_bytes, len(cwd_bytes))
+                read_ptr._obj.value = len(cwd_bytes)
+            else:
+                return 0
+            return 1
+
+        def fake_nt_query(_h, _cls, out_pbi, size, ret_len):
+            out_pbi._obj.PebBaseAddress = 0x10000
+            ret_len._obj.value = size
+            return 0
+
+        class FakeKernel32:
+            OpenProcess = CheckedFn("OpenProcess", lambda *_a: high_handle)
+            IsWow64Process = CheckedFn("IsWow64Process", lambda _h, _p: 1)
+            ReadProcessMemory = CheckedFn("ReadProcessMemory", fake_read_mem)
+            CloseHandle = CheckedFn("CloseHandle", lambda h: closed.append(h) or 1)
+
+        class FakeNtdll:
+            NtQueryInformationProcess = CheckedFn("NtQueryInformationProcess", fake_nt_query)
+
+        def fake_windll(name, use_last_error=False):
+            return FakeKernel32() if name == "kernel32" else FakeNtdll()
+
+        with mock.patch.object(ctypes, "WinDLL", side_effect=fake_windll, create=True):
+            self.assertEqual(update._windows_process_cwd(999999), "D:\\synthetic\\cwd")
+        self.assertEqual(closed, [high_handle])
+
+    def test_update_uses_fsutil_is_windows(self):
+        update = self._import_repo_update()
+        self.assertFalse(hasattr(update, "_is_windows"))
 
 
 if __name__ == "__main__":

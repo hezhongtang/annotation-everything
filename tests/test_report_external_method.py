@@ -144,16 +144,15 @@ def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
     d.mkdir(parents=True, exist_ok=True)
     if not (d / "materials" / "notes.md").exists():
         (d / "materials").mkdir(exist_ok=True)
-        (d / "materials" / "notes.md").write_text(MATERIAL, encoding="utf-8")
+        (d / "materials" / "notes.md").write_bytes(MATERIAL.encode("utf-8"))
     paths = {"report": d / "report.html"}
-    paths["report"].write_text(report, encoding="utf-8")
+    paths["report"].write_bytes(report.encode("utf-8"))
     if script is not None:
         paths["script"] = d / "script.md"
-        paths["script"].write_text(script, encoding="utf-8")
+        paths["script"].write_bytes(script.encode("utf-8"))
     if record is not None:
         paths["record"] = d / "report-record.json"
-        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-                                   encoding="utf-8")
+        paths["record"].write_bytes((json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     return paths
 
 
@@ -366,12 +365,13 @@ def installed_ae_copy(tmp: Path) -> tuple[Path, dict]:
     """ae.py install 装进合成 HOME 的临时副本，返回 (scripts 目录, 环境变量)。"""
     home = tmp / "home"
     skills = home / ".claude" / "skills"
-    env = {**os.environ, "HOME": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
     done = subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stdout + done.stderr
     installed = skills / "annotation-everything"
     return installed / "scripts", {**os.environ, "HOME": str(home),
+                                   "USERPROFILE": str(home),
                                    "CLAUDE_SKILLS_DIR": str(skills),
                                    "AE_HOME": str(tmp / "ae-home")}
 
@@ -392,7 +392,7 @@ class SyntheticExternalSkillTests(unittest.TestCase):
         shutil.copytree(ROOT / "fixtures" / fixture, skill_dir, dirs_exist_ok=True)
         materials = out / "materials" / "notes.md"
         materials.parent.mkdir(parents=True, exist_ok=True)
-        materials.write_text(MATERIAL, encoding="utf-8")
+        materials.write_bytes(MATERIAL.encode("utf-8"))
         return subprocess.run(
             [sys.executable, str(skill_dir / "scripts" / "make_report.py"),
              "--materials", str(materials), "--out", str(out)],
@@ -484,8 +484,7 @@ class SyntheticExternalSkillTests(unittest.TestCase):
         shutil.copy(out / "script.md", d / "script.md")
         paths = {"report": d / "report.html", "script": d / "script.md",
                  "record": d / "report-record.json"}
-        paths["record"].write_text(json.dumps(twin, ensure_ascii=False, indent=2) + "\n",
-                                   encoding="utf-8")
+        paths["record"].write_bytes((json.dumps(twin, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
         _, builtin_payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(outline(builtin_payload), outline(external_payload),
                          "相同缺陷的内外产物判定必须一致")

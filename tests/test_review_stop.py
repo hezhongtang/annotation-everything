@@ -35,6 +35,7 @@ import host_isolation
 host_isolation.require_for_module(__name__)
 
 THREAD = "11111111-1111-4111-8111-111111111111"
+_HAS_UNIX_DESKTOP_IPC = os.name != "nt" and hasattr(socket, "AF_UNIX") and hasattr(os, "getuid")
 
 
 class Desktop:
@@ -124,12 +125,18 @@ class ReviewStopTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="ae-stop-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.env_patch = patch.dict(os.environ, {"AE_HOME": str(self.root / "ledger")})
+        home_dir = str(self.root / "home")
+        self.env_patch = patch.dict(os.environ, {
+            "AE_HOME": str(self.root / "ledger"),
+            "HOME": home_dir,
+            "USERPROFILE": home_dir,
+        })
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
         self.env = {k: v for k, v in os.environ.items()
                     if k not in ("CODEX_THREAD_ID", "AE_HARNESS", "AE_SESSION_ID", "AE_LOCALE")}
-        self.env.update(AE_HOME=str(self.root / "ledger"), PYTHONDONTWRITEBYTECODE="1")
+        self.env.update(AE_HOME=str(self.root / "ledger"), HOME=home_dir, USERPROFILE=home_dir,
+                        PYTHONDONTWRITEBYTECODE="1")
         self.processes = []
         self.addCleanup(self.stop_processes)
 
@@ -532,7 +539,10 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(json.loads(queried.stdout)["state"], "stopped")
         self.assertEqual(json.loads(repeated.stdout)["stopId"], result["stopId"])
         state_path = directory / ".annotation-stop.json"
-        self.assertEqual(state_path.stat().st_mode & 0o777, 0o600)
+        if os.name == "nt":
+            fsutil.check_private_regular_file(state_path, error_prefix="stop")
+        else:
+            self.assertEqual(state_path.stat().st_mode & 0o777, 0o600)
         self.assertNotIn(rid, ledger.load()["reviews"].get("stop", {}))
 
     def test_stop_exits_waiter_and_only_explicit_start_reopens_the_review(self):
@@ -576,6 +586,7 @@ class ReviewStopTests(unittest.TestCase):
         final_stop = self.cli("serve.py", "stop", rid, "--timeout", "3")
         self.assertEqual(final_stop.returncode, 0, final_stop.stdout + final_stop.stderr)
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_event_stop_cancels_only_this_reviews_turn_and_requires_confirmation(self):
         desktop = Desktop(self.root / "desktop.sock")
         self.addCleanup(desktop.close)
@@ -633,6 +644,7 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(final_stop.returncode, 0, final_stop.stdout + final_stop.stderr)
         self.assertEqual(len(desktop.cancelled), 2)
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_rejected_cancel_is_incomplete_blocks_new_work_and_retries_same_stop(self):
         desktop = Desktop(self.root / "desktop.sock")
         self.addCleanup(desktop.close)
@@ -707,6 +719,7 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(batches["latest"]["status"], "pending")
         self.assertEqual(len(desktop.cancelled), 2)
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_retry_protects_browser_changes_after_the_first_save_was_confirmed(self):
         desktop = Desktop(self.root / "desktop-retry-save.sock")
         self.addCleanup(desktop.close)
@@ -760,6 +773,7 @@ class ReviewStopTests(unittest.TestCase):
         code, _, doc = self.request(restarted, "GET", "/api/notes", rid=target_rid)
         self.assertEqual((code, [note["text"] for note in doc["notes"]]), (200, [annotation["text"]]))
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_concurrent_stops_share_a_single_cancellation(self):
         desktop = Desktop(self.root / "desktop-concurrent.sock")
         self.addCleanup(desktop.close)
@@ -789,6 +803,7 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(results[0]["stopId"], results[1]["stopId"])
         self.assertEqual(len(desktop.cancelled), 1)
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_transfer_waits_for_confirmation_of_unclaimed_desktop_turn(self):
         desktop = Desktop(self.root / "desktop-transfer.sock")
         self.addCleanup(desktop.close)
@@ -809,6 +824,7 @@ class ReviewStopTests(unittest.TestCase):
         replaced = self.cli(*command)
         self.assertEqual(replaced.returncode, 0, replaced.stdout + replaced.stderr)
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_stop_confirms_the_desktop_turn_of_a_voided_analysis_round(self):
         desktop = Desktop(self.root / "desktop.sock")
         self.addCleanup(desktop.close)
@@ -826,6 +842,7 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
         self.assertEqual([item["turnId"] for item in desktop.cancelled], [delivered["turnId"]])
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_interrupted_connection_does_not_leave_an_active_turn(self):
         desktop = Desktop(self.root / "desktop.sock")
         self.addCleanup(desktop.close)
@@ -857,6 +874,7 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(self.cli("wakeup.py", "unbind", str(directory)).returncode, 0)
         self.assertFalse(desktop.turns)
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_stop_timeout_includes_persisting_cancellation_confirmation(self):
         desktop = Desktop(self.root / "desktop.sock")
         self.addCleanup(desktop.close)
@@ -882,6 +900,7 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(retried.returncode, 0, retried.stdout + retried.stderr)
         self.assertEqual(json.loads(retried.stdout)["stopId"], state["stopId"])
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_explicit_reuse_recovers_a_cancelled_unclaimed_turn_after_partial_stop(self):
         desktop = Desktop(self.root / "desktop-reuse.sock")
         self.addCleanup(desktop.close)
@@ -902,6 +921,7 @@ class ReviewStopTests(unittest.TestCase):
         self.assertTrue(self.wait_until(lambda: len(desktop.turns) == 3),
                         "reusing the service should redeliver the cancelled turn")
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_accept_only_and_timeout_are_capability_gaps_not_stop_confirmations(self):
         for rid, mode, expected in (("7a" * 8, "accept", "agent-cancel-confirmation-required"),
                                     ("8a" * 8, "timeout", "agent-cancel-timeout")):
@@ -1008,6 +1028,7 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(retried.returncode, 0, retried.stdout + retried.stderr)
         self.assertEqual(json.loads(retried.stdout)["stopId"], result["stopId"])
 
+    @unittest.skipUnless(hasattr(signal, "SIGSTOP"), "POSIX SIGSTOP required")
     def test_unresponsive_live_http_process_is_not_reported_stopped(self):
         rid = "cd" * 8
         directory = self.review("unresponsive", rid)
@@ -1026,6 +1047,42 @@ class ReviewStopTests(unittest.TestCase):
         retried = self.cli("serve.py", "stop", rid, "--timeout", "2")
         self.assertEqual(retried.returncode, 0, retried.stdout + retried.stderr)
         self.assertEqual(json.loads(retried.stdout)["stopId"], result["stopId"])
+
+    def test_unresponsive_http_socket_is_not_reported_stopped(self):
+        rid = "ce" * 8
+        directory = self.review("unresponsive-socket", rid)
+        port_file = self.root / "stub.port"
+        ready_file = self.root / "stub.ready"
+        stub = (
+            "import json, socket, sys, time\n"
+            "from pathlib import Path\n"
+            "srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "srv.bind(('127.0.0.1', 0))\n"
+            "srv.listen(4)\n"
+            "Path(sys.argv[1]).write_text(str(srv.getsockname()[1]))\n"
+            "Path(sys.argv[2]).write_text('ready')\n"
+            "conns = []\n"
+            "while True:\n"
+            "    c, _ = srv.accept()\n"
+            "    conns.append(c)\n"
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", stub, str(port_file), str(ready_file)],
+            env=self.env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        self.processes.append(proc)
+        self.assertTrue(self.wait_until(ready_file.exists))
+        port = int(port_file.read_text(encoding="utf-8"))
+        (directory / serve.STATUS_FILE).write_text(
+            json.dumps({"app": serve.APP, "version": serve.VERSION, "pid": proc.pid, "port": port}),
+            encoding="utf-8",
+        )
+        stopped = self.cli("serve.py", "stop", rid, "--timeout", ".2")
+        self.assertEqual(stopped.returncode, 1, stopped.stdout + stopped.stderr)
+        result = json.loads(stopped.stdout)
+        self.assertEqual(result["state"], "incomplete")
+        self.assertEqual(result["components"]["http"]["error"], "http-status-unconfirmed")
+        self.assertIsNone(proc.poll())
 
     def test_stop_rejects_ambiguous_unknown_and_invalid_timeout_without_creating_state(self):
         first_rid = "abcd" + "0" * 12
@@ -1267,7 +1324,7 @@ sys.exit(serve.serve(Path(sys.argv[2]), None, False, False))
             "deadline=time.monotonic()+5\n"
             f"while not Path({str(release)!r}).exists() and time.monotonic()<deadline: time.sleep(.02)\n",
             encoding="utf-8")
-        info, _ = self.start_server(directory, f"{sys.executable} {hook}")
+        info, _ = self.start_server(directory, fsutil.join_cli([sys.executable, str(hook)]))
         status, _, submitted = self.request(info, "POST", "/api/handoff", {"message": "long hook"}, rid)
         self.assertEqual(status, 200, submitted)
         deadline = time.monotonic() + 5
@@ -1285,13 +1342,19 @@ sys.exit(serve.serve(Path(sys.argv[2]), None, False, False))
             result = json.loads(stopped.stdout)
             self.assertEqual(result["state"], "incomplete")
             self.assertEqual(result["components"]["hooks"]["error"], "background-hook-running")
-            self.assertIn(hook_pid, result["components"]["hooks"]["pids"])
+            hook_pids = result["components"]["hooks"]["pids"]
+            self.assertTrue(hook_pids and all(ledger.pid_alive(pid) for pid in hook_pids), result)
+            if os.name != "nt":
+                self.assertIn(hook_pid, hook_pids)
             restarted_info, _ = self.start_server(directory)
             stopped = self.cli("serve.py", "stop", rid, "--timeout", ".1")
             self.assertEqual(stopped.returncode, 1, stopped.stdout + stopped.stderr)
             result = json.loads(stopped.stdout)
             self.assertEqual(result["components"]["hooks"]["error"], "background-hook-running")
-            self.assertIn(hook_pid, result["components"]["hooks"]["pids"])
+            hook_pids = result["components"]["hooks"]["pids"]
+            self.assertTrue(hook_pids and all(ledger.pid_alive(pid) for pid in hook_pids), result)
+            if os.name != "nt":
+                self.assertIn(hook_pid, hook_pids)
             self.assertEqual(self.request(restarted_info, "GET", "/api/health")[0], 200)
         finally:
             release.write_text("release")
@@ -1379,6 +1442,7 @@ sys.exit(serve.serve(Path(sys.argv[2]), None, False, False,
         self.assertIn("review-stopped", result.stderr)
         self.assertEqual(analysis_store.load(directory, aid), history_before)
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_inflight_delivery_is_settled_and_cancelled_before_stop_completes(self):
         desktop = Desktop(self.root / "desktop-inflight.sock")
         desktop.start_hold = threading.Event()
@@ -1421,6 +1485,7 @@ sys.exit(serve.serve(Path(sys.argv[2]), None, False, False,
         self.assertEqual(json.loads(stdout)["state"], "stopped")
         self.assertEqual(len(desktop.cancelled), 1)
 
+    @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_direct_delivery_cannot_start_after_cancellation_snapshot(self):
         desktop = Desktop(self.root / "desktop-race.sock")
         self.addCleanup(desktop.close)
@@ -1456,6 +1521,105 @@ sys.exit(serve.serve(Path(sys.argv[2]), None, False, False,
         starts = [request for request in desktop.requests if request["method"] == "thread-follower-start-turn"]
         self.assertEqual(len(desktop.cancelled), len(starts),
                          "every direct delivery admitted before cancellation must be confirmed stopped")
+
+    def _start_overview_home(self):
+        proc = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), "overview", "--no-open"],
+                                env=self.env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.processes.append(proc)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            info = serve.read_home_status()
+            if info and info.get("pid") == proc.pid:
+                health = serve.probe(info["port"], timeout=.2)
+                if health and health.get("hostKind") == "overview-home":
+                    return proc, info, health
+            if proc.poll() is not None:
+                self.fail(f"overview home exited early: {proc.returncode}")
+            time.sleep(.03)
+        self.fail("overview home did not become ready")
+
+    def test_overview_home_stop_all_and_restart_preserves_port_binding_and_claimed_work(self):
+        rid1, rid2 = "e1" * 8, "e2" * 8
+        d1 = self.review("home-r1", rid1)
+        d2 = self.review("home-r2", rid2)
+
+        def cleanup_overview_children() -> None:
+            for d in (d1, d2):
+                info = serve.read_status(d) or {}
+                pid = info.get("pid")
+                if type(pid) is int and pid > 0 and ledger.pid_alive(pid):
+                    with contextlib.suppress(OSError):
+                        os.kill(pid, signal.SIGTERM)
+
+        self.addCleanup(cleanup_overview_children)
+        for d, sess in ((d1, "sess-1"), (d2, "sess-2")):
+            bound = self.cli("wakeup.py", "bind", str(d), "--adapter", "wait",
+                             "--harness", "Claude Code", "--session", sess)
+            self.assertEqual(bound.returncode, 0, bound.stdout + bound.stderr)
+        b1_before = json.loads((d1 / ".agent-binding.json").read_text(encoding="utf-8"))["bindingId"]
+        b2_before = json.loads((d2 / ".agent-binding.json").read_text(encoding="utf-8"))["bindingId"]
+
+        home_proc, home_info, home_health = self._start_overview_home()
+        host_headers = {"X-AE-Host": home_health["hostId"]}
+        s1, _, start1 = self.request(home_info, "POST", "/api/overview/start", {"reviewId": rid1},
+                                     extra_headers=host_headers, timeout=8)
+        s2, _, start2 = self.request(home_info, "POST", "/api/overview/start", {"reviewId": rid2},
+                                     extra_headers=host_headers, timeout=8)
+        self.assertEqual((s1, s2), (200, 200), (start1, start2))
+        port1 = int(start1["url"].rstrip("/").rsplit(":", 1)[1])
+        port2 = int(start2["url"].rstrip("/").rsplit(":", 1)[1])
+
+        # 提交并领取 r1 批次；停止全部时未完成的停止不会误报已停止，完成并停止后总览仍可列出与重启
+        code, _, handed = serve._req(port1, "POST", "/api/handoff",
+                                      {"Host": f"127.0.0.1:{port1}", "Origin": f"http://127.0.0.1:{port1}",
+                                       "Content-Type": "application/json", "X-AE-Review": rid1},
+                                      {"message": "batch 1", "receiverBindingId": b1_before})
+        self.assertEqual(code, 200, handed)
+        owner_env = {**self.env, "AE_HARNESS": "Claude Code", "AE_SESSION_ID": "sess-1"}
+        claimed = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "claim", str(d1)],
+                                 env=owner_env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(claimed.returncode, 0, claimed.stdout + claimed.stderr)
+
+        _, _, stopped2 = self.request(home_info, "POST", "/api/overview/stop",
+                                      {"reviewId": rid2, "scope": "all"}, extra_headers=host_headers, timeout=10)
+        self.assertEqual(stopped2["state"], "stopped")
+        done1 = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "done", str(d1), "--seq", "1"],
+                               env=owner_env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(done1.returncode, 0, done1.stdout + done1.stderr)
+        _, _, stopped1 = self.request(home_info, "POST", "/api/overview/stop",
+                                      {"reviewId": rid1, "scope": "all"}, extra_headers=host_headers, timeout=10)
+        self.assertEqual(stopped1["state"], "stopped")
+
+        # 全部停掉后重开总览首页，应回到同一保留端口并保留两份审阅、专属端口与接收方绑定
+        home_proc.terminate()
+        home_proc.wait(timeout=5)
+        home_proc2, home_info2, home_health2 = self._start_overview_home()
+        self.addCleanup(lambda: home_proc2.poll() is None and home_proc2.terminate())
+        self.assertEqual(home_info2["port"], home_info["port"])
+        self.assertEqual(home_health2["hostId"], home_health["hostId"])
+
+        code, _, listed = self.request(home_info2, "GET", "/api/overview?scope=all")
+        self.assertEqual(code, 200)
+        by_id = {row["reviewId"]: row for row in listed["reviews"]}
+        self.assertEqual({rid1, rid2}, set(by_id))
+        self.assertEqual((by_id[rid1]["port"], by_id[rid2]["port"]), (port1, port2))
+
+        host_headers2 = {"X-AE-Host": home_health2["hostId"]}
+        code, _, restarted1 = self.request(home_info2, "POST", "/api/overview/start", {"reviewId": rid1},
+                                           extra_headers=host_headers2, timeout=8)
+        self.assertEqual(code, 200, restarted1)
+        self.assertEqual(int(restarted1["url"].rstrip("/").rsplit(":", 1)[1]), port1)
+        self.assertEqual(restarted1["agentDelivery"]["adapter"], "wait")
+        self.assertEqual(serve.probe(port1)["receiver"]["bindingId"], b1_before)
+        self.assertEqual(json.loads((d1 / ".agent-binding.json").read_text(encoding="utf-8"))["bindingId"], b1_before)
+        self.assertEqual(json.loads((d2 / ".agent-binding.json").read_text(encoding="utf-8"))["bindingId"], b2_before)
+        restarted_pid = (serve.read_status(d1) or {}).get("pid")
+        code, _, stop_after = self.request(home_info2, "POST", "/api/overview/stop",
+                                           {"reviewId": rid1, "scope": "all"}, extra_headers=host_headers2, timeout=10)
+        self.assertEqual((code, stop_after.get("state")), (200, "stopped"), stop_after)
+        if type(restarted_pid) is int and restarted_pid > 0:
+            self.assertTrue(self.wait_until(lambda: not ledger.pid_alive(restarted_pid), timeout=5))
 
 
 if __name__ == "__main__":

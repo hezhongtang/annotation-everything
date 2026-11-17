@@ -395,14 +395,21 @@ class Assets:
 
     def __init__(self, root: Path, *, locale: str | None = None) -> None:
         self.locale = locale
+        if fsutil.is_unc_or_device_path(root, allow_local_extended=True):
+            raise BuildError(f"Unsupported UNC or device path: {root}")
         self.root = root.resolve()
         self.cache: dict[Path, str] = {}
         self.warnings: list[str] = []
         self.total = 0
 
     def local(self, ref: str, base: Path) -> Path | None:
-        """解析本地引用；超出允许目录时记警告并返回 None。"""
-        path = (base / unquote(ref.split("#", 1)[0].split("?", 1)[0])).resolve()
+        """解析本地引用；拒绝 UNC/设备路径并拦截超出允许目录的引用。"""
+        stripped = ref.strip()
+        raw_ref = unquote(stripped.split("#", 1)[0].split("?", 1)[0]).strip()
+        if fsutil.is_unc_or_device_path(stripped) or fsutil.is_unc_or_device_path(raw_ref):
+            self.warn(diag(self.locale, "build.asset.external", ref=stripped[:120]))
+            return None
+        path = (base / raw_ref).resolve()
         if not path.is_relative_to(self.root):
             self.warn(diag(self.locale, "build.asset.outside", ref=ref[:120], root=self.root))
             return None
@@ -413,7 +420,8 @@ class Assets:
         low = r.lower()
         if not r or low.startswith(("data:", "#", "mailto:", "javascript:", "blob:", "about:")):
             return None
-        if low.startswith(("http:", "https:", "//")):
+        raw_ref = unquote(r.split("#", 1)[0].split("?", 1)[0]).strip()
+        if low.startswith(("http:", "https:", "//")) or fsutil.is_unc_or_device_path(r) or fsutil.is_unc_or_device_path(raw_ref):
             self.warn(diag(self.locale, "build.asset.external", ref=r[:120]))
             return None
         path = self.local(r, base)
@@ -583,8 +591,9 @@ def report_parts(doc: str, report: Path, assets: Assets) -> tuple[str, str, list
         a = attrs_of(m.group(0))
         if "stylesheet" not in a.get("rel", "").lower().split() or not a.get("href"):
             continue
-        href = a["href"]
-        if href.lower().startswith(("http:", "https:", "//")):
+        href = a["href"].strip()
+        raw_href = unquote(href.split("#", 1)[0].split("?", 1)[0]).strip()
+        if href.lower().startswith(("http:", "https:", "//")) or fsutil.is_unc_or_device_path(href) or fsutil.is_unc_or_device_path(raw_href):
             assets.warn(diag(assets.locale, "build.asset.externalCss", ref=href[:120]))
             continue
         f = assets.local(href, base)
@@ -752,11 +761,18 @@ def file_label(name: str, rid: str) -> str:
     return f"{slug}_{rid[:4]}"
 
 
+def _reject_unc_path(path: Path | None) -> None:
+    if path is not None and fsutil.is_unc_or_device_path(path, allow_local_extended=True):
+        raise BuildError(f"Unsupported UNC or device path: {path}")
+
+
 def build(report: Path, script: Path | None, out: Path, title: str | None = None,
           sections_arg: str | None = None, no_sections: bool = False, lenient: bool = False,
           asset_root: Path | None = None, name: str | None = None,
           skills_from: list[Path] | None = None, no_scan_skills: bool = False,
           locale: str | None = None) -> dict:
+    for item in (report, script, out, asset_root, *(skills_from or ())):
+        _reject_unc_path(item)
     import i18n
     import ledger
     preview = ledger.read_manifest(out) if out.exists() else {}
@@ -916,12 +932,22 @@ def build(report: Path, script: Path | None, out: Path, title: str | None = None
     page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
     write_private(out / "index.html", page_html)
     rr, rs = report.resolve(), (script.resolve() if script else None)
+    out_resolved = out.resolve()
+
+    def _rel_or_none(target: Path | None) -> str | None:
+        if target is None:
+            return None
+        try:
+            return os.path.relpath(target, out_resolved)
+        except ValueError:
+            return None
+
     manifest = {
-        "app": APP, "kind": "deck", "reviewId": rid, "reviewDir": str(out.resolve()), "title": final_title, "name": review_name,
+        "app": APP, "kind": "deck", "reviewId": rid, "reviewDir": str(out_resolved), "title": final_title, "name": review_name,
         "namespace": ns,
         "builtAt": datetime.now().astimezone().isoformat(timespec="seconds"),
-        # 相对审阅目录的路径优先：整棵目录树被移动或复制后仍指向同一处的源文件
-        "sources": {"report": os.path.relpath(rr, out.resolve()), "script": os.path.relpath(rs, out.resolve()) if rs else None},
+        # 相对审阅目录的路径优先：整棵目录树被移动或复制后仍指向同一处的源文件；Windows 跨盘符回退 sourcesAbs
+        "sources": {"report": _rel_or_none(rr), "script": _rel_or_none(rs)},
         "sourcesAbs": {"report": str(rr), "script": str(rs) if rs else None},
         "build": {"title": title, "name": (name or "").strip() or None, "sections": sections_arg, "noSections": no_sections, "lenient": lenient,
                   "assetRoot": str(asset_root.resolve()) if asset_root else None,
@@ -1068,6 +1094,7 @@ def register_review(rid: str, out: Path, review_name: str, assets: Assets) -> No
 
 
 def main(argv: list[str] | None = None) -> int:
+    fsutil.configure_stdio()
     import i18n
     import ledger
     argv = sys.argv[1:] if argv is None else argv
@@ -1076,6 +1103,8 @@ def main(argv: list[str] | None = None) -> int:
     pre.add_argument("--rebuild", type=Path)
     pre.add_argument("--out", type=Path)
     requested, _ = pre.parse_known_args(argv)
+    _reject_unc_path(requested.rebuild)
+    _reject_unc_path(requested.out)
     previous = ledger.read_manifest(requested.rebuild or requested.out) if requested.rebuild or requested.out else {}
     try:
         language = i18n.cli_locale(requested.locale, stored=previous.get("locale"))

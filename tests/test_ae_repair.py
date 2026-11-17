@@ -31,7 +31,10 @@ import host_isolation  # noqa: E402
 host_isolation.require_for_module(__name__)
 
 import ae  # noqa: E402
-from test_ae_checks_runtime import ServeProcess, make_review_dir, write_ledger  # noqa: E402
+try:
+    from test_ae_checks_runtime import ServeProcess, make_review_dir, write_ledger  # noqa: E402
+except ModuleNotFoundError:
+    from tests.test_ae_checks_runtime import ServeProcess, make_review_dir, write_ledger  # noqa: E402
 
 PASS, WARN, FAIL = ae.LEVEL_PASS, ae.LEVEL_WARN, ae.LEVEL_FAIL
 RID_STALE, RID_VALID = "1111111111111111", "2222222222222222"
@@ -110,7 +113,7 @@ class PlanFromResultsTests(unittest.TestCase):
 class ExecutePlanTests(unittest.TestCase):
     """execute_plan 的函数级行为：安全项自动执行；破坏性项没有参数就不动手。"""
 
-    KEYS = ("HOME", "CLAUDE_SKILLS_DIR", "CODEX_HOME", "AE_HOME")
+    KEYS = ("HOME", "USERPROFILE", "CLAUDE_SKILLS_DIR", "CODEX_HOME", "AE_HOME")
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ae-repair-test-")
@@ -123,7 +126,8 @@ class ExecutePlanTests(unittest.TestCase):
         self.repo = make_repo(self.root / "repo")
         self.copy = self.skills / "annotation-everything"
         self._saved = {key: os.environ.get(key) for key in self.KEYS}
-        os.environ.update({"HOME": str(self.home), "CLAUDE_SKILLS_DIR": str(self.skills),
+        os.environ.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
+                           "CLAUDE_SKILLS_DIR": str(self.skills),
                            "CODEX_HOME": str(self.home / ".codex"), "AE_HOME": str(self.ledger_home)})
 
     def tearDown(self):
@@ -148,7 +152,13 @@ class ExecutePlanTests(unittest.TestCase):
         """在 Agent 技能目录建软链接，返回与安装记录同构的条目。"""
         link = ae.link_path(agent)
         link.parent.mkdir(parents=True, exist_ok=True)
-        os.symlink(str(target if target is not None else self.copy.resolve()), str(link))
+        try:
+            os.symlink(str(target if target is not None else self.copy.resolve()), str(link),
+                       target_is_directory=True)
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                self.skipTest("当前 Windows 账户无符号链接权限")
+            raise
         return {"agent": agent, "path": str(link)}
 
     # ── 安全项：重新同步技能副本 ────────────────────────────────
@@ -245,6 +255,41 @@ class ExecutePlanTests(unittest.TestCase):
         self.assertTrue(any("未启用" in line for line in lines), lines)
         self.assertEqual(ae.check_git_hooks(self.ctx()).level, WARN)
 
+    def test_windows_git_hooks_uses_git_config_without_bash(self):
+        import unittest.mock as mock
+
+        self.git_repo()
+        real_run = ae.subprocess.run
+        seen = []
+
+        def spy_run(cmd, *args, **kwargs):
+            seen.append(cmd)
+            return real_run(cmd, *args, **kwargs)
+
+        with mock.patch.object(ae, "_is_windows", return_value=True), \
+                mock.patch.object(ae.subprocess, "run", side_effect=spy_run):
+            lines = ae._enable_git_hooks(self.repo)
+        self.assertTrue(any("core.hooksPath" in line for line in lines), lines)
+        self.assertTrue(any(cmd[:1] == ["git"] and "core.hooksPath" in cmd for cmd in seen), seen)
+        self.assertFalse(any(cmd[:1] == ["bash"] for cmd in seen), seen)
+        self.assertEqual(ae.check_git_hooks(self.ctx()).level, PASS)
+
+    def test_windows_find_chrome_probes_chrome_and_edge(self):
+        import unittest.mock as mock
+
+        edge = self.root / "ProgramFiles" / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+        edge.parent.mkdir(parents=True)
+        edge.write_bytes(b"")
+        with mock.patch.object(ae, "_is_windows", return_value=True), \
+                mock.patch.object(ae.shutil, "which", return_value=None), \
+                mock.patch.dict(os.environ, {
+                    "ProgramFiles": str(self.root / "ProgramFiles"),
+                    "ProgramFiles(x86)": str(self.root / "ProgramFilesX86"),
+                    "LocalAppData": str(self.root / "LocalAppData"),
+                }, clear=False):
+            found = ae.find_chrome()
+        self.assertEqual(found, str(edge))
+
     # ── 破坏性项：--forget-stale ───────────────────────────────
 
     def stale_ledger(self) -> Path:
@@ -316,9 +361,23 @@ class RepairCliTests(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
-        self.env = {**os.environ, "HOME": str(self.home), "CLAUDE_SKILLS_DIR": str(self.skills),
+        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
+                    "CLAUDE_SKILLS_DIR": str(self.skills),
                     "CODEX_HOME": str(self.home / ".codex"), "AE_HOME": str(self.root / "ledger"),
                     "PYTHONDONTWRITEBYTECODE": "1"}
+        self.can_symlink = self._probe_symlink()
+
+    def _probe_symlink(self) -> bool:
+        if os.name != "nt":
+            return True
+        src, dst = self.root / "_sym_src", self.root / "_sym_dst"
+        src.mkdir(exist_ok=True)
+        try:
+            os.symlink(str(src), str(dst), target_is_directory=True)
+        except OSError:
+            return False
+        dst.unlink()
+        return True
 
     def run_ae(self, *args, cwd=None):
         return subprocess.run([sys.executable, str(AE), *args],
@@ -342,22 +401,26 @@ class RepairCliTests(unittest.TestCase):
         return {r["code"]: r["level"] for r in json.loads(p.stdout)["results"]}
 
     def break_install_state(self):
-        """构造三处可自动修复的问题：副本被改、版本号落后、链接指向别处。"""
-        self.install("codex")
+        """构造可自动修复的问题：副本被改、版本号落后（含符号链接权限时再构造坏链接）。"""
+        if self.can_symlink:
+            self.install("codex")
+        else:
+            self.install()
         (self.copy_dir / "手工改动.txt").write_text("多余文件", encoding="utf-8")
         record_path = self.copy_dir / ae.RECORD_NAME
         record = json.loads(record_path.read_text(encoding="utf-8"))
         record["version"] = "0.0.1"
         record_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
-        elsewhere = self.root / "elsewhere"
-        elsewhere.mkdir()
-        os.unlink(self.codex_link)
-        os.symlink(str(elsewhere), str(self.codex_link))
+        if self.can_symlink:
+            elsewhere = self.root / "elsewhere"
+            elsewhere.mkdir()
+            os.unlink(self.codex_link)
+            os.symlink(str(elsewhere), str(self.codex_link), target_is_directory=True)
 
     def test_dry_run_prints_plan_and_changes_nothing(self):
         self.break_install_state()
         before = snapshot_all(self.copy_dir)
-        link_before = os.readlink(self.codex_link)
+        link_before = os.readlink(self.codex_link) if self.can_symlink else None
         p = self.run_ae("repair", "--dry-run")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)   # 安装状态的失败项是确定性的
         self.assertIn("修复计划", p.stdout)
@@ -365,10 +428,12 @@ class RepairCliTests(unittest.TestCase):
         self.assertNotIn("执行修复", p.stdout, "--dry-run 只打印计划")
         self.assertNotIn("修复后体检", p.stdout)
         self.assertEqual(snapshot_all(self.copy_dir), before, "--dry-run 不改动技能副本")
-        self.assertEqual(os.readlink(self.codex_link), link_before, "--dry-run 不改动链接")
+        if self.can_symlink:
+            self.assertEqual(os.readlink(self.codex_link), link_before, "--dry-run 不改动链接")
         levels = self.doctor_levels()
         self.assertEqual(levels["skill-copy-sync"], "失败")
-        self.assertEqual(levels["skill-links"], "失败")
+        if self.can_symlink:
+            self.assertEqual(levels["skill-links"], "失败")
 
     def test_repair_resyncs_copy_and_fixes_links(self):
         self.break_install_state()
@@ -382,7 +447,8 @@ class RepairCliTests(unittest.TestCase):
         levels = self.doctor_levels()
         for code in ("skill-copy-present", "skill-copy-sync", "skill-copy-version", "skill-links"):
             self.assertEqual(levels[code], "通过", f"{code} 应被修复")
-        self.assertEqual(os.path.realpath(str(self.codex_link)), str(self.copy_dir.resolve()))
+        if self.can_symlink:
+            self.assertEqual(os.path.realpath(str(self.codex_link)), str(self.copy_dir.resolve()))
 
     def test_repair_enables_git_hooks(self):
         repo = self.root / "synthetic-repo"

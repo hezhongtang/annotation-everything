@@ -27,11 +27,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
 import json
 import os
 import re
-import shlex
 import signal
 import sys
 import time
@@ -42,6 +40,7 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import docx_review  # noqa: E402
 import export_format as ef  # noqa: E402
+import fsutil  # noqa: E402
 import i18n  # noqa: E402
 import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
@@ -63,7 +62,7 @@ def _inherited_update_lock(value: str | None) -> bool:
         current = ledger.update_lock_path().stat()
         if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
             return False
-        fcntl.flock(fd, fcntl.LOCK_SH)
+        fsutil.lock_fd(fd, exclusive=False)
         return True
     except (OSError, ValueError):
         return False
@@ -738,6 +737,7 @@ def read_import(path: Path, *, lang: str = i18n.DEFAULT_LOCALE) -> tuple[list[di
 
 
 def main(argv: list[str] | None = None) -> int:
+    fsutil.configure_stdio()
     inherited = os.environ.pop("_AE_NOTES_UPDATE_LOCK_FD", None)
     if __name__ == "__main__" and _inherited_update_lock(inherited):
         return _main_locked(argv)
@@ -747,8 +747,9 @@ def main(argv: list[str] | None = None) -> int:
         except OSError:
             print(cli_text(i18n.DEFAULT_LOCALE)("cli.notes.updateLockUnavailable"), file=sys.stderr)
             return _main_locked(argv)
-        if __name__ == "__main__":
-            # 锁可能在导入旧代码后才拿到。持锁重新执行入口，保证载入的是切换后的整套代码。
+        if __name__ == "__main__" and os.name != "nt":
+            # Windows 首期不允许在服务/等待者持锁期间原地替换目录；且 Windows os.execve 会异步派生子进程并立即退出父进程。
+            # 锁可能在导入旧代码后才拿到。POSIX 下持锁重新执行入口，保证载入的是切换后的整套代码。
             args = list(sys.argv[1:] if argv is None else argv)
             try:
                 os.set_inheritable(fd, True)
@@ -924,6 +925,9 @@ def _main_locked(argv: list[str] | None = None) -> int:
         ap.error(t("cli.notes.help.claim.roundRequiresEvents"))
     ledger.set_locale(help_lang)
     try:
+        for extra in (getattr(a, "file", None), getattr(a, "out", None)):
+            if extra is not None and fsutil.is_unc_or_device_path(extra, allow_local_extended=True):
+                raise ledger.LedgerError(f"Unsupported UNC or device path: {extra}")
         d = ledger.resolve_dir(a.dir).resolve()   # 也接受审阅标识（或至少 4 位前缀）：从台账查目录
     except (ledger.LedgerError, OSError) as e:
         print(t("cli.notes.error", reason=e), file=sys.stderr)
@@ -1492,16 +1496,7 @@ def _is_pptx(src: Path) -> bool:
 
 def _write_private_bytes(path: Path, data: bytes) -> None:
     """二进制版 write_private：同目录临时文件（mkstemp 出来就是 0600）+ os.replace，diff 不会读到写了一半的快照。"""
-    import tempfile
-    fd, tmp = tempfile.mkstemp(prefix="." + path.name + "-", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(tmp)
-        raise
+    fsutil.atomic_write_bytes(path, data, prefix="." + path.name + "-")
 
 
 def _parts(kind: str, text: str) -> list[tuple[str, int, str]]:
@@ -1788,7 +1783,7 @@ def notify_analysis(d: Path, state: dict[str, Any]) -> None:
 def analysis_check_text(context: dict[str, Any], d: Path, lang: str | None = None) -> str:
     """无活动轮次也可读取的结论清单；仅供核对，不代替审阅人确认。"""
     t = cli_text(lang)
-    command = shlex.join(["python3", str(Path(__file__).resolve()), "analysis-check", str(d), "--json"])
+    command = fsutil.join_cli([fsutil.python_cli(), str(Path(__file__).resolve()), "analysis-check", str(d), "--json"])
     out = [t("cli.analysis.protect.fullCheck", command=command)]
     for item in context["checks"]:
         out.append(t("cli.analysis.protect.check." + item["kind"]))
@@ -1865,10 +1860,13 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     except OSError:
         mark = None
 
-    def _stop(*_a: Any) -> None:   # 后台任务被杀（SIGTERM / SIGHUP）也要走 finally 删标记
+    def _stop(*_a: Any) -> None:   # 后台任务被杀（SIGTERM / SIGHUP / SIGBREAK）也要走 finally 删标记
         raise KeyboardInterrupt
     old_handlers = {}
-    for sig in (signal.SIGTERM, signal.SIGHUP):
+    for sig_name in ("SIGTERM", "SIGHUP", "SIGBREAK"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
         with contextlib.suppress(ValueError, OSError):   # 不在主线程时设不了，靠 pid 存活判断兜底
             old_handlers[sig] = signal.signal(sig, _stop)
     # 停止状态参与每次签名检查；claim 时绑定与 review.json 也在完整重读时校验。

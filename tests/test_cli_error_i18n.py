@@ -85,8 +85,8 @@ CASES = [
     ("update", "missing-required", "en", ['--locale', 'en'], {}, 2, 'usage: update.py [-h] [--locale LANG] MODE\nMissing update mode (choose auto, check, or now)\n', None),
     ("update", "invalid-choice", "zh", ['bogus'], {}, 2, 'usage: update.py [-h] [--locale LANG] MODE\n未知的更新模式：bogus（可选：auto、check、now）\n', None),
     ("update", "invalid-choice", "en", ['--locale', 'en', 'bogus'], {}, 2, 'usage: update.py [-h] [--locale LANG] MODE\nUnknown update mode: bogus (choose auto, check, or now)\n', None),
-    ("update", "empty-locale", "zh", ['--locale', '', 'now'], {}, 1, '缺少有效的安装记录或来源仓库，无法检查更新；请从来源仓库重新安装。\n', None),
-    ("update", "empty-locale", "en", ['--locale', '', 'now'], {'AE_LOCALE': 'en'}, 1, 'The install record or source repository is unavailable; reinstall from the source repository to check for updates.\n', None),
+    ("update", "empty-locale", "zh", ['--locale', '', 'check'], {}, 1, '缺少有效的安装记录或来源仓库，无法检查更新；请从来源仓库重新安装。\n', None),
+    ("update", "empty-locale", "en", ['--locale', '', 'check'], {'AE_LOCALE': 'en'}, 1, 'The install record or source repository is unavailable; reinstall from the source repository to check for updates.\n', None),
     ("update", "invalid-locale", "zh", ['--locale', 'fr', 'now'], {}, 2, '不支持的语言：fr（可选：auto、zh-CN 或 en）\n', None),
     ("update", "invalid-locale", "en", ['--locale', 'fr', 'now'], {'AE_LOCALE': 'en'}, 2, '不支持的语言：fr（可选：auto、zh-CN 或 en）\n', None),
     ("update", "after-dashes", "zh", ['--', '--locale', 'en'], {}, 2, 'usage: update.py [-h] [--locale LANG] MODE\n未知的更新模式：--locale（可选：auto、check、now）\n', None),
@@ -97,8 +97,8 @@ CASES = [
     ("fonts", "unrecognized", "en", ['--locale', 'en', PPTX, '--nope'], {}, 2, 'usage: check_pptx_fonts.py [-h] [--locale LANG] [--pdf PDF] pptx\nUnrecognized argument: --nope\n', None),
     ("fonts", "missing-required", "zh", [], {}, 2, 'usage: check_pptx_fonts.py [-h] [--locale LANG] [--pdf PDF] pptx\n缺少必需的参数\n', None),
     ("fonts", "missing-required", "en", ['--locale', 'en'], {}, 2, 'usage: check_pptx_fonts.py [-h] [--locale LANG] [--pdf PDF] pptx\nA required argument is missing\n', None),
-    ("fonts", "empty-locale", "zh", ['--locale', '', PPTX], {}, 2, '错误：找不到 fc-list，无法枚举字体；请安装 fontconfig 后重试\n', None),
-    ("fonts", "empty-locale", "en", ['--locale', '', PPTX], {'AE_LOCALE': 'en'}, 2, 'Error: fc-list not found, cannot list fonts; install fontconfig and retry\n', None),
+    ("fonts", "empty-locale", "zh", ['--locale', '', '--pdf', 'missing.pdf', PPTX] if os.name == "nt" else ['--locale', '', PPTX], {}, 2, '错误：PDF 文件不存在或无法读取\n' if os.name == "nt" else '错误：找不到 fc-list，无法枚举字体；请安装 fontconfig 后重试\n', None),
+    ("fonts", "empty-locale", "en", ['--locale', '', '--pdf', 'missing.pdf', PPTX] if os.name == "nt" else ['--locale', '', PPTX], {'AE_LOCALE': 'en'}, 2, 'Error: The PDF file does not exist or cannot be read\n' if os.name == "nt" else 'Error: fc-list not found, cannot list fonts; install fontconfig and retry\n', None),
     ("fonts", "invalid-locale", "zh", ['--locale', 'fr', PPTX], {}, 2, '不支持的语言：fr（可选：auto、zh-CN 或 en）\n', None),
     ("fonts", "invalid-locale", "en", ['--locale', 'fr', PPTX], {'AE_LOCALE': 'en'}, 2, '不支持的语言：fr（可选：auto、zh-CN 或 en）\n', None),
     ("fonts", "after-dashes", "zh", ['--', '--locale', 'en'], {}, 2, 'usage: check_pptx_fonts.py [-h] [--locale LANG] [--pdf PDF] pptx\n无法识别的参数：en\n', None),
@@ -107,10 +107,10 @@ CASES = [
     ("ae", "missing-value", "en", ['--locale', 'en', 'install', '--link'], {}, 2, 'usage: ae.py install [-h] [--locale LANG] [--target DIR] [--link AGENTS]\nOption --link needs a value\n', None),
     ("ae", "unrecognized", "zh", ['doctor', '--nope'], {}, 2, 'usage: ae.py [-h] [--locale LANG] 子命令 ...\n无法识别的参数：--nope\n', None),
     ("ae", "unrecognized", "en", ['--locale', 'en', 'doctor', '--nope'], {}, 2, 'usage: ae.py [-h] [--locale LANG] COMMAND ...\nUnrecognized argument: --nope\n', None),
-    ("ae", "missing-required", "zh", [], {}, 2, 'usage: ae.py [-h] [--locale LANG] 子命令 ...\n缺少子命令（可选：install、doctor、repair、uninstall）\n', None),
-    ("ae", "missing-required", "en", ['--locale', 'en'], {}, 2, 'usage: ae.py [-h] [--locale LANG] COMMAND ...\nMissing subcommand (choose from: install, doctor, repair, uninstall)\n', None),
-    ("ae", "invalid-choice", "zh", ['no-such-subcommand'], {}, 2, 'usage: ae.py [-h] [--locale LANG] 子命令 ...\n未知的子命令：no-such-subcommand（可选：install、doctor、repair、uninstall）\n', None),
-    ("ae", "invalid-choice", "en", ['--locale', 'en', 'no-such-subcommand'], {}, 2, 'usage: ae.py [-h] [--locale LANG] COMMAND ...\nUnknown subcommand: no-such-subcommand (choose from: install, doctor, repair, uninstall)\n', None),
+    ("ae", "missing-required", "zh", [], {}, 2, 'usage: ae.py [-h] [--locale LANG] 子命令 ...\n缺少子命令（可选：install、upgrade、doctor、repair、uninstall）\n', None),
+    ("ae", "missing-required", "en", ['--locale', 'en'], {}, 2, 'usage: ae.py [-h] [--locale LANG] COMMAND ...\nMissing subcommand (choose from: install, upgrade, doctor, repair, uninstall)\n', None),
+    ("ae", "invalid-choice", "zh", ['no-such-subcommand'], {}, 2, 'usage: ae.py [-h] [--locale LANG] 子命令 ...\n未知的子命令：no-such-subcommand（可选：install、upgrade、doctor、repair、uninstall）\n', None),
+    ("ae", "invalid-choice", "en", ['--locale', 'en', 'no-such-subcommand'], {}, 2, 'usage: ae.py [-h] [--locale LANG] COMMAND ...\nUnknown subcommand: no-such-subcommand (choose from: install, upgrade, doctor, repair, uninstall)\n', None),
     ("ae", "empty-locale", "zh", ['--locale', '', 'doctor'], {}, 1, '', None),
     ("ae", "empty-locale", "en", ['--locale', '', 'doctor'], {'AE_LOCALE': 'en'}, 1, '', None),
     ("ae", "invalid-locale", "zh", ['--locale', 'fr', 'doctor'], {}, 2, '不支持的语言：fr（可选：auto、zh-CN 或 en）\n', None),
@@ -167,7 +167,8 @@ class CliErrorMatrixTests(unittest.TestCase):
     def env(self, **extra) -> dict:
         base = {k: v for k, v in os.environ.items()
                 if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
-        base.update({"HOME": str(self.home), "AE_HOME": str(self.ledger),
+        base.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
+                     "AE_HOME": str(self.ledger),
                      "PATH": str(self.bin), "PYTHONDONTWRITEBYTECODE": "1"})
         base.update(extra)
         return base
@@ -259,7 +260,8 @@ class OldSkillCopyFallbackTests(unittest.TestCase):
     def run_ae(self, *args: str):
         env = {k: v for k, v in os.environ.items()
                if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
-        env.update({"HOME": str(self.home), "AE_HOME": str(self.ledger),
+        env.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
+                    "AE_HOME": str(self.ledger),
                     "CLAUDE_SKILLS_DIR": str(self.skills),
                     "CODEX_HOME": str(self.home / ".codex"),
                     "PYTHONDONTWRITEBYTECODE": "1"})
