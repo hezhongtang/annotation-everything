@@ -194,7 +194,8 @@ class TestRecordAlignment(unittest.TestCase):
             "record.visual", "record.length", "record.method", "record.revision",
         )
         self.assertEqual(rc.Checks.ORDER[:15], expected_prefix)
-        self.assertEqual(rc.Checks.ORDER[15:], ("record.alignment", "report.navigation"))
+        self.assertEqual(rc.Checks.ORDER[15:],
+                     ("record.alignment", "report.navigation", "record.deliverables"))
 
     def test_legacy_record_without_alignment_remains_compatible(self):
         paths = write_case(tmpdir(), record=make_record())

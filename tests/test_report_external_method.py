@@ -580,7 +580,7 @@ class ChecksOrderContractTests(unittest.TestCase):
         for cid in ("report.parse", "record.checks", "record.claims", "record.reading",
                     "record.sources", "record.visual", "record.length"):
             self.assertIn(cid, rc.Checks.ORDER)
-        self.assertEqual(len(rc.Checks.ORDER), 17)
+        self.assertEqual(len(rc.Checks.ORDER), 18)
 
     def test_method_kinds_closed_enum(self):
         self.assertEqual(rc.METHOD_KINDS, ("builtin", "external"))

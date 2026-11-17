@@ -2689,6 +2689,21 @@
     "pptxrender.reason.pageRenderFailed": "pdftoppm failed to render pages (exit {code})",
     "pptxrender.reason.noPages": "No page-*.png in the output directory; page inspection cannot start",
     "pptxcheck.verdict.ok": "file checks passed",
-    "pptxcheck.verdict.fail": "file check problems"
+    "pptxcheck.verdict.fail": "file check problems",
+    "check.item.record.deliverables": "Extra deliverable (PPTX) evidence and consistency",
+    "check.err.deliverableBad": "{part}: invalid deliverable record structure (kind is pptx; check status is pass / fail / not_run / unavailable)",
+    "check.err.deliverableMissing": "{part}: the declared artifact does not exist on disk",
+    "check.err.deliverableStale": "{part}: the recorded sha256 does not match the current file — the file changed and the old pass claim no longer applies",
+    "check.err.deliverableInvocation": "{part}: missing build tool name or invocation basis (build.tool / build.invocation)",
+    "check.err.deliverablePages": "{part}: invalid page count or page reference (declared pages differ from actual slides, page out of range)",
+    "check.err.deliverableVisual": "{part}: per-page evidence incomplete (missing pages, unchecked pages, page issues, missing images or hash mismatch)",
+    "check.err.deliverableConsistency": "{part}: cross-format consistency evidence insufficient (claim unmapped, mapped slides missing key numbers, invalid findings)",
+    "check.err.deliverableOpenIssues": "{part}: declaring pass with unresolved issues (openIssues) — a determinable contradiction",
+    "check.err.deliverablePowerpoint": "{part}: invalid PowerPoint verification status, or pass declared without OS and version evidence",
+    "check.err.deliverableStatus": "{part}: an unfinished deliverable needs note or resume (specific cause and resume condition)",
+    "check.reason.deliverablesGap": "Extra deliverable (PPTX) not ready: {items} — see the deliverables details for status and gaps; this does not change the HTML verdict",
+    "check.deliverables.line": "Extra deliverable {file}: {deliverable}, PowerPoint verification: {powerpoint}",
+    "check.deliverables.yes": "deliverable",
+    "check.deliverables.no": "not deliverable"
   }
 }

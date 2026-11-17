@@ -2495,6 +2495,21 @@
     "pptxrender.reason.pageRenderFailed": "pdftoppm 逐页转换失败（退出码 {code}）",
     "pptxrender.reason.noPages": "输出目录里没有 page-*.png，逐页环节无法开始",
     "pptxcheck.verdict.ok": "文件检查通过",
-    "pptxcheck.verdict.fail": "文件检查有问题"
+    "pptxcheck.verdict.fail": "文件检查有问题",
+    "check.item.record.deliverables": "额外交付（PPTX）证据与一致性",
+    "check.err.deliverableBad": "{part}：额外交付记录结构无效（kind 用 pptx，检查状态用 pass / fail / not_run / unavailable）",
+    "check.err.deliverableMissing": "{part}：声明的产物在磁盘上不存在",
+    "check.err.deliverableStale": "{part}：记录的 sha256 与当前文件不一致——文件已改变，旧的通过声明不再适用",
+    "check.err.deliverableInvocation": "{part}：缺制作工具名或实际调用说明（build.tool / build.invocation）",
+    "check.err.deliverablePages": "{part}：页数或页面引用无效（声明页数与幻灯片实际页数不符、页码越界）",
+    "check.err.deliverableVisual": "{part}：逐页证据不完整（缺页、有页未查看、页面带问题、图片缺失或哈希不匹配）",
+    "check.err.deliverableConsistency": "{part}：跨格式一致性证据不足（结论未映射到幻灯片、映射页缺少关键数字、findings 结构无效）",
+    "check.err.deliverableOpenIssues": "{part}：带着未解决问题（openIssues）声明通过——可确定的矛盾",
+    "check.err.deliverablePowerpoint": "{part}：PowerPoint 实测状态无效，或声明 pass 却缺操作系统与版本依据",
+    "check.err.deliverableStatus": "{part}：未完成的额外交付要写 note 或 resume（具体原因与可继续的条件）",
+    "check.reason.deliverablesGap": "额外交付（PPTX）尚未可交付：{items}——状态与缺口见 deliverables 明细，不影响 HTML 自己的判定",
+    "check.deliverables.line": "额外交付 {file}：{deliverable}，PowerPoint 实测：{powerpoint}",
+    "check.deliverables.yes": "可交付",
+    "check.deliverables.no": "不可交付"
   }
 }
