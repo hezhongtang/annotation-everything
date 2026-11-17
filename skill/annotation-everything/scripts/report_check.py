@@ -1540,7 +1540,7 @@ def _pptx_slide_texts(path: Path) -> tuple[dict[int, str], int]:
                 rid = node.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id", "")
                 target = targets.get(rid, "")
                 if target:
-                    base = posixpath_posix(target)
+                    base = _presentation_target(target)
                     slide_parts.append(base)
             texts: dict[int, str] = {}
             for page, part in enumerate(slide_parts, 1):
@@ -1576,7 +1576,7 @@ def _posix_norm(source: str, target: str) -> str:
     return posixpath.normpath(posixpath.join(posixpath.dirname(source), target))
 
 
-def posixpath_posix(target: str) -> str:
+def _presentation_target(target: str) -> str:
     # presentation 的关系目标相对 ppt/ 目录解析。
     return _posix_norm("presentation.xml", target)
 

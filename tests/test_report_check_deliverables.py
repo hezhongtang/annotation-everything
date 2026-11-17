@@ -265,6 +265,15 @@ class DeliverablesCheckTests(unittest.TestCase):
         self.assertEqual(self.status(result), "fail")
         self.assertFalse(self.item(result)["deliverable"])
 
+    def test_page_issues_with_pass_claim_fail(self):
+        """合成视觉缺陷反例：页面带 issues 却声明 pass，不能通过。"""
+        item = self.deliverable()
+        item["checks"]["visual"]["pages"][0]["issues"] = ["标题溢出画布"]
+        result = self.run_check(make_record(deliverables=[item]))
+        self.assertEqual(self.status(result), "fail")
+        self.assertIn("record.deliverable-visual", self._codes(result))
+        self.assertFalse(self.item(result)["deliverable"])
+
     def test_powerpoint_declaration_needs_evidence(self):
         """实测声明 pass 必须带系统与版本；要求逐份实测而缺实测阻止可交付。"""
         bare = self.deliverable(powerpoint={"status": "pass"})

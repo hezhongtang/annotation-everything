@@ -240,6 +240,9 @@ class RoutingEntryTests(unittest.TestCase):
                       "英文生成路由用例")
         # 既有路由用例不回退
         self.assertIn(("generate", "references/workflow.zh-CN.md"), actions)
+        # PPTX 额外交付路由（issue #180）
+        self.assertIn(("generate-deck", "references/generation-pptx.zh-CN.md"), actions)
+        self.assertIn(("generate-deck", "references/generation-pptx.en.md"), actions)
 
     def test_formats_reference_the_record(self):
         """格式参考指向核验记录契约（单一来源在生成指引与 report_check.py）。"""

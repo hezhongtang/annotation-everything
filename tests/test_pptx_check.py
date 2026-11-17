@@ -209,6 +209,17 @@ class PptxCheckTests(unittest.TestCase):
         result = pc.check_deck(deck)
         self.assertIn("chartFixedColor", self._codes(result))
 
+    def test_chart_content_type_mismatch_is_reported(self):
+        """图表部件内容类型写错：按部件家族规则抓到。"""
+        types = self._deck_content_types().replace(
+            'PartName="/ppt/charts/chart1.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"',
+            'PartName="/ppt/charts/chart1.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"')
+        deck = self._mutated({"[Content_Types].xml": types})
+        result = pc.check_deck(deck)
+        self.assertIn("contentTypeMismatch", self._codes(result))
+
     def test_slide_missing_from_sections_is_reported(self):
         """章节漏页：可定位漏掉的幻灯片。"""
         presentation = self._part_text("ppt/presentation.xml")

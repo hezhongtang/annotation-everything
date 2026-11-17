@@ -437,7 +437,7 @@ def _slide_ids(keys: list[str]) -> dict[str, int]:
                 taken.add(candidate)
                 break
         else:
-            raise DeckSpecError("slideKeyDup", key=key)
+            raise DeckSpecError("slideIdExhausted", key=key)
     return assigned
 
 
@@ -565,10 +565,10 @@ def _master_xml(master: dict, size: tuple[int, int]) -> tuple[str, str]:
 </p:spTree></p:cSld>
 <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
 <p:sldLayoutIdLst>{{layouts}}</p:sldLayoutIdLst>
+{hf}
 <p:txStyles><p:titleStyle><a:lvl1pPr><a:defRPr sz="3600" b="0"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mj-lt"/><a:ea typeface="+mj-ea"/></a:defRPr></a:lvl1pPr></p:titleStyle>
 <p:bodyStyle><a:lvl1pPr marL="228600" indent="-228600"><a:buFont typeface="Arial"/><a:buChar char="•"/><a:defRPr sz="2000"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/></a:defRPr></a:lvl1pPr><a:lvl2pPr marL="457200" indent="-228600"><a:buFont typeface="Arial"/><a:buChar char="–"/><a:defRPr sz="1800"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/></a:defRPr></a:lvl2pPr></p:bodyStyle>
-<p:otherStyle><a:lvl1pPr><a:defRPr sz="1800"/></a:lvl1pPr></p:otherStyle></p:txStyles>
-{hf}</p:sldMaster>'''
+<p:otherStyle><a:lvl1pPr><a:defRPr sz="1800"/></a:lvl1pPr></p:otherStyle></p:txStyles></p:sldMaster>'''
     rels.append(("rIdTheme", R + "/theme", "../theme/theme1.xml"))
     return xml, _rels_xml(rels)
 
@@ -1094,8 +1094,12 @@ def build_deck(spec: object, out: Path, *, base_dir: Path | None = None) -> dict
     parts["[Content_Types].xml"] = _content_types(overrides, defaults)
 
     out = Path(out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    write_package(out, parts)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        write_package(out, parts)
+    except OSError as exc:
+        raise DeckSpecError("writeFailed", path=str(out),
+                            detail=exc.strerror or "") from None
     digest = hashlib.sha256(out.read_bytes()).hexdigest()
     return {"schema": BUILD_SCHEMA, "file": out.name, "sha256": digest,
             "pages": len(slides), "title": spec["title"]}

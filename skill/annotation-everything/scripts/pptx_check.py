@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import fsutil
 import i18n
+import pptx_build
 
 RESULT_SCHEMA = "ae-pptx-check/1"
 
@@ -55,9 +56,8 @@ CHECK_ORDER = ("package.required-parts", "package.relationships", "package.conte
                "slide.list", "slide.layout-refs", "slide.placeholders",
                "chart.structure", "chart.theme-fill", "theme.parts", "sections.coverage")
 
-# 幻灯片/版式占位符的 type → 语义（idx 缺省按 None 比对）。
-THEME_SLOTS = ("dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3",
-               "accent4", "accent5", "accent6", "hlink", "folHlink")
+# 主题色槽位与制作器共享同一份声明（防漂移；制作器写、检查器读）。
+THEME_SLOTS = pptx_build.COLOR_SLOTS
 SUPPORTED_CHART_GROUPS = ("barChart", "lineChart", "pieChart")
 AXIS_ELEMENTS = ("catAx", "valAx")
 
@@ -150,6 +150,7 @@ def _ref_ids(element: ET.Element) -> set[str]:
 
 
 def _placeholders(sld_like: ET.Element) -> set[tuple[str, int | None]]:
+    """收集幻灯片/版式的占位符集合；idx 缺省按 None 比对。"""
     found: set[tuple[str, int | None]] = set()
     for ph in sld_like.iter(_q(P, "ph")):
         idx = ph.get("idx")
@@ -273,6 +274,14 @@ class _Checker:
         }
         for part in self._slide_parts:
             expected[part] = CT_SLIDE
+        # 家族规则：生成范围内的部件目录有确定的内容类型，写错即 mismatch
+        family = (("ppt/slideLayouts/", CT_LAYOUT), ("ppt/slideMasters/", CT_MASTER),
+                  ("ppt/charts/chart", CT_CHART), ("ppt/notesSlides/", CT_NOTES_SLIDE),
+                  ("ppt/notesMasters/", CT_NOTES_MASTER))
+        for part, ctype in overrides.items():
+            for prefix, family_ctype in family:
+                if part.startswith(prefix):
+                    expected.setdefault(part, family_ctype)
         for part in sorted(names):
             if part in expected and overrides.get(part) != expected[part]:
                 self.add("package.content-types", "contentTypeMismatch", part=part,

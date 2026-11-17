@@ -2442,7 +2442,6 @@
     "pptxbuild.err.sectionUnknownKey": "章节引用了不存在的幻灯片 key：{key}",
     "pptxbuild.err.sectionDuplicateSlide": "幻灯片 {key} 出现在多个章节：{sections}",
     "pptxbuild.err.sectionMissingSlides": "这些幻灯片不在任何章节里：{keys}",
-    "pptxbuild.err.chartsUnsupported": "图表构建尚未接入（issue #180 后续切片）",
     "pptxcheck.badLocale": "语言不合法：{locale}（可用 zh-CN / en）",
     "pptxcheck.fileMissing": "文件读不到：{path}",
     "pptxcheck.summary": "{file}：{verdict}（{slides} 张幻灯片）",
@@ -2510,6 +2509,17 @@
     "check.reason.deliverablesGap": "额外交付（PPTX）尚未可交付：{items}——状态与缺口见 deliverables 明细，不影响 HTML 自己的判定",
     "check.deliverables.line": "额外交付 {file}：{deliverable}，PowerPoint 实测：{powerpoint}",
     "check.deliverables.yes": "可交付",
-    "check.deliverables.no": "不可交付"
+    "check.deliverables.no": "不可交付",
+    "pptxbuild.err.chartUnknown": "图表类型不认识：{chart}（首版支持 column / bar / line / pie，组合、双轴与三维不在范围）",
+    "pptxbuild.err.chartBad": "图表配置无效：chart 用 column/bar/line/pie，x/y/cx/cy 用正整数 EMU（cx/cy 必须大于 0）且落在画布内",
+    "pptxbuild.err.chartDataBad": "图表数据无效：categories 与 series 非空、类目为字符串、系列要 name 且数值为有限数字",
+    "pptxbuild.err.chartCountMismatch": "图表类目 {categories} 个与数值 {values} 个不等长——每个系列的 values 都要与 categories 等长",
+    "pptxbuild.err.chartTooManySeries": "系列数 {n} 超过首版上限 25（内嵌工作簿列到 Z）",
+    "pptxbuild.err.chartLegendBad": "图例位置不认识：{legend}（可用 none / right / bottom / top）",
+    "pptxbuild.err.chartLabelsBad": "数据标签取值不认识：{labels}（柱形/条形/折线用 none / value，饼图另支持 percent）",
+    "pptxbuild.err.labelsPercentNeedsPie": "labels=percent 只用于饼图（柱形/条形/折线用 none / value）；不支持的图表类型按缺口如实报告，不用图片冒充",
+    "pptxbuild.err.slideIdExhausted": "幻灯片 ID 空间耗尽，无法为 {key} 派生唯一 ID（理论不可达，出现说明实现有误）",
+    "pptxbuild.err.writeFailed": "写入输出文件失败：{path}（{detail}）",
+    "pptxrender.reason.timeout": "渲染工具超时未返回（300 秒上限），已按失败处理；可重跑或检查工具是否挂起"
   }
 }

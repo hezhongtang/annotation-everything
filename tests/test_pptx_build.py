@@ -5,7 +5,9 @@ CLI 包装。全部材料由标准库现场合成，只用 Python 标准库。
 """
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -338,6 +340,39 @@ class PptxBuildTests(unittest.TestCase):
         with zipfile.ZipFile(out) as archive:
             names = [n for n in archive.namelist() if "notes" in n.lower()]
         self.assertEqual(names, [])
+
+    def test_master_element_order_follows_ecma_sequence(self):
+        """母版子元素按 ECMA-376 序列：hf 必须在 txStyles 之前（无修复提示的前提）。"""
+        spec = deck_spec()
+        spec["master"] = {"footer": True, "pageNumber": True, "logo": None}
+        out, _ = self._build(spec)
+        master = self._part(out, "ppt/slideMasters/slideMaster1.xml")
+        hf_index = master.find("<p:hf")
+        styles_index = master.find("<p:txStyles")
+        self.assertGreater(hf_index, 0)
+        self.assertGreater(styles_index, hf_index)
+        # 关闭公共元素时没有 hf 元素，顺序约束自然满足
+        spec["master"] = {"footer": False, "pageNumber": False, "logo": None}
+        out2, _ = self._build(spec, name="nohf.pptx")
+        self.assertNotIn("<p:hf", self._part(out2, "ppt/slideMasters/slideMaster1.xml"))
+
+    def test_cli_reports_chart_spec_errors_exit_two(self):
+        """CLI 级反例：不支持的图表类型按规格错误退出码 2，打印可读文案而非 traceback。"""
+        spec = deck_spec()
+        spec["slides"][1]["charts"] = [{
+            "chart": "scatter", "x": 0, "y": 0, "cx": 1000000, "cy": 1000000,
+            "categories": ["甲"], "series": [{"name": "系列", "values": [1]}]}]
+        spec_path = self.root / "bad-chart.json"
+        spec_path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+        out = self.root / "bad-chart.pptx"
+        script = ROOT / "skill" / "annotation-everything" / "scripts" / "pptx_build.py"
+        done = subprocess.run(
+            [sys.executable, str(script), "--deck", str(spec_path), "--out", str(out)],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+        self.assertIn("scatter", done.stderr)
+        self.assertFalse(out.exists())
 
     def test_cli_reports_build_summary(self):
         """CLI 包装：--json 输出构建摘要，退出码 0。"""

@@ -2634,7 +2634,6 @@
     "pptxbuild.err.sectionUnknownKey": "Section references unknown slide key: {key}",
     "pptxbuild.err.sectionDuplicateSlide": "Slide {key} appears in multiple sections: {sections}",
     "pptxbuild.err.sectionMissingSlides": "These slides are in no section: {keys}",
-    "pptxbuild.err.chartsUnsupported": "Chart building is not wired yet (later slice of issue #180)",
     "pptxcheck.badLocale": "Unsupported locale: {locale} (use zh-CN or en)",
     "pptxcheck.fileMissing": "File not readable: {path}",
     "pptxcheck.summary": "{file}: {verdict} ({slides} slides)",
@@ -2704,6 +2703,17 @@
     "check.reason.deliverablesGap": "Extra deliverable (PPTX) not ready: {items} — see the deliverables details for status and gaps; this does not change the HTML verdict",
     "check.deliverables.line": "Extra deliverable {file}: {deliverable}, PowerPoint verification: {powerpoint}",
     "check.deliverables.yes": "deliverable",
-    "check.deliverables.no": "not deliverable"
+    "check.deliverables.no": "not deliverable",
+    "pptxbuild.err.chartUnknown": "Unknown chart type: {chart} (first version supports column / bar / line / pie; combo, dual-axis and 3-D are out of scope)",
+    "pptxbuild.err.chartBad": "Invalid chart config: chart is column/bar/line/pie; x/y/cx/cy are positive EMU integers (cx/cy > 0) inside the canvas",
+    "pptxbuild.err.chartDataBad": "Invalid chart data: categories and series are non-empty, categories are strings, each series needs a name and finite numeric values",
+    "pptxbuild.err.chartCountMismatch": "Chart has {categories} categories but {values} values — every series' values must match the categories length",
+    "pptxbuild.err.chartTooManySeries": "Series count {n} exceeds the first-version limit of 25 (the embedded workbook runs out of columns at Z)",
+    "pptxbuild.err.chartLegendBad": "Unknown legend position: {legend} (use none / right / bottom / top)",
+    "pptxbuild.err.chartLabelsBad": "Unknown data-label value: {labels} (column/bar/line use none / value; pie also supports percent)",
+    "pptxbuild.err.labelsPercentNeedsPie": "labels=percent applies to pie charts only (column/bar/line use none / value); report unsupported chart types as gaps instead of faking them with pictures",
+    "pptxbuild.err.slideIdExhausted": "Slide id space exhausted for {key}; this is unreachable by design and signals a bug",
+    "pptxbuild.err.writeFailed": "Cannot write the output file: {path} ({detail})",
+    "pptxrender.reason.timeout": "Render tool timed out after 300s and was treated as a failure; rerun or check whether the tool is hanging"
   }
 }

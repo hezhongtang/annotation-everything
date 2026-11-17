@@ -17,8 +17,8 @@ Pre-generation alignment — purpose, audience, length, script choice, and visua
 | Tool | Role | Platforms | Verified versions | Detection | Install |
 |---|---|---|---|---|---|
 | Python 3 (stdlib) | Build and checks | macOS / Linux / Windows | Ships with the host | `python3 --version` | — |
-| LibreOffice (`soffice`) | Render page images | macOS / Linux / Windows | 26.8 (macOS arm64) verified; others unverified | `pptx_render.py` probes PATH and the macOS install location; override with `AE_SOFFICE` | `brew install --cask libreoffice` (macOS), `apt install libreoffice` (Debian/Ubuntu) |
-| poppler (`pdftoppm`) | PDF to page PNGs | macOS / Linux / Windows | 26.08 (macOS arm64) verified; others unverified | `pptx_render.py` probes PATH; override with `AE_PDFTOPPM` | `brew install poppler`, `apt install poppler-utils` |
+| LibreOffice (`soffice`) | Render page images | macOS / Linux / Windows | 26.2 (macOS arm64) verified; others unverified | `pptx_render.py` probes PATH and the macOS install location; override with `AE_SOFFICE` | `brew install --cask libreoffice` (macOS), `apt install libreoffice` (Debian/Ubuntu) |
+| poppler (`pdftoppm`) | PDF to page PNGs | macOS / Linux / Windows | 26.07 (macOS arm64) verified; others unverified | `pptx_render.py` probes PATH; override with `AE_PDFTOPPM` | `brew install poppler`, `apt install poppler-utils` |
 
 Building needs no third-party libraries. When render tools are missing or conversion fails, `pptx_render.py` reports `unavailable` / `failed` with a specific diagnosis; register it under "Statuses and failure handling" below, and basic HTML review stays available. The preferred verification environments for rendering are macOS and Linux; Windows is not machine-verified — when you verify it in a real task, record the version in the `render` field.
 
@@ -88,7 +88,7 @@ A backward-compatible optional extension; records without the field keep the old
  "build": {"tool": "annotation-everything built-in pptx_build.py", "version": "<AE version>",
            "invocation": "python3 $S/pptx_build.py --deck deck.json --out deck.pptx",
            "deckSpec": "deck.json", "deckSpecSha256": "<deck spec sha256>"},
- "render": {"tool": "LibreOffice soffice", "version": "26.8", "notes": "pdftoppm 26.08"},
+ "render": {"tool": "LibreOffice soffice", "version": "26.2", "notes": "pdftoppm 26.07"},
  "checks": {
    "file": {"id": "pptx.file", "status": "pass", "note": "pptx_check all passed", "issues": []},
    "visual": {"id": "pptx.visual", "status": "pass", "note": "every page viewed",

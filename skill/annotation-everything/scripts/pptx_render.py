@@ -110,10 +110,15 @@ def render_deck(path: Path, out_dir: Path, locale: str | None = None) -> dict:
     with tempfile.TemporaryDirectory(prefix="ae-pptx-render-") as workdir:
         work = Path(workdir)
         profile = (work / "lo-profile").as_uri()
-        done = subprocess.run(
-            [str(soffice), "--headless", f"-env:UserInstallation={profile}",
-             "--convert-to", "pdf", "--outdir", str(work), str(path)],
-            capture_output=True, text=True, timeout=300)
+        try:
+            done = subprocess.run(
+                [str(soffice), "--headless", f"-env:UserInstallation={profile}",
+                 "--convert-to", "pdf", "--outdir", str(work), str(path)],
+                capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            manifest["status"] = "failed"
+            manifest["diagnosis"].append(_t(loc, "pptxrender.reason.timeout"))
+            return manifest
         pdf = work / (path.stem + ".pdf")
         if not pdf.is_file():
             manifest["status"] = "failed"
@@ -122,10 +127,15 @@ def render_deck(path: Path, out_dir: Path, locale: str | None = None) -> dict:
                 loc, "pptxrender.reason.conversionFailed",
                 detail=detail[0][:200] if detail else ""))
             return manifest
-        render = subprocess.run(
-            [str(pdftoppm), "-png", "-r", str(RENDER_DPI), str(pdf),
-             str(out_dir / "page")],
-            capture_output=True, text=True, timeout=300)
+        try:
+            render = subprocess.run(
+                [str(pdftoppm), "-png", "-r", str(RENDER_DPI), str(pdf),
+                 str(out_dir / "page")],
+                capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            manifest["status"] = "failed"
+            manifest["diagnosis"].append(_t(loc, "pptxrender.reason.timeout"))
+            return manifest
     if render.returncode != 0:
         manifest["status"] = "failed"
         manifest["diagnosis"].append(_t(loc, "pptxrender.reason.pageRenderFailed",

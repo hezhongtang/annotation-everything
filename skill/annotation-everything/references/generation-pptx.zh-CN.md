@@ -17,8 +17,8 @@
 | 工具 | 用途 | 平台 | 已验证版本 | 探测 | 安装 |
 |---|---|---|---|---|---|
 | Python 3（标准库） | 制作与检查 | macOS / Linux / Windows | 随宿主 | `python3 --version` | — |
-| LibreOffice（`soffice`） | 渲染逐页图片 | macOS / Linux / Windows | 26.8（macOS arm64）实测；其余未验证 | `pptx_render.py` 自动探测 PATH 与 macOS 安装位置；可用 `AE_SOFFICE` 指定 | `brew install --cask libreoffice`（macOS）、`apt install libreoffice`（Debian/Ubuntu） |
-| poppler（`pdftoppm`） | PDF 转逐页 PNG | macOS / Linux / Windows | 26.08（macOS arm64）实测；其余未验证 | `pptx_render.py` 自动探测；可用 `AE_PDFTOPPM` 指定 | `brew install poppler`、`apt install poppler-utils` |
+| LibreOffice（`soffice`） | 渲染逐页图片 | macOS / Linux / Windows | 26.2（macOS arm64）实测；其余未验证 | `pptx_render.py` 自动探测 PATH 与 macOS 安装位置；可用 `AE_SOFFICE` 指定 | `brew install --cask libreoffice`（macOS）、`apt install libreoffice`（Debian/Ubuntu） |
+| poppler（`pdftoppm`） | PDF 转逐页 PNG | macOS / Linux / Windows | 26.07（macOS arm64）实测；其余未验证 | `pptx_render.py` 自动探测；可用 `AE_PDFTOPPM` 指定 | `brew install poppler`、`apt install poppler-utils` |
 
 制作不依赖第三方库；渲染工具缺失或转换失败时，`pptx_render.py` 输出 `unavailable` / `failed` 与具体诊断，按下面「状态与失败处理」登记，基础 HTML 审阅保持可用。渲染工具的首选验证环境是 macOS 与 Linux；Windows 未做实机验证，如在实际任务中验证过，请把版本写进记录的 `render` 字段。
 
@@ -88,7 +88,7 @@
  "build": {"tool": "annotation-everything 内置 pptx_build.py", "version": "<AE 版本>",
            "invocation": "python3 $S/pptx_build.py --deck deck.json --out deck.pptx",
            "deckSpec": "deck.json", "deckSpecSha256": "<deck 规格 sha256>"},
- "render": {"tool": "LibreOffice soffice", "version": "26.8", "notes": "pdftoppm 26.08"},
+ "render": {"tool": "LibreOffice soffice", "version": "26.2", "notes": "pdftoppm 26.07"},
  "checks": {
    "file": {"id": "pptx.file", "status": "pass", "note": "pptx_check 全部通过", "issues": []},
    "visual": {"id": "pptx.visual", "status": "pass", "note": "逐页看图完成",
