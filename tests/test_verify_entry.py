@@ -4104,6 +4104,120 @@ class ParallelUnitTests(VerifyEntryTestCase):
 class WindowsVerificationContractTests(VerifyEntryTestCase):
     """验证入口在无 fork / 非 POSIX 信号环境下保持串行执行、准确环境摘要与正常收尾。"""
 
+    def test_abort_reaps_job_even_after_its_root_has_exited(self):
+        import unittest.mock as mock
+        import verify
+
+        ctx = verify.RunContext("job-reap", self.repo.artifact_dir, None, None, True)
+        proc = mock.Mock(pid=12345)
+        proc.poll.return_value = 0
+        proc.wait.return_value = 0
+        entry = ctx.registry.register(proc, "synthetic", job=42)
+        with mock.patch.object(verify.os, "name", "nt"), \
+                mock.patch.object(verify, "_win32_job_active_processes", side_effect=[1, 1, 0]), \
+                mock.patch.object(verify, "_terminate_win32_job", return_value=True) as terminate, \
+                mock.patch.object(verify, "_close_win32_job") as close, \
+                mock.patch.object(ctx, "save_children"), mock.patch.object(verify.time, "sleep"):
+            ctx.abort(signal.SIGTERM)
+        terminate.assert_called_once_with(42)
+        close.assert_called_once_with(entry)
+        self.assertTrue(entry["reaped"])
+
+    def test_job_query_failure_keeps_child_unreaped_and_handle_open(self):
+        import unittest.mock as mock
+        import verify
+
+        ctx = verify.RunContext("job-unknown", self.repo.artifact_dir, None, None, True)
+        proc = mock.Mock(pid=12345)
+        proc.poll.return_value = 0
+        proc.wait.return_value = 0
+        entry = ctx.registry.register(proc, "synthetic", job=42)
+        with mock.patch.object(verify.os, "name", "nt"), \
+                mock.patch.object(verify, "_win32_job_active_processes", return_value=None), \
+                mock.patch.object(verify, "_terminate_win32_job", return_value=True), \
+                mock.patch.object(verify, "KILL_GRACE_SECONDS", 0), \
+                mock.patch.object(verify, "_close_win32_job") as close, \
+                mock.patch.object(ctx, "save_children"):
+            ctx.abort(signal.SIGTERM)
+        close.assert_not_called()
+        self.assertFalse(entry["reaped"])
+        self.assertEqual(entry["job"], 42)
+        self.assertTrue(ctx.notes)
+
+    @unittest.skipUnless(os.name == "nt", "需要真实 Windows Job Object")
+    def test_windows_abort_and_timeout_reap_sigbreak_ignoring_descendants(self):
+        import unittest.mock as mock
+        import verify
+
+        for mode in ("abort", "timeout"):
+            with self.subTest(mode=mode):
+                root = Path(self.temp.name) / mode
+                root.mkdir()
+                release = root / "spawn"
+                child_ready = root / "child-ready"
+                child_code = (
+                    "import os, signal, time\nfrom pathlib import Path\n"
+                    "signal.signal(signal.SIGBREAK, signal.SIG_IGN)\n"
+                    f"Path({str(child_ready)!r}).write_text(str(os.getpid()))\n"
+                    "time.sleep(60)\n"
+                )
+                script = root / "tree.py"
+                script.write_text(
+                    "import signal, subprocess, sys, time\nfrom pathlib import Path\n"
+                    "signal.signal(signal.SIGBREAK, lambda *_: sys.exit(0))\n"
+                    f"while not Path({str(release)!r}).exists(): time.sleep(0.01)\n"
+                    f"subprocess.Popen([sys.executable, '-c', {child_code!r}], "
+                    "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+                    "time.sleep(60)\n", encoding="utf-8")
+                ctx = verify.RunContext(mode, root / "artifacts", 2, None, True)
+                ctx.run_dir.mkdir(parents=True)
+                real_assign = verify._assign_win32_job
+
+                def assign_then_spawn(proc):
+                    job = real_assign(proc)
+                    self.assertIsNotNone(job, "必须实际建立 Job 后才允许创建后代")
+                    release.touch()
+                    deadline = time.monotonic() + 10
+                    while not child_ready.exists() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(child_ready.exists(), "后代已安装 SIGBREAK 忽略处理器")
+                    return job
+
+                outsider = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+                self.addCleanup(_reap, outsider)
+                try:
+                    if mode == "abort":
+                        proc = subprocess.Popen([sys.executable, str(script)],
+                                                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+                        self.addCleanup(_reap, proc)
+                        job = assign_then_spawn(proc)
+                        ctx.registry.register(proc, "synthetic", job=job)
+                        ctx.abort(signal.SIGBREAK)
+                    else:
+                        group = verify.Group(name="synthetic", title="Synthetic", purpose="Synthetic",
+                                             argv=[sys.executable, str(script)], equivalent="synthetic",
+                                             counter="log", resources=("host-state",))
+                        handle = mock.Mock(waited_seconds=0.0)
+                        handle.file_descriptors.return_value = ()
+
+                        def check_before_unlock(_handle):
+                            self.assertFalse(pid_alive(int(child_ready.read_text())),
+                                             "释放资源锁前后代必须已经退出")
+
+                        with mock.patch.object(verify, "_assign_win32_job", side_effect=assign_then_spawn), \
+                                mock.patch.object(verify.host_isolation, "acquire", return_value=handle), \
+                                mock.patch.object(verify.host_isolation, "release", side_effect=check_before_unlock):
+                            result = verify.execute_group(group, ctx)
+                        self.assertEqual(result["outcome"], "timeout")
+                    self.assertFalse(pid_alive(int(child_ready.read_text())))
+                    self.assertTrue(ctx.registry.entries[0]["reaped"])
+                    self.assertIsNone(outsider.poll(), "未登记的进程不得被回收")
+                finally:
+                    for entry in ctx.registry.entries:
+                        if entry.get("job"):
+                            verify._terminate_win32_job(entry["job"])
+                            verify._close_win32_job(entry)
+
     def test_missing_fork_forces_serial_execution_and_records_serial_summary(self):
         for index in range(7):
             self.repo.write("tests/test_serial_extra_%s.py" % index,

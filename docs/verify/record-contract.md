@@ -149,6 +149,8 @@ unittest 执行期间捕获中断时，已完成用例保留原结果，中断�
 
 `children.json` 是子进程登记簿，每项含 `group`、`pid`、`pgid`、`started_at`、`reaped`、`exit_status`、`signal`。它只登记本次入口自己拉起的进程；入口不去盘点、不去结束任何未登记进程。登记或元数据写入失败时，入口退出前仍回收本次已登记且尚未结束的子进程。
 
+Windows 上已关联 Job Object 的登记项，仅在直属进程退出且 Job 活动成员数确认为 0 后设置 `reaped=true`。根进程退出但后代仍存活、Job 查询失败或回收超时，都保持 `reaped=false` 并记录原因。
+
 ## 结论与优先级
 
 组结论 `outcome` 的取值和触发条件：

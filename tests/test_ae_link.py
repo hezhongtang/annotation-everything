@@ -376,6 +376,93 @@ class AeLinkCliTests(unittest.TestCase):
         self.assertTrue((self.copy_dir / "SKILL.md").is_file())
         self.assertEqual((self.copy_dir / ae.RECORD_NAME).read_text(encoding="utf-8"), record_before)
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
+    def test_existing_correct_links_need_no_symlink_privilege(self):
+        import contextlib, io, unittest.mock as mock
+        self.addCleanup(ae.set_locale, ae.current_locale())
+        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        link = agent_link(self.home, "codex")
+        old_target = os.readlink(link)
+        win_err = OSError(1314, "synthetic missing symlink privilege")
+        win_err.winerror = 1314
+        for command in ("install", "upgrade"):
+            with self.subTest(command=command), mock.patch.dict(os.environ, self.env), \
+                    mock.patch.object(ae, "list_processes", return_value=[]), \
+                    mock.patch("ae.os.symlink", side_effect=win_err) as symlink, \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(ae.main([command, "--link", "codex"]), 0)
+            symlink.assert_not_called()
+            self.assertEqual(os.readlink(link), old_target)
+
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
+    def test_link_failure_restores_replaced_links_and_preserves_existing_links(self):
+        import contextlib, io, unittest.mock as mock
+        self.addCleanup(ae.set_locale, ae.current_locale())
+        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        old_target = self.home / "previous-skill"
+        old_target.mkdir()
+        replaced = self.custom_dir("replaced") / SKILL
+        failed = self.custom_dir("failed") / SKILL
+        fresh = self.custom_dir("fresh") / SKILL
+        for link in (replaced, failed):
+            link.parent.mkdir(parents=True)
+            link.symlink_to(old_target, target_is_directory=True)
+        original_targets = {link: os.readlink(link) for link in (agent_link(self.home, "codex"), replaced, failed)}
+        record_before = (self.copy_dir / RECORD_NAME).read_bytes()
+        real_symlink = os.symlink
+        win_err = OSError(1314, "synthetic missing symlink privilege")
+        win_err.winerror = 1314
+
+        def fail_last(src, dst, target_is_directory=False):
+            if Path(dst) == failed:
+                raise win_err
+            return real_symlink(src, dst, target_is_directory=target_is_directory)
+
+        links = f"codex,old={replaced.parent},new={fresh.parent},failed={failed.parent}"
+        for command in ("install", "upgrade"):
+            with self.subTest(command=command), mock.patch.dict(os.environ, self.env), \
+                    mock.patch.object(ae, "_is_windows", return_value=True), \
+                    mock.patch.object(ae, "list_processes", return_value=[]), \
+                    mock.patch("ae.os.symlink", side_effect=fail_last), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(ae.main([command, "--link", links]), 2)
+            self.assertEqual((self.copy_dir / RECORD_NAME).read_bytes(), record_before)
+            self.assertTrue((self.copy_dir / "SKILL.md").is_file())
+            self.assertFalse(fresh.is_symlink(), "本次新建链接必须回滚")
+            for link, target in original_targets.items():
+                self.assertEqual(os.readlink(link), target, "原有链接必须完整保留")
+            self.assertEqual(list(self.home.rglob(".ae-link-backup-*")), [])
+
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
+    def test_upgrade_post_verification_failure_rolls_back_link_changes(self):
+        import contextlib, io, unittest.mock as mock
+        self.addCleanup(ae.set_locale, ae.current_locale())
+        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        old_target = self.home / "previous-skill"
+        old_target.mkdir()
+        link = self.custom_dir("replacement") / SKILL
+        link.parent.mkdir(parents=True)
+        link.symlink_to(old_target, target_is_directory=True)
+        target_before = os.readlink(link)
+        record_before = (self.copy_dir / RECORD_NAME).read_bytes()
+        real_write = ae.write_record
+
+        def corrupt_stage(dst, repo, links=None):
+            result = real_write(dst, repo, links)
+            if ".ae-upgrade-stage-" in str(dst):
+                (dst / "SKILL.md").unlink()
+            return result
+
+        with mock.patch.dict(os.environ, self.env), \
+                mock.patch.object(ae, "list_processes", return_value=[]), \
+                mock.patch.object(ae, "write_record", side_effect=corrupt_stage), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = ae.main(["upgrade", "--link", f"codex,old={link.parent}"])
+        self.assertEqual(code, 1)
+        self.assertEqual(os.readlink(link), target_before)
+        self.assertTrue(agent_link(self.home, "codex").is_symlink())
+        self.assertEqual((self.copy_dir / RECORD_NAME).read_bytes(), record_before)
+
     def test_windows_privilege_error_preserves_target_and_link_intent_across_commands(self):
         import contextlib, io, unittest.mock
         previous = ae.current_locale()

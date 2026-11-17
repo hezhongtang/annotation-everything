@@ -1124,6 +1124,49 @@ def _terminate_win32_job(job_handle) -> bool:
         return False
 
 
+def _win32_job_active_processes(job_handle) -> Optional[int]:
+    """查询整个受控 Job 的活动成员；查询失败不能解释为已经退出。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class Accounting(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_longlong) for name in (
+                "TotalUserTime", "TotalKernelTime", "ThisPeriodTotalUserTime", "ThisPeriodTotalKernelTime"
+            )] + [(name, wintypes.DWORD) for name in (
+                "TotalPageFaultCount", "TotalProcesses", "ActiveProcesses", "TotalTerminatedProcesses"
+            )]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.QueryInformationJobObject.argtypes = [
+            wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p]
+        kernel32.QueryInformationJobObject.restype = wintypes.BOOL
+        info = Accounting()
+        if kernel32.QueryInformationJobObject(job_handle, 1, ctypes.byref(info), ctypes.sizeof(info), None):
+            return int(info.ActiveProcesses)
+    except Exception:
+        pass
+    return None
+
+
+def _reap_win32_job(job_handle, timeout: float) -> bool:
+    """根进程退出后仍回收其后代，确认 Job 已空才允许关闭句柄。"""
+    if os.name != "nt" or not job_handle:
+        return True
+    if _win32_job_active_processes(job_handle) == 0:
+        return True
+    if not _terminate_win32_job(job_handle):
+        return False
+    deadline = time.monotonic() + timeout
+    while True:
+        if _win32_job_active_processes(job_handle) == 0:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(remaining, _WINDOWS_WAIT_SLICE))
+
+
 def _close_win32_job(entry: Optional[dict]) -> None:
     if not entry:
         return
@@ -1243,6 +1286,19 @@ class RunContext:
         if text not in self.notes:
             self.notes.append(text)
 
+    def reap_child(self, entry: dict) -> bool:
+        if entry["reaped"]:
+            return True
+        job_reaped = _reap_win32_job(entry.get("job"), KILL_GRACE_SECONDS)
+        code = entry["proc"].poll()
+        reaped = code is not None and job_reaped
+        entry.update(reaped=reaped, exit_status=code, signal=signal_name(code))
+        if reaped:
+            _close_win32_job(entry)
+        else:
+            self.note("登记的 %s 子进程或其 Job 后代未能在宽限期内退出" % entry["group"])
+        return reaped
+
     def abort(self, signum: int) -> None:
         """回收本次登记的子进程：先原信号，宽限期后升级；未登记的进程一律不动。"""
         cleanup_started = time.monotonic()
@@ -1261,12 +1317,7 @@ class RunContext:
                     _wait_process(entry["proc"], timeout=KILL_GRACE_SECONDS)
                 except subprocess.TimeoutExpired:
                     pass
-            code = entry["proc"].poll()
-            entry.update(reaped=code is not None, exit_status=code, signal=signal_name(code))
-            if code is not None:
-                _close_win32_job(entry)
-            else:
-                self.note("登记的 %s 子进程未能在宽限期内退出" % entry["group"])
+            self.reap_child(entry)
         try:
             self.save_children()
         except OSError as exc:
@@ -1388,6 +1439,8 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
                     except subprocess.TimeoutExpired:
                         signal_group(proc, hard_kill, job_handle=job_handle)
                         code = _wait_process(proc)
+                if not ctx.reap_child(registry_entry):
+                    raise RuntimeError("无法确认 %s 的受控进程树已退出" % group.name)
                 _join_thread(reader, timeout=5)
             except Interrupted as exc:
                 # 先让子进程在原日志流上完成中断摘要，再关闭文件。否则读线程会
@@ -1414,9 +1467,7 @@ def _execute_group_body(group: Group, ctx: RunContext, lock_fds: tuple = ()) -> 
             if interrupted_signum is None:
                 cleanup_guard.enter_context(capture_termination(result))
             if registry_entry is not None:
-                registry_entry.update(reaped=code is not None, exit_status=code, signal=signal_name(code))
-                if code is not None:
-                    _close_win32_job(registry_entry)
+                ctx.reap_child(registry_entry)
             ctx.save_children()
         child_seconds = round(time.monotonic() - started_wall, 6)
 

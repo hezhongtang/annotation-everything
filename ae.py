@@ -489,6 +489,49 @@ def create_link(name: str, directory: Path, copy_dir: Path) -> dict:
     return {"agent": name, "path": str(link)}
 
 
+class LinkTransaction:
+    """保留正确链接，替换前用重命名备份；失败回滚不依赖创建符号链接的权限。"""
+
+    def __init__(self):
+        self.changes = []
+        self.committed = False
+
+    def __enter__(self):
+        return self
+
+    def create(self, name: str, directory: Path, copy_dir: Path) -> dict:
+        link = Path(directory) / SKILL_NAME
+        if _link_targets_copy(link, copy_dir):
+            return {"agent": name, "path": str(link)}
+        backup_root = None
+        if link.is_symlink():
+            backup_root = Path(tempfile.mkdtemp(prefix=".ae-link-backup-", dir=link.parent))
+            try:
+                os.replace(link, backup_root / SKILL_NAME)
+            except BaseException:
+                backup_root.rmdir()
+                raise
+        self.changes.append((link, backup_root))
+        return create_link(name, directory, copy_dir)
+
+    def __exit__(self, exc_type, exc, tb):
+        errors = []
+        for link, backup_root in reversed(self.changes):
+            try:
+                if not self.committed:
+                    if backup_root is not None:
+                        os.replace(backup_root / SKILL_NAME, link)
+                    else:
+                        link.unlink(missing_ok=True)
+                if backup_root is not None:
+                    shutil.rmtree(backup_root)
+            except OSError as error:
+                # 恢复失败的备份留在原位置，继续恢复其他链接。
+                errors.append(error)
+        if errors:
+            raise errors[0]
+
+
 def _strip_win_device_prefix(raw: str) -> str:
     if raw.startswith("\\\\?\\UNC\\"):
         return "\\\\" + raw[8:]
@@ -592,36 +635,35 @@ def cmd_install(args) -> int:
     existed_before = dst.exists()
     backup_root: Optional[Path] = None
     backup: Optional[Path] = None
-    try:
-        if existed_before and agents and dst.is_dir() and not dst.is_symlink():
-            backup_root = Path(tempfile.mkdtemp(prefix=".ae-install-backup-", dir=dst.parent))
-            backup = backup_root / SKILL_NAME
-            shutil.copytree(dst, backup, symlinks=True)
-        copy_skill(src, dst)
-        created = []
+    with LinkTransaction() as link_changes:
         try:
-            for name, directory in agents:
-                created.append(create_link(name, directory, dst))
-        except OSError as exc:
-            if not _is_symlink_privilege_error(exc):
-                raise
-            for entry in created:
-                with contextlib.suppress(OSError):
-                    Path(entry["path"]).unlink()
-            if backup is not None and backup.exists():
-                if dst.exists():
-                    shutil.rmtree(dst)
-                os.replace(backup, dst)
-            elif not existed_before:
-                shutil.rmtree(dst, ignore_errors=True)
-            specs = [_link_agent_spec(name, directory) for name, directory in agents]
-            print(_privilege_error_message(repo, specs, getattr(args, "target", None)), file=sys.stderr)
-            return 2
-    finally:
-        if backup_root is not None:
-            shutil.rmtree(backup_root, ignore_errors=True)
-    links = merged_links(previous, dst, created)
-    write_record(dst, repo, links)
+            if existed_before and agents and dst.is_dir() and not dst.is_symlink():
+                backup_root = Path(tempfile.mkdtemp(prefix=".ae-install-backup-", dir=dst.parent))
+                backup = backup_root / SKILL_NAME
+                shutil.copytree(dst, backup, symlinks=True)
+            copy_skill(src, dst)
+            created = []
+            try:
+                for name, directory in agents:
+                    created.append(link_changes.create(name, directory, dst))
+            except OSError as exc:
+                if not _is_symlink_privilege_error(exc):
+                    raise
+                if backup is not None and backup.exists():
+                    if dst.exists():
+                        shutil.rmtree(dst)
+                    os.replace(backup, dst)
+                elif not existed_before:
+                    shutil.rmtree(dst, ignore_errors=True)
+                specs = [_link_agent_spec(name, directory) for name, directory in agents]
+                print(_privilege_error_message(repo, specs, getattr(args, "target", None)), file=sys.stderr)
+                return 2
+            links = merged_links(previous, dst, created)
+            write_record(dst, repo, links)
+            link_changes.committed = True
+        finally:
+            if backup_root is not None:
+                shutil.rmtree(backup_root, ignore_errors=True)
     print(T("cli.ae.install.done", path=dst))
     if created:
         print(T("cli.ae.install.links",
@@ -811,6 +853,7 @@ def cmd_upgrade(args) -> int:
             print(T("cli.ae.upgrade.running", detail=join(details)), file=sys.stderr)
             return 1
 
+        link_changes = lock_stack.enter_context(LinkTransaction())
         stage_root = Path(tempfile.mkdtemp(prefix=".ae-upgrade-stage-", dir=dst.parent))
         backup_root = Path(tempfile.mkdtemp(prefix=".ae-upgrade-backup-", dir=dst.parent))
         stage = stage_root / SKILL_NAME
@@ -844,11 +887,8 @@ def cmd_upgrade(args) -> int:
             if agents:
                 try:
                     for name, directory in agents:
-                        created.append(create_link(name, directory, dst))
+                        created.append(link_changes.create(name, directory, dst))
                 except OSError as exc:
-                    for entry in created:
-                        with contextlib.suppress(OSError):
-                            Path(entry["path"]).unlink()
                     if not _is_symlink_privilege_error(exc):
                         raise
                     try:
@@ -876,6 +916,7 @@ def cmd_upgrade(args) -> int:
                 print(T("cli.ae.upgrade.rolledBack", path=dst, detail="verification-failed"), file=sys.stderr)
                 return 1
             installed_new = True
+            link_changes.committed = True
             print(T("cli.ae.upgrade.done", installed=old_version, version=new_version, path=dst))
             if created:
                 print(T("cli.ae.install.links",

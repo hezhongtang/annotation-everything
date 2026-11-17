@@ -42,6 +42,7 @@ serve.py——并行时盘点结果里混进对方的服务，被误判成残留
   - **POSIX（macOS / Linux）**：`fcntl.flock` 排他锁。入口通过 `pass_fds` 将实际持有的锁描述符传给组子进程；入口单独被 `SIGKILL` 时，仍运行的组继续持有该描述符；最后一个持有者退出后内核释放锁。
   - **Windows（#172）**：Win32 共享模式排他写锁（`CreateFileW` 不授予 `FILE_SHARE_WRITE`，允许 `FILE_SHARE_READ | FILE_SHARE_DELETE` 供只读诊断读取）。入口标记锁句柄可继承，并通过 `STARTUPINFO` 的 `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 仅把锁句柄（与标准流）传给组子进程，不泄漏无关句柄；入口被强行终止时，仍在运行的组继续持有同一内核文件对象句柄，后继参与方仍收到 `ERROR_SHARING_VIOLATION` 并按等待上限排队，直到最后一个持有者退出由内核释放。
   - **统一收尾**：正常结束或可处理的中断先回收登记的受控子进程（Windows 使用 `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK_EVENT` 与无关闭强杀限制的 Win32 Job Object `TerminateJobObject` 回收整棵受控进程树，不波及未登记进程），再释放锁；后继运行无需删除锁文件，也不会在前一组仍使用资源时提前进入。
+    Windows 收尾还会查询 Job 的活动成员数；即使直属进程已退出，也会终止残留后代，并确认活动成员数为 0 后才关闭 Job 句柄。查询或回收失败时保留未回收状态并记录原因，不将直属进程退出记作整棵进程树回收完成。
 - **锁文件位置**：同一用户共享、不依赖个人绝对路径。优先级：
   `AE_LOCK_DIR`（测试与特殊环境覆盖）→ `$XDG_RUNTIME_DIR/annotation-everything-locks-<用户标识>`
   → 系统临时目录下同名目录。POSIX 按用户 UID 区分，Windows 按用户名与域名的 SHA-256 摘要区分，均以私有目录或每用户临时目录隔离；同一用户的任何检出解析到相同位置，因此跨 worktree、跨独立 checkout 生效。
