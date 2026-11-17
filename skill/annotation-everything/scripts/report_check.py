@@ -1581,7 +1581,8 @@ def _posix_norm(source: str, target: str) -> str:
     return posixpath.normpath(posixpath.join(posixpath.dirname(source), target))
 
 
-_NUMBER_TOKEN = re.compile(r"[+-]?[0-9]+(?:[0-9,，]*[0-9])?(?:\.[0-9]+)?")
+_NUMBER_TOKEN = re.compile(r"[+-]?(?:[0-9]+(?:[0-9,，]*[0-9])?(?:\.[0-9]+)?|\.[0-9]+)"
+                           r"(?:[eE][+-]?[0-9]+)?")
 
 
 def _numeric_tokens(text: str) -> set[str]:

@@ -402,6 +402,29 @@ class DeliverablesCheckTests(unittest.TestCase):
                     record["findings"][0]["calculation"]["expected"] = 21
                     self.assertIn("record.deliverable-consistency", self._codes(self.run_check(record)))
 
+    def test_scientific_notation_chart_values_match_decimal_claims(self):
+        for value in (0.00001, -0.00001, 1.25e-7, 1e20):
+            with self.subTest(value=value):
+                claim = "合成指标为 " + format(value, ".20f").rstrip("0").rstrip(".")
+                spec = deck_spec()
+                spec["slides"][1].update(layout="titleOnly", body=[], charts=[{
+                    "chart": "column", "name": "指标", "x": 600000, "y": 1800000,
+                    "cx": 6000000, "cy": 3600000, "categories": ["本期"],
+                    "series": [{"name": "数值", "values": [value]}]}])
+                self.deck_sha = pb.build_deck(spec, self.deck_path)["sha256"]
+                item = self.deliverable()
+                item["checks"]["consistency"]["findings"][0]["claim"] = claim
+                record = make_record(deliverables=[item])
+                record["findings"][0].update(claim=claim, type="fact")
+                record["findings"][0].pop("calculation")
+                result = self.run_check(record)
+                self.assertEqual(self.status(result), "pass", result)
+                self.assertTrue(self.item(result)["deliverable"])
+                wrong = "合成指标为 " + str(value * 2)
+                record["findings"][0]["claim"] = wrong
+                item["checks"]["consistency"]["findings"][0]["claim"] = wrong
+                self.assertIn("record.deliverable-consistency", self._codes(self.run_check(record)))
+
     def test_negative_percent_change_matches_signed_slide_text(self):
         claim = "三季度收入同比变化 -12%"
         for rendered in (claim, claim.replace("-", "−")):

@@ -2482,6 +2482,8 @@
     "pptxcheck.reason.chartCacheBad": "系列缺类目或数值缓存",
     "pptxcheck.reason.chartCacheMismatch": "类目缓存（{cat}）与数值缓存（{val}）点数不一致",
     "pptxcheck.reason.chartDataMissing": "图表缺内嵌工作簿关系（externalData），无法证明数据可编辑",
+    "pptxcheck.reason.chartWorkbookInvalid": "内嵌工作簿无法解析，或缺少必要部件、关系及工作表",
+    "pptxcheck.reason.chartWorkbookMismatch": "图表引用数据与内嵌工作簿不一致：{formula}",
     "pptxcheck.reason.chartFixedColor": "图表系列使用固定色（srgbClr）而非主题引用",
     "pptxcheck.reason.themeMissing": "母版没有指向主题的关系",
     "pptxcheck.reason.themeSlotMissing": "主题色缺槽位（{slots}）",

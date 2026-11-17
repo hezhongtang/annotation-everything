@@ -2674,6 +2674,8 @@
     "pptxcheck.reason.chartCacheBad": "Series lacks category or value cache",
     "pptxcheck.reason.chartCacheMismatch": "Category cache ({cat}) and value cache ({val}) point counts differ",
     "pptxcheck.reason.chartDataMissing": "Chart lacks the embedded workbook relationship (externalData); editable data unproven",
+    "pptxcheck.reason.chartWorkbookInvalid": "Embedded workbook is unreadable or lacks required parts, relationships, or worksheets",
+    "pptxcheck.reason.chartWorkbookMismatch": "Chart data reference does not match the embedded workbook: {formula}",
     "pptxcheck.reason.chartFixedColor": "Chart series uses a fixed color (srgbClr) instead of a theme reference",
     "pptxcheck.reason.themeMissing": "Master has no relationship to a theme",
     "pptxcheck.reason.themeSlotMissing": "Theme color scheme missing slots ({slots})",

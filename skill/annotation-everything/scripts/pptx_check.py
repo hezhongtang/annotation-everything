@@ -19,10 +19,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import posixpath
+import re
 import sys
 import zipfile
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -41,6 +44,7 @@ R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 CT = "http://schemas.openxmlformats.org/package/2006/content-types"
 P14 = "http://schemas.microsoft.com/office/powerpoint/2010/main"
+S = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 CT_PRESENTATION = "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"
 CT_SLIDE = "application/vnd.openxmlformats-officedocument.presentationml.slide+xml"
@@ -50,6 +54,8 @@ CT_THEME = "application/vnd.openxmlformats-officedocument.theme+xml"
 CT_CHART = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
 CT_NOTES_MASTER = "application/vnd.openxmlformats-officedocument.presentationml.notesMaster+xml"
 CT_NOTES_SLIDE = "application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"
+CT_WORKBOOK = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+CT_WORKSHEET = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
 
 # 检查项固定顺序；id 语言无关，可读名称随 locale。
 CHECK_ORDER = ("package.required-parts", "package.relationships", "package.content-types",
@@ -162,6 +168,126 @@ def _placeholders(sld_like: ET.Element) -> set[tuple[str, int | None]]:
     return found
 
 
+def _workbook_cells(book: zipfile.ZipFile) -> dict[str, dict[str, tuple[str, str]]]:
+    """沿工作簿关系读取工作表；仅接受可由图表引用的真实单元格。"""
+    types = _xml(book, "[Content_Types].xml")
+    if types.tag != _q(CT, "Types"):
+        raise ValueError("content types")
+    overrides = {node.get("PartName", "").lstrip("/"): node.get("ContentType")
+                 for node in types.findall(_q(CT, "Override"))}
+    defaults = {node.get("Extension", "").lower(): node.get("ContentType")
+                for node in types.findall(_q(CT, "Default"))}
+
+    def part_xml(part: str, ctype: str, tag: str) -> ET.Element:
+        if overrides.get(part, defaults.get(part.rsplit(".", 1)[-1].lower())) != ctype:
+            raise ValueError("content type")
+        root = _xml(book, part)
+        if root.tag != _q(S, tag):
+            raise ValueError("part root")
+        return root
+
+    main = [rel for rel in _read_rels(book, "").values()
+            if rel["type"] == R + "/officeDocument" and not rel["external"]]
+    if len(main) != 1:
+        raise ValueError("workbook relationship")
+    part = main[0]["target"]
+    workbook = part_xml(part, CT_WORKBOOK, "workbook")
+    rels = _read_rels(book, part)
+    strings = []
+    for rel in rels.values():
+        if rel["type"] == R + "/sharedStrings" and not rel["external"]:
+            root = _xml(book, rel["target"])
+            strings = ["".join(node.itertext()) for node in root.findall(_q(S, "si"))]
+    sheets = {}
+    for sheet in workbook.findall(_q(S, "sheets") + "/" + _q(S, "sheet")):
+        name = sheet.get("name", "")
+        rel = rels.get(sheet.get(_q(R, "id")), {})
+        if not name or name in sheets or rel.get("type") != R + "/worksheet" or rel.get("external"):
+            raise ValueError("worksheet relationship")
+        root = part_xml(rel["target"], CT_WORKSHEET, "worksheet")
+        data = root.find(_q(S, "sheetData"))
+        if data is None:
+            raise ValueError("worksheet data")
+        cells = {}
+        for cell in data.iter(_q(S, "c")):
+            address = cell.get("r", "")
+            if not re.fullmatch(r"[A-Z]+[1-9][0-9]*", address) or address in cells:
+                raise ValueError("cell address")
+            kind = cell.get("t", "n")
+            value = cell.findtext(_q(S, "v"), "")
+            if kind == "inlineStr":
+                value = "".join(node.text or "" for node in cell.iter(_q(S, "t")))
+            elif kind == "s":
+                index = int(value)
+                if not 0 <= index < len(strings):
+                    raise ValueError("shared string")
+                value = strings[index]
+            cells[address] = (kind, value)
+        sheets[name] = cells
+    if not sheets:
+        raise ValueError("no worksheets")
+    return sheets
+
+
+def _chart_reference_matches(ref: ET.Element, sheets: dict) -> bool:
+    """比较引用范围、缓存索引和工作表单元格，覆盖系列名、类目与数值。"""
+    formula = ref.findtext(_q(C, "f"), "")
+    match = re.fullmatch(r"('(?:[^']|'')+'|[^!]+)!\$?([A-Z]+)\$?([1-9][0-9]*)"
+                         r"(?::\$?([A-Z]+)\$?([1-9][0-9]*))?", formula)
+    if match is None:
+        return False
+    sheet, first_col, first_row, last_col, last_row = match.groups()
+    if sheet.startswith("'") and sheet.endswith("'"):
+        sheet = sheet[1:-1].replace("''", "'")
+
+    def column_number(label: str) -> int:
+        value = 0
+        for char in label:
+            value = value * 26 + ord(char) - ord("A") + 1
+        return value
+
+    def column_label(value: int) -> str:
+        label = ""
+        while value:
+            value, rest = divmod(value - 1, 26)
+            label = chr(ord("A") + rest) + label
+        return label
+
+    c1, c2 = column_number(first_col), column_number(last_col or first_col)
+    r1, r2 = int(first_row), int(last_row or first_row)
+    if sheet not in sheets or not (1 <= c1 <= c2 <= 16384 and 1 <= r1 <= r2 <= 1048576) \
+            or (c1 != c2 and r1 != r2):
+        return False
+    numeric = ref.tag == _q(C, "numRef")
+    cache = ref.find(_q(C, "numCache" if numeric else "strCache"))
+    if cache is None:
+        return False
+    points = cache.findall(_q(C, "pt"))
+    count = max(c2 - c1, r2 - r1) + 1
+    count_node = cache.find(_q(C, "ptCount"))
+    if len(points) != count or count_node is None or count_node.get("val") != str(count):
+        return False
+    try:
+        indices = [int(point.get("idx", "")) for point in points]
+        if set(indices) != set(range(count)):
+            return False
+        for index, point in zip(indices, points):
+            address = column_label(c1 + (index if c1 != c2 else 0)) + str(r1 + (index if r1 != r2 else 0))
+            cell = sheets[sheet].get(address)
+            value = point.findtext(_q(C, "v"), "")
+            if cell is None:
+                return False
+            if numeric:
+                actual, expected = Decimal(cell[1]), Decimal(value)
+                if cell[0] != "n" or not actual.is_finite() or not expected.is_finite() or actual != expected:
+                    return False
+            elif cell[1] != value:
+                return False
+    except (ValueError, InvalidOperation):
+        return False
+    return True
+
+
 class _Checker:
     def __init__(self, path: Path, loc: str):
         self.path = path
@@ -172,6 +298,7 @@ class _Checker:
         self._pres_rels: dict[str, dict] = {}
         self._slide_parts: list[str] = []
         self._slide_ids: set[str] = set()
+        self._part_types: dict[str, str] = {}
         self.sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
 
     def add(self, check: str, code: str, part: str = "", slide: int | None = None,
@@ -292,14 +419,30 @@ class _Checker:
         family = (("ppt/theme/", CT_THEME), ("ppt/slideLayouts/", CT_LAYOUT), ("ppt/slideMasters/", CT_MASTER),
                   ("ppt/charts/chart", CT_CHART), ("ppt/notesSlides/", CT_NOTES_SLIDE),
                   ("ppt/notesMasters/", CT_NOTES_MASTER))
-        for part, ctype in overrides.items():
+        for part in names:
+            if not part.endswith(".xml"):
+                continue
             for prefix, family_ctype in family:
                 if part.startswith(prefix):
                     expected.setdefault(part, family_ctype)
+        relationship_types = {R + "/" + suffix: ctype for suffix, ctype in (
+            ("slide", CT_SLIDE), ("slideMaster", CT_MASTER), ("slideLayout", CT_LAYOUT),
+            ("notesSlide", CT_NOTES_SLIDE), ("notesMaster", CT_NOTES_MASTER),
+            ("chart", CT_CHART), ("theme", CT_THEME))}
+        for rel_name in sorted(names):
+            if not rel_name.endswith(".rels"):
+                continue
+            source = "" if rel_name == "_rels/.rels" else posixpath.join(
+                posixpath.dirname(posixpath.dirname(rel_name)), posixpath.basename(rel_name)[:-5])
+            for rel in _read_rels(archive, source).values():
+                if not rel["external"] and rel["type"] in relationship_types:
+                    expected[rel["target"]] = relationship_types[rel["type"]]
+        self._part_types = expected
         for part in sorted(names):
-            if part in expected and overrides.get(part) != expected[part]:
+            actual = overrides.get(part, defaults.get(part.rsplit(".", 1)[-1].lower(), ""))
+            if part in expected and actual != expected[part]:
                 self.add("package.content-types", "contentTypeMismatch", part=part,
-                         expected=expected[part], actual=overrides.get(part, ""))
+                         expected=expected[part], actual=actual)
         # 每个部件的扩展名都要有 Default 或 Override，媒体与内嵌包靠 Default 登记
         for part in sorted(names):
             if part.endswith((".xml", ".rels")) or part in overrides:
@@ -377,10 +520,11 @@ class _Checker:
         root = self._content_types_root
         if root is None:
             return
-        chart_parts = sorted(node.get("PartName", "").lstrip("/")
-                             for node in root.findall(_q(CT, "Override"))
-                             if node.get("ContentType") == CT_CHART)
-        for part in chart_parts:
+        chart_parts = {node.get("PartName", "").lstrip("/")
+                       for node in root.findall(_q(CT, "Override"))
+                       if node.get("ContentType") == CT_CHART}
+        chart_parts.update(part for part, ctype in self._part_types.items() if ctype == CT_CHART)
+        for part in sorted(chart_parts):
             self.scope("chart.structure", part)
             if part not in names:
                 self.add("chart.structure", "partMissing", part=part)
@@ -429,14 +573,30 @@ class _Checker:
                         self.add("chart.structure", "chartCrossAxBad", part=part)
             for ser in group.findall(_q(C, "ser")):
                 self._chart_series(part, ser)
-            external = [rel for rel in chart_rels.values()
-                        if rel["type"] == R + "/package"]
-            has_ref = root_elem.find(_q(C, "externalData")) is not None
-            if not external or not has_ref:
+            data = root_elem.find(_q(C, "externalData"))
+            rel = chart_rels.get(data.get(_q(R, "id")), {}) if data is not None else {}
+            if rel.get("type") != R + "/package" or rel.get("external"):
                 self.add("chart.structure", "chartDataMissing", part=part)
-            elif external[0]["target"] not in names:
+            elif rel["target"] not in names:
                 self.add("chart.structure", "relTargetMissing", part=part,
-                         target=external[0]["raw_target"])
+                         target=rel["raw_target"])
+            else:
+                self._chart_workbook(archive, rel["target"], root_elem, part)
+
+    def _chart_workbook(self, archive: zipfile.ZipFile, workbook_part: str,
+                        chart: ET.Element, chart_part: str) -> None:
+        try:
+            if archive.getinfo(workbook_part).file_size > MAX_XML_BYTES:
+                raise ValueError("workbook size")
+            with zipfile.ZipFile(io.BytesIO(archive.read(workbook_part))) as book:
+                sheets = _workbook_cells(book)
+        except (zipfile.BadZipFile, KeyError, ValueError, OSError, _Problem):
+            self.add("chart.structure", "chartWorkbookInvalid", part=workbook_part)
+            return
+        for ref in chart.iter():
+            if ref.tag in (_q(C, "strRef"), _q(C, "numRef")) and not _chart_reference_matches(ref, sheets):
+                self.add("chart.structure", "chartWorkbookMismatch", part=chart_part,
+                         formula=ref.findtext(_q(C, "f"), ""))
 
     def _chart_series(self, part: str, ser: ET.Element) -> None:
         cat_cache = ser.find(_q(C, "cat") + "/" + _q(C, "strRef") + "/" + _q(C, "strCache"))

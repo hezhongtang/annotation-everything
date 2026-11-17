@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -288,6 +289,105 @@ class PptxCheckTests(unittest.TestCase):
         deck = self._mutated({"[Content_Types].xml": types})
         result = pc.check_deck(deck)
         self.assertIn("contentTypeMismatch", self._codes(result))
+
+    def test_missing_part_content_type_cannot_skip_checks(self):
+        for part in ("ppt/charts/chart1.xml", "ppt/slideLayouts/slideLayout1.xml",
+                     "ppt/slideMasters/slideMaster1.xml", "ppt/notesMasters/notesMaster1.xml",
+                     "ppt/notesSlides/notesSlide1.xml", "ppt/theme/theme2.xml"):
+            with self.subTest(part=part):
+                types = re.sub(r'<Override PartName="/' + re.escape(part) + r'"[^>]*/>',
+                               "", self._deck_content_types())
+                result = pc.check_deck(self._mutated({"[Content_Types].xml": types}))
+                self.assertFalse(result["ok"])
+                self.assertTrue(any(p["code"] == "contentTypeMismatch" and p["part"] == part
+                                    for p in result["problems"]))
+                chart = next(c for c in result["checks"] if c["id"] == "chart.structure")
+                self.assertIn("ppt/charts/chart1.xml", chart["scope"])
+
+    def _workbook_mutated(self, mutations):
+        with zipfile.ZipFile(self._deck()) as deck:
+            data = deck.read("ppt/embeddings/data1.xlsx")
+        with zipfile.ZipFile(io.BytesIO(data)) as book:
+            parts = {name: book.read(name) for name in book.namelist()}
+        for name, change in mutations.items():
+            if change is None:
+                parts.pop(name, None)
+            elif callable(change):
+                parts[name] = change(parts[name])
+            else:
+                parts[name] = change
+        result = io.BytesIO()
+        with zipfile.ZipFile(result, "w", zipfile.ZIP_DEFLATED) as book:
+            for name, data in parts.items():
+                book.writestr(name, data)
+        return result.getvalue()
+
+    def test_broken_embedded_workbook_is_rejected(self):
+        cases = [b"not an xlsx",
+                 self._workbook_mutated({"xl/worksheets/sheet1.xml": None}),
+                 self._workbook_mutated({"xl/workbook.xml": b"<broken>"}),
+                 self._workbook_mutated({"[Content_Types].xml": None}),
+                 self._workbook_mutated({"_rels/.rels": None})]
+        for index, data in enumerate(cases):
+            with self.subTest(case=index):
+                result = pc.check_deck(self._mutated({"ppt/embeddings/data1.xlsx": data}))
+                self.assertFalse(result["ok"])
+                self.assertIn("chartWorkbookInvalid", self._codes(result))
+                problem = next(p for p in result["problems"] if p["code"] == "chartWorkbookInvalid")
+                self.assertEqual(problem["part"], "ppt/embeddings/data1.xlsx")
+
+    def test_chart_cache_must_match_referenced_workbook_cells(self):
+        cases = [
+            {"ppt/embeddings/data1.xlsx": self._workbook_mutated({
+                "xl/worksheets/sheet1.xml": lambda data: data.replace(b"<v>112</v>", b"<v>999</v>")})},
+            {"ppt/embeddings/data1.xlsx": self._workbook_mutated({
+                "xl/worksheets/sheet1.xml": lambda data: data.replace(b'<c r="B3"><v>112</v></c>', b"")})},
+            {"ppt/charts/chart1.xml": self._part_text("ppt/charts/chart1.xml").replace(
+                "Sheet1!", "Missing!")},
+        ]
+        for index, parts in enumerate(cases):
+            with self.subTest(case=index):
+                result = pc.check_deck(self._mutated(parts))
+                self.assertFalse(result["ok"])
+                self.assertIn("chartWorkbookMismatch", self._codes(result))
+
+    def test_external_data_must_reference_the_workbook_relationship(self):
+        rels = self._part_text("ppt/charts/_rels/chart1.xml.rels").replace(
+            'Type="' + pc.R + '/package"', 'Type="' + pc.R + '/image"')
+        result = pc.check_deck(self._mutated({"ppt/charts/_rels/chart1.xml.rels": rels}))
+        self.assertIn("chartDataMissing", self._codes(result))
+
+    def test_chart_relationship_identifies_renamed_part_without_content_type(self):
+        original, renamed = "ppt/charts/chart1.xml", "ppt/custom/metrics.xml"
+        types = re.sub(r'<Override PartName="/' + re.escape(original) + r'"[^>]*/>',
+                       "", self._deck_content_types())
+        result = pc.check_deck(self._mutated({
+            "[Content_Types].xml": types, original: None,
+            renamed: self._part_text(original),
+            "ppt/charts/_rels/chart1.xml.rels": None,
+            "ppt/custom/_rels/metrics.xml.rels": self._part_text("ppt/charts/_rels/chart1.xml.rels"),
+            "ppt/slides/_rels/slide2.xml.rels": self._part_text("ppt/slides/_rels/slide2.xml.rels").replace(
+                "../charts/chart1.xml", "../custom/metrics.xml"),
+        }))
+        self.assertFalse(result["ok"])
+        self.assertTrue(any(p["code"] == "contentTypeMismatch" and p["part"] == renamed
+                            for p in result["problems"]))
+        chart = next(c for c in result["checks"] if c["id"] == "chart.structure")
+        self.assertIn(renamed, chart["scope"])
+
+    def test_workbook_data_checks_accept_all_supported_chart_types(self):
+        for kind in ("column", "bar", "line", "pie"):
+            with self.subTest(kind=kind):
+                spec = full_deck_spec()
+                chart = spec["slides"][1]["charts"][0]
+                chart["chart"] = kind
+                chart["series"][0]["values"] = [0.00001, 1.25e-7]
+                if kind != "pie":
+                    chart["series"].append({"name": "对照", "values": [-100, 112.5]})
+                deck = self.root / (kind + ".pptx")
+                pb.build_deck(spec, deck)
+                result = pc.check_deck(deck)
+                self.assertTrue(result["ok"], result["problems"])
 
     def test_slide_missing_from_sections_is_reported(self):
         """章节漏页：可定位漏掉的幻灯片。"""
