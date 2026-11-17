@@ -68,9 +68,10 @@ class CheckInputError(Exception):
     """输入或用法错误：退出码 2。"""
 
 
-class _Problem:
+class _Problem(Exception):
     def __init__(self, check: str, code: str, part: str = "", slide: int | None = None,
                  **params: object):
+        super().__init__(code)
         self.check = check
         self.code = code
         self.part = part
@@ -101,7 +102,10 @@ def _xml(archive: zipfile.ZipFile, name: str) -> ET.Element:
         raise KeyError(name)
     if info.file_size > MAX_XML_BYTES:
         raise _Problem("package.required-parts", "partTooLarge", part=name)
-    return ET.fromstring(archive.read(name))
+    try:
+        return ET.fromstring(archive.read(name))
+    except ET.ParseError as exc:
+        raise _Problem("package.required-parts", "badXml", part=name, detail=str(exc)) from exc
 
 
 def _target(source: str, target: str) -> str:
@@ -178,6 +182,7 @@ class _Checker:
         self.scopes.setdefault(check, []).append(item)
 
     def run(self) -> dict:
+        slides_count = 0
         try:
             archive = zipfile.ZipFile(self.path)
         except (zipfile.BadZipFile, OSError):
@@ -190,10 +195,13 @@ class _Checker:
                 if "ppt/presentation.xml" in names:
                     self._relationships(archive, names)
                     self._content_types(archive, names)
+                    self._text_bodies(archive, names)
                     self._slides(archive, names)
                     self._charts(archive, names)
                     self._theme(archive, names)
                     self._sections(archive, names)
+        except _Problem as exc:
+            self.problems.append(exc)
         except KeyError as exc:
             self.add("package.required-parts", "partMissing", part=str(exc.args[0]))
         except ET.ParseError as exc:
@@ -223,6 +231,12 @@ class _Checker:
             return 0
         pres_rels = _read_rels(archive, "ppt/presentation.xml")
         self._pres_rels = pres_rels
+        notes = presentation.find(_q(P, "notesMasterIdLst"))
+        if notes is not None:
+            entries = notes.findall(_q(P, "notesMasterId"))
+            if len(entries) != 1 or set(entries[0].attrib) != {_q(R, "id")} \
+                    or pres_rels.get(entries[0].get(_q(R, "id")), {}).get("type") != R + "/notesMaster":
+                self.add("package.required-parts", "notesMasterListBad", part="ppt/presentation.xml")
         slide_parts: list[str] = []
         seen_ids: set[str] = set()
         slide_nodes = presentation.findall(_q(P, "sldIdLst") + "/" + _q(P, "sldId"))
@@ -275,7 +289,7 @@ class _Checker:
         for part in self._slide_parts:
             expected[part] = CT_SLIDE
         # 家族规则：生成范围内的部件目录有确定的内容类型，写错即 mismatch
-        family = (("ppt/slideLayouts/", CT_LAYOUT), ("ppt/slideMasters/", CT_MASTER),
+        family = (("ppt/theme/", CT_THEME), ("ppt/slideLayouts/", CT_LAYOUT), ("ppt/slideMasters/", CT_MASTER),
                   ("ppt/charts/chart", CT_CHART), ("ppt/notesSlides/", CT_NOTES_SLIDE),
                   ("ppt/notesMasters/", CT_NOTES_MASTER))
         for part, ctype in overrides.items():
@@ -300,6 +314,19 @@ class _Checker:
             self.add("slide.layout-refs", "noLayouts", part="ppt/presentation.xml")
         if not masters:
             self.add("slide.layout-refs", "noMaster", part="ppt/presentation.xml")
+
+    def _text_bodies(self, archive: zipfile.ZipFile, names: set[str]) -> None:
+        prefixes = ("ppt/slides/", "ppt/slideLayouts/", "ppt/slideMasters/",
+                    "ppt/notesSlides/", "ppt/notesMasters/")
+        page_numbers = {part: n for n, part in enumerate(self._slide_parts, 1)}
+        for part in sorted(names):
+            if part.startswith(prefixes) and part.endswith(".xml"):
+                root = _xml(archive, part)
+                for body in root.iter(_q(P, "txBody")):
+                    if body.find(_q(A, "p")) is None:
+                        self.add("package.required-parts", "textBodyEmpty", part=part,
+                                 slide=page_numbers.get(part))
+                        break
 
     def _slides(self, archive: zipfile.ZipFile, names: set[str]) -> None:
         layout_cache: dict[str, set[tuple[str, int | None]] | None] = {}
@@ -336,6 +363,9 @@ class _Checker:
             if not master_rels:
                 self.add("slide.layout-refs", "layoutMasterMissing", part=layout_part)
             if layout_part not in layout_cache:
+                shape_ids = [node.get("id") for node in layout_root.iter(_q(P, "cNvPr"))]
+                if len(shape_ids) != len(set(shape_ids)):
+                    self.add("slide.layout-refs", "shapeIdDuplicate", part=layout_part, slide=index)
                 layout_cache[layout_part] = _placeholders(layout_root)
             known = layout_cache[layout_part]
             for ph_type, ph_idx in _placeholders(_xml(archive, part)) - (known or set()):
@@ -429,29 +459,37 @@ class _Checker:
                 self.add("chart.theme-fill", "chartFixedColor", part=part)
 
     def _theme(self, archive: zipfile.ZipFile, names: set[str]) -> None:
-        master_part = "ppt/slideMasters/slideMaster1.xml"
-        if master_part not in names:
-            return
-        theme_rels = [rel for rel in _read_rels(archive, master_part).values()
-                      if rel["type"] == R + "/theme"]
-        if not theme_rels or theme_rels[0]["target"] not in names:
-            self.add("theme.parts", "themeMissing", part=master_part)
-            return
-        theme = _xml(archive, theme_rels[0]["target"])
-        self.scope("theme.parts", theme_rels[0]["target"])
+        seen: set[str] = set()
+        masters = sorted(part for part in names if part.endswith(".xml")
+                         and part.startswith(("ppt/slideMasters/", "ppt/notesMasters/")))
+        for master_part in masters:
+            theme_rels = [rel for rel in _read_rels(archive, master_part).values()
+                          if rel["type"] == R + "/theme"]
+            if not theme_rels or theme_rels[0]["target"] not in names:
+                self.add("theme.parts", "themeMissing", part=master_part)
+                continue
+            target = theme_rels[0]["target"]
+            if target in seen:
+                self.add("theme.parts", "themeShared", part=master_part)
+            seen.add(target)
+            self._theme_part(archive, target)
+
+    def _theme_part(self, archive: zipfile.ZipFile, part: str) -> None:
+        theme = _xml(archive, part)
+        self.scope("theme.parts", part)
         clr = theme.find(_q(A, "themeElements") + "/" + _q(A, "clrScheme"))
         if clr is None:
             self.add("theme.parts", "themeSlotMissing",
-                     part=theme_rels[0]["target"], slots="全部")
+                     part=part, slots="全部")
         else:
             slots = {_local(child.tag) for child in clr}
             missing = [slot for slot in THEME_SLOTS if slot not in slots]
             if missing:
                 self.add("theme.parts", "themeSlotMissing",
-                         part=theme_rels[0]["target"], slots="、".join(missing))
+                         part=part, slots="、".join(missing))
         fonts = theme.find(_q(A, "themeElements") + "/" + _q(A, "fontScheme"))
         if fonts is None:
-            self.add("theme.parts", "fontSchemeMissing", part=theme_rels[0]["target"])
+            self.add("theme.parts", "fontSchemeMissing", part=part)
             return
         for role in ("majorFont", "minorFont"):
             entry = fonts.find(_q(A, role))
@@ -460,7 +498,7 @@ class _Checker:
                     or not (entry.find(_q(A, "latin")).get("typeface", "").strip()
                             and entry.find(_q(A, "ea")).get("typeface", "").strip()):
                 self.add("theme.parts", "fontSchemeMissing",
-                         part=theme_rels[0]["target"], role=role)
+                         part=part, role=role)
 
     def _sections(self, archive: zipfile.ZipFile, names: set[str]) -> None:
         presentation = _xml(archive, "ppt/presentation.xml")

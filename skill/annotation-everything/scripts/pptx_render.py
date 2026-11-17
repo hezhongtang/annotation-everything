@@ -130,30 +130,37 @@ def render_deck(path: Path, out_dir: Path, locale: str | None = None) -> dict:
         try:
             render = subprocess.run(
                 [str(pdftoppm), "-png", "-r", str(RENDER_DPI), str(pdf),
-                 str(out_dir / "page")],
+                 str(work / "page")],
                 capture_output=True, text=True, timeout=300)
         except subprocess.TimeoutExpired:
             manifest["status"] = "failed"
             manifest["diagnosis"].append(_t(loc, "pptxrender.reason.timeout"))
             return manifest
-    if render.returncode != 0:
-        manifest["status"] = "failed"
-        manifest["diagnosis"].append(_t(loc, "pptxrender.reason.pageRenderFailed",
-                                        code=render.returncode))
-        return manifest
-    pages = []
-    for image in sorted(out_dir.glob("page-*.png")):
-        matched = _IMAGE_RE.search(image.name)
-        if not matched:
-            continue
-        pages.append({"page": int(matched.group(1)),
-                      "image": image.name,
-                      "sha256": hashlib.sha256(image.read_bytes()).hexdigest()})
-    pages.sort(key=lambda entry: entry["page"])
-    if not pages:
-        manifest["status"] = "failed"
-        manifest["diagnosis"].append(_t(loc, "pptxrender.reason.noPages"))
-        return manifest
+        if render.returncode != 0:
+            manifest["status"] = "failed"
+            manifest["diagnosis"].append(_t(loc, "pptxrender.reason.pageRenderFailed",
+                                            code=render.returncode))
+            return manifest
+        pages = []
+        for image in sorted(work.glob("page-*.png")):
+            matched = _IMAGE_RE.fullmatch(image.name)
+            if not matched:
+                continue
+            pages.append({"page": int(matched.group(1)),
+                          "image": image.name,
+                          "sha256": hashlib.sha256(image.read_bytes()).hexdigest()})
+        pages.sort(key=lambda entry: entry["page"])
+        if not pages:
+            manifest["status"] = "failed"
+            manifest["diagnosis"].append(_t(loc, "pptxrender.reason.noPages"))
+            return manifest
+        # 只有本次转换成功的页图进入清单；缩短文稿时移除上一轮多出的页图。
+        current_names = {entry["image"] for entry in pages}
+        for entry in pages:
+            shutil.copyfile(work / entry["image"], out_dir / entry["image"])
+        for image in out_dir.glob("page-*.png"):
+            if _IMAGE_RE.fullmatch(image.name) and image.name not in current_names and image.is_file():
+                image.unlink()
     manifest["status"] = "ok"
     manifest["pages"] = pages
     return manifest

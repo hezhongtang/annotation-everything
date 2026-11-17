@@ -1242,6 +1242,7 @@ def check_record_deliverables(record: dict, base_dir: Path, c: Checks) -> list[d
                          "params": params})
 
     for index, item in enumerate(items, 1):
+        problem_start = len(problems)
         label = f"deliverables[{index}]"
         if not isinstance(item, dict):
             fail("record.deliverable-bad", label)
@@ -1326,10 +1327,13 @@ def check_record_deliverables(record: dict, base_dir: Path, c: Checks) -> list[d
         if not isinstance(pages, int) or isinstance(pages, bool) or pages <= 0:
             fail("record.deliverable-pages", str(file_name), field="pages")
             pages = 0
-        elif actual_pages and pages != actual_pages:
+        elif pages != actual_pages:
             fail("record.deliverable-pages", str(file_name),
                  declared=pages, actual=actual_pages)
         if statuses.get("visual") == "pass":
+            render = item.get("render")
+            if not isinstance(render, dict) or render.get("pptxSha256") != actual_sha:
+                fail("record.deliverable-stale", str(file_name), field="render.pptxSha256")
             evidence = checks["visual"].get("pages")
             seen: set[int] = set()
             if not isinstance(evidence, list):
@@ -1401,7 +1405,7 @@ def check_record_deliverables(record: dict, base_dir: Path, c: Checks) -> list[d
             info["openIssues"] = len(open_issues)
             if open_issues and any(status == "pass" for status in statuses.values()):
                 fail("record.deliverable-openissues", str(file_name))
-        no_failures = not any(p["part"] == str(file_name) for p in problems)
+        no_failures = len(problems) == problem_start
         info["deliverable"] = bool(
             no_failures
             and statuses.get("file") == "pass" and statuses.get("visual") == "pass"
@@ -1540,16 +1544,17 @@ def _pptx_slide_texts(path: Path) -> tuple[dict[int, str], int]:
                 rid = node.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id", "")
                 target = targets.get(rid, "")
                 if target:
-                    base = _presentation_target(target)
+                    base = _posix_norm("ppt/presentation.xml", target)
                     slide_parts.append(base)
             texts: dict[int, str] = {}
             for page, part in enumerate(slide_parts, 1):
                 chunks: list[str] = []
-                slide_root = ET.fromstring(archive.read("ppt/" + part))
+                slide_root = ET.fromstring(archive.read(part))
                 for element in slide_root.iter():
                     if _local_tag(element.tag) == "t" and (element.text or ""):
                         chunks.append(element.text)
-                slide_rels_name = "ppt/_rels/" + part + ".rels"
+                slide_rels_name = posixpath.join(posixpath.dirname(part), "_rels",
+                                                 posixpath.basename(part) + ".rels")
                 if slide_rels_name in archive.NameToInfo:
                     slide_rels = ET.fromstring(archive.read(slide_rels_name))
                     for rel in slide_rels:
@@ -1557,8 +1562,8 @@ def _pptx_slide_texts(path: Path) -> tuple[dict[int, str], int]:
                             continue
                         rtype = rel.get("Type", "")
                         target = rel.get("Target", "")
-                        if rtype.endswith("/chart") and target:
-                            chart_part = "ppt/" + _posix_norm("ppt/" + part, target)
+                        if rtype.endswith("/chart") and target and rel.get("TargetMode") != "External":
+                            chart_part = _posix_norm(part, target)
                             chart_root = ET.fromstring(archive.read(chart_part))
                             for element in chart_root.iter():
                                 if _local_tag(element.tag) == "v" and (element.text or ""):
@@ -1576,18 +1581,13 @@ def _posix_norm(source: str, target: str) -> str:
     return posixpath.normpath(posixpath.join(posixpath.dirname(source), target))
 
 
-def _presentation_target(target: str) -> str:
-    # presentation 的关系目标相对 ppt/ 目录解析。
-    return _posix_norm("presentation.xml", target)
-
-
-_NUMBER_TOKEN = re.compile(r"[0-9]+(?:[0-9,，]*[0-9])?(?:\.[0-9]+)?")
+_NUMBER_TOKEN = re.compile(r"[+-]?[0-9]+(?:[0-9,，]*[0-9])?(?:\.[0-9]+)?")
 
 
 def _numeric_tokens(text: str) -> set[str]:
     """抽取文本里的数字令牌，归一化成可比较的 Decimal 文本（12 与 12.0 相等）。"""
     tokens: set[str] = set()
-    for match in _NUMBER_TOKEN.finditer(text.replace("，", ",")):
+    for match in _NUMBER_TOKEN.finditer(text.replace("，", ",").replace("−", "-")):
         raw = match.group(0).replace(",", "")
         try:
             tokens.add(str(Decimal(raw).normalize()))
@@ -1654,7 +1654,7 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
               length_info: dict | None = None,
               deliverables: list[dict] | None = None) -> dict:
     reasons: list[str] = []
-    failed_program = checks.failed()
+    failed_program = [item for item in checks.failed() if item["id"] != "record.deliverables"]
     # 全部实质材料不可读：空结构或虚构内容不能当作初稿生成完成（issue #71）。
     reading_blocked = any(f["id"] == "record.reading" and f["code"] == "record.reading-blocked"
                           for f in failed_program)

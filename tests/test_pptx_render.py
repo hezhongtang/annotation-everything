@@ -169,6 +169,35 @@ class PptxRenderTests(unittest.TestCase):
         self.assertEqual(manifest["pages"], [])
         self.assertTrue(any("soffice" in line for line in manifest["diagnosis"]))
 
+    def test_reused_output_directory_contains_only_current_pages(self):
+        fake_soffice(self.bin_dir)
+        fake_pdftoppm(self.bin_dir, pages=12)
+        self._set_env(soffice=self.bin_dir / "soffice", pdftoppm=self.bin_dir / "pdftoppm")
+        deck = self._deck()
+        out_dir = self.root / "pages"
+        first = pr_render.render_deck(deck, out_dir)
+        self.assertEqual(len(first["pages"]), 12)
+        (out_dir / "notes.txt").write_text("保留", encoding="utf-8")
+        fake_pdftoppm(self.bin_dir, pages=2)
+        second = pr_render.render_deck(deck, out_dir)
+        self.assertEqual(second["status"], "ok")
+        self.assertEqual([p["page"] for p in second["pages"]], [1, 2])
+        self.assertEqual(sorted(p.name for p in out_dir.glob("page-*.png")),
+                         [p["image"] for p in second["pages"]])
+        self.assertEqual((out_dir / "notes.txt").read_text(encoding="utf-8"), "保留")
+
+    def test_successful_tool_without_new_pages_cannot_reuse_old_output(self):
+        fake_soffice(self.bin_dir)
+        fake_pdftoppm(self.bin_dir)
+        self._set_env(soffice=self.bin_dir / "soffice", pdftoppm=self.bin_dir / "pdftoppm")
+        deck = self._deck()
+        out_dir = self.root / "pages"
+        self.assertEqual(pr_render.render_deck(deck, out_dir)["status"], "ok")
+        fake_pdftoppm(self.bin_dir, pages=0)
+        result = pr_render.render_deck(deck, out_dir)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["pages"], [])
+
     def test_missing_pdftoppm_reports_unavailable(self):
         """缺 pdftoppm：同样 unavailable 并指名工具。"""
         fake_soffice(self.bin_dir)

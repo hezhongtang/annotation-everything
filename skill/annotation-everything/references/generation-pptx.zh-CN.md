@@ -19,6 +19,7 @@
 | Python 3（标准库） | 制作与检查 | macOS / Linux / Windows | 随宿主 | `python3 --version` | — |
 | LibreOffice（`soffice`） | 渲染逐页图片 | macOS / Linux / Windows | 26.2（macOS arm64）实测；其余未验证 | `pptx_render.py` 自动探测 PATH 与 macOS 安装位置；可用 `AE_SOFFICE` 指定 | `brew install --cask libreoffice`（macOS）、`apt install libreoffice`（Debian/Ubuntu） |
 | poppler（`pdftoppm`） | PDF 转逐页 PNG | macOS / Linux / Windows | 26.07（macOS arm64）实测；其余未验证 | `pptx_render.py` 自动探测；可用 `AE_PDFTOPPM` 指定 | `brew install poppler`、`apt install poppler-utils` |
+| Microsoft PowerPoint | 桌面兼容性与原生图表编辑验收 | macOS / Windows | 16.115（macOS arm64）：合成文稿无修复提示，修改图表数据后正确更新；Windows 未验证 | 手动打开桌面应用并记录版本 | Microsoft 官方安装包 |
 
 制作不依赖第三方库；渲染工具缺失或转换失败时，`pptx_render.py` 输出 `unavailable` / `failed` 与具体诊断，按下面「状态与失败处理」登记，基础 HTML 审阅保持可用。渲染工具的首选验证环境是 macOS 与 Linux；Windows 未做实机验证，如在实际任务中验证过，请把版本写进记录的 `render` 字段。
 
@@ -88,7 +89,8 @@
  "build": {"tool": "annotation-everything 内置 pptx_build.py", "version": "<AE 版本>",
            "invocation": "python3 $S/pptx_build.py --deck deck.json --out deck.pptx",
            "deckSpec": "deck.json", "deckSpecSha256": "<deck 规格 sha256>"},
- "render": {"tool": "LibreOffice soffice", "version": "26.2", "notes": "pdftoppm 26.07"},
+ "render": {"tool": "LibreOffice soffice", "version": "26.2", "notes": "pdftoppm 26.07",
+            "pptxSha256": "<渲染清单中的源文件 sha256>"},
  "checks": {
    "file": {"id": "pptx.file", "status": "pass", "note": "pptx_check 全部通过", "issues": []},
    "visual": {"id": "pptx.visual", "status": "pass", "note": "逐页看图完成",
@@ -102,6 +104,7 @@
 
 - `required`：用户明确要求的额外交付写 `true`。必需而未完成时，摘要保留整项请求缺口，但不改变 HTML 自己的可交付判定；「HTML 已可交付、PPTX 未完成」可以同时成立。
 - `build`：HTML 用内置范式、PPTX 用另一种制作工具时分别记清，不能一个笼统的方法名覆盖两种产物。缺 `tool` 或 `invocation`，核验入口判失败——只出现技能名称或一段自述不算调用证据。
+- `render.pptxSha256`：从本次渲染清单复制源 PPTX 的哈希；视觉检查声明 `pass` 时，该值必须与当前产物哈希一致。重建改变文件后，先重新渲染、复核，再更新证据；只更新产物的 `sha256` 不能沿用旧截图。
 - `checks.visual.pages[]`：逐页证据绑定到被检查的文件版本——每页带图片相对路径与 sha256；缺页、有页 `checked: false`、图片缺失或哈希不匹配、带问题却声明 pass，都判失败。
 - `checks.consistency.findings[]`：每条记录 `findings` 的结论映射到幻灯片页码；声明里的关键数字（声明文本 + 计算期望值）必须在映射页的幻灯片文本或图表数据中出现。
 - `powerpoint`：`pass`（附 `os`、`version`，有则附 `build`）/ `fail` / `not_run` / `unavailable`。未实测的文件必须如实披露该项未执行，不能宣称已在 PowerPoint 实测或兼容所有 Office/WPS 版本。

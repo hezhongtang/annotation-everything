@@ -92,7 +92,6 @@ SLIDE_ID_PROBE_STEP = 7919
 
 MASTER_ID = 2147483648
 LAYOUT_ID_BASE = 2147483649
-NOTES_MASTER_ID = 2147483648 + 64
 
 # 页码字段的固定 GUID（确定性构建的一部分）。
 _FLD_SLIDENUM_GUID = "{5BD2E6AB-1AF4-4D41-9A79-9ED000000001}"
@@ -450,7 +449,8 @@ def _color_ref(slot: str) -> str:
 
 
 def _text_body(paragraphs: list[str]) -> str:
-    return f"<p:txBody><a:bodyPr/><a:lstStyle/>{''.join(paragraphs)}</p:txBody>"
+    content = "".join(paragraphs) or "<a:p/>"
+    return f"<p:txBody><a:bodyPr/><a:lstStyle/>{content}</p:txBody>"
 
 
 def _para(text: str, *, level: int = 0, bold: bool = False, size: int | None = None,
@@ -483,8 +483,9 @@ def _placeholder_sp(shape_id: int, name: str, ph_type: str, idx: int | None,
         tx_body = (f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:fld id="{_FLD_SLIDENUM_GUID}" '
                    'type="slidenum"><a:rPr lang="zh-CN"/><a:t>1</a:t></a:fld></a:p></p:txBody>')
     else:
+        content = "".join(paragraphs) or "<a:p/>"
         tx_body = (f"<p:txBody><a:bodyPr/>{lst_style}"
-                   f"{''.join(paragraphs)}</p:txBody>")
+                   f"{content}</p:txBody>")
     return (f'<p:sp><p:nvSpPr><p:cNvPr id="{shape_id}" name="{_esc(name)}"/><p:cNvSpPr/>'
             f'<p:nvPr><p:ph {ph}/></p:nvPr></p:nvSpPr>'
             f"<p:spPr>{geometry}</p:spPr>{tx_body}</p:sp>")
@@ -603,6 +604,7 @@ def _layout_xml(layout_key: str, size: tuple[int, int],
         else:
             geometry = _geom(800000, 1800000, width - 1600000, height - 2400000)
         shapes.append(_placeholder_sp(next_id, "内容占位符", "body", 1, [], geometry))
+        next_id += 1
     if hf_attrs and "ftr" in " ".join(hf_attrs):
         shapes.append(_placeholder_sp(
             next_id, "页脚占位符", "ftr", None, [],
@@ -1044,7 +1046,10 @@ def build_deck(spec: object, out: Path, *, base_dir: Path | None = None) -> dict
     if has_notes:
         parts["ppt/notesMasters/notesMaster1.xml"] = _notes_master_xml()
         parts["ppt/notesMasters/_rels/notesMaster1.xml.rels"] = _rels_xml(
-            [("rId1", R + "/theme", "../theme/theme1.xml")])
+            [("rId1", R + "/theme", "../theme/theme2.xml")])
+        # PowerPoint expects the notes master to own a separate theme part.
+        parts["ppt/theme/theme2.xml"] = parts["ppt/theme/theme1.xml"]
+        overrides.append(("ppt/theme/theme2.xml", CT_THEME))
         overrides.append(("ppt/notesMasters/notesMaster1.xml", CT_NOTES_MASTER))
         pres_rels.insert(1, ("rIdNotesMaster", R + "/notesMaster",
                              "notesMasters/notesMaster1.xml"))
@@ -1071,10 +1076,10 @@ def build_deck(spec: object, out: Path, *, base_dir: Path | None = None) -> dict
                 archive.writestr(info, data)
         parts[f"ppt/embeddings/data{chart_number}.xlsx"] = buffer.getvalue()
 
-    notes_master_entry = (f'<p:notesMasterId id="{NOTES_MASTER_ID}" r:id="rIdNotesMaster"/>'
-                          if has_notes else "")
+    notes_master_list = ('<p:notesMasterIdLst><p:notesMasterId r:id="rIdNotesMaster"/>'
+                         '</p:notesMasterIdLst>' if has_notes else "")
     presentation = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:presentation xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}"><p:sldMasterIdLst><p:sldMasterId id="{MASTER_ID}" r:id="rIdMaster"/></p:sldMasterIdLst><p:notesMasterIdLst>{notes_master_entry}</p:notesMasterIdLst><p:sldIdLst>{pres_slide_entries}</p:sldIdLst><p:sldSz cx="{size[0]}" cy="{size[1]}"/><p:notesSz cx="{_NOTES_SIZE[0]}" cy="{_NOTES_SIZE[1]}"/>{_sections_ext(spec["sections"], slide_ids)}</p:presentation>'''
+<p:presentation xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}"><p:sldMasterIdLst><p:sldMasterId id="{MASTER_ID}" r:id="rIdMaster"/></p:sldMasterIdLst>{notes_master_list}<p:sldIdLst>{pres_slide_entries}</p:sldIdLst><p:sldSz cx="{size[0]}" cy="{size[1]}"/><p:notesSz cx="{_NOTES_SIZE[0]}" cy="{_NOTES_SIZE[1]}"/>{_sections_ext(spec["sections"], slide_ids)}</p:presentation>'''
     parts["ppt/presentation.xml"] = presentation
     parts["ppt/_rels/presentation.xml.rels"] = _rels_xml(pres_rels)
 

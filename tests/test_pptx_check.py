@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -104,6 +105,74 @@ class PptxCheckTests(unittest.TestCase):
         # 图表与内嵌工作簿部件被识别并检查
         chart_check = next(c for c in result["checks"] if c["id"] == "chart.structure")
         self.assertIn("ppt/charts/chart1.xml", chart_check["scope"])
+
+    def test_invalid_core_xml_returns_structured_cli_failure(self):
+        for part in ("[Content_Types].xml", "_rels/.rels", "ppt/presentation.xml"):
+            with self.subTest(part=part):
+                deck = self._mutated({part: b"<broken>"})
+                done = subprocess.run(
+                    [sys.executable, str(SCRIPTS / "pptx_check.py"), str(deck), "--json"],
+                    capture_output=True, text=True, timeout=60)
+                self.assertEqual(done.returncode, 1, done.stderr)
+                result = json.loads(done.stdout)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["slides"], 0)
+                problem = next(p for p in result["problems"] if p["code"] == "badXml")
+                self.assertEqual(problem["part"], part)
+                self.assertNotIn("Traceback", done.stderr)
+
+    def test_oversized_xml_returns_structured_cli_failure(self):
+        part = "[Content_Types].xml"
+        deck = self._mutated({part: b" " * (pc.MAX_XML_BYTES + 1)})
+        done = subprocess.run(
+            [sys.executable, str(SCRIPTS / "pptx_check.py"), str(deck), "--json"],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        result = json.loads(done.stdout)
+        self.assertFalse(result["ok"])
+        problem = next(p for p in result["problems"] if p["code"] == "partTooLarge")
+        self.assertEqual(problem["part"], part)
+        self.assertEqual(result["slides"], 0)
+        self.assertNotIn("Traceback", done.stderr)
+
+    def test_duplicate_layout_shape_ids_are_rejected(self):
+        part = "ppt/slideLayouts/slideLayout1.xml"
+        with zipfile.ZipFile(self._deck()) as archive:
+            damaged = archive.read(part).replace(b'<p:cNvPr id="2"', b'<p:cNvPr id="1"')
+        deck = self._mutated({part: damaged})
+        result = pc.check_deck(deck)
+        self.assertFalse(result["ok"])
+        problem = next(p for p in result["problems"] if p["code"] == "shapeIdDuplicate")
+        self.assertEqual(problem["part"], part)
+        self.assertEqual(problem["slide"], 1)
+
+    def test_empty_text_body_is_rejected_with_part(self):
+        part = "ppt/slideMasters/slideMaster1.xml"
+        with zipfile.ZipFile(self._deck()) as archive:
+            damaged = archive.read(part).replace(b"<a:p/>", b"")
+        result = pc.check_deck(self._mutated({part: damaged}))
+        self.assertFalse(result["ok"])
+        problem = next(p for p in result["problems"] if p["code"] == "textBodyEmpty")
+        self.assertEqual(problem["part"], part)
+
+    def test_invalid_notes_master_list_is_rejected(self):
+        part = "ppt/presentation.xml"
+        with zipfile.ZipFile(self._deck()) as archive:
+            original = archive.read(part)
+        for content in (b"", b'<p:notesMasterId id="2147483712" r:id="rIdNotesMaster"/>'):
+            with self.subTest(content=content):
+                damaged = re.sub(rb'<p:notesMasterIdLst>.*?</p:notesMasterIdLst>',
+                                 b'<p:notesMasterIdLst>' + content + b'</p:notesMasterIdLst>', original)
+                result = pc.check_deck(self._mutated({part: damaged}))
+                self.assertIn("notesMasterListBad", self._codes(result))
+
+    def test_shared_notes_theme_is_rejected(self):
+        part = "ppt/notesMasters/_rels/notesMaster1.xml.rels"
+        with zipfile.ZipFile(self._deck()) as archive:
+            damaged = archive.read(part).replace(b"theme2.xml", b"theme1.xml")
+        result = pc.check_deck(self._mutated({part: damaged}))
+        self.assertFalse(result["ok"])
+        self.assertIn("themeShared", self._codes(result))
 
     def test_missing_rel_target_is_reported_with_part_path(self):
         """关系目标缺失：报告检查项与部件路径。"""

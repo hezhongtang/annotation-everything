@@ -19,6 +19,7 @@ Pre-generation alignment — purpose, audience, length, script choice, and visua
 | Python 3 (stdlib) | Build and checks | macOS / Linux / Windows | Ships with the host | `python3 --version` | — |
 | LibreOffice (`soffice`) | Render page images | macOS / Linux / Windows | 26.2 (macOS arm64) verified; others unverified | `pptx_render.py` probes PATH and the macOS install location; override with `AE_SOFFICE` | `brew install --cask libreoffice` (macOS), `apt install libreoffice` (Debian/Ubuntu) |
 | poppler (`pdftoppm`) | PDF to page PNGs | macOS / Linux / Windows | 26.07 (macOS arm64) verified; others unverified | `pptx_render.py` probes PATH; override with `AE_PDFTOPPM` | `brew install poppler`, `apt install poppler-utils` |
+| Microsoft PowerPoint | Desktop compatibility and native chart editing | macOS / Windows | 16.115 (macOS arm64): synthetic deck opens without repair and charts update after data edits; Windows unverified | Open the desktop app and record its version | Official Microsoft installer |
 
 Building needs no third-party libraries. When render tools are missing or conversion fails, `pptx_render.py` reports `unavailable` / `failed` with a specific diagnosis; register it under "Statuses and failure handling" below, and basic HTML review stays available. The preferred verification environments for rendering are macOS and Linux; Windows is not machine-verified — when you verify it in a real task, record the version in the `render` field.
 
@@ -88,7 +89,8 @@ A backward-compatible optional extension; records without the field keep the old
  "build": {"tool": "annotation-everything built-in pptx_build.py", "version": "<AE version>",
            "invocation": "python3 $S/pptx_build.py --deck deck.json --out deck.pptx",
            "deckSpec": "deck.json", "deckSpecSha256": "<deck spec sha256>"},
- "render": {"tool": "LibreOffice soffice", "version": "26.2", "notes": "pdftoppm 26.07"},
+ "render": {"tool": "LibreOffice soffice", "version": "26.2", "notes": "pdftoppm 26.07",
+            "pptxSha256": "<source file sha256 from the render manifest>"},
  "checks": {
    "file": {"id": "pptx.file", "status": "pass", "note": "pptx_check all passed", "issues": []},
    "visual": {"id": "pptx.visual", "status": "pass", "note": "every page viewed",
@@ -102,6 +104,7 @@ A backward-compatible optional extension; records without the field keep the old
 
 - `required`: `true` when the user explicitly requested this deliverable. A required-but-unfinished PPTX keeps the whole-request gap in the summary without changing the HTML verdict; "HTML deliverable, PPTX unfinished" can both hold.
 - `build`: when HTML used the built-in paradigm and PPTX another tool, record both separately — one umbrella method name never covers two artifacts. Missing `tool` or `invocation` fails the check; a skill name or a self-description is not invocation evidence.
+- `render.pptxSha256`: copy the source PPTX hash from the current render manifest. A visual `pass` requires it to match the current artifact. If rebuilding changes the file, render and inspect it again before updating the evidence; updating only the artifact's `sha256` cannot validate old screenshots.
 - `checks.visual.pages[]`: per-page evidence is bound to the checked file version — each page carries the image path and sha256. Missing pages, `checked: false`, missing images, hash mismatch, or pass with open issues all fail.
 - `checks.consistency.findings[]`: every finding maps to slide page numbers; key numbers from the claim text and the calculation's expected value must appear in the mapped slides' text or chart data.
 - `powerpoint`: `pass` (with `os`, `version`, optionally `build`) / `fail` / `not_run` / `unavailable`. Unverified files must disclose that; never claim PowerPoint testing or universal Office/WPS compatibility.

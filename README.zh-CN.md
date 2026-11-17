@@ -167,7 +167,7 @@ python "$S\serve.py" "$env:TEMP\ae-demo"
 | `check_pptx_fonts.py 原始.pptx [--pdf 转换后.pdf]` | PPTX 转换前后的字体核查；`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选界面语言 |
 | `pptx_build.py --deck deck.json --out deck.pptx [--json]` | 内置 PPTX 制作器：按 `ae-pptx-deck/1` 规格写出可编辑演示文稿——命名版式、主题色与字体、章节、原生图表（内嵌可编辑数据）、备注讲稿；确定性输出，规格错误退出码 2 |
 | `pptx_check.py deck.pptx [--json]` | 生成类 PPTX 的文件层检查：部件与关系目标、内容类型、版式引用与占位符、原生图表关键结构、主题部件、章节覆盖；结果结构 `ae-pptx-check/1` |
-| `pptx_render.py deck.pptx --out-dir pages/ [--json]` | 可选工具渲染（LibreOffice `soffice` + poppler `pdftoppm`，可用 `AE_SOFFICE` / `AE_PDFTOPPM` 覆盖）：逐页 PNG 与带工具版本、页图哈希的 `ae-pptx-render/1` 清单 |
+| `pptx_render.py deck.pptx --out-dir pages/ [--json]` | 可选工具渲染（LibreOffice `soffice` + poppler `pdftoppm`，可用 `AE_SOFFICE` / `AE_PDFTOPPM` 覆盖）：本次逐页 PNG 与 `ae-pptx-render/1` 清单，记录工具版本，并将页图哈希绑定到源 PPTX 哈希 |
 
 </details>
 

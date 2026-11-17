@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -142,6 +143,7 @@ class DeliverablesCheckTests(unittest.TestCase):
                       "invocation": "python3 $S/pptx_build.py --deck deck.json --out deck.pptx",
                       "deckSpec": "deck.json", "deckSpecSha256": sha("{}")},
             "render": {"tool": "LibreOffice soffice", "version": "26.07",
+                       "pptxSha256": self.deck_sha,
                        "notes": "pdftoppm 24.08"},
             "checks": {
                 "file": {"id": "pptx.file", "status": "pass", "note": "pptx_check 全部通过",
@@ -279,6 +281,11 @@ class DeliverablesCheckTests(unittest.TestCase):
         bare = self.deliverable(powerpoint={"status": "pass"})
         result = self.run_check(make_record(deliverables=[bare]))
         self.assertEqual(self.status(result), "fail")
+        self.assertFalse(self.item(result)["deliverable"])
+
+        bare["requirePowerpoint"] = True
+        result = self.run_check(make_record(deliverables=[bare]))
+        self.assertFalse(self.item(result)["deliverable"])
 
         grounded = self.deliverable(
             powerpoint={"status": "pass", "os": "Windows 11 23H2",
@@ -322,6 +329,113 @@ class DeliverablesCheckTests(unittest.TestCase):
         entry = self.item(result)
         self.assertFalse(entry["deliverable"])
         self.assertTrue(any("PPTX" in reason for reason in result["verdict"]["reasons"]))
+
+    def test_render_evidence_must_match_rebuilt_pptx(self):
+        item = self.deliverable()
+        spec = deck_spec()
+        spec["theme"]["colors"]["accent1"] = "FF0000"
+        rebuilt = pb.build_deck(spec, self.deck_path)
+        item["sha256"] = rebuilt["sha256"]
+        self.assertNotEqual(item["sha256"], item["render"]["pptxSha256"])
+        result = self.run_check(make_record(deliverables=[item]))
+        self.assertIn("record.deliverable-stale", self._codes(result))
+        self.assertFalse(self.item(result)["deliverable"])
+
+    def test_visual_pass_requires_render_source_hash(self):
+        for render in (None, {}, {"pptxSha256": "0" * 64}):
+            with self.subTest(render=render):
+                result = self.run_check(make_record(deliverables=[self.deliverable(render=render)]))
+                self.assertIn("record.deliverable-stale", self._codes(result))
+                self.assertFalse(self.item(result)["deliverable"])
+
+    def test_extra_deliverable_failure_preserves_html_verdict(self):
+        record = make_record()
+        record["verdict"]["deliverable"] = True
+        for check in record["checks"]:
+            check.update(status="pass", scope="全部页", note="合成核验记录")
+            if check["id"] == "visual.pages":
+                check["pages"] = [{"page": n, "checked": True, "issues": []}
+                                  for n in (1, 2)]
+        baseline = self.run_check(record)
+        self.assertTrue(baseline["verdict"]["deliverable"], baseline)
+        for required in (False, True):
+            with self.subTest(required=required):
+                record["deliverables"] = [self.deliverable(required=required, file="missing.pptx")]
+                result = self.run_check(record)
+                self.assertEqual(self.status(result), "fail")
+                self.assertTrue(result["verdict"]["deliverable"])
+                self.assertFalse(self.item(result)["deliverable"])
+                has_gap = any("PPTX" in reason for reason in result["verdict"]["reasons"])
+                self.assertEqual(has_gap, required)
+
+    def test_errors_are_scoped_to_the_deliverable_item(self):
+        invalid = self.deliverable(sha256="0" * 64)
+        valid = self.deliverable()
+        result = self.run_check(make_record(deliverables=[invalid, valid]))
+        self.assertEqual([item["deliverable"] for item in result["deliverables"]], [False, True])
+
+    def test_chart_only_numbers_are_extracted_from_relationships(self):
+        for chart_type in ("column", "bar", "line", "pie"):
+            for absolute in (False, True):
+                with self.subTest(chart_type=chart_type, absolute=absolute):
+                    spec = deck_spec()
+                    spec["slides"][1].update(layout="titleOnly", body=[], charts=[{
+                        "chart": chart_type, "name": "同比", "x": 600000, "y": 1800000,
+                        "cx": 6000000, "cy": 3600000, "categories": ["本期"],
+                        "series": [{"name": "增长率", "values": [12]}]}])
+                    pb.build_deck(spec, self.deck_path)
+                    if absolute:
+                        with zipfile.ZipFile(self.deck_path) as archive:
+                            parts = {name: archive.read(name) for name in archive.namelist()}
+                        part = "ppt/_rels/presentation.xml.rels"
+                        parts[part] = parts[part].replace(b'Target="slides/', b'Target="/ppt/slides/')
+                        part = "ppt/slides/_rels/slide2.xml.rels"
+                        parts[part] = parts[part].replace(b'Target="../charts/', b'Target="/ppt/charts/')
+                        with zipfile.ZipFile(self.deck_path, "w") as archive:
+                            for name, data in parts.items():
+                                archive.writestr(name, data)
+                    self.deck_sha = sha(self.deck_path.read_bytes())
+                    result = self.run_check(make_record(deliverables=[self.deliverable()]))
+                    self.assertEqual(self.status(result), "pass", result)
+                    self.assertTrue(self.item(result)["deliverable"])
+                    record = make_record(deliverables=[self.deliverable()])
+                    record["findings"][0]["calculation"]["expected"] = 21
+                    self.assertIn("record.deliverable-consistency", self._codes(self.run_check(record)))
+
+    def test_negative_percent_change_matches_signed_slide_text(self):
+        claim = "三季度收入同比变化 -12%"
+        for rendered in (claim, claim.replace("-", "−")):
+            with self.subTest(rendered=rendered):
+                _, self.deck_sha = self._deck(rendered)
+                item = self.deliverable()
+                item["checks"]["consistency"]["findings"][0]["claim"] = claim
+                record = make_record(deliverables=[item])
+                record["findings"][0]["claim"] = claim
+                record["findings"][0]["calculation"].update(inputs={"a": 100, "b": 88}, expected=-12)
+                result = self.run_check(record)
+                self.assertEqual(self.status(result), "pass", result)
+                self.assertTrue(self.item(result)["deliverable"])
+
+    def test_opposite_sign_without_calculation_is_rejected(self):
+        claim = "三季度收入同比变化 -12%"
+        _, self.deck_sha = self._deck(claim.replace("-", "+"))
+        item = self.deliverable()
+        item["checks"]["consistency"]["findings"][0]["claim"] = claim
+        record = make_record(deliverables=[item])
+        record["findings"][0].update(claim=claim, type="fact")
+        record["findings"][0].pop("calculation")
+        result = self.run_check(record)
+        self.assertIn("record.deliverable-consistency", self._codes(result))
+        self.assertFalse(self.item(result)["deliverable"])
+
+    def test_unreadable_pptx_cannot_pass_with_no_findings(self):
+        self.deck_path.write_bytes(b"broken pptx")
+        item = self.deliverable(sha256=sha(self.deck_path.read_bytes()))
+        item["render"]["pptxSha256"] = item["sha256"]
+        item["checks"]["consistency"]["findings"] = []
+        result = self.run_check(make_record(findings=[], deliverables=[item]))
+        self.assertIn("record.deliverable-pages", self._codes(result))
+        self.assertFalse(self.item(result)["deliverable"])
 
 if __name__ == "__main__":
     unittest.main()

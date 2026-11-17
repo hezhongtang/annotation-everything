@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
@@ -164,6 +165,63 @@ class PptxBuildTests(unittest.TestCase):
 
         self.assertIn('showMasterSp="0"', self._part(out, "ppt/slides/slide1.xml"))
         self.assertNotIn("showMasterSp", self._part(out, "ppt/slides/slide2.xml"))
+
+    def test_layout_shape_ids_are_unique_with_footer_and_page_numbers(self):
+        for footer, page_number in ((True, False), (False, True), (True, True)):
+            with self.subTest(footer=footer, page_number=page_number):
+                spec = deck_spec()
+                spec["master"] = {"footer": footer, "pageNumber": page_number}
+                spec["slides"].extend({"key": layout, "layout": layout, "title": "合成页"}
+                                      for layout in ("sectionHeader", "titleOnly"))
+                spec["slides"].append({"key": "blank", "layout": "blank"})
+                out, _ = self._build(spec)
+                with zipfile.ZipFile(out) as archive:
+                    layouts = [name for name in archive.namelist()
+                               if name.startswith("ppt/slideLayouts/") and name.endswith(".xml")]
+                    self.assertEqual(len(layouts), 5)
+                    for name in layouts:
+                        root = ET.fromstring(archive.read(name))
+                        ids = [node.get("id") for node in root.iter(f"{{{pb.P}}}cNvPr")]
+                        self.assertEqual(len(ids), len(set(ids)), name)
+
+    def test_empty_text_bodies_still_have_a_paragraph(self):
+        spec = deck_spec()
+        spec["slides"][0]["notes"] = "合成讲稿"
+        spec["slides"][1]["shapes"] = [{"shape": "rect", "x": 600000, "y": 1800000,
+                                        "cx": 1000000, "cy": 1000000, "fill": "accent1"}]
+        out, _ = self._build(spec)
+        with zipfile.ZipFile(out) as archive:
+            for name in archive.namelist():
+                if not name.endswith(".xml"):
+                    continue
+                root = ET.fromstring(archive.read(name))
+                for body in root.iter(f"{{{pb.P}}}txBody"):
+                    self.assertIsNotNone(body.find(f"{{{pb.A}}}p"), name)
+
+    def test_notes_master_list_is_present_only_with_notes(self):
+        for notes in (False, True):
+            with self.subTest(notes=notes):
+                spec = deck_spec()
+                if notes:
+                    spec["slides"][0]["notes"] = "合成讲稿"
+                out, _ = self._build(spec)
+                root = ET.fromstring(self._part(out, "ppt/presentation.xml"))
+                entries = root.find(f"{{{pb.P}}}notesMasterIdLst")
+                if notes:
+                    self.assertEqual(len(entries), 1)
+                    self.assertEqual(set(entries[0].attrib), {f"{{{pb.R}}}id"})
+                else:
+                    self.assertIsNone(entries)
+
+    def test_notes_master_uses_an_independent_theme_part(self):
+        spec = deck_spec()
+        spec["slides"][0]["notes"] = "合成讲稿"
+        out, _ = self._build(spec)
+        with zipfile.ZipFile(out) as archive:
+            root = ET.fromstring(archive.read("ppt/notesMasters/_rels/notesMaster1.xml.rels"))
+            themes = [rel.get("Target") for rel in root if rel.get("Type") == pb.R + "/theme"]
+            self.assertEqual(themes, ["../theme/theme2.xml"])
+            self.assertEqual(archive.read("ppt/theme/theme1.xml"), archive.read("ppt/theme/theme2.xml"))
 
     def test_sections_group_all_slides_exactly_once(self):
         """章节覆盖全部幻灯片且不重复归组；引用的幻灯片 ID 有效。"""

@@ -167,7 +167,7 @@ See the [English format reference](skill/annotation-everything/references/format
 | `check_pptx_fonts.py original.pptx [--pdf converted.pdf]` | Check fonts before and after converting a PPTX file; `--locale auto\|zh-CN\|en` or `AE_LOCALE` picks the interface language |
 | `pptx_build.py --deck deck.json --out deck.pptx [--json]` | Built-in PPTX builder: writes an editable deck from an `ae-pptx-deck/1` spec — named layouts, theme colors/fonts, sections, native charts with embedded editable data, speaker notes. Deterministic bytes; exit 2 on spec errors |
 | `pptx_check.py deck.pptx [--json]` | File-level checks for generated PPTX packages: parts and relationship targets, content types, layout references and placeholders, native chart structure, theme parts, section coverage; result schema `ae-pptx-check/1` |
-| `pptx_render.py deck.pptx --out-dir pages/ [--json]` | Optional-tool renderer (LibreOffice `soffice` + poppler `pdftoppm`, overridable via `AE_SOFFICE` / `AE_PDFTOPPM`): per-page PNGs and an `ae-pptx-render/1` manifest with tool versions and page hashes |
+| `pptx_render.py deck.pptx --out-dir pages/ [--json]` | Optional-tool renderer (LibreOffice `soffice` + poppler `pdftoppm`, overridable via `AE_SOFFICE` / `AE_PDFTOPPM`): current-run PNGs and an `ae-pptx-render/1` manifest binding page hashes to the source PPTX hash, with tool versions |
 
 </details>
 
