@@ -71,6 +71,7 @@ class InterferenceRegressionTests(unittest.TestCase):
         return {**os.environ,
                 "HOME": str(self.user_home),
                 "CLAUDE_SKILLS_DIR": str(self.skills),
+                "CODEX_HOME": str(self.user_home / ".codex"),
                 "AE_HOME": str(ae_home),
                 "PYTHONDONTWRITEBYTECODE": "1"}
 

@@ -5,14 +5,15 @@
   python3 ae.py install [--target 目录]
                                     # 把技能本体复制为技能副本；缺省装到 ~/.claude/skills（CLAUDE_SKILLS_DIR
                                     # 可覆盖），--target 指定技能目录的根（副本装在 <目录>/annotation-everything）
-  python3 ae.py install --link codex,agents,zcode
+  python3 ae.py install --link codex,agents,zcode,antigravity,gemini-cli
                                     # 同时在这些 Agent 的技能目录里建指向技能副本的软链接；
                                     # --link 也接受 名称=路径（如 cursor=~/.cursor/skills）为任意目录建链接
   python3 ae.py doctor [--json] [--target 目录]
-                                    # 体检：逐项检查并给出级别与修复命令；--target 定位自定义位置的副本
-  python3 ae.py repair [--dry-run] [--forget-stale] [--stop-orphans] [--target 目录]
+                                    # 体检：逐项检查并给出级别与修复命令；--target 定位自定义位置的副本。
+                                    # 已登记宿主目录里的实目录副本只警告，不删除
+  python3 ae.py repair [--dry-run] [--forget-stale] [--stop-orphans] [--replace-with-links] [--target 目录]
                                     # 修复体检发现的问题：先打印计划；安全项自动修，
-                                    # 删除台账失效记录与结束残留服务需显式参数
+                                    # 删除台账失效记录、结束残留服务、把实目录换成软链接需显式参数
   python3 ae.py uninstall [--purge] [--stop-servers] [--target 目录]
                                     # 删除技能副本与指向它的链接；默认保留审阅台账（--purge 一并删除），
                                     # 任何情况下不动审阅目录；检测到 serve.py 在运行会拒绝（--stop-servers 先结束）
@@ -32,6 +33,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import datetime
+import errno
 import hashlib
 import http.client
 import importlib
@@ -39,6 +41,7 @@ import json
 import os
 import platform
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -54,9 +57,83 @@ SKILL_NAME = "annotation-everything"
 SKILL_SRC = Path("skill") / SKILL_NAME
 RECORD_NAME = ".install-record.json"
 SERVE_PY = SKILL_SRC / "scripts" / "serve.py"
-# --link 接受的内置 Agent 名称；目录约定与 skill_sources.default_roots 一致。
-# 其他 Agent 用 名称=路径 写法指定任意技能目录，不在这里维护各家清单
-LINK_AGENTS = ("codex", "agents", "zcode")
+# 已登记的宿主技能目录，相对用户主目录。名单取 skills CLI 的全局目录表（2026-11-17），
+# 并纳入 Antigravity（~/.gemini/config/skills）与 Gemini CLI（~/.gemini/skills）这两个不同目录。
+# Codex 仍走 CODEX_HOME（默认 ~/.codex/skills），不改成 ~/.agents/skills。
+# 多家共用同一路径的只登记一次：~/.agents/skills 用 agents，Antigravity 的目录用 antigravity。
+# 新目录只解析主目录下的固定相对路径，不读 XDG_CONFIG_HOME、GROK_HOME、HERMES_HOME、
+# AUTOHAND_HOME、VIBE_HOME、CLAUDE_CONFIG_DIR 或 APPDATA。那些变量指向主目录外时，
+# 视为未登记的自定义目录，不扫描。CODEX_HOME 与 CLAUDE_SKILLS_DIR 保持原有覆盖。
+# 自动更新不读这张表，仍只替换正在执行更新脚本的那一份副本。
+_SKILL_ROOTS = (
+    ("agents", (".agents", "skills")),
+    ("zcode", (".zcode", "skills")),
+    ("antigravity", (".gemini", "config", "skills")),
+    ("gemini-cli", (".gemini", "skills")),
+    ("cursor", (".cursor", "skills")),
+    ("grok", (".grok", "skills")),
+    ("github-copilot", (".copilot", "skills")),
+    ("droid", (".factory", "skills")),
+    ("opencode", (".config", "opencode", "skills")),
+    ("goose", (".config", "goose", "skills")),
+    ("amp", (".config", "agents", "skills")),
+    ("aider-desk", (".aider-desk", "skills")),
+    ("astrbot", (".astrbot", "data", "skills")),
+    ("autohand-code", (".autohand", "skills")),
+    ("augment", (".augment", "skills")),
+    ("bob", (".bob", "skills")),
+    ("openclaw", (".openclaw", "skills")),
+    ("clawdbot", (".clawdbot", "skills")),
+    ("moltbot", (".moltbot", "skills")),
+    ("codearts-agent", (".codeartsdoer", "skills")),
+    ("codebuddy", (".codebuddy", "skills")),
+    ("codemaker", (".codemaker", "skills")),
+    ("codestudio", (".codestudio", "skills")),
+    ("command-code", (".commandcode", "skills")),
+    ("continue", (".continue", "skills")),
+    ("cortex", (".snowflake", "cortex", "skills")),
+    ("crush", (".config", "crush", "skills")),
+    ("deepagents", (".deepagents", "agent", "skills")),
+    ("devin", (".config", "devin", "skills")),
+    ("firebender", (".firebender", "skills")),
+    ("forgecode", (".forge", "skills")),
+    ("hermes-agent", (".hermes", "skills")),
+    ("inference-sh", (".inferencesh", "skills")),
+    ("jazz", (".jazz", "skills")),
+    ("junie", (".junie", "skills")),
+    ("iflow-cli", (".iflow", "skills")),
+    ("kilo", (".kilo", "skills")),
+    ("kimchi", (".config", "kimchi", "harness", "skills")),
+    ("kiro-cli", (".kiro", "skills")),
+    ("kode", (".kode", "skills")),
+    ("lingma", (".lingma", "skills")),
+    ("mcpjam", (".mcpjam", "skills")),
+    ("minimax-code", (".minimax", "skills")),
+    ("mistral-vibe", (".vibe", "skills")),
+    ("moxby", (".moxby", "skills")),
+    ("mux", (".mux", "skills")),
+    ("openhands", (".openhands", "skills")),
+    ("ona", (".ona", "skills")),
+    ("posit-assistant", (".posit", "assistant", "skills")),
+    ("qoder", (".qoder", "skills")),
+    ("qoder-cn", (".qoder-cn", "skills")),
+    ("qwen-code", (".qwen", "skills")),
+    ("reasonix", (".reasonix", "skills")),
+    ("rovodev", (".rovodev", "skills")),
+    ("roo", (".roo", "skills")),
+    ("tabnine-cli", (".tabnine", "agent", "skills")),
+    ("terramind", (".terramind", "skills")),
+    ("tinycloud", (".tinycloud", "skills")),
+    ("trae", (".trae", "skills")),
+    ("trae-cn", (".trae-cn", "skills")),
+    ("windsurf", (".codeium", "windsurf", "skills")),
+    ("zencoder", (".zencoder", "skills")),
+    ("neovate", (".neovate", "skills")),
+    ("pochi", (".pochi", "skills")),
+    ("adal", (".adal", "skills")),
+)
+# --link 接受的已登记名称。其他位置仍用 名称=路径。
+LINK_AGENTS = ("codex", "claude-code") + tuple(name for name, _parts in _SKILL_ROOTS)
 # 复制与比对都忽略的缓存文件：字节码、系统杂项
 EXCLUDED_DIRS = {"__pycache__"}
 EXCLUDED_NAMES = {".DS_Store"}
@@ -267,15 +344,45 @@ def resolve_copy_dir(target) -> Path:
     return Path(target).expanduser() / SKILL_NAME
 
 
-def link_target_dir(agent: str) -> Optional[Path]:
-    """Agent 的技能目录；未知名称返回 None。目录约定与 skill_sources 一致。"""
+def _norm_key(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(os.path.normpath(str(path))))
+
+
+def known_skill_roots() -> list:
+    """已登记宿主技能目录：[(名称, 目录), ...]。按路径去重，先出现的名称保留。
+
+    不缓存：测试会在同一进程里改 HOME。不调用 link_target_dir，避免互相递归。
+    """
     home = Path.home()
-    if agent == "codex":
-        return Path(os.environ.get("CODEX_HOME") or home / ".codex").expanduser() / "skills"
-    if agent == "agents":
-        return home / ".agents" / "skills"
-    if agent == "zcode":
-        return home / ".zcode" / "skills"
+    found, seen = [], set()
+
+    def add(name: str, path: Path) -> None:
+        path = Path(path).expanduser()
+        key = _norm_key(path)
+        if key in seen:
+            return
+        seen.add(key)
+        found.append((name, path))
+
+    add("codex", Path(os.environ.get("CODEX_HOME") or home / ".codex").expanduser() / "skills")
+    claude = Path(os.environ.get("CLAUDE_SKILLS_DIR") or home / ".claude" / "skills").expanduser()
+    add("claude-code", claude)
+    add("claude-code", home / ".claude" / "skills")
+    for name, parts in _SKILL_ROOTS:
+        add(name, home.joinpath(*parts))
+    if os.name == "nt":
+        # 不用 APPDATA：那个变量可以指向主目录以外，新登记的目录不跟出去。
+        add("reasonix", home / "AppData" / "Roaming" / "reasonix" / "skills")
+    return found
+
+
+def link_target_dir(agent: str) -> Optional[Path]:
+    """已登记 Agent 的技能目录；未知名称返回 None。同名多条路径时取第一条。"""
+    if agent not in LINK_AGENTS:
+        return None
+    for name, path in known_skill_roots():
+        if name == agent:
+            return path
     return None
 
 
@@ -628,17 +735,22 @@ def check_copy_version(ctx: DoctorContext) -> CheckResult:
 
 
 def scan_links(skill_copy: Path) -> list:
-    """回退扫描：在三个已知 Agent 技能目录里找指向技能副本的链接（含悬空的）。
+    """回退扫描：在已登记的宿主技能目录里找指向技能副本的链接（含悬空的）。
 
     返回条目与安装记录 links 同构：{"agent": 名称, "path": 链接绝对路径}。
+    记录缺失时才会走到这里；记录里的 links 是空列表时不回退。
     """
     target = os.path.realpath(str(skill_copy))
     found = []
-    for agent in LINK_AGENTS:
-        link = link_path(agent)
-        if not link.is_symlink():
+    for agent, root in known_skill_roots():
+        link = Path(root) / SKILL_NAME
+        try:
+            if not link.is_symlink():
+                continue
+            points_here = os.path.realpath(str(link)) == target or os.readlink(str(link)) == target
+        except OSError:
             continue
-        if os.path.realpath(str(link)) == target or os.readlink(str(link)) == target:
+        if points_here:
             found.append({"agent": agent, "path": str(link)})
     return found
 
@@ -676,7 +788,7 @@ def install_link_fix(repo: Optional[Path], specs: list, target: Optional[Path] =
 
 
 def known_links(ctx: DoctorContext) -> list:
-    """已知链接：优先取安装记录；记录缺失时回退扫描三个已知 Agent 目录。"""
+    """已知链接：优先取安装记录；记录缺失时回退扫描已登记的宿主目录。"""
     links = ctx.record.get("links") if isinstance(ctx.record, dict) else None
     if isinstance(links, list):
         return links
@@ -715,6 +827,60 @@ def check_links(ctx: DoctorContext) -> CheckResult:
                        T("doctor.links.broken", count=len(broken),
                           list=join(broken + ok, item=T("cli.ae.itemSeparator"))),
                        fix)
+
+
+def _is_real_dir(path: Path) -> bool:
+    """实目录：先看是不是软链接。is_dir() 会跟随链接，不能单独用来判断。"""
+    try:
+        return (not path.is_symlink()) and path.is_dir()
+    except OSError:
+        return False
+
+
+def _same_copy(path: Path, skill_copy: Path) -> bool:
+    """正在检查的那一份正本。路径相同，或两者都不是软链接且解析到同一目录。"""
+    if _norm_key(path) == _norm_key(skill_copy):
+        return True
+    try:
+        if path.is_symlink() or Path(skill_copy).is_symlink():
+            return False
+        return path.resolve() == Path(skill_copy).resolve()
+    except (OSError, RuntimeError):
+        return False
+
+
+def find_independent_copies(skill_copy: Path) -> list:
+    """已登记目录里、不是正本、也不是指向正本的软链接的实目录副本。
+
+    返回 [(名称, 路径), ...]。缺目录、普通文件和软链接都跳过；软链接交给链接检查。
+    """
+    found = []
+    for name, root in known_skill_roots():
+        path = Path(root) / SKILL_NAME
+        if not _is_real_dir(path) or _same_copy(path, skill_copy):
+            continue
+        if paths_overlap(path, skill_copy):
+            continue
+        found.append((name, path))
+    return found
+
+
+def check_independent_copies(ctx: DoctorContext) -> CheckResult:
+    """实目录副本只警告。修复命令同时给出换成软链接和就地升级，本检查不删目录。"""
+    copies = find_independent_copies(ctx.skill_copy)
+    if not copies:
+        return CheckResult("independent-copies", CATEGORY_INSTALL, LEVEL_PASS,
+                           T("doctor.copies.none"))
+    listing = join((T("doctor.copies.item", agent=name, path=path) for name, path in copies),
+                   item=T("cli.ae.itemSeparator"))
+    replace_cmd = repair_fix(ctx.repo, "--replace-with-links", target=ctx.target)
+    upgrades = [install_fix(ctx.repo, path.parent) for _name, path in copies]
+    upgrade_text = "\n".join(upgrades)
+    return CheckResult(
+        "independent-copies", CATEGORY_INSTALL, LEVEL_WARN,
+        T("doctor.copies.warn", count=len(copies), list=listing,
+          replace=replace_cmd, upgrades=upgrade_text),
+        replace_cmd + "\n" + upgrade_text)
 
 
 # ── 体检：运行状态（审阅台账、专属端口、残留服务） ──────────────────
@@ -1172,6 +1338,7 @@ def check_chrome(ctx: DoctorContext) -> CheckResult:
 
 # 全部检查项：doctor 按此顺序执行；后续工单在元组里追加新检查项函数
 CHECKS = (check_python, check_copy_present, check_copy_sync, check_copy_version, check_links,
+          check_independent_copies,
           check_ledger_readable, check_ledger_stale, check_port_pool, check_orphan_servers,
           check_fc_list, check_pdffonts)
 
@@ -1241,7 +1408,8 @@ def cmd_doctor(args) -> int:
 
 # ── 修复 ───────────────────────────────────────────────────────
 # 修复计划由体检结果（同一组检查项）生成，执行前先打印；安全项自动修（重新同步技能副本、
-# 修复悬空链接、启用 git 钩子）；删除台账失效记录与结束残留服务是破坏性操作，必须加显式参数。
+# 修复悬空链接、启用 git 钩子）；删除台账失效记录、结束残留服务、把实目录换成软链接
+# 是破坏性操作，必须加显式参数。
 
 # 三个「技能副本」检查项合并为一个重新同步动作
 REPAIR_COPY_CODES = ("skill-copy-present", "skill-copy-sync", "skill-copy-version")
@@ -1252,13 +1420,14 @@ REPAIR_KIND_CODES = {
     "git-hooks": ("git-hooks",),
     "forget-stale": ("ledger-stale",),
     "stop-orphans": ("orphan-servers",),
+    "replace-copies": ("independent-copies",),
 }
 
 
 @dataclasses.dataclass
 class PlanItem:
     """修复计划里的一项；flag 非空表示破坏性操作，需要对应显式参数才执行。"""
-    kind: str        # 动作类别：resync-copy / fix-links / git-hooks / forget-stale / stop-orphans
+    kind: str        # 动作类别：resync-copy / fix-links / git-hooks / forget-stale / stop-orphans / replace-copies
     problem: str     # 问题描述（取体检项的说明）
     action: str      # 修复动作（给用户看）
     flag: str = ""   # 需要的显式参数；空 = 安全项，自动执行
@@ -1286,6 +1455,10 @@ def plan_from_results(results) -> list:
     if r is not None and r.level == LEVEL_FAIL:
         plan.append(PlanItem("stop-orphans", r.message, T("cli.ae.plan.stopOrphans"),
                              "--stop-orphans"))
+    r = by_code.get("independent-copies")
+    if r is not None and r.level == LEVEL_WARN:
+        plan.append(PlanItem("replace-copies", r.message, T("cli.ae.plan.replaceCopies"),
+                             "--replace-with-links"))
     return plan
 
 
@@ -1361,11 +1534,145 @@ def stop_orphan_servers(entries: dict, lister, extra_copy: Optional[Path] = None
             for pid, port, _dir in orphans]
 
 
+_BACKUP_PREFIX = ".ae-replace-backup-"
+_RESTORE_OCCUPIED = object()
+
+
+def _is_privilege(exc: BaseException) -> bool:
+    """没有建立软链接的权限。不提权。Windows 的 1314 是缺少创建符号链接的特权。"""
+    if not isinstance(exc, OSError):
+        return False
+    if isinstance(exc, PermissionError) or exc.errno in (errno.EPERM, errno.EACCES):
+        return True
+    return getattr(exc, "winerror", None) == 1314
+
+
+def _backup_path(path: Path) -> Optional[Path]:
+    parent = path.parent
+    for _ in range(16):
+        candidate = parent / f"{_BACKUP_PREFIX}{secrets.token_hex(4)}"
+        if not candidate.exists() and not candidate.is_symlink():
+            return candidate
+    return None
+
+
+def _restore_replaced_dir(backup: Path, path: Path):
+    """把备份移回原位。成功返回 None。原位已有实目录时返回 _RESTORE_OCCUPIED。
+
+    其他失败返回系统错误原文。只删除本次可能留下的软链接，不动实目录。
+    """
+    try:
+        if path.is_symlink():
+            path.unlink()
+        elif path.exists():
+            return _RESTORE_OCCUPIED
+        os.replace(str(backup), str(path))
+    except OSError as exc:
+        return str(exc)
+    return None
+
+
+def replace_independent_copy(path: Path, copy_dir: Path, repo: Optional[Path]) -> Optional[str]:
+    """把实目录换成指向正本的软链接。成功返回 None；失败时原目录仍在，返回说明。
+
+    先改名到旁边的备份，链接建成后再删备份。链接失败则把备份移回，不提权。
+    """
+    path = Path(path)
+    copy_dir = Path(copy_dir)
+    upgrade = install_fix(repo, path.parent)
+    if not _is_real_dir(path):
+        return T("cli.ae.repair.copyReplaceNotDir", path=path)
+    if _same_copy(path, copy_dir) or paths_overlap(path, copy_dir):
+        return T("cli.ae.repair.copyReplaceSame", path=path)
+    try:
+        usable = copy_dir.is_dir()
+    except OSError:
+        usable = False
+    if not usable:
+        return T("cli.ae.repair.copyReplaceNoCopy", path=path, command=install_fix(repo, None))
+    backup = _backup_path(path)
+    if backup is None:
+        return T("cli.ae.repair.copyReplaceNoBackup", path=path)
+    try:
+        os.replace(str(path), str(backup))
+    except OSError as exc:
+        return T("cli.ae.repair.copyReplaceKept", path=path, detail=exc)
+    try:
+        os.symlink(str(copy_dir.resolve()), str(path))
+    except OSError as exc:
+        restored = _restore_replaced_dir(backup, path)
+        if restored is _RESTORE_OCCUPIED:
+            return T("cli.ae.repair.copyReplaceRestoreBlocked", path=path, backup=backup,
+                     command=upgrade)
+        if restored is not None:
+            return T("cli.ae.repair.copyReplaceRestoreFailed", path=path, backup=backup,
+                     detail=restored, command=upgrade)
+        if _is_privilege(exc):
+            return T("cli.ae.repair.linkPrivilege", path=path, command=upgrade)
+        return T("cli.ae.repair.copyReplaceKept", path=path, detail=exc)
+    try:
+        shutil.rmtree(backup)
+    except OSError:
+        # 链接已经建成。备份删不掉时留下，不把已成功的替换说成失败。
+        pass
+    return None
+
+
+def _kept_link_entries(existing: list, skill_copy: Path, created: list) -> list:
+    """保留原记录的每一条，只追加新建且仍指向正本的链接。按路径去重。
+
+    不用 merged_links：那条只留健康软链接，会把「已不是链接」的记录删掉，
+    下次体检就不再报这条失败。
+    """
+    kept, seen = [], set()
+    for entry in existing:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path")
+        if not isinstance(path, str) or not path or path in seen:
+            continue
+        kept.append(entry)
+        seen.add(path)
+    target = os.path.realpath(str(skill_copy))
+    for entry in created:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path")
+        if not isinstance(path, str) or not path or path in seen:
+            continue
+        try:
+            healthy = Path(path).is_symlink() and os.path.realpath(path) == target
+        except OSError:
+            healthy = False
+        if not healthy:
+            continue
+        agent = entry.get("agent", "")
+        kept.append({"agent": agent if isinstance(agent, str) else "", "path": path})
+        seen.add(path)
+    return kept
+
+
+def _remember_created_links(skill_copy: Path, created: list) -> None:
+    """把新建的链接补进安装记录，不改 tree、version 等其余字段。没有记录文件时不新建。"""
+    record_path = skill_copy / RECORD_NAME
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(record, dict):
+        return
+    existing = record.get("links")
+    record["links"] = _kept_link_entries(existing if isinstance(existing, list) else [], skill_copy, created)
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def execute_plan(plan: list, ctx: DoctorContext,
-                 forget_stale: bool = False, stop_orphans: bool = False) -> tuple:
+                 forget_stale: bool = False, stop_orphans: bool = False,
+                 replace_with_links: bool = False) -> tuple:
     """执行修复计划：破坏性项必须给出对应参数才动手。返回（报告行列表, 是否执行了动作）。"""
     lines, acted = [], False
-    flag_given = {"--forget-stale": forget_stale, "--stop-orphans": stop_orphans}
+    flag_given = {"--forget-stale": forget_stale, "--stop-orphans": stop_orphans,
+                  "--replace-with-links": replace_with_links}
     resynced = False
     for item in plan:
         if item.flag and not flag_given.get(item.flag):
@@ -1413,6 +1720,25 @@ def execute_plan(plan: list, ctx: DoctorContext,
                 detail = T("cli.ae.repair.portDetail", port=port) if port else ""
                 lines.append(T("cli.ae.repair.stopped", pid=pid, detail=detail) if note is None
                              else T("cli.ae.repair.stopNote", pid=pid, detail=detail, note=note))
+        elif item.kind == "replace-copies":
+            try:
+                usable = ctx.skill_copy.is_dir()
+            except OSError:
+                usable = False
+            if not usable:
+                lines.append(T("cli.ae.repair.copyReplaceNoCopy", path=ctx.skill_copy,
+                               command=install_fix(ctx.repo, ctx.target)))
+                continue
+            created = []
+            for name, occupied in find_independent_copies(ctx.skill_copy):
+                detail = replace_independent_copy(occupied, ctx.skill_copy, ctx.repo)
+                if detail is None:
+                    lines.append(T("cli.ae.repair.copyReplaced", path=occupied))
+                    created.append({"agent": name, "path": str(occupied)})
+                else:
+                    lines.append(detail)
+            if created:
+                _remember_created_links(ctx.skill_copy, created)
     return lines, acted
 
 
@@ -1443,12 +1769,13 @@ def _enable_git_hooks(repo: Optional[Path]) -> list:
 
 
 def print_plan(plan: list, forget_stale: bool = False, stop_orphans: bool = False,
-               dry_run: bool = False) -> None:
+               dry_run: bool = False, replace_with_links: bool = False) -> None:
     print(T("cli.ae.repair.planTitle"))
     if not plan:
         print(T("cli.ae.repair.nothing"))
         return
-    given = {"--forget-stale": forget_stale, "--stop-orphans": stop_orphans}
+    given = {"--forget-stale": forget_stale, "--stop-orphans": stop_orphans,
+             "--replace-with-links": replace_with_links}
     for index, item in enumerate(plan, 1):
         if item.flag and not given.get(item.flag):
             note = T("cli.ae.repair.destructive", flag=item.flag)
@@ -1478,12 +1805,13 @@ def cmd_repair(args) -> int:
     results = run_doctor(ctx)
     plan = plan_from_results(results)
     print_plan(plan, forget_stale=args.forget_stale, stop_orphans=args.stop_orphans,
-               dry_run=args.dry_run)
+               dry_run=args.dry_run, replace_with_links=args.replace_with_links)
     _print_unrepairable(results, plan)
     if args.dry_run:
         return 1 if any(r.level == LEVEL_FAIL for r in results) else 0
     lines, acted = execute_plan(plan, ctx, forget_stale=args.forget_stale,
-                                stop_orphans=args.stop_orphans)
+                                stop_orphans=args.stop_orphans,
+                                replace_with_links=args.replace_with_links)
     if lines:
         print(T("cli.ae.repair.execTitle"))
         for line in lines:
@@ -1715,7 +2043,7 @@ def remove_skill_copy(skill_copy: Path) -> str:
 def cmd_uninstall(args) -> int:
     skill_copy = resolve_copy_dir(getattr(args, "target", None))
     record = read_record(skill_copy, getattr(args, "target", None))
-    # 已知链接：记录优先，缺失时回退扫描三个已知 Agent 目录（含悬空链接）
+    # 已知链接：记录优先，缺失时回退扫描已登记的宿主目录（含悬空链接）
     links = [entry for entry in known_links(DoctorContext(skill_copy=skill_copy, repo=None, record=record))
              if isinstance(entry, dict) and isinstance(entry.get("path"), str)]
     ensure_not_skill_source(skill_copy)   # 动手前拦下，避免删了链接才报错
@@ -1807,6 +2135,8 @@ def build_parser() -> argparse.ArgumentParser:
                           help=T("cli.ae.cmd.repair.forgetStale"))
     p_repair.add_argument("--stop-orphans", action="store_true", dest="stop_orphans",
                           help=T("cli.ae.cmd.repair.stopOrphans"))
+    p_repair.add_argument("--replace-with-links", action="store_true", dest="replace_with_links",
+                          help=T("cli.ae.cmd.repair.replaceCopies"))
     p_repair.set_defaults(handler=cmd_repair)
     p_uninstall = sub.add_parser("uninstall", add_help=False, help=T("cli.ae.cmd.uninstall"))
     _add_help(p_uninstall)

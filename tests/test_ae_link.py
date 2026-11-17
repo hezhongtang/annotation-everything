@@ -10,12 +10,29 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 AE = ROOT / "ae.py"
 sys.path.insert(0, str(ROOT))
 import ae  # noqa: E402
+
+
+def _can_symlink() -> bool:
+    if os.name != "nt":
+        return True
+    with tempfile.TemporaryDirectory() as directory:
+        src = Path(directory) / "src"
+        src.mkdir()
+        try:
+            os.symlink(str(src), str(Path(directory) / "lnk"), target_is_directory=True)
+            return True
+        except OSError:
+            return False
+
+
+CAN_SYMLINK = _can_symlink()
 
 RECORD_NAME = ae.RECORD_NAME
 SKILL = "annotation-everything"
@@ -515,7 +532,7 @@ class LinkFixSpecTests(unittest.TestCase):
         self.assertIn(str(link), result.message)
 
     def test_record_without_links_key_falls_back_to_scan(self):
-        link = self.home / ".agents" / "skills" / SKILL   # 回退扫描只看三个内置目录
+        link = self.home / ".agents" / "skills" / SKILL   # 回退扫描看已登记的宿主目录
         link.parent.mkdir(parents=True)
         os.symlink(str(self.copy.resolve()), str(link))
         record = self.base_record()
@@ -538,6 +555,231 @@ class LinkFixSpecTests(unittest.TestCase):
         previous = self.base_record({"agent": "cursor", "path": str(link)})
         merged = ae.merged_links(previous, self.copy, [])
         self.assertEqual(merged, [{"agent": "cursor", "path": str(link)}])
+
+
+class IndependentCopyTests(unittest.TestCase):
+    """已登记宿主目录里的实目录副本：只在合成家目录里体检，不读用户的技能目录。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ae-independent-")
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name) / "home"
+        self.home.mkdir()
+        self.skills = self.home / ".claude" / "skills"
+        self._saved = {key: os.environ.get(key) for key in (
+            "HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_SKILLS_DIR",
+            "XDG_CONFIG_HOME", "GROK_HOME", "HERMES_HOME", "AUTOHAND_HOME",
+            "VIBE_HOME", "REASONIX_HOME", "CLAUDE_CONFIG_DIR")}
+        for key in self._saved:
+            os.environ.pop(key, None)
+        os.environ.update({
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "CODEX_HOME": str(self.home / ".codex"),
+            "CLAUDE_SKILLS_DIR": str(self.skills),
+        })
+        self.env = dict(os.environ)
+
+    def tearDown(self):
+        for key, value in self._saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def run_ae(self, *args):
+        return subprocess.run([sys.executable, str(AE), *args], cwd=self.home,
+                              env=self.env, capture_output=True, text=True, timeout=60)
+
+    @property
+    def copy_dir(self) -> Path:
+        return self.skills / SKILL
+
+    def doctor_result(self, code: str, *args) -> dict:
+        p = self.run_ae("doctor", "--json", *args)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        results = [item for item in json.loads(p.stdout)["results"] if item["code"] == code]
+        self.assertEqual(len(results), 1, p.stdout + p.stderr)
+        return results[0]
+
+    def plant(self, *parts) -> Path:
+        path = self.home.joinpath(*parts) / SKILL
+        path.mkdir(parents=True)
+        (path / "keep.txt").write_text("保留", encoding="utf-8")
+        return path
+
+    def test_canonical_copy_is_not_reported(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        result = self.doctor_result("independent-copies")
+        self.assertEqual(result["level"], "通过")
+        self.assertEqual(result["status"], "pass")
+
+    def test_real_directory_warns_even_when_link_record_is_empty(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        antigravity = self.plant(".gemini", "config", "skills")
+        gemini = self.plant(".gemini", "skills")
+        result = self.doctor_result("independent-copies")
+        self.assertEqual(result["level"], "警告")
+        self.assertEqual(result["status"], "warn")
+        self.assertIn(str(antigravity), result["message"])
+        self.assertIn(str(gemini), result["message"])
+        self.assertIn("--replace-with-links", result["fix_command"])
+        self.assertIn(f"install --target {shlex.quote(str(antigravity.parent))}", result["fix_command"])
+        self.assertIn(f"install --target {shlex.quote(str(gemini.parent))}", result["fix_command"])
+        links = self.doctor_result("skill-links")
+        self.assertEqual(links["level"], "通过")
+        self.assertIn("未发现指向技能副本的链接", links["message"])
+        self.assertTrue((antigravity / "keep.txt").is_file())
+
+    def test_english_warning_names_the_same_paths(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        antigravity = self.plant(".gemini", "config", "skills")
+        p = self.run_ae("doctor", "--json", "--locale", "en")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        result = next(item for item in json.loads(p.stdout)["results"]
+                      if item["code"] == "independent-copies")
+        self.assertEqual(result["level"], "警告")
+        self.assertIn(str(antigravity), result["message"])
+        self.assertIn("symlink", result["message"].lower())
+        self.assertIn("--replace-with-links", result["fix_command"])
+
+    def test_symlink_to_canonical_copy_passes(self):
+        self.assertEqual(self.run_ae("install", "--link", "antigravity,gemini-cli").returncode, 0)
+        for parts in ((".gemini", "config", "skills"), (".gemini", "skills")):
+            link = self.home.joinpath(*parts) / SKILL
+            self.assertTrue(link.is_symlink(), parts)
+        result = self.doctor_result("independent-copies")
+        self.assertEqual(result["level"], "通过")
+        links = self.doctor_result("skill-links")
+        self.assertEqual(links["level"], "通过")
+
+    def test_target_copy_is_the_canonical_one(self):
+        gemini_root = self.home / ".gemini" / "skills"
+        self.assertEqual(self.run_ae("install", "--target", str(gemini_root)).returncode, 0)
+        codex = self.plant(".codex", "skills")
+        result = self.doctor_result("independent-copies", "--target", str(gemini_root))
+        self.assertIn(str(codex), result["message"])
+        self.assertNotIn(str(gemini_root / SKILL), result["message"])
+
+    def test_every_registered_root_is_checked_together(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        canonical = os.path.normcase(os.path.abspath(self.copy_dir))
+        planted = []
+        for _name, root in ae.known_skill_roots():
+            candidate = root / SKILL
+            if os.path.normcase(os.path.abspath(candidate)) == canonical:
+                continue
+            candidate.mkdir(parents=True)
+            (candidate / "keep.txt").write_text("保留", encoding="utf-8")
+            planted.append(candidate)
+        self.assertGreaterEqual(len(planted), 10)
+        result = self.doctor_result("independent-copies")
+        for path in planted:
+            self.assertIn(str(path), result["message"])
+            self.assertTrue((path / "keep.txt").is_file())
+        self.assertNotIn(str(self.copy_dir), result["message"])
+
+    def test_repair_without_flag_keeps_the_real_directory(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        antigravity = self.plant(".gemini", "config", "skills")
+        p = self.run_ae("repair")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("--replace-with-links", p.stdout)
+        self.assertIn("本次未执行", p.stdout)
+        self.assertIn(str(antigravity), p.stdout)
+        self.assertTrue((antigravity / "keep.txt").is_file())
+        self.assertFalse(antigravity.is_symlink())
+
+    @unittest.skipUnless(CAN_SYMLINK, "当前账户无符号链接权限")
+    def test_replace_flag_swaps_real_directory_for_symlink_and_records_it(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        antigravity = self.plant(".gemini", "config", "skills")
+        sibling = antigravity.parent / "keep-sibling.txt"
+        sibling.write_text("旁边的文件", encoding="utf-8")
+        p = self.run_ae("repair", "--replace-with-links")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertLess(p.stdout.index("修复计划"), p.stdout.index("执行修复"))
+        self.assertTrue(antigravity.is_symlink())
+        self.assertEqual(os.path.realpath(str(antigravity)), str(self.copy_dir.resolve()))
+        self.assertFalse((antigravity / "keep.txt").is_file())
+        self.assertTrue(sibling.is_file())
+        record = json.loads((self.copy_dir / RECORD_NAME).read_text(encoding="utf-8"))
+        self.assertIn(str(antigravity), [entry["path"] for entry in record["links"]])
+
+    @unittest.skipUnless(CAN_SYMLINK, "当前账户无符号链接权限")
+    def test_replace_keeps_recorded_path_that_is_no_longer_a_link(self):
+        """替换一份已登记实目录时，记录里另一条已不是链接的路径仍留下，下次体检仍失败。"""
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        antigravity = self.plant(".gemini", "config", "skills")
+        custom = self.home / "custom-skills" / SKILL
+        custom.mkdir(parents=True)
+        (custom / "keep.txt").write_text("保留", encoding="utf-8")
+        record_path = self.copy_dir / RECORD_NAME
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["links"] = [{"agent": "custom", "path": str(custom)}]
+        record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        p = self.run_ae("repair", "--replace-with-links")
+        # custom 无法自动修复（请手工处理），修复后体检仍失败，repair 退出码跟随体检
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertTrue(antigravity.is_symlink())
+        updated = json.loads(record_path.read_text(encoding="utf-8"))
+        paths = [entry["path"] for entry in updated["links"]]
+        self.assertIn(str(custom), paths)
+        self.assertIn(str(antigravity), paths)
+        self.assertEqual(updated.get("tree"), record.get("tree"))
+        self.assertEqual(updated.get("version"), record.get("version"))
+        self.assertTrue((custom / "keep.txt").is_file())
+        doctor = self.run_ae("doctor", "--json")
+        self.assertEqual(doctor.returncode, 1, doctor.stdout + doctor.stderr)
+        links = next(item for item in json.loads(doctor.stdout)["results"]
+                     if item["code"] == "skill-links")
+        self.assertEqual(links["level"], "失败")
+        self.assertIn(str(custom), links["message"])
+        self.assertIn("已不是链接", links["message"])
+        self.assertIn("install --link", links["fix_command"])
+
+    @unittest.skipUnless(CAN_SYMLINK, "当前账户无符号链接权限")
+    def test_dry_run_with_flag_does_not_replace(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        antigravity = self.plant(".gemini", "config", "skills")
+        p = self.run_ae("repair", "--dry-run", "--replace-with-links")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("--dry-run", p.stdout)
+        self.assertTrue((antigravity / "keep.txt").is_file())
+        self.assertFalse(antigravity.is_symlink())
+
+    def test_install_link_still_refuses_real_directory(self):
+        occupied = self.plant(".gemini", "config", "skills")
+        p = self.run_ae("install", "--link", "antigravity")
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn(str(occupied), p.stderr)
+        self.assertTrue((occupied / "keep.txt").is_file())
+        self.assertFalse(self.copy_dir.exists())
+
+    def test_uninstall_leaves_unrecorded_real_directory(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        occupied = self.plant(".gemini", "skills")
+        p = self.run_ae("uninstall")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue((occupied / "keep.txt").is_file())
+        self.assertFalse(self.copy_dir.exists())
+
+    def test_privilege_error_restores_the_real_directory(self):
+        self.assertEqual(self.run_ae("install").returncode, 0)
+        occupied = self.plant(".grok", "skills")
+        with mock.patch.object(ae.os, "symlink", side_effect=PermissionError(1, "Operation not permitted")):
+            message = ae.replace_independent_copy(occupied, self.copy_dir, ROOT)
+        self.assertIsNotNone(message)
+        self.assertIn("install --target", message)
+        self.assertIn(str(occupied.parent), message)
+        self.assertFalse(occupied.is_symlink())
+        self.assertEqual((occupied / "keep.txt").read_text(encoding="utf-8"), "保留")
+
+    def test_updater_does_not_scan_other_host_directories(self):
+        text = (ROOT / "skill" / "annotation-everything" / "scripts" / "update.py").read_text(encoding="utf-8")
+        self.assertNotIn("known_skill_roots", text)
+        self.assertNotIn("find_independent_copies", text)
+        self.assertNotIn("independent-copies", text)
 
 
 if __name__ == "__main__":

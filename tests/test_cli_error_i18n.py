@@ -261,6 +261,7 @@ class OldSkillCopyFallbackTests(unittest.TestCase):
                if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
         env.update({"HOME": str(self.home), "AE_HOME": str(self.ledger),
                     "CLAUDE_SKILLS_DIR": str(self.skills),
+                    "CODEX_HOME": str(self.home / ".codex"),
                     "PYTHONDONTWRITEBYTECODE": "1"})
         return subprocess.run([sys.executable, str(self.outside / "ae.py"), *args],
                               env=env, capture_output=True, text=True, timeout=120)

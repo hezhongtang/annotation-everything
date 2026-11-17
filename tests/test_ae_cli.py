@@ -56,6 +56,7 @@ class AeCliTests(unittest.TestCase):
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
         self.env = {**os.environ, "HOME": str(self.home), "CLAUDE_SKILLS_DIR": str(self.skills),
+                    "CODEX_HOME": str(self.home / ".codex"),  # 体检会看 $CODEX_HOME/skills，不能落到真实目录
                     "AE_HOME": str(self.root / "ledger"),     # 运行状态检查读台账：指向临时目录，不碰真实台账
                     "PYTHONDONTWRITEBYTECODE": "1"}
 
