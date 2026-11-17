@@ -12,6 +12,7 @@
   unit-related 相关单元       显式指定用例 / 模块，如 tests/test_core.py
   browser      完整浏览器     uv run --no-project --with playwright python tests/e2e_browser.py
   serve-check  服务安全自检   python3 skill/annotation-everything/scripts/serve.py check
+  lint         代码风格与格式  uv tool run --from ruff==0.17.5 ruff check .
   all          完整验收       unit + serve-check + browser
 
 行为：
@@ -53,6 +54,8 @@ WRAPPER_VERSION = 2
 ARTIFACT_DIRNAME = ".verify"
 TEST_START_DIR = "tests"
 KILL_GRACE_SECONDS = 5.0
+# lint 步骤锁定的 ruff 版本；与 pyproject.toml [tool.ruff] 的 required-version 一致（单测强校验）
+RUFF_VERSION = "0.17.5"
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -566,6 +569,13 @@ def build_groups(selectors: Optional[list] = None) -> dict:
             equivalent="python3 skill/annotation-everything/scripts/serve.py check",
             argv=[sys.executable, "skill/annotation-everything/scripts/serve.py", "check"],
             counter="log"),
+        "lint": Group(
+            name="lint", title="代码风格与格式",
+            purpose="ruff 静态检查（ruff check；版本锁定 ruff==%s，与 pyproject.toml 一致）；"
+                    "步骤输出实时转发，整组按「N/M 通过」摘要计数" % RUFF_VERSION,
+            equivalent="uv tool run --from ruff==%s ruff check ." % RUFF_VERSION,
+            argv=[sys.executable, str(VERIFY_PY), "_lint-runner"],
+            counter="log", requires=("uv",)),
     }
     groups["all"] = Group(
         name="all", title="完整验收",
@@ -972,6 +982,35 @@ def run_parallel_units(cases, args, run_suite) -> int:
     if interrupted:
         return 128 + interrupted_signal
     return 1 if failed or errors else 0
+
+
+def cmd_lint_runner(argv: list) -> int:
+    """内部子命令：按固定顺序执行 lint 步骤，实时转发输出并打「N/M 通过」摘要行。
+
+    每步的子进程直接继承本入口的 stdout / stderr，输出实时进入组日志；
+    结束时按通过步骤数打「N/M 通过」摘要行（parse_log_counts 的记录契约），
+    全部通过才退出 0。本 PR 只有 ruff check 一步；后续步骤（如 format --check）
+    在此追加，摘要与退出码口径不变。
+    """
+    if argv:
+        print("入口自身失败：_lint-runner 不接受参数：%s" % " ".join(argv), file=sys.stderr)
+        return EXIT_WRAPPER
+    steps = [
+        ("ruff check", ["uv", "tool", "run", "--from", "ruff==" + RUFF_VERSION,
+                        "ruff", "check", "."]),
+    ]
+    passed = 0
+    for index, (label, step_argv) in enumerate(steps, start=1):
+        print("=== lint 步骤 %d/%d：%s ===" % (index, len(steps), label), flush=True)
+        try:
+            code = subprocess.run(step_argv, cwd=str(REPO)).returncode
+        except OSError as exc:
+            print("lint 步骤 %s 启动失败：%s" % (label, exc), file=sys.stderr, flush=True)
+            code = EXIT_FAILED
+        if code == EXIT_OK:
+            passed += 1
+    print("\n%d/%d 通过" % (passed, len(steps)), flush=True)
+    return EXIT_OK if passed == len(steps) else EXIT_FAILED
 
 
 def parse_log_counts(text: str) -> Optional[dict]:
@@ -2988,6 +3027,8 @@ def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "_unit-runner":
         return cmd_unit_runner(argv[1:])
+    if argv and argv[0] == "_lint-runner":
+        return cmd_lint_runner(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "command", None) is None:

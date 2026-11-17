@@ -37,7 +37,7 @@ cat .verify/runs/<run ID>/shadow.json
 
 映射是 `verify_selection.py` 里的受版本控制声明，不用 CodeGraph / AST 索引做判定依据。每条规则带 `why`，计划里逐条展示命中：
 
-- `SELECTION_RULES`：路径前缀 → 建议选择器 / 浏览器场景 / 是否带 `serve-check` / 命中即回退的类别。一个路径可命中多条规则，选测取并集：选择器、场景与 `serve-check` 都合并，不会因为多命中而丢掉任何一组的范围。初始覆盖：`ae.py`（CLI）、`notes.py` / `notes_store.py` / `ledger.py`（审阅协议与存储）、`serve.py` / `viewer_template.html` / `build_viewer.py`（服务与页面）、`match.py` / `skill_sources.py`（页面匹配与技能发现）、`i18n.py` 与两处 `locales/`（词典，显式含全局契约模块）、`export_format.py` / `check_pptx_fonts.py`（导出与字体）、`docx_review.py` / `docx_edit.py` / `fixtures/docx/`（DOCX 渲染与回写）、`pptx_reader.py` / `pptx_report.py` / `pptx_edit.py` / `fixtures/pptx/`（PPTX 读取、构建与白名单回写）、`fsutil.py`（共享叶子模块，被台账与批注存储、生成器、更新器共同依赖，同时并入审阅协议与存储、服务与页面、更新器三组）；`skill/annotation-everything/SKILL.md`、`references/`、`evals/`（技能资源，回退）、`fixtures/`（回退）、`verify.py` 等执行配置（回退）、`docs/` 等说明文档（回退）。
+- `SELECTION_RULES`：路径前缀 → 建议选择器 / 浏览器场景 / 是否带 `serve-check` / 命中即回退的类别。一个路径可命中多条规则，选测取并集：选择器、场景与 `serve-check` 都合并，不会因为多命中而丢掉任何一组的范围。初始覆盖：`ae.py`（CLI）、`notes.py` / `notes_store.py` / `ledger.py`（审阅协议与存储）、`serve.py` / `viewer_template.html` / `build_viewer.py`（服务与页面）、`match.py` / `skill_sources.py`（页面匹配与技能发现）、`i18n.py` 与两处 `locales/`（词典，显式含全局契约模块）、`export_format.py` / `check_pptx_fonts.py`（导出与字体）、`docx_review.py` / `docx_edit.py` / `fixtures/docx/`（DOCX 渲染与回写）、`pptx_reader.py` / `pptx_report.py` / `pptx_edit.py` / `fixtures/pptx/`（PPTX 读取、构建与白名单回写）、`fsutil.py`（共享叶子模块，被台账与批注存储、生成器、更新器共同依赖，同时并入审阅协议与存储、服务与页面、更新器三组）；`skill/annotation-everything/SKILL.md`、`references/`、`evals/`（技能资源，回退）、`fixtures/`（回退）、`verify.py`、`pyproject.toml` 等执行配置（回退）、`docs/` 等说明文档与 `.git-blame-ignore-revs` 等仓库辅助文件（回退）。
 - `DOC_ALLOWLIST`（狭窄允许列表）：`README.md`、`README.zh-CN.md`、`docs/assets/`。`GLOSSARY.md` 与 `docs/adr/` 曾在策略 v11–v15 豁免，自 #162 起被测试消费，按防漂移契约撤销（见「文档允许列表核实」）。只有全部有效差异都命中允许列表，且策略、基线、清单与效率守卫均可信时，`pr` 阶段才不执行产品测试；其余阶段继续采用影子模式。`--no-reuse` 可强制实际执行，覆盖映射不获本地门禁豁免。
 - 浏览器场景 `*` 仅在该规则命中时展开为注册场景清单，未命中的规则不会扩大浏览器建议。
 - `STRATEGY_VERSION`：映射或判定逻辑变化时递增；记录里的 `context.selection.strategy_version` 标明计划用的版本。修改映射走普通 PR（受审查的策略变更）。
@@ -54,7 +54,7 @@ cat .verify/runs/<run ID>/shadow.json
 | `broken_rules` | 映射结构损坏、场景 ID 不在注册表、覆盖映射解析失败 |
 | `incomplete_manifest` | 映射选择器指向不存在的测试文件、场景注册表缺失、全局契约模块缺失、新增 / 删除 / 重命名的测试未纳入映射 |
 | `unknown_path` | 路径不在任何规则或允许列表（含改名伪装进允许列表、未提交的新文件） |
-| `strategy_change` | `verify.py` / `verify_selection.py` / `verify_evidence.py` / `verify_report.py` / `verify_parallel.py` / `host_isolation.py` / `.github/` / `tools/` 自身变化：映射边界不可信 |
+| `strategy_change` | `verify.py` / `verify_selection.py` / `verify_evidence.py` / `verify_report.py` / `verify_parallel.py` / `host_isolation.py` / `.github/` / `tools/` / `pyproject.toml` 自身变化：映射边界不可信 |
 | `infrastructure_change` | `tests/` 下非测试文件的新增、删除、重命名或修改 |
 | `shared_resource` | fixture、技能指引与评估资源：影响面不可静态判定，不能按扩展名放行 |
 | `guarded_doc` | 不在允许列表内的说明文档 |
@@ -90,6 +90,8 @@ cat .verify/runs/<run ID>/shadow.json
 策略 v14 将 `docx_edit.py` 和 `tests/test_docx_edit.py` 并入 `docx-review` 映射，覆盖回写的字节保留、写前闸门与失败恢复；浏览器场景仍为 `docx-review`。修改策略自身继续回退完整 PR 门禁，开发阶段只执行相关快速检查并移交全量要求。
 
 策略 v17（issue #180）新增 `pptx-generation` 规则，覆盖内置 PPTX 制作链路：`pptx_build.py` / `pptx_check.py` / `pptx_render.py` 映射到制作器、文件检查器、渲染辅助与 `tests/test_report_check_deliverables.py` 的额外交付判定用例；`protocol-notes` 规则的 `report_check.py` 选择器同步纳入该测试文件。逐页视觉检查与 PowerPoint 实机兼容属 PR review 门禁，不在快速检查映射内。
+
+策略 v18（issue #183）随 lint 组接入更新两条既有规则：`exec-config` 增加 `pyproject.toml`——它锁定 lint 组实际执行的 ruff 版本与规则（`required-version`、`select`），属于执行配置，差异按 `strategy_change` 回退完整检查；`guarded-docs` 增加 `.git-blame-ignore-revs`——它不是允许列表内的说明文档，差异按 `guarded_doc` 回退。版本不一致的旧验证记录不参与复用。
 
 
 ## 文档允许列表核实（策略 v11，issue #117；策略 v16 起 GLOSSARY 与 ADR 撤销豁免，#162）

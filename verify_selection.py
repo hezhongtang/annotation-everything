@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 17
+STRATEGY_VERSION = 18
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -244,15 +244,15 @@ SELECTION_RULES = (
     ),
     SelectionRule(
         rid="exec-config",
-        prefixes=("verify.py", "verify_selection.py", "verify_evidence.py", "verify_report.py", "verify_parallel.py", "host_isolation.py", ".github/", "tools/"),
+        prefixes=("verify.py", "verify_selection.py", "verify_evidence.py", "verify_report.py", "verify_parallel.py", "host_isolation.py", ".github/", "tools/", "pyproject.toml"),
         fallback="strategy_change",
-        why="验证入口、策略与 CI 配置自身变化，映射边界不可信",
+        why="验证入口、策略、CI 配置与 ruff 工具配置自身变化，映射边界不可信",
     ),
     SelectionRule(
         rid="guarded-docs",
-        prefixes=("docs/", "AGENTS.md", "CLAUDE.md", "LICENSE", ".gitignore", ".gitattributes"),
+        prefixes=("docs/", "AGENTS.md", "CLAUDE.md", "LICENSE", ".gitignore", ".gitattributes", ".git-blame-ignore-revs"),
         fallback="guarded_doc",
-        why="不在狭窄允许列表内的说明文档，保守回退完整检查",
+        why="不在狭窄允许列表内的说明文档与仓库辅助文件，保守回退完整检查",
     ),
 )
 
