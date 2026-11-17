@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
+import contextlib
 import http.client
 import json
 import os
@@ -453,8 +454,9 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(self.request(target_info, "POST", save_path, page, target_rid)[0], 200)
         stop_path = target / ".annotation-stop.json"
         overview_body = {"reviewId": target_rid, "scope": "workspace"}
-        stop_from_overview = lambda: self.request(host_info, "POST", "/api/overview/stop",
-                                                  overview_body, host_rid, timeout=12)
+        def stop_from_overview():
+            return self.request(host_info, "POST", "/api/overview/stop",
+                                overview_body, host_rid, timeout=12)
 
         def challenge():
             return self.request(target_info, "POST", save_path, page, target_rid)[2]["request"]

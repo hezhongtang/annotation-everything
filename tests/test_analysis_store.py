@@ -354,7 +354,7 @@ class RoundFlowTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "agent-busy")
         # 批次在处理中时同样领不到轮次
         analysis_store.writeback(self.d, self.state["id"], self.round1, 1, [], by="Synthetic")
-        third = add_note(self.d, page=7)
+        add_note(self.d, page=7)
         store.handoff_submit(self.d, "合成附言")
         store.handoff_claim(self.d, by="Synthetic")
         with self.assertRaises(store.HandoffError):

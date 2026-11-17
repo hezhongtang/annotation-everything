@@ -600,7 +600,7 @@ class CliFlowTests(unittest.TestCase):
 
     def test_parallel_batches_keep_their_stages_straight(self):
         first = store.add(self.d, {"page": 2, "text": "第一批 A"})[1]["id"]
-        second = store.add(self.d, {"page": 3, "text": "第二批 B"})[1]["id"]
+        store.add(self.d, {"page": 3, "text": "第二批 B"})[1]["id"]
         store.handoff_submit(self.d, "第一批", target="review")
         store.handoff_claim(self.d, by="A")
         store.set_status(self.d, first, "drafted", by="A")

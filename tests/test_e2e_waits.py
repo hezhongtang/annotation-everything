@@ -114,7 +114,7 @@ class BoundedPollTests(unittest.TestCase):
             probes.append(clock.now)
             return False
 
-        with capture_output() as out:
+        with capture_output():
             result = e2e_waits.bounded_poll(probe, 0.2, step=0.05,
                                             clock=clock.monotonic, sleeper=clock.sleep)
         self.assertFalse(result)

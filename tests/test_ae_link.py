@@ -337,7 +337,9 @@ class AeLinkCliTests(unittest.TestCase):
         self.assertEqual(os.path.realpath(str(self.custom_link())), str(self.copy_dir.resolve()))
 
     def test_windows_link_privilege_error_fails_cleanly_with_target_guidance(self):
-        import contextlib, io, unittest.mock
+        import contextlib
+        import io
+        import unittest.mock
         previous = ae.current_locale()
         self.addCleanup(ae.set_locale, previous)
         custom = self.custom_dir("中文 目标")
@@ -395,7 +397,9 @@ class AeLinkCliTests(unittest.TestCase):
 
     @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_existing_correct_links_need_no_symlink_privilege(self):
-        import contextlib, io, unittest.mock as mock
+        import contextlib
+        import io
+        import unittest.mock as mock
         self.addCleanup(ae.set_locale, ae.current_locale())
         self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
         link = agent_link(self.home, "codex")
@@ -413,7 +417,9 @@ class AeLinkCliTests(unittest.TestCase):
 
     @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_link_failure_restores_replaced_links_and_preserves_existing_links(self):
-        import contextlib, io, unittest.mock as mock
+        import contextlib
+        import io
+        import unittest.mock as mock
         self.addCleanup(ae.set_locale, ae.current_locale())
         self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
         old_target = self.home / "previous-skill"
@@ -479,7 +485,9 @@ class AeLinkCliTests(unittest.TestCase):
 
     @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_upgrade_post_verification_failure_rolls_back_link_changes(self):
-        import contextlib, io, unittest.mock as mock
+        import contextlib
+        import io
+        import unittest.mock as mock
         self.addCleanup(ae.set_locale, ae.current_locale())
         self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
         old_target = self.home / "previous-skill"
@@ -508,7 +516,9 @@ class AeLinkCliTests(unittest.TestCase):
         self.assertEqual((self.copy_dir / RECORD_NAME).read_bytes(), record_before)
 
     def test_windows_privilege_error_preserves_target_and_link_intent_across_commands(self):
-        import contextlib, io, unittest.mock
+        import contextlib
+        import io
+        import unittest.mock
         previous = ae.current_locale()
         self.addCleanup(ae.set_locale, previous)
         custom_target = self.home.parent / "real-target"

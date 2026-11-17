@@ -263,7 +263,8 @@ class PortPoolTests(TempRootTestCase):
         foreign = ForeignListener(port)
         self.addCleanup(foreign.close)
         write_ledger(self.ledger_home, {self.rid: {"dir": str(self.root / "review"), "port": port}})
-        probe = lambda p: ae.probe_port(p) if p == port else None     # 只探测测试自建的端口
+        def probe(p):  # 只探测测试自建的端口
+            return ae.probe_port(p) if p == port else None
         result = ae.check_port_pool(self.ctx(port_probe=probe))
         self.assertEqual(result.level, FAIL)
         self.assertIn(str(port), result.message)
@@ -273,7 +274,8 @@ class PortPoolTests(TempRootTestCase):
     def test_passes_when_pool_port_used_by_own_serve(self):
         d = make_review_dir(self.root, self.rid)
         server = self.start_server(d)
-        probe = lambda p: ae.probe_port(p) if p == server.port else None
+        def probe(p):
+            return ae.probe_port(p) if p == server.port else None
         result = ae.check_port_pool(self.ctx(port_probe=probe))
         self.assertEqual(result.level, PASS)
 
@@ -355,8 +357,9 @@ class OrphanServerTests(TempRootTestCase):
         self.assertEqual(result.level, PASS)
 
     def test_ignores_processes_without_serve_py_script(self):
-        lister = lambda: [(999998, "/usr/bin/tail -f /var/log/system.log"),
-                          (999997, f"{sys.executable} {ROOT / 'tests' / 'test_core.py'}")]
+        def lister():
+            return [(999998, "/usr/bin/tail -f /var/log/system.log"),
+                    (999997, f"{sys.executable} {ROOT / 'tests' / 'test_core.py'}")]
         result = ae.check_orphan_servers(self.ctx(process_lister=lister))
         self.assertEqual(result.level, PASS)
 
@@ -367,7 +370,8 @@ class OrphanServerTests(TempRootTestCase):
     def test_skips_when_ledger_unreadable(self):
         self.ledger_home.mkdir(parents=True)
         (self.ledger_home / "reviews.json").write_text("坏", encoding="utf-8")
-        lister = lambda: [(424246, f"{sys.executable} {SERVE_PY} {self.root / 'x'} --no-open")]
+        def lister():
+            return [(424246, f"{sys.executable} {SERVE_PY} {self.root / 'x'} --no-open")]
         result = ae.check_orphan_servers(self.ctx(process_lister=lister))
         self.assertEqual(result.level, PASS)
 

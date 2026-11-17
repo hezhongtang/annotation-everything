@@ -202,7 +202,7 @@ class AnalysisAgentTests(unittest.TestCase):
     def test_claim_prefers_earlier_batch_across_queues(self):
         """批次交出在先、轮次在后：合在一起领取时先领批次。"""
         first = self.add_note()
-        second = self.add_note(text="第 5 页配色太浅", page=5)
+        self.add_note(text="第 5 页配色太浅", page=5)
         store.handoff_submit(self.review, "先交的批次")   # 批次 1：first + second
         analysis_store.start(self.review, first["id"])     # first 移出批次，开题轮次排队在后
         got = json.loads(_cli_out("claim", str(self.review), "--events", "analysis"))
@@ -214,7 +214,7 @@ class AnalysisAgentTests(unittest.TestCase):
         """轮次交出在先、批次在后：先领轮次；轮次在手上时一次只处理一项，领不到批次。"""
         note = self.add_note()
         analysis_store.start(self.review, note["id"])      # 开题轮次先排队
-        other = self.add_note(text="第 5 页配色太浅", page=5)
+        self.add_note(text="第 5 页配色太浅", page=5)
         store.handoff_submit(self.review, "后交的批次")
         got = json.loads(_cli_out("claim", str(self.review), "--events", "analysis"))
         self.assertTrue(got["claimed"])

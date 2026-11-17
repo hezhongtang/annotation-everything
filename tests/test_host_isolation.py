@@ -313,7 +313,6 @@ class NestedEntryTests(TemporaryLockDirTestCase):
         """没有继承豁免的同级进程仍要等锁：豁免只沿父子链传递。"""
         parent = hi.acquire(["host-state"], timeout=5.0, env=self.child_env())
         self.addCleanup(hi.release, parent)
-        started = time.monotonic()
         try:
             hi.acquire(["host-state"], timeout=0.3, env=self.child_env())
             self.fail("未豁免的进程不应拿到别人持有的锁")

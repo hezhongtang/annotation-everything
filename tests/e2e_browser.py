@@ -1869,7 +1869,7 @@ def skill_i18n_checks(browser, tmp: Path):
     cli = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "skills", str(d), "--locale", "en"],
                          capture_output=True, text=True, timeout=60)
     ok(cli.returncode == 0 and "sample:sample (Style)" in cli.stdout
-       and f"skill-204" in cli.stdout and "Standing skills" in cli.stdout,
+       and "skill-204" in cli.stdout and "Standing skills" in cli.stdout,
        "命令行英文输出与页面保存的结果一致")
     zh = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "skills", str(d), "--locale", "zh-CN"],
                         capture_output=True, text=True, timeout=60)
@@ -2741,7 +2741,6 @@ def handoff_i18n_checks(browser, tmp: Path):
         page.fill("#handMsg", "先改第 2 页")
         open_lines = page.inner_text("#handInfo")
         ok("open annotations, on pages" in open_lines, f"英文批次范围（实际 {open_lines!r}）")
-        posts = sum(1 for method, _url in net if method == "POST")
         page.click("#doHand")
         ok(wait_until(lambda: (d / "handoff.json").exists(), page, 5), "提交写进 handoff.json")
         item = json.loads((d / "handoff.json").read_text(encoding="utf-8"))["items"][-1]
@@ -3165,7 +3164,8 @@ def current_task_controls_checks(browser, tmp: Path):
 
         requests = []
         page.on("request", lambda req: requests.append((req.method, req.url)))
-        stop_requests = lambda: [r for r in requests if r[0] == "POST" and r[1].endswith("/api/server/stop")]
+        def stop_requests():
+            return [r for r in requests if r[0] == "POST" and r[1].endswith("/api/server/stop")]
         button = page.locator("header #stopReviewBtn")
 
         def stop_info_contains(tab, text, seconds=5):

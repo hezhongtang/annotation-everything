@@ -18,6 +18,7 @@ import struct
 import sys
 import time
 import uuid
+from typing import Any
 
 import ledger
 import notes_store as store

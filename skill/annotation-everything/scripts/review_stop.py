@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 from pathlib import Path
-import stat
 import time
 import uuid
 
