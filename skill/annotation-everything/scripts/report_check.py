@@ -29,8 +29,12 @@ import json
 import math
 import re
 import sys
+import posixpath
+import zipfile
+from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -106,7 +110,7 @@ class Checks:
              "record.freshness", "record.pageRefs", "record.calculations", "record.checks",
              "record.claims", "record.reading", "record.sources",
              "record.visual", "record.length", "record.method", "record.revision",
-             "record.alignment", "report.navigation")
+             "record.alignment", "report.navigation", "record.deliverables")
 
     def __init__(self, locale: str):
         self.locale = locale
@@ -177,6 +181,18 @@ class Checks:
                                     "record.alignment-qa-bad": "check.err.alignmentQaBad",
                                     "record.alignment-conflict-pass": "check.err.alignmentConflictPass"}.get(
                                         code, "check.err.alignmentBad"),
+               "record.deliverables": {
+                   "record.deliverable-bad": "check.err.deliverableBad",
+                   "record.deliverable-missing": "check.err.deliverableMissing",
+                   "record.deliverable-stale": "check.err.deliverableStale",
+                   "record.deliverable-invocation": "check.err.deliverableInvocation",
+                   "record.deliverable-pages": "check.err.deliverablePages",
+                   "record.deliverable-visual": "check.err.deliverableVisual",
+                   "record.deliverable-consistency": "check.err.deliverableConsistency",
+                   "record.deliverable-openissues": "check.err.deliverableOpenIssues",
+                   "record.deliverable-powerpoint": "check.err.deliverablePowerpoint",
+                   "record.deliverable-status": "check.err.deliverableStatus"}.get(
+                       code, "check.err.deliverableBad"),
                "report.navigation": {"report.nav-broken-link": "check.err.navBrokenLink",
                                      "report.nav-bad-range": "check.err.navBadRange"}.get(
                                          code, "check.err.navBrokenLink"),
@@ -1190,6 +1206,223 @@ def check_record_alignment(record: dict | None, c: Checks) -> dict | None:
     return align_info
 
 
+def check_record_deliverables(record: dict, base_dir: Path, c: Checks) -> list[dict]:
+    """额外交付（issue #180）：核对记录里的 PPTX 证据链并派生各项可交付判定。
+
+    程序只核对证据的完整性与一致性：产物存在、哈希新鲜、调用依据、页面覆盖、
+    图片证据绑定、pass 与未解决问题的矛盾、跨格式数字对应，以及实测声明的
+    依据。诚实记录的未完成（unavailable / not_run）不是程序失败——它在摘要里
+    如实披露缺口。返回每项的派生信息供摘要与结构化结果使用。
+    """
+    items = record.get("deliverables")
+    if items is None:
+        return []
+    problems: list[dict] = []
+    infos: list[dict] = []
+    if not isinstance(items, list):
+        c.set("record.deliverables", "fail", code="record.deliverable-bad")
+        return infos
+
+    detail_keys = {
+        "record.deliverable-bad": "check.err.deliverableBad",
+        "record.deliverable-missing": "check.err.deliverableMissing",
+        "record.deliverable-stale": "check.err.deliverableStale",
+        "record.deliverable-invocation": "check.err.deliverableInvocation",
+        "record.deliverable-pages": "check.err.deliverablePages",
+        "record.deliverable-visual": "check.err.deliverableVisual",
+        "record.deliverable-consistency": "check.err.deliverableConsistency",
+        "record.deliverable-openissues": "check.err.deliverableOpenIssues",
+        "record.deliverable-powerpoint": "check.err.deliverablePowerpoint",
+        "record.deliverable-status": "check.err.deliverableStatus",
+    }
+
+    def fail(code: str, part: str = "", slide: int | None = None, **params: object) -> None:
+        problems.append({"code": code, "part": part, "slide": slide,
+                         "detail_key": detail_keys.get(code, "check.err.deliverableBad"),
+                         "params": params})
+
+    for index, item in enumerate(items, 1):
+        problem_start = len(problems)
+        label = f"deliverables[{index}]"
+        if not isinstance(item, dict):
+            fail("record.deliverable-bad", label)
+            continue
+        kind = item.get("kind")
+        file_name = item.get("file")
+        required = item.get("required", False)
+        require_powerpoint = item.get("requirePowerpoint", False)
+        info = {"kind": kind if isinstance(kind, str) else "?",
+                "file": file_name if isinstance(file_name, str) and file_name else None,
+                "required": bool(required), "requirePowerpoint": bool(require_powerpoint),
+                "deliverable": False, "powerpoint": None, "openIssues": 0,
+                "checks": {}, "note": item.get("note", "")}
+        infos.append(info)
+        if kind != "pptx":
+            fail("record.deliverable-bad", label, kind=str(kind))
+            continue
+        # 结构与枚举：三项检查与实测状态都用 pass / fail / not_run / unavailable
+        checks = item.get("checks")
+        statuses: dict[str, str] = {}
+        if file_name:
+            if not isinstance(checks, dict):
+                fail("record.deliverable-bad", label)
+                continue
+            for name in ("file", "visual", "consistency"):
+                entry = checks.get(name)
+                status = entry.get("status") if isinstance(entry, dict) else None
+                if status not in CHECK_STATUSES:
+                    fail("record.deliverable-bad", label, field=name)
+                    status = "not_run"
+                statuses[name] = status
+            info["checks"] = dict(statuses)
+        else:
+            # 没有有效产物：如实声明状态并给出原因与可继续的条件
+            status = item.get("status")
+            if status not in CHECK_STATUSES:
+                fail("record.deliverable-bad", label, field="status")
+            note = item.get("note")
+            resume = item.get("resume")
+            has_reason = isinstance(note, str) and bool(note.strip()) or \
+                isinstance(resume, str) and bool(resume.strip())
+            if not has_reason:
+                fail("record.deliverable-status", label)
+            if checks:
+                fail("record.deliverable-bad", label, field="checks")
+            open_issues = [x for x in item.get("openIssues", [])
+                           if isinstance(x, str)] if isinstance(item.get("openIssues"), list) else []
+            info["openIssues"] = len(open_issues)
+        if file_name is None:
+            continue
+        powerpoint = item.get("powerpoint")
+        ppt_status = None
+        if isinstance(powerpoint, dict):
+            ppt_status = powerpoint.get("status")
+            info["powerpoint"] = ppt_status if ppt_status in CHECK_STATUSES else None
+            if ppt_status not in CHECK_STATUSES:
+                fail("record.deliverable-powerpoint", label, status=str(ppt_status))
+            elif ppt_status == "pass" and (
+                    not str(powerpoint.get("os", "")).strip()
+                    or not str(powerpoint.get("version", "")).strip()):
+                fail("record.deliverable-powerpoint", label)
+        else:
+            fail("record.deliverable-powerpoint", label)
+
+        # 产物与哈希：旧通过声明不适用于已改变的文件
+        part_path = base_dir / str(file_name)
+        declared_sha = item.get("sha256")
+        actual_sha = None
+        try:
+            actual_sha = sha256_bytes(part_path.read_bytes())
+        except OSError:
+            fail("record.deliverable-missing", str(file_name))
+            continue
+        if declared_sha != actual_sha:
+            fail("record.deliverable-stale", str(file_name))
+        build = item.get("build")
+        if not isinstance(build, dict) or not str(build.get("tool", "")).strip() \
+                or not str(build.get("invocation", "")).strip():
+            fail("record.deliverable-invocation", str(file_name))
+        pages = item.get("pages")
+        texts, actual_pages = _pptx_slide_texts(part_path)
+        if not isinstance(pages, int) or isinstance(pages, bool) or pages <= 0:
+            fail("record.deliverable-pages", str(file_name), field="pages")
+            pages = 0
+        elif pages != actual_pages:
+            fail("record.deliverable-pages", str(file_name),
+                 declared=pages, actual=actual_pages)
+        if statuses.get("visual") == "pass":
+            render = item.get("render")
+            if not isinstance(render, dict) or render.get("pptxSha256") != actual_sha:
+                fail("record.deliverable-stale", str(file_name), field="render.pptxSha256")
+            evidence = checks["visual"].get("pages")
+            seen: set[int] = set()
+            if not isinstance(evidence, list):
+                fail("record.deliverable-visual", str(file_name), field="pages")
+                evidence = []
+            for entry in evidence:
+                if not isinstance(entry, dict):
+                    fail("record.deliverable-visual", str(file_name), field="page")
+                    continue
+                number = entry.get("page")
+                issues = entry.get("issues", [])
+                image = entry.get("image")
+                image_sha = entry.get("sha256")
+                if not isinstance(number, int) or not (1 <= number <= (pages or 0)):
+                    fail("record.deliverable-pages", str(file_name), page=number)
+                    continue
+                seen.add(number)
+                if entry.get("checked") is not True:
+                    fail("record.deliverable-visual", str(file_name), page=number)
+                if isinstance(issues, list) and issues:
+                    fail("record.deliverable-visual", str(file_name), page=number,
+                         issues=len(issues))
+                image_path = base_dir / str(image) if isinstance(image, str) and image else None
+                if image_path is None or not image_path.is_file():
+                    fail("record.deliverable-visual", str(file_name), page=number,
+                         field="image")
+                elif not isinstance(image_sha, str) or \
+                        sha256_bytes(image_path.read_bytes()) != image_sha:
+                    fail("record.deliverable-visual", str(file_name), page=number,
+                         field="sha256")
+            missing = [n for n in range(1, (pages or 0) + 1) if n not in seen]
+            if missing:
+                fail("record.deliverable-visual", str(file_name), missing="、".join(map(str, missing)))
+        if statuses.get("consistency") == "pass":
+            mappings = checks["consistency"].get("findings")
+            claims = {f.get("claim"): f for f in record.get("findings", [])
+                      if isinstance(f, dict) and isinstance(f.get("claim"), str)}
+            mapped: set[str] = set()
+            if not isinstance(mappings, list):
+                fail("record.deliverable-consistency", str(file_name), field="findings")
+                mappings = []
+            for entry in mappings:
+                if not isinstance(entry, dict):
+                    fail("record.deliverable-consistency", str(file_name), field="finding")
+                    continue
+                claim = entry.get("claim")
+                mapped.add(claim if isinstance(claim, str) else "")
+                page_list = entry.get("pages")
+                if not isinstance(page_list, list) or not page_list:
+                    fail("record.deliverable-consistency", str(file_name), claim=str(claim))
+                    continue
+                page_tokens: set[str] = set()
+                for number in page_list:
+                    if not isinstance(number, int) or not (1 <= number <= (pages or 0)):
+                        fail("record.deliverable-pages", str(file_name), page=number)
+                    else:
+                        page_tokens |= _numeric_tokens(texts.get(number, ""))
+                for token in _claim_numbers(claims.get(claim, {})):
+                    if token not in page_tokens:
+                        fail("record.deliverable-consistency", str(file_name),
+                             page=page_list if isinstance(page_list, list) and page_list else None,
+                             claim=str(claim), token=token)
+            unmapped = sorted(set(claims) - mapped)
+            if unmapped:
+                fail("record.deliverable-consistency", str(file_name),
+                     missing="、".join(unmapped))
+        open_issues = item.get("openIssues")
+        if isinstance(open_issues, list):
+            info["openIssues"] = len(open_issues)
+            if open_issues and any(status == "pass" for status in statuses.values()):
+                fail("record.deliverable-openissues", str(file_name))
+        no_failures = len(problems) == problem_start
+        info["deliverable"] = bool(
+            no_failures
+            and statuses.get("file") == "pass" and statuses.get("visual") == "pass"
+            and statuses.get("consistency") == "pass"
+            and not info["openIssues"]
+            and (not require_powerpoint or info["powerpoint"] == "pass"))
+    rendered = [{"code": p["code"], "part": p["part"], "slide": p["slide"],
+                 "detail": t(c.locale, p["detail_key"], part=p["part"], **p["params"])}
+                for p in problems]
+    c.set("record.deliverables", "fail" if problems else "pass",
+          code=problems[0]["code"] if problems else None,
+          **({"part": problems[0]["part"]} if problems else {}))
+    entry = c.items["record.deliverables"]
+    entry["problems"] = rendered
+    return infos
+
+
 def _alignment_deviation_pairs(deviations: list[dict] | None,
                                dimensions: dict | None) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = [(d["item"], d["reason"]) for d in (deviations or [])]
@@ -1288,6 +1521,94 @@ def check_report_navigation(pages: list[dict], c: Checks) -> None:
     c.set("report.navigation", "pass")
 
 
+def _local_tag(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _pptx_slide_texts(path: Path) -> tuple[dict[int, str], int]:
+    """提取 PPTX 每张幻灯片的文本（含图表数据值），按 sldIdLst 顺序 1 起编页。
+
+    供跨格式一致性比对使用；读取失败返回空映射——调用方按「一致性无法验证」
+    处理，不让报告检查因附加产物损坏而崩溃。
+    """
+    try:
+        with zipfile.ZipFile(path) as archive:
+            presentation = ET.fromstring(archive.read("ppt/presentation.xml"))
+            rels_root = ET.fromstring(archive.read("ppt/_rels/presentation.xml.rels"))
+            targets = {rel.get("Id", ""): rel.get("Target", "")
+                       for rel in rels_root if _local_tag(rel.tag) == "Relationship"}
+            slide_parts = []
+            for node in presentation.iter():
+                if _local_tag(node.tag) != "sldId":
+                    continue
+                rid = node.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id", "")
+                target = targets.get(rid, "")
+                if target:
+                    base = _posix_norm("ppt/presentation.xml", target)
+                    slide_parts.append(base)
+            texts: dict[int, str] = {}
+            for page, part in enumerate(slide_parts, 1):
+                chunks: list[str] = []
+                slide_root = ET.fromstring(archive.read(part))
+                for element in slide_root.iter():
+                    if _local_tag(element.tag) == "t" and (element.text or ""):
+                        chunks.append(element.text)
+                slide_rels_name = posixpath.join(posixpath.dirname(part), "_rels",
+                                                 posixpath.basename(part) + ".rels")
+                if slide_rels_name in archive.NameToInfo:
+                    slide_rels = ET.fromstring(archive.read(slide_rels_name))
+                    for rel in slide_rels:
+                        if _local_tag(rel.tag) != "Relationship":
+                            continue
+                        rtype = rel.get("Type", "")
+                        target = rel.get("Target", "")
+                        if rtype.endswith("/chart") and target and rel.get("TargetMode") != "External":
+                            chart_part = _posix_norm(part, target)
+                            chart_root = ET.fromstring(archive.read(chart_part))
+                            for element in chart_root.iter():
+                                if _local_tag(element.tag) == "v" and (element.text or ""):
+                                    chunks.append(element.text)
+                texts[page] = "\n".join(chunks)
+            return texts, len(slide_parts)
+    except (OSError, zipfile.BadZipFile, KeyError, ET.ParseError):
+        return {}, 0
+
+
+def _posix_norm(source: str, target: str) -> str:
+    """以 posixpath 解析包内关系目标（与 pptx_reader 的定位约定一致）。"""
+    if target.startswith("/"):
+        return target.lstrip("/")
+    return posixpath.normpath(posixpath.join(posixpath.dirname(source), target))
+
+
+_NUMBER_TOKEN = re.compile(r"[+-]?(?:[0-9]+(?:[0-9,，]*[0-9])?(?:\.[0-9]+)?|\.[0-9]+)"
+                           r"(?:[eE][+-]?[0-9]+)?")
+
+
+def _numeric_tokens(text: str) -> set[str]:
+    """抽取文本里的数字令牌，归一化成可比较的 Decimal 文本（12 与 12.0 相等）。"""
+    tokens: set[str] = set()
+    for match in _NUMBER_TOKEN.finditer(text.replace("，", ",").replace("−", "-")):
+        raw = match.group(0).replace(",", "")
+        try:
+            tokens.add(str(Decimal(raw).normalize()))
+        except (InvalidOperation, ValueError):
+            continue
+    return tokens
+
+
+def _claim_numbers(finding: dict) -> set[str]:
+    """结论声明里的关键数字：声明文本 + 声明口径的计算期望值。"""
+    tokens = _numeric_tokens(str(finding.get("claim", "")))
+    calculation = finding.get("calculation")
+    if isinstance(calculation, dict) and calculation.get("expected") is not None:
+        try:
+            tokens.add(str(Decimal(str(calculation["expected"])).normalize()))
+        except (InvalidOperation, ValueError):
+            pass
+    return tokens
+
+
 def coverage_for(record: dict | None, fresh: bool, kind: str,
                  script_present: bool = True) -> tuple[str, int, int, int]:
     """汇总一类核验的覆盖情况；状态语义语言无关，返回 (状态, 通过数, 总数, 失败数)。
@@ -1331,9 +1652,10 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
               calc_pending: list[str] | None = None, source_stale: bool = False,
               reading: dict | None = None, script_present: bool = True,
               revision: dict | None = None, alignment: dict | None = None,
-              length_info: dict | None = None) -> dict:
+              length_info: dict | None = None,
+              deliverables: list[dict] | None = None) -> dict:
     reasons: list[str] = []
-    failed_program = checks.failed()
+    failed_program = [item for item in checks.failed() if item["id"] != "record.deliverables"]
     # 全部实质材料不可读：空结构或虚构内容不能当作初稿生成完成（issue #71）。
     reading_blocked = any(f["id"] == "record.reading" and f["code"] == "record.reading-blocked"
                           for f in failed_program)
@@ -1417,6 +1739,14 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
                          else f"{x['scope']} ({x['reason']})"
                          for x in revision["pending"])
         reasons.append(t(checks.locale, "check.reason.revisionPending", items=items))
+    # 额外交付缺口（issue #180）：用户明确要求的 PPTX 未完成时保留整项请求缺口，
+    # 不影响 HTML 自己的可交付判定，也不把已通过的 HTML 检查记成失败。
+    gap_items = [f"{d['file'] or d['note'] or d['kind']}"
+                 for d in (deliverables or [])
+                 if d.get("required") and not d.get("deliverable")]
+    if gap_items:
+        reasons.append(t(checks.locale, "check.reason.deliverablesGap",
+                         items="、".join(gap_items)))
     if alignment:
         sep = "；" if checks.locale == "zh-CN" else "; "
         if alignment.get("conflicts"):
@@ -1465,6 +1795,7 @@ def summarize(record: dict | None, fresh: bool, checks: Checks, draft_ok: bool,
                    "revision": revision,
                    "alignment": alignment,
                    "length": length_info},
+        "deliverables": deliverables or [],
         "coverage": coverage,
         "coverageCounts": coverage_counts,
         "coverageCapped": capped,
@@ -1520,6 +1851,7 @@ def check_report(report_path: Path, script_path: Path | None = None,
     revision = None
     alignment = None
     length_info = None
+    deliverables = None
     if record is not None:
         claims_info = analyze_claims(record)
         check_page_refs(record, pages, c)
@@ -1533,12 +1865,14 @@ def check_report(report_path: Path, script_path: Path | None = None,
         length_info = check_record_length(record, pages, c)
         revision = check_record_revision(record, c)
         alignment = check_record_alignment(record, c)
+        deliverables = check_record_deliverables(record, report_path.parent, c)
         if script_declared_but_missing(record, script_text is not None):
             c.add_warning("check.warn.scriptDeclaredMissing")
     result = summarize(record, fresh, c, draft_ok, record_ok, claims_info=claims_info,
                        calc_pending=calc_pending, source_stale=source_stale, reading=reading,
                        script_present=script_text is not None, revision=revision,
-                       alignment=alignment, length_info=length_info)
+                       alignment=alignment, length_info=length_info,
+                       deliverables=deliverables)
     result["schema"] = RESULT_SCHEMA
     result["inputs"] = {
         "report": {"path": report_path.name, "sha256": report_sha},
@@ -1704,6 +2038,13 @@ def render_summary(result: dict) -> str:
                        fresh=t(loc, "check.record.fresh" if rec["fresh"] else "check.record.stale")))
         oi = rec["openItems"]
         lines.append(t(loc, "check.openItems.line", n=oi["n"], blocking=oi["blocking"]))
+    for d in result.get("deliverables") or []:
+        label = d.get("file") or d.get("note") or d.get("kind") or "?"
+        lines.append("  " + t(loc, "check.deliverables.line", file=label,
+                              deliverable=t(loc, "check.deliverables.yes"
+                                            if d.get("deliverable")
+                                            else "check.deliverables.no"),
+                              powerpoint=d.get("powerpoint") or "not_run"))
     lines.append(t(loc, "check.deliverable.yes" if v["deliverable"]
                    else "check.deliverable.no"))
     for r in v["reasons"]:

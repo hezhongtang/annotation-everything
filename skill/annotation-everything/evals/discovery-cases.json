@@ -62,6 +62,16 @@
       "request": "Use my installed synthetic-brief-kit skill to generate a report draft from materials/; do not use the built-in paradigm.",
       "workflow": "references/generation.en.md",
       "action": "generate-with-external-skill"
+    },
+    {
+      "request": "从这些材料生成一份汇报用的 PPT 演示文稿。",
+      "workflow": "references/generation-pptx.zh-CN.md",
+      "action": "generate-deck"
+    },
+    {
+      "request": "Turn this material into a PPTX presentation deliverable.",
+      "workflow": "references/generation-pptx.en.md",
+      "action": "generate-deck"
     }
   ]
 }

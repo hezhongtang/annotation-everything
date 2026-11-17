@@ -165,6 +165,9 @@ See the [English format reference](skill/annotation-everything/references/format
 | `notes.py batches` | Show batch history |
 | `notes.py skills` | Show or set the skill catalog and standing skills. `--locale` chooses the output language and beats `AE_LOCALE` and the review setting; scopes accept `全部` / `报告` / `讲稿` / `风格优化` or `all` / `report` / `script` / `style` |
 | `check_pptx_fonts.py original.pptx [--pdf converted.pdf]` | Check fonts before and after converting a PPTX file; `--locale auto\|zh-CN\|en` or `AE_LOCALE` picks the interface language |
+| `pptx_build.py --deck deck.json --out deck.pptx [--json]` | Built-in PPTX builder: writes an editable deck from an `ae-pptx-deck/1` spec — named layouts, theme colors/fonts, sections, native charts with embedded editable data, speaker notes. Deterministic bytes; exit 2 on spec errors |
+| `pptx_check.py deck.pptx [--json]` | File-level checks for generated PPTX packages: parts and relationship targets, content types, layout references and placeholders, native chart structure, theme parts, section coverage; result schema `ae-pptx-check/1` |
+| `pptx_render.py deck.pptx --out-dir pages/ [--json]` | Optional-tool renderer (LibreOffice `soffice` + poppler `pdftoppm`, overridable via `AE_SOFFICE` / `AE_PDFTOPPM`): current-run PNGs and an `ae-pptx-render/1` manifest binding page hashes to the source PPTX hash, with tool versions |
 
 </details>
 
@@ -285,6 +288,7 @@ When no report exists yet, give the agent your source material and requirements.
 - **Executable density and length rules**: reports target `presentation-led`, `standalone reading`, or `deep review` density, remain self-contained with or without speaker notes, and record whether length limits are `hard` or `reference` targets and whether `data-kind="supplement"` supplementary pages count (`request.lengthSpec`). A single `hard` page count is an upper bound; legacy records retain exact-count checks. Internal contradictions trigger tradeoff confirmation, and unresolved conflicts or unanswered Q&A items prevent delivery.
 - **Concrete visual and task-oriented navigation**: abstract style words and references are translated into concrete variables, typography hierarchy, grid, whitespace, and chart rules verified under both standalone HTML and AE's `1280×720` Shadow DOM review scaling; reports support overview comprehension, section-topic lookup, and bidirectional conclusion ↔ evidence/supplement navigation via `href="#page-<key>"` (with `data-page-ref` fallback and a viewer back button across rebuilds).
 - **Shared verification and legacy compatibility**: external generation skills follow the same alignment and verification rules (`record.alignment`, `report.navigation`, extended `record.length`, plus `request.alignment`, `request.qa`, `request.lengthSpec`, and `deviations` inside `ae-report-record/1`), while older records without the new fields stay valid and show unrecorded preferences cleanly.
+- **Built-in PPTX extra deliverable**: when the user asks for a presentation, AE ships a standard-library builder, file-level checks, an optional-tool renderer and per-page evidence rules ([generation-pptx guide](skill/annotation-everything/references/generation-pptx.en.md)); the PPTX is registered in `ae-report-record/1`'s optional `deliverables[]` with build invocation, file hash, page-by-page render evidence, cross-format number consistency and a disclosed PowerPoint verification status. The web report keeps the original flow and the review write-back whitelist is unchanged; records without the field stay valid.
 
 The agent still uses the supplied [base report stylesheet](skill/annotation-everything/references/report-base.css) by default. Reading source material depends on the host's available capabilities. The agent records what was read, partly read or unreadable, including the scope and reasons, and preserves citations and calculation definitions for key claims and figures. Gaps and deviations are disclosed; if all substantive material is unreadable, the draft cannot be declared complete. The report, requested speaker notes and `report-record.json` verification record stay beside the controlled source material. The generation guide defines the record and the workflow.
 
@@ -494,6 +498,9 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── pptx_reader.py             safe PPTX package reader: OOXML element model, capability matrix and slide identity
 │   ├── pptx_report.py             builds PPTX review pages: local LibreOffice/Poppler rendering and font evidence
 │   ├── pptx_edit.py               writes PPTX text, notes, and whitelisted geometry/style edits with preflight, snapshot and atomic replacement
+│   ├── pptx_build.py              built-in PPTX builder: deterministic editable decks from an ae-pptx-deck/1 spec (layouts, theme, sections, native charts, notes)
+│   ├── pptx_check.py              file-level checks for generated PPTX packages: parts, relationships, layouts, chart structure, sections
+│   ├── pptx_render.py             renders a PPTX to per-page PNGs via optional LibreOffice/poppler, with a hashed render manifest
 │   ├── report_check.py            report verification: deterministic rules, coverage and delivery verdict
 │   ├── i18n.py                    loads the shared catalogs and fills in the chosen language; holds the process-wide interface language state (set once by an entry, shared by every module); the command line boilerplate shared by every entry (reading --locale, translating argparse errors, reporting an unsupported language)
 │   ├── update.py                  checks stable releases and updates the skill copy
@@ -534,6 +541,10 @@ tests/test_docx_review.py          DOCX rendering, pagination, untrusted input a
 tests/test_docx_anchor.py          DOCX annotation locations, rebuild remapping, show and export
 tests/test_docx_edit.py            DOCX write-back, byte preservation, preflight gates, failure recovery and CLI
 tests/test_pptx_reader.py          PPTX package reading, element model, capability matrix and untrusted input
+tests/test_pptx_build.py           built-in PPTX builder: deck spec validation, editable package, theme/layouts/charts/notes, determinism
+tests/test_pptx_check.py           PPTX file-level checks and synthetic counterexamples (missing targets, chart structure, stale evidence)
+tests/test_pptx_render.py          render helper probing with fake tools: unavailable diagnosis and manifest binding
+tests/test_report_check_deliverables.py  extra-deliverable verdicts: hash binding, page coverage, cross-format consistency, PowerPoint disclosure
 tests/test_pptx_report.py          PPTX review-page build, rendering diagnostics, font evidence and format routing
 tests/test_pptx_annotations.py     PPTX slide locations: storage contract, page/element/text/point/region fields
 tests/test_pptx_remap.py           PPTX rebuild remapping, annotation exchange and speaker-notes handling

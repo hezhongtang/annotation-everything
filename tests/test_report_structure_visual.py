@@ -713,8 +713,9 @@ class DisclosureTests(unittest.TestCase):
         _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         ids = [c["id"] for c in payload["checks"]]
         self.assertEqual(len(ids), len(rc.Checks.ORDER))
-        self.assertEqual(ids[-5:], ["record.length", "record.method", "record.revision",
-                                    "record.alignment", "report.navigation"])
+        self.assertEqual(ids[-6:], ["record.length", "record.method", "record.revision",
+                                    "record.alignment", "report.navigation",
+                                    "record.deliverables"])
 
 
 if __name__ == "__main__":

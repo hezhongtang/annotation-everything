@@ -89,6 +89,8 @@ cat .verify/runs/<run ID>/shadow.json
 
 策略 v14 将 `docx_edit.py` 和 `tests/test_docx_edit.py` 并入 `docx-review` 映射，覆盖回写的字节保留、写前闸门与失败恢复；浏览器场景仍为 `docx-review`。修改策略自身继续回退完整 PR 门禁，开发阶段只执行相关快速检查并移交全量要求。
 
+策略 v17（issue #180）新增 `pptx-generation` 规则，覆盖内置 PPTX 制作链路：`pptx_build.py` / `pptx_check.py` / `pptx_render.py` 映射到制作器、文件检查器、渲染辅助与 `tests/test_report_check_deliverables.py` 的额外交付判定用例；`protocol-notes` 规则的 `report_check.py` 选择器同步纳入该测试文件。逐页视觉检查与 PowerPoint 实机兼容属 PR review 门禁，不在快速检查映射内。
+
 
 ## 文档允许列表核实（策略 v11，issue #117；策略 v16 起 GLOSSARY 与 ADR 撤销豁免，#162）
 

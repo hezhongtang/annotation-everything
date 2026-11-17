@@ -167,6 +167,62 @@ class GenerationGuideTests(unittest.TestCase):
         self.assertIn("generation.en.md", en_flow, "英文工作流链到生成指引")
 
 
+class GenerationPptxGuideTests(unittest.TestCase):
+    """中英 PPTX 额外交付指引随安装发布，锚点与实现一致（issue #180）。"""
+
+    REQUIRED_ANCHORS = (
+        "pptx_build.py",        # 内置制作器
+        "pptx_check.py",        # 文件层检查
+        "pptx_render.py",       # 渲染辅助
+        "ae-pptx-deck/1",       # deck 规格 schema
+        "ae-pptx-check/1",      # 文件检查结果 schema
+        "ae-pptx-render/1",     # 渲染清单 schema
+        "deliverables",         # 记录扩展字段
+        "AE_SOFFICE",           # 渲染工具探测覆盖
+        "AE_PDFTOPPM",
+    )
+    REFERENCED_SCRIPTS = ("pptx_build.py", "pptx_check.py", "pptx_render.py")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.copy = installed_copy()
+        cls.zh = (cls.copy / "references" / "generation-pptx.zh-CN.md").read_text(encoding="utf-8")
+        cls.en = (cls.copy / "references" / "generation-pptx.en.md").read_text(encoding="utf-8")
+
+    def test_guides_ship_with_install(self):
+        base = SKILL_SRC / "references"
+        self.assertTrue((base / "generation-pptx.zh-CN.md").is_file())
+        self.assertTrue((base / "generation-pptx.en.md").is_file())
+        self.assertTrue((self.copy / "references" / "generation-pptx.zh-CN.md").is_file())
+        self.assertTrue((self.copy / "references" / "generation-pptx.en.md").is_file())
+
+    def test_guides_cross_link_and_anchors(self):
+        self.assertIn("generation-pptx.en.md", self.zh)
+        self.assertIn("generation-pptx.zh-CN.md", self.en)
+        self.assertIn("generation.zh-CN.md", self.zh, "中文指引链回默认范式")
+        self.assertIn("generation.en.md", self.en, "英文指引链回默认范式")
+        for anchor in self.REQUIRED_ANCHORS:
+            self.assertIn(anchor, self.zh, f"中文指引缺锚点 {anchor}")
+            self.assertIn(anchor, self.en, f"英文指引缺锚点 {anchor}")
+
+    def test_deck_schema_matches_builder(self):
+        import pptx_build
+        for text, label in ((self.zh, "中文"), (self.en, "英文")):
+            self.assertIn(pptx_build.DECK_SCHEMA, text, f"{label}指引写明 deck 规格 schema")
+            self.assertIn(pptx_build.BUILD_SCHEMA, text, f"{label}指引写明构建摘要 schema")
+
+    def test_referenced_scripts_ship_with_install(self):
+        for name in self.REFERENCED_SCRIPTS:
+            self.assertTrue((self.copy / "scripts" / name).is_file(),
+                            f"安装副本缺 {name}")
+            self.assertTrue((SCRIPTS / name).is_file(), f"仓库技能缺 {name}")
+
+    def test_skill_entry_links_the_guide(self):
+        skill_text = (SKILL_SRC / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("generation-pptx.zh-CN.md", skill_text)
+        self.assertIn("generation-pptx.en.md", skill_text)
+
+
 class RoutingEntryTests(unittest.TestCase):
     """发现与路由入口认识「从原始材料生成」这条路径。"""
 
@@ -184,6 +240,9 @@ class RoutingEntryTests(unittest.TestCase):
                       "英文生成路由用例")
         # 既有路由用例不回退
         self.assertIn(("generate", "references/workflow.zh-CN.md"), actions)
+        # PPTX 额外交付路由（issue #180）
+        self.assertIn(("generate-deck", "references/generation-pptx.zh-CN.md"), actions)
+        self.assertIn(("generate-deck", "references/generation-pptx.en.md"), actions)
 
     def test_formats_reference_the_record(self):
         """格式参考指向核验记录契约（单一来源在生成指引与 report_check.py）。"""
