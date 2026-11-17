@@ -476,6 +476,7 @@ def install_release(copy: Path, record: dict, release: Path, tag: str, commit: s
 
 
 def main(argv=None) -> int:
+    fsutil.configure_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     choice = i18n.explicit_locale(argv)
     try:

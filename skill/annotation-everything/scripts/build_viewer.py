@@ -1094,6 +1094,7 @@ def register_review(rid: str, out: Path, review_name: str, assets: Assets) -> No
 
 
 def main(argv: list[str] | None = None) -> int:
+    fsutil.configure_stdio()
     import i18n
     import ledger
     argv = sys.argv[1:] if argv is None else argv

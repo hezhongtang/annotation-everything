@@ -440,3 +440,14 @@ def script_hashes(html_text: str) -> str:
     """
     return " ".join("'sha256-" + base64.b64encode(hashlib.sha256(s.encode("utf-8")).digest()).decode() + "'"
                     for s in INLINE_SCRIPT.findall(html_text))
+
+
+def configure_stdio() -> None:
+    """把标准输出与标准错误切到 UTF-8，避免 Windows 孤立模式（-I）或 cp1252 终端输出中文时报错。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass

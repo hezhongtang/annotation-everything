@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 import zipfile
 from pathlib import Path
 
@@ -545,6 +546,31 @@ else:
             self.assertEqual(report["merge_events"]["unconfirmed"], [str(identity) for identity in identities])
             self.assertTrue(json.loads((directory / "state.json").read_text())["incomplete_history"])
             self.assertEqual(len(list((directory / "reviews").glob("*.json"))), 1)
+
+    def test_redact_paths_normalizes_backslashes_in_relative_suffixes(self):
+        import verify_report
+
+        extra = Path(self.tmp.name) / "extra-source"
+        redacted = verify_report.redact_paths({
+            "record_path": f"{self.root}\\runs\\local-record\\record.json",
+            "reason": f"cannot read {extra}\\runs\\imported-record\\record.json",
+        }, [self.root, extra])
+        self.assertEqual(redacted["record_path"], "local/runs/local-record/record.json")
+        self.assertTrue(redacted["reason"].startswith("cannot read source-"))
+        self.assertTrue(redacted["reason"].endswith("/runs/imported-record/record.json"))
+
+    def test_collect_verify_history_resolves_gh_executable_for_cmd_shims(self):
+        tools_dir = str(ROOT / "tools")
+        if tools_dir not in sys.path:
+            sys.path.insert(0, tools_dir)
+        import collect_verify_history
+
+        completed = subprocess.CompletedProcess(["gh"], 0, stdout=b"{}", stderr=b"")
+        with unittest.mock.patch.object(collect_verify_history.shutil, "which", return_value="C:\\bin\\gh.cmd"), \
+                unittest.mock.patch.object(collect_verify_history.subprocess, "run", return_value=completed) as run_mock:
+            self.assertEqual(collect_verify_history.gh_api("repos/synthetic/repo"), {})
+        self.assertEqual(run_mock.call_args.args[0], ["C:\\bin\\gh.cmd", "api", "repos/synthetic/repo"])
+        self.assertNotIn("shell", run_mock.call_args.kwargs)
 
 
 if __name__ == "__main__":

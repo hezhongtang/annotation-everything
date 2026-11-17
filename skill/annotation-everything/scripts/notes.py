@@ -737,6 +737,7 @@ def read_import(path: Path, *, lang: str = i18n.DEFAULT_LOCALE) -> tuple[list[di
 
 
 def main(argv: list[str] | None = None) -> int:
+    fsutil.configure_stdio()
     inherited = os.environ.pop("_AE_NOTES_UPDATE_LOCK_FD", None)
     if __name__ == "__main__" and _inherited_update_lock(inherited):
         return _main_locked(argv)

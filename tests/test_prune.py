@@ -347,7 +347,7 @@ class LedgerPruneTests(unittest.TestCase):
 
         self.assertEqual(code, 2)
         self.assertIn(".annotation-prune-", errors.getvalue())
-        self.assertIn(str(directory), errors.getvalue(), "CLI 必须输出可定位的绝对隔离路径")
+        self.assertIn(str(directory.resolve()), errors.getvalue(), "CLI 必须输出可定位的绝对隔离路径")
         self.assertEqual((directory / ".agent-binding.json").read_text(encoding="utf-8"), "old binding")
         self.assertEqual((directory / ".agent-deliveries.json").read_text(encoding="utf-8"), "new deliveries")
         self.assertIn(rid, self.ledger.entries())
@@ -543,11 +543,16 @@ class LedgerPruneTests(unittest.TestCase):
             return original(fd, review_id)
 
         with unittest.mock.patch.object(self.ledger, "_metadata_plan", side_effect=swap_after_open):
-            self.ledger.prune_stale(all_stale=True, under=scope, review_ids=[rid], delete_metadata=True)
+            result = self.ledger.prune_stale(all_stale=True, under=scope, review_ids=[rid], delete_metadata=True)
 
         self.assertEqual((outside / ".agent-binding.json").read_text(encoding="utf-8"), "binding",
                          "范围外 symlink 目标的元数据不得删除")
-        self.assertFalse((self.root / "moved-inside" / ".agent-binding.json").exists())
+        if os.name == "nt":
+            self.assertEqual((self.root / "moved-inside" / ".agent-binding.json").read_text(encoding="utf-8"), "binding")
+            self.assertEqual(result["metadataDeleted"], [])
+            self.assertEqual([r["reviewId"] for r in result["skipped"]], [rid])
+        else:
+            self.assertFalse((self.root / "moved-inside" / ".agent-binding.json").exists())
 
     def test_metadata_delete_fails_closed_for_unknown_identity_and_live_service(self):
         running = self.root / "running-unknown"
@@ -706,6 +711,15 @@ class LedgerPruneTests(unittest.TestCase):
         self.assertEqual(seen["argtypes"], [wintypes.HANDLE])
         self.assertEqual(seen["restype"], wintypes.BOOL)
         self.assertEqual(seen["handle"], (1 << 40) + 7)
+
+    def test_pid_alive_rejects_overflow_pid_before_win32_openprocess(self):
+        import ctypes
+
+        with unittest.mock.patch.object(self.ledger.os, "name", "nt"), \
+                unittest.mock.patch.object(ctypes, "WinDLL", side_effect=AssertionError("should not call OpenProcess"),
+                                           create=True):
+            with self.assertRaises(OverflowError):
+                self.ledger.pid_alive(1 << 32)
 
 
 class OverviewPruneTests(unittest.TestCase):
@@ -883,16 +897,18 @@ class OverviewPruneTests(unittest.TestCase):
     def test_snapshot_computes_default_prune_eligibility_from_the_ledger_path(self):
         import review_overview
         if os.name == "nt":
+            fake_temp = self.root / "fake-temp"
+            fake_temp.mkdir()
             outside = self.root / "outside-target"
             outside.mkdir()
-            temp_dir = Path(tempfile.gettempdir()) / f"ae-prune-temp-{uuid.uuid4().hex}"
             rid_temp = "3000000000000000"
             rid_outside = "4000000000000000"
-            self.add(rid_temp, temp_dir)
+            self.add(rid_temp, fake_temp / "missing")
             self.add(rid_outside, outside / "missing")
             self.write_ledger()
 
-            data = review_overview.snapshot(None, None, "all", self.serve.review_row)
+            with unittest.mock.patch.object(self.ledger, "TEMP_ROOTS", (fake_temp,)):
+                data = review_overview.snapshot(None, None, "all", self.serve.review_row)
             by_id = {row["reviewId"]: row for row in data["reviews"]}
             self.assertTrue(by_id[rid_temp]["defaultPruneEligible"])
             self.assertFalse(by_id[rid_outside]["defaultPruneEligible"])
@@ -921,21 +937,34 @@ class OverviewPruneTests(unittest.TestCase):
         self.add("3000000000000000", directory)
         self.write_ledger()
 
-        outcomes = (("success", [0], 200), ("failed", [2], 500),
-                    ("timeout", [subprocess.TimeoutExpired("file-manager", 5), 0], 500))
-        for outcome, exit_statuses, expected in outcomes:
-            with self.subTest(outcome=outcome), unittest.mock.patch.object(self.serve.subprocess, "Popen") as opener:
-                opener.return_value.wait.side_effect = exit_statuses
-                status, result = self.post("/api/overview/reveal", {"reviewId": "3000000000000000"})
+        if os.name == "nt":
+            for outcome, side_effect, expected in (("success", None, 200),
+                                                   ("failed", OSError("cannot open"), 500)):
+                with self.subTest(outcome=outcome), \
+                        unittest.mock.patch.object(self.serve.os, "startfile", side_effect=side_effect, create=True) as opener:
+                    status, result = self.post("/api/overview/reveal", {"reviewId": "3000000000000000"})
+                    self.assertEqual(status, expected, result)
+                    if status == 200:
+                        self.assertEqual(result["reviewId"], "3000000000000000")
+                    else:
+                        self.assertEqual(result["code"], "overview-reveal-failed")
+                    opener.assert_called_once_with(str(directory.resolve()))
+        else:
+            outcomes = (("success", [0], 200), ("failed", [2], 500),
+                        ("timeout", [subprocess.TimeoutExpired("file-manager", 5), 0], 500))
+            for outcome, exit_statuses, expected in outcomes:
+                with self.subTest(outcome=outcome), unittest.mock.patch.object(self.serve.subprocess, "Popen") as opener:
+                    opener.return_value.wait.side_effect = exit_statuses
+                    status, result = self.post("/api/overview/reveal", {"reviewId": "3000000000000000"})
 
-                self.assertEqual(status, expected, result)
-                if status == 200:
-                    self.assertEqual(result["reviewId"], "3000000000000000")
-                else:
-                    self.assertEqual(result["code"], "overview-reveal-failed")
-                self.assertIn(str(directory.resolve()), opener.call_args.args[0])
-                self.assertNotIn("shell", opener.call_args.kwargs)
-                self.assertIsNotNone(opener.return_value.wait.call_args_list[0].kwargs.get("timeout"))
+                    self.assertEqual(status, expected, result)
+                    if status == 200:
+                        self.assertEqual(result["reviewId"], "3000000000000000")
+                    else:
+                        self.assertEqual(result["code"], "overview-reveal-failed")
+                    self.assertIn(str(directory.resolve()), opener.call_args.args[0])
+                    self.assertNotIn("shell", opener.call_args.kwargs)
+                    self.assertIsNotNone(opener.return_value.wait.call_args_list[0].kwargs.get("timeout"))
         self.assertEqual((directory / "notes.json").read_text(encoding="utf-8"), "synthetic annotations")
 
     def test_prune_metadata_response_reports_deleted_and_preserved_targets(self):

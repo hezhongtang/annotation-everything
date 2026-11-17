@@ -2860,6 +2860,7 @@ def _add_locale(parser: argparse.ArgumentParser) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    fsutil.configure_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     locale_choice = i18n.explicit_locale(argv)
     # 先按共同契约定语言，再建解析器：帮助、参数说明与错误消息才能用同一种语言

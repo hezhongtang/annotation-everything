@@ -539,7 +539,10 @@ class ReviewStopTests(unittest.TestCase):
         self.assertEqual(json.loads(queried.stdout)["state"], "stopped")
         self.assertEqual(json.loads(repeated.stdout)["stopId"], result["stopId"])
         state_path = directory / ".annotation-stop.json"
-        self.assertEqual(state_path.stat().st_mode & 0o777, 0o600)
+        if os.name == "nt":
+            fsutil.check_private_regular_file(state_path, error_prefix="stop")
+        else:
+            self.assertEqual(state_path.stat().st_mode & 0o777, 0o600)
         self.assertNotIn(rid, ledger.load()["reviews"].get("stop", {}))
 
     def test_stop_exits_waiter_and_only_explicit_start_reopens_the_review(self):

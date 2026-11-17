@@ -164,6 +164,8 @@ def pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
     if os.name == "nt":
+        if pid > 0xFFFFFFFF:
+            raise OverflowError("pid out of range")
         import ctypes
         from ctypes import wintypes
 

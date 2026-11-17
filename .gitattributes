@@ -1,0 +1,15 @@
+* text=auto eol=lf
+LICENSE text eol=lf
+NOTICE text eol=lf
+skill/annotation-everything/LICENSE text eol=lf
+skill/annotation-everything/NOTICE text eol=lf
+fixtures/** text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.png binary
+*.gz binary
+*.zip binary
+*.docx binary
+*.pptx binary
+*.pdf binary

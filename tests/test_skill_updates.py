@@ -256,9 +256,31 @@ class SkillUpdateTests(unittest.TestCase):
         for command in ([sys.executable, "-I", script, "--help"],
                         [sys.executable, "-I", "-c", fallback, script]):
             with self.subTest(command=command[:3]):
-                result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=45)
+                result = subprocess.run(command, env=env, capture_output=True, text=True,
+                                        encoding="utf-8", errors="replace", timeout=45)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertFalse(marker.exists(), "restarting notes.py must preserve -I")
+
+    def test_configure_stdio_reconfigures_text_streams_to_utf8(self):
+        import io
+        scripts_dir = str(self.copy / "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        import fsutil
+
+        out = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
+        err = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
+        string_stream = io.StringIO()
+        with mock.patch.object(sys, "stdout", out), \
+                mock.patch.object(sys, "stderr", err):
+            fsutil.configure_stdio()
+            print("中文输出", file=sys.stdout, flush=True)
+            print("中文错误", file=sys.stderr, flush=True)
+        self.assertEqual(out.encoding.lower(), "utf-8")
+        self.assertEqual(err.encoding.lower(), "utf-8")
+        with mock.patch.object(sys, "stdout", string_stream), \
+                mock.patch.object(sys, "stderr", string_stream):
+            fsutil.configure_stdio()
 
     @_POSIX_AUTO_UPDATE
     def test_failed_atomic_exchange_keeps_previous_copy(self):
