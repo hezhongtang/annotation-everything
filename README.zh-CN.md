@@ -4,12 +4,12 @@
 
 ## 安装：把这段交给 Agent
 
-复制下面这段给 Agent，即可安装并体检。需要 Python 3.9 及以上，支持 macOS 和 Linux。
+复制下面这段给 Agent，即可安装并体检。需要 Python 3.9 及以上；当前正式支持范围为 macOS 和 Linux；Windows 11 x64 原生运行时、PowerShell 命令行与 Windows CI（Python 3.9/3.12 完整单元与服务安全自检）已就绪，整体正式支持声明待真实 Windows 11 桌面完整验收（Edge/Chrome 浏览器端到端与真实宿主接手）后更新。
 
 ```text
 请从 https://github.com/hezhongtang/annotation-everything 安装 annotation-everything 技能。
-在仓库运行 python3 ae.py install，按当前 Agent 配置 --link；Claude Code 无需链接。
-再运行 python3 ae.py doctor --json，确认安装项通过，报告仍需处理的问题。
+在仓库运行 python3 ae.py install（Windows PowerShell 用 python ae.py install；无软链接权限时改用 --target <目标技能目录>），按当前 Agent 配置 --link；Claude Code 无需链接。
+再运行 python3 ae.py doctor --json（Windows 用 python ae.py doctor --json），确认安装项通过，报告仍需处理的问题。
 ```
 
 默认技能副本位于 `~/.claude/skills/annotation-everything`，链接让其他 Agent 使用同一副本。自定义目录与更新、修复、卸载见[安装与维护](#安装与维护)。
@@ -101,6 +101,26 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 想试英文材料，把 `--report` 换成 `fixtures/sample/report.en.html`，`--script` 换成 `fixtures/sample/script.en.md`，加 `--locale en` 即可体验英文界面；只换材料时界面语言不变，也可用英文界面审阅原来的中文材料。
 
+<details>
+<summary><b>Windows PowerShell 快速上手与本机工作目录边界（首期，待 Win11 桌面实测验收）</b></summary>
+
+基础安装与 HTML/DOCX/PPTX 审阅使用普通用户权限即可，不要求管理员、开发者模式、符号链接或 WSL。在 PowerShell 中用双引号包裹带空格或中文的路径：
+
+```powershell
+$env:PYTHONUTF8 = "1"
+$env:AE_HOME = "$env:TEMP\ae-demo-ledger"   # 试用时把审阅台账放到临时目录，不影响真实台账
+$S = "skill\annotation-everything\scripts"
+python "$S\build_viewer.py" --report "fixtures\sample\report.html" --script "fixtures\sample\script.md" --out "$env:TEMP\ae-demo"
+python "$S\serve.py" "$env:TEMP\ae-demo"
+```
+
+- **同步盘与共享位置边界**：活动审阅目录必须位于本机固定磁盘（支持材料与审阅目录分处 `C:\`、`D:\` 等不同盘符）。不要直接在 OneDrive、SharePoint、iCloud、Dropbox、映射盘或 `\\server\share` UNC 路径内审阅；本工具不承诺自动识别所有第三方同步服务。请先复制到本机工作目录（例如 `Copy-Item "C:\Users\<用户>\OneDrive\材料\*" -Destination "D:\work\材料\" -Recurse`），完成审阅后再手工放回。
+- **可选 PPTX 工具与字体检查**：自动探测 `PATH` 与 Windows 标准安装路径（`Program Files`、`LocalAppData\Programs`）下的 LibreOffice（`soffice`）和 Poppler（`pdftoppm` / `pdffonts`）；缺可选工具不阻断 HTML 或 DOCX 审阅。Windows 缺少 `fc-list` 时，`check_pptx_fonts.py` 回退读取 Windows 字体注册表枚举已装字体，PDF 字体嵌入核对仍依赖 `pdffonts`。
+- **首期手动维护**：Windows 首期不自动原地更新（`update.py auto` 不阻断审阅）；升级前先停止运行中的审阅服务、等待者和总览首页，再从来源仓库手动运行 `python ae.py upgrade`（自定义目录加 `--target <目录>`）。
+- **首期边界与验证状态**：Windows CI 覆盖 Python 3.9 与 3.12 的完整 `unit` 与 `serve-check`；真实 Windows 11 x64 桌面验收（`e2e_browser.py` 的 Edge/Chrome 流程与真实宿主 Agent 接手）需在真实 Win11 桌面完成。Windows 10、ARM64、Windows Server、WSL 安装路径、自动原地更新及任意空闲/已关闭聊天的自动唤醒均在首期支持范围外。
+
+</details>
+
 **2. 准备自己的材料**
 
 - **报告**：一份 HTML 文件，每一页是一个 `<section class="page" data-page="N" data-key="唯一键">` 元素。
@@ -113,8 +133,8 @@ python3 $S/notes.py wait /tmp/ae-demo
 
 | 命令 | 作用 |
 |---|---|
-| `ae.py install` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；修复体检发现的问题（先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划）；卸载时删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。四个子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
-| `update.py auto` / `check` / `now` | 在技能副本中检查正式版本并自动更新 / 只检查 / 立即检查并安装；`auto` 由技能入口触发，最多每天一次 |
+| `ae.py install` / `upgrade` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；`upgrade` 先检查并拒绝/停止运行中的服务后从仓库可靠手动升级（Windows 首期专用升级入口）；`doctor` 体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；`repair` 先列计划，安全项自动修，`--forget-stale`/`--stop-orphans` 显式执行破坏性操作，`--dry-run` 只看计划；`uninstall` 删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。各子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
+| `update.py auto` / `check` / `now` | 在 macOS/Linux 技能副本中检查正式版本并自动更新 / 只检查 / 立即检查并安装（Windows 首期跳过自动原地更新并引导改用 `ae.py upgrade`）；`auto` 由技能入口触发，最多每天一次 |
 | `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照，并把当前仍有效的通过证据跨阶段引用给后续阶段（`--no-reuse` 强制全部重跑）；`report` 只读记录并展示证据链。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
 | `build_viewer.py --report … [--script …] --out 审阅目录` | 从逐页 HTML、DOCX 或 PPTX 生成对照页；讲稿可选；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
 | `docx_edit.py apply 审阅目录 --batch N` / `replace 审阅目录 --paragraph N --from 原文 --to 新文` | 回写 DOCX 快捷修改／自由批注的单条替换；`--id ID` 可重复选择批注，`--dry-run` 预演，`--output 新路径` 另存；默认备份后原地写入，不自动处理批注状态 |
@@ -128,7 +148,7 @@ python3 $S/notes.py wait /tmp/ae-demo
 | `serve.py status 审阅目录或审阅标识` | 查看一份审阅的运行状态 |
 | `serve.py stop 审阅目录或审阅标识 [--timeout 秒]` / `stop 审阅目录或审阅标识 --status` | 按审阅标识协调保存保护、等待者、Agent 轮次与 HTTP 服务停止，或查询持久状态。JSON 状态为 `stopping` / `stopped` / `incomplete`；退出码 0 表示全部停止，1 表示未完全停止，2 表示目标无效或有歧义。`stop-status` 是 `--status` 的别名 |
 | `serve.py forget <短标识>` | 移除确认不再需要的单条台账记录并释放专属端口；保留审阅目录与元数据。总览对失效项提供这条命令 |
-| `serve.py prune --stale [--list] [--under 目录 \| --all]` | 批量预览或清理失效台账条目并释放专属端口。默认只清 `/tmp/`、`/private/tmp/`、`/var/folders/` 下目录不在的条目；`--under` 清范围内全部失效项，`--all` 清全部失效项。`--delete-metadata` 显式删除可安全处理目录的归档、绑定、投递、等待和停止状态元数据，其他有效审阅的元数据保留；不删批注、材料或审阅目录 |
+| `serve.py prune --stale [--list] [--under 目录 \| --all]` | 批量预览或清理失效台账条目并释放专属端口。默认只清 `/tmp/`、`/private/tmp/`、`/var/folders/`（或 Windows `%TEMP%` / `%TMP%` / `tempfile.gettempdir()`）下目录不在的条目；`--under` 清范围内全部失效项，`--all` 清全部失效项。`--delete-metadata` 显式删除可安全处理目录的归档、绑定、投递、等待和停止状态元数据，其他有效审阅的元数据保留；不删批注、材料或审阅目录 |
 | `serve.py check` | 运行服务安全自检 |
 | `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | 绑定接收 harness 与会话、查看身份与状态；Codex 桌面使用事件接收，其他 harness 可用 `--adapter wait`；显式交接用 `bind --replace`，处理中批次先收尾 |
 | `notes.py wait` / `claim` | 等待或领取任务；`--events analysis` 显式接收分析，默认不领取分析，也不能越过更早轮次。`--round N` 须带此开关，`--seq N` 只指批次，所有筛选均受全局队首约束 |
@@ -297,7 +317,7 @@ Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lan
 
 ### 安装命令与维护选项
 
-前提：Python 3.9 及以上，macOS 或 Linux。
+前提：Python 3.9 及以上；当前正式支持范围为 macOS 或 Linux（Windows 11 x64 PowerShell 安装、审阅、办公材料、按能力接手与维护升级已纳入 Windows CI 完整 `unit` + `serve-check`，整体正式支持声明待真实 Win11 桌面验收）。
 
 ```bash
 python3 ae.py install                            # 安装：把技能复制为技能副本到 ~/.claude/skills/
@@ -312,6 +332,20 @@ python3 ae.py doctor --locale en                 # 可选：界面语言 auto、
 python3 ~/.claude/skills/annotation-everything/scripts/update.py check  # 立即检查正式版本，不安装
 python3 ~/.claude/skills/annotation-everything/scripts/update.py now    # 立即检查并安装新版
 ```
+
+Windows PowerShell 用法（普通用户权限，不要求管理员、开发者模式、符号链接或 WSL）：
+
+```powershell
+$env:PYTHONUTF8 = "1"
+python ae.py install                            # 安装到 %USERPROFILE%\.claude\skills\annotation-everything
+python ae.py install --target "D:\AgentSkills"  # 或直接安装到任意 Agent 技能目录，无需软链接
+python ae.py upgrade                            # 手动升级（先停止运行中的审阅服务、等待者与总览首页）
+python ae.py doctor --target "D:\AgentSkills" --json
+```
+
+若账户没有符号链接权限导致 `--link` 失败，工具不会静默提权，而是非零退出并给出不带 `--link` 的直接安装命令（传了 `--target` 时原样保留，也可改传 `--target <Agent 技能目录>` 直接安装到目标目录）及开启开发人员模式后重试 `--link` 的命令；Windows 首期不执行自动原地更新，升级请先停止服务和等待者后运行 `python ae.py upgrade`（或首次安装用 `python ae.py install`）。
+
+`install --link` 与 `upgrade --link` 会保留已经指向所选技能副本的链接。后续链接创建失败时，命令恢复本次替换的旧链接，并仅移除本次新建的链接；恢复旧链接不需要创建符号链接的权限。
 
 - **版本更新**：Agent 按 `SKILL.md` 使用技能时，每份技能副本至多每天检查一次安装来源 `origin` 的正式版本标签（`v主.次.修订`），发现更高版本后自动更新并提示；预发布标签不会自动安装。离线、认证失败、来源不可用时保留当前版本并继续审阅；技能副本有本地改动，或审阅服务、批注进程仍在运行时，先提示并推迟更新。停止后可运行 `update.py now`；自定义安装位置请把命令中的路径换成当前技能副本的路径。设置 `AE_AUTO_UPDATE=0` 可关闭自动检查，手动命令仍可使用。
 - 更新只替换技能副本，保留指向它的软链接、审阅台账与审阅目录，不修改来源仓库的检出。正式版本的本地来源通常保存在 `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`，若与技能副本重叠则存到副本旁的独立目录；这些文件供后续体检、修复和更新使用，不要在仍使用该副本时删除。首次获得更新功能仍需先用包含此功能的版本运行一次 `ae.py install`。升级已有审阅时，停止旧服务、重建对照页、启动新服务并刷新浏览器。
@@ -335,7 +369,7 @@ Agent 自动执行修复前，遇到 `--purge`、`--forget-stale`、`--stop-orph
 | 只在本机访问 | 服务只监听 `127.0.0.1`，校验请求的 Host 头，不返回跨域访问（CORS）响应头 |
 | 防止跨站伪造写入 | 写入请求的来源（Origin）必须与页面同源，并且内容类型必须是 JSON |
 | 只开放必要的内容 | 只提供 `index.html` 和 `/api/*` 接口，审阅目录里的其他文件无法通过服务访问 |
-| 不依赖第三方 Python 库 | 运行时只用 Python 标准库；字体核查会调用系统工具 `fc-list` 和 `pdffonts`，缺少时会给出安装提示 |
+| 不依赖第三方 Python 库 | 运行时只用 Python 标准库；字体核查会调用 `fc-list`（Windows 缺 `fc-list` 时回退读取 Windows 字体注册表）和 `pdffonts`，缺少工具时会给出安装提示 |
 | 网络访问范围 | 审阅服务通过本机回环接口协调同机审阅。更新检查访问安装来源的 Git 远端，不上传审阅数据或遥测。页面嵌入本地图片和字体，阻止加载报告引用的外部资源 |
 | 数据留在本地 | 批注和对照页都保存在审阅人指定的审阅目录；本机的审阅台账 `~/.annotation-everything/` 只记录审阅标识、目录路径和端口 |
 
@@ -480,7 +514,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── fsutil.py                  原子写入、文件锁和 CSP 脚本哈希的公共小工具
 │   └── check_pptx_fonts.py        PPTX 与 PDF 字体核查
 └── evals/                         技能评测用例，含生成、核验与改稿（供 skill-creator 使用）
-ae.py                             统一管理命令：install 安装技能副本，doctor 体检，repair 修复，uninstall 卸载
+ae.py                             统一管理命令：install 安装技能副本，upgrade 手动升级，doctor 体检，repair 修复，uninstall 卸载
 verify.py                         统一验证入口：plan 解释范围，run 执行并记录，report 只读记录
 verify_selection.py               阶段选测与影子对照策略：版本化映射、保守回退与遗漏对照
 verify_evidence.py                证据复用策略：同输入同环境且当前有效的通过记录跨阶段引用
@@ -525,9 +559,9 @@ GLOSSARY.md                        术语表
 
 ## 开发
 
-克隆后先运行一次 `tools/setup-dev.sh` 启用 git 钩子。
+克隆后先运行一次 `tools/setup-dev.sh` 启用 git 钩子（无 `sh` 的 Windows 环境运行 `git config core.hooksPath tools/git-hooks`）。
 
-采用两阶段流程：issue 实现阶段只做直接相关的快速单元测试（单次反馈目标 60 秒）、已配置的 Lint 与格式检查，完成后开 PR 并交接。用户手动调用 agents 后，再做全量代码审查、完整单元、服务安全自检和完整浏览器验证；全量审查、验证与 CI 全部通过后才能合并。
+采用两阶段流程：issue 实现阶段只做直接相关的快速单元测试（单次反馈目标 60 秒）、已配置的 Lint 与格式检查，完成后开 PR 并交接。用户手动调用 agents 后，再做全量代码审查、完整单元、服务安全自检和完整浏览器验证；全量审查、验证与 CI 全部通过后才能合并。Windows CI 在 Python 3.9 与 3.12 串行运行完整 `unit` + `serve-check`；`browser`（`tests/e2e_browser.py`，默认 `chrome`，支持 `AE_E2E_BROWSER_CHANNEL=msedge` 验证 Edge）与真实宿主 Agent 交互验收在真实 Windows 11 桌面完成。
 
 Lint 与格式化工具尚未配置，另开 PR 接入；当前如实记录「未配置」，`git diff --check` 只作空白检查。快速检查范围、纯文档改动、慢项移交及证据要求见 [AGENTS.md](AGENTS.md#开发与-pr-review) 与[验证接入说明](docs/verify/onboarding.md)。
 

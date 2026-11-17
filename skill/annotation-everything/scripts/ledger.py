@@ -22,6 +22,7 @@ import os
 import re
 import stat
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Collection, Iterator
@@ -102,9 +103,17 @@ class CopiedDir(LedgerError):
     """这个目录是从台账里登记的那份审阅复制来的（原目录还在、标识相同）：不让副本顶替原审阅的条目和专属端口。"""
 
 
+def _reject_unc_path(raw: str | Path) -> None:
+    if fsutil.is_unc_or_device_path(raw, allow_local_extended=True):
+        raise LedgerError(f"Unsupported UNC or device path: {raw}")
+
+
 def home() -> Path:
     env = os.environ.get("AE_HOME")
-    return Path(env).expanduser().resolve() if env else Path.home() / ".annotation-everything"
+    if env:
+        _reject_unc_path(env)
+        return Path(env).expanduser().resolve()
+    return Path.home() / ".annotation-everything"
 
 
 def overview_host_id() -> str:
@@ -139,16 +148,46 @@ def metadata_lock(review_dir: Path, *, exclusive: bool = True):
 
 
 @contextlib.contextmanager
-def _metadata_lock_fd(directory_fd: int):
+def _metadata_lock_fd(directory_fd: Any):
     """在已固定的目录内持有同一把审阅级锁，避免路径切换影响清理临界区。"""
+    if isinstance(directory_fd, _WinMetadataDir):
+        directory = directory_fd.current_path()
+        with fsutil.flocked(directory / METADATA_LOCK_FILE, exclusive=True, nofollow=True) as fd:
+            yield fd
+        return
     with fsutil.flocked(METADATA_LOCK_FILE, exclusive=True, nofollow=True, dir_fd=directory_fd) as fd:
         yield fd
 
 
 def pid_alive(pid: int) -> bool:
-    """这个 pid 的进程还在不在：发信号 0 探活；没权限（别人的进程）时按活着算。"""
+    """这个 pid 的进程还在不在：POSIX 发信号 0，Windows 查 OpenProcess + 退出码；没权限时按活着算。"""
     if pid <= 0:
         return False
+    if os.name == "nt":
+        if pid > 0xFFFFFFFF:
+            raise OverflowError("pid out of range")
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        # PROCESS_QUERY_LIMITED_INFORMATION = 0x1000, ERROR_ACCESS_DENIED = 5, STILL_ACTIVE = 259
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == 5
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == 259
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
         return True
@@ -247,6 +286,7 @@ def register(rid: str, review_dir: Path) -> dict[str, Any]:
     _refresh_locale()   # 标识非法的报错也可能先于任何读写发生，语言要已经定好
     if not RID.fullmatch(str(rid or "")):
         raise LedgerError(T("ledger.err.badRid", rid=rid))
+    _reject_unc_path(review_dir)
     d = str(Path(review_dir).resolve())
     with _edit() as doc:
         return dict(_set_dir(doc["reviews"], rid, d))
@@ -265,6 +305,7 @@ def assign_port(rid: str, review_dir: Path, *, prefer: int | None = None,
     否则从 8765 起，挑台账里没人认领、此刻也没被占用的最小端口。
     首页保留端口不算空闲：无论首页在不在运行，审阅的专属端口都不落在它上面。
     """
+    _reject_unc_path(review_dir)
     d = str(Path(review_dir).resolve())
     with _edit() as doc:
         reviews = doc["reviews"]
@@ -290,6 +331,7 @@ def claim_port(rid: str, review_dir: Path, port: int) -> None:
     """把专属端口改成 port。端口归别的审阅或已保留给总览首页时拒绝（先 forget 那一份）。"""
     if not 1024 <= port <= 65535:
         raise LedgerError(T("ledger.err.portRange", port=port))
+    _reject_unc_path(review_dir)
     d = str(Path(review_dir).resolve())
     with _edit() as doc:
         if _read_overview_port(overview_port_file()) == port:
@@ -348,14 +390,41 @@ def forget(key: str) -> tuple[str, dict[str, Any]]:
     return rid, e
 
 
-TEMP_ROOTS = (Path("/tmp"), Path("/private/tmp"), Path("/var/folders"))
+def _default_temp_roots() -> tuple[Path, ...]:
+    if os.name != "nt":
+        return (Path("/tmp"), Path("/private/tmp"), Path("/var/folders"))
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for candidate in (tempfile.gettempdir(), os.environ.get("TEMP"), os.environ.get("TMP")):
+        if not candidate:
+            continue
+        path = Path(candidate)
+        key = os.path.normcase(str(path))
+        if key not in seen:
+            seen.add(key)
+            roots.append(path)
+    return tuple(roots)
+
+
+TEMP_ROOTS = _default_temp_roots()
 PRUNE_METADATA_FILES = (".annotation-archived", ".agent-binding.json", ".agent-deliveries.json",
                         ".annotation-stop.json")
 
 
 def in_temp_area(directory: Path) -> bool:
     resolved = directory.resolve()
-    return any(directory.is_relative_to(root) or resolved.is_relative_to(root.resolve()) for root in TEMP_ROOTS)
+    for root in TEMP_ROOTS:
+        try:
+            if directory.is_relative_to(root):
+                return True
+        except ValueError:
+            pass
+        try:
+            if resolved.is_relative_to(root.resolve()):
+                return True
+        except (OSError, ValueError):
+            pass
+    return False
 
 
 class _MetadataUnsafe(Exception):
@@ -364,7 +433,115 @@ class _MetadataUnsafe(Exception):
         self.reason = reason
 
 
-def _read_metadata_json(fd: int, name: str, *, missing: Any) -> Any:
+class _WinMetadataDir:
+    """Windows 下固定已打开的审阅目录身份：持有共享删除句柄并按需解析实时规范路径。"""
+
+    def __init__(self, initial_path: Path, root: Path | None, handle: int, identity: tuple[int, int]):
+        self.initial_path = initial_path
+        self.root = root
+        self.handle = handle
+        self.identity = identity
+        self.closed = False
+
+    @staticmethod
+    def _strip_device_prefix(raw: str) -> str:
+        if raw.startswith("\\\\?\\UNC\\"):
+            return "\\\\" + raw[8:]
+        if raw.startswith("\\\\?\\"):
+            return raw[4:]
+        return raw
+
+    def current_path(self) -> Path:
+        if self.closed or not self.handle:
+            raise _MetadataUnsafe("directory-unavailable")
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        get_final = kernel32.GetFinalPathNameByHandleW
+        get_final.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+        get_final.restype = wintypes.DWORD
+        needed = get_final(self.handle, None, 0, 0)
+        if not needed:
+            raise _MetadataUnsafe("directory-unavailable")
+        buf = ctypes.create_unicode_buffer(needed + 1)
+        written = get_final(self.handle, buf, len(buf), 0)
+        if not written or written >= len(buf):
+            raise _MetadataUnsafe("directory-unavailable")
+        clean = self._strip_device_prefix(buf.value)
+        resolved = Path(clean).resolve()
+        if self.root is not None and not resolved.is_relative_to(self.root):
+            raise _MetadataUnsafe("out-of-scope")
+        try:
+            info = resolved.lstat()
+        except OSError:
+            raise _MetadataUnsafe("directory-unavailable") from None
+        if not stat.S_ISDIR(info.st_mode) or fsutil._is_reparse_or_symlink(info):
+            raise _MetadataUnsafe("out-of-scope")
+        if (info.st_dev, info.st_ino) != self.identity:
+            raise _MetadataUnsafe("directory-changed")
+        return resolved
+
+    def close(self) -> None:
+        if self.closed or not self.handle:
+            return
+        self.closed = True
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle(self.handle)
+        self.handle = 0
+
+
+def _close_metadata_dir(dir_ref: Any) -> None:
+    if isinstance(dir_ref, _WinMetadataDir):
+        dir_ref.close()
+    else:
+        os.close(dir_ref)
+
+
+def _dir_identity(dir_ref: Any) -> tuple[int, int]:
+    if isinstance(dir_ref, _WinMetadataDir):
+        return dir_ref.identity
+    info = os.fstat(dir_ref)
+    return (info.st_dev, info.st_ino)
+
+
+def _read_metadata_json(fd: Any, name: str, *, missing: Any) -> Any:
+    if isinstance(fd, _WinMetadataDir):
+        directory = fd.current_path()
+        target = directory / name
+        try:
+            info = target.lstat()
+        except FileNotFoundError:
+            return missing
+        except OSError:
+            raise _MetadataUnsafe("identity-unconfirmed") from None
+        if not stat.S_ISREG(info.st_mode) or fsutil._is_reparse_or_symlink(info):
+            raise _MetadataUnsafe("identity-unconfirmed")
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        try:
+            raw = os.open(str(target), flags)
+        except FileNotFoundError:
+            return missing
+        except OSError:
+            raise _MetadataUnsafe("identity-unconfirmed") from None
+        try:
+            opened = os.fstat(raw)
+            if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                raise _MetadataUnsafe("identity-unconfirmed")
+            with os.fdopen(raw, "r", encoding="utf-8") as fh:
+                raw = -1
+                try:
+                    return json.load(fh)
+                except (OSError, ValueError):
+                    raise _MetadataUnsafe("identity-unconfirmed") from None
+        finally:
+            if raw >= 0:
+                os.close(raw)
     flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
     try:
         raw = os.open(name, flags, dir_fd=fd)
@@ -386,7 +563,49 @@ def _read_metadata_json(fd: int, name: str, *, missing: Any) -> Any:
             os.close(raw)
 
 
-def _open_metadata_dir(directory: Path, root: Path | None) -> tuple[int, Path]:
+def _open_metadata_dir(directory: Path, root: Path | None) -> tuple[Any, Path]:
+    if fsutil.is_windows():
+        try:
+            orig_info = directory.lstat()
+        except OSError:
+            raise _MetadataUnsafe("directory-unavailable") from None
+        if fsutil._is_reparse_or_symlink(orig_info):
+            raise _MetadataUnsafe("out-of-scope")
+        resolved = directory.resolve()
+        if root is not None and not resolved.is_relative_to(root):
+            raise _MetadataUnsafe("out-of-scope")
+        try:
+            info = resolved.lstat()
+        except OSError:
+            raise _MetadataUnsafe("directory-unavailable") from None
+        if not stat.S_ISDIR(info.st_mode) or fsutil._is_reparse_or_symlink(info):
+            raise _MetadataUnsafe("directory-unavailable")
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+            wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        ]
+        kernel32.CreateFileW.restype = wintypes.HANDLE
+        # FILE_READ_ATTRIBUTES (0x80), FILE_SHARE_READ|WRITE|DELETE (0x07), OPEN_EXISTING (3), FILE_FLAG_BACKUP_SEMANTICS (0x02000000)
+        handle = kernel32.CreateFileW(str(resolved), 0x80, 0x07, None, 3, 0x02000000, None)
+        invalid_handle = wintypes.HANDLE(-1).value
+        if not handle or handle == invalid_handle:
+            raise _MetadataUnsafe("directory-unavailable")
+        win_dir = _WinMetadataDir(resolved, root, handle, (info.st_dev, info.st_ino))
+        try:
+            confirmed = directory.resolve()
+            current = confirmed.lstat()
+            if confirmed != resolved or (root is not None and not confirmed.is_relative_to(root)):
+                raise _MetadataUnsafe("out-of-scope")
+            if fsutil._is_reparse_or_symlink(current) or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+                raise _MetadataUnsafe("directory-changed")
+            return win_dir, confirmed
+        except BaseException:
+            win_dir.close()
+            raise
     resolved = directory.resolve()
     if root is not None and not resolved.is_relative_to(root):
         raise _MetadataUnsafe("out-of-scope")
@@ -408,14 +627,18 @@ def _open_metadata_dir(directory: Path, root: Path | None) -> tuple[int, Path]:
         raise
 
 
-def _metadata_plan(fd: int, rid: str) -> tuple[str, str | None]:
+def _metadata_plan(fd: Any, rid: str) -> tuple[str, str | None]:
     try:
         manifest = _read_metadata_json(fd, "review.json", missing=None)
-    except _MetadataUnsafe:
+    except _MetadataUnsafe as error:
+        if error.reason != "identity-unconfirmed":
+            return "skip", error.reason
         manifest = None
     try:
         status = _read_metadata_json(fd, STATUS_FILE, missing={})
-    except _MetadataUnsafe:
+    except _MetadataUnsafe as error:
+        if error.reason != "identity-unconfirmed":
+            return "skip", error.reason
         status = None
     status_valid = isinstance(status, dict) and ("pid" not in status
                     or (type(status["pid"]) is int and status["pid"] > 0))
@@ -439,7 +662,27 @@ def _metadata_plan(fd: int, rid: str) -> tuple[str, str | None]:
     return "delete", None
 
 
-def _metadata_names(fd: int) -> list[str]:
+def _metadata_names(fd: Any) -> list[str]:
+    if isinstance(fd, _WinMetadataDir):
+        directory = fd.current_path()
+        names = []
+        for name in sorted(PRUNE_METADATA_FILES):
+            target = directory / name
+            try:
+                info = os.stat(target, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode):
+                raise OSError(f"metadata is not a file: {name}")
+            names.append(name)
+        for name in sorted(os.listdir(directory)):
+            if not name.startswith(WAIT_PREFIX) or not name.endswith(".json") or name in names:
+                continue
+            info = os.stat(directory / name, follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode):
+                raise OSError(f"metadata is not a file: {name}")
+            names.append(name)
+        return names
     names = []
     for name in sorted(PRUNE_METADATA_FILES):
         try:
@@ -459,7 +702,17 @@ def _metadata_names(fd: int) -> list[str]:
     return names
 
 
-def _restore_metadata_file(fd: int, quarantine: str, name: str) -> None:
+def _restore_metadata_file(fd: Any, quarantine: str, name: str) -> None:
+    if isinstance(fd, _WinMetadataDir):
+        directory = fd.current_path()
+        source = directory / quarantine / name
+        target = directory / name
+        if not os.path.lexists(source):
+            return
+        if os.path.lexists(target):
+            raise OSError(f"rollback target exists; quarantine kept: {quarantine}/{name}")
+        os.rename(str(source), str(target))
+        return
     source = f"{quarantine}/{name}"
     try:
         os.link(source, name, src_dir_fd=fd, dst_dir_fd=fd, follow_symlinks=False)
@@ -476,6 +729,13 @@ def _quarantine_metadata(item: dict[str, Any]) -> None:
         return
     fd = item["fd"]
     quarantine = f".annotation-prune-{uuid.uuid4().hex}"
+    if isinstance(fd, _WinMetadataDir):
+        directory = fd.current_path()
+        os.mkdir(directory / quarantine, mode=0o700)
+        item["quarantine"] = quarantine
+        for name in item["names"]:
+            os.rename(str(directory / name), str(directory / quarantine / name))
+        return
     os.mkdir(quarantine, mode=0o700, dir_fd=fd)
     item["quarantine"] = quarantine
     for name in item["names"]:
@@ -488,13 +748,22 @@ def _rollback_quarantines(prepared: list[dict[str, Any]]) -> None:
         if not item["quarantine"]:
             continue
         fd, quarantine = item["fd"], item["quarantine"]
+        try:
+            win_dir = fd.current_path() if isinstance(fd, _WinMetadataDir) else None
+        except _MetadataUnsafe as error:
+            errors.append(f"{item['directory'] / quarantine}: {error.reason}")
+            continue
         for name in reversed(item["names"]):
             try:
                 _restore_metadata_file(fd, quarantine, name)
-            except OSError as error:
-                errors.append(f"{item['directory'] / quarantine / name}: {error}")
+            except (OSError, _MetadataUnsafe) as error:
+                detail = error.reason if isinstance(error, _MetadataUnsafe) else str(error)
+                errors.append(f"{item['directory'] / quarantine / name}: {detail}")
         try:
-            os.rmdir(quarantine, dir_fd=fd)
+            if win_dir is not None:
+                os.rmdir(win_dir / quarantine)
+            else:
+                os.rmdir(quarantine, dir_fd=fd)
         except FileNotFoundError:
             pass
         except OSError as error:
@@ -509,16 +778,28 @@ def _cleanup_quarantines(prepared: list[dict[str, Any]]) -> tuple[list[dict[str,
         if not item["quarantine"]:
             continue
         fd, quarantine = item["fd"], item["quarantine"]
+        try:
+            win_dir = fd.current_path() if isinstance(fd, _WinMetadataDir) else None
+        except _MetadataUnsafe as error:
+            errors.append({**item["row"], "reason": "metadata-cleanup-failed",
+                           "quarantine": str(item["directory"] / quarantine), "detail": error.reason})
+            continue
         failure = None
         for name in item["names"]:
             try:
-                os.unlink(f"{quarantine}/{name}", dir_fd=fd)
+                if win_dir is not None:
+                    os.unlink(win_dir / quarantine / name)
+                else:
+                    os.unlink(f"{quarantine}/{name}", dir_fd=fd)
             except OSError as error:
                 failure = str(error)
                 break
         if failure is None:
             try:
-                os.rmdir(quarantine, dir_fd=fd)
+                if win_dir is not None:
+                    os.rmdir(win_dir / quarantine)
+                else:
+                    os.rmdir(quarantine, dir_fd=fd)
             except OSError as error:
                 failure = str(error)
         if failure is None:
@@ -560,7 +841,7 @@ def _preview_metadata_prune(
         try:
             action, reason = _metadata_plan(fd, row["reviewId"])
         finally:
-            os.close(fd)
+            _close_metadata_dir(fd)
         if action == "skip":
             skipped.append({**row, "reason": reason})
         else:
@@ -578,6 +859,8 @@ def prune_stale(*, all_stale: bool = False, under: Path | None = None,
     skipped: list[dict[str, Any]] = []
     prepared: list[dict[str, Any]] = []
     locked_directories: set[tuple[int, int]] = set()
+    if under is not None:
+        _reject_unc_path(under)
     root = under.expanduser().resolve() if under is not None else None
     targets = set(review_ids) if review_ids is not None else None
     if dry_run:
@@ -609,13 +892,16 @@ def prune_stale(*, all_stale: bool = False, under: Path | None = None,
                 except _MetadataUnsafe as error:
                     skipped.append({**row, "reason": error.reason})
                     continue
-                stack.callback(os.close, fd)
+                stack.callback(_close_metadata_dir, fd)
                 action, reason = _metadata_plan(fd, rid)
                 if action == "delete":
-                    info = os.fstat(fd)
-                    identity = (info.st_dev, info.st_ino)
+                    identity = _dir_identity(fd)
                     if identity not in locked_directories:
-                        stack.enter_context(_metadata_lock_fd(fd))
+                        try:
+                            stack.enter_context(_metadata_lock_fd(fd))
+                        except _MetadataUnsafe as error:
+                            skipped.append({**row, "reason": error.reason})
+                            continue
                         locked_directories.add(identity)
                     action, reason = _metadata_plan(fd, rid)
                 if action == "preserve":
@@ -625,11 +911,28 @@ def prune_stale(*, all_stale: bool = False, under: Path | None = None,
                 if action == "skip":
                     skipped.append({**row, "reason": reason})
                     continue
+                try:
+                    names = _metadata_names(fd)
+                except _MetadataUnsafe as error:
+                    skipped.append({**row, "reason": error.reason})
+                    continue
                 item = {"row": row, "fd": fd, "directory": confirmed,
-                        "quarantine": "", "names": _metadata_names(fd)}
+                        "quarantine": "", "names": names}
                 # 先记录所有计划移动的文件，覆盖系统调用已经成功、Python 随即中断的情况。
                 prepared.append(item)
-                _quarantine_metadata(item)
+                try:
+                    _quarantine_metadata(item)
+                except _MetadataUnsafe as error:
+                    _rollback_quarantines([item])
+                    prepared.pop()
+                    skipped.append({**row, "reason": error.reason})
+                    continue
+                except PermissionError:
+                    _rollback_quarantines([item])
+                    prepared.pop()
+                    metadata_preserved.append({**row, "reason": "identity-unconfirmed"})
+                    skipped.append({**row, "reason": "metadata-locked"})
+                    continue
                 action, reason = _metadata_plan(fd, rid)
                 if action != "delete":
                     _rollback_quarantines([item])
@@ -655,6 +958,7 @@ def resolve_dir(arg: str | Path) -> Path:
     带路径分隔符、以 . 或 ~ 开头的一律按路径处理，打错目录时不会悄悄换成另一份审阅。
     """
     raw = str(arg)
+    _reject_unc_path(raw)
     p = Path(raw).expanduser()
     if p.exists() or os.sep in raw or "/" in raw or raw.startswith((".", "~")) \
             or not RID_PREFIX.fullmatch(raw.strip().lower()):

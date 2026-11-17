@@ -157,7 +157,7 @@ class PptxOpsTests(unittest.TestCase):
         self.assertEqual([p["text"] for p in el["paragraphs"]], ["标题甲标题乙"])
         backup = Path(result["backup"])
         self.assertEqual(backup.read_bytes(), self.original)
-        self.assertIn("batch-0/pptx-writeback", str(backup))
+        self.assertIn("batch-0/pptx-writeback", backup.as_posix())
 
     def test_geometry_position_only_keeps_size_bytes(self):
         self.build()

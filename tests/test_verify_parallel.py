@@ -18,6 +18,23 @@ import host_isolation as hi
 import verify_parallel as parallel
 
 
+class ParallelEnvironmentTests(unittest.TestCase):
+    def test_isolate_environment_sets_isolated_ledger_and_home(self):
+        with tempfile.TemporaryDirectory(prefix="ae-parallel-env-") as temp:
+            root = Path(temp)
+            before = dict(os.environ)
+            try:
+                parallel.isolate_environment(root)
+                self.assertEqual(os.environ["HOME"], str(root / "home"))
+                self.assertEqual(os.environ["AE_HOME"], str(root / "ledger"))
+                if os.name == "nt":
+                    self.assertEqual(os.environ["USERPROFILE"], str(root / "home"))
+            finally:
+                os.environ.clear()
+                os.environ.update(before)
+
+
+@unittest.skipUnless(hasattr(os, "fork"), "verify_parallel 仅用于 POSIX fork 并行路径；Windows 首期为串行执行")
 class ParallelProcessTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ae-parallel-test-")
@@ -148,6 +165,7 @@ parallel.run_tasks([('one', 'one')], worker, root / 'workers', jobs=1)
         hi.release(handle, env)
 
 
+@unittest.skipUnless(hasattr(os, "fork"), "verify_parallel 仅用于 POSIX fork 并行路径；Windows 首期为串行执行")
 class PartialResultAndFamilyTests(unittest.TestCase):
     setUp = ParallelProcessTests.setUp
     start_script = ParallelProcessTests.start_script

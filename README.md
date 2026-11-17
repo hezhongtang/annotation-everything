@@ -4,12 +4,12 @@
 
 ## Install: give this to your agent
 
-Copy this prompt to your agent to install the skill and check it. Requires Python 3.9 or later on macOS or Linux.
+Copy this prompt to your agent to install the skill and check it. Formal support currently covers Python 3.9 or later on macOS or Linux; Windows 11 x64 native runtime, PowerShell CLI, and Windows CI (`unit` + `serve-check` on Python 3.9/3.12) are in place, while formal Windows 11 support awaits real Windows 11 desktop acceptance (Edge/Chrome E2E and live host Agent handoff).
 
 ```text
 Install the annotation-everything skill from https://github.com/hezhongtang/annotation-everything.
-Run python3 ae.py install in the repository. Set --link for the current agent; Claude Code needs no link.
-Then run python3 ae.py doctor --json, confirm installation checks pass, and report any remaining issues.
+Run python3 ae.py install in the repository (or python ae.py install in Windows PowerShell; use --target <agent-skills-dir> if symlinks are unavailable). Set --link for the current agent; Claude Code needs no link.
+Then run python3 ae.py doctor --json (or python ae.py doctor --json on Windows), confirm installation checks pass, and report any remaining issues.
 ```
 
 The default skill copy lives at `~/.claude/skills/annotation-everything`; links let other agents use that same copy. For custom directories, updates, repairs and removal, see [Installation and maintenance](#installation-and-maintenance).
@@ -101,6 +101,26 @@ The command prints the annotations you just submitted, which is exactly what the
 
 For Chinese material, use `fixtures/sample/report.html` and `fixtures/sample/script.md`. Keep `--locale en` to review it in English, or choose `--locale zh-CN` for a Chinese interface. Changing the source material alone does not change the interface language.
 
+<details>
+<summary><b>Windows PowerShell quick start & local-disk boundary (Phase 1, pending Win11 desktop acceptance)</b></summary>
+
+No administrator privilege, Developer Mode, symlinks, or WSL are required for basic installation and HTML/DOCX/PPTX review. Use standard Windows PowerShell and quote paths containing spaces or non-ASCII characters:
+
+```powershell
+$env:PYTHONUTF8 = "1"
+$env:AE_HOME = "$env:TEMP\ae-demo-ledger"   # keep the demo review ledger isolated
+$S = "skill\annotation-everything\scripts"
+python "$S\build_viewer.py" --report "fixtures\sample\report.en.html" --script "fixtures\sample\script.en.md" --out "$env:TEMP\ae-demo" --locale en
+python "$S\serve.py" "$env:TEMP\ae-demo" --locale en
+```
+
+- **Sync and shared drives**: Active review directories must reside on a local fixed disk (different drives such as `C:\` and `D:\` are supported). Do not run active reviews directly in OneDrive, SharePoint, iCloud, Dropbox, mapped network drives, or UNC paths (`\\server\share`); the tool does not claim automatic detection of third-party sync services. Copy materials to a local folder first (e.g., `Copy-Item "C:\Users\<user>\OneDrive\Deck\*" -Destination "D:\work\deck\" -Recurse`), review locally, and copy updated files back manually.
+- **Optional PPTX tools & font check**: LibreOffice (`soffice`) and Poppler (`pdftoppm` / `pdffonts`) are probed on `PATH` and standard Windows install locations (`Program Files`, `LocalAppData\Programs`). Missing optional tools never block HTML or DOCX review. When `fc-list` is absent on Windows, `check_pptx_fonts.py` falls back to the Windows font registry for installed-font enumeration while `pdffonts` still provides PDF font embedding evidence.
+- **Manual upgrades**: Phase 1 Windows skips automatic in-place updates (`update.py auto` is non-blocking). To upgrade manually, stop running review services, waiters, and overview home first, then run `python ae.py upgrade` from the source repository (add `--target <dir>` for a custom skills directory).
+- **Phase 1 boundaries & verification status**: Windows CI covers full `unit` and `serve-check` on Python 3.9 and 3.12; real Windows 11 x64 desktop acceptance (`e2e_browser.py` on Edge/Chrome and live host Agent handoff) requires an actual Windows 11 desktop environment. Windows 10, ARM64, Windows Server, WSL install paths, automatic updates, and arbitrary idle/closed-chat auto-wakeup remain out of scope.
+
+</details>
+
 **2. Prepare your own material**
 
 - **Report**: one HTML file in which every page is a `<section class="page" data-page="N" data-key="unique-key">` element.
@@ -113,10 +133,10 @@ See the [English format reference](skill/annotation-everything/references/format
 
 | Command | What it does |
 |---|---|
-| `ae.py install` / `doctor` / `repair` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--target <dir>` for another skills root; `--link codex,agents,zcode` or `name=path` symlinks it into other agents' skill directories); check installation, runtime, optional tools and dev environment (`--json` for structured output); repair what the checks find (prints a plan first, fixes safe items automatically, `--forget-stale`/`--stop-orphans` run the destructive ones explicitly, `--dry-run` only prints); uninstall removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first). All four subcommands accept `--target <dir>` to locate a custom copy |
-| `update.py auto` / `check` / `now` | Check and automatically install a release / only check / check and install immediately from the skill copy; the skill entry runs `auto` at most once a day |
+| `ae.py install` / `upgrade` / `doctor` / `repair` / `uninstall` | Management commands run from the repository root: install the skill copy into `~/.claude/skills/` (`--target <dir>` for another skills root; `--link codex,agents,zcode` or `name=path` symlinks it into other agents' skill directories); `upgrade` stops/refuses active services first and performs a reliable manual upgrade from the checkout (required for Phase 1 Windows); `doctor` checks installation, runtime, optional tools and dev environment (`--json` for structured output); `repair` prints a plan first, fixes safe items automatically, `--forget-stale`/`--stop-orphans` run the destructive ones explicitly, `--dry-run` only prints; `uninstall` removes the skill copy and the links pointing at it, keeps the review ledger by default (`--purge` deletes it too; review directories are never touched; a running `serve.py` blocks uninstall unless `--stop-servers` stops it first). All subcommands accept `--target <dir>` to locate a custom copy |
+| `update.py auto` / `check` / `now` | Check and automatically install a release / only check / check and install immediately from the skill copy on macOS/Linux (Phase 1 Windows skips auto-install and defers to `ae.py upgrade`); the skill entry runs `auto` at most once a day |
 | `verify.py plan` / `run` / `report` | Unified verification entry run from the repository root: `plan` explains the groups and commands without starting anything (`plan --phase development` also shows what the current changes should run, why, and when it falls back to the full check); `run` executes and writes structured records plus raw logs into `.verify/` (git-ignored), records the shadow comparison between the suggested selection and the full gate by default, and lets later stages reference currently valid passing evidence (`--no-reuse` forces a full rerun); `report` only reads records and shows the evidence chain. Groups: `unit` (full unit), `unit-related` (explicitly named cases, always augmented with the global dictionary contract in `tests/test_i18n_catalog_contract.py`), `browser` (full browser), `serve-check` (server security self-check), `all` (runs `unit` → `serve-check` → `browser` in order). Field contract: [docs/verify/record-contract.md](docs/verify/record-contract.md), selection strategy: [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
-| `build_viewer.py --report … [--script …] --out <review-dir>` | Build the review page from paginated HTML or DOCX, with optional speaker notes; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
+| `build_viewer.py --report … [--script …] --out <review-dir>` | Build the review page from paginated HTML, DOCX or PPTX, with optional speaker notes; `--rebuild <review-dir>` rebuilds it with the recorded options; `--locale auto`, `zh-CN`, or `en` sets the interface language. Omit it and a new review stays in Chinese; a rebuild keeps the saved choice |
 | `docx_edit.py apply REVIEW --batch N` / `replace REVIEW --paragraph N --from ORIGINAL --to REPLACEMENT` | Write DOCX quick edits or a single free-form replacement; repeat `--id ID` to select annotations, preview with `--dry-run`, or save a new file with `--output NEW_PATH`. The default backs up then edits in place; annotation statuses are unchanged |
 | `pptx_edit.py apply REVIEW --batch N` / `ops REVIEW --ops OPSFILE` | Write PPTX quick text/notes edits by slide location, or issue whitelisted element geometry and style changes from a JSON operations file; `--id ID` selects annotations, `--dry-run` previews, `--output NEW_PATH` saves a new file. Whole-group preflight, 0600 binary snapshots, atomic replacement; read-only elements are refused |
 | `report_check.py report.html [--script script.md] [--record report-record.json]` | Public report verification entry: a readable summary by default, structured results with `--json`, and `--locale en` or `zh-CN` for the language. Exit 0 means program checks passed, not that the report is deliverable; 1 means checks failed; 2 means an input or usage error. Content, structure and visual coverage and delivery blockers are listed separately |
@@ -128,7 +148,7 @@ See the [English format reference](skill/annotation-everything/references/format
 | `serve.py status <review-dir-or-id>` | Show one review's running status |
 | `serve.py stop <review-dir-or-id> [--timeout N]` / `stop <review-dir-or-id> --status` | Coordinate one review's save protection, waiters, agent turns and HTTP service to stop, or query its persistent state. JSON states are `stopping`, `stopped` and `incomplete`; exit 0 means fully stopped, 1 means incomplete, 2 means an invalid or ambiguous target. `stop-status` is an alias for `--status` |
 | `serve.py forget <short-id>` | Remove one ledger entry confirmed unnecessary and release its owned port while keeping the review directory and metadata. The overview provides this command for invalid entries |
-| `serve.py prune --stale [--list] [--under DIR \| --all]` | Preview or prune stale ledger entries in bulk and release their owned ports. By default, select only missing directories under `/tmp/`, `/private/tmp/` or `/var/folders/`; `--under` selects every stale entry in scope and `--all` selects every stale entry. `--delete-metadata` explicitly deletes archive, binding, delivery, waiting and stop-state metadata where safe, preserves metadata owned by another valid review, and never deletes annotations, materials or review directories |
+| `serve.py prune --stale [--list] [--under DIR \| --all]` | Preview or prune stale ledger entries in bulk and release their owned ports. By default, select only missing directories under `/tmp/`, `/private/tmp/`, `/var/folders/` (or Windows `%TEMP%` / `%TMP%` / `tempfile.gettempdir()`); `--under` selects every stale entry in scope and `--all` selects every stale entry. `--delete-metadata` explicitly deletes archive, binding, delivery, waiting and stop-state metadata where safe, preserves metadata owned by another valid review, and never deletes annotations, materials or review directories |
 | `serve.py check` | Run the server's security self-check |
 | `wakeup.py bind` / `status` / `check` / `ack` / `unbind` | Bind the receiving harness and session and inspect identity and state; Codex desktop uses events, other harnesses can use `--adapter wait`; transfer with `bind --replace` after active batches finish |
 | `notes.py wait` / `claim` | Wait for or claim work. Opt in with `--events analysis`; default receivers never claim analysis or skip an earlier round. `--round N` requires that opt-in; `--seq N` targets a batch. Every filter respects the shared queue head |
@@ -297,7 +317,7 @@ The management command is `ae.py` at the repository root (Python standard librar
 
 ### Installation commands and maintenance options
 
-Prerequisites: Python 3.9 or later, macOS or Linux.
+Prerequisites: Python 3.9 or later; formal support currently covers macOS or Linux (Windows 11 x64 PowerShell install, review, Office materials, capability-based handoff, and maintenance are covered in Windows CI `unit` + `serve-check`, pending final Windows 11 desktop acceptance).
 
 ```bash
 python3 ae.py install                            # install: copy the skill into ~/.claude/skills/ (the skill copy)
@@ -312,6 +332,20 @@ python3 ae.py doctor --locale en                 # optional: interface language 
 python3 ~/.claude/skills/annotation-everything/scripts/update.py check  # check releases now without installing
 python3 ~/.claude/skills/annotation-everything/scripts/update.py now    # check now and install a newer release
 ```
+
+On Windows PowerShell (ordinary user permissions; no admin, Developer Mode, symlinks, or WSL needed):
+
+```powershell
+$env:PYTHONUTF8 = "1"
+python ae.py install                            # install to %USERPROFILE%\.claude\skills\annotation-everything
+python ae.py install --target "D:\AgentSkills"  # or install directly into any agent skills root without symlinks
+python ae.py upgrade                            # manual upgrade (stop running review services, waiters, and overview home first)
+python ae.py doctor --target "D:\AgentSkills" --json
+```
+
+If `--link` fails on Windows because the account lacks symlink privilege, no elevation is attempted and the command exits non-zero with the direct install command without `--link` (preserving `--target` if given, or pass `--target <agent-skills-dir>` to install directly into an agent skills directory) and the `--link` retry command; Phase 1 Windows uses manual `python ae.py upgrade` (or `python ae.py install` for a fresh copy) instead of automatic in-place updates.
+
+`install --link` and `upgrade --link` preserve existing links that already point to the selected skill copy. If a later link fails, the command restores replaced links and removes only links created by that attempt. Restoring an existing link does not require symlink creation privilege.
 
 - **Release updates**: when an agent follows `SKILL.md`, each skill copy checks its install source's `origin` for stable version tags (`vMAJOR.MINOR.PATCH`) at most once a day, and automatically installs and announces a newer release. Prerelease tags are ignored. Offline, authentication, and source errors leave the current version usable. Local changes in the skill copy or a running review server or annotation process defer the update with a notice. Stop them and run `update.py now` to retry. For a custom installation, substitute that skill copy's path in the commands above. Set `AE_AUTO_UPDATE=0` to disable automatic checks; manual commands still work.
 - Updates replace only the skill copy: its symlinks, review ledger, review directories, and source checkout are preserved. The release checkout used for later checks, repairs, and updates normally lives in `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`; if that overlaps the copy, it lives in a separate directory beside it. Keep it while using that skill copy. To get the updater for the first time, run `ae.py install` once from a version that contains it. When upgrading an existing review, stop its old service, rebuild the review page, start the new service, and refresh the browser.
@@ -335,7 +369,7 @@ Before an agent runs a repair with `--purge`, `--forget-stale`, `--stop-orphans`
 | Reachable from this machine only | The server listens on `127.0.0.1` only, validates the Host header, and never sends cross-origin resource sharing (CORS) headers |
 | No cross-site forged writes | Write requests must come from the same origin as the page and use a JSON content type |
 | Only what is needed is exposed | Only `index.html` and the `/api/*` endpoints are served; no other file in the review directory is reachable through the server |
-| No third-party Python packages | The runtime uses the Python standard library only; the font check calls the system tools `fc-list` and `pdffonts` and explains how to install them if they are missing |
+| No third-party Python packages | The runtime uses the Python standard library only; the font check calls `fc-list` (or the Windows font registry fallback when `fc-list` is absent on Windows) and `pdffonts`, and explains how to install missing tools |
 | Network access | Review servers coordinate through the local loopback interface. The updater contacts the installation's Git remote without sending review data or telemetry. The page embeds local images and fonts and blocks external report resources |
 | Your data stays local | Annotations and the review page live in the review directory you choose; the local review ledger `~/.annotation-everything/` records only review IDs, directory paths and ports |
 
@@ -480,7 +514,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── fsutil.py                  shared helper for atomic writes, file locks and CSP script hashes
 │   └── check_pptx_fonts.py        PPTX and PDF font check
 └── evals/                         skill evaluations, including generation, verification and revisions (used with skill-creator)
-ae.py                             unified management command: install the skill copy, doctor checks it, repair fixes it, uninstall removes it
+ae.py                             unified management command: install the skill copy, upgrade it manually, doctor checks it, repair fixes it, uninstall removes it
 verify.py                         unified verification entry: plan explains the scope, run executes and records, report only reads
 verify_selection.py               staged test selection and shadow comparison strategy: versioned mapping, conservative fallback and gap comparison
 verify_evidence.py                evidence reuse policy: valid same-input same-environment passes are referenced across stages
@@ -525,9 +559,9 @@ GLOSSARY.md                        glossary
 
 ## Development
 
-After cloning, run `tools/setup-dev.sh` once to enable the git hooks.
+After cloning, run `tools/setup-dev.sh` once to enable the git hooks (on Windows without `sh`, run `git config core.hooksPath tools/git-hooks`).
 
-Use two stages: during issue implementation, run only quick unit tests directly related to the change (targeting feedback within 60 seconds), plus configured lint and format checks, then open the PR and hand off. When the user invokes agents, perform the full code review, full unit suite, server security self-check and full browser suite. Full review, validation and CI must pass before merging.
+Use two stages: during issue implementation, run only quick unit tests directly related to the change (targeting feedback within 60 seconds), plus configured lint and format checks, then open the PR and hand off. When the user invokes agents, perform the full code review, full unit suite, server security self-check and full browser suite. Full review, validation and CI must pass before merging. Windows CI runs full `unit` + `serve-check` serially on Python 3.9 and 3.12; `browser` (`tests/e2e_browser.py`, defaulting to `chrome` and supporting `AE_E2E_BROWSER_CHANNEL=msedge` for Edge) and live Windows 11 desktop Agent verification run on an actual Windows 11 desktop.
 
 Lint and formatting tools are not configured yet and will be introduced in a separate PR; record them as unconfigured, with `git diff --check` covering whitespace only. For quick-check scope, documentation-only changes, deferred slow checks and evidence requirements, see [AGENTS.md](AGENTS.md#开发与-pr-review) and the [verification onboarding guide](docs/verify/onboarding.md).
 

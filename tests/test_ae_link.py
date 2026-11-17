@@ -31,6 +31,29 @@ def agent_link(home: Path, agent: str) -> Path:
     return home / ".zcode" / "skills" / SKILL
 
 
+def _can_symlink() -> bool:
+    if os.name != "nt":
+        return True
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "src"
+        src.mkdir()
+        try:
+            os.symlink(str(src), str(Path(d) / "lnk"), target_is_directory=True)
+            return True
+        except OSError:
+            return False
+
+
+CAN_SYMLINK = _can_symlink()
+
+
+def _resolved_link_target(link: Path) -> Path:
+    raw = os.readlink(link)
+    if raw.startswith("\\\\?\\") and not raw.startswith("\\\\?\\UNC\\"):
+        raw = raw[4:]
+    return Path(raw).resolve()
+
+
 class AeLinkCliTests(unittest.TestCase):
     """命令行行为：子进程运行 ae.py，HOME 与各技能目录全部指向临时目录。"""
 
@@ -40,7 +63,7 @@ class AeLinkCliTests(unittest.TestCase):
         self.home = Path(self.temp.name) / "home"
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
-        self.env = {**os.environ, "HOME": str(self.home),
+        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
                     "AE_HOME": str(self.home / ".annotation-everything"),
                     "CLAUDE_SKILLS_DIR": str(self.skills),
                     "CODEX_HOME": str(self.home / ".codex"),
@@ -63,6 +86,7 @@ class AeLinkCliTests(unittest.TestCase):
         self.assertEqual(len(results), 1, p.stdout + p.stderr)
         return results[0]
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_link_creates_symlinks_to_copy_for_each_agent(self):
         p = self.run_ae("install", "--link", "codex,agents,zcode")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -94,6 +118,7 @@ class AeLinkCliTests(unittest.TestCase):
         self.assertIn(str(occupied), p.stderr)
         self.assertTrue((occupied / "keep.txt").is_file(), "已有非链接目录不被覆盖")
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_repeated_install_records_each_link_once(self):
         self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
         p = self.run_ae("install", "--link", "codex")
@@ -102,12 +127,14 @@ class AeLinkCliTests(unittest.TestCase):
         self.assertEqual(len(record["links"]), 1, "重复安装不重复记录")
         self.assertTrue(agent_link(self.home, "codex").is_symlink(), "链接仍有效")
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_new_install_keeps_previously_recorded_links(self):
         self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
         self.assertEqual(self.run_ae("install", "--link", "zcode").returncode, 0)
         recorded = {entry["agent"] for entry in self.read_record()["links"]}
         self.assertEqual(recorded, {"codex", "zcode"}, "换一组 --link 不丢已建链接的记录")
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_doctor_passes_with_healthy_links(self):
         self.assertEqual(self.run_ae("install", "--link", "codex,agents").returncode, 0)
         result = self.doctor_result("skill-links")
@@ -115,6 +142,7 @@ class AeLinkCliTests(unittest.TestCase):
         self.assertIn("codex", result["message"])
         self.assertIn("agents", result["message"])
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_doctor_fails_on_dangling_link_with_fix(self):
         self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
         shutil.rmtree(self.copy_dir)  # 副本与安装记录一起消失 → 回退扫描发现悬空链接
@@ -123,11 +151,12 @@ class AeLinkCliTests(unittest.TestCase):
         self.assertIn("codex", result["message"])
         self.assertIn("install --link codex", result["fix_command"])
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_doctor_falls_back_to_scan_when_record_missing(self):
         self.assertEqual(self.run_ae("install").returncode, 0)
         link = agent_link(self.home, "agents")
         link.parent.mkdir(parents=True)
-        os.symlink(str(self.copy_dir.resolve()), str(link))
+        os.symlink(str(self.copy_dir.resolve()), str(link), target_is_directory=True)
         (self.copy_dir / RECORD_NAME).unlink()
         result = self.doctor_result("skill-links")
         self.assertEqual(result["level"], "通过")
@@ -142,6 +171,7 @@ class AeLinkCliTests(unittest.TestCase):
     def custom_link(self, name="cursor-skills") -> Path:
         return self.custom_dir(name) / SKILL
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_link_name_path_creates_symlink_and_records(self):
         custom = self.custom_dir()
         p = self.run_ae("install", "--link", f"cursor={custom}")
@@ -151,6 +181,7 @@ class AeLinkCliTests(unittest.TestCase):
         recorded = {entry["agent"]: entry["path"] for entry in self.read_record()["links"]}
         self.assertEqual(recorded, {"cursor": str(self.custom_link())}, "自定义链接应记入安装记录")
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_link_name_path_mixes_with_builtin(self):
         custom = self.custom_dir()
         p = self.run_ae("install", "--link", f"codex,cursor={custom}")
@@ -160,6 +191,7 @@ class AeLinkCliTests(unittest.TestCase):
         recorded = {entry["agent"] for entry in self.read_record()["links"]}
         self.assertEqual(recorded, {"codex", "cursor"})
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_link_name_path_expands_user(self):
         p = self.run_ae("install", "--link", "cursor=~/.cursor/skills")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -167,6 +199,7 @@ class AeLinkCliTests(unittest.TestCase):
         self.assertTrue(link.is_symlink(), "~ 应展开到临时 HOME")
         self.assertEqual(os.path.realpath(str(link)), str(self.copy_dir.resolve()))
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_link_name_path_relative_to_cwd(self):
         custom = Path("relative-skills")
         p = self.run_ae("install", "--link", f"cursor={custom}", cwd=str(self.home))
@@ -174,9 +207,10 @@ class AeLinkCliTests(unittest.TestCase):
         link = self.home.resolve() / custom / SKILL   # 子进程的 cwd 是解析后的真实路径
         self.assertTrue(link.is_symlink(), "相对路径按运行目录解析并记为绝对路径")
         self.assertEqual(os.path.realpath(str(link)), str(self.copy_dir.resolve()))
-        recorded = [entry["path"] for entry in self.read_record()["links"]]
-        self.assertEqual(recorded, [str(link)])
+        recorded = [Path(entry["path"]).resolve() for entry in self.read_record()["links"]]
+        self.assertEqual(recorded, [link.resolve()])
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_link_name_path_repeated_keeps_single_entry(self):
         custom = self.custom_dir()
         self.assertEqual(self.run_ae("install", "--link", f"cursor={custom}").returncode, 0)
@@ -222,30 +256,33 @@ class AeLinkCliTests(unittest.TestCase):
                 self.assertFalse(self.copy_dir.exists(), "路径重叠时不能先复制")
                 self.assertFalse(outer.exists(), "路径重叠时不能先创建链接目录")
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_existing_symlink_inside_copy_is_refused_before_resync(self):
         self.assertEqual(self.run_ae("install").returncode, 0)
         nested = self.copy_dir / "nested"
         nested.mkdir()
-        os.symlink(str(self.home / "missing"), str(nested / SKILL))
+        os.symlink(str(self.home / "missing"), str(nested / SKILL), target_is_directory=True)
         p = self.run_ae("install", "--link", f"inner={nested}")
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
-        self.assertEqual(os.readlink(nested / SKILL), str(self.home / "missing"))
+        self.assertEqual(_resolved_link_target(nested / SKILL), (self.home / "missing").resolve())
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_nested_link_locations_with_existing_parent_link_are_refused(self):
         outer = self.custom_dir("outer")
         outer.mkdir()
         previous = self.custom_dir("previous")
         previous.mkdir()
-        os.symlink(str(previous), str(outer / SKILL))
+        os.symlink(str(previous), str(outer / SKILL), target_is_directory=True)
         specs = [f"outer={outer}", f"inner={outer / SKILL / 'nested'}"]
         for ordered in (specs, list(reversed(specs))):
             with self.subTest(specs=ordered):
                 p = self.run_ae("install", "--link", ",".join(ordered))
                 self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
                 self.assertFalse(self.copy_dir.exists(), "路径重叠时不能先复制")
-                self.assertEqual(os.readlink(outer / SKILL), str(previous))
+                self.assertEqual(_resolved_link_target(outer / SKILL), previous.resolve())
                 self.assertEqual(list(previous.iterdir()), [], "不能在旧链接目标内创建子链接")
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_doctor_fix_command_repairs_custom_path_with_shell_characters(self):
         custom = self.custom_dir("path with space & 'quote'")
         p = self.run_ae("install", "--link", f"cursor={custom}")
@@ -253,12 +290,13 @@ class AeLinkCliTests(unittest.TestCase):
         link = custom / SKILL
         link.unlink()
         result = self.doctor_result("skill-links")
-        command = shlex.split(result["fix_command"])
+        command = ae.command_tokens(result["fix_command"]) if os.name == "nt" else shlex.split(result["fix_command"])
         p = subprocess.run(command, env=self.env, capture_output=True, text=True, timeout=60)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertTrue(link.is_symlink())
         self.assertEqual(link.resolve(), self.copy_dir.resolve())
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_uninstall_removes_custom_link(self):
         custom = self.custom_dir()
         self.assertEqual(self.run_ae("install", "--link", f"cursor={custom}").returncode, 0)
@@ -267,6 +305,7 @@ class AeLinkCliTests(unittest.TestCase):
         self.assertFalse(self.custom_link().exists(), "自定义链接应随卸载删除")
         self.assertFalse(self.copy_dir.exists())
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_repair_rebuilds_custom_link(self):
         custom = self.custom_dir()
         self.assertEqual(self.run_ae("install", "--link", f"cursor={custom}").returncode, 0)
@@ -279,6 +318,237 @@ class AeLinkCliTests(unittest.TestCase):
         self.assertIn(p.returncode, (0, 1), p.stdout + p.stderr)
         self.assertTrue(self.custom_link().is_symlink(), "repair 应重建自定义链接")
         self.assertEqual(os.path.realpath(str(self.custom_link())), str(self.copy_dir.resolve()))
+
+    def test_windows_link_privilege_error_fails_cleanly_with_target_guidance(self):
+        import contextlib, io, unittest.mock
+        previous = ae.current_locale()
+        self.addCleanup(ae.set_locale, previous)
+        custom = self.custom_dir("中文 目标")
+        win_err = OSError(1314, "A required privilege is not held by the client")
+        win_err.winerror = 1314
+        out, err = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "zh-CN"}), \
+                unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
+                unittest.mock.patch("ae.os.symlink", side_effect=win_err), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = ae.main(["install", "--link", f"cursor={custom}"])
+        self.assertEqual(code, 2, out.getvalue() + err.getvalue())
+        self.assertEqual(out.getvalue(), "", "未完成链接时不能输出安装成功")
+        self.assertIn("--link", err.getvalue())
+        self.assertIn(str(custom), err.getvalue())
+        self.assertNotIn("--target", err.getvalue())
+        self.assertFalse(self.copy_dir.exists(), "全新 --link 失败时不留下部分安装副本")
+        self.assertFalse((custom / SKILL).exists())
+
+        # 第一条链接成功、第二条触发 1314 时，应回滚第一条链接，不留半成品
+        calls = {"n": 0}
+        real_symlink = os.symlink
+
+        def fail_second(src, dst, target_is_directory=False):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise win_err
+            return real_symlink(src, dst, target_is_directory=target_is_directory)
+
+        out2, err2 = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "en"}), \
+                unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
+                unittest.mock.patch("ae.os.symlink", side_effect=fail_second), \
+                contextlib.redirect_stdout(out2), contextlib.redirect_stderr(err2):
+            code2 = ae.main(["install", "--link", f"codex,cursor={custom}"])
+        self.assertEqual(code2, 2)
+        self.assertFalse(agent_link(self.home, "codex").exists(), "部分建出的链接应回滚")
+        self.assertIn("--link", err2.getvalue())
+
+        # 已有安装副本时 --link 触发 1314：必须保留/恢复原副本与 .install-record.json
+        with unittest.mock.patch.dict(os.environ, self.env), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ae.main(["install"]), 0)
+        record_before = (self.copy_dir / ae.RECORD_NAME).read_text(encoding="utf-8")
+        out3, err3 = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "zh-CN"}), \
+                unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
+                unittest.mock.patch("ae.os.symlink", side_effect=win_err), \
+                contextlib.redirect_stdout(out3), contextlib.redirect_stderr(err3):
+            code3 = ae.main(["install", "--link", f"cursor={custom}"])
+        self.assertEqual(code3, 2)
+        self.assertTrue((self.copy_dir / ae.RECORD_NAME).is_file())
+        self.assertTrue((self.copy_dir / "SKILL.md").is_file())
+        self.assertEqual((self.copy_dir / ae.RECORD_NAME).read_text(encoding="utf-8"), record_before)
+
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
+    def test_existing_correct_links_need_no_symlink_privilege(self):
+        import contextlib, io, unittest.mock as mock
+        self.addCleanup(ae.set_locale, ae.current_locale())
+        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        link = agent_link(self.home, "codex")
+        old_target = os.readlink(link)
+        win_err = OSError(1314, "synthetic missing symlink privilege")
+        win_err.winerror = 1314
+        for command in ("install", "upgrade"):
+            with self.subTest(command=command), mock.patch.dict(os.environ, self.env), \
+                    mock.patch.object(ae, "list_processes", return_value=[]), \
+                    mock.patch("ae.os.symlink", side_effect=win_err) as symlink, \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(ae.main([command, "--link", "codex"]), 0)
+            symlink.assert_not_called()
+            self.assertEqual(os.readlink(link), old_target)
+
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
+    def test_link_failure_restores_replaced_links_and_preserves_existing_links(self):
+        import contextlib, io, unittest.mock as mock
+        self.addCleanup(ae.set_locale, ae.current_locale())
+        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        old_target = self.home / "previous-skill"
+        old_target.mkdir()
+        replaced = self.custom_dir("replaced") / SKILL
+        failed = self.custom_dir("failed") / SKILL
+        fresh = self.custom_dir("fresh") / SKILL
+        for link in (replaced, failed):
+            link.parent.mkdir(parents=True)
+            link.symlink_to(old_target, target_is_directory=True)
+        original_targets = {link: os.readlink(link) for link in (agent_link(self.home, "codex"), replaced, failed)}
+        record_before = (self.copy_dir / RECORD_NAME).read_bytes()
+        real_symlink = os.symlink
+        win_err = OSError(1314, "synthetic missing symlink privilege")
+        win_err.winerror = 1314
+
+        def fail_last(src, dst, target_is_directory=False):
+            if Path(dst) == failed:
+                raise win_err
+            return real_symlink(src, dst, target_is_directory=target_is_directory)
+
+        links = f"codex,old={replaced.parent},new={fresh.parent},failed={failed.parent}"
+        for command in ("install", "upgrade"):
+            with self.subTest(command=command), mock.patch.dict(os.environ, self.env), \
+                    mock.patch.object(ae, "_is_windows", return_value=True), \
+                    mock.patch.object(ae, "list_processes", return_value=[]), \
+                    mock.patch("ae.os.symlink", side_effect=fail_last), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(ae.main([command, "--link", links]), 2)
+            self.assertEqual((self.copy_dir / RECORD_NAME).read_bytes(), record_before)
+            self.assertTrue((self.copy_dir / "SKILL.md").is_file())
+            self.assertFalse(fresh.is_symlink(), "本次新建链接必须回滚")
+            for link, target in original_targets.items():
+                self.assertEqual(os.readlink(link), target, "原有链接必须完整保留")
+            self.assertEqual(list(self.home.rglob(".ae-link-backup-*")), [])
+
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
+    def test_link_rollback_does_not_replace_an_existing_directory_symlink(self):
+        import unittest.mock as mock
+        original = self.home / "original-skill"
+        replacement = self.home / "replacement-skill"
+        original.mkdir()
+        replacement.mkdir()
+        directory = self.custom_dir("rollback")
+        directory.mkdir()
+        link = directory / SKILL
+        link.symlink_to(original, target_is_directory=True)
+        old_target = os.readlink(link)
+        real_replace = os.replace
+
+        def windows_replace(src, dst):
+            if Path(dst).is_symlink() and Path(dst).is_dir():
+                raise PermissionError("Windows cannot replace a directory symlink")
+            return real_replace(src, dst)
+
+        with mock.patch("ae.os.replace", side_effect=windows_replace):
+            with ae.LinkTransaction() as changes:
+                changes.create("synthetic", directory, replacement)
+                self.assertEqual(link.resolve(), replacement.resolve())
+                # 未提交事务：模拟后续链接或安装核验失败。
+        self.assertEqual(os.readlink(link), old_target)
+        self.assertEqual(list(directory.glob(".ae-link-backup-*")), [])
+
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
+    def test_upgrade_post_verification_failure_rolls_back_link_changes(self):
+        import contextlib, io, unittest.mock as mock
+        self.addCleanup(ae.set_locale, ae.current_locale())
+        self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
+        old_target = self.home / "previous-skill"
+        old_target.mkdir()
+        link = self.custom_dir("replacement") / SKILL
+        link.parent.mkdir(parents=True)
+        link.symlink_to(old_target, target_is_directory=True)
+        target_before = os.readlink(link)
+        record_before = (self.copy_dir / RECORD_NAME).read_bytes()
+        real_write = ae.write_record
+
+        def corrupt_stage(dst, repo, links=None):
+            result = real_write(dst, repo, links)
+            if ".ae-upgrade-stage-" in str(dst):
+                (dst / "SKILL.md").unlink()
+            return result
+
+        with mock.patch.dict(os.environ, self.env), \
+                mock.patch.object(ae, "list_processes", return_value=[]), \
+                mock.patch.object(ae, "write_record", side_effect=corrupt_stage), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = ae.main(["upgrade", "--link", f"codex,old={link.parent}"])
+        self.assertEqual(code, 1)
+        self.assertEqual(os.readlink(link), target_before)
+        self.assertTrue(agent_link(self.home, "codex").is_symlink())
+        self.assertEqual((self.copy_dir / RECORD_NAME).read_bytes(), record_before)
+
+    def test_windows_privilege_error_preserves_target_and_link_intent_across_commands(self):
+        import contextlib, io, unittest.mock
+        previous = ae.current_locale()
+        self.addCleanup(ae.set_locale, previous)
+        custom_target = self.home.parent / "real-target"
+        custom_link = self.custom_dir("cursor-dir")
+        win_err = OSError(1314, "A required privilege is not held by the client")
+        win_err.winerror = 1314
+
+        with unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True):
+            expected_target = f"--target {ae._quote_cli(str(custom_target))}"
+            expected_link = f"--link {ae._quote_cli(f'cursor={custom_link}')}"
+            unexpected_target = f"--target {ae._quote_cli(str(custom_link))}"
+
+        # 1) cmd_install: preserves real --target and --link intent, never passes link dir as --target
+        out, err = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "en"}), \
+                unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
+                unittest.mock.patch("ae.os.symlink", side_effect=win_err), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = ae.main(["install", "--target", str(custom_target), "--link", f"cursor={custom_link}"])
+        self.assertEqual(code, 2)
+        msg = err.getvalue()
+        self.assertIn(expected_target, msg)
+        self.assertIn(expected_link, msg)
+        self.assertNotIn(unexpected_target, msg)
+        self.assertNotIn(f"--target {custom_link}", msg)
+
+        # 2) cmd_upgrade: install directly first, then fail symlink in upgrade
+        with unittest.mock.patch.dict(os.environ, self.env), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ae.main(["install", "--target", str(custom_target)]), 0)
+        out_up, err_up = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "en"}), \
+                unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
+                unittest.mock.patch.object(ae, "list_processes", return_value=[]), \
+                unittest.mock.patch("ae.os.symlink", side_effect=win_err), \
+                contextlib.redirect_stdout(out_up), contextlib.redirect_stderr(err_up):
+            code_up = ae.main(["upgrade", "--target", str(custom_target), "--link", f"cursor={custom_link}"])
+        self.assertEqual(code_up, 2)
+        msg_up = err_up.getvalue()
+        self.assertIn(expected_target, msg_up)
+        self.assertIn(expected_link, msg_up)
+        self.assertNotIn(unexpected_target, msg_up)
+        self.assertNotIn(f"--target {custom_link}", msg_up)
+
+        # 3) repair_links: preserves ctx.target and link spec
+        copy_dir = custom_target / SKILL
+        record = {"links": [{"agent": "cursor", "path": str(custom_link / SKILL)}]}
+        ctx = ae.DoctorContext(skill_copy=copy_dir, repo=ROOT, record=record, target=custom_target)
+        with unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
+                unittest.mock.patch("ae.os.symlink", side_effect=win_err):
+            created, stuck = ae.repair_links(ctx)
+        self.assertEqual(created, [])
+        self.assertEqual(len(stuck), 1)
+        self.assertIn(expected_target, stuck[0])
+        self.assertIn(expected_link, stuck[0])
+        self.assertNotIn(unexpected_target, stuck[0])
+        self.assertNotIn(f"--target {custom_link}", stuck[0])
 
 
 class LinkCheckTests(unittest.TestCase):
@@ -297,8 +567,9 @@ class LinkCheckTests(unittest.TestCase):
                                             encoding="utf-8")
         self.repo = self.root / "repo"
         self.repo.mkdir()
-        self._saved = {key: os.environ.get(key) for key in ("HOME", "CODEX_HOME", "CLAUDE_SKILLS_DIR")}
-        os.environ.update({"HOME": str(self.home), "CODEX_HOME": str(self.home / ".codex"),
+        self._saved = {key: os.environ.get(key) for key in ("HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_SKILLS_DIR")}
+        os.environ.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
+                           "CODEX_HOME": str(self.home / ".codex"),
                            "CLAUDE_SKILLS_DIR": str(self.skills)})
 
     def tearDown(self):
@@ -310,9 +581,11 @@ class LinkCheckTests(unittest.TestCase):
 
     def make_link(self, agent: str, target=None) -> dict:
         """在 Agent 技能目录建软链接，返回与安装记录同构的条目。"""
+        if not CAN_SYMLINK:
+            self.skipTest("Windows 当前账户无符号链接权限")
         link = agent_link(self.home, agent)
         link.parent.mkdir(parents=True, exist_ok=True)
-        os.symlink(str(target if target is not None else self.copy.resolve()), str(link))
+        os.symlink(str(target if target is not None else self.copy.resolve()), str(link), target_is_directory=True)
         return {"agent": agent, "path": str(link)}
 
     def base_record(self, *entries: dict) -> dict:
@@ -395,8 +668,8 @@ class ParseLinkAgentsTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name) / "home"
         self.home.mkdir()
-        self._saved = {key: os.environ.get(key) for key in ("HOME",)}
-        os.environ["HOME"] = str(self.home)
+        self._saved = {key: os.environ.get(key) for key in ("HOME", "USERPROFILE")}
+        os.environ.update({"HOME": str(self.home), "USERPROFILE": str(self.home)})
 
     def tearDown(self):
         for key, value in self._saved.items():
@@ -418,12 +691,12 @@ class ParseLinkAgentsTests(unittest.TestCase):
     def test_name_path_maps_to_given_dir(self):
         pairs = ae.parse_link_agents("cursor=~/.cursor/skills, my-agent=/opt/skills ")
         self.assertEqual(pairs, [("cursor", self.home / ".cursor" / "skills"),
-                                 ("my-agent", Path("/opt/skills"))])
+                                 ("my-agent", Path(os.path.abspath("/opt/skills")))])
 
     def test_dedup_keeps_first_occurrence(self):
         pairs = ae.parse_link_agents("cursor=/a, codex, cursor=/b")
         self.assertEqual([name for name, _dir in pairs], ["cursor", "codex"])
-        self.assertEqual(pairs[0][1], Path("/a"))
+        self.assertEqual(pairs[0][1], Path(os.path.abspath("/a")))
 
     def test_blank_parts_skipped(self):
         self.assertEqual(ae.parse_link_agents(" codex ,, "), [("codex", ae.link_target_dir("codex"))])
@@ -450,8 +723,9 @@ class LinkFixSpecTests(unittest.TestCase):
         self.copy.mkdir(parents=True)
         (self.copy / "SKILL.md").write_text("---\nname: annotation-everything\n---\n合成技能\n",
                                             encoding="utf-8")
-        self._saved = {key: os.environ.get(key) for key in ("HOME", "CODEX_HOME", "CLAUDE_SKILLS_DIR")}
-        os.environ.update({"HOME": str(self.home), "CODEX_HOME": str(self.home / ".codex"),
+        self._saved = {key: os.environ.get(key) for key in ("HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_SKILLS_DIR")}
+        os.environ.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
+                           "CODEX_HOME": str(self.home / ".codex"),
                            "CLAUDE_SKILLS_DIR": str(self.skills)})
 
     def tearDown(self):
@@ -468,31 +742,34 @@ class LinkFixSpecTests(unittest.TestCase):
         return {"repo": str(self.root / "repo"), "commit": "0" * 40, "version": "9.9.9",
                 "installed_at": "2026-10-29T00:00:00+08:00", "links": list(entries)}
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_fix_command_uses_name_path_for_custom_entries(self):
         custom = self.home / "cursor-skills"
         link = custom / SKILL
         link.parent.mkdir(parents=True)
-        os.symlink(str(self.root / "no-such-copy"), str(link))   # 悬空
+        os.symlink(str(self.root / "no-such-copy"), str(link), target_is_directory=True)   # 悬空
         record = self.base_record({"agent": "cursor", "path": str(link)})
         result = ae.check_links(self.ctx(record))
         self.assertEqual(result.level, ae.LEVEL_FAIL)
-        self.assertIn(f"install --link cursor={custom}", result.fix_command)
+        self.assertIn(f"install --link {ae._quote_cli(f'cursor={custom}')}", result.fix_command)
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_fix_command_keeps_bare_names_for_builtin_entries(self):
         link = self.home / ".codex" / "skills" / SKILL
         link.parent.mkdir(parents=True)
-        os.symlink(str(self.root / "no-such-copy"), str(link))
+        os.symlink(str(self.root / "no-such-copy"), str(link), target_is_directory=True)
         record = self.base_record({"agent": "codex", "path": str(link)})
         result = ae.check_links(self.ctx(record))
         self.assertEqual(result.level, ae.LEVEL_FAIL)
         self.assertIn("install --link codex", result.fix_command)
         self.assertNotIn("codex=", result.fix_command)
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_fix_command_rebuilds_moved_builtin_at_recorded_location(self):
         elsewhere = self.home / "moved-skills"
         link = elsewhere / SKILL
         link.parent.mkdir(parents=True)
-        os.symlink(str(self.root / "no-such-copy"), str(link))
+        os.symlink(str(self.root / "no-such-copy"), str(link), target_is_directory=True)
         record = self.base_record({"agent": "codex", "path": str(link)})
         result = ae.check_links(self.ctx(record))
         self.assertIn(f"codex={elsewhere}", result.fix_command, "内置名称但位置对不上时按记录位置重建")
@@ -505,19 +782,21 @@ class LinkFixSpecTests(unittest.TestCase):
             target=target))
         self.assertIn("--target", result.fix_command)
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_old_record_entry_without_agent_field_is_tolerated(self):
         link = self.home / ".codex" / "skills" / SKILL
         link.parent.mkdir(parents=True)
-        os.symlink(str(self.copy.resolve()), str(link))
+        os.symlink(str(self.copy.resolve()), str(link), target_is_directory=True)
         record = self.base_record({"path": str(link)})   # 旧记录缺 agent 字段：按缺省处理，不报错
         result = ae.check_links(self.ctx(record))
         self.assertEqual(result.level, ae.LEVEL_PASS)
         self.assertIn(str(link), result.message)
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_record_without_links_key_falls_back_to_scan(self):
         link = self.home / ".agents" / "skills" / SKILL   # 回退扫描只看三个内置目录
         link.parent.mkdir(parents=True)
-        os.symlink(str(self.copy.resolve()), str(link))
+        os.symlink(str(self.copy.resolve()), str(link), target_is_directory=True)
         record = self.base_record()
         del record["links"]                              # 更老的记录没有 links 键
         result = ae.check_links(self.ctx(record))
@@ -525,16 +804,20 @@ class LinkFixSpecTests(unittest.TestCase):
         self.assertIn("agents", result.message)
 
     def test_install_link_fix_formats_specs_and_target(self):
-        self.assertEqual(ae.install_link_fix(Path("/repo"), ["codex"]),
-                         "python3 /repo/ae.py install --link codex")
-        self.assertEqual(ae.install_link_fix(None, ["codex", "cursor=/x y"], target=Path("/dir with space")),
-                         "python3 ae.py install --link 'codex,cursor=/x y' --target '/dir with space'")
+        py = ae._python_cli()
+        repo = Path("/repo")
+        self.assertEqual(ae.install_link_fix(repo, ["codex"]),
+                         f"{py} {ae._quote_cli(str(repo / 'ae.py'))} install --link codex")
+        target = Path("/dir with space")
+        self.assertEqual(ae.install_link_fix(None, ["codex", "cursor=/x y"], target=target),
+                         f"{py} ae.py install --link {ae._quote_cli('codex,cursor=/x y')} --target {ae._quote_cli(str(target))}")
 
+    @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_merged_links_keeps_custom_entries(self):
         custom = self.home / "cursor-skills"
         link = custom / SKILL
         link.parent.mkdir(parents=True)
-        os.symlink(str(self.copy.resolve()), str(link))
+        os.symlink(str(self.copy.resolve()), str(link), target_is_directory=True)
         previous = self.base_record({"agent": "cursor", "path": str(link)})
         merged = ae.merged_links(previous, self.copy, [])
         self.assertEqual(merged, [{"agent": "cursor", "path": str(link)}])

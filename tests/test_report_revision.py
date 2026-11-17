@@ -167,16 +167,15 @@ def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
     d.mkdir(parents=True, exist_ok=True)
     if not (d / "materials" / "q3-notes.md").exists():
         (d / "materials").mkdir(exist_ok=True)
-        (d / "materials" / "q3-notes.md").write_text(MATERIAL, encoding="utf-8")
+        (d / "materials" / "q3-notes.md").write_bytes(MATERIAL.encode("utf-8"))
     paths = {"report": d / "report.html"}
-    paths["report"].write_text(report, encoding="utf-8")
+    paths["report"].write_bytes(report.encode("utf-8"))
     if script is not None:
         paths["script"] = d / "script.md"
-        paths["script"].write_text(script, encoding="utf-8")
+        paths["script"].write_bytes(script.encode("utf-8"))
     if record is not None:
         paths["record"] = d / "report-record.json"
-        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-                                   encoding="utf-8")
+        paths["record"].write_bytes((json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     return paths
 
 
@@ -392,9 +391,8 @@ class RevisionUpdateFlowTests(unittest.TestCase):
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertTrue(payload["verdict"]["deliverable"])
         # 真实改稿：源文件内容变化
-        paths["report"].write_text(
-            paths["report"].read_text(encoding="utf-8").replace("+12%", "+18%"),
-            encoding="utf-8")
+        paths["report"].write_bytes(
+            paths["report"].read_text(encoding="utf-8").replace("+12%", "+18%").encode("utf-8"))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertFalse(payload["verdict"]["deliverable"],
                          "旧的可交付判定不能为改后的报告背书")
@@ -413,7 +411,7 @@ class RevisionUpdateFlowTests(unittest.TestCase):
         # 改数字（第 1 页结论页）
         changed_report = (paths["report"].read_text(encoding="utf-8")
                           .replace("+12%", "+15%"))
-        paths["report"].write_text(changed_report, encoding="utf-8")
+        paths["report"].write_bytes(changed_report.encode("utf-8"))
         # 改稿方维护记录：更新报告哈希，声明本次重新核验的检查项与判定依据
         record = compliant_record(
             links={"report": "report.html", "script": "script.md",
@@ -422,8 +420,7 @@ class RevisionUpdateFlowTests(unittest.TestCase):
             revision=revision(basis="改动只在第 1 页结论数字，讲稿同步；跨页口径与引用未受影响",
                               rechecked=["content.numbers-charts", "content.cross-page",
                                          "content.script-consistency"]))
-        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-                                   encoding="utf-8")
+        paths["record"].write_bytes((json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertTrue(payload["verdict"]["deliverable"],
                         "受影响项重新核验、未受影响证据保留后可交付恢复")
@@ -442,12 +439,12 @@ class RevisionUpdateFlowTests(unittest.TestCase):
         new_material = MATERIAL.replace("112", "118")
         (paths["report"].parent / "materials").mkdir(exist_ok=True)
         material_path = paths["report"].parent / "materials" / "q3-notes.md"
-        material_path.write_text(MATERIAL, encoding="utf-8")
+        material_path.write_bytes(MATERIAL.encode("utf-8"))
         # 真实改稿：材料、报告一起更新
-        material_path.write_text(new_material, encoding="utf-8")
+        material_path.write_bytes(new_material.encode("utf-8"))
         changed_report = (paths["report"].read_text(encoding="utf-8")
                           .replace("+12%", "+18%"))
-        paths["report"].write_text(changed_report, encoding="utf-8")
+        paths["report"].write_bytes(changed_report.encode("utf-8"))
         updated_finding = {
             "claim": "三季度收入同比增长 18%", "type": "calculation",
             "sources": ["materials/q3-notes.md"], "pages": ["sum"],
@@ -473,8 +470,7 @@ class RevisionUpdateFlowTests(unittest.TestCase):
             revision=revision(basis="材料收入数字更新，报告结论页与讲稿同步；跨页口径未受影响",
                               rechecked=["content.numbers-charts", "content.cross-page",
                                          "content.script-consistency"]))
-        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-                                   encoding="utf-8")
+        paths["record"].write_bytes((json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertTrue(payload["verdict"]["deliverable"],
                         "受影响的引用、计算与检查结果更新后核验恢复")
@@ -488,11 +484,11 @@ class RevisionUpdateFlowTests(unittest.TestCase):
         paths = write_case(d, record=record)
         (paths["report"].parent / "materials").mkdir(exist_ok=True)
         material_path = paths["report"].parent / "materials" / "q3-notes.md"
-        material_path.write_text(MATERIAL, encoding="utf-8")
+        material_path.write_bytes(MATERIAL.encode("utf-8"))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertTrue(payload["verdict"]["deliverable"])
         # 来源再次变化（改稿之外的因素），记录没有跟着维护
-        material_path.write_text(MATERIAL.replace("112", "117"), encoding="utf-8")
+        material_path.write_bytes(MATERIAL.replace("112", "117").encode("utf-8"))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(check_by_id(payload, "record.sources")["code"], "record.source-stale")
         self.assertEqual(payload["coverage"]["content"], "unverified")
@@ -523,7 +519,7 @@ class RevisionUpdateFlowTests(unittest.TestCase):
         body_head = original[:original.index('<section class="page" data-page="2"')]
         tail = "</body></html>\n"
         reordered = body_head + next_html_new + rev_html_new + tail
-        paths["report"].write_text(reordered, encoding="utf-8")
+        paths["report"].write_bytes(reordered.encode("utf-8"))
         # 改稿方维护记录：只更新报告哈希；findings[].pages 仍是稳定键 sum
         record = compliant_record(
             links={"report": "report.html", "script": "script.md",
@@ -531,8 +527,7 @@ class RevisionUpdateFlowTests(unittest.TestCase):
                    "sourceNote": "materials/q3-notes.md 及同目录讲稿"},
             revision=revision(basis="页序调整，内容未变；引用按稳定页面键保持",
                               rechecked=["structure.flow"]))
-        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-                                   encoding="utf-8")
+        paths["record"].write_bytes((json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         refs_item = check_by_id(payload, "record.pageRefs")
         self.assertEqual(refs_item["status"], "pass",
@@ -545,14 +540,14 @@ class RevisionUpdateFlowTests(unittest.TestCase):
         record = compliant_record(revision=revision())
         paths = write_case(d, record=record)
         (paths["report"].parent / "materials").mkdir(exist_ok=True)
-        (paths["report"].parent / "materials" / "q3-notes.md").write_text(
-            MATERIAL, encoding="utf-8")
+        (paths["report"].parent / "materials" / "q3-notes.md").write_bytes(
+            MATERIAL.encode("utf-8"))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertTrue(payload["verdict"]["deliverable"], "材料一致时判定成立")
         # 材料被再次修改（改稿之外的因素）
         new_material = MATERIAL.replace("112", "115")
-        (paths["report"].parent / "materials" / "q3-notes.md").write_text(
-            new_material, encoding="utf-8")
+        (paths["report"].parent / "materials" / "q3-notes.md").write_bytes(
+            new_material.encode("utf-8"))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         sources_item = check_by_id(payload, "record.sources")
         self.assertEqual(sources_item["code"], "record.source-stale")
@@ -564,8 +559,7 @@ class RevisionUpdateFlowTests(unittest.TestCase):
                       "coverage": "全文", "sha256": sha(new_material), "note": "改稿后重新读取"}],
             revision=revision(basis="材料更新收入数字，报告与讲稿同步改",
                               rechecked=["content.numbers-charts", "content.cross-page"]))
-        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-                                   encoding="utf-8")
+        paths["record"].write_bytes((json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertTrue(payload["verdict"]["deliverable"], "来源重新核验后判定恢复")
 

@@ -26,6 +26,7 @@ from xml.parsers import expat
 from xml.sax.saxutils import escape
 
 import docx_review as dr
+import fsutil
 import i18n
 import ledger
 import notes_store as store
@@ -467,17 +468,37 @@ def _validate(path: Path | io.BytesIO, original: bytes, main: str, document: byt
             raise EditError("validation", main)
 
 
+def _is_in_use_error(exc: OSError) -> bool:
+    """判断 OSError 是否为文件被 Office/预览占用（Windows 共享/锁定冲突或权限拒绝）。"""
+    return isinstance(exc, PermissionError) or getattr(exc, "winerror", None) in (5, 32, 33)
+
+
+def _replace_file(temp: Path, destination: Path) -> None:
+    """原子替换目标文件；若目标正被 Office/预览占用，保留原件并明确报 locked。"""
+    try:
+        os.replace(temp, destination)
+    except OSError as exc:
+        if _is_in_use_error(exc):
+            raise EditError("locked", str(exc)) from None
+        raise
+
+
 def _source_check(source: Path, fingerprint: str) -> bytes:
     """源文件安全检查（DOCX 与 PPTX 回写共用）：符号链接、owner file、包大小与指纹。"""
-    if source.is_symlink() or not source.is_file():
-        raise EditError("source")
-    # Word 与 PowerPoint 的 owner file 按平台可能截去原文件名开头的两个字符，两种都检查。
-    for name in ("~$" + source.name, "~$" + source.name[2:]):
-        if source.with_name(name).exists():
-            raise EditError("locked")
-    if source.stat().st_size > MAX_PACKAGE:
-        raise EditError("size")
-    raw = source.read_bytes()
+    try:
+        if source.is_symlink() or not source.is_file():
+            raise EditError("source")
+        # Word 与 PowerPoint 的 owner file 按平台可能截去原文件名开头的两个字符，两种都检查。
+        for name in ("~$" + source.name, "~$" + source.name[2:]):
+            if source.with_name(name).exists():
+                raise EditError("locked")
+        if source.stat().st_size > MAX_PACKAGE:
+            raise EditError("size")
+        raw = source.read_bytes()
+    except OSError as exc:
+        if _is_in_use_error(exc):
+            raise EditError("locked", str(exc)) from None
+        raise
     if not fingerprint or hashlib.sha256(raw).hexdigest() != fingerprint:
         raise EditError("fingerprint")
     return raw
@@ -580,7 +601,7 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
         temp = Path(temp_name)
         try:
             with os.fdopen(fd, "wb") as fh:
-                if not separate:
+                if not separate and hasattr(os, "fchmod"):
                     os.fchmod(fh.fileno(), stat.S_IMODE(source.stat().st_mode))
                 fh.write(packed)
                 fh.flush()
@@ -589,13 +610,14 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
             _source_check(source, fingerprint)   # Word 或别的进程在准备期间动过源文件就拒绝提交
             if separate and destination.exists():
                 raise EditError("output", str(destination))
-            os.replace(temp, destination)
+            _replace_file(temp, destination)
         finally:
             temp.unlink(missing_ok=True)
         return result
 
 
 def main(argv: list[str] | None = None) -> int:
+    fsutil.configure_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
         language = i18n.cli_locale(i18n.explicit_locale(argv))

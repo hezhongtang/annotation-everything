@@ -5,6 +5,7 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import struct
 import subprocess
@@ -23,6 +24,8 @@ os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不�
 
 import serve
 import notes_store as store
+import fsutil
+import i18n
 import wakeup
 import notes as notes_cli
 sys.path.insert(0, str(ROOT))
@@ -30,6 +33,7 @@ import host_isolation
 host_isolation.require_for_module(__name__)
 
 THREAD = "11111111-1111-4111-8111-111111111111"
+_HAS_UNIX_DESKTOP_IPC = os.name != "nt" and hasattr(socket, "AF_UNIX") and hasattr(os, "getuid")
 
 
 class Desktop:
@@ -92,17 +96,27 @@ class DeliveryTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="ae-delivery-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.env = patch.dict(os.environ, {"AE_HOME": str(self.root / "ledger"), "CODEX_THREAD_ID": THREAD})
+        home_dir = str(self.root / "home")
+        self.env = patch.dict(os.environ, {
+            "AE_HOME": str(self.root / "ledger"),
+            "HOME": home_dir,
+            "USERPROFILE": home_dir,
+            "CODEX_THREAD_ID": THREAD,
+        })
         self.env.start()
         self.addCleanup(self.env.stop)
         self.review = self.root / "review"
         self.review.mkdir(mode=0o700)
         (self.review / "review.json").write_text(json.dumps({"reviewId": "synthetic-delivery", "reviewDir": str(self.review)}))
         (self.review / "index.html").write_text("<!doctype html><title>Synthetic</title>")
-        self.desktop = Desktop(self.root / "desktop.sock")
-        self.addCleanup(self.desktop.close)
+        self.desktop = None
+        if _HAS_UNIX_DESKTOP_IPC:
+            self.desktop = Desktop(self.root / "desktop.sock")
+            self.addCleanup(self.desktop.close)
 
     def bind(self):
+        if not _HAS_UNIX_DESKTOP_IPC:
+            self.skipTest("Unix domain socket desktop IPC is POSIX-only")
         return wakeup.bind(self.review, THREAD, self.desktop.path)
 
     def start_server(self):
@@ -331,7 +345,7 @@ class DeliveryTests(unittest.TestCase):
 
     def test_transfer_checks_consult_every_registered_source(self):
         """改绑 / 解除接收方的前置检查按登记的来源逐个判定；来源可登记多种。"""
-        self.bind()
+        wakeup.bind_wait(self.review, "Claude Code", "session-a")
         store.handoff_submit(self.review, "synthetic")
         store.handoff_claim(self.review, by="Synthetic")
         with self.assertRaises(ValueError) as ctx:
@@ -357,6 +371,109 @@ class DeliveryTests(unittest.TestCase):
                               input=json.dumps(payload), capture_output=True, text=True, timeout=10)
         self.assertEqual(sent.returncode, 2, sent.stdout + sent.stderr)
         self.assertEqual(self.desktop.requests, [])
+
+    def test_desktop_ipc_reports_capability_unavailable_on_windows(self):
+        sock_file = self.root / "ipc.sock"
+        sock_file.write_text("not-a-socket", encoding="utf-8")
+        with patch("fsutil.is_windows", return_value=True):
+            with self.assertRaises(ValueError) as ctx:
+                wakeup.DesktopIPC(sock_file)
+            self.assertEqual(str(ctx.exception), "desktop-ipc-unavailable")
+            with self.assertRaises(ValueError) as bind_ctx:
+                wakeup.bind(self.review, THREAD, sock_file)
+            self.assertEqual(str(bind_ctx.exception), "desktop-ipc-unavailable")
+        self.assertFalse((self.review / wakeup.BINDING_FILE).exists())
+
+    def test_prompt_uses_windows_python_cli_without_posix_single_quotes(self):
+        binding = {
+            "version": 1,
+            "adapter": "codex-desktop",
+            "bindingId": "00000000-0000-4000-8000-000000000001",
+            "reviewId": "synthetic-delivery",
+            "reviewDir": str(self.root / "My Review"),
+            "threadId": THREAD,
+        }
+        store.handoff_submit(self.review, "synthetic", full_check=True)
+        with patch("fsutil.is_windows", return_value=True):
+            text = wakeup.prompt(binding, "handoff", 1, "msg-1")
+        self.assertNotIn("python3 ", text)
+        self.assertIn("python ", text)
+        self.assertIn(f'"{binding["reviewDir"]}"', text)
+        with patch("fsutil.is_windows", return_value=True):
+            analysis_text = wakeup.prompt(binding, "analysis", 1, "msg-2")
+        self.assertNotIn("python3 ", analysis_text)
+        self.assertIn("python ", analysis_text)
+
+    def test_windows_private_binding_accepts_ntfs_mode_and_rejects_reparse(self):
+        wakeup.bind_wait(self.review, "Claude Code", "session-a")
+        fake_ntfs = os.stat_result((0o100666, 1, 1, 1, 0, 0, (self.review / wakeup.BINDING_FILE).stat().st_size, 0, 0, 0))
+        with patch("fsutil.is_windows", return_value=True), patch.object(Path, "lstat", return_value=fake_ntfs):
+            loaded = wakeup.load_binding(self.review)
+            self.assertEqual(loaded["sessionId"], "session-a")
+
+        class FakeReparseStat:
+            st_mode = 0o100666
+            st_size = 128
+            st_file_attributes = 0x0400
+
+        with patch("fsutil.is_windows", return_value=True), patch.object(Path, "lstat", return_value=FakeReparseStat()):
+            self.assertEqual(wakeup.public_status(self.review)["state"], "error")
+
+    def test_viewer_distinguishes_delivery_receipt_completion_and_unknown_states(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is required to execute viewer_template.html helpers")
+        source = (SCRIPTS / "viewer_template.html").read_text(encoding="utf-8")
+        a = source.index("const DELIVERY_LABEL=")
+        b = source.index("let handMode=null;")
+        c = source.index("function overviewReceiverText(row){")
+        d = source.index("function overviewTempStale(row){")
+        messages = i18n.load_catalog("zh-CN")["messages"]
+        program = "\n".join([
+            "const M=" + json.dumps(messages, ensure_ascii=False) + ";",
+            "const uiLocale='zh-CN';",
+            "const tMsg=(k,p={})=>String(M[k]??k).replace(/\\{(\\w+)\\}/g,(_,n)=>String(p[n]??''));",
+            "const elements=new Map(); const $=id=>{if(!elements.has(id))elements.set(id,{textContent:'',title:'',className:'',classList:{classes:new Set(),contains(x){return this.classes.has(x)},toggle(x,f){if(f)this.classes.add(x);else this.classes.delete(x)},remove(x){this.classes.delete(x)}}});return elements.get(id)};",
+            "const FILE=false; let mode='server', srvOld=false, agentDelivery=null, receiver=null, hand=null, handDestination=null, handQueued=false;",
+            "const handUserMessage=()=>'';",
+            source[a:b],
+            source[c:d],
+            """
+            const out = {};
+            hand = {latest: {seq: 1, status: 'pending'}};
+            agentDelivery = {adapter: 'codex-desktop', seq: 1, event: 'handoff', state: 'accepted'};
+            renderHand();
+            out.accepted = $('agentDelivery').textContent;
+            agentDelivery = {adapter: 'codex-desktop', seq: 1, event: 'handoff', state: 'received'};
+            renderHand();
+            out.received = $('agentDelivery').textContent;
+            hand = {latest: {seq: 1, status: 'done', resolvedCount: 2, summary: 'ok'}};
+            renderHand();
+            out.doneHand = $('handState').textContent;
+            hand = null;
+            agentDelivery = {adapter: 'future-protocol', seq: 1, event: 'handoff', state: 'future-state'};
+            renderHand();
+            out.unknownProtocol = $('agentDelivery').textContent;
+            receiver = {state: 'future-receiver'};
+            renderReceiver();
+            out.unknownReceiver = $('receiver').textContent;
+            out.overviewProcessing = overviewReceiverText({hook: false, agentDelivery: {adapter: 'wait', state: 'bound', receiver: {state: 'processing', harness: 'H', sessionId: 'S'}}});
+            out.overviewRestart = overviewReceiverText({hook: false, agentDelivery: {adapter: 'wait', state: 'bound', receiver: {state: 'restart-required', harness: 'H', sessionId: 'S'}}});
+            console.log(JSON.stringify(out));
+            """,
+        ])
+        probe = self.root / "viewer_probe.js"
+        probe.write_text(program, encoding="utf-8")
+        run = subprocess.run([node, str(probe)], capture_output=True, text=True, timeout=15)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        out = json.loads(run.stdout)
+        self.assertEqual(out["accepted"], messages["viewer.agent.accepted"])
+        self.assertEqual(out["received"], messages["viewer.agent.received"])
+        self.assertIn("已处理", out["doneHand"])
+        self.assertEqual(out["unknownProtocol"], messages["viewer.agent.unknown"])
+        self.assertEqual(out["unknownReceiver"], messages["viewer.receiver.legacy"])
+        self.assertEqual(out["overviewProcessing"], messages["viewer.overview.receiver.processing"])
+        self.assertEqual(out["overviewRestart"], messages["viewer.overview.receiver.restartRequired"])
 
 
 if __name__ == "__main__":

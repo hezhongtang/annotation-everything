@@ -147,16 +147,16 @@ def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
                record: dict | None = None) -> dict:
     d.mkdir(parents=True, exist_ok=True)
     (d / "materials").mkdir(exist_ok=True)
-    (d / "materials" / "notes.md").write_text(MATERIAL, encoding="utf-8")
+    (d / "materials" / "notes.md").write_bytes(MATERIAL.encode("utf-8"))
     paths = {"report": d / "report.html"}
-    paths["report"].write_text(report, encoding="utf-8")
+    paths["report"].write_bytes(report.encode("utf-8"))
     if script is not None:
         paths["script"] = d / "script.md"
-        paths["script"].write_text(script, encoding="utf-8")
+        paths["script"].write_bytes(script.encode("utf-8"))
     if record is not None:
         paths["record"] = d / "report-record.json"
-        paths["record"].write_text(
-            json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        paths["record"].write_bytes(
+            (json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         )
     return paths
 
@@ -683,8 +683,8 @@ class TestViewerNavigationAndRebuild(unittest.TestCase):
         rep = work / "report.html"
         scr = work / "script.md"
         out = work / "review"
-        rep.write_text(NAV_REPORT_OK, encoding="utf-8")
-        scr.write_text(NAV_SCRIPT_OK, encoding="utf-8")
+        rep.write_bytes(NAV_REPORT_OK.encode("utf-8"))
+        scr.write_bytes(NAV_SCRIPT_OK.encode("utf-8"))
 
         res1 = bv.build(rep, scr, out, no_scan_skills=True, locale="zh-CN")
         self.assertGreaterEqual(res1["sections"], 1)
@@ -733,8 +733,8 @@ class TestViewerNavigationAndRebuild(unittest.TestCase):
 ### 第 4 页｜补充口径
 **讲法**：补充口径。
 """
-        rep.write_text(reordered, encoding="utf-8")
-        scr.write_text(reordered_script, encoding="utf-8")
+        rep.write_bytes(reordered.encode("utf-8"))
+        scr.write_bytes(reordered_script.encode("utf-8"))
         bv.main(["--rebuild", str(out), "--no-scan-skills", "--locale", "zh-CN"])
         manifest2 = json.loads((out / "review.json").read_text(encoding="utf-8"))
         self.assertIn(["第一部分 证据与结论", 2, 3], manifest2["sections"])

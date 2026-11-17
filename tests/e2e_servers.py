@@ -37,7 +37,14 @@ SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 
 TERMINATE_TIMEOUT = 5.0
 READY_TIMEOUT = 8.0
-BLOCKED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+BLOCKED_SIGNALS = tuple(
+    sig for sig in (
+        signal.SIGINT,
+        signal.SIGTERM,
+        getattr(signal, "SIGHUP", None),
+        getattr(signal, "SIGBREAK", None),
+    ) if sig is not None
+)
 
 
 class TestCleanup:
@@ -88,14 +95,24 @@ def _signals_deferred(signals=BLOCKED_SIGNALS):
     C 层一置位，主线程下一个检查点照样抛 KeyboardInterrupt。信号处置是进程级的，
     所以同时把这几个信号临时设成 SIG_IGN，清理完再还原。
     """
-    deferred = {sig: signal.signal(sig, signal.SIG_IGN) for sig in signals}
-    previous = signal.pthread_sigmask(signal.SIG_BLOCK, signals)
+    deferred = {}
+    for sig in signals:
+        try:
+            deferred[sig] = signal.signal(sig, signal.SIG_IGN)
+        except (OSError, ValueError):
+            pass
+    has_sigmask = hasattr(signal, "pthread_sigmask")
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, signals) if has_sigmask else None
     try:
         yield
     finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        if has_sigmask:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
         for sig, handler in deferred.items():
-            signal.signal(sig, handler)
+            try:
+                signal.signal(sig, handler)
+            except (OSError, ValueError):
+                pass
 
 
 def reap(proc: subprocess.Popen, timeout: float | None = None) -> tuple[str | None, str | None]:
@@ -126,8 +143,13 @@ def install(cleanup: TestCleanup = CLEANUP) -> None:
     _INSTALLED = True
     atexit.register(cleanup.stop_all)
     handler = _cleanup_handler(cleanup)
-    for sig in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(sig, handler)
+    for name in ("SIGTERM", "SIGHUP", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            try:
+                signal.signal(sig, handler)
+            except (OSError, ValueError):
+                pass
 
 
 def _cleanup_handler(cleanup: TestCleanup):

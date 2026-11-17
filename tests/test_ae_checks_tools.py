@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,13 +48,36 @@ class ToolCheckTests(unittest.TestCase):
         os.environ["PATH"] = self.old_path
 
     def fake_tool(self, name):
-        path = self.bin / name
-        path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        path.chmod(0o755)
+        if os.name == "nt":
+            path = self.bin / f"{name}.cmd"
+            path.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
+        else:
+            path = self.bin / name
+            path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            path.chmod(0o755)
 
     def with_only_fake_bin(self):
-        """PATH 只剩假 bin：shutil.which 找不到任何真实工具。"""
+        """PATH 只剩假 bin：shutil.which 找不到任何真实工具，同时屏蔽默认候选安装路径。"""
         os.environ["PATH"] = str(self.bin)
+        empty = str(self.root / "no-such-install")
+        env_patch = mock.patch.dict(os.environ, {
+            "ProgramFiles": empty,
+            "ProgramFiles(x86)": empty,
+            "ProgramW6432": empty,
+            "LOCALAPPDATA": empty,
+            "USERPROFILE": empty,
+            "ProgramData": empty,
+        })
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        try:
+            pr_mod = ae.skill_module("pptx_report")
+        except ImportError:
+            pr_mod = None
+        if pr_mod is not None:
+            cand_patch = mock.patch.object(pr_mod, "SOFFICE_CANDIDATES", ())
+            cand_patch.start()
+            self.addCleanup(cand_patch.stop)
 
     def with_fake_bin_first(self):
         os.environ["PATH"] = os.pathsep.join([str(self.bin), self.old_path])
@@ -85,9 +109,41 @@ class ToolCheckTests(unittest.TestCase):
         self.assertEqual(result.code, "pdffonts")
         self.assertIn("poppler", result.fix_command)
 
+    def test_libreoffice_and_pdftoppm_pass_when_present_and_warn_when_missing(self):
+        self.with_only_fake_bin()
+        lo_warn = ae.check_libreoffice(self.ctx)
+        ppm_warn = ae.check_pdftoppm(self.ctx)
+        self.assertEqual(lo_warn.level, WARN)
+        self.assertEqual(lo_warn.code, "libreoffice")
+        self.assertIn("HTML", lo_warn.message)
+        self.assertEqual(ppm_warn.level, WARN)
+        self.assertEqual(ppm_warn.code, "pdftoppm")
+        self.assertIn("poppler", ppm_warn.fix_command.lower())
+
+        self.fake_tool("soffice")
+        self.fake_tool("pdftoppm")
+        self.with_fake_bin_first()
+        self.assertEqual(ae.check_libreoffice(self.ctx).level, PASS)
+        self.assertEqual(ae.check_pdftoppm(self.ctx).level, PASS)
+
+    def test_windows_tool_fix_and_fc_list_diagnostics_avoid_apt(self):
+        with mock.patch.object(ae, "_is_windows", return_value=True):
+            for pkg in ("libreoffice", "poppler", "fontconfig", "python3.12"):
+                hint = ae.tool_fix(pkg)
+                self.assertNotIn("apt", hint)
+                self.assertNotIn("brew", hint)
+            self.assertIn("Poppler", ae.tool_fix("poppler"))
+            self.assertIn("PATH", ae.tool_fix("poppler"))
+            self.assertIn("LibreOffice", ae.tool_fix("libreoffice"))
+            self.with_only_fake_bin()
+            fc_res = ae.check_fc_list(self.ctx)
+            self.assertEqual(fc_res.level, WARN)
+            self.assertIn("注册表", fc_res.message)
+
     def test_missing_optional_tools_are_never_failures(self):
         self.with_only_fake_bin()
-        for result in (ae.check_fc_list(self.ctx), ae.check_pdffonts(self.ctx)):
+        for result in (ae.check_fc_list(self.ctx), ae.check_pdffonts(self.ctx),
+                       ae.check_libreoffice(self.ctx), ae.check_pdftoppm(self.ctx)):
             self.assertEqual(result.category, "可选工具")
             self.assertNotEqual(result.level, FAIL)
 
@@ -147,7 +203,8 @@ class GitHooksCheckTests(unittest.TestCase):
         result = ae.check_git_hooks(self.ctx(repo))
         self.assertEqual(result.level, WARN)
         self.assertEqual(result.code, "git-hooks")
-        self.assertIn("setup-dev.sh", result.fix_command)
+        expected_fix = "core.hooksPath" if os.name == "nt" else "setup-dev.sh"
+        self.assertIn(expected_fix, result.fix_command)
 
     def test_warns_when_pointing_elsewhere(self):
         repo = self.make_repo()
@@ -160,7 +217,8 @@ class GitHooksCheckTests(unittest.TestCase):
         repo = self.make_repo(git_init=False)
         result = ae.check_git_hooks(self.ctx(repo))
         self.assertEqual(result.level, WARN)
-        self.assertIn("setup-dev.sh", result.fix_command)
+        expected_fix = "core.hooksPath" if os.name == "nt" else "setup-dev.sh"
+        self.assertIn(expected_fix, result.fix_command)
 
     def test_warns_when_hooks_directory_missing(self):
         repo = self.make_repo(hooks_dir=False)
@@ -220,6 +278,8 @@ class DoctorScopeTests(unittest.TestCase):
         self.assertIn("可选工具", categories)
         self.assertIn("fc-list", codes)
         self.assertIn("pdffonts", codes)
+        self.assertIn("libreoffice", codes)
+        self.assertIn("pdftoppm", codes)
 
     def test_dev_checks_present_inside_repo(self):
         ctx = ae.DoctorContext(skill_copy=self.root / "skills" / "annotation-everything",
@@ -242,8 +302,8 @@ class DoctorCliTests(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
-        self.env = {**os.environ, "HOME": str(self.home), "CLAUDE_SKILLS_DIR": str(self.skills),
-                    "PYTHONDONTWRITEBYTECODE": "1"}
+        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
+                    "CLAUDE_SKILLS_DIR": str(self.skills), "PYTHONDONTWRITEBYTECODE": "1"}
 
     @property
     def copy_dir(self) -> Path:
@@ -254,7 +314,8 @@ class DoctorCliTests(unittest.TestCase):
         if path is not None:
             env["PATH"] = path
         return subprocess.run([sys.executable, str(script), *args],
-                              cwd=cwd, env=env, capture_output=True, text=True, timeout=60)
+                              cwd=cwd, env=env, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=60)
 
     def install(self):
         p = self.run_ae(AE, "install")

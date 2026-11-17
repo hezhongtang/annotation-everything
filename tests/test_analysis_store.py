@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -381,8 +382,9 @@ class AnalysisModelTests(unittest.TestCase):
         second = self.events(state["id"])
         self.assertEqual(second[:len(first)], first)   # 已写下的事件一个字都不改
         self.assertGreater(len(second), len(first))
-        for f in (self.d / "analysis" / state["id"] / "events.jsonl", self.d / "analysis" / "counter.json"):
-            self.assertEqual(f.stat().st_mode & 0o777, 0o600, f)
+        if os.name != "nt":
+            for f in (self.d / "analysis" / state["id"] / "events.jsonl", self.d / "analysis" / "counter.json"):
+                self.assertEqual(f.stat().st_mode & 0o777, 0o600, f)
 
     def test_round_numbers_unique_across_analyses_and_baseline_monotonic(self):
         one = add_note(self.d, page=3)
@@ -536,7 +538,12 @@ class AnalysisBoundaryTests(unittest.TestCase):
                 with self.subTest(analysis_id=analysis_id), self.assertRaises(store.NoteError):
                     analysis_store.load(review, analysis_id)
             (review / "analysis").mkdir()
-            (review / "analysis" / foreign["id"]).symlink_to(foreign_dir, target_is_directory=True)
+            try:
+                (review / "analysis" / foreign["id"]).symlink_to(foreign_dir, target_is_directory=True)
+            except OSError as exc:
+                if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                    return
+                raise
             with self.assertRaises(store.NoteError):
                 analysis_store.load(review, foreign["id"])
             with self.assertRaises(store.NoteError):

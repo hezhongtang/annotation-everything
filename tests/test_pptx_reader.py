@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -236,7 +237,9 @@ class PptxSecurityTests(unittest.TestCase):
             with self.subTest(path=name):
                 parts = mp.sample_parts()
                 parts[name] = "<unused/>"
-                self.assert_error(mp.write_package(self.root / f"unsafe-{index}.pptx", parts), "unsafePath", name)
+                expected_part = name.replace(os.sep, "/") if os.name == "nt" else name
+                self.assert_error(mp.write_package(self.root / f"unsafe-{index}.pptx", parts), "unsafePath",
+                                  expected_part)
 
         duplicate = self.root / "duplicate.pptx"
         with warnings.catch_warnings():

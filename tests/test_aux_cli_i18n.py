@@ -25,19 +25,26 @@ class FontCliLanguageTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="font-i18n-test-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.pptx = self.root / "synthetic.pptx"
         self.env = {k: v for k, v in os.environ.items()
                     if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
-        self.env.update({"HOME": str(self.root / "home"), "PATH": str(self.bin) + os.pathsep + os.defpath,
+        home_dir = str(self.root / "home")
+        self.env.update({"HOME": home_dir, "USERPROFILE": home_dir,
+                         "PATH": str(self.bin) + os.pathsep + os.defpath,
                          "PYTHONDONTWRITEBYTECODE": "1"})
 
-    def tool(self, name: str, script: str):
-        path = self.bin / name
-        path.write_text("#!/bin/sh\n" + script + "\n", encoding="utf-8")
-        path.chmod(0o755)
+    def tool(self, name: str, body: str):
+        if os.name == "nt":
+            (self.bin / f"{name}.py").write_text(body + "\n", encoding="utf-8")
+            (self.bin / f"{name}.cmd").write_text(
+                f'@echo off\r\n"{sys.executable}" "%~dp0{name}.py" %*\r\n', encoding="utf-8")
+        else:
+            path = self.bin / name
+            path.write_text(f"#!{sys.executable}\n{body}\n", encoding="utf-8")
+            path.chmod(0o755)
 
     def make_pptx(self):
         with zipfile.ZipFile(self.pptx, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -52,7 +59,7 @@ class FontCliLanguageTests(unittest.TestCase):
 
     def test_default_stays_chinese(self):
         self.make_pptx()
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans,Synthetic Sans Regular'")
+        self.tool("fc-list", "print('Synthetic Sans,Synthetic Sans Regular')")
         p = self.run_check()
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("PPTX 字体声明：", p.stdout)
@@ -61,7 +68,7 @@ class FontCliLanguageTests(unittest.TestCase):
 
     def test_locale_flag_localizes_but_keeps_font_names(self):
         self.make_pptx()
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans,Synthetic Sans Regular'")
+        self.tool("fc-list", "print('Synthetic Sans,Synthetic Sans Regular')")
         p = self.run_check("--locale", "en")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("Synthetic Sans", p.stdout)
@@ -77,7 +84,7 @@ class FontCliLanguageTests(unittest.TestCase):
 
     def test_locale_flag_position_and_env(self):
         self.make_pptx()
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        self.tool("fc-list", "print('Synthetic Sans')")
         p = self.run_check("--locale", "en")
         self.assertIn("Fonts declared in the PPTX:", p.stdout)
         p = self.run_check(AE_LOCALE="en")
@@ -104,7 +111,7 @@ class FontCliLanguageTests(unittest.TestCase):
     def test_unrecognized_argument_is_localized_and_exits_two(self):
         """R1 回归：这条路径曾经缺 detail 参数，抛 MessageFormatError 并返回 1。"""
         self.make_pptx()
-        self.tool("fc-list", "printf '%s\\n' 'Synthetic Sans'")
+        self.tool("fc-list", "print('Synthetic Sans')")
         p = self.run_check("--nope")
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn("无法识别的参数", p.stderr)
@@ -118,6 +125,28 @@ class FontCliLanguageTests(unittest.TestCase):
         """工具缺失时的本地化错误。PATH 只留临时目录：CI 的 Ubuntu 自带 fc-list
         （在 /usr/bin），不隔离就会走到「枚举成功」那条分支，断言随之落空。"""
         self.make_pptx()
+        if os.name == "nt":
+            # Windows 缺 fc-list 时会回退注册表；这里模拟双双缺失以验证本地化报错路径
+            run = (
+                "import sys\n"
+                "from unittest.mock import patch\n"
+                "sys.path.insert(0, sys.argv[1])\n"
+                "import check_pptx_fonts\n"
+                "def fail_reg():\n"
+                "    raise check_pptx_fonts.CheckError(check_pptx_fonts.T('font.err.noFcList'))\n"
+                "with patch.object(check_pptx_fonts, '_windows_registry_fonts', side_effect=fail_reg):\n"
+                "    sys.exit(check_pptx_fonts.main(sys.argv[2:]))\n"
+            )
+            env_iso = {**self.env, "PATH": str(self.bin)}
+            p = subprocess.run([sys.executable, "-c", run, str(SCRIPTS), str(self.pptx), "--locale", "en"],
+                               env=env_iso, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+            self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+            self.assertIn("fc-list", p.stderr)
+            self.assertIn("fontconfig", p.stderr)
+            p = subprocess.run([sys.executable, "-c", run, str(SCRIPTS), str(self.pptx)],
+                               env=env_iso, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+            self.assertIn("找不到 fc-list", p.stderr)
+            return
         p = self.run_check("--locale", "en", PATH=str(self.bin))
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn("fc-list", p.stderr)
@@ -133,7 +162,7 @@ class SkillScanLanguageTests(unittest.TestCase):
         # 别的测试可能在进程内定过语言（set_locale 会定住）；先解开，AE_LOCALE 才说得上话
         self.addCleanup(skill_sources.set_locale, None)
         skill_sources.set_locale(None)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.source = self.root / "skills"
         (self.source / "broken").mkdir(parents=True)
         (self.source / "broken" / "SKILL.md").write_text("没有 frontmatter\n", encoding="utf-8")
@@ -218,7 +247,7 @@ class LedgerErrorLanguageTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ledger-i18n-test-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.home = self.root / "ledger"
         self.home.mkdir()
         self.saved = os.environ.get("AE_HOME")

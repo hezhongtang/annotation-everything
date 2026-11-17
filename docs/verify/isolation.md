@@ -38,20 +38,16 @@ serve.py——并行时盘点结果里混进对方的服务，被误判成残留
 
 ## 锁机制
 
-- **flock 排他锁**：`fcntl.flock`，macOS 与 Linux 均支持。入口将实际持有的锁
-  描述符传给组子进程；正常结束或可处理的中断先回收组，再释放锁。入口单独被
-  `SIGKILL` 时，仍运行的组继续持有该描述符；最后一个持有者退出后内核释放锁，
-  后继运行无需删除锁文件，也不会在前一组仍使用资源时提前进入。
+- **平台锁**：
+  - **POSIX（macOS / Linux）**：`fcntl.flock` 排他锁。入口通过 `pass_fds` 将实际持有的锁描述符传给组子进程；入口单独被 `SIGKILL` 时，仍运行的组继续持有该描述符；最后一个持有者退出后内核释放锁。
+  - **Windows（#172）**：Win32 共享模式排他写锁（`CreateFileW` 不授予 `FILE_SHARE_WRITE`，允许 `FILE_SHARE_READ | FILE_SHARE_DELETE` 供只读诊断读取）。入口标记锁句柄可继承，并通过 `STARTUPINFO` 的 `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 仅把锁句柄（与标准流）传给组子进程，不泄漏无关句柄；入口被强行终止时，仍在运行的组继续持有同一内核文件对象句柄，后继参与方仍收到 `ERROR_SHARING_VIOLATION` 并按等待上限排队，直到最后一个持有者退出由内核释放。
+  - **统一收尾**：正常结束或可处理的中断先回收登记的受控子进程（Windows 使用 `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK_EVENT` 与无关闭强杀限制的 Win32 Job Object `TerminateJobObject` 回收整棵受控进程树，不波及未登记进程），再释放锁；后继运行无需删除锁文件，也不会在前一组仍使用资源时提前进入。
+    Windows 收尾还会查询 Job 的活动成员数；即使直属进程已退出，也会终止残留后代，并确认活动成员数为 0 后才关闭 Job 句柄。查询或回收失败时保留未回收状态并记录原因，不将直属进程退出记作整棵进程树回收完成。
 - **锁文件位置**：同一用户共享、不依赖个人绝对路径。优先级：
-  `AE_LOCK_DIR`（测试与特殊环境覆盖）→ `$XDG_RUNTIME_DIR/annotation-everything-locks-<UID>`
-  → 系统临时目录下同名目录。目录按用户 UID 区分并以私有权限创建，Linux 回退到
-  共享 `/tmp` 时不同用户也不会争用写权限。同一用户的任何检出解析到相同位置，
-  因此跨 worktree、跨独立 checkout 生效。
-- **锁文件内容**：持有者诊断信息（pid、资源、时间），只用于报告「谁在持有」；
-  所有权判断以 flock 为准，锁文件残留不构成占用。协议不删除锁文件（删除有
-  竞态），它们只有几十字节且可重复使用。
-- **平台差异**：依赖 POSIX `flock`；Windows 不在支持范围（CI 是 Linux、开发机
-  是 macOS）。只用 Python 标准库，语法兼容 Python 3.9。
+  `AE_LOCK_DIR`（测试与特殊环境覆盖）→ `$XDG_RUNTIME_DIR/annotation-everything-locks-<用户标识>`
+  → 系统临时目录下同名目录。POSIX 按用户 UID 区分，Windows 按用户名与域名的 SHA-256 摘要区分，均以私有目录或每用户临时目录隔离；同一用户的任何检出解析到相同位置，因此跨 worktree、跨独立 checkout 生效。
+- **锁文件内容**：持有者诊断信息（pid、资源、时间），通过已持有的写句柄直接写入，只用于报告「谁在持有」；所有权判断以操作系统锁句柄为准，锁文件残留不构成占用。协议不删除锁文件（删除有竞态），它们只有几十字节且可重复使用。
+- **实现约束**：只用 Python 标准库，语法兼容 Python 3.9。Windows 首期在组内串行执行（见 [ADR 0005](../adr/0005-isolated-verification-processes.md)）。
 
 ## 等待与超时
 
@@ -91,4 +87,4 @@ serve.py——并行时盘点结果里混进对方的服务，被误判成残留
 
 ## 组内进程隔离
 
-入口版本 2 在原组锁内最多执行 3 个独立任务。所有敏感单元模块仍在同一串行任务中运行；浏览器场景必须显式声明隔离。fork 继承原锁描述符，不另起互斥机制，尚存任务继续持有资源。环境、收尾与串行回退见 [parallel-execution.md](parallel-execution.md)。
+入口版本 2 在 POSIX 上可在原组锁内最多执行 3 个独立任务（所有敏感单元模块仍在同一串行任务中运行，浏览器场景需显式声明隔离，fork 继承原锁描述符）；Windows 首期因无 `os.fork()` 保持组内串行执行，仍遵守同一资源锁与受控子进程收尾协议。环境、收尾与串行回退见 [parallel-execution.md](parallel-execution.md)。

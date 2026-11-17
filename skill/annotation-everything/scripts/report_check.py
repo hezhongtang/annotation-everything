@@ -35,6 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import build_viewer
+import fsutil
 import i18n
 
 RECORD_SCHEMA = "ae-report-record/1"
@@ -1727,6 +1728,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    fsutil.configure_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

@@ -167,19 +167,18 @@ def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
     d.mkdir(parents=True, exist_ok=True)
     if material and not (d / "materials" / "q3-notes.md").exists():
         (d / "materials").mkdir(exist_ok=True)
-        (d / "materials" / "q3-notes.md").write_text(MATERIAL, encoding="utf-8")
+        (d / "materials" / "q3-notes.md").write_bytes(MATERIAL.encode("utf-8"))
     paths = {"report": d / report_name}
-    paths["report"].write_text(report, encoding="utf-8")
+    paths["report"].write_bytes(report.encode("utf-8"))
     if script is not None:
         paths["script"] = d / "script.md"
-        paths["script"].write_text(script, encoding="utf-8")
+        paths["script"].write_bytes(script.encode("utf-8"))
     if record_text is not None:
         paths["record"] = d / "report-record.json"
-        paths["record"].write_text(record_text, encoding="utf-8")
+        paths["record"].write_bytes(record_text.encode("utf-8"))
     elif record is not None:
         paths["record"] = d / "report-record.json"
-        paths["record"].write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-                                   encoding="utf-8")
+        paths["record"].write_bytes((json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     return paths
 
 
@@ -578,7 +577,7 @@ class ReviewBoundaryTests(unittest.TestCase):
         self.directory = tmpdir()
         material = self.directory / "materials" / "q3-notes.md"
         material.parent.mkdir()
-        material.write_text(MATERIAL, encoding="utf-8")
+        material.write_bytes(MATERIAL.encode("utf-8"))
 
     def check(self, record):
         paths = write_case(self.directory, record=record)
@@ -794,14 +793,13 @@ class SourceAssociationTests(unittest.TestCase):
     def test_stale_material_unverifies_content(self):
         d = tmpdir()
         (d / "materials").mkdir()
-        (d / "materials" / "q3-notes.md").write_text(MATERIAL, encoding="utf-8")
+        (d / "materials" / "q3-notes.md").write_bytes(MATERIAL.encode("utf-8"))
         paths = write_case(d, record=compliant_record())
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0)
         self.assertEqual(check_by_id(payload, "record.sources")["status"], "pass")
         # 材料内容变化：旧核验结果不能为新材料背书
-        (d / "materials" / "q3-notes.md").write_text(MATERIAL + "\n四季度：待补充\n",
-                                                     encoding="utf-8")
+        (d / "materials" / "q3-notes.md").write_bytes((MATERIAL + "\n四季度：待补充\n").encode("utf-8"))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
         item = check_by_id(payload, "record.sources")
@@ -813,7 +811,7 @@ class SourceAssociationTests(unittest.TestCase):
     def test_matching_material_hash_passes(self):
         d = tmpdir()
         (d / "materials").mkdir()
-        (d / "materials" / "q3-notes.md").write_text(MATERIAL, encoding="utf-8")
+        (d / "materials" / "q3-notes.md").write_bytes(MATERIAL.encode("utf-8"))
         paths = write_case(d, record=compliant_record())
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0)

@@ -74,11 +74,12 @@ def _read(review, manifest=None):
     path = Path(review) / STATE_FILE
     if not path.exists() and not path.is_symlink():
         return _initial(review, manifest)
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError("private-stop-state-required")
-    if info.st_size > 1024 * 1024:
-        raise ValueError("stop-state-too-large")
+    fsutil.check_private_regular_file(
+        path,
+        max_bytes=1024 * 1024,
+        private_error="private-stop-state-required",
+        size_error="stop-state-too-large",
+    )
     value = json.loads(path.read_text(encoding="utf-8"))
     initial = _initial(review, manifest)
     if not isinstance(value, dict) or value.get("version") != SCHEMA \

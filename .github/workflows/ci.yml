@@ -55,3 +55,44 @@ jobs:
           echo "构件：verify-python${{ matrix.python-version }}（.verify/ 全部内容，含 record.json 与各组原始日志）"
           python3 verify.py report --latest | tee -a "$GITHUB_STEP_SUMMARY"
           python3 verify.py report --efficiency | tee -a "$GITHUB_STEP_SUMMARY"
+
+  windows-foundation:
+    name: 单元测试与服务安全自检（Windows Python ${{ matrix.python-version }}）
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # 统一验证入口：Windows 首期串行执行完整单元 + 服务安全自检；
+      # 完整浏览器检查（e2e_browser.py，Edge/Chrome）与真实 Windows 11 x64 桌面交互验收仍需真实桌面环境。
+      - name: 单元测试与服务安全自检（Windows 统一验证入口）
+        shell: pwsh
+        run: |
+          $env:AE_HOME = "$env:RUNNER_TEMP\ae-home"
+          $env:PYTHONUTF8 = "1"
+          python verify.py run --group unit --group serve-check --phase ci `
+            --reason "CI Windows ${{ github.event_name }} ${{ github.ref_name }} Python ${{ matrix.python-version }}"
+      - name: 保存 Windows 验证构件
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-windows-python${{ matrix.python-version }}
+          path: .verify/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Windows 验证摘要
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $env:PYTHONUTF8 = "1"
+          "构件：verify-windows-python${{ matrix.python-version }}（已运行 Windows CI 完整单元 unit + 服务安全自检 serve-check；browser 组与真实 Windows 11 x64 桌面交互验收仍需真实桌面环境）" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          python verify.py report --latest | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          python verify.py report --efficiency | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
