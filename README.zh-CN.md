@@ -343,7 +343,7 @@ python ae.py upgrade                            # 手动升级（先停止运行
 python ae.py doctor --target "D:\AgentSkills" --json
 ```
 
-若账户没有符号链接权限导致 `--link` 失败，工具不会静默提权，而是非零退出并给出对应的 `--target <Agent 技能目录>` 直接安装命令；Windows 首期不执行自动原地更新，升级请先停止服务和等待者后运行 `python ae.py upgrade`（或首次安装用 `python ae.py install`）。
+若账户没有符号链接权限导致 `--link` 失败，工具不会静默提权，而是非零退出并给出不带 `--link` 的直接安装命令（传了 `--target` 时原样保留，也可改传 `--target <Agent 技能目录>` 直接安装到目标目录）及开启开发人员模式后重试 `--link` 的命令；Windows 首期不执行自动原地更新，升级请先停止服务和等待者后运行 `python ae.py upgrade`（或首次安装用 `python ae.py install`）。
 
 - **版本更新**：Agent 按 `SKILL.md` 使用技能时，每份技能副本至多每天检查一次安装来源 `origin` 的正式版本标签（`v主.次.修订`），发现更高版本后自动更新并提示；预发布标签不会自动安装。离线、认证失败、来源不可用时保留当前版本并继续审阅；技能副本有本地改动，或审阅服务、批注进程仍在运行时，先提示并推迟更新。停止后可运行 `update.py now`；自定义安装位置请把命令中的路径换成当前技能副本的路径。设置 `AE_AUTO_UPDATE=0` 可关闭自动检查，手动命令仍可使用。
 - 更新只替换技能副本，保留指向它的软链接、审阅台账与审阅目录，不修改来源仓库的检出。正式版本的本地来源通常保存在 `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`，若与技能副本重叠则存到副本旁的独立目录；这些文件供后续体检、修复和更新使用，不要在仍使用该副本时删除。首次获得更新功能仍需先用包含此功能的版本运行一次 `ae.py install`。升级已有审阅时，停止旧服务、重建对照页、启动新服务并刷新浏览器。
@@ -512,7 +512,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── fsutil.py                  原子写入、文件锁和 CSP 脚本哈希的公共小工具
 │   └── check_pptx_fonts.py        PPTX 与 PDF 字体核查
 └── evals/                         技能评测用例，含生成、核验与改稿（供 skill-creator 使用）
-ae.py                             统一管理命令：install 安装技能副本，doctor 体检，repair 修复，uninstall 卸载
+ae.py                             统一管理命令：install 安装技能副本，upgrade 手动升级，doctor 体检，repair 修复，uninstall 卸载
 verify.py                         统一验证入口：plan 解释范围，run 执行并记录，report 只读记录
 verify_selection.py               阶段选测与影子对照策略：版本化映射、保守回退与遗漏对照
 verify_evidence.py                证据复用策略：同输入同环境且当前有效的通过记录跨阶段引用

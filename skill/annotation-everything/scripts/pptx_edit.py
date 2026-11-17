@@ -33,6 +33,7 @@ from xml.parsers import expat
 from xml.sax.saxutils import escape as _attr_escape_raw
 
 import docx_edit as de   # 与 DOCX 回写共用同一套字节级 ZIP 重封装、转义与空白折叠匹配
+import fsutil
 import i18n
 import ledger
 import notes_store as store
@@ -1451,6 +1452,7 @@ def _load_ops_file(path: Path) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    fsutil.configure_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
         language = i18n.cli_locale(i18n.explicit_locale(argv))

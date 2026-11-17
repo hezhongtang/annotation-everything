@@ -550,7 +550,9 @@ class LedgerPruneTests(unittest.TestCase):
         if os.name == "nt":
             self.assertEqual((self.root / "moved-inside" / ".agent-binding.json").read_text(encoding="utf-8"), "binding")
             self.assertEqual(result["metadataDeleted"], [])
+            self.assertEqual(result["removed"], [])
             self.assertEqual([r["reviewId"] for r in result["skipped"]], [rid])
+            self.assertEqual([r["reason"] for r in result["skipped"]], ["out-of-scope"])
         else:
             self.assertFalse((self.root / "moved-inside" / ".agent-binding.json").exists())
 
@@ -856,7 +858,7 @@ class OverviewPruneTests(unittest.TestCase):
         # 每次 current_path() 调用分别对应：plan(2次), _metadata_lock_fd(1次), plan复核(2次),
         # _metadata_names(1次), _quarantine_metadata(1次), plan再复核(2次), _cleanup_quarantines(1次)
         ledger_mod = self.ledger
-        for fail_at in (3, 6, 7, 10):
+        for fail_at in range(1, 11):
             rid = f"70000000000000{fail_at:02d}"
             orphan = self.scope / f"win-unsafe-{fail_at}"
             orphan.mkdir(exist_ok=True)
@@ -885,7 +887,7 @@ class OverviewPruneTests(unittest.TestCase):
             with self.subTest(fail_at=fail_at):
                 with unittest.mock.patch.object(ledger_mod, "_open_metadata_dir", side_effect=fake_open):
                     result = ledger_mod.prune_stale(all_stale=True, under=self.scope, review_ids=[rid], delete_metadata=True)
-                if fail_at in (3, 6, 7):
+                if fail_at < 10:
                     self.assertEqual([(r["reviewId"], r["reason"]) for r in result["skipped"]], [(rid, "directory-changed")])
                     self.assertEqual(result["removed"], [])
                     self.assertTrue((orphan / ".agent-binding.json").is_file())

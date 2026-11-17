@@ -262,7 +262,10 @@ class ProcessEnumerationError(CommandError):
 
 def skill_copy_dir() -> Path:
     """缺省的技能副本位置：CLAUDE_SKILLS_DIR 可覆盖，默认 ~/.claude/skills。"""
-    skills_root = os.environ.get("CLAUDE_SKILLS_DIR") or Path.home() / ".claude" / "skills"
+    env_root = os.environ.get("CLAUDE_SKILLS_DIR")
+    if env_root:
+        _reject_unc_path(env_root)
+    skills_root = env_root or Path.home() / ".claude" / "skills"
     return Path(skills_root).expanduser() / SKILL_NAME
 
 
@@ -286,7 +289,10 @@ def link_target_dir(agent: str) -> Optional[Path]:
     """Agent 的技能目录；未知名称返回 None。目录约定与 skill_sources 一致。"""
     home = Path.home()
     if agent == "codex":
-        return Path(os.environ.get("CODEX_HOME") or home / ".codex").expanduser() / "skills"
+        env_codex = os.environ.get("CODEX_HOME")
+        if env_codex:
+            _reject_unc_path(env_codex)
+        return Path(env_codex or home / ".codex").expanduser() / "skills"
     if agent == "agents":
         return home / ".agents" / "skills"
     if agent == "zcode":
@@ -581,23 +587,39 @@ def cmd_install(args) -> int:
     except CommandError:
         # 重装可以修复损坏记录；已知位置的链接仍通过扫描保留。
         previous = {"links": scan_links(dst)}
+    if paths_overlap(src, dst):
+        raise CommandError(T("cli.ae.copy.overlap", copy=dst, source=src))
     existed_before = dst.exists()
-    copy_skill(src, dst)
-    created = []
+    backup_root: Optional[Path] = None
+    backup: Optional[Path] = None
     try:
-        for name, directory in agents:
-            created.append(create_link(name, directory, dst))
-    except OSError as exc:
-        if not _is_symlink_privilege_error(exc):
-            raise
-        for entry in created:
-            with contextlib.suppress(OSError):
-                Path(entry["path"]).unlink()
-        if not existed_before:
-            shutil.rmtree(dst, ignore_errors=True)
-        specs = [_link_agent_spec(name, directory) for name, directory in agents]
-        print(_privilege_error_message(repo, specs, getattr(args, "target", None)), file=sys.stderr)
-        return 2
+        if existed_before and agents and dst.is_dir() and not dst.is_symlink():
+            backup_root = Path(tempfile.mkdtemp(prefix=".ae-install-backup-", dir=dst.parent))
+            backup = backup_root / SKILL_NAME
+            shutil.copytree(dst, backup, symlinks=True)
+        copy_skill(src, dst)
+        created = []
+        try:
+            for name, directory in agents:
+                created.append(create_link(name, directory, dst))
+        except OSError as exc:
+            if not _is_symlink_privilege_error(exc):
+                raise
+            for entry in created:
+                with contextlib.suppress(OSError):
+                    Path(entry["path"]).unlink()
+            if backup is not None and backup.exists():
+                if dst.exists():
+                    shutil.rmtree(dst)
+                os.replace(backup, dst)
+            elif not existed_before:
+                shutil.rmtree(dst, ignore_errors=True)
+            specs = [_link_agent_spec(name, directory) for name, directory in agents]
+            print(_privilege_error_message(repo, specs, getattr(args, "target", None)), file=sys.stderr)
+            return 2
+    finally:
+        if backup_root is not None:
+            shutil.rmtree(backup_root, ignore_errors=True)
     links = merged_links(previous, dst, created)
     write_record(dst, repo, links)
     print(T("cli.ae.install.done", path=dst))
@@ -1310,7 +1332,12 @@ def serve_script_index(cmdline: str, pid: Optional[int] = None,
     if extra_copy is not None:
         trusted.append(Path(extra_copy) / "scripts" / "serve.py")
     try:
-        return index if any(script.resolve() == path.resolve() for path in trusted) else None
+        resolved = script.resolve()
+        return index if any(
+            (os.path.normcase(str(resolved)) == os.path.normcase(str(path.resolve())))
+            if _is_windows() else (resolved == path.resolve())
+            for path in trusted
+        ) else None
     except (OSError, ValueError):
         return None
 

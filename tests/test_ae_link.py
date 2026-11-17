@@ -360,6 +360,22 @@ class AeLinkCliTests(unittest.TestCase):
         self.assertFalse(agent_link(self.home, "codex").exists(), "部分建出的链接应回滚")
         self.assertIn("--link", err2.getvalue())
 
+        # 已有安装副本时 --link 触发 1314：必须保留/恢复原副本与 .install-record.json
+        with unittest.mock.patch.dict(os.environ, self.env), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ae.main(["install"]), 0)
+        record_before = (self.copy_dir / ae.RECORD_NAME).read_text(encoding="utf-8")
+        out3, err3 = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "zh-CN"}), \
+                unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
+                unittest.mock.patch("ae.os.symlink", side_effect=win_err), \
+                contextlib.redirect_stdout(out3), contextlib.redirect_stderr(err3):
+            code3 = ae.main(["install", "--link", f"cursor={custom}"])
+        self.assertEqual(code3, 2)
+        self.assertTrue((self.copy_dir / ae.RECORD_NAME).is_file())
+        self.assertTrue((self.copy_dir / "SKILL.md").is_file())
+        self.assertEqual((self.copy_dir / ae.RECORD_NAME).read_text(encoding="utf-8"), record_before)
+
     def test_windows_privilege_error_preserves_target_and_link_intent_across_commands(self):
         import contextlib, io, unittest.mock
         previous = ae.current_locale()

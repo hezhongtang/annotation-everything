@@ -26,6 +26,7 @@ from xml.parsers import expat
 from xml.sax.saxutils import escape
 
 import docx_review as dr
+import fsutil
 import i18n
 import ledger
 import notes_store as store
@@ -616,6 +617,7 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
 
 
 def main(argv: list[str] | None = None) -> int:
+    fsutil.configure_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
         language = i18n.cli_locale(i18n.explicit_locale(argv))

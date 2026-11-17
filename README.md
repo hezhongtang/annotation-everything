@@ -343,7 +343,7 @@ python ae.py upgrade                            # manual upgrade (stop running r
 python ae.py doctor --target "D:\AgentSkills" --json
 ```
 
-If `--link` fails on Windows because the account lacks symlink privilege, no elevation is attempted and the command exits non-zero with the exact `--target <agent-skills-dir>` install command; Phase 1 Windows uses manual `python ae.py upgrade` (or `python ae.py install` for a fresh copy) instead of automatic in-place updates.
+If `--link` fails on Windows because the account lacks symlink privilege, no elevation is attempted and the command exits non-zero with the direct install command without `--link` (preserving `--target` if given, or pass `--target <agent-skills-dir>` to install directly into an agent skills directory) and the `--link` retry command; Phase 1 Windows uses manual `python ae.py upgrade` (or `python ae.py install` for a fresh copy) instead of automatic in-place updates.
 
 - **Release updates**: when an agent follows `SKILL.md`, each skill copy checks its install source's `origin` for stable version tags (`vMAJOR.MINOR.PATCH`) at most once a day, and automatically installs and announces a newer release. Prerelease tags are ignored. Offline, authentication, and source errors leave the current version usable. Local changes in the skill copy or a running review server or annotation process defer the update with a notice. Stop them and run `update.py now` to retry. For a custom installation, substitute that skill copy's path in the commands above. Set `AE_AUTO_UPDATE=0` to disable automatic checks; manual commands still work.
 - Updates replace only the skill copy: its symlinks, review ledger, review directories, and source checkout are preserved. The release checkout used for later checks, repairs, and updates normally lives in `${XDG_DATA_HOME:-~/.local/share}/annotation-everything/updates/`; if that overlaps the copy, it lives in a separate directory beside it. Keep it while using that skill copy. To get the updater for the first time, run `ae.py install` once from a version that contains it. When upgrading an existing review, stop its old service, rebuild the review page, start the new service, and refresh the browser.
@@ -512,7 +512,7 @@ skill/annotation-everything/       the skill itself, copied as a whole on instal
 │   ├── fsutil.py                  shared helper for atomic writes, file locks and CSP script hashes
 │   └── check_pptx_fonts.py        PPTX and PDF font check
 └── evals/                         skill evaluations, including generation, verification and revisions (used with skill-creator)
-ae.py                             unified management command: install the skill copy, doctor checks it, repair fixes it, uninstall removes it
+ae.py                             unified management command: install the skill copy, upgrade it manually, doctor checks it, repair fixes it, uninstall removes it
 verify.py                         unified verification entry: plan explains the scope, run executes and records, report only reads
 verify_selection.py               staged test selection and shadow comparison strategy: versioned mapping, conservative fallback and gap comparison
 verify_evidence.py                evidence reuse policy: valid same-input same-environment passes are referenced across stages

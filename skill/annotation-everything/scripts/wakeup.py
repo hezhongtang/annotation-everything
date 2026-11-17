@@ -697,6 +697,7 @@ def cancel_review(review, *, deadline):
 
 
 def main(argv=None):
+    fsutil.configure_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("bind", "check", "status", "ack", "deliver", "unbind"):

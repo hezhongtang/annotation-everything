@@ -1555,7 +1555,7 @@ async function poll(){
     if(upgradeNotice.successful&&upgradeNotice.key&&!analysisSupported)showAnalysisUpgrade(upgradeNotice.key)}}
 // ---------- 服务不在时：说清这个端口上现在是谁，给出本审阅的启动命令（按审阅标识，页面里不写本机路径） ----------
 const IS_WIN=/Win/i.test(navigator.userAgentData?.platform||navigator.platform||navigator.userAgent||"");
-const SERVE_CMD=IS_WIN?`python ~\\.claude\\skills\\annotation-everything\\scripts\\serve.py ${RID}`:`python3 ~/.claude/skills/annotation-everything/scripts/serve.py ${RID}`;
+const SERVE_CMD=IS_WIN?`python $HOME\\.claude\\skills\\annotation-everything\\scripts\\serve.py ${RID}`:`python3 ~/.claude/skills/annotation-everything/scripts/serve.py ${RID}`;
 let occupant=null, barShownFor="", barClosedFor="", probedAt=0, firstPolled=false;   // 首次轮询前不显示（打开页面时不闪红条）
 async function whoIsHere(){   // 读 /api/health：任何本服务都会应答，不带审阅标识
   const ctl=new AbortController(),t=setTimeout(()=>ctl.abort(),3000);
@@ -2360,7 +2360,7 @@ $("handHist").onclick=()=>{$("hand").classList.remove("on");openBatches()};
 // ---------- 停止审阅 ----------
 const REVIEW_STOP_KEY="ae."+RID+".stop";
 const REVIEW_STOP_PATH="/api/server/stop";
-const STOP_STATUS_CMD=IS_WIN?`python ~\\.claude\\skills\\annotation-everything\\scripts\\serve.py stop ${RID} --status`:`python3 ~/.claude/skills/annotation-everything/scripts/serve.py stop ${RID} --status`;
+const STOP_STATUS_CMD=IS_WIN?`python $HOME\\.claude\\skills\\annotation-everything\\scripts\\serve.py stop ${RID} --status`:`python3 ~/.claude/skills/annotation-everything/scripts/serve.py stop ${RID} --status`;
 const STOP_COMPONENTS={
   gate:"viewer.stop.component.gate",save:"viewer.stop.component.save",waiters:"viewer.stop.component.waiters",
   hooks:"viewer.stop.component.hooks",agent:"viewer.stop.component.agent",http:"viewer.stop.component.http"

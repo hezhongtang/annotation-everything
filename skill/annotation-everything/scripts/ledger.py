@@ -630,11 +630,15 @@ def _open_metadata_dir(directory: Path, root: Path | None) -> tuple[Any, Path]:
 def _metadata_plan(fd: Any, rid: str) -> tuple[str, str | None]:
     try:
         manifest = _read_metadata_json(fd, "review.json", missing=None)
-    except _MetadataUnsafe:
+    except _MetadataUnsafe as error:
+        if error.reason != "identity-unconfirmed":
+            return "skip", error.reason
         manifest = None
     try:
         status = _read_metadata_json(fd, STATUS_FILE, missing={})
-    except _MetadataUnsafe:
+    except _MetadataUnsafe as error:
+        if error.reason != "identity-unconfirmed":
+            return "skip", error.reason
         status = None
     status_valid = isinstance(status, dict) and ("pid" not in status
                     or (type(status["pid"]) is int and status["pid"] > 0))

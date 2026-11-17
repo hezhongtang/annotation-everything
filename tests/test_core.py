@@ -4061,7 +4061,7 @@ class LedgerTests(unittest.TestCase):
         self.assertIn("python ", text)
         self.assertIn(f'"{d.resolve()}"', text)
         html = (d / "index.html").read_text(encoding="utf-8")
-        self.assertIn(r"python ~\\.claude\\skills\\annotation-everything\\scripts\\serve.py", html)
+        self.assertIn(r"python $HOME\\.claude\\skills\\annotation-everything\\scripts\\serve.py", html)
 
     def test_wait_leaves_and_removes_marker(self):
         d = tmpdir() / "r"
