@@ -96,3 +96,35 @@ jobs:
           "构件：verify-windows-python${{ matrix.python-version }}（已运行 Windows CI 完整单元 unit + 服务安全自检 serve-check；browser 组与真实 Windows 11 x64 桌面交互验收仍需真实桌面环境）" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           python verify.py report --latest | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           python verify.py report --efficiency | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+  lint:
+    # 固定名称（无 matrix）：便于 protect-main 规则集绑定单一 status check context
+    name: Lint 与格式检查
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # lint 组经 uv tool run --from ruff==0.17.5 ruff check . 执行，uv 在此提供
+      - uses: astral-sh/setup-uv@v5
+      - name: Lint 与格式检查（统一验证入口）
+        run: |
+          # 验证记录与日志写在 .verify/（已忽略），CI 里作为构件上传；lint 是纯逻辑组，不跑产品测试。
+          # job 级 env 不允许 runner 上下文，AE_HOME 用运行器的 RUNNER_TEMP 在脚本内展开。
+          export AE_HOME="$RUNNER_TEMP/ae-home"
+          python3 verify.py run --group lint --phase ci \
+            --reason "CI lint ${{ github.event_name }} ${{ github.ref_name }}"
+      - name: 保存验证构件
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # 命名刻意避开 verify-python* 前缀：tools/collect_verify_history.py 只把
+          # verify-python* 构件导入产品测试效率历史，lint 记录不是产品测试样本。
+          name: verify-lint
+          path: .verify/
+          # .verify 是点开头的目录，upload-artifact@v4 默认排除隐藏文件，必须显式包含
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
