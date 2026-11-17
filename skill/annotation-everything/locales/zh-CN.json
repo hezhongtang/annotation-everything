@@ -2445,7 +2445,7 @@
     "pptxbuild.err.chartsUnsupported": "图表构建尚未接入（issue #180 后续切片）",
     "pptxcheck.badLocale": "语言不合法：{locale}（可用 zh-CN / en）",
     "pptxcheck.fileMissing": "文件读不到：{path}",
-    "pptxcheck.summary": "{file}：{ok}{slides}",
+    "pptxcheck.summary": "{file}：{verdict}（{slides} 张幻灯片）",
     "pptxcheck.status.pass": "通过",
     "pptxcheck.status.fail": "失败",
     "pptxcheck.problemCount": "{count} 处问题",
@@ -2486,6 +2486,15 @@
     "pptxcheck.reason.sectionsAbsent": "演示文稿没有章节清单",
     "pptxcheck.reason.sectionSlideUnknown": "章节引用了不存在的幻灯片 ID（章节 {section}，id {id}）",
     "pptxcheck.reason.sectionSlideDuplicate": "幻灯片出现在多个章节（id {id}：{sections}）",
-    "pptxcheck.reason.sectionSlideMissing": "这些幻灯片不在任何章节里（{ids}）"
+    "pptxcheck.reason.sectionSlideMissing": "这些幻灯片不在任何章节里（{ids}）",
+    "pptxrender.badLocale": "语言不合法：{locale}（可用 zh-CN / en）",
+    "pptxrender.fileMissing": "文件读不到：{path}",
+    "pptxrender.summary": "{file} 渲染状态 {status}，产出 {pages} 页图片",
+    "pptxrender.reason.missingTool": "缺渲染工具：{tool}（可用环境变量 {env} 指定，或安装后加入 PATH；安装方式见 generation-pptx 指引的工具表）",
+    "pptxrender.reason.conversionFailed": "soffice 转 PDF 没有产出文件（{detail}）",
+    "pptxrender.reason.pageRenderFailed": "pdftoppm 逐页转换失败（退出码 {code}）",
+    "pptxrender.reason.noPages": "输出目录里没有 page-*.png，逐页环节无法开始",
+    "pptxcheck.verdict.ok": "文件检查通过",
+    "pptxcheck.verdict.fail": "文件检查有问题"
   }
 }

@@ -2637,7 +2637,7 @@
     "pptxbuild.err.chartsUnsupported": "Chart building is not wired yet (later slice of issue #180)",
     "pptxcheck.badLocale": "Unsupported locale: {locale} (use zh-CN or en)",
     "pptxcheck.fileMissing": "File not readable: {path}",
-    "pptxcheck.summary": "{file}: {ok}{slides}",
+    "pptxcheck.summary": "{file}: {verdict} ({slides} slides)",
     "pptxcheck.status.pass": "PASS",
     "pptxcheck.status.fail": "FAIL",
     "pptxcheck.problemCount": "{count} problem(s)",
@@ -2680,6 +2680,15 @@
     "pptxcheck.reason.sectionSlideDuplicate": "Slide appears in multiple sections (id {id}: {sections})",
     "pptxcheck.reason.sectionSlideMissing": "These slides are in no section ({ids})",
     "pptxcheck.problemCount.one": "{count} problem",
-    "pptxcheck.problemCount.other": "{count} problems"
+    "pptxcheck.problemCount.other": "{count} problems",
+    "pptxrender.badLocale": "Unsupported locale: {locale} (use zh-CN or en)",
+    "pptxrender.fileMissing": "File not readable: {path}",
+    "pptxrender.summary": "{file}: render status {status}, {pages} page image(s)",
+    "pptxrender.reason.missingTool": "Missing render tool: {tool} (set {env}, or install it and add it to PATH; see the tool table in the generation-pptx guide)",
+    "pptxrender.reason.conversionFailed": "soffice produced no PDF ({detail})",
+    "pptxrender.reason.pageRenderFailed": "pdftoppm failed to render pages (exit {code})",
+    "pptxrender.reason.noPages": "No page-*.png in the output directory; page inspection cannot start",
+    "pptxcheck.verdict.ok": "file checks passed",
+    "pptxcheck.verdict.fail": "file check problems"
   }
 }

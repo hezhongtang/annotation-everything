@@ -544,7 +544,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(result, ensure_ascii=False))
     else:
-        header = _t(loc, "pptxcheck.summary", file=result["file"], ok=result["ok"],
+        header = _t(loc, "pptxcheck.summary", file=result["file"],
+                    verdict=_t(loc, "pptxcheck.verdict.ok" if result["ok"]
+                               else "pptxcheck.verdict.fail"),
                     slides=result["slides"])
         print(header)
         for check in result["checks"]:

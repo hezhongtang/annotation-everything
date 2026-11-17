@@ -476,14 +476,15 @@ def _geom(x: int, y: int, cx: int, cy: int) -> str:
 
 def _placeholder_sp(shape_id: int, name: str, ph_type: str, idx: int | None,
                    paragraphs: list[str], geometry: str = "",
-                   *, slidenum_field: bool = False) -> str:
+                   *, slidenum_field: bool = False, lst_style: str = "") -> str:
     ph = f'type="{ph_type}"' + (f' idx="{idx}"' if idx is not None else "")
     if slidenum_field:
         # 母版上的页码字段：PowerPoint 渲染为实际页号。
-        tx_body = (f'<p:txBody><a:bodyPr/><a:lstStyle/><a:fld id="{_FLD_SLIDENUM_GUID}" '
-                   'type="slidenum"><a:rPr lang="zh-CN"/><a:t>1</a:t></a:fld></p:txBody>')
+        tx_body = (f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:fld id="{_FLD_SLIDENUM_GUID}" '
+                   'type="slidenum"><a:rPr lang="zh-CN"/><a:t>1</a:t></a:fld></a:p></p:txBody>')
     else:
-        tx_body = _text_body(paragraphs)
+        tx_body = (f"<p:txBody><a:bodyPr/>{lst_style}"
+                   f"{''.join(paragraphs)}</p:txBody>")
     return (f'<p:sp><p:nvSpPr><p:cNvPr id="{shape_id}" name="{_esc(name)}"/><p:cNvSpPr/>'
             f'<p:nvPr><p:ph {ph}/></p:nvPr></p:nvSpPr>'
             f"<p:spPr>{geometry}</p:spPr>{tx_body}</p:sp>")
@@ -572,7 +573,8 @@ def _master_xml(master: dict, size: tuple[int, int]) -> tuple[str, str]:
     return xml, _rels_xml(rels)
 
 
-def _layout_xml(layout_key: str, size: tuple[int, int]) -> str:
+def _layout_xml(layout_key: str, size: tuple[int, int],
+                hf_attrs: list[str] | None = None) -> str:
     entry = LAYOUTS[layout_key]
     width, height = size
     shapes: list[str] = []
@@ -592,7 +594,8 @@ def _layout_xml(layout_key: str, size: tuple[int, int]) -> str:
     if "subTitle" in entry["placeholders"]:
         shapes.append(_placeholder_sp(
             next_id, "副标题占位符", "subTitle", 1, [],
-            _geom(800000, 4000000, width - 1600000, 1000000)))
+            _geom(800000, 4000000, width - 1600000, 1000000),
+            lst_style="<a:lstStyle><a:lvl1pPr><a:buNone/></a:lvl1pPr></a:lstStyle>"))
         next_id += 1
     if "body" in entry["placeholders"]:
         if layout_key == "sectionHeader":
@@ -600,12 +603,22 @@ def _layout_xml(layout_key: str, size: tuple[int, int]) -> str:
         else:
             geometry = _geom(800000, 1800000, width - 1600000, height - 2400000)
         shapes.append(_placeholder_sp(next_id, "内容占位符", "body", 1, [], geometry))
+    if hf_attrs and "ftr" in " ".join(hf_attrs):
+        shapes.append(_placeholder_sp(
+            next_id, "页脚占位符", "ftr", None, [],
+            _geom(800000, height - 500000, 3600000, 360000)))
+        next_id += 1
+    if hf_attrs and "sldNum" in " ".join(hf_attrs):
+        shapes.append(_placeholder_sp(
+            next_id, "页码占位符", "sldNum", None, [],
+            _geom(width - 1600000, height - 500000, 800000, 360000)))
+    hf = f"<p:hf {' '.join(hf_attrs)}/>" if hf_attrs else ""
     return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sldLayout xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}" type="{entry["type"]}" preserve="1">
 <p:cSld name="{_esc(entry["name"])}"><p:spTree>
 <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
 {''.join(shapes)}
-</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>'''
+</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>{hf}</p:sldLayout>'''
 
 
 def _custom_shape(sp_id: int, shape: dict) -> str:
@@ -624,10 +637,14 @@ def _custom_shape(sp_id: int, shape: dict) -> str:
             f"</p:nvSpPr>{props}{_text_body(paragraphs)}</p:sp>")
 
 
-def _slide_xml(slide: dict, chart_frames: list[tuple[str, dict]]) -> str:
+def _slide_xml(slide: dict, chart_frames: list[tuple[str, dict]],
+               hf_attrs: list[str] | None = None,
+               footer_text: str = "", size: tuple[int, int] = _DEFAULT_SIZE) -> str:
     entry = LAYOUTS[slide["layout"]]
+    width, height = size
     shapes: list[str] = []
     next_id = 2
+    hf_attrs = hf_attrs or []
     if "ctrTitle" in entry["placeholders"]:
         paragraphs = [_para(slide["title"])] if slide["title"] else []
         shapes.append(_placeholder_sp(next_id, "标题占位符", "ctrTitle", None, paragraphs))
@@ -649,6 +666,22 @@ def _slide_xml(slide: dict, chart_frames: list[tuple[str, dict]]) -> str:
     for shape in slide["shapes"]:
         shapes.append(_custom_shape(next_id, shape))
         next_id += 1
+    flags = " ".join(hf_attrs)
+    if hf_attrs and not slide["hideMasterShapes"]:
+        if "ftr" in flags:
+            # 页脚文本逐页写入（PowerPoint 的实际做法，不依赖占位符文本继承）。
+            para = (_para(footer_text, size=900, color_slot="tx1") if footer_text
+                    else '<a:p><a:endParaRPr lang="zh-CN"/></a:p>')
+            shapes.append(_placeholder_sp(
+                next_id, "页脚占位符", "ftr", None, [para],
+                _geom(800000, height - 500000, 3600000, 360000)))
+            next_id += 1
+        if "sldNum" in flags:
+            shapes.append(_placeholder_sp(
+                next_id, "页码占位符", "sldNum", None, [],
+                _geom(width - 1600000, height - 500000, 800000, 360000),
+                slidenum_field=True))
+            next_id += 1
     for rid, chart in chart_frames:
         name = chart["name"] or "图表"
         shapes.append(
@@ -936,6 +969,11 @@ def build_deck(spec: object, out: Path, *, base_dir: Path | None = None) -> dict
 
     master_xml, master_rels = _master_xml(spec["master"], size)
     master_xml = master_xml.replace("{layouts}", layout_id_entries)
+    hf_attrs: list[str] = []
+    if spec["master"]["footer"]:
+        hf_attrs.append('ftr="1"')
+    if spec["master"]["pageNumber"]:
+        hf_attrs.append('sldNum="1"')
     master_rels = master_rels.replace(
         "</Relationships>",
         "".join(f'<Relationship Id="{layout_rids[key]}" Type="{R}/slideLayout" '
@@ -965,7 +1003,7 @@ def build_deck(spec: object, out: Path, *, base_dir: Path | None = None) -> dict
         "ppt/slideMasters/_rels/slideMaster1.xml.rels": master_rels,
     }
     for key in used_layouts:
-        parts[f"ppt/slideLayouts/{layout_parts[key]}"] = _layout_xml(key, size)
+        parts[f"ppt/slideLayouts/{layout_parts[key]}"] = _layout_xml(key, size, hf_attrs)
         parts[f"ppt/slideLayouts/_rels/{layout_parts[key]}.rels"] = _rels_xml(
             [("rId1", R + "/slideMaster", "../slideMasters/slideMaster1.xml")])
     chart_counter = 0
@@ -998,7 +1036,8 @@ def build_deck(spec: object, out: Path, *, base_dir: Path | None = None) -> dict
             overrides.append((f"ppt/notesSlides/notesSlide{index}.xml", CT_NOTES_SLIDE))
             rel_entries.append(("rIdNotes", R + "/notesSlide",
                                 f"../notesSlides/notesSlide{index}.xml"))
-        parts[f"ppt/slides/slide{index}.xml"] = _slide_xml(slide, chart_frames)
+        parts[f"ppt/slides/slide{index}.xml"] = _slide_xml(
+            slide, chart_frames, hf_attrs, spec["master"]["footerText"], size)
         parts[f"ppt/slides/_rels/slide{index}.xml.rels"] = _rels_xml(rel_entries)
         pres_rels.append((slide_rids[slide["key"]], R + "/slide", f"slides/slide{index}.xml"))
 
