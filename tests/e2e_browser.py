@@ -923,6 +923,9 @@ def receiver_binding_checks(browser, tmp: Path):
     ctx = browser.new_context(viewport={"width": 1440, "height": 1000})
     try:
         page = ctx.new_page()
+        # 让页面自己注册的轮询定时器推进。等待者启动后仍等自然轮询，验证后台状态会自动出现。
+        page.clock.install()
+        poll_interval_ms = 4_000
         page.goto(f"http://127.0.0.1:{json.loads((d / '.annotation-server.json').read_text())['port']}/")
         wait_mode(page, "server")
         visible = page.locator("#receiver").count() > 0
@@ -978,6 +981,7 @@ def receiver_binding_checks(browser, tmp: Path):
         out, err = waiter.communicate(timeout=15)
         CLEANUP.discard(waiter)
         ok(waiter.returncode == 0, "页面提交由绑定会话接收：" + (err if waiter.returncode else "batch 1"))
+        page.clock.fast_forward(poll_interval_ms)
         ok(
             wait_dom(page, "() => document.getElementById('receiver').textContent.includes('Processing')", 8),
             "领取后显示接收方与处理中状态",
@@ -999,6 +1003,7 @@ def receiver_binding_checks(browser, tmp: Path):
             capture_output=True,
             check=True,
         )
+        page.clock.fast_forward(poll_interval_ms)
         ok(
             wait_dom(page, "() => document.getElementById('receiver').textContent.includes('Not waiting')", 8),
             "批次收尾后保留接收方，显示未等待",
@@ -1010,6 +1015,7 @@ def receiver_binding_checks(browser, tmp: Path):
         ok("等待中" in page.inner_text("#handReceiver"), "提交窗口显示当前等待状态")
         stop(waiter)
         waiter = None
+        page.clock.fast_forward(poll_interval_ms)
         ok(
             wait_dom(page, "() => document.getElementById('receiver').textContent.includes('未等待')", 8)
             and "Claude Code" in page.inner_text("#receiver"),
@@ -1021,6 +1027,7 @@ def receiver_binding_checks(browser, tmp: Path):
         )
         page.keyboard.press("Escape")
         stop(srv)
+        page.clock.fast_forward(poll_interval_ms)
         ok(wait_mode(page, "offline", 12) and "待确认" in page.inner_text("#receiver"), "服务断开后不沿用在线状态")
         srv = start_server(d, port)
         page.reload()
@@ -1034,6 +1041,7 @@ def receiver_binding_checks(browser, tmp: Path):
             route.fulfill(response=response, json=data)
 
         page.route("**/api/notes", old_service)
+        page.clock.fast_forward(poll_interval_ms)
         ok(
             wait_dom(page, "() => document.getElementById('receiver').textContent.includes('请升级')", 8),
             "旧版服务明确提示接收方未知",
