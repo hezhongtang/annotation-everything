@@ -342,11 +342,7 @@ class PlanTests(VerifyEntryTestCase):
             "uv run --no-project --with playwright python tests/e2e_browser.py", p.stdout, "说明完整浏览器的等价命令"
         )
         self.assertIn("skill/annotation-everything/scripts/serve.py check", p.stdout, "说明服务安全自检")
-        self.assertIn(
-            "uv tool run --from ruff==0.17.5 ruff check . && uv tool run --from ruff==0.17.5 ruff format --check .",
-            p.stdout,
-            "说明 lint 组包含静态检查与格式校验两步等价命令",
-        )
+        self.assertIn("等价命令：python3 verify.py _lint-runner", p.stdout)
         self.assertIn("ruff check + ruff format --check", p.stdout, "说明 lint 组包含静态检查与格式校验")
         self.assertFalse((self.repo.artifact_dir).exists(), "plan 不写任何记录")
         self.assertNotIn("test_alpha_ok", p.stdout, "plan 不执行测试")
@@ -1696,6 +1692,7 @@ class LintGroupTests(VerifyEntryTestCase):
                 record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
                 group = record["groups"][0]
                 self.assertEqual(group["name"], "lint")
+                self.assertEqual(group["equivalent"], " ".join(group["command"]))
                 self.assertEqual(group["outcome"], expected_outcome)
                 self.assertEqual(group["granularity"], "group")
                 self.assertIsNone(group["scenarios"], "非浏览器组不留场景字段")

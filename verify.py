@@ -12,7 +12,9 @@
   unit-related 相关单元       显式指定用例 / 模块，如 tests/test_core.py
   browser      完整浏览器     uv run --no-project --with playwright python tests/e2e_browser.py
   serve-check  服务安全自检   python3 skill/annotation-everything/scripts/serve.py check
-  lint         代码风格与格式  uv tool run --from ruff==0.17.5 ruff check . && uv tool run --from ruff==0.17.5 ruff format --check .
+  lint         代码风格与格式  python3 verify.py _lint-runner
+               1. uv tool run --from ruff==0.17.5 ruff check .
+               2. uv tool run --from ruff==0.17.5 ruff format --check .
   all          完整验收       unit + serve-check + browser
 
 行为：
@@ -617,8 +619,7 @@ def build_groups(selectors: Optional[list] = None) -> dict:
             purpose="Ruff 静态检查与格式校验（只读，不改工作树）：ruff check + ruff format --check"
             "（版本锁定 ruff==%s，与 pyproject.toml 一致）；步骤输出实时转发，整组按「N/M 通过」摘要计数"
             % RUFF_VERSION,
-            equivalent="uv tool run --from ruff==%s ruff check . && uv tool run --from ruff==%s ruff format --check ."
-            % (RUFF_VERSION, RUFF_VERSION),
+            equivalent="python3 verify.py _lint-runner",
             argv=[sys.executable, str(VERIFY_PY), "_lint-runner"],
             counter="log",
             requires=("uv",),
