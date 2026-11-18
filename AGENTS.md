@@ -13,10 +13,10 @@
 
 - **需求阶段**：只整理需求与验收标准，不自动运行测试。
 - **issue 实现阶段**：完成代码、必要的测试代码与文档，只执行与改动直接相关的快速单元测试、已配置的 Lint 和格式检查。相关单元优先点名用例或类，以单次反馈 60 秒为目标；完整单元、浏览器、服务安全自检、eval 和依赖宿主状态的慢项统一留到 PR review。选测建议回退全量时，将全量要求写入 PR，不在实现阶段自动扩大执行范围。
-- **快速检查工具**：Lint 和格式化工具另开 PR 接入，当前仓库尚未配置；如实标注「未配置」。接入后按项目配置检查本次改动文件，格式化限定在本次改动范围。`git diff --check` 用于空白检查，不能记作 Lint 或格式化通过。纯协作文档、README 与 PR 模板改动检查文本和 diff，单元测试标注「不适用」；skill 指引、fixture 和执行配置不适用此豁免。
+- **快速检查工具**：Lint 与格式化已接入锁定版本的 Ruff（`ruff==0.17.5`，配置见 `pyproject.toml`，兼容目标 `py39`、行宽 120、规则 `E4`/`E7`/`E9`/`F`）。日常入口为 `python3 verify.py run --group lint --phase development`，按全仓只读范围验证并记录结果；计划与验证记录中的复现命令为 `python3 verify.py _lint-runner`，依次执行 `ruff check .` 和 `ruff format --check .`，两步都会执行，任一项失败时返回 `1`。日常写入式格式化和 `--fix` 限于本次改动文件（`uv tool run --from ruff==0.17.5 ruff format <改动文件...>`、`uv tool run --from ruff==0.17.5 ruff check --fix <改动文件...>`）。`git diff --check` 单列为空白检查，不能记作 Lint 或格式化通过。运行时只用 Python 标准库，类型检查仍未配置。纯协作文档、README 与 PR 模板改动检查文本和 diff，单元测试标注「不适用」；skill 指引、fixture 和执行配置不适用此豁免。
 - **开 PR 与交接**：快速检查中发现的实现问题先修复，再提交并开 PR。超时、锁等待或环境阻塞如实记录为未完成，列出已运行的检查、结果和移交范围；未运行项不得标记通过。开发 Agent 开 PR 后结束交接，不自动启动 review agents，也不等待全量测试或 CI 收敛。
 - **PR review 阶段**：由用户手动调用 agents，完成全量代码审查，并运行 `python3 verify.py run --group all --phase pr --pr <编号>`。全部有效差异位于内置文档允许列表且通过策略判定时，记录产品测试 `not_applicable`、由 CI 兜底；其余 PR 实际执行完整单元、服务安全自检和完整浏览器。豁免边界见 `docs/verify/selection-strategy.md`，`--no-reuse` 可强制文档 PR 实际执行。CLI 的 `review` 阶段用于按疑点补测，不能替代 `pr` 门禁；已有快速检查证据不替代门禁要求的实际执行。审查发现问题后在原 PR 分支修复并完成验证，跟进最新提交的 CI。
-- **合并门禁**：全量审查、适用的 PR 门禁及 CI 全部通过后才可合并；开 PR 不代表完成验收。现有 CI 自动触发、同机资源互斥与证据有效性要求继续执行。
+- **合并门禁**：全量审查、适用的 PR 门禁及 CI 全部通过后才可合并；PR 验收查看 Linux Python 3.12 产品测试（`单元测试与服务安全自检（Python 3.12）`，`protect-main` 唯一要求的必需检查）和独立的 `Lint 静态检查`（作业键 `lint`）两项结果（Windows 与 Python 3.9 CI 已暂停）；开 PR 不代表完成验收。现有 CI 自动触发、同机资源互斥与证据有效性要求继续执行。
 
 ## 用户问答
 
@@ -26,7 +26,7 @@
 
 `main` 只通过 PR 的 squash 合并更新。GitHub 规则集 `protect-main` 在服务器端要求走 PR、只允许 squash、必须通过规则集列出的 CI 检查，并禁止删除和强推 `main`；规则集 `protect-release-tags` 禁止修改和删除 `v*` 标签。本地钩子提前拦截同类操作，其余规则靠这份约定执行。管理员可以在 PR 上越过必需检查，只有用户明确同意时才使用。
 
-- **先启用钩子**：克隆后运行一次 `tools/setup-dev.sh`。钩子会拒绝在 `main` 上提交、推送到 `main` 和删除 `main`，本地 `main` 只能快进到 `origin/main` 上已有的提交。不要用 `--no-verify` 绕过；确需绕过时先征得用户同意。
+- **先启用钩子**：克隆后运行一次 `tools/setup-dev.sh`。钩子会拒绝在 `main` 上提交、推送到 `main` 和删除 `main`，本地 `main` 只能快进到 `origin/main` 上已有的提交；脚本同时把 `blame.ignoreRevsFile` 设为 `.git-blame-ignore-revs`。不要用 `--no-verify` 绕过；确需绕过时先征得用户同意。
 - **一个 issue 一个分支、一个 PR**：从 issue 开分支，`gh issue develop <编号> --name <type>/<编号>-<简述> --base main --checkout`，`type` 与提交类型一致（feat / fix / docs / chore 等），不用工具名作前缀。没有 issue 的小改动也要开分支，命名 `<type>/<简述>`。
 - **issue 跟着合并关闭**：PR 正文写 `Closes #编号`，issue 在合并进 `main` 时自动关闭。有子 issue 的父 issue，在最后一个子 issue 的 PR 里同时写 `Closes #父编号`。不要手动关闭已实现的 issue；只有不做（`wontfix`）、重复或无效的 issue 才手动关闭，并留评论说明原因。
 - **验收项在 PR 里核对**：开 PR 时逐条说明 issue 验收项的实现状态，依赖全量测试的项标记「待 PR review 验证」；审查阶段在 issue 里勾选已有证据支持的项。未满足的项写进 PR 正文，不要关闭 issue。

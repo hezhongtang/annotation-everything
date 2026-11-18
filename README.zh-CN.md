@@ -135,7 +135,7 @@ python "$S\serve.py" "$env:TEMP\ae-demo"
 |---|---|
 | `ae.py install` / `upgrade` / `doctor` / `repair` / `uninstall` | 仓库根目录的管理命令：安装技能副本到 `~/.claude/skills/`（`--target <目录>` 装到其他技能目录的根；`--link codex,agents,zcode` 或 `名称=路径` 为其他 Agent 建指向副本的软链接）；`upgrade` 先检查并拒绝/停止运行中的服务后从仓库可靠手动升级（Windows 首期专用升级入口）；`doctor` 体检安装状态、运行状态、可选工具、开发环境（`--json` 输出结构化结果，含语言无关的 `status` / `category_id` 判定字段）；`repair` 先列计划，安全项自动修，`--forget-stale`/`--stop-orphans`/`--replace-with-links` 显式执行破坏性操作，`--dry-run` 只看计划；`uninstall` 删除技能副本和指向它的链接，默认保留审阅台账（`--purge` 一并删除，审阅目录任何情况下都不动；有 `serve.py` 在运行时拒绝，`--stop-servers` 先停止）。各子命令都接受 `--target <目录>` 定位自定义位置的副本；都可加 `--locale auto\|zh-CN\|en` 或设 `AE_LOCALE` 选界面语言 |
 | `update.py auto` / `check` / `now` | 在 macOS/Linux 技能副本中检查正式版本并自动更新 / 只检查 / 立即检查并安装（Windows 首期跳过自动原地更新并引导改用 `ae.py upgrade`）；`auto` 由技能入口触发，最多每天一次 |
-| `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照，并把当前仍有效的通过证据跨阶段引用给后续阶段（`--no-reuse` 强制全部重跑）；`report` 只读记录并展示证据链。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
+| `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照，并把当前仍有效的通过证据跨阶段引用给后续阶段（`--no-reuse` 强制全部重跑）；`report` 只读记录并展示证据链。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`lint`（锁定 `ruff==0.17.5` 的全仓只读静态与格式检查；复现命令 `python3 verify.py _lint-runner` 依次执行 `ruff check .` 和 `ruff format --check .`，任一项失败返回 `1`）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
 | `build_viewer.py --report … [--script …] --out 审阅目录` | 从逐页 HTML、DOCX 或 PPTX 生成对照页；讲稿可选；`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
 | `docx_edit.py apply 审阅目录 --batch N` / `replace 审阅目录 --paragraph N --from 原文 --to 新文` | 回写 DOCX 快捷修改／自由批注的单条替换；`--id ID` 可重复选择批注，`--dry-run` 预演，`--output 新路径` 另存；默认备份后原地写入，不自动处理批注状态 |
 | `pptx_edit.py apply 审阅目录 --batch N` / `ops 审阅目录 --ops 操作文件` | 按幻灯片定位回写 PPTX 文本与备注快捷修改，或用 JSON 操作文件下发白名单内的元素几何与样式修改；`--id ID` 选择批注，`--dry-run` 预演，`--output 新路径` 另存；整组预检、0600 快照、原子替换，只读结构明确拒绝 |
@@ -530,6 +530,8 @@ verify_evidence.py                证据复用策略：同输入同环境且当�
 verify_report.py                  持续效率报告、同环境分组、有界回顾与去重
 verify_parallel.py                验证组内的有界进程调度；保留原资源锁与失败证据
 host_isolation.py                 同机资源隔离协议：验证参与方按共享资源互斥的锁与声明
+pyproject.toml                    锁定的 Ruff 配置（版本、py39 兼容目标、120 列行宽与规则集）
+.git-blame-ignore-revs            git blame 默认忽略的提交列表（如全仓 Ruff 格式化提交）
 fixtures/sample/                   合成样例（虚构数据）
 fixtures/docx/                     合成 DOCX 样例及生成脚本
 fixtures/pptx/                     合成 PPTX 样例生成器（多页、跨 run 样式、备注、只读结构）
@@ -557,7 +559,7 @@ tests/e2e_waits.py                  浏览器条件等待：有界轮询、事�
 tests/e2e_scenarios.py              浏览器场景注册表与选择调度（无浏览器依赖）
 tests/e2e_servers.py                端到端测试的服务起停与中断后的兜底清理
 tools/
-├── setup-dev.sh                   启用仓库自带的 git 钩子
+├── setup-dev.sh                   启用仓库自带的 git 钩子并配置 blame.ignoreRevsFile
 ├── collect_verify_history.py      只读 GitHub 上已有的验证构件与合并事件，不启动测试
 ├── grade_iteration.py             给一轮技能评测打分，写出每次运行的 grading.json
 ├── release.py                     CI 通过后打版本标签、补全 Release 并关闭里程碑
@@ -572,17 +574,19 @@ GLOSSARY.md                        术语表
 
 ## 开发
 
-克隆后先运行一次 `tools/setup-dev.sh` 启用 git 钩子（无 `sh` 的 Windows 环境运行 `git config core.hooksPath tools/git-hooks`）。
+克隆后先运行一次 `tools/setup-dev.sh` 启用 git 钩子并配置 `blame.ignoreRevsFile = .git-blame-ignore-revs`（无 `sh` 的 Windows 环境运行 `git config core.hooksPath tools/git-hooks` 与 `git config --local blame.ignoreRevsFile .git-blame-ignore-revs`）。如需临时查看包含已忽略提交在内的完整归属，运行 `git blame --ignore-revs-file "" -L 622,622 41ec733e -- verify.py`。
 
-采用两阶段流程：issue 实现阶段只做直接相关的快速单元测试（单次反馈目标 60 秒）、已配置的 Lint 与格式检查，完成后开 PR 并交接。用户手动调用 agents 后，再做全量代码审查、完整单元、服务安全自检和完整浏览器验证；全量审查、验证与 CI 全部通过后才能合并。CI 在 Linux 上使用 Python 3.12 运行完整 `unit` 和 `serve-check`。Windows 的 `browser` 检查（`tests/e2e_browser.py`，默认 `chrome`，支持 `AE_E2E_BROWSER_CHANNEL=msedge` 验证 Edge）与真实宿主 Agent 交互验收在真实 Windows 11 桌面完成。
+采用两阶段流程：issue 实现阶段只做直接相关的快速单元测试（单次反馈目标 60 秒）、已配置的 Lint 与格式检查，完成后开 PR 并交接。用户手动调用 agents 后，再做全量代码审查、完整单元、服务安全自检和完整浏览器验证；全量审查、验证与 CI 全部通过后才能合并，PR 验收查看 Linux Python 3.12 产品测试（`单元测试与服务安全自检（Python 3.12）`，`protect-main` 唯一要求的必需检查）和独立的 `Lint 静态检查`（`--group lint`，构件名 `verify-lint`）两项结果。Windows 与 Python 3.9 CI 已暂停，Ruff 兼容目标为 `py39`。Windows 的 `browser` 检查（`tests/e2e_browser.py`，默认 `chrome`，支持 `AE_E2E_BROWSER_CHANNEL=msedge` 验证 Edge）与真实宿主 Agent 交互验收在真实 Windows 11 桌面完成。
 
-Lint 与格式化工具尚未配置，另开 PR 接入；当前如实记录「未配置」，`git diff --check` 只作空白检查。快速检查范围、纯文档改动、慢项移交及证据要求见 [AGENTS.md](AGENTS.md#开发与-pr-review) 与[验证接入说明](docs/verify/onboarding.md)。
+Lint 与格式化已接入锁定版本的 Ruff（`ruff==0.17.5`，配置见 `pyproject.toml`）：日常入口为 `python3 verify.py run --group lint --phase development`，按全仓只读范围验证并记录结构化结果；计划和验证记录中的复现命令为 `python3 verify.py _lint-runner`，依次执行 `ruff check .` 和 `ruff format --check .`，两步都会执行，任一项失败时返回 `1`。日常写入式格式化和 `--fix` 限于本次改动文件（`uv tool run --from ruff==0.17.5 ruff format <文件...>`、`ruff check --fix <文件...>`）。`git diff --check` 单列为空白检查。运行时使用 Python 标准库，类型检查仍未配置。快速检查范围、纯文档改动、慢项移交及证据要求见 [AGENTS.md](AGENTS.md#开发与-pr-review) 与[验证接入说明](docs/verify/onboarding.md)。
 
 ```bash
 python3 verify.py plan                                            # 统一验证入口：解释将执行哪些组与命令
 python3 verify.py plan --phase development                        # 只读建议；全量回退要求移交 PR review
 python3 verify.py run unit-related tests/test_i18n.py --phase development --timeout 60 # 快速单元示例；按改动选择用例 / 类
-git diff --check                                                 # 空白检查；Lint / 格式化工具另行接入
+python3 verify.py run --group lint --phase development            # 日常全仓只读 Ruff 静态检查与格式校验（写操作限本次改动文件）
+python3 verify.py _lint-runner                                    # 计划与记录中的复现命令：依次执行 ruff check 与 ruff format --check
+git diff --check                                                 # 空白检查（单列于 Ruff lint / 格式化之外）
 python3 verify.py run --group all --phase pr --pr <编号>           # 用户发起 PR review 后：完整验收
 AE_VERIFY_SERIAL=1 python3 verify.py run --group all --phase pr    # PR review 串行回退；保留全部验证范围
 python3 verify.py run --group all --phase pr --no-reuse            # PR review 独立复测：全部实际执行

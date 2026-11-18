@@ -56,9 +56,8 @@ jobs:
           python3 verify.py report --efficiency | tee -a "$GITHUB_STEP_SUMMARY"
 
   lint:
-    # 固定名称（无 matrix）：便于 protect-main 规则集绑定单一 status check context。
-    # 名称只涵盖 ruff check：格式检查（ruff format --check）待一次性格式化 PR 合并后
-    # 在 cmd_lint_runner 的 steps 里追加，追加时无需改此名称，也就无需重新绑定。
+    # 固定名称（无 matrix）：便于规则集按需绑定单一 status check context。
+    # Lint 静态检查已依次执行 ruff check . 和 ruff format --check .（均由 cmd_lint_runner 执行）。
     name: Lint 静态检查
     runs-on: ubuntu-22.04
     timeout-minutes: 15
@@ -67,7 +66,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # lint 组经 uv tool run --from ruff==0.17.5 ruff check . 执行，uv 在此提供
+      # lint 组经 uv tool run --from ruff==0.17.5 依次执行 ruff check . 和 ruff format --check .，uv 在此提供
       - uses: astral-sh/setup-uv@v5
       - name: Lint 静态检查（统一验证入口）
         run: |
