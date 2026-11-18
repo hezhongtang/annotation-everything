@@ -196,7 +196,7 @@ class AnalysisResolutionTests(unittest.TestCase):
         end = next(iter(pending["deadEnds"].values()))
         self.assertEqual(end["status"], "pending")
         analysis.redecide(self.review, self.aid, "n1", "quarter")
-        state = analysis.redecide(self.review, self.aid, "n1", "year")
+        analysis.redecide(self.review, self.aid, "n1", "year")
         number = analysis.queue(self.review)[0]["seq"]
         confirmed = analysis.answer(self.review, self.aid, number, "D:" + end["id"], {"kind": "accept"})
         self.assertEqual(confirmed["deadEnds"][end["id"]]["status"], "confirmed")
@@ -207,7 +207,7 @@ class AnalysisResolutionTests(unittest.TestCase):
         self.assertEqual(blocked.exception.params["assumptions"], ["合成原始材料的全年口径可比"])
         self.assertEqual(analysis.load(self.review, self.aid), confirmed)
         cp = analysis.seal_checkpoint(self.review, self.aid)["checkpoints"][-1]
-        alternative = analysis.fork_line(self.review, self.aid, cp["id"])
+        analysis.fork_line(self.review, self.aid, cp["id"])
         with self.assertRaises(notes.HandoffError) as across_lines:
             analysis.redecide(self.review, self.aid, "n1", "quarter")
         self.assertEqual(across_lines.exception.code, "dead-end-option")
@@ -222,7 +222,7 @@ class AnalysisResolutionTests(unittest.TestCase):
     def test_confirmed_line_dead_end_blocks_switch_and_checkpoint_fork_until_refutation(self):
         _number, _first, _second, _linked = self.reasoning()
         checkpoint = analysis.seal_checkpoint(self.review, self.aid)["checkpoints"][-1]
-        other = analysis.fork_line(self.review, self.aid, checkpoint["id"])
+        analysis.fork_line(self.review, self.aid, checkpoint["id"])
         number = analysis.queue(self.review)[0]["seq"]
         result = self.write(number, dead_ends=[{
             "key": "old-line", "kind": "line", "targetLine": "main",

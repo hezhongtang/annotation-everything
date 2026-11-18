@@ -29,6 +29,7 @@ os.environ.setdefault("USERPROFILE", _test_user)
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
 
 import build_viewer  # noqa: E402
+from fake_tools import write_python_tool
 import ledger  # noqa: E402
 import make_pptx as mp  # noqa: E402
 import pptx_reader as pr  # noqa: E402
@@ -260,19 +261,6 @@ class CompatibilityTests(ControlledRenderMixin, unittest.TestCase):
         self.assertNotIn("UnicodeDecodeError", str(caught.exception))
 
 
-def _write_py_tool(bin_dir: Path, name: str, body: str) -> None:
-    """跨平台假工具脚本：POSIX 直接 shebang，Windows 用 .cmd 调 sys.executable。"""
-    if os.name == "nt":
-        py_path = bin_dir / f"{name}.py"
-        py_path.write_text(body + "\n", encoding="utf-8")
-        cmd_path = bin_dir / f"{name}.cmd"
-        cmd_path.write_text(f'@echo off\r\n"{sys.executable}" "%~dp0{name}.py" %*\r\n', encoding="utf-8")
-    else:
-        path = bin_dir / name
-        path.write_text(f"#!{sys.executable}\n{body}\n", encoding="utf-8")
-        path.chmod(0o755)
-
-
 class RenderPipelineTests(unittest.TestCase):
     """真实工具管线的错误路径：伪造 soffice / pdftoppm 脚本注入 PATH（先例 test_pptx_fonts）。
 
@@ -290,7 +278,7 @@ class RenderPipelineTests(unittest.TestCase):
         self.workdir.mkdir()
 
     def tool(self, name: str, body: str):
-        _write_py_tool(self.bin, name, body)
+        write_python_tool(self.bin, name, body)
 
     def isolated(self):
         """PATH 只保留伪造 bin 与系统 defpath；屏蔽各平台 LibreOffice / Poppler 默认候选位置。"""
@@ -485,7 +473,7 @@ class FontEvidenceTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def tool(self, name: str, body: str):
-        _write_py_tool(self.bin, name, body)
+        write_python_tool(self.bin, name, body)
 
     def evidence(self, pdf: Path | None | object = ...) -> dict:
         # Ellipsis 表示默认用渲染 PDF；显式传 None 才是不做转换后对照

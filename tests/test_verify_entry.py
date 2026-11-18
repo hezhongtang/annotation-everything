@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -26,7 +27,8 @@ from verify_selection import STRATEGY_VERSION
 
 DOC_FIXTURES = json.loads((ROOT / "fixtures" / "verify-doc-allowlist.json").read_text(encoding="utf-8"))
 
-# 合成 uv：剥掉 run --no-project --with <依赖>，直接执行剩下的命令（浏览器依赖仍只在真入口里导入）
+# 合成 uv：剥掉 run --no-project --with <依赖> 与 tool run --from <包>，直接执行剩下的命令
+# （浏览器依赖仍只在真入口里导入；ruff 按环境变量合成通过 / 失败，不依赖真实 ruff）
 UV_STUB = '''#!/usr/bin/env python3
 import os
 import signal
@@ -37,14 +39,22 @@ args = sys.argv[1:]
 index = 0
 while index < len(args):
     token = args[index]
-    if token in ("run", "--no-project"):
+    if token in ("run", "--no-project", "tool"):
         index += 1
-    elif token == "--with":
+    elif token in ("--with", "--from"):
         index += 2
     else:
         break
 if args[index] == "python":
     args[index] = sys.executable
+if args[index] == "ruff" and args[index + 1:index + 2] == ["check"]:
+    failed = int(os.environ.get("SYNTH_RUFF_FAILED", "0"))
+    if failed:
+        print("synth.py:1:1: F401 合成未使用的导入")
+        print("Found %d error." % failed)
+    else:
+        print("All checks passed!")
+    sys.exit(1 if failed else 0)
 if os.name == "nt":
     for name in ("SIGINT", "SIGBREAK"):
         sig = getattr(signal, name, None)
@@ -303,7 +313,7 @@ class PlanTests(VerifyEntryTestCase):
     def test_plan_explains_every_group_and_command_without_running_tests(self):
         p = self.repo.run_verify("plan")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        for name in ("unit", "unit-related", "browser", "serve-check", "all"):
+        for name in ("unit", "unit-related", "browser", "serve-check", "lint", "all"):
             self.assertIn(name, p.stdout, f"plan 说明 {name}")
         self.assertIn("python3 -m unittest discover tests", p.stdout, "说明完整单元的等价命令")
         self.assertIn("uv run --no-project --with playwright python tests/e2e_browser.py", p.stdout,
@@ -333,7 +343,7 @@ class PlanTests(VerifyEntryTestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         plan = json.loads(p.stdout)
         names = [group["name"] for group in plan["groups"]]
-        self.assertEqual(names, ["unit", "unit-related", "browser", "serve-check", "all"])
+        self.assertEqual(names, ["unit", "unit-related", "browser", "serve-check", "lint", "all"])
         unit = plan["groups"][0]
         self.assertEqual(unit["counter"], "unittest")
         self.assertEqual(unit["granularity"], "case")
@@ -1452,6 +1462,104 @@ class OtherGroupTests(VerifyEntryTestCase):
         self.assertEqual(len(index), 1)
         self.assertEqual(index[0]["run_id"], run_id)
         self.assertEqual(index[0]["outcome"], "passed")
+
+
+class LintVersionLockTests(unittest.TestCase):
+    """lint 组锁定的 ruff 版本与 pyproject.toml 的声明必须逐字一致（issue #183）。"""
+
+    def test_lint_runner_ruff_version_matches_pyproject_lock(self):
+        import verify
+
+        text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        match = re.search(r'^required-version\s*=\s*"==([^"]+)"', text, re.MULTILINE)
+        self.assertIsNotNone(match, 'pyproject.toml 必须以 required-version = "==x.y.z" 锁定 ruff 版本')
+        self.assertEqual(verify.RUFF_VERSION, match.group(1),
+                         "verify.RUFF_VERSION 与 pyproject.toml 锁定的 ruff 版本必须完全一致")
+
+    def test_module_docstring_usage_tracks_ruff_version(self):
+        # 顶部用法文档里的「uv tool run --from ruff==x.y.z」是第三处版本硬编码，
+        # 无动态拼接，靠本断言防止升级时静默过期（issue #183）
+        import verify
+
+        self.assertIn("ruff==" + verify.RUFF_VERSION, verify.__doc__ or "",
+                      "模块顶部用法文档里的 ruff 版本必须与 RUFF_VERSION 同步更新")
+
+
+class LintGroupTests(VerifyEntryTestCase):
+    """lint 组的命令启动、执行范围、结果记录与证据复用。"""
+
+    def test_lint_runner_launches_resolved_windows_uv_cmd(self):
+        import unittest.mock as mock
+        import verify
+
+        shim = r"C:\synth tools\uv.cmd"
+        with mock.patch.object(verify.os, "name", "nt"), \
+             mock.patch.object(verify.shutil, "which", return_value=shim), \
+             mock.patch.object(verify.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as launch:
+            self.assertEqual(verify.cmd_lint_runner([]), 0)
+        self.assertEqual(launch.call_args_list[0].args[0][0], shim)
+
+    def test_lint_group_run_records_contract_for_pass_and_fail_paths(self):
+        # lint 是纯逻辑组，development 阶段默认可被证据复用引用；本测两条路径都必须
+        # 实际执行，统一 --no-reuse 强制重跑（复用语义由效率复用的既有契约覆盖）
+        # 通过路径：合成 ruff 无告警，摘要行 1/1 通过
+        p = self.repo.run_verify("run", "--group", "lint", "--no-reuse")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["name"], "lint")
+        self.assertEqual(group["outcome"], "passed")
+        self.assertEqual(group["granularity"], "group")
+        self.assertIsNone(group["scenarios"], "非浏览器组不留场景字段")
+        self.assertEqual(group["counts"], {"total": 1, "passed": 1, "failed": 0})
+        self.assertEqual(record["result"]["counts"]["checks"], 1)
+        self.assertTrue(record["result"]["usable_as_evidence"])
+        log = (self.repo.artifact_dir / "runs" / self.repo.latest_run_id()
+               / "lint.log").read_text(encoding="utf-8")
+        self.assertIn("1/1 通过", log, "lint 日志保留子进程摘要行")
+        self.assertIn("All checks passed!", log, "ruff 子进程输出实时转发进日志")
+        # 失败路径：ruff 报告诊断，0/1 通过，不是通过
+        p = self.repo.run_verify("run", "--group", "lint", "--no-reuse",
+                                 extra_env={"SYNTH_RUFF_FAILED": "1"})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
+        group = record["groups"][0]
+        self.assertEqual(group["name"], "lint")
+        self.assertEqual(group["outcome"], "failed")
+        self.assertEqual(group["counts"], {"total": 1, "passed": 0, "failed": 1})
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        log = (self.repo.artifact_dir / "runs" / self.repo.latest_run_id()
+               / "lint.log").read_text(encoding="utf-8")
+        self.assertIn("0/1 通过", log, "lint 日志保留子进程摘要行")
+        self.assertIn("F401", log, "失败时 ruff 的原始诊断同样转发进日志")
+
+    def test_efficiency_guard_preserves_explicit_lint_alongside_full_gate(self):
+        self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
+            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": STRATEGY_VERSION,
+            "reason": "合成效率守卫", "evidence": ["synthetic"]}))
+        plan = self.repo.run_verify("plan", "--group", "lint", "--json")
+        self.assertEqual(plan.returncode, 0, plan.stderr)
+        self.assertEqual(json.loads(plan.stdout)["selected"], ["unit", "serve-check", "browser", "lint"])
+        result = self.repo.run_verify("run", "--group", "lint", "--json",
+                                      extra_env={"SYNTH_RUFF_FAILED": "1"})
+        self.assertEqual(result.returncode, 1, result.stderr)
+        outcomes = {group["name"]: group["outcome"] for group in json.loads(result.stdout)["groups"]}
+        self.assertEqual(outcomes, {"unit": "passed", "serve-check": "passed", "browser": "passed", "lint": "failed"})
+
+    def test_lint_reuse_requires_identical_inputs_including_document_paths(self):
+        args = ("run", "--group", "lint", "--group", "serve-check", "--phase", "development", "--json")
+        self.repo.write("docs/assets/example.py", "value = 1\n")
+        first = self.repo.run_verify(*args)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        same = self.repo.run_verify(*args)
+        self.assertEqual(same.returncode, 0, same.stderr)
+        self.assertEqual([group["outcome"] for group in json.loads(same.stdout)["groups"]], ["reused", "reused"])
+
+        self.repo.write("docs/assets/example.py", "import os\n")
+        changed = self.repo.run_verify(*args, extra_env={"SYNTH_RUFF_FAILED": "1"})
+        self.assertEqual(changed.returncode, 1, changed.stderr)
+        outcomes = {group["name"]: group["outcome"] for group in json.loads(changed.stdout)["groups"]}
+        self.assertEqual(outcomes, {"lint": "failed", "serve-check": "reused"})
 
 
 class EfficiencyIntegrationTests(VerifyEntryTestCase):
@@ -2592,7 +2700,8 @@ class SelectionPlanTests(VerifyEntryTestCase):
         plan = self.selection("--phase", "pr")
         self.assertIn("all", plan["suggested"]["groups"], "PR 收敛完成完整验收")
         notes = "\n".join(plan["suggested"]["notes"])
-        self.assertIn("CI", notes, "双 Python 全量与浏览器责任由 CI 说明")
+        self.assertIn("Python 3.12", notes)
+        self.assertNotIn("3.9", notes)
 
     def test_ci_phase_matches_matrix(self):
         self.repo.write("tools/synth-cli.py", "v1\n")
@@ -2987,6 +3096,26 @@ class SelectionBuiltinMapTests(unittest.TestCase):
         repo.commit_all("内置映射测试基建")
         return repo
 
+    def test_document_pr_runs_explicit_lint_and_exempts_only_product_tests(self):
+        repo = self.builtin_repo("verify-doc-pr-lint-")
+        repo.write("docs/assets/example.py", "import os\n")
+        failing_ruff = {"SYNTH_RUFF_FAILED": "1"}
+        lint_only = repo.run_verify("run", "lint", "--phase", "pr", "--json", extra_env=failing_ruff)
+        self.assertEqual(lint_only.returncode, 1, lint_only.stderr)
+        self.assertEqual(json.loads(lint_only.stdout)["groups"][0]["outcome"], "failed")
+        result = repo.run_verify("run", "--group", "all", "--group", "lint", "--phase", "pr", "--json",
+                                 extra_env=failing_ruff)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        record = json.loads(result.stdout)
+        outcomes = {group["name"]: group["outcome"] for group in record["groups"]}
+        self.assertEqual(outcomes, {"unit": "not_applicable", "serve-check": "not_applicable",
+                                    "browser": "not_applicable", "lint": "failed"})
+        self.assertEqual(record["result"]["counts"]["checks"], 1)
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        plan = repo.run_verify("plan", "--group", "all", "--group", "lint", "--phase", "pr")
+        self.assertEqual(plan.returncode, 0, plan.stderr)
+        self.assertIn("本次将执行：lint\n", plan.stdout)
+
     def test_builtin_map_declares_real_repo_manifest(self):
         sys.path.insert(0, str(ROOT))
         import verify_selection as vs
@@ -3167,6 +3296,7 @@ class SelectionBuiltinMapTests(unittest.TestCase):
         original = json.loads(result.stdout)
         path = repo.artifact_dir / "runs" / original["run_id"] / "record.json"
         malformed = [
+            (("groups", 0, "name"), "lint"),
             (("context", "selection"), [1]),
             (("context", "selection", "policy_guard"), "broken"),
             (("context", "selection", "available"), 1),
@@ -4373,7 +4503,6 @@ class WindowsVerificationContractTests(VerifyEntryTestCase):
         self.assertIn(str(outside / "runs" / record["run_id"]) + os.sep, rendered)
 
     def test_execute_group_restores_inheritable_false_when_startup_setup_fails(self):
-        import types
         import unittest.mock as mock
         import verify
 

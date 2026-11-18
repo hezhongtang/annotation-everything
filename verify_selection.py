@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 17
+STRATEGY_VERSION = 18
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -87,6 +87,7 @@ DOC_ALLOWLIST = (
 )
 
 DOC_PR_REASON = "差异仅在文档允许列表内，由 CI 兜底；本地产品测试不适用。"
+PRODUCT_TEST_GROUPS = ("unit", "unit-related", "serve-check", "browser")
 
 SELECTION_RULES = (
     SelectionRule(
@@ -244,15 +245,15 @@ SELECTION_RULES = (
     ),
     SelectionRule(
         rid="exec-config",
-        prefixes=("verify.py", "verify_selection.py", "verify_evidence.py", "verify_report.py", "verify_parallel.py", "host_isolation.py", ".github/", "tools/"),
+        prefixes=("verify.py", "verify_selection.py", "verify_evidence.py", "verify_report.py", "verify_parallel.py", "host_isolation.py", ".github/", "tools/", "pyproject.toml"),
         fallback="strategy_change",
-        why="验证入口、策略与 CI 配置自身变化，映射边界不可信",
+        why="验证入口、策略、CI 配置与 ruff 工具配置自身变化，映射边界不可信",
     ),
     SelectionRule(
         rid="guarded-docs",
-        prefixes=("docs/", "AGENTS.md", "CLAUDE.md", "LICENSE", ".gitignore", ".gitattributes"),
+        prefixes=("docs/", "AGENTS.md", "CLAUDE.md", "LICENSE", ".gitignore", ".gitattributes", ".git-blame-ignore-revs"),
         fallback="guarded_doc",
-        why="不在狭窄允许列表内的说明文档，保守回退完整检查",
+        why="不在狭窄允许列表内的说明文档与仓库辅助文件，保守回退完整检查",
     ),
 )
 
@@ -641,13 +642,13 @@ def _suggest_for_phase(phase: str, classified: dict, changes: dict, fallback: Op
         suggested["groups"] = ["all"]
         suggested["notes"] = [
             "PR 收敛完成完整验收：完整单元 + 服务安全自检 + 完整浏览器。",
-            "Python 3.9 / 3.12 双版本全量与服务安全自检由 CI 独立承担，本地结果不替代 CI。",
+            "CI 在 Linux 上使用 Python 3.12 执行完整单元和服务安全自检。",
         ]
         return suggested
     if phase == "ci":
         suggested["groups"] = ["unit", "serve-check"]
         suggested["notes"] = [
-            "CI 与现有矩阵一致：完整单元 + 服务安全自检；浏览器不在 CI 矩阵，由本地完整验收承担。",
+            "CI 在 Linux 上使用 Python 3.12 执行完整单元和服务安全自检。完整浏览器检查由本地 PR 验收执行。",
         ]
         return suggested
     # development / review / manual
@@ -675,7 +676,7 @@ def _suggest_for_phase(phase: str, classified: dict, changes: dict, fallback: Op
         scenarios.update(entry["scenarios"])
         serve_check = serve_check or entry["serve_check"]
     if classified["doc_exempt"] and not selectors and not scenarios and not serve_check:
-        suggested["not_applicable"] = ["unit", "unit-related", "serve-check", "browser"]
+        suggested["not_applicable"] = list(PRODUCT_TEST_GROUPS)
         suggested["notes"] = [
             "全部有效差异都在文档允许列表内：产品测试确认不适用（%s）。"
             % "、".join("%s（%s）" % (item["path"], item["category"]) for item in classified["doc_exempt"]),
@@ -777,7 +778,7 @@ def build_selection(snapshot: dict, baseline: dict, phase: str, repo: Path,
                                                 selection["fallback"], expanded)
     if phase == "pr" and documentation_only(selection):
         selection["suggested"].update(runs_tests=False, groups=[],
-                                      not_applicable=["unit", "unit-related", "serve-check", "browser"],
+                                      not_applicable=list(PRODUCT_TEST_GROUPS),
                                       notes=[DOC_PR_REASON])
     return selection
 

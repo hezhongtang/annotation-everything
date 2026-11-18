@@ -219,7 +219,9 @@ class WindowsUpdateNoticeTests(unittest.TestCase):
     """Windows 首期不执行自动原地更新：auto 不阻断且提示手动维护，now 明确说明手动路径。"""
 
     def test_windows_auto_update_is_non_blocking_and_points_to_manual_install(self):
-        import contextlib, io, unittest.mock
+        import contextlib
+        import io
+        import unittest.mock
         sys.path.insert(0, str(SKILL_SRC / "scripts"))
         import update
 
@@ -316,7 +318,9 @@ class AeUpgradeTests(unittest.TestCase):
         self.assertFalse((self.copy / "upgrade-marker.txt").exists())
 
     def test_upgrade_refuses_when_overview_or_enumeration_unsafe_and_recovers_on_swap_failure(self):
-        import contextlib, io, unittest.mock
+        import contextlib
+        import io
+        import unittest.mock
         self.assertEqual(self.run_repo_ae("install").returncode, 0)
         self.bump_repo_version("9.9.9")
         old_version = json.loads((self.copy / RECORD_NAME).read_text(encoding="utf-8"))["version"]
@@ -382,7 +386,9 @@ class AeUpgradeTests(unittest.TestCase):
         self.assertEqual(json.loads((self.copy / RECORD_NAME).read_text(encoding="utf-8"))["version"], old_version)
 
     def test_upgrade_rolls_back_when_post_install_verification_fails(self):
-        import contextlib, io, unittest.mock
+        import contextlib
+        import io
+        import unittest.mock
         self.assertEqual(self.run_repo_ae("install").returncode, 0)
         self.bump_repo_version("9.9.9")
         old_version = json.loads((self.copy / RECORD_NAME).read_text(encoding="utf-8"))["version"]

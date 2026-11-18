@@ -1,7 +1,6 @@
 """PR #25 审查缺陷的回归测试；仅使用合成文件与注入的进程表。"""
 from __future__ import annotations
 
-import argparse
 import contextlib
 import io
 import json
@@ -186,7 +185,8 @@ class SecondReviewRegressionTests(RegressionCase):
 
     def test_serve_subcommand_mirrors_serve_py_main(self):
         review, entries = self.registered_review()
-        serve = lambda *args: _join_cmd([sys.executable, SERVE, *args])
+        def serve(*args):
+            return _join_cmd([sys.executable, SERVE, *args])
         self.assertEqual(ae.serve_dir_argument(serve("serve", str(review), "--no-open")), str(review))
         self.assertEqual(ae.serve_dir_argument(serve("--no-open", "list")), "list")  # 选项在前时 list 是目录
         for sub in ("check", "status", "stop", "stop-status", "list", "forget", "prune"):
@@ -261,7 +261,8 @@ class SecondReviewRegressionTests(RegressionCase):
         (self.ledger / "reviews.json").write_text(
             json.dumps({"version": 1, "reviews": entries}), encoding="utf-8")
         probed = []
-        probe = lambda port: probed.append(port) or {"app": "other"}
+        def probe(port):
+            return probed.append(port) or {"app": "other"}
         result = ae.check_port_pool(self.ctx(port_probe=probe))
         self.assertEqual(result.level, ae.LEVEL_FAIL)
         self.assertIn("8800", result.message)
@@ -306,7 +307,8 @@ class SecondReviewRegressionTests(RegressionCase):
     def test_health_confirms_registered_dir_with_space(self):
         review, entries = self.registered_review("my review")
         cmd = f"{sys.executable} {SERVE} {review} --no-open"   # ps 输出不保留引号
-        health = lambda pid: {"app": ae.APP, "pid": pid, "dir": str(review), "port": 8800}
+        def health(pid):
+            return {"app": ae.APP, "pid": pid, "dir": str(review), "port": 8800}
         with patch.object(ae, "listening_port_of", return_value=8800):
             self.assertEqual(ae.find_orphan_servers(
                 entries, lambda: [(4303, cmd)], lambda port: health(4303)), [])

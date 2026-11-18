@@ -510,8 +510,6 @@ class RevisionUpdateFlowTests(unittest.TestCase):
                                   '<section class="page" data-page="2" data-key="next"')
         head, _, rest = swapped.partition('data-key="rev"')
         # 重排文档顺序：sum, next, rev
-        sum_html = original[original.index('<section class="page" data-page="1"'):
-                            original.index('<section class="page" data-page="2"')]
         rev_html_new = ('<section class="page" data-page="3" data-key="rev" id="page-rev">'
                         '<h2>收入结构</h2><p>外卖占比 38%。</p></section>\n')
         next_html_new = ('<section class="page" data-page="2" data-key="next" id="page-next">'

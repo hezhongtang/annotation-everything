@@ -9,7 +9,6 @@ import io
 import json
 import os
 import re
-import shlex
 import shutil
 import signal
 import socket
@@ -400,8 +399,9 @@ class BatchTests(unittest.TestCase):
     def test_cli_batches_and_done_message(self):
         a = store.add(self.d, {"page": 4, "text": "要改"})[1]["id"]
         store.handoff_submit(self.d, "改一下")
-        run = lambda *x: subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *x], capture_output=True, text=True,
-                                        env={**os.environ, "CLAUDECODE": ""})
+        def run(*x):
+            return subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *x],
+                                  capture_output=True, text=True, env={**os.environ, "CLAUDECODE": ""})
         run("claim", str(self.d))
         r = run("done", str(self.d), "--summary", "什么也没标")
         self.assertIn("这批解决 0 条", r.stdout)
@@ -513,8 +513,10 @@ class TwoStageTests(unittest.TestCase):
 
     def test_cli_wait_snapshot_diff_review_show(self):
         a, b, _c = self.ids
-        run = lambda *x: subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *x], capture_output=True, text=True,
-                                        env={**os.environ, "CLAUDECODE": ""}, timeout=30)
+        def run(*x):
+            return subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *x],
+                                  capture_output=True, text=True, env={**os.environ, "CLAUDECODE": ""},
+                                  timeout=30)
         store.handoff_submit(self.d, "先改第 3 页", target="review")
         out = run("wait", str(self.d), "--timeout", "5").stdout
         self.assertIn("要求：做到「已初改·待复核」后停下等用户；不允许派发子代理", out)
@@ -880,8 +882,10 @@ class MultiBatchTests(unittest.TestCase):
             store.set_status(self.d, a, "drafted", by="page")                # 页面不能直接标待复核
 
     def test_snapshot_failure_warns_and_single_stage_skips(self):
-        run = lambda *x: subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *x], capture_output=True, text=True,
-                                        env={**os.environ, "CLAUDECODE": ""}, timeout=30)
+        def run(*x):
+            return subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *x],
+                                  capture_output=True, text=True, env={**os.environ, "CLAUDECODE": ""},
+                                  timeout=30)
         self.add(2)
         store.handoff_submit(self.d, "")
         self.assertEqual(run("claim", str(self.d)).returncode, 0)
@@ -1099,10 +1103,10 @@ class HandoffTests(unittest.TestCase):
         _d, n = store.add(self.d, {"page": 1, "text": "x"})
         self.cli("resolve", str(self.d), n["id"])
         self.assertEqual(store.load(self.d)["notes"][0]["resolvedBy"], "agent")
-        r = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "reopen", str(self.d), n["id"]],
-                           capture_output=True, text=True, env={**os.environ, "CLAUDECODE": "1"})
-        r = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "resolve", str(self.d), n["id"]],
-                           capture_output=True, text=True, env={**os.environ, "CLAUDECODE": "1"})
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "reopen", str(self.d), n["id"]],
+                       capture_output=True, text=True, env={**os.environ, "CLAUDECODE": "1"})
+        subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "resolve", str(self.d), n["id"]],
+                       capture_output=True, text=True, env={**os.environ, "CLAUDECODE": "1"})
         self.assertEqual(store.load(self.d)["notes"][0]["resolvedBy"], "claude")
 
     def test_server_handoff_api_and_notes_payload(self):
@@ -1559,7 +1563,8 @@ class ReviewRound3Tests(unittest.TestCase):
     def test_claim_command(self):
         d = tmpdir()
         (d / "index.html").write_text("x")
-        run = lambda *a: subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *a], capture_output=True, text=True)
+        def run(*a):
+            return subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *a], capture_output=True, text=True)
         self.assertEqual(run("claim", str(d)).returncode, 3)
         store.handoff_submit(d, "m")
         r = run("claim", str(d), "--by", "agent")
@@ -1820,8 +1825,8 @@ class BuildTests(unittest.TestCase):
             self.assertIn(keep, build_viewer.shadow_css(keep + "{x:1}"), keep)
 
     def test_root_font_size_moves_to_outer_document(self):
-        r = build_viewer.build(self.write_report(page(1, '<p class="t">x</p>'), css="html{font-size:62.5%} .t{font-size:2.4rem}"),
-                               None, self.out)
+        build_viewer.build(self.write_report(page(1, '<p class="t">x</p>'), css="html{font-size:62.5%} .t{font-size:2.4rem}"),
+                           None, self.out)
         html = (self.out / "index.html").read_text()
         self.assertIn("html{font-size:62.5%}", html)
         self.assertIsNone(build_viewer.root_font_size("html{font-size:expression(alert(1))}"))
@@ -3313,8 +3318,10 @@ class OverviewHandoffTests(unittest.TestCase):
         self.start_home(**kwargs)
 
     def start_request(self, rid=None, headers=None, body=None):
+        # 服务端有 5 秒启动期限，客户端要等到响应后再开始清理子进程。
         status, _, raw = serve._req(self.port, "POST", "/api/overview/start",
-                                    headers or self.same, body if body is not None else {"reviewId": rid or self.rid})
+                                    headers or self.same, body if body is not None else {"reviewId": rid or self.rid},
+                                    timeout=12)
         return status, json.loads(raw)
 
     def claim_port(self):
@@ -3418,7 +3425,7 @@ class OverviewHandoffTests(unittest.TestCase):
 
     def test_hooked_start_rejects_extra_fields_and_forged_requests_without_a_process(self):
         self.start_home(on_handoff=serve.parse_hook(f"{sys.executable} -c pass"), hook_cwd=str(self.home_cwd))
-        port = self.claim_port()
+        self.claim_port()
         with patch.object(subprocess, "Popen", side_effect=AssertionError("伪造请求不拉起任何进程")) as spawned:
             status, body = self.start_request(body={"reviewId": self.rid, "onHandoff": f"{sys.executable} -c pass"})
             self.assertEqual((status, body["code"]), (400, "bad-overview-start"), body)
@@ -3443,7 +3450,8 @@ class OverviewHandoffTests(unittest.TestCase):
         port = self.claim_port()
         self.addCleanup(self.stop_started)
         status, body = self.start_request()
-        self.assertEqual((status, body["url"]), (200, f"http://127.0.0.1:{port}/"), body)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["url"], f"http://127.0.0.1:{port}/")
         self.assertFalse(body["hookConfigured"])
         self.assertEqual((body["agentDelivery"]["adapter"], body["agentDelivery"]["state"]), ("wait", "bound"))
         self.assertEqual((body["agentDelivery"]["receiver"]["harness"],
@@ -3460,7 +3468,7 @@ class OverviewHandoffTests(unittest.TestCase):
 
     def test_start_without_receiver_notes_how_to_receive(self):
         self.start_home()
-        port = self.claim_port()
+        self.claim_port()
         self.addCleanup(self.stop_started)
         status, body = self.start_request()
         self.assertEqual(status, 200, body)
@@ -3473,7 +3481,7 @@ class OverviewHandoffTests(unittest.TestCase):
 
     def test_resume_keeps_running_service_and_notes_unapplied_hook(self):
         self.start_home()
-        port = self.claim_port()
+        self.claim_port()
         self.addCleanup(self.stop_started)
         status, first = self.start_request()
         self.assertEqual((status, first["note"]), (200, "no-receiver"), first)
@@ -3520,7 +3528,7 @@ class OverviewHandoffTests(unittest.TestCase):
         store.handoff_submit(self.review, "启动前的积压")
         hook_py, hook_log = self.write_hook(), self.tree / "hook-log.jsonl"
         self.start_home(on_handoff=self.hook_argv(hook_py, hook_log), hook_cwd=str(self.home_cwd))
-        port = self.claim_port()
+        self.claim_port()
         self.addCleanup(self.stop_started)
         status, body = self.start_request()
         self.assertEqual(status, 200, body)
@@ -3620,7 +3628,7 @@ class OverviewHandoffTests(unittest.TestCase):
         wakeup.bind(self.review, thread, self.tree / "desktop.sock")
         store.handoff_submit(self.review, "启动前的积压")
         self.start_home()
-        port = self.claim_port()
+        self.claim_port()
         self.addCleanup(self.stop_started)
         status, body = self.start_request()
         self.assertEqual(status, 200, body)
@@ -3774,8 +3782,8 @@ class OverviewHomeCliTests(unittest.TestCase):
         """--under 经真实启动命令落到首页宿主上：列表只含范围内审阅，范围名随启动目录（issue #160 前的回归）。"""
         outside = self.tree / "outside"
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            outside_rid = build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md",
-                                             outside, name="Outside review")["reviewId"]
+            build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md",
+                               outside, name="Outside review")["reviewId"]
         explicit = free_port()
         proc = self.spawn("--no-open", "--port", str(explicit), "--under", str(self.workspace))
         self.addCleanup(self.terminate, proc)
@@ -5465,29 +5473,38 @@ class WaitPollReadsTests(unittest.TestCase):
 
         def run_wait():   # 等待进程跑在后台线程里：主线程同时向服务发请求
             with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
-                result["code"] = notes_cli.main(["wait", str(review), "--timeout", "8", "--interval", "1",
+                result["code"] = notes_cli.main(["wait", str(review), "--timeout", "40", "--interval", "1",
                                                  "--by", "agent", "--harness", "claude", "--session", "sess-1"])
                 result["out"] = out.getvalue()
 
         waiter = threading.Thread(target=run_wait, daemon=True)
         waiter.start()
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:   # 先等到服务认出「有代理在等」
-            _code, body = self.request(srv)
-            if body["receiver"]["state"] == "waiting":
-                break
-            time.sleep(0.03)
-        self.assertEqual(body["receiver"]["state"], "waiting")
-        seen = []
-        until = time.monotonic() + 4.5   # 跨过一次等待标记重写（剩余有效期不到一半时）
-        while time.monotonic() < until:
-            for path in ("/api/notes", "/api/health"):
-                code, got = self.request(srv, path=path)
-                self.assertEqual(code, 200)
-                seen.append((path, got["receiver"]["state"]))
-            time.sleep(0.1)
-        store.handoff_submit(review, "合成批次")   # 提交到达：等待结束
-        waiter.join(10)
+        try:
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:   # 先等到服务认出「有代理在等」
+                _code, body = self.request(srv)
+                if body["receiver"]["state"] == "waiting":
+                    break
+                time.sleep(0.03)
+            self.assertEqual(body["receiver"]["state"], "waiting")
+            seen = []
+            mark = ledger.wait_file(review, os.getpid())
+            first_write = mark.stat().st_mtime_ns
+            refreshed = False
+            until = time.monotonic() + 15
+            while time.monotonic() < until:
+                refreshed = mark.stat().st_mtime_ns != first_write
+                for path in ("/api/notes", "/api/health"):
+                    code, got = self.request(srv, path=path)
+                    self.assertEqual(code, 200)
+                    seen.append((path, got["receiver"]["state"]))
+                if refreshed:   # 两个入口都已在真实续写之后读取过状态
+                    break
+                time.sleep(0.1)
+        finally:
+            store.handoff_submit(review, "合成批次")
+            waiter.join(10)
+        self.assertTrue(refreshed, "必须观测到一次等待标记续写")
         self.assertEqual(result.get("code"), 0, result.get("out"))
         self.assertIn("第 1 批", result.get("out", ""))
         self.assertEqual({state for _path, state in seen}, {"waiting"}, seen[:4])

@@ -1,7 +1,6 @@
 """Synthetic HTTP -> persisted binding -> desktop IPC, including service restart."""
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 from pathlib import Path
@@ -24,7 +23,6 @@ os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不�
 
 import serve
 import notes_store as store
-import fsutil
 import i18n
 import wakeup
 import notes as notes_cli

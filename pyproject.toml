@@ -1,0 +1,11 @@
+[tool.ruff]
+required-version = "==0.17.5"
+target-version = "py39"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E402"]
+"tools/collect_verify_history.py" = ["E402"]

@@ -8,21 +8,21 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import subprocess
 import sys
 import tempfile
 import unittest
-import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(ROOT / "fixtures" / "pptx"))
 os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))
 
 import pptx_render as pr_render  # noqa: E402
 import pptx_build as pb  # noqa: E402
+from fake_tools import write_python_tool
 
 
 def deck_spec() -> dict:
@@ -51,57 +51,30 @@ FAKE_PDF = b"%PDF-1.4 synthetic"
 
 
 def fake_soffice(source: Path) -> Path:
-    """假 soffice：--version 报版本；--convert-to pdf 在 --outdir 落一个假 PDF。"""
-    script = source / "soffice"
-    script.write_text(
-        "#!/bin/sh\n"
-        'if [ "$1" = "--version" ]; then echo "LibreOffice 24.8.4.2"; exit 0; fi\n'
-        'outdir=""\nsrc=""\n'
-        'for arg in "$@"; do\n'
-        '  case "$arg" in\n'
-        '    --*) : ;;\n'
-        '    *) if [ -z "$src" ] && [ -f "$arg" ]; then src="$arg";\n'
-        '       elif [ -d "$arg" ]; then outdir="$arg"; fi ;;\n'
-        '  esac\n'
-        "done\n"
-        'base=$(basename "${src%.*}")\n'
-        'python3 -c "import sys; open(sys.argv[1], \'wb\').write(\'%PDF-1.4 synthetic\')" '
-        '"$outdir/$base.pdf"\n'
-        "exit 0\n")
-    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    return script
+    return write_python_tool(source, "soffice", f"""\
+import sys
+from pathlib import Path
+
+if sys.argv[1:] == ["--version"]:
+    print("LibreOffice 24.8.4.2")
+else:
+    outdir = Path(sys.argv[sys.argv.index("--outdir") + 1])
+    filename = Path(sys.argv[-1]).stem + ".pdf"
+    (outdir / filename).write_bytes({FAKE_PDF!r})
+""")
 
 
 def fake_pdftoppm(source: Path, pages: int = 2) -> Path:
-    """假 pdftoppm：-v 报版本；转换时按 -r 之外的参数产出 N 页假 PNG。"""
-    script = source / "pdftoppm"
-    lines = [
-        "#!/bin/sh",
-        'if [ "$1" = "-v" ] || [ "$1" = "--version" ]; then echo "pdftoppm version 24.08.0"; exit 0; fi',
-        'prefix=""',
-        'prev=""',
-        'for arg in "$@"; do',
-        '  case "$prev" in',
-        '    -r|-png|-gray) : ;;',
-        '  esac',
-        '  case "$arg" in',
-        '    -*) : ;;',
-        '    *) prefix="$arg" ;;',
-        '  esac',
-        '  prev="$arg"',
-        "done",
-        'python3 - "$prefix" <<\'PYEOF\'',
-        "import sys, pathlib",
-        f"blob = {FAKE_PNG!r}",
-        "prefix = sys.argv[1]",
-        f"for page in range(1, {pages} + 1):",
-        '    pathlib.Path(f"{prefix}-{page:02d}.png").write_bytes(blob)',
-        "PYEOF",
-        "exit 0",
-    ]
-    script.write_text("\n".join(lines) + "\n")
-    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    return script
+    return write_python_tool(source, "pdftoppm", f"""\
+import sys
+from pathlib import Path
+
+if sys.argv[1:] in (["-v"], ["--version"]):
+    print("pdftoppm version 24.08.0")
+else:
+    for page in range(1, {pages + 1}):
+        Path(f"{{sys.argv[-1]}}-{{page:02d}}.png").write_bytes({FAKE_PNG!r})
+""")
 
 
 class PptxRenderTests(unittest.TestCase):
@@ -137,10 +110,7 @@ class PptxRenderTests(unittest.TestCase):
 
     def test_render_produces_pages_and_manifest(self):
         """两个假工具齐全：产出逐页 PNG 与绑定文件哈希的渲染清单。"""
-        fake_soffice(self.bin_dir)
-        fake_pdftoppm(self.bin_dir)
-        self._set_env(soffice=self.bin_dir / "soffice",
-                      pdftoppm=self.bin_dir / "pdftoppm")
+        self._set_env(soffice=fake_soffice(self.bin_dir), pdftoppm=fake_pdftoppm(self.bin_dir))
         deck = self._deck()
         out_dir = self.root / "pages"
         manifest = pr_render.render_deck(deck, out_dir)
@@ -170,9 +140,7 @@ class PptxRenderTests(unittest.TestCase):
         self.assertTrue(any("soffice" in line for line in manifest["diagnosis"]))
 
     def test_reused_output_directory_contains_only_current_pages(self):
-        fake_soffice(self.bin_dir)
-        fake_pdftoppm(self.bin_dir, pages=12)
-        self._set_env(soffice=self.bin_dir / "soffice", pdftoppm=self.bin_dir / "pdftoppm")
+        self._set_env(soffice=fake_soffice(self.bin_dir), pdftoppm=fake_pdftoppm(self.bin_dir, pages=12))
         deck = self._deck()
         out_dir = self.root / "pages"
         first = pr_render.render_deck(deck, out_dir)
@@ -187,9 +155,7 @@ class PptxRenderTests(unittest.TestCase):
         self.assertEqual((out_dir / "notes.txt").read_text(encoding="utf-8"), "保留")
 
     def test_successful_tool_without_new_pages_cannot_reuse_old_output(self):
-        fake_soffice(self.bin_dir)
-        fake_pdftoppm(self.bin_dir)
-        self._set_env(soffice=self.bin_dir / "soffice", pdftoppm=self.bin_dir / "pdftoppm")
+        self._set_env(soffice=fake_soffice(self.bin_dir), pdftoppm=fake_pdftoppm(self.bin_dir))
         deck = self._deck()
         out_dir = self.root / "pages"
         self.assertEqual(pr_render.render_deck(deck, out_dir)["status"], "ok")
@@ -200,8 +166,7 @@ class PptxRenderTests(unittest.TestCase):
 
     def test_missing_pdftoppm_reports_unavailable(self):
         """缺 pdftoppm：同样 unavailable 并指名工具。"""
-        fake_soffice(self.bin_dir)
-        self._set_env(soffice=self.bin_dir / "soffice",
+        self._set_env(soffice=fake_soffice(self.bin_dir),
                       pdftoppm=self.bin_dir / "不存在的pdftoppm")
         deck = self._deck()
         manifest = pr_render.render_deck(deck, self.root / "pages3")
@@ -211,11 +176,8 @@ class PptxRenderTests(unittest.TestCase):
 
     def test_conversion_without_pdf_is_failed(self):
         """soffice 转换没产出 PDF：状态 failed，不再进入逐页环节。"""
-        script = self.bin_dir / "soffice-empty"
-        script.write_text("#!/bin/sh\nexit 0\n")
-        script.chmod(script.stat().st_mode | stat.S_IXUSR)
-        fake_pdftoppm(self.bin_dir)
-        self._set_env(soffice=script, pdftoppm=self.bin_dir / "pdftoppm")
+        script = write_python_tool(self.bin_dir, "soffice-empty", "pass")
+        self._set_env(soffice=script, pdftoppm=fake_pdftoppm(self.bin_dir))
         deck = self._deck()
         manifest = pr_render.render_deck(deck, self.root / "pages4")
 
@@ -224,12 +186,10 @@ class PptxRenderTests(unittest.TestCase):
 
     def test_cli_contract(self):
         """CLI：--json 输出清单；工具缺失退出 1。"""
-        fake_soffice(self.bin_dir)
-        fake_pdftoppm(self.bin_dir)
         deck = self._deck("cli.pptx")
         out_dir = self.root / "cli-pages"
-        env = {**os.environ, "AE_SOFFICE": str(self.bin_dir / "soffice"),
-               "AE_PDFTOPPM": str(self.bin_dir / "pdftoppm")}
+        env = {**os.environ, "AE_SOFFICE": str(fake_soffice(self.bin_dir)),
+               "AE_PDFTOPPM": str(fake_pdftoppm(self.bin_dir))}
         done = subprocess.run(
             [sys.executable, str(SCRIPTS / "pptx_render.py"), str(deck),
              "--out-dir", str(out_dir), "--json"],

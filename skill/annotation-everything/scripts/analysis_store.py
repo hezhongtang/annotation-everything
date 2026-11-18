@@ -18,7 +18,6 @@ notes_store 的不加锁内部函数在本模块的锁内完成（同一次写�
 """
 from __future__ import annotations
 
-import contextlib
 import copy
 import json
 import re

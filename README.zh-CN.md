@@ -4,7 +4,7 @@
 
 ## 安装：把这段交给 Agent
 
-复制下面这段给 Agent，即可安装并体检。需要 Python 3.9 及以上；当前正式支持范围为 macOS 和 Linux；Windows 11 x64 原生运行时、PowerShell 命令行与 Windows CI（Python 3.9/3.12 完整单元与服务安全自检）已就绪，整体正式支持声明待真实 Windows 11 桌面完整验收（Edge/Chrome 浏览器端到端与真实宿主接手）后更新。
+复制下面这段给 Agent，即可安装并体检。本工具正式支持 macOS 和 Linux，要求 Python 3.9 及以上。Windows 11 x64 原生运行时和 PowerShell 命令行已可用。正式支持 Windows 前，还需在真实桌面上完成 Edge/Chrome 浏览器端到端测试及宿主 Agent 接手验收。
 
 ```text
 请从 https://github.com/hezhongtang/annotation-everything 安装 annotation-everything 技能。
@@ -117,7 +117,7 @@ python "$S\serve.py" "$env:TEMP\ae-demo"
 - **同步盘与共享位置边界**：活动审阅目录必须位于本机固定磁盘（支持材料与审阅目录分处 `C:\`、`D:\` 等不同盘符）。不要直接在 OneDrive、SharePoint、iCloud、Dropbox、映射盘或 `\\server\share` UNC 路径内审阅；本工具不承诺自动识别所有第三方同步服务。请先复制到本机工作目录（例如 `Copy-Item "C:\Users\<用户>\OneDrive\材料\*" -Destination "D:\work\材料\" -Recurse`），完成审阅后再手工放回。
 - **可选 PPTX 工具与字体检查**：自动探测 `PATH` 与 Windows 标准安装路径（`Program Files`、`LocalAppData\Programs`）下的 LibreOffice（`soffice`）和 Poppler（`pdftoppm` / `pdffonts`）；缺可选工具不阻断 HTML 或 DOCX 审阅。Windows 缺少 `fc-list` 时，`check_pptx_fonts.py` 回退读取 Windows 字体注册表枚举已装字体，PDF 字体嵌入核对仍依赖 `pdffonts`。
 - **首期手动维护**：Windows 首期不自动原地更新（`update.py auto` 不阻断审阅）；升级前先停止运行中的审阅服务、等待者和总览首页，再从来源仓库手动运行 `python ae.py upgrade`（自定义目录加 `--target <目录>`）。
-- **首期边界与验证状态**：Windows CI 覆盖 Python 3.9 与 3.12 的完整 `unit` 与 `serve-check`；真实 Windows 11 x64 桌面验收（`e2e_browser.py` 的 Edge/Chrome 流程与真实宿主 Agent 接手）需在真实 Win11 桌面完成。Windows 10、ARM64、Windows Server、WSL 安装路径、自动原地更新及任意空闲/已关闭聊天的自动唤醒均在首期支持范围外。
+- **Windows CI** 已暂停。Windows 11 x64 桌面验收（`e2e_browser.py` 的 Edge/Chrome 流程与真实宿主 Agent 接手）需在真实 Win11 桌面完成。Windows 10、ARM64、Windows Server、WSL 安装路径、自动原地更新及任意空闲/已关闭聊天的自动唤醒均在首期支持范围外。
 
 </details>
 
@@ -321,7 +321,7 @@ Markdown 的第一行是格式标记（`<!-- annotation-everything export v1 lan
 
 ### 安装命令与维护选项
 
-前提：Python 3.9 及以上；当前正式支持范围为 macOS 或 Linux（Windows 11 x64 PowerShell 安装、审阅、办公材料、按能力接手与维护升级已纳入 Windows CI 完整 `unit` + `serve-check`，整体正式支持声明待真实 Win11 桌面验收）。
+安装需要 Python 3.9 及以上，正式支持 macOS 和 Linux。Windows 11 x64 上的 PowerShell 安装、审阅、办公材料、按能力接手与维护升级功能仍待真实 Windows 桌面最终验收。
 
 ```bash
 python3 ae.py install                            # 安装：把技能复制为技能副本到 ~/.claude/skills/
@@ -574,7 +574,7 @@ GLOSSARY.md                        术语表
 
 克隆后先运行一次 `tools/setup-dev.sh` 启用 git 钩子（无 `sh` 的 Windows 环境运行 `git config core.hooksPath tools/git-hooks`）。
 
-采用两阶段流程：issue 实现阶段只做直接相关的快速单元测试（单次反馈目标 60 秒）、已配置的 Lint 与格式检查，完成后开 PR 并交接。用户手动调用 agents 后，再做全量代码审查、完整单元、服务安全自检和完整浏览器验证；全量审查、验证与 CI 全部通过后才能合并。Windows CI 在 Python 3.9 与 3.12 串行运行完整 `unit` + `serve-check`；`browser`（`tests/e2e_browser.py`，默认 `chrome`，支持 `AE_E2E_BROWSER_CHANNEL=msedge` 验证 Edge）与真实宿主 Agent 交互验收在真实 Windows 11 桌面完成。
+采用两阶段流程：issue 实现阶段只做直接相关的快速单元测试（单次反馈目标 60 秒）、已配置的 Lint 与格式检查，完成后开 PR 并交接。用户手动调用 agents 后，再做全量代码审查、完整单元、服务安全自检和完整浏览器验证；全量审查、验证与 CI 全部通过后才能合并。CI 在 Linux 上使用 Python 3.12 运行完整 `unit` 和 `serve-check`。Windows 的 `browser` 检查（`tests/e2e_browser.py`，默认 `chrome`，支持 `AE_E2E_BROWSER_CHANNEL=msedge` 验证 Edge）与真实宿主 Agent 交互验收在真实 Windows 11 桌面完成。
 
 Lint 与格式化工具尚未配置，另开 PR 接入；当前如实记录「未配置」，`git diff --check` 只作空白检查。快速检查范围、纯文档改动、慢项移交及证据要求见 [AGENTS.md](AGENTS.md#开发与-pr-review) 与[验证接入说明](docs/verify/onboarding.md)。
 

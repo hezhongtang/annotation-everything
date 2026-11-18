@@ -7,7 +7,6 @@ LC_ALL / LC_MESSAGES / LANG。字体名、来源路径与系统原始错误保�
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 import re
 from shutil import which

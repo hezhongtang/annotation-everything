@@ -114,7 +114,7 @@ class ForeignListener:
 
 
 class ServeProcess:
-    """真实 serve.py 子进程：状态文件写出即启动完成；stop() 优雅停止并确认端口已释放。"""
+    """等待自建 serve.py 发布状态并响应健康请求，停止后确认端口已释放。"""
 
     def __init__(self, review_dir: Path, ledger_home: Path):
         self.review_dir = review_dir
@@ -133,20 +133,23 @@ class ServeProcess:
 
     def _wait_ready(self) -> None:
         status_file = self.review_dir / ".annotation-server.json"
-        deadline = time.time() + 20
-        while time.time() < deadline:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
             if status_file.is_file():
                 try:
                     info = json.loads(status_file.read_text(encoding="utf-8"))
                 except ValueError:
                     info = {}
                 if info.get("pid") == self.proc.pid and info.get("port") == self.port:
-                    return
+                    # Windows 在写出状态文件后才安装停止事件并进入 HTTP 循环。
+                    health = ae.probe_port(self.port, timeout=0.5) or {}
+                    if health.get("pid") == self.proc.pid:
+                        return
             if self.proc.poll() is not None:
                 out, err = self.proc.communicate(timeout=10)
                 raise AssertionError(f"serve.py 启动即退出：{out}{err}")
             time.sleep(0.1)
-        raise AssertionError("serve.py 未在期限内写出状态文件")
+        raise AssertionError("serve.py 未在期限内发布状态并响应健康请求")
 
     def stop(self) -> None:
         if self.proc.poll() is None:
@@ -263,7 +266,8 @@ class PortPoolTests(TempRootTestCase):
         foreign = ForeignListener(port)
         self.addCleanup(foreign.close)
         write_ledger(self.ledger_home, {self.rid: {"dir": str(self.root / "review"), "port": port}})
-        probe = lambda p: ae.probe_port(p) if p == port else None     # 只探测测试自建的端口
+        def probe(p):  # 只探测测试自建的端口
+            return ae.probe_port(p) if p == port else None
         result = ae.check_port_pool(self.ctx(port_probe=probe))
         self.assertEqual(result.level, FAIL)
         self.assertIn(str(port), result.message)
@@ -273,7 +277,8 @@ class PortPoolTests(TempRootTestCase):
     def test_passes_when_pool_port_used_by_own_serve(self):
         d = make_review_dir(self.root, self.rid)
         server = self.start_server(d)
-        probe = lambda p: ae.probe_port(p) if p == server.port else None
+        def probe(p):
+            return ae.probe_port(p) if p == server.port else None
         result = ae.check_port_pool(self.ctx(port_probe=probe))
         self.assertEqual(result.level, PASS)
 
@@ -355,8 +360,9 @@ class OrphanServerTests(TempRootTestCase):
         self.assertEqual(result.level, PASS)
 
     def test_ignores_processes_without_serve_py_script(self):
-        lister = lambda: [(999998, "/usr/bin/tail -f /var/log/system.log"),
-                          (999997, f"{sys.executable} {ROOT / 'tests' / 'test_core.py'}")]
+        def lister():
+            return [(999998, "/usr/bin/tail -f /var/log/system.log"),
+                    (999997, f"{sys.executable} {ROOT / 'tests' / 'test_core.py'}")]
         result = ae.check_orphan_servers(self.ctx(process_lister=lister))
         self.assertEqual(result.level, PASS)
 
@@ -367,7 +373,8 @@ class OrphanServerTests(TempRootTestCase):
     def test_skips_when_ledger_unreadable(self):
         self.ledger_home.mkdir(parents=True)
         (self.ledger_home / "reviews.json").write_text("坏", encoding="utf-8")
-        lister = lambda: [(424246, f"{sys.executable} {SERVE_PY} {self.root / 'x'} --no-open")]
+        def lister():
+            return [(424246, f"{sys.executable} {SERVE_PY} {self.root / 'x'} --no-open")]
         result = ae.check_orphan_servers(self.ctx(process_lister=lister))
         self.assertEqual(result.level, PASS)
 

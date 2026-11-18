@@ -344,9 +344,12 @@ class ExecutePlanTests(unittest.TestCase):
         plan = [ae.PlanItem("stop-orphans", "有残留服务", "结束残留服务", "--stop-orphans")]
         lines, acted = ae.execute_plan(plan, ctx, stop_orphans=True)
         self.assertTrue(acted)
-        self.assertIsNotNone(server.proc.poll(), "SIGTERM 后进程已退出")
+        # repair 返回时就要释放端口并清理状态文件，再等待父进程取得正常退出码。
+        self.assertFalse((server.review_dir / ae.STATUS_FILE).exists(), lines)
         with self.assertRaises(OSError):
-            socket.create_connection(("127.0.0.1", server.port), timeout=1)   # 端口已释放
+            with socket.create_connection(("127.0.0.1", server.port), timeout=1):
+                pass
+        self.assertEqual(server.proc.wait(timeout=5), 0, lines)
         self.assertTrue(any(str(server.proc.pid) in line for line in lines), lines)
 
 

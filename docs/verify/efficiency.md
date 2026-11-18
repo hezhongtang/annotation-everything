@@ -56,7 +56,9 @@ python3 verify.py report --efficiency --rebuild --events .verify/ci-events.json
 
 采集器只读最近 100 个构件与最近 100 个已关闭 PR，缺省最多导入 20 个 `verify-python*` 构件，`--limit` 可设为 1–50。截断、权限不足、离线、构件过期或只有旧格式日志都保留缺口。远端构件先进行路径、符号链接、文件数和展开体积检查，不执行其中任何代码；来源运行链接保留在 `source_artifacts`。缓存只保留本次选择的构件，不触及本地原始运行目录。
 
-`.github/workflows/verify-efficiency.yml` 在既有 CI 完成后、每日定时和手动触发时只采集和重建报告，不运行完整回归。工作流只使用 `contents: read`、`actions: read`、`pull-requests: read`；始终检出默认分支，只有同仓库默认分支报告工作流产出的状态才可恢复为去重历史。报告与状态通过 `verify-efficiency-history` 构件延续，原有 Python 3.9 / 3.12 CI 保持完整执行。报告不发聊天或邮件、不自动创建工单、不自动合并或关闭 issue。
+CI lint job 上传的 `verify-lint` 构件不进入产品测试效率历史投影：采集器只选择名称以 `verify-python` 为前缀的构件导入，lint 记录不含产品测试组（unit / serve-check / browser）样本，导入会把纯逻辑检查的耗时混入产品测试组的中位数与回退规则基线。`verify-lint` 只作为单次 CI 运行的原始证据，保留期与其他验证构件一致（14 天），投影不采集、不导入、不重放它。
+
+`.github/workflows/verify-efficiency.yml` 在既有 CI 完成后、每日定时和手动触发时只采集和重建报告，不运行完整回归。工作流只使用 `contents: read`、`actions: read`、`pull-requests: read`；始终检出默认分支，只有同仓库默认分支报告工作流产出的状态才可恢复为去重历史。报告与状态通过 `verify-efficiency-history` 构件延续。当前产品测试样本来自 `verify-python3.12`。报告不发聊天或邮件、不自动创建工单、不自动合并或关闭 issue。
 
 ## 确认遗漏与策略维护
 

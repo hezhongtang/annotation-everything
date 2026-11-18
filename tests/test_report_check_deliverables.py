@@ -162,10 +162,10 @@ class DeliverablesCheckTests(unittest.TestCase):
         return item
 
     def write_case(self, record: dict, *, deck=True) -> Path:
-        (self.root / "report.html").write_text(REPORT, encoding="utf-8")
-        (self.root / "script.md").write_text(SCRIPT, encoding="utf-8")
+        (self.root / "report.html").write_bytes(REPORT.encode("utf-8"))
+        (self.root / "script.md").write_bytes(SCRIPT.encode("utf-8"))
         (self.root / "materials").mkdir(exist_ok=True)
-        (self.root / "materials" / "q3-notes.md").write_text(MATERIAL, encoding="utf-8")
+        (self.root / "materials" / "q3-notes.md").write_bytes(MATERIAL.encode("utf-8"))
         (self.root / "report-record.json").write_text(
             json.dumps(record, ensure_ascii=False), encoding="utf-8")
         if deck and not self.deck_path.exists():

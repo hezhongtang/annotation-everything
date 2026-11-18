@@ -26,8 +26,6 @@ sys.path.insert(0, str(ROOT))
 import ae  # noqa: E402
 sys.path.insert(0, str(SCRIPTS))
 
-import i18n  # noqa: E402
-
 # 既有中文判定字段：旧机器消费者照旧读取，任何语言下都不得变值
 LEGACY_LEVELS = ("通过", "警告", "失败")
 LEGACY_CATEGORIES = ("安装状态", "可选工具", "开发环境", "运行状态")

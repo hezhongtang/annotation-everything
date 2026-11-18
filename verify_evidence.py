@@ -12,10 +12,9 @@ verify.py 的复用策略：同一产物根（同一检出 / worktree）里，�
   完整浏览器、命中敏感模块的相关单元）指纹相同也不复用，必须实际执行或要求
   隔离证明。
 - 输入相同：来源记录的 input.fingerprint 与当前一致（指纹覆盖 HEAD 与 staged /
-  unstaged / untracked 的完整内容），且来源记录确认覆盖最终输入；基线提交也须
-  一致（显式换基线就是换口径）。唯一放宽：指纹与基线的差异被证明仅在文档允许
-  列表内（与选测策略同一允许列表，覆盖映射下停用）时按「文档无关等价」处理，
-  复用理由注明；无法证明独立性就回退重新验证。
+  unstaged / untracked 的完整内容），且来源记录确认覆盖最终输入。基线须一致或
+  提交差异仅在文档允许列表内。只有产品测试组可按内置文档允许列表判定输入等价，
+  并在复用理由中注明。lint 复用要求完整输入指纹一致。
 - 环境相同：OS、Python、CI 标记与配置摘要在比对范围内一致。
 - 范围覆盖：请求组的测试清单 ⊆ 来源组已验证的清单。serve-check 按组名；
   unit-related 按归一化选择器前缀（模块级），点名到类 / 用例的选择器是按疑点
@@ -48,7 +47,7 @@ except Exception:  # pragma: no cover - 防御分支：选测层不可用时没�
     verify_selection = None  # type: ignore[assignment]
 
 SCHEMA = "ae-verify-reuse/1"
-POLICY_VERSION = 2
+POLICY_VERSION = 3
 
 # 本地证据的保鲜上限（小时）。这只是本地证据的新鲜度边界，不代表外部状态在
 # 24 小时内稳定。
@@ -328,6 +327,9 @@ def _decide_group(name: str, meta: dict, sources: list, general_attempts: list,
         if group.get("outcome") != "passed":
             attempts.append((run_id, "run %s 的 %s 组结论是 %s，不是实际通过的执行"
                              % (run_id, name, group.get("outcome"))))
+            continue
+        if doc_equivalent and (verify_selection is None or name not in verify_selection.PRODUCT_TEST_GROUPS):
+            attempts.append((run_id, "run %s 输入指纹不同，%s 组要求完整输入指纹一致" % (run_id, name)))
             continue
         if counter == "unittest":
             covered, why = _selectors_covered(requested, source, prefix_of)

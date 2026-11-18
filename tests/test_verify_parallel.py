@@ -218,8 +218,10 @@ while True: time.sleep(.01)
         def cleanup_child():
             pidfile = self.root / "child-pid"
             if pidfile.exists():
-                try: os.kill(int(pidfile.read_text()), signal.SIGKILL)
-                except ProcessLookupError: pass
+                try:
+                    os.kill(int(pidfile.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
         self.addCleanup(cleanup_child)
         results = parallel.run_tasks([("killed", "killed")], worker, self.root / "workers", jobs=1)
         self.assertEqual(results["killed"]["exit_status"], -signal.SIGKILL)

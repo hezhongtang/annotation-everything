@@ -1,7 +1,6 @@
 """#113 的公开行为：分析锁、重裁与断枝、基线恢复和结论批注保护。"""
 from __future__ import annotations
 
-import json
 import sys
 import tempfile
 import unittest
