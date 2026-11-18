@@ -1486,7 +1486,18 @@ class LintVersionLockTests(unittest.TestCase):
 
 
 class LintGroupTests(VerifyEntryTestCase):
-    """lint 组（counter=log）：通过与失败两条路径的记录契约（issue #183）。"""
+    """lint 组的命令启动、执行范围、结果记录与证据复用。"""
+
+    def test_lint_runner_launches_resolved_windows_uv_cmd(self):
+        import unittest.mock as mock
+        import verify
+
+        shim = r"C:\synth tools\uv.cmd"
+        with mock.patch.object(verify.os, "name", "nt"), \
+             mock.patch.object(verify.shutil, "which", return_value=shim), \
+             mock.patch.object(verify.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as launch:
+            self.assertEqual(verify.cmd_lint_runner([]), 0)
+        self.assertEqual(launch.call_args_list[0].args[0][0], shim)
 
     def test_lint_group_run_records_contract_for_pass_and_fail_paths(self):
         # lint 是纯逻辑组，development 阶段默认可被证据复用引用；本测两条路径都必须
@@ -1521,6 +1532,34 @@ class LintGroupTests(VerifyEntryTestCase):
                / "lint.log").read_text(encoding="utf-8")
         self.assertIn("0/1 通过", log, "lint 日志保留子进程摘要行")
         self.assertIn("F401", log, "失败时 ruff 的原始诊断同样转发进日志")
+
+    def test_efficiency_guard_preserves_explicit_lint_alongside_full_gate(self):
+        self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
+            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": STRATEGY_VERSION,
+            "reason": "合成效率守卫", "evidence": ["synthetic"]}))
+        plan = self.repo.run_verify("plan", "--group", "lint", "--json")
+        self.assertEqual(plan.returncode, 0, plan.stderr)
+        self.assertEqual(json.loads(plan.stdout)["selected"], ["unit", "serve-check", "browser", "lint"])
+        result = self.repo.run_verify("run", "--group", "lint", "--json",
+                                      extra_env={"SYNTH_RUFF_FAILED": "1"})
+        self.assertEqual(result.returncode, 1, result.stderr)
+        outcomes = {group["name"]: group["outcome"] for group in json.loads(result.stdout)["groups"]}
+        self.assertEqual(outcomes, {"unit": "passed", "serve-check": "passed", "browser": "passed", "lint": "failed"})
+
+    def test_lint_reuse_requires_identical_inputs_including_document_paths(self):
+        args = ("run", "--group", "lint", "--group", "serve-check", "--phase", "development", "--json")
+        self.repo.write("docs/assets/example.py", "value = 1\n")
+        first = self.repo.run_verify(*args)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        same = self.repo.run_verify(*args)
+        self.assertEqual(same.returncode, 0, same.stderr)
+        self.assertEqual([group["outcome"] for group in json.loads(same.stdout)["groups"]], ["reused", "reused"])
+
+        self.repo.write("docs/assets/example.py", "import os\n")
+        changed = self.repo.run_verify(*args, extra_env={"SYNTH_RUFF_FAILED": "1"})
+        self.assertEqual(changed.returncode, 1, changed.stderr)
+        outcomes = {group["name"]: group["outcome"] for group in json.loads(changed.stdout)["groups"]}
+        self.assertEqual(outcomes, {"lint": "failed", "serve-check": "reused"})
 
 
 class EfficiencyIntegrationTests(VerifyEntryTestCase):
@@ -3056,6 +3095,26 @@ class SelectionBuiltinMapTests(unittest.TestCase):
         repo.commit_all("内置映射测试基建")
         return repo
 
+    def test_document_pr_runs_explicit_lint_and_exempts_only_product_tests(self):
+        repo = self.builtin_repo("verify-doc-pr-lint-")
+        repo.write("docs/assets/example.py", "import os\n")
+        failing_ruff = {"SYNTH_RUFF_FAILED": "1"}
+        lint_only = repo.run_verify("run", "lint", "--phase", "pr", "--json", extra_env=failing_ruff)
+        self.assertEqual(lint_only.returncode, 1, lint_only.stderr)
+        self.assertEqual(json.loads(lint_only.stdout)["groups"][0]["outcome"], "failed")
+        result = repo.run_verify("run", "--group", "all", "--group", "lint", "--phase", "pr", "--json",
+                                 extra_env=failing_ruff)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        record = json.loads(result.stdout)
+        outcomes = {group["name"]: group["outcome"] for group in record["groups"]}
+        self.assertEqual(outcomes, {"unit": "not_applicable", "serve-check": "not_applicable",
+                                    "browser": "not_applicable", "lint": "failed"})
+        self.assertEqual(record["result"]["counts"]["checks"], 1)
+        self.assertFalse(record["result"]["usable_as_evidence"])
+        plan = repo.run_verify("plan", "--group", "all", "--group", "lint", "--phase", "pr")
+        self.assertEqual(plan.returncode, 0, plan.stderr)
+        self.assertIn("本次将执行：lint\n", plan.stdout)
+
     def test_builtin_map_declares_real_repo_manifest(self):
         sys.path.insert(0, str(ROOT))
         import verify_selection as vs
@@ -3236,6 +3295,7 @@ class SelectionBuiltinMapTests(unittest.TestCase):
         original = json.loads(result.stdout)
         path = repo.artifact_dir / "runs" / original["run_id"] / "record.json"
         malformed = [
+            (("groups", 0, "name"), "lint"),
             (("context", "selection"), [1]),
             (("context", "selection", "policy_guard"), "broken"),
             (("context", "selection", "available"), 1),

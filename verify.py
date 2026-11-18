@@ -597,6 +597,12 @@ def expand_groups(requested: list, groups: dict) -> list:
     return ordered
 
 
+def expand_guarded_groups(selected: list, groups: dict) -> list:
+    # 完整单元已覆盖 unit-related，独立请求的检查仍须执行。
+    remaining = [name for name in selected if name != "unit-related"]
+    return expand_groups(["all", *remaining], groups)
+
+
 # ── 计时探针（在子进程里跑，只面向 unittest） ──────────────────────────────
 
 def _test_id(test) -> str:
@@ -1003,7 +1009,7 @@ def cmd_lint_runner(argv: list) -> int:
     for index, (label, step_argv) in enumerate(steps, start=1):
         print("=== lint 步骤 %d/%d：%s ===" % (index, len(steps), label), flush=True)
         try:
-            code = subprocess.run(step_argv, cwd=str(REPO)).returncode
+            code = subprocess.run(_resolve_command_argv(step_argv, os.environ), cwd=str(REPO)).returncode
         except OSError as exc:
             print("lint 步骤 %s 启动失败：%s" % (label, exc), file=sys.stderr, flush=True)
             code = EXIT_FAILED
@@ -1700,6 +1706,12 @@ def artifact_root(out_dir: Optional[str]) -> Path:
     return REPO / ARTIFACT_DIRNAME
 
 
+def doc_pr_exempt_groups(phase: Optional[str], selection: Optional[dict]) -> tuple:
+    if phase == "pr" and verify_selection is not None and verify_selection.documentation_only(selection or {}):
+        return verify_selection.PRODUCT_TEST_GROUPS
+    return ()
+
+
 def cmd_plan(args) -> int:
     # 与 run 一致：「plan unit-related tests/test_x.py」这类写法，第一个位置参数是
     # 组名时当组名用，不把组名混进选择器与等价 / 实际命令
@@ -1716,6 +1728,8 @@ def cmd_plan(args) -> int:
         selection = build_selection_for(phase or DEFAULT_PHASE,
                                         resolve_baseline(getattr(args, "baseline", None)),
                                         snapshot_input())
+        if (selection.get("policy_guard") or {}).get("active"):
+            selected = expand_guarded_groups(selected, groups)
     if args.as_json:
         payload = {
             "schema": PLAN_SCHEMA,
@@ -1737,7 +1751,7 @@ def cmd_plan(args) -> int:
                 "enabled_phases": list(verify_evidence.REUSE_PHASES) if verify_evidence else [],
                 "gate_phases": list(verify_evidence.GATE_PHASES) if verify_evidence else ["pr", "ci"],
                 "rule": "同输入指纹 + 同环境 + 范围覆盖 + 当前校验有效 + 未超保鲜窗口 + 版本一致"
-                        "才复用（差异被证明仅在文档允许列表内不算输入变化）；"
+                        "才复用（仅产品测试可按文档允许列表判定输入等价，lint 要求完整指纹一致）；"
                         "依赖宿主机状态的组（resources 非空）不复用；"
                         "--no-reuse 强制全部重跑",
             },
@@ -1755,9 +1769,13 @@ def cmd_plan(args) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return EXIT_OK
     print("验证入口 verify.py（记录 schema %s，入口版本 %d）" % (SCHEMA, WRAPPER_VERSION))
-    doc_pr = (phase == "pr" and verify_selection is not None
-              and verify_selection.documentation_only(selection or {}))
-    print((verify_selection.DOC_PR_REASON if doc_pr else "本次将执行：%s" % "、".join(selected)) + "\n")
+    exempt = doc_pr_exempt_groups(phase, selection)
+    applicable = [name for name in selected if name not in exempt]
+    if len(applicable) < len(selected):
+        print(verify_selection.DOC_PR_REASON)
+    if applicable:
+        print("本次将执行：%s" % "、".join(applicable))
+    print()
     for group in groups.values():
         print("%s %-12s %s" % ("*" if group.name in selected else " ", group.name, group.title))
         print("    做什么：%s" % group.purpose)
@@ -2280,13 +2298,13 @@ def cmd_run(args) -> int:
     record = build_record(args, groups, selected)
     guard = (record["context"]["selection"].get("policy_guard") or {})
     if guard.get("active"):
-        selected = expand_groups(["all"], groups)
+        selected = expand_guarded_groups(selected, groups)
         record = build_record(args, groups, selected)
-        record["result"]["notes"].append("效率守卫扩大实际执行范围到 all：%s" % guard["reason"])
+        record["result"]["notes"].append("效率守卫扩大实际执行范围到 %s：%s" % ("、".join(selected), guard["reason"]))
         args.no_reuse = True
-    doc_pr = (args.phase == "pr" and not args.no_reuse and verify_selection is not None
-              and verify_selection.documentation_only(record["context"]["selection"]))
-    if doc_pr:
+    exempt = () if args.no_reuse else doc_pr_exempt_groups(args.phase, record["context"]["selection"])
+    applicable = [name for name in selected if name not in exempt]
+    if len(applicable) < len(selected):
         record["result"]["notes"].append(verify_selection.DOC_PR_REASON)
     record["run_id"] = ctx.run_id
     record["reuse"] = {"schema": REUSE_SCHEMA, "policy_version": None, "enabled": False,
@@ -2398,18 +2416,18 @@ def cmd_run(args) -> int:
     sealed = False
     try:
         # 规划与保存同样受取消保护；规划耗时单独记入排队时间。
-        if doc_pr:
-            record["reuse"].update(reason=verify_selection.DOC_PR_REASON)
-        else:
-            record["reuse"] = build_reuse_plan(ctx.artifact_dir, record, groups, selected,
+        if applicable:
+            record["reuse"] = build_reuse_plan(ctx.artifact_dir, record, groups, applicable,
                                                bypass=bool(args.no_reuse))
+        else:
+            record["reuse"].update(reason=verify_selection.DOC_PR_REASON)
         ctx.save_record(record)
         reuse_decisions = {item["group"]: item for item in record["reuse"]["decisions"]}
         record["timing"]["queue_seconds"] = round(time.monotonic() - queued_at, 6)
         record["timing"]["started_at"] = now_iso()
         started = time.monotonic()
         for name in selected:
-            if doc_pr:
+            if name in exempt:
                 results[name] = {"outcome": NOT_APPLICABLE, "exit_status": EXIT_OK,
                                  "signal": None, "timed_out": False,
                                  "note": verify_selection.DOC_PR_REASON,
@@ -2676,9 +2694,8 @@ def validate_local_evidence(record: dict, run_dir: Path) -> list:
             continue
         if group.get("outcome") == NOT_APPLICABLE:
             context = record.get("context") or {}
-            if (context.get("phase") != "pr" or verify_selection is None
-                    or not verify_selection.documentation_only(context.get("selection") or {})):
-                problems.append("产品测试不适用缺少可信的纯文档 PR 判定")
+            if group.get("name") not in doc_pr_exempt_groups(context.get("phase"), context.get("selection")):
+                problems.append("组 %s 不满足纯文档 PR 的产品测试豁免条件" % group.get("name"))
             if group.get("started_at") is not None or group.get("counts") or group.get("cases"):
                 problems.append("产品测试不适用却带有实际执行结果")
             continue
