@@ -250,6 +250,22 @@ class ExecutePlanTests(unittest.TestCase):
         self.assertTrue(acted)
         self.assertEqual(ae.check_git_hooks(ctx).level, PASS)
 
+    @unittest.skipUnless(shutil.which("bash"), "tools/setup-dev.sh 需要 Bash")
+    def test_setup_dev_preserves_other_blame_ignore_files_on_rerun(self):
+        repo = self.git_repo()
+        project_file = ".git-blame-ignore-revs"
+        (repo / project_file).write_text("# synthetic\n", encoding="utf-8")
+        config = ["git", "-C", str(repo), "config", "--local"]
+        key = "blame.ignoreRevsFile"
+        personal_files = ["personal revs", "xgit-blame-ignore-revs"]
+        for name in personal_files:
+            subprocess.run([*config, "--add", key, name], check=True)
+
+        for _ in range(2):
+            subprocess.run(["bash", str(repo / "tools" / "setup-dev.sh")], check=True, capture_output=True)
+            values = subprocess.check_output([*config, "--get-all", key], text=True).splitlines()
+            self.assertEqual(values, [*personal_files, project_file])
+
     def test_git_hooks_reports_missing_setup_script(self):
         self.git_repo()
         (self.repo / "tools" / "setup-dev.sh").unlink()

@@ -1,5 +1,5 @@
 # PR #185 (chore: 全仓运行 ruff format 并开启格式检查（#183 阶段 2/3）)
 # 注意：该 squash 合并提交同时包含全仓 Python 机械格式化（ruff==0.17.5）、
 # verify.py 开启 ruff format --check . 及统一复现命令的行为改动，以及对应单元测试。
-# 如需临时查看包含该提交在内的完整归属，可运行：git blame --ignore-revs-file "" ...
+# 如需临时查看包含该提交在内的完整归属，可运行 git blame --no-ignore-revs-file ...
 41ec733e15e05aadfaaef74e50739fca0c06806c

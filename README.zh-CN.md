@@ -574,17 +574,27 @@ GLOSSARY.md                        术语表
 
 ## 开发
 
-克隆后先运行一次 `tools/setup-dev.sh` 启用 git 钩子并配置 `blame.ignoreRevsFile = .git-blame-ignore-revs`（无 `sh` 的 Windows 环境运行 `git config core.hooksPath tools/git-hooks` 与 `git config --local blame.ignoreRevsFile .git-blame-ignore-revs`）。如需临时查看包含已忽略提交在内的完整归属，运行 `git blame --ignore-revs-file "" -L 622,622 41ec733e -- verify.py`。
+克隆后运行 `tools/setup-dev.sh` 启用 Git 钩子，并将 `.git-blame-ignore-revs` 加入仓库的 blame 配置。重复运行会保留其他忽略清单。Windows 环境缺少 Bash 时，在仓库根目录用 PowerShell 执行以下命令。
+
+```powershell
+git config core.hooksPath tools/git-hooks
+git config --local --replace-all blame.ignoreRevsFile .git-blame-ignore-revs '^[.]git-blame-ignore-revs$'
+```
+
+关联工作树共享这项配置。切换到缺少清单的旧版本后，可在该工作树运行 `git blame --no-ignore-revs-file -- verify.py` 查看完整归属。要查看指定提交中的某一行，可用同一个选项，例如 `git blame --no-ignore-revs-file -L 622,622 41ec733e -- verify.py`。
 
 采用两阶段流程：issue 实现阶段只做直接相关的快速单元测试（单次反馈目标 60 秒）、已配置的 Lint 与格式检查，完成后开 PR 并交接。用户手动调用 agents 后，再做全量代码审查、完整单元、服务安全自检和完整浏览器验证；全量审查、验证与 CI 全部通过后才能合并，PR 验收查看 Linux Python 3.12 产品测试（`单元测试与服务安全自检（Python 3.12）`，`protect-main` 唯一要求的必需检查）和独立的 `Lint 静态检查`（`--group lint`，构件名 `verify-lint`）两项结果。Windows 与 Python 3.9 CI 已暂停，Ruff 兼容目标为 `py39`。Windows 的 `browser` 检查（`tests/e2e_browser.py`，默认 `chrome`，支持 `AE_E2E_BROWSER_CHANNEL=msedge` 验证 Edge）与真实宿主 Agent 交互验收在真实 Windows 11 桌面完成。
 
-Lint 与格式化已接入锁定版本的 Ruff（`ruff==0.17.5`，配置见 `pyproject.toml`）：日常入口为 `python3 verify.py run --group lint --phase development`，按全仓只读范围验证并记录结构化结果；计划和验证记录中的复现命令为 `python3 verify.py _lint-runner`，依次执行 `ruff check .` 和 `ruff format --check .`，两步都会执行，任一项失败时返回 `1`。日常写入式格式化和 `--fix` 限于本次改动文件（`uv tool run --from ruff==0.17.5 ruff format <文件...>`、`ruff check --fix <文件...>`）。`git diff --check` 单列为空白检查。运行时使用 Python 标准库，类型检查仍未配置。快速检查范围、纯文档改动、慢项移交及证据要求见 [AGENTS.md](AGENTS.md#开发与-pr-review) 与[验证接入说明](docs/verify/onboarding.md)。
+Lint 与格式检查使用 `pyproject.toml` 锁定的 Ruff `0.17.5`。先运行 `python3 verify.py plan --group lint --phase development`。如果「本次将执行」只列出 `lint`，运行 `python3 verify.py run --group lint --phase development` 执行全仓只读检查并记录结果。如果效率守卫加入了产品测试，将本次扩大的检查移交 PR review。
+
+计划和验证记录中的复现命令为 `python3 verify.py _lint-runner`。它依次执行 `ruff check .` 和 `ruff format --check .`，任一项失败时返回 `1`。写入式格式化和自动修复限于本次改动文件，分别使用 `uv tool run --from ruff==0.17.5 ruff format <文件...>` 和 `uv tool run --from ruff==0.17.5 ruff check --fix <文件...>`。`git diff --check` 单列为空白检查。运行时只使用 Python 标准库，类型检查仍未配置。快速检查范围、纯文档改动、慢项移交及证据要求见 [AGENTS.md](AGENTS.md#开发与-pr-review) 与[验证接入说明](docs/verify/onboarding.md)。
 
 ```bash
 python3 verify.py plan                                            # 统一验证入口：解释将执行哪些组与命令
 python3 verify.py plan --phase development                        # 只读建议；全量回退要求移交 PR review
 python3 verify.py run unit-related tests/test_i18n.py --phase development --timeout 60 # 快速单元示例；按改动选择用例 / 类
-python3 verify.py run --group lint --phase development            # 日常全仓只读 Ruff 静态检查与格式校验（写操作限本次改动文件）
+python3 verify.py plan --group lint --phase development           # 先查看「本次将执行」
+python3 verify.py run --group lint --phase development            # 只在计划仅列出 lint 时执行
 python3 verify.py _lint-runner                                    # 计划与记录中的复现命令：依次执行 ruff check 与 ruff format --check
 git diff --check                                                 # 空白检查（单列于 Ruff lint / 格式化之外）
 python3 verify.py run --group all --phase pr --pr <编号>           # 用户发起 PR review 后：完整验收

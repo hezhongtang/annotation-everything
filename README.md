@@ -574,17 +574,27 @@ GLOSSARY.md                        glossary
 
 ## Development
 
-After cloning, run `tools/setup-dev.sh` once to enable the git hooks and configure `blame.ignoreRevsFile` to `.git-blame-ignore-revs` (on Windows without `sh`, run `git config core.hooksPath tools/git-hooks` and `git config --local blame.ignoreRevsFile .git-blame-ignore-revs`). To inspect full attribution temporarily without ignoring formatted revisions, run `git blame --ignore-revs-file "" -L 622,622 41ec733e -- verify.py`.
+After cloning, run `tools/setup-dev.sh` to enable the Git hooks and add `.git-blame-ignore-revs` to the repository's blame configuration. Running it again preserves other ignore files. On Windows without Bash, run these commands from the repository root in PowerShell.
+
+```powershell
+git config core.hooksPath tools/git-hooks
+git config --local --replace-all blame.ignoreRevsFile .git-blame-ignore-revs '^[.]git-blame-ignore-revs$'
+```
+
+Linked worktrees share this configuration. If an older checkout lacks the ignore file, run `git blame --no-ignore-revs-file -- verify.py` there to read the full attribution. The same option works for a specific revision and line, for example `git blame --no-ignore-revs-file -L 622,622 41ec733e -- verify.py`.
 
 Use two stages: during issue implementation, run only quick unit tests directly related to the change (targeting feedback within 60 seconds), plus configured lint and format checks, then open the PR and hand off. When the user invokes agents, perform the full code review, full unit suite, server security self-check and full browser suite. Full review, validation and CI must pass before merging; check both the Linux Python 3.12 product-test job (`单元测试与服务安全自检（Python 3.12）`, the sole required check in `protect-main`) and the standalone `Lint 静态检查` job (`--group lint`, uploading `verify-lint`). Windows and Python 3.9 CI are paused, while Ruff targets `py39`. Windows browser tests in the `browser` group (`tests/e2e_browser.py`, defaulting to `chrome` and supporting `AE_E2E_BROWSER_CHANNEL=msedge` for Edge) and live Windows 11 desktop Agent verification run on an actual Windows 11 desktop.
 
-Lint and formatting use pinned Ruff (`ruff==0.17.5`, configured in `pyproject.toml`): run `python3 verify.py run --group lint --phase development` as the daily entry for full-repo read-only validation and structured recording; the reproducible command in plans and verification records is `python3 verify.py _lint-runner`, which runs both `ruff check .` and `ruff format --check .` and returns `1` if either fails. Daily in-place formatting and `--fix` are limited to files touched by the current change (`uv tool run --from ruff==0.17.5 ruff format <files...>` and `ruff check --fix <files...>`). `git diff --check` is listed separately as a whitespace check. Runtime scripts use the Python standard library only, and type checking remains unconfigured. For quick-check scope, documentation-only changes, deferred slow checks and evidence requirements, see [AGENTS.md](AGENTS.md#开发与-pr-review) and the [verification onboarding guide](docs/verify/onboarding.md).
+Lint and formatting use Ruff `0.17.5`, pinned in `pyproject.toml`. First run `python3 verify.py plan --group lint --phase development`. If the execution list contains only `lint`, run `python3 verify.py run --group lint --phase development` to record the full-repository read-only checks. If the efficiency guard adds product tests, hand the expanded run off to PR review.
+
+The command recorded in the plan and results is `python3 verify.py _lint-runner`. It runs both `ruff check .` and `ruff format --check .` and returns `1` if either fails. Limit in-place changes to files touched by the current change with `uv tool run --from ruff==0.17.5 ruff format <files...>` or `uv tool run --from ruff==0.17.5 ruff check --fix <files...>`. Record `git diff --check` separately as a whitespace check. Runtime scripts use only the Python standard library. Type checking is currently unconfigured. For quick-check scope, documentation-only changes, deferred slow checks and evidence requirements, see [AGENTS.md](AGENTS.md#开发与-pr-review) and the [verification onboarding guide](docs/verify/onboarding.md).
 
 ```bash
 python3 verify.py plan                                            # unified verification entry: explains the groups and commands
 python3 verify.py plan --phase development                        # read-only advice; defer full fallback requirements to PR review
 python3 verify.py run unit-related tests/test_i18n.py --phase development --timeout 60 # quick unit example; choose related cases / classes
-python3 verify.py run --group lint --phase development            # daily full-repo read-only Ruff lint & format check (in-place fixes limited to changed files)
+python3 verify.py plan --group lint --phase development           # inspect the execution list before running lint
+python3 verify.py run --group lint --phase development            # run here only if the plan lists lint alone
 python3 verify.py _lint-runner                                    # reproducible command: runs both ruff check . and ruff format --check .
 git diff --check                                                 # whitespace check only (separate from Ruff lint / format)
 python3 verify.py run --group all --phase pr --pr <number>         # full validation after the user invokes PR review

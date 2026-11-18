@@ -13,7 +13,7 @@
 执行时机以 [AGENTS.md「开发与 PR review」](../../AGENTS.md#开发与-pr-review) 为准：issue 实现阶段做快速相关单元测试与已配置的 Lint、格式检查，完成后开 PR；用户手动调用 agents 后做全量审查与验证，全部通过后才能合并。
 
 - 快速单元优先选择直接相关的用例或类，单次反馈目标 60 秒。`unit-related` 自动附带的全局词典契约仍保留。选定范围过慢、涉及宿主状态资源，或计划要求全量回退时，记录移交范围，不在实现阶段自动启动完整检查。
-- Lint 与格式化已接入锁定版本的 Ruff（`ruff==0.17.5`，配置见 `pyproject.toml`，兼容目标 `py39`、行宽 120、规则 `E4`/`E7`/`E9`/`F`）。日常入口为 `python3 verify.py run --group lint --phase development`，按全仓只读范围验证并记录结果；计划与验证记录中的复现命令为 `python3 verify.py _lint-runner`，依次执行 `ruff check .` 和 `ruff format --check .`，两步都会执行，任一项失败时返回 `1`。日常写入式格式化和 `--fix` 限于本次改动文件（`uv tool run --from ruff==0.17.5 ruff format <改动文件...>`、`uv tool run --from ruff==0.17.5 ruff check --fix <改动文件...>`）。`git diff --check` 单列为空白检查。运行时只用 Python 标准库，类型检查仍未配置。纯协作文档、README 和 PR 模板改动检查文本与 diff，单元测试记录「不适用」；skill 指引、fixture 与执行配置不按文件后缀豁免。
+- Lint 与格式化已接入锁定版本的 Ruff（`ruff==0.17.5`，配置见 `pyproject.toml`，兼容目标 `py39`、行宽 120、规则 `E4`/`E7`/`E9`/`F`）。日常先用 `python3 verify.py plan --group lint --phase development` 查看「本次将执行」。仅列出 `lint` 时，运行 `python3 verify.py run --group lint --phase development`，执行全仓只读检查并记录结果。若效率守卫加入 `unit`、`serve-check` 和 `browser`，把产品测试和待执行的 lint 一并移交 PR review。计划与验证记录中的复现命令为 `python3 verify.py _lint-runner`，依次执行 `ruff check .` 和 `ruff format --check .`，两步都会执行，任一项失败时返回 `1`。日常写入式格式化和 `--fix` 限于本次改动文件（`uv tool run --from ruff==0.17.5 ruff format <改动文件...>`、`uv tool run --from ruff==0.17.5 ruff check --fix <改动文件...>`）。`git diff --check` 单列为空白检查。运行时只用 Python 标准库，类型检查仍未配置。纯协作文档、README 和 PR 模板改动检查文本与 diff，单元测试记录「不适用」；skill 指引、fixture 与执行配置不按文件后缀豁免。
 - 已知快速检查失败先修复；超时、锁等待或环境阻塞如实记录，不能写成通过。开 PR 时列明待验证项，开发 Agent 随后结束交接。
 - PR review 的门禁使用 `--group all --phase pr`：符合内置文档允许列表的纯文档 PR 记录产品测试 `not_applicable`、由 CI 兜底；其余 PR 实际执行完整单元、服务安全自检和完整浏览器。豁免边界见下文「阶段口径」及 [selection-strategy.md](selection-strategy.md)。CLI 的 `review` 阶段只用于补测或报告交接；已有快速检查证据不替代门禁要求的实际执行。CI 保留自动触发，由审查 Agent 跟进失败修复。
 
@@ -52,7 +52,10 @@ python3 verify.py report --latest           # 读最近一次记录，不启动�
 # issue 实现：选择直接相关的快速单元；以下用语言逻辑模块举例
 python3 verify.py run unit-related tests/test_i18n.py --phase development --timeout 60
 
-# issue 实现：全仓只读 Lint 与格式校验（两步均执行，任一失败返回 1；写入式修复限改动文件）
+# 开发阶段先核对「本次将执行」。若列出产品测试，记录待验范围并移交 PR review。
+python3 verify.py plan --group lint --phase development
+
+# 仅当上述计划只列出 lint 时执行全仓只读的 Lint 与格式校验。
 python3 verify.py run --group lint --phase development
 
 # 看当前改动建议跑什么、为什么（不启动测试）

@@ -17,7 +17,7 @@ Closes #
 <!-- 完成适用的快速检查即可开 PR；纯协作文档、README 与本模板改动的单元测试标记「不适用」。类型检查仍未配置；超时、锁等待、环境阻塞与未执行项都如实填写，不能记作通过。 -->
 
 - 快速相关单元测试：<!-- 命令、范围与结果；优先点名用例 / 类，单次反馈目标 60 秒。慢项与选测全量回退移交 PR review。 -->
-- Lint：<!-- 锁定版本 Ruff（ruff==0.17.5）；日常运行 `python3 verify.py run --group lint --phase development`（全仓只读，复现命令 `python3 verify.py _lint-runner` 依次执行 `ruff check .` 和 `ruff format --check .`，两步均执行、任一失败返回 `1`）；写入式 `--fix` 限于本次改动文件。记录 run ID 与结果。 -->
+- Lint：<!-- 锁定版本 Ruff（ruff==0.17.5）；先用 `python3 verify.py plan --group lint --phase development` 核对「本次将执行」。效率守卫加入产品测试时，记录待验范围并移交 PR review。仅列出 `lint` 时运行 `python3 verify.py run --group lint --phase development`（全仓只读，复现命令 `python3 verify.py _lint-runner` 依次执行 `ruff check .` 和 `ruff format --check .`，两步均执行、任一失败返回 `1`）；写入式 `--fix` 限于本次改动文件。记录 run ID 与结果。 -->
 - 格式检查：<!-- 同上 `python3 verify.py run --group lint --phase development` 中的 `ruff format --check .` 结果；日常写入式 `ruff format` 限于本次改动文件。 -->
 - 空白检查：<!-- `git diff --check`（单列为空白检查，不等同于 Lint 或格式化）。 -->
 - [ ] 改了 skill：已运行 `python3 ae.py install`
