@@ -50,4 +50,4 @@
 
 整线审查后的修复 tip `d1c3f71` 为 run `20261105T161108Z-a0b68a`：169/169、约 16.2 秒、稳定干净输入。新增公开回归覆盖：已推翻假设不能增加新决策依赖且拒绝不部分写入；本轮五种已存回答可沿原轮次编辑；待复核旧线可重确认原选项；五类条目去重、历史与已确认批注更新只读；实际中英本地化按钮不残留占位符。原有三处浏览器提交文案断言也同步更新，浏览器场景实际执行结论仍由 PR 门禁给出。
 
-Lint、格式化和类型检查未配置；`git diff --check` 只用于空白检查。PR review 需执行项目规定的完整门禁并跟进最新提交 CI，满足合并门禁后由 PR 自动关闭父子 issues。分析不做导出/导入，完整记录须保留审阅目录。
+Lint 与格式化已接入锁定版本的 Ruff（`ruff==0.17.5`，配置见 `pyproject.toml`）：先用 `python3 verify.py plan --group lint --phase development` 核对「本次将执行」。效率守卫加入产品测试时，将扩大的检查移交 PR review。仅列出 `lint` 时运行 `python3 verify.py run --group lint --phase development`（按全仓只读范围验证并记录结果；复现命令为 `python3 verify.py _lint-runner`，依次执行 `ruff check .` 和 `ruff format --check .`，两步都会执行，任一项失败时返回 `1`；日常写入式格式化和 `--fix` 限于本次改动文件）。`git diff --check` 单列为空白检查；运行时使用 Python 标准库，类型检查仍未配置。PR review 需执行项目规定的完整门禁并跟进最新提交 CI（查看 Linux Python 3.12 产品测试与独立的 `Lint 静态检查` 两项结果），满足合并门禁后由 PR 自动关闭父子 issues。分析不做导出/导入，完整记录须保留审阅目录。
