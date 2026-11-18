@@ -4,6 +4,7 @@
 serve.py 进程；CLI 子进程级绝不带 --stop-orphans，只测 --dry-run、不带参数的计划输出与
 --forget-stale（不碰进程）。家目录、各 Agent 技能目录、审阅台账（AE_HOME）全部指向临时目录。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -31,6 +32,7 @@ import host_isolation  # noqa: E402
 host_isolation.require_for_module(__name__)
 
 import ae  # noqa: E402
+
 try:
     from test_ae_checks_runtime import ServeProcess, make_review_dir, write_ledger  # noqa: E402
 except ModuleNotFoundError:
@@ -88,8 +90,7 @@ class PlanFromResultsTests(unittest.TestCase):
             self.result("git-hooks", WARN, ae.CATEGORY_DEV),
         ]
         plan = ae.plan_from_results(results)
-        self.assertEqual([item.kind for item in plan],
-                         ["fix-links", "git-hooks", "forget-stale", "stop-orphans"])
+        self.assertEqual([item.kind for item in plan], ["fix-links", "git-hooks", "forget-stale", "stop-orphans"])
         flags = {item.kind: item.flag for item in plan}
         self.assertEqual(flags["forget-stale"], "--forget-stale")
         self.assertEqual(flags["stop-orphans"], "--stop-orphans")
@@ -126,9 +127,15 @@ class ExecutePlanTests(unittest.TestCase):
         self.repo = make_repo(self.root / "repo")
         self.copy = self.skills / "annotation-everything"
         self._saved = {key: os.environ.get(key) for key in self.KEYS}
-        os.environ.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
-                           "CLAUDE_SKILLS_DIR": str(self.skills),
-                           "CODEX_HOME": str(self.home / ".codex"), "AE_HOME": str(self.ledger_home)})
+        os.environ.update(
+            {
+                "HOME": str(self.home),
+                "USERPROFILE": str(self.home),
+                "CLAUDE_SKILLS_DIR": str(self.skills),
+                "CODEX_HOME": str(self.home / ".codex"),
+                "AE_HOME": str(self.ledger_home),
+            }
+        )
 
     def tearDown(self):
         for key, value in self._saved.items():
@@ -153,8 +160,7 @@ class ExecutePlanTests(unittest.TestCase):
         link = ae.link_path(agent)
         link.parent.mkdir(parents=True, exist_ok=True)
         try:
-            os.symlink(str(target if target is not None else self.copy.resolve()), str(link),
-                       target_is_directory=True)
+            os.symlink(str(target if target is not None else self.copy.resolve()), str(link), target_is_directory=True)
         except OSError as exc:
             if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
                 self.skipTest("当前 Windows 账户无符号链接权限")
@@ -169,23 +175,24 @@ class ExecutePlanTests(unittest.TestCase):
         (self.copy / "手工改动.txt").write_text("多余文件", encoding="utf-8")
         (self.copy / "SKILL.md").write_text("手工覆盖", encoding="utf-8")
         (self.repo / "skill" / "annotation-everything" / "scripts" / "serve.py").write_text(
-            'VERSION = "9.9.10"\n', encoding="utf-8")           # 仓库升级
-        lines, acted = ae.execute_plan(
-            [ae.PlanItem("resync-copy", "不一致", "重新同步技能副本")], self.ctx(record))
+            'VERSION = "9.9.10"\n', encoding="utf-8"
+        )  # 仓库升级
+        lines, acted = ae.execute_plan([ae.PlanItem("resync-copy", "不一致", "重新同步技能副本")], self.ctx(record))
         self.assertTrue(acted)
         src = self.repo / "skill" / "annotation-everything"
         self.assertEqual(ae._digests(src), ae._digests(self.copy), "副本与来源仓库重新一致")
         new_record = ae.read_record(self.copy)
         self.assertEqual(new_record["version"], "9.9.10")
-        self.assertEqual([e["path"] for e in new_record["links"]], [entry["path"]],
-                         "重装保留安装记录里仍有效的链接")
+        self.assertEqual([e["path"] for e in new_record["links"]], [entry["path"]], "重装保留安装记录里仍有效的链接")
 
     def test_resync_recreates_copy_and_self_heals_dangling_links(self):
         entry = self.make_link("codex")
         record = self.install_state([entry])
-        shutil.rmtree(self.copy)                                  # 副本与安装记录一起消失，链接悬空
-        plan = [ae.PlanItem("resync-copy", "副本缺失", "重新同步技能副本"),
-                ae.PlanItem("fix-links", "链接悬空", "修复链接")]
+        shutil.rmtree(self.copy)  # 副本与安装记录一起消失，链接悬空
+        plan = [
+            ae.PlanItem("resync-copy", "副本缺失", "重新同步技能副本"),
+            ae.PlanItem("fix-links", "链接悬空", "修复链接"),
+        ]
         lines, acted = ae.execute_plan(plan, self.ctx(record))
         self.assertTrue(acted)
         self.assertTrue((self.copy / "SKILL.md").is_file())
@@ -196,8 +203,7 @@ class ExecutePlanTests(unittest.TestCase):
     def test_resync_reports_when_source_repo_missing(self):
         record = self.install_state()
         ctx = self.ctx(record, repo=self.root / "not-a-repo")
-        lines, acted = ae.execute_plan(
-            [ae.PlanItem("resync-copy", "副本缺失", "重新同步技能副本")], ctx)
+        lines, acted = ae.execute_plan([ae.PlanItem("resync-copy", "副本缺失", "重新同步技能副本")], ctx)
         self.assertTrue(acted)
         self.assertTrue(any("未重新同步" in line for line in lines), lines)
 
@@ -206,9 +212,9 @@ class ExecutePlanTests(unittest.TestCase):
     def test_fix_links_recreates_broken_links_but_not_occupied(self):
         elsewhere = self.root / "elsewhere"
         elsewhere.mkdir()
-        codex = self.make_link("codex", target=elsewhere)          # 指向别处
-        agents = {"agent": "agents", "path": str(ae.link_path("agents"))}   # 已删除
-        zcode = {"agent": "zcode", "path": str(ae.link_path("zcode"))}      # 位置被非链接占用
+        codex = self.make_link("codex", target=elsewhere)  # 指向别处
+        agents = {"agent": "agents", "path": str(ae.link_path("agents"))}  # 已删除
+        zcode = {"agent": "zcode", "path": str(ae.link_path("zcode"))}  # 位置被非链接占用
         zcode_dir = Path(zcode["path"])
         zcode_dir.parent.mkdir(parents=True)
         zcode_dir.mkdir()
@@ -216,21 +222,20 @@ class ExecutePlanTests(unittest.TestCase):
         record = self.install_state([codex, agents, zcode])
         record_before = (self.copy / ae.RECORD_NAME).read_bytes()
         lines, acted = ae.execute_plan(
-            [ae.PlanItem("fix-links", "链接异常", "修复指向技能副本的链接")], self.ctx(record))
+            [ae.PlanItem("fix-links", "链接异常", "修复指向技能副本的链接")], self.ctx(record)
+        )
         self.assertTrue(acted)
         copy_real = str(self.copy.resolve())
         self.assertEqual(os.path.realpath(codex["path"]), copy_real, "指向别处的链接重建为指向技能副本")
         self.assertEqual(os.path.realpath(agents["path"]), copy_real, "已删除的链接原位重建")
         self.assertTrue((zcode_dir / "keep.txt").is_file(), "被非链接内容占用的位置不动手")
         self.assertTrue(any("zcode" in line and "无法修复" in line for line in lines), lines)
-        self.assertEqual((self.copy / ae.RECORD_NAME).read_bytes(), record_before,
-                         "未重装时不改写安装记录")
+        self.assertEqual((self.copy / ae.RECORD_NAME).read_bytes(), record_before, "未重装时不改写安装记录")
 
     # ── 安全项：启用 git 钩子 ──────────────────────────────────
 
     def git_repo(self) -> Path:
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True,
-                       capture_output=True, timeout=30)
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True, capture_output=True, timeout=30)
         hooks = self.repo / "tools" / "git-hooks"
         hooks.mkdir(parents=True)
         (hooks / "pre-commit").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -240,17 +245,15 @@ class ExecutePlanTests(unittest.TestCase):
     def test_git_hooks_enabled_by_running_setup_script(self):
         self.git_repo()
         ctx = self.ctx()
-        self.assertEqual(ae.check_git_hooks(ctx).level, WARN)      # 前置：未启用
-        lines, acted = ae.execute_plan(
-            [ae.PlanItem("git-hooks", "未启用", "启用 git 钩子")], ctx)
+        self.assertEqual(ae.check_git_hooks(ctx).level, WARN)  # 前置：未启用
+        lines, acted = ae.execute_plan([ae.PlanItem("git-hooks", "未启用", "启用 git 钩子")], ctx)
         self.assertTrue(acted)
         self.assertEqual(ae.check_git_hooks(ctx).level, PASS)
 
     def test_git_hooks_reports_missing_setup_script(self):
         self.git_repo()
         (self.repo / "tools" / "setup-dev.sh").unlink()
-        lines, acted = ae.execute_plan(
-            [ae.PlanItem("git-hooks", "未启用", "启用 git 钩子")], self.ctx())
+        lines, acted = ae.execute_plan([ae.PlanItem("git-hooks", "未启用", "启用 git 钩子")], self.ctx())
         self.assertTrue(acted)
         self.assertTrue(any("未启用" in line for line in lines), lines)
         self.assertEqual(ae.check_git_hooks(self.ctx()).level, WARN)
@@ -266,8 +269,10 @@ class ExecutePlanTests(unittest.TestCase):
             seen.append(cmd)
             return real_run(cmd, *args, **kwargs)
 
-        with mock.patch.object(ae, "_is_windows", return_value=True), \
-                mock.patch.object(ae.subprocess, "run", side_effect=spy_run):
+        with (
+            mock.patch.object(ae, "_is_windows", return_value=True),
+            mock.patch.object(ae.subprocess, "run", side_effect=spy_run),
+        ):
             lines = ae._enable_git_hooks(self.repo)
         self.assertTrue(any("core.hooksPath" in line for line in lines), lines)
         self.assertTrue(any(cmd[:1] == ["git"] and "core.hooksPath" in cmd for cmd in seen), seen)
@@ -280,13 +285,19 @@ class ExecutePlanTests(unittest.TestCase):
         edge = self.root / "ProgramFiles" / "Microsoft" / "Edge" / "Application" / "msedge.exe"
         edge.parent.mkdir(parents=True)
         edge.write_bytes(b"")
-        with mock.patch.object(ae, "_is_windows", return_value=True), \
-                mock.patch.object(ae.shutil, "which", return_value=None), \
-                mock.patch.dict(os.environ, {
+        with (
+            mock.patch.object(ae, "_is_windows", return_value=True),
+            mock.patch.object(ae.shutil, "which", return_value=None),
+            mock.patch.dict(
+                os.environ,
+                {
                     "ProgramFiles": str(self.root / "ProgramFiles"),
                     "ProgramFiles(x86)": str(self.root / "ProgramFilesX86"),
                     "LocalAppData": str(self.root / "LocalAppData"),
-                }, clear=False):
+                },
+                clear=False,
+            ),
+        ):
             found = ae.find_chrome()
         self.assertEqual(found, str(edge))
 
@@ -294,9 +305,13 @@ class ExecutePlanTests(unittest.TestCase):
 
     def stale_ledger(self) -> Path:
         valid_dir = make_review_dir(self.root, RID_VALID)
-        write_ledger(self.ledger_home, {
-            RID_STALE: {"dir": str(self.root / "gone"), "port": 8800},
-            RID_VALID: {"dir": str(valid_dir), "port": 8801}})
+        write_ledger(
+            self.ledger_home,
+            {
+                RID_STALE: {"dir": str(self.root / "gone"), "port": 8800},
+                RID_VALID: {"dir": str(valid_dir), "port": 8801},
+            },
+        )
         return valid_dir
 
     def test_forget_stale_without_flag_changes_nothing(self):
@@ -310,8 +325,7 @@ class ExecutePlanTests(unittest.TestCase):
     def test_forget_stale_with_flag_removes_stale_and_frees_port(self):
         self.stale_ledger()
         plan = [ae.PlanItem("forget-stale", "有失效记录", "删除失效记录", "--forget-stale")]
-        lines, acted = ae.execute_plan(plan, self.ctx(ledger_home=self.ledger_home),
-                                       forget_stale=True)
+        lines, acted = ae.execute_plan(plan, self.ctx(ledger_home=self.ledger_home), forget_stale=True)
         self.assertTrue(acted)
         mod = ae.skill_ledger_module()
         entries = mod.entries()
@@ -325,11 +339,10 @@ class ExecutePlanTests(unittest.TestCase):
 
     def orphan_state(self):
         review_dir = make_review_dir(self.root, RID_SERVER)
-        server = ServeProcess(review_dir, self.ledger_home)       # 启动时登记进临时台账
+        server = ServeProcess(review_dir, self.ledger_home)  # 启动时登记进临时台账
         self.addCleanup(server.stop)
-        write_ledger(self.ledger_home, {})                        # 模拟已 forget：进程成残留服务
-        ctx = self.ctx(ledger_home=self.ledger_home,
-                       process_lister=lambda: [(server.proc.pid, server.cmdline)])
+        write_ledger(self.ledger_home, {})  # 模拟已 forget：进程成残留服务
+        ctx = self.ctx(ledger_home=self.ledger_home, process_lister=lambda: [(server.proc.pid, server.cmdline)])
         return server, ctx
 
     def test_stop_orphans_without_flag_leaves_process_running(self):
@@ -364,10 +377,15 @@ class RepairCliTests(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
-        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
-                    "CLAUDE_SKILLS_DIR": str(self.skills),
-                    "CODEX_HOME": str(self.home / ".codex"), "AE_HOME": str(self.root / "ledger"),
-                    "PYTHONDONTWRITEBYTECODE": "1"}
+        self.env = {
+            **os.environ,
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "CLAUDE_SKILLS_DIR": str(self.skills),
+            "CODEX_HOME": str(self.home / ".codex"),
+            "AE_HOME": str(self.root / "ledger"),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
         self.can_symlink = self._probe_symlink()
 
     def _probe_symlink(self) -> bool:
@@ -383,8 +401,9 @@ class RepairCliTests(unittest.TestCase):
         return True
 
     def run_ae(self, *args, cwd=None):
-        return subprocess.run([sys.executable, str(AE), *args],
-                              cwd=cwd, env=self.env, capture_output=True, text=True, timeout=180)
+        return subprocess.run(
+            [sys.executable, str(AE), *args], cwd=cwd, env=self.env, capture_output=True, text=True, timeout=180
+        )
 
     @property
     def copy_dir(self) -> Path:
@@ -425,7 +444,7 @@ class RepairCliTests(unittest.TestCase):
         before = snapshot_all(self.copy_dir)
         link_before = os.readlink(self.codex_link) if self.can_symlink else None
         p = self.run_ae("repair", "--dry-run")
-        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)   # 安装状态的失败项是确定性的
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)  # 安装状态的失败项是确定性的
         self.assertIn("修复计划", p.stdout)
         self.assertIn("重新同步", p.stdout)
         self.assertNotIn("执行修复", p.stdout, "--dry-run 只打印计划")
@@ -441,7 +460,7 @@ class RepairCliTests(unittest.TestCase):
     def test_repair_resyncs_copy_and_fixes_links(self):
         self.break_install_state()
         p = self.run_ae("repair")
-        self.assertIn(p.returncode, (0, 1))          # 运行状态取决于本机真实进程
+        self.assertIn(p.returncode, (0, 1))  # 运行状态取决于本机真实进程
         self.assertIn("修复计划", p.stdout)
         self.assertIn("执行修复", p.stdout)
         self.assertIn("修复后体检", p.stdout)
@@ -473,9 +492,13 @@ class RepairCliTests(unittest.TestCase):
 
     def write_stale_ledger(self):
         valid_dir = make_review_dir(self.root, RID_VALID)
-        write_ledger(self.root / "ledger", {
-            RID_STALE: {"dir": str(self.root / "gone"), "port": 8800},
-            RID_VALID: {"dir": str(valid_dir), "port": 8801}})
+        write_ledger(
+            self.root / "ledger",
+            {
+                RID_STALE: {"dir": str(self.root / "gone"), "port": 8800},
+                RID_VALID: {"dir": str(valid_dir), "port": 8801},
+            },
+        )
 
     def test_forget_stale_flag_removes_stale_entries(self):
         self.write_stale_ledger()
@@ -483,8 +506,7 @@ class RepairCliTests(unittest.TestCase):
         p = self.run_ae("repair", "--forget-stale")
         self.assertIn(p.returncode, (0, 1))
         self.assertIn(RID_STALE[:8], p.stdout)
-        entries = json.loads((self.root / "ledger" / "reviews.json").read_text(
-            encoding="utf-8"))["reviews"]
+        entries = json.loads((self.root / "ledger" / "reviews.json").read_text(encoding="utf-8"))["reviews"]
         self.assertNotIn(RID_STALE, entries)
         self.assertIn(RID_VALID, entries)
         self.assertEqual(self.doctor_levels()["ledger-stale"], "通过")
@@ -495,8 +517,7 @@ class RepairCliTests(unittest.TestCase):
         p = self.run_ae("repair")
         self.assertIn(p.returncode, (0, 1))
         self.assertIn("--forget-stale", p.stdout, "计划应提示所需参数")
-        entries = json.loads((self.root / "ledger" / "reviews.json").read_text(
-            encoding="utf-8"))["reviews"]
+        entries = json.loads((self.root / "ledger" / "reviews.json").read_text(encoding="utf-8"))["reviews"]
         self.assertIn(RID_STALE, entries, "不带参数不删除台账记录")
 
 

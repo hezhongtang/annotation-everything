@@ -5,6 +5,7 @@ fixture 由 fixtures/pptx/make_pptx.py 现场合成；渲染与字体工具输�
 真实工具链的集成验证按 Testing Decision 6 留待 PR review 与 #153。
 只用标准库：python3 -m unittest tests.test_pptx_report
 """
+
 from __future__ import annotations
 
 import io
@@ -26,7 +27,7 @@ _test_user = tempfile.mkdtemp(prefix="ae-test-user-")
 os.environ.setdefault("HOME", _test_user)
 os.environ.setdefault("USERPROFILE", _test_user)
 
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
 
 import build_viewer  # noqa: E402
 from fake_tools import write_python_tool
@@ -35,9 +36,11 @@ import make_pptx as mp  # noqa: E402
 import pptx_reader as pr  # noqa: E402
 import pptx_report as pp  # noqa: E402
 
-PNG_1PX = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-           b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
-           b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+PNG_1PX = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+    b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 def tmp() -> Path:
@@ -50,9 +53,23 @@ class ControlledRenderMixin:
     def controlled(self, slides: int = 2, fonts: dict | None = None) -> mock._patch:
         images = [PNG_1PX] * slides
         renderer = mock.patch.object(pp, "render_slides", lambda pptx, workdir: images)
-        evidence = mock.patch.object(pp, "font_evidence", lambda pptx, pdf: fonts or {
-            "declared": [], "missing": [], "unresolved": [], "fallbacks": [],
-            "installed": "ok", "pdf": None, "review": False, "warning": False})
+        evidence = mock.patch.object(
+            pp,
+            "font_evidence",
+            lambda pptx, pdf: (
+                fonts
+                or {
+                    "declared": [],
+                    "missing": [],
+                    "unresolved": [],
+                    "fallbacks": [],
+                    "installed": "ok",
+                    "pdf": None,
+                    "review": False,
+                    "warning": False,
+                }
+            ),
+        )
         renderer.start()
         evidence.start()
         self.addCleanup(renderer.stop)
@@ -71,11 +88,15 @@ class PartsTests(ControlledRenderMixin, unittest.TestCase):
         result = pp.parts(mp.build_sample(self.root / "sample.pptx"))
 
         self.assertEqual(result["title"], "合成标题")
-        self.assertEqual([(s["n"], s["key"]) for s in result["pages"]], [(1, "s260"), (2, "s257")],
-                         "页面顺序跟随演示文稿的 sldIdLst，页面键用持久幻灯片标识")
+        self.assertEqual(
+            [(s["n"], s["key"]) for s in result["pages"]],
+            [(1, "s260"), (2, "s257")],
+            "页面顺序跟随演示文稿的 sldIdLst，页面键用持久幻灯片标识",
+        )
         first = result["pages"][0]
-        self.assertEqual((first["w"], first["h"], first["orient"]), (1280.0, 720.0, "landscape"),
-                         "EMU 画布按 96dpi 折算成舞台像素")
+        self.assertEqual(
+            (first["w"], first["h"], first["orient"]), (1280.0, 720.0, "landscape"), "EMU 画布按 96dpi 折算成舞台像素"
+        )
         self.assertTrue(first["stable"])
         for s in result["pages"]:
             self.assertIn('class="page pptx-page"', s["html"])
@@ -84,8 +105,10 @@ class PartsTests(ControlledRenderMixin, unittest.TestCase):
     def test_portrait_canvas_keeps_original_orientation(self):
         self.controlled(slides=2)
         result = pp.parts(mp.build_sample(self.root / "portrait.pptx", portrait=True))
-        self.assertEqual((result["pages"][0]["w"], result["pages"][0]["h"], result["pages"][0]["orient"]),
-                         (720.0, 1280.0, "portrait"))
+        self.assertEqual(
+            (result["pages"][0]["w"], result["pages"][0]["h"], result["pages"][0]["orient"]),
+            (720.0, 1280.0, "portrait"),
+        )
 
     def test_meta_records_identity_renderer_and_unverified_items(self):
         self.controlled(slides=2)
@@ -136,8 +159,9 @@ class BuildIntegrationTests(ControlledRenderMixin, unittest.TestCase):
         o, e = io.StringIO(), io.StringIO()
         with redirect_stdout(o), redirect_stderr(e):
             try:
-                code = build_viewer.main(["--report", str(report), "--out", str(out),
-                                          "--no-scan-skills", "--locale", "zh-CN", *args])
+                code = build_viewer.main(
+                    ["--report", str(report), "--out", str(out), "--no-scan-skills", "--locale", "zh-CN", *args]
+                )
             except SystemExit as exc:
                 code = exc.code if isinstance(exc.code, int) else 1
                 e.write(str(exc.code))
@@ -159,10 +183,10 @@ class BuildIntegrationTests(ControlledRenderMixin, unittest.TestCase):
         self.assertEqual(code, 0, stderr)
         m = json.loads((out / "review.json").read_text(encoding="utf-8"))
         self.assertEqual(m["format"], {"report": "pptx", "version": pp.FORMAT_VERSION})
-        self.assertEqual([(p["n"], p["key"], p["orient"]) for p in m["pages"]],
-                         [(1, "s260", "landscape"), (2, "s257", "landscape")])
-        self.assertEqual(m["pptx"]["fingerprint"],
-                         pr.read(self.root / "deck.pptx")["fingerprint"])
+        self.assertEqual(
+            [(p["n"], p["key"], p["orient"]) for p in m["pages"]], [(1, "s260", "landscape"), (2, "s257", "landscape")]
+        )
+        self.assertEqual(m["pptx"]["fingerprint"], pr.read(self.root / "deck.pptx")["fingerprint"])
         self.assertIn("visual", m["pptx"]["unverified"])
         page = (out / "index.html").read_text(encoding="utf-8")
         self.assertIn('class=\\"page pptx-page\\"', page)
@@ -184,8 +208,10 @@ class BuildIntegrationTests(ControlledRenderMixin, unittest.TestCase):
         self.assertNotIn("format", m, "HTML 审阅保持没有 format 字段")
 
     def test_missing_renderer_is_an_executable_failure(self):
-        with mock.patch.object(pp, "find_soffice", lambda: None), \
-                mock.patch.object(pp, "font_evidence", lambda p, d: None):
+        with (
+            mock.patch.object(pp, "find_soffice", lambda: None),
+            mock.patch.object(pp, "font_evidence", lambda p, d: None),
+        ):
             code, _o, stderr = self.build(mp.build_sample(self.root / "deck.pptx"), self.root / "rv")
         self.assertNotEqual(code, 0)
         self.assertIn("LibreOffice", stderr, "工具缺失给出安装指引")
@@ -206,8 +232,17 @@ class CompatibilityTests(ControlledRenderMixin, unittest.TestCase):
         o, e = io.StringIO(), io.StringIO()
         with redirect_stdout(o), redirect_stderr(e):
             try:
-                code = build_viewer.main(["--report", str(mp.build_sample(self.root / "deck.pptx")),
-                                          "--out", str(out), "--no-scan-skills", "--locale", "zh-CN"])
+                code = build_viewer.main(
+                    [
+                        "--report",
+                        str(mp.build_sample(self.root / "deck.pptx")),
+                        "--out",
+                        str(out),
+                        "--no-scan-skills",
+                        "--locale",
+                        "zh-CN",
+                    ]
+                )
             except SystemExit as exc:
                 code = exc.code if isinstance(exc.code, int) else 1
         assert code == 0, e.getvalue()
@@ -235,6 +270,7 @@ class CompatibilityTests(ControlledRenderMixin, unittest.TestCase):
 
     def test_service_declares_pptx_feature(self):
         import serve
+
         self.assertIn("pptx", serve.FEATURES)
 
     def test_pptx_warning_list_separator_follows_locale(self):
@@ -255,6 +291,7 @@ class CompatibilityTests(ControlledRenderMixin, unittest.TestCase):
 
     def test_report_check_refuses_pptx_explicitly(self):
         import report_check
+
         with self.assertRaises(report_check.UsageError) as caught:
             report_check.check_report(mp.build_sample(self.root / "deck.pptx"), locale="zh-CN")
         self.assertIn("演示文稿", str(caught.exception))
@@ -283,15 +320,18 @@ class RenderPipelineTests(unittest.TestCase):
     def isolated(self):
         """PATH 只保留伪造 bin 与系统 defpath；屏蔽各平台 LibreOffice / Poppler 默认候选位置。"""
         empty = str(self.root / "no-such-install")
-        patcher = mock.patch.dict(os.environ, {
-            "PATH": str(self.bin) + os.pathsep + os.defpath,
-            "ProgramFiles": empty,
-            "ProgramFiles(x86)": empty,
-            "ProgramW6432": empty,
-            "LOCALAPPDATA": empty,
-            "USERPROFILE": empty,
-            "ProgramData": empty,
-        })
+        patcher = mock.patch.dict(
+            os.environ,
+            {
+                "PATH": str(self.bin) + os.pathsep + os.defpath,
+                "ProgramFiles": empty,
+                "ProgramFiles(x86)": empty,
+                "ProgramW6432": empty,
+                "LOCALAPPDATA": empty,
+                "USERPROFILE": empty,
+                "ProgramData": empty,
+            },
+        )
         candidates = mock.patch.object(pp, "SOFFICE_CANDIDATES", ())
         patcher.start()
         candidates.start()
@@ -301,17 +341,23 @@ class RenderPipelineTests(unittest.TestCase):
     def fake_soffice(self):
         """伪造 soffice：按 --outdir 参数把合成 PDF 复制到输出目录。"""
         pdf = self.fake_pdf()
-        self.tool("soffice", (
-            "import shutil, sys\n"
-            "from pathlib import Path\n"
-            "outdir = Path(sys.argv[sys.argv.index('--outdir') + 1])\n"
-            "stem = Path(sys.argv[-1]).stem\n"
-            f"shutil.copyfile({str(pdf)!r}, outdir / (stem + '.pdf'))\n"
-        ))
+        self.tool(
+            "soffice",
+            (
+                "import shutil, sys\n"
+                "from pathlib import Path\n"
+                "outdir = Path(sys.argv[sys.argv.index('--outdir') + 1])\n"
+                "stem = Path(sys.argv[-1]).stem\n"
+                f"shutil.copyfile({str(pdf)!r}, outdir / (stem + '.pdf'))\n"
+            ),
+        )
 
     def fake_pdf(self, pages: int = 2) -> Path:
-        objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-                   b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 960 540] >>"]
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 960 540] >>",
+        ]
         raw = bytearray(b"%PDF-1.4\n")
         for number, obj in enumerate(objects, 1):
             raw.extend(f"{number} 0 obj\n".encode() + obj + b"\nendobj\n")
@@ -338,7 +384,7 @@ class RenderPipelineTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "convertFailed")
         self.assertIn("boom", caught.exception.detail)
 
-        self.tool("soffice", "import sys\nsys.exit(0)")   # 成功但不产出 PDF：同样按转换失败报
+        self.tool("soffice", "import sys\nsys.exit(0)")  # 成功但不产出 PDF：同样按转换失败报
         with self.assertRaises(pp.PptxReportError) as caught:
             pp.render_slides(self.pptx, self.workdir)
         self.assertEqual(caught.exception.code, "convertFailed")
@@ -369,13 +415,16 @@ class RenderPipelineTests(unittest.TestCase):
     def test_pipeline_returns_rasterized_pages_in_order(self):
         self.isolated()
         self.fake_soffice()
-        self.tool("pdftoppm", (
-            "import sys\n"
-            "from pathlib import Path\n"
-            "prefix = Path(sys.argv[-1])\n"
-            "for n in (1, 2):\n"
-            "    Path(f'{prefix}-{n}.png').write_bytes(b'PDFPAGE')\n"
-        ))
+        self.tool(
+            "pdftoppm",
+            (
+                "import sys\n"
+                "from pathlib import Path\n"
+                "prefix = Path(sys.argv[-1])\n"
+                "for n in (1, 2):\n"
+                "    Path(f'{prefix}-{n}.png').write_bytes(b'PDFPAGE')\n"
+            ),
+        )
         images = pp.render_slides(self.pptx, self.workdir)
         self.assertEqual(images, [b"PDFPAGE", b"PDFPAGE"])
 
@@ -400,9 +449,11 @@ class RenderPipelineTests(unittest.TestCase):
             "USERPROFILE": str(self.root / "Users" / "张伟 办公"),
             "ProgramData": str(self.root / "no-pd"),
         }
-        with mock.patch.dict(os.environ, env), \
-                mock.patch.object(pp, "SOFFICE_CANDIDATES", ()), \
-                mock.patch.object(pp.fsutil, "is_windows", return_value=True):
+        with (
+            mock.patch.dict(os.environ, env),
+            mock.patch.object(pp, "SOFFICE_CANDIDATES", ()),
+            mock.patch.object(pp.fsutil, "is_windows", return_value=True),
+        ):
             self.assertEqual(pp.find_soffice(), str(soffice_com))
             self.assertEqual(pp.find_rasterizer(), str(pdftoppm_exe))
 
@@ -414,9 +465,11 @@ class RenderPipelineTests(unittest.TestCase):
         local_ppm.parent.mkdir(parents=True)
         local_ppm.write_bytes(b"ppm")
         env["ProgramFiles"] = str(self.root / "missing-pf")
-        with mock.patch.dict(os.environ, env), \
-                mock.patch.object(pp, "SOFFICE_CANDIDATES", ()), \
-                mock.patch.object(pp.fsutil, "is_windows", return_value=True):
+        with (
+            mock.patch.dict(os.environ, env),
+            mock.patch.object(pp, "SOFFICE_CANDIDATES", ()),
+            mock.patch.object(pp.fsutil, "is_windows", return_value=True),
+        ):
             self.assertEqual(pp.find_soffice(), str(local_soffice))
             self.assertEqual(pp.find_rasterizer(), str(local_ppm))
 
@@ -428,29 +481,32 @@ class RenderPipelineTests(unittest.TestCase):
         cjk_work = cjk_dir / "渲染 输出"
         cjk_work.mkdir()
         self.fake_soffice()
-        self.tool("pdftoppm", (
-            "import sys\n"
-            "from pathlib import Path\n"
-            "prefix = Path(sys.argv[-1])\n"
-            "for n in (1, 2):\n"
-            "    Path(f'{prefix}-{n}.png').write_bytes(b'CJKPAGE')\n"
-        ))
+        self.tool(
+            "pdftoppm",
+            (
+                "import sys\n"
+                "from pathlib import Path\n"
+                "prefix = Path(sys.argv[-1])\n"
+                "for n in (1, 2):\n"
+                "    Path(f'{prefix}-{n}.png').write_bytes(b'CJKPAGE')\n"
+            ),
+        )
         self.assertEqual(pp.render_slides(cjk_pptx, cjk_work), [b"CJKPAGE", b"CJKPAGE"])
 
-        self.tool("soffice", (
-            "import sys\n"
-            "sys.stderr.buffer.write('中文错误：路径含空格\\n'.encode('utf-8'))\n"
-            "sys.exit(1)\n"
-        ))
+        self.tool(
+            "soffice", ("import sys\nsys.stderr.buffer.write('中文错误：路径含空格\\n'.encode('utf-8'))\nsys.exit(1)\n")
+        )
         with self.assertRaises(pp.PptxReportError) as caught:
             pp.render_slides(cjk_pptx, cjk_work)
         self.assertEqual(caught.exception.code, "convertFailed")
         self.assertIn("中文错误：路径含空格", caught.exception.detail)
 
     def test_page_count_mismatch_stops_the_build(self):
-        images = [PNG_1PX]   # 只有 1 张渲染图，源里有 2 张幻灯片
-        with mock.patch.object(pp, "render_slides", lambda p, w: images), \
-                mock.patch.object(pp, "font_evidence", lambda p, d: None):
+        images = [PNG_1PX]  # 只有 1 张渲染图，源里有 2 张幻灯片
+        with (
+            mock.patch.object(pp, "render_slides", lambda p, w: images),
+            mock.patch.object(pp, "font_evidence", lambda p, d: None),
+        ):
             with self.assertRaises(pp.PptxReportError) as caught:
                 pp.parts(self.pptx)
         self.assertEqual(caught.exception.code, "pageCount")
@@ -481,28 +537,27 @@ class FontEvidenceTests(unittest.TestCase):
 
     def explicit_font_deck(self, name: str = "explicit.pptx") -> Path:
         """单页 deck：全部 run 显式声明同一字体，unresolved 与主题备选为空。"""
-        run = ('<a:r><a:rPr lang="en-US"><a:latin typeface="Synthetic Sans"/></a:rPr>'
-               '<a:t>explicit text</a:t></a:r>')
+        run = '<a:r><a:rPr lang="en-US"><a:latin typeface="Synthetic Sans"/></a:rPr><a:t>explicit text</a:t></a:r>'
         parts = {
             "[Content_Types].xml": '<?xml version="1.0" encoding="UTF-8"?>\n'
-                f'<Types xmlns="{mp.CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-                '<Default Extension="xml" ContentType="application/xml"/>'
-                '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>'
-                '<Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>',
+            f'<Types xmlns="{mp.CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>'
+            '<Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>',
             "_rels/.rels": '<?xml version="1.0" encoding="UTF-8"?>\n'
-                f'<Relationships xmlns="{mp.PKG_REL}"><Relationship Id="rIdDeck" Type="{mp.R}/officeDocument" Target="ppt/presentation.xml"/></Relationships>',
+            f'<Relationships xmlns="{mp.PKG_REL}"><Relationship Id="rIdDeck" Type="{mp.R}/officeDocument" Target="ppt/presentation.xml"/></Relationships>',
             "ppt/presentation.xml": '<?xml version="1.0" encoding="UTF-8"?>\n'
-                f'<p:presentation xmlns:p="{mp.P}" xmlns:r="{mp.R}"><p:sldIdLst><p:sldId id="257" r:id="rIdFirst"/></p:sldIdLst>'
-                '<p:sldSz cx="12192000" cy="6858000"/></p:presentation>',
+            f'<p:presentation xmlns:p="{mp.P}" xmlns:r="{mp.R}"><p:sldIdLst><p:sldId id="257" r:id="rIdFirst"/></p:sldIdLst>'
+            '<p:sldSz cx="12192000" cy="6858000"/></p:presentation>',
             "ppt/_rels/presentation.xml.rels": '<?xml version="1.0" encoding="UTF-8"?>\n'
-                f'<Relationships xmlns="{mp.PKG_REL}"><Relationship Id="rIdFirst" Type="{mp.R}/slide" Target="slides/slide1.xml"/></Relationships>',
+            f'<Relationships xmlns="{mp.PKG_REL}"><Relationship Id="rIdFirst" Type="{mp.R}/slide" Target="slides/slide1.xml"/></Relationships>',
             "ppt/slides/slide1.xml": '<?xml version="1.0" encoding="UTF-8"?>\n'
-                f'<p:sld xmlns:p="{mp.P}" xmlns:a="{mp.A}" xmlns:r="{mp.R}"><p:cSld><p:spTree>'
-                '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>'
-                '<p:sp><p:nvSpPr><p:cNvPr id="2" name="显式字体页"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
-                '<p:spPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="5486400" cy="914400"/></a:xfrm></p:spPr>'
-                f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p>{run}</a:p></p:txBody></p:sp>'
-                '</p:spTree></p:cSld></p:sld>',
+            f'<p:sld xmlns:p="{mp.P}" xmlns:a="{mp.A}" xmlns:r="{mp.R}"><p:cSld><p:spTree>'
+            '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>'
+            '<p:sp><p:nvSpPr><p:cNvPr id="2" name="显式字体页"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
+            '<p:spPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="5486400" cy="914400"/></a:xfrm></p:spPr>'
+            f"<p:txBody><a:bodyPr/><a:lstStyle/><a:p>{run}</a:p></p:txBody></p:sp>"
+            "</p:spTree></p:cSld></p:sld>",
         }
         return mp.write_package(self.root / name, parts)
 
@@ -524,8 +579,7 @@ class FontEvidenceTests(unittest.TestCase):
         self.tool("fc-list", "import sys\nsys.exit(7)")
         evidence = self.evidence(pdf=None)
         self.assertEqual(evidence["installed"], "failed")
-        self.assertEqual([d["font"] for d in evidence["declared"]], ["Synthetic Sans"],
-                         "枚举失败时声明清单仍然可见")
+        self.assertEqual([d["font"] for d in evidence["declared"]], ["Synthetic Sans"], "枚举失败时声明清单仍然可见")
         self.assertEqual(evidence["missing"], [], "枚举失败不误报缺失：是无法确认，不是缺失")
         self.assertTrue(evidence["warning"])
 
@@ -533,7 +587,8 @@ class FontEvidenceTests(unittest.TestCase):
         parts = mp.sample_parts()
         parts["ppt/slides/slide10.xml"] = parts["ppt/slides/slide10.xml"].replace(
             '<a:rPr b="1"><a:latin typeface="Synthetic Sans"/></a:rPr>',
-            '<a:rPr b="1"><a:latin typeface="+mn-lt"/></a:rPr>')
+            '<a:rPr b="1"><a:latin typeface="+mn-lt"/></a:rPr>',
+        )
         self.pptx = mp.write_package(self.root / "theme.pptx", parts)
         self.tool("fc-list", "print('Synthetic Sans')")
         evidence = self.evidence(pdf=None)
@@ -542,11 +597,14 @@ class FontEvidenceTests(unittest.TestCase):
 
     def test_pdf_evidence_with_unembedded_font_requires_review(self):
         self.tool("fc-list", "print('Synthetic Sans')")
-        self.tool("pdffonts", (
-            "print('name                                 type              encoding         emb sub uni object ID')\n"
-            "print('------------------------------------ ----------------- ---------------- --- --- --- ---------')\n"
-            "print('Synthetic Sans                       TrueType          WinAnsi          no  no  no       5  0')"
-        ))
+        self.tool(
+            "pdffonts",
+            (
+                "print('name                                 type              encoding         emb sub uni object ID')\n"
+                "print('------------------------------------ ----------------- ---------------- --- --- --- ---------')\n"
+                "print('Synthetic Sans                       TrueType          WinAnsi          no  no  no       5  0')"
+            ),
+        )
         evidence = self.evidence()
         self.assertEqual(evidence["pdf"]["rows"][0]["name"], "Synthetic Sans")
         self.assertEqual(evidence["pdf"]["rows"][0]["emb"], "no")
@@ -554,32 +612,40 @@ class FontEvidenceTests(unittest.TestCase):
 
     def test_matching_names_never_mark_visual_verified(self):
         self.tool("fc-list", "print('Synthetic Sans')")
-        self.tool("pdffonts", (
-            "print('name                                 type              encoding         emb sub uni object ID')\n"
-            "print('------------------------------------ ----------------- ---------------- --- --- --- ---------')\n"
-            "print('Synthetic Sans                       TrueType          WinAnsi          yes yes yes      5  0')"
-        ))
+        self.tool(
+            "pdffonts",
+            (
+                "print('name                                 type              encoding         emb sub uni object ID')\n"
+                "print('------------------------------------ ----------------- ---------------- --- --- --- ---------')\n"
+                "print('Synthetic Sans                       TrueType          WinAnsi          yes yes yes      5  0')"
+            ),
+        )
         self.pptx = self.explicit_font_deck()
         evidence = self.evidence()
         self.assertFalse(evidence["review"], "名称一致且嵌入：字体清单层面不触发核查")
-        with mock.patch.object(pp, "render_slides", lambda p, w: [PNG_1PX]), \
-                mock.patch.object(pp, "font_evidence", lambda p, d: evidence):
+        with (
+            mock.patch.object(pp, "render_slides", lambda p, w: [PNG_1PX]),
+            mock.patch.object(pp, "font_evidence", lambda p, d: evidence),
+        ):
             result = pp.parts(self.pptx)
-        self.assertIn("visual", result["meta"]["unverified"],
-                      "字体名称一致也不自动标记视觉核验通过")
+        self.assertIn("visual", result["meta"]["unverified"], "字体名称一致也不自动标记视觉核验通过")
 
     def test_missing_pdffonts_keeps_fonts_unverified_even_when_installed_fonts_ok(self):
         self.tool("fc-list", "print('Synthetic Sans')")
         self.pptx = self.explicit_font_deck()
-        with mock.patch.dict(os.environ, {"PATH": str(self.bin)}), \
-                mock.patch.object(pp, "render_slides", lambda p, w: [PNG_1PX]):
+        with (
+            mock.patch.dict(os.environ, {"PATH": str(self.bin)}),
+            mock.patch.object(pp, "render_slides", lambda p, w: [PNG_1PX]),
+        ):
             # 模拟 render_slides 之外仍产生了 PDF（字体核对要查 pdffonts）
             evidence = pp.font_evidence(self.pptx, self.pdf)
         self.assertEqual(evidence["installed"], "ok")
         self.assertTrue(evidence["warning"])
         self.assertTrue(evidence["review"])
-        with mock.patch.object(pp, "render_slides", lambda p, w: [PNG_1PX]), \
-                mock.patch.object(pp, "font_evidence", lambda p, d: evidence):
+        with (
+            mock.patch.object(pp, "render_slides", lambda p, w: [PNG_1PX]),
+            mock.patch.object(pp, "font_evidence", lambda p, d: evidence),
+        ):
             result = pp.parts(self.pptx)
         self.assertEqual(result["meta"]["unverified"], ["visual", "fonts"])
 
@@ -592,6 +658,7 @@ class NotesSupportTests(ControlledRenderMixin, unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         import notes as notes_cli
+
         self.notes_cli = notes_cli
 
     def build_review(self) -> tuple[Path, Path]:
@@ -600,8 +667,7 @@ class NotesSupportTests(ControlledRenderMixin, unittest.TestCase):
         out = self.root / "rv"
         o, e = io.StringIO(), io.StringIO()
         with redirect_stdout(o), redirect_stderr(e):
-            code = build_viewer.main(["--report", str(src), "--out", str(out),
-                                      "--no-scan-skills", "--locale", "zh-CN"])
+            code = build_viewer.main(["--report", str(src), "--out", str(out), "--no-scan-skills", "--locale", "zh-CN"])
         assert code == 0, e.getvalue()
         return src, out
 
@@ -616,8 +682,11 @@ class NotesSupportTests(ControlledRenderMixin, unittest.TestCase):
         _src, out = self.build_review()
         source = self.notes_cli._sources(out)
         parts = self.notes_cli._load_parts("report", source["report"])
-        self.assertEqual([(k, n) for k, n, _t in parts], [("k:s260", 1), ("k:s257", 2)],
-                         "PPT 报告按幻灯片稳定键切页，不交给 DOCX 渲染器")
+        self.assertEqual(
+            [(k, n) for k, n, _t in parts],
+            [("k:s260", 1), ("k:s257", 2)],
+            "PPT 报告按幻灯片稳定键切页，不交给 DOCX 渲染器",
+        )
         self.assertIn("合成标题", parts[0][2])
         self.assertIn("合成单元格", parts[1][2])
 

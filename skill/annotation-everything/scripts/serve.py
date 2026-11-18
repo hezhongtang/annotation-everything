@@ -37,6 +37,7 @@ AE_HANDOFF_SEQ / AE_URL；运行中又来的事件排队依次补跑；命令输
 三者都没有则中文，只有 auto 才读 LC_ALL / LC_MESSAGES / LANG。拒绝与错误的原因代码、HTTP 状态和退出码
 不随语言变，只换给人看的说明；来源路径、命令与系统原始错误保持原文。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -75,9 +76,27 @@ APP = "annotation-everything"
 VERSION = "0.12.1"
 # 服务支持的功能；页面据此判断背后的服务是不是旧版（旧服务会静默丢掉框选、重新标注等新字段）
 FEATURES = [
-    "notes", "handoff", "marks", "batches", "stages", "always", "full-check", "agent-delivery",
-    "stop-service", "stop-review", "stop-review-status", "stop-save-protection", "resume-review",
-    "receiver-binding", "overview", "overview-stop", "overview-prune", "analysis", "finalize-all", "docx", "pptx",
+    "notes",
+    "handoff",
+    "marks",
+    "batches",
+    "stages",
+    "always",
+    "full-check",
+    "agent-delivery",
+    "stop-service",
+    "stop-review",
+    "stop-review-status",
+    "stop-save-protection",
+    "resume-review",
+    "receiver-binding",
+    "overview",
+    "overview-stop",
+    "overview-prune",
+    "analysis",
+    "finalize-all",
+    "docx",
+    "pptx",
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
@@ -154,9 +173,11 @@ def cli_locale(explicit: object, review_dir=None) -> str:
 
 class StaleServer(Exception):
     """本目录已有旧版本的服务在跑：复用它会让新页面的改动被静默丢掉。"""
+
+
 DEFAULT_PORT = 8765
 PORT_TRIES = 20
-STATUS_FILE = ledger.STATUS_FILE   # 运行状态文件名只在台账模块定义一次；这里是给既有调用方的名字
+STATUS_FILE = ledger.STATUS_FILE  # 运行状态文件名只在台账模块定义一次；这里是给既有调用方的名字
 LOG_FILE = "server.log"
 MANIFEST = "review.json"
 MAX_BODY = 2 * 1024 * 1024
@@ -164,19 +185,21 @@ HOST = "127.0.0.1"
 NOTE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})$")
 SAFE_CHARS = re.compile(r"[^A-Za-z0-9._:/?=&%+@-]")
 # 总览首页宿主：页面、运行状态、日志与启动锁都在台账目录，不写进任何审阅目录（文件名只在 ledger 定义一次）
-HOST_KIND_OVERVIEW = ledger.HOST_KIND_OVERVIEW          # /api/health 的宿主种类；审阅宿主不带宿主种类字段（行为不变）
-OVERVIEW_PAGE_FILE = ledger.OVERVIEW_PAGE_FILE          # 仅总览视图的首页页面（由 build_overview_home 生成）
-OVERVIEW_LOG_FILE = ledger.OVERVIEW_LOG_FILE            # 首页服务日志
-OVERVIEW_STATUS_FILE = ledger.OVERVIEW_STATUS_FILE      # 首页运行状态（pid/端口/宿主标识），退出时删除
-OVERVIEW_START_LOCK_FILE = ledger.OVERVIEW_START_LOCK_FILE   # 并发首次启动的串行化锁（台账目录）
+HOST_KIND_OVERVIEW = ledger.HOST_KIND_OVERVIEW  # /api/health 的宿主种类；审阅宿主不带宿主种类字段（行为不变）
+OVERVIEW_PAGE_FILE = ledger.OVERVIEW_PAGE_FILE  # 仅总览视图的首页页面（由 build_overview_home 生成）
+OVERVIEW_LOG_FILE = ledger.OVERVIEW_LOG_FILE  # 首页服务日志
+OVERVIEW_STATUS_FILE = ledger.OVERVIEW_STATUS_FILE  # 首页运行状态（pid/端口/宿主标识），退出时删除
+OVERVIEW_START_LOCK_FILE = ledger.OVERVIEW_START_LOCK_FILE  # 并发首次启动的串行化锁（台账目录）
 
 
 def csp_for(html_text: str) -> str:
     """只放行页面里的内联脚本（按内容 sha256），其余脚本、内联事件一律不执行。"""
     hashes = fsutil.script_hashes(html_text)
-    return (f"default-src 'none'; script-src {hashes or chr(39) + 'none' + chr(39)}; style-src 'unsafe-inline'; "
-            "img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'self'; "
-            "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'")
+    return (
+        f"default-src 'none'; script-src {hashes or chr(39) + 'none' + chr(39)}; style-src 'unsafe-inline'; "
+        "img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
+    )
 
 
 def clean(value: Any, limit: int = 60) -> str:
@@ -212,7 +235,7 @@ class _RequestReads:
         if name not in self._done:
             try:
                 self._done[name] = read()
-            except Exception as exc:   # 记住失败：同一请求里重放同一异常
+            except Exception as exc:  # 记住失败：同一请求里重放同一异常
                 self._done[name] = exc
         return self._done[name]
 
@@ -221,8 +244,9 @@ class _RequestReads:
 
     def binding(self) -> Any:
         """接收方绑定；manifest 取服务已有的缓存（按 mtime 判断，命中不开文件）。"""
-        return self._once("binding", lambda: wakeup.load_binding(
-            self.server.review_dir, manifest=self.server.manifest()))
+        return self._once(
+            "binding", lambda: wakeup.load_binding(self.server.review_dir, manifest=self.server.manifest())
+        )
 
     def handoff(self) -> Any:
         """批次记录。"""
@@ -253,6 +277,7 @@ class _RequestReads:
         processing / event），既不会多开文件也不会漏判。将来新增分支时注意：只有在确认不可能
         有代理在等时才返回 None，否则要真的去读一次等待标记。
         """
+
         def read():
             binding, handoff = self.binding(), self.handoff()
             if isinstance(binding, Exception) or isinstance(handoff, Exception) or not binding:
@@ -262,17 +287,27 @@ class _RequestReads:
             if binding.get("adapter") == "codex-desktop":
                 return None
             return wakeup.waiting_state(self.server.review_dir, binding)
+
         return self._once("waiting", read)
 
 
 class ReviewServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, review_dir: Path | None, port: int, debug: bool = False, log_to_file: bool = True,
-                 on_handoff: list[str] | None = None, hook_cwd: str | None = None,
-                 locale: str | None = None, *, home_id: str | None = None,
-                 overview_under: Path | None = None):
-        self.home_id = home_id   # 非 None：总览首页宿主（无审阅目录）；None：审阅宿主，行为与从前一致
+    def __init__(
+        self,
+        review_dir: Path | None,
+        port: int,
+        debug: bool = False,
+        log_to_file: bool = True,
+        on_handoff: list[str] | None = None,
+        hook_cwd: str | None = None,
+        locale: str | None = None,
+        *,
+        home_id: str | None = None,
+        overview_under: Path | None = None,
+    ):
+        self.home_id = home_id  # 非 None：总览首页宿主（无审阅目录）；None：审阅宿主，行为与从前一致
         self.overview_under = Path(overview_under).expanduser().resolve() if overview_under else None
         self.review_dir = review_dir
         self.debug = debug
@@ -289,7 +324,7 @@ class ReviewServer(ThreadingHTTPServer):
         self.locale = locale or i18n.DEFAULT_LOCALE
         self._hook_lock = threading.Lock()
         self._hook_running = False
-        self._hook_queue: list[dict[str, Any]] = []   # 钩子运行中又来的事件：按到达顺序排队，同一批同一事件只留最新
+        self._hook_queue: list[dict[str, Any]] = []  # 钩子运行中又来的事件：按到达顺序排队，同一批同一事件只留最新
         self._writes = threading.Condition()
         self._active_writes = 0
         self.browser_saves = None if home_id is not None else review_save.BrowserSaves(review_dir)
@@ -313,7 +348,9 @@ class ReviewServer(ThreadingHTTPServer):
             print(line, file=sys.stderr, flush=True)
             if self.log_to_file:
                 # 首页宿主的日志在台账目录；审阅宿主的照旧在审阅目录
-                target = (ledger.home() / OVERVIEW_LOG_FILE) if self.home_id is not None else (self.review_dir / LOG_FILE)
+                target = (
+                    (ledger.home() / OVERVIEW_LOG_FILE) if self.home_id is not None else (self.review_dir / LOG_FILE)
+                )
                 try:
                     store.append_private(target, line)
                 except OSError:
@@ -344,16 +381,27 @@ class ReviewServer(ThreadingHTTPServer):
         url = f"http://127.0.0.1:{self.port}/"
         user_message = store.handoff_user_message(item)
         message = store.full_check_message(user_message) if item.get("fullCheck") is True else user_message
-        payload = {"event": event, "app": APP, "reviewId": self.review_id(), "reviewDir": str(self.review_dir),
-                   "bindingId": (self.agent_binding or {}).get("bindingId"),
-                   "url": url, "seq": item.get("seq"), "message": message, "userMessage": user_message,
-                   "stage": "review" if event == "review" else "draft", "target": item.get("target", "final"),
-                   "allowSubagents": bool(item.get("allowSubagents")), "fullCheck": bool(item.get("fullCheck")),
-                   "reviewMessage": item.get("reviewMessage", ""),
-                   "openCount": item.get("openCount"), "pages": item.get("pages"),
-                   "notesFile": str(self.review_dir / store.NOTES_FILE),
-                   "handoffFile": str(self.review_dir / store.HANDOFF_FILE),
-                   "notesCli": str(Path(__file__).resolve().with_name("notes.py"))}
+        payload = {
+            "event": event,
+            "app": APP,
+            "reviewId": self.review_id(),
+            "reviewDir": str(self.review_dir),
+            "bindingId": (self.agent_binding or {}).get("bindingId"),
+            "url": url,
+            "seq": item.get("seq"),
+            "message": message,
+            "userMessage": user_message,
+            "stage": "review" if event == "review" else "draft",
+            "target": item.get("target", "final"),
+            "allowSubagents": bool(item.get("allowSubagents")),
+            "fullCheck": bool(item.get("fullCheck")),
+            "reviewMessage": item.get("reviewMessage", ""),
+            "openCount": item.get("openCount"),
+            "pages": item.get("pages"),
+            "notesFile": str(self.review_dir / store.NOTES_FILE),
+            "handoffFile": str(self.review_dir / store.HANDOFF_FILE),
+            "notesCli": str(Path(__file__).resolve().with_name("notes.py")),
+        }
         self._enqueue_hook(payload, event, item.get("seq"))
 
     def run_analysis_hook(self, round_no: int) -> None:
@@ -364,12 +412,17 @@ class ReviewServer(ThreadingHTTPServer):
             return
         if not self._hook_binding_ok():
             return
-        payload = {"event": "analysis", "app": APP, "reviewId": self.review_id(),
-                   "reviewDir": str(self.review_dir),
-                   "bindingId": (self.agent_binding or {}).get("bindingId"),
-                   "url": f"http://127.0.0.1:{self.port}/", "seq": round_no,
-                   "notesFile": str(self.review_dir / store.NOTES_FILE),
-                   "notesCli": str(Path(__file__).resolve().with_name("notes.py"))}
+        payload = {
+            "event": "analysis",
+            "app": APP,
+            "reviewId": self.review_id(),
+            "reviewDir": str(self.review_dir),
+            "bindingId": (self.agent_binding or {}).get("bindingId"),
+            "url": f"http://127.0.0.1:{self.port}/",
+            "seq": round_no,
+            "notesFile": str(self.review_dir / store.NOTES_FILE),
+            "notesCli": str(Path(__file__).resolve().with_name("notes.py")),
+        }
         self._enqueue_hook(payload, "analysis", round_no)
 
     def _hook_binding_ok(self) -> bool:
@@ -385,14 +438,21 @@ class ReviewServer(ThreadingHTTPServer):
         return True
 
     def _enqueue_hook(self, payload: dict[str, Any], event: str, seq: int | None) -> None:
-        env = {**os.environ, "AE_EVENT": event, "AE_REVIEW_DIR": str(self.review_dir),
-               "AE_HANDOFF_SEQ": str(seq), "AE_URL": payload["url"]}
+        env = {
+            **os.environ,
+            "AE_EVENT": event,
+            "AE_REVIEW_DIR": str(self.review_dir),
+            "AE_HANDOFF_SEQ": str(seq),
+            "AE_URL": payload["url"],
+        }
         job = {"payload": payload, "env": env, "seq": seq, "event": event}
         with self._hook_lock:
             if not review_stop.accepts_work(self.review_dir):
                 return
             if self._hook_running:
-                self._hook_queue = [j for j in self._hook_queue if (j["event"], j["seq"]) != (job["event"], job["seq"])] + [job]
+                self._hook_queue = [
+                    j for j in self._hook_queue if (j["event"], j["seq"]) != (job["event"], job["seq"])
+                ] + [job]
                 return
             self._hook_running = True
         threading.Thread(target=self._hook_worker, args=(job,), daemon=True).start()
@@ -415,8 +475,15 @@ class ReviewServer(ThreadingHTTPServer):
                 try:
                     payload = b"1" + json.dumps(job["payload"], ensure_ascii=False).encode("utf-8")
                     command = [sys.executable, "-I", "-S", "-c", _HOOK_EXEC, *self.on_handoff]
-                    proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                            stderr=subprocess.DEVNULL, cwd=self.hook_cwd, env=job["env"], start_new_session=True)
+                    proc = subprocess.Popen(
+                        command,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        cwd=self.hook_cwd,
+                        env=job["env"],
+                        start_new_session=True,
+                    )
                     try:
                         review_stop.hook_started(self.review_dir, proc.pid, job["seq"], job["event"])
                         try:
@@ -454,14 +521,15 @@ class ReviewServer(ThreadingHTTPServer):
             left = review_stop.remaining(deadline)
             if not left:
                 return False
-            time.sleep(min(.02, left))
+            time.sleep(min(0.02, left))
 
     @contextlib.contextmanager
     def write_request(self, *, origin=None, page_id=None, token=None):
         # Admission and draining share this condition. The persisted gate also applies to CLI work.
         with self._writes:
-            if (not review_stop.accepts_work(self.review_dir)
-                    and not self.browser_saves.allows_write(origin, page_id, token)):
+            if not review_stop.accepts_work(self.review_dir) and not self.browser_saves.allows_write(
+                origin, page_id, token
+            ):
                 raise Reject(409, "review-stopped", i18n.Translator(self.locale)("serve.err.reviewStopped"))
             self._active_writes += 1
         try:
@@ -479,8 +547,11 @@ class ReviewServer(ThreadingHTTPServer):
         # Older generated pages run their own save preflight for a local stop.
         # An external caller cannot use that browser's preflight.
         index = self.index()
-        return not (index and b'const APP="annotation-everything", FILE=' in index[0]
-                    and b'"/api/server/save-protection"' not in index[0])
+        return not (
+            index
+            and b'const APP="annotation-everything", FILE=' in index[0]
+            and b'"/api/server/save-protection"' not in index[0]
+        )
 
     def commit_stop(self, stop_id: str) -> bool:
         with self._close_lock:
@@ -512,13 +583,15 @@ class ReviewServer(ThreadingHTTPServer):
 
     def manifest(self) -> dict[str, Any]:
         if self.home_id is not None:
-            return {}   # 首页宿主没有审阅清单；页面与路由都不注入审阅标识
+            return {}  # 首页宿主没有审阅清单；页面与路由都不注入审阅标识
+
         def read(f: Path | None) -> dict[str, Any]:
             try:
                 m = json.loads(f.read_text(encoding="utf-8")) if f else {}
                 return m if isinstance(m, dict) else {}
             except (OSError, ValueError):
                 return {}
+
         return self._cached(MANIFEST, read)
 
     def review_id(self) -> str | None:
@@ -533,6 +606,7 @@ class ReviewServer(ThreadingHTTPServer):
                 return None
             raw = f.read_bytes()
             return raw, csp_for(raw.decode("utf-8", errors="replace"))
+
         return self._cached("index.html", read)
 
 
@@ -568,12 +642,17 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
 
     def _reject(self, e: Reject) -> None:
-        self.server.log("reject", f"code={e.code} status={e.status} method={clean(self.command, 12)} "
-                                  f"path={clean(self.path)} host={clean(self.headers.get('Host'))} "
-                                  f"origin={clean(self.headers.get('Origin'))} site={clean(self.headers.get('Sec-Fetch-Site'), 20)}")
+        self.server.log(
+            "reject",
+            f"code={e.code} status={e.status} method={clean(self.command, 12)} "
+            f"path={clean(self.path)} host={clean(self.headers.get('Host'))} "
+            f"origin={clean(self.headers.get('Origin'))} site={clean(self.headers.get('Sec-Fetch-Site'), 20)}",
+        )
         self.close_connection = True
-        self._json(e.status, {"error": e.msg, "code": e.code, "app": APP,
-                              **({"params": e.params} if e.params is not None else {})})
+        self._json(
+            e.status,
+            {"error": e.msg, "code": e.code, "app": APP, **({"params": e.params} if e.params is not None else {})},
+        )
 
     def _t(self, key: str, **params: object) -> str:
         """拒绝说明用的消息：按服务启动时定的语言取，原因代码与状态不走这里。"""
@@ -618,7 +697,7 @@ class Handler(BaseHTTPRequestHandler):
             raise Reject(400, "bad-json", self._t("serve.err.badJson")) from e
 
     def _dispatch(self) -> None:
-        self._reads = None   # 长连接复用同一个 handler：每个请求重新读一次审阅文件
+        self._reads = None  # 长连接复用同一个 handler：每个请求重新读一次审阅文件
         try:
             self._check_host()
             path = self.path.split("?", 1)[0]
@@ -633,10 +712,15 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 # Overview actions address the review named in their body. Archiving changes
                 # an atomic metadata marker and is also available for already stopped reviews.
-                if mutating and path not in ("/api/server/stop", "/api/server/resume",
-                                             "/api/server/save-protection", "/api/overview/start",
-                                             "/api/overview/archive", "/api/overview/stop"):
-                    save = (path in ("/api/notes", "/api/notes/import") or NOTE_PATH.fullmatch(path))
+                if mutating and path not in (
+                    "/api/server/stop",
+                    "/api/server/resume",
+                    "/api/server/save-protection",
+                    "/api/overview/start",
+                    "/api/overview/archive",
+                    "/api/overview/stop",
+                ):
+                    save = path in ("/api/notes", "/api/notes/import") or NOTE_PATH.fullmatch(path)
                     token = self.headers.get("X-AE-Save-Token") if save else None
                     if token is not None:
                         self._check_json_content_type()
@@ -657,21 +741,27 @@ class Handler(BaseHTTPRequestHandler):
         except Reject as e:
             self._reject(e)
         except (store.NoteError, UnicodeEncodeError) as e:  # 由请求内容引起的错误一律 4xx，页面不会反复重试
-            detail = {"error": str(e) if isinstance(e, store.NoteError)
-                       else self._t("serve.err.badCharacters"), "code": "bad-note", "app": APP}
+            detail = {
+                "error": str(e) if isinstance(e, store.NoteError) else self._t("serve.err.badCharacters"),
+                "code": "bad-note",
+                "app": APP,
+            }
             if isinstance(e, store.TextLimitError):
                 params = {"field": e.field, "limit": e.limit}
-                detail.update(error=self._t("serve.err.textTooLong", **params),
-                              reason="text-too-long", params=params)
+                detail.update(error=self._t("serve.err.textTooLong", **params), reason="text-too-long", params=params)
             self._json(400, detail)
         except store.NotFound:
             self._json(404, {"error": self._t("serve.err.noNote"), "code": "no-note", "app": APP})
         except Exception as e:  # 服务端错误也写日志，方便排障
-            self.server.log("error", f"code=server-error method={clean(self.command, 12)} path={clean(self.path)} "
-                                     f"{type(e).__name__}: {e}")
+            self.server.log(
+                "error",
+                f"code=server-error method={clean(self.command, 12)} path={clean(self.path)} {type(e).__name__}: {e}",
+            )
             # 只说明类型与恢复动作，不回显异常内容（可能含请求数据）
-            self._json(500, {"error": self._t("serve.err.serverError", type=type(e).__name__),
-                             "code": "server-error", "app": APP})
+            self._json(
+                500,
+                {"error": self._t("serve.err.serverError", type=type(e).__name__), "code": "server-error", "app": APP},
+            )
 
     do_GET = do_HEAD = do_POST = do_PATCH = do_DELETE = do_PUT = _dispatch
 
@@ -699,36 +789,45 @@ class Handler(BaseHTTPRequestHandler):
 
     def _receiver(self, active_binding) -> dict[str, Any]:
         reads = self._request_reads()
-        return wakeup.receiver_status(self.server.review_dir, active_binding, binding=reads.binding(),
-                                      handoff=reads.handoff(), waiting=reads.waiting())
+        return wakeup.receiver_status(
+            self.server.review_dir,
+            active_binding,
+            binding=reads.binding(),
+            handoff=reads.handoff(),
+            waiting=reads.waiting(),
+        )
 
     def _public_status(self) -> dict[str, Any]:
         reads = self._request_reads()
-        return wakeup.public_status(self.server.review_dir, binding=reads.binding(),
-                                    handoff=reads.handoff(), waiting=reads.waiting())
+        return wakeup.public_status(
+            self.server.review_dir, binding=reads.binding(), handoff=reads.handoff(), waiting=reads.waiting()
+        )
 
     def _handoff_state(self, *, full: bool) -> dict[str, Any]:
         reads = self._request_reads()
-        return store.handoff_state(self.server.review_dir, full=full,
-                                   handoff=reads.handoff(), notes=reads.notes_list())
+        return store.handoff_state(self.server.review_dir, full=full, handoff=reads.handoff(), notes=reads.notes_list())
 
     def _notes_doc(self) -> dict[str, Any]:
         return self._request_reads().notes_doc()
 
     def _ident(self) -> dict[str, Any]:
         # name：审阅名。别的审阅的旧标签页连到这个端口时，据此告诉用户「这里现在是哪一份」（无 CORS 头，只有同源页面读得到）
-        return {"app": APP, "reviewId": self.server.review_id(), "name": self.server.review_name(),
-                "archived": review_overview.is_archived(self.server.review_dir),
-                "version": VERSION, "features": FEATURES,
-                "receiver": self._receiver(self.server.agent_binding)}
+        return {
+            "app": APP,
+            "reviewId": self.server.review_id(),
+            "name": self.server.review_name(),
+            "archived": review_overview.is_archived(self.server.review_dir),
+            "version": VERSION,
+            "features": FEATURES,
+            "receiver": self._receiver(self.server.agent_binding),
+        }
 
     def _stop_status(self) -> None:
         d = self.server.review_dir
         wait_id = parse_qs(self.path.partition("?")[2]).get("wait", [None])[0]
         closed = self.server.shutdown_complete
         if not wait_id or closed is None:
-            self._json(200, {"app": APP, "reviewId": self.server.review_id(),
-                             "stop": review_stop.public_status(d)})
+            self._json(200, {"app": APP, "reviewId": self.server.review_id(), "stop": review_stop.public_status(d)})
             return
         # Status watchers use the existing connection to receive the final state after
         # shutdown closes the listener. A disconnected or slow observer cannot delay exit.
@@ -740,7 +839,7 @@ class Handler(BaseHTTPRequestHandler):
                 remaining = review_stop.remaining(deadline)
                 if not remaining:
                     break
-                ended = closed.wait(min(.15, remaining))
+                ended = closed.wait(min(0.15, remaining))
                 state = review_stop.public_status(d)
                 if ended:
                     break
@@ -751,8 +850,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def _stop_response(self, result: dict[str, Any], *, closing=False, legacy=False) -> None:
         ident = self._ident() if legacy else {"app": APP, "reviewId": self.server.review_id()}
-        self._json(200, {**ident, "stopping": closing, "state": result["state"],
-                         "stop": result if legacy else review_stop.public_snapshot(result)})
+        self._json(
+            200,
+            {
+                **ident,
+                "stopping": closing,
+                "state": result["state"],
+                "stop": result if legacy else review_stop.public_snapshot(result),
+            },
+        )
         self.wfile.flush()
 
     def _stop_review(self, body: dict[str, Any]) -> None:
@@ -761,18 +867,24 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             raise Reject(400, "bad-request", self._t("serve.err.badStopTimeout")) from None
         expected = body.get("expectedStop")
-        if expected is not None and (not isinstance(expected, dict)
-                                     or set(expected) != {"stopId", "attempts"}
-                                     or expected["stopId"] is not None and not isinstance(expected["stopId"], str)
-                                     or type(expected["attempts"]) is not int or expected["attempts"] < 0):
+        if expected is not None and (
+            not isinstance(expected, dict)
+            or set(expected) != {"stopId", "attempts"}
+            or expected["stopId"] is not None
+            and not isinstance(expected["stopId"], str)
+            or type(expected["attempts"]) is not int
+            or expected["attempts"] < 0
+        ):
             raise Reject(400, "bad-request", self._t("serve.err.badStopState"))
         closed = self.server.shutdown_complete
         wait_for_exit = body.get("waitForExit") is True and closed is not None
         deadline = time.monotonic() + timeout
         d = self.server.review_dir
         try:
-            with (self.server.stop_reply() if wait_for_exit else contextlib.nullcontext()), \
-                    review_stop.stop_attempt(d, deadline=deadline) as owns_attempt:
+            with (
+                self.server.stop_reply() if wait_for_exit else contextlib.nullcontext(),
+                review_stop.stop_attempt(d, deadline=deadline) as owns_attempt,
+            ):
                 if not owns_attempt:
                     self._stop_response(review_stop.load(d), legacy=not wait_for_exit)
                     return
@@ -789,8 +901,12 @@ class Handler(BaseHTTPRequestHandler):
                         return
                 self.server.log("info", "review stop requested")
                 review_stop.begin(d, http={"pid": os.getpid(), "port": self.server.port})
-                result = review_stop.coordinate(d, server=self.server, deadline=deadline,
-                                                browser_protocol_required=body.get("requirePageSave") is True)
+                result = review_stop.coordinate(
+                    d,
+                    server=self.server,
+                    deadline=deadline,
+                    browser_protocol_required=body.get("requirePageSave") is True,
+                )
                 ready = review_stop.ready_for_http(result) and self.server.commit_stop(result["stopId"])
                 if ready and wait_for_exit:
                     self.close_connection = True
@@ -848,19 +964,40 @@ class Handler(BaseHTTPRequestHandler):
         return round_no
 
     def _analysis_error_text(self, error: store.HandoffError) -> str:
-        messages = {"focus-required": "serve.life.focusRequired", "page-not-found": "serve.life.pageMissing",
-                    "analysis-closed": "serve.life.analysisClosed", "analysis-invalid-input": "serve.life.invalidInput",
-                    "structure-target-changed": "serve.life.structureChanged"}
-        protection_codes = ("analysis-locked", "bad-option", "draft-basis-changed", "note-not-changed", "bad-updates",
-                            "updates-required", "update-not-pending", "update-source-changed", "round-not-answerable")
+        messages = {
+            "focus-required": "serve.life.focusRequired",
+            "page-not-found": "serve.life.pageMissing",
+            "analysis-closed": "serve.life.analysisClosed",
+            "analysis-invalid-input": "serve.life.invalidInput",
+            "structure-target-changed": "serve.life.structureChanged",
+        }
+        protection_codes = (
+            "analysis-locked",
+            "bad-option",
+            "draft-basis-changed",
+            "note-not-changed",
+            "bad-updates",
+            "updates-required",
+            "update-not-pending",
+            "update-source-changed",
+            "round-not-answerable",
+        )
         if error.code in protection_codes:
             return self._t("cli.analysis.protect.error." + error.code)
         if error.code in ("checkpoint-not-found", "line-not-found", "analysis-pending-rounds"):
             return self._t("cli.analysis.history.error." + error.code)
-        if error.code in ("assumption-not-found", "bad-dead-ends", "dead-end-option", "dead-end-line", "dead-end-obsolete"):
+        if error.code in (
+            "assumption-not-found",
+            "bad-dead-ends",
+            "dead-end-option",
+            "dead-end-line",
+            "dead-end-obsolete",
+        ):
             params = dict(error.params)
             if error.code in ("dead-end-option", "dead-end-line"):
-                params["assumptions"] = " / ".join(params.get("assumptions", [])) or self._t("cli.analysis.resolution.noAssumptions")
+                params["assumptions"] = " / ".join(params.get("assumptions", [])) or self._t(
+                    "cli.analysis.resolution.noAssumptions"
+                )
             return self._t("cli.analysis.resolution.error." + error.code, **params)
         return self._t(messages[error.code]) if error.code in messages else str(error)
 
@@ -882,8 +1019,9 @@ class Handler(BaseHTTPRequestHandler):
                     raise Reject(400, "bad-request", self._t("serve.err.noAnswer"))
                 return analysis_store.answer(d, aid, self._analysis_round(body), key, value, by="page")
             if op == "submit":
-                return analysis_store.submit_round(d, aid, self._analysis_round(body), by="page",
-                                                   authorize=lambda: self._check_receiver(body))
+                return analysis_store.submit_round(
+                    d, aid, self._analysis_round(body), by="page", authorize=lambda: self._check_receiver(body)
+                )
             if op == "convert":
                 node = body.get("node")
                 if not isinstance(node, str) or not node:
@@ -904,17 +1042,23 @@ class Handler(BaseHTTPRequestHandler):
                 assumption = body.get("assumption")
                 if not isinstance(assumption, str) or not assumption:
                     raise Reject(400, "bad-request", self._t("cli.analysis.resolution.error.assumption-not-found"))
-                return analysis_store.refute_assumption(d, aid, assumption, by="page",
-                                                        authorize=lambda: self._check_receiver(body))
+                return analysis_store.refute_assumption(
+                    d, aid, assumption, by="page", authorize=lambda: self._check_receiver(body)
+                )
             if op in ("seal", "fork", "switch-line", "close", "reopen"):
-                operations = {"seal": analysis_store.seal_checkpoint, "fork": analysis_store.fork_line,
-                              "switch-line": analysis_store.switch_line, "close": analysis_store.close_analysis,
-                              "reopen": analysis_store.reopen_analysis}
+                operations = {
+                    "seal": analysis_store.seal_checkpoint,
+                    "fork": analysis_store.fork_line,
+                    "switch-line": analysis_store.switch_line,
+                    "close": analysis_store.close_analysis,
+                    "reopen": analysis_store.reopen_analysis,
+                }
                 args = []
                 if op in ("seal", "fork"):
                     checkpoint = body.get("checkpoint")
-                    if ((op == "fork" and checkpoint is None) or
-                            (checkpoint is not None and (not isinstance(checkpoint, str) or not checkpoint))):
+                    if (op == "fork" and checkpoint is None) or (
+                        checkpoint is not None and (not isinstance(checkpoint, str) or not checkpoint)
+                    ):
                         raise Reject(400, "bad-request", self._t("cli.analysis.history.error.checkpoint-not-found"))
                     args.append(checkpoint)
                 if op == "switch-line":
@@ -929,23 +1073,30 @@ class Handler(BaseHTTPRequestHandler):
                     raise Reject(400, "bad-request", self._t("cli.analysis.protect.noQuestion"))
                 if not isinstance(option, str) or not option:
                     raise Reject(400, "bad-request", self._t("cli.analysis.protect.noOption"))
-                return analysis_store.redecide(d, aid, node, option, by="page",
-                                               authorize=lambda: self._check_receiver(body))
+                return analysis_store.redecide(
+                    d, aid, node, option, by="page", authorize=lambda: self._check_receiver(body)
+                )
             if op in ("update-note", "keep-note", "delete-note"):
                 note_id = body.get("noteId")
                 if not isinstance(note_id, str) or not note_id:
                     raise Reject(400, "bad-request", self._t("cli.analysis.protect.noNote"))
-                operation = {"update-note": analysis_store.request_update, "keep-note": analysis_store.keep_note,
-                             "delete-note": analysis_store.delete_note}[op]
+                operation = {
+                    "update-note": analysis_store.request_update,
+                    "keep-note": analysis_store.keep_note,
+                    "delete-note": analysis_store.delete_note,
+                }[op]
                 operation(d, aid, note_id, by="page", authorize=lambda: self._check_receiver(body))
                 return analysis_store.load(d, aid)
         except store.NotFound:
             raise Reject(404, "no-round", self._t("serve.err.noRound"))
         except store.HandoffError as e:
-            params = ({"reason": e.params["reason"], "assumptions": e.params["assumptions"]}
-                      if e.code in ("dead-end-option", "dead-end-line") else None)
+            params = (
+                {"reason": e.params["reason"], "assumptions": e.params["assumptions"]}
+                if e.code in ("dead-end-option", "dead-end-line")
+                else None
+            )
             raise Reject(400, e.code, self._analysis_error_text(e), params=params)
-        raise Reject(400, "bad-request", self._t("serve.err.noAnalysis"))   # 未覆盖的 op，不可达
+        raise Reject(400, "bad-request", self._t("serve.err.noAnalysis"))  # 未覆盖的 op，不可达
 
     def _api(self, path: str) -> None:
         cmd = "GET" if self.command == "HEAD" else self.command
@@ -960,15 +1111,23 @@ class Handler(BaseHTTPRequestHandler):
             if not rid or claimed != rid:
                 raise Reject(409, "review-mismatch", self._t("serve.err.reviewMismatch"))
         if path == "/api/health" and cmd == "GET":
-            self._json(200, {**self._ident(), "dir": str(d), "pid": os.getpid(),
-                             "port": self.server.port, "hook": bool(self.server.on_handoff),
-                             "customHook": bool(self.server.on_handoff and self.server.agent_binding is None),
-                             "agentDelivery": self._public_status()})
+            self._json(
+                200,
+                {
+                    **self._ident(),
+                    "dir": str(d),
+                    "pid": os.getpid(),
+                    "port": self.server.port,
+                    "hook": bool(self.server.on_handoff),
+                    "customHook": bool(self.server.on_handoff and self.server.agent_binding is None),
+                    "agentDelivery": self._public_status(),
+                },
+            )
         elif path == "/api/notes" and cmd == "GET":
             doc = self._notes_doc()
             idx = d / "index.html"
             doc["indexMtime"] = idx.stat().st_mtime if idx.exists() else None  # 页面据此提示「已重建，请刷新」
-            doc["handoff"] = self._handoff_state(full=False)   # 轮询只带最新一批；处理记录全量走 GET /api/handoff
+            doc["handoff"] = self._handoff_state(full=False)  # 轮询只带最新一批；处理记录全量走 GET /api/handoff
             doc["agentDelivery"] = self._public_status()
             skills = self._request_reads().skills()
             doc["skillCatalog"] = store.skills_catalog(d, doc=skills)
@@ -1004,16 +1163,34 @@ class Handler(BaseHTTPRequestHandler):
                 raise Reject(400, "bad-request", self._t("serve.err.fullCheck"))
             if "userMessage" in body and not isinstance(body["userMessage"], str):
                 raise Reject(400, "bad-request", self._t("serve.err.userMessage"))
-            message = body["userMessage"] if body.get("fullCheck") is True and "userMessage" in body else str(body.get("message") or "")
-            _h, item, merged = store.handoff_submit(d, message, by="page",
-                                                    target=str(body.get("target") or "final"),
-                                                    allow_subagents=body.get("allowSubagents") is True,
-                                                    full_check=body.get("fullCheck"),
-                                                    authorize=lambda: self._check_receiver(body))
-            self.server.log("info", f"handoff seq={item['seq']} open={item['openCount']} merged={merged} target={item['target']}")
+            message = (
+                body["userMessage"]
+                if body.get("fullCheck") is True and "userMessage" in body
+                else str(body.get("message") or "")
+            )
+            _h, item, merged = store.handoff_submit(
+                d,
+                message,
+                by="page",
+                target=str(body.get("target") or "final"),
+                allow_subagents=body.get("allowSubagents") is True,
+                full_check=body.get("fullCheck"),
+                authorize=lambda: self._check_receiver(body),
+            )
+            self.server.log(
+                "info", f"handoff seq={item['seq']} open={item['openCount']} merged={merged} target={item['target']}"
+            )
             self.server.run_hook(item, merged)
-            self._json(200, {"doc": {**self._notes_doc(), **self._ident()}, "handoff": self._handoff_state(full=False),
-                             "merged": merged, "seq": item["seq"], "acceptedFullCheck": item["fullCheck"]})
+            self._json(
+                200,
+                {
+                    "doc": {**self._notes_doc(), **self._ident()},
+                    "handoff": self._handoff_state(full=False),
+                    "merged": merged,
+                    "seq": item["seq"],
+                    "acceptedFullCheck": item["fullCheck"],
+                },
+            )
         elif path == "/api/analysis" and cmd == "GET":
             params = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
             ids = params.get("analysis", [])
@@ -1024,22 +1201,36 @@ class Handler(BaseHTTPRequestHandler):
                 raise Reject(400, "bad-request", self._t("serve.err.noRound"))
             requested_round = int(requested[0]) if requested else None
             rounds = analysis_store.delivery_items(d)
-            result = {"analyses": analysis_store.list_analyses(d),
-                      "queue": {status: sum(r["status"] == status for r in rounds)
-                                for status in ("submitted", "claimed")}}
+            result = {
+                "analyses": analysis_store.list_analyses(d),
+                "queue": {status: sum(r["status"] == status for r in rounds) for status in ("submitted", "claimed")},
+            }
             if ids:
                 try:
                     state = self._analysis_state(d, ids[0])
-                    current = next((r for r in reversed(state["rounds"])
-                                    if r.get("line", "main") == state["line"]
-                                    and r["status"] in ("open", "submitted", "claimed")), None)
-                    result.update(analysis=state,
-                                  context=analysis_store.round_context(d, ids[0], requested_round)
-                                  if requested_round is not None else
-                                  analysis_store.round_context(d, ids[0], current["seq"]) if current else None)
+                    current = next(
+                        (
+                            r
+                            for r in reversed(state["rounds"])
+                            if r.get("line", "main") == state["line"]
+                            and r["status"] in ("open", "submitted", "claimed")
+                        ),
+                        None,
+                    )
+                    result.update(
+                        analysis=state,
+                        context=analysis_store.round_context(d, ids[0], requested_round)
+                        if requested_round is not None
+                        else analysis_store.round_context(d, ids[0], current["seq"])
+                        if current
+                        else None,
+                    )
                 except store.NotFound:
-                    raise Reject(404, "no-round" if requested_round is not None else "no-analysis",
-                                 self._t("serve.err.noRound" if requested_round is not None else "serve.err.noAnalysis"))
+                    raise Reject(
+                        404,
+                        "no-round" if requested_round is not None else "no-analysis",
+                        self._t("serve.err.noRound" if requested_round is not None else "serve.err.noAnalysis"),
+                    )
             self._json(200, {**result, **self._ident()})
         elif path == "/api/analysis/start" and cmd == "POST":
             body = self._expect_obj(self._body())
@@ -1048,11 +1239,17 @@ class Handler(BaseHTTPRequestHandler):
                 if "noteId" in body:
                     if not isinstance(note_id, str) or not note_id:
                         raise Reject(400, "bad-request", self._t("serve.err.noNoteId"))
-                    state, round_no = analysis_store.start(d, note_id, by="page",
-                                                           authorize=lambda: self._check_receiver(body))
+                    state, round_no = analysis_store.start(
+                        d, note_id, by="page", authorize=lambda: self._check_receiver(body)
+                    )
                 else:
-                    state, round_no = analysis_store.start_question(d, body.get("focus"), page=body.get("page"),
-                                                                    by="page", authorize=lambda: self._check_receiver(body))
+                    state, round_no = analysis_store.start_question(
+                        d,
+                        body.get("focus"),
+                        page=body.get("page"),
+                        by="page",
+                        authorize=lambda: self._check_receiver(body),
+                    )
             except store.HandoffError as error:
                 raise Reject(400, error.code, self._analysis_error_text(error))
             except store.NotFound:
@@ -1065,18 +1262,36 @@ class Handler(BaseHTTPRequestHandler):
             body = self._expect_obj(self._body())
             state = self._analysis_write(d, body, path.rsplit("/", 1)[-1])
             self._json(200, {"analysis": state, **self._ident()})
-        elif path in ("/api/analysis/redecide", "/api/analysis/update-note", "/api/analysis/keep-note",
-                      "/api/analysis/delete-note", "/api/analysis/seal", "/api/analysis/fork",
-                      "/api/analysis/switch-line", "/api/analysis/close", "/api/analysis/reopen",
-                      "/api/analysis/refute") and cmd == "POST":
+        elif (
+            path
+            in (
+                "/api/analysis/redecide",
+                "/api/analysis/update-note",
+                "/api/analysis/keep-note",
+                "/api/analysis/delete-note",
+                "/api/analysis/seal",
+                "/api/analysis/fork",
+                "/api/analysis/switch-line",
+                "/api/analysis/close",
+                "/api/analysis/reopen",
+                "/api/analysis/refute",
+            )
+            and cmd == "POST"
+        ):
             body = self._expect_obj(self._body())
             state = self._analysis_write(d, body, path.rsplit("/", 1)[-1])
             if path.endswith(("/redecide", "/update-note", "/fork", "/reopen", "/refute")):
                 for round_ in state["rounds"]:
                     if round_["status"] == "submitted":
                         self.server.run_analysis_hook(round_["seq"])
-            self._json(200, {"analysis": self._analysis_state(d, body["analysis"]),
-                             "doc": {**self._notes_doc(), **self._ident()}, **self._ident()})
+            self._json(
+                200,
+                {
+                    "analysis": self._analysis_state(d, body["analysis"]),
+                    "doc": {**self._notes_doc(), **self._ident()},
+                    **self._ident(),
+                },
+            )
         elif path == "/api/analysis/answer" and cmd == "POST":
             body = self._expect_obj(self._body())
             self._analysis_write(d, body, "answer")
@@ -1090,20 +1305,31 @@ class Handler(BaseHTTPRequestHandler):
             body = self._expect_obj(self._body())
             draft = self._analysis_write(d, body, "convert")
             self.server.log("info", f"analysis convert analysis={body['analysis']} draft={draft['id']}")
-            self._json(200, {"draft": draft, "analysis": analysis_store.load(d, body["analysis"]),
-                             **self._ident()})
+            self._json(200, {"draft": draft, "analysis": analysis_store.load(d, body["analysis"]), **self._ident()})
         elif path == "/api/analysis/confirm" and cmd == "POST":
             body = self._expect_obj(self._body())
             note = self._analysis_write(d, body, "confirm")
             self.server.log("info", f"analysis confirm analysis={body['analysis']} note={note['id']}")
-            self._json(200, {"note": note, "analysis": analysis_store.load(d, body["analysis"]),
-                             "doc": {**self._notes_doc(), **self._ident()}})
+            self._json(
+                200,
+                {
+                    "note": note,
+                    "analysis": analysis_store.load(d, body["analysis"]),
+                    "doc": {**self._notes_doc(), **self._ident()},
+                },
+            )
         elif path == "/api/analysis/release" and cmd == "POST":
             body = self._expect_obj(self._body())
             note = self._analysis_write(d, body, "release")
             self.server.log("info", f"analysis release analysis={body['analysis']} note={note['id']}")
-            self._json(200, {"note": note, "analysis": analysis_store.load(d, body["analysis"]),
-                             "doc": {**self._notes_doc(), **self._ident()}})
+            self._json(
+                200,
+                {
+                    "note": note,
+                    "analysis": analysis_store.load(d, body["analysis"]),
+                    "doc": {**self._notes_doc(), **self._ident()},
+                },
+            )
         elif path == "/api/skills/always" and cmd == "POST":
             body = self._expect_obj(self._body())
             if "always" not in body:
@@ -1119,32 +1345,59 @@ class Handler(BaseHTTPRequestHandler):
                 raise Reject(400, "bad-request", self._t("serve.err.badFinalizeSelection"))
             for group in groups:
                 seq, ids = (group.get("seq"), group.get("ids")) if isinstance(group, dict) else (None, None)
-                if (not isinstance(seq, int) or isinstance(seq, bool) or seq < 1 or seq in selections
-                        or not isinstance(ids, list) or not ids or any(not store.valid_id(nid) for nid in ids)
-                        or len(set(ids)) != len(ids) or seen.intersection(ids)):
+                if (
+                    not isinstance(seq, int)
+                    or isinstance(seq, bool)
+                    or seq < 1
+                    or seq in selections
+                    or not isinstance(ids, list)
+                    or not ids
+                    or any(not store.valid_id(nid) for nid in ids)
+                    or len(set(ids)) != len(ids)
+                    or seen.intersection(ids)
+                ):
                     raise Reject(400, "bad-request", self._t("serve.err.badFinalizeSelection"))
                 selections[seq] = set(ids)
                 seen.update(ids)
             result = store.handoff_finalize_all(d, selections)
             self.server.log("info", f"finalize-all count={result['finalizedCount']} skipped={result['skippedCount']}")
-            self._json(200, {**result, "doc": {**self._notes_doc(), **self._ident()},
-                             "handoff": self._handoff_state(full=False), **self._ident()})
+            self._json(
+                200,
+                {
+                    **result,
+                    "doc": {**self._notes_doc(), **self._ident()},
+                    "handoff": self._handoff_state(full=False),
+                    **self._ident(),
+                },
+            )
         elif path in ("/api/handoff/review", "/api/handoff/finalize") and cmd == "POST":
             body = self._expect_obj(self._body())
             seq = body.get("seq")
             if not isinstance(seq, int) or isinstance(seq, bool):
                 raise Reject(400, "bad-request", self._t("serve.err.noSeq"))
             if path.endswith("review"):
-                item = store.handoff_request_review(d, seq, str(body.get("message") or ""),
-                                                    allow_subagents=body.get("allowSubagents") is True, by="page",
-                                                    authorize=lambda: self._check_receiver(body))
+                item = store.handoff_request_review(
+                    d,
+                    seq,
+                    str(body.get("message") or ""),
+                    allow_subagents=body.get("allowSubagents") is True,
+                    by="page",
+                    authorize=lambda: self._check_receiver(body),
+                )
                 self.server.log("info", f"handoff-review seq={seq}")
                 self.server.run_hook(item, False, event="review")
             else:
                 item = store.handoff_finalize(d, seq, by="page")
                 self.server.log("info", f"handoff-finalize seq={seq}")
-            self._json(200, {"doc": {**self._notes_doc(), **self._ident()}, "handoff": self._handoff_state(full=False),
-                             "seq": seq, "status": item["status"]})
+            self._json(
+                200,
+                {
+                    "doc": {**self._notes_doc(), **self._ident()},
+                    "handoff": self._handoff_state(full=False),
+                    "seq": seq,
+                    "status": item["status"],
+                },
+            )
         elif path == "/api/notes" and cmd == "POST":
             doc, note = store.add(d, self._expect_obj(self._body()), by="page")
             self.server.log("info", f"add {note['id']} page={note['page']}")
@@ -1158,8 +1411,9 @@ class Handler(BaseHTTPRequestHandler):
         elif m and cmd == "PATCH":
             body = self._expect_obj(self._body())
             if "status" in body:
-                doc, note = store.set_status(d, m.group(1), str(body["status"]),
-                                             resolution=str(body.get("resolution") or ""), by="page")
+                doc, note = store.set_status(
+                    d, m.group(1), str(body["status"]), resolution=str(body.get("resolution") or ""), by="page"
+                )
             else:
                 doc, note = store.update(d, m.group(1), body, by="page")
             self.server.log("info", f"update {m.group(1)}")
@@ -1176,14 +1430,25 @@ class Handler(BaseHTTPRequestHandler):
             scopes = parse_qs(self.path.partition("?")[2], keep_blank_values=True).get("scope", ["workspace"])
             if len(scopes) != 1 or scopes[0] not in ("workspace", "all"):
                 raise Reject(400, "bad-scope", self._t("serve.err.overviewScope"))
-            self._json(200, {"app": APP, "reviewId": self.server.review_id(), "features": FEATURES,
-                             **review_overview.snapshot(d, self.server.review_id(), scopes[0], review_row)})
+            self._json(
+                200,
+                {
+                    "app": APP,
+                    "reviewId": self.server.review_id(),
+                    "features": FEATURES,
+                    **review_overview.snapshot(d, self.server.review_id(), scopes[0], review_row),
+                },
+            )
         elif path == "/api/overview/stop" and cmd == "POST":
             if not claimed:
                 raise Reject(409, "review-mismatch", self._t("serve.err.reviewMismatch"))
             body = self._body()
-            if (not isinstance(body, dict) or set(body) != {"reviewId", "scope"}
-                    or not isinstance(body["reviewId"], str) or not ledger.RID.fullmatch(body["reviewId"])):
+            if (
+                not isinstance(body, dict)
+                or set(body) != {"reviewId", "scope"}
+                or not isinstance(body["reviewId"], str)
+                or not ledger.RID.fullmatch(body["reviewId"])
+            ):
                 raise Reject(400, "bad-overview-stop", self._t("serve.err.overviewStopBody"))
             rid, scope = body["reviewId"], body["scope"]
             if scope not in ("workspace", "all"):
@@ -1198,8 +1463,13 @@ class Handler(BaseHTTPRequestHandler):
                 if current["state"] == "stopping":
                     self._json(200, {"app": APP, "reviewId": rid, "state": current["state"], "stop": current})
                     return
-                self._stop_review({"waitForExit": True, "requirePageSave": True,
-                                   "expectedStop": {"stopId": current["stopId"], "attempts": current["attempts"]}})
+                self._stop_review(
+                    {
+                        "waitForExit": True,
+                        "requirePageSave": True,
+                        "expectedStop": {"stopId": current["stopId"], "attempts": current["attempts"]},
+                    }
+                )
             else:
                 result = review_stop.public_snapshot(stop_overview_review(target, rid, self._t))
                 self._json(200, {"app": APP, "reviewId": rid, "state": result["state"], "stop": result})
@@ -1229,11 +1499,20 @@ class Handler(BaseHTTPRequestHandler):
         """总览首页宿主的 API：健康检查与总览家族之外一律显式拒绝，不创建或改写任何状态文件。"""
         server = self.server
         if path == "/api/health" and cmd == "GET":
-            self._json(200, {"app": APP, "version": VERSION, "features": FEATURES,
-                             "hostKind": HOST_KIND_OVERVIEW, "hostId": server.home_id,
-                             "pid": os.getpid(), "port": server.port,
-                             "under": str(server.overview_under) if server.overview_under else None,
-                             "hook": bool(server.on_handoff)})
+            self._json(
+                200,
+                {
+                    "app": APP,
+                    "version": VERSION,
+                    "features": FEATURES,
+                    "hostKind": HOST_KIND_OVERVIEW,
+                    "hostId": server.home_id,
+                    "pid": os.getpid(),
+                    "port": server.port,
+                    "under": str(server.overview_under) if server.overview_under else None,
+                    "hook": bool(server.on_handoff),
+                },
+            )
             return
         if path == "/api/overview" and cmd == "GET":
             scopes = parse_qs(self.path.partition("?")[2], keep_blank_values=True).get("scope", [None])
@@ -1242,14 +1521,26 @@ class Handler(BaseHTTPRequestHandler):
             if scopes[0] == "workspace":
                 raise Reject(400, "bad-scope", self._t("serve.err.overviewScopeHome"))
             under = server.overview_under
-            self._json(200, {"app": APP, "reviewId": None, "features": FEATURES,
-                             "hostKind": HOST_KIND_OVERVIEW, "hostId": server.home_id,
-                             "under": str(under) if under is not None else None,
-                             **review_overview.snapshot(None, None, "all", review_row,
-                                                        workspace_dir=under, under_dir=under)})
+            self._json(
+                200,
+                {
+                    "app": APP,
+                    "reviewId": None,
+                    "features": FEATURES,
+                    "hostKind": HOST_KIND_OVERVIEW,
+                    "hostId": server.home_id,
+                    "under": str(under) if under is not None else None,
+                    **review_overview.snapshot(None, None, "all", review_row, workspace_dir=under, under_dir=under),
+                },
+            )
             return
-        if cmd != "GET" and path in ("/api/overview/start", "/api/overview/archive", "/api/overview/stop",
-                                     "/api/overview/prune", "/api/overview/reveal"):
+        if cmd != "GET" and path in (
+            "/api/overview/start",
+            "/api/overview/archive",
+            "/api/overview/stop",
+            "/api/overview/prune",
+            "/api/overview/reveal",
+        ):
             # 首页写操作要求请求头里的宿主标识与本服务一致（对照页的 X-AE-Review 只对审阅宿主有意义）
             if self.headers.get("X-AE-Host") != server.home_id:
                 raise Reject(409, "host-mismatch", self._t("serve.err.hostMismatch"))
@@ -1263,8 +1554,9 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
             if not isinstance(body, dict) or set(body) != {"reviewId"}:
                 raise Reject(400, "bad-overview-start", self._t("serve.err.overviewStartBody"))
-            result = start_overview_review(body["reviewId"], self._t, hook=server.on_handoff,
-                                           hook_cwd=server.hook_cwd, under=server.overview_under)
+            result = start_overview_review(
+                body["reviewId"], self._t, hook=server.on_handoff, hook_cwd=server.hook_cwd, under=server.overview_under
+            )
             self._json(200, {"app": APP, **result})
             return
         if path == "/api/overview/archive":
@@ -1296,11 +1588,16 @@ class Handler(BaseHTTPRequestHandler):
                 raise Reject(409, "overview-reveal-unavailable", self._t("serve.err.revealUnavailable"))
             try:
                 if os.name == "nt":
-                    os.startfile(str(directory))   # Windows 资源管理器；仅用户显式点击触发
+                    os.startfile(str(directory))  # Windows 资源管理器；仅用户显式点击触发
                 else:
                     command = ["open" if sys.platform == "darwin" else "xdg-open", str(directory)]
-                    child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                             stderr=subprocess.DEVNULL, start_new_session=True)
+                    child = subprocess.Popen(
+                        command,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
                     try:
                         exit_code = child.wait(timeout=5)
                     except subprocess.TimeoutExpired:
@@ -1316,25 +1613,34 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/overview/prune":
             body = self._expect_obj(self._body())
             ids = body.get("reviewIds")
-            if (set(body) != {"reviewIds", "allStale", "deleteMetadata"}
-                    or not isinstance(ids, list)
-                    or any(not isinstance(rid, str) or not ledger.RID.fullmatch(rid) for rid in ids)
-                    or not isinstance(body["allStale"], bool) or not isinstance(body["deleteMetadata"], bool)
-                    or (body["deleteMetadata"] and not body["allStale"])):
+            if (
+                set(body) != {"reviewIds", "allStale", "deleteMetadata"}
+                or not isinstance(ids, list)
+                or any(not isinstance(rid, str) or not ledger.RID.fullmatch(rid) for rid in ids)
+                or not isinstance(body["allStale"], bool)
+                or not isinstance(body["deleteMetadata"], bool)
+                or (body["deleteMetadata"] and not body["allStale"])
+            ):
                 raise Reject(400, "bad-overview-prune", self._t("serve.err.prunePayload"))
             try:
-                result = ledger.prune_stale(all_stale=body["allStale"], under=server.overview_under,
-                                            review_ids=list(dict.fromkeys(ids)),
-                                            delete_metadata=body["deleteMetadata"])
+                result = ledger.prune_stale(
+                    all_stale=body["allStale"],
+                    under=server.overview_under,
+                    review_ids=list(dict.fromkeys(ids)),
+                    delete_metadata=body["deleteMetadata"],
+                )
             except (ledger.LedgerError, OSError) as error:
-                raise Reject(500, "overview-prune-failed",
-                             self._t("serve.err.pruneFailed", detail=error)) from None
+                raise Reject(500, "overview-prune-failed", self._t("serve.err.pruneFailed", detail=error)) from None
             self._json(200, {"app": APP, **result})
             return
         # /api/overview/stop
         body = self._body()
-        if (not isinstance(body, dict) or set(body) != {"reviewId", "scope"}
-                or not isinstance(body["reviewId"], str) or not ledger.RID.fullmatch(body["reviewId"])):
+        if (
+            not isinstance(body, dict)
+            or set(body) != {"reviewId", "scope"}
+            or not isinstance(body["reviewId"], str)
+            or not ledger.RID.fullmatch(body["reviewId"])
+        ):
             raise Reject(400, "bad-overview-stop", self._t("serve.err.overviewStopBody"))
         rid, scope = body["reviewId"], body["scope"]
         if scope not in ("workspace", "all"):
@@ -1354,14 +1660,20 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
         identity = {"pageId", "clientId"}
         receipt = identity | {"stopId", "token", "saved"}
-        if (not isinstance(body, dict)
-                or set(body) not in (identity, identity | {"closing"}, receipt)
-                or any(not isinstance(body[key], str) or not review_save.PAGE_ID.fullmatch(body[key])
-                       for key in identity)
-                or ("closing" in body and body["closing"] is not True)
-                or (set(body) == receipt and (not isinstance(body["saved"], bool)
-                                             or not isinstance(body["stopId"], str)
-                                             or not isinstance(body["token"], str)))):
+        if (
+            not isinstance(body, dict)
+            or set(body) not in (identity, identity | {"closing"}, receipt)
+            or any(not isinstance(body[key], str) or not review_save.PAGE_ID.fullmatch(body[key]) for key in identity)
+            or ("closing" in body and body["closing"] is not True)
+            or (
+                set(body) == receipt
+                and (
+                    not isinstance(body["saved"], bool)
+                    or not isinstance(body["stopId"], str)
+                    or not isinstance(body["token"], str)
+                )
+            )
+        ):
             raise Reject(400, "bad-save-protection", self._t("serve.err.saveProtectionBody"))
         try:
             result = self.server.browser_saves.update(rid, self.headers["Origin"].lower(), body)
@@ -1398,9 +1710,16 @@ def read_status(review_dir: Path) -> dict[str, Any] | None:
 
 
 def write_status(server: ReviewServer) -> None:
-    info = {"app": APP, "version": VERSION, "pid": os.getpid(), "port": server.port,
-            "url": f"http://127.0.0.1:{server.port}/", "dir": str(server.review_dir),
-            "hook": bool(server.on_handoff), "startedAt": store.now_iso()}
+    info = {
+        "app": APP,
+        "version": VERSION,
+        "pid": os.getpid(),
+        "port": server.port,
+        "url": f"http://127.0.0.1:{server.port}/",
+        "dir": str(server.review_dir),
+        "hook": bool(server.on_handoff),
+        "startedAt": store.now_iso(),
+    }
     f = ledger.status_file(server.review_dir)
     with ledger.metadata_lock(server.review_dir, exclusive=True):
         fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -1415,7 +1734,7 @@ def clear_status(review_dir: Path) -> None:
             if info and info.get("pid") == os.getpid():
                 ledger.status_file(review_dir).unlink(missing_ok=True)
     except FileNotFoundError:
-        pass   # 审阅目录已删除时与原实现一样无需清理
+        pass  # 审阅目录已删除时与原实现一样无需清理
 
 
 # ---------- 总览首页宿主：运行状态、实例判定与启动 ----------
@@ -1430,13 +1749,22 @@ def read_home_status() -> dict[str, Any] | None:
 
 def write_home_status(server: ReviewServer, config: dict[str, Any]) -> None:
     # config 的键与运行字段错开（显式端口记 explicitPort，实际端口才叫 port），避免展开覆盖
-    info = {"app": APP, "version": VERSION, "hostKind": HOST_KIND_OVERVIEW,
-            "hostId": server.home_id, **config,
-            "pid": os.getpid(), "port": server.port,
-            "url": f"http://127.0.0.1:{server.port}/", "startedAt": store.now_iso()}
-    fsutil.atomic_write(ledger.home() / OVERVIEW_STATUS_FILE,
-                        json.dumps(info, ensure_ascii=False, indent=2) + "\n",
-                        prefix=".overview-home-status-")
+    info = {
+        "app": APP,
+        "version": VERSION,
+        "hostKind": HOST_KIND_OVERVIEW,
+        "hostId": server.home_id,
+        **config,
+        "pid": os.getpid(),
+        "port": server.port,
+        "url": f"http://127.0.0.1:{server.port}/",
+        "startedAt": store.now_iso(),
+    }
+    fsutil.atomic_write(
+        ledger.home() / OVERVIEW_STATUS_FILE,
+        json.dumps(info, ensure_ascii=False, indent=2) + "\n",
+        prefix=".overview-home-status-",
+    )
 
 
 def clear_home_status() -> None:
@@ -1456,15 +1784,21 @@ def overview_running() -> dict[str, Any] | None:
     pid, port = info.get("pid"), info.get("port")
     if type(pid) is not int or not ledger.pid_alive(pid):
         return None
-    found = probe(port, timeout=.5) if type(port) is int and 1 <= port <= 65535 else None
-    if (found and found.get("hostKind") == HOST_KIND_OVERVIEW and found.get("hostId") == info["hostId"]
-            and found.get("pid") == pid and found.get("port") == port):
+    found = probe(port, timeout=0.5) if type(port) is int and 1 <= port <= 65535 else None
+    if (
+        found
+        and found.get("hostKind") == HOST_KIND_OVERVIEW
+        and found.get("hostId") == info["hostId"]
+        and found.get("pid") == pid
+        and found.get("port") == port
+    ):
         return {**info, "version": found.get("version"), "url": f"http://127.0.0.1:{port}/"}
     return None
 
 
-def bind_home(port: int, *, home_id: str, debug: bool, on_handoff: list[str] | None,
-              avoid: dict[int, str], under: Path | None) -> tuple[ReviewServer | None, list[str]]:
+def bind_home(
+    port: int, *, home_id: str, debug: bool, on_handoff: list[str] | None, avoid: dict[int, str], under: Path | None
+) -> tuple[ReviewServer | None, list[str]]:
     """绑定空闲地址。实例复用统一由当前台账的运行状态与健康检查决定。"""
     notes: list[str] = []
     for p in range(port, min(port + PORT_TRIES, 65536)):
@@ -1473,13 +1807,25 @@ def bind_home(port: int, *, home_id: str, debug: bool, on_handoff: list[str] | N
             continue
         found = probe(p)
         if found is not None:
-            who = T("serve.bind.otherProgram") if found.get("app") != APP else T(
-                "serve.bind.otherHome" if found.get("hostKind") == HOST_KIND_OVERVIEW else "serve.bind.otherReview")
+            who = (
+                T("serve.bind.otherProgram")
+                if found.get("app") != APP
+                else T(
+                    "serve.bind.otherHome" if found.get("hostKind") == HOST_KIND_OVERVIEW else "serve.bind.otherReview"
+                )
+            )
             notes.append(T("serve.bind.busy", port=p, who=who))
             continue
         try:
-            return ReviewServer(None, p, debug=debug, on_handoff=on_handoff, overview_under=under,
-                                home_id=home_id, locale=i18n.current_locale()), notes
+            return ReviewServer(
+                None,
+                p,
+                debug=debug,
+                on_handoff=on_handoff,
+                overview_under=under,
+                home_id=home_id,
+                locale=i18n.current_locale(),
+            ), notes
         except OSError as e:
             notes.append(T("serve.bind.failed", port=p, detail=e.strerror or e))
     return None, notes
@@ -1487,27 +1833,43 @@ def bind_home(port: int, *, home_id: str, debug: bool, on_handoff: list[str] | N
 
 def _overview_config(under: Path | None, port: int | None, on_handoff: list[str] | None) -> dict[str, Any]:
     """实例复用的配置比较：规范化 --under、显式临时端口、默认界面语言、钩子参数与启用钩子时的工作目录。"""
-    return {"under": str(under.expanduser().resolve()) if under else None,
-            "explicitPort": port, "locale": i18n.current_locale(),
-            "hook": list(on_handoff) if on_handoff else None,
-            "hookCwd": os.getcwd() if on_handoff else None}
+    return {
+        "under": str(under.expanduser().resolve()) if under else None,
+        "explicitPort": port,
+        "locale": i18n.current_locale(),
+        "hook": list(on_handoff) if on_handoff else None,
+        "hookCwd": os.getcwd() if on_handoff else None,
+    }
 
 
 def _overview_config_diff(existing: dict[str, Any], requested: dict[str, Any]) -> str:
     """差异明细：旗标名两侧通用，非旗标标签走词典；分隔与赋值标点跟随当前语言。"""
-    labels = {"under": "--under", "explicitPort": "--port", "locale": "--locale",
-              "hook": "--on-handoff", "hookCwd": T("serve.overview.diffHookCwd")}
+    labels = {
+        "under": "--under",
+        "explicitPort": "--port",
+        "locale": "--locale",
+        "hook": "--on-handoff",
+        "hookCwd": T("serve.overview.diffHookCwd"),
+    }
     zh = i18n.current_locale() == "zh-CN"
     sep = "；" if zh else "; "
     assign = "：" if zh else ": "
-    return sep.join(f"{labels[k]}{assign}{existing.get(k)} → {requested.get(k)}"
-                    for k in requested if existing.get(k) != requested.get(k))
+    return sep.join(
+        f"{labels[k]}{assign}{existing.get(k)} → {requested.get(k)}"
+        for k in requested
+        if existing.get(k) != requested.get(k)
+    )
 
 
 def _reuse_overview_home(running: dict[str, Any], config: dict[str, Any], open_browser: bool) -> int:
     if running.get("version") != VERSION:
-        detail = T("serve.stale.detail", old=running.get("version") or T("serve.stale.oldWord"),
-                   port=running["port"], pid=running["pid"], version=VERSION)
+        detail = T(
+            "serve.stale.detail",
+            old=running.get("version") or T("serve.stale.oldWord"),
+            port=running["port"],
+            pid=running["pid"],
+            version=VERSION,
+        )
         print(T("serve.serve.stale", detail=detail), file=sys.stderr)
         return 6
     existing = {k: running.get(k) for k in config}
@@ -1521,11 +1883,12 @@ def _reuse_overview_home(running: dict[str, Any], config: dict[str, Any], open_b
     return 0
 
 
-def _prepare_overview_home(under: Path | None, port: int | None, debug: bool,
-                           on_handoff: list[str] | None,
-                           config: dict[str, Any]) -> tuple[ReviewServer, str] | int:
+def _prepare_overview_home(
+    under: Path | None, port: int | None, debug: bool, on_handoff: list[str] | None, config: dict[str, Any]
+) -> tuple[ReviewServer, str] | int:
     """持首页启动锁构建页面、决定地址、绑定并写运行状态。"""
     import build_viewer
+
     home_id = ledger.overview_host_id()
     build_viewer.build_overview_home(ledger.home(), host_id=home_id, locale=i18n.current_locale())
     owned = ledger.overview_reserved_port()
@@ -1546,8 +1909,14 @@ def _prepare_overview_home(under: Path | None, port: int | None, debug: bool,
                 return 3
             print(T("serve.overview.portOwned", port=reserved), file=sys.stderr)
             first, owned = reserved, reserved
-    server, trail = bind_home(first if first is not None else DEFAULT_PORT, home_id=home_id,
-                              debug=debug, on_handoff=on_handoff, avoid=avoid, under=under)
+    server, trail = bind_home(
+        first if first is not None else DEFAULT_PORT,
+        home_id=home_id,
+        debug=debug,
+        on_handoff=on_handoff,
+        avoid=avoid,
+        under=under,
+    )
     for t in trail:
         print(T("serve.port.trail", detail=t), file=sys.stderr)
     if server is None:
@@ -1607,10 +1976,10 @@ def _windows_stop_event(server: ReviewServer):
         kernel32.CloseHandle(handle)
 
 
-def _serve_overview_home(server: ReviewServer, url: str, on_handoff: list[str] | None,
-                         open_browser: bool) -> int:
+def _serve_overview_home(server: ReviewServer, url: str, on_handoff: list[str] | None, open_browser: bool) -> int:
     """前台跑到 Ctrl+C / SIGTERM，关闭监听后清理运行状态。"""
     try:
+
         def _term(*_a: Any) -> None:
             raise KeyboardInterrupt
 
@@ -1619,9 +1988,12 @@ def _serve_overview_home(server: ReviewServer, url: str, on_handoff: list[str] |
             if sig is not None:
                 signal.signal(sig, _term)
         server.log("info", f"启动 {APP} {VERSION}：{url} 托管总览首页（pid {os.getpid()}）")
-        print(T("serve.overview.ready", url=url)
-              + (T("serve.serve.hookLine", command=fsutil.join_cli(on_handoff)) if on_handoff else "")
-              + T("serve.overview.stopHint"), flush=True)
+        print(
+            T("serve.overview.ready", url=url)
+            + (T("serve.serve.hookLine", command=fsutil.join_cli(on_handoff)) if on_handoff else "")
+            + T("serve.overview.stopHint"),
+            flush=True,
+        )
         if open_browser:
             threading.Timer(0.3, webbrowser.open, args=(url,)).start()
         with _windows_stop_event(server):
@@ -1635,15 +2007,21 @@ def _serve_overview_home(server: ReviewServer, url: str, on_handoff: list[str] |
     return 0
 
 
-def overview_home(under: Path | None, port: int | None, open_browser: bool, debug: bool,
-                  on_handoff: list[str] | None, locale: str | None) -> int:
+def overview_home(
+    under: Path | None,
+    port: int | None,
+    open_browser: bool,
+    debug: bool,
+    on_handoff: list[str] | None,
+    locale: str | None,
+) -> int:
     """总览首页：无审阅目录的宿主，列出本机（或 --under 目录下）的审阅，占一个台账保留端口。"""
     set_locale(locale or cli_locale(None))
     if under is not None and fsutil.is_unc_or_device_path(under, allow_local_extended=True):
         raise SystemExit(T("serve.msg.error", detail=f"Unsupported UNC or device path: {under}"))
     with contextlib.ExitStack() as stack:
         try:
-            stack.enter_context(ledger.update_lock())   # 运行期间沿用服务的更新锁，技能更新可识别该占用
+            stack.enter_context(ledger.update_lock())  # 运行期间沿用服务的更新锁，技能更新可识别该占用
         except OSError:
             print(T("serve.serve.updateLockUnavailable"), file=sys.stderr)
         try:
@@ -1670,7 +2048,7 @@ def overview_home(under: Path | None, port: int | None, open_browser: bool, debu
                 if remaining <= 0:
                     print(T("serve.overview.startupBusy"), file=sys.stderr)
                     return 3
-                time.sleep(min(.05, remaining))
+                time.sleep(min(0.05, remaining))
             else:
                 break
         outcome = _prepare_overview_home(under, port, debug, on_handoff, config)
@@ -1683,8 +2061,12 @@ def overview_home(under: Path | None, port: int | None, open_browser: bool, debu
 def same_dir(found: dict[str, Any], review_dir: Path) -> bool:
     try:
         directory = found.get("dir")
-        return (found.get("app") == APP and isinstance(directory, str) and bool(directory)
-                and Path(directory).resolve() == review_dir.resolve())
+        return (
+            found.get("app") == APP
+            and isinstance(directory, str)
+            and bool(directory)
+            and Path(directory).resolve() == review_dir.resolve()
+        )
     except (OSError, TypeError):
         return False
 
@@ -1709,8 +2091,7 @@ def overview_start_target(rid: Any, translate: Any, *, under: Path | None = None
 
 
 def overview_health(found: dict[str, Any] | None, rid: str, directory: Path, port: int) -> bool:
-    return bool(found and same_dir(found, directory) and found.get("reviewId") == rid
-                and found.get("port") == port)
+    return bool(found and same_dir(found, directory) and found.get("reviewId") == rid and found.get("port") == port)
 
 
 def stop_overview_review(directory: Path, rid: str, translate: Any) -> dict[str, Any]:
@@ -1723,9 +2104,15 @@ def stop_overview_review(directory: Path, rid: str, translate: Any) -> dict[str,
         return state
 
     def unconfirmed(component: str, code: str) -> dict[str, Any]:
-        return {**state, "state": "incomplete", "components": {
-            **state["components"], component: {"state": "incomplete", "error": code},
-        }, "incompleteReasons": {**state.get("incompleteReasons", {}), component: code}}
+        return {
+            **state,
+            "state": "incomplete",
+            "components": {
+                **state["components"],
+                component: {"state": "incomplete", "error": code},
+            },
+            "incompleteReasons": {**state.get("incompleteReasons", {}), component: code},
+        }
 
     info = read_status(directory) or {}
     port, pid = info.get("port"), info.get("pid")
@@ -1733,7 +2120,7 @@ def stop_overview_review(directory: Path, rid: str, translate: Any) -> dict[str,
         if state["state"] == "active":
             raise Reject(409, "overview-review-not-running", translate("serve.err.overviewStopNotRunning"))
         return unconfirmed("http", "http-status-unconfirmed")
-    found = probe(port, timeout=.5) if type(port) is int and 1024 <= port <= 65535 else None
+    found = probe(port, timeout=0.5) if type(port) is int and 1024 <= port <= 65535 else None
     if not overview_health(found, rid, directory, port) or found.get("pid") != pid:
         return unconfirmed("http", "http-status-unconfirmed")
     features = found.get("features")
@@ -1751,13 +2138,16 @@ def stop_overview_review(directory: Path, rid: str, translate: Any) -> dict[str,
 
 
 def _review_request(port: int, rid: str, path: str, body: dict[str, Any], timeout: float):
-    headers = {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}",
-               "Content-Type": "application/json", "X-AE-Review": rid}
+    headers = {
+        "Host": f"127.0.0.1:{port}",
+        "Origin": f"http://127.0.0.1:{port}",
+        "Content-Type": "application/json",
+        "X-AE-Review": rid,
+    }
     return _req(port, "POST", path, headers, body, timeout=timeout)
 
 
-def resume_running_review(directory: Path, rid: str, port: int, found: dict[str, Any],
-                          timeout: float = 6.0) -> bool:
+def resume_running_review(directory: Path, rid: str, port: int, found: dict[str, Any], timeout: float = 6.0) -> bool:
     if not overview_health(found, rid, directory, port):
         return False
     if "resume-review" not in (found.get("features") or []):
@@ -1789,8 +2179,9 @@ def _binding_conflicts_with_hook(directory: Path) -> bool:
         return True
 
 
-def _overview_start_result(directory: Path, rid: str, url: str, *,
-                           health: dict[str, Any], hook_not_applied: bool = False) -> dict[str, Any]:
+def _overview_start_result(
+    directory: Path, rid: str, url: str, *, health: dict[str, Any], hook_not_applied: bool = False
+) -> dict[str, Any]:
     """启动结果的公开字段：地址、该服务实际加载的接收方式、可复制的等待命令与一次性的提示键。
 
     用实际服务的健康响应，兼容还没有 customHook 字段的旧副本。
@@ -1810,13 +2201,18 @@ def _overview_start_result(directory: Path, rid: str, url: str, *,
         note = "no-receiver"
     else:
         note = None
-    return {"url": url, "agentDelivery": receiver,
-            "waitCommand": review_overview.wait_command(rid, hook=hook_configured, receiver=receiver),
-            "hookConfigured": hook_configured, "note": note}
+    return {
+        "url": url,
+        "agentDelivery": receiver,
+        "waitCommand": review_overview.wait_command(rid, hook=hook_configured, receiver=receiver),
+        "hookConfigured": hook_configured,
+        "note": note,
+    }
 
 
-def start_overview_review(rid: Any, translate: Any, hook: list[str] | None = None,
-                          hook_cwd: str | None = None, *, under: Path | None = None) -> dict[str, Any]:
+def start_overview_review(
+    rid: Any, translate: Any, hook: list[str] | None = None, hook_cwd: str | None = None, *, under: Path | None = None
+) -> dict[str, Any]:
     """代启动一份台账审阅，返回公开的启动结果。
 
     hook：启动本服务的命令行解析后的钩子参数（只来自首页启动命令，绝不来自 HTTP），
@@ -1826,16 +2222,23 @@ def start_overview_review(rid: Any, translate: Any, hook: list[str] | None = Non
     deadline = time.monotonic() + 5
     # 每份审阅一把启动锁，跨托管服务串行化；不能持台账写锁等子进程登记。
     try:
-        with fsutil.flocked(ledger.home() / f".overview-start.{rid}.lock",
-                            exclusive=True, nofollow=True, deadline=deadline):
+        with fsutil.flocked(
+            ledger.home() / f".overview-start.{rid}.lock", exclusive=True, nofollow=True, deadline=deadline
+        ):
             return _start_overview_review_locked(rid, translate, deadline, hook, hook_cwd, under=under)
     except OSError:
         raise Reject(503, "overview-start-failed", translate("serve.err.overviewStartFailed")) from None
 
 
-def _start_overview_review_locked(rid: str, translate: Any, deadline: float,
-                                  hook: list[str] | None = None,
-                                  hook_cwd: str | None = None, *, under: Path | None = None) -> dict[str, Any]:
+def _start_overview_review_locked(
+    rid: str,
+    translate: Any,
+    deadline: float,
+    hook: list[str] | None = None,
+    hook_cwd: str | None = None,
+    *,
+    under: Path | None = None,
+) -> dict[str, Any]:
     directory, entry = overview_start_target(rid, translate, under=under)
     # 状态文件只提供候选端口；旧版服务也要实际核对健康响应中的身份。
     info = read_status(directory) or {}
@@ -1844,15 +2247,15 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float,
         if isinstance(port, int) and not isinstance(port, bool) and 1024 <= port <= 65535:
             found = probe(port, timeout=0.2)
             if overview_health(found, rid, directory, port):
-                if resume_running_review(directory, rid, port, found, max(.1, review_stop.remaining(deadline))):
-                    return _overview_start_result(directory, rid, f"http://127.0.0.1:{port}/",
-                                                  health=found, hook_not_applied=hook is not None)
+                if resume_running_review(directory, rid, port, found, max(0.1, review_stop.remaining(deadline))):
+                    return _overview_start_result(
+                        directory, rid, f"http://127.0.0.1:{port}/", health=found, hook_not_applied=hook is not None
+                    )
                 if probe(port, timeout=0.2) is not None:
                     raise Reject(503, "overview-start-failed", translate("serve.err.resumeFailed"))
     if hook is not None and _binding_conflicts_with_hook(directory):
         raise Reject(409, "overview-hook-conflict", translate("serve.err.overviewHookConflict"))
-    port = ledger.assign_port(rid, directory,
-                              is_free=lambda candidate: probe(candidate, timeout=0.2) is None)
+    port = ledger.assign_port(rid, directory, is_free=lambda candidate: probe(candidate, timeout=0.2) is None)
     if probe(port, timeout=0.2) is not None:
         raise Reject(409, "overview-port-busy", translate("serve.err.overviewStartBusy"))
     if time.monotonic() >= deadline:
@@ -1860,8 +2263,7 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float,
     child = None
     ready = False
     try:
-        command = [sys.executable, str(Path(__file__).resolve()), str(directory),
-                   "--no-open", "--overview-start", rid]
+        command = [sys.executable, str(Path(__file__).resolve()), str(directory), "--no-open", "--overview-start", rid]
         if under is not None:
             command += ["--overview-under", str(under)]
         if hook is not None:
@@ -1869,20 +2271,27 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float,
             command += ["--on-handoff", fsutil.join_cli(hook)]
             if hook_cwd:
                 command += ["--overview-hook-cwd", os.path.abspath(hook_cwd)]
-        child = subprocess.Popen(command, cwd=str(directory), stdin=subprocess.DEVNULL,
-                                 env={**os.environ, "AE_HOME": str(ledger.home())},
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                 start_new_session=True)
+        child = subprocess.Popen(
+            command,
+            cwd=str(directory),
+            stdin=subprocess.DEVNULL,
+            env={**os.environ, "AE_HOME": str(ledger.home())},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
         while time.monotonic() < deadline:
             found = probe(port, timeout=0.2)
             if overview_health(found, rid, directory, port):
                 if found.get("pid") != child.pid:
                     stop_overview_child(child)
-                    if not resume_running_review(directory, rid, port, found,
-                                                 max(.1, review_stop.remaining(deadline))):
+                    if not resume_running_review(
+                        directory, rid, port, found, max(0.1, review_stop.remaining(deadline))
+                    ):
                         raise Reject(503, "overview-start-failed", translate("serve.err.resumeFailed"))
-                    return _overview_start_result(directory, rid, f"http://127.0.0.1:{port}/",
-                                                  health=found, hook_not_applied=hook is not None)
+                    return _overview_start_result(
+                        directory, rid, f"http://127.0.0.1:{port}/", health=found, hook_not_applied=hook is not None
+                    )
                 threading.Thread(target=child.wait, daemon=True).start()
                 ready = True
                 return _overview_start_result(directory, rid, f"http://127.0.0.1:{port}/", health=found)
@@ -1897,11 +2306,16 @@ def _start_overview_review_locked(rid: str, translate: Any, deadline: float,
             stop_overview_child(child)
 
 
-def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
-         on_handoff: list[str] | None = None,
-         avoid: dict[int, str] | None = None,
-         locale: str | None = None,
-         hook_cwd: str | None = None) -> tuple[ReviewServer | None, str | None, list[str]]:
+def bind(
+    review_dir: Path,
+    port: int,
+    debug: bool,
+    tries: int = PORT_TRIES,
+    on_handoff: list[str] | None = None,
+    avoid: dict[int, str] | None = None,
+    locale: str | None = None,
+    hook_cwd: str | None = None,
+) -> tuple[ReviewServer | None, str | None, list[str]]:
     """返回 (服务, 已在运行的 URL, 过程记录)。本目录已有旧版本服务在跑时抛 StaleServer（不静默复用）。
 
     avoid：别的审阅的专属端口（端口 → 标识）。顺延时跳过它们，免得占了别人的地址。
@@ -1911,15 +2325,22 @@ def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
 
     def check_version(found: dict[str, Any], p: int) -> None:
         if found.get("version") != VERSION:
-            raise StaleServer(T("serve.stale.detail", old=found.get('version') or T("serve.stale.oldWord"),
-                                port=p, pid=found.get('pid'), version=VERSION))
+            raise StaleServer(
+                T(
+                    "serve.stale.detail",
+                    old=found.get("version") or T("serve.stale.oldWord"),
+                    port=p,
+                    pid=found.get("pid"),
+                    version=VERSION,
+                )
+            )
 
     info = read_status(review_dir)
     if info and ledger.pid_alive(int(info.get("pid") or 0)) and info.get("port"):
         found = probe(int(info["port"]))
         if found and same_dir(found, review_dir):
             check_version(found, int(info["port"]))
-            notes.append(T("serve.bind.runningHere", port=info['port'], pid=info.get('pid')))
+            notes.append(T("serve.bind.runningHere", port=info["port"], pid=info.get("pid")))
             return None, f"http://127.0.0.1:{info['port']}/", notes
     for p in range(port, port + tries):
         if p in avoid:
@@ -1932,14 +2353,24 @@ def bind(review_dir: Path, port: int, debug: bool, tries: int = PORT_TRIES,
         if found is not None:
             if same_dir(found, review_dir):
                 check_version(found, p)
-                notes.append(T("serve.bind.runningThere", port=p, pid=found.get('pid')))
+                notes.append(T("serve.bind.runningThere", port=p, pid=found.get("pid")))
                 return None, f"http://127.0.0.1:{p}/", notes
             who = T("serve.bind.otherReview") if found.get("app") == APP else T("serve.bind.otherProgram")
             notes.append(T("serve.bind.busy", port=p, who=who))
             continue
         try:
-            return ReviewServer(review_dir, p, debug=debug, on_handoff=on_handoff,
-                                locale=locale or i18n.current_locale(), hook_cwd=hook_cwd), None, notes
+            return (
+                ReviewServer(
+                    review_dir,
+                    p,
+                    debug=debug,
+                    on_handoff=on_handoff,
+                    locale=locale or i18n.current_locale(),
+                    hook_cwd=hook_cwd,
+                ),
+                None,
+                notes,
+            )
         except OSError as e:
             notes.append(T("serve.bind.failed", port=p, detail=e.strerror or e))
     return None, None, notes
@@ -1980,7 +2411,9 @@ def _others_ports(rid: str | None) -> dict[int, str]:
         return {}
 
 
-def plan_port(review_dir: Path, rid: str | None, port: int | None, claim: int | None) -> tuple[int, int | None, dict[int, str]]:
+def plan_port(
+    review_dir: Path, rid: str | None, port: int | None, claim: int | None
+) -> tuple[int, int | None, dict[int, str]]:
     """决定本次先试哪个端口。返回 (首选端口, 专属端口, 要避开的别人的专属端口)。
 
     - 不传 --port：用专属端口；还没有就分配（已在运行的认领当前端口，否则从 8765 起挑没人认领、此刻空闲的最小端口）；
@@ -2006,11 +2439,14 @@ def plan_port(review_dir: Path, rid: str | None, port: int | None, claim: int | 
         owned = (ledger.get(rid) or {}).get("port")
         if not owned:
             info = read_status(review_dir)
-            running = int(info["port"]) if info and info.get("port") and ledger.pid_alive(int(info.get("pid") or 0)) else None
+            running = (
+                int(info["port"]) if info and info.get("port") and ledger.pid_alive(int(info.get("pid") or 0)) else None
+            )
 
             def free(p: int) -> bool:
                 found = probe(p, timeout=0.5)
                 return found is None or same_dir(found, review_dir)
+
             owned = ledger.assign_port(rid, review_dir, prefer=running, is_free=free)
             print(T("serve.port.owned", port=owned), file=sys.stderr)
     except ledger.CopiedDir as e:
@@ -2022,9 +2458,18 @@ def plan_port(review_dir: Path, rid: str | None, port: int | None, claim: int | 
     return (port if port else owned), owned, _others_ports(rid)
 
 
-def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, on_handoff: list[str] | None = None,
-          claim: int | None = None, locale: str | None = None, overview_start: str | None = None,
-          hook_cwd: str | None = None, overview_under: Path | None = None) -> int:
+def serve(
+    review_dir: Path,
+    port: int | None,
+    open_browser: bool,
+    debug: bool,
+    on_handoff: list[str] | None = None,
+    claim: int | None = None,
+    locale: str | None = None,
+    overview_start: str | None = None,
+    hook_cwd: str | None = None,
+    overview_under: Path | None = None,
+) -> int:
     if fsutil.is_unc_or_device_path(review_dir, allow_local_extended=True):
         raise SystemExit(T("serve.msg.error", detail=f"Unsupported UNC or device path: {review_dir}"))
     if overview_under is not None and fsutil.is_unc_or_device_path(overview_under, allow_local_extended=True):
@@ -2046,14 +2491,23 @@ def serve(review_dir: Path, port: int | None, open_browser: bool, debug: bool, o
         except OSError:
             print(T("serve.serve.updateRestart"), file=sys.stderr)
             return 6
-        return _serve_locked(review_dir, port, open_browser, debug, on_handoff, claim, locale, overview_start,
-                             hook_cwd, overview_under)
+        return _serve_locked(
+            review_dir, port, open_browser, debug, on_handoff, claim, locale, overview_start, hook_cwd, overview_under
+        )
 
 
-def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug: bool,
-                  on_handoff: list[str] | None = None, claim: int | None = None,
-                  locale: str | None = None, overview_start: str | None = None,
-                  hook_cwd: str | None = None, overview_under: Path | None = None) -> int:
+def _serve_locked(
+    review_dir: Path,
+    port: int | None,
+    open_browser: bool,
+    debug: bool,
+    on_handoff: list[str] | None = None,
+    claim: int | None = None,
+    locale: str | None = None,
+    overview_start: str | None = None,
+    hook_cwd: str | None = None,
+    overview_under: Path | None = None,
+) -> int:
     review_dir = review_dir.resolve()
     set_locale(locale or cli_locale(None, review_dir))
     if not (review_dir / "index.html").is_file():
@@ -2064,9 +2518,9 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
     except ValueError as e:
         print(T("serve.serve.badNotes", detail=e), file=sys.stderr)
         return 2
-    m = ledger.read_manifest(review_dir)   # 读不了或不是 JSON 对象都返回 {}：不提示复制
+    m = ledger.read_manifest(review_dir)  # 读不了或不是 JSON 对象都返回 {}：不提示复制
     problem = ledger.unsupported_format(m)
-    if problem:   # 更高版本的报告格式（如新版 DOCX 元数据）：不启动，免得旧服务读写它
+    if problem:  # 更高版本的报告格式（如新版 DOCX 元数据）：不启动，免得旧服务读写它
         print(problem, file=sys.stderr)
         return 2
     if overview_start is not None:
@@ -2092,9 +2546,16 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
             print(T("serve.err.overviewStartFailed"), file=sys.stderr)
             return 3
         try:
-            server, running_url, trail = bind(review_dir, first, debug, tries=1 if overview_start else PORT_TRIES,
-                                              on_handoff=on_handoff, avoid=avoid,
-                                              locale=i18n.current_locale(), hook_cwd=hook_cwd)
+            server, running_url, trail = bind(
+                review_dir,
+                first,
+                debug,
+                tries=1 if overview_start else PORT_TRIES,
+                on_handoff=on_handoff,
+                avoid=avoid,
+                locale=i18n.current_locale(),
+                hook_cwd=hook_cwd,
+            )
         except StaleServer as e:
             print(T("serve.serve.stale", detail=e), file=sys.stderr)
             return 6
@@ -2109,8 +2570,11 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
                 return 3
             url = f"http://127.0.0.1:{server.port}/"
             if owned and server.port != owned:
-                why = T("serve.serve.whyTemp", port=server.port) if port \
+                why = (
+                    T("serve.serve.whyTemp", port=server.port)
+                    if port
                     else T("serve.serve.whyOccupied", owned=owned, port=server.port)
+                )
                 print(T("serve.serve.tempPortNote", why=why, owned=owned), file=sys.stderr)
             elif not owned and server.port != first:
                 print(T("serve.port.firstBusy", first=first, port=server.port), file=sys.stderr)
@@ -2127,9 +2591,15 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
         receiver = found.get("receiver") or {}
         needs_restart = receiver.get("state") == "restart-required"
         if binding:
-            needs_restart = needs_restart or "receiver-binding" not in found.get("features", []) or receiver.get("bindingId") != binding["bindingId"]
+            needs_restart = (
+                needs_restart
+                or "receiver-binding" not in found.get("features", [])
+                or receiver.get("bindingId") != binding["bindingId"]
+            )
             if binding["adapter"] == "codex-desktop":
-                needs_restart = needs_restart or "agent-delivery" not in found.get("features", []) or not found.get("hook")
+                needs_restart = (
+                    needs_restart or "agent-delivery" not in found.get("features", []) or not found.get("hook")
+                )
         if needs_restart:
             print(T("serve.serve.agentRestart"), file=sys.stderr)
             return 6
@@ -2138,15 +2608,17 @@ def _serve_locked(review_dir: Path, port: int | None, open_browser: bool, debug:
             return 6
         if claim and f":{claim}/" not in running_url:
             print(T("serve.port.claimButRunning", port=claim), file=sys.stderr)
-        print(T("serve.serve.running", url=running_url)
-              + (T("serve.serve.runningHookNote") if on_handoff else ""))
+        print(T("serve.serve.running", url=running_url) + (T("serve.serve.runningHookNote") if on_handoff else ""))
         if open_browser:
             webbrowser.open(running_url)
         return 0
     server.log("info", f"启动 {APP} {VERSION}：{url} 托管 {review_dir}（pid {os.getpid()}）")
-    print(T("serve.serve.ready", url=url, path=review_dir / store.NOTES_FILE)
-          + (T("serve.serve.hookLine", command=fsutil.join_cli(on_handoff)) if on_handoff else "")
-          + T("serve.serve.stopHint"), flush=True)
+    print(
+        T("serve.serve.ready", url=url, path=review_dir / store.NOTES_FILE)
+        + (T("serve.serve.hookLine", command=fsutil.join_cli(on_handoff)) if on_handoff else "")
+        + T("serve.serve.stopHint"),
+        flush=True,
+    )
 
     def _term(*_a: Any) -> None:
         raise KeyboardInterrupt
@@ -2195,16 +2667,20 @@ def status(review_dir: Path, locale: str | None = None) -> int:
     try:
         doc = store.load(review_dir)
         notes = doc["notes"]
-        out["notes"] = {"rev": doc.get("rev"), "total": len(notes),
-                        "open": sum(n.get("status", "open") == "open" for n in notes),
-                        "drafted": sum(n.get("status") == "drafted" for n in notes),
-                        "resolved": sum(n.get("status") == "resolved" for n in notes)}
+        out["notes"] = {
+            "rev": doc.get("rev"),
+            "total": len(notes),
+            "open": sum(n.get("status", "open") == "open" for n in notes),
+            "drafted": sum(n.get("status") == "drafted" for n in notes),
+            "resolved": sum(n.get("status") == "resolved" for n in notes),
+        }
     except ValueError as e:
         out["notes"] = {"error": T("serve.status.notesBroken", type=type(e).__name__)}
     hs = store.handoff_state(review_dir, full=False)
     latest = hs.get("latest") or {}
     out["handoff"] = {k: hs.get(k) for k in ("pending", "claimed", "drafted", "review", "reviewing")} | {
-                      "latest": {k: latest.get(k) for k in ("seq", "status", "at", "claimedAt", "doneAt")} if latest else None}
+        "latest": {k: latest.get(k) for k in ("seq", "status", "at", "claimedAt", "doneAt")} if latest else None
+    }
     code = 3
     info = read_status(review_dir)
     if info is not None:
@@ -2213,10 +2689,10 @@ def status(review_dir: Path, locale: str | None = None) -> int:
         alive = ledger.pid_alive(pid)
         health = probe(int(info.get("port") or 0)) if info.get("port") else None
         if alive and health and same_dir(health, review_dir) and health.get("pid") == pid:
-            out["server"] = T("serve.status.running", url=info.get('url'))
+            out["server"] = T("serve.status.running", url=info.get("url"))
             code = 0
         elif alive:
-            out["server"] = T("serve.status.stuck", pid=pid, port=info.get('port'))
+            out["server"] = T("serve.status.stuck", pid=pid, port=info.get("port"))
             code = 5
         else:
             out["server"] = T("serve.status.stale")
@@ -2225,16 +2701,21 @@ def status(review_dir: Path, locale: str | None = None) -> int:
                     if read_status(review_dir) == info:
                         ledger.status_file(review_dir).unlink(missing_ok=True)
             except FileNotFoundError:
-                pass   # 读取后目录消失：与 unlink(missing_ok=True) 的旧行为一致
+                pass  # 读取后目录消失：与 unlink(missing_ok=True) 的旧行为一致
             code = 4
     else:
         out["server"] = T("serve.status.notRunning")
     check_port = out["owned_port"] if isinstance(out.get("owned_port"), int) else DEFAULT_PORT
     found = probe(check_port)
     out["owned_port_now" if isinstance(out.get("owned_port"), int) else "default_port"] = (
-        T("serve.status.portIdle") if found is None else
-        T("serve.status.portSelf") if same_dir(found, review_dir) else
-        T("serve.status.portOther") if found.get("app") == APP else T("serve.status.portForeign"))
+        T("serve.status.portIdle")
+        if found is None
+        else T("serve.status.portSelf")
+        if same_dir(found, review_dir)
+        else T("serve.status.portOther")
+        if found.get("app") == APP
+        else T("serve.status.portForeign")
+    )
     out["agent_waiting"] = read_wait(review_dir)
     out["agentDelivery"] = wakeup.public_status(review_dir)
     log = review_dir / LOG_FILE
@@ -2242,9 +2723,13 @@ def status(review_dir: Path, locale: str | None = None) -> int:
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
         rejects = Counter(m.group(1) for ln in lines if (m := re.search(r"\[reject\] code=([a-z-]+)", ln)))
         errors = [ln for ln in lines if "[error]" in ln]
-        out["log"] = {"file": str(log), "reject_counts": dict(rejects), "errors": len(errors),
-                      "last_error_at": errors[-1][:19] if errors else None,
-                      "note": T("serve.status.logNote")}
+        out["log"] = {
+            "file": str(log),
+            "reject_counts": dict(rejects),
+            "errors": len(errors),
+            "last_error_at": errors[-1][:19] if errors else None,
+            "note": T("serve.status.logNote"),
+        }
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return code
 
@@ -2262,8 +2747,11 @@ def read_wait(review_dir: Path) -> list[str]:
             w = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if isinstance(w, dict) and f.name == ledger.wait_file(review_dir, int(w.get("pid") or 0)).name \
-                and ledger.pid_alive(int(w.get("pid") or 0)):
+        if (
+            isinstance(w, dict)
+            and f.name == ledger.wait_file(review_dir, int(w.get("pid") or 0)).name
+            and ledger.pid_alive(int(w.get("pid") or 0))
+        ):
             stages.append(str(w.get("stage") or "any"))
     return stages
 
@@ -2275,11 +2763,23 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
     直接用批次记录，不为此加载批注。
     """
     d = Path(e["dir"])
-    row: dict[str, Any] = {"reviewId": rid, "dir": str(d), "port": e.get("port"), "name": None, "state": None,
-                           "archived": review_overview.is_archived(d),
-                           "state_id": None,
-                           "running": None, "pending": 0, "review": 0, "waiting": False, "hook": False, "unattended": False,
-                           "agentDelivery": None, "receiptConfirmed": None}
+    row: dict[str, Any] = {
+        "reviewId": rid,
+        "dir": str(d),
+        "port": e.get("port"),
+        "name": None,
+        "state": None,
+        "archived": review_overview.is_archived(d),
+        "state_id": None,
+        "running": None,
+        "pending": 0,
+        "review": 0,
+        "waiting": False,
+        "hook": False,
+        "unattended": False,
+        "agentDelivery": None,
+        "receiptConfirmed": None,
+    }
     m = ledger.read_manifest(d)
     st = ledger.entry_state(rid, e, m)
     # state 是给脚本读的判定值，恒为中文、不随语言改值；state_id 是语言无关的稳定值；
@@ -2298,14 +2798,13 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
         row["running"] = port
         row["hook"] = bool(info.get("hook"))
         row["state_id"] = "running" if row["running"] == e.get("port") else "running-temp"
-        row["state"] = ("运行中" if row["running"] == e.get("port")
-                        else f"运行中（临时端口 {row['running']}）")
+        row["state"] = "运行中" if row["running"] == e.get("port") else f"运行中（临时端口 {row['running']}）"
     else:
         row["state"], row["state_id"] = "已停", "stopped"
     try:
         try:
             handoff = store.handoff_load(d)
-        except ValueError as exc:   # 批次记录损坏：计数按 0，投递状态按同一降级结果处理
+        except ValueError as exc:  # 批次记录损坏：计数按 0，投递状态按同一降级结果处理
             handoff = exc
         items = handoff["items"] if isinstance(handoff, dict) else []
         row["pending"] = sum(1 for i in items if i.get("status") == "pending")
@@ -2316,7 +2815,11 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
         latest = items[-1] if items else {}
         delivery = row["agentDelivery"] = wakeup.public_status(d, handoff=handoff, manifest=m)
         event = "review" if latest.get("status") in ("review", "reviewing") else "handoff"
-        if delivery.get("state") == "received" and delivery.get("seq") == latest.get("seq") and delivery.get("event") == event:
+        if (
+            delivery.get("state") == "received"
+            and delivery.get("seq") == latest.get("seq")
+            and delivery.get("event") == event
+        ):
             row["receiptConfirmed"] = True
         # No receipt is unknown, never evidence that a claimed worker is offline.
     except (OSError, ValueError):
@@ -2326,7 +2829,9 @@ def review_row(rid: str, e: dict[str, Any]) -> dict[str, Any]:
     # 有提交在等接收，却既没有对应阶段的代理在 wait、也没有钩子：用户点了「交给 Agent」也没人接
     takes_draft = any(x in ("draft", "any") for x in stages)
     takes_review = any(x in ("review", "any") for x in stages)
-    row["unattended"] = not row["hook"] and bool((row["pending"] and not takes_draft) or (row["review"] and not takes_review))
+    row["unattended"] = not row["hook"] and bool(
+        (row["pending"] and not takes_draft) or (row["review"] and not takes_review)
+    )
     return row
 
 
@@ -2336,8 +2841,7 @@ def _state_label(r: dict[str, Any]) -> str:
         return T("serve.msg.stateMissing")
     if r["state_id"] == "mismatch":
         rid = str(ledger.read_manifest(Path(r["dir"])).get("reviewId") or "")[:8]
-        return (T("serve.msg.stateMismatch", id=rid) if rid
-                else T("serve.msg.stateMismatchNoId"))
+        return T("serve.msg.stateMismatch", id=rid) if rid else T("serve.msg.stateMismatchNoId")
     if r["state_id"] == "running-temp":
         return T("serve.msg.stateRunningTemp", port=r["running"])
     if r["state_id"] == "running":
@@ -2356,35 +2860,50 @@ def list_reviews(under: Path | None, as_json: bool, locale: str | None = None) -
         print(T("serve.msg.error", detail=e), file=sys.stderr)
         return 2
     root = under.expanduser().resolve() if under else None
-    rows = [review_row(rid, e) for rid, e in items.items()
-            if root is None or Path(e["dir"]) == root or root in Path(e["dir"]).parents]
+    rows = [
+        review_row(rid, e)
+        for rid, e in items.items()
+        if root is None or Path(e["dir"]) == root or root in Path(e["dir"]).parents
+    ]
     rows.sort(key=lambda r: (r["port"] or 1 << 20, r["dir"]))
     if as_json:
-        print(json.dumps({"ledger": str(ledger.home() / ledger.LEDGER_FILE), "reviews": rows}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {"ledger": str(ledger.home() / ledger.LEDGER_FILE), "reviews": rows}, ensure_ascii=False, indent=2
+            )
+        )
         return 0
     if not rows:
-        print(T("serve.msg.listEmpty") + (T("serve.msg.listEmptyUnder", root=root) if root else "")
-              + T("serve.msg.listAutoRegister"))
+        print(
+            T("serve.msg.listEmpty")
+            + (T("serve.msg.listEmptyUnder", root=root) if root else "")
+            + T("serve.msg.listAutoRegister")
+        )
         return 0
     print(T("serve.msg.listHeader", path=ledger.home() / ledger.LEDGER_FILE, count=len(rows)))
     for r in rows:
-        parts = [T("serve.msg.pending", count=r["pending"]) if r["pending"] else "",
-                 T("serve.msg.review", count=r["review"]) if r["review"] else ""]
+        parts = [
+            T("serve.msg.pending", count=r["pending"]) if r["pending"] else "",
+            T("serve.msg.review", count=r["review"]) if r["review"] else "",
+        ]
         sub = T("serve.msg.listSeparator").join(x for x in parts if x) or T("serve.msg.noPending")
-        who = (T("serve.msg.agentWaiting") if r["waiting"]
-               else T("serve.msg.hook") if r["hook"] else T("serve.msg.nobodyWaiting"))
+        who = (
+            T("serve.msg.agentWaiting")
+            if r["waiting"]
+            else T("serve.msg.hook")
+            if r["hook"]
+            else T("serve.msg.nobodyWaiting")
+        )
         state = _state_label(r)
         if r["archived"]:
             state += " · " + T("serve.msg.archived")
-        print(T("serve.msg.reviewHead", rid=r['reviewId'][:8], name=r['name'] or T("serve.msg.unknownName")))
-        print(T("serve.msg.reviewLine", port=r['port'] or T("serve.msg.noPort"),
-                state=state, sub=sub, who=who))
-        print(T("serve.msg.reviewDir", dir=r['dir']))
+        print(T("serve.msg.reviewHead", rid=r["reviewId"][:8], name=r["name"] or T("serve.msg.unknownName")))
+        print(T("serve.msg.reviewLine", port=r["port"] or T("serve.msg.noPort"), state=state, sub=sub, who=who))
+        print(T("serve.msg.reviewDir", dir=r["dir"]))
         if r["unattended"]:
             notes_py = fsutil.quote_cli(str(Path(__file__).resolve().with_name("notes.py")))
             review_arg = fsutil.quote_cli(str(r["dir"]))
-            print(T("serve.msg.unattended",
-                    command=f"{fsutil.python_cli()} {notes_py} wait {review_arg}"))
+            print(T("serve.msg.unattended", command=f"{fsutil.python_cli()} {notes_py} wait {review_arg}"))
         print()
     stale = [r for r in rows if r["state_id"] in ("missing", "mismatch")]
     if stale:
@@ -2399,18 +2918,22 @@ def forget(key: str, locale: str | None = None) -> int:
     except (ledger.LedgerError, OSError) as err:
         print(T("serve.msg.error", detail=err), file=sys.stderr)
         return 2
-    print(T("serve.msg.forgetDone", rid=rid, dir=e['dir'])
-          + (T("serve.msg.forgetPort", port=e['port']) if e.get("port") else "")
-          + T("serve.msg.forgetTail"))
+    print(
+        T("serve.msg.forgetDone", rid=rid, dir=e["dir"])
+        + (T("serve.msg.forgetPort", port=e["port"]) if e.get("port") else "")
+        + T("serve.msg.forgetTail")
+    )
     return 0
 
 
-def prune(*, all_stale: bool, under: Path | None, delete_metadata: bool,
-          dry_run: bool, locale: str | None = None) -> int:
+def prune(
+    *, all_stale: bool, under: Path | None, delete_metadata: bool, dry_run: bool, locale: str | None = None
+) -> int:
     set_locale(locale or cli_locale(None))
     try:
-        result = ledger.prune_stale(all_stale=all_stale or under is not None, under=under,
-                                    delete_metadata=delete_metadata, dry_run=dry_run)
+        result = ledger.prune_stale(
+            all_stale=all_stale or under is not None, under=under, delete_metadata=delete_metadata, dry_run=dry_run
+        )
     except (ledger.LedgerError, OSError) as err:
         print(T("serve.msg.error", detail=err), file=sys.stderr)
         return 2
@@ -2431,8 +2954,14 @@ def prune(*, all_stale: bool, under: Path | None, delete_metadata: bool,
     if result["metadataErrors"]:
         print(T("serve.msg.pruneMetadataErrors", count=len(result["metadataErrors"])))
         for row in result["metadataErrors"]:
-            print(T("serve.msg.pruneMetadataErrorRow", rid=row["reviewId"],
-                    quarantine=row["quarantine"], detail=row["detail"]))
+            print(
+                T(
+                    "serve.msg.pruneMetadataErrorRow",
+                    rid=row["reviewId"],
+                    quarantine=row["quarantine"],
+                    detail=row["detail"],
+                )
+            )
         return 1
     return 0
 
@@ -2446,8 +2975,15 @@ def resolve_arg(arg: str) -> Path:
 
 
 # ---------- 自检 ----------
-def _req(port: int, method: str, path: str, headers: dict[str, str], body: Any = None,
-         raw: bytes | None = None, timeout: float = 3) -> tuple[int, dict[str, str], bytes]:
+def _req(
+    port: int,
+    method: str,
+    path: str,
+    headers: dict[str, str],
+    body: Any = None,
+    raw: bytes | None = None,
+    timeout: float = 3,
+) -> tuple[int, dict[str, str], bytes]:
     c = http.client.HTTPConnection(HOST, port, timeout=timeout)
     data = raw if raw is not None else (None if body is None else json.dumps(body).encode())
     c.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
@@ -2486,9 +3022,18 @@ def check(locale: str | None = None) -> int:
     previous_home = os.environ.get("AE_HOME")
     os.environ["AE_HOME"] = str(tmp / "ledger")
     try:
-        (tmp / "index.html").write_text("<!doctype html><title>check</title><script>var ok=1</script>ok", encoding="utf-8")
-        (tmp / MANIFEST).write_text(json.dumps({"reviewId": "checkreview", "pages": [
-            {"n": 1, "key": "synthetic-summary", "title": "合成概要", "stable": True}]}), encoding="utf-8")
+        (tmp / "index.html").write_text(
+            "<!doctype html><title>check</title><script>var ok=1</script>ok", encoding="utf-8"
+        )
+        (tmp / MANIFEST).write_text(
+            json.dumps(
+                {
+                    "reviewId": "checkreview",
+                    "pages": [{"n": 1, "key": "synthetic-summary", "title": "合成概要", "stable": True}],
+                }
+            ),
+            encoding="utf-8",
+        )
         srv = ReviewServer(tmp, 0, log_to_file=True, locale=i18n.current_locale())
         port = srv.port
         t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
@@ -2516,8 +3061,10 @@ def check(locale: str | None = None) -> int:
         s, h, b = _req(port, "GET", "/", good)
         ok(s == 200 and b"ok" in b, T("serve.check.indexOpens"))
         csp = h.get("content-security-policy", "")
-        ok("'sha256-" in csp and "unsafe-inline" not in csp.split("script-src", 1)[1].split(";", 1)[0],
-           T("serve.check.csp"))
+        ok(
+            "'sha256-" in csp and "unsafe-inline" not in csp.split("script-src", 1)[1].split(";", 1)[0],
+            T("serve.check.csp"),
+        )
         s, _, _ = _req(port, "GET", "/", {"Host": f"evil.example:{port}"})
         ok(s == 421, T("serve.check.badHost", status=s))
         s, _, _ = _req(port, "GET", "/api/notes", {"Host": f"evil.example:{port}"})
@@ -2527,31 +3074,41 @@ def check(locale: str | None = None) -> int:
         # 新写接口逐项过同一套安全门；被拒请求不能创建或改写状态文件。
         state_paths = [tmp / store.NOTES_FILE, tmp / store.LOG_FILE, tmp / store.HANDOFF_FILE]
         before_finalize = [path.read_bytes() if path.exists() else None for path in state_paths]
-        finalize_guards = [({**same, "Host": "evil.example"}, 421, "Host"),
-                           ({**same, "Origin": "http://evil.example"}, 403, "Origin"),
-                           ({k: v for k, v in same.items() if k != "Origin"}, 403, "NoOrigin"),
-                           ({**same, "Content-Type": "text/plain"}, 415, "Content-Type"),
-                           ({**same, "Sec-Fetch-Site": "cross-site"}, 403, "Sec-Fetch-Site")]
+        finalize_guards = [
+            ({**same, "Host": "evil.example"}, 421, "Host"),
+            ({**same, "Origin": "http://evil.example"}, 403, "Origin"),
+            ({k: v for k, v in same.items() if k != "Origin"}, 403, "NoOrigin"),
+            ({**same, "Content-Type": "text/plain"}, 415, "Content-Type"),
+            ({**same, "Sec-Fetch-Site": "cross-site"}, 403, "Sec-Fetch-Site"),
+        ]
         for headers, expected, guard in finalize_guards:
             s, h, _ = _req(port, "POST", "/api/handoff/finalize-all", headers, {"batches": []})
-            ok(s == expected and "access-control-allow-origin" not in h,
-               T("serve.check.finalizeAllGuard", guard=guard, status=s))
-        ok([path.read_bytes() if path.exists() else None for path in state_paths] == before_finalize,
-           T("serve.check.finalizeAllUnchanged"))
+            ok(
+                s == expected and "access-control-allow-origin" not in h,
+                T("serve.check.finalizeAllGuard", guard=guard, status=s),
+            )
+        ok(
+            [path.read_bytes() if path.exists() else None for path in state_paths] == before_finalize,
+            T("serve.check.finalizeAllUnchanged"),
+        )
         # 在进程边界设置拒绝哨兵：失守也不能真的拉起不应启动的服务。
         start_headers = {**same, "X-AE-Review": "checkreview"}
         with patch.object(subprocess, "Popen", side_effect=AssertionError("unexpected overview child")) as spawned:
-            guards = [({**start_headers, "Host": "evil.example"}, 421, "Host"),
-                      ({**start_headers, "Origin": "http://evil.example"}, 403, "Origin"),
-                      ({key: value for key, value in start_headers.items() if key != "Origin"}, 403, "NoOrigin"),
-                      ({**start_headers, "Content-Type": "text/plain"}, 415, "ContentType"),
-                      ({**start_headers, "Sec-Fetch-Site": "cross-site"}, 403, "CrossSite")]
+            guards = [
+                ({**start_headers, "Host": "evil.example"}, 421, "Host"),
+                ({**start_headers, "Origin": "http://evil.example"}, 403, "Origin"),
+                ({key: value for key, value in start_headers.items() if key != "Origin"}, 403, "NoOrigin"),
+                ({**start_headers, "Content-Type": "text/plain"}, 415, "ContentType"),
+                ({**start_headers, "Sec-Fetch-Site": "cross-site"}, 403, "CrossSite"),
+            ]
             for headers, expected, label in guards:
                 s, _, _ = _req(port, "POST", "/api/overview/start", headers, {"reviewId": "0" * 16})
                 ok(s == expected, T("serve.check.overviewStart" + label, status=s))
             s, _, raw = _req(port, "POST", "/api/overview/start", start_headers, {"reviewId": "0" * 16})
-            ok(s == 404 and json.loads(raw).get("code") == "overview-review-unknown",
-               T("serve.check.overviewStartUnknown", status=s))
+            ok(
+                s == 404 and json.loads(raw).get("code") == "overview-review-unknown",
+                T("serve.check.overviewStartUnknown", status=s),
+            )
             ok(spawned.call_count == 0, T("serve.check.overviewStartNoProcess"))
 
         save_state_paths = [tmp / review_stop.STATE_FILE, tmp / review_save.REGISTRY]
@@ -2559,20 +3116,30 @@ def check(locale: str | None = None) -> int:
         stop_body = {"reviewId": "0" * 16, "scope": "all"}
         save_body = {"pageId": "0" * 32, "clientId": "1" * 32}
         for path, body in (("/api/overview/stop", stop_body), ("/api/server/save-protection", save_body)):
-            for headers, expected, guard in (*guards,
-                    ({**start_headers, "X-AE-Review": "2" * 16}, 409, "X-AE-Review"),
-                    (same, 409, "X-AE-Review")):
+            for headers, expected, guard in (
+                *guards,
+                ({**start_headers, "X-AE-Review": "2" * 16}, 409, "X-AE-Review"),
+                (same, 409, "X-AE-Review"),
+            ):
                 s, h, _ = _req(port, "POST", path, headers, body)
-                ok(s == expected and "access-control-allow-origin" not in h,
-                   T("serve.check.overviewStopGuard", path=path, guard=guard, status=s))
+                ok(
+                    s == expected and "access-control-allow-origin" not in h,
+                    T("serve.check.overviewStopGuard", path=path, guard=guard, status=s),
+                )
         s, _, raw = _req(port, "POST", "/api/overview/stop", start_headers, stop_body)
-        ok(s == 404 and json.loads(raw).get("code") == "overview-review-unknown",
-           T("serve.check.overviewStopUnknown", status=s))
+        ok(
+            s == 404 and json.loads(raw).get("code") == "overview-review-unknown",
+            T("serve.check.overviewStopUnknown", status=s),
+        )
         s, _, raw = _req(port, "POST", "/api/overview/stop", start_headers, {**stop_body, "port": port})
-        ok(s == 400 and json.loads(raw).get("code") == "bad-overview-stop",
-           T("serve.check.overviewStopTarget", status=s))
-        ok([path.read_bytes() if path.exists() else None for path in save_state_paths] == before_stop,
-           T("serve.check.saveProtectionUnchanged"))
+        ok(
+            s == 400 and json.loads(raw).get("code") == "bad-overview-stop",
+            T("serve.check.overviewStopTarget", status=s),
+        )
+        ok(
+            [path.read_bytes() if path.exists() else None for path in save_state_paths] == before_stop,
+            T("serve.check.saveProtectionUnchanged"),
+        )
 
         archive = {"reviewId": "0" * 16, "archived": True}
         s, _, _ = _req(port, "POST", "/api/overview/archive", {**same, "Host": f"evil.example:{port}"}, archive)
@@ -2596,8 +3163,12 @@ def check(locale: str | None = None) -> int:
         ok(s == 403, T("serve.check.crossSite", status=s))
         s, _, _ = _req(port, "POST", "/api/notes", {**same, "Content-Length": "-5"}, raw=b"")
         ok(s == 400, T("serve.check.negativeLength", status=s))
-        s, h, _ = _req(port, "OPTIONS", "/api/notes", {**good, "Origin": "http://evil.example",
-                                                         "Access-Control-Request-Method": "POST"})
+        s, h, _ = _req(
+            port,
+            "OPTIONS",
+            "/api/notes",
+            {**good, "Origin": "http://evil.example", "Access-Control-Request-Method": "POST"},
+        )
         ok(s == 405 and "access-control-allow-origin" not in h, T("serve.check.preflight", status=s))
         s, _, _ = _req(port, "GET", "/../notes.json", good)
         ok(s == 404, T("serve.check.traversal", status=s))
@@ -2605,8 +3176,9 @@ def check(locale: str | None = None) -> int:
         ok(s == 404, T("serve.check.otherFiles", status=s))
 
         evil_id = 'z"><img src=x onerror=alert(1)>'
-        s, h, b = _req(port, "POST", "/api/notes", same, {"id": evil_id, "page": 2, "text": "自检批注",
-                                                           "pin": {"x": 10, "y": 20}})
+        s, h, b = _req(
+            port, "POST", "/api/notes", same, {"id": evil_id, "page": 2, "text": "自检批注", "pin": {"x": 10, "y": 20}}
+        )
         ok(s == 201 and "access-control-allow-origin" not in h, T("serve.check.sameOriginWrite", status=s))
         nid = json.loads(b)["note"]["id"] if s == 201 else ""
         ok(nid and nid != evil_id and store.valid_id(nid), T("serve.check.idRegenerated"))
@@ -2624,14 +3196,20 @@ def check(locale: str | None = None) -> int:
             except (OSError, ValueError):
                 file_mode_ok = False
         else:
-            file_mode_ok = (oct((tmp / store.NOTES_FILE).stat().st_mode & 0o777) == "0o600"
-                            and oct((tmp / store.LOG_FILE).stat().st_mode & 0o777) == "0o600")
+            file_mode_ok = (
+                oct((tmp / store.NOTES_FILE).stat().st_mode & 0o777) == "0o600"
+                and oct((tmp / store.LOG_FILE).stat().st_mode & 0o777) == "0o600"
+            )
         ok(file_mode_ok, T("serve.check.fileMode"))
         s, _, _ = _req(port, "PATCH", f"/api/notes/{nid}", same, {"status": "resolved", "resolution": "已改"})
         ok(s == 200, T("serve.check.markResolved", status=s))
         hook_out = tmp / "hook.json"
-        srv.on_handoff = [sys.executable, "-c", "import sys,pathlib;pathlib.Path(sys.argv[1]).write_text(sys.stdin.read())",
-                          str(hook_out)]
+        srv.on_handoff = [
+            sys.executable,
+            "-c",
+            "import sys,pathlib;pathlib.Path(sys.argv[1]).write_text(sys.stdin.read())",
+            str(hook_out),
+        ]
         s, _, _ = _req(port, "POST", "/api/handoff", {**same, "Origin": "http://evil.example"}, {"message": "x"})
         ok(s == 403, T("serve.check.crossSiteHandoff", status=s))
         s, _, b = _req(port, "POST", "/api/handoff", same, {"message": "请处理"})
@@ -2641,48 +3219,78 @@ def check(locale: str | None = None) -> int:
             if hook_out.exists() and hook_out.stat().st_size:
                 break
             time.sleep(0.1)
-        payload = json.loads(hook_out.read_text(encoding="utf-8")) if hook_out.exists() and hook_out.stat().st_size else {}
-        ok(payload.get("seq") == 1 and payload.get("reviewId") == "checkreview" and payload.get("message") == "请处理",
-           T("serve.check.hookRuns"))
+        payload = (
+            json.loads(hook_out.read_text(encoding="utf-8")) if hook_out.exists() and hook_out.stat().st_size else {}
+        )
+        ok(
+            payload.get("seq") == 1 and payload.get("reviewId") == "checkreview" and payload.get("message") == "请处理",
+            T("serve.check.hookRuns"),
+        )
         s, _, b = _req(port, "POST", "/api/handoff", same, {"message": "补充"})
         ok(s == 200 and json.loads(b).get("merged") and json.loads(b).get("seq") == 1, T("serve.check.merge"))
         s, _, b = _req(port, "POST", "/api/notes", same, {"page": 1, "text": "自检：第 1 页的口径对吗"})
         anid = json.loads(b)["note"]["id"] if s == 201 else ""
-        analysis_guards = [({**same, "Host": f"evil.example:{port}"}, 421, "Host"),
-                           ({**same, "Origin": "http://evil.example"}, 403, "Origin"),
-                           ({k: v for k, v in same.items() if k != "Origin"}, 403, "NoOrigin"),
-                           ({**same, "Content-Type": "text/plain"}, 415, "ContentType")]
+        analysis_guards = [
+            ({**same, "Host": f"evil.example:{port}"}, 421, "Host"),
+            ({**same, "Origin": "http://evil.example"}, 403, "Origin"),
+            ({k: v for k, v in same.items() if k != "Origin"}, 403, "NoOrigin"),
+            ({**same, "Content-Type": "text/plain"}, 415, "ContentType"),
+        ]
         for headers, expected, label in analysis_guards:
             s, _, _ = _req(port, "POST", "/api/analysis/start", headers, {"noteId": anid})
             ok(s == expected, T("serve.check.analysisStart" + label, status=s))
         s, _, b = _req(port, "POST", "/api/analysis/start", same, {"noteId": anid})
-        ok(s == 200 and json.loads(b).get("note", {}).get("status") == "held"
-           and json.loads(b).get("round") == 1, T("serve.check.analysisStartOk", status=s))
+        ok(
+            s == 200 and json.loads(b).get("note", {}).get("status") == "held" and json.loads(b).get("round") == 1,
+            T("serve.check.analysisStartOk", status=s),
+        )
         first = json.loads(b).get("analysis", {})
         claimed_round = analysis_store.claim(tmp, seq=1)
         count = len(store.load(tmp)["notes"])
-        s, _, b = _req(port, "POST", "/api/analysis/start", same,
-                       {"focus": "自检：这一页的结论有依据吗？", "page": 1})
+        s, _, b = _req(port, "POST", "/api/analysis/start", same, {"focus": "自检：这一页的结论有依据吗？", "page": 1})
         second = json.loads(b).get("analysis", {})
-        ok(s == 200 and json.loads(b).get("note") is None and second.get("sourceNote") is None
-           and second.get("sourceCopy", {}).get("key") == "synthetic-summary"
-           and len(store.load(tmp)["notes"]) == count, T("serve.check.lifeFocus", status=s))
+        ok(
+            s == 200
+            and json.loads(b).get("note") is None
+            and second.get("sourceNote") is None
+            and second.get("sourceCopy", {}).get("key") == "synthetic-summary"
+            and len(store.load(tmp)["notes"]) == count,
+            T("serve.check.lifeFocus", status=s),
+        )
         s, _, b = _req(port, "POST", "/api/analysis/activate", same, {"analysis": first["id"]})
         active = json.loads(b).get("analysis", {})
-        ok(s == 200 and active.get("status") == "active" and active.get("rev") == claimed_round["baseRev"]
-           and analysis_store.load(tmp, second["id"])["status"] == "paused", T("serve.check.lifeSwitch", status=s))
+        ok(
+            s == 200
+            and active.get("status") == "active"
+            and active.get("rev") == claimed_round["baseRev"]
+            and analysis_store.load(tmp, second["id"])["status"] == "paused",
+            T("serve.check.lifeSwitch", status=s),
+        )
         for headers, expected, label in analysis_guards:
-            codes = [_req(port, "POST", "/api/analysis/" + op, headers, {"analysis": first["id"]})[0]
-                     for op in ("activate", "pause", "redecide", "update-note", "keep-note", "delete-note",
-                                "seal", "fork", "switch-line", "close", "reopen", "refute")]
+            codes = [
+                _req(port, "POST", "/api/analysis/" + op, headers, {"analysis": first["id"]})[0]
+                for op in (
+                    "activate",
+                    "pause",
+                    "redecide",
+                    "update-note",
+                    "keep-note",
+                    "delete-note",
+                    "seal",
+                    "fork",
+                    "switch-line",
+                    "close",
+                    "reopen",
+                    "refute",
+                )
+            ]
             ok(all(code == expected for code in codes), T("serve.check.lifeGuard", guard=label, status=codes[-1]))
         analysis_store.writeback(tmp, first["id"], 1, claimed_round["baseRev"], [])
         s, _, _ = _req(port, "POST", "/api/server/stop", same, {})
         ok(s == 409, T("serve.check.stopNeedsReview"))
         s, _, b = _req(port, "POST", "/api/server/stop", {**same, "X-AE-Review": "checkreview"}, {})
         t.join(timeout=3)
-        ok(s == 200 and json.loads(b).get("stopping") is True and not t.is_alive(),
-           T("serve.check.stopFromPage"))
+        ok(s == 200 and json.loads(b).get("stopping") is True and not t.is_alive(), T("serve.check.stopFromPage"))
         srv.shutdown()
         srv.server_close()
         srv2 = ReviewServer(tmp, 0, log_to_file=True, locale=i18n.current_locale())
@@ -2696,63 +3304,86 @@ def check(locale: str | None = None) -> int:
 
         # ---------- 总览首页：同一套安全门落在无审阅目录的宿主上 ----------
         import build_viewer
+
         home_srv = None
         try:
             home_id = ledger.overview_host_id()
-            build_viewer.build_overview_home(ledger.home(), host_id=home_id,
-                                             locale=i18n.current_locale())
-            home_srv = ReviewServer(None, 0, home_id=home_id, log_to_file=False,
-                                    locale=i18n.current_locale())
+            build_viewer.build_overview_home(ledger.home(), host_id=home_id, locale=i18n.current_locale())
+            home_srv = ReviewServer(None, 0, home_id=home_id, log_to_file=False, locale=i18n.current_locale())
             home_port = home_srv.port
             ht = threading.Thread(target=home_srv.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
             ht.start()
-            ok(home_srv.server_address[0] == "127.0.0.1", T("serve.check.overviewLoopback",
-                                                            host=home_srv.server_address[0]))
+            ok(
+                home_srv.server_address[0] == "127.0.0.1",
+                T("serve.check.overviewLoopback", host=home_srv.server_address[0]),
+            )
             hg = {"Host": f"127.0.0.1:{home_port}"}
             s, hh, _ = _req(home_port, "GET", "/", hg)
             ok(s == 200 and "content-security-policy" in hh, T("serve.check.overviewIndex"))
             s, _, raw = _req(home_port, "GET", "/api/health", hg)
             body = json.loads(raw) if s == 200 else {}
-            ok(s == 200 and body.get("hostKind") == "overview-home"
-               and body.get("hostId") == home_id, T("serve.check.overviewHealth"))
+            ok(
+                s == 200 and body.get("hostKind") == "overview-home" and body.get("hostId") == home_id,
+                T("serve.check.overviewHealth"),
+            )
             s, _, _ = _req(home_port, "GET", "/", {"Host": f"evil.example:{home_port}"})
             ok(s == 421, T("serve.check.overviewBadHost", status=s))
             s, _, raw = _req(home_port, "GET", "/api/overview?scope=workspace", hg)
-            ok(s == 400 and json.loads(raw).get("code") == "bad-scope",
-               T("serve.check.overviewWorkspaceScope", status=s))
+            ok(
+                s == 400 and json.loads(raw).get("code") == "bad-scope",
+                T("serve.check.overviewWorkspaceScope", status=s),
+            )
             s, _, raw = _req(home_port, "GET", "/api/overview", hg)
             body = json.loads(raw) if s == 200 else {}
             ok(s == 200 and body.get("hostKind") == "overview-home", T("serve.check.overviewSnapshot"))
             # 伪造请求不得创建或改写任何状态文件（台账与审阅目录一起核对）
-            home_paths = [ledger.home() / ledger.LEDGER_FILE, ledger.home() / ledger.OVERVIEW_PORT_FILE,
-                          ledger.home() / OVERVIEW_STATUS_FILE, tmp / store.NOTES_FILE, tmp / store.LOG_FILE]
+            home_paths = [
+                ledger.home() / ledger.LEDGER_FILE,
+                ledger.home() / ledger.OVERVIEW_PORT_FILE,
+                ledger.home() / OVERVIEW_STATUS_FILE,
+                tmp / store.NOTES_FILE,
+                tmp / store.LOG_FILE,
+            ]
             home_before = [p.read_bytes() if p.exists() else None for p in home_paths]
-            same_home = {**hg, "Origin": f"http://127.0.0.1:{home_port}", "Content-Type": "application/json",
-                         "X-AE-Host": home_id}
-            start_guards = [({"Host": f"evil.example:{home_port}"}, 421, "Host"),
-                            ({**same_home, "Origin": "http://evil.example"}, 403, "Origin"),
-                            ({k: v for k, v in same_home.items() if k != "Origin"}, 403, "NoOrigin"),
-                            ({**same_home, "Content-Type": "text/plain"}, 415, "ContentType"),
-                            ({**same_home, "Sec-Fetch-Site": "cross-site"}, 403, "SecFetchSite"),
-                            ({**same_home, "X-AE-Host": "other-home"}, 409, "HostId")]
+            same_home = {
+                **hg,
+                "Origin": f"http://127.0.0.1:{home_port}",
+                "Content-Type": "application/json",
+                "X-AE-Host": home_id,
+            }
+            start_guards = [
+                ({"Host": f"evil.example:{home_port}"}, 421, "Host"),
+                ({**same_home, "Origin": "http://evil.example"}, 403, "Origin"),
+                ({k: v for k, v in same_home.items() if k != "Origin"}, 403, "NoOrigin"),
+                ({**same_home, "Content-Type": "text/plain"}, 415, "ContentType"),
+                ({**same_home, "Sec-Fetch-Site": "cross-site"}, 403, "SecFetchSite"),
+                ({**same_home, "X-AE-Host": "other-home"}, 409, "HostId"),
+            ]
             for headers, expected, guard in start_guards:
                 s, h, _ = _req(home_port, "POST", "/api/overview/start", headers, {"reviewId": "0" * 16})
-                ok(s == expected and "access-control-allow-origin" not in h,
-                   T("serve.check.overviewGuard", guard=guard, status=s))
+                ok(
+                    s == expected and "access-control-allow-origin" not in h,
+                    T("serve.check.overviewGuard", guard=guard, status=s),
+                )
             # 审阅专属路由与台账外标识：稳定原因码；进程创建哨兵在进程边界兜底
-            with patch.object(subprocess, "Popen",
-                              side_effect=AssertionError("unexpected overview child")) as spawned:
+            with patch.object(subprocess, "Popen", side_effect=AssertionError("unexpected overview child")) as spawned:
                 s, _, raw = _req(home_port, "GET", "/api/notes", hg)
-                ok(s == 404 and json.loads(raw).get("code") == "review-only-api",
-                   T("serve.check.overviewReviewOnly", status=s))
+                ok(
+                    s == 404 and json.loads(raw).get("code") == "review-only-api",
+                    T("serve.check.overviewReviewOnly", status=s),
+                )
                 s, _, _ = _req(home_port, "POST", "/api/notes", same_home, {"page": 1, "text": "x"})
                 ok(s == 405, T("serve.check.overviewReviewWrite", status=s))
                 s, _, raw = _req(home_port, "POST", "/api/overview/start", same_home, {"reviewId": "0" * 16})
-                ok(s == 404 and json.loads(raw).get("code") == "overview-review-unknown",
-                   T("serve.check.overviewStartUnknown", status=s))
+                ok(
+                    s == 404 and json.loads(raw).get("code") == "overview-review-unknown",
+                    T("serve.check.overviewStartUnknown", status=s),
+                )
                 ok(spawned.call_count == 0, T("serve.check.overviewStartNoProcess"))
-            ok([p.read_bytes() if p.exists() else None for p in home_paths] == home_before,
-               T("serve.check.overviewUnchanged"))
+            ok(
+                [p.read_bytes() if p.exists() else None for p in home_paths] == home_before,
+                T("serve.check.overviewUnchanged"),
+            )
             s, _, _ = _req(home_port, "GET", "/../reviews.json", hg)
             ok(s == 404, T("serve.check.overviewOtherFiles", status=s))
         except Exception as e:
@@ -2789,12 +3420,13 @@ def _stop_review_from_cli(review_dir: Path, timeout: float) -> dict[str, Any]:
         info = read_status(review_dir) or {}
         alive = ledger.pid_alive(int(info.get("pid") or 0))
         port = int(info.get("port") or 0)
-        probe_timeout = min(.5, max(.05, review_stop.remaining(deadline)))
+        probe_timeout = min(0.5, max(0.05, review_stop.remaining(deadline)))
         health = probe(port, timeout=probe_timeout) if alive and port else None
-        running = (overview_health(health, state["reviewId"], review_dir, port)
-                   and health.get("pid") == info.get("pid"))
+        running = overview_health(health, state["reviewId"], review_dir, port) and health.get("pid") == info.get("pid")
         features = health.get("features") if running else None
-        if not isinstance(features, list) or not all(name in features for name in ("stop-review", "stop-save-protection")):
+        if not isinstance(features, list) or not all(
+            name in features for name in ("stop-review", "stop-save-protection")
+        ):
             http = {"pid": info["pid"], "port": port} if alive else {"state": "stopped"}
             review_stop.begin(review_dir, http=http)
             if running:
@@ -2809,27 +3441,34 @@ def _stop_review_from_cli(review_dir: Path, timeout: float) -> dict[str, Any]:
     return _request_live_review_stop(review_dir, port, state, deadline)
 
 
-def _request_live_review_stop(review_dir: Path, port: int, state: dict[str, Any],
-                              deadline: float, *, wait_for_exit: bool = False) -> dict[str, Any]:
+def _request_live_review_stop(
+    review_dir: Path, port: int, state: dict[str, Any], deadline: float, *, wait_for_exit: bool = False
+) -> dict[str, Any]:
     # The live server owns coordination, including the last state write after the socket closes.
     try:
         remaining = review_stop.remaining(deadline)
         stop_id = state["stopId"]
-        body = {"timeout": remaining, "requirePageSave": True,
-                "expectedStop": {"stopId": stop_id, "attempts": state.get("attempts", 0) if stop_id else 0}}
+        body = {
+            "timeout": remaining,
+            "requirePageSave": True,
+            "expectedStop": {"stopId": stop_id, "attempts": state.get("attempts", 0) if stop_id else 0},
+        }
         if wait_for_exit:
             body["waitForExit"] = True
         code, _, raw = _review_request(port, state["reviewId"], "/api/server/stop", body, remaining + 1)
         response = json.loads(raw)
         stop = response.get("stop") if isinstance(response, dict) else None
-        if (code == 200 and isinstance(stop, dict) and response.get("app") == APP
-                and response.get("reviewId") == state["reviewId"] == stop.get("reviewId")
-                and response.get("stopping") is True):
+        if (
+            code == 200
+            and isinstance(stop, dict)
+            and response.get("app") == APP
+            and response.get("reviewId") == state["reviewId"] == stop.get("reviewId")
+            and response.get("stopping") is True
+        ):
             stop_id = stop.get("stopId")
             result = review_stop.load(review_dir)
-            while result["stopId"] == stop_id and result["state"] == "stopping" \
-                    and time.monotonic() < deadline + 1:
-                time.sleep(.03)
+            while result["stopId"] == stop_id and result["state"] == "stopping" and time.monotonic() < deadline + 1:
+                time.sleep(0.03)
                 result = review_stop.load(review_dir)
             return result
     except (OSError, ValueError, http.client.HTTPException):
@@ -2849,14 +3488,12 @@ def stop_review_command(review_dir: Path, *, query: bool, timeout: float) -> int
 
 
 def _add_help(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("-h", "--help", action="help", default=argparse.SUPPRESS,
-                        help=T("serve.opt.help"))
+    parser.add_argument("-h", "--help", action="help", default=argparse.SUPPRESS, help=T("serve.opt.help"))
 
 
 def _add_locale(parser: argparse.ArgumentParser) -> None:
     # 子命令上的 --locale 用 SUPPRESS 默认值：没写时不覆盖写在根命令上的选择
-    parser.add_argument("--locale", metavar="LANG", default=argparse.SUPPRESS,
-                        help=T("serve.opt.locale"))
+    parser.add_argument("--locale", metavar="LANG", default=argparse.SUPPRESS, help=T("serve.opt.locale"))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2871,12 +3508,13 @@ def main(argv: list[str] | None = None) -> int:
         print(i18n.locale_error_message(exc, ERROR_KEYS, T), file=sys.stderr)
         return 2
     # 子命令也可以写在 --locale 之后：认子命令前先剥掉开头这个选项
-    rest = argv[2:] if argv[:1] == ["--locale"] else (argv[1:] if argv[:1] and argv[0].startswith("--locale=") else argv)
+    rest = (
+        argv[2:] if argv[:1] == ["--locale"] else (argv[1:] if argv[:1] and argv[0].startswith("--locale=") else argv)
+    )
     if rest[:1] == ["check"]:
         return check(locale=i18n.current_locale())
     if rest[:1] == ["status"]:
-        ap = i18n.LocalizedParser(prog="serve.py status", add_help=False,
-                                  keys=ERROR_KEYS, translate=T)
+        ap = i18n.LocalizedParser(prog="serve.py status", add_help=False, keys=ERROR_KEYS, translate=T)
         _add_help(ap)
         _add_locale(ap)
         ap.add_argument("dir", type=str, help=T("serve.opt.dirOrId"))
@@ -2886,8 +3524,9 @@ def main(argv: list[str] | None = None) -> int:
         set_locale(cli_locale(locale_choice, d))
         return status(d, locale=i18n.current_locale())
     if rest[:1] in (["stop"], ["stop-status"]):
-        ap = i18n.LocalizedParser(prog="serve.py stop", add_help=False, description=T("serve.desc.stop"),
-                                  keys=ERROR_KEYS, translate=T)
+        ap = i18n.LocalizedParser(
+            prog="serve.py stop", add_help=False, description=T("serve.desc.stop"), keys=ERROR_KEYS, translate=T
+        )
         _add_help(ap)
         _add_locale(ap)
         ap.add_argument("dir", type=str, help=T("serve.opt.dirOrId"))
@@ -2902,59 +3541,88 @@ def main(argv: list[str] | None = None) -> int:
             print(T("serve.msg.error", detail=error), file=sys.stderr)
             return 2
     if rest[:1] == ["list"]:
-        ap = i18n.LocalizedParser(prog="serve.py list", add_help=False, description=T("serve.desc.list"),
-                                  keys=ERROR_KEYS, translate=T)
+        ap = i18n.LocalizedParser(
+            prog="serve.py list", add_help=False, description=T("serve.desc.list"), keys=ERROR_KEYS, translate=T
+        )
         _add_help(ap)
         _add_locale(ap)
-        ap.add_argument("--under", type=Path, metavar="目录" if i18n.current_locale() == "zh-CN" else "DIR",
-                        help=T("serve.opt.under"))
+        ap.add_argument(
+            "--under",
+            type=Path,
+            metavar="目录" if i18n.current_locale() == "zh-CN" else "DIR",
+            help=T("serve.opt.under"),
+        )
         ap.add_argument("--json", action="store_true", help=T("serve.opt.json"))
         a = ap.parse_args(rest[1:])
         return list_reviews(a.under, a.json, locale=i18n.current_locale())
     if rest[:1] == ["forget"]:
-        ap = i18n.LocalizedParser(prog="serve.py forget", add_help=False, description=T("serve.desc.forget"),
-                                  keys=ERROR_KEYS, translate=T)
+        ap = i18n.LocalizedParser(
+            prog="serve.py forget", add_help=False, description=T("serve.desc.forget"), keys=ERROR_KEYS, translate=T
+        )
         _add_help(ap)
         _add_locale(ap)
         ap.add_argument("key", help=T("serve.opt.key"))
         a = ap.parse_args(rest[1:])
         return forget(a.key, locale=i18n.current_locale())
     if rest[:1] == ["prune"]:
-        ap = i18n.LocalizedParser(prog="serve.py prune", add_help=False, description=T("serve.desc.prune"),
-                                  keys=ERROR_KEYS, translate=T)
+        ap = i18n.LocalizedParser(
+            prog="serve.py prune", add_help=False, description=T("serve.desc.prune"), keys=ERROR_KEYS, translate=T
+        )
         _add_help(ap)
         _add_locale(ap)
         ap.add_argument("--stale", action="store_true", help=T("serve.opt.pruneStale"))
         ap.add_argument("--list", action="store_true", help=T("serve.opt.pruneList"))
         scope = ap.add_mutually_exclusive_group()
-        scope.add_argument("--under", type=Path, metavar="目录" if i18n.current_locale() == "zh-CN" else "DIR",
-                           help=T("serve.opt.pruneUnder"))
+        scope.add_argument(
+            "--under",
+            type=Path,
+            metavar="目录" if i18n.current_locale() == "zh-CN" else "DIR",
+            help=T("serve.opt.pruneUnder"),
+        )
         scope.add_argument("--all", action="store_true", help=T("serve.opt.pruneAll"))
         ap.add_argument("--delete-metadata", action="store_true", help=T("serve.opt.pruneDeleteMetadata"))
         a = ap.parse_args(rest[1:])
         if a.delete_metadata and not (a.all or a.under):
             ap.error(T("serve.err.pruneMetadataScope"))
-        return prune(all_stale=a.all, under=a.under, delete_metadata=a.delete_metadata,
-                     dry_run=a.list, locale=i18n.current_locale())
+        return prune(
+            all_stale=a.all,
+            under=a.under,
+            delete_metadata=a.delete_metadata,
+            dry_run=a.list,
+            locale=i18n.current_locale(),
+        )
     if rest[:1] == ["overview"]:
-        ap = i18n.LocalizedParser(prog="serve.py overview", add_help=False, description=T("serve.desc.overview"),
-                                  keys=ERROR_KEYS, translate=T)
+        ap = i18n.LocalizedParser(
+            prog="serve.py overview", add_help=False, description=T("serve.desc.overview"), keys=ERROR_KEYS, translate=T
+        )
         _add_help(ap)
         _add_locale(ap)
-        ap.add_argument("--under", type=Path, metavar="目录" if i18n.current_locale() == "zh-CN" else "DIR",
-                        help=T("serve.opt.under"))
+        ap.add_argument(
+            "--under",
+            type=Path,
+            metavar="目录" if i18n.current_locale() == "zh-CN" else "DIR",
+            help=T("serve.opt.under"),
+        )
         ap.add_argument("--port", type=int, help=T("serve.opt.overviewPort"))
         ap.add_argument("--no-open", action="store_true", help=T("serve.opt.noOpen"))
         ap.add_argument("--debug", action="store_true", help=T("serve.opt.debug"))
-        ap.add_argument("--on-handoff", metavar="命令" if i18n.current_locale() == "zh-CN" else "COMMAND",
-                        help=T("serve.opt.onHandoff"))
+        ap.add_argument(
+            "--on-handoff",
+            metavar="命令" if i18n.current_locale() == "zh-CN" else "COMMAND",
+            help=T("serve.opt.onHandoff"),
+        )
         a = ap.parse_args(rest[1:])
-        return overview_home(a.under, a.port, not a.no_open, a.debug, parse_hook(a.on_handoff),
-                             locale=i18n.current_locale())
+        return overview_home(
+            a.under, a.port, not a.no_open, a.debug, parse_hook(a.on_handoff), locale=i18n.current_locale()
+        )
     argv = rest[1:] if rest[:1] == ["serve"] else rest
-    ap = i18n.LocalizedParser(prog="serve.py", add_help=False,
-                              description=T("serve.desc") + "\n\n" + T("serve.desc.subcommands"),
-                              keys=ERROR_KEYS, translate=T)
+    ap = i18n.LocalizedParser(
+        prog="serve.py",
+        add_help=False,
+        description=T("serve.desc") + "\n\n" + T("serve.desc.subcommands"),
+        keys=ERROR_KEYS,
+        translate=T,
+    )
     _add_help(ap)
     _add_locale(ap)
     ap.add_argument("dir", type=str, help=T("serve.opt.dir"))
@@ -2965,15 +3633,25 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--overview-start", help=argparse.SUPPRESS)
     ap.add_argument("--overview-hook-cwd", help=argparse.SUPPRESS)
     ap.add_argument("--overview-under", type=Path, help=argparse.SUPPRESS)
-    ap.add_argument("--on-handoff", metavar="命令" if i18n.current_locale() == "zh-CN" else "COMMAND",
-                    help=T("serve.opt.onHandoff"))
+    ap.add_argument(
+        "--on-handoff", metavar="命令" if i18n.current_locale() == "zh-CN" else "COMMAND", help=T("serve.opt.onHandoff")
+    )
     a = ap.parse_args(argv)
     d = resolve_arg(a.dir)
     # 目录解析出来后还有一级兜底：审阅里保存的 locale
     set_locale(cli_locale(locale_choice, d))
-    return serve(d, a.port, not a.no_open, a.debug, parse_hook(a.on_handoff),
-                 claim=a.claim_port, locale=i18n.current_locale(), overview_start=a.overview_start,
-                 hook_cwd=a.overview_hook_cwd, overview_under=a.overview_under)
+    return serve(
+        d,
+        a.port,
+        not a.no_open,
+        a.debug,
+        parse_hook(a.on_handoff),
+        claim=a.claim_port,
+        locale=i18n.current_locale(),
+        overview_start=a.overview_start,
+        hook_cwd=a.overview_hook_cwd,
+        overview_under=a.overview_under,
+    )
 
 
 if __name__ == "__main__":

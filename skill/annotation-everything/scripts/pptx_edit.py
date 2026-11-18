@@ -13,6 +13,7 @@ geometry 用归一化坐标（unit=normalized）换算 EMU 改 a:off/a:ext，sty
 超出契约即拒绝；同一元素被多个操作命中拒绝；写入仍走快照 + 原子替换 + 写后重建核验闭环。
 自动重叠/缩小/出界警告与视觉核验状态分开记录；视觉核验未执行不得视为通过。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -32,14 +33,14 @@ from pathlib import Path
 from xml.parsers import expat
 from xml.sax.saxutils import escape as _attr_escape_raw
 
-import docx_edit as de   # 与 DOCX 回写共用同一套字节级 ZIP 重封装、转义与空白折叠匹配
+import docx_edit as de  # 与 DOCX 回写共用同一套字节级 ZIP 重封装、转义与空白折叠匹配
 import fsutil
 import i18n
 import ledger
 import notes_store as store
 import pptx_reader as pr
 from build_viewer import BuildError, resolve_sources
-from docx_edit import EditError, SelectionError   # 同一错误契约：code / detail / item / errors
+from docx_edit import EditError, SelectionError  # 同一错误契约：code / detail / item / errors
 
 ERROR_KEYS = {
     i18n.CLI_ERROR_INVALID_CHOICE: "pptx.edit.cli.invalidChoice",
@@ -51,7 +52,7 @@ ERROR_KEYS = {
     i18n.CLI_ERROR_INVALID_LOCALE: "pptx.edit.cli.invalidLocale",
 }
 
-A_ = pr.A + "}"   # expat 命名空间分隔后的名字形如「uri}local」（docx_edit.W 同一口径）
+A_ = pr.A + "}"  # expat 命名空间分隔后的名字形如「uri}local」（docx_edit.W 同一口径）
 P_ = pr.P + "}"
 AT = A_ + "t"
 AR = A_ + "r"
@@ -69,7 +70,7 @@ NOTES_EXCLUDED_PH = ("sldImg", "sldNum", "hdr", "ftr", "dt")
 
 # ---------- 白名单几何与样式回写（ops 契约 v1，见 references/formats） ----------
 OPS_VERSION = 1
-GEOMETRY_EPS = 1e-4                      # 画布边界容差，与 notes_store 归一化区域一致
+GEOMETRY_EPS = 1e-4  # 画布边界容差，与 notes_store 归一化区域一致
 ASPECTS = ("geometry", "style")
 OPS_SCOPES = ("text", "fill", "line")
 GEOMETRY_UNITS = ("normalized",)
@@ -77,8 +78,8 @@ GEOMETRY_KEYS = ("x", "y", "width", "height")
 TEXT_PROPS = ("bold", "italic", "underline", "size", "color")
 FILL_PROPS = ("color",)
 LINE_PROPS = ("color", "width")
-SIZE_PT_MIN, SIZE_PT_MAX = 1.0, 4000.0   # a:rPr/@sz 以百分之一磅为单位（ST_TextFontSize 100..400000）
-LINE_PT_MAX = 1584.0                     # a:ln/@w 以 EMU 为单位（ST_LineWidth 上限 20116800）
+SIZE_PT_MIN, SIZE_PT_MAX = 1.0, 4000.0  # a:rPr/@sz 以百分之一磅为单位（ST_TextFontSize 100..400000）
+LINE_PT_MAX = 1584.0  # a:ln/@w 以 EMU 为单位（ST_LineWidth 上限 20116800）
 _EMU_PER_POINT = 12700
 _SRGB_RE = re.compile(r"[0-9A-Fa-f]{6}\Z")
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -94,19 +95,54 @@ SRGB = A_ + "srgbClr"
 FILL_KINDS = ("noFill", "solidFill", "gradFill", "blipFill", "pattFill", "grpFill")
 LN_FILL_KINDS = ("noFill", "solidFill", "gradFill", "pattFill")
 # 白名单外的直接子元素一律拒绝：不能证明改写安全的结构保持只读
-SPPR_ALLOWED = frozenset(("xfrm", "prstGeom", "custGeom", "ln", "effectLst", "effectDag",
-                          "scene3d", "sp3d", "extLst") + FILL_KINDS)
-LN_ALLOWED = frozenset(("prstDash", "custDash", "round", "bevel", "miter",
-                        "headEnd", "tailEnd", "extLst") + LN_FILL_KINDS)
-RPR_ALLOWED = frozenset(("ln", "effectLst", "effectDag", "highlight", "uLnTx", "uLn", "uFillTx",
-                         "uFill", "latin", "ea", "cs", "sym", "hlinkClick", "hlinkMouseOver",
-                         "rtl", "extLst") + FILL_KINDS)
+SPPR_ALLOWED = frozenset(
+    ("xfrm", "prstGeom", "custGeom", "ln", "effectLst", "effectDag", "scene3d", "sp3d", "extLst") + FILL_KINDS
+)
+LN_ALLOWED = frozenset(
+    ("prstDash", "custDash", "round", "bevel", "miter", "headEnd", "tailEnd", "extLst") + LN_FILL_KINDS
+)
+RPR_ALLOWED = frozenset(
+    (
+        "ln",
+        "effectLst",
+        "effectDag",
+        "highlight",
+        "uLnTx",
+        "uLn",
+        "uFillTx",
+        "uFill",
+        "latin",
+        "ea",
+        "cs",
+        "sym",
+        "hlinkClick",
+        "hlinkMouseOver",
+        "rtl",
+        "extLst",
+    )
+    + FILL_KINDS
+)
 # 新元素的插入位置按 ECMA-376 子元素顺序：插到这些局部名之前，否则插到内容末尾
 SPPR_BEFORE_FILL = ("ln", "effectLst", "effectDag", "scene3d", "sp3d", "extLst")
 SPPR_BEFORE_LN = ("effectLst", "effectDag", "scene3d", "sp3d", "extLst")
 LN_BEFORE_FILL = ("prstDash", "custDash", "round", "bevel", "miter", "headEnd", "tailEnd", "extLst")
-RPR_BEFORE_FILL = ("effectLst", "effectDag", "highlight", "uLnTx", "uLn", "uFillTx", "uFill",
-                   "latin", "ea", "cs", "sym", "hlinkClick", "hlinkMouseOver", "rtl", "extLst")
+RPR_BEFORE_FILL = (
+    "effectLst",
+    "effectDag",
+    "highlight",
+    "uLnTx",
+    "uLn",
+    "uFillTx",
+    "uFill",
+    "latin",
+    "ea",
+    "cs",
+    "sym",
+    "hlinkClick",
+    "hlinkMouseOver",
+    "rtl",
+    "extLst",
+)
 
 
 class Piece:
@@ -131,8 +167,8 @@ class Shape:
 
     def __init__(self, order: int):
         self.sid, self.order = "", order
-        self.ph_present, self.ph_type = False, None   # ph 的 type 属性：缺失是 None，与 reader 口径一致
-        self.txbody_done = False                       # 只认第一个 txBody，与读取层 find 口径一致
+        self.ph_present, self.ph_type = False, None  # ph 的 type 属性：缺失是 None，与 reader 口径一致
+        self.txbody_done = False  # 只认第一个 txBody，与读取层 find 口径一致
         self.paras: list[Para] = []
 
 
@@ -174,8 +210,7 @@ class _PartParser:
         return self.shape_stack[-1][0] if self.shape_stack else None
 
     def _top_level_shape(self, depth: int) -> bool:
-        return (self.mode == "slide" and self.sp_tree_depth is not None
-                and depth == self.sp_tree_depth + 1)
+        return self.mode == "slide" and self.sp_tree_depth is not None and depth == self.sp_tree_depth + 1
 
     def start(self, name, attrs):
         if self.active is not None:
@@ -208,22 +243,19 @@ class _PartParser:
                     self.txbody_depth = depth
             elif _local(name).startswith("nv") and parent == PSP:
                 self.nv_depth = depth
-        if (self.txbody_depth is not None and self.txbody_depth + 1 == depth
-                and name == AP):
+        if self.txbody_depth is not None and self.txbody_depth + 1 == depth and name == AP:
             shape = self._current_shape()
             if shape is not None:
                 shape.paras.append(Para(len(shape.paras)))
                 self.run_depth = None
-        elif name in (AR, AFLD) and self.txbody_depth is not None and depth == self.txbody_depth + 2 \
-                and parent == AP:
+        elif name in (AR, AFLD) and self.txbody_depth is not None and depth == self.txbody_depth + 2 and parent == AP:
             shape = self._current_shape()
             para = shape.paras[-1] if shape and shape.paras else None
             if para is not None:
                 self.run_depth = depth
                 self.run_offset = len(para.text)
                 self.run_piece_done = False
-        elif name == ABR and self.txbody_depth is not None and depth == self.txbody_depth + 2 \
-                and parent == AP:
+        elif name == ABR and self.txbody_depth is not None and depth == self.txbody_depth + 2 and parent == AP:
             shape = self._current_shape()
             para = shape.paras[-1] if shape and shape.paras else None
             if para is not None:
@@ -235,8 +267,7 @@ class _PartParser:
                 at = self.parser.CurrentByteIndex
                 end = de._tag_end(self.raw, at)
                 tag = self.raw[at:end]
-                piece = Piece(at, end, self.run_offset,
-                              _local_tag(tag), tag.rstrip().endswith(b"/>"))
+                piece = Piece(at, end, self.run_offset, _local_tag(tag), tag.rstrip().endswith(b"/>"))
                 para.pieces.append(piece)
                 self.active, self.active_para = piece, para
                 self.run_piece_done = True
@@ -302,9 +333,9 @@ def _parse_part(raw: bytes, part: str, mode: str) -> list[Shape]:
 def _raw_tag_name(raw: bytes, start: int) -> bytes:
     """start 指向 '<'；返回起始标签里的原始限定名（保留文档自己的前缀）。"""
     end = start + 1
-    while end < len(raw) and raw[end:end + 1] not in (b" ", b"\t", b"\n", b"\r", b">", b"/"):
+    while end < len(raw) and raw[end : end + 1] not in (b" ", b"\t", b"\n", b"\r", b">", b"/"):
         end += 1
-    return raw[start + 1:end]
+    return raw[start + 1 : end]
 
 
 def _attr_bytes(value: str) -> bytes:
@@ -348,7 +379,7 @@ class _PropsParser:
         self.raw, self.part = raw, part
         self.shapes: list[dict] = []
         self.stack: list[str] = []
-        self.frames: list[dict | None] = []   # 与 stack 平行；跟踪中的元素节点
+        self.frames: list[dict | None] = []  # 与 stack 平行；跟踪中的元素节点
         self.a_prefix: bytes | None = None
         self.sp_tree_depth: int | None = None
         self.shape: dict | None = None
@@ -365,20 +396,29 @@ class _PropsParser:
 
     def _node(self, at: int, name: str, attrs: dict) -> dict:
         opening_end = de._tag_end(self.raw, at)
-        empty = self.raw[opening_end - 2:opening_end] == b"/>"
+        empty = self.raw[opening_end - 2 : opening_end] == b"/>"
         local = _local(name)
-        return {"expat": name, "local": local, "start": at, "opening_end": opening_end,
-                "stop": opening_end if empty else 0, "empty": empty,
-                "content_end": opening_end if empty else 0, "attrs": dict(attrs),
-                "children": [], "srgb": None, "fill": None}
+        return {
+            "expat": name,
+            "local": local,
+            "start": at,
+            "opening_end": opening_end,
+            "stop": opening_end if empty else 0,
+            "empty": empty,
+            "content_end": opening_end if empty else 0,
+            "attrs": dict(attrs),
+            "children": [],
+            "srgb": None,
+            "fill": None,
+        }
 
     def _capture_prefix(self, at: int, name: str) -> None:
-        local = name[len(A_):].encode("utf-8")
+        local = name[len(A_) :].encode("utf-8")
         raw_name = _raw_tag_name(self.raw, at)
         if raw_name.endswith(local) and len(raw_name) > len(local):
-            self.a_prefix = raw_name[:len(raw_name) - len(local) - 1]
+            self.a_prefix = raw_name[: len(raw_name) - len(local) - 1]
         else:
-            self.a_prefix = b""   # 默认命名空间绑定 drawingml
+            self.a_prefix = b""  # 默认命名空间绑定 drawingml
 
     def _track_child(self, at: int, name: str, attrs: dict) -> dict:
         node = self._node(at, name, attrs)
@@ -405,15 +445,25 @@ class _PropsParser:
             return
         if self.shape is None:
             if name == PSP and self.sp_tree_depth is not None and depth == self.sp_tree_depth + 1:
-                self.shape = {"sid": "", "order": len(self.shapes), "start": at, "stop": 0,
-                              "sp_node": None, "children": [], "off": None, "ext": None,
-                              "fill": None, "ln": None, "runs": []}
+                self.shape = {
+                    "sid": "",
+                    "order": len(self.shapes),
+                    "start": at,
+                    "stop": 0,
+                    "sp_node": None,
+                    "children": [],
+                    "off": None,
+                    "ext": None,
+                    "fill": None,
+                    "ln": None,
+                    "runs": [],
+                }
                 self.shape_depth = depth
                 self.nv_depth = self.sp_depth = self.xfrm_depth = self.ln_depth = None
                 self.txbody_depth = self.run_depth = self.rpr_depth = None
             return
         if name == PSP and depth == self.shape_depth:
-            return   # end 分支处理
+            return  # end 分支处理
         if name == PCNVPR and self.nv_depth is not None and depth == self.nv_depth + 1:
             if not self.shape["sid"]:
                 self.shape["sid"] = attrs.get("id", "")
@@ -457,8 +507,7 @@ class _PropsParser:
             self.run_depth = None
             self.rpr_depth = None
             return
-        if self.txbody_depth is not None and depth == self.txbody_depth + 2 and parent == AP \
-                and name in (AR, AFLD):
+        if self.txbody_depth is not None and depth == self.txbody_depth + 2 and parent == AP and name in (AR, AFLD):
             self.run_depth = depth
             self.rpr_depth = None
             self.run = {"open_end": de._tag_end(self.raw, at), "rpr": None, "text": ""}
@@ -578,8 +627,9 @@ def _props_snapshot(shape: dict) -> dict:
     runs = []
     for run in shape["runs"]:
         rpr = run["rpr"]
-        runs.append((tuple(sorted(rpr["attrs"].items())) if rpr else (),
-                     _srgb_of(rpr["fill"]) if rpr else None, run["text"]))
+        runs.append(
+            (tuple(sorted(rpr["attrs"].items())) if rpr else (), _srgb_of(rpr["fill"]) if rpr else None, run["text"])
+        )
     return {"off": off, "ext": ext, "fill": fill, "ln": ln, "runs": runs}
 
 
@@ -587,8 +637,7 @@ def _notes_paragraphs(shapes: list[Shape]) -> list[Para]:
     """读取层 _notes 的同一套占位符规则：先收 body 占位符，没有再排除页码等辅助形状。"""
     body = [s for s in shapes if s.ph_present and (s.ph_type if s.ph_type is not None else "body") == "body"]
     if not body:
-        body = [s for s in shapes
-                if not s.ph_present or (s.ph_type or "") not in NOTES_EXCLUDED_PH]
+        body = [s for s in shapes if not s.ph_present or (s.ph_type or "") not in NOTES_EXCLUDED_PH]
     return [p for s in body for p in s.paras]
 
 
@@ -629,10 +678,10 @@ def _part_bytes(raw: bytes, part: str) -> bytes:
 @dataclass
 class Task:
     id: str
-    kind: str            # shape / notes
+    kind: str  # shape / notes
     part: str
     mode: str
-    container: int       # slide 模式是部件内顶层形状序号；notes 固定 0
+    container: int  # slide 模式是部件内顶层形状序号；notes 固定 0
     para: int
     start: int
     end: int
@@ -645,9 +694,13 @@ class Task:
 def _locate_span(p: Para, frm: str, offsets: tuple[int, int] | None) -> tuple[int, int]:
     if offsets is not None:
         start, end = offsets
-        if (isinstance(start, bool) or isinstance(end, bool)
-                or not isinstance(start, int) or not isinstance(end, int)
-                or not 0 <= start < end <= len(p.text)):
+        if (
+            isinstance(start, bool)
+            or isinstance(end, bool)
+            or not isinstance(start, int)
+            or not isinstance(end, int)
+            or not 0 <= start < end <= len(p.text)
+        ):
             raise EditError("anchor")
         selected = p.text[start:end]
         if selected != frm and (not de._fold(selected)[0] or de._fold(selected)[0] != de._fold(frm)[0]):
@@ -675,7 +728,9 @@ def _shape_by_id(shapes: list[Shape], sid: str) -> tuple[Shape, int]:
     return hits[0]
 
 
-def edit_parts(raw_parts: dict[str, bytes], edits: list[dict], model: dict) -> tuple[dict[str, bytes], list[Task], dict]:
+def edit_parts(
+    raw_parts: dict[str, bytes], edits: list[dict], model: dict
+) -> tuple[dict[str, bytes], list[Task], dict]:
     """定位并落实整组修改：先逐条定位（任何一条失败都不写），再按段落组应用并重封部件字节。"""
     slides_by_key = {s["key"]: s for s in model["slides"]}
     parsed: dict[str, tuple[str, list[Shape]]] = {}
@@ -712,13 +767,26 @@ def edit_parts(raw_parts: dict[str, bytes], edits: list[dict], model: dict) -> t
             if hashlib.sha256(p.text.encode("utf-8")).hexdigest() != text.get("paraDigest"):
                 raise EditError("anchor", item=e["id"])
             offsets = None
-            if all(isinstance(text.get(k), int) and not isinstance(text.get(k), bool)
-                   for k in ("start", "end")):
+            if all(isinstance(text.get(k), int) and not isinstance(text.get(k), bool) for k in ("start", "end")):
                 offsets = (text["start"], text["end"])
             start, end = _locate_span(p, e["from"], offsets)
             _check_span(p, start, end)
-            tasks.append(Task(e["id"], "shape", slide["part"], "slide", container, para_n,
-                              start, end, e["to"], slide["key"], slide["n"], str(el["id"])))
+            tasks.append(
+                Task(
+                    e["id"],
+                    "shape",
+                    slide["part"],
+                    "slide",
+                    container,
+                    para_n,
+                    start,
+                    end,
+                    e["to"],
+                    slide["key"],
+                    slide["n"],
+                    str(el["id"]),
+                )
+            )
         else:
             slide = slides_by_key.get(e.get("slide_key") or "")
             if slide is None:
@@ -733,13 +801,26 @@ def edit_parts(raw_parts: dict[str, bytes], edits: list[dict], model: dict) -> t
                 raise EditError("ambiguous" if found else "notFound", item=e["id"])
             para_n, (start, end) = found[0]
             _check_span(paras[para_n], start, end)
-            tasks.append(Task(e["id"], "notes", notes["part"], "notes", 0, para_n,
-                              start, end, e["to"], slide["key"], slide["n"], ""))
+            tasks.append(
+                Task(
+                    e["id"],
+                    "notes",
+                    notes["part"],
+                    "notes",
+                    0,
+                    para_n,
+                    start,
+                    end,
+                    e["to"],
+                    slide["key"],
+                    slide["n"],
+                    "",
+                )
+            )
     grouped: dict[tuple[str, int, int], list[Task]] = {}
     for t in tasks:
         group = grouped.setdefault((t.part, t.container, t.para), [])
-        if any(t.start < b and a < t.end for a, b, _to, _id in
-               ((x.start, x.end, x.to, x.id) for x in group)):
+        if any(t.start < b and a < t.end for a, b, _to, _id in ((x.start, x.end, x.to, x.id) for x in group)):
             raise EditError("overlap", item=t.id)
         group.append(t)
     changed: dict[str, bytes] = {}
@@ -758,7 +839,7 @@ def edit_parts(raw_parts: dict[str, bytes], edits: list[dict], model: dict) -> t
             p = paras[_para_n]
             target = p.text
             for t in sorted(items, key=lambda x: x.start, reverse=True):
-                target = target[:t.start] + t.to + target[t.end:]
+                target = target[: t.start] + t.to + target[t.end :]
             exp.setdefault(container, {})[_para_n] = target
             for piece in p.pieces:
                 value = piece.text
@@ -857,8 +938,12 @@ def _validate_ops(spec: object) -> list[dict]:
         aspect = raw_op.get("aspect")
         if aspect not in ASPECTS:
             raise EditError("ops", "aspect", item=oid)
-        op: dict = {"id": oid, "slide": slide.strip(), "aspect": aspect,
-                    "target": _ops_target(raw_op.get("target"), oid)}
+        op: dict = {
+            "id": oid,
+            "slide": slide.strip(),
+            "aspect": aspect,
+            "target": _ops_target(raw_op.get("target"), oid),
+        }
         if aspect == "geometry":
             unit = raw_op.get("unit")
             if unit not in GEOMETRY_UNITS:
@@ -935,8 +1020,7 @@ def _geometry_emu(op: dict, shape: dict, canvas_w: int, canvas_h: int) -> tuple[
     return left, top, cx, cy
 
 
-def _insert_point(children: list[dict], before: tuple[str, ...],
-                  parent: dict) -> tuple[int, int, bool]:
+def _insert_point(children: list[dict], before: tuple[str, ...], parent: dict) -> tuple[int, int, bool]:
     """(start, stop, whole)：插到 before 中最早的子元素之前，否则父元素内容末尾；空元素整节点重写。"""
     for child in children:
         if child["local"] in before:
@@ -982,7 +1066,9 @@ def _attr_contract(label: str, prior: object) -> object:
     return prior
 
 
-def _style_edits(op: dict, oid: str, raw: bytes, shape: dict, prefix: bytes)         -> tuple[list[tuple[int, int, bytes]], dict, list[dict]]:
+def _style_edits(
+    op: dict, oid: str, raw: bytes, shape: dict, prefix: bytes
+) -> tuple[list[tuple[int, int, bytes]], dict, list[dict]]:
     """白名单样式：只做直接格式的替换/插入；与当前直接格式一致且无字节变化时拒绝。"""
     scope, props = op["scope"], op["props"]
     spans: list[tuple[int, int, bytes]] = []
@@ -1005,8 +1091,7 @@ def _style_edits(op: dict, oid: str, raw: bytes, shape: dict, prefix: bytes)    
             if rpr is None:
                 body = _fill_bytes(prefix, color) if color else b""
                 attrs = {k: wanted[k] for k in ("b", "i", "u", "sz") if k in wanted}
-                spans.append((run["open_end"], run["open_end"],
-                              _el(_qname(prefix, b"rPr"), attrs, body)))
+                spans.append((run["open_end"], run["open_end"], _el(_qname(prefix, b"rPr"), attrs, body)))
                 expected_runs.append((tuple(sorted(attrs.items())), color, run["text"]))
                 continue
             new_attrs = dict(rpr["attrs"])
@@ -1014,16 +1099,18 @@ def _style_edits(op: dict, oid: str, raw: bytes, shape: dict, prefix: bytes)    
             if new_attrs != rpr["attrs"] and not (rpr["empty"] and color is not None):
                 spans.append(_tag_rewrite(raw, rpr, new_attrs))
             new_color = _srgb_of(rpr["fill"]) if rpr["fill"] and rpr["fill"]["local"] == "solidFill" else None
-            if color is not None and (rpr["fill"] is None or rpr["fill"]["local"] != "solidFill"
-                                      or _srgb_of(rpr["fill"]) != color):
+            if color is not None and (
+                rpr["fill"] is None or rpr["fill"]["local"] != "solidFill" or _srgb_of(rpr["fill"]) != color
+            ):
                 _check_children(rpr["children"], RPR_ALLOWED, "rPr", oid)
                 piece = _fill_bytes(prefix, color)
                 if rpr["fill"] is not None:
                     spans.append((rpr["fill"]["start"], rpr["fill"]["stop"], piece))
                 else:
                     start, stop, whole = _insert_point(rpr["children"], RPR_BEFORE_FILL, rpr)
-                    spans.append((start, stop, _with_children(raw, {**rpr, "attrs": new_attrs}, piece)
-                                  if whole else piece))
+                    spans.append(
+                        (start, stop, _with_children(raw, {**rpr, "attrs": new_attrs}, piece) if whole else piece)
+                    )
                 new_color = color
             expected_runs.append((tuple(sorted(new_attrs.items())), new_color, run["text"]))
         if not spans:
@@ -1034,17 +1121,29 @@ def _style_edits(op: dict, oid: str, raw: bytes, shape: dict, prefix: bytes)    
             if key not in props:
                 continue
             if key == "color":
-                mapped = [_attr_contract(key, _srgb_of(r["rpr"]["fill"])
-                                         if r["rpr"] and r["rpr"]["fill"]
-                                         and r["rpr"]["fill"]["local"] == "solidFill" else None)
-                          for r in shape["runs"]]
+                mapped = [
+                    _attr_contract(
+                        key,
+                        _srgb_of(r["rpr"]["fill"])
+                        if r["rpr"] and r["rpr"]["fill"] and r["rpr"]["fill"]["local"] == "solidFill"
+                        else None,
+                    )
+                    for r in shape["runs"]
+                ]
             else:
                 source = {"bold": "b", "italic": "i", "underline": "u", "size": "sz"}[key]
-                mapped = [_attr_contract(key, r["rpr"]["attrs"].get(source) if r["rpr"] else None)
-                          for r in shape["runs"]]
+                mapped = [
+                    _attr_contract(key, r["rpr"]["attrs"].get(source) if r["rpr"] else None) for r in shape["runs"]
+                ]
             prior = mapped[0] if mapped and all(m == mapped[0] for m in mapped) else "mixed"
-            change_props.append({"name": key, "unit": None if key in ("bold", "italic", "underline")
-                                 else "pt" if key == "size" else "srgb", "from": prior, "to": props[key]})
+            change_props.append(
+                {
+                    "name": key,
+                    "unit": None if key in ("bold", "italic", "underline") else "pt" if key == "size" else "srgb",
+                    "from": prior,
+                    "to": props[key],
+                }
+            )
         return spans, expected, change_props
     _check_children(shape["children"], SPPR_ALLOWED, "spPr", oid)
     if scope == "fill":
@@ -1059,7 +1158,7 @@ def _style_edits(op: dict, oid: str, raw: bytes, shape: dict, prefix: bytes)    
         else:
             start, stop, whole = _insert_point(shape["children"], SPPR_BEFORE_FILL, shape["sp_node"])
             spans.append((start, stop, _with_children(raw, shape["sp_node"], piece) if whole else piece))
-        return spans, {"fill": ("solidFill", color)},             [{"name": "color", "unit": "srgb", "from": prior, "to": color}]
+        return spans, {"fill": ("solidFill", color)}, [{"name": "color", "unit": "srgb", "from": prior, "to": color}]
     color = props.get("color")
     width = int(round(props["width"] * _EMU_PER_POINT)) if "width" in props else None
     ln = shape["ln"]
@@ -1077,27 +1176,34 @@ def _style_edits(op: dict, oid: str, raw: bytes, shape: dict, prefix: bytes)    
             lattrs["w"] = str(width)
             if not (ln["empty"] and color is not None):
                 spans.append(_tag_rewrite(raw, ln, lattrs))
-        if color is not None and (ln["fill"] is None or ln["fill"]["local"] != "solidFill"
-                                  or _srgb_of(ln["fill"]) != color):
+        if color is not None and (
+            ln["fill"] is None or ln["fill"]["local"] != "solidFill" or _srgb_of(ln["fill"]) != color
+        ):
             _check_children(ln["children"], LN_ALLOWED, "a:ln", oid)
             piece = _fill_bytes(prefix, color)
             if ln["fill"] is not None:
                 spans.append((ln["fill"]["start"], ln["fill"]["stop"], piece))
             else:
                 start, stop, whole = _insert_point(ln["children"], LN_BEFORE_FILL, ln)
-                spans.append((start, stop, _with_children(raw, {**ln, "attrs": lattrs}, piece)
-                              if whole else piece))
-        new_ln = (width if width is not None else old[0],
-                  "solidFill" if color is not None else old[1],
-                  color if color is not None else old[2])
+                spans.append((start, stop, _with_children(raw, {**ln, "attrs": lattrs}, piece) if whole else piece))
+        new_ln = (
+            width if width is not None else old[0],
+            "solidFill" if color is not None else old[1],
+            color if color is not None else old[2],
+        )
     if not spans:
         raise EditError("noChange", "line", item=oid)
     change_props = []
     if width is not None:
         prior = old[0]
-        change_props.append({"name": "width", "unit": "pt",
-                             "from": round(prior / _EMU_PER_POINT, 4) if prior is not None else None,
-                             "to": round(width / _EMU_PER_POINT, 4)})
+        change_props.append(
+            {
+                "name": "width",
+                "unit": "pt",
+                "from": round(prior / _EMU_PER_POINT, 4) if prior is not None else None,
+                "to": round(width / _EMU_PER_POINT, 4),
+            }
+        )
     if color is not None:
         change_props.append({"name": "color", "unit": "srgb", "from": old[2], "to": color})
     return spans, {"ln": new_ln}, change_props
@@ -1164,17 +1270,26 @@ def _run_ops(raw: bytes, spec: object, model: dict):
                 raise EditError("noChange", "geometry", item=oid)
             values = op["set"]
             if "x" in values or "y" in values:
-                spans_by_part.setdefault(part, []).append(_tag_rewrite(
-                    raw_parts[part], shape["off"], {**shape["off"]["attrs"],
-                                                    "x": str(left), "y": str(top)}))
+                spans_by_part.setdefault(part, []).append(
+                    _tag_rewrite(
+                        raw_parts[part], shape["off"], {**shape["off"]["attrs"], "x": str(left), "y": str(top)}
+                    )
+                )
             if "width" in values or "height" in values:
-                spans_by_part.setdefault(part, []).append(_tag_rewrite(
-                    raw_parts[part], shape["ext"], {**shape["ext"]["attrs"],
-                                                    "cx": str(cx), "cy": str(cy)}))
-            names = {"x": ("x", old["off"][0], left), "y": ("y", old["off"][1], top),
-                     "width": ("cx", old["ext"][0], cx), "height": ("cy", old["ext"][1], cy)}
-            change_props = [{"name": names[k][0], "unit": "emu", "from": names[k][1], "to": names[k][2]}
-                            for k in ("x", "y", "width", "height") if k in values]
+                spans_by_part.setdefault(part, []).append(
+                    _tag_rewrite(raw_parts[part], shape["ext"], {**shape["ext"]["attrs"], "cx": str(cx), "cy": str(cy)})
+                )
+            names = {
+                "x": ("x", old["off"][0], left),
+                "y": ("y", old["off"][1], top),
+                "width": ("cx", old["ext"][0], cx),
+                "height": ("cy", old["ext"][1], cy),
+            }
+            change_props = [
+                {"name": names[k][0], "unit": "emu", "from": names[k][1], "to": names[k][2]}
+                for k in ("x", "y", "width", "height")
+                if k in values
+            ]
             if ("width" in values and cx < old["ext"][0]) or ("height" in values and cy < old["ext"][1]):
                 warnings.append({"id": oid, "code": "shrink", "page": slide["n"], "detail": ""})
             if left + cx > canvas_w or top + cy > canvas_h:
@@ -1190,30 +1305,43 @@ def _run_ops(raw: bytes, spec: object, model: dict):
                 if ox > OVERLAP_EPS and oy > OVERLAP_EPS:
                     hits.append(other["key"])
             if hits:
-                warnings.append({"id": oid, "code": "overlap", "page": slide["n"],
-                                 "detail": ", ".join(hits), "with": hits})
+                warnings.append(
+                    {"id": oid, "code": "overlap", "page": slide["n"], "detail": ", ".join(hits), "with": hits}
+                )
             expected_delta: dict = {"off": (left, top), "ext": (cx, cy)}
         else:
             spans, expected_delta, change_props = _style_edits(op, oid, raw_parts[part], shape, prefix)
             spans_by_part.setdefault(part, []).extend(spans)
         expected_by_part.setdefault(part, {})[shape["sid"]] = {**old, **expected_delta}
         touched_by_part.setdefault(part, set()).add(shape["sid"])
-        changes.append({"id": oid, "kind": "shape", "slide": slide["key"], "page": slide["n"],
-                        "part": part, "element": str(el["id"]), "aspect": op["aspect"],
-                        "props": change_props})
+        changes.append(
+            {
+                "id": oid,
+                "kind": "shape",
+                "slide": slide["key"],
+                "page": slide["n"],
+                "part": part,
+                "element": str(el["id"]),
+                "aspect": op["aspect"],
+                "props": change_props,
+            }
+        )
     changed: dict[str, bytes] = {}
     for part, spans in spans_by_part.items():
         new = raw_parts[part]
         for start, stop, data in sorted(spans, key=lambda s: (s[0], s[1]), reverse=True):
             new = new[:start] + data + new[stop:]
         changed[part] = new
-    checkers = {part: partial(_validate_props_part, part=part, expected=expected_by_part[part],
-                              touched=touched_by_part[part]) for part in changed}
+    checkers = {
+        part: partial(_validate_props_part, part=part, expected=expected_by_part[part], touched=touched_by_part[part])
+        for part in changed
+    }
     return changed, changes, warnings, checkers
 
 
-def _validate_props_part(old_raw: bytes, new_raw: bytes, part: str,
-                         expected: dict[str, dict], touched: set[str]) -> None:
+def _validate_props_part(
+    old_raw: bytes, new_raw: bytes, part: str, expected: dict[str, dict], touched: set[str]
+) -> None:
     """写后逐形状核对：触及形状匹配预期快照；未触及形状快照与字节切片都保持不变。"""
     old_shapes, _prefix = _parse_props(old_raw, part)
     new_shapes, _p2 = _parse_props(new_raw, part)
@@ -1227,19 +1355,20 @@ def _validate_props_part(old_raw: bytes, new_raw: bytes, part: str,
         else:
             if _props_snapshot(old_shape) != _props_snapshot(new_shape):
                 raise EditError("validation", part)
-            if new_raw[new_shape["start"]:new_shape["stop"]] != old_raw[old_shape["start"]:old_shape["stop"]]:
+            if new_raw[new_shape["start"] : new_shape["stop"]] != old_raw[old_shape["start"] : old_shape["stop"]]:
                 raise EditError("validation", part)
 
 
-
-def _validate_part(old_raw: bytes, new_raw: bytes, part: str, mode: str,
-                   expected: dict[int, dict[int, str]]) -> None:
+def _validate_part(old_raw: bytes, new_raw: bytes, part: str, mode: str, expected: dict[int, dict[int, str]]) -> None:
     old_shapes = _parse_part(old_raw, part, mode)
     new_shapes = _parse_part(new_raw, part, mode)
     if len(old_shapes) != len(new_shapes) or any(o.sid != n.sid for o, n in zip(old_shapes, new_shapes)):
         raise EditError("validation", part)
-    pairs = ([(o.paras, n.paras, i) for i, (o, n) in enumerate(zip(old_shapes, new_shapes))] if mode == "slide"
-             else [(_notes_paragraphs(old_shapes), _notes_paragraphs(new_shapes), 0)])
+    pairs = (
+        [(o.paras, n.paras, i) for i, (o, n) in enumerate(zip(old_shapes, new_shapes))]
+        if mode == "slide"
+        else [(_notes_paragraphs(old_shapes), _notes_paragraphs(new_shapes), 0)]
+    )
     for old_paras, new_paras, i in pairs:
         if len(old_paras) != len(new_paras):
             raise EditError("validation", part)
@@ -1248,8 +1377,7 @@ def _validate_part(old_raw: bytes, new_raw: bytes, part: str, mode: str,
                 raise EditError("validation", part)
 
 
-def _validate(path: Path | io.BytesIO, original: bytes, changed: dict[str, bytes],
-              checkers: dict[str, object]) -> None:
+def _validate(path: Path | io.BytesIO, original: bytes, changed: dict[str, bytes], checkers: dict[str, object]) -> None:
     """重开结果逐成员核对：未触及成员 CRC 与原值一致，改动成员字节交给部件级检查函数复核。"""
     with zipfile.ZipFile(io.BytesIO(original)) as old, zipfile.ZipFile(path) as new:
         if new.namelist() != old.namelist() or new.comment != old.comment:
@@ -1281,8 +1409,9 @@ def _slide_key_of(note: dict, manifest: dict) -> str:
     return ""
 
 
-def _selection(review: Path, batch: int | None, ids: list[str] | None, manifest: dict,
-               allow_notes: bool) -> tuple[list[dict], list[dict]]:
+def _selection(
+    review: Path, batch: int | None, ids: list[str] | None, manifest: dict, allow_notes: bool
+) -> tuple[list[dict], list[dict]]:
     """挑出要处理的批注：批次模式跳过已处理/无快捷修改的项并说明原因；其余不合格直接报错。"""
     doc = store.load(review)
     skipped: list[dict] = []
@@ -1303,9 +1432,15 @@ def _selection(review: Path, batch: int | None, ids: list[str] | None, manifest:
             continue
         ed, qf = note.get("edit") or {}, note.get("quoteFrom", "报告")
         side = "notes" if qf == "讲稿" else "shape" if qf == "报告" else None
-        if (note.get("status", "open") != "open" or note.get("orphan") or note.get("hold")
-                or side is None or ed.get("op") not in ("delete", "replace")
-                or not isinstance(ed.get("from"), str) or not ed.get("from")):
+        if (
+            note.get("status", "open") != "open"
+            or note.get("orphan")
+            or note.get("hold")
+            or side is None
+            or ed.get("op") not in ("delete", "replace")
+            or not isinstance(ed.get("from"), str)
+            or not ed.get("from")
+        ):
             errors.append(EditError("note", item=nid))
             continue
         to = "" if ed["op"] == "delete" else ed.get("to", "")
@@ -1325,15 +1460,23 @@ def _selection(review: Path, batch: int | None, ids: list[str] | None, manifest:
             if not allow_notes:
                 errors.append(EditError("notes", item=nid))
                 continue
-            selected.append({"id": nid, "side": "notes", "from": ed["from"], "to": to,
-                             "slide_key": _slide_key_of(note, manifest)})
+            selected.append(
+                {"id": nid, "side": "notes", "from": ed["from"], "to": to, "slide_key": _slide_key_of(note, manifest)}
+            )
     if errors:
         raise SelectionError(errors)
     return selected, skipped
 
 
-def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None = None,
-              output: Path | None = None, dry_run: bool = False, ops: dict | None = None) -> dict:
+def writeback(
+    review: Path,
+    *,
+    batch: int | None = None,
+    ids: list[str] | None = None,
+    output: Path | None = None,
+    dry_run: bool = False,
+    ops: dict | None = None,
+) -> dict:
     """公开入口：验证整组修改并写入（或预演），返回文件、备份、逐条修改与跳过原因；不改批注。
 
     batch/ids 走批注文本回写；ops 走白名单几何与样式回写（{"v": 1, "ops": [...]}），两者互斥。
@@ -1341,8 +1484,7 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
     """
     review = Path(review).resolve()
     manifest = ledger.read_manifest(review)
-    if (not manifest or ledger.unsupported_format(manifest)
-            or (manifest.get("format") or {}).get("report") != "pptx"):
+    if not manifest or ledger.unsupported_format(manifest) or (manifest.get("format") or {}).get("report") != "pptx":
         raise EditError("review")
     try:
         sources = resolve_sources(review, manifest)
@@ -1360,30 +1502,57 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
             model = _read_model(raw)
             changed, changes, warnings, checkers = _run_ops(raw, ops, model)
             pages = sorted({c["page"] for c in changes})
-            result = {"source": str(source), "output": "", "dryRun": dry_run, "backup": None,
-                      "ids": [c["id"] for c in changes], "pages": pages, "changes": changes,
-                      "skipped": [], "warnings": warnings,
-                      "visual": {"status": "notRun", "pages": pages}}
+            result = {
+                "source": str(source),
+                "output": "",
+                "dryRun": dry_run,
+                "backup": None,
+                "ids": [c["id"] for c in changes],
+                "pages": pages,
+                "changes": changes,
+                "skipped": [],
+                "warnings": warnings,
+                "visual": {"status": "notRun", "pages": pages},
+            }
         else:
-            edits, skipped = _selection(review, batch, ids, manifest,
-                                        allow_notes=sources.get("script") is None)
+            edits, skipped = _selection(review, batch, ids, manifest, allow_notes=sources.get("script") is None)
             if not edits:
                 raise EditError("empty")
-            stale = [EditError("anchor", item=e["id"]) for e in edits
-                     if e.get("anchor") and e["anchor"].get("fp") not in (None, "")
-                     and e["anchor"]["fp"] != fingerprint]
+            stale = [
+                EditError("anchor", item=e["id"])
+                for e in edits
+                if e.get("anchor") and e["anchor"].get("fp") not in (None, "") and e["anchor"]["fp"] != fingerprint
+            ]
             if stale:
                 raise SelectionError(stale)
             model = _read_model(raw)
             changed, tasks, expected = _run_edits(raw, edits, model)
-            checkers = {part: partial(_validate_part, part=part, mode=expected[part][0],
-                                      expected=expected[part][1]) for part in changed}
-            result = {"source": str(source), "output": "", "dryRun": dry_run,
-                      "backup": None, "ids": [t.id for t in tasks],
-                      "pages": sorted({t.page for t in tasks}),
-                      "changes": [{"id": t.id, "kind": t.kind, "slide": t.slide, "page": t.page,
-                                   "part": t.part, "para": t.para, "element": t.element} for t in tasks],
-                      "skipped": skipped, "warnings": []}
+            checkers = {
+                part: partial(_validate_part, part=part, mode=expected[part][0], expected=expected[part][1])
+                for part in changed
+            }
+            result = {
+                "source": str(source),
+                "output": "",
+                "dryRun": dry_run,
+                "backup": None,
+                "ids": [t.id for t in tasks],
+                "pages": sorted({t.page for t in tasks}),
+                "changes": [
+                    {
+                        "id": t.id,
+                        "kind": t.kind,
+                        "slide": t.slide,
+                        "page": t.page,
+                        "part": t.part,
+                        "para": t.para,
+                        "element": t.element,
+                    }
+                    for t in tasks
+                ],
+                "skipped": skipped,
+                "warnings": [],
+            }
         packed = raw
         for part, data in changed.items():
             packed = de.repack(packed, part, data)
@@ -1407,7 +1576,7 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
                 fh.flush()
                 os.fsync(fh.fileno())
             _validate(temp, raw, changed, checkers)
-            de._source_check(source, fingerprint)   # PowerPoint 或别的进程在准备期间动过源文件就拒绝提交
+            de._source_check(source, fingerprint)  # PowerPoint 或别的进程在准备期间动过源文件就拒绝提交
             if separate and destination.exists():
                 raise EditError("output", str(destination))
             de._replace_file(temp, destination)
@@ -1427,8 +1596,11 @@ def _run_edits(raw: bytes, edits: list[dict], model: dict):
                 needed.add(got["slide"]["part"])
         else:
             slide = slides_by_key.get(e.get("slide_key") or "")
-            if slide is not None and isinstance(slide.get("notes"), dict) \
-                    and slide["notes"].get("status") == "available":
+            if (
+                slide is not None
+                and isinstance(slide.get("notes"), dict)
+                and slide["notes"].get("status") == "available"
+            ):
                 needed.add(slide["notes"]["part"])
     raw_parts = {part: _part_bytes(raw, part) for part in needed}
     return edit_parts(raw_parts, edits, model)
@@ -1494,8 +1666,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if a.batch is not None or a.ids or a.ops is None:
                 raise EditError("arguments")
-            result = writeback(a.review, output=a.output, dry_run=a.dry_run,
-                               ops=_load_ops_file(a.ops))
+            result = writeback(a.review, output=a.output, dry_run=a.dry_run, ops=_load_ops_file(a.ops))
         sep = ", " if language == "en" else "、"
         pages = sep.join(str(n) for n in result["pages"])
         if a.json:
@@ -1504,16 +1675,26 @@ def main(argv: list[str] | None = None) -> int:
             if a.command == "ops":
                 for change in result["changes"]:
                     names = sep.join(p["name"] for p in change["props"])
-                    print(t("pptx.ops.change", id=change["id"],
-                            aspect=t("pptx.ops.aspect." + change["aspect"]), props=names))
+                    print(
+                        t(
+                            "pptx.ops.change",
+                            id=change["id"],
+                            aspect=t("pptx.ops.aspect." + change["aspect"]),
+                            props=names,
+                        )
+                    )
                 for warn in result["warnings"]:
                     detail = sep.join(warn["with"]) if warn.get("with") else warn.get("detail", "")
-                    print(t("pptx.ops.warningLine", id=warn["id"],
-                            text=t("pptx.ops.warning." + warn["code"], detail=detail)))
+                    print(
+                        t(
+                            "pptx.ops.warningLine",
+                            id=warn["id"],
+                            text=t("pptx.ops.warning." + warn["code"], detail=detail),
+                        )
+                    )
                 if result.get("visual"):
                     print(t("pptx.ops.visual", pages=pages))
-            print(t("pptx.ops.preview" if a.dry_run else "pptx.ops.done",
-                    path=result["output"], pages=pages))
+            print(t("pptx.ops.preview" if a.dry_run else "pptx.ops.done", path=result["output"], pages=pages))
         if result["backup"] and not a.json:
             print(t("pptx.edit.backup", path=result["backup"]))
         return 0

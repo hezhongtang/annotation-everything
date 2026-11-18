@@ -1,4 +1,5 @@
 """#151：用合成 PPTX 从公开回写入口核验字节保留、幻灯片定位、防护及失败后的原件。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -37,8 +38,10 @@ def local_records(raw):
     """独立读取各成员的 local header + 压缩流 + descriptor，比较未改成员原字节。"""
     with zipfile.ZipFile(io.BytesIO(raw)) as zf:
         infos = sorted(zf.infolist(), key=lambda i: i.header_offset)
-        return {i.filename: raw[i.header_offset:infos[n + 1].header_offset if n + 1 < len(infos) else zf.start_dir]
-                for n, i in enumerate(infos)}
+        return {
+            i.filename: raw[i.header_offset : infos[n + 1].header_offset if n + 1 < len(infos) else zf.start_dir]
+            for n, i in enumerate(infos)
+        }
 
 
 class PptxEditTests(unittest.TestCase):
@@ -57,15 +60,18 @@ class PptxEditTests(unittest.TestCase):
         mp.write_package(self.source, parts)
         self.original = self.source.read_bytes()
         self.fp = hashlib.sha256(self.original).hexdigest()
-        self.manifest = {"format": {"report": "pptx", "version": 1},
-                         "sources": {"report": "../synthetic.pptx"},
-                         "pptx": {"fingerprint": self.fp}}
+        self.manifest = {
+            "format": {"report": "pptx", "version": 1},
+            "sources": {"report": "../synthetic.pptx"},
+            "pptx": {"fingerprint": self.fp},
+        }
         if script:
             self.manifest["sources"]["script"] = script
         if pages:
             model = pr.read(self.source)
-            self.manifest["pages"] = [{"n": s["n"], "key": s["key"], "title": "", "stable": True}
-                                      for s in model["slides"]]
+            self.manifest["pages"] = [
+                {"n": s["n"], "key": s["key"], "title": "", "stable": True} for s in model["slides"]
+            ]
         (self.review / "review.json").write_text(json.dumps(self.manifest), encoding="utf-8")
         return self.source
 
@@ -85,38 +91,66 @@ class PptxEditTests(unittest.TestCase):
         model = pr.read(self.source)
         slide = model["slides"][slide_n - 1]
         el = next(e for e in slide["elements"] if str(e["id"]) == str(elem_id))
-        target = {"key": el["key"], "id": str(el["id"] or ""), "name": el.get("name", ""),
-                  "kind": el["kind"], "z": el.get("z", 0), "digest": el["evidenceDigest"]}
+        target = {
+            "key": el["key"],
+            "id": str(el["id"] or ""),
+            "name": el.get("name", ""),
+            "kind": el["kind"],
+            "z": el.get("z", 0),
+            "digest": el["evidenceDigest"],
+        }
         ro = [k for k in ("text", "geometry", "style") if not el["capabilities"][k + "Write"]]
         if ro:
             target["ro"] = ro
         p = el["paragraphs"][para]
-        text = {"para": para, "paraDigest": p["digest"],
-                "quote": p["text"] if quote is None else quote}
+        text = {"para": para, "paraDigest": p["digest"], "quote": p["text"] if quote is None else quote}
         if start is not None:
             text["start"], text["end"] = start, end
-            text["runs"] = [{"start": r["start"], "end": r["end"]}
-                            for r in p["runs"] if r["start"] < end and r["end"] > start]
-        a = {"v": 1, "slide": slide["key"], "kind": "text", "via": "selection", "fp": self.fp,
-             "elements": [target], "text": text}
+            text["runs"] = [
+                {"start": r["start"], "end": r["end"]} for r in p["runs"] if r["start"] < end and r["end"] > start
+            ]
+        a = {
+            "v": 1,
+            "slide": slide["key"],
+            "kind": "text",
+            "via": "selection",
+            "fp": self.fp,
+            "elements": [target],
+            "text": text,
+        }
         a.update(over)
         return a
 
-    def shape_note(self, before, after="新", *, slide_n=1, elem_id="2", para=0,
-                   start=None, end=None, quote=None, anchor_over=None):
-        a = self.shape_anchor(slide_n=slide_n, elem_id=elem_id, para=para, quote=quote,
-                              start=start, end=end, **(anchor_over or {}))
-        _doc, note = store.add(self.review, {
-            "page": slide_n, "target": "报告", "quoteFrom": "报告", "quote": before,
-            "text": ("改为：" + after) if after else "删除引用的这段文字", "pptx": a,
-            "edit": {"op": "replace", "from": before, "to": after} if after else {"op": "delete", "from": before}})
+    def shape_note(
+        self, before, after="新", *, slide_n=1, elem_id="2", para=0, start=None, end=None, quote=None, anchor_over=None
+    ):
+        a = self.shape_anchor(
+            slide_n=slide_n, elem_id=elem_id, para=para, quote=quote, start=start, end=end, **(anchor_over or {})
+        )
+        _doc, note = store.add(
+            self.review,
+            {
+                "page": slide_n,
+                "target": "报告",
+                "quoteFrom": "报告",
+                "quote": before,
+                "text": ("改为：" + after) if after else "删除引用的这段文字",
+                "pptx": a,
+                "edit": {"op": "replace", "from": before, "to": after} if after else {"op": "delete", "from": before},
+            },
+        )
         self.ids.append(note["id"])
         return note["id"]
 
     def notes_note(self, before, after="新讲法", *, page=1, key=True, target="讲稿", quote_from="讲稿"):
-        data = {"page": page, "target": target, "quoteFrom": quote_from, "quote": before,
-                "text": "改为：" + after if after else "删除引用的这段文字",
-                "edit": {"op": "replace", "from": before, "to": after} if after else {"op": "delete", "from": before}}
+        data = {
+            "page": page,
+            "target": target,
+            "quoteFrom": quote_from,
+            "quote": before,
+            "text": "改为：" + after if after else "删除引用的这段文字",
+            "edit": {"op": "replace", "from": before, "to": after} if after else {"op": "delete", "from": before},
+        }
         if key:
             data["key"] = self.slide_key(page)
         _doc, note = store.add(self.review, data)
@@ -147,14 +181,21 @@ class PptxEditTests(unittest.TestCase):
         result = self.writeback(batch=batch["seq"])
         self.assertEqual(result["ids"], [one, two, three])
         self.assertEqual(result["pages"], [1])
-        self.assertEqual([(c["kind"], c["part"], c["para"]) for c in result["changes"]],
-                         [("shape", "ppt/slides/slide10.xml", 1),
-                          ("shape", "ppt/slides/slide10.xml", 0),
-                          ("notes", "ppt/notesSlides/notesSlide1.xml", 1)])
+        self.assertEqual(
+            [(c["kind"], c["part"], c["para"]) for c in result["changes"]],
+            [
+                ("shape", "ppt/slides/slide10.xml", 1),
+                ("shape", "ppt/slides/slide10.xml", 0),
+                ("notes", "ppt/notesSlides/notesSlide1.xml", 1),
+            ],
+        )
         self.assertEqual(result["skipped"], [])
         xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml")
-        self.assertIn('<a:rPr i="1" sz="1800"/><a:t xml:space="preserve">😀&amp;&lt;</a:t>'.encode(),
-                      xml, "未触及 run 的文字与属性原样保留")
+        self.assertIn(
+            '<a:rPr i="1" sz="1800"/><a:t xml:space="preserve">😀&amp;&lt;</a:t>'.encode(),
+            xml,
+            "未触及 run 的文字与属性原样保留",
+        )
         self.assertIn('<a:t xml:space="preserve">第二段新文</a:t>'.encode(), xml)
         self.assertIn(b'<a:t xml:space="preserve"></a:t>', xml)
         self.assertEqual(xml.count(b"<a:rPr"), 3, "未触及 run 的属性全部保留")
@@ -194,8 +235,10 @@ class PptxEditTests(unittest.TestCase):
         self.assertTrue(runs[0]["style"]["bold"], "替换文本沿用起始 run 的加粗")
         self.assertTrue(runs[1]["style"]["italic"], "未触及文本保留原有斜体")
         xml = member(self.source.read_bytes(), "ppt/slides/slide10.xml")
-        self.assertIn(b'<a:rPr b="1"><a:latin typeface="Synthetic Sans"/></a:rPr>'
-                      b'<a:t xml:space="preserve">\xe6\x96\xb0</a:t>', xml)
+        self.assertIn(
+            b'<a:rPr b="1"><a:latin typeface="Synthetic Sans"/></a:rPr><a:t xml:space="preserve">\xe6\x96\xb0</a:t>',
+            xml,
+        )
         self.assertIn(b'<a:rPr i="1" sz="1800"/>', xml)
 
     def test_repeated_text_requires_offsets_and_uses_them(self):
@@ -209,7 +252,8 @@ class PptxEditTests(unittest.TestCase):
     def test_repeated_text_without_offsets_is_refused(self):
         parts = mp.sample_parts()
         parts["ppt/slides/slide10.xml"] = mp.slide_xml(
-            paragraphs='<a:p><a:r><a:rPr lang="zh-CN"/><a:t xml:space="preserve">相同相同</a:t></a:r></a:p>')
+            paragraphs='<a:p><a:r><a:rPr lang="zh-CN"/><a:t xml:space="preserve">相同相同</a:t></a:r></a:p>'
+        )
         self.build(parts)
         self.shape_note("相同", "新", para=0)
         self.assert_refused("ambiguous")
@@ -233,11 +277,13 @@ class PptxEditTests(unittest.TestCase):
     def test_unlocatable_text_reference_is_refused(self):
         self.build()
         gone = {"text": {"para": 1, "paraDigest": "0" * 64, "quote": "没有这句话"}}
-        self.assert_refused("anchor", lambda: self.writeback(
-            ids=[self.shape_note("没有这句话", "新", para=1, anchor_over=gone)]))
+        self.assert_refused(
+            "anchor", lambda: self.writeback(ids=[self.shape_note("没有这句话", "新", para=1, anchor_over=gone)])
+        )
         multi = {"text": {"para": 1, "paraDigest": "0" * 64, "quote": "相同"}}
-        self.assert_refused("ambiguous", lambda: self.writeback(
-            ids=[self.shape_note("相同", "新", para=1, anchor_over=multi)]))
+        self.assert_refused(
+            "ambiguous", lambda: self.writeback(ids=[self.shape_note("相同", "新", para=1, anchor_over=multi)])
+        )
 
     def test_overlapping_edits_refuse_the_entire_selection(self):
         self.build()
@@ -250,18 +296,29 @@ class PptxEditTests(unittest.TestCase):
         parts = mp.sample_parts()
         parts["ppt/slides/slide10.xml"] = mp.slide_xml(
             paragraphs='<a:p><a:r><a:rPr lang="zh-CN"/><a:t xml:space="preserve">甲</a:t></a:r>'
-                       "<a:br/><a:r><a:rPr lang=\"zh-CN\"/><a:t xml:space=\"preserve\">乙</a:t></a:r></a:p>")
+            '<a:br/><a:r><a:rPr lang="zh-CN"/><a:t xml:space="preserve">乙</a:t></a:r></a:p>'
+        )
         self.build(parts)
-        self.assert_refused("range", lambda: self.writeback(
-            ids=[self.shape_note("甲\n乙", "新", quote="甲\n乙")]))
+        self.assert_refused("range", lambda: self.writeback(ids=[self.shape_note("甲\n乙", "新", quote="甲\n乙")]))
 
     def test_readonly_structures_are_refused(self):
         self.build()
         for elem_id, kind in (("18", "unknown"), ("13", "shape")):
             with self.subTest(elem_id=elem_id):
-                errors = self.assert_refused("readonly", lambda: self.writeback(
-                    ids=[self.shape_note("未知合成文本" if elem_id == "18" else "组合内文本", "新",
-                                          slide_n=2, elem_id=elem_id, quote="未知合成文本" if elem_id == "18" else "组合内文本")]))
+                errors = self.assert_refused(
+                    "readonly",
+                    lambda: self.writeback(
+                        ids=[
+                            self.shape_note(
+                                "未知合成文本" if elem_id == "18" else "组合内文本",
+                                "新",
+                                slide_n=2,
+                                elem_id=elem_id,
+                                quote="未知合成文本" if elem_id == "18" else "组合内文本",
+                            )
+                        ]
+                    ),
+                )
                 self.assertEqual(errors[0].detail, kind)
 
     def test_stale_or_future_anchor_is_refused(self):
@@ -290,27 +347,22 @@ class PptxEditTests(unittest.TestCase):
     def test_notes_writeback_requires_no_external_script(self):
         self.build(script="讲稿.md")
         (self.review / "讲稿.md").write_text("### 第 1 页｜甲\n**讲法**\n外部讲稿\n", encoding="utf-8")
-        self.assert_refused("notes", lambda: self.writeback(
-            ids=[self.notes_note("第二段", "新讲法")]))
+        self.assert_refused("notes", lambda: self.writeback(ids=[self.notes_note("第二段", "新讲法")]))
 
     def test_notes_writeback_requires_existing_notes_part(self):
         self.build()
-        self.assert_refused("notes", lambda: self.writeback(
-            ids=[self.notes_note("第二段", "新讲法", page=2)]))
+        self.assert_refused("notes", lambda: self.writeback(ids=[self.notes_note("第二段", "新讲法", page=2)]))
 
     def test_ambiguous_notes_quote_is_refused(self):
         parts = mp.sample_parts()
         para = '<a:p><a:r><a:rPr lang="zh-CN"/><a:t xml:space="preserve">第二段</a:t></a:r></a:p>'
-        parts["ppt/notesSlides/notesSlide1.xml"] = parts["ppt/notesSlides/notesSlide1.xml"].replace(
-            para, para + para)
+        parts["ppt/notesSlides/notesSlide1.xml"] = parts["ppt/notesSlides/notesSlide1.xml"].replace(para, para + para)
         self.build(parts)
-        self.assert_refused("ambiguous", lambda: self.writeback(
-            ids=[self.notes_note("第二段", "新讲法")]))
+        self.assert_refused("ambiguous", lambda: self.writeback(ids=[self.notes_note("第二段", "新讲法")]))
 
     def test_missing_notes_quote_is_refused(self):
         self.build()
-        self.assert_refused("notFound", lambda: self.writeback(
-            ids=[self.notes_note("没有这句话", "新")]))
+        self.assert_refused("notFound", lambda: self.writeback(ids=[self.notes_note("没有这句话", "新")]))
 
     def test_notes_writeback_uses_page_key_fallback_without_note_key(self):
         self.build()
@@ -325,7 +377,8 @@ class PptxEditTests(unittest.TestCase):
         self.shape_note("相同", "新", para=1, anchor_over={"fp": None})
         parts = mp.sample_parts()
         parts["ppt/slides/slide10.xml"] = parts["ppt/slides/slide10.xml"].replace(
-            "<p:sld", '<!DOCTYPE p:sld [<!ENTITY x "乙">]><p:sld', 1)
+            "<p:sld", '<!DOCTYPE p:sld [<!ENTITY x "乙">]><p:sld', 1
+        )
         self.refresh_source(parts)
         errors = self.assert_refused("xml")
         self.assertIn("DTD", errors[0].detail)
@@ -381,9 +434,11 @@ class PptxEditTests(unittest.TestCase):
     def test_dry_run_lists_changes_without_output_or_backup(self):
         self.build()
         output = self.root / "preview.pptx"
-        result = self.writeback(ids=[self.shape_note("相同", "新", para=1),
-                                     self.notes_note("第二段", "讲稿改后")],
-                                output=output, dry_run=True)
+        result = self.writeback(
+            ids=[self.shape_note("相同", "新", para=1), self.notes_note("第二段", "讲稿改后")],
+            output=output,
+            dry_run=True,
+        )
         self.assertTrue(result["dryRun"])
         self.assertEqual(result["pages"], [1])
         self.assertIsNone(result["backup"])
@@ -397,8 +452,9 @@ class PptxEditTests(unittest.TestCase):
         self.writeback(ids=[self.shape_note("相同", "新", para=1)], output=output)
         self.assertEqual(self.source.read_bytes(), self.original)
         self.assertIn("新".encode(), member(output.read_bytes(), "ppt/slides/slide10.xml"))
-        self.assert_refused("output", lambda: self.writeback(
-            ids=[self.shape_note("相同", "新", para=1)], output=output))
+        self.assert_refused(
+            "output", lambda: self.writeback(ids=[self.shape_note("相同", "新", para=1)], output=output)
+        )
         link = self.root / "link.pptx"
         try:
             link.symlink_to(output)
@@ -406,8 +462,7 @@ class PptxEditTests(unittest.TestCase):
             if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
                 return
             raise
-        self.assert_refused("output", lambda: self.writeback(
-            ids=[self.shape_note("相同", "新", para=1)], output=link))
+        self.assert_refused("output", lambda: self.writeback(ids=[self.shape_note("相同", "新", para=1)], output=link))
 
     def test_zip_comments_extra_fields_and_attributes_are_preserved(self):
         self.build()
@@ -432,8 +487,10 @@ class PptxEditTests(unittest.TestCase):
             self.assertEqual(old.comment, new.comment)
             for name in old.namelist():
                 a, b = old.getinfo(name), new.getinfo(name)
-                self.assertEqual((a.extra, a.comment, a.external_attr, a.date_time),
-                                 (b.extra, b.comment, b.external_attr, b.date_time))
+                self.assertEqual(
+                    (a.extra, a.comment, a.external_attr, a.date_time),
+                    (b.extra, b.comment, b.external_attr, b.date_time),
+                )
 
     def test_data_descriptor_members_survive_writeback_byte_identical(self):
         # 第三方工具（Keynote / LibreOffice）导出的包可能带 data descriptor（flag 0x08）。
@@ -442,14 +499,15 @@ class PptxEditTests(unittest.TestCase):
         self.build()
         sink = io.BytesIO()
         with zipfile.ZipFile(sink, "w") as archive:
-            archive._seekable = False   # 模拟流式目标：zipfile 转入 descriptor 写法
+            archive._seekable = False  # 模拟流式目标：zipfile 转入 descriptor 写法
             with zipfile.ZipFile(io.BytesIO(self.original)) as old:
                 for info in old.infolist():
                     archive.writestr(info, old.read(info.filename))
         descriptor_raw = sink.getvalue()
         with zipfile.ZipFile(io.BytesIO(descriptor_raw)) as check:
-            self.assertTrue(all(info.flag_bits & 0x8 for info in check.infolist()),
-                            "夹具必须真的构造出 data descriptor")
+            self.assertTrue(
+                all(info.flag_bits & 0x8 for info in check.infolist()), "夹具必须真的构造出 data descriptor"
+            )
         self.assertGreater(descriptor_raw.count(b"PK\x07\x08"), 0)
         self.source.write_bytes(descriptor_raw)
         self.original = descriptor_raw
@@ -495,8 +553,10 @@ class PptxEditTests(unittest.TestCase):
                 os.lseek(fd, 0, os.SEEK_SET)
                 os.write(fd, b"broken zip")
 
-        with patch.object(pe.os, "fsync", side_effect=corrupt_pending), \
-                self.assertRaises((pe.EditError, zipfile.BadZipFile)):
+        with (
+            patch.object(pe.os, "fsync", side_effect=corrupt_pending),
+            self.assertRaises((pe.EditError, zipfile.BadZipFile)),
+        ):
             self.writeback(ids=[nid])
         self.assertEqual(self.source.read_bytes(), self.original)
         self.assertEqual(next((self.review / ".snapshots").rglob("*.pptx")).read_bytes(), self.original)
@@ -514,8 +574,7 @@ class PptxEditTests(unittest.TestCase):
             if count == 2:
                 self.source.write_bytes(self.original + b"external change")
 
-        with patch.object(pe.os, "fsync", side_effect=change_source), \
-                self.assertRaises(pe.EditError) as caught:
+        with patch.object(pe.os, "fsync", side_effect=change_source), self.assertRaises(pe.EditError) as caught:
             self.writeback(ids=[nid])
             self.assertEqual(caught.exception.code, "fingerprint")
             self.assertEqual(self.source.read_bytes(), self.original + b"external change")
@@ -535,14 +594,13 @@ class PptxEditTests(unittest.TestCase):
             position = out.find(b"PK\x01\x02")
             while position >= 0:
                 name_length, extra_length, comment_length = struct.unpack_from("<HHH", out, position + 28)
-                if bytes(out[position + 46:position + 46 + name_length]).decode("utf-8") == "ppt/presentation.xml":
-                    struct.pack_into("<I", out, position + 16, 0xDEADBEEF)   # 未触及成员的目录 CRC
+                if bytes(out[position + 46 : position + 46 + name_length]).decode("utf-8") == "ppt/presentation.xml":
+                    struct.pack_into("<I", out, position + 16, 0xDEADBEEF)  # 未触及成员的目录 CRC
                     break
                 position = out.find(b"PK\x01\x02", position + 46 + name_length + extra_length + comment_length)
             return bytes(out)
 
-        with patch.object(pe.de, "repack", side_effect=tamper_crc), \
-                self.assertRaises(pe.EditError) as caught:
+        with patch.object(pe.de, "repack", side_effect=tamper_crc), self.assertRaises(pe.EditError) as caught:
             self.writeback(ids=[nid])
         self.assertEqual(caught.exception.code, "validation")
         self.assertEqual(caught.exception.detail, "ppt/presentation.xml")
@@ -584,12 +642,14 @@ class PptxEditTests(unittest.TestCase):
 
     def test_cli_argument_errors_use_the_shared_language_contract(self):
         self.build()
-        cases = [(["--locale"], {}, "参数 --locale 需要一个值"),
-                 (["--locale", "en", "apply", str(self.review), "--id"], {}, "Option --id needs a value"),
-                 (["apply", str(self.review), "--id", "missing"], {"AE_LOCALE": "fr"}, "不支持的语言：fr"),
-                 (["apply", str(self.review), "--unknown", "--locale", "en"], {}, "Unrecognized argument: --unknown"),
-                 (["apply", str(self.review), "--batch", "1", "--id", "x"], {}, "apply"),
-                 (["apply", str(self.review), "--batch", "0"], {}, "apply")]
+        cases = [
+            (["--locale"], {}, "参数 --locale 需要一个值"),
+            (["--locale", "en", "apply", str(self.review), "--id"], {}, "Option --id needs a value"),
+            (["apply", str(self.review), "--id", "missing"], {"AE_LOCALE": "fr"}, "不支持的语言：fr"),
+            (["apply", str(self.review), "--unknown", "--locale", "en"], {}, "Unrecognized argument: --unknown"),
+            (["apply", str(self.review), "--batch", "1", "--id", "x"], {}, "apply"),
+            (["apply", str(self.review), "--batch", "0"], {}, "apply"),
+        ]
         for args, env, expected in cases:
             with self.subTest(args=args), patch.dict(os.environ, {"AE_LOCALE": "", **env}):
                 out, err = io.StringIO(), io.StringIO()
@@ -631,8 +691,7 @@ class PptxEditTests(unittest.TestCase):
         err_in_use = PermissionError(13, "sharing violation")
         err_in_use.winerror = 32
         out, err = io.StringIO(), io.StringIO()
-        with patch.object(pe.de.os, "replace", side_effect=err_in_use), \
-                redirect_stdout(out), redirect_stderr(err):
+        with patch.object(pe.de.os, "replace", side_effect=err_in_use), redirect_stdout(out), redirect_stderr(err):
             code = pe.main(["apply", str(self.review), "--batch", str(batch["seq"]), "--locale", "zh-CN"])
         self.assertEqual(code, 2)
         self.assertIn("关闭", err.getvalue())
@@ -661,8 +720,7 @@ class PptxEditTests(unittest.TestCase):
         notes_before = (self.review / "notes.json").read_bytes()
         err_in_use = PermissionError(13, "locked by powerpoint")
         err_in_use.winerror = 32
-        with patch.object(Path, "read_bytes", side_effect=err_in_use), \
-                self.assertRaises(pe.EditError) as caught_lock:
+        with patch.object(Path, "read_bytes", side_effect=err_in_use), self.assertRaises(pe.EditError) as caught_lock:
             pe.writeback(self.review, ids=[nid])
         self.assertEqual(caught_lock.exception.code, "locked")
         self.assertEqual(self.source.read_bytes(), self.original)

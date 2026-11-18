@@ -4,6 +4,7 @@
 冲突拒绝、执行计划与清单来自同一份注册表。真实浏览器行为在
 tests/e2e_browser.py 的端到端层验证，这里不启动浏览器。
 """
+
 from __future__ import annotations
 
 import sys
@@ -168,14 +169,12 @@ class LegacyAliasTests(unittest.TestCase):
                 self.assertNotIn("locale-live-controls", request.plan)
                 for target in targets:
                     if target != "installed-delivery":
-                        self.assertNotIn("installed-delivery", request.plan,
-                                         "除 --delivery-only 外不得夹带安装交付")
+                        self.assertNotIn("installed-delivery", request.plan, "除 --delivery-only 外不得夹带安装交付")
 
     def test_alias_notes_are_attached_to_the_matching_scenarios(self):
         for flag, targets in LEGACY_TARGETS.items():
             for target in targets:
-                self.assertIn(flag, reg.scenario_by_id(target).aliases,
-                              "%s 应声明别名 %s" % (target, flag))
+                self.assertIn(flag, reg.scenario_by_id(target).aliases, "%s 应声明别名 %s" % (target, flag))
 
 
 class ListingTests(unittest.TestCase):
@@ -237,11 +236,14 @@ class RunnerConsistencyTests(unittest.TestCase):
 class RunnerOutcomeTests(unittest.TestCase):
     """执行真实入口调度函数，以合成浏览器覆盖失败和取消，不导入浏览器依赖。"""
 
-    def run_main(self, first, *, connected=True, launch_error=False, argv=None, extra_env=None, os_mod=os, run_parallel=None):
+    def run_main(
+        self, first, *, connected=True, launch_error=False, argv=None, extra_env=None, os_mod=os, run_parallel=None
+    ):
         tree = ast.parse((TESTS / "e2e_browser.py").read_text(encoding="utf-8"))
-        functions = ast.Module(body=[node for node in tree.body
-                                    if isinstance(node, ast.FunctionDef)
-                                    and node.name in ("main", "iso_now")], type_ignores=[])
+        functions = ast.Module(
+            body=[node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in ("main", "iso_now")],
+            type_ignores=[],
+        )
         results = []
         browser = SimpleNamespace(is_connected=lambda: connected, close=lambda: None, version="synthetic-browser")
         launch_calls = []
@@ -265,40 +267,60 @@ class RunnerOutcomeTests(unittest.TestCase):
         runners = {sid: run_next for sid in reg.SCENARIO_IDS}
         runners["file-mode"] = run_first
         cleanup = mock.Mock()
-        namespace = dict(scenarios=reg, SCENARIO_RUNNERS=runners, RESULTS=results,
-                         CLEANUP=cleanup, sync_playwright=playwright,
-                         # main() 在每个场景前后登记场景 ID，供等待超时诊断使用（issue #54）；
-                         # 这里的合成场景不经过真实等待层，用空实现即可
-                         e2e_waits=SimpleNamespace(set_scenario=lambda *_: None),
-                         SCENARIO_STATUS_LABELS={name: name for name in
-                             ("passed", "failed", "error", "interrupted", "not_run")},
-                         os=os_mod, sys=sys, signal=signal, Path=Path, tempfile=tempfile,
-                         time=time, traceback=traceback, json=json)
+        namespace = dict(
+            scenarios=reg,
+            SCENARIO_RUNNERS=runners,
+            RESULTS=results,
+            CLEANUP=cleanup,
+            sync_playwright=playwright,
+            # main() 在每个场景前后登记场景 ID，供等待超时诊断使用（issue #54）；
+            # 这里的合成场景不经过真实等待层，用空实现即可
+            e2e_waits=SimpleNamespace(set_scenario=lambda *_: None),
+            SCENARIO_STATUS_LABELS={name: name for name in ("passed", "failed", "error", "interrupted", "not_run")},
+            os=os_mod,
+            sys=sys,
+            signal=signal,
+            Path=Path,
+            tempfile=tempfile,
+            time=time,
+            traceback=traceback,
+            json=json,
+        )
         if run_parallel is not None:
             namespace["run_parallel_browser"] = run_parallel
         exec(compile(functions, str(TESTS / "e2e_browser.py"), "exec"), namespace)
         output = io.StringIO()
         previous_handler = signal.getsignal(signal.SIGINT)
         cli_argv = ["e2e_browser.py"] + (["--only", "file-mode,css-fidelity"] if argv is None else list(argv))
-        with tempfile.TemporaryDirectory() as tmp, \
-                mock.patch.object(sys, "argv", cli_argv), \
-                mock.patch.object(tempfile, "mkdtemp", return_value=tmp), \
-                mock.patch.dict(os.environ, extra_env or {}, clear=False), \
-                contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(sys, "argv", cli_argv),
+            mock.patch.object(tempfile, "mkdtemp", return_value=tmp),
+            mock.patch.dict(os.environ, extra_env or {}, clear=False),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
             code = namespace["main"]()
         self.assertIs(signal.getsignal(signal.SIGINT), previous_handler)
         lines = output.getvalue().splitlines()
-        summary = json.loads(next(line.removeprefix("AE-SCENARIOS: ")
-                                  for line in lines
-                                  if line.startswith("AE-SCENARIOS: ")))
+        summary = json.loads(
+            next(line.removeprefix("AE-SCENARIOS: ") for line in lines if line.startswith("AE-SCENARIOS: "))
+        )
         self._last_launch_calls = launch_calls
-        self._last_env_line = next((json.loads(line.removeprefix("AE-BROWSER-ENV: "))
-                                    for line in lines if line.startswith("AE-BROWSER-ENV: ")), None)
+        self._last_env_line = next(
+            (
+                json.loads(line.removeprefix("AE-BROWSER-ENV: "))
+                for line in lines
+                if line.startswith("AE-BROWSER-ENV: ")
+            ),
+            None,
+        )
         return code, summary["scenarios"], cleanup
 
     def test_browser_crash_is_error_and_later_scene_not_run(self):
         def crash(_results):
             raise RuntimeError("synthetic browser crash")
+
         code, scenes, cleanup = self.run_main(crash, connected=False)
         self.assertEqual(code, 1)
         self.assertEqual([item["status"] for item in scenes], ["error", "not_run"])
@@ -312,6 +334,7 @@ class RunnerOutcomeTests(unittest.TestCase):
                 signal.raise_signal(signal.SIGINT)
             except KeyboardInterrupt:
                 raise RuntimeError("synthetic disconnected driver")
+
         code, scenes, _ = self.run_main(interrupt, connected=False)
         self.assertEqual(code, 130)
         self.assertEqual([item["status"] for item in scenes], ["interrupted", "not_run"])
@@ -324,8 +347,7 @@ class RunnerOutcomeTests(unittest.TestCase):
         self.assertIn("没有执行任何检查", scenes[0]["message"])
 
     def test_disconnect_after_completed_check_does_not_pass_unrun_scenes(self):
-        code, scenes, _ = self.run_main(
-            lambda results: results.append((True, "completed check")), connected=False)
+        code, scenes, _ = self.run_main(lambda results: results.append((True, "completed check")), connected=False)
         self.assertEqual(code, 1)
         self.assertEqual([item["status"] for item in scenes], ["passed", "not_run"])
 
@@ -336,6 +358,7 @@ class RunnerOutcomeTests(unittest.TestCase):
 
     def test_browser_channel_reads_ae_e2e_browser_channel_and_records_it(self):
         import importlib.metadata
+
         with mock.patch.object(importlib.metadata, "version", return_value="synthetic-pw"):
             code, scenes, _ = self.run_main(
                 lambda results: results.append((True, "ok")),
@@ -355,38 +378,54 @@ class RunnerOutcomeTests(unittest.TestCase):
             scenario_by_id=lambda sid: SimpleNamespace(parallel_safe=True, title=sid),
         )
         tree = ast.parse((TESTS / "e2e_browser.py").read_text(encoding="utf-8"))
-        functions = ast.Module(body=[node for node in tree.body
-                                    if isinstance(node, ast.FunctionDef)
-                                    and node.name in ("main", "iso_now")], type_ignores=[])
+        functions = ast.Module(
+            body=[node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in ("main", "iso_now")],
+            type_ignores=[],
+        )
         results = []
         browser = SimpleNamespace(is_connected=lambda: True, close=lambda: None, version="synthetic-browser")
         runners = {sid: (lambda *_a: results.append((True, "ok"))) for sid in reg.SCENARIO_IDS}
         namespace = dict(
-            scenarios=all_parallel, SCENARIO_RUNNERS=runners, RESULTS=results,
+            scenarios=all_parallel,
+            SCENARIO_RUNNERS=runners,
+            RESULTS=results,
             CLEANUP=mock.Mock(),
             sync_playwright=lambda: contextlib.nullcontext(
                 SimpleNamespace(chromium=SimpleNamespace(launch=lambda **_kw: browser))
             ),
             e2e_waits=SimpleNamespace(set_scenario=lambda *_: None),
             SCENARIO_STATUS_LABELS={name: name for name in ("passed", "failed", "error", "interrupted", "not_run")},
-            os=no_fork_os, sys=sys, signal=signal, Path=Path, tempfile=tempfile,
-            time=time, traceback=traceback, json=json,
-            run_parallel_browser=mock.Mock(side_effect=AssertionError("must not call run_parallel_browser without fork")),
+            os=no_fork_os,
+            sys=sys,
+            signal=signal,
+            Path=Path,
+            tempfile=tempfile,
+            time=time,
+            traceback=traceback,
+            json=json,
+            run_parallel_browser=mock.Mock(
+                side_effect=AssertionError("must not call run_parallel_browser without fork")
+            ),
         )
         exec(compile(functions, str(TESTS / "e2e_browser.py"), "exec"), namespace)
         output = io.StringIO()
-        with tempfile.TemporaryDirectory() as tmp, \
-                mock.patch.object(sys, "argv", ["e2e_browser.py"]), \
-                mock.patch.object(tempfile, "mkdtemp", return_value=tmp), \
-                contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(sys, "argv", ["e2e_browser.py"]),
+            mock.patch.object(tempfile, "mkdtemp", return_value=tmp),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
             code = namespace["main"]()
         self.assertEqual(code, 0)
-        summary = json.loads(next(line.removeprefix("AE-SCENARIOS: ")
-                                  for line in output.getvalue().splitlines()
-                                  if line.startswith("AE-SCENARIOS: ")))
+        summary = json.loads(
+            next(
+                line.removeprefix("AE-SCENARIOS: ")
+                for line in output.getvalue().splitlines()
+                if line.startswith("AE-SCENARIOS: ")
+            )
+        )
         self.assertEqual(len(summary["scenarios"]), len(reg.SCENARIO_IDS))
-
-
 
 
 class ParallelBrowserSummaryTests(unittest.TestCase):
@@ -395,13 +434,20 @@ class ParallelBrowserSummaryTests(unittest.TestCase):
     def run_summary(self, *, broken=None, failed=None, interrupted=False, mismatch=False):
         sys.path.insert(0, str(TESTS.parent))
         import verify_parallel
+
         tree = ast.parse((TESTS / "e2e_browser.py").read_text(encoding="utf-8"))
-        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
-                        and node.name == "run_parallel_browser")
+        function = next(
+            node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "run_parallel_browser"
+        )
         request = reg.resolve_request(["--only", "file-mode,css-fidelity"])
         request = reg.Request(mode="full", plan=request.plan, requested=(), source="default")
-        env = {"schema": "ae-browser-environment/1", "browser": "chromium", "channel": "chrome",
-               "version": "synthetic-1", "playwright": "synthetic-1"}
+        env = {
+            "schema": "ae-browser-environment/1",
+            "browser": "chromium",
+            "channel": "chrome",
+            "version": "synthetic-1",
+            "playwright": "synthetic-1",
+        }
 
         def tasks(spec, _worker, root):
             result = {}
@@ -409,28 +455,48 @@ class ParallelBrowserSummaryTests(unittest.TestCase):
                 if interrupted and index == 1:
                     raise verify_parallel.InterruptedRun(result)
                 log = root / (sid + ".log")
-                summary = {"mode": "partial", "plan": ["wrong"] if sid == broken else [sid],
-                           "scenarios": [{"id": sid, "status": "passed",
-                               "checks": {"total": index + 1, "passed": index + 1, "failed": 0},
-                               "started_at": "synthetic-start", "ended_at": "synthetic-end", "seconds": 0.01}]}
+                summary = {
+                    "mode": "partial",
+                    "plan": ["wrong"] if sid == broken else [sid],
+                    "scenarios": [
+                        {
+                            "id": sid,
+                            "status": "passed",
+                            "checks": {"total": index + 1, "passed": index + 1, "failed": 0},
+                            "started_at": "synthetic-start",
+                            "ended_at": "synthetic-end",
+                            "seconds": 0.01,
+                        }
+                    ],
+                }
                 local_env = {**env, "version": "synthetic-2"} if mismatch and index else env
-                log.write_text("AE-BROWSER-ENV: " + json.dumps(local_env) + "\nAE-SCENARIOS: "
-                               + json.dumps(summary) + "\n")
-                result[sid] = {"id": sid, "log": log, "seconds": 0.01,
-                               "exit_status": 1 if sid == failed else 0}
+                log.write_text(
+                    "AE-BROWSER-ENV: " + json.dumps(local_env) + "\nAE-SCENARIOS: " + json.dumps(summary) + "\n"
+                )
+                result[sid] = {"id": sid, "log": log, "seconds": 0.01, "exit_status": 1 if sid == failed else 0}
             return result
 
-        namespace = dict(scenarios=reg, Path=Path, tempfile=tempfile, json=json,
-                         CLEANUP=mock.Mock(), os=os, signal=signal, main=mock.Mock(return_value=0))
+        namespace = dict(
+            scenarios=reg,
+            Path=Path,
+            tempfile=tempfile,
+            json=json,
+            CLEANUP=mock.Mock(),
+            os=os,
+            signal=signal,
+            main=mock.Mock(return_value=0),
+        )
         exec(compile(ast.Module(body=[function], type_ignores=[]), str(TESTS / "e2e_browser.py"), "exec"), namespace)
         output = io.StringIO()
         with mock.patch.object(verify_parallel, "run_tasks", side_effect=tasks), contextlib.redirect_stdout(output):
             code = namespace["run_parallel_browser"](request)
         lines = output.getvalue().splitlines()
-        summary = json.loads(next(line[len("AE-SCENARIOS: "):] for line in reversed(lines)
-                                  if line.startswith("AE-SCENARIOS: ")))
-        actual_env = json.loads(next(line[len("AE-BROWSER-ENV: "):] for line in reversed(lines)
-                                     if line.startswith("AE-BROWSER-ENV: ")))
+        summary = json.loads(
+            next(line[len("AE-SCENARIOS: ") :] for line in reversed(lines) if line.startswith("AE-SCENARIOS: "))
+        )
+        actual_env = json.loads(
+            next(line[len("AE-BROWSER-ENV: ") :] for line in reversed(lines) if line.startswith("AE-BROWSER-ENV: "))
+        )
         return code, summary, actual_env
 
     def test_same_complete_scope_and_registry_order_are_preserved(self):

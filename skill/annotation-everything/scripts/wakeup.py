@@ -4,6 +4,7 @@
 The desktop IPC adapter is capability checked; it is not a stable public Codex API.
 An accepted IPC request and a chat acknowledgement are recorded separately.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -96,9 +97,15 @@ class DesktopIPC:
     def request(self, method, params, version=0, target=None):
         request_id = str(uuid.uuid4())
         deadline = self._request_deadline()
-        message = {"type": "request", "requestId": request_id, "sourceClientId": self.client,
-                   "method": method, "version": version, "params": params,
-                   "timeoutMs": int(self._time_left(deadline) * 1000)}
+        message = {
+            "type": "request",
+            "requestId": request_id,
+            "sourceClientId": self.client,
+            "method": method,
+            "version": version,
+            "params": params,
+            "timeoutMs": int(self._time_left(deadline) * 1000),
+        }
         if target:
             message["targetClientId"] = target
         body = json.dumps(message, ensure_ascii=False).encode()
@@ -122,19 +129,35 @@ class DesktopIPC:
         return owner
 
     def start(self, thread, owner, prompt, message_id):
-        return self.request("thread-follower-start-turn", {
-            "conversationId": thread,
-            "turnStart": {"request": {"threadId": thread,
-                "input": [{"type": "text", "text": prompt, "text_elements": []}],
-                "clientUserMessageId": message_id},
-                "context": {"inheritThreadSettings": True}},
-        }, 2, owner)
+        return self.request(
+            "thread-follower-start-turn",
+            {
+                "conversationId": thread,
+                "turnStart": {
+                    "request": {
+                        "threadId": thread,
+                        "input": [{"type": "text", "text": prompt, "text_elements": []}],
+                        "clientUserMessageId": message_id,
+                    },
+                    "context": {"inheritThreadSettings": True},
+                },
+            },
+            2,
+            owner,
+        )
 
     def cancel(self, binding, owner, turn_id):
-        return self.request("thread-follower-cancel-turn", {
-            "conversationId": binding["threadId"], "turnId": turn_id,
-            "reviewId": binding["reviewId"], "bindingId": binding["bindingId"],
-        }, 2, owner)
+        return self.request(
+            "thread-follower-cancel-turn",
+            {
+                "conversationId": binding["threadId"],
+                "turnId": turn_id,
+                "reviewId": binding["reviewId"],
+                "bindingId": binding["bindingId"],
+            },
+            2,
+            owner,
+        )
 
 
 def _read(path):
@@ -193,7 +216,9 @@ def identity(harness, session):
         raise ValueError("harness-required")
     if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,199}", session):
         raise ValueError("session-required")
-    harness = {"codex": "Codex", "claude": "Claude Code", "claude code": "Claude Code"}.get(harness.strip().lower(), harness.strip())
+    harness = {"codex": "Codex", "claude": "Claude Code", "claude code": "Claude Code"}.get(
+        harness.strip().lower(), harness.strip()
+    )
     return {"harness": harness, "sessionId": session}
 
 
@@ -206,19 +231,29 @@ def caller_identity(harness=None, session=None):
 
 
 def binding_identity(binding):
-    return (identity("Codex", binding["threadId"]) if binding["adapter"] == "codex-desktop"
-            else identity(binding["harness"], binding["sessionId"]))
+    return (
+        identity("Codex", binding["threadId"])
+        if binding["adapter"] == "codex-desktop"
+        else identity(binding["harness"], binding["sessionId"])
+    )
 
 
 # 改绑 / 解除接收方前的「处理中」检查来源：批次、分析轮次。任一来源判定在处理中就拒绝转移或解除。
 TRANSFER_BLOCKS = (
-    ("batch-in-progress: finish the current batch before transferring or unbinding",
-     lambda review: any(item.get("status") in ("claimed", "reviewing")
-                        for item in store.handoff_load(review)["items"])),
-    ("analysis-in-progress: finish the claimed analysis round before transferring or unbinding",
-     lambda review: analysis_store.has_claimed_round(review)),
-    ("delivery-in-progress: stop the review and confirm cancellation before transferring or unbinding",
-     lambda review: any(item.get("cancelState") != "confirmed" for item in _active_deliveries(review))),
+    (
+        "batch-in-progress: finish the current batch before transferring or unbinding",
+        lambda review: any(
+            item.get("status") in ("claimed", "reviewing") for item in store.handoff_load(review)["items"]
+        ),
+    ),
+    (
+        "analysis-in-progress: finish the claimed analysis round before transferring or unbinding",
+        lambda review: analysis_store.has_claimed_round(review),
+    ),
+    (
+        "delivery-in-progress: stop the review and confirm cancellation before transferring or unbinding",
+        lambda review: any(item.get("cancelState") != "confirmed" for item in _active_deliveries(review)),
+    ),
 )
 
 
@@ -247,9 +282,15 @@ def bind_wait(review, harness, session, replace=False):
         if previous and not replace:
             raise ValueError("already-bound: explicit --replace required")
         assert_transferable(review)
-        binding = {"version": SCHEMA, "adapter": "wait", "bindingId": str(uuid.uuid4()),
-                   "reviewId": manifest["reviewId"], "reviewDir": str(review),
-                   **receiver, "boundAt": store.now_iso()}
+        binding = {
+            "version": SCHEMA,
+            "adapter": "wait",
+            "bindingId": str(uuid.uuid4()),
+            "reviewId": manifest["reviewId"],
+            "reviewDir": str(review),
+            **receiver,
+            "boundAt": store.now_iso(),
+        }
         _write(review / BINDING_FILE, binding)
         return binding
 
@@ -260,7 +301,9 @@ def bind(review, thread, socket_path=None, replace=False):
     manifest = ledger.read_manifest(review)
     if not manifest.get("reviewId"):
         raise ValueError("review-identity-required")
-    socket_path = Path(socket_path or Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "ipc/ipc.sock").resolve()
+    socket_path = Path(
+        socket_path or Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "ipc/ipc.sock"
+    ).resolve()
     with contextlib.closing(DesktopIPC(socket_path)) as ipc:
         ipc.owner(thread)
     with dispatch_lock(review), store.locked(review):
@@ -270,14 +313,26 @@ def bind(review, thread, socket_path=None, replace=False):
             if not replace:
                 raise
             previous = None
-        if previous and previous["adapter"] == "codex-desktop" and previous["threadId"] == thread and previous["socketPath"] == str(socket_path):
+        if (
+            previous
+            and previous["adapter"] == "codex-desktop"
+            and previous["threadId"] == thread
+            and previous["socketPath"] == str(socket_path)
+        ):
             return previous
         if previous and not replace:
             raise ValueError("already-bound: explicit --replace required")
         assert_transferable(review)
-        binding = {"version": SCHEMA, "adapter": "codex-desktop", "bindingId": str(uuid.uuid4()),
-                   "reviewId": manifest["reviewId"], "reviewDir": str(review),
-                   "threadId": thread, "socketPath": str(socket_path), "boundAt": store.now_iso()}
+        binding = {
+            "version": SCHEMA,
+            "adapter": "codex-desktop",
+            "bindingId": str(uuid.uuid4()),
+            "reviewId": manifest["reviewId"],
+            "reviewDir": str(review),
+            "threadId": thread,
+            "socketPath": str(socket_path),
+            "boundAt": store.now_iso(),
+        }
         _write(review / BINDING_FILE, binding)
     return binding
 
@@ -293,7 +348,7 @@ def _deliveries(review):
 def _key(binding, event, seq):
     if event not in DELIVERY_EVENTS or isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
         raise ValueError("invalid-delivery-event")
-    return f'{binding["bindingId"]}:{event}:{seq}'
+    return f"{binding['bindingId']}:{event}:{seq}"
 
 
 def _record(review, key, changes, *, deadline=None):
@@ -309,22 +364,56 @@ def prompt(binding, event, seq, message_id):
     review = Path(binding["reviewDir"])
     scripts = Path(__file__).resolve().parent
     py = fsutil.python_cli()
-    ack = fsutil.join_cli([py, str(scripts / "wakeup.py"), "ack", str(review),
-                           "--event", event, "--seq", str(seq), "--message-id", message_id])
-    metadata = json.dumps({"reviewId": binding["reviewId"], "reviewDir": str(review),
-                           "event": event, "seq": seq, "messageId": message_id}, ensure_ascii=False)
+    ack = fsutil.join_cli(
+        [
+            py,
+            str(scripts / "wakeup.py"),
+            "ack",
+            str(review),
+            "--event",
+            event,
+            "--seq",
+            str(seq),
+            "--message-id",
+            message_id,
+        ]
+    )
+    metadata = json.dumps(
+        {
+            "reviewId": binding["reviewId"],
+            "reviewDir": str(review),
+            "event": event,
+            "seq": seq,
+            "messageId": message_id,
+        },
+        ensure_ascii=False,
+    )
     queue_hint = (
         "If claiming returns exit code 3 with reason earlier-item, this item must wait. Finish the "
         "earlier queued item through its matching workflow, then retry. Never treat a revision batch "
         "and an analysis round with the same number as the same item.\n"
     )
     if event == "analysis":
-        claim = fsutil.join_cli([py, str(scripts / "notes.py"), "claim", str(review),
-                                 "--events", "analysis", "--round", str(seq), "--by", "Codex"])
-        context = fsutil.join_cli([py, str(scripts / "notes.py"), "analysis", str(review),
-                                   "--round", str(seq), "--json"])
-        writeback = fsutil.join_cli([py, str(scripts / "notes.py"), "analysis-writeback", str(review),
-                                     "--round", str(seq)])
+        claim = fsutil.join_cli(
+            [
+                py,
+                str(scripts / "notes.py"),
+                "claim",
+                str(review),
+                "--events",
+                "analysis",
+                "--round",
+                str(seq),
+                "--by",
+                "Codex",
+            ]
+        )
+        context = fsutil.join_cli(
+            [py, str(scripts / "notes.py"), "analysis", str(review), "--round", str(seq), "--json"]
+        )
+        writeback = fsutil.join_cli(
+            [py, str(scripts / "notes.py"), "analysis-writeback", str(review), "--round", str(seq)]
+        )
         return (
             "[annotation-everything: analysis round]\n"
             "This message was delivered by the local review's saved binding to this chat after the reviewer "
@@ -355,9 +444,22 @@ def prompt(binding, event, seq, message_id):
             "create a scheduler, change Codex configuration, or start another CLI agent.\n"
             f"Delivery marker: ae:{binding['reviewId']}:{event}:{seq}:{message_id}"
         )
-    claim = fsutil.join_cli([py, str(scripts / "notes.py"), "claim", str(review),
-                             "--stage", DELIVERY_EVENTS[event]["claimStage"], "--events", "analysis",
-                             "--seq", str(seq), "--by", "Codex"])
+    claim = fsutil.join_cli(
+        [
+            py,
+            str(scripts / "notes.py"),
+            "claim",
+            str(review),
+            "--stage",
+            DELIVERY_EVENTS[event]["claimStage"],
+            "--events",
+            "analysis",
+            "--seq",
+            str(seq),
+            "--by",
+            "Codex",
+        ]
+    )
     item = next((item for item in store.handoff_load(review)["items"] if item["seq"] == seq), {})
     check_hint = ""
     if item.get("fullCheck") is True:
@@ -393,6 +495,7 @@ def prompt(binding, event, seq, message_id):
 def deliver(review, event, seq, *, expected_binding=_ANY_BINDING):
     review = Path(review).resolve()
     import review_stop
+
     # Network operations use their own short-lived lock, not the annotation data lock.
     with dispatch_lock(review):
         review_stop.assert_accepts_work(review)
@@ -412,19 +515,41 @@ def deliver(review, event, seq, *, expected_binding=_ANY_BINDING):
         if not target or target.get("status") != expected:
             return {"state": "skipped", "reason": "batch-not-awaiting-receipt"}
         previous = _deliveries(review)["items"].get(key, {})
-        if previous.get("state") in ("accepted", "received", "unconfirmed") \
-                and previous.get("cancelState") != "confirmed":
+        if (
+            previous.get("state") in ("accepted", "received", "unconfirmed")
+            and previous.get("cancelState") != "confirmed"
+        ):
             return previous
         if previous.get("state") == "sending":
             return _record(review, key, {"state": "unconfirmed", "errorCode": "interrupted-after-dispatch"})
         attempt = int(previous.get("deliveryAttempt", 1)) + 1 if previous else 1
-        message_id = str(uuid.uuid5(uuid.NAMESPACE_URL,
-                                    "annotation-everything:" + key + (f":attempt:{attempt}" if attempt > 1 else "")))
-        _record(review, key, {"bindingId": binding["bindingId"], "seq": seq, "event": event,
-                              "messageId": message_id, "state": "connecting", "attemptAt": store.now_iso(),
-                              "deliveryAttempt": attempt, "acceptedAt": None, "receivedAt": None, "turnId": None,
-                              "cancelState": None, "cancelRequestedAt": None, "cancelConfirmedAt": None,
-                              "cancelFailedAt": None, "cancelError": None, "errorCode": None})
+        message_id = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL, "annotation-everything:" + key + (f":attempt:{attempt}" if attempt > 1 else "")
+            )
+        )
+        _record(
+            review,
+            key,
+            {
+                "bindingId": binding["bindingId"],
+                "seq": seq,
+                "event": event,
+                "messageId": message_id,
+                "state": "connecting",
+                "attemptAt": store.now_iso(),
+                "deliveryAttempt": attempt,
+                "acceptedAt": None,
+                "receivedAt": None,
+                "turnId": None,
+                "cancelState": None,
+                "cancelRequestedAt": None,
+                "cancelConfirmedAt": None,
+                "cancelFailedAt": None,
+                "cancelError": None,
+                "errorCode": None,
+            },
+        )
         dispatched = False
         try:
             with contextlib.closing(DesktopIPC(binding["socketPath"])) as ipc:
@@ -465,7 +590,11 @@ def acknowledge(review, event, seq, message_id, thread):
         key = _key(binding, event, seq)
         history = _deliveries(review)
         item = history["items"].get(key)
-        if not item or item.get("messageId") != message_id or item.get("state") not in ("sending", "accepted", "received", "unconfirmed"):
+        if (
+            not item
+            or item.get("messageId") != message_id
+            or item.get("state") not in ("sending", "accepted", "received", "unconfirmed")
+        ):
             raise ValueError("acknowledgement-delivery-mismatch")
         item.update(state="received", receivedAt=item.get("receivedAt") or store.now_iso(), errorCode=None)
         _write(review / DELIVERY_FILE, history)
@@ -490,18 +619,30 @@ def status(review, *, binding=_ANY_BINDING, handoff=None, manifest=None, waiting
     review = Path(review).resolve()
     binding = store.pre_read(binding, _ANY_BINDING, lambda: load_binding(review, manifest=manifest))
     if not binding:
-        return {"adapter": None, "state": "unconfigured", "receiver": receiver_status(review, binding=binding, handoff=handoff, waiting=waiting)}
+        return {
+            "adapter": None,
+            "state": "unconfigured",
+            "receiver": receiver_status(review, binding=binding, handoff=handoff, waiting=waiting),
+        }
     if binding["adapter"] == "wait":
-        return {"adapter": "wait", "state": "bound", "receiver": receiver_status(review, binding=binding, handoff=handoff, waiting=waiting)}
+        return {
+            "adapter": "wait",
+            "state": "bound",
+            "receiver": receiver_status(review, binding=binding, handoff=handoff, waiting=waiting),
+        }
     items = [v for v in _deliveries(review)["items"].values() if v.get("bindingId") == binding["bindingId"]]
     by_event = _latest_by_event(items)
     # 汇总条目从各类型的最新里挑：seq 最大、相同时登记顺序靠后的优先（与只登记两类时的旧口径一致）
-    latest = max(by_event.values(), key=lambda v: (v.get("seq", 0), list(DELIVERY_EVENTS).index(v.get("event"))),
-                 default={})
-    return {"adapter": binding["adapter"], "state": latest.get("state", "bound"), "receiver": receiver_status(review, binding=binding, handoff=handoff, waiting=waiting),
-            **{k: latest[k] for k in ("seq", "event", *STATUS_FIELDS) if k in latest},
-            "events": {event: {k: v[k] for k in ("state", *STATUS_FIELDS) if k in v}
-                       for event, v in by_event.items()}}
+    latest = max(
+        by_event.values(), key=lambda v: (v.get("seq", 0), list(DELIVERY_EVENTS).index(v.get("event"))), default={}
+    )
+    return {
+        "adapter": binding["adapter"],
+        "state": latest.get("state", "bound"),
+        "receiver": receiver_status(review, binding=binding, handoff=handoff, waiting=waiting),
+        **{k: latest[k] for k in ("seq", "event", *STATUS_FIELDS) if k in latest},
+        "events": {event: {k: v[k] for k in ("state", *STATUS_FIELDS) if k in v} for event, v in by_event.items()},
+    }
 
 
 def public_status(review, *, binding=_ANY_BINDING, handoff=None, manifest=None, waiting=None):
@@ -520,10 +661,15 @@ def waiting_state(review, binding) -> bool:
         try:
             mark = _read(path)
             pid = mark.get("pid")
-            if (not isinstance(pid, int) or pid <= 0 or path.name != ledger.wait_file(review, pid).name
-                    or mark.get("bindingId") != binding["bindingId"]
-                    or {k: mark.get(k) for k in ("harness", "sessionId")} != binding_identity(binding)
-                    or not isinstance(mark.get("expiresAt"), (int, float)) or not time.time() < mark["expiresAt"]):
+            if (
+                not isinstance(pid, int)
+                or pid <= 0
+                or path.name != ledger.wait_file(review, pid).name
+                or mark.get("bindingId") != binding["bindingId"]
+                or {k: mark.get(k) for k in ("harness", "sessionId")} != binding_identity(binding)
+                or not isinstance(mark.get("expiresAt"), (int, float))
+                or not time.time() < mark["expiresAt"]
+            ):
                 continue
             if ledger.pid_alive(pid):
                 return True
@@ -532,8 +678,7 @@ def waiting_state(review, binding) -> bool:
     return False
 
 
-def receiver_status(review, active_binding=_ANY_BINDING, *, binding=_ANY_BINDING, handoff=None,
-                    waiting=None):
+def receiver_status(review, active_binding=_ANY_BINDING, *, binding=_ANY_BINDING, handoff=None, waiting=None):
     """Public receiver metadata. Never return paths, socket addresses or hook commands.
 
     binding / handoff / waiting：调用方已读好的接收方绑定、批次记录与「有没有代理在等」
@@ -546,7 +691,9 @@ def receiver_status(review, active_binding=_ANY_BINDING, *, binding=_ANY_BINDING
     try:
         binding = store.pre_read(binding, _ANY_BINDING, lambda: load_binding(review))
         if not binding:
-            return {"state": "restart-required" if active_binding is not _ANY_BINDING and active_binding else "unconfigured"}
+            return {
+                "state": "restart-required" if active_binding is not _ANY_BINDING and active_binding else "unconfigured"
+            }
         result = {"bindingId": binding["bindingId"], "adapter": binding["adapter"], **binding_identity(binding)}
         if active_binding is not _ANY_BINDING and (active_binding or {}).get("bindingId") != binding["bindingId"]:
             return {**result, "state": "restart-required"}
@@ -568,12 +715,16 @@ def hook_command(review, custom=None, *, binding=_ANY_BINDING):
         binding = load_binding(review)
     if binding and custom:
         raise ValueError("saved-agent-binding-conflicts-with-custom-hook")
-    return ([sys.executable, str(Path(__file__).resolve()), "deliver", str(Path(review).resolve())]
-            if binding and binding["adapter"] == "codex-desktop" else custom)
+    return (
+        [sys.executable, str(Path(__file__).resolve()), "deliver", str(Path(review).resolve())]
+        if binding and binding["adapter"] == "codex-desktop"
+        else custom
+    )
 
 
-def assert_claim_owner(review, harness=None, session=None, *, expected_binding=_ANY_BINDING,
-                       binding=_ANY_BINDING, manifest=None):
+def assert_claim_owner(
+    review, harness=None, session=None, *, expected_binding=_ANY_BINDING, binding=_ANY_BINDING, manifest=None
+):
     """binding / manifest：调用方已读好的接收方绑定与绑定校验用的 review.json
     （一次请求里只读一次时传入，见 serve.py 的请求快照）；都不传就自己读，降级结果与原来一致。"""
     binding = store.pre_read(binding, _ANY_BINDING, lambda: load_binding(review, manifest=manifest))
@@ -602,7 +753,9 @@ def _active_deliveries(review):
             if event == "analysis":
                 # Voiding a submitted round in the analysis log does not stop its desktop turn.
                 active_statuses.add("void")
-            queues[event] = {candidate.get("seq") for candidate in candidates if candidate.get("status") in active_statuses}
+            queues[event] = {
+                candidate.get("seq") for candidate in candidates if candidate.get("status") in active_statuses
+            }
         if seq in queues[event]:
             deliveries.append({**item, "key": key})
     return deliveries
@@ -612,8 +765,9 @@ def active_work(review):
     """Work that still needs an explicit cancellation confirmation before stopping."""
     review = Path(review).resolve()
     return {
-        "batches": [item for item in store.handoff_load(review)["items"]
-                    if item.get("status") in ("claimed", "reviewing")],
+        "batches": [
+            item for item in store.handoff_load(review)["items"] if item.get("status") in ("claimed", "reviewing")
+        ],
         "analyses": [item for item in analysis_store.delivery_items(review) if item.get("status") == "claimed"],
         "deliveries": _active_deliveries(review),
     }
@@ -623,8 +777,11 @@ def _cancel_confirmed(reply, turn_id):
     result = reply.get("result", {})
     payload = result.get("result", result) if isinstance(result, dict) else {}
     turn = payload.get("turn", {}) if isinstance(payload, dict) else {}
-    return (isinstance(turn, dict) and turn.get("id") == turn_id
-            and turn.get("status") in ("cancelled", "canceled", "interrupted", "completed"))
+    return (
+        isinstance(turn, dict)
+        and turn.get("id") == turn_id
+        and turn.get("status") in ("cancelled", "canceled", "interrupted", "completed")
+    )
 
 
 def cancel_review(review, *, deadline):
@@ -635,18 +792,21 @@ def cancel_review(review, *, deadline):
     binding = load_binding(review)
     deliveries = active["deliveries"]
     binding_id = (binding or {}).get("bindingId")
-    covered = {(item.get("event"), item.get("seq")) for item in deliveries
-               if item.get("bindingId") == binding_id}
-    untracked = ([("review" if item.get("status") == "reviewing" else "handoff", item.get("seq"))
-                  for item in active["batches"]
-                  if ("review" if item.get("status") == "reviewing" else "handoff", item.get("seq")) not in covered]
-                 + [("analysis", item.get("seq")) for item in active["analyses"]
-                    if ("analysis", item.get("seq")) not in covered])
+    covered = {(item.get("event"), item.get("seq")) for item in deliveries if item.get("bindingId") == binding_id}
+    untracked = [
+        ("review" if item.get("status") == "reviewing" else "handoff", item.get("seq"))
+        for item in active["batches"]
+        if ("review" if item.get("status") == "reviewing" else "handoff", item.get("seq")) not in covered
+    ] + [("analysis", item.get("seq")) for item in active["analyses"] if ("analysis", item.get("seq")) not in covered]
     if (not binding or binding["adapter"] != "codex-desktop") and (
-            untracked or any(item.get("cancelState") != "confirmed" for item in deliveries)):
-        return {"state": "incomplete", "error": "agent-cancellation-unsupported",
-                "capabilityGap": "confirmed-review-scoped-cancellation",
-                "active": {name: len(items) for name, items in active.items()}}
+        untracked or any(item.get("cancelState") != "confirmed" for item in deliveries)
+    ):
+        return {
+            "state": "incomplete",
+            "error": "agent-cancellation-unsupported",
+            "capabilityGap": "confirmed-review-scoped-cancellation",
+            "active": {name: len(items) for name, items in active.items()},
+        }
     failures, confirmed = [], []
     for item in deliveries:
         key, turn_id = item["key"], item.get("turnId")
@@ -657,14 +817,22 @@ def cancel_review(review, *, deadline):
             failures.append({"event": item.get("event"), "seq": item.get("seq"), "code": "agent-binding-unavailable"})
             continue
         if not turn_id:
-            code = ("agent-delivery-in-flight" if item.get("state") == "sending"
-                    else "agent-turn-id-unavailable")
+            code = "agent-delivery-in-flight" if item.get("state") == "sending" else "agent-turn-id-unavailable"
             failures.append({"event": item.get("event"), "seq": item.get("seq"), "code": code})
             continue
         try:
-            _record(review, key, {"cancelState": "cancelling", "cancelRequestedAt": store.now_iso(),
-                                  "cancelReviewId": binding["reviewId"], "cancelBindingId": binding["bindingId"],
-                                  "cancelError": None}, deadline=deadline)
+            _record(
+                review,
+                key,
+                {
+                    "cancelState": "cancelling",
+                    "cancelRequestedAt": store.now_iso(),
+                    "cancelReviewId": binding["reviewId"],
+                    "cancelBindingId": binding["bindingId"],
+                    "cancelError": None,
+                },
+                deadline=deadline,
+            )
             remaining = max(0.0, deadline - time.monotonic())
             if remaining <= 0:
                 raise TimeoutError("agent-cancel-timeout")
@@ -673,27 +841,45 @@ def cancel_review(review, *, deadline):
                 reply = ipc.cancel(binding, owner, turn_id)
             if not _cancel_confirmed(reply, turn_id):
                 raise ValueError("agent-cancel-confirmation-required")
-            _record(review, key, {"cancelState": "confirmed", "cancelConfirmedAt": store.now_iso(),
-                                  "cancelError": None}, deadline=deadline)
+            _record(
+                review,
+                key,
+                {"cancelState": "confirmed", "cancelConfirmedAt": store.now_iso(), "cancelError": None},
+                deadline=deadline,
+            )
             confirmed.append(turn_id)
         except Exception as error:
             if isinstance(error, BlockingIOError):
                 code = "agent-record-timeout"
             else:
-                code = ("agent-cancel-rejected" if isinstance(error, Rejected) else
-                        "agent-cancel-timeout" if isinstance(error, (TimeoutError, socket.timeout)) else
-                        str(error) if str(error).startswith("agent-cancel-") else "agent-cancel-unconfirmed")
+                code = (
+                    "agent-cancel-rejected"
+                    if isinstance(error, Rejected)
+                    else "agent-cancel-timeout"
+                    if isinstance(error, (TimeoutError, socket.timeout))
+                    else str(error)
+                    if str(error).startswith("agent-cancel-")
+                    else "agent-cancel-unconfirmed"
+                )
                 try:
-                    _record(review, key, {"cancelState": "unconfirmed", "cancelError": code,
-                                          "cancelFailedAt": store.now_iso()}, deadline=deadline)
+                    _record(
+                        review,
+                        key,
+                        {"cancelState": "unconfirmed", "cancelError": code, "cancelFailedAt": store.now_iso()},
+                        deadline=deadline,
+                    )
                 except BlockingIOError:
                     code = "agent-record-timeout"
             failures.append({"event": item.get("event"), "seq": item.get("seq"), "code": code})
     if failures or untracked:
-        return {"state": "incomplete",
-                "error": "agent-work-untracked" if untracked and not failures else "agent-cancel-unconfirmed",
-                "capabilityGap": "confirmed-review-scoped-cancellation",
-                "failures": failures, "untracked": untracked, "confirmedTurns": confirmed}
+        return {
+            "state": "incomplete",
+            "error": "agent-work-untracked" if untracked and not failures else "agent-cancel-unconfirmed",
+            "capabilityGap": "confirmed-review-scoped-cancellation",
+            "failures": failures,
+            "untracked": untracked,
+            "confirmedTurns": confirmed,
+        }
     return {"state": "stopped", "confirmed": True, "confirmedTurns": confirmed}
 
 
@@ -740,9 +926,14 @@ def main(argv=None):
     elif args.command == "deliver":
         payload = json.load(sys.stdin)
         binding = load_binding(review)
-        if (not binding or binding["adapter"] != "codex-desktop" or payload.get("bindingId") != binding["bindingId"]
-                or payload.get("app") != "annotation-everything" or payload.get("reviewId") != binding["reviewId"]
-                or Path(payload.get("reviewDir", "")).resolve() != review.resolve()):
+        if (
+            not binding
+            or binding["adapter"] != "codex-desktop"
+            or payload.get("bindingId") != binding["bindingId"]
+            or payload.get("app") != "annotation-everything"
+            or payload.get("reviewId") != binding["reviewId"]
+            or Path(payload.get("reviewDir", "")).resolve() != review.resolve()
+        ):
             raise ValueError("delivery-event-identity-mismatch")
         result = deliver(review, payload.get("event"), payload.get("seq"), expected_binding=payload.get("bindingId"))
     elif args.command == "unbind":

@@ -33,6 +33,7 @@ verify.py 的复用策略：同一产物根（同一检出 / worktree）里，�
 归一化由调用方注入，避免与 verify.py 循环导入。任何读取错误由调用方回退为
 「全部实际执行」，不会把旧记录误判成功。
 """
+
 from __future__ import annotations
 
 import datetime
@@ -76,8 +77,7 @@ def environment_basis(environment: Optional[dict]) -> dict:
     ci = environment.get("ci") or {}
     return {
         "os": environment.get("os"),
-        "python": {"version": python.get("version"),
-                   "implementation": python.get("implementation")},
+        "python": {"version": python.get("version"), "implementation": python.get("implementation")},
         "ci": {"is_ci": ci.get("is_ci")},
         "config_summary": environment.get("config_summary"),
     }
@@ -124,7 +124,10 @@ def _git_diff_paths(repo: Path, from_head: str, to_head: str) -> tuple:
     try:
         proc = subprocess.run(
             ["git", "-C", str(repo), "diff", "--no-renames", "--name-only", "-z", from_head, to_head],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, str(exc)
     if proc.returncode != 0:
@@ -133,6 +136,7 @@ def _git_diff_paths(repo: Path, from_head: str, to_head: str) -> tuple:
 
 
 # ── 候选收集 ───────────────────────────────────────────────────────────────
+
 
 def _candidates(artifact_dir: Path, eligible_groups: list) -> list:
     """index.jsonl 里可能覆盖请求组的记录 run ID，新到旧。
@@ -170,6 +174,7 @@ def _candidates(artifact_dir: Path, eligible_groups: list) -> list:
 
 # ── 文档无关等价（验收：仅变化显式允许且已证明无关的文档时仍可复用） ─────────
 
+
 def _inputs_test_equivalent(source: dict, record: dict, repo: Path) -> tuple:
     """指纹不同时判断两次输入是否「测试等价」：差异仅在文档允许列表内。
 
@@ -181,8 +186,8 @@ def _inputs_test_equivalent(source: dict, record: dict, repo: Path) -> tuple:
       HEAD 有改动，而另一侧等于 HEAD 内容）。
     返回 (是否等价, 拒绝原因)。任何读不出来、解析不了的情况都判不等价（从紧）。
     """
-    s_sel = ((source.get("context") or {}).get("selection") or {})
-    c_sel = ((record.get("context") or {}).get("selection") or {})
+    s_sel = (source.get("context") or {}).get("selection") or {}
+    c_sel = (record.get("context") or {}).get("selection") or {}
     if s_sel.get("strategy_source") != "builtin" or c_sel.get("strategy_source") != "builtin":
         return False, "选测映射不是内置版本，无法证明文档无关"
     s_snap = (source.get("input") or {}).get("at_start") or {}
@@ -210,8 +215,7 @@ def _inputs_test_equivalent(source: dict, record: dict, repo: Path) -> tuple:
     return True, ""
 
 
-def _baselines_doc_equivalent(repo: Path, source_baseline: Optional[str],
-                              current_baseline: Optional[str]) -> tuple:
+def _baselines_doc_equivalent(repo: Path, source_baseline: Optional[str], current_baseline: Optional[str]) -> tuple:
     """两个基线提交的差异是否只在文档允许列表内（缺基线或解析失败一律不算）。"""
     if not source_baseline or not current_baseline:
         return False, "（基线缺失，无法证明文档无关）"
@@ -226,10 +230,18 @@ def _baselines_doc_equivalent(repo: Path, source_baseline: Optional[str],
 
 # ── 来源记录的整体门槛 ─────────────────────────────────────────────────────
 
-def _source_reject_reason(source: dict, record: dict, fingerprint: str, basis: dict,
-                          current_strategy, current_wrapper,
-                          baseline_commit: Optional[str], now: datetime.datetime,
-                          repo: Path) -> tuple:
+
+def _source_reject_reason(
+    source: dict,
+    record: dict,
+    fingerprint: str,
+    basis: dict,
+    current_strategy,
+    current_wrapper,
+    baseline_commit: Optional[str],
+    now: datetime.datetime,
+    repo: Path,
+) -> tuple:
     """候选记录不满足整体门槛的原因。
 
     返回 (拒用原因或 None, 文档无关等价)。None 表示可以进入逐组覆盖判断；
@@ -257,23 +269,36 @@ def _source_reject_reason(source: dict, record: dict, fingerprint: str, basis: d
         return "run %s 环境不同（%s）" % (run_id, "、".join(diff)), doc_equivalent
     if source.get("wrapper_version") != current_wrapper:
         return "run %s 入口版本不同（来源 %s，当前 %s）" % (
-            run_id, source.get("wrapper_version"), current_wrapper), doc_equivalent
+            run_id,
+            source.get("wrapper_version"),
+            current_wrapper,
+        ), doc_equivalent
     source_strategy = ((source.get("context") or {}).get("selection") or {}).get("strategy_version")
     if source_strategy != current_strategy:
         return "run %s 策略版本不同（来源 %s，当前 %s）" % (run_id, source_strategy, current_strategy), doc_equivalent
     if (source.get("reuse") or {}).get("policy_version") != POLICY_VERSION:
         return "run %s 复用策略版本不同（来源 %s，当前 %s）；统一入口 G 之前的记录不参与复用" % (
-            run_id, (source.get("reuse") or {}).get("policy_version"), POLICY_VERSION), doc_equivalent
+            run_id,
+            (source.get("reuse") or {}).get("policy_version"),
+            POLICY_VERSION,
+        ), doc_equivalent
     source_phase = (source.get("context") or {}).get("phase")
     if source_phase not in REUSE_PHASES:
         return "run %s 的阶段是 %s，不在可引用阶段内（%s）" % (
-            run_id, source_phase, "、".join(REUSE_PHASES)), doc_equivalent
+            run_id,
+            source_phase,
+            "、".join(REUSE_PHASES),
+        ), doc_equivalent
     source_baseline = (source_input.get("baseline") or {}).get("commit")
     if source_baseline != baseline_commit:
         ok, why = _baselines_doc_equivalent(repo, source_baseline, baseline_commit)
         if not ok:
             return "run %s 基线不同（来源 %s，当前 %s）%s" % (
-                run_id, source_baseline, baseline_commit, why), doc_equivalent
+                run_id,
+                source_baseline,
+                baseline_commit,
+                why,
+            ), doc_equivalent
     ended = parse_timestamp(source.get("ended_at"))
     if ended is None:
         return "run %s 结束时间不可解析，时间不可信" % run_id, doc_equivalent
@@ -282,13 +307,17 @@ def _source_reject_reason(source: dict, record: dict, fingerprint: str, basis: d
         return "run %s 结束时间在未来（%s），时间回退不可信" % (run_id, source.get("ended_at")), doc_equivalent
     if age_hours > FRESHNESS_HOURS:
         return "run %s 已超过 %.0f 小时保鲜窗口（结束于 %s）" % (
-            run_id, FRESHNESS_HOURS, source.get("ended_at")), doc_equivalent
+            run_id,
+            FRESHNESS_HOURS,
+            source.get("ended_at"),
+        ), doc_equivalent
     if result.get("outcome") != "passed":
         return "run %s 整次结论是 %s，不是通过" % (run_id, result.get("outcome")), doc_equivalent
     return None, doc_equivalent
 
 
 # ── 逐组覆盖判断 ───────────────────────────────────────────────────────────
+
 
 def _selectors_covered(requested: list, source: dict, prefix_of) -> tuple:
     """请求的选择器清单是否被来源记录覆盖。返回 (是否覆盖, 拒绝原因)。"""
@@ -297,36 +326,36 @@ def _selectors_covered(requested: list, source: dict, prefix_of) -> tuple:
         return False, "请求的选择器清单为空，无法证明覆盖"
     dotted = [item for item in requested if "." in (prefix_of(item) or "")]
     if dotted:
-        return False, ("请求显式点名到类 / 用例级（%s）：按疑点复测，不复用"
-                       % "、".join(dotted))
+        return False, ("请求显式点名到类 / 用例级（%s）：按疑点复测，不复用" % "、".join(dotted))
     source_selectors = ((source.get("context") or {}).get("selectors_effective")) or []
     if not source_selectors:
         return False, "run %s 没有可核对的选择器清单" % run_id
     source_prefixes = [prefix_of(item) for item in source_selectors]
     for item in requested:
         req = prefix_of(item)
-        if not any(req == src or req.startswith(src + ".")
-                   for src in source_prefixes if src):
-            return False, ("run %s 的验证范围不覆盖请求（%s 不在已验证清单 %s 内）"
-                           % (run_id, item, "、".join(source_selectors)))
+        if not any(req == src or req.startswith(src + ".") for src in source_prefixes if src):
+            return False, (
+                "run %s 的验证范围不覆盖请求（%s 不在已验证清单 %s 内）" % (run_id, item, "、".join(source_selectors))
+            )
     return True, None
 
 
-def _decide_group(name: str, meta: dict, sources: list, general_attempts: list,
-                  prefix_of, candidate_order: dict) -> dict:
+def _decide_group(
+    name: str, meta: dict, sources: list, general_attempts: list, prefix_of, candidate_order: dict
+) -> dict:
     """为一个可复用类组挑选最新的合格来源；找不到则给出从紧原因。"""
     attempts = list(general_attempts)
     requested = meta.get("selectors_effective") or []
     counter = meta.get("counter")
     for run_id, source, age_hours, doc_equivalent in sources:
-        group = next((item for item in source.get("groups") or []
-                      if item.get("name") == name), None)
+        group = next((item for item in source.get("groups") or [] if item.get("name") == name), None)
         if group is None:
             attempts.append((run_id, "run %s 没有执行 %s 组" % (run_id, name)))
             continue
         if group.get("outcome") != "passed":
-            attempts.append((run_id, "run %s 的 %s 组结论是 %s，不是实际通过的执行"
-                             % (run_id, name, group.get("outcome"))))
+            attempts.append(
+                (run_id, "run %s 的 %s 组结论是 %s，不是实际通过的执行" % (run_id, name, group.get("outcome")))
+            )
             continue
         if doc_equivalent and (verify_selection is None or name not in verify_selection.PRODUCT_TEST_GROUPS):
             attempts.append((run_id, "run %s 输入指纹不同，%s 组要求完整输入指纹一致" % (run_id, name)))
@@ -336,35 +365,34 @@ def _decide_group(name: str, meta: dict, sources: list, general_attempts: list,
             if not covered:
                 attempts.append((run_id, why))
                 continue
-        input_note = ("同输入（差异仅在文档允许列表内，已证明与产品测试无关）"
-                      if doc_equivalent else "同输入")
+        input_note = "同输入（差异仅在文档允许列表内，已证明与产品测试无关）" if doc_equivalent else "同输入"
         return {
             "group": name,
             "decision": DECISION_REUSE,
-            "reason": "%s、同环境、范围覆盖，且来源证据当前校验有效（%.1f 小时前结束）"
-                      % (input_note, age_hours),
+            "reason": "%s、同环境、范围覆盖，且来源证据当前校验有效（%.1f 小时前结束）" % (input_note, age_hours),
             "source_run_id": run_id,
             "source_ended_at": source.get("ended_at"),
             "source_fingerprint": (source.get("input") or {}).get("fingerprint"),
             "source_phase": (source.get("context") or {}).get("phase"),
-            "source_scope": {"group": name,
-                             "selectors": ((source.get("context") or {}).get("selectors_effective") or [])
-                             if counter == "unittest" else []},
+            "source_scope": {
+                "group": name,
+                "selectors": ((source.get("context") or {}).get("selectors_effective") or [])
+                if counter == "unittest"
+                else [],
+            },
             "source_environment": environment_basis(source.get("environment")),
             "age_hours": round(age_hours, 6),
             "attempts": _trim_attempts(attempts, candidate_order),
         }
     trimmed = _trim_attempts(attempts, candidate_order)
     reason = trimmed[0]["reason"] if trimmed else "没有可引用的已有记录"
-    return {"group": name, "decision": DECISION_RUN, "reason": reason,
-            "attempts": trimmed}
+    return {"group": name, "decision": DECISION_RUN, "reason": reason, "attempts": trimmed}
 
 
 def _trim_attempts(attempts: list, candidate_order: dict) -> list:
     # 整体拒因与组级拒因分开收集，合并后仍按候选的新旧顺序呈现。
     attempts = sorted(attempts, key=lambda item: candidate_order.get(item[0], MAX_CANDIDATES))
-    return [{"run_id": run_id, "reason": reason}
-            for run_id, reason in attempts[:MAX_ATTEMPTS]]
+    return [{"run_id": run_id, "reason": reason} for run_id, reason in attempts[:MAX_ATTEMPTS]]
 
 
 def reference_reject_reason(source: dict, record: dict, group: dict, repo: Path, prefix_of) -> Optional[str]:
@@ -374,19 +402,29 @@ def reference_reject_reason(source: dict, record: dict, group: dict, repo: Path,
         return "引用记录的阶段不允许复用"
     now = datetime.datetime.now(datetime.timezone.utc)
     reason, doc_equivalent = _source_reject_reason(
-        source, record, (record.get("input") or {}).get("fingerprint"),
+        source,
+        record,
+        (record.get("input") or {}).get("fingerprint"),
         environment_basis(record.get("environment")),
-        (context.get("selection") or {}).get("strategy_version"), record.get("wrapper_version"),
-        ((record.get("input") or {}).get("baseline") or {}).get("commit"), now, repo)
+        (context.get("selection") or {}).get("strategy_version"),
+        record.get("wrapper_version"),
+        ((record.get("input") or {}).get("baseline") or {}).get("commit"),
+        now,
+        repo,
+    )
     if reason:
         return reason
     if group.get("resources"):
         return "依赖宿主机状态的组不能引用已有验证"
     run_id = source.get("run_id")
     decision = _decide_group(
-        group.get("name"), {"counter": group.get("counter"),
-                            "selectors_effective": context.get("selectors_effective") or []},
-        [(run_id, source, 0.0, doc_equivalent)], [], prefix_of, {run_id: 0})
+        group.get("name"),
+        {"counter": group.get("counter"), "selectors_effective": context.get("selectors_effective") or []},
+        [(run_id, source, 0.0, doc_equivalent)],
+        [],
+        prefix_of,
+        {run_id: 0},
+    )
     return decision["reason"] if decision["decision"] != DECISION_REUSE else None
 
 
@@ -396,10 +434,18 @@ def _run_decision(name: str, reason: str) -> dict:
 
 # ── 复用规划 ───────────────────────────────────────────────────────────────
 
-def build_reuse_plan(artifact_dir: Path, record: dict, requested: list, group_meta: dict,
-                     prefix_of, load_record, repo: Path,
-                     bypass_reason: Optional[str] = None,
-                     now: Optional[datetime.datetime] = None) -> dict:
+
+def build_reuse_plan(
+    artifact_dir: Path,
+    record: dict,
+    requested: list,
+    group_meta: dict,
+    prefix_of,
+    load_record,
+    repo: Path,
+    bypass_reason: Optional[str] = None,
+    now: Optional[datetime.datetime] = None,
+) -> dict:
     """决定请求的每个组「引用已有验证」还是「实际执行」。
 
     artifact_dir：本次运行的产物根目录（候选记录只来自这里，即同一检出的会话）。
@@ -452,20 +498,19 @@ def build_reuse_plan(artifact_dir: Path, record: dict, requested: list, group_me
     baseline_commit = ((record.get("input") or {}).get("baseline") or {}).get("commit")
 
     attempts = []  # (run_id, 原因)：整体门槛拒掉的候选，新到旧
-    sources = []   # (run_id, 记录, 年龄小时)：通过整体门槛的候选，新到旧
+    sources = []  # (run_id, 记录, 年龄小时)：通过整体门槛的候选，新到旧
     candidates = _candidates(artifact_dir, eligible)[:MAX_CANDIDATES]
     candidate_order = {run_id: index for index, run_id in enumerate(candidates)}
     for run_id in candidates:
         source, problems = load_record(artifact_dir / "runs" / run_id)
         if source is None or problems:
-            attempts.append((run_id, "证据当前校验不可用：%s"
-                             % ("；".join(problems) or "读不出来")))
+            attempts.append((run_id, "证据当前校验不可用：%s" % ("；".join(problems) or "读不出来")))
             continue
         ended = parse_timestamp(source.get("ended_at"))
         age_hours = ((now - ended).total_seconds() / 3600.0) if ended is not None else None
         reason, doc_equivalent = _source_reject_reason(
-            source, record, fingerprint, basis, current_strategy,
-            current_wrapper, baseline_commit, now, repo)
+            source, record, fingerprint, basis, current_strategy, current_wrapper, baseline_commit, now, repo
+        )
         if reason is not None:
             attempts.append((run_id, reason))
             continue
@@ -474,9 +519,13 @@ def build_reuse_plan(artifact_dir: Path, record: dict, requested: list, group_me
     for name in requested:
         meta = group_meta.get(name) or {}
         if meta.get("resources"):
-            plan["decisions"].append(_run_decision(
-                name, "组依赖同机宿主机状态（资源：%s），指纹相同也不可复用，"
-                      "必须实际执行或要求隔离证明" % "、".join(meta["resources"])))
+            plan["decisions"].append(
+                _run_decision(
+                    name,
+                    "组依赖同机宿主机状态（资源：%s），指纹相同也不可复用，"
+                    "必须实际执行或要求隔离证明" % "、".join(meta["resources"]),
+                )
+            )
             continue
         plan["decisions"].append(_decide_group(name, meta, sources, attempts, prefix_of, candidate_order))
     return plan

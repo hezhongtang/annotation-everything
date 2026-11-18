@@ -1,4 +1,5 @@
 """审阅总览：复用台账行状态，仅公开适合页面显示的字段。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -80,8 +81,7 @@ def wait_command(review_id: str, *, hook: bool, receiver: Any) -> str | None:
 
 def report_metadata(directory: Path, review_id: str) -> dict[str, Any]:
     """顺着报告来源读取可展示的核验信息；损坏记录不影响其他审阅。"""
-    metadata: dict[str, Any] = {"summary": "", "purpose": "", "audience": "",
-                                "coreQuestions": [], "coverTitle": ""}
+    metadata: dict[str, Any] = {"summary": "", "purpose": "", "audience": "", "coreQuestions": [], "coverTitle": ""}
     manifest = ledger.read_manifest(directory)
     if manifest.get("reviewId") != review_id:
         return metadata
@@ -91,9 +91,11 @@ def report_metadata(directory: Path, review_id: str) -> dict[str, Any]:
         if isinstance(title, str):
             metadata["coverTitle"] = title
     # 与构建入口相同：相对路径优先，兼容 0.1 的 sourcesRel / sources 组合。
-    relative, absolute = ((manifest.get("sourcesRel"), manifest.get("sources"))
-                          if "sourcesRel" in manifest else
-                          (manifest.get("sources"), manifest.get("sourcesAbs")))
+    relative, absolute = (
+        (manifest.get("sourcesRel"), manifest.get("sources"))
+        if "sourcesRel" in manifest
+        else (manifest.get("sources"), manifest.get("sourcesAbs"))
+    )
     report = None
     for base, sources in ((directory, relative), (Path(), absolute)):
         name = sources.get("report") if isinstance(sources, dict) else None
@@ -120,8 +122,12 @@ def report_metadata(directory: Path, review_id: str) -> dict[str, Any]:
     request = record["request"]
     purpose, audience = request.get("purpose", ""), request.get("audience", "")
     questions = request.get("coreQuestions", [])
-    if not isinstance(purpose, str) or not isinstance(audience, str) \
-            or not isinstance(questions, list) or any(not isinstance(q, str) for q in questions):
+    if (
+        not isinstance(purpose, str)
+        or not isinstance(audience, str)
+        or not isinstance(questions, list)
+        or any(not isinstance(q, str) for q in questions)
+    ):
         return metadata
     # JSON 能解码孤立 UTF-16 代理，但总览响应必须是有效 UTF-8。
     try:
@@ -129,14 +135,19 @@ def report_metadata(directory: Path, review_id: str) -> dict[str, Any]:
             text.encode("utf-8")
     except UnicodeEncodeError:
         return metadata
-    metadata.update(summary=record.get("summary", ""), purpose=purpose,
-                    audience=audience, coreQuestions=questions)
+    metadata.update(summary=record.get("summary", ""), purpose=purpose, audience=audience, coreQuestions=questions)
     return metadata
 
 
-def snapshot(review_dir: Path | None, review_id: str | None, scope: str,
-             row_builder: Callable[[str, dict[str, Any]], dict[str, Any]], *,
-             workspace_dir: Path | None = None, under_dir: Path | None = None) -> dict[str, Any]:
+def snapshot(
+    review_dir: Path | None,
+    review_id: str | None,
+    scope: str,
+    row_builder: Callable[[str, dict[str, Any]], dict[str, Any]],
+    *,
+    workspace_dir: Path | None = None,
+    under_dir: Path | None = None,
+) -> dict[str, Any]:
     """台账是索引，审阅名、计数和运行状态由 list 的同一份逻辑现读。
 
     workspace_dir / under_dir：总览首页宿主没有审阅目录，显式传显示用工作区与 --under 范围
@@ -147,7 +158,7 @@ def snapshot(review_dir: Path | None, review_id: str | None, scope: str,
     elif review_dir is not None:
         workspace = workspace_for(review_dir)
     else:
-        workspace = None   # 总览首页的全台账范围：没有工作区，显示路径全部走 ~/ 或目录名
+        workspace = None  # 总览首页的全台账范围：没有工作区，显示路径全部走 ~/ 或目录名
     under = under_dir.resolve() if under_dir is not None else None
     rows = []
     for rid, entry in ledger.entries().items():
@@ -167,30 +178,43 @@ def snapshot(review_dir: Path | None, review_id: str | None, scope: str,
                 pass
         work = {}
         if running:
-            work = {"waiters": source["waiting"], "batches": source.get("processing", False),
-                    "hooks": source["hook"]}
+            work = {"waiters": source["waiting"], "batches": source.get("processing", False), "hooks": source["hook"]}
             try:
                 work["analysis"] = analysis_store.has_claimed_round(directory)
             except (OSError, ValueError, store.NotFound):
                 pass
-        rows.append({
-            "reviewId": rid, "name": source["name"] or directory.name,
-            "path": display_path(directory, workspace), "state": state,
-            "directory": str(directory) if state in ("missing", "mismatch") else None,
-            "defaultPruneEligible": state == "missing" and ledger.in_temp_area(Path(entry["dir"])),
-            "archived": source["archived"],
-            "port": source["port"], "running": running,
-            "stop": stop, "stopWork": work,
-            "pending": source["pending"], "review": source["review"],
-            # 公开接收方字段：绑定状态与接收方式（不含钩子命令、工作目录、套接字地址或日志）
-            "hook": source["hook"], "agentDelivery": source["agentDelivery"],
-            "waitCommand": wait_command(rid, hook=source["hook"], receiver=source["agentDelivery"]),
-            "lastActivity": last_activity(directory), "current": rid == review_id,
-            "url": f"http://127.0.0.1:{running}/" if running else None,
-            "forgetCommand": f"serve.py forget {rid[:8]}" if state in ("missing", "mismatch") else None,
-            **report_metadata(directory, rid),
-        })
-    rows.sort(key=lambda row: (2 if row["archived"] and row["state"] not in ("missing", "mismatch")
-                              else STATE_ORDER.get(row["state"], 3), -(row["lastActivity"] or 0),
-                               row["name"].casefold(), row["reviewId"]))
+        rows.append(
+            {
+                "reviewId": rid,
+                "name": source["name"] or directory.name,
+                "path": display_path(directory, workspace),
+                "state": state,
+                "directory": str(directory) if state in ("missing", "mismatch") else None,
+                "defaultPruneEligible": state == "missing" and ledger.in_temp_area(Path(entry["dir"])),
+                "archived": source["archived"],
+                "port": source["port"],
+                "running": running,
+                "stop": stop,
+                "stopWork": work,
+                "pending": source["pending"],
+                "review": source["review"],
+                # 公开接收方字段：绑定状态与接收方式（不含钩子命令、工作目录、套接字地址或日志）
+                "hook": source["hook"],
+                "agentDelivery": source["agentDelivery"],
+                "waitCommand": wait_command(rid, hook=source["hook"], receiver=source["agentDelivery"]),
+                "lastActivity": last_activity(directory),
+                "current": rid == review_id,
+                "url": f"http://127.0.0.1:{running}/" if running else None,
+                "forgetCommand": f"serve.py forget {rid[:8]}" if state in ("missing", "mismatch") else None,
+                **report_metadata(directory, rid),
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            2 if row["archived"] and row["state"] not in ("missing", "mismatch") else STATE_ORDER.get(row["state"], 3),
+            -(row["lastActivity"] or 0),
+            row["name"].casefold(),
+            row["reviewId"],
+        )
+    )
     return {"workspace": workspace.name if workspace is not None else None, "scope": scope, "reviews": rows}

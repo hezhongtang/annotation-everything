@@ -9,6 +9,7 @@
 
 只用 Python 标准库。
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -35,10 +36,27 @@ STATUSES = ("open", "drafted", "resolved", "held")
 # held：搁住（暂不交给 Agent 改稿），hold 记原因（分析中 / 结论已变）、heldBy 记引出分析。
 #   只能由分析存储在发起分析 / 解除搁住时设置，手动改状态走不到这里；
 #   提交快照只收「未处理」，搁住的批注天然不进批次。旧版工具导入时按未知状态退回未处理。
-TRAIL_KEEP = 50   # 每条批注保留的处理痕迹条数（谁、哪个阶段、做了什么、理由）
+TRAIL_KEEP = 50  # 每条批注保留的处理痕迹条数（谁、哪个阶段、做了什么、理由）
 # 页面可写的字段；id / at / status 相关字段由存储层或专门操作维护
-EDITABLE = ("page", "title", "target", "text", "quote", "quoteFrom", "pin", "region", "edit", "pair", "skills", "style",
-            "anchor", "key", "orphan", "docx", "pptx")
+EDITABLE = (
+    "page",
+    "title",
+    "target",
+    "text",
+    "quote",
+    "quoteFrom",
+    "pin",
+    "region",
+    "edit",
+    "pair",
+    "skills",
+    "style",
+    "anchor",
+    "key",
+    "orphan",
+    "docx",
+    "pptx",
+)
 # key：页面键（报告 section 的 data-key），重排页序后据此把批注挪回正确的页；orphan：重建后原页面已不存在
 # docx：DOCX 审阅的段落定位（带版本号 v），见 _clean_docx；重建时先按它把批注归到段落现在所在的页，
 #   页面键只用于没有段落定位的批注。HTML 报告的批注没有这个字段。
@@ -153,7 +171,7 @@ def load(review_dir: Path) -> dict[str, Any]:
     for n in doc["notes"]:
         n.setdefault("status", "open")
         if isinstance(n, dict):
-            _settle_marks(n)   # 0.3 旧数据：框从 style.region 挪到顶层 region（下次写盘时落盘）
+            _settle_marks(n)  # 0.3 旧数据：框从 style.region 挪到顶层 region（下次写盘时落盘）
     return doc
 
 
@@ -179,7 +197,11 @@ def _append_log(review_dir: Path, entry: dict[str, Any]) -> None:
 def fix_text(v: Any) -> str:
     """转成字符串并修掉孤立的 UTF-16 代理（半个 emoji 等），否则写盘时会抛 UnicodeEncodeError。"""
     s = "" if v is None else str(v)
-    return s.encode("utf-8", "surrogatepass").decode("utf-8", "replace") if any("\ud800" <= c <= "\udfff" for c in s) else s
+    return (
+        s.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+        if any("\ud800" <= c <= "\udfff" for c in s)
+        else s
+    )
 
 
 def _clean_pin(pin: Any) -> dict[str, float] | None:
@@ -205,7 +227,9 @@ def _clean_region(v: Any, name: str = "region") -> dict[str, float] | None:
         x, y, w, h = (float(v[k]) for k in ("x", "y", "w", "h"))
     except (TypeError, KeyError, ValueError) as e:
         raise NoteError(f"{name} 须含数值 x、y、w、h（百分比）") from e
-    if not all(math.isfinite(t) for t in (x, y, w, h)) or not (0 <= x <= 100 and 0 <= y <= 100 and 0 < w <= 100 and 0 < h <= 100):
+    if not all(math.isfinite(t) for t in (x, y, w, h)) or not (
+        0 <= x <= 100 and 0 <= y <= 100 and 0 < w <= 100 and 0 < h <= 100
+    ):
         raise NoteError(f"{name} 超出页面范围")
     return {"x": round(x, 1), "y": round(y, 1), "w": round(min(w, 100 - x), 1), "h": round(min(h, 100 - y), 1)}
 
@@ -318,8 +342,11 @@ def _skills_doc_for_write(review_dir: Path) -> dict[str, Any]:
 def _catalog_items(value: Any) -> list[dict[str, str]]:
     if not isinstance(value, list):
         return []
-    return [{"name": fix_text(x["name"]).strip()[:64], "desc": fix_text(x.get("desc", "")).strip()}
-            for x in value if isinstance(x, dict) and isinstance(x.get("name"), str) and x["name"].strip()]
+    return [
+        {"name": fix_text(x["name"]).strip()[:64], "desc": fix_text(x.get("desc", "")).strip()}
+        for x in value
+        if isinstance(x, dict) and isinstance(x.get("name"), str) and x["name"].strip()
+    ]
 
 
 def _skill_sources_state(review_dir: Path, current: list[dict[str, str]]) -> dict[str, Any]:
@@ -330,15 +357,22 @@ def _skill_sources_state(review_dir: Path, current: list[dict[str, str]]) -> dic
         state = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise NoteError(f"技能来源记录无法读取，未覆盖：{e}") from e
-    def valid_items(items: Any) -> bool:
-        return isinstance(items, list) and all(isinstance(x, dict) and isinstance(x.get("name"), str)
-                                               and isinstance(x.get("desc"), str) for x in items)
 
-    if (not isinstance(state, dict) or state.get("version") != 1 or not valid_items(state.get("manual"))
-            or not isinstance(state.get("excluded"), list) or not all(isinstance(x, str) for x in state["excluded"])
-            or not isinstance(state.get("sources"), dict) or not all(isinstance(k, str) and valid_items(v)
-                                                                      for k, v in state["sources"].items())
-            or not valid_items(state.get("generated"))):
+    def valid_items(items: Any) -> bool:
+        return isinstance(items, list) and all(
+            isinstance(x, dict) and isinstance(x.get("name"), str) and isinstance(x.get("desc"), str) for x in items
+        )
+
+    if (
+        not isinstance(state, dict)
+        or state.get("version") != 1
+        or not valid_items(state.get("manual"))
+        or not isinstance(state.get("excluded"), list)
+        or not all(isinstance(x, str) for x in state["excluded"])
+        or not isinstance(state.get("sources"), dict)
+        or not all(isinstance(k, str) and valid_items(v) for k, v in state["sources"].items())
+        or not valid_items(state.get("generated"))
+    ):
         raise NoteError("技能来源记录结构不正确，未覆盖")
     return state
 
@@ -359,8 +393,9 @@ def _reconcile_skill_edits(state: dict[str, Any], current: list[dict[str, str]])
     state["manual"], state["excluded"] = list(manual.values()), sorted(excluded)
 
 
-def _save_catalog_state(review_dir: Path, doc: dict[str, Any], state: dict[str, Any],
-                        catalog: list[dict[str, str]]) -> None:
+def _save_catalog_state(
+    review_dir: Path, doc: dict[str, Any], state: dict[str, Any], catalog: list[dict[str, str]]
+) -> None:
     state["generated"] = catalog
     state_path = review_dir / SKILL_SOURCES_FILE
     try:
@@ -369,8 +404,13 @@ def _save_catalog_state(review_dir: Path, doc: dict[str, Any], state: dict[str, 
         previous = None
     _atomic_write(state_path, _dumps(state, indent=2) + "\n")
     try:
-        _atomic_write(review_dir / SKILLS_FILE,
-                      _dumps({"version": 1, "skills": catalog, "always": _always_items(doc.get("always"), strict=False)}, indent=2) + "\n")
+        _atomic_write(
+            review_dir / SKILLS_FILE,
+            _dumps(
+                {"version": 1, "skills": catalog, "always": _always_items(doc.get("always"), strict=False)}, indent=2
+            )
+            + "\n",
+        )
     except BaseException as error:
         try:
             if previous is None:
@@ -382,7 +422,9 @@ def _save_catalog_state(review_dir: Path, doc: dict[str, Any], state: dict[str, 
         raise
 
 
-def skills_merge_scan(review_dir: Path, results: list[tuple[str, list[dict[str, str]] | None, bool]]) -> tuple[list[dict[str, str]], bool]:
+def skills_merge_scan(
+    review_dir: Path, results: list[tuple[str, list[dict[str, str]] | None, bool]]
+) -> tuple[list[dict[str, str]], bool]:
     """在锁内合并扫描与最新的手工目录；失败来源沿用上次结果。"""
     with locked(review_dir):
         doc = _skills_doc_for_write(review_dir)
@@ -414,10 +456,18 @@ def skills_merge_scan(review_dir: Path, results: list[tuple[str, list[dict[str, 
         return catalog, retained
 
 
-def skills_update(review_dir: Path, *, set_to: list[dict[str, str]] | None = None,
-                  add: list[dict[str, str]] | None = None, remove: list[str] | None = None,
-                  clear: bool = False, always_set: Any = None, always_add: Any = None,
-                  always_remove: list[str] | None = None, always_clear: bool = False) -> list[dict[str, str]]:
+def skills_update(
+    review_dir: Path,
+    *,
+    set_to: list[dict[str, str]] | None = None,
+    add: list[dict[str, str]] | None = None,
+    remove: list[str] | None = None,
+    clear: bool = False,
+    always_set: Any = None,
+    always_add: Any = None,
+    always_remove: list[str] | None = None,
+    always_clear: bool = False,
+) -> list[dict[str, str]]:
     """在锁内修改技能目录并记录手工覆盖及移除。"""
     with locked(review_dir):
         doc = _skills_doc_for_write(review_dir)
@@ -448,8 +498,13 @@ def skills_update(review_dir: Path, *, set_to: list[dict[str, str]] | None = Non
         excluded.difference_update(x["name"] for x in manual.values())
         state["manual"], state["excluded"] = list(manual.values()), sorted(excluded)
         if always_set is not None or always_add or always_remove or always_clear:
-            doc["always"] = _updated_always(_always_items(doc.get("always"), strict=False), set_to=always_set,
-                                            add=always_add, remove=always_remove, clear=always_clear)
+            doc["always"] = _updated_always(
+                _always_items(doc.get("always"), strict=False),
+                set_to=always_set,
+                add=always_add,
+                remove=always_remove,
+                clear=always_clear,
+            )
         _save_catalog_state(review_dir, doc, state, catalog)
         return catalog
 
@@ -493,8 +548,14 @@ def clean_always(v: Any) -> list[dict[str, str]]:
     return _always_items(v, strict=True)
 
 
-def _updated_always(cur: list[dict[str, str]], *, set_to: Any = None, add: Any = None,
-                    remove: list[str] | None = None, clear: bool = False) -> list[dict[str, str]]:
+def _updated_always(
+    cur: list[dict[str, str]],
+    *,
+    set_to: Any = None,
+    add: Any = None,
+    remove: list[str] | None = None,
+    clear: bool = False,
+) -> list[dict[str, str]]:
     add_items = clean_always(add or [])
     base_items = clean_always(set_to) if set_to is not None else None
     gone = {re.sub(r"\s+", " ", fix_text(x)).strip()[:64] for r in remove or [] for x in re.split(_SKILL_SEP, r)} - {""}
@@ -510,7 +571,7 @@ def always_skills(review_dir: Path, *, doc: dict[str, Any] | None = None) -> lis
 
 def _write_skills_doc(review_dir: Path, *, always: Any = None, update: Any = None) -> list[dict[str, str]]:
     """在文件锁内读改写 skills.json，技能目录与常驻技能互不覆盖。update(当前常驻) → 新常驻。"""
-    with locked(review_dir):   # locked 先确认审阅目录存在
+    with locked(review_dir):  # locked 先确认审阅目录存在
         doc = _skills_doc_for_write(review_dir)
         cur = _always_items(doc.get("always"), strict=False)
         new = update(cur) if update else (always if always is not None else cur)
@@ -527,11 +588,14 @@ def always_save(review_dir: Path, items: Any) -> list[dict[str, str]]:
     return _write_skills_doc(review_dir, always=clean_always(items))
 
 
-def always_update(review_dir: Path, *, set_to: Any = None, add: Any = None, remove: list[str] | None = None,
-                  clear: bool = False) -> list[dict[str, str]]:
+def always_update(
+    review_dir: Path, *, set_to: Any = None, add: Any = None, remove: list[str] | None = None, clear: bool = False
+) -> list[dict[str, str]]:
     """命令行增删常驻技能：在锁内读最新名单，先删（按名字，所有范围）后加，避免和页面同时保存时丢更新。"""
+
     def apply(cur: list[dict[str, str]]) -> list[dict[str, str]]:
         return _updated_always(cur, set_to=set_to, add=add, remove=remove, clear=clear)
+
     return _write_skills_doc(review_dir, update=apply)
 
 
@@ -556,9 +620,9 @@ def skills_for(note: dict[str, Any], always: list[dict[str, str]]) -> list[tuple
 
 
 # ---------- DOCX 段落定位 ----------
-DOCX_KINDS = ("quote", "pin", "region")       # 定位的是引用选区、点标注还是框选
-DOCX_VIA = ("selection", "text", "point")     # 定位来源：浏览器选区 / 按文本唯一匹配反查 / 标注坐标处的段落
-MAX_DOCX_RAW = 4000                           # 更高版本的定位原样保留时的大小上限（JSON 字符数）
+DOCX_KINDS = ("quote", "pin", "region")  # 定位的是引用选区、点标注还是框选
+DOCX_VIA = ("selection", "text", "point")  # 定位来源：浏览器选区 / 按文本唯一匹配反查 / 标注坐标处的段落
+MAX_DOCX_RAW = 4000  # 更高版本的定位原样保留时的大小上限（JSON 字符数）
 _FP_RE = re.compile(r"[0-9a-f]{16,64}")
 _DIGEST_RE = re.compile(r"[0-9a-f]{12}")
 _MAX_OFFSET = 10_000_000
@@ -629,25 +693,34 @@ def _clean_docx(v: Any) -> dict[str, Any] | None:
 
 
 # ---------- PPT 幻灯片定位（与 DOCX 段落定位并列的字段，见 GLOSSARY「幻灯片定位」） ----------
-PPTX_KINDS = ("page", "elements", "text", "point", "region")   # 定位整页、元素（可多选）、文本选区、点或区域
-PPTX_VIA = {"page": ("thumb",), "elements": ("click",), "text": ("selection", "text"),
-            "point": ("point",), "region": ("region",)}
+PPTX_KINDS = ("page", "elements", "text", "point", "region")  # 定位整页、元素（可多选）、文本选区、点或区域
+PPTX_VIA = {
+    "page": ("thumb",),
+    "elements": ("click",),
+    "text": ("selection", "text"),
+    "point": ("point",),
+    "region": ("region",),
+}
 # 定位来源：页缩略图选整页 / 元素点选（含多选）/ 浏览器选区 / 按文本唯一匹配反查 / 标注坐标
 PPTX_EL_KINDS = ("shape", "group", "connector", "picture", "media", "table", "chart", "smartArt", "ole", "unknown")
-PPTX_RO = ("text", "geometry", "style")     # 能力矩阵里声明不可自动回写的方面（只读元素）
-MAX_PPTX_ELEMENTS = 32                      # 一次批注最多指向的元素目标数
-MAX_PPTX_RUNS = 64                          # 文本选区保留的样式边界（run 边界）条数
-MAX_PPTX_QUOTE = 600                        # 文本选区引用原文的长度上限（字符）
-MAX_PPTX_RAW = 8000                         # 更高版本的定位原样保留时的大小上限（JSON 字符数）
-_PPTX_DIGEST_RE = re.compile(r"[0-9a-f]{64}")   # pptx_reader 的摘要一律是 SHA-256 十六进制全串
+PPTX_RO = ("text", "geometry", "style")  # 能力矩阵里声明不可自动回写的方面（只读元素）
+MAX_PPTX_ELEMENTS = 32  # 一次批注最多指向的元素目标数
+MAX_PPTX_RUNS = 64  # 文本选区保留的样式边界（run 边界）条数
+MAX_PPTX_QUOTE = 600  # 文本选区引用原文的长度上限（字符）
+MAX_PPTX_RAW = 8000  # 更高版本的定位原样保留时的大小上限（JSON 字符数）
+_PPTX_DIGEST_RE = re.compile(r"[0-9a-f]{64}")  # pptx_reader 的摘要一律是 SHA-256 十六进制全串
 
 
 def usable_pptx_anchor(a: object) -> bool:
     """本版本读得懂的 pptx 定位：v1 且带幻灯片键与 kind。更高版本的原样保留但不参与重定位。"""
-    return (isinstance(a, dict) and not isinstance(a.get("v"), bool)
-            and a.get("v") == pptx_reader.ANCHOR_VERSION
-            and isinstance(a.get("slide"), str) and bool(a["slide"])
-            and a.get("kind") in PPTX_KINDS)
+    return (
+        isinstance(a, dict)
+        and not isinstance(a.get("v"), bool)
+        and a.get("v") == pptx_reader.ANCHOR_VERSION
+        and isinstance(a.get("slide"), str)
+        and bool(a["slide"])
+        and a.get("kind") in PPTX_KINDS
+    )
 
 
 def _pptx_nat(v: Any, name: str) -> int:
@@ -679,12 +752,23 @@ def _clean_pptx_element(v: Any) -> dict[str, Any]:
         raise NoteError(f"pptx.elements[].kind 须为 {PPTX_EL_KINDS} 之一")
     if not isinstance(v.get("digest"), str) or not _PPTX_DIGEST_RE.fullmatch(v["digest"]):
         raise NoteError("pptx.elements[].digest 不是合法的证据摘要")
-    out = {"key": key.strip(), "id": eid.strip(), "name": name[:MAX_SHORT], "kind": v["kind"],
-           "z": _pptx_nat(v.get("z"), "elements[].z"), "digest": v["digest"]}
+    out = {
+        "key": key.strip(),
+        "id": eid.strip(),
+        "name": name[:MAX_SHORT],
+        "kind": v["kind"],
+        "z": _pptx_nat(v.get("z"), "elements[].z"),
+        "digest": v["digest"],
+    }
     ro = v.get("ro")
     if ro not in (None, "", []):
-        if (not isinstance(ro, list) or not ro or len(ro) > len(PPTX_RO)
-                or any(x not in PPTX_RO for x in ro) or len(set(ro)) != len(ro)):
+        if (
+            not isinstance(ro, list)
+            or not ro
+            or len(ro) > len(PPTX_RO)
+            or any(x not in PPTX_RO for x in ro)
+            or len(set(ro)) != len(ro)
+        ):
             raise NoteError(f"pptx.elements[].ro 须为 {PPTX_RO} 的非空子集")
         out["ro"] = ro
     return out
@@ -698,8 +782,11 @@ def _clean_pptx_text(v: Any) -> dict[str, Any]:
         raise NoteError("pptx.text.quote 须为引用原文")
     if not isinstance(v.get("paraDigest"), str) or not _PPTX_DIGEST_RE.fullmatch(v["paraDigest"]):
         raise NoteError("pptx.text.paraDigest 不是合法的段落摘要")
-    out = {"para": _pptx_nat(v.get("para"), "text.para"), "paraDigest": v["paraDigest"],
-           "quote": quote[:MAX_PPTX_QUOTE]}
+    out = {
+        "para": _pptx_nat(v.get("para"), "text.para"),
+        "paraDigest": v["paraDigest"],
+        "quote": quote[:MAX_PPTX_QUOTE],
+    }
     # start / end / runs 成对给出：选区与段内唯一反查带字符偏移与样式边界；
     # 段内重复文字反查只记元素与逻辑段落，不猜偏移
     has_range = any(k in v for k in ("start", "end"))
@@ -800,7 +887,7 @@ def _clean_pptx(v: Any) -> dict[str, Any] | None:
         raise NoteError("元素定位须携带元素目标列表")
     if kind == "text" and "elements" not in out:
         raise NoteError("文本定位须携带所在元素")
-    if v.get("changed") is True:   # 重建后元素文字已变的标记（偏移与指纹仍是旧版本的），与 docx.changed 同义
+    if v.get("changed") is True:  # 重建后元素文字已变的标记（偏移与指纹仍是旧版本的），与 docx.changed 同义
         out["changed"] = True
     return out
 
@@ -811,7 +898,7 @@ def _clean_style(v: Any) -> dict[str, Any] | None:
     if not isinstance(v, dict) or v.get("scope") not in STYLE_SCOPES:
         raise NoteError(f"style.scope 须为 {STYLE_SCOPES} 之一")
     out: dict[str, Any] = {"scope": v["scope"]}
-    if v.get("region") not in (None, "", {}):   # 0.3 旧格式：框存在 style.region 里；由 _settle_marks 挪到顶层
+    if v.get("region") not in (None, "", {}):  # 0.3 旧格式：框存在 style.region 里；由 _settle_marks 挪到顶层
         out["region"] = _clean_region(v["region"], "style.region")
     return out
 
@@ -821,9 +908,13 @@ def _clean_trail(v: Any) -> list[dict[str, Any]]:
     out = []
     for e in v if isinstance(v, list) else []:
         if isinstance(e, dict) and isinstance(e.get("action"), str):
-            out.append({k: (fix_text(e[k])[:MAX_TEXT] if isinstance(e[k], str) else e[k])
-                        for k in ("at", "by", "stage", "batch", "action", "note") if e.get(k) not in (None, "")
-                        and isinstance(e[k], (str, int))})
+            out.append(
+                {
+                    k: (fix_text(e[k])[:MAX_TEXT] if isinstance(e[k], str) else e[k])
+                    for k in ("at", "by", "stage", "batch", "action", "note")
+                    if e.get(k) not in (None, "") and isinstance(e[k], (str, int))
+                }
+            )
     return out[-TRAIL_KEEP:]
 
 
@@ -897,7 +988,7 @@ def _clean_fields(data: dict[str, Any], *, partial: bool) -> dict[str, Any]:
                 v = v[:MAX_SHORT]
         out[k] = v
     st = out.get("style")
-    if isinstance(st, dict) and "region" in st:   # 0.3 页面的改动（含离线队列补传）：框写在 style.region 里
+    if isinstance(st, dict) and "region" in st:  # 0.3 页面的改动（含离线队列补传）：框写在 style.region 里
         reg = st.pop("region")
         out.setdefault("region", reg)
     if not partial:
@@ -925,9 +1016,17 @@ def _find(doc: dict[str, Any], note_id: str) -> dict[str, Any]:
 
 
 def _new_note(raw: dict[str, Any], fields: dict[str, Any], nid: str) -> dict[str, Any]:
-    note = {"id": nid, "title": "", "target": "", "quote": "", "quoteFrom": "", "pin": None, **fields,
-            "status": raw.get("status") if raw.get("status") in STATUSES else "open",
-            "at": _clean_time(raw.get("at")) or now_iso()}
+    note = {
+        "id": nid,
+        "title": "",
+        "target": "",
+        "quote": "",
+        "quoteFrom": "",
+        "pin": None,
+        **fields,
+        "status": raw.get("status") if raw.get("status") in STATUSES else "open",
+        "at": _clean_time(raw.get("at")) or now_iso(),
+    }
     if note["status"] in ("resolved", "drafted"):
         for k in ("resolution", "resolvedAt", "resolvedBy", "draftedAt", "draftedBy"):
             if raw.get(k) not in (None, ""):
@@ -951,9 +1050,20 @@ def _new_note(raw: dict[str, Any], fields: dict[str, Any], nid: str) -> dict[str
 
 # _new_note 能写出的全部字段。导入时表外的键是认不出的扩展字段（更高版本写入的），
 # 原样保留、不清洗：本版本降级读写也不能把将来的数据丢掉。
-NOTE_FIELDS = frozenset(EDITABLE) | {"id", "at", "status", "updatedAt", "trail",
-                                     "resolution", "resolvedAt", "resolvedBy",
-                                     "draftedAt", "draftedBy", "draftBatch", "resolvedBatch"}
+NOTE_FIELDS = frozenset(EDITABLE) | {
+    "id",
+    "at",
+    "status",
+    "updatedAt",
+    "trail",
+    "resolution",
+    "resolvedAt",
+    "resolvedBy",
+    "draftedAt",
+    "draftedBy",
+    "draftBatch",
+    "resolvedBatch",
+}
 
 
 def _extra_fields(source: dict[str, Any]) -> dict[str, Any]:
@@ -977,7 +1087,9 @@ def add(review_dir: Path, data: dict[str, Any], *, by: str = "page") -> tuple[di
         return _commit(review_dir, doc, {"op": "add", "by": by, "id": nid, "note": note}), note
 
 
-def update(review_dir: Path, note_id: str, data: dict[str, Any], *, by: str = "page") -> tuple[dict[str, Any], dict[str, Any]]:
+def update(
+    review_dir: Path, note_id: str, data: dict[str, Any], *, by: str = "page"
+) -> tuple[dict[str, Any], dict[str, Any]]:
     fields = _clean_fields(data, partial=True)
     if "text" in fields and not fields["text"].strip():
         raise NoteError("批注内容为空")
@@ -985,19 +1097,21 @@ def update(review_dir: Path, note_id: str, data: dict[str, Any], *, by: str = "p
         doc = load(review_dir)
         note = _find(doc, note_id)
         ed = note.get("edit") if isinstance(note.get("edit"), dict) else None
-        if ed and "text" in fields and "edit" not in fields:   # 旧版页面只改 text：同步到快捷修改的结构上
+        if ed and "text" in fields and "edit" not in fields:  # 旧版页面只改 text：同步到快捷修改的结构上
             if ed.get("op") == "replace" and fields["text"].startswith(REPLACE_PREFIX):
-                fields["edit"] = {**ed, "to": fields["text"][len(REPLACE_PREFIX):]}
+                fields["edit"] = {**ed, "to": fields["text"][len(REPLACE_PREFIX) :]}
             elif fields["text"] not in (DELETE_TEXT,) and not fields["text"].startswith(REPLACE_PREFIX):
-                fields["edit"] = None   # 改成了普通意见
+                fields["edit"] = None  # 改成了普通意见
         # 人工确认归属（去掉 orphan）或挪到别的页：以这次决定为准。本版本读得懂的段落定位不再保留，
         # 否则下次重建又会按段落把批注挪回去或重新标为孤立；之后这条批注按页面键走。
         moved = "page" in fields and fields["page"] != note.get("page")
-        if "docx" not in fields and (moved or fields.get("orphan") is False) \
-                and docx_review.usable_anchor(note.get("docx")):
+        if (
+            "docx" not in fields
+            and (moved or fields.get("orphan") is False)
+            and docx_review.usable_anchor(note.get("docx"))
+        ):
             fields["docx"] = None
-        if "pptx" not in fields and (moved or fields.get("orphan") is False) \
-                and usable_pptx_anchor(note.get("pptx")):
+        if "pptx" not in fields and (moved or fields.get("orphan") is False) and usable_pptx_anchor(note.get("pptx")):
             fields["pptx"] = None
         note.update(fields)
         _settle_marks(note, fields)
@@ -1015,7 +1129,7 @@ RESOLVE_FIELDS = ("resolvedAt", "resolvedBy", "resolution", "resolvedBatch")
 DRAFT_FIELDS = ("draftedAt", "draftedBy", "draftBatch")
 
 
-IN_FLIGHT = ("pending", "claimed", "review", "reviewing")   # 已交给 Agent、还没停下或定稿的批次
+IN_FLIGHT = ("pending", "claimed", "review", "reviewing")  # 已交给 Agent、还没停下或定稿的批次
 
 
 def _items(review_dir: Path) -> list[dict[str, Any]]:
@@ -1032,8 +1146,12 @@ def _batch_for(items: list[dict[str, Any]], note: dict[str, Any], seq: int | Non
     if seq is not None:
         it = _find_batch(items, seq)
         if it.get("status") not in IN_FLIGHT:
-            raise HandoffError(f"第 {seq} 批不在处理中（{it.get('status')}）",
-                               code="batch-not-active", seq=seq, status=it.get("status"))
+            raise HandoffError(
+                f"第 {seq} 批不在处理中（{it.get('status')}）",
+                code="batch-not-active",
+                seq=seq,
+                status=it.get("status"),
+            )
         return it
     db = note.get("draftBatch")
     if note.get("status") == "drafted" and db is not None:
@@ -1076,8 +1194,16 @@ def _mark_open(note: dict[str, Any]) -> None:
         note.pop(k, None)
 
 
-def set_status(review_dir: Path, note_id: str, status: str, *, resolution: str = "", by: str = "page",
-               seq: int | None = None, authorize: Callable[[], None] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+def set_status(
+    review_dir: Path,
+    note_id: str,
+    status: str,
+    *,
+    resolution: str = "",
+    by: str = "page",
+    seq: int | None = None,
+    authorize: Callable[[], None] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """标已处理 / 重新打开。代理在两段流程的初改阶段标已处理时，记为「已初改·待复核」（drafted），
     复核通过或用户定稿后才算已处理。每次都在批注的处理痕迹里追加一条。"""
     if status not in STATUSES:
@@ -1093,15 +1219,28 @@ def set_status(review_dir: Path, note_id: str, status: str, *, resolution: str =
         note = _find(doc, note_id)
         prev = note.get("status", "open")
         if prev == "held":
-            raise HandoffError(f"{note_id} 已被分析搁住（{note.get('hold')}），不在改稿流程里；"
-                               f"解除搁住或确认结论转出，都走分析的操作", code="note-held", id=note_id)
+            raise HandoffError(
+                f"{note_id} 已被分析搁住（{note.get('hold')}），不在改稿流程里；解除搁住或确认结论转出，都走分析的操作",
+                code="note-held",
+                id=note_id,
+            )
         items = _items(review_dir) if by != "page" else []
         cur = _batch_for(items, note, seq) if by != "page" else None
         db = note.get("draftBatch")
-        if cur and prev == "drafted" and db is not None and db != int(cur.get("seq", 0)) and any(
-                int(i.get("seq", 0)) == db and i.get("status") != "done" for i in items):
-            raise HandoffError(f"{note_id} 是第 {db} 批的初改，在等复核或用户定稿：不要在第 {cur['seq']} 批里处理它",
-                               code="other-draft-batch", id=note_id, draft=db, seq=cur["seq"])
+        if (
+            cur
+            and prev == "drafted"
+            and db is not None
+            and db != int(cur.get("seq", 0))
+            and any(int(i.get("seq", 0)) == db and i.get("status") != "done" for i in items)
+        ):
+            raise HandoffError(
+                f"{note_id} 是第 {db} 批的初改，在等复核或用户定稿：不要在第 {cur['seq']} 批里处理它",
+                code="other-draft-batch",
+                id=note_id,
+                draft=db,
+                seq=cur["seq"],
+            )
         stage, seq = _stage_of(cur), (int(cur.get("seq", 0)) if cur else None)
         if status == "resolved" and stage == "draft" and two_stage(cur):
             status = "drafted"
@@ -1120,8 +1259,14 @@ def set_status(review_dir: Path, note_id: str, status: str, *, resolution: str =
         else:
             _mark_open(note)
             action = "reopened"
-        _trail(note, by=by, stage=stage or ("page" if by == "page" else None), batch=seq, action=action,
-               note=fix_text(resolution)[:MAX_TEXT] if resolution else None)
+        _trail(
+            note,
+            by=by,
+            stage=stage or ("page" if by == "page" else None),
+            batch=seq,
+            action=action,
+            note=fix_text(resolution)[:MAX_TEXT] if resolution else None,
+        )
         op = {"resolved": "resolve", "drafted": "draft"}.get(status, "reopen")
         return _commit(review_dir, doc, {"op": op, "by": by, "id": note_id, "resolution": resolution}), note
 
@@ -1129,8 +1274,16 @@ def set_status(review_dir: Path, note_id: str, status: str, *, resolution: str =
 REVIEW_VERDICTS = ("ok", "revise", "return")
 
 
-def review(review_dir: Path, note_id: str, verdict: str, *, note: str = "", by: str = "agent",
-           seq: int | None = None, authorize: Callable[[], None] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+def review(
+    review_dir: Path,
+    note_id: str,
+    verdict: str,
+    *,
+    note: str = "",
+    by: str = "agent",
+    seq: int | None = None,
+    authorize: Callable[[], None] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """复核结论：ok 通过（定为已处理）、revise 复核者直接再改（写明改了什么）、return 退回给用户拍板（重新打开，写明原因）。"""
     if verdict not in REVIEW_VERDICTS:
         raise NoteError(f"复核结论须为 {REVIEW_VERDICTS} 之一")
@@ -1143,28 +1296,46 @@ def review(review_dir: Path, note_id: str, verdict: str, *, note: str = "", by: 
         doc = load(review_dir)
         n = _find(doc, note_id)
         if n.get("status", "open") == "open":
-            raise HandoffError(f"{note_id} 还没有被处理过（未处理），没有可复核的改动：直接改完用 notes.py resolve",
-                               code="note-not-drafted", id=note_id)
+            raise HandoffError(
+                f"{note_id} 还没有被处理过（未处理），没有可复核的改动：直接改完用 notes.py resolve",
+                code="note-not-drafted",
+                id=note_id,
+            )
         items = _items(review_dir)
-        if seq is None:   # 按批注归属找复核批次：初改 → 它的初改批次；已定的 → 本批复核时定的那一批
+        if seq is None:  # 按批注归属找复核批次：初改 → 它的初改批次；已定的 → 本批复核时定的那一批
             seq = n.get("draftBatch") if n.get("status") == "drafted" else n.get("resolvedBatch")
         cur = next((i for i in items if seq is not None and int(i.get("seq", 0)) == seq), None)
         if not cur or cur.get("status") != "reviewing":
-            raise HandoffError(f"{note_id} 不在正在复核的批次里" + (f"（第 {seq} 批现在是「{cur.get('status')}」）" if cur else "")
-                               + "：先 notes.py claim --stage review 接收复核，复核只针对那一批的初改",
-                               code="note-not-reviewing", id=note_id, seq=seq, status=cur.get("status") if cur else None)
-        if not ((n.get("status") == "drafted" and n.get("draftBatch") == seq) or
-                (n.get("status") == "resolved" and n.get("resolvedBatch") == seq)):
-            raise HandoffError(f"{note_id} 不属于第 {seq} 批的复核范围",
-                               code="note-outside-review", id=note_id, seq=seq)
+            raise HandoffError(
+                f"{note_id} 不在正在复核的批次里"
+                + (f"（第 {seq} 批现在是「{cur.get('status')}」）" if cur else "")
+                + "：先 notes.py claim --stage review 接收复核，复核只针对那一批的初改",
+                code="note-not-reviewing",
+                id=note_id,
+                seq=seq,
+                status=cur.get("status") if cur else None,
+            )
+        if not (
+            (n.get("status") == "drafted" and n.get("draftBatch") == seq)
+            or (n.get("status") == "resolved" and n.get("resolvedBatch") == seq)
+        ):
+            raise HandoffError(
+                f"{note_id} 不属于第 {seq} 批的复核范围", code="note-outside-review", id=note_id, seq=seq
+            )
         if verdict == "return":
             _mark_open(n)
         else:
             _mark_resolved(n, by=by, resolution=text if verdict == "revise" else "", batch=seq)
             if verdict == "ok" and not n.get("resolution"):
                 n.pop("resolution", None)
-        _trail(n, by=by, stage="review", batch=seq, action={"ok": "approved", "revise": "revised", "return": "returned"}[verdict],
-               note=text or None)
+        _trail(
+            n,
+            by=by,
+            stage="review",
+            batch=seq,
+            action={"ok": "approved", "revise": "revised", "return": "returned"}[verdict],
+            note=text or None,
+        )
         return _commit(review_dir, doc, {"op": "review", "by": by, "id": note_id, "verdict": verdict, "note": text}), n
 
 
@@ -1188,11 +1359,24 @@ def dedup_key(n: dict[str, Any]) -> tuple:
     pptx = n.get("pptx")
     if isinstance(pptx, dict) and pptx.get("v") == 1 and isinstance(pptx.get("elements"), list):
         # 展示名不属于元素身份，Markdown 也不携带；未知版本仍按完整内容比较。
-        pptx = {**pptx, "elements": [{k: v for k, v in e.items() if k != "name"}
-                                    if isinstance(e, dict) else e for e in pptx["elements"]]}
+        pptx = {
+            **pptx,
+            "elements": [
+                {k: v for k, v in e.items() if k != "name"} if isinstance(e, dict) else e for e in pptx["elements"]
+            ],
+        }
     pptx_t = _dumps(pptx, sort_keys=True) if isinstance(pptx, dict) else None
-    return (int(n.get("page", 0)), str(n.get("target", "")).strip(), str(n.get("text", "")).strip(),
-            str(n.get("quote", "")).strip(), pin_t, rg_t, st_t, docx_t, pptx_t)
+    return (
+        int(n.get("page", 0)),
+        str(n.get("target", "")).strip(),
+        str(n.get("text", "")).strip(),
+        str(n.get("quote", "")).strip(),
+        pin_t,
+        rg_t,
+        st_t,
+        docx_t,
+        pptx_t,
+    )
 
 
 def _stamp(n: dict[str, Any]) -> float:
@@ -1227,12 +1411,14 @@ def _reconcile_edit(raw: dict[str, Any]) -> None:
     if text == DELETE_TEXT:
         raw["edit"] = {"op": "delete", "from": ed["from"]}
     elif text.startswith(REPLACE_PREFIX):
-        raw["edit"] = {"op": "replace", "from": ed["from"], "to": text[len(REPLACE_PREFIX):]}
+        raw["edit"] = {"op": "replace", "from": ed["from"], "to": text[len(REPLACE_PREFIX) :]}
     else:
         raw.pop("edit", None)
 
 
-def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "import") -> tuple[dict[str, Any], int, int, int]:
+def import_notes(
+    review_dir: Path, items: list[dict[str, Any]], *, by: str = "import"
+) -> tuple[dict[str, Any], int, int, int]:
     """批量导入（旧版导出、离线模式积压等）。返回 (文档, 新增, 跳过, 更新)。
 
     - 同 id 已存在：导入方更新得更晚（编辑过、标过已处理）就覆盖内容与状态，否则跳过；
@@ -1257,13 +1443,16 @@ def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "im
                 if _stamp(raw) > _stamp(cur):
                     fresh = _new_note(raw, fields, nid)
                     fresh["at"] = cur.get("at", fresh["at"])
-                    merged_trail = _merge_trails(cur.get("trail"), fresh.get("trail"))   # 痕迹只追加：合并去重
+                    merged_trail = _merge_trails(cur.get("trail"), fresh.get("trail"))  # 痕迹只追加：合并去重
                     if merged_trail:
                         fresh["trail"] = merged_trail
-                    if fresh["status"] == "resolved" and cur.get("resolvedBatch") is not None \
-                            and fresh.get("resolvedAt") == cur.get("resolvedAt"):
-                        fresh["resolvedBatch"] = cur["resolvedBatch"]   # 同一次处理：保留批次号
-                    fresh.update({**_extra_fields(cur), **_extra_fields(raw)})   # 扩展字段：库里的保底，导入方的覆盖
+                    if (
+                        fresh["status"] == "resolved"
+                        and cur.get("resolvedBatch") is not None
+                        and fresh.get("resolvedAt") == cur.get("resolvedAt")
+                    ):
+                        fresh["resolvedBatch"] = cur["resolvedBatch"]  # 同一次处理：保留批次号
+                    fresh.update({**_extra_fields(cur), **_extra_fields(raw)})  # 扩展字段：库里的保底，导入方的覆盖
                     cur.clear()
                     cur.update(fresh)
                     updated += 1
@@ -1279,7 +1468,9 @@ def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "im
             keys.add(dedup_key(note))
             added += 1
         if added or updated:
-            doc = _commit(review_dir, doc, {"op": "import", "by": by, "added": added, "updated": updated, "skipped": skipped})
+            doc = _commit(
+                review_dir, doc, {"op": "import", "by": by, "added": added, "updated": updated, "skipped": skipped}
+            )
         return doc, added, skipped, updated
 
 
@@ -1288,7 +1479,7 @@ def import_notes(review_dir: Path, items: list[dict[str, Any]], *, by: str = "im
 # 提交存 handoff.json，状态 pending（等待接收）→ claimed（代理已接收、处理中）→ done（已处理）。
 # 任何代理都可以：跑 notes.py wait 阻塞等待，或自己轮询 handoff.json。
 HANDOFF_FILE = "handoff.json"
-HANDOFF_KEEP = 200   # 处理记录（批次）保留条数
+HANDOFF_KEEP = 200  # 处理记录（批次）保留条数
 MAX_MSG = 4000
 FULL_CHECK_TEXT = "全量勾稽：逐页检查整份报告和讲稿的口径、数据及前后引用；有依据的同步修正，不确定或未检查的部分要说明"
 
@@ -1325,8 +1516,9 @@ def _handoff_commit(review_dir: Path, doc: dict[str, Any], log: dict[str, Any]) 
     return doc
 
 
-def batch_resolved(notes: list[dict[str, Any]], item: dict[str, Any], end: str | None = None,
-                   next_start: str | None = None) -> list[dict[str, Any]]:
+def batch_resolved(
+    notes: list[dict[str, Any]], item: dict[str, Any], end: str | None = None, next_start: str | None = None
+) -> list[dict[str, Any]]:
     """这一批里被代理标为已处理的批注。标的时候记了批次号（resolvedBatch）就按批次号；
     没记的（0.3 旧数据、代理没先接收）按时间窗：从接收（没接收就从提交）起，到收尾、且早于下一批被接收，
     由页面以外（代理）标的。下一批的接收时间是开区间上界，相邻两批不会重复计数。"""
@@ -1342,8 +1534,13 @@ def batch_resolved(notes: list[dict[str, Any]], item: dict[str, Any], end: str |
                 out.append(n)
             continue
         t = _ts(n.get("resolvedAt"))
-        if n.get("resolvedBy") not in (None, "", "page") and t and t >= start \
-                and (stop is None or t <= stop) and (nxt is None or t < nxt):
+        if (
+            n.get("resolvedBy") not in (None, "", "page")
+            and t
+            and t >= start
+            and (stop is None or t <= stop)
+            and (nxt is None or t < nxt)
+        ):
             out.append(n)
     return out
 
@@ -1366,22 +1563,30 @@ def _open_ids(notes: list[dict[str, Any]]) -> set[Any]:
     return {n.get("id") for n in notes if n.get("status", "open") == "open"}
 
 
-def _batch_stats(notes: list[dict[str, Any]], item: dict[str, Any], end: str | None,
-                 next_start: str | None = None, open_now: set[Any] | None = None) -> dict[str, Any]:
+def _batch_stats(
+    notes: list[dict[str, Any]],
+    item: dict[str, Any],
+    end: str | None,
+    next_start: str | None = None,
+    open_now: set[Any] | None = None,
+) -> dict[str, Any]:
     """open_now：此刻仍未处理的批注 id；一次算多批时由调用方算好传入，不传就现算。"""
     got = batch_resolved(notes, item, end, next_start)
     if open_now is None:
         open_now = _open_ids(notes)
     seq = int(item.get("seq", 0) or 0)
     drafted = [n.get("id") for n in notes if n.get("status") == "drafted" and n.get("draftBatch") == seq]
-    return {"resolvedIds": [n.get("id") for n in got], "resolvedCount": len(got),
-            "draftedIds": drafted, "draftedCount": len(drafted),
-            "resolvedPages": sorted({int(n.get("page", 0) or 0) for n in got}),
-            "leftOpen": sum(1 for x in item.get("openIds") or [] if x in open_now)}
+    return {
+        "resolvedIds": [n.get("id") for n in got],
+        "resolvedCount": len(got),
+        "draftedIds": drafted,
+        "draftedCount": len(drafted),
+        "resolvedPages": sorted({int(n.get("page", 0) or 0) for n in got}),
+        "leftOpen": sum(1 for x in item.get("openIds") or [] if x in open_now),
+    }
 
 
-def handoff_state(review_dir: Path, *, full: bool = True, handoff: Any = None,
-                  notes: Any = None) -> dict[str, Any]:
+def handoff_state(review_dir: Path, *, full: bool = True, handoff: Any = None, notes: Any = None) -> dict[str, Any]:
     """给页面和 status 用的摘要：最近一批、各状态计数，以及（full 时）全部批次 history（处理记录，新的在前，
     不含提交时的批注 id 清单）。页面轮询用 full=False，打开处理记录时再取全量。
 
@@ -1417,24 +1622,35 @@ def handoff_state(review_dir: Path, *, full: bool = True, handoff: Any = None,
     flight = [i for i in items if i.get("status") in IN_FLIGHT]
     by_id = {n.get("id"): n for n in notes}
 
-    def returned(nid: str, seq: int) -> bool:   # 复核时退回给用户的：不再算「处理中」
+    def returned(nid: str, seq: int) -> bool:  # 复核时退回给用户的：不再算「处理中」
         t = [e for e in (by_id.get(nid) or {}).get("trail") or [] if isinstance(e, dict)]
         return bool(t) and t[-1].get("action") == "returned" and t[-1].get("batch") == seq
-    out = {"latest": history[0] if history else None, "total": len(items),
-           # 已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」而不是「未处理」）
-           "inFlightIds": sorted({x for i in flight for x in (i.get("openIds") or []) if not returned(x, int(i.get("seq", 0)))}),
-           # 在途与停在待复核的批次及用户要求（show / 接手中断的代理据此知道要做到哪一步、能不能派子代理）
-           "open": [{**{k: i.get(k) for k in ("seq", "status", "target", "allowSubagents", "fullCheck", "message")},
-                     "userMessage": handoff_user_message(i)}
-                    for i in items if i.get("status") in IN_FLIGHT + ("drafted",)],
-           **{st: sum(i.get("status") == st for i in items) for st in BATCH_STATUSES},
-           "finalizable": _finalizable(notes, items)}
+
+    out = {
+        "latest": history[0] if history else None,
+        "total": len(items),
+        # 已交给 Agent、还在路上的批注（页面「批注」按钮据此显示「处理中」而不是「未处理」）
+        "inFlightIds": sorted(
+            {x for i in flight for x in (i.get("openIds") or []) if not returned(x, int(i.get("seq", 0)))}
+        ),
+        # 在途与停在待复核的批次及用户要求（show / 接手中断的代理据此知道要做到哪一步、能不能派子代理）
+        "open": [
+            {
+                **{k: i.get(k) for k in ("seq", "status", "target", "allowSubagents", "fullCheck", "message")},
+                "userMessage": handoff_user_message(i),
+            }
+            for i in items
+            if i.get("status") in IN_FLIGHT + ("drafted",)
+        ],
+        **{st: sum(i.get("status") == st for i in items) for st in BATCH_STATUSES},
+        "finalizable": _finalizable(notes, items),
+    }
     if full:
         out["history"] = history
     return out
 
 
-TARGETS = ("final", "review")   # 这批做到哪一步：定稿 / 已初改·待复核（由用户在「交给 Agent」时选）
+TARGETS = ("final", "review")  # 这批做到哪一步：定稿 / 已初改·待复核（由用户在「交给 Agent」时选）
 BATCH_STATUSES = ("pending", "claimed", "drafted", "review", "reviewing", "done", "void")
 # pending 等待接收 → claimed 初改中（或单段流程的处理中）→ drafted 已初改·待复核（停下等用户）
 #   → review 等待复核接收 → reviewing 复核中 → done 已定稿；drafted / review 也可由用户直接定稿
@@ -1445,21 +1661,35 @@ class Unreviewed(HandoffError):
     """复核收尾时还有没给结论的初改批注。"""
 
     def __init__(self, ids: list[str], seq: int):
-        super().__init__(f"第 {seq} 批还有 {len(ids)} 条初改没给复核结论：{'、'.join(ids)}。"
-                         f"逐条 notes.py review，或确认都可以后加 --accept-rest 一并通过",
-                         code="unreviewed", ids=ids, seq=seq)
+        super().__init__(
+            f"第 {seq} 批还有 {len(ids)} 条初改没给复核结论：{'、'.join(ids)}。"
+            f"逐条 notes.py review，或确认都可以后加 --accept-rest 一并通过",
+            code="unreviewed",
+            ids=ids,
+            seq=seq,
+        )
         self.ids, self.seq = ids, seq
 
 
 def _open_snapshot(notes: list[dict[str, Any]]) -> dict[str, Any]:
     open_notes = [n for n in notes if n.get("status", "open") == "open"]
-    return {"openCount": len(open_notes), "openIds": [n.get("id") for n in open_notes],
-            "pages": sorted({int(n.get("page", 0) or 0) for n in open_notes})}
+    return {
+        "openCount": len(open_notes),
+        "openIds": [n.get("id") for n in open_notes],
+        "pages": sorted({int(n.get("page", 0) or 0) for n in open_notes}),
+    }
 
 
-def handoff_submit(review_dir: Path, message: str = "", *, target: str = "final", allow_subagents: bool = False,
-                   full_check: bool | None = None, by: str = "page",
-                   authorize: Callable[[], None] | None = None) -> tuple[dict[str, Any], dict[str, Any], bool]:
+def handoff_submit(
+    review_dir: Path,
+    message: str = "",
+    *,
+    target: str = "final",
+    allow_subagents: bool = False,
+    full_check: bool | None = None,
+    by: str = "page",
+    authorize: Callable[[], None] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
     """记一次提交（一批），快照当时的未处理批注。上一次提交还没被代理接收时合并进去（刷新快照、附言与选项），不重复排队。
 
     target：final 做到定稿 / review 做到「已初改·待复核」后停下；allow_subagents：是否允许代理派发子代理；
@@ -1473,13 +1703,24 @@ def handoff_submit(review_dir: Path, message: str = "", *, target: str = "final"
         notes = load(review_dir)["notes"]
         doc = handoff_load(review_dir)
         latest = doc["items"][-1] if doc["items"] else None
-        full_check_value = (latest.get("fullCheck") is True if latest and latest.get("status") == "pending" and full_check is None
-                            else full_check is True)
+        full_check_value = (
+            latest.get("fullCheck") is True
+            if latest and latest.get("status") == "pending" and full_check is None
+            else full_check is True
+        )
         # 旧版 wait 只输出 message；把勾选要求也放进去，避免仍在等待的旧进程漏掉。
         legacy_message = full_check_message(message) if full_check_value else message
-        snap = {"at": now_iso(), "by": by, "message": legacy_message, "userMessage": message,
-                "target": target, "allowSubagents": bool(allow_subagents),
-                "fullCheck": full_check_value, "alwaysSkills": always_skills(review_dir), **_open_snapshot(notes)}
+        snap = {
+            "at": now_iso(),
+            "by": by,
+            "message": legacy_message,
+            "userMessage": message,
+            "target": target,
+            "allowSubagents": bool(allow_subagents),
+            "fullCheck": full_check_value,
+            "alwaysSkills": always_skills(review_dir),
+            **_open_snapshot(notes),
+        }
         if latest and latest.get("status") == "pending":
             latest.update(snap)
             latest["updates"] = int(latest.get("updates", 0)) + 1
@@ -1489,8 +1730,17 @@ def handoff_submit(review_dir: Path, message: str = "", *, target: str = "final"
             doc["submitSeq"] = int(doc.get("submitSeq", 0)) + 1
             item, merged = {"seq": doc["seq"], "status": "pending", "order": doc["submitSeq"], **snap}, False
             doc["items"].append(item)
-        _handoff_commit(review_dir, doc, {"op": "handoff-update" if merged else "handoff", "by": by,
-                                          "seq": item["seq"], "openCount": item["openCount"], "target": target})
+        _handoff_commit(
+            review_dir,
+            doc,
+            {
+                "op": "handoff-update" if merged else "handoff",
+                "by": by,
+                "seq": item["seq"],
+                "openCount": item["openCount"],
+                "target": target,
+            },
+        )
         return doc, item, merged
 
 
@@ -1518,8 +1768,14 @@ def _stage_entry(item: dict[str, Any], stage: str) -> dict[str, Any]:
 CLAIM_STATUSES = {"draft": ("pending",), "review": ("review",), "any": ("pending", "review")}
 
 
-def handoff_claim(review_dir: Path, *, by: str = "agent", stage: str = "any", seq: int | None = None,
-                  authorize: Callable[[], None] | None = None) -> dict[str, Any] | None:
+def handoff_claim(
+    review_dir: Path,
+    *,
+    by: str = "agent",
+    stage: str = "any",
+    seq: int | None = None,
+    authorize: Callable[[], None] | None = None,
+) -> dict[str, Any] | None:
     """接收最早一个等着的批次：stage=draft 只接新提交（→ 初改中），review 只接请求复核的（→ 复核中），any 都接。
     返回的批次带 stage 字段说明是哪个阶段；没有则 None。"""
     want = CLAIM_STATUSES.get(stage)
@@ -1529,7 +1785,9 @@ def handoff_claim(review_dir: Path, *, by: str = "agent", stage: str = "any", se
         if authorize is not None:
             authorize()
         doc = handoff_load(review_dir)
-        item = next((i for i in doc["items"] if i.get("status") in want and (seq is None or int(i.get("seq", 0)) == seq)), None)
+        item = next(
+            (i for i in doc["items"] if i.get("status") in want and (seq is None or int(i.get("seq", 0)) == seq)), None
+        )
         if item is None:
             return None
         now = now_iso()
@@ -1545,7 +1803,9 @@ def handoff_claim(review_dir: Path, *, by: str = "agent", stage: str = "any", se
         return {**item, "userMessage": handoff_user_message(item), "stage": st}
 
 
-def _finish(item: dict[str, Any], notes: list[dict[str, Any]] | None, items: list[dict[str, Any]], by: str, summary: str) -> None:
+def _finish(
+    item: dict[str, Any], notes: list[dict[str, Any]] | None, items: list[dict[str, Any]], by: str, summary: str
+) -> None:
     item.update({"status": "done", "doneAt": now_iso(), "doneBy": by})
     if summary:
         item["summary"] = summary
@@ -1560,9 +1820,16 @@ def _load_notes_or_none(review_dir: Path) -> dict[str, Any] | None:
         return None
 
 
-def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "", by: str = "agent",
-                 mode: str | None = None, accept_rest: bool = False,
-                 authorize: Callable[[], None] | None = None) -> dict[str, Any]:
+def handoff_done(
+    review_dir: Path,
+    *,
+    seq: int | None = None,
+    summary: str = "",
+    by: str = "agent",
+    mode: str | None = None,
+    accept_rest: bool = False,
+    authorize: Callable[[], None] | None = None,
+) -> dict[str, Any]:
     """收尾当前阶段。不给 seq 时取最近一个处理中（初改中 / 复核中）的，没有就取最近一个等待接收的。
 
     初改阶段：用户选了「待复核」（target=review）→ 停在 drafted 等用户；选了定稿 → 直接定稿（done）；
@@ -1580,9 +1847,15 @@ def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "",
         else:
             active = [i for i in items if i.get("status") in ("claimed", "reviewing")]
             if len(active) > 1:
-                raise HandoffError("同时有 " + "、".join(f"第 {i['seq']} 批（{'复核中' if i['status'] == 'reviewing' else '处理中'}）"
-                                                      for i in active) + "：用 --seq 指定收尾哪一批",
-                                   code="ambiguous-batches", batches=[(i["seq"], i["status"]) for i in active])
+                raise HandoffError(
+                    "同时有 "
+                    + "、".join(
+                        f"第 {i['seq']} 批（{'复核中' if i['status'] == 'reviewing' else '处理中'}）" for i in active
+                    )
+                    + "：用 --seq 指定收尾哪一批",
+                    code="ambiguous-batches",
+                    batches=[(i["seq"], i["status"]) for i in active],
+                )
             item = active[0] if active else next((i for i in reversed(items) if i.get("status") == "pending"), None)
             if item is None:
                 raise NotFound("没有待处理的提交")
@@ -1596,13 +1869,19 @@ def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "",
             target = item.get("target", "final")
             if target == "review":
                 if mode == "final":
-                    raise HandoffError(f"用户要求第 {n_seq} 批做到「已初改·待复核」为止：不能直接定稿（用户可在页面上定稿）",
-                                       code="final-forbidden", seq=n_seq)
+                    raise HandoffError(
+                        f"用户要求第 {n_seq} 批做到「已初改·待复核」为止：不能直接定稿（用户可在页面上定稿）",
+                        code="final-forbidden",
+                        seq=n_seq,
+                    )
                 to = "drafted"
             elif mode == "draft":
                 if not item.get("allowSubagents"):
-                    raise HandoffError(f"第 {n_seq} 批由你直接处理到定稿（用户没有允许派发子代理）：直接 notes.py done",
-                                       code="subagents-forbidden", seq=n_seq)
+                    raise HandoffError(
+                        f"第 {n_seq} 批由你直接处理到定稿（用户没有允许派发子代理）：直接 notes.py done",
+                        code="subagents-forbidden",
+                        seq=n_seq,
+                    )
                 to = "review"
             else:
                 to = "done"
@@ -1611,7 +1890,7 @@ def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "",
             if summary:
                 e["summary"] = summary
             if to == "done":
-                for n in mine:   # 单段流程（或允许子代理但直接定稿）：初改即定稿
+                for n in mine:  # 单段流程（或允许子代理但直接定稿）：初改即定稿
                     _mark_resolved(n, by=by, resolution=n.get("resolution", ""), batch=n_seq)
                     _trail(n, by=by, stage="draft", batch=n_seq, action="finalized")
                     changed = True
@@ -1637,21 +1916,35 @@ def handoff_done(review_dir: Path, *, seq: int | None = None, summary: str = "",
                 e["summary"] = summary
             _finish(item, notes, items, by, summary)
         elif status in ("drafted", "review"):
-            raise HandoffError(f"第 {n_seq} 批在等复核：要复核先 notes.py claim --stage review（或用户在页面请求复核）；"
-                               "要直接定稿由用户在页面上点「直接定稿」", code="review-not-claimed", seq=n_seq)
+            raise HandoffError(
+                f"第 {n_seq} 批在等复核：要复核先 notes.py claim --stage review（或用户在页面请求复核）；"
+                "要直接定稿由用户在页面上点「直接定稿」",
+                code="review-not-claimed",
+                seq=n_seq,
+            )
         else:
             raise HandoffError(f"第 {n_seq} 批已经定稿了", code="already-done", seq=n_seq)
         if changed:
             _commit(review_dir, ndoc, {"op": "finalize", "by": by, "seq": n_seq, "ids": [n["id"] for n in mine]})
-        _handoff_commit(review_dir, doc, {"op": "handoff-done", "by": by, "seq": n_seq, "status": item["status"],
-                                          "resolvedCount": item.get("resolvedCount"), "leftOpen": item.get("leftOpen")})
+        _handoff_commit(
+            review_dir,
+            doc,
+            {
+                "op": "handoff-done",
+                "by": by,
+                "seq": n_seq,
+                "status": item["status"],
+                "resolvedCount": item.get("resolvedCount"),
+                "leftOpen": item.get("leftOpen"),
+            },
+        )
         return item
 
 
 def _review_counts(notes: list[dict[str, Any]], seq: int) -> dict[str, int]:
     """复核阶段的结论计数：从批注痕迹里数这批复核阶段的 approved / revised / returned / resolved。"""
     c = {"approved": 0, "revised": 0, "returned": 0, "resolved": 0}
-    for n in notes:   # 每条只算这批复核阶段的最后一个动作（改过主意的不重复计）
+    for n in notes:  # 每条只算这批复核阶段的最后一个动作（改过主意的不重复计）
         last = None
         for e in n.get("trail") or []:
             if isinstance(e, dict) and e.get("stage") == "review" and e.get("batch") == seq and e.get("action") in c:
@@ -1661,8 +1954,15 @@ def _review_counts(notes: list[dict[str, Any]], seq: int) -> dict[str, int]:
     return c
 
 
-def handoff_request_review(review_dir: Path, seq: int, message: str = "", *, allow_subagents: bool = False,
-                           by: str = "page", authorize: Callable[[], None] | None = None) -> dict[str, Any]:
+def handoff_request_review(
+    review_dir: Path,
+    seq: int,
+    message: str = "",
+    *,
+    allow_subagents: bool = False,
+    by: str = "page",
+    authorize: Callable[[], None] | None = None,
+) -> dict[str, Any]:
     """用户看过初改，请代理复核：drafted → review（等待复核接收）。"""
     with locked(review_dir):
         if authorize is not None:
@@ -1674,8 +1974,15 @@ def handoff_request_review(review_dir: Path, seq: int, message: str = "", *, all
         if item["status"] != "review":
             doc["submitSeq"] = int(doc.get("submitSeq", 0)) + 1
             item["order"] = doc["submitSeq"]
-        item.update({"status": "review", "reviewRequestedAt": now_iso(), "reviewRequestedBy": by,
-                     "reviewMessage": fix_text(message)[:MAX_MSG], "allowSubagents": bool(allow_subagents)})
+        item.update(
+            {
+                "status": "review",
+                "reviewRequestedAt": now_iso(),
+                "reviewRequestedBy": by,
+                "reviewMessage": fix_text(message)[:MAX_MSG],
+                "allowSubagents": bool(allow_subagents),
+            }
+        )
         _handoff_commit(review_dir, doc, {"op": "handoff-review", "by": by, "seq": seq})
         return item
 
@@ -1693,15 +2000,28 @@ def _finalizable(notes: list[dict[str, Any]], items: list[dict[str, Any]]) -> di
         if status in ("drafted", "review"):
             groups.setdefault(seq, []).append(note["id"])
         else:
-            skipped.append({"id": note["id"], "batch": seq,
-                            "reason": status if status in ("claimed", "reviewing") else "unavailable"})
-    return {"count": sum(len(ids) for ids in groups.values()),
-            "batches": [{"seq": seq, "ids": ids} for seq, ids in sorted(groups.items())],
-            "skipped": skipped}
+            skipped.append(
+                {
+                    "id": note["id"],
+                    "batch": seq,
+                    "reason": status if status in ("claimed", "reviewing") else "unavailable",
+                }
+            )
+    return {
+        "count": sum(len(ids) for ids in groups.values()),
+        "batches": [{"seq": seq, "ids": ids} for seq, ids in sorted(groups.items())],
+        "skipped": skipped,
+    }
 
 
-def _finalize_batch(review_dir: Path, doc: dict[str, Any], ndoc: dict[str, Any],
-                    item: dict[str, Any], mine: list[dict[str, Any]], by: str) -> None:
+def _finalize_batch(
+    review_dir: Path,
+    doc: dict[str, Any],
+    ndoc: dict[str, Any],
+    item: dict[str, Any],
+    mine: list[dict[str, Any]],
+    by: str,
+) -> None:
     """调用方已持批注锁；单批与跨批定稿共用处理痕迹和阶段记录。"""
     seq = item["seq"]
     for note in mine:
@@ -1751,8 +2071,13 @@ def handoff_finalize_all(review_dir: Path, selections: dict[int, set[str]]) -> d
             for nid in ids:
                 if nid not in finalized and nid not in skipped:
                     skipped[nid] = {"id": nid, "batch": seq, "reason": "changed"}
-        return {"finalizedCount": len(finalized), "finalizedIds": finalized, "batches": batches,
-                "skippedCount": len(skipped), "skipped": list(skipped.values())}
+        return {
+            "finalizedCount": len(finalized),
+            "finalizedIds": finalized,
+            "batches": batches,
+            "skippedCount": len(skipped),
+            "skipped": list(skipped.values()),
+        }
 
 
 # ---------- 重建后校正页码：DOCX 先按段落，其余按页面键 ----------
@@ -1766,7 +2091,7 @@ def _remap_docx(n: dict[str, Any], ctx: dict[str, Any], new_titles: dict[int, st
         if to != page:
             result["moved"].append({"id": n.get("id"), "from": page, "to": to, "key": ctx["keys"].get(to, "")})
             n["page"] = to
-        if to in new_titles:             # 页码没变，页首也可能换了段：标题与键一起跟上
+        if to in new_titles:  # 页码没变，页首也可能换了段：标题与键一起跟上
             n["title"] = new_titles[to]
         if ctx["keys"].get(to):
             n["key"] = ctx["keys"][to]
@@ -1775,7 +2100,7 @@ def _remap_docx(n: dict[str, Any], ctx: dict[str, Any], new_titles: dict[int, st
         if "endPara" in got:
             anchor["endPara"]["n"] = got["endPara"]["n"]
         if got["changed"]:
-            anchor["changed"] = True     # 段落还在但文字变了：偏移与摘要仍是旧版本的，指纹不更新
+            anchor["changed"] = True  # 段落还在但文字变了：偏移与摘要仍是旧版本的，指纹不更新
         else:
             anchor.pop("changed", None)
             if ctx.get("fingerprint"):
@@ -1786,8 +2111,16 @@ def _remap_docx(n: dict[str, Any], ctx: dict[str, Any], new_titles: dict[int, st
     touched = _dumps(n) != before
     # 需要说明的情况只在这条批注这次确实被改动时说一遍；找不到的每次都说，直到用户确认
     if got["status"] != "ok" or (touched and (got["why"] or got["changed"])):
-        result["docx"].append({"id": n.get("id"), "status": got["status"], "how": got["how"], "why": got["why"],
-                               "changed": got["changed"], "page": n.get("page")})
+        result["docx"].append(
+            {
+                "id": n.get("id"),
+                "status": got["status"],
+                "how": got["how"],
+                "why": got["why"],
+                "changed": got["changed"],
+                "page": n.get("page"),
+            }
+        )
     return touched
 
 
@@ -1801,17 +2134,17 @@ def _remap_pptx(n: dict[str, Any], ctx: dict[str, Any], new_titles: dict[int, st
         if to != page:
             result["moved"].append({"id": n.get("id"), "from": page, "to": to, "key": ctx["keys"].get(to, "")})
             n["page"] = to
-        if to in new_titles:             # 页码没变，标题也可能换了
+        if to in new_titles:  # 页码没变，标题也可能换了
             n["title"] = new_titles[to]
         if ctx["keys"].get(to):
             n["key"] = ctx["keys"][to]
         n.pop("orphan", None)
-        if got["targets"]:               # 元素身份刷新成当前版本（重命名、顺序与文本变化后仍指同一对象）
+        if got["targets"]:  # 元素身份刷新成当前版本（重命名、顺序与文本变化后仍指同一对象）
             anchor["elements"] = got["targets"]
         if got["text"] is not None:
             anchor["text"]["para"] = got["text"]["para"]
         if got["changed"]:
-            anchor["changed"] = True     # 元素还在但文字变了：偏移与指纹仍是旧版本的
+            anchor["changed"] = True  # 元素还在但文字变了：偏移与指纹仍是旧版本的
         else:
             anchor.pop("changed", None)
             if ctx.get("fingerprint"):
@@ -1822,14 +2155,27 @@ def _remap_pptx(n: dict[str, Any], ctx: dict[str, Any], new_titles: dict[int, st
     touched = _dumps(n) != before
     # 需要说明的情况只在这条批注这次确实被改动时说一遍；找不到的每次都说，直到用户确认
     if got["status"] != "ok" or (touched and got["changed"]):
-        result["pptx"].append({"id": n.get("id"), "status": got["status"], "why": got["why"],
-                               "changed": got["changed"], "page": n.get("page")})
+        result["pptx"].append(
+            {
+                "id": n.get("id"),
+                "status": got["status"],
+                "why": got["why"],
+                "changed": got["changed"],
+                "page": n.get("page"),
+            }
+        )
     return touched
 
 
-def remap_pages(review_dir: Path, old_keys: dict[int, str], new_pages: dict[str, int], new_titles: dict[int, str],
-                ambiguous: set[str] | None = None, docx: dict[str, Any] | None = None,
-                pptx: dict[str, Any] | None = None) -> dict[str, Any]:
+def remap_pages(
+    review_dir: Path,
+    old_keys: dict[int, str],
+    new_pages: dict[str, int],
+    new_titles: dict[int, str],
+    ambiguous: set[str] | None = None,
+    docx: dict[str, Any] | None = None,
+    pptx: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """生成对照页时调用：old_keys 是上一版 review.json 的「页码 → 键」，new_pages 是新版的「键 → 页码」。
 
     DOCX 审阅另传 docx = {"paragraphs": 新版段落索引, "fingerprint": 源文件指纹, "keys": {页码: 键}}：
@@ -1882,6 +2228,15 @@ def remap_pages(review_dir: Path, old_keys: dict[int, str], new_pages: dict[str,
             else:
                 result["orphans"].append({"id": n.get("id"), "page": page, "key": key})
         if changed:
-            _commit(review_dir, doc, {"op": "remap", "by": "build", "moved": len(result["moved"]),
-                                      "orphans": len(result["orphans"]), "keyed": result["keyed"]})
+            _commit(
+                review_dir,
+                doc,
+                {
+                    "op": "remap",
+                    "by": "build",
+                    "moved": len(result["moved"]),
+                    "orphans": len(result["orphans"]),
+                    "keyed": result["keyed"],
+                },
+            )
     return result

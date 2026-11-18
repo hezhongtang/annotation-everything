@@ -1,4 +1,5 @@
 """#114 公开行为：检查点、分析线、历史回看与结案。"""
+
 from __future__ import annotations
 
 import json
@@ -14,15 +15,21 @@ sys.path.insert(0, str(ROOT / "skill/annotation-everything/scripts"))
 sys.path.insert(0, str(ROOT))
 
 import host_isolation
+
 host_isolation.require_for_module(__name__)
 import analysis_store as analysis
 import notes_store as notes
 
 
 def question(key, *, parent=None):
-    return {"key": key, "text": "合成材料应采用哪个统计口径？", "short": "统计口径",
-            "options": [{"id": "year", "label": "全年"}, {"id": "quarter", "label": "季度"}],
-            "recommend": "year", "parent": parent}
+    return {
+        "key": key,
+        "text": "合成材料应采用哪个统计口径？",
+        "short": "统计口径",
+        "options": [{"id": "year", "label": "全年"}, {"id": "quarter", "label": "季度"}],
+        "recommend": "year",
+        "parent": parent,
+    }
 
 
 class AnalysisHistoryTests(unittest.TestCase):
@@ -101,12 +108,15 @@ class AnalysisHistoryTests(unittest.TestCase):
         self.assertEqual(statuses[first_note["id"]], "open")
         self.assertEqual(statuses[second_note["id"]], "held")
         fork_round = next(r["seq"] for r in forked["rounds"] if r["line"] == other and r["status"] == "submitted")
-        alternative = analysis.answer(self.review, self.aid, fork_round, "Q:n2",
-                                      {"kind": "option", "option": "quarter"})
+        alternative = analysis.answer(
+            self.review, self.aid, fork_round, "Q:n2", {"kind": "option", "option": "quarter"}
+        )
         alternative_decision = alternative["nodes"]["n2"]["decision"]
         restored = analysis.switch_line(self.review, self.aid, "main")
         self.assertEqual(restored["nodes"]["n2"]["decision"], second_decision)
-        self.assertEqual(next(n for n in notes.load(self.review)["notes"] if n["id"] == second_note["id"])["status"], "open")
+        self.assertEqual(
+            next(n for n in notes.load(self.review)["notes"] if n["id"] == second_note["id"])["status"], "open"
+        )
         latest = analysis.switch_line(self.review, self.aid, other)
         self.assertEqual(latest["nodes"]["n2"]["decision"], alternative_decision)
         self.assertEqual(next(c for c in latest["checkpoints"] if c["id"] == checkpoint["id"]), checkpoint)
@@ -210,7 +220,9 @@ class AnalysisHistoryTests(unittest.TestCase):
         number = self.open_questions()
         state = analysis.answer(self.review, self.aid, number, "Q:n1", {"kind": "accept"})
         did = state["nodes"]["n1"]["decision"]
-        number = self.write(number, assumptions=[{"key": "scope", "text": "合成期间范围相同", "decisions": [did]}])["nextRound"]
+        number = self.write(number, assumptions=[{"key": "scope", "text": "合成期间范围相同", "decisions": [did]}])[
+            "nextRound"
+        ]
         checkpoint = analysis.seal_checkpoint(self.review, self.aid)["checkpoints"][-1]
         alternative = analysis.fork_line(self.review, self.aid, checkpoint["id"])
         other = alternative["line"]

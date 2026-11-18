@@ -1,4 +1,5 @@
 """失效台账条目的批量清理：默认保守、可预览，并使用合成目录。"""
+
 from __future__ import annotations
 
 import contextlib
@@ -20,6 +21,7 @@ SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT))
 import host_isolation  # noqa: E402
+
 host_isolation.require_for_module(__name__)
 
 _IMPORT_HOME = tempfile.TemporaryDirectory(prefix="ae-prune-import-home-")
@@ -36,6 +38,7 @@ class LedgerPruneTests(unittest.TestCase):
         os.environ["AE_HOME"] = str(self.home)
         self.addCleanup(self._restore_home)
         import ledger
+
         self.ledger = ledger
         self.addCleanup(ledger.set_locale, None)
         self.reviews = {}
@@ -68,13 +71,13 @@ class LedgerPruneTests(unittest.TestCase):
 
     def write_ledger(self):
         self.home.mkdir(parents=True, exist_ok=True)
-        (self.home / "reviews.json").write_text(
-            json.dumps({"version": 1, "reviews": self.reviews}), encoding="utf-8")
+        (self.home / "reviews.json").write_text(json.dumps({"version": 1, "reviews": self.reviews}), encoding="utf-8")
 
     def run_cli(self, *args: str, timeout: float = 60):
         env = {**os.environ, "AE_HOME": str(self.home), "PYTHONDONTWRITEBYTECODE": "1"}
-        return subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), *args], env=env,
-                              capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "serve.py"), *args], env=env, capture_output=True, text=True, timeout=timeout
+        )
 
     def test_default_dry_run_previews_only_missing_temp_entries_without_writing(self):
         before = (self.home / "reviews.json").read_bytes()
@@ -140,8 +143,9 @@ class LedgerPruneTests(unittest.TestCase):
 
         result = self.ledger.prune_stale(all_stale=True)
 
-        self.assertEqual({row["reviewId"] for row in result["removed"]},
-                         {"1000000000000000", "4000000000000000", "5000000000000000"})
+        self.assertEqual(
+            {row["reviewId"] for row in result["removed"]}, {"1000000000000000", "4000000000000000", "5000000000000000"}
+        )
         self.assertEqual(set(self.ledger.entries()), {"2000000000000000", "3000000000000000"})
         self.assertTrue(mismatch.is_dir(), "清理台账不删除失效条目的目录")
         self.assertTrue((mismatch / ".annotation-archived").is_file(), "未显式选择时保留元数据")
@@ -155,8 +159,7 @@ class LedgerPruneTests(unittest.TestCase):
 
         result = self.ledger.prune_stale(all_stale=True, under=self.root)
 
-        self.assertEqual({row["reviewId"] for row in result["removed"]},
-                         {"1000000000000000", "5000000000000000"})
+        self.assertEqual({row["reviewId"] for row in result["removed"]}, {"1000000000000000", "5000000000000000"})
         self.assertIn("4000000000000000", self.ledger.entries(), "范围外的外部失效项保留")
         self.assertIn("2000000000000000", self.ledger.entries())
 
@@ -192,8 +195,13 @@ class LedgerPruneTests(unittest.TestCase):
         owned.mkdir()
         (orphan / "review.json").write_text("{}", encoding="utf-8")
         (owned / "review.json").write_text(json.dumps({"reviewId": "f" * 16}), encoding="utf-8")
-        names = (".annotation-archived", ".agent-binding.json", ".agent-deliveries.json",
-                 ".annotation-wait.123.json", ".annotation-stop.json")
+        names = (
+            ".annotation-archived",
+            ".agent-binding.json",
+            ".agent-deliveries.json",
+            ".annotation-wait.123.json",
+            ".annotation-stop.json",
+        )
         for directory in (orphan, owned):
             for name in names:
                 (directory / name).write_text("synthetic metadata", encoding="utf-8")
@@ -233,8 +241,9 @@ class LedgerPruneTests(unittest.TestCase):
         self.write_ledger()
 
         with self.assertRaises(OSError):
-            self.ledger.prune_stale(all_stale=True, review_ids=["5000000000000000", "6000000000000000"],
-                                    delete_metadata=True)
+            self.ledger.prune_stale(
+                all_stale=True, review_ids=["5000000000000000", "6000000000000000"], delete_metadata=True
+            )
 
         self.assertIn("5000000000000000", self.ledger.entries())
         self.assertIn("6000000000000000", self.ledger.entries())
@@ -263,8 +272,10 @@ class LedgerPruneTests(unittest.TestCase):
             with original_lock(fd) as lock:
                 yield lock
 
-        with unittest.mock.patch.object(self.ledger, "_metadata_lock_fd", interrupt_second_lock), \
-                self.assertRaises(KeyboardInterrupt):
+        with (
+            unittest.mock.patch.object(self.ledger, "_metadata_lock_fd", interrupt_second_lock),
+            self.assertRaises(KeyboardInterrupt),
+        ):
             self.ledger.prune_stale(all_stale=True, review_ids=ids, delete_metadata=True)
 
         self.assertTrue(set(ids) <= self.ledger.entries().keys())
@@ -286,8 +297,10 @@ class LedgerPruneTests(unittest.TestCase):
             original_write(path, doc)
             raise KeyboardInterrupt
 
-        with unittest.mock.patch.object(self.ledger, "_write", side_effect=interrupt_after_write), \
-                self.assertRaises(KeyboardInterrupt):
+        with (
+            unittest.mock.patch.object(self.ledger, "_write", side_effect=interrupt_after_write),
+            self.assertRaises(KeyboardInterrupt),
+        ):
             self.ledger.prune_stale(all_stale=True, review_ids=[rid], delete_metadata=True)
 
         self.assertNotIn(rid, self.ledger.entries())
@@ -319,11 +332,15 @@ class LedgerPruneTests(unittest.TestCase):
         self.assertEqual(error["reason"], "metadata-cleanup-failed")
         quarantine = Path(error["quarantine"])
         self.assertTrue(quarantine.is_dir())
-        self.assertEqual((quarantine / ".agent-binding.json").read_text(encoding="utf-8"), "binding",
-                         "提交后删除失败时文件仍可在隔离区恢复")
+        self.assertEqual(
+            (quarantine / ".agent-binding.json").read_text(encoding="utf-8"),
+            "binding",
+            "提交后删除失败时文件仍可在隔离区恢复",
+        )
 
     def test_rollback_restores_uncontested_files_after_a_move_fails(self):
         import serve
+
         directory = self.root / "internal-rollback"
         directory.mkdir()
         (directory / "review.json").write_text("{}", encoding="utf-8")
@@ -341,8 +358,10 @@ class LedgerPruneTests(unittest.TestCase):
                 raise OSError("injected move failure")
             return original(src, dst, **kwargs)
 
-        with unittest.mock.patch.object(self.ledger.os, "rename", side_effect=fail_third_move), \
-                contextlib.redirect_stderr(io.StringIO()) as errors:
+        with (
+            unittest.mock.patch.object(self.ledger.os, "rename", side_effect=fail_third_move),
+            contextlib.redirect_stderr(io.StringIO()) as errors,
+        ):
             code = serve.prune(all_stale=True, under=None, delete_metadata=True, dry_run=False, locale="en")
 
         self.assertEqual(code, 2)
@@ -374,8 +393,10 @@ class LedgerPruneTests(unittest.TestCase):
                 raise RuntimeError("injected precommit failure")
             return original(fd, review_id)
 
-        with unittest.mock.patch.object(self.ledger, "_metadata_plan", side_effect=create_new_file_and_fail), \
-                self.assertRaises(Exception) as caught:
+        with (
+            unittest.mock.patch.object(self.ledger, "_metadata_plan", side_effect=create_new_file_and_fail),
+            self.assertRaises(Exception) as caught,
+        ):
             self.ledger.prune_stale(all_stale=True, review_ids=[rid], delete_metadata=True)
 
         self.assertIn(".annotation-prune-", str(caught.exception))
@@ -386,11 +407,13 @@ class LedgerPruneTests(unittest.TestCase):
 
     def test_metadata_delete_rejects_invalid_manifest_and_status_structures_on_both_reads(self):
         missing_status = object()
-        cases = (("null-owner", {"reviewId": None}, missing_status, "identity-unconfirmed"),
-                 ("null-status", {}, None, "status-unconfirmed"),
-                 ("array-status", {}, [], "status-unconfirmed"),
-                 ("invalid-pid", {}, {"pid": None}, "status-unconfirmed"),
-                 ("overflow-pid", {}, {"pid": 1267650600228229401496703205376}, "status-unconfirmed"))
+        cases = (
+            ("null-owner", {"reviewId": None}, missing_status, "identity-unconfirmed"),
+            ("null-status", {}, None, "status-unconfirmed"),
+            ("array-status", {}, [], "status-unconfirmed"),
+            ("invalid-pid", {}, {"pid": None}, "status-unconfirmed"),
+            ("overflow-pid", {}, {"pid": 1267650600228229401496703205376}, "status-unconfirmed"),
+        )
         for index, (name, manifest, status, reason) in enumerate(cases, start=5):
             with self.subTest(name=name):
                 self.reviews = {}
@@ -500,8 +523,10 @@ class LedgerPruneTests(unittest.TestCase):
             order.append("cleanup-end")
             return result
 
-        with unittest.mock.patch.object(self.ledger, "_metadata_plan", side_effect=start_writer_on_final_plan), \
-                unittest.mock.patch.object(self.ledger, "_cleanup_quarantines", side_effect=record_cleanup):
+        with (
+            unittest.mock.patch.object(self.ledger, "_metadata_plan", side_effect=start_writer_on_final_plan),
+            unittest.mock.patch.object(self.ledger, "_cleanup_quarantines", side_effect=record_cleanup),
+        ):
             self.ledger.prune_stale(all_stale=True, review_ids=[rid], delete_metadata=True)
 
         for worker in workers:
@@ -545,10 +570,15 @@ class LedgerPruneTests(unittest.TestCase):
         with unittest.mock.patch.object(self.ledger, "_metadata_plan", side_effect=swap_after_open):
             result = self.ledger.prune_stale(all_stale=True, under=scope, review_ids=[rid], delete_metadata=True)
 
-        self.assertEqual((outside / ".agent-binding.json").read_text(encoding="utf-8"), "binding",
-                         "范围外 symlink 目标的元数据不得删除")
+        self.assertEqual(
+            (outside / ".agent-binding.json").read_text(encoding="utf-8"),
+            "binding",
+            "范围外 symlink 目标的元数据不得删除",
+        )
         if os.name == "nt":
-            self.assertEqual((self.root / "moved-inside" / ".agent-binding.json").read_text(encoding="utf-8"), "binding")
+            self.assertEqual(
+                (self.root / "moved-inside" / ".agent-binding.json").read_text(encoding="utf-8"), "binding"
+            )
             self.assertEqual(result["metadataDeleted"], [])
             self.assertEqual(result["removed"], [])
             self.assertEqual([r["reviewId"] for r in result["skipped"]], [rid])
@@ -577,8 +607,9 @@ class LedgerPruneTests(unittest.TestCase):
         self.assertEqual([row["reason"] for row in preview["skipped"]], ["running-review"])
         self.assertEqual(preview["removed"], [])
         self.assertFalse((self.home / self.ledger.LOCK_FILE).exists(), "预览不创建台账锁")
-        self.assertFalse(any((directory / self.ledger.METADATA_LOCK_FILE).exists() for directory in ids.values()),
-                         "预览不创建审阅锁")
+        self.assertFalse(
+            any((directory / self.ledger.METADATA_LOCK_FILE).exists() for directory in ids.values()), "预览不创建审阅锁"
+        )
         self.assertTrue(set(ids) <= self.ledger.entries().keys())
 
         result = self.ledger.prune_stale(all_stale=True, review_ids=list(ids), delete_metadata=True)
@@ -594,6 +625,7 @@ class LedgerPruneTests(unittest.TestCase):
 
     def test_cli_reports_metadata_cleanup_errors_and_returns_partial_failure(self):
         import serve
+
         directory = self.root / "cleanup-error"
         directory.mkdir()
         (directory / "review.json").write_text("{}", encoding="utf-8")
@@ -602,11 +634,17 @@ class LedgerPruneTests(unittest.TestCase):
         self.add(rid, directory)
         self.write_ledger()
         row = {"reviewId": rid, "state": "mismatch", "dir": str(directory), "port": None}
-        error = {**row, "reason": "metadata-cleanup-failed",
-                 "quarantine": str(directory / ".annotation-prune-synthetic"), "detail": "synthetic failure"}
+        error = {
+            **row,
+            "reason": "metadata-cleanup-failed",
+            "quarantine": str(directory / ".annotation-prune-synthetic"),
+            "detail": "synthetic failure",
+        }
 
-        with unittest.mock.patch.object(self.ledger, "_cleanup_quarantines", return_value=([], [error])), \
-                contextlib.redirect_stdout(io.StringIO()) as output:
+        with (
+            unittest.mock.patch.object(self.ledger, "_cleanup_quarantines", return_value=([], [error])),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
             code = serve.prune(all_stale=True, under=None, delete_metadata=True, dry_run=False, locale="en")
 
         self.assertEqual(code, 1, "台账已提交但元数据未清完是部分失败")
@@ -618,8 +656,7 @@ class LedgerPruneTests(unittest.TestCase):
         result = self.ledger.prune_stale(all_stale=True, review_ids=["4000000000000000"])
 
         self.assertEqual([row["reviewId"] for row in result["removed"]], ["4000000000000000"])
-        self.assertIn("1000000000000000", self.ledger.entries(),
-                      "确认框之外的失效项不因后续批量请求被顺带删除")
+        self.assertIn("1000000000000000", self.ledger.entries(), "确认框之外的失效项不因后续批量请求被顺带删除")
 
     def test_cli_lists_then_removes_with_localized_counts(self):
         preview = self.run_cli("prune", "--stale", "--list", "--locale", "en")
@@ -717,9 +754,12 @@ class LedgerPruneTests(unittest.TestCase):
     def test_pid_alive_rejects_overflow_pid_before_win32_openprocess(self):
         import ctypes
 
-        with unittest.mock.patch.object(self.ledger.os, "name", "nt"), \
-                unittest.mock.patch.object(ctypes, "WinDLL", side_effect=AssertionError("should not call OpenProcess"),
-                                           create=True):
+        with (
+            unittest.mock.patch.object(self.ledger.os, "name", "nt"),
+            unittest.mock.patch.object(
+                ctypes, "WinDLL", side_effect=AssertionError("should not call OpenProcess"), create=True
+            ),
+        ):
             with self.assertRaises(OverflowError):
                 self.ledger.pid_alive(1 << 32)
 
@@ -735,6 +775,7 @@ class OverviewPruneTests(unittest.TestCase):
         self.addCleanup(self._restore_home)
         import ledger
         import serve
+
         self.ledger = ledger
         self.serve = serve
         self.reviews = {}
@@ -746,14 +787,16 @@ class OverviewPruneTests(unittest.TestCase):
         self.add("2000000000000000", self.outside, 9202)
         self.write_ledger()
         self.host_id = ledger.overview_host_id()
-        self.srv = serve.ReviewServer(None, 0, home_id=self.host_id, overview_under=self.scope,
-                                      log_to_file=False)
+        self.srv = serve.ReviewServer(None, 0, home_id=self.host_id, overview_under=self.scope, log_to_file=False)
         threading.Thread(target=self.srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         self.addCleanup(self.srv.server_close)
         self.addCleanup(self.srv.shutdown)
-        self.headers = {"Host": f"127.0.0.1:{self.srv.port}",
-                        "Origin": f"http://127.0.0.1:{self.srv.port}",
-                        "Content-Type": "application/json", "X-AE-Host": self.host_id}
+        self.headers = {
+            "Host": f"127.0.0.1:{self.srv.port}",
+            "Origin": f"http://127.0.0.1:{self.srv.port}",
+            "Content-Type": "application/json",
+            "X-AE-Host": self.host_id,
+        }
 
     def _restore_home(self):
         if self.previous_home is None:
@@ -766,24 +809,25 @@ class OverviewPruneTests(unittest.TestCase):
 
     def write_ledger(self):
         self.home.mkdir(parents=True, exist_ok=True)
-        (self.home / "reviews.json").write_text(
-            json.dumps({"version": 1, "reviews": self.reviews}), encoding="utf-8")
+        (self.home / "reviews.json").write_text(json.dumps({"version": 1, "reviews": self.reviews}), encoding="utf-8")
 
     def post(self, path: str, body: dict):
         status, _headers, raw = self.serve._req(self.srv.port, "POST", path, self.headers, body)
         return status, json.loads(raw)
 
     def test_prune_honors_confirmed_ids_and_home_under_scope(self):
-        status, result = self.post("/api/overview/prune", {
-            "reviewIds": ["1000000000000000", "2000000000000000"],
-            "allStale": False, "deleteMetadata": False})
+        status, result = self.post(
+            "/api/overview/prune",
+            {"reviewIds": ["1000000000000000", "2000000000000000"], "allStale": False, "deleteMetadata": False},
+        )
 
         self.assertEqual(status, 200, result)
         self.assertEqual([row["reviewId"] for row in result["removed"]], ["1000000000000000"])
         self.assertNotIn("1000000000000000", self.ledger.entries())
         self.assertIn("2000000000000000", self.ledger.entries(), "首页 --under 外的目标不得删除")
-        status, _headers, raw = self.serve._req(self.srv.port, "GET", "/api/overview?scope=all",
-                                                {"Host": self.headers["Host"]})
+        status, _headers, raw = self.serve._req(
+            self.srv.port, "GET", "/api/overview?scope=all", {"Host": self.headers["Host"]}
+        )
         self.assertEqual(status, 200, raw)
         self.assertEqual(json.loads(raw)["reviews"], [], "清理后的总览快照立即不再返回该条目")
 
@@ -886,9 +930,13 @@ class OverviewPruneTests(unittest.TestCase):
 
             with self.subTest(fail_at=fail_at):
                 with unittest.mock.patch.object(ledger_mod, "_open_metadata_dir", side_effect=fake_open):
-                    result = ledger_mod.prune_stale(all_stale=True, under=self.scope, review_ids=[rid], delete_metadata=True)
+                    result = ledger_mod.prune_stale(
+                        all_stale=True, under=self.scope, review_ids=[rid], delete_metadata=True
+                    )
                 if fail_at < 10:
-                    self.assertEqual([(r["reviewId"], r["reason"]) for r in result["skipped"]], [(rid, "directory-changed")])
+                    self.assertEqual(
+                        [(r["reviewId"], r["reason"]) for r in result["skipped"]], [(rid, "directory-changed")]
+                    )
                     self.assertEqual(result["removed"], [])
                     self.assertTrue((orphan / ".agent-binding.json").is_file())
                 else:
@@ -898,6 +946,7 @@ class OverviewPruneTests(unittest.TestCase):
 
     def test_snapshot_computes_default_prune_eligibility_from_the_ledger_path(self):
         import review_overview
+
         if os.name == "nt":
             fake_temp = self.root / "fake-temp"
             fake_temp.mkdir()
@@ -926,10 +975,10 @@ class OverviewPruneTests(unittest.TestCase):
             data = review_overview.snapshot(None, None, "all", self.serve.review_row)
             row = next(row for row in data["reviews"] if row["reviewId"] == rid)
 
-            self.assertFalse(self.ledger.in_temp_area(Path(row["directory"])),
-                             "解析后的 /var/tmp 路径本身不属于默认临时区")
-            self.assertTrue(row["defaultPruneEligible"],
-                            "原始 /tmp 台账路径仍须与 ledger 默认候选口径一致")
+            self.assertFalse(
+                self.ledger.in_temp_area(Path(row["directory"])), "解析后的 /var/tmp 路径本身不属于默认临时区"
+            )
+            self.assertTrue(row["defaultPruneEligible"], "原始 /tmp 台账路径仍须与 ledger 默认候选口径一致")
 
     def test_reveal_reports_opener_result_without_changing_the_directory(self):
         directory = self.scope / "mismatch"
@@ -940,10 +989,13 @@ class OverviewPruneTests(unittest.TestCase):
         self.write_ledger()
 
         if os.name == "nt":
-            for outcome, side_effect, expected in (("success", None, 200),
-                                                   ("failed", OSError("cannot open"), 500)):
-                with self.subTest(outcome=outcome), \
-                        unittest.mock.patch.object(self.serve.os, "startfile", side_effect=side_effect, create=True) as opener:
+            for outcome, side_effect, expected in (("success", None, 200), ("failed", OSError("cannot open"), 500)):
+                with (
+                    self.subTest(outcome=outcome),
+                    unittest.mock.patch.object(
+                        self.serve.os, "startfile", side_effect=side_effect, create=True
+                    ) as opener,
+                ):
                     status, result = self.post("/api/overview/reveal", {"reviewId": "3000000000000000"})
                     self.assertEqual(status, expected, result)
                     if status == 200:
@@ -952,10 +1004,16 @@ class OverviewPruneTests(unittest.TestCase):
                         self.assertEqual(result["code"], "overview-reveal-failed")
                     opener.assert_called_once_with(str(directory.resolve()))
         else:
-            outcomes = (("success", [0], 200), ("failed", [2], 500),
-                        ("timeout", [subprocess.TimeoutExpired("file-manager", 5), 0], 500))
+            outcomes = (
+                ("success", [0], 200),
+                ("failed", [2], 500),
+                ("timeout", [subprocess.TimeoutExpired("file-manager", 5), 0], 500),
+            )
             for outcome, exit_statuses, expected in outcomes:
-                with self.subTest(outcome=outcome), unittest.mock.patch.object(self.serve.subprocess, "Popen") as opener:
+                with (
+                    self.subTest(outcome=outcome),
+                    unittest.mock.patch.object(self.serve.subprocess, "Popen") as opener,
+                ):
                     opener.return_value.wait.side_effect = exit_statuses
                     status, result = self.post("/api/overview/reveal", {"reviewId": "3000000000000000"})
 
@@ -983,13 +1041,13 @@ class OverviewPruneTests(unittest.TestCase):
         self.add("4000000000000000", owned)
         self.write_ledger()
 
-        status, result = self.post("/api/overview/prune", {
-            "reviewIds": ["3000000000000000", "4000000000000000"],
-            "allStale": True, "deleteMetadata": True})
+        status, result = self.post(
+            "/api/overview/prune",
+            {"reviewIds": ["3000000000000000", "4000000000000000"], "allStale": True, "deleteMetadata": True},
+        )
 
         self.assertEqual(status, 200, result)
-        self.assertEqual({row["reviewId"] for row in result["removed"]},
-                         {"3000000000000000", "4000000000000000"})
+        self.assertEqual({row["reviewId"] for row in result["removed"]}, {"3000000000000000", "4000000000000000"})
         self.assertEqual([row["reviewId"] for row in result["metadataDeleted"]], ["3000000000000000"])
         self.assertEqual(result["metadataPreserved"][0]["reason"], "owned-by-other-review")
         self.assertFalse((orphan / ".annotation-archived").exists())
@@ -1001,38 +1059,63 @@ class OverviewPruneTests(unittest.TestCase):
 class OverviewPrunePageTests(unittest.TestCase):
     def test_invalid_group_has_confirmed_prune_actions_refresh_and_backup_controls(self):
         text = (SCRIPTS / "viewer_template.html").read_text(encoding="utf-8")
-        for needle in ("data-overview-prune", "function pruneOverview", "confirm(message)",
-                       "await loadOverview()", "overviewCopyPath", "overviewReveal",
-                       "result.metadataErrors", "result.skipped"):
+        for needle in (
+            "data-overview-prune",
+            "function pruneOverview",
+            "confirm(message)",
+            "await loadOverview()",
+            "overviewCopyPath",
+            "overviewReveal",
+            "result.metadataErrors",
+            "result.skipped",
+        ):
             self.assertIn(needle, text)
-        keys = ("viewer.overview.prune.temp", "viewer.overview.prune.all", "viewer.overview.prune.metadata",
-                "viewer.overview.prune.confirm.temp", "viewer.overview.prune.confirm.all",
-                "viewer.overview.prune.confirm.metadata", "viewer.overview.prune.metadataErrors",
-                "viewer.overview.prune.metadataProtected", "viewer.overview.prune.skipped",
-                "viewer.overview.copyPath", "viewer.overview.reveal")
+        keys = (
+            "viewer.overview.prune.temp",
+            "viewer.overview.prune.all",
+            "viewer.overview.prune.metadata",
+            "viewer.overview.prune.confirm.temp",
+            "viewer.overview.prune.confirm.all",
+            "viewer.overview.prune.confirm.metadata",
+            "viewer.overview.prune.metadataErrors",
+            "viewer.overview.prune.metadataProtected",
+            "viewer.overview.prune.skipped",
+            "viewer.overview.copyPath",
+            "viewer.overview.reveal",
+        )
         for locale in ("zh-CN", "en"):
             catalog = json.loads((SCRIPTS.parent / "locales" / f"{locale}.json").read_text(encoding="utf-8"))
             for key in keys:
                 self.assertIn(key, catalog["messages"], f"{locale} 缺 {key}")
 
     def test_metadata_confirmation_and_output_disclose_every_deleted_category(self):
-        expected = {"zh-CN": ("归档", "绑定", "投递", "等待", "停止"),
-                    "en": ("archive", "binding", "delivery", "waiting", "stop-state")}
+        expected = {
+            "zh-CN": ("归档", "绑定", "投递", "等待", "停止"),
+            "en": ("archive", "binding", "delivery", "waiting", "stop-state"),
+        }
         for locale, words in expected.items():
             catalog = json.loads((SCRIPTS.parent / "locales" / f"{locale}.json").read_text(encoding="utf-8"))
-            for key in ("viewer.overview.prune.confirm.metadata", "viewer.overview.prune.metadataDone",
-                        "serve.opt.pruneDeleteMetadata", "serve.msg.pruneMetadataDone"):
+            for key in (
+                "viewer.overview.prune.confirm.metadata",
+                "viewer.overview.prune.metadataDone",
+                "serve.opt.pruneDeleteMetadata",
+                "serve.msg.pruneMetadataDone",
+            ):
                 message = catalog["messages"][key].lower()
                 for word in words:
                     self.assertIn(word.lower(), message, f"{locale} {key} 未披露 {word}")
 
     def test_prune_protocol_is_documented_in_both_format_references(self):
-        for name, heading in (("formats.md", "## 失效台账清理"),
-                              ("formats.en.md", "## Stale ledger pruning")):
+        for name, heading in (("formats.md", "## 失效台账清理"), ("formats.en.md", "## Stale ledger pruning")):
             text = (SCRIPTS.parent / "references" / name).read_text(encoding="utf-8")
             self.assertIn(heading, text)
-            for needle in ("POST /api/overview/prune", "POST /api/overview/reveal",
-                           ".annotation-metadata.lock", "metadataErrors", "no-replace"):
+            for needle in (
+                "POST /api/overview/prune",
+                "POST /api/overview/reveal",
+                ".annotation-metadata.lock",
+                "metadataErrors",
+                "no-replace",
+            ):
                 self.assertIn(needle, text, f"{name} 缺 {needle}")
 
 

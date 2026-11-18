@@ -12,6 +12,7 @@ unavailable 不产生程序失败，但覆盖如实降级、不能形成可交�
 
 只用标准库与内联合成数据：python3 -m unittest discover tests
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -28,19 +29,31 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))
-os.environ.pop("AE_LOCALE", None)   # 语言由各用例显式给定
+os.environ.pop("AE_LOCALE", None)  # 语言由各用例显式给定
 
 import report_check as rc  # noqa: E402
 
 RECORD_SCHEMA = "ae-report-record/1"
 CHECK_SCHEMA = "ae-report-check/1"
 
-CONTENT_CHECK_IDS = ("content.requirements", "content.claims", "content.fact-vs-inference",
-                     "content.units-dates", "content.numbers-charts", "content.cross-page",
-                     "content.script-consistency", "content.open-questions")
+CONTENT_CHECK_IDS = (
+    "content.requirements",
+    "content.claims",
+    "content.fact-vs-inference",
+    "content.units-dates",
+    "content.numbers-charts",
+    "content.cross-page",
+    "content.script-consistency",
+    "content.open-questions",
+)
 # #73 结构核验清单（决策 11）：叙述顺序、标题与内容、结论支撑、重复缺口、篇幅或时长。
-STRUCTURE_CHECK_IDS = ("structure.flow", "structure.headings", "structure.claim-support",
-                       "structure.dup-gaps", "structure.length")
+STRUCTURE_CHECK_IDS = (
+    "structure.flow",
+    "structure.headings",
+    "structure.claim-support",
+    "structure.dup-gaps",
+    "structure.length",
+)
 VISUAL_CHECK_IDS = ("visual.pages",)
 # 讲稿关联项：无讲稿时不计入覆盖总数，声明 pass 即虚假的已检查。
 SCRIPT_SCOPED_IDS = ("content.script-consistency", "structure.length")
@@ -84,8 +97,13 @@ SCRIPT = """# 讲稿：合成季度回顾
 
 def visual_evidence(pages: list | None = None, *, status: str = "pass") -> list[dict]:
     """visual.pages 的 checks 声明；pages 为 None 表示不带逐页证据。"""
-    item = {"id": "visual.pages", "kind": "visual", "status": status,
-            "scope": "全部 3 页（1280×720 实际渲染）", "note": "逐页渲染检查"}
+    item = {
+        "id": "visual.pages",
+        "kind": "visual",
+        "status": status,
+        "scope": "全部 3 页（1280×720 实际渲染）",
+        "note": "逐页渲染检查",
+    }
     if pages is not None:
         item["pages"] = pages
     return item
@@ -102,15 +120,16 @@ def full_pages(*, checked: bool = True, issues: list | None = None) -> list[dict
     return entries
 
 
-def all_checks(*, content: str = "pass", structure: str = "pass",
-               visual: dict | None = None) -> list[dict]:
+def all_checks(*, content: str = "pass", structure: str = "pass", visual: dict | None = None) -> list[dict]:
     """完整清单声明：内容八项 + 结构五项 + 视觉一项（默认全 pass、带证据）。"""
-    items = [{"id": cid, "kind": "content", "status": content,
-              "scope": "全部", "note": "合成契约数据"}
-             for cid in CONTENT_CHECK_IDS]
-    items += [{"id": cid, "kind": "structure", "status": structure,
-               "scope": "全部页", "note": "合成契约数据"}
-              for cid in STRUCTURE_CHECK_IDS]
+    items = [
+        {"id": cid, "kind": "content", "status": content, "scope": "全部", "note": "合成契约数据"}
+        for cid in CONTENT_CHECK_IDS
+    ]
+    items += [
+        {"id": cid, "kind": "structure", "status": structure, "scope": "全部页", "note": "合成契约数据"}
+        for cid in STRUCTURE_CHECK_IDS
+    ]
     if visual is None:
         visual = visual_evidence(full_pages())
     items.append(visual)
@@ -122,33 +141,56 @@ def make_record(script_text: str = SCRIPT, **overrides) -> dict:
     record = {
         "schema": RECORD_SCHEMA,
         "generatedAt": "2026-11-02T09:00:00+08:00",
-        "request": {"purpose": "季度经营汇报", "audience": "管理层",
-                    "coreQuestions": ["三季度收入为什么增长"], "length": "3 页",
-                    "script": "yes"},
-        "sources": [{"path": "materials/q3-notes.md", "status": "read",
-                     "coverage": "全文", "sha256": sha(MATERIAL), "note": ""}],
-        "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
-                   "version": "0.9.0", "unavailable": []},
-        "links": {"report": "report.html", "script": "script.md",
-                  "sha256": {"report": sha(REPORT), "script": sha(script_text)},
-                  "sourceNote": "materials/q3-notes.md 及同目录讲稿"},
-        "findings": [{"claim": "三季度收入同比增长 12%", "type": "calculation",
-                      "sources": ["materials/q3-notes.md"], "pages": ["sum"],
-                      "refs": [{"path": "materials/q3-notes.md", "locator": "§1 收入",
-                                "quote": "去年同期为 100 万元", "found": True}],
-                      "support": "supported",
-                      "basis": "对比材料 §1 两期收入原文，并按声明输入复算 percent-change",
-                      "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 112},
-                                      "expected": 12,
-                                      "unit": "万元", "period": "2025Q3 对 2024Q3",
-                                      "definition": "对上年同期收入的增长百分比",
-                                      "inputLocations": {
-                                          "a": "materials/q3-notes.md §1：去年同期 100 万元",
-                                          "b": "materials/q3-notes.md §1：三季度收入 112 万元"}},
-                      "note": "收入 112 对上年 100，四舍五入到整数"}],
+        "request": {
+            "purpose": "季度经营汇报",
+            "audience": "管理层",
+            "coreQuestions": ["三季度收入为什么增长"],
+            "length": "3 页",
+            "script": "yes",
+        },
+        "sources": [
+            {"path": "materials/q3-notes.md", "status": "read", "coverage": "全文", "sha256": sha(MATERIAL), "note": ""}
+        ],
+        "method": {"kind": "builtin", "name": "annotation-everything 内置范式", "version": "0.9.0", "unavailable": []},
+        "links": {
+            "report": "report.html",
+            "script": "script.md",
+            "sha256": {"report": sha(REPORT), "script": sha(script_text)},
+            "sourceNote": "materials/q3-notes.md 及同目录讲稿",
+        },
+        "findings": [
+            {
+                "claim": "三季度收入同比增长 12%",
+                "type": "calculation",
+                "sources": ["materials/q3-notes.md"],
+                "pages": ["sum"],
+                "refs": [
+                    {
+                        "path": "materials/q3-notes.md",
+                        "locator": "§1 收入",
+                        "quote": "去年同期为 100 万元",
+                        "found": True,
+                    }
+                ],
+                "support": "supported",
+                "basis": "对比材料 §1 两期收入原文，并按声明输入复算 percent-change",
+                "calculation": {
+                    "op": "percent-change",
+                    "inputs": {"a": 100, "b": 112},
+                    "expected": 12,
+                    "unit": "万元",
+                    "period": "2025Q3 对 2024Q3",
+                    "definition": "对上年同期收入的增长百分比",
+                    "inputLocations": {
+                        "a": "materials/q3-notes.md §1：去年同期 100 万元",
+                        "b": "materials/q3-notes.md §1：三季度收入 112 万元",
+                    },
+                },
+                "note": "收入 112 对上年 100，四舍五入到整数",
+            }
+        ],
         "gaps": ["十月的周报缺失"],
-        "checks": all_checks(content="not_run", structure="not_run",
-                             visual=visual_evidence(status="not_run")),
+        "checks": all_checks(content="not_run", structure="not_run", visual=visual_evidence(status="not_run")),
         "openItems": [{"item": "十月周报待补", "blocking": False}],
         "verdict": {"draftComplete": True, "deliverable": None},
     }
@@ -164,8 +206,7 @@ def compliant_record(**overrides) -> dict:
     return record
 
 
-def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
-               record: dict | None = None) -> dict:
+def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT, record: dict | None = None) -> dict:
     d.mkdir(parents=True, exist_ok=True)
     if not (d / "materials" / "q3-notes.md").exists():
         (d / "materials").mkdir(exist_ok=True)
@@ -181,8 +222,9 @@ def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
     return paths
 
 
-def run_check(paths: dict, *, locale: str | None = None,
-              argv_extra: list[str] | None = None) -> tuple[int, dict | None, str, str]:
+def run_check(
+    paths: dict, *, locale: str | None = None, argv_extra: list[str] | None = None
+) -> tuple[int, dict | None, str, str]:
     argv = [str(paths["report"])]
     if paths.get("script"):
         argv += ["--script", str(paths["script"])]
@@ -223,35 +265,34 @@ class StructureChecklistTests(unittest.TestCase):
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0)
         self.assertEqual(payload["coverage"]["structure"], "covered")
-        self.assertEqual(payload["coverageCounts"]["structure"],
-                         {"done": len(STRUCTURE_CHECK_IDS),
-                          "total": len(STRUCTURE_CHECK_IDS), "failed": 0})
+        self.assertEqual(
+            payload["coverageCounts"]["structure"],
+            {"done": len(STRUCTURE_CHECK_IDS), "total": len(STRUCTURE_CHECK_IDS), "failed": 0},
+        )
         self.assertTrue(payload["verdict"]["deliverable"])
 
     def test_undeclared_structure_items_block_deliverable_without_program_failure(self):
         """#72 形态记录（只声明内容与视觉）：不引入程序失败，结构覆盖如实显示未执行。"""
         d = tmpdir()
-        legacy_checks = [{"id": cid, "kind": "content", "status": "not_run",
-                          "scope": "", "note": ""} for cid in CONTENT_CHECK_IDS]
+        legacy_checks = [
+            {"id": cid, "kind": "content", "status": "not_run", "scope": "", "note": ""} for cid in CONTENT_CHECK_IDS
+        ]
         legacy_checks.append(visual_evidence(status="not_run"))
-        paths = write_case(d, record=make_record(checks=legacy_checks,
-                                                 request={"purpose": "季度经营汇报"}))
+        paths = write_case(d, record=make_record(checks=legacy_checks, request={"purpose": "季度经营汇报"}))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0, "缺结构清单不引入新的程序检查失败")
         self.assertEqual(check_by_id(payload, "record.checks")["status"], "pass")
         self.assertEqual(check_by_id(payload, "record.visual")["status"], "not_applicable")
         self.assertEqual(payload["coverage"]["structure"], "not_run")
         self.assertFalse(payload["verdict"]["deliverable"])
-        self.assertTrue(any("结构" in r for r in payload["verdict"]["reasons"]),
-                        payload["verdict"]["reasons"])
+        self.assertTrue(any("结构" in r for r in payload["verdict"]["reasons"]), payload["verdict"]["reasons"])
 
     def test_failed_structure_item_blocks_deliverable(self):
         d = tmpdir()
         record = compliant_record()
         for item in record["checks"]:
             if item["id"] == "structure.headings":
-                item.update({"status": "fail", "scope": "第 2 页",
-                             "note": "标题写「渠道」，正文讲的是成本"})
+                item.update({"status": "fail", "scope": "第 2 页", "note": "标题写「渠道」，正文讲的是成本"})
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0, "清单项如实失败是覆盖问题，不是程序检查失败")
@@ -284,7 +325,7 @@ class ScriptScopeTests(unittest.TestCase):
         paths = write_case(d, script=None, record=self.no_script_record())
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0)
-        n_content = len(CONTENT_CHECK_IDS) - 1     # script-consistency 不适用
+        n_content = len(CONTENT_CHECK_IDS) - 1  # script-consistency 不适用
         n_structure = len(STRUCTURE_CHECK_IDS) - 1  # structure.length 不适用
         self.assertEqual(payload["coverageCounts"]["content"]["total"], n_content)
         self.assertEqual(payload["coverageCounts"]["structure"]["total"], n_structure)
@@ -293,18 +334,15 @@ class ScriptScopeTests(unittest.TestCase):
         d = tmpdir()
         paths = write_case(d, record=make_record())
         _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
-        self.assertEqual(payload["coverageCounts"]["content"]["total"],
-                         len(CONTENT_CHECK_IDS))
-        self.assertEqual(payload["coverageCounts"]["structure"]["total"],
-                         len(STRUCTURE_CHECK_IDS))
+        self.assertEqual(payload["coverageCounts"]["content"]["total"], len(CONTENT_CHECK_IDS))
+        self.assertEqual(payload["coverageCounts"]["structure"]["total"], len(STRUCTURE_CHECK_IDS))
 
     def test_script_scoped_pass_without_script_is_false_checked(self):
         """无讲稿却声明 script-consistency / structure.length 已通过：程序检查失败。"""
         for scoped in SCRIPT_SCOPED_IDS:
             with self.subTest(scoped=scoped):
                 d = tmpdir()
-                record = compliant_record(request={"purpose": "季度经营汇报",
-                                                   "script": "no"})
+                record = compliant_record(request={"purpose": "季度经营汇报", "script": "no"})
                 for item in record["checks"]:
                     if item["id"] == scoped:
                         item["status"] = "pass"
@@ -332,43 +370,41 @@ class LengthConstraintTests(unittest.TestCase):
         four_pages = REPORT.replace(
             "</body></html>",
             '<section class="page" data-page="4" data-key="extra" id="page-extra">'
-            "<h2>附录</h2><p>补充页。</p></section></body></html>")
+            "<h2>附录</h2><p>补充页。</p></section></body></html>",
+        )
         four_script = SCRIPT + "\n### 第 4 页｜附录\n**讲法**：\n补充页讲一句。\n"
-        paths = write_case(d, report=four_pages, script=four_script,
-                           record=make_record(script_text=four_script,
-                                              request={"purpose": "季度经营汇报",
-                                                       "length": "3 页"}))
+        paths = write_case(
+            d,
+            report=four_pages,
+            script=four_script,
+            record=make_record(script_text=four_script, request={"purpose": "季度经营汇报", "length": "3 页"}),
+        )
         code, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
         item = check_by_id(payload, "record.length")
         self.assertEqual(item["status"], "fail")
         self.assertEqual(item["code"], "record.length-mismatch")
         self.assertFalse(payload["verdict"]["deliverable"])
-        self.assertTrue(payload["verdict"]["draftComplete"],
-                        "篇幅不符不阻塞初稿进入审阅")
+        self.assertTrue(payload["verdict"]["draftComplete"], "篇幅不符不阻塞初稿进入审阅")
         self.assertIn("篇幅", text)
 
     def test_range_constraint_passes_within_bounds(self):
         d = tmpdir()
-        paths = write_case(d, record=make_record(request={"purpose": "季度经营汇报",
-                                                          "length": "2–5 页"}))
+        paths = write_case(d, record=make_record(request={"purpose": "季度经营汇报", "length": "2–5 页"}))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0)
         self.assertEqual(check_by_id(payload, "record.length")["status"], "pass")
 
     def test_range_constraint_fails_outside_bounds(self):
         d = tmpdir()
-        paths = write_case(d, record=make_record(request={"purpose": "季度经营汇报",
-                                                          "length": "5-8 页"}))
+        paths = write_case(d, record=make_record(request={"purpose": "季度经营汇报", "length": "5-8 页"}))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
-        self.assertEqual(check_by_id(payload, "record.length")["code"],
-                         "record.length-mismatch")
+        self.assertEqual(check_by_id(payload, "record.length")["code"], "record.length-mismatch")
 
     def test_english_pages_constraint(self):
         d = tmpdir()
-        paths = write_case(d, record=make_record(request={"purpose": "Quarterly review",
-                                                          "length": "3 pages"}))
+        paths = write_case(d, record=make_record(request={"purpose": "Quarterly review", "length": "3 pages"}))
         code, payload, _, _ = run_check(paths, locale="en", argv_extra=["--json"])
         self.assertEqual(code, 0)
         self.assertEqual(check_by_id(payload, "record.length")["status"], "pass")
@@ -376,8 +412,7 @@ class LengthConstraintTests(unittest.TestCase):
     def test_duration_only_not_compared(self):
         """时长约束不折算页数：不可解析为页数时判不适用，不虚假比较。"""
         d = tmpdir()
-        paths = write_case(d, record=make_record(request={"purpose": "季度经营汇报",
-                                                          "length": "10 分钟讲稿"}))
+        paths = write_case(d, record=make_record(request={"purpose": "季度经营汇报", "length": "10 分钟讲稿"}))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0)
         self.assertEqual(check_by_id(payload, "record.length")["status"], "not_applicable")
@@ -422,8 +457,7 @@ class VisualEvidenceTests(unittest.TestCase):
         record = compliant_record()
         for item in record["checks"]:
             if item["id"] == "visual.pages":
-                item["pages"] = [{"page": 1, "checked": True},
-                                 {"page": 2, "checked": True}]
+                item["pages"] = [{"page": 1, "checked": True}, {"page": 2, "checked": True}]
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
@@ -441,8 +475,7 @@ class VisualEvidenceTests(unittest.TestCase):
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
-        self.assertEqual(check_by_id(payload, "record.visual")["code"],
-                         "record.visual-coverage")
+        self.assertEqual(check_by_id(payload, "record.visual")["code"], "record.visual-coverage")
 
     def test_unchecked_page_blocks_pass(self):
         """证据里有未检查的页却声明逐页通过：程序检查失败。"""
@@ -450,15 +483,15 @@ class VisualEvidenceTests(unittest.TestCase):
         record = compliant_record()
         for item in record["checks"]:
             if item["id"] == "visual.pages":
-                item["pages"] = [{"page": 1, "checked": True},
-                                 {"page": 2, "checked": True},
-                                 {"page": 3, "checked": False,
-                                  "note": "渲染中断，未检查"}]
+                item["pages"] = [
+                    {"page": 1, "checked": True},
+                    {"page": 2, "checked": True},
+                    {"page": 3, "checked": False, "note": "渲染中断，未检查"},
+                ]
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
-        self.assertEqual(check_by_id(payload, "record.visual")["code"],
-                         "record.visual-unchecked")
+        self.assertEqual(check_by_id(payload, "record.visual")["code"], "record.visual-unchecked")
         self.assertFalse(payload["verdict"]["deliverable"])
 
     def test_unresolved_issue_with_pass_fails(self):
@@ -467,10 +500,11 @@ class VisualEvidenceTests(unittest.TestCase):
         record = compliant_record()
         for item in record["checks"]:
             if item["id"] == "visual.pages":
-                item["pages"] = [{"page": 1, "checked": True, "issues": []},
-                                 {"page": 2, "checked": True,
-                                  "issues": ["表格溢出画布右缘约 40px"]},
-                                 {"page": 3, "checked": True, "issues": []}]
+                item["pages"] = [
+                    {"page": 1, "checked": True, "issues": []},
+                    {"page": 2, "checked": True, "issues": ["表格溢出画布右缘约 40px"]},
+                    {"page": 3, "checked": True, "issues": []},
+                ]
         paths = write_case(d, record=record)
         code, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
@@ -486,12 +520,16 @@ class VisualEvidenceTests(unittest.TestCase):
         record["verdict"] = {"draftComplete": True, "deliverable": False}
         for item in record["checks"]:
             if item["id"] == "visual.pages":
-                item.update(visual_evidence(
-                    [{"page": 1, "checked": True, "issues": []},
-                     {"page": 2, "checked": True,
-                      "issues": ["图表文字小于 12px，不可读"]},
-                     {"page": 3, "checked": True, "issues": []}],
-                    status="fail"))
+                item.update(
+                    visual_evidence(
+                        [
+                            {"page": 1, "checked": True, "issues": []},
+                            {"page": 2, "checked": True, "issues": ["图表文字小于 12px，不可读"]},
+                            {"page": 3, "checked": True, "issues": []},
+                        ],
+                        status="fail",
+                    )
+                )
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0, "如实记录的视觉失败不产生程序检查失败")
@@ -507,20 +545,25 @@ class VisualEvidenceTests(unittest.TestCase):
         record["verdict"] = {"draftComplete": True, "deliverable": None}
         for item in record["checks"]:
             if item["id"] == "visual.pages":
-                item.update(visual_evidence(
-                    [{"page": 1, "checked": True, "issues": []},
-                     {"page": 2, "checked": False, "note": "渲染中断"},
-                     {"page": 3, "checked": False, "note": "渲染中断"}],
-                    status="not_run"))
+                item.update(
+                    visual_evidence(
+                        [
+                            {"page": 1, "checked": True, "issues": []},
+                            {"page": 2, "checked": False, "note": "渲染中断"},
+                            {"page": 3, "checked": False, "note": "渲染中断"},
+                        ],
+                        status="not_run",
+                    )
+                )
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0)
-        self.assertEqual(check_by_id(payload, "record.visual")["status"], "pass",
-                         "声明 not_run 且如实记录中断，与证据一致")
+        self.assertEqual(
+            check_by_id(payload, "record.visual")["status"], "pass", "声明 not_run 且如实记录中断，与证据一致"
+        )
         self.assertEqual(payload["coverage"]["visual"], "not_run")
         self.assertFalse(payload["verdict"]["deliverable"])
-        self.assertTrue(any("视觉" in r for r in payload["verdict"]["reasons"]),
-                        payload["verdict"]["reasons"])
+        self.assertTrue(any("视觉" in r for r in payload["verdict"]["reasons"]), payload["verdict"]["reasons"])
 
     def test_unavailable_viewing_capability_recorded(self):
         """缺少查看能力：unavailable 如实登记，不能以程序检查通过代替视觉通过。"""
@@ -529,9 +572,9 @@ class VisualEvidenceTests(unittest.TestCase):
         record["verdict"] = {"draftComplete": True, "deliverable": None}
         for item in record["checks"]:
             if item["id"] == "visual.pages":
-                item.update({"status": "unavailable",
-                             "scope": "宿主无页面渲染能力",
-                             "note": "无法渲染页面，未执行视觉检查"})
+                item.update(
+                    {"status": "unavailable", "scope": "宿主无页面渲染能力", "note": "无法渲染页面，未执行视觉检查"}
+                )
                 item.pop("pages", None)
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
@@ -548,8 +591,7 @@ class VisualEvidenceTests(unittest.TestCase):
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
-        self.assertEqual(check_by_id(payload, "record.visual")["code"],
-                         "record.visual-bad")
+        self.assertEqual(check_by_id(payload, "record.visual")["code"], "record.visual-bad")
 
     def test_malformed_entry_fails(self):
         d = tmpdir()
@@ -560,21 +602,19 @@ class VisualEvidenceTests(unittest.TestCase):
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
-        self.assertEqual(check_by_id(payload, "record.visual")["code"],
-                         "record.visual-bad")
+        self.assertEqual(check_by_id(payload, "record.visual")["code"], "record.visual-bad")
 
     def test_no_visual_declaration_not_applicable(self):
         """没有视觉声明（旧形态）：record.visual 不适用，覆盖走 not_run。"""
         d = tmpdir()
-        record = make_record(checks=[{"id": "content.requirements", "kind": "content",
-                                      "status": "not_run", "scope": "", "note": ""}])
+        record = make_record(
+            checks=[{"id": "content.requirements", "kind": "content", "status": "not_run", "scope": "", "note": ""}]
+        )
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1, "缺视觉类声明按 #72 契约仍是程序检查失败")
-        self.assertEqual(check_by_id(payload, "record.checks")["code"],
-                         "record.checks-empty")
-        self.assertEqual(check_by_id(payload, "record.visual")["status"],
-                         "not_applicable")
+        self.assertEqual(check_by_id(payload, "record.checks")["code"], "record.checks-empty")
+        self.assertEqual(check_by_id(payload, "record.visual")["status"], "not_applicable")
 
 
 class DeliverableMergeTests(unittest.TestCase):
@@ -600,8 +640,7 @@ class DeliverableMergeTests(unittest.TestCase):
         record = compliant_record()
         for item in record["checks"]:
             if item["id"] == "visual.pages":
-                item["pages"] = [{"page": 1, "checked": True},
-                                 {"page": 2, "checked": True}]
+                item["pages"] = [{"page": 1, "checked": True}, {"page": 2, "checked": True}]
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
@@ -610,8 +649,7 @@ class DeliverableMergeTests(unittest.TestCase):
     def test_unexecuted_required_check_not_deliverable(self):
         """反例：未执行必要检查（结构清单留 not_run），不能通过整体交付验收。"""
         d = tmpdir()
-        paths = write_case(d, record=compliant_record(
-            checks=all_checks(structure="not_run")))
+        paths = write_case(d, record=compliant_record(checks=all_checks(structure="not_run")))
         _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertFalse(payload["verdict"]["deliverable"])
 
@@ -625,8 +663,7 @@ class DeliverableMergeTests(unittest.TestCase):
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0, "缺声明是待核实，不是程序失败")
         self.assertEqual(payload["coverage"]["content"], "not_run")
-        self.assertEqual(payload["coverage"]["structure"], "not_run",
-                         "结论支撑证据不足时结构核验同样不能显示为已覆盖")
+        self.assertEqual(payload["coverage"]["structure"], "not_run", "结论支撑证据不足时结构核验同样不能显示为已覆盖")
         self.assertTrue(payload["coverageCapped"]["structure"])
         self.assertFalse(payload["verdict"]["deliverable"])
         self.assertTrue(payload["verdict"]["draftComplete"])
@@ -660,8 +697,7 @@ class DeliverableMergeTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse(payload["record"]["fresh"])
         for kind in ("content", "structure", "visual"):
-            self.assertEqual(payload["coverage"][kind], "unverified",
-                             f"过期记录的 {kind} 覆盖不能沿用")
+            self.assertEqual(payload["coverage"][kind], "unverified", f"过期记录的 {kind} 覆盖不能沿用")
         self.assertFalse(payload["verdict"]["deliverable"])
 
     def test_verdict_declared_false_not_overridden(self):
@@ -713,9 +749,17 @@ class DisclosureTests(unittest.TestCase):
         _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         ids = [c["id"] for c in payload["checks"]]
         self.assertEqual(len(ids), len(rc.Checks.ORDER))
-        self.assertEqual(ids[-6:], ["record.length", "record.method", "record.revision",
-                                    "record.alignment", "report.navigation",
-                                    "record.deliverables"])
+        self.assertEqual(
+            ids[-6:],
+            [
+                "record.length",
+                "record.method",
+                "record.revision",
+                "record.alignment",
+                "report.navigation",
+                "record.deliverables",
+            ],
+        )
 
 
 if __name__ == "__main__":

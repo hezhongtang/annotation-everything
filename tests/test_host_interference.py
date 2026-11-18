@@ -8,6 +8,7 @@ ae.py doctor 的真实全机进程枚举，且不在安装维护侧的台账里�
 读全机视图的一方不会再看到另一方临界区里的真实服务。本模块自身启动真实
 serve.py 并跑真实 doctor，因此在敏感清单里、模块导入时取锁。
 """
+
 from __future__ import annotations
 
 import json
@@ -38,11 +39,10 @@ REVIEW_ID = "0000000000000052"
 def make_review_dir(root: Path) -> Path:
     directory = root / "review"
     directory.mkdir(parents=True)
-    (directory / "index.html").write_text("<!doctype html><title>干扰复现合成页</title>",
-                                          encoding="utf-8")
+    (directory / "index.html").write_text("<!doctype html><title>干扰复现合成页</title>", encoding="utf-8")
     (directory / "review.json").write_text(
-        json.dumps({"reviewId": REVIEW_ID, "name": "干扰复现合成审阅"}, ensure_ascii=False),
-        encoding="utf-8")
+        json.dumps({"reviewId": REVIEW_ID, "name": "干扰复现合成审阅"}, ensure_ascii=False), encoding="utf-8"
+    )
     return directory
 
 
@@ -68,26 +68,32 @@ class InterferenceRegressionTests(unittest.TestCase):
         self.skills = self.user_home / ".claude" / "skills"
 
     def env_for(self, ae_home: Path) -> dict:
-        return {**os.environ,
-                "HOME": str(self.user_home),
-                "USERPROFILE": str(self.user_home),
-                "CLAUDE_SKILLS_DIR": str(self.skills),
-                "CODEX_HOME": str(self.user_home / ".codex"),
-                "AE_HOME": str(ae_home),
-                "PYTHONDONTWRITEBYTECODE": "1"}
+        return {
+            **os.environ,
+            "HOME": str(self.user_home),
+            "USERPROFILE": str(self.user_home),
+            "CLAUDE_SKILLS_DIR": str(self.skills),
+            "CODEX_HOME": str(self.user_home / ".codex"),
+            "AE_HOME": str(ae_home),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
 
     def doctor(self) -> dict:
-        done = subprocess.run([sys.executable, str(AE), "doctor", "--json"],
-                              env=self.env_for(self.doctor_home),
-                              capture_output=True, text=True, timeout=90)
+        done = subprocess.run(
+            [sys.executable, str(AE), "doctor", "--json"],
+            env=self.env_for(self.doctor_home),
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
         return json.loads(done.stdout)
 
     def start_server(self, review: Path):
         # 服务子进程继承启动窗口内的合成配置；不依赖其他测试模块先改过全局环境。
         with mock.patch.dict(os.environ, self.env_for(self.server_home)):
             server = e2e_servers.start_server(
-                review, e2e_servers.free_port(),
-                scripts=ROOT / "skill" / "annotation-everything" / "scripts")
+                review, e2e_servers.free_port(), scripts=ROOT / "skill" / "annotation-everything" / "scripts"
+            )
         self.addCleanup(e2e_servers.stop, server)
         return server
 
@@ -101,8 +107,7 @@ class InterferenceRegressionTests(unittest.TestCase):
         server = self.start_server(review)
         # serve 在自己的台账侧登记；让它真正出现在 /api/health 里再盘点
         item = self.orphan_item(self.doctor())
-        self.assertEqual(item["level"], "失败",
-                         "并行真实服务应当被 doctor 的全机枚举捕获（干扰复现）")
+        self.assertEqual(item["level"], "失败", "并行真实服务应当被 doctor 的全机枚举捕获（干扰复现）")
         self.assertIn(str(server.pid), item["message"], "报告的残留应是本测试启动的 serve.py")
 
     def test_serialised_by_protocol_doctor_no_longer_sees_the_server(self):
@@ -111,8 +116,7 @@ class InterferenceRegressionTests(unittest.TestCase):
         server = self.start_server(review)
         e2e_servers.stop(server)
         item = self.orphan_item(self.doctor())
-        self.assertNotEqual(item["level"], "失败",
-                            "服务退出后 doctor 仍报告残留：干扰没有被隔离修复")
+        self.assertNotEqual(item["level"], "失败", "服务退出后 doctor 仍报告残留：干扰没有被隔离修复")
         self.assertNotIn(str(server.pid), item.get("message", ""))
 
     def test_server_uses_its_own_ledger_without_changing_parent_ledger(self):
@@ -123,12 +127,13 @@ class InterferenceRegressionTests(unittest.TestCase):
         review = make_review_dir(self.root)
         with mock.patch.dict(os.environ, self.env_for(outer_home)):
             self.start_server(review)
-            self.assertEqual(os.environ["AE_HOME"], str(outer_home),
-                             "服务启动后必须恢复父进程的环境")
-        self.assertEqual(outer_ledger.read_bytes(), original,
-                         "合成服务不能修改父进程台账")
-        self.assertEqual(sorted(path.name for path in outer_home.iterdir()), ["reviews.json"],
-                         "父进程台账目录不能留下锁或其他新增文件")
+            self.assertEqual(os.environ["AE_HOME"], str(outer_home), "服务启动后必须恢复父进程的环境")
+        self.assertEqual(outer_ledger.read_bytes(), original, "合成服务不能修改父进程台账")
+        self.assertEqual(
+            sorted(path.name for path in outer_home.iterdir()),
+            ["reviews.json"],
+            "父进程台账目录不能留下锁或其他新增文件",
+        )
         server_ledger = json.loads((self.server_home / "reviews.json").read_text(encoding="utf-8"))
         self.assertEqual(server_ledger["reviews"][REVIEW_ID]["dir"], str(review.resolve()))
 

@@ -12,6 +12,7 @@
   超时通过 register_timeout_errors 注册的异常类型识别（playwright 的
   TimeoutError 由 e2e_browser.py 在导入时注册，stub 测试注册自己的类型）。
 """
+
 from __future__ import annotations
 
 import time
@@ -43,9 +44,11 @@ def _is_timeout(exc: BaseException) -> bool:
 
 def _report_timeout(condition, seconds, last_state) -> None:
     scenario = current_scenario() or "（未登记场景）"
-    print("[等待超时] 场景 %s：%s（上限 %g 秒）；最后状态：%s" % (
-        scenario, condition, seconds, last_state if last_state is not None else "（未提供）"),
-        flush=True)
+    print(
+        "[等待超时] 场景 %s：%s（上限 %g 秒）；最后状态：%s"
+        % (scenario, condition, seconds, last_state if last_state is not None else "（未提供）"),
+        flush=True,
+    )
 
 
 def _safe_describe(describe):
@@ -53,12 +56,11 @@ def _safe_describe(describe):
         return None
     try:
         return describe()
-    except Exception as exc:   # 页面已关闭等：快照失败不能掩盖等待超时本身
+    except Exception as exc:  # 页面已关闭等：快照失败不能掩盖等待超时本身
         return "（状态快照失败：%s: %s）" % (type(exc).__name__, exc)
 
 
-def bounded_poll(probe, seconds, *, step=0.05, sleeper=time.sleep, clock=time.monotonic,
-                 condition=None, describe=None):
+def bounded_poll(probe, seconds, *, step=0.05, sleeper=time.sleep, clock=time.monotonic, condition=None, describe=None):
     """有界轮询 Python 侧条件（磁盘文件、组合判断等）。
 
     probe() 为真时立即返回它的真值（可以是列表 / 字典等，便于调用方直接取用，
@@ -96,8 +98,7 @@ def wait_dom(page, expression: str, seconds, *, arg=None, condition=None, descri
         return False
 
 
-def wait_response(page, predicate, seconds, *, condition=None, describe=None,
-                  action=None) -> bool:
+def wait_response(page, predicate, seconds, *, condition=None, describe=None, action=None) -> bool:
     """等下一个匹配的响应头到达：page.expect_response（事件驱动，不靠固定间隔）。
 
     用于把等待绑定到本次动作的请求 / 响应；页面正文处理完成须另等 DOM 或修订状态。
@@ -137,6 +138,8 @@ def wait_rev(page, before, seconds, *, describe=None) -> bool:
     return wait_dom(
         page,
         "b => typeof rev !== 'undefined' && rev !== null && rev !== b",
-        seconds, arg=before,
+        seconds,
+        arg=before,
         condition="页面应用新的服务端修订（rev 离开基线 %r）" % (before,),
-        describe=describe)
+        describe=describe,
+    )

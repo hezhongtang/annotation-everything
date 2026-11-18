@@ -3,6 +3,7 @@
 fixture 全部现场合成，不入库真实材料。只用标准库：
 python3 -m unittest tests.test_pptx_annotations
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -41,8 +42,17 @@ def review_dir() -> Path:
     return d
 
 
-def element(key: str = "e2", *, eid: str = "2", name: str = "合成标题", kind: str = "shape",
-            z: int = 0, digest: str = D64, ro: list[str] | None = None, **more) -> dict:
+def element(
+    key: str = "e2",
+    *,
+    eid: str = "2",
+    name: str = "合成标题",
+    kind: str = "shape",
+    z: int = 0,
+    digest: str = D64,
+    ro: list[str] | None = None,
+    **more,
+) -> dict:
     out = {"key": key, "id": eid, "name": name, "kind": kind, "z": z, "digest": digest, **more}
     if ro is not None:
         out["ro"] = ro
@@ -58,31 +68,81 @@ class PptxAnchorFieldTests(unittest.TestCase):
 
     def test_elements_anchor_keeps_order_and_drops_unknown_keys(self):
         d = review_dir()
-        a = anchor("elements", "click", fp=FP, elements=[
-            element("e11", eid="11", name="合成图片", kind="picture", z=1, ro=["text", "geometry", "style"]),
-            element("e12", eid="12", name="合成组合", kind="group", z=2, ro=["geometry", "style"], junk=1),
-        ], junk="x")
+        a = anchor(
+            "elements",
+            "click",
+            fp=FP,
+            elements=[
+                element("e11", eid="11", name="合成图片", kind="picture", z=1, ro=["text", "geometry", "style"]),
+                element("e12", eid="12", name="合成组合", kind="group", z=2, ro=["geometry", "style"], junk=1),
+            ],
+            junk="x",
+        )
         _doc, note = store.add(d, {"page": 1, "text": "成组调整", "pptx": a})
-        self.assertEqual(note["pptx"], {
-            "v": 1, "slide": "s260", "kind": "elements", "via": "click", "fp": FP,
-            "elements": [
-                {"key": "e11", "id": "11", "name": "合成图片", "kind": "picture", "z": 1,
-                 "digest": D64, "ro": ["text", "geometry", "style"]},
-                {"key": "e12", "id": "12", "name": "合成组合", "kind": "group", "z": 2,
-                 "digest": D64, "ro": ["geometry", "style"]},
-            ]})
-        self.assertEqual([e["key"] for e in note["pptx"]["elements"]], ["e11", "e12"],
-                         "多元素批注保存每个目标的稳定身份，顺序就是选择顺序")
+        self.assertEqual(
+            note["pptx"],
+            {
+                "v": 1,
+                "slide": "s260",
+                "kind": "elements",
+                "via": "click",
+                "fp": FP,
+                "elements": [
+                    {
+                        "key": "e11",
+                        "id": "11",
+                        "name": "合成图片",
+                        "kind": "picture",
+                        "z": 1,
+                        "digest": D64,
+                        "ro": ["text", "geometry", "style"],
+                    },
+                    {
+                        "key": "e12",
+                        "id": "12",
+                        "name": "合成组合",
+                        "kind": "group",
+                        "z": 2,
+                        "digest": D64,
+                        "ro": ["geometry", "style"],
+                    },
+                ],
+            },
+        )
+        self.assertEqual(
+            [e["key"] for e in note["pptx"]["elements"]],
+            ["e11", "e12"],
+            "多元素批注保存每个目标的稳定身份，顺序就是选择顺序",
+        )
 
     def test_text_anchor_keeps_paragraph_offsets_quote_and_run_boundaries(self):
         d = review_dir()
-        a = anchor("text", "selection", fp=FP, elements=[element()],
-                   text={"para": 0, "paraDigest": D64, "start": 1, "end": 4, "quote": "相同😀",
-                         "runs": [{"start": 0, "end": 2}, {"start": 2, "end": 4}]})
+        a = anchor(
+            "text",
+            "selection",
+            fp=FP,
+            elements=[element()],
+            text={
+                "para": 0,
+                "paraDigest": D64,
+                "start": 1,
+                "end": 4,
+                "quote": "相同😀",
+                "runs": [{"start": 0, "end": 2}, {"start": 2, "end": 4}],
+            },
+        )
         _doc, note = store.add(d, {"page": 1, "text": "改措辞", "pptx": a})
-        self.assertEqual(note["pptx"]["text"], {
-            "para": 0, "paraDigest": D64, "start": 1, "end": 4, "quote": "相同😀",
-            "runs": [{"start": 0, "end": 2}, {"start": 2, "end": 4}]})
+        self.assertEqual(
+            note["pptx"]["text"],
+            {
+                "para": 0,
+                "paraDigest": D64,
+                "start": 1,
+                "end": 4,
+                "quote": "相同😀",
+                "runs": [{"start": 0, "end": 2}, {"start": 2, "end": 4}],
+            },
+        )
 
     def test_page_point_region_anchors_use_normalized_canvas_coordinates(self):
         d = review_dir()
@@ -94,27 +154,33 @@ class PptxAnchorFieldTests(unittest.TestCase):
         for raw, want in cases:
             with self.subTest(kind=raw["kind"]):
                 _doc, note = store.add(d, {"page": 1, "text": "x", "pptx": raw})
-                self.assertEqual(note["pptx"], want if want else raw,
-                                 "点与区域保存相对幻灯片画布的归一化坐标")
+                self.assertEqual(note["pptx"], want if want else raw, "点与区域保存相对幻灯片画布的归一化坐标")
 
     def test_malformed_anchor_is_rejected(self):
         d = review_dir()
         bad = (
-            "x", {"v": 1}, {"v": 0}, {"v": True},
-            anchor("elements", "thumb"),                       # kind 与 via 不匹配
-            anchor("elements", "click", elements=[]),          # 元素目标至少一个
-            anchor("page", "thumb", elements=[element()]),     # 整页不带元素列表
-            anchor("text", "click", elements=[element()]),     # 文本定位来源只能是选区或文本反查
+            "x",
+            {"v": 1},
+            {"v": 0},
+            {"v": True},
+            anchor("elements", "thumb"),  # kind 与 via 不匹配
+            anchor("elements", "click", elements=[]),  # 元素目标至少一个
+            anchor("page", "thumb", elements=[element()]),  # 整页不带元素列表
+            anchor("text", "click", elements=[element()]),  # 文本定位来源只能是选区或文本反查
             anchor("text", "selection", elements=[element(), element("e3", eid="3")]),  # 文本只落一个元素
             anchor("text", "selection", elements=[element()]),  # 缺文本选区
-            anchor("point", "point"),                          # 缺点坐标
-            anchor("region", "region"),                        # 缺区域坐标
+            anchor("point", "point"),  # 缺点坐标
+            anchor("region", "region"),  # 缺区域坐标
             anchor("elements", "click", elements=[element(ro=["nope"])]),
             anchor("elements", "click", elements=[element(digest="zz")]),
             anchor("elements", "click", elements=[element(kind="strange")]),
             anchor("elements", "click", elements=[element(z=-1)]),
-            anchor("text", "selection", elements=[element()],
-                   text={"para": 0, "paraDigest": D64, "start": 4, "end": 2, "quote": "甲"}),
+            anchor(
+                "text",
+                "selection",
+                elements=[element()],
+                text={"para": 0, "paraDigest": D64, "start": 4, "end": 2, "quote": "甲"},
+            ),
             anchor("point", "point", point={"x": 1.5, "y": 0.1}),
             anchor("region", "region", region={"x": 0.2, "y": 0.1, "w": 0.9, "h": 0.1}),
             anchor("point", "point", point={"x": 0.5, "y": 0.1, "h": 0.2}),
@@ -128,8 +194,7 @@ class PptxAnchorFieldTests(unittest.TestCase):
     def test_text_anchor_without_offsets_keeps_element_and_paragraph_only(self):
         """段内重复文字的文本反查：只记元素与逻辑段落（含上下文摘要），不猜字符偏移。"""
         d = review_dir()
-        a = anchor("text", "text", elements=[element()],
-                   text={"para": 1, "paraDigest": D64, "quote": "相同"})
+        a = anchor("text", "text", elements=[element()], text={"para": 1, "paraDigest": D64, "quote": "相同"})
         _doc, note = store.add(d, {"page": 1, "text": "改措辞", "pptx": a})
         self.assertEqual(note["pptx"]["text"], {"para": 1, "paraDigest": D64, "quote": "相同"})
 
@@ -148,10 +213,10 @@ class PptxAnchorFieldTests(unittest.TestCase):
 
     def test_update_replaces_or_clears_the_anchor(self):
         d = review_dir()
-        _doc, note = store.add(d, {"page": 1, "text": "x", "pptx": anchor("elements", "click",
-                                                                          elements=[element()])})
-        _doc, note = store.update(d, note["id"], {"pptx": anchor("region", "region",
-                                                                  region={"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2})})
+        _doc, note = store.add(d, {"page": 1, "text": "x", "pptx": anchor("elements", "click", elements=[element()])})
+        _doc, note = store.update(
+            d, note["id"], {"pptx": anchor("region", "region", region={"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2})}
+        )
         self.assertEqual(note["pptx"]["kind"], "region")
         _doc, note = store.update(d, note["id"], {"pptx": None})
         self.assertNotIn("pptx", note)
@@ -159,28 +224,42 @@ class PptxAnchorFieldTests(unittest.TestCase):
     def test_manual_page_move_drops_the_anchor(self):
         """人工挪页以这次决定为准：读得懂的 pptx 定位不再保留（与 docx 同一条规则）。"""
         d = review_dir()
-        _doc, note = store.add(d, {"page": 1, "key": "s260", "text": "x",
-                                   "pptx": anchor("elements", "click", elements=[element()])})
+        _doc, note = store.add(
+            d, {"page": 1, "key": "s260", "text": "x", "pptx": anchor("elements", "click", elements=[element()])}
+        )
         _doc, moved = store.update(d, note["id"], {"page": 2, "key": "s257", "orphan": False})
         self.assertNotIn("pptx", moved)
 
     def test_import_round_trips_the_anchor(self):
         d = review_dir()
-        a = anchor("text", "selection", elements=[element()],
-                   text={"para": 0, "paraDigest": D64, "start": 0, "end": 2, "quote": "相同",
-                         "runs": [{"start": 0, "end": 2}]})
+        a = anchor(
+            "text",
+            "selection",
+            elements=[element()],
+            text={
+                "para": 0,
+                "paraDigest": D64,
+                "start": 0,
+                "end": 2,
+                "quote": "相同",
+                "runs": [{"start": 0, "end": 2}],
+            },
+        )
         store.import_notes(d, [{"id": "n1", "page": 1, "text": "x", "pptx": a}])
         self.assertEqual(store.load(d)["notes"][0]["pptx"], a)
 
 
-PNG_1PX = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06" \
-          b"\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01" \
-          b"\x0d\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+PNG_1PX = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06"
+    b"\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+    b"\x0d\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 def build_page(out: Path, source: Path) -> dict:
     """真实 build_viewer 构建（渲染注入受控 PNG），返回 review.json 内容。"""
     import build_viewer
+
     with mock.patch.object(__import__("pptx_report"), "render_slides", lambda p, w: [PNG_1PX, PNG_1PX]):
         build_viewer.main(["--report", str(source), "--out", str(out), "--no-scan-skills"])
     return json.loads((out / "review.json").read_text(encoding="utf-8"))
@@ -192,7 +271,7 @@ def viewer_pptx(out: Path) -> dict:
     start = text.find("const PPTX=")
     end = text.find(";\n", start)
     assert start > 0 and end > start, "index.html 缺 PPTX 常量"
-    return json.loads(text[start + len("const PPTX="):end])
+    return json.loads(text[start + len("const PPTX=") : end])
 
 
 class PptxViewModelTests(unittest.TestCase):
@@ -210,8 +289,10 @@ class PptxViewModelTests(unittest.TestCase):
         title = slides["s260"]["elements"][0]
         self.assertEqual(title["key"], "e2")
         self.assertEqual(title["kind"], "shape")
-        self.assertEqual(title["geo"], {"x": 914400 / 12192000, "y": 914400 / 6858000,
-                                        "width": 5486400 / 12192000, "height": 914400 / 6858000})
+        self.assertEqual(
+            title["geo"],
+            {"x": 914400 / 12192000, "y": 914400 / 6858000, "width": 5486400 / 12192000, "height": 914400 / 6858000},
+        )
         self.assertTrue(title["cap"]["textWrite"] and title["cap"]["geometryWrite"])
 
     def test_paragraphs_keep_logical_text_digest_and_run_boundaries(self):
@@ -220,10 +301,14 @@ class PptxViewModelTests(unittest.TestCase):
         self.assertEqual([p["n"] for p in title["paragraphs"]], [0, 1])
         first = title["paragraphs"][0]
         self.assertEqual(first["text"], "相同😀&<")
-        self.assertEqual(first["digest"], hashlib.sha256("相同😀&<".encode()).hexdigest(),
-                         "段落摘要保持读取层口径（上下文摘要）")
-        self.assertEqual(first["runs"], [{"start": 0, "end": 2}, {"start": 2, "end": 5}],
-                         "跨 run 选区所需的样式边界按 Unicode 码点保留")
+        self.assertEqual(
+            first["digest"], hashlib.sha256("相同😀&<".encode()).hexdigest(), "段落摘要保持读取层口径（上下文摘要）"
+        )
+        self.assertEqual(
+            first["runs"],
+            [{"start": 0, "end": 2}, {"start": 2, "end": 5}],
+            "跨 run 选区所需的样式边界按 Unicode 码点保留",
+        )
         second = title["paragraphs"][1]
         self.assertEqual((second["text"], second["runs"]), ("相同", [{"start": 0, "end": 2}]))
 
@@ -241,11 +326,20 @@ class PptxViewModelTests(unittest.TestCase):
 def pptx_view_model(source: Path) -> dict:
     """与 build_viewer.pptx_view 同构的页面 PPTX 常量（真实读取层输出）。"""
     import build_viewer
+
     model = pr.read(source)
-    return {"fp": model["fingerprint"],
-            "slides": [{"key": s["key"], "n": s["n"], "notes": False,
-                        "elements": [build_viewer._pptx_view_element(e) for e in s["elements"]]}
-                       for s in model["slides"]]}
+    return {
+        "fp": model["fingerprint"],
+        "slides": [
+            {
+                "key": s["key"],
+                "n": s["n"],
+                "notes": False,
+                "elements": [build_viewer._pptx_view_element(e) for e in s["elements"]],
+            }
+            for s in model["slides"]
+        ],
+    }
 
 
 _PURE_START = "// ---------- PPT 幻灯片定位（pptx 字段 v1）"
@@ -261,6 +355,7 @@ def pure_js() -> str:
 
 def _js_engine() -> list[str] | None:
     import shutil
+
     node = shutil.which("node")
     if node:
         return [node]
@@ -291,7 +386,7 @@ class ViewerPptxLogicTests(unittest.TestCase):
             "const cpLen = s => { let n = 0; for (const _ of s) n++; return n; };\n"
             "const tMsg = (k, p) => k + (p ? ':' + JSON.stringify(p) : '');\n"
         )
-        cases = r'''
+        cases = r"""
 var __out = {
   crossRun: pptxFromText('相同😀&<'),
   repeated: pptxFromText('相同'),
@@ -310,11 +405,12 @@ var __out = {
     elements: [{key: 'e11', name: '合成图片', ro: ['text', 'geometry', 'style']},
                {key: 'e12', name: '合成组合', ro: []}]})
 };
-'''
+"""
         script = prologue + pure_js() + "\n" + cases + "console.log(JSON.stringify(__out));"
         path = tmp() / "pptx_logic.js"
         path.write_text(script, encoding="utf-8")
         import subprocess
+
         done = subprocess.run(engine + [str(path)], capture_output=True, text=True, timeout=30)
         assert done.returncode == 0, done.stderr[:2000]
         cls.out = json.loads(done.stdout.strip().splitlines()[-1])
@@ -325,21 +421,23 @@ var __out = {
         self.assertEqual(a["elements"][0]["key"], "e2")
         self.assertEqual(a["text"]["para"], 0)
         self.assertEqual((a["text"]["start"], a["text"]["end"]), (0, 5))
-        self.assertEqual(a["text"]["runs"], [{"start": 0, "end": 2}, {"start": 2, "end": 5}],
-                         "跨 run 反查保留样式边界所需的 run 边界")
+        self.assertEqual(
+            a["text"]["runs"],
+            [{"start": 0, "end": 2}, {"start": 2, "end": 5}],
+            "跨 run 反查保留样式边界所需的 run 边界",
+        )
         self.assertEqual(a["text"]["quote"], "相同😀&<")
 
     def test_repeated_text_across_paragraphs_is_not_anchored_by_text_alone(self):
-        self.assertIsNone(self.out["repeated"],
-                          "「相同」在两个段落都出现：只匹配文字会选错目标，不写定位")
+        self.assertIsNone(self.out["repeated"], "「相同」在两个段落都出现：只匹配文字会选错目标，不写定位")
         self.assertIsNone(self.out["absent"])
 
     def test_hit_test_prefers_the_topmost_selectable_element(self):
-        self.assertEqual(self.out["hitTable"]["key"], "e18",
-                         "原点一带表格/图表/SmartArt/OLE/未知结构叠放：命中 z 最高的未知结构")
+        self.assertEqual(
+            self.out["hitTable"]["key"], "e18", "原点一带表格/图表/SmartArt/OLE/未知结构叠放：命中 z 最高的未知结构"
+        )
         self.assertEqual(self.out["hitMedia"]["key"], "e16")
-        self.assertEqual(self.out["hitGroupOverPicture"]["key"], "e12",
-                         "组合形状盖在图片上方时命中组合（z 更高）")
+        self.assertEqual(self.out["hitGroupOverPicture"]["key"], "e12", "组合形状盖在图片上方时命中组合（z 更高）")
 
     def test_targets_carry_identity_and_readonly_limits(self):
         shape = self.out["targetShape"]
@@ -352,7 +450,9 @@ var __out = {
     def test_point_anchor_is_normalized_with_slide_key_and_fingerprint(self):
         model = pptx_view_model(self.source)
         p = self.out["point"]
-        self.assertEqual((p["kind"], p["via"], p["slide"], p["point"]), ("point", "point", "s260", {"x": 0.5, "y": 0.1}))
+        self.assertEqual(
+            (p["kind"], p["via"], p["slide"], p["point"]), ("point", "point", "s260", {"x": 0.5, "y": 0.1})
+        )
         self.assertEqual(p["fp"], model["fp"])
 
     def test_location_summaries_name_target_type_and_quote(self):

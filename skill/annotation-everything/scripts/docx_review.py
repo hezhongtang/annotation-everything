@@ -19,6 +19,7 @@
 DOCX 多来自他人，按不可信输入处理：颜色只收 6 位十六进制，字体名过滤掉能跳出 CSS 的字符，
 XML 部件限大小并拒绝 DTD，数值不合法时按缺省值处理。只用 Python 标准库。
 """
+
 from __future__ import annotations
 
 import base64
@@ -34,8 +35,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-FORMAT_VERSION = 1           # review.json 的 format.version：DOCX 审阅元数据的版本
-ANCHOR_VERSION = 1           # 批注 docx 定位字段的版本（note["docx"]["v"]）
+FORMAT_VERSION = 1  # review.json 的 format.version：DOCX 审阅元数据的版本
+ANCHOR_VERSION = 1  # 批注 docx 定位字段的版本（note["docx"]["v"]）
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 STRICT_NS = "http://purl.oclc.org/ooxml/wordprocessingml/main"
 W = "{%s}" % W_NS
@@ -51,37 +52,85 @@ EP = "{http://schemas.openxmlformats.org/officeDocument/2006/extended-properties
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 MAX_MEDIA = 10 * 1024 * 1024
 MAX_PART = 64 * 1024 * 1024  # 单个 XML 部件解压后的上限
-MAX_COUNTER = 9999           # 列表编号起始值与计数的上限
-TWIP_PX = 96 / 1440          # 1 twip = 1/1440 英寸
-EMU_PX = 96 / 914400         # 1 EMU = 1/914400 英寸
+MAX_COUNTER = 9999  # 列表编号起始值与计数的上限
+TWIP_PX = 96 / 1440  # 1 twip = 1/1440 英寸
+EMU_PX = 96 / 914400  # 1 EMU = 1/914400 英寸
 HEX6 = re.compile(r"[0-9A-Fa-f]{6}")
 PARA_ID = re.compile(r"[0-9A-Fa-f]{1,8}")
 BREAK = "\x00BREAK\x00"
 DIAG_MARK = re.compile(r"\x00DOCX_DIAG:([A-Za-z]+)\x00")
-HIGHLIGHT = {"yellow": "#ffff00", "green": "#00ff00", "cyan": "#00ffff", "magenta": "#ff00ff", "blue": "#0000ff",
-             "red": "#ff0000", "darkBlue": "#00008b", "darkCyan": "#008b8b", "darkGreen": "#006400",
-             "darkMagenta": "#800080", "darkRed": "#8b0000", "darkYellow": "#808000", "darkGray": "#a9a9a9",
-             "lightGray": "#d3d3d3", "black": "#000000", "white": "#ffffff"}
-JC = {"center": "center", "right": "right", "end": "right", "both": "justify", "distribute": "justify",
-      "left": "left", "start": "left"}
+HIGHLIGHT = {
+    "yellow": "#ffff00",
+    "green": "#00ff00",
+    "cyan": "#00ffff",
+    "magenta": "#ff00ff",
+    "blue": "#0000ff",
+    "red": "#ff0000",
+    "darkBlue": "#00008b",
+    "darkCyan": "#008b8b",
+    "darkGreen": "#006400",
+    "darkMagenta": "#800080",
+    "darkRed": "#8b0000",
+    "darkYellow": "#808000",
+    "darkGray": "#a9a9a9",
+    "lightGray": "#d3d3d3",
+    "black": "#000000",
+    "white": "#ffffff",
+}
+JC = {
+    "center": "center",
+    "right": "right",
+    "end": "right",
+    "both": "justify",
+    "distribute": "justify",
+    "left": "left",
+    "start": "left",
+}
 CN_DIGITS = "零一二三四五六七八九"
 BULLET_MAP = {"": "•", "": "▪", "": "❖", "": "➢", "": "✓", "o": "◦", "": "•"}
-NUM_FORMATS = ("decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "chineseCounting",
-               "chineseCountingThousand", "ideographTraditional", "decimalEnclosedCircle", "decimalZero",
-               "none", "bullet")
+NUM_FORMATS = (
+    "decimal",
+    "lowerLetter",
+    "upperLetter",
+    "lowerRoman",
+    "upperRoman",
+    "chineseCounting",
+    "chineseCountingThousand",
+    "ideographTraditional",
+    "decimalEnclosedCircle",
+    "decimalZero",
+    "none",
+    "bullet",
+)
 
 # 支持矩阵：结构 → (显示, 回写)。显示：exact 原样 / approx 近似 / placeholder 占位 / hidden 不显示；
 # 回写：yes 可以 / no 所在段落只读 / na 不适用（不是可改的正文）。诊断、对照页提示与文档共用这一份。
 SUPPORT = {
-    "estimatedPages": ("approx", "na"), "revision": ("approx", "no"), "formatRevision": ("approx", "no"),
-    "comment": ("placeholder", "yes"), "textbox": ("approx", "no"), "field": ("approx", "no"),
-    "footnote": ("placeholder", "na"), "math": ("approx", "no"), "contentControl": ("approx", "no"),
-    "hidden": ("hidden", "no"), "object": ("placeholder", "no"), "mediaTooLarge": ("placeholder", "na"),
-    "floating": ("approx", "na"), "columns": ("approx", "na"), "rowSplit": ("approx", "na"),
-    "numbering": ("approx", "na"), "unknown": ("hidden", "no"),
-    "table": ("approx", "yes"), "list": ("approx", "yes"), "image": ("approx", "na"),
-    "header": ("approx", "na"), "footer": ("approx", "na"),
-    "text": ("exact", "yes"), "highlight": ("exact", "yes"), "strike": ("exact", "yes"),
+    "estimatedPages": ("approx", "na"),
+    "revision": ("approx", "no"),
+    "formatRevision": ("approx", "no"),
+    "comment": ("placeholder", "yes"),
+    "textbox": ("approx", "no"),
+    "field": ("approx", "no"),
+    "footnote": ("placeholder", "na"),
+    "math": ("approx", "no"),
+    "contentControl": ("approx", "no"),
+    "hidden": ("hidden", "no"),
+    "object": ("placeholder", "no"),
+    "mediaTooLarge": ("placeholder", "na"),
+    "floating": ("approx", "na"),
+    "columns": ("approx", "na"),
+    "rowSplit": ("approx", "na"),
+    "numbering": ("approx", "na"),
+    "unknown": ("hidden", "no"),
+    "table": ("approx", "yes"),
+    "list": ("approx", "yes"),
+    "image": ("approx", "na"),
+    "header": ("approx", "na"),
+    "footer": ("approx", "na"),
+    "text": ("exact", "yes"),
+    "highlight": ("exact", "yes"),
+    "strike": ("exact", "yes"),
 }
 DIAG_ORDER = tuple(SUPPORT)
 # 读到就让所在段落只读的结构：回写会破坏它们，或者改了也不能保证 Word 里一致
@@ -196,7 +245,7 @@ class Package:
                     sha.update(chunk)
         except OSError as exc:
             raise DocxError("unreadable", str(exc)) from None
-        self.fingerprint = sha.hexdigest()   # 源文件指纹：批注据此判断是不是对着当前版本写的
+        self.fingerprint = sha.hexdigest()  # 源文件指纹：批注据此判断是不是对着当前版本写的
         try:
             zf = zipfile.ZipFile(self.path)
         except (zipfile.BadZipFile, OSError) as exc:
@@ -226,7 +275,7 @@ class Package:
                     self.parts[rel["target"]] = (self.xml(rel["target"], optional=True), self.relations(rel["target"]))
                 elif rel["type"].endswith("/comments"):
                     croot = self.xml(rel["target"], optional=True)
-                    for c in (croot.iter(W + "comment") if croot is not None else ()):
+                    for c in croot.iter(W + "comment") if croot is not None else ():
                         text = " ".join("".join(t.text or "" for t in p.iter(W + "t")) for p in c.iter(W + "p")).strip()
                         self.comments[c.get(W + "id", "")] = (c.get(W + "author", "")[:80], text[:500])
             self.media: dict[str, bytes | None] = {}
@@ -264,7 +313,7 @@ class Package:
         d, f = posixpath.split(part)
         root = self.xml(posixpath.join(d, "_rels", f + ".rels"), optional=True)
         out = {}
-        for r in (root.iter(REL + "Relationship") if root is not None else ()):
+        for r in root.iter(REL + "Relationship") if root is not None else ():
             target, external = r.get("Target", ""), r.get("TargetMode") == "External"
             if not external:
                 target = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join(d, target))
@@ -277,8 +326,14 @@ class Package:
             return None, ""
         pages, app, ver = (self.app.find(EP + k) for k in ("Pages", "Application", "AppVersion"))
         n = _int(pages.text, -1) if pages is not None and pages.text else -1
-        name = " ".join(x for x in ((app.text or "").strip() if app is not None else "",
-                                     (ver.text or "").strip() if ver is not None else "") if x)
+        name = " ".join(
+            x
+            for x in (
+                (app.text or "").strip() if app is not None else "",
+                (ver.text or "").strip() if ver is not None else "",
+            )
+            if x
+        )
         return (n if n > 0 else None), name[:80]
 
 
@@ -361,15 +416,64 @@ def writeback_restrictions(root: ET.Element, style_root: ET.Element | None) -> d
     styles = Styles(style_root)
     indices = {id(p): n for n, p in enumerate(paragraphs)}
     reasons: dict[int, set[str]] = {n: set() for n in indices.values()}
-    kinds = {**{W + t: "revision" for t in ("ins", "del", "moveFrom", "moveTo", "cellIns", "cellDel", "cellMerge")},
-             **{W + t: "field" for t in ("fldChar", "fldSimple", "instrText")},
-             W + "txbxContent": "textbox", W + "sdt": "contentControl", W + "object": "object",
-             M + "oMath": "math", M + "oMathPara": "math"}
+    kinds = {
+        **{W + t: "revision" for t in ("ins", "del", "moveFrom", "moveTo", "cellIns", "cellDel", "cellMerge")},
+        **{W + t: "field" for t in ("fldChar", "fldSimple", "instrText")},
+        W + "txbxContent": "textbox",
+        W + "sdt": "contentControl",
+        W + "object": "object",
+        M + "oMath": "math",
+        M + "oMathPara": "math",
+    }
     field_depth = 0
     revision_ranges: set[str] = set()
-    inline_parents = {W + t for t in ("p", "hyperlink", "smartTag", "customXml", "sdtContent", "ins", "del", "moveFrom", "moveTo")}
-    inline_known = SKIP_INLINE | {W + t for t in ("r", "hyperlink", "smartTag", "customXml", "sdt", "ins", "del", "moveFrom", "moveTo", "fldSimple", "commentRangeStart", "commentRangeEnd", "p")} | {M + "oMath", M + "oMathPara"}
-    run_known = SKIP_RUN | {W + t for t in ("t", "delText", "instrText", "fldChar", "tab", "ptab", "br", "cr", "lastRenderedPageBreak", "noBreakHyphen", "softHyphen", "sym", "drawing", "pict", "footnoteReference", "endnoteReference", "commentReference")}
+    inline_parents = {
+        W + t for t in ("p", "hyperlink", "smartTag", "customXml", "sdtContent", "ins", "del", "moveFrom", "moveTo")
+    }
+    inline_known = (
+        SKIP_INLINE
+        | {
+            W + t
+            for t in (
+                "r",
+                "hyperlink",
+                "smartTag",
+                "customXml",
+                "sdt",
+                "ins",
+                "del",
+                "moveFrom",
+                "moveTo",
+                "fldSimple",
+                "commentRangeStart",
+                "commentRangeEnd",
+                "p",
+            )
+        }
+        | {M + "oMath", M + "oMathPara"}
+    )
+    run_known = SKIP_RUN | {
+        W + t
+        for t in (
+            "t",
+            "delText",
+            "instrText",
+            "fldChar",
+            "tab",
+            "ptab",
+            "br",
+            "cr",
+            "lastRenderedPageBreak",
+            "noBreakHyphen",
+            "softHyphen",
+            "sym",
+            "drawing",
+            "pict",
+            "footnoteReference",
+            "endnoteReference",
+            "commentReference",
+        )
+    }
     pending = [(root, set(), (), None)]
     while pending:
         el, inherited, parents, parent_tag = pending.pop()
@@ -377,15 +481,18 @@ def writeback_restrictions(root: ET.Element, style_root: ET.Element | None) -> d
         kind = kinds.get(el.tag)
         if el.tag.startswith(W) and _local(el.tag).endswith("Change"):
             kind = "formatRevision"
-        if el.tag.startswith(W) and re.fullmatch(r"(?:moveFrom|moveTo|customXml(?:Ins|Del|MoveFrom|MoveTo))Range(?:Start|End)", _local(el.tag)):
+        if el.tag.startswith(W) and re.fullmatch(
+            r"(?:moveFrom|moveTo|customXml(?:Ins|Del|MoveFrom|MoveTo))Range(?:Start|End)", _local(el.tag)
+        ):
             kind = "revision"
             key = _local(el.tag).removesuffix("Start").removesuffix("End") + el.get(W + "id", "")
             if _local(el.tag).endswith("Start"):
                 revision_ranges.add(key)
             else:
                 revision_ranges.discard(key)
-        if ((parent_tag in inline_parents and el.tag not in inline_known)
-                or (parent_tag == W + "r" and el.tag not in run_known)):
+        if (parent_tag in inline_parents and el.tag not in inline_known) or (
+            parent_tag == W + "r" and el.tag not in run_known
+        ):
             own.add("unknown")
         if kind:
             own.add(kind)
@@ -397,8 +504,10 @@ def writeback_restrictions(root: ET.Element, style_root: ET.Element | None) -> d
             sid = table_style.get(W + "val") if table_style is not None else styles.default_table
             # 条件表格样式的实际应用受行列位置等影响；包含隐藏设置时整表保守只读。
             for style in styles.chain(sid):
-                if any(_local(prop.tag) in ("vanish", "webHidden", "specVanish") and _on(prop) is True
-                       for prop in style.iter()):
+                if any(
+                    _local(prop.tag) in ("vanish", "webHidden", "specVanish") and _on(prop) is True
+                    for prop in style.iter()
+                ):
                     own.add("hidden")
         for prop in props.iter() if props is not None else ():
             if prop.tag in kinds:
@@ -434,8 +543,21 @@ def writeback_restrictions(root: ET.Element, style_root: ET.Element | None) -> d
 
 
 def roman(n: int) -> str:
-    vals = ((1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"), (50, "l"), (40, "xl"),
-            (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"))
+    vals = (
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
+        (1, "i"),
+    )
     out = ""
     for v, s in vals:
         while n >= v:
@@ -459,11 +581,19 @@ def chinese(n: int) -> str:
 
 
 def fmt_number(n: int, fmt: str) -> str:
-    return {"decimal": str(n), "lowerLetter": letters(n), "upperLetter": letters(n).upper(),
-            "lowerRoman": roman(n), "upperRoman": roman(n).upper(), "chineseCounting": chinese(n),
-            "chineseCountingThousand": chinese(n), "ideographTraditional": "甲乙丙丁戊己庚辛壬癸"[(n - 1) % 10],
-            "decimalEnclosedCircle": chr(0x2460 + n - 1) if 0 < n <= 20 else str(n),
-            "decimalZero": f"{n:02d}", "none": ""}.get(fmt, str(n))
+    return {
+        "decimal": str(n),
+        "lowerLetter": letters(n),
+        "upperLetter": letters(n).upper(),
+        "lowerRoman": roman(n),
+        "upperRoman": roman(n).upper(),
+        "chineseCounting": chinese(n),
+        "chineseCountingThousand": chinese(n),
+        "ideographTraditional": "甲乙丙丁戊己庚辛壬癸"[(n - 1) % 10],
+        "decimalEnclosedCircle": chr(0x2460 + n - 1) if 0 < n <= 20 else str(n),
+        "decimalZero": f"{n:02d}",
+        "none": "",
+    }.get(fmt, str(n))
 
 
 class Numbering:
@@ -549,6 +679,7 @@ class Numbering:
             f = el.find(W + "numFmt") if el is not None else None
             kf = "decimal" if legal else (f.get(W + "val", "decimal") if f is not None else "decimal")
             return fmt_number(cnt.get(k, start(k)), kf)
+
         return re.sub(r"%(\d)", sub, text)[:40], problem
 
 
@@ -556,17 +687,24 @@ class Section:
     """一节的页面几何、页码设置与页眉页脚引用。"""
 
     def __init__(self, sp: ET.Element | None, prev: "Section | None" = None):
-        def g(el, k, d, lo=0.0, hi=31680.0):   # 22 英寸以内
+        def g(el, k, d, lo=0.0, hi=31680.0):  # 22 英寸以内
             return _num(el.get(W + k) if el is not None else None, d, lo, hi)
+
         sz = sp.find(W + "pgSz") if sp is not None else None
         mar = sp.find(W + "pgMar") if sp is not None else None
         self.w = max(g(sz, "w", 11906), 1440) * TWIP_PX
         self.h = max(g(sz, "h", 16838), 1440) * TWIP_PX
         orient = sz.get(W + "orient") if sz is not None else None
         self.orient = "landscape" if (orient == "landscape" or self.w > self.h) else "portrait"
-        self.margin = {k: abs(_num(mar.get(W + k) if mar is not None else None,
-                                   1440 if k in ("top", "bottom") else 1800, -15840, 15840)) * TWIP_PX
-                       for k in ("top", "right", "bottom", "left")}
+        self.margin = {
+            k: abs(
+                _num(
+                    mar.get(W + k) if mar is not None else None, 1440 if k in ("top", "bottom") else 1800, -15840, 15840
+                )
+            )
+            * TWIP_PX
+            for k in ("top", "right", "bottom", "left")
+        }
         self.header_dist = g(mar, "header", 851) * TWIP_PX
         self.footer_dist = g(mar, "footer", 992) * TWIP_PX
         t = sp.find(W + "type") if sp is not None else None
@@ -574,7 +712,7 @@ class Section:
         self.title_pg = (_on(sp.find(W + "titlePg")) is True) if sp is not None else False
         self.refs: dict[tuple[str, str], str] = dict(prev.refs) if prev else {}
         for kind in ("header", "footer"):
-            for ref in (sp.findall(W + kind + "Reference") if sp is not None else []):
+            for ref in sp.findall(W + kind + "Reference") if sp is not None else []:
                 self.refs[(kind, ref.get(W + "type", "default"))] = ref.get(R + "id", "")
         cols = sp.find(W + "cols") if sp is not None else None
         self.cols = _int(cols.get(W + "num") if cols is not None else None, 1, 1, 45)
@@ -586,20 +724,76 @@ class Section:
         return abs(self.w - other.w) < 1 and abs(self.h - other.h) < 1
 
 
-SKIP_BLOCK = frozenset(W + t for t in ("sectPr", "tcPr", "trPr", "tblPr", "tblGrid", "bookmarkStart", "bookmarkEnd",
-                                       "proofErr", "permStart", "permEnd", "customXmlInsRangeStart",
-                                       "customXmlInsRangeEnd", "customXmlDelRangeStart", "customXmlDelRangeEnd",
-                                       "moveFromRangeStart", "moveFromRangeEnd", "moveToRangeStart", "moveToRangeEnd",
-                                       "sdtPr", "sdtEndPr", "tblPrEx"))
-SKIP_INLINE = frozenset(W + t for t in ("pPr", "bookmarkStart", "bookmarkEnd", "proofErr", "permStart", "permEnd",
-                                        "moveFromRangeStart", "moveFromRangeEnd", "moveToRangeStart", "moveToRangeEnd",
-                                        "customXmlInsRangeStart", "customXmlInsRangeEnd", "customXmlDelRangeStart",
-                                        "customXmlDelRangeEnd", "customXmlMoveFromRangeStart",
-                                        "customXmlMoveFromRangeEnd", "customXmlMoveToRangeStart",
-                                        "customXmlMoveToRangeEnd", "sdtPr", "sdtEndPr"))
-SKIP_RUN = frozenset(W + t for t in ("rPr", "footnoteRef", "endnoteRef", "separator", "continuationSeparator",
-                                     "annotationRef", "dayShort", "monthShort", "yearShort", "dayLong", "monthLong",
-                                     "yearLong", "pgNum", "lastRenderedPageBreak_"))
+SKIP_BLOCK = frozenset(
+    W + t
+    for t in (
+        "sectPr",
+        "tcPr",
+        "trPr",
+        "tblPr",
+        "tblGrid",
+        "bookmarkStart",
+        "bookmarkEnd",
+        "proofErr",
+        "permStart",
+        "permEnd",
+        "customXmlInsRangeStart",
+        "customXmlInsRangeEnd",
+        "customXmlDelRangeStart",
+        "customXmlDelRangeEnd",
+        "moveFromRangeStart",
+        "moveFromRangeEnd",
+        "moveToRangeStart",
+        "moveToRangeEnd",
+        "sdtPr",
+        "sdtEndPr",
+        "tblPrEx",
+    )
+)
+SKIP_INLINE = frozenset(
+    W + t
+    for t in (
+        "pPr",
+        "bookmarkStart",
+        "bookmarkEnd",
+        "proofErr",
+        "permStart",
+        "permEnd",
+        "moveFromRangeStart",
+        "moveFromRangeEnd",
+        "moveToRangeStart",
+        "moveToRangeEnd",
+        "customXmlInsRangeStart",
+        "customXmlInsRangeEnd",
+        "customXmlDelRangeStart",
+        "customXmlDelRangeEnd",
+        "customXmlMoveFromRangeStart",
+        "customXmlMoveFromRangeEnd",
+        "customXmlMoveToRangeStart",
+        "customXmlMoveToRangeEnd",
+        "sdtPr",
+        "sdtEndPr",
+    )
+)
+SKIP_RUN = frozenset(
+    W + t
+    for t in (
+        "rPr",
+        "footnoteRef",
+        "endnoteRef",
+        "separator",
+        "continuationSeparator",
+        "annotationRef",
+        "dayShort",
+        "monthShort",
+        "yearShort",
+        "dayLong",
+        "monthLong",
+        "yearLong",
+        "pgNum",
+        "lastRenderedPageBreak_",
+    )
+)
 
 
 class Renderer:
@@ -611,7 +805,7 @@ class Renderer:
         self.writeback_ro = writeback_restrictions(pkg.root, pkg.styles)
         self.numbering = Numbering(pkg.numbering, self.styles)
         self.even_odd = pkg.settings is not None and _on(pkg.settings.find(W + "evenAndOddHeaders")) is True
-        self.diag: dict[str, dict] = {}       # 代码 → {"keys", "count", "pages", "examples"}
+        self.diag: dict[str, dict] = {}  # 代码 → {"keys", "count", "pages", "examples"}
         self.pindex: dict[int, int] = {}
         self.rindex: dict[int, int] = {}
         for i, p in enumerate(pkg.root.iter(W + "p")):
@@ -619,15 +813,15 @@ class Renderer:
             for j, r in enumerate(own_runs(p)):
                 self.rindex[id(r)] = j
         self.has_rendered = self._body_has_rendered()
-        self.fields: list[dict] = []           # 复杂域的嵌套栈：{"instr", "phase": instr / result / replaced, "id"}
+        self.fields: list[dict] = []  # 复杂域的嵌套栈：{"instr", "phase": instr / result / replaced, "id"}
         self.comment_open: list[str] = []
-        self.part = "body"                     # body / header / footer / textbox
-        self.rels = pkg.rels                   # 当前部件的关系表（图片、链接按它找）
-        self.block_ro: set[str] = set()        # 块级内容控件等外层结构给段落带来的只读原因
-        self.block_wrap: tuple = ()           # 表格行、单元格修订传给内部文字的样式与提示
-        self.block_notes = ""                  # 跟随各片段、在最终分页后登记的诊断标记
+        self.part = "body"  # body / header / footer / textbox
+        self.rels = pkg.rels  # 当前部件的关系表（图片、链接按它找）
+        self.block_ro: set[str] = set()  # 块级内容控件等外层结构给段落带来的只读原因
+        self.block_wrap: tuple = ()  # 表格行、单元格修订传给内部文字的样式与提示
+        self.block_notes = ""  # 跟随各片段、在最终分页后登记的诊断标记
         self.pages: list[dict] = []
-        self.media: dict[str, str] = {}        # 部件路径 → CSS 类名（同一张图全文只内联一次）
+        self.media: dict[str, str] = {}  # 部件路径 → CSS 类名（同一张图全文只内联一次）
         self.media_css: list[str] = []
         self.part_cache: dict[str, str] = {}
         self.sect: Section | None = None
@@ -659,7 +853,9 @@ class Renderer:
 
     # ---------- 分页 ----------
     def new_page(self, opened_by: str) -> None:
-        self.pages.append({"sect": self.sect, "blocks": [], "notes": "", "content": 0, "opened": opened_by, "first": None})
+        self.pages.append(
+            {"sect": self.sect, "blocks": [], "notes": "", "content": 0, "opened": opened_by, "first": None}
+        )
 
     def brk(self, kind: str) -> None:
         """硬分页保留空白页；段前分页与渲染标记在空页上不重复翻页。"""
@@ -667,7 +863,7 @@ class Renderer:
         if page["content"] or (kind == "explicit" and page["opened"] != "rendered"):
             self.new_page(kind)
         elif kind == "explicit":
-            page["opened"] = "explicit"   # 渲染标记只抵消同一处的一个硬分页符
+            page["opened"] = "explicit"  # 渲染标记只抵消同一处的一个硬分页符
 
     def emit(self, block: str, first: dict | None = None) -> None:
         page = self.pages[-1]
@@ -682,7 +878,7 @@ class Renderer:
         out = set(self.block_ro)
         out.update(self.writeback_ro.get(self.pindex.get(id(p)), ()))
         if self.fields:
-            out.add("field")                      # 跨段的域（目录等）还没结束
+            out.add("field")  # 跨段的域（目录等）还没结束
         for el in p.iter():
             t = el.tag
             if t in (W + "ins", W + "del", W + "moveFrom", W + "moveTo"):
@@ -781,14 +977,18 @@ class Renderer:
             css.append(f"background-color:{hexcolor(shd.get(W + 'fill'))}")
         va = rp.get("vertAlign")
         if va is not None and va.get(W + "val") in ("superscript", "subscript"):
-            css.append("vertical-align:" + ("super" if va.get(W + "val") == "superscript" else "sub") + ";font-size:smaller")
+            css.append(
+                "vertical-align:" + ("super" if va.get(W + "val") == "superscript" else "sub") + ";font-size:smaller"
+            )
         if _on(rp.get("caps")):
             css.append("text-transform:uppercase")
         if _on(rp.get("smallCaps")):
             css.append("font-variant:small-caps")
         f = rp.get("rFonts")
         if f is not None:
-            fams = [x for x in dict.fromkeys(font_name(f.get(W + k) or "") for k in ("eastAsia", "ascii", "hAnsi")) if x]
+            fams = [
+                x for x in dict.fromkeys(font_name(f.get(W + k) or "") for k in ("eastAsia", "ascii", "hAnsi")) if x
+            ]
             if fams:
                 css.append("font-family:" + ",".join(f"'{x}'" for x in fams) + ",var(--docx-fallback)")
         return ";".join(css), cls
@@ -809,10 +1009,10 @@ class Renderer:
         prefix = ""
         notes = self.block_notes
         ppr = p.find(W + "pPr")
-        for ch in (ppr.iter() if ppr is not None else ()):
+        for ch in ppr.iter() if ppr is not None else ():
             if ch.tag in (W + "pPrChange", W + "sectPrChange"):
                 notes += self.note("formatRevision", id(ch))
-            elif ch.tag in (W + "ins", W + "del", W + "moveFrom", W + "moveTo"):   # 段落标记的插入 / 删除
+            elif ch.tag in (W + "ins", W + "del", W + "moveFrom", W + "moveTo"):  # 段落标记的插入 / 删除
                 notes += self.note("revision", ch.get(W + "id") or id(ch), ch.get(W + "author", ""))
             elif ch.tag == W + "rPrChange":
                 notes += self.note("formatRevision", id(ch))
@@ -822,8 +1022,13 @@ class Renderer:
             cont = started
             body = ("" if cont else prefix) + "".join(inline)
             attrs = self.para_attrs(pi, pid, pp, sid, cont, ro)
-            tokens.append(("html", f"<div {attrs}>{notes}{body or '<br>'}</div>",
-                           {"pi": pi, "pid": pid, "cont": cont, "empty": not inline}))
+            tokens.append(
+                (
+                    "html",
+                    f"<div {attrs}>{notes}{body or '<br>'}</div>",
+                    {"pi": pi, "pid": pid, "cont": cont, "empty": not inline},
+                )
+            )
             inline, started = [], True
 
         if paginate and _on(pp.get("pageBreakBefore")):
@@ -831,14 +1036,18 @@ class Renderer:
         num = pp.get("numPr")
         if num is not None:
             ilvl_el, nid_el = num.find(W + "ilvl"), num.find(W + "numId")
-            text, problem = self.numbering.label(nid_el.get(W + "val", "") if nid_el is not None else "",
-                                                 _int(ilvl_el.get(W + "val") if ilvl_el is not None else None, 0, 0, 8))
+            text, problem = self.numbering.label(
+                nid_el.get(W + "val", "") if nid_el is not None else "",
+                _int(ilvl_el.get(W + "val") if ilvl_el is not None else None, 0, 0, 8),
+            )
             if problem:
                 notes += self.note("numbering", problem, problem)
             if text:
                 notes += self.note("list", nid_el.get(W + "val", "") if nid_el is not None else "")
-                prefix = (f'<span class="docx-num" aria-hidden="true">{_esc(text)}</span>'
-                          '<span class="docx-tab docx-num" aria-hidden="true">\t</span>')
+                prefix = (
+                    f'<span class="docx-num" aria-hidden="true">{_esc(text)}</span>'
+                    '<span class="docx-tab docx-num" aria-hidden="true">\t</span>'
+                )
         for kind, payload in self.inline(p, base_rp, paginate, self.block_wrap):
             if kind == "html":
                 inline.append(payload)
@@ -849,8 +1058,13 @@ class Renderer:
         if inline or not started:
             flush()
         # 只有分页符的空段：段落标记留在分页之前那一页
-        if (len(tokens) == 2 and tokens[0] == ("break", "explicit") and tokens[1][0] == "html"
-                and tokens[1][2]["empty"] and not prefix):
+        if (
+            len(tokens) == 2
+            and tokens[0] == ("break", "explicit")
+            and tokens[1][0] == "html"
+            and tokens[1][2]["empty"]
+            and not prefix
+        ):
             tokens.reverse()
         sect = pp.get("sectPr")
         if sect is not None and paginate:
@@ -894,7 +1108,9 @@ class Renderer:
                 ins = tag in (W + "ins", W + "moveTo")
                 mark = self.note("revision", el.get(W + "id") or id(el), el.get(W + "author", ""))
                 title = f"{'+' if ins else '−'} {el.get(W + 'author', '')[:80]} {el.get(W + 'date', '')[:40]}".strip()
-                yield from self.inline(el, base_rp, paginate, wrap + (("docx-ins" if ins else "docx-del", title),), notes + mark)
+                yield from self.inline(
+                    el, base_rp, paginate, wrap + (("docx-ins" if ins else "docx-del", title),), notes + mark
+                )
             elif tag == W + "hyperlink":
                 rel = self.rels.get(el.get(R + "id", ""), {})
                 title = rel.get("target", "") or el.get(W + "anchor", "")
@@ -906,7 +1122,9 @@ class Renderer:
                 if special:
                     yield ("html", notes + mark + special)
                 else:
-                    yield from self.inline(el, base_rp, paginate, wrap + (("docx-field", instr.strip()[:200]),), notes + mark)
+                    yield from self.inline(
+                        el, base_rp, paginate, wrap + (("docx-field", instr.strip()[:200]),), notes + mark
+                    )
             elif tag in (W + "smartTag", W + "customXml"):
                 yield from self.inline(el, base_rp, paginate, wrap, notes)
             elif tag == W + "sdt":
@@ -1020,7 +1238,7 @@ class Renderer:
                 self.run_children(list(pick) if pick is not None else [], parts, in_result)
                 continue
             if any(f["phase"] != "result" for f in self.fields):
-                continue                              # 域的指令部分，或已换成页码的结果
+                continue  # 域的指令部分，或已换成页码的结果
             if self.fields:
                 in_result[0] = True
             if tag in (W + "t", W + "delText"):
@@ -1044,8 +1262,8 @@ class Renderer:
                 except (ValueError, OverflowError):
                     c = ""
                 if 0xD800 <= ord(c) <= 0xDFFF:
-                    c = ""   # 孤立代理编码不进 UTF-8，也不出现在页面文字里
-                parts.append(("html", '<span class="docx-nontext">' + _esc(BULLET_MAP.get(c, c)) + '</span>'))
+                    c = ""  # 孤立代理编码不进 UTF-8，也不出现在页面文字里
+                parts.append(("html", '<span class="docx-nontext">' + _esc(BULLET_MAP.get(c, c)) + "</span>"))
             elif tag == W + "drawing":
                 parts.append(("html", self.drawing(ch)))
             elif tag == W + "pict":
@@ -1054,13 +1272,20 @@ class Renderer:
                 kind = "fn" if tag == W + "footnoteReference" else "en"
                 nid = ch.get(W + "id", "")[:12]
                 mark = self.note("footnote", kind + nid)
-                parts.append(("html", mark + f'<sup class="docx-mark" data-docx-note="{kind}{_esc(nid)}">[{_esc(nid)}]</sup>'))
+                parts.append(
+                    ("html", mark + f'<sup class="docx-mark" data-docx-note="{kind}{_esc(nid)}">[{_esc(nid)}]</sup>')
+                )
             elif tag == W + "commentReference":
                 cid = ch.get(W + "id", "")
                 author, text = self.pkg.comments.get(cid, ("", ""))
                 mark = self.note("comment", cid)
                 tip = (author + "：" if author else "") + text
-                parts.append(("html", mark + f'<sup class="docx-mark docx-comment" title="{_esc(tip)}">[W{_esc(cid[:12])}]</sup>'))
+                parts.append(
+                    (
+                        "html",
+                        mark + f'<sup class="docx-mark docx-comment" title="{_esc(tip)}">[W{_esc(cid[:12])}]</sup>',
+                    )
+                )
             elif tag == W + "object":
                 mark = self.note("object", id(ch))
                 parts.append(("html", mark + '<span class="docx-mark docx-object">[OLE]</span>'))
@@ -1129,8 +1354,14 @@ class Renderer:
         if cls is None:
             data = self.pkg.media.get(target)
             ext = target.rsplit(".", 1)[-1].lower()
-            mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif",
-                    "bmp": "image/bmp", "webp": "image/webp"}.get(ext)
+            mime = {
+                "png": "image/png",
+                "jpg": "image/jpeg",
+                "jpeg": "image/jpeg",
+                "gif": "image/gif",
+                "bmp": "image/bmp",
+                "webp": "image/webp",
+            }.get(ext)
             if data is None and target in self.pkg.media:
                 return self.note("mediaTooLarge", target, target) + placeholder
             if data is None or not mime:
@@ -1194,16 +1425,31 @@ class Renderer:
         outer = self.block_ro, self.block_wrap, self.block_notes
         try:
             for prop in props:
-                for rv in (prop if prop is not None else ()):
+                for rv in prop if prop is not None else ():
                     tag = _local(rv.tag)
-                    if rv.tag not in {W + name for name in ("ins", "del", "cellIns", "cellDel", "cellMerge",
-                                                            "tcPrChange", "trPrChange", "tblPrChange")}:
+                    if rv.tag not in {
+                        W + name
+                        for name in (
+                            "ins",
+                            "del",
+                            "cellIns",
+                            "cellDel",
+                            "cellMerge",
+                            "tcPrChange",
+                            "trPrChange",
+                            "tblPrChange",
+                        )
+                    }:
                         continue
                     code = "formatRevision" if tag.endswith("PrChange") else "revision"
                     self.block_ro = self.block_ro | {code}
                     self.block_notes += self.note(code, rv.get(W + "id") or id(rv), rv.get(W + "author", ""))
-                    cls, symbol = {"ins": ("docx-ins", "+"), "cellIns": ("docx-ins", "+"),
-                                   "del": ("docx-del", "−"), "cellDel": ("docx-del", "−")}.get(tag, ("docx-revision", "Δ"))
+                    cls, symbol = {
+                        "ins": ("docx-ins", "+"),
+                        "cellIns": ("docx-ins", "+"),
+                        "del": ("docx-del", "−"),
+                        "cellDel": ("docx-del", "−"),
+                    }.get(tag, ("docx-revision", "Δ"))
                     title = f"{symbol} {rv.get(W + 'author', '')[:80]} {rv.get(W + 'date', '')[:40]}".strip()
                     self.block_wrap += ((cls, title),)
             yield
@@ -1246,14 +1492,20 @@ class Renderer:
                 css.extend(border_css(merged([tborders, tcb])))
                 va = tcpr.find(W + "vAlign") if tcpr is not None else None
                 if va is not None:
-                    css.append("vertical-align:" + {"center": "middle", "bottom": "bottom"}.get(va.get(W + "val", ""), "top"))
+                    css.append(
+                        "vertical-align:" + {"center": "middle", "bottom": "bottom"}.get(va.get(W + "val", ""), "top")
+                    )
                 fp = tc.find(W + "p")
-                first = ({"pi": self.pindex.get(id(fp)), "pid": para_id(fp), "cont": False}
-                         if fp is not None and self.part == "body" else None)
+                first = (
+                    {"pi": self.pindex.get(id(fp)), "pid": para_id(fp), "cont": False}
+                    if fp is not None and self.part == "body"
+                    else None
+                )
                 with self.structural_revisions(tpr, trpr, tcpr):
                     segs = self.blocks(tc, paginate=paginate)
-                cells.append({"col": col, "span": span, "vmerge": vmerge, "css": ";".join(css),
-                              "segs": segs, "first": first})
+                cells.append(
+                    {"col": col, "span": span, "vmerge": vmerge, "css": ";".join(css), "segs": segs, "first": first}
+                )
                 col += span
             # 行从新页开始：凡有分页标记的单元格，标记都在最前面（第一段是空的）。Word 往往只在第一格
             # 写标记，其余格没有标记，这些格的内容随行一起落到新页上。
@@ -1269,9 +1521,18 @@ class Renderer:
             row_note = self.note("rowSplit", id(tr)) if nseg - begin > 1 else ""
             for k in range(begin, nseg):
                 seg_cells = [dict(c, html="".join(c["segs"][k]) if k < len(c["segs"]) else "") for c in cells]
-                rows.append({"cells": seg_cells, "header": header and nseg == 1, "break": k > 0, "notes": row_note,
-                             "first": first if k == begin or not first else {**first, "cont": True}})
-        colgroup = ("<colgroup>" + "".join(f'<col style="width:{w:.1f}px">' for w in grid) + "</colgroup>") if grid else ""
+                rows.append(
+                    {
+                        "cells": seg_cells,
+                        "header": header and nseg == 1,
+                        "break": k > 0,
+                        "notes": row_note,
+                        "first": first if k == begin or not first else {**first, "cont": True},
+                    }
+                )
+        colgroup = (
+            ("<colgroup>" + "".join(f'<col style="width:{w:.1f}px">' for w in grid) + "</colgroup>") if grid else ""
+        )
         width = sum(grid)
         tstyle = f' style="width:{min(width, 4000):.1f}px"' if width else ""
         headers = [r for r in rows if r["header"]]
@@ -1281,7 +1542,12 @@ class Renderer:
         def close():
             if cur:
                 first = next((r["first"] for r in cur if not r.get("repeat")), None)
-                parts.append((notes + f'<table class="docx-table"{tstyle}>{colgroup}<tbody>{rows_html(cur)}</tbody></table>', first))
+                parts.append(
+                    (
+                        notes + f'<table class="docx-table"{tstyle}>{colgroup}<tbody>{rows_html(cur)}</tbody></table>',
+                        first,
+                    )
+                )
 
         for row in rows:
             if row["break"] and paginate:
@@ -1326,8 +1592,9 @@ class Renderer:
     def render(self) -> list[dict]:
         body = self.pkg.root.find(W + "body")
         sections: list[Section] = []
-        for sp in [s for s in (p.find(W + "pPr/" + W + "sectPr") for p in body_paragraphs(body)) if s is not None] \
-                + [body.find(W + "sectPr")]:
+        for sp in [s for s in (p.find(W + "pPr/" + W + "sectPr") for p in body_paragraphs(body)) if s is not None] + [
+            body.find(W + "sectPr")
+        ]:
             sections.append(Section(sp, sections[-1] if sections else None))
         si = 0
         self.sect = sections[0]
@@ -1421,24 +1688,45 @@ class Renderer:
             if seen_keys[key] > 1:
                 key = f"{key}-{seen_keys[key]}"
             m = sect.margin
-            style = (f"width:{sect.w:.1f}px;min-height:{sect.h:.1f}px;"
-                     f"padding:{m['top']:.1f}px {m['right']:.1f}px {m['bottom']:.1f}px {m['left']:.1f}px")
+            style = (
+                f"width:{sect.w:.1f}px;min-height:{sect.h:.1f}px;"
+                f"padding:{m['top']:.1f}px {m['right']:.1f}px {m['bottom']:.1f}px {m['left']:.1f}px"
+            )
             body = "".join(page["blocks"])
             parts = []
             if header:
-                parts.append(f'<div class="docx-header" style="top:{sect.header_dist:.1f}px;left:{m["left"]:.1f}px;'
-                             f'right:{m["right"]:.1f}px">{header}</div>')
+                parts.append(
+                    f'<div class="docx-header" style="top:{sect.header_dist:.1f}px;left:{m["left"]:.1f}px;'
+                    f'right:{m["right"]:.1f}px">{header}</div>'
+                )
             parts.append(f'<div class="docx-body">{body}</div>')
             if footer:
-                parts.append(f'<div class="docx-footer" style="bottom:{sect.footer_dist:.1f}px;left:{m["left"]:.1f}px;'
-                             f'right:{m["right"]:.1f}px">{footer}</div>')
+                parts.append(
+                    f'<div class="docx-footer" style="bottom:{sect.footer_dist:.1f}px;left:{m["left"]:.1f}px;'
+                    f'right:{m["right"]:.1f}px">{footer}</div>'
+                )
             label = fmt_number(shown, sect.pg_fmt) or str(shown)
-            inner = ("".join(parts).replace("\x00PAGE\x00", _esc(label)).replace("\x00NUMPAGES\x00", str(total))
-                     .replace("\x00SECTIONPAGES\x00", str(sect_pages[id(sect)])))
-            out.append({"n": n, "key": key, "title": page_title(body) or str(n), "w": round(sect.w, 1),
-                        "h": round(sect.h, 1), "orient": sect.orient, "label": label,
-                        "html": (f'<section class="page docx-page docx-{sect.orient}" data-page="{n}" '
-                                 f'data-key="{_esc(key)}" style="{style}">{inner}</section>')})
+            inner = (
+                "".join(parts)
+                .replace("\x00PAGE\x00", _esc(label))
+                .replace("\x00NUMPAGES\x00", str(total))
+                .replace("\x00SECTIONPAGES\x00", str(sect_pages[id(sect)]))
+            )
+            out.append(
+                {
+                    "n": n,
+                    "key": key,
+                    "title": page_title(body) or str(n),
+                    "w": round(sect.w, 1),
+                    "h": round(sect.h, 1),
+                    "orient": sect.orient,
+                    "label": label,
+                    "html": (
+                        f'<section class="page docx-page docx-{sect.orient}" data-page="{n}" '
+                        f'data-key="{_esc(key)}" style="{style}">{inner}</section>'
+                    ),
+                }
+            )
         return out
 
 
@@ -1470,8 +1758,14 @@ def top_textboxes(el: ET.Element) -> list[ET.Element]:
 def border_css(b: dict) -> list[str]:
     """边框：insideH / insideV 先写，四边后写覆盖它们；单元格的 tcBorders 已在合并时覆盖表格的同名边。"""
     out = []
-    for side, names in (("h", ("insideH",)), ("v", ("insideV",)), ("top", ("top",)), ("right", ("right", "end")),
-                        ("bottom", ("bottom",)), ("left", ("left", "start"))):
+    for side, names in (
+        ("h", ("insideH",)),
+        ("v", ("insideV",)),
+        ("top", ("top",)),
+        ("right", ("right", "end")),
+        ("bottom", ("bottom",)),
+        ("left", ("left", "start")),
+    ):
         el = next((b[n] for n in names if n in b), None)
         if el is None:
             continue
@@ -1481,7 +1775,9 @@ def border_css(b: dict) -> list[str]:
         else:
             sz = max(_num(el.get(W + "sz"), 4, 0, 96) / 8 * 96 / 72, 1)
             color = hexcolor(el.get(W + "color")) or "#000"
-            style = "double" if val == "double" else "dashed" if "dash" in val else "dotted" if "dot" in val else "solid"
+            style = (
+                "double" if val == "double" else "dashed" if "dash" in val else "dotted" if "dot" in val else "solid"
+            )
             spec = f"{sz:.1f}px {style} {color}"
         if side == "h":
             out += [f"border-top:{spec}", f"border-bottom:{spec}"]
@@ -1591,7 +1887,7 @@ class _ParaScan(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.stack: list[object] = []          # 每个未闭合元素：片段记录（dict）/ "decor" / None
+        self.stack: list[object] = []  # 每个未闭合元素：片段记录（dict）/ "decor" / None
         self.frags: list[dict] = []
 
     def handle_starttag(self, tag, attrs):
@@ -1645,7 +1941,7 @@ def index_paragraphs(pages: list[dict]) -> list[dict]:
 
         def mark(m: re.Match) -> str:
             frag = next(it, None)
-            if frag is None or str(frag["n"]) != m.group(1):   # 与扫描结果对不上：不写属性，不猜
+            if frag is None or str(frag["n"]) != m.group(1):  # 与扫描结果对不上：不写属性，不猜
                 return m.group(0)
             extra = f' data-docx-d="{paras[frag["n"]]["digest"]}"'
             if frag["start"]:
@@ -1661,8 +1957,12 @@ def usable_anchor(a: object) -> bool:
     if not isinstance(a, dict) or a.get("v") != ANCHOR_VERSION or isinstance(a.get("v"), bool):
         return False
     para = a.get("para")
-    return (isinstance(para, dict) and isinstance(para.get("n"), int) and not isinstance(para.get("n"), bool)
-            and isinstance(para.get("digest"), str))
+    return (
+        isinstance(para, dict)
+        and isinstance(para.get("n"), int)
+        and not isinstance(para.get("n"), bool)
+        and isinstance(para.get("digest"), str)
+    )
 
 
 def relocate(anchor: dict, paragraphs: list[dict]) -> dict:
@@ -1682,8 +1982,13 @@ def relocate(anchor: dict, paragraphs: list[dict]) -> dict:
         return got
     last = _relocate_para({"para": end, "start": anchor.get("end", 0)}, paragraphs)
     if last["status"] != "ok":
-        return {**got, "status": last["status"], "page": None, "why": last["why"],
-                "changed": got["changed"] or last["changed"]}
+        return {
+            **got,
+            "status": last["status"],
+            "page": None,
+            "why": last["why"],
+            "changed": got["changed"] or last["changed"],
+        }
     if last["para"]["n"] <= got["para"]["n"]:
         return {**got, "status": "ambiguous", "page": None}
     got["endPara"] = last["para"]
@@ -1711,8 +2016,14 @@ def _relocate_para(anchor: dict, paragraphs: list[dict]) -> dict:
     hit = next((p for p in same if p["n"] == n), None)
     if hit is not None:
         return _located(anchor, hit, "ordinal", why, False)
-    return {"status": "ambiguous" if same else "missing", "how": None, "why": why, "para": None, "page": None,
-            "changed": False}
+    return {
+        "status": "ambiguous" if same else "missing",
+        "how": None,
+        "why": why,
+        "para": None,
+        "page": None,
+        "changed": False,
+    }
 
 
 def _located(anchor: dict, para: dict, how: str, why: str | None, changed: bool) -> dict:
@@ -1722,7 +2033,7 @@ def _located(anchor: dict, para: dict, how: str, why: str | None, changed: bool)
     start = anchor.get("start")
     start = start if isinstance(start, int) and not isinstance(start, bool) and start > 0 else 0
     page = para["frags"][0]["page"]
-    for frag in para["frags"]:      # 跨页段落：落在起始偏移所在的那一片上
+    for frag in para["frags"]:  # 跨页段落：落在起始偏移所在的那一片上
         if frag["start"] <= start:
             page = frag["page"]
     return {"status": "ok", "how": how, "why": why, "para": para, "page": page, "changed": changed}
@@ -1791,12 +2102,28 @@ def render(path: Path) -> dict:
     for code in sorted(r.diag, key=lambda c: DIAG_ORDER.index(c) if c in DIAG_ORDER else len(DIAG_ORDER)):
         d = r.diag[code]
         display, writeback = SUPPORT.get(code, ("hidden", "no"))
-        diags.append({"code": code, "count": d["count"], "display": display, "writeback": writeback,
-                      "pages": sorted(d["pages"]), "examples": d["examples"]})
-    return {"title": title, "css": BASE_CSS + "\n".join(r.media_css), "pages": pages, "diagnostics": diags,
-            "pagination": pagination, "appPages": app_pages, "application": application,
-            "lang": re.sub(r"[^A-Za-z0-9-]", "", lang)[:20], "paragraphs": paragraphs,
-            "fingerprint": pkg.fingerprint}
+        diags.append(
+            {
+                "code": code,
+                "count": d["count"],
+                "display": display,
+                "writeback": writeback,
+                "pages": sorted(d["pages"]),
+                "examples": d["examples"],
+            }
+        )
+    return {
+        "title": title,
+        "css": BASE_CSS + "\n".join(r.media_css),
+        "pages": pages,
+        "diagnostics": diags,
+        "pagination": pagination,
+        "appPages": app_pages,
+        "application": application,
+        "lang": re.sub(r"[^A-Za-z0-9-]", "", lang)[:20],
+        "paragraphs": paragraphs,
+        "fingerprint": pkg.fingerprint,
+    }
 
 
 def page_texts(path: Path) -> dict[int, str]:

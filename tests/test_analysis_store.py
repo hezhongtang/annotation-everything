@@ -3,6 +3,7 @@
 情形来源：prototype/analysis-model 原型的「从批注到结论」（本票范围内的步骤）、
 「已交出但没被接手的批注」「已经在改的批注」；原型中「应被拒绝」的步骤断言为拒绝。
 """
+
 from __future__ import annotations
 
 import json
@@ -30,17 +31,22 @@ def tmpdir() -> Path:
 
 
 def add_note(d: Path, text: str = "第 3 页「增长主要来自新客」这个结论站得住吗？", page: int = 3) -> dict:
-    _doc, note = store.add(d, {"page": page, "text": text, "target": "报告",
-                               "quote": "增长主要来自新客", "quoteFrom": "报告"})
+    _doc, note = store.add(
+        d, {"page": page, "text": text, "target": "报告", "quote": "增长主要来自新客", "quoteFrom": "报告"}
+    )
     return note
 
 
 def propose_caliber(key: str = "p1", parent: dict | None = None) -> dict:
     """Agent 写回的结构提议：问题文本、简称、选项、推荐答案、挂在哪个问题下。"""
-    return {"key": key, "text": "第 3 页「增长主要来自新客」用年度还是季度口径来验证？",
-            "short": "验证口径", "recommend": "Y",
-            "options": [{"id": "Y", "label": "年度"}, {"id": "S", "label": "季度"}],
-            "parent": parent}
+    return {
+        "key": key,
+        "text": "第 3 页「增长主要来自新客」用年度还是季度口径来验证？",
+        "short": "验证口径",
+        "recommend": "Y",
+        "options": [{"id": "Y", "label": "年度"}, {"id": "S", "label": "季度"}],
+        "parent": parent,
+    }
 
 
 class AnalysisStartTests(unittest.TestCase):
@@ -102,7 +108,7 @@ class AnalysisStartTests(unittest.TestCase):
         store.handoff_claim(self.d, by="Synthetic")
         with self.assertRaises(store.HandoffError) as ctx:
             analysis_store.start(self.d, note["id"])
-        self.assertIn("Synthetic", str(ctx.exception))   # 说明原因
+        self.assertIn("Synthetic", str(ctx.exception))  # 说明原因
         self.assertEqual(ctx.exception.code, "note-in-progress")
         # 批注未被搁住，也没有产生分析
         self.assertEqual(store.load(self.d)["notes"][0]["status"], "open")
@@ -116,8 +122,10 @@ class AnalysisStartTests(unittest.TestCase):
             analysis_store.start(self.d, note["id"])
         self.assertEqual(ctx.exception.code, "note-not-open")
         drafted = add_note(self.d, page=4)
-        store.import_notes(self.d, [{"id": drafted["id"], "page": 4, "text": "x",
-                                     "status": "drafted", "draftedAt": "2030-01-01T00:00:00Z"}])
+        store.import_notes(
+            self.d,
+            [{"id": drafted["id"], "page": 4, "text": "x", "status": "drafted", "draftedAt": "2030-01-01T00:00:00Z"}],
+        )
         with self.assertRaises(store.HandoffError):
             analysis_store.start(self.d, drafted["id"])
         held = add_note(self.d, page=5)
@@ -136,8 +144,10 @@ class AnalysisStartTests(unittest.TestCase):
         self.assertEqual(kept["text"], "第 3 页「增长主要来自新客」这个结论站得住吗？")
         self.assertEqual(kept["quote"], "增长主要来自新客")
         store.delete(self.d, note["id"])
-        self.assertEqual(analysis_store.load(self.d, state["id"])["sourceCopy"]["text"],
-                         "第 3 页「增长主要来自新客」这个结论站得住吗？")
+        self.assertEqual(
+            analysis_store.load(self.d, state["id"])["sourceCopy"]["text"],
+            "第 3 页「增长主要来自新客」这个结论站得住吗？",
+        )
 
     def test_release_returns_source_note_to_open(self):
         """不打算继续分析时手动解除搁住，批注回到未处理。"""
@@ -148,7 +158,7 @@ class AnalysisStartTests(unittest.TestCase):
         self.assertEqual(after["status"], "open")
         self.assertNotIn("hold", after)
         with self.assertRaises(store.HandoffError):
-            analysis_store.release_source(self.d, state["id"])   # 只能解除一次
+            analysis_store.release_source(self.d, state["id"])  # 只能解除一次
 
 
 class RoundFlowTests(unittest.TestCase):
@@ -164,8 +174,9 @@ class RoundFlowTests(unittest.TestCase):
         claimed = analysis_store.claim(self.d, by="Synthetic")
         self.assertEqual(claimed["seq"], self.round1)
         self.assertEqual(claimed["baseRev"], 1)
-        analysis_store.writeback(self.d, self.state["id"], self.round1, 1,
-                                 [propose_caliber()], note="先问口径", by="Synthetic")
+        analysis_store.writeback(
+            self.d, self.state["id"], self.round1, 1, [propose_caliber()], note="先问口径", by="Synthetic"
+        )
         state = analysis_store.load(self.d, self.state["id"])
         self.assertEqual([r["seq"] for r in state["rounds"]], [1, 2])
         self.assertEqual(state["rounds"][1]["status"], "open")
@@ -194,8 +205,9 @@ class RoundFlowTests(unittest.TestCase):
         self.assertEqual(state["rounds"][1]["status"], "submitted")
         second = analysis_store.claim(self.d, by="Synthetic")
         self.assertEqual(second["seq"], 2)
-        result = analysis_store.writeback(self.d, self.state["id"], 2, second["baseRev"], [],
-                                          note="没有要追问的了", by="Synthetic")
+        result = analysis_store.writeback(
+            self.d, self.state["id"], 2, second["baseRev"], [], note="没有要追问的了", by="Synthetic"
+        )
         self.assertIsNone(result.get("nextRound"))
         self.assertEqual(analysis_store.load(self.d, self.state["id"])["rounds"][1]["status"], "done")
 
@@ -243,8 +255,9 @@ class RoundFlowTests(unittest.TestCase):
     def test_rejected_proposal_never_enters_tree(self):
         """结构提议不采纳：不入树，也不出现在下一轮。"""
         analysis_store.claim(self.d, by="Synthetic")
-        analysis_store.writeback(self.d, self.state["id"], self.round1, 1,
-                                 [propose_caliber("p1"), propose_caliber("p2")], by="Synthetic")
+        analysis_store.writeback(
+            self.d, self.state["id"], self.round1, 1, [propose_caliber("p1"), propose_caliber("p2")], by="Synthetic"
+        )
         analysis_store.answer(self.d, self.state["id"], 2, "S:p1", {"kind": "reject"})
         analysis_store.answer(self.d, self.state["id"], 2, "S:p2", {"kind": "accept"})
         state = analysis_store.load(self.d, self.state["id"])
@@ -266,9 +279,14 @@ class RoundFlowTests(unittest.TestCase):
         analysis_store.submit_round(self.d, self.state["id"], 2)
         claimed = analysis_store.claim(self.d, by="Synthetic")
         # 子问题挂在「年度」下；当前答了「季度」，写回后下一轮只有结构提议、没有可答的问题
-        child = {"key": "p2", "text": "年度口径下，对比对象选谁？", "short": "对比对象",
-                 "options": [{"id": "P", "label": "去年同期"}, {"id": "I", "label": "行业均值"}],
-                 "recommend": "P", "parent": {"node": "n1", "option": "Y"}}
+        child = {
+            "key": "p2",
+            "text": "年度口径下，对比对象选谁？",
+            "short": "对比对象",
+            "options": [{"id": "P", "label": "去年同期"}, {"id": "I", "label": "行业均值"}],
+            "recommend": "P",
+            "parent": {"node": "n1", "option": "Y"},
+        }
         result = analysis_store.writeback(self.d, self.state["id"], 2, claimed["baseRev"], [child], by="Synthetic")
         nxt = result["nextRound"]
         items = analysis_store.load(self.d, self.state["id"])["rounds"][-1]["items"]
@@ -285,7 +303,7 @@ class RoundFlowTests(unittest.TestCase):
 
     def test_answers_are_kept_verbatim_without_truncation(self):
         """问答记录不截断：问题文本、选项与审阅人回答原文保留。"""
-        long_text = "问题原文很长。" * 60   # 远超批注侧 200 字的短字段上限
+        long_text = "问题原文很长。" * 60  # 远超批注侧 200 字的短字段上限
         analysis_store.claim(self.d, by="Synthetic")
         proposal = propose_caliber()
         proposal["text"] = long_text
@@ -299,11 +317,12 @@ class RoundFlowTests(unittest.TestCase):
     def test_unanswered_questions_reappear_in_next_round(self):
         """只答一部分就交出：没答的问题下一轮还会出现。"""
         analysis_store.claim(self.d, by="Synthetic")
-        analysis_store.writeback(self.d, self.state["id"], self.round1, 1,
-                                 [propose_caliber("p1"), propose_caliber("p2")], by="Synthetic")
+        analysis_store.writeback(
+            self.d, self.state["id"], self.round1, 1, [propose_caliber("p1"), propose_caliber("p2")], by="Synthetic"
+        )
         analysis_store.answer(self.d, self.state["id"], 2, "S:p1", {"kind": "accept"})
         analysis_store.answer(self.d, self.state["id"], 2, "Q:n1", {"kind": "option", "option": "Y"})
-        analysis_store.submit_round(self.d, self.state["id"], 2)   # S:p2 没答就交出
+        analysis_store.submit_round(self.d, self.state["id"], 2)  # S:p2 没答就交出
         claimed = analysis_store.claim(self.d, by="Synthetic")
         analysis_store.writeback(self.d, self.state["id"], 2, claimed["baseRev"], [], by="Synthetic")
         state = analysis_store.load(self.d, self.state["id"])
@@ -340,8 +359,7 @@ class RoundFlowTests(unittest.TestCase):
             analysis_store.writeback(self.d, self.state["id"], self.round1, 1, [], by="Synthetic")
         claimed = analysis_store.claim(self.d, by="Synthetic")
         with self.assertRaises(store.HandoffError) as ctx:
-            analysis_store.writeback(self.d, self.state["id"], self.round1, claimed["baseRev"] + 5,
-                                     [], by="Synthetic")
+            analysis_store.writeback(self.d, self.state["id"], self.round1, claimed["baseRev"] + 5, [], by="Synthetic")
         self.assertEqual(ctx.exception.code, "base-rev-mismatch")
 
     def test_agent_handles_one_item_at_a_time(self):
@@ -380,7 +398,7 @@ class AnalysisModelTests(unittest.TestCase):
         analysis_store.claim(self.d, by="Synthetic")
         analysis_store.writeback(self.d, state["id"], round1, 1, [propose_caliber()], by="Synthetic")
         second = self.events(state["id"])
-        self.assertEqual(second[:len(first)], first)   # 已写下的事件一个字都不改
+        self.assertEqual(second[: len(first)], first)  # 已写下的事件一个字都不改
         self.assertGreater(len(second), len(first))
         if os.name != "nt":
             for f in (self.d / "analysis" / state["id"] / "events.jsonl", self.d / "analysis" / "counter.json"):
@@ -392,7 +410,7 @@ class AnalysisModelTests(unittest.TestCase):
         state1, round1 = analysis_store.start(self.d, one["id"])
         state2, round2 = analysis_store.start(self.d, two["id"])
         self.assertEqual(round1, 1)
-        self.assertEqual(round2, 2)   # 轮次号在整份审阅内唯一，不按分析各自编号
+        self.assertEqual(round2, 2)  # 轮次号在整份审阅内唯一，不按分析各自编号
         self.assertGreaterEqual(round2, round1 + 1)
         # 分析线标识预留：本票只有主线
         self.assertEqual(state1["line"], "main")
@@ -424,9 +442,8 @@ class AnalysisModelTests(unittest.TestCase):
         analysis_store.writeback(self.d, state["id"], round1, 1, [propose_caliber()], by="Synthetic")
         analysis_store.answer(self.d, state["id"], 2, "S:p1", {"kind": "accept"})
         again = analysis_store.load(self.d, state["id"])
-        self.assertEqual(list(again["nodes"]), ["n1"])   # 无缓存文件也推导出同一状态
-        self.assertEqual(sorted(p.name for p in (self.d / "analysis" / state["id"]).iterdir()),
-                         ["events.jsonl"])
+        self.assertEqual(list(again["nodes"]), ["n1"])  # 无缓存文件也推导出同一状态
+        self.assertEqual(sorted(p.name for p in (self.d / "analysis" / state["id"]).iterdir()), ["events.jsonl"])
 
 
 class ConvertTests(unittest.TestCase):
@@ -461,7 +478,7 @@ class ConvertTests(unittest.TestCase):
         self.assertEqual(confirmed["page"], self.note["page"])
         source = next(n for n in notes if n["id"] == self.note["id"])
         self.assertEqual(source["status"], "resolved")
-        self.assertEqual(source["analysisId"], self.state["id"])   # 指向分析
+        self.assertEqual(source["analysisId"], self.state["id"])  # 指向分析
         # 草稿确认一次后不能再来
         with self.assertRaises(store.HandoffError):
             analysis_store.confirm_convert(self.d, self.state["id"], draft["id"])
@@ -471,27 +488,30 @@ class ConvertTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             review = Path(directory)
             manifest = review / "review.json"
-            manifest.write_text(json.dumps({"pages": [{"n": 3, "key": "growth", "stable": True,
-                                                       "title": "原来的增长页"}]}))
+            manifest.write_text(
+                json.dumps({"pages": [{"n": 3, "key": "growth", "stable": True, "title": "原来的增长页"}]})
+            )
             _doc, note = store.add(review, {"page": 3, "text": "增长结论对吗？", "key": "growth"})
             state, round_no = analysis_store.start(review, note["id"])
             analysis_store.claim(review)
             analysis_store.writeback(review, state["id"], round_no, 1, [propose_caliber()])
             analysis_store.answer(review, state["id"], 2, "S:p1", {"kind": "accept"})
             analysis_store.answer(review, state["id"], 2, "Q:n1", {"kind": "accept"})
-            manifest.write_text(json.dumps({"pages": [{"n": 7, "key": "growth", "stable": True,
-                                                       "title": "重排后的增长页"}]}))
+            manifest.write_text(
+                json.dumps({"pages": [{"n": 7, "key": "growth", "stable": True, "title": "重排后的增长页"}]})
+            )
             draft = analysis_store.convert(review, state["id"], "n1")
             self.assertEqual((draft["page"], draft["key"]), (7, "growth"))
-            manifest.write_text(json.dumps({"pages": [{"n": 8, "key": "growth", "stable": True,
-                                                       "title": "再次重排的增长页"}]}))
+            manifest.write_text(
+                json.dumps({"pages": [{"n": 8, "key": "growth", "stable": True, "title": "再次重排的增长页"}]})
+            )
             converted = analysis_store.confirm_convert(review, state["id"], draft["id"])
-            self.assertEqual((converted["page"], converted["key"], converted["title"]),
-                             (8, "growth", "再次重排的增长页"))
+            self.assertEqual(
+                (converted["page"], converted["key"], converted["title"]), (8, "growth", "再次重排的增长页")
+            )
             self.assertFalse(converted.get("orphan"))
             original = analysis_store.load(review, state["id"])["sourceCopy"]
-            self.assertEqual((original["page"], original["key"], original["text"]),
-                             (3, "growth", "增长结论对吗？"))
+            self.assertEqual((original["page"], original["key"], original["text"]), (3, "growth", "增长结论对吗？"))
             draft = analysis_store.convert(review, state["id"], "n1")
             manifest.write_text(json.dumps({"pages": [{"n": 8, "key": "other", "stable": True}]}))
             orphan = analysis_store.confirm_convert(review, state["id"], draft["id"])
@@ -510,8 +530,11 @@ class ConvertTests(unittest.TestCase):
             analysis_store.writeback(review, state["id"], round_no, 1, [propose_caliber()])
             analysis_store.answer(review, state["id"], 2, "S:p1", {"kind": "accept"})
             analysis_store.answer(review, state["id"], 2, "Q:n1", {"kind": "accept"})
-            manifest.write_text(json.dumps({"pages": [{"n": 7, "key": "growth", "stable": True},
-                                                       {"n": 8, "key": "growth", "stable": False}]}))
+            manifest.write_text(
+                json.dumps(
+                    {"pages": [{"n": 7, "key": "growth", "stable": True}, {"n": 8, "key": "growth", "stable": False}]}
+                )
+            )
             draft = analysis_store.convert(review, state["id"], "n1")
             self.assertTrue(draft["orphan"])
 
@@ -520,7 +543,7 @@ class ConvertTests(unittest.TestCase):
         with self.assertRaises(store.HandoffError) as ctx:
             analysis_store.convert(self.d, self.state["id"], "n1")
         self.assertEqual(ctx.exception.code, "node-not-decided")
-        self.decide_caliber(option="S")   # 答了「季度」：根节点的结论照样成立
+        self.decide_caliber(option="S")  # 答了「季度」：根节点的结论照样成立
         draft = analysis_store.convert(self.d, self.state["id"], "n1")
         self.assertEqual(draft["basis"]["option"], "S")
 
@@ -533,8 +556,7 @@ class AnalysisBoundaryTests(unittest.TestCase):
             foreign, _round_no = analysis_store.start(other, add_note(other)["id"])
             foreign_dir = other / "analysis" / foreign["id"]
             original = (foreign_dir / "events.jsonl").read_bytes()
-            for analysis_id in (str(foreign_dir), f"../../{other.name}/analysis/{foreign['id']}",
-                                foreign["id"] + "\n"):
+            for analysis_id in (str(foreign_dir), f"../../{other.name}/analysis/{foreign['id']}", foreign["id"] + "\n"):
                 with self.subTest(analysis_id=analysis_id), self.assertRaises(store.NoteError):
                     analysis_store.load(review, analysis_id)
             (review / "analysis").mkdir()

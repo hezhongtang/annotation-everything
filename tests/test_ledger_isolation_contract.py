@@ -9,6 +9,7 @@
 `os.environ["AE_HOME"] = ...` 赋值。通过 subprocess 运行的脚本使用
 子进程的 AE_HOME。notes_store 只写审阅目录内的批注文件。
 """
+
 from __future__ import annotations
 
 import ast
@@ -33,13 +34,15 @@ def _sets_ae_home(node: ast.stmt) -> bool:
     if not isinstance(node, ast.Assign):
         return False
     for target in node.targets:
-        if (isinstance(target, ast.Subscript)
-                and isinstance(target.value, ast.Attribute)
-                and isinstance(target.value.value, ast.Name)
-                and target.value.value.id == "os"
-                and target.value.attr == "environ"
-                and isinstance(target.slice, ast.Constant)
-                and target.slice.value == "AE_HOME"):
+        if (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Attribute)
+            and isinstance(target.value.value, ast.Name)
+            and target.value.value.id == "os"
+            and target.value.attr == "environ"
+            and isinstance(target.slice, ast.Constant)
+            and target.slice.value == "AE_HOME"
+        ):
             return True
     return False
 
@@ -76,7 +79,7 @@ class LedgerIsolationContractTests(unittest.TestCase):
             offenders,
             [],
             "以下测试文件未在首个台账导入所在的模块级语句前赋值"
-            " os.environ[\"AE_HOME\"]，可能写入真实的审阅台账（issue #165）",
+            ' os.environ["AE_HOME"]，可能写入真实的审阅台账（issue #165）',
         )
 
 

@@ -15,6 +15,7 @@ tests/e2e_browser.py。它们在启动资源敏感的验证前先取锁，结束
 持有者诊断信息，所有权以操作系统锁句柄为准。只用 Python 标准库，语法兼容
 Python 3.9。
 """
+
 from __future__ import annotations
 
 import datetime
@@ -65,9 +66,9 @@ RESOURCE_DECLARATIONS = {
         "mutually_exclusive": True,
         "shared_by": "同一用户在同一台机器上的全部检出（worktree、独立 checkout）",
         "why": "doctor / uninstall 用真实 ps 枚举本机全部进程并探测端口，"
-               "任何并行启动的真实 serve.py 都会进入盘点结果、被误判为残留服务；"
-               "端口分配也共享同一内核端口池。状态属于机器与用户，不属于任何一个检出，"
-               "按检出加锁挡不住别的 worktree 或独立 checkout 里的参与者。",
+        "任何并行启动的真实 serve.py 都会进入盘点结果、被误判为残留服务；"
+        "端口分配也共享同一内核端口池。状态属于机器与用户，不属于任何一个检出，"
+        "按检出加锁挡不住别的 worktree 或独立 checkout 里的参与者。",
     },
     "ledger-and-skill-copy": {
         "title": "审阅台账与技能副本",
@@ -75,9 +76,9 @@ RESOURCE_DECLARATIONS = {
         "mutually_exclusive": False,
         "shared_by": "同一用户的真实台账与技能副本位置",
         "why": "测试与 eval 已全部通过 AE_HOME、CLAUDE_SKILLS_DIR、HOME 注入合成位置，"
-               "真实台账与技能副本从不被读写，没有跨进程共享的可变状态，不需要互斥。"
-               "登记在此说明独立的理由，也提醒后续改动：一旦测试开始共享这些位置，"
-               "就必须改为互斥资源。",
+        "真实台账与技能副本从不被读写，没有跨进程共享的可变状态，不需要互斥。"
+        "登记在此说明独立的理由，也提醒后续改动：一旦测试开始共享这些位置，"
+        "就必须改为互斥资源。",
     },
 }
 
@@ -91,19 +92,19 @@ GROUP_RESOURCES = {
 # require_for_module 取锁，直接跑 unittest discover 时同样受协议保护。
 # e2e_browser.py 不进 discover，单独在文件头接入。
 MODULE_RESOURCES = {
-    "tests.test_agent_delivery": ("host-state",),     # 普通 CLI 重启的合成服务
+    "tests.test_agent_delivery": ("host-state",),  # 普通 CLI 重启的合成服务
     "tests.test_ae_checks_runtime": ("host-state",),  # 真实 probe_port / ps 枚举 + 真实 serve.py
-    "tests.test_ae_cli": ("host-state",),              # doctor / uninstall 真实子进程读全机视图
-    "tests.test_ae_repair": ("host-state",),           # 真实 serve.py + doctor 子进程
-    "tests.test_ae_target": ("host-state",),           # --target doctor 真实子进程读全机视图
-    "tests.test_ae_uninstall": ("host-state",),        # 真实 serve.py + real_ps 用例
-    "tests.test_serve_locale": ("host-state",),       # CLI 安全自检短暂启动真实 serve.py
-    "tests.test_review_stop": ("host-state",),        # 审阅停止回归启动真实 serve.py
-    "tests.test_skill_updates": ("host-state",),      # 更新期间读取真实进程并启动合成审阅服务
-    "tests.test_core": ("host-state",),                # ServerTests / StaleServerTests 启动真实 serve.py
-    "tests.test_e2e_servers": ("host-state",),         # 真实 serve.py 生命周期
-    "tests.test_host_interference": ("host-state",),   # 真实 serve.py × 真实 doctor 干扰回归
-    "tests.e2e_browser": ("host-state",),              # 直跑入口：真实 serve.py + 浏览器
+    "tests.test_ae_cli": ("host-state",),  # doctor / uninstall 真实子进程读全机视图
+    "tests.test_ae_repair": ("host-state",),  # 真实 serve.py + doctor 子进程
+    "tests.test_ae_target": ("host-state",),  # --target doctor 真实子进程读全机视图
+    "tests.test_ae_uninstall": ("host-state",),  # 真实 serve.py + real_ps 用例
+    "tests.test_serve_locale": ("host-state",),  # CLI 安全自检短暂启动真实 serve.py
+    "tests.test_review_stop": ("host-state",),  # 审阅停止回归启动真实 serve.py
+    "tests.test_skill_updates": ("host-state",),  # 更新期间读取真实进程并启动合成审阅服务
+    "tests.test_core": ("host-state",),  # ServerTests / StaleServerTests 启动真实 serve.py
+    "tests.test_e2e_servers": ("host-state",),  # 真实 serve.py 生命周期
+    "tests.test_host_interference": ("host-state",),  # 真实 serve.py × 真实 doctor 干扰回归
+    "tests.e2e_browser": ("host-state",),  # 直跑入口：真实 serve.py + 浏览器
 }
 
 # 合成资源名：只用于协议自身的测试与顺序获取演示，不映射到真实组。
@@ -132,9 +133,13 @@ class LockTimeoutError(Exception):
 def _all_resources() -> dict:
     known = dict(RESOURCE_DECLARATIONS)
     for name in SYNTHETIC_RESOURCES:
-        known[name] = {"title": "合成资源（协议测试用）", "scope": "test-only",
-                       "mutually_exclusive": True, "shared_by": "测试临时锁目录",
-                       "why": "验证多资源按序获取与跨进程互斥，不对应真实共享状态。"}
+        known[name] = {
+            "title": "合成资源（协议测试用）",
+            "scope": "test-only",
+            "mutually_exclusive": True,
+            "shared_by": "测试临时锁目录",
+            "why": "验证多资源按序获取与跨进程互斥，不对应真实共享状态。",
+        }
     return known
 
 
@@ -201,8 +206,9 @@ def normalize_resources(resources) -> tuple:
     names = set(resources or ())
     unknown = names - set(known)
     if unknown:
-        raise UnknownResourceError("未声明的资源：%s（可选：%s）"
-                                   % ("、".join(sorted(unknown)), "、".join(resource_order())))
+        raise UnknownResourceError(
+            "未声明的资源：%s（可选：%s）" % ("、".join(sorted(unknown)), "、".join(resource_order()))
+        )
     return tuple(name for name in resource_order() if name in names)
 
 
@@ -224,8 +230,9 @@ class LockHandle:
     误清掉——那会让同进程后续的子参与者失去豁免、与宿主持有的锁互相等待。
     """
 
-    def __init__(self, resources: tuple, borrowed_resources, waited_seconds: float,
-                 files: Optional[list] = None, env=None):
+    def __init__(
+        self, resources: tuple, borrowed_resources, waited_seconds: float, files: Optional[list] = None, env=None
+    ):
         self.resources = resources
         self.borrowed_resources = tuple(borrowed_resources or ())
         self.borrowed = bool(self.borrowed_resources)
@@ -234,9 +241,12 @@ class LockHandle:
         self.env = env
 
     def describe(self) -> dict:
-        return {"resources": list(self.resources), "borrowed": self.borrowed,
-                "borrowed_resources": list(self.borrowed_resources),
-                "wait_seconds": round(self.waited_seconds, 6)}
+        return {
+            "resources": list(self.resources),
+            "borrowed": self.borrowed,
+            "borrowed_resources": list(self.borrowed_resources),
+            "wait_seconds": round(self.waited_seconds, 6),
+        }
 
     def file_descriptors(self) -> tuple:
         """本次实际持有的锁描述符，传给组子进程以覆盖入口先退出的时序。"""
@@ -245,11 +255,17 @@ class LockHandle:
 
 def _write_holder_note(handle, resource: str) -> None:
     """把持有者诊断信息写进已持有的锁句柄。只用于观测，所有权以操作系统锁为准。"""
-    payload = json.dumps({
-        "pid": os.getpid(),
-        "resource": resource,
-        "at": datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="seconds"),
-    }, ensure_ascii=False) + "\n"
+    payload = (
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "resource": resource,
+                "at": datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="seconds"),
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
     try:
         handle.seek(0)
         handle.truncate(0)
@@ -301,8 +317,13 @@ def _open_windows_lock(path: Path, resource: str, timeout: float, started: float
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     create_file = kernel32.CreateFileW
     create_file.argtypes = [
-        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
-        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
     ]
     create_file.restype = wintypes.HANDLE
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
@@ -317,8 +338,13 @@ def _open_windows_lock(path: Path, resource: str, timeout: float, started: float
 
     while True:
         raw_handle = create_file(
-            str(path), generic_rw, share_read_delete, None,
-            open_always, attr_normal, None,
+            str(path),
+            generic_rw,
+            share_read_delete,
+            None,
+            open_always,
+            attr_normal,
+            None,
         )
         if raw_handle not in (None, 0, invalid_handle):
             break

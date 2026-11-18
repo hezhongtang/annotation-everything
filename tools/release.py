@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """版本提交通过 CI 后补齐标签、GitHub Release 和里程碑。可重复运行。"""
+
 from __future__ import annotations
 
 import argparse
@@ -53,8 +54,9 @@ def make_plan(version: str, tags: Iterable[str], releases: Iterable[str]) -> Pla
     if new_tag:
         ordered.append(new_tag)
     published = set(releases)
-    missing = [(tag, ordered[index - 1] if index else None)
-               for index, tag in enumerate(ordered) if tag not in published]
+    missing = [
+        (tag, ordered[index - 1] if index else None) for index, tag in enumerate(ordered) if tag not in published
+    ]
     return Plan(new_tag, missing, ordered[-1] if ordered else None)
 
 
@@ -67,21 +69,44 @@ def read_version(run: Runner, sha: str) -> str:
 
 def require_ci_success(run: Runner, repo: str, sha: str) -> None:
     """新版本会经自动更新下发，所以目标提交必须有成功的 main push CI。"""
-    query = (f"repos/{repo}/actions/workflows/ci.yml/runs"
-             f"?head_sha={sha}&event=push&status=success&per_page=1")
+    query = f"repos/{repo}/actions/workflows/ci.yml/runs?head_sha={sha}&event=push&status=success&per_page=1"
     if not int(run(["gh", "api", query, "--jq", ".total_count"]).strip() or 0):
         raise ReleaseError(f"提交 {sha} 没有成功的 CI 记录，不发布新版本")
 
 
 def create_tag(run: Runner, tag: str, sha: str) -> None:
-    run(["git", "-c", f"user.name={BOT[0]}", "-c", f"user.email={BOT[1]}",
-         "tag", "-a", tag, sha, "-m", f"annotation-everything {tag}"])
+    run(
+        [
+            "git",
+            "-c",
+            f"user.name={BOT[0]}",
+            "-c",
+            f"user.email={BOT[1]}",
+            "tag",
+            "-a",
+            tag,
+            sha,
+            "-m",
+            f"annotation-everything {tag}",
+        ]
+    )
     run(["git", "push", "origin", f"refs/tags/{tag}"])
 
 
 def create_release(run: Runner, repo: str, tag: str, previous: Optional[str], latest: bool) -> None:
-    args = ["gh", "release", "create", tag, "--repo", repo, "--verify-tag",
-            "--title", tag, "--generate-notes", "--latest" if latest else "--latest=false"]
+    args = [
+        "gh",
+        "release",
+        "create",
+        tag,
+        "--repo",
+        repo,
+        "--verify-tag",
+        "--title",
+        tag,
+        "--generate-notes",
+        "--latest" if latest else "--latest=false",
+    ]
     if previous:
         args += ["--notes-start-tag", previous]
     run(args)
@@ -95,8 +120,17 @@ def close_milestone(run: Runner, repo: str, tag: str) -> None:
         if milestone["open_issues"]:
             print(f"里程碑 {tag} 还有 {milestone['open_issues']} 项未完成，保持打开")
         else:
-            run(["gh", "api", "--method", "PATCH", f"repos/{repo}/milestones/{milestone['number']}",
-                 "-f", "state=closed"])
+            run(
+                [
+                    "gh",
+                    "api",
+                    "--method",
+                    "PATCH",
+                    f"repos/{repo}/milestones/{milestone['number']}",
+                    "-f",
+                    "state=closed",
+                ]
+            )
 
 
 def execute(run: Runner, repo: str, sha: str, dry_run: bool = False) -> Plan:
@@ -107,8 +141,9 @@ def execute(run: Runner, repo: str, sha: str, dry_run: bool = False) -> Plan:
     run(["git", "merge-base", "--is-ancestor", sha, "origin/main"])
     version = read_version(run, sha)
     tags = run(["git", "tag", "--list", "v*"]).split()
-    releases = run(["gh", "release", "list", "--repo", repo, "--limit", "1000",
-                    "--json", "tagName", "--jq", ".[].tagName"]).split()
+    releases = run(
+        ["gh", "release", "list", "--repo", repo, "--limit", "1000", "--json", "tagName", "--jq", ".[].tagName"]
+    ).split()
     plan = make_plan(version, tags, releases)
     print(f"版本 {version}；新标签：{plan.new_tag or '无'}；待建 Release：{[tag for tag, _ in plan.missing]}")
     if plan.new_tag:

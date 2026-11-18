@@ -5,6 +5,7 @@
 数字一致性、PowerPoint 实测披露，以及必需而未完成时整项请求的缺口披露。
 全部材料由标准库现场合成（deck 用内置制作器构建）。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -44,42 +45,63 @@ def make_record(**overrides) -> dict:
     record = {
         "schema": RECORD_SCHEMA,
         "generatedAt": "2026-11-02T09:00:00+08:00",
-        "request": {"purpose": "季度经营汇报", "audience": "管理层",
-                    "coreQuestions": ["三季度收入为什么增长"], "length": "2 页",
-                    "script": "yes"},
-        "sources": [{"path": "materials/q3-notes.md", "status": "read",
-                     "coverage": "全文", "sha256": sha(MATERIAL), "note": ""}],
-        "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
-                   "version": "0.12.1", "unavailable": []},
-        "links": {"report": "report.html", "script": "script.md",
-                  "sha256": {"report": sha(REPORT), "script": sha(SCRIPT)},
-                  "sourceNote": "材料旁"},
-        "findings": [{"claim": "三季度收入同比增长 12%", "type": "calculation",
-                      "sources": ["materials/q3-notes.md"], "pages": ["sum"],
-                      "refs": [{"path": "materials/q3-notes.md", "locator": "§1",
-                                "quote": "去年同期为 100 万元", "found": True}],
-                      "support": "supported",
-                      "basis": "对比两期原文并复算",
-                      "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 112},
-                                      "expected": 12, "unit": "万元",
-                                      "period": "2025Q3 对 2024Q3",
-                                      "definition": "对上年同期收入的增长百分比",
-                                      "inputLocations": {"a": "§1", "b": "§1"}}}],
-        "gaps": [], "openItems": [],
-        "checks": [{"id": "content.requirements", "status": "not_run", "scope": "", "note": ""},
-                   {"id": "content.claims", "status": "not_run", "scope": "", "note": ""},
-                   {"id": "content.fact-vs-inference", "status": "not_run", "scope": "", "note": ""},
-                   {"id": "content.units-dates", "status": "not_run", "scope": "", "note": ""},
-                   {"id": "content.numbers-charts", "status": "not_run", "scope": "", "note": ""},
-                   {"id": "content.cross-page", "status": "not_run", "scope": "", "note": ""},
-                   {"id": "content.script-consistency", "status": "not_run", "scope": "", "note": ""},
-                   {"id": "content.open-questions", "status": "not_run", "scope": "", "note": ""},
-                   {"id": "structure.flow", "status": "not_run", "scope": "", "note": ""},
-                   {"id": "structure.headings", "status": "not_run", "scope": "", "note": ""},
-                   {"id": "structure.claim-support", "status": "not_run", "scope": "", "note": ""},
-                   {"id": "structure.dup-gaps", "status": "not_run", "scope": "", "note": ""},
-                   {"id": "structure.length", "status": "not_run", "scope": "", "note": ""},
-                   {"id": "visual.pages", "status": "not_run", "scope": "", "note": ""}],
+        "request": {
+            "purpose": "季度经营汇报",
+            "audience": "管理层",
+            "coreQuestions": ["三季度收入为什么增长"],
+            "length": "2 页",
+            "script": "yes",
+        },
+        "sources": [
+            {"path": "materials/q3-notes.md", "status": "read", "coverage": "全文", "sha256": sha(MATERIAL), "note": ""}
+        ],
+        "method": {"kind": "builtin", "name": "annotation-everything 内置范式", "version": "0.12.1", "unavailable": []},
+        "links": {
+            "report": "report.html",
+            "script": "script.md",
+            "sha256": {"report": sha(REPORT), "script": sha(SCRIPT)},
+            "sourceNote": "材料旁",
+        },
+        "findings": [
+            {
+                "claim": "三季度收入同比增长 12%",
+                "type": "calculation",
+                "sources": ["materials/q3-notes.md"],
+                "pages": ["sum"],
+                "refs": [
+                    {"path": "materials/q3-notes.md", "locator": "§1", "quote": "去年同期为 100 万元", "found": True}
+                ],
+                "support": "supported",
+                "basis": "对比两期原文并复算",
+                "calculation": {
+                    "op": "percent-change",
+                    "inputs": {"a": 100, "b": 112},
+                    "expected": 12,
+                    "unit": "万元",
+                    "period": "2025Q3 对 2024Q3",
+                    "definition": "对上年同期收入的增长百分比",
+                    "inputLocations": {"a": "§1", "b": "§1"},
+                },
+            }
+        ],
+        "gaps": [],
+        "openItems": [],
+        "checks": [
+            {"id": "content.requirements", "status": "not_run", "scope": "", "note": ""},
+            {"id": "content.claims", "status": "not_run", "scope": "", "note": ""},
+            {"id": "content.fact-vs-inference", "status": "not_run", "scope": "", "note": ""},
+            {"id": "content.units-dates", "status": "not_run", "scope": "", "note": ""},
+            {"id": "content.numbers-charts", "status": "not_run", "scope": "", "note": ""},
+            {"id": "content.cross-page", "status": "not_run", "scope": "", "note": ""},
+            {"id": "content.script-consistency", "status": "not_run", "scope": "", "note": ""},
+            {"id": "content.open-questions", "status": "not_run", "scope": "", "note": ""},
+            {"id": "structure.flow", "status": "not_run", "scope": "", "note": ""},
+            {"id": "structure.headings", "status": "not_run", "scope": "", "note": ""},
+            {"id": "structure.claim-support", "status": "not_run", "scope": "", "note": ""},
+            {"id": "structure.dup-gaps", "status": "not_run", "scope": "", "note": ""},
+            {"id": "structure.length", "status": "not_run", "scope": "", "note": ""},
+            {"id": "visual.pages", "status": "not_run", "scope": "", "note": ""},
+        ],
         "verdict": {"draftComplete": True, "deliverable": None},
     }
     record.update(overrides)
@@ -90,22 +112,34 @@ def deck_spec(claim_text: str = "三季度收入同比增长 12%") -> dict:
     return {
         "schema": "ae-pptx-deck/1",
         "title": "合成演示文稿",
-        "theme": {"colors": {"dk1": "1F2933", "lt1": "FFFFFF", "dk2": "3E4C59",
-                             "lt2": "F5F7FA", "accent1": "2B6CB0", "accent2": "2C7A7B",
-                             "accent3": "B7791F", "accent4": "6B46C1", "accent5": "C05621",
-                             "accent6": "975FA8", "hlink": "2B6CB0", "folHlink": "805AD5"},
-                  "fonts": {"major": {"latin": "Synthetic Display", "ea": "合成标题字体"},
-                            "minor": {"latin": "Synthetic Text", "ea": "合成正文字体"}}},
+        "theme": {
+            "colors": {
+                "dk1": "1F2933",
+                "lt1": "FFFFFF",
+                "dk2": "3E4C59",
+                "lt2": "F5F7FA",
+                "accent1": "2B6CB0",
+                "accent2": "2C7A7B",
+                "accent3": "B7791F",
+                "accent4": "6B46C1",
+                "accent5": "C05621",
+                "accent6": "975FA8",
+                "hlink": "2B6CB0",
+                "folHlink": "805AD5",
+            },
+            "fonts": {
+                "major": {"latin": "Synthetic Display", "ea": "合成标题字体"},
+                "minor": {"latin": "Synthetic Text", "ea": "合成正文字体"},
+            },
+        },
         "slides": [
             {"key": "cover", "layout": "title", "title": "合成封面"},
-            {"key": "sum", "layout": "titleAndContent", "title": "收入结论",
-             "body": [claim_text]},
+            {"key": "sum", "layout": "titleAndContent", "title": "收入结论", "body": [claim_text]},
         ],
     }
 
 
-FAKE_PNG = (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR"
-            + (4).to_bytes(4, "big") + (4).to_bytes(4, "big") + b"rest")
+FAKE_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR" + (4).to_bytes(4, "big") + (4).to_bytes(4, "big") + b"rest"
 
 
 class DeliverablesCheckTests(unittest.TestCase):
@@ -130,33 +164,50 @@ class DeliverablesCheckTests(unittest.TestCase):
         for number in numbers:
             image = directory / f"page-{number:02d}.png"
             image.write_bytes(FAKE_PNG)
-            entries.append({"page": number, "image": f"{prefix}/page-{number:02d}.png",
-                            "sha256": sha(FAKE_PNG), "checked": True, "issues": []})
+            entries.append(
+                {
+                    "page": number,
+                    "image": f"{prefix}/page-{number:02d}.png",
+                    "sha256": sha(FAKE_PNG),
+                    "checked": True,
+                    "issues": [],
+                }
+            )
         return entries
 
     def deliverable(self, **overrides) -> dict:
         item = {
-            "kind": "pptx", "required": True,
-            "file": "deck.pptx", "sha256": self.deck_sha, "pages": 2,
-            "build": {"tool": "annotation-everything 内置 pptx_build.py",
-                      "version": "0.12.1",
-                      "invocation": "python3 $S/pptx_build.py --deck deck.json --out deck.pptx",
-                      "deckSpec": "deck.json", "deckSpecSha256": sha("{}")},
-            "render": {"tool": "LibreOffice soffice", "version": "26.07",
-                       "pptxSha256": self.deck_sha,
-                       "notes": "pdftoppm 24.08"},
+            "kind": "pptx",
+            "required": True,
+            "file": "deck.pptx",
+            "sha256": self.deck_sha,
+            "pages": 2,
+            "build": {
+                "tool": "annotation-everything 内置 pptx_build.py",
+                "version": "0.12.1",
+                "invocation": "python3 $S/pptx_build.py --deck deck.json --out deck.pptx",
+                "deckSpec": "deck.json",
+                "deckSpecSha256": sha("{}"),
+            },
+            "render": {
+                "tool": "LibreOffice soffice",
+                "version": "26.07",
+                "pptxSha256": self.deck_sha,
+                "notes": "pdftoppm 24.08",
+            },
             "checks": {
-                "file": {"id": "pptx.file", "status": "pass", "note": "pptx_check 全部通过",
-                         "issues": []},
-                "visual": {"id": "pptx.visual", "status": "pass", "note": "逐页看图完成",
-                           "pages": self.images},
-                "consistency": {"id": "pptx.consistency", "status": "pass",
-                                "note": "关键数字逐条核对",
-                                "findings": [{"claim": "三季度收入同比增长 12%",
-                                              "pages": [2]}]},
+                "file": {"id": "pptx.file", "status": "pass", "note": "pptx_check 全部通过", "issues": []},
+                "visual": {"id": "pptx.visual", "status": "pass", "note": "逐页看图完成", "pages": self.images},
+                "consistency": {
+                    "id": "pptx.consistency",
+                    "status": "pass",
+                    "note": "关键数字逐条核对",
+                    "findings": [{"claim": "三季度收入同比增长 12%", "pages": [2]}],
+                },
             },
             "powerpoint": {"status": "not_run", "note": "本机无 PowerPoint，待 PR review 实测"},
-            "openIssues": [], "note": "",
+            "openIssues": [],
+            "note": "",
         }
         item.update(overrides)
         return item
@@ -166,18 +217,16 @@ class DeliverablesCheckTests(unittest.TestCase):
         (self.root / "script.md").write_bytes(SCRIPT.encode("utf-8"))
         (self.root / "materials").mkdir(exist_ok=True)
         (self.root / "materials" / "q3-notes.md").write_bytes(MATERIAL.encode("utf-8"))
-        (self.root / "report-record.json").write_text(
-            json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        (self.root / "report-record.json").write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
         if deck and not self.deck_path.exists():
             self._deck()
         return self.root / "report-record.json"
 
     def run_check(self, record: dict) -> dict:
         self.write_case(record)
-        return rc.check_report(self.root / "report.html",
-                               self.root / "script.md",
-                               self.root / "report-record.json",
-                               locale="zh-CN")
+        return rc.check_report(
+            self.root / "report.html", self.root / "script.md", self.root / "report-record.json", locale="zh-CN"
+        )
 
     def item(self, result: dict) -> dict | None:
         found = result.get("deliverables") or []
@@ -288,9 +337,14 @@ class DeliverablesCheckTests(unittest.TestCase):
         self.assertFalse(self.item(result)["deliverable"])
 
         grounded = self.deliverable(
-            powerpoint={"status": "pass", "os": "Windows 11 23H2",
-                        "version": "PowerPoint 2024 17932.20100", "build": "17932.20100",
-                        "note": "合成样例实测"})
+            powerpoint={
+                "status": "pass",
+                "os": "Windows 11 23H2",
+                "version": "PowerPoint 2024 17932.20100",
+                "build": "17932.20100",
+                "note": "合成样例实测",
+            }
+        )
         result2 = self.run_check(make_record(deliverables=[grounded]))
         self.assertEqual(self.status(result2), "pass")
         self.assertTrue(self.item(result2)["deliverable"])
@@ -308,8 +362,7 @@ class DeliverablesCheckTests(unittest.TestCase):
         item = self.deliverable()
         result = self.run_check(make_record(deliverables=[item]))
         self.assertEqual(self.status(result), "fail")
-        problems = [p for c in result["checks"] if c["id"] == "record.deliverables"
-                    for p in c.get("problems", [])]
+        problems = [p for c in result["checks"] if c["id"] == "record.deliverables" for p in c.get("problems", [])]
         self.assertTrue(any("consistency" in p["code"] for p in problems))
         self.assertFalse(self.item(result)["deliverable"])
 
@@ -322,8 +375,14 @@ class DeliverablesCheckTests(unittest.TestCase):
 
     def test_required_but_not_completed_discloses_gap(self):
         """必需而未完成（无有效产物）：程序不判矛盾，但保留整项请求缺口。"""
-        item = {"kind": "pptx", "required": True, "file": None, "status": "unavailable",
-                "note": "宿主缺 LibreOffice，暂无法渲染", "resume": "安装后可继续"}
+        item = {
+            "kind": "pptx",
+            "required": True,
+            "file": None,
+            "status": "unavailable",
+            "note": "宿主缺 LibreOffice，暂无法渲染",
+            "resume": "安装后可继续",
+        }
         result = self.run_check(make_record(deliverables=[item]))
         self.assertEqual(self.status(result), "pass")
         entry = self.item(result)
@@ -354,8 +413,7 @@ class DeliverablesCheckTests(unittest.TestCase):
         for check in record["checks"]:
             check.update(status="pass", scope="全部页", note="合成核验记录")
             if check["id"] == "visual.pages":
-                check["pages"] = [{"page": n, "checked": True, "issues": []}
-                                  for n in (1, 2)]
+                check["pages"] = [{"page": n, "checked": True, "issues": []} for n in (1, 2)]
         baseline = self.run_check(record)
         self.assertTrue(baseline["verdict"]["deliverable"], baseline)
         for required in (False, True):
@@ -379,10 +437,22 @@ class DeliverablesCheckTests(unittest.TestCase):
             for absolute in (False, True):
                 with self.subTest(chart_type=chart_type, absolute=absolute):
                     spec = deck_spec()
-                    spec["slides"][1].update(layout="titleOnly", body=[], charts=[{
-                        "chart": chart_type, "name": "同比", "x": 600000, "y": 1800000,
-                        "cx": 6000000, "cy": 3600000, "categories": ["本期"],
-                        "series": [{"name": "增长率", "values": [12]}]}])
+                    spec["slides"][1].update(
+                        layout="titleOnly",
+                        body=[],
+                        charts=[
+                            {
+                                "chart": chart_type,
+                                "name": "同比",
+                                "x": 600000,
+                                "y": 1800000,
+                                "cx": 6000000,
+                                "cy": 3600000,
+                                "categories": ["本期"],
+                                "series": [{"name": "增长率", "values": [12]}],
+                            }
+                        ],
+                    )
                     pb.build_deck(spec, self.deck_path)
                     if absolute:
                         with zipfile.ZipFile(self.deck_path) as archive:
@@ -407,10 +477,22 @@ class DeliverablesCheckTests(unittest.TestCase):
             with self.subTest(value=value):
                 claim = "合成指标为 " + format(value, ".20f").rstrip("0").rstrip(".")
                 spec = deck_spec()
-                spec["slides"][1].update(layout="titleOnly", body=[], charts=[{
-                    "chart": "column", "name": "指标", "x": 600000, "y": 1800000,
-                    "cx": 6000000, "cy": 3600000, "categories": ["本期"],
-                    "series": [{"name": "数值", "values": [value]}]}])
+                spec["slides"][1].update(
+                    layout="titleOnly",
+                    body=[],
+                    charts=[
+                        {
+                            "chart": "column",
+                            "name": "指标",
+                            "x": 600000,
+                            "y": 1800000,
+                            "cx": 6000000,
+                            "cy": 3600000,
+                            "categories": ["本期"],
+                            "series": [{"name": "数值", "values": [value]}],
+                        }
+                    ],
+                )
                 self.deck_sha = pb.build_deck(spec, self.deck_path)["sha256"]
                 item = self.deliverable()
                 item["checks"]["consistency"]["findings"][0]["claim"] = claim
@@ -459,6 +541,7 @@ class DeliverablesCheckTests(unittest.TestCase):
         result = self.run_check(make_record(findings=[], deliverables=[item]))
         self.assertIn("record.deliverable-pages", self._codes(result))
         self.assertFalse(self.item(result)["deliverable"])
+
 
 if __name__ == "__main__":
     unittest.main()

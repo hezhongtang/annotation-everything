@@ -1,4 +1,5 @@
 """技能发现的命令行测试；所有技能和审阅均为合成数据。"""
+
 from __future__ import annotations
 
 import json
@@ -29,18 +30,30 @@ class SkillDiscoveryTests(unittest.TestCase):
         self.sources = self.root / "sources"
         self.sources.mkdir()
         self.review = self.root / "review"
-        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
-                    "AE_HOME": str(self.root / "ledger"),
-                    "CODEX_HOME": str(self.home / ".codex"), "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills")}
+        self.env = {
+            **os.environ,
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "AE_HOME": str(self.root / "ledger"),
+            "CODEX_HOME": str(self.home / ".codex"),
+            "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills"),
+        }
 
     def skill(self, folder: str, name: str, description: str):
         d = self.sources / folder
         d.mkdir(parents=True, exist_ok=True)
-        (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description}\n---\n合成技能正文\n", encoding="utf-8")
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {description}\n---\n合成技能正文\n", encoding="utf-8"
+        )
 
     def run_cli(self, script: str, *args: str):
-        return subprocess.run([sys.executable, str(SCRIPTS / script), *map(str, args)],
-                              env=self.env, capture_output=True, text=True, timeout=30)
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / script), *map(str, args)],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
     def catalog(self):
         return json.loads((self.review / "skills.json").read_text(encoding="utf-8"))["skills"]
@@ -48,11 +61,13 @@ class SkillDiscoveryTests(unittest.TestCase):
     def test_build_discovers_configured_skill_metadata(self):
         self.skill("writer", "writer", "文字校对")
         self.skill("chart", "chart", "图表设计")
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", self.sources
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertCountEqual(self.catalog(), [{"name": "writer", "desc": "文字校对"},
-                                               {"name": "chart", "desc": "图表设计"}])
+        self.assertCountEqual(
+            self.catalog(), [{"name": "writer", "desc": "文字校对"}, {"name": "chart", "desc": "图表设计"}]
+        )
         page = (self.review / "index.html").read_text(encoding="utf-8")
         self.assertIn('"writer"', page)
         self.assertNotIn(str(self.sources), page, "页面不包含本机扫描路径")
@@ -65,26 +80,38 @@ class SkillDiscoveryTests(unittest.TestCase):
     def test_rebuild_preserves_manual_override_and_removal(self):
         self.skill("writer", "writer", "扫描的旧说明")
         self.skill("chart", "chart", "图表设计")
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", self.sources
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        p = self.run_cli("notes.py", "skills", self.review, "--add", "writer=手工说明", "--remove", "chart",
-                         "--always", "writer=讲稿")
+        p = self.run_cli(
+            "notes.py",
+            "skills",
+            self.review,
+            "--add",
+            "writer=手工说明",
+            "--remove",
+            "chart",
+            "--always",
+            "writer=讲稿",
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.skill("writer", "writer", "扫描的新说明")
         self.skill("fresh", "fresh", "新安装的技能")
         p = self.run_cli("build_viewer.py", "--rebuild", self.review)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertCountEqual(self.catalog(), [{"name": "writer", "desc": "手工说明"},
-                                               {"name": "fresh", "desc": "新安装的技能"}])
+        self.assertCountEqual(
+            self.catalog(), [{"name": "writer", "desc": "手工说明"}, {"name": "fresh", "desc": "新安装的技能"}]
+        )
         doc = json.loads((self.review / "skills.json").read_text(encoding="utf-8"))
         self.assertEqual(doc["always"], [{"name": "writer", "scope": "讲稿"}])
 
     def test_large_catalog_survives_build_and_always_save(self):
         for n in range(205):
             self.skill(f"s{n:03d}", f"skill-{n:03d}", "合成说明")
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", self.sources
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(len(self.catalog()), 205)
         page = (self.review / "index.html").read_text(encoding="utf-8")
@@ -96,13 +123,16 @@ class SkillDiscoveryTests(unittest.TestCase):
     def test_default_discovery_can_be_disabled_and_remembers_choice(self):
         default = self.home / ".agents" / "skills" / "default-skill"
         default.mkdir(parents=True)
-        (default / "SKILL.md").write_text("---\nname: default-skill\ndescription: 合成默认技能\n---\n", encoding="utf-8")
+        (default / "SKILL.md").write_text(
+            "---\nname: default-skill\ndescription: 合成默认技能\n---\n", encoding="utf-8"
+        )
         p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn({"name": "default-skill", "desc": "合成默认技能"}, self.catalog())
         empty_review = self.root / "no-scan"
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", empty_review,
-                         "--no-scan-skills")
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", empty_review, "--no-scan-skills"
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         p = self.run_cli("build_viewer.py", "--rebuild", empty_review)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -110,8 +140,9 @@ class SkillDiscoveryTests(unittest.TestCase):
 
     def test_unavailable_source_keeps_previous_catalog_and_warns(self):
         self.skill("writer", "writer", "文字校对")
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", self.sources
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.sources.rename(self.root / "temporarily-unavailable")
         p = self.run_cli("build_viewer.py", "--rebuild", self.review)
@@ -123,8 +154,9 @@ class SkillDiscoveryTests(unittest.TestCase):
     def test_automatic_updates_refresh_but_clear_does_not_resurrect(self):
         self.skill("writer", "writer", "旧说明")
         self.skill("chart", "chart", "图表设计")
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", self.sources
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.skill("writer", "writer", "更新说明")
         (self.sources / "chart" / "SKILL.md").unlink()
@@ -142,16 +174,18 @@ class SkillDiscoveryTests(unittest.TestCase):
         self.review.mkdir()
         catalog = self.review / "skills.json"
         catalog.write_text("{broken", encoding="utf-8")
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", self.sources
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(catalog.read_text(encoding="utf-8"), "{broken")
         self.assertIn("未覆盖", p.stderr)
 
     def test_concurrent_rebuild_and_manual_changes_keep_both_updates(self):
         self.skill("writer", "writer", "文字校对")
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", self.sources
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.skill("fresh", "fresh", "新安装技能")
         commands = [
@@ -161,17 +195,25 @@ class SkillDiscoveryTests(unittest.TestCase):
         ]
         with (self.review / ".notes.lock").open("r+") as lock:
             fsutil.lock_fd(lock.fileno(), exclusive=True)
-            processes = [subprocess.Popen([sys.executable, str(SCRIPTS / cmd[0]), *cmd[1:]], env=self.env,
-                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                         for cmd in commands]
+            processes = [
+                subprocess.Popen(
+                    [sys.executable, str(SCRIPTS / cmd[0]), *cmd[1:]],
+                    env=self.env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                for cmd in commands
+            ]
             time.sleep(0.2)
             self.assertTrue(all(p.poll() is None for p in processes), "各操作同时等待审阅目录锁")
             fsutil.unlock_fd(lock.fileno())
         for process in processes:
             stdout, stderr = process.communicate(timeout=30)
             self.assertEqual(process.returncode, 0, stdout + stderr)
-        self.assertCountEqual(self.catalog(), [{"name": "fresh", "desc": "新安装技能"},
-                                               {"name": "manual", "desc": "手工说明"}])
+        self.assertCountEqual(
+            self.catalog(), [{"name": "fresh", "desc": "新安装技能"}, {"name": "manual", "desc": "手工说明"}]
+        )
         doc = json.loads((self.review / "skills.json").read_text(encoding="utf-8"))
         self.assertEqual(doc["always"], [{"name": "manual", "scope": "讲稿"}])
         p = self.run_cli("build_viewer.py", "--rebuild", self.review)
@@ -191,21 +233,31 @@ class SkillDiscoveryTests(unittest.TestCase):
         (direct / "SKILL.md").write_text("---\nname: sample\ndescription: 直接安装\n---\n", encoding="utf-8")
         p = self.run_cli("build_viewer.py", "--rebuild", self.review)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertEqual([x for x in self.catalog() if x["name"] == "sample"],
-                         [{"name": "sample", "desc": "直接安装"}])
+        self.assertEqual([x for x in self.catalog() if x["name"] == "sample"], [{"name": "sample", "desc": "直接安装"}])
         self.assertIn({"name": "sample:sample", "desc": "新版"}, self.catalog())
 
     def test_default_roots_include_zcode_plugin_cache(self):
         sys.path.insert(0, str(SCRIPTS))
         import skill_sources
+
         with mock.patch("pathlib.Path.home", return_value=self.home):
             roots = skill_sources.default_roots()
         self.assertIn(self.home / ".zcode" / "cli" / "plugins" / "cache", roots)
 
     def test_zcode_plugin_cache_uses_newest_version_and_qualified_names(self):
         for version, desc in [("0.5.1", "旧版"), ("0.6.0", "新版")]:
-            d = (self.home / ".zcode" / "cli" / "plugins" / "cache"
-                 / "zcode-plugins-official" / "browser-use" / version / "skills" / "control-browser")
+            d = (
+                self.home
+                / ".zcode"
+                / "cli"
+                / "plugins"
+                / "cache"
+                / "zcode-plugins-official"
+                / "browser-use"
+                / version
+                / "skills"
+                / "control-browser"
+            )
             d.mkdir(parents=True)
             (d / "SKILL.md").write_text(f"---\nname: control-browser\ndescription: {desc}\n---\n", encoding="utf-8")
         p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review)
@@ -216,23 +268,30 @@ class SkillDiscoveryTests(unittest.TestCase):
     def test_bad_skill_file_preserves_previous_entries_and_imports_good_ones(self):
         self.skill("writer", "writer", "文字校对")
         self.skill("chart", "chart", "图表设计")
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", self.sources
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         (self.sources / "chart" / "SKILL.md").write_text("---\nname: chart\n", encoding="utf-8")
         self.skill("fresh", "fresh", "新安装技能")
         p = self.run_cli("build_viewer.py", "--rebuild", self.review)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertCountEqual(self.catalog(), [{"name": "writer", "desc": "文字校对"},
-                                               {"name": "chart", "desc": "图表设计"},
-                                               {"name": "fresh", "desc": "新安装技能"}])
+        self.assertCountEqual(
+            self.catalog(),
+            [
+                {"name": "writer", "desc": "文字校对"},
+                {"name": "chart", "desc": "图表设计"},
+                {"name": "fresh", "desc": "新安装技能"},
+            ],
+        )
         self.assertIn("技能", p.stderr)
 
     def test_complete_description_is_available_for_search(self):
         description = "合成说明" * 40 + "字体校对"
         self.skill("writer", "writer", description)
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", self.sources
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(self.catalog()[0]["desc"], description)
         self.assertTrue("字体校对" in (self.review / "index.html").read_text(encoding="utf-8"))
@@ -242,11 +301,20 @@ class SkillDiscoveryTests(unittest.TestCase):
         other = self.root / "other"
         (other / "second").mkdir(parents=True)
         (other / "second" / "SKILL.md").write_text("---\nname: second\ndescription: 第二来源\n---\n", encoding="utf-8")
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources, other)
+        p = self.run_cli(
+            "build_viewer.py",
+            "--report",
+            FIXTURE / "report.html",
+            "--out",
+            self.review,
+            "--skills-from",
+            self.sources,
+            other,
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertCountEqual(self.catalog(), [{"name": "first", "desc": "第一来源"},
-                                               {"name": "second", "desc": "第二来源"}])
+        self.assertCountEqual(
+            self.catalog(), [{"name": "first", "desc": "第一来源"}, {"name": "second", "desc": "第二来源"}]
+        )
 
     def test_unavailable_default_source_warns_when_prior_results_are_kept(self):
         root = self.home / ".agents" / "skills"
@@ -262,8 +330,9 @@ class SkillDiscoveryTests(unittest.TestCase):
 
     def test_clear_and_set_in_one_command_keeps_the_new_manual_entry(self):
         self.skill("writer", "writer", "扫描说明")
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", self.sources
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         p = self.run_cli("notes.py", "skills", self.review, "--clear", "--set", "writer=手工说明")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -281,22 +350,25 @@ class SkillDiscoveryTests(unittest.TestCase):
             if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
                 self.skipTest("Windows 当前账户无符号链接权限")
             raise
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", self.sources
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(self.catalog(), [{"name": "writer", "desc": "文字校对"}])
 
     def test_setting_duplicate_names_keeps_the_last_description(self):
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--no-scan-skills")
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--no-scan-skills"
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         p = self.run_cli("notes.py", "skills", self.review, "--set", "writer=第一版", "writer=第二版")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(self.catalog(), [{"name": "writer", "desc": "第二版"}])
 
     def test_invalid_always_update_does_not_partially_change_catalog(self):
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--no-scan-skills")
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--no-scan-skills"
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         always = [f"a{n}" for n in range(20)]
         p = self.run_cli("notes.py", "skills", self.review, "--always", *always)
@@ -307,8 +379,9 @@ class SkillDiscoveryTests(unittest.TestCase):
 
     def test_malformed_source_state_is_not_overwritten(self):
         self.skill("writer", "writer", "文字校对")
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", self.sources
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         state = self.review / ".skill-sources.json"
         broken = json.loads(state.read_text(encoding="utf-8"))
@@ -324,12 +397,13 @@ class SkillDiscoveryTests(unittest.TestCase):
 
     def test_failed_catalog_write_rolls_back_source_state(self):
         self.skill("writer", "writer", "文字校对")
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", self.sources)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", self.sources
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         state, catalog = self.review / ".skill-sources.json", self.review / "skills.json"
         before_state, before_catalog = state.read_bytes(), catalog.read_bytes()
-        fault = '''
+        fault = """
 import os, pathlib, sys
 sys.path.insert(0, sys.argv[1])
 import notes
@@ -340,9 +414,14 @@ def replace(src, dst):
     return real_replace(src, dst)
 os.replace = replace
 sys.exit(notes.main(["skills", sys.argv[2], "--remove", "writer"]))
-'''
-        p = subprocess.run([sys.executable, "-c", fault, str(SCRIPTS), str(self.review)],
-                           env=self.env, capture_output=True, text=True, timeout=30)
+"""
+        p = subprocess.run(
+            [sys.executable, "-c", fault, str(SCRIPTS), str(self.review)],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
         self.assertNotEqual(p.returncode, 0)
         self.assertEqual(catalog.read_bytes(), before_catalog)
         self.assertEqual(state.read_bytes(), before_state, "目录写入失败后恢复来源状态")
@@ -359,8 +438,9 @@ sys.exit(notes.main(["skills", sys.argv[2], "--remove", "writer"]))
             if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
                 self.skipTest("Windows 当前账户无符号链接权限")
             raise
-        p = self.run_cli("build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review,
-                         "--skills-from", alias)
+        p = self.run_cli(
+            "build_viewer.py", "--report", FIXTURE / "report.html", "--out", self.review, "--skills-from", alias
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         alias.unlink()
         alias.symlink_to(other.parent, target_is_directory=True)

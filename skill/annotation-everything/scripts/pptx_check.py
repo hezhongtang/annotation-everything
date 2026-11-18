@@ -15,6 +15,7 @@
 
 退出码：0 全部检查通过；1 有检查问题；2 输入或用法错误（文件读不到、语言不合法）。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,9 +59,18 @@ CT_WORKBOOK = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 CT_WORKSHEET = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
 
 # 检查项固定顺序；id 语言无关，可读名称随 locale。
-CHECK_ORDER = ("package.required-parts", "package.relationships", "package.content-types",
-               "slide.list", "slide.layout-refs", "slide.placeholders",
-               "chart.structure", "chart.theme-fill", "theme.parts", "sections.coverage")
+CHECK_ORDER = (
+    "package.required-parts",
+    "package.relationships",
+    "package.content-types",
+    "slide.list",
+    "slide.layout-refs",
+    "slide.placeholders",
+    "chart.structure",
+    "chart.theme-fill",
+    "theme.parts",
+    "sections.coverage",
+)
 
 # 主题色槽位与制作器共享同一份声明（防漂移；制作器写、检查器读）。
 THEME_SLOTS = pptx_build.COLOR_SLOTS
@@ -75,8 +85,7 @@ class CheckInputError(Exception):
 
 
 class _Problem(Exception):
-    def __init__(self, check: str, code: str, part: str = "", slide: int | None = None,
-                 **params: object):
+    def __init__(self, check: str, code: str, part: str = "", slide: int | None = None, **params: object):
         super().__init__(code)
         self.check = check
         self.code = code
@@ -85,9 +94,13 @@ class _Problem(Exception):
         self.params = params
 
     def as_dict(self, loc: str) -> dict:
-        return {"check": self.check, "code": self.code, "part": self.part,
-                "slide": self.slide,
-                "reason": _t(loc, "pptxcheck.reason." + self.code, **self.params)}
+        return {
+            "check": self.check,
+            "code": self.code,
+            "part": self.part,
+            "slide": self.slide,
+            "reason": _t(loc, "pptxcheck.reason." + self.code, **self.params),
+        }
 
 
 def _t(loc: str, key: str, **params: object) -> str:
@@ -125,8 +138,7 @@ def _target(source: str, target: str) -> str:
 def _rels_name(source: str) -> str:
     if source == "":
         return "_rels/.rels"
-    return posixpath.join(posixpath.dirname(source), "_rels",
-                          posixpath.basename(source) + ".rels")
+    return posixpath.join(posixpath.dirname(source), "_rels", posixpath.basename(source) + ".rels")
 
 
 def _read_rels(archive: zipfile.ZipFile, source: str) -> dict[str, dict]:
@@ -173,10 +185,10 @@ def _workbook_cells(book: zipfile.ZipFile) -> dict[str, dict[str, tuple[str, str
     types = _xml(book, "[Content_Types].xml")
     if types.tag != _q(CT, "Types"):
         raise ValueError("content types")
-    overrides = {node.get("PartName", "").lstrip("/"): node.get("ContentType")
-                 for node in types.findall(_q(CT, "Override"))}
-    defaults = {node.get("Extension", "").lower(): node.get("ContentType")
-                for node in types.findall(_q(CT, "Default"))}
+    overrides = {
+        node.get("PartName", "").lstrip("/"): node.get("ContentType") for node in types.findall(_q(CT, "Override"))
+    }
+    defaults = {node.get("Extension", "").lower(): node.get("ContentType") for node in types.findall(_q(CT, "Default"))}
 
     def part_xml(part: str, ctype: str, tag: str) -> ET.Element:
         if overrides.get(part, defaults.get(part.rsplit(".", 1)[-1].lower())) != ctype:
@@ -186,8 +198,9 @@ def _workbook_cells(book: zipfile.ZipFile) -> dict[str, dict[str, tuple[str, str
             raise ValueError("part root")
         return root
 
-    main = [rel for rel in _read_rels(book, "").values()
-            if rel["type"] == R + "/officeDocument" and not rel["external"]]
+    main = [
+        rel for rel in _read_rels(book, "").values() if rel["type"] == R + "/officeDocument" and not rel["external"]
+    ]
     if len(main) != 1:
         raise ValueError("workbook relationship")
     part = main[0]["target"]
@@ -232,8 +245,11 @@ def _workbook_cells(book: zipfile.ZipFile) -> dict[str, dict[str, tuple[str, str
 def _chart_reference_matches(ref: ET.Element, sheets: dict) -> bool:
     """比较引用范围、缓存索引和工作表单元格，覆盖系列名、类目与数值。"""
     formula = ref.findtext(_q(C, "f"), "")
-    match = re.fullmatch(r"('(?:[^']|'')+'|[^!]+)!\$?([A-Z]+)\$?([1-9][0-9]*)"
-                         r"(?::\$?([A-Z]+)\$?([1-9][0-9]*))?", formula)
+    match = re.fullmatch(
+        r"('(?:[^']|'')+'|[^!]+)!\$?([A-Z]+)\$?([1-9][0-9]*)"
+        r"(?::\$?([A-Z]+)\$?([1-9][0-9]*))?",
+        formula,
+    )
     if match is None:
         return False
     sheet, first_col, first_row, last_col, last_row = match.groups()
@@ -255,8 +271,7 @@ def _chart_reference_matches(ref: ET.Element, sheets: dict) -> bool:
 
     c1, c2 = column_number(first_col), column_number(last_col or first_col)
     r1, r2 = int(first_row), int(last_row or first_row)
-    if sheet not in sheets or not (1 <= c1 <= c2 <= 16384 and 1 <= r1 <= r2 <= 1048576) \
-            or (c1 != c2 and r1 != r2):
+    if sheet not in sheets or not (1 <= c1 <= c2 <= 16384 and 1 <= r1 <= r2 <= 1048576) or (c1 != c2 and r1 != r2):
         return False
     numeric = ref.tag == _q(C, "numRef")
     cache = ref.find(_q(C, "numCache" if numeric else "strCache"))
@@ -301,8 +316,7 @@ class _Checker:
         self._part_types: dict[str, str] = {}
         self.sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
 
-    def add(self, check: str, code: str, part: str = "", slide: int | None = None,
-            **params: object) -> None:
+    def add(self, check: str, code: str, part: str = "", slide: int | None = None, **params: object) -> None:
         self.problems.append(_Problem(check, code, part, slide, **params))
 
     def scope(self, check: str, item: str) -> None:
@@ -338,18 +352,22 @@ class _Checker:
     # ── 各检查项 ────────────────────────────────────────────────────────
 
     def _required_parts(self, archive: zipfile.ZipFile, names: set[str]) -> int:
-        for required in ("[Content_Types].xml", "_rels/.rels", "ppt/presentation.xml",
-                         "ppt/slideMasters/slideMaster1.xml", "ppt/theme/theme1.xml"):
+        for required in (
+            "[Content_Types].xml",
+            "_rels/.rels",
+            "ppt/presentation.xml",
+            "ppt/slideMasters/slideMaster1.xml",
+            "ppt/theme/theme1.xml",
+        ):
             if required not in names:
                 self.add("package.required-parts", "partMissing", part=required)
-        content_types = _xml(archive, "[Content_Types].xml") if "[Content_Types].xml" in names \
-            else None
+        content_types = _xml(archive, "[Content_Types].xml") if "[Content_Types].xml" in names else None
         root_rels = _read_rels(archive, "")
-        main = next((rel for rel in root_rels.values()
-                     if rel["type"] == R + "/officeDocument" and not rel["external"]), None)
+        main = next(
+            (rel for rel in root_rels.values() if rel["type"] == R + "/officeDocument" and not rel["external"]), None
+        )
         if main is None or main["target"] != "ppt/presentation.xml":
-            self.add("package.required-parts", "officeDocumentMissing",
-                     part=str(main["raw_target"]) if main else "")
+            self.add("package.required-parts", "officeDocumentMissing", part=str(main["raw_target"]) if main else "")
             return 0
         self._content_types_root = content_types
         presentation = _xml(archive, "ppt/presentation.xml")
@@ -361,8 +379,11 @@ class _Checker:
         notes = presentation.find(_q(P, "notesMasterIdLst"))
         if notes is not None:
             entries = notes.findall(_q(P, "notesMasterId"))
-            if len(entries) != 1 or set(entries[0].attrib) != {_q(R, "id")} \
-                    or pres_rels.get(entries[0].get(_q(R, "id")), {}).get("type") != R + "/notesMaster":
+            if (
+                len(entries) != 1
+                or set(entries[0].attrib) != {_q(R, "id")}
+                or pres_rels.get(entries[0].get(_q(R, "id")), {}).get("type") != R + "/notesMaster"
+            ):
                 self.add("package.required-parts", "notesMasterListBad", part="ppt/presentation.xml")
         slide_parts: list[str] = []
         seen_ids: set[str] = set()
@@ -371,8 +392,7 @@ class _Checker:
             slide_id = node.get("id", "")
             rid = node.get(_q(R, "id"), "")
             rel = pres_rels.get(rid)
-            if not slide_id or slide_id in seen_ids or rel is None or rel["external"] \
-                    or rel["type"] != R + "/slide":
+            if not slide_id or slide_id in seen_ids or rel is None or rel["external"] or rel["type"] != R + "/slide":
                 self.add("slide.list", "slideListBad", part="ppt/presentation.xml")
                 continue
             seen_ids.add(slide_id)
@@ -387,28 +407,31 @@ class _Checker:
         for name in sorted(names):
             if not name.endswith(".rels"):
                 continue
-            source = "" if name == "_rels/.rels" else \
-                posixpath.join(posixpath.dirname(posixpath.dirname(name)),
-                               posixpath.basename(name)[:-5])
+            source = (
+                ""
+                if name == "_rels/.rels"
+                else posixpath.join(posixpath.dirname(posixpath.dirname(name)), posixpath.basename(name)[:-5])
+            )
             root = _xml(archive, name)
             for rel in root.findall(_q(PKG_REL, "Relationship")):
                 if rel.get("TargetMode") == "External":
                     continue
                 target = _target(source, rel.get("Target", ""))
                 if not target or target not in names:
-                    self.add("package.relationships", "relTargetMissing",
-                             part=name, target=rel.get("Target", ""))
+                    self.add("package.relationships", "relTargetMissing", part=name, target=rel.get("Target", ""))
 
     def _content_types(self, archive: zipfile.ZipFile, names: set[str]) -> None:
         root = self._content_types_root
         if root is None or _local(root.tag) != "Types":
-            self.add("package.content-types", "contentTypesBroken",
-                     part="[Content_Types].xml")
+            self.add("package.content-types", "contentTypesBroken", part="[Content_Types].xml")
             return
-        defaults = {node.get("Extension", "").lower(): node.get("ContentType", "")
-                    for node in root.findall(_q(CT, "Default"))}
-        overrides = {node.get("PartName", "").lstrip("/"): node.get("ContentType", "")
-                     for node in root.findall(_q(CT, "Override"))}
+        defaults = {
+            node.get("Extension", "").lower(): node.get("ContentType", "") for node in root.findall(_q(CT, "Default"))
+        }
+        overrides = {
+            node.get("PartName", "").lstrip("/"): node.get("ContentType", "")
+            for node in root.findall(_q(CT, "Override"))
+        }
         expected = {
             "ppt/presentation.xml": CT_PRESENTATION,
             "ppt/theme/theme1.xml": CT_THEME,
@@ -416,24 +439,40 @@ class _Checker:
         for part in self._slide_parts:
             expected[part] = CT_SLIDE
         # 家族规则：生成范围内的部件目录有确定的内容类型，写错即 mismatch
-        family = (("ppt/theme/", CT_THEME), ("ppt/slideLayouts/", CT_LAYOUT), ("ppt/slideMasters/", CT_MASTER),
-                  ("ppt/charts/chart", CT_CHART), ("ppt/notesSlides/", CT_NOTES_SLIDE),
-                  ("ppt/notesMasters/", CT_NOTES_MASTER))
+        family = (
+            ("ppt/theme/", CT_THEME),
+            ("ppt/slideLayouts/", CT_LAYOUT),
+            ("ppt/slideMasters/", CT_MASTER),
+            ("ppt/charts/chart", CT_CHART),
+            ("ppt/notesSlides/", CT_NOTES_SLIDE),
+            ("ppt/notesMasters/", CT_NOTES_MASTER),
+        )
         for part in names:
             if not part.endswith(".xml"):
                 continue
             for prefix, family_ctype in family:
                 if part.startswith(prefix):
                     expected.setdefault(part, family_ctype)
-        relationship_types = {R + "/" + suffix: ctype for suffix, ctype in (
-            ("slide", CT_SLIDE), ("slideMaster", CT_MASTER), ("slideLayout", CT_LAYOUT),
-            ("notesSlide", CT_NOTES_SLIDE), ("notesMaster", CT_NOTES_MASTER),
-            ("chart", CT_CHART), ("theme", CT_THEME))}
+        relationship_types = {
+            R + "/" + suffix: ctype
+            for suffix, ctype in (
+                ("slide", CT_SLIDE),
+                ("slideMaster", CT_MASTER),
+                ("slideLayout", CT_LAYOUT),
+                ("notesSlide", CT_NOTES_SLIDE),
+                ("notesMaster", CT_NOTES_MASTER),
+                ("chart", CT_CHART),
+                ("theme", CT_THEME),
+            )
+        }
         for rel_name in sorted(names):
             if not rel_name.endswith(".rels"):
                 continue
-            source = "" if rel_name == "_rels/.rels" else posixpath.join(
-                posixpath.dirname(posixpath.dirname(rel_name)), posixpath.basename(rel_name)[:-5])
+            source = (
+                ""
+                if rel_name == "_rels/.rels"
+                else posixpath.join(posixpath.dirname(posixpath.dirname(rel_name)), posixpath.basename(rel_name)[:-5])
+            )
             for rel in _read_rels(archive, source).values():
                 if not rel["external"] and rel["type"] in relationship_types:
                     expected[rel["target"]] = relationship_types[rel["type"]]
@@ -441,8 +480,9 @@ class _Checker:
         for part in sorted(names):
             actual = overrides.get(part, defaults.get(part.rsplit(".", 1)[-1].lower(), ""))
             if part in expected and actual != expected[part]:
-                self.add("package.content-types", "contentTypeMismatch", part=part,
-                         expected=expected[part], actual=actual)
+                self.add(
+                    "package.content-types", "contentTypeMismatch", part=part, expected=expected[part], actual=actual
+                )
         # 每个部件的扩展名都要有 Default 或 Override，媒体与内嵌包靠 Default 登记
         for part in sorted(names):
             if part.endswith((".xml", ".rels")) or part in overrides:
@@ -459,16 +499,14 @@ class _Checker:
             self.add("slide.layout-refs", "noMaster", part="ppt/presentation.xml")
 
     def _text_bodies(self, archive: zipfile.ZipFile, names: set[str]) -> None:
-        prefixes = ("ppt/slides/", "ppt/slideLayouts/", "ppt/slideMasters/",
-                    "ppt/notesSlides/", "ppt/notesMasters/")
+        prefixes = ("ppt/slides/", "ppt/slideLayouts/", "ppt/slideMasters/", "ppt/notesSlides/", "ppt/notesMasters/")
         page_numbers = {part: n for n, part in enumerate(self._slide_parts, 1)}
         for part in sorted(names):
             if part.startswith(prefixes) and part.endswith(".xml"):
                 root = _xml(archive, part)
                 for body in root.iter(_q(P, "txBody")):
                     if body.find(_q(A, "p")) is None:
-                        self.add("package.required-parts", "textBodyEmpty", part=part,
-                                 slide=page_numbers.get(part))
+                        self.add("package.required-parts", "textBodyEmpty", part=part, slide=page_numbers.get(part))
                         break
 
     def _slides(self, archive: zipfile.ZipFile, names: set[str]) -> None:
@@ -480,10 +518,8 @@ class _Checker:
             slide_rels = _read_rels(archive, part)
             for rid in _ref_ids(_xml(archive, part)):
                 if rid not in slide_rels:
-                    self.add("package.relationships", "refUnknown", part=part,
-                             slide=index, rid=rid)
-            layout_rels = [rel for rel in slide_rels.values()
-                           if rel["type"] == R + "/slideLayout"]
+                    self.add("package.relationships", "refUnknown", part=part, slide=index, rid=rid)
+            layout_rels = [rel for rel in slide_rels.values() if rel["type"] == R + "/slideLayout"]
             if not layout_rels:
                 self.add("slide.layout-refs", "slideLayoutMissing", part=part, slide=index)
                 continue
@@ -501,8 +537,9 @@ class _Checker:
                 name_attr = c_sld.get("name", "")
             if not name_attr.strip():
                 self.add("slide.layout-refs", "layoutUnnamed", part=layout_part, slide=index)
-            master_rels = [rel for rel in _read_rels(archive, layout_part).values()
-                           if rel["type"] == R + "/slideMaster"]
+            master_rels = [
+                rel for rel in _read_rels(archive, layout_part).values() if rel["type"] == R + "/slideMaster"
+            ]
             if not master_rels:
                 self.add("slide.layout-refs", "layoutMasterMissing", part=layout_part)
             if layout_part not in layout_cache:
@@ -512,17 +549,24 @@ class _Checker:
                 layout_cache[layout_part] = _placeholders(layout_root)
             known = layout_cache[layout_part]
             for ph_type, ph_idx in _placeholders(_xml(archive, part)) - (known or set()):
-                self.add("slide.placeholders", "placeholderUnknown", part=part, slide=index,
-                         ph=ph_type + (f" idx={ph_idx}" if ph_idx is not None else ""))
+                self.add(
+                    "slide.placeholders",
+                    "placeholderUnknown",
+                    part=part,
+                    slide=index,
+                    ph=ph_type + (f" idx={ph_idx}" if ph_idx is not None else ""),
+                )
             self.scope("slide.layout-refs", f"{part} → {layout_part}")
 
     def _charts(self, archive: zipfile.ZipFile, names: set[str]) -> None:
         root = self._content_types_root
         if root is None:
             return
-        chart_parts = {node.get("PartName", "").lstrip("/")
-                       for node in root.findall(_q(CT, "Override"))
-                       if node.get("ContentType") == CT_CHART}
+        chart_parts = {
+            node.get("PartName", "").lstrip("/")
+            for node in root.findall(_q(CT, "Override"))
+            if node.get("ContentType") == CT_CHART
+        }
         chart_parts.update(part for part, ctype in self._part_types.items() if ctype == CT_CHART)
         for part in sorted(chart_parts):
             self.scope("chart.structure", part)
@@ -539,17 +583,17 @@ class _Checker:
             if plot_area is None:
                 self.add("chart.structure", "chartPlotMissing", part=part)
                 continue
-            groups = [child for child in plot_area
-                      if _local(child.tag) in SUPPORTED_CHART_GROUPS]
+            groups = [child for child in plot_area if _local(child.tag) in SUPPORTED_CHART_GROUPS]
             if len(groups) != 1:
-                self.add("chart.structure", "chartTypeBad", part=part,
-                         found=",".join(_local(c.tag) for c in groups))
+                self.add("chart.structure", "chartTypeBad", part=part, found=",".join(_local(c.tag) for c in groups))
                 continue
             group = groups[0]
             kind = _local(group.tag)
-            axes = {child_local: child for child_local, child in
-                    ((_local(c.tag), c) for c in plot_area)
-                    if child_local in AXIS_ELEMENTS}
+            axes = {
+                child_local: child
+                for child_local, child in ((_local(c.tag), c) for c in plot_area)
+                if child_local in AXIS_ELEMENTS
+            }
             group_ax_ids = [node.get("val", "") for node in group.findall(_q(C, "axId"))]
             if kind == "pieChart":
                 if group_ax_ids or axes:
@@ -559,16 +603,14 @@ class _Checker:
                 for entry in axes.values():
                     for node in entry.findall(_q(C, "axId")):
                         axis_ids.add(node.get("val", ""))
-                if len(group_ax_ids) != 2 or not set(group_ax_ids) <= axis_ids \
-                        or set(axes) != {"catAx", "valAx"}:
+                if len(group_ax_ids) != 2 or not set(group_ax_ids) <= axis_ids or set(axes) != {"catAx", "valAx"}:
                     self.add("chart.structure", "chartAxisMissing", part=part)
                 else:
                     for entry in axes.values():
                         if entry.find(_q(C, "tickLblPos")) is None:
                             self.add("chart.structure", "chartTickLblMissing", part=part)
                             break
-                    cross = [node.get("val", "") for entry in axes.values()
-                             for node in entry.findall(_q(C, "crossAx"))]
+                    cross = [node.get("val", "") for entry in axes.values() for node in entry.findall(_q(C, "crossAx"))]
                     if sorted(cross) != sorted(group_ax_ids):
                         self.add("chart.structure", "chartCrossAxBad", part=part)
             for ser in group.findall(_q(C, "ser")):
@@ -578,13 +620,11 @@ class _Checker:
             if rel.get("type") != R + "/package" or rel.get("external"):
                 self.add("chart.structure", "chartDataMissing", part=part)
             elif rel["target"] not in names:
-                self.add("chart.structure", "relTargetMissing", part=part,
-                         target=rel["raw_target"])
+                self.add("chart.structure", "relTargetMissing", part=part, target=rel["raw_target"])
             else:
                 self._chart_workbook(archive, rel["target"], root_elem, part)
 
-    def _chart_workbook(self, archive: zipfile.ZipFile, workbook_part: str,
-                        chart: ET.Element, chart_part: str) -> None:
+    def _chart_workbook(self, archive: zipfile.ZipFile, workbook_part: str, chart: ET.Element, chart_part: str) -> None:
         try:
             if archive.getinfo(workbook_part).file_size > MAX_XML_BYTES:
                 raise ValueError("workbook size")
@@ -595,8 +635,9 @@ class _Checker:
             return
         for ref in chart.iter():
             if ref.tag in (_q(C, "strRef"), _q(C, "numRef")) and not _chart_reference_matches(ref, sheets):
-                self.add("chart.structure", "chartWorkbookMismatch", part=chart_part,
-                         formula=ref.findtext(_q(C, "f"), ""))
+                self.add(
+                    "chart.structure", "chartWorkbookMismatch", part=chart_part, formula=ref.findtext(_q(C, "f"), "")
+                )
 
     def _chart_series(self, part: str, ser: ET.Element) -> None:
         cat_cache = ser.find(_q(C, "cat") + "/" + _q(C, "strRef") + "/" + _q(C, "strCache"))
@@ -610,21 +651,21 @@ class _Checker:
         val_node = val_cache.find(_q(C, "ptCount"))
         cat_count = cat_node.get("val", "") if cat_node is not None else ""
         val_count = val_node.get("val", "") if val_node is not None else ""
-        if cat_count != str(len(cat_points)) or val_count != str(len(val_points)) \
-                or cat_count != val_count:
-            self.add("chart.structure", "chartCacheMismatch", part=part,
-                     cat=cat_count, val=val_count)
+        if cat_count != str(len(cat_points)) or val_count != str(len(val_points)) or cat_count != val_count:
+            self.add("chart.structure", "chartCacheMismatch", part=part, cat=cat_count, val=val_count)
         for sp_pr in ser.findall(_q(C, "spPr")):
             if sp_pr.findall(f".//{_q(A, 'srgbClr')}"):
                 self.add("chart.theme-fill", "chartFixedColor", part=part)
 
     def _theme(self, archive: zipfile.ZipFile, names: set[str]) -> None:
         seen: set[str] = set()
-        masters = sorted(part for part in names if part.endswith(".xml")
-                         and part.startswith(("ppt/slideMasters/", "ppt/notesMasters/")))
+        masters = sorted(
+            part
+            for part in names
+            if part.endswith(".xml") and part.startswith(("ppt/slideMasters/", "ppt/notesMasters/"))
+        )
         for master_part in masters:
-            theme_rels = [rel for rel in _read_rels(archive, master_part).values()
-                          if rel["type"] == R + "/theme"]
+            theme_rels = [rel for rel in _read_rels(archive, master_part).values() if rel["type"] == R + "/theme"]
             if not theme_rels or theme_rels[0]["target"] not in names:
                 self.add("theme.parts", "themeMissing", part=master_part)
                 continue
@@ -639,26 +680,28 @@ class _Checker:
         self.scope("theme.parts", part)
         clr = theme.find(_q(A, "themeElements") + "/" + _q(A, "clrScheme"))
         if clr is None:
-            self.add("theme.parts", "themeSlotMissing",
-                     part=part, slots="全部")
+            self.add("theme.parts", "themeSlotMissing", part=part, slots="全部")
         else:
             slots = {_local(child.tag) for child in clr}
             missing = [slot for slot in THEME_SLOTS if slot not in slots]
             if missing:
-                self.add("theme.parts", "themeSlotMissing",
-                         part=part, slots="、".join(missing))
+                self.add("theme.parts", "themeSlotMissing", part=part, slots="、".join(missing))
         fonts = theme.find(_q(A, "themeElements") + "/" + _q(A, "fontScheme"))
         if fonts is None:
             self.add("theme.parts", "fontSchemeMissing", part=part)
             return
         for role in ("majorFont", "minorFont"):
             entry = fonts.find(_q(A, role))
-            if entry is None or entry.find(_q(A, "latin")) is None \
-                    or entry.find(_q(A, "ea")) is None \
-                    or not (entry.find(_q(A, "latin")).get("typeface", "").strip()
-                            and entry.find(_q(A, "ea")).get("typeface", "").strip()):
-                self.add("theme.parts", "fontSchemeMissing",
-                         part=part, role=role)
+            if (
+                entry is None
+                or entry.find(_q(A, "latin")) is None
+                or entry.find(_q(A, "ea")) is None
+                or not (
+                    entry.find(_q(A, "latin")).get("typeface", "").strip()
+                    and entry.find(_q(A, "ea")).get("typeface", "").strip()
+                )
+            ):
+                self.add("theme.parts", "fontSchemeMissing", part=part, role=role)
 
     def _sections(self, archive: zipfile.ZipFile, names: set[str]) -> None:
         presentation = _xml(archive, "ppt/presentation.xml")
@@ -678,18 +721,26 @@ class _Checker:
             for node in section.findall(_q(P14, "sldIdLst") + "/" + _q(P14, "sldId")):
                 slide_id = node.get("id", "")
                 if slide_id not in self._slide_ids:
-                    self.add("sections.coverage", "sectionSlideUnknown",
-                             part="ppt/presentation.xml", section=name, id=slide_id)
+                    self.add(
+                        "sections.coverage",
+                        "sectionSlideUnknown",
+                        part="ppt/presentation.xml",
+                        section=name,
+                        id=slide_id,
+                    )
                 elif slide_id in covered:
-                    self.add("sections.coverage", "sectionSlideDuplicate",
-                             part="ppt/presentation.xml", id=slide_id,
-                             sections=f"{covered[slide_id]}、{name}")
+                    self.add(
+                        "sections.coverage",
+                        "sectionSlideDuplicate",
+                        part="ppt/presentation.xml",
+                        id=slide_id,
+                        sections=f"{covered[slide_id]}、{name}",
+                    )
                 else:
                     covered[slide_id] = name
         missing = sorted(self._slide_ids - set(covered))
         if missing:
-            self.add("sections.coverage", "sectionSlideMissing",
-                     part="ppt/presentation.xml", ids="、".join(missing))
+            self.add("sections.coverage", "sectionSlideMissing", part="ppt/presentation.xml", ids="、".join(missing))
 
     # ── 结果 ────────────────────────────────────────────────────────────
 
@@ -701,16 +752,23 @@ class _Checker:
         for cid in CHECK_ORDER:
             found = by_check.get(cid, [])
             scope = "、".join(self.scopes.get(cid, []))
-            checks.append({
-                "id": cid,
-                "status": "fail" if found else "pass",
-                "scope": scope,
-                "note": "" if not found else _t(self.loc, "pptxcheck.problemCount",
-                                                count=len(found)),
-            })
-        return {"schema": RESULT_SCHEMA, "file": self.path.name, "sha256": self.sha256,
-                "slides": slides, "ok": not self.problems, "checks": checks,
-                "problems": [p.as_dict(self.loc) for p in self.problems]}
+            checks.append(
+                {
+                    "id": cid,
+                    "status": "fail" if found else "pass",
+                    "scope": scope,
+                    "note": "" if not found else _t(self.loc, "pptxcheck.problemCount", count=len(found)),
+                }
+            )
+        return {
+            "schema": RESULT_SCHEMA,
+            "file": self.path.name,
+            "sha256": self.sha256,
+            "slides": slides,
+            "ok": not self.problems,
+            "checks": checks,
+            "problems": [p.as_dict(self.loc) for p in self.problems],
+        }
 
 
 def check_deck(path: Path, locale: str | None = None) -> dict:
@@ -723,8 +781,7 @@ def check_deck(path: Path, locale: str | None = None) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="检查 PPTX 包结构与关键部件（issue #180 文件层检查）")
+    parser = argparse.ArgumentParser(description="检查 PPTX 包结构与关键部件（issue #180 文件层检查）")
     parser.add_argument("pptx", help="要检查的 .pptx 文件")
     parser.add_argument("--locale")
     parser.add_argument("--json", action="store_true")
@@ -738,10 +795,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         loc = i18n.resolve_locale(args.locale, system_languages=i18n.system_languages())
     except i18n.LocaleError as exc:
-        print(_t("zh-CN", "pptxcheck.badLocale", locale=exc.params.get("locale", "")),
-              file=sys.stderr)
-        print(_t("en", "pptxcheck.badLocale", locale=exc.params.get("locale", "")),
-              file=sys.stderr)
+        print(_t("zh-CN", "pptxcheck.badLocale", locale=exc.params.get("locale", "")), file=sys.stderr)
+        print(_t("en", "pptxcheck.badLocale", locale=exc.params.get("locale", "")), file=sys.stderr)
         return 2
     try:
         result = check_deck(Path(args.pptx), locale=loc)
@@ -751,10 +806,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(result, ensure_ascii=False))
     else:
-        header = _t(loc, "pptxcheck.summary", file=result["file"],
-                    verdict=_t(loc, "pptxcheck.verdict.ok" if result["ok"]
-                               else "pptxcheck.verdict.fail"),
-                    slides=result["slides"])
+        header = _t(
+            loc,
+            "pptxcheck.summary",
+            file=result["file"],
+            verdict=_t(loc, "pptxcheck.verdict.ok" if result["ok"] else "pptxcheck.verdict.fail"),
+            slides=result["slides"],
+        )
         print(header)
         for check in result["checks"]:
             status = _t(loc, "pptxcheck.status." + check["status"])

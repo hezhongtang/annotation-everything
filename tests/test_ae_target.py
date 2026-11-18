@@ -3,6 +3,7 @@
 均为合成环境：HOME、CLAUDE_SKILLS_DIR、CODEX_HOME 与审阅台账（AE_HOME）全部指向临时目录，
 绝不触碰真实家目录。CLI 用例子进程运行 ae.py；单元用例直接导入 ae。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -57,15 +58,20 @@ class TargetCliTests(unittest.TestCase):
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
         self.target = self.root / "custom-skills"
-        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
-                    "CLAUDE_SKILLS_DIR": str(self.skills),
-                    "CODEX_HOME": str(self.home / ".codex"),
-                    "AE_HOME": str(self.root / "ledger"),     # 运行状态检查读台账：指向临时目录
-                    "PYTHONDONTWRITEBYTECODE": "1"}
+        self.env = {
+            **os.environ,
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "CLAUDE_SKILLS_DIR": str(self.skills),
+            "CODEX_HOME": str(self.home / ".codex"),
+            "AE_HOME": str(self.root / "ledger"),  # 运行状态检查读台账：指向临时目录
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
 
     def run_ae(self, *args):
-        return subprocess.run([sys.executable, str(AE), *args],
-                              env=self.env, capture_output=True, text=True, timeout=120)
+        return subprocess.run(
+            [sys.executable, str(AE), *args], env=self.env, capture_output=True, text=True, timeout=120
+        )
 
     @property
     def default_copy(self) -> Path:
@@ -185,9 +191,14 @@ class TargetUnitTests(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self._saved = {key: os.environ.get(key) for key in self.KEYS}
-        os.environ.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
-                           "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills"),
-                           "CODEX_HOME": str(self.home / ".codex")})
+        os.environ.update(
+            {
+                "HOME": str(self.home),
+                "USERPROFILE": str(self.home),
+                "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills"),
+                "CODEX_HOME": str(self.home / ".codex"),
+            }
+        )
 
     def tearDown(self):
         for key, value in self._saved.items():
@@ -197,14 +208,16 @@ class TargetUnitTests(unittest.TestCase):
                 os.environ[key] = value
 
     def test_resolve_copy_dir_default_and_custom(self):
-        self.assertEqual(ae.resolve_copy_dir(None),
-                         self.home / ".claude" / "skills" / SKILL, "缺省走 CLAUDE_SKILLS_DIR 或 ~/.claude/skills")
+        self.assertEqual(
+            ae.resolve_copy_dir(None),
+            self.home / ".claude" / "skills" / SKILL,
+            "缺省走 CLAUDE_SKILLS_DIR 或 ~/.claude/skills",
+        )
         custom = self.root / "anywhere"
         self.assertEqual(ae.resolve_copy_dir(custom), custom / SKILL)
 
     def test_resolve_copy_dir_expands_user(self):
-        self.assertEqual(ae.resolve_copy_dir("~/ae-target-fixture"),
-                         self.home / "ae-target-fixture" / SKILL)
+        self.assertEqual(ae.resolve_copy_dir("~/ae-target-fixture"), self.home / "ae-target-fixture" / SKILL)
 
     def test_install_fix_appends_target_only_when_given(self):
         py = ae._python_cli()
@@ -212,13 +225,19 @@ class TargetUnitTests(unittest.TestCase):
         repo = Path("/repo")
         self.assertEqual(ae.install_fix(repo), f"{py} {ae._quote_cli(str(repo / 'ae.py'))} install")
         target = Path("/dir with space")
-        self.assertEqual(ae.install_fix(repo, target),
-                         f"{py} {ae._quote_cli(str(repo / 'ae.py'))} install --target {ae._quote_cli(str(target))}")
+        self.assertEqual(
+            ae.install_fix(repo, target),
+            f"{py} {ae._quote_cli(str(repo / 'ae.py'))} install --target {ae._quote_cli(str(target))}",
+        )
 
     def test_install_fix_preserves_script_and_target_shell_arguments(self):
         repo = self.root / "repo with space & 'quote'"
         target = self.root / "target with space"
-        tokens = ae.command_tokens(ae.install_fix(repo, target)) if os.name == "nt" else shlex.split(ae.install_fix(repo, target))
+        tokens = (
+            ae.command_tokens(ae.install_fix(repo, target))
+            if os.name == "nt"
+            else shlex.split(ae.install_fix(repo, target))
+        )
         self.assertEqual(tokens, [ae._python_cli(), str(repo / "ae.py"), "install", "--target", str(target)])
 
     def test_orphan_fix_command_preserves_custom_target(self):
@@ -228,12 +247,24 @@ class TargetUnitTests(unittest.TestCase):
         scripts.mkdir(parents=True)
         serve = scripts / "serve.py"
         serve.write_text("# 合成脚本\n", encoding="utf-8")
-        command = subprocess.list2cmdline([sys.executable, str(serve), str(self.root / "missing-review")]) if os.name == "nt" else shlex.join(["python3", str(serve), str(self.root / "missing-review")])
-        ctx = ae.DoctorContext(skill_copy=copy, target=target, repo=ROOT, record=None,
-                               ledger_home=self.root / "ledger",
-                               process_lister=lambda: [(424242, command)], port_probe=lambda port: None)
-        with patch.object(ae, "served_review_dir", return_value=None), \
-                patch.object(ae, "server_port_of", return_value=None):
+        command = (
+            subprocess.list2cmdline([sys.executable, str(serve), str(self.root / "missing-review")])
+            if os.name == "nt"
+            else shlex.join(["python3", str(serve), str(self.root / "missing-review")])
+        )
+        ctx = ae.DoctorContext(
+            skill_copy=copy,
+            target=target,
+            repo=ROOT,
+            record=None,
+            ledger_home=self.root / "ledger",
+            process_lister=lambda: [(424242, command)],
+            port_probe=lambda port: None,
+        )
+        with (
+            patch.object(ae, "served_review_dir", return_value=None),
+            patch.object(ae, "server_port_of", return_value=None),
+        ):
             result = ae.check_orphan_servers(ctx)
         self.assertEqual(result.level, ae.LEVEL_FAIL)
         tokens = ae.command_tokens(result.fix_command) if os.name == "nt" else shlex.split(result.fix_command)
@@ -271,6 +302,7 @@ class TargetUnitTests(unittest.TestCase):
 
     def test_windows_fix_commands_and_exe_command_tokens(self):
         from pathlib import PureWindowsPath
+
         with patch.object(ae, "_is_windows", return_value=True, create=True):
             fix = ae.install_fix(PureWindowsPath(r"C:\repo with space\ae"), PureWindowsPath(r"D:\中文 用户\skills"))
             self.assertTrue(fix.startswith("python "), fix)

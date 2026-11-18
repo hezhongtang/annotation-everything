@@ -2,6 +2,7 @@
 
 fixture 全部现场合成，不入库真实文档。只用标准库：python3 -m unittest tests.test_docx_anchor
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -18,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT / "fixtures" / "docx"))
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
 _test_user = tempfile.mkdtemp(prefix="ae-test-user-")
 os.environ["HOME"] = _test_user
 os.environ["USERPROFILE"] = _test_user
@@ -31,7 +32,7 @@ import notes as notes_cli  # noqa: E402
 import notes_store as store  # noqa: E402
 
 LRPB = "<w:lastRenderedPageBreak/>"
-PAGE_BR = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'   # 只有分页符的段落：占一个段落序号
+PAGE_BR = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'  # 只有分页符的段落：占一个段落序号
 
 
 def tmp() -> Path:
@@ -61,14 +62,21 @@ class ParagraphIndexTests(unittest.TestCase):
     def test_index_lists_digest_and_fragment_offsets(self):
         split = f'<w:p w14:paraId="0000000B"><w:r><w:t>前半</w:t></w:r><w:r>{LRPB}<w:t>后 半</w:t></w:r></w:p>'
         r = dr.render(docx(para("第一段", pid="0000000A") + split))
-        self.assertEqual(r["paragraphs"], [
-            {"n": 0, "id": "0000000A", "digest": digest("第一段"), "frags": [{"page": 1, "start": 0}]},
-            {"n": 1, "id": "0000000B", "digest": digest("前半后 半"),
-             "frags": [{"page": 1, "start": 0}, {"page": 2, "start": 2}]},
-        ])
+        self.assertEqual(
+            r["paragraphs"],
+            [
+                {"n": 0, "id": "0000000A", "digest": digest("第一段"), "frags": [{"page": 1, "start": 0}]},
+                {
+                    "n": 1,
+                    "id": "0000000B",
+                    "digest": digest("前半后 半"),
+                    "frags": [{"page": 1, "start": 0}, {"page": 2, "start": 2}],
+                },
+            ],
+        )
 
     def test_pages_expose_digest_and_continuation_offset(self):
-        split = f'<w:p><w:r><w:t>前半</w:t></w:r><w:r>{LRPB}<w:t>后半</w:t></w:r></w:p>'
+        split = f"<w:p><w:r><w:t>前半</w:t></w:r><w:r>{LRPB}<w:t>后半</w:t></w:r></w:p>"
         pages = dr.render(docx(split))["pages"]
         d = digest("前半后半")
         self.assertIn(f'data-docx-p="0" data-docx-d="{d}"', pages[0]["html"])
@@ -76,8 +84,10 @@ class ParagraphIndexTests(unittest.TestCase):
         self.assertIn(f'data-docx-p="0" data-docx-d="{d}" data-docx-o="2"', pages[1]["html"])
 
     def test_list_numbers_are_not_part_of_the_digest(self):
-        numbered = ('<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>'
-                    "<w:r><w:t>条款正文</w:t></w:r></w:p>")
+        numbered = (
+            '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>'
+            "<w:r><w:t>条款正文</w:t></w:r></w:p>"
+        )
         r = dr.render(docx(numbered))
         self.assertIn("docx-num", r["pages"][0]["html"], "编号已画出")
         self.assertEqual(r["paragraphs"][0]["digest"], digest("条款正文"))
@@ -97,8 +107,9 @@ class RelocateTests(unittest.TestCase):
         # 旧版：目标段是第 2 页页首；新版：前面多了一段，目标段成了第 2 页的第二段
         new = para("甲", pid="0000000A") + PAGE_BR + para("新增", pid="0000000C") + para("目标段", pid="0000000B")
         got = self.locate(new, anchor("目标段", 2, pid="0000000B"))
-        self.assertEqual((got["status"], got["how"], got["page"], got["para"]["n"], got["changed"]),
-                         ("ok", "paraId", 2, 3, False))
+        self.assertEqual(
+            (got["status"], got["how"], got["page"], got["para"]["n"], got["changed"]), ("ok", "paraId", 2, 3, False)
+        )
 
     def test_para_id_match_with_changed_text_is_flagged(self):
         got = self.locate(para("目标段改过了", pid="0000000B"), anchor("目标段", 0, pid="0000000B"))
@@ -146,18 +157,39 @@ class AnchorFieldTests(unittest.TestCase):
 
     def test_add_keeps_a_valid_anchor_and_drops_unknown_keys(self):
         d = review_dir()
-        a = {**anchor("目标段", 3, pid="0000000b", start=2, end=5, run=1), "fp": "ab" * 32, "junk": "x",
-             "endPara": {"id": None, "n": 4, "digest": digest("下一段"), "extra": 1}}
+        a = {
+            **anchor("目标段", 3, pid="0000000b", start=2, end=5, run=1),
+            "fp": "ab" * 32,
+            "junk": "x",
+            "endPara": {"id": None, "n": 4, "digest": digest("下一段"), "extra": 1},
+        }
         _doc, note = store.add(d, {"page": 2, "text": "改一下", "docx": a})
-        self.assertEqual(note["docx"], {
-            "v": 1, "kind": "quote", "via": "selection", "fp": "ab" * 32,
-            "para": {"id": "0000000B", "n": 3, "digest": digest("目标段")}, "start": 2, "end": 5,
-            "endPara": {"id": None, "n": 4, "digest": digest("下一段")}, "run": 1})
+        self.assertEqual(
+            note["docx"],
+            {
+                "v": 1,
+                "kind": "quote",
+                "via": "selection",
+                "fp": "ab" * 32,
+                "para": {"id": "0000000B", "n": 3, "digest": digest("目标段")},
+                "start": 2,
+                "end": 5,
+                "endPara": {"id": None, "n": 4, "digest": digest("下一段")},
+                "run": 1,
+            },
+        )
 
     def test_malformed_anchor_is_rejected(self):
         d = review_dir()
-        for bad in ("x", {"v": 1}, {**anchor("甲", 0), "kind": "nope"}, {**anchor("甲", 0), "para": {"n": -1, "digest": "zz"}},
-                    {**anchor("甲", 0), "start": 5, "end": 2}, {"v": 0}, {"v": True}):
+        for bad in (
+            "x",
+            {"v": 1},
+            {**anchor("甲", 0), "kind": "nope"},
+            {**anchor("甲", 0), "para": {"n": -1, "digest": "zz"}},
+            {**anchor("甲", 0), "start": 5, "end": 2},
+            {"v": 0},
+            {"v": True},
+        ):
             with self.subTest(bad=bad), self.assertRaises(store.NoteError):
                 store.add(d, {"page": 1, "text": "x", "docx": bad})
 
@@ -189,10 +221,24 @@ class AnchorFieldTests(unittest.TestCase):
         self.assertEqual(store.load(d)["notes"][0]["docx"], a)
 
     def test_import_keeps_identical_quotes_at_distinct_paragraphs(self):
-        items = [{"id": "n1", "page": 1, "target": "报告", "text": "改措辞", "quote": "重复段",
-                  "docx": anchor("重复段", 0, pid="0000000A", start=0, end=3)},
-                 {"id": "n2", "page": 1, "target": "报告", "text": "改措辞", "quote": "重复段",
-                  "docx": anchor("重复段", 1, pid="0000000B", start=0, end=3)}]
+        items = [
+            {
+                "id": "n1",
+                "page": 1,
+                "target": "报告",
+                "text": "改措辞",
+                "quote": "重复段",
+                "docx": anchor("重复段", 0, pid="0000000A", start=0, end=3),
+            },
+            {
+                "id": "n2",
+                "page": 1,
+                "target": "报告",
+                "text": "改措辞",
+                "quote": "重复段",
+                "docx": anchor("重复段", 1, pid="0000000B", start=0, end=3),
+            },
+        ]
         for lang in (None, "zh-CN", "en"):
             with self.subTest(lang=lang):
                 exported = items if lang is None else ef.parse_markdown(ef.render(items, title="合成", lang=lang))[0]
@@ -212,10 +258,17 @@ class RemapTests(unittest.TestCase):
     def remap(self, d: Path, inner: str, old_keys: dict[int, str] | None = None) -> dict:
         r = dr.render(docx(inner))
         pages = r["pages"]
-        return store.remap_pages(d, old_keys or {}, {pg["key"]: pg["n"] for pg in pages},
-                                 {pg["n"]: pg["title"] for pg in pages},
-                                 docx={"paragraphs": r["paragraphs"], "fingerprint": self.NEW_FP,
-                                       "keys": {pg["n"]: pg["key"] for pg in pages}})
+        return store.remap_pages(
+            d,
+            old_keys or {},
+            {pg["key"]: pg["n"] for pg in pages},
+            {pg["n"]: pg["title"] for pg in pages},
+            docx={
+                "paragraphs": r["paragraphs"],
+                "fingerprint": self.NEW_FP,
+                "keys": {pg["n"]: pg["key"] for pg in pages},
+            },
+        )
 
     def add(self, d: Path, page: int, key: str, a: dict | None) -> str:
         data = {"page": page, "key": key, "title": "旧标题", "text": "意见"}
@@ -230,8 +283,11 @@ class RemapTests(unittest.TestCase):
         # 旧版第 2 页以目标段开头（键 w0000000B）；新版前面插了一段，页首换成新段，旧键已不存在
         d = review_dir()
         nid = self.add(d, 2, "w0000000B", anchor("目标段", 2, pid="0000000B"))
-        result = self.remap(d, para("甲", pid="0000000A") + PAGE_BR + para("新页首", pid="0000000C")
-                            + para("目标段", pid="0000000B"), {2: "w0000000B"})
+        result = self.remap(
+            d,
+            para("甲", pid="0000000A") + PAGE_BR + para("新页首", pid="0000000C") + para("目标段", pid="0000000B"),
+            {2: "w0000000B"},
+        )
         n = self.note(d, nid)
         self.assertEqual((n["page"], n["key"], n["title"]), (2, "w0000000C", "新页首 目标段"))
         self.assertNotIn("orphan", n, "段落还在，不算孤立")
@@ -252,8 +308,9 @@ class RemapTests(unittest.TestCase):
         nid = self.add(d, 1, "tabc", anchor("目标段", 0))
         result = self.remap(d, para("前面插入") + PAGE_BR + para("目标段"))
         self.assertEqual(self.note(d, nid)["page"], 2)
-        self.assertEqual([(x["id"], x["status"], x["how"], x["why"]) for x in result["docx"]],
-                         [(nid, "ok", "digest", "noId")])
+        self.assertEqual(
+            [(x["id"], x["status"], x["how"], x["why"]) for x in result["docx"]], [(nid, "ok", "digest", "noId")]
+        )
 
     def test_unprovable_paragraph_is_orphaned_without_moving(self):
         d = review_dir()
@@ -273,8 +330,9 @@ class RemapTests(unittest.TestCase):
 
     def test_cross_paragraph_end_follows_inserted_paragraphs(self):
         d = review_dir()
-        a = anchor("起点", 0, pid="0000000A", start=0, end=2,
-                   endPara={"id": "0000000B", "n": 1, "digest": digest("终点")})
+        a = anchor(
+            "起点", 0, pid="0000000A", start=0, end=2, endPara={"id": "0000000B", "n": 1, "digest": digest("终点")}
+        )
         nid = self.add(d, 1, "w0000000A", a)
         self.remap(d, para("新增") + para("起点", pid="0000000A") + para("终点", pid="0000000B"))
         got = self.note(d, nid)["docx"]
@@ -282,15 +340,24 @@ class RemapTests(unittest.TestCase):
 
     def test_cross_paragraph_range_keeps_old_fingerprint_when_an_end_is_invalid(self):
         first, last = para("起点", pid="0000000A"), para("终点", pid="0000000B")
-        cases = ((first, True, False),
-                 (first + para("终点已编辑", pid="0000000B"), False, True),
-                 (last + first, True, False))
+        cases = (
+            (first, True, False),
+            (first + para("终点已编辑", pid="0000000B"), False, True),
+            (last + first, True, False),
+        )
         for kind in ("quote", "region"):
             for inner, orphaned, changed in cases:
                 with self.subTest(kind=kind, inner=inner):
                     d = review_dir()
-                    a = anchor("起点", 0, pid="0000000A", kind=kind, start=0, end=2,
-                               endPara={"id": "0000000B", "n": 1, "digest": digest("终点")})
+                    a = anchor(
+                        "起点",
+                        0,
+                        pid="0000000A",
+                        kind=kind,
+                        start=0,
+                        end=2,
+                        endPara={"id": "0000000B", "n": 1, "digest": digest("终点")},
+                    )
                     nid = self.add(d, 1, "w0000000A", a)
                     self.remap(d, inner)
                     got = self.note(d, nid)
@@ -299,11 +366,17 @@ class RemapTests(unittest.TestCase):
                     self.assertEqual(bool(got["docx"].get("changed")), changed)
 
     def test_whitespace_edit_does_not_validate_or_move_a_split_anchor(self):
-        split = ('<w:p w14:paraId="0000000B"><w:r><w:t xml:space="preserve"> 甲</w:t></w:r>'
-                 f'<w:r>{LRPB}<w:t>乙</w:t></w:r></w:p>')
-        for kind, page, offsets in (("quote", 2, {"start": 1, "end": 2}),
-                                    ("pin", 2, {"start": 1}), ("region", 2, {"start": 1}),
-                                    ("pin", 1, {}), ("region", 1, {})):
+        split = (
+            '<w:p w14:paraId="0000000B"><w:r><w:t xml:space="preserve"> 甲</w:t></w:r>'
+            f"<w:r>{LRPB}<w:t>乙</w:t></w:r></w:p>"
+        )
+        for kind, page, offsets in (
+            ("quote", 2, {"start": 1, "end": 2}),
+            ("pin", 2, {"start": 1}),
+            ("region", 2, {"start": 1}),
+            ("pin", 1, {}),
+            ("region", 1, {}),
+        ):
             with self.subTest(kind=kind, page=page):
                 d = review_dir()
                 a = anchor("甲乙", 0, pid="0000000B", kind=kind, **offsets)
@@ -371,7 +444,9 @@ def build(report: Path, out: Path, locale: str = "zh-CN") -> tuple[int, str, str
     o, e = io.StringIO(), io.StringIO()
     with redirect_stdout(o), redirect_stderr(e):
         try:
-            code = build_viewer.main(["--report", str(report), "--out", str(out), "--no-scan-skills", "--locale", locale])
+            code = build_viewer.main(
+                ["--report", str(report), "--out", str(out), "--no-scan-skills", "--locale", locale]
+            )
         except SystemExit as exc:
             code = exc.code if isinstance(exc.code, int) else 1
             e.write(str(exc.code))
@@ -396,9 +471,17 @@ class BuildRemapTests(unittest.TestCase):
         src, out = docx(para("甲") + para("目标段")), tmp() / "rv"
         self.assertEqual(build(src, out)[0], 0)
         old = manifest(out)
-        _doc, note = store.add(out, {"page": 1, "key": old["pages"][0]["key"], "text": "意见", "quote": "目标",
-                                     "docx": {**anchor("目标段", 1, start=0, end=2), "fp": old["docx"]["fingerprint"]}})
-        docx(para("新增的第一页") + PAGE_BR + para("甲") + para("目标段"), src)   # Word 里在前面加了一页
+        _doc, note = store.add(
+            out,
+            {
+                "page": 1,
+                "key": old["pages"][0]["key"],
+                "text": "意见",
+                "quote": "目标",
+                "docx": {**anchor("目标段", 1, start=0, end=2), "fp": old["docx"]["fingerprint"]},
+            },
+        )
+        docx(para("新增的第一页") + PAGE_BR + para("甲") + para("目标段"), src)  # Word 里在前面加了一页
         code, _o, err = build(src, out)
         self.assertEqual(code, 0, err)
         new = manifest(out)
@@ -420,27 +503,56 @@ class BuildRemapTests(unittest.TestCase):
         self.assertIn(note["id"], err)
 
 
-FULL = {"v": 1, "kind": "quote", "via": "text", "fp": "ab" * 32,
-        "para": {"id": "0000000B", "n": 12, "digest": "0123456789ab"}, "start": 5, "end": 18,
-        "endPara": {"id": None, "n": 13, "digest": "ba9876543210"}, "run": 2, "changed": True}
+FULL = {
+    "v": 1,
+    "kind": "quote",
+    "via": "text",
+    "fp": "ab" * 32,
+    "para": {"id": "0000000B", "n": 12, "digest": "0123456789ab"},
+    "start": 5,
+    "end": 18,
+    "endPara": {"id": None, "n": 13, "digest": "ba9876543210"},
+    "run": 2,
+    "changed": True,
+}
 
 
 class ExportTests(unittest.TestCase):
     """导出 Markdown 中英两种文法都带 DOCX 定位，导入后字段还原。"""
 
     def notes(self, a: dict) -> list[dict]:
-        return [{"id": "n1", "page": 3, "title": "条款", "target": "报告", "text": "改措辞", "status": "open",
-                 "at": "2026-01-01T00:00:00+08:00", "quote": "原文", "quoteFrom": "报告", "pin": None, "docx": a}]
+        return [
+            {
+                "id": "n1",
+                "page": 3,
+                "title": "条款",
+                "target": "报告",
+                "text": "改措辞",
+                "status": "open",
+                "at": "2026-01-01T00:00:00+08:00",
+                "quote": "原文",
+                "quoteFrom": "报告",
+                "pin": None,
+                "docx": a,
+            }
+        ]
 
     def test_both_languages_carry_the_location(self):
         zh = ef.render(self.notes(FULL), title="合成", lang="zh-CN")
         en = ef.render(self.notes(FULL), title="合成", lang="en")
-        self.assertIn("   DOCX 定位：v1 引用 · 段落 12（paraId 0000000B，摘要 0123456789ab） · 字符 5–18"
-                      " · 止于段落 13（paraId -，摘要 ba9876543210） · 运行 2 · 来源 文本匹配 · 指纹 " + "ab" * 32
-                      + " · 段落已改动", zh)
-        self.assertIn("   DOCX location: v1 quote · paragraph 12 (paraId 0000000B, digest 0123456789ab) · chars 5–18"
-                      " · ends in paragraph 13 (paraId -, digest ba9876543210) · run 2 · source text match"
-                      " · fingerprint " + "ab" * 32 + " · paragraph changed", en)
+        self.assertIn(
+            "   DOCX 定位：v1 引用 · 段落 12（paraId 0000000B，摘要 0123456789ab） · 字符 5–18"
+            " · 止于段落 13（paraId -，摘要 ba9876543210） · 运行 2 · 来源 文本匹配 · 指纹 "
+            + "ab" * 32
+            + " · 段落已改动",
+            zh,
+        )
+        self.assertIn(
+            "   DOCX location: v1 quote · paragraph 12 (paraId 0000000B, digest 0123456789ab) · chars 5–18"
+            " · ends in paragraph 13 (paraId -, digest ba9876543210) · run 2 · source text match"
+            " · fingerprint " + "ab" * 32 + " · paragraph changed",
+            en,
+        )
 
     def test_round_trip_restores_the_anchor(self):
         pin = {"v": 1, "kind": "pin", "via": "point", "para": {"id": None, "n": 0, "digest": "0123456789ab"}}
@@ -468,12 +580,28 @@ class ExportTests(unittest.TestCase):
 class ShowTests(unittest.TestCase):
     """notes.py show / wait 的阅读输出带 DOCX 定位，并说明定位是否对着当前版本。"""
 
-    MANIFEST = {"title": "合成", "pages": [{"n": 3, "key": "w0000000B", "title": "条款"}],
-                "docx": {"fingerprint": "cd" * 32}}
+    MANIFEST = {
+        "title": "合成",
+        "pages": [{"n": 3, "key": "w0000000B", "title": "条款"}],
+        "docx": {"fingerprint": "cd" * 32},
+    }
 
     def show(self, a: dict, lang: str) -> str:
-        doc = {"rev": 1, "notes": [{"id": "n1", "page": 3, "key": "w0000000B", "target": "报告", "text": "改措辞",
-                                    "status": "open", "at": "2026-01-01T00:00:00+08:00", "docx": a}]}
+        doc = {
+            "rev": 1,
+            "notes": [
+                {
+                    "id": "n1",
+                    "page": 3,
+                    "key": "w0000000B",
+                    "target": "报告",
+                    "text": "改措辞",
+                    "status": "open",
+                    "at": "2026-01-01T00:00:00+08:00",
+                    "docx": a,
+                }
+            ],
+        }
         return notes_cli.to_markdown(doc, self.MANIFEST, include_resolved=True, page=None, locale=lang)
 
     def test_location_line_in_both_languages(self):
@@ -494,10 +622,26 @@ class ShowTests(unittest.TestCase):
         self.assertIn("another version", self.show(old, "en"))
 
     def test_orphaned_location_points_to_confirmation_not_rebuild(self):
-        doc = {"rev": 1, "notes": [{"id": "n1", "page": 3, "key": "w0000000B", "target": "报告", "text": "改措辞",
-                                    "status": "open", "at": "2026-01-01T00:00:00+08:00", "orphan": True,
-                                    "docx": {k: v for k, v in FULL.items() if k != "changed"}}]}
-        for lang, want, not_want in (("zh-CN", "定位的段落", "先重建对照页"), ("en", "paragraph it points to", "rebuild the review page first")):
+        doc = {
+            "rev": 1,
+            "notes": [
+                {
+                    "id": "n1",
+                    "page": 3,
+                    "key": "w0000000B",
+                    "target": "报告",
+                    "text": "改措辞",
+                    "status": "open",
+                    "at": "2026-01-01T00:00:00+08:00",
+                    "orphan": True,
+                    "docx": {k: v for k, v in FULL.items() if k != "changed"},
+                }
+            ],
+        }
+        for lang, want, not_want in (
+            ("zh-CN", "定位的段落", "先重建对照页"),
+            ("en", "paragraph it points to", "rebuild the review page first"),
+        ):
             text = notes_cli.to_markdown(doc, self.MANIFEST, include_resolved=True, page=None, locale=lang)
             self.assertIn(want, text)
             self.assertNotIn(not_want, text)
@@ -507,8 +651,21 @@ class ShowTests(unittest.TestCase):
         self.assertIn("cannot be used for write-back", self.show({"v": 2, "x": 1}, "en"))
 
     def test_newer_version_keeps_the_orphan_page_warning(self):
-        doc = {"rev": 1, "notes": [{"id": "n1", "page": 3, "key": "missing", "target": "报告", "text": "改措辞",
-                                    "status": "open", "orphan": True, "docx": {"v": 2, "x": 1}}]}
+        doc = {
+            "rev": 1,
+            "notes": [
+                {
+                    "id": "n1",
+                    "page": 3,
+                    "key": "missing",
+                    "target": "报告",
+                    "text": "改措辞",
+                    "status": "open",
+                    "orphan": True,
+                    "docx": {"v": 2, "x": 1},
+                }
+            ],
+        }
         for lang, want in (("zh-CN", "页码可能不对"), ("en", "page number may be wrong")):
             with self.subTest(lang=lang):
                 text = notes_cli.to_markdown(doc, self.MANIFEST, include_resolved=True, page=None, locale=lang)

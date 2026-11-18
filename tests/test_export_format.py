@@ -4,6 +4,7 @@
 这里用同一批合成用例钉住命令行那一份的规范；页面那一份由 tests/e2e_browser.py 的
 export_import_checks 用同一批用例核对。只用标准库：python3 -m unittest discover tests
 """
+
 from __future__ import annotations
 
 import io
@@ -21,8 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 FIXTURE = ROOT / "fixtures" / "sample"
 sys.path.insert(0, str(SCRIPTS))
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
-os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-test-user-")      # 技能扫描只使用合成目录
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
+os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-test-user-")  # 技能扫描只使用合成目录
 os.environ["USERPROFILE"] = os.environ["HOME"]
 os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
 os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")
@@ -44,29 +45,49 @@ def review(tmp: Path, name: str = "rv", locale: str | None = None) -> Path:
     """按合成样例建一份审阅，返回审阅目录。"""
     out = tmp / name
     out.mkdir(parents=True, exist_ok=True)
-    build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", out,
-                       **({"locale": locale} if locale else {}))
+    build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", out, **({"locale": locale} if locale else {}))
     return out
 
 
 def rich_notes() -> list[dict]:
     """一条把 Markdown 支持字段都用上的批注，加一条只有正文的批注。"""
     return [
-        {"id": "n1rich00000000a", "page": 3, "title": "结论：收入增长 12%", "target": "报告",
-         "text": "把 +12% 改成「同比 +12%」\n第二行也要改", "quote": "+12%", "quoteFrom": "报告",
-         "pin": {"x": 38.8, "y": 59.8}, "status": "open", "at": "2026-10-27T10:19:14Z"},
-        {"id": "n2rich00000000b", "page": 7, "title": "成本", "target": "讲稿",
-         "text": "改为：删掉整段", "quote": "原句甲乙", "quoteFrom": "讲稿", "status": "drafted",
-         "edit": {"op": "replace", "from": "原句甲乙", "to": "删掉整段"},
-         "at": "2026-10-27T11:00:00Z", "resolution": "已缩短", "region": {"x": 5, "y": 20, "w": 60, "h": 30},
-         "style": {"scope": "region"}, "anchor": "table「渠道」", "skills": ["humanizer-zh", "dataviz"],
-         "pair": {"side": "报告", "match": "exact", "text": "对应句子"}},
+        {
+            "id": "n1rich00000000a",
+            "page": 3,
+            "title": "结论：收入增长 12%",
+            "target": "报告",
+            "text": "把 +12% 改成「同比 +12%」\n第二行也要改",
+            "quote": "+12%",
+            "quoteFrom": "报告",
+            "pin": {"x": 38.8, "y": 59.8},
+            "status": "open",
+            "at": "2026-10-27T10:19:14Z",
+        },
+        {
+            "id": "n2rich00000000b",
+            "page": 7,
+            "title": "成本",
+            "target": "讲稿",
+            "text": "改为：删掉整段",
+            "quote": "原句甲乙",
+            "quoteFrom": "讲稿",
+            "status": "drafted",
+            "edit": {"op": "replace", "from": "原句甲乙", "to": "删掉整段"},
+            "at": "2026-10-27T11:00:00Z",
+            "resolution": "已缩短",
+            "region": {"x": 5, "y": 20, "w": 60, "h": 30},
+            "style": {"scope": "region"},
+            "anchor": "table「渠道」",
+            "skills": ["humanizer-zh", "dataviz"],
+            "pair": {"side": "报告", "match": "exact", "text": "对应句子"},
+        },
     ]
 
 
 def add_notes(d: Path, notes: list[dict] | None = None) -> None:
     """写进审阅目录。store.add 不接受 status / resolution，drafted 要用 set_status 标。"""
-    for n in (notes if notes is not None else rich_notes()):
+    for n in notes if notes is not None else rich_notes():
         status = n.get("status")
         _doc, saved = store.add(d, {k: v for k, v in n.items() if k not in ("status", "resolution")})
         if status in ("drafted", "resolved"):
@@ -122,33 +143,57 @@ class MarkerTests(unittest.TestCase):
             self.assertEqual([i["target"] for i in items], ["报告", "讲稿"])
             self.assertEqual([i["status"] for i in items], ["open", "drafted"])
 
-    GRAMMAR_LITERALS = ("[Report · Pin", "[Script · Region", "> Quote (", "> Quote: ",
-                        "Persistent skills (", "Position hint: ", "Draft note: ", "Style: Whole page",
-                        "↔ Other side (", "Skills: ", "Resolution: ",
-                        # 标记本身是两边各自写死的常量，由 test_marker_declares_version_and_language 直接钉；
-                        # 报错文案里可以引用它（那正是要告诉用户的写法），所以不列入这里。
-                        "## 第 3 页｜", "【已处理】", "【已初改·待复核】")
+    GRAMMAR_LITERALS = (
+        "[Report · Pin",
+        "[Script · Region",
+        "> Quote (",
+        "> Quote: ",
+        "Persistent skills (",
+        "Position hint: ",
+        "Draft note: ",
+        "Style: Whole page",
+        "↔ Other side (",
+        "Skills: ",
+        "Resolution: ",
+        # 标记本身是两边各自写死的常量，由 test_marker_declares_version_and_language 直接钉；
+        # 报错文案里可以引用它（那正是要告诉用户的写法），所以不列入这里。
+        "## 第 3 页｜",
+        "【已处理】",
+        "【已初改·待复核】",
+    )
 
     ZH_ONLY = ("## 第 3 页｜", "【已处理】", "【已初改·待复核】")
 
     def test_version_one_labels_stay_fixed(self):
         """交换格式保持 v1 标签；显示文案可以恰好使用相同的词，不代表文法依赖词典。"""
-        with_resolved = rich_notes() + [{"id": "r" * 16, "page": 9, "title": "结尾", "target": "报告",
-                                          "text": "已处理的意见", "status": "resolved",
-                                          "at": "2026-10-27T14:00:00Z"}]
+        with_resolved = rich_notes() + [
+            {
+                "id": "r" * 16,
+                "page": 9,
+                "title": "结尾",
+                "target": "报告",
+                "text": "已处理的意见",
+                "status": "resolved",
+                "at": "2026-10-27T14:00:00Z",
+            }
+        ]
         zh = ef.render(with_resolved, title="示例报告", lang="zh-CN", exported_at=AT)
         en = ef.render(with_resolved, title="示例报告", lang="en", exported_at=AT)
         for literal in self.GRAMMAR_LITERALS + self.ZH_ONLY:
             if literal in self.ZH_ONLY:
                 self.assertIn(literal, zh)
-            elif literal not in ("[Script · Region", "> Quote: ", "Persistent skills (",
-                                 "Style: Whole page", "Resolution: "):
-                self.assertIn(literal, en)   # 其余几个这批合成数据里没有对应字段
+            elif literal not in (
+                "[Script · Region",
+                "> Quote: ",
+                "Persistent skills (",
+                "Style: Whole page",
+                "Resolution: ",
+            ):
+                self.assertIn(literal, en)  # 其余几个这批合成数据里没有对应字段
 
     def test_ui_copy_change_does_not_change_the_grammar(self):
         """从模块加载到导出和解析都不读取 UI 词典，普通文案变化不会影响交换格式。"""
-        before = {lang: ef.render(rich_notes(), title="t", lang=lang, exported_at=AT)
-                  for lang in ("zh-CN", "en")}
+        before = {lang: ef.render(rich_notes(), title="t", lang=lang, exported_at=AT) for lang in ("zh-CN", "en")}
         spec = importlib.util.spec_from_file_location("isolated_export_format", SCRIPTS / "export_format.py")
         isolated = importlib.util.module_from_spec(spec)
         with mock.patch.object(i18n, "load_catalog", side_effect=AssertionError("交换格式不得读取 UI 词典")) as load:
@@ -170,9 +215,19 @@ class RoundTripTests(unittest.TestCase):
 
     def test_chinese_export_imports_back_identically(self):
         items = self._round_trip("zh-CN")
-        self.assertEqual(items[0], {"page": 3, "title": "结论：收入增长 12%", "target": "报告",
-                                    "text": "把 +12% 改成「同比 +12%」\n第二行也要改", "status": "open",
-                                    "pin": {"x": 38.8, "y": 59.8}, "quoteFrom": "报告", "quote": "+12%"})
+        self.assertEqual(
+            items[0],
+            {
+                "page": 3,
+                "title": "结论：收入增长 12%",
+                "target": "报告",
+                "text": "把 +12% 改成「同比 +12%」\n第二行也要改",
+                "status": "open",
+                "pin": {"x": 38.8, "y": 59.8},
+                "quoteFrom": "报告",
+                "quote": "+12%",
+            },
+        )
 
     def test_english_export_imports_back_identically(self):
         items = self._round_trip("en")
@@ -225,8 +280,7 @@ class RoundTripTests(unittest.TestCase):
         # 断言不随开发机的系统语言漂移。
         d = review(tmpdir())
         add_notes(d, [rich_notes()[0]])
-        saved = {name: os.environ.get(name)
-                 for name in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
+        saved = {name: os.environ.get(name) for name in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
 
         def restore() -> None:
             for name, value in saved.items():
@@ -286,18 +340,20 @@ class RoundTripTests(unittest.TestCase):
 class LegacyTests(unittest.TestCase):
     """验收 4：旧中文 Markdown 继续可读，并逐项声明往返范围。"""
 
-    LEGACY = ("# 批注 · 示例报告\n导出时间：2026-10-30 08:00:00；共 1 条（未处理 1），涉及 1 页\n"
-              "报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。\n"
-              "## 第 4 页｜收入\n"
-              "1. 【报告·标点 2（x 12.3%，y 45.6%）】意见一\n"
-              "   > 引用（报告）：甲乙丙\n"
-              "   ↔ 另一侧（讲稿·相近）：丁戊己\n"
-              "2. 【报告和讲稿】删除引用的这段文字\n"
-              "   > 引用（报告）：戊己庚\n"
-              "3. 【讲稿·框选 3（x 1%，y 2%，宽 30%，高 4%）】风格意见\n"
-              "   风格优化：框选处\n"
-              "   位置线索：table「渠道」\n"
-              "   技能：humanizer-zh（常驻·讲稿）、dataviz（这条指定）——处理这条前先调用这些技能\n")
+    LEGACY = (
+        "# 批注 · 示例报告\n导出时间：2026-10-30 08:00:00；共 1 条（未处理 1），涉及 1 页\n"
+        "报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。\n"
+        "## 第 4 页｜收入\n"
+        "1. 【报告·标点 2（x 12.3%，y 45.6%）】意见一\n"
+        "   > 引用（报告）：甲乙丙\n"
+        "   ↔ 另一侧（讲稿·相近）：丁戊己\n"
+        "2. 【报告和讲稿】删除引用的这段文字\n"
+        "   > 引用（报告）：戊己庚\n"
+        "3. 【讲稿·框选 3（x 1%，y 2%，宽 30%，高 4%）】风格意见\n"
+        "   风格优化：框选处\n"
+        "   位置线索：table「渠道」\n"
+        "   技能：humanizer-zh（常驻·讲稿）、dataviz（这条指定）——处理这条前先调用这些技能\n"
+    )
 
     def test_legacy_chinese_markdown_still_parses(self):
         items, always = ef.parse_markdown(self.LEGACY)
@@ -339,7 +395,9 @@ class LegacyTests(unittest.TestCase):
                 self.assertEqual(items[0]["resolution"], "已缩短", "处理说明")
                 self.assertEqual(items[0]["anchor"], "table「渠道」", "位置线索")
                 self.assertEqual(items[0]["skills"], ["humanizer-zh", "dataviz"], "本条指定的技能")
-                self.assertEqual(items[0]["pair"], {"side": "报告", "match": "exact", "text": "对应句子"}, "另一侧对应句")
+                self.assertEqual(
+                    items[0]["pair"], {"side": "报告", "match": "exact", "text": "对应句子"}, "另一侧对应句"
+                )
                 self.assertEqual(items[0]["edit"], {"op": "replace", "from": "原句甲乙", "to": "删掉整段"}, "快捷修改")
 
     def test_multiline_body_survives(self):
@@ -349,10 +407,20 @@ class LegacyTests(unittest.TestCase):
             self.assertEqual(items[0]["text"], "把 +12% 改成「同比 +12%」\n第二行也要改")
 
     def test_status_markers_round_trip(self):
-        for status, zh, en in (("open", "", ""), ("drafted", "【已初改·待复核】", "[Drafted] "),
-                               ("resolved", "【已处理】", "[Resolved] ")):
-            note = {"id": "x" * 16, "page": 2, "title": "t", "target": "报告", "text": "意见",
-                    "status": status, "at": "2026-10-27T10:00:00Z"}
+        for status, zh, en in (
+            ("open", "", ""),
+            ("drafted", "【已初改·待复核】", "[Drafted] "),
+            ("resolved", "【已处理】", "[Resolved] "),
+        ):
+            note = {
+                "id": "x" * 16,
+                "page": 2,
+                "title": "t",
+                "target": "报告",
+                "text": "意见",
+                "status": status,
+                "at": "2026-10-27T10:00:00Z",
+            }
             for lang, prefix in (("zh-CN", zh), ("en", en)):
                 md = ef.render([note], title="t", lang=lang, exported_at=AT)
                 if prefix:
@@ -369,8 +437,16 @@ class LegacyTests(unittest.TestCase):
             self.assertEqual(len(items), 2)
 
     def test_resolution_and_draft_note_labels_differ(self):
-        note = {"id": "y" * 16, "page": 2, "title": "t", "target": "报告", "text": "意见",
-                "status": "drafted", "at": "2026-10-27T10:00:00Z", "resolution": "初改说明"}
+        note = {
+            "id": "y" * 16,
+            "page": 2,
+            "title": "t",
+            "target": "报告",
+            "text": "意见",
+            "status": "drafted",
+            "at": "2026-10-27T10:00:00Z",
+            "resolution": "初改说明",
+        }
         zh = ef.render([note], title="t", lang="zh-CN", exported_at=AT)
         en = ef.render([note], title="t", lang="en", exported_at=AT)
         self.assertIn("初改说明：", zh)
@@ -380,8 +456,7 @@ class LegacyTests(unittest.TestCase):
 
     def test_unspecified_target_uses_the_fixed_literal(self):
         """对象为空时写固定字面量 `未指定`（文法的一部分，与 0.3 以来一致），导入时原样成为 target。"""
-        note = {"id": "u" * 16, "page": 2, "title": "t", "target": "", "text": "意见",
-                "at": "2026-10-27T10:00:00Z"}
+        note = {"id": "u" * 16, "page": 2, "title": "t", "target": "", "text": "意见", "at": "2026-10-27T10:00:00Z"}
         for lang in ("zh-CN", "en"):
             md = ef.render([note], title="t", lang=lang, exported_at=AT)
             self.assertIn("未指定", md, f"{lang} 也要写同一个字面量")
@@ -390,27 +465,45 @@ class LegacyTests(unittest.TestCase):
 
     def test_inherited_limits_are_pinned(self):
         """formats.md「从 0.3 继承下来的三条限制」：正文行读起来像元信息行时按元信息读。"""
-        note = {"id": "v" * 16, "page": 2, "title": "t", "target": "报告",
-                "text": "第一行\n   风格优化：整页", "at": "2026-10-27T10:00:00Z"}
+        note = {
+            "id": "v" * 16,
+            "page": 2,
+            "title": "t",
+            "target": "报告",
+            "text": "第一行\n   风格优化：整页",
+            "at": "2026-10-27T10:00:00Z",
+        }
         items, _ = ef.parse_markdown(ef.render([note], title="t", lang="zh-CN", exported_at=AT))
         self.assertEqual(items[0]["text"], "第一行", "像元信息行的正文行按元信息读（与 0.3 一致）")
         self.assertEqual(items[0]["style"], {"scope": "page"})
 
     def test_blank_line_inside_a_body_is_dropped(self):
-        note = {"id": "w" * 16, "page": 2, "title": "t", "target": "报告",
-                "text": "第一行\n\n第三行", "at": "2026-10-27T10:00:00Z"}
+        note = {
+            "id": "w" * 16,
+            "page": 2,
+            "title": "t",
+            "target": "报告",
+            "text": "第一行\n\n第三行",
+            "at": "2026-10-27T10:00:00Z",
+        }
         items, _ = ef.parse_markdown(ef.render([note], title="t", lang="zh-CN", exported_at=AT))
         self.assertEqual(items[0]["text"], "第一行\n第三行", "空行被丢掉，要原样保留请用 JSON")
 
     def test_body_starting_with_a_status_marker_is_read_as_that_status(self):
-        note = {"id": "x" * 16, "page": 2, "title": "t", "target": "报告",
-                "text": "【已处理】其实是正文", "at": "2026-10-27T10:00:00Z"}
+        note = {
+            "id": "x" * 16,
+            "page": 2,
+            "title": "t",
+            "target": "报告",
+            "text": "【已处理】其实是正文",
+            "at": "2026-10-27T10:00:00Z",
+        }
         items, _ = ef.parse_markdown(ef.render([note], title="t", lang="zh-CN", exported_at=AT))
         self.assertEqual(items[0]["status"], "resolved")
         self.assertEqual(items[0]["text"], "其实是正文")
 
     def test_zero_three_region_written_on_the_style_line_still_reads(self):
-        md = ("## 第 4 页｜收入\n1. 【报告】表格太挤\n   风格优化：区域（x 5%，y 20%，宽 60%，高 30%）\n")
+        md = "## 第 4 页｜收入\n1. 【报告】表格太挤\n   风格优化：区域（x 5%，y 20%，宽 60%，高 30%）\n"
         items, _ = ef.parse_markdown(md)
         self.assertEqual(items[0]["region"], {"x": 5.0, "y": 20.0, "w": 60.0, "h": 30.0})
         self.assertEqual(items[0]["style"], {"scope": "region"})
@@ -464,16 +557,24 @@ class EditedBodyTests(unittest.TestCase):
         ):
             with self.subTest(original=original):
                 f = d / "switch.json"
-                f.write_text(json.dumps({"notes": [{"page": 1, "target": "报告", "text": text,
-                                                    "quote": "原句", "edit": original}]}), encoding="utf-8")
+                f.write_text(
+                    json.dumps(
+                        {"notes": [{"page": 1, "target": "报告", "text": text, "quote": "原句", "edit": original}]}
+                    ),
+                    encoding="utf-8",
+                )
                 code, _, err = run_cli(["import", str(d), str(f)])
                 self.assertEqual(code, 0, err)
                 saved = next(n for n in store.load(d)["notes"] if n["text"] == text)
                 self.assertEqual(saved["edit"], expected)
 
     def test_unrelated_markdown_is_refused_with_a_rule(self):
-        for text in ("随便一段文字，没有页头也没有条目。", "# 只是个标题\n\n一些段落。",
-                     "<!-- 别的注释 -->\n## 第 1 页｜x\n", "## Page 3 | x\n1. [Report] 意见\n"):
+        for text in (
+            "随便一段文字，没有页头也没有条目。",
+            "# 只是个标题\n\n一些段落。",
+            "<!-- 别的注释 -->\n## 第 1 页｜x\n",
+            "## Page 3 | x\n1. [Report] 意见\n",
+        ):
             with self.subTest(text=text[:20]):
                 with self.assertRaises(ef.FormatError) as cm:
                     ef.parse_markdown(text)
@@ -512,18 +613,36 @@ class SpecialCharTests(unittest.TestCase):
     # formats.md「从 0.3 继承下来的三条限制」第 1 条：正文续行读起来像元信息行时按元信息读。
     # 每种语言给对应形状的那一行（中文行在英文文法里就是普通正文，反之亦然）。
     META_LINES = {
-        "zh-CN": ["风格优化：整页", "处理说明：改好了", "技能：humanizer-zh", "位置线索：table",
-                  "↔ 另一侧（报告·相同）：对应句", "> 引用（报告）：别的东西"],
-        "en": ["Style: Whole page", "Resolution: done", "Skills: humanizer-zh", "Position hint: table",
-               "↔ Other side (Report · identical): a sentence", "> Quote (Report): something else"],
+        "zh-CN": [
+            "风格优化：整页",
+            "处理说明：改好了",
+            "技能：humanizer-zh",
+            "位置线索：table",
+            "↔ 另一侧（报告·相同）：对应句",
+            "> 引用（报告）：别的东西",
+        ],
+        "en": [
+            "Style: Whole page",
+            "Resolution: done",
+            "Skills: humanizer-zh",
+            "Position hint: table",
+            "↔ Other side (Report · identical): a sentence",
+            "> Quote (Report): something else",
+        ],
     }
 
     def test_special_bodies_round_trip_in_both_languages(self):
         for label, extra in self.CASES:
             for lang in ("zh-CN", "en"):
                 with self.subTest(label=label, lang=lang):
-                    note = {"id": "z" * 16, "page": 2, "title": "标题｜带分隔符", "target": "报告",
-                            "at": "2026-10-27T10:00:00Z", **extra}
+                    note = {
+                        "id": "z" * 16,
+                        "page": 2,
+                        "title": "标题｜带分隔符",
+                        "target": "报告",
+                        "at": "2026-10-27T10:00:00Z",
+                        **extra,
+                    }
                     md = ef.render([note], title="t", lang=lang, exported_at=AT)
                     items, _ = ef.parse_markdown(md)
                     self.assertEqual(items[0]["text"], extra["text"])
@@ -533,8 +652,14 @@ class SpecialCharTests(unittest.TestCase):
         for lang, lines in self.META_LINES.items():
             for line in lines:
                 with self.subTest(lang=lang, line=line):
-                    note = {"id": "m" * 16, "page": 2, "title": "t", "target": "报告",
-                            "text": "意见\n" + line, "at": "2026-10-27T10:00:00Z"}
+                    note = {
+                        "id": "m" * 16,
+                        "page": 2,
+                        "title": "t",
+                        "target": "报告",
+                        "text": "意见\n" + line,
+                        "at": "2026-10-27T10:00:00Z",
+                    }
                     items, _ = ef.parse_markdown(ef.render([note], title="t", lang=lang, exported_at=AT))
                     self.assertEqual(items[0]["text"], "意见", "这一行按元信息读，不算正文")
 
@@ -543,8 +668,14 @@ class SpecialCharTests(unittest.TestCase):
         （引用被造出来会改掉重复判定，快捷修改的 edit.from 也会跟着变）。"""
         for lang, line in (("zh-CN", "> 引用（讲稿）：别的东西"), ("en", "> Quote (Script): something else")):
             with self.subTest(lang=lang):
-                note = {"id": "y" * 16, "page": 2, "title": "t", "target": "报告",
-                        "text": "结论\n" + line, "at": "2026-10-27T10:00:00Z"}
+                note = {
+                    "id": "y" * 16,
+                    "page": 2,
+                    "title": "t",
+                    "target": "报告",
+                    "text": "结论\n" + line,
+                    "at": "2026-10-27T10:00:00Z",
+                }
                 items, _ = ef.parse_markdown(ef.render([note], title="t", lang=lang, exported_at=AT))
                 self.assertEqual(items[0]["text"], "结论")
                 self.assertEqual(items[0]["quote"], "别的东西" if lang == "zh-CN" else "something else")
@@ -554,15 +685,30 @@ class SpecialCharTests(unittest.TestCase):
         """导出的元信息行排在正文续行之后，所以批注真有的字段不会被正文里的同形行改掉。"""
         for lang, body_line, real in (("zh-CN", "技能：假的", "真的"), ("en", "Skills: fake", "real")):
             with self.subTest(lang=lang):
-                note = {"id": "w" * 16, "page": 2, "title": "t", "target": "报告", "skills": [real],
-                        "text": "意见\n" + body_line, "at": "2026-10-27T10:00:00Z"}
+                note = {
+                    "id": "w" * 16,
+                    "page": 2,
+                    "title": "t",
+                    "target": "报告",
+                    "skills": [real],
+                    "text": "意见\n" + body_line,
+                    "at": "2026-10-27T10:00:00Z",
+                }
                 items, _ = ef.parse_markdown(ef.render([note], title="t", lang=lang, exported_at=AT))
                 self.assertEqual(items[0]["text"], "意见")
                 self.assertEqual(items[0]["skills"], [real])
 
     def test_quote_with_html_and_newline_is_flattened(self):
-        note = {"id": "q" * 16, "page": 2, "title": "t", "target": "报告", "text": "意见",
-                "quote": "第一行\n<script>x</script>", "quoteFrom": "报告", "at": "2026-10-27T10:00:00Z"}
+        note = {
+            "id": "q" * 16,
+            "page": 2,
+            "title": "t",
+            "target": "报告",
+            "text": "意见",
+            "quote": "第一行\n<script>x</script>",
+            "quoteFrom": "报告",
+            "at": "2026-10-27T10:00:00Z",
+        }
         for lang in ("zh-CN", "en"):
             md = ef.render([note], title="t", lang=lang, exported_at=AT)
             self.assertNotIn("\n<script>", md, "引用里的换行要折成一行，否则会变成续行")
@@ -571,8 +717,7 @@ class SpecialCharTests(unittest.TestCase):
 
     def test_english_item_survives_a_stripped_trailing_space(self):
         """英文条目靠方括号后那个空格分隔正文；行尾空白被工具去掉时也不能把整条读丢。"""
-        note = {"id": "s" * 16, "page": 2, "title": "t", "target": "报告", "text": "意见",
-                "at": "2026-10-27T10:00:00Z"}
+        note = {"id": "s" * 16, "page": 2, "title": "t", "target": "报告", "text": "意见", "at": "2026-10-27T10:00:00Z"}
         md = ef.render([note], title="t", lang="en", exported_at=AT)
         stripped = "\n".join(line.rstrip() for line in md.splitlines())
         items, _ = ef.parse_markdown(stripped)
@@ -592,13 +737,19 @@ class SpecialCharTests(unittest.TestCase):
         ]
         for text in broken:
             with self.subTest(text=text.splitlines()[-1][:30]):
-                items, _always = ef.parse_markdown(text)   # 不抛异常，也不产出半条批注
+                items, _always = ef.parse_markdown(text)  # 不抛异常，也不产出半条批注
                 self.assertTrue(all(i.get("text", "").strip() or i.get("status") for i in items))
 
     def test_export_is_safe_to_render(self):
         """导出内容按不可信数据处理：HTML 原样写出，由使用方转义。"""
-        note = {"id": "h" * 16, "page": 2, "title": "t", "target": "报告",
-                "text": "<img src=x onerror=alert(1)>", "at": "2026-10-27T10:00:00Z"}
+        note = {
+            "id": "h" * 16,
+            "page": 2,
+            "title": "t",
+            "target": "报告",
+            "text": "<img src=x onerror=alert(1)>",
+            "at": "2026-10-27T10:00:00Z",
+        }
         md = ef.render([note], title="t", lang="en", exported_at=AT)
         self.assertIn("<img src=x onerror=alert(1)>", md, "导出不做转义，也不解释 HTML")
 
@@ -616,17 +767,23 @@ class WrapperTests(unittest.TestCase):
         self.assertTrue(ef.default_filename("ns", "zh-CN", stamp="202610310934").startswith("批注_"))
 
     def test_exported_timestamp_is_locale_independent(self):
-        note = {"id": "t" * 16, "page": 2, "title": "t", "target": "报告", "text": "意见",
-                "at": "2026-10-27T10:00:00Z"}
+        note = {"id": "t" * 16, "page": 2, "title": "t", "target": "报告", "text": "意见", "at": "2026-10-27T10:00:00Z"}
         stamps = {ef.render([note], title="t", lang=lang, exported_at=AT).splitlines()[2] for lang in ("zh-CN", "en")}
         self.assertEqual(len(stamps), 2)
         for line in stamps:
             self.assertIn("2026-10-31 09:34:00", line)
 
     def test_coordinates_and_numbers_keep_their_machine_meaning(self):
-        note = {"id": "c" * 16, "page": 2, "title": "t", "target": "报告", "text": "意见",
-                "pin": {"x": 1234.5, "y": 0.125}, "region": {"x": 100000, "y": 0.5, "w": 33.333, "h": 1},
-                "at": "2026-10-27T10:00:00Z"}
+        note = {
+            "id": "c" * 16,
+            "page": 2,
+            "title": "t",
+            "target": "报告",
+            "text": "意见",
+            "pin": {"x": 1234.5, "y": 0.125},
+            "region": {"x": 100000, "y": 0.5, "w": 33.333, "h": 1},
+            "at": "2026-10-27T10:00:00Z",
+        }
         for lang in ("zh-CN", "en"):
             items, _ = ef.parse_markdown(ef.render([note], title="t", lang=lang, exported_at=AT))
             self.assertEqual(items[0]["pin"], {"x": 1234.5, "y": 0.125})
@@ -642,7 +799,7 @@ class JsonConsumerTests(unittest.TestCase):
     def test_new_lang_key_is_ignorable_by_old_consumers(self):
         payload = ef.json_export(review_id="r" * 16, name="n", namespace="ns", notes=[], always=[], lang="en")
         self.assertEqual(payload["lang"], "en")
-        old = {k: v for k, v in payload.items() if k != "lang"}   # 旧消费者只认这几个键
+        old = {k: v for k, v in payload.items() if k != "lang"}  # 旧消费者只认这几个键
         self.assertEqual(old["notes"], [])
         self.assertEqual(old["alwaysSkills"], [])
         self.assertEqual(old["reviewId"], "r" * 16)
@@ -652,8 +809,7 @@ class JsonConsumerTests(unittest.TestCase):
         target = review(tmpdir(), name="target")
         rid_src = src.joinpath("review.json")
         rid_target = target.joinpath("review.json")
-        self.assertNotEqual(json.loads(rid_src.read_text())["reviewId"],
-                            json.loads(rid_target.read_text())["reviewId"])
+        self.assertNotEqual(json.loads(rid_src.read_text())["reviewId"], json.loads(rid_target.read_text())["reviewId"])
         add_notes(src, [rich_notes()[0]])
         _code, out, _err = run_cli(["export", str(src), "--format", "json"])
         f = target / "other.json"

@@ -1,4 +1,5 @@
 """Save receipts from browser storage contexts before the review service exits."""
+
 from __future__ import annotations
 
 import json
@@ -28,8 +29,11 @@ def registered_pages(directory: Path, review_id: str) -> dict[str, tuple[str, st
     except FileNotFoundError:
         return {}
     value = json.loads(path.read_text(encoding="utf-8"))
-    if (not isinstance(value, dict) or not isinstance(value.get("reviewId"), str)
-            or not ledger.RID.fullmatch(value["reviewId"])):
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get("reviewId"), str)
+        or not ledger.RID.fullmatch(value["reviewId"])
+    ):
         raise ValueError("invalid-save-pages")
     if value["reviewId"] != review_id:
         # A rebuilt copy has a different browser queue and no registered pages.
@@ -38,9 +42,14 @@ def registered_pages(directory: Path, review_id: str) -> dict[str, tuple[str, st
     if not isinstance(pages, dict) or len(pages) > MAX_PAGES:
         raise ValueError("invalid-save-pages")
     for page_id, group in pages.items():
-        if (not PAGE_ID.fullmatch(page_id) or not isinstance(group, list) or len(group) != 2
-                or not isinstance(group[0], str) or not isinstance(group[1], str)
-                or not PAGE_ID.fullmatch(group[1])):
+        if (
+            not PAGE_ID.fullmatch(page_id)
+            or not isinstance(group, list)
+            or len(group) != 2
+            or not isinstance(group[0], str)
+            or not isinstance(group[1], str)
+            or not PAGE_ID.fullmatch(group[1])
+        ):
             raise ValueError("invalid-save-pages")
     return {page_id: tuple(group) for page_id, group in pages.items()}
 
@@ -68,9 +77,11 @@ class BrowserSaves:
             return bool(self._load(review_id))
 
     def _store(self, review_id, pages):
-        fsutil.atomic_write(self.directory / REGISTRY,
-                            json.dumps({"reviewId": review_id, "pages": pages}) + "\n",
-                            prefix=".annotation-save-pages-")
+        fsutil.atomic_write(
+            self.directory / REGISTRY,
+            json.dumps({"reviewId": review_id, "pages": pages}) + "\n",
+            prefix=".annotation-save-pages-",
+        )
         self._pages = pages
 
     def update(self, review_id, origin, body):
@@ -81,8 +92,11 @@ class BrowserSaves:
             if known is not None and known != group:
                 raise SaveConflict
             if "saved" in body:
-                if (known is None or self._request is None
-                        or any(body[key] != self._request[key] for key in ("stopId", "token"))):
+                if (
+                    known is None
+                    or self._request is None
+                    or any(body[key] != self._request[key] for key in ("stopId", "token"))
+                ):
                     raise SaveConflict
                 self._last_seen[page_id] = time.monotonic()
                 self._answers[group] = self._answers.get(group, True) and body["saved"]
@@ -117,8 +131,7 @@ class BrowserSaves:
             self._answers.clear()
 
             def answered():
-                return (False in self._answers.values()
-                        or set(self._pages.values()).issubset(self._answers))
+                return False in self._answers.values() or set(self._pages.values()).issubset(self._answers)
 
             try:
                 if not self._condition.wait_for(answered, timeout):
@@ -128,8 +141,7 @@ class BrowserSaves:
                 # A current page confirms the shared storage for its browser and
                 # origin. Older registrations in that storage can now be retired.
                 recent = time.monotonic() - 5
-                current = {key: group for key, group in self._pages.items()
-                           if self._last_seen.get(key, 0) >= recent}
+                current = {key: group for key, group in self._pages.items() if self._last_seen.get(key, 0) >= recent}
                 if current != self._pages:
                     self._store(review_id, current)
                     self._last_seen = {key: self._last_seen[key] for key in current}

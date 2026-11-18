@@ -13,6 +13,7 @@
 语言：LedgerError 的人读文案按界面语言变（`AE_LOCALE`，默认中文）；台账路径、标识、
 端口与恢复命令保持原文。调用方（serve.py / notes.py / ae.py）只负责打印。
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -32,25 +33,29 @@ import fsutil  # noqa: E402
 import i18n  # noqa: E402
 
 LEDGER_FILE = "reviews.json"
-WAIT_PREFIX = ".annotation-wait."   # 审阅目录里：每个 notes.py wait 进程留一个 .annotation-wait.<pid>.json，退出时删掉
-STATUS_FILE = ".annotation-server.json"   # 审阅目录里：服务运行状态（pid/端口/地址），停止时删除；服务与更新器共用这个名字
-METADATA_LOCK_FILE = ".annotation-metadata.lock"   # manifest / 运行状态写入与失效元数据清理的审阅级互斥
+WAIT_PREFIX = ".annotation-wait."  # 审阅目录里：每个 notes.py wait 进程留一个 .annotation-wait.<pid>.json，退出时删掉
+STATUS_FILE = (
+    ".annotation-server.json"  # 审阅目录里：服务运行状态（pid/端口/地址），停止时删除；服务与更新器共用这个名字
+)
+METADATA_LOCK_FILE = ".annotation-metadata.lock"  # manifest / 运行状态写入与失效元数据清理的审阅级互斥
 
 
 def wait_file(review_dir: Path, pid: int) -> Path:
     return Path(review_dir) / f"{WAIT_PREFIX}{pid}.json"
+
+
 LOCK_FILE = ".reviews.lock"
 BASE_PORT = 8765
-MAX_SCAN = 500          # 分配专属端口时最多往后找多少个
+MAX_SCAN = 500  # 分配专属端口时最多往后找多少个
 RID = re.compile(r"[0-9a-f]{16}")
 RID_PREFIX = re.compile(r"[0-9a-f]{4,16}")
 # 总览首页宿主：保留端口记录与运行状态都放在台账目录，独立于审阅条目（不登记成审阅、不改台账结构）
-OVERVIEW_PORT_FILE = "overview-home.json"       # 保留端口记录：{"version": 1, "port": N}
-HOST_KIND_OVERVIEW = "overview-home"            # /api/health 与页面注入的宿主种类；审阅宿主不带宿主种类字段
-OVERVIEW_PAGE_FILE = ".overview-home.html"      # 仅总览视图的首页页面（build_overview_home 生成）
-OVERVIEW_LOG_FILE = "overview-home.log"         # 首页服务日志
-OVERVIEW_STATUS_FILE = ".overview-home-status.json"   # 首页运行状态（pid/端口/宿主标识），退出时删除
-OVERVIEW_START_LOCK_FILE = ".overview-home-start.lock"   # 并发首次启动的串行化锁
+OVERVIEW_PORT_FILE = "overview-home.json"  # 保留端口记录：{"version": 1, "port": N}
+HOST_KIND_OVERVIEW = "overview-home"  # /api/health 与页面注入的宿主种类；审阅宿主不带宿主种类字段
+OVERVIEW_PAGE_FILE = ".overview-home.html"  # 仅总览视图的首页页面（build_overview_home 生成）
+OVERVIEW_LOG_FILE = "overview-home.log"  # 首页服务日志
+OVERVIEW_STATUS_FILE = ".overview-home-status.json"  # 首页运行状态（pid/端口/宿主标识），退出时删除
+OVERVIEW_START_LOCK_FILE = ".overview-home-start.lock"  # 并发首次启动的串行化锁
 
 
 def overview_port_file() -> Path:
@@ -130,8 +135,7 @@ def update_lock_path() -> Path:
 @contextlib.contextmanager
 def update_lock(*, exclusive: bool = False, nonblocking: bool = False):
     """按技能副本路径协调，不同 AE_HOME 的服务共用一把锁。"""
-    with fsutil.flocked(update_lock_path(), exclusive=exclusive, nonblocking=nonblocking,
-                        nofollow=True) as fd:
+    with fsutil.flocked(update_lock_path(), exclusive=exclusive, nonblocking=nonblocking, nofollow=True) as fd:
         yield fd
 
 
@@ -222,8 +226,12 @@ def _read(path: Path) -> dict[str, Any]:
     for rid, e in doc["reviews"].items():
         if RID.fullmatch(str(rid)) and isinstance(e, dict) and isinstance(e.get("dir"), str):
             port = e.get("port")
-            clean[rid] = {"dir": e["dir"], "port": port if isinstance(port, int) and not isinstance(port, bool)
-                          and 1024 <= port <= 65535 else None}
+            clean[rid] = {
+                "dir": e["dir"],
+                "port": port
+                if isinstance(port, int) and not isinstance(port, bool) and 1024 <= port <= 65535
+                else None,
+            }
     return {"version": 1, "reviews": clean}
 
 
@@ -283,7 +291,7 @@ def _set_dir(reviews: dict[str, Any], rid: str, d: str) -> dict[str, Any]:
 
 def register(rid: str, review_dir: Path) -> dict[str, Any]:
     """登记（或更新目录）一份审阅，返回它的条目。标识不合法时不登记。"""
-    _refresh_locale()   # 标识非法的报错也可能先于任何读写发生，语言要已经定好
+    _refresh_locale()  # 标识非法的报错也可能先于任何读写发生，语言要已经定好
     if not RID.fullmatch(str(rid or "")):
         raise LedgerError(T("ledger.err.badRid", rid=rid))
     _reject_unc_path(review_dir)
@@ -297,8 +305,9 @@ def owners() -> dict[int, str]:
     return {e["port"]: rid for rid, e in entries().items() if e.get("port")}
 
 
-def assign_port(rid: str, review_dir: Path, *, prefer: int | None = None,
-                is_free: Callable[[int], bool] = lambda p: True) -> int:
+def assign_port(
+    rid: str, review_dir: Path, *, prefer: int | None = None, is_free: Callable[[int], bool] = lambda p: True
+) -> int:
     """返回这份审阅的专属端口；还没有就分配一个，此后不变。
 
     prefer：已在运行的审阅第一次登记时，认领它正在用的端口（没被别的审阅认领的话）；
@@ -323,8 +332,7 @@ def assign_port(rid: str, review_dir: Path, *, prefer: int | None = None,
             if p not in taken and is_free(p):
                 e["port"] = p
                 return p
-        raise LedgerError(T("ledger.err.portsExhausted", base=BASE_PORT,
-                            end=BASE_PORT + MAX_SCAN - 1))
+        raise LedgerError(T("ledger.err.portsExhausted", base=BASE_PORT, end=BASE_PORT + MAX_SCAN - 1))
 
 
 def claim_port(rid: str, review_dir: Path, port: int) -> None:
@@ -342,8 +350,7 @@ def claim_port(rid: str, review_dir: Path, port: int) -> None:
         _set_dir(doc["reviews"], rid, d)["port"] = port
 
 
-def assign_overview_port(*, prefer: int | None = None,
-                         is_free: Callable[[int], bool] = lambda p: True) -> int | None:
+def assign_overview_port(*, prefer: int | None = None, is_free: Callable[[int], bool] = lambda p: True) -> int | None:
     """总览首页的保留端口：记录已有就直接用；没有才在台账写锁内挑一个写进独立记录。
 
     prefer：首次分配时优先考虑的端口（缺省从 8765 起）。候选避开台账里审阅已认领的专属端口
@@ -357,12 +364,14 @@ def assign_overview_port(*, prefer: int | None = None,
         current = _read_overview_port(path)
         if current is not None:
             return None if current in taken else current
-        candidates = ([prefer] if prefer and 1024 <= prefer <= 65535 else []) \
-            + list(range(BASE_PORT, BASE_PORT + MAX_SCAN))
+        candidates = ([prefer] if prefer and 1024 <= prefer <= 65535 else []) + list(
+            range(BASE_PORT, BASE_PORT + MAX_SCAN)
+        )
         for p in candidates:
             if p not in taken and is_free(p):
-                fsutil.atomic_write(path, json.dumps({"version": 1, "port": p}, ensure_ascii=False) + "\n",
-                                    prefix=".overview-home-")
+                fsutil.atomic_write(
+                    path, json.dumps({"version": 1, "port": p}, ensure_ascii=False) + "\n", prefix=".overview-home-"
+                )
                 return p
         return None
 
@@ -376,8 +385,9 @@ def match(key: str) -> str:
     if not hits:
         raise LedgerError(T("ledger.err.noSuchKey", prefix=key))
     if len(hits) > 1:
-        raise LedgerError(T("ledger.err.ambiguousKey", prefix=key,
-                            hits=T("cli.ae.listSeparator").join(h[:8] for h in hits)))
+        raise LedgerError(
+            T("ledger.err.ambiguousKey", prefix=key, hits=T("cli.ae.listSeparator").join(h[:8] for h in hits))
+        )
     return hits[0]
 
 
@@ -407,8 +417,12 @@ def _default_temp_roots() -> tuple[Path, ...]:
 
 
 TEMP_ROOTS = _default_temp_roots()
-PRUNE_METADATA_FILES = (".annotation-archived", ".agent-binding.json", ".agent-deliveries.json",
-                        ".annotation-stop.json")
+PRUNE_METADATA_FILES = (
+    ".annotation-archived",
+    ".agent-binding.json",
+    ".agent-deliveries.json",
+    ".annotation-stop.json",
+)
 
 
 def in_temp_area(directory: Path) -> bool:
@@ -585,8 +599,13 @@ def _open_metadata_dir(directory: Path, root: Path | None) -> tuple[Any, Path]:
 
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel32.CreateFileW.argtypes = [
-            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
-            wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
         ]
         kernel32.CreateFileW.restype = wintypes.HANDLE
         # FILE_READ_ATTRIBUTES (0x80), FILE_SHARE_READ|WRITE|DELETE (0x07), OPEN_EXISTING (3), FILE_FLAG_BACKUP_SEMANTICS (0x02000000)
@@ -640,8 +659,9 @@ def _metadata_plan(fd: Any, rid: str) -> tuple[str, str | None]:
         if error.reason != "identity-unconfirmed":
             return "skip", error.reason
         status = None
-    status_valid = isinstance(status, dict) and ("pid" not in status
-                    or (type(status["pid"]) is int and status["pid"] > 0))
+    status_valid = isinstance(status, dict) and (
+        "pid" not in status or (type(status["pid"]) is int and status["pid"] > 0)
+    )
     if status_valid and type(status.get("pid")) is int:
         try:
             if pid_alive(status["pid"]):
@@ -781,8 +801,14 @@ def _cleanup_quarantines(prepared: list[dict[str, Any]]) -> tuple[list[dict[str,
         try:
             win_dir = fd.current_path() if isinstance(fd, _WinMetadataDir) else None
         except _MetadataUnsafe as error:
-            errors.append({**item["row"], "reason": "metadata-cleanup-failed",
-                           "quarantine": str(item["directory"] / quarantine), "detail": error.reason})
+            errors.append(
+                {
+                    **item["row"],
+                    "reason": "metadata-cleanup-failed",
+                    "quarantine": str(item["directory"] / quarantine),
+                    "detail": error.reason,
+                }
+            )
             continue
         failure = None
         for name in item["names"]:
@@ -805,13 +831,20 @@ def _cleanup_quarantines(prepared: list[dict[str, Any]]) -> tuple[list[dict[str,
         if failure is None:
             deleted.append(item["row"])
         else:
-            errors.append({**item["row"], "reason": "metadata-cleanup-failed",
-                           "quarantine": str(item["directory"] / quarantine), "detail": failure})
+            errors.append(
+                {
+                    **item["row"],
+                    "reason": "metadata-cleanup-failed",
+                    "quarantine": str(item["directory"] / quarantine),
+                    "detail": failure,
+                }
+            )
     return deleted, errors
 
 
-def _prune_candidates(doc: dict[str, Any], *, all_stale: bool, root: Path | None,
-                      targets: set[str] | None) -> list[dict[str, Any]]:
+def _prune_candidates(
+    doc: dict[str, Any], *, all_stale: bool, root: Path | None, targets: set[str] | None
+) -> list[dict[str, Any]]:
     candidates = []
     for rid, entry in doc["reviews"].items():
         if targets is not None and rid not in targets:
@@ -849,9 +882,14 @@ def _preview_metadata_prune(
     return preview, skipped
 
 
-def prune_stale(*, all_stale: bool = False, under: Path | None = None,
-                review_ids: Collection[str] | None = None, delete_metadata: bool = False,
-                dry_run: bool = False) -> dict[str, list[dict[str, Any]]]:
+def prune_stale(
+    *,
+    all_stale: bool = False,
+    under: Path | None = None,
+    review_ids: Collection[str] | None = None,
+    delete_metadata: bool = False,
+    dry_run: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
     """预览或清理失效条目；元数据删除先隔离并可回滚，身份不明或仍在运行时保护。"""
     candidates: list[dict[str, Any]] = []
     removed: list[dict[str, Any]] = []
@@ -867,8 +905,14 @@ def prune_stale(*, all_stale: bool = False, under: Path | None = None,
         preview = _prune_candidates(_read(home() / LEDGER_FILE), all_stale=all_stale, root=root, targets=targets)
         if delete_metadata:
             preview, skipped = _preview_metadata_prune(preview, root)
-        return {"candidates": preview, "removed": [], "metadataDeleted": [],
-                "metadataPreserved": [], "metadataErrors": [], "skipped": skipped}
+        return {
+            "candidates": preview,
+            "removed": [],
+            "metadataDeleted": [],
+            "metadataPreserved": [],
+            "metadataErrors": [],
+            "skipped": skipped,
+        }
     with contextlib.ExitStack() as stack:
         with _edit(rollback=lambda: _rollback_quarantines(prepared)) as doc:
             candidates = _prune_candidates(doc, all_stale=all_stale, root=root, targets=targets)
@@ -916,8 +960,7 @@ def prune_stale(*, all_stale: bool = False, under: Path | None = None,
                 except _MetadataUnsafe as error:
                     skipped.append({**row, "reason": error.reason})
                     continue
-                item = {"row": row, "fd": fd, "directory": confirmed,
-                        "quarantine": "", "names": names}
+                item = {"row": row, "fd": fd, "directory": confirmed, "quarantine": "", "names": names}
                 # 先记录所有计划移动的文件，覆盖系统调用已经成功、Python 随即中断的情况。
                 prepared.append(item)
                 try:
@@ -947,8 +990,14 @@ def prune_stale(*, all_stale: bool = False, under: Path | None = None,
             for row in removed:
                 doc["reviews"].pop(row["reviewId"], None)
         metadata_deleted, metadata_errors = _cleanup_quarantines(prepared)
-    return {"candidates": candidates, "removed": removed, "metadataDeleted": metadata_deleted,
-            "metadataPreserved": metadata_preserved, "metadataErrors": metadata_errors, "skipped": skipped}
+    return {
+        "candidates": candidates,
+        "removed": removed,
+        "metadataDeleted": metadata_deleted,
+        "metadataPreserved": metadata_preserved,
+        "metadataErrors": metadata_errors,
+        "skipped": skipped,
+    }
 
 
 def resolve_dir(arg: str | Path) -> Path:
@@ -960,8 +1009,13 @@ def resolve_dir(arg: str | Path) -> Path:
     raw = str(arg)
     _reject_unc_path(raw)
     p = Path(raw).expanduser()
-    if p.exists() or os.sep in raw or "/" in raw or raw.startswith((".", "~")) \
-            or not RID_PREFIX.fullmatch(raw.strip().lower()):
+    if (
+        p.exists()
+        or os.sep in raw
+        or "/" in raw
+        or raw.startswith((".", "~"))
+        or not RID_PREFIX.fullmatch(raw.strip().lower())
+    ):
         return p
     rid = match(str(arg))
     return Path(entries()[rid]["dir"])
@@ -997,8 +1051,7 @@ def unsupported_format(manifest: dict[str, Any]) -> str | None:
     return T("ledger.err.format", kind=kind, version=version)
 
 
-def copied_from(review_dir: Path, manifest: dict[str, Any] | None = None, *,
-                origin: Path | None = None) -> Path | None:
+def copied_from(review_dir: Path, manifest: dict[str, Any] | None = None, *, origin: Path | None = None) -> Path | None:
     """这个目录是从哪份审阅复制来的：候选原目录还在、不是它自己、且那份里还是同一个审阅标识。
 
     候选原目录默认取 manifest 的 reviewDir（build_viewer 与 serve 的口径）；台账传 origin，
@@ -1018,7 +1071,7 @@ def copied_from(review_dir: Path, manifest: dict[str, Any] | None = None, *,
     if orig is None and isinstance(raw, str) and raw:
         try:
             orig = Path(raw)
-        except (ValueError, OSError):   # 含空字节等构不成路径的值：按没有来源处理
+        except (ValueError, OSError):  # 含空字节等构不成路径的值：按没有来源处理
             orig = None
     if orig is None or orig == review_dir or not orig.is_dir():
         return None

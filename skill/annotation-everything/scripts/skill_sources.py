@@ -4,6 +4,7 @@
 技能名与系统错误类型保持原文。调用方（ae.py / build_viewer）把已解析的语言用
 set_locale() 传下来；没有传时按 AE_LOCALE 兜底。调用方只负责打印警告。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -92,7 +93,7 @@ def _version_key(path: Path):
 
 
 def _skill_files(root: Path) -> list[Path]:
-    _refresh_locale()   # 也可能被 scan() 之外直接调用，语言要先定好
+    _refresh_locale()  # 也可能被 scan() 之外直接调用，语言要先定好
     if root.is_file():
         if root.name != "SKILL.md":
             raise ValueError(T("skill.err.notSkillFile"))
@@ -106,17 +107,22 @@ def _skill_files(root: Path) -> list[Path]:
             if version.is_dir() and (version / "skills").is_dir():
                 newest[(version.parent.parent.name, version.parent.name)] = version
         return [file for version in newest.values() for file in sorted((version / "skills").glob("*/SKILL.md"))]
-    return [child / "SKILL.md" for child in sorted(root.iterdir())
-            if child.is_dir() and (child / "SKILL.md").is_file()]
+    return [child / "SKILL.md" for child in sorted(root.iterdir()) if child.is_dir() and (child / "SKILL.md").is_file()]
 
 
 def default_roots() -> list[Path]:
     home = Path.home()
     codex = Path(os.environ.get("CODEX_HOME") or home / ".codex")
     claude = Path(os.environ.get("CLAUDE_SKILLS_DIR") or home / ".claude" / "skills")
-    return [home / ".agents" / "skills", claude, home / ".zcode" / "skills", codex / "skills",
-            codex / "plugins" / "cache", home / ".claude" / "plugins" / "cache",
-            home / ".zcode" / "cli" / "plugins" / "cache"]
+    return [
+        home / ".agents" / "skills",
+        claude,
+        home / ".zcode" / "skills",
+        codex / "skills",
+        codex / "plugins" / "cache",
+        home / ".claude" / "plugins" / "cache",
+        home / ".zcode" / "cli" / "plugins" / "cache",
+    ]
 
 
 def scan(roots: list[Path]) -> tuple[list[tuple[str, list[dict[str, str]] | None, bool]], list[str]]:

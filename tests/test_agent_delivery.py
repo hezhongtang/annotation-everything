@@ -1,4 +1,5 @@
 """Synthetic HTTP -> persisted binding -> desktop IPC, including service restart."""
+
 from __future__ import annotations
 
 import json
@@ -19,15 +20,17 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill/annotation-everything/scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
 
 import serve
 import notes_store as store
 import i18n
 import wakeup
 import notes as notes_cli
+
 sys.path.insert(0, str(ROOT))
 import host_isolation
+
 host_isolation.require_for_module(__name__)
 
 THREAD = "11111111-1111-4111-8111-111111111111"
@@ -56,6 +59,7 @@ class Desktop:
             except socket.timeout:
                 continue
             with client:
+
                 def exact(n):
                     data = b""
                     while len(data) < n:
@@ -64,6 +68,7 @@ class Desktop:
                             return None
                         data += part
                     return data
+
                 while True:
                     head = exact(4)
                     if not head:
@@ -76,10 +81,14 @@ class Desktop:
                         if self.drop_reply:
                             break
                         result = {"result": {"turn": {"id": "fixture-turn", "status": "inProgress"}}}
-                    reply = {"type": "response", "requestId": request["requestId"],
-                             "resultType": "error" if self.reject and method.endswith("start-turn") else "success",
-                             "error": "unsupported-protocol", "result": result,
-                             "handledByClientId": "owner"}
+                    reply = {
+                        "type": "response",
+                        "requestId": request["requestId"],
+                        "resultType": "error" if self.reject and method.endswith("start-turn") else "success",
+                        "error": "unsupported-protocol",
+                        "result": result,
+                        "handledByClientId": "owner",
+                    }
                     raw = json.dumps(reply).encode()
                     client.sendall(struct.pack("<I", len(raw)) + raw)
 
@@ -95,17 +104,22 @@ class DeliveryTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         home_dir = str(self.root / "home")
-        self.env = patch.dict(os.environ, {
-            "AE_HOME": str(self.root / "ledger"),
-            "HOME": home_dir,
-            "USERPROFILE": home_dir,
-            "CODEX_THREAD_ID": THREAD,
-        })
+        self.env = patch.dict(
+            os.environ,
+            {
+                "AE_HOME": str(self.root / "ledger"),
+                "HOME": home_dir,
+                "USERPROFILE": home_dir,
+                "CODEX_THREAD_ID": THREAD,
+            },
+        )
         self.env.start()
         self.addCleanup(self.env.stop)
         self.review = self.root / "review"
         self.review.mkdir(mode=0o700)
-        (self.review / "review.json").write_text(json.dumps({"reviewId": "synthetic-delivery", "reviewDir": str(self.review)}))
+        (self.review / "review.json").write_text(
+            json.dumps({"reviewId": "synthetic-delivery", "reviewDir": str(self.review)})
+        )
         (self.review / "index.html").write_text("<!doctype html><title>Synthetic</title>")
         self.desktop = None
         if _HAS_UNIX_DESKTOP_IPC:
@@ -121,21 +135,31 @@ class DeliveryTests(unittest.TestCase):
         server = serve.ReviewServer(self.review, 0, log_to_file=False)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
+
         def close():
             server.shutdown()
             server.server_close()
             worker.join(2)
             self.assertTrue(server.wait_for_hooks(5), "hook workers must finish before removing the review fixture")
+
         return server, close
 
     def submit(self, server):
-        headers = {"Host": f"127.0.0.1:{server.port}", "Origin": f"http://127.0.0.1:{server.port}",
-                   "Content-Type": "application/json", "X-AE-Review": "synthetic-delivery"}
+        headers = {
+            "Host": f"127.0.0.1:{server.port}",
+            "Origin": f"http://127.0.0.1:{server.port}",
+            "Content-Type": "application/json",
+            "X-AE-Review": "synthetic-delivery",
+        }
         _, _, metadata = serve._req(server.port, "GET", "/api/notes", headers)
         receiver = json.loads(metadata)["receiver"]
-        status, _, data = serve._req(server.port, "POST", "/api/handoff", headers,
-                                     {"message": "synthetic", "allowSubagents": False,
-                                      "receiverBindingId": receiver.get("bindingId")})
+        status, _, data = serve._req(
+            server.port,
+            "POST",
+            "/api/handoff",
+            headers,
+            {"message": "synthetic", "allowSubagents": False, "receiverBindingId": receiver.get("bindingId")},
+        )
         self.assertEqual(status, 200)
         return json.loads(data)["seq"]
 
@@ -145,7 +169,7 @@ class DeliveryTests(unittest.TestCase):
             result = wakeup.status(self.review)
             if result.get("state") == state:
                 return result
-            time.sleep(.02)
+            time.sleep(0.02)
         self.fail(wakeup.status(self.review))
 
     def test_binding_survives_plain_service_restart_and_ack_is_separate(self):
@@ -197,7 +221,7 @@ class DeliveryTests(unittest.TestCase):
             self.wait_status("accepted")
             self.assertEqual(store.handoff_state(self.review)["latest"]["status"], "pending")
             server.recover_deliveries()
-            time.sleep(.1)
+            time.sleep(0.1)
             self.assertEqual(len(self.desktop.requests), 2)
         finally:
             close()
@@ -239,8 +263,10 @@ class DeliveryTests(unittest.TestCase):
         store.handoff_request_review(self.review, 1)
         wakeup.deliver(self.review, "review", 1)
         self.assertEqual(len(self.desktop.requests), 2)
-        self.assertNotEqual(self.desktop.requests[0]["params"]["turnStart"]["request"]["clientUserMessageId"],
-                            self.desktop.requests[1]["params"]["turnStart"]["request"]["clientUserMessageId"])
+        self.assertNotEqual(
+            self.desktop.requests[0]["params"]["turnStart"]["request"]["clientUserMessageId"],
+            self.desktop.requests[1]["params"]["turnStart"]["request"]["clientUserMessageId"],
+        )
 
     def test_claim_without_chat_receipt_is_unknown_not_offline(self):
         store.handoff_submit(self.review, "synthetic")
@@ -262,8 +288,11 @@ class DeliveryTests(unittest.TestCase):
     def test_plain_cli_restart_recovers_unsent_submission(self):
         self.bind()
         store.handoff_submit(self.review, "synthetic")
-        process = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), str(self.review), "--no-open"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        process = subprocess.Popen(
+            [sys.executable, str(SCRIPTS / "serve.py"), str(self.review), "--no-open"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         try:
             self.wait_status("accepted")
             state = json.loads((self.review / serve.STATUS_FILE).read_text())
@@ -272,8 +301,11 @@ class DeliveryTests(unittest.TestCase):
             process.terminate()
             process.wait(timeout=5)
 
-        process = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), str(self.review), "--no-open"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        process = subprocess.Popen(
+            [sys.executable, str(SCRIPTS / "serve.py"), str(self.review), "--no-open"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         try:
             deadline = time.monotonic() + 3
             state, health = None, None
@@ -283,11 +315,11 @@ class DeliveryTests(unittest.TestCase):
                     health = serve.probe(state["port"])
                     if health and health.get("hook"):
                         break
-                time.sleep(.02)
+                time.sleep(0.02)
             self.assertIsNotNone(state, "重启服务须写出完整的状态 JSON")
             self.assertEqual(state["pid"], process.pid)
             self.assertTrue(health and health.get("hook"))
-            time.sleep(.1)
+            time.sleep(0.1)
             self.assertEqual(len(self.desktop.requests), 1)
         finally:
             process.terminate()
@@ -295,14 +327,21 @@ class DeliveryTests(unittest.TestCase):
 
     def test_wait_binding_reuses_the_same_running_service(self):
         wakeup.bind_wait(self.review, "Claude Code", "session-a")
-        process = subprocess.Popen([sys.executable, str(SCRIPTS / "serve.py"), str(self.review), "--no-open"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        process = subprocess.Popen(
+            [sys.executable, str(SCRIPTS / "serve.py"), str(self.review), "--no-open"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         try:
             deadline = time.monotonic() + 4
             while not (self.review / serve.STATUS_FILE).exists() and time.monotonic() < deadline:
-                time.sleep(.02)
-            reused = subprocess.run([sys.executable, str(SCRIPTS / "serve.py"), str(self.review), "--no-open"],
-                                    capture_output=True, text=True, timeout=10)
+                time.sleep(0.02)
+            reused = subprocess.run(
+                [sys.executable, str(SCRIPTS / "serve.py"), str(self.review), "--no-open"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
             self.assertEqual(reused.returncode, 0, reused.stdout + reused.stderr)
             self.assertEqual(json.loads((self.review / serve.STATUS_FILE).read_text())["pid"], process.pid)
         finally:
@@ -314,32 +353,37 @@ class DeliveryTests(unittest.TestCase):
         self.bind()
         fake = {"awaiting": "pending", "claimStage": "draft"}
         with patch.dict(wakeup.DELIVERY_EVENTS, {"fake": fake}):
-            with self.assertRaises(ValueError):   # 未登记的事件类型：去重键拒绝
+            with self.assertRaises(ValueError):  # 未登记的事件类型：去重键拒绝
                 wakeup.deliver(self.review, "future-analysis", 1)
             store.handoff_submit(self.review, "synthetic")
             handoff = wakeup.deliver(self.review, "handoff", 1)
-            other = wakeup.deliver(self.review, "fake", 1)   # 同 seq 不同事件：不互相去重
+            other = wakeup.deliver(self.review, "fake", 1)  # 同 seq 不同事件：不互相去重
             self.assertEqual(len(self.desktop.requests), 2)
             self.assertNotEqual(handoff["messageId"], other["messageId"])
             wakeup.acknowledge(self.review, "handoff", 1, handoff["messageId"], THREAD)
             result = wakeup.status(self.review)
             self.assertEqual(result["events"]["handoff"]["state"], "received")
             self.assertEqual(result["events"]["fake"]["state"], "accepted")
-            self.assertEqual((result["event"], result["state"]), ("fake", "accepted"),
-                             "同 seq 时登记顺序靠后的类型优先汇总")
-            with self.assertRaises(ValueError):   # 确认命令接受已登记类型（过了参数解析才到绑定校验）
+            self.assertEqual(
+                (result["event"], result["state"]), ("fake", "accepted"), "同 seq 时登记顺序靠后的类型优先汇总"
+            )
+            with self.assertRaises(ValueError):  # 确认命令接受已登记类型（过了参数解析才到绑定校验）
                 wakeup.main(["ack", str(self.review), "--event", "fake", "--seq", "1", "--message-id", "wrong"])
-            with self.assertRaises(SystemExit):   # 未登记类型过不了参数解析
+            with self.assertRaises(SystemExit):  # 未登记类型过不了参数解析
                 wakeup.main(["ack", str(self.review), "--event", "future-analysis", "--seq", "1", "--message-id", "x"])
         binding = wakeup.load_binding(self.review)
         history = json.loads((self.review / wakeup.DELIVERY_FILE).read_text())
-        history["items"][f'{binding["bindingId"]}:future-analysis:99'] = {   # 将来版本写下的记录，本版本未登记
-            "bindingId": binding["bindingId"], "seq": 99, "event": "future-analysis",
-            "messageId": "future-version", "state": "received"}
+        history["items"][f"{binding['bindingId']}:future-analysis:99"] = {  # 将来版本写下的记录，本版本未登记
+            "bindingId": binding["bindingId"],
+            "seq": 99,
+            "event": "future-analysis",
+            "messageId": "future-version",
+            "state": "received",
+        }
         (self.review / wakeup.DELIVERY_FILE).write_text(json.dumps(history, ensure_ascii=False))
         result = wakeup.status(self.review)
         self.assertEqual((result["event"], result["seq"]), ("handoff", 1), "未登记类型的记录不抢汇总")
-        self.assertEqual(list(result["events"]), ["handoff"])   # 解除登记后同样不参与统计
+        self.assertEqual(list(result["events"]), ["handoff"])  # 解除登记后同样不参与统计
 
     def test_transfer_checks_consult_every_registered_source(self):
         """改绑 / 解除接收方的前置检查按登记的来源逐个判定；来源可登记多种。"""
@@ -350,23 +394,34 @@ class DeliveryTests(unittest.TestCase):
             wakeup.assert_transferable(self.review)
         self.assertIn("batch-in-progress", str(ctx.exception))
         store.handoff_done(self.review, seq=1, by="Synthetic")
-        wakeup.assert_transferable(self.review)   # 批次不在处理中：通过
+        wakeup.assert_transferable(self.review)  # 批次不在处理中：通过
         fake = ("fake-in-progress: synthetic source", lambda review: True)
         with patch.object(wakeup, "TRANSFER_BLOCKS", wakeup.TRANSFER_BLOCKS + (fake,)):
-            with self.assertRaises(ValueError) as ctx:   # 批次之外登记的来源也能拦下
+            with self.assertRaises(ValueError) as ctx:  # 批次之外登记的来源也能拦下
                 wakeup.assert_transferable(self.review)
         self.assertIn("fake-in-progress", str(ctx.exception))
-        wakeup.assert_transferable(self.review)   # 解除登记后恢复通过
+        wakeup.assert_transferable(self.review)  # 解除登记后恢复通过
 
     def test_old_delivery_event_cannot_route_to_the_replacement_chat(self):
         old = self.bind()
         replacement = "22222222-2222-4222-8222-222222222222"
         wakeup.bind(self.review, replacement, self.desktop.path, replace=True)
         store.handoff_submit(self.review, "Synthetic queued event")
-        payload = {"app": "annotation-everything", "reviewId": "synthetic-delivery", "reviewDir": str(self.review),
-                   "bindingId": old["bindingId"], "event": "handoff", "seq": 1}
-        sent = subprocess.run([sys.executable, str(SCRIPTS / "wakeup.py"), "deliver", str(self.review)],
-                              input=json.dumps(payload), capture_output=True, text=True, timeout=10)
+        payload = {
+            "app": "annotation-everything",
+            "reviewId": "synthetic-delivery",
+            "reviewDir": str(self.review),
+            "bindingId": old["bindingId"],
+            "event": "handoff",
+            "seq": 1,
+        }
+        sent = subprocess.run(
+            [sys.executable, str(SCRIPTS / "wakeup.py"), "deliver", str(self.review)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
         self.assertEqual(sent.returncode, 2, sent.stdout + sent.stderr)
         self.assertEqual(self.desktop.requests, [])
 
@@ -404,7 +459,9 @@ class DeliveryTests(unittest.TestCase):
 
     def test_windows_private_binding_accepts_ntfs_mode_and_rejects_reparse(self):
         wakeup.bind_wait(self.review, "Claude Code", "session-a")
-        fake_ntfs = os.stat_result((0o100666, 1, 1, 1, 0, 0, (self.review / wakeup.BINDING_FILE).stat().st_size, 0, 0, 0))
+        fake_ntfs = os.stat_result(
+            (0o100666, 1, 1, 1, 0, 0, (self.review / wakeup.BINDING_FILE).stat().st_size, 0, 0, 0)
+        )
         with patch("fsutil.is_windows", return_value=True), patch.object(Path, "lstat", return_value=fake_ntfs):
             loaded = wakeup.load_binding(self.review)
             self.assertEqual(loaded["sessionId"], "session-a")
@@ -427,16 +484,17 @@ class DeliveryTests(unittest.TestCase):
         c = source.index("function overviewReceiverText(row){")
         d = source.index("function overviewTempStale(row){")
         messages = i18n.load_catalog("zh-CN")["messages"]
-        program = "\n".join([
-            "const M=" + json.dumps(messages, ensure_ascii=False) + ";",
-            "const uiLocale='zh-CN';",
-            "const tMsg=(k,p={})=>String(M[k]??k).replace(/\\{(\\w+)\\}/g,(_,n)=>String(p[n]??''));",
-            "const elements=new Map(); const $=id=>{if(!elements.has(id))elements.set(id,{textContent:'',title:'',className:'',classList:{classes:new Set(),contains(x){return this.classes.has(x)},toggle(x,f){if(f)this.classes.add(x);else this.classes.delete(x)},remove(x){this.classes.delete(x)}}});return elements.get(id)};",
-            "const FILE=false; let mode='server', srvOld=false, agentDelivery=null, receiver=null, hand=null, handDestination=null, handQueued=false;",
-            "const handUserMessage=()=>'';",
-            source[a:b],
-            source[c:d],
-            """
+        program = "\n".join(
+            [
+                "const M=" + json.dumps(messages, ensure_ascii=False) + ";",
+                "const uiLocale='zh-CN';",
+                "const tMsg=(k,p={})=>String(M[k]??k).replace(/\\{(\\w+)\\}/g,(_,n)=>String(p[n]??''));",
+                "const elements=new Map(); const $=id=>{if(!elements.has(id))elements.set(id,{textContent:'',title:'',className:'',classList:{classes:new Set(),contains(x){return this.classes.has(x)},toggle(x,f){if(f)this.classes.add(x);else this.classes.delete(x)},remove(x){this.classes.delete(x)}}});return elements.get(id)};",
+                "const FILE=false; let mode='server', srvOld=false, agentDelivery=null, receiver=null, hand=null, handDestination=null, handQueued=false;",
+                "const handUserMessage=()=>'';",
+                source[a:b],
+                source[c:d],
+                """
             const out = {};
             hand = {latest: {seq: 1, status: 'pending'}};
             agentDelivery = {adapter: 'codex-desktop', seq: 1, event: 'handoff', state: 'accepted'};
@@ -459,7 +517,8 @@ class DeliveryTests(unittest.TestCase):
             out.overviewRestart = overviewReceiverText({hook: false, agentDelivery: {adapter: 'wait', state: 'bound', receiver: {state: 'restart-required', harness: 'H', sessionId: 'S'}}});
             console.log(JSON.stringify(out));
             """,
-        ])
+            ]
+        )
         probe = self.root / "viewer_probe.js"
         probe.write_text(program, encoding="utf-8")
         run = subprocess.run([node, str(probe)], capture_output=True, text=True, timeout=15)

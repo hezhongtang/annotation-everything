@@ -17,6 +17,7 @@
 
 只用标准库与内联合成数据：python3 -m unittest discover tests
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -33,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))
-os.environ.pop("AE_LOCALE", None)   # 语言由各用例显式给定
+os.environ.pop("AE_LOCALE", None)  # 语言由各用例显式给定
 
 import report_check as rc  # noqa: E402
 
@@ -42,11 +43,23 @@ CHECK_SCHEMA = "ae-report-check/1"
 
 # #72 内容核验清单（决策 10）：八个内容项 + 视觉项；#73 增加结构清单与视觉逐页证据，
 # 可交付要求内容、结构、视觉三类覆盖全部 covered。
-CONTENT_CHECK_IDS = ("content.requirements", "content.claims", "content.fact-vs-inference",
-                     "content.units-dates", "content.numbers-charts", "content.cross-page",
-                     "content.script-consistency", "content.open-questions")
-STRUCTURE_CHECK_IDS = ("structure.flow", "structure.headings", "structure.claim-support",
-                       "structure.dup-gaps", "structure.length")
+CONTENT_CHECK_IDS = (
+    "content.requirements",
+    "content.claims",
+    "content.fact-vs-inference",
+    "content.units-dates",
+    "content.numbers-charts",
+    "content.cross-page",
+    "content.script-consistency",
+    "content.open-questions",
+)
+STRUCTURE_CHECK_IDS = (
+    "structure.flow",
+    "structure.headings",
+    "structure.claim-support",
+    "structure.dup-gaps",
+    "structure.length",
+)
 VISUAL_CHECK_IDS = ("visual.pages",)
 
 # 合成材料原文：用于 sources[].sha256 的新鲜度用例。
@@ -63,11 +76,17 @@ def all_checks(status: str) -> list[dict]:
     #73 起视觉项声明 pass 必须带逐页证据（checks[].pages）；本 helper 用 status 统一
     构造时，视觉项在 pass 下携带覆盖全部报告页的证据。"""
     pages = [{"page": n, "checked": True, "issues": []} for n in (1, 2)]
-    return [{"id": cid, "kind": "visual" if cid in VISUAL_CHECK_IDS else
-             ("structure" if cid in STRUCTURE_CHECK_IDS else "content"),
-             "status": status, "scope": "全部", "note": "合成契约数据",
-             **({"pages": pages} if cid in VISUAL_CHECK_IDS else {})}
-            for cid in CONTENT_CHECK_IDS + STRUCTURE_CHECK_IDS + VISUAL_CHECK_IDS]
+    return [
+        {
+            "id": cid,
+            "kind": "visual" if cid in VISUAL_CHECK_IDS else ("structure" if cid in STRUCTURE_CHECK_IDS else "content"),
+            "status": status,
+            "scope": "全部",
+            "note": "合成契约数据",
+            **({"pages": pages} if cid in VISUAL_CHECK_IDS else {}),
+        }
+        for cid in CONTENT_CHECK_IDS + STRUCTURE_CHECK_IDS + VISUAL_CHECK_IDS
+    ]
 
 
 REPORT = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>合成季度回顾</title>
@@ -108,40 +127,60 @@ def sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def make_record(report_text: str = REPORT, script_text: str | None = SCRIPT,
-                report_name: str = "report.html", **overrides) -> dict:
+def make_record(
+    report_text: str = REPORT, script_text: str | None = SCRIPT, report_name: str = "report.html", **overrides
+) -> dict:
     """一份结构完整的最小核验记录（#72 形态）；检查结果缺省全部 not_run。"""
     links = {
         "report": report_name,
         "script": "script.md" if script_text is not None else None,
-        "sha256": {"report": sha(report_text),
-                   "script": sha(script_text) if script_text is not None else None},
+        "sha256": {"report": sha(report_text), "script": sha(script_text) if script_text is not None else None},
         "sourceNote": "materials/q3-notes.md 及同目录讲稿",
     }
     record = {
         "schema": RECORD_SCHEMA,
         "generatedAt": "2026-11-02T09:00:00+08:00",
-        "request": {"purpose": "季度经营汇报", "audience": "管理层",
-                    "coreQuestions": ["三季度收入为什么增长"], "length": "2 页", "script": "yes"},
-        "sources": [{"path": "materials/q3-notes.md", "status": "read",
-                     "coverage": "全文", "note": ""}],
-        "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
-                   "version": "0.9.0", "unavailable": []},
+        "request": {
+            "purpose": "季度经营汇报",
+            "audience": "管理层",
+            "coreQuestions": ["三季度收入为什么增长"],
+            "length": "2 页",
+            "script": "yes",
+        },
+        "sources": [{"path": "materials/q3-notes.md", "status": "read", "coverage": "全文", "note": ""}],
+        "method": {"kind": "builtin", "name": "annotation-everything 内置范式", "version": "0.9.0", "unavailable": []},
         "links": links,
-        "findings": [{"claim": "三季度收入同比增长 12%", "type": "calculation",
-                      "sources": ["materials/q3-notes.md"], "pages": ["sum"],
-                      "refs": [{"path": "materials/q3-notes.md", "locator": "§1 收入",
-                                "quote": "去年同期为 100 万元", "found": True}],
-                      "support": "supported",
-                      "basis": "对比材料 §1 两期收入原文，并按声明输入复算 percent-change",
-                      "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 112},
-                                      "expected": 12,
-                                      "unit": "万元", "period": "2025Q3 对 2024Q3",
-                                      "definition": "对上年同期收入的增长百分比",
-                                      "inputLocations": {
-                                          "a": "materials/q3-notes.md §1：去年同期 100 万元",
-                                          "b": "materials/q3-notes.md §1：三季度收入 112 万元"}},
-                      "note": "收入 112 对上年 100，四舍五入到整数"}],
+        "findings": [
+            {
+                "claim": "三季度收入同比增长 12%",
+                "type": "calculation",
+                "sources": ["materials/q3-notes.md"],
+                "pages": ["sum"],
+                "refs": [
+                    {
+                        "path": "materials/q3-notes.md",
+                        "locator": "§1 收入",
+                        "quote": "去年同期为 100 万元",
+                        "found": True,
+                    }
+                ],
+                "support": "supported",
+                "basis": "对比材料 §1 两期收入原文，并按声明输入复算 percent-change",
+                "calculation": {
+                    "op": "percent-change",
+                    "inputs": {"a": 100, "b": 112},
+                    "expected": 12,
+                    "unit": "万元",
+                    "period": "2025Q3 对 2024Q3",
+                    "definition": "对上年同期收入的增长百分比",
+                    "inputLocations": {
+                        "a": "materials/q3-notes.md §1：去年同期 100 万元",
+                        "b": "materials/q3-notes.md §1：三季度收入 112 万元",
+                    },
+                },
+                "note": "收入 112 对上年 100，四舍五入到整数",
+            }
+        ],
         "gaps": ["十月的周报缺失"],
         "checks": all_checks("not_run"),
         "openItems": [{"item": "十月周报待补", "blocking": False}],
@@ -160,9 +199,16 @@ def compliant_record(**overrides) -> dict:
     return record
 
 
-def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
-               record: dict | None = None, record_text: str | None = None,
-               report_name: str = "report.html", material: bool = True) -> dict:
+def write_case(
+    d: Path,
+    *,
+    report: str = REPORT,
+    script: str | None = SCRIPT,
+    record: dict | None = None,
+    record_text: str | None = None,
+    report_name: str = "report.html",
+    material: bool = True,
+) -> dict:
     """把合成产物写进临时目录；返回各文件路径。"""
     d.mkdir(parents=True, exist_ok=True)
     if material and not (d / "materials" / "q3-notes.md").exists():
@@ -182,8 +228,9 @@ def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
     return paths
 
 
-def run_check(paths: dict, *, locale: str | None = None, argv_extra: list[str] | None = None
-              ) -> tuple[int, dict | None, str, str]:
+def run_check(
+    paths: dict, *, locale: str | None = None, argv_extra: list[str] | None = None
+) -> tuple[int, dict | None, str, str]:
     """在进程内调用公开入口：返回 (退出码, JSON 结果或 None, 摘要 stdout, stderr)。"""
     argv = [str(paths["report"])]
     if paths.get("script"):
@@ -231,8 +278,9 @@ class ValidInputsTests(unittest.TestCase):
         self.assertEqual(check_by_id(payload, "script.pages")["status"], "pass")
         self.assertEqual(check_by_id(payload, "record.calculations")["status"], "pass")
         # 交付被挡下的原因要写明内容与视觉核验未执行
-        self.assertTrue(any("视觉" in r or "visual" in r for r in payload["verdict"]["reasons"]),
-                        payload["verdict"]["reasons"])
+        self.assertTrue(
+            any("视觉" in r or "visual" in r for r in payload["verdict"]["reasons"]), payload["verdict"]["reasons"]
+        )
         # 未执行的检查不能出现在任何「通过」的展示里
         self.assertNotIn("content.requirements", [c["id"] for c in payload["checks"]])
 
@@ -244,13 +292,19 @@ class ValidInputsTests(unittest.TestCase):
         self.assertIn("核验", zh)
         _, _, en, _ = run_check(paths, locale="en")
         self.assertIn("Draft", en)
-        self.assertIn("not", en.lower() or en)   # 英文摘要说明未执行项
+        self.assertIn("not", en.lower() or en)  # 英文摘要说明未执行项
 
     def test_report_summary_is_optional_but_must_be_text(self):
-        for fields, valid in (({}, True), ({"summary": "Synthetic revenue review."}, True),
-                              ({"summary": ""}, True), ({"summary": None}, False),
-                              ({"summary": 42}, False), ({"summary": True}, False),
-                              ({"summary": []}, False), ({"summary": {}}, False)):
+        for fields, valid in (
+            ({}, True),
+            ({"summary": "Synthetic revenue review."}, True),
+            ({"summary": ""}, True),
+            ({"summary": None}, False),
+            ({"summary": 42}, False),
+            ({"summary": True}, False),
+            ({"summary": []}, False),
+            ({"summary": {}}, False),
+        ):
             with self.subTest(fields=fields):
                 paths = write_case(tmpdir(), record=make_record(**fields))
                 code, payload, _, _ = run_check(paths, locale="en", argv_extra=["--json"])
@@ -274,13 +328,13 @@ class ValidInputsTests(unittest.TestCase):
         self.assertFalse(payload["record"]["fresh"])
         self.assertEqual(payload["coverage"]["content"], "not_run")
         # 没有记录时，交付结论必须说明内容与视觉核验没有执行依据
-        self.assertTrue(any("记录" in r for r in payload["verdict"]["reasons"]),
-                        payload["verdict"]["reasons"])
+        self.assertTrue(any("记录" in r for r in payload["verdict"]["reasons"]), payload["verdict"]["reasons"])
 
     def test_english_materials(self):
         d = tmpdir()
-        paths = write_case(d, report=REPORT_EN, script=SCRIPT_EN,
-                           record=make_record(report_text=REPORT_EN, script_text=SCRIPT_EN))
+        paths = write_case(
+            d, report=REPORT_EN, script=SCRIPT_EN, record=make_record(report_text=REPORT_EN, script_text=SCRIPT_EN)
+        )
         code, payload, _, _ = run_check(paths, locale="en", argv_extra=["--json"])
         self.assertEqual(code, 0)
         self.assertTrue(payload["verdict"]["draftComplete"])
@@ -324,25 +378,21 @@ class ScriptDeclarationConsistencyTests(unittest.TestCase):
     @staticmethod
     def declared_script_record(*, with_scoped: bool) -> dict:
         """声明讲稿哈希的可交付形态记录；with_scoped 控制 checks 是否声明讲稿关联两项。"""
-        checks = [c for c in all_checks("pass")
-                  if with_scoped or c["id"] not in rc.SCRIPT_SCOPED_CHECKS]
+        checks = [c for c in all_checks("pass") if with_scoped or c["id"] not in rc.SCRIPT_SCOPED_CHECKS]
         return compliant_record(checks=checks)
 
     def test_declared_script_hash_without_script_blocks_deliverable(self):
         """核心静默场景：讲稿哈希已声明、讲稿关联两项未声明，其余全 pass——
         修复前其余 pass 后可交付静默成立；修复后拦可交付并显式警告。"""
         d = tmpdir()
-        paths = write_case(d, script=None,
-                           record=self.declared_script_record(with_scoped=False))
+        paths = write_case(d, script=None, record=self.declared_script_record(with_scoped=False))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0, "讲稿缺失拦可交付判定，不是程序检查失败")
-        self.assertFalse(payload["verdict"]["deliverable"],
-                         "声明了讲稿哈希而未收到讲稿：已声明产物的检查未执行")
+        self.assertFalse(payload["verdict"]["deliverable"], "声明了讲稿哈希而未收到讲稿：已声明产物的检查未执行")
         self.assertTrue(payload["verdict"]["draftComplete"], "拦可交付，不拦初稿")
         reasons = "；".join(payload["verdict"]["reasons"])
         self.assertIn("讲稿", reasons, payload["verdict"]["reasons"])
-        self.assertTrue(any("讲稿" in w for w in payload["warnings"]),
-                        payload["warnings"])
+        self.assertTrue(any("讲稿" in w for w in payload["warnings"]), payload["warnings"])
         _, _, summary, _ = run_check(paths, locale="zh-CN")
         self.assertIn("讲稿", summary, "可读摘要里要有显式警告")
         self.assertIn("报告可交付：否", summary)
@@ -351,51 +401,51 @@ class ScriptDeclarationConsistencyTests(unittest.TestCase):
     def test_declared_scoped_pass_still_fails_with_warning(self):
         """讲稿关联两项声明 pass 而无讲稿：既有程序失败规则不动，另给显式警告。"""
         d = tmpdir()
-        paths = write_case(d, script=None,
-                           record=self.declared_script_record(with_scoped=True))
+        paths = write_case(d, script=None, record=self.declared_script_record(with_scoped=True))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
         self.assertFalse(payload["verdict"]["deliverable"])
-        self.assertEqual(check_by_id(payload, "record.checks")["code"],
-                         "record.check-not-applicable")
-        self.assertTrue(any("讲稿" in w for w in payload["warnings"]),
-                        payload["warnings"])
+        self.assertEqual(check_by_id(payload, "record.checks")["code"], "record.check-not-applicable")
+        self.assertTrue(any("讲稿" in w for w in payload["warnings"]), payload["warnings"])
 
     def test_declared_script_hash_warning_is_localized(self):
         """核心静默场景在英文下同样拦可交付并给出英文警告。"""
         d = tmpdir()
-        paths = write_case(d, script=None,
-                           record=self.declared_script_record(with_scoped=False))
+        paths = write_case(d, script=None, record=self.declared_script_record(with_scoped=False))
         code, payload, _, _ = run_check(paths, locale="en", argv_extra=["--json"])
         self.assertEqual(code, 0)
         self.assertFalse(payload["verdict"]["deliverable"])
-        self.assertTrue(any("script" in w.lower() for w in payload["warnings"]),
-                        payload["warnings"])
-        self.assertTrue(any("script" in r.lower() for r in payload["verdict"]["reasons"]),
-                        payload["verdict"]["reasons"])
+        self.assertTrue(any("script" in w.lower() for w in payload["warnings"]), payload["warnings"])
+        self.assertTrue(
+            any("script" in r.lower() for r in payload["verdict"]["reasons"]), payload["verdict"]["reasons"]
+        )
 
     def test_undeclared_no_script_keeps_applicability_rules(self):
         """真无讲稿（无哈希声明）：适用性规则不变，可交付判定照常成立。"""
         d = tmpdir()
         record = compliant_record(
-            request={"purpose": "季度经营汇报", "audience": "管理层",
-                     "coreQuestions": ["三季度收入为什么增长"], "length": "2 页",
-                     "script": "no"},
-            links={"report": "report.html", "script": None,
-                   "sha256": {"report": sha(REPORT), "script": None},
-                   "sourceNote": "materials/q3-notes.md"},
-            checks=[c for c in all_checks("pass")
-                    if c["id"] not in rc.SCRIPT_SCOPED_CHECKS])
+            request={
+                "purpose": "季度经营汇报",
+                "audience": "管理层",
+                "coreQuestions": ["三季度收入为什么增长"],
+                "length": "2 页",
+                "script": "no",
+            },
+            links={
+                "report": "report.html",
+                "script": None,
+                "sha256": {"report": sha(REPORT), "script": None},
+                "sourceNote": "materials/q3-notes.md",
+            },
+            checks=[c for c in all_checks("pass") if c["id"] not in rc.SCRIPT_SCOPED_CHECKS],
+        )
         paths = write_case(d, script=None, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0)
         self.assertEqual(check_by_id(payload, "script.pages")["status"], "not_applicable")
-        self.assertEqual(payload["coverage"]["content"], "covered",
-                         "讲稿关联项不计入覆盖总数的规则不变")
-        self.assertTrue(payload["verdict"]["deliverable"],
-                        "无声明、真无讲稿的可交付判定不受影响")
-        self.assertFalse(any("讲稿" in w for w in payload["warnings"]),
-                         "真无讲稿不产生讲稿声明警告")
+        self.assertEqual(payload["coverage"]["content"], "covered", "讲稿关联项不计入覆盖总数的规则不变")
+        self.assertTrue(payload["verdict"]["deliverable"], "无声明、真无讲稿的可交付判定不受影响")
+        self.assertFalse(any("讲稿" in w for w in payload["warnings"]), "真无讲稿不产生讲稿声明警告")
 
 
 class RecordStructureTests(unittest.TestCase):
@@ -453,7 +503,7 @@ class FreshnessTests(unittest.TestCase):
 
     def test_stale_record(self):
         d = tmpdir()
-        record = make_record()          # 哈希对应 REPORT
+        record = make_record()  # 哈希对应 REPORT
         paths = write_case(d, report=REPORT.replace("两件事", "三件事"), record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
@@ -593,9 +643,17 @@ class ReviewBoundaryTests(unittest.TestCase):
                 self.assertEqual(check_by_id(payload, "record.calculations")["status"], status)
 
     def test_malformed_nested_mappings_return_structured_error(self):
-        for field, value in (("hash", None), ("hash", []), ("hash", "bad"),
-                             ("source", []), ("source", {}), ("source", "materials/\0.md"),
-                             ("citations", 1), ("check", []), ("unavailable", 1)):
+        for field, value in (
+            ("hash", None),
+            ("hash", []),
+            ("hash", "bad"),
+            ("source", []),
+            ("source", {}),
+            ("source", "materials/\0.md"),
+            ("citations", 1),
+            ("check", []),
+            ("unavailable", 1),
+        ):
             with self.subTest(field=field, value=value):
                 record = compliant_record()
                 if field == "hash":
@@ -660,7 +718,7 @@ class ReviewBoundaryTests(unittest.TestCase):
 
     def test_calculations_reject_nonfinite_and_out_of_range_numbers(self):
         for field in ("input", "expected"):
-            for value in (float("nan"), float("inf"), 10 ** 1000, True):
+            for value in (float("nan"), float("inf"), 10**1000, True):
                 with self.subTest(field=field, value=repr(value)[:20]):
                     record = compliant_record()
                     calculation = record["findings"][0]["calculation"]
@@ -698,13 +756,11 @@ class CalculationTests(unittest.TestCase):
     def test_unsupported_operator_fails(self):
         d = tmpdir()
         record = make_record()
-        record["findings"][0]["calculation"] = {"op": "pow", "inputs": {"a": 2, "b": 10},
-                                                "expected": 1024}
+        record["findings"][0]["calculation"] = {"op": "pow", "inputs": {"a": 2, "b": 10}, "expected": 1024}
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
-        self.assertEqual(check_by_id(payload, "record.calculations")["code"],
-                         "record.calc-unsupported-op")
+        self.assertEqual(check_by_id(payload, "record.calculations")["code"], "record.calc-unsupported-op")
 
 
 class CalculationBasisTests(unittest.TestCase):
@@ -757,8 +813,7 @@ class CalculationBasisTests(unittest.TestCase):
         del record["findings"][0]["calculation"]["period"]
         paths = write_case(d, record=record)
         _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
-        self.assertTrue(payload["verdict"]["draftComplete"],
-                        "有明确缺口的初稿仍可进入审阅")
+        self.assertTrue(payload["verdict"]["draftComplete"], "有明确缺口的初稿仍可进入审阅")
 
     def test_mismatch_locates_claim_and_page(self):
         d = tmpdir()
@@ -826,8 +881,7 @@ class SourceAssociationTests(unittest.TestCase):
         code, payload, text, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0)
         self.assertEqual(check_by_id(payload, "record.sources")["status"], "pass")
-        self.assertTrue(any("materials/q3-notes.md" in w for w in payload["warnings"]),
-                        payload["warnings"])
+        self.assertTrue(any("materials/q3-notes.md" in w for w in payload["warnings"]), payload["warnings"])
         self.assertIn("无法核对", text)
 
     def test_missing_hash_caps_not_run(self):
@@ -865,10 +919,12 @@ class RecordChecksTests(unittest.TestCase):
 
     def test_unknown_check_id_fails(self):
         d = tmpdir()
-        record = make_record(checks=[
-            {"id": "magic.auto-review", "kind": "content", "status": "pass", "scope": "", "note": ""},
-            {"id": "visual.pages", "kind": "visual", "status": "not_run", "scope": "", "note": ""},
-        ])
+        record = make_record(
+            checks=[
+                {"id": "magic.auto-review", "kind": "content", "status": "pass", "scope": "", "note": ""},
+                {"id": "visual.pages", "kind": "visual", "status": "not_run", "scope": "", "note": ""},
+            ]
+        )
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
@@ -878,10 +934,11 @@ class RecordChecksTests(unittest.TestCase):
 
     def test_missing_visual_declaration_fails(self):
         d = tmpdir()
-        record = make_record(checks=[
-            {"id": "content.requirements", "kind": "content", "status": "not_run",
-             "scope": "", "note": ""},
-        ])
+        record = make_record(
+            checks=[
+                {"id": "content.requirements", "kind": "content", "status": "not_run", "scope": "", "note": ""},
+            ]
+        )
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
@@ -889,11 +946,12 @@ class RecordChecksTests(unittest.TestCase):
 
     def test_bad_check_status_fails(self):
         d = tmpdir()
-        record = make_record(checks=[
-            {"id": "content.requirements", "kind": "content", "status": "done",
-             "scope": "", "note": ""},
-            {"id": "visual.pages", "kind": "visual", "status": "not_run", "scope": "", "note": ""},
-        ])
+        record = make_record(
+            checks=[
+                {"id": "content.requirements", "kind": "content", "status": "done", "scope": "", "note": ""},
+                {"id": "visual.pages", "kind": "visual", "status": "not_run", "scope": "", "note": ""},
+            ]
+        )
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
@@ -930,8 +988,7 @@ class DeliverableVerdictTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["coverage"]["visual"], "not_run")
         self.assertFalse(payload["verdict"]["deliverable"])
-        self.assertTrue(any("视觉" in r for r in payload["verdict"]["reasons"]),
-                        payload["verdict"]["reasons"])
+        self.assertTrue(any("视觉" in r for r in payload["verdict"]["reasons"]), payload["verdict"]["reasons"])
 
     def test_blocking_open_item_prevents_deliverable(self):
         d = tmpdir()
@@ -947,8 +1004,7 @@ class DeliverableVerdictTests(unittest.TestCase):
         record = self.passed_record()
         for item in record["checks"]:
             if item["id"] == "content.requirements":
-                item.update({"status": "fail", "scope": "核心问题 2",
-                             "note": "报告未回应第二个核心问题"})
+                item.update({"status": "fail", "scope": "核心问题 2", "note": "报告未回应第二个核心问题"})
         record["verdict"] = {"draftComplete": True, "deliverable": False}
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
@@ -972,19 +1028,26 @@ class ChecklistCoverageTests(unittest.TestCase):
 
     def test_partial_content_checklist_cannot_cover(self):
         d = tmpdir()
-        record = compliant_record(checks=[
-            {"id": "content.requirements", "kind": "content", "status": "pass",
-             "scope": "全部需求", "note": ""},
-            {"id": "visual.pages", "kind": "visual", "status": "pass",
-             "scope": "全部 2 页", "note": "",
-             "pages": [{"page": 1, "checked": True}, {"page": 2, "checked": True}]},
-        ])
+        record = compliant_record(
+            checks=[
+                {"id": "content.requirements", "kind": "content", "status": "pass", "scope": "全部需求", "note": ""},
+                {
+                    "id": "visual.pages",
+                    "kind": "visual",
+                    "status": "pass",
+                    "scope": "全部 2 页",
+                    "note": "",
+                    "pages": [{"page": 1, "checked": True}, {"page": 2, "checked": True}],
+                },
+            ]
+        )
         paths = write_case(d, record=record)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0)
         self.assertEqual(payload["coverage"]["content"], "partial")
-        self.assertEqual(payload["coverageCounts"]["content"],
-                         {"done": 1, "total": len(CONTENT_CHECK_IDS), "failed": 0})
+        self.assertEqual(
+            payload["coverageCounts"]["content"], {"done": 1, "total": len(CONTENT_CHECK_IDS), "failed": 0}
+        )
         self.assertFalse(payload["verdict"]["deliverable"])
 
     def test_full_checklist_declared_pass_is_covered(self):
@@ -992,9 +1055,10 @@ class ChecklistCoverageTests(unittest.TestCase):
         paths = write_case(d, record=compliant_record())
         _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(payload["coverage"]["content"], "covered")
-        self.assertEqual(payload["coverageCounts"]["content"],
-                         {"done": len(CONTENT_CHECK_IDS), "total": len(CONTENT_CHECK_IDS),
-                          "failed": 0})
+        self.assertEqual(
+            payload["coverageCounts"]["content"],
+            {"done": len(CONTENT_CHECK_IDS), "total": len(CONTENT_CHECK_IDS), "failed": 0},
+        )
         self.assertEqual(payload["coverageCounts"]["visual"], {"done": 1, "total": 1, "failed": 0})
 
     def test_script_consistency_check_is_known(self):
@@ -1011,8 +1075,7 @@ class ChecklistCoverageTests(unittest.TestCase):
         record = compliant_record()
         for item in record["checks"]:
             if item["id"] == "content.units-dates":
-                item.update({"status": "fail", "scope": "咖啡豆成本",
-                             "note": "单位口径未在报告标注"})
+                item.update({"status": "fail", "scope": "咖啡豆成本", "note": "单位口径未在报告标注"})
         paths = write_case(d, record=record)
         _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(payload["coverage"]["content"], "uncovered")
@@ -1045,8 +1108,7 @@ class SummaryDisclosureTests(unittest.TestCase):
     def test_blocking_count_disclosed(self):
         d = tmpdir()
         record = compliant_record()
-        record["openItems"] = [{"item": "核心口径二选一", "blocking": True},
-                               {"item": "附录页码", "blocking": False}]
+        record["openItems"] = [{"item": "核心口径二选一", "blocking": True}, {"item": "附录页码", "blocking": False}]
         paths = write_case(d, record=record)
         _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(payload["record"]["openItems"], {"n": 2, "blocking": 1})
@@ -1063,23 +1125,34 @@ class LegacyRecordCompatTests(unittest.TestCase):
             "schema": RECORD_SCHEMA,
             "generatedAt": "2026-11-02T09:00:00+08:00",
             "request": {"purpose": "季度经营汇报"},
-            "sources": [{"path": "materials/q3-notes.md", "status": "read",
-                         "coverage": "全文", "note": ""}],
-            "method": {"kind": "builtin", "name": "annotation-everything 内置范式",
-                       "version": "0.9.0", "unavailable": []},
-            "links": {"report": "report.html", "script": "script.md",
-                      "sha256": {"report": sha(REPORT), "script": sha(SCRIPT)},
-                      "sourceNote": ""},
-            "findings": [{"claim": "三季度收入同比增长 12%", "type": "calculation",
-                          "sources": ["materials/q3-notes.md"], "pages": ["sum"],
-                          "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 112},
-                                          "expected": 12},
-                          "note": ""}],
+            "sources": [{"path": "materials/q3-notes.md", "status": "read", "coverage": "全文", "note": ""}],
+            "method": {
+                "kind": "builtin",
+                "name": "annotation-everything 内置范式",
+                "version": "0.9.0",
+                "unavailable": [],
+            },
+            "links": {
+                "report": "report.html",
+                "script": "script.md",
+                "sha256": {"report": sha(REPORT), "script": sha(SCRIPT)},
+                "sourceNote": "",
+            },
+            "findings": [
+                {
+                    "claim": "三季度收入同比增长 12%",
+                    "type": "calculation",
+                    "sources": ["materials/q3-notes.md"],
+                    "pages": ["sum"],
+                    "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 112}, "expected": 12},
+                    "note": "",
+                }
+            ],
             "gaps": [],
-            "checks": [{"id": "content.requirements", "kind": "content", "status": "not_run",
-                        "scope": "", "note": ""},
-                       {"id": "visual.pages", "kind": "visual", "status": "not_run",
-                        "scope": "", "note": ""}],
+            "checks": [
+                {"id": "content.requirements", "kind": "content", "status": "not_run", "scope": "", "note": ""},
+                {"id": "visual.pages", "kind": "visual", "status": "not_run", "scope": "", "note": ""},
+            ],
             "openItems": [],
             "verdict": {"draftComplete": True, "deliverable": None},
         }
@@ -1116,8 +1189,9 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_derived_page_key_warns_but_draft_stands(self):
         d = tmpdir()
-        derived = REPORT.replace('data-key="sum" id="page-sum"', 'id="page-sum"') \
-                        .replace('data-key="next" id="page-next"', 'id="page-next"')
+        derived = REPORT.replace('data-key="sum" id="page-sum"', 'id="page-sum"').replace(
+            'data-key="next" id="page-next"', 'id="page-next"'
+        )
         paths = write_case(d, report=derived, script=None)
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0)
@@ -1172,7 +1246,7 @@ class CliContractTests(unittest.TestCase):
         paths = write_case(d, record=make_record())
         _, _, zh, _ = run_check(paths, locale="zh-CN")
         self.assertIn("初稿", zh)
-        self.assertIn("报告可交付", zh)      # 明确区分两个判定
+        self.assertIn("报告可交付", zh)  # 明确区分两个判定
         self.assertIn("未执行", zh)
 
 

@@ -1,4 +1,5 @@
 """持续效率报告的 CLI 契约；历史、环境和 PR 事件均为合成数据。"""
+
 from __future__ import annotations
 
 import datetime
@@ -34,38 +35,84 @@ class EfficiencyCliTests(unittest.TestCase):
         self.root = Path(self.tmp.name) / ".verify"
         self.root.mkdir()
 
-    def record(self, rid, start=0, seconds=20, outcome="passed", python="3.12.1",
-               fingerprint="same-input", reused=False, omissions=None):
+    def record(
+        self,
+        rid,
+        start=0,
+        seconds=20,
+        outcome="passed",
+        python="3.12.1",
+        fingerprint="same-input",
+        reused=False,
+        omissions=None,
+    ):
         directory = self.root / "runs" / rid
         directory.mkdir(parents=True)
         log = b"synthetic verification output\n"
         (directory / "unit.log").write_bytes(log)
-        group = {"name": "unit-related", "outcome": "reused" if reused else outcome,
-                 "started_at": None if reused else stamp(start), "resources": [],
-                 "counter": "unittest", "timing": {"child_seconds": 0 if reused else seconds},
-                 "cases": [] if reused else [{"id": "test_synthetic.T.test_ok", "status": outcome,
-                                              "seconds": seconds}],
-                 "counts": {"cases": 0 if reused else 1, "skipped": 0}, "scenarios": None}
-        record = {"schema": "ae-verify-run/1", "state": "complete", "run_id": rid,
-                  "wrapper_version": 1, "started_at": stamp(start),
-                  "ended_at": stamp(start + seconds),
-                  "context": {"phase": "development", "selectors_effective": ["tests/test_synthetic.py"],
-                              "session": {"id": "synthetic-session"},
-                              "selection": {"strategy_version": 2}},
-                  "input": {"fingerprint": fingerprint, "covers_final_input": True},
-                  "environment": {"os": {"system": "SyntheticOS", "release": "1", "machine": "arm64"},
-                                  "python": {"version": python, "implementation": "CPython"},
-                                  "ci": {"is_ci": False}, "config_summary": {},
-                                  "isolation": {"mechanism": "flock"}},
-                  "groups": [group], "timing": {"queued_at": stamp(start),
-                       "started_at": stamp(start), "ended_at": stamp(start + seconds),
-                       "queue_seconds": 2, "lock_wait_seconds": 3, "cleanup_seconds": 1, "wall_seconds": seconds},
-                  "result": {"outcome": outcome, "exit_status": 0 if outcome == "passed" else 1,
-                             "usable_as_evidence": outcome == "passed"},
-                  "evidence": {"integrity": "ok", "record_path": "record.json", "cases": [], "notes": [],
-                       "logs": [{"group": "unit-related", "path": "unit.log", "bytes": len(log),
-                       "sha256": hashlib.sha256(log).hexdigest()}]},
-                  "shadow": {"comparable": True, "candidate_omissions": omissions or []}}
+        group = {
+            "name": "unit-related",
+            "outcome": "reused" if reused else outcome,
+            "started_at": None if reused else stamp(start),
+            "resources": [],
+            "counter": "unittest",
+            "timing": {"child_seconds": 0 if reused else seconds},
+            "cases": [] if reused else [{"id": "test_synthetic.T.test_ok", "status": outcome, "seconds": seconds}],
+            "counts": {"cases": 0 if reused else 1, "skipped": 0},
+            "scenarios": None,
+        }
+        record = {
+            "schema": "ae-verify-run/1",
+            "state": "complete",
+            "run_id": rid,
+            "wrapper_version": 1,
+            "started_at": stamp(start),
+            "ended_at": stamp(start + seconds),
+            "context": {
+                "phase": "development",
+                "selectors_effective": ["tests/test_synthetic.py"],
+                "session": {"id": "synthetic-session"},
+                "selection": {"strategy_version": 2},
+            },
+            "input": {"fingerprint": fingerprint, "covers_final_input": True},
+            "environment": {
+                "os": {"system": "SyntheticOS", "release": "1", "machine": "arm64"},
+                "python": {"version": python, "implementation": "CPython"},
+                "ci": {"is_ci": False},
+                "config_summary": {},
+                "isolation": {"mechanism": "flock"},
+            },
+            "groups": [group],
+            "timing": {
+                "queued_at": stamp(start),
+                "started_at": stamp(start),
+                "ended_at": stamp(start + seconds),
+                "queue_seconds": 2,
+                "lock_wait_seconds": 3,
+                "cleanup_seconds": 1,
+                "wall_seconds": seconds,
+            },
+            "result": {
+                "outcome": outcome,
+                "exit_status": 0 if outcome == "passed" else 1,
+                "usable_as_evidence": outcome == "passed",
+            },
+            "evidence": {
+                "integrity": "ok",
+                "record_path": "record.json",
+                "cases": [],
+                "notes": [],
+                "logs": [
+                    {
+                        "group": "unit-related",
+                        "path": "unit.log",
+                        "bytes": len(log),
+                        "sha256": hashlib.sha256(log).hexdigest(),
+                    }
+                ],
+            },
+            "shadow": {"comparable": True, "candidate_omissions": omissions or []},
+        }
         (directory / "record.json").write_text(json.dumps(record), encoding="utf-8")
         return directory / "record.json"
 
@@ -73,14 +120,34 @@ class EfficiencyCliTests(unittest.TestCase):
         env = dict(os.environ)
         env["AE_LOCK_DIR"] = str(Path(self.tmp.name) / "locks")
         env.pop("AE_HELD_LOCKS", None)
-        return subprocess.run([sys.executable, str(ROOT / "verify.py"), "report", "--efficiency",
-                               "--out-dir", str(self.root), "--now", stamp(now), "--json", *args],
-                              capture_output=True, text=True, env=env, timeout=20)
+        return subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "verify.py"),
+                "report",
+                "--efficiency",
+                "--out-dir",
+                str(self.root),
+                "--now",
+                stamp(now),
+                "--json",
+                *args,
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=20,
+        )
 
     def plan(self):
         env = dict(os.environ, AE_VERIFY_DIR=str(self.root))
-        result = subprocess.run([sys.executable, str(ROOT / "verify.py"), "plan", "--phase", "development", "--json"],
-                                capture_output=True, text=True, env=env, timeout=20)
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "verify.py"), "plan", "--phase", "development", "--json"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=20,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)["selection"]
 
@@ -112,8 +179,7 @@ class EfficiencyCliTests(unittest.TestCase):
     def test_legacy_execution_union_is_bounded_by_the_verification_window(self):
         path = self.record("rounded-end", seconds=8.052128)
         record = json.loads(path.read_text())
-        record["timing"].update(queue_seconds=0, lock_wait_seconds=0, wall_seconds=8.082984,
-                                 ended_at=stamp(8))
+        record["timing"].update(queue_seconds=0, lock_wait_seconds=0, wall_seconds=8.082984, ended_at=stamp(8))
         record["ended_at"] = stamp(8)
         path.write_text(json.dumps(record))
         metrics = json.loads(self.cli().stdout)["metrics"]
@@ -150,15 +216,39 @@ class EfficiencyCliTests(unittest.TestCase):
         scripts = repo / "skill" / "annotation-everything" / "scripts"
         scripts.mkdir(parents=True)
         (repo / ".gitignore").write_text(".verify/\n__pycache__/\n")
-        for name in ("verify.py", "verify_evidence.py", "verify_selection.py", "verify_report.py", "verify_parallel.py", "host_isolation.py"):
+        for name in (
+            "verify.py",
+            "verify_evidence.py",
+            "verify_selection.py",
+            "verify_report.py",
+            "verify_parallel.py",
+            "host_isolation.py",
+        ):
             shutil.copy2(ROOT / name, repo / name)
         (scripts / "serve.py").write_text("print('1/1 通过')\n")
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
         subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-        subprocess.run(["git", "-c", "user.name=synthetic", "-c", "user.email=synthetic@example.invalid",
-                        "commit", "-qm", "synthetic"], cwd=repo, check=True)
-        result = subprocess.run([sys.executable, str(repo / "verify.py"), "run", "--group", "serve-check", "--json"],
-                                cwd=repo, capture_output=True, text=True, timeout=20)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=synthetic",
+                "-c",
+                "user.email=synthetic@example.invalid",
+                "commit",
+                "-qm",
+                "synthetic",
+            ],
+            cwd=repo,
+            check=True,
+        )
+        result = subprocess.run(
+            [sys.executable, str(repo / "verify.py"), "run", "--group", "serve-check", "--json"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["result"]["counts"]["checks"], 1)
         summary = json.loads((repo / ".verify" / "efficiency" / "summary.json").read_text())
@@ -169,16 +259,37 @@ class EfficiencyCliTests(unittest.TestCase):
     def test_confirmed_omission_expands_plan_and_broken_guard_stays_conservative(self):
         self.record("finding")
         events = Path(self.tmp.name) / "events.json"
-        events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": [], "gaps": [],
-            "selection_findings": [{"status": "confirmed", "strategy_version": STRATEGY_VERSION,
-                "reason": "合成的已确认漏选", "evidence": ["runs/finding/record.json"]}]}))
+        events.write_text(
+            json.dumps(
+                {
+                    "schema": "ae-verify-events/1",
+                    "merged_prs": [],
+                    "gaps": [],
+                    "selection_findings": [
+                        {
+                            "status": "confirmed",
+                            "strategy_version": STRATEGY_VERSION,
+                            "reason": "合成的已确认漏选",
+                            "evidence": ["runs/finding/record.json"],
+                        }
+                    ],
+                }
+            )
+        )
         self.cli("--rebuild", "--events", str(events))
         env = dict(os.environ, AE_VERIFY_DIR=str(self.root))
+
         def plan():
-            result = subprocess.run([sys.executable, str(ROOT / "verify.py"), "plan", "--phase", "development", "--json"],
-                                    capture_output=True, text=True, env=env, timeout=20)
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "verify.py"), "plan", "--phase", "development", "--json"],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=20,
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
             return json.loads(result.stdout)["selection"]
+
         selection = plan()
         self.assertEqual(selection["suggested"]["groups"], ["all"])
         self.assertIn("已确认漏选", selection["fallback"]["reason"])
@@ -239,8 +350,7 @@ class EfficiencyCliTests(unittest.TestCase):
     def _write_fake_gh(fake_bin: Path, body: str) -> None:
         if os.name == "nt":
             (fake_bin / "gh.py").write_text(body, encoding="utf-8")
-            (fake_bin / "gh.cmd").write_text(
-                f'@echo off\r\n"{sys.executable}" "%~dp0gh.py" %*\r\n', encoding="utf-8")
+            (fake_bin / "gh.cmd").write_text(f'@echo off\r\n"{sys.executable}" "%~dp0gh.py" %*\r\n', encoding="utf-8")
         else:
             gh = fake_bin / "gh"
             gh.write_text(f"#!{sys.executable}\n{body}", encoding="utf-8")
@@ -251,9 +361,20 @@ class EfficiencyCliTests(unittest.TestCase):
         fake_bin.mkdir()
         self._write_fake_gh(fake_bin, "import sys\nprint('HTTP 403 permission denied', file=sys.stderr)\nsys.exit(1)\n")
         env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"])
-        result = subprocess.run([sys.executable, str(ROOT / "tools" / "collect_verify_history.py"),
-                                 "--repo", "synthetic/repo", "--out-dir", str(self.root)],
-                                env=env, capture_output=True, text=True, timeout=20)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "collect_verify_history.py"),
+                "--repo",
+                "synthetic/repo",
+                "--out-dir",
+                str(self.root),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
         self.assertEqual(result.returncode, 1)
         report = self.cli("--events", str(self.root / "ci-events.json"))
         self.assertEqual(report.returncode, 1)
@@ -283,9 +404,20 @@ else:
 """.replace("BYTES", repr(base64.b64encode(buffer.getvalue()).decode()))
         self._write_fake_gh(fake_bin, script)
         env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"])
-        result = subprocess.run([sys.executable, str(ROOT / "tools" / "collect_verify_history.py"),
-                                 "--repo", "synthetic/repo", "--out-dir", str(self.root)],
-                                env=env, capture_output=True, text=True, timeout=20)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "collect_verify_history.py"),
+                "--repo",
+                "synthetic/repo",
+                "--out-dir",
+                str(self.root),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
         self.assertEqual(result.returncode, 1, result.stderr)
         report = json.loads(self.cli("--events", str(self.root / "ci-events.json")).stdout)
         self.assertEqual(report["metrics"]["runs"], 1)
@@ -295,8 +427,20 @@ else:
         self.record("concurrent")
         events = Path(self.tmp.name) / "events.json"
         events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": list(range(10)), "gaps": []}))
-        command = [sys.executable, str(ROOT / "verify.py"), "report", "--efficiency", "--rebuild",
-                   "--out-dir", str(self.root), "--events", str(events), "--now", stamp(3600), "--json"]
+        command = [
+            sys.executable,
+            str(ROOT / "verify.py"),
+            "report",
+            "--efficiency",
+            "--rebuild",
+            "--out-dir",
+            str(self.root),
+            "--events",
+            str(events),
+            "--now",
+            stamp(3600),
+            "--json",
+        ]
         env = dict(os.environ, AE_LOCK_DIR=str(Path(self.tmp.name) / "locks"))
         env.pop("AE_HELD_LOCKS", None)
         first = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
@@ -310,15 +454,35 @@ else:
         self.record("concurrent-local")
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:
-            archive.writestr("efficiency/state.json", json.dumps({
-                "schema": "ae-verify-efficiency/1", "sample_ids": ["old-remote"],
-                "reviewed_prs": [], "candidate_versions": {}, "reviewed_at": stamp()}))
+            archive.writestr(
+                "efficiency/state.json",
+                json.dumps(
+                    {
+                        "schema": "ae-verify-efficiency/1",
+                        "sample_ids": ["old-remote"],
+                        "reviewed_prs": [],
+                        "candidate_versions": {},
+                        "reviewed_at": stamp(),
+                    }
+                ),
+            )
         expected = Path(self.tmp.name) / "concurrent-state.json"
         fake_bin = Path(self.tmp.name) / "bin"
         fake_bin.mkdir()
-        command = [sys.executable, str(ROOT / "verify.py"), "report", "--efficiency", "--rebuild",
-                   "--out-dir", str(self.root), "--now", stamp(3600), "--json"]
-        script = """import base64, json, pathlib, subprocess, sys
+        command = [
+            sys.executable,
+            str(ROOT / "verify.py"),
+            "report",
+            "--efficiency",
+            "--rebuild",
+            "--out-dir",
+            str(self.root),
+            "--now",
+            stamp(3600),
+            "--json",
+        ]
+        script = (
+            """import base64, json, pathlib, subprocess, sys
 endpoint = sys.argv[-1]
 if '/pulls?' in endpoint:
     print('[]')
@@ -338,19 +502,36 @@ elif endpoint.endswith('/42/zip'):
     sys.stdout.buffer.write(base64.b64decode(BYTES))
 else:
     sys.exit(1)
-""".replace("COMMAND", repr(command)).replace("EXPECTED", repr(str(expected))).replace(
-            "STATE", repr(str(self.root / "efficiency" / "state.json"))).replace(
-            "BYTES", repr(base64.b64encode(buffer.getvalue()).decode()))
+""".replace("COMMAND", repr(command))
+            .replace("EXPECTED", repr(str(expected)))
+            .replace("STATE", repr(str(self.root / "efficiency" / "state.json")))
+            .replace("BYTES", repr(base64.b64encode(buffer.getvalue()).decode()))
+        )
         self._write_fake_gh(fake_bin, script)
-        env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"],
-                   AE_LOCK_DIR=str(Path(self.tmp.name) / "locks"))
+        env = dict(
+            os.environ,
+            PATH=str(fake_bin) + os.pathsep + os.environ["PATH"],
+            AE_LOCK_DIR=str(Path(self.tmp.name) / "locks"),
+        )
         env.pop("AE_HELD_LOCKS", None)
-        result = subprocess.run([sys.executable, str(ROOT / "tools" / "collect_verify_history.py"),
-                                 "--repo", "synthetic/repo", "--out-dir", str(self.root)],
-                                env=env, capture_output=True, text=True, timeout=20)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "collect_verify_history.py"),
+                "--repo",
+                "synthetic/repo",
+                "--out-dir",
+                str(self.root),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
         self.assertNotIn("Traceback", result.stderr)
-        self.assertEqual(json.loads((self.root / "efficiency" / "state.json").read_text()),
-                         json.loads(expected.read_text()))
+        self.assertEqual(
+            json.loads((self.root / "efficiency" / "state.json").read_text()), json.loads(expected.read_text())
+        )
 
     def test_seven_day_review_without_merge_events_and_no_sample_stays_quiet(self):
         self.record("initial")
@@ -404,16 +585,32 @@ else:
         prior_review.parent.mkdir(parents=True)
         prior_review.write_text(json.dumps({"schema": "ae-verify-efficiency/1", "source": str(imported)}))
         events = Path(self.tmp.name) / "private-events.json"
-        events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": list(range(10)),
-            "gaps": [{"source": str(imported / "missing"), "reason": "cannot read " + str(imported / "missing")}],
-            "selection_findings": [{"status": "confirmed", "strategy_version": STRATEGY_VERSION,
-                "reason": "synthetic finding in /private/synthetic-home/secret/file.json",
-                "evidence": [str(imported / "runs" / "imported-record" / "record.json")]}]}))
+        events.write_text(
+            json.dumps(
+                {
+                    "schema": "ae-verify-events/1",
+                    "merged_prs": list(range(10)),
+                    "gaps": [
+                        {"source": str(imported / "missing"), "reason": "cannot read " + str(imported / "missing")}
+                    ],
+                    "selection_findings": [
+                        {
+                            "status": "confirmed",
+                            "strategy_version": STRATEGY_VERSION,
+                            "reason": "synthetic finding in /private/synthetic-home/secret/file.json",
+                            "evidence": [str(imported / "runs" / "imported-record" / "record.json")],
+                        }
+                    ],
+                }
+            )
+        )
         result = self.cli("--rebuild", "--source", str(imported), "--events", str(events))
         report = json.loads(result.stdout)
         locations = [item["record_path"] for item in report["history"]]
         self.assertIn("local/runs/local-record/record.json", locations)
-        self.assertTrue(any(item.startswith("source-") and item.endswith("/runs/imported-record/record.json") for item in locations))
+        self.assertTrue(
+            any(item.startswith("source-") and item.endswith("/runs/imported-record/record.json") for item in locations)
+        )
         for path in (self.root / "efficiency").rglob("*"):
             if path.is_file():
                 content = path.read_text()
@@ -423,13 +620,20 @@ else:
     def test_old_findings_cannot_downgrade_the_current_guard_in_any_order(self):
         self.record("guard-input")
         events = Path(self.tmp.name) / "guard-events.json"
-        current = {"status": "confirmed", "strategy_version": STRATEGY_VERSION, "reason": "current guard",
-                   "evidence": ["runs/guard-input/record.json"]}
+        current = {
+            "status": "confirmed",
+            "strategy_version": STRATEGY_VERSION,
+            "reason": "current guard",
+            "evidence": ["runs/guard-input/record.json"],
+        }
         old = dict(current, strategy_version=STRATEGY_VERSION - 1, reason="old guard")
         for findings in ([current, old], [old, current], [old]):
             with self.subTest(findings=[item["strategy_version"] for item in findings]):
-                events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": [],
-                                              "gaps": [], "selection_findings": findings}))
+                events.write_text(
+                    json.dumps(
+                        {"schema": "ae-verify-events/1", "merged_prs": [], "gaps": [], "selection_findings": findings}
+                    )
+                )
                 self.cli("--rebuild", "--events", str(events))
                 selection = self.plan()
                 self.assertTrue(selection["policy_guard"]["active"])
@@ -437,17 +641,32 @@ else:
                 guard = json.loads((self.root / "efficiency" / "selection-guard.json").read_text())
                 self.assertEqual(guard["strategy_version"], STRATEGY_VERSION)
         for findings in ([dict(current, strategy_version=STRATEGY_VERSION + 1), old], [current]):
-            events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": [],
-                                          "gaps": [], "selection_findings": findings}))
+            events.write_text(
+                json.dumps(
+                    {"schema": "ae-verify-events/1", "merged_prs": [], "gaps": [], "selection_findings": findings}
+                )
+            )
             self.cli("--rebuild", "--events", str(events))
             self.assertTrue(self.plan()["policy_guard"]["active"])
             self.assertEqual(self.plan()["suggested"]["groups"], ["all"])
-            self.assertEqual(json.loads((self.root / "efficiency" / "selection-guard.json").read_text())["strategy_version"], STRATEGY_VERSION + 1)
+            self.assertEqual(
+                json.loads((self.root / "efficiency" / "selection-guard.json").read_text())["strategy_version"],
+                STRATEGY_VERSION + 1,
+            )
 
     def test_missing_evidence_and_invalid_durations_preserve_claims_but_exclude_samples(self):
-        changes = [("evidence-object", None), ("logs", None), ("log-file", None),
-                   ("duration", None), ("duration", -1), ("duration", True), ("duration", "20"),
-                   ("duration", float("nan")), ("duration", float("inf")), ("duration", 10 ** 1000)]
+        changes = [
+            ("evidence-object", None),
+            ("logs", None),
+            ("log-file", None),
+            ("duration", None),
+            ("duration", -1),
+            ("duration", True),
+            ("duration", "20"),
+            ("duration", float("nan")),
+            ("duration", float("inf")),
+            ("duration", 10**1000),
+        ]
         for index, (kind, value) in enumerate(changes):
             with self.subTest(kind=kind, value=repr(value)[:20]):
                 path = self.record("invalid-%d" % index, start=index * 30)
@@ -466,8 +685,12 @@ else:
         report = json.loads(result.stdout)
         self.assertEqual(report["metrics"]["outcomes"]["passed"], len(changes))
         self.assertTrue(report["gaps"])
-        self.assertTrue(all(bucket["sample_count"] == 0 and all(not sample["valid"] for sample in bucket["samples"])
-                            for bucket in report["comparison_groups"]))
+        self.assertTrue(
+            all(
+                bucket["sample_count"] == 0 and all(not sample["valid"] for sample in bucket["samples"])
+                for bucket in report["comparison_groups"]
+            )
+        )
 
     def test_missing_execution_duration_is_not_a_valid_zero_second_pass(self):
         path = self.record("missing-duration")
@@ -480,8 +703,21 @@ else:
         self.assertEqual(report["metrics"]["outcomes"]["passed"], 1)
         self.assertEqual(report["comparison_groups"][0]["sample_count"], 0)
         self.assertFalse(report["comparison_groups"][0]["samples"][0]["valid"])
-        raw_report = subprocess.run([sys.executable, str(ROOT / "verify.py"), "report", "--out-dir", str(self.root),
-                                     "--run", "missing-duration", "--json"], capture_output=True, text=True, timeout=20)
+        raw_report = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "verify.py"),
+                "report",
+                "--out-dir",
+                str(self.root),
+                "--run",
+                "missing-duration",
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
         self.assertEqual(raw_report.returncode, 1)
         self.assertFalse(json.loads(raw_report.stdout)["result"]["usable_as_evidence"])
 
@@ -504,13 +740,25 @@ else:
         self.assertTrue(old_replay["gaps"])
         self.record("fresh-low-numbered-merges", start=300)
         fresh = list(range(1, 11))
-        events.write_text(json.dumps({"schema": "ae-verify-events/1", "merged_prs": fresh, "gaps": [],
-            "merged_pr_events": [{"id": identity, "merged_at": stamp(3660).replace("+00:00", "Z")} for identity in fresh]}))
+        events.write_text(
+            json.dumps(
+                {
+                    "schema": "ae-verify-events/1",
+                    "merged_prs": fresh,
+                    "gaps": [],
+                    "merged_pr_events": [
+                        {"id": identity, "merged_at": stamp(3660).replace("+00:00", "Z")} for identity in fresh
+                    ],
+                }
+            )
+        )
         newly_merged = json.loads(self.cli("--rebuild", "--events", str(events), now=3670).stdout)
         self.assertTrue(newly_merged["review"]["generated"])
         self.assertEqual(newly_merged["merge_events"]["new"], [str(identity) for identity in fresh])
         self.record("known-merge-time-replay", start=330)
-        self.assertFalse(json.loads(self.cli("--rebuild", "--events", str(events), now=3680).stdout)["review"]["generated"])
+        self.assertFalse(
+            json.loads(self.cli("--rebuild", "--events", str(events), now=3680).stdout)["review"]["generated"]
+        )
 
     def test_lost_review_state_does_not_describe_old_events_as_new(self):
         self.record("before-state-loss")
@@ -551,10 +799,13 @@ else:
         import verify_report
 
         extra = Path(self.tmp.name) / "extra-source"
-        redacted = verify_report.redact_paths({
-            "record_path": f"{self.root}\\runs\\local-record\\record.json",
-            "reason": f"cannot read {extra}\\runs\\imported-record\\record.json",
-        }, [self.root, extra])
+        redacted = verify_report.redact_paths(
+            {
+                "record_path": f"{self.root}\\runs\\local-record\\record.json",
+                "reason": f"cannot read {extra}\\runs\\imported-record\\record.json",
+            },
+            [self.root, extra],
+        )
         self.assertEqual(redacted["record_path"], "local/runs/local-record/record.json")
         self.assertTrue(redacted["reason"].startswith("cannot read source-"))
         self.assertTrue(redacted["reason"].endswith("/runs/imported-record/record.json"))
@@ -566,8 +817,10 @@ else:
         import collect_verify_history
 
         completed = subprocess.CompletedProcess(["gh"], 0, stdout=b"{}", stderr=b"")
-        with unittest.mock.patch.object(collect_verify_history.shutil, "which", return_value="C:\\bin\\gh.cmd"), \
-                unittest.mock.patch.object(collect_verify_history.subprocess, "run", return_value=completed) as run_mock:
+        with (
+            unittest.mock.patch.object(collect_verify_history.shutil, "which", return_value="C:\\bin\\gh.cmd"),
+            unittest.mock.patch.object(collect_verify_history.subprocess, "run", return_value=completed) as run_mock,
+        ):
             self.assertEqual(collect_verify_history.gh_api("repos/synthetic/repo"), {})
         self.assertEqual(run_mock.call_args.args[0], ["C:\\bin\\gh.cmd", "api", "repos/synthetic/repo"])
         self.assertNotIn("shell", run_mock.call_args.kwargs)

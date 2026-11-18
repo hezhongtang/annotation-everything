@@ -1,4 +1,5 @@
 """技能副本的内容指纹：保留目录和软链接，不跟随软链接。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -24,8 +25,11 @@ def snapshot(root: Path) -> dict:
                         result[rel] = ["dir", stat.S_IMODE(item.stat(follow_symlinks=False).st_mode)]
                         visit(path)
                 elif item.is_file(follow_symlinks=False) and path.suffix not in (".pyc", ".pyo"):
-                    result[rel] = ["file", stat.S_IMODE(item.stat(follow_symlinks=False).st_mode),
-                                   hashlib.sha256(path.read_bytes()).hexdigest()]
+                    result[rel] = [
+                        "file",
+                        stat.S_IMODE(item.stat(follow_symlinks=False).st_mode),
+                        hashlib.sha256(path.read_bytes()).hexdigest(),
+                    ]
                 else:
                     result[rel] = ["other"]
 

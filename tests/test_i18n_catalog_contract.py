@@ -5,6 +5,7 @@ unit-related 局部组由 verify.py 自动带上本模块，独立运行相关�
 各功能模块只保留自己独有的 key、占位符、复数与调用位置断言；校验器对合成
 错误输入的行为测试在 tests/test_i18n.py 的 CheckCatalogTests，不是这里的重复项。
 """
+
 from __future__ import annotations
 
 import json
@@ -31,8 +32,7 @@ class ContractGuardTests(unittest.TestCase):
     """守住「一个权威契约」本身：真的会失败、失败后能恢复、只扫一次。"""
 
     def _run_contract_case(self) -> unittest.TestResult:
-        suite = unittest.TestSuite(
-            [RepoCatalogContractTests("test_shipped_catalogs_stay_consistent")])
+        suite = unittest.TestSuite([RepoCatalogContractTests("test_shipped_catalogs_stay_consistent")])
         result = unittest.TestResult()
         suite.run(result)
         return result
@@ -44,10 +44,8 @@ class ContractGuardTests(unittest.TestCase):
         en = {"locale": "en", "messages": {"a": "A"}}
         zh["messages"].update(extra_zh)
         en["messages"].update(extra_en)
-        (base / "zh-CN.json").write_text(
-            json.dumps(zh, ensure_ascii=False), encoding="utf-8")
-        (base / "en.json").write_text(
-            json.dumps(en, ensure_ascii=False), encoding="utf-8")
+        (base / "zh-CN.json").write_text(json.dumps(zh, ensure_ascii=False), encoding="utf-8")
+        (base / "en.json").write_text(json.dumps(en, ensure_ascii=False), encoding="utf-8")
 
     def test_contract_fails_on_a_synthetic_inconsistent_dictionary(self):
         """合成的不一致词典必须让契约失败；词典修好后同一用例恢复通过。
@@ -65,8 +63,7 @@ class ContractGuardTests(unittest.TestCase):
                 self.assertFalse(result.wasSuccessful(), "不一致的合成词典没让契约失败")
                 self.assertTrue(result.failures, "契约失败要是断言失败，不是报错")
                 # 修复：把缺失的 key 补进英文，恢复两侧一致
-                self._write_locales(locales, extra_zh={"probe.key": "探针"},
-                                    extra_en={"probe.key": "probe"})
+                self._write_locales(locales, extra_zh={"probe.key": "探针"}, extra_en={"probe.key": "probe"})
                 result = self._run_contract_case()
                 self.assertTrue(result.wasSuccessful(), "词典修好后契约没有恢复通过")
             finally:

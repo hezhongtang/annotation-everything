@@ -18,6 +18,7 @@ KeyboardInterrupt；SIGTERM 与 SIGHUP 不触发 `atexit`，另接信号处理�
 产品超时一致；测试通过受控参数（TestCleanup(terminate_timeout=...) 与
 start_server(ready_timeout=...)）注入更短的等待，不扩散成产品开关。
 """
+
 from __future__ import annotations
 
 import atexit
@@ -38,12 +39,14 @@ SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 TERMINATE_TIMEOUT = 5.0
 READY_TIMEOUT = 8.0
 BLOCKED_SIGNALS = tuple(
-    sig for sig in (
+    sig
+    for sig in (
         signal.SIGINT,
         signal.SIGTERM,
         getattr(signal, "SIGHUP", None),
         getattr(signal, "SIGBREAK", None),
-    ) if sig is not None
+    )
+    if sig is not None
 )
 
 
@@ -84,7 +87,7 @@ class TestCleanup:
             while self._procs:
                 proc = self._procs[0]
                 reap(proc, timeout=self.terminate_timeout)
-                self._procs.remove(proc)   # 收掉了才摘，中途被打断也不会丢下剩下的
+                self._procs.remove(proc)  # 收掉了才摘，中途被打断也不会丢下剩下的
 
 
 @contextlib.contextmanager
@@ -154,12 +157,13 @@ def install(cleanup: TestCleanup = CLEANUP) -> None:
 
 def _cleanup_handler(cleanup: TestCleanup):
     def handler(signum, _frame):
-        signal.signal(signum, signal.SIG_IGN)   # 清理期间再来的同号信号直接丢掉
+        signal.signal(signum, signal.SIG_IGN)  # 清理期间再来的同号信号直接丢掉
         try:
             cleanup.stop_all()
         finally:
             signal.signal(signum, signal.SIG_DFL)
             os.kill(os.getpid(), signum)
+
     return handler
 
 
@@ -169,13 +173,23 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def start_server(d: Path, port: int, cleanup: TestCleanup = CLEANUP, *, scripts: Path | None = None,
-                 ready_timeout: float | None = None) -> subprocess.Popen:
+def start_server(
+    d: Path,
+    port: int,
+    cleanup: TestCleanup = CLEANUP,
+    *,
+    scripts: Path | None = None,
+    ready_timeout: float | None = None,
+) -> subprocess.Popen:
     scripts = SCRIPTS if scripts is None else scripts
     if ready_timeout is None:
         ready_timeout = READY_TIMEOUT
-    p = subprocess.Popen([sys.executable, str(scripts / "serve.py"), str(d), "--port", str(port), "--no-open"],
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    p = subprocess.Popen(
+        [sys.executable, str(scripts / "serve.py"), str(d), "--port", str(port), "--no-open"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     cleanup.add(p)
     end = time.monotonic() + ready_timeout
     while time.monotonic() < end:
@@ -184,10 +198,10 @@ def start_server(d: Path, port: int, cleanup: TestCleanup = CLEANUP, *, scripts:
             return p
         time.sleep(0.1)
     _, stderr = reap(p, timeout=cleanup.terminate_timeout)
-    cleanup.discard(p)   # 启动失败也先完成回收，中断时仍由退出清理接手
+    cleanup.discard(p)  # 启动失败也先完成回收，中断时仍由退出清理接手
     raise RuntimeError("server did not start on the expected port: " + (stderr or ""))
 
 
 def stop(p: subprocess.Popen, cleanup: TestCleanup = CLEANUP) -> None:
     reap(p, timeout=cleanup.terminate_timeout)
-    cleanup.discard(p)   # 回收成功后才注销；被中断时保留登记，交给退出清理
+    cleanup.discard(p)  # 回收成功后才注销；被中断时保留登记，交给退出清理

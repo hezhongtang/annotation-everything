@@ -6,6 +6,7 @@
   可用性/不可用原因、异步待确认项、内部冲突不写全部满足、偏离披露与摘要呈现）；
 - 与未包含新增字段的旧版 `ae-report-record/1` 保持兼容（判不适用、摘要如实标未记录偏好）。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -46,11 +47,7 @@ STRUCTURE_IDS = (
 )
 VISUAL_IDS = ("visual.pages",)
 
-MATERIAL = (
-    "# 季度经营简记（合成）\n\n"
-    "- 三季度收入 112 万元\n"
-    "- 上年同期收入 100 万元\n"
-)
+MATERIAL = "# 季度经营简记（合成）\n\n- 三季度收入 112 万元\n- 上年同期收入 100 万元\n"
 
 REPORT = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>合成对齐测试</title>
 <style>.page{width:1280px;height:720px;padding:56px;box-sizing:border-box;font-family:sans-serif}</style></head><body>
@@ -79,8 +76,7 @@ def sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def all_checks(status: str = "pass", *, overrides: dict[str, str] | None = None,
-               page_count: int = 2) -> list[dict]:
+def all_checks(status: str = "pass", *, overrides: dict[str, str] | None = None, page_count: int = 2) -> list[dict]:
     ovr = overrides or {}
     pages = [{"page": n, "checked": True, "issues": []} for n in range(1, page_count + 1)]
     items = []
@@ -110,13 +106,15 @@ def make_record(report: str = REPORT, script: str | None = SCRIPT, **overrides) 
             "length": "2 页",
             "script": "yes" if script is not None else "no",
         },
-        "sources": [{
-            "path": "materials/notes.md",
-            "status": "read",
-            "coverage": "全文",
-            "sha256": sha(MATERIAL),
-            "note": "",
-        }],
+        "sources": [
+            {
+                "path": "materials/notes.md",
+                "status": "read",
+                "coverage": "全文",
+                "sha256": sha(MATERIAL),
+                "note": "",
+            }
+        ],
         "method": {
             "kind": "builtin",
             "name": "annotation-everything 内置范式",
@@ -124,16 +122,19 @@ def make_record(report: str = REPORT, script: str | None = SCRIPT, **overrides) 
             "unavailable": [],
         },
         "links": links,
-        "findings": [{
-            "claim": "三季度收入 112 万元",
-            "type": "fact",
-            "sources": ["materials/notes.md"],
-            "pages": ["sum"],
-            "refs": [{"path": "materials/notes.md", "locator": "第 3 行",
-                      "quote": "三季度收入 112 万元", "found": True}],
-            "support": "supported",
-            "basis": "直接引自材料第 3 行",
-        }],
+        "findings": [
+            {
+                "claim": "三季度收入 112 万元",
+                "type": "fact",
+                "sources": ["materials/notes.md"],
+                "pages": ["sum"],
+                "refs": [
+                    {"path": "materials/notes.md", "locator": "第 3 行", "quote": "三季度收入 112 万元", "found": True}
+                ],
+                "support": "supported",
+                "basis": "直接引自材料第 3 行",
+            }
+        ],
         "gaps": [],
         "checks": all_checks("pass"),
         "openItems": [],
@@ -143,8 +144,7 @@ def make_record(report: str = REPORT, script: str | None = SCRIPT, **overrides) 
     return rec
 
 
-def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
-               record: dict | None = None) -> dict:
+def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT, record: dict | None = None) -> dict:
     d.mkdir(parents=True, exist_ok=True)
     (d / "materials").mkdir(exist_ok=True)
     (d / "materials" / "notes.md").write_bytes(MATERIAL.encode("utf-8"))
@@ -155,9 +155,7 @@ def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
         paths["script"].write_bytes(script.encode("utf-8"))
     if record is not None:
         paths["record"] = d / "report-record.json"
-        paths["record"].write_bytes(
-            (json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-        )
+        paths["record"].write_bytes((json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     return paths
 
 
@@ -188,14 +186,24 @@ def by_id(payload: dict, cid: str) -> dict:
 class TestRecordAlignment(unittest.TestCase):
     def test_check_order_appends_alignment_and_navigation(self):
         expected_prefix = (
-            "report.parse", "report.pageKeys", "script.pages", "record.structure",
-            "record.freshness", "record.pageRefs", "record.calculations", "record.checks",
-            "record.claims", "record.reading", "record.sources",
-            "record.visual", "record.length", "record.method", "record.revision",
+            "report.parse",
+            "report.pageKeys",
+            "script.pages",
+            "record.structure",
+            "record.freshness",
+            "record.pageRefs",
+            "record.calculations",
+            "record.checks",
+            "record.claims",
+            "record.reading",
+            "record.sources",
+            "record.visual",
+            "record.length",
+            "record.method",
+            "record.revision",
         )
         self.assertEqual(rc.Checks.ORDER[:15], expected_prefix)
-        self.assertEqual(rc.Checks.ORDER[15:],
-                     ("record.alignment", "report.navigation", "record.deliverables"))
+        self.assertEqual(rc.Checks.ORDER[15:], ("record.alignment", "report.navigation", "record.deliverables"))
 
     def test_legacy_record_without_alignment_remains_compatible(self):
         paths = write_case(tmpdir(), record=make_record())
@@ -216,10 +224,18 @@ class TestRecordAlignment(unittest.TestCase):
         rec = make_record()
         rec["request"]["alignment"] = {
             "density": {"value": "standalone", "source": "user", "status": "confirmed"},
-            "visual": {"value": "clean-editorial", "source": "delegated", "status": "confirmed",
-                       "basis": "用户委派由 Agent 决定，采用克制报告排版默认样式"},
-            "navigation": {"value": "conclusion-to-evidence", "source": "reused", "status": "confirmed",
-                           "reason": "复用历史季度汇报模板约束"},
+            "visual": {
+                "value": "clean-editorial",
+                "source": "delegated",
+                "status": "confirmed",
+                "basis": "用户委派由 Agent 决定，采用克制报告排版默认样式",
+            },
+            "navigation": {
+                "value": "conclusion-to-evidence",
+                "source": "reused",
+                "status": "confirmed",
+                "reason": "复用历史季度汇报模板约束",
+            },
         }
         rec["request"]["qa"] = {
             "used": True,
@@ -239,25 +255,19 @@ class TestRecordAlignment(unittest.TestCase):
 
     def test_delegated_requires_basis_and_inferred_requires_reason(self):
         rec1 = make_record()
-        rec1["request"]["alignment"] = {
-            "visual": {"value": "minimal", "source": "delegated", "status": "confirmed"}
-        }
+        rec1["request"]["alignment"] = {"visual": {"value": "minimal", "source": "delegated", "status": "confirmed"}}
         code1, p1, _, _ = run_check(write_case(tmpdir(), record=rec1), json_out=True)
         self.assertEqual(code1, 1)
         self.assertEqual(by_id(p1, "record.alignment")["status"], "fail")
 
         rec2 = make_record()
-        rec2["request"]["alignment"] = {
-            "density": {"value": "deep", "source": "inferred", "status": "pending"}
-        }
+        rec2["request"]["alignment"] = {"density": {"value": "deep", "source": "inferred", "status": "pending"}}
         code2, p2, _, _ = run_check(write_case(tmpdir(), record=rec2), json_out=True)
         self.assertEqual(code2, 1)
         self.assertEqual(by_id(p2, "record.alignment")["status"], "fail")
 
         rec3 = make_record()
-        rec3["request"]["alignment"] = {
-            "density": {"value": "deep", "source": "bad-source", "status": "confirmed"}
-        }
+        rec3["request"]["alignment"] = {"density": {"value": "deep", "source": "bad-source", "status": "confirmed"}}
         code3, p3, _, _ = run_check(write_case(tmpdir(), record=rec3), json_out=True)
         self.assertEqual(code3, 1)
         self.assertEqual(by_id(p3, "record.alignment")["status"], "fail")
@@ -266,8 +276,12 @@ class TestRecordAlignment(unittest.TestCase):
         # 问答工具不可用但缺少具体原因 -> fail
         rec_missing_reason = make_record()
         rec_missing_reason["request"]["alignment"] = {
-            "density": {"value": "standalone", "source": "default", "status": "pending",
-                        "reason": "未询问用户，暂按独立阅读默认"}
+            "density": {
+                "value": "standalone",
+                "source": "default",
+                "status": "pending",
+                "reason": "未询问用户，暂按独立阅读默认",
+            }
         }
         rec_missing_reason["request"]["qa"] = {"used": False, "available": False}
         code1, p1, _, _ = run_check(write_case(tmpdir(), record=rec_missing_reason), json_out=True)
@@ -277,8 +291,12 @@ class TestRecordAlignment(unittest.TestCase):
         # 有不可用原因 -> record.alignment 通过并披露待确认默认方案
         rec_with_reason = make_record()
         rec_with_reason["request"]["alignment"] = {
-            "density": {"value": "standalone", "source": "default", "status": "pending",
-                        "reason": "按默认独立阅读方案生成"}
+            "density": {
+                "value": "standalone",
+                "source": "default",
+                "status": "pending",
+                "reason": "按默认独立阅读方案生成",
+            }
         }
         rec_with_reason["request"]["qa"] = {
             "used": False,
@@ -291,14 +309,12 @@ class TestRecordAlignment(unittest.TestCase):
         code2, p2, _, _ = run_check(paths_ok, json_out=True)
         self.assertEqual(code2, 0)
         self.assertEqual(by_id(p2, "record.alignment")["status"], "pass")
-        self.assertEqual(p2["record"]["alignment"]["qa"]["unavailableReason"],
-                         "当前宿主通道无交互式问答工具")
+        self.assertEqual(p2["record"]["alignment"]["qa"]["unavailableReason"], "当前宿主通道无交互式问答工具")
 
         # 明明未禁用也没不可用原因却跳过问答留下 default/inferred -> fail
         rec_skipped = make_record()
         rec_skipped["request"]["alignment"] = {
-            "density": {"value": "standalone", "source": "default", "status": "pending",
-                        "reason": "自行假定默认"}
+            "density": {"value": "standalone", "source": "default", "status": "pending", "reason": "自行假定默认"}
         }
         rec_skipped["request"]["qa"] = {"used": False}
         code3, p3, _, _ = run_check(write_case(tmpdir(), record=rec_skipped), json_out=True)
@@ -309,12 +325,18 @@ class TestRecordAlignment(unittest.TestCase):
         rec = make_record()
         rec["request"]["alignment"] = {
             "density": {"value": "standalone", "source": "user", "status": "confirmed"},
-            "visual": {"value": "warm-editorial", "source": "default", "status": "pending",
-                       "reason": "异步问答超时未回复，按默认方案继续生成，待审阅确认"},
+            "visual": {
+                "value": "warm-editorial",
+                "source": "default",
+                "status": "pending",
+                "reason": "异步问答超时未回复，按默认方案继续生成，待审阅确认",
+            },
         }
         rec["request"]["qa"] = {
-            "used": True, "tool": "ask_question",
-            "asked": ["density", "visual"], "unanswered": ["visual"],
+            "used": True,
+            "tool": "ask_question",
+            "asked": ["density", "visual"],
+            "unanswered": ["visual"],
         }
         rec["verdict"] = {"draftComplete": True, "deliverable": False}
         paths = write_case(tmpdir(), record=rec)
@@ -334,8 +356,12 @@ class TestRecordAlignment(unittest.TestCase):
         # 情况 A：诚实标注冲突且未将 content.requirements 标为 pass
         rec_honest = make_record(checks=all_checks("pass", overrides={"content.requirements": "not_run"}))
         rec_honest["request"]["alignment"] = {
-            "density": {"value": "deep", "source": "user", "status": "conflict",
-                        "reason": "同时要求极高细节与极少页数，尚未确认取舍"},
+            "density": {
+                "value": "deep",
+                "source": "user",
+                "status": "conflict",
+                "reason": "同时要求极高细节与极少页数，尚未确认取舍",
+            },
         }
         rec_honest["verdict"] = {"draftComplete": True, "deliverable": False}
         code1, p1, _, _ = run_check(write_case(tmpdir(), record=rec_honest), json_out=True)
@@ -348,8 +374,12 @@ class TestRecordAlignment(unittest.TestCase):
         # 情况 B：存在未解决冲突却把 content.requirements 宣称为 pass -> 程序检查失败且不能 covered/deliverable
         rec_dishonest = make_record(checks=all_checks("pass"))
         rec_dishonest["request"]["alignment"] = {
-            "density": {"value": "deep", "source": "user", "status": "conflict",
-                        "reason": "高密度与页数上限矛盾尚未解决"},
+            "density": {
+                "value": "deep",
+                "source": "user",
+                "status": "conflict",
+                "reason": "高密度与页数上限矛盾尚未解决",
+            },
         }
         code2, p2, _, _ = run_check(write_case(tmpdir(), record=rec_dishonest), json_out=True)
         self.assertEqual(code2, 1)
@@ -358,15 +388,20 @@ class TestRecordAlignment(unittest.TestCase):
         self.assertFalse(p2["verdict"]["deliverable"])
 
     def test_unanswered_qa_blocks_delivery_without_pending_dimension(self):
-        for alignment in (None, {
-            "visual": {"value": "clean", "source": "user", "status": "confirmed"},
-        }):
+        for alignment in (
+            None,
+            {
+                "visual": {"value": "clean", "source": "user", "status": "confirmed"},
+            },
+        ):
             with self.subTest(alignment=alignment):
                 rec = make_record()
                 if alignment is not None:
                     rec["request"]["alignment"] = alignment
                 rec["request"]["qa"] = {
-                    "used": True, "asked": ["visual"], "unanswered": ["visual", "visual"],
+                    "used": True,
+                    "asked": ["visual"],
+                    "unanswered": ["visual", "visual"],
                 }
                 paths = write_case(tmpdir(), record=rec)
                 code, payload, _, _ = run_check(paths)
@@ -376,8 +411,7 @@ class TestRecordAlignment(unittest.TestCase):
                 self.assertEqual(payload["record"]["alignment"]["pending"], ["visual"])
                 for locale, label in (("zh-CN", "待确认"), ("en", "pending")):
                     _, _, summary, _ = run_check(paths, locale=locale, json_out=False)
-                    pending_lines = [line for line in summary.splitlines()
-                                     if label in line.lower()]
+                    pending_lines = [line for line in summary.splitlines() if label in line.lower()]
                     self.assertTrue(any("visual" in line for line in pending_lines), summary)
 
     def test_answered_qa_without_dimensions_does_not_block_delivery(self):
@@ -390,12 +424,14 @@ class TestRecordAlignment(unittest.TestCase):
     def test_deviations_disclosed_and_block_full_satisfaction(self):
         rec = make_record()
         rec["request"]["alignment"] = {
-            "visual": {"value": "dense-table", "source": "user", "status": "deviated",
-                       "reason": "单页放不下双宽表，拆为两页避免溢出"},
+            "visual": {
+                "value": "dense-table",
+                "source": "user",
+                "status": "deviated",
+                "reason": "单页放不下双宽表，拆为两页避免溢出",
+            },
         }
-        rec["deviations"] = [
-            {"item": "visual.table-layout", "reason": "单页容量不足以同时放下两张宽表，拆页展示"}
-        ]
+        rec["deviations"] = [{"item": "visual.table-layout", "reason": "单页容量不足以同时放下两张宽表，拆页展示"}]
         paths = write_case(tmpdir(), record=rec)
         code, p, _, _ = run_check(paths, locale="zh-CN", json_out=True)
         self.assertEqual(code, 0)
@@ -413,8 +449,7 @@ class TestRecordAlignment(unittest.TestCase):
     def test_deviated_dimension_renders_without_top_level_list(self):
         rec = make_record()
         rec["request"]["alignment"] = {
-            "visual": {"value": "dense-table", "source": "user", "status": "deviated",
-                       "reason": "拆分表格页避免溢出"},
+            "visual": {"value": "dense-table", "source": "user", "status": "deviated", "reason": "拆分表格页避免溢出"},
         }
         paths = write_case(tmpdir(), record=rec)
         _, _, zh_text, _ = run_check(paths, locale="zh-CN", json_out=False)
@@ -454,10 +489,12 @@ class TestLengthSpecAndSupplements(unittest.TestCase):
             for count, passes in ((4, True), (6, True), (7, False)):
                 with self.subTest(length=length, count=count):
                     rec = make_record()
-                    rec["request"].update({
-                        "length": length,
-                        "lengthSpec": {"nature": "hard", "includeSupplements": False},
-                    })
+                    rec["request"].update(
+                        {
+                            "length": length,
+                            "lengthSpec": {"nature": "hard", "includeSupplements": False},
+                        }
+                    )
                     pages = [{"kind": ""} for _ in range(count)] + [{"kind": "supplement"}]
                     checks = rc.Checks("zh-CN")
                     info = rc.check_record_length(rec, pages, checks)
@@ -483,8 +520,7 @@ class TestLengthSpecAndSupplements(unittest.TestCase):
                 self.assertEqual(info["inRange"], in_range)
 
     def test_hard_limit_excluding_supplements_passes_when_main_pages_fit(self):
-        rec = make_record(report=REPORT_WITH_SUPPLEMENTS, script=SCRIPT_3,
-                          checks=all_checks("pass", page_count=3))
+        rec = make_record(report=REPORT_WITH_SUPPLEMENTS, script=SCRIPT_3, checks=all_checks("pass", page_count=3))
         rec["request"]["length"] = "2 页"
         rec["request"]["lengthSpec"] = {"nature": "hard", "includeSupplements": False}
         paths = write_case(tmpdir(), report=REPORT_WITH_SUPPLEMENTS, script=SCRIPT_3, record=rec)
@@ -499,8 +535,7 @@ class TestLengthSpecAndSupplements(unittest.TestCase):
         self.assertFalse(length_info["includeSupplements"])
 
     def test_hard_limit_including_supplements_fails_when_total_exceeds(self):
-        rec = make_record(report=REPORT_WITH_SUPPLEMENTS, script=SCRIPT_3,
-                          checks=all_checks("pass", page_count=3))
+        rec = make_record(report=REPORT_WITH_SUPPLEMENTS, script=SCRIPT_3, checks=all_checks("pass", page_count=3))
         rec["request"]["length"] = "2 页"
         rec["request"]["lengthSpec"] = {"nature": "hard", "includeSupplements": True}
         paths = write_case(tmpdir(), report=REPORT_WITH_SUPPLEMENTS, script=SCRIPT_3, record=rec)
@@ -510,8 +545,7 @@ class TestLengthSpecAndSupplements(unittest.TestCase):
         self.assertEqual(p["record"]["length"]["countedPages"], 3)
 
     def test_reference_target_warns_without_failing_program_check(self):
-        rec = make_record(report=REPORT_WITH_SUPPLEMENTS, script=SCRIPT_3,
-                          checks=all_checks("pass", page_count=3))
+        rec = make_record(report=REPORT_WITH_SUPPLEMENTS, script=SCRIPT_3, checks=all_checks("pass", page_count=3))
         rec["request"]["length"] = "2 页"
         rec["request"]["lengthSpec"] = {"nature": "reference", "includeSupplements": True}
         paths = write_case(tmpdir(), report=REPORT_WITH_SUPPLEMENTS, script=SCRIPT_3, record=rec)
@@ -523,8 +557,7 @@ class TestLengthSpecAndSupplements(unittest.TestCase):
         self.assertFalse(p["record"]["length"]["inRange"])
 
     def test_invalid_length_spec_fails_record_length(self):
-        rec = make_record(report=REPORT_WITH_SUPPLEMENTS, script=SCRIPT_3,
-                          checks=all_checks("pass", page_count=3))
+        rec = make_record(report=REPORT_WITH_SUPPLEMENTS, script=SCRIPT_3, checks=all_checks("pass", page_count=3))
         rec["request"]["lengthSpec"] = {"nature": "unknown-mode", "includeSupplements": "nope"}
         paths = write_case(tmpdir(), report=REPORT_WITH_SUPPLEMENTS, script=SCRIPT_3, record=rec)
         code, p, _, _ = run_check(paths, locale="zh-CN", json_out=True)
@@ -576,15 +609,27 @@ class TestReportNavigation(unittest.TestCase):
         cases = (
             (linked.replace(' id="page-ev"', ""), "fail"),
             (linked.replace('id="page-ev"', 'id="wrong-id"'), "fail"),
-            (linked.replace(' id="page-ev"', "").replace(
-                "</section>", '<span id="page-ev"></span></section>', 1), "fail"),
+            (
+                linked.replace(' id="page-ev"', "").replace("</section>", '<span id="page-ev"></span></section>', 1),
+                "fail",
+            ),
             (linked.replace('id="page-sum"', 'id="page-ev"'), "fail"),
-            (linked.replace('id="page-ev"', 'id="wrong-id"').replace(
-                "<h2>关键证据</h2>", '<!-- <span id="page-ev"></span> --><h2>关键证据</h2>'), "fail"),
-            (linked.replace(' id="page-ev"', "").replace(
-                "<h2>关键证据</h2>", '<h2 id="page-ev">关键证据</h2>'), "pass"),
-            (linked.replace(' id="page-ev"', "").replace(
-                "<h2>关键证据</h2>", '<a name="page-ev"></a><h2>关键证据</h2>'), "pass"),
+            (
+                linked.replace('id="page-ev"', 'id="wrong-id"').replace(
+                    "<h2>关键证据</h2>", '<!-- <span id="page-ev"></span> --><h2>关键证据</h2>'
+                ),
+                "fail",
+            ),
+            (
+                linked.replace(' id="page-ev"', "").replace("<h2>关键证据</h2>", '<h2 id="page-ev">关键证据</h2>'),
+                "pass",
+            ),
+            (
+                linked.replace(' id="page-ev"', "").replace(
+                    "<h2>关键证据</h2>", '<a name="page-ev"></a><h2>关键证据</h2>'
+                ),
+                "pass",
+            ),
         )
         for report, expected in cases:
             with self.subTest(report=report):
@@ -596,7 +641,8 @@ class TestReportNavigation(unittest.TestCase):
 
     def test_data_page_ref_fallback_does_not_require_html_fragment(self):
         report = REPORT.replace(' id="page-ev"', "").replace(
-            "</section>", '<a data-page-ref="ev">Evidence</a></section>', 1)
+            "</section>", '<a data-page-ref="ev">Evidence</a></section>', 1
+        )
         rec = make_record(report=report)
         code, payload, _, _ = run_check(write_case(tmpdir(), report=report, record=rec))
         self.assertEqual(code, 0)
@@ -613,8 +659,7 @@ class TestReportNavigation(unittest.TestCase):
         )
         for fragment in fragments:
             with self.subTest(fragment=fragment):
-                for real_link, expected in (("", "not_applicable"),
-                                            ('<a href="#page-ev">Evidence</a>', "pass")):
+                for real_link, expected in (("", "not_applicable"), ('<a href="#page-ev">Evidence</a>', "pass")):
                     report = REPORT.replace("</section>", fragment + real_link + "</section>", 1)
                     rec = make_record(report=report)
                     code, payload, _, _ = run_check(write_case(tmpdir(), report=report, record=rec))
@@ -623,16 +668,14 @@ class TestReportNavigation(unittest.TestCase):
                     self.assertTrue(payload["verdict"]["deliverable"])
 
     def test_anchor_attributes_with_greater_than_character_are_parsed(self):
-        report = REPORT.replace("</section>",
-                                '<a title="A > B" href="#page-missing">Evidence</a></section>', 1)
+        report = REPORT.replace("</section>", '<a title="A > B" href="#page-missing">Evidence</a></section>', 1)
         rec = make_record(report=report)
         code, payload, _, _ = run_check(write_case(tmpdir(), report=report, record=rec))
         self.assertEqual(code, 1)
         self.assertEqual(by_id(payload, "report.navigation")["code"], "report.nav-broken-link")
 
     def test_bidirectional_links_and_toc_ranges_pass(self):
-        rec = make_record(report=NAV_REPORT_OK, script=NAV_SCRIPT_OK,
-                          checks=all_checks("pass", page_count=4))
+        rec = make_record(report=NAV_REPORT_OK, script=NAV_SCRIPT_OK, checks=all_checks("pass", page_count=4))
         rec["request"]["length"] = "4 页"
         rec["findings"][0]["pages"] = ["sum"]
         paths = write_case(tmpdir(), report=NAV_REPORT_OK, script=NAV_SCRIPT_OK, record=rec)
@@ -696,10 +739,16 @@ class TestViewerNavigationAndRebuild(unittest.TestCase):
         self.assertIn(["第一部分 结论与证据", 2, 3], manifest1["sections"])
 
         # 新增一条落于 sum（第 2 页）的批注，随后将 sum 与 ev-detail 调换顺序并 rebuild
-        ns.add(out, {
-            "page": 2, "key": "sum", "title": "核心结论",
-            "target": "报告", "text": "保留结论跳转链接",
-        })
+        ns.add(
+            out,
+            {
+                "page": 2,
+                "key": "sum",
+                "title": "核心结论",
+                "target": "报告",
+                "text": "保留结论跳转链接",
+            },
+        )
         reordered = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>导航闭环报告</title>
 <style>.page{width:1280px;height:720px;padding:56px;box-sizing:border-box;font-family:sans-serif}</style></head><body>
 <section class="page" data-page="1" data-key="toc" id="page-toc">
@@ -774,6 +823,7 @@ class TestSkillDocsAndStylesContract(unittest.TestCase):
     def setUpClass(cls):
         sys.path.insert(0, str(ROOT))
         import ae
+
         target = tmpdir() / "skills-root"
         target.mkdir(parents=True, exist_ok=True)
         out = io.StringIO()
@@ -789,16 +839,39 @@ class TestSkillDocsAndStylesContract(unittest.TestCase):
             self.assertIn(dim, zh, f"中文生成指引缺少维度：{dim}")
         for dim in self.EN_DIMENSIONS:
             self.assertIn(dim, en, f"英文生成指引缺少维度：{dim}")
-        for anchor in ("演示为主", "独立阅读", "深入审阅", "data-kind=\"supplement\"",
-                       "代表性内页校准", "request.alignment", "request.lengthSpec",
-                       "request.qa", "deviations", "record.alignment", "report.navigation",
-                       "Shadow DOM", "待确认", "问答工具"):
+        for anchor in (
+            "演示为主",
+            "独立阅读",
+            "深入审阅",
+            'data-kind="supplement"',
+            "代表性内页校准",
+            "request.alignment",
+            "request.lengthSpec",
+            "request.qa",
+            "deviations",
+            "record.alignment",
+            "report.navigation",
+            "Shadow DOM",
+            "待确认",
+            "问答工具",
+        ):
             self.assertIn(anchor, zh, f"中文生成指引缺少锚点：{anchor}")
-        for anchor in ("presentation-led", "standalone reading", "deep review",
-                       "data-kind=\"supplement\"", "representative inner-page calibration",
-                       "request.alignment", "request.lengthSpec", "request.qa",
-                       "deviations", "record.alignment", "report.navigation",
-                       "Shadow DOM", "pending", "Q&A tool"):
+        for anchor in (
+            "presentation-led",
+            "standalone reading",
+            "deep review",
+            'data-kind="supplement"',
+            "representative inner-page calibration",
+            "request.alignment",
+            "request.lengthSpec",
+            "request.qa",
+            "deviations",
+            "record.alignment",
+            "report.navigation",
+            "Shadow DOM",
+            "pending",
+            "Q&A tool",
+        ):
             self.assertIn(anchor, en, f"英文生成指引缺少锚点：{anchor}")
 
     def test_agent_mechanisms_formats_workflow_css_and_readme_sync(self):
@@ -809,7 +882,7 @@ class TestSkillDocsAndStylesContract(unittest.TestCase):
 
         fmt_zh = (self.copy / "references" / "formats.md").read_text(encoding="utf-8")
         fmt_en = (self.copy / "references" / "formats.en.md").read_text(encoding="utf-8")
-        for tok in ("data-kind=\"supplement\"", "data-page-ref"):
+        for tok in ('data-kind="supplement"', "data-page-ref"):
             self.assertIn(tok, fmt_zh)
             self.assertIn(tok, fmt_en)
 
@@ -821,6 +894,7 @@ class TestSkillDocsAndStylesContract(unittest.TestCase):
         css = (self.copy / "references" / "report-base.css").read_text(encoding="utf-8")
         self.assertIn(".ae-supplement", css)
         import build_viewer as bv
+
         self.assertIn(".ae-supplement", bv.shadow_css(css))
 
         readme_zh = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
@@ -833,6 +907,7 @@ class TestSkillDocsAndStylesContract(unittest.TestCase):
     def test_verify_selection_builtin_map_is_clean(self):
         sys.path.insert(0, str(ROOT))
         import verify_selection
+
         problems = verify_selection.validate_builtin_map(ROOT)
         self.assertEqual(problems, [], f"verify_selection 存在未映射条目：{problems}")
 

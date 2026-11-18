@@ -1,4 +1,5 @@
 """只读 PPTX OOXML 包结构；不解压、不执行嵌入内容、不修改源文件。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -51,14 +52,21 @@ def _validate_archive(archive: zipfile.ZipFile) -> None:
     for info in infos:
         name = info.filename
         drive = name.split("/", 1)[0]
-        if (not name or name.startswith("/") or "\\" in name or "\x00" in name
-                or ".." in name.split("/") or len(drive) == 2 and drive[1] == ":" and drive[0].isalpha()):
+        if (
+            not name
+            or name.startswith("/")
+            or "\\" in name
+            or "\x00" in name
+            or ".." in name.split("/")
+            or len(drive) == 2
+            and drive[1] == ":"
+            and drive[0].isalpha()
+        ):
             raise PptxError("unsafePath", name)
         if name in seen:
             raise PptxError("duplicateMember", name)
         seen.add(name)
-        if info.file_size > MAX_MEMBER_BYTES or (name.endswith((".xml", ".rels")) and
-                info.file_size > MAX_XML_BYTES):
+        if info.file_size > MAX_MEMBER_BYTES or (name.endswith((".xml", ".rels")) and info.file_size > MAX_XML_BYTES):
             raise PptxError("tooLarge", name)
         total += info.file_size
         if total > MAX_TOTAL_BYTES:
@@ -67,8 +75,9 @@ def _validate_archive(archive: zipfile.ZipFile) -> None:
             raise PptxError("encrypted", name)
         if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
             raise PptxError("unsupportedCompression", name)
-        if info.file_size >= 1024 * 1024 and (info.compress_size == 0 or
-                info.file_size / info.compress_size > MAX_COMPRESSION_RATIO):
+        if info.file_size >= 1024 * 1024 and (
+            info.compress_size == 0 or info.file_size / info.compress_size > MAX_COMPRESSION_RATIO
+        ):
             raise PptxError("compressionRatio", name)
 
 
@@ -128,8 +137,11 @@ def _xml(archive: zipfile.ZipFile, name: str) -> ET.Element:
 def _target(source: str, target: str) -> str:
     if not target or "\\" in target:
         raise PptxError("unsafePath", target)
-    resolved = target.lstrip("/") if target.startswith("/") else posixpath.normpath(
-        posixpath.join(posixpath.dirname(source), target))
+    resolved = (
+        target.lstrip("/")
+        if target.startswith("/")
+        else posixpath.normpath(posixpath.join(posixpath.dirname(source), target))
+    )
     if resolved.startswith("../") or resolved == ".." or resolved.startswith("/"):
         raise PptxError("unsafePath", target)
     return resolved
@@ -160,8 +172,7 @@ def _run_style(run: ET.Element) -> tuple[dict[str, object], str]:
     if props is None:
         return {}, _digest("")
     style: dict[str, object] = {}
-    for source, target in (("b", "bold"), ("i", "italic"), ("u", "underline"),
-                           ("sz", "size"), ("lang", "language")):
+    for source, target in (("b", "bold"), ("i", "italic"), ("u", "underline"), ("sz", "size"), ("lang", "language")):
         if source in props.attrib:
             value: object = props.attrib[source]
             if source in ("b", "i"):
@@ -191,15 +202,13 @@ def _paragraph(element: ET.Element, index: int) -> dict:
             start = len(text)
             text += "\n"
             style, style_digest = _run_style(child)
-            runs.append({"start": start, "end": len(text), "text": "\n",
-                         "style": style, "styleDigest": style_digest})
+            runs.append({"start": start, "end": len(text), "text": "\n", "style": style, "styleDigest": style_digest})
         elif child.tag in (_q(A, "r"), _q(A, "fld")):
             value = child.findtext(_q(A, "t"), default="")
             start = len(text)
             text += value
             style, style_digest = _run_style(child)
-            runs.append({"start": start, "end": len(text), "text": value,
-                         "style": style, "styleDigest": style_digest})
+            runs.append({"start": start, "end": len(text), "text": value, "style": style, "styleDigest": style_digest})
     return {"index": index, "text": text, "digest": _digest(text), "runs": runs}
 
 
@@ -229,8 +238,9 @@ def _number(value: float) -> int | float:
     return int(value) if value.is_integer() else value
 
 
-def _geometry(rect: tuple[int, int, int, int] | None, transform: tuple[float, float, float, float],
-              width: int, height: int) -> dict | None:
+def _geometry(
+    rect: tuple[int, int, int, int] | None, transform: tuple[float, float, float, float], width: int, height: int
+) -> dict | None:
     if rect is None:
         return None
     x, y, cx, cy = rect
@@ -238,14 +248,25 @@ def _geometry(rect: tuple[int, int, int, int] | None, transform: tuple[float, fl
     left, top = x * sx + tx, y * sy + ty
     right, bottom = (x + cx) * sx + tx, (y + cy) * sy + ty
     return {
-        "source": {"x": _number(left), "y": _number(top), "cx": _number(right - left),
-                   "cy": _number(bottom - top), "unit": "emu"},
-        "normalized": {"x": left / width, "y": top / height,
-                       "width": (right - left) / width, "height": (bottom - top) / height},
+        "source": {
+            "x": _number(left),
+            "y": _number(top),
+            "cx": _number(right - left),
+            "cy": _number(bottom - top),
+            "unit": "emu",
+        },
+        "normalized": {
+            "x": left / width,
+            "y": top / height,
+            "width": (right - left) / width,
+            "height": (bottom - top) / height,
+        },
     }
 
 
-def _child_transform(group: ET.Element, parent: tuple[float, float, float, float]) -> tuple[float, float, float, float] | None:
+def _child_transform(
+    group: ET.Element, parent: tuple[float, float, float, float]
+) -> tuple[float, float, float, float] | None:
     rect = _rect(group)
     transform = group.find(_q(P, "grpSpPr") + "/" + _q(A, "xfrm"))
     if rect is None or transform is None:
@@ -320,8 +341,9 @@ def _paragraphs(parent: ET.Element, path: str) -> list[dict]:
 
 def _capabilities(kind: str, geometry: dict | None, shape: ET.Element, parent: str | None) -> dict:
     has_text = shape.find(_q(P, "txBody")) is not None
-    unsupported = (shape.find(".//" + _q(A, "extLst") + "/" + _q(A, "ext")) is not None
-                   or any(_local(node.tag) in ("AlternateContent", "fld") for node in shape.iter()))
+    unsupported = shape.find(".//" + _q(A, "extLst") + "/" + _q(A, "ext")) is not None or any(
+        _local(node.tag) in ("AlternateContent", "fld") for node in shape.iter()
+    )
     ordinary = kind == "shape" and parent is None and not unsupported
     return {
         "display": True,
@@ -334,8 +356,13 @@ def _capabilities(kind: str, geometry: dict | None, shape: ET.Element, parent: s
 
 
 def _evidence_digest(name: str, description: str, kind: str, text_digest: str, geometry: dict | None) -> str:
-    evidence = {"name": name, "description": description, "kind": kind, "textDigest": text_digest,
-                "geometry": geometry["normalized"] if geometry is not None else None}
+    evidence = {
+        "name": name,
+        "description": description,
+        "kind": kind,
+        "textDigest": text_digest,
+        "geometry": geometry["normalized"] if geometry is not None else None,
+    }
     return _digest(json.dumps(evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
 
@@ -352,8 +379,15 @@ def _unique_key(shape_id: str, evidence: str, elements: list[dict]) -> str:
     return candidate
 
 
-def _elements(slide: ET.Element, width: int, height: int, relations: dict[str, dict[str, object]] | None = None,
-              slide_key: str = "", part: str = "", diagnostics: list[dict] | None = None) -> list[dict]:
+def _elements(
+    slide: ET.Element,
+    width: int,
+    height: int,
+    relations: dict[str, dict[str, object]] | None = None,
+    slide_key: str = "",
+    part: str = "",
+    diagnostics: list[dict] | None = None,
+) -> list[dict]:
     relations = relations or {}
     diagnostics = diagnostics if diagnostics is not None else []
     tree = slide.find(_q(P, "cSld") + "/" + _q(P, "spTree"))
@@ -362,8 +396,9 @@ def _elements(slide: ET.Element, width: int, height: int, relations: dict[str, d
         raise PptxError("invalidPackage", part, "missing cSld/spTree")
     result = []
 
-    def visit(shape: ET.Element, parent: str | None, depth: int,
-              transform: tuple[float, float, float, float] | None) -> None:
+    def visit(
+        shape: ET.Element, parent: str | None, depth: int, transform: tuple[float, float, float, float] | None
+    ) -> None:
         props = _props(shape)
         if props is None:
             return
@@ -378,10 +413,23 @@ def _elements(slide: ET.Element, width: int, height: int, relations: dict[str, d
                 for column, cell in enumerate(table_row.findall(_q(A, "tc"))):
                     cell_paragraphs = _paragraphs(cell, _q(A, "txBody") + "/" + _q(A, "p"))
                     cell_text = "\n".join(p["text"] for p in cell_paragraphs)
-                    cells.append({"row": row, "column": column, "text": cell_text, "digest": _digest(cell_text),
-                                  "paragraphs": cell_paragraphs,
-                                  "capabilities": {"display": True, "select": True, "locate": True,
-                                                   "textWrite": False, "geometryWrite": False, "styleWrite": False}})
+                    cells.append(
+                        {
+                            "row": row,
+                            "column": column,
+                            "text": cell_text,
+                            "digest": _digest(cell_text),
+                            "paragraphs": cell_paragraphs,
+                            "capabilities": {
+                                "display": True,
+                                "select": True,
+                                "locate": True,
+                                "textWrite": False,
+                                "geometryWrite": False,
+                                "styleWrite": False,
+                            },
+                        }
+                    )
             text = "\n".join(cell["text"] for cell in cells)
         elif kind == "unknown":
             paragraphs = _paragraphs(shape, ".//" + _q(A, "p"))
@@ -390,10 +438,12 @@ def _elements(slide: ET.Element, width: int, height: int, relations: dict[str, d
             text = "\n".join(p["text"] for p in paragraphs)
         evidence_text = text
         if kind == "group":
-            evidence_text = "\n".join("".join(t.text or "" for t in p.iter(_q(A, "t")))
-                                      for p in shape.findall(".//" + _q(A, "p")))
-        evidence = _evidence_digest(props.get("name", ""), props.get("descr", ""), kind,
-                                    _digest(evidence_text), geometry)
+            evidence_text = "\n".join(
+                "".join(t.text or "" for t in p.iter(_q(A, "t"))) for p in shape.findall(".//" + _q(A, "p"))
+            )
+        evidence = _evidence_digest(
+            props.get("name", ""), props.get("descr", ""), kind, _digest(evidence_text), geometry
+        )
         key = _unique_key(shape_id, evidence, result)
         element = {
             "id": shape_id,
@@ -416,8 +466,9 @@ def _elements(slide: ET.Element, width: int, height: int, relations: dict[str, d
             element["cells"] = cells
         result.append(element)
         if kind == "unknown":
-            diagnostics.append({"code": "unknownStructure", "part": part, "slide": slide_key,
-                                "element": key, "detail": detail})
+            diagnostics.append(
+                {"code": "unknownStructure", "part": part, "slide": slide_key, "element": key, "detail": detail}
+            )
         if kind == "group":
             child_transform = _child_transform(shape, transform) if transform is not None else None
             child_start = len(result)
@@ -428,7 +479,7 @@ def _elements(slide: ET.Element, width: int, height: int, relations: dict[str, d
             element["text"] = group_text
             element["textDigest"] = _digest(group_text)
 
-    for node in (list(tree) if tree is not None else []):
+    for node in list(tree) if tree is not None else []:
         if node.tag in (_q(P, "sp"), _q(P, "grpSp"), _q(P, "pic"), _q(P, "graphicFrame"), _q(P, "cxnSp")):
             visit(node, None, 0, (1.0, 1.0, 0.0, 0.0))
         elif _props(node) is not None:
@@ -449,13 +500,21 @@ def _elements(slide: ET.Element, width: int, height: int, relations: dict[str, d
         for cell in element.get("cells", []):
             cell["capabilities"]["locate"] = False
         if not shape_id:
-            diagnostics.append({"code": "missingShapeId", "part": part, "slide": slide_key,
-                                "element": element["key"], "detail": ""})
+            diagnostics.append(
+                {"code": "missingShapeId", "part": part, "slide": slide_key, "element": element["key"], "detail": ""}
+            )
             continue
         occurrences[shape_id] = occurrences.get(shape_id, 0) + 1
         if occurrences[shape_id] == 2:
-            diagnostics.append({"code": "duplicateShapeId", "part": part, "slide": slide_key,
-                                "element": element["key"], "detail": shape_id})
+            diagnostics.append(
+                {
+                    "code": "duplicateShapeId",
+                    "part": part,
+                    "slide": slide_key,
+                    "element": element["key"],
+                    "detail": shape_id,
+                }
+            )
     return result
 
 
@@ -464,8 +523,9 @@ def _optional_relations(archive: zipfile.ZipFile, source: str) -> dict[str, dict
     return _relations(archive, source) if name in archive.NameToInfo else {}
 
 
-def _notes(archive: zipfile.ZipFile, relations: dict[str, dict[str, object]], slide_key: str,
-           diagnostics: list[dict]) -> dict | None:
+def _notes(
+    archive: zipfile.ZipFile, relations: dict[str, dict[str, object]], slide_key: str, diagnostics: list[dict]
+) -> dict | None:
     found = next(((rid, rel) for rid, rel in relations.items() if rel["type"] == R + "/notesSlide"), None)
     if found is None:
         return None
@@ -482,9 +542,20 @@ def _notes(archive: zipfile.ZipFile, relations: dict[str, dict[str, object]], sl
             raise
         diagnostic = {"code": exc.code, "part": part, "slide": slide_key, "element": "", "detail": exc.detail}
         diagnostics.append(diagnostic)
-        return {"status": "error", "relationshipId": rid, "part": part, "detail": exc.detail,
-                "capabilities": {"display": False, "select": False, "locate": False,
-                                 "textWrite": False, "geometryWrite": False, "styleWrite": False}}
+        return {
+            "status": "error",
+            "relationshipId": rid,
+            "part": part,
+            "detail": exc.detail,
+            "capabilities": {
+                "display": False,
+                "select": False,
+                "locate": False,
+                "textWrite": False,
+                "geometryWrite": False,
+                "styleWrite": False,
+            },
+        }
     shapes = []
     for shape in root.findall(".//" + _q(P, "sp")):
         placeholder = shape.find(_q(P, "nvSpPr") + "/" + _q(P, "nvPr") + "/" + _q(P, "ph"))
@@ -502,10 +573,22 @@ def _notes(archive: zipfile.ZipFile, relations: dict[str, dict[str, object]], sl
         for paragraph in shape.findall(_q(P, "txBody") + "/" + _q(A, "p")):
             paragraphs.append(_paragraph(paragraph, len(paragraphs)))
     text = "\n".join(p["text"] for p in paragraphs)
-    return {"status": "available", "relationshipId": rid, "part": part,
-            "text": text, "digest": _digest(text), "paragraphs": paragraphs,
-            "capabilities": {"display": True, "select": True, "locate": True,
-                             "textWrite": True, "geometryWrite": False, "styleWrite": False}}
+    return {
+        "status": "available",
+        "relationshipId": rid,
+        "part": part,
+        "text": text,
+        "digest": _digest(text),
+        "paragraphs": paragraphs,
+        "capabilities": {
+            "display": True,
+            "select": True,
+            "locate": True,
+            "textWrite": True,
+            "geometryWrite": False,
+            "styleWrite": False,
+        },
+    }
 
 
 # ---------- 重建重定位：按幻灯片定位在当前版本的元素模型里找回目标 ----------
@@ -515,8 +598,14 @@ def _ro_of(element: dict) -> list[str]:
 
 
 def _target_of(element: dict) -> dict:
-    out = {"key": element["key"], "id": str(element.get("id") or ""), "name": element.get("name") or "",
-           "kind": element["kind"], "z": element.get("z", 0), "digest": element.get("evidenceDigest") or ""}
+    out = {
+        "key": element["key"],
+        "id": str(element.get("id") or ""),
+        "name": element.get("name") or "",
+        "kind": element["kind"],
+        "z": element.get("z", 0),
+        "digest": element.get("evidenceDigest") or "",
+    }
     ro = _ro_of(element)
     if ro:
         out["ro"] = ro
@@ -531,7 +620,7 @@ def _relocate_text(selection: dict, element: dict) -> dict:
     if len(same) == 1:
         return {"para": same[0]["index"], "changed": False, "why": None}
     hit = next((p for p in same if p["index"] == selection.get("para")), None)
-    if hit is not None:   # 摘要撞车（重复段落）：序号一致才认
+    if hit is not None:  # 摘要撞车（重复段落）：序号一致才认
         return {"para": hit["index"], "changed": False, "why": None}
     quote = str(selection.get("quote") or "")
     hits = [p for p in paragraphs if quote and p.get("text", "").count(quote) == 1]
@@ -559,9 +648,9 @@ def _relocate_element(target: dict, elements: list[dict]) -> dict:
     by_digest = [e for e in elements if digest and e.get("evidenceDigest") == digest]
     if len(by_digest) == 1:
         return {"element": by_digest[0], "how": "evidence", "why": why}
-    if why == "duplicateShapeId":   # 重复标识且证据对不上：证据冲突，不猜其中一个
+    if why == "duplicateShapeId":  # 重复标识且证据对不上：证据冲突，不猜其中一个
         return {"element": None, "how": None, "why": why}
-    if by_digest:                   # 证据撞车（复制出的同内容形状）：标需确认
+    if by_digest:  # 证据撞车（复制出的同内容形状）：标需确认
         return {"element": None, "how": None, "why": "duplicateEvidence"}
     return {"element": None, "how": None, "why": "elementGone"}
 
@@ -579,17 +668,32 @@ def relocate(anchor: dict, slides: list[dict]) -> dict:
     """
     slide = next((s for s in slides if s.get("key") == anchor.get("slide")), None)
     if slide is None:
-        return {"status": "missing", "how": None, "why": "slideGone", "slide": None, "page": None,
-                "changed": False, "targets": None, "text": None}
+        return {
+            "status": "missing",
+            "how": None,
+            "why": "slideGone",
+            "slide": None,
+            "page": None,
+            "changed": False,
+            "targets": None,
+            "text": None,
+        }
     elements = anchor.get("elements") or []
     targets, how, why = [], "slideKey", None
     matched = None
     for target in elements:
         got = _relocate_element(target, slide["elements"])
         if got["element"] is None:
-            return {"status": "ambiguous" if got["why"] in ("duplicateShapeId", "duplicateEvidence")
-                    else "missing", "how": None, "why": got["why"], "slide": slide, "page": None,
-                    "changed": False, "targets": None, "text": None}
+            return {
+                "status": "ambiguous" if got["why"] in ("duplicateShapeId", "duplicateEvidence") else "missing",
+                "how": None,
+                "why": got["why"],
+                "slide": slide,
+                "page": None,
+                "changed": False,
+                "targets": None,
+                "text": None,
+            }
         targets.append(_target_of(got["element"]))
         matched = got["element"]
         how, why = got["how"], got["why"]
@@ -597,12 +701,27 @@ def relocate(anchor: dict, slides: list[dict]) -> dict:
     if isinstance(anchor.get("text"), dict):
         got = _relocate_text(anchor["text"], matched or {})
         if got["para"] is None:
-            return {"status": "ambiguous" if got["why"] == "textAmbiguous" else "missing",
-                    "how": how, "why": got["why"], "slide": slide, "page": None,
-                    "changed": False, "targets": None, "text": None}
+            return {
+                "status": "ambiguous" if got["why"] == "textAmbiguous" else "missing",
+                "how": how,
+                "why": got["why"],
+                "slide": slide,
+                "page": None,
+                "changed": False,
+                "targets": None,
+                "text": None,
+            }
         text = {"para": got["para"], "changed": got["changed"]}
-    return {"status": "ok", "how": how, "why": why, "slide": slide, "page": slide["n"],
-            "changed": bool(text and text["changed"]), "targets": targets or None, "text": text}
+    return {
+        "status": "ok",
+        "how": how,
+        "why": why,
+        "slide": slide,
+        "page": slide["n"],
+        "changed": bool(text and text["changed"]),
+        "targets": targets or None,
+        "text": text,
+    }
 
 
 def read(path: Path) -> dict:
@@ -623,8 +742,10 @@ def read(path: Path) -> dict:
             if _local(content_types.tag) != "Types":
                 raise PptxError("invalidPackage", "[Content_Types].xml", "not content types")
             root_rels = _relations(archive, "")
-            main = next((rel for rel in root_rels.values()
-                         if rel["type"] == R + "/officeDocument" and not rel["external"]), None)
+            main = next(
+                (rel for rel in root_rels.values() if rel["type"] == R + "/officeDocument" and not rel["external"]),
+                None,
+            )
             if main is None:
                 raise PptxError("missingPart", "ppt/presentation.xml")
             main_part = str(main["target"])
@@ -658,8 +779,17 @@ def read(path: Path) -> dict:
                 slide_key = "s" + slide_id
                 relations = _optional_relations(archive, part)
                 elements = _elements(slide, width, height, relations, slide_key, part, diagnostics)
-                slides.append({"n": n, "id": slide_id, "key": slide_key, "relationshipId": rid, "part": part,
-                               "elements": elements, "notes": _notes(archive, relations, slide_key, diagnostics)})
+                slides.append(
+                    {
+                        "n": n,
+                        "id": slide_id,
+                        "key": slide_key,
+                        "relationshipId": rid,
+                        "part": part,
+                        "elements": elements,
+                        "notes": _notes(archive, relations, slide_key, diagnostics),
+                    }
+                )
     except PptxError:
         raise
     except (OSError, zipfile.BadZipFile, RuntimeError, NotImplementedError, EOFError, zlib.error) as exc:
