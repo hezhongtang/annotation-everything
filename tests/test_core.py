@@ -5470,29 +5470,38 @@ class WaitPollReadsTests(unittest.TestCase):
 
         def run_wait():   # 等待进程跑在后台线程里：主线程同时向服务发请求
             with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
-                result["code"] = notes_cli.main(["wait", str(review), "--timeout", "8", "--interval", "1",
+                result["code"] = notes_cli.main(["wait", str(review), "--timeout", "40", "--interval", "1",
                                                  "--by", "agent", "--harness", "claude", "--session", "sess-1"])
                 result["out"] = out.getvalue()
 
         waiter = threading.Thread(target=run_wait, daemon=True)
         waiter.start()
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:   # 先等到服务认出「有代理在等」
-            _code, body = self.request(srv)
-            if body["receiver"]["state"] == "waiting":
-                break
-            time.sleep(0.03)
-        self.assertEqual(body["receiver"]["state"], "waiting")
-        seen = []
-        until = time.monotonic() + 4.5   # 跨过一次等待标记重写（剩余有效期不到一半时）
-        while time.monotonic() < until:
-            for path in ("/api/notes", "/api/health"):
-                code, got = self.request(srv, path=path)
-                self.assertEqual(code, 200)
-                seen.append((path, got["receiver"]["state"]))
-            time.sleep(0.1)
-        store.handoff_submit(review, "合成批次")   # 提交到达：等待结束
-        waiter.join(10)
+        try:
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:   # 先等到服务认出「有代理在等」
+                _code, body = self.request(srv)
+                if body["receiver"]["state"] == "waiting":
+                    break
+                time.sleep(0.03)
+            self.assertEqual(body["receiver"]["state"], "waiting")
+            seen = []
+            mark = ledger.wait_file(review, os.getpid())
+            first_write = mark.stat().st_mtime_ns
+            refreshed = False
+            until = time.monotonic() + 15
+            while time.monotonic() < until:
+                refreshed = mark.stat().st_mtime_ns != first_write
+                for path in ("/api/notes", "/api/health"):
+                    code, got = self.request(srv, path=path)
+                    self.assertEqual(code, 200)
+                    seen.append((path, got["receiver"]["state"]))
+                if refreshed:   # 两个入口都已在真实续写之后读取过状态
+                    break
+                time.sleep(0.1)
+        finally:
+            store.handoff_submit(review, "合成批次")
+            waiter.join(10)
+        self.assertTrue(refreshed, "必须观测到一次等待标记续写")
         self.assertEqual(result.get("code"), 0, result.get("out"))
         self.assertIn("第 1 批", result.get("out", ""))
         self.assertEqual({state for _path, state in seen}, {"waiting"}, seen[:4])

@@ -974,13 +974,14 @@ class IndependentCopyTests(unittest.TestCase):
         self.assertEqual(link.resolve(), self.copy_dir.resolve())
 
     def test_replace_refuses_source_and_overlapping_directories(self):
-        repo = self.home / "source-repo"
+        repo = self.home.resolve() / "source-repo"
         source = repo / ae.SKILL_SRC
         nested = source / "nested"
         nested.mkdir(parents=True)
         marker = nested / "uncommitted.txt"
         marker.write_text("合成未提交改动", encoding="utf-8")
         self.copy_dir.mkdir(parents=True)
+        ae.i18n_module()  # 在 __file__ 切到合成仓库前加载错误消息，单独运行此用例也能显示诊断。
         # 同时保护显式来源仓库，以及没有来源记录时执行脚本所在的仓库。
         for script_repo, recorded_repo in ((self.home / "runner", repo), (repo, None)):
             with mock.patch.object(ae, "__file__", str(script_repo / "ae.py")):
