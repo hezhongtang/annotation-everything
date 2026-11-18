@@ -12,7 +12,7 @@
   unit-related 相关单元       显式指定用例 / 模块，如 tests/test_core.py
   browser      完整浏览器     uv run --no-project --with playwright python tests/e2e_browser.py
   serve-check  服务安全自检   python3 skill/annotation-everything/scripts/serve.py check
-  lint         Lint 静态检查  uv tool run --from ruff==0.17.5 ruff check .
+  lint         代码风格与格式  uv tool run --from ruff==0.17.5 ruff check . && uv tool run --from ruff==0.17.5 ruff format --check .
   all          完整验收       unit + serve-check + browser
 
 行为：
@@ -613,10 +613,12 @@ def build_groups(selectors: Optional[list] = None) -> dict:
         ),
         "lint": Group(
             name="lint",
-            title="Lint 静态检查",
-            purpose="ruff 静态检查（ruff check；版本锁定 ruff==%s，与 pyproject.toml 一致）；"
-            "步骤输出实时转发，整组按「N/M 通过」摘要计数" % RUFF_VERSION,
-            equivalent="uv tool run --from ruff==%s ruff check ." % RUFF_VERSION,
+            title="代码风格与格式",
+            purpose="Ruff 静态检查与格式校验（只读，不改工作树）：ruff check + ruff format --check"
+            "（版本锁定 ruff==%s，与 pyproject.toml 一致）；步骤输出实时转发，整组按「N/M 通过」摘要计数"
+            % RUFF_VERSION,
+            equivalent="uv tool run --from ruff==%s ruff check . && uv tool run --from ruff==%s ruff format --check ."
+            % (RUFF_VERSION, RUFF_VERSION),
             argv=[sys.executable, str(VERIFY_PY), "_lint-runner"],
             counter="log",
             requires=("uv",),
@@ -1084,18 +1086,25 @@ def run_parallel_units(cases, args, run_suite) -> int:
 
 
 def cmd_lint_runner(argv: list) -> int:
-    """内部子命令：按固定顺序执行 lint 步骤，实时转发输出并打「N/M 通过」摘要行。
+    """内部子命令：按固定顺序执行 ruff check 与 ruff format --check，实时转发输出并打「N/M 通过」摘要行。
 
     每步的子进程直接继承本入口的 stdout / stderr，输出实时进入组日志；
+    某步失败时继续执行后续步骤以完整呈现所有问题，并打印出错步骤提示；
     结束时按通过步骤数打「N/M 通过」摘要行（parse_log_counts 的记录契约），
-    全部通过才退出 0。本 PR 只有 ruff check 一步；后续步骤（如 format --check）
-    在此追加，摘要与退出码口径不变。
+    全部通过才退出 0。
     """
     if argv:
         print("入口自身失败：_lint-runner 不接受参数：%s" % " ".join(argv), file=sys.stderr)
         return EXIT_WRAPPER
     steps = [
-        ("ruff check", ["uv", "tool", "run", "--from", "ruff==" + RUFF_VERSION, "ruff", "check", "."]),
+        (
+            "ruff check",
+            ["uv", "tool", "run", "--from", "ruff==" + RUFF_VERSION, "ruff", "check", "."],
+        ),
+        (
+            "ruff format --check",
+            ["uv", "tool", "run", "--from", "ruff==" + RUFF_VERSION, "ruff", "format", "--check", "."],
+        ),
     ]
     passed = 0
     for index, (label, step_argv) in enumerate(steps, start=1):
@@ -1107,6 +1116,8 @@ def cmd_lint_runner(argv: list) -> int:
             code = EXIT_FAILED
         if code == EXIT_OK:
             passed += 1
+        else:
+            print("lint 步骤 %d/%d 失败：%s（退出码 %s）" % (index, len(steps), label, code), flush=True)
     print("\n%d/%d 通过" % (passed, len(steps)), flush=True)
     return EXIT_OK if passed == len(steps) else EXIT_FAILED
 
