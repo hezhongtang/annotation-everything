@@ -15,6 +15,7 @@ AE_LOCALE 刷新共享状态，其余模块随之同语言——这正是「只�
 
 只用标准库与合成数据：python3 -m unittest discover tests
 """
+
 from __future__ import annotations
 
 import os
@@ -35,7 +36,7 @@ sys.path.insert(0, str(SCRIPTS))
 import check_pptx_fonts  # noqa: E402
 import i18n  # noqa: E402
 
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
 
 import ledger  # noqa: E402
 import serve  # noqa: E402
@@ -47,8 +48,7 @@ SKILL_FRONTMATTER = {"zh-CN": "缺少 frontmatter", "en": "Missing frontmatter"}
 FONTS_PPTX = {"zh-CN": "无法读取 PPTX", "en": "Cannot read the PPTX"}
 HOOK_SYNTAX = {"zh-CN": "--on-handoff 的命令写法不对", "en": "The --on-handoff command is malformed"}
 # 入口报错里来自底层模块的那段
-LEDGER_MISSING = {"zh-CN": "审阅台账里没有标识以 ffff 开头的审阅",
-                  "en": "No review in the ledger starts with ffff"}
+LEDGER_MISSING = {"zh-CN": "审阅台账里没有标识以 ffff 开头的审阅", "en": "No review in the ledger starts with ffff"}
 LEDGER_UNREADABLE = {"zh-CN": "读不了（JSONDecodeError）", "en": "Cannot read the review ledger"}
 LEDGER_REGISTER = {"zh-CN": "没能登记到审阅台账", "en": "Could not register in the review ledger"}
 
@@ -67,8 +67,7 @@ class LocaleStateTestCase(unittest.TestCase):
         self.skills = self.root / "skills"
         (self.skills / "broken").mkdir(parents=True)
         (self.skills / "broken" / "SKILL.md").write_text("没有 frontmatter\n", encoding="utf-8")
-        self.saved = {name: os.environ.get(name)
-                      for name in ("AE_LOCALE", "AE_HOME", "LC_ALL", "LC_MESSAGES", "LANG")}
+        self.saved = {name: os.environ.get(name) for name in ("AE_LOCALE", "AE_HOME", "LC_ALL", "LC_MESSAGES", "LANG")}
         for name in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG"):
             os.environ.pop(name, None)
         os.environ["AE_HOME"] = str(self.ledger_home)
@@ -120,8 +119,12 @@ class ProcessLocalePinTests(LocaleStateTestCase):
     def test_any_module_pinning_holds_for_the_whole_process(self):
         """任何一个模块定住语言，全进程各模块都用它；按模块分开保存并没有实际隔离。"""
         os.environ["AE_LOCALE"] = "en"
-        for name, pin in (("ledger", ledger.set_locale), ("skill_sources", skill_sources.set_locale),
-                          ("serve", serve.set_locale), ("check_pptx_fonts", check_pptx_fonts.set_locale)):
+        for name, pin in (
+            ("ledger", ledger.set_locale),
+            ("skill_sources", skill_sources.set_locale),
+            ("serve", serve.set_locale),
+            ("check_pptx_fonts", check_pptx_fonts.set_locale),
+        ):
             with self.subTest(pinned_by=name):
                 pin("zh-CN")
                 self.assertIn(LEDGER_RID["zh-CN"], self.ledger_error())
@@ -193,24 +196,31 @@ class EntryLanguageTests(unittest.TestCase):
             ps.write_text(f'@echo off\r\n"{sys.executable}" "{helper}" %*\r\n', encoding="utf-8")
         else:
             ps = self.bin / "ps"
-            ps.write_text('#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  exit 0\n'
-                          'else\n  exec /bin/ps "$@"\nfi\n', encoding="utf-8")
+            ps.write_text(
+                '#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  exit 0\nelse\n  exec /bin/ps "$@"\nfi\n',
+                encoding="utf-8",
+            )
             ps.chmod(0o755)
-        self.env = {k: v for k, v in os.environ.items()
-                    if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
-        self.env.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
-                         "AE_HOME": str(self.ledger_home),
-                         "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills"),
-                         "CODEX_HOME": str(self.home / ".codex"),
-                         "PATH": str(self.bin) + os.pathsep + os.defpath,
-                         "PYTHONDONTWRITEBYTECODE": "1"})
+        self.env = {k: v for k, v in os.environ.items() if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
+        self.env.update(
+            {
+                "HOME": str(self.home),
+                "USERPROFILE": str(self.home),
+                "AE_HOME": str(self.ledger_home),
+                "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills"),
+                "CODEX_HOME": str(self.home / ".codex"),
+                "PATH": str(self.bin) + os.pathsep + os.defpath,
+                "PYTHONDONTWRITEBYTECODE": "1",
+            }
+        )
 
     def run_entry(self, script: Path, *args: str, broken_ledger: bool = False, **extra):
         merged = {**self.env, **extra}
         if broken_ledger:
             merged["AE_HOME"] = str(self.broken_home)
-        return subprocess.run([sys.executable, str(script), *map(str, args)], env=merged,
-                              capture_output=True, text=True, timeout=180)
+        return subprocess.run(
+            [sys.executable, str(script), *map(str, args)], env=merged, capture_output=True, text=True, timeout=180
+        )
 
     def out_dir(self, name: str) -> Path:
         d = self.root / name
@@ -233,14 +243,25 @@ class EntryLanguageTests(unittest.TestCase):
 
     def test_build_viewer_ledger_and_skill_errors_follow_the_single_language(self):
         for locale, ledger_needle, skill_needle in (
-                ("zh-CN", LEDGER_REGISTER["zh-CN"], SKILL_FRONTMATTER["zh-CN"]),
-                ("en", LEDGER_REGISTER["en"], SKILL_FRONTMATTER["en"])):
+            ("zh-CN", LEDGER_REGISTER["zh-CN"], SKILL_FRONTMATTER["zh-CN"]),
+            ("en", LEDGER_REGISTER["en"], SKILL_FRONTMATTER["en"]),
+        ):
             with self.subTest(locale=locale):
                 out = self.out_dir("out-" + locale)
-                p = self.run_entry(SCRIPTS / "build_viewer.py", "--report", SAMPLE / "report.html",
-                                   "--script", SAMPLE / "script.md", "--out", out,
-                                   "--skills-from", self.skills, "--locale", locale,
-                                   broken_ledger=True)
+                p = self.run_entry(
+                    SCRIPTS / "build_viewer.py",
+                    "--report",
+                    SAMPLE / "report.html",
+                    "--script",
+                    SAMPLE / "script.md",
+                    "--out",
+                    out,
+                    "--skills-from",
+                    self.skills,
+                    "--locale",
+                    locale,
+                    broken_ledger=True,
+                )
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 self.assertIn(ledger_needle, p.stderr, "台账登记失败也用同一语言")
                 self.assertIn(skill_needle, p.stderr, "技能扫描警告也用同一语言")
@@ -257,8 +278,7 @@ class EntryLanguageTests(unittest.TestCase):
         """字体检查没有台账与技能发现依赖，它的报错经词典适配层（进程级状态）出来。"""
         for locale, needle in (("zh-CN", FONTS_PPTX["zh-CN"]), ("en", FONTS_PPTX["en"])):
             with self.subTest(locale=locale):
-                p = self.run_entry(SCRIPTS / "check_pptx_fonts.py",
-                                   self.root / "missing.pptx", "--locale", locale)
+                p = self.run_entry(SCRIPTS / "check_pptx_fonts.py", self.root / "missing.pptx", "--locale", locale)
                 self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
                 self.assertIn(needle, p.stderr)
 
@@ -273,6 +293,7 @@ class AeOldSkillCopyLocaleTests(unittest.TestCase):
     def setUp(self):
         sys.path.insert(0, str(ROOT))
         import ae
+
         self.ae = ae
         saved = (dict(ae._skill_modules), ae._locale, ae._messages)
 
@@ -280,6 +301,7 @@ class AeOldSkillCopyLocaleTests(unittest.TestCase):
             ae._skill_modules.clear()
             ae._skill_modules.update(saved[0])
             ae._locale, ae._messages = saved[1], saved[2]
+
         self.addCleanup(restore)
 
     def test_language_reaches_ledger_and_skill_sources_of_an_old_copy(self):
@@ -288,11 +310,15 @@ class AeOldSkillCopyLocaleTests(unittest.TestCase):
         def module_with_set_locale(name):
             return types.SimpleNamespace(set_locale=got[name].append)
 
-        old_i18n = types.SimpleNamespace(Translator=i18n.Translator)   # 旧版：没有 set_locale
+        old_i18n = types.SimpleNamespace(Translator=i18n.Translator)  # 旧版：没有 set_locale
         self.ae._skill_modules.clear()
-        self.ae._skill_modules.update({"i18n": old_i18n,
-                                       "ledger": module_with_set_locale("ledger"),
-                                       "skill_sources": module_with_set_locale("skill_sources")})
+        self.ae._skill_modules.update(
+            {
+                "i18n": old_i18n,
+                "ledger": module_with_set_locale("ledger"),
+                "skill_sources": module_with_set_locale("skill_sources"),
+            }
+        )
         self.assertIsNone(self.ae.ui_language(), "合成的旧副本没有进程级语言状态")
         self.ae.set_locale("en")
         self.assertEqual(got, {"ledger": ["en"], "skill_sources": ["en"]})

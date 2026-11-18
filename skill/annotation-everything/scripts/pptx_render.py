@@ -15,6 +15,7 @@ AE_SOFFICE / AE_PDFTOPPM 环境变量，再 PATH，再 macOS 的 LibreOffice 安
 
 退出码：0 渲染成功；1 工具缺失或转换失败；2 输入或用法错误。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -37,9 +38,7 @@ RENDER_SCHEMA = "ae-pptx-render/1"
 
 # 渲染 DPI：150 在 1280×720 画布上得到清晰可读的逐页图。
 RENDER_DPI = 150
-_SOFFICE_MAC_CANDIDATES = (
-    "/Applications/LibreOffice.app/Contents/MacOS/soffice",
-)
+_SOFFICE_MAC_CANDIDATES = ("/Applications/LibreOffice.app/Contents/MacOS/soffice",)
 _IMAGE_RE = re.compile(r"page-(\d+)\.png$")
 
 
@@ -50,8 +49,7 @@ def _t(loc: str, key: str, **params: object) -> str:
 def _version_of(binary: Path) -> str:
     """从 --version 首行解析出数字版本（如 24.8.4.2）；解析不出返回整行。"""
     try:
-        done = subprocess.run([str(binary), "--version"], capture_output=True,
-                              text=True, timeout=60)
+        done = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired):
         return ""
     first = (done.stdout or done.stderr).strip().splitlines()
@@ -85,23 +83,28 @@ def render_deck(path: Path, out_dir: Path, locale: str | None = None) -> dict:
     path = Path(path)
     loc = i18n.resolve_locale(locale, system_languages=i18n.system_languages())
     pptx_sha = hashlib.sha256(path.read_bytes()).hexdigest()
-    manifest: dict = {"schema": RENDER_SCHEMA, "file": path.name,
-                      "pptxSha256": pptx_sha, "status": "unavailable",
-                      "renderer": {}, "pages": [], "diagnosis": [], "outDir": out_dir.name}
+    manifest: dict = {
+        "schema": RENDER_SCHEMA,
+        "file": path.name,
+        "pptxSha256": pptx_sha,
+        "status": "unavailable",
+        "renderer": {},
+        "pages": [],
+        "diagnosis": [],
+        "outDir": out_dir.name,
+    }
     soffice = _probe("AE_SOFFICE", "soffice", _SOFFICE_MAC_CANDIDATES)
     pdftoppm = _probe("AE_PDFTOPPM", "pdftoppm")
     if soffice is None:
         manifest["diagnosis"].append(_diagnose_missing(loc, "soffice", "AE_SOFFICE"))
     else:
         version = _version_of(soffice)
-        manifest["renderer"]["soffice"] = {"name": "LibreOffice",
-                                           "version": version, "path": soffice.name}
+        manifest["renderer"]["soffice"] = {"name": "LibreOffice", "version": version, "path": soffice.name}
     if pdftoppm is None:
         manifest["diagnosis"].append(_diagnose_missing(loc, "pdftoppm", "AE_PDFTOPPM"))
     else:
         version = _version_of(pdftoppm)
-        manifest["renderer"]["pdftoppm"] = {"name": "poppler pdftoppm",
-                                            "version": version, "path": pdftoppm.name}
+        manifest["renderer"]["pdftoppm"] = {"name": "poppler pdftoppm", "version": version, "path": pdftoppm.name}
     if soffice is None or pdftoppm is None:
         return manifest
 
@@ -112,9 +115,20 @@ def render_deck(path: Path, out_dir: Path, locale: str | None = None) -> dict:
         profile = (work / "lo-profile").as_uri()
         try:
             done = subprocess.run(
-                [str(soffice), "--headless", f"-env:UserInstallation={profile}",
-                 "--convert-to", "pdf", "--outdir", str(work), str(path)],
-                capture_output=True, text=True, timeout=300)
+                [
+                    str(soffice),
+                    "--headless",
+                    f"-env:UserInstallation={profile}",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    str(work),
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
         except subprocess.TimeoutExpired:
             manifest["status"] = "failed"
             manifest["diagnosis"].append(_t(loc, "pptxrender.reason.timeout"))
@@ -123,32 +137,37 @@ def render_deck(path: Path, out_dir: Path, locale: str | None = None) -> dict:
         if not pdf.is_file():
             manifest["status"] = "failed"
             detail = (done.stderr or done.stdout or "").strip().splitlines()
-            manifest["diagnosis"].append(_t(
-                loc, "pptxrender.reason.conversionFailed",
-                detail=detail[0][:200] if detail else ""))
+            manifest["diagnosis"].append(
+                _t(loc, "pptxrender.reason.conversionFailed", detail=detail[0][:200] if detail else "")
+            )
             return manifest
         try:
             render = subprocess.run(
-                [str(pdftoppm), "-png", "-r", str(RENDER_DPI), str(pdf),
-                 str(work / "page")],
-                capture_output=True, text=True, timeout=300)
+                [str(pdftoppm), "-png", "-r", str(RENDER_DPI), str(pdf), str(work / "page")],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
         except subprocess.TimeoutExpired:
             manifest["status"] = "failed"
             manifest["diagnosis"].append(_t(loc, "pptxrender.reason.timeout"))
             return manifest
         if render.returncode != 0:
             manifest["status"] = "failed"
-            manifest["diagnosis"].append(_t(loc, "pptxrender.reason.pageRenderFailed",
-                                            code=render.returncode))
+            manifest["diagnosis"].append(_t(loc, "pptxrender.reason.pageRenderFailed", code=render.returncode))
             return manifest
         pages = []
         for image in sorted(work.glob("page-*.png")):
             matched = _IMAGE_RE.fullmatch(image.name)
             if not matched:
                 continue
-            pages.append({"page": int(matched.group(1)),
-                          "image": image.name,
-                          "sha256": hashlib.sha256(image.read_bytes()).hexdigest()})
+            pages.append(
+                {
+                    "page": int(matched.group(1)),
+                    "image": image.name,
+                    "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+                }
+            )
         pages.sort(key=lambda entry: entry["page"])
         if not pages:
             manifest["status"] = "failed"
@@ -167,8 +186,7 @@ def render_deck(path: Path, out_dir: Path, locale: str | None = None) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="把 PPTX 渲染成逐页 PNG 并写渲染清单（可选工具：soffice + pdftoppm）")
+    parser = argparse.ArgumentParser(description="把 PPTX 渲染成逐页 PNG 并写渲染清单（可选工具：soffice + pdftoppm）")
     parser.add_argument("pptx", help="要渲染的 .pptx 文件")
     parser.add_argument("--out-dir", required=True, help="逐页图片输出目录")
     parser.add_argument("--locale")
@@ -183,10 +201,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         loc = i18n.resolve_locale(args.locale, system_languages=i18n.system_languages())
     except i18n.LocaleError as exc:
-        print(_t("zh-CN", "pptxrender.badLocale", locale=exc.params.get("locale", "")),
-              file=sys.stderr)
-        print(_t("en", "pptxrender.badLocale", locale=exc.params.get("locale", "")),
-              file=sys.stderr)
+        print(_t("zh-CN", "pptxrender.badLocale", locale=exc.params.get("locale", "")), file=sys.stderr)
+        print(_t("en", "pptxrender.badLocale", locale=exc.params.get("locale", "")), file=sys.stderr)
         return 2
     path = Path(args.pptx)
     if not path.is_file():
@@ -196,8 +212,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(manifest, ensure_ascii=False))
     else:
-        print(_t(loc, "pptxrender.summary", file=manifest["file"],
-                 status=manifest["status"], pages=len(manifest["pages"])))
+        print(
+            _t(
+                loc,
+                "pptxrender.summary",
+                file=manifest["file"],
+                status=manifest["status"],
+                pages=len(manifest["pages"]),
+            )
+        )
         for line in manifest["diagnosis"]:
             print(f"  - {line}")
     return 0 if manifest["status"] == "ok" else 1

@@ -9,6 +9,7 @@
 
 所有数字口径都是编造的合成设定，只用于技能评测，不代表任何真实业务。
 """
+
 from __future__ import annotations
 
 import sys
@@ -28,16 +29,15 @@ def build_scanned_pdf() -> bytes:
     stream = b"0.92 0.92 0.92 rg 0 0 612 792 re f 0 rg"
     page_ids = []
     for _ in range(2):
-        cont = add(b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n"
-                   + stream + b"\nendstream")
-        page = add(b"<< /Type /Page /Parent " + str(pages_obj).encode() + b" 0 R "
-                   b"/MediaBox [0 0 612 792] /Contents " + str(cont).encode()
-                   + b" 0 R >>")
+        cont = add(b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream")
+        page = add(
+            b"<< /Type /Page /Parent " + str(pages_obj).encode() + b" 0 R "
+            b"/MediaBox [0 0 612 792] /Contents " + str(cont).encode() + b" 0 R >>"
+        )
         page_ids.append(page)
     objs[catalog - 1] = f"<< /Type /Catalog /Pages {pages_obj} 0 R >>".encode()
     kids = " ".join(f"{p} 0 R" for p in page_ids)
-    objs[pages_obj - 1] = (f"<< /Type /Pages /Kids [{kids}] "
-                           f"/Count {len(page_ids)} >>").encode()
+    objs[pages_obj - 1] = (f"<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>").encode()
     out = bytearray(b"%PDF-1.4\n")
     offsets = []
     for i, body in enumerate(objs, 1):
@@ -47,8 +47,7 @@ def build_scanned_pdf() -> bytes:
     out += f"xref\n0 {len(objs) + 1}\n".encode() + b"0000000000 65535 f \n"
     for off in offsets:
         out += f"{off:010d} 00000 n \n".encode()
-    out += (f"trailer\n<< /Size {len(objs) + 1} /Root {catalog} 0 R >>\n"
-            f"startxref\n{xref}\n%%EOF\n").encode()
+    out += (f"trailer\n<< /Size {len(objs) + 1} /Root {catalog} 0 R >>\nstartxref\n{xref}\n%%EOF\n").encode()
     return bytes(out)
 
 

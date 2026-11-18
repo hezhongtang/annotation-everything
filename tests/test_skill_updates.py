@@ -1,4 +1,5 @@
 """技能更新的命令行行为；仓库、技能副本与审阅数据均为合成环境。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -22,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILL = "annotation-everything"
 sys.path.insert(0, str(ROOT))
 import host_isolation  # noqa: E402
+
 host_isolation.require_for_module(__name__)
 
 
@@ -36,13 +38,19 @@ class SkillUpdateTests(unittest.TestCase):
         self.remote = self.root / "remote.git"
         self.skills = self.root / "custom-skills"
         self.copy = self.skills / SKILL
-        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
-                    "LOCALAPPDATA": str(self.home / "AppData" / "Local"),
-                    "AE_HOME": str(self.home / "ledger"),
-                    "XDG_DATA_HOME": str(self.home / "data"),
-                    "CODEX_HOME": str(self.home / ".codex"),
-                    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
-                    "GIT_TERMINAL_PROMPT": "0", "PYTHONDONTWRITEBYTECODE": "1"}
+        self.env = {
+            **os.environ,
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "LOCALAPPDATA": str(self.home / "AppData" / "Local"),
+            "AE_HOME": str(self.home / "ledger"),
+            "XDG_DATA_HOME": str(self.home / "data"),
+            "CODEX_HOME": str(self.home / ".codex"),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_TERMINAL_PROMPT": "0",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
         self.can_symlink = self._probe_symlink()
         self.git("init", "--bare", str(self.remote))
         self.repo.mkdir()
@@ -51,13 +59,15 @@ class SkillUpdateTests(unittest.TestCase):
         self.git("-C", str(self.repo), "config", "user.email", "test@example.invalid")
         shutil.copy2(ROOT / "ae.py", self.repo / "ae.py")
         (self.repo / ".gitignore").write_text("ignored-data.txt\n", encoding="utf-8")
-        shutil.copytree(ROOT / "skill" / SKILL, self.repo / "skill" / SKILL,
-                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"))
+        shutil.copytree(
+            ROOT / "skill" / SKILL,
+            self.repo / "skill" / SKILL,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
+        )
         self.git("-C", str(self.repo), "remote", "add", "origin", str(self.remote))
         self.publish("0.9.0")
         link_args = ("--link", "codex") if self.can_symlink else ()
-        installed = self.run_command(self.repo / "ae.py", "install", "--target", str(self.skills),
-                                     *link_args)
+        installed = self.run_command(self.repo / "ae.py", "install", "--target", str(self.skills), *link_args)
         self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
 
     def _probe_symlink(self) -> bool:
@@ -73,17 +83,20 @@ class SkillUpdateTests(unittest.TestCase):
         return True
 
     def git(self, *args):
-        return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", *args],
-                              env=self.env, capture_output=True, text=True, check=True)
+        return subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", *args], env=self.env, capture_output=True, text=True, check=True
+        )
 
     def run_command(self, script, *args):
-        return subprocess.run([sys.executable, str(script), *args], env=self.env,
-                              capture_output=True, text=True, timeout=45)
+        return subprocess.run(
+            [sys.executable, str(script), *args], env=self.env, capture_output=True, text=True, timeout=45
+        )
 
     def publish(self, version):
         serve = self.repo / "skill" / SKILL / "scripts" / "serve.py"
         content = serve.read_text(encoding="utf-8")
         import re
+
         content = re.sub(r'^VERSION = "[^"]+"', f'VERSION = "{version}"', content, flags=re.M)
         serve.write_text(content, encoding="utf-8")
         (self.repo / "skill" / SKILL / "release-marker.txt").write_text(version, encoding="utf-8")
@@ -112,15 +125,19 @@ class SkillUpdateTests(unittest.TestCase):
         link = self.home / ".codex" / "skills" / SKILL
         self.assertTrue(link.is_symlink())
         self.assertEqual(link.resolve(), self.copy.resolve())
-        self.assertEqual(json.loads(review.read_text(encoding="utf-8")),
-                         {"reviews": {"synthetic": "keep"}})
+        self.assertEqual(json.loads(review.read_text(encoding="utf-8")), {"reviews": {"synthetic": "keep"}})
         self.assertEqual(work.read_text(encoding="utf-8"), "unfinished work")
         self.assertEqual(self.git("-C", str(self.repo), "rev-parse", "HEAD").stdout, source_head)
         doctor = self.run_command(self.repo / "ae.py", "doctor", "--target", str(self.skills), "--json")
         checked = json.loads(doctor.stdout)["results"]
-        self.assertTrue(all(item["status"] == "pass" for item in checked
-                            if item["code"] in ("skill-copy-sync", "skill-copy-version", "skill-links")),
-                        doctor.stdout + doctor.stderr)
+        self.assertTrue(
+            all(
+                item["status"] == "pass"
+                for item in checked
+                if item["code"] in ("skill-copy-sync", "skill-copy-version", "skill-links")
+            ),
+            doctor.stdout + doctor.stderr,
+        )
 
     def test_check_reports_a_release_without_installing_it(self):
         self.publish("0.10.0")
@@ -136,9 +153,13 @@ class SkillUpdateTests(unittest.TestCase):
         entry = (self.copy / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn('python3 "$S/update.py" auto --locale LANG', entry)
         self.assertIn("reload this `SKILL.md`", entry)
-        result = subprocess.run(["sh", "-c", 'python3 "$S/update.py" auto --locale en'],
-                                env={**self.env, "S": str(self.copy / "scripts")},
-                                capture_output=True, text=True, timeout=45)
+        result = subprocess.run(
+            ["sh", "-c", 'python3 "$S/update.py" auto --locale en'],
+            env={**self.env, "S": str(self.copy / "scripts")},
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("0.10.0", result.stdout)
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.10.0")
@@ -249,20 +270,22 @@ class SkillUpdateTests(unittest.TestCase):
         site.mkdir()
         marker = self.root / "unexpected-sitecustomize"
         (site / "sitecustomize.py").write_text(
-            "import os, pathlib\npathlib.Path(os.environ['SITE_MARKER']).write_text('ran')\n")
+            "import os, pathlib\npathlib.Path(os.environ['SITE_MARKER']).write_text('ran')\n"
+        )
         env = {**self.env, "PYTHONPATH": str(site), "SITE_MARKER": str(marker)}
         script = str(self.copy / "scripts" / "notes.py")
         fallback = "import runpy, sys; sys.orig_argv = None; sys.argv = [sys.argv[1], '--help']; runpy.run_path(sys.argv[0], run_name='__main__')"
-        for command in ([sys.executable, "-I", script, "--help"],
-                        [sys.executable, "-I", "-c", fallback, script]):
+        for command in ([sys.executable, "-I", script, "--help"], [sys.executable, "-I", "-c", fallback, script]):
             with self.subTest(command=command[:3]):
-                result = subprocess.run(command, env=env, capture_output=True, text=True,
-                                        encoding="utf-8", errors="replace", timeout=45)
+                result = subprocess.run(
+                    command, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45
+                )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertFalse(marker.exists(), "restarting notes.py must preserve -I")
 
     def test_configure_stdio_reconfigures_text_streams_to_utf8(self):
         import io
+
         scripts_dir = str(self.copy / "scripts")
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)
@@ -271,15 +294,13 @@ class SkillUpdateTests(unittest.TestCase):
         out = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
         err = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
         string_stream = io.StringIO()
-        with mock.patch.object(sys, "stdout", out), \
-                mock.patch.object(sys, "stderr", err):
+        with mock.patch.object(sys, "stdout", out), mock.patch.object(sys, "stderr", err):
             fsutil.configure_stdio()
             print("中文输出", file=sys.stdout, flush=True)
             print("中文错误", file=sys.stderr, flush=True)
         self.assertEqual(out.encoding.lower(), "utf-8")
         self.assertEqual(err.encoding.lower(), "utf-8")
-        with mock.patch.object(sys, "stdout", string_stream), \
-                mock.patch.object(sys, "stderr", string_stream):
+        with mock.patch.object(sys, "stdout", string_stream), mock.patch.object(sys, "stderr", string_stream):
             fsutil.configure_stdio()
 
     @_POSIX_AUTO_UPDATE
@@ -294,8 +315,13 @@ def exchange(*_):
 update.exchange_directories = exchange
 sys.exit(update.main(['now', '--locale', 'en']))
 """
-        result = subprocess.run([sys.executable, "-c", runner, str(self.copy / "scripts")],
-                                env=self.env, capture_output=True, text=True, timeout=45)
+        result = subprocess.run(
+            [sys.executable, "-c", runner, str(self.copy / "scripts")],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("did not complete", result.stderr)
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.9.0")
@@ -315,8 +341,13 @@ def exchange_then_stop(*args):
 update.exchange_directories = exchange_then_stop
 sys.exit(update.main(['now', '--locale', 'en']))
 """
-        result = subprocess.run([sys.executable, "-c", runner, str(self.copy / "scripts")],
-                                env=self.env, capture_output=True, text=True, timeout=45)
+        result = subprocess.run(
+            [sys.executable, "-c", runner, str(self.copy / "scripts")],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
         self.assertEqual(result.returncode, -signal.SIGKILL, result.stdout + result.stderr)
         self.assertEqual((self.copy / "release-marker.txt").read_text(encoding="utf-8"), "0.10.0")
         self.assertTrue((self.home / ".codex" / "skills" / SKILL / "SKILL.md").is_file())
@@ -381,8 +412,13 @@ def exchange_with_edit(old, new):
 update.exchange_directories = exchange_with_edit
 sys.exit(update.main(['now', '--locale', 'en']))
 """
-        result = subprocess.run([sys.executable, "-c", runner, str(self.copy / "scripts")],
-                                env=self.env, capture_output=True, text=True, timeout=45)
+        result = subprocess.run(
+            [sys.executable, "-c", runner, str(self.copy / "scripts")],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("Updated annotation-everything", result.stdout)
         self.assertIn("changed while updating", result.stderr)
@@ -412,8 +448,13 @@ update.exchange_directories = exchange_then_mark
 update.content_manifest.snapshot = read_tree
 sys.exit(update.main(['now', '--locale', 'en']))
 """
-        result = subprocess.run([sys.executable, "-c", runner, str(self.copy / "scripts")],
-                                env=self.env, capture_output=True, text=True, timeout=45)
+        result = subprocess.run(
+            [sys.executable, "-c", runner, str(self.copy / "scripts")],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("Updated annotation-everything", result.stdout)
         self.assertIn("previous copy changed", result.stderr)
@@ -445,8 +486,12 @@ sys.exit(update.main(['now', '--locale', 'en']))
         original = script.read_bytes()
         marker = self.root / "legacy-ready"
         script.write_text("import pathlib, sys, time\npathlib.Path(sys.argv[1]).write_text('ready')\ntime.sleep(30)\n")
-        process = subprocess.Popen([sys.executable, str(script), str(marker)], env=self.env,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        process = subprocess.Popen(
+            [sys.executable, str(script), str(marker)],
+            env=self.env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         self.addCleanup(lambda: process.poll() is None and process.kill())
         deadline = time.monotonic() + 10
         while not marker.exists() and time.monotonic() < deadline:
@@ -469,9 +514,15 @@ sys.exit(update.main(['now', '--locale', 'en']))
         other.mkdir()
         marker = self.root / "unrelated-ready"
         (other / "serve.py").write_text(
-            "import pathlib, sys, time\npathlib.Path(sys.argv[1]).write_text('ready')\ntime.sleep(30)\n")
-        process = subprocess.Popen([sys.executable, "serve.py", str(marker)], cwd=other, env=self.env,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            "import pathlib, sys, time\npathlib.Path(sys.argv[1]).write_text('ready')\ntime.sleep(30)\n"
+        )
+        process = subprocess.Popen(
+            [sys.executable, "serve.py", str(marker)],
+            cwd=other,
+            env=self.env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         self.addCleanup(lambda: process.poll() is None and process.kill())
         deadline = time.monotonic() + 10
         while not marker.exists() and time.monotonic() < deadline:
@@ -508,14 +559,17 @@ sys.exit(update.main(['now', '--locale', 'en']))
         review = self.root / "review"
         review.mkdir()
         (review / "index.html").write_text("<title>Synthetic</title>", encoding="utf-8")
-        (review / "review.json").write_text('{}', encoding="utf-8")  # 无标识：不会登记到台账
+        (review / "review.json").write_text("{}", encoding="utf-8")  # 无标识：不会登记到台账
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
         server_env = {**self.env, "AE_HOME": str(self.home / "other-ledger")}
-        server = subprocess.Popen([sys.executable, str(self.copy / "scripts" / "serve.py"), str(review),
-                                   "--port", str(port), "--no-open"], env=server_env,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        server = subprocess.Popen(
+            [sys.executable, str(self.copy / "scripts" / "serve.py"), str(review), "--port", str(port), "--no-open"],
+            env=server_env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         self.addCleanup(lambda: server.poll() is None and server.kill())
         deadline = time.monotonic() + 10
         while not (review / ".annotation-server.json").exists() and time.monotonic() < deadline:
@@ -541,9 +595,12 @@ sys.exit(update.main(['now', '--locale', 'en']))
         review.mkdir()
         (review / "review.json").write_text('{"reviewId":"0123456789abcdef"}', encoding="utf-8")
         wait_env = {**self.env, "AE_HOME": str(self.home / "other-ledger")}
-        waiter = subprocess.Popen([sys.executable, str(self.copy / "scripts" / "notes.py"), "wait", str(review),
-                                   "--timeout", "30"], env=wait_env,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        waiter = subprocess.Popen(
+            [sys.executable, str(self.copy / "scripts" / "notes.py"), "wait", str(review), "--timeout", "30"],
+            env=wait_env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         self.addCleanup(lambda: waiter.poll() is None and waiter.kill())
         deadline = time.monotonic() + 10
         while not list(review.glob(".annotation-wait.*.json")) and time.monotonic() < deadline:
@@ -567,7 +624,7 @@ sys.exit(update.main(['now', '--locale', 'en']))
         review = self.root / "review-during-update"
         review.mkdir()
         (review / "index.html").write_text("<title>Synthetic</title>", encoding="utf-8")
-        (review / "review.json").write_text('{}', encoding="utf-8")
+        (review / "review.json").write_text("{}", encoding="utf-8")
         update_runner = """
 import sys, time
 from pathlib import Path
@@ -583,9 +640,13 @@ def delayed_exchange(*args):
 update.exchange_directories = delayed_exchange
 sys.exit(update.main(['now', '--locale', 'en']))
 """
-        updater = subprocess.Popen([sys.executable, "-c", update_runner, str(self.copy / "scripts"),
-                                    str(ready), str(resume)], env=self.env,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        updater = subprocess.Popen(
+            [sys.executable, "-c", update_runner, str(self.copy / "scripts"), str(ready), str(resume)],
+            env=self.env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         self.addCleanup(lambda: updater.poll() is None and updater.kill())
         deadline = time.monotonic() + 10
         while not ready.exists() and time.monotonic() < deadline:
@@ -601,9 +662,13 @@ import serve
 Path(sys.argv[2]).write_text('ready')
 sys.exit(serve.serve(Path(sys.argv[3]), None, False, False, locale='en'))
 """
-        server = subprocess.Popen([sys.executable, "-c", serve_runner, str(self.copy / "scripts"),
-                                   str(server_ready), str(review)], env={**self.env, "AE_HOME": str(self.root / "other-home")},
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        server = subprocess.Popen(
+            [sys.executable, "-c", serve_runner, str(self.copy / "scripts"), str(server_ready), str(review)],
+            env={**self.env, "AE_HOME": str(self.root / "other-home")},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         self.addCleanup(lambda: server.poll() is None and server.kill())
         deadline = time.monotonic() + 10
         while not server_ready.exists() and time.monotonic() < deadline:
@@ -622,9 +687,10 @@ sys.exit(serve.serve(Path(sys.argv[3]), None, False, False, locale='en'))
     def test_notes_started_during_exchange_reloads_the_new_code(self):
         notes_source = self.repo / "skill" / SKILL / "scripts" / "notes.py"
         source = notes_source.read_text(encoding="utf-8")
-        notes_source.write_text(source.replace("def main(argv:",
-                                              "print('NEW-NOTES-CODE-LOADED', file=sys.stderr)\ndef main(argv:", 1),
-                                encoding="utf-8")
+        notes_source.write_text(
+            source.replace("def main(argv:", "print('NEW-NOTES-CODE-LOADED', file=sys.stderr)\ndef main(argv:", 1),
+            encoding="utf-8",
+        )
         self.publish("0.10.0")
         exchange_ready = self.root / "notes-exchange-ready"
         exchange_resume = self.root / "notes-exchange-resume"
@@ -644,9 +710,13 @@ def delayed_exchange(*args):
 update.exchange_directories = delayed_exchange
 sys.exit(update.main(['now', '--locale', 'en']))
 """
-        updater = subprocess.Popen([sys.executable, "-c", updater_code, str(self.copy / "scripts"),
-                                    str(exchange_ready), str(exchange_resume)], env=self.env,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        updater = subprocess.Popen(
+            [sys.executable, "-c", updater_code, str(self.copy / "scripts"), str(exchange_ready), str(exchange_resume)],
+            env=self.env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         self.addCleanup(lambda: updater.poll() is None and updater.kill())
         deadline = time.monotonic() + 10
         while not exchange_ready.exists() and time.monotonic() < deadline:
@@ -663,9 +733,13 @@ Path(ready).write_text('compiled')
 sys.argv = [script, '--help']
 exec(code, {'__name__': '__main__', '__file__': script})
 """
-        notes = subprocess.Popen([sys.executable, "-c", notes_code, str(self.copy / "scripts" / "notes.py"),
-                                  str(compiled)], env=self.env,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        notes = subprocess.Popen(
+            [sys.executable, "-c", notes_code, str(self.copy / "scripts" / "notes.py"), str(compiled)],
+            env=self.env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         self.addCleanup(lambda: notes.poll() is None and notes.kill())
         deadline = time.monotonic() + 10
         while not compiled.exists() and time.monotonic() < deadline:
@@ -690,11 +764,13 @@ exec(code, {'__name__': '__main__', '__file__': script})
         (review / "review.json").write_text(json.dumps({"app": SKILL, "reviewId": "a" * 16}), encoding="utf-8")
         ledger_file = self.home / "ledger" / "reviews.json"
         ledger_file.parent.mkdir(parents=True, exist_ok=True)
-        ledger_file.write_text(json.dumps({"version": 1, "reviews": {
-            "a" * 16: {"dir": str(review), "port": 8765}}}), encoding="utf-8")
-        (review / ".annotation-server.json").write_text(json.dumps(
-            {"app": SKILL, "version": "0.9.0", "pid": os.getpid(), "port": 8765, "dir": str(review)}),
-            encoding="utf-8")
+        ledger_file.write_text(
+            json.dumps({"version": 1, "reviews": {"a" * 16: {"dir": str(review), "port": 8765}}}), encoding="utf-8"
+        )
+        (review / ".annotation-server.json").write_text(
+            json.dumps({"app": SKILL, "version": "0.9.0", "pid": os.getpid(), "port": 8765, "dir": str(review)}),
+            encoding="utf-8",
+        )
         result = self.run_command(self.copy / "scripts" / "update.py", "now", "--locale", "en")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("review server or annotation process is running", result.stderr)
@@ -703,11 +779,16 @@ exec(code, {'__name__': '__main__', '__file__': script})
     @_POSIX_AUTO_UPDATE
     def test_cache_lock_reports_busy_and_auto_stays_silent(self):
         # 更新器按解析后的副本路径算缓存目录，测试也要用解析后的路径才算到同一把锁
-        cache = (Path(self.env["XDG_DATA_HOME"]) / SKILL / "updates"
-                 / hashlib.sha256(os.fsencode(str(self.copy.resolve()))).hexdigest()[:24])
+        cache = (
+            Path(self.env["XDG_DATA_HOME"])
+            / SKILL
+            / "updates"
+            / hashlib.sha256(os.fsencode(str(self.copy.resolve()))).hexdigest()[:24]
+        )
         cache.mkdir(parents=True, exist_ok=True)
         sys.path.insert(0, str(self.copy / "scripts"))
         import fsutil
+
         with fsutil.flocked(cache / "lock", exclusive=True):
             busy = self.run_command(self.copy / "scripts" / "update.py", "now", "--locale", "en")
             self.assertEqual(busy.returncode, 0, busy.stdout + busy.stderr)
@@ -738,14 +819,17 @@ exec(code, {'__name__': '__main__', '__file__': script})
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)
         import update
+
         return update
 
     def test_windows_update_storage_uses_localappdata_when_xdg_unset(self):
         update = self._import_repo_update()
 
         local_app = self.home / "AppData" / "Local"
-        with mock.patch.object(update.fsutil, "is_windows", return_value=True), \
-                mock.patch.dict(os.environ, {"LOCALAPPDATA": str(local_app)}, clear=False):
+        with (
+            mock.patch.object(update.fsutil, "is_windows", return_value=True),
+            mock.patch.dict(os.environ, {"LOCALAPPDATA": str(local_app)}, clear=False),
+        ):
             os.environ.pop("XDG_DATA_HOME", None)
             path = update.update_storage(self.copy)
         self.assertTrue(path.is_relative_to(local_app.resolve()), path)
@@ -755,14 +839,20 @@ exec(code, {'__name__': '__main__', '__file__': script})
 
         record = json.loads((self.copy / ".install-record.json").read_text(encoding="utf-8"))
         serve_path = self.copy / "scripts" / "serve.py"
-        with mock.patch.object(update.fsutil, "is_windows", return_value=True), \
-                mock.patch.object(update, "_list_processes",
-                                  return_value=[(101, ""), (202, f'python.exe "{serve_path}" "r"')]):
+        with (
+            mock.patch.object(update.fsutil, "is_windows", return_value=True),
+            mock.patch.object(
+                update, "_list_processes", return_value=[(101, ""), (202, f'python.exe "{serve_path}" "r"')]
+            ),
+        ):
             self.assertTrue(update.has_legacy_process(self.copy, record))
 
-        with mock.patch.object(update.fsutil, "is_windows", return_value=True), \
-                mock.patch.object(update, "_list_processes",
-                                  side_effect=update.UpdateError("cli.update.cannotVerifyServices")):
+        with (
+            mock.patch.object(update.fsutil, "is_windows", return_value=True),
+            mock.patch.object(
+                update, "_list_processes", side_effect=update.UpdateError("cli.update.cannotVerifyServices")
+            ),
+        ):
             with self.assertRaises(update.UpdateError) as caught:
                 update.has_legacy_process(self.copy, record)
             self.assertEqual(caught.exception.key, "cli.update.cannotVerifyServices")
@@ -785,8 +875,13 @@ exec(code, {'__name__': '__main__', '__file__': script})
             "with unittest.mock.patch.object(update.fsutil, 'is_windows', return_value=True):\n"
             "    sys.exit(update.main(['check', '--locale', 'en']))\n"
         )
-        result = subprocess.run([sys.executable, "-c", runner, str(self.copy / "scripts")],
-                                env=self.env, capture_output=True, text=True, timeout=45)
+        result = subprocess.run(
+            [sys.executable, "-c", runner, str(self.copy / "scripts")],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("0.10.0", result.stdout)
         self.assertIn("ae.py upgrade", result.stdout)

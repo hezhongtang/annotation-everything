@@ -1,4 +1,5 @@
 """ae.py 检查项函数的测试：直接导入，构造状态，断言返回记录的级别与修复命令。"""
+
 from __future__ import annotations
 
 import json
@@ -34,8 +35,13 @@ class CheckFunctionTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.repo = make_repo(self.root / "repo")
         self.copy = self.root / "skills" / "annotation-everything"
-        self.record = {"repo": str(self.repo), "commit": "0" * 40, "version": "9.9.9",
-                       "installed_at": "2026-10-29T00:00:00+08:00", "links": []}
+        self.record = {
+            "repo": str(self.repo),
+            "commit": "0" * 40,
+            "version": "9.9.9",
+            "installed_at": "2026-10-29T00:00:00+08:00",
+            "links": [],
+        }
 
     def install_copy(self):
         ae.copy_skill(self.repo / "skill" / "annotation-everything", self.copy)
@@ -120,7 +126,8 @@ class CheckFunctionTests(unittest.TestCase):
         result = ae.check_python(self.ctx())
         self.assertEqual(
             {f.name for f in __import__("dataclasses").fields(result)},
-            {"code", "category", "level", "message", "fix_command"})
+            {"code", "category", "level", "message", "fix_command"},
+        )
 
 
 class OverviewHomeDoctorTests(unittest.TestCase):
@@ -136,13 +143,21 @@ class OverviewHomeDoctorTests(unittest.TestCase):
         self.home_line = f"python3 {self.serve} overview --no-open"
 
     def ctx(self, lister):
-        return ae.DoctorContext(skill_copy=Path(self.temp.name) / "copy", repo=None, record=None,
-                                ledger_home=self.ae_home, process_lister=lister,
-                                port_probe=lambda port: None)
+        return ae.DoctorContext(
+            skill_copy=Path(self.temp.name) / "copy",
+            repo=None,
+            record=None,
+            ledger_home=self.ae_home,
+            process_lister=lister,
+            port_probe=lambda port: None,
+        )
 
     def test_find_orphan_servers_skips_overview_home(self):
-        self.assertEqual(ae.find_orphan_servers({}, lambda: [(99, self.home_line)], probe=lambda port: None), [],
-                         "总览首页不是孤儿审阅，孤儿修复也不该碰它")
+        self.assertEqual(
+            ae.find_orphan_servers({}, lambda: [(99, self.home_line)], probe=lambda port: None),
+            [],
+            "总览首页不是孤儿审阅，孤儿修复也不该碰它",
+        )
 
     def test_check_orphan_servers_skips_overview_home_in_count(self):
         result = ae.check_orphan_servers(self.ctx(lambda: [(99, self.home_line)]))

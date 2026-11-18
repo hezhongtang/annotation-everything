@@ -1,4 +1,5 @@
 """运行时脚本的公共小工具：原子写入、文件锁、CSP 脚本哈希。只依赖标准库，不导入本目录的其他模块。"""
+
 from __future__ import annotations
 
 import base64
@@ -96,14 +97,21 @@ def _win_lock_api():
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     lock_ex = kernel32.LockFileEx
     lock_ex.argtypes = [
-        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
-        wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(_Overlapped),
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(_Overlapped),
     ]
     lock_ex.restype = wintypes.BOOL
     unlock_ex = kernel32.UnlockFileEx
     unlock_ex.argtypes = [
-        wintypes.HANDLE, wintypes.DWORD,
-        wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(_Overlapped),
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(_Overlapped),
     ]
     unlock_ex.restype = wintypes.BOOL
     return ctypes, lock_ex, unlock_ex, _Overlapped
@@ -124,6 +132,7 @@ def lock_fd(fd: int, *, exclusive: bool = False, nonblocking: bool = False) -> N
         return
     if os.name == "nt":
         import msvcrt
+
         ctypes, lock_ex, _unlock_ex, overlapped_cls = _win_lock_api()
         handle = msvcrt.get_osfhandle(fd)
         flags = (_WIN_LOCKFILE_EXCLUSIVE_LOCK if exclusive else 0) | (
@@ -146,6 +155,7 @@ def unlock_fd(fd: int) -> None:
         return
     if os.name == "nt":
         import msvcrt
+
         ctypes, _lock_ex, unlock_ex, overlapped_cls = _win_lock_api()
         handle = msvcrt.get_osfhandle(fd)
         ov = _win_overlapped(overlapped_cls)
@@ -278,9 +288,15 @@ def check_private_regular_file(
 
 
 @contextlib.contextmanager
-def flocked(path: Path, *, exclusive: bool = False, nonblocking: bool = False,
-            nofollow: bool = False, deadline: float | None = None,
-            dir_fd: int | None = None) -> Iterator[int]:
+def flocked(
+    path: Path,
+    *,
+    exclusive: bool = False,
+    nonblocking: bool = False,
+    nofollow: bool = False,
+    deadline: float | None = None,
+    dir_fd: int | None = None,
+) -> Iterator[int]:
     """打开锁文件、按模式加锁、退出时解锁：文件锁只有一个实现，各处只差显式参数。
 
     exclusive：独占（LOCK_EX）还是共享（LOCK_SH）；nonblocking：拿不到锁立刻抛
@@ -325,7 +341,7 @@ def flocked(path: Path, *, exclusive: bool = False, nonblocking: bool = False,
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise
-                    time.sleep(min(.02, remaining))
+                    time.sleep(min(0.02, remaining))
         try:
             yield fh.fileno()
         finally:
@@ -438,8 +454,10 @@ def script_hashes(html_text: str) -> str:
     两个出口各有一条自己的策略串（响应头版带 frame-ancestors 与无脚本时的兜底，meta 版都没有），
     但哈希算法、匹配的正则与 base64 编码只在这里算一次。
     """
-    return " ".join("'sha256-" + base64.b64encode(hashlib.sha256(s.encode("utf-8")).digest()).decode() + "'"
-                    for s in INLINE_SCRIPT.findall(html_text))
+    return " ".join(
+        "'sha256-" + base64.b64encode(hashlib.sha256(s.encode("utf-8")).digest()).decode() + "'"
+        for s in INLINE_SCRIPT.findall(html_text)
+    )
 
 
 def configure_stdio() -> None:

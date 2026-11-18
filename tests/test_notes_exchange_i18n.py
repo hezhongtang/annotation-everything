@@ -1,4 +1,5 @@
 """导入导出 CLI 的双语交付：参数、反馈、错误与原始数据分别保持契约。"""
+
 from __future__ import annotations
 
 import json
@@ -20,17 +21,36 @@ class NotesExchangeLanguageTests(unittest.TestCase):
         self.root = Path(temp.name)
         self.review = self.root / "review"
         self.env = {**os.environ, "AE_HOME": str(self.root / "ledger"), "AE_LOCALE": "zh-CN"}
-        built = subprocess.run([sys.executable, str(SCRIPTS / "build_viewer.py"), "--report",
-                                str(ROOT / "fixtures" / "sample" / "report.html"), "--out", str(self.review),
-                                "--no-scan-skills"], env=self.env, capture_output=True, text=True, timeout=30)
+        built = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "build_viewer.py"),
+                "--report",
+                str(ROOT / "fixtures" / "sample" / "report.html"),
+                "--out",
+                str(self.review),
+                "--no-scan-skills",
+            ],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
         self.assertEqual(built.returncode, 0, built.stderr)
         self.input = self.root / "notes.json"
-        self.input.write_text(json.dumps({"notes": [{"id": "example", "page": 1, "target": "报告",
-                                                     "text": "原文 <tag> {count}"}]}), encoding="utf-8")
+        self.input.write_text(
+            json.dumps({"notes": [{"id": "example", "page": 1, "target": "报告", "text": "原文 <tag> {count}"}]}),
+            encoding="utf-8",
+        )
 
     def run_cli(self, *args):
-        return subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), *map(str, args)],
-                              env=self.env, capture_output=True, text=True, timeout=30)
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "notes.py"), *map(str, args)],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
     def test_english_import_feedback_keeps_original_protocol(self):
         result = self.run_cli("import", self.review, self.input, "--locale", "en")
@@ -48,10 +68,24 @@ class NotesExchangeLanguageTests(unittest.TestCase):
 
     def test_english_show_explains_a_missing_source_without_changing_notes(self):
         source = self.root / "temporary-report.html"
-        source.write_text((ROOT / "fixtures" / "sample" / "report.en.html").read_text(encoding="utf-8"), encoding="utf-8")
-        built = subprocess.run([sys.executable, str(SCRIPTS / "build_viewer.py"), "--report", str(source),
-                                "--out", str(self.review), "--no-scan-skills"], env=self.env,
-                               capture_output=True, text=True, timeout=30)
+        source.write_text(
+            (ROOT / "fixtures" / "sample" / "report.en.html").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        built = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "build_viewer.py"),
+                "--report",
+                str(source),
+                "--out",
+                str(self.review),
+                "--no-scan-skills",
+            ],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
         self.assertEqual(built.returncode, 0, built.stderr)
         self.assertEqual(self.run_cli("import", self.review, self.input).returncode, 0)
         source.unlink()
@@ -96,14 +130,21 @@ class NotesExchangeLanguageTests(unittest.TestCase):
     def test_english_generation_localizes_results_help_and_asset_warnings(self):
         report = self.root / "english.html"
         text = (ROOT / "fixtures" / "sample" / "report.en.html").read_text(encoding="utf-8")
-        report.write_text(text.replace("<h2>Agenda</h2>",
-                          '<h2>Agenda</h2><img src="https://example.invalid/demo.png">'), encoding="utf-8")
+        report.write_text(
+            text.replace("<h2>Agenda</h2>", '<h2>Agenda</h2><img src="https://example.invalid/demo.png">'),
+            encoding="utf-8",
+        )
         command = [sys.executable, str(SCRIPTS / "build_viewer.py"), "--locale", "en"]
         help_result = subprocess.run([*command, "--help"], env=self.env, capture_output=True, text=True, timeout=30)
         self.assertEqual(help_result.returncode, 0)
         self.assertNotRegex(help_result.stdout, r"[一-鿿]")
-        result = subprocess.run([*command, "--report", str(report), "--out", str(self.root / "english-review"),
-                                 "--no-scan-skills"], env=self.env, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            [*command, "--report", str(report), "--out", str(self.root / "english-review"), "--no-scan-skills"],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("pages: 6", result.stdout)
         self.assertIn("example.invalid", result.stderr)

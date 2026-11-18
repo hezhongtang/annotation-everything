@@ -6,6 +6,7 @@ build_viewer 的样式管道并生成可通过 report_check 核验的报告。
 
 只用标准库与内联合成数据：python3 -m unittest discover tests
 """
+
 from __future__ import annotations
 
 import json
@@ -46,8 +47,9 @@ def installed_copy() -> Path:
     home = Path(temp) / "home"
     skills = home / ".claude" / "skills"
     env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
-    done = subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"], env=env,
-                          capture_output=True, text=True, timeout=120)
+    done = subprocess.run(
+        [sys.executable, str(ROOT / "ae.py"), "install"], env=env, capture_output=True, text=True, timeout=120
+    )
     assert done.returncode == 0, done.stdout + done.stderr
     _installed.append(skills / "annotation-everything")
     return _installed[0]
@@ -74,6 +76,7 @@ class BaseCssTests(unittest.TestCase):
 
     def test_css_survives_shadow_pipeline(self):
         import build_viewer
+
         out = build_viewer.shadow_css(self.repo_text)
         self.assertTrue(out.strip(), "shadow_css 输出非空")
         self.assertNotIn(":root", out, ":root 已改写为 :host")
@@ -82,25 +85,50 @@ class BaseCssTests(unittest.TestCase):
     def test_css_minimal_report_builds_and_checks(self):
         """用基础样式内联的最小合成报告：可生成对照页，也可通过核验入口。"""
         import build_viewer
-        report = ('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
-                  '<title>样式冒烟</title><style>' + self.repo_text + '</style></head><body>'
-                  '<section class="page" data-page="1" data-key="smoke" id="page-smoke">'
-                  '<h1>样式冒烟</h1><p class="ae-kpi">+3%</p></section></body></html>')
+
+        report = (
+            '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+            "<title>样式冒烟</title><style>" + self.repo_text + "</style></head><body>"
+            '<section class="page" data-page="1" data-key="smoke" id="page-smoke">'
+            '<h1>样式冒烟</h1><p class="ae-kpi">+3%</p></section></body></html>'
+        )
         doc = build_viewer.build.__doc__  # noqa: F841  build 在下面的 CLI 冒烟用
         with tempfile.TemporaryDirectory() as td:
             src = Path(td) / "report.html"
             out = Path(td) / "review"
             src.write_text(report, encoding="utf-8")
             done = subprocess.run(
-                [sys.executable, str(SCRIPTS / "build_viewer.py"), "--report", str(src),
-                 "--out", str(out), "--name", "样式冒烟", "--no-scan-skills"],
-                capture_output=True, text=True, timeout=60,
-                env={**os.environ, "AE_HOME": str(Path(td) / "ledger")})
+                [
+                    sys.executable,
+                    str(SCRIPTS / "build_viewer.py"),
+                    "--report",
+                    str(src),
+                    "--out",
+                    str(out),
+                    "--name",
+                    "样式冒烟",
+                    "--no-scan-skills",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env={**os.environ, "AE_HOME": str(Path(td) / "ledger")},
+            )
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
             self.assertTrue((out / "index.html").is_file())
-            record = {"schema": "ae-report-record/1", "generatedAt": "2026-11-02T00:00:00+08:00",
-                      "request": {}, "sources": [], "method": {}, "links": {}, "findings": [],
-                      "gaps": [], "checks": [], "openItems": [], "verdict": {}}
+            record = {
+                "schema": "ae-report-record/1",
+                "generatedAt": "2026-11-02T00:00:00+08:00",
+                "request": {},
+                "sources": [],
+                "method": {},
+                "links": {},
+                "findings": [],
+                "gaps": [],
+                "checks": [],
+                "openItems": [],
+                "verdict": {},
+            }
             self.assertIn("schema", record)  # 冒烟里不落记录：核验只针对报告本身
             result = rc.check_report(src, None, None, locale="zh-CN")
             self.assertTrue(result["verdict"]["draftComplete"])
@@ -110,11 +138,11 @@ class GenerationGuideTests(unittest.TestCase):
     """中英生成指引随安装发布，锚点与实现一致。"""
 
     REQUIRED_ANCHORS = (
-        "report_check.py",          # 公开核验入口
-        "ae-report-record/1",       # 核验记录 schema
-        "report-base.css",          # 基础样式
-        "data-key",                 # 稳定页面标识
-        "ae-report-check/1",        # 结构化核验结果 schema
+        "report_check.py",  # 公开核验入口
+        "ae-report-record/1",  # 核验记录 schema
+        "report-base.css",  # 基础样式
+        "data-key",  # 稳定页面标识
+        "ae-report-check/1",  # 结构化核验结果 schema
     )
 
     @classmethod
@@ -142,12 +170,12 @@ class GenerationGuideTests(unittest.TestCase):
     def test_record_fields_match_implementation(self):
         """指引里的记录字段列表与 report_check 的必需字段一致，防止文档漂移。"""
         from report_check import REQUIRED_RECORD_FIELDS
+
         for text, label in ((self.zh, "中文"), (self.en, "英文")):
             block = re.search(r"```[a-z]*\n([^`]*\"schema\"[^`]*)```", text)
             self.assertIsNotNone(block, f"{label}指引里有记录字段示例")
             for field in REQUIRED_RECORD_FIELDS:
-                self.assertIn(f'"{field}"', block.group(1),
-                              f"{label}指引的记录示例缺字段 {field}")
+                self.assertIn(f'"{field}"', block.group(1), f"{label}指引的记录示例缺字段 {field}")
 
     def test_guides_state_clarification_and_boundary(self):
         """指引写明需求澄清边界与判定边界：只补缺项、初稿不等于可交付。"""
@@ -171,14 +199,14 @@ class GenerationPptxGuideTests(unittest.TestCase):
     """中英 PPTX 额外交付指引随安装发布，锚点与实现一致（issue #180）。"""
 
     REQUIRED_ANCHORS = (
-        "pptx_build.py",        # 内置制作器
-        "pptx_check.py",        # 文件层检查
-        "pptx_render.py",       # 渲染辅助
-        "ae-pptx-deck/1",       # deck 规格 schema
-        "ae-pptx-check/1",      # 文件检查结果 schema
-        "ae-pptx-render/1",     # 渲染清单 schema
-        "deliverables",         # 记录扩展字段
-        "AE_SOFFICE",           # 渲染工具探测覆盖
+        "pptx_build.py",  # 内置制作器
+        "pptx_check.py",  # 文件层检查
+        "pptx_render.py",  # 渲染辅助
+        "ae-pptx-deck/1",  # deck 规格 schema
+        "ae-pptx-check/1",  # 文件检查结果 schema
+        "ae-pptx-render/1",  # 渲染清单 schema
+        "deliverables",  # 记录扩展字段
+        "AE_SOFFICE",  # 渲染工具探测覆盖
         "AE_PDFTOPPM",
     )
     REFERENCED_SCRIPTS = ("pptx_build.py", "pptx_check.py", "pptx_render.py")
@@ -207,14 +235,14 @@ class GenerationPptxGuideTests(unittest.TestCase):
 
     def test_deck_schema_matches_builder(self):
         import pptx_build
+
         for text, label in ((self.zh, "中文"), (self.en, "英文")):
             self.assertIn(pptx_build.DECK_SCHEMA, text, f"{label}指引写明 deck 规格 schema")
             self.assertIn(pptx_build.BUILD_SCHEMA, text, f"{label}指引写明构建摘要 schema")
 
     def test_referenced_scripts_ship_with_install(self):
         for name in self.REFERENCED_SCRIPTS:
-            self.assertTrue((self.copy / "scripts" / name).is_file(),
-                            f"安装副本缺 {name}")
+            self.assertTrue((self.copy / "scripts" / name).is_file(), f"安装副本缺 {name}")
             self.assertTrue((SCRIPTS / name).is_file(), f"仓库技能缺 {name}")
 
     def test_skill_entry_links_the_guide(self):
@@ -234,10 +262,8 @@ class RoutingEntryTests(unittest.TestCase):
     def test_discovery_cases_cover_generation_routing(self):
         cases = json.loads((SKILL_SRC / "evals" / "discovery-cases.json").read_text(encoding="utf-8"))
         actions = {(c.get("action"), c.get("workflow")) for c in cases["cases"]}
-        self.assertIn(("generate-from-material", "references/generation.zh-CN.md"), actions,
-                      "中文生成路由用例")
-        self.assertIn(("generate-from-material", "references/generation.en.md"), actions,
-                      "英文生成路由用例")
+        self.assertIn(("generate-from-material", "references/generation.zh-CN.md"), actions, "中文生成路由用例")
+        self.assertIn(("generate-from-material", "references/generation.en.md"), actions, "英文生成路由用例")
         # 既有路由用例不回退
         self.assertIn(("generate", "references/workflow.zh-CN.md"), actions)
         # PPTX 额外交付路由（issue #180）

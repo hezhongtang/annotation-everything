@@ -5,6 +5,7 @@
 最后观察到的状态）、错误不被重试掩盖、事件驱动等待把超时上限传给页面 API。
 真实浏览器里的等待行为只在 tests/e2e_browser.py 端到端层验证。
 """
+
 from __future__ import annotations
 
 import ast
@@ -44,8 +45,8 @@ class StubPage:
     def __init__(self, fail_after=None, error=None, timeout_error=StubTimeout):
         self.calls = []
         self.state_checks = 0
-        self.fail_after = fail_after          # 前 N 次超时，之后成功；None 表示一直超时
-        self.error = error                    # 非 None 时每次调用抛这个异常
+        self.fail_after = fail_after  # 前 N 次超时，之后成功；None 表示一直超时
+        self.error = error  # 非 None 时每次调用抛这个异常
         self.timeout_error = timeout_error
 
     def wait_for_function(self, expression, arg=None, timeout=None):
@@ -95,7 +96,7 @@ class BoundedPollTests(unittest.TestCase):
 
         self.assertTrue(e2e_waits.bounded_poll(probe, 5, clock=clock.monotonic, sleeper=clock.sleep))
         self.assertEqual(len(probes), 1)
-        self.assertEqual(clock.now, 100.0)   # 没有任何固定等待
+        self.assertEqual(clock.now, 100.0)  # 没有任何固定等待
 
     def test_returns_the_probe_truthy_value_not_just_true(self):
         clock = FakeClock()
@@ -115,8 +116,7 @@ class BoundedPollTests(unittest.TestCase):
             return False
 
         with capture_output():
-            result = e2e_waits.bounded_poll(probe, 0.2, step=0.05,
-                                            clock=clock.monotonic, sleeper=clock.sleep)
+            result = e2e_waits.bounded_poll(probe, 0.2, step=0.05, clock=clock.monotonic, sleeper=clock.sleep)
         self.assertFalse(result)
         self.assertGreaterEqual(clock.now - 100.0, 0.2, "没等满上限就放弃")
         self.assertLess(clock.now - 100.0, 0.2 + 0.05 * 2, "超出上限后还在轮询")
@@ -129,9 +129,14 @@ class BoundedPollTests(unittest.TestCase):
             return False
 
         with capture_output() as out:
-            e2e_waits.bounded_poll(probe, 0.1, clock=clock.monotonic, sleeper=clock.sleep,
-                                   condition="合成状态变为绿色",
-                                   describe=lambda: "mode=offline; nlist=空")
+            e2e_waits.bounded_poll(
+                probe,
+                0.1,
+                clock=clock.monotonic,
+                sleeper=clock.sleep,
+                condition="合成状态变为绿色",
+                describe=lambda: "mode=offline; nlist=空",
+            )
         text = out.getvalue()
         self.assertIn("unit-scenario", text, "诊断没有包含场景 ID")
         self.assertIn("合成状态变为绿色", text, "诊断没有包含等待条件")
@@ -144,8 +149,9 @@ class BoundedPollTests(unittest.TestCase):
             return False
 
         with capture_output() as out:
-            result = e2e_waits.bounded_poll(probe, 0.1, clock=clock.monotonic, sleeper=clock.sleep,
-                                            condition="条件", describe=lambda: 1 / 0)
+            result = e2e_waits.bounded_poll(
+                probe, 0.1, clock=clock.monotonic, sleeper=clock.sleep, condition="条件", describe=lambda: 1 / 0
+            )
         self.assertFalse(result)
         self.assertIn("条件", out.getvalue())
 
@@ -182,9 +188,9 @@ class WaitDomTests(unittest.TestCase):
     def test_returns_false_with_diagnostic_when_the_page_times_out(self):
         page = StubPage()
         with capture_output() as out:
-            result = e2e_waits.wait_dom(page, "() => rev !== b", 2,
-                                        condition="页面应用新的服务端修订",
-                                        describe=lambda: "mode=server; rev=7")
+            result = e2e_waits.wait_dom(
+                page, "() => rev !== b", 2, condition="页面应用新的服务端修订", describe=lambda: "mode=server; rev=7"
+            )
         self.assertFalse(result)
         text = out.getvalue()
         self.assertIn("unit-scenario", text)
@@ -197,7 +203,7 @@ class WaitDomTests(unittest.TestCase):
             e2e_waits.wait_dom(page, "() => oops", 1)
 
     def test_unregistered_timeout_errors_propagate_instead_of_passing(self):
-        e2e_waits.register_timeout_errors()   # 清空注册：未注册的超时不能被当成成功
+        e2e_waits.register_timeout_errors()  # 清空注册：未注册的超时不能被当成成功
         page = StubPage()
         with self.assertRaises(StubTimeout):
             e2e_waits.wait_dom(page, "() => x", 1)
@@ -267,10 +273,10 @@ class InvariantEvidenceTests(unittest.TestCase):
 
     def run_selection_step(self, poll_applied):
         source = ast.parse((TESTS / "e2e_browser.py").read_text(encoding="utf-8"))
-        scenario = next(node for node in source.body
-                        if isinstance(node, ast.FunctionDef) and node.name == "skill_search_checks")
-        exercise = next(node for node in scenario.body
-                        if isinstance(node, ast.FunctionDef) and node.name == "exercise")
+        scenario = next(
+            node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "skill_search_checks"
+        )
+        exercise = next(node for node in scenario.body if isinstance(node, ast.FunctionDef) and node.name == "exercise")
         observations = []
 
         class ReachedSelection(Exception):
@@ -286,10 +292,15 @@ class InvariantEvidenceTests(unittest.TestCase):
         options.locator.return_value.count.return_value = 0
         options.filter.return_value.count.return_value = 1
         page.input_value.side_effect = ["chart", "writer"]
-        namespace = {"ok": record, "wait_dom": mock.Mock(return_value=poll_applied),
-                     "wait_poll": mock.Mock(return_value=poll_applied),
-                     "subprocess": mock.Mock(), "sys": sys, "SCRIPTS": Path("synthetic-scripts"),
-                     "d": Path("synthetic-review")}
+        namespace = {
+            "ok": record,
+            "wait_dom": mock.Mock(return_value=poll_applied),
+            "wait_poll": mock.Mock(return_value=poll_applied),
+            "subprocess": mock.Mock(),
+            "sys": sys,
+            "SCRIPTS": Path("synthetic-scripts"),
+            "d": Path("synthetic-review"),
+        }
         exec(compile(ast.Module(body=[exercise], type_ignores=[]), "<isolated-skill-search>", "exec"), namespace)
         with self.assertRaises(ReachedSelection):
             namespace["exercise"](page, "服务模式")

@@ -5,6 +5,7 @@
 - Chrome：经 DoctorContext 注入探测函数，CI 无 Chrome 时测试不受影响；
 - 命令行：doctor 的 --json 与退出码，家目录与技能目录全部指向临时目录。
 """
+
 from __future__ import annotations
 
 import json
@@ -41,8 +42,7 @@ class ToolCheckTests(unittest.TestCase):
         self.bin.mkdir()
         self.old_path = os.environ.get("PATH", os.defpath)
         self.addCleanup(self.restore_path)
-        self.ctx = ae.DoctorContext(skill_copy=self.root / "skills" / "annotation-everything",
-                                    repo=None, record=None)
+        self.ctx = ae.DoctorContext(skill_copy=self.root / "skills" / "annotation-everything", repo=None, record=None)
 
     def restore_path(self):
         os.environ["PATH"] = self.old_path
@@ -60,14 +60,17 @@ class ToolCheckTests(unittest.TestCase):
         """PATH 只剩假 bin：shutil.which 找不到任何真实工具，同时屏蔽默认候选安装路径。"""
         os.environ["PATH"] = str(self.bin)
         empty = str(self.root / "no-such-install")
-        env_patch = mock.patch.dict(os.environ, {
-            "ProgramFiles": empty,
-            "ProgramFiles(x86)": empty,
-            "ProgramW6432": empty,
-            "LOCALAPPDATA": empty,
-            "USERPROFILE": empty,
-            "ProgramData": empty,
-        })
+        env_patch = mock.patch.dict(
+            os.environ,
+            {
+                "ProgramFiles": empty,
+                "ProgramFiles(x86)": empty,
+                "ProgramW6432": empty,
+                "LOCALAPPDATA": empty,
+                "USERPROFILE": empty,
+                "ProgramData": empty,
+            },
+        )
         env_patch.start()
         self.addCleanup(env_patch.stop)
         try:
@@ -142,8 +145,12 @@ class ToolCheckTests(unittest.TestCase):
 
     def test_missing_optional_tools_are_never_failures(self):
         self.with_only_fake_bin()
-        for result in (ae.check_fc_list(self.ctx), ae.check_pdffonts(self.ctx),
-                       ae.check_libreoffice(self.ctx), ae.check_pdftoppm(self.ctx)):
+        for result in (
+            ae.check_fc_list(self.ctx),
+            ae.check_pdffonts(self.ctx),
+            ae.check_libreoffice(self.ctx),
+            ae.check_pdftoppm(self.ctx),
+        ):
             self.assertEqual(result.category, "可选工具")
             self.assertNotEqual(result.level, FAIL)
 
@@ -166,24 +173,22 @@ class GitHooksCheckTests(unittest.TestCase):
         repo = self.root / "repo"
         skill = repo / "skill" / "annotation-everything"
         skill.mkdir(parents=True)
-        (skill / "SKILL.md").write_text("---\nname: annotation-everything\n---\n合成技能\n",
-                                        encoding="utf-8")
+        (skill / "SKILL.md").write_text("---\nname: annotation-everything\n---\n合成技能\n", encoding="utf-8")
         if hooks_dir:
             hooks = repo / "tools" / "git-hooks"
             hooks.mkdir(parents=True)
             (hooks / "pre-commit").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         if git_init:
-            subprocess.run(["git", "init", "-q", str(repo)],
-                           check=True, capture_output=True, timeout=30)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True, timeout=30)
         return repo
 
     def ctx(self, repo: Path):
-        return ae.DoctorContext(skill_copy=self.root / "skills" / "annotation-everything",
-                                repo=repo, record=None)
+        return ae.DoctorContext(skill_copy=self.root / "skills" / "annotation-everything", repo=repo, record=None)
 
     def configure(self, repo: Path, value: str):
-        subprocess.run(["git", "-C", str(repo), "config", "core.hooksPath", value],
-                       check=True, capture_output=True, timeout=30)
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "core.hooksPath", value], check=True, capture_output=True, timeout=30
+        )
 
     def test_passes_when_hooks_path_configured(self):
         repo = self.make_repo()
@@ -232,8 +237,12 @@ class ChromeCheckTests(unittest.TestCase):
     def ctx(self, probe):
         temp_root = Path(tempfile.mkdtemp(prefix="ae-chrome-test-"))
         self.addCleanup(shutil.rmtree, temp_root, ignore_errors=True)
-        return ae.DoctorContext(skill_copy=temp_root / "skills" / "annotation-everything",
-                                repo=temp_root / "repo", record=None, chrome_probe=probe)
+        return ae.DoctorContext(
+            skill_copy=temp_root / "skills" / "annotation-everything",
+            repo=temp_root / "repo",
+            record=None,
+            chrome_probe=probe,
+        )
 
     def test_passes_when_probe_finds_executable(self):
         fake = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -265,17 +274,17 @@ class DoctorScopeTests(unittest.TestCase):
         self.repo = self.root / "repo"
         skill = self.repo / "skill" / "annotation-everything"
         skill.mkdir(parents=True)
-        (skill / "SKILL.md").write_text("---\nname: annotation-everything\n---\n合成技能\n",
-                                        encoding="utf-8")
+        (skill / "SKILL.md").write_text("---\nname: annotation-everything\n---\n合成技能\n", encoding="utf-8")
         # 体检会扫描已登记的宿主技能目录。家目录必须留在临时目录里，不能读到用户的技能目录。
-        self._saved = {key: os.environ.get(key) for key in (
-            "HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_SKILLS_DIR")}
-        os.environ.update({
-            "HOME": str(self.home),
-            "USERPROFILE": str(self.home),
-            "CODEX_HOME": str(self.home / ".codex"),
-            "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills"),
-        })
+        self._saved = {key: os.environ.get(key) for key in ("HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_SKILLS_DIR")}
+        os.environ.update(
+            {
+                "HOME": str(self.home),
+                "USERPROFILE": str(self.home),
+                "CODEX_HOME": str(self.home / ".codex"),
+                "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills"),
+            }
+        )
 
     def tearDown(self):
         for key, value in self._saved.items():
@@ -285,8 +294,7 @@ class DoctorScopeTests(unittest.TestCase):
                 os.environ[key] = value
 
     def test_dev_checks_absent_outside_repo(self):
-        ctx = ae.DoctorContext(skill_copy=self.root / "skills" / "annotation-everything",
-                               repo=None, record=None)
+        ctx = ae.DoctorContext(skill_copy=self.root / "skills" / "annotation-everything", repo=None, record=None)
         results = ae.run_doctor(ctx)
         categories = {r.category for r in results}
         codes = {r.code for r in results}
@@ -300,8 +308,9 @@ class DoctorScopeTests(unittest.TestCase):
         self.assertIn("pdftoppm", codes)
 
     def test_dev_checks_present_inside_repo(self):
-        ctx = ae.DoctorContext(skill_copy=self.root / "skills" / "annotation-everything",
-                               repo=self.repo, record=None, cwd=self.repo)
+        ctx = ae.DoctorContext(
+            skill_copy=self.root / "skills" / "annotation-everything", repo=self.repo, record=None, cwd=self.repo
+        )
         results = ae.run_doctor(ctx)
         categories = {r.category for r in results}
         codes = {r.code for r in results}
@@ -320,10 +329,14 @@ class DoctorCliTests(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
-        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
-                    "CLAUDE_SKILLS_DIR": str(self.skills),
-                    "CODEX_HOME": str(self.home / ".codex"),
-                    "PYTHONDONTWRITEBYTECODE": "1"}
+        self.env = {
+            **os.environ,
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "CLAUDE_SKILLS_DIR": str(self.skills),
+            "CODEX_HOME": str(self.home / ".codex"),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
 
     @property
     def copy_dir(self) -> Path:
@@ -333,9 +346,16 @@ class DoctorCliTests(unittest.TestCase):
         env = dict(self.env)
         if path is not None:
             env["PATH"] = path
-        return subprocess.run([sys.executable, str(script), *args],
-                              cwd=cwd, env=env, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=60)
+        return subprocess.run(
+            [sys.executable, str(script), *args],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
 
     def install(self):
         p = self.run_ae(AE, "install")

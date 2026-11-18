@@ -1,4 +1,5 @@
 """许可证随仓库和技能副本一起交付。"""
+
 import hashlib
 import os
 import re
@@ -41,11 +42,17 @@ class LicenseFilesTests(unittest.TestCase):
             root = Path(tmp)
             skills = root / "home" / ".claude" / "skills"
             skills.mkdir(parents=True)
-            env = {**os.environ, "HOME": str(root / "home"), "USERPROFILE": str(root / "home"),
-                   "CLAUDE_SKILLS_DIR": str(skills),
-                   "AE_HOME": str(root / "ledger"), "PYTHONDONTWRITEBYTECODE": "1"}
-            result = subprocess.run([sys.executable, str(AE), "install"], env=env,
-                                    capture_output=True, text=True, timeout=60)
+            env = {
+                **os.environ,
+                "HOME": str(root / "home"),
+                "USERPROFILE": str(root / "home"),
+                "CLAUDE_SKILLS_DIR": str(skills),
+                "AE_HOME": str(root / "ledger"),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            }
+            result = subprocess.run(
+                [sys.executable, str(AE), "install"], env=env, capture_output=True, text=True, timeout=60
+            )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             for name in ("LICENSE", "NOTICE"):
                 with self.subTest(name=name):

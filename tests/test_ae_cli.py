@@ -1,4 +1,5 @@
 """ae.py 命令行的外部行为测试；技能与仓库均为合成环境，绝不触碰真实家目录。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -55,15 +56,20 @@ class AeCliTests(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
-        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
-                    "CLAUDE_SKILLS_DIR": str(self.skills),
-                    "CODEX_HOME": str(self.home / ".codex"),  # 体检会看 $CODEX_HOME/skills，不能落到真实目录
-                    "AE_HOME": str(self.root / "ledger"),     # 运行状态检查读台账：指向临时目录，不碰真实台账
-                    "PYTHONDONTWRITEBYTECODE": "1"}
+        self.env = {
+            **os.environ,
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "CLAUDE_SKILLS_DIR": str(self.skills),
+            "CODEX_HOME": str(self.home / ".codex"),  # 体检会看 $CODEX_HOME/skills，不能落到真实目录
+            "AE_HOME": str(self.root / "ledger"),  # 运行状态检查读台账：指向临时目录，不碰真实台账
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
 
     def run_ae(self, *args: str):
-        return subprocess.run([sys.executable, str(AE), *args],
-                              env=self.env, capture_output=True, text=True, timeout=60)
+        return subprocess.run(
+            [sys.executable, str(AE), *args], env=self.env, capture_output=True, text=True, timeout=60
+        )
 
     @property
     def copy_dir(self) -> Path:
@@ -173,19 +179,19 @@ class AeCliTests(unittest.TestCase):
         record_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
         p, doc = self.doctor_json()
         self.assertEqual(p.returncode, 1)
-        failing = {r["code"]: r for r in doc["results"]
-                   if r["level"] == "失败" and r["category"] == "安装状态"}
+        failing = {r["code"]: r for r in doc["results"] if r["level"] == "失败" and r["category"] == "安装状态"}
         self.assertEqual(list(failing), ["skill-copy-version"])
         self.assertIn("ae.py install", failing["skill-copy-version"]["fix_command"])
 
     def test_doctor_json_structure(self):
         self.assertEqual(self.run_ae("install").returncode, 0)
         p, doc = self.doctor_json()
-        self.assertIn(p.returncode, (0, 1))     # 退出码取决于本机真实运行状态，结构则恒定
+        self.assertIn(p.returncode, (0, 1))  # 退出码取决于本机真实运行状态，结构则恒定
         for r in doc["results"]:
             # 旧消费者读的五个键原样保留；status / category_id 是 #33 新增的语言无关判定字段
-            self.assertEqual(set(r) - {"status", "category_id"},
-                             {"code", "category", "level", "message", "fix_command"})
+            self.assertEqual(
+                set(r) - {"status", "category_id"}, {"code", "category", "level", "message", "fix_command"}
+            )
             self.assertIn(r["status"], ("pass", "warn", "fail"))
             self.assertIn(r["category_id"], ("install", "tools", "dev", "runtime"))
         self.assertEqual(set(doc["summary"]), {"pass", "warn", "fail"})
@@ -193,7 +199,7 @@ class AeCliTests(unittest.TestCase):
     def test_doctor_text_output_groups_by_category(self):
         self.assertEqual(self.run_ae("install").returncode, 0)
         p = self.run_ae("doctor")
-        self.assertIn(p.returncode, (0, 1))     # 退出码取决于本机真实运行状态
+        self.assertIn(p.returncode, (0, 1))  # 退出码取决于本机真实运行状态
         self.assertIn("安装状态", p.stdout)
         self.assertIn("运行状态", p.stdout)
         self.assertIn("汇总", p.stdout)
@@ -209,9 +215,9 @@ class AeCliTests(unittest.TestCase):
         self.assertTrue(install and all(r["status"] == "pass" for r in install), doc["results"])
 
 
-
 def _rmtree(path: Path):
     import shutil
+
     shutil.rmtree(path, ignore_errors=True)
 
 
@@ -222,15 +228,19 @@ class WindowsUpdateNoticeTests(unittest.TestCase):
         import contextlib
         import io
         import unittest.mock
+
         sys.path.insert(0, str(SKILL_SRC / "scripts"))
         import update
 
         for locale, needle in (("zh-CN", "手动"), ("en", "manual")):
             out, err = io.StringIO(), io.StringIO()
-            with unittest.mock.patch.object(update.fsutil, "is_windows", return_value=True), \
-                    unittest.mock.patch("update.has_legacy_process", side_effect=AssertionError("should not run ps")), \
-                    unittest.mock.patch("update.exchange_directories", side_effect=AssertionError("should not swap")), \
-                    contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with (
+                unittest.mock.patch.object(update.fsutil, "is_windows", return_value=True),
+                unittest.mock.patch("update.has_legacy_process", side_effect=AssertionError("should not run ps")),
+                unittest.mock.patch("update.exchange_directories", side_effect=AssertionError("should not swap")),
+                contextlib.redirect_stdout(out),
+                contextlib.redirect_stderr(err),
+            ):
                 code = update.main(["auto", "--locale", locale])
             self.assertEqual(code, 0, out.getvalue() + err.getvalue())
             self.assertEqual(err.getvalue(), "")
@@ -238,17 +248,23 @@ class WindowsUpdateNoticeTests(unittest.TestCase):
             self.assertIn("ae.py install", out.getvalue())
 
         out_quiet, err_quiet = io.StringIO(), io.StringIO()
-        with unittest.mock.patch.dict(os.environ, {"AE_AUTO_UPDATE": "0"}), \
-                unittest.mock.patch.object(update.fsutil, "is_windows", return_value=True), \
-                contextlib.redirect_stdout(out_quiet), contextlib.redirect_stderr(err_quiet):
+        with (
+            unittest.mock.patch.dict(os.environ, {"AE_AUTO_UPDATE": "0"}),
+            unittest.mock.patch.object(update.fsutil, "is_windows", return_value=True),
+            contextlib.redirect_stdout(out_quiet),
+            contextlib.redirect_stderr(err_quiet),
+        ):
             code = update.main(["auto", "--locale", "en"])
         self.assertEqual(code, 0)
         self.assertEqual(out_quiet.getvalue() + err_quiet.getvalue(), "")
 
         out_now, err_now = io.StringIO(), io.StringIO()
-        with unittest.mock.patch.object(update.fsutil, "is_windows", return_value=True), \
-                unittest.mock.patch("update.has_legacy_process", side_effect=AssertionError("should not run ps")), \
-                contextlib.redirect_stdout(out_now), contextlib.redirect_stderr(err_now):
+        with (
+            unittest.mock.patch.object(update.fsutil, "is_windows", return_value=True),
+            unittest.mock.patch("update.has_legacy_process", side_effect=AssertionError("should not run ps")),
+            contextlib.redirect_stdout(out_now),
+            contextlib.redirect_stderr(err_now),
+        ):
             code_now = update.main(["now", "--locale", "en"])
         self.assertEqual(code_now, 1)
         self.assertIn("manual", err_now.getvalue().lower())
@@ -268,17 +284,27 @@ class AeUpgradeTests(unittest.TestCase):
         self.ledger = self.root / "ledger"
         self.repo = self.root / "repo"
         import shutil
+
         shutil.copy2(AE, self.repo / "ae.py") if (self.repo.mkdir(), True) else None
-        shutil.copytree(SKILL_SRC, self.repo / "skill" / "annotation-everything",
-                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"))
-        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
-                    "CLAUDE_SKILLS_DIR": str(self.skills), "AE_HOME": str(self.ledger),
-                    "PYTHONDONTWRITEBYTECODE": "1"}
+        shutil.copytree(
+            SKILL_SRC,
+            self.repo / "skill" / "annotation-everything",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
+        )
+        self.env = {
+            **os.environ,
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "CLAUDE_SKILLS_DIR": str(self.skills),
+            "AE_HOME": str(self.ledger),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
         self.copy = self.skills / "annotation-everything"
 
     def run_repo_ae(self, *args: str):
-        return subprocess.run([sys.executable, str(self.repo / "ae.py"), *args],
-                              env=self.env, capture_output=True, text=True, timeout=60)
+        return subprocess.run(
+            [sys.executable, str(self.repo / "ae.py"), *args], env=self.env, capture_output=True, text=True, timeout=60
+        )
 
     def bump_repo_version(self, version: str = "9.9.9") -> None:
         serve = self.repo / "skill" / "annotation-everything" / "scripts" / "serve.py"
@@ -294,8 +320,10 @@ class AeUpgradeTests(unittest.TestCase):
         (review_dir / ".agent-binding.json").write_text('{"bindingId": "b1", "adapter": "wait"}', encoding="utf-8")
         self.ledger.mkdir(parents=True, exist_ok=True)
         ledger_file = self.ledger / "reviews.json"
-        ledger_file.write_text(json.dumps({"version": 1, "reviews": {
-            "0123456789abcdef": {"dir": str(review_dir), "port": 8805}}}), encoding="utf-8")
+        ledger_file.write_text(
+            json.dumps({"version": 1, "reviews": {"0123456789abcdef": {"dir": str(review_dir), "port": 8805}}}),
+            encoding="utf-8",
+        )
 
         self.bump_repo_version("9.9.9")
         p = self.run_repo_ae("upgrade", "--locale", "en")
@@ -304,8 +332,12 @@ class AeUpgradeTests(unittest.TestCase):
         record = json.loads((self.copy / RECORD_NAME).read_text(encoding="utf-8"))
         self.assertEqual(record["version"], "9.9.9")
         self.assertEqual(json.loads((review_dir / "notes.json").read_text(encoding="utf-8"))["notes"][0]["id"], "n1")
-        self.assertEqual(json.loads((review_dir / ".agent-binding.json").read_text(encoding="utf-8"))["bindingId"], "b1")
-        self.assertEqual(json.loads(ledger_file.read_text(encoding="utf-8"))["reviews"]["0123456789abcdef"]["port"], 8805)
+        self.assertEqual(
+            json.loads((review_dir / ".agent-binding.json").read_text(encoding="utf-8"))["bindingId"], "b1"
+        )
+        self.assertEqual(
+            json.loads(ledger_file.read_text(encoding="utf-8"))["reviews"]["0123456789abcdef"]["port"], 8805
+        )
 
     def test_upgrade_refuses_when_local_modifications_exist_without_touching_copy(self):
         self.assertEqual(self.run_repo_ae("install").returncode, 0)
@@ -321,18 +353,23 @@ class AeUpgradeTests(unittest.TestCase):
         import contextlib
         import io
         import unittest.mock
+
         self.assertEqual(self.run_repo_ae("install").returncode, 0)
         self.bump_repo_version("9.9.9")
         old_version = json.loads((self.copy / RECORD_NAME).read_text(encoding="utf-8"))["version"]
 
         sys.path.insert(0, str(self.root / "unused"))
         import ae
+
         self.addCleanup(ae.set_locale, ae.current_locale())
 
-        with unittest.mock.patch.dict(os.environ, self.env), \
-                unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")), \
-                unittest.mock.patch.object(ae, "list_processes", side_effect=ae.ProcessEnumerationError("denied")), \
-                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+        with (
+            unittest.mock.patch.dict(os.environ, self.env),
+            unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")),
+            unittest.mock.patch.object(ae, "list_processes", side_effect=ae.ProcessEnumerationError("denied")),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()) as err,
+        ):
             code = ae.main(["upgrade", "--locale", "en"])
         self.assertEqual(code, 1)
         self.assertIn("denied", err.getvalue())
@@ -349,11 +386,14 @@ class AeUpgradeTests(unittest.TestCase):
                 raise PermissionError("file in use")
             return real_replace(src, dst)
 
-        with unittest.mock.patch.dict(os.environ, self.env), \
-                unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")), \
-                unittest.mock.patch.object(ae, "list_processes", return_value=[]), \
-                unittest.mock.patch.object(ae.os, "replace", side_effect=fail_second_replace), \
-                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+        with (
+            unittest.mock.patch.dict(os.environ, self.env),
+            unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")),
+            unittest.mock.patch.object(ae, "list_processes", return_value=[]),
+            unittest.mock.patch.object(ae.os, "replace", side_effect=fail_second_replace),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()) as err,
+        ):
             code = ae.main(["upgrade", "--locale", "en"])
         self.assertEqual(code, 1)
         self.assertFalse((self.copy / "upgrade-marker.txt").exists(), "失败回滚后不得留半更新版本")
@@ -362,11 +402,15 @@ class AeUpgradeTests(unittest.TestCase):
         # 模拟运行中审阅服务/总览首页拒绝升级（不碰旧副本）
         self.ledger.mkdir(parents=True, exist_ok=True)
         (self.ledger / ".overview-home-status.json").write_text(
-            json.dumps({"app": "annotation-everything", "pid": os.getpid()}), encoding="utf-8")
-        with unittest.mock.patch.dict(os.environ, self.env), \
-                unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")), \
-                unittest.mock.patch.object(ae, "list_processes", return_value=[]), \
-                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            json.dumps({"app": "annotation-everything", "pid": os.getpid()}), encoding="utf-8"
+        )
+        with (
+            unittest.mock.patch.dict(os.environ, self.env),
+            unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")),
+            unittest.mock.patch.object(ae, "list_processes", return_value=[]),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()) as err,
+        ):
             code = ae.main(["upgrade", "--locale", "en"])
         self.assertEqual(code, 1)
         self.assertIn("overview-home", err.getvalue())
@@ -374,11 +418,14 @@ class AeUpgradeTests(unittest.TestCase):
         (self.ledger / ".overview-home-status.json").unlink()
 
         # 模拟旧副本被占用导致第一步移动失败：旧副本原样保留，不留下半更新
-        with unittest.mock.patch.dict(os.environ, self.env), \
-                unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")), \
-                unittest.mock.patch.object(ae, "list_processes", return_value=[]), \
-                unittest.mock.patch.object(ae.os, "replace", side_effect=PermissionError("locked by explorer")), \
-                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+        with (
+            unittest.mock.patch.dict(os.environ, self.env),
+            unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")),
+            unittest.mock.patch.object(ae, "list_processes", return_value=[]),
+            unittest.mock.patch.object(ae.os, "replace", side_effect=PermissionError("locked by explorer")),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()) as err,
+        ):
             code = ae.main(["upgrade", "--locale", "en"])
         self.assertEqual(code, 1)
         self.assertIn("locked", err.getvalue().lower())
@@ -389,11 +436,13 @@ class AeUpgradeTests(unittest.TestCase):
         import contextlib
         import io
         import unittest.mock
+
         self.assertEqual(self.run_repo_ae("install").returncode, 0)
         self.bump_repo_version("9.9.9")
         old_version = json.loads((self.copy / RECORD_NAME).read_text(encoding="utf-8"))["version"]
 
         import ae
+
         self.addCleanup(ae.set_locale, ae.current_locale())
         real_write_record = ae.write_record
 
@@ -403,11 +452,14 @@ class AeUpgradeTests(unittest.TestCase):
                 (dst / "SKILL.md").unlink()
             return path
 
-        with unittest.mock.patch.dict(os.environ, self.env), \
-                unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")), \
-                unittest.mock.patch.object(ae, "list_processes", return_value=[]), \
-                unittest.mock.patch.object(ae, "write_record", side_effect=corrupt_write_record), \
-                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        with (
+            unittest.mock.patch.dict(os.environ, self.env),
+            unittest.mock.patch.object(ae, "__file__", str(self.repo / "ae.py")),
+            unittest.mock.patch.object(ae, "list_processes", return_value=[]),
+            unittest.mock.patch.object(ae, "write_record", side_effect=corrupt_write_record),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
             code = ae.main(["upgrade", "--locale", "en"])
         self.assertNotEqual(code, 0)
         self.assertTrue((self.copy / "SKILL.md").is_file(), "后置校验失败后必须回滚旧副本")

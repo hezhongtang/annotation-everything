@@ -4,6 +4,7 @@
 进程枚举与端口探测经 DoctorContext 注入，只针对测试自建的进程与端口断言，
 绝不杀真实进程、绝不读写真实台账（AE_HOME 只在子进程环境里指向临时目录）。
 """
+
 from __future__ import annotations
 
 import json
@@ -32,7 +33,7 @@ import ae  # noqa: E402
 
 PASS, WARN, FAIL = ae.LEVEL_PASS, ae.LEVEL_WARN, ae.LEVEL_FAIL
 SERVE_PY = ROOT / "skill" / "annotation-everything" / "scripts" / "serve.py"
-POOL_FIRST, POOL_LAST = 8765, 9264            # ledger.BASE_PORT 起 MAX_SCAN 个专属端口
+POOL_FIRST, POOL_LAST = 8765, 9264  # ledger.BASE_PORT 起 MAX_SCAN 个专属端口
 FIX_FORGET_STALE = "ae.py repair --forget-stale"
 FIX_STOP_ORPHANS = "ae.py repair --stop-orphans"
 
@@ -49,7 +50,8 @@ def make_review_dir(root: Path, rid: str) -> Path:
 def write_ledger(home: Path, reviews: dict) -> None:
     home.mkdir(parents=True, exist_ok=True)
     (home / "reviews.json").write_text(
-        json.dumps({"version": 1, "reviews": reviews}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        json.dumps({"version": 1, "reviews": reviews}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def free_pool_port() -> int:
@@ -65,8 +67,12 @@ def free_pool_port() -> int:
 
 def runtime_ctx(root: Path, **overrides):
     """运行状态检查用的 DoctorContext：台账、技能副本全部指向临时目录。"""
-    values = {"skill_copy": root / "skills" / "annotation-everything", "repo": root, "record": None,
-              "ledger_home": root / "ledger"}
+    values = {
+        "skill_copy": root / "skills" / "annotation-everything",
+        "repo": root,
+        "record": None,
+        "ledger_home": root / "ledger",
+    }
     values.update(overrides)
     return ae.DoctorContext(**values)
 
@@ -97,8 +103,10 @@ class ForeignListener:
                 break
             try:
                 conn.recv(65536)
-                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
-                             b"Content-Length: " + str(len(self.BODY)).encode() + b"\r\n\r\n" + self.BODY)
+                conn.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
+                    b"Content-Length: " + str(len(self.BODY)).encode() + b"\r\n\r\n" + self.BODY
+                )
             except OSError:
                 pass
             finally:
@@ -124,7 +132,10 @@ class ServeProcess:
         self.proc = subprocess.Popen(
             argv,
             env={**os.environ, "AE_HOME": str(ledger_home), "PYTHONDONTWRITEBYTECODE": "1"},
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         try:
             self._wait_ready()
         except BaseException:
@@ -165,13 +176,12 @@ class ServeProcess:
                 with socket.create_connection(("127.0.0.1", self.port), timeout=0.2):
                     pass
             except OSError:
-                return                                  # 连不上 = 端口已释放
+                return  # 连不上 = 端口已释放
             time.sleep(0.1)
         raise AssertionError(f"serve.py 停止后端口 {self.port} 仍未释放")
 
 
 class TempRootTestCase(unittest.TestCase):
-
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ae-runtime-test-")
         self.addCleanup(self.temp.cleanup)
@@ -189,7 +199,6 @@ class TempRootTestCase(unittest.TestCase):
 
 
 class LedgerReadableTests(TempRootTestCase):
-
     def test_fails_when_ledger_file_is_corrupt(self):
         self.ledger_home.mkdir(parents=True)
         (self.ledger_home / "reviews.json").write_text("{不是 JSON", encoding="utf-8")
@@ -215,7 +224,6 @@ class LedgerReadableTests(TempRootTestCase):
 
 
 class LedgerStaleTests(TempRootTestCase):
-
     def assert_fix_repair(self, fix_command: str, flag: str, posix_suffix: str):
         tokens = ae.command_tokens(fix_command)
         self.assertGreaterEqual(len(tokens), 4, fix_command)
@@ -229,8 +237,8 @@ class LedgerStaleTests(TempRootTestCase):
         result = ae.check_ledger_stale(self.ctx())
         self.assertEqual(result.level, WARN)
         self.assertEqual(result.code, "ledger-stale")
-        self.assertIn(self.rid[:8], result.message)          # 审阅标识前缀
-        self.assertIn("8800", result.message)                # 占用的专属端口
+        self.assertIn(self.rid[:8], result.message)  # 审阅标识前缀
+        self.assertIn("8800", result.message)  # 占用的专属端口
         self.assert_fix_repair(result.fix_command, "--forget-stale", FIX_FORGET_STALE)
 
     def test_warns_when_review_id_mismatches(self):
@@ -254,7 +262,6 @@ class LedgerStaleTests(TempRootTestCase):
 
 
 class PortPoolTests(TempRootTestCase):
-
     def test_passes_when_pool_free(self):
         result = ae.check_port_pool(self.ctx(port_probe=lambda port: None))
         self.assertEqual(result.level, PASS)
@@ -266,8 +273,10 @@ class PortPoolTests(TempRootTestCase):
         foreign = ForeignListener(port)
         self.addCleanup(foreign.close)
         write_ledger(self.ledger_home, {self.rid: {"dir": str(self.root / "review"), "port": port}})
+
         def probe(p):  # 只探测测试自建的端口
             return ae.probe_port(p) if p == port else None
+
         result = ae.check_port_pool(self.ctx(port_probe=probe))
         self.assertEqual(result.level, FAIL)
         self.assertIn(str(port), result.message)
@@ -277,8 +286,10 @@ class PortPoolTests(TempRootTestCase):
     def test_passes_when_pool_port_used_by_own_serve(self):
         d = make_review_dir(self.root, self.rid)
         server = self.start_server(d)
+
         def probe(p):
             return ae.probe_port(p) if p == server.port else None
+
         result = ae.check_port_pool(self.ctx(port_probe=probe))
         self.assertEqual(result.level, PASS)
 
@@ -287,20 +298,19 @@ class PortPoolTests(TempRootTestCase):
         server = self.start_server(d)
         found = ae.probe_port(server.port)
         self.assertIsNotNone(found)
-        self.assertEqual(found.get("app"), "annotation-everything")   # 缺 Host 头会被 421 拒、误判为外部占用
+        self.assertEqual(found.get("app"), "annotation-everything")  # 缺 Host 头会被 421 拒、误判为外部占用
 
 
 class OrphanServerTests(TempRootTestCase):
-
     def test_list_processes_includes_current_process(self):
         procs = dict(ae.list_processes())
-        self.assertIn(os.getpid(), procs)              # 真实 ps 枚举：本进程一定在列
-        self.assertTrue(procs[os.getpid()].strip())    # 且能拿到非空命令行
+        self.assertIn(os.getpid(), procs)  # 真实 ps 枚举：本进程一定在列
+        self.assertTrue(procs[os.getpid()].strip())  # 且能拿到非空命令行
 
     def test_fails_when_serving_dir_not_in_ledger(self):
         d = make_review_dir(self.root, self.rid)
-        server = self.start_server(d)                 # 启动时会登记进临时台账
-        write_ledger(self.ledger_home, {})            # 模拟这份审阅已从台账 forget
+        server = self.start_server(d)  # 启动时会登记进临时台账
+        write_ledger(self.ledger_home, {})  # 模拟这份审阅已从台账 forget
         result = ae.check_orphan_servers(self.ctx(process_lister=lambda: [(server.proc.pid, server.cmdline)]))
         self.assertEqual(result.level, FAIL)
         self.assertEqual(result.code, "orphan-servers")
@@ -308,7 +318,9 @@ class OrphanServerTests(TempRootTestCase):
         self.assertIn(str(server.proc.pid), result.message)
         self.assertIn(str(server.port), result.message)
         tokens = ae.command_tokens(result.fix_command)
-        self.assertEqual((Path(tokens[1]).name, tokens[2:]), ("ae.py", ["repair", "--stop-orphans"]), result.fix_command)
+        self.assertEqual(
+            (Path(tokens[1]).name, tokens[2:]), ("ae.py", ["repair", "--stop-orphans"]), result.fix_command
+        )
         if os.name != "nt":
             self.assertTrue(result.fix_command.rstrip().endswith(FIX_STOP_ORPHANS), result.fix_command)
 
@@ -321,13 +333,15 @@ class OrphanServerTests(TempRootTestCase):
         self.assertIn(str(server.proc.pid), result.message)
         self.assertIn(str(server.port), result.message)
         tokens = ae.command_tokens(result.fix_command)
-        self.assertEqual((Path(tokens[1]).name, tokens[2:]), ("ae.py", ["repair", "--stop-orphans"]), result.fix_command)
+        self.assertEqual(
+            (Path(tokens[1]).name, tokens[2:]), ("ae.py", ["repair", "--stop-orphans"]), result.fix_command
+        )
         if os.name != "nt":
             self.assertTrue(result.fix_command.rstrip().endswith(FIX_STOP_ORPHANS), result.fix_command)
 
     def test_passes_when_serving_ledgered_review(self):
         d = make_review_dir(self.root, self.rid)
-        server = self.start_server(d)                 # 台账保留启动时的登记
+        server = self.start_server(d)  # 台账保留启动时的登记
         result = ae.check_orphan_servers(self.ctx(process_lister=lambda: [(server.proc.pid, server.cmdline)]))
         self.assertEqual(result.level, PASS)
 
@@ -361,8 +375,11 @@ class OrphanServerTests(TempRootTestCase):
 
     def test_ignores_processes_without_serve_py_script(self):
         def lister():
-            return [(999998, "/usr/bin/tail -f /var/log/system.log"),
-                    (999997, f"{sys.executable} {ROOT / 'tests' / 'test_core.py'}")]
+            return [
+                (999998, "/usr/bin/tail -f /var/log/system.log"),
+                (999997, f"{sys.executable} {ROOT / 'tests' / 'test_core.py'}"),
+            ]
+
         result = ae.check_orphan_servers(self.ctx(process_lister=lister))
         self.assertEqual(result.level, PASS)
 
@@ -373,8 +390,10 @@ class OrphanServerTests(TempRootTestCase):
     def test_skips_when_ledger_unreadable(self):
         self.ledger_home.mkdir(parents=True)
         (self.ledger_home / "reviews.json").write_text("坏", encoding="utf-8")
+
         def lister():
             return [(424246, f"{sys.executable} {SERVE_PY} {self.root / 'x'} --no-open")]
+
         result = ae.check_orphan_servers(self.ctx(process_lister=lister))
         self.assertEqual(result.level, PASS)
 
@@ -393,16 +412,23 @@ class OrphanServerTests(TempRootTestCase):
         self.assertIn("enumeration failed", result.message)
 
     def test_windows_process_enumeration_handles_inaccessible_command_lines(self):
-        payload = json.dumps([
-            {"ProcessId": 101, "Name": "System", "CommandLine": None},
-            {"ProcessId": 202, "Name": "python.exe", "CommandLine": None},
-            {"ProcessId": 303, "Name": "python.exe",
-             "CommandLine": f'"C:\\Users\\Test User\\python.exe" "{SERVE_PY}" "C:\\Users\\Test User\\review"'},
-        ])
+        payload = json.dumps(
+            [
+                {"ProcessId": 101, "Name": "System", "CommandLine": None},
+                {"ProcessId": 202, "Name": "python.exe", "CommandLine": None},
+                {
+                    "ProcessId": 303,
+                    "Name": "python.exe",
+                    "CommandLine": f'"C:\\Users\\Test User\\python.exe" "{SERVE_PY}" "C:\\Users\\Test User\\review"',
+                },
+            ]
+        )
         done = subprocess.CompletedProcess([], 0, stdout=payload, stderr="")
-        with mock.patch.object(ae, "_is_windows", return_value=True), \
-                mock.patch.object(ae, "_windows_powershell", return_value="powershell.exe"), \
-                mock.patch.object(ae.subprocess, "run", return_value=done):
+        with (
+            mock.patch.object(ae, "_is_windows", return_value=True),
+            mock.patch.object(ae, "_windows_powershell", return_value="powershell.exe"),
+            mock.patch.object(ae.subprocess, "run", return_value=done),
+        ):
             procs = ae.list_processes()
         self.assertEqual(dict(procs)[101], "")
         self.assertEqual(dict(procs)[202], "")
@@ -416,12 +442,22 @@ class DoctorCliTests(TempRootTestCase):
 
     def run_doctor(self, ledger_home: Path):
         home = str(self.root / "home")
-        env = {**os.environ, "HOME": home, "USERPROFILE": home, "AE_HOME": str(ledger_home),
-               "CLAUDE_SKILLS_DIR": str(self.root / "skills"),
-               "CODEX_HOME": str(self.root / "home" / ".codex"),
-               "PYTHONDONTWRITEBYTECODE": "1"}
-        proc = subprocess.run([sys.executable, str(ROOT / "ae.py"), "doctor", "--json"],
-                              env=env, capture_output=True, text=True, timeout=120)
+        env = {
+            **os.environ,
+            "HOME": home,
+            "USERPROFILE": home,
+            "AE_HOME": str(ledger_home),
+            "CLAUDE_SKILLS_DIR": str(self.root / "skills"),
+            "CODEX_HOME": str(self.root / "home" / ".codex"),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "ae.py"), "doctor", "--json"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
         return proc, json.loads(proc.stdout)
 
     def test_doctor_fails_on_unreadable_ledger(self):
@@ -431,7 +467,7 @@ class DoctorCliTests(TempRootTestCase):
         by_code = {r["code"]: r for r in doc["results"]}
         self.assertEqual(by_code["ledger-readable"]["level"], "失败")
         self.assertEqual(by_code["ledger-readable"]["category"], "运行状态")
-        self.assertEqual(proc.returncode, 1)      # 台账这项确定失败，与机器上的真实进程无关
+        self.assertEqual(proc.returncode, 1)  # 台账这项确定失败，与机器上的真实进程无关
 
     def test_doctor_runtime_ledger_checks_pass_when_absent(self):
         proc, doc = self.run_doctor(self.root / "no-ledger")

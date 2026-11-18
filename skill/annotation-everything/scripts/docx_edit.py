@@ -5,6 +5,7 @@ apply REVIEW --batch N / --id ID：处理快捷删除与替换。
 replace REVIEW --paragraph N --from OLD --to NEW：Agent 核对自由批注后的单条替换。
 段落序号从 0 开始。所有选择先整体校验；任何一条失败都不写。不会处理批注状态。
 """
+
 from __future__ import annotations
 
 import copy
@@ -140,7 +141,7 @@ def parse_document(raw: bytes) -> list[Paragraph]:
                     text = ""
             p.text += text
         elif name in (W + "br", W + "cr") and attrs.get(W + "type") != "page":
-            p.barriers.append(len(p.text))   # DOM 文本偏移不计 <br>，但不能跨过它删除或替换
+            p.barriers.append(len(p.text))  # DOM 文本偏移不计 <br>，但不能跨过它删除或替换
 
     def end(name):
         if name == W + "t" and active:
@@ -167,14 +168,16 @@ def parse_document(raw: bytes) -> list[Paragraph]:
 
 
 def _xml_text(text: str) -> bytes:
-    if any(not (c in "\t\n\r" or 0x20 <= ord(c) <= 0xD7FF or 0xE000 <= ord(c) <= 0xFFFD
-                or 0x10000 <= ord(c) <= 0x10FFFF) for c in text):
+    if any(
+        not (c in "\t\n\r" or 0x20 <= ord(c) <= 0xD7FF or 0xE000 <= ord(c) <= 0xFFFD or 0x10000 <= ord(c) <= 0x10FFFF)
+        for c in text
+    ):
         raise EditError("characters")
     return escape(text).replace("\r", "&#13;").encode("utf-8")
 
 
 def _element_bytes(raw: bytes, node: TextElement, text: str) -> bytes:
-    opening = raw[node.start:node.opening_end]
+    opening = raw[node.start : node.opening_end]
     # 目标元素总是显式 preserve；其他属性、前缀以及其他元素不动。
     space = rb"\bxml:space\s*=\s*(['\"])[^'\"]*\1"
     if re.search(space, opening):
@@ -183,7 +186,7 @@ def _element_bytes(raw: bytes, node: TextElement, text: str) -> bytes:
         at = opening.rfind(b"/>") if node.empty else len(opening) - 1
         opening = opening[:at] + b' xml:space="preserve"' + opening[at:]
     if node.empty:
-        opening = opening[:opening.rfind(b"/>")] + b">"
+        opening = opening[: opening.rfind(b"/>")] + b">"
     return opening + _xml_text(text) + b"</" + node.qname + b">"
 
 
@@ -359,12 +362,15 @@ def _gates(zf: zipfile.ZipFile, allow_untracked: bool) -> tuple[str, bytes, dict
     for name in names:
         if name == "[Content_Types].xml" or name.endswith(".rels"):
             root = dr.parse_xml(_read_part(zf, name), name)
-            if any("digital-signature" in str(v).lower() or "digitalsignature" in str(v).lower()
-                   for el in root.iter() for v in el.attrib.values()):
+            if any(
+                "digital-signature" in str(v).lower() or "digitalsignature" in str(v).lower()
+                for el in root.iter()
+                for v in el.attrib.values()
+            ):
                 raise EditError("signed")
     main, settings, styles = _package_parts(zf)
     raw = _read_part(zf, main)
-    parse_document(raw)   # 明确拒绝 UTF-16、DTD 和坏 XML，再交给只读结构检查
+    parse_document(raw)  # 明确拒绝 UTF-16、DTD 和坏 XML，再交给只读结构检查
     root = dr.parse_xml(raw, main)
     if root.tag != dr.W + "document" or root.find(dr.W + "body") is None:
         raise EditError("package")
@@ -386,7 +392,7 @@ def _directory(raw: bytes, infos: list) -> tuple[int, int, list[bytes]]:
     # ZIP32 的目录记录只改相对偏移；ZIP64 / 分卷没有可靠的同字节重封装支持，明确拒绝。
     end = len(raw)
     eocd = raw.rfind(b"PK\x05\x06", max(0, end - 65557))
-    while eocd >= 0 and (eocd + 22 > end or eocd + 22 + int.from_bytes(raw[eocd + 20:eocd + 22], "little") != end):
+    while eocd >= 0 and (eocd + 22 > end or eocd + 22 + int.from_bytes(raw[eocd + 20 : eocd + 22], "little") != end):
         eocd = raw.rfind(b"PK\x05\x06", max(0, end - 65557), eocd)
     if eocd < 0:
         raise EditError("package")
@@ -395,7 +401,7 @@ def _directory(raw: bytes, infos: list) -> tuple[int, int, list[bytes]]:
         raise EditError("package")
     records, at = [], start
     for info in infos:
-        if raw[at:at + 4] != b"PK\x01\x02" or at + 46 > eocd:
+        if raw[at : at + 4] != b"PK\x01\x02" or at + 46 > eocd:
             raise EditError("package")
         nlen, xlen, clen = struct.unpack_from("<3H", raw, at + 28)
         stop = at + 46 + nlen + xlen + clen
@@ -430,10 +436,10 @@ def repack(raw: bytes, main: str, document: bytes) -> bytes:
         chunks, offsets, length = [], {}, 0
         for i, info in enumerate(ordered):
             stop = ordered[i + 1].header_offset if i + 1 < len(ordered) else cd_start
-            if info.header_offset >= stop or raw[info.header_offset:info.header_offset + 4] != b"PK\x03\x04":
+            if info.header_offset >= stop or raw[info.header_offset : info.header_offset + 4] != b"PK\x03\x04":
                 raise EditError("package")
             offsets[info.filename] = length
-            chunk = new_raw[:new_start] if info.filename == main else raw[info.header_offset:stop]
+            chunk = new_raw[:new_start] if info.filename == main else raw[info.header_offset : stop]
             chunks.append(chunk)
             length += len(chunk)
         new_cd = []
@@ -453,7 +459,11 @@ def _validate(path: Path | io.BytesIO, original: bytes, main: str, document: byt
             raise EditError("validation")
         for info in new.infolist():
             prior = old.getinfo(info.filename)
-            if info.filename != main and (info.CRC, info.file_size, info.compress_size) != (prior.CRC, prior.file_size, prior.compress_size):
+            if info.filename != main and (info.CRC, info.file_size, info.compress_size) != (
+                prior.CRC,
+                prior.file_size,
+                prior.compress_size,
+            ):
                 raise EditError("validation", info.filename)
             # 重开后实际解压、检查 CRC，不只比较目录里声称的值。
             with new.open(info) as fh:
@@ -539,29 +549,42 @@ def _selection(review: Path, batch: int | None, ids: list[str] | None) -> list[d
         if batch is not None and (note.get("status") == "resolved" or not note.get("edit")):
             continue
         ed, a = note.get("edit") or {}, note.get("docx")
-        if (note.get("status", "open") != "open" or note.get("orphan") or note.get("hold")
-                or ed.get("op") not in ("delete", "replace") or note.get("quoteFrom", "报告") != "报告"
-                or note.get("target", "报告") not in ("报告", "报告和讲稿")
-                or not isinstance(ed.get("from"), str) or not ed.get("from")):
+        if (
+            note.get("status", "open") != "open"
+            or note.get("orphan")
+            or note.get("hold")
+            or ed.get("op") not in ("delete", "replace")
+            or note.get("quoteFrom", "报告") != "报告"
+            or note.get("target", "报告") not in ("报告", "报告和讲稿")
+            or not isinstance(ed.get("from"), str)
+            or not ed.get("from")
+        ):
             errors.append(EditError("note", item=nid))
         elif not dr.usable_anchor(a):
             errors.append(EditError("anchor", item=nid))
         else:
-            selected.append({"id": nid, "anchor": a, "from": ed["from"],
-                             "to": "" if ed["op"] == "delete" else ed.get("to", "")})
+            selected.append(
+                {"id": nid, "anchor": a, "from": ed["from"], "to": "" if ed["op"] == "delete" else ed.get("to", "")}
+            )
     if errors:
         raise SelectionError(errors)
     return selected
 
 
-def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None = None,
-              replacement: dict | None = None, output: Path | None = None,
-              dry_run: bool = False, allow_untracked: bool = False) -> dict:
+def writeback(
+    review: Path,
+    *,
+    batch: int | None = None,
+    ids: list[str] | None = None,
+    replacement: dict | None = None,
+    output: Path | None = None,
+    dry_run: bool = False,
+    allow_untracked: bool = False,
+) -> dict:
     """公开入口：验证整组修改并写入（或预演），返回文件、备份、逐条修改和警告；不改批注。"""
     review = Path(review).resolve()
     manifest = ledger.read_manifest(review)
-    if (not manifest or ledger.unsupported_format(manifest)
-            or (manifest.get("format") or {}).get("report") != "docx"):
+    if not manifest or ledger.unsupported_format(manifest) or (manifest.get("format") or {}).get("report") != "docx":
         raise EditError("review")
     try:
         source = resolve_sources(review, manifest)["report"]
@@ -571,14 +594,21 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
         raise EditError("source")
     fingerprint = (manifest.get("docx") or {}).get("fingerprint", "")
     with store.locked(review):
-        if replacement is not None and batch is not None and not any(i.get("seq") == batch for i in store.handoff_load(review)["items"]):
+        if (
+            replacement is not None
+            and batch is not None
+            and not any(i.get("seq") == batch for i in store.handoff_load(review)["items"])
+        ):
             raise EditError("batch", str(batch))
         edits = [replacement] if replacement is not None else _selection(review, batch, ids)
         if not edits:
             raise EditError("empty")
         raw = _source_check(source, fingerprint)
-        stale = [EditError("anchor", item=e.get("id", "")) for e in edits
-                 if e.get("anchor") and e["anchor"].get("fp") != fingerprint]
+        stale = [
+            EditError("anchor", item=e.get("id", ""))
+            for e in edits
+            if e.get("anchor") and e["anchor"].get("fp") != fingerprint
+        ]
         if stale:
             raise SelectionError(stale)
         with zipfile.ZipFile(io.BytesIO(raw)) as zf:
@@ -589,9 +619,15 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
         separate = destination != source
         if destination.is_symlink() or (separate and destination.exists()):
             raise EditError("output", str(destination))
-        result = {"source": str(source), "output": str(destination), "dryRun": dry_run,
-                  "backup": None, "ids": [e.get("id", "") for e in edits],
-                  "paragraphs": sorted(expected), "warnings": ["untracked"] if tracked else []}
+        result = {
+            "source": str(source),
+            "output": str(destination),
+            "dryRun": dry_run,
+            "backup": None,
+            "ids": [e.get("id", "") for e in edits],
+            "paragraphs": sorted(expected),
+            "warnings": ["untracked"] if tracked else [],
+        }
         if dry_run:
             _validate(io.BytesIO(packed), raw, main, document, expected)
             return result
@@ -607,7 +643,7 @@ def writeback(review: Path, *, batch: int | None = None, ids: list[str] | None =
                 fh.flush()
                 os.fsync(fh.fileno())
             _validate(temp, raw, main, document, expected)
-            _source_check(source, fingerprint)   # Word 或别的进程在准备期间动过源文件就拒绝提交
+            _source_check(source, fingerprint)  # Word 或别的进程在准备期间动过源文件就拒绝提交
             if separate and destination.exists():
                 raise EditError("output", str(destination))
             _replace_file(temp, destination)
@@ -656,19 +692,34 @@ def main(argv: list[str] | None = None) -> int:
         if a.batch is not None and a.batch < 1:
             raise EditError("arguments")
         if a.command == "apply":
-            if bool(a.ids) == (a.batch is not None) or any(x is not None for x in (a.paragraph, a.para_id, a.before, a.after)):
+            if bool(a.ids) == (a.batch is not None) or any(
+                x is not None for x in (a.paragraph, a.para_id, a.before, a.after)
+            ):
                 raise EditError("arguments")
         else:
             if a.ids or a.paragraph is None or a.paragraph < 0 or not a.before or a.after is None:
                 raise EditError("arguments")
             replacement = {"paragraph": a.paragraph, "para_id": a.para_id, "from": a.before, "to": a.after}
-        result = writeback(a.review, batch=a.batch, ids=a.ids, replacement=replacement, output=a.output,
-                           dry_run=a.dry_run, allow_untracked=a.allow_untracked)
+        result = writeback(
+            a.review,
+            batch=a.batch,
+            ids=a.ids,
+            replacement=replacement,
+            output=a.output,
+            dry_run=a.dry_run,
+            allow_untracked=a.allow_untracked,
+        )
         for warning in result["warnings"]:
             print(t("docx.edit." + warning), file=sys.stderr)
-        print(json.dumps(result, ensure_ascii=False) if a.json else t(
-            "docx.edit.preview" if a.dry_run else "docx.edit.done", path=result["output"],
-            paragraphs=", ".join(str(n) for n in result["paragraphs"])))
+        print(
+            json.dumps(result, ensure_ascii=False)
+            if a.json
+            else t(
+                "docx.edit.preview" if a.dry_run else "docx.edit.done",
+                path=result["output"],
+                paragraphs=", ".join(str(n) for n in result["paragraphs"]),
+            )
+        )
         if result["backup"] and not a.json:
             print(t("docx.edit.backup", path=result["backup"]))
         return 0

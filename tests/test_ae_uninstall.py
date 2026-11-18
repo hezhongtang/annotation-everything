@@ -5,6 +5,7 @@
 也不可能在测试里误杀真实进程；「拒绝卸载」用例则用真 ps 验证真实进程表可用。
 进程枚举与 serve.py 识别复用运行状态体检（#20）的 list_processes / serve_script_index。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -106,21 +107,25 @@ class UninstallCliTests(unittest.TestCase):
             shim = self.bin / "ps"
             shim.write_text(
                 f'#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  cat "{self.ps_table}"\nelse\n  exec "{real_ps}" "$@"\nfi\n',
-                encoding="utf-8")
+                encoding="utf-8",
+            )
             shim.chmod(0o755)
-        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
-                    "CLAUDE_SKILLS_DIR": str(self.skills),
-                    "CODEX_HOME": str(self.home / ".codex"),
-                    "AE_HOME": str(self.ae_home),
-                    "PATH": str(self.bin) + os.pathsep + os.environ.get("PATH", os.defpath),
-                    "PYTHONDONTWRITEBYTECODE": "1"}
+        self.env = {
+            **os.environ,
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "CLAUDE_SKILLS_DIR": str(self.skills),
+            "CODEX_HOME": str(self.home / ".codex"),
+            "AE_HOME": str(self.ae_home),
+            "PATH": str(self.bin) + os.pathsep + os.environ.get("PATH", os.defpath),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
 
     def run_ae(self, *args, real_ps: bool = False):
         env = dict(self.env)
         if real_ps:  # 指定用本机真实的 ps 与进程表
             env["PATH"] = os.environ.get("PATH", os.defpath)
-        return subprocess.run([sys.executable, str(AE), *args],
-                              env=env, capture_output=True, text=True, timeout=60)
+        return subprocess.run([sys.executable, str(AE), *args], env=env, capture_output=True, text=True, timeout=60)
 
     @property
     def copy_dir(self) -> Path:
@@ -141,8 +146,9 @@ class UninstallCliTests(unittest.TestCase):
         for index, directory in enumerate(review_dirs):
             reviews[f"{index:016x}"] = {"dir": str(directory), "port": 8765 + index}
         path = self.ae_home / "reviews.json"
-        path.write_text(json.dumps({"version": 1, "reviews": reviews}, ensure_ascii=False, indent=2) + "\n",
-                        encoding="utf-8")
+        path.write_text(
+            json.dumps({"version": 1, "reviews": reviews}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
         return path
 
     def make_review_dir(self, name: str = "review") -> Path:
@@ -151,7 +157,8 @@ class UninstallCliTests(unittest.TestCase):
         (directory / "index.html").write_text("<!doctype html><title>合成对照页</title>", encoding="utf-8")
         (directory / "review.json").write_text(
             json.dumps({"reviewId": f"{int(name == 'review'):016x}", "name": "合成审阅"}, ensure_ascii=False),
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         return directory
 
     def free_port(self) -> int:
@@ -432,8 +439,9 @@ class RemoveLinksTests(unittest.TestCase):
         (replaced / "keep.txt").write_text("保留", encoding="utf-8")
         deleted = self.links / "deleted"  # 记录里有、磁盘上已没有
         report = ae.remove_links(
-            [elsewhere_link, {"agent": "replaced", "path": str(replaced)},
-             {"agent": "deleted", "path": str(deleted)}], self.copy)
+            [elsewhere_link, {"agent": "replaced", "path": str(replaced)}, {"agent": "deleted", "path": str(deleted)}],
+            self.copy,
+        )
         actions = {Path(path).name: action for path, action in report}
         self.assertEqual(actions["elsewhere"], "指向别处，未删除")
         self.assertEqual(actions["replaced"], "已不是链接，未删除")
@@ -446,25 +454,31 @@ class RunningServersTests(unittest.TestCase):
     """running_servers 与 stop_servers 的单元行为：注入列举器，不依赖真实进程表。"""
 
     def test_running_servers_only_matches_own_serve_script(self):
-        fake = [(1, f"python3 {SERVE} /r"),
-                (2, "/usr/bin/python3 /b/serve.py --port 9"),
-                (3, "python3 /c/other.py x"),
-                (4, "grep serve.py notes.txt")]
+        fake = [
+            (1, f"python3 {SERVE} /r"),
+            (2, "/usr/bin/python3 /b/serve.py --port 9"),
+            (3, "python3 /c/other.py x"),
+            (4, "grep serve.py notes.txt"),
+        ]
         found = ae.running_servers(lister=lambda: fake)
-        self.assertEqual([pid for pid, _command in found], [1],
-                         "只识别本项目脚本，不匹配其他项目或 grep 参数")
+        self.assertEqual([pid for pid, _command in found], [1], "只识别本项目脚本，不匹配其他项目或 grep 参数")
 
     def test_running_servers_empty_when_no_processes(self):
         self.assertEqual(ae.running_servers(lister=lambda: []), [])
 
     def test_running_home_servers_matches_only_overview_subcommand(self):
-        fake = [(1, f"python3 {SERVE} overview --no-open"),
-                (2, f"python3 {SERVE} /r"),
-                (3, f"python3 {SERVE} overview --locale=en"),
-                (4, "grep overview notes.txt")]
+        fake = [
+            (1, f"python3 {SERVE} overview --no-open"),
+            (2, f"python3 {SERVE} /r"),
+            (3, f"python3 {SERVE} overview --locale=en"),
+            (4, "grep overview notes.txt"),
+        ]
         self.assertEqual([pid for pid, _command in ae.running_home_servers(lister=lambda: fake)], [1, 3])
-        self.assertEqual([pid for pid, _command in ae.running_servers(lister=lambda: fake)], [2],
-                         "overview 进程不算审阅服务：体检的审阅服务计数与孤儿修复跳过它")
+        self.assertEqual(
+            [pid for pid, _command in ae.running_servers(lister=lambda: fake)],
+            [2],
+            "overview 进程不算审阅服务：体检的审阅服务计数与孤儿修复跳过它",
+        )
         self.assertIsNone(ae.serve_dir_argument(fake[0][1], fake[0][0]))
 
     def test_server_identity_accepts_overview_home_process(self):
@@ -487,10 +501,12 @@ class RunningServersTests(unittest.TestCase):
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         self.addCleanup(self.stop, proc)
         cmd = f'"{sys.executable}" "{SERVE}" "{Path.cwd() / "review"}"'
-        with mock.patch.object(ae, "_is_windows", return_value=True), \
-                mock.patch.object(ae, "_process_stopped", return_value=False), \
-                mock.patch.object(ae, "_read_process_cmdline", return_value=None), \
-                mock.patch.object(ae, "_win_terminate_process") as term:
+        with (
+            mock.patch.object(ae, "_is_windows", return_value=True),
+            mock.patch.object(ae, "_process_stopped", return_value=False),
+            mock.patch.object(ae, "_read_process_cmdline", return_value=None),
+            mock.patch.object(ae, "_win_terminate_process") as term,
+        ):
             stuck = ae.stop_servers([(proc.pid, cmd)], wait_seconds=0)
         term.assert_not_called()
         self.assertEqual([pid for pid, _ in stuck], [proc.pid])
@@ -506,10 +522,20 @@ class RunningServersTests(unittest.TestCase):
             copy_dir = skills / SKILL
             copy_dir.mkdir(parents=True)
             (copy_dir / "SKILL.md").write_text("合成技能", encoding="utf-8")
-            with mock.patch.dict(os.environ, {"HOME": str(root), "USERPROFILE": str(root),
-                                             "CLAUDE_SKILLS_DIR": str(skills), "AE_HOME": str(root / "ledger")}), \
-                    mock.patch.object(ae, "list_processes", side_effect=ae.ProcessEnumerationError("access denied")), \
-                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "HOME": str(root),
+                        "USERPROFILE": str(root),
+                        "CLAUDE_SKILLS_DIR": str(skills),
+                        "AE_HOME": str(root / "ledger"),
+                    },
+                ),
+                mock.patch.object(ae, "list_processes", side_effect=ae.ProcessEnumerationError("access denied")),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()) as err,
+            ):
                 code = ae.main(["uninstall"])
             self.assertEqual(code, 1)
             self.assertTrue((copy_dir / "SKILL.md").is_file(), "枚举失败时不得删除技能副本")
@@ -535,10 +561,10 @@ class PurgeGuardTests(unittest.TestCase):
 
     def write_ledger(self, *review_dirs: str):
         self.ledger_home.mkdir(parents=True, exist_ok=True)
-        reviews = {f"{index:016x}": {"dir": directory, "port": 8765 + index}
-                   for index, directory in enumerate(review_dirs)}
-        (self.ledger_home / "reviews.json").write_text(
-            json.dumps({"version": 1, "reviews": reviews}), encoding="utf-8")
+        reviews = {
+            f"{index:016x}": {"dir": directory, "port": 8765 + index} for index, directory in enumerate(review_dirs)
+        }
+        (self.ledger_home / "reviews.json").write_text(json.dumps({"version": 1, "reviews": reviews}), encoding="utf-8")
 
     def test_accepts_missing_ledger_home(self):
         self.assertIsNone(ae.purge_guard(self.ledger_home))

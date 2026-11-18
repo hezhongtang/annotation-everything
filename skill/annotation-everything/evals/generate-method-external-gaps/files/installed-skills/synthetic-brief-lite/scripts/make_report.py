@@ -10,6 +10,7 @@ report_check.py 做同一验收，缺依据会被如实降级为不可交付。�
 
 退出码：0 成功；2 材料里找不到需要的数字（如实失败，不补造事实）。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -24,13 +25,20 @@ SKILL_NAME = "synthetic-brief-lite"
 SKILL_VERSION = "0.3.0"
 
 CHECK_IDS = (
-    ("content.requirements", "content"), ("content.claims", "content"),
-    ("content.fact-vs-inference", "content"), ("content.units-dates", "content"),
-    ("content.numbers-charts", "content"), ("content.cross-page", "content"),
-    ("content.script-consistency", "content"), ("content.open-questions", "content"),
-    ("structure.flow", "structure"), ("structure.headings", "structure"),
-    ("structure.claim-support", "structure"), ("structure.dup-gaps", "structure"),
-    ("structure.length", "structure"), ("visual.pages", "visual"),
+    ("content.requirements", "content"),
+    ("content.claims", "content"),
+    ("content.fact-vs-inference", "content"),
+    ("content.units-dates", "content"),
+    ("content.numbers-charts", "content"),
+    ("content.cross-page", "content"),
+    ("content.script-consistency", "content"),
+    ("content.open-questions", "content"),
+    ("structure.flow", "structure"),
+    ("structure.headings", "structure"),
+    ("structure.claim-support", "structure"),
+    ("structure.dup-gaps", "structure"),
+    ("structure.length", "structure"),
+    ("visual.pages", "visual"),
 )
 
 CSS = """
@@ -108,32 +116,47 @@ def main() -> int:
     record = {
         "schema": "ae-report-record/1",
         "generatedAt": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
-        "request": {"purpose": "季度经营汇报", "audience": "管理层",
-                    "coreQuestions": ["收入为什么增长"], "length": "2 页", "script": "yes"},
-        "sources": [{"path": rel, "status": "read", "coverage": "全文",
-                     "note": "lite 模式不提供材料哈希"}],
-        "method": {"kind": "external", "name": SKILL_NAME, "version": SKILL_VERSION,
-                   "invocation": "实际运行本技能脚本 scripts/make_report.py --materials … --out … "
-                                 "生成了 report.html / script.md / report-record.json",
-                   "unavailable": ["来源标注", "计算口径与复算", "材料 sha256"],
-                   "note": "精简变体：产物缺依据由同一核验入口如实降级"},
-        "links": {"report": "report.html", "script": "script.md",
-                  "sha256": {"report": sha_text(report), "script": sha_text(script_md)},
-                  "sourceNote": f"{rel} 及同目录讲稿"},
-        "findings": [{"claim": f"三季度收入同比增长 {pct_show}%", "type": "calculation",
-                      "sources": [rel], "pages": ["sum"],
-                      "note": "lite 模式不提供 refs / support / basis / calculation"}],
-        "gaps": ["lite 模式不提供来源标注、计算口径与材料哈希：结论依据需另行核对",
-                 "十月周报缺失：材料未提供十月数据"],
-        "checks": [{"id": cid, "kind": kind, "status": "not_run", "scope": "全部", "note": ""}
-                   for cid, kind in CHECK_IDS],
+        "request": {
+            "purpose": "季度经营汇报",
+            "audience": "管理层",
+            "coreQuestions": ["收入为什么增长"],
+            "length": "2 页",
+            "script": "yes",
+        },
+        "sources": [{"path": rel, "status": "read", "coverage": "全文", "note": "lite 模式不提供材料哈希"}],
+        "method": {
+            "kind": "external",
+            "name": SKILL_NAME,
+            "version": SKILL_VERSION,
+            "invocation": "实际运行本技能脚本 scripts/make_report.py --materials … --out … "
+            "生成了 report.html / script.md / report-record.json",
+            "unavailable": ["来源标注", "计算口径与复算", "材料 sha256"],
+            "note": "精简变体：产物缺依据由同一核验入口如实降级",
+        },
+        "links": {
+            "report": "report.html",
+            "script": "script.md",
+            "sha256": {"report": sha_text(report), "script": sha_text(script_md)},
+            "sourceNote": f"{rel} 及同目录讲稿",
+        },
+        "findings": [
+            {
+                "claim": f"三季度收入同比增长 {pct_show}%",
+                "type": "calculation",
+                "sources": [rel],
+                "pages": ["sum"],
+                "note": "lite 模式不提供 refs / support / basis / calculation",
+            }
+        ],
+        "gaps": ["lite 模式不提供来源标注、计算口径与材料哈希：结论依据需另行核对", "十月周报缺失：材料未提供十月数据"],
+        "checks": [
+            {"id": cid, "kind": kind, "status": "not_run", "scope": "全部", "note": ""} for cid, kind in CHECK_IDS
+        ],
         "openItems": [],
         "verdict": {"draftComplete": True, "deliverable": None},
     }
-    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-                           encoding="utf-8")
-    print(f"{SKILL_NAME} v{SKILL_VERSION}: wrote report.html script.md report-record.json "
-          f"(style marker: xs-lite)")
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"{SKILL_NAME} v{SKILL_VERSION}: wrote report.html script.md report-record.json (style marker: xs-lite)")
     return 0
 
 

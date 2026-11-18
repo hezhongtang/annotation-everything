@@ -1,4 +1,5 @@
 """ae.py install --link 与链接体检的测试；均为合成环境，绝不触碰真实家目录。"""
+
 from __future__ import annotations
 
 import json
@@ -80,15 +81,20 @@ class AeLinkCliTests(unittest.TestCase):
         self.home = Path(self.temp.name) / "home"
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
-        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
-                    "AE_HOME": str(self.home / ".annotation-everything"),
-                    "CLAUDE_SKILLS_DIR": str(self.skills),
-                    "CODEX_HOME": str(self.home / ".codex"),
-                    "PYTHONDONTWRITEBYTECODE": "1"}
+        self.env = {
+            **os.environ,
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "AE_HOME": str(self.home / ".annotation-everything"),
+            "CLAUDE_SKILLS_DIR": str(self.skills),
+            "CODEX_HOME": str(self.home / ".codex"),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
 
     def run_ae(self, *args, cwd=None):
-        return subprocess.run([sys.executable, str(AE), *args], cwd=cwd,
-                              env=self.env, capture_output=True, text=True, timeout=60)
+        return subprocess.run(
+            [sys.executable, str(AE), *args], cwd=cwd, env=self.env, capture_output=True, text=True, timeout=60
+        )
 
     @property
     def copy_dir(self) -> Path:
@@ -221,7 +227,7 @@ class AeLinkCliTests(unittest.TestCase):
         custom = Path("relative-skills")
         p = self.run_ae("install", "--link", f"cursor={custom}", cwd=str(self.home))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        link = self.home.resolve() / custom / SKILL   # 子进程的 cwd 是解析后的真实路径
+        link = self.home.resolve() / custom / SKILL  # 子进程的 cwd 是解析后的真实路径
         self.assertTrue(link.is_symlink(), "相对路径按运行目录解析并记为绝对路径")
         self.assertEqual(os.path.realpath(str(link)), str(self.copy_dir.resolve()))
         recorded = [Path(entry["path"]).resolve() for entry in self.read_record()["links"]]
@@ -326,7 +332,7 @@ class AeLinkCliTests(unittest.TestCase):
     def test_repair_rebuilds_custom_link(self):
         custom = self.custom_dir()
         self.assertEqual(self.run_ae("install", "--link", f"cursor={custom}").returncode, 0)
-        os.unlink(self.custom_link())   # 链接被删：doctor 应报失败，repair 应按记录重建
+        os.unlink(self.custom_link())  # 链接被删：doctor 应报失败，repair 应按记录重建
         p = self.run_ae("doctor", "--json")
         result = self.doctor_result("skill-links")
         self.assertEqual(result["level"], "失败")
@@ -340,16 +346,20 @@ class AeLinkCliTests(unittest.TestCase):
         import contextlib
         import io
         import unittest.mock
+
         previous = ae.current_locale()
         self.addCleanup(ae.set_locale, previous)
         custom = self.custom_dir("中文 目标")
         win_err = OSError(1314, "A required privilege is not held by the client")
         win_err.winerror = 1314
         out, err = io.StringIO(), io.StringIO()
-        with unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "zh-CN"}), \
-                unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
-                unittest.mock.patch("ae.os.symlink", side_effect=win_err), \
-                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with (
+            unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "zh-CN"}),
+            unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True),
+            unittest.mock.patch("ae.os.symlink", side_effect=win_err),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
             code = ae.main(["install", "--link", f"cursor={custom}"])
         self.assertEqual(code, 2, out.getvalue() + err.getvalue())
         self.assertEqual(out.getvalue(), "", "未完成链接时不能输出安装成功")
@@ -370,25 +380,34 @@ class AeLinkCliTests(unittest.TestCase):
             return real_symlink(src, dst, target_is_directory=target_is_directory)
 
         out2, err2 = io.StringIO(), io.StringIO()
-        with unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "en"}), \
-                unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
-                unittest.mock.patch("ae.os.symlink", side_effect=fail_second), \
-                contextlib.redirect_stdout(out2), contextlib.redirect_stderr(err2):
+        with (
+            unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "en"}),
+            unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True),
+            unittest.mock.patch("ae.os.symlink", side_effect=fail_second),
+            contextlib.redirect_stdout(out2),
+            contextlib.redirect_stderr(err2),
+        ):
             code2 = ae.main(["install", "--link", f"codex,cursor={custom}"])
         self.assertEqual(code2, 2)
         self.assertFalse(agent_link(self.home, "codex").exists(), "部分建出的链接应回滚")
         self.assertIn("--link", err2.getvalue())
 
         # 已有安装副本时 --link 触发 1314：必须保留/恢复原副本与 .install-record.json
-        with unittest.mock.patch.dict(os.environ, self.env), \
-                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        with (
+            unittest.mock.patch.dict(os.environ, self.env),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
             self.assertEqual(ae.main(["install"]), 0)
         record_before = (self.copy_dir / ae.RECORD_NAME).read_text(encoding="utf-8")
         out3, err3 = io.StringIO(), io.StringIO()
-        with unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "zh-CN"}), \
-                unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
-                unittest.mock.patch("ae.os.symlink", side_effect=win_err), \
-                contextlib.redirect_stdout(out3), contextlib.redirect_stderr(err3):
+        with (
+            unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "zh-CN"}),
+            unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True),
+            unittest.mock.patch("ae.os.symlink", side_effect=win_err),
+            contextlib.redirect_stdout(out3),
+            contextlib.redirect_stderr(err3),
+        ):
             code3 = ae.main(["install", "--link", f"cursor={custom}"])
         self.assertEqual(code3, 2)
         self.assertTrue((self.copy_dir / ae.RECORD_NAME).is_file())
@@ -400,6 +419,7 @@ class AeLinkCliTests(unittest.TestCase):
         import contextlib
         import io
         import unittest.mock as mock
+
         self.addCleanup(ae.set_locale, ae.current_locale())
         self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
         link = agent_link(self.home, "codex")
@@ -407,10 +427,14 @@ class AeLinkCliTests(unittest.TestCase):
         win_err = OSError(1314, "synthetic missing symlink privilege")
         win_err.winerror = 1314
         for command in ("install", "upgrade"):
-            with self.subTest(command=command), mock.patch.dict(os.environ, self.env), \
-                    mock.patch.object(ae, "list_processes", return_value=[]), \
-                    mock.patch("ae.os.symlink", side_effect=win_err) as symlink, \
-                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with (
+                self.subTest(command=command),
+                mock.patch.dict(os.environ, self.env),
+                mock.patch.object(ae, "list_processes", return_value=[]),
+                mock.patch("ae.os.symlink", side_effect=win_err) as symlink,
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
                 self.assertEqual(ae.main([command, "--link", "codex"]), 0)
             symlink.assert_not_called()
             self.assertEqual(os.readlink(link), old_target)
@@ -420,6 +444,7 @@ class AeLinkCliTests(unittest.TestCase):
         import contextlib
         import io
         import unittest.mock as mock
+
         self.addCleanup(ae.set_locale, ae.current_locale())
         self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
         old_target = self.home / "previous-skill"
@@ -443,11 +468,15 @@ class AeLinkCliTests(unittest.TestCase):
 
         links = f"codex,old={replaced.parent},new={fresh.parent},failed={failed.parent}"
         for command in ("install", "upgrade"):
-            with self.subTest(command=command), mock.patch.dict(os.environ, self.env), \
-                    mock.patch.object(ae, "_is_windows", return_value=True), \
-                    mock.patch.object(ae, "list_processes", return_value=[]), \
-                    mock.patch("ae.os.symlink", side_effect=fail_last), \
-                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with (
+                self.subTest(command=command),
+                mock.patch.dict(os.environ, self.env),
+                mock.patch.object(ae, "_is_windows", return_value=True),
+                mock.patch.object(ae, "list_processes", return_value=[]),
+                mock.patch("ae.os.symlink", side_effect=fail_last),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
                 self.assertEqual(ae.main([command, "--link", links]), 2)
             self.assertEqual((self.copy_dir / RECORD_NAME).read_bytes(), record_before)
             self.assertTrue((self.copy_dir / "SKILL.md").is_file())
@@ -459,6 +488,7 @@ class AeLinkCliTests(unittest.TestCase):
     @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_link_rollback_does_not_replace_an_existing_directory_symlink(self):
         import unittest.mock as mock
+
         original = self.home / "original-skill"
         replacement = self.home / "replacement-skill"
         original.mkdir()
@@ -488,6 +518,7 @@ class AeLinkCliTests(unittest.TestCase):
         import contextlib
         import io
         import unittest.mock as mock
+
         self.addCleanup(ae.set_locale, ae.current_locale())
         self.assertEqual(self.run_ae("install", "--link", "codex").returncode, 0)
         old_target = self.home / "previous-skill"
@@ -505,10 +536,13 @@ class AeLinkCliTests(unittest.TestCase):
                 (dst / "SKILL.md").unlink()
             return result
 
-        with mock.patch.dict(os.environ, self.env), \
-                mock.patch.object(ae, "list_processes", return_value=[]), \
-                mock.patch.object(ae, "write_record", side_effect=corrupt_stage), \
-                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        with (
+            mock.patch.dict(os.environ, self.env),
+            mock.patch.object(ae, "list_processes", return_value=[]),
+            mock.patch.object(ae, "write_record", side_effect=corrupt_stage),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
             code = ae.main(["upgrade", "--link", f"codex,old={link.parent}"])
         self.assertEqual(code, 1)
         self.assertEqual(os.readlink(link), target_before)
@@ -519,6 +553,7 @@ class AeLinkCliTests(unittest.TestCase):
         import contextlib
         import io
         import unittest.mock
+
         previous = ae.current_locale()
         self.addCleanup(ae.set_locale, previous)
         custom_target = self.home.parent / "real-target"
@@ -533,10 +568,13 @@ class AeLinkCliTests(unittest.TestCase):
 
         # 1) cmd_install: preserves real --target and --link intent, never passes link dir as --target
         out, err = io.StringIO(), io.StringIO()
-        with unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "en"}), \
-                unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
-                unittest.mock.patch("ae.os.symlink", side_effect=win_err), \
-                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with (
+            unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "en"}),
+            unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True),
+            unittest.mock.patch("ae.os.symlink", side_effect=win_err),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
             code = ae.main(["install", "--target", str(custom_target), "--link", f"cursor={custom_link}"])
         self.assertEqual(code, 2)
         msg = err.getvalue()
@@ -546,15 +584,21 @@ class AeLinkCliTests(unittest.TestCase):
         self.assertNotIn(f"--target {custom_link}", msg)
 
         # 2) cmd_upgrade: install directly first, then fail symlink in upgrade
-        with unittest.mock.patch.dict(os.environ, self.env), \
-                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        with (
+            unittest.mock.patch.dict(os.environ, self.env),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
             self.assertEqual(ae.main(["install", "--target", str(custom_target)]), 0)
         out_up, err_up = io.StringIO(), io.StringIO()
-        with unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "en"}), \
-                unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
-                unittest.mock.patch.object(ae, "list_processes", return_value=[]), \
-                unittest.mock.patch("ae.os.symlink", side_effect=win_err), \
-                contextlib.redirect_stdout(out_up), contextlib.redirect_stderr(err_up):
+        with (
+            unittest.mock.patch.dict(os.environ, {**self.env, "AE_LOCALE": "en"}),
+            unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True),
+            unittest.mock.patch.object(ae, "list_processes", return_value=[]),
+            unittest.mock.patch("ae.os.symlink", side_effect=win_err),
+            contextlib.redirect_stdout(out_up),
+            contextlib.redirect_stderr(err_up),
+        ):
             code_up = ae.main(["upgrade", "--target", str(custom_target), "--link", f"cursor={custom_link}"])
         self.assertEqual(code_up, 2)
         msg_up = err_up.getvalue()
@@ -567,8 +611,10 @@ class AeLinkCliTests(unittest.TestCase):
         copy_dir = custom_target / SKILL
         record = {"links": [{"agent": "cursor", "path": str(custom_link / SKILL)}]}
         ctx = ae.DoctorContext(skill_copy=copy_dir, repo=ROOT, record=record, target=custom_target)
-        with unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True), \
-                unittest.mock.patch("ae.os.symlink", side_effect=win_err):
+        with (
+            unittest.mock.patch.object(ae, "_is_windows", return_value=True, create=True),
+            unittest.mock.patch("ae.os.symlink", side_effect=win_err),
+        ):
             created, stuck = ae.repair_links(ctx)
         self.assertEqual(created, [])
         self.assertEqual(len(stuck), 1)
@@ -590,14 +636,18 @@ class LinkCheckTests(unittest.TestCase):
         self.skills = self.home / ".claude" / "skills"
         self.copy = self.skills / SKILL
         self.copy.mkdir(parents=True)
-        (self.copy / "SKILL.md").write_text("---\nname: annotation-everything\n---\n合成技能\n",
-                                            encoding="utf-8")
+        (self.copy / "SKILL.md").write_text("---\nname: annotation-everything\n---\n合成技能\n", encoding="utf-8")
         self.repo = self.root / "repo"
         self.repo.mkdir()
         self._saved = {key: os.environ.get(key) for key in ("HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_SKILLS_DIR")}
-        os.environ.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
-                           "CODEX_HOME": str(self.home / ".codex"),
-                           "CLAUDE_SKILLS_DIR": str(self.skills)})
+        os.environ.update(
+            {
+                "HOME": str(self.home),
+                "USERPROFILE": str(self.home),
+                "CODEX_HOME": str(self.home / ".codex"),
+                "CLAUDE_SKILLS_DIR": str(self.skills),
+            }
+        )
 
     def tearDown(self):
         for key, value in self._saved.items():
@@ -616,8 +666,13 @@ class LinkCheckTests(unittest.TestCase):
         return {"agent": agent, "path": str(link)}
 
     def base_record(self, *entries: dict) -> dict:
-        return {"repo": str(self.repo), "commit": "0" * 40, "version": "9.9.9",
-                "installed_at": "2026-10-29T00:00:00+08:00", "links": list(entries)}
+        return {
+            "repo": str(self.repo),
+            "commit": "0" * 40,
+            "version": "9.9.9",
+            "installed_at": "2026-10-29T00:00:00+08:00",
+            "links": list(entries),
+        }
 
     def ctx(self, record, copy=None):
         return ae.DoctorContext(skill_copy=copy or self.copy, repo=self.repo, record=record)
@@ -646,7 +701,9 @@ class LinkCheckTests(unittest.TestCase):
         self.assertIn("已不是链接", result.message)
 
     def test_check_links_fails_when_recorded_link_deleted(self):
-        result = ae.check_links(self.ctx(self.base_record({"agent": "codex", "path": str(agent_link(self.home, "codex"))})))
+        result = ae.check_links(
+            self.ctx(self.base_record({"agent": "codex", "path": str(agent_link(self.home, "codex"))}))
+        )
         self.assertEqual(result.level, ae.LEVEL_FAIL)
         self.assertIn("已删除", result.message)
 
@@ -713,10 +770,11 @@ class ParseLinkAgentsTests(unittest.TestCase):
 
     def test_shared_directory_keeps_all_registered_names(self):
         shared = self.home / ".agents" / "skills"
-        with mock.patch.dict(os.environ, {
-                "CODEX_HOME": str(shared.parent), "CLAUDE_SKILLS_DIR": str(shared)}):
-            self.assertEqual(ae.parse_link_agents("codex,claude-code,agents"),
-                             [(name, shared) for name in ("codex", "claude-code", "agents")])
+        with mock.patch.dict(os.environ, {"CODEX_HOME": str(shared.parent), "CLAUDE_SKILLS_DIR": str(shared)}):
+            self.assertEqual(
+                ae.parse_link_agents("codex,claude-code,agents"),
+                [(name, shared) for name in ("codex", "claude-code", "agents")],
+            )
             scanned = [(name, path) for name, path in ae.known_skill_roots() if path == shared]
         self.assertEqual(scanned, [("codex", shared)], "扫描同一路径仍只做一次")
 
@@ -726,8 +784,9 @@ class ParseLinkAgentsTests(unittest.TestCase):
 
     def test_name_path_maps_to_given_dir(self):
         pairs = ae.parse_link_agents("cursor=~/.cursor/skills, my-agent=/opt/skills ")
-        self.assertEqual(pairs, [("cursor", self.home / ".cursor" / "skills"),
-                                 ("my-agent", Path(os.path.abspath("/opt/skills")))])
+        self.assertEqual(
+            pairs, [("cursor", self.home / ".cursor" / "skills"), ("my-agent", Path(os.path.abspath("/opt/skills")))]
+        )
 
     def test_dedup_keeps_first_occurrence(self):
         pairs = ae.parse_link_agents("cursor=/a, codex, cursor=/b")
@@ -757,12 +816,16 @@ class LinkFixSpecTests(unittest.TestCase):
         self.skills = self.home / ".claude" / "skills"
         self.copy = self.skills / SKILL
         self.copy.mkdir(parents=True)
-        (self.copy / "SKILL.md").write_text("---\nname: annotation-everything\n---\n合成技能\n",
-                                            encoding="utf-8")
+        (self.copy / "SKILL.md").write_text("---\nname: annotation-everything\n---\n合成技能\n", encoding="utf-8")
         self._saved = {key: os.environ.get(key) for key in ("HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_SKILLS_DIR")}
-        os.environ.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
-                           "CODEX_HOME": str(self.home / ".codex"),
-                           "CLAUDE_SKILLS_DIR": str(self.skills)})
+        os.environ.update(
+            {
+                "HOME": str(self.home),
+                "USERPROFILE": str(self.home),
+                "CODEX_HOME": str(self.home / ".codex"),
+                "CLAUDE_SKILLS_DIR": str(self.skills),
+            }
+        )
 
     def tearDown(self):
         for key, value in self._saved.items():
@@ -775,15 +838,20 @@ class LinkFixSpecTests(unittest.TestCase):
         return ae.DoctorContext(skill_copy=self.copy, repo=self.root / "repo", record=record)
 
     def base_record(self, *entries):
-        return {"repo": str(self.root / "repo"), "commit": "0" * 40, "version": "9.9.9",
-                "installed_at": "2026-10-29T00:00:00+08:00", "links": list(entries)}
+        return {
+            "repo": str(self.root / "repo"),
+            "commit": "0" * 40,
+            "version": "9.9.9",
+            "installed_at": "2026-10-29T00:00:00+08:00",
+            "links": list(entries),
+        }
 
     @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_fix_command_uses_name_path_for_custom_entries(self):
         custom = self.home / "cursor-skills"
         link = custom / SKILL
         link.parent.mkdir(parents=True)
-        os.symlink(str(self.root / "no-such-copy"), str(link), target_is_directory=True)   # 悬空
+        os.symlink(str(self.root / "no-such-copy"), str(link), target_is_directory=True)  # 悬空
         record = self.base_record({"agent": "cursor", "path": str(link)})
         result = ae.check_links(self.ctx(record))
         self.assertEqual(result.level, ae.LEVEL_FAIL)
@@ -812,10 +880,14 @@ class LinkFixSpecTests(unittest.TestCase):
 
     def test_fix_command_carries_target(self):
         target = self.root / "custom"
-        result = ae.check_links(ae.DoctorContext(
-            skill_copy=target / SKILL, repo=self.root / "repo",
-            record=self.base_record({"agent": "codex", "path": str(self.home / ".codex" / "skills" / SKILL)}),
-            target=target))
+        result = ae.check_links(
+            ae.DoctorContext(
+                skill_copy=target / SKILL,
+                repo=self.root / "repo",
+                record=self.base_record({"agent": "codex", "path": str(self.home / ".codex" / "skills" / SKILL)}),
+                target=target,
+            )
+        )
         self.assertIn("--target", result.fix_command)
 
     @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
@@ -823,18 +895,18 @@ class LinkFixSpecTests(unittest.TestCase):
         link = self.home / ".codex" / "skills" / SKILL
         link.parent.mkdir(parents=True)
         os.symlink(str(self.copy.resolve()), str(link), target_is_directory=True)
-        record = self.base_record({"path": str(link)})   # 旧记录缺 agent 字段：按缺省处理，不报错
+        record = self.base_record({"path": str(link)})  # 旧记录缺 agent 字段：按缺省处理，不报错
         result = ae.check_links(self.ctx(record))
         self.assertEqual(result.level, ae.LEVEL_PASS)
         self.assertIn(str(link), result.message)
 
     @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_record_without_links_key_falls_back_to_scan(self):
-        link = self.home / ".agents" / "skills" / SKILL   # 回退扫描看已登记的宿主目录
+        link = self.home / ".agents" / "skills" / SKILL  # 回退扫描看已登记的宿主目录
         link.parent.mkdir(parents=True)
         os.symlink(str(self.copy.resolve()), str(link), target_is_directory=True)
         record = self.base_record()
-        del record["links"]                              # 更老的记录没有 links 键
+        del record["links"]  # 更老的记录没有 links 键
         result = ae.check_links(self.ctx(record))
         self.assertEqual(result.level, ae.LEVEL_PASS)
         self.assertIn("agents", result.message)
@@ -842,11 +914,14 @@ class LinkFixSpecTests(unittest.TestCase):
     def test_install_link_fix_formats_specs_and_target(self):
         py = ae._python_cli()
         repo = Path("/repo")
-        self.assertEqual(ae.install_link_fix(repo, ["codex"]),
-                         f"{py} {ae._quote_cli(str(repo / 'ae.py'))} install --link codex")
+        self.assertEqual(
+            ae.install_link_fix(repo, ["codex"]), f"{py} {ae._quote_cli(str(repo / 'ae.py'))} install --link codex"
+        )
         target = Path("/dir with space")
-        self.assertEqual(ae.install_link_fix(None, ["codex", "cursor=/x y"], target=target),
-                         f"{py} ae.py install --link {ae._quote_cli('codex,cursor=/x y')} --target {ae._quote_cli(str(target))}")
+        self.assertEqual(
+            ae.install_link_fix(None, ["codex", "cursor=/x y"], target=target),
+            f"{py} ae.py install --link {ae._quote_cli('codex,cursor=/x y')} --target {ae._quote_cli(str(target))}",
+        )
 
     @unittest.skipUnless(CAN_SYMLINK, "Windows 当前账户无符号链接权限")
     def test_merged_links_keeps_custom_entries(self):
@@ -868,18 +943,32 @@ class IndependentCopyTests(unittest.TestCase):
         self.home = Path(self.temp.name) / "home"
         self.home.mkdir()
         self.skills = self.home / ".claude" / "skills"
-        self._saved = {key: os.environ.get(key) for key in (
-            "HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_SKILLS_DIR",
-            "XDG_CONFIG_HOME", "GROK_HOME", "HERMES_HOME", "AUTOHAND_HOME",
-            "VIBE_HOME", "REASONIX_HOME", "CLAUDE_CONFIG_DIR")}
+        self._saved = {
+            key: os.environ.get(key)
+            for key in (
+                "HOME",
+                "USERPROFILE",
+                "CODEX_HOME",
+                "CLAUDE_SKILLS_DIR",
+                "XDG_CONFIG_HOME",
+                "GROK_HOME",
+                "HERMES_HOME",
+                "AUTOHAND_HOME",
+                "VIBE_HOME",
+                "REASONIX_HOME",
+                "CLAUDE_CONFIG_DIR",
+            )
+        }
         for key in self._saved:
             os.environ.pop(key, None)
-        os.environ.update({
-            "HOME": str(self.home),
-            "USERPROFILE": str(self.home),
-            "CODEX_HOME": str(self.home / ".codex"),
-            "CLAUDE_SKILLS_DIR": str(self.skills),
-        })
+        os.environ.update(
+            {
+                "HOME": str(self.home),
+                "USERPROFILE": str(self.home),
+                "CODEX_HOME": str(self.home / ".codex"),
+                "CLAUDE_SKILLS_DIR": str(self.skills),
+            }
+        )
         self.env = dict(os.environ)
 
     def tearDown(self):
@@ -890,8 +979,9 @@ class IndependentCopyTests(unittest.TestCase):
                 os.environ[key] = value
 
     def run_ae(self, *args):
-        return subprocess.run([sys.executable, str(AE), *args], cwd=self.home,
-                              env=self.env, capture_output=True, text=True, timeout=60)
+        return subprocess.run(
+            [sys.executable, str(AE), *args], cwd=self.home, env=self.env, capture_output=True, text=True, timeout=60
+        )
 
     @property
     def copy_dir(self) -> Path:
@@ -938,8 +1028,7 @@ class IndependentCopyTests(unittest.TestCase):
         antigravity = self.plant(".gemini", "config", "skills")
         p = self.run_ae("doctor", "--json", "--locale", "en")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        result = next(item for item in json.loads(p.stdout)["results"]
-                      if item["code"] == "independent-copies")
+        result = next(item for item in json.loads(p.stdout)["results"] if item["code"] == "independent-copies")
         self.assertEqual(result["level"], "警告")
         self.assertIn(str(antigravity), result["message"])
         self.assertIn("symlink", result["message"].lower())
@@ -1065,8 +1154,7 @@ class IndependentCopyTests(unittest.TestCase):
         self.assertTrue((custom / "keep.txt").is_file())
         doctor = self.run_ae("doctor", "--json")
         self.assertEqual(doctor.returncode, 1, doctor.stdout + doctor.stderr)
-        links = next(item for item in json.loads(doctor.stdout)["results"]
-                     if item["code"] == "skill-links")
+        links = next(item for item in json.loads(doctor.stdout)["results"] if item["code"] == "skill-links")
         self.assertEqual(links["level"], "失败")
         self.assertIn(str(custom), links["message"])
         self.assertIn("已不是链接", links["message"])
@@ -1085,8 +1173,7 @@ class IndependentCopyTests(unittest.TestCase):
         p = self.run_ae("repair", "--replace-with-links")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         updated = json.loads(record_path.read_text(encoding="utf-8"))
-        self.assertEqual({entry["path"] for entry in updated["links"]},
-                         {str(original_link), str(replaced)})
+        self.assertEqual({entry["path"] for entry in updated["links"]}, {str(original_link), str(replaced)})
         self.assertEqual(updated.get("tree"), record.get("tree"))
         self.assertEqual(updated.get("version"), record.get("version"))
         p = self.run_ae("uninstall")

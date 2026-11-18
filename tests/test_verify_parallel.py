@@ -1,4 +1,5 @@
 """有界验证进程调度的行为测试；只用合成目录和本测试启动的进程。"""
+
 from __future__ import annotations
 
 import contextlib
@@ -56,10 +57,14 @@ class ParallelProcessTests(unittest.TestCase):
             print("synthetic output " + name)
             return 1 if name == "failure" else 0
 
-        with (self.root / "caller.log").open("w") as caller, \
-                contextlib.redirect_stdout(caller), contextlib.redirect_stderr(caller):
-            results = parallel.run_tasks([("success", "success"), ("failure", "failure")], worker,
-                                         self.root / "workers", jobs=2)
+        with (
+            (self.root / "caller.log").open("w") as caller,
+            contextlib.redirect_stdout(caller),
+            contextlib.redirect_stderr(caller),
+        ):
+            results = parallel.run_tasks(
+                [("success", "success"), ("failure", "failure")], worker, self.root / "workers", jobs=2
+            )
         self.assertEqual(results["success"]["exit_status"], 0)
         self.assertEqual(results["failure"]["exit_status"], 1)
         environments = [json.loads(item["output"].read_text()) for item in results.values()]
@@ -75,8 +80,9 @@ class ParallelProcessTests(unittest.TestCase):
             output.write_text('{"done": true}')
             return 0
 
-        results = parallel.run_tasks([("killed", "killed"), ("passed", "passed")], worker,
-                                     self.root / "workers", jobs=2)
+        results = parallel.run_tasks(
+            [("killed", "killed"), ("passed", "passed")], worker, self.root / "workers", jobs=2
+        )
         self.assertEqual(results["killed"]["exit_status"], -signal.SIGKILL)
         self.assertFalse(results["killed"]["output"].exists())
         self.assertEqual(results["passed"]["exit_status"], 0)
@@ -84,6 +90,7 @@ class ParallelProcessTests(unittest.TestCase):
     def test_invalid_capacity_and_duplicate_ids_do_not_start_workers(self):
         def worker(*_):
             self.fail("非法请求不能启动任务")
+
         for jobs, tasks in ((0, [("one", 1)]), (4, [("one", 1)]), (2, [("one", 1), ("one", 2)])):
             with self.subTest(jobs=jobs, tasks=tasks), self.assertRaises(ValueError):
                 parallel.run_tasks(tasks, worker, self.root / "workers", jobs=jobs)
@@ -93,15 +100,22 @@ class ParallelProcessTests(unittest.TestCase):
         script.write_text("import sys\nsys.path.insert(0, " + repr(str(ROOT)) + ")\n" + body)
         env = dict(os.environ, AE_LOCK_DIR=str(self.root / "locks"))
         env.pop(hi.HELD_ENV, None)
-        process = subprocess.Popen([sys.executable, str(script), str(self.root)], env=env,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                   start_new_session=True)
+        process = subprocess.Popen(
+            [sys.executable, str(script), str(self.root)],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+
         def close():
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             process.communicate(timeout=10)
+
         self.addCleanup(close)
         return process, env
 
@@ -112,7 +126,7 @@ class ParallelProcessTests(unittest.TestCase):
         self.assertTrue(path.exists(), "等不到合成进程信号：" + path.name)
 
     def test_interrupt_runs_worker_cleanup_and_reaps_registered_children(self):
-        process, _env = self.start_script('''
+        process, _env = self.start_script("""
 import os, time
 from pathlib import Path
 import verify_parallel as parallel
@@ -128,7 +142,7 @@ try:
     parallel.run_tasks([('first', 'first'), ('second', 'second')], worker, root / 'workers', jobs=2)
 except parallel.InterruptedRun:
     sys.exit(130)
-''')
+""")
         for name in ("first", "second"):
             self.wait_file(self.root / name)
         process.terminate()
@@ -140,7 +154,7 @@ except parallel.InterruptedRun:
                 os.kill(int((self.root / name).read_text()), 0)
 
     def test_forked_worker_keeps_existing_resource_lock_if_parent_is_killed(self):
-        process, env = self.start_script('''
+        process, env = self.start_script("""
 import os, time
 from pathlib import Path
 import host_isolation as hi
@@ -154,7 +168,7 @@ def worker(name, output):
         time.sleep(0.01)
     return 0
 parallel.run_tasks([('one', 'one')], worker, root / 'workers', jobs=1)
-''')
+""")
         self.wait_file(self.root / "entered")
         process.kill()
         process.wait(timeout=10)
@@ -170,8 +184,9 @@ class PartialResultAndFamilyTests(unittest.TestCase):
     setUp = ParallelProcessTests.setUp
     start_script = ParallelProcessTests.start_script
     wait_file = ParallelProcessTests.wait_file
+
     def test_cancellation_keeps_a_workers_already_written_failure(self):
-        process, _env = self.start_script('''
+        process, _env = self.start_script("""
 import os, time, json
 from pathlib import Path
 import verify_parallel as parallel
@@ -190,7 +205,7 @@ except parallel.InterruptedRun as error:
     if result:
         (root / 'preserved').write_text(result['output'].read_text())
     sys.exit(130)
-''')
+""")
         self.wait_file(self.root / "ready")
         process.terminate()
         out, err = process.communicate(timeout=10)
@@ -200,6 +215,7 @@ except parallel.InterruptedRun as error:
 
     def test_killed_worker_does_not_leave_its_service_child_running(self):
         import socket
+
         def worker(_name, _output):
             script = """
 import signal, socket, sys, time
@@ -215,6 +231,7 @@ while True: time.sleep(.01)
             (self.root / "child-pid").write_text(str(child.pid))
             self.wait_file(self.root / "port")
             os.kill(os.getpid(), signal.SIGKILL)
+
         def cleanup_child():
             pidfile = self.root / "child-pid"
             if pidfile.exists():
@@ -222,6 +239,7 @@ while True: time.sleep(.01)
                     os.kill(int(pidfile.read_text()), signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+
         self.addCleanup(cleanup_child)
         results = parallel.run_tasks([("killed", "killed")], worker, self.root / "workers", jobs=1)
         self.assertEqual(results["killed"]["exit_status"], -signal.SIGKILL)
@@ -235,7 +253,6 @@ while True: time.sleep(.01)
                 break
             time.sleep(0.01)
         self.assertTrue(closed, "异常 worker 的受控服务后代必须被回收")
-
 
     def test_signal_at_fork_cannot_escape_worker_registration(self):
         process, _env = self.start_script("""
@@ -261,12 +278,12 @@ except parallel.InterruptedRun as error:
 """)
         out, err = process.communicate(timeout=10)
         self.assertEqual(process.returncode, 130, out + err)
-        self.assertEqual((self.root / "registered").read_text(), "1",
-                         "fork 后立即取消，也必须先登记再回收 worker")
+        self.assertEqual((self.root / "registered").read_text(), "1", "fork 后立即取消，也必须先登记再回收 worker")
 
     def test_inline_task_keeps_original_process_and_child_timings_are_not_reap_delays(self):
         parent = os.getpid()
         marker = self.root / "child-done"
+
         def worker(name, output):
             if name == "serial":
                 self.wait_file(marker)
@@ -275,15 +292,17 @@ except parallel.InterruptedRun as error:
                 marker.write_text("done")
             output.write_text(str(os.getpid()))
             return 0
-        results = parallel.run_tasks([("child", "child")], worker, self.root / "workers", jobs=2,
-                                     inline=("serial", "serial"))
+
+        results = parallel.run_tasks(
+            [("child", "child")], worker, self.root / "workers", jobs=2, inline=("serial", "serial")
+        )
         self.assertEqual(int(results["serial"]["output"].read_text()), parent)
         self.assertNotEqual(int(results["child"]["output"].read_text()), parent)
         self.assertLess(results["child"]["seconds"], results["serial"]["seconds"])
         self.assertEqual(results["child"]["timing_precision"], "measured")
 
     def test_cancel_after_background_finished_while_inline_waits_keeps_all_records(self):
-        process, _env = self.start_script('''
+        process, _env = self.start_script("""
 import os, time
 from pathlib import Path
 import verify_parallel as parallel
@@ -305,7 +324,7 @@ try:
 except parallel.InterruptedRun as error:
     (root / 'preserved').write_text(error.results['background']['output'].read_text())
     sys.exit(128 + error.signum)
-''')
+""")
         self.wait_file(self.root / "ready")
         process.terminate()
         out, err = process.communicate(timeout=10)
@@ -314,7 +333,8 @@ except parallel.InterruptedRun as error:
 
     def test_cancel_during_family_cleanup_still_kills_registered_service(self):
         import socket
-        process, _env = self.start_script('''
+
+        process, _env = self.start_script("""
 import os, signal, subprocess, time
 from pathlib import Path
 import verify_parallel as parallel
@@ -340,7 +360,7 @@ try:
     parallel.run_tasks([('family', 'family')], worker, root / 'workers', jobs=1)
 except parallel.InterruptedRun as error:
     sys.exit(128 + error.signum)
-''')
+""")
         out, err = process.communicate(timeout=10)
         self.assertEqual(process.returncode, 143, out + err)
         port = int((self.root / "port").read_text())
@@ -351,11 +371,11 @@ except parallel.InterruptedRun as error:
                 closed = probe.connect_ex(("127.0.0.1", port)) != 0
             if closed or time.monotonic() >= deadline:
                 break
-            time.sleep(.01)
+            time.sleep(0.01)
         self.assertTrue(closed, "正常收尾期间取消，也必须收完已登记进程族")
 
     def test_cancel_after_waitpid_before_registration_keeps_the_reaped_result(self):
-        process, _env = self.start_script('''
+        process, _env = self.start_script("""
 import os, signal
 from pathlib import Path
 import verify_parallel as parallel
@@ -379,13 +399,13 @@ except parallel.InterruptedRun as error:
     result = error.results['one']
     (root / 'preserved').write_text(result['output'].read_text())
     sys.exit(128 + error.signum)
-''')
+""")
         out, err = process.communicate(timeout=10)
         self.assertEqual(process.returncode, 143, out + err)
         self.assertEqual((self.root / "preserved").read_text(), "original failed result")
 
     def test_cancel_allows_a_worker_to_finish_writing_its_partial_failure(self):
-        process, _env = self.start_script('''
+        process, _env = self.start_script("""
 import os, time
 from pathlib import Path
 import verify_parallel as parallel
@@ -402,7 +422,7 @@ try:
 except parallel.InterruptedRun as error:
     (root / 'preserved').write_text(error.results['partial']['output'].read_text())
     sys.exit(128 + error.signum)
-''')
+""")
         self.wait_file(self.root / "ready")
         process.terminate()
         out, err = process.communicate(timeout=10)

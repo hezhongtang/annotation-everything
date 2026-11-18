@@ -1,4 +1,5 @@
 """#115 公开行为：推翻假设、死局及整线组合。"""
+
 from __future__ import annotations
 
 import os
@@ -13,15 +14,21 @@ sys.path.insert(0, str(ROOT / "skill/annotation-everything/scripts"))
 sys.path.insert(0, str(ROOT))
 
 import host_isolation
+
 host_isolation.require_for_module(__name__)
 import analysis_store as analysis
 import notes_store as notes
 
 
 def question(key, *, parent=None):
-    return {"key": key, "text": "合成材料应采用哪个统计口径？", "short": "统计口径",
-            "options": [{"id": "year", "label": "全年"}, {"id": "quarter", "label": "季度"}],
-            "recommend": "year", "parent": parent}
+    return {
+        "key": key,
+        "text": "合成材料应采用哪个统计口径？",
+        "short": "统计口径",
+        "options": [{"id": "year", "label": "全年"}, {"id": "quarter", "label": "季度"}],
+        "recommend": "year",
+        "parent": parent,
+    }
 
 
 class AnalysisResolutionTests(unittest.TestCase):
@@ -47,9 +54,12 @@ class AnalysisResolutionTests(unittest.TestCase):
         first = before["nodes"]["n1"]["decision"]
         child = question("comparison", parent={"node": "n1", "option": "year"})
         child.update(text="合成材料的对比期间应采用哪个范围？", short="对比期间")
-        number = self.write(number, [child], assumptions=[
-            {"key": "source", "text": "合成原始材料的全年口径可比", "decisions": [first]}],
-            facts=[{"key": "verified", "text": "合成查证：样例数据覆盖全年", "source": "fixtures/sample"}])["nextRound"]
+        number = self.write(
+            number,
+            [child],
+            assumptions=[{"key": "source", "text": "合成原始材料的全年口径可比", "decisions": [first]}],
+            facts=[{"key": "verified", "text": "合成查证：样例数据覆盖全年", "source": "fixtures/sample"}],
+        )["nextRound"]
         analysis.answer(self.review, self.aid, number, "A:a1", {"kind": "accept"})
         analysis.answer(self.review, self.aid, number, "S:comparison", {"kind": "accept"})
         before = analysis.answer(self.review, self.aid, number, "Q:n2", {"kind": "accept"})
@@ -78,15 +88,22 @@ class AnalysisResolutionTests(unittest.TestCase):
         before_state = analysis.load(self.review, self.aid)
         before_notes = notes.load(self.review)
         with self.assertRaises(notes.HandoffError) as rejected:
-            analysis.writeback(self.review, self.aid, refresh["seq"], claimed["baseRev"], [],
-                               assumptions=[{**candidate, "decisions": [second]}])
+            analysis.writeback(
+                self.review,
+                self.aid,
+                refresh["seq"],
+                claimed["baseRev"],
+                [],
+                assumptions=[{**candidate, "decisions": [second]}],
+            )
         self.assertEqual(rejected.exception.code, "analysis-invalid-input")
         self.assertEqual(analysis.load(self.review, self.aid), before_state)
         self.assertEqual(notes.load(self.review), before_notes)
         self.assertTrue(analysis.decision_in_force(before_state, second))
         self.assertEqual(next(n for n in before_notes["notes"] if n["id"] == note["id"])["status"], "open")
-        retried = analysis.writeback(self.review, self.aid, refresh["seq"], claimed["baseRev"], [],
-                                     assumptions=[candidate])["state"]
+        retried = analysis.writeback(
+            self.review, self.aid, refresh["seq"], claimed["baseRev"], [], assumptions=[candidate]
+        )["state"]
         self.assertEqual(retried["assumptions"]["a1"]["decisions"], [first])
         self.assertTrue(retried["assumptions"]["a1"]["refuted"])
         self.assertTrue(analysis.decision_in_force(retried, second))
@@ -106,14 +123,26 @@ class AnalysisResolutionTests(unittest.TestCase):
         analysis.submit_round(review, aid, number)
         claimed = analysis.claim(review, seq=number)
         self.assertFalse(analysis.round_context(review, aid, number)["verificationRequests"][0]["allowExternal"])
-        number = analysis.writeback(review, aid, number, claimed["baseRev"], [], facts=[{
-            "key": "coverage", "text": "合成核查：统计数据覆盖全年", "source": "fixtures/sample"}])["nextRound"]
+        number = analysis.writeback(
+            review,
+            aid,
+            number,
+            claimed["baseRev"],
+            [],
+            facts=[{"key": "coverage", "text": "合成核查：统计数据覆盖全年", "source": "fixtures/sample"}],
+        )["nextRound"]
         answered = analysis.answer(review, aid, number, "Q:n1", {"kind": "accept", "verbatim": "确认采用全年"})
         did = answered["nodes"]["n1"]["decision"]
         analysis.submit_round(review, aid, number)
         claimed = analysis.claim(review, seq=number)
-        number = analysis.writeback(review, aid, number, claimed["baseRev"], [], assumptions=[{
-            "key": "comparable", "text": "合成数据全年可比", "decisions": [did]}])["nextRound"]
+        number = analysis.writeback(
+            review,
+            aid,
+            number,
+            claimed["baseRev"],
+            [],
+            assumptions=[{"key": "comparable", "text": "合成数据全年可比", "decisions": [did]}],
+        )["nextRound"]
         analysis.answer(review, aid, number, "A:a1", {"kind": "accept"})
         before = notes.load(review)
         draft = analysis.convert(review, aid, "n1", text="合成改稿意见：按全年口径说明增长")
@@ -189,9 +218,19 @@ class AnalysisResolutionTests(unittest.TestCase):
 
     def test_confirmed_option_dead_end_blocks_redecision_across_lines_until_refutation(self):
         number, _first, _second, _linked = self.reasoning()
-        result = self.write(number, dead_ends=[{
-            "key": "quarter-impossible", "kind": "option", "node": "n1", "option": "quarter",
-            "reason": "合成原始材料缺少季度可比范围", "assumptions": ["a1"]}])
+        result = self.write(
+            number,
+            dead_ends=[
+                {
+                    "key": "quarter-impossible",
+                    "kind": "option",
+                    "node": "n1",
+                    "option": "quarter",
+                    "reason": "合成原始材料缺少季度可比范围",
+                    "assumptions": ["a1"],
+                }
+            ],
+        )
         pending = result["state"]
         end = next(iter(pending["deadEnds"].values()))
         self.assertEqual(end["status"], "pending")
@@ -224,9 +263,18 @@ class AnalysisResolutionTests(unittest.TestCase):
         checkpoint = analysis.seal_checkpoint(self.review, self.aid)["checkpoints"][-1]
         analysis.fork_line(self.review, self.aid, checkpoint["id"])
         number = analysis.queue(self.review)[0]["seq"]
-        result = self.write(number, dead_ends=[{
-            "key": "old-line", "kind": "line", "targetLine": "main",
-            "reason": "合成旧思路需要重新审视", "assumptions": ["a1"]}])
+        result = self.write(
+            number,
+            dead_ends=[
+                {
+                    "key": "old-line",
+                    "kind": "line",
+                    "targetLine": "main",
+                    "reason": "合成旧思路需要重新审视",
+                    "assumptions": ["a1"],
+                }
+            ],
+        )
         end = next(iter(result["state"]["deadEnds"].values()))
         confirmed = analysis.answer(self.review, self.aid, result["nextRound"], "D:" + end["id"], {"kind": "accept"})
         for action in (
@@ -251,9 +299,19 @@ class AnalysisResolutionTests(unittest.TestCase):
         proposed["recommend"] = "quarter"
         number = self.write(number, [proposed])["nextRound"]
         analysis.answer(self.review, self.aid, number, "S:pending", {"kind": "accept"})
-        result = self.write(number, dead_ends=[{
-            "key": "pending-quarter", "kind": "option", "node": "n3", "option": "quarter",
-            "reason": "合成季度路径不成立", "assumptions": ["a1"]}])
+        result = self.write(
+            number,
+            dead_ends=[
+                {
+                    "key": "pending-quarter",
+                    "kind": "option",
+                    "node": "n3",
+                    "option": "quarter",
+                    "reason": "合成季度路径不成立",
+                    "assumptions": ["a1"],
+                }
+            ],
+        )
         end = next(iter(result["state"]["deadEnds"].values()))
         number = result["nextRound"]
         before = analysis.answer(self.review, self.aid, number, "D:" + end["id"], {"kind": "accept"})
@@ -307,13 +365,25 @@ class AnalysisResolutionTests(unittest.TestCase):
 
     def test_dead_end_confirmation_during_claim_preserves_baseline_and_history(self):
         number, _first, _second, _linked = self.reasoning()
-        result = self.write(number, dead_ends=[{
-            "key": "quarter", "kind": "option", "node": "n1", "option": "quarter",
-            "reason": "合成季度路径不可用", "assumptions": ["a1"]}])
+        result = self.write(
+            number,
+            dead_ends=[
+                {
+                    "key": "quarter",
+                    "kind": "option",
+                    "node": "n1",
+                    "option": "quarter",
+                    "reason": "合成季度路径不可用",
+                    "assumptions": ["a1"],
+                }
+            ],
+        )
         number = result["nextRound"]
         analysis.submit_round(self.review, self.aid, number)
         claimed = analysis.claim(self.review, seq=number)
-        state = analysis.answer(self.review, self.aid, number, "D:e1", {"kind": "accept", "verbatim": "处理期间确认死局"})
+        state = analysis.answer(
+            self.review, self.aid, number, "D:e1", {"kind": "accept", "verbatim": "处理期间确认死局"}
+        )
         self.assertEqual(state["rev"], claimed["baseRev"])
         result = analysis.writeback(self.review, self.aid, number, claimed["baseRev"], [])
         self.assertIsNone(result["nextRound"])
@@ -327,16 +397,29 @@ class AnalysisResolutionTests(unittest.TestCase):
         analysis.submit_round(self.review, self.aid, number)
         claimed = analysis.claim(self.review, seq=number)
         before = analysis.load(self.review, self.aid)
-        for proposal in ({"key": "invalid", "kind": "option", "node": "n1", "option": "quarter",
-                          "assumptions": ["a1"]},
-                         {"key": "invalid", "kind": "option", "node": "n1", "option": "quarter",
-                          "reason": "合成理由", "assumptions": ["unknown"]}):
+        for proposal in (
+            {"key": "invalid", "kind": "option", "node": "n1", "option": "quarter", "assumptions": ["a1"]},
+            {
+                "key": "invalid",
+                "kind": "option",
+                "node": "n1",
+                "option": "quarter",
+                "reason": "合成理由",
+                "assumptions": ["unknown"],
+            },
+        ):
             with self.assertRaises(notes.HandoffError) as invalid:
                 analysis.writeback(self.review, self.aid, number, claimed["baseRev"], [], dead_ends=[proposal])
             self.assertEqual(invalid.exception.code, "bad-dead-ends")
             self.assertEqual(analysis.load(self.review, self.aid), before)
-        proposal = {"key": "quarter", "kind": "option", "node": "n1", "option": "quarter",
-                    "reason": "合成提议理由", "assumptions": ["a1"]}
+        proposal = {
+            "key": "quarter",
+            "kind": "option",
+            "node": "n1",
+            "option": "quarter",
+            "reason": "合成提议理由",
+            "assumptions": ["a1"],
+        }
         result = analysis.writeback(self.review, self.aid, number, claimed["baseRev"], [], dead_ends=[proposal])
         number = result["nextRound"]
         rejected = analysis.answer(self.review, self.aid, number, "D:e1", {"kind": "reject"})
@@ -355,20 +438,34 @@ class AnalysisResolutionTests(unittest.TestCase):
         decision = state["nodes"]["n1"]["decision"]
         analysis.request_update(self.review, self.aid, linked[0]["id"])
         number = analysis.queue(self.review)[0]["seq"]
-        result = self.write(number, [question("later")],
-                            updates=[{"noteId": linked[0]["id"], "text": "合成更新原话"}],
-                            assumptions=[{"key": "new-source", "text": "合成新口径假设", "decisions": [decision]}],
-                            dead_ends=[{"key": "comparison-quarter", "kind": "option", "node": "n2",
-                                        "option": "quarter", "reason": "合成不可比路径", "assumptions": ["a1"]}])
+        result = self.write(
+            number,
+            [question("later")],
+            updates=[{"noteId": linked[0]["id"], "text": "合成更新原话"}],
+            assumptions=[{"key": "new-source", "text": "合成新口径假设", "decisions": [decision]}],
+            dead_ends=[
+                {
+                    "key": "comparison-quarter",
+                    "kind": "option",
+                    "node": "n2",
+                    "option": "quarter",
+                    "reason": "合成不可比路径",
+                    "assumptions": ["a1"],
+                }
+            ],
+        )
         number = result["nextRound"]
         context = analysis.round_context(self.review, self.aid, number)
-        self.assertEqual([item["type"] for item in context["items"]],
-                         ["deadend", "update", "assumption", "structure", "question"])
-        answers = {"D:e1": {"kind": "accept", "verbatim": "死局确认原话"},
-                   "U:u1": {"kind": "accept", "verbatim": "新文本确认原话"},
-                   "A:a2": {"kind": "accept", "verbatim": "假设确认原话"},
-                   "S:later": {"kind": "accept", "verbatim": "结构确认原话"},
-                   "Q:n3": {"kind": "text", "text": "合成保留原话", "verbatim": "问题回答原话"}}
+        self.assertEqual(
+            [item["type"] for item in context["items"]], ["deadend", "update", "assumption", "structure", "question"]
+        )
+        answers = {
+            "D:e1": {"kind": "accept", "verbatim": "死局确认原话"},
+            "U:u1": {"kind": "accept", "verbatim": "新文本确认原话"},
+            "A:a2": {"kind": "accept", "verbatim": "假设确认原话"},
+            "S:later": {"kind": "accept", "verbatim": "结构确认原话"},
+            "Q:n3": {"kind": "text", "text": "合成保留原话", "verbatim": "问题回答原话"},
+        }
         for key, value in answers.items():
             analysis.answer(self.review, self.aid, number, key, value)
         analysis.answer(self.review, self.aid, number, "Q:n4", {"kind": "accept"})
@@ -378,9 +475,13 @@ class AnalysisResolutionTests(unittest.TestCase):
         for key, value in answers.items():
             self.assertEqual(context["answers"].get(key), value, key)
         self.assertNotIn("Q:n4", context["answers"])
-        self.assertEqual([item["type"] for item in context["items"]],
-                         sorted([item["type"] for item in context["items"]],
-                                key={"deadend": 0, "update": 1, "assumption": 2, "structure": 3, "question": 4}.get))
+        self.assertEqual(
+            [item["type"] for item in context["items"]],
+            sorted(
+                [item["type"] for item in context["items"]],
+                key={"deadend": 0, "update": 1, "assumption": 2, "structure": 3, "question": 4}.get,
+            ),
+        )
         counts = (len(state["nodes"]), len(state["decisions"]), len(state["deadEnds"]), len(state["updates"]))
         claimed = analysis.claim(self.review, seq=refreshed)
         with self.assertRaises(notes.HandoffError) as stale:
@@ -394,7 +495,9 @@ class AnalysisResolutionTests(unittest.TestCase):
         final = self.write(result["nextRound"])
         self.assertIsNone(final["nextRound"])
         state = final["state"]
-        self.assertEqual((len(state["nodes"]), len(state["decisions"]), len(state["deadEnds"]), len(state["updates"])), counts)
+        self.assertEqual(
+            (len(state["nodes"]), len(state["decisions"]), len(state["deadEnds"]), len(state["updates"])), counts
+        )
         note = next(n for n in analysis.linked_notes(self.review, self.aid) if n["id"] == linked[0]["id"])
         self.assertEqual((note["text"], len(note["analysisHistory"])), ("合成更新原话", 1))
 

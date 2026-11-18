@@ -1,4 +1,5 @@
 """#112 的公开行为：焦点、五种作答、假设及查证事实。仅用合成审阅。"""
+
 from __future__ import annotations
 
 import json
@@ -22,14 +23,19 @@ import analysis_store as analysis
 import notes_store as store
 import notes as notes_cli
 
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
 
 import serve
 
 
 def question(key="caliber"):
-    return {"key": key, "text": "采用哪个口径？", "short": "口径", "recommend": "year",
-            "options": [{"id": "year", "label": "全年"}, {"id": "quarter", "label": "季度"}]}
+    return {
+        "key": key,
+        "text": "采用哪个口径？",
+        "short": "口径",
+        "recommend": "year",
+        "options": [{"id": "year", "label": "全年"}, {"id": "quarter", "label": "季度"}],
+    }
 
 
 class AnalysisLifecycleTests(unittest.TestCase):
@@ -49,8 +55,7 @@ class AnalysisLifecycleTests(unittest.TestCase):
     def open_questions(self, count=1):
         aid, seq = self.start()
         claimed = analysis.claim(self.d, seq=seq)
-        result = analysis.writeback(self.d, aid, seq, claimed["baseRev"],
-                                    [question(f"p{i}") for i in range(count)])
+        result = analysis.writeback(self.d, aid, seq, claimed["baseRev"], [question(f"p{i}") for i in range(count)])
         seq = result["nextRound"]
         for i in range(count):
             analysis.answer(self.d, aid, seq, f"S:p{i}", {"kind": "accept"})
@@ -58,8 +63,9 @@ class AnalysisLifecycleTests(unittest.TestCase):
 
     def test_page_and_blank_focus_do_not_create_or_hold_notes(self):
         _, untouched = store.add(self.d, {"page": 1, "text": "原有未处理批注"})
-        (self.d / "review.json").write_text(json.dumps({"pages": [
-            {"n": 1, "key": "summary", "title": "合成概要", "stable": True}]}))
+        (self.d / "review.json").write_text(
+            json.dumps({"pages": [{"n": 1, "key": "summary", "title": "合成概要", "stable": True}]})
+        )
         state, seq = analysis.start_question(self.d, "这一页的结论有依据吗？", page=1)
         self.assertIsNone(state["sourceNote"])
         self.assertEqual(state["sourceCopy"]["key"], "summary")
@@ -125,8 +131,14 @@ class AnalysisLifecycleTests(unittest.TestCase):
         self.assertEqual(answered["Q:n5"]["text"], "采用哪个口径？")
         self.assertEqual(answered["Q:n5"]["recommend"], "year")
         claimed = analysis.claim(self.d, seq=seq)
-        nxt = analysis.writeback(self.d, aid, seq, claimed["baseRev"], [], facts=[
-            {"key": "sales", "text": "合成底稿全年收入为120。", "source": "合成底稿第2页", "node": "n5"}])["nextRound"]
+        nxt = analysis.writeback(
+            self.d,
+            aid,
+            seq,
+            claimed["baseRev"],
+            [],
+            facts=[{"key": "sales", "text": "合成底稿全年收入为120。", "source": "合成底稿第2页", "node": "n5"}],
+        )["nextRound"]
         ctx = analysis.round_context(self.d, aid, nxt)
         self.assertEqual(ctx["facts"][0]["text"], "合成底稿全年收入为120。")
         self.assertIn("Q:n5", [i["key"] for i in ctx["items"]])
@@ -135,7 +147,9 @@ class AnalysisLifecycleTests(unittest.TestCase):
     def test_partial_answer_and_rejected_proposal_do_not_disappear_or_repeat(self):
         aid, seq = self.start()
         claimed = analysis.claim(self.d, seq=seq)
-        seq = analysis.writeback(self.d, aid, seq, claimed["baseRev"], [question("keep"), question("drop")])["nextRound"]
+        seq = analysis.writeback(self.d, aid, seq, claimed["baseRev"], [question("keep"), question("drop")])[
+            "nextRound"
+        ]
         analysis.answer(self.d, aid, seq, "S:drop", {"kind": "reject"})
         analysis.submit_round(self.d, aid, seq)
         claimed = analysis.claim(self.d, seq=seq)
@@ -149,9 +163,17 @@ class AnalysisLifecycleTests(unittest.TestCase):
         did = state["nodes"]["n1"]["decision"]
         analysis.submit_round(self.d, aid, seq)
         claimed = analysis.claim(self.d, seq=seq)
-        seq = analysis.writeback(self.d, aid, seq, claimed["baseRev"], [], assumptions=[
-            {"key": "scope", "text": "两期合并范围一致。", "decisions": [did]},
-            {"key": "season", "text": "不存在季节性影响。", "decisions": [did]}])["nextRound"]
+        seq = analysis.writeback(
+            self.d,
+            aid,
+            seq,
+            claimed["baseRev"],
+            [],
+            assumptions=[
+                {"key": "scope", "text": "两期合并范围一致。", "decisions": [did]},
+                {"key": "season", "text": "不存在季节性影响。", "decisions": [did]},
+            ],
+        )["nextRound"]
         ctx = analysis.round_context(self.d, aid, seq)
         self.assertEqual([i["type"] for i in ctx["items"]], ["assumption", "assumption", "question"])
         analysis.answer(self.d, aid, seq, "A:a1", {"kind": "accept"})
@@ -171,8 +193,14 @@ class AnalysisLifecycleTests(unittest.TestCase):
         other_decision = state["nodes"]["n2"]["decision"]
         analysis.submit_round(self.d, aid, seq)
         claimed = analysis.claim(self.d, seq=seq)
-        after = analysis.writeback(self.d, aid, seq, claimed["baseRev"], [], assumptions=[
-            {"key": "scope", "text": "两期合并范围一致。", "decisions": [other_decision]}])["state"]
+        after = analysis.writeback(
+            self.d,
+            aid,
+            seq,
+            claimed["baseRev"],
+            [],
+            assumptions=[{"key": "scope", "text": "两期合并范围一致。", "decisions": [other_decision]}],
+        )["state"]
         self.assertEqual(set(after["assumptions"]), old_ids)
         self.assertEqual(after["decisions"][other_decision]["assumptions"], ["a1"])
         self.assertEqual(after["assumptions"]["a1"]["confirmed"]["main"], "confirmed")
@@ -193,8 +221,12 @@ class AnalysisLifecycleTests(unittest.TestCase):
         original = state["nodes"]["n1"]["decision"]
         analysis.submit_round(self.d, aid, seq)
         claimed = analysis.claim(self.d, seq=seq)
-        split = {"key": "split", "op": "split", "targets": ["n1"],
-                 "replacements": [question("split-a"), question("split-b")]}
+        split = {
+            "key": "split",
+            "op": "split",
+            "targets": ["n1"],
+            "replacements": [question("split-a"), question("split-b")],
+        }
         seq = analysis.writeback(self.d, aid, seq, claimed["baseRev"], [split])["nextRound"]
         before = analysis.load(self.d, aid)
         self.assertEqual(before["nodes"]["n1"]["status"], "decided")
@@ -213,8 +245,7 @@ class AnalysisLifecycleTests(unittest.TestCase):
         self.assertEqual(list(state["nodes"]), ["n1", "n2", *new_ids])
         analysis.submit_round(self.d, aid, seq)
         claimed = analysis.claim(self.d, seq=seq)
-        merge = {"key": "merge", "op": "merge", "targets": new_ids,
-                 "replacements": [question("merged")]}
+        merge = {"key": "merge", "op": "merge", "targets": new_ids, "replacements": [question("merged")]}
         seq = analysis.writeback(self.d, aid, seq, claimed["baseRev"], [merge])["nextRound"]
         state = analysis.answer(self.d, aid, seq, "S:merge", {"kind": "accept"})
         self.assertTrue(all(state["nodes"][nid]["status"] == "void" for nid in new_ids))
@@ -222,8 +253,9 @@ class AnalysisLifecycleTests(unittest.TestCase):
         self.assertEqual(state["nodes"][merged]["status"], "pending")
         analysis.submit_round(self.d, aid, seq)
         claimed = analysis.claim(self.d, seq=seq)
-        seq = analysis.writeback(self.d, aid, seq, claimed["baseRev"], [
-            {"key": "void", "op": "void", "targets": [merged]}])["nextRound"]
+        seq = analysis.writeback(
+            self.d, aid, seq, claimed["baseRev"], [{"key": "void", "op": "void", "targets": [merged]}]
+        )["nextRound"]
         state = analysis.answer(self.d, aid, seq, "S:void", {"kind": "accept"})
         self.assertEqual(state["nodes"][merged]["status"], "void")
         self.assertEqual(state["nodes"]["n2"]["status"], "pending")
@@ -245,6 +277,7 @@ class AnalysisLifecycleTests(unittest.TestCase):
 
 class AnalysisLifecycleTransportTests(unittest.TestCase):
     """只核对新增传输形状，不在 HTTP 重复存储规则。"""
+
     setUp = AnalysisLifecycleTests.setUp
     start = AnalysisLifecycleTests.start
     open_questions = AnalysisLifecycleTests.open_questions
@@ -257,8 +290,20 @@ class AnalysisLifecycleTransportTests(unittest.TestCase):
         path.write_text(json.dumps({"proposals": [], "facts": [{"key": "synthetic-private", "text": ""}]}))
         errors = io.StringIO()
         with redirect_stdout(io.StringIO()), redirect_stderr(errors):
-            code = notes_cli.main(["analysis-writeback", str(self.d), "--round", str(seq), "--base-rev",
-                                   str(claimed["baseRev"]), "--proposals", str(path), "--locale", "en"])
+            code = notes_cli.main(
+                [
+                    "analysis-writeback",
+                    str(self.d),
+                    "--round",
+                    str(seq),
+                    "--base-rev",
+                    str(claimed["baseRev"]),
+                    "--proposals",
+                    str(path),
+                    "--locale",
+                    "en",
+                ]
+            )
         self.assertEqual(code, 1)
         self.assertIn("Invalid analysis input", errors.getvalue())
         self.assertNotIn("synthetic-private", errors.getvalue())
@@ -271,14 +316,27 @@ class AnalysisLifecycleTransportTests(unittest.TestCase):
         did = state["nodes"]["n1"]["decision"]
         analysis.submit_round(self.d, aid, seq)
         claimed = analysis.claim(self.d, seq=seq)
-        payload = {"proposals": [], "assumptions": [{"key": "scope", "text": "两期范围一致", "decisions": [did]}],
-                   "facts": [{"key": "source", "text": "合成材料记载为120", "source": "合成底稿"}]}
+        payload = {
+            "proposals": [],
+            "assumptions": [{"key": "scope", "text": "两期范围一致", "decisions": [did]}],
+            "facts": [{"key": "source", "text": "合成材料记载为120", "source": "合成底稿"}],
+        }
         path = self.d / "writeback.json"
         path.write_text(json.dumps(payload))
         output = io.StringIO()
         with redirect_stdout(output):
-            code = notes_cli.main(["analysis-writeback", str(self.d), "--round", str(seq),
-                                   "--base-rev", str(claimed["baseRev"]), "--proposals", str(path)])
+            code = notes_cli.main(
+                [
+                    "analysis-writeback",
+                    str(self.d),
+                    "--round",
+                    str(seq),
+                    "--base-rev",
+                    str(claimed["baseRev"]),
+                    "--proposals",
+                    str(path),
+                ]
+            )
         self.assertEqual(code, 0)
         ctx = analysis.round_context(self.d, aid, json.loads(output.getvalue())["nextRound"])
         self.assertEqual(ctx["facts"][0]["text"], "合成材料记载为120")
@@ -298,27 +356,41 @@ class AnalysisLifecycleTransportTests(unittest.TestCase):
         self.assertIn("only be suggested for an open annotation", errors.getvalue())
 
     def test_http_start_focus_and_switch_have_compatible_response(self):
-        (self.d / "review.json").write_text(json.dumps({"reviewId": "synthetic-life", "pages": [
-            {"n": 1, "key": "summary", "title": "合成概要", "stable": True}]}))
+        (self.d / "review.json").write_text(
+            json.dumps(
+                {
+                    "reviewId": "synthetic-life",
+                    "pages": [{"n": 1, "key": "summary", "title": "合成概要", "stable": True}],
+                }
+            )
+        )
         server = serve.ReviewServer(self.d, 0, log_to_file=False, locale="en")
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
+
         def cleanup():
             server.shutdown()
             server.server_close()
             worker.join(2)
+
         self.addCleanup(cleanup)
-        headers = {"Host": f"127.0.0.1:{server.port}", "Origin": f"http://127.0.0.1:{server.port}",
-                   "Content-Type": "application/json", "X-AE-Review": "synthetic-life"}
+        headers = {
+            "Host": f"127.0.0.1:{server.port}",
+            "Origin": f"http://127.0.0.1:{server.port}",
+            "Content-Type": "application/json",
+            "X-AE-Review": "synthetic-life",
+        }
         code, _, raw = serve._req(server.port, "POST", "/api/analysis/start", headers, {"focus": ""})
         self.assertEqual(code, 400)
         rejected = json.loads(raw)
         self.assertEqual(rejected["code"], "focus-required")
         self.assertIn("focus question", rejected["error"])
+
         def post(op, data):
             code, _, raw = serve._req(server.port, "POST", "/api/analysis/" + op, headers, data)
             self.assertEqual(code, 200, raw)
             return json.loads(raw)
+
         first = post("start", {"focus": "合成页中的结论成立吗？", "page": 1})
         self.assertIsNone(first["note"])
         self.assertEqual(first["analysis"]["sourceCopy"]["key"], "summary")

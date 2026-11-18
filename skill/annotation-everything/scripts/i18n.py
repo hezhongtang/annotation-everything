@@ -10,6 +10,7 @@ tMsg 里，不另开资源路由。tests/test_i18n.py 与 tests/test_review_page
 中英非负整数计数复数，以及上面那份命令行样板。不做 ICU / MessageFormat、消息
 嵌套、序数或任意表达式。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -106,9 +107,9 @@ def canonical_choice(value: object) -> str | None:
         return AUTO
     tag = normalize_locale(text)
     if tag is None:
-        raise LocaleError("unsupported-locale",
-                          f"不支持的语言：{text}（可选：{'、'.join(SUPPORTED)} 或 {AUTO}）",
-                          locale=text)
+        raise LocaleError(
+            "unsupported-locale", f"不支持的语言：{text}（可选：{'、'.join(SUPPORTED)} 或 {AUTO}）", locale=text
+        )
     return tag
 
 
@@ -149,9 +150,9 @@ def resolve_locale(choice: object, *, system_languages: Sequence[str] = ()) -> s
             if matched:
                 return matched
         return AUTO_FALLBACK
-    raise LocaleError("unsupported-locale",
-                      f"不支持的语言：{text}（可选：{'、'.join(SUPPORTED)} 或 {AUTO}）",
-                      locale=text)
+    raise LocaleError(
+        "unsupported-locale", f"不支持的语言：{text}（可选：{'、'.join(SUPPORTED)} 或 {AUTO}）", locale=text
+    )
 
 
 _PLACEHOLDER = re.compile(r"\{\{|\}\}|\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -259,9 +260,15 @@ def catalog(locale: str, root: Path | None = None) -> dict:
     return cached
 
 
-def translate(catalog: Mapping, key: str, *, catalogs: Mapping[str, Mapping] | None = None,
-              on_missing: Callable[[str], None] | None = None,
-              count: int | None = None, **params: object) -> str:
+def translate(
+    catalog: Mapping,
+    key: str,
+    *,
+    catalogs: Mapping[str, Mapping] | None = None,
+    on_missing: Callable[[str], None] | None = None,
+    count: int | None = None,
+    **params: object,
+) -> str:
     """在指定词典里查一条消息并插值。
 
     count 只用于挑选复数分支，同时作为名为 count 的占位符。当前词典没有这条
@@ -304,8 +311,7 @@ def check_catalogs(root: Path | None = None) -> list[str]:
 
     def bases(tag: str) -> dict[str, set[str]]:
         messages = catalogs[tag]["messages"]
-        return {k: placeholders(v) for k, v in messages.items()
-                if not _is_branch(k, messages)}
+        return {k: placeholders(v) for k, v in messages.items() if not _is_branch(k, messages)}
 
     reference = bases(SUPPORTED[0])
     for tag in SUPPORTED[1:]:
@@ -317,8 +323,8 @@ def check_catalogs(root: Path | None = None) -> list[str]:
         for key in sorted(set(reference) & set(current)):
             if reference[key] != current[key]:
                 problems.append(
-                    f"{key} 的占位符不一致：{SUPPORTED[0]} 是 {sorted(reference[key])}，"
-                    f"{tag} 是 {sorted(current[key])}")
+                    f"{key} 的占位符不一致：{SUPPORTED[0]} 是 {sorted(reference[key])}，{tag} 是 {sorted(current[key])}"
+                )
 
     for tag in SUPPORTED:
         messages = catalogs[tag]["messages"]
@@ -326,18 +332,14 @@ def check_catalogs(root: Path | None = None) -> list[str]:
             head, _, suffix = key.rpartition(".")
             missing = [s for s in _BRANCH_SUFFIXES if f"{head}.{s}" not in messages]
             if missing:
-                problems.append(
-                    f"{tag} 的复数分支不完整：{head} 缺 "
-                    + ", ".join(f"{head}.{s}" for s in missing))
+                problems.append(f"{tag} 的复数分支不完整：{head} 缺 " + ", ".join(f"{head}.{s}" for s in missing))
             for branch in _BRANCH_SUFFIXES:
                 full = f"{head}.{branch}"
                 if full in messages:
                     want = placeholders(messages[head])
                     got = placeholders(messages[full])
                     if want != got:
-                        problems.append(
-                            f"{tag} 的 {full} 占位符与 {head} 不一致："
-                            f"{sorted(want)} 对 {sorted(got)}")
+                        problems.append(f"{tag} 的 {full} 占位符与 {head} 不一致：{sorted(want)} 对 {sorted(got)}")
         # 计数消息必须分支齐全：英文分 one / other，中文不分。少了分支会静默退化成
         # "1 annotations"，所以这里当成资源错误，而不是留给运行时发现。
         for key in sorted(bases(tag)):
@@ -350,9 +352,7 @@ def check_catalogs(root: Path | None = None) -> list[str]:
             else:
                 extra = [s for s in _BRANCH_SUFFIXES if f"{key}.{s}" in messages]
                 if extra:
-                    problems.append(
-                        f"{tag} 的计数消息 {key} 不该有复数分支："
-                        + ", ".join(f"{key}.{s}" for s in extra))
+                    problems.append(f"{tag} 的计数消息 {key} 不该有复数分支：" + ", ".join(f"{key}.{s}" for s in extra))
     return problems
 
 
@@ -370,8 +370,7 @@ def system_languages(env: Mapping[str, str] | None = None) -> list[str]:
     return found
 
 
-def cli_choice(explicit: object, environ: Mapping[str, str] | None = None,
-               stored: object = None) -> object:
+def cli_choice(explicit: object, environ: Mapping[str, str] | None = None, stored: object = None) -> object:
     """命令行的语言选择：显式参数 > 环境变量 AE_LOCALE > 审阅保存值。
 
     三级都没有时返回 None，由 resolve_locale 兜底成中文（旧调用行为不变）。
@@ -380,11 +379,9 @@ def cli_choice(explicit: object, environ: Mapping[str, str] | None = None,
     return effective_choice(explicit, env.get(ENV_VAR), stored)
 
 
-def cli_locale(explicit: object, environ: Mapping[str, str] | None = None,
-               stored: object = None) -> str:
+def cli_locale(explicit: object, environ: Mapping[str, str] | None = None, stored: object = None) -> str:
     """按共同契约解析命令行的语言；非法选择抛 LocaleError（不静默改值）。"""
-    return resolve_locale(cli_choice(explicit, environ, stored),
-                          system_languages=system_languages(environ))
+    return resolve_locale(cli_choice(explicit, environ, stored), system_languages=system_languages(environ))
 
 
 def explicit_locale(argv) -> object:
@@ -438,8 +435,7 @@ def classify_cli_error(message: str) -> tuple[str, dict]:
     return CLI_ERROR_GENERIC, {"detail": text}
 
 
-def translate_cli_error(message: str, keys: Mapping[str, str],
-                        translate: Callable[..., str]) -> str:
+def translate_cli_error(message: str, keys: Mapping[str, str], translate: Callable[..., str]) -> str:
     """按入口自己的消息 key 表，把 argparse 的英文报错换成本地化的说法。
 
     keys 把类别（CLI_ERROR_*）映射到消息 key，必须含 CLI_ERROR_GENERIC 一项。
@@ -461,8 +457,7 @@ class LocalizedParser(argparse.ArgumentParser):
     语言查词典。报错时先打印用法，再打印本地化说明，退出码 2。
     """
 
-    def __init__(self, *args, keys: Mapping[str, str],
-                 translate: Callable[..., str], **kwargs):
+    def __init__(self, *args, keys: Mapping[str, str], translate: Callable[..., str], **kwargs):
         super().__init__(*args, **kwargs)
         self.keys = keys
         self.translate = translate
@@ -470,8 +465,7 @@ class LocalizedParser(argparse.ArgumentParser):
     def add_subparsers(self, **kwargs):
         # add_subparsers 默认用 type(self) 建子解析器；把自己的 key 表与译文一起
         # 传下去，子命令的报错才不会退回 argparse 的英文原文
-        kwargs.setdefault("parser_class",
-                          partial(type(self), keys=self.keys, translate=self.translate))
+        kwargs.setdefault("parser_class", partial(type(self), keys=self.keys, translate=self.translate))
         return super().add_subparsers(**kwargs)
 
     def error(self, message: str):
@@ -480,8 +474,9 @@ class LocalizedParser(argparse.ArgumentParser):
         sys.exit(2)
 
 
-def locale_error_message(exc: Exception, keys: Mapping[str, str],
-                         translate: Callable[..., str], name: object = None) -> str:
+def locale_error_message(
+    exc: Exception, keys: Mapping[str, str], translate: Callable[..., str], name: object = None
+) -> str:
     """语言选择为空或非法时的一句话；按异常里带的值区分空值和非法值。
 
     keys 需要 CLI_ERROR_EMPTY_LOCALE 与 CLI_ERROR_INVALID_LOCALE 两项。此时没有
@@ -580,5 +575,4 @@ class Translator:
         def on_missing(used: str) -> None:
             self.missing.append(used)
 
-        return translate(self.catalog, key, catalogs=self.catalogs,
-                         on_missing=on_missing, count=count, **params)
+        return translate(self.catalog, key, catalogs=self.catalogs, on_missing=on_missing, count=count, **params)

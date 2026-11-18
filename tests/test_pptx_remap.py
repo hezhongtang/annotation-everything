@@ -3,6 +3,7 @@
 fixture 全部现场合成（fixtures/pptx/make_pptx.py 的变体），不入库真实材料。只用标准库：
 python3 -m unittest tests.test_pptx_remap
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -20,12 +21,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT / "fixtures" / "pptx"))
-os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))   # 测试不碰用户真实的审阅台账
+os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))  # 测试不碰用户真实的审阅台账
 _test_user = tempfile.mkdtemp(prefix="ae-test-user-")
 os.environ.setdefault("HOME", _test_user)
 os.environ.setdefault("USERPROFILE", _test_user)
 
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
 
 import build_viewer  # noqa: E402
 import export_format as ef  # noqa: E402
@@ -36,9 +37,11 @@ import pptx_reader as pr  # noqa: E402
 
 FP = "ab" * 32
 OLD_FP, NEW_FP = "0" * 64, "1" * 64
-PNG_1PX = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06"
-           b"\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
-           b"\x0d\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+PNG_1PX = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06"
+    b"\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+    b"\x0d\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 def tmp() -> Path:
@@ -55,8 +58,10 @@ SldLST = '<p:sldIdLst><p:sldId id="260" r:id="rIdSecond"/><p:sldId id="257" r:id
 
 def reorder(parts: dict) -> dict:
     out = dict(parts)
-    swapped = SldLST.replace('id="260" r:id="rIdSecond"/><p:sldId id="257" r:id="rIdFirst"',
-                             'id="257" r:id="rIdFirst"/><p:sldId id="260" r:id="rIdSecond"')
+    swapped = SldLST.replace(
+        'id="260" r:id="rIdSecond"/><p:sldId id="257" r:id="rIdFirst"',
+        'id="257" r:id="rIdFirst"/><p:sldId id="260" r:id="rIdSecond"',
+    )
     assert swapped != SldLST
     out["ppt/presentation.xml"] = parts["ppt/presentation.xml"].replace(SldLST, swapped)
     return out
@@ -64,8 +69,11 @@ def reorder(parts: dict) -> dict:
 
 def drop_slide(parts: dict, slide_id: str = "260") -> dict:
     out = dict(parts)
-    entry = next(s for s in ('<p:sldId id="260" r:id="rIdSecond"/>', '<p:sldId id="257" r:id="rIdFirst"/>')
-                 if f'id="{slide_id}"' in s)
+    entry = next(
+        s
+        for s in ('<p:sldId id="260" r:id="rIdSecond"/>', '<p:sldId id="257" r:id="rIdFirst"/>')
+        if f'id="{slide_id}"' in s
+    )
     out["ppt/presentation.xml"] = parts["ppt/presentation.xml"].replace(entry, "")
     return out
 
@@ -82,21 +90,27 @@ def drop_notes_rel(parts: dict) -> dict:
     out = dict(parts)
     out["ppt/slides/_rels/slide10.xml.rels"] = parts["ppt/slides/_rels/slide10.xml.rels"].replace(
         '<Relationship Id="rIdNotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships'
-        '/notesSlide" Target="../notesSlides/notesSlide1.xml"/>', "")
+        '/notesSlide" Target="../notesSlides/notesSlide1.xml"/>',
+        "",
+    )
     return out
 
 
-ORIGINAL_PIC = ('<p:pic><p:nvPicPr><p:cNvPr id="11" name="合成图片" descr="合成图片替代文本"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>'
-                '<p:blipFill><a:blip r:embed="rIdImage"/></p:blipFill>'
-                '<p:spPr><a:xfrm><a:off x="1000000" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr></p:pic>')
+ORIGINAL_PIC = (
+    '<p:pic><p:nvPicPr><p:cNvPr id="11" name="合成图片" descr="合成图片替代文本"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>'
+    '<p:blipFill><a:blip r:embed="rIdImage"/></p:blipFill>'
+    '<p:spPr><a:xfrm><a:off x="1000000" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr></p:pic>'
+)
 
 
 def duplicate_picture_id(parts: dict) -> dict:
     """在元素页再放一个同 id 的图片（名称与几何不同）：形状标识撞车，只能靠证据消歧。"""
     out = dict(parts)
-    clone = ('<p:pic><p:nvPicPr><p:cNvPr id="11" name="重复图片"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>'
-             '<p:blipFill><a:blip r:embed="rIdImage"/></p:blipFill>'
-             '<p:spPr><a:xfrm><a:off x="3000000" y="0"/><a:ext cx="500000" cy="500000"/></a:xfrm></p:spPr></p:pic>')
+    clone = (
+        '<p:pic><p:nvPicPr><p:cNvPr id="11" name="重复图片"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>'
+        '<p:blipFill><a:blip r:embed="rIdImage"/></p:blipFill>'
+        '<p:spPr><a:xfrm><a:off x="3000000" y="0"/><a:ext cx="500000" cy="500000"/></a:xfrm></p:spPr></p:pic>'
+    )
     assert ORIGINAL_PIC in parts["ppt/slides/slide2.xml"]
     out["ppt/slides/slide2.xml"] = parts["ppt/slides/slide2.xml"].replace(ORIGINAL_PIC, ORIGINAL_PIC + clone)
     return out
@@ -116,17 +130,31 @@ def element_of(model: dict, slide_key: str, key: str) -> dict:
 
 def target_of(e: dict) -> dict:
     """页面写入批注时的元素目标（与 viewer_template 的 pptxTargetOf 同一套语义）。"""
-    out = {"key": e["key"], "id": str(e.get("id") or ""), "name": e.get("name") or "", "kind": e["kind"],
-           "z": e.get("z", 0), "digest": e.get("evidenceDigest") or ""}
+    out = {
+        "key": e["key"],
+        "id": str(e.get("id") or ""),
+        "name": e.get("name") or "",
+        "kind": e["kind"],
+        "z": e.get("z", 0),
+        "digest": e.get("evidenceDigest") or "",
+    }
     ro = [k for k in ("text", "geometry", "style") if not e["capabilities"][k + "Write"]]
     if ro:
         out["ro"] = ro
     return out
 
 
-def anchor(kind: str, via: str, slide: str = "s260", *, elements: list | None = None,
-           text: dict | None = None, point: dict | None = None, region: dict | None = None,
-           fp: str | None = OLD_FP) -> dict:
+def anchor(
+    kind: str,
+    via: str,
+    slide: str = "s260",
+    *,
+    elements: list | None = None,
+    text: dict | None = None,
+    point: dict | None = None,
+    region: dict | None = None,
+    fp: str | None = OLD_FP,
+) -> dict:
     out = {"v": 1, "slide": slide, "kind": kind, "via": via}
     if fp:
         out["fp"] = fp
@@ -153,8 +181,10 @@ class RelocateTests(unittest.TestCase):
 
     def test_point_and_region_anchors_follow_the_slide_only(self):
         model = self.read(reorder(mp.sample_parts()))
-        for a in (anchor("point", "point", point={"x": 0.5, "y": 0.1}),
-                  anchor("region", "region", region={"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2})):
+        for a in (
+            anchor("point", "point", point={"x": 0.5, "y": 0.1}),
+            anchor("region", "region", region={"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}),
+        ):
             with self.subTest(kind=a["kind"]):
                 got = pr.relocate(a, model["slides"])
                 self.assertEqual((got["status"], got["page"]), ("ok", 2))
@@ -164,7 +194,9 @@ class RelocateTests(unittest.TestCase):
         self.assertEqual(got["status"], "missing")
         self.assertIsNone(got["page"])
 
-    def element_anchor(self, parts: dict, slide_key: str = "s257", keys: tuple[str, ...] = ("e11",)) -> tuple[dict, dict]:
+    def element_anchor(
+        self, parts: dict, slide_key: str = "s257", keys: tuple[str, ...] = ("e11",)
+    ) -> tuple[dict, dict]:
         """从原版模型取元素目标写成定位，返回 (定位, 新版模型)。"""
         original = pr.read(deck(mp.sample_parts(), "origin.pptx"))
         elements = [target_of(element_of(original, slide_key, k)) for k in keys]
@@ -177,8 +209,7 @@ class RelocateTests(unittest.TestCase):
         self.assertEqual((got["status"], got["how"]), ("ok", "shapeId"))
         self.assertEqual(got["targets"][0]["key"], "e11")
         self.assertEqual(got["targets"][0]["name"], "重命名的图片", "身份不变，目标信息刷新成当前版本")
-        self.assertEqual(got["targets"][0]["digest"],
-                         element_of(model, "s257", "e11")["evidenceDigest"])
+        self.assertEqual(got["targets"][0]["digest"], element_of(model, "s257", "e11")["evidenceDigest"])
 
     def test_multi_element_targets_keep_order(self):
         a, model = self.element_anchor(reorder(mp.sample_parts()), keys=("e11", "e12"))
@@ -195,8 +226,11 @@ class RelocateTests(unittest.TestCase):
         parts = rename_element(duplicate_picture_id(mp.sample_parts()), "合成图片", "同名重命名后证据对不上")
         a, model = self.element_anchor(parts)
         got = pr.relocate(a, model["slides"])
-        self.assertEqual((got["status"], got["why"]), ("ambiguous", "duplicateShapeId"),
-                         "标识重复且证据对不上：宁可标需确认，不吸附相近对象")
+        self.assertEqual(
+            (got["status"], got["why"]),
+            ("ambiguous", "duplicateShapeId"),
+            "标识重复且证据对不上：宁可标需确认，不吸附相近对象",
+        )
 
     def test_deleted_element_is_missing(self):
         parts = mp.sample_parts()
@@ -215,18 +249,31 @@ class RelocateTests(unittest.TestCase):
         body_parts = mp.sample_parts()
         if first_para is not None:
             body_parts["ppt/slides/slide10.xml"] = mp.slide_xml(
-                paragraphs=f'<a:p>{mp.text_run(first_para)}</a:p><a:p>{mp.text_run("相同")}</a:p>')
+                paragraphs=f"<a:p>{mp.text_run(first_para)}</a:p><a:p>{mp.text_run('相同')}</a:p>"
+            )
             parts = {**body_parts, **{k: v for k, v in parts.items() if k != "ppt/slides/slide10.xml"}}
-        a = anchor("text", "selection", "s260", elements=[target_of(el)],
-                   text={"para": 0, "paraDigest": p["digest"], "quote": "相同😀", "start": 0, "end": 3,
-                         "runs": [{"start": r["start"], "end": r["end"]} for r in p["runs"]]})
+        a = anchor(
+            "text",
+            "selection",
+            "s260",
+            elements=[target_of(el)],
+            text={
+                "para": 0,
+                "paraDigest": p["digest"],
+                "quote": "相同😀",
+                "start": 0,
+                "end": 3,
+                "runs": [{"start": r["start"], "end": r["end"]} for r in p["runs"]],
+            },
+        )
         return a, self.read(parts)
 
     def test_run_resplit_keeps_the_selection(self):
         """run 重新拆分只改样式边界：逻辑段落文字不变，定位原样有效。"""
         parts = mp.sample_parts()
         parts["ppt/slides/slide10.xml"] = mp.slide_xml(
-            paragraphs=f'<a:p>{mp.text_run("相同😀&<")}</a:p><a:p>{mp.text_run("相同")}</a:p>')
+            paragraphs=f"<a:p>{mp.text_run('相同😀&<')}</a:p><a:p>{mp.text_run('相同')}</a:p>"
+        )
         a, model = self.text_anchor(parts)
         got = pr.relocate(a, model["slides"])
         self.assertEqual((got["status"], got["changed"]), ("ok", False))
@@ -241,16 +288,21 @@ class RelocateTests(unittest.TestCase):
     def test_quote_gone_is_missing_not_attached_to_similar_text(self):
         a, model = self.text_anchor(mp.sample_parts(), first_para="完全不同的文字")
         got = pr.relocate(a, model["slides"])
-        self.assertEqual((got["status"], got["why"], got["page"]), ("missing", "textGone", None),
-                         "引用原文消失：选区已删，不猜相近文字")
+        self.assertEqual(
+            (got["status"], got["why"], got["page"]),
+            ("missing", "textGone", None),
+            "引用原文消失：选区已删，不猜相近文字",
+        )
 
     def test_paragraph_inserted_before_moves_the_index(self):
         parts = mp.sample_parts()
         # run 属性提到 f-string 外定义：3.9 及更早不允许表达式里出现反斜杠或同种引号
         marked_rpr = '<a:rPr b="1"/>'
         parts["ppt/slides/slide10.xml"] = mp.slide_xml(
-            paragraphs=f'<a:p>{mp.text_run("新插入段")}</a:p><a:p>{mp.text_run("相同", marked_rpr)}'
-                       + mp.text_run("😀&<", "<a:rPr i=\"1\"/>") + f'</a:p><a:p>{mp.text_run("相同")}</a:p>')
+            paragraphs=f"<a:p>{mp.text_run('新插入段')}</a:p><a:p>{mp.text_run('相同', marked_rpr)}"
+            + mp.text_run("😀&<", '<a:rPr i="1"/>')
+            + f"</a:p><a:p>{mp.text_run('相同')}</a:p>"
+        )
         a, model = self.text_anchor(parts)
         got = pr.relocate(a, model["slides"])
         self.assertEqual((got["status"], got["changed"]), ("ok", False))
@@ -271,8 +323,13 @@ class PptxRemapTests(unittest.TestCase):
     def remap(self, d: Path, parts: dict, old_keys: dict[int, str] | None = None) -> dict:
         model = pr.read(deck(parts, "rebuilt.pptx"))
         keys = {s["n"]: s["key"] for s in model["slides"]}
-        return store.remap_pages(d, old_keys or {}, {k: n for n, k in keys.items()}, dict(self.TITLES),
-                                 pptx={"slides": model["slides"], "fingerprint": NEW_FP, "keys": keys})
+        return store.remap_pages(
+            d,
+            old_keys or {},
+            {k: n for n, k in keys.items()},
+            dict(self.TITLES),
+            pptx={"slides": model["slides"], "fingerprint": NEW_FP, "keys": keys},
+        )
 
     def add(self, d: Path, page: int, a: dict | None, key: str = "s260") -> str:
         data = {"page": page, "key": key, "title": "旧标题", "text": "意见"}
@@ -295,8 +352,12 @@ class PptxRemapTests(unittest.TestCase):
 
     def test_fingerprint_change_alone_refreshes_the_anchor(self):
         d = review_dir()
-        a = anchor("elements", "click", "s257", elements=[target_of(
-            element_of(pr.read(deck(mp.sample_parts(), "o.pptx")), "s257", "e11"))])
+        a = anchor(
+            "elements",
+            "click",
+            "s257",
+            elements=[target_of(element_of(pr.read(deck(mp.sample_parts(), "o.pptx")), "s257", "e11"))],
+        )
         nid = self.add(d, 2, a, key="s257")
         self.remap(d, mp.sample_parts(), {2: "s257"})
         n = self.note(d, nid)
@@ -307,8 +368,11 @@ class PptxRemapTests(unittest.TestCase):
         nid = self.add(d, 1, anchor("page", "thumb"))
         result = self.remap(d, drop_slide(mp.sample_parts()), {1: "s260"})
         n = self.note(d, nid)
-        self.assertEqual((n["page"], n.get("orphan"), n["pptx"]["fp"]), (1, True, OLD_FP),
-                         "幻灯片已删：页码不动、定位保持旧版本，等人工确认")
+        self.assertEqual(
+            (n["page"], n.get("orphan"), n["pptx"]["fp"]),
+            (1, True, OLD_FP),
+            "幻灯片已删：页码不动、定位保持旧版本，等人工确认",
+        )
         self.assertEqual([(o["id"], o.get("reason")) for o in result["orphans"]], [(nid, "slideGone")])
 
     def test_deleted_element_orphans_with_reason(self):
@@ -327,18 +391,33 @@ class PptxRemapTests(unittest.TestCase):
         original = pr.read(deck(mp.sample_parts(), "o.pptx"))
         el = element_of(original, "s260", "e2")
         p = el["paragraphs"][0]
-        a = anchor("text", "selection", "s260", elements=[target_of(el)],
-                   text={"para": 0, "paraDigest": p["digest"], "quote": "相同😀", "start": 0, "end": 3,
-                         "runs": [{"start": r["start"], "end": r["end"]} for r in p["runs"]]})
+        a = anchor(
+            "text",
+            "selection",
+            "s260",
+            elements=[target_of(el)],
+            text={
+                "para": 0,
+                "paraDigest": p["digest"],
+                "quote": "相同😀",
+                "start": 0,
+                "end": 3,
+                "runs": [{"start": r["start"], "end": r["end"]} for r in p["runs"]],
+            },
+        )
         d = review_dir()
         nid = self.add(d, 1, a)
         parts = mp.sample_parts()
         parts["ppt/slides/slide10.xml"] = mp.slide_xml(
-            paragraphs=f'<a:p>{mp.text_run("相同😀&<，补充一句")}</a:p><a:p>{mp.text_run("相同")}</a:p>')
+            paragraphs=f"<a:p>{mp.text_run('相同😀&<，补充一句')}</a:p><a:p>{mp.text_run('相同')}</a:p>"
+        )
         result = self.remap(d, parts)
         n = self.note(d, nid)
-        self.assertEqual((n["pptx"]["fp"], n["pptx"].get("changed")), (OLD_FP, True),
-                         "文字已变：偏移与指纹仍是旧版本的，不冒充当前版本")
+        self.assertEqual(
+            (n["pptx"]["fp"], n["pptx"].get("changed")),
+            (OLD_FP, True),
+            "文字已变：偏移与指纹仍是旧版本的，不冒充当前版本",
+        )
         self.assertEqual([x["changed"] for x in result["pptx"]], [True])
 
     def test_ambiguous_element_is_orphaned_not_attached(self):
@@ -346,8 +425,9 @@ class PptxRemapTests(unittest.TestCase):
         a = anchor("elements", "click", "s257", elements=[target_of(element_of(original, "s257", "e11"))])
         d = review_dir()
         nid = self.add(d, 2, a, key="s257")
-        result = self.remap(d, rename_element(duplicate_picture_id(mp.sample_parts()),
-                                              "合成图片", "重命名后证据对不上"), {2: "s257"})
+        result = self.remap(
+            d, rename_element(duplicate_picture_id(mp.sample_parts()), "合成图片", "重命名后证据对不上"), {2: "s257"}
+        )
         self.assertEqual([(o["id"], o.get("reason")) for o in result["orphans"]], [(nid, "duplicateShapeId")])
 
     def test_newer_anchor_version_falls_back_to_the_page_key(self):
@@ -388,13 +468,14 @@ class PptxRemapTests(unittest.TestCase):
 def build(source: Path, out: Path, *extra: str) -> tuple[int, str, str]:
     """真实 build_viewer 构建（渲染注入受控 PNG，页数随源文件）。"""
     import pptx_report
+
     o, e = io.StringIO(), io.StringIO()
     pages = [PNG_1PX] * len(pr.read(source)["slides"])
-    with redirect_stdout(o), redirect_stderr(e), \
-            mock.patch.object(pptx_report, "render_slides", lambda p, w: pages):
+    with redirect_stdout(o), redirect_stderr(e), mock.patch.object(pptx_report, "render_slides", lambda p, w: pages):
         try:
-            code = build_viewer.main(["--report", str(source), "--out", str(out), "--no-scan-skills",
-                                      "--locale", "zh-CN", *extra])
+            code = build_viewer.main(
+                ["--report", str(source), "--out", str(out), "--no-scan-skills", "--locale", "zh-CN", *extra]
+            )
         except SystemExit as exc:
             code = exc.code if isinstance(exc.code, int) else 1
             e.write(str(exc.code))
@@ -420,8 +501,7 @@ class PptxBuildRemapTests(unittest.TestCase):
         source, out = deck(mp.sample_parts(), "src.pptx"), tmp() / "rv"
         self.assertEqual(build(source, out)[0], 0)
         rid = manifest(out)["reviewId"]
-        _doc, note = store.add(out, {"page": 1, "key": "s260", "text": "整页意见",
-                                     "pptx": anchor("page", "thumb")})
+        _doc, note = store.add(out, {"page": 1, "key": "s260", "text": "整页意见", "pptx": anchor("page", "thumb")})
         mp.write_package(source, reorder(mp.sample_parts()))
         code, _o, err = build(source, out)
         self.assertEqual(code, 0, err)
@@ -435,8 +515,7 @@ class PptxBuildRemapTests(unittest.TestCase):
     def test_rebuild_orphans_note_on_deleted_slide(self):
         source, out = deck(mp.sample_parts(), "src.pptx"), tmp() / "rv"
         self.assertEqual(build(source, out)[0], 0)
-        _doc, note = store.add(out, {"page": 1, "key": "s260", "text": "意见",
-                                     "pptx": anchor("page", "thumb")})
+        _doc, note = store.add(out, {"page": 1, "key": "s260", "text": "意见", "pptx": anchor("page", "thumb")})
         mp.write_package(source, drop_slide(mp.sample_parts()))
         code, _o, err = build(source, out)
         self.assertEqual(code, 0, err)
@@ -469,8 +548,9 @@ class SpeakerNotesTests(unittest.TestCase):
 
     def test_external_script_takes_precedence_and_warns_notes_not_merged(self):
         script = tmp() / "讲稿.md"
-        script.write_text("### 第 1 页｜甲\n**讲法**\n外部讲稿一句\n\n### 第 2 页｜乙\n**讲法**\n第二页讲法\n",
-                          encoding="utf-8")
+        script.write_text(
+            "### 第 1 页｜甲\n**讲法**\n外部讲稿一句\n\n### 第 2 页｜乙\n**讲法**\n第二页讲法\n", encoding="utf-8"
+        )
         source, out = deck(mp.sample_parts(), "src.pptx"), tmp() / "rv"
         code, _o, err = build(source, out, "--script", str(script))
         self.assertEqual(code, 0, err)
@@ -481,25 +561,61 @@ class SpeakerNotesTests(unittest.TestCase):
         self.assertIn("不是回写目标", err)
 
 
-SHOW_EL = anchor("elements", "click", "s257", fp="cd" * 32, elements=[
-    {"key": "e11", "id": "11", "name": "合成图片", "kind": "picture", "z": 1, "digest": "d" * 64,
-     "ro": ["text", "geometry", "style"]},
-    {"key": "e12", "id": "12", "name": "合成组合", "kind": "group", "z": 2, "digest": "e" * 64}])
-SHOW_TEXT = anchor("text", "selection", "s260", fp="cd" * 32, elements=[
-    {"key": "e2", "id": "2", "name": "合成标题", "kind": "shape", "z": 0, "digest": "f" * 64}],
-    text={"para": 0, "paraDigest": "a" * 64, "start": 1, "end": 4, "quote": "相同😀",
-          "runs": [{"start": 0, "end": 2}, {"start": 2, "end": 4}]})
+SHOW_EL = anchor(
+    "elements",
+    "click",
+    "s257",
+    fp="cd" * 32,
+    elements=[
+        {
+            "key": "e11",
+            "id": "11",
+            "name": "合成图片",
+            "kind": "picture",
+            "z": 1,
+            "digest": "d" * 64,
+            "ro": ["text", "geometry", "style"],
+        },
+        {"key": "e12", "id": "12", "name": "合成组合", "kind": "group", "z": 2, "digest": "e" * 64},
+    ],
+)
+SHOW_TEXT = anchor(
+    "text",
+    "selection",
+    "s260",
+    fp="cd" * 32,
+    elements=[{"key": "e2", "id": "2", "name": "合成标题", "kind": "shape", "z": 0, "digest": "f" * 64}],
+    text={
+        "para": 0,
+        "paraDigest": "a" * 64,
+        "start": 1,
+        "end": 4,
+        "quote": "相同😀",
+        "runs": [{"start": 0, "end": 2}, {"start": 2, "end": 4}],
+    },
+)
 
 
 class ShowTests(unittest.TestCase):
     """notes.py show / wait 的阅读输出带幻灯片定位：版本、身份、文本或区域、指纹与限制。"""
 
-    MANIFEST = {"title": "合成", "pages": [{"n": 2, "key": "s257", "title": "元素页"}],
-                "pptx": {"fingerprint": "cd" * 32}}
+    MANIFEST = {
+        "title": "合成",
+        "pages": [{"n": 2, "key": "s257", "title": "元素页"}],
+        "pptx": {"fingerprint": "cd" * 32},
+    }
 
     def show(self, a: dict, lang: str, **extra: object) -> str:
-        note = {"id": "n1", "page": 2, "key": "s257", "target": "报告", "text": "改措辞", "status": "open",
-                "at": "2026-01-01T00:00:00+08:00", "pptx": a}
+        note = {
+            "id": "n1",
+            "page": 2,
+            "key": "s257",
+            "target": "报告",
+            "text": "改措辞",
+            "status": "open",
+            "at": "2026-01-01T00:00:00+08:00",
+            "pptx": a,
+        }
         note.update(extra)
         doc = {"rev": 1, "notes": [note]}
         return notes_cli.to_markdown(doc, self.MANIFEST, include_resolved=True, page=None, locale=lang)
@@ -551,21 +667,56 @@ class ExchangeTests(unittest.TestCase):
     """批注交换的 PPT 定位：导出与导入同一版本化格式，中英文法都完整还原；同文不同元素不误去重。"""
 
     PAGE = anchor("page", "thumb", "s260", fp="ab" * 32)
-    ELEMENTS = anchor("elements", "click", "s257", fp="ab" * 32, elements=[
-        {"key": "e11", "id": "11", "name": "合成图片", "kind": "picture", "z": 1, "digest": "d" * 64,
-         "ro": ["text", "geometry", "style"]},
-        {"key": "e12", "id": "12", "name": "合成组合", "kind": "group", "z": 2, "digest": "e" * 64}])
-    TEXT = anchor("text", "selection", "s260", fp="ab" * 32, elements=[
-        {"key": "e2", "id": "2", "name": "合成标题", "kind": "shape", "z": 0, "digest": "f" * 64}],
-        text={"para": 0, "paraDigest": "a" * 64, "start": 1, "end": 4, "quote": "相同😀",
-              "runs": [{"start": 0, "end": 2}, {"start": 2, "end": 4}]})
+    ELEMENTS = anchor(
+        "elements",
+        "click",
+        "s257",
+        fp="ab" * 32,
+        elements=[
+            {
+                "key": "e11",
+                "id": "11",
+                "name": "合成图片",
+                "kind": "picture",
+                "z": 1,
+                "digest": "d" * 64,
+                "ro": ["text", "geometry", "style"],
+            },
+            {"key": "e12", "id": "12", "name": "合成组合", "kind": "group", "z": 2, "digest": "e" * 64},
+        ],
+    )
+    TEXT = anchor(
+        "text",
+        "selection",
+        "s260",
+        fp="ab" * 32,
+        elements=[{"key": "e2", "id": "2", "name": "合成标题", "kind": "shape", "z": 0, "digest": "f" * 64}],
+        text={
+            "para": 0,
+            "paraDigest": "a" * 64,
+            "start": 1,
+            "end": 4,
+            "quote": "相同😀",
+            "runs": [{"start": 0, "end": 2}, {"start": 2, "end": 4}],
+        },
+    )
     POINT = anchor("point", "point", "s260", fp="ab" * 32, point={"x": 0.5, "y": 0.1})
     REGION = anchor("region", "region", "s260", fp="ab" * 32, region={"x": 0.25, "y": 0.1, "w": 0.3, "h": 0.2})
     CHANGED = dict(TEXT, changed=True)
 
     def notes(self, a: dict) -> list[dict]:
-        return [{"id": "n1", "page": 2, "title": "元素页", "target": "报告", "text": "改措辞", "status": "open",
-                 "at": "2026-01-01T00:00:00+08:00", "pptx": a}]
+        return [
+            {
+                "id": "n1",
+                "page": 2,
+                "title": "元素页",
+                "target": "报告",
+                "text": "改措辞",
+                "status": "open",
+                "at": "2026-01-01T00:00:00+08:00",
+                "pptx": a,
+            }
+        ]
 
     @staticmethod
     def portable(a: dict) -> dict:
@@ -579,17 +730,26 @@ class ExchangeTests(unittest.TestCase):
     def test_both_languages_carry_the_location(self):
         zh = ef.render(self.notes(self.ELEMENTS), title="合成", lang="zh-CN")
         en = ef.render(self.notes(self.ELEMENTS), title="合成", lang="en")
-        self.assertIn("   PPT 定位：v1 元素 · 幻灯片 s257"
-                      " · 目标 e11（标识 11，picture，第 1 层，摘要 " + "d" * 64 + "，只读 文本、几何、样式）"
-                      "、e12（标识 12，group，第 2 层，摘要 " + "e" * 64 + "）"
-                      " · 来源 点选 · 指纹 " + "ab" * 32, zh)
-        self.assertIn("   PPT location: v1 elements · slide s257"
-                      " · targets e11 (id 11, picture, z 1, digest " + "d" * 64 + ", read-only text, geometry, style)"
-                      "; e12 (id 12, group, z 2, digest " + "e" * 64 + ")"
-                      " · source click · fingerprint " + "ab" * 32, en)
+        self.assertIn(
+            "   PPT 定位：v1 元素 · 幻灯片 s257"
+            " · 目标 e11（标识 11，picture，第 1 层，摘要 " + "d" * 64 + "，只读 文本、几何、样式）"
+            "、e12（标识 12，group，第 2 层，摘要 " + "e" * 64 + "）"
+            " · 来源 点选 · 指纹 " + "ab" * 32,
+            zh,
+        )
+        self.assertIn(
+            "   PPT location: v1 elements · slide s257"
+            " · targets e11 (id 11, picture, z 1, digest " + "d" * 64 + ", read-only text, geometry, style)"
+            "; e12 (id 12, group, z 2, digest " + "e" * 64 + ")"
+            " · source click · fingerprint " + "ab" * 32,
+            en,
+        )
         text = ef.render(self.notes(self.TEXT), title="合成", lang="zh-CN")
-        self.assertIn(" · 段落 0（摘要 " + "a" * 64 + "） · 字符 1–4 · 运行 0–2、2–4 · 来源 选区"
-                      " · 指纹 " + "ab" * 32 + " · 引用 相同😀", text)
+        self.assertIn(
+            " · 段落 0（摘要 " + "a" * 64 + "） · 字符 1–4 · 运行 0–2、2–4 · 来源 选区"
+            " · 指纹 " + "ab" * 32 + " · 引用 相同😀",
+            text,
+        )
 
     def test_page_point_region_and_changed_round_trip(self):
         for lang in ("zh-CN", "en"):
@@ -607,8 +767,15 @@ class ExchangeTests(unittest.TestCase):
                     self.assertEqual(items[0]["pptx"], self.portable(a))
 
     def test_smartart_and_mixed_targets_round_trip_without_loss(self):
-        smartart = {"key": "e15", "id": "15", "name": "合成流程图", "kind": "smartArt",
-                    "z": 4, "digest": "c" * 64, "ro": ["text", "geometry", "style"]}
+        smartart = {
+            "key": "e15",
+            "id": "15",
+            "name": "合成流程图",
+            "kind": "smartArt",
+            "z": 4,
+            "digest": "c" * 64,
+            "ro": ["text", "geometry", "style"],
+        }
         for lang in ("zh-CN", "en"):
             for targets in ([smartart], [self.ELEMENTS["elements"][0], smartart]):
                 with self.subTest(lang=lang, count=len(targets)):
@@ -621,8 +788,10 @@ class ExchangeTests(unittest.TestCase):
 
     def test_point_and_thin_region_keep_storage_precision(self):
         for lang in ("zh-CN", "en"):
-            for a in (dict(self.POINT, point={"x": 0.1234, "y": 0.9999}),
-                      dict(self.REGION, region={"x": 0.1234, "y": 0.5678, "w": 0.004, "h": 0.0001})):
+            for a in (
+                dict(self.POINT, point={"x": 0.1234, "y": 0.9999}),
+                dict(self.REGION, region={"x": 0.1234, "y": 0.5678, "w": 0.004, "h": 0.0001}),
+            ):
                 with self.subTest(lang=lang, kind=a["kind"]):
                     items, _ = ef.parse_markdown(ef.render(self.notes(a), title="合成", lang=lang))
                     self.assertEqual(items[0]["pptx"], a)
@@ -643,10 +812,18 @@ class ExchangeTests(unittest.TestCase):
             store.import_notes(d, items)
             saved = store.load(d)["notes"][0]
             self.assertEqual(saved.get("pptx"), {"v": 2}, "存储层高版本原样保留，导入不丢")
-            shown = notes_cli.to_markdown(store.load(d), {"title": "合成", "pages": [{"n": 2, "key": "s260", "title": "元素页"}]},
-                                          include_resolved=True, page=None, locale=lang)
-            self.assertIn("不可用于回写" if lang == "zh-CN" else "cannot be used for write-back", shown,
-                          "需升级提示可见，不是无定位文本")
+            shown = notes_cli.to_markdown(
+                store.load(d),
+                {"title": "合成", "pages": [{"n": 2, "key": "s260", "title": "元素页"}]},
+                include_resolved=True,
+                page=None,
+                locale=lang,
+            )
+            self.assertIn(
+                "不可用于回写" if lang == "zh-CN" else "cannot be used for write-back",
+                shown,
+                "需升级提示可见，不是无定位文本",
+            )
 
     def test_named_targets_reimport_into_the_same_review_without_duplicates(self):
         for lang in ("zh-CN", "en"):
@@ -662,8 +839,10 @@ class ExchangeTests(unittest.TestCase):
 
     def test_future_location_names_are_not_discarded_from_dedup(self):
         d = review_dir()
-        notes = [dict(self.notes({"v": 2, "elements": [{"name": name}]})[0], id="future" + str(i))
-                 for i, name in enumerate(("甲", "乙"))]
+        notes = [
+            dict(self.notes({"v": 2, "elements": [{"name": name}]})[0], id="future" + str(i))
+            for i, name in enumerate(("甲", "乙"))
+        ]
         _doc, added, skipped, _updated = store.import_notes(d, notes)
         self.assertEqual((added, skipped), (2, 0), "未知版本的字段含义未知，保持完整比较")
 
@@ -677,12 +856,24 @@ class ExchangeTests(unittest.TestCase):
         d = review_dir()
 
         def anchor_for(digest: str) -> dict:
-            return {"v": 1, "slide": "s257", "kind": "elements", "via": "click", "fp": OLD_FP,
-                    "elements": [{"key": "e11", "id": "11", "name": "", "kind": "picture", "z": 1,
-                                  "digest": digest}]}
+            return {
+                "v": 1,
+                "slide": "s257",
+                "kind": "elements",
+                "via": "click",
+                "fp": OLD_FP,
+                "elements": [{"key": "e11", "id": "11", "name": "", "kind": "picture", "z": 1, "digest": digest}],
+            }
 
-        first = {"id": "n1", "page": 2, "key": "s257", "target": "报告", "text": "同样的话",
-                 "quote": "相同", "pptx": anchor_for("d" * 64)}
+        first = {
+            "id": "n1",
+            "page": 2,
+            "key": "s257",
+            "target": "报告",
+            "text": "同样的话",
+            "quote": "相同",
+            "pptx": anchor_for("d" * 64),
+        }
         second = {**first, "id": "n2", "pptx": anchor_for("e" * 64)}
         _doc, added, skipped, _updated = store.import_notes(d, [first, second])
         self.assertEqual((added, skipped), (2, 0), "同文不同元素：两条都留下")

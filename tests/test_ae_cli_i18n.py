@@ -3,6 +3,7 @@
 技能副本、台账与技能目录全是合成环境；只用标准库。中英文两轮跑同一批断言，
 保证「人读文案按语言变、机器判定字段不变」。
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -24,6 +25,7 @@ SERVE_PY = ROOT / "skill" / "annotation-everything" / "scripts" / "serve.py"
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(ROOT))
 import ae  # noqa: E402
+
 sys.path.insert(0, str(SCRIPTS))
 
 # 既有中文判定字段：旧机器消费者照旧读取，任何语言下都不得变值
@@ -63,24 +65,36 @@ class AeLocaleTestCase(unittest.TestCase):
             ps.write_text(f'@echo off\r\n"{sys.executable}" "{helper}" %*\r\n', encoding="utf-8")
         else:
             ps = self.host_bin / "ps"
-            ps.write_text('#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  exit 0\n'
-                          'else\n  exec /bin/ps "$@"\nfi\n', encoding="utf-8")
+            ps.write_text(
+                '#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  exit 0\nelse\n  exec /bin/ps "$@"\nfi\n',
+                encoding="utf-8",
+            )
             ps.chmod(0o755)
 
     def env(self, **extra) -> dict:
-        base = {k: v for k, v in os.environ.items()
-                if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
-        base.update({"HOME": str(self.home), "USERPROFILE": str(self.home),
-                     "CLAUDE_SKILLS_DIR": str(self.skills),
-                     "CODEX_HOME": str(self.home / ".codex"),
-                     "AE_HOME": str(self.root / "ledger"), "PYTHONDONTWRITEBYTECODE": "1",
-                     "PATH": str(self.host_bin) + os.pathsep + os.environ.get("PATH", os.defpath)})
+        base = {k: v for k, v in os.environ.items() if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
+        base.update(
+            {
+                "HOME": str(self.home),
+                "USERPROFILE": str(self.home),
+                "CLAUDE_SKILLS_DIR": str(self.skills),
+                "CODEX_HOME": str(self.home / ".codex"),
+                "AE_HOME": str(self.root / "ledger"),
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PATH": str(self.host_bin) + os.pathsep + os.environ.get("PATH", os.defpath),
+            }
+        )
         base.update(extra)
         return base
 
     def run_ae(self, *args: str, **extra):
-        return subprocess.run([sys.executable, str(self.ae_script), *args], env=self.env(**extra),
-                              capture_output=True, text=True, timeout=120)
+        return subprocess.run(
+            [sys.executable, str(self.ae_script), *args],
+            env=self.env(**extra),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
 
     def install(self, *args: str, **extra):
         p = self.run_ae("install", *args, **extra)
@@ -147,14 +161,22 @@ class LocaleSelectionTests(AeLocaleTestCase):
         copied = copy / "scripts" / "serve.py"
         self.assertTrue(copied.is_file())
         base = self.env()
-        for argv, want in ((["list", "--locale", "en"], "No reviews in the review ledger"),
-                           (["list"], "审阅台账里没有审阅")):
-            p = subprocess.run([sys.executable, str(copied), *argv], env=base,
-                               capture_output=True, text=True, timeout=60)
+        for argv, want in (
+            (["list", "--locale", "en"], "No reviews in the review ledger"),
+            (["list"], "审阅台账里没有审阅"),
+        ):
+            p = subprocess.run(
+                [sys.executable, str(copied), *argv], env=base, capture_output=True, text=True, timeout=60
+            )
             self.assertIn(p.returncode, (0, 2), p.stdout + p.stderr)
             self.assertIn(want, p.stdout, argv)
-        p = subprocess.run([sys.executable, str(copied), "list"], env=self.env(AE_LOCALE="en"),
-                           capture_output=True, text=True, timeout=60)
+        p = subprocess.run(
+            [sys.executable, str(copied), "list"],
+            env=self.env(AE_LOCALE="en"),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
         self.assertIn("No reviews in the review ledger", p.stdout)
 
 
@@ -229,8 +251,9 @@ class DoctorMachineOutputTests(AeLocaleTestCase):
             self.assertIn(p.returncode, (0, 1))
             self.assertIsInstance(doc["results"], list)
             self.assertTrue(doc["results"])
-            self.assertEqual(doc["summary"]["pass"] + doc["summary"]["warn"] + doc["summary"]["fail"],
-                             len(doc["results"]))
+            self.assertEqual(
+                doc["summary"]["pass"] + doc["summary"]["warn"] + doc["summary"]["fail"], len(doc["results"])
+            )
 
     def test_legacy_fields_stay_chinese_and_identical_across_locales(self):
         self.install()
@@ -291,8 +314,10 @@ class DoctorMachineOutputTests(AeLocaleTestCase):
         p_en, en = self.doctor_json("--locale", "en")
         self.assertEqual(p_zh.returncode, 1)
         self.assertEqual(p_en.returncode, 1)
-        self.assertEqual([r["code"] for r in zh["results"] if r["status"] == "fail"],
-                         [r["code"] for r in en["results"] if r["status"] == "fail"])
+        self.assertEqual(
+            [r["code"] for r in zh["results"] if r["status"] == "fail"],
+            [r["code"] for r in en["results"] if r["status"] == "fail"],
+        )
         self.assertIn("skill-copy-sync", {r["code"] for r in en["results"] if r["status"] == "fail"})
 
     def test_json_error_path_is_valid_json(self):
@@ -324,8 +349,7 @@ class DoctorMachineOutputTests(AeLocaleTestCase):
         repo.mkdir()
         self.ae_script = repo / "ae.py"
         shutil.copyfile(AE, self.ae_script)
-        shutil.copytree(ROOT / "skill", repo / "skill",
-                        ignore=shutil.ignore_patterns("__pycache__", ".DS_Store"))
+        shutil.copytree(ROOT / "skill", repo / "skill", ignore=shutil.ignore_patterns("__pycache__", ".DS_Store"))
         self.assertEqual(self.run_ae("doctor", "--json").returncode, 1, "没安装时安装状态失败")
         self.install()
         p = self.run_ae("doctor")
@@ -367,8 +391,7 @@ class CommandMessageTests(AeLocaleTestCase):
         # 与其他 ae 测试一样把 CODEX_HOME 指到临时目录：否则 --link 会写到本机真实的 ~/.codex
         target = self.home / ".codex" / "skills" / "annotation-everything"
         target.mkdir(parents=True)
-        p = self.run_ae("install", "--link", "codex", "--locale", "en",
-                        CODEX_HOME=str(self.home / ".codex"))
+        p = self.run_ae("install", "--link", "codex", "--locale", "en", CODEX_HOME=str(self.home / ".codex"))
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn("left untouched", p.stderr)
         self.assertIn(str(target), p.stderr)
@@ -394,9 +417,10 @@ class CommandMessageTests(AeLocaleTestCase):
         ledger_home.mkdir(parents=True, exist_ok=True)
         review = self.root / "review"
         review.mkdir()
-        (ledger_home / "reviews.json").write_text(json.dumps(
-            {"version": 1, "reviews": {"a" * 16: {"dir": str(self.root / "gone"), "port": None}}}),
-            encoding="utf-8")
+        (ledger_home / "reviews.json").write_text(
+            json.dumps({"version": 1, "reviews": {"a" * 16: {"dir": str(self.root / "gone"), "port": None}}}),
+            encoding="utf-8",
+        )
         p = self.run_ae("repair", "--dry-run", "--locale", "en")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("not executed this time", p.stdout)
@@ -408,16 +432,16 @@ class CommandMessageTests(AeLocaleTestCase):
     def test_purge_refusals_stay_localized_and_specific(self):
         home = self.root / "ledger"
         home.mkdir(parents=True, exist_ok=True)
-        (home / "reviews.json").write_text(json.dumps(
-            {"version": 1, "reviews": {"b" * 16: {"dir": str(home / "inside"), "port": None}}}),
-            encoding="utf-8")
+        (home / "reviews.json").write_text(
+            json.dumps({"version": 1, "reviews": {"b" * 16: {"dir": str(home / "inside"), "port": None}}}),
+            encoding="utf-8",
+        )
         self.install()
         p = self.run_ae("uninstall", "--purge", "--locale", "en")
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn("refusing to delete", p.stderr)
         self.assertIn("never touches review directories", p.stderr)
-        self.assertTrue((self.skills / "annotation-everything" / "SKILL.md").is_file(),
-                        "安全检查不过时什么都不删")
+        self.assertTrue((self.skills / "annotation-everything" / "SKILL.md").is_file(), "安全检查不过时什么都不删")
         p = self.run_ae("uninstall", "--purge")
         self.assertEqual(p.returncode, 2)
         self.assertIn("拒绝删除", p.stderr)
@@ -430,8 +454,11 @@ class CommandMessageTests(AeLocaleTestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.ps_table = self.root / "ps-table.txt"
-        cmd_line = f'"{sys.executable}" "{copy / "scripts" / "serve.py"}" review' if os.name == "nt" \
+        cmd_line = (
+            f'"{sys.executable}" "{copy / "scripts" / "serve.py"}" review'
+            if os.name == "nt"
             else f"{sys.executable} {copy / 'scripts' / 'serve.py'} review"
+        )
         self.ps_table.write_text(f"4242 {cmd_line}\n", encoding="utf-8")
         if os.name == "nt":
             sysroot = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
@@ -456,14 +483,21 @@ class CommandMessageTests(AeLocaleTestCase):
         else:
             real_ps = shutil.which("ps") or "/bin/ps"
             shim = self.bin / "ps"
-            shim.write_text(f'#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  cat "{self.ps_table}"\n'
-                            f'else\n  exec "{real_ps}" "$@"\nfi\n', encoding="utf-8")
+            shim.write_text(
+                f'#!/bin/sh\nif [ "$1 $2" = "-ww -eo" ]; then\n  cat "{self.ps_table}"\n'
+                f'else\n  exec "{real_ps}" "$@"\nfi\n',
+                encoding="utf-8",
+            )
             shim.chmod(0o755)
         env = {**self.env(), "PATH": str(self.bin) + os.pathsep + os.environ.get("PATH", os.defpath)}
         for locale, needle in ((None, "请先停止服务"), ("en", "Stop the services first")):
-            p = subprocess.run([sys.executable, str(AE), "uninstall",
-                                *(["--locale", locale] if locale else [])],
-                               env=env, capture_output=True, text=True, timeout=60)
+            p = subprocess.run(
+                [sys.executable, str(AE), "uninstall", *(["--locale", locale] if locale else [])],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
             self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
             self.assertIn(needle, p.stderr)
             self.assertIn("--stop-servers", p.stderr)
@@ -476,8 +510,9 @@ class CommandMessageTests(AeLocaleTestCase):
         (ledger_home / "reviews.json").write_text("{坏的", encoding="utf-8")
         self.install()
         for argv, needle, absent in (
-                (["--locale", "en"], "Cannot read the review ledger", "审阅台账"),
-                ([], "审阅台账", "Cannot read the review ledger")):
+            (["--locale", "en"], "Cannot read the review ledger", "审阅台账"),
+            ([], "审阅台账", "Cannot read the review ledger"),
+        ):
             p = self.run_ae("doctor", *argv)
             self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
             self.assertIn(needle, p.stdout, argv)
@@ -492,6 +527,7 @@ class CommandMessageTests(AeLocaleTestCase):
         """未预期的异常也走本地化的一句话，不把堆栈抛给用户。"""
         sys.path.insert(0, str(ROOT))
         import ae
+
         previous = ae.current_locale()
         self.addCleanup(ae.set_locale, previous)
         out, err = io.StringIO(), io.StringIO()

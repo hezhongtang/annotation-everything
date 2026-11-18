@@ -4,6 +4,7 @@
 语言：`--locale auto|zh-CN|en` 优先于环境变量 AE_LOCALE；都没有则中文，只有 auto 才读
 LC_ALL / LC_MESSAGES / LANG。字体名、来源路径与系统原始错误保持原文，只补本地化上下文。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,7 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fsutil  # noqa: E402
 import i18n  # noqa: E402
 
-PART = re.compile(r"^ppt/(?:slides/slide\d+|slideMasters/slideMaster\d+|slideLayouts/slideLayout\d+|theme/theme\d+)\.xml$")
+PART = re.compile(
+    r"^ppt/(?:slides/slide\d+|slideMasters/slideMaster\d+|slideLayouts/slideLayout\d+|theme/theme\d+)\.xml$"
+)
 MAX_PART_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_PARTS = 3000
@@ -114,15 +117,27 @@ def declared_fonts(path: Path) -> tuple[list[str], list[str], list[str]]:
                         declared.add(face)
                     if _local(element.tag) == "t" and (element.text or "").strip():
                         run = parents.get(element)
-                        props = next((child for child in (list(run) if run is not None else [])
-                                      if _local(child.tag) == "rPr"), None)
-                        faces = {_local(child.tag): (child.attrib.get("typeface") or "").strip()
-                                 for child in (props.iter() if props is not None else ())}
+                        props = next(
+                            (child for child in (list(run) if run is not None else []) if _local(child.tag) == "rPr"),
+                            None,
+                        )
+                        faces = {
+                            _local(child.tag): (child.attrib.get("typeface") or "").strip()
+                            for child in (props.iter() if props is not None else ())
+                        }
                         if not any(faces.values()):
                             unresolved.add(T("font.unresolved.inherit"))
                         elif any(not faces.get(slot) for slot in _theme_slots(element.text)):
                             unresolved.add(T("font.unresolved.slot"))
-    except (OSError, zipfile.BadZipFile, RuntimeError, zipfile.LargeZipFile, NotImplementedError, EOFError, zlib.error) as e:
+    except (
+        OSError,
+        zipfile.BadZipFile,
+        RuntimeError,
+        zipfile.LargeZipFile,
+        NotImplementedError,
+        EOFError,
+        zlib.error,
+    ) as e:
         raise CheckError(T("font.err.pptxUnreadable", detail=e)) from e
     by_name = lambda names: sorted(names, key=str.casefold)  # noqa: E731
     return by_name(declared), by_name(unresolved), by_name(fallbacks - declared)
@@ -212,8 +227,15 @@ def find_pdffonts() -> str:
 def installed_fonts() -> tuple[set[str], bool]:
     fc_list = which("fc-list")
     try:
-        result = subprocess.run([fc_list or "fc-list", "--format=%{family}\\n"], capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", timeout=TOOL_TIMEOUT, check=False)
+        result = subprocess.run(
+            [fc_list or "fc-list", "--format=%{family}\\n"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=TOOL_TIMEOUT,
+            check=False,
+        )
     except FileNotFoundError as e:
         if fsutil.is_windows():
             return _windows_registry_fonts(), False
@@ -232,8 +254,15 @@ def pdf_fonts(path: Path) -> tuple[list[dict[str, str]], bool]:
     if not path.is_file():
         raise CheckError(T("font.err.pdfMissing"))
     try:
-        result = subprocess.run([find_pdffonts(), str(path.resolve())], capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", timeout=TOOL_TIMEOUT, check=False)
+        result = subprocess.run(
+            [find_pdffonts(), str(path.resolve())],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=TOOL_TIMEOUT,
+            check=False,
+        )
     except FileNotFoundError as e:
         raise CheckError(T("font.err.noPdffonts")) from e
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -252,14 +281,32 @@ def pdf_fonts(path: Path) -> tuple[list[dict[str, str]], bool]:
         if not raw.strip():
             continue
         status = re.search(r"\s+(yes|no)\s+(yes|no)\s+(yes|no)\s+\d+\s+\d+\s*$", raw, re.I)
-        name_end, type_start, type_end, enc_start, enc_end = cols[0].end(), cols[1].start(), cols[1].end(), cols[2].start(), cols[2].end()
-        if (not status or len(raw) <= type_start or raw[name_end:type_start].strip()
-                or raw[type_end:enc_start].strip() or raw[enc_end:cols[3].start()].strip()):
+        name_end, type_start, type_end, enc_start, enc_end = (
+            cols[0].end(),
+            cols[1].start(),
+            cols[1].end(),
+            cols[2].start(),
+            cols[2].end(),
+        )
+        if (
+            not status
+            or len(raw) <= type_start
+            or raw[name_end:type_start].strip()
+            or raw[type_end:enc_start].strip()
+            or raw[enc_end : cols[3].start()].strip()
+        ):
             rows.append({"raw": raw.strip()})
             continue
-        rows.append({"name": raw[:name_end].strip(), "type": raw[type_start:type_end].strip(),
-                     "encoding": raw[enc_start:enc_end].strip(), "emb": status.group(1).lower(),
-                     "sub": status.group(2).lower(), "uni": status.group(3).lower()})
+        rows.append(
+            {
+                "name": raw[:name_end].strip(),
+                "type": raw[type_start:type_end].strip(),
+                "encoding": raw[enc_start:enc_end].strip(),
+                "emb": status.group(1).lower(),
+                "sub": status.group(2).lower(),
+                "uni": status.group(3).lower(),
+            }
+        )
     return rows, bool(result.stderr.strip())
 
 
@@ -274,7 +321,7 @@ def report_pdf(rows: list[dict[str, str]], declared: list[str], fallbacks: list[
     review = False
     for row in rows:
         if "raw" in row:
-            print(T("font.pdfRaw", raw=row['raw']))
+            print(T("font.pdfRaw", raw=row["raw"]))
             review = True
             continue
         name = row["name"]
@@ -286,8 +333,18 @@ def report_pdf(rows: list[dict[str, str]], declared: list[str], fallbacks: list[
         if not known or row["emb"] != "yes":
             review = True
         verdict = T("font.pdfVerdict.known" if known and row["emb"] == "yes" else "font.pdfVerdict.review")
-        print(T("font.pdfRow", name=name, type=row['type'], encoding=row['encoding'],
-                emb=row['emb'], sub=row['sub'], uni=row['uni'], verdict=verdict))
+        print(
+            T(
+                "font.pdfRow",
+                name=name,
+                type=row["type"],
+                encoding=row["encoding"],
+                emb=row["emb"],
+                sub=row["sub"],
+                uni=row["uni"],
+                verdict=verdict,
+            )
+        )
     unmatched = [name for name in declared if normal(name) not in matched]
     if unmatched:
         print(T("font.pdfUnmatched", names=T("cli.ae.listSeparator").join(unmatched)))
@@ -306,8 +363,7 @@ def main(argv: list[str] | None = None) -> int:
         set_locale(i18n.DEFAULT_LOCALE)
         print(i18n.locale_error_message(exc, ERROR_KEYS, T), file=sys.stderr)
         return 2
-    ap = i18n.LocalizedParser(description=T("font.usage"), add_help=False,
-                              keys=ERROR_KEYS, translate=T)
+    ap = i18n.LocalizedParser(description=T("font.usage"), add_help=False, keys=ERROR_KEYS, translate=T)
     ap.add_argument("-h", "--help", action="help", default=argparse.SUPPRESS, help=T("font.opt.help"))
     ap.add_argument("--locale", metavar="LANG", help=T("font.opt.locale"))
     ap.add_argument("pptx", type=Path, help=T("font.arg.pptx"))
@@ -330,8 +386,11 @@ def main(argv: list[str] | None = None) -> int:
         found = installed is not None and normal(font) in installed
         if installed is not None and not found:
             missing.append(font)
-        result = (T("font.declared.unknown") if installed is None
-                  else T("font.declared.found" if found else "font.declared.missing"))
+        result = (
+            T("font.declared.unknown")
+            if installed is None
+            else T("font.declared.found" if found else "font.declared.missing")
+        )
         print(T("font.declaredRow", font=font, result=result))
     if fallbacks:
         head = T("font.themeHead", count=len(fallbacks))
@@ -339,9 +398,14 @@ def main(argv: list[str] | None = None) -> int:
             print(head + T("font.themeUnknown"))
         else:
             absent = [font for font in fallbacks if normal(font) not in installed]
-            print(head + (T("font.themeMissing", count=len(absent),
-                            names=T("font.listSeparator").join(absent)) if absent
-                          else T("font.themeAllFound")))
+            print(
+                head
+                + (
+                    T("font.themeMissing", count=len(absent), names=T("font.listSeparator").join(absent))
+                    if absent
+                    else T("font.themeAllFound")
+                )
+            )
     if unresolved:
         print(T("font.unresolvedHead", names=T("font.listSeparator").join(unresolved)))
     if not fonts and not unresolved:

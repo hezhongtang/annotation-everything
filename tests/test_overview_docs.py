@@ -87,7 +87,7 @@ class WorkflowOverviewHomeDocsTests(unittest.TestCase):
     ZH_ANCHORS = (
         "serve.py overview",
         "不用先启动任何审阅",
-        "从任一运行中的对照页进总览",   # 旧路径继续有效
+        "从任一运行中的对照页进总览",  # 旧路径继续有效
         "保留地址",
         "临时顺延",
         "相同启动配置",
@@ -158,7 +158,8 @@ class WorkflowOverviewHomeDocsTests(unittest.TestCase):
         cases = json.loads(read(SKILL / "evals" / "discovery-cases.json"))["cases"]
         routes = [
             (case.get("conversation_language"), case["workflow"], case["action"])
-            for case in cases if case["request"] == "/annotation-everything"
+            for case in cases
+            if case["request"] == "/annotation-everything"
         ]
         for language in ("zh-CN", "en"):
             with self.subTest(language=language):
@@ -168,10 +169,10 @@ class WorkflowOverviewHomeDocsTests(unittest.TestCase):
         """退出语义与英文版、ADR 0008 一致：只清运行状态，保留端口记录留下。"""
         zh = read(SKILL / "references" / "workflow.zh-CN.md")
         en = read(SKILL / "references" / "workflow.en.md")
-        self.assertIn("退出时清理运行状态，保留端口记录", zh,
-                      "中文退出语义要与英文版、ADR 0008 一致：保留端口记录不清理")
-        self.assertNotIn("清理运行状态、保留端口记录", zh,
-                         "顿号连接会读成连端口记录一起清理，与 serve.py 行为相反")
+        self.assertIn(
+            "退出时清理运行状态，保留端口记录", zh, "中文退出语义要与英文版、ADR 0008 一致：保留端口记录不清理"
+        )
+        self.assertNotIn("清理运行状态、保留端口记录", zh, "顿号连接会读成连端口记录一起清理，与 serve.py 行为相反")
         self.assertIn("keeps the reserved-port record", en)
 
 
@@ -217,8 +218,9 @@ class ReadmeOverviewHomeSyncTests(unittest.TestCase):
     def test_project_structure_lines_follow_the_new_commands(self):
         for text, label in ((self.zh, "中文"), (self.en, "英文")):
             self.assertIn("forget / check / overview", text, f"{label}项目结构的 serve.py 行")
-            self.assertIn("总览首页的保留端口" if label == "中文" else "reserved port",
-                          text, f"{label}项目结构的 ledger.py 行")
+            self.assertIn(
+                "总览首页的保留端口" if label == "中文" else "reserved port", text, f"{label}项目结构的 ledger.py 行"
+            )
 
     def test_interface_language_bullet_includes_overview(self):
         for text in (self.zh, self.en):
@@ -235,8 +237,7 @@ class VersionBadgeConsistencyTests(unittest.TestCase):
         self.assertRegex(version, r"\d+\.\d+\.\d+")
         for name in ("README.md", "README.zh-CN.md"):
             text = read(ROOT / name)
-            self.assertRegex(text, rf'alt="(?:version|版本) {version}"',
-                             f"{name} 徽章 alt 版本号")
+            self.assertRegex(text, rf'alt="(?:version|版本) {version}"', f"{name} 徽章 alt 版本号")
             self.assertIn(f"-{version}-1f3a5f", text, f"{name} 徽章 URL 版本号")
         for svg in ("banner.zh.svg", "banner.en.svg"):
             self.assertIn(version, read(ROOT / "docs" / "assets" / svg), f"{svg} 头图版本号")

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """检查来源仓库的正式标签并更新当前技能副本，不改来源检出或审阅数据。"""
+
 from __future__ import annotations
 
 import contextlib
@@ -71,9 +72,16 @@ def version(value):
 def git(repo: Path, *args: str, timeout: int = 15) -> str:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     try:
-        result = subprocess.run(["git", "-C", str(repo), *args], stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                timeout=timeout, env=env)
+        result = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env=env,
+        )
     except (OSError, subprocess.TimeoutExpired):
         raise UpdateError("cli.update.network") from None
     if result.returncode:
@@ -99,7 +107,7 @@ def latest_release(repo: Path):
         fields = line.split("\t")
         if len(fields) != 2 or not fields[1].startswith("refs/tags/v"):
             continue
-        ref = fields[1][len("refs/tags/"):]
+        ref = fields[1][len("refs/tags/") :]
         peeled = ref.endswith("^{}")
         tag = ref[:-3] if peeled else ref
         parsed = version(tag[1:])
@@ -170,8 +178,12 @@ def _windows_list_processes():
     try:
         done = subprocess.run(
             [shell, "-NoProfile", "-NonInteractive", "-Command", script],
-            stdin=subprocess.DEVNULL, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=20,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
         )
     except (OSError, subprocess.TimeoutExpired):
         raise UpdateError("cli.update.cannotVerifyServices") from None
@@ -219,15 +231,21 @@ def _windows_process_cwd(pid: int):
         kernel32.IsWow64Process.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
         kernel32.IsWow64Process.restype = wintypes.BOOL
     kernel32.ReadProcessMemory.argtypes = [
-        wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
-        ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_size_t),
     ]
     kernel32.ReadProcessMemory.restype = wintypes.BOOL
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel32.CloseHandle.restype = wintypes.BOOL
     ntdll.NtQueryInformationProcess.argtypes = [
-        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
-        wintypes.ULONG, ctypes.POINTER(wintypes.ULONG),
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.ULONG,
+        ctypes.POINTER(wintypes.ULONG),
     ]
     ntdll.NtQueryInformationProcess.restype = ctypes.c_long
     handle = kernel32.OpenProcess(0x0410, False, pid)
@@ -249,14 +267,18 @@ def _windows_process_cwd(pid: int):
 
         pbi = _PBI()
         ret_len = wintypes.ULONG()
-        if ntdll.NtQueryInformationProcess(handle, 0, ctypes.byref(pbi), ctypes.sizeof(pbi), ctypes.byref(ret_len)) != 0:
+        if (
+            ntdll.NtQueryInformationProcess(handle, 0, ctypes.byref(pbi), ctypes.sizeof(pbi), ctypes.byref(ret_len))
+            != 0
+        ):
             return None
         if not pbi.PebBaseAddress:
             return None
         val = ctypes.c_uint64()
         read = ctypes.c_size_t()
-        if not kernel32.ReadProcessMemory(handle, ctypes.c_void_p(pbi.PebBaseAddress + 0x20),
-                                          ctypes.byref(val), 8, ctypes.byref(read)):
+        if not kernel32.ReadProcessMemory(
+            handle, ctypes.c_void_p(pbi.PebBaseAddress + 0x20), ctypes.byref(val), 8, ctypes.byref(read)
+        ):
             return None
         params_addr = val.value
         if not params_addr:
@@ -266,15 +288,16 @@ def _windows_process_cwd(pid: int):
             _fields_ = [("Length", ctypes.c_ushort), ("MaximumLength", ctypes.c_ushort), ("Buffer", ctypes.c_uint64)]
 
         us = _UnicodeString()
-        if not kernel32.ReadProcessMemory(handle, ctypes.c_void_p(params_addr + 0x38),
-                                          ctypes.byref(us), ctypes.sizeof(us), ctypes.byref(read)):
+        if not kernel32.ReadProcessMemory(
+            handle, ctypes.c_void_p(params_addr + 0x38), ctypes.byref(us), ctypes.sizeof(us), ctypes.byref(read)
+        ):
             return None
         if not us.Length or not us.Buffer or us.Length > 65534:
             return None
         buf = ctypes.create_string_buffer(us.Length)
         if not kernel32.ReadProcessMemory(handle, ctypes.c_void_p(us.Buffer), buf, us.Length, ctypes.byref(read)):
             return None
-        return buf.raw[:read.value].decode("utf-16-le", errors="replace").rstrip("\x00") or None
+        return buf.raw[: read.value].decode("utf-16-le", errors="replace").rstrip("\x00") or None
     except OSError:
         return None
     finally:
@@ -286,8 +309,14 @@ def process_cwd(pid: int):
         return _windows_process_cwd(pid)
     if sys.platform == "darwin":
         try:
-            result = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
-                                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+            result = subprocess.run(
+                ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+            )
         except (OSError, subprocess.TimeoutExpired):
             return None
         return next((line[1:] for line in result.stdout.splitlines() if line.startswith("n")), None)
@@ -301,8 +330,15 @@ def _list_processes():
     if fsutil.is_windows():
         return _windows_list_processes()
     try:
-        done = subprocess.run(["ps", "-ww", "-eo", "pid=,command="], stdin=subprocess.DEVNULL,
-                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+        done = subprocess.run(
+            ["ps", "-ww", "-eo", "pid=,command="],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
     except (OSError, subprocess.TimeoutExpired):
         raise UpdateError("cli.update.cannotVerifyServices") from None
     if done.returncode:
@@ -324,8 +360,9 @@ def has_legacy_process(copy: Path, record: dict) -> bool:
     roots = [Path(__file__).parent.parent]
     links = record.get("links", [])
     if isinstance(links, list):
-        roots.extend(Path(item["path"]) for item in links
-                     if isinstance(item, dict) and isinstance(item.get("path"), str))
+        roots.extend(
+            Path(item["path"]) for item in links if isinstance(item, dict) and isinstance(item.get("path"), str)
+        )
     aliases = {str(root / "scripts" / name) for root in [copy, *roots] for name in names}
     aliases |= {path.removeprefix("/private") for path in aliases if path.startswith("/private/var/")}
     win = fsutil.is_windows()
@@ -351,8 +388,9 @@ def has_legacy_process(copy: Path, record: dict) -> bool:
             index += 2 if words[index] in ("-W", "-X") else 1
         if index >= len(words) or words[index].startswith("-"):
             continue
-        if any(re.search(r"(?:^|\s)" + re.escape(alias) + r"(?:\s|$)", command, re.I if win else 0)
-               for alias in aliases):
+        if any(
+            re.search(r"(?:^|\s)" + re.escape(alias) + r"(?:\s|$)", command, re.I if win else 0) for alias in aliases
+        ):
             return True
         script = Path(words[index])
         if script.name not in names:
@@ -379,8 +417,20 @@ def clone_release(repo: Path, cache: Path, tag: str, commit: str) -> Path:
         release = cache / ("release-" + commit + "-" + uuid.uuid4().hex)
     with tempfile.TemporaryDirectory(prefix=".fetch-", dir=cache) as temp:
         checkout = Path(temp) / "repo"
-        git(repo, "clone", "--quiet", "--no-local", "--depth", "1", "--branch", tag,
-            "--", remote_url(repo), str(checkout), timeout=60)
+        git(
+            repo,
+            "clone",
+            "--quiet",
+            "--no-local",
+            "--depth",
+            "1",
+            "--branch",
+            tag,
+            "--",
+            remote_url(repo),
+            str(checkout),
+            timeout=60,
+        )
         if git(checkout, "rev-parse", "HEAD") != commit:
             raise UpdateError("cli.update.badRelease")
         os.replace(checkout, release)
@@ -395,7 +445,7 @@ def copy_tracked_skill(release: Path, stage: Path) -> None:
     for name in filter(None, files):
         if not name.startswith(prefix):
             raise UpdateError("cli.update.badRelease")
-        relative = Path(name[len(prefix):])
+        relative = Path(name[len(prefix) :])
         if relative.is_absolute() or ".." in relative.parts:
             raise UpdateError("cli.update.badRelease")
         source = release / name
@@ -434,9 +484,19 @@ def install_release(copy: Path, record: dict, release: Path, tag: str, commit: s
     except OSError:
         raise UpdateError("cli.update.badRelease") from None
     match = re.search(r'^VERSION = "([^"]+)"', serve, re.M)
-    required = ("SKILL.md", "scripts/update.py", "scripts/content_manifest.py", "scripts/i18n.py", "scripts/ledger.py",
-                "scripts/fsutil.py", "scripts/review_overview.py", "scripts/review_stop.py", "scripts/review_save.py",
-                "locales/zh-CN.json", "locales/en.json")
+    required = (
+        "SKILL.md",
+        "scripts/update.py",
+        "scripts/content_manifest.py",
+        "scripts/i18n.py",
+        "scripts/ledger.py",
+        "scripts/fsutil.py",
+        "scripts/review_overview.py",
+        "scripts/review_stop.py",
+        "scripts/review_save.py",
+        "locales/zh-CN.json",
+        "locales/en.json",
+    )
     if any(not (source / item).is_file() for item in required) or not match or match.group(1) != tag[1:]:
         raise UpdateError("cli.update.badRelease")
     expected = record.get("tree")
@@ -454,9 +514,14 @@ def install_release(copy: Path, record: dict, release: Path, tag: str, commit: s
         stage = temp / SKILL
         copy_tracked_skill(release, stage)
         os.chmod(stage, stat.S_IMODE(copy.stat().st_mode))
-        updated = {**record, "repo": str(release), "commit": commit, "version": tag[1:],
-                   "installed_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
-                   "tree": content_manifest.snapshot(stage)}
+        updated = {
+            **record,
+            "repo": str(release),
+            "commit": commit,
+            "version": tag[1:],
+            "installed_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "tree": content_manifest.snapshot(stage),
+        }
         updated.pop("files", None)
         (stage / RECORD).write_text(json.dumps(updated, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         if content_manifest.snapshot(copy) != expected:
@@ -484,16 +549,18 @@ def main(argv=None) -> int:
     except i18n.LocaleError as exc:
         default = i18n.Translator(i18n.DEFAULT_LOCALE)
         # name 按用户原样输入回显（不随解析去掉首尾空白），与从前的输出一致
-        print(i18n.locale_error_message(exc, ERROR_KEYS, default, name=choice or ""),
-              file=sys.stderr)
+        print(i18n.locale_error_message(exc, ERROR_KEYS, default, name=choice or ""), file=sys.stderr)
         return 2
     translate = i18n.Translator(locale)
-    parser = i18n.LocalizedParser(keys=ERROR_KEYS, translate=translate, prog="update.py",
-                                  description=translate("cli.update.description"),
-                                  add_help=False)
+    parser = i18n.LocalizedParser(
+        keys=ERROR_KEYS,
+        translate=translate,
+        prog="update.py",
+        description=translate("cli.update.description"),
+        add_help=False,
+    )
     parser.add_argument("-h", "--help", action="help", help=translate("cli.ae.opt.help"))
-    parser.add_argument("mode", choices=("auto", "check", "now"), metavar="MODE",
-                        help=translate("cli.update.modeHelp"))
+    parser.add_argument("mode", choices=("auto", "check", "now"), metavar="MODE", help=translate("cli.update.modeHelp"))
     parser.add_argument("--locale", metavar="LANG", help=translate("cli.ae.opt.locale"))
     args = parser.parse_args(argv)
     copy = Path(__file__).resolve().parent.parent

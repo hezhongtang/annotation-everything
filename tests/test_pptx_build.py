@@ -3,6 +3,7 @@
 接缝：pptx_build.build_deck（deck 规格 dict → .pptx 文件与构建摘要）与它的
 CLI 包装。全部材料由标准库现场合成，只用 Python 标准库。
 """
+
 from __future__ import annotations
 
 import json
@@ -34,17 +35,33 @@ def deck_spec() -> dict:
         "schema": "ae-pptx-deck/1",
         "title": "合成演示文稿",
         "theme": {
-            "colors": {"dk1": "1F2933", "lt1": "FFFFFF", "dk2": "3E4C59", "lt2": "F5F7FA",
-                       "accent1": "2B6CB0", "accent2": "2C7A7B", "accent3": "B7791F",
-                       "accent4": "6B46C1", "accent5": "C05621", "accent6": "975FA8",
-                       "hlink": "2B6CB0", "folHlink": "805AD5"},
-            "fonts": {"major": {"latin": "Synthetic Display", "ea": "合成标题字体"},
-                      "minor": {"latin": "Synthetic Text", "ea": "合成正文字体"}},
+            "colors": {
+                "dk1": "1F2933",
+                "lt1": "FFFFFF",
+                "dk2": "3E4C59",
+                "lt2": "F5F7FA",
+                "accent1": "2B6CB0",
+                "accent2": "2C7A7B",
+                "accent3": "B7791F",
+                "accent4": "6B46C1",
+                "accent5": "C05621",
+                "accent6": "975FA8",
+                "hlink": "2B6CB0",
+                "folHlink": "805AD5",
+            },
+            "fonts": {
+                "major": {"latin": "Synthetic Display", "ea": "合成标题字体"},
+                "minor": {"latin": "Synthetic Text", "ea": "合成正文字体"},
+            },
         },
         "slides": [
             {"key": "cover", "layout": "title", "title": "合成封面", "subtitle": "副标题"},
-            {"key": "sum", "layout": "titleAndContent", "title": "要点页",
-             "body": ["第一条要点", {"text": "二级要点", "level": 1}, "第二条要点"]},
+            {
+                "key": "sum",
+                "layout": "titleAndContent",
+                "title": "要点页",
+                "body": ["第一条要点", {"text": "二级要点", "level": 1}, "第二条要点"],
+            },
         ],
     }
 
@@ -75,8 +92,9 @@ class PptxBuildTests(unittest.TestCase):
         self.assertTrue(out.exists())
         model = pr.read(out)
         self.assertEqual([s["n"] for s in model["slides"]], [1, 2])
-        self.assertEqual(model["canvas"], {
-            "width": 12192000, "height": 6858000, "unit": "emu", "orientation": "landscape"})
+        self.assertEqual(
+            model["canvas"], {"width": 12192000, "height": 6858000, "unit": "emu", "orientation": "landscape"}
+        )
 
     def test_theme_carries_confirmed_colors_and_fonts(self):
         """已确认的主题色与标题/正文字体写进主题部件，受控元素实际引用主题。"""
@@ -106,7 +124,7 @@ class PptxBuildTests(unittest.TestCase):
 
         self.assertIn('name="标题幻灯片"', layout1)
         self.assertIn('type="title"', layout1)
-        self.assertIn("<p:ph type=\"ctrTitle\"/>", layout1)
+        self.assertIn('<p:ph type="ctrTitle"/>', layout1)
         self.assertIn('name="标题和内容"', layout2)
         self.assertIn('type="obj"', layout2)
         self.assertIn('<p:ph type="title"/>', layout2)
@@ -130,16 +148,19 @@ class PptxBuildTests(unittest.TestCase):
         self.assertNotEqual(theme_a, theme_b)
         self.assertIn("C53030", theme_b)
         # 幻灯片 XML 只引用主题槽位，与主题取值无关，换主题前后应逐字节相同
-        self.assertEqual(self._part(out_a, "ppt/slides/slide2.xml"),
-                         self._part(out_b, "ppt/slides/slide2.xml"))
+        self.assertEqual(self._part(out_a, "ppt/slides/slide2.xml"), self._part(out_b, "ppt/slides/slide2.xml"))
 
     def test_master_carries_footer_number_and_logo(self):
         """页脚、页码与标志按规格落在母版，不逐页复制；内容类型登记图片格式。"""
         logo_path = self.root / "logo.png"
         logo_path.write_bytes(PNG_1X1)
         spec = deck_spec()
-        spec["master"] = {"footer": True, "footerText": "内部资料", "pageNumber": True,
-                          "logo": {"path": str(logo_path), "name": "合成标志"}}
+        spec["master"] = {
+            "footer": True,
+            "footerText": "内部资料",
+            "pageNumber": True,
+            "logo": {"path": str(logo_path), "name": "合成标志"},
+        }
         out, _ = self._build(spec)
         master = self._part(out, "ppt/slideMasters/slideMaster1.xml")
 
@@ -171,13 +192,17 @@ class PptxBuildTests(unittest.TestCase):
             with self.subTest(footer=footer, page_number=page_number):
                 spec = deck_spec()
                 spec["master"] = {"footer": footer, "pageNumber": page_number}
-                spec["slides"].extend({"key": layout, "layout": layout, "title": "合成页"}
-                                      for layout in ("sectionHeader", "titleOnly"))
+                spec["slides"].extend(
+                    {"key": layout, "layout": layout, "title": "合成页"} for layout in ("sectionHeader", "titleOnly")
+                )
                 spec["slides"].append({"key": "blank", "layout": "blank"})
                 out, _ = self._build(spec)
                 with zipfile.ZipFile(out) as archive:
-                    layouts = [name for name in archive.namelist()
-                               if name.startswith("ppt/slideLayouts/") and name.endswith(".xml")]
+                    layouts = [
+                        name
+                        for name in archive.namelist()
+                        if name.startswith("ppt/slideLayouts/") and name.endswith(".xml")
+                    ]
                     self.assertEqual(len(layouts), 5)
                     for name in layouts:
                         root = ET.fromstring(archive.read(name))
@@ -187,8 +212,9 @@ class PptxBuildTests(unittest.TestCase):
     def test_empty_text_bodies_still_have_a_paragraph(self):
         spec = deck_spec()
         spec["slides"][0]["notes"] = "合成讲稿"
-        spec["slides"][1]["shapes"] = [{"shape": "rect", "x": 600000, "y": 1800000,
-                                        "cx": 1000000, "cy": 1000000, "fill": "accent1"}]
+        spec["slides"][1]["shapes"] = [
+            {"shape": "rect", "x": 600000, "y": 1800000, "cx": 1000000, "cy": 1000000, "fill": "accent1"}
+        ]
         out, _ = self._build(spec)
         with zipfile.ZipFile(out) as archive:
             for name in archive.namelist():
@@ -227,8 +253,7 @@ class PptxBuildTests(unittest.TestCase):
         """章节覆盖全部幻灯片且不重复归组；引用的幻灯片 ID 有效。"""
         spec = deck_spec()
         spec["slides"].append({"key": "trend", "layout": "titleOnly", "title": "趋势页"})
-        spec["sections"] = [{"name": "开场", "keys": ["cover"]},
-                            {"name": "结论", "keys": ["sum", "trend"]}]
+        spec["sections"] = [{"name": "开场", "keys": ["cover"]}, {"name": "结论", "keys": ["sum", "trend"]}]
         out, _ = self._build(spec)
         presentation = self._part(out, "ppt/presentation.xml")
 
@@ -265,11 +290,17 @@ class PptxBuildTests(unittest.TestCase):
             ("slideKeyDup", lambda s: s["slides"].append(dict(s["slides"][0]))),
             ("hexColor", lambda s: s["theme"]["colors"].update({"accent1": "红色"})),
             ("layoutUnknown", lambda s: s["slides"][0].update({"layout": "fancy"})),
-            ("shapeOutside", lambda s: s["slides"][1].update(
-                {"shapes": [{"shape": "rect", "x": 0, "y": 0, "cx": 999999999, "cy": 100000}]})),
+            (
+                "shapeOutside",
+                lambda s: s["slides"][1].update(
+                    {"shapes": [{"shape": "rect", "x": 0, "y": 0, "cx": 999999999, "cy": 100000}]}
+                ),
+            ),
             ("notesEmpty", lambda s: s["slides"][0].update({"notes": " "})),
-            ("bodyLayoutMismatch", lambda s: s["slides"][1].update(
-                {"layout": "titleOnly", "body": ["只读标题页不放正文"]})),
+            (
+                "bodyLayoutMismatch",
+                lambda s: s["slides"][1].update({"layout": "titleOnly", "body": ["只读标题页不放正文"]}),
+            ),
         ]
         for code, mutate in cases:
             with self.subTest(code=code):
@@ -285,23 +316,54 @@ class PptxBuildTests(unittest.TestCase):
         """四类首版图表都是原生图表部件：轴引用、数据缓存与内嵌工作簿齐全。"""
         spec = deck_spec()
         charts = [
-            {"chart": "column", "name": "季度收入", "x": 600000, "y": 1800000,
-             "cx": 6000000, "cy": 3800000, "categories": ["一季度", "二季度", "三季度"],
-             "series": [{"name": "收入", "values": [100, 112, 121]}], "legend": "bottom"},
-            {"chart": "bar", "name": "渠道对比", "x": 600000, "y": 1800000,
-             "cx": 6000000, "cy": 3800000, "categories": ["直营", "加盟"],
-             "series": [{"name": "销售额", "values": [80, 60]}]},
-            {"chart": "line", "name": "趋势", "x": 600000, "y": 1800000,
-             "cx": 6000000, "cy": 3800000, "categories": ["1月", "2月", "3月"],
-             "series": [{"name": "活跃", "values": [5, 7, 6]}]},
-            {"chart": "pie", "name": "占比", "x": 600000, "y": 1800000,
-             "cx": 6000000, "cy": 3800000, "categories": ["线上", "线下"],
-             "series": [{"name": "订单", "values": [62, 38]}],
-             "labels": "percent", "legend": "right"},
+            {
+                "chart": "column",
+                "name": "季度收入",
+                "x": 600000,
+                "y": 1800000,
+                "cx": 6000000,
+                "cy": 3800000,
+                "categories": ["一季度", "二季度", "三季度"],
+                "series": [{"name": "收入", "values": [100, 112, 121]}],
+                "legend": "bottom",
+            },
+            {
+                "chart": "bar",
+                "name": "渠道对比",
+                "x": 600000,
+                "y": 1800000,
+                "cx": 6000000,
+                "cy": 3800000,
+                "categories": ["直营", "加盟"],
+                "series": [{"name": "销售额", "values": [80, 60]}],
+            },
+            {
+                "chart": "line",
+                "name": "趋势",
+                "x": 600000,
+                "y": 1800000,
+                "cx": 6000000,
+                "cy": 3800000,
+                "categories": ["1月", "2月", "3月"],
+                "series": [{"name": "活跃", "values": [5, 7, 6]}],
+            },
+            {
+                "chart": "pie",
+                "name": "占比",
+                "x": 600000,
+                "y": 1800000,
+                "cx": 6000000,
+                "cy": 3800000,
+                "categories": ["线上", "线下"],
+                "series": [{"name": "订单", "values": [62, 38]}],
+                "labels": "percent",
+                "legend": "right",
+            },
         ]
         spec["slides"] = [
-            {"key": f"chart{i + 1}", "layout": "titleOnly", "title": f"图表 {i + 1}",
-             "charts": [chart]} for i, chart in enumerate(charts)]
+            {"key": f"chart{i + 1}", "layout": "titleOnly", "title": f"图表 {i + 1}", "charts": [chart]}
+            for i, chart in enumerate(charts)
+        ]
         out, _ = self._build(spec)
         with zipfile.ZipFile(out) as archive:
             names = archive.namelist()
@@ -321,7 +383,7 @@ class PptxBuildTests(unittest.TestCase):
         self.assertIn("<c:catAx>", column)
         self.assertIn("<c:valAx>", column)
         self.assertIn('<c:tickLblPos val="nextTo"/>', column)
-        self.assertIn("<c:legendPos val=\"b\"/>", column)
+        self.assertIn('<c:legendPos val="b"/>', column)
         self.assertIn("<c:v>112</c:v>", column)
         self.assertIn("<c:v>三季度</c:v>", column)
         # 轴的 crossAx 互相引用，数据缓存条数与规格一致
@@ -340,6 +402,7 @@ class PptxBuildTests(unittest.TestCase):
 
         # 内嵌工作簿可打开，数据与图表缓存一致（可编辑数据的载体）
         import io
+
         with zipfile.ZipFile(out) as outer:
             workbook_bytes = outer.read("ppt/embeddings/data1.xlsx")
         with zipfile.ZipFile(io.BytesIO(workbook_bytes)) as workbook:
@@ -352,8 +415,15 @@ class PptxBuildTests(unittest.TestCase):
 
     def test_chart_data_validation(self):
         """图表反例在写入前拒绝：类目与数值等长、类型封闭、饼图限定标签。"""
-        base = {"chart": "column", "x": 0, "y": 0, "cx": 4000000, "cy": 3000000,
-                "categories": ["甲", "乙"], "series": [{"name": "系列", "values": [1, 2]}]}
+        base = {
+            "chart": "column",
+            "x": 0,
+            "y": 0,
+            "cx": 4000000,
+            "cy": 3000000,
+            "categories": ["甲", "乙"],
+            "series": [{"name": "系列", "values": [1, 2]}],
+        }
         cases = [
             ("chartUnknown", {**base, "chart": "scatter"}),
             ("chartCountMismatch", {**base, "series": [{"name": "系列", "values": [1]}]}),
@@ -362,8 +432,7 @@ class PptxBuildTests(unittest.TestCase):
         for code, chart in cases:
             with self.subTest(code=code):
                 spec = deck_spec()
-                spec["slides"] = [{"key": "c", "layout": "titleOnly", "title": "图",
-                                   "charts": [chart]}]
+                spec["slides"] = [{"key": "c", "layout": "titleOnly", "title": "图", "charts": [chart]}]
                 out = self.root / f"bad-{code}.pptx"
                 with self.assertRaises(pb.DeckSpecError) as ctx:
                     pb.build_deck(spec, out)
@@ -387,8 +456,9 @@ class PptxBuildTests(unittest.TestCase):
         self.assertIn("../notesMasters/notesMaster1.xml", notes_rels)
         self.assertIn("../slides/slide1.xml", notes_rels)
         slide_rels = self._part(out, "ppt/slides/_rels/slide1.xml.rels")
-        self.assertIn('Type="%s/notesSlide"' % "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
-                      slide_rels)
+        self.assertIn(
+            'Type="%s/notesSlide"' % "http://schemas.openxmlformats.org/officeDocument/2006/relationships", slide_rels
+        )
         presentation = self._part(out, "ppt/presentation.xml")
         self.assertIn("notesMasterIdLst", presentation)
 
@@ -417,16 +487,27 @@ class PptxBuildTests(unittest.TestCase):
     def test_cli_reports_chart_spec_errors_exit_two(self):
         """CLI 级反例：不支持的图表类型按规格错误退出码 2，打印可读文案而非 traceback。"""
         spec = deck_spec()
-        spec["slides"][1]["charts"] = [{
-            "chart": "scatter", "x": 0, "y": 0, "cx": 1000000, "cy": 1000000,
-            "categories": ["甲"], "series": [{"name": "系列", "values": [1]}]}]
+        spec["slides"][1]["charts"] = [
+            {
+                "chart": "scatter",
+                "x": 0,
+                "y": 0,
+                "cx": 1000000,
+                "cy": 1000000,
+                "categories": ["甲"],
+                "series": [{"name": "系列", "values": [1]}],
+            }
+        ]
         spec_path = self.root / "bad-chart.json"
         spec_path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
         out = self.root / "bad-chart.pptx"
         script = ROOT / "skill" / "annotation-everything" / "scripts" / "pptx_build.py"
         done = subprocess.run(
             [sys.executable, str(script), "--deck", str(spec_path), "--out", str(out)],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertNotIn("Traceback", done.stderr)
         self.assertIn("scatter", done.stderr)
@@ -443,7 +524,10 @@ class PptxBuildTests(unittest.TestCase):
         script = ROOT / "skill" / "annotation-everything" / "scripts" / "pptx_build.py"
         done = subprocess.run(
             [sys.executable, str(script), "--deck", str(spec_path), "--out", str(out), "--json"],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
         self.assertEqual(done.returncode, 0, done.stderr)
         summary = json.loads(done.stdout)
         self.assertEqual(summary["schema"], "ae-pptx-build/1")

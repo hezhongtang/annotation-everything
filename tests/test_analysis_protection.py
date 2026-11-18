@@ -1,4 +1,5 @@
 """#113 的公开行为：分析锁、重裁与断枝、基线恢复和结论批注保护。"""
+
 from __future__ import annotations
 
 import sys
@@ -12,6 +13,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT))
 
 import host_isolation
+
 host_isolation.require_for_module(__name__)
 
 import analysis_store as analysis
@@ -19,9 +21,14 @@ import notes_store as notes
 
 
 def proposal(key="caliber", *, parent=None):
-    return {"key": key, "text": "按哪种口径核对增长？", "short": "增长口径",
-            "options": [{"id": "Y", "label": "年度"}, {"id": "Q", "label": "季度"}],
-            "recommend": "Y", "parent": parent}
+    return {
+        "key": key,
+        "text": "按哪种口径核对增长？",
+        "short": "增长口径",
+        "options": [{"id": "Y", "label": "年度"}, {"id": "Q", "label": "季度"}],
+        "recommend": "Y",
+        "parent": parent,
+    }
 
 
 class ProtectionTests(unittest.TestCase):
@@ -35,8 +42,13 @@ class ProtectionTests(unittest.TestCase):
 
     def questions(self, proposals=None):
         claimed = analysis.claim(self.review, by="Synthetic")
-        result = analysis.writeback(self.review, self.aid, claimed["seq"], claimed["baseRev"],
-                                    proposals if proposals is not None else [proposal()])
+        result = analysis.writeback(
+            self.review,
+            self.aid,
+            claimed["seq"],
+            claimed["baseRev"],
+            proposals if proposals is not None else [proposal()],
+        )
         return result["nextRound"]
 
     def branch_note(self):
@@ -58,8 +70,9 @@ class ProtectionTests(unittest.TestCase):
         analysis.submit_round(self.review, self.aid, round_no)
         claimed = analysis.claim(self.review)
         analysis.answer(self.review, self.aid, round_no, "S:caliber", {"kind": "accept"})
-        current = analysis.answer(self.review, self.aid, round_no, "Q:n1",
-                                  {"kind": "option", "option": "Y", "verbatim": "沿用年度口径"})
+        current = analysis.answer(
+            self.review, self.aid, round_no, "Q:n1", {"kind": "option", "option": "Y", "verbatim": "沿用年度口径"}
+        )
         self.assertEqual(current["rev"], claimed["baseRev"])
         self.assertEqual(current["rounds"][-1]["answers"]["Q:n1"]["verbatim"], "沿用年度口径")
         analysis.writeback(self.review, self.aid, round_no, claimed["baseRev"], [])
@@ -91,8 +104,7 @@ class ProtectionTests(unittest.TestCase):
         self.assertEqual(changed["nodes"]["n2"]["branch"], "detached")
         self.assertEqual(changed["nodes"]["n2"]["decision"], original_decision)
         held = next(n for n in notes.load(self.review)["notes"] if n["id"] == note["id"])
-        self.assertEqual((held["status"], held["hold"], held["text"]),
-                         ("held", "结论已变", note["text"]))
+        self.assertEqual((held["status"], held["hold"], held["text"]), ("held", "结论已变", note["text"]))
         self.assertEqual(notes.handoff_load(self.review)["items"][-1]["status"], "void")
         with self.assertRaises(notes.HandoffError) as old_round:
             analysis.answer(self.review, self.aid, round_no, "Q:n2", {"kind": "accept"})
@@ -113,8 +125,9 @@ class ProtectionTests(unittest.TestCase):
         self.assertEqual(current["rounds"][0]["status"], "void")
         self.assertEqual(len(current["rejections"]), 1)
         self.assertFalse(current["protection"]["locked"])
-        self.assertEqual([(r["kind"], r["status"], r["line"]) for r in current["rounds"][1:]],
-                         [("refresh", "submitted", "main")])
+        self.assertEqual(
+            [(r["kind"], r["status"], r["line"]) for r in current["rounds"][1:]], [("refresh", "submitted", "main")]
+        )
         with self.assertRaises(notes.HandoffError):
             analysis.writeback(self.review, self.aid, claimed["seq"], claimed["baseRev"], [])
         self.assertEqual(len(analysis.queue(self.review)), 1)
@@ -154,8 +167,14 @@ class ProtectionTests(unittest.TestCase):
         self.assertEqual(requested["updateRequests"][note["id"]]["status"], "requested")
         claimed = analysis.claim(self.review)
         text = "新批注：按季度说明增长，先说明口径变化"
-        result = analysis.writeback(self.review, self.aid, claimed["seq"], claimed["baseRev"], [],
-                                    updates=[{"noteId": note["id"], "text": text}])
+        result = analysis.writeback(
+            self.review,
+            self.aid,
+            claimed["seq"],
+            claimed["baseRev"],
+            [],
+            updates=[{"noteId": note["id"], "text": text}],
+        )
         context = analysis.round_context(self.review, self.aid, result["nextRound"])
         item = next(item for item in context["items"] if item["type"] == "update")
         self.assertEqual((item["beforeText"], item["text"]), (note["text"], text))
@@ -164,7 +183,9 @@ class ProtectionTests(unittest.TestCase):
         analysis.answer(self.review, self.aid, result["nextRound"], item["key"], {"kind": "accept"})
         confirmed = next(n for n in notes.load(self.review)["notes"] if n["id"] == note["id"])
         self.assertEqual((confirmed["text"], confirmed["status"]), (text, "open"))
-        self.assertEqual(confirmed["basis"]["decision"], analysis.load(self.review, self.aid)["nodes"]["n1"]["decision"])
+        self.assertEqual(
+            confirmed["basis"]["decision"], analysis.load(self.review, self.aid)["nodes"]["n1"]["decision"]
+        )
         self.assertEqual(confirmed["analysisHistory"][-1]["text"], note["text"])
         analysis.answer(self.review, self.aid, result["nextRound"], item["key"], {"kind": "accept"})
         retried = next(n for n in notes.load(self.review)["notes"] if n["id"] == note["id"])
@@ -199,7 +220,9 @@ class ProtectionTests(unittest.TestCase):
         notes.handoff_submit(self.review, full_check=True)
         context = analysis.full_check_context(self.review)
         categories = {item["kind"]: item for item in context["checks"]}
-        self.assertEqual(set(categories), {"changed-notes", "resolved-changed-basis", "report-conflicts", "analysis-conflicts"})
+        self.assertEqual(
+            set(categories), {"changed-notes", "resolved-changed-basis", "report-conflicts", "analysis-conflicts"}
+        )
         self.assertEqual([n["id"] for n in categories["changed-notes"]["notes"]], [child_note["id"]])
         self.assertEqual([n["id"] for n in categories["resolved-changed-basis"]["notes"]], [resolved["id"]])
         self.assertEqual(notes.load(self.review), before)
@@ -257,7 +280,11 @@ class ProtectionTests(unittest.TestCase):
                 claimed = analysis.claim(review)
                 change = proposal("change")
                 if operation != "add":
-                    change = {"key": "change", "op": operation, "targets": ["n1", "n2"] if operation == "merge" else ["n1"]}
+                    change = {
+                        "key": "change",
+                        "op": operation,
+                        "targets": ["n1", "n2"] if operation == "merge" else ["n1"],
+                    }
                     if operation != "void":
                         replacements = [proposal("replacement-a")]
                         if operation == "split":
@@ -276,7 +303,9 @@ class ProtectionTests(unittest.TestCase):
                 self.assertEqual(queued["answers"]["S:change"], original)
                 self.assertEqual(analysis.load(review, state["id"])["nodes"], before)
                 claimed = analysis.claim(review)
-                next_round = analysis.writeback(review, state["id"], claimed["seq"], claimed["baseRev"], [])["nextRound"]
+                next_round = analysis.writeback(review, state["id"], claimed["seq"], claimed["baseRev"], [])[
+                    "nextRound"
+                ]
                 context = analysis.round_context(review, state["id"], next_round)
                 self.assertEqual(context["answers"]["S:change"], original)
                 self.assertTrue(any(item["key"] == "S:change" for item in context["answeredItems"]))
@@ -285,14 +314,17 @@ class ProtectionTests(unittest.TestCase):
                 claimed = analysis.claim(review)
                 after = analysis.writeback(review, state["id"], claimed["seq"], claimed["baseRev"], [])
                 if after["nextRound"] is not None:
-                    self.assertNotIn("S:change", analysis.round_context(review, state["id"], after["nextRound"])["answers"])
+                    self.assertNotIn(
+                        "S:change", analysis.round_context(review, state["id"], after["nextRound"])["answers"]
+                    )
 
     def test_reaffirming_a_structure_answer_does_not_reset_a_parked_question(self):
         round_no = self.questions()
         analysis.answer(self.review, self.aid, round_no, "S:caliber", {"kind": "accept"})
         analysis.answer(self.review, self.aid, round_no, "Q:n1", {"kind": "park"})
-        current = analysis.answer(self.review, self.aid, round_no, "S:caliber",
-                                  {"kind": "accept", "verbatim": "仍然同意这项结构"})
+        current = analysis.answer(
+            self.review, self.aid, round_no, "S:caliber", {"kind": "accept", "verbatim": "仍然同意这项结构"}
+        )
         self.assertEqual(current["nodes"]["n1"]["status"], "parked")
 
 

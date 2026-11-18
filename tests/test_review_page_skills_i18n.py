@@ -3,6 +3,7 @@
 只检查契约，不绑定 DOM 拼法：渲染路径必须从词典取消息，范围存储值、导出协议
 和技能调用名保持原样。真实行为由 tests/e2e_browser.py 的浏览器回归覆盖。
 """
+
 from __future__ import annotations
 
 import json
@@ -21,7 +22,7 @@ TEMPLATE = SCRIPTS / "viewer_template.html"
 FIXTURE = ROOT / "fixtures" / "sample"
 sys.path.insert(0, str(SCRIPTS))
 
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
 
 import build_viewer  # noqa: E402
 import i18n  # noqa: E402
@@ -107,11 +108,13 @@ def _between(text: str, start: str, end: str) -> str:
 
 def _uses(region: str, key: str) -> bool:
     """渲染路径从词典取这条消息：JS 动态片段直接调 tMsg，静态标记用 data-* 声明。"""
-    return (f'tMsg("{key}"' in region
-            or f'data-msg="{key}"' in region
-            or f'data-title="{key}"' in region
-            or f'data-aria="{key}"' in region
-            or f'data-ph="{key}"' in region)
+    return (
+        f'tMsg("{key}"' in region
+        or f'data-msg="{key}"' in region
+        or f'data-title="{key}"' in region
+        or f'data-aria="{key}"' in region
+        or f'data-ph="{key}"' in region
+    )
 
 
 def _page_source() -> str:
@@ -120,9 +123,11 @@ def _page_source() -> str:
 
 def _wired_sources() -> str:
     """页面脚本之外，命令行与生成侧也要用上这些消息。"""
-    return (_page_source()
-            + (ROOT / "skill" / "annotation-everything" / "scripts" / "notes.py").read_text(encoding="utf-8")
-            + (ROOT / "skill" / "annotation-everything" / "scripts" / "build_viewer.py").read_text(encoding="utf-8"))
+    return (
+        _page_source()
+        + (ROOT / "skill" / "annotation-everything" / "scripts" / "notes.py").read_text(encoding="utf-8")
+        + (ROOT / "skill" / "annotation-everything" / "scripts" / "build_viewer.py").read_text(encoding="utf-8")
+    )
 
 
 def tmpdir() -> Path:
@@ -134,8 +139,13 @@ def run_skills(review: Path, *args: str, env: dict[str, str] | None = None):
     base.update(env or {})
     base["CLAUDECODE"] = ""
     base["AE_HOME"] = str(tmpdir())
-    return subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "skills", str(review), *args],
-                          capture_output=True, text=True, env=base, timeout=60)
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS / "notes.py"), "skills", str(review), *args],
+        capture_output=True,
+        text=True,
+        env=base,
+        timeout=60,
+    )
 
 
 class SkillCatalogTests(unittest.TestCase):
@@ -148,8 +158,7 @@ class SkillCatalogTests(unittest.TestCase):
 
     def test_english_values_carry_no_chinese(self):
         en = i18n.load_catalog("en")["messages"]
-        chinese = sorted(k for k, v in en.items()
-                         if _CJK.search(v) and k not in LANGUAGE_NAMES)
+        chinese = sorted(k for k, v in en.items() if _CJK.search(v) and k not in LANGUAGE_NAMES)
         self.assertEqual(chinese, [], "英文消息里混了中文（语言自身的名字除外）")
 
     def test_counted_english_messages_have_both_plural_branches(self):
@@ -173,16 +182,30 @@ class SkillCatalogTests(unittest.TestCase):
 
     def test_every_skill_key_is_wired_in(self):
         page = _wired_sources()
-        unwired = sorted(k for k in SKILL_KEYS
-                         if f'tMsg("{k}"' not in page and f'data-msg="{k}"' not in page
-                         and f'data-title="{k}"' not in page and f'data-aria="{k}"' not in page
-                         and f'data-ph="{k}"' not in page and f'"{k}"' not in page)
+        unwired = sorted(
+            k
+            for k in SKILL_KEYS
+            if f'tMsg("{k}"' not in page
+            and f'data-msg="{k}"' not in page
+            and f'data-title="{k}"' not in page
+            and f'data-aria="{k}"' not in page
+            and f'data-ph="{k}"' not in page
+            and f'"{k}"' not in page
+        )
         self.assertEqual(unwired, [], "这些消息加了却没有任何地方用")
+
     def test_skill_keys_do_not_collide_with_other_issues(self):
         """前缀各自独立：#30 的 viewer.* 条目一个都没动。"""
         zh = i18n.load_catalog("zh-CN")["messages"]
-        for key in ("viewer.target", "viewer.add", "viewer.styleBtn", "viewer.edit",
-                    "viewer.markPin", "cli.show.count", "cli.status.open"):
+        for key in (
+            "viewer.target",
+            "viewer.add",
+            "viewer.styleBtn",
+            "viewer.edit",
+            "viewer.markPin",
+            "cli.show.count",
+            "cli.status.open",
+        ):
             self.assertIn(key, zh, f"不属于 #31 的消息被删掉了：{key}")
 
 
@@ -203,12 +226,16 @@ class SkillInputTests(unittest.TestCase):
     def test_candidate_listbox_and_recommendation_read_from_the_catalog(self):
         self.assertTrue(_uses(self.source, "viewer.skill.candidates"), "viewer.skill.candidates")
         self.assertNotIn('aria-label="技能候选"', self.source)
-        for key in ("viewer.skill.recommended", "viewer.skill.used", "viewer.skill.showAll",
-                    "viewer.skill.noMatch", "viewer.skill.none"):
+        for key in (
+            "viewer.skill.recommended",
+            "viewer.skill.used",
+            "viewer.skill.showAll",
+            "viewer.skill.noMatch",
+            "viewer.skill.none",
+        ):
             self.assertIn(f'"{key}"', self.render, f"候选列表没走词典：{key}")
-        self.assertIn('tMsg(q?"viewer.skill.noMatch":"viewer.skill.none")', self.render,
-                      "空结果要按有没有查询分开说")
-        for literal in (">建议<", "查看全部技能（", "desc:\"用过\""):
+        self.assertIn('tMsg(q?"viewer.skill.noMatch":"viewer.skill.none")', self.render, "空结果要按有没有查询分开说")
+        for literal in (">建议<", "查看全部技能（", 'desc:"用过"'):
             self.assertNotIn(literal, self.render, f"候选列表里还写死了 {literal}")
 
     def test_search_matches_original_name_and_description(self):
@@ -220,7 +247,7 @@ class SkillInputTests(unittest.TestCase):
             self.assertNotIn(literal, filtered, f"搜索路径改了技能的原始名称或说明：{literal}")
 
     def test_chosen_skill_name_is_written_back_verbatim(self):
-        choose = _between(self.source, "function chooseSkill(", "$(\"skillList\").addEventListener")
+        choose = _between(self.source, "function chooseSkill(", '$("skillList").addEventListener')
         self.assertIn("c.name", choose, "选择候选时按目录里的原名写回输入框")
         for literal in ("tMsg(c.name", "localizedName"):
             self.assertNotIn(literal, choose, f"实际调用名被显示翻译改写了：{literal}")
@@ -229,18 +256,31 @@ class SkillInputTests(unittest.TestCase):
         """插件技能带命名空间（market:sample），页面与服务都不改写它。"""
         review = tmpdir() / "plugin"
         review.mkdir()
-        (review / "skills.json").write_text(json.dumps({"version": 1, "always": [], "skills": [
-            {"name": "sample:sample", "desc": "合成插件技能"},
-            {"name": "润色（中文）", "desc": "混合语言说明 mixed-language"},
-            {"name": 'quote"and<tag>', "desc": "特殊字符 <>&\"'"},
-        ]}, ensure_ascii=False), encoding="utf-8")
-        page = (build_viewer.build(FIXTURE / "report.html", None, review, no_scan_skills=True)
-                and (review / "index.html").read_text(encoding="utf-8"))
+        (review / "skills.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "always": [],
+                    "skills": [
+                        {"name": "sample:sample", "desc": "合成插件技能"},
+                        {"name": "润色（中文）", "desc": "混合语言说明 mixed-language"},
+                        {"name": 'quote"and<tag>', "desc": "特殊字符 <>&\"'"},
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        page = build_viewer.build(FIXTURE / "report.html", None, review, no_scan_skills=True) and (
+            review / "index.html"
+        ).read_text(encoding="utf-8")
         for name in ("sample:sample", "润色（中文）", 'quote"and<tag>'):
             self.assertIn(name.replace('"', '\\"'), page.replace('\\"', '\\"'), f"页面丢了技能名 {name}")
-        self.assertEqual([x["name"] for x in store.skills_catalog(review)],
-                         ["sample:sample", "润色（中文）", 'quote"and<tag>'],
-                         "技能目录不被显示语言改写")
+        self.assertEqual(
+            [x["name"] for x in store.skills_catalog(review)],
+            ["sample:sample", "润色（中文）", 'quote"and<tag>'],
+            "技能目录不被显示语言改写",
+        )
 
     def test_edit_form_skills_placeholder_reads_from_the_catalog(self):
         note = _between(self.source, "function noteHtml(", "// 把正在编辑的那张卡片")
@@ -251,7 +291,7 @@ class SkillInputTests(unittest.TestCase):
         note = _between(self.source, "function noteHtml(", "// 把正在编辑的那张卡片")
         for key in ("viewer.skill.noteTitle", "viewer.skill.alwaysChip", "viewer.skill.alwaysChipTitle"):
             self.assertIn(f'tMsg("{key}"', note, f"卡片上的技能标签没走词典：{key}")
-        for literal in ("常驻 ", "title=\"常驻技能（", "title=\"处理这条批注时调用的技能\""):
+        for literal in ("常驻 ", 'title="常驻技能（', 'title="处理这条批注时调用的技能"'):
             self.assertNotIn(literal, note, f"卡片里还写死了 {literal}")
 
 
@@ -274,14 +314,24 @@ class AlwaysScopeTests(unittest.TestCase):
         for scope in ALWAYS_STORAGE_SCOPES:
             self.assertIn(f'"{scope}"', self.source, f"存储值 {scope} 不能从页面里消失")
         labels = _between(self.source, "const ALWAYS_LABEL=", "const ALWAYS_EXPORT=")
-        for scope, key in (("all", "viewer.always.scope.all"), ("报告", "viewer.always.scope.report"),
-                           ("讲稿", "viewer.always.scope.script"), ("style", "viewer.always.scope.style")):
+        for scope, key in (
+            ("all", "viewer.always.scope.all"),
+            ("报告", "viewer.always.scope.report"),
+            ("讲稿", "viewer.always.scope.script"),
+            ("style", "viewer.always.scope.style"),
+        ):
             self.assertIn(f'{scope}:"{key}"', labels.replace(" ", ""), f"{scope} 的显示标签没接词典")
         for tag in i18n.SUPPORTED:
             messages = i18n.load_catalog(tag)["messages"]
-            self.assertEqual([messages[f"viewer.always.scope.{s}"] for s in ("all", "report", "script", "style")],
-                             [messages["viewer.always.scope.all"], messages["viewer.always.scope.report"],
-                              messages["viewer.always.scope.script"], messages["viewer.always.scope.style"]])
+            self.assertEqual(
+                [messages[f"viewer.always.scope.{s}"] for s in ("all", "report", "script", "style")],
+                [
+                    messages["viewer.always.scope.all"],
+                    messages["viewer.always.scope.report"],
+                    messages["viewer.always.scope.script"],
+                    messages["viewer.always.scope.style"],
+                ],
+            )
 
     def test_scope_matching_keeps_storage_values(self):
         for value in ("报告", "讲稿"):
@@ -293,21 +343,31 @@ class AlwaysScopeTests(unittest.TestCase):
 
     def test_chinese_export_protocol_stays_fixed(self):
         export = _between(self.source, "const ALWAYS_EXPORT=", "let alwaysSkills=")
-        self.assertIn('{all:"全部批注",报告:"报告",讲稿:"讲稿",style:"风格优化"}', export.replace(" ", ""),
-                      "导出的常驻技能范围是协议值，必须固定中文")
+        self.assertIn(
+            '{all:"全部批注",报告:"报告",讲稿:"讲稿",style:"风格优化"}',
+            export.replace(" ", ""),
+            "导出的常驻技能范围是协议值，必须固定中文",
+        )
         grammar = _between(self.source, "function expGrammar(", "const G_ZH=")
         self.assertIn("ALWAYS_EXPORT[s]", grammar)
         self.assertNotIn("alwaysLabel(", grammar, "交换格式不能从界面语言反推范围标签")
-        self.assertIn("g.alwaysHead(alwaysSkills)", _between(self.source, "function exportText(", "function importRid("))
+        self.assertIn(
+            "g.alwaysHead(alwaysSkills)", _between(self.source, "function exportText(", "function importRid(")
+        )
 
     def test_lenient_scope_read_maps_unknown_to_all(self):
-        self.assertIn("ALWAYS_SCOPES.includes(a.scope)?a.scope:\"all\"", self.split.replace(" ", ""))
+        self.assertIn('ALWAYS_SCOPES.includes(a.scope)?a.scope:"all"', self.split.replace(" ", ""))
         self.assertNotIn("ALWAYS_ZH[a.scope]?a.scope", self.split)
 
     def test_button_and_button_title_read_from_the_catalog(self):
         self.assertIn('data-msg="viewer.always.button"', self.form_region(), "常驻技能按钮的可见文字")
-        self.assertIn('tMsg("viewer.always.buttonTitle"', _between(self.source, "function updateAlwaysBtn(", "function alwaysRow("))
-        self.assertIn('tMsg("viewer.always.buttonList"', _between(self.source, "function updateAlwaysBtn(", "function alwaysRow("))
+        self.assertIn(
+            'tMsg("viewer.always.buttonTitle"',
+            _between(self.source, "function updateAlwaysBtn(", "function alwaysRow("),
+        )
+        self.assertIn(
+            'tMsg("viewer.always.buttonList"', _between(self.source, "function updateAlwaysBtn(", "function alwaysRow(")
+        )
 
     def test_button_title_reads_as_one_sentence_in_both_languages(self):
         """名单和说明两段拼起来，英文不能粘成一句（"…).Every"）。"""
@@ -319,14 +379,12 @@ class AlwaysScopeTests(unittest.TestCase):
                 # translate() 的第二个位置参数名叫 key，{key} 占位符只能走 interpolate
                 return i18n.interpolate(raw[msg_key], params)
 
-            item = render("viewer.always.scopeItem", name="humanizer-zh",
-                          scope=render("viewer.always.scope.report"))
-            title = (render("viewer.always.buttonList", list=item)
-                     + render("viewer.always.buttonTitle", key="G"))
+            item = render("viewer.always.scopeItem", name="humanizer-zh", scope=render("viewer.always.scope.report"))
+            title = render("viewer.always.buttonList", list=item) + render("viewer.always.buttonTitle", key="G")
             self.assertIn(tail, title, tag)
             self.assertNotIn(").Every", title, tag)
         self.assertNotIn('title="常驻技能：这份审阅里每条批注（按范围）都让 Agent 先调用', self.source)
-        self.assertNotIn("常驻技能：\"+alwaysSkills.map", self.source)
+        self.assertNotIn('常驻技能："+alwaysSkills.map', self.source)
 
     def form_region(self):
         return _between(self.source, '<div class="form" id="nform">', '<div id="selbar">')
@@ -362,11 +420,19 @@ class AlwaysDialogTests(unittest.TestCase):
         self.dialog = _between(self.source, '<div class="modal" id="always">', '<div class="modal" id="batches">')
 
     def test_dialog_copy_reads_from_the_catalog(self):
-        for key in ("viewer.always.dialogTitle", "viewer.always.dialogHint", "viewer.always.add",
-                    "viewer.always.addTitle", "viewer.always.save", "viewer.cancel"):
+        for key in (
+            "viewer.always.dialogTitle",
+            "viewer.always.dialogHint",
+            "viewer.always.add",
+            "viewer.always.addTitle",
+            "viewer.always.save",
+            "viewer.cancel",
+        ):
             self.assertTrue(_uses(self.dialog, key), key)
-        for literal in ('title="添加一个常驻技能（在名称输入框按回车）"',
-                        'title="这份审阅里，范围内的每一条批注都会要求 Agent'):
+        for literal in (
+            'title="添加一个常驻技能（在名称输入框按回车）"',
+            'title="这份审阅里，范围内的每一条批注都会要求 Agent',
+        ):
             self.assertNotIn(literal, self.dialog, f"弹窗里还写死了 {literal}")
 
     def test_row_controls_read_from_the_catalog(self):
@@ -380,15 +446,25 @@ class AlwaysDialogTests(unittest.TestCase):
 
     def test_limit_and_failure_prompts_read_from_the_catalog(self):
         save = _between(self.source, "async function setAlways(", "async function saveAlways(")
-        for key in ("viewer.always.tooMany", "viewer.always.noServer", "viewer.always.oldServer",
-                    "viewer.always.saveFailed", "viewer.always.noReply"):
+        for key in (
+            "viewer.always.tooMany",
+            "viewer.always.noServer",
+            "viewer.always.oldServer",
+            "viewer.always.saveFailed",
+            "viewer.always.noReply",
+        ):
             self.assertIn(f'tMsg("{key}"', save, f"保存失败提示没走词典：{key}")
-        for literal in ("常驻技能最多 20 个", "服务没连上：常驻技能暂时保存不了",
-                        "本地服务是旧版本，不支持常驻技能", "没能保存常驻技能：", "本地服务没有应答，请稍后再试"):
+        for literal in (
+            "常驻技能最多 20 个",
+            "服务没连上：常驻技能暂时保存不了",
+            "本地服务是旧版本，不支持常驻技能",
+            "没能保存常驻技能：",
+            "本地服务没有应答，请稍后再试",
+        ):
             self.assertNotIn(literal, save, f"保存提示里还写死了 {literal}")
 
     def test_overwrite_confirm_and_result_toasts_read_from_the_catalog(self):
-        region = _between(self.source, "async function saveAlways(", "$(\"alwaysSave\").onclick")
+        region = _between(self.source, "async function saveAlways(", '$("alwaysSave").onclick')
         self.assertIn('tMsg("viewer.always.changed")', region)
         self.assertIn('tMsg("viewer.always.saved"', region)
         self.assertIn('tMsg("viewer.always.cleared")', region)
@@ -396,9 +472,14 @@ class AlwaysDialogTests(unittest.TestCase):
             self.assertNotIn(literal, region, f"保存结果里还写死了 {literal}")
 
     def test_import_offer_reads_from_the_catalog(self):
-        region = _between(self.source, "async function offerAlways(", "$(\"alwaysSave\").onclick")
-        for key in ("viewer.always.importOffer", "viewer.always.importNone", "viewer.always.imported",
-                    "viewer.always.scopeItem", "viewer.always.listSep"):
+        region = _between(self.source, "async function offerAlways(", '$("alwaysSave").onclick')
+        for key in (
+            "viewer.always.importOffer",
+            "viewer.always.importNone",
+            "viewer.always.imported",
+            "viewer.always.scopeItem",
+            "viewer.always.listSep",
+        ):
             self.assertIn(f'tMsg("{key}"', region, f"导入提示没走词典：{key}")
         for literal in ("导入的内容里带了常驻技能：", "（无）", "已采用导入的常驻技能"):
             self.assertNotIn(literal, region, f"导入提示里还写死了 {literal}")
@@ -422,31 +503,48 @@ class CliSkillsTests(unittest.TestCase):
     def test_chinese_stays_the_default(self):
         r = run_skills(self.out, "--always", "humanizer-zh=讲稿", "frontend-design=风格优化", "checker")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("常驻技能（每条批注按范围先调用）：humanizer-zh（讲稿）、frontend-design（风格优化）、checker（全部批注）", r.stdout)
+        self.assertIn(
+            "常驻技能（每条批注按范围先调用）：humanizer-zh（讲稿）、frontend-design（风格优化）、checker（全部批注）",
+            r.stdout,
+        )
         self.assertIn("技能目录（页面「技能」输入栏的候选）：", r.stdout)
 
     def test_english_output_uses_the_same_storage_values(self):
         run_skills(self.out, "--always", "humanizer-zh=讲稿")
         r = run_skills(self.out, "--locale", "en")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("Standing skills (called first for every annotation, by scope): "
-                      "humanizer-zh (Speaker notes)", r.stdout)
+        self.assertIn(
+            "Standing skills (called first for every annotation, by scope): humanizer-zh (Speaker notes)", r.stdout
+        )
         self.assertIn("Skill catalog (candidates for the page's skill box): (empty)", r.stdout)
         self.assertNotIn("常驻技能", r.stdout)
-        self.assertEqual(store.always_skills(self.out), [{"name": "humanizer-zh", "scope": "讲稿"}],
-                         "英文输出不改存储值")
+        self.assertEqual(
+            store.always_skills(self.out), [{"name": "humanizer-zh", "scope": "讲稿"}], "英文输出不改存储值"
+        )
 
     def test_english_scope_tokens_map_to_the_same_storage_values(self):
         r = run_skills(self.out, "--locale", "en", "--always", "a=report", "b=script", "c=all", "d=style")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(store.always_skills(self.out),
-                         [{"name": "a", "scope": "报告"}, {"name": "b", "scope": "讲稿"},
-                          {"name": "c", "scope": "all"}, {"name": "d", "scope": "style"}])
+        self.assertEqual(
+            store.always_skills(self.out),
+            [
+                {"name": "a", "scope": "报告"},
+                {"name": "b", "scope": "讲稿"},
+                {"name": "c", "scope": "all"},
+                {"name": "d", "scope": "style"},
+            ],
+        )
         chinese = run_skills(self.out, "--always", "a=报告", "b=讲稿", "c=全部", "d=风格优化")
         self.assertEqual(chinese.returncode, 0, chinese.stdout + chinese.stderr)
-        self.assertEqual(store.always_skills(self.out),
-                         [{"name": "a", "scope": "报告"}, {"name": "b", "scope": "讲稿"},
-                          {"name": "c", "scope": "all"}, {"name": "d", "scope": "style"}])
+        self.assertEqual(
+            store.always_skills(self.out),
+            [
+                {"name": "a", "scope": "报告"},
+                {"name": "b", "scope": "讲稿"},
+                {"name": "c", "scope": "all"},
+                {"name": "d", "scope": "style"},
+            ],
+        )
 
     def test_environment_beats_review_and_review_beats_default(self):
         manifest = json.loads((self.out / "review.json").read_text(encoding="utf-8"))
@@ -508,18 +606,25 @@ class CliSkillsTests(unittest.TestCase):
     def test_duplicates_are_deduped_and_keep_one_entry(self):
         r = run_skills(self.out, "--always", "dup=all", "dup=all", "dup=报告")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(store.always_skills(self.out),
-                         [{"name": "dup", "scope": "all"}, {"name": "dup", "scope": "报告"}])
+        self.assertEqual(
+            store.always_skills(self.out), [{"name": "dup", "scope": "all"}, {"name": "dup", "scope": "报告"}]
+        )
         listed = run_skills(self.out, "--locale", "en")
         self.assertEqual(listed.stdout.count("dup"), 2, "同名不同范围各留一项，重复项只算一次")
 
     def test_lenient_read_strict_write_is_kept(self):
-        (self.out / "skills.json").write_text(json.dumps(
-            {"skills": None, "always": ["humanizer-zh", {"name": "dataviz", "scope": "报告"}, 3, {"x": 1}]},
-            ensure_ascii=False), encoding="utf-8")
-        self.assertEqual(store.always_skills(self.out),
-                         [{"name": "humanizer-zh", "scope": "all"}, {"name": "dataviz", "scope": "报告"}],
-                         "坏项跳过、好项保留，字符串当全部批注")
+        (self.out / "skills.json").write_text(
+            json.dumps(
+                {"skills": None, "always": ["humanizer-zh", {"name": "dataviz", "scope": "报告"}, 3, {"x": 1}]},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            store.always_skills(self.out),
+            [{"name": "humanizer-zh", "scope": "all"}, {"name": "dataviz", "scope": "报告"}],
+            "坏项跳过、好项保留，字符串当全部批注",
+        )
         r = run_skills(self.out, "--set", "x=y")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         with self.assertRaises(store.NoteError):
@@ -531,10 +636,11 @@ class AgentSnapshotTests(unittest.TestCase):
 
     def setUp(self):
         self.out = tmpdir() / "review"
-        build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", self.out,
-                           locale="en", no_scan_skills=True)
-        store.add(self.out, {"page": 1, "text": "两侧都改", "target": "报告和讲稿",
-                             "skills": ["sample:sample", "润色（中文）"]})
+        build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", self.out, locale="en", no_scan_skills=True)
+        store.add(
+            self.out,
+            {"page": 1, "text": "两侧都改", "target": "报告和讲稿", "skills": ["sample:sample", "润色（中文）"]},
+        )
         store.add(self.out, {"page": 2, "text": "整页风格", "target": "报告", "style": {"scope": "page"}})
 
     def test_both_sided_annotation_gets_both_sides_standing_skills(self):
@@ -554,21 +660,37 @@ class AgentSnapshotTests(unittest.TestCase):
         self.assertEqual([n for n, _ in zh], ["humanizer-zh", "checker", "sample:sample", "润色（中文）"])
         for locale in i18n.SUPPORTED:
             catalog = i18n.load_catalog(locale)
-            label = {s: i18n.translate(catalog, f"viewer.always.scope.{k}")
-                     for s, k in (("all", "all"), ("报告", "report"), ("讲稿", "script"), ("style", "style"))}
-            self.assertEqual([label[a["scope"]] for a in store.always_for(note, always)],
-                             ["讲稿", "报告"] if locale == "zh-CN" else ["Speaker notes", "Report"])
-            self.assertEqual([n for n, _ in store.skills_for(note, always)],
-                             [n for n, _ in zh], "适用技能名单不随语言变")
+            label = {
+                s: i18n.translate(catalog, f"viewer.always.scope.{k}")
+                for s, k in (("all", "all"), ("报告", "report"), ("讲稿", "script"), ("style", "style"))
+            }
+            self.assertEqual(
+                [label[a["scope"]] for a in store.always_for(note, always)],
+                ["讲稿", "报告"] if locale == "zh-CN" else ["Speaker notes", "Report"],
+            )
+            self.assertEqual(
+                [n for n, _ in store.skills_for(note, always)], [n for n, _ in zh], "适用技能名单不随语言变"
+            )
 
     def test_show_preserves_applicable_skills_and_sources_in_both_languages(self):
-        run_skills(self.out, "--always", "humanizer-zh=讲稿", "checker=报告", "stylish=style", "every=all",
-                   "sample:sample=报告", "sample:sample=讲稿")
+        run_skills(
+            self.out,
+            "--always",
+            "humanizer-zh=讲稿",
+            "checker=报告",
+            "stylish=style",
+            "every=all",
+            "sample:sample=报告",
+            "sample:sample=讲稿",
+        )
         before = (self.out / "notes.json").read_bytes()
         for locale in i18n.SUPPORTED:
             result = subprocess.run(
                 [sys.executable, str(SCRIPTS / "notes.py"), "show", str(self.out), "--locale", locale],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
             # Read the output given to the agent, not only the matching helper's result.
             blocks = re.split(r"\n- `", result.stdout)[1:]
@@ -593,8 +715,9 @@ class AgentSnapshotTests(unittest.TestCase):
 
     def test_rebuild_keeps_manual_catalog_and_always(self):
         run_skills(self.out, "--add", "manual=手工说明", "--always", "manual=报告")
-        build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", self.out,
-                           locale="zh-CN", no_scan_skills=True)
+        build_viewer.build(
+            FIXTURE / "report.html", FIXTURE / "script.md", self.out, locale="zh-CN", no_scan_skills=True
+        )
         self.assertEqual([x["name"] for x in store.skills_catalog(self.out)], ["manual"])
         self.assertEqual(store.always_skills(self.out), [{"name": "manual", "scope": "报告"}])
         page = (self.out / "index.html").read_text(encoding="utf-8")
@@ -602,13 +725,15 @@ class AgentSnapshotTests(unittest.TestCase):
 
     def test_large_mixed_catalog_survives_all_three_readers(self):
         catalog = [{"name": f"skill-{n:03d}", "desc": f"合成说明 {n}"} for n in range(205)]
-        catalog += [{"name": "sample:sample", "desc": "插件技能 plugin skill"},
-                    {"name": "混合 mixed", "desc": "中英混合说明 with English words"},
-                    {"name": 'odd"<>&', "desc": "特殊字符 <b>&amp;</b>"}]
-        (self.out / "skills.json").write_text(json.dumps(
-            {"version": 1, "skills": catalog, "always": []}, ensure_ascii=False), encoding="utf-8")
-        build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", self.out,
-                           locale="en", no_scan_skills=True)
+        catalog += [
+            {"name": "sample:sample", "desc": "插件技能 plugin skill"},
+            {"name": "混合 mixed", "desc": "中英混合说明 with English words"},
+            {"name": 'odd"<>&', "desc": "特殊字符 <b>&amp;</b>"},
+        ]
+        (self.out / "skills.json").write_text(
+            json.dumps({"version": 1, "skills": catalog, "always": []}, ensure_ascii=False), encoding="utf-8"
+        )
+        build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", self.out, locale="en", no_scan_skills=True)
         page = (self.out / "index.html").read_text(encoding="utf-8")
         for item in catalog:
             self.assertIn(item["name"].replace('"', '\\"'), page, f"页面丢了候选 {item['name']}")
@@ -620,8 +745,7 @@ class AgentSnapshotTests(unittest.TestCase):
         run_skills(self.out, "--always", *[x["name"] for x in catalog[:20]])
         self.assertEqual(len(store.always_skills(self.out)), 20)
         store.handoff_submit(self.out, "")
-        self.assertEqual(len(store.handoff_load(self.out)["items"][-1]["alwaysSkills"]), 20,
-                         "提交时记下当时的常驻技能")
+        self.assertEqual(len(store.handoff_load(self.out)["items"][-1]["alwaysSkills"]), 20, "提交时记下当时的常驻技能")
 
 
 class AlwaysApiTests(unittest.TestCase):
@@ -635,8 +759,11 @@ class AlwaysApiTests(unittest.TestCase):
         self.addCleanup(srv.server_close)
         threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         self.port = srv.port
-        self.headers = {"Host": f"127.0.0.1:{srv.port}", "Origin": f"http://127.0.0.1:{srv.port}",
-                        "Content-Type": "application/json"}
+        self.headers = {
+            "Host": f"127.0.0.1:{srv.port}",
+            "Origin": f"http://127.0.0.1:{srv.port}",
+            "Content-Type": "application/json",
+        }
 
     def post(self, body):
         return serve._req(self.port, "POST", "/api/skills/always", self.headers, body)
@@ -672,27 +799,39 @@ class BuildWarningTests(unittest.TestCase):
         self.sources = self.root / "sources"
         (self.sources / "writer").mkdir(parents=True)
         (self.sources / "writer" / "SKILL.md").write_text(
-            "---\nname: writer\ndescription: 合成说明\n---\n", encoding="utf-8")
+            "---\nname: writer\ndescription: 合成说明\n---\n", encoding="utf-8"
+        )
         self.review = self.root / "review"
-        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
-                    "AE_HOME": str(self.root / "ledger"),
-                    "CODEX_HOME": str(self.home / ".codex"),
-                    "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills")}
+        self.env = {
+            **os.environ,
+            "HOME": str(self.home),
+            "USERPROFILE": str(self.home),
+            "AE_HOME": str(self.root / "ledger"),
+            "CODEX_HOME": str(self.home / ".codex"),
+            "CLAUDE_SKILLS_DIR": str(self.home / ".claude" / "skills"),
+        }
 
     def build(self, *extra: str) -> subprocess.CompletedProcess:
-        return subprocess.run([sys.executable, str(SCRIPTS / "build_viewer.py"), *extra],
-                              capture_output=True, text=True, env=self.env, timeout=60)
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "build_viewer.py"), *extra],
+            capture_output=True,
+            text=True,
+            env=self.env,
+            timeout=60,
+        )
 
     def test_unavailable_source_warns_in_the_current_language(self):
-        first = self.build("--report", str(FIXTURE / "report.html"), "--out", str(self.review),
-                           "--skills-from", str(self.sources))
+        first = self.build(
+            "--report", str(FIXTURE / "report.html"), "--out", str(self.review), "--skills-from", str(self.sources)
+        )
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
         self.sources.rename(self.root / "gone")
         zh = self.build("--rebuild", str(self.review))
         self.assertEqual(zh.returncode, 0, zh.stdout + zh.stderr)
         self.assertIn("有技能来源不可访问，保留此前该来源的记录", zh.stderr)
-        self.assertEqual([x["name"] for x in store.skills_catalog(self.review)], ["writer"],
-                         "来源不可访问时保留此前的记录")
+        self.assertEqual(
+            [x["name"] for x in store.skills_catalog(self.review)], ["writer"], "来源不可访问时保留此前的记录"
+        )
         en = self.build("--rebuild", str(self.review), "--locale", "en")
         self.assertEqual(en.returncode, 0, en.stdout + en.stderr)
         self.assertIn("A skill source is not reachable; keeping its previous entries", en.stderr)

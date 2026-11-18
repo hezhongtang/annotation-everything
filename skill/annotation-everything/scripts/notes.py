@@ -23,6 +23,7 @@
 退出码：0 成功（wait：收到提交）；1 部分 id 不存在；2 参数或目录不对；3 wait 超时；4 审阅停止（不要重新挂起）。
 处理人默认记为 claude（在 Claude Code 里运行时）或 agent，可用 --by 指定。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -48,8 +49,16 @@ import pptx_reader  # noqa: E402
 import review_stop  # noqa: E402
 import wakeup  # noqa: E402
 import analysis_store  # noqa: E402
-from build_viewer import (BuildError, FIELD_LABEL, field_name, find_pages, page_heads,  # noqa: E402
-                          resolve_sources, strip_tags, write_private)
+from build_viewer import (
+    BuildError,
+    FIELD_LABEL,
+    field_name,
+    find_pages,
+    page_heads,  # noqa: E402
+    resolve_sources,
+    strip_tags,
+    write_private,
+)
 import difflib  # noqa: E402
 import match  # noqa: E402
 
@@ -93,12 +102,16 @@ def _interpreter_options() -> list[str]:
             options.append("-E")
         if flags.no_user_site:
             options.append("-s")
-    for name, option in (("no_site", "-S"), ("dont_write_bytecode", "-B"),
-                         ("inspect", "-i"), ("quiet", "-q"), ("safe_path", "-P")):
+    for name, option in (
+        ("no_site", "-S"),
+        ("dont_write_bytecode", "-B"),
+        ("inspect", "-i"),
+        ("quiet", "-q"),
+        ("safe_path", "-P"),
+    ):
         if getattr(flags, name, False) and not (name == "safe_path" and flags.isolated):
             options.append(option)
-    for name, option in (("optimize", "O"), ("bytes_warning", "b"),
-                         ("verbose", "v"), ("debug", "d")):
+    for name, option in (("optimize", "O"), ("bytes_warning", "b"), ("verbose", "v"), ("debug", "d")):
         count = getattr(flags, name, 0)
         if count:
             options.append("-" + option * count)
@@ -110,7 +123,7 @@ def _interpreter_options() -> list[str]:
 
 
 def load_manifest(review_dir: Path) -> dict[str, Any]:
-    return ledger.read_manifest(review_dir)   # 读不了或不是 JSON 对象都返回 {}
+    return ledger.read_manifest(review_dir)  # 读不了或不是 JSON 对象都返回 {}
 
 
 def stored_locale(review_dir: Path, manifest: dict[str, Any] | None = None) -> str | None:
@@ -125,7 +138,8 @@ def cli_locale(explicit: object, review_dir: Path, manifest: dict[str, Any] | No
     """命令行的语言：--locale 优先于 AE_LOCALE，再优先于审阅设置，最后中文。"""
     return i18n.resolve_locale(
         i18n.effective_choice(explicit, os.environ.get("AE_LOCALE"), stored_locale(review_dir, manifest)),
-        system_languages=i18n.system_languages())
+        system_languages=i18n.system_languages(),
+    )
 
 
 def default_agent() -> str:
@@ -133,27 +147,60 @@ def default_agent() -> str:
 
 
 # 批次状态、痕迹动作、阶段与批注状态：存储值 → 界面消息 key（存储值本身不随语言改写）
-STATUS_KEY = {"pending": "cli.batch.status.pending", "claimed": "cli.batch.status.claimed",
-              "drafted": "cli.batch.status.drafted", "review": "cli.batch.status.review",
-              "reviewing": "cli.batch.status.reviewing", "done": "cli.batch.status.done"}
+STATUS_KEY = {
+    "pending": "cli.batch.status.pending",
+    "claimed": "cli.batch.status.claimed",
+    "drafted": "cli.batch.status.drafted",
+    "review": "cli.batch.status.review",
+    "reviewing": "cli.batch.status.reviewing",
+    "done": "cli.batch.status.done",
+}
 NOTE_STATUS_KEY = {"open": "cli.status.open", "drafted": "cli.status.drafted", "resolved": "cli.status.resolved"}
-ACTION_KEY = {"drafted": "cli.batch.trail.action.drafted", "resolved": "cli.batch.trail.action.resolved",
-              "finalized": "cli.batch.trail.action.finalized", "approved": "cli.batch.trail.action.approved",
-              "revised": "cli.batch.trail.action.revised", "returned": "cli.batch.trail.action.returned",
-              "reopened": "cli.batch.trail.action.reopened", "accepted": "cli.batch.trail.action.accepted"}
+ACTION_KEY = {
+    "drafted": "cli.batch.trail.action.drafted",
+    "resolved": "cli.batch.trail.action.resolved",
+    "finalized": "cli.batch.trail.action.finalized",
+    "approved": "cli.batch.trail.action.approved",
+    "revised": "cli.batch.trail.action.revised",
+    "returned": "cli.batch.trail.action.returned",
+    "reopened": "cli.batch.trail.action.reopened",
+    "accepted": "cli.batch.trail.action.accepted",
+}
 STAGE_KEY = {"draft": "cli.batch.stageName.draft", "review": "cli.batch.stageName.review"}
 # 人读命令遵循同一语言优先级；claim 的原始 JSON 与技能设置另有归属。
-LOCALIZED_CMDS = ("show", "wait", "batches", "done", "review", "diff", "resolve", "reopen", "import", "export",
-                  "analysis", "analysis-writeback", "suggest-analysis", "analysis-check", "analysis-redecide", "analysis-note",
-                  "analysis-history", "analysis-line", "analysis-refute")
+LOCALIZED_CMDS = (
+    "show",
+    "wait",
+    "batches",
+    "done",
+    "review",
+    "diff",
+    "resolve",
+    "reopen",
+    "import",
+    "export",
+    "analysis",
+    "analysis-writeback",
+    "suggest-analysis",
+    "analysis-check",
+    "analysis-redecide",
+    "analysis-note",
+    "analysis-history",
+    "analysis-line",
+    "analysis-refute",
+)
 # 常驻技能的范围：存储值 → 界面显示的消息 key（存储值本身不随语言改写）
-ALWAYS_SCOPE_KEY = {"all": "viewer.hand.scope.all", "报告": "viewer.hand.scope.report",
-                    "讲稿": "viewer.hand.scope.script", "style": "viewer.hand.scope.style"}
+ALWAYS_SCOPE_KEY = {
+    "all": "viewer.hand.scope.all",
+    "报告": "viewer.hand.scope.report",
+    "讲稿": "viewer.hand.scope.script",
+    "style": "viewer.hand.scope.style",
+}
 
 
 def cli_text(lang: str | None):
     """按当前语言取命令行文案；缺译时回退到另一种语言（词典自检保证两种语言齐备）。"""
-    catalogs = i18n.load_all()   # 读一次缓存住：处理记录可能几百批，不能每条消息都读一遍文件
+    catalogs = i18n.load_all()  # 读一次缓存住：处理记录可能几百批，不能每条消息都读一遍文件
     cat = cli_catalog(lang)
 
     def t(msg: str, **params: object) -> str:
@@ -183,8 +230,13 @@ def always_text(t, items: object) -> str:
         if not isinstance(x, dict):
             continue
         scope = ALWAYS_SCOPE_KEY.get(x.get("scope"))
-        out.append(t("cli.hand.alwaysItem", name=str(x.get("name") or ""),
-                     scope=label(t, scope) if scope else str(x.get("scope") or "")))
+        out.append(
+            t(
+                "cli.hand.alwaysItem",
+                name=str(x.get("name") or ""),
+                scope=label(t, scope) if scope else str(x.get("scope") or ""),
+            )
+        )
     return t("cli.hand.itemSep").join(out)
 
 
@@ -244,19 +296,39 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
         "structure-target-changed": "cli.life.structureChanged",
         "suggest-note-not-open": "cli.life.suggestNotOpen",
     }
-    protection_codes = ("analysis-locked", "bad-option", "draft-basis-changed", "note-not-changed", "bad-updates",
-                        "updates-required", "update-not-pending", "update-source-changed", "round-not-answerable")
+    protection_codes = (
+        "analysis-locked",
+        "bad-option",
+        "draft-basis-changed",
+        "note-not-changed",
+        "bad-updates",
+        "updates-required",
+        "update-not-pending",
+        "update-source-changed",
+        "round-not-answerable",
+    )
     if isinstance(error, store.HandoffError) and error.code in protection_codes:
         return cli_text(lang)("cli.analysis.protect.error." + error.code)
     if isinstance(error, store.HandoffError) and error.code in (
-            "checkpoint-not-found", "line-not-found", "analysis-pending-rounds", "analysis-closed"):
+        "checkpoint-not-found",
+        "line-not-found",
+        "analysis-pending-rounds",
+        "analysis-closed",
+    ):
         return cli_text(lang)("cli.analysis.history.error." + error.code)
     if isinstance(error, store.HandoffError) and error.code in (
-            "assumption-not-found", "bad-dead-ends", "dead-end-option", "dead-end-line", "dead-end-obsolete"):
+        "assumption-not-found",
+        "bad-dead-ends",
+        "dead-end-option",
+        "dead-end-line",
+        "dead-end-obsolete",
+    ):
         t = cli_text(lang)
         params = dict(error.params)
         if error.code in ("dead-end-option", "dead-end-line"):
-            params["assumptions"] = " / ".join(params.get("assumptions", [])) or t("cli.analysis.resolution.noAssumptions")
+            params["assumptions"] = " / ".join(params.get("assumptions", [])) or t(
+                "cli.analysis.resolution.noAssumptions"
+            )
         return t("cli.analysis.resolution.error." + error.code, **params)
     if lang != "en" or not isinstance(error, store.HandoffError) or error.code not in messages:
         return str(error)
@@ -267,14 +339,18 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
     if error.code == "ambiguous-batches":
         params["batches"] = t("cli.hand.itemSep").join(
             t("cli.hand.error.batchState", seq=seq, status=label(t, STATUS_KEY.get(status, ""), status))
-            for seq, status in params["batches"])
+            for seq, status in params["batches"]
+        )
     if "status" in params:
         params["status"] = label(t, STATUS_KEY.get(params["status"], ""), params["status"])
     if error.code == "note-in-progress" and not params.get("by"):
-        params["by"] = t("cli.hand.agentFallback")   # 批次还没记下是谁领的
+        params["by"] = t("cli.hand.agentFallback")  # 批次还没记下是谁领的
     if error.code == "note-not-reviewing":
-        params["batch"] = (t("cli.hand.error.batchState", seq=params["seq"], status=params["status"])
-                           if params["seq"] is not None and params["status"] else t("cli.hand.error.noReviewBatch"))
+        params["batch"] = (
+            t("cli.hand.error.batchState", seq=params["seq"], status=params["status"])
+            if params["seq"] is not None and params["status"]
+            else t("cli.hand.error.noReviewBatch")
+        )
     return t(messages[error.code], **params)
 
 
@@ -284,24 +360,46 @@ def handoff_lines(state: dict[str, Any] | None, lang: str | None = None) -> list
     if not state or not state.get("latest"):
         return []
     h = state["latest"]
-    out = [t("cli.hand.latest", seq=h["seq"], status=label(t, STATUS_KEY.get(h.get("status"), ""), h.get("status")),
-             at=h.get("at"), count=h.get("openCount"))]
+    out = [
+        t(
+            "cli.hand.latest",
+            seq=h["seq"],
+            status=label(t, STATUS_KEY.get(h.get("status"), ""), h.get("status")),
+            at=h.get("at"),
+            count=h.get("openCount"),
+        )
+    ]
     if message := store.handoff_user_message(h):
         out.append(t("cli.hand.userMessage", message=message))
     if h.get("status") == "done":
-        out.append(t("cli.hand.resolvedCount", count=h.get("resolvedCount", 0))
-                   + (t("cli.hand.summary", summary=h["summary"]) if h.get("summary") else ""))
+        out.append(
+            t("cli.hand.resolvedCount", count=h.get("resolvedCount", 0))
+            + (t("cli.hand.summary", summary=h["summary"]) if h.get("summary") else "")
+        )
     if state.get("total"):
         out.append(t("cli.hand.history", count=state["total"]))
     if state.get("pending") or state.get("claimed") or state.get("review") or state.get("reviewing"):
-        out.append(t("cli.hand.inFlight", pending=state.get("pending", 0), claimed=state.get("claimed", 0),
-                     review=state.get("review", 0), reviewing=state.get("reviewing", 0)))
+        out.append(
+            t(
+                "cli.hand.inFlight",
+                pending=state.get("pending", 0),
+                claimed=state.get("claimed", 0),
+                review=state.get("review", 0),
+                reviewing=state.get("reviewing", 0),
+            )
+        )
     if state.get("drafted"):
         out.append(t("cli.hand.drafted", count=state["drafted"]))
     for b in state.get("open") or []:
-        out.append(t("cli.hand.open", seq=b["seq"], status=label(t, STATUS_KEY.get(b.get("status"), ""), b.get("status")),
-                     target=target_text(b, lang))
-                   + (t("cli.hand.unclaimed") if b.get("status") in ("pending", "review") else ""))
+        out.append(
+            t(
+                "cli.hand.open",
+                seq=b["seq"],
+                status=label(t, STATUS_KEY.get(b.get("status"), ""), b.get("status")),
+                target=target_text(b, lang),
+            )
+            + (t("cli.hand.unclaimed") if b.get("status") in ("pending", "review") else "")
+        )
     return out
 
 
@@ -310,27 +408,36 @@ def mark_numbers(notes: list[dict[str, Any]]) -> dict[str, int]:
     return ef.mark_numbers(notes)
 
 
-def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: int | None = None,
-                 lang: str | None = None) -> str:
+def batches_text(
+    state: dict[str, Any], notes: list[dict[str, Any]], *, limit: int | None = None, lang: str | None = None
+) -> str:
     """处理记录：每次「交给 Agent」算一批，列出提交、接收、收尾、这批解决了哪些批注和处理摘要（新的在前）。"""
     t = cli_text(lang)
     sep = t("cli.hand.itemSep")
     hist = state.get("history") or []
     by_id = {n.get("id"): n for n in notes}
-    counts = t("cli.batch.counts", done=state.get("done", 0), claimed=state.get("claimed", 0),
-               pending=state.get("pending", 0))
+    counts = t(
+        "cli.batch.counts", done=state.get("done", 0), claimed=state.get("claimed", 0), pending=state.get("pending", 0)
+    )
     for k in ("drafted", "review", "reviewing"):
         if state.get(k):
             counts += t("cli.batch.countsMore", status=label(t, STATUS_KEY.get(k, ""), k), count=state[k])
     out = [t("cli.batch.title", total=len(hist), counts=counts, count=len(hist))]
     for h in hist[:limit] if limit else hist:
         who = h.get("doneBy") or h.get("claimedBy") or ""
-        out.append(t("cli.batch.item", seq=h.get("seq"),
-                     status=label(t, STATUS_KEY.get(h.get("status"), ""), h.get("status")),
-                     who=t("cli.batch.who", who=who) if who else ""))
-        out.append(t("cli.batch.submitted", at=h.get("at"), count=h.get("openCount"))
-                   + (t("cli.batch.pages", pages=sep.join(map(str, h.get("pages") or []))) if h.get("pages") else "")
-                   + (t("cli.batch.updates", count=h["updates"]) if h.get("updates") else ""))
+        out.append(
+            t(
+                "cli.batch.item",
+                seq=h.get("seq"),
+                status=label(t, STATUS_KEY.get(h.get("status"), ""), h.get("status")),
+                who=t("cli.batch.who", who=who) if who else "",
+            )
+        )
+        out.append(
+            t("cli.batch.submitted", at=h.get("at"), count=h.get("openCount"))
+            + (t("cli.batch.pages", pages=sep.join(map(str, h.get("pages") or []))) if h.get("pages") else "")
+            + (t("cli.batch.updates", count=h["updates"]) if h.get("updates") else "")
+        )
         if message := store.handoff_user_message(h):
             out.append(t("cli.hand.userMessage", message=message))
         if "target" in h:
@@ -339,23 +446,35 @@ def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: i
             out.append(t("cli.batch.alwaysLine", list=always_text(t, h["alwaysSkills"])))
         stages = [e for e in h.get("stages") or [] if isinstance(e, dict)]
         if not stages and h.get("claimedAt"):
-            out.append(t("cli.batch.claimedAt", at=h["claimedAt"])
-                       + (t("cli.batch.doneAt", at=h["doneAt"]) if h.get("doneAt") else ""))
+            out.append(
+                t("cli.batch.claimedAt", at=h["claimedAt"])
+                + (t("cli.batch.doneAt", at=h["doneAt"]) if h.get("doneAt") else "")
+            )
         two = store.two_stage(h)
         for e in stages:
             if e.get("stage") == "accept":
                 out.append(t("cli.batch.acceptLine", count=e.get("count", 0), at=e.get("at")))
                 continue
             # 单段流程不叫「初改」，就叫处理
-            name = (label(t, STAGE_KEY.get(e.get("stage"), ""), e.get("stage")) if two
-                    or e.get("stage") != "draft" else t("cli.batch.stageName.single"))
-            line = t("cli.batch.stage", stage=name, by=e.get("by") or "") + t("cli.batch.stageClaim", at=e.get("claimedAt") or "—")
+            name = (
+                label(t, STAGE_KEY.get(e.get("stage"), ""), e.get("stage"))
+                if two or e.get("stage") != "draft"
+                else t("cli.batch.stageName.single")
+            )
+            line = t("cli.batch.stage", stage=name, by=e.get("by") or "") + t(
+                "cli.batch.stageClaim", at=e.get("claimedAt") or "—"
+            )
             line += t("cli.batch.stageDone", at=e["doneAt"]) if e.get("doneAt") else t("cli.batch.stageLive")
             if two and e.get("stage") == "draft" and "draftedIds" in e and e.get("doneAt"):
                 line += t("cli.batch.stageDrafted", count=len(e["draftedIds"]))
             if e.get("stage") == "review" and e.get("doneAt"):
-                line += t("cli.batch.stageReviewed", ok=e.get("approved", 0), revised=e.get("revised", 0),
-                          returned=e.get("returned", 0), resolved=e.get("resolved", 0))
+                line += t(
+                    "cli.batch.stageReviewed",
+                    ok=e.get("approved", 0),
+                    revised=e.get("revised", 0),
+                    returned=e.get("returned", 0),
+                    resolved=e.get("resolved", 0),
+                )
             out.append(line)
             if e.get("summary") and e["summary"] != h.get("summary"):
                 out.append(t("cli.batch.stageSummary", stage=name, summary=e["summary"]))
@@ -364,23 +483,35 @@ def batches_text(state: dict[str, Any], notes: list[dict[str, Any]], *, limit: i
         if "resolvedCount" in h:
             pages = sep.join(map(str, h.get("resolvedPages") or []))
             note = t("cli.batch.live") if h.get("live") else t("cli.batch.estimated") if h.get("estimated") else ""
-            out.append(t("cli.batch.resolved", count=h["resolvedCount"])
-                       + (t("cli.batch.resolvedPages", pages=pages) if pages else "")
-                       + (t("cli.batch.leftOpen", count=h["leftOpen"]) if h.get("leftOpen") else "") + note)
+            out.append(
+                t("cli.batch.resolved", count=h["resolvedCount"])
+                + (t("cli.batch.resolvedPages", pages=pages) if pages else "")
+                + (t("cli.batch.leftOpen", count=h["leftOpen"]) if h.get("leftOpen") else "")
+                + note
+            )
         if h.get("summary"):
             out.append(t("cli.batch.summary", summary=h["summary"]))
         if h.get("draftedCount"):
-            out.append(t("cli.batch.drafted", count=h["draftedCount"],
-                         list=sep.join(t("cli.batch.draftedItem", id=x) for x in h.get("draftedIds") or [])))
+            out.append(
+                t(
+                    "cli.batch.drafted",
+                    count=h["draftedCount"],
+                    list=sep.join(t("cli.batch.draftedItem", id=x) for x in h.get("draftedIds") or []),
+                )
+            )
         for nid in h.get("resolvedIds") or []:
             n = by_id.get(nid)
             if not n:
                 out.append(t("cli.batch.deleted", id=nid))
                 continue
             body = str(n.get("text", "")).replace("\n", " ")
-            line = t("cli.batch.noteLine", id=nid, page=n.get("page"),
-                     target=_en_target(cli_catalog(lang), n.get("target")),
-                     body=body[:60] + ("…" if len(body) > 60 else ""))
+            line = t(
+                "cli.batch.noteLine",
+                id=nid,
+                page=n.get("page"),
+                target=_en_target(cli_catalog(lang), n.get("target")),
+                body=body[:60] + ("…" if len(body) > 60 else ""),
+            )
             if n.get("status") != "resolved":
                 line += t("cli.batch.reopened")
             elif n.get("resolution"):
@@ -398,25 +529,28 @@ def side_texts(sources: dict[str, Path | None] | None) -> dict[str, dict[int, st
     out: dict[str, dict[int, str]] = {"报告": {}, "讲稿": {}}
     if not sources:
         return out
-    try:   # 报告与讲稿分开容错：一侧读不了，另一侧照样给出对应句
+    try:  # 报告与讲稿分开容错：一侧读不了，另一侧照样给出对应句
         if sources.get("report"):
             import docx_review
             import pptx_report
+
             if docx_review.is_word_like(sources["report"]):
                 out["报告"] = docx_review.page_texts(sources["report"])
             elif pptx_report.is_pptx(sources["report"]):
                 out["报告"] = pptx_report.slide_texts(sources["report"])
             else:
                 for sct in find_pages(sources["report"].read_text(encoding="utf-8")):
-                    out["报告"][sct["n"]] = strip_tags(re.sub(r"<(script|style)\b.*?</\1\s*>", " ", sct["html"], flags=re.S | re.I))
+                    out["报告"][sct["n"]] = strip_tags(
+                        re.sub(r"<(script|style)\b.*?</\1\s*>", " ", sct["html"], flags=re.S | re.I)
+                    )
     except (OSError, ValueError, BuildError):
         out["报告"] = {}
     try:
         if sources.get("script"):
             md = sources["script"].read_text(encoding="utf-8")
-            heads = page_heads(md)   # 中英页头都认，与界面语言无关
+            heads = page_heads(md)  # 中英页头都认，与界面语言无关
             for k, h in enumerate(heads):
-                body = md[h.end(): heads[k + 1].start() if k + 1 < len(heads) else len(md)]
+                body = md[h.end() : heads[k + 1].start() if k + 1 < len(heads) else len(md)]
                 # 只删认得出来的字段名：认不出的按正文显示（与对照页一致），不然对应句提示会对不上
                 body = FIELD_LABEL.sub(lambda m: "\n" if field_name(m.group(1)) else m.group(0), body).replace("**", "")
                 out["讲稿"][int(h.group(1))] = h.group(2) + "\n" + body
@@ -437,7 +571,7 @@ def mark_tag(n: dict[str, Any], no: int | None, lang: str | None = None) -> str:
         if rg:
             out += t("cli.show.region", no=no, **{k: rg.get(k) for k in ("x", "y", "w", "h")})
         return out
-    out = ""   # 0.3 留下的批注可能点和框都有：两个都列出
+    out = ""  # 0.3 留下的批注可能点和框都有：两个都列出
     if n.get("pin"):
         out += ef.PIN_ZH.format(no=no, x=n["pin"]["x"], y=n["pin"]["y"])
     rg = store.region_of(n)
@@ -459,8 +593,15 @@ def pair_lines(n: dict[str, Any], texts: dict[str, dict[int, str]], lang: str | 
     cat = cli_catalog(lang)
     pr = n.get("pair") if isinstance(n.get("pair"), dict) else None
     if pr:
-        return ["  " + t("cli.show.pairRequired", side=_en_target(cat, pr.get("side")),
-                         match=_match_word(t, lang, pr.get("match")), text=pr.get("text", ""))]
+        return [
+            "  "
+            + t(
+                "cli.show.pairRequired",
+                side=_en_target(cat, pr.get("side")),
+                match=_match_word(t, lang, pr.get("match")),
+                text=pr.get("text", ""),
+            )
+        ]
     side = n.get("target")
     if n.get("status") == "resolved" or side not in ("报告", "讲稿"):
         return []
@@ -471,13 +612,22 @@ def pair_lines(n: dict[str, Any], texts: dict[str, dict[int, str]], lang: str | 
     got = match.counterpart(probe, hay) if probe else None
     if not got:
         return []
-    return ["  " + t("cli.show.pairSuggested", side=_en_target(cat, other), page=n.get("page"),
-                     match=_match_word(t, lang, got[0]), text=got[1])]
+    return [
+        "  "
+        + t(
+            "cli.show.pairSuggested",
+            side=_en_target(cat, other),
+            page=n.get("page"),
+            match=_match_word(t, lang, got[0]),
+            text=got[1],
+        )
+    ]
 
 
 def _en_target(cat: dict, value: object) -> str:
-    key = {"报告": "viewer.target.report", "讲稿": "viewer.target.script",
-           "报告和讲稿": "viewer.target.both"}.get(str(value or ""))
+    key = {"报告": "viewer.target.report", "讲稿": "viewer.target.script", "报告和讲稿": "viewer.target.both"}.get(
+        str(value or "")
+    )
     if key:
         return i18n.translate(cat, key)
     if value:
@@ -502,8 +652,12 @@ def _always_head(t, lang: str | None, always: list[dict[str, str]], scope_label:
     """常驻技能行：中英各取自己那条消息与范围标签（英文那套只服务于英文输出，换成中文那条会改英文措辞）；
     中文的 cli.hand.alwaysHead 与英文的 cli.skills.agentAlways 在中文下逐字相同，仍各走各的写法。"""
     if lang == "en":
-        return t("cli.skills.agentAlways", list=t("cli.skills.listSep").join(
-            t("viewer.always.scopeItem", name=a["name"], scope=scope_label(a["scope"])) for a in always))
+        return t(
+            "cli.skills.agentAlways",
+            list=t("cli.skills.listSep").join(
+                t("viewer.always.scopeItem", name=a["name"], scope=scope_label(a["scope"])) for a in always
+            ),
+        )
     return t("cli.hand.alwaysHead", list=always_text(t, always))
 
 
@@ -520,28 +674,56 @@ def pptx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]
     out = [t("cli.show.pptx.head", v=a["v"], kind=t(f"cli.show.pptx.kind.{a['kind']}"), slide=a["slide"])]
     elements = a.get("elements") or []
     if elements:
-        items = [t("cli.show.pptx.element", name=e.get("name") or e.get("key") or "",
-                   kind=t(f"viewer.pptx.kind.{e['kind']}"), id=e.get("id") or "") for e in elements]
+        items = [
+            t(
+                "cli.show.pptx.element",
+                name=e.get("name") or e.get("key") or "",
+                kind=t(f"viewer.pptx.kind.{e['kind']}"),
+                id=e.get("id") or "",
+            )
+            for e in elements
+        ]
         out.append(t("cli.show.pptx.elements", count=len(items), list=sep.join(items)))
         limited = [e for e in elements if e.get("ro")]
         if limited:
-            ro_items = [t("cli.show.pptx.roItem", name=e.get("name") or e.get("key") or "",
-                          ro=sep.join(t(f"viewer.pptx.ro.{x}") for x in e["ro"])) for e in limited]
+            ro_items = [
+                t(
+                    "cli.show.pptx.roItem",
+                    name=e.get("name") or e.get("key") or "",
+                    ro=sep.join(t(f"viewer.pptx.ro.{x}") for x in e["ro"]),
+                )
+                for e in limited
+            ]
             out.append(t("cli.show.pptx.ro", list=sep.join(ro_items)))
     text = a.get("text") if isinstance(a.get("text"), dict) else None
     if text is not None:
         if text.get("start") is not None and text.get("end") is not None:
-            out.append(t("cli.show.pptx.text", para=text.get("para", 0) + 1, start=text["start"],
-                         end=text["end"], quote=text.get("quote", "")))
+            out.append(
+                t(
+                    "cli.show.pptx.text",
+                    para=text.get("para", 0) + 1,
+                    start=text["start"],
+                    end=text["end"],
+                    quote=text.get("quote", ""),
+                )
+            )
         else:
             out.append(t("cli.show.pptx.textPara", para=text.get("para", 0) + 1, quote=text.get("quote", "")))
     if isinstance(a.get("point"), dict):
-        out.append(t("cli.show.pptx.point", x=round(a["point"].get("x", 0) * 100),
-                     y=round(a["point"].get("y", 0) * 100)))
+        out.append(
+            t("cli.show.pptx.point", x=round(a["point"].get("x", 0) * 100), y=round(a["point"].get("y", 0) * 100))
+        )
     if isinstance(a.get("region"), dict):
         rg = a["region"]
-        out.append(t("cli.show.pptx.region", x=round(rg.get("x", 0) * 100), y=round(rg.get("y", 0) * 100),
-                     w=round(rg.get("w", 0) * 100), h=round(rg.get("h", 0) * 100)))
+        out.append(
+            t(
+                "cli.show.pptx.region",
+                x=round(rg.get("x", 0) * 100),
+                y=round(rg.get("y", 0) * 100),
+                w=round(rg.get("w", 0) * 100),
+                h=round(rg.get("h", 0) * 100),
+            )
+        )
     out.append(t(f"cli.show.pptx.via.{a.get('via')}"))
     current = (manifest.get("pptx") or {}).get("fingerprint") if isinstance(manifest.get("pptx"), dict) else None
     if n.get("orphan"):
@@ -565,8 +747,11 @@ def docx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]
     out = [t("cli.show.docx.paraId" if para.get("id") else "cli.show.docx.para", n=para["n"], id=para.get("id") or "")]
     end_para = a.get("endPara") if isinstance(a.get("endPara"), dict) else None
     if a.get("start") is not None and a.get("end") is not None:
-        out.append(t("cli.show.docx.charsAcross", start=a["start"], end=a["end"], n=end_para.get("n")) if end_para
-                   else t("cli.show.docx.chars", start=a["start"], end=a["end"]))
+        out.append(
+            t("cli.show.docx.charsAcross", start=a["start"], end=a["end"], n=end_para.get("n"))
+            if end_para
+            else t("cli.show.docx.chars", start=a["start"], end=a["end"])
+        )
     elif a.get("start"):
         out.append(t("cli.show.docx.charsFrom", start=a["start"]))
     if a.get("run") is not None:
@@ -582,10 +767,18 @@ def docx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]
     return out
 
 
-def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolved: bool, page: int | None,
-                sources: dict[str, Path | None] | None = None, handoff: dict[str, Any] | None = None,
-                only: set[str] | None = None, always: list[dict[str, str]] | None = None,
-                locale: str | None = None) -> str:
+def to_markdown(
+    doc: dict[str, Any],
+    manifest: dict[str, Any],
+    *,
+    include_resolved: bool,
+    page: int | None,
+    sources: dict[str, Path | None] | None = None,
+    handoff: dict[str, Any] | None = None,
+    only: set[str] | None = None,
+    always: list[dict[str, str]] | None = None,
+    locale: str | None = None,
+) -> str:
     """阅读输出（show 与 wait 退出时共用）：中英一条词典驱动的渲染路径，标点与括号也按语言取词典。
     批注原文、引用原文和 id 不翻译；JSON 导出仍走原始对象。
     中文标注格式、标注说明句与风格标签和导出 Markdown 共用 export_format 里的唯一定义。"""
@@ -593,8 +786,12 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
     t = cli_text(lang)
     cat = cli_catalog(lang)
     # 常驻技能范围：存储值 → 界面显示的消息 key（存储值本身不随语言改写）
-    scope_keys = {"all": "viewer.always.scope.all", "报告": "viewer.always.scope.report",
-                  "讲稿": "viewer.always.scope.script", "style": "viewer.always.scope.style"}
+    scope_keys = {
+        "all": "viewer.always.scope.all",
+        "报告": "viewer.always.scope.report",
+        "讲稿": "viewer.always.scope.script",
+        "style": "viewer.always.scope.style",
+    }
 
     def scope_label(scope: str) -> str:
         return t(scope_keys[scope])
@@ -604,8 +801,13 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
     marks = mark_numbers(all_notes)
     titles = {p["n"]: p.get("title", "") for p in manifest.get("pages", [])}
     keys = {p["n"]: p.get("key", "") for p in manifest.get("pages", [])}
-    notes = [n for n in all_notes if (include_resolved or n.get("status") != "resolved")
-             and (page is None or n.get("page") == page) and (only is None or n.get("id") in only)]
+    notes = [
+        n
+        for n in all_notes
+        if (include_resolved or n.get("status") != "resolved")
+        and (page is None or n.get("page") == page)
+        and (only is None or n.get("id") in only)
+    ]
     notes.sort(key=lambda n: (int(n.get("page", 0) or 0), str(n.get("at", ""))))
     n_open = sum(n.get("status", "open") == "open" for n in all_notes)
     n_draft = sum(n.get("status") == "drafted" for n in all_notes)
@@ -655,7 +857,9 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
         else:
             body = str(n.get("text", ""))
         if ed:
-            tag += t("cli.show.markSep") + t("cli.show.deleteTag" if ed.get("op") == "delete" else "cli.show.replaceTag")
+            tag += t("cli.show.markSep") + t(
+                "cli.show.deleteTag" if ed.get("op") == "delete" else "cli.show.replaceTag"
+            )
         st = n.get("style") if isinstance(n.get("style"), dict) else None
         if st:
             scope = st.get("scope") if st.get("scope") in ef.STYLE_LABEL_ZH else "page"
@@ -666,8 +870,11 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
             line += f"\n  > {t('cli.show.quote')}{origin}{t('cli.show.quoteColon')}{n['quote']}"
         # 处理说明与痕迹保持原文：Agent 要能看出上一批改了什么、谁改的
         if n.get("status") in ("resolved", "drafted") and n.get("resolution"):
-            line += ("\n  " + t("cli.show.draftResolution", text=n["resolution"]) if n.get("status") == "drafted"
-                     else t("cli.batch.resolution", text=n["resolution"]))
+            line += (
+                "\n  " + t("cli.show.draftResolution", text=n["resolution"])
+                if n.get("status") == "drafted"
+                else t("cli.batch.resolution", text=n["resolution"])
+            )
         if n.get("trail"):
             line += t("cli.batch.trail", text=trail_text(n, lang=lang))
         if n.get("orphan"):
@@ -689,8 +896,9 @@ def to_markdown(doc: dict[str, Any], manifest: dict[str, Any], *, include_resolv
         skills = store.skills_for(n, active_always)
         if skills:
             shown = t("cli.skills.listSep").join(
-                t("cli.skills.agentItem", name=name,
-                  source=sources_by_name.get(name, t("cli.skills.ownSource"))) for name, _ in skills)
+                t("cli.skills.agentItem", name=name, source=sources_by_name.get(name, t("cli.skills.ownSource")))
+                for name, _ in skills
+            )
             line += "\n  " + t("cli.skills.agentSkills", list=shown)
         for extra in pair_lines(n, texts, lang):
             line += "\n" + extra
@@ -712,7 +920,9 @@ def parse_legacy_markdown(text: str) -> list[dict[str, Any]]:
     return ef.parse_zh(text)
 
 
-def read_import(path: Path, *, lang: str = i18n.DEFAULT_LOCALE) -> tuple[list[dict[str, Any]], list[dict[str, str]] | None, str | None]:
+def read_import(
+    path: Path, *, lang: str = i18n.DEFAULT_LOCALE
+) -> tuple[list[dict[str, Any]], list[dict[str, str]] | None, str | None]:
     """返回 (批注, 常驻技能, 来源审阅标识)。常驻技能只有导出里带了才不是 None（本地文件模式设的常驻技能随之带过来）；
     来源审阅标识取自页面导出的 JSON（reviewId），用来防止导进别的审阅。"""
     text = path.read_text(encoding="utf-8")
@@ -722,8 +932,11 @@ def read_import(path: Path, *, lang: str = i18n.DEFAULT_LOCALE) -> tuple[list[di
         if isinstance(data, dict):
             al = data.get("alwaysSkills")
             rid = data.get("reviewId")
-            return (data.get("notes", []), (al if isinstance(al, list) else None),
-                    rid if isinstance(rid, str) and ledger.RID.fullmatch(rid) else None)
+            return (
+                data.get("notes", []),
+                (al if isinstance(al, list) else None),
+                rid if isinstance(rid, str) and ledger.RID.fullmatch(rid) else None,
+            )
         return data, None, None
     try:
         items, always = ef.parse_markdown(text)
@@ -754,8 +967,9 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 os.set_inheritable(fd, True)
                 env = {**os.environ, "_AE_NOTES_UPDATE_LOCK_FD": str(fd)}
-                os.execve(sys.executable,
-                          [sys.executable, *_interpreter_options(), str(Path(__file__).resolve()), *args], env)
+                os.execve(
+                    sys.executable, [sys.executable, *_interpreter_options(), str(Path(__file__).resolve()), *args], env
+                )
             except OSError:
                 print(cli_text(i18n.DEFAULT_LOCALE)("cli.notes.updateRestart"), file=sys.stderr)
                 return 2
@@ -809,20 +1023,32 @@ def _main_locked(argv: list[str] | None = None) -> int:
     w.add_argument("--interval", type=float, default=1.0, help=t("cli.notes.help.wait.interval"))
     w.add_argument("--no-claim", action="store_true", help=t("cli.notes.help.wait.no_claim"))
     w.add_argument("--by", default=default_agent(), help=t("cli.notes.help.wait.by"))
-    w.add_argument("--stage", choices=("any", "draft", "review"), default="any",
-                   help=t("cli.notes.help.wait.stage"))
-    w.add_argument("--events", choices=("analysis",), default=None,
-                   help=t("cli.notes.help.wait.events"))
+    w.add_argument("--stage", choices=("any", "draft", "review"), default="any", help=t("cli.notes.help.wait.stage"))
+    w.add_argument("--events", choices=("analysis",), default=None, help=t("cli.notes.help.wait.events"))
     sk = sub.add_parser("skills", help=t("cli.notes.help.command.skills"))
     sk.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
-    sk.add_argument("--set", nargs="*", metavar=t("cli.notes.help.skillDescription"), help=t("cli.notes.help.skills.set"))
-    sk.add_argument("--add", nargs="*", metavar=t("cli.notes.help.skillDescription"), help=t("cli.notes.help.skills.add"))
-    sk.add_argument("--remove", nargs="*", metavar=t("cli.notes.help.skillName"), help=t("cli.notes.help.skills.remove"))
+    sk.add_argument(
+        "--set", nargs="*", metavar=t("cli.notes.help.skillDescription"), help=t("cli.notes.help.skills.set")
+    )
+    sk.add_argument(
+        "--add", nargs="*", metavar=t("cli.notes.help.skillDescription"), help=t("cli.notes.help.skills.add")
+    )
+    sk.add_argument(
+        "--remove", nargs="*", metavar=t("cli.notes.help.skillName"), help=t("cli.notes.help.skills.remove")
+    )
     sk.add_argument("--clear", action="store_true", help=t("cli.notes.help.skills.clear"))
-    sk.add_argument("--always", nargs="*", metavar=t("cli.notes.help.skillScope"),
-                    help=t("cli.notes.help.skills.always"))
-    sk.add_argument("--always-add", nargs="*", metavar=t("cli.notes.help.skillScope"), help=t("cli.notes.help.skills.always_add"))
-    sk.add_argument("--always-remove", nargs="*", metavar=t("cli.notes.help.skillName"), help=t("cli.notes.help.skills.always_remove"))
+    sk.add_argument(
+        "--always", nargs="*", metavar=t("cli.notes.help.skillScope"), help=t("cli.notes.help.skills.always")
+    )
+    sk.add_argument(
+        "--always-add", nargs="*", metavar=t("cli.notes.help.skillScope"), help=t("cli.notes.help.skills.always_add")
+    )
+    sk.add_argument(
+        "--always-remove",
+        nargs="*",
+        metavar=t("cli.notes.help.skillName"),
+        help=t("cli.notes.help.skills.always_remove"),
+    )
     sk.add_argument("--always-clear", action="store_true", help=t("cli.notes.help.skills.always_clear"))
     cl = sub.add_parser("claim", help=t("cli.notes.help.command.claim"))
     cl.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
@@ -831,8 +1057,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
     claim_target = cl.add_mutually_exclusive_group()
     claim_target.add_argument("--seq", type=int, help=t("cli.notes.help.claim.seq"))
     claim_target.add_argument("--round", type=int, help=t("cli.notes.help.claim.round"))
-    cl.add_argument("--events", choices=("analysis",), default=None,
-                    help=t("cli.notes.help.claim.events"))
+    cl.add_argument("--events", choices=("analysis",), default=None, help=t("cli.notes.help.claim.events"))
     an = sub.add_parser("analysis", help=t("cli.notes.help.command.analysis"))
     an.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     an.add_argument("--analysis", help=t("cli.notes.help.analysis.analysis"))
@@ -843,8 +1068,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
     aw.add_argument("--analysis", help=t("cli.notes.help.analysis.analysis"))
     aw.add_argument("--round", type=int, required=True, help=t("cli.notes.help.writeback.round"))
     aw.add_argument("--base-rev", type=int, required=True, help=t("cli.notes.help.writeback.baseRev"))
-    aw.add_argument("--proposals", required=True,
-                    help=t("cli.analysis.resolution.help.writebackPayload"))
+    aw.add_argument("--proposals", required=True, help=t("cli.analysis.resolution.help.writebackPayload"))
     aw.add_argument("--note", default="", help=t("cli.notes.help.writeback.note"))
     aw.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
     ac = sub.add_parser("analysis-check", help=t("cli.analysis.protect.help.check"))
@@ -860,8 +1084,9 @@ def _main_locked(argv: list[str] | None = None) -> int:
     anote.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     anote.add_argument("--analysis", required=True, help=t("cli.notes.help.analysis.analysis"))
     anote.add_argument("--note-id", required=True, help=t("cli.life.noteId"))
-    anote.add_argument("--action", required=True, choices=("update", "keep", "delete"),
-                       help=t("cli.analysis.protect.help.action"))
+    anote.add_argument(
+        "--action", required=True, choices=("update", "keep", "delete"), help=t("cli.analysis.protect.help.action")
+    )
     anote.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
     history = sub.add_parser("analysis-history", help=t("cli.analysis.history.help.history"))
     history.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
@@ -870,8 +1095,12 @@ def _main_locked(argv: list[str] | None = None) -> int:
     line = sub.add_parser("analysis-line", help=t("cli.analysis.history.help.line"))
     line.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     line.add_argument("--analysis", required=True, help=t("cli.notes.help.analysis.analysis"))
-    line.add_argument("--action", required=True, choices=("seal", "fork", "switch", "close", "reopen"),
-                      help=t("cli.analysis.history.help.action"))
+    line.add_argument(
+        "--action",
+        required=True,
+        choices=("seal", "fork", "switch", "close", "reopen"),
+        help=t("cli.analysis.history.help.action"),
+    )
     line.add_argument("--checkpoint", help=t("cli.analysis.history.help.checkpoint"))
     line.add_argument("--line", help=t("cli.analysis.history.help.targetLine"))
     line.add_argument("--by", default=default_agent(), help=t("cli.notes.help.resolve.by"))
@@ -907,16 +1136,27 @@ def _main_locked(argv: list[str] | None = None) -> int:
     df = sub.add_parser("diff", help=t("cli.notes.help.command.diff"))
     df.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     df.add_argument("--batch", type=int, help=t("cli.notes.help.diff.batch"))
-    df.add_argument("--to", choices=("draft", "current"), default="draft",
-                    help=t("cli.notes.help.diff.to"))
+    df.add_argument("--to", choices=("draft", "current"), default="draft", help=t("cli.notes.help.diff.to"))
     df.add_argument("--page", type=int, help=t("cli.notes.help.diff.page"))
     bt = sub.add_parser("batches", help=t("cli.notes.help.command.batches"))
     bt.add_argument("dir", type=str, help=t("cli.notes.help.reviewDir"))
     bt.add_argument("--last", type=int, help=t("cli.notes.help.batches.last"))
     bt.add_argument("--json", action="store_true", help=t("cli.notes.help.rawJson"))
     for name, parser in sub.choices.items():
-        if name in ("wait", "claim", "resolve", "reopen", "review", "done", "analysis-writeback", "suggest-analysis",
-                    "analysis-redecide", "analysis-note", "analysis-line", "analysis-refute"):
+        if name in (
+            "wait",
+            "claim",
+            "resolve",
+            "reopen",
+            "review",
+            "done",
+            "analysis-writeback",
+            "suggest-analysis",
+            "analysis-redecide",
+            "analysis-note",
+            "analysis-line",
+            "analysis-refute",
+        ):
             parser.add_argument("--harness", help=t("cli.notes.help.receiver.harness"))
             parser.add_argument("--session", help=t("cli.notes.help.receiver.session"))
         parser.add_argument("--locale", default=argparse.SUPPRESS, help=t("cli.notes.localeHelp"))
@@ -928,7 +1168,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
         for extra in (getattr(a, "file", None), getattr(a, "out", None)):
             if extra is not None and fsutil.is_unc_or_device_path(extra, allow_local_extended=True):
                 raise ledger.LedgerError(f"Unsupported UNC or device path: {extra}")
-        d = ledger.resolve_dir(a.dir).resolve()   # 也接受审阅标识（或至少 4 位前缀）：从台账查目录
+        d = ledger.resolve_dir(a.dir).resolve()  # 也接受审阅标识（或至少 4 位前缀）：从台账查目录
     except (ledger.LedgerError, OSError) as e:
         print(t("cli.notes.error", reason=e), file=sys.stderr)
         return 2
@@ -975,10 +1215,20 @@ def _main_locked(argv: list[str] | None = None) -> int:
         manifest = load_manifest(d)
         only = batch_note_ids(d, doc["notes"], a.batch) if a.batch else None
         if a.json:
-            notes = [n for n in doc["notes"] if (a.all or n.get("status") != "resolved")
-                     and (a.page is None or n.get("page") == a.page) and (only is None or n.get("id") in only)]
-            print(json.dumps({**doc, "notes": notes, "handoff": store.handoff_state(d), "alwaysSkills": store.always_skills(d)},
-                             ensure_ascii=False, indent=2))
+            notes = [
+                n
+                for n in doc["notes"]
+                if (a.all or n.get("status") != "resolved")
+                and (a.page is None or n.get("page") == a.page)
+                and (only is None or n.get("id") in only)
+            ]
+            print(
+                json.dumps(
+                    {**doc, "notes": notes, "handoff": store.handoff_state(d), "alwaysSkills": store.always_skills(d)},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
         else:
             _refuse_newer_format(manifest)
             try:
@@ -986,22 +1236,49 @@ def _main_locked(argv: list[str] | None = None) -> int:
             except BuildError as e:
                 print(t("cli.notes.warning", reason=e), file=sys.stderr)
                 sources = None
-            print(to_markdown(doc, manifest, include_resolved=a.all or bool(a.batch), page=a.page, sources=sources,
-                              handoff=store.handoff_state(d, full=False), only=only, always=store.always_skills(d),
-                              locale=lang), end="")
+            print(
+                to_markdown(
+                    doc,
+                    manifest,
+                    include_resolved=a.all or bool(a.batch),
+                    page=a.page,
+                    sources=sources,
+                    handoff=store.handoff_state(d, full=False),
+                    only=only,
+                    always=store.always_skills(d),
+                    locale=lang,
+                ),
+                end="",
+            )
         return 0
     if a.cmd in ("resolve", "reopen"):
         status = "resolved" if a.cmd == "resolve" else "open"
         bad = 0
         for nid in a.ids:
             try:
-                _doc, n = store.set_status(d, nid, status, resolution=getattr(a, "note", ""), by=getattr(a, "by", default_agent()),
-                                           seq=getattr(a, "seq", None), authorize=authorize)
-                print(t("cli.hand.markResult", id=nid,
-                        status=label(t, NOTE_STATUS_KEY.get(n.get("status"), ""), n.get("status"))))
+                _doc, n = store.set_status(
+                    d,
+                    nid,
+                    status,
+                    resolution=getattr(a, "note", ""),
+                    by=getattr(a, "by", default_agent()),
+                    seq=getattr(a, "seq", None),
+                    authorize=authorize,
+                )
+                print(
+                    t(
+                        "cli.hand.markResult",
+                        id=nid,
+                        status=label(t, NOTE_STATUS_KEY.get(n.get("status"), ""), n.get("status")),
+                    )
+                )
             except store.NotFound as e:
-                print(t("cli.hand.noteMissing", id=nid) if str(e).strip(chr(39)) == nid
-                      else t("cli.hand.noteNoBatch", id=nid, why=e), file=sys.stderr)
+                print(
+                    t("cli.hand.noteMissing", id=nid)
+                    if str(e).strip(chr(39)) == nid
+                    else t("cli.hand.noteNoBatch", id=nid, why=e),
+                    file=sys.stderr,
+                )
                 bad += 1
             except store.NoteError as e:
                 print(t("cli.hand.noteFailed", id=nid, why=handoff_error_text(e, lang)), file=sys.stderr)
@@ -1036,8 +1313,12 @@ def _main_locked(argv: list[str] | None = None) -> int:
                 return 0
             cur = store.always_skills(d)
             sep = "、" if lang == "zh-CN" else ", "
-            names = sep.join(f"{x['name']}（{store.ALWAYS_ZH[x['scope']]}）" if lang == "zh-CN" else
-                             f"{x['name']} ({label(t, ALWAYS_SCOPE_KEY.get(x['scope'], ''), x['scope'])})" for x in new)
+            names = sep.join(
+                f"{x['name']}（{store.ALWAYS_ZH[x['scope']]}）"
+                if lang == "zh-CN"
+                else f"{x['name']} ({label(t, ALWAYS_SCOPE_KEY.get(x['scope'], ''), x['scope'])})"
+                for x in new
+            )
             if not cur or cur == new:
                 store.always_save(d, new)
                 print(t("cli.notes.import.skillsSaved", list=names or t("cli.skills.alwaysNone")))
@@ -1053,26 +1334,47 @@ def _main_locked(argv: list[str] | None = None) -> int:
             print(t("cli.notes.invalidLocale", name=exc.params.get("locale", "")), file=sys.stderr)
             return 2
         all_notes = doc["notes"]
-        picked = [n for n in all_notes if (a.all or n.get("status") != "resolved")
-                  and (a.page is None or n.get("page") == a.page)]
+        picked = [
+            n
+            for n in all_notes
+            if (a.all or n.get("status") != "resolved") and (a.page is None or n.get("page") == a.page)
+        ]
         pages = {p["n"]: p.get("title", "") for p in manifest.get("pages", [])}
         always = store.always_skills(d)
         if a.format == "json":
-            body = json.dumps(ef.json_export(review_id=manifest.get("reviewId", ""), name=manifest.get("name", ""),
-                                            namespace=manifest.get("namespace", ""), notes=picked,
-                                            always=always, lang=lang), ensure_ascii=False, indent=2) + "\n"
+            body = (
+                json.dumps(
+                    ef.json_export(
+                        review_id=manifest.get("reviewId", ""),
+                        name=manifest.get("name", ""),
+                        namespace=manifest.get("namespace", ""),
+                        notes=picked,
+                        always=always,
+                        lang=lang,
+                    ),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            )
         else:
             titles = dict(pages)
-            for n in picked:   # 页面标题取不到时退回批注自己记的标题
+            for n in picked:  # 页面标题取不到时退回批注自己记的标题
                 titles.setdefault(int(n.get("page", 0) or 0), str(n.get("title", "")))
             # 标题与页面 exportText() 取同一个值：页面用 <title>，即 manifest 的 title
-            body = ef.render(all_notes, title=manifest.get("title") or manifest.get("name") or "对照页",
-                             page_titles=titles, always=always, lang=lang,
-                             include_resolved=a.all, page=a.page)
+            body = ef.render(
+                all_notes,
+                title=manifest.get("title") or manifest.get("name") or "对照页",
+                page_titles=titles,
+                always=always,
+                lang=lang,
+                include_resolved=a.all,
+                page=a.page,
+            )
         if a.out:
             try:
                 a.out.parent.mkdir(parents=True, exist_ok=True)
-                write_private(a.out, body)   # 原子写入、权限 0600：导出内容就是整份批注
+                write_private(a.out, body)  # 原子写入、权限 0600：导出内容就是整份批注
             except OSError as e:
                 print(t("cli.notes.export.writeFailed", path=a.out, reason=e), file=sys.stderr)
                 return 2
@@ -1081,14 +1383,24 @@ def _main_locked(argv: list[str] | None = None) -> int:
             sys.stdout.write(body)
         return 0
     if a.cmd == "wait":
-        return wait(d, a.timeout, a.interval, claim=not a.no_claim, by=a.by, stage=a.stage, lang=lang,
-                    harness=a.harness, session=a.session, manifest=manifest, events=a.events)
+        return wait(
+            d,
+            a.timeout,
+            a.interval,
+            claim=not a.no_claim,
+            by=a.by,
+            stage=a.stage,
+            lang=lang,
+            harness=a.harness,
+            session=a.session,
+            manifest=manifest,
+            events=a.events,
+        )
     if a.cmd == "analysis":
         try:
             ctx = analysis_context_of(d, analysis=a.analysis, round_no=a.round)
         except store.NotFound as e:
-            print(t("cli.analysis.noRound", reason=str(e).strip("'") if str(e).strip("'") else "—"),
-                  file=sys.stderr)
+            print(t("cli.analysis.noRound", reason=str(e).strip("'") if str(e).strip("'") else "—"), file=sys.stderr)
             return 1
         if a.json:
             print(json.dumps(ctx, ensure_ascii=False, indent=2))
@@ -1107,13 +1419,18 @@ def _main_locked(argv: list[str] | None = None) -> int:
             if a.cmd == "analysis-history":
                 state = analysis_store.load(d, a.analysis)
             else:
-                operations = {"seal": analysis_store.seal_checkpoint, "fork": analysis_store.fork_line,
-                              "switch": analysis_store.switch_line, "close": analysis_store.close_analysis,
-                              "reopen": analysis_store.reopen_analysis}
-                args = ([a.checkpoint] if a.action in ("seal", "fork") else [a.line] if a.action == "switch" else [])
+                operations = {
+                    "seal": analysis_store.seal_checkpoint,
+                    "fork": analysis_store.fork_line,
+                    "switch": analysis_store.switch_line,
+                    "close": analysis_store.close_analysis,
+                    "reopen": analysis_store.reopen_analysis,
+                }
+                args = [a.checkpoint] if a.action in ("seal", "fork") else [a.line] if a.action == "switch" else []
                 submits = a.action in ("fork", "reopen")
-                state = operations[a.action](d, a.analysis, *args, by=a.by,
-                                             authorize=authorize_new_work if submits else authorize)
+                state = operations[a.action](
+                    d, a.analysis, *args, by=a.by, authorize=authorize_new_work if submits else authorize
+                )
                 if submits:
                     notify_analysis(d, state)
         except store.NotFound:
@@ -1135,14 +1452,24 @@ def _main_locked(argv: list[str] | None = None) -> int:
     if a.cmd in ("analysis-redecide", "analysis-note", "analysis-refute"):
         try:
             if a.cmd == "analysis-refute":
-                state = analysis_store.refute_assumption(d, a.analysis, a.assumption, by=a.by, authorize=authorize_new_work)
+                state = analysis_store.refute_assumption(
+                    d, a.analysis, a.assumption, by=a.by, authorize=authorize_new_work
+                )
             elif a.cmd == "analysis-redecide":
                 state = analysis_store.redecide(d, a.analysis, a.node, a.option, by=a.by, authorize=authorize_new_work)
             else:
-                operation = {"update": analysis_store.request_update, "keep": analysis_store.keep_note,
-                             "delete": analysis_store.delete_note}[a.action]
-                operation(d, a.analysis, a.note_id, by=a.by,
-                          authorize=authorize_new_work if a.action == "update" else authorize)
+                operation = {
+                    "update": analysis_store.request_update,
+                    "keep": analysis_store.keep_note,
+                    "delete": analysis_store.delete_note,
+                }[a.action]
+                operation(
+                    d,
+                    a.analysis,
+                    a.note_id,
+                    by=a.by,
+                    authorize=authorize_new_work if a.action == "update" else authorize,
+                )
                 state = analysis_store.load(d, a.analysis)
             if a.cmd in ("analysis-redecide", "analysis-refute") or a.action == "update":
                 notify_analysis(d, state)
@@ -1192,12 +1519,21 @@ def _main_locked(argv: list[str] | None = None) -> int:
                 return 1
         try:
             payload = proposals if isinstance(proposals, dict) else {"proposals": proposals}
-            result = analysis_store.writeback(d, aid, a.round, a.base_rev, payload.get("proposals", []),
-                                              note=a.note, by=a.by, assumptions=payload.get("assumptions"),
-                                              facts=payload.get("facts"), updates=payload.get("updates"),
-                                              dead_ends=payload.get("deadEnds"),
-                                              authorize=authorize,
-                                              authorize_refresh=lambda: review_stop.assert_accepts_work(d, manifest=manifest))
+            result = analysis_store.writeback(
+                d,
+                aid,
+                a.round,
+                a.base_rev,
+                payload.get("proposals", []),
+                note=a.note,
+                by=a.by,
+                assumptions=payload.get("assumptions"),
+                facts=payload.get("facts"),
+                updates=payload.get("updates"),
+                dead_ends=payload.get("deadEnds"),
+                authorize=authorize,
+                authorize_refresh=lambda: review_stop.assert_accepts_work(d, manifest=manifest),
+            )
         except store.NotFound:
             print(t("cli.analysis.noRound", reason=f"round#{a.round}"), file=sys.stderr)
             return 1
@@ -1210,12 +1546,14 @@ def _main_locked(argv: list[str] | None = None) -> int:
             print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
             return 2
         nxt = result.get("nextRound")
-        print(json.dumps({"ok": True, "round": a.round, "nextRound": nxt,
-                          "analysis": aid}, ensure_ascii=False))
-        print(t("cli.analysis.writebackNoNext" if nxt is None else "cli.analysis.writebackDone",
-                round=nxt), file=sys.stderr)
+        print(json.dumps({"ok": True, "round": a.round, "nextRound": nxt, "analysis": aid}, ensure_ascii=False))
+        print(
+            t("cli.analysis.writebackNoNext" if nxt is None else "cli.analysis.writebackDone", round=nxt),
+            file=sys.stderr,
+        )
         return 0
     if a.cmd == "skills":
+
         def parse(items: list[str] | None) -> list[dict[str, str]]:
             out = []
             for it in items or []:
@@ -1224,14 +1562,30 @@ def _main_locked(argv: list[str] | None = None) -> int:
                 if name:
                     out.append({"name": name[0], "desc": desc.strip()})
             return out
+
         # 常驻技能范围：存储值 → 界面消息 key；scope_of 收中英文所有字面量，
         # scope_prompt 只放当前语言那份，报错时列给用户看的不能混语言
-        always_label_key = {"all": "viewer.always.scope.all", "报告": "viewer.always.scope.report",
-                            "讲稿": "viewer.always.scope.script", "style": "viewer.always.scope.style"}
-        scope_of = {"all": "all", "全部": "all", "全部批注": "all", "报告": "报告", "report": "报告",
-                    "讲稿": "讲稿", "script": "讲稿", "style": "style", "风格优化": "style"}
-        scope_prompt = {"zh-CN": {"all": "all", "报告": "报告", "讲稿": "讲稿", "style": "style"},
-                        "en": {"all": "all", "报告": "report", "讲稿": "script", "style": "style"}}
+        always_label_key = {
+            "all": "viewer.always.scope.all",
+            "报告": "viewer.always.scope.report",
+            "讲稿": "viewer.always.scope.script",
+            "style": "viewer.always.scope.style",
+        }
+        scope_of = {
+            "all": "all",
+            "全部": "all",
+            "全部批注": "all",
+            "报告": "报告",
+            "report": "报告",
+            "讲稿": "讲稿",
+            "script": "讲稿",
+            "style": "style",
+            "风格优化": "style",
+        }
+        scope_prompt = {
+            "zh-CN": {"all": "all", "报告": "报告", "讲稿": "讲稿", "style": "style"},
+            "en": {"all": "all", "报告": "report", "讲稿": "script", "style": "style"},
+        }
         try:
             lang = cli_locale(a.locale, d)
         except i18n.LocaleError as exc:
@@ -1252,11 +1606,13 @@ def _main_locked(argv: list[str] | None = None) -> int:
                 token = sc.strip().lower()
                 if token and token not in scope_of:
                     choices = t("viewer.always.listSep").join(
-                        scope_item(scope_prompt[lang][scope], scope) for scope in scope_prompt[lang])
+                        scope_item(scope_prompt[lang][scope], scope) for scope in scope_prompt[lang]
+                    )
                     raise ValueError(t("cli.skills.badScope", scope=sc.strip(), choices=choices))
                 out.append({"name": name, "scope": scope_of[token or "全部"]})
             return out
-        try:   # 先把参数全部解析、校验完，再写盘：出错时什么都不改
+
+        try:  # 先把参数全部解析、校验完，再写盘：出错时什么都不改
             set_al, add_al = (parse_always(a.always) if a.always is not None else None), parse_always(a.always_add)
             store.clean_always((set_al or []) + add_al)
         except store.AlwaysLimitError as e:
@@ -1269,9 +1625,17 @@ def _main_locked(argv: list[str] | None = None) -> int:
         always_change = bool(set_al is not None or add_al or a.always_remove or a.always_clear)
         if catalog_change:
             try:
-                cat = store.skills_update(d, set_to=parse(a.set) if a.set is not None else None,
-                                          add=parse(a.add), remove=a.remove, clear=a.clear, always_set=set_al,
-                                          always_add=add_al, always_remove=a.always_remove, always_clear=a.always_clear)
+                cat = store.skills_update(
+                    d,
+                    set_to=parse(a.set) if a.set is not None else None,
+                    add=parse(a.add),
+                    remove=a.remove,
+                    clear=a.clear,
+                    always_set=set_al,
+                    always_add=add_al,
+                    always_remove=a.always_remove,
+                    always_clear=a.always_clear,
+                )
             except store.AlwaysLimitError as e:
                 print(f"错误：{t('viewer.always.tooMany', limit=e.limit, count=e.count)}", file=sys.stderr)
                 return 2
@@ -1291,37 +1655,61 @@ def _main_locked(argv: list[str] | None = None) -> int:
                 return 2
         sep = t("cli.skills.listSep")
         used = sorted({x for n in store.load(d)["notes"] for x in (n.get("skills") or [])})
-        print(t("cli.skills.catalog", list=sep.join(
-            t("cli.skills.item", name=c["name"], desc=c["desc"]) if c["desc"] else c["name"]
-            for c in cat) or t("cli.skills.catalogEmpty")))
+        print(
+            t(
+                "cli.skills.catalog",
+                list=sep.join(
+                    t("cli.skills.item", name=c["name"], desc=c["desc"]) if c["desc"] else c["name"] for c in cat
+                )
+                or t("cli.skills.catalogEmpty"),
+            )
+        )
         if used:
             print(t("cli.skills.used", list=sep.join(used)))
         alw = store.always_skills(d)
-        print(t("cli.skills.always", list=sep.join(scope_item(x["name"], x["scope"]) for x in alw)
-               or t("cli.skills.alwaysNone")))
+        print(
+            t(
+                "cli.skills.always",
+                list=sep.join(scope_item(x["name"], x["scope"]) for x in alw) or t("cli.skills.alwaysNone"),
+            )
+        )
         return 0
     if a.cmd == "claim":
         try:
             if a.events == "analysis":
-                event, item = claim_next(d, by=a.by, stage=a.stage, seq=a.seq,
-                                         round_no=a.round, include_analysis=True, authorize=authorize)
+                event, item = claim_next(
+                    d, by=a.by, stage=a.stage, seq=a.seq, round_no=a.round, include_analysis=True, authorize=authorize
+                )
                 if item is None:
                     print(json.dumps({"claimed": False}, ensure_ascii=False))
                     return 3
                 if event == "analysis":
                     ctx = analysis_store.round_context(d, item["analysis"], item["seq"])
-                    print(json.dumps({"claimed": True, "event": "analysis", "focus": ctx["focus"],
-                                      "round": item["seq"],
-                                      **{k: v for k, v in item.items() if k != "proposals"},
-                                      "items": ctx["items"], "answers": ctx["answers"]}, ensure_ascii=False))
+                    print(
+                        json.dumps(
+                            {
+                                "claimed": True,
+                                "event": "analysis",
+                                "focus": ctx["focus"],
+                                "round": item["seq"],
+                                **{k: v for k, v in item.items() if k != "proposals"},
+                                "items": ctx["items"],
+                                "answers": ctx["answers"],
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
                     return 0
                 if item["stage"] == "draft":
                     snapshot(d, item, "base")
-                print(json.dumps({"claimed": True, "event": "handoff",
-                                  **{k: v for k, v in item.items() if k != "openIds"}}, ensure_ascii=False))
+                print(
+                    json.dumps(
+                        {"claimed": True, "event": "handoff", **{k: v for k, v in item.items() if k != "openIds"}},
+                        ensure_ascii=False,
+                    )
+                )
                 return 0
-            _event, item = claim_next(d, by=a.by, stage=a.stage, seq=a.seq,
-                                      authorize=authorize)
+            _event, item = claim_next(d, by=a.by, stage=a.stage, seq=a.seq, authorize=authorize)
         except store.HandoffError as error:
             if error.code == "queue-order":
                 print(json.dumps({"claimed": False, "reason": "earlier-item"}, ensure_ascii=False))
@@ -1341,9 +1729,15 @@ def _main_locked(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "done":
         try:
-            item = store.handoff_done(d, seq=a.seq, summary=a.summary, by=a.by,
-                                      mode="draft" if a.draft else "final" if a.final else None, accept_rest=a.accept_rest,
-                                      authorize=authorize)
+            item = store.handoff_done(
+                d,
+                seq=a.seq,
+                summary=a.summary,
+                by=a.by,
+                mode="draft" if a.draft else "final" if a.final else None,
+                accept_rest=a.accept_rest,
+                authorize=authorize,
+            )
         except store.NotFound:
             print(t("cli.hand.doneMissing"), file=sys.stderr)
             return 1
@@ -1355,12 +1749,19 @@ def _main_locked(argv: list[str] | None = None) -> int:
             return 2
         if item["status"] in ("drafted", "review"):
             snapshot(d, item, "draft")
-            print(t("cli.hand.doneDrafted", seq=item["seq"], count=item.get("draftedCount", 0))
-                  + (t("cli.hand.doneStop") if item["status"] == "drafted"
-                     else t("cli.hand.doneReview", dir=d)))
+            print(
+                t("cli.hand.doneDrafted", seq=item["seq"], count=item.get("draftedCount", 0))
+                + (t("cli.hand.doneStop") if item["status"] == "drafted" else t("cli.hand.doneReview", dir=d))
+            )
             return 0
-        print(t("cli.hand.doneFinal", seq=item["seq"], count=item.get("resolvedCount", 0),
-                left=t("cli.hand.doneLeft", count=item["leftOpen"]) if item.get("leftOpen") else ""))
+        print(
+            t(
+                "cli.hand.doneFinal",
+                seq=item["seq"],
+                count=item.get("resolvedCount", 0),
+                left=t("cli.hand.doneLeft", count=item["leftOpen"]) if item.get("leftOpen") else "",
+            )
+        )
         if not item.get("resolvedCount"):
             print(t("cli.hand.doneNone"), file=sys.stderr)
         return 0
@@ -1369,9 +1770,16 @@ def _main_locked(argv: list[str] | None = None) -> int:
         for nid in a.ids:
             try:
                 _doc, n = store.review(d, nid, a.verdict, note=a.note, by=a.by, seq=a.seq, authorize=authorize)
-                print(t("cli.hand.reviewResult", id=nid,
-                        action=label(t, ACTION_KEY[{"ok": "approved", "revise": "revised", "return": "returned"}[a.verdict]]),
-                        status=label(t, NOTE_STATUS_KEY.get(n.get("status"), ""), n.get("status"))))
+                print(
+                    t(
+                        "cli.hand.reviewResult",
+                        id=nid,
+                        action=label(
+                            t, ACTION_KEY[{"ok": "approved", "revise": "revised", "return": "returned"}[a.verdict]]
+                        ),
+                        status=label(t, NOTE_STATUS_KEY.get(n.get("status"), ""), n.get("status")),
+                    )
+                )
             except store.NotFound:
                 print(t("cli.hand.noteMissing", id=nid), file=sys.stderr)
                 bad += 1
@@ -1406,7 +1814,8 @@ def batch_note_ids(d: Path, notes: list[dict[str, Any]], seq: int) -> set[str]:
     ids = set(item.get("openIds") or [])
     for n in notes:
         if seq in (n.get("draftBatch"), n.get("resolvedBatch")) or any(
-                isinstance(e, dict) and e.get("batch") == seq for e in n.get("trail") or []):
+            isinstance(e, dict) and e.get("batch") == seq for e in n.get("trail") or []
+        ):
             ids.add(n.get("id"))
     return ids
 
@@ -1421,6 +1830,7 @@ def _refuse_newer_format(manifest) -> None:
     if not manifest:
         return
     import ledger
+
     problem = ledger.unsupported_format(manifest)
     if problem:
         raise BuildError(problem)
@@ -1446,7 +1856,10 @@ def snapshot(d: Path, item: dict[str, Any], label: str) -> Path | None:
     try:
         return _snapshot(d, int(item["seq"]), label)
     except (OSError, ValueError) as e:
-        print(f"警告：源文件快照没存成（{type(e).__name__}: {e}）；notes.py diff 将看不到这批的改动，其他不受影响。", file=sys.stderr)
+        print(
+            f"警告：源文件快照没存成（{type(e).__name__}: {e}）；notes.py diff 将看不到这批的改动，其他不受影响。",
+            file=sys.stderr,
+        )
         return None
 
 
@@ -1465,12 +1878,12 @@ def _snapshot(d: Path, seq: int, label: str) -> Path | None:
         if src and src.is_file():
             if src.stat().st_size > SNAP_MAX:
                 raise ValueError(f"{src} 超过 {SNAP_MAX // 1024 // 1024} MB")
-            if kind == "report" and (_is_word(src) or _is_pptx(src)):   # Word / PPT 二进制包按原字节保存，不按文本读
+            if kind == "report" and (_is_word(src) or _is_pptx(src)):  # Word / PPT 二进制包按原字节保存，不按文本读
                 _write_private_bytes(out / kind, src.read_bytes())
             else:
                 write_private(out / kind, src.read_text(encoding="utf-8"))
     olds = sorted((p for p in root.glob("batch-*") if p.name[6:].isdigit()), key=lambda p: int(p.name[6:]))
-    for p in olds[:-SNAP_KEEP]:   # 只留最近几十批
+    for p in olds[:-SNAP_KEEP]:  # 只留最近几十批
         for f in sorted(p.rglob("*"), reverse=True):
             f.unlink() if f.is_file() else f.rmdir()
         p.rmdir()
@@ -1479,11 +1892,13 @@ def _snapshot(d: Path, seq: int, label: str) -> Path | None:
 
 def _is_word(src: Path) -> bool:
     import docx_review
+
     return docx_review.is_word_like(src)
 
 
 def _is_pptx(src: Path) -> bool:
     import pptx_report
+
     if pptx_report.is_pptx(src):
         return True
     # 快照按原字节保存时没有扩展名：按包内容认 PPTX（有主演示文稿部件），不误交给 DOCX 渲染器
@@ -1503,11 +1918,19 @@ def _parts(kind: str, text: str) -> list[tuple[str, int, str]]:
     """把源文件按页切开：[(匹配键, 页码, 内容)]。报告按 data-key（没有就页码），讲稿按页码；切不开就整份。"""
     try:
         if kind == "report":
-            return [(f"k:{p['key']}" if p.get("key") else f"n:{p['n']}", int(p["n"]), p["html"]) for p in find_pages(text)]
-        heads = page_heads(text)   # 中英页头都认，与界面语言无关
+            return [
+                (f"k:{p['key']}" if p.get("key") else f"n:{p['n']}", int(p["n"]), p["html"]) for p in find_pages(text)
+            ]
+        heads = page_heads(text)  # 中英页头都认，与界面语言无关
         if heads:
-            return [(f"n:{h.group(1)}", int(h.group(1)), text[h.start(): heads[k + 1].start() if k + 1 < len(heads) else len(text)])
-                    for k, h in enumerate(heads)]
+            return [
+                (
+                    f"n:{h.group(1)}",
+                    int(h.group(1)),
+                    text[h.start() : heads[k + 1].start() if k + 1 < len(heads) else len(text)],
+                )
+                for k, h in enumerate(heads)
+            ]
     except (BuildError, ValueError):
         pass
     return [("all", 0, text)]
@@ -1518,19 +1941,26 @@ def _load_parts(kind: str, path: Path) -> list[tuple[str, int, str]]:
     with path.open("rb") as fh:
         is_zip = fh.read(2) == b"PK"
     if kind == "report" and is_zip:
-        if _is_pptx(path):   # PPTX 也是 zip 包：按幻灯片键切页，不交给 DOCX 渲染器
+        if _is_pptx(path):  # PPTX 也是 zip 包：按幻灯片键切页，不交给 DOCX 渲染器
             import pptx_report
+
             return pptx_report.slide_parts(path)
         import docx_review
-        return [(f"k:{pg['key']}", pg["n"], docx_review.page_lines(pg["html"])) for pg in docx_review.render(path)["pages"]]
+
+        return [
+            (f"k:{pg['key']}", pg["n"], docx_review.page_lines(pg["html"])) for pg in docx_review.render(path)["pages"]
+        ]
     return _parts(kind, path.read_text(encoding="utf-8"))
 
 
 def diff_cmd(d: Path, seq: int | None, to: str, page: int | None, lang: str | None = None) -> int:
     t = cli_text(lang)
     root = d / SNAP_DIR
-    if seq is None:   # 最近一个有接收时快照的批次
-        have = sorted((int(p.name[6:]) for p in root.glob("batch-*") if p.name[6:].isdigit() and (p / "base").is_dir()), reverse=True)
+    if seq is None:  # 最近一个有接收时快照的批次
+        have = sorted(
+            (int(p.name[6:]) for p in root.glob("batch-*") if p.name[6:].isdigit() and (p / "base").is_dir()),
+            reverse=True,
+        )
         if not have:
             print(t("cli.batch.diffNoSnapshot"), file=sys.stderr)
             return 1
@@ -1543,8 +1973,13 @@ def diff_cmd(d: Path, seq: int | None, to: str, page: int | None, lang: str | No
     use_current = to == "current" or not after_dir.is_dir()
     sources = _sources(d) or {}
     side = {"report": "cli.show.source.report", "script": "cli.show.source.script"}
-    print(t("cli.batch.diffHead", seq=seq,
-            range=t("cli.batch.diffRangeNow" if use_current else "cli.batch.diffRangeDraft")))
+    print(
+        t(
+            "cli.batch.diffHead",
+            seq=seq,
+            range=t("cli.batch.diffRangeNow" if use_current else "cli.batch.diffRangeDraft"),
+        )
+    )
     any_change = False
     for kind in ("report", "script"):
         if not (base / kind).is_file():
@@ -1557,7 +1992,7 @@ def diff_cmd(d: Path, seq: int | None, to: str, page: int | None, lang: str | No
             continue
         try:
             old_parts, new_parts = _load_parts(kind, base / kind), _load_parts(kind, Path(src))
-        except (OSError, ValueError) as exc:   # Word 文档读不了：说明原因，不中断另一侧
+        except (OSError, ValueError) as exc:  # Word 文档读不了：说明原因，不中断另一侧
             print(t("cli.notes.warning", reason=exc), file=sys.stderr)
             continue
         old = {k: (n, t) for k, n, t in old_parts}
@@ -1567,11 +2002,26 @@ def diff_cmd(d: Path, seq: int | None, to: str, page: int | None, lang: str | No
             prev = old.pop(key, (n, ""))[1]
             if prev != text:
                 any_change = True
-                print(t("cli.batch.diffPage", side=label(t, side[kind], kind), page=n,
-                        pageKey=t("cli.batch.diffKey", pageKey=key[2:]) if key.startswith("k:") else ""))
-                print("\n".join(difflib.unified_diff(prev.splitlines(), text.splitlines(),
-                                                     t("cli.batch.diffBefore"), t("cli.batch.diffAfter"),
-                                                     lineterm="", n=2)))
+                print(
+                    t(
+                        "cli.batch.diffPage",
+                        side=label(t, side[kind], kind),
+                        page=n,
+                        pageKey=t("cli.batch.diffKey", pageKey=key[2:]) if key.startswith("k:") else "",
+                    )
+                )
+                print(
+                    "\n".join(
+                        difflib.unified_diff(
+                            prev.splitlines(),
+                            text.splitlines(),
+                            t("cli.batch.diffBefore"),
+                            t("cli.batch.diffAfter"),
+                            lineterm="",
+                            n=2,
+                        )
+                    )
+                )
         for key, (n, text) in old.items():
             if page is None or n == page:
                 any_change = True
@@ -1600,18 +2050,25 @@ def _submitted_before(batch: dict[str, Any], round_: dict[str, Any]) -> bool:
     return store._ts(batch_at) <= store._ts(round_at)
 
 
-def claim_next(d: Path, *, by: str, stage: str = "any", seq: int | None = None,
-               round_no: int | None = None,
-               include_analysis: bool = False, authorize: Callable[[], None] | None = None,
-               expected_binding: dict[str, Any] | None = None) -> tuple[str, dict[str, Any] | None]:
+def claim_next(
+    d: Path,
+    *,
+    by: str,
+    stage: str = "any",
+    seq: int | None = None,
+    round_no: int | None = None,
+    include_analysis: bool = False,
+    authorize: Callable[[], None] | None = None,
+    expected_binding: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any] | None]:
     """领取最早交出的一项：改稿批次（按 --stage）或分析轮次，按交出先后挑。
 
     seq 只指批次，round_no 只指分析轮次。精确领取不得跳过更早交出的项。
     锁外选择目标；锁内重新校验身份、忙闲和队首，然后由对应存储领取。"""
+
     def next_waiting():
         # 先决定全局队首；阶段与事件参数只能限制能否领取，不能改变排队顺序。
-        batches = [item for item in store.handoff_load(d)["items"]
-                   if item.get("status") in store.CLAIM_STATUSES["any"]]
+        batches = [item for item in store.handoff_load(d)["items"] if item.get("status") in store.CLAIM_STATUSES["any"]]
         batch = None
         for candidate in batches:
             if batch is None or not _submitted_before(batch, candidate):
@@ -1635,8 +2092,11 @@ def claim_next(d: Path, *, by: str, stage: str = "any", seq: int | None = None,
         if current != selected or (requested is not None and current is not None and requested != current):
             raise store.HandoffError("有更早交出的项，请先处理后重试", code="queue-order")
 
-    if (selected is None or (requested is not None and requested != selected)
-            or (selected[0] == "analysis" and not include_analysis)):
+    if (
+        selected is None
+        or (requested is not None and requested != selected)
+        or (selected[0] == "analysis" and not include_analysis)
+    ):
         with store.locked(d):
             check_available()
         return "", None
@@ -1658,13 +2118,22 @@ def analysis_context_of(d: Path, *, analysis: str | None, round_no: int | None) 
         if analysis is not None and analysis != aid:
             raise store.NotFound(f"round#{round_no}")
         return analysis_store.round_context(d, aid, round_no)
-    target = (next((r for r in rows if r["id"] == analysis), None) if analysis is not None
-              else next((r for r in rows if r["status"] == "active"), rows[0]))
+    target = (
+        next((r for r in rows if r["id"] == analysis), None)
+        if analysis is not None
+        else next((r for r in rows if r["status"] == "active"), rows[0])
+    )
     if target is None:
         raise store.NotFound(f"analysis#{analysis}")
     state = analysis_store.load(d, target["id"])
-    round_ = next((r for r in reversed(state["rounds"]) if r.get("line", "main") == state["line"]
-                   and r["status"] in ("open", "submitted", "claimed")), None)
+    round_ = next(
+        (
+            r
+            for r in reversed(state["rounds"])
+            if r.get("line", "main") == state["line"] and r["status"] in ("open", "submitted", "claimed")
+        ),
+        None,
+    )
     if round_ is None:
         raise store.NotFound("no-open-round")
     return analysis_store.round_context(d, target["id"], round_["seq"])
@@ -1673,52 +2142,101 @@ def analysis_context_of(d: Path, *, analysis: str | None, round_no: int | None) 
 def analysis_context_text(ctx: dict[str, Any], lang: str | None = None) -> str:
     """一轮上下文的人读输出：焦点问题、当前路径上的决策、本轮条目、审阅人原话回答。"""
     t = cli_text(lang)
-    out = [t("cli.analysis.heading", focus=ctx["focus"]),
-           t("cli.analysis.meta", round=ctx["round"], status=ctx["status"],
-             kind=t("cli.analysis.kind." + ("opening" if ctx["kind"] == "opening" else "next")),
-             rev=ctx["baseRev"] if ctx["baseRev"] is not None else "—")]
+    out = [
+        t("cli.analysis.heading", focus=ctx["focus"]),
+        t(
+            "cli.analysis.meta",
+            round=ctx["round"],
+            status=ctx["status"],
+            kind=t("cli.analysis.kind." + ("opening" if ctx["kind"] == "opening" else "next")),
+            rev=ctx["baseRev"] if ctx["baseRev"] is not None else "—",
+        ),
+    ]
     if ctx["decisions"]:
         out.append(t("cli.analysis.decisions"))
         for dec in ctx["decisions"]:
-            out.append(t("cli.analysis.decisionItem", short=dec["nodeShort"], label=dec["label"],
-                         round=dec["round"]))
+            out.append(t("cli.analysis.decisionItem", short=dec["nodeShort"], label=dec["label"], round=dec["round"]))
     out.append(t("cli.analysis.items"))
     all_items = {item["key"]: item for item in ctx["items"] + ctx.get("answeredItems", [])}
     for item in all_items.values():
         if item["type"] == "deadend":
             if item["kind"] == "line":
                 ordinal = item["targetOrdinal"]
-                target = t("cli.analysis.history.main" if ordinal == 1 else "cli.analysis.history.second") if ordinal < 3 else t(
-                    "cli.analysis.history.other", number=ordinal)
+                target = (
+                    t("cli.analysis.history.main" if ordinal == 1 else "cli.analysis.history.second")
+                    if ordinal < 3
+                    else t("cli.analysis.history.other", number=ordinal)
+                )
             else:
-                target = t("cli.analysis.resolution.optionTarget", question=item["targetText"], option=item["optionLabel"])
-            out.append(t("cli.analysis.resolution.deadItem", target=target, reason=item["reason"],
-                         assumptions=" / ".join(item["assumptionTexts"]) or t("cli.analysis.resolution.noAssumptions")))
+                target = t(
+                    "cli.analysis.resolution.optionTarget", question=item["targetText"], option=item["optionLabel"]
+                )
+            out.append(
+                t(
+                    "cli.analysis.resolution.deadItem",
+                    target=target,
+                    reason=item["reason"],
+                    assumptions=" / ".join(item["assumptionTexts"]) or t("cli.analysis.resolution.noAssumptions"),
+                )
+            )
             continue
         if item["type"] == "update":
             out.append(t("cli.analysis.protect.updateItem", before=item["beforeText"], after=item["text"]))
             continue
         if item["type"] == "assumption":
-            out.append(t("cli.life.assumptionItem", text=item["text"],
-                         status=t("viewer.life.status." + item.get("status", "pending"))))
+            out.append(
+                t(
+                    "cli.life.assumptionItem",
+                    text=item["text"],
+                    status=t("viewer.life.status." + item.get("status", "pending")),
+                )
+            )
             continue
         if item["type"] == "structure" and item.get("op", "add") != "add":
-            out.append(t("cli.life.structureChange", action=t("cli.life.structure." + item["op"]),
-                         questions=" / ".join(item.get("targetNames", []))))
+            out.append(
+                t(
+                    "cli.life.structureChange",
+                    action=t("cli.life.structure." + item["op"]),
+                    questions=" / ".join(item.get("targetNames", [])),
+                )
+            )
             if item.get("text"):
                 out.append(item["text"])
             for replacement in item.get("replacements", []):
-                out.append(t("cli.life.structureItem", item=replacement["key"], text=replacement["text"],
-                             short=replacement["short"], recommend=replacement["recommend"],
-                             options=" / ".join(o["label"] for o in replacement["options"])))
+                out.append(
+                    t(
+                        "cli.life.structureItem",
+                        item=replacement["key"],
+                        text=replacement["text"],
+                        short=replacement["short"],
+                        recommend=replacement["recommend"],
+                        options=" / ".join(o["label"] for o in replacement["options"]),
+                    )
+                )
             continue
-        options = " / ".join(f'{o["id"]}：{o["label"]}' for o in item["options"])
+        options = " / ".join(f"{o['id']}：{o['label']}" for o in item["options"])
         if item["type"] == "structure":
-            out.append(t("cli.life.structureItem", item=item["key"], text=item["text"],
-                         short=item["short"], options=options, recommend=item["recommend"]))
+            out.append(
+                t(
+                    "cli.life.structureItem",
+                    item=item["key"],
+                    text=item["text"],
+                    short=item["short"],
+                    options=options,
+                    recommend=item["recommend"],
+                )
+            )
         else:
-            out.append(t("cli.life.questionItem", item=item["key"], short=item["short"],
-                         text=item["text"], options=options, recommend=item["recommend"]))
+            out.append(
+                t(
+                    "cli.life.questionItem",
+                    item=item["key"],
+                    short=item["short"],
+                    text=item["text"],
+                    options=options,
+                    recommend=item["recommend"],
+                )
+            )
     if ctx["answers"]:
         out.append(t("cli.analysis.answers"))
         for key, value in ctx["answers"].items():
@@ -1726,8 +2244,13 @@ def analysis_context_text(ctx: dict[str, Any], lang: str | None = None) -> str:
     if ctx.get("assumptions"):
         out.append(t("cli.life.assumptions"))
         for assumption in ctx["assumptions"]:
-            out.append(t("cli.life.assumptionItem", text=assumption["text"],
-                         status=t("viewer.life.status." + assumption["status"])))
+            out.append(
+                t(
+                    "cli.life.assumptionItem",
+                    text=assumption["text"],
+                    status=t("viewer.life.status." + assumption["status"]),
+                )
+            )
     if ctx.get("facts"):
         out.append(t("cli.life.facts"))
         for fact in ctx["facts"]:
@@ -1735,8 +2258,15 @@ def analysis_context_text(ctx: dict[str, Any], lang: str | None = None) -> str:
     if ctx.get("updateRequests"):
         out.append(t("cli.analysis.protect.updateRequests"))
         for request in ctx["updateRequests"]:
-            out.append(t("cli.analysis.protect.updateRequest", noteId=request["noteId"], text=request["text"],
-                         question=request["question"], answer=request["answer"]))
+            out.append(
+                t(
+                    "cli.analysis.protect.updateRequest",
+                    noteId=request["noteId"],
+                    text=request["text"],
+                    question=request["question"],
+                    answer=request["answer"],
+                )
+            )
     out.append(t("cli.life.verificationRule"))
     if ctx.get("historical"):
         if ctx.get("note"):
@@ -1752,22 +2282,47 @@ def analysis_context_text(ctx: dict[str, Any], lang: str | None = None) -> str:
 def analysis_history_text(state: dict[str, Any], lang: str | None = None) -> str:
     """按自然线名与轮次输出时间线；内部标识保留在JSON读取中。"""
     t = cli_text(lang)
+
     def line_name(line):
         ordinal = state["lines"][line]["ordinal"]
-        return t("cli.analysis.history.main" if ordinal == 1 else "cli.analysis.history.second") if ordinal < 3 else t(
-            "cli.analysis.history.other", number=ordinal)
+        return (
+            t("cli.analysis.history.main" if ordinal == 1 else "cli.analysis.history.second")
+            if ordinal < 3
+            else t("cli.analysis.history.other", number=ordinal)
+        )
+
     out = [t("cli.analysis.history.title", focus=state["focus"])]
     for line in state["lines"].values():
-        out.append(t("cli.analysis.history.lineRow", name=line_name(line["id"]),
-                     current=t("cli.analysis.history.current") if line["id"] == state["line"] else ""))
+        out.append(
+            t(
+                "cli.analysis.history.lineRow",
+                name=line_name(line["id"]),
+                current=t("cli.analysis.history.current") if line["id"] == state["line"] else "",
+            )
+        )
     for round_ in state["rounds"]:
-        out.append(t("cli.analysis.history.roundRow", round=round_["seq"], line=line_name(round_["line"]),
-                     status=t("cli.analysis.history.status." + round_["status"])))
+        out.append(
+            t(
+                "cli.analysis.history.roundRow",
+                round=round_["seq"],
+                line=line_name(round_["line"]),
+                status=t("cli.analysis.history.status." + round_["status"]),
+            )
+        )
     for checkpoint in state["checkpoints"]:
-        name = t("cli.analysis.history.checkpoint", round=checkpoint["round"]) if checkpoint["round"] is not None else t(
-            "cli.analysis.history.checkpointNow")
-        out.append(t("cli.analysis.history.checkpointRow", name=name, line=line_name(checkpoint["line"]),
-                     state=t("cli.analysis.history.sealed" if checkpoint["sealed"] else "cli.analysis.history.automatic")))
+        name = (
+            t("cli.analysis.history.checkpoint", round=checkpoint["round"])
+            if checkpoint["round"] is not None
+            else t("cli.analysis.history.checkpointNow")
+        )
+        out.append(
+            t(
+                "cli.analysis.history.checkpointRow",
+                name=name,
+                line=line_name(checkpoint["line"]),
+                state=t("cli.analysis.history.sealed" if checkpoint["sealed"] else "cli.analysis.history.automatic"),
+            )
+        )
     return "\n".join(out)
 
 
@@ -1792,7 +2347,9 @@ def analysis_check_text(context: dict[str, Any], d: Path, lang: str | None = Non
     for analysis in context["analyses"]:
         out.append(analysis["focus"])
         for conclusion in analysis["conclusions"]:
-            out.append(t("cli.analysis.protect.conclusion", question=conclusion["question"], answer=conclusion["answer"]))
+            out.append(
+                t("cli.analysis.protect.conclusion", question=conclusion["question"], answer=conclusion["answer"])
+            )
     return "\n".join(out)
 
 
@@ -1813,9 +2370,20 @@ def _poll_signature(path: Path) -> tuple[int, int, int, int] | None:
     return (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
 
 
-def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stage: str = "any",
-         lang: str | None = None, harness: str | None = None, session: str | None = None,
-         manifest: dict[str, Any] | None = None, events: str | None = None) -> int:
+def wait(
+    d: Path,
+    timeout: float,
+    interval: float,
+    *,
+    claim: bool,
+    by: str,
+    stage: str = "any",
+    lang: str | None = None,
+    harness: str | None = None,
+    session: str | None = None,
+    manifest: dict[str, Any] | None = None,
+    events: str | None = None,
+) -> int:
     """阻塞等待「交给 Agent」提交。已经在等待中的提交（之前没人接收）会立即返回。
 
     manifest：调用方已读好的 review.json（接收方绑定的校验用它，不重复打开同一份文件）。
@@ -1843,11 +2411,11 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
         print(t("cli.hand.waitHint", count=state.get("claimed", 0) + state.get("reviewing", 0)), file=sys.stderr)
     want = store.CLAIM_STATUSES[stage]
     deadline = time.monotonic() + timeout if timeout > 0 else None
-    mark: Path | None = ledger.wait_file(d, os.getpid())   # 让 serve.py list 看得出「有代理在等这份审阅」
+    mark: Path | None = ledger.wait_file(d, os.getpid())  # 让 serve.py list 看得出「有代理在等这份审阅」
     wait_info = {"version": 1, "pid": os.getpid(), "stage": stage, "since": store.now_iso()}
     if claim and binding:
         wait_info.update(bindingId=binding["bindingId"], **wakeup.binding_identity(binding))
-    mark_window = max(5, interval * 3)   # 等待标记的有效期；服务端据此判断「有代理在等」
+    mark_window = max(5, interval * 3)  # 等待标记的有效期；服务端据此判断「有代理在等」
     mark_expires = time.time() + mark_window
     # 有效期只对带绑定的标记有意义（只有它会按有效期重写）；没有绑定的标记格式不变
     first = {**wait_info, "expiresAt": mark_expires} if claim and binding else wait_info
@@ -1860,35 +2428,38 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     except OSError:
         mark = None
 
-    def _stop(*_a: Any) -> None:   # 后台任务被杀（SIGTERM / SIGHUP / SIGBREAK）也要走 finally 删标记
+    def _stop(*_a: Any) -> None:  # 后台任务被杀（SIGTERM / SIGHUP / SIGBREAK）也要走 finally 删标记
         raise KeyboardInterrupt
+
     old_handlers = {}
     for sig_name in ("SIGTERM", "SIGHUP", "SIGBREAK"):
         sig = getattr(signal, sig_name, None)
         if sig is None:
             continue
-        with contextlib.suppress(ValueError, OSError):   # 不在主线程时设不了，靠 pid 存活判断兜底
+        with contextlib.suppress(ValueError, OSError):  # 不在主线程时设不了，靠 pid 存活判断兜底
             old_handlers[sig] = signal.signal(sig, _stop)
     # 停止状态参与每次签名检查；claim 时绑定与 review.json 也在完整重读时校验。
-    poll_paths = [d / store.HANDOFF_FILE, d / review_stop.STATE_FILE] + \
-                 ([d / wakeup.BINDING_FILE, d / "review.json"] if claim else [])
+    poll_paths = [d / store.HANDOFF_FILE, d / review_stop.STATE_FILE] + (
+        [d / wakeup.BINDING_FILE, d / "review.json"] if claim else []
+    )
     force_read = WAIT_FORCE_READ_SECONDS
-    last_sig: tuple[tuple[int, int, int, int] | None, ...] | None = None   # None = 还没读过，首轮必读
+    last_sig: tuple[tuple[int, int, int, int] | None, ...] | None = None  # None = 还没读过，首轮必读
     next_force = time.monotonic() + force_read
     try:
         while True:
             watch = poll_paths + (sorted((d / "analysis").glob("*/events.jsonl")) if include_analysis else [])
             sig = tuple(_poll_signature(p) for p in watch)
             now = time.monotonic()
-            if sig != last_sig or now >= next_force:   # 变了、或到了强制重读周期：完整读一次
+            if sig != last_sig or now >= next_force:  # 变了、或到了强制重读周期：完整读一次
                 last_sig, next_force = sig, now + force_read
                 if not review_stop.accepts_work(d, manifest=manifest):
                     print(t("cli.hand.reviewStopped"), file=sys.stderr)
                     return 4
                 if claim:
                     try:
-                        wakeup.assert_claim_owner(d, harness, session,
-                                                  expected_binding=(binding or {}).get("bindingId"))
+                        wakeup.assert_claim_owner(
+                            d, harness, session, expected_binding=(binding or {}).get("bindingId")
+                        )
                     except (OSError, ValueError, KeyError) as error:
                         print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
                         return 2
@@ -1898,7 +2469,7 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
                     doc = {"items": []}
             if claim and mark is not None and binding:
                 try:
-                    if time.time() + mark_window / 2 > mark_expires:   # 剩余有效期不到一半才重写
+                    if time.time() + mark_window / 2 > mark_expires:  # 剩余有效期不到一半才重写
                         mark_expires = time.time() + mark_window
                         write_private(mark, json.dumps({**wait_info, "expiresAt": mark_expires}) + "\n")
                 except (OSError, ValueError, KeyError) as error:
@@ -1908,12 +2479,17 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
             if any(i.get("status") in want for i in doc["items"]) or rounds:
                 if claim:
                     try:
-                        event, item = claim_next(d, by=by, stage=stage,
-                                                  include_analysis=include_analysis,
-                            authorize=lambda: wakeup.assert_claim_owner(d, harness, session,
-                                expected_binding=(binding or {}).get("bindingId")))
+                        event, item = claim_next(
+                            d,
+                            by=by,
+                            stage=stage,
+                            include_analysis=include_analysis,
+                            authorize=lambda: wakeup.assert_claim_owner(
+                                d, harness, session, expected_binding=(binding or {}).get("bindingId")
+                            ),
+                        )
                     except store.HandoffError:
-                        event, item = "", None   # 刚被别的 Agent 抢走：继续等，不打断等待
+                        event, item = "", None  # 刚被别的 Agent 抢走：继续等，不打断等待
                     except (OSError, ValueError, KeyError) as error:
                         print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
                         return 2
@@ -1966,9 +2542,19 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
             print(analysis_check_text(analysis_store.full_check_context(d), d, lang))
         print(t("cli.hand.reviewerBrief", dir=d, seq=item["seq"]) + "\n")
         doc = store.load(d)
-        print(to_markdown(doc, manifest, include_resolved=False, page=None, sources=sources,
-                          only=batch_note_ids(d, doc["notes"], item["seq"]), always=store.always_skills(d),
-                          locale=lang), end="")
+        print(
+            to_markdown(
+                doc,
+                manifest,
+                include_resolved=False,
+                page=None,
+                sources=sources,
+                only=batch_note_ids(d, doc["notes"], item["seq"]),
+                always=store.always_skills(d),
+                locale=lang,
+            ),
+            end="",
+        )
         return 0
     pages = sep.join(str(p) for p in item.get("pages") or []) or t("cli.hand.noPages")
     print(t("cli.hand.head", seq=item["seq"], at=item.get("at")))
@@ -1981,22 +2567,35 @@ def wait(d: Path, timeout: float, interval: float, *, claim: bool, by: str, stag
     alw = store.always_skills(d)
     if alw:
         print(t("cli.hand.alwaysLine", list=always_text(t, alw)))
-    need = sorted({x for n in store.load(d)["notes"] if n.get("status", "open") == "open" for x in (n.get("skills") or [])})
+    need = sorted(
+        {x for n in store.load(d)["notes"] if n.get("status", "open") == "open" for x in (n.get("skills") or [])}
+    )
     if need:
         print(t("cli.hand.moreSkills", list=sep.join(need)))
-    print(t("cli.hand.openCount", count=item.get("openCount"), pages=pages)
-          + (t("cli.hand.claimedNote") if claim else t("cli.hand.noClaimNote")))
+    print(
+        t("cli.hand.openCount", count=item.get("openCount"), pages=pages)
+        + (t("cli.hand.claimedNote") if claim else t("cli.hand.noClaimNote"))
+    )
     end_hint = t("cli.hand.endReview" if item.get("target") == "review" else "cli.hand.endFinal")
     print(t("cli.hand.finishLine", dir=d, seq=item["seq"], end=end_hint) + "\n")
     doc = store.load(d)
     open_ids = set(item.get("openIds") or [])
     mine = {n["id"] for n in doc["notes"] if n.get("id") in open_ids and n.get("status", "open") == "open"}
     others = [n for n in doc["notes"] if n.get("id") in open_ids and n.get("status") == "drafted"]
-    if others:   # 提交后被别的批次初改了的：等那一批复核，不要动
-        print(t("cli.hand.otherBatch", list=sep.join(
-            t("cli.hand.otherBatchItem", id=n["id"], batch=n.get("draftBatch")) for n in others)) + "\n")
-    print(to_markdown(doc, manifest, include_resolved=False, page=None, sources=sources, only=mine,
-                      always=alw, locale=lang), end="")
+    if others:  # 提交后被别的批次初改了的：等那一批复核，不要动
+        print(
+            t(
+                "cli.hand.otherBatch",
+                list=sep.join(t("cli.hand.otherBatchItem", id=n["id"], batch=n.get("draftBatch")) for n in others),
+            )
+            + "\n"
+        )
+    print(
+        to_markdown(
+            doc, manifest, include_resolved=False, page=None, sources=sources, only=mine, always=alw, locale=lang
+        ),
+        end="",
+    )
     return 0
 
 

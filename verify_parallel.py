@@ -3,6 +3,7 @@
 独立任务各自拥有进程组，fork 继承原锁描述符。敏感及未知单元在调用方原进程
 执行；调度器只回收本次创建的进程族，不枚举或停止宿主机的其他进程。
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -23,9 +24,13 @@ class InterruptedRun(KeyboardInterrupt):
 def isolate_environment(root: Path) -> None:
     home = root / "home"
     home.mkdir(parents=True)
-    updates = dict(HOME=str(home), AE_HOME=str(root / "ledger"),
-                   CLAUDE_SKILLS_DIR=str(home / ".claude" / "skills"),
-                   CODEX_HOME=str(home / ".codex"), XDG_DATA_HOME=str(home / ".local" / "share"))
+    updates = dict(
+        HOME=str(home),
+        AE_HOME=str(root / "ledger"),
+        CLAUDE_SKILLS_DIR=str(home / ".claude" / "skills"),
+        CODEX_HOME=str(home / ".codex"),
+        XDG_DATA_HOME=str(home / ".local" / "share"),
+    )
     if os.name == "nt":
         updates["USERPROFILE"] = str(home)
     os.environ.update(updates)
@@ -106,8 +111,12 @@ def run_tasks(tasks, worker, root: Path, jobs: int = 3, inline=None):
     def location(key, index):
         directory = root / str(index)
         directory.mkdir()
-        return directory, {"id": key, "output": directory / "result.json", "log": directory / "output.log",
-                           "started": time.monotonic()}
+        return directory, {
+            "id": key,
+            "output": directory / "result.json",
+            "log": directory / "output.log",
+            "started": time.monotonic(),
+        }
 
     try:
         while active or not exhausted or not inline_done:
@@ -134,8 +143,12 @@ def run_tasks(tasks, worker, root: Path, jobs: int = 3, inline=None):
                                 os.dup2(stream.fileno(), 1)
                                 os.dup2(stream.fileno(), 2)
                                 # 调用方可能已重定向到其他 fd；重新绑定 Python 文本流。
-                                sys.stdout = os.fdopen(os.dup(1), "w", buffering=1, encoding="utf-8", errors="backslashreplace")
-                                sys.stderr = os.fdopen(os.dup(2), "w", buffering=1, encoding="utf-8", errors="backslashreplace")
+                                sys.stdout = os.fdopen(
+                                    os.dup(1), "w", buffering=1, encoding="utf-8", errors="backslashreplace"
+                                )
+                                sys.stderr = os.fdopen(
+                                    os.dup(2), "w", buffering=1, encoding="utf-8", errors="backslashreplace"
+                                )
                                 isolate_environment(directory)
                                 code = worker(payload, item["output"])
                         except KeyboardInterrupt:
@@ -167,8 +180,11 @@ def run_tasks(tasks, worker, root: Path, jobs: int = 3, inline=None):
                 _directory, item = location(key, "inline")
                 code = 128 + cancelled_signal
                 try:
-                    with item["log"].open("w", encoding="utf-8") as stream, \
-                            contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
+                    with (
+                        item["log"].open("w", encoding="utf-8") as stream,
+                        contextlib.redirect_stdout(stream),
+                        contextlib.redirect_stderr(stream),
+                    ):
                         code = worker(payload, item["output"])
                 finally:
                     item["seconds"] = round(time.monotonic() - item.pop("started"), 6)
@@ -196,12 +212,14 @@ def run_tasks(tasks, worker, root: Path, jobs: int = 3, inline=None):
         # 取消收尾本身不接受第二个终止信号；所有部分结果收齐后再向调用方报告取消。
         for sig in cancel_signals:
             signal.signal(sig, signal.SIG_IGN)
+
         def reap_ready():
             for pid in list(active):
                 waited, status = os.waitpid(pid, os.WNOHANG)
                 if waited:
                     remember(pid, status)
             return bool(active)
+
         _stop_families(list(families), reap=reap_ready)
         for pid in list(active):
             _pid, status = os.waitpid(pid, 0)

@@ -6,6 +6,7 @@ e2e_browser.py 直跑）。锁只协调参与者：外部占用者与未登记�
 测试只用合成锁目录（AE_LOCK_DIR 指向临时目录）与登记过的合成子进程，
 不与并行会话的真实互斥发生冲突。
 """
+
 from __future__ import annotations
 
 import json
@@ -130,8 +131,7 @@ class AcquireReleaseTests(TemporaryLockDirTestCase):
             self.assertEqual(hi.held_from_env(env), {"synthetic-a", "synthetic-b"})
         finally:
             hi.release(handle, env)
-        self.assertEqual(hi.held_from_env(env), {"synthetic-a"},
-                         "借入资源的豁免标记属于祖先，release 不得清掉")
+        self.assertEqual(hi.held_from_env(env), {"synthetic-a"}, "借入资源的豁免标记属于祖先，release 不得清掉")
         # 新拿的 synthetic-b 已真正释放：别的进程可立即获取
         follower = WorkerScript(self, ["synthetic-b"], hold=0.05)
         proc, _marker = follower.start("after-mixed-release")
@@ -181,19 +181,25 @@ class WorkerScript:
         proc = subprocess.Popen(
             [sys.executable, str(script), payload, str(marker), str(self.hold)],
             env=env or self.test.child_env(),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            encoding="utf-8", errors="replace")
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         self.test.addCleanup(reap, proc)
         return proc, marker
 
 
 def json_dumps(value) -> str:
     import json
+
     return json.dumps(list(value))
 
 
 def shutil_rmtree(path: Path) -> None:
     import shutil
+
     shutil.rmtree(path, ignore_errors=True)
 
 
@@ -217,9 +223,11 @@ def wait_for_file(path: Path, timeout: float = 30.0) -> None:
 
 def assert_no_overlap(test: unittest.TestCase, first: Path, second: Path) -> None:
     """用 enter/exit 标记文件的 mtime 证明两个临界区没有重叠。"""
-    test.assertLessEqual(first.with_suffix(".exit").stat().st_mtime_ns,
-                         second.with_suffix(".enter").stat().st_mtime_ns,
-                         "临界区重叠：%s 未退出前 %s 已进入" % (first.name, second.name))
+    test.assertLessEqual(
+        first.with_suffix(".exit").stat().st_mtime_ns,
+        second.with_suffix(".enter").stat().st_mtime_ns,
+        "临界区重叠：%s 未退出前 %s 已进入" % (first.name, second.name),
+    )
 
 
 class CrossProcessMutexTests(TemporaryLockDirTestCase):
@@ -230,8 +238,7 @@ class CrossProcessMutexTests(TemporaryLockDirTestCase):
         proc_b, marker_b = worker.start("worktree-b", env=self.child_env())
         first, second = self._first_entrant((marker_a, marker_b))
         # 先进入者持有期间，后到者必须还在等锁
-        self.assertFalse(second.with_suffix(".enter").exists(),
-                         "先进入者持有 host-state 期间另一方进入了临界区")
+        self.assertFalse(second.with_suffix(".enter").exists(), "先进入者持有 host-state 期间另一方进入了临界区")
         wait_for_file(first.with_suffix(".exit"))
         wait_for_file(second.with_suffix(".enter"))
         wait_for_file(second.with_suffix(".exit"))
@@ -360,8 +367,13 @@ class LegacyEntryIntegrationTests(TemporaryLockDirTestCase):
     def test_discover_import_of_sensitive_module_holds_host_state(self):
         proc = subprocess.Popen(
             [sys.executable, "-c", self.IMPORT_PROBE.format(root=str(ROOT))],
-            env=self.child_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", errors="replace")
+            env=self.child_env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         self.addCleanup(reap, proc)
         first = proc.stdout.readline().strip()
         self.assertEqual(first, "imported", "敏感模块导入失败：%s" % first)
@@ -377,8 +389,7 @@ class LegacyEntryIntegrationTests(TemporaryLockDirTestCase):
         self.assertIn('require_for_module("tests.e2e_browser")', text)
         join_line = text.index('require_for_module("tests.e2e_browser")')
         first_server = text.index("start_server(")
-        self.assertLess(join_line, first_server,
-                        "e2e_browser 必须在启动任何服务之前加入隔离协议")
+        self.assertLess(join_line, first_server, "e2e_browser 必须在启动任何服务之前加入隔离协议")
 
 
 class RealEntryIntegrationTests(TemporaryLockDirTestCase):
@@ -394,12 +405,27 @@ class RealEntryIntegrationTests(TemporaryLockDirTestCase):
         env = self.child_env(AE_VERIFY_DIR=str(out_dir), AE_HOME=str(out_dir / "home"))
         started = time.monotonic()
         process = subprocess.Popen(
-            [sys.executable, str(ROOT / "verify.py"), "run",
-             "unit-related", "tests.test_ae_cli.AeCliTests.test_missing_subcommand_is_command_error",
-             "--quiet", "--out-dir", str(out_dir), "--phase", "development", "--reason",
-             "issue 52 隔离协议端到端"],
-            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            encoding="utf-8", errors="replace")
+            [
+                sys.executable,
+                str(ROOT / "verify.py"),
+                "run",
+                "unit-related",
+                "tests.test_ae_cli.AeCliTests.test_missing_subcommand_is_command_error",
+                "--quiet",
+                "--out-dir",
+                str(out_dir),
+                "--phase",
+                "development",
+                "--reason",
+                "issue 52 隔离协议端到端",
+            ],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         self.addCleanup(reap, process)
         wait_for_file(out_dir / "latest.json")
         run_id = json.loads((out_dir / "latest.json").read_text(encoding="utf-8"))["run_id"]
@@ -407,15 +433,15 @@ class RealEntryIntegrationTests(TemporaryLockDirTestCase):
         wait_for_file(run_dir / "record.json")
         time.sleep(0.6)  # 实际持锁窗口：不是入口启动时间，也不是产品测试的垫等待
         self.assertIsNone(process.poll(), "外部持有者尚未释放时入口不能结束")
-        self.assertFalse((run_dir / "unit-related.cases.json").exists(),
-                         "外部锁释放前不能执行敏感测试")
+        self.assertFalse((run_dir / "unit-related.cases.json").exists(), "外部锁释放前不能执行敏感测试")
         hi.release(holder, holder_env)
         stdout, stderr = process.communicate(timeout=120)
         self.assertEqual(process.returncode, 0, stdout + stderr)
         record = json.loads((run_dir / "record.json").read_text(encoding="utf-8"))
         group = record["groups"][0]
-        self.assertEqual(group["lock"]["resources"], ["host-state"],
-                         "敏感选择器（tests.test_ae_cli）应触发 host-state 锁")
+        self.assertEqual(
+            group["lock"]["resources"], ["host-state"], "敏感选择器（tests.test_ae_cli）应触发 host-state 锁"
+        )
         self.assertGreaterEqual(group["lock"]["wait_seconds"], 0.4, "入口等到了外部持有者释放")
         self.assertEqual(group["outcome"], "passed")
         # 入口拿锁后拉起 _unit-runner：敏感模块导入按借入处理，没有自锁
@@ -428,9 +454,12 @@ class RealEntryIntegrationTests(TemporaryLockDirTestCase):
         env = self.child_env(AE_VERIFY_DIR=str(out_dir))
         popen_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
         wrapper = subprocess.Popen(
-            [sys.executable, str(ROOT / "verify.py"), "run", "--group", "unit",
-             "--out-dir", str(out_dir), "--quiet"],
-            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **popen_kwargs)
+            [sys.executable, str(ROOT / "verify.py"), "run", "--group", "unit", "--out-dir", str(out_dir), "--quiet"],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **popen_kwargs,
+        )
         try:
             pointer = out_dir / "latest.json"
             deadline = time.monotonic() + 30
@@ -495,17 +524,25 @@ class ModuleRequirementTests(TemporaryLockDirTestCase):
 
     def test_declared_sensitive_modules_really_touch_host_state(self):
         """防清单腐烂：列入敏感清单的模块必须能找到触及宿主机状态的真实路径。"""
-        signals = ("start_server", "free_port", "spawn_server", '"doctor"', "'doctor'",
-                   "probe_port(", "list_processes()", "serve.ReviewServer(")
+        signals = (
+            "start_server",
+            "free_port",
+            "spawn_server",
+            '"doctor"',
+            "'doctor'",
+            "probe_port(",
+            "list_processes()",
+            "serve.ReviewServer(",
+        )
         for name in hi.MODULE_RESOURCES:
             text = (ROOT / (name.replace(".", "/") + ".py")).read_text(encoding="utf-8")
-            self.assertTrue(any(token in text for token in signals),
-                            "%s 里找不到触及宿主机状态的特征，不应列入敏感清单" % name)
+            self.assertTrue(
+                any(token in text for token in signals), "%s 里找不到触及宿主机状态的特征，不应列入敏感清单" % name
+            )
 
     def test_pure_logic_modules_are_not_declared(self):
         for name in ("tests.test_i18n", "tests.test_script_formats", "tests.test_host_isolation"):
-            self.assertNotIn(name, hi.MODULE_RESOURCES,
-                             "%s 是纯逻辑模块，不该被资源锁阻塞" % name)
+            self.assertNotIn(name, hi.MODULE_RESOURCES, "%s 是纯逻辑模块，不该被资源锁阻塞" % name)
 
     def test_require_for_module_acquires_declared_resources(self):
         env = self.child_env()
@@ -524,8 +561,7 @@ class ModuleRequirementTests(TemporaryLockDirTestCase):
         try:
             wait_for_file(marker.with_suffix(".enter"))
             with self.assertRaises(hi.LockTimeoutError):
-                hi.require_for_module("tests.test_ae_cli",
-                                      env=self.child_env(AE_LOCK_WAIT_SECONDS="0.2"))
+                hi.require_for_module("tests.test_ae_cli", env=self.child_env(AE_LOCK_WAIT_SECONDS="0.2"))
         finally:
             self.assertEqual(proc.wait(timeout=30), 0)
 
@@ -533,11 +569,12 @@ class ModuleRequirementTests(TemporaryLockDirTestCase):
         """discover 的顶层名（无 tests. 前缀）与显式包名查到同一份资源要求。"""
         for packaged in hi.MODULE_RESOURCES:
             top_level = packaged.split(".", 1)[1]
-            self.assertEqual(hi.resources_for_module(packaged),
-                             hi.MODULE_RESOURCES[packaged])
-            self.assertEqual(hi.resources_for_module(top_level),
-                             hi.MODULE_RESOURCES[packaged],
-                             "顶层名 %s 查表落空：discover 直跑时锁协议失效" % top_level)
+            self.assertEqual(hi.resources_for_module(packaged), hi.MODULE_RESOURCES[packaged])
+            self.assertEqual(
+                hi.resources_for_module(top_level),
+                hi.MODULE_RESOURCES[packaged],
+                "顶层名 %s 查表落空：discover 直跑时锁协议失效" % top_level,
+            )
         self.assertIsNone(hi.resources_for_module("tests.test_i18n"))
         self.assertIsNone(hi.resources_for_module("test_i18n"))
         self.assertIsNone(hi.resources_for_module("some_other.test_ae_cli"))
@@ -545,16 +582,24 @@ class ModuleRequirementTests(TemporaryLockDirTestCase):
     def test_discover_loaded_sensitive_module_acquires_host_state(self):
         """loader.discover 真实加载敏感模块：导入即取 host-state 锁（R1 回归）。"""
         probe = self.DISCOVER_PROBE.format(root=str(ROOT), tests_dir=str(ROOT / "tests"))
-        proc = subprocess.run([sys.executable, "-c", probe], env=self.child_env(),
-                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+        proc = subprocess.run(
+            [sys.executable, "-c", probe],
+            env=self.child_env(),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+        )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         report = json.loads(proc.stdout.strip().splitlines()[-1])
         self.assertEqual(report["errors"], [])
         self.assertTrue(report["ids"], "discover 应收集到敏感模块的用例")
-        self.assertTrue(report["ids"][0].startswith("test_host_interference."),
-                        "加载形态应是顶层名（无 tests. 前缀），实测：%s" % report["ids"][0])
-        self.assertIn("host-state", report["held"],
-                      "discover 加载的敏感模块没有取 host-state 锁")
+        self.assertTrue(
+            report["ids"][0].startswith("test_host_interference."),
+            "加载形态应是顶层名（无 tests. 前缀），实测：%s" % report["ids"][0],
+        )
+        self.assertIn("host-state", report["held"], "discover 加载的敏感模块没有取 host-state 锁")
 
     def test_open_windows_lock_configures_closehandle_argtypes_and_restype(self):
         import ctypes
@@ -582,8 +627,10 @@ class ModuleRequirementTests(TemporaryLockDirTestCase):
             def open_osfhandle(_h, _flags):
                 raise OSError("synthetic osfhandle failure")
 
-        with mock.patch.object(ctypes, "WinDLL", return_value=FakeKernel32(), create=True), \
-                mock.patch.dict(sys.modules, {"msvcrt": FakeMsvcrt}):
+        with (
+            mock.patch.object(ctypes, "WinDLL", return_value=FakeKernel32(), create=True),
+            mock.patch.dict(sys.modules, {"msvcrt": FakeMsvcrt}),
+        ):
             with self.assertRaises(OSError):
                 hi._open_windows_lock(self.lock_root / "x.lock", "host-state", 1.0, 0.0)
         self.assertEqual(seen["CloseHandle"], ([wintypes.HANDLE], wintypes.BOOL))

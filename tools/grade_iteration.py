@@ -6,6 +6,7 @@
 每个 run 目录写 grading.json（字段 text / passed / evidence，供 skill-creator 的 viewer 与汇总脚本使用）。
 manual.json 格式：{"<断言原文>": {"passed": true, "evidence": "..."}}
 """
+
 from __future__ import annotations
 
 import json
@@ -48,7 +49,10 @@ def auto(case: str, out: Path, original: Path) -> dict[str, tuple[bool, str]]:
         h = idx.read_text(encoding="utf-8") if idx.exists() else ""
         need = ["外卖套餐提价 1 元", "咖啡豆采购价上涨 9%", "各位好，今天汇报三季度经营情况"]
         miss = [s for s in need if s not in h]
-        r["01"] = (idx.exists() and not miss, f"index.html {'存在' if idx.exists() else '不存在'}；缺少：{miss or '无'}")
+        r["01"] = (
+            idx.exists() and not miss,
+            f"index.html {'存在' if idx.exists() else '不存在'}；缺少：{miss or '无'}",
+        )
     elif case == "apply-notes-and-resolve":
         p3 = section(rep, 3)
         kpi = re.search(r'class="kpi"[^>]*>(.*?)<', p3)
@@ -59,22 +63,40 @@ def auto(case: str, out: Path, original: Path) -> dict[str, tuple[bool, str]]:
         r["02"] = (old not in s4 and new in s4, f"旧句仍在：{old in s4}；新句出现：{new in s4}")
         r6, s6 = section(rep, 6), script_page(scr, 6)
         ok6 = all("评估外卖套餐提价方案" in x and "提价 1 元" not in x for x in (r6, s6))
-        r["03"] = (ok6, f"报告第 6 页含新说法 {'评估外卖套餐提价方案' in r6}、旧说法 {'提价 1 元' in r6}；"
-                        f"讲稿第 6 页含新说法 {'评估外卖套餐提价方案' in s6}、旧说法 {'提价 1 元' in s6}")
+        r["03"] = (
+            ok6,
+            f"报告第 6 页含新说法 {'评估外卖套餐提价方案' in r6}、旧说法 {'提价 1 元' in r6}；"
+            f"讲稿第 6 页含新说法 {'评估外卖套餐提价方案' in s6}、旧说法 {'提价 1 元' in s6}",
+        )
         orep = (original / "report.html").read_text(encoding="utf-8")
         oscr = (original / "script.md").read_text(encoding="utf-8")
-        added = [f"{name}第{n}页" for n in (5, 6) for name, a, b in
-                 (("报告", section(orep, n), section(rep, n)), ("讲稿", script_page(oscr, n), script_page(scr, n)))
-                 if b.count("供应商") > a.count("供应商")]
+        added = [
+            f"{name}第{n}页"
+            for n in (5, 6)
+            for name, a, b in (
+                ("报告", section(orep, n), section(rep, n)),
+                ("讲稿", script_page(oscr, n), script_page(scr, n)),
+            )
+            if b.count("供应商") > a.count("供应商")
+        ]
         notes = {n.get("id"): n for n in notes_of(out)}
         st5 = notes.get("n5ask", {}).get("status")
         r["04"] = (not added and st5 == "open", f"新增「供应商」的位置：{added or '无'}；n5ask 状态：{st5}")
-        bad = [k for k in ("n3kpi", "n4talk", "n6both")
-               if notes.get(k, {}).get("status") != "resolved" or not str(notes.get(k, {}).get("resolution", "")).strip()]
+        bad = [
+            k
+            for k in ("n3kpi", "n4talk", "n6both")
+            if notes.get(k, {}).get("status") != "resolved" or not str(notes.get(k, {}).get("resolution", "")).strip()
+        ]
         r["05"] = (not bad, f"未标已处理或缺处理说明：{bad or '无'}")
-        idx = (out / "review" / "index.html").read_text(encoding="utf-8") if (out / "review" / "index.html").exists() else ""
-        r["06"] = ("评估外卖套餐提价方案" in idx and "外卖套餐提价 1 元" not in idx,
-                   f"index.html 含新说法 {'评估外卖套餐提价方案' in idx}、含旧说法 {'外卖套餐提价 1 元' in idx}")
+        idx = (
+            (out / "review" / "index.html").read_text(encoding="utf-8")
+            if (out / "review" / "index.html").exists()
+            else ""
+        )
+        r["06"] = (
+            "评估外卖套餐提价方案" in idx and "外卖套餐提价 1 元" not in idx,
+            f"index.html 含新说法 {'评估外卖套餐提价方案' in idx}、含旧说法 {'外卖套餐提价 1 元' in idx}",
+        )
     elif case == "import-pasted-notes":
         ns = notes_of(out)
         pages = sorted(int(n.get("page", 0)) for n in ns)
@@ -101,7 +123,9 @@ def main() -> int:
         original = EVALS / case_dir.name / "files"
         for run in sorted(p for p in case_dir.iterdir() if (p / "outputs").is_dir()):
             got = auto(case_dir.name, run / "outputs", original)
-            manual = json.loads((run / "manual.json").read_text(encoding="utf-8")) if (run / "manual.json").exists() else {}
+            manual = (
+                json.loads((run / "manual.json").read_text(encoding="utf-8")) if (run / "manual.json").exists() else {}
+            )
             exps = []
             for k, text in enumerate(meta["assertions"], 1):
                 key = f"{k:02d}"
@@ -114,11 +138,20 @@ def main() -> int:
                     passed, ev = False, "未判定"
                 exps.append({"text": text, "passed": passed, "evidence": ev})
             n = sum(e["passed"] for e in exps)
-            grading = {"expectations": exps, "summary": {"passed": n, "failed": len(exps) - n, "total": len(exps),
-                                                          "pass_rate": round(n / len(exps), 2) if exps else 0}}
+            grading = {
+                "expectations": exps,
+                "summary": {
+                    "passed": n,
+                    "failed": len(exps) - n,
+                    "total": len(exps),
+                    "pass_rate": round(n / len(exps), 2) if exps else 0,
+                },
+            }
             (run / "grading.json").write_text(json.dumps(grading, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"{case_dir.name}/{run.name}: {n}/{len(exps)}" + "".join(
-                f"\n   {'✓' if e['passed'] else '✗'} {e['text'][:40]}… {e['evidence'][:110]}" for e in exps))
+            print(
+                f"{case_dir.name}/{run.name}: {n}/{len(exps)}"
+                + "".join(f"\n   {'✓' if e['passed'] else '✗'} {e['text'][:40]}… {e['evidence'][:110]}" for e in exps)
+            )
     return 0
 
 

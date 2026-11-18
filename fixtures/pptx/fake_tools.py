@@ -1,4 +1,5 @@
 """为 PPTX 管线测试生成可直接启动的合成工具。"""
+
 import os
 import sys
 from pathlib import Path

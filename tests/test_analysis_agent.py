@@ -1,4 +1,5 @@
 """Agent 侧契约：analysis 事件的投递、去重、跨队列领取顺序、旧等待进程不领取、命令行与 HTTP 接口形状。"""
+
 from __future__ import annotations
 
 import io
@@ -30,7 +31,7 @@ import fsutil  # noqa: E402
 import notes as notes_cli  # noqa: E402
 import notes_store as store  # noqa: E402
 
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
 
 import serve  # noqa: E402
 import wakeup  # noqa: E402
@@ -61,6 +62,7 @@ class Desktop:
             except socket.timeout:
                 continue
             with client:
+
                 def exact(n):
                     data = b""
                     while len(data) < n:
@@ -69,6 +71,7 @@ class Desktop:
                             return None
                         data += part
                     return data
+
                 while True:
                     head = exact(4)
                     if not head:
@@ -79,8 +82,13 @@ class Desktop:
                     if method == "thread-follower-start-turn":
                         self.requests.append(request)
                         result = {"result": {"turn": {"id": "fixture-turn", "status": "inProgress"}}}
-                    reply = {"type": "response", "requestId": request["requestId"],
-                             "resultType": "success", "result": result, "handledByClientId": "owner"}
+                    reply = {
+                        "type": "response",
+                        "requestId": request["requestId"],
+                        "resultType": "success",
+                        "result": result,
+                        "handledByClientId": "owner",
+                    }
                     raw = json.dumps(reply).encode()
                     client.sendall(struct.pack("<I", len(raw)) + raw)
 
@@ -121,18 +129,22 @@ class AnalysisAgentTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         home_dir = str(self.root / "home")
-        self.env = patch.dict(os.environ, {
-            "AE_HOME": str(self.root / "ledger"),
-            "HOME": home_dir,
-            "USERPROFILE": home_dir,
-            "CODEX_THREAD_ID": THREAD,
-        })
+        self.env = patch.dict(
+            os.environ,
+            {
+                "AE_HOME": str(self.root / "ledger"),
+                "HOME": home_dir,
+                "USERPROFILE": home_dir,
+                "CODEX_THREAD_ID": THREAD,
+            },
+        )
         self.env.start()
         self.addCleanup(self.env.stop)
         self.review = self.root / "review"
         self.review.mkdir(mode=0o700)
         (self.review / "review.json").write_text(
-            json.dumps({"reviewId": "synthetic-analysis", "reviewDir": str(self.review)}))
+            json.dumps({"reviewId": "synthetic-analysis", "reviewDir": str(self.review)})
+        )
         (self.review / "index.html").write_text("<!doctype html><title>Synthetic</title>")
         self.desktop = None
 
@@ -159,12 +171,12 @@ class AnalysisAgentTests(unittest.TestCase):
         self.assertEqual(len(self.desktop.requests), 1)
         prompt = self.desktop.prompt()
         self.assertIn("analysis", prompt.lower())
-        self.assertIn("notes.py analysis", prompt)               # 读一轮上下文的命令
-        self.assertIn("analysis-writeback", prompt)              # 写回轮次的命令
-        self.assertIn("--events analysis", prompt)               # 领取命令声明接收分析事件
-        self.assertIn("source material", prompt)                 # 默认只查审阅的原始材料
-        self.assertNotIn("rebuild the same review", prompt)      # 不要求重建对照页
-        self.assertNotIn("resolve each annotation", prompt)      # 不要求改稿收尾
+        self.assertIn("notes.py analysis", prompt)  # 读一轮上下文的命令
+        self.assertIn("analysis-writeback", prompt)  # 写回轮次的命令
+        self.assertIn("--events analysis", prompt)  # 领取命令声明接收分析事件
+        self.assertIn("source material", prompt)  # 默认只查审阅的原始材料
+        self.assertNotIn("rebuild the same review", prompt)  # 不要求重建对照页
+        self.assertNotIn("resolve each annotation", prompt)  # 不要求改稿收尾
         # 同一轮次重复投递被去重键拦下
         again = wakeup.deliver(self.review, "analysis", round_no)
         self.assertEqual(again["state"], "accepted")
@@ -191,8 +203,16 @@ class AnalysisAgentTests(unittest.TestCase):
         wakeup.bind_wait(self.review, "Claude Code", "session-a")
         note = self.add_note()
         state, round_no = analysis_store.start(self.review, note["id"])
-        command = ["claim", str(self.review), "--events", "analysis",
-                   "--harness", "Claude Code", "--session", "session-b"]
+        command = [
+            "claim",
+            str(self.review),
+            "--events",
+            "analysis",
+            "--harness",
+            "Claude Code",
+            "--session",
+            "session-b",
+        ]
         self.assertEqual(notes_cli.main(command), 2)
         self.assertEqual(analysis_store.load(self.review, state["id"])["rounds"][0]["status"], "submitted")
         command[-1] = "session-a"
@@ -203,8 +223,8 @@ class AnalysisAgentTests(unittest.TestCase):
         """批次交出在先、轮次在后：合在一起领取时先领批次。"""
         first = self.add_note()
         self.add_note(text="第 5 页配色太浅", page=5)
-        store.handoff_submit(self.review, "先交的批次")   # 批次 1：first + second
-        analysis_store.start(self.review, first["id"])     # first 移出批次，开题轮次排队在后
+        store.handoff_submit(self.review, "先交的批次")  # 批次 1：first + second
+        analysis_store.start(self.review, first["id"])  # first 移出批次，开题轮次排队在后
         got = json.loads(_cli_out("claim", str(self.review), "--events", "analysis"))
         self.assertTrue(got["claimed"])
         self.assertEqual(got.get("event", "handoff"), "handoff")
@@ -213,7 +233,7 @@ class AnalysisAgentTests(unittest.TestCase):
     def test_claim_prefers_earlier_round_across_queues(self):
         """轮次交出在先、批次在后：先领轮次；轮次在手上时一次只处理一项，领不到批次。"""
         note = self.add_note()
-        analysis_store.start(self.review, note["id"])      # 开题轮次先排队
+        analysis_store.start(self.review, note["id"])  # 开题轮次先排队
         self.add_note(text="第 5 页配色太浅", page=5)
         store.handoff_submit(self.review, "后交的批次")
         got = json.loads(_cli_out("claim", str(self.review), "--events", "analysis"))
@@ -303,7 +323,7 @@ class AnalysisAgentTests(unittest.TestCase):
         self.assertEqual(code, 3, output.getvalue())
         prefix = "Then claim this exact batch: "
         line = next(line for line in self.desktop.prompt().splitlines() if line.startswith(prefix))
-        command = fsutil.split_cli(line[len(prefix):])
+        command = fsutil.split_cli(line[len(prefix) :])
         received = subprocess.run(command, capture_output=True, text=True, timeout=10)
         self.assertEqual(received.returncode, 3, received.stdout + received.stderr)
         self.assertFalse(json.loads(received.stdout)["claimed"])
@@ -322,8 +342,7 @@ class AnalysisAgentTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()) as output:
             code = notes_cli.main(["claim", str(self.review), "--events", "analysis", "--stage", "review"])
         self.assertEqual(code, 3, output.getvalue())
-        self.assertEqual([item["status"] for item in store.handoff_load(self.review)["items"]],
-                         ["review", "pending"])
+        self.assertEqual([item["status"] for item in store.handoff_load(self.review)["items"]], ["review", "pending"])
         received = json.loads(_cli_out("claim", str(self.review), "--events", "analysis"))
         self.assertEqual((received["seq"], received["stage"]), (2, "draft"))
 
@@ -336,23 +355,43 @@ class AnalysisAgentTests(unittest.TestCase):
         state, _round_no = analysis_store.start(self.review, self.add_note(text="分析问题")["id"])
         self.assertEqual(notes_cli.main(["claim", str(self.review), "--events", "analysis"]), 2)
         self.assertEqual(notes_cli.main(["claim", str(self.review)]), 2)
-        self.assertEqual([item["status"] for item in store.handoff_load(self.review)["items"]],
-                         ["claimed", "pending"])
+        self.assertEqual([item["status"] for item in store.handoff_load(self.review)["items"]], ["claimed", "pending"])
         self.assertEqual(analysis_store.load(self.review, state["id"])["rounds"][0]["status"], "submitted")
 
     def test_old_waiter_and_plain_claim_cannot_take_analysis_round(self):
         """不带显式参数的等待与领取领不到分析轮次（旧进程不受影响）。"""
         note = self.add_note()
         state, round_no = analysis_store.start(self.review, note["id"])
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("CODEX_THREAD_ID", "CLAUDECODE", "AE_HARNESS", "AE_SESSION_ID", "AE_LOCALE")}
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("CODEX_THREAD_ID", "CLAUDECODE", "AE_HARNESS", "AE_SESSION_ID", "AE_LOCALE")
+        }
         env.update(AE_HOME=str(self.root / "ledger"), PYTHONDONTWRITEBYTECODE="1")
-        plain = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "claim", str(self.review)],
-                               env=env, capture_output=True, text=True, timeout=10)
-        self.assertEqual(plain.returncode, 3, plain.stdout + plain.stderr)   # 没有可领的批次
-        waited = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "wait", str(self.review),
-                                 "--timeout", "0.5", "--interval", "0.1"],
-                                env=env, capture_output=True, text=True, timeout=10)
+        plain = subprocess.run(
+            [sys.executable, str(SCRIPTS / "notes.py"), "claim", str(self.review)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(plain.returncode, 3, plain.stdout + plain.stderr)  # 没有可领的批次
+        waited = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "notes.py"),
+                "wait",
+                str(self.review),
+                "--timeout",
+                "0.5",
+                "--interval",
+                "0.1",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
         self.assertEqual(waited.returncode, 3, waited.stdout + waited.stderr)
         rounds = analysis_store.load(self.review, state["id"])["rounds"]
         self.assertEqual([r["status"] for r in rounds], ["submitted"])
@@ -361,14 +400,32 @@ class AnalysisAgentTests(unittest.TestCase):
         """带 --events analysis 的等待领得到轮次，输出焦点问题与写回指引。"""
         note = self.add_note()
         state, round_no = analysis_store.start(self.review, note["id"])
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("CODEX_THREAD_ID", "CLAUDECODE", "AE_HARNESS", "AE_SESSION_ID", "AE_LOCALE")}
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("CODEX_THREAD_ID", "CLAUDECODE", "AE_HARNESS", "AE_SESSION_ID", "AE_LOCALE")
+        }
         env.update(AE_HOME=str(self.root / "ledger"), PYTHONDONTWRITEBYTECODE="1")
-        waited = subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "wait", str(self.review),
-                                 "--timeout", "2", "--interval", "0.1", "--events", "analysis"],
-                                env=env, capture_output=True, text=True, timeout=15)
+        waited = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "notes.py"),
+                "wait",
+                str(self.review),
+                "--timeout",
+                "2",
+                "--interval",
+                "0.1",
+                "--events",
+                "analysis",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
         self.assertEqual(waited.returncode, 0, waited.stdout + waited.stderr)
-        self.assertIn(note["text"], waited.stdout)   # 焦点问题
+        self.assertIn(note["text"], waited.stdout)  # 焦点问题
         self.assertIn("analysis-writeback", waited.stdout)
         rounds = analysis_store.load(self.review, state["id"])["rounds"]
         self.assertEqual(rounds[0]["status"], "claimed")
@@ -384,11 +441,31 @@ class AnalysisAgentTests(unittest.TestCase):
         self.assertEqual(context["round"], round_no)
         self.assertEqual(context["baseRev"], claimed["baseRev"])
         self.assertEqual(context["items"], [])
-        proposals = [{"key": "p1", "text": "用年度还是季度口径验证？", "short": "验证口径",
-                      "options": [{"id": "Y", "label": "年度"}, {"id": "S", "label": "季度"}],
-                      "recommend": "Y", "parent": None}]
-        out = json.loads(_cli_json_in(["analysis-writeback", str(self.review), "--round", str(round_no),
-                                       "--base-rev", str(claimed["baseRev"]), "--proposals", "-"], proposals))
+        proposals = [
+            {
+                "key": "p1",
+                "text": "用年度还是季度口径验证？",
+                "short": "验证口径",
+                "options": [{"id": "Y", "label": "年度"}, {"id": "S", "label": "季度"}],
+                "recommend": "Y",
+                "parent": None,
+            }
+        ]
+        out = json.loads(
+            _cli_json_in(
+                [
+                    "analysis-writeback",
+                    str(self.review),
+                    "--round",
+                    str(round_no),
+                    "--base-rev",
+                    str(claimed["baseRev"]),
+                    "--proposals",
+                    "-",
+                ],
+                proposals,
+            )
+        )
         self.assertEqual(out["nextRound"], round_no + 1)
         after = analysis_store.load(self.review, state["id"])
         self.assertEqual(after["rounds"][1]["items"][0]["key"], "S:p1")
@@ -413,9 +490,14 @@ class AnalysisAgentTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             worker.join(2)
+
         self.addCleanup(close)
-        headers = {"Host": f"127.0.0.1:{server.port}", "Origin": f"http://127.0.0.1:{server.port}",
-                   "Content-Type": "application/json", "X-AE-Review": "synthetic-analysis"}
+        headers = {
+            "Host": f"127.0.0.1:{server.port}",
+            "Origin": f"http://127.0.0.1:{server.port}",
+            "Content-Type": "application/json",
+            "X-AE-Review": "synthetic-analysis",
+        }
 
         code, _, raw = serve._req(server.port, "GET", "/api/health", {"Host": f"127.0.0.1:{server.port}"})
         self.assertEqual(code, 200)
@@ -433,22 +515,26 @@ class AnalysisAgentTests(unittest.TestCase):
         self.assertEqual(started["analysis"]["sourceNote"], note["id"])
         self.assertEqual(started["note"]["status"], "held")
 
-        code, _, raw = serve._req(server.port, "GET", "/api/analysis?analysis=" + started["analysis"]["id"],
-                                 {"Host": f"127.0.0.1:{server.port}"})
+        code, _, raw = serve._req(
+            server.port,
+            "GET",
+            "/api/analysis?analysis=" + started["analysis"]["id"],
+            {"Host": f"127.0.0.1:{server.port}"},
+        )
         self.assertEqual(code, 200, raw)
         detail = json.loads(raw)
         self.assertEqual(detail["analysis"]["focus"], note["text"])
         self.assertEqual(detail["context"]["round"], 1)
         self.assertEqual(detail["queue"], {"submitted": 1, "claimed": 0})
-        code, _, _ = serve._req(server.port, "GET", "/api/analysis?analysis=missing",
-                               {"Host": f"127.0.0.1:{server.port}"})
+        code, _, _ = serve._req(
+            server.port, "GET", "/api/analysis?analysis=missing", {"Host": f"127.0.0.1:{server.port}"}
+        )
         self.assertIn(code, (400, 404))
 
         busy_note = self.add_note(text="已经交给 Agent 改稿的批注")
         store.handoff_submit(self.review)
         store.handoff_claim(self.review)
-        code, _, raw = serve._req(server.port, "POST", "/api/analysis/start", headers,
-                                  {"noteId": busy_note["id"]})
+        code, _, raw = serve._req(server.port, "POST", "/api/analysis/start", headers, {"noteId": busy_note["id"]})
         self.assertEqual(code, 400, raw)
         self.assertEqual(json.loads(raw)["code"], "note-in-progress")
 
@@ -459,11 +545,21 @@ class AnalysisAgentTests(unittest.TestCase):
         self.assertEqual(code, 400)
 
         aid = started["analysis"]["id"]
-        code, _, raw = serve._req(server.port, "POST", "/api/analysis/answer", headers,
-                                  {"analysis": aid, "round": 1, "key": "S:p1", "value": {"kind": "accept"}})
-        self.assertEqual(code, 400, raw)   # 该轮还没有这一项
-        code, _, raw = serve._req(server.port, "POST", "/api/analysis/answer", headers,
-                                  {"analysis": aid, "round": 99, "key": "S:p1", "value": {"kind": "accept"}})
+        code, _, raw = serve._req(
+            server.port,
+            "POST",
+            "/api/analysis/answer",
+            headers,
+            {"analysis": aid, "round": 1, "key": "S:p1", "value": {"kind": "accept"}},
+        )
+        self.assertEqual(code, 400, raw)  # 该轮还没有这一项
+        code, _, raw = serve._req(
+            server.port,
+            "POST",
+            "/api/analysis/answer",
+            headers,
+            {"analysis": aid, "round": 99, "key": "S:p1", "value": {"kind": "accept"}},
+        )
         self.assertEqual(code, 404)
 
     def test_http_analysis_submit_checks_the_receiver(self):
@@ -471,9 +567,21 @@ class AnalysisAgentTests(unittest.TestCase):
         binding = wakeup.bind_wait(self.review, "Claude Code", "session-a")
         state, round_no = analysis_store.start(self.review, self.add_note()["id"])
         claimed = analysis_store.claim(self.review)
-        result = analysis_store.writeback(self.review, state["id"], round_no, claimed["baseRev"],
-                                         [{"key": "p1", "text": "采用哪个口径？", "short": "口径",
-                                           "options": [{"id": "Y", "label": "年度"}], "recommend": "Y"}])
+        result = analysis_store.writeback(
+            self.review,
+            state["id"],
+            round_no,
+            claimed["baseRev"],
+            [
+                {
+                    "key": "p1",
+                    "text": "采用哪个口径？",
+                    "short": "口径",
+                    "options": [{"id": "Y", "label": "年度"}],
+                    "recommend": "Y",
+                }
+            ],
+        )
         server = serve.ReviewServer(self.review, 0, log_to_file=False)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
@@ -482,9 +590,14 @@ class AnalysisAgentTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             worker.join(2)
+
         self.addCleanup(close)
-        headers = {"Host": f"127.0.0.1:{server.port}", "Origin": f"http://127.0.0.1:{server.port}",
-                   "Content-Type": "application/json", "X-AE-Review": "synthetic-analysis"}
+        headers = {
+            "Host": f"127.0.0.1:{server.port}",
+            "Origin": f"http://127.0.0.1:{server.port}",
+            "Content-Type": "application/json",
+            "X-AE-Review": "synthetic-analysis",
+        }
         body = {"analysis": state["id"], "round": result["nextRound"], "receiverBindingId": "stale"}
         code, _, raw = serve._req(server.port, "POST", "/api/analysis/submit", headers, body)
         self.assertEqual((code, json.loads(raw).get("code")), (409, "receiver-mismatch"))
@@ -505,14 +618,17 @@ class AnalysisAgentTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             worker.join(2)
+
         self.addCleanup(close)
         good = {"Host": f"127.0.0.1:{server.port}"}
         same = {**good, "Origin": f"http://127.0.0.1:{server.port}", "Content-Type": "application/json"}
         note = self.add_note()
-        guards = [({**same, "Host": "evil.example"}, 421),
-                  ({**same, "Origin": "http://evil.example"}, 403),
-                  ({k: v for k, v in same.items() if k != "Origin"}, 403),
-                  ({**same, "Content-Type": "text/plain"}, 415)]
+        guards = [
+            ({**same, "Host": "evil.example"}, 421),
+            ({**same, "Origin": "http://evil.example"}, 403),
+            ({k: v for k, v in same.items() if k != "Origin"}, 403),
+            ({**same, "Content-Type": "text/plain"}, 415),
+        ]
         for headers, expected in guards:
             code, _, _raw = serve._req(server.port, "POST", "/api/analysis/start", headers, {"noteId": note["id"]})
             self.assertEqual(code, expected, headers)

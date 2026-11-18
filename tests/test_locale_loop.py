@@ -1,4 +1,5 @@
 """最小审阅闭环：生成时选择语言、页面内嵌词典、CLI 按优先级读取。"""
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,7 @@ SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 FIXTURE = ROOT / "fixtures" / "sample"
 sys.path.insert(0, str(SCRIPTS))
 
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
 
 import build_viewer  # noqa: E402
 import notes_store as store  # noqa: E402
@@ -28,8 +29,13 @@ def show(review: Path, args: list[str], env: dict[str, str] | None = None) -> su
     base = {k: v for k, v in os.environ.items() if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
     base.update(env or {})
     base["CLAUDECODE"] = ""
-    return subprocess.run([sys.executable, str(SCRIPTS / "notes.py"), "show", str(review), *args],
-                          capture_output=True, text=True, env=base, timeout=30)
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS / "notes.py"), "show", str(review), *args],
+        capture_output=True,
+        text=True,
+        env=base,
+        timeout=30,
+    )
 
 
 class BuildLocaleTests(unittest.TestCase):
@@ -62,8 +68,9 @@ class BuildLocaleTests(unittest.TestCase):
 
     def test_explicit_locale_is_stored_and_survives_rebuild(self):
         out = tmpdir() / "review"
-        first = build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.md", out,
-                                    locale="en-GB", no_scan_skills=True)
+        first = build_viewer.build(
+            FIXTURE / "report.html", FIXTURE / "script.md", out, locale="en-GB", no_scan_skills=True
+        )
         manifest = json.loads((out / "review.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["locale"], "en")
         self.assertEqual(manifest["build"]["locale"], "en")
@@ -217,6 +224,7 @@ class InstalledCopyTests(unittest.TestCase):
     def test_skill_copy_includes_both_catalogs(self):
         sys.path.insert(0, str(ROOT))
         import ae
+
         dst = tmpdir() / "annotation-everything"
         ae.copy_skill(ROOT / "skill" / "annotation-everything", dst)
         self.assertTrue((dst / "locales" / "zh-CN.json").is_file())

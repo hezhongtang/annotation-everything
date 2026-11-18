@@ -1,4 +1,5 @@
 """Persistent, review-scoped stop coordination."""
+
 from __future__ import annotations
 
 import contextlib
@@ -30,8 +31,9 @@ def operation(review, *, deadline=None):
     # Keep the state lock short so queries and hook registration can proceed during a stop.
     with contextlib.ExitStack() as stack:
         try:
-            stack.enter_context(fsutil.flocked(Path(review) / OPERATION_LOCK, exclusive=True,
-                                               nofollow=True, deadline=deadline))
+            stack.enter_context(
+                fsutil.flocked(Path(review) / OPERATION_LOCK, exclusive=True, nofollow=True, deadline=deadline)
+            )
         except BlockingIOError:
             raise OperationBusy from None
         yield
@@ -64,8 +66,13 @@ def _initial(review, manifest=None):
     rid = manifest.get("reviewId")
     if not isinstance(rid, str) or not rid:
         raise ValueError("review-identity-required")
-    return {"version": SCHEMA, "reviewId": rid, "state": "active", "stopId": None,
-            "components": {name: {"state": "active"} for name in COMPONENTS}}
+    return {
+        "version": SCHEMA,
+        "reviewId": rid,
+        "state": "active",
+        "stopId": None,
+        "components": {name: {"state": "active"} for name in COMPONENTS},
+    }
 
 
 def _read(review, manifest=None):
@@ -80,14 +87,23 @@ def _read(review, manifest=None):
     )
     value = json.loads(path.read_text(encoding="utf-8"))
     initial = _initial(review, manifest)
-    if not isinstance(value, dict) or value.get("version") != SCHEMA \
-            or value.get("reviewId") != initial["reviewId"] \
-            or value.get("state") not in ("active", "stopping", "stopped", "incomplete") \
-            or not isinstance(value.get("components"), dict):
+    if (
+        not isinstance(value, dict)
+        or value.get("version") != SCHEMA
+        or value.get("reviewId") != initial["reviewId"]
+        or value.get("state") not in ("active", "stopping", "stopped", "incomplete")
+        or not isinstance(value.get("components"), dict)
+    ):
         raise ValueError("invalid-stop-state")
     for name in COMPONENTS:
         component = value["components"].get(name)
-        if not isinstance(component, dict) or component.get("state") not in ("active", "pending", "stopping", "stopped", "incomplete"):
+        if not isinstance(component, dict) or component.get("state") not in (
+            "active",
+            "pending",
+            "stopping",
+            "stopped",
+            "incomplete",
+        ):
             raise ValueError("invalid-stop-component")
     return value
 
@@ -95,9 +111,9 @@ def _read(review, manifest=None):
 def _write(review, value):
     value["updatedAt"] = _now()
     value["revision"] = value.get("revision", 0) + 1
-    fsutil.atomic_write(Path(review) / STATE_FILE,
-                        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
-                        prefix=".annotation-stop-")
+    fsutil.atomic_write(
+        Path(review) / STATE_FILE, json.dumps(value, ensure_ascii=False, indent=2) + "\n", prefix=".annotation-stop-"
+    )
 
 
 def _edit(review, change):
@@ -141,17 +157,25 @@ def public_snapshot(value):
             public["error"] = error
         failures = component.get("failures")
         if isinstance(failures, list):
-            causes = list(dict.fromkeys(item["code"] for item in failures
-                                        if isinstance(item, dict) and isinstance(item.get("code"), str)))
+            causes = list(
+                dict.fromkeys(
+                    item["code"] for item in failures if isinstance(item, dict) and isinstance(item.get("code"), str)
+                )
+            )
             if causes:
                 public["causes"] = causes
     reasons = {name: item["error"] for name, item in components.items() if "error" in item}
     if value.get("incompleteReasons", {}).get("request") == STOP_INTERRUPTED:
         reasons["request"] = STOP_INTERRUPTED
-    return {"reviewId": value["reviewId"], "state": value["state"], "stopId": value["stopId"],
-            "attempts": value.get("attempts", 0) if value["stopId"] else 0,
-            "revision": value.get("revision", 0), "components": components,
-            "incompleteReasons": reasons}
+    return {
+        "reviewId": value["reviewId"],
+        "state": value["state"],
+        "stopId": value["stopId"],
+        "attempts": value.get("attempts", 0) if value["stopId"] else 0,
+        "revision": value.get("revision", 0),
+        "components": components,
+        "incompleteReasons": reasons,
+    }
 
 
 def public_status(review, *, manifest=None):
@@ -203,12 +227,14 @@ def begin(review, *, http=None):
         if running.get("state") != "stopped":
             value["components"]["http"] = {**running, "state": "stopping"}
         return value
+
     return _edit(review, change)
 
 
 def mark(review, name, state, error=None, *, stop_id=None, **details):
     if name not in COMPONENTS or state not in ("stopping", "stopped", "incomplete"):
         raise ValueError("invalid-stop-transition")
+
     def change(value):
         if stop_id is not None and value["stopId"] != stop_id:
             return value
@@ -227,8 +253,9 @@ def mark(review, name, state, error=None, *, stop_id=None, **details):
         components = value["components"]
         if any(components[item]["state"] == "incomplete" for item in COMPONENTS):
             value["state"] = "incomplete"
-            value["incompleteReasons"] = {item: components[item]["error"]
-                                          for item in COMPONENTS if components[item]["state"] == "incomplete"}
+            value["incompleteReasons"] = {
+                item: components[item]["error"] for item in COMPONENTS if components[item]["state"] == "incomplete"
+            }
         elif all(components[item]["state"] == "stopped" for item in COMPONENTS):
             value["state"] = "stopped"
             value["stoppedAt"] = _now()
@@ -236,6 +263,7 @@ def mark(review, name, state, error=None, *, stop_id=None, **details):
         else:
             value["state"] = "stopping"
         return value
+
     return _edit(review, change)
 
 
@@ -250,6 +278,7 @@ def start(review):
         value["components"] = {name: {"state": "active"} for name in COMPONENTS}
         value["components"]["hooks"] = {**hook_runtime, "state": "active"}
         return value
+
     return _edit(review, change)
 
 
@@ -259,12 +288,14 @@ def configure_hooks(review, configured):
         component.update(configured=bool(configured), tracked=True)
         component.setdefault("workers", [])
         return value
+
     return _edit(review, change)
 
 
 def hook_started(review, pid, seq, event):
     if not ledger.read_manifest(review).get("reviewId"):
         return
+
     def change(value):
         component = value["components"]["hooks"]
         component.update(configured=True, tracked=True)
@@ -272,17 +303,19 @@ def hook_started(review, pid, seq, event):
         workers.append({"pid": pid, "seq": seq, "event": event})
         component["workers"] = workers
         return value
+
     return _edit(review, change)
 
 
 def hook_finished(review, pid):
     if not ledger.read_manifest(review).get("reviewId"):
         return
+
     def change(value):
         component = value["components"]["hooks"]
-        component["workers"] = [worker for worker in component.get("workers", [])
-                                if worker.get("pid") != pid]
+        component["workers"] = [worker for worker in component.get("workers", []) if worker.get("pid") != pid]
         return value
+
     return _edit(review, change)
 
 
@@ -292,8 +325,12 @@ def _live_waiters(review):
         try:
             wait_mark = json.loads(path.read_text(encoding="utf-8"))
             pid = wait_mark.get("pid")
-            if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 \
-                    or path.name != ledger.wait_file(Path(review), pid).name:
+            if (
+                not isinstance(pid, int)
+                or isinstance(pid, bool)
+                or pid <= 0
+                or path.name != ledger.wait_file(Path(review), pid).name
+            ):
                 continue
             if ledger.pid_alive(pid):
                 live.append(pid)
@@ -311,8 +348,11 @@ def _protect_save(review, deadline, server, browser_protocol_required):
         if server is not None and browser_protocol_required and not server.browser_save_protocol_available():
             mark(review, "save", "incomplete", "save-protection-upgrade-required")
             return
-        registered = (bool(review_save.registered_pages(review, rid)) if server is None
-                      else server.browser_saves.has_registered_pages(rid))
+        registered = (
+            bool(review_save.registered_pages(review, rid))
+            if server is None
+            else server.browser_saves.has_registered_pages(rid)
+        )
         # A browser can queue more changes while an incomplete stop leaves HTTP running.
         if state["components"]["save"]["state"] == "stopped" and not registered:
             return
@@ -349,8 +389,13 @@ def _coordinate_hooks(review, server, deadline):
         return
     while True:
         workers = load(review)["components"]["hooks"].get("workers", [])
-        pids = sorted({worker.get("pid") for worker in workers
-                       if type(worker.get("pid")) is int and worker["pid"] > 0 and ledger.pid_alive(worker["pid"])})
+        pids = sorted(
+            {
+                worker.get("pid")
+                for worker in workers
+                if type(worker.get("pid")) is int and worker["pid"] > 0 and ledger.pid_alive(worker["pid"])
+            }
+        )
         if not pids:
             mark(review, "hooks", "stopped", pids=[], workers=[])
             return
@@ -359,7 +404,7 @@ def _coordinate_hooks(review, server, deadline):
             mark(review, "hooks", "incomplete", "background-hook-running", pids=pids)
             return
         mark(review, "hooks", "stopping", pids=pids)
-        time.sleep(min(.05, left))
+        time.sleep(min(0.05, left))
 
 
 def _coordinate_waiters(review, deadline):
@@ -375,7 +420,7 @@ def _coordinate_waiters(review, deadline):
             mark(review, "waiters", "incomplete", "waiter-exit-timeout", pids=waiters)
             return
         mark(review, "waiters", "stopping", pids=waiters)
-        time.sleep(min(.05, left))
+        time.sleep(min(0.05, left))
 
 
 def _coordinate_agent(review, deadline):
@@ -387,10 +432,14 @@ def _coordinate_agent(review, deadline):
     except BlockingIOError:
         result = {"state": "incomplete", "error": "agent-dispatch-timeout"}
     except Exception as error:
-        result = {"state": "incomplete", "error": "agent-cancel-unconfirmed",
-                  "detail": type(error).__name__}
-    mark(review, "agent", result["state"], result.get("error"),
-         **{k: v for k, v in result.items() if k not in ("state", "error")})
+        result = {"state": "incomplete", "error": "agent-cancel-unconfirmed", "detail": type(error).__name__}
+    mark(
+        review,
+        "agent",
+        result["state"],
+        result.get("error"),
+        **{k: v for k, v in result.items() if k not in ("state", "error")},
+    )
 
 
 def coordinate(review, *, deadline, server=None, browser_protocol_required=False):

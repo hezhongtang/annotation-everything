@@ -1,4 +1,5 @@
 """#114 历史与分析线的 CLI/HTTP 薄契约。"""
+
 from __future__ import annotations
 
 import io
@@ -16,11 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skill/annotation-everything/scripts"))
 sys.path.insert(0, str(ROOT))
 import host_isolation
+
 host_isolation.require_for_module(__name__)
 import analysis_store as analysis
 import notes as cli
 
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
 
 import serve
 import wakeup
@@ -39,9 +41,21 @@ class AnalysisHistoryAgentTests(unittest.TestCase):
         state, opening = analysis.start_question(self.review, "合成增长结论是否成立？")
         self.aid = state["id"]
         claimed = analysis.claim(self.review, seq=opening)
-        self.number = analysis.writeback(self.review, self.aid, opening, claimed["baseRev"], [{
-            "key": "scope", "text": "合成统计口径是什么？", "short": "统计口径", "recommend": "year",
-            "options": [{"id": "year", "label": "全年"}, {"id": "quarter", "label": "季度"}]}])["nextRound"]
+        self.number = analysis.writeback(
+            self.review,
+            self.aid,
+            opening,
+            claimed["baseRev"],
+            [
+                {
+                    "key": "scope",
+                    "text": "合成统计口径是什么？",
+                    "short": "统计口径",
+                    "recommend": "year",
+                    "options": [{"id": "year", "label": "全年"}, {"id": "quarter", "label": "季度"}],
+                }
+            ],
+        )["nextRound"]
         analysis.answer(self.review, self.aid, self.number, "S:scope", {"kind": "accept"})
         analysis.answer(self.review, self.aid, self.number, "Q:n1", {"kind": "accept"})
 
@@ -55,7 +69,9 @@ class AnalysisHistoryAgentTests(unittest.TestCase):
         code, out, err = self.command("analysis-line", "--analysis", self.aid, "--action", "seal")
         self.assertEqual(code, 0, err)
         checkpoint = json.loads(out)["analysis"]["checkpoints"][-1]["id"]
-        code, out, err = self.command("analysis-line", "--analysis", self.aid, "--action", "fork", "--checkpoint", checkpoint)
+        code, out, err = self.command(
+            "analysis-line", "--analysis", self.aid, "--action", "fork", "--checkpoint", checkpoint
+        )
         self.assertEqual(code, 0, err)
         self.assertNotEqual(json.loads(out)["analysis"]["line"], "main")
         code, out, err = self.command("analysis-history", "--analysis", self.aid, "--json")
@@ -66,8 +82,17 @@ class AnalysisHistoryAgentTests(unittest.TestCase):
         self.assertIn("Main line", out)
         self.assertIn("Second line", out)
         self.assertIn("Checkpoint", out)
-        code, out, err = self.command("analysis-line", "--analysis", self.aid, "--action", "fork",
-                                      "--checkpoint", "missing-internal-checkpoint", "--locale", "en")
+        code, out, err = self.command(
+            "analysis-line",
+            "--analysis",
+            self.aid,
+            "--action",
+            "fork",
+            "--checkpoint",
+            "missing-internal-checkpoint",
+            "--locale",
+            "en",
+        )
         self.assertEqual(code, 1)
         self.assertIn("checkpoint", err.lower())
         self.assertNotIn("missing-internal-checkpoint", err)
@@ -77,13 +102,19 @@ class AnalysisHistoryAgentTests(unittest.TestCase):
         server = serve.ReviewServer(self.review, 0, log_to_file=False, locale="en")
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
+
         def close():
             server.shutdown()
             server.server_close()
             worker.join(2)
+
         self.addCleanup(close)
-        headers = {"Host": f"127.0.0.1:{server.port}", "Origin": f"http://127.0.0.1:{server.port}",
-                   "Content-Type": "application/json", "X-AE-Review": "synthetic-history"}
+        headers = {
+            "Host": f"127.0.0.1:{server.port}",
+            "Origin": f"http://127.0.0.1:{server.port}",
+            "Content-Type": "application/json",
+            "X-AE-Review": "synthetic-history",
+        }
         return server, headers, binding
 
     def test_http_history_operations_preserve_current_line_and_receiver_gates(self):
@@ -92,14 +123,17 @@ class AnalysisHistoryAgentTests(unittest.TestCase):
         bad = {**payload, "receiverBindingId": "stale"}
         code, _, raw = serve._req(server.port, "POST", "/api/analysis/seal", headers, bad)
         self.assertEqual((code, json.loads(raw).get("code")), (409, "receiver-mismatch"))
-        code, response_headers, _ = serve._req(server.port, "POST", "/api/analysis/seal",
-                                               {**headers, "Origin": "http://evil.example"}, payload)
+        code, response_headers, _ = serve._req(
+            server.port, "POST", "/api/analysis/seal", {**headers, "Origin": "http://evil.example"}, payload
+        )
         self.assertEqual(code, 403)
         self.assertFalse(any(k.lower().startswith("access-control-") for k in response_headers))
+
         def post(action, **extra):
             code, _, raw = serve._req(server.port, "POST", "/api/analysis/" + action, headers, {**payload, **extra})
             self.assertEqual(code, 200, raw)
             return json.loads(raw)
+
         sealed = post("seal")
         checkpoint = sealed["analysis"]["checkpoints"][-1]["id"]
         self.assertIn("doc", sealed)
@@ -107,7 +141,9 @@ class AnalysisHistoryAgentTests(unittest.TestCase):
             forked = post("fork", checkpoint=checkpoint)
         self.assertTrue(hook.called)
         other = forked["analysis"]["line"]
-        number = next(r["seq"] for r in forked["analysis"]["rounds"] if r["line"] == other and r["status"] == "submitted")
+        number = next(
+            r["seq"] for r in forked["analysis"]["rounds"] if r["line"] == other and r["status"] == "submitted"
+        )
         post("switch-line", line="main")
         code, _, raw = serve._req(server.port, "GET", "/api/analysis?analysis=" + self.aid, headers)
         self.assertEqual(code, 200, raw)

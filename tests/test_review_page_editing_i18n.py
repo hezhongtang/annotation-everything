@@ -4,6 +4,7 @@
 属于其他子 issue 的界面（#31 技能、#32 提交与批次、#35 导出入）保持原样。
 真实行为由 tests/e2e_browser.py 的浏览器回归覆盖。
 """
+
 from __future__ import annotations
 
 import re
@@ -161,14 +162,24 @@ QUICK_MARKERS = ("删除引用的这段文字", "改为：")
 # #31 的技能选择与常驻技能已由 tests/test_review_page_skills_i18n.py 接走；这里只剩
 # 「交给 Agent」与处理记录（#32）、导出入（#35）的文案。
 OTHER_ISSUE_LITERALS = (
-    "交给 Agent", "处理记录", "全部批注", "导入…", "清空",  # #32 / #35
-    "复制全部（粘贴给 Agent）", "下载 Markdown", "下载 JSON",
-    "粘贴之前「复制全部」的文字", "在这里粘贴批注文字或 JSON",
+    "交给 Agent",
+    "处理记录",
+    "全部批注",
+    "导入…",
+    "清空",  # #32 / #35
+    "复制全部（粘贴给 Agent）",
+    "下载 Markdown",
+    "下载 JSON",
+    "粘贴之前「复制全部」的文字",
+    "在这里粘贴批注文字或 JSON",
     "这批做到：",
-    "允许派发子代理", "全量勾稽（检查全文前后一致性）",
-    "背后的本地服务是旧版本", "本地服务是旧版本，不支持全量勾稽",
-    "初改说明", "处理说明",
-    "常驻技能（每条批注按范围处理前都先调用）",   # #35 的导出协议，固定中文
+    "允许派发子代理",
+    "全量勾稽（检查全文前后一致性）",
+    "背后的本地服务是旧版本",
+    "本地服务是旧版本，不支持全量勾稽",
+    "初改说明",
+    "处理说明",
+    "常驻技能（每条批注按范围处理前都先调用）",  # #35 的导出协议，固定中文
 )
 
 
@@ -182,11 +193,13 @@ def _between(text: str, start: str, end: str) -> str:
 
 def _uses(region: str, key: str) -> bool:
     """渲染路径从词典取这条消息：JS 动态片段直接调 tMsg，静态标记用 data-* 声明。"""
-    return (f'tMsg("{key}"' in region
-            or f'data-msg="{key}"' in region
-            or f'data-title="{key}"' in region
-            or f'data-aria="{key}"' in region
-            or f'data-ph="{key}"' in region)
+    return (
+        f'tMsg("{key}"' in region
+        or f'data-msg="{key}"' in region
+        or f'data-title="{key}"' in region
+        or f'data-aria="{key}"' in region
+        or f'data-ph="{key}"' in region
+    )
 
 
 def _source() -> str:
@@ -204,8 +217,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_english_values_carry_no_chinese(self):
         en = i18n.load_catalog("en")["messages"]
-        chinese = sorted(k for k, v in en.items()
-                         if _CJK.search(v) and k not in LANGUAGE_NAMES)
+        chinese = sorted(k for k, v in en.items() if _CJK.search(v) and k not in LANGUAGE_NAMES)
         self.assertEqual(chinese, [], "英文消息里混了中文（语言自身的名字除外）")
 
     def test_counted_english_messages_have_both_plural_branches(self):
@@ -230,10 +242,16 @@ class CatalogTests(unittest.TestCase):
     def test_every_editing_key_is_wired_into_the_page(self):
         builder = (ROOT / "skill" / "annotation-everything" / "scripts" / "build_viewer.py").read_text(encoding="utf-8")
         page = _source() + builder
-        unwired = sorted(k for k in EDITING_KEYS
-                         if f'tMsg("{k}"' not in page and f'data-msg="{k}"' not in page
-                         and f'data-title="{k}"' not in page and f'data-aria="{k}"' not in page
-                         and f'data-ph="{k}"' not in page and f'"{k}"' not in page)
+        unwired = sorted(
+            k
+            for k in EDITING_KEYS
+            if f'tMsg("{k}"' not in page
+            and f'data-msg="{k}"' not in page
+            and f'data-title="{k}"' not in page
+            and f'data-aria="{k}"' not in page
+            and f'data-ph="{k}"' not in page
+            and f'"{k}"' not in page
+        )
         self.assertEqual(unwired, [], "这些消息加了却没有任何地方用")
 
 
@@ -245,20 +263,27 @@ class CardActionTests(unittest.TestCase):
         self.list = _between(_source(), "function refreshList(", "// 「批注」按钮")
 
     def test_actions_read_from_the_catalog(self):
-        for key in ("viewer.save", "viewer.edit", "viewer.delete", "viewer.cancel",
-                    "viewer.finalize", "viewer.returnForRedo",
-                    "viewer.unpin", "viewer.quickDelete"):
+        for key in (
+            "viewer.save",
+            "viewer.edit",
+            "viewer.delete",
+            "viewer.cancel",
+            "viewer.finalize",
+            "viewer.returnForRedo",
+            "viewer.unpin",
+            "viewer.quickDelete",
+        ):
             self.assertTrue(_uses(self.note, key), f"卡片动作没走词典：{key}")
         # 标注按钮与 resolve / reopen 按状态二选一，是计算 key
-        for key in ("viewer.resolve", "viewer.reopen", "viewer.remark", "viewer.remarkAgain",
-                    "viewer.quickReplace"):
+        for key in ("viewer.resolve", "viewer.reopen", "viewer.remark", "viewer.remarkAgain", "viewer.quickReplace"):
             self.assertIn(f'"{key}"', self.note, f"卡片动作没走词典：{key}")
 
     def test_delete_confirmation_reads_from_the_catalog(self):
         source = _source()
         self.assertNotIn('confirm("删除这条批注？")', source, "删除确认还写死了中文")
-        self.assertEqual(source.count('confirm(tMsg("viewer.confirmDelete"))'), 2,
-                         "卡片和标注弹窗两处删除确认都要走词典")
+        self.assertEqual(
+            source.count('confirm(tMsg("viewer.confirmDelete"))'), 2, "卡片和标注弹窗两处删除确认都要走词典"
+        )
 
     def test_action_titles_read_from_the_catalog(self):
         for key in ("viewer.finalizeTitle", "viewer.remarkTitle"):
@@ -269,14 +294,23 @@ class CardActionTests(unittest.TestCase):
             self.assertTrue(_uses(self.note, key), key)
 
     def test_no_hardcoded_action_labels(self):
-        for literal in (">保存<", ">编辑<", ">删除<", ">取消<", ">重新打开<",
-                        ">标为已处理<", ">定稿<", ">退回重改<", ">去掉标注<",
-                        ">重新标注<", ">在报告上标注<"):
+        for literal in (
+            ">保存<",
+            ">编辑<",
+            ">删除<",
+            ">取消<",
+            ">重新打开<",
+            ">标为已处理<",
+            ">定稿<",
+            ">退回重改<",
+            ">去掉标注<",
+            ">重新标注<",
+            ">在报告上标注<",
+        ):
             self.assertNotIn(literal, self.note, f"卡片里还写死了 {literal}")
 
     def test_no_hardcoded_chip_labels(self):
-        for literal in ("已处理", "已初改·待复核", "处理中", "· 删除", "· 改写",
-                        "· 风格优化", "·整页"):
+        for literal in ("已处理", "已初改·待复核", "处理中", "· 删除", "· 改写", "· 风格优化", "·整页"):
             self.assertNotIn(literal, self.note, f"卡片里还写死了 {literal}")
 
     def test_list_labels_read_from_the_catalog(self):
@@ -284,16 +318,14 @@ class CardActionTests(unittest.TestCase):
             self.assertTrue(_uses(self.list, key), key)
         for key in ("viewer.hideResolved", "viewer.showResolved"):
             self.assertIn(f'"{key}"', self.list, f"已处理的显隐没走词典：{key}")
-            self.assertIn('{count:nDone}', self.list, f"{key} 要带上条数")
+            self.assertIn("{count:nDone}", self.list, f"{key} 要带上条数")
         for literal in ("本页批注", "全部已处理", "暂无批注。", "隐藏已处理（", "显示已处理（"):
             self.assertNotIn(literal, self.list, f"列表里还写死了 {literal}")
 
     def test_editing_form_reads_from_the_catalog(self):
-        for key in ("viewer.moveTo", "viewer.page", "viewer.anchorLabel",
-                    "viewer.orphanWarning"):
+        for key in ("viewer.moveTo", "viewer.page", "viewer.anchorLabel", "viewer.orphanWarning"):
             self.assertTrue(_uses(self.note, key), key)
-        for literal in ("移到 ", "位置：", "原来所在的页面在新版报告里找不到",
-                        "第 ", " 页</option>"):
+        for literal in ("移到 ", "位置：", "原来所在的页面在新版报告里找不到", "第 ", " 页</option>"):
             self.assertNotIn(literal, self.note, f"编辑表单里还写死了 {literal}")
 
     def test_status_chip_titles_read_from_the_catalog(self):
@@ -301,8 +333,9 @@ class CardActionTests(unittest.TestCase):
         self.assertNotIn("已交给 Agent，正在处理", self.note)
 
     def test_storage_values_survive_in_the_render_path(self):
-        compares = (_between(_source(), "function targetLabel(", "function msgParams(")
-                    + _between(_source(), "const alwaysFor=", "const parseSkills="))
+        compares = _between(_source(), "function targetLabel(", "function msgParams(") + _between(
+            _source(), "const alwaysFor=", "const parseSkills="
+        )
         for value in STORAGE_VALUES:
             self.assertIn(f'"{value}"', compares, f"存储值 {value} 不能从比较路径里消失")
         self.assertIn("targetLabel(x.target)", self.note)
@@ -318,8 +351,11 @@ class SelectionAndPairTests(unittest.TestCase):
         bar = _between(self.source, '<div id="selbar">', '<div id="pinpop"')
         for key in ("viewer.sel.delete", "viewer.sel.replace", "viewer.sel.comment"):
             self.assertTrue(_uses(bar, key), key)
-        for literal in ('title="删除选中的文字（D）"', 'title="把选中的文字改为…（R）"',
-                        'title="以选中文字为引用写批注（C）"'):
+        for literal in (
+            'title="删除选中的文字（D）"',
+            'title="把选中的文字改为…（R）"',
+            'title="以选中文字为引用写批注（C）"',
+        ):
             self.assertNotIn(literal, bar, f"操作条里还写死了 {literal}")
 
     def test_confirm_delete_prompt_reads_from_the_catalog(self):
@@ -353,8 +389,7 @@ class SelectionAndPairTests(unittest.TestCase):
         box = _between(self.source, '<div id="repbox">', "</main>")
         for key in ("viewer.repTitle", "viewer.repOk", "viewer.cancel"):
             self.assertTrue(_uses(box, key), key)
-        self.assertNotIn('<p class="hint">把选中的文字改为：</p>', box,
-                         "改写框的标题没挂 data-msg")
+        self.assertNotIn('<p class="hint">把选中的文字改为：</p>', box, "改写框的标题没挂 data-msg")
 
     def test_blockquote_prefix_reads_from_the_catalog(self):
         note = _between(_source(), "function noteHtml(", "// 把正在编辑的那张卡片")
@@ -366,14 +401,15 @@ class SelectionAndPairTests(unittest.TestCase):
         source = _source()
         self.assertIn('text="风格优化："+STYLE_EXPORT[scope]', source)
         for tag in i18n.SUPPORTED:
-            self.assertNotIn("viewer.styleFallback", i18n.load_catalog(tag)["messages"],
-                             f"{tag} 不该再用显示文案生成存储正文")
+            self.assertNotIn(
+                "viewer.styleFallback", i18n.load_catalog(tag)["messages"], f"{tag} 不该再用显示文案生成存储正文"
+            )
 
     def test_quick_edit_markers_stay_untouched(self):
         for marker in QUICK_MARKERS:
             self.assertIn(f'"{marker}"', self.source, f"协议标记 {marker} 不能改")
-        self.assertNotIn('DEL_TEXT=tMsg', self.source)
-        self.assertNotIn('REP_PREFIX=tMsg', self.source)
+        self.assertNotIn("DEL_TEXT=tMsg", self.source)
+        self.assertNotIn("REP_PREFIX=tMsg", self.source)
 
 
 class MarkAndStyleTests(unittest.TestCase):
@@ -397,9 +433,13 @@ class MarkAndStyleTests(unittest.TestCase):
         for key in ("viewer.markPin", "viewer.markHint", "viewer.markRehint"):
             self.assertTrue(_uses(label, key), key)
         self.assertIn("markBtnLabel()", mode, "setMarkMode 要复用标签刷写")
-        for literal in ("单击放点，拖动框选…", "重新标注…", "在报告上标注",
-                        "在左侧报告上单击放一个点，或按住拖动框选一块区域（Esc 取消）",
-                        "给这条批注标注：在左侧报告上单击放点，或拖动框选（Esc 取消）"):
+        for literal in (
+            "单击放点，拖动框选…",
+            "重新标注…",
+            "在报告上标注",
+            "在左侧报告上单击放一个点，或按住拖动框选一块区域（Esc 取消）",
+            "给这条批注标注：在左侧报告上单击放点，或拖动框选（Esc 取消）",
+        ):
             self.assertNotIn(literal, mode, f"标注提示里还写死了 {literal}")
 
     def test_mark_kind_labels_read_from_the_catalog(self):
@@ -417,26 +457,33 @@ class MarkAndStyleTests(unittest.TestCase):
         menu = _between(self.source, '<div id="stylemenu"', '<div id="repbox">')
         for key in ("viewer.styleScope", "viewer.stylePage", "viewer.styleMark"):
             self.assertTrue(_uses(menu, key), key)
-        for literal in ('<p class="hint">风格优化的范围：</p>',
-                        '<button data-sm="page">整页（当前这一页）<kbd>1</kbd></button>',
-                        '<button data-sm="mark">标注处（单击放点或拖动框选）<kbd>2</kbd></button>'):
+        for literal in (
+            '<p class="hint">风格优化的范围：</p>',
+            '<button data-sm="page">整页（当前这一页）<kbd>1</kbd></button>',
+            '<button data-sm="mark">标注处（单击放点或拖动框选）<kbd>2</kbd></button>',
+        ):
             self.assertNotIn(literal, menu, f"风格菜单里还写死了 {literal}")
 
     def test_style_scope_labels_read_from_the_catalog(self):
         for key in ("viewer.style.page", "viewer.style.region", "viewer.style.pin"):
             self.assertIn(f'"{key}"', self.source, f"风格范围标签没走词典：{key}")
         self.assertNotIn('const STYLE_ZH={page:"整页",region:"框选处",pin:"标点处"}', self.source)
-        self.assertIn('const STYLE_LABEL', self.source, "风格范围标签要走映射表")
-        self.assertIn('const STYLE_EXPORT={page:"整页",region:"框选处",pin:"标点处"}', self.source,
-                      "导出的风格写法是协议值，必须固定中文")
+        self.assertIn("const STYLE_LABEL", self.source, "风格范围标签要走映射表")
+        self.assertIn(
+            'const STYLE_EXPORT={page:"整页",region:"框选处",pin:"标点处"}',
+            self.source,
+            "导出的风格写法是协议值，必须固定中文",
+        )
 
     def test_style_chip_read_from_the_catalog(self):
         chip = _between(self.source, "function updateStyleChip(", "function describe(")
-        for key in ("viewer.styleChip", "viewer.styleCancel", "viewer.styleCancelAria",
-                    "viewer.stylePlaceholder"):
+        for key in ("viewer.styleChip", "viewer.styleCancel", "viewer.styleCancelAria", "viewer.stylePlaceholder"):
             self.assertTrue(_uses(chip, key), key)
-        for literal in ("风格优化 · ", "取消风格优化（标注保留）",
-                        "想要的风格方向（可不写）：例如更简洁、对齐、配色统一、突出重点……"):
+        for literal in (
+            "风格优化 · ",
+            "取消风格优化（标注保留）",
+            "想要的风格方向（可不写）：例如更简洁、对齐、配色统一、突出重点……",
+        ):
             self.assertNotIn(literal, chip, f"风格条里还写死了 {literal}")
 
     def test_style_scope_suffix_on_cards_read_from_the_catalog(self):
@@ -448,15 +495,27 @@ class MarkAndStyleTests(unittest.TestCase):
 
     def test_pin_popup_read_from_the_catalog(self):
         pop = _between(self.source, "function openPinPop(", '$("pinpop").addEventListener')
-        for key in ("viewer.popClose", "viewer.popUnset", "viewer.popResolved",
-                    "viewer.markNewRegion", "viewer.markNewPin",
-                    "viewer.markRemoveRegion", "viewer.markRemovePin",
-                    "viewer.popResolved"):
+        for key in (
+            "viewer.popClose",
+            "viewer.popUnset",
+            "viewer.popResolved",
+            "viewer.markNewRegion",
+            "viewer.markNewPin",
+            "viewer.markRemoveRegion",
+            "viewer.markRemovePin",
+            "viewer.popResolved",
+        ):
             self.assertTrue(_uses(pop, key), key)
         self.assertIn("targetLabel(x.target)", pop, "弹窗里的对象名走显示映射")
-        for literal in ("新框选的区域：写好意见后点「添加批注」。拖动可移动，拖右下角可调大小。",
-                        "新标点：写好意见后点「添加批注」。拖动可调整位置。",
-                        "移除这个框", "移除标点", ">关闭<", "未指定", "· 已处理"):
+        for literal in (
+            "新框选的区域：写好意见后点「添加批注」。拖动可移动，拖右下角可调大小。",
+            "新标点：写好意见后点「添加批注」。拖动可调整位置。",
+            "移除这个框",
+            "移除标点",
+            ">关闭<",
+            "未指定",
+            "· 已处理",
+        ):
             self.assertNotIn(literal, pop, f"标注弹窗里还写死了 {literal}")
 
 
@@ -474,16 +533,14 @@ class PageAndScriptTests(unittest.TestCase):
             self.assertNotIn(literal, self.render, f"统计行里还写死了 {literal}")
 
     def test_script_column_labels_read_from_the_catalog(self):
-        for key in ("viewer.page", "viewer.scriptTalk", "viewer.scriptNext",
-                    "viewer.scriptQA", "viewer.scriptEmpty"):
+        for key in ("viewer.page", "viewer.scriptTalk", "viewer.scriptNext", "viewer.scriptQA", "viewer.scriptEmpty"):
             self.assertTrue(_uses(self.render, key), key)
         for literal in ("讲法", "过渡", "可能被问", "（本页无讲稿）", " 页</span>"):
             self.assertNotIn(literal, self.render, f"讲稿栏里还写死了 {literal}")
 
     def test_jump_dropdown_reads_from_the_catalog(self):
         counts = _between(self.source, "function updateCounts(", "function setMarkMode(")
-        for key in ("viewer.page", "viewer.jumpNotes", "viewer.jumpInFlight",
-                    "viewer.jumpDraft"):
+        for key in ("viewer.page", "viewer.jumpNotes", "viewer.jumpInFlight", "viewer.jumpDraft"):
             self.assertTrue(_uses(counts, key), key)
         for literal in ("第 ", " 页", "批注 ", "处理中 ", "待复核 "):
             self.assertNotIn(literal, counts, f"页码下拉里还写死了 {literal}")
@@ -492,8 +549,11 @@ class PageAndScriptTests(unittest.TestCase):
         counts = _between(self.source, "function updateCounts(", "function setMarkMode(")
         for key in ("viewer.count.open", "viewer.count.inFlight", "viewer.count.draft"):
             self.assertTrue(_uses(counts, key), key)
-        for literal in ("未处理（还没交给 Agent）", "已交给 Agent、正在处理的批注",
-                        "已初改、等你看过后请求复核或定稿的批注"):
+        for literal in (
+            "未处理（还没交给 Agent）",
+            "已交给 Agent、正在处理的批注",
+            "已初改、等你看过后请求复核或定稿的批注",
+        ):
             self.assertNotIn(literal, counts, f"角标提示里还写死了 {literal}")
 
     def test_jump_aria_label_reads_from_the_catalog(self):
@@ -509,35 +569,53 @@ class HeaderAndHelpTests(unittest.TestCase):
 
     def test_header_controls_read_from_the_catalog(self):
         # 导航与活动入口按 #118 分区；#128 的更新提示独立于状态栏。
-        navigation = _between(self.source, '<div class="page-nav">', '</div>')
-        activity = _between(self.source, '<nav class="activity"', '</nav>')
-        status = _between(self.source, '<footer id="statusbar"', '</footer>')
-        reload_notice = _between(self.source, '<div id="reloadBanner"', '</div>')
-        for part, keys in ((navigation, ("viewer.prev", "viewer.prevTitle", "viewer.next", "viewer.nextTitle")),
-                           (activity, ("viewer.help", "viewer.helpTitle")),
-                           (reload_notice, ("viewer.reload", "viewer.reloadTitle", "viewer.reloadNotice",
-                                            "viewer.reloadHint", "viewer.reloadClose")),
-                           (status, ("viewer.legacy", "viewer.legacyTitle",
-                                     "viewer.stray", "viewer.strayTitle"))):
+        navigation = _between(self.source, '<div class="page-nav">', "</div>")
+        activity = _between(self.source, '<nav class="activity"', "</nav>")
+        status = _between(self.source, '<footer id="statusbar"', "</footer>")
+        reload_notice = _between(self.source, '<div id="reloadBanner"', "</div>")
+        for part, keys in (
+            (navigation, ("viewer.prev", "viewer.prevTitle", "viewer.next", "viewer.nextTitle")),
+            (activity, ("viewer.help", "viewer.helpTitle")),
+            (
+                reload_notice,
+                (
+                    "viewer.reload",
+                    "viewer.reloadTitle",
+                    "viewer.reloadNotice",
+                    "viewer.reloadHint",
+                    "viewer.reloadClose",
+                ),
+            ),
+            (status, ("viewer.legacy", "viewer.legacyTitle", "viewer.stray", "viewer.strayTitle")),
+        ):
             for key in keys:
                 self.assertTrue(_uses(part, key), key)
         # 界面语言的名字由 #29 的 applyLocale 显式设置，这里只确认静态标记仍是中文初始值
         self.assertIn("界面语言", status)
-        self.assertIn('tMsg("locale.switcher")',
-                      _between(self.source, "function applyLocale()", '$("localePick").addEventListener'))
-        for literal in ('aria-label="跳到页"', 'title="上一页（←）"', 'title="下一页（→）"',
-                        'title="使用说明与快捷键（H）"', 'title="Agent 已按批注重建对照页"',
-                        'title="浏览器里发现这份稿件之前版本的批注"',
-                        'title="这个地址下还暂存着别的审阅没保存的改动（旧标签页留下的），可下载后导回那份审阅"'):
+        self.assertIn(
+            'tMsg("locale.switcher")',
+            _between(self.source, "function applyLocale()", '$("localePick").addEventListener'),
+        )
+        for literal in (
+            'aria-label="跳到页"',
+            'title="上一页（←）"',
+            'title="下一页（→）"',
+            'title="使用说明与快捷键（H）"',
+            'title="Agent 已按批注重建对照页"',
+            'title="浏览器里发现这份稿件之前版本的批注"',
+            'title="这个地址下还暂存着别的审阅没保存的改动（旧标签页留下的），可下载后导回那份审阅"',
+        ):
             self.assertNotIn(literal, navigation + activity + status, f"界面里还写死了 {literal}")
 
     def test_see_list_button_reads_from_the_catalog(self):
         form = _between(self.source, '<section id="bottomPanel"', '<div id="selbar">')
-        for key in ("viewer.markPinTitle", "viewer.styleBtnTitle", "viewer.seeList",
-                    "viewer.seeListTitle"):
+        for key in ("viewer.markPinTitle", "viewer.styleBtnTitle", "viewer.seeList", "viewer.seeListTitle"):
             self.assertTrue(_uses(form, key), key)
-        for literal in ('title="在报告上标注：单击放一个点，拖动框选一块区域（P）"',
-                        'title="风格优化：整页 / 标注处（S）"', 'title="看本页已有的批注"'):
+        for literal in (
+            'title="在报告上标注：单击放一个点，拖动框选一块区域（P）"',
+            'title="风格优化：整页 / 标注处（S）"',
+            'title="看本页已有的批注"',
+        ):
             self.assertNotIn(literal, form, f"输入栏里还写死了 {literal}")
 
     def test_help_body_has_both_languages(self):
@@ -561,16 +639,25 @@ class OfflineHintTests(unittest.TestCase):
         self.source = _source()
 
     def test_offline_hints_read_from_the_catalog(self):
-        for key in ("viewer.offline.stashed", "viewer.offline.newStashed",
-                    "viewer.offline.retried", "viewer.offline.reconnected",
-                    "viewer.offline.noServer", "viewer.mode.offline",
-                    "viewer.mode.file", "viewer.mode.offlineTitle"):
+        for key in (
+            "viewer.offline.stashed",
+            "viewer.offline.newStashed",
+            "viewer.offline.retried",
+            "viewer.offline.reconnected",
+            "viewer.offline.noServer",
+            "viewer.mode.offline",
+            "viewer.mode.file",
+            "viewer.mode.offlineTitle",
+        ):
             self.assertTrue(_uses(self.source, key), key)
-        for literal in ("本地服务断开：改动暂存浏览器，恢复后自动补传",
-                        "本地服务断开：新改动暂存浏览器",
-                        "已补传暂存的改动", "已重新连上本地服务",
-                        "没连上本地服务：新批注暂存浏览器。确认 serve.py 在运行",
-                        "新改动暂存在本浏览器；重新运行 serve.py 后会自动补传"):
+        for literal in (
+            "本地服务断开：改动暂存浏览器，恢复后自动补传",
+            "本地服务断开：新改动暂存浏览器",
+            "已补传暂存的改动",
+            "已重新连上本地服务",
+            "没连上本地服务：新批注暂存浏览器。确认 serve.py 在运行",
+            "新改动暂存在本浏览器；重新运行 serve.py 后会自动补传",
+        ):
             self.assertNotIn(literal, self.source, f"离线提示里还写死了 {literal}")
 
     def test_offline_mode_badge_reads_from_the_catalog(self):
@@ -587,14 +674,13 @@ class OfflineHintTests(unittest.TestCase):
 
     def test_no_editing_message_is_hardcoded_in_an_attribute(self):
         zh = i18n.load_catalog("zh-CN")["messages"]
-        allowed = {"viewer.textPlaceholder"}   # #ntext 的初始占位符，applyLocale 每次都会重写
+        allowed = {"viewer.textPlaceholder"}  # #ntext 的初始占位符，applyLocale 每次都会重写
         for key in sorted(EDITING_KEYS):
             value = zh.get(key, "")
             if key in allowed or not value or not _CJK.search(value):
                 continue
             for attr in ("title", "aria-label", "placeholder"):
-                self.assertNotIn(f'{attr}="{value}"', self.source,
-                                 f"{key} 的中文还写死在 {attr} 里")
+                self.assertNotIn(f'{attr}="{value}"', self.source, f"{key} 的中文还写死在 {attr} 里")
 
     def test_every_constant_table_used_is_declared(self):
         """改名后漏改引用只是运行时的 ReferenceError，端到端才暴露，太贵；这里提前查。"""
@@ -609,25 +695,41 @@ class OfflineHintTests(unittest.TestCase):
         declared |= set(re.findall(r"\bfunction\s+([A-Za-z_$][A-Za-z0-9_$]*)", source))
         declared |= set(re.findall(r"__([A-Z_]+)__", source))
         used = set(re.findall(r"\b([A-Z][A-Z0-9_]{2,})\b", source))
-        host = {"JSON", "CSS", "URL", "DOM", "HTML", "HTTP", "GET", "POST", "PATCH",
-                "DELETE", "SELECT", "INPUT", "TEXTAREA", "CJK", "CSP", "ROOTFS", "API",
-                "HOME", "PPT"}   # PPT 是格式名，只出现在注释与样式字符串里；页面常量是已声明的 PPTX
-        self.assertEqual(sorted(used - declared - host), [],
-                         "页面里用了没声明的常量，跑起来会是 ReferenceError")
+        host = {
+            "JSON",
+            "CSS",
+            "URL",
+            "DOM",
+            "HTML",
+            "HTTP",
+            "GET",
+            "POST",
+            "PATCH",
+            "DELETE",
+            "SELECT",
+            "INPUT",
+            "TEXTAREA",
+            "CJK",
+            "CSP",
+            "ROOTFS",
+            "API",
+            "HOME",
+            "PPT",
+        }  # PPT 是格式名，只出现在注释与样式字符串里；页面常量是已声明的 PPTX
+        self.assertEqual(sorted(used - declared - host), [], "页面里用了没声明的常量，跑起来会是 ReferenceError")
 
     def test_locale_switch_refreshes_in_flight_controls(self):
         """风格优化、标注模式、删除待确认和连接徽标进行中切语言，都要按当前语言重刷。"""
         apply = _between(self.source, "function applyLocale()", '$("localePick").addEventListener')
         for call in ("markBtnLabel()", "armDelete(delArmed)", "updateStyleChip()", "updateMode()"):
             self.assertIn(call, apply, f"切语言时没有重刷 {call}")
-        self.assertIn("armDelete(delArmed)", apply,
-                      "删除待确认是两步确认，切语言后不能把「再按一次」的提示弄丢")
+        self.assertIn("armDelete(delArmed)", apply, "删除待确认是两步确认，切语言后不能把「再按一次」的提示弄丢")
 
     def test_static_markup_tags_are_balanced(self):
         """说明正文按语言分成两块后最容易漏 </div>；漏了浏览器会自行补救，但英文块会被
         嵌套进中文块，切语言时一起被藏掉。"""
         body = _source()
-        body = body[body.find("<body>"):body.find("<script>")]
+        body = body[body.find("<body>") : body.find("<script>")]
         for tag in ("div", "span", "button", "select", "label", "p"):
             opens = len(re.findall(rf"<{tag}\b", body))
             closes = len(re.findall(rf"</{tag}>", body))

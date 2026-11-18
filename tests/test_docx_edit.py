@@ -1,4 +1,5 @@
 """#137：用合成 DOCX 从公开回写入口核验字节保留、定位、防护及失败后的原件。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -42,8 +43,10 @@ def local_records(raw):
     """独立读取各成员的 local header + 压缩流 + descriptor，比较未改成员原字节。"""
     with zipfile.ZipFile(io.BytesIO(raw)) as zf:
         infos = sorted(zf.infolist(), key=lambda i: i.header_offset)
-        return {i.filename: raw[i.header_offset:infos[n + 1].header_offset if n + 1 < len(infos) else zf.start_dir]
-                for n, i in enumerate(infos)}
+        return {
+            i.filename: raw[i.header_offset : infos[n + 1].header_offset if n + 1 < len(infos) else zf.start_dir]
+            for n, i in enumerate(infos)
+        }
 
 
 class WritebackTests(unittest.TestCase):
@@ -60,8 +63,11 @@ class WritebackTests(unittest.TestCase):
         ms.package(self.source, raw, extra=extra)
         self.original = self.source.read_bytes()
         self.fp = hashlib.sha256(self.original).hexdigest()
-        self.manifest = {"format": {"report": "docx", "version": 1}, "sources": {"report": "../synthetic.docx"},
-                         "docx": {"fingerprint": self.fp}}
+        self.manifest = {
+            "format": {"report": "docx", "version": 1},
+            "sources": {"report": "../synthetic.docx"},
+            "docx": {"fingerprint": self.fp},
+        }
         (self.review / "review.json").write_text(json.dumps(self.manifest), encoding="utf-8")
         return self.source
 
@@ -69,11 +75,26 @@ class WritebackTests(unittest.TestCase):
         return de.writeback(self.review, replacement={"paragraph": 0, "from": before, "to": after}, **kwargs)
 
     def note(self, before="乙", after="新", *, n=0, full="甲乙丙", pid="0000000A", **location):
-        a = {"v": 1, "kind": "quote", "via": "selection", "fp": self.fp,
-             "para": {"id": pid, "n": n, "digest": dr.text_digest(full)}, **location}
-        _doc, note = store.add(self.review, {"page": 1, "target": "报告", "quoteFrom": "报告", "quote": before,
-            "text": "改为：" + after if after else "删除", "docx": a,
-            "edit": {"op": "replace", "from": before, "to": after} if after else {"op": "delete", "from": before}})
+        a = {
+            "v": 1,
+            "kind": "quote",
+            "via": "selection",
+            "fp": self.fp,
+            "para": {"id": pid, "n": n, "digest": dr.text_digest(full)},
+            **location,
+        }
+        _doc, note = store.add(
+            self.review,
+            {
+                "page": 1,
+                "target": "报告",
+                "quoteFrom": "报告",
+                "quote": before,
+                "text": "改为：" + after if after else "删除",
+                "docx": a,
+                "edit": {"op": "replace", "from": before, "to": after} if after else {"op": "delete", "from": before},
+            },
+        )
         return note["id"]
 
     def assert_refused(self, code, action=None):
@@ -92,8 +113,12 @@ class WritebackTests(unittest.TestCase):
         notes_before = (self.review / "notes.json").read_bytes()
         result = de.writeback(self.review, batch=batch["seq"])
         self.assertEqual(result["ids"], [one, two])
-        expected = member(self.original).replace(b"<w:t>" + "甲乙丙".encode() + b"</w:t>", b'<w:t xml:space="preserve">' + "甲丙".encode() + b"</w:t>")
-        expected = expected.replace(b"<w:t>" + "第二段".encode() + b"</w:t>", b'<w:t xml:space="preserve">' + "新段".encode() + b"</w:t>")
+        expected = member(self.original).replace(
+            b"<w:t>" + "甲乙丙".encode() + b"</w:t>", b'<w:t xml:space="preserve">' + "甲丙".encode() + b"</w:t>"
+        )
+        expected = expected.replace(
+            b"<w:t>" + "第二段".encode() + b"</w:t>", b'<w:t xml:space="preserve">' + "新段".encode() + b"</w:t>"
+        )
         self.assertEqual(member(self.source.read_bytes()), expected)
         self.assertEqual((self.review / "notes.json").read_bytes(), notes_before)
         before, after = local_records(self.original), local_records(self.source.read_bytes())
@@ -108,8 +133,10 @@ class WritebackTests(unittest.TestCase):
         self.assertEqual(backup.parent.parent.name, "batch-1")
 
     def test_cross_run_replacement_keeps_run_properties_and_paragraphs(self):
-        self.document('<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>合同金</w:t></w:r>'
-                      '<w:r><w:rPr><w:i/></w:rPr><w:t>额为100元。</w:t></w:r></w:p>')
+        self.document(
+            "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>合同金</w:t></w:r>"
+            "<w:r><w:rPr><w:i/></w:rPr><w:t>额为100元。</w:t></w:r></w:p>"
+        )
         self.replace("金额为100", "合计200")
         xml = member(self.source.read_bytes())
         self.assertIn('<w:t xml:space="preserve">合同合计200</w:t>'.encode(), xml)
@@ -118,23 +145,32 @@ class WritebackTests(unittest.TestCase):
         self.assertIn(b"<w:rPr><w:i/></w:rPr>", xml)
 
     def test_utf8_bom_alt_prefix_entities_cdata_and_empty_elements(self):
-        raw = ('\ufeff' + ms.body_xml('<w:p><w:r><w:t/><w:t></w:t><w:t>甲&amp;<![CDATA[<乙>]]>&#x4E19;</w:t></w:r></w:p>')).replace("w:", "x:").replace("xmlns:w=", "xmlns:x=")
+        raw = (
+            (
+                "\ufeff"
+                + ms.body_xml("<w:p><w:r><w:t/><w:t></w:t><w:t>甲&amp;<![CDATA[<乙>]]>&#x4E19;</w:t></w:r></w:p>")
+            )
+            .replace("w:", "x:")
+            .replace("xmlns:w=", "xmlns:x=")
+        )
         self.document(raw=raw)
         self.replace("&<乙>", " <&新> ")
         xml = member(self.source.read_bytes())
-        expected = member(self.original).replace('<x:t>甲&amp;<![CDATA[<乙>]]>&#x4E19;</x:t>'.encode(),
-                    '<x:t xml:space="preserve">甲 &lt;&amp;新&gt; 丙</x:t>'.encode())
+        expected = member(self.original).replace(
+            "<x:t>甲&amp;<![CDATA[<乙>]]>&#x4E19;</x:t>".encode(),
+            '<x:t xml:space="preserve">甲 &lt;&amp;新&gt; 丙</x:t>'.encode(),
+        )
         self.assertEqual(xml, expected)
         self.assertTrue(xml.startswith(b"\xef\xbb\xbf"))
         self.assertIn(b"<x:t/><x:t></x:t>", xml)
 
     def test_space_default_single_quotes_and_attribute_greater_than(self):
-        self.document('<w:p><w:r><w:t xml:space=\'default\' custom="a>b">甲乙丙</w:t></w:r></w:p>')
+        self.document("<w:p><w:r><w:t xml:space='default' custom=\"a>b\">甲乙丙</w:t></w:r></w:p>")
         self.replace("甲乙丙", " 新 \r\n\t")
         xml = member(self.source.read_bytes())
         self.assertIn(b'xml:space="preserve" custom="a>b"', xml)
         self.assertIn(b"&#13;", xml)
-        self.assertEqual(ET.fromstring(xml).find('.//' + dr.W + 't').text, " 新 \r\n\t")
+        self.assertEqual(ET.fromstring(xml).find(".//" + dr.W + "t").text, " 新 \r\n\t")
 
     def test_whitespace_fallback_and_non_bmp_characters(self):
         self.document(para("甲 😀  乙 丙"))
@@ -180,7 +216,7 @@ class WritebackTests(unittest.TestCase):
         self.assertEqual(texts, ["甲乙丙", "甲新丙"])
 
     def test_no_id_unique_digest_survives_shifted_ordinal(self):
-        self.document(para("前置", "00000001") + '<w:p><w:r><w:t>甲乙丙</w:t></w:r></w:p>')
+        self.document(para("前置", "00000001") + "<w:p><w:r><w:t>甲乙丙</w:t></w:r></w:p>")
         nid = self.note(n=0, pid=None)
         de.writeback(self.review, ids=[nid])
         self.assertIn("甲新丙".encode(), member(self.source.read_bytes()))
@@ -209,7 +245,7 @@ class WritebackTests(unittest.TestCase):
         self.assert_refused("range", lambda: de.writeback(self.review, ids=[nid]))
         for special in ("<w:tab/>", "<w:br/>", "<w:noBreakHyphen/>"):
             with self.subTest(special=special):
-                self.document(f'<w:p><w:r><w:t>甲</w:t>{special}<w:t>乙</w:t></w:r></w:p>')
+                self.document(f"<w:p><w:r><w:t>甲</w:t>{special}<w:t>乙</w:t></w:r></w:p>")
                 text = {"<w:tab/>": "甲\t乙", "<w:br/>": "甲乙", "<w:noBreakHyphen/>": "甲‑乙"}[special]
                 self.assert_refused("range", lambda: self.replace(text))
 
@@ -221,8 +257,10 @@ class WritebackTests(unittest.TestCase):
             self.assert_refused("characters", lambda: self.replace(after=bad))
 
     def test_dtd_and_nested_text_elements_are_refused(self):
-        for raw in (ms.body_xml(para("甲乙丙")).replace('<w:document', '<!DOCTYPE w:document [<!ENTITY x "乙">]><w:document'),
-                    ms.body_xml('<w:p><w:r><w:t>甲<unexpected/>乙</w:t></w:r></w:p>')):
+        for raw in (
+            ms.body_xml(para("甲乙丙")).replace("<w:document", '<!DOCTYPE w:document [<!ENTITY x "乙">]><w:document'),
+            ms.body_xml("<w:p><w:r><w:t>甲<unexpected/>乙</w:t></w:r></w:p>"),
+        ):
             self.document(raw=raw)
             self.assert_refused("xml")
 
@@ -255,19 +293,24 @@ class WritebackTests(unittest.TestCase):
             self.assertEqual(old.comment, new.comment)
             for name in old.namelist():
                 a, b = old.getinfo(name), new.getinfo(name)
-                self.assertEqual((a.extra, a.comment, a.external_attr, a.date_time), (b.extra, b.comment, b.external_attr, b.date_time))
+                self.assertEqual(
+                    (a.extra, a.comment, a.external_attr, a.date_time),
+                    (b.extra, b.comment, b.external_attr, b.date_time),
+                )
 
     def test_readonly_math_note_explains_structure_even_when_digest_contains_math_text(self):
-        self.document(f'<w:p><w:r><w:t>甲乙丙</w:t></w:r><m:oMath xmlns:m="{dr.M[1:-1]}"><m:r><m:t>x</m:t></m:r></m:oMath></w:p>')
+        self.document(
+            f'<w:p><w:r><w:t>甲乙丙</w:t></w:r><m:oMath xmlns:m="{dr.M[1:-1]}"><m:r><m:t>x</m:t></m:r></m:oMath></w:p>'
+        )
         nid = self.note(full="甲乙丙x", pid=None)
         errors = self.assert_refused("readonly", lambda: de.writeback(self.review, ids=[nid]))
         self.assertIn("math", errors[0].detail)
 
     def test_table_cell_revisions_and_unknown_run_content_are_readonly(self):
         for kind in ("cellIns", "cellDel", "cellMerge", "tcPrChange"):
-            self.document(f'<w:tbl><w:tr><w:tc><w:tcPr><w:{kind}/></w:tcPr>{para("甲乙丙")}</w:tc></w:tr></w:tbl>')
+            self.document(f"<w:tbl><w:tr><w:tc><w:tcPr><w:{kind}/></w:tcPr>{para('甲乙丙')}</w:tc></w:tr></w:tbl>")
             self.assert_refused("readonly")
-        self.document('<w:p><w:r><w:t>甲乙丙</w:t><w:unknownContent/></w:r></w:p>')
+        self.document("<w:p><w:r><w:t>甲乙丙</w:t><w:unknownContent/></w:r></w:p>")
         self.assert_refused("readonly")
 
     def test_tracking_needs_explicit_untracked_flag_and_warns(self):
@@ -275,16 +318,34 @@ class WritebackTests(unittest.TestCase):
         self.assert_refused("tracked")
         result = self.replace(allow_untracked=True)
         self.assertEqual(result["warnings"], ["untracked"])
-        self.assertEqual(member(self.original, "word/settings.xml"), member(self.source.read_bytes(), "word/settings.xml"))
+        self.assertEqual(
+            member(self.original, "word/settings.xml"), member(self.source.read_bytes(), "word/settings.xml")
+        )
 
     def test_disabled_tracking_and_protection_allow_editing(self):
-        self.document(extra={"word/settings.xml": f'<w:settings xmlns:w="{dr.W_NS}"><w:trackRevisions w:val="false"/><w:documentProtection w:enforcement="0"/></w:settings>'})
+        self.document(
+            extra={
+                "word/settings.xml": f'<w:settings xmlns:w="{dr.W_NS}"><w:trackRevisions w:val="false"/><w:documentProtection w:enforcement="0"/></w:settings>'
+            }
+        )
         self.replace()
 
     def test_editing_protection_and_signatures_cannot_be_overridden(self):
-        for code, extra in (("protected", {"word/settings.xml": f'<w:settings xmlns:w="{dr.W_NS}"><w:documentProtection w:enforcement="1"/></w:settings>'}),
-                            ("signed", {"_xmlsignatures/sig1.xml": "signature"}),
-                            ("signed", {"_rels/signature.rels": '<Relationships><Relationship Type="http://example/digital-signature/signature"/></Relationships>'})):
+        for code, extra in (
+            (
+                "protected",
+                {
+                    "word/settings.xml": f'<w:settings xmlns:w="{dr.W_NS}"><w:documentProtection w:enforcement="1"/></w:settings>'
+                },
+            ),
+            ("signed", {"_xmlsignatures/sig1.xml": "signature"}),
+            (
+                "signed",
+                {
+                    "_rels/signature.rels": '<Relationships><Relationship Type="http://example/digital-signature/signature"/></Relationships>'
+                },
+            ),
+        ):
             with self.subTest(code=code):
                 self.document(extra=extra)
                 self.assert_refused(code, lambda: self.replace(allow_untracked=True))
@@ -303,7 +364,7 @@ class WritebackTests(unittest.TestCase):
         self.assert_refused("fingerprint", lambda: self.replace(allow_untracked=True))
 
     def test_readonly_structures_report_each_note_without_partial_write(self):
-        self.document(para("甲乙丙") + '<w:p><w:ins><w:r><w:t>需要修改</w:t></w:r></w:ins></w:p>')
+        self.document(para("甲乙丙") + "<w:p><w:ins><w:r><w:t>需要修改</w:t></w:r></w:ins></w:p>")
         one = self.note()
         two = self.note(before="需要", full="需要修改", n=1, pid=None)
         errors = self.assert_refused("readonly", lambda: de.writeback(self.review, ids=[one, two]))
@@ -312,12 +373,14 @@ class WritebackTests(unittest.TestCase):
 
     def test_all_unsupported_structures_are_refused_in_page_and_writer(self):
         variants = {
-            "revision": '<w:p><w:ins><w:r><w:t>甲乙丙</w:t></w:r></w:ins></w:p>',
+            "revision": "<w:p><w:ins><w:r><w:t>甲乙丙</w:t></w:r></w:ins></w:p>",
             "field": '<w:p><w:fldSimple w:instr="TOC"><w:r><w:t>甲乙丙</w:t></w:r></w:fldSimple></w:p>',
-            "contentControl": '<w:sdt><w:sdtContent>' + para("甲乙丙") + '</w:sdtContent></w:sdt>',
-            "textbox": '<w:p><w:r><w:t>甲乙丙</w:t><w:pict><w:txbxContent>' + para("内文") + '</w:txbxContent></w:pict></w:r></w:p>',
+            "contentControl": "<w:sdt><w:sdtContent>" + para("甲乙丙") + "</w:sdtContent></w:sdt>",
+            "textbox": "<w:p><w:r><w:t>甲乙丙</w:t><w:pict><w:txbxContent>"
+            + para("内文")
+            + "</w:txbxContent></w:pict></w:r></w:p>",
             "math": f'<w:p><w:r><w:t>甲乙丙</w:t></w:r><m:oMath xmlns:m="{dr.M[1:-1]}"><m:r><m:t>x</m:t></m:r></m:oMath></w:p>',
-            "hidden": '<w:p><w:r><w:rPr><w:vanish/></w:rPr><w:t>甲乙丙</w:t></w:r></w:p>',
+            "hidden": "<w:p><w:r><w:rPr><w:vanish/></w:rPr><w:t>甲乙丙</w:t></w:r></w:p>",
         }
         for reason, inner in variants.items():
             with self.subTest(reason=reason):
@@ -328,58 +391,91 @@ class WritebackTests(unittest.TestCase):
                 self.assertRegex(page, 'data-docx-ro="[^"]*' + reason)
 
     def test_cross_paragraph_field_and_inherited_hidden_style_are_readonly(self):
-        self.document('<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:p>' + para("甲乙丙") +
-                      '<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>')
-        self.assert_refused("readonly", lambda: de.writeback(self.review, replacement={"paragraph": 1, "from": "乙", "to": "新"}))
-        styles = f'<w:styles xmlns:w="{dr.W_NS}"><w:style w:styleId="Hide"><w:rPr><w:vanish/></w:rPr></w:style></w:styles>'
-        self.document('<w:p><w:pPr><w:pStyle w:val="Hide"/></w:pPr><w:r><w:t>甲乙丙</w:t></w:r></w:p>', extra={"word/styles.xml": styles})
+        self.document(
+            '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:p>'
+            + para("甲乙丙")
+            + '<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+        )
+        self.assert_refused(
+            "readonly", lambda: de.writeback(self.review, replacement={"paragraph": 1, "from": "乙", "to": "新"})
+        )
+        styles = (
+            f'<w:styles xmlns:w="{dr.W_NS}"><w:style w:styleId="Hide"><w:rPr><w:vanish/></w:rPr></w:style></w:styles>'
+        )
+        self.document(
+            '<w:p><w:pPr><w:pStyle w:val="Hide"/></w:pPr><w:r><w:t>甲乙丙</w:t></w:r></w:p>',
+            extra={"word/styles.xml": styles},
+        )
         self.assert_refused("readonly")
         self.assertIn('data-docx-ro="hidden"', dr.render(self.source)["pages"][0]["html"])
 
     def test_character_style_false_preserves_inherited_hidden_text(self):
-        styles = (f'<w:styles xmlns:w="{dr.W_NS}">'
-                  '<w:style w:type="character" w:styleId="BaseChar"><w:rPr><w:vanish/></w:rPr></w:style>'
-                  '<w:style w:type="character" w:styleId="DerivedChar"><w:basedOn w:val="BaseChar"/>'
-                  '<w:rPr><w:vanish w:val="0"/></w:rPr></w:style></w:styles>')
-        self.document('<w:p><w:r><w:rPr><w:rStyle w:val="DerivedChar"/></w:rPr>'
-                      '<w:t>甲乙丙</w:t></w:r></w:p>', extra={"word/styles.xml": styles})
+        styles = (
+            f'<w:styles xmlns:w="{dr.W_NS}">'
+            '<w:style w:type="character" w:styleId="BaseChar"><w:rPr><w:vanish/></w:rPr></w:style>'
+            '<w:style w:type="character" w:styleId="DerivedChar"><w:basedOn w:val="BaseChar"/>'
+            '<w:rPr><w:vanish w:val="0"/></w:rPr></w:style></w:styles>'
+        )
+        self.document(
+            '<w:p><w:r><w:rPr><w:rStyle w:val="DerivedChar"/></w:rPr><w:t>甲乙丙</w:t></w:r></w:p>',
+            extra={"word/styles.xml": styles},
+        )
         nid = self.note(pid=None)
         self.assert_refused("readonly")
         self.assert_refused("readonly", lambda: de.writeback(self.review, ids=[nid]))
         rendered = dr.render(self.source)
         self.assertIn('data-docx-ro="hidden"', rendered["pages"][0]["html"])
-        self.assertRegex(rendered["pages"][0]["html"], r'<span [^>]*\bhidden[^>]*>甲乙丙</span>')
+        self.assertRegex(rendered["pages"][0]["html"], r"<span [^>]*\bhidden[^>]*>甲乙丙</span>")
         self.assertIn("hidden", [item["code"] for item in rendered["diagnostics"]])
 
     def test_character_style_toggle_and_direct_format_can_unhide_text(self):
         for derived, direct in (("1", ""), ("0", '<w:vanish w:val="0"/>')):
             with self.subTest(derived=derived, direct=direct):
-                styles = (f'<w:styles xmlns:w="{dr.W_NS}">'
-                          '<w:style w:type="character" w:styleId="BaseChar"><w:rPr><w:vanish/></w:rPr></w:style>'
-                          '<w:style w:type="character" w:styleId="DerivedChar"><w:basedOn w:val="BaseChar"/>'
-                          f'<w:rPr><w:vanish w:val="{derived}"/></w:rPr></w:style></w:styles>')
-                self.document('<w:p><w:r><w:rPr><w:rStyle w:val="DerivedChar"/>' + direct
-                              + '</w:rPr><w:t>甲乙丙</w:t></w:r></w:p>', extra={"word/styles.xml": styles})
+                styles = (
+                    f'<w:styles xmlns:w="{dr.W_NS}">'
+                    '<w:style w:type="character" w:styleId="BaseChar"><w:rPr><w:vanish/></w:rPr></w:style>'
+                    '<w:style w:type="character" w:styleId="DerivedChar"><w:basedOn w:val="BaseChar"/>'
+                    f'<w:rPr><w:vanish w:val="{derived}"/></w:rPr></w:style></w:styles>'
+                )
+                self.document(
+                    '<w:p><w:r><w:rPr><w:rStyle w:val="DerivedChar"/>'
+                    + direct
+                    + "</w:rPr><w:t>甲乙丙</w:t></w:r></w:p>",
+                    extra={"word/styles.xml": styles},
+                )
                 self.assertNotIn('data-docx-ro="hidden"', dr.render(self.source)["pages"][0]["html"])
                 self.replace()
                 self.assertIn("甲新丙".encode(), member(self.source.read_bytes()))
 
     def test_table_styles_including_inheritance_and_conditions_are_readonly(self):
-        for body in ('<w:rPr><w:vanish/></w:rPr>', '<w:tblStylePr w:type="firstRow"><w:rPr><w:vanish/></w:rPr></w:tblStylePr>'):
+        for body in (
+            "<w:rPr><w:vanish/></w:rPr>",
+            '<w:tblStylePr w:type="firstRow"><w:rPr><w:vanish/></w:rPr></w:tblStylePr>',
+        ):
             for explicit in (True, False):
                 with self.subTest(body=body, explicit=explicit):
-                    styles = (f'<w:styles xmlns:w="{dr.W_NS}"><w:style w:type="table" w:styleId="Base">{body}</w:style>'
-                              '<w:style w:type="table" w:styleId="HiddenTable" w:default="1"><w:basedOn w:val="Base"/></w:style></w:styles>')
-                    props = '<w:tblPr><w:tblStyle w:val="HiddenTable"/></w:tblPr>' if explicit else ''
-                    self.document(f'<w:tbl>{props}<w:tr><w:tc>{para("甲乙丙")}</w:tc></w:tr></w:tbl>', extra={"word/styles.xml": styles})
+                    styles = (
+                        f'<w:styles xmlns:w="{dr.W_NS}"><w:style w:type="table" w:styleId="Base">{body}</w:style>'
+                        '<w:style w:type="table" w:styleId="HiddenTable" w:default="1"><w:basedOn w:val="Base"/></w:style></w:styles>'
+                    )
+                    props = '<w:tblPr><w:tblStyle w:val="HiddenTable"/></w:tblPr>' if explicit else ""
+                    self.document(
+                        f"<w:tbl>{props}<w:tr><w:tc>{para('甲乙丙')}</w:tc></w:tr></w:tbl>",
+                        extra={"word/styles.xml": styles},
+                    )
                     errors = self.assert_refused("readonly")
                     self.assertEqual(errors[0].detail, "hidden")
                     self.assertIn('data-docx-ro="hidden"', dr.render(self.source)["pages"][0]["html"])
 
     def test_nontext_symbols_are_exposed_to_the_page_without_changing_text_offsets(self):
-        for token, visible in (("<w:tab/>", "\t"), ("<w:noBreakHyphen/>", "‑"), ("<w:softHyphen/>", "­"), ('<w:sym w:char="0041"/>', "A")):
+        for token, visible in (
+            ("<w:tab/>", "\t"),
+            ("<w:noBreakHyphen/>", "‑"),
+            ("<w:softHyphen/>", "­"),
+            ('<w:sym w:char="0041"/>', "A"),
+        ):
             with self.subTest(token=token):
-                self.document(f'<w:p><w:r><w:t>甲</w:t>{token}<w:t>乙</w:t></w:r></w:p>')
+                self.document(f"<w:p><w:r><w:t>甲</w:t>{token}<w:t>乙</w:t></w:r></w:p>")
                 result = dr.render(self.source)
                 self.assertEqual(result["paragraphs"][0]["digest"], dr.text_digest("甲" + visible + "乙"))
                 self.assertRegex(result["pages"][0]["html"], r'class="docx-(?:tab|nontext)"')
@@ -434,7 +530,10 @@ class WritebackTests(unittest.TestCase):
                 os.lseek(fd, 0, os.SEEK_SET)
                 os.write(fd, b"broken zip")
 
-        with patch.object(de.os, "fsync", side_effect=corrupt_pending), self.assertRaises((de.EditError, zipfile.BadZipFile)):
+        with (
+            patch.object(de.os, "fsync", side_effect=corrupt_pending),
+            self.assertRaises((de.EditError, zipfile.BadZipFile)),
+        ):
             self.replace()
         self.assertEqual(self.source.read_bytes(), self.original)
         self.assertEqual(next((self.review / ".snapshots").rglob("*.docx")).read_bytes(), self.original)
@@ -476,7 +575,23 @@ class WritebackTests(unittest.TestCase):
         for lang, phrase in (("zh-CN", "AE 写入的是不留痕改动"), ("en", "AE writes untracked changes")):
             out, err = io.StringIO(), io.StringIO()
             with redirect_stdout(out), redirect_stderr(err):
-                code = de.main(["replace", str(self.review), "--paragraph", "0", "--from", "乙", "--to", "新", "--dry-run", "--json", "--allow-untracked", "--locale", lang])
+                code = de.main(
+                    [
+                        "replace",
+                        str(self.review),
+                        "--paragraph",
+                        "0",
+                        "--from",
+                        "乙",
+                        "--to",
+                        "新",
+                        "--dry-run",
+                        "--json",
+                        "--allow-untracked",
+                        "--locale",
+                        lang,
+                    ]
+                )
             self.assertEqual(code, 0, err.getvalue())
             self.assertTrue(json.loads(out.getvalue())["dryRun"])
             self.assertIn(phrase, err.getvalue())
@@ -484,10 +599,12 @@ class WritebackTests(unittest.TestCase):
 
     def test_cli_argument_errors_use_the_shared_language_contract(self):
         self.document()
-        cases = [(["--locale"], {}, "参数 --locale 需要一个值"),
-                 (["--locale", "en", "apply", str(self.review), "--id"], {}, "Option --id needs a value"),
-                 (["apply", str(self.review), "--id", "missing"], {"AE_LOCALE": "fr"}, "不支持的语言：fr"),
-                 (["apply", str(self.review), "--unknown", "--locale", "en"], {}, "Unrecognized argument: --unknown")]
+        cases = [
+            (["--locale"], {}, "参数 --locale 需要一个值"),
+            (["--locale", "en", "apply", str(self.review), "--id"], {}, "Option --id needs a value"),
+            (["apply", str(self.review), "--id", "missing"], {"AE_LOCALE": "fr"}, "不支持的语言：fr"),
+            (["apply", str(self.review), "--unknown", "--locale", "en"], {}, "Unrecognized argument: --unknown"),
+        ]
         for args, env, expected in cases:
             with self.subTest(args=args), patch.dict(os.environ, {"AE_LOCALE": "", **env}):
                 out, err = io.StringIO(), io.StringIO()
@@ -529,8 +646,7 @@ class WritebackTests(unittest.TestCase):
         err_in_use = PermissionError(13, "sharing violation")
         err_in_use.winerror = 32
         out, err = io.StringIO(), io.StringIO()
-        with patch.object(de.os, "replace", side_effect=err_in_use), \
-                redirect_stdout(out), redirect_stderr(err):
+        with patch.object(de.os, "replace", side_effect=err_in_use), redirect_stdout(out), redirect_stderr(err):
             code = de.main(["apply", str(self.review), "--batch", str(batch["seq"]), "--locale", "zh-CN"])
         self.assertEqual(code, 2)
         self.assertIn("关闭", err.getvalue())
@@ -560,8 +676,7 @@ class WritebackTests(unittest.TestCase):
         notes_before = (self.review / "notes.json").read_bytes()
         err_in_use = PermissionError(13, "locked by office")
         err_in_use.winerror = 32
-        with patch.object(Path, "read_bytes", side_effect=err_in_use), \
-                self.assertRaises(de.EditError) as caught_lock:
+        with patch.object(Path, "read_bytes", side_effect=err_in_use), self.assertRaises(de.EditError) as caught_lock:
             de.writeback(self.review, ids=[nid])
         self.assertEqual(caught_lock.exception.code, "locked")
         self.assertEqual(self.source.read_bytes(), self.original)

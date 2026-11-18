@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """生成 PPTX 读取层用的可复现合成材料，只使用 Python 标准库。"""
+
 from __future__ import annotations
 
 import argparse
@@ -32,24 +33,44 @@ def slide_xml(text: str = "", paragraphs: str = "") -> str:
 
 
 def graphic_frame(shape_id: int, name: str, uri: str, content: str) -> str:
-    return (f'<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="{shape_id}" name="{name}"/>'
-            '<p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>'
-            '<p:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></p:xfrm>'
-            f'<a:graphic><a:graphicData uri="{uri}">{content}</a:graphicData></a:graphic></p:graphicFrame>')
+    return (
+        f'<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="{shape_id}" name="{name}"/>'
+        "<p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>"
+        '<p:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></p:xfrm>'
+        f'<a:graphic><a:graphicData uri="{uri}">{content}</a:graphicData></a:graphic></p:graphicFrame>'
+    )
 
 
 def element_slide_xml() -> str:
-    table = graphic_frame(10, "合成表格", A + "/table", '<a:tbl><a:tblGrid/><a:tr h="400000"><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p>'
-                          + text_run("合成单元格") + '</a:p></a:txBody><a:tcPr/></a:tc><a:tc><a:txBody><a:bodyPr/><a:p>'
-                          + text_run("第二列") + '</a:p></a:txBody></a:tc></a:tr><a:tr h="400000"><a:tc><a:txBody><a:bodyPr/><a:p>'
-                          + text_run("第二行") + '</a:p></a:txBody></a:tc></a:tr></a:tbl>')
-    picture = '''<p:pic><p:nvPicPr><p:cNvPr id="11" name="合成图片" descr="合成图片替代文本"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rIdImage"/></p:blipFill><p:spPr><a:xfrm><a:off x="1000000" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr></p:pic>'''
-    group = '''<p:grpSp><p:nvGrpSpPr><p:cNvPr id="12" name="合成组合"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="1219200" y="685800"/><a:ext cx="6096000" cy="3429000"/><a:chOff x="100" y="200"/><a:chExt cx="1000" cy="1000"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="13" name="组合内文本"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="600" y="700"/><a:ext cx="500" cy="500"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>组合内文本</a:t></a:r></a:p></p:txBody></p:sp></p:grpSp>'''
-    chart = graphic_frame(14, "合成图表", A + "/chart", '<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rIdChart"/>')
-    smartart = graphic_frame(15, "合成流程图", A + "/diagram", '<dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rIdDiagram"/>')
-    media = '''<p:pic><p:nvPicPr><p:cNvPr id="16" name="合成媒体"/><p:cNvPicPr/><p:nvPr><a:videoFile r:link="rIdVideo"/></p:nvPr></p:nvPicPr><p:blipFill><a:blip r:embed="rIdImage"/></p:blipFill><p:spPr><a:xfrm><a:off x="5000000" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr></p:pic>'''
+    table = graphic_frame(
+        10,
+        "合成表格",
+        A + "/table",
+        '<a:tbl><a:tblGrid/><a:tr h="400000"><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p>'
+        + text_run("合成单元格")
+        + "</a:p></a:txBody><a:tcPr/></a:tc><a:tc><a:txBody><a:bodyPr/><a:p>"
+        + text_run("第二列")
+        + '</a:p></a:txBody></a:tc></a:tr><a:tr h="400000"><a:tc><a:txBody><a:bodyPr/><a:p>'
+        + text_run("第二行")
+        + "</a:p></a:txBody></a:tc></a:tr></a:tbl>",
+    )
+    picture = """<p:pic><p:nvPicPr><p:cNvPr id="11" name="合成图片" descr="合成图片替代文本"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rIdImage"/></p:blipFill><p:spPr><a:xfrm><a:off x="1000000" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr></p:pic>"""
+    group = """<p:grpSp><p:nvGrpSpPr><p:cNvPr id="12" name="合成组合"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="1219200" y="685800"/><a:ext cx="6096000" cy="3429000"/><a:chOff x="100" y="200"/><a:chExt cx="1000" cy="1000"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="13" name="组合内文本"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="600" y="700"/><a:ext cx="500" cy="500"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>组合内文本</a:t></a:r></a:p></p:txBody></p:sp></p:grpSp>"""
+    chart = graphic_frame(
+        14,
+        "合成图表",
+        A + "/chart",
+        '<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rIdChart"/>',
+    )
+    smartart = graphic_frame(
+        15,
+        "合成流程图",
+        A + "/diagram",
+        '<dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rIdDiagram"/>',
+    )
+    media = """<p:pic><p:nvPicPr><p:cNvPr id="16" name="合成媒体"/><p:cNvPicPr/><p:nvPr><a:videoFile r:link="rIdVideo"/></p:nvPr></p:nvPicPr><p:blipFill><a:blip r:embed="rIdImage"/></p:blipFill><p:spPr><a:xfrm><a:off x="5000000" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm></p:spPr></p:pic>"""
     ole = graphic_frame(17, "合成OLE", A + "/oleobject", '<p:oleObj r:id="rIdOle"/>')
-    unknown = graphic_frame(18, "未知扩展", "urn:synthetic:unknown", '<a:p>' + text_run("未知合成文本") + '</a:p>')
+    unknown = graphic_frame(18, "未知扩展", "urn:synthetic:unknown", "<a:p>" + text_run("未知合成文本") + "</a:p>")
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <p:sld xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
 {table}{picture}{group}{chart}{smartart}{media}{ole}{unknown}</p:spTree></p:cSld></p:sld>'''
@@ -77,8 +98,14 @@ def styled_slide_xml() -> str:
 
 
 def sample_parts(portrait: bool = False) -> dict[str, str | bytes]:
-    rich = ("<a:p>" + text_run("相同", '<a:rPr b="1"><a:latin typeface="Synthetic Sans"/></a:rPr>')
-            + text_run("😀&<", '<a:rPr i="1" sz="1800"/>') + "</a:p><a:p>" + text_run("相同") + "</a:p>")
+    rich = (
+        "<a:p>"
+        + text_run("相同", '<a:rPr b="1"><a:latin typeface="Synthetic Sans"/></a:rPr>')
+        + text_run("😀&<", '<a:rPr i="1" sz="1800"/>')
+        + "</a:p><a:p>"
+        + text_run("相同")
+        + "</a:p>"
+    )
     width, height = (6858000, 12192000) if portrait else (12192000, 6858000)
     slides = {
         "ppt/slides/slide10.xml": slide_xml(paragraphs=rich),
@@ -120,7 +147,7 @@ def write_package(out: Path, parts: dict[str, str | bytes]) -> Path:
         for name, content in parts.items():
             data = content.encode("utf-8") if isinstance(content, str) else content
             info = zipfile.ZipInfo(name, FIXED_TIME)
-            info.filename = name   # 保留原始成员名（如反斜杠路径）以覆盖非规范 ZIP 输入测试
+            info.filename = name  # 保留原始成员名（如反斜杠路径）以覆盖非规范 ZIP 输入测试
             info.external_attr = 0o600 << 16
             archive.writestr(info, data, zipfile.ZIP_DEFLATED)
     return out

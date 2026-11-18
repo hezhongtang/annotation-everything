@@ -9,6 +9,7 @@
 语义不变：短等待只通过受控参数注入，见 test_default_timeouts_keep_the_product_configuration
 与保留的默认配置用例。
 """
+
 from __future__ import annotations
 
 import os
@@ -113,8 +114,7 @@ def wait_dead(pid: int, timeout: float = 15.0) -> bool:
 
 
 def sleeper() -> subprocess.Popen:
-    return subprocess.Popen([sys.executable, "-c", SLEEPER],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return subprocess.Popen([sys.executable, "-c", SLEEPER], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def grandchild_code(ready: Path, ignore_sigterm: bool, got_term: Path | None = None) -> str:
@@ -171,8 +171,8 @@ class CleanupTests(unittest.TestCase):
     def test_stop_all_reaps_a_registered_service(self):
         p = sleeper()
         self.addCleanup(self.kill, p)
-        e2e_servers.TestCleanup().stop_all()          # 空登记表不该炸
-        reg = e2e_servers.TestCleanup()               # 缺省配置的真实子进程路径
+        e2e_servers.TestCleanup().stop_all()  # 空登记表不该炸
+        reg = e2e_servers.TestCleanup()  # 缺省配置的真实子进程路径
         reg.add(p)
         reg.stop_all()
         self.assertTrue(wait_dead(p.pid), "登记过的服务没被回收")
@@ -215,9 +215,11 @@ class CleanupTests(unittest.TestCase):
         """等满注入的终止超时才升级 SIGKILL；以注入值和实际退出状态为断言。"""
         ready = self.root / "ready"
         got_term = self.root / "got-term"
-        p = subprocess.Popen([sys.executable, "-c",
-                              grandchild_code(ready, True, got_term)],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p = subprocess.Popen(
+            [sys.executable, "-c", grandchild_code(ready, True, got_term)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         self.addCleanup(self.kill, p)
         end = time.monotonic() + 10
         while not ready.exists() and time.monotonic() < end:
@@ -232,8 +234,7 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue(got_term.exists(), "SIGTERM 没有送达，未进入忽略终止状态")
         self.assertEqual(p.poll(), -signal.SIGKILL, "没有走 SIGKILL 升级分支")
         self.assertTrue(wait_dead(p.pid), "忽略 SIGTERM 的服务没被回收")
-        self.assertGreaterEqual(elapsed, SHORT_TERMINATE,
-                                "没等满注入的终止超时就升级，说明跳过了目标分支")
+        self.assertGreaterEqual(elapsed, SHORT_TERMINATE, "没等满注入的终止超时就升级，说明跳过了目标分支")
 
     def test_stop_all_removes_registered_dirs(self):
         d = self.root / "review"
@@ -267,10 +268,8 @@ class CleanupTests(unittest.TestCase):
         """短等待只是测试注入的边界参数：缺省配置仍是产品的 5 秒 / 8 秒。"""
         self.assertEqual(e2e_servers.TERMINATE_TIMEOUT, 5.0)
         self.assertEqual(e2e_servers.READY_TIMEOUT, 8.0)
-        self.assertEqual(e2e_servers.TestCleanup().terminate_timeout,
-                         e2e_servers.TERMINATE_TIMEOUT)
-        self.assertEqual(e2e_servers.TestCleanup(terminate_timeout=0.25).terminate_timeout,
-                         0.25)
+        self.assertEqual(e2e_servers.TestCleanup().terminate_timeout, e2e_servers.TERMINATE_TIMEOUT)
+        self.assertEqual(e2e_servers.TestCleanup(terminate_timeout=0.25).terminate_timeout, 0.25)
 
 
 class StartServerTests(unittest.TestCase):
@@ -282,7 +281,8 @@ class StartServerTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         stub = self.root / "scripts"
         stub.mkdir()
-        (stub / "serve.py").write_text(textwrap.dedent("""
+        (stub / "serve.py").write_text(
+            textwrap.dedent("""
             import json
             import sys
             import time
@@ -291,7 +291,9 @@ class StartServerTests(unittest.TestCase):
             d = Path(sys.argv[1])
             (d / ".annotation-server.json").write_text(json.dumps({"port": int(sys.argv[3])}))
             time.sleep(120)
-        """), encoding="utf-8")
+        """),
+            encoding="utf-8",
+        )
         self.scripts = stub
 
     def test_start_server_registers_the_service_it_starts(self):
@@ -314,8 +316,7 @@ class StartServerTests(unittest.TestCase):
         d.mkdir()
         started = time.monotonic()
         with self.assertRaises(RuntimeError):
-            e2e_servers.start_server(d, e2e_servers.free_port(), scripts=self.scripts,
-                                     ready_timeout=SHORT_READY)
+            e2e_servers.start_server(d, e2e_servers.free_port(), scripts=self.scripts, ready_timeout=SHORT_READY)
         elapsed = time.monotonic() - started
         self.assertGreaterEqual(elapsed, SHORT_READY, "没等满注入的就绪超时就放弃")
         e2e_servers.CLEANUP.stop_all()
@@ -353,21 +354,26 @@ class AbnormalExitTests(unittest.TestCase):
         if rest and rest[0].strip():
             shutil.rmtree(rest[0], ignore_errors=True)
 
-    def run_child(self, tail: str, extra: str = "", ignore_sigterm: bool = False,
-                  terminate_timeout: float = SHORT_TERMINATE):
+    def run_child(
+        self, tail: str, extra: str = "", ignore_sigterm: bool = False, terminate_timeout: float = SHORT_TERMINATE
+    ):
         ready = self.root / "ready"
         probe = self.root / "probe.txt"
         got_term = self.root / "got-term"
-        code = CHILD.format(tests=str(TESTS),
-                            grandchild=grandchild_code(ready, ignore_sigterm, got_term),
-                            ready=str(ready), probe=str(probe), extra=extra, tail=tail,
-                            terminate_timeout=terminate_timeout)
+        code = CHILD.format(
+            tests=str(TESTS),
+            grandchild=grandchild_code(ready, ignore_sigterm, got_term),
+            ready=str(ready),
+            probe=str(probe),
+            extra=extra,
+            tail=tail,
+            terminate_timeout=terminate_timeout,
+        )
         # 探针断言与读取也在 try 里：断言失败（探针没写出 / 只写了一半）同样要
         # _salvage，不能把孙进程留在登记机制外。探针完全没写出时 _salvage 没有
         # 凭据，孙进程只能靠自灭时限（sleep(120)）退出——见 _salvage 的边界说明。
         try:
-            proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                                  text=True, timeout=180)
+            proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=180)
             self.assertTrue(probe.exists(), f"子进程没写出探针：{proc.stdout!r} {proc.stderr!r}")
             pid_text, dir_text = probe.read_text(encoding="utf-8").split("\n")[:2]
         except BaseException:
@@ -375,11 +381,19 @@ class AbnormalExitTests(unittest.TestCase):
             raise
         return int(pid_text), Path(dir_text), proc
 
-    def assert_cleaned_up(self, tail, expect_failure=False, returncode=None,
-                          extra="", ignore_sigterm=False,
-                          terminate_timeout=SHORT_TERMINATE, sent=None):
-        pid, d, proc = self.run_child(tail, extra=extra, ignore_sigterm=ignore_sigterm,
-                                      terminate_timeout=terminate_timeout)
+    def assert_cleaned_up(
+        self,
+        tail,
+        expect_failure=False,
+        returncode=None,
+        extra="",
+        ignore_sigterm=False,
+        terminate_timeout=SHORT_TERMINATE,
+        sent=None,
+    ):
+        pid, d, proc = self.run_child(
+            tail, extra=extra, ignore_sigterm=ignore_sigterm, terminate_timeout=terminate_timeout
+        )
         self.addCleanup(self.kill_pid, pid)
         if returncode is not None:
             self.assertEqual(proc.returncode, returncode, f"退出码不对：{proc.stderr}")
@@ -389,10 +403,8 @@ class AbnormalExitTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, f"子进程异常：{proc.stderr}")
         if sent is not None:
             self.assertTrue(sent.exists(), "第二个信号没有发出")
-            self.assertEqual(sent.read_text(encoding="utf-8"), "during",
-                             "第二个信号没有落在清理的终止等待窗口内")
-        self.assertTrue(wait_dead(pid),
-                        f"退出后服务成了残留服务（pid {pid}，returncode {proc.returncode}）")
+            self.assertEqual(sent.read_text(encoding="utf-8"), "during", "第二个信号没有落在清理的终止等待窗口内")
+        self.assertTrue(wait_dead(pid), f"退出后服务成了残留服务（pid {pid}，returncode {proc.returncode}）")
         self.assertFalse(d.exists(), f"退出后临时目录没清理：{d}")
 
     def test_probe_assertion_failure_still_salvages_the_grandchild(self):
@@ -404,9 +416,11 @@ class AbnormalExitTests(unittest.TestCase):
         """
         probe = self.root / "probe.txt"
         orphan_pid = self.root / "grandchild-pid"
-        tail = (f"Path({str(probe)!r}).write_text(str(grandchild.pid)); "
-                f"Path({str(orphan_pid)!r}).write_text(str(grandchild.pid)); "
-                "os._exit(3)")
+        tail = (
+            f"Path({str(probe)!r}).write_text(str(grandchild.pid)); "
+            f"Path({str(orphan_pid)!r}).write_text(str(grandchild.pid)); "
+            "os._exit(3)"
+        )
         with self.assertRaises(ValueError):
             self.run_child(tail)
         pid = int(orphan_pid.read_text(encoding="utf-8"))
@@ -421,15 +435,12 @@ class AbnormalExitTests(unittest.TestCase):
         """
         probe = self.root / "probe.txt"
         orphan_pid = self.root / "grandchild-pid"
-        tail = (f"Path({str(orphan_pid)!r}).write_text(str(grandchild.pid)); "
-                f"Path({str(probe)!r}).unlink(); os._exit(3)")
+        tail = f"Path({str(orphan_pid)!r}).write_text(str(grandchild.pid)); Path({str(probe)!r}).unlink(); os._exit(3)"
         with self.assertRaises(AssertionError):
             self.run_child(tail)
         pid = int(orphan_pid.read_text(encoding="utf-8"))
         self.addCleanup(self.kill_pid, pid)
-        self.assertTrue(alive(pid),
-                        "场景失真：探针没写出时孙进程应仍在自灭时限内运行，"
-                        "而不是被凭空回收")
+        self.assertTrue(alive(pid), "场景失真：探针没写出时孙进程应仍在自灭时限内运行，而不是被凭空回收")
 
     def test_keyboard_interrupt_still_cleans_up(self):
         self.assert_cleaned_up("raise KeyboardInterrupt", expect_failure=True)
@@ -438,17 +449,22 @@ class AbnormalExitTests(unittest.TestCase):
     def test_ctrl_c_during_stop_does_not_leave_services_behind(self):
         """正常 stop 等待退出时被打断，仍由 atexit 回收尚未结束的服务。"""
         sent = self.root / "sent"
-        self.assert_cleaned_up("e2e_servers.stop(grandchild, cleanup)", expect_failure=True,
-                               extra=second_signal_source("SIGINT", self.root / "got-term", sent),
-                               ignore_sigterm=True,
-                               terminate_timeout=HANDSHAKE_TERMINATE, sent=sent)
+        self.assert_cleaned_up(
+            "e2e_servers.stop(grandchild, cleanup)",
+            expect_failure=True,
+            extra=second_signal_source("SIGINT", self.root / "got-term", sent),
+            ignore_sigterm=True,
+            terminate_timeout=HANDSHAKE_TERMINATE,
+            sent=sent,
+        )
 
     def assert_start_timeout_cleans_up(self, interrupt=False):
         probe = self.root / "startup-pid"
         terminating = self.root / "terminating"
         scripts = self.root / "scripts"
         scripts.mkdir()
-        (scripts / "serve.py").write_text(textwrap.dedent(f"""
+        (scripts / "serve.py").write_text(
+            textwrap.dedent(f"""
             import os
             import signal
             import sys
@@ -461,13 +477,16 @@ class AbnormalExitTests(unittest.TestCase):
             Path({str(probe)!r}).write_text(str(os.getpid()))
             print('startup stalled', file=sys.stderr, flush=True)
             time.sleep(120)
-        """), encoding="utf-8")
+        """),
+            encoding="utf-8",
+        )
         d = self.root / "review"
         d.mkdir()
 
         def cleanup_service():
             if probe.exists():
                 self.kill_pid(int(probe.read_text()))
+
         self.addCleanup(cleanup_service)
 
         code = textwrap.dedent(f"""
@@ -494,14 +513,12 @@ class AbnormalExitTests(unittest.TestCase):
                                      ready_timeout={SHORT_READY!r})
         """)
         started = time.monotonic()
-        proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                              text=True, timeout=30)
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
         elapsed = time.monotonic() - started
         self.assertTrue(probe.exists(), f"服务未启动：{proc.stderr}")
         self.assertTrue(terminating.exists(), "未进入忽略终止的失败回收路径")
         self.assertNotEqual(proc.returncode, 0, "未就绪的服务不应启动成功")
-        self.assertGreaterEqual(elapsed, SHORT_READY + SHORT_TERMINATE,
-                                "没有等满注入的就绪与终止超时")
+        self.assertGreaterEqual(elapsed, SHORT_READY + SHORT_TERMINATE, "没有等满注入的就绪与终止超时")
         if interrupt:
             self.assertIn("KeyboardInterrupt", proc.stderr)
         else:
@@ -526,33 +543,38 @@ class AbnormalExitTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "Windows os.kill(SIGTERM) 直接 TerminateProcess，不触发信号处理器")
     def test_sigterm_still_cleans_up(self):
         """SIGTERM 不触发 atexit，只能靠 install() 装的处理器回收。"""
-        self.assert_cleaned_up("import os, signal; os.kill(os.getpid(), signal.SIGTERM)",
-                               returncode=-15)
+        self.assert_cleaned_up("import os, signal; os.kill(os.getpid(), signal.SIGTERM)", returncode=-15)
 
     @unittest.skipUnless(hasattr(signal, "SIGHUP"), "POSIX SIGHUP required")
     def test_sighup_still_cleans_up(self):
         """关终端发的是 SIGHUP，同样不触发 atexit。"""
-        self.assert_cleaned_up("import os, signal; os.kill(os.getpid(), signal.SIGHUP)",
-                               returncode=-1)
+        self.assert_cleaned_up("import os, signal; os.kill(os.getpid(), signal.SIGHUP)", returncode=-1)
 
     @unittest.skipIf(os.name == "nt", "Windows os.kill(SIGTERM) 不可被处理器拦截或二次重入")
     def test_second_sigterm_during_cleanup_does_not_leave_services_behind(self):
         """清理耗时期间又补一个 SIGTERM，不该把还没收完的进程留下。"""
         sent = self.root / "sent"
-        self.assert_cleaned_up("import os, signal; os.kill(os.getpid(), signal.SIGTERM)",
-                               returncode=-15,
-                               extra=second_signal_source("SIGTERM", self.root / "got-term", sent),
-                               ignore_sigterm=True,
-                               terminate_timeout=HANDSHAKE_TERMINATE, sent=sent)
+        self.assert_cleaned_up(
+            "import os, signal; os.kill(os.getpid(), signal.SIGTERM)",
+            returncode=-15,
+            extra=second_signal_source("SIGTERM", self.root / "got-term", sent),
+            ignore_sigterm=True,
+            terminate_timeout=HANDSHAKE_TERMINATE,
+            sent=sent,
+        )
 
     @unittest.skipIf(os.name == "nt", "Windows 上 TerminateProcess 不可被子进程忽略")
     def test_second_ctrl_c_during_cleanup_does_not_leave_services_behind(self):
         """atexit 清理期间再按一次 Ctrl-C，同样不该留下残留服务。"""
         sent = self.root / "sent"
-        self.assert_cleaned_up("raise KeyboardInterrupt", expect_failure=True,
-                               extra=second_signal_source("SIGINT", self.root / "got-term", sent),
-                               ignore_sigterm=True,
-                               terminate_timeout=HANDSHAKE_TERMINATE, sent=sent)
+        self.assert_cleaned_up(
+            "raise KeyboardInterrupt",
+            expect_failure=True,
+            extra=second_signal_source("SIGINT", self.root / "got-term", sent),
+            ignore_sigterm=True,
+            terminate_timeout=HANDSHAKE_TERMINATE,
+            sent=sent,
+        )
 
 
 class StopProcsTests(unittest.TestCase):

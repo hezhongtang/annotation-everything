@@ -17,6 +17,7 @@
 
 只用标准库与合成数据：python3 -m unittest discover tests
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -35,22 +36,36 @@ SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 SKILL_SRC = ROOT / "skill" / "annotation-everything"
 sys.path.insert(0, str(SCRIPTS))
 os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-test-home-"))
-os.environ.pop("AE_LOCALE", None)   # 语言由各用例显式给定
+os.environ.pop("AE_LOCALE", None)  # 语言由各用例显式给定
 
 import report_check as rc  # noqa: E402
 
 RECORD_SCHEMA = "ae-report-record/1"
 CHECK_SCHEMA = "ae-report-check/1"
 
-CONTENT_CHECK_IDS = ("content.requirements", "content.claims", "content.fact-vs-inference",
-                     "content.units-dates", "content.numbers-charts", "content.cross-page",
-                     "content.script-consistency", "content.open-questions")
-STRUCTURE_CHECK_IDS = ("structure.flow", "structure.headings", "structure.claim-support",
-                       "structure.dup-gaps", "structure.length")
+CONTENT_CHECK_IDS = (
+    "content.requirements",
+    "content.claims",
+    "content.fact-vs-inference",
+    "content.units-dates",
+    "content.numbers-charts",
+    "content.cross-page",
+    "content.script-consistency",
+    "content.open-questions",
+)
+STRUCTURE_CHECK_IDS = (
+    "structure.flow",
+    "structure.headings",
+    "structure.claim-support",
+    "structure.dup-gaps",
+    "structure.length",
+)
 VISUAL_CHECK_IDS = ("visual.pages",)
 
-MATERIAL = ("# 三季度经营笔记（合成）\n\n- 三季度收入 112 万元\n- 上年同期收入 100 万元\n"
-            "- 外卖渠道占比 38%\n- 十月周报缺失，十月趋势暂无法核对\n")
+MATERIAL = (
+    "# 三季度经营笔记（合成）\n\n- 三季度收入 112 万元\n- 上年同期收入 100 万元\n"
+    "- 外卖渠道占比 38%\n- 十月周报缺失，十月趋势暂无法核对\n"
+)
 
 REPORT = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>合成季度回顾</title>
 <style>.page{width:1280px;height:720px;padding:56px;box-sizing:border-box;font-family:sans-serif}
@@ -72,11 +87,15 @@ SCRIPT = """# 讲稿：合成季度回顾
 两件事。
 """
 
-EXTERNAL_METHOD = {"kind": "external", "name": "synthetic-brief-kit", "version": "1.4.2",
-                   "invocation": "运行技能脚本 make_report.py 生成 report.html 与记录",
-                   "unavailable": [], "note": ""}
-BUILTIN_METHOD = {"kind": "builtin", "name": "annotation-everything 内置范式",
-                  "version": "0.9.0", "unavailable": []}
+EXTERNAL_METHOD = {
+    "kind": "external",
+    "name": "synthetic-brief-kit",
+    "version": "1.4.2",
+    "invocation": "运行技能脚本 make_report.py 生成 report.html 与记录",
+    "unavailable": [],
+    "note": "",
+}
+BUILTIN_METHOD = {"kind": "builtin", "name": "annotation-everything 内置范式", "version": "0.9.0", "unavailable": []}
 
 
 def tmpdir() -> Path:
@@ -85,11 +104,17 @@ def tmpdir() -> Path:
 
 def all_checks(status: str) -> list[dict]:
     pages = [{"page": n, "checked": True, "issues": []} for n in (1, 2)]
-    return [{"id": cid, "kind": "visual" if cid in VISUAL_CHECK_IDS else
-             ("structure" if cid in STRUCTURE_CHECK_IDS else "content"),
-             "status": status, "scope": "全部", "note": "合成契约数据",
-             **({"pages": pages} if cid in VISUAL_CHECK_IDS else {})}
-            for cid in CONTENT_CHECK_IDS + STRUCTURE_CHECK_IDS + VISUAL_CHECK_IDS]
+    return [
+        {
+            "id": cid,
+            "kind": "visual" if cid in VISUAL_CHECK_IDS else ("structure" if cid in STRUCTURE_CHECK_IDS else "content"),
+            "status": status,
+            "scope": "全部",
+            "note": "合成契约数据",
+            **({"pages": pages} if cid in VISUAL_CHECK_IDS else {}),
+        }
+        for cid in CONTENT_CHECK_IDS + STRUCTURE_CHECK_IDS + VISUAL_CHECK_IDS
+    ]
 
 
 def sha(text: str) -> str:
@@ -97,32 +122,53 @@ def sha(text: str) -> str:
 
 
 def make_record(method: dict | None = None, **overrides) -> dict:
-    links = {"report": "report.html", "script": "script.md",
-             "sha256": {"report": sha(REPORT), "script": sha(SCRIPT)},
-             "sourceNote": "materials/notes.md"}
+    links = {
+        "report": "report.html",
+        "script": "script.md",
+        "sha256": {"report": sha(REPORT), "script": sha(SCRIPT)},
+        "sourceNote": "materials/notes.md",
+    }
     record = {
         "schema": RECORD_SCHEMA,
         "generatedAt": "2026-11-02T09:00:00+08:00",
-        "request": {"purpose": "季度经营汇报", "audience": "管理层",
-                    "coreQuestions": ["三季度收入为什么增长"], "length": "2 页", "script": "yes"},
-        "sources": [{"path": "materials/notes.md", "status": "read",
-                     "coverage": "全文", "sha256": sha(MATERIAL), "note": ""}],
+        "request": {
+            "purpose": "季度经营汇报",
+            "audience": "管理层",
+            "coreQuestions": ["三季度收入为什么增长"],
+            "length": "2 页",
+            "script": "yes",
+        },
+        "sources": [
+            {"path": "materials/notes.md", "status": "read", "coverage": "全文", "sha256": sha(MATERIAL), "note": ""}
+        ],
         "method": dict(BUILTIN_METHOD) if method is None else method,
         "links": links,
-        "findings": [{"claim": "三季度收入同比增长 12%", "type": "calculation",
-                      "sources": ["materials/notes.md"], "pages": ["sum"],
-                      "refs": [{"path": "materials/notes.md", "locator": "第 2 行",
-                                "quote": "三季度收入 112 万元", "found": True}],
-                      "support": "supported",
-                      "basis": "对比材料两期收入原文，并按声明输入复算 percent-change",
-                      "calculation": {"op": "percent-change", "inputs": {"a": 100, "b": 112},
-                                      "expected": 12, "unit": "万元",
-                                      "period": "2025Q3 对 2024Q3",
-                                      "definition": "对上年同期收入的增长百分比",
-                                      "inputLocations": {
-                                          "a": "materials/notes.md 第 3 行：上年同期收入 100 万元",
-                                          "b": "materials/notes.md 第 2 行：三季度收入 112 万元"}},
-                      "note": "收入 112 对上年 100"}],
+        "findings": [
+            {
+                "claim": "三季度收入同比增长 12%",
+                "type": "calculation",
+                "sources": ["materials/notes.md"],
+                "pages": ["sum"],
+                "refs": [
+                    {"path": "materials/notes.md", "locator": "第 2 行", "quote": "三季度收入 112 万元", "found": True}
+                ],
+                "support": "supported",
+                "basis": "对比材料两期收入原文，并按声明输入复算 percent-change",
+                "calculation": {
+                    "op": "percent-change",
+                    "inputs": {"a": 100, "b": 112},
+                    "expected": 12,
+                    "unit": "万元",
+                    "period": "2025Q3 对 2024Q3",
+                    "definition": "对上年同期收入的增长百分比",
+                    "inputLocations": {
+                        "a": "materials/notes.md 第 3 行：上年同期收入 100 万元",
+                        "b": "materials/notes.md 第 2 行：三季度收入 112 万元",
+                    },
+                },
+                "note": "收入 112 对上年 100",
+            }
+        ],
         "gaps": ["十月周报缺失"],
         "checks": all_checks("not_run"),
         "openItems": [],
@@ -139,8 +185,7 @@ def compliant_record(method: dict | None = None, **overrides) -> dict:
     return record
 
 
-def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
-               record: dict | None = None) -> dict:
+def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT, record: dict | None = None) -> dict:
     d.mkdir(parents=True, exist_ok=True)
     if not (d / "materials" / "notes.md").exists():
         (d / "materials").mkdir(exist_ok=True)
@@ -156,8 +201,9 @@ def write_case(d: Path, *, report: str = REPORT, script: str | None = SCRIPT,
     return paths
 
 
-def run_check(paths: dict, *, locale: str | None = None,
-              argv_extra: list[str] | None = None) -> tuple[int, dict | None, str, str]:
+def run_check(
+    paths: dict, *, locale: str | None = None, argv_extra: list[str] | None = None
+) -> tuple[int, dict | None, str, str]:
     argv = [str(paths["report"])]
     if paths.get("script"):
         argv += ["--script", str(paths["script"])]
@@ -169,6 +215,7 @@ def run_check(paths: dict, *, locale: str | None = None,
         argv += argv_extra
     import io
     from contextlib import redirect_stdout, redirect_stderr
+
     out, err = io.StringIO(), io.StringIO()
     with redirect_stdout(out), redirect_stderr(err):
         code = rc.main(argv)
@@ -188,14 +235,17 @@ def check_by_id(payload: dict, cid: str) -> dict:
 
 def outline(payload: dict) -> dict:
     """与语言无关的判定骨架：检查项 (id, status, code)、覆盖与交付判定。"""
-    return {"checks": [(c["id"], c["status"], c["code"]) for c in payload["checks"]],
-            "coverage": payload["coverage"],
-            "coverageCapped": payload.get("coverageCapped"),
-            "draftComplete": payload["verdict"]["draftComplete"],
-            "deliverable": payload["verdict"]["deliverable"]}
+    return {
+        "checks": [(c["id"], c["status"], c["code"]) for c in payload["checks"]],
+        "coverage": payload["coverage"],
+        "coverageCapped": payload.get("coverageCapped"),
+        "draftComplete": payload["verdict"]["draftComplete"],
+        "deliverable": payload["verdict"]["deliverable"],
+    }
 
 
 # ── 切片 A：record.method 声明契约 ──────────────────────────────────────────
+
 
 class MethodDeclarationTests(unittest.TestCase):
     """实际生成方法与可得版本保留在记录里；外部方法必须有实际调用依据；
@@ -229,16 +279,14 @@ class MethodDeclarationTests(unittest.TestCase):
 
     def test_unknown_kind_fails(self):
         d = tmpdir()
-        paths = write_case(d, record=make_record(
-            method={"kind": "remote-magic", "name": "某技能"}))
+        paths = write_case(d, record=make_record(method={"kind": "remote-magic", "name": "某技能"}))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
         self.assertEqual(check_by_id(payload, "record.method")["code"], "record.method-unknown")
 
     def test_external_without_name_fails(self):
         d = tmpdir()
-        paths = write_case(d, record=make_record(
-            method={"kind": "external", "invocation": "运行了脚本"}))
+        paths = write_case(d, record=make_record(method={"kind": "external", "invocation": "运行了脚本"}))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 1)
         self.assertEqual(check_by_id(payload, "record.method")["code"], "record.method-missing")
@@ -256,8 +304,7 @@ class MethodDeclarationTests(unittest.TestCase):
         self.assertIn("synthetic-brief-kit", item["detail"])
 
     def test_bad_optional_field_types_fail(self):
-        method = dict(EXTERNAL_METHOD, unavailable="没有", version=1.4,
-                      requested=["a"], note=7)
+        method = dict(EXTERNAL_METHOD, unavailable="没有", version=1.4, requested=["a"], note=7)
         d = tmpdir()
         paths = write_case(d, record=make_record(method=method))
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
@@ -268,9 +315,11 @@ class MethodDeclarationTests(unittest.TestCase):
             self.assertIn(field, item["detail"])
 
     def test_structured_result_and_summary_disclose_method(self):
-        record = make_record(method=dict(EXTERNAL_METHOD, requested="fancy-deck-maker",
-                                         note="指定的技能未安装",
-                                         unavailable=["无导出能力"]))
+        record = make_record(
+            method=dict(
+                EXTERNAL_METHOD, requested="fancy-deck-maker", note="指定的技能未安装", unavailable=["无导出能力"]
+            )
+        )
         d = tmpdir()
         paths = write_case(d, record=record)
         _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
@@ -298,8 +347,7 @@ class MethodDeclarationTests(unittest.TestCase):
         paths = write_case(d, record=make_record(method=method))
         _, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(check_by_id(payload, "record.method")["status"], "pass")
-        self.assertTrue(any("method.version" in w for w in payload["warnings"]),
-                        payload["warnings"])
+        self.assertTrue(any("method.version" in w for w in payload["warnings"]), payload["warnings"])
 
     def test_no_record_has_no_method_check(self):
         d = tmpdir()
@@ -311,6 +359,7 @@ class MethodDeclarationTests(unittest.TestCase):
 
 # ── 切片 B：内外产物判定一致性 ──────────────────────────────────────────────
 
+
 class BuiltinExternalParityTests(unittest.TestCase):
     """相同缺陷在 builtin 与 external 方法声明下判定一致：不受支持的结论、
     坏页面、未执行检查与缺依据都不能因方法不同而通过。"""
@@ -319,21 +368,31 @@ class BuiltinExternalParityTests(unittest.TestCase):
         """对每种相同缺陷，交换 method 声明不改变程序结果与交付判定。"""
         defect_fixes = {
             "unsupported-claim": lambda r: r["findings"][0].update(
-                {"support": "unsupported",
-                 "basis": "材料只说华东增长，报告写成全国增长"}),
+                {"support": "unsupported", "basis": "材料只说华东增长，报告写成全国增长"}
+            ),
             "unlocatable-ref": lambda r: r["findings"][0]["refs"][0].update({"found": False}),
             "visual-issue-declared-pass": lambda r: [
-                item.update({"pages": [{"page": 1, "checked": True, "issues": ["第 1 页溢出"]},
-                                       {"page": 2, "checked": True, "issues": []}]})
-                for item in r["checks"] if item["id"] == "visual.pages"],
-            "checks-not-run": lambda r: r.update(checks=all_checks("not_run"),
-                                                 verdict={"draftComplete": True,
-                                                          "deliverable": True}),
-            "missing-basis": lambda r: (r["findings"][0].pop("refs"),
-                                        r["findings"][0].pop("support"),
-                                        r["findings"][0].pop("basis"),
-                                        r["findings"][0].pop("calculation"),
-                                        r["sources"][0].pop("sha256")),
+                item.update(
+                    {
+                        "pages": [
+                            {"page": 1, "checked": True, "issues": ["第 1 页溢出"]},
+                            {"page": 2, "checked": True, "issues": []},
+                        ]
+                    }
+                )
+                for item in r["checks"]
+                if item["id"] == "visual.pages"
+            ],
+            "checks-not-run": lambda r: r.update(
+                checks=all_checks("not_run"), verdict={"draftComplete": True, "deliverable": True}
+            ),
+            "missing-basis": lambda r: (
+                r["findings"][0].pop("refs"),
+                r["findings"][0].pop("support"),
+                r["findings"][0].pop("basis"),
+                r["findings"][0].pop("calculation"),
+                r["sources"][0].pop("sha256"),
+            ),
             "calc-mismatch": lambda r: r["findings"][0]["calculation"].update({"expected": 99}),
         }
         for name, fix in defect_fixes.items():
@@ -346,8 +405,7 @@ class BuiltinExternalParityTests(unittest.TestCase):
                     paths = write_case(d, record=record)
                     code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
                     twins[label] = (code, outline(payload))
-                self.assertEqual(twins["builtin"], twins["external"],
-                                 f"缺陷 {name} 在内外方法下的判定不一致")
+                self.assertEqual(twins["builtin"], twins["external"], f"缺陷 {name} 在内外方法下的判定不一致")
 
     def test_compliant_external_record_reaches_deliverable(self):
         """外部产物达到同一验收时同样可交付：验收相同，不是只对外部更严。"""
@@ -361,19 +419,24 @@ class BuiltinExternalParityTests(unittest.TestCase):
 
 # ── 切片 C：受控合成外部技能端到端（离线部分） ──────────────────────────────
 
+
 def installed_ae_copy(tmp: Path) -> tuple[Path, dict]:
     """ae.py install 装进合成 HOME 的临时副本，返回 (scripts 目录, 环境变量)。"""
     home = tmp / "home"
     skills = home / ".claude" / "skills"
     env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "CLAUDE_SKILLS_DIR": str(skills)}
-    done = subprocess.run([sys.executable, str(ROOT / "ae.py"), "install"], env=env,
-                          capture_output=True, text=True, timeout=120)
+    done = subprocess.run(
+        [sys.executable, str(ROOT / "ae.py"), "install"], env=env, capture_output=True, text=True, timeout=120
+    )
     assert done.returncode == 0, done.stdout + done.stderr
     installed = skills / "annotation-everything"
-    return installed / "scripts", {**os.environ, "HOME": str(home),
-                                   "USERPROFILE": str(home),
-                                   "CLAUDE_SKILLS_DIR": str(skills),
-                                   "AE_HOME": str(tmp / "ae-home")}
+    return installed / "scripts", {
+        **os.environ,
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        "CLAUDE_SKILLS_DIR": str(skills),
+        "AE_HOME": str(tmp / "ae-home"),
+    }
 
 
 class SyntheticExternalSkillTests(unittest.TestCase):
@@ -394,9 +457,19 @@ class SyntheticExternalSkillTests(unittest.TestCase):
         materials.parent.mkdir(parents=True, exist_ok=True)
         materials.write_bytes(MATERIAL.encode("utf-8"))
         return subprocess.run(
-            [sys.executable, str(skill_dir / "scripts" / "make_report.py"),
-             "--materials", str(materials), "--out", str(out)],
-            env=self.env, capture_output=True, text=True, timeout=60)
+            [
+                sys.executable,
+                str(skill_dir / "scripts" / "make_report.py"),
+                "--materials",
+                str(materials),
+                "--out",
+                str(out),
+            ],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
 
     def test_specified_external_skill_generates_and_passes_same_entry(self):
         """明确指定且可用的外部技能被实际调用：产物走同一核验入口。"""
@@ -414,8 +487,7 @@ class SyntheticExternalSkillTests(unittest.TestCase):
         self.assertEqual(record["method"]["name"], "synthetic-brief-kit")
         self.assertTrue(record["method"].get("invocation", "").strip())
         # 同一核验入口：同一记录契约、同一判定语义
-        paths = {"report": out / "report.html", "script": out / "script.md",
-                 "record": out / "report-record.json"}
+        paths = {"report": out / "report.html", "script": out / "script.md", "record": out / "report-record.json"}
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0, json.dumps(payload["checks"], ensure_ascii=False))
         self.assertTrue(payload["verdict"]["draftComplete"])
@@ -424,14 +496,30 @@ class SyntheticExternalSkillTests(unittest.TestCase):
         # 对照页照常生成（浏览器渲染在 e2e 场景验证）
         review = out / "brief-review"
         built = subprocess.run(
-            [sys.executable, str(self.scripts / "build_viewer.py"),
-             "--report", str(paths["report"]), "--script", str(paths["script"]),
-             "--out", str(review), "--name", "外部技能简报", "--no-scan-skills"],
-            env=self.env, capture_output=True, text=True, timeout=60)
+            [
+                sys.executable,
+                str(self.scripts / "build_viewer.py"),
+                "--report",
+                str(paths["report"]),
+                "--script",
+                str(paths["script"]),
+                "--out",
+                str(review),
+                "--name",
+                "外部技能简报",
+                "--no-scan-skills",
+            ],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
         self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
         review_json = json.loads((review / "review.json").read_text(encoding="utf-8"))
-        self.assertEqual([{"n": p["n"], "key": p["key"]} for p in review_json["pages"]],
-                         [{"n": 1, "key": "sum"}, {"n": 2, "key": "next"}])
+        self.assertEqual(
+            [{"n": p["n"], "key": p["key"]} for p in review_json["pages"]],
+            [{"n": 1, "key": "sum"}, {"n": 2, "key": "next"}],
+        )
         self.assertTrue((review / "index.html").is_file())
 
     def test_limited_external_product_discloses_gaps_not_deliverable(self):
@@ -439,28 +527,30 @@ class SyntheticExternalSkillTests(unittest.TestCase):
         out = self.tmp / "case-lite"
         done = self.run_skill("external-report-skill-lite", out)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        paths = {"report": out / "report.html", "script": out / "script.md",
-                 "record": out / "report-record.json"}
+        paths = {"report": out / "report.html", "script": out / "script.md", "record": out / "report-record.json"}
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
         self.assertEqual(code, 0, "缺依据是缺口披露，不是程序失败")
         self.assertFalse(payload["verdict"]["deliverable"])
         self.assertNotEqual(payload["coverage"]["content"], "covered")
         self.assertIn("结论依据需另行核对", payload["gaps"][0])
-        self.assertTrue(any("sha256" in w or "哈希" in w for w in payload["warnings"]),
-                        f"缺哈希要有警告：{payload['warnings']}")
+        self.assertTrue(
+            any("sha256" in w or "哈希" in w for w in payload["warnings"]), f"缺哈希要有警告：{payload['warnings']}"
+        )
 
     def test_alignment_eval_materials_work_with_bundled_external_generator(self):
-        files = (ROOT / "skill" / "annotation-everything" / "evals"
-                 / "align-navigation-visual-external" / "files")
+        files = ROOT / "skill" / "annotation-everything" / "evals" / "align-navigation-visual-external" / "files"
         out = self.tmp / "case-alignment-eval"
         shutil.copytree(files / "materials", out / "materials")
         generator = files / "installed-skills" / "synthetic-brief-kit" / "scripts" / "make_report.py"
         done = subprocess.run(
-            [sys.executable, str(generator), "--materials", str(out / "materials" / "q3-notes.md"),
-             "--out", str(out)], env=self.env, capture_output=True, text=True, timeout=60)
+            [sys.executable, str(generator), "--materials", str(out / "materials" / "q3-notes.md"), "--out", str(out)],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        paths = {"report": out / "report.html", "script": out / "script.md",
-                 "record": out / "report-record.json"}
+        paths = {"report": out / "report.html", "script": out / "script.md", "record": out / "report-record.json"}
         record = json.loads(paths["record"].read_text(encoding="utf-8"))
         self.assertEqual(record["findings"][0]["calculation"]["inputs"], {"a": 100, "b": 112})
         code, payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
@@ -474,20 +564,19 @@ class SyntheticExternalSkillTests(unittest.TestCase):
         self.run_skill("external-report-skill-lite", out)
         record = json.loads((out / "report-record.json").read_text(encoding="utf-8"))
         _, external_payload, _, _ = run_check(
-            {"report": out / "report.html", "script": out / "script.md",
-             "record": out / "report-record.json"},
-            locale="zh-CN", argv_extra=["--json"])
+            {"report": out / "report.html", "script": out / "script.md", "record": out / "report-record.json"},
+            locale="zh-CN",
+            argv_extra=["--json"],
+        )
         twin = dict(record)
         twin["method"] = dict(BUILTIN_METHOD)
         d = tmpdir()
         shutil.copy(out / "report.html", d / "report.html")
         shutil.copy(out / "script.md", d / "script.md")
-        paths = {"report": d / "report.html", "script": d / "script.md",
-                 "record": d / "report-record.json"}
+        paths = {"report": d / "report.html", "script": d / "script.md", "record": d / "report-record.json"}
         paths["record"].write_bytes((json.dumps(twin, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
         _, builtin_payload, _, _ = run_check(paths, locale="zh-CN", argv_extra=["--json"])
-        self.assertEqual(outline(builtin_payload), outline(external_payload),
-                         "相同缺陷的内外产物判定必须一致")
+        self.assertEqual(outline(builtin_payload), outline(external_payload), "相同缺陷的内外产物判定必须一致")
 
 
 # ── 切片 D：接入约定随技能发布（中英资源契约） ──────────────────────────────
@@ -514,14 +603,18 @@ class ExternalMethodResourceTests(unittest.TestCase):
         cls.zh_copy = (cls.copy / "references" / "generation.zh-CN.md").read_text(encoding="utf-8")
         cls.en_copy = (cls.copy / "references" / "generation.en.md").read_text(encoding="utf-8")
 
-    ZH_ANCHORS = ("外部生成技能", "invocation", "requested", "unavailable",
-                  "不自动搜索", "record.method")
-    EN_ANCHORS = ("external generation skill", "invocation", "requested", "unavailable",
-                  "Never automatically search for or install remote skills", "record.method")
+    ZH_ANCHORS = ("外部生成技能", "invocation", "requested", "unavailable", "不自动搜索", "record.method")
+    EN_ANCHORS = (
+        "external generation skill",
+        "invocation",
+        "requested",
+        "unavailable",
+        "Never automatically search for or install remote skills",
+        "record.method",
+    )
 
     def test_guides_carry_external_method_section(self):
-        for text, anchors, label in ((self.zh_repo, self.ZH_ANCHORS, "中文"),
-                                     (self.en_repo, self.EN_ANCHORS, "英文")):
+        for text, anchors, label in ((self.zh_repo, self.ZH_ANCHORS, "中文"), (self.en_repo, self.EN_ANCHORS, "英文")):
             for anchor in anchors:
                 self.assertIn(anchor, text, f"{label}生成指引缺外部方法锚点 {anchor}")
 
@@ -534,14 +627,13 @@ class ExternalMethodResourceTests(unittest.TestCase):
         for text, label in ((self.zh_repo, "中文"), (self.en_repo, "英文")):
             bullet = re.search(r"[-*] `method`", text)
             self.assertIsNotNone(bullet, f"{label}指引有 method 字段语义")
-            blob = text[bullet.start():bullet.start() + 1600]
+            blob = text[bullet.start() : bullet.start() + 1600]
             self.assertIn("invocation", blob, f"{label}指引说明 invocation")
             self.assertIn("requested", blob, f"{label}指引说明 requested")
 
     def test_workflow_routes_to_method_choice(self):
         """中英工作流的生成入口写明生成方法选择。"""
-        for name, anchor in (("workflow.zh-CN.md", "外部生成技能"),
-                             ("workflow.en.md", "external generation skill")):
+        for name, anchor in (("workflow.zh-CN.md", "外部生成技能"), ("workflow.en.md", "external generation skill")):
             text = (SKILL_SRC / "references" / name).read_text(encoding="utf-8")
             self.assertIn("generation.", text, f"{name} 链到生成指引")
             self.assertIn(anchor, text, f"{name} 提及生成方法选择")
@@ -554,10 +646,12 @@ class ExternalMethodResourceTests(unittest.TestCase):
     def test_discovery_cases_cover_external_skill_routing(self):
         cases = json.loads((SKILL_SRC / "evals" / "discovery-cases.json").read_text(encoding="utf-8"))
         actions = {(c.get("action"), c.get("workflow")) for c in cases["cases"]}
-        self.assertIn(("generate-with-external-skill", "references/generation.zh-CN.md"),
-                      actions, "中文指定外部技能的路由用例")
-        self.assertIn(("generate-with-external-skill", "references/generation.en.md"),
-                      actions, "英文指定外部技能的路由用例")
+        self.assertIn(
+            ("generate-with-external-skill", "references/generation.zh-CN.md"), actions, "中文指定外部技能的路由用例"
+        )
+        self.assertIn(
+            ("generate-with-external-skill", "references/generation.en.md"), actions, "英文指定外部技能的路由用例"
+        )
 
     def test_synthetic_skills_are_self_contained(self):
         """合成技能只依赖标准库、声明自己不是真实远程技能。"""
@@ -577,8 +671,15 @@ class ChecksOrderContractTests(unittest.TestCase):
     def test_method_check_appended_after_existing_ids(self):
         """检查项只追加：method 与后续检查进入固定顺序，既有前 15 项 id 不变。"""
         self.assertEqual(rc.Checks.ORDER[13], "record.method")
-        for cid in ("report.parse", "record.checks", "record.claims", "record.reading",
-                    "record.sources", "record.visual", "record.length"):
+        for cid in (
+            "report.parse",
+            "record.checks",
+            "record.claims",
+            "record.reading",
+            "record.sources",
+            "record.visual",
+            "record.length",
+        ):
             self.assertIn(cid, rc.Checks.ORDER)
         self.assertEqual(len(rc.Checks.ORDER), 18)
 

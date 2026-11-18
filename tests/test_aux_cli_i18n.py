@@ -1,4 +1,5 @@
 """字体检查与技能扫描的语言选择：人读文案按语言变，字体名与路径保持原文。"""
+
 from __future__ import annotations
 
 import json
@@ -15,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "skill" / "annotation-everything" / "scripts" / "check_pptx_fonts.py"
 SCRIPTS = CHECKER.parent
 sys.path.insert(0, str(SCRIPTS))
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
 
 import ledger  # noqa: E402
 import skill_sources  # noqa: E402
@@ -29,18 +30,23 @@ class FontCliLanguageTests(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.pptx = self.root / "synthetic.pptx"
-        self.env = {k: v for k, v in os.environ.items()
-                    if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
+        self.env = {k: v for k, v in os.environ.items() if k not in ("AE_LOCALE", "LC_ALL", "LC_MESSAGES", "LANG")}
         home_dir = str(self.root / "home")
-        self.env.update({"HOME": home_dir, "USERPROFILE": home_dir,
-                         "PATH": str(self.bin) + os.pathsep + os.defpath,
-                         "PYTHONDONTWRITEBYTECODE": "1"})
+        self.env.update(
+            {
+                "HOME": home_dir,
+                "USERPROFILE": home_dir,
+                "PATH": str(self.bin) + os.pathsep + os.defpath,
+                "PYTHONDONTWRITEBYTECODE": "1",
+            }
+        )
 
     def tool(self, name: str, body: str):
         if os.name == "nt":
             (self.bin / f"{name}.py").write_text(body + "\n", encoding="utf-8")
             (self.bin / f"{name}.cmd").write_text(
-                f'@echo off\r\n"{sys.executable}" "%~dp0{name}.py" %*\r\n', encoding="utf-8")
+                f'@echo off\r\n"{sys.executable}" "%~dp0{name}.py" %*\r\n', encoding="utf-8"
+            )
         else:
             path = self.bin / name
             path.write_text(f"#!{sys.executable}\n{body}\n", encoding="utf-8")
@@ -48,14 +54,22 @@ class FontCliLanguageTests(unittest.TestCase):
 
     def make_pptx(self):
         with zipfile.ZipFile(self.pptx, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("ppt/slides/slide1.xml", '''<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
+            archive.writestr(
+                "ppt/slides/slide1.xml",
+                """<p:sld xmlns:p="urn:p" xmlns:a="urn:a">
               <a:r><a:rPr><a:latin typeface="Synthetic Sans"/><a:ea typeface="Missing Family"/></a:rPr></a:r>
-            </p:sld>''')
+            </p:sld>""",
+            )
 
     def run_check(self, *args: str, **env):
         merged = {**self.env, **env}
-        return subprocess.run([sys.executable, str(CHECKER), str(self.pptx), *map(str, args)],
-                              env=merged, capture_output=True, text=True, timeout=60)
+        return subprocess.run(
+            [sys.executable, str(CHECKER), str(self.pptx), *map(str, args)],
+            env=merged,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
 
     def test_default_stays_chinese(self):
         self.make_pptx()
@@ -93,17 +107,28 @@ class FontCliLanguageTests(unittest.TestCase):
         self.assertIn("PPTX 字体声明：", p.stdout)
 
     def test_help_is_localized(self):
-        p = subprocess.run([sys.executable, str(CHECKER), "--help", "--locale", "en"],
-                           env=self.env, capture_output=True, text=True, timeout=60)
+        p = subprocess.run(
+            [sys.executable, str(CHECKER), "--help", "--locale", "en"],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
         self.assertEqual(p.returncode, 0)
         self.assertIn("Check the fonts declared in a PPTX", p.stdout)
-        p = subprocess.run([sys.executable, str(CHECKER), "--help"],
-                           env=self.env, capture_output=True, text=True, timeout=60)
+        p = subprocess.run(
+            [sys.executable, str(CHECKER), "--help"], env=self.env, capture_output=True, text=True, timeout=60
+        )
         self.assertIn("检查 PPTX 声明字体", p.stdout)
 
     def test_unsupported_locale_is_command_error(self):
-        p = subprocess.run([sys.executable, str(CHECKER), str(self.pptx), "--locale", "fr"],
-                           env=self.env, capture_output=True, text=True, timeout=60)
+        p = subprocess.run(
+            [sys.executable, str(CHECKER), str(self.pptx), "--locale", "fr"],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
         self.assertEqual(p.returncode, 2)
         self.assertTrue(p.stderr.strip())
         self.assertEqual(p.stdout, "")
@@ -138,13 +163,27 @@ class FontCliLanguageTests(unittest.TestCase):
                 "    sys.exit(check_pptx_fonts.main(sys.argv[2:]))\n"
             )
             env_iso = {**self.env, "PATH": str(self.bin)}
-            p = subprocess.run([sys.executable, "-c", run, str(SCRIPTS), str(self.pptx), "--locale", "en"],
-                               env=env_iso, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+            p = subprocess.run(
+                [sys.executable, "-c", run, str(SCRIPTS), str(self.pptx), "--locale", "en"],
+                env=env_iso,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+            )
             self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
             self.assertIn("fc-list", p.stderr)
             self.assertIn("fontconfig", p.stderr)
-            p = subprocess.run([sys.executable, "-c", run, str(SCRIPTS), str(self.pptx)],
-                               env=env_iso, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+            p = subprocess.run(
+                [sys.executable, "-c", run, str(SCRIPTS), str(self.pptx)],
+                env=env_iso,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+            )
             self.assertIn("找不到 fc-list", p.stderr)
             return
         p = self.run_check("--locale", "en", PATH=str(self.bin))
@@ -193,25 +232,46 @@ class SkillScanLanguageTests(unittest.TestCase):
         self.assertTrue(any("保留" in w for w in warnings), warnings)
 
     def test_build_scan_uses_explicit_and_saved_page_language(self):
-        for locale, fallback, message in (("en", "zh-CN", "Missing frontmatter"),
-                                           ("zh-CN", "en", "缺少 frontmatter")):
+        for locale, fallback, message in (("en", "zh-CN", "Missing frontmatter"), ("zh-CN", "en", "缺少 frontmatter")):
             with self.subTest(locale=locale):
                 out = self.root / locale
                 env = {**os.environ, "AE_HOME": str(self.root / "ledger"), "AE_LOCALE": fallback}
-                args = ["--report", str(ROOT / "fixtures/sample/report.html"),
-                        "--script", str(ROOT / "fixtures/sample/script.md"),
-                        "--out", str(out), "--locale", locale, "--skills-from", str(self.source)]
-                for command, run_env in ((args, env), (["--rebuild", str(out)], {k:v for k,v in env.items() if k != "AE_LOCALE"})):
-                    p = subprocess.run([sys.executable, str(SCRIPTS / "build_viewer.py"), *command],
-                                       env=run_env, capture_output=True, text=True)
+                args = [
+                    "--report",
+                    str(ROOT / "fixtures/sample/report.html"),
+                    "--script",
+                    str(ROOT / "fixtures/sample/script.md"),
+                    "--out",
+                    str(out),
+                    "--locale",
+                    locale,
+                    "--skills-from",
+                    str(self.source),
+                ]
+                for command, run_env in (
+                    (args, env),
+                    (["--rebuild", str(out)], {k: v for k, v in env.items() if k != "AE_LOCALE"}),
+                ):
+                    p = subprocess.run(
+                        [sys.executable, str(SCRIPTS / "build_viewer.py"), *command],
+                        env=run_env,
+                        capture_output=True,
+                        text=True,
+                    )
                     self.assertEqual(p.returncode, 0, p.stderr)
                     self.assertIn(message, p.stdout + p.stderr)
                     self.assertIn(str(self.source / "broken" / "SKILL.md"), p.stdout + p.stderr)
-                overridden = subprocess.run([sys.executable, str(SCRIPTS / "build_viewer.py"), "--rebuild", str(out)],
-                                            env=env, capture_output=True, text=True)
+                overridden = subprocess.run(
+                    [sys.executable, str(SCRIPTS / "build_viewer.py"), "--rebuild", str(out)],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                )
                 self.assertEqual(overridden.returncode, 0, overridden.stderr)
-                self.assertIn("Missing frontmatter" if fallback == "en" else "缺少 frontmatter",
-                              overridden.stdout + overridden.stderr)
+                self.assertIn(
+                    "Missing frontmatter" if fallback == "en" else "缺少 frontmatter",
+                    overridden.stdout + overridden.stderr,
+                )
                 self.assertEqual(json.loads((out / "review.json").read_text(encoding="utf-8"))["locale"], fallback)
 
     def test_not_skill_file_error_is_localized(self):

@@ -1,4 +1,5 @@
 """自动发版：只在版本号前进时打标签，重复运行时只补缺失的 Release。"""
+
 import importlib.util
 import json
 import sys
@@ -48,8 +49,7 @@ class PlanTests(unittest.TestCase):
 class FakeHost:
     """记录写操作，并按合成状态回答查询。"""
 
-    def __init__(self, version="0.12.1", tags=("v0.12.0",), releases=(), milestones=(), on_main=True,
-                 ci_success=1):
+    def __init__(self, version="0.12.1", tags=("v0.12.0",), releases=(), milestones=(), on_main=True, ci_success=1):
         self.version, self.tags, self.releases = version, list(tags), list(releases)
         self.milestones, self.on_main = list(milestones), on_main
         self.ci_success = ci_success
@@ -78,8 +78,7 @@ class FakeHost:
 
 class ExecuteTests(unittest.TestCase):
     def test_publishes_tag_release_and_closes_finished_milestone(self):
-        host = FakeHost(releases=["v0.12.0"],
-                        milestones=[{"number": 6, "title": "v0.12.1", "open_issues": 0}])
+        host = FakeHost(releases=["v0.12.0"], milestones=[{"number": 6, "title": "v0.12.1", "open_issues": 0}])
         release.execute(host, REPO, SHA)
         joined = [" ".join(call) for call in host.calls]
         self.assertTrue(any("tag -a v0.12.1 " + SHA in call for call in joined), joined)
@@ -114,8 +113,7 @@ class ExecuteTests(unittest.TestCase):
         self.assertEqual(host.calls[0][:4], ["gh", "release", "create", "v0.12.0"])
 
     def test_milestone_with_open_issues_stays_open(self):
-        host = FakeHost(releases=["v0.12.0"],
-                        milestones=[{"number": 6, "title": "v0.12.1", "open_issues": 2}])
+        host = FakeHost(releases=["v0.12.0"], milestones=[{"number": 6, "title": "v0.12.1", "open_issues": 2}])
         release.execute(host, REPO, SHA)
         self.assertFalse(any("milestones/6" in " ".join(call) for call in host.calls))
 

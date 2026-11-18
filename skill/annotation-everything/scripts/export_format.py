@@ -18,6 +18,7 @@ PPT 幻灯片定位（v1）、本条指定的技能、另一侧对应句，以�
 痕迹、孤立页警告、页面键不一致警告、「常驻·范围」这类来源标签不进交换格式（它们在
 `notes.py show` 的阅读输出里）。
 """
+
 from __future__ import annotations
 
 import re
@@ -52,8 +53,10 @@ ALWAYS_ZH_LABEL = store.ALWAYS_ZH
 ALWAYS_ZH_REV = {"全部批注": "all", "全部": "all", "报告": "报告", "讲稿": "讲稿", "风格优化": "style"}
 
 HEAD_NOTE = "报告上的标注：标点是一个点，框选是一块区域；坐标为相对页面左上角的百分比（横向 x、纵向 y，宽、高）。"
-HEAD_NOTE_EN = ("Marks on the report: a pin is a point and a region is a box; coordinates are percentages "
-                "from the top-left corner of the page (x across, y down, width, height).")
+HEAD_NOTE_EN = (
+    "Marks on the report: a pin is a point and a region is a box; coordinates are percentages "
+    "from the top-left corner of the page (x across, y down, width, height)."
+)
 
 # 中文标注格式（标点、框选）与风格标签：导出 Markdown 与 notes.py show 的阅读输出共用这一份定义
 # （show 的中文侧从这里取，英文侧仍走界面词典）。改这里的间距或标点会同时改变两边，正是目的：
@@ -75,10 +78,22 @@ _DG = r"([0-9a-f]{12})"
 # 只读限制），不写元素名——名称会变、不是身份，重定位时刷新成当前版本，与 DOCX 段落定位
 # 不携带段落文本同理。更高版本的定位只写版本号，完整内容在 JSON 备份里。
 PPTX_KIND_ZH = {"page": "整页", "elements": "元素", "text": "文本", "point": "点", "region": "区域"}
-PPTX_VIA_ZH = {"thumb": "页缩略图", "click": "点选", "selection": "选区", "text": "文本匹配",
-               "point": "标注点", "region": "框选"}
-PPTX_VIA_EN = {"thumb": "thumbnail", "click": "click", "selection": "selection", "text": "text match",
-               "point": "point", "region": "region"}
+PPTX_VIA_ZH = {
+    "thumb": "页缩略图",
+    "click": "点选",
+    "selection": "选区",
+    "text": "文本匹配",
+    "point": "标注点",
+    "region": "框选",
+}
+PPTX_VIA_EN = {
+    "thumb": "thumbnail",
+    "click": "click",
+    "selection": "selection",
+    "text": "text match",
+    "point": "point",
+    "region": "region",
+}
 PPTX_RO_ZH = {"text": "文本", "geometry": "几何", "style": "样式"}
 PPTX_RO_ZH_REV = {v: k for k, v in PPTX_RO_ZH.items()}
 _PPTX_FP = r"([0-9a-f]{16,64})"
@@ -86,9 +101,11 @@ _PPTX_FP = r"([0-9a-f]{16,64})"
 # 对象为空时的固定字面量：文法的一部分，两种语言一样，导入时原样成为 target（与 0.3 以来一致）
 UNSET_TARGET = "未指定"
 
-UNKNOWN_FORMAT = ("既不是 JSON，也不是能识别的批注 Markdown。新版导出第一行是格式标记"
-                  "（annotation-everything export v1 lang=…）；旧版中文导出（## 第 N 页｜…）"
-                  "没有标记也能读，别的文字不按批注处理。")
+UNKNOWN_FORMAT = (
+    "既不是 JSON，也不是能识别的批注 Markdown。新版导出第一行是格式标记"
+    "（annotation-everything export v1 lang=…）；旧版中文导出（## 第 N 页｜…）"
+    "没有标记也能读，别的文字不按批注处理。"
+)
 
 
 class FormatError(Exception):
@@ -115,12 +132,16 @@ class Grammar:
         if en:
             self.page = re.compile(r"^##\s*Page\s+(\d+)\s*\|\s*(.*)$")
             # 方括号后容忍零个或一个空格：正文为空时行尾那个空格被工具去掉也不丢整条
-            self.item = re.compile(r"^(\d+)\. \[([^\]·]*)(?: · Pin \d+ \(x ([\d.]+)%, y ([\d.]+)%\))?"
-                                   r"(?: · Region \d+ \(x ([\d.]+)%, y ([\d.]+)%, w ([\d.]+)%, h ([\d.]+)%\))?\]\s?(.*)$")
+            self.item = re.compile(
+                r"^(\d+)\. \[([^\]·]*)(?: · Pin \d+ \(x ([\d.]+)%, y ([\d.]+)%\))?"
+                r"(?: · Region \d+ \(x ([\d.]+)%, y ([\d.]+)%, w ([\d.]+)%, h ([\d.]+)%\))?\]\s?(.*)$"
+            )
             self.quote = re.compile(r"^\s+> Quote(?: \(([^)]*)\))?: (.*)$")
             self.resolution = re.compile(r"^\s+(Resolution|Draft note): (.*)$")
-            self.style = re.compile(r"^\s+Style: (Whole page|Pin|Region"
-                                    r"|Region \(x ([\d.]+)%, y ([\d.]+)%, w ([\d.]+)%, h ([\d.]+)%\))$")
+            self.style = re.compile(
+                r"^\s+Style: (Whole page|Pin|Region"
+                r"|Region \(x ([\d.]+)%, y ([\d.]+)%, w ([\d.]+)%, h ([\d.]+)%\))$"
+            )
             self.anchor = re.compile(r"^\s+Position hint: (.*)$")
             self.skills = re.compile(r"^\s+Skills: (.*)$")
             self.pair = re.compile(r"^\s+↔ Other side \((Report|Script)(?: · (identical|similar))?\): (.*)$")
@@ -130,11 +151,13 @@ class Grammar:
                 r"(?: · chars (\d+)(?:–(\d+)| onward))?"
                 r"(?: · ends in paragraph (\d+) \(paraId " + _PID + r", digest " + _DG + r"\))?"
                 r"(?: · run (\d+))?(?: · source (selection|text match|mark))?"
-                r"(?: · fingerprint ([0-9a-f]{16,64}))?( · paragraph changed)?$")
+                r"(?: · fingerprint ([0-9a-f]{16,64}))?( · paragraph changed)?$"
+            )
             self.pptx = re.compile(r"^\s+PPT location: v(\d+)(.*)$")
             self.pptx_el = re.compile(
                 r"([\w~][^\s(,;]*) \(id ([^,()]+), ([A-Za-z]+), z (\d+), digest ([0-9a-f]{64})"
-                r"(?:, read-only ([a-z]+(?:, [a-z]+)*))?\)")
+                r"(?:, read-only ([a-z]+(?:, [a-z]+)*))?\)"
+            )
             self.pptx_body = re.compile(
                 r"^ (?P<kind>page|elements|text|point|region) · slide (?P<slide>\S+)"
                 r"(?: · targets (?P<targets>.+?))?"
@@ -146,18 +169,23 @@ class Grammar:
                 r" · source (?P<via>thumbnail|click|selection|text match|point|region)"
                 r"(?: · fingerprint (?P<fp>" + _PPTX_FP + r"))?"
                 r"(?P<changed> · text changed)?"
-                r"(?: · quote (?P<quote>.*))?$")
+                r"(?: · quote (?P<quote>.*))?$"
+            )
             self.always = re.compile(r"^Persistent skills \([^)]*\): (.+)$", re.M)
             self.always_item = re.compile(r"^(.+?) \((All notes|Report|Script|Style)\)$")
             self.always_sep = ", "
         else:
             self.page = re.compile(r"^## 第 (\d+) 页｜(.*)$")
-            self.item = re.compile(r"^(\d+)\. 【([^】·]*)(?:·标点 \d+（x ([\d.]+)%，y ([\d.]+)%）)?"
-                                   r"(?:·框选 \d+（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)?】(.*)$")
+            self.item = re.compile(
+                r"^(\d+)\. 【([^】·]*)(?:·标点 \d+（x ([\d.]+)%，y ([\d.]+)%）)?"
+                r"(?:·框选 \d+（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)?】(.*)$"
+            )
             self.quote = re.compile(r"^\s+> 引用(?:（([^）]*)）)?：(.*)$")
             self.resolution = re.compile(r"^\s+(处理|初改)说明：(.*)$")
-            self.style = re.compile(r"^\s+风格优化：(整页|标点处|框选处"
-                                    r"|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$")
+            self.style = re.compile(
+                r"^\s+风格优化：(整页|标点处|框选处"
+                r"|区域（x ([\d.]+)%，y ([\d.]+)%，宽 ([\d.]+)%，高 ([\d.]+)%）)$"
+            )
             self.anchor = re.compile(r"^\s+位置线索：(.*)$")
             self.skills = re.compile(r"^\s+技能：(.*)$")
             self.pair = re.compile(r"^\s+↔ 另一侧（(报告|讲稿)(?:·(相同|相近))?）：(.*)$")
@@ -167,11 +195,13 @@ class Grammar:
                 r"(?: · 字符 (\d+)(?:–(\d+)| 起))?"
                 r"(?: · 止于段落 (\d+)（paraId " + _PID + r"，摘要 " + _DG + r"）)?"
                 r"(?: · 运行 (\d+))?(?: · 来源 (选区|文本匹配|标注处))?"
-                r"(?: · 指纹 ([0-9a-f]{16,64}))?( · 段落已改动)?$")
+                r"(?: · 指纹 ([0-9a-f]{16,64}))?( · 段落已改动)?$"
+            )
             self.pptx = re.compile(r"^\s+PPT 定位：v(\d+)(.*)$")
             self.pptx_el = re.compile(
                 r"([\w~][^\s（、]*)（标识 ([^，()]+)，([A-Za-z]+)，第 (\d+) 层，摘要 ([0-9a-f]{64})"
-                r"(?:，只读 ([^）]+))?" + r"）")
+                r"(?:，只读 ([^）]+))?" + r"）"
+            )
             self.pptx_body = re.compile(
                 r"^ (?P<kind>整页|元素|文本|点|区域) · 幻灯片 (?P<slide>\S+)"
                 r"(?: · 目标 (?P<targets>.+?))?"
@@ -183,13 +213,16 @@ class Grammar:
                 r" · 来源 (?P<via>页缩略图|点选|选区|文本匹配|标注点|框选)"
                 r"(?: · 指纹 (?P<fp>" + _PPTX_FP + r"))?"
                 r"(?P<changed> · 文字已改动)?"
-                r"(?: · 引用 (?P<quote>.*))?$")
+                r"(?: · 引用 (?P<quote>.*))?$"
+            )
             self.always = re.compile(r"^常驻技能（[^）]*）：(.+)$", re.M)
             self.always_item = re.compile(r"^(.+?)（(全部批注|全部|报告|讲稿|风格优化)）$")
             self.always_sep = "、"
-        self.state_prefix = {"resolved": "【已处理】" if not en else "[Resolved] ",
-                             "drafted": "【已初改·待复核】" if not en else "[Drafted] "}
-        self.status = {prefix: state for state, prefix in self.state_prefix.items()}   # 导入：前缀 → 状态
+        self.state_prefix = {
+            "resolved": "【已处理】" if not en else "[Resolved] ",
+            "drafted": "【已初改·待复核】" if not en else "[Drafted] ",
+        }
+        self.status = {prefix: state for state, prefix in self.state_prefix.items()}  # 导入：前缀 → 状态
         self.indent = "   "
 
     # ---------- 导入 ----------
@@ -208,11 +241,16 @@ class Grammar:
                 body, status = m.group(9), "open"
                 for prefix, st in self.status.items():
                     if body.startswith(prefix):
-                        body, status = body[len(prefix):], st
+                        body, status = body[len(prefix) :], st
                         break
-                cur = {"page": page, "title": title, "target": self._target_in(m.group(2)),
-                       "text": body, "status": status,
-                       "pin": {"x": float(m.group(3)), "y": float(m.group(4))} if m.group(3) else None}
+                cur = {
+                    "page": page,
+                    "title": title,
+                    "target": self._target_in(m.group(2)),
+                    "text": body,
+                    "status": status,
+                    "pin": {"x": float(m.group(3)), "y": float(m.group(4))} if m.group(3) else None,
+                }
                 if m.group(5):
                     cur["region"] = {k: float(m.group(g)) for k, g in zip(("x", "y", "w", "h"), (5, 6, 7, 8))}
                 items.append(cur)
@@ -225,21 +263,25 @@ class Grammar:
                 if cur["text"] == DELETE_TEXT:
                     cur["edit"] = {"op": "delete", "from": cur["quote"]}
                 elif cur["text"].startswith(REPLACE_PREFIX):
-                    cur["edit"] = {"op": "replace", "from": cur["quote"], "to": cur["text"][len(REPLACE_PREFIX):]}
+                    cur["edit"] = {"op": "replace", "from": cur["quote"], "to": cur["text"][len(REPLACE_PREFIX) :]}
                 continue
             if m := self.resolution.match(line):
                 cur["resolution"] = m.group(2)
                 continue
             if m := self.style.match(line):
-                if m.group(2):   # 0.3 导出的格式：框写在风格优化这一行
-                    cur["region"] = {"x": float(m.group(2)), "y": float(m.group(3)),
-                                     "w": float(m.group(4)), "h": float(m.group(5))}
+                if m.group(2):  # 0.3 导出的格式：框写在风格优化这一行
+                    cur["region"] = {
+                        "x": float(m.group(2)),
+                        "y": float(m.group(3)),
+                        "w": float(m.group(4)),
+                        "h": float(m.group(5)),
+                    }
                 cur["style"] = {"scope": self._scope_style_in(m.group(1))}
                 continue
             if m := self.anchor.match(line):
                 cur["anchor"] = m.group(1)
                 continue
-            if m := self.docx.match(line):   # 读不懂的（更高版本、被改坏的）整行略过，不并进正文
+            if m := self.docx.match(line):  # 读不懂的（更高版本、被改坏的）整行略过，不并进正文
                 got = self._docx_in(int(m.group(1)), m.group(2))
                 if got:
                     cur["docx"] = got
@@ -261,13 +303,16 @@ class Grammar:
                 cur["skills"] = store.clean_skill_names([re.sub(r"（这条指定）$", "", x.strip()) for x in own])
                 continue
             if m := self.pair.match(line):
-                cur["pair"] = {"side": self._side_in(m.group(1)),
-                               "match": MATCH_ZH.get(m.group(2), "similar") if self.lang == "en"
-                               else ("exact" if m.group(2) == "相同" else "similar"),
-                               "text": m.group(3)}
+                cur["pair"] = {
+                    "side": self._side_in(m.group(1)),
+                    "match": MATCH_ZH.get(m.group(2), "similar")
+                    if self.lang == "en"
+                    else ("exact" if m.group(2) == "相同" else "similar"),
+                    "text": m.group(3),
+                }
                 continue
             if line.startswith(self.indent) and line.strip():
-                cur["text"] += "\n" + line[len(self.indent):]
+                cur["text"] += "\n" + line[len(self.indent) :]
         return items
 
     def _docx_in(self, version: int, body: str) -> dict[str, Any] | None:
@@ -308,17 +353,29 @@ class Grammar:
         if raw:
             els = []
             for em in self.pptx_el.finditer(raw):
-                el: dict[str, Any] = {"key": em.group(1), "id": em.group(2), "name": "", "kind": em.group(3),
-                                      "z": int(em.group(4)), "digest": em.group(5)}
+                el: dict[str, Any] = {
+                    "key": em.group(1),
+                    "id": em.group(2),
+                    "name": "",
+                    "kind": em.group(3),
+                    "z": int(em.group(4)),
+                    "digest": em.group(5),
+                }
                 if em.group(6):
                     ro_rev = {} if self.lang == "en" else PPTX_RO_ZH_REV
-                    el["ro"] = [ro_rev.get(x.strip(), x.strip())
-                                for x in em.group(6).split("," if self.lang == "en" else "、") if x.strip()]
+                    el["ro"] = [
+                        ro_rev.get(x.strip(), x.strip())
+                        for x in em.group(6).split("," if self.lang == "en" else "、")
+                        if x.strip()
+                    ]
                 els.append(el)
             out["elements"] = els
         if m.group("para") is not None:
-            text: dict[str, Any] = {"para": int(m.group("para")), "paraDigest": m.group("paraDigest"),
-                                    "quote": m.group("quote") or ""}
+            text: dict[str, Any] = {
+                "para": int(m.group("para")),
+                "paraDigest": m.group("paraDigest"),
+                "quote": m.group("quote") or "",
+            }
             if m.group("start") is not None:
                 text["start"], text["end"] = int(m.group("start")), int(m.group("end"))
                 runs = []
@@ -331,8 +388,9 @@ class Grammar:
         if m.group("px") is not None:
             out["point"] = {"x": round(float(m.group("px")) / 100, 4), "y": round(float(m.group("py")) / 100, 4)}
         if m.group("rx") is not None:
-            out["region"] = {k: round(float(m.group(g)) / 100, 4)
-                             for k, g in (("x", "rx"), ("y", "ry"), ("w", "rw"), ("h", "rh"))}
+            out["region"] = {
+                k: round(float(m.group(g)) / 100, 4) for k, g in (("x", "rx"), ("y", "ry"), ("w", "rw"), ("h", "rh"))
+            }
         if m.group("via"):
             out["via"] = vias[m.group("via")]
         if m.group("fp"):
@@ -350,8 +408,11 @@ class Grammar:
         return {"Report": "报告", "Script": "讲稿"}.get(label, label)
 
     def _scope_style_in(self, label: str) -> str:
-        return STYLE_ZH.get(label, "region") if self.lang == "en" else \
-            {"整页": "page", "标点处": "pin"}.get(label, "region")
+        return (
+            STYLE_ZH.get(label, "region")
+            if self.lang == "en"
+            else {"整页": "page", "标点处": "pin"}.get(label, "region")
+        )
 
     # ---------- 导出 ----------
     def marker(self) -> str:
@@ -370,39 +431,50 @@ class Grammar:
         out = target
         if note.get("pin"):
             p = note["pin"]
-            out += (f" · Pin {no} (x {p['x']}%, y {p['y']}%)" if self.lang == "en"
-                    else PIN_ZH.format(no=no, x=p["x"], y=p["y"]))
+            out += (
+                f" · Pin {no} (x {p['x']}%, y {p['y']}%)"
+                if self.lang == "en"
+                else PIN_ZH.format(no=no, x=p["x"], y=p["y"])
+            )
         rg = store.region_of(note)
         if rg:
-            out += (f" · Region {no} (x {rg.get('x')}%, y {rg.get('y')}%, w {rg.get('w')}%, h {rg.get('h')}%)"
-                    if self.lang == "en"
-                    else REGION_ZH.format(no=no, **{k: rg.get(k) for k in ("x", "y", "w", "h")}))
+            out += (
+                f" · Region {no} (x {rg.get('x')}%, y {rg.get('y')}%, w {rg.get('w')}%, h {rg.get('h')}%)"
+                if self.lang == "en"
+                else REGION_ZH.format(no=no, **{k: rg.get(k) for k in ("x", "y", "w", "h")})
+            )
         return f"[{out}]" if self.lang == "en" else f"【{out}】"
 
     def head(self, *, title: str, total: int, open_count: int, pages: int, exported_at: str) -> list[str]:
         if self.lang == "en":
-            return [f"# Annotations · {title}",
-                    f"Exported {exported_at}; {total} {_plural(total, 'note')} "
-                    f"({open_count} open) across {pages} {_plural(pages, 'page')}",
-                    HEAD_NOTE_EN]
-        return [f"# 批注 · {title}",
-                f"导出时间：{exported_at}；共 {total} 条（未处理 {open_count}），涉及 {pages} 页",
-                HEAD_NOTE]
+            return [
+                f"# Annotations · {title}",
+                f"Exported {exported_at}; {total} {_plural(total, 'note')} "
+                f"({open_count} open) across {pages} {_plural(pages, 'page')}",
+                HEAD_NOTE_EN,
+            ]
+        return [
+            f"# 批注 · {title}",
+            f"导出时间：{exported_at}；共 {total} 条（未处理 {open_count}），涉及 {pages} 页",
+            HEAD_NOTE,
+        ]
 
     def always_head(self, always: list[dict[str, str]]) -> str:
         parts = []
         for a in always:
             scope = str(a.get("scope") or "all")
             label = SCOPE_EN.get(scope, scope) if self.lang == "en" else ALWAYS_ZH_LABEL.get(scope, scope)
-            parts.append(f"{a.get('name', '')} ({label})" if self.lang == "en"
-                         else f"{a.get('name', '')}（{label}）")
+            parts.append(f"{a.get('name', '')} ({label})" if self.lang == "en" else f"{a.get('name', '')}（{label}）")
         body = (", " if self.lang == "en" else "、").join(parts)
-        lead = "Persistent skills (run before every note within scope): " if self.lang == "en" \
+        lead = (
+            "Persistent skills (run before every note within scope): "
+            if self.lang == "en"
             else "常驻技能（每条批注按范围处理前都先调用）："
+        )
         return lead + body
 
     def quote_line(self, quote: str, quote_from: str) -> str:
-        src = (TARGET_EN.get(quote_from, quote_from) if self.lang == "en" else quote_from)
+        src = TARGET_EN.get(quote_from, quote_from) if self.lang == "en" else quote_from
         if self.lang == "en":
             return f"   > Quote ({src}): {_one_line(quote)}" if src else f"   > Quote: {_one_line(quote)}"
         return f"   > 引用（{src}）：{_one_line(quote)}" if src else f"   > 引用：{_one_line(quote)}"
@@ -416,8 +488,7 @@ class Grammar:
     def style_line(self, style: dict[str, Any]) -> str:
         """只写范围标签；坐标已在标题行里（0.3 那种「区域（x…）」写法只读不写）。"""
         scope = str(style.get("scope") or "page")
-        label = STYLE_EN.get(scope, "Whole page") if self.lang == "en" else \
-            STYLE_LABEL_ZH.get(scope, "整页")
+        label = STYLE_EN.get(scope, "Whole page") if self.lang == "en" else STYLE_LABEL_ZH.get(scope, "整页")
         return f"   Style: {label}" if self.lang == "en" else f"   风格优化：{label}"
 
     def anchor_line(self, anchor: str) -> str:
@@ -428,17 +499,25 @@ class Grammar:
         en = self.lang == "en"
         lead = "   DOCX location: " if en else "   DOCX 定位："
         if a.get("v") != 1 or not isinstance(a.get("para"), dict):
-            return lead + (f"v{a.get('v')} · newer than this tool supports; the JSON backup keeps it in full" if en
-                           else f"v{a.get('v')} · 高于本工具支持的版本，完整内容见 JSON 备份")
+            return lead + (
+                f"v{a.get('v')} · newer than this tool supports; the JSON backup keeps it in full"
+                if en
+                else f"v{a.get('v')} · 高于本工具支持的版本，完整内容见 JSON 备份"
+            )
 
         def para(p: dict[str, Any]) -> str:
             pid = p.get("id") or "-"
-            return (f"{p.get('n')} (paraId {pid}, digest {p.get('digest')})" if en
-                    else f"{p.get('n')}（paraId {pid}，摘要 {p.get('digest')}）")
+            return (
+                f"{p.get('n')} (paraId {pid}, digest {p.get('digest')})"
+                if en
+                else f"{p.get('n')}（paraId {pid}，摘要 {p.get('digest')}）"
+            )
 
         kind = str(a.get("kind"))
-        parts = [f"v1 {kind if en else DOCX_KIND_ZH.get(kind, kind)}",
-                 ("paragraph " if en else "段落 ") + para(a["para"])]
+        parts = [
+            f"v1 {kind if en else DOCX_KIND_ZH.get(kind, kind)}",
+            ("paragraph " if en else "段落 ") + para(a["para"]),
+        ]
         if a.get("start") is not None:
             tail = f"–{a['end']}" if a.get("end") is not None else (" onward" if en else " 起")
             parts.append(("chars " if en else "字符 ") + f"{a['start']}{tail}")
@@ -460,27 +539,39 @@ class Grammar:
         en = self.lang == "en"
         lead = "   PPT location: " if en else "   PPT 定位："
         if a.get("v") != 1 or not isinstance(a.get("slide"), str) or not a.get("slide"):
-            return lead + (f"v{a.get('v')} · newer than this tool supports; the JSON backup keeps it in full" if en
-                           else f"v{a.get('v')} · 高于本工具支持的版本，完整内容见 JSON 备份")
-        parts = [f"v1 {a['kind'] if en else PPTX_KIND_ZH.get(a['kind'], a['kind'])}",
-                 ("slide " if en else "幻灯片 ") + str(a["slide"])]
+            return lead + (
+                f"v{a.get('v')} · newer than this tool supports; the JSON backup keeps it in full"
+                if en
+                else f"v{a.get('v')} · 高于本工具支持的版本，完整内容见 JSON 备份"
+            )
+        parts = [
+            f"v1 {a['kind'] if en else PPTX_KIND_ZH.get(a['kind'], a['kind'])}",
+            ("slide " if en else "幻灯片 ") + str(a["slide"]),
+        ]
         els = a.get("elements") or []
         if els:
             items = []
             for e in els:
-                body = (f"{e.get('key')} (id {e.get('id')}, {e.get('kind')}, z {e.get('z', 0)},"
-                        f" digest {e.get('digest')}" if en else
-                        f"{e.get('key')}（标识 {e.get('id')}，{e.get('kind')}，第 {e.get('z', 0)} 层，"
-                        f"摘要 {e.get('digest')}")
+                body = (
+                    f"{e.get('key')} (id {e.get('id')}, {e.get('kind')}, z {e.get('z', 0)}, digest {e.get('digest')}"
+                    if en
+                    else f"{e.get('key')}（标识 {e.get('id')}，{e.get('kind')}，第 {e.get('z', 0)} 层，"
+                    f"摘要 {e.get('digest')}"
+                )
                 if e.get("ro"):
                     ro = (", " if en else "、").join(x if en else PPTX_RO_ZH.get(x, x) for x in e["ro"])
-                    body += (f", read-only {ro}" if en else f"，只读 {ro}")
+                    body += f", read-only {ro}" if en else f"，只读 {ro}"
                 items.append(body + (")" if en else "）"))
             parts.append(("targets " if en else "目标 ") + ("; " if en else "、").join(items))
         text = a.get("text") if isinstance(a.get("text"), dict) else None
         if text is not None:
-            parts.append((f"paragraph {text.get('para', 0)} (digest {text.get('paraDigest', '')})" if en
-                          else f"段落 {text.get('para', 0)}（摘要 {text.get('paraDigest', '')}）"))
+            parts.append(
+                (
+                    f"paragraph {text.get('para', 0)} (digest {text.get('paraDigest', '')})"
+                    if en
+                    else f"段落 {text.get('para', 0)}（摘要 {text.get('paraDigest', '')}）"
+                )
+            )
             if text.get("start") is not None and text.get("end") is not None:
                 parts.append(("chars " if en else "字符 ") + f"{text['start']}–{text['end']}")
                 runs = [r for r in (text.get("runs") or []) if isinstance(r, dict)]
@@ -489,15 +580,20 @@ class Grammar:
                     parts.append(("runs " if en else "运行 ") + joined)
         if isinstance(a.get("point"), dict):
             p = a["point"]
-            px, py = (format(round(p.get(k, 0) * 100, 2), ".2f").rstrip("0").rstrip(".")
-                      for k in ("x", "y"))
+            px, py = (format(round(p.get(k, 0) * 100, 2), ".2f").rstrip("0").rstrip(".") for k in ("x", "y"))
             parts.append(f"point x {px}%, y {py}%" if en else f"点 x {px}%，y {py}%")
         if isinstance(a.get("region"), dict):
             rg = a["region"]
-            vals = {k: format(round(rg.get(k, 0) * 100, 2), ".2f").rstrip("0").rstrip(".")
-                    for k in ("x", "y", "w", "h")}
-            parts.append((f"region x {vals['x']}%, y {vals['y']}%, width {vals['w']}%, height {vals['h']}%" if en
-                          else f"区域 x {vals['x']}%，y {vals['y']}%，宽 {vals['w']}%，高 {vals['h']}%"))
+            vals = {
+                k: format(round(rg.get(k, 0) * 100, 2), ".2f").rstrip("0").rstrip(".") for k in ("x", "y", "w", "h")
+            }
+            parts.append(
+                (
+                    f"region x {vals['x']}%, y {vals['y']}%, width {vals['w']}%, height {vals['h']}%"
+                    if en
+                    else f"区域 x {vals['x']}%，y {vals['y']}%，宽 {vals['w']}%，高 {vals['h']}%"
+                )
+            )
         via = str(a.get("via"))
         parts.append(("source " if en else "来源 ") + (PPTX_VIA_EN if en else PPTX_VIA_ZH).get(via, via))
         if a.get("fp"):
@@ -516,8 +612,11 @@ class Grammar:
     def pair_line(self, pair: dict[str, Any]) -> str:
         side = str(pair.get("side") or "")
         side = TARGET_EN.get(side, side) if self.lang == "en" else side
-        match = MATCH_EN.get(str(pair.get("match") or "similar"), "similar") if self.lang == "en" \
+        match = (
+            MATCH_EN.get(str(pair.get("match") or "similar"), "similar")
+            if self.lang == "en"
             else {"exact": "相同", "similar": "相近"}.get(str(pair.get("match")), "相近")
+        )
         if self.lang == "en":
             return f"   ↔ Other side ({side} · {match}): {_one_line(pair.get('text', ''))}"
         return f"   ↔ 另一侧（{side}·{match}）：{_one_line(pair.get('text', ''))}"
@@ -575,12 +674,18 @@ def parse_markdown(text: str) -> tuple[list[dict[str, Any]], list[dict[str, str]
             raise FormatError(UNKNOWN_FORMAT)
         return items, parse_always(text, "zh-CN")
     if version != FORMAT_VERSION:
-        raise FormatError(f"这个导出用的是格式版本 v{version}，当前只支持 v{FORMAT_VERSION}："
-                          "请把 notes.py 和对照页都升级到同一版本再导入", code="version", version=version,
-                          supported=FORMAT_VERSION)
+        raise FormatError(
+            f"这个导出用的是格式版本 v{version}，当前只支持 v{FORMAT_VERSION}："
+            "请把 notes.py 和对照页都升级到同一版本再导入",
+            code="version",
+            version=version,
+            supported=FORMAT_VERSION,
+        )
     g = _GRAMMARS.get(lang)
     if g is None:
-        raise FormatError(f"这个导出的内容语言是「{lang}」，当前只支持 {'、'.join(LANGS)}", code="language", language=lang)
+        raise FormatError(
+            f"这个导出的内容语言是「{lang}」，当前只支持 {'、'.join(LANGS)}", code="language", language=lang
+        )
     return g.parse(text), parse_always(text, lang)
 
 
@@ -607,15 +712,25 @@ def parse_always(text: str, lang: str = "zh-CN") -> list[dict[str, str]] | None:
 
 
 # ---------- 导出 ----------
-def render(notes: list[dict[str, Any]], *, title: str, page_titles: dict[int, str] | None = None,
-           always: list[dict[str, str]] | None = None, lang: str = "zh-CN",
-           exported_at: str | None = None, include_resolved: bool = True,
-           page: int | None = None) -> str:
+def render(
+    notes: list[dict[str, Any]],
+    *,
+    title: str,
+    page_titles: dict[int, str] | None = None,
+    always: list[dict[str, str]] | None = None,
+    lang: str = "zh-CN",
+    exported_at: str | None = None,
+    include_resolved: bool = True,
+    page: int | None = None,
+) -> str:
     """渲染成交换用的 Markdown。notes 先按（页码, 时间）排序，与页面导出一致。"""
     g = _GRAMMARS[lang]
     titles = page_titles or {}
-    picked = [n for n in notes if (include_resolved or n.get("status") != "resolved")
-              and (page is None or n.get("page") == page)]
+    picked = [
+        n
+        for n in notes
+        if (include_resolved or n.get("status") != "resolved") and (page is None or n.get("page") == page)
+    ]
     picked.sort(key=lambda n: (int(n.get("page", 0) or 0), str(n.get("at", ""))))
     marks = mark_numbers(notes)
     by: dict[int, list[dict[str, Any]]] = {}
@@ -624,8 +739,9 @@ def render(notes: list[dict[str, Any]], *, title: str, page_titles: dict[int, st
     # 「未处理」与页面一致：已初改·待复核也还没定稿，算在里面（这行只给人看，不参与解析）
     open_count = sum(1 for n in notes if n.get("status", "open") != "resolved")
     lines = [g.marker()]
-    lines += g.head(title=title, total=len(notes), open_count=open_count, pages=len(by),
-                    exported_at=exported_at or exported_stamp())
+    lines += g.head(
+        title=title, total=len(notes), open_count=open_count, pages=len(by), exported_at=exported_at or exported_stamp()
+    )
     if always:
         lines.append(g.always_head(always))
     for pg in sorted(by):
@@ -634,9 +750,10 @@ def render(notes: list[dict[str, Any]], *, title: str, page_titles: dict[int, st
         lines.append(g.page_head(pg, str(titles.get(pg) or group[0].get("title") or "")))
         for k, n in enumerate(group):
             body = str(n.get("text", ""))
-            gap = " " if lang == "en" else ""   # 英文的方括号后面要空格才读得顺
-            lines.append(f"{k + 1}. {g.tag(n, marks.get(n['id']))}{gap}{g.state_prefix.get(n.get('status'), '')}"
-                         + _body(body))
+            gap = " " if lang == "en" else ""  # 英文的方括号后面要空格才读得顺
+            lines.append(
+                f"{k + 1}. {g.tag(n, marks.get(n['id']))}{gap}{g.state_prefix.get(n.get('status'), '')}" + _body(body)
+            )
             if n.get("quote"):
                 lines.append(g.quote_line(str(n["quote"]), str(n.get("quoteFrom") or "")))
             if n.get("status") in ("resolved", "drafted") and n.get("resolution"):
@@ -658,11 +775,26 @@ def render(notes: list[dict[str, Any]], *, title: str, page_titles: dict[int, st
     return "\n".join(lines) + "\n"
 
 
-def json_export(*, review_id: str, name: str, namespace: str, notes: list[dict[str, Any]],
-                always: list[dict[str, str]] | None, lang: str) -> dict[str, Any]:
+def json_export(
+    *,
+    review_id: str,
+    name: str,
+    namespace: str,
+    notes: list[dict[str, Any]],
+    always: list[dict[str, str]] | None,
+    lang: str,
+) -> dict[str, Any]:
     """结构化备份：整份 notes 原样带上，协议值不改写；lang 是新增的元信息，旧消费者按 key 读取即可忽略。"""
-    return {"version": 1, "reviewId": review_id, "name": name, "namespace": namespace,
-            "lang": lang, "notes": notes, "alwaysSkills": always or []}
+    return {
+        "version": 1,
+        "reviewId": review_id,
+        "name": name,
+        "namespace": namespace,
+        "lang": lang,
+        "notes": notes,
+        "alwaysSkills": always or [],
+    }
+
 
 def file_prefix(lang: str) -> str:
     return "annotations" if lang == "en" else "批注"

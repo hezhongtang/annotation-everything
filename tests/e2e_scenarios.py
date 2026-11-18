@@ -10,6 +10,7 @@ fixture 与隔离），再到 `e2e_browser.py` 的 `SCENARIO_RUNNERS` 挂执行�
 两边的完整性由入口启动时的一致性检查把关，缺一边都直接报错退出，
 不会静默少跑。登记后全量模式自动纳入（全量必选场景按注册顺序执行）。
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -19,11 +20,11 @@ from typing import Optional
 @dataclasses.dataclass(frozen=True)
 class Scenario:
     id: str
-    title: str                 # 行为说明：这个场景验证什么用户行为
-    fixture: str               # 声明的准备步骤：合成材料与目录，只承担本场景需要的状态
-    isolation: str             # 隔离边界：浏览器上下文、临时审阅目录与收尾
+    title: str  # 行为说明：这个场景验证什么用户行为
+    fixture: str  # 声明的准备步骤：合成材料与目录，只承担本场景需要的状态
+    isolation: str  # 隔离边界：浏览器上下文、临时审阅目录与收尾
     full_required: bool = True  # 是否全量模式必选
-    aliases: tuple[str, ...] = ()   # 旧局部参数（兼容别名）
+    aliases: tuple[str, ...] = ()  # 旧局部参数（兼容别名）
     parallel_safe: bool = False  # 审查过的进程 / HOME / 台账隔离；新场景默认串行
 
 
@@ -71,71 +72,69 @@ SCENARIOS: list[Scenario] = [
         parallel_safe=True,
         id="generated-draft-loop",
         title="默认范式初稿闭环：安装副本上的核验入口放行初稿、对照页吃进带基础样式的产物、"
-              "批注落盘后页序调整再重建，批注按稳定页面键找回且审阅标识不变",
+        "批注落盘后页序调整再重建，批注按稳定页面键找回且审阅标识不变",
         fixture="ae.py install 装进合成 HOME 的临时副本；按范式合成的三页报告（内联 report-base.css）、"
-                "讲稿与 ae-report-record/1 核验记录；独立 AE_HOME，不碰真实台账",
+        "讲稿与 ae-report-record/1 核验记录；独立 AE_HOME，不碰真实台账",
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
         parallel_safe=True,
         id="report-verdict-loop",
         title="结构与视觉核验的可交付判定：真实渲染逐页测得溢出与无溢出并作为视觉证据写进记录，"
-              "正确产物支持「报告可交付」，故障产物（如实登记的溢出、缺页覆盖）不能通过整体交付验收；"
-              "判定离线完成不落批注，报告仍在对照页可审阅",
+        "正确产物支持「报告可交付」，故障产物（如实登记的溢出、缺页覆盖）不能通过整体交付验收；"
+        "判定离线完成不落批注，报告仍在对照页可审阅",
         fixture="ae.py install 装进合成 HOME 的临时副本；正确与故障两套合成产物（内联 report-base.css 的"
-                "三页报告、讲稿、合成材料与 ae-report-record/1 记录，故障报告第 3 页带 1600px 宽块）；"
-                "独立 AE_HOME，不碰真实台账",
+        "三页报告、讲稿、合成材料与 ae-report-record/1 记录，故障报告第 3 页带 1600px 宽块）；"
+        "独立 AE_HOME，不碰真实台账",
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
         parallel_safe=True,
         id="revision-update-loop",
         title="改稿更新核验：可交付初态经改数字、来源变动、只改样式与页序调整后旧判定失效，"
-              "维护记录（更新哈希、受影响引用与计算、revision 重新核验声明）后恢复，"
-              "无法确认影响范围时摘要如实披露待核验范围与原因，页序重排按稳定页面键保持关联",
+        "维护记录（更新哈希、受影响引用与计算、revision 重新核验声明）后恢复，"
+        "无法确认影响范围时摘要如实披露待核验范围与原因，页序重排按稳定页面键保持关联",
         fixture="ae.py install 装进合成 HOME 的临时副本；带完整核验记录的合成三页报告（内联 "
-                "report-base.css）、讲稿与合成材料；独立 AE_HOME，不碰真实台账",
+        "report-base.css）、讲稿与合成材料；独立 AE_HOME，不碰真实台账",
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
         parallel_safe=True,
         id="legacy-report-compat",
         title="旧报告无核验记录仍直接审阅：批注落盘、页面提交（已初改·待复核）、接收初改、重建，"
-              "批次停在待复核且报告质量状态独立；整体核验请求下按完整清单建立记录恢复可交付，"
-              "原始依据不可得时缺口登记不伪称核验完成",
-        fixture="无核验记录的合成三页报告与讲稿（部分用例带合成材料、部分材料缺席）；"
-                "独立 AE_HOME，不碰真实台账",
+        "批次停在待复核且报告质量状态独立；整体核验请求下按完整清单建立记录恢复可交付，"
+        "原始依据不可得时缺口登记不伪称核验完成",
+        fixture="无核验记录的合成三页报告与讲稿（部分用例带合成材料、部分材料缺席）；独立 AE_HOME，不碰真实台账",
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
         parallel_safe=True,
         id="external-method-loop",
         title="外部生成技能共用验收：明确指定的合成外部技能被实际调用（运行其脚本，"
-              "可观察的调用效果与调用说明写进记录），产物走同一核验入口与记录契约、"
-              "打开现有对照页渲染并批注；缺依据的外部产物与换成内置方法声明的孪生"
-              "记录判定一致，外部方法不放宽验收",
+        "可观察的调用效果与调用说明写进记录），产物走同一核验入口与记录契约、"
+        "打开现有对照页渲染并批注；缺依据的外部产物与换成内置方法声明的孪生"
+        "记录判定一致，外部方法不放宽验收",
         fixture="ae.py install 装进合成 HOME 的临时副本；fixtures/external-report-skill 与 "
-                "external-report-skill-lite（受控合成外部技能）复制进同一合成技能目录；"
-                "按技能脚本合成的两页简报、讲稿与 ae-report-record/1 记录、合成材料；"
-                "独立 AE_HOME，不碰真实台账",
+        "external-report-skill-lite（受控合成外部技能）复制进同一合成技能目录；"
+        "按技能脚本合成的两页简报、讲稿与 ae-report-record/1 记录、合成材料；"
+        "独立 AE_HOME，不碰真实台账",
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
         parallel_safe=True,
         id="alignment-navigation-loop",
         title="对齐与导航闭环：多板块目录与边栏导航、结论 → 证据/补充页 → 对应分析双向跳转"
-              "与对照页返回上一浏览页、重排与 rebuild 后保持章节范围与稳定页面键、"
-              "1280×720 Shadow DOM 视觉渲染无溢出及补充页计数",
-        fixture="ae.py install 临时安装副本；含目录、核心分析、证据、data-kind=\"supplement\" 补充页与"
-                "request.alignment / request.lengthSpec / request.qa 的合成报告与可选讲稿；独立 AE_HOME",
+        "与对照页返回上一浏览页、重排与 rebuild 后保持章节范围与稳定页面键、"
+        "1280×720 Shadow DOM 视觉渲染无溢出及补充页计数",
+        fixture='ae.py install 临时安装副本；含目录、核心分析、证据、data-kind="supplement" 补充页与'
+        "request.alignment / request.lengthSpec / request.qa 的合成报告与可选讲稿；独立 AE_HOME",
         isolation="独立临时审阅目录、独立端口与浏览器上下文，服务用后即停",
     ),
     Scenario(
         parallel_safe=True,
         id="installed-delivery",
         title="从唯一的临时安装副本完成英文、中文、中英混合三种语言组合的真实审阅流程",
-        fixture="ae.py install 装进合成 HOME 的临时副本；fixtures/sample 合成报告与讲稿；"
-                "独立 AE_HOME，不碰真实台账",
+        fixture="ae.py install 装进合成 HOME 的临时副本；fixtures/sample 合成报告与讲稿；独立 AE_HOME，不碰真实台账",
         isolation="每种语言组合独立临时审阅目录、独立端口与浏览器上下文；CLI 子进程全部登记回收",
         aliases=("--delivery-only",),
     ),
@@ -258,61 +257,61 @@ SCENARIOS: list[Scenario] = [
     Scenario(
         id="pptx-review",
         title="PPTX 直接审阅：幻灯片按原始尺寸方向与页序显示、渲染与未核验横幅、"
-              "元素覆盖层点选单元素与 ⌘/Ctrl 多选（有序目标、只读元素限制提示）、"
-              "页缩略图选整页、普通文本选择（逻辑段落 + 字符偏移 + run 样式边界）、"
-              "整页批注、点标注与框选区域在 PPT 页可用且坐标按画布归一化；"
-              "保存被拒后重试保留完整 pptx 定位，file:// 暂存与服务模式落盘都不丢字段，"
-              "旧版服务不认 pptx 特性时阻断内容写入，保留停止服务入口",
+        "元素覆盖层点选单元素与 ⌘/Ctrl 多选（有序目标、只读元素限制提示）、"
+        "页缩略图选整页、普通文本选择（逻辑段落 + 字符偏移 + run 样式边界）、"
+        "整页批注、点标注与框选区域在 PPT 页可用且坐标按画布归一化；"
+        "保存被拒后重试保留完整 pptx 定位，file:// 暂存与服务模式落盘都不丢字段，"
+        "旧版服务不认 pptx 特性时阻断内容写入，保留停止服务入口",
         fixture="fixtures/pptx/make_pptx.py 现场合成的 2 页样例（横版；元素页含表格、图片、"
-                "组合形状、媒体与未知结构，文本页含跨 run 样式与重复文字）；真实 build_viewer 构建，"
-                "渲染走伪造 soffice/pdftoppm 工具脚本注入的受控合成 PDF/PNG（不依赖本机 LibreOffice）；"
-                "仅拦截合成服务的 pptx 能力声明",
+        "组合形状、媒体与未知结构，文本页含跨 run 样式与重复文字）；真实 build_viewer 构建，"
+        "渲染走伪造 soffice/pdftoppm 工具脚本注入的受控合成 PDF/PNG（不依赖本机 LibreOffice）；"
+        "仅拦截合成服务的 pptx 能力声明",
         isolation="独立临时审阅目录、端口与浏览器上下文；先 file:// 模式（批注只进本地存储），"
-                  "再服务模式（服务用后回收）",
+        "再服务模式（服务用后回收）",
     ),
     Scenario(
         id="docx-review",
         title="DOCX 直接审阅：Word 原分页与横向页按原比例显示、verified 横幅与限制清单、"
-              "页眉页脚按实际页码、正文可拖选、点标注与快捷删除在 DOCX 页可用、"
-              "纯文字快捷修改提示可回写、原生修订（含文本反查）提示不能自动回写；引用、点标注与框选写入段落定位（docx 字段），"
-              "文本反查兜底、保存被拒后重试保留定位、同文异段导入不误去重；"
-              "旧版服务不认 docx 特性时阻断内容写入，保留停止服务入口",
+        "页眉页脚按实际页码、正文可拖选、点标注与快捷删除在 DOCX 页可用、"
+        "纯文字快捷修改提示可回写、原生修订（含文本反查）提示不能自动回写；引用、点标注与框选写入段落定位（docx 字段），"
+        "文本反查兜底、保存被拒后重试保留定位、同文异段导入不误去重；"
+        "旧版服务不认 docx 特性时阻断内容写入，保留停止服务入口",
         fixture="fixtures/docx/make_sample.py 现场合成的 5 页样例（4 页 A4 纵向 + 1 页横向；"
-                "跨页表格、原生修订、Word 批注、文本框、域）；真实 build_viewer 构建，无讲稿；"
-                "仅拦截合成服务的 docx 能力声明",
+        "跨页表格、原生修订、Word 批注、文本框、域）；真实 build_viewer 构建，无讲稿；"
+        "仅拦截合成服务的 docx 能力声明",
         isolation="独立临时审阅目录、端口与浏览器上下文；先 file:// 模式（批注只进本地存储），"
-                  "再服务模式（服务用后回收）",
+        "再服务模式（服务用后回收）",
     ),
     Scenario(
         parallel_safe=True,
         id="server-mode",
         title="服务模式全流程：落盘与编辑、标点 / 区域交互、快捷删除与改写、风格优化、常驻技能、轮询不打断草稿、交给 Agent 唤醒等待命令，随后断线补传、写入失败、服务卡死、同一端口换审阅、恶意网页与恶意导入",
         fixture="fixtures/sample 合成材料生成的审阅；导入用的 Markdown 由真实 CLI（resolve 标已处理后 "
-                "notes.py export --all）从独立合成审阅导出；恶意页面与批注均为合成载荷",
+        "notes.py export --all）从独立合成审阅导出；恶意页面与批注均为合成载荷",
         isolation="独立临时审阅目录与端口；一个跨阶段的浏览器上下文承载同一次审阅会话，"
-                  "服务进程全部经登记表启动与回收，场景结束即停",
+        "服务进程全部经登记表启动与回收，场景结束即停",
     ),
     Scenario(
         id="poll-repaint",
         title="轮询数据不变时不重画提交状态与续看提示：跳页计数、标注序号与标点编号不变，"
-              "只改摘要字段仍重画，本地写批注、翻页、切语言与别的标签页写入都立即更新",
+        "只改摘要字段仍重画，本地写批注、翻页、切语言与别的标签页写入都立即更新",
         fixture="fixtures/sample 合成材料生成的两份审阅（一份预写合成批注）；"
-                "notes.py claim/resolve/done 真实子进程；file:// 阶段用同一上下文的第二个标签页",
+        "notes.py claim/resolve/done 真实子进程；file:// 阶段用同一上下文的第二个标签页",
         isolation="每阶段独立临时审阅目录、端口与浏览器上下文；服务与 CLI 子进程全部登记回收",
     ),
     Scenario(
         id="overview-home",
         title="总览首页：零运行审阅直接打开、默认范围覆盖台账、运行中/已停/归档/失效按组排序显示、"
-              "无「返回当前审阅」与顶栏停止按钮、视图内双语切换、失效清理命令与批量清理确认/即时刷新、"
-              "完整路径备份入口、运行中与已停审阅在新标签页打开对照页、无接收方提示与可复制等待命令、"
-              "桌面事件绑定显示接收方式、--under 过滤列表与批量停止（含范围内归档运行中）、"
-              "范围外服务不受影响、全部服务回收",
+        "无「返回当前审阅」与顶栏停止按钮、视图内双语切换、失效清理命令与批量清理确认/即时刷新、"
+        "完整路径备份入口、运行中与已停审阅在新标签页打开对照页、无接收方提示与可复制等待命令、"
+        "桌面事件绑定显示接收方式、--under 过滤列表与批量停止（含范围内归档运行中）、"
+        "范围外服务不受影响、全部服务回收",
         fixture="入口临时台账（AE_HOME）按 fixtures/sample 构建七份合成审阅：运行中、两份已停"
-                "（一份经对照页写入真实批注）、归档（总览页内归档）、失效（目录删除）、桌面事件绑定"
-                "（wakeup.py bind 真实路径 + 合成桌面套接字）与 --under 范围外审阅；首页由 "
-                "serve.py overview 真实子进程提供（默认与 --under 各启一次）",
+        "（一份经对照页写入真实批注）、归档（总览页内归档）、失效（目录删除）、桌面事件绑定"
+        "（wakeup.py bind 真实路径 + 合成桌面套接字）与 --under 范围外审阅；首页由 "
+        "serve.py overview 真实子进程提供（默认与 --under 各启一次）",
         isolation="独立浏览器上下文与审阅目录；台账为入口的临时 AE_HOME（与同进程场景共享同一临时目录），"
-                  "首页与审阅服务（含代启动的）按运行状态文件核对后在场景结束全部回收，沿用 host-state 锁",
+        "首页与审阅服务（含代启动的）按运行状态文件核对后在场景结束全部回收，沿用 host-state 锁",
     ),
 ]
 
@@ -337,11 +336,11 @@ class UsageError(Exception):
 
 @dataclasses.dataclass(frozen=True)
 class Request:
-    mode: str                    # "full" | "partial"
-    plan: tuple[str, ...]        # 实际执行的场景，按注册表顺序去重
-    requested: tuple[str, ...]   # 用户原始选择（去重前，便于记录解释）
-    source: str                  # "default" | "--only" | 旧参数名
-    listing: bool = False        # 只要求打印场景清单
+    mode: str  # "full" | "partial"
+    plan: tuple[str, ...]  # 实际执行的场景，按注册表顺序去重
+    requested: tuple[str, ...]  # 用户原始选择（去重前，便于记录解释）
+    source: str  # "default" | "--only" | 旧参数名
+    listing: bool = False  # 只要求打印场景清单
 
 
 def scenario_by_id(scenario_id: str) -> Scenario:
@@ -353,7 +352,9 @@ def scenario_by_id(scenario_id: str) -> Scenario:
 
 def _unknown(names: list[str]) -> str:
     return "未知的浏览器场景：%s（可选：%s）\n用 --list 查看场景清单与行为说明。" % (
-        "、".join(names), "、".join(SCENARIO_IDS))
+        "、".join(names),
+        "、".join(SCENARIO_IDS),
+    )
 
 
 def _split_ids(raw: str) -> list[str]:
@@ -375,21 +376,21 @@ def resolve_request(argv: list[str]) -> Request:
             if index >= len(argv):
                 raise UsageError("%s 需要场景 ID，例如 --only skill-i18n；用 --list 查看清单。" % token)
             if source not in (None, "--only"):
-                raise UsageError("冲突的选择：%s 不能与旧参数 %s 混用，请只用一种选择方式。"
-                                 % (token, source))
+                raise UsageError("冲突的选择：%s 不能与旧参数 %s 混用，请只用一种选择方式。" % (token, source))
             source = "--only"
             requested.extend(_split_ids(argv[index]))
         elif token in LEGACY_FLAGS:
             if source is not None:
                 partner = ("旧参数 " + source) if source in LEGACY_FLAGS else source
-                raise UsageError("冲突的选择：%s 不能与 %s 混用，请只用一种选择方式。"
-                                 % (token, partner))
+                raise UsageError("冲突的选择：%s 不能与 %s 混用，请只用一种选择方式。" % (token, partner))
             source = token
             requested.extend(LEGACY_FLAGS[token])
         elif token.startswith("-"):
-            raise UsageError("未知的参数：%s\n用 --list 查看场景清单；"
-                             "旧参数 --delivery-only / --skills-only / --full-check-only / "
-                             "--handoff-only 仍可用。" % token)
+            raise UsageError(
+                "未知的参数：%s\n用 --list 查看场景清单；"
+                "旧参数 --delivery-only / --skills-only / --full-check-only / "
+                "--handoff-only 仍可用。" % token
+            )
         else:
             raise UsageError("未知的参数：%s（场景选择用 --only，清单用 --list）" % token)
         index += 1
@@ -405,7 +406,7 @@ def resolve_request(argv: list[str]) -> Request:
     unknown = [name for name in requested if name not in SCENARIO_IDS]
     if unknown:
         raise UsageError(_unknown(unknown))
-    plan = tuple(sid for sid in SCENARIO_IDS if sid in set(requested))   # 去重并按注册顺序执行
+    plan = tuple(sid for sid in SCENARIO_IDS if sid in set(requested))  # 去重并按注册顺序执行
     return Request(mode="partial", plan=plan, requested=tuple(requested), source=source)
 
 
@@ -419,8 +420,7 @@ def format_listing() -> str:
         lines.append("  行为：%s" % scenario.title)
         lines.append("  fixture：%s" % scenario.fixture)
         lines.append("  隔离：%s\n" % scenario.isolation)
-    lines.append("选择：--only 场景1,场景2（去重，按上面顺序执行）；"
-                 "未知 / 空 / 冲突的选择在启动浏览器前报错退出。")
+    lines.append("选择：--only 场景1,场景2（去重，按上面顺序执行）；未知 / 空 / 冲突的选择在启动浏览器前报错退出。")
     return "\n".join(lines)
 
 

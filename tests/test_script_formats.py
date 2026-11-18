@@ -4,6 +4,7 @@
 在这里都有对得上的合成用例（中英格式、混合语言正文、缺页与代表性格式错误）。
 只用标准库：python3 -m unittest discover tests
 """
+
 from __future__ import annotations
 
 import io
@@ -19,8 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 FIXTURE = ROOT / "fixtures" / "sample"
 sys.path.insert(0, str(SCRIPTS))
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
-os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-test-user-")      # 技能扫描只使用合成目录
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
+os.environ["HOME"] = tempfile.mkdtemp(prefix="ae-test-user-")  # 技能扫描只使用合成目录
 os.environ["USERPROFILE"] = os.environ["HOME"]
 os.environ["CODEX_HOME"] = str(Path(os.environ["HOME"]) / ".codex")
 os.environ["CLAUDE_SKILLS_DIR"] = str(Path(os.environ["HOME"]) / ".claude" / "skills")
@@ -108,7 +109,9 @@ class EnglishFormatTests(unittest.TestCase):
         self.assertEqual(pages[1]["qa"], [{"q": "新店贡献多少？", "a": "约占三分之二。"}])
 
     def test_english_head_accepts_half_width_separator_and_spacing(self):
-        _h1, _i, pages, warns = parse("### Page 3 | 结论：收入增长 12%\n**Duration**: 90 s\n**Talking points**：\n正文\n")
+        _h1, _i, pages, warns = parse(
+            "### Page 3 | 结论：收入增长 12%\n**Duration**: 90 s\n**Talking points**：\n正文\n"
+        )
         self.assertEqual(warns, [])
         self.assertEqual(pages[0]["n"], 3)
         self.assertEqual(pages[0]["title"], "结论：收入增长 12%")
@@ -117,11 +120,15 @@ class EnglishFormatTests(unittest.TestCase):
 
     def test_english_head_without_space_after_page(self):
         """「### Page2｜标题」与中文「### 第2页｜标题」同样宽容，不会把整页并进上一页。"""
-        _h1, _i, pages, warns = parse("### Page1｜封面\n**Duration**: 20 s\n**Talking points**:\n一\n"
-                                      "### page2｜目录\n**Duration**: 30 s\n**Talking points**:\n二\n")
+        _h1, _i, pages, warns = parse(
+            "### Page1｜封面\n**Duration**: 20 s\n**Talking points**:\n一\n"
+            "### page2｜目录\n**Duration**: 30 s\n**Talking points**:\n二\n"
+        )
         self.assertEqual(warns, [])
-        self.assertEqual([(p["n"], p["title"], p["sec"], p["talk"]) for p in pages],
-                         [(1, "封面", 20, "<p>一</p>"), (2, "目录", 30, "<p>二</p>")])
+        self.assertEqual(
+            [(p["n"], p["title"], p["sec"], p["talk"]) for p in pages],
+            [(1, "封面", 20, "<p>一</p>"), (2, "目录", 30, "<p>二</p>")],
+        )
 
     def test_head_without_separator_is_diagnosed_even_without_space(self):
         bad = write(tmpdir(), "s.md", "### 第 1 页｜封面\n**时长**：20 秒\n### page2 目录\n")
@@ -134,19 +141,23 @@ class EnglishFormatTests(unittest.TestCase):
 
     def test_a_colon_inside_chinese_text_is_not_an_answer_marker(self):
         """「套餐A：」「评级A：」是正文，不能当成英文问答的答标记把问题截断。"""
-        for line, want in (("- 问：套餐A：能退吗？答：可以。", ("套餐A：能退吗？", "可以。")),
-                           ("- 问：评级A：代表什么？", ("评级A：代表什么？", "")),
-                           ("- 问：方案A：能改吗？答：在谈。", ("方案A：能改吗？", "在谈。"))):
+        for line, want in (
+            ("- 问：套餐A：能退吗？答：可以。", ("套餐A：能退吗？", "可以。")),
+            ("- 问：评级A：代表什么？", ("评级A：代表什么？", "")),
+            ("- 问：方案A：能改吗？答：在谈。", ("方案A：能改吗？", "在谈。")),
+        ):
             _h1, _i, pages, warns = parse(f"### 第 1 页｜问答\n**可能被问**：\n{line}\n")
             self.assertEqual(warns, [])
             self.assertEqual(pages[0]["qa"], [{"q": want[0], "a": want[1]}], line)
 
     def test_english_answer_marker_still_splits(self):
-        for line, want in (("- Q: 新店贡献多少？ A: 约占三分之二。", ("新店贡献多少？", "约占三分之二。")),
-                           ("- Q: Why did margin fall? A: Commission.", ("Why did margin fall?", "Commission.")),
-                           ("- Q:q?A:a.", ("q?", "a.")),
-                           # 问题里自己也带了「A:」时取第一个标记，与中文「答：」取第一个一致
-                           ("- Q: Is plan A: cut costs feasible? A: Yes.", ("Is plan", "cut costs feasible? A: Yes."))):
+        for line, want in (
+            ("- Q: 新店贡献多少？ A: 约占三分之二。", ("新店贡献多少？", "约占三分之二。")),
+            ("- Q: Why did margin fall? A: Commission.", ("Why did margin fall?", "Commission.")),
+            ("- Q:q?A:a.", ("q?", "a.")),
+            # 问题里自己也带了「A:」时取第一个标记，与中文「答：」取第一个一致
+            ("- Q: Is plan A: cut costs feasible? A: Yes.", ("Is plan", "cut costs feasible? A: Yes.")),
+        ):
             _h1, _i, pages, warns = parse(f"### Page 1｜QA\n**Likely questions**:\n{line}\n")
             self.assertEqual(warns, [])
             self.assertEqual(pages[0]["qa"], [{"q": want[0], "a": want[1]}], line)
@@ -160,7 +171,8 @@ class EnglishFormatTests(unittest.TestCase):
         self.assertIn("看不懂", warns[0])
         self.assertIn("1.2.3 分钟", warns[0])
         _h1, _i, pages, warns = build_viewer.parse_script(
-            "### Page 1｜Bad duration\n**Duration**: 1.2.3 min\n**Talking points**:\nBody\n", "en")
+            "### Page 1｜Bad duration\n**Duration**: 1.2.3 min\n**Talking points**:\nBody\n", "en"
+        )
         self.assertEqual(len(warns), 1)
         self.assertIn("cannot be read", warns[0])
 
@@ -170,9 +182,19 @@ class EnglishFormatTests(unittest.TestCase):
             self.assertEqual(warns, [], dur)
 
     def test_english_time_units(self):
-        for text, want in (("2 minutes", 120), ("45 seconds", 45), ("30 s", 30), ("1 min 30 s", 90),
-                           ("1.5 min", 90), ("2 mins", 120), ("20 秒", 20), ("1.5 分钟", 90),
-                           ("1 分 30 秒", 90), ("90 sec", 90), ("2 MINUTES", 120)):
+        for text, want in (
+            ("2 minutes", 120),
+            ("45 seconds", 45),
+            ("30 s", 30),
+            ("1 min 30 s", 90),
+            ("1.5 min", 90),
+            ("2 mins", 120),
+            ("20 秒", 20),
+            ("1.5 分钟", 90),
+            ("1 分 30 秒", 90),
+            ("90 sec", 90),
+            ("2 MINUTES", 120),
+        ):
             self.assertEqual(build_viewer.seconds(text), want, text)
 
     def test_english_qa_without_bullets_and_half_width_colons(self):
@@ -189,9 +211,11 @@ class EnglishFormatTests(unittest.TestCase):
         self.assertEqual(pages[0]["next"], "收尾")
 
     def test_documented_english_aliases(self):
-        text = ("### Page 1｜别名\n**Time**: 20 s\n**Talk**:\n正文\n"
-                "### Page 2｜别名二\n**Time**: 30 s\n**Talking point**:\n正文二\n**Q&A**:\nQ: 甲？ A: 乙。\n"
-                "### Page 3｜别名三\n**Questions**:\nQ: 丙？ A: 丁。\n")
+        text = (
+            "### Page 1｜别名\n**Time**: 20 s\n**Talk**:\n正文\n"
+            "### Page 2｜别名二\n**Time**: 30 s\n**Talking point**:\n正文二\n**Q&A**:\nQ: 甲？ A: 乙。\n"
+            "### Page 3｜别名三\n**Questions**:\nQ: 丙？ A: 丁。\n"
+        )
         _h1, _i, pages, warns = parse(text)
         self.assertEqual(warns, [])
         self.assertEqual([p["sec"] for p in pages], [20, 30, 0])
@@ -214,8 +238,11 @@ class EnglishFormatTests(unittest.TestCase):
         self.assertEqual(en[3], [])
         self.assertEqual(len(zh[2]), len(en[2]))
         for a, b in zip(zh[2], en[2]):
-            self.assertEqual((a["n"], a["sec"], len(a["qa"]), bool(a["next"]), bool(a["talk"])),
-                             (b["n"], b["sec"], len(b["qa"]), bool(b["next"]), bool(b["talk"])), f"第 {a['n']} 页")
+            self.assertEqual(
+                (a["n"], a["sec"], len(a["qa"]), bool(a["next"]), bool(a["talk"])),
+                (b["n"], b["sec"], len(b["qa"]), bool(b["next"]), bool(b["talk"])),
+                f"第 {a['n']} 页",
+            )
         self.assertEqual([p["n"] for p in en[2]], [1, 2, 3, 4, 5, 6])
         self.assertEqual([p["sec"] for p in en[2]], [20, 30, 90, 120, 120, 90])
         self.assertEqual(len(en[2][2]["qa"]), 2)
@@ -239,18 +266,27 @@ class EquivalenceTests(unittest.TestCase):
         self.assertIn("<h3>使用说明</h3>", intro)
         self.assertEqual([p["n"] for p in pages], [1, 2, 3, 4, 5, 6])
         self.assertEqual(sum(p["sec"] for p in pages), 20 + 30 + 90 + 120 + 120 + 90)
-        self.assertEqual(pages[2]["qa"], [{"q": "新店贡献具体多少？", "a": "约占增量的三分之二。"},
-                                          {"q": "老店为什么放缓？", "a": "主要是商圈客流下降。"}])
+        self.assertEqual(
+            pages[2]["qa"],
+            [
+                {"q": "新店贡献具体多少？", "a": "约占增量的三分之二。"},
+                {"q": "老店为什么放缓？", "a": "主要是商圈客流下降。"},
+            ],
+        )
         # 受支持的无字段正文：整页按「讲法」显示（中英都一样）
-        for text, talk in (("### 第 1 页｜无字段\n第一句\n第二句\n", "<p>第一句</p><p>第二句</p>"),
-                           ("### Page 1｜No fields\nFirst line.\nSecond line.\n", "<p>First line.</p><p>Second line.</p>")):
+        for text, talk in (
+            ("### 第 1 页｜无字段\n第一句\n第二句\n", "<p>第一句</p><p>第二句</p>"),
+            ("### Page 1｜No fields\nFirst line.\nSecond line.\n", "<p>First line.</p><p>Second line.</p>"),
+        ):
             _h1, _i, only, warns = parse(text)
             self.assertEqual(warns, [])
             self.assertEqual(only[0]["talk"], talk)
 
     def test_mixed_head_and_field_languages_in_one_script(self):
-        text = ("### 第 1 页｜中文页头\n**Duration**: 20 s\n**讲法**：\n中文界面也认英文时长。\n"
-                "### Page 2｜English head\n**时长**：30 秒\n**Talking points**:\n英文界面也认中文字段。\n")
+        text = (
+            "### 第 1 页｜中文页头\n**Duration**: 20 s\n**讲法**：\n中文界面也认英文时长。\n"
+            "### Page 2｜English head\n**时长**：30 秒\n**Talking points**:\n英文界面也认中文字段。\n"
+        )
         _h1, _i, pages, warns = parse(text)
         self.assertEqual(warns, [])
         self.assertEqual([p["n"] for p in pages], [1, 2])
@@ -265,7 +301,9 @@ class LocaleIndependenceTests(unittest.TestCase):
 
     def test_english_script_builds_in_chinese_ui_without_translation(self):
         out = tmpdir() / "review"
-        r = build_viewer.build(FIXTURE / "report.html", FIXTURE / "script.en.md", out, locale="zh-CN", no_scan_skills=True)
+        r = build_viewer.build(
+            FIXTURE / "report.html", FIXTURE / "script.en.md", out, locale="zh-CN", no_scan_skills=True
+        )
         self.assertEqual(r["pages"], 6)
         self.assertEqual(r["seconds"], 20 + 30 + 90 + 120 + 120 + 90)
         html = (out / "index.html").read_text(encoding="utf-8")
@@ -352,8 +390,12 @@ class RebuildAndPerPageTests(unittest.TestCase):
         self.assertIn("### Page 3｜", parts[2][2])
 
         notes_cli._snapshot(out, 1, "base")
-        script.write_text((FIXTURE / "script.en.md").read_text(encoding="utf-8").replace(
-            "Revenue grew 12% year on year", "Revenue grew 13% year on year"), encoding="utf-8")
+        script.write_text(
+            (FIXTURE / "script.en.md")
+            .read_text(encoding="utf-8")
+            .replace("Revenue grew 12% year on year", "Revenue grew 13% year on year"),
+            encoding="utf-8",
+        )
         buf = io.StringIO()
         with redirect_stdout(buf):
             code = notes_cli.diff_cmd(out, 1, "current", None)
@@ -364,14 +406,18 @@ class RebuildAndPerPageTests(unittest.TestCase):
         self.assertIn("-Revenue grew 12% year on year", diff)
         self.assertNotIn("第 4 页", diff, "只列出改动过的页")
 
-
     def test_side_texts_keep_unrecognized_field_labels(self):
         """对照页把认不出的字段名当正文显示，匹配用的纯文本也要一样，否则「另一侧也要改」的提示会对不上。"""
         tree = tmpdir()
         (tree / "report.html").write_bytes((FIXTURE / "report.html").read_bytes())
-        script = write(tree, "s.md", "".join(
-            f"### 第 {i} 页｜第 {i} 页\n**时长**：20 秒\n**讲法**：\n**关键数据**：第 {i} 页的关键数据。\n"
-            for i in range(1, 7)))
+        script = write(
+            tree,
+            "s.md",
+            "".join(
+                f"### 第 {i} 页｜第 {i} 页\n**时长**：20 秒\n**讲法**：\n**关键数据**：第 {i} 页的关键数据。\n"
+                for i in range(1, 7)
+            ),
+        )
         build_viewer.build(tree / "report.html", script, tree / "review", no_scan_skills=True)
         texts = notes_cli.side_texts(build_viewer.resolve_sources(tree / "review"))
         self.assertIn("关键数据", texts["讲稿"][3])
@@ -397,8 +443,13 @@ class DiagnosticTests(unittest.TestCase):
         self.assertNotIn("第 N 页", str(cm.exception))
 
     def test_unrecognized_head_reports_line_and_expected_form(self):
-        cases = ("### Page 2 - 结论\n", "### Page 2：结论\n", "#### Page 2｜结论\n", "### 第 2 页 结论\n",
-                 "### Page 2 结论\n")
+        cases = (
+            "### Page 2 - 结论\n",
+            "### Page 2：结论\n",
+            "#### Page 2｜结论\n",
+            "### 第 2 页 结论\n",
+            "### Page 2 结论\n",
+        )
         for text in cases:
             bad = write(tmpdir(), "s.md", "### 第 1 页｜封面\n**时长**：20 秒\n" + text)
             with self.assertRaises(SystemExit) as cm:
@@ -429,7 +480,9 @@ class DiagnosticTests(unittest.TestCase):
         self.assertIn("讲稿页码与报告页序不一致", str(cm.exception))
         self.assertIn("报告有、讲稿缺：[6]", str(cm.exception))
         with redirect_stderr(io.StringIO()):
-            r = build_viewer.build(FIXTURE / "report.html", bad, tmpdir() / "c", locale="en", lenient=True, no_scan_skills=True)
+            r = build_viewer.build(
+                FIXTURE / "report.html", bad, tmpdir() / "c", locale="en", lenient=True, no_scan_skills=True
+            )
         self.assertEqual(r["pages"], 6)
         self.assertEqual(r["seconds"], 20 + 30 + 90 + 120 + 120)
 
@@ -443,8 +496,7 @@ class FieldRuleTests(unittest.TestCase):
     """验收 6：重复或未知字段的处理规则：不丢内容、给诊断、不静默按空讲稿交付。"""
 
     def test_duplicate_field_warns_and_keeps_last_value(self):
-        text = ("### 第 1 页｜重复\n**时长**：20 秒\n**讲法**：\n第一版。\n"
-                "**时长**：40 秒\n**过渡**：收尾。\n")
+        text = "### 第 1 页｜重复\n**时长**：20 秒\n**讲法**：\n第一版。\n**时长**：40 秒\n**过渡**：收尾。\n"
         _h1, _i, pages, warns = parse(text)
         self.assertEqual(pages[0]["sec"], 40, "重复字段采用最后一次的值（与既有行为一致）")
         self.assertEqual(pages[0]["dur"], "40 秒")
@@ -492,25 +544,40 @@ class MixedLanguageTests(unittest.TestCase):
     """验收 7：混合语言正文按原文保留，界面语言不改写材料。"""
 
     def test_mixed_language_body_is_kept_verbatim(self):
-        text = ("### Page 1｜混合\n**Duration**: 30 s\n**Talking points**:\n"
-                "Revenue grew 12%（收入同比增长 12%）。\n第二行 mixed language。\n"
-                "**Transition**: 过渡也用中英混排 next slide\n"
-                "**Likely questions**:\n- Q: 新店贡献多少？ A: About two thirds.\n")
+        text = (
+            "### Page 1｜混合\n**Duration**: 30 s\n**Talking points**:\n"
+            "Revenue grew 12%（收入同比增长 12%）。\n第二行 mixed language。\n"
+            "**Transition**: 过渡也用中英混排 next slide\n"
+            "**Likely questions**:\n- Q: 新店贡献多少？ A: About two thirds.\n"
+        )
         _h1, _i, pages, warns = parse(text)
         self.assertEqual(warns, [])
         self.assertEqual(pages[0]["sec"], 30)
-        self.assertEqual(pages[0]["talk"], "<p>Revenue grew 12%（收入同比增长 12%）。</p><p>第二行 mixed language。</p>")
+        self.assertEqual(
+            pages[0]["talk"], "<p>Revenue grew 12%（收入同比增长 12%）。</p><p>第二行 mixed language。</p>"
+        )
         self.assertEqual(pages[0]["next"], "过渡也用中英混排 next slide")
         self.assertEqual(pages[0]["qa"], [{"q": "新店贡献多少？", "a": "About two thirds."}])
 
     def test_build_mixed_material_in_both_ui_languages(self):
         tree = tmpdir()
-        pages = (("封面", "Hello 大家好。"), ("目录", "Agenda 目录。"), ("结论", "结论 +12%。"),
-                 ("收入", "收入结构。"), ("成本", "成本端。"), ("下一步", "三件事。"))
+        pages = (
+            ("封面", "Hello 大家好。"),
+            ("目录", "Agenda 目录。"),
+            ("结论", "结论 +12%。"),
+            ("收入", "收入结构。"),
+            ("成本", "成本端。"),
+            ("下一步", "三件事。"),
+        )
         secs = (20, 30, 90, 120, 120, 90)
-        script = write(tree, "s.md", "".join(
-            f"### Page {i}｜{title}\n**Duration**: {sec} s\n**Talking points**:\n{body}\n"
-            for i, (title, body), sec in zip(range(1, 7), pages, secs)))
+        script = write(
+            tree,
+            "s.md",
+            "".join(
+                f"### Page {i}｜{title}\n**Duration**: {sec} s\n**Talking points**:\n{body}\n"
+                for i, (title, body), sec in zip(range(1, 7), pages, secs)
+            ),
+        )
         for locale in ("zh-CN", "en"):
             out = tmpdir() / ("r" + locale)
             r = build_viewer.build(FIXTURE / "report.html", script, out, locale=locale, no_scan_skills=True)
@@ -528,9 +595,20 @@ class CatalogTests(unittest.TestCase):
     # 本类只保留 build.* / formats.* 专有的 key 断言。
 
     def test_new_keys_exist_in_both_languages(self):
-        keys = ["build.scriptNoPages", "build.scriptBadHead", "build.scriptDuplicatePage", "build.pageMismatch",
-                "build.pageMismatchLenient", "build.diff.onlyReport", "build.diff.onlyScript", "build.diff.order",
-                "build.scriptDuplicateField", "build.scriptUnknownField", "formats.pageHead", "formats.fields"]
+        keys = [
+            "build.scriptNoPages",
+            "build.scriptBadHead",
+            "build.scriptDuplicatePage",
+            "build.pageMismatch",
+            "build.pageMismatchLenient",
+            "build.diff.onlyReport",
+            "build.diff.onlyScript",
+            "build.diff.order",
+            "build.scriptDuplicateField",
+            "build.scriptUnknownField",
+            "formats.pageHead",
+            "formats.fields",
+        ]
         for tag in i18n.SUPPORTED:
             messages = i18n.load_catalog(tag)["messages"]
             for key in keys:

@@ -4,6 +4,7 @@
 有 node 或 macOS 自带的 JavaScriptCore 时直接执行这段函数；没有 JS 引擎的
 环境只检查函数还在，避免 CI 因缺少运行时而失败。本机和端到端测试会真正执行。
 """
+
 from __future__ import annotations
 
 import json
@@ -54,8 +55,9 @@ def _run_temp_js(command: list[str], source: str) -> subprocess.CompletedProcess
     path = Path(raw)
     path.write_bytes(source.encode("utf-8"))
     try:
-        return subprocess.run([*command, str(path)], capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=30)
+        return subprocess.run(
+            [*command, str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30
+        )
     finally:
         path.unlink(missing_ok=True)
 
@@ -65,19 +67,21 @@ def _run_js(catalogs: dict, cases: list[dict]) -> list[dict]:
     if engine is None:
         raise unittest.SkipTest("没有 JS 引擎，跳过页面函数执行")
     epilogue = "console.log(JSON.stringify(__out));" if _is_node(engine) else "__out"
-    source = "\n".join([
-        "const CATALOGS = " + json.dumps(catalogs, ensure_ascii=False) + ";",
-        "let uiLocale = 'zh-CN';",
-        _runtime_source(),
-        "var __cases = " + json.dumps(cases, ensure_ascii=False) + ";",
-        "var __out = __cases.map(function(c){",
-        "  uiLocale = c.locale;",
-        "  var before = missingKeys.length;",
-        "  var text = tMsg(c.key, c.params);",
-        "  return {text: text, recorded: missingKeys.slice(before)};",
-        "});",
-        epilogue,
-    ])
+    source = "\n".join(
+        [
+            "const CATALOGS = " + json.dumps(catalogs, ensure_ascii=False) + ";",
+            "let uiLocale = 'zh-CN';",
+            _runtime_source(),
+            "var __cases = " + json.dumps(cases, ensure_ascii=False) + ";",
+            "var __out = __cases.map(function(c){",
+            "  uiLocale = c.locale;",
+            "  var before = missingKeys.length;",
+            "  var text = tMsg(c.key, c.params);",
+            "  return {text: text, recorded: missingKeys.slice(before)};",
+            "});",
+            epilogue,
+        ]
+    )
     proc = _run_temp_js(engine, source)
     if proc.returncode != 0:
         raise AssertionError(proc.stderr or proc.stdout)
@@ -126,20 +130,26 @@ class ReviewPageRuntimeTests(unittest.TestCase):
         self.assertNotIn("1 annotations", en_one)
 
     def test_synthetic_rules_match_python(self):
-        zh = {"locale": "zh-CN", "messages": {
-            "n": "{count} 条",
-            "greet": "你好 {name}",
-            "brace": "{{count}} 与 {count}",
-            "only.zh": "只有中文 {name}",
-        }}
-        en = {"locale": "en", "messages": {
-            "n": "{count} items",
-            "n.one": "{count} item",
-            "n.other": "{count} items",
-            "greet": "Hello {name}",
-            "brace": "{{count}} and {count}",
-            "only.en": "English only {name}",
-        }}
+        zh = {
+            "locale": "zh-CN",
+            "messages": {
+                "n": "{count} 条",
+                "greet": "你好 {name}",
+                "brace": "{{count}} 与 {count}",
+                "only.zh": "只有中文 {name}",
+            },
+        }
+        en = {
+            "locale": "en",
+            "messages": {
+                "n": "{count} items",
+                "n.one": "{count} item",
+                "n.other": "{count} items",
+                "greet": "Hello {name}",
+                "brace": "{{count}} and {count}",
+                "only.en": "English only {name}",
+            },
+        }
         bundled = {"zh-CN": zh, "en": en}
         page_cats = {tag: cat["messages"] for tag, cat in bundled.items()}
         specs = [
@@ -170,14 +180,22 @@ class ReviewPageRuntimeTests(unittest.TestCase):
 
     def test_bool_and_missing_placeholder_do_not_break_the_page(self):
         """页面不把 true 当成 1，缺参数时保留花括号，避免一条坏调用打断界面。"""
-        catalogs = {"zh-CN": {"n": "{count} 条"}, "en": {
-            "n": "{count} items", "n.one": "{count} item", "n.other": "{count} items",
-            "greet": "Hello {name}",
-        }}
-        got = _run_js(catalogs, [
-            {"locale": "en", "key": "n", "params": {"count": True}},
-            {"locale": "en", "key": "greet", "params": {}},
-        ])
+        catalogs = {
+            "zh-CN": {"n": "{count} 条"},
+            "en": {
+                "n": "{count} items",
+                "n.one": "{count} item",
+                "n.other": "{count} items",
+                "greet": "Hello {name}",
+            },
+        }
+        got = _run_js(
+            catalogs,
+            [
+                {"locale": "en", "key": "n", "params": {"count": True}},
+                {"locale": "en", "key": "greet", "params": {}},
+            ],
+        )
         self.assertEqual(got[0]["text"], "true items")
         self.assertNotEqual(got[0]["text"], "1 item")
         self.assertEqual(got[1]["text"], "Hello {name}")
@@ -197,7 +215,7 @@ class ReviewPageRuntimeTests(unittest.TestCase):
         end = source.rfind("</script>")
         self.assertGreaterEqual(start, 0, "页面里找不到内联脚本")
         self.assertGreater(end, start, "页面里的内联脚本没有闭合")
-        script = source[start + len("<script>"):end]
+        script = source[start + len("<script>") : end]
         proc = _run_temp_js([*engine, "--check"], script)
         self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
 

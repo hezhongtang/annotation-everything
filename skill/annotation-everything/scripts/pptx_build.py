@@ -19,6 +19,7 @@ GUID），同一份内容重建前后哈希不变，核验记录据此判断证�
 页序不挪身份。渲染与逐页看图见 generation-pptx 指引，核验记录字段见
 report-record 的 deliverables 约定。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -79,15 +80,27 @@ TITLE_LAYOUTS = ("title", "sectionHeader", "titleAndContent", "titleOnly")
 BODY_LAYOUTS = ("sectionHeader", "titleAndContent")
 
 # 主题色槽位（deck 规格写法与 schemeClr 取值一一对应）。
-COLOR_SLOTS = ("dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3",
-               "accent4", "accent5", "accent6", "hlink", "folHlink")
+COLOR_SLOTS = (
+    "dk1",
+    "lt1",
+    "dk2",
+    "lt2",
+    "accent1",
+    "accent2",
+    "accent3",
+    "accent4",
+    "accent5",
+    "accent6",
+    "hlink",
+    "folHlink",
+)
 
 KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 HEX_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
 
 # 幻灯片身份从 deck key 确定性派生：重排页序不挪身份，已有审阅定位不受重建影响。
 SLIDE_ID_BASE = 256
-SLIDE_ID_SPAN = 2 ** 31 - SLIDE_ID_BASE - 1024
+SLIDE_ID_SPAN = 2**31 - SLIDE_ID_BASE - 1024
 SLIDE_ID_PROBE_STEP = 7919
 
 MASTER_ID = 2147483648
@@ -120,6 +133,7 @@ def _esc(value: object) -> str:
 
 # ── 规格校验 ────────────────────────────────────────────────────────────────
 
+
 def _need(condition: bool, code: str, **params: object) -> None:
     if not condition:
         raise DeckSpecError(code, **params)
@@ -139,8 +153,7 @@ def _validate_theme(raw: object) -> dict:
     _need(not unknown, "colorSlot", slots="、".join(str(k) for k in unknown))
     missing = [k for k in COLOR_SLOTS if k not in colors]
     _need(not missing, "themeColorsMissing", slots="、".join(missing))
-    bad = [k for k in COLOR_SLOTS
-           if not (isinstance(colors[k], str) and HEX_RE.match(colors[k]))]
+    bad = [k for k in COLOR_SLOTS if not (isinstance(colors[k], str) and HEX_RE.match(colors[k]))]
     _need(not bad, "hexColor", slots="、".join(bad))
     fonts = raw.get("fonts")
     _need(isinstance(fonts, dict), "fontsRequired")
@@ -148,8 +161,10 @@ def _validate_theme(raw: object) -> dict:
     for role in ("major", "minor"):
         entry = fonts.get(role)
         _need(isinstance(entry, dict), "fontsRequired")
-        out_fonts[role] = {"latin": _str_field(entry, "latin", code="fontField").strip(),
-                           "ea": _str_field(entry, "ea", code="fontField").strip()}
+        out_fonts[role] = {
+            "latin": _str_field(entry, "latin", code="fontField").strip(),
+            "ea": _str_field(entry, "ea", code="fontField").strip(),
+        }
     return {"colors": {k: str(colors[k]).upper() for k in COLOR_SLOTS}, "fonts": out_fonts}
 
 
@@ -159,8 +174,7 @@ def _validate_size(raw: object) -> tuple[int, int]:
     _need(isinstance(raw, dict), "sizeBad")
     width, height = raw.get("width"), raw.get("height")
     for value in (width, height):
-        _need(isinstance(value, int) and not isinstance(value, bool)
-              and 0 < value <= 2 ** 31, "sizeBad")
+        _need(isinstance(value, int) and not isinstance(value, bool) and 0 < value <= 2**31, "sizeBad")
     return int(width), int(height)
 
 
@@ -179,9 +193,9 @@ def _image_size(data: bytes) -> tuple[int, int, str]:
             if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
                 index += 2
                 continue
-            length = struct.unpack(">H", data[index + 2:index + 4])[0]
+            length = struct.unpack(">H", data[index + 2 : index + 4])[0]
             if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
-                height, width = struct.unpack(">HH", data[index + 5:index + 9])
+                height, width = struct.unpack(">HH", data[index + 5 : index + 9])
                 return width, height, "jpg"
             index += 2 + length
     raise DeckSpecError("logoFormat")
@@ -212,10 +226,8 @@ def _validate_master(raw: object, base_dir: Path) -> dict:
         _need(width > 0 and height > 0, "logoSize")
         name = logo_raw.get("name")
         _need(isinstance(name, str) or name is None, "masterBad")
-        logo = {"data": data, "ext": ext, "width": width, "height": height,
-                "name": str(name) if name else "标志"}
-    return {"footer": bool(footer), "footerText": str(footer_text),
-            "pageNumber": bool(page_number), "logo": logo}
+        logo = {"data": data, "ext": ext, "width": width, "height": height, "name": str(name) if name else "标志"}
+    return {"footer": bool(footer), "footerText": str(footer_text), "pageNumber": bool(page_number), "logo": logo}
 
 
 def _validate_body_items(raw: object) -> list[dict]:
@@ -232,8 +244,7 @@ def _validate_body_items(raw: object) -> list[dict]:
         text = entry.get("text")
         _need(isinstance(text, str) and bool(text.strip()), "bodyBad")
         level = entry.get("level", 0)
-        _need(isinstance(level, int) and not isinstance(level, bool)
-              and 0 <= level <= 8, "bodyLevel", level=level)
+        _need(isinstance(level, int) and not isinstance(level, bool) and 0 <= level <= 8, "bodyLevel", level=level)
         bold = entry.get("bold", False)
         _need(isinstance(bold, bool), "bodyBad")
         items.append({"text": text, "level": int(level), "bold": bool(bold)})
@@ -253,13 +264,17 @@ def _validate_shapes(raw: object, canvas: tuple[int, int]) -> list[dict]:
         geo = {}
         for field in ("x", "y", "cx", "cy"):
             value = entry.get(field)
-            _need(isinstance(value, int) and not isinstance(value, bool),
-                  "shapeBad", field=field)
+            _need(isinstance(value, int) and not isinstance(value, bool), "shapeBad", field=field)
             geo[field] = int(value)
         _need(geo["cx"] > 0 and geo["cy"] > 0, "shapeBad", field="cx/cy")
-        _need(0 <= geo["x"] and 0 <= geo["y"]
-              and geo["x"] + geo["cx"] <= width and geo["y"] + geo["cy"] <= height,
-              "shapeOutside", x=geo["x"], y=geo["y"], cx=geo["cx"], cy=geo["cy"])
+        _need(
+            0 <= geo["x"] and 0 <= geo["y"] and geo["x"] + geo["cx"] <= width and geo["y"] + geo["cy"] <= height,
+            "shapeOutside",
+            x=geo["x"],
+            y=geo["y"],
+            cx=geo["cx"],
+            cy=geo["cy"],
+        )
         fill = entry.get("fill", "accent1")
         _need(fill in COLOR_SLOTS, "colorSlot", slots=str(fill))
         line = entry.get("line")
@@ -269,15 +284,26 @@ def _validate_shapes(raw: object, canvas: tuple[int, int]) -> list[dict]:
             color = line.get("color")
             _need(color in COLOR_SLOTS, "colorSlot", slots=str(color))
             line_width = line.get("width", 12700)
-            _need(isinstance(line_width, int) and not isinstance(line_width, bool)
-                  and 0 < line_width <= 3175000, "lineWidth", width=line_width)
+            _need(
+                isinstance(line_width, int) and not isinstance(line_width, bool) and 0 < line_width <= 3175000,
+                "lineWidth",
+                width=line_width,
+            )
             line_out = {"color": color, "width": int(line_width)}
         text = entry.get("text", "")
         _need(isinstance(text, str), "shapeBad")
         name = entry.get("name")
         _need(isinstance(name, str) or name is None, "shapeBad")
-        shapes.append({"shape": str(kind), **geo, "fill": str(fill), "line": line_out,
-                       "text": text, "name": str(name) if name else ""})
+        shapes.append(
+            {
+                "shape": str(kind),
+                **geo,
+                "fill": str(fill),
+                "line": line_out,
+                "text": text,
+                "name": str(name) if name else "",
+            }
+        )
     return shapes
 
 
@@ -295,17 +321,20 @@ def _validate_charts(raw: object, canvas: tuple[int, int]) -> list[dict]:
         geo = {}
         for field in ("x", "y", "cx", "cy"):
             value = entry.get(field)
-            _need(isinstance(value, int) and not isinstance(value, bool),
-                  "chartBad", field=field)
+            _need(isinstance(value, int) and not isinstance(value, bool), "chartBad", field=field)
             geo[field] = int(value)
         _need(geo["cx"] > 0 and geo["cy"] > 0, "chartBad", field="cx/cy")
-        _need(0 <= geo["x"] and 0 <= geo["y"]
-              and geo["x"] + geo["cx"] <= width and geo["y"] + geo["cy"] <= height,
-              "shapeOutside", x=geo["x"], y=geo["y"], cx=geo["cx"], cy=geo["cy"])
+        _need(
+            0 <= geo["x"] and 0 <= geo["y"] and geo["x"] + geo["cx"] <= width and geo["y"] + geo["cy"] <= height,
+            "shapeOutside",
+            x=geo["x"],
+            y=geo["y"],
+            cx=geo["cx"],
+            cy=geo["cy"],
+        )
         categories = entry.get("categories")
         _need(isinstance(categories, list) and bool(categories), "chartDataBad")
-        _need(all(isinstance(item, str) and item.strip() for item in categories),
-              "chartDataBad")
+        _need(all(isinstance(item, str) and item.strip() for item in categories), "chartDataBad")
         series_raw = entry.get("series")
         _need(isinstance(series_raw, list) and bool(series_raw), "chartDataBad")
         _need(len(series_raw) <= 25, "chartTooManySeries", n=len(series_raw))
@@ -314,12 +343,17 @@ def _validate_charts(raw: object, canvas: tuple[int, int]) -> list[dict]:
             _need(isinstance(item, dict), "chartDataBad")
             name = _str_field(item, "name", code="chartDataBad")
             values = item.get("values")
-            _need(isinstance(values, list) and len(values) == len(categories),
-                  "chartCountMismatch", categories=len(categories),
-                  values=len(values) if isinstance(values, list) else -1)
+            _need(
+                isinstance(values, list) and len(values) == len(categories),
+                "chartCountMismatch",
+                categories=len(categories),
+                values=len(values) if isinstance(values, list) else -1,
+            )
             for value in values:
-                _need(isinstance(value, (int, float)) and not isinstance(value, bool)
-                      and math.isfinite(value), "chartDataBad")
+                _need(
+                    isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value),
+                    "chartDataBad",
+                )
             series.append({"name": name, "values": [_num(v) for v in values]})
         name = entry.get("name")
         _need(isinstance(name, str) or name is None, "chartBad")
@@ -334,11 +368,18 @@ def _validate_charts(raw: object, canvas: tuple[int, int]) -> list[dict]:
             raise DeckSpecError("labelsPercentNeedsPie", labels=str(labels))
         else:
             _need(labels in ("none", "value"), "chartLabelsBad", labels=str(labels))
-        charts.append({"chart": str(kind), "name": str(name) if name else "",
-                       **geo, "categories": [str(c) for c in categories],
-                       "series": series,
-                       "title": str(title) if title else "",
-                       "legend": str(legend), "labels": str(labels)})
+        charts.append(
+            {
+                "chart": str(kind),
+                "name": str(name) if name else "",
+                **geo,
+                "categories": [str(c) for c in categories],
+                "series": series,
+                "title": str(title) if title else "",
+                "legend": str(legend),
+                "labels": str(labels),
+            }
+        )
     return charts
 
 
@@ -356,8 +397,7 @@ def _validate_sections(raw: object, keys: list[str]) -> list[dict]:
         for key in section_keys:
             _need(isinstance(key, str) and key in keys, "sectionUnknownKey", key=str(key))
             first = seen.get(key)
-            _need(first is None, "sectionDuplicateSlide", key=str(key),
-                  sections=f"{first}、{name}")
+            _need(first is None, "sectionDuplicateSlide", key=str(key), sections=f"{first}、{name}")
             seen[key] = name
         sections.append({"name": name, "keys": [str(k) for k in section_keys]})
     missing = [k for k in keys if k not in seen]
@@ -388,40 +428,52 @@ def validate_spec(spec: object, base_dir: Path | None = None) -> dict:
         _need(layout in LAYOUTS, "layoutUnknown", layout=str(layout))
         title_text = entry.get("title")
         if layout in TITLE_LAYOUTS:
-            _need(isinstance(title_text, str) and bool(title_text.strip()),
-                  "slideTitleRequired", key=str(key))
+            _need(isinstance(title_text, str) and bool(title_text.strip()), "slideTitleRequired", key=str(key))
         else:
-            _need(title_text is None or (isinstance(title_text, str) and not title_text.strip()),
-                  "slideTitleUnexpected", key=str(key), layout=str(layout))
+            _need(
+                title_text is None or (isinstance(title_text, str) and not title_text.strip()),
+                "slideTitleUnexpected",
+                key=str(key),
+                layout=str(layout),
+            )
         subtitle = entry.get("subtitle")
         if layout == "title":
             _need(subtitle is None or isinstance(subtitle, str), "bodyBad")
         else:
             _need(subtitle is None, "subtitleOnlyTitle", key=str(key))
         body = _validate_body_items(entry.get("body"))
-        _need(not body or layout in BODY_LAYOUTS, "bodyLayoutMismatch",
-              key=str(key), layout=str(layout))
+        _need(not body or layout in BODY_LAYOUTS, "bodyLayoutMismatch", key=str(key), layout=str(layout))
         hide_master = entry.get("hideMasterShapes", False)
         _need(isinstance(hide_master, bool), "specType")
         notes = entry.get("notes")
-        _need(notes is None or (isinstance(notes, str) and bool(notes.strip())), "notesEmpty",
-              key=str(key))
-        slides.append({
-            "key": str(key), "layout": str(layout),
-            "title": str(title_text).strip()
-            if isinstance(title_text, str) and title_text.strip() else "",
-            "subtitle": str(subtitle) if isinstance(subtitle, str) else "",
-            "body": body, "shapes": _validate_shapes(entry.get("shapes"), size),
-            "charts": _validate_charts(entry.get("charts"), size),
-            "hideMasterShapes": bool(hide_master),
-            "notes": str(notes) if isinstance(notes, str) else "",
-        })
+        _need(notes is None or (isinstance(notes, str) and bool(notes.strip())), "notesEmpty", key=str(key))
+        slides.append(
+            {
+                "key": str(key),
+                "layout": str(layout),
+                "title": str(title_text).strip() if isinstance(title_text, str) and title_text.strip() else "",
+                "subtitle": str(subtitle) if isinstance(subtitle, str) else "",
+                "body": body,
+                "shapes": _validate_shapes(entry.get("shapes"), size),
+                "charts": _validate_charts(entry.get("charts"), size),
+                "hideMasterShapes": bool(hide_master),
+                "notes": str(notes) if isinstance(notes, str) else "",
+            }
+        )
     sections = _validate_sections(spec.get("sections"), keys=[s["key"] for s in slides])
-    return {"schema": DECK_SCHEMA, "title": title.strip(), "theme": theme, "size": size,
-            "master": master, "slides": slides, "sections": sections}
+    return {
+        "schema": DECK_SCHEMA,
+        "title": title.strip(),
+        "theme": theme,
+        "size": size,
+        "master": master,
+        "slides": slides,
+        "sections": sections,
+    }
 
 
 # ── XML 构建 ────────────────────────────────────────────────────────────────
+
 
 def _slide_ids(keys: list[str]) -> dict[str, int]:
     """deck key → 确定且互不冲突的幻灯片 ID（重排页序不改变身份）。"""
@@ -453,8 +505,9 @@ def _text_body(paragraphs: list[str]) -> str:
     return f"<p:txBody><a:bodyPr/><a:lstStyle/>{content}</p:txBody>"
 
 
-def _para(text: str, *, level: int = 0, bold: bool = False, size: int | None = None,
-          color_slot: str | None = None) -> str:
+def _para(
+    text: str, *, level: int = 0, bold: bool = False, size: int | None = None, color_slot: str | None = None
+) -> str:
     props = 'lang="zh-CN" dirty="0"'
     if bold:
         props += ' b="1"'
@@ -462,33 +515,42 @@ def _para(text: str, *, level: int = 0, bold: bool = False, size: int | None = N
         props += f' sz="{size}"'
     inner = ""
     if color_slot:
-        inner += f'<a:solidFill>{_color_ref(color_slot)}</a:solidFill>'
+        inner += f"<a:solidFill>{_color_ref(color_slot)}</a:solidFill>"
     props_child = f"<a:rPr {props}>{inner}</a:rPr>" if inner else f"<a:rPr {props}/>"
     lvl = f'<a:pPr lvl="{level}"/>' if level else ""
-    return (f"<a:p>{lvl}<a:r>{props_child}"
-            f"<a:t xml:space=\"preserve\">{_esc(text)}</a:t></a:r></a:p>")
+    return f'<a:p>{lvl}<a:r>{props_child}<a:t xml:space="preserve">{_esc(text)}</a:t></a:r></a:p>'
 
 
 def _geom(x: int, y: int, cx: int, cy: int) -> str:
-    return (f"<a:xfrm><a:off x=\"{x}\" y=\"{y}\"/>"
-            f"<a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>")
+    return f'<a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
 
 
-def _placeholder_sp(shape_id: int, name: str, ph_type: str, idx: int | None,
-                   paragraphs: list[str], geometry: str = "",
-                   *, slidenum_field: bool = False, lst_style: str = "") -> str:
+def _placeholder_sp(
+    shape_id: int,
+    name: str,
+    ph_type: str,
+    idx: int | None,
+    paragraphs: list[str],
+    geometry: str = "",
+    *,
+    slidenum_field: bool = False,
+    lst_style: str = "",
+) -> str:
     ph = f'type="{ph_type}"' + (f' idx="{idx}"' if idx is not None else "")
     if slidenum_field:
         # 母版上的页码字段：PowerPoint 渲染为实际页号。
-        tx_body = (f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:fld id="{_FLD_SLIDENUM_GUID}" '
-                   'type="slidenum"><a:rPr lang="zh-CN"/><a:t>1</a:t></a:fld></a:p></p:txBody>')
+        tx_body = (
+            f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:fld id="{_FLD_SLIDENUM_GUID}" '
+            'type="slidenum"><a:rPr lang="zh-CN"/><a:t>1</a:t></a:fld></a:p></p:txBody>'
+        )
     else:
         content = "".join(paragraphs) or "<a:p/>"
-        tx_body = (f"<p:txBody><a:bodyPr/>{lst_style}"
-                   f"{content}</p:txBody>")
-    return (f'<p:sp><p:nvSpPr><p:cNvPr id="{shape_id}" name="{_esc(name)}"/><p:cNvSpPr/>'
-            f'<p:nvPr><p:ph {ph}/></p:nvPr></p:nvSpPr>'
-            f"<p:spPr>{geometry}</p:spPr>{tx_body}</p:sp>")
+        tx_body = f"<p:txBody><a:bodyPr/>{lst_style}{content}</p:txBody>"
+    return (
+        f'<p:sp><p:nvSpPr><p:cNvPr id="{shape_id}" name="{_esc(name)}"/><p:cNvSpPr/>'
+        f"<p:nvPr><p:ph {ph}/></p:nvPr></p:nvSpPr>"
+        f"<p:spPr>{geometry}</p:spPr>{tx_body}</p:sp>"
+    )
 
 
 def _theme_xml(theme: dict) -> str:
@@ -497,15 +559,18 @@ def _theme_xml(theme: dict) -> str:
     fonts = theme["fonts"]
 
     def font_entry(role: str) -> str:
-        return (f'<a:latin typeface="{_esc(fonts[role]["latin"])}"/>'
-                f'<a:ea typeface="{_esc(fonts[role]["ea"])}"/><a:cs typeface=""/>')
+        return (
+            f'<a:latin typeface="{_esc(fonts[role]["latin"])}"/>'
+            f'<a:ea typeface="{_esc(fonts[role]["ea"])}"/><a:cs typeface=""/>'
+        )
 
     solid = '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>'
     fills = solid * 3
     lines = "".join(
-        f'<a:ln w="{width}" cap="flat" cmpd="sng" algn="ctr">{solid}'
-        '<a:prstDash val="solid"/></a:ln>' for width in (6350, 12700, 19050))
-    effects = '<a:effectStyle><a:effectLst/></a:effectStyle>' * 3
+        f'<a:ln w="{width}" cap="flat" cmpd="sng" algn="ctr">{solid}<a:prstDash val="solid"/></a:ln>'
+        for width in (6350, 12700, 19050)
+    )
+    effects = "<a:effectStyle><a:effectLst/></a:effectStyle>" * 3
     name = "AE 主题"
     return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <a:theme xmlns:a="{A}" name="{name}"><a:themeElements>
@@ -520,28 +585,32 @@ def _master_xml(master: dict, size: tuple[int, int]) -> tuple[str, str]:
     width, height = size
     shapes: list[str] = []
     rels: list[tuple[str, str, str]] = []
-    shapes.append(_placeholder_sp(
-        2, "标题占位符", "title", None, [],
-        _geom(800000, 400000, width - 1600000, 1200000)))
-    shapes.append(_placeholder_sp(
-        3, "内容占位符", "body", 1, [],
-        _geom(800000, 1800000, width - 1600000, height - 2400000)))
+    shapes.append(_placeholder_sp(2, "标题占位符", "title", None, [], _geom(800000, 400000, width - 1600000, 1200000)))
+    shapes.append(
+        _placeholder_sp(3, "内容占位符", "body", 1, [], _geom(800000, 1800000, width - 1600000, height - 2400000))
+    )
     next_id = 4
     hf_attrs: list[str] = []
     if master["footer"]:
         text = master["footerText"]
-        para = (_para(text, size=900, color_slot="tx1") if text
-                else '<a:p><a:endParaRPr lang="zh-CN"/></a:p>')
-        shapes.append(_placeholder_sp(
-            next_id, "页脚占位符", "ftr", None, [para],
-            _geom(800000, height - 500000, 3600000, 360000)))
+        para = _para(text, size=900, color_slot="tx1") if text else '<a:p><a:endParaRPr lang="zh-CN"/></a:p>'
+        shapes.append(
+            _placeholder_sp(next_id, "页脚占位符", "ftr", None, [para], _geom(800000, height - 500000, 3600000, 360000))
+        )
         hf_attrs.append('ftr="1"')
         next_id += 1
     if master["pageNumber"]:
-        shapes.append(_placeholder_sp(
-            next_id, "页码占位符", "sldNum", None, [],
-            _geom(width - 1600000, height - 500000, 800000, 360000),
-            slidenum_field=True))
+        shapes.append(
+            _placeholder_sp(
+                next_id,
+                "页码占位符",
+                "sldNum",
+                None,
+                [],
+                _geom(width - 1600000, height - 500000, 800000, 360000),
+                slidenum_field=True,
+            )
+        )
         hf_attrs.append('sldNum="1"')
         next_id += 1
     if master["logo"]:
@@ -554,15 +623,16 @@ def _master_xml(master: dict, size: tuple[int, int]) -> tuple[str, str]:
             f'<p:pic><p:nvPicPr><p:cNvPr id="{next_id}" name="{_esc(logo["name"])}" '
             f'descr="{_esc(logo["name"])}"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>'
             '<p:blipFill><a:blip r:embed="rIdLogo"/><a:stretch><a:fillRect/></a:stretch>'
-            '</p:blipFill>'
-            f'<p:spPr>{_geom(x, y, cx, cy)}'
-            '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>')
+            "</p:blipFill>"
+            f"<p:spPr>{_geom(x, y, cx, cy)}"
+            '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>'
+        )
         rels.append(("rIdLogo", R + "/image", f"../media/logo.{logo['ext']}"))
     hf = f"<p:hf {' '.join(hf_attrs)}/>" if hf_attrs else ""
     xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sldMaster xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}"><p:cSld name="AE 母版"><p:spTree>
 <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
-{''.join(shapes)}
+{"".join(shapes)}
 </p:spTree></p:cSld>
 <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
 <p:sldLayoutIdLst>{{layouts}}</p:sldLayoutIdLst>
@@ -574,16 +644,17 @@ def _master_xml(master: dict, size: tuple[int, int]) -> tuple[str, str]:
     return xml, _rels_xml(rels)
 
 
-def _layout_xml(layout_key: str, size: tuple[int, int],
-                hf_attrs: list[str] | None = None) -> str:
+def _layout_xml(layout_key: str, size: tuple[int, int], hf_attrs: list[str] | None = None) -> str:
     entry = LAYOUTS[layout_key]
     width, height = size
     shapes: list[str] = []
     next_id = 2
     if "ctrTitle" in entry["placeholders"]:
-        shapes.append(_placeholder_sp(
-            next_id, "标题占位符", "ctrTitle", None, [],
-            _geom(800000, 2200000, width - 1600000, 1600000)))
+        shapes.append(
+            _placeholder_sp(
+                next_id, "标题占位符", "ctrTitle", None, [], _geom(800000, 2200000, width - 1600000, 1600000)
+            )
+        )
         next_id += 1
     if "title" in entry["placeholders"]:
         if layout_key == "sectionHeader":
@@ -593,10 +664,17 @@ def _layout_xml(layout_key: str, size: tuple[int, int],
         shapes.append(_placeholder_sp(next_id, "标题占位符", "title", None, [], geometry))
         next_id += 1
     if "subTitle" in entry["placeholders"]:
-        shapes.append(_placeholder_sp(
-            next_id, "副标题占位符", "subTitle", 1, [],
-            _geom(800000, 4000000, width - 1600000, 1000000),
-            lst_style="<a:lstStyle><a:lvl1pPr><a:buNone/></a:lvl1pPr></a:lstStyle>"))
+        shapes.append(
+            _placeholder_sp(
+                next_id,
+                "副标题占位符",
+                "subTitle",
+                1,
+                [],
+                _geom(800000, 4000000, width - 1600000, 1000000),
+                lst_style="<a:lstStyle><a:lvl1pPr><a:buNone/></a:lvl1pPr></a:lstStyle>",
+            )
+        )
         next_id += 1
     if "body" in entry["placeholders"]:
         if layout_key == "sectionHeader":
@@ -606,42 +684,53 @@ def _layout_xml(layout_key: str, size: tuple[int, int],
         shapes.append(_placeholder_sp(next_id, "内容占位符", "body", 1, [], geometry))
         next_id += 1
     if hf_attrs and "ftr" in " ".join(hf_attrs):
-        shapes.append(_placeholder_sp(
-            next_id, "页脚占位符", "ftr", None, [],
-            _geom(800000, height - 500000, 3600000, 360000)))
+        shapes.append(
+            _placeholder_sp(next_id, "页脚占位符", "ftr", None, [], _geom(800000, height - 500000, 3600000, 360000))
+        )
         next_id += 1
     if hf_attrs and "sldNum" in " ".join(hf_attrs):
-        shapes.append(_placeholder_sp(
-            next_id, "页码占位符", "sldNum", None, [],
-            _geom(width - 1600000, height - 500000, 800000, 360000)))
+        shapes.append(
+            _placeholder_sp(
+                next_id, "页码占位符", "sldNum", None, [], _geom(width - 1600000, height - 500000, 800000, 360000)
+            )
+        )
     hf = f"<p:hf {' '.join(hf_attrs)}/>" if hf_attrs else ""
     return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sldLayout xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}" type="{entry["type"]}" preserve="1">
 <p:cSld name="{_esc(entry["name"])}"><p:spTree>
 <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
-{''.join(shapes)}
+{"".join(shapes)}
 </p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>{hf}</p:sldLayout>'''
 
 
 def _custom_shape(sp_id: int, shape: dict) -> str:
     geometry = _geom(shape["x"], shape["y"], shape["cx"], shape["cy"])
     prst = "rect" if shape["shape"] == "rect" else "ellipse"
-    props = (f"<p:spPr>{geometry}"
-             f'<a:prstGeom prst="{prst}"><a:avLst/></a:prstGeom>'
-             f'<a:solidFill>{_color_ref(shape["fill"])}</a:solidFill>')
+    props = (
+        f"<p:spPr>{geometry}"
+        f'<a:prstGeom prst="{prst}"><a:avLst/></a:prstGeom>'
+        f"<a:solidFill>{_color_ref(shape['fill'])}</a:solidFill>"
+    )
     if shape["line"]:
-        props += (f'<a:ln w="{shape["line"]["width"]}">'
-                  f'<a:solidFill>{_color_ref(shape["line"]["color"])}</a:solidFill></a:ln>')
+        props += (
+            f'<a:ln w="{shape["line"]["width"]}"><a:solidFill>{_color_ref(shape["line"]["color"])}</a:solidFill></a:ln>'
+        )
     props += "</p:spPr>"
     name = shape["name"] or f"形状 {sp_id}"
     paragraphs = [_para(shape["text"], color_slot="lt1")] if shape["text"] else []
-    return (f'<p:sp><p:nvSpPr><p:cNvPr id="{sp_id}" name="{_esc(name)}"/><p:cNvSpPr/><p:nvPr/>'
-            f"</p:nvSpPr>{props}{_text_body(paragraphs)}</p:sp>")
+    return (
+        f'<p:sp><p:nvSpPr><p:cNvPr id="{sp_id}" name="{_esc(name)}"/><p:cNvSpPr/><p:nvPr/>'
+        f"</p:nvSpPr>{props}{_text_body(paragraphs)}</p:sp>"
+    )
 
 
-def _slide_xml(slide: dict, chart_frames: list[tuple[str, dict]],
-               hf_attrs: list[str] | None = None,
-               footer_text: str = "", size: tuple[int, int] = _DEFAULT_SIZE) -> str:
+def _slide_xml(
+    slide: dict,
+    chart_frames: list[tuple[str, dict]],
+    hf_attrs: list[str] | None = None,
+    footer_text: str = "",
+    size: tuple[int, int] = _DEFAULT_SIZE,
+) -> str:
     entry = LAYOUTS[slide["layout"]]
     width, height = size
     shapes: list[str] = []
@@ -656,13 +745,13 @@ def _slide_xml(slide: dict, chart_frames: list[tuple[str, dict]],
         shapes.append(_placeholder_sp(next_id, "标题占位符", "title", None, paragraphs))
         next_id += 1
     if "subTitle" in entry["placeholders"] and slide["subtitle"]:
-        shapes.append(_placeholder_sp(
-            next_id, "副标题占位符", "subTitle", 1,
-            [_para(slide["subtitle"], size=2000)]))
+        shapes.append(_placeholder_sp(next_id, "副标题占位符", "subTitle", 1, [_para(slide["subtitle"], size=2000)]))
         next_id += 1
     if "body" in entry["placeholders"] and slide["body"]:
-        paragraphs = [_para(item["text"], level=min(item["level"], len(_BULLET_CHARS) - 1),
-                            bold=item["bold"]) for item in slide["body"]]
+        paragraphs = [
+            _para(item["text"], level=min(item["level"], len(_BULLET_CHARS) - 1), bold=item["bold"])
+            for item in slide["body"]
+        ]
         shapes.append(_placeholder_sp(next_id, "内容占位符", "body", 1, paragraphs))
         next_id += 1
     for shape in slide["shapes"]:
@@ -672,17 +761,29 @@ def _slide_xml(slide: dict, chart_frames: list[tuple[str, dict]],
     if hf_attrs and not slide["hideMasterShapes"]:
         if "ftr" in flags:
             # 页脚文本逐页写入（PowerPoint 的实际做法，不依赖占位符文本继承）。
-            para = (_para(footer_text, size=900, color_slot="tx1") if footer_text
-                    else '<a:p><a:endParaRPr lang="zh-CN"/></a:p>')
-            shapes.append(_placeholder_sp(
-                next_id, "页脚占位符", "ftr", None, [para],
-                _geom(800000, height - 500000, 3600000, 360000)))
+            para = (
+                _para(footer_text, size=900, color_slot="tx1")
+                if footer_text
+                else '<a:p><a:endParaRPr lang="zh-CN"/></a:p>'
+            )
+            shapes.append(
+                _placeholder_sp(
+                    next_id, "页脚占位符", "ftr", None, [para], _geom(800000, height - 500000, 3600000, 360000)
+                )
+            )
             next_id += 1
         if "sldNum" in flags:
-            shapes.append(_placeholder_sp(
-                next_id, "页码占位符", "sldNum", None, [],
-                _geom(width - 1600000, height - 500000, 800000, 360000),
-                slidenum_field=True))
+            shapes.append(
+                _placeholder_sp(
+                    next_id,
+                    "页码占位符",
+                    "sldNum",
+                    None,
+                    [],
+                    _geom(width - 1600000, height - 500000, 800000, 360000),
+                    slidenum_field=True,
+                )
+            )
             next_id += 1
     for rid, chart in chart_frames:
         name = chart["name"] or "图表"
@@ -692,63 +793,69 @@ def _slide_xml(slide: dict, chart_frames: list[tuple[str, dict]],
             f'<p:xfrm><a:off x="{chart["x"]}" y="{chart["y"]}"/>'
             f'<a:ext cx="{chart["cx"]}" cy="{chart["cy"]}"/></p:xfrm>'
             f'<a:graphic><a:graphicData uri="{C}">'
-            f'<c:chart xmlns:c="{C}" r:id="{rid}"/></a:graphicData></a:graphic></p:graphicFrame>')
+            f'<c:chart xmlns:c="{C}" r:id="{rid}"/></a:graphicData></a:graphic></p:graphicFrame>'
+        )
         next_id += 1
     hide = ' showMasterSp="0"' if slide["hideMasterShapes"] else ""
     slide_name = slide["title"] or slide["key"]
     return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}"{hide}><p:cSld name="{_esc(slide_name)}"><p:spTree>
 <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
-{''.join(shapes)}
+{"".join(shapes)}
 </p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>'''
 
 
 def _content_types(overrides: list[tuple[str, str]], defaults: list[tuple[str, str]]) -> str:
-    default_entries = "".join(
-        f'<Default Extension="{ext}" ContentType="{ctype}"/>' for ext, ctype in defaults)
-    override_entries = "".join(
-        f'<Override PartName="/{name}" ContentType="{ctype}"/>' for name, ctype in overrides)
+    default_entries = "".join(f'<Default Extension="{ext}" ContentType="{ctype}"/>' for ext, ctype in defaults)
+    override_entries = "".join(f'<Override PartName="/{name}" ContentType="{ctype}"/>' for name, ctype in overrides)
     return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="{CT}">{default_entries}{override_entries}</Types>'''
 
 
 def _rels_xml(entries: list[tuple[str, str, str]]) -> str:
     body = "".join(
-        f'<Relationship Id="{rid}" Type="{rtype}" Target="{_esc(target)}"/>'
-        for rid, rtype, target in entries)
+        f'<Relationship Id="{rid}" Type="{rtype}" Target="{_esc(target)}"/>' for rid, rtype, target in entries
+    )
     return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="{PKG_REL}">{body}</Relationships>'''
 
 
 def _core_props(title: str) -> str:
-    return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            f'<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
-            f'xmlns:dc="http://purl.org/dc/elements/1.1/" '
-            f'xmlns:dcterms="http://purl.org/dc/terms/" '
-            f'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-            f"<dc:title>{_esc(title)}</dc:title><dc:creator>annotation-everything</dc:creator>"
-            f'<dcterms:created xsi:type="dcterms:W3CDTF">{FIXED_STAMP}</dcterms:created>'
-            f'<dcterms:modified xsi:type="dcterms:W3CDTF">{FIXED_STAMP}</dcterms:modified>'
-            "</cp:coreProperties>")
+    return (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        f'<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+        f'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+        f'xmlns:dcterms="http://purl.org/dc/terms/" '
+        f'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        f"<dc:title>{_esc(title)}</dc:title><dc:creator>annotation-everything</dc:creator>"
+        f'<dcterms:created xsi:type="dcterms:W3CDTF">{FIXED_STAMP}</dcterms:created>'
+        f'<dcterms:modified xsi:type="dcterms:W3CDTF">{FIXED_STAMP}</dcterms:modified>'
+        "</cp:coreProperties>"
+    )
 
 
 def _app_props(slides: int) -> str:
-    return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            f'<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">'
-            f"<Application>annotation-everything</Application><Slides>{slides}</Slides>"
-            "</Properties>")
+    return (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        f'<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">'
+        f"<Application>annotation-everything</Application><Slides>{slides}</Slides>"
+        "</Properties>"
+    )
 
 
 def _sections_ext(sections: list[dict], slide_ids: dict[str, int]) -> str:
     parts = "".join(
         f'<p14:section name="{_esc(section["name"])}" id="{_guid("section:" + section["name"])}">'
-        '<p14:sldIdLst>'
+        "<p14:sldIdLst>"
         + "".join(f'<p14:sldId id="{slide_ids[key]}"/>' for key in section["keys"])
         + "</p14:sldIdLst></p14:section>"
-        for section in sections)
-    return ('<p:extLst><p:ext uri="{521415D9-36F7-43DF-B3DD-418300879F6D}">'
-            '<p14:sectionLst xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main">'
-            f"{parts}</p14:sectionLst></p:ext></p:extLst>")
+        for section in sections
+    )
+    return (
+        '<p:extLst><p:ext uri="{521415D9-36F7-43DF-B3DD-418300879F6D}">'
+        '<p14:sectionLst xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main">'
+        f"{parts}</p14:sectionLst></p:ext></p:extLst>"
+    )
 
 
 def _num(value: object) -> str:
@@ -773,26 +880,28 @@ def _chart_xml(chart: dict, index: int) -> str:
     sers: list[str] = []
     for order, series in enumerate(chart["series"]):
         col = _col_letter(order)
-        cat_pts = "".join(f'<c:pt idx="{i}"><c:v>{_esc(v)}</c:v></c:pt>'
-                          for i, v in enumerate(chart["categories"]))
-        val_pts = "".join(f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>'
-                          for i, v in enumerate(series["values"]))
+        cat_pts = "".join(f'<c:pt idx="{i}"><c:v>{_esc(v)}</c:v></c:pt>' for i, v in enumerate(chart["categories"]))
+        val_pts = "".join(f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>' for i, v in enumerate(series["values"]))
         dlbls = ""
         if chart["labels"] != "none":
             show_val = "1" if chart["labels"] == "value" else "0"
             show_percent = "1" if chart["labels"] == "percent" else "0"
-            dlbls = (f"<c:dLbls><c:showLegendKey val=\"0\"/><c:showVal val=\"{show_val}\"/>"
-                     '<c:showCatName val="0"/><c:showSerName val="0"/>'
-                     f'<c:showPercent val="{show_percent}"/><c:showBubbleSize val="0"/></c:dLbls>')
-        ser = (f'<c:ser><c:idx val="{order}"/><c:order val="{order}"/>'
-               f'<c:tx><c:strRef><c:f>Sheet1!${col}$1</c:f><c:strCache>'
-               f'<c:ptCount val="1"/><c:pt idx="0"><c:v>{_esc(series["name"])}</c:v></c:pt>'
-               f'</c:strCache></c:strRef></c:tx>{dlbls}'
-               f'<c:cat><c:strRef><c:f>Sheet1!$A$2:$A${count + 1}</c:f><c:strCache>'
-               f'<c:ptCount val="{count}"/>{cat_pts}</c:strCache></c:strRef></c:cat>'
-               f'<c:val><c:numRef><c:f>Sheet1!${col}$2:${col}${count + 1}</c:f>'
-               f'<c:numCache><c:formatCode>General</c:formatCode>'
-               f'<c:ptCount val="{count}"/>{val_pts}</c:numCache></c:numRef></c:val>')
+            dlbls = (
+                f'<c:dLbls><c:showLegendKey val="0"/><c:showVal val="{show_val}"/>'
+                '<c:showCatName val="0"/><c:showSerName val="0"/>'
+                f'<c:showPercent val="{show_percent}"/><c:showBubbleSize val="0"/></c:dLbls>'
+            )
+        ser = (
+            f'<c:ser><c:idx val="{order}"/><c:order val="{order}"/>'
+            f"<c:tx><c:strRef><c:f>Sheet1!${col}$1</c:f><c:strCache>"
+            f'<c:ptCount val="1"/><c:pt idx="0"><c:v>{_esc(series["name"])}</c:v></c:pt>'
+            f"</c:strCache></c:strRef></c:tx>{dlbls}"
+            f"<c:cat><c:strRef><c:f>Sheet1!$A$2:$A${count + 1}</c:f><c:strCache>"
+            f'<c:ptCount val="{count}"/>{cat_pts}</c:strCache></c:strRef></c:cat>'
+            f"<c:val><c:numRef><c:f>Sheet1!${col}$2:${col}${count + 1}</c:f>"
+            f"<c:numCache><c:formatCode>General</c:formatCode>"
+            f'<c:ptCount val="{count}"/>{val_pts}</c:numCache></c:numRef></c:val>'
+        )
         if kind == "line":
             ser += '<c:smooth val="0"/>'
         ser += "</c:ser>"
@@ -801,9 +910,11 @@ def _chart_xml(chart: dict, index: int) -> str:
     if kind in ("column", "bar"):
         direction = "col" if kind == "column" else "bar"
         cat_pos, val_pos = ("b", "l") if kind == "column" else ("l", "b")
-        group = (f'<c:barChart><c:barDir val="{direction}"/><c:grouping val="clustered"/>'
-                 f'<c:varyColors val="0"/>{sers_xml}<c:gapWidth val="150"/>'
-                 f'<c:axId val="{ax_a}"/><c:axId val="{ax_b}"/></c:barChart>')
+        group = (
+            f'<c:barChart><c:barDir val="{direction}"/><c:grouping val="clustered"/>'
+            f'<c:varyColors val="0"/>{sers_xml}<c:gapWidth val="150"/>'
+            f'<c:axId val="{ax_a}"/><c:axId val="{ax_b}"/></c:barChart>'
+        )
         axes = (
             f'<c:catAx><c:axId val="{ax_a}"/><c:scaling><c:orientation val="minMax"/></c:scaling>'
             f'<c:delete val="0"/><c:axPos val="{cat_pos}"/><c:majorTickMark val="out"/>'
@@ -815,11 +926,14 @@ def _chart_xml(chart: dict, index: int) -> str:
             f'<c:numFmt formatCode="General" sourceLinked="0"/>'
             f'<c:majorTickMark val="out"/><c:minorTickMark val="none"/>'
             f'<c:tickLblPos val="nextTo"/><c:crossAx val="{ax_a}"/>'
-            '<c:crosses val="autoZero"/></c:valAx>')
+            '<c:crosses val="autoZero"/></c:valAx>'
+        )
     elif kind == "line":
-        group = (f'<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>'
-                 f'{sers_xml}<c:marker val="0"/>'
-                 f'<c:axId val="{ax_a}"/><c:axId val="{ax_b}"/></c:lineChart>')
+        group = (
+            f'<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>'
+            f'{sers_xml}<c:marker val="0"/>'
+            f'<c:axId val="{ax_a}"/><c:axId val="{ax_b}"/></c:lineChart>'
+        )
         axes = (
             f'<c:catAx><c:axId val="{ax_a}"/><c:scaling><c:orientation val="minMax"/></c:scaling>'
             f'<c:delete val="0"/><c:axPos val="b"/><c:majorTickMark val="out"/>'
@@ -831,34 +945,40 @@ def _chart_xml(chart: dict, index: int) -> str:
             f'<c:numFmt formatCode="General" sourceLinked="0"/>'
             f'<c:majorTickMark val="out"/><c:minorTickMark val="none"/>'
             f'<c:tickLblPos val="nextTo"/><c:crossAx val="{ax_a}"/>'
-            '<c:crosses val="autoZero"/></c:valAx>')
+            '<c:crosses val="autoZero"/></c:valAx>'
+        )
     else:
         dlbls = ""
         if chart["labels"] != "none":
             show_val = "1" if chart["labels"] == "value" else "0"
             show_percent = "1" if chart["labels"] == "percent" else "0"
-            dlbls = (f"<c:dLbls><c:showLegendKey val=\"0\"/><c:showVal val=\"{show_val}\"/>"
-                     '<c:showCatName val="0"/><c:showSerName val="0"/>'
-                     f'<c:showPercent val="{show_percent}"/><c:showBubbleSize val="0"/></c:dLbls>')
-        group = (f'<c:pieChart><c:varyColors val="1"/>{sers_xml}{dlbls}'
-                 '<c:firstSliceAng val="0"/></c:pieChart>')
+            dlbls = (
+                f'<c:dLbls><c:showLegendKey val="0"/><c:showVal val="{show_val}"/>'
+                '<c:showCatName val="0"/><c:showSerName val="0"/>'
+                f'<c:showPercent val="{show_percent}"/><c:showBubbleSize val="0"/></c:dLbls>'
+            )
+        group = f'<c:pieChart><c:varyColors val="1"/>{sers_xml}{dlbls}<c:firstSliceAng val="0"/></c:pieChart>'
         axes = ""
     title_block = ""
     if chart["title"]:
-        title_block = (f'<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p>'
-                       f'<a:pPr><a:defRPr sz="1400"/></a:pPr>'
-                       f'<a:r><a:rPr lang="zh-CN" sz="1400"/><a:t>{_esc(chart["title"])}</a:t></a:r>'
-                       f'</a:p></c:rich></c:tx><c:overlay val="0"/></c:title>')
+        title_block = (
+            f"<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p>"
+            f'<a:pPr><a:defRPr sz="1400"/></a:pPr>'
+            f'<a:r><a:rPr lang="zh-CN" sz="1400"/><a:t>{_esc(chart["title"])}</a:t></a:r>'
+            f'</a:p></c:rich></c:tx><c:overlay val="0"/></c:title>'
+        )
     legend_block = ""
     if chart["legend"] != "none":
         pos = {"right": "r", "bottom": "b", "top": "t"}[chart["legend"]]
         legend_block = f'<c:legend><c:legendPos val="{pos}"/><c:overlay val="0"/></c:legend>'
-    return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            f'<c:chartSpace xmlns:c="{C}" xmlns:a="{A}" xmlns:r="{R}"><c:chart>'
-            f"{title_block}<c:autoTitleDeleted val=\"{0 if chart['title'] else 1}\"/>"
-            f"<c:plotArea><c:layout/>{group}{axes}</c:plotArea>{legend_block}"
-            '<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>'
-            '<c:externalData r:id="rId1" autoUpdate="0"/></c:chartSpace>')
+    return (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        f'<c:chartSpace xmlns:c="{C}" xmlns:a="{A}" xmlns:r="{R}"><c:chart>'
+        f'{title_block}<c:autoTitleDeleted val="{0 if chart["title"] else 1}"/>'
+        f"<c:plotArea><c:layout/>{group}{axes}</c:plotArea>{legend_block}"
+        '<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>'
+        '<c:externalData r:id="rId1" autoUpdate="0"/></c:chartSpace>'
+    )
 
 
 def _chart_workbook(chart: dict) -> dict[str, str]:
@@ -875,66 +995,63 @@ def _chart_workbook(chart: dict) -> dict[str, str]:
             cells.append(f'<c r="{col}{index + 2}"><v>{series["values"][index]}</v></c>')
         rows.append(f'<row r="{index + 2}">{"".join(cells)}</row>')
     return {
-        "[Content_Types].xml":
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-            '<Default Extension="xml" ContentType="application/xml"/>'
-            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
-            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
-            "</Types>",
-        "_rels/.rels":
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
-            "</Relationships>",
-        "xl/workbook.xml":
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
-            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-            '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
-        "xl/_rels/workbook.xml.rels":
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
-            "</Relationships>",
-        "xl/worksheets/sheet1.xml":
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-            f"<sheetData>{''.join(rows)}</sheetData></worksheet>",
+        "[Content_Types].xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        "</Types>",
+        "_rels/.rels": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+        "</Relationships>",
+        "xl/workbook.xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        "xl/_rels/workbook.xml.rels": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+        "</Relationships>",
+        "xl/worksheets/sheet1.xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f"<sheetData>{''.join(rows)}</sheetData></worksheet>",
     }
 
 
 def _notes_slide_xml(notes: str) -> str:
     """备注部件：讲稿按行成段，只挂在对应幻灯片上。"""
-    paragraphs = [_para(line) for line in
-                  [line for line in notes.split("\n") if line.strip()]]
-    shapes = [_placeholder_sp(2, "幻灯片图像", "sldImg", None, [],
-                              _geom(685800, 457200, 5486400, 3086100)),
-              _placeholder_sp(3, "备注正文", "body", 1, paragraphs,
-                              _geom(685800, 3800000, 5486400, 4800000))]
-    return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            f'<p:notes xmlns:p="{P}" xmlns:a="{A}"><p:cSld name="备注"><p:spTree>'
-            "<p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>"
-            f"{''.join(shapes)}"
-            "</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>")
+    paragraphs = [_para(line) for line in [line for line in notes.split("\n") if line.strip()]]
+    shapes = [
+        _placeholder_sp(2, "幻灯片图像", "sldImg", None, [], _geom(685800, 457200, 5486400, 3086100)),
+        _placeholder_sp(3, "备注正文", "body", 1, paragraphs, _geom(685800, 3800000, 5486400, 4800000)),
+    ]
+    return (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        f'<p:notes xmlns:p="{P}" xmlns:a="{A}"><p:cSld name="备注"><p:spTree>'
+        '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>'
+        f"{''.join(shapes)}"
+        "</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>"
+    )
 
 
 def _notes_master_xml() -> str:
-    shapes = [_placeholder_sp(2, "幻灯片图像", "sldImg", None, [],
-                              _geom(685800, 457200, 5486400, 3086100)),
-              _placeholder_sp(3, "备注正文", "body", 1, [],
-                              _geom(685800, 3800000, 5486400, 4800000)),
-              _placeholder_sp(4, "页码占位符", "sldNum", None, [],
-                              _geom(6000000, 8700000, 400000, 300000))]
-    return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            f'<p:notesMaster xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}">'
-            '<p:cSld name="备注母版"><p:spTree>'
-            "<p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>"
-            f"{''.join(shapes)}</p:spTree></p:cSld>"
-            '<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>'
-            '<p:notesStyle><a:lvl1pPr><a:defRPr sz="1200"/></a:lvl1pPr></p:notesStyle>'
-            "</p:notesMaster>")
+    shapes = [
+        _placeholder_sp(2, "幻灯片图像", "sldImg", None, [], _geom(685800, 457200, 5486400, 3086100)),
+        _placeholder_sp(3, "备注正文", "body", 1, [], _geom(685800, 3800000, 5486400, 4800000)),
+        _placeholder_sp(4, "页码占位符", "sldNum", None, [], _geom(6000000, 8700000, 400000, 300000)),
+    ]
+    return (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        f'<p:notesMaster xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}">'
+        '<p:cSld name="备注母版"><p:spTree>'
+        '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>'
+        f"{''.join(shapes)}</p:spTree></p:cSld>"
+        '<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>'
+        '<p:notesStyle><a:lvl1pPr><a:defRPr sz="1200"/></a:lvl1pPr></p:notesStyle>'
+        "</p:notesMaster>"
+    )
 
 
 def write_package(out: Path, parts: dict[str, str | bytes]) -> Path:
@@ -956,15 +1073,13 @@ def build_deck(spec: object, out: Path, *, base_dir: Path | None = None) -> dict
     size = spec["size"]
     slides = spec["slides"]
 
-    used_layouts = [key for key in LAYOUT_ORDER
-                    if any(s["layout"] == key for s in slides)]
-    layout_parts = {key: f"slideLayout{index + 1}.xml"
-                    for index, key in enumerate(used_layouts)}
-    layout_rids = {key: f"rIdLayout{index + 1}"
-                   for index, key in enumerate(used_layouts)}
+    used_layouts = [key for key in LAYOUT_ORDER if any(s["layout"] == key for s in slides)]
+    layout_parts = {key: f"slideLayout{index + 1}.xml" for index, key in enumerate(used_layouts)}
+    layout_rids = {key: f"rIdLayout{index + 1}" for index, key in enumerate(used_layouts)}
     layout_id_entries = "".join(
         f'<p:sldLayoutId id="{LAYOUT_ID_BASE + index}" r:id="{layout_rids[key]}"/>'
-        for index, key in enumerate(used_layouts))
+        for index, key in enumerate(used_layouts)
+    )
 
     slide_ids = _slide_ids([s["key"] for s in slides])
     slide_rids = {s["key"]: f"rIdSlide{index + 1}" for index, s in enumerate(slides)}
@@ -978,15 +1093,16 @@ def build_deck(spec: object, out: Path, *, base_dir: Path | None = None) -> dict
         hf_attrs.append('sldNum="1"')
     master_rels = master_rels.replace(
         "</Relationships>",
-        "".join(f'<Relationship Id="{layout_rids[key]}" Type="{R}/slideLayout" '
-                f'Target="../slideLayouts/{layout_parts[key]}"/>'
-                for key in used_layouts) + "</Relationships>")
+        "".join(
+            f'<Relationship Id="{layout_rids[key]}" Type="{R}/slideLayout" '
+            f'Target="../slideLayouts/{layout_parts[key]}"/>'
+            for key in used_layouts
+        )
+        + "</Relationships>",
+    )
 
-    pres_rels: list[tuple[str, str, str]] = [
-        ("rIdMaster", R + "/slideMaster", "slideMasters/slideMaster1.xml")]
-    pres_slide_entries = "".join(
-        f'<p:sldId id="{slide_ids[s["key"]]}" r:id="{slide_rids[s["key"]]}"/>'
-        for s in slides)
+    pres_rels: list[tuple[str, str, str]] = [("rIdMaster", R + "/slideMaster", "slideMasters/slideMaster1.xml")]
+    pres_slide_entries = "".join(f'<p:sldId id="{slide_ids[s["key"]]}" r:id="{slide_rids[s["key"]]}"/>' for s in slides)
 
     overrides: list[tuple[str, str]] = [
         ("ppt/presentation.xml", CT_PRESENTATION),
@@ -1007,15 +1123,16 @@ def build_deck(spec: object, out: Path, *, base_dir: Path | None = None) -> dict
     for key in used_layouts:
         parts[f"ppt/slideLayouts/{layout_parts[key]}"] = _layout_xml(key, size, hf_attrs)
         parts[f"ppt/slideLayouts/_rels/{layout_parts[key]}.rels"] = _rels_xml(
-            [("rId1", R + "/slideMaster", "../slideMasters/slideMaster1.xml")])
+            [("rId1", R + "/slideMaster", "../slideMasters/slideMaster1.xml")]
+        )
     chart_counter = 0
     has_charts = False
     has_notes = any(s["notes"] for s in slides)
     for index, slide in enumerate(slides, 1):
         overrides.append((f"ppt/slides/slide{index}.xml", CT_SLIDE))
         rel_entries: list[tuple[str, str, str]] = [
-            (slide_rids[slide["key"]], R + "/slideLayout",
-             f"../slideLayouts/{layout_parts[slide['layout']]}")]
+            (slide_rids[slide["key"]], R + "/slideLayout", f"../slideLayouts/{layout_parts[slide['layout']]}")
+        ]
         chart_frames: list[tuple[str, dict]] = []
         for chart in slide["charts"]:
             chart_counter += 1
@@ -1024,78 +1141,85 @@ def build_deck(spec: object, out: Path, *, base_dir: Path | None = None) -> dict
             overrides.append((f"ppt/charts/chart{chart_counter}.xml", CT_CHART))
             parts[f"ppt/charts/chart{chart_counter}.xml"] = _chart_xml(chart, chart_counter)
             parts[f"ppt/charts/_rels/chart{chart_counter}.xml.rels"] = _rels_xml(
-                [("rId1", R + "/package", f"../embeddings/data{chart_counter}.xlsx")])
+                [("rId1", R + "/package", f"../embeddings/data{chart_counter}.xlsx")]
+            )
             for name, content in _chart_workbook(chart).items():
                 parts[f"ppt/charts/workbook{chart_counter}/{name}"] = content
             rel_entries.append((rid, R + "/chart", f"../charts/chart{chart_counter}.xml"))
             chart_frames.append((rid, chart))
         if slide["notes"]:
             parts[f"ppt/notesSlides/notesSlide{index}.xml"] = _notes_slide_xml(slide["notes"])
-            parts[f"ppt/notesSlides/_rels/notesSlide{index}.xml.rels"] = _rels_xml([
-                ("rId1", R + "/notesMaster", "../notesMasters/notesMaster1.xml"),
-                ("rId2", R + "/slide", f"../slides/slide{index}.xml"),
-            ])
+            parts[f"ppt/notesSlides/_rels/notesSlide{index}.xml.rels"] = _rels_xml(
+                [
+                    ("rId1", R + "/notesMaster", "../notesMasters/notesMaster1.xml"),
+                    ("rId2", R + "/slide", f"../slides/slide{index}.xml"),
+                ]
+            )
             overrides.append((f"ppt/notesSlides/notesSlide{index}.xml", CT_NOTES_SLIDE))
-            rel_entries.append(("rIdNotes", R + "/notesSlide",
-                                f"../notesSlides/notesSlide{index}.xml"))
+            rel_entries.append(("rIdNotes", R + "/notesSlide", f"../notesSlides/notesSlide{index}.xml"))
         parts[f"ppt/slides/slide{index}.xml"] = _slide_xml(
-            slide, chart_frames, hf_attrs, spec["master"]["footerText"], size)
+            slide, chart_frames, hf_attrs, spec["master"]["footerText"], size
+        )
         parts[f"ppt/slides/_rels/slide{index}.xml.rels"] = _rels_xml(rel_entries)
         pres_rels.append((slide_rids[slide["key"]], R + "/slide", f"slides/slide{index}.xml"))
 
     if has_notes:
         parts["ppt/notesMasters/notesMaster1.xml"] = _notes_master_xml()
         parts["ppt/notesMasters/_rels/notesMaster1.xml.rels"] = _rels_xml(
-            [("rId1", R + "/theme", "../theme/theme2.xml")])
+            [("rId1", R + "/theme", "../theme/theme2.xml")]
+        )
         # PowerPoint expects the notes master to own a separate theme part.
         parts["ppt/theme/theme2.xml"] = parts["ppt/theme/theme1.xml"]
         overrides.append(("ppt/theme/theme2.xml", CT_THEME))
         overrides.append(("ppt/notesMasters/notesMaster1.xml", CT_NOTES_MASTER))
-        pres_rels.insert(1, ("rIdNotesMaster", R + "/notesMaster",
-                             "notesMasters/notesMaster1.xml"))
+        pres_rels.insert(1, ("rIdNotesMaster", R + "/notesMaster", "notesMasters/notesMaster1.xml"))
 
     if spec["master"]["logo"]:
         logo = spec["master"]["logo"]
         parts[f"ppt/media/logo.{logo['ext']}"] = logo["data"]
 
     # 图表的内嵌工作簿是嵌套的 xlsx 包：先单独打包，再作为部件放进外层包。
-    workbook_numbers = sorted({int(name.split("/")[2].removeprefix("workbook"))
-                               for name in parts if name.startswith("ppt/charts/workbook")})
+    workbook_numbers = sorted(
+        {int(name.split("/")[2].removeprefix("workbook")) for name in parts if name.startswith("ppt/charts/workbook")}
+    )
     for chart_number in workbook_numbers:
         prefix = f"ppt/charts/workbook{chart_number}/"
-        inner = {key: parts.pop(key) for key in sorted(parts)
-                 if key.startswith(prefix)}
+        inner = {key: parts.pop(key) for key in sorted(parts) if key.startswith(prefix)}
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             for member in sorted(inner):
                 content = inner[member]
                 data = content.encode("utf-8") if isinstance(content, str) else content
-                info = zipfile.ZipInfo(member.removeprefix(f"ppt/charts/workbook{chart_number}/"),
-                                       FIXED_TIME)
+                info = zipfile.ZipInfo(member.removeprefix(f"ppt/charts/workbook{chart_number}/"), FIXED_TIME)
                 info.external_attr = 0o600 << 16
                 archive.writestr(info, data)
         parts[f"ppt/embeddings/data{chart_number}.xlsx"] = buffer.getvalue()
 
-    notes_master_list = ('<p:notesMasterIdLst><p:notesMasterId r:id="rIdNotesMaster"/>'
-                         '</p:notesMasterIdLst>' if has_notes else "")
+    notes_master_list = (
+        '<p:notesMasterIdLst><p:notesMasterId r:id="rIdNotesMaster"/></p:notesMasterIdLst>' if has_notes else ""
+    )
     presentation = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}"><p:sldMasterIdLst><p:sldMasterId id="{MASTER_ID}" r:id="rIdMaster"/></p:sldMasterIdLst>{notes_master_list}<p:sldIdLst>{pres_slide_entries}</p:sldIdLst><p:sldSz cx="{size[0]}" cy="{size[1]}"/><p:notesSz cx="{_NOTES_SIZE[0]}" cy="{_NOTES_SIZE[1]}"/>{_sections_ext(spec["sections"], slide_ids)}</p:presentation>'''
     parts["ppt/presentation.xml"] = presentation
     parts["ppt/_rels/presentation.xml.rels"] = _rels_xml(pres_rels)
 
-    defaults = [("rels", "application/vnd.openxmlformats-package.relationships+xml"),
-                ("xml", "application/xml")]
+    defaults = [("rels", "application/vnd.openxmlformats-package.relationships+xml"), ("xml", "application/xml")]
     if has_charts:
         defaults.append(("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
     if spec["master"]["logo"]:
         ext = spec["master"]["logo"]["ext"]
         defaults.append((ext, f"image/{'jpeg' if ext == 'jpg' else ext}"))
-    parts["_rels/.rels"] = _rels_xml([
-        ("rId1", R + "/officeDocument", "ppt/presentation.xml"),
-        ("rId2", "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties",
-         "docProps/core.xml"),
-        ("rId3", R + "/extended-properties", "docProps/app.xml"),
-    ])
+    parts["_rels/.rels"] = _rels_xml(
+        [
+            ("rId1", R + "/officeDocument", "ppt/presentation.xml"),
+            (
+                "rId2",
+                "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties",
+                "docProps/core.xml",
+            ),
+            ("rId3", R + "/extended-properties", "docProps/app.xml"),
+        ]
+    )
     parts["[Content_Types].xml"] = _content_types(overrides, defaults)
 
     out = Path(out)
@@ -1103,22 +1227,20 @@ def build_deck(spec: object, out: Path, *, base_dir: Path | None = None) -> dict
         out.parent.mkdir(parents=True, exist_ok=True)
         write_package(out, parts)
     except OSError as exc:
-        raise DeckSpecError("writeFailed", path=str(out),
-                            detail=exc.strerror or "") from None
+        raise DeckSpecError("writeFailed", path=str(out), detail=exc.strerror or "") from None
     digest = hashlib.sha256(out.read_bytes()).hexdigest()
-    return {"schema": BUILD_SCHEMA, "file": out.name, "sha256": digest,
-            "pages": len(slides), "title": spec["title"]}
+    return {"schema": BUILD_SCHEMA, "file": out.name, "sha256": digest, "pages": len(slides), "title": spec["title"]}
 
 
 # ── 命令行 ──────────────────────────────────────────────────────────────────
+
 
 def _t(loc: str, key: str, **params: object) -> str:
     return i18n.translate(i18n.catalog(loc), key, **params)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="把 ae-pptx-deck/1 规格写成可编辑的 .pptx（内置 PPTX 制作器）")
+    parser = argparse.ArgumentParser(description="把 ae-pptx-deck/1 规格写成可编辑的 .pptx（内置 PPTX 制作器）")
     parser.add_argument("--deck", required=True, help="deck 规格 JSON 文件")
     parser.add_argument("--out", required=True, help="输出 .pptx 文件")
     parser.add_argument("--locale")
@@ -1133,22 +1255,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         loc = i18n.resolve_locale(args.locale, system_languages=i18n.system_languages())
     except i18n.LocaleError as exc:
-        print(_t("zh-CN", "pptxbuild.badLocale", locale=exc.params.get("locale", "")),
-              file=sys.stderr)
-        print(_t("en", "pptxbuild.badLocale", locale=exc.params.get("locale", "")),
-              file=sys.stderr)
+        print(_t("zh-CN", "pptxbuild.badLocale", locale=exc.params.get("locale", "")), file=sys.stderr)
+        print(_t("en", "pptxbuild.badLocale", locale=exc.params.get("locale", "")), file=sys.stderr)
         return 2
     try:
         raw = Path(args.deck).read_text(encoding="utf-8")
     except OSError as exc:
-        print(_t(loc, "pptxbuild.err.deckRead", path=args.deck,
-                 detail=exc.strerror or ""), file=sys.stderr)
+        print(_t(loc, "pptxbuild.err.deckRead", path=args.deck, detail=exc.strerror or ""), file=sys.stderr)
         return 2
     try:
         spec = json.loads(raw)
     except ValueError as exc:
-        print(_t(loc, "pptxbuild.err.deckJson", path=args.deck, detail=str(exc)),
-              file=sys.stderr)
+        print(_t(loc, "pptxbuild.err.deckJson", path=args.deck, detail=str(exc)), file=sys.stderr)
         return 2
     try:
         summary = build_deck(spec, Path(args.out), base_dir=Path(args.deck).resolve().parent)
@@ -1158,8 +1276,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(summary, ensure_ascii=False))
     else:
-        print(_t(loc, "pptxbuild.ok", file=summary["file"], pages=summary["pages"],
-                 sha256=summary["sha256"][:12]))
+        print(_t(loc, "pptxbuild.ok", file=summary["file"], pages=summary["pages"], sha256=summary["sha256"][:12]))
     return 0
 
 

@@ -18,6 +18,7 @@ verify.py 的选测策略：把「当前有效差异 + 开发阶段」翻译成�
 `AE_SELECTION_MAP` 环境变量可指向与内置结构相同的 JSON 覆盖映射（测试与
 实验用）；覆盖映射损坏同样保守回退，不静默采用部分规则。
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -44,16 +45,16 @@ ALL_SCENARIOS = "*"
 
 # 回退原因类别。多个原因同时出现时按此顺序取第一个作为 kind，原因文本合并。
 FALLBACK_KINDS = (
-    "input_unavailable",      # git 快照或有效输入读不出来
-    "bad_baseline",           # 基线缺失或解析不了
-    "broken_rules",           # 映射表缺失字段、引用不存在的场景等
-    "incomplete_manifest",    # 测试清单不完整 / 新增、删除、重命名的测试未纳入映射
-    "unknown_path",           # 未分类路径（含改名伪装、未提交的新文件）
-    "strategy_change",        # 验证入口、策略或 CI 配置自身变化，映射边界不可信
+    "input_unavailable",  # git 快照或有效输入读不出来
+    "bad_baseline",  # 基线缺失或解析不了
+    "broken_rules",  # 映射表缺失字段、引用不存在的场景等
+    "incomplete_manifest",  # 测试清单不完整 / 新增、删除、重命名的测试未纳入映射
+    "unknown_path",  # 未分类路径（含改名伪装、未提交的新文件）
+    "strategy_change",  # 验证入口、策略或 CI 配置自身变化，映射边界不可信
     "infrastructure_change",  # 测试基础设施（浏览器 / 服务入口、辅助文件）变化
-    "shared_resource",        # fixture、技能资源等影响面不可静态判定的共享资源
-    "guarded_doc",            # 不在允许列表内的说明文档，保守回退
-    "no_changes",             # 相对基线没有差异：不解释成不用测，保守按完整检查
+    "shared_resource",  # fixture、技能资源等影响面不可静态判定的共享资源
+    "guarded_doc",  # 不在允许列表内的说明文档，保守回退
+    "no_changes",  # 相对基线没有差异：不解释成不用测，保守按完整检查
 )
 
 # 测试文件与测试基础设施的判定（tests/ 的处理内建，不进映射表）
@@ -63,8 +64,8 @@ INFRA_TEST_FILES = ("tests/e2e_browser.py", "tests/e2e_scenarios.py", "tests/e2e
 
 @dataclasses.dataclass(frozen=True)
 class AllowEntry:
-    prefix: str      # 精确路径，或以 / 结尾的目录前缀
-    category: str    # 判定理由里展示的类别
+    prefix: str  # 精确路径，或以 / 结尾的目录前缀
+    category: str  # 判定理由里展示的类别
 
 
 @dataclasses.dataclass(frozen=True)
@@ -75,7 +76,7 @@ class SelectionRule:
     selectors: tuple = ()
     scenarios: tuple = ()
     serve_check: bool = False
-    fallback: Optional[str] = None   # 命中即回退的类别（FALLBACK_KINDS 之一）
+    fallback: Optional[str] = None  # 命中即回退的类别（FALLBACK_KINDS 之一）
 
 
 # ── 内置映射（真实仓库；修改走受审查的 PR，并同步 STRATEGY_VERSION） ────────
@@ -93,147 +94,245 @@ SELECTION_RULES = (
     SelectionRule(
         rid="cli-ae",
         prefixes=("ae.py",),
-        selectors=("tests/test_ae_cli.py", "tests/test_ae_cli_i18n.py", "tests/test_ae_checks.py",
-                   "tests/test_ae_checks_runtime.py", "tests/test_ae_checks_tools.py",
-                   "tests/test_ae_repair.py", "tests/test_ae_target.py", "tests/test_ae_uninstall.py",
-                   "tests/test_aux_cli_i18n.py", "tests/test_core.py", "tests/test_skill_updates.py"),
+        selectors=(
+            "tests/test_ae_cli.py",
+            "tests/test_ae_cli_i18n.py",
+            "tests/test_ae_checks.py",
+            "tests/test_ae_checks_runtime.py",
+            "tests/test_ae_checks_tools.py",
+            "tests/test_ae_repair.py",
+            "tests/test_ae_target.py",
+            "tests/test_ae_uninstall.py",
+            "tests/test_aux_cli_i18n.py",
+            "tests/test_core.py",
+            "tests/test_skill_updates.py",
+        ),
         why="ae.py 是安装 / 体检 / 修复 CLI，行为由这些模块覆盖",
     ),
     SelectionRule(
         rid="skill-updates",
-        prefixes=("skill/annotation-everything/scripts/update.py",
-                  "skill/annotation-everything/scripts/content_manifest.py",
-                  "skill/annotation-everything/scripts/fsutil.py"),
+        prefixes=(
+            "skill/annotation-everything/scripts/update.py",
+            "skill/annotation-everything/scripts/content_manifest.py",
+            "skill/annotation-everything/scripts/fsutil.py",
+        ),
         selectors=("tests/test_skill_updates.py", "tests/test_ae_cli.py", "tests/test_ae_target.py"),
         why="更新器与安装记录、副本和运行中的服务共同构成更新边界",
     ),
     SelectionRule(
         rid="protocol-notes",
-        prefixes=("skill/annotation-everything/scripts/notes.py",
-                  "skill/annotation-everything/scripts/notes_store.py",
-                  "skill/annotation-everything/scripts/ledger.py",
-                  "skill/annotation-everything/scripts/report_check.py",
-                  "skill/annotation-everything/scripts/fsutil.py"),
-        selectors=("tests/test_notes_exchange_i18n.py", "tests/test_core.py", "tests/test_handoff_i18n.py",
-                   "tests/test_locale_loop.py", "tests/test_export_format.py",
-                   "tests/test_skill_discovery.py", "tests/test_review_page_skills_i18n.py",
-                   "tests/test_report_check.py", "tests/test_report_generation_resources.py",
-                   "tests/test_report_reading.py", "tests/test_report_structure_visual.py",
-                   "tests/test_report_revision.py", "tests/test_report_external_method.py",
-                   "tests/test_report_alignment.py", "tests/test_report_check_deliverables.py",
-                   "tests/test_docx_review.py", "tests/test_docx_anchor.py"),
-        scenarios=("full-check", "locale-loop", "generated-draft-loop", "report-verdict-loop",
-                   "revision-update-loop", "legacy-report-compat", "external-method-loop",
-                   "alignment-navigation-loop"),
+        prefixes=(
+            "skill/annotation-everything/scripts/notes.py",
+            "skill/annotation-everything/scripts/notes_store.py",
+            "skill/annotation-everything/scripts/ledger.py",
+            "skill/annotation-everything/scripts/report_check.py",
+            "skill/annotation-everything/scripts/fsutil.py",
+        ),
+        selectors=(
+            "tests/test_notes_exchange_i18n.py",
+            "tests/test_core.py",
+            "tests/test_handoff_i18n.py",
+            "tests/test_locale_loop.py",
+            "tests/test_export_format.py",
+            "tests/test_skill_discovery.py",
+            "tests/test_review_page_skills_i18n.py",
+            "tests/test_report_check.py",
+            "tests/test_report_generation_resources.py",
+            "tests/test_report_reading.py",
+            "tests/test_report_structure_visual.py",
+            "tests/test_report_revision.py",
+            "tests/test_report_external_method.py",
+            "tests/test_report_alignment.py",
+            "tests/test_report_check_deliverables.py",
+            "tests/test_docx_review.py",
+            "tests/test_docx_anchor.py",
+        ),
+        scenarios=(
+            "full-check",
+            "locale-loop",
+            "generated-draft-loop",
+            "report-verdict-loop",
+            "revision-update-loop",
+            "legacy-report-compat",
+            "external-method-loop",
+            "alignment-navigation-loop",
+        ),
         serve_check=True,
         why="审阅协议、共享存储与报告产物核验是服务/产物边界，变更必须带上服务安全自检",
     ),
     SelectionRule(
         rid="serve-page",
-        prefixes=("skill/annotation-everything/scripts/serve.py",
-                  "skill/annotation-everything/scripts/viewer_template.html",
-                  "skill/annotation-everything/scripts/build_viewer.py",
-                  "skill/annotation-everything/scripts/fsutil.py"),
-        selectors=("tests/test_serve_locale.py", "tests/test_core.py", "tests/test_review_page_i18n.py",
-                   "tests/test_review_page_editing_i18n.py", "tests/test_review_page_skills_i18n.py",
-                   "tests/test_aux_cli_i18n.py", "tests/test_notes_exchange_i18n.py",
-                   "tests/test_report_alignment.py",
-                   "tests/test_docx_review.py", "tests/test_docx_anchor.py"),
+        prefixes=(
+            "skill/annotation-everything/scripts/serve.py",
+            "skill/annotation-everything/scripts/viewer_template.html",
+            "skill/annotation-everything/scripts/build_viewer.py",
+            "skill/annotation-everything/scripts/fsutil.py",
+        ),
+        selectors=(
+            "tests/test_serve_locale.py",
+            "tests/test_core.py",
+            "tests/test_review_page_i18n.py",
+            "tests/test_review_page_editing_i18n.py",
+            "tests/test_review_page_skills_i18n.py",
+            "tests/test_aux_cli_i18n.py",
+            "tests/test_notes_exchange_i18n.py",
+            "tests/test_report_alignment.py",
+            "tests/test_docx_review.py",
+            "tests/test_docx_anchor.py",
+        ),
         scenarios=(ALL_SCENARIOS,),
         serve_check=True,
         why="服务与页面模板影响全部浏览器场景与服务安全约束",
     ),
     SelectionRule(
         rid="analysis",
-        prefixes=("skill/annotation-everything/scripts/analysis_store.py",
-                  "skill/annotation-everything/scripts/notes.py",
-                  "skill/annotation-everything/scripts/notes_store.py",
-                  "skill/annotation-everything/scripts/ledger.py",
-                  "skill/annotation-everything/scripts/serve.py",
-                  "skill/annotation-everything/scripts/viewer_template.html",
-                  "skill/annotation-everything/scripts/build_viewer.py",
-                  "skill/annotation-everything/scripts/wakeup.py",
-                  "skill/annotation-everything/scripts/i18n.py",
-                  "skill/annotation-everything/locales/"),
-        selectors=("tests/test_analysis_store.py", "tests/test_analysis_agent.py",
-                   "tests/test_analysis_page.py", "tests/test_analysis_lifecycle.py",
-                   "tests/test_analysis_protection.py", "tests/test_analysis_protection_agent.py",
-                   "tests/test_analysis_protection_page.py", "tests/test_analysis_history.py",
-                   "tests/test_analysis_history_agent.py", "tests/test_analysis_history_page.py",
-                   "tests/test_analysis_resolution.py", "tests/test_analysis_resolution_agent.py",
-                   "tests/test_analysis_resolution_page.py", "tests/test_cli_error_i18n.py",
-                   "tests/test_agent_delivery.py", "tests/test_receiver_binding.py"),
+        prefixes=(
+            "skill/annotation-everything/scripts/analysis_store.py",
+            "skill/annotation-everything/scripts/notes.py",
+            "skill/annotation-everything/scripts/notes_store.py",
+            "skill/annotation-everything/scripts/ledger.py",
+            "skill/annotation-everything/scripts/serve.py",
+            "skill/annotation-everything/scripts/viewer_template.html",
+            "skill/annotation-everything/scripts/build_viewer.py",
+            "skill/annotation-everything/scripts/wakeup.py",
+            "skill/annotation-everything/scripts/i18n.py",
+            "skill/annotation-everything/locales/",
+        ),
+        selectors=(
+            "tests/test_analysis_store.py",
+            "tests/test_analysis_agent.py",
+            "tests/test_analysis_page.py",
+            "tests/test_analysis_lifecycle.py",
+            "tests/test_analysis_protection.py",
+            "tests/test_analysis_protection_agent.py",
+            "tests/test_analysis_protection_page.py",
+            "tests/test_analysis_history.py",
+            "tests/test_analysis_history_agent.py",
+            "tests/test_analysis_history_page.py",
+            "tests/test_analysis_resolution.py",
+            "tests/test_analysis_resolution_agent.py",
+            "tests/test_analysis_resolution_page.py",
+            "tests/test_cli_error_i18n.py",
+            "tests/test_agent_delivery.py",
+            "tests/test_receiver_binding.py",
+        ),
         scenarios=("analysis-smoke", "analysis-ui", "receiver-binding", "full-check"),
         serve_check=True,
         why="分析存储、改稿联动、投递与页面共享协议边界，覆盖全部分析契约及接收方兼容性",
     ),
     SelectionRule(
         rid="docx-review",
-        prefixes=("skill/annotation-everything/scripts/docx_review.py", "skill/annotation-everything/scripts/docx_edit.py", "fixtures/docx/"),
-        selectors=("tests/test_docx_review.py", "tests/test_docx_anchor.py", "tests/test_docx_edit.py", "tests/test_core.py", "tests/test_review_page_i18n.py"),
+        prefixes=(
+            "skill/annotation-everything/scripts/docx_review.py",
+            "skill/annotation-everything/scripts/docx_edit.py",
+            "fixtures/docx/",
+        ),
+        selectors=(
+            "tests/test_docx_review.py",
+            "tests/test_docx_anchor.py",
+            "tests/test_docx_edit.py",
+            "tests/test_core.py",
+            "tests/test_review_page_i18n.py",
+        ),
         scenarios=("docx-review",),
         why="DOCX 渲染器、回写与合成样例：分页、诊断、字节保留、写前闸门及失败恢复由 DOCX 用例覆盖；"
-            "浏览器场景钉住原分页显示、限制清单、点/框选标注与只读提示（服务安全自检由 pr 门禁覆盖）",
+        "浏览器场景钉住原分页显示、限制清单、点/框选标注与只读提示（服务安全自检由 pr 门禁覆盖）",
     ),
     SelectionRule(
         rid="pptx-review",
-        prefixes=("skill/annotation-everything/scripts/pptx_reader.py",
-                  "skill/annotation-everything/scripts/pptx_report.py",
-                  "skill/annotation-everything/scripts/pptx_edit.py",
-                  "fixtures/pptx/"),
-        selectors=("tests/test_pptx_reader.py", "tests/test_pptx_report.py",
-                   "tests/test_pptx_annotations.py", "tests/test_pptx_remap.py",
-                   "tests/test_pptx_edit.py", "tests/test_pptx_ops.py",
-                   "tests/test_core.py", "tests/test_review_page_i18n.py"),
+        prefixes=(
+            "skill/annotation-everything/scripts/pptx_reader.py",
+            "skill/annotation-everything/scripts/pptx_report.py",
+            "skill/annotation-everything/scripts/pptx_edit.py",
+            "fixtures/pptx/",
+        ),
+        selectors=(
+            "tests/test_pptx_reader.py",
+            "tests/test_pptx_report.py",
+            "tests/test_pptx_annotations.py",
+            "tests/test_pptx_remap.py",
+            "tests/test_pptx_edit.py",
+            "tests/test_pptx_ops.py",
+            "tests/test_core.py",
+            "tests/test_review_page_i18n.py",
+        ),
         scenarios=("pptx-review",),
         why="PPTX 读取、构建、回写与合成样例：包读取、能力矩阵、渲染诊断、幻灯片定位、重映射与白名单回写由 PPT 用例覆盖；"
-            "浏览器场景钉住直接审阅、元素/文本/区域批注、只读元素、旧服务阻断与改后重建（服务安全自检由 pr 门禁覆盖）",
+        "浏览器场景钉住直接审阅、元素/文本/区域批注、只读元素、旧服务阻断与改后重建（服务安全自检由 pr 门禁覆盖）",
     ),
     SelectionRule(
         rid="pptx-generation",
-        prefixes=("skill/annotation-everything/scripts/pptx_build.py",
-                  "skill/annotation-everything/scripts/pptx_check.py",
-                  "skill/annotation-everything/scripts/pptx_render.py"),
-        selectors=("tests/test_pptx_build.py", "tests/test_pptx_check.py",
-                   "tests/test_pptx_render.py", "tests/test_report_check_deliverables.py"),
+        prefixes=(
+            "skill/annotation-everything/scripts/pptx_build.py",
+            "skill/annotation-everything/scripts/pptx_check.py",
+            "skill/annotation-everything/scripts/pptx_render.py",
+        ),
+        selectors=(
+            "tests/test_pptx_build.py",
+            "tests/test_pptx_check.py",
+            "tests/test_pptx_render.py",
+            "tests/test_report_check_deliverables.py",
+        ),
         scenarios=(),
         why="内置 PPTX 制作与文件/渲染检查（issue #180）：deck 规格、OOXML 部件、图表结构、"
-            "证据链判定与反例由单元用例覆盖；逐页视觉检查与 PowerPoint 实机兼容由 PR review 门禁覆盖",
+        "证据链判定与反例由单元用例覆盖；逐页视觉检查与 PowerPoint 实机兼容由 PR review 门禁覆盖",
     ),
     SelectionRule(
         rid="review-page",
-        prefixes=("skill/annotation-everything/scripts/match.py",
-                  "skill/annotation-everything/scripts/skill_sources.py"),
-        selectors=("tests/test_review_page_i18n.py", "tests/test_review_page_skills_i18n.py",
-                   "tests/test_skill_discovery.py"),
+        prefixes=(
+            "skill/annotation-everything/scripts/match.py",
+            "skill/annotation-everything/scripts/skill_sources.py",
+        ),
+        selectors=(
+            "tests/test_review_page_i18n.py",
+            "tests/test_review_page_skills_i18n.py",
+            "tests/test_skill_discovery.py",
+        ),
         scenarios=("skill-search", "skill-recommendations", "skill-i18n"),
         why="页面匹配与技能发现逻辑",
     ),
     SelectionRule(
         rid="dict",
-        prefixes=("skill/annotation-everything/scripts/i18n.py", "locales/",
-                  "skill/annotation-everything/locales/"),
-        selectors=("tests/test_i18n_catalog_contract.py", "tests/test_i18n.py", "tests/test_serve_locale.py",
-                   "tests/test_locale_loop.py", "tests/test_ae_cli_i18n.py", "tests/test_aux_cli_i18n.py",
-                   "tests/test_handoff_i18n.py", "tests/test_notes_exchange_i18n.py",
-                   "tests/test_review_page_i18n.py", "tests/test_review_page_editing_i18n.py",
-                   "tests/test_review_page_skills_i18n.py", "tests/test_export_format.py"),
+        prefixes=("skill/annotation-everything/scripts/i18n.py", "locales/", "skill/annotation-everything/locales/"),
+        selectors=(
+            "tests/test_i18n_catalog_contract.py",
+            "tests/test_i18n.py",
+            "tests/test_serve_locale.py",
+            "tests/test_locale_loop.py",
+            "tests/test_ae_cli_i18n.py",
+            "tests/test_aux_cli_i18n.py",
+            "tests/test_handoff_i18n.py",
+            "tests/test_notes_exchange_i18n.py",
+            "tests/test_review_page_i18n.py",
+            "tests/test_review_page_editing_i18n.py",
+            "tests/test_review_page_skills_i18n.py",
+            "tests/test_export_format.py",
+        ),
         scenarios=(ALL_SCENARIOS,),
         why="词典与界面文案；全局契约模块显式在列，局部运行不丢全局保护",
     ),
     SelectionRule(
         rid="export-fonts",
-        prefixes=("skill/annotation-everything/scripts/export_format.py",
-                  "skill/annotation-everything/scripts/check_pptx_fonts.py"),
-        selectors=("tests/test_export_format.py", "tests/test_pptx_fonts.py",
-                   "tests/test_aux_cli_i18n.py", "tests/test_script_formats.py"),
+        prefixes=(
+            "skill/annotation-everything/scripts/export_format.py",
+            "skill/annotation-everything/scripts/check_pptx_fonts.py",
+        ),
+        selectors=(
+            "tests/test_export_format.py",
+            "tests/test_pptx_fonts.py",
+            "tests/test_aux_cli_i18n.py",
+            "tests/test_script_formats.py",
+        ),
         why="导出格式与字体检查 CLI",
     ),
     # 以下规则命中即回退：影响面不可静态判定或属于策略 / 配置自身
     SelectionRule(
         rid="skill-assets",
-        prefixes=("skill/annotation-everything/SKILL.md", "skill/annotation-everything/references/",
-                  "skill/annotation-everything/evals/"),
+        prefixes=(
+            "skill/annotation-everything/SKILL.md",
+            "skill/annotation-everything/references/",
+            "skill/annotation-everything/evals/",
+        ),
         fallback="shared_resource",
         why="技能指引、协议说明与评估资源影响行为面广，不能按扩展名放行",
     ),
@@ -245,13 +344,31 @@ SELECTION_RULES = (
     ),
     SelectionRule(
         rid="exec-config",
-        prefixes=("verify.py", "verify_selection.py", "verify_evidence.py", "verify_report.py", "verify_parallel.py", "host_isolation.py", ".github/", "tools/", "pyproject.toml"),
+        prefixes=(
+            "verify.py",
+            "verify_selection.py",
+            "verify_evidence.py",
+            "verify_report.py",
+            "verify_parallel.py",
+            "host_isolation.py",
+            ".github/",
+            "tools/",
+            "pyproject.toml",
+        ),
         fallback="strategy_change",
         why="验证入口、策略、CI 配置与 ruff 工具配置自身变化，映射边界不可信",
     ),
     SelectionRule(
         rid="guarded-docs",
-        prefixes=("docs/", "AGENTS.md", "CLAUDE.md", "LICENSE", ".gitignore", ".gitattributes", ".git-blame-ignore-revs"),
+        prefixes=(
+            "docs/",
+            "AGENTS.md",
+            "CLAUDE.md",
+            "LICENSE",
+            ".gitignore",
+            ".gitattributes",
+            ".git-blame-ignore-revs",
+        ),
         fallback="guarded_doc",
         why="不在狭窄允许列表内的说明文档与仓库辅助文件，保守回退完整检查",
     ),
@@ -259,6 +376,7 @@ SELECTION_RULES = (
 
 
 # ── 覆盖映射与环境变量 ─────────────────────────────────────────────────────
+
 
 def _parse_override(text: str) -> tuple:
     """覆盖映射 JSON -> (payload 或 None, problems)。"""
@@ -281,8 +399,12 @@ def _payload_to_strategy(payload: dict, problems: list) -> tuple:
     raw_allow = payload.get("doc_allowlist")
     if isinstance(raw_allow, list):
         for entry in raw_allow:
-            if (isinstance(entry, dict) and isinstance(entry.get("prefix"), str) and entry["prefix"]
-                    and isinstance(entry.get("category"), str)):
+            if (
+                isinstance(entry, dict)
+                and isinstance(entry.get("prefix"), str)
+                and entry["prefix"]
+                and isinstance(entry.get("category"), str)
+            ):
                 allowlist.append(AllowEntry(entry["prefix"], entry["category"]))
             else:
                 problems.append("doc_allowlist 条目必须是 {prefix, category}：%r" % (entry,))
@@ -313,8 +435,7 @@ def _rule_from_payload(raw, problems: list, index: int) -> Optional[SelectionRul
     if not isinstance(rid, str) or not rid:
         problems.append("rules[%d] 缺少 id" % index)
         return None
-    if not isinstance(prefixes, list) or not prefixes or not all(
-            isinstance(item, str) and item for item in prefixes):
+    if not isinstance(prefixes, list) or not prefixes or not all(isinstance(item, str) and item for item in prefixes):
         problems.append("规则 %s 的 prefixes 必须是非空字符串数组" % rid)
         return None
     if not isinstance(why, str) or not why:
@@ -335,9 +456,15 @@ def _rule_from_payload(raw, problems: list, index: int) -> Optional[SelectionRul
     if not selectors and fallback is None:
         problems.append("规则 %s 既没有 selectors 也没有 fallback，命中后没有可执行的建议" % rid)
         return None
-    return SelectionRule(rid=rid, prefixes=tuple(prefixes), why=why, selectors=tuple(selectors),
-                         scenarios=tuple(scenarios), serve_check=bool(raw.get("serve_check")),
-                         fallback=fallback)
+    return SelectionRule(
+        rid=rid,
+        prefixes=tuple(prefixes),
+        why=why,
+        selectors=tuple(selectors),
+        scenarios=tuple(scenarios),
+        serve_check=bool(raw.get("serve_check")),
+        fallback=fallback,
+    )
 
 
 def load_strategy(repo: Path, env: Optional[dict] = None) -> dict:
@@ -352,27 +479,54 @@ def load_strategy(repo: Path, env: Optional[dict] = None) -> dict:
         try:
             text = Path(override).read_text(encoding="utf-8")
         except (OSError, UnicodeError) as exc:
-            return {"rules": SELECTION_RULES, "allowlist": DOC_ALLOWLIST,
-                    "version": STRATEGY_VERSION, "source": "builtin",
-                    "problems": ["覆盖映射读不出来（%s），按内置映射继续校验" % exc],
-                    "override_used": True}
+            return {
+                "rules": SELECTION_RULES,
+                "allowlist": DOC_ALLOWLIST,
+                "version": STRATEGY_VERSION,
+                "source": "builtin",
+                "problems": ["覆盖映射读不出来（%s），按内置映射继续校验" % exc],
+                "override_used": True,
+            }
         payload, problems = _parse_override(text)
         if payload is None:
-            return {"rules": SELECTION_RULES, "allowlist": DOC_ALLOWLIST,
-                    "version": STRATEGY_VERSION, "source": "builtin",
-                    "problems": problems, "override_used": True}
+            return {
+                "rules": SELECTION_RULES,
+                "allowlist": DOC_ALLOWLIST,
+                "version": STRATEGY_VERSION,
+                "source": "builtin",
+                "problems": problems,
+                "override_used": True,
+            }
         rules, allowlist, version = _payload_to_strategy(payload, problems)
         if problems:
-            return {"rules": SELECTION_RULES, "allowlist": DOC_ALLOWLIST,
-                    "version": STRATEGY_VERSION, "source": "builtin",
-                    "problems": problems, "override_used": True}
-        return {"rules": tuple(rules), "allowlist": tuple(allowlist), "version": version,
-                "source": "override", "problems": [], "override_used": True}
-    return {"rules": SELECTION_RULES, "allowlist": DOC_ALLOWLIST, "version": STRATEGY_VERSION,
-            "source": "builtin", "problems": [], "override_used": False}
+            return {
+                "rules": SELECTION_RULES,
+                "allowlist": DOC_ALLOWLIST,
+                "version": STRATEGY_VERSION,
+                "source": "builtin",
+                "problems": problems,
+                "override_used": True,
+            }
+        return {
+            "rules": tuple(rules),
+            "allowlist": tuple(allowlist),
+            "version": version,
+            "source": "override",
+            "problems": [],
+            "override_used": True,
+        }
+    return {
+        "rules": SELECTION_RULES,
+        "allowlist": DOC_ALLOWLIST,
+        "version": STRATEGY_VERSION,
+        "source": "builtin",
+        "problems": [],
+        "override_used": False,
+    }
 
 
 # ── 浏览器场景注册表（按需加载） ───────────────────────────────────────────
+
 
 def load_scenario_ids(repo: Path) -> tuple:
     """返回 (场景 ID 元组或 None, 问题或 None)。只在规则引用场景时调用。"""
@@ -406,10 +560,17 @@ def load_scenario_ids(repo: Path) -> tuple:
 
 # ── 有效差异收集 ───────────────────────────────────────────────────────────
 
+
 def git_output(repo: Path, args: list) -> tuple:
     try:
-        proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
-                              text=True, encoding="utf-8", errors="replace", timeout=120)
+        proc = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, str(exc)
     return proc.returncode, proc.stdout
@@ -421,10 +582,16 @@ def collect_changes(repo: Path, baseline_commit: Optional[str], snapshot: dict) 
     staged 的重命名由 git 的 rename 检测给出两端；工作树里未暂存的重命名
     表现为「删除 + 未跟踪」，两端同样被收集，不会只看到一半。
     """
-    changes = {"added": [], "deleted": [], "modified": [], "renamed": [], "untracked": [],
-               "staged": list(snapshot.get("staged") or []),
-               "unstaged": list(snapshot.get("unstaged") or []),
-               "counts": dict(snapshot.get("counts") or {})}
+    changes = {
+        "added": [],
+        "deleted": [],
+        "modified": [],
+        "renamed": [],
+        "untracked": [],
+        "staged": list(snapshot.get("staged") or []),
+        "unstaged": list(snapshot.get("unstaged") or []),
+        "counts": dict(snapshot.get("counts") or {}),
+    }
     if not baseline_commit:
         return changes
     code, out = git_output(repo, ["diff", "--name-status", "-z", "-M", baseline_commit])
@@ -463,6 +630,7 @@ def collect_changes(repo: Path, baseline_commit: Optional[str], snapshot: dict) 
 
 # ── 分类与建议 ─────────────────────────────────────────────────────────────
 
+
 def _allowlist_category(path: str, allowlist: tuple) -> Optional[str]:
     for entry in allowlist:
         if entry.prefix.endswith("/"):
@@ -499,8 +667,12 @@ def _relevant_paths(changes: dict) -> list:
 
 def documentation_only(selection: dict) -> bool:
     """仅内置允许列表可豁免 PR 产品测试；缺失、回退和覆盖映射均从紧。"""
-    if (not isinstance(selection, dict) or selection.get("available") is not True
-            or selection.get("strategy_source") != "builtin" or selection.get("fallback") is not None):
+    if (
+        not isinstance(selection, dict)
+        or selection.get("available") is not True
+        or selection.get("strategy_source") != "builtin"
+        or selection.get("fallback") is not None
+    ):
         return False
     guard = selection.get("policy_guard")
     if guard is not None and (not isinstance(guard, dict) or guard.get("active") is not False):
@@ -531,9 +703,14 @@ def _classify(repo: Path, changes: dict, strategy: dict, scenario_ids: Optional[
     """逐路径分类：允许列表 -> tests 内建 -> 映射规则 -> 未知。"""
     rules = strategy["rules"]
     allowlist = strategy["allowlist"]
-    result = {"matched_rules": {}, "doc_exempt": [], "unknown_paths": [],
-              "fallbacks": [], "self_selectors": set(),
-              "manifest": {"new_tests": [], "deleted_tests": [], "renamed_tests": []}}
+    result = {
+        "matched_rules": {},
+        "doc_exempt": [],
+        "unknown_paths": [],
+        "fallbacks": [],
+        "self_selectors": set(),
+        "manifest": {"new_tests": [], "deleted_tests": [], "renamed_tests": []},
+    }
     touched_tests = False
     for path in _relevant_paths(changes):
         category = _allowlist_category(path, allowlist)
@@ -542,12 +719,14 @@ def _classify(repo: Path, changes: dict, strategy: dict, scenario_ids: Optional[
             continue
         if path.startswith("tests/"):
             touched_tests = True
-            renamed_entry = next((item for item in changes.get("renamed") or []
-                                  if path in (item["from"], item["to"])), None)
+            renamed_entry = next(
+                (item for item in changes.get("renamed") or [] if path in (item["from"], item["to"])), None
+            )
             if _is_test_file(path):
                 if renamed_entry is not None:
                     result["manifest"]["renamed_tests"].append(
-                        {"from": renamed_entry["from"], "to": renamed_entry["to"]})
+                        {"from": renamed_entry["from"], "to": renamed_entry["to"]}
+                    )
                 elif path in (changes.get("added") or []) or path in (changes.get("untracked") or []):
                     result["manifest"]["new_tests"].append(path)
                 elif path in (changes.get("deleted") or []):
@@ -556,20 +735,19 @@ def _classify(repo: Path, changes: dict, strategy: dict, scenario_ids: Optional[
                     result["self_selectors"].add(path)  # 修改已有测试：建议运行自身
             elif renamed_entry is not None:
                 result["fallbacks"].append(
-                    ("infrastructure_change", "tests/ 下的基础设施文件被重命名：%s -> %s"
-                     % (renamed_entry["from"], renamed_entry["to"])))
+                    (
+                        "infrastructure_change",
+                        "tests/ 下的基础设施文件被重命名：%s -> %s" % (renamed_entry["from"], renamed_entry["to"]),
+                    )
+                )
             elif path in (changes.get("added") or []) or path in (changes.get("untracked") or []):
-                result["fallbacks"].append(
-                    ("infrastructure_change", "tests/ 下新增了非测试文件：%s" % path))
+                result["fallbacks"].append(("infrastructure_change", "tests/ 下新增了非测试文件：%s" % path))
             elif path in (changes.get("deleted") or []):
-                result["fallbacks"].append(
-                    ("infrastructure_change", "tests/ 下的文件被删除：%s" % path))
+                result["fallbacks"].append(("infrastructure_change", "tests/ 下的文件被删除：%s" % path))
             elif path in INFRA_TEST_FILES:
-                result["fallbacks"].append(
-                    ("infrastructure_change", "测试基础设施变化：%s" % path))
+                result["fallbacks"].append(("infrastructure_change", "测试基础设施变化：%s" % path))
             else:
-                result["fallbacks"].append(
-                    ("infrastructure_change", "tests/ 下的辅助文件变化：%s" % path))
+                result["fallbacks"].append(("infrastructure_change", "tests/ 下的辅助文件变化：%s" % path))
             continue
         hits = _rule_hits(path, rules)
         if not hits:
@@ -577,26 +755,35 @@ def _classify(repo: Path, changes: dict, strategy: dict, scenario_ids: Optional[
             continue
         for rule in hits:
             if rule.fallback is not None:
-                result["fallbacks"].append((rule.fallback, "规则 %s：%s（路径 %s）"
-                                            % (rule.rid, rule.why, path)))
+                result["fallbacks"].append((rule.fallback, "规则 %s：%s（路径 %s）" % (rule.rid, rule.why, path)))
                 continue
             entry = result["matched_rules"].setdefault(
-                rule.rid, {"id": rule.rid, "why": rule.why, "paths": [],
-                           "selectors": list(rule.selectors),
-                           "scenarios": list(rule.scenarios), "serve_check": rule.serve_check})
+                rule.rid,
+                {
+                    "id": rule.rid,
+                    "why": rule.why,
+                    "paths": [],
+                    "selectors": list(rule.selectors),
+                    "scenarios": list(rule.scenarios),
+                    "serve_check": rule.serve_check,
+                },
+            )
             entry["paths"].append(path)
-    if touched_tests and not (result["manifest"]["new_tests"] or result["manifest"]["deleted_tests"]
-                              or result["manifest"]["renamed_tests"]):
+    if touched_tests and not (
+        result["manifest"]["new_tests"] or result["manifest"]["deleted_tests"] or result["manifest"]["renamed_tests"]
+    ):
         # tests/ 只有修改时清单检查通过；这里不做额外动作
         pass
     result["manifest"]["renamed_tests"] = sorted(
         {item["from"] + "->" + item["to"]: item for item in result["manifest"]["renamed_tests"]}.values(),
-        key=lambda item: item["to"])
+        key=lambda item: item["to"],
+    )
     return result
 
 
-def _manifest_problems(repo: Path, strategy: dict, classified: dict, scenario_ids: Optional[tuple],
-                       declared_scenarios: set) -> list:
+def _manifest_problems(
+    repo: Path, strategy: dict, classified: dict, scenario_ids: Optional[tuple], declared_scenarios: set
+) -> list:
     """测试清单完整性：映射声明的选择器与场景必须可解析，测试增删改名必须纳入映射。"""
     problems = []
     for rule in strategy["rules"]:
@@ -612,25 +799,34 @@ def _manifest_problems(repo: Path, strategy: dict, classified: dict, scenario_id
                 if scenario != ALL_SCENARIOS and scenario not in known:
                     problems.append("规则引用了不存在的浏览器场景：%s" % scenario)
     if classified["manifest"]["new_tests"]:
-        problems.append("新增或改名进来的测试未纳入任何映射规则：%s"
-                        % "、".join(classified["manifest"]["new_tests"]))
+        problems.append("新增或改名进来的测试未纳入任何映射规则：%s" % "、".join(classified["manifest"]["new_tests"]))
     if classified["manifest"]["deleted_tests"]:
         problems.append("测试清单变化（删除）：%s" % "、".join(classified["manifest"]["deleted_tests"]))
     if classified["manifest"]["renamed_tests"]:
-        problems.append("测试清单变化（重命名）：%s"
-                        % "、".join("%s -> %s" % (item["from"], item["to"])
-                                    for item in classified["manifest"]["renamed_tests"]))
+        problems.append(
+            "测试清单变化（重命名）：%s"
+            % "、".join("%s -> %s" % (item["from"], item["to"]) for item in classified["manifest"]["renamed_tests"])
+        )
     contract = "tests/test_i18n_catalog_contract.py"
     if any(rule.selectors for rule in strategy["rules"]) and not (repo / contract).is_file():
         problems.append("全局词典一致性契约模块缺失：%s" % contract)
     return problems
 
 
-def _suggest_for_phase(phase: str, classified: dict, changes: dict, fallback: Optional[dict],
-                       expanded_scenarios: list) -> dict:
-    suggested = {"runs_tests": True, "groups": [], "selectors": [], "selectors_effective": [],
-                 "contract_added": [], "scenarios": [], "serve_check": False,
-                 "not_applicable": [], "notes": []}
+def _suggest_for_phase(
+    phase: str, classified: dict, changes: dict, fallback: Optional[dict], expanded_scenarios: list
+) -> dict:
+    suggested = {
+        "runs_tests": True,
+        "groups": [],
+        "selectors": [],
+        "selectors_effective": [],
+        "contract_added": [],
+        "scenarios": [],
+        "serve_check": False,
+        "not_applicable": [],
+        "notes": [],
+    }
     if phase == "issue":
         suggested["runs_tests"] = False
         suggested["notes"] = [
@@ -661,8 +857,7 @@ def _suggest_for_phase(phase: str, classified: dict, changes: dict, fallback: Op
             scenarios.update(entry["scenarios"])
             serve_check = serve_check or entry["serve_check"]
         suggested["groups"] = ["unit"] + (["serve-check"] if serve_check else [])
-        suggested["scenarios"] = (sorted(expanded_scenarios) if ALL_SCENARIOS in scenarios
-                                  else sorted(scenarios))
+        suggested["scenarios"] = sorted(expanded_scenarios) if ALL_SCENARIOS in scenarios else sorted(scenarios)
         suggested["serve_check"] = serve_check
         suggested["notes"] = ["回退完整检查：%s" % fallback["reason"]]
         if serve_check or scenarios:
@@ -685,45 +880,48 @@ def _suggest_for_phase(phase: str, classified: dict, changes: dict, fallback: Op
         return suggested
     suggested["groups"] = ["unit-related"] + (["serve-check"] if serve_check else [])
     suggested["selectors"] = sorted(selectors)
-    suggested["scenarios"] = (sorted(expanded_scenarios) if ALL_SCENARIOS in scenarios
-                              else sorted(scenarios))
+    suggested["scenarios"] = sorted(expanded_scenarios) if ALL_SCENARIOS in scenarios else sorted(scenarios)
     suggested["serve_check"] = serve_check
     if scenarios:
         suggested["notes"] = ["浏览器场景为计划层对照：影子模式不因此增减实际执行的组。"]
     return suggested
 
 
-def build_selection(snapshot: dict, baseline: dict, phase: str, repo: Path,
-                    env: Optional[dict] = None) -> dict:
+def build_selection(snapshot: dict, baseline: dict, phase: str, repo: Path, env: Optional[dict] = None) -> dict:
     """构建选测计划。snapshot 与 baseline 由调用方提供（与 run 记录同源）。"""
-    selection = {"schema": SCHEMA, "strategy_version": None, "strategy_source": None,
-                 "available": bool(snapshot.get("available")),
-                 "reason": snapshot.get("reason"), "phase": phase,
-                 "baseline": baseline, "changes": None, "fallback": None,
-                 "matched_rules": [], "doc_exempt": [], "unknown_paths": [],
-                 "manifest_check": {"new_tests": [], "deleted_tests": [], "renamed_tests": [],
-                                    "problems": []},
-                 "suggested": None}
+    selection = {
+        "schema": SCHEMA,
+        "strategy_version": None,
+        "strategy_source": None,
+        "available": bool(snapshot.get("available")),
+        "reason": snapshot.get("reason"),
+        "phase": phase,
+        "baseline": baseline,
+        "changes": None,
+        "fallback": None,
+        "matched_rules": [],
+        "doc_exempt": [],
+        "unknown_paths": [],
+        "manifest_check": {"new_tests": [], "deleted_tests": [], "renamed_tests": [], "problems": []},
+        "suggested": None,
+    }
     fallbacks = []
     if baseline.get("commit") is None:
-        fallbacks.append(("bad_baseline",
-                          baseline.get("error") or "基线缺失：无法确定有效差异的起点"))
+        fallbacks.append(("bad_baseline", baseline.get("error") or "基线缺失：无法确定有效差异的起点"))
     if not snapshot.get("available"):
         fallbacks.append(("input_unavailable", snapshot.get("reason") or "有效输入快照不可用"))
     strategy = load_strategy(repo, env)
     selection["strategy_source"] = strategy["source"]
     selection["strategy_version"] = strategy["version"]
     if strategy["override_used"]:
-        selection.setdefault("notes", []).append(
-            "使用 AE_SELECTION_MAP 覆盖映射（测试与实验用）；路径不进记录。")
+        selection.setdefault("notes", []).append("使用 AE_SELECTION_MAP 覆盖映射（测试与实验用）；路径不进记录。")
     if strategy["problems"]:
         fallbacks.append(("broken_rules", "；".join(strategy["problems"])))
     if fallbacks and fallbacks[0][0] in ("bad_baseline", "input_unavailable", "broken_rules"):
-        selection["fallback"] = {"kind": fallbacks[0][0],
-                                 "reason": "；".join(reason for _, reason in fallbacks)}
-        selection["suggested"] = _suggest_for_phase(phase, {"matched_rules": {}, "doc_exempt": [],
-                                                            "self_selectors": set()}, {},
-                                                    selection["fallback"], [])
+        selection["fallback"] = {"kind": fallbacks[0][0], "reason": "；".join(reason for _, reason in fallbacks)}
+        selection["suggested"] = _suggest_for_phase(
+            phase, {"matched_rules": {}, "doc_exempt": [], "self_selectors": set()}, {}, selection["fallback"], []
+        )
         return selection
     changes = collect_changes(repo, baseline.get("commit"), snapshot)
     selection["changes"] = changes
@@ -737,17 +935,25 @@ def build_selection(snapshot: dict, baseline: dict, phase: str, repo: Path,
             fallbacks.append(("incomplete_manifest", problem))
     classified = _classify(repo, changes, strategy, scenario_ids)
     selection["matched_rules"] = sorted(
-        ({"id": entry["id"], "why": entry["why"], "paths": sorted(set(entry["paths"])),
-          "selectors": sorted(set(entry["selectors"])), "scenarios": entry["scenarios"],
-          "serve_check": entry["serve_check"]}
-         for entry in classified["matched_rules"].values()),
-        key=lambda entry: entry["id"])
+        (
+            {
+                "id": entry["id"],
+                "why": entry["why"],
+                "paths": sorted(set(entry["paths"])),
+                "selectors": sorted(set(entry["selectors"])),
+                "scenarios": entry["scenarios"],
+                "serve_check": entry["serve_check"],
+            }
+            for entry in classified["matched_rules"].values()
+        ),
+        key=lambda entry: entry["id"],
+    )
     selection["doc_exempt"] = sorted(classified["doc_exempt"], key=lambda item: item["path"])
     selection["unknown_paths"] = classified["unknown_paths"]
     if classified["unknown_paths"]:
-        fallbacks.append(("unknown_path",
-                          "未分类路径不在任何映射规则或文档允许列表中：%s"
-                          % "、".join(classified["unknown_paths"])))
+        fallbacks.append(
+            ("unknown_path", "未分类路径不在任何映射规则或文档允许列表中：%s" % "、".join(classified["unknown_paths"]))
+        )
     for kind, reason in classified["fallbacks"]:
         fallbacks.append((kind, reason))
     manifest_problems = _manifest_problems(repo, strategy, classified, scenario_ids, declared)
@@ -755,7 +961,8 @@ def build_selection(snapshot: dict, baseline: dict, phase: str, repo: Path,
         "new_tests": sorted(classified["manifest"]["new_tests"]),
         "deleted_tests": sorted(classified["manifest"]["deleted_tests"]),
         "renamed_tests": classified["manifest"]["renamed_tests"],
-        "problems": manifest_problems}
+        "problems": manifest_problems,
+    }
     if manifest_problems:
         fallbacks.append(("incomplete_manifest", "；".join(manifest_problems)))
     for kind in ("strategy_change", "infrastructure_change", "shared_resource", "guarded_doc"):
@@ -769,17 +976,17 @@ def build_selection(snapshot: dict, baseline: dict, phase: str, repo: Path,
     if fallbacks:
         order = {kind: index for index, kind in enumerate(FALLBACK_KINDS)}
         fallbacks.sort(key=lambda item: order.get(item[0], len(order)))
-        selection["fallback"] = {"kind": fallbacks[0][0],
-                                 "reason": "；".join(reason for _, reason in fallbacks)}
+        selection["fallback"] = {"kind": fallbacks[0][0], "reason": "；".join(reason for _, reason in fallbacks)}
     elif not _relevant_paths(changes):
-        selection["fallback"] = {"kind": "no_changes",
-                                 "reason": "相对基线没有可用差异；空差异不解释成不用测，保守按完整检查"}
-    selection["suggested"] = _suggest_for_phase(phase, classified, changes,
-                                                selection["fallback"], expanded)
+        selection["fallback"] = {
+            "kind": "no_changes",
+            "reason": "相对基线没有可用差异；空差异不解释成不用测，保守按完整检查",
+        }
+    selection["suggested"] = _suggest_for_phase(phase, classified, changes, selection["fallback"], expanded)
     if phase == "pr" and documentation_only(selection):
-        selection["suggested"].update(runs_tests=False, groups=[],
-                                      not_applicable=list(PRODUCT_TEST_GROUPS),
-                                      notes=[DOC_PR_REASON])
+        selection["suggested"].update(
+            runs_tests=False, groups=[], not_applicable=list(PRODUCT_TEST_GROUPS), notes=[DOC_PR_REASON]
+        )
     return selection
 
 

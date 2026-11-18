@@ -1,4 +1,5 @@
 """#113 CLI、投递提示与 HTTP 薄契约，全部使用合成审阅。"""
+
 from __future__ import annotations
 
 import io
@@ -16,12 +17,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skill/annotation-everything/scripts"))
 sys.path.insert(0, str(ROOT))
 import host_isolation
+
 host_isolation.require_for_module(__name__)
 import analysis_store as analysis
 import notes as cli
 import notes_store as store
 
-os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")   # 测试不碰用户真实的审阅台账
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")  # 测试不碰用户真实的审阅台账
 
 import serve
 import wakeup
@@ -33,8 +35,14 @@ class ProtectionAgentTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.d = Path(self.tmp.name) / "review"
         self.d.mkdir()
-        (self.d / "review.json").write_text(json.dumps({"reviewId": "synthetic-protection", "pages": [
-            {"n": 1, "key": "summary", "title": "合成概要", "stable": True}]}))
+        (self.d / "review.json").write_text(
+            json.dumps(
+                {
+                    "reviewId": "synthetic-protection",
+                    "pages": [{"n": 1, "key": "summary", "title": "合成概要", "stable": True}],
+                }
+            )
+        )
         (self.d / "index.html").write_text("<!doctype html><title>Synthetic</title>")
         self.env = patch.dict(os.environ, {"AE_HOME": str(Path(self.tmp.name) / "ledger")})
         self.env.start()
@@ -44,9 +52,21 @@ class ProtectionAgentTests(unittest.TestCase):
         state, seq = analysis.start_question(self.d, "采用哪个合成口径？", page=1)
         aid = state["id"]
         claimed = analysis.claim(self.d, seq=seq)
-        seq = analysis.writeback(self.d, aid, seq, claimed["baseRev"], [{
-            "key": "caliber", "text": "采用哪个口径？", "short": "口径", "recommend": "year",
-            "options": [{"id": "year", "label": "全年"}, {"id": "quarter", "label": "季度"}]}])["nextRound"]
+        seq = analysis.writeback(
+            self.d,
+            aid,
+            seq,
+            claimed["baseRev"],
+            [
+                {
+                    "key": "caliber",
+                    "text": "采用哪个口径？",
+                    "short": "口径",
+                    "recommend": "year",
+                    "options": [{"id": "year", "label": "全年"}, {"id": "quarter", "label": "季度"}],
+                }
+            ],
+        )["nextRound"]
         analysis.answer(self.d, aid, seq, "S:caliber", {"kind": "accept"})
         analysis.answer(self.d, aid, seq, "Q:n1", {"kind": "accept"})
         return aid, seq
@@ -60,8 +80,11 @@ class ProtectionAgentTests(unittest.TestCase):
 
     def command(self, *args, payload=None):
         out, err = io.StringIO(), io.StringIO()
-        with redirect_stdout(out), redirect_stderr(err), patch.object(
-                sys, "stdin", io.StringIO(json.dumps(payload) if payload is not None else "")):
+        with (
+            redirect_stdout(out),
+            redirect_stderr(err),
+            patch.object(sys, "stdin", io.StringIO(json.dumps(payload) if payload is not None else "")),
+        ):
             code = cli.main([args[0], str(self.d), *args[1:]])
         return code, out.getvalue(), err.getvalue()
 
@@ -69,13 +92,19 @@ class ProtectionAgentTests(unittest.TestCase):
         server = serve.ReviewServer(self.d, 0, log_to_file=False, locale=locale)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
+
         def close():
             server.shutdown()
             server.server_close()
             worker.join(2)
+
         self.addCleanup(close)
-        headers = {"Host": f"127.0.0.1:{server.port}", "Origin": f"http://127.0.0.1:{server.port}",
-                   "Content-Type": "application/json", "X-AE-Review": "synthetic-protection"}
+        headers = {
+            "Host": f"127.0.0.1:{server.port}",
+            "Origin": f"http://127.0.0.1:{server.port}",
+            "Content-Type": "application/json",
+            "X-AE-Review": "synthetic-protection",
+        }
         return server, headers
 
     def test_read_current_conclusions_without_an_open_round_is_read_only(self):
@@ -88,8 +117,10 @@ class ProtectionAgentTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         context = json.loads(out)
         self.assertEqual(context["analyses"][0]["conclusions"][0]["answer"], "全年")
-        self.assertEqual({item["kind"] for item in context["checks"]}, {
-            "changed-notes", "resolved-changed-basis", "report-conflicts", "analysis-conflicts"})
+        self.assertEqual(
+            {item["kind"] for item in context["checks"]},
+            {"changed-notes", "resolved-changed-basis", "report-conflicts", "analysis-conflicts"},
+        )
         self.assertEqual(before, {p: p.read_bytes() for p in before})
 
     def test_cli_redecide_request_and_update_envelope_keep_original_until_answered(self):
@@ -103,10 +134,23 @@ class ProtectionAgentTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         seq = analysis.queue(self.d)[0]["seq"]
         claimed = analysis.claim(self.d, seq=seq)
-        code, out, err = self.command("analysis-writeback", "--analysis", aid, "--round", str(seq),
-                                      "--base-rev", str(claimed["baseRev"]), "--proposals", "-", payload={
-                                          "updates": [{"noteId": note["id"], "text": "按季度口径核对合成数字"}],
-                                          "proposals": [], "assumptions": [], "facts": []})
+        code, out, err = self.command(
+            "analysis-writeback",
+            "--analysis",
+            aid,
+            "--round",
+            str(seq),
+            "--base-rev",
+            str(claimed["baseRev"]),
+            "--proposals",
+            "-",
+            payload={
+                "updates": [{"noteId": note["id"], "text": "按季度口径核对合成数字"}],
+                "proposals": [],
+                "assumptions": [],
+                "facts": [],
+            },
+        )
         self.assertEqual(code, 0, err)
         seq = json.loads(out)["nextRound"]
         code, out, err = self.command("analysis", "--round", str(seq), "--locale", "en")
@@ -127,7 +171,13 @@ class ProtectionAgentTests(unittest.TestCase):
         binding = {"reviewDir": str(self.d), "reviewId": "synthetic-protection"}
         before = store.load(self.d)
         prompt = wakeup.prompt(binding, "handoff", batch["seq"], "synthetic-message")
-        for expected in ("analysis-check", "changed-notes", "resolved-changed-basis", "report-conflicts", "analysis-conflicts"):
+        for expected in (
+            "analysis-check",
+            "changed-notes",
+            "resolved-changed-basis",
+            "report-conflicts",
+            "analysis-conflicts",
+        ):
             self.assertIn(expected, prompt)
         self.assertIn("Do not rewrite annotation text", prompt)
         code, out, err = self.command("wait", "--no-claim", "--timeout", "0.01", "--locale", "en")
@@ -176,19 +226,26 @@ class ProtectionAgentTests(unittest.TestCase):
             code, _, raw = serve._req(server.port, "POST", "/api/analysis/" + action, headers, {"analysis": aid})
             self.assertEqual(code, 400, raw)
             self.assertIn("annotation", json.loads(raw)["error"].lower())
-        code, _, raw = serve._req(server.port, "POST", "/api/analysis/keep-note", headers,
-                                  {"analysis": aid, "noteId": note["id"]})
+        code, _, raw = serve._req(
+            server.port, "POST", "/api/analysis/keep-note", headers, {"analysis": aid, "noteId": note["id"]}
+        )
         self.assertEqual(code, 200, raw)
         self.assertFalse(json.loads(raw)["analysis"]["linkedNotes"][0]["tracking"])
         old = analysis.load(self.d, aid)["rounds"][1]["seq"]
-        code, _, raw = serve._req(server.port, "POST", "/api/analysis/answer", headers,
-                                  {"analysis": aid, "round": old, "key": "Q:n1", "value": {"kind": "accept"}})
+        code, _, raw = serve._req(
+            server.port,
+            "POST",
+            "/api/analysis/answer",
+            headers,
+            {"analysis": aid, "round": old, "key": "Q:n1", "value": {"kind": "accept"}},
+        )
         self.assertEqual(code, 400, raw)
         self.assertEqual(json.loads(raw)["code"], "round-not-answerable")
         self.assertIn("refresh", json.loads(raw)["error"].lower())
         other, discarded = self.changed_note()
-        code, _, raw = serve._req(server.port, "POST", "/api/analysis/delete-note", headers,
-                                  {"analysis": other, "noteId": discarded["id"]})
+        code, _, raw = serve._req(
+            server.port, "POST", "/api/analysis/delete-note", headers, {"analysis": other, "noteId": discarded["id"]}
+        )
         self.assertEqual(code, 200, raw)
         self.assertEqual(json.loads(raw)["analysis"]["linkedNotes"], [])
         self.assertNotIn(discarded["id"], [n["id"] for n in json.loads(raw)["doc"]["notes"]])

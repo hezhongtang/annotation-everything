@@ -4,6 +4,7 @@
 不碰真实仓库内容、不启动真实浏览器、不读取任何真实审阅材料。
 只验证命令行边界与落盘证据，不绑定入口内部的模块拆分。对应 issue #50。
 """
+
 from __future__ import annotations
 
 import datetime
@@ -29,7 +30,7 @@ DOC_FIXTURES = json.loads((ROOT / "fixtures" / "verify-doc-allowlist.json").read
 
 # 合成 uv：剥掉 run --no-project --with <依赖> 与 tool run --from <包>，直接执行剩下的命令
 # （浏览器依赖仍只在真入口里导入；ruff 按环境变量合成通过 / 失败，不依赖真实 ruff）
-UV_STUB = '''#!/usr/bin/env python3
+UV_STUB = """#!/usr/bin/env python3
 import os
 import signal
 import subprocess
@@ -66,10 +67,10 @@ if os.name == "nt":
     proc = subprocess.Popen(args[index:])
     sys.exit(proc.wait())
 os.execvp(args[index], args[index:])
-'''
+"""
 
 # 合成服务安全自检：只打印与真自检相同的摘要行，退出码由 SYNTH_SERVE_FAILED 决定
-SERVE_STUB = '''#!/usr/bin/env python3
+SERVE_STUB = """#!/usr/bin/env python3
 import os
 import sys
 
@@ -81,10 +82,10 @@ for index in range(failed):
     print("失败  合成自检项 %d" % (total - failed + index))
 print("\\n%d/%d 通过" % (total - failed, total))
 sys.exit(1 if failed else 0)
-'''
+"""
 
 # 合成浏览器入口：打印与 tests/e2e_browser.py 相同的 PASS / FAIL 行与摘要
-BROWSER_STUB = '''#!/usr/bin/env python3
+BROWSER_STUB = """#!/usr/bin/env python3
 import os
 import sys
 import time
@@ -101,11 +102,11 @@ for index in range(failed):
     print("FAIL  合成场景 %d" % (total - failed + index))
 print("\\n%d/%d 通过" % (total - failed, total))
 sys.exit(1 if failed else 0)
-'''
+"""
 
 # 合成浏览器入口（场景化）：在「N/M 通过」后再打一行 AE-SCENARIOS 摘要，
 # 与 tests/e2e_browser.py 的场景执行清单同一格式（issue #53）
-BROWSER_SCENARIO_STUB = '''#!/usr/bin/env python3
+BROWSER_SCENARIO_STUB = """#!/usr/bin/env python3
 import json
 import os
 import sys
@@ -149,9 +150,9 @@ print("AE-SCENARIOS: " + json.dumps({
 if STATUS == "interrupted":
     sys.exit(130)
 sys.exit(0 if passed_total == total else 1)
-'''
+"""
 
-UNIT_PASS = '''import unittest
+UNIT_PASS = """import unittest
 
 
 class AlphaTests(unittest.TestCase):
@@ -165,11 +166,11 @@ class AlphaTests(unittest.TestCase):
 class BetaTests(unittest.TestCase):
     def test_beta_ok(self):
         self.assertGreater(3, 2)
-'''
+"""
 
 # 合成版全局词典一致性契约：真实仓库里这一检查在 tests/test_i18n_catalog_contract.py，
 # unit-related 组固定附带它（issue #51）。合成版检查合成仓库自己的 locales/。
-CONTRACT_MODULE = '''import json
+CONTRACT_MODULE = """import json
 import unittest
 from pathlib import Path
 
@@ -182,7 +183,7 @@ class RepoCatalogContractTests(unittest.TestCase):
         en = json.loads((LOCALES / "en.json").read_text(encoding="utf-8"))
         missing = sorted(set(zh) - set(en)) + sorted(set(en) - set(zh))
         self.assertEqual(missing, [], "合成词典 key 必须一致")
-'''
+"""
 
 
 def read_record(artifact_dir: Path, run_id: str) -> dict:
@@ -221,8 +222,7 @@ class SynthRepo:
         shutil.copy2(ROOT / "verify_parallel.py", self.path / "verify_parallel.py")
         self.git("init", "-q")
         self.git("add", "-A")
-        self.git("-c", "user.name=synth", "-c", "user.email=synth@example.invalid",
-                 "commit", "-q", "-m", "合成基线")
+        self.git("-c", "user.name=synth", "-c", "user.email=synth@example.invalid", "commit", "-q", "-m", "合成基线")
 
     # -- 文件与 git -------------------------------------------------------
     def write(self, rel: str, text: str, executable: bool = False) -> Path:
@@ -234,8 +234,16 @@ class SynthRepo:
         return path
 
     def git(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", *args], cwd=self.path, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", env=self.git_env, timeout=60)
+        return subprocess.run(
+            ["git", *args],
+            cwd=self.path,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=self.git_env,
+            timeout=60,
+        )
 
     @property
     def git_env(self) -> dict:
@@ -247,16 +255,16 @@ class SynthRepo:
 
     def commit_all(self, message: str) -> None:
         self.git("add", "-A")
-        self.git("-c", "user.name=synth", "-c", "user.email=synth@example.invalid",
-                 "commit", "-q", "-m", message)
+        self.git("-c", "user.name=synth", "-c", "user.email=synth@example.invalid", "commit", "-q", "-m", message)
 
     # -- 运行入口 --------------------------------------------------------
     @property
     def artifact_dir(self) -> Path:
         return self.path / ".verify"
 
-    def run_verify(self, *args: str, timeout: float = 120, extra_env: dict | None = None,
-                   cwd: Path | None = None) -> subprocess.CompletedProcess:
+    def run_verify(
+        self, *args: str, timeout: float = 120, extra_env: dict | None = None, cwd: Path | None = None
+    ) -> subprocess.CompletedProcess:
         env = dict(os.environ)
         env["PATH"] = f"{self.path / 'bin'}{os.pathsep}{env['PATH']}"
         env["GIT_CONFIG_GLOBAL"] = os.devnull
@@ -275,10 +283,16 @@ class SynthRepo:
         env["AE_LOCK_DIR"] = str(self.test_lock_dir)
         if extra_env:
             env.update(extra_env)
-        return subprocess.run([sys.executable, str((self.path / "verify.py").resolve()), *args],
-                              cwd=str(cwd or self.path), env=env,
-                              capture_output=True, text=True, encoding="utf-8", errors="replace",
-                              timeout=timeout)
+        return subprocess.run(
+            [sys.executable, str((self.path / "verify.py").resolve()), *args],
+            cwd=str(cwd or self.path),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
 
     def latest_run_id(self) -> str:
         return json.loads((self.artifact_dir / "latest.json").read_text(encoding="utf-8"))["run_id"]
@@ -316,8 +330,9 @@ class PlanTests(VerifyEntryTestCase):
         for name in ("unit", "unit-related", "browser", "serve-check", "lint", "all"):
             self.assertIn(name, p.stdout, f"plan 说明 {name}")
         self.assertIn("python3 -m unittest discover tests", p.stdout, "说明完整单元的等价命令")
-        self.assertIn("uv run --no-project --with playwright python tests/e2e_browser.py", p.stdout,
-                      "说明完整浏览器的等价命令")
+        self.assertIn(
+            "uv run --no-project --with playwright python tests/e2e_browser.py", p.stdout, "说明完整浏览器的等价命令"
+        )
         self.assertIn("skill/annotation-everything/scripts/serve.py check", p.stdout, "说明服务安全自检")
         self.assertFalse((self.repo.artifact_dir).exists(), "plan 不写任何记录")
         self.assertNotIn("test_alpha_ok", p.stdout, "plan 不执行测试")
@@ -329,10 +344,8 @@ class PlanTests(VerifyEntryTestCase):
         plan = json.loads(p.stdout)
         self.assertEqual(plan["requested"], ["unit-related"], "组名要弹出到组请求里")
         unit_related = {group["name"]: group for group in plan["groups"]}["unit-related"]
-        self.assertNotIn("unit-related", unit_related["command"],
-                         "组名不是选择器，不得出现在实际命令里")
-        self.assertNotIn("unit-related", unit_related["equivalent"],
-                         "组名不得出现在等价命令里")
+        self.assertNotIn("unit-related", unit_related["command"], "组名不是选择器，不得出现在实际命令里")
+        self.assertNotIn("unit-related", unit_related["equivalent"], "组名不得出现在等价命令里")
         text = self.repo.run_verify("plan", "unit-related", "tests/test_synth.py")
         self.assertEqual(text.returncode, 0, text.stdout + text.stderr)
         self.assertIn("python3 -m unittest tests/test_synth.py", text.stdout)
@@ -389,8 +402,9 @@ class UnitRunTests(VerifyEntryTestCase):
         for case in group["cases"]:
             self.assertIn("seconds", case)
             self.assertGreaterEqual(case["seconds"], 0.0)
-            self.assertIn(case["status"], ("passed", "failed", "error", "skipped",
-                                           "expected_failure", "unexpected_success"))
+            self.assertIn(
+                case["status"], ("passed", "failed", "error", "skipped", "expected_failure", "unexpected_success")
+            )
         # 用例耗时合计与墙钟分开陈述，不用累计值冒充等待时间
         timing = record["timing"]
         self.assertGreater(timing["wall_seconds"], 0)
@@ -420,7 +434,7 @@ class UnitRunTests(VerifyEntryTestCase):
         self.assertEqual(record["evidence"]["integrity"], "ok")
 
 
-UNIT_SLOW = '''import time
+UNIT_SLOW = """import time
 import unittest
 
 
@@ -429,9 +443,9 @@ class SlowTests(unittest.TestCase):
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             time.sleep(0.05)
-'''
+"""
 
-UNIT_FIXTURE = '''import time
+UNIT_FIXTURE = """import time
 import unittest
 
 
@@ -458,9 +472,9 @@ class OtherFixtureTests(unittest.TestCase):
 
     def test_three(self):
         self.assertTrue(True)
-'''
+"""
 
-UNIT_SUBTEST = '''import unittest
+UNIT_SUBTEST = """import unittest
 
 
 class SubTests(unittest.TestCase):
@@ -468,29 +482,29 @@ class SubTests(unittest.TestCase):
         for index in range(3):
             with self.subTest(index=index):
                 self.assertLess(index, 2)
-'''
+"""
 
-UNIT_SKIP = '''import unittest
+UNIT_SKIP = """import unittest
 
 
 class SkipTests(unittest.TestCase):
     @unittest.skip("合成跳过")
     def test_skipped(self):
         self.assertTrue(False)
-'''
+"""
 
 UNIT_IMPORT_ERROR = "raise ImportError('合成导入错误')\n"
 
-UNIT_HARD_EXIT = '''import os
+UNIT_HARD_EXIT = """import os
 import unittest
 
 
 class EscapeTests(unittest.TestCase):
     def test_leaves_without_reporting(self):
         os._exit(0)
-'''
+"""
 
-UNIT_CHANGES_INPUT = '''import pathlib
+UNIT_CHANGES_INPUT = """import pathlib
 import time
 import unittest
 
@@ -501,7 +515,7 @@ class ChurnTests(unittest.TestCase):
         path.write_text(path.read_text(encoding="utf-8") + "运行期改动\\n", encoding="utf-8")
         time.sleep(1.0)
         self.assertTrue(True)
-'''
+"""
 
 
 def pid_alive(pid: int) -> bool:
@@ -596,8 +610,7 @@ class OutcomeTests(VerifyEntryTestCase):
         self.assertEqual(counts["subtest_failures"], 1)
         self.assertEqual(counts["failed"], 1)
         self.assertEqual(record["result"]["outcome"], "failed")
-        case = {item["id"]: item for item in record["groups"][0]["cases"]}[
-            "test_synth.SubTests.test_subtests"]
+        case = {item["id"]: item for item in record["groups"][0]["cases"]}["test_synth.SubTests.test_subtests"]
         self.assertEqual(case["subtest_failures"], 1)
         self.assertEqual(case["status"], "failed")
 
@@ -612,8 +625,7 @@ class OutcomeTests(VerifyEntryTestCase):
         counts = record["result"]["counts"]
         self.assertEqual((counts["skipped"], counts["cases"]), (2, 2))
         self.assertFalse(record["result"]["usable_as_evidence"])
-        self.assertTrue(any("跳过" in note
-                            for note in record["result"]["notes"] + [record["result"]["summary"]]))
+        self.assertTrue(any("跳过" in note for note in record["result"]["notes"] + [record["result"]["summary"]]))
 
     def test_empty_collection_is_not_a_pass(self):
         (self.repo.path / "tests" / "test_synth.py").unlink()
@@ -651,23 +663,27 @@ class TimingAttributionTests(VerifyEntryTestCase):
         run_id = self.repo.latest_run_id()
         record = read_record(self.repo.artifact_dir, run_id)
         timing = record["timing"]
-        self.assertGreaterEqual(timing["fixture_seconds_total"], 0.95,
-                                "setUpModule 与两个 setUpClass 的耗时都要有归属")
+        self.assertGreaterEqual(timing["fixture_seconds_total"], 0.95, "setUpModule 与两个 setUpClass 的耗时都要有归属")
         for case in record["groups"][0]["cases"]:
             self.assertLess(case["seconds"], 0.2, "用例自身很快，fixture 时间不能摊到它头上")
         self.assertLess(timing["case_seconds_total"], timing["fixture_seconds_total"])
-        sidecar = json.loads((self.repo.artifact_dir / "runs" / run_id
-                              / "unit.cases.json").read_text(encoding="utf-8"))
+        sidecar = json.loads((self.repo.artifact_dir / "runs" / run_id / "unit.cases.json").read_text(encoding="utf-8"))
         by_kind = sidecar["seconds"]["gap_by_kind"]
         # 契约模块按字母序先被发现，test_synth 的模块级准备落在「运行开始」或
         # 「模块边界」空隙里；两种空隙合计都要覆盖 setUpModule 的 0.3 秒
         self.assertGreaterEqual(
-            by_kind.get("run-start", 0.0) + by_kind.get("class-boundary", 0.0), 0.3,
-            "模块级准备计入运行开始或模块边界空隙")
+            by_kind.get("run-start", 0.0) + by_kind.get("class-boundary", 0.0),
+            0.3,
+            "模块级准备计入运行开始或模块边界空隙",
+        )
         self.assertGreaterEqual(by_kind.get("class-boundary", 0.0), 0.3, "换类时的准备与清理计入边界空隙")
         self.assertLess(sidecar["seconds"]["unattributed"], 0.05, "同类相邻用例之间不应有大额未归属开销")
-        self.assertAlmostEqual(sum(gap["seconds"] for gap in sidecar["gaps"]),
-                               sidecar["seconds"]["gap_total"], places=5, msg="空隙耗时不重复累计")
+        self.assertAlmostEqual(
+            sum(gap["seconds"] for gap in sidecar["gaps"]),
+            sidecar["seconds"]["gap_total"],
+            places=5,
+            msg="空隙耗时不重复累计",
+        )
 
 
 class InputSnapshotTests(VerifyEntryTestCase):
@@ -706,16 +722,17 @@ class ProcessLifecycleTests(VerifyEntryTestCase):
     def test_repeated_abort_preserves_time_spent_reaping_children(self):
         import verify
 
-        ctx = verify.RunContext("cleanup-probe", self.repo.artifact_dir,
-                                None, sys.stdout, True)
+        ctx = verify.RunContext("cleanup-probe", self.repo.artifact_dir, None, sys.stdout, True)
         ctx.run_dir.mkdir(parents=True)
         popen_kwargs = (
-            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-            if os.name == "nt"
-            else {"start_new_session": True}
+            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
         )
         sig = signal.SIGBREAK if os.name == "nt" else signal.SIGTERM
-        child = subprocess.Popen([sys.executable, "-c", '''import signal, sys, time
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                """import signal, sys, time
 def cleanup(signum, frame):
     time.sleep(0.2)
     sys.exit(128 + signum)
@@ -727,8 +744,15 @@ print("ready", flush=True)
 deadline = time.monotonic() + 30
 while time.monotonic() < deadline:
     time.sleep(0.05)
-'''], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                 encoding="utf-8", errors="replace", **popen_kwargs)
+""",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **popen_kwargs,
+        )
         self.addCleanup(_reap, child)
         self.assertEqual(child.stdout.readline().strip(), "ready")
         ctx.registry.register(child, "synthetic")
@@ -737,8 +761,7 @@ while time.monotonic() < deadline:
         self.assertGreaterEqual(first_cleanup, 0.15, "第一次回收包含子进程的实际清理")
         self.assertEqual(child.returncode, 128 + sig)
         ctx.abort(sig)  # 外层收尾再次调用：已经没有活跃子进程
-        self.assertGreaterEqual(ctx.cleanup_seconds, first_cleanup,
-                                "第二次空回收不得抹去已经发生的清理耗时")
+        self.assertGreaterEqual(ctx.cleanup_seconds, first_cleanup, "第二次空回收不得抹去已经发生的清理耗时")
 
     def test_group_timeout_reaps_the_child_and_reports_timeout(self):
         self.unit(UNIT_SLOW)
@@ -749,8 +772,7 @@ while time.monotonic() < deadline:
         record = read_record(self.repo.artifact_dir, run_id)
         self.assertEqual(record["result"]["outcome"], "timeout")
         self.assertTrue(record["groups"][0]["timed_out"])
-        children = json.loads((self.repo.artifact_dir / "runs" / run_id
-                               / "children.json").read_text(encoding="utf-8"))
+        children = json.loads((self.repo.artifact_dir / "runs" / run_id / "children.json").read_text(encoding="utf-8"))
         self.assertEqual(len(children), 1)
         self.assertTrue(children[0]["reaped"])
         deadline = time.time() + 5
@@ -767,10 +789,17 @@ while time.monotonic() < deadline:
         env.pop("AE_HELD_LOCKS", None)
         env["AE_LOCK_DIR"] = str(self.test_lock_dir)
         popen_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
-        wrapper = subprocess.Popen([sys.executable, "verify.py", "run", "--group", "unit"],
-                                   cwd=str(self.repo.path), env=env,
-                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                   encoding="utf-8", errors="replace", **popen_kwargs)
+        wrapper = subprocess.Popen(
+            [sys.executable, "verify.py", "run", "--group", "unit"],
+            cwd=str(self.repo.path),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **popen_kwargs,
+        )
         run_id, children = self._wait_for_children()
         self.assertEqual(len(children), 1, "本次登记的子进程只有一个")
         child_pid = children[0]["pid"]
@@ -820,7 +849,7 @@ while time.monotonic() < deadline:
 
 # 外部锁占用者：扮演另一检出里直跑 unittest / 浏览器入口的参与者（同样遵守协议），
 # 或一个只持锁的合成占用者。绝不被入口停止。
-LOCK_HOLDER = '''
+LOCK_HOLDER = """
 import sys, time
 sys.path.insert(0, {root!r})
 import host_isolation as hi
@@ -837,7 +866,7 @@ deadline = time.monotonic() + float({hold!r})
 while time.monotonic() < deadline:
     time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 hi.release(handle)
-'''
+"""
 
 
 class IsolationLockTests(VerifyEntryTestCase):
@@ -870,10 +899,17 @@ class IsolationLockTests(VerifyEntryTestCase):
         holder_dir = Path(tempfile.mkdtemp(prefix="verify-holder-"))
         self.addCleanup(shutil.rmtree, holder_dir, ignore_errors=True)
         script = holder_dir / "holder.py"
-        script.write_text(LOCK_HOLDER.format(root=str(ROOT), resource=resource, hold=hold, ready=str(ready) if ready else None),
-                          encoding="utf-8")
-        proc = subprocess.Popen([sys.executable, str(script)], env=self._holder_env(),
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        script.write_text(
+            LOCK_HOLDER.format(root=str(ROOT), resource=resource, hold=hold, ready=str(ready) if ready else None),
+            encoding="utf-8",
+        )
+        proc = subprocess.Popen(
+            [sys.executable, str(script)],
+            env=self._holder_env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         self.addCleanup(_reap, proc)
         self.assertEqual(proc.stdout.readline().strip(), "held", "占用者没拿到锁")
         return proc
@@ -895,16 +931,17 @@ class IsolationLockTests(VerifyEntryTestCase):
     def test_sensitive_group_waits_for_external_holder_and_records_wait(self):
         ready = Path(self.temp.name) / "entry-planned"
         holder = self.start_holder(hold=0.8, ready=ready)
+
         def release_after_planning():
             deadline = time.monotonic() + 15
             while not (self.repo.artifact_dir / "latest.json").exists() and time.monotonic() < deadline:
                 time.sleep(0.01)
             ready.write_text("planned")
+
         notifier = threading.Thread(target=release_after_planning)
         notifier.start()
         self.addCleanup(notifier.join, 20)
-        p = self.repo.run_verify("run", "--group", "browser",
-                                 extra_env=self.lock_env())
+        p = self.repo.run_verify("run", "--group", "browser", extra_env=self.lock_env())
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         group = record["groups"][0]
@@ -913,13 +950,19 @@ class IsolationLockTests(VerifyEntryTestCase):
         self.assertGreaterEqual(group["lock"]["wait_seconds"], 0.4, "锁等待被单独记录")
         self.assertGreaterEqual(record["timing"]["lock_wait_seconds"], 0.4)
         # 锁等待不摊进入口自身开销，也不摊进组执行耗时
-        self.assertLess(record["timing"]["wrapper_seconds"],
-                        record["timing"]["wall_seconds"] - 0.4,
-                        "锁等待不应计入 wrapper_seconds")
-        self.assertAlmostEqual(record["timing"]["wall_seconds"],
-                               group["timing"]["child_seconds"] + record["timing"]["wrapper_seconds"]
-                               + record["timing"]["lock_wait_seconds"], delta=0.0001,
-                               msg="墙钟必须分别归属执行、入口与锁等待；不能按宿主速度猜执行上限")
+        self.assertLess(
+            record["timing"]["wrapper_seconds"],
+            record["timing"]["wall_seconds"] - 0.4,
+            "锁等待不应计入 wrapper_seconds",
+        )
+        self.assertAlmostEqual(
+            record["timing"]["wall_seconds"],
+            group["timing"]["child_seconds"]
+            + record["timing"]["wrapper_seconds"]
+            + record["timing"]["lock_wait_seconds"],
+            delta=0.0001,
+            msg="墙钟必须分别归属执行、入口与锁等待；不能按宿主速度猜执行上限",
+        )
         self.assertGreaterEqual(record["timing"]["wrapper_seconds"], 0)
         self.assertTrue(record["environment"]["isolation"]["mechanism"])
         self.assertIn("锁等待", p.stdout, "报告文本要呈现锁等待")
@@ -927,8 +970,7 @@ class IsolationLockTests(VerifyEntryTestCase):
 
     def test_lock_wait_timeout_is_failure_and_external_holder_survives(self):
         holder = self.start_holder(hold=2.0)
-        p = self.repo.run_verify("run", "--group", "browser",
-                                 extra_env=self.lock_env(AE_LOCK_WAIT_SECONDS="0.3"))
+        p = self.repo.run_verify("run", "--group", "browser", extra_env=self.lock_env(AE_LOCK_WAIT_SECONDS="0.3"))
         self.assertEqual(p.returncode, 124, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         group = record["groups"][0]
@@ -948,12 +990,15 @@ class IsolationLockTests(VerifyEntryTestCase):
     def test_timeout_message_uses_limit_while_record_keeps_actual_wait(self):
         """调度延迟使实际等待越过上限时，提示上限与耗时记录不能混为一谈。"""
         module = self.repo.path / "host_isolation.py"
-        module.write_text(module.read_text(encoding="utf-8") + '''
+        module.write_text(
+            module.read_text(encoding="utf-8")
+            + """
 def acquire(resources, timeout=None, env=None):
     raise LockTimeoutError("host-state", 0.45)
-''', encoding="utf-8")
-        p = self.repo.run_verify("run", "--group", "browser",
-                                 extra_env=self.lock_env(AE_LOCK_WAIT_SECONDS="0.3"))
+""",
+            encoding="utf-8",
+        )
+        p = self.repo.run_verify("run", "--group", "browser", extra_env=self.lock_env(AE_LOCK_WAIT_SECONDS="0.3"))
         self.assertEqual(p.returncode, 124, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         group = record["groups"][0]
@@ -963,8 +1008,7 @@ def acquire(resources, timeout=None, env=None):
     def test_pure_logic_group_not_blocked_by_unrelated_lock(self):
         holder = self.start_holder(hold=1.5)
         started = time.monotonic()
-        p = self.repo.run_verify("run", "unit-related", "tests/test_synth.py",
-                                 extra_env=self.lock_env())
+        p = self.repo.run_verify("run", "unit-related", "tests/test_synth.py", extra_env=self.lock_env())
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertLess(time.monotonic() - started, 1.4, "纯逻辑组被无关资源锁阻塞")
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
@@ -983,8 +1027,15 @@ def acquire(resources, timeout=None, env=None):
         popen_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
         proc = subprocess.Popen(
             [sys.executable, "verify.py", "run", "--group", group, "--quiet"],
-            cwd=str(self.repo.path), env=env, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", **popen_kwargs)
+            cwd=str(self.repo.path),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **popen_kwargs,
+        )
         self.addCleanup(_reap, proc)
         return proc
 
@@ -1027,7 +1078,9 @@ def acquire(resources, timeout=None, env=None):
         started = self.lock_root / "child-started"
         cleaning = self.lock_root / "child-cleaning"
         finished = self.lock_root / "allow-child-exit"
-        self.repo.write("tests/e2e_browser.py", '''import signal, sys, time
+        self.repo.write(
+            "tests/e2e_browser.py",
+            """import signal, sys, time
 from pathlib import Path
 
 def cleanup(signum, frame):
@@ -1045,14 +1098,15 @@ Path(%r).write_text("started", encoding="utf-8")
 deadline = time.monotonic() + 30
 while time.monotonic() < deadline:
     time.sleep(0.05)
-''' % (str(cleaning), str(finished), str(started)))
+"""
+            % (str(cleaning), str(finished), str(started)),
+        )
         wrapper = self.start_wrapper()
         self.wait_for_marker(started)
         expected_code = _send_interrupt(wrapper)
         try:
             self.wait_for_marker(cleaning)
-            with self.assertRaises(hi.LockTimeoutError,
-                                   msg="旧组仍在清理时不得让后继进入临界区"):
+            with self.assertRaises(hi.LockTimeoutError, msg="旧组仍在清理时不得让后继进入临界区"):
                 handle = hi.acquire(["host-state"], timeout=0.2, env=self.lock_env())
                 hi.release(handle)
         finally:
@@ -1073,13 +1127,27 @@ while time.monotonic() < deadline:
         env.pop("AE_HELD_LOCKS", None)
         env.update(self.lock_env(SYNTH_BROWSER_SECONDS="1.0"))
         command = [sys.executable, "verify.py", "run", "--group", "browser", "--quiet"]
-        first = subprocess.Popen(command, cwd=str(self.repo.path), env=env,
-                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                 encoding="utf-8", errors="replace")
+        first = subprocess.Popen(
+            command,
+            cwd=str(self.repo.path),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         self.addCleanup(_reap, first)
-        second = subprocess.Popen(command, cwd=str(self.repo.path), env=env,
-                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                  encoding="utf-8", errors="replace")
+        second = subprocess.Popen(
+            command,
+            cwd=str(self.repo.path),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         self.addCleanup(_reap, second)
         self.assertEqual(first.wait(timeout=60), 0, "并发敏感组出现假失败（第一个）")
         self.assertEqual(second.wait(timeout=60), 0, "并发敏感组出现假失败（第二个）")
@@ -1092,13 +1160,17 @@ while time.monotonic() < deadline:
 
         started = self.lock_root / "surviving-child"
         finished = self.lock_root / "allow-surviving-child-exit"
-        self.repo.write("tests/e2e_browser.py", '''import os, time
+        self.repo.write(
+            "tests/e2e_browser.py",
+            """import os, time
 from pathlib import Path
 
 Path(%r).write_text(str(os.getpid()), encoding="utf-8")
 while not Path(%r).exists():
     time.sleep(0.01)
-''' % (str(started), str(finished)))
+"""
+            % (str(started), str(finished)),
+        )
         wrapper = self.start_wrapper()
         self.wait_for_marker(started)
         child_pid = int(started.read_text(encoding="utf-8"))
@@ -1106,8 +1178,7 @@ while not Path(%r).exists():
         wrapper.wait(timeout=15)
         try:
             self.assertTrue(pid_alive(child_pid), "合成组仍运行，才能覆盖入口先退出的时序")
-            with self.assertRaises(hi.LockTimeoutError,
-                                   msg="入口被杀时，仍运行的组必须继续持有锁"):
+            with self.assertRaises(hi.LockTimeoutError, msg="入口被杀时，仍运行的组必须继续持有锁"):
                 handle = hi.acquire(["host-state"], timeout=0.2, env=self.lock_env())
                 hi.release(handle)
         finally:
@@ -1140,17 +1211,15 @@ while not Path(%r).exists():
         self.assertTrue(detour.startswith(".."), "绕行路径应含 .. 段：%s" % detour)
         plan = self.repo.run_verify("plan", "--json", "unit-related", detour, cwd=outside)
         self.assertEqual(plan.returncode, 0, plan.stdout + plan.stderr)
-        planned = {group["name"]: group["resources"]
-                   for group in json.loads(plan.stdout)["groups"]}
-        self.assertEqual(planned["unit-related"], ["host-state"],
-                         "plan 阶段绕行相对路径没有归一到敏感模块")
-        p = self.repo.run_verify("run", "unit-related", detour,
-                                 cwd=outside, extra_env=self.lock_env())
+        planned = {group["name"]: group["resources"] for group in json.loads(plan.stdout)["groups"]}
+        self.assertEqual(planned["unit-related"], ["host-state"], "plan 阶段绕行相对路径没有归一到敏感模块")
+        p = self.repo.run_verify("run", "unit-related", detour, cwd=outside, extra_env=self.lock_env())
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         group = record["groups"][0]
-        self.assertEqual(group["lock"]["resources"], ["host-state"],
-                         "绕行相对路径的选择器让组级资源判定落空（R5 回归）")
+        self.assertEqual(
+            group["lock"]["resources"], ["host-state"], "绕行相对路径的选择器让组级资源判定落空（R5 回归）"
+        )
         self.assertEqual(group["outcome"], "passed")
 
     def test_inherited_outer_lock_dir_does_not_make_synth_repo_wait(self):
@@ -1162,11 +1231,16 @@ while not Path(%r).exists():
         hostile_dir = Path(tempfile.mkdtemp(prefix="verify-hostile-lock-"))
         self.addCleanup(shutil.rmtree, hostile_dir, ignore_errors=True)
         script = hostile_dir / "hostile-holder.py"
-        script.write_text(LOCK_HOLDER.format(root=str(ROOT), resource="host-state", hold=45, ready=None),
-                          encoding="utf-8")
-        holder = subprocess.Popen([sys.executable, str(script)],
-                                  env=self._holder_env(hostile_dir),
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        script.write_text(
+            LOCK_HOLDER.format(root=str(ROOT), resource="host-state", hold=45, ready=None), encoding="utf-8"
+        )
+        holder = subprocess.Popen(
+            [sys.executable, str(script)],
+            env=self._holder_env(hostile_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         self.addCleanup(_reap, holder)
         self.assertEqual(holder.stdout.readline().strip(), "held", "占用者没拿到锁")
         inherited = os.environ.get("AE_LOCK_DIR")
@@ -1180,8 +1254,7 @@ while not Path(%r).exists():
             else:
                 os.environ["AE_LOCK_DIR"] = inherited
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertLess(time.monotonic() - started, 30,
-                        "合成入口继承了外层 AE_LOCK_DIR，与外部占用者互等")
+        self.assertLess(time.monotonic() - started, 30, "合成入口继承了外层 AE_LOCK_DIR，与外部占用者互等")
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         self.assertEqual(record["groups"][0]["lock"]["resources"], ["host-state"])
 
@@ -1199,8 +1272,7 @@ class SignalDuringFinalizeTests(VerifyEntryTestCase):
     """R1/R2：信号落在收尾段或组与组之间时，入口仍落最终记录、按 128+信号退出，
     已完整执行的组保留真实结果，只有没执行的组标 interrupted。"""
 
-    def start_wrapper(self, *args: str, extra_env: dict | None = None,
-                      launcher: str | None = None) -> subprocess.Popen:
+    def start_wrapper(self, *args: str, extra_env: dict | None = None, launcher: str | None = None) -> subprocess.Popen:
         env = dict(os.environ)
         env["PATH"] = "%s%s%s" % (self.repo.path / "bin", os.pathsep, env["PATH"])
         env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -1212,9 +1284,17 @@ class SignalDuringFinalizeTests(VerifyEntryTestCase):
             env.update(extra_env)
         command = [sys.executable, "-c", launcher] if launcher else [sys.executable, "verify.py"]
         popen_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
-        return subprocess.Popen([*command, *args], cwd=str(self.repo.path),
-                                env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, encoding="utf-8", errors="replace", **popen_kwargs)
+        return subprocess.Popen(
+            [*command, *args],
+            cwd=str(self.repo.path),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **popen_kwargs,
+        )
 
     def wait_latest_run(self, timeout: float = 30) -> str:
         pointer = self.repo.artifact_dir / "latest.json"
@@ -1243,14 +1323,16 @@ class SignalDuringFinalizeTests(VerifyEntryTestCase):
         self.fail("入口没有登记 %d 个子进程" % count)
 
     def index_entries(self) -> list:
-        return [json.loads(line) for line in
-                (self.repo.artifact_dir / "index.jsonl").read_text(encoding="utf-8").splitlines()]
+        return [
+            json.loads(line)
+            for line in (self.repo.artifact_dir / "index.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
 
     def test_signal_during_finalize_seals_aborted_record(self):
         marker = Path(self.temp.name) / "finalize-ready"
         # reaped 只说明子进程结束，尚可能处于组证据收尾。明确在第二次输入快照
         # （整次运行收尾）握手，不用创建大量文件来赌不同平台上的耗时窗口。
-        launcher = '''import os
+        launcher = """import os
 import signal
 import sys
 import time
@@ -1273,9 +1355,10 @@ def snapshot_with_barrier():
 
 verify.snapshot_input = snapshot_with_barrier
 sys.exit(verify.main())
-'''
-        wrapper = self.start_wrapper("run", "--group", "unit", launcher=launcher,
-                                     extra_env={"SYNTH_FINALIZE_READY": str(marker)})
+"""
+        wrapper = self.start_wrapper(
+            "run", "--group", "unit", launcher=launcher, extra_env={"SYNTH_FINALIZE_READY": str(marker)}
+        )
         self.addCleanup(_reap, wrapper)
         try:
             run_id = self.wait_latest_run()
@@ -1296,11 +1379,9 @@ sys.exit(verify.main())
         self.assertEqual(record["result"]["exit_status"], expected_code)
         self.assertFalse(record["result"]["usable_as_evidence"])
         self.assertEqual(record["groups"][0]["outcome"], "passed", "已完成的组保留真实结果")
-        self.assertEqual(record["shadow"]["run_outcome"], "interrupted",
-                         "收尾中断时影子结论必须与整次运行一致")
+        self.assertEqual(record["shadow"]["run_outcome"], "interrupted", "收尾中断时影子结论必须与整次运行一致")
         self.assertFalse(record["shadow"]["usable_as_evidence"])
-        self.assertIn(run_id, [entry["run_id"] for entry in self.index_entries()],
-                      "index.jsonl 记下这次运行")
+        self.assertIn(run_id, [entry["run_id"] for entry in self.index_entries()], "index.jsonl 记下这次运行")
 
     def test_first_signal_during_group_evidence_is_captured_not_ignored(self):
         """子进程已结束但组证据尚未交回时，首次取消不能被二次信号保护吞掉。"""
@@ -1308,8 +1389,7 @@ sys.exit(verify.main())
         source = wrapper_path.read_text(encoding="utf-8")
         boundary = "cleanup_guard.enter_context(capture_termination(result))"
         self.assertIn(boundary, source)
-        source = source.replace(boundary, boundary + "\n"
-                                "                signal.raise_signal(signal.SIGTERM)", 1)
+        source = source.replace(boundary, boundary + "\n                signal.raise_signal(signal.SIGTERM)", 1)
         wrapper_path.write_text(source, encoding="utf-8")
         self.repo.commit_all("合成组证据收尾首次取消")
         p = self.repo.run_verify("run", "--group", "unit", "--group", "serve-check")
@@ -1326,20 +1406,17 @@ sys.exit(verify.main())
         self.assertIsNotNone(group["started_at"], "已执行的组有进程登记时间")
         self.assertIsNone(record["groups"][1]["started_at"], "取消后的计划组未启动")
         self.assertEqual(record["shadow"]["executed_groups"], ["unit"])
-        self.assertEqual(record["shadow"]["coverage"],
-                         {"unit": True, "serve-check": False, "browser": False})
+        self.assertEqual(record["shadow"]["coverage"], {"unit": True, "serve-check": False, "browser": False})
         children = json.loads((self.repo.artifact_dir / "runs" / run_id / "children.json").read_text())
         self.assertEqual(len(children), 1, "首次取消后不再启动后续组")
         self.assertTrue(children[0]["reaped"])
 
     def test_interrupt_between_groups_keeps_completed_group_results(self):
-        wrapper = self.start_wrapper("run", "--group", "all",
-                                     extra_env={"SYNTH_BROWSER_SECONDS": "30"})
+        wrapper = self.start_wrapper("run", "--group", "all", extra_env={"SYNTH_BROWSER_SECONDS": "30"})
         try:
             run_id = self.wait_latest_run()
             children = self.wait_children(run_id, 3)
-            self.assertEqual([entry["group"] for entry in children],
-                             ["unit", "serve-check", "browser"])
+            self.assertEqual([entry["group"] for entry in children], ["unit", "serve-check", "browser"])
             self.assertFalse(children[2]["reaped"], "browser 还在跑：前两组已完整执行")
             expected_code = _send_interrupt(wrapper)
             code = wrapper.wait(timeout=30)
@@ -1362,7 +1439,7 @@ sys.exit(verify.main())
         self.assertIn(run_id, [entry["run_id"] for entry in self.index_entries()])
 
 
-UNIT_MARKER = '''import os
+UNIT_MARKER = """import os
 import pathlib
 import unittest
 
@@ -1371,7 +1448,7 @@ class MarkerTests(unittest.TestCase):
     def test_writes_marker(self):
         pathlib.Path(os.environ["SYNTH_MARKER"]).write_text("跑过了", encoding="utf-8")
         self.assertTrue(True)
-'''
+"""
 
 
 def absolute_strings(value, found=None):
@@ -1413,8 +1490,9 @@ class OtherGroupTests(VerifyEntryTestCase):
         self.assertEqual(record["groups"][0]["counts"]["failed"], 1)
 
     def test_browser_timeout_is_reported_as_timeout(self):
-        p = self.repo.run_verify("run", "--group", "browser", "--timeout", "0.3",
-                                 extra_env={"SYNTH_BROWSER_SECONDS": "8"})
+        p = self.repo.run_verify(
+            "run", "--group", "browser", "--timeout", "0.3", extra_env={"SYNTH_BROWSER_SECONDS": "8"}
+        )
         self.assertEqual(p.returncode, 124, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         self.assertEqual(record["result"]["outcome"], "timeout")
@@ -1447,8 +1525,7 @@ class OtherGroupTests(VerifyEntryTestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         run_id = self.repo.latest_run_id()
         record = read_record(self.repo.artifact_dir, run_id)
-        self.assertEqual([group["name"] for group in record["groups"]],
-                         ["unit", "serve-check", "browser"])
+        self.assertEqual([group["name"] for group in record["groups"]], ["unit", "serve-check", "browser"])
         self.assertEqual(record["context"]["phase"], "pr")
         self.assertEqual(record["context"]["pr"], 50)
         self.assertEqual(record["result"]["counts"]["groups"], 3)
@@ -1457,8 +1534,10 @@ class OtherGroupTests(VerifyEntryTestCase):
         self.assertTrue(record["result"]["usable_as_evidence"])
         for name in ("unit", "serve-check", "browser"):
             self.assertTrue((self.repo.artifact_dir / "runs" / run_id / ("%s.log" % name)).is_file())
-        index = [json.loads(line) for line in
-                 (self.repo.artifact_dir / "index.jsonl").read_text(encoding="utf-8").splitlines()]
+        index = [
+            json.loads(line)
+            for line in (self.repo.artifact_dir / "index.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
         self.assertEqual(len(index), 1)
         self.assertEqual(index[0]["run_id"], run_id)
         self.assertEqual(index[0]["outcome"], "passed")
@@ -1473,16 +1552,20 @@ class LintVersionLockTests(unittest.TestCase):
         text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         match = re.search(r'^required-version\s*=\s*"==([^"]+)"', text, re.MULTILINE)
         self.assertIsNotNone(match, 'pyproject.toml 必须以 required-version = "==x.y.z" 锁定 ruff 版本')
-        self.assertEqual(verify.RUFF_VERSION, match.group(1),
-                         "verify.RUFF_VERSION 与 pyproject.toml 锁定的 ruff 版本必须完全一致")
+        self.assertEqual(
+            verify.RUFF_VERSION, match.group(1), "verify.RUFF_VERSION 与 pyproject.toml 锁定的 ruff 版本必须完全一致"
+        )
 
     def test_module_docstring_usage_tracks_ruff_version(self):
         # 顶部用法文档里的「uv tool run --from ruff==x.y.z」是第三处版本硬编码，
         # 无动态拼接，靠本断言防止升级时静默过期（issue #183）
         import verify
 
-        self.assertIn("ruff==" + verify.RUFF_VERSION, verify.__doc__ or "",
-                      "模块顶部用法文档里的 ruff 版本必须与 RUFF_VERSION 同步更新")
+        self.assertIn(
+            "ruff==" + verify.RUFF_VERSION,
+            verify.__doc__ or "",
+            "模块顶部用法文档里的 ruff 版本必须与 RUFF_VERSION 同步更新",
+        )
 
 
 class LintGroupTests(VerifyEntryTestCase):
@@ -1493,9 +1576,11 @@ class LintGroupTests(VerifyEntryTestCase):
         import verify
 
         shim = r"C:\synth tools\uv.cmd"
-        with mock.patch.object(verify.os, "name", "nt"), \
-             mock.patch.object(verify.shutil, "which", return_value=shim), \
-             mock.patch.object(verify.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as launch:
+        with (
+            mock.patch.object(verify.os, "name", "nt"),
+            mock.patch.object(verify.shutil, "which", return_value=shim),
+            mock.patch.object(verify.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as launch,
+        ):
             self.assertEqual(verify.cmd_lint_runner([]), 0)
         self.assertEqual(launch.call_args_list[0].args[0][0], shim)
 
@@ -1514,13 +1599,11 @@ class LintGroupTests(VerifyEntryTestCase):
         self.assertEqual(group["counts"], {"total": 1, "passed": 1, "failed": 0})
         self.assertEqual(record["result"]["counts"]["checks"], 1)
         self.assertTrue(record["result"]["usable_as_evidence"])
-        log = (self.repo.artifact_dir / "runs" / self.repo.latest_run_id()
-               / "lint.log").read_text(encoding="utf-8")
+        log = (self.repo.artifact_dir / "runs" / self.repo.latest_run_id() / "lint.log").read_text(encoding="utf-8")
         self.assertIn("1/1 通过", log, "lint 日志保留子进程摘要行")
         self.assertIn("All checks passed!", log, "ruff 子进程输出实时转发进日志")
         # 失败路径：ruff 报告诊断，0/1 通过，不是通过
-        p = self.repo.run_verify("run", "--group", "lint", "--no-reuse",
-                                 extra_env={"SYNTH_RUFF_FAILED": "1"})
+        p = self.repo.run_verify("run", "--group", "lint", "--no-reuse", extra_env={"SYNTH_RUFF_FAILED": "1"})
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         group = record["groups"][0]
@@ -1528,20 +1611,27 @@ class LintGroupTests(VerifyEntryTestCase):
         self.assertEqual(group["outcome"], "failed")
         self.assertEqual(group["counts"], {"total": 1, "passed": 0, "failed": 1})
         self.assertFalse(record["result"]["usable_as_evidence"])
-        log = (self.repo.artifact_dir / "runs" / self.repo.latest_run_id()
-               / "lint.log").read_text(encoding="utf-8")
+        log = (self.repo.artifact_dir / "runs" / self.repo.latest_run_id() / "lint.log").read_text(encoding="utf-8")
         self.assertIn("0/1 通过", log, "lint 日志保留子进程摘要行")
         self.assertIn("F401", log, "失败时 ruff 的原始诊断同样转发进日志")
 
     def test_efficiency_guard_preserves_explicit_lint_alongside_full_gate(self):
-        self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
-            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": STRATEGY_VERSION,
-            "reason": "合成效率守卫", "evidence": ["synthetic"]}))
+        self.repo.write(
+            ".verify/efficiency/selection-guard.json",
+            json.dumps(
+                {
+                    "schema": "ae-verify-policy-guard/1",
+                    "active": True,
+                    "strategy_version": STRATEGY_VERSION,
+                    "reason": "合成效率守卫",
+                    "evidence": ["synthetic"],
+                }
+            ),
+        )
         plan = self.repo.run_verify("plan", "--group", "lint", "--json")
         self.assertEqual(plan.returncode, 0, plan.stderr)
         self.assertEqual(json.loads(plan.stdout)["selected"], ["unit", "serve-check", "browser", "lint"])
-        result = self.repo.run_verify("run", "--group", "lint", "--json",
-                                      extra_env={"SYNTH_RUFF_FAILED": "1"})
+        result = self.repo.run_verify("run", "--group", "lint", "--json", extra_env={"SYNTH_RUFF_FAILED": "1"})
         self.assertEqual(result.returncode, 1, result.stderr)
         outcomes = {group["name"]: group["outcome"] for group in json.loads(result.stdout)["groups"]}
         self.assertEqual(outcomes, {"unit": "passed", "serve-check": "passed", "browser": "passed", "lint": "failed"})
@@ -1592,13 +1682,22 @@ class EfficiencyIntegrationTests(VerifyEntryTestCase):
         self.assertTrue(record["context"]["selection"]["policy_guard"]["active"])
 
     def test_guard_paths_next_to_chinese_are_redacted_and_urls_are_preserved(self):
-        paths = ["/Users/synthetic/private.json", "/private/synthetic/quoted.json",
-                 "/tmp/synthetic/spaced.json"]
+        paths = ["/Users/synthetic/private.json", "/private/synthetic/quoted.json", "/tmp/synthetic/spaced.json"]
         urls = ["https://example.invalid/review/49", "https://合成.invalid/审阅/49"]
-        reason = "无法读取%s；引号\"%s\"；空格 %s；来源 %s %s" % (*paths, *urls)
-        self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
-            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": STRATEGY_VERSION,
-            "reason": reason, "evidence": ["synthetic"]}, ensure_ascii=False))
+        reason = '无法读取%s；引号"%s"；空格 %s；来源 %s %s' % (*paths, *urls)
+        self.repo.write(
+            ".verify/efficiency/selection-guard.json",
+            json.dumps(
+                {
+                    "schema": "ae-verify-policy-guard/1",
+                    "active": True,
+                    "strategy_version": STRATEGY_VERSION,
+                    "reason": reason,
+                    "evidence": ["synthetic"],
+                },
+                ensure_ascii=False,
+            ),
+        )
         result = self.repo.run_verify("run", "unit-related", "tests/test_synth.py", "--json")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         record = json.loads(result.stdout)
@@ -1610,12 +1709,22 @@ class EfficiencyIntegrationTests(VerifyEntryTestCase):
         self.assertTrue(record["context"]["selection"]["policy_guard"]["active"])
 
     def test_a_known_new_policy_version_replaces_an_older_guard(self):
-        self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
-            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": STRATEGY_VERSION,
-            "reason": "old reviewed policy", "evidence": ["synthetic"]}))
+        self.repo.write(
+            ".verify/efficiency/selection-guard.json",
+            json.dumps(
+                {
+                    "schema": "ae-verify-policy-guard/1",
+                    "active": True,
+                    "strategy_version": STRATEGY_VERSION,
+                    "reason": "old reviewed policy",
+                    "evidence": ["synthetic"],
+                }
+            ),
+        )
         policy = (self.repo.path / "verify_selection.py").read_text(encoding="utf-8")
-        upgraded = policy.replace("STRATEGY_VERSION = %d" % STRATEGY_VERSION,
-                                  "STRATEGY_VERSION = %d" % (STRATEGY_VERSION + 1))
+        upgraded = policy.replace(
+            "STRATEGY_VERSION = %d" % STRATEGY_VERSION, "STRATEGY_VERSION = %d" % (STRATEGY_VERSION + 1)
+        )
         self.assertNotEqual(upgraded, policy, "合成升级必须实际修改策略版本")
         self.repo.write("verify_selection.py", upgraded)
         self.repo.commit_all("合成受审查策略升级")
@@ -1624,9 +1733,18 @@ class EfficiencyIntegrationTests(VerifyEntryTestCase):
         self.assertFalse(json.loads(result.stdout)["selection"]["policy_guard"]["active"])
 
     def test_uncertain_impact_expands_explicit_related_run_to_actual_full_gate(self):
-        self.repo.write(".verify/efficiency/selection-guard.json", json.dumps({
-            "schema": "ae-verify-policy-guard/1", "active": True, "strategy_version": STRATEGY_VERSION,
-            "reason": "合成无法界定的影响", "evidence": ["synthetic"]}))
+        self.repo.write(
+            ".verify/efficiency/selection-guard.json",
+            json.dumps(
+                {
+                    "schema": "ae-verify-policy-guard/1",
+                    "active": True,
+                    "strategy_version": STRATEGY_VERSION,
+                    "reason": "合成无法界定的影响",
+                    "evidence": ["synthetic"],
+                }
+            ),
+        )
         p = self.repo.run_verify("run", "unit-related", "tests/test_synth.py", "--json")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         record = json.loads(p.stdout)
@@ -1643,9 +1761,16 @@ class BrowserScenarioTests(VerifyEntryTestCase):
         self.repo.commit_all("换成带场景摘要的合成浏览器入口")
 
     def test_browser_runtime_versions_are_preserved_from_synthetic_log(self):
-        metadata = {"schema": "ae-browser-environment/1", "browser": "chromium", "channel": "chrome",
-                    "version": "synthetic-130.0", "playwright": "synthetic-1.48"}
-        stub = BROWSER_SCENARIO_STUB.replace("import time", "import time\nprint('AE-BROWSER-ENV: ' + " + repr(json.dumps(metadata)) + ")")
+        metadata = {
+            "schema": "ae-browser-environment/1",
+            "browser": "chromium",
+            "channel": "chrome",
+            "version": "synthetic-130.0",
+            "playwright": "synthetic-1.48",
+        }
+        stub = BROWSER_SCENARIO_STUB.replace(
+            "import time", "import time\nprint('AE-BROWSER-ENV: ' + " + repr(json.dumps(metadata)) + ")"
+        )
         self.repo.write("tests/e2e_browser.py", stub, executable=True)
         p = self.repo.run_verify("run", "--group", "browser")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -1674,8 +1799,7 @@ class BrowserScenarioTests(VerifyEntryTestCase):
 
     def test_failing_scenario_is_identifiable_in_the_record(self):
         self.use_scenario_browser()
-        p = self.repo.run_verify("run", "--group", "browser",
-                                 extra_env={"SYNTH_SCENARIO_STATUS": "failed"})
+        p = self.repo.run_verify("run", "--group", "browser", extra_env={"SYNTH_SCENARIO_STATUS": "failed"})
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         group = record["groups"][0]
@@ -1686,22 +1810,21 @@ class BrowserScenarioTests(VerifyEntryTestCase):
     def test_browser_exit_130_is_interrupted_not_failed(self):
         """子进程以 130 自行退出（浏览器脚本的中断路径）时按中断归类，不冒充失败。"""
         self.use_scenario_browser()
-        p = self.repo.run_verify("run", "--group", "browser",
-                                 extra_env={"SYNTH_SCENARIO_STATUS": "interrupted"})
+        p = self.repo.run_verify("run", "--group", "browser", extra_env={"SYNTH_SCENARIO_STATUS": "interrupted"})
         self.assertEqual(p.returncode, 130, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         group = record["groups"][0]
         self.assertEqual(group["outcome"], "interrupted", p.stdout)
         self.assertEqual(group["exit_status"], 130)
         statuses = {item["id"]: item["status"] for item in group["scenarios"]}
-        self.assertEqual(statuses, {"skill-search": "passed", "server-mode": "interrupted",
-                                    "css-fidelity": "not_run"})
+        self.assertEqual(statuses, {"skill-search": "passed", "server-mode": "interrupted", "css-fidelity": "not_run"})
         self.assertFalse(record["result"]["usable_as_evidence"], "中断不能作为通过证据")
 
     def test_interrupting_wrapper_preserves_scenarios_and_finishes_child_cleanup(self):
         """真实中断父入口：日志流须留到子进程交出场景摘要，二次信号不打断回收。"""
         script = BROWSER_SCENARIO_STUB.replace(
-            'STATUS = os.environ.get("SYNTH_SCENARIO_STATUS", "passed")', '''from pathlib import Path
+            'STATUS = os.environ.get("SYNTH_SCENARIO_STATUS", "passed")',
+            """from pathlib import Path
 import signal
 
 def cancel(signum, frame):
@@ -1720,27 +1843,40 @@ except KeyboardInterrupt:
     Path(os.environ["SYNTH_CLEANING"]).write_text("cleaning")
     time.sleep(0.3)
     STATUS = "interrupted"
-''')
+""",
+        )
         self.repo.write("tests/e2e_browser.py", script, executable=True)
         self.repo.commit_all("合成父入口取消与场景摘要")
-        cases = ([(signal.CTRL_BREAK_EVENT, signal.SIGBREAK)] if os.name == "nt"
-                 else [(signal.SIGINT, signal.SIGINT), (signal.SIGTERM, signal.SIGTERM)])
+        cases = (
+            [(signal.CTRL_BREAK_EVENT, signal.SIGBREAK)]
+            if os.name == "nt"
+            else [(signal.SIGINT, signal.SIGINT), (signal.SIGTERM, signal.SIGTERM)]
+        )
         for send_sig, expected_sig in cases:
             with self.subTest(signum=expected_sig):
                 ready = Path(self.temp.name) / ("ready-%s" % expected_sig)
                 cleaning = Path(self.temp.name) / ("cleaning-%s" % expected_sig)
                 env = dict(os.environ)
-                env.update(PATH=str(self.repo.path / "bin") + os.pathsep + env["PATH"],
-                           PYTHONIOENCODING="utf-8",
-                           SYNTH_READY=str(ready), SYNTH_CLEANING=str(cleaning),
-                           AE_LOCK_DIR=str(self.test_lock_dir))
+                env.update(
+                    PATH=str(self.repo.path / "bin") + os.pathsep + env["PATH"],
+                    PYTHONIOENCODING="utf-8",
+                    SYNTH_READY=str(ready),
+                    SYNTH_CLEANING=str(cleaning),
+                    AE_LOCK_DIR=str(self.test_lock_dir),
+                )
                 env.pop("AE_HELD_LOCKS", None)
                 popen_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
                 wrapper = subprocess.Popen(
-                    [sys.executable, "verify.py", "run", "--group", "browser",
-                     "--group", "serve-check"], cwd=self.repo.path, env=env,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                    encoding="utf-8", errors="replace", **popen_kwargs)
+                    [sys.executable, "verify.py", "run", "--group", "browser", "--group", "serve-check"],
+                    cwd=self.repo.path,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    **popen_kwargs,
+                )
                 try:
                     deadline = time.monotonic() + 10
                     while not ready.exists() and wrapper.poll() is None and time.monotonic() < deadline:
@@ -1767,9 +1903,10 @@ except KeyboardInterrupt:
                 self.assertEqual(group["signal"], signal.Signals(expected_sig).name)
                 self.assertEqual(group["granularity"], "scenario")
                 self.assertEqual(group["counts"], {"total": 3, "passed": 3, "failed": 0})
-                self.assertEqual({item["id"]: item["status"] for item in group["scenarios"]},
-                                 {"skill-search": "passed", "server-mode": "interrupted",
-                                  "css-fidelity": "not_run"})
+                self.assertEqual(
+                    {item["id"]: item["status"] for item in group["scenarios"]},
+                    {"skill-search": "passed", "server-mode": "interrupted", "css-fidelity": "not_run"},
+                )
                 self.assertFalse(record["result"]["usable_as_evidence"])
                 run_dir = self.repo.artifact_dir / "runs" / run_id
                 self.assertIn("AE-SCENARIOS:", (run_dir / "browser.log").read_text(encoding="utf-8"))
@@ -1786,9 +1923,7 @@ except KeyboardInterrupt:
         # 在合成入口的日志排空边界注入一次真实信号，避免依赖调度速度碰竞态。
         boundary = "_join_thread(reader, timeout=5)"
         self.assertIn(boundary, source)
-        source = source.replace(boundary,
-                                "signal.raise_signal(signal.SIGINT)\n"
-                                "                " + boundary, 1)
+        source = source.replace(boundary, "signal.raise_signal(signal.SIGINT)\n                " + boundary, 1)
         wrapper_path.write_text(source, encoding="utf-8")
         self.repo.commit_all("合成日志排空期间取消")
         p = self.repo.run_verify("run", "--group", "browser", "--group", "serve-check")
@@ -1808,24 +1943,31 @@ except KeyboardInterrupt:
 
 class RelatedUnitTests(VerifyEntryTestCase):
     def test_explicit_selector_runs_only_what_was_named(self):
-        self.repo.write("tests/test_other.py", '''import unittest
+        self.repo.write(
+            "tests/test_other.py",
+            """import unittest
 
 
 class OtherTests(unittest.TestCase):
     def test_other(self):
         self.assertTrue(True)
-''')
+""",
+        )
         self.repo.commit_all("合成两个模块")
         p = self.repo.run_verify("run", "unit-related", "tests/test_synth.py")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         self.assertEqual(record["groups"][0]["name"], "unit-related")
         ids = [case["id"] for case in record["groups"][0]["cases"]]
-        self.assertEqual(sorted(ids), ["test_i18n_catalog_contract.RepoCatalogContractTests"
-                                       ".test_shipped_catalogs_stay_consistent",
-                                       "test_synth.AlphaTests.test_alpha_also_ok",
-                                       "test_synth.AlphaTests.test_alpha_ok",
-                                       "test_synth.BetaTests.test_beta_ok"])
+        self.assertEqual(
+            sorted(ids),
+            [
+                "test_i18n_catalog_contract.RepoCatalogContractTests.test_shipped_catalogs_stay_consistent",
+                "test_synth.AlphaTests.test_alpha_also_ok",
+                "test_synth.AlphaTests.test_alpha_ok",
+                "test_synth.BetaTests.test_beta_ok",
+            ],
+        )
         self.assertNotIn("test_other.OtherTests.test_other", ids)
         self.assertEqual(record["context"]["selectors"], ["tests/test_synth.py"])
 
@@ -1860,18 +2002,18 @@ class OtherTests(unittest.TestCase):
 class RelatedContractTests(VerifyEntryTestCase):
     """unit-related 固定附带全局词典契约（issue #51）：去重后独立跑相关组也不丢全局保护。"""
 
-    CONTRACT_ID = ("test_i18n_catalog_contract.RepoCatalogContractTests"
-                   ".test_shipped_catalogs_stay_consistent")
+    CONTRACT_ID = "test_i18n_catalog_contract.RepoCatalogContractTests.test_shipped_catalogs_stay_consistent"
 
     def test_unit_related_auto_includes_the_global_catalog_contract(self):
         p = self.repo.run_verify("run", "unit-related", "tests/test_synth.py")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
-        self.assertEqual(record["context"]["selectors"], ["tests/test_synth.py"],
-                         "记录保留调用方的原始选择器")
-        self.assertEqual(record["context"]["selectors_effective"],
-                         ["tests/test_synth.py", "tests/test_i18n_catalog_contract.py"],
-                         "生效选择器要写明自动附带的契约模块")
+        self.assertEqual(record["context"]["selectors"], ["tests/test_synth.py"], "记录保留调用方的原始选择器")
+        self.assertEqual(
+            record["context"]["selectors_effective"],
+            ["tests/test_synth.py", "tests/test_i18n_catalog_contract.py"],
+            "生效选择器要写明自动附带的契约模块",
+        )
         ids = [case["id"] for case in record["groups"][0]["cases"]]
         self.assertIn(self.CONTRACT_ID, ids, "相关组自动执行全局词典契约")
         self.assertIn("test_synth.AlphaTests.test_alpha_ok", ids)
@@ -1882,19 +2024,21 @@ class RelatedContractTests(VerifyEntryTestCase):
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         ids = [case["id"] for case in record["groups"][0]["cases"]]
         self.assertEqual(ids.count(self.CONTRACT_ID), 1, "契约只执行一次，不重复")
-        self.assertEqual(record["context"]["selectors_effective"],
-                         ["tests/test_i18n_catalog_contract.py"])
+        self.assertEqual(record["context"]["selectors_effective"], ["tests/test_i18n_catalog_contract.py"])
 
     def test_method_selector_of_the_contract_module_is_not_duplicated(self):
         p = self.repo.run_verify(
-            "run", "unit-related",
-            "tests.test_i18n_catalog_contract.RepoCatalogContractTests.test_shipped_catalogs_stay_consistent")
+            "run",
+            "unit-related",
+            "tests.test_i18n_catalog_contract.RepoCatalogContractTests.test_shipped_catalogs_stay_consistent",
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         ids = [case["id"] for case in record["groups"][0]["cases"]]
         # 点分选择器导入的模块名带 tests. 前缀，用方法后缀计数判断唯一
-        contract_runs = [i for i in ids if i.endswith(".RepoCatalogContractTests"
-                                                     ".test_shipped_catalogs_stay_consistent")]
+        contract_runs = [
+            i for i in ids if i.endswith(".RepoCatalogContractTests.test_shipped_catalogs_stay_consistent")
+        ]
         self.assertEqual(len(contract_runs), 1, "指到契约模块内部时也不能重复执行")
 
     def test_explicit_contract_selector_with_dot_slash_prefix_is_not_duplicated(self):
@@ -1902,9 +2046,11 @@ class RelatedContractTests(VerifyEntryTestCase):
         p = self.repo.run_verify("run", "unit-related", "./tests/test_i18n_catalog_contract.py")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
-        self.assertEqual(record["context"]["selectors_effective"],
-                         ["./tests/test_i18n_catalog_contract.py"],
-                         "./ 写法归一后不得再附带第二种写法的契约模块")
+        self.assertEqual(
+            record["context"]["selectors_effective"],
+            ["./tests/test_i18n_catalog_contract.py"],
+            "./ 写法归一后不得再附带第二种写法的契约模块",
+        )
         ids = [case["id"] for case in record["groups"][0]["cases"]]
         self.assertEqual(ids.count(self.CONTRACT_ID), 1, "契约只执行一次，不重复")
 
@@ -1912,13 +2058,14 @@ class RelatedContractTests(VerifyEntryTestCase):
         """R1：绕行相对路径（../<repo>/tests/…，从仓库外 cwd 出发）也归一到同一前缀。"""
         outside = Path(self.temp.name) / "outside"
         outside.mkdir()
-        p = self.repo.run_verify("run", "unit-related",
-                                 "../repo/tests/test_i18n_catalog_contract.py", cwd=outside)
+        p = self.repo.run_verify("run", "unit-related", "../repo/tests/test_i18n_catalog_contract.py", cwd=outside)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
-        self.assertEqual(record["context"]["selectors_effective"],
-                         ["../repo/tests/test_i18n_catalog_contract.py"],
-                         "绕行写法归一后不得再附带契约模块的第二种写法")
+        self.assertEqual(
+            record["context"]["selectors_effective"],
+            ["../repo/tests/test_i18n_catalog_contract.py"],
+            "绕行写法归一后不得再附带契约模块的第二种写法",
+        )
         ids = [case["id"] for case in record["groups"][0]["cases"]]
         self.assertEqual(ids.count(self.CONTRACT_ID), 1, "绕行写法也只执行一次契约")
 
@@ -1941,17 +2088,15 @@ class RelatedContractTests(VerifyEntryTestCase):
             self.assertEqual(local.returncode, 1, local.stdout + local.stderr)
             record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
             by_id = {case["id"]: case for case in record["groups"][0]["cases"]}
-            self.assertEqual(by_id[self.CONTRACT_ID]["status"], "failed",
-                             "局部组要发现词典不一致")
-            self.assertEqual(by_id["test_synth.AlphaTests.test_alpha_ok"]["status"], "passed",
-                             "失败只来自词典契约，不连累指定模块")
+            self.assertEqual(by_id[self.CONTRACT_ID]["status"], "failed", "局部组要发现词典不一致")
+            self.assertEqual(
+                by_id["test_synth.AlphaTests.test_alpha_ok"]["status"], "passed", "失败只来自词典契约，不连累指定模块"
+            )
             full = self.repo.run_verify("run", "--group", "unit")
             self.assertEqual(full.returncode, 1, full.stdout + full.stderr)
             full_record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
-            full_status = {case["id"]: case["status"]
-                           for case in full_record["groups"][0]["cases"]}
-            self.assertEqual(full_status[self.CONTRACT_ID], "failed",
-                             "完整组同样发现词典不一致")
+            full_status = {case["id"]: case["status"] for case in full_record["groups"][0]["cases"]}
+            self.assertEqual(full_status[self.CONTRACT_ID], "failed", "完整组同样发现词典不一致")
         finally:
             en.write_text(original, encoding="utf-8")
         local = self.repo.run_verify("run", "unit-related", "tests/test_synth.py")
@@ -1963,8 +2108,9 @@ class RelatedContractTests(VerifyEntryTestCase):
         p = self.repo.run_verify("plan", "--group", "unit-related", "tests/test_synth.py")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("test_i18n_catalog_contract", p.stdout, "plan 说明自动附带的契约模块")
-        plan = json.loads(self.repo.run_verify(
-            "plan", "--group", "unit-related", "tests/test_synth.py", "--json").stdout)
+        plan = json.loads(
+            self.repo.run_verify("plan", "--group", "unit-related", "tests/test_synth.py", "--json").stdout
+        )
         unit_related = {group["name"]: group for group in plan["groups"]}["unit-related"]
         self.assertEqual(unit_related["auto_included"], ["tests/test_i18n_catalog_contract.py"])
         plain = json.loads(self.repo.run_verify("plan", "--json").stdout)
@@ -1979,21 +2125,18 @@ class OutDirTests(VerifyEntryTestCase):
         outside = Path(self.temp.name) / "outside"
         outside.mkdir()
         artifacts = outside / "evidence-out"
-        p = self.repo.run_verify("run", "--group", "unit", "--out-dir", "evidence-out",
-                                 cwd=outside)
+        p = self.repo.run_verify("run", "--group", "unit", "--out-dir", "evidence-out", cwd=outside)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         run_id = json.loads((artifacts / "latest.json").read_text(encoding="utf-8"))["run_id"]
         record = read_record(artifacts, run_id)
         self.assertEqual(record["groups"][0]["outcome"], "passed", "通过的用例不被误判 error")
         self.assertEqual(record["evidence"]["integrity"], "ok")
-        self.assertTrue((artifacts / "runs" / run_id / "unit.cases.json").is_file(),
-                        "计时证据与主进程写在同一处")
+        self.assertTrue((artifacts / "runs" / run_id / "unit.cases.json").is_file(), "计时证据与主进程写在同一处")
         status = self.repo.git("status", "--porcelain").stdout
         self.assertEqual(status, "", "仓库工作树不留下未忽略的产物目录")
         report = self.repo.run_verify("report", "--latest", "--out-dir", "evidence-out", cwd=outside)
         self.assertEqual(report.returncode, 0, report.stdout + report.stderr)
-        self.assertIn(str((artifacts / "runs" / run_id).resolve()), report.stdout,
-                      "报告显示的记录目录与实际一致")
+        self.assertIn(str((artifacts / "runs" / run_id).resolve()), report.stdout, "报告显示的记录目录与实际一致")
 
 
 class WrapperFailureTests(VerifyEntryTestCase):
@@ -2044,8 +2187,9 @@ class WrapperFailureTests(VerifyEntryTestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         self.assertEqual(record["result"]["outcome"], "passed")
-        self.assertTrue(any("索引追加失败" in note for note in record["result"]["notes"]),
-                        "元数据写入失败要写进记录，不静默")
+        self.assertTrue(
+            any("索引追加失败" in note for note in record["result"]["notes"]), "元数据写入失败要写进记录，不静默"
+        )
 
 
 class ReportTests(VerifyEntryTestCase):
@@ -2133,8 +2277,9 @@ class ReportTests(VerifyEntryTestCase):
         self.assertEqual(current["evidence"]["integrity"], "degraded")
         self.assertIn("校验和不一致", report.stdout)
         self.assertEqual(current["result"]["outcome"], "passed", "原始测试结论仍然保留")
-        self.assertEqual((run_dir / "record.json").read_bytes(), original_record,
-                         "报告重新校验证据，但不改写原始运行记录")
+        self.assertEqual(
+            (run_dir / "record.json").read_bytes(), original_record, "报告重新校验证据，但不改写原始运行记录"
+        )
 
     def test_missing_log_breaks_the_evidence(self):
         record = self.prepare("run", "--group", "unit")
@@ -2164,8 +2309,7 @@ class ReviewRegressionTests(VerifyEntryTestCase):
         for equals_style in (False, True):
             with self.subTest(equals_style=equals_style):
                 artifacts = Path(self.temp.name) / ("out-%s" % equals_style)
-                out_args = (["--out-dir=" + str(artifacts)] if equals_style
-                            else ["--out-dir", str(artifacts)])
+                out_args = ["--out-dir=" + str(artifacts)] if equals_style else ["--out-dir", str(artifacts)]
                 p = self.repo.run_verify("run", "unit-related", str(selector), *out_args)
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 run_id = json.loads((artifacts / "latest.json").read_text(encoding="utf-8"))["run_id"]
@@ -2177,13 +2321,12 @@ class ReviewRegressionTests(VerifyEntryTestCase):
                 self.assertNotIn(str(self.repo.path.resolve()), serialized)
                 self.assertEqual(record["context"]["selectors"], ["tests/test_synth.py"])
                 self.assertEqual(absolute_strings(record), [])
-                sidecar = (artifacts / "runs" / run_id / "unit-related.cases.json").read_text(
-                    encoding="utf-8")
+                sidecar = (artifacts / "runs" / run_id / "unit-related.cases.json").read_text(encoding="utf-8")
                 self.assertNotIn(str(self.repo.path), sidecar, "用例明细也只记仓库相对选择器")
                 self.assertNotIn(str(self.repo.path.resolve()), sidecar)
 
     def test_equal_size_large_fixture_change_invalidates_input_coverage(self):
-        self.unit('''import pathlib
+        self.unit("""import pathlib
 import unittest
 
 class LargeFixtureTests(unittest.TestCase):
@@ -2191,7 +2334,7 @@ class LargeFixtureTests(unittest.TestCase):
         with pathlib.Path("fixtures/large.bin").open("r+b") as handle:
             handle.seek(8)
             handle.write(b"B")
-''')
+""")
         self.repo.commit_all("合成大文件变更测试")
         fixture = self.repo.path / "fixtures" / "large.bin"
         fixture.parent.mkdir()
@@ -2206,8 +2349,7 @@ class LargeFixtureTests(unittest.TestCase):
         self.assertFalse(record["result"]["usable_as_evidence"])
         self.assertNotEqual(record["input"]["fingerprint"], record["input"]["final_fingerprint"])
 
-    @unittest.skipUnless(os.name == "posix" and os.geteuid() != 0,
-                         "文件读取权限回归需要非 root 的 POSIX 用户")
+    @unittest.skipUnless(os.name == "posix" and os.geteuid() != 0, "文件读取权限回归需要非 root 的 POSIX 用户")
     def test_unreadable_input_cannot_produce_usable_evidence(self):
         fixture = self.repo.write("fixtures/unreadable.txt", "合成受限输入")
         fixture.chmod(0)
@@ -2223,7 +2365,7 @@ class LargeFixtureTests(unittest.TestCase):
         self.assertEqual(report.returncode, 1, report.stdout + report.stderr)
 
     def test_multiple_failed_subtests_count_one_failed_main_case(self):
-        self.unit('''import unittest
+        self.unit("""import unittest
 
 class SubTests(unittest.TestCase):
     def test_failures(self):
@@ -2233,7 +2375,7 @@ class SubTests(unittest.TestCase):
 
     def test_pass(self):
         self.assertTrue(True)
-''')
+""")
         self.repo.commit_all("合成多个失败子测试")
         p = self.repo.run_verify("run", "--quiet")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
@@ -2241,11 +2383,10 @@ class SubTests(unittest.TestCase):
         counts = record["result"]["counts"]
         self.assertEqual((counts["cases"], counts["failed"], counts["passed"]), (3, 1, 2))
         self.assertEqual(counts["subtest_failures"], 3)
-        self.assertEqual([case["status"] for case in record["groups"][0]["cases"]],
-                         ["passed", "failed", "passed"])
+        self.assertEqual([case["status"] for case in record["groups"][0]["cases"]], ["passed", "failed", "passed"])
 
     def test_child_sigint_preserves_interruption_and_completed_cases(self):
-        self.unit('''import os
+        self.unit("""import os
 import signal
 import unittest
 
@@ -2258,7 +2399,7 @@ class InterruptTests(unittest.TestCase):
 
     def test_c_not_started(self):
         self.fail("中断后的用例不能执行")
-''')
+""")
         self.repo.commit_all("合成子进程 SIGINT")
         p = self.repo.run_verify("run", "--quiet")
         self.assertEqual(p.returncode, 130, p.stdout + p.stderr)
@@ -2271,8 +2412,7 @@ class InterruptTests(unittest.TestCase):
         self.assertEqual(cases["test_a_completed"]["status"], "passed")
         self.assertNotEqual(cases.get("test_b_interrupt", {}).get("status"), "passed")
         self.assertNotIn("test_c_not_started", cases)
-        children = json.loads((self.repo.artifact_dir / "runs" / run_id / "children.json").read_text(
-            encoding="utf-8"))
+        children = json.loads((self.repo.artifact_dir / "runs" / run_id / "children.json").read_text(encoding="utf-8"))
         self.assertEqual(children[0]["exit_status"], 130)
         self.assertTrue(children[0]["reaped"])
 
@@ -2282,7 +2422,8 @@ class InterruptTests(unittest.TestCase):
         injection = Path(self.temp.name) / "injection"
         injection.mkdir()
         pid_file = Path(self.temp.name) / "owned-child.pid"
-        (injection / "sitecustomize.py").write_text('''import errno
+        (injection / "sitecustomize.py").write_text(
+            """import errno
 import json
 import os
 from pathlib import Path
@@ -2297,14 +2438,20 @@ def replace_with_registry_failure(source, target):
     return original_replace(source, target)
 
 os.replace = replace_with_registry_failure
-''', encoding="utf-8")
-        decoy = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
-                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL)
+""",
+            encoding="utf-8",
+        )
+        decoy = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         child_pid = None
         try:
-            p = self.repo.run_verify("run", "--quiet", timeout=20, extra_env={
-                "PYTHONPATH": str(injection), "SYNTH_CHILD_PID": str(pid_file)})
+            p = self.repo.run_verify(
+                "run", "--quiet", timeout=20, extra_env={"PYTHONPATH": str(injection), "SYNTH_CHILD_PID": str(pid_file)}
+            )
             self.assertTrue(pid_file.is_file(), "故障发生在子进程已经启动并登记之后")
             child_pid = int(pid_file.read_text(encoding="utf-8"))
             self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
@@ -2337,13 +2484,16 @@ class UnitOutcomeBoundaryTests(VerifyEntryTestCase):
     def test_only_skipped_subtest_is_not_a_pass(self):
         # 契约模块也要整个跳过，套件才是「只有跳过」的形态
         self.repo.write("tests/test_i18n_catalog_contract.py", UNIT_SKIP)
-        record = self.run_body('''import unittest
+        record = self.run_body(
+            """import unittest
 
 class SubTests(unittest.TestCase):
     def test_skipped(self):
         with self.subTest(name="合成跳过"):
             self.skipTest("没有执行子测试")
-''', 1)
+""",
+            1,
+        )
         self.assertEqual(record["result"]["outcome"], "skipped")
         self.assertFalse(record["result"]["usable_as_evidence"])
         counts = record["result"]["counts"]
@@ -2352,7 +2502,8 @@ class SubTests(unittest.TestCase):
         self.assertEqual(record["groups"][0]["cases"][-1]["status"], "skipped")
 
     def test_class_fixture_skip_does_not_skip_another_passed_case(self):
-        record = self.run_body('''import unittest
+        record = self.run_body(
+            """import unittest
 
 class AUnavailableTests(unittest.TestCase):
     @classmethod
@@ -2365,20 +2516,29 @@ class AUnavailableTests(unittest.TestCase):
 class BAvailableTests(unittest.TestCase):
     def test_pass(self):
         self.assertTrue(True)
-''', 0)
+""",
+            0,
+        )
         self.assertEqual(record["result"]["outcome"], "passed")
         self.assertTrue(record["result"]["usable_as_evidence"])
         counts = record["result"]["counts"]
         self.assertEqual((counts["cases"], counts["passed"], counts["skipped"]), (2, 2, 0))
         self.assertEqual(counts["fixture_skips"], 1)
-        self.assertEqual([case["name"] for case in record["groups"][0]["cases"]],
-                         ["test_shipped_catalogs_stay_consistent", "test_pass"])
+        self.assertEqual(
+            [case["name"] for case in record["groups"][0]["cases"]],
+            ["test_shipped_catalogs_stay_consistent", "test_pass"],
+        )
 
     def test_sigint_during_explicit_module_import_is_interrupted(self):
-        record = self.run_body('''import signal
+        record = self.run_body(
+            """import signal
 
 signal.raise_signal(signal.SIGINT)
-''', 130, "unit-related", "tests/test_synth.py")
+""",
+            130,
+            "unit-related",
+            "tests/test_synth.py",
+        )
         self.assertEqual(record["result"]["outcome"], "interrupted")
         self.assertEqual(record["result"]["exit_status"], 130)
         self.assertFalse(record["result"]["usable_as_evidence"])
@@ -2386,7 +2546,8 @@ signal.raise_signal(signal.SIGINT)
         self.assertEqual(record["groups"][0]["cases"], [])
 
     def test_class_fixture_error_is_separate_from_case_errors(self):
-        record = self.run_body('''import unittest
+        record = self.run_body(
+            """import unittest
 
 class BrokenFixtureTests(unittest.TestCase):
     @classmethod
@@ -2395,17 +2556,21 @@ class BrokenFixtureTests(unittest.TestCase):
 
     def test_not_started(self):
         self.fail("准备失败后不能执行")
-''', 1)
+""",
+            1,
+        )
         self.assertEqual(record["result"]["outcome"], "error")
         self.assertFalse(record["result"]["usable_as_evidence"])
         counts = record["result"]["counts"]
         self.assertEqual((counts["cases"], counts["passed"], counts["errors"]), (1, 1, 0))
         self.assertEqual(counts["fixture_errors"], 1)
-        self.assertEqual([case["name"] for case in record["groups"][0]["cases"]],
-                         ["test_shipped_catalogs_stay_consistent"])
+        self.assertEqual(
+            [case["name"] for case in record["groups"][0]["cases"]], ["test_shipped_catalogs_stay_consistent"]
+        )
 
     def test_passed_and_skipped_subtests_preserve_passed_main_case(self):
-        record = self.run_body('''import unittest
+        record = self.run_body(
+            """import unittest
 
 class SubTests(unittest.TestCase):
     def test_mixed(self):
@@ -2413,7 +2578,9 @@ class SubTests(unittest.TestCase):
             self.assertTrue(True)
         with self.subTest(name="跳过"):
             self.skipTest("合成子测试不适用")
-''', 0)
+""",
+            0,
+        )
         self.assertEqual(record["result"]["outcome"], "passed")
         self.assertTrue(record["result"]["usable_as_evidence"])
         counts = record["result"]["counts"]
@@ -2422,13 +2589,16 @@ class SubTests(unittest.TestCase):
         self.assertEqual(record["groups"][0]["cases"][-1]["status"], "passed")
 
     def test_unexpected_success_is_not_counted_as_passed(self):
-        record = self.run_body('''import unittest
+        record = self.run_body(
+            """import unittest
 
 class ExpectedFailureTests(unittest.TestCase):
     @unittest.expectedFailure
     def test_unexpected_success(self):
         self.assertTrue(True)
-''', 1)
+""",
+            1,
+        )
         self.assertEqual(record["result"]["outcome"], "failed")
         self.assertFalse(record["result"]["usable_as_evidence"])
         counts = record["result"]["counts"]
@@ -2472,38 +2642,66 @@ SELECTION_MAP_OK = {
         {"prefix": "docs/assets/", "category": "头图与截图"},
     ],
     "rules": [
-        {"id": "r-cli", "prefixes": ["tools/synth-cli.py"],
-         "selectors": ["tests/test_synth.py"],
-         "why": "合成 CLI 影响 test_synth"},
-        {"id": "r-serve", "prefixes": ["skill/annotation-everything/scripts/serve.py"],
-         "selectors": ["tests/test_synth.py"],
-         "serve_check": True,
-         "scenarios": ["skill-search"],
-         "why": "合成服务影响服务安全自检与场景"},
-        {"id": "r-page", "prefixes": ["templates/"],
-         "selectors": ["tests/test_synth.py"],
-         "scenarios": ["skill-search"],
-         "why": "合成页面模板影响场景"},
-        {"id": "r-dict", "prefixes": ["locales/"],
-         "selectors": ["tests/test_i18n_catalog_contract.py", "tests/test_synth.py"],
-         "why": "合成词典与全局契约"},
-        {"id": "r-docs", "prefixes": ["docs/"],
-         "selectors": [], "fallback": "guarded_doc",
-         "why": "docs 不在允许列表，保守回退"},
-        {"id": "r-skill", "prefixes": ["SKILL.md"],
-         "selectors": [], "fallback": "shared_resource",
-         "why": "技能指引不放行"},
-        {"id": "r-exec", "prefixes": ["verify.py"],
-         "selectors": [], "fallback": "strategy_change",
-         "why": "验证入口自身变化"},
-        {"id": "r-fixture", "prefixes": ["fixtures/"],
-         "selectors": [], "fallback": "shared_resource",
-         "why": "fixture 不能按扩展名放行"},
+        {
+            "id": "r-cli",
+            "prefixes": ["tools/synth-cli.py"],
+            "selectors": ["tests/test_synth.py"],
+            "why": "合成 CLI 影响 test_synth",
+        },
+        {
+            "id": "r-serve",
+            "prefixes": ["skill/annotation-everything/scripts/serve.py"],
+            "selectors": ["tests/test_synth.py"],
+            "serve_check": True,
+            "scenarios": ["skill-search"],
+            "why": "合成服务影响服务安全自检与场景",
+        },
+        {
+            "id": "r-page",
+            "prefixes": ["templates/"],
+            "selectors": ["tests/test_synth.py"],
+            "scenarios": ["skill-search"],
+            "why": "合成页面模板影响场景",
+        },
+        {
+            "id": "r-dict",
+            "prefixes": ["locales/"],
+            "selectors": ["tests/test_i18n_catalog_contract.py", "tests/test_synth.py"],
+            "why": "合成词典与全局契约",
+        },
+        {
+            "id": "r-docs",
+            "prefixes": ["docs/"],
+            "selectors": [],
+            "fallback": "guarded_doc",
+            "why": "docs 不在允许列表，保守回退",
+        },
+        {
+            "id": "r-skill",
+            "prefixes": ["SKILL.md"],
+            "selectors": [],
+            "fallback": "shared_resource",
+            "why": "技能指引不放行",
+        },
+        {
+            "id": "r-exec",
+            "prefixes": ["verify.py"],
+            "selectors": [],
+            "fallback": "strategy_change",
+            "why": "验证入口自身变化",
+        },
+        {
+            "id": "r-fixture",
+            "prefixes": ["fixtures/"],
+            "selectors": [],
+            "fallback": "shared_resource",
+            "why": "fixture 不能按扩展名放行",
+        },
     ],
 }
 
 # 运行期间改写已跟踪文件的慢测试：让结束快照与开始快照不同（AC8 的输入变化）
-CHURN_BODY = '''import pathlib
+CHURN_BODY = """import pathlib
 import time
 import unittest
 
@@ -2514,7 +2712,7 @@ class ChurnShadowTests(unittest.TestCase):
         path.write_text(path.read_text(encoding="utf-8") + "运行期改动\\n", encoding="utf-8")
         time.sleep(1.0)
         self.assertTrue(True)
-'''
+"""
 
 
 class SelectionPlanTests(VerifyEntryTestCase):
@@ -2524,7 +2722,8 @@ class SelectionPlanTests(VerifyEntryTestCase):
         super().setUp()
         self.repo.write("tests/e2e_scenarios.py", E2E_SCENARIOS_STUB)
         self.map_path = self.repo.write(
-            "selection-map.json", json.dumps(SELECTION_MAP_OK, ensure_ascii=False, indent=2))
+            "selection-map.json", json.dumps(SELECTION_MAP_OK, ensure_ascii=False, indent=2)
+        )
         self.sel_env = {"AE_SELECTION_MAP": str(self.map_path)}
         # 映射与场景 stub 属于测试基建：提交进基线，避免被当成未分类改动
         self.repo.commit_all("选测测试基建")
@@ -2585,6 +2784,7 @@ class SelectionPlanTests(VerifyEntryTestCase):
 
     def test_unknown_scenario_id_falls_back(self):
         import copy
+
         payload = copy.deepcopy(SELECTION_MAP_OK)
         for rule in payload["rules"]:
             if rule["id"] == "r-serve":
@@ -2592,12 +2792,14 @@ class SelectionPlanTests(VerifyEntryTestCase):
         self.write_map(payload)
         self.repo.write("skill/annotation-everything/scripts/serve.py", SERVE_STUB)
         plan = self.selection("--phase", "development")
-        self.assertEqual(plan["fallback"]["kind"], "incomplete_manifest",
-                         "规则引用不存在的场景：映射与场景注册表失配，保守回退")
+        self.assertEqual(
+            plan["fallback"]["kind"], "incomplete_manifest", "规则引用不存在的场景：映射与场景注册表失配，保守回退"
+        )
         self.assertIn("no-such-scene", plan["fallback"]["reason"])
 
     def test_manifest_gaps_fall_back(self):
         import copy
+
         # 选择器指向不存在的测试文件：测试清单不完整
         payload = copy.deepcopy(SELECTION_MAP_OK)
         for rule in payload["rules"]:
@@ -2626,8 +2828,7 @@ class SelectionPlanTests(VerifyEntryTestCase):
     def test_skill_guidance_and_guarded_docs_fall_back(self):
         self.repo.write("SKILL.md", "技能指引\n")
         plan = self.selection("--phase", "development")
-        self.assertEqual(plan["fallback"]["kind"], "shared_resource",
-                         "技能指引不能按扩展名放行")
+        self.assertEqual(plan["fallback"]["kind"], "shared_resource", "技能指引不能按扩展名放行")
         self.repo.commit_all("技能指引")
         self.repo.write("docs/verify/onboarding.md", "接入说明\n")
         plan2 = self.selection("--phase", "development")
@@ -2639,22 +2840,24 @@ class SelectionPlanTests(VerifyEntryTestCase):
         self.assertIsNotNone(plan["fallback"], "改名换姓进不了允许列表")
         self.assertEqual(plan["fallback"]["kind"], "unknown_path")
         self.assertIn("NOTICE.md", plan["fallback"]["reason"])
-        self.assertEqual(plan["changes"]["renamed"], [{"from": "README.md", "to": "NOTICE.md"}],
-                         "重命名两端都被识别")
+        self.assertEqual(plan["changes"]["renamed"], [{"from": "README.md", "to": "NOTICE.md"}], "重命名两端都被识别")
 
     def test_added_and_deleted_tests_trigger_manifest_check(self):
         # 新增测试用不同内容：与被删文件内容相同时 git 的 rename 检测会把它配成重命名
-        self.repo.write("tests/test_new_area.py",
-                        UNIT_PASS.replace("AlphaTests", "NewAreaTests")
-                                 .replace("test_alpha_ok", "test_new_area_ok"))
+        self.repo.write(
+            "tests/test_new_area.py",
+            UNIT_PASS.replace("AlphaTests", "NewAreaTests").replace("test_alpha_ok", "test_new_area_ok"),
+        )
         plan = self.selection("--phase", "development")
-        self.assertEqual(plan["fallback"]["kind"], "incomplete_manifest",
-                         "新增测试未纳入映射，触发清单覆盖检查并保守回退")
+        self.assertEqual(
+            plan["fallback"]["kind"], "incomplete_manifest", "新增测试未纳入映射，触发清单覆盖检查并保守回退"
+        )
         self.assertIn("tests/test_new_area.py", plan["manifest_check"]["new_tests"])
         self.repo.git("add", "-A")
         plan2 = self.selection("--phase", "development")
-        self.assertIn("tests/test_new_area.py", plan2["manifest_check"]["new_tests"],
-                      "新增测试提交前后都触发清单覆盖检查")
+        self.assertIn(
+            "tests/test_new_area.py", plan2["manifest_check"]["new_tests"], "新增测试提交前后都触发清单覆盖检查"
+        )
         # 先把新增测试提交进基线，再删除另一个测试文件：差异里只有删除，
         # 不会被 git 的 rename 检测把新增与删除配对成重命名
         self.repo.commit_all("新增区域测试")
@@ -2667,13 +2870,11 @@ class SelectionPlanTests(VerifyEntryTestCase):
         self.repo.write("tests/test_synth.py", UNIT_PASS + "\n# 改动\n")
         plan = self.selection("--phase", "development")
         self.assertIsNone(plan["fallback"], "修改已有测试是可解释的常见情形")
-        self.assertIn("tests/test_synth.py", plan["suggested"]["selectors"],
-                      "测试自身变化建议运行自身")
+        self.assertIn("tests/test_synth.py", plan["suggested"]["selectors"], "测试自身变化建议运行自身")
 
     def test_fallback_suggestion_keeps_matched_serve_check_and_scenarios(self):
         # R2 回归：回退建议取并集——命中规则的 serve-check 与场景计划不能被丢弃
-        self.repo.write("skill/annotation-everything/scripts/serve.py",
-                        SERVE_STUB + "\n# 合成变更\n")
+        self.repo.write("skill/annotation-everything/scripts/serve.py", SERVE_STUB + "\n# 合成变更\n")
         self.repo.write("scratch.xyz", "?\n")
         plan = self.selection("--phase", "development")
         self.assertIsNotNone(plan["fallback"], "未分类路径触发回退")
@@ -2681,11 +2882,9 @@ class SelectionPlanTests(VerifyEntryTestCase):
         matched = {item["id"] for item in plan["matched_rules"]}
         self.assertIn("r-serve", matched, "回退时命中规则仍保留在计划里")
         suggested = plan["suggested"]
-        self.assertEqual(suggested["groups"], ["unit", "serve-check"],
-                         "回退建议保留命中规则的 serve-check")
+        self.assertEqual(suggested["groups"], ["unit", "serve-check"], "回退建议保留命中规则的 serve-check")
         self.assertTrue(suggested["serve_check"])
-        self.assertIn("skill-search", suggested["scenarios"],
-                      "回退建议保留命中规则的场景计划")
+        self.assertIn("skill-search", suggested["scenarios"], "回退建议保留命中规则的场景计划")
 
     def test_issue_phase_does_not_auto_start_tests(self):
         self.repo.write("tools/synth-cli.py", "v1\n")
@@ -2706,16 +2905,20 @@ class SelectionPlanTests(VerifyEntryTestCase):
     def test_ci_phase_matches_matrix(self):
         self.repo.write("tools/synth-cli.py", "v1\n")
         plan = self.selection("--phase", "ci")
-        self.assertEqual(plan["suggested"]["groups"], ["unit", "serve-check"],
-                         "CI 阶段与现有矩阵一致：完整单元 + 服务安全自检")
+        self.assertEqual(
+            plan["suggested"]["groups"], ["unit", "serve-check"], "CI 阶段与现有矩阵一致：完整单元 + 服务安全自检"
+        )
 
     def test_dict_rule_keeps_global_contract(self):
         self.repo.write("locales/zh-CN.json", '{"a": "甲", "b": "乙"}\n')
         plan = self.selection("--phase", "development")
         matched = {item["id"] for item in plan["matched_rules"]}
         self.assertIn("r-dict", matched)
-        self.assertIn("tests/test_i18n_catalog_contract.py", plan["suggested"]["selectors_effective"],
-                      "词典功能局部组包含全局契约")
+        self.assertIn(
+            "tests/test_i18n_catalog_contract.py",
+            plan["suggested"]["selectors_effective"],
+            "词典功能局部组包含全局契约",
+        )
 
     def test_uncommitted_changes_are_collected(self):
         self.repo.write("tools/synth-cli.py", "v1\n")
@@ -2739,8 +2942,7 @@ class SelectionPlanTests(VerifyEntryTestCase):
         self.assertEqual(with_baseline["suggested"]["groups"], [])
         head_plan = self.selection("--phase", "development")
         self.assertIsNotNone(head_plan["fallback"], "默认基线（HEAD）下没有差异")
-        self.assertEqual(head_plan["fallback"]["kind"], "no_changes",
-                         "空差异不解释成不用测，保守按完整检查")
+        self.assertEqual(head_plan["fallback"]["kind"], "no_changes", "空差异不解释成不用测，保守按完整检查")
         self.assertEqual(with_baseline["baseline"]["source"], "explicit")
 
 
@@ -2751,13 +2953,13 @@ class SelectionShadowTests(VerifyEntryTestCase):
         super().setUp()
         self.repo.write("tests/e2e_scenarios.py", E2E_SCENARIOS_STUB)
         self.map_path = self.repo.write(
-            "selection-map.json", json.dumps(SELECTION_MAP_OK, ensure_ascii=False, indent=2))
+            "selection-map.json", json.dumps(SELECTION_MAP_OK, ensure_ascii=False, indent=2)
+        )
         self.sel_env = {"AE_SELECTION_MAP": str(self.map_path)}
         # 映射与场景 stub 属于测试基建：提交进基线，避免被当成未分类改动
         self.repo.commit_all("选测测试基建")
 
-    def run_shadow(self, *args: str, env: dict | None = None,
-                   timeout: float = 120) -> tuple:
+    def run_shadow(self, *args: str, env: dict | None = None, timeout: float = 120) -> tuple:
         merged = dict(self.sel_env)
         if env:
             merged.update(env)
@@ -2771,45 +2973,48 @@ class SelectionShadowTests(VerifyEntryTestCase):
         self.repo.commit_all("合成失败与场景记录")
         self.repo.write("tools/synth-cli.py", "v1\n")
         for phase, groups, expected_groups in (
-                ("pr", ["--group", "all"], {"unit", "serve-check", "browser"}),
-                ("ci", ["--group", "unit", "--group", "serve-check"], {"unit", "serve-check"})):
+            ("pr", ["--group", "all"], {"unit", "serve-check", "browser"}),
+            ("ci", ["--group", "unit", "--group", "serve-check"], {"unit", "serve-check"}),
+        ):
             with self.subTest(phase=phase):
-                p, record = self.run_shadow(*groups, "--phase", phase,
-                    env={"SYNTH_SERVE_FAILED": "1", "SYNTH_SCENARIO_STATUS": "failed"})
+                p, record = self.run_shadow(
+                    *groups, "--phase", phase, env={"SYNTH_SERVE_FAILED": "1", "SYNTH_SCENARIO_STATUS": "failed"}
+                )
                 self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
                 self.assertIsNone(record["context"]["selection"]["fallback"])
                 shadow = record["shadow"]
                 self.assertTrue(shadow["comparable"])
                 self.assertEqual({item["group"] for item in shadow["failures"]}, expected_groups)
-                self.assertEqual(shadow["candidate_omissions"], [],
-                                 "完整组已覆盖失败，不能根据空 selectors 误报遗漏")
+                self.assertEqual(shadow["candidate_omissions"], [], "完整组已覆盖失败，不能根据空 selectors 误报遗漏")
 
     def test_wildcard_only_expands_for_a_matching_rule(self):
         import copy
+
         payload = copy.deepcopy(SELECTION_MAP_OK)
         next(rule for rule in payload["rules"] if rule["id"] == "r-page")["scenarios"] = ["*"]
         self.map_path.write_text(json.dumps(payload), encoding="utf-8")
         self.repo.write("tests/e2e_browser.py", BROWSER_SCENARIO_STUB, executable=True)
         self.repo.commit_all("合成全场景映射")
         self.repo.write("tools/synth-cli.py", "v1\n")
-        plan = self.repo.run_verify("plan", "--phase", "development", "--json",
-                                   extra_env=self.sel_env)
+        plan = self.repo.run_verify("plan", "--phase", "development", "--json", extra_env=self.sel_env)
         self.assertEqual(plan.returncode, 0, plan.stdout + plan.stderr)
-        self.assertEqual(json.loads(plan.stdout)["selection"]["suggested"]["scenarios"], [],
-                         "未命中的全场景规则不能把 CLI 建议扩大到浏览器")
+        self.assertEqual(
+            json.loads(plan.stdout)["selection"]["suggested"]["scenarios"],
+            [],
+            "未命中的全场景规则不能把 CLI 建议扩大到浏览器",
+        )
         self.repo.write("templates/page.html", "合成模板\n")
-        p, record = self.run_shadow("--group", "all", "--phase", "development",
-                                   env={"SYNTH_SCENARIO_STATUS": "failed"})
+        p, record = self.run_shadow("--group", "all", "--phase", "development", env={"SYNTH_SCENARIO_STATUS": "failed"})
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        self.assertEqual(record["shadow"]["browser_planned_scenarios"],
-                         ["server-mode", "skill-search"])
-        self.assertEqual(record["shadow"]["candidate_omissions"], [],
-                         "全场景覆盖必须识别实际失败场景")
+        self.assertEqual(record["shadow"]["browser_planned_scenarios"], ["server-mode", "skill-search"])
+        self.assertEqual(record["shadow"]["candidate_omissions"], [], "全场景覆盖必须识别实际失败场景")
         self.repo.write("unknown.txt", "触发回退\n")
-        fallback_plan = self.repo.run_verify("plan", "--phase", "development", "--json",
-                                            extra_env=self.sel_env)
-        self.assertEqual(json.loads(fallback_plan.stdout)["selection"]["suggested"]["scenarios"],
-                         ["server-mode", "skill-search"], "回退也保留展开后的场景")
+        fallback_plan = self.repo.run_verify("plan", "--phase", "development", "--json", extra_env=self.sel_env)
+        self.assertEqual(
+            json.loads(fallback_plan.stdout)["selection"]["suggested"]["scenarios"],
+            ["server-mode", "skill-search"],
+            "回退也保留展开后的场景",
+        )
 
     def test_non_utf8_override_falls_back_and_still_executes_gate(self):
         self.map_path.write_bytes(b"\xff\xfe")
@@ -2837,8 +3042,7 @@ class SelectionShadowTests(VerifyEntryTestCase):
         self.assertEqual(record["shadow"]["candidate_omissions"], [])
 
     def test_incomparable_input_keeps_observed_failures(self):
-        self.repo.write("tests/test_synth.py", CHURN_BODY.replace("self.assertTrue(True)",
-                                                                "self.fail('合成失败')"))
+        self.repo.write("tests/test_synth.py", CHURN_BODY.replace("self.assertTrue(True)", "self.fail('合成失败')"))
         self.repo.commit_all("合成输入变化与失败")
         p, record = self.run_shadow("--phase", "development")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
@@ -2869,11 +3073,11 @@ class SelectionShadowTests(VerifyEntryTestCase):
         self.assertEqual(shadow["candidate_omissions"], [], "完整门禁全绿时没有候选遗漏")
         shadow_file = self.repo.artifact_dir / "runs" / record["run_id"] / "shadow.json"
         self.assertTrue(shadow_file.is_file(), "影子对照单独落盘供 G / H 读取")
-        self.assertEqual(json.loads(shadow_file.read_text(encoding="utf-8"))["schema"],
-                         "ae-verify-shadow/1")
+        self.assertEqual(json.loads(shadow_file.read_text(encoding="utf-8"))["schema"], "ae-verify-shadow/1")
 
     def test_planted_miss_is_recorded_and_failure_kept(self):
         import copy
+
         payload = copy.deepcopy(SELECTION_MAP_OK)
         for rule in payload["rules"]:
             if rule["id"] == "r-serve":
@@ -2884,10 +3088,10 @@ class SelectionShadowTests(VerifyEntryTestCase):
         # 窄映射提交进基线；服务变更留在工作树未提交（合成仓库在 main 上，
         # 默认基线退化为 HEAD，提交过的变更相对基线不可见）
         self.repo.commit_all("窄映射")
-        self.repo.write("skill/annotation-everything/scripts/serve.py",
-                        SERVE_STUB + "\n# 合成变更\n")
-        p, record = self.run_shadow("--group", "unit", "--group", "serve-check",
-                                    "--phase", "development", env={"SYNTH_SERVE_FAILED": "1"})
+        self.repo.write("skill/annotation-everything/scripts/serve.py", SERVE_STUB + "\n# 合成变更\n")
+        p, record = self.run_shadow(
+            "--group", "unit", "--group", "serve-check", "--phase", "development", env={"SYNTH_SERVE_FAILED": "1"}
+        )
         self.assertEqual(p.returncode, 1, "完整门禁的失败必须保留，不能被影子层吞掉")
         self.assertEqual(record["result"]["outcome"], "failed")
         serve_group = {group["name"]: group for group in record["groups"]}["serve-check"]
@@ -2948,8 +3152,7 @@ class SelectionShadowTests(VerifyEntryTestCase):
         p, record = self.run_shadow("--group", "unit", "--phase", "development")
         shadow = record["shadow"]
         self.assertFalse(shadow["coverage"]["browser"], "浏览器未执行")
-        self.assertIn("skill-search", shadow["browser_planned_scenarios"],
-                      "浏览器场景只在计划层对照")
+        self.assertIn("skill-search", shadow["browser_planned_scenarios"], "浏览器场景只在计划层对照")
 
 
 class SelectionSampleReplayTests(unittest.TestCase):
@@ -2972,8 +3175,7 @@ class SelectionSampleReplayTests(unittest.TestCase):
         repo.test_lock_dir = Path(lock.name)
         # 与 SelectionShadowTests 相同的测试基建：场景 stub + 覆盖映射提交进基线
         repo.write("tests/e2e_scenarios.py", E2E_SCENARIOS_STUB)
-        map_path = repo.write(
-            "selection-map.json", json.dumps(SELECTION_MAP_OK, ensure_ascii=False, indent=2))
+        map_path = repo.write("selection-map.json", json.dumps(SELECTION_MAP_OK, ensure_ascii=False, indent=2))
         repo.commit_all("选测测试基建")
         self.sel_env = {"AE_SELECTION_MAP": str(map_path)}
         return repo
@@ -2989,8 +3191,7 @@ class SelectionSampleReplayTests(unittest.TestCase):
             repo.commit_all("合成页面")
             repo.write("templates/viewer.html", "<!-- 合成页面 v2 -->\n")
         elif sample_id == "S5":
-            repo.write("skill/annotation-everything/scripts/serve.py",
-                       SERVE_STUB + "\n# 合成变更\n")
+            repo.write("skill/annotation-everything/scripts/serve.py", SERVE_STUB + "\n# 合成变更\n")
         elif sample_id == "S6":
             repo.write("locales/zh-CN.json", '{"a": "甲", "b": "乙"}\n')
         elif sample_id == "S7":
@@ -2998,9 +3199,10 @@ class SelectionSampleReplayTests(unittest.TestCase):
         elif sample_id == "S8":
             repo.write("scratch.xyz", "?\n")
         elif sample_id == "S9":
-            repo.write("tests/test_new_area.py",
-                       UNIT_PASS.replace("AlphaTests", "NewAreaTests")
-                                .replace("test_alpha_ok", "test_new_area_ok"))
+            repo.write(
+                "tests/test_new_area.py",
+                UNIT_PASS.replace("AlphaTests", "NewAreaTests").replace("test_alpha_ok", "test_new_area_ok"),
+            )
         elif sample_id == "S10":
             repo.git("rm", "-q", "tests/test_synth.py")
         elif sample_id == "S11":
@@ -3010,17 +3212,16 @@ class SelectionSampleReplayTests(unittest.TestCase):
             repo.write("tools/renamed-cli.py", "#!/usr/bin/env python3\nprint('cli v2')\n")
         elif sample_id == "S12":
             entry = repo.path / "verify.py"
-            entry.write_text(entry.read_text(encoding="utf-8") + "\n# 合成变更\n",
-                             encoding="utf-8")
+            entry.write_text(entry.read_text(encoding="utf-8") + "\n# 合成变更\n", encoding="utf-8")
         else:
             raise AssertionError("未登记的重放形态：%s" % sample_id)
 
     def assert_replays_to_sample(self, repo: SynthRepo, sample: dict) -> None:
         where = sample["id"]
-        p = repo.run_verify("run", "--group", "unit", "--group", "serve-check",
-                            "--phase", "development", extra_env=dict(self.sel_env))
-        self.assertEqual(p.returncode, sample["exit_status"],
-                         where + " 退出码与样本不一致：" + p.stdout + p.stderr)
+        p = repo.run_verify(
+            "run", "--group", "unit", "--group", "serve-check", "--phase", "development", extra_env=dict(self.sel_env)
+        )
+        self.assertEqual(p.returncode, sample["exit_status"], where + " 退出码与样本不一致：" + p.stdout + p.stderr)
         record = read_record(repo.artifact_dir, repo.latest_run_id())
         selection = record["context"]["selection"]
         shadow = record["shadow"]
@@ -3029,22 +3230,18 @@ class SelectionSampleReplayTests(unittest.TestCase):
         self.assertEqual(fallback["kind"] if fallback else None, sample["fallback"], where)
         if fallback is not None:
             self.assertTrue(fallback["reason"], where + " 回退必须带原因")
-            self.assertEqual(fallback["reason"], sample.get("fallback_reason"),
-                             where + " 回退原因与样本记录一致")
-        self.assertEqual(sorted(item["id"] for item in selection["matched_rules"]),
-                         sample["matched_rules"], where)
+            self.assertEqual(fallback["reason"], sample.get("fallback_reason"), where + " 回退原因与样本记录一致")
+        self.assertEqual(sorted(item["id"] for item in selection["matched_rules"]), sample["matched_rules"], where)
         suggested = selection["suggested"]
         self.assertEqual(suggested["groups"], sample["suggested_groups"], where)
         self.assertEqual(suggested.get("not_applicable"), sample.get("not_applicable"), where)
         self.assertEqual(shadow["suggested_selectors"], sample["suggested_selectors"], where)
-        self.assertEqual(shadow["browser_planned_scenarios"],
-                         sample["suggested_scenarios"], where)
+        self.assertEqual(shadow["browser_planned_scenarios"], sample["suggested_scenarios"], where)
         self.assertEqual(shadow["comparable"], sample["comparable"], where)
         if sample["comparable"]:
             self.assertIsNone(shadow["incomparable_reason"], where)
         else:
-            self.assertEqual(shadow["incomparable_reason"],
-                             sample["incomparable_reason"], where)
+            self.assertEqual(shadow["incomparable_reason"], sample["incomparable_reason"], where)
         self.assertEqual(shadow["coverage"], sample["coverage"], where)
         expected_failures = sample["failures"]
         if isinstance(expected_failures, int):
@@ -3056,14 +3253,15 @@ class SelectionSampleReplayTests(unittest.TestCase):
             self.assertEqual(len(shadow["candidate_omissions"]), expected_omissions, where)
         else:
             self.assertEqual(
-                [(item["group"], item["target"], item["attribution"])
-                 for item in shadow["candidate_omissions"]],
-                [(item["group"], item["target"], item["attribution"])
-                 for item in expected_omissions], where)
+                [(item["group"], item["target"], item["attribution"]) for item in shadow["candidate_omissions"]],
+                [(item["group"], item["target"], item["attribution"]) for item in expected_omissions],
+                where,
+            )
 
     def test_synthetic_samples_replay_to_recorded_fields(self):
-        samples = {item["id"]: item for item in
-                   json.loads(self.SAMPLES_PATH.read_text(encoding="utf-8"))["synthetic_samples"]}
+        samples = {
+            item["id"]: item for item in json.loads(self.SAMPLES_PATH.read_text(encoding="utf-8"))["synthetic_samples"]
+        }
         for sample_id in self.REPLAY_IDS:
             with self.subTest(sample=sample_id):
                 repo = self.make_repo()
@@ -3084,9 +3282,9 @@ class SelectionBuiltinMapTests(unittest.TestCase):
         repo.test_lock_dir = Path(lock_temp.name)
         sys.path.insert(0, str(ROOT))
         import verify_selection as vs
+
         # 真实场景注册表：声明「*」的规则展开结果必须与真实注册表一致
-        repo.write("tests/e2e_scenarios.py",
-                   (ROOT / "tests" / "e2e_scenarios.py").read_text(encoding="utf-8"))
+        repo.write("tests/e2e_scenarios.py", (ROOT / "tests" / "e2e_scenarios.py").read_text(encoding="utf-8"))
         for rule in vs.SELECTION_RULES:
             for selector in rule.selectors:
                 if not (repo.path / selector).exists():
@@ -3103,13 +3301,16 @@ class SelectionBuiltinMapTests(unittest.TestCase):
         lint_only = repo.run_verify("run", "lint", "--phase", "pr", "--json", extra_env=failing_ruff)
         self.assertEqual(lint_only.returncode, 1, lint_only.stderr)
         self.assertEqual(json.loads(lint_only.stdout)["groups"][0]["outcome"], "failed")
-        result = repo.run_verify("run", "--group", "all", "--group", "lint", "--phase", "pr", "--json",
-                                 extra_env=failing_ruff)
+        result = repo.run_verify(
+            "run", "--group", "all", "--group", "lint", "--phase", "pr", "--json", extra_env=failing_ruff
+        )
         self.assertEqual(result.returncode, 1, result.stderr)
         record = json.loads(result.stdout)
         outcomes = {group["name"]: group["outcome"] for group in record["groups"]}
-        self.assertEqual(outcomes, {"unit": "not_applicable", "serve-check": "not_applicable",
-                                    "browser": "not_applicable", "lint": "failed"})
+        self.assertEqual(
+            outcomes,
+            {"unit": "not_applicable", "serve-check": "not_applicable", "browser": "not_applicable", "lint": "failed"},
+        )
         self.assertEqual(record["result"]["counts"]["checks"], 1)
         self.assertFalse(record["result"]["usable_as_evidence"])
         plan = repo.run_verify("plan", "--group", "all", "--group", "lint", "--phase", "pr")
@@ -3119,6 +3320,7 @@ class SelectionBuiltinMapTests(unittest.TestCase):
     def test_builtin_map_declares_real_repo_manifest(self):
         sys.path.insert(0, str(ROOT))
         import verify_selection as vs
+
         problems = vs.validate_builtin_map(repo_root=ROOT)
         self.assertEqual(problems, [], "内置映射的选择器与场景必须在真实仓库里全部可解析")
 
@@ -3151,16 +3353,22 @@ class SelectionBuiltinMapTests(unittest.TestCase):
                 selection = json.loads(plan.stdout)["selection"]
                 self.assertIsNone(selection["fallback"])
                 self.assertEqual([item["path"] for item in selection["doc_exempt"]], [readme])
-                result = repo.run_verify("run", "--group", "all", "--phase", "pr", "--json",
-                                         extra_env={"SYNTH_SERVE_FAILED": "1", "SYNTH_BROWSER_FAILED": "1"})
+                result = repo.run_verify(
+                    "run",
+                    "--group",
+                    "all",
+                    "--phase",
+                    "pr",
+                    "--json",
+                    extra_env={"SYNTH_SERVE_FAILED": "1", "SYNTH_BROWSER_FAILED": "1"},
+                )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 record = json.loads(result.stdout)
                 self.assertTrue(record["result"]["usable_as_evidence"])
                 self.assertEqual(record["result"]["counts"]["groups"], 0)
                 self.assertEqual(record["result"]["counts"]["cases"], 0)
                 self.assertEqual(record["result"]["counts"]["checks"], 0)
-                self.assertEqual([group["name"] for group in record["groups"]],
-                                 ["unit", "serve-check", "browser"])
+                self.assertEqual([group["name"] for group in record["groups"]], ["unit", "serve-check", "browser"])
                 for group in record["groups"]:
                     self.assertEqual(group["outcome"], "not_applicable")
                     self.assertIsNone(group["started_at"])
@@ -3178,8 +3386,14 @@ class SelectionBuiltinMapTests(unittest.TestCase):
                 self.assertEqual(summary["comparison_groups"], [])
 
     def test_pr_gate_executes_all_groups_for_every_non_document_change(self):
-        for change in ("mapped-code", "guarded-doc", "untracked", "staged-rename", "committed-rename",
-                       "retired-readme"):
+        for change in (
+            "mapped-code",
+            "guarded-doc",
+            "untracked",
+            "staged-rename",
+            "committed-rename",
+            "retired-readme",
+        ):
             with self.subTest(change=change):
                 repo = self.builtin_repo("verify-doc-pr-mixed-")
                 repo.write("implementation.py", "# 合成源码\n")
@@ -3200,8 +3414,7 @@ class SelectionBuiltinMapTests(unittest.TestCase):
                     repo.git("mv", "implementation.py", DOC_FIXTURES["renamed_adr"])
                     if change == "committed-rename":
                         repo.commit_all("合成已提交改名")
-                result = repo.run_verify("run", "--group", "all", "--phase", "pr",
-                                         "--baseline", baseline, "--json")
+                result = repo.run_verify("run", "--group", "all", "--phase", "pr", "--baseline", baseline, "--json")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 record = json.loads(result.stdout)
                 self.assertEqual([group["outcome"] for group in record["groups"]], ["passed"] * 3)
@@ -3270,8 +3483,9 @@ class SelectionBuiltinMapTests(unittest.TestCase):
                 self.assertEqual(json.loads(plan.stdout)["selection"]["suggested"]["groups"], ["all"])
                 result = repo.run_verify("run", "--group", "all", "--phase", "pr", "--json", extra_env=env)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(json.loads(result.stdout)["shadow"]["executed_groups"],
-                                 ["unit", "serve-check", "browser"])
+                self.assertEqual(
+                    json.loads(result.stdout)["shadow"]["executed_groups"], ["unit", "serve-check", "browser"]
+                )
 
     def test_report_still_accepts_executed_records_from_strategy_v10(self):
         repo = self.builtin_repo("verify-doc-pr-legacy-")
@@ -3289,6 +3503,7 @@ class SelectionBuiltinMapTests(unittest.TestCase):
 
     def test_report_degrades_malformed_document_selection_without_a_traceback(self):
         import copy
+
         repo = self.builtin_repo("verify-doc-pr-malformed-")
         repo.write("README.md", "# 合成文档改动\n")
         result = repo.run_verify("run", "--group", "all", "--phase", "pr", "--json")
@@ -3339,35 +3554,31 @@ class SelectionBuiltinMapTests(unittest.TestCase):
     def test_fsutil_change_selects_the_union_of_its_dependent_rules(self):
         """#98：只改 fsutil.py 时按依赖方给出三组规则的并集，不再回退完整检查。"""
         repo = self.builtin_repo("verify-selection-fsutil-")
-        repo.write("skill/annotation-everything/scripts/fsutil.py",
-                   "# 合成 fsutil：#88 新增的共享叶子模块\n")
+        repo.write("skill/annotation-everything/scripts/fsutil.py", "# 合成 fsutil：#88 新增的共享叶子模块\n")
         p = repo.run_verify("plan", "--phase", "development", "--json")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         selection = json.loads(p.stdout)["selection"]
         self.assertEqual(selection["strategy_source"], "builtin")
-        self.assertEqual(selection["strategy_version"], STRATEGY_VERSION,
-                         "内置策略版本随声明透传")
+        self.assertEqual(selection["strategy_version"], STRATEGY_VERSION, "内置策略版本随声明透传")
         self.assertIsNone(selection["fallback"], "fsutil.py 已纳入映射：不需要 unknown_path 回退")
         self.assertEqual(selection["unknown_paths"], [])
-        self.assertEqual(sorted(item["id"] for item in selection["matched_rules"]),
-                         ["protocol-notes", "serve-page", "skill-updates"],
-                         "台账 / 批注存储、生成器与更新器三条依赖方同时命中，取并集")
+        self.assertEqual(
+            sorted(item["id"] for item in selection["matched_rules"]),
+            ["protocol-notes", "serve-page", "skill-updates"],
+            "台账 / 批注存储、生成器与更新器三条依赖方同时命中，取并集",
+        )
         suggested = selection["suggested"]
         self.assertEqual(suggested["groups"], ["unit-related", "serve-check"])
         self.assertTrue(suggested["serve_check"], "存储协议与对照页都带服务安全自检")
         selectors = suggested["selectors_effective"]
         self.assertIn("tests/test_skill_updates.py", selectors, "技能更新组的选择器")
         self.assertIn("tests/test_core.py", selectors, "存储协议与对照页组的选择器")
-        self.assertIn("tests/test_i18n_catalog_contract.py", selectors,
-                      "局部组固定附带全局词典契约")
-        self.assertIn("server-mode", suggested["scenarios"],
-                      "对照页规则的场景计划展开为全部注册场景")
-
+        self.assertIn("tests/test_i18n_catalog_contract.py", selectors, "局部组固定附带全局词典契约")
+        self.assertIn("server-mode", suggested["scenarios"], "对照页规则的场景计划展开为全部注册场景")
 
     def test_analysis_boundaries_select_the_complete_analysis_contracts(self):
         """#109：分析存储与投递边界必须选到全部分析契约及两个场景。"""
-        expected = {path.relative_to(ROOT).as_posix()
-                    for path in (ROOT / "tests").glob("test_analysis*.py")}
+        expected = {path.relative_to(ROOT).as_posix() for path in (ROOT / "tests").glob("test_analysis*.py")}
         for name in ("analysis_store.py", "wakeup.py"):
             with self.subTest(source=name):
                 repo = self.builtin_repo("verify-selection-analysis-")
@@ -3388,7 +3599,7 @@ class SelectionBuiltinMapTests(unittest.TestCase):
 
 # 带执行痕迹的合成单元测试：每次真实执行都在 SYNTH_TOUCH 指向的文件（仓库外）追加一行。
 # 「没有重新执行」用真实执行事件证明，不靠报告文字。
-UNIT_TOUCH = '''import os
+UNIT_TOUCH = """import os
 import unittest
 
 
@@ -3397,10 +3608,10 @@ class TouchTests(unittest.TestCase):
         with open(os.environ["SYNTH_TOUCH"], "a", encoding="utf-8") as fh:
             fh.write("unit\\n")
         self.assertTrue(True)
-'''
+"""
 
 # 带执行痕迹的合成服务安全自检：摘要行与 SERVE_STUB 相同，另追加执行痕迹
-SERVE_TOUCH_STUB = '''#!/usr/bin/env python3
+SERVE_TOUCH_STUB = """#!/usr/bin/env python3
 import os
 import sys
 
@@ -3416,10 +3627,10 @@ for index in range(failed):
     print("失败  合成自检项 %d" % (total - failed + index))
 print("\\n%d/%d 通过" % (total - failed, total))
 sys.exit(1 if failed else 0)
-'''
+"""
 
 # 带执行痕迹的合成浏览器入口：摘要行与 BROWSER_STUB 相同，另追加执行痕迹
-BROWSER_TOUCH_STUB = '''#!/usr/bin/env python3
+BROWSER_TOUCH_STUB = """#!/usr/bin/env python3
 import os
 import sys
 import time
@@ -3437,7 +3648,7 @@ for index in range(failed):
     print("FAIL  合成场景 %d" % (total - failed + index))
 print("\\n%d/%d 通过" % (total - failed, total))
 sys.exit(1 if failed else 0)
-'''
+"""
 
 
 class EvidenceReuseTests(VerifyEntryTestCase):
@@ -3454,13 +3665,14 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         self.browser_touch = Path(self.temp.name) / "browser-touch.txt"
         self.repo.write("tests/test_synth.py", UNIT_TOUCH)
         self.repo.write("tests/e2e_scenarios.py", E2E_SCENARIOS_STUB)
-        self.repo.write("skill/annotation-everything/scripts/serve.py",
-                        SERVE_TOUCH_STUB, executable=True)
+        self.repo.write("skill/annotation-everything/scripts/serve.py", SERVE_TOUCH_STUB, executable=True)
         self.repo.write("tests/e2e_browser.py", BROWSER_TOUCH_STUB, executable=True)
         self.repo.commit_all("合成执行痕迹基建")
-        self.trace_env = {"SYNTH_TOUCH": str(self.unit_touch),
-                          "SYNTH_SERVE_TOUCH": str(self.serve_touch),
-                          "SYNTH_BROWSER_TOUCH": str(self.browser_touch)}
+        self.trace_env = {
+            "SYNTH_TOUCH": str(self.unit_touch),
+            "SYNTH_SERVE_TOUCH": str(self.serve_touch),
+            "SYNTH_BROWSER_TOUCH": str(self.browser_touch),
+        }
 
     # -- 工具 -------------------------------------------------------------
 
@@ -3489,8 +3701,7 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         """把来源记录的结束时间改到 hours 小时前；负数表示未来（时间回退形态）。"""
         path = self.repo.artifact_dir / "runs" / run_id / "record.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
-        stamp = (datetime.datetime.now(datetime.timezone.utc)
-                 - datetime.timedelta(hours=hours)).isoformat()
+        stamp = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)).isoformat()
         payload["ended_at"] = stamp
         payload["timing"]["ended_at"] = stamp
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -3499,47 +3710,50 @@ class EvidenceReuseTests(VerifyEntryTestCase):
 
     def test_cross_stage_demo_reuses_evidence_and_pr_gate_reruns(self):
         """开发验证 → 审查 → PR 整理引用原有效结果（0 次重跑）；pr 门禁仍实际执行。"""
-        p = self.verify("run", "--group", "serve-check", "--phase", "development",
-                        "--issue", "56", "--reason", "开发验证")
+        p = self.verify(
+            "run", "--group", "serve-check", "--phase", "development", "--issue", "56", "--reason", "开发验证"
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         dev_serve = self.repo.latest_run_id()
-        p = self.verify("run", "unit-related", "tests/test_synth.py",
-                        "--phase", "development", "--reason", "开发验证")
+        p = self.verify("run", "unit-related", "tests/test_synth.py", "--phase", "development", "--reason", "开发验证")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         dev_unit = self.repo.latest_run_id()
         self.assertEqual(self.trace(self.serve_touch), 1)
         self.assertEqual(self.trace(self.unit_touch), 1)
 
         # 审查阶段：读取有效证据，不重跑
-        p = self.verify("run", "--group", "serve-check", "--phase", "review",
-                        "--reason", "独立审查读取有效证据")
+        p = self.verify("run", "--group", "serve-check", "--phase", "review", "--reason", "独立审查读取有效证据")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         review_serve = self.record()
         self.assertEqual(self.group(review_serve, "serve-check")["outcome"], "reused")
         self.assertEqual(self.decision(review_serve, "serve-check")["source_run_id"], dev_serve)
         self.assertEqual(self.trace(self.serve_touch), 1, "审查阶段没有重新执行 serve-check")
 
-        p = self.verify("run", "unit-related", "tests/test_synth.py", "--phase", "review",
-                        "--reason", "独立审查读取有效证据")
+        p = self.verify(
+            "run", "unit-related", "tests/test_synth.py", "--phase", "review", "--reason", "独立审查读取有效证据"
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         review_unit = self.record()
         self.assertEqual(self.group(review_unit, "unit-related")["outcome"], "reused")
         self.assertEqual(self.decision(review_unit, "unit-related")["source_run_id"], dev_unit)
-        self.assertEqual(self.group(review_unit, "unit-related")["reuse"]["source_scope"]["selectors"],
-                         ["tests/test_synth.py", "tests/test_i18n_catalog_contract.py"])
+        self.assertEqual(
+            self.group(review_unit, "unit-related")["reuse"]["source_scope"]["selectors"],
+            ["tests/test_synth.py", "tests/test_i18n_catalog_contract.py"],
+        )
         self.assertEqual(self.trace(self.unit_touch), 1, "审查阶段没有重新执行相关单元")
 
         # PR 整理（manual 阶段）：继续引用，且来源是实际执行的记录而不是复用记录
-        p = self.verify("run", "--group", "serve-check", "--phase", "manual",
-                        "--reason", "PR 整理，引用已有验证")
+        p = self.verify("run", "--group", "serve-check", "--phase", "manual", "--reason", "PR 整理，引用已有验证")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         tidy = self.record()
         self.assertEqual(self.group(tidy, "serve-check")["outcome"], "reused")
-        self.assertEqual(self.decision(tidy, "serve-check")["source_run_id"], dev_serve,
-                         "复用来源必须是实际执行的记录，不能链式引用另一条复用记录")
+        self.assertEqual(
+            self.decision(tidy, "serve-check")["source_run_id"],
+            dev_serve,
+            "复用来源必须是实际执行的记录，不能链式引用另一条复用记录",
+        )
         self.assertEqual(self.trace(self.serve_touch), 1)
-        self.assertEqual(self.trace(self.unit_touch), 1,
-                         "开发验证 → 审查 → PR 整理全程 0 次重复执行")
+        self.assertEqual(self.trace(self.unit_touch), 1, "开发验证 → 审查 → PR 整理全程 0 次重复执行")
 
         # 引用不重复计入通过数量：引用组的检查数不计入 result.counts
         self.assertEqual(review_serve["result"]["counts"]["checks"], 0)
@@ -3548,8 +3762,7 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         self.assertTrue(tidy["result"]["usable_as_evidence"])
 
         # pr 门禁：按口径必须实际执行，不引用
-        p = self.verify("run", "--group", "serve-check", "--phase", "pr",
-                        "--reason", "PR 收敛门禁")
+        p = self.verify("run", "--group", "serve-check", "--phase", "pr", "--reason", "PR 收敛门禁")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         gate = self.record()
         self.assertEqual(self.group(gate, "serve-check")["outcome"], "passed")
@@ -3647,8 +3860,9 @@ class EvidenceReuseTests(VerifyEntryTestCase):
             with self.subTest(session=session):
                 p = self.verify("run", "--group", "serve-check", "--phase", "development", "--no-reuse")
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-                p = self.verify("run", "--group", "serve-check", "--phase", "review",
-                                extra_env={"AE_VERIFY_SESSION": session})
+                p = self.verify(
+                    "run", "--group", "serve-check", "--phase", "review", extra_env={"AE_VERIFY_SESSION": session}
+                )
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 decision = self.decision(self.record(), "serve-check")
                 self.assertEqual(decision["decision"], "run")
@@ -3673,8 +3887,9 @@ class EvidenceReuseTests(VerifyEntryTestCase):
 
     def test_session_identity_is_hashed_in_the_record(self):
         secret = "synthetic-private-chat-identity"
-        p = self.verify("run", "--group", "serve-check", "--phase", "development",
-                        extra_env={"AE_VERIFY_SESSION": secret})
+        p = self.verify(
+            "run", "--group", "serve-check", "--phase", "development", extra_env={"AE_VERIFY_SESSION": secret}
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         record = self.record()
         self.assertEqual(record["context"]["session"]["source"], "AE_VERIFY_SESSION")
@@ -3709,8 +3924,7 @@ class EvidenceReuseTests(VerifyEntryTestCase):
 
     def test_environment_change_invalidates_evidence(self):
         self.verify("run", "--group", "serve-check", "--phase", "development")
-        p = self.verify("run", "--group", "serve-check", "--phase", "review",
-                        extra_env={"AE_LOCALE": "fr"})
+        p = self.verify("run", "--group", "serve-check", "--phase", "review", extra_env={"AE_LOCALE": "fr"})
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         item = self.decision(self.record(), "serve-check")
         self.assertEqual(item["decision"], "run")
@@ -3720,8 +3934,7 @@ class EvidenceReuseTests(VerifyEntryTestCase):
     def test_baseline_change_invalidates_evidence(self):
         first_commit = self.repo.git("rev-parse", "HEAD~1").stdout.strip()
         self.verify("run", "--group", "serve-check", "--phase", "development")
-        p = self.verify("run", "--group", "serve-check", "--phase", "review",
-                        "--baseline", first_commit)
+        p = self.verify("run", "--group", "serve-check", "--phase", "review", "--baseline", first_commit)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         item = self.decision(self.record(), "serve-check")
         self.assertEqual(item["decision"], "run")
@@ -3750,8 +3963,9 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         item = self.decision(self.record(), "serve-check")
         self.assertEqual(item["decision"], "run")
         self.assertEqual(len(item["attempts"]), 5)
-        self.assertEqual(item["attempts"][0]["reason"], item["reason"],
-                         "主原因取最新候选，attempts 也必须以最新候选开头")
+        self.assertEqual(
+            item["attempts"][0]["reason"], item["reason"], "主原因取最新候选，attempts 也必须以最新候选开头"
+        )
 
     def test_newest_group_rejection_precedes_older_general_rejection(self):
         self.repo.write("tests/test_extra.py", UNIT_TOUCH)
@@ -3789,15 +4003,15 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         self.assertEqual(self.trace(self.serve_touch), 2)
 
     def test_sources_that_are_not_passes_are_rejected(self):
-        self.repo.write("skill/annotation-everything/scripts/serve.py",
-                        SERVE_TOUCH_STUB.replace('SYNTH_SERVE_FAILED", "0"',
-                                                 'SYNTH_SERVE_FAILED", "1"'),
-                        executable=True)
+        self.repo.write(
+            "skill/annotation-everything/scripts/serve.py",
+            SERVE_TOUCH_STUB.replace('SYNTH_SERVE_FAILED", "0"', 'SYNTH_SERVE_FAILED", "1"'),
+            executable=True,
+        )
         self.repo.commit_all("自检失败形态")
         p = self.verify("run", "--group", "serve-check", "--phase", "development")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        self.repo.write("skill/annotation-everything/scripts/serve.py",
-                        SERVE_TOUCH_STUB, executable=True)
+        self.repo.write("skill/annotation-everything/scripts/serve.py", SERVE_TOUCH_STUB, executable=True)
         self.repo.commit_all("自检恢复")
         p = self.verify("run", "--group", "serve-check", "--phase", "review")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -3869,10 +4083,12 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         map_v8 = Path(self.temp.name) / "map-v8.json"
         map_v7.write_text(json.dumps(payload_v7), encoding="utf-8")
         map_v8.write_text(json.dumps(payload_v8), encoding="utf-8")
-        self.verify("run", "--group", "serve-check", "--phase", "development",
-                    extra_env={"AE_SELECTION_MAP": str(map_v7)})
-        p = self.verify("run", "--group", "serve-check", "--phase", "review",
-                        extra_env={"AE_SELECTION_MAP": str(map_v8)})
+        self.verify(
+            "run", "--group", "serve-check", "--phase", "development", extra_env={"AE_SELECTION_MAP": str(map_v7)}
+        )
+        p = self.verify(
+            "run", "--group", "serve-check", "--phase", "review", extra_env={"AE_SELECTION_MAP": str(map_v8)}
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         item = self.decision(self.record(), "serve-check")
         self.assertEqual(item["decision"], "run")
@@ -3883,8 +4099,7 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         self.repo.write("tests/test_extra.py", UNIT_TOUCH)
         self.repo.commit_all("新增合成模块")
         self.verify("run", "unit-related", "tests/test_synth.py", "--phase", "development")
-        p = self.verify("run", "unit-related", "tests/test_synth.py", "tests/test_extra.py",
-                        "--phase", "review")
+        p = self.verify("run", "unit-related", "tests/test_synth.py", "tests/test_extra.py", "--phase", "review")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         item = self.decision(self.record(), "unit-related")
         self.assertEqual(item["decision"], "run")
@@ -3903,10 +4118,8 @@ class EvidenceReuseTests(VerifyEntryTestCase):
 
     def test_host_state_groups_are_never_reused(self):
         """依赖宿主机状态的组指纹相同也不复用；纯逻辑组在同一记录里照常复用。"""
-        self.verify("run", "--group", "browser", "--group", "serve-check",
-                    "--phase", "development")
-        p = self.verify("run", "--group", "browser", "--group", "serve-check",
-                        "--phase", "review")
+        self.verify("run", "--group", "browser", "--group", "serve-check", "--phase", "development")
+        p = self.verify("run", "--group", "browser", "--group", "serve-check", "--phase", "review")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         record = self.record()
         browser = self.decision(record, "browser")
@@ -3956,8 +4169,7 @@ class EvidenceReuseTests(VerifyEntryTestCase):
     def test_report_shows_the_reuse_chain(self):
         self.verify("run", "--group", "serve-check", "--phase", "development")
         first = self.repo.latest_run_id()
-        self.verify("run", "--group", "serve-check", "--phase", "review",
-                    "--reason", "独立审查")
+        self.verify("run", "--group", "serve-check", "--phase", "review", "--reason", "独立审查")
         second = self.repo.latest_run_id()
         p = self.repo.run_verify("report", "--run", second)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -4018,8 +4230,9 @@ class EvidenceReuseTests(VerifyEntryTestCase):
             with self.subTest(change=change):
                 payload = json.loads(original)
                 if change == "freshness":
-                    payload["ended_at"] = (datetime.datetime.now(datetime.timezone.utc)
-                                           - datetime.timedelta(hours=25)).isoformat()
+                    payload["ended_at"] = (
+                        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=25)
+                    ).isoformat()
                 elif change == "environment":
                     payload["environment"]["os"]["system"] = "synthetic-other-os"
                 elif change == "session":
@@ -4039,9 +4252,10 @@ class EvidenceReuseTests(VerifyEntryTestCase):
         source = policy.read_text(encoding="utf-8")
         marker = '    context = record.get("context") or {}\n'
         self.assertIn(marker, source)
-        policy.write_text(source.replace(marker,
-            '    __import__("signal").raise_signal(__import__("signal").SIGTERM)\n' + marker),
-            encoding="utf-8")
+        policy.write_text(
+            source.replace(marker, '    __import__("signal").raise_signal(__import__("signal").SIGTERM)\n' + marker),
+            encoding="utf-8",
+        )
         self.repo.commit_all("合成规划期间取消")
         p = self.verify("run", "--group", "serve-check", "--phase", "review")
         self.assertEqual(p.returncode, 128 + signal.SIGTERM, p.stdout + p.stderr)
@@ -4092,8 +4306,9 @@ class EvidenceReuseTests(VerifyEntryTestCase):
 class ParallelUnitTests(VerifyEntryTestCase):
     def prepare_parallel_suite(self, extra=""):
         for index in range(7):
-            self.repo.write("tests/test_unclassified_%s.py" % index,
-                            UNIT_PASS.replace("AlphaTests", "Unclassified%sTests" % index))
+            self.repo.write(
+                "tests/test_unclassified_%s.py" % index, UNIT_PASS.replace("AlphaTests", "Unclassified%sTests" % index)
+            )
         self.repo.write("tests/test_handoff_i18n.py", UNIT_PASS + extra)
         self.repo.commit_all("合成并行验证集合")
 
@@ -4128,9 +4343,12 @@ class ParallelUnitTests(VerifyEntryTestCase):
     @unittest.skipUnless(hasattr(os, "fork"), "Windows 首期串行执行，不启动 fork 并行 worker")
     def test_killed_worker_leaves_unusable_evidence_instead_of_false_success(self):
         self.prepare_parallel_suite()
-        self.repo.write("tests/test_handoff_i18n.py", "import unittest, os, signal\n"
-                        "class KilledTests(unittest.TestCase):\n"
-                        "    def test_killed(self): os.kill(os.getpid(), signal.SIGKILL)\n")
+        self.repo.write(
+            "tests/test_handoff_i18n.py",
+            "import unittest, os, signal\n"
+            "class KilledTests(unittest.TestCase):\n"
+            "    def test_killed(self): os.kill(os.getpid(), signal.SIGKILL)\n",
+        )
         result = self.repo.run_verify("run", "--no-reuse")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
@@ -4147,12 +4365,14 @@ class ParallelUnitTests(VerifyEntryTestCase):
         self.assertEqual(record["environment"]["config_summary"]["verification_execution"], "serial")
 
     def test_browser_signal_exit_codes_keep_the_actual_signal(self):
-        signals = [sig for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None),
-                                   getattr(signal, "SIGBREAK", None)) if sig is not None]
+        signals = [
+            sig
+            for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None), getattr(signal, "SIGBREAK", None))
+            if sig is not None
+        ]
         for sig in signals:
             with self.subTest(signal=sig):
-                stub = BROWSER_STUB.replace("sys.exit(1 if failed else 0)",
-                                            "sys.exit(%s)" % (128 + sig))
+                stub = BROWSER_STUB.replace("sys.exit(1 if failed else 0)", "sys.exit(%s)" % (128 + sig))
                 self.repo.write("tests/e2e_browser.py", stub, executable=True)
                 result = self.repo.run_verify("run", "--group", "browser", "--no-reuse")
                 self.assertEqual(result.returncode, 128 + sig, result.stdout + result.stderr)
@@ -4165,11 +4385,14 @@ class ParallelUnitTests(VerifyEntryTestCase):
     def test_cancellation_preserves_the_actual_unittest_failure_from_a_worker(self):
         self.prepare_parallel_suite()
         # 正常路径只按失败证据同步；较长上限仅在夹具故障时防止遗留无限等待。
-        self.repo.write("tests/test_unclassified_0.py", "import time, unittest\n"
-                        "class WaitingTests(unittest.TestCase):\n"
-                        "    def test_wait(self):\n"
-                        "        deadline = time.monotonic() + 60\n"
-                        "        while time.monotonic() < deadline: time.sleep(.01)\n")
+        self.repo.write(
+            "tests/test_unclassified_0.py",
+            "import time, unittest\n"
+            "class WaitingTests(unittest.TestCase):\n"
+            "    def test_wait(self):\n"
+            "        deadline = time.monotonic() + 60\n"
+            "        while time.monotonic() < deadline: time.sleep(.01)\n",
+        )
 
         def cancel_run(process):
             if process.poll() is None:
@@ -4178,25 +4401,37 @@ class ParallelUnitTests(VerifyEntryTestCase):
                 process.communicate(timeout=20)
             except subprocess.TimeoutExpired:
                 _reap(process)
+
         # 注入调度延迟模拟高负载；同步条件始终是失败记录已落盘，不是等待若干秒。
         for delay in (0.0, 0.3, 1.0):
             with self.subTest(worker_delay=delay):
-                self.repo.write("tests/test_handoff_i18n.py", "import time, unittest\n"
-                                "class PartialTests(unittest.TestCase):\n"
-                                "    def test_a_original_failure(self):\n"
-                                "        time.sleep(%r)\n"
-                                "        self.fail('original synthetic failure')\n" % delay)
+                self.repo.write(
+                    "tests/test_handoff_i18n.py",
+                    "import time, unittest\n"
+                    "class PartialTests(unittest.TestCase):\n"
+                    "    def test_a_original_failure(self):\n"
+                    "        time.sleep(%r)\n"
+                    "        self.fail('original synthetic failure')\n" % delay,
+                )
                 worker_temp = Path(self.temp.name) / ("worker-temp-%s" % delay)
                 worker_temp.mkdir()
                 env = self.repo.git_env
                 env.pop("AE_HELD_LOCKS", None)
                 env.pop("AE_VERIFY_DIR", None)
-                env.update(AE_LOCK_DIR=str(self.test_lock_dir),
-                           AE_HOME=str(Path(self.temp.name) / "ledger"), TMPDIR=str(worker_temp))
+                env.update(
+                    AE_LOCK_DIR=str(self.test_lock_dir),
+                    AE_HOME=str(Path(self.temp.name) / "ledger"),
+                    TMPDIR=str(worker_temp),
+                )
                 wrapper = subprocess.Popen(
                     [sys.executable, str(self.repo.path / "verify.py"), "run", "--no-reuse"],
-                    cwd=self.repo.path, env=env, stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE, text=True, start_new_session=True)
+                    cwd=self.repo.path,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                )
                 self.addCleanup(cancel_run, wrapper)
                 persisted_failure = False
                 deadline = time.monotonic() + 30
@@ -4208,13 +4443,14 @@ class ParallelUnitTests(VerifyEntryTestCase):
                         except (OSError, ValueError):
                             continue
                         persisted_failure = any(
-                            case.get("id", "").endswith("test_a_original_failure")
-                            and case.get("status") == "failed" for case in payload.get("cases", []))
+                            case.get("id", "").endswith("test_a_original_failure") and case.get("status") == "failed"
+                            for case in payload.get("cases", [])
+                        )
                         if persisted_failure:
                             break
                     if persisted_failure:
                         break
-                    time.sleep(.01)
+                    time.sleep(0.01)
                 self.assertTrue(persisted_failure, "必须先观察到工作进程已落盘的原始失败再取消")
                 wrapper.terminate()
                 out, err = wrapper.communicate(timeout=30)
@@ -4223,12 +4459,16 @@ class ParallelUnitTests(VerifyEntryTestCase):
                 self.assertEqual(record["result"]["outcome"], "interrupted")
                 self.assertFalse(record["result"]["usable_as_evidence"])
                 self.assertEqual(record["groups"][0]["execution"]["jobs"], 3)
-                failure = next((case for case in record["groups"][0]["cases"]
-                                if case["id"].endswith("test_a_original_failure")), None)
+                failure = next(
+                    (case for case in record["groups"][0]["cases"] if case["id"].endswith("test_a_original_failure")),
+                    None,
+                )
                 self.assertIsNotNone(failure, json.dumps(record, ensure_ascii=False))
                 self.assertEqual(failure["status"], "failed")
-                self.assertIn("original synthetic failure", (self.repo.artifact_dir / "runs" /
-                              record["run_id"] / "unit.log").read_text(encoding="utf-8"))
+                self.assertIn(
+                    "original synthetic failure",
+                    (self.repo.artifact_dir / "runs" / record["run_id"] / "unit.log").read_text(encoding="utf-8"),
+                )
 
 
 class WindowsVerificationContractTests(VerifyEntryTestCase):
@@ -4243,11 +4483,14 @@ class WindowsVerificationContractTests(VerifyEntryTestCase):
         proc.poll.return_value = 0
         proc.wait.return_value = 0
         entry = ctx.registry.register(proc, "synthetic", job=42)
-        with mock.patch.object(verify.os, "name", "nt"), \
-                mock.patch.object(verify, "_win32_job_active_processes", side_effect=[1, 1, 0]), \
-                mock.patch.object(verify, "_terminate_win32_job", return_value=True) as terminate, \
-                mock.patch.object(verify, "_close_win32_job") as close, \
-                mock.patch.object(ctx, "save_children"), mock.patch.object(verify.time, "sleep"):
+        with (
+            mock.patch.object(verify.os, "name", "nt"),
+            mock.patch.object(verify, "_win32_job_active_processes", side_effect=[1, 1, 0]),
+            mock.patch.object(verify, "_terminate_win32_job", return_value=True) as terminate,
+            mock.patch.object(verify, "_close_win32_job") as close,
+            mock.patch.object(ctx, "save_children"),
+            mock.patch.object(verify.time, "sleep"),
+        ):
             ctx.abort(signal.SIGTERM)
         terminate.assert_called_once_with(42)
         close.assert_called_once_with(entry)
@@ -4262,12 +4505,14 @@ class WindowsVerificationContractTests(VerifyEntryTestCase):
         proc.poll.return_value = 0
         proc.wait.return_value = 0
         entry = ctx.registry.register(proc, "synthetic", job=42)
-        with mock.patch.object(verify.os, "name", "nt"), \
-                mock.patch.object(verify, "_win32_job_active_processes", return_value=None), \
-                mock.patch.object(verify, "_terminate_win32_job", return_value=True), \
-                mock.patch.object(verify, "KILL_GRACE_SECONDS", 0), \
-                mock.patch.object(verify, "_close_win32_job") as close, \
-                mock.patch.object(ctx, "save_children"):
+        with (
+            mock.patch.object(verify.os, "name", "nt"),
+            mock.patch.object(verify, "_win32_job_active_processes", return_value=None),
+            mock.patch.object(verify, "_terminate_win32_job", return_value=True),
+            mock.patch.object(verify, "KILL_GRACE_SECONDS", 0),
+            mock.patch.object(verify, "_close_win32_job") as close,
+            mock.patch.object(ctx, "save_children"),
+        ):
             ctx.abort(signal.SIGTERM)
         close.assert_not_called()
         self.assertFalse(entry["reaped"])
@@ -4298,7 +4543,9 @@ class WindowsVerificationContractTests(VerifyEntryTestCase):
                     f"while not Path({str(release)!r}).exists(): time.sleep(0.01)\n"
                     f"subprocess.Popen([sys.executable, '-c', {child_code!r}], "
                     "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-                    "time.sleep(60)\n", encoding="utf-8")
+                    "time.sleep(60)\n",
+                    encoding="utf-8",
+                )
                 ctx = verify.RunContext(mode, root / "artifacts", 2, None, True)
                 ctx.run_dir.mkdir(parents=True)
                 real_assign = verify._assign_win32_job
@@ -4317,26 +4564,34 @@ class WindowsVerificationContractTests(VerifyEntryTestCase):
                 self.addCleanup(_reap, outsider)
                 try:
                     if mode == "abort":
-                        proc = subprocess.Popen([sys.executable, str(script)],
-                                                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+                        proc = subprocess.Popen(
+                            [sys.executable, str(script)], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                        )
                         self.addCleanup(_reap, proc)
                         job = assign_then_spawn(proc)
                         ctx.registry.register(proc, "synthetic", job=job)
                         ctx.abort(signal.SIGBREAK)
                     else:
-                        group = verify.Group(name="synthetic", title="Synthetic", purpose="Synthetic",
-                                             argv=[sys.executable, str(script)], equivalent="synthetic",
-                                             counter="log", resources=("host-state",))
+                        group = verify.Group(
+                            name="synthetic",
+                            title="Synthetic",
+                            purpose="Synthetic",
+                            argv=[sys.executable, str(script)],
+                            equivalent="synthetic",
+                            counter="log",
+                            resources=("host-state",),
+                        )
                         handle = mock.Mock(waited_seconds=0.0)
                         handle.file_descriptors.return_value = ()
 
                         def check_before_unlock(_handle):
-                            self.assertFalse(pid_alive(int(child_ready.read_text())),
-                                             "释放资源锁前后代必须已经退出")
+                            self.assertFalse(pid_alive(int(child_ready.read_text())), "释放资源锁前后代必须已经退出")
 
-                        with mock.patch.object(verify, "_assign_win32_job", side_effect=assign_then_spawn), \
-                                mock.patch.object(verify.host_isolation, "acquire", return_value=handle), \
-                                mock.patch.object(verify.host_isolation, "release", side_effect=check_before_unlock):
+                        with (
+                            mock.patch.object(verify, "_assign_win32_job", side_effect=assign_then_spawn),
+                            mock.patch.object(verify.host_isolation, "acquire", return_value=handle),
+                            mock.patch.object(verify.host_isolation, "release", side_effect=check_before_unlock),
+                        ):
                             result = verify.execute_group(group, ctx)
                         self.assertEqual(result["outcome"], "timeout")
                     self.assertFalse(pid_alive(int(child_ready.read_text())))
@@ -4350,8 +4605,9 @@ class WindowsVerificationContractTests(VerifyEntryTestCase):
 
     def test_missing_fork_forces_serial_execution_and_records_serial_summary(self):
         for index in range(7):
-            self.repo.write("tests/test_serial_extra_%s.py" % index,
-                            UNIT_PASS.replace("AlphaTests", "SerialExtra%sTests" % index))
+            self.repo.write(
+                "tests/test_serial_extra_%s.py" % index, UNIT_PASS.replace("AlphaTests", "SerialExtra%sTests" % index)
+            )
         self.repo.write("tests/test_handoff_i18n.py", UNIT_PASS)
         self.repo.commit_all("合成无 fork 串行验证集合")
         injection = Path(self.temp.name) / "no-fork"
@@ -4378,13 +4634,23 @@ class WindowsVerificationContractTests(VerifyEntryTestCase):
             with mock.patch.object(verify.signal, "SIGHUP", None, create=True):
                 # 触发 hasattr/getattr 保护，不应因 SIGHUP 为 None 报 TypeError/AttributeError
                 outcome, code = verify.classify_group(
-                    group, 128 + int(signal.SIGINT), False, {"total": 1, "passed": 0, "failed": 0},
-                    None, None, False,
+                    group,
+                    128 + int(signal.SIGINT),
+                    False,
+                    {"total": 1, "passed": 0, "failed": 0},
+                    None,
+                    None,
+                    False,
                 )
         else:
             outcome, code = verify.classify_group(
-                group, 128 + int(signal.SIGINT), False, {"total": 1, "passed": 0, "failed": 0},
-                None, None, False,
+                group,
+                128 + int(signal.SIGINT),
+                False,
+                {"total": 1, "passed": 0, "failed": 0},
+                None,
+                None,
+                False,
             )
         self.assertEqual(outcome, verify.INTERRUPTED)
         self.assertEqual(code, 128 + int(signal.SIGINT))
@@ -4416,8 +4682,10 @@ class WindowsVerificationContractTests(VerifyEntryTestCase):
         import unittest.mock as mock
         import verify
 
-        with mock.patch.object(verify.os, "name", "nt"), \
-             mock.patch.object(verify.shutil, "which", return_value=r"C:\synth\bin\uv.cmd") as which_mock:
+        with (
+            mock.patch.object(verify.os, "name", "nt"),
+            mock.patch.object(verify.shutil, "which", return_value=r"C:\synth\bin\uv.cmd") as which_mock,
+        ):
             argv = verify._resolve_command_argv(["uv", "run", "tests/e2e_browser.py"], {"PATH": r"C:\synth\bin"})
         self.assertEqual(argv, [r"C:\synth\bin\uv.cmd", "run", "tests/e2e_browser.py"])
         which_mock.assert_called_once_with("uv", path=r"C:\synth\bin")
@@ -4540,10 +4808,12 @@ class WindowsVerificationContractTests(VerifyEntryTestCase):
         fake_subprocess.STDOUT = subprocess.STDOUT
         fake_subprocess.STARTUPINFO = mock.MagicMock()
 
-        with mock.patch("verify.os.name", "nt"), \
-                mock.patch("verify.os.set_inheritable", side_effect=lambda fd, flag: calls.append((fd, flag))), \
-                mock.patch.dict(sys.modules, {"msvcrt": FakeMsvcrt}), \
-                mock.patch.object(verify, "subprocess", fake_subprocess):
+        with (
+            mock.patch("verify.os.name", "nt"),
+            mock.patch("verify.os.set_inheritable", side_effect=lambda fd, flag: calls.append((fd, flag))),
+            mock.patch.dict(sys.modules, {"msvcrt": FakeMsvcrt}),
+            mock.patch.object(verify, "subprocess", fake_subprocess),
+        ):
             with self.assertRaises(OSError):
                 verify._execute_group_body(group, ctx, lock_fds=(101, 102))
         self.assertEqual(calls, [(101, True), (102, True), (101, False), (102, False)])

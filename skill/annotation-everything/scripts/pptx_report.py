@@ -4,6 +4,7 @@
 显示产物，不进入任何回写依据。渲染走本机 LibreOffice → Poppler 管线，工具
 缺失、执行失败、超时、页数不符或输出为空时明确失败，不静默退回纯文本页面。
 """
+
 from __future__ import annotations
 
 import base64
@@ -22,7 +23,7 @@ FORMAT_VERSION = 1
 # 一页幻灯片的 EMU 转 96dpi 舞台像素：1 英寸 = 914400 EMU = 96 px
 EMU_PER_PX = 9525
 
-SOFFICE_TIMEOUT = 180   # 大 deck 的 PDF 转换较慢，超时按分钟计
+SOFFICE_TIMEOUT = 180  # 大 deck 的 PDF 转换较慢，超时按分钟计
 RASTER_TIMEOUT = 60
 SOFFICE_CANDIDATES = ("/Applications/LibreOffice.app/Contents/MacOS/soffice",)
 RENDER_TOOL = "libreoffice+poppler"
@@ -109,6 +110,7 @@ def windows_poppler_dirs() -> list[Path]:
 def find_soffice() -> str | None:
     """本机 LibreOffice 可执行文件：先看 PATH，再试常见安装位置；没有返回 None。"""
     from shutil import which
+
     found = which("soffice")
     if found:
         return found
@@ -125,6 +127,7 @@ def find_soffice() -> str | None:
 def find_rasterizer() -> str | None:
     """本机 Poppler pdftoppm：先看 PATH，Windows 再探测常见 Poppler 安装目录。"""
     from shutil import which
+
     found = which("pdftoppm")
     if found:
         return found
@@ -148,7 +151,13 @@ def render_slides(pptx: Path, workdir: Path) -> list[bytes]:
     try:
         done = subprocess.run(
             [soffice, "--headless", "--norestore", "--convert-to", "pdf", "--outdir", str(workdir), str(pptx)],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=SOFFICE_TIMEOUT, check=False)
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=SOFFICE_TIMEOUT,
+            check=False,
+        )
     except subprocess.TimeoutExpired:
         raise PptxReportError("timeout", "soffice") from None
     except OSError as exc:
@@ -162,9 +171,15 @@ def render_slides(pptx: Path, workdir: Path) -> list[bytes]:
         raise PptxReportError("noRasterizer")
     prefix = workdir / "slide"
     try:
-        done = subprocess.run([rasterizer, "-png", "-r", "96", str(pdf), str(prefix)],
-                              capture_output=True, text=True, encoding="utf-8", errors="replace",
-                              timeout=RASTER_TIMEOUT, check=False)
+        done = subprocess.run(
+            [rasterizer, "-png", "-r", "96", str(pdf), str(prefix)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=RASTER_TIMEOUT,
+            check=False,
+        )
     except subprocess.TimeoutExpired:
         raise PptxReportError("timeout", "pdftoppm") from None
     except OSError as exc:
@@ -189,8 +204,16 @@ def font_evidence(pptx: Path, pdf: Path | None) -> dict:
     """
     import check_pptx_fonts as fonts
 
-    evidence: dict = {"declared": [], "missing": [], "unresolved": [], "fallbacks": [],
-                      "installed": "ok", "pdf": None, "review": False, "warning": False}
+    evidence: dict = {
+        "declared": [],
+        "missing": [],
+        "unresolved": [],
+        "fallbacks": [],
+        "installed": "ok",
+        "pdf": None,
+        "review": False,
+        "warning": False,
+    }
     declared: list[str] = []
     fallbacks: list[str] = []
     try:
@@ -210,8 +233,9 @@ def font_evidence(pptx: Path, pdf: Path | None) -> dict:
         if warning:
             evidence["warning"] = True
     evidence["fallbacks"] = fallbacks
-    evidence["declared"] = [{"font": name, "found": installed is not None and fonts.normal(name) in installed}
-                            for name in declared]
+    evidence["declared"] = [
+        {"font": name, "found": installed is not None and fonts.normal(name) in installed} for name in declared
+    ]
     if installed is not None:
         evidence["missing"] = [name for name in declared if fonts.normal(name) not in installed]
     if evidence["missing"] or evidence["unresolved"] or not declared or evidence["installed"] != "ok":
@@ -267,10 +291,12 @@ def _slide_title(slide: dict) -> str:
 
 def _section_html(slide: dict, image: bytes, width, height, title: str) -> str:
     uri = "data:image/png;base64," + base64.b64encode(image).decode("ascii")
-    return (f'<section class="page pptx-page" data-slide="{html.escape(slide["key"])}" '
-            f'style="width:{width}px;height:{height}px">'
-            f'<img class="pptx-render" src="{uri}" alt="{html.escape(title)}">'
-            f"</section>")
+    return (
+        f'<section class="page pptx-page" data-slide="{html.escape(slide["key"])}" '
+        f'style="width:{width}px;height:{height}px">'
+        f'<img class="pptx-render" src="{uri}" alt="{html.escape(title)}">'
+        f"</section>"
+    )
 
 
 def parts(report: Path) -> dict:
@@ -294,18 +320,36 @@ def parts(report: Path) -> dict:
     pages = []
     for slide, image in zip(slides, images):
         title = _slide_title(slide)
-        pages.append({"n": slide["n"], "key": slide["key"], "stable": True,
-                      "html": _section_html(slide, image, width, height, title),
-                      "title": title, "w": width, "h": height, "orient": canvas["orientation"]})
+        pages.append(
+            {
+                "n": slide["n"],
+                "key": slide["key"],
+                "stable": True,
+                "html": _section_html(slide, image, width, height, title),
+                "title": title,
+                "w": width,
+                "h": height,
+                "orient": canvas["orientation"],
+            }
+        )
     meta = {
-        "formatVersion": model["formatVersion"], "capabilityVersion": model["capabilityVersion"],
-        "fingerprint": model["fingerprint"], "canvas": canvas,
+        "formatVersion": model["formatVersion"],
+        "capabilityVersion": model["capabilityVersion"],
+        "fingerprint": model["fingerprint"],
+        "canvas": canvas,
         "renderer": {"tool": RENDER_TOOL, "pages": len(images), "status": "ok"},
         "fonts": fonts,
         "diagnostics": model["diagnostics"],
-        "slides": [{"n": s["n"], "key": s["key"], "part": s["part"],
-                    "notes": bool(s["notes"] and s["notes"].get("status") == "available"),
-                    "elements": s["elements"]} for s in slides],
+        "slides": [
+            {
+                "n": s["n"],
+                "key": s["key"],
+                "part": s["part"],
+                "notes": bool(s["notes"] and s["notes"].get("status") == "available"),
+                "elements": s["elements"],
+            }
+            for s in slides
+        ],
         "unverified": ["visual"] + (["fonts"] if fonts.get("warning") or fonts.get("installed") != "ok" else []),
     }
     title = pages[0]["title"] if pages else ""
@@ -341,6 +385,8 @@ def slide_parts(path: Path) -> list[tuple[str, int, str]]:
 def notes_by_slide(path: Path) -> dict[int, str]:
     """逐页演讲者备注正文（未提供外部讲稿时进讲稿侧）；没有备注的页不在结果里。"""
     model = pr.read(Path(path))
-    return {s["n"]: s["notes"]["text"] for s in model["slides"]
-            if isinstance(s.get("notes"), dict) and s["notes"].get("status") == "available"
-            and s["notes"].get("text")}
+    return {
+        s["n"]: s["notes"]["text"]
+        for s in model["slides"]
+        if isinstance(s.get("notes"), dict) and s["notes"].get("status") == "available" and s["notes"].get("text")
+    }
