@@ -344,7 +344,7 @@ class ExecutePlanTests(unittest.TestCase):
         plan = [ae.PlanItem("stop-orphans", "有残留服务", "结束残留服务", "--stop-orphans")]
         lines, acted = ae.execute_plan(plan, ctx, stop_orphans=True)
         self.assertTrue(acted)
-        self.assertIsNotNone(server.proc.poll(), "SIGTERM 后进程已退出")
+        self.assertIsNotNone(server.proc.poll(), lines)
         with self.assertRaises(OSError):
             socket.create_connection(("127.0.0.1", server.port), timeout=1)   # 端口已释放
         self.assertTrue(any(str(server.proc.pid) in line for line in lines), lines)

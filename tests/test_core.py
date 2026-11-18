@@ -3318,8 +3318,10 @@ class OverviewHandoffTests(unittest.TestCase):
         self.start_home(**kwargs)
 
     def start_request(self, rid=None, headers=None, body=None):
+        # 服务端有 5 秒启动期限，客户端要等到响应后再开始清理子进程。
         status, _, raw = serve._req(self.port, "POST", "/api/overview/start",
-                                    headers or self.same, body if body is not None else {"reviewId": rid or self.rid})
+                                    headers or self.same, body if body is not None else {"reviewId": rid or self.rid},
+                                    timeout=12)
         return status, json.loads(raw)
 
     def claim_port(self):
@@ -3448,7 +3450,8 @@ class OverviewHandoffTests(unittest.TestCase):
         port = self.claim_port()
         self.addCleanup(self.stop_started)
         status, body = self.start_request()
-        self.assertEqual((status, body["url"]), (200, f"http://127.0.0.1:{port}/"), body)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["url"], f"http://127.0.0.1:{port}/")
         self.assertFalse(body["hookConfigured"])
         self.assertEqual((body["agentDelivery"]["adapter"], body["agentDelivery"]["state"]), ("wait", "bound"))
         self.assertEqual((body["agentDelivery"]["receiver"]["harness"],

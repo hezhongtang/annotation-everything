@@ -114,7 +114,7 @@ class ForeignListener:
 
 
 class ServeProcess:
-    """真实 serve.py 子进程：状态文件写出即启动完成；stop() 优雅停止并确认端口已释放。"""
+    """等待自建 serve.py 发布状态并响应健康请求，停止后确认端口已释放。"""
 
     def __init__(self, review_dir: Path, ledger_home: Path):
         self.review_dir = review_dir
@@ -133,20 +133,23 @@ class ServeProcess:
 
     def _wait_ready(self) -> None:
         status_file = self.review_dir / ".annotation-server.json"
-        deadline = time.time() + 20
-        while time.time() < deadline:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
             if status_file.is_file():
                 try:
                     info = json.loads(status_file.read_text(encoding="utf-8"))
                 except ValueError:
                     info = {}
                 if info.get("pid") == self.proc.pid and info.get("port") == self.port:
-                    return
+                    # Windows 在写出状态文件后才安装停止事件并进入 HTTP 循环。
+                    health = ae.probe_port(self.port, timeout=0.5) or {}
+                    if health.get("pid") == self.proc.pid:
+                        return
             if self.proc.poll() is not None:
                 out, err = self.proc.communicate(timeout=10)
                 raise AssertionError(f"serve.py 启动即退出：{out}{err}")
             time.sleep(0.1)
-        raise AssertionError("serve.py 未在期限内写出状态文件")
+        raise AssertionError("serve.py 未在期限内发布状态并响应健康请求")
 
     def stop(self) -> None:
         if self.proc.poll() is None:
