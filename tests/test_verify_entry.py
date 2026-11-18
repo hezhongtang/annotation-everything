@@ -92,7 +92,8 @@ print("\\n%d/%d 通过" % (total - failed, total))
 sys.exit(1 if failed else 0)
 """
 
-# 合成浏览器入口：打印与 tests/e2e_browser.py 相同的 PASS / FAIL 行与摘要
+# 合成浏览器入口：打印与 tests/e2e_browser.py 相同的 PASS / FAIL 行与摘要。
+# 需要观察执行时长的用例通过 SYNTH_BROWSER_SECONDS 设置等待时间。
 BROWSER_STUB = """#!/usr/bin/env python3
 import os
 import sys
@@ -100,7 +101,7 @@ import time
 
 total = int(os.environ.get("SYNTH_BROWSER_TOTAL", "3"))
 failed = int(os.environ.get("SYNTH_BROWSER_FAILED", "0"))
-seconds = float(os.environ.get("SYNTH_BROWSER_SECONDS", "0.2"))
+seconds = float(os.environ.get("SYNTH_BROWSER_SECONDS", "0"))
 deadline = time.monotonic() + seconds
 while time.monotonic() < deadline:
     time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
@@ -1478,7 +1479,7 @@ def absolute_strings(value, found=None):
 
 class OtherGroupTests(VerifyEntryTestCase):
     def test_browser_group_times_as_a_whole_and_reserves_scenario_slots(self):
-        p = self.repo.run_verify("run", "--group", "browser")
+        p = self.repo.run_verify("run", "--group", "browser", extra_env={"SYNTH_BROWSER_SECONDS": "0.2"})
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         record = read_record(self.repo.artifact_dir, self.repo.latest_run_id())
         group = record["groups"][0]
