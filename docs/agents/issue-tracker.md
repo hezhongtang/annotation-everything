@@ -16,7 +16,7 @@ Infer the repo from `git remote -v`; `gh` does this automatically when run insid
 
 ## Issue lifecycle: issue → branch → PR → merge
 
-Every change reaches `main` through a squash-merged PR. The repository is public. The active GitHub ruleset `protect-main` requires a PR, squash merging and both required CI checks, and blocks deletion and force pushes to `main`; `protect-release-tags` blocks changes to and deletion of `v*` tags. Local hooks (`tools/setup-dev.sh`) also refuse commits on `main`, pushes to `main` and deleting `main`, and only let local `main` move to commits already on `origin/main`. Use an administrator bypass only with the user's explicit approval.
+Every change reaches `main` through a squash-merged PR. The repository is public. The active GitHub ruleset `protect-main` requires a PR, squash merging and the CI checks listed in the ruleset, and blocks deletion and force pushes to `main`; `protect-release-tags` blocks changes to and deletion of `v*` tags. Local hooks (`tools/setup-dev.sh`) also refuse commits on `main`, pushes to `main` and deleting `main`, and only let local `main` move to commits already on `origin/main`. Use an administrator bypass only with the user's explicit approval.
 
 1. **Create** from a template (`.github/ISSUE_TEMPLATE/`), labelled `needs-triage`.
 2. **Triage**: once the acceptance criteria and compatibility notes are complete, swap `needs-triage` for `ready-for-agent` (or `ready-for-human`). Missing details → `needs-info`. Agents pick up only `ready-for-agent` issues.

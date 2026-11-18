@@ -2700,7 +2700,8 @@ class SelectionPlanTests(VerifyEntryTestCase):
         plan = self.selection("--phase", "pr")
         self.assertIn("all", plan["suggested"]["groups"], "PR 收敛完成完整验收")
         notes = "\n".join(plan["suggested"]["notes"])
-        self.assertIn("CI", notes, "双 Python 全量与浏览器责任由 CI 说明")
+        self.assertIn("Python 3.12", notes)
+        self.assertNotIn("3.9", notes)
 
     def test_ci_phase_matches_matrix(self):
         self.repo.write("tools/synth-cli.py", "v1\n")

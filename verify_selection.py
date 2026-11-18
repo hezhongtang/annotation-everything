@@ -642,13 +642,13 @@ def _suggest_for_phase(phase: str, classified: dict, changes: dict, fallback: Op
         suggested["groups"] = ["all"]
         suggested["notes"] = [
             "PR 收敛完成完整验收：完整单元 + 服务安全自检 + 完整浏览器。",
-            "Python 3.9 / 3.12 双版本全量与服务安全自检由 CI 独立承担，本地结果不替代 CI。",
+            "CI 在 Linux 上使用 Python 3.12 执行完整单元和服务安全自检。",
         ]
         return suggested
     if phase == "ci":
         suggested["groups"] = ["unit", "serve-check"]
         suggested["notes"] = [
-            "CI 与现有矩阵一致：完整单元 + 服务安全自检；浏览器不在 CI 矩阵，由本地完整验收承担。",
+            "CI 在 Linux 上使用 Python 3.12 执行完整单元和服务安全自检。完整浏览器检查由本地 PR 验收执行。",
         ]
         return suggested
     # development / review / manual

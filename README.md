@@ -4,7 +4,7 @@
 
 ## Install: give this to your agent
 
-Copy this prompt to your agent to install the skill and check it. Formal support currently covers Python 3.9 or later on macOS or Linux; Windows 11 x64 native runtime, PowerShell CLI, and Windows CI (`unit` + `serve-check` on Python 3.9/3.12) are in place, while formal Windows 11 support awaits real Windows 11 desktop acceptance (Edge/Chrome E2E and live host Agent handoff).
+Copy this prompt to your agent to install the skill and check it. The skill supports Python 3.9 or later on macOS and Linux. The Windows 11 x64 runtime and PowerShell CLI are available. Formal Windows support awaits Edge/Chrome desktop testing and a live host Agent handoff.
 
 ```text
 Install the annotation-everything skill from https://github.com/hezhongtang/annotation-everything.
@@ -117,7 +117,7 @@ python "$S\serve.py" "$env:TEMP\ae-demo" --locale en
 - **Sync and shared drives**: Active review directories must reside on a local fixed disk (different drives such as `C:\` and `D:\` are supported). Do not run active reviews directly in OneDrive, SharePoint, iCloud, Dropbox, mapped network drives, or UNC paths (`\\server\share`); the tool does not claim automatic detection of third-party sync services. Copy materials to a local folder first (e.g., `Copy-Item "C:\Users\<user>\OneDrive\Deck\*" -Destination "D:\work\deck\" -Recurse`), review locally, and copy updated files back manually.
 - **Optional PPTX tools & font check**: LibreOffice (`soffice`) and Poppler (`pdftoppm` / `pdffonts`) are probed on `PATH` and standard Windows install locations (`Program Files`, `LocalAppData\Programs`). Missing optional tools never block HTML or DOCX review. When `fc-list` is absent on Windows, `check_pptx_fonts.py` falls back to the Windows font registry for installed-font enumeration while `pdffonts` still provides PDF font embedding evidence.
 - **Manual upgrades**: Phase 1 Windows skips automatic in-place updates (`update.py auto` is non-blocking). To upgrade manually, stop running review services, waiters, and overview home first, then run `python ae.py upgrade` from the source repository (add `--target <dir>` for a custom skills directory).
-- **Phase 1 boundaries & verification status**: Windows CI covers full `unit` and `serve-check` on Python 3.9 and 3.12; real Windows 11 x64 desktop acceptance (`e2e_browser.py` on Edge/Chrome and live host Agent handoff) requires an actual Windows 11 desktop environment. Windows 10, ARM64, Windows Server, WSL install paths, automatic updates, and arbitrary idle/closed-chat auto-wakeup remain out of scope.
+- **Windows CI** is paused. Windows 11 x64 desktop acceptance (`e2e_browser.py` on Edge/Chrome and live host Agent handoff) requires an actual Windows 11 desktop environment. Windows 10, ARM64, Windows Server, WSL install paths, automatic updates, and arbitrary idle/closed-chat auto-wakeup remain out of scope.
 
 </details>
 
@@ -321,7 +321,7 @@ The management command is `ae.py` at the repository root (Python standard librar
 
 ### Installation commands and maintenance options
 
-Prerequisites: Python 3.9 or later; formal support currently covers macOS or Linux (Windows 11 x64 PowerShell install, review, Office materials, capability-based handoff, and maintenance are covered in Windows CI `unit` + `serve-check`, pending final Windows 11 desktop acceptance).
+Installation requires Python 3.9 or later. Formal support covers macOS and Linux. Windows 11 x64 PowerShell installation, review, Office materials, capability-based handoff, and maintenance await final Windows desktop acceptance.
 
 ```bash
 python3 ae.py install                            # install: copy the skill into ~/.claude/skills/ (the skill copy)
@@ -574,7 +574,7 @@ GLOSSARY.md                        glossary
 
 After cloning, run `tools/setup-dev.sh` once to enable the git hooks (on Windows without `sh`, run `git config core.hooksPath tools/git-hooks`).
 
-Use two stages: during issue implementation, run only quick unit tests directly related to the change (targeting feedback within 60 seconds), plus configured lint and format checks, then open the PR and hand off. When the user invokes agents, perform the full code review, full unit suite, server security self-check and full browser suite. Full review, validation and CI must pass before merging. Windows CI runs full `unit` + `serve-check` serially on Python 3.9 and 3.12; `browser` (`tests/e2e_browser.py`, defaulting to `chrome` and supporting `AE_E2E_BROWSER_CHANNEL=msedge` for Edge) and live Windows 11 desktop Agent verification run on an actual Windows 11 desktop.
+Use two stages: during issue implementation, run only quick unit tests directly related to the change (targeting feedback within 60 seconds), plus configured lint and format checks, then open the PR and hand off. When the user invokes agents, perform the full code review, full unit suite, server security self-check and full browser suite. Full review, validation and CI must pass before merging. CI runs the full `unit` and `serve-check` groups on Linux with Python 3.12. Windows browser tests in the `browser` group (`tests/e2e_browser.py`, defaulting to `chrome` and supporting `AE_E2E_BROWSER_CHANNEL=msedge` for Edge) and live Windows 11 desktop Agent verification run on an actual Windows 11 desktop.
 
 Lint and formatting tools are not configured yet and will be introduced in a separate PR; record them as unconfigured, with `git diff --check` covering whitespace only. For quick-check scope, documentation-only changes, deferred slow checks and evidence requirements, see [AGENTS.md](AGENTS.md#开发与-pr-review) and the [verification onboarding guide](docs/verify/onboarding.md).
 

@@ -53,7 +53,7 @@
 ## 交接与总规格核对
 
 - A–G 与 H 的持续报告、只读 CI 汇总、周期 / 去重与策略维护已在基线主线中；维护入口见 [onboarding.md](onboarding.md)、[efficiency.md](efficiency.md)、[selection-strategy.md](selection-strategy.md)。报告只读现有记录，不额外启动产品测试；无新样本不重复回顾。
-- 当时的流程为开发先跑相关组，独立审查与 PR 整理读取有效证据，有疑点才点名补测。本轮同会话 `serve-check` 演示实际执行 1 组、跨 development → review → manual 引用 2 次，重复全量为 0；三个 run ID 和引用链保留于快照与证据包。这是纯安全自检的历史交接演示，host-state 结果仍不自动复用。当前流程把服务安全自检和全量门禁统一放到 PR review，历史演示不替代 `pr` 阶段及 Python 3.9 / 3.12 CI 的实际执行。
+- 当时的流程为开发先跑相关组，独立审查与 PR 整理读取有效证据，有疑点才点名补测。本轮同会话 `serve-check` 演示实际执行 1 组、跨 development → review → manual 引用 2 次，重复全量为 0；三个 run ID 和引用链保留于快照与证据包。这是纯安全自检的历史交接演示，host-state 结果仍不自动复用。当前流程把服务安全自检和全量门禁统一放到 PR review，历史演示不替代 `pr` 阶段及当前 CI 的实际执行。
 - 未知路径、未分类新增 / 删除 / 重命名、脏输入变化、过期 / 损坏证据、已确认或无法界定的遗漏继续保守扩大范围；普通影子候选保留待核实，不自动削减门禁。
 - 最终 PR 附实际完整门禁的 run ID、指纹、完整日志、双 Python CI 与独立标准 / 规格审查。中英 README 同步，记录契约已更新到入口 v2 的追加元数据；回退命令为 `AE_VERIFY_SERIAL=1 python3 verify.py run --group all --no-reuse`。
 - 本轮不改 skill 本体、产品版本、已有审阅协议和真实材料；运行时仍只使用标准库。127.0.0.1 监听、Host / Origin / JSON Content-Type、无 CORS 与路由边界继续由原完整安全检查覆盖。

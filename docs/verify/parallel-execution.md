@@ -26,6 +26,6 @@ fork 继承既有锁描述符，并建立各自的登记进程组；外部验证
 AE_VERIFY_SERIAL=1 python3 verify.py run --group all --no-reuse
 ```
 
-此命令保留完整单元、服务安全与完整浏览器，恢复顺序执行。`python3 -m unittest discover tests` 仍按旧方式执行；浏览器直接入口同样接受 `AE_VERIFY_SERIAL=1`。无需修改或删除测试。性能目标、独立审查、Python 3.9 / 3.12 完整 CI 和最终浏览器验收均保留。
+此命令保留完整单元、服务安全与完整浏览器，恢复顺序执行。`python3 -m unittest discover tests` 仍按旧方式执行；浏览器直接入口同样接受 `AE_VERIFY_SERIAL=1`。无需修改或删除测试。性能目标、独立审查、Linux Python 3.12 CI 和最终浏览器验收均保留。
 
 异常任务退出后，父级仍回收登记进程组中的受控服务；取消收尾保留任务已写出的部分记录。敏感单元在原进程执行，使用分离会话的执行器测试不进入独立任务。
