@@ -71,6 +71,7 @@ import review_overview  # noqa: E402
 import review_save  # noqa: E402
 import review_stop  # noqa: E402
 import video_review  # noqa: E402
+import video_source  # noqa: E402
 import wakeup  # noqa: E402
 
 APP = "annotation-everything"
@@ -99,6 +100,8 @@ FEATURES = [
     "docx",
     "pptx",
     "video",
+    "selective-handoff",
+    "video-source",
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
@@ -1163,6 +1166,53 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(chunk)
                 remaining -= len(chunk)
 
+    def _update_video_source(self, change: Any) -> dict[str, Any]:
+        """在台账元数据锁内改写 review.json 的 video.sourceProject，返回更新后的清单。
+
+        只在视频审阅上可用；其他格式（含旧审阅）在 change 前就拒绝，不碰清单。"""
+        with ledger.metadata_lock(self.server.review_dir, exclusive=True):
+            manifest_path = self.server.review_dir / MANIFEST
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                raise Reject(400, "no-video", self._t("serve.err.noApi")) from None
+            if not isinstance(manifest, dict) or not isinstance(manifest.get("video"), dict):
+                raise Reject(400, "no-video", self._t("serve.err.noApi"))
+            try:
+                updated = change(manifest)
+            except video_source.SourceError as error:
+                raise Reject(400, "bad-source-project", self._t("serve.err.sourceProject", reason=str(error))) from None
+            fsutil.atomic_write(
+                manifest_path,
+                json.dumps(updated, ensure_ascii=False, indent=2) + "\n",
+                prefix="." + MANIFEST + "-",
+            )
+            return updated
+
+    def _link_source_project(self, body: dict[str, Any]) -> None:
+        entry = body.get("entry")
+        payload = {"engine": body.get("engine"), "root": body.get("root"), "entry": entry}
+        for key in ("media", "filename", "candidates"):
+            if body.get(key) is not None:
+                payload[key] = body[key]
+        manifest = self._update_video_source(
+            lambda m: {**m, "video": video_source.link(m["video"], by="page", **payload)}
+        )
+        sp = video_source.public(manifest["video"]) or {}
+        self.server.log("info", f"video source-project status={sp.get('status')} engine={clean(sp.get('engine'))}")
+        self._json(200, {"sourceProject": sp, **self._ident()})
+
+    def _confirm_source_project(self, body: dict[str, Any]) -> None:
+        choice = body.get("choice")
+        if choice is not None and not isinstance(choice, str):
+            raise Reject(400, "bad-request", self._t("serve.err.sourceProjectBody"))
+        manifest = self._update_video_source(
+            lambda m: {**m, "video": video_source.confirm(m["video"], choice=choice, by="page")}
+        )
+        sp = video_source.public(manifest["video"]) or {}
+        self.server.log("info", f"video source-project confirmed engine={clean(sp.get('engine'))}")
+        self._json(200, {"sourceProject": sp, **self._ident()})
+
     def _api(self, path: str) -> None:
         cmd = "GET" if self.command == "HEAD" else self.command
         if self.server.home_id is not None:
@@ -1205,6 +1255,18 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"videoVersion": version, **self._ident()})
         elif video_media is not None and cmd == "GET":
             self._video_media(video_media.group(1))
+        elif path == "/api/video/source-project" and cmd == "GET":
+            video = self.server.manifest().get("video")
+            self._json(
+                200,
+                {"sourceProject": video_source.public(video) if isinstance(video, dict) else None, **self._ident()},
+            )
+        elif path == "/api/video/source-project" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            self._link_source_project(body)
+        elif path == "/api/video/source-project/confirm" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            self._confirm_source_project(body)
         elif path == "/api/notes" and cmd == "GET":
             doc = self._notes_doc()
             idx = d / "index.html"
@@ -1245,6 +1307,19 @@ class Handler(BaseHTTPRequestHandler):
                 raise Reject(400, "bad-request", self._t("serve.err.fullCheck"))
             if "userMessage" in body and not isinstance(body["userMessage"], str):
                 raise Reject(400, "bad-request", self._t("serve.err.userMessage"))
+            note_ids = body.get("noteIds")
+            if note_ids is not None and (
+                not isinstance(note_ids, list) or not all(isinstance(x, str) and x for x in note_ids)
+            ):
+                raise Reject(400, "bad-note-ids", self._t("serve.err.noteIds"))
+            submit_id = body.get("submitId")
+            if submit_id is not None and (not isinstance(submit_id, str) or not 1 <= len(submit_id) <= 64):
+                raise Reject(400, "bad-submit-id", self._t("serve.err.submitId"))
+            # 视频审阅的提交就是改源提交：没有已确认的源工程关联时保留批注与选择，提示先关联。
+            manifest = self.server.manifest()
+            if isinstance(manifest.get("format"), dict) and manifest["format"].get("report") == "video":
+                if not video_source.linked(manifest.get("video") or {}):
+                    raise Reject(400, "video-source-required", self._t("serve.err.videoSourceRequired"))
             message = (
                 body["userMessage"]
                 if body.get("fullCheck") is True and "userMessage" in body
@@ -1258,6 +1333,8 @@ class Handler(BaseHTTPRequestHandler):
                 allow_subagents=body.get("allowSubagents") is True,
                 full_check=body.get("fullCheck"),
                 authorize=lambda: self._check_receiver(body),
+                note_ids=note_ids,
+                submit_id=submit_id,
             )
             self.server.log(
                 "info", f"handoff seq={item['seq']} open={item['openCount']} merged={merged} target={item['target']}"

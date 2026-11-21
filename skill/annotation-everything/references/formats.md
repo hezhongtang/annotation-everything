@@ -98,6 +98,9 @@ python3 $S/build_viewer.py --report 成片.mp4 --out 成片-review --name "合�
 - `review.json` 写 `format: {"report": "video", "version": 1}` 与 `video.currentVersionId` / `versions[]`。版本高于当前安装能处理的版本时，各入口明确报错。
 - 视频批注的兼容 `page` 固定为 1；真实位置在 `notes.json` 的 `video` 字段（见下文）。尚未关联源工程时，对照页说明先批成片，改源提交要等后续关联 Remotion / HyperFrames 工程。
 - 媒体只经本机服务读取：`GET /api/video/versions` 与 `GET /api/video/versions/<versionId>` 返回登记元数据（不含私有路径），`GET/HEAD /api/video/versions/<versionId>/media` 返回该版本字节并支持单个 `Range: bytes=…`。未登记版本、任意 path 参数、跨审阅路径、`..`、绝对路径或 `media/` 内符号链接一律 404；Host、同源 Origin、无 CORS 与「只暴露 index.html 及 /api/*」边界不变。
+- 源工程关联是改源提交的前提：审阅人在对照页「关联源工程」，提供引擎（`remotion` / `hyperframes`）、本机工程根与 composition / scene 入口，可选提供工程侧成片特征（帧数、时长、fps、宽、高）。特征与登记版本完全一致时直接绑定（`match: verified`）；有差异、只有文件名或列出多个候选时停在待确认（`status: pending`），页面给出差异对照（原片 ↔ 工程）与候选清单，审阅人确认后才绑定（`match: confirmed`）。仅文件名相同不构成匹配依据。关联记录在 `review.json` 的 `video.sourceProject`，原批注始终指向原成片版本，关联与确认都不改 `notes.json`。服务端点：`GET/POST /api/video/source-project`、`POST /api/video/source-project/confirm`（写要求同源 Origin 与 JSON Content-Type）。本版不读工程文件、不调用渲染器；工程探测与渲染由后续版本接入 `video_source` 的同一套确认流程。
+- 选择性提交：视频审阅的「交给 Agent」弹窗默认全选、可取消部分；提交带 `noteIds`（所选批注 id，按勾选顺序）与 `submitId`（这一次提交操作的幂等键）。批次快照只固定所选批注并记 `selected: true`；未选中的保持未处理，留待以后提交。等待接收期间重试同一 `submitId` 合并进原批次并刷新快照、附言与选项；批次已被领取或收尾后重试同一 `submitId` 原样返回该批次，不新增批次、不改写范围。文档审阅不带 `noteIds`，沿用整批提交。视频审阅未绑定源工程时服务拒绝提交（`video-source-required`），批注与勾选保留。服务声明 `selective-handoff` 与 `video-source` 特性；旧服务不支持时页面保留勾选并提示所缺能力。
+- 领取负载自含范围：绑定会话 `notes.py claim` 的 JSON 带 `reviewId`、`seq`、`noteIds`、`userMessage`，以及每条批注的 `materials[]`（`noteId`、`text`、可选 `quote`、`video` 定位〔版本、帧或半开区间、时间基准、可选点/框〕、`media`〔相对 URL、审阅内私有路径、SHA-256；本机服务在线时另有绝对 URL〕）；已绑定源工程时另有 `sourceProject`（引擎、工程根、入口、对准的成片版本）。`notes.py wait` 的人读输出带同样的源工程行，未选中的批注不出现，不需要再读 `show --batch` 才拿到范围。
 
 ## PPTX（直接审阅与白名单回写）
 

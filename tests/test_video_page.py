@@ -117,6 +117,20 @@ class VideoPagePureTests(unittest.TestCase):
         self.assertIn("视频定位：", actual[0]["line"])
         self.assertIn("Video location: ", actual[1]["line"])
 
+    def test_selective_handoff_range_defaults_to_all_and_keeps_order(self):
+        """5 条选 3：默认全选走整批（null），取消 2 条后只交所选 3 条，全不选停在空数组由入口拦住。"""
+        actual = run_video(
+            "const avail=['n1','n2','n3','n4','n5'];"
+            "return {untouched:handoffNoteIds(avail,null),"
+            "allTicked:handoffNoteIds(avail,new Set(avail)),"
+            "three:handoffNoteIds(avail,new Set(['n4','n1','n5'])),"
+            "none:handoffNoteIds(avail,new Set())};"
+        )
+        self.assertIsNone(actual["untouched"])
+        self.assertIsNone(actual["allTicked"])
+        self.assertEqual(actual["three"], ["n1", "n4", "n5"])
+        self.assertEqual(actual["none"], [])
+
 
 class VideoPageWiringTests(unittest.TestCase):
     @classmethod
@@ -151,6 +165,26 @@ class VideoPageWiringTests(unittest.TestCase):
             "videoLayout()",
             "videoEl().getBoundingClientRect()",
             "videoSourceHint",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, self.source)
+
+    def test_selective_handoff_and_source_project_are_wired(self):
+        """提交弹窗的勾选列表、幂等键与源工程关联入口都接上服务契约。"""
+        for fragment in (
+            'id="handPick"',
+            'id="hPickOld"',
+            'id="handSource"',
+            'id="vsrc"',
+            'id="videoSourceBtn"',
+            "renderHandPick()",
+            "handoffNoteIds(avail,handPickSel)",
+            'hasFeature(d,"selective-handoff")',
+            'hasFeature(d,"video-source")',
+            '"/api/video/source-project"',
+            '"/api/video/source-project/confirm"',
+            "body.noteIds=op.noteIds",
+            "body.submitId=op.submitId",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.source)

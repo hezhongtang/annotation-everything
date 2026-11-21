@@ -600,7 +600,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
 <textarea id="impText" data-ph="import.placeholder" placeholder="在这里粘贴批注文字或 JSON"></textarea>
 <p><input type="file" id="impFile" accept=".json,.md,.txt" data-aria="import.pick"></p></div></div></div>
 <div class="modal" id="hand"><div class="dlg"><div class="bar"><h2 id="handTitle" data-msg="viewer.hand.title">交给 Agent</h2><button class="primary" id="doHand"><span id="doHandLabel" data-msg="viewer.hand.submit">交给 Agent</span><kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close><span data-msg="viewer.hand.cancel">取消</span><kbd>Esc</kbd></button></div>
-<div class="pad"><div id="handDrafts"></div><p id="handReceiver" class="hint"></p><p id="handInfo"></p>
+<div class="pad"><div id="handDrafts"></div><div id="handPick"></div><span class="hint" id="hPickOld" style="display:none" data-msg="viewer.hand.oldSelect"></span><p class="hint" id="handSource" style="display:none"></p><p id="handReceiver" class="hint"></p><p id="handInfo"></p>
 <div class="hopts"><span id="hTargetRow"><span data-msg="viewer.hand.targetLabel">这批做到：</span><label data-title="viewer.hand.targetFinalTitle"><input type="radio" name="htarget" value="final" checked><span data-msg="viewer.hand.targetFinal">定稿</span></label>
 <label data-title="viewer.hand.targetReviewTitle"><input type="radio" name="htarget" value="review"><span data-msg="viewer.hand.targetReview">已初改·待复核</span></label></span>
 <label id="hSubRow" data-title="viewer.hand.subagentsTitle"><input type="checkbox" id="hSub"><span data-msg="viewer.hand.subagents">允许派发子代理</span></label>
@@ -609,6 +609,20 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
 <span class="hint" id="hOld" style="display:none" data-msg="viewer.hand.oldServer">背后的本地服务是旧版本，不支持「做到哪一步 / 子代理 / 复核」：停掉旧服务后重新运行 serve.py 再刷新</span></div><p class="hint"><span id="handLast"></span> <button id="handHist" data-title="viewer.hand.histTitle"><span data-msg="viewer.hand.hist">处理记录</span><kbd>J</kbd></button></p>
 <textarea id="handMsg" data-ph="viewer.hand.msgPlaceholder"></textarea>
 <p class="hint" id="handHelp" data-msg="viewer.hand.help">提交后，正在等待的代理会收到这批未处理批注，状态栏显示「等待接收 → 处理中 → 已处理」（选「已初改·待复核」则停在待复核，由你决定请求复核或直接定稿）。代理还没接收时再提交一次，会合并成同一次（附言、选项以最新为准）。</p></div></div></div>
+<div class="modal" id="vsrc"><div class="dlg"><div class="bar"><h2 data-msg="viewer.video.source.title">源工程</h2><button class="primary" id="vsrcConfirm" style="display:none"><span data-msg="viewer.video.source.confirm">确认匹配</span></button><button class="primary" id="vsrcLink"><span data-msg="viewer.video.source.link">关联</span></button><button data-close data-msg="viewer.video.source.close">关闭</button></div>
+<div class="pad"><div id="vsrcState"></div>
+<div class="vrow"><label><span data-msg="viewer.video.source.engine">引擎</span><select id="vsrcEngine"><option value="remotion">Remotion</option><option value="hyperframes">HyperFrames</option></select></label></div>
+<div class="vrow"><label><span data-msg="viewer.video.source.root">工程根（本机绝对路径）</span><input id="vsrcRoot" type="text" data-ph="viewer.video.source.rootPh"></label></div>
+<div class="vrow"><label><span data-msg="viewer.video.source.entry">入口 ID</span><input id="vsrcEntry" type="text"></label></div>
+<p class="hint" data-msg="viewer.video.source.mediaHint">可选：填工程侧成片的帧数、时长（秒）、fps、宽、高，与登记成片一致时直接绑定；不填或对不上时进入待确认。</p>
+<div class="vrow" id="vsrcMediaRow">
+<label>frames <input id="vsrcFrames" type="number" min="1" step="1"></label>
+<label>duration(s) <input id="vsrcDuration" type="number" min="0" step="0.001"></label>
+<label>fps <input id="vsrcFps" type="number" min="0" step="0.001"></label>
+<label>width <input id="vsrcWidth" type="number" min="1" step="1"></label>
+<label>height <input id="vsrcHeight" type="number" min="1" step="1"></label>
+</div>
+<p class="hint" id="vsrcErr"></p></div></div></div>
 <div class="modal" id="always"><div class="dlg"><div class="bar"><h2 data-msg="viewer.always.dialogTitle">常驻技能</h2><button class="primary" id="alwaysSave"><span data-msg="viewer.always.save">保存</span><kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close><span data-msg="viewer.cancel">取消</span><kbd>Esc</kbd></button></div>
 <div class="pad"><p class="hint" data-msg="viewer.always.dialogHint">这份审阅里，范围内的每一条批注都会要求 Agent 处理前先调用这些技能——适合需要长期约束、不会主动想到用技能的 Agent。只对当前这份审阅生效；单条批注的「技能」照常可加。名称框按 Enter 添加下一项（有高亮候选时先选择），按 Ctrl/Cmd+Enter 保存。</p>
 <div id="alwaysRows"></div><p><button id="alwaysAdd" data-title="viewer.always.addTitle"><span data-msg="viewer.always.add">添加一个</span><kbd>↵</kbd></button></p></div></div></div>
@@ -987,11 +1001,23 @@ ${RCSS}
 #videoControls{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px;background:#20242a;font:12px/1.4 sans-serif}
 #videoControls button,#videoControls input{font:inherit}
 #videoControls input{width:76px}
+#vsrc .vrow{display:flex;gap:10px;margin:6px 0;flex-wrap:wrap;align-items:center}
+#vsrc .vrow label{display:flex;gap:6px;align-items:center}
+#vsrc input,#vsrc select{font:inherit}
+#vsrc input[type="text"]{flex:1;min-width:200px}
+#vsrcMediaRow input{width:90px}
+#vsrcState .vs-line{margin:4px 0}
+#vsrcState .vs-diff{margin:2px 0;color:#c99}
+#handPick .hp-head{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
+#handPick .hp-head button{font:inherit}
+#handPick .hp-item{display:flex;gap:8px;align-items:baseline;margin:2px 0;font-size:12px}
+#handPick .hp-loc{white-space:nowrap;color:var(--ae-dim,#888)}
+#handPick .hp-text{overflow:hidden;text-overflow:ellipsis}
 #videoError{margin:4px 8px;color:#ffb4a8;font:12px/1.4 sans-serif}
 </style><div class="ae-frame" id="ae-frame"><div id="ae-stage"><section id="videoStage" hidden>
 <div id="videoViewport"><video id="videoPlayer" controls playsinline preload="metadata"></video><div id="videoMarkLayer"></div></div>
 <div id="videoError" role="alert" hidden></div>
-<div id="videoControls"><span id="videoVersion"></span><button id="videoPrevFrame" type="button">−1</button><input id="videoFrame" type="number" min="0" step="1" value="0" aria-label="Frame"><button id="videoNextFrame" type="button">+1</button><button id="videoSetStart" type="button">[</button><button id="videoSetEnd" type="button">]</button><button id="videoPlayRange" type="button">▶</button><span id="videoRange"></span><span id="videoSourceHint"></span></div>
+<div id="videoControls"><span id="videoVersion"></span><button id="videoPrevFrame" type="button">−1</button><input id="videoFrame" type="number" min="0" step="1" value="0" aria-label="Frame"><button id="videoNextFrame" type="button">+1</button><button id="videoSetStart" type="button">[</button><button id="videoSetEnd" type="button">]</button><button id="videoPlayRange" type="button">▶</button><span id="videoRange"></span><button id="videoSourceBtn" type="button"></button><span id="videoSourceHint"></span></div>
 </section></div></div>`;
 const stage=sr.getElementById("ae-stage"), frame=sr.getElementById("ae-frame");
 function fit(){const slide=$("slide"),style=getComputedStyle(slide),b=slide.getBoundingClientRect();
@@ -1384,6 +1410,8 @@ function send(op,fullCheckSupported=true,saveRequest=null){
   if(op.kind==="del")return write("DELETE","/api/notes/"+encodeURIComponent(op.id),saveRequest?{}:undefined);
   if(op.kind==="import")return write("POST","/api/notes/import",{notes:op.notes});
   if(op.kind==="handoff"){const message=op.message||"",body={message,target:op.target||"final",allowSubagents:!!op.allowSubagents};
+    if(op.noteIds)body.noteIds=op.noteIds;   // 视频审阅的选择性提交：范围与幂等键跟着同一次操作重试
+    if(op.submitId)body.submitId=op.submitId;
     body.receiverBindingId=op.receiverBindingId??null;
     if(op.fullCheck===true){body.userMessage=message;body.message=FULL_CHECK_COMPAT+(message?"\n\n"+message:"")}
     if("fullCheck" in op&&fullCheckSupported)body.fullCheck=op.fullCheck===true;return api("POST","/api/handoff",body)}}
@@ -1553,6 +1581,8 @@ function applyServer(d,quietHand){
     else if(["legacy","offline","mismatch"].includes(stopProblem))stopProblem=""
   }
   finalizeAllSupported=hasFeature(d,"finalize-all");srvNoDocx=!!DOCX&&!hasFeature(d,"docx");srvNoPptx=!!PPTX&&!hasFeature(d,"pptx");srvNoVideo=!!VIDEO&&!hasFeature(d,"video");updateMode();renderDocxBlock();renderPptxBlock();renderVideoBlock();
+  srvNoSelect=!hasFeature(d,"selective-handoff");srvNoVideoSource=!!VIDEO&&!hasFeature(d,"video-source");   // 选择性提交与源工程关联都按服务声明的能力走，旧服务不误发
+  if(VIDEO&&mode==="server"&&!videoSourceLoaded){videoSourceLoaded=true;loadVideoSource()}
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
   if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
@@ -1613,6 +1643,7 @@ async function copyText(t){try{await navigator.clipboard.writeText(t)}catch(e){c
 $("srvCopy").onclick=async()=>{await copyText(SERVE_CMD);toast(tMsg("viewer.mode.barCopied"),3000)};
 $("srvClose").onclick=()=>{barClosedFor=mode;$("srvBar").classList.remove("on")};
 let srvOld=false, srvNoStages=false, srvNoFullCheck=false;   // 服务不支持的字段不能静默丢掉
+let srvNoSelect=false, srvNoVideoSource=false, videoSourceLoaded=false;   // 选择性提交 / 源工程关联：旧服务的能力探测与首拉状态
 function oldGuard(){if(mode==="server"&&srvOld){toast(tMsg("viewer.mode.oldTitle"),8000);return true}return false}
 function updateMode(){const m=$("mode"),q=pend.get().length,f=failed.get().length,extra=(q?tMsg("viewer.mode.queued",{n:q}):"")+(f?tMsg("viewer.mode.failed",{n:f}):"");m.className=mode;
   if(mode==="server"&&srvOld){m.classList.add("old");m.textContent=tMsg("viewer.mode.old",{extra});m.title=tMsg("viewer.mode.oldTitle")}
@@ -1736,6 +1767,12 @@ function videoImportLine(line,en){const match=line.match(en?/^\s+Video location:
 function videoLocText(anchor){if(!anchor||anchor.v!==1||!anchor.fps)return tMsg("viewer.video.unknownLocation");const fps=anchor.fps;
   return Number.isInteger(anchor.frame)?tMsg("viewer.video.frameLocation",{version:anchor.versionId,frame:anchor.frame,fps})
     :tMsg("viewer.video.rangeLocation",{version:anchor.versionId,start:(anchor.startFrame/fps).toFixed(3),end:(anchor.endFrame/fps).toFixed(3),fps})}
+function handoffNoteIds(avail,sel){
+  // 视频审阅的选择性提交范围：null = 没勾选过或又全选了，沿用整批语义（不带 noteIds）；
+  // 部分选择返回所选 id（按列表顺序，可为空数组，由提交入口拦住）。
+  if(!sel)return null;
+  const picked=avail.filter(id=>sel.has(id));
+  return picked.length===avail.length?null:picked}
 // ---------- 视频审阅 DOM ----------
 let videoDraft=null,videoRangeStart=null,videoRangeEnd=null,videoSelectedId=null,videoPointerStart=null,videoPendingMark=null;
 const videoEl=()=>sr.getElementById("videoPlayer"),videoLayer=()=>sr.getElementById("videoMarkLayer");
@@ -1770,7 +1807,9 @@ function videoShowNote(note){if(!VIDEO||!note||!note.video)return;const anchor=n
   if(Number.isInteger(anchor.startFrame))videoPlayInterval(player,anchor).catch(()=>{sr.getElementById("videoError").hidden=false;sr.getElementById("videoError").textContent=tMsg("viewer.video.playbackUnavailable")})}
 function videoInit(){if(!VIDEO)return;const player=videoEl(),stageEl=sr.getElementById("videoStage"),version=videoCurrentVersion();
   stageEl.hidden=false;$("host").hidden=true;$("scriptPane").hidden=true;$("scriptHandle").hidden=true;
-  sr.getElementById("videoVersion").textContent=version?version.versionId:"";sr.getElementById("videoSourceHint").textContent=tMsg("viewer.video.sourceHint");
+  sr.getElementById("videoVersion").textContent=version?version.versionId:"";
+  const sourceBtn=sr.getElementById("videoSourceBtn");if(sourceBtn)sourceBtn.onclick=()=>openVsrc();
+  renderVideoSource();
   if(version){player.src=version.url;player.muted=false;player.addEventListener("loadedmetadata",()=>{if(Math.abs(player.videoWidth-version.width)>0||Math.abs(player.videoHeight-version.height)>0){
       sr.getElementById("videoError").hidden=false;sr.getElementById("videoError").textContent=tMsg("viewer.video.dimensionMismatch")}videoLayout()})}
   player.addEventListener("error",()=>{const box=sr.getElementById("videoError");box.hidden=false;box.textContent=tMsg(FILE?"viewer.video.filePlayback":"viewer.video.playbackUnavailable")});
@@ -2398,6 +2437,7 @@ function renderHand(){renderDelivery();const el=$("handState"),L=hand&&hand.late
   el.title=(L.status==="done"?tMsg("viewer.hand.stateTitle.done",{summary:L.summary||tMsg("viewer.hand.stateTitle.none")})
       :(handUserMessage(L)?tMsg("viewer.hand.stateTitle.note",{message:handUserMessage(L)}):""))+tMsg("viewer.hand.stateTitle.hint")}
 let handMode=null;   // null = 交一批新的；{seq} = 请求复核这一批
+let handPickSel=null;   // 提交弹窗勾选的批注 id 集合；null = 还没初始化（打开弹窗时默认全选）
 const HOPT=`ae.${RID}.handOpts`;   // 提交选项按审阅分别记住
 // 常驻技能的范围只改显示：存储值与导出文法保持不变。
 const HAND_SCOPE={all:"viewer.hand.scope.all",报告:"viewer.hand.scope.report",讲稿:"viewer.hand.scope.script",style:"viewer.hand.scope.style"};
@@ -2430,14 +2470,17 @@ function paintHand(){
     resolved:"resolvedCount" in L?tMsg("viewer.hand.lastCount",{n:+L.resolvedCount}):"",
     summary:L.status==="done"&&L.summary?tMsg("viewer.hand.lastSummary",{summary:L.summary}):""}):"";
   $("handHist").style.display=L?"":"none";
-  $("handMsg").placeholder=handMode?tMsg("viewer.hand.reviewMsgPlaceholder"):tMsg("viewer.hand.msgPlaceholder")}
+  $("handMsg").placeholder=handMode?tMsg("viewer.hand.reviewMsgPlaceholder"):tMsg("viewer.hand.msgPlaceholder");
+  renderHandPick();renderHandSource()}
 function openHand(review){
   if(FILE){copyAll(tMsg("viewer.hand.toast.fileMode"));return}
   handDestination=receiver?{...receiver}:null;
   handMode=review&&review.seq?{seq:+review.seq}:null;
+  if(!handMode)handPickSel=null;   // 每次打开新的提交弹窗都从「默认全选」开始；只改勾选不动附言
   const o=LS.get(HOPT,{})||{};document.querySelectorAll('input[name="htarget"]').forEach(r=>r.checked=r.value===(o.target==="review"?"review":"final"));
   $("hSub").checked=!!o.sub;
   $("hFullCheck").checked=!!o.fullCheck;
+  if(!handMode&&VIDEO&&mode==="server")loadVideoSource();
   paintHand();
   if(!handMode&&mode==="server")api("GET","/api/handoff").then(d=>{if(d&&Array.isArray(d.history)){hand={...hand,...d};if($("hand").classList.contains("on"))renderHandDrafts()}}).catch(()=>{});   // 更早的待复核批次
   $("hand").classList.add("on");$("handMsg").focus()}
@@ -2732,9 +2775,125 @@ $("doHand").onclick=()=>{const message=$("handMsg").value.trim(),sub=$("hSub").c
   if((handDestination&&handDestination.bindingId)!==(receiver&&receiver.bindingId)||receiver&&["error","restart-required"].includes(receiver.state)){
     toast(tMsg("viewer.receiver.changed"),6000);return}
   if(!handMode&&fullCheck&&mode==="server"&&srvNoFullCheck){toast(tMsg("viewer.hand.toast.fullCheckOld"),6000);return}
+  let noteIds=null;
+  if(!handMode&&VIDEO){   // 视频审阅：先过源工程这一关，再带上勾选的范围
+    if(videoSourceInfo&&videoSourceInfo.status!=="linked"){toast(tMsg(videoSourceInfo.status==="pending"?"viewer.hand.sourcePending":"viewer.hand.sourceMissing"),7000);return}
+    if(srvNoVideoSource){toast(tMsg("viewer.video.sourceHint"),7000);return}
+    const avail=notes.filter(x=>x.status==="open"&&!flight.has(x.id)).map(x=>x.id);
+    const picked=handoffNoteIds(avail,handPickSel);
+    if(picked!==null){
+      if(!picked.length){toast(tMsg("viewer.hand.infoNone"),6000);return}
+      if(mode==="server"&&srvNoSelect){toast(tMsg("viewer.hand.oldSelect"),9000);return}   // 旧服务只认整批：保留勾选，先提示能力
+      noteIds=picked}}
   LS.set(HOPT,{target,sub,fullCheck});$("hand").classList.remove("on");$("handMsg").value="";
   if(handMode){requestReview(handMode.seq,message,sub);return}
-  mutate({kind:"handoff",message,target,allowSubagents:sub,fullCheck,receiverBindingId:handDestination&&handDestination.bindingId})};
+  mutate({kind:"handoff",message,target,allowSubagents:sub,fullCheck,receiverBindingId:handDestination&&handDestination.bindingId,
+    noteIds,submitId:noteIds?"hs-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,10):null})};
+
+// ---------- 提交弹窗的可勾选列表与源工程关联（仅视频审阅；文档审阅整批提交沿用旧路径） ----------
+function submittableNotes(){return VIDEO?notes.filter(x=>x.status==="open"&&!flight.has(x.id)):[]}
+function renderHandPick(){
+  const box=$("handPick");if(!box)return;
+  const open=submittableNotes();
+  if(!VIDEO||handMode||mode!=="server"||!open.length){box.innerHTML="";$("hPickOld").style.display="none";return}
+  if(!handPickSel)handPickSel=new Set(open.map(x=>x.id));
+  const count=open.reduce((n,x)=>n+(handPickSel.has(x.id)?1:0),0);
+  box.innerHTML=`<div class="hp-head"><span>${tMsg("viewer.hand.pickTitle")}</span>`
+    +`<button type="button" data-pick="all">${tMsg("viewer.hand.pickAll")}</button>`
+    +`<button type="button" data-pick="none">${tMsg("viewer.hand.pickNone")}</button>`
+    +`<span class="hint">${tMsg("viewer.hand.pickCount",{n:count,m:open.length})}</span></div>`
+    +open.map(x=>{const v=x.video&&typeof x.video==="object"?x.video:{},
+      loc=Number.isInteger(v.frame)?tMsg("viewer.hand.pickFrame",{frame:v.frame})
+        :tMsg("viewer.hand.pickRange",{start:v.startFrame!=null?v.startFrame:"?",end:v.endFrame!=null?v.endFrame:"?"});
+      return `<label class="hp-item"><input type="checkbox" data-noteid="${escH(x.id)}"${handPickSel.has(x.id)?" checked":""}>`
+        +`<span class="hp-loc">${escH(loc)}</span><span class="hp-text">${escH(clip(x.text||"",80))}</span></label>`}).join("");
+  $("hPickOld").style.display=srvNoSelect?"":"none"}
+$("handPick").addEventListener("click",e=>{
+  const btn=e.target.closest("[data-pick]");
+  if(btn){const open=submittableNotes();
+    handPickSel=btn.dataset.pick==="all"?new Set(open.map(x=>x.id)):new Set();
+    renderHandPick();return}
+  const cb=e.target.closest('input[type="checkbox"][data-noteid]');
+  if(cb&&handPickSel){cb.checked?handPickSel.add(cb.dataset.noteid):handPickSel.delete(cb.dataset.noteid);
+    const count=submittableNotes().reduce((n,x)=>n+(handPickSel.has(x.id)?1:0),0);
+    const hint=$("handPick").querySelector(".hp-head .hint");
+    if(hint)hint.textContent=tMsg("viewer.hand.pickCount",{n:count,m:submittableNotes().length})}});
+function renderHandSource(){
+  const el=$("handSource");if(!el)return;
+  if(!VIDEO||handMode||mode!=="server"){el.style.display="none";return}
+  el.style.display="";
+  if(srvNoVideoSource){el.textContent=tMsg("viewer.video.sourceHint");return}
+  const sp=videoSourceInfo;
+  el.textContent=!sp?tMsg("viewer.hand.sourceMissing")
+    :sp.status==="pending"?tMsg("viewer.hand.sourcePending")
+    :tMsg("viewer.video.source.stateLinked",{engine:sp.engine||"",entry:sourceEntryLabel(sp.entry),version:sp.versionId||""})}
+function sourceEntryLabel(entry){
+  if(!entry||!entry.id)return"";
+  return tMsg("viewer.video.source.kind."+(entry.kind==="scene"?"scene":"composition"))+" "+entry.id}
+let videoSourceInfo=null;
+async function loadVideoSource(){
+  if(!VIDEO||mode!=="server")return;
+  try{const d=await api("GET","/api/video/source-project");videoSourceInfo=d&&d.sourceProject||null;srvNoVideoSource=false}
+  catch(e){if(e.code==="no-api"||e.status===404)srvNoVideoSource=true}
+  renderVideoSource();
+  if($("hand").classList.contains("on"))renderHandSource();
+  if($("vsrc").classList.contains("on"))renderVsrc()}
+function renderVideoSource(){
+  if(!VIDEO)return;
+  const btn=sr.getElementById("videoSourceBtn"),hint=sr.getElementById("videoSourceHint");
+  if(btn)btn.textContent=tMsg("viewer.video.source.btn");
+  if(!hint)return;
+  const sp=videoSourceInfo;
+  hint.textContent=srvNoVideoSource||!sp?tMsg("viewer.video.sourceHint")
+    :sp.status==="pending"?tMsg("viewer.video.source.statePending",{engine:sp.engine||"",entry:sourceEntryLabel(sp.entry)})
+    :tMsg("viewer.video.source.stateLinked",{engine:sp.engine||"",entry:sourceEntryLabel(sp.entry),version:sp.versionId||""})}
+function openVsrc(){
+  if(FILE){toast(tMsg("viewer.hand.toast.fileMode"));return}
+  if(mode!=="server"){toast(tMsg("viewer.hand.toast.needServer",{mode:$("mode").textContent.replace("● ","")}),4000);return}
+  if(srvNoVideoSource){toast(tMsg("viewer.video.sourceHint"),7000);return}
+  loadVideoSource();renderVsrc();$("vsrcErr").textContent="";
+  $("vsrc").classList.add("on");$("vsrcRoot").focus()}
+function renderVsrc(){
+  const sp=videoSourceInfo,state=$("vsrcState");if(!state)return;
+  $("vsrcConfirm").style.display=sp&&sp.status==="pending"?"":"none";
+  let html="";
+  if(sp){
+    html+=`<div class="vs-line">${escH(tMsg(sp.status==="pending"?"viewer.video.source.statePending":"viewer.video.source.stateLinked",
+      {engine:sp.engine||"",entry:sourceEntryLabel(sp.entry),version:sp.versionId||""}))}</div>`;
+    (sp.differences||[]).forEach(d=>{html+=`<div class="vs-diff">${escH(tMsg("viewer.video.source.diffLine",
+      {field:d.field,review:String(d.review),project:String(d.project)}))}</div>`});
+    if((sp.candidates||[]).length>1){
+      html+=`<div class="vs-line">${tMsg("viewer.video.source.needChoice")}</div>`;
+      sp.candidates.forEach(c=>{html+=`<label class="vs-line"><input type="radio" name="vsrcChoice" value="${escH(c.id)}">`
+        +`<span>${escH(tMsg("viewer.video.source.candidateLine",{engine:c.engine||"",entry:sourceEntryLabel(c.entry),root:c.root||""}))}</span></label>`})}}
+  state.innerHTML=html;
+  if(sp&&sp.root&&!$("vsrcRoot").value)$("vsrcRoot").value=sp.root;
+  if(sp&&sp.engine)$("vsrcEngine").value=sp.engine==="hyperframes"?"hyperframes":"remotion";
+  if(sp&&sp.entry&&sp.entry.id&&!$("vsrcEntry").value)$("vsrcEntry").value=sp.entry.id}
+$("vsrcLink").onclick=async()=>{
+  const engine=$("vsrcEngine").value==="hyperframes"?"hyperframes":"remotion",
+    root=$("vsrcRoot").value.trim(),id=$("vsrcEntry").value.trim(),err=$("vsrcErr");
+  err.textContent="";
+  if(!root||!id){err.textContent=tMsg("viewer.video.source.linkFailed",{message:"root / entry"});return}
+  const body={engine,root,entry:{kind:engine==="hyperframes"?"scene":"composition",id}};
+  const fields=[["vsrcFrames","frames"],["vsrcDuration","duration"],["vsrcFps","fps"],["vsrcWidth","width"],["vsrcHeight","height"]];
+  const media={};fields.forEach(([el,key])=>{const raw=$(el).value.trim();
+    if(raw!==""){const v=parseFloat(raw);if(Number.isFinite(v)&&v>=0)media[key]=v}});
+  if(Object.keys(media).length)body.media=media;
+  try{const d=await api("POST","/api/video/source-project",body);videoSourceInfo=d&&d.sourceProject||null}
+  catch(e){err.textContent=tMsg("viewer.video.source.linkFailed",{message:e.message||""});return}
+  renderVideoSource();renderVsrc();renderHandSource()};
+$("vsrcConfirm").onclick=async()=>{
+  const sp=videoSourceInfo,err=$("vsrcErr");err.textContent="";
+  if(!sp||sp.status!=="pending")return;
+  let choice=null;
+  if((sp.candidates||[]).length>1){
+    const picked=document.querySelector('input[name="vsrcChoice"]:checked');
+    if(!picked){err.textContent=tMsg("viewer.video.source.needChoice");return}
+    choice=picked.value}
+  try{const d=await api("POST","/api/video/source-project/confirm",{choice});videoSourceInfo=d&&d.sourceProject||null}
+  catch(e){err.textContent=tMsg("viewer.video.source.linkFailed",{message:e.message||""});return}
+  renderVideoSource();renderVsrc();renderHandSource()};
 
 // ---------- 导出 / 导入 ----------
 // 交换格式与 scripts/export_format.py 是同一份规范（页面和命令行各一份实现）：

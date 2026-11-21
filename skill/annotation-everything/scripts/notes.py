@@ -47,6 +47,8 @@ import ledger  # noqa: E402
 import notes_store as store  # noqa: E402
 import pptx_reader  # noqa: E402
 import review_stop  # noqa: E402
+import video_review  # noqa: E402
+import video_source  # noqa: E402
 import wakeup  # noqa: E402
 import analysis_store  # noqa: E402
 from build_viewer import (
@@ -124,6 +126,77 @@ def _interpreter_options() -> list[str]:
 
 def load_manifest(review_dir: Path) -> dict[str, Any]:
     return ledger.read_manifest(review_dir)  # 读不了或不是 JSON 对象都返回 {}
+
+
+def _serving_url(review_dir: Path, suffix: str) -> str | None:
+    """本机服务在线时给出可直开的绝对 URL；读不到运行状态就只报相对路径。"""
+    try:
+        info = json.loads(ledger.status_file(review_dir).read_text(encoding="utf-8"))
+        port = info.get("port") if isinstance(info, dict) else None
+    except (OSError, ValueError):
+        return None
+    if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
+        return None
+    return f"http://127.0.0.1:{port}{suffix}"
+
+
+def handoff_claim_payload(d: Path, item: dict[str, Any], manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+    """claim JSON 的完整负载：自含批次范围与每条批注的交接材料，不用再读 show --batch。
+
+    每条材料带原话、视频定位（版本、帧或区间、可选点/框）与可访问证据（媒体 URL 与审阅内
+    私有路径）；视频审阅已绑定源工程时另带引擎、工程根、入口与对准的成片版本。
+    """
+    manifest = manifest if manifest is not None else load_manifest(d)
+    out = {k: v for k, v in item.items() if k != "openIds"}
+    out["noteIds"] = list(item.get("openIds") or [])
+    out["reviewId"] = manifest.get("reviewId")
+    video = manifest.get("video") if isinstance(manifest.get("video"), dict) else None
+    if video is None:
+        return out
+    brief = video_source.agent_brief(video)
+    if brief is not None:
+        out["sourceProject"] = brief
+    by_id = {n.get("id"): n for n in store.load(d)["notes"]}
+    materials = []
+    for nid in out["noteIds"]:
+        note = by_id.get(nid)
+        if not isinstance(note, dict):
+            continue
+        material: dict[str, Any] = {"noteId": nid, "text": str(note.get("text") or "")}
+        if note.get("quote"):
+            material["quote"] = str(note["quote"])
+        anchor = note.get("video") if isinstance(note.get("video"), dict) else None
+        if isinstance(anchor, dict) and anchor.get("v") == 1 and anchor.get("versionId"):
+            keys = (
+                "versionId",
+                "fps",
+                "timebase",
+                "frames",
+                "videoWidth",
+                "videoHeight",
+                "frame",
+                "startFrame",
+                "endFrame",
+                "mark",
+            )
+            material["video"] = {k: anchor[k] for k in keys if anchor.get(k) is not None}
+            version_id = str(anchor["versionId"])
+            try:
+                version = video_review.registered_version({"video": video}, version_id)
+            except video_review.VideoError:
+                version = {}
+            media: dict[str, Any] = {"url": f"/api/video/versions/{version_id}/media"}
+            if version.get("path"):
+                media["path"] = version["path"]
+            if version.get("sha256"):
+                media["sha256"] = version["sha256"]
+            absolute = _serving_url(d, media["url"])
+            if absolute:
+                media["absoluteUrl"] = absolute
+            material["media"] = media
+        materials.append(material)
+    out["materials"] = materials
+    return out
 
 
 def stored_locale(review_dir: Path, manifest: dict[str, Any] | None = None) -> str | None:
@@ -1748,7 +1821,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
                     snapshot(d, item, "base")
                 print(
                     json.dumps(
-                        {"claimed": True, "event": "handoff", **{k: v for k, v in item.items() if k != "openIds"}},
+                        {"claimed": True, "event": "handoff", **handoff_claim_payload(d, item)},
                         ensure_ascii=False,
                     )
                 )
@@ -1769,7 +1842,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
             return 3
         if item["stage"] == "draft":
             snapshot(d, item, "base")
-        print(json.dumps({"claimed": True, **{k: v for k, v in item.items() if k != "openIds"}}, ensure_ascii=False))
+        print(json.dumps({"claimed": True, **handoff_claim_payload(d, item)}, ensure_ascii=False))
         return 0
     if a.cmd == "done":
         try:
@@ -2602,6 +2675,21 @@ def wait(
         return 0
     pages = sep.join(str(p) for p in item.get("pages") or []) or t("cli.hand.noPages")
     print(t("cli.hand.head", seq=item["seq"], at=item.get("at")))
+    source = video_source.agent_brief(manifest.get("video") or {})
+    if source:  # 视频审阅已绑定源工程：改稿对准的引擎、入口与原成片版本一次说清
+        print(
+            t(
+                "cli.hand.videoSource",
+                engine=source.get("engine"),
+                entry=t(
+                    "cli.hand.videoSourceEntry",
+                    kind=(source.get("entry") or {}).get("kind"),
+                    id=(source.get("entry") or {}).get("id"),
+                ),
+                root=source.get("root"),
+                version=source.get("versionId"),
+            )
+        )
     if message := store.handoff_user_message(item):
         print(t("cli.hand.userMessage", message=message))
     print(t("cli.batch.requirement", target=target_text(item, lang)))

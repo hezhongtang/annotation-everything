@@ -1795,6 +1795,30 @@ def _open_snapshot(notes: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _selected_snapshot(notes: list[dict[str, Any]], note_ids: list[Any]) -> dict[str, Any]:
+    """选择性提交的快照：只收指定的未处理批注（去重保序）；选了不存在或不在处理的 id 就拒绝。"""
+    by_id = {n.get("id"): n for n in notes}
+    seen: set[Any] = set()
+    ids: list[Any] = []
+    for nid in note_ids:
+        note = by_id.get(nid)
+        if note is None:
+            raise HandoffError(f"批注 {nid} 不存在", code="note-missing", noteId=nid)
+        if note.get("status", "open") != "open":
+            raise HandoffError(f"批注 {nid} 不是未处理状态，不能选进这一批", code="note-not-open", noteId=nid)
+        if nid not in seen:
+            seen.add(nid)
+            ids.append(nid)
+    if not ids:
+        raise HandoffError("选择性提交至少要选一条未处理批注", code="note-not-open")
+    return {
+        "openCount": len(ids),
+        "openIds": ids,
+        "pages": sorted({int(by_id[i].get("page", 0) or 0) for i in ids}),
+        "selected": True,
+    }
+
+
 def handoff_submit(
     review_dir: Path,
     message: str = "",
@@ -1804,11 +1828,20 @@ def handoff_submit(
     full_check: bool | None = None,
     by: str = "page",
     authorize: Callable[[], None] | None = None,
+    note_ids: list[str] | None = None,
+    submit_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], bool]:
     """记一次提交（一批），快照当时的未处理批注。上一次提交还没被代理接收时合并进去（刷新快照、附言与选项），不重复排队。
 
     target：final 做到定稿 / review 做到「已初改·待复核」后停下；allow_subagents：是否允许代理派发子代理；
-    full_check：处理后是否检查整份材料的前后一致性；缺省时保留待接收批次的原选项。"""
+    full_check：处理后是否检查整份材料的前后一致性；缺省时保留待接收批次的原选项。
+    note_ids：选择性提交（视频审阅）只交所选批注，缺省仍是全部未处理批注（文档审阅沿用）；
+    submit_id：这一次提交操作的幂等键——网络重试带同一键时，等待中的批次照常合并刷新，
+    已被接收或收尾的批次原样返回（merged=True，不写任何更改），不产生新批次。"""
+    if note_ids is not None and (not isinstance(note_ids, list) or not all(isinstance(x, str) and x for x in note_ids)):
+        raise HandoffError("note_ids 须为批注 id 列表", code="bad-note-ids")
+    if submit_id is not None and (not isinstance(submit_id, str) or not 1 <= len(submit_id) <= 64):
+        raise HandoffError("submit_id 须为 1 至 64 个字符", code="bad-submit-id")
     message = fix_text(message)[:MAX_MSG]
     if target not in TARGETS:
         raise NoteError(f"target 须为 {TARGETS} 之一")
@@ -1817,10 +1850,18 @@ def handoff_submit(
             authorize()
         notes = load(review_dir)["notes"]
         doc = handoff_load(review_dir)
-        latest = doc["items"][-1] if doc["items"] else None
+        items = doc["items"]
+        existing = next((i for i in items if submit_id is not None and i.get("submitId") == submit_id), None)
+        if existing is not None and existing.get("status") != "pending":
+            # 陈旧提交的重试：批次已被接收或收尾，按原样返回，不新增也不改写。
+            return doc, existing, True
+        latest = items[-1] if items else None
+        merge_into = (
+            existing if existing is not None else latest if latest and latest.get("status") == "pending" else None
+        )
         full_check_value = (
-            latest.get("fullCheck") is True
-            if latest and latest.get("status") == "pending" and full_check is None
+            merge_into.get("fullCheck") is True
+            if merge_into and merge_into.get("status") == "pending" and full_check is None
             else full_check is True
         )
         # 旧版 wait 只输出 message；把勾选要求也放进去，避免仍在等待的旧进程漏掉。
@@ -1834,12 +1875,14 @@ def handoff_submit(
             "allowSubagents": bool(allow_subagents),
             "fullCheck": full_check_value,
             "alwaysSkills": always_skills(review_dir),
-            **_open_snapshot(notes),
+            **(_selected_snapshot(notes, note_ids) if note_ids is not None else _open_snapshot(notes)),
         }
-        if latest and latest.get("status") == "pending":
-            latest.update(snap)
-            latest["updates"] = int(latest.get("updates", 0)) + 1
-            item, merged = latest, True
+        if submit_id is not None:
+            snap["submitId"] = submit_id
+        if merge_into is not None:
+            merge_into.update(snap)
+            merge_into["updates"] = int(merge_into.get("updates", 0)) + 1
+            item, merged = merge_into, True
         else:
             doc["seq"] = int(doc.get("seq", 0)) + 1
             doc["submitSeq"] = int(doc.get("submitSeq", 0)) + 1
