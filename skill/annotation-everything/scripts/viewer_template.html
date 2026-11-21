@@ -496,6 +496,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
   <details id="docxDetails"><summary data-msg="viewer.docx.details"></summary><ul id="docxList"></ul></details>
 </div>
 <div id="pptxBlock" class="docx-block" role="alert" hidden data-msg="viewer.pptx.oldService"></div>
+<div id="videoBlock" class="docx-block" role="alert" hidden data-msg="viewer.video.oldService"></div>
 <div id="pptxBanner" class="docx-banner" role="status" hidden>
   <span id="pptxBannerText"></span>
 </div>
@@ -635,6 +636,8 @@ const SECT=__SECT__, RCSS=__RCSS__, SECT_KEYS=P.map(p=>"page-"+p.key);
 const DOCX=__DOCX__;
 // PPT 审阅：渲染信息、字体证据与未核验项（null 表示非 PPTX 报告）。视觉由每页内联渲染图负责
 const PPTX=__PPTX__;
+// 视频审阅：V1 媒体清单由构建器注入；旧文档审阅固定为 null
+const VIDEO=__VIDEO__;
 // 总览首页宿主（null 表示对照页）：这个页面由台账目录的服务提供，只服务总览视图，没有批注与对照页
 const OVERVIEW_HOME=__OVERVIEW_HOME__;
 function pageSize(k){const p=P[k]||{};return{w:+p.w>0?+p.w:1280,h:+p.h>0?+p.h:720}}
@@ -973,7 +976,23 @@ ${RCSS}
 .pptx-el:hover{box-shadow:inset 0 0 0 2px rgba(42,120,214,.5)}
 .pptx-el.on{box-shadow:inset 0 0 0 3px rgba(42,120,214,.95);background:rgba(42,120,214,.12)}
 #ae-stage.markmode .pptx-layer *{pointer-events:none}
-</style><div class="ae-frame" id="ae-frame"><div id="ae-stage"></div></div>`;
+#videoStage{position:relative;width:100%;height:100%;background:#111;color:#fff;display:flex;flex-direction:column}
+#videoStage[hidden]{display:none}
+#videoViewport{position:relative;flex:1;min-height:0;overflow:hidden;background:#000}
+#videoPlayer{position:absolute;display:block;object-fit:contain;background:#000}
+#videoMarkLayer{position:absolute;z-index:2;touch-action:none;pointer-events:none}
+#ae-stage.markmode #videoMarkLayer{pointer-events:auto;cursor:crosshair}
+.video-mark{position:absolute;pointer-events:none;border:2px solid #ff5c45;background:rgba(255,92,69,.12);box-sizing:border-box}
+.video-mark.point{width:18px;height:18px;border-radius:50%;transform:translate(-50%,-50%)}
+#videoControls{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px;background:#20242a;font:12px/1.4 sans-serif}
+#videoControls button,#videoControls input{font:inherit}
+#videoControls input{width:76px}
+#videoError{margin:4px 8px;color:#ffb4a8;font:12px/1.4 sans-serif}
+</style><div class="ae-frame" id="ae-frame"><div id="ae-stage"><section id="videoStage" hidden>
+<div id="videoViewport"><video id="videoPlayer" controls playsinline preload="metadata"></video><div id="videoMarkLayer"></div></div>
+<div id="videoError" role="alert" hidden></div>
+<div id="videoControls"><span id="videoVersion"></span><button id="videoPrevFrame" type="button">−1</button><input id="videoFrame" type="number" min="0" step="1" value="0" aria-label="Frame"><button id="videoNextFrame" type="button">+1</button><button id="videoSetStart" type="button">[</button><button id="videoSetEnd" type="button">]</button><button id="videoPlayRange" type="button">▶</button><span id="videoRange"></span><span id="videoSourceHint"></span></div>
+</section></div></div>`;
 const stage=sr.getElementById("ae-stage"), frame=sr.getElementById("ae-frame");
 function fit(){const slide=$("slide"),style=getComputedStyle(slide),b=slide.getBoundingClientRect();
   const w=b.width-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight),h=b.height-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom);
@@ -983,7 +1002,7 @@ function fit(){const slide=$("slide"),style=getComputedStyle(slide),b=slide.getB
   const k=DOCX?Math.max(.05,Math.min(1.6,(w-24)/sz.w)):Math.max(.01,Math.min((w-24)/sz.w,(h-24)/sz.h));
   stage.style.setProperty("width",sz.w+"px","important");stage.style.setProperty("height",H+"px","important");
   frame.style.width=sz.w*k+"px";frame.style.height=H*k+"px";frame.style.margin=DOCX?"12px 0":"";stage.style.transform=`scale(${k})`;
-  stage.style.setProperty("--ae-pin",(24/k).toFixed(1)+"px")}   // 标点在屏幕上始终约 24px，缩小了也好点、好拖
+  stage.style.setProperty("--ae-pin",(24/k).toFixed(1)+"px");if(VIDEO)videoLayout()}   // 标点在屏幕上始终约 24px，缩小了也好点、好拖；视频覆盖层跟着布局变
 
 // ---------- DOCX：分页可信度、限制清单、本页结构、只读段落 ----------
 function docxKinds(codes){return String(codes).split(",").filter(Boolean).map(c=>tMsg("docx.kind."+c)).join(uiLocale==="en"?", ":"、")}
@@ -1078,6 +1097,11 @@ function renderDocxBlock(){if(!DOCX)return;const on=docxBlocked();$("docxBlock")
 let srvNoPptx=false;
 function pptxBlocked(){return !!PPTX&&mode==="server"&&srvNoPptx}
 function renderPptxBlock(){if(!PPTX)return;const on=pptxBlocked();$("pptxBlock").hidden=!on;$("bottomPanel").inert=on||docxBlocked()}
+// 视频定位与 DOCX / PPT 一样，旧服务不能静默丢弃；输入留在 composer 与草稿里，补传前再次核验能力。
+let srvNoVideo=false;
+function videoBlocked(){return !!VIDEO&&mode==="server"&&srvNoVideo}
+function videoBlockToast(){setTimeout(()=>toast(tMsg("viewer.video.oldService"),9000),0)}
+function renderVideoBlock(){if(!VIDEO)return;const on=videoBlocked();$("videoBlock").hidden=!on;$("bottomPanel").inert=on}
 function renderPptx(){if(!PPTX)return;
   const layer=stage.querySelector(".pptx-layer");if(layer)layer.remove();pptxBuildLayer();   // 语言切换后重建：元素提示跟当前语言
   const parts=[tMsg("viewer.pptx.rendered",{tool:PPTX.renderer&&PPTX.renderer.tool||"?",pages:PPTX.renderer&&PPTX.renderer.pages||0})];
@@ -1305,7 +1329,7 @@ function pptxKey(a){if(!a||a.v!==1)return docxKey(a);
   for(const field of ["point","region"])if(a[field]&&typeof a[field]==="object")
     portable[field]=Object.fromEntries(Object.entries(a[field]).map(([k,v])=>[k,typeof v==="number"?Math.round(v*10000)/10000:v]));
   return docxKey(portable)}
-function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),rgKey(regionOf(x)),x.style&&x.style.scope?"s":"",docxKey(x.docx),pptxKey(x.pptx)].join("\u0001")}
+function dedupKey(x){return [x.page,String(x.target||"").trim(),String(x.text||"").trim(),String(x.quote||"").trim(),pinKey(x.pin),rgKey(regionOf(x)),x.style&&x.style.scope?"s":"",docxKey(x.docx),pptxKey(x.pptx),videoKey(x.video)].join("\u0001")}
 const okRegion=r=>r&&typeof r==="object"&&["x","y","w","h"].every(k=>r[k]!=null&&r[k]!==""&&isFinite(+r[k]))&&+r.w>0&&+r.h>0?{x:+r.x,y:+r.y,w:+r.w,h:+r.h}:null;
 function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:String(x.title||""),target:String(x.target||""),text:String(x.text||""),
     quote:String(x.quote||""),quoteFrom:String(x.quoteFrom||""),pin:x.pin&&x.pin.x!=null?{x:+x.pin.x,y:+x.pin.y}:null,
@@ -1324,6 +1348,7 @@ function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:Str
   if(typeof x.key==="string"&&x.key)n.key=clip(x.key,120);
   if(x.docx&&typeof x.docx==="object"&&!Array.isArray(x.docx)&&Number.isInteger(x.docx.v)&&x.docx.v>0)n.docx=JSON.parse(JSON.stringify(x.docx));   // DOCX 段落定位：原样带着（含更高版本）
   if(x.pptx&&typeof x.pptx==="object"&&!Array.isArray(x.pptx)&&Number.isInteger(x.pptx.v)&&x.pptx.v>0)n.pptx=JSON.parse(JSON.stringify(x.pptx));   // PPT 定位也须经过本地导入与补传清洗保留
+  if(x.video)n.video=cleanVideo(x.video);   // 视频版本、帧和归一化画面定位必须穿过本地导入与离线队列
   if(Array.isArray(x.skills)||typeof x.skills==="string"){const sk=parseSkills(Array.isArray(x.skills)?x.skills.join(","):x.skills);if(sk.length)n.skills=sk}
   const pr=x.pair;if(pr&&(pr.side==="报告"||pr.side==="讲稿")&&String(pr.text||"").trim())n.pair={side:pr.side,text:String(pr.text),match:pr.match==="exact"?"exact":"similar"};
   const e=x.edit;if(e&&(e.op==="delete"||e.op==="replace")&&String(e.from||"").trim())n.edit=e.op==="delete"?{op:"delete",from:String(e.from)}:{op:"replace",from:String(e.from),to:String(e.to??"")};
@@ -1335,14 +1360,17 @@ function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:Str
   return n}
 function mergeLocal(items){const byId=new Map(notes.map(x=>[x.id,x])),keys=new Set(notes.map(dedupKey));let added=0,skipped=0,updated=0;
   items.forEach(raw=>{const x=cleanItem(raw);const cur=byId.get(x.id);
-    if(cur){if(stamp(x)>stamp(cur)){Object.keys(cur).forEach(k=>delete cur[k]);Object.assign(cur,x);updated++}else skipped++;return}
+    if(cur){if(cur.video&&videoKey(x.video)!==videoKey(cur.video)){skipped++;return}   // 原版本定位不可变：缺 video 或改定位都不覆盖
+      if(stamp(x)>stamp(cur)){Object.keys(cur).forEach(k=>delete cur[k]);Object.assign(cur,x);updated++}else skipped++;return}
     if(keys.has(dedupKey(x))){skipped++;return}
     notes.push(x);byId.set(x.id,x);keys.add(dedupKey(x));added++});
   return{added,skipped,updated}}
 function applyLocal(op){
   if(op.kind==="add"){if(!notes.some(x=>x.id===op.note.id))notes.push(op.note)}
   else if(op.kind==="del")notes=notes.filter(x=>x.id!==op.id);
-  else if(op.kind==="patch"){const x=notes.find(x=>x.id===op.id);if(x){Object.assign(x,op.body);settleMarks(x,op.body);x.updatedAt=nowIso();
+  else if(op.kind==="patch"){const x=notes.find(x=>x.id===op.id);if(x){
+    if(x.video&&op.body&&"video" in op.body&&videoKey(op.body.video)!==videoKey(x.video))throw new Error("video location is immutable");
+    Object.assign(x,op.body);settleMarks(x,op.body);x.updatedAt=nowIso();
     if(op.body.status==="open"){["resolvedAt","resolvedBy","resolution","resolvedBatch","draftedAt","draftedBy","draftBatch"].forEach(k=>delete x[k])}
     if(op.body.status==="resolved"){x.resolvedAt=nowIso();x.resolvedBy="page"}}}
   else if(op.kind==="import")return mergeLocal(op.notes);
@@ -1371,7 +1399,7 @@ function migrateLegacyQueue(){const old=LS.get(K.legacyPending,null);if(!Array.i
 const failed={get(){if(queueSnap)return queueSnap.f;const v=LS.get(K.failed,[]);return Array.isArray(v)?v:[]},
   push(op,why){queueSnap=null;const v=failed.get();v.push({op,why,at:nowIso()});LS.set(K.failed,v)},clear(){queueSnap=null;LS.del(K.failed)}};
 async function mutate(op){
-  if(docxBlocked()||pptxBlocked()){docxBlocked()?docxBlockToast():pptxBlockToast();return}   // 旧服务会丢掉 DOCX / PPT 定位：不写入、不进队列
+  if(docxBlocked()||pptxBlocked()||videoBlocked()){docxBlocked()?docxBlockToast():pptxBlocked()?pptxBlockToast():videoBlockToast();return}   // 旧服务会丢掉 DOCX / PPT / 视频定位：不写入、不进队列
   op.opId=newId();
   if(FILE){const cur=LS.get(K.notes,[]);notes=Array.isArray(cur)?cur:[];   // 先读最新再改：多个标签页不互相覆盖
     const res=applyLocal(op);mirror();refreshList();return res}
@@ -1398,13 +1426,14 @@ function onRejected(op,e){   // 服务明确不接受（4xx）：不重试；返
     else if(pa&&pa.kind==="elements"){const slide=pptxSlide();
       pptxSel=(pa.elements||[]).map(t=>slide&&(slide.elements||[]).find(e=>e.key===t.key)).filter(Boolean)}
     showQuote();updateStyleChip();updatePptxChip();pptxPaintSelection();drawPins()}
+  if(op.kind==="add"&&op.note.video){videoDraft=op.note.video;videoPendingMark=op.note.video.mark||null;videoRangeStart=Number.isInteger(op.note.video.startFrame)?op.note.video.startFrame:null;videoUpdateRange();videoDrawMarks()}
   return ()=>toast(tMsg("viewer.recovery.rejected",{reason:e.message}),6000)}
 const fails={};let flushing=null;
 function flush(){if(FILE)return Promise.resolve();
   if(!flushing)flushing=(navigator.locks?navigator.locks.request(`ae-flush-${RID}`,()=>doFlush()):doFlush()).finally(()=>{flushing=null});
   return flushing}
 async function doFlush(saveRequest=null){   // 按顺序补传；多个标签页之间用浏览器锁排队，按操作 id 移除
-  let successful=true,problem=null,docxOk=!DOCX,pptxOk=!PPTX;busy++;
+  let successful=true,problem=null,docxOk=!DOCX,pptxOk=!PPTX,videoOk=!VIDEO;busy++;
   try{for(;;){   // 补完一轮再对一次服务端；这期间又有新改动进队列就接着补
     for(let q=pend.get();q.length;q=pend.get()){const op=q[0];
       if(saveRequest&&op.kind==="handoff")return false;
@@ -1414,6 +1443,8 @@ async function doFlush(saveRequest=null){   // 按顺序补传；多个标签页
           if(srvNoDocx){mode="server";successful=false;problem=()=>toast(tMsg("viewer.docx.oldService"),9000);return false}docxOk=true}
         if(!pptxOk){const d=await getNotes();srvNoPptx=!hasFeature(d,"pptx");   // PPT 审阅同样先确认服务声明了 pptx 能力
           if(srvNoPptx){mode="server";successful=false;problem=()=>toast(tMsg("viewer.pptx.oldService"),9000);return false}pptxOk=true}
+        if(!videoOk){const d=await getNotes();srvNoVideo=!hasFeature(d,"video");   // 视频定位同样先确认能力：旧服务不补传、不静默丢 video 字段
+          if(srvNoVideo){mode="server";successful=false;problem=()=>toast(tMsg("viewer.video.oldService"),9000);return false}videoOk=true}
         const hasFullCheck=op.kind==="handoff"&&"fullCheck" in op;let fullCheckSupported=true;
         if(hasFullCheck){const d=await getNotes();fullCheckSupported=hasFeature(d,"full-check");srvNoFullCheck=!fullCheckSupported;
           const latest=d.handoff&&d.handoff.latest,pendingCheck=latest&&latest.status==="pending"&&latest.fullCheck===true;
@@ -1440,7 +1471,7 @@ async function doFlush(saveRequest=null){   // 按顺序补传；多个标签页
     mode="server";await resync();if(!pend.get().length)break}
     return successful}
   // 最后一个失败或受阻提示优先于后续成功、处理状态等通知。
-  finally{busy--;updateMode();renderDocxBlock();renderPptxBlock();if(problem)problem()}}
+  finally{busy--;updateMode();renderDocxBlock();renderPptxBlock();renderVideoBlock();if(problem)problem()}}
 async function resync(){try{const d=await getNotes();rev=null;applyServer(d)}catch(e){}}
 
 // 总览和命令行通过目标服务请求保存回执。浏览器只访问同源服务。
@@ -1521,7 +1552,7 @@ function applyServer(d,quietHand){
     if(stopSnapshot?.state==="stopped")mode="offline";
     else if(["legacy","offline","mismatch"].includes(stopProblem))stopProblem=""
   }
-  finalizeAllSupported=hasFeature(d,"finalize-all");srvNoDocx=!!DOCX&&!hasFeature(d,"docx");srvNoPptx=!!PPTX&&!hasFeature(d,"pptx");updateMode();renderDocxBlock();renderPptxBlock();
+  finalizeAllSupported=hasFeature(d,"finalize-all");srvNoDocx=!!DOCX&&!hasFeature(d,"docx");srvNoPptx=!!PPTX&&!hasFeature(d,"pptx");srvNoVideo=!!VIDEO&&!hasFeature(d,"video");updateMode();renderDocxBlock();renderPptxBlock();renderVideoBlock();
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
   if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
@@ -1658,6 +1689,105 @@ function renderStrays(){const list=strays(),box=$("strays");
 function updateLegacy(){const n=foundSets().filter(s=>s.same).reduce((a,s)=>a+s.items.length,0);const b=$("legacyBtn");
   b.style.display=n?"inline-block":"none";b.textContent=tMsg("viewer.recovery.legacyButton",{n})}
 
+// ---------- 视频审阅纯函数 ----------
+function videoNumber(value,name){if(typeof value!=="number"||!Number.isFinite(value))throw new Error("invalid-video-"+name);return value}
+function videoInteger(value,name,min=0){if(!Number.isInteger(value)||value<min)throw new Error("invalid-video-"+name);return value}
+function cleanVideo(value){
+  if(value==null)return null;
+  if(!value||typeof value!=="object"||Array.isArray(value))throw new Error("invalid-video-location");
+  if(!Number.isInteger(value.v)||value.v<1)throw new Error("invalid-video-version");
+  if(value.v!==1)return JSON.parse(JSON.stringify(value));
+  if(typeof value.versionId!=="string"||!/^V[1-9][0-9]*$/.test(value.versionId))throw new Error("invalid-video-version-id");
+  const fps=videoNumber(value.fps,"fps");if(fps<=0)throw new Error("invalid-video-fps");
+  const tb=value.timebase;if(!tb||typeof tb!=="object"||Array.isArray(tb))throw new Error("invalid-video-timebase");
+  const num=videoInteger(tb.num,"timebase",1),den=videoInteger(tb.den,"timebase",1);
+  if(Math.abs(fps-den/num)>1e-7)throw new Error("invalid-video-clock");
+  const out={v:1,versionId:value.versionId,fps,timebase:{num,den},frames:videoInteger(value.frames,"frames",1),
+    videoWidth:videoInteger(value.videoWidth,"width",1),videoHeight:videoInteger(value.videoHeight,"height",1)};
+  const single=Object.prototype.hasOwnProperty.call(value,"frame"),start=Object.prototype.hasOwnProperty.call(value,"startFrame"),end=Object.prototype.hasOwnProperty.call(value,"endFrame");
+  if(single===(start||end)||start!==end)throw new Error("invalid-video-temporal-shape");
+  if(single){out.frame=videoInteger(value.frame,"frame");if(out.frame>=out.frames)throw new Error("invalid-video-frame")}
+  else{out.startFrame=videoInteger(value.startFrame,"start");out.endFrame=videoInteger(value.endFrame,"end");
+    if(out.startFrame>=out.endFrame||out.endFrame>out.frames)throw new Error("invalid-video-range")}
+  if(value.mark!=null){const m=value.mark;if(!m||typeof m!=="object"||!["point","region"].includes(m.kind))throw new Error("invalid-video-mark");
+    const mark={kind:m.kind,x:videoNumber(m.x,"mark"),y:videoNumber(m.y,"mark")};
+    if(mark.x<0||mark.x>1||mark.y<0||mark.y>1)throw new Error("invalid-video-mark");
+    if(m.kind==="region"){mark.width=videoNumber(m.width,"mark");mark.height=videoNumber(m.height,"mark");
+      if(mark.width<=0||mark.height<=0||mark.x+mark.width>1||mark.y+mark.height>1)throw new Error("invalid-video-mark")}
+    out.mark=mark}
+  return out
+}
+function videoKey(value){const sorted=v=>Array.isArray(v)?v.map(sorted):v&&typeof v==="object"?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;
+  return value&&typeof value==="object"?JSON.stringify(sorted(value)):""}
+function videoMakeAnchor(manifest,temporal,mark){const version=(manifest.versions||[]).find(v=>v.versionId===manifest.currentVersionId);if(!version)throw new Error("missing-video-version");
+  return cleanVideo({v:1,versionId:version.versionId,fps:version.fps,timebase:version.timebase,frames:version.frames,
+    videoWidth:version.width,videoHeight:version.height,...temporal,...(mark?{mark}:{})})}
+function videoContentRect(viewportWidth,viewportHeight,videoWidth,videoHeight){const scale=Math.min(viewportWidth/videoWidth,viewportHeight/videoHeight),width=videoWidth*scale,height=videoHeight*scale;
+  return{x:(viewportWidth-width)/2,y:(viewportHeight-height)/2,width,height}}
+function videoNormalizedPoint(clientX,clientY,viewport,content){const x=clientX-viewport.left-content.x,y=clientY-viewport.top-content.y;
+  if(x<0||y<0||x>content.width||y>content.height)return null;return{x:x/content.width,y:y/content.height}}
+function videoSeekFrame(player,frame,fps){player.pause();player.muted=false;player.currentTime=Math.max(0,Math.floor(frame))/fps;return player.currentTime}
+async function videoPlayInterval(player,anchor){videoSeekFrame(player,anchor.startFrame,anchor.fps);videoRangeEnd=anchor.endFrame/anchor.fps;player.muted=false;await player.play()}
+function videoRangeTick(player){if(videoRangeEnd==null||player.currentTime+1e-6<videoRangeEnd)return;
+  const end=videoRangeEnd;videoRangeEnd=null;player.pause();player.currentTime=end}
+function videoExportLine(anchor,en){return(en?"   Video location: ":"   视频定位：")+JSON.stringify(anchor)}
+function videoImportLine(line,en){const match=line.match(en?/^\s+Video location: (\{.*\})$/:/^\s+视频定位：(\{.*\})$/);if(!match)return null;
+  try{const value=JSON.parse(match[1]);return value&&typeof value==="object"&&!Array.isArray(value)?value:null}catch(error){return null}}
+function videoLocText(anchor){if(!anchor||anchor.v!==1||!anchor.fps)return tMsg("viewer.video.unknownLocation");const fps=anchor.fps;
+  return Number.isInteger(anchor.frame)?tMsg("viewer.video.frameLocation",{version:anchor.versionId,frame:anchor.frame,fps})
+    :tMsg("viewer.video.rangeLocation",{version:anchor.versionId,start:(anchor.startFrame/fps).toFixed(3),end:(anchor.endFrame/fps).toFixed(3),fps})}
+// ---------- 视频审阅 DOM ----------
+let videoDraft=null,videoRangeStart=null,videoRangeEnd=null,videoSelectedId=null,videoPointerStart=null,videoPendingMark=null;
+const videoEl=()=>sr.getElementById("videoPlayer"),videoLayer=()=>sr.getElementById("videoMarkLayer");
+function videoCurrentVersion(){return VIDEO&&(VIDEO.versions||[]).find(v=>v.versionId===VIDEO.currentVersionId)||null}
+function videoCurrentFrame(){const version=videoCurrentVersion(),player=videoEl();return version?Math.max(0,Math.min(version.frames-1,Math.floor(player.currentTime*version.fps+1e-6))):0}
+function videoLayout(){if(!VIDEO)return;const viewport=sr.getElementById("videoViewport"),player=videoEl(),layer=videoLayer(),version=videoCurrentVersion();if(!viewport||!player||!layer||!version)return;
+  const rect=videoContentRect(viewport.clientWidth,viewport.clientHeight,player.videoWidth||version.width,player.videoHeight||version.height);   // 标记相对实际解码画面，不信登记尺寸
+  for(const el of [player,layer])Object.assign(el.style,{left:rect.x+"px",top:rect.y+"px",width:rect.width+"px",height:rect.height+"px"});
+  videoDrawMarks()}
+function videoMarkElements(mark,cls=""){const layer=videoLayer();if(!layer||!mark)return;const el=document.createElement("div");el.className="video-mark "+(mark.kind==="point"?"point ":"")+cls;
+  if(mark.kind==="point")Object.assign(el.style,{left:mark.x*100+"%",top:mark.y*100+"%"});
+  else Object.assign(el.style,{left:mark.x*100+"%",top:mark.y*100+"%",width:mark.width*100+"%",height:mark.height*100+"%"});
+  layer.appendChild(el)}
+function videoDrawMarks(){const layer=videoLayer();if(!VIDEO||!layer)return;layer.innerHTML="";
+  const frame=videoCurrentFrame(),shown=new Set;
+  notes.forEach(x=>{const a=x.video;if(!a||!a.mark||shown.has(x.id))return;
+    const hit=Number.isInteger(a.frame)?a.frame===frame:a.startFrame<=frame&&frame<a.endFrame;   // 当前帧能看到的画面标记都显示
+    if(x.id===videoSelectedId||hit){shown.add(x.id);videoMarkElements(a.mark,isDone(x)?"done":"")}});
+  if(videoPendingMark)videoMarkElements(videoPendingMark)}
+function videoUpdateRange(){const label=sr.getElementById("videoRange");if(label)label.textContent=videoRangeStart==null?"":`${videoRangeStart} → ${videoDraft&&Number.isInteger(videoDraft.endFrame)?videoDraft.endFrame:"?"}`}
+function videoDraftAt(mark=videoPendingMark){const version=videoCurrentVersion();if(!version)return null;const frame=videoCurrentFrame();
+  if(videoRangeStart!=null){const start=videoRangeStart,end=Math.max(frame+1,start+1);return videoMakeAnchor(VIDEO,{startFrame:start,endFrame:Math.min(end,version.frames)},mark)}
+  return videoMakeAnchor(VIDEO,{frame},mark)}
+function videoSeekDraftFrame(frame){const version=videoCurrentVersion();if(!version)return;videoSeekFrame(videoEl(),Math.max(0,Math.min(version.frames-1,frame)),version.fps);videoRangeEnd=null;
+  sr.getElementById("videoFrame").value=videoCurrentFrame();videoDrawMarks()}
+function videoShowNote(note){if(!VIDEO||!note||!note.video)return;const anchor=note.video,version=(VIDEO.versions||[]).find(v=>v.versionId===anchor.versionId),player=videoEl();if(!version||!player)return;
+  videoSelectedId=note.id;videoPendingMark=null;
+  if(player.getAttribute("src")!==version.url){player.src=version.url;player.load()}
+  const frame=Number.isInteger(anchor.frame)?anchor.frame:anchor.startFrame;
+  const seek=()=>{videoSeekFrame(player,frame,anchor.fps);sr.getElementById("videoFrame").value=frame;videoDrawMarks()};
+  if(player.readyState>=1)seek();else player.addEventListener("loadedmetadata",seek,{once:true});
+  if(Number.isInteger(anchor.startFrame))videoPlayInterval(player,anchor).catch(()=>{sr.getElementById("videoError").hidden=false;sr.getElementById("videoError").textContent=tMsg("viewer.video.playbackUnavailable")})}
+function videoInit(){if(!VIDEO)return;const player=videoEl(),stageEl=sr.getElementById("videoStage"),version=videoCurrentVersion();
+  stageEl.hidden=false;$("host").hidden=true;$("scriptPane").hidden=true;$("scriptHandle").hidden=true;
+  sr.getElementById("videoVersion").textContent=version?version.versionId:"";sr.getElementById("videoSourceHint").textContent=tMsg("viewer.video.sourceHint");
+  if(version){player.src=version.url;player.muted=false;player.addEventListener("loadedmetadata",()=>{if(Math.abs(player.videoWidth-version.width)>0||Math.abs(player.videoHeight-version.height)>0){
+      sr.getElementById("videoError").hidden=false;sr.getElementById("videoError").textContent=tMsg("viewer.video.dimensionMismatch")}videoLayout()})}
+  player.addEventListener("error",()=>{const box=sr.getElementById("videoError");box.hidden=false;box.textContent=tMsg(FILE?"viewer.video.filePlayback":"viewer.video.playbackUnavailable")});
+  player.addEventListener("timeupdate",()=>{videoRangeTick(player);sr.getElementById("videoFrame").value=videoCurrentFrame()});
+  sr.getElementById("videoPrevFrame").onclick=()=>videoSeekDraftFrame(videoCurrentFrame()-1);sr.getElementById("videoNextFrame").onclick=()=>videoSeekDraftFrame(videoCurrentFrame()+1);
+  sr.getElementById("videoFrame").onchange=e=>videoSeekDraftFrame(+e.target.value);
+  sr.getElementById("videoSetStart").onclick=()=>{videoRangeStart=videoCurrentFrame();videoDraft=videoDraftAt();videoUpdateRange();saveDraft()};
+  sr.getElementById("videoSetEnd").onclick=()=>{if(videoRangeStart==null)videoRangeStart=videoCurrentFrame();videoDraft=videoDraftAt();videoRangeStart=videoDraft.startFrame;videoUpdateRange();saveDraft()};
+  sr.getElementById("videoPlayRange").onclick=()=>{videoDraft=videoDraftAt();if(videoDraft&&Number.isInteger(videoDraft.startFrame))videoPlayInterval(player,videoDraft).catch(()=>{})};
+  videoLayer().addEventListener("pointerdown",e=>{if(!markMode||e.button!==0)return;const viewport=videoEl().getBoundingClientRect();   // 用实际视频画面的屏幕矩形：舞台 transform 缩放后仍归一化正确
+    const point=videoNormalizedPoint(e.clientX,e.clientY,viewport,{x:0,y:0,width:viewport.width,height:viewport.height});if(!point)return;e.preventDefault();videoPointerStart={point,clientX:e.clientX,clientY:e.clientY};videoLayer().setPointerCapture(e.pointerId)});
+  videoLayer().addEventListener("pointerup",e=>{if(!videoPointerStart)return;const start=videoPointerStart;videoPointerStart=null;const viewport=videoEl().getBoundingClientRect();
+    const end=videoNormalizedPoint(e.clientX,e.clientY,viewport,{x:0,y:0,width:viewport.width,height:viewport.height});if(!end)return;const moved=Math.hypot(e.clientX-start.clientX,e.clientY-start.clientY)>=5;
+    videoPendingMark=moved?{kind:"region",x:Math.min(start.point.x,end.x),y:Math.min(start.point.y,end.y),width:Math.abs(end.x-start.point.x),height:Math.abs(end.y-start.point.y)}:{kind:"point",...end};
+    videoDraft=videoDraftAt(videoPendingMark);videoDrawMarks();saveDraft();openComposer()});
+  videoLayout()}
+
 // ---------- 批注区：列表与输入框分开，刷新列表不碰正在写的内容 ----------
 // 计数与标注序号都先一次遍历建好映射再填充：不再每页、每张卡片各扫一遍批注。
 // pageStats：页 → {o,f,d,n}（同 counts 的口径，另记本页批注总数）；markNos：页+id → 序号；
@@ -1714,6 +1844,7 @@ function noteHtml(x){
    +(ed?`<div class="anchor">${tMsg("viewer.moveTo")} <select id="epage">${P.map(q=>`<option value="${q.n}"${q.n===(editBuf["pg:"+x.id]??x.page)?" selected":""}>${escH(tMsg("viewer.page",{page:q.n}))}</option>`).join("")}</select></div>`:"")
    +(!ed&&x.anchor?`<div class="anchor">${tMsg("viewer.anchorLabel")}${escH(clip(x.anchor,140))}</div>`:"")
    +(!ed&&x.pptx&&x.pptx.v===1?`<div class="anchor">${escH(pptxLocText(x.pptx))}</div>`:"")
+   +(!ed&&x.video?`<div class="anchor">${escH(videoLocText(x.video))}</div>`:"")
    +(()=>{if(ed)return"";const al=done?[]:alwaysFor(x).filter((a,k,arr)=>!sk.includes(a.name)&&arr.findIndex(b=>b.name===a.name)===k);
       return sk.length||al.length?`<div class="skills">${al.map(a=>`<span class="skill al" title="${escH(tMsg("viewer.skill.alwaysChipTitle",{scope:alwaysLabel(a.scope)}))}">${escH(tMsg("viewer.skill.alwaysChip",{name:a.name}))}</span>`).join("")}${sk.map(n=>`<span class="skill" title="${escH(tMsg("viewer.skill.noteTitle"))}">⚙ ${escH(n)}</span>`).join("")}</div>`:""})()
    +(x.pair&&x.pair.text?`<div class="pair">${escH(tMsg("viewer.pairLine",{side:targetLabel(x.pair.side),match:tMsg(x.pair.match==="exact"?"viewer.pairSame":"viewer.pairSimilar"),text:clip(x.pair.text,120)}))}</div>`:"")
@@ -1902,7 +2033,11 @@ function addNote(){let text=$("ntext").value.trim();
     else if(!px&&pendingRegion)px=pptxAnchor("region","region",{region:{x:pendingRegion.x/100,y:pendingRegion.y/100,w:pendingRegion.w/100,h:pendingRegion.h/100}});
     else if(!px&&pendingPin)px=pptxAnchor("point","point",{point:{x:pendingPin.x/100,y:pendingPin.y/100}});
     if(px)note.pptx=px}
+  if(VIDEO){if(!videoDraft)videoDraft=videoDraftAt(null);   // 只标时间也成立：落在当前帧或已选区间
+    if(!videoDraft){toast(tMsg("viewer.video.missingLocation"));return}
+    note.video=videoDraft;note.anchor=videoLocText(videoDraft);note.target="报告"}
   quoteDocx=null;quotePptx=null;pptxSel=[];pptxPageOn=false;updatePptxChip();styleOn=false;pendingRegion=null;updateStyleChip();
+  if(VIDEO){videoDraft=null;videoPendingMark=null;videoRangeStart=null;videoUpdateRange();videoDrawMarks()}
   if(quote&&quotePair)note.pair={side:quotePair.side,text:quotePair.text,match:quotePair.match};
   const sk=parseSkills($("nskills").value);if(sk.length)note.skills=sk;$("nskills").value="";
   quote="";quotePair=null;pendingPin=null;$("ntext").value="";autoGrow();showQuote();delete drafts[p.n];SS.set(K.drafts,drafts);mutate({kind:"add",note});if(focusMode)closeComposer();toast(tMsg("viewer.added"))}
@@ -2008,7 +2143,10 @@ stage.addEventListener("mouseover",e=>{const pin=e.target.closest&&e.target.clos
   if(pin&&pin.dataset.id){const c=$("nlist").querySelector(`[data-note="${CSS.escape(pin.dataset.id)}"]`);if(c)c.classList.add("hl")}});
 $("nlist").addEventListener("mouseover",e=>{const c=e.target.closest("[data-note]");highlightPin(c?c.dataset.note:null)});
 $("nlist").addEventListener("mouseleave",()=>highlightPin(null));
-$("nlist").addEventListener("click",e=>{if(e.target.closest("button,textarea,input,a"))return;const c=e.target.closest("[data-note]");if(c)flash(pinEl(c.dataset.note))});
+$("nlist").addEventListener("click",e=>{if(e.target.closest("button,textarea,input,a"))return;const c=e.target.closest("[data-note]");if(!c)return;
+  const x=notes.find(n=>n.id===c.dataset.note);
+  if(VIDEO&&x&&x.video)videoShowNote(x);   // 点原批注：换回登记版本、跳到原帧或播放原区间
+  flash(pinEl(c.dataset.note))});
 
 // ---------- 风格优化：范围菜单、框选模式、位置线索 ----------
 function openStyleMenu(){const m=$("stylemenu"),b=$("styleBtn").getBoundingClientRect();m.classList.add("on");
@@ -2585,7 +2723,8 @@ $("batchList").addEventListener("click",e=>{
   const b=e.target.closest("[data-goto]");if(!b)return;const x=notes.find(n=>n.id===b.dataset.goto);if(!x)return;
   $("batches").classList.remove("on");const k=P.findIndex(p=>p.n===x.page);if(k<0)return;
   if(isDone(x)&&hideDone){hideDone=false;LS.set(K.hide,false)}
-  if(k!==i)go(k);else refreshList(true);setTimeout(()=>{flashCard(x.id);flash(pinEl(x.id))},80)});
+  if(k!==i)go(k);else refreshList(true);if(VIDEO&&x.video)videoShowNote(x);
+  setTimeout(()=>{flashCard(x.id);flash(pinEl(x.id))},80)});
 $("handMsg").addEventListener("keydown",e=>{if(!e.isComposing&&e.key==="Enter"&&(e.metaKey||e.ctrlKey))$("doHand").click();else if(e.key==="Escape")$("hand").classList.remove("on")});
 $("doHand").onclick=()=>{const message=$("handMsg").value.trim(),sub=$("hSub").checked,fullCheck=$("hFullCheck").checked,
     target=(document.querySelector('input[name="htarget"]:checked')||{}).value==="review"?"review":"final";
@@ -2661,6 +2800,8 @@ function expGrammar(lang){
   const en=lang==="en";
   const back=(t,v,d)=>en&&t[v]!==undefined?t[v]:d;
   return {lang,en,...pptxExchangeGrammar(en),
+    video:en?/^\s+Video location: (\{.*\})$/:/^\s+视频定位：(\{.*\})$/,
+    videoLine:a=>videoExportLine(a,en),
     marker:`<!-- annotation-everything export v${EXP_VERSION} lang=${lang} -->`,
     page:en?/^##\s*Page\s+(\d+)\s*\|\s*(.*)$/:/^## 第 (\d+) 页｜(.*)$/,
     item:en?/^(\d+)\. \[([^\]·]*)(?: · Pin \d+ \(x ([\d.]+)%, y ([\d.]+)%\))?(?: · Region \d+ \(x ([\d.]+)%, y ([\d.]+)%, w ([\d.]+)%, h ([\d.]+)%\))?\]\s?(.*)$/
@@ -2758,6 +2899,7 @@ function exportText(){
       if(x.anchor)L.push(g.anchorLine(x.anchor));
       if(x.docx&&typeof x.docx==="object")L.push(g.docxLine(x.docx));
       if(x.pptx&&typeof x.pptx==="object")L.push(g.pptxLine(x.pptx));
+      if(x.video&&typeof x.video==="object")L.push(g.videoLine(x.video));
       if(Array.isArray(x.skills)&&x.skills.length)L.push(g.skillsLine(x.skills));
       if(x.pair&&x.pair.text)L.push(g.pairLine(x.pair))})});
   return L.join("\n")+"\n"}
@@ -2780,6 +2922,7 @@ function parseMdGrammar(text,g){const items=[];let page=null,title="",cur=null;
     if((m=line.match(g.anchor))){cur.anchor=m[1];return}
     if((m=line.match(g.docx))){const a=g.docxIn(m[1],m[2],g.docxBody);if(a)cur.docx=a;return}   // 读不懂的整行略过，不并进正文
     if((m=line.match(g.pptx))){const a=g.pptxIn(m[1],m[2]);if(a)cur.pptx=a;return}
+    if((m=line.match(g.video))){cur.video=videoImportLine(m[0],g.en);return}   // 读不懂的整行略过，不并进正文
     if((m=line.match(g.skills))){   // 与 export_format 一致：去掉尾缀，带「（常驻·…）」来源标签的不写进单条
       const body=m[1].trim().replace(/(——处理这条前先调用这些技能|（处理这条前先调用这些技能）)$/,"");
       cur.skills=parseSkills(body.split(/[,，、;；]+/).filter(x=>!/（常驻·[^）]*）$/.test(x.trim()))
@@ -2798,7 +2941,7 @@ function parseImport(text){const s=String(text||"").trim();if(!s)return[];
   if(!items.length&&!marked)throw new Error(tMsg("export.badFormat"));   // 没标记又不是旧中文格式
   return items}
 async function runImport(items,label){
-  if(docxBlocked()||pptxBlocked()){docxBlocked()?docxBlockToast():pptxBlockToast();return}
+  if(docxBlocked()||pptxBlocked()||videoBlocked()){docxBlocked()?docxBlockToast():pptxBlocked()?pptxBlockToast():videoBlockToast();return}
   items=items.filter(x=>x&&+x.page>0&&String(x.text||"").trim()).map(cleanItem);   // 先定好 id，离线补传后与服务端一致
   if(!items.length){toast(tMsg("import.empty"));return}
   const r=await mutate({kind:"import",notes:items})||{};
@@ -2851,20 +2994,22 @@ document.querySelectorAll(".modal").forEach(m=>m.addEventListener("click",e=>{if
 // ---------- 翻页（每页的草稿、引用、标点各自保留） ----------
 function saveDraft(){const n=P[i].n,t=$("ntext").value;
   const skv=$("nskills").value;
-  if(t.trim()||quote||pendingPin||pendingRegion||skv.trim()||styleOn||pptxSel.length||pptxPageOn)drafts[n]={text:t,target:$("ntarget").value,quote,quoteFrom,pin:pendingPin,pair:quotePair,skills:skv,style:styleOn,region:pendingRegion,docx:quote&&quoteDocx&&quoteDocx.text===quote&&quoteDocx.page===n?quoteDocx:null,
-    pptx:{page:pptxPageOn,keys:pptxSel.map(e=>e.key),quote:quote&&quotePptx&&quotePptx.text===quote&&quotePptx.page===n?quotePptx:null}};else delete drafts[n];
+  if(t.trim()||quote||pendingPin||pendingRegion||skv.trim()||styleOn||pptxSel.length||pptxPageOn||videoDraft)drafts[n]={text:t,target:$("ntarget").value,quote,quoteFrom,pin:pendingPin,pair:quotePair,skills:skv,style:styleOn,region:pendingRegion,docx:quote&&quoteDocx&&quoteDocx.text===quote&&quoteDocx.page===n?quoteDocx:null,
+    video:videoDraft,pptx:{page:pptxPageOn,keys:pptxSel.map(e=>e.key),quote:quote&&quotePptx&&quotePptx.text===quote&&quotePptx.page===n?quotePptx:null}};else delete drafts[n];
   SS.set(K.drafts,drafts)}
 function loadDraft(){const d=drafts[P[i].n]||{};$("ntext").value=d.text||"";$("ntarget").value=d.target||"报告";
   quote=d.quote||"";quoteFrom=d.quoteFrom||"";pendingPin=d.pin||null;quotePair=d.pair||null;quoteDocx=d.docx||null;$("nskills").value=d.skills||"";styleOn=!!d.style;pendingRegion=d.region||null;updateStyleChip();showQuote();autoGrow();
   const dp=d.pptx||{},slide=pptxSlide();   // PPT 目标跟随草稿：元素按键回查当前模型，模型里没有的不再保留
   pptxPageOn=!!dp.page;
   pptxSel=(dp.keys||[]).map(k=>slide&&(slide.elements||[]).find(e=>e.key===k)).filter(Boolean);
-  quotePptx=dp.quote||null;updatePptxChip();pptxPaintSelection()}
+  quotePptx=dp.quote||null;updatePptxChip();pptxPaintSelection();
+  videoDraft=d.video||null;videoPendingMark=videoDraft&&videoDraft.mark||null;videoRangeStart=videoDraft&&Number.isInteger(videoDraft.startFrame)?videoDraft.startFrame:null;videoUpdateRange();videoDrawMarks()}
 function updatePageStat(){if(!P.length)return;const p=P[i];
   $("stat").textContent=tMsg("viewer.pageStat",{page:p.n,total:P[N-1].n})+(total?` · ${tMsg("viewer.timeStat",{at:mmss(cum[i]),total:mmss(total)})}`:"")}
 function render(){
   const p=P[i], s=secOf(p.n);
-  stage.innerHTML=SECT[i]; fit();
+  if(VIDEO){fit();videoLayout()}   // 视频舞台是常驻 DOM：不能像报告页那样整段重写
+  else{stage.innerHTML=SECT[i]; fit()}
   if(PPTX)pptxBuildLayer();
   if(DOCX){$("slide").scrollTop=0;renderDocxPage()}
   $("jump").value=i;
@@ -2882,9 +3027,10 @@ const navHistory=[];let skipNavHistory=false;
 function updateNavBack(){const b=$("prevBack");if(b)b.disabled=!navHistory.length}
 function go(k){k=Math.max(0,Math.min(N-1,k));if(k===i)return;if(!skipNavHistory&&P[i]){if(navHistory[navHistory.length-1]!==i)navHistory.push(i);if(navHistory.length>40)navHistory.shift()}if(focusMode)closeComposer();else saveDraft();i=k;render()}
 function goBackVisited(){if(!navHistory.length)return;skipNavHistory=true;try{go(navHistory.pop())}finally{skipNavHistory=false}}
-$("prevBack").onclick=goBackVisited;$("prev").onclick=()=>go(i-1);$("next").onclick=()=>go(i+1);addEventListener("resize",fit);
+$("prevBack").onclick=goBackVisited;$("prev").onclick=()=>go(i-1);$("next").onclick=()=>go(i+1);addEventListener("resize",()=>{fit();if(VIDEO)videoLayout()});
 if(DOCX){renderDocx();if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit)}   // 字体就绪后页高可能变，重量一次
-if(PPTX)renderPptx()
+if(PPTX)renderPptx();
+if(VIDEO)videoInit()
 $("jump").onchange=e=>go(+e.target.value);
 $("helpBtn").onclick=$("shortcutsBtn").onclick=()=>$("help").classList.toggle("on");
 $("allTab").onclick=openAll;$("historyBtn").onclick=$("batchesTab").onclick=openBatches;

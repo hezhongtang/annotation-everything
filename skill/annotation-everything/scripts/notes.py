@@ -735,6 +735,48 @@ def pptx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]
     return out
 
 
+def video_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]:
+    """批注的视频定位（show / wait 的阅读输出）：成片版本、帧 / 半开区间、画面标记与时间基准。"""
+    a = n.get("video")
+    if not isinstance(a, dict):
+        return []
+    if a.get("v") != 1:
+        return [t("cli.show.video.unsupported", version=a.get("v"), supported=1)]
+    out = [
+        t(
+            "cli.show.video.head",
+            version=a.get("versionId"),
+            width=a.get("videoWidth"),
+            height=a.get("videoHeight"),
+            fps=a.get("fps"),
+            num=(a.get("timebase") or {}).get("num"),
+            den=(a.get("timebase") or {}).get("den"),
+        )
+    ]
+    if isinstance(a.get("frame"), int):
+        out.append(t("cli.show.video.frame", frame=a["frame"]))
+    else:
+        out.append(t("cli.show.video.range", start=a.get("startFrame"), end=a.get("endFrame")))
+    mark = a.get("mark") if isinstance(a.get("mark"), dict) else None
+    if mark:
+        if mark.get("kind") == "point":
+            out.append(t("cli.show.video.point", x=round(mark.get("x", 0) * 100), y=round(mark.get("y", 0) * 100)))
+        else:
+            out.append(
+                t(
+                    "cli.show.video.region",
+                    x=round(mark.get("x", 0) * 100),
+                    y=round(mark.get("y", 0) * 100),
+                    w=round(mark.get("width", 0) * 100),
+                    h=round(mark.get("height", 0) * 100),
+                )
+            )
+    current = (manifest.get("video") or {}).get("currentVersionId") if isinstance(manifest.get("video"), dict) else None
+    if current and a.get("versionId") != current:
+        out.append(t("cli.show.video.outdated", current=current))
+    return out
+
+
 def docx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]:
     """批注的 DOCX 段落定位（show / wait 的阅读输出）：段落、偏移、定位来源，以及定位是否对着当前版本。"""
     a = n.get("docx")
@@ -888,6 +930,8 @@ def to_markdown(
         for extra in docx_lines(n, manifest, t):
             line += "\n  " + extra
         for extra in pptx_lines(n, manifest, t):
+            line += "\n  " + extra
+        for extra in video_lines(n, manifest, t):
             line += "\n  " + extra
         active_always = (always or []) if n.get("status") != "resolved" else []
         sources_by_name = {}

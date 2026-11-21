@@ -6355,8 +6355,8 @@ class CspPolicyTests(unittest.TestCase):
     )
     SHARED = (
         "default-src 'none'; script-src %s; style-src 'unsafe-inline'; img-src data: blob:; "
-        "font-src data:; media-src data: blob:; connect-src 'self'; "
-    )
+        "font-src data:; media-src 'self' data: blob:; connect-src 'self'; "
+    )  # media-src 的 'self' 只服务登记版本的同源媒体 API；其他本机路径仍由服务 404 拒绝
     HEAD_TAIL = "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
     META_TAIL = "base-uri 'none'; form-action 'none'; object-src 'none'"
 

@@ -85,6 +85,20 @@ python3 $S/build_viewer.py --report 合同.docx --out 合同-review --name "采�
 
 `review.json` 里 `format` 为 `{"report": "docx", "version": 1}`。版本高于当前安装能处理的版本时，`--rebuild`、`serve.py` 和 `notes.py` 都会明确报错，不按普通文本读取。旧审阅没有 `format` 字段，仍按逐页 HTML 处理。
 
+## 视频 MP4（首版只批成片）
+
+`--report` 直接接受本地 `.mp4`（不接受讲稿输入）：
+
+```bash
+python3 $S/build_viewer.py --report 成片.mp4 --out 成片-review --name "合成短片"
+```
+
+- 构建只读标准库能确认的 MP4 元数据：恰好一条视频轨、实际画面宽高、恒定帧率、媒体时长与样本表。缺少这些证据、可变帧时长或认不出容器时明确报错，不猜测帧率，也不把文本预览冒充视频审阅。
+- 首版登记 `V1`：原文件按字节复制为审阅内私有 `media/v1.mp4`（0600），清单记录 SHA-256、宽高、时长、fps 与帧时间基准。此后原输出文件被覆盖不影响已登记版本；`--rebuild` 只读私有副本，不迁移或改写视频批注。
+- `review.json` 写 `format: {"report": "video", "version": 1}` 与 `video.currentVersionId` / `versions[]`。版本高于当前安装能处理的版本时，各入口明确报错。
+- 视频批注的兼容 `page` 固定为 1；真实位置在 `notes.json` 的 `video` 字段（见下文）。尚未关联源工程时，对照页说明先批成片，改源提交要等后续关联 Remotion / HyperFrames 工程。
+- 媒体只经本机服务读取：`GET /api/video/versions` 与 `GET /api/video/versions/<versionId>` 返回登记元数据（不含私有路径），`GET/HEAD /api/video/versions/<versionId>/media` 返回该版本字节并支持单个 `Range: bytes=…`。未登记版本、任意 path 参数、跨审阅路径、`..`、绝对路径或 `media/` 内符号链接一律 404；Host、同源 Origin、无 CORS 与「只暴露 index.html 及 /api/*」边界不变。
+
 ## PPTX（直接审阅与白名单回写）
 
 `--report` 直接接受 `.pptx`；一张幻灯片生成一页对照页，页面保留原始尺寸、方向与顺序。幻灯片按本机 LibreOffice（`soffice`）+ Poppler（`pdftoppm`）渲染成图：macOS 安装 LibreOffice.app、Linux 安装 `libreoffice` 与 `poppler-utils`、Windows 将 LibreOffice（探测 `PATH` 与常见 `Program Files` / `LocalAppData\Programs` 位置）与 Poppler（`PATH` 或常见 Poppler 安装目录的 `bin`）配置好后即可构建；工具缺失、转换失败、页数不符或输出为空时构建明确报错，不自动下载安装，也不把文字预览冒充视觉审阅（可选渲染工具缺失不影响基础 HTML 与 DOCX 审阅）。旧版二进制 `.ppt`（以及 `.pptm`、`.potx`、`.ppsx`）不受支持，先在 PowerPoint/WPS 中另存为 `.pptx`。字体核查在转换前后各做一次：PPTX 转图前先运行 `python3 $S/check_pptx_fonts.py 原始.pptx`，转出 PDF 后再加 `--pdf 转换后.pdf` 对照字体证据；逐页视觉核验仍不可省略，字体名称一致也不能证明逐字形渲染正确，且不宣称已验证所有 Office/WPS 版本或所有字体布局。
@@ -206,6 +220,14 @@ One line per paragraph.
         "endPara": {"id": null, "n": 7, "digest": "…"},   // 选区或框跨段落时的最后一段；此时 end 是它里面的偏移
         "run": 1,                                // 文字运行序号，只作提示
         "changed": true                          // 重建后段落还在但文字已变：偏移与摘要对应旧版本，fp 不更新
+      },
+      "video": {                                 // 视频审阅的定位（其他审阅没有）；写入后不可变
+        "v": 1,
+        "versionId": "V1",                        // 定位绑定的成片版本
+        "startFrame": 120, "endFrame": 180,       // 半开区间 [startFrame,endFrame)；30 fps 下即 4–6 秒。单帧定位改写 "frame": 96（从 0 计）
+        "fps": 30, "timebase": {"num": 1, "den": 30},   // 主时间基准：帧；timebase 是每帧秒数
+        "frames": 180, "videoWidth": 640, "videoHeight": 360,
+        "mark": {"kind": "region", "x": 0.1, "y": 0.8, "width": 0.5, "height": 0.1}   // 可选：相对实际视频画面的归一化点 / 区域
       }
     }
   ]
@@ -217,11 +239,12 @@ One line per paragraph.
 - 快捷修改的 `text` 是固定说法（「删除引用的这段文字」「改为：…」），`quote` 等于 `edit.from`，旧工具照样能看懂。
 - 生成对照页时若审阅目录里已有批注：没有 `key` 的按上一版 review.json 的页码补上，再按 `key` 把 `page` 改成新版的页码；`key` 在新版里找不到的标 `orphan`。所以 `data-key` 要稳定、唯一（重复的键不做校正）。DOCX 审阅里带 `docx` 定位的批注先按段落校正，不走页面键，规则见上文「批注定位」。
 - `docx.v` 高于当前安装支持的版本时，字段原样保留（上限 4000 字符），不用于重建定位；`notes.py show` 会标明不可用于回写。没有 `docx` 字段的旧批注按原规则读取。
+- `video.v` 为 1 时必须恰好带 `frame` 或 `startFrame`/`endFrame` 之一；帧从 0 计，区间为 `[start,end)`，`fps` 与 `timebase` 是主时间基准，`mark` 相对实际视频画面归一化（点 `{kind,x,y}` 或区域 `{kind,x,y,width,height}`）。同一批注的 `video` 定位写入后不可变：编辑正文、状态或导入都不能改版本、帧、区间或标记，避免原证据被覆盖。`video.v` 高于当前安装支持的版本时原样保留（上限 4000 字符），`notes.py show` 标明不可用于定位。视频审阅的页面要求服务声明 `video` 特性；旧服务会丢字段，页面阻断写入并提示重启新版服务。Markdown 导出用 `视频定位：{…}` / `Video location: {…}` 整行 JSON 往返。
 - 风格优化的 `target` 固定为报告；`text` 是用户写的方向，没写时为「风格优化：整页 / 框选处 / 标点处」。
 - 0.3 及更早只有风格优化能框选，框存在 `style.region` 里；读入时自动挪到顶层 `region`（下次写盘落成新格式），原来的风格范围和点都保留——所以旧批注可能点和框并存、或「整页」风格优化带一个点。0.3 页面发来的 `{style:{region}}` 改动按顶层 `region` 处理。
 - 批注归哪一批：`resolve` / `review` 不带 `--seq` 时按批注归属找（待复核的初改 → 它的初改批次；提交时包含它的在途批次，复核中优先、同级取最早），不再取「最新一批」；同时有几批处理中时 `done` 必须带 `--seq`。别的批次还在等复核的初改，不能在另一批里处理。
 - 页面新建和「重新标注」时 `pin`、`region` 一起发（另一个为 `null`），所以新批注只有一种标注；拖动只发被拖的那一个，另一个不动。改动动了标注时，风格范围跟着标注走（只拖动、原范围是整页的保持整页）。
-- 页面轮询的 `GET /api/notes` 只带最新一批（`handoff.latest`、计数、`total`）；完整处理记录 `history` 由 `GET /api/handoff` 和 `notes.py batches` 提供。服务响应里带 `version` 与 `features`（含 `marks`、`batches`），页面据此识别旧版服务。DOCX 审阅的页面要求服务声明 `docx` 特性：没有声明这项特性的旧版服务会丢弃 `docx` 字段，页面连上这样的服务时显示阻断提示并停止写入，重启新版服务并刷新后恢复。
+- 页面轮询的 `GET /api/notes` 只带最新一批（`handoff.latest`、计数、`total`）；完整处理记录 `history` 由 `GET /api/handoff` 和 `notes.py batches` 提供。服务响应里带 `version` 与 `features`（含 `marks`、`batches`），页面据此识别旧版服务。DOCX 审阅的页面要求服务声明 `docx` 特性：没有声明这项特性的旧版服务会丢弃 `docx` 字段，页面连上这样的服务时显示阻断提示并停止写入，重启新版服务并刷新后恢复。视频审阅同理要求 `video` 特性；媒体与元数据 API 见上文「视频 MP4」。
 
 `notes.jsonl` 每行一条操作：`{"ts","rev","op":"add|update|resolve|draft|reopen|review|finalize|delete|import|handoff|handoff-update|handoff-claim|handoff-done|handoff-review|handoff-finalize","by":…,"id"|"seq",…}`。
 

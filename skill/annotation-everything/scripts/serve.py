@@ -70,6 +70,7 @@ import notes_store as store  # noqa: E402
 import review_overview  # noqa: E402
 import review_save  # noqa: E402
 import review_stop  # noqa: E402
+import video_review  # noqa: E402
 import wakeup  # noqa: E402
 
 APP = "annotation-everything"
@@ -97,6 +98,7 @@ FEATURES = [
     "finalize-all",
     "docx",
     "pptx",
+    "video",
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
@@ -183,6 +185,8 @@ MANIFEST = "review.json"
 MAX_BODY = 2 * 1024 * 1024
 HOST = "127.0.0.1"
 NOTE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})$")
+VIDEO_MEDIA_PATH = re.compile(r"^/api/video/versions/(V[1-9][0-9]*)/media$")
+VIDEO_VERSION_PATH = re.compile(r"^/api/video/versions/(V[1-9][0-9]*)$")
 SAFE_CHARS = re.compile(r"[^A-Za-z0-9._:/?=&%+@-]")
 # 总览首页宿主：页面、运行状态、日志与启动锁都在台账目录，不写进任何审阅目录（文件名只在 ledger 定义一次）
 HOST_KIND_OVERVIEW = ledger.HOST_KIND_OVERVIEW  # /api/health 的宿主种类；审阅宿主不带宿主种类字段（行为不变）
@@ -197,7 +201,7 @@ def csp_for(html_text: str) -> str:
     hashes = fsutil.script_hashes(html_text)
     return (
         f"default-src 'none'; script-src {hashes or chr(39) + 'none' + chr(39)}; style-src 'unsafe-inline'; "
-        "img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'self'; "
+        "img-src data: blob:; font-src data:; media-src 'self' data: blob:; connect-src 'self'; "
         "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
     )
 
@@ -1098,12 +1102,75 @@ class Handler(BaseHTTPRequestHandler):
             raise Reject(400, e.code, self._analysis_error_text(e), params=params)
         raise Reject(400, "bad-request", self._t("serve.err.noAnalysis"))  # 未覆盖的 op，不可达
 
+    def _range_reject(self, size: int) -> None:
+        body = json.dumps(
+            {"error": self._t("serve.err.badRange"), "code": "bad-range", "app": APP}, ensure_ascii=False
+        ).encode("utf-8")
+        self._send(416, body, "application/json; charset=utf-8", {"Content-Range": f"bytes */{size}"})
+
+    def _video_media(self, version_id: str) -> None:
+        try:
+            path = video_review.media_path(self.server.review_dir, self.server.manifest(), version_id)
+            media = path.open("rb")
+        except (OSError, video_review.VideoError):
+            raise Reject(404, "no-video", self._t("serve.err.noApi")) from None
+        with media:
+            size = media.seek(0, os.SEEK_END)
+            start, end, status = 0, size - 1, 200
+            value = self.headers.get("Range")
+            if value is not None:
+                matched = re.fullmatch(r"bytes=([0-9]*)-([0-9]*)", value.strip())
+                if matched is None or not any(matched.groups()):
+                    self._range_reject(size)
+                    return
+                first, last = matched.groups()
+                if not first:
+                    suffix = int(last)
+                    if suffix <= 0:
+                        self._range_reject(size)
+                        return
+                    start = max(0, size - suffix)
+                else:
+                    start = int(first)
+                    if last:
+                        end = int(last)
+                if start >= size or end < start:
+                    self._range_reject(size)
+                    return
+                end = min(end, size - 1)
+                status = 206
+            length = max(0, end - start + 1)
+            self.send_response(status)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", str(length))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Accept-Ranges", "bytes")
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            media.seek(start)
+            remaining = length
+            while remaining:
+                chunk = media.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise ConnectionError("registered video changed during response")
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+
     def _api(self, path: str) -> None:
         cmd = "GET" if self.command == "HEAD" else self.command
         if self.server.home_id is not None:
             self._api_home(path, cmd)
             return
         d, m = self.server.review_dir, NOTE_PATH.match(path)
+        video_media = VIDEO_MEDIA_PATH.fullmatch(path)
+        video_version = VIDEO_VERSION_PATH.fullmatch(path)
         # 页面带上自己的审阅标识：端口上换成了另一份审阅的服务时，先拒绝，绝不写进别人的 notes.json
         claimed = self.headers.get("X-AE-Review")
         if claimed is not None and path != "/api/health":
@@ -1123,6 +1190,21 @@ class Handler(BaseHTTPRequestHandler):
                     "agentDelivery": self._public_status(),
                 },
             )
+        elif path == "/api/video/versions" and cmd == "GET":
+            try:
+                video = video_review.public_manifest(self.server.manifest())
+            except video_review.VideoError:
+                raise Reject(404, "no-video", self._t("serve.err.noApi")) from None
+            self._json(200, {"video": video, **self._ident()})
+        elif video_version is not None and cmd == "GET":
+            try:
+                video = video_review.public_manifest(self.server.manifest())
+                version = next(item for item in video["versions"] if item["versionId"] == video_version.group(1))
+            except (StopIteration, video_review.VideoError):
+                raise Reject(404, "no-video", self._t("serve.err.noApi")) from None
+            self._json(200, {"videoVersion": version, **self._ident()})
+        elif video_media is not None and cmd == "GET":
+            self._video_media(video_media.group(1))
         elif path == "/api/notes" and cmd == "GET":
             doc = self._notes_doc()
             idx = d / "index.html"

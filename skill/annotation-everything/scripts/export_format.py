@@ -21,6 +21,7 @@ PPT 幻灯片定位（v1）、本条指定的技能、另一侧对应句，以�
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -153,6 +154,7 @@ class Grammar:
                 r"(?: · run (\d+))?(?: · source (selection|text match|mark))?"
                 r"(?: · fingerprint ([0-9a-f]{16,64}))?( · paragraph changed)?$"
             )
+            self.video = re.compile(r"^\s+Video location: (\{.*\})$")
             self.pptx = re.compile(r"^\s+PPT location: v(\d+)(.*)$")
             self.pptx_el = re.compile(
                 r"([\w~][^\s(,;]*) \(id ([^,()]+), ([A-Za-z]+), z (\d+), digest ([0-9a-f]{64})"
@@ -197,6 +199,7 @@ class Grammar:
                 r"(?: · 运行 (\d+))?(?: · 来源 (选区|文本匹配|标注处))?"
                 r"(?: · 指纹 ([0-9a-f]{16,64}))?( · 段落已改动)?$"
             )
+            self.video = re.compile(r"^\s+视频定位：(\{.*\})$")
             self.pptx = re.compile(r"^\s+PPT 定位：v(\d+)(.*)$")
             self.pptx_el = re.compile(
                 r"([\w~][^\s（、]*)（标识 ([^，()]+)，([A-Za-z]+)，第 (\d+) 层，摘要 ([0-9a-f]{64})"
@@ -285,6 +288,14 @@ class Grammar:
                 got = self._docx_in(int(m.group(1)), m.group(2))
                 if got:
                     cur["docx"] = got
+                continue
+            if m := self.video.match(line):
+                try:
+                    location = json.loads(m.group(1))
+                except json.JSONDecodeError:
+                    location = None
+                if isinstance(location, dict):
+                    cur["video"] = location
                 continue
             if m := self.pptx.match(line):
                 version = int(m.group(1))
@@ -533,6 +544,10 @@ class Grammar:
             parts.append("paragraph changed" if en else "段落已改动")
         return lead + " · ".join(parts)
 
+    def video_line(self, a: dict[str, Any]) -> str:
+        label = "Video location: " if self.lang == "en" else "视频定位："
+        return f"   {label}{json.dumps(a, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}"
+
     def pptx_line(self, a: dict[str, Any]) -> str:
         """PPT 幻灯片定位：v1 逐项写出（可还原）；更高版本只写版本号。
         元素目标只写身份不写名称（名称会变、不是身份，重定位时刷新），引用原文放行尾。"""
@@ -767,6 +782,8 @@ def render(
                 lines.append(g.docx_line(n["docx"]))
             if isinstance(n.get("pptx"), dict):
                 lines.append(g.pptx_line(n["pptx"]))
+            if isinstance(n.get("video"), dict):
+                lines.append(g.video_line(n["video"]))
             if n.get("skills"):
                 lines.append(g.skills_line(list(n["skills"])))
             pr = n.get("pair") if isinstance(n.get("pair"), dict) else None

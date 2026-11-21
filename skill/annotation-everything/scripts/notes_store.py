@@ -56,6 +56,7 @@ EDITABLE = (
     "orphan",
     "docx",
     "pptx",
+    "video",
 )
 # key：页面键（报告 section 的 data-key），重排页序后据此把批注挪回正确的页；orphan：重建后原页面已不存在
 # docx：DOCX 审阅的段落定位（带版本号 v），见 _clean_docx；重建时先按它把批注归到段落现在所在的页，
@@ -936,6 +937,97 @@ def _trail(target: dict[str, Any], /, **entry: Any) -> None:
     target["trail"] = t[-TRAIL_KEEP:]
 
 
+def _video_int(value: Any, name: str, *, minimum: int = 0) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise NoteError(f"video.{name} 须为不小于 {minimum} 的整数")
+    return value
+
+
+def _video_number(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise NoteError(f"video.{name} 须为有限数字")
+    return float(value)
+
+
+def _clean_video_mark(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("kind") not in ("point", "region"):
+        raise NoteError("video.mark 须为归一化点或区域")
+    kind = value["kind"]
+    names = ("x", "y") if kind == "point" else ("x", "y", "width", "height")
+    if set(value) != {"kind", *names}:
+        raise NoteError("video.mark 含无法识别的字段")
+    mark = {"kind": kind, **{name: _video_number(value[name], f"mark.{name}") for name in names}}
+    if any(mark[name] < 0 or mark[name] > 1 for name in ("x", "y")):
+        raise NoteError("video.mark 坐标须在 0 至 1 之间")
+    if kind == "region":
+        if mark["width"] <= 0 or mark["height"] <= 0:
+            raise NoteError("video.mark 区域宽高须大于 0")
+        if mark["x"] + mark["width"] > 1 or mark["y"] + mark["height"] > 1:
+            raise NoteError("video.mark 区域不能超出实际视频画面")
+    return mark
+
+
+def _clean_video(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise NoteError("video 须为定位对象")
+    version = value.get("v")
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise NoteError("video.v 须为正整数")
+    if version != 1:
+        # 与 DOCX / PPT 定位一致：更高版本原样保留，但不能按本版本的帧规则解释。
+        try:
+            encoded = _dumps(value, sort_keys=True)
+        except (TypeError, ValueError) as exc:
+            raise NoteError("video 含无法序列化的内容") from exc
+        if len(encoded) > 4000:
+            raise NoteError("video 高版本定位过长")
+        return json.loads(encoded)
+    if not isinstance(value.get("versionId"), str) or not re.fullmatch(r"V[1-9][0-9]*", value["versionId"]):
+        raise NoteError("video.versionId 无效")
+    fps = _video_number(value.get("fps"), "fps")
+    if fps <= 0:
+        raise NoteError("video.fps 须大于 0")
+    timebase = value.get("timebase")
+    if not isinstance(timebase, dict) or set(timebase) != {"num", "den"}:
+        raise NoteError("video.timebase 须为 {num, den}")
+    num = _video_int(timebase.get("num"), "timebase.num", minimum=1)
+    den = _video_int(timebase.get("den"), "timebase.den", minimum=1)
+    if not math.isclose(fps, den / num, rel_tol=1e-9, abs_tol=1e-9):
+        raise NoteError("video.fps 与 timebase 不一致")
+    frames = _video_int(value.get("frames"), "frames", minimum=1)
+    width = _video_int(value.get("videoWidth"), "videoWidth", minimum=1)
+    height = _video_int(value.get("videoHeight"), "videoHeight", minimum=1)
+    has_frame = "frame" in value
+    has_start, has_end = "startFrame" in value, "endFrame" in value
+    if has_frame == (has_start or has_end) or has_start != has_end:
+        raise NoteError("video 须恰好使用 frame 或 startFrame/endFrame 其中一种定位")
+    out = {
+        "v": 1,
+        "versionId": value["versionId"],
+        "fps": fps,
+        "timebase": {"num": num, "den": den},
+        "frames": frames,
+        "videoWidth": width,
+        "videoHeight": height,
+    }
+    if has_frame:
+        frame = _video_int(value.get("frame"), "frame")
+        if frame >= frames:
+            raise NoteError("video.frame 超出已登记帧数")
+        out["frame"] = frame
+    else:
+        start = _video_int(value.get("startFrame"), "startFrame")
+        end = _video_int(value.get("endFrame"), "endFrame")
+        if start >= end or end > frames:
+            raise NoteError("video 区间须满足 0 <= startFrame < endFrame <= frames")
+        out["startFrame"], out["endFrame"] = start, end
+    if value.get("mark") is not None:
+        out["mark"] = _clean_video_mark(value["mark"])
+    return out
+
+
 def _clean_time(v: Any) -> str | None:
     if isinstance(v, str) and 0 < len(v) <= 64:
         return v
@@ -979,6 +1071,8 @@ def _clean_fields(data: dict[str, Any], *, partial: bool) -> dict[str, Any]:
             v = _clean_docx(v)
         elif k == "pptx":
             v = _clean_pptx(v)
+        elif k == "video":
+            v = _clean_video(v)
         else:
             v = fix_text(v)
             if k in ("text", "quote"):
@@ -996,6 +1090,8 @@ def _clean_fields(data: dict[str, Any], *, partial: bool) -> dict[str, Any]:
             raise NoteError("缺少 page")
         if not out.get("text", "").strip():
             raise NoteError("批注内容为空")
+        if isinstance(out.get("video"), dict) and out["video"].get("v") == 1 and out["page"] != 1:
+            raise NoteError("视频批注的兼容 page 固定为 1")
     return out
 
 
@@ -1045,6 +1141,8 @@ def _new_note(raw: dict[str, Any], fields: dict[str, Any], nid: str) -> dict[str
         note.pop("docx", None)
     if note.get("pptx") is None:
         note.pop("pptx", None)
+    if note.get("video") is None:
+        note.pop("video", None)
     return note
 
 
@@ -1113,6 +1211,17 @@ def update(
             fields["docx"] = None
         if "pptx" not in fields and (moved or fields.get("orphan") is False) and usable_pptx_anchor(note.get("pptx")):
             fields["pptx"] = None
+        if isinstance(fields.get("video"), dict) and fields["video"].get("v") == 1:
+            final_page = fields.get("page", note.get("page"))
+            if final_page != 1:
+                raise NoteError("视频批注的兼容 page 固定为 1")
+        current_video = note.get("video")
+        if isinstance(current_video, dict):
+            if "video" in fields and fields["video"] != current_video:
+                raise NoteError("video 原版本定位不可变")
+            fields.pop("video", None)
+            if "page" in fields and fields["page"] != 1:
+                raise NoteError("视频批注不能移出兼容 page=1")
         note.update(fields)
         _settle_marks(note, fields)
         if note.get("edit") is None:
@@ -1121,6 +1230,8 @@ def update(
             note.pop("docx", None)
         if note.get("pptx") is None:
             note.pop("pptx", None)
+        if note.get("video") is None:
+            note.pop("video", None)
         note["updatedAt"] = now_iso()
         return _commit(review_dir, doc, {"op": "update", "by": by, "id": note_id, "fields": fields}), note
 
@@ -1366,6 +1477,7 @@ def dedup_key(n: dict[str, Any]) -> tuple:
             ],
         }
     pptx_t = _dumps(pptx, sort_keys=True) if isinstance(pptx, dict) else None
+    video_t = _dumps(n["video"], sort_keys=True) if isinstance(n.get("video"), dict) else None
     return (
         int(n.get("page", 0)),
         str(n.get("target", "")).strip(),
@@ -1376,6 +1488,7 @@ def dedup_key(n: dict[str, Any]) -> tuple:
         st_t,
         docx_t,
         pptx_t,
+        video_t,
     )
 
 
@@ -1453,6 +1566,8 @@ def import_notes(
                     ):
                         fresh["resolvedBatch"] = cur["resolvedBatch"]  # 同一次处理：保留批次号
                     fresh.update({**_extra_fields(cur), **_extra_fields(raw)})  # 扩展字段：库里的保底，导入方的覆盖
+                    if isinstance(cur.get("video"), dict) and fresh.get("video") != cur["video"]:
+                        raise NoteError("导入不能改变已有批注的 video 原版本定位")
                     cur.clear()
                     cur.update(fresh)
                     updated += 1
