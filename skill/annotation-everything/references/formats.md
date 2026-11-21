@@ -102,6 +102,22 @@ python3 $S/build_viewer.py --report 成片.mp4 --out 成片-review --name "合�
 - 选择性提交：视频审阅的「交给 Agent」弹窗默认全选、可取消部分；提交带 `noteIds`（所选批注 id，按勾选顺序）与 `submitId`（这一次提交操作的幂等键）。批次快照只固定所选批注并记 `selected: true`；未选中的保持未处理，留待以后提交。等待接收期间重试同一 `submitId` 合并进原批次并刷新快照、附言与选项；批次已被领取或收尾后重试同一 `submitId` 原样返回该批次，不新增批次、不改写范围。文档审阅不带 `noteIds`，沿用整批提交。视频审阅未绑定源工程时服务拒绝提交（`video-source-required`），批注与勾选保留。服务声明 `selective-handoff` 与 `video-source` 特性；旧服务不支持时页面保留勾选并提示所缺能力。
 - 领取负载自含范围：绑定会话 `notes.py claim` 的 JSON 带 `reviewId`、`seq`、`noteIds`、`userMessage`，以及每条批注的 `materials[]`（`noteId`、`text`、可选 `quote`、`video` 定位〔版本、帧或半开区间、时间基准、可选点/框〕、`media`〔相对 URL、审阅内私有路径、SHA-256；本机服务在线时另有绝对 URL〕）；已绑定源工程时另有 `sourceProject`（引擎、工程根、入口、对准的成片版本）。`notes.py wait` 的人读输出带同样的源工程行，未选中的批注不出现，不需要再读 `show --batch` 才拿到范围。
 
+## 从源工程直接开始（Remotion / HyperFrames）
+
+`--report` 也接受本地源工程目录（同样不接受讲稿输入），产出的审阅与 MP4 入口同一形态（同一 `format: video` 清单、V1 私有副本、SHA-256、批注与交接流程）：
+
+```bash
+python3 $S/build_viewer.py --report 源工程目录 --out 工程-review --name "短片审阅"
+python3 $S/video_engines.py inspect 源工程目录        # 只读巡检：引擎、候选、成片证据（JSON）
+```
+
+- **引擎探测只读工程文件，不执行工程代码**。Remotion：`package.json` 依赖含 `remotion`（或工程内有 `node_modules/.bin/remotion`），入口取 `remotion.config.ts` 的 `setEntryPoint`，否则按 `src/index.tsx/.ts/.jsx/.js` 顺序；合成清单由工程内 `node_modules/.bin/remotion compositions <入口>` 列出，按表头映射解析 ID、宽高、fps 与时长。HyperFrames：依赖含 `hyperframes`（或有对应 bin），候选为工程根与一层子目录的 HTML（排除 `node_modules` 与隐藏目录），fps 取根 composition 的 `data-fps`，缺省回退 30，宽高与时长以实际渲染结果为准。两种引擎标志同时出现时明确报错。入口或 composition 路径解析后越出工程一律拒绝。
+- **复用只认可证明匹配的成片，不认文件名**：Remotion 要求探测出的宽高、fps、帧数与合成声明一致；HyperFrames 静态只能核对 fps。成片比 `package.json`、入口 / 配置、所选 composition HTML 的新鲜度基准旧视为陈旧。恰好一个新匹配时自动复用（构建警告注明出处）；多个匹配、陈旧或 HyperFrames 只到 fps 证据时需要人工确认：`--reuse-movie <路径>` 确认复用，`--no-reuse` 跳过复用直接渲染。复用的成片同样按上文规则登记 V1。
+- **直接入口写入源工程关联（#193 契约）**：从工程构建成功即把引擎证据写进 `review.json` 的 `video.sourceProject`（经 `video_source.link`，`by=build`）：合成声明特征（Remotion 为宽高、fps、帧数；HyperFrames 为声明的 fps）与登记 V1 完全一致时自动 `linked` / `match=verified`，可立即交改；渲染结果与声明有差异时写入 `pending` 并保留 `differences` 逐字段证据，审阅人在页面按 `/api/video/source-project/confirm` 确认后才满足交改所需的 `video-source-required`。`--rebuild` 保留关联。多候选合成仍须先用 `--video-composition` 选定才能构建（没有成片无法登记 V1），`video_engines.py inspect` 输出候选证据供选择。MP4 先批后绑不写关联，继续走上文的页面关联与确认流程。
+- **渲染在工程环境调用其引擎**：cwd 为工程根，`shell=False` 固定 argv——Remotion `render <入口> <合成ID> <输出> --codec=h264 --overwrite=false`，HyperFrames `render . --format mp4 -o <输出> -c <composition HTML>`；只用工程内 `node_modules/.bin`，缺失时明确报错并提示先在工程内安装依赖，AE 不安装依赖、不联网、不隐式 `npx`。输出写入审阅目录 `.render/` 暂存（新路径预先检查不存在），登记 V1 后删除。超时由 `--render-timeout` 控制（默认 1800 秒，也可用环境变量 `AE_VIDEO_RENDER_TIMEOUT`），超时终止整个进程组。渲染产物仍须通过 MP4 探测（恒定帧率、单视频轨），否则明确拒绝。
+- **失败给可执行的恢复信息**：引擎退出码与 stderr 摘录、缺依赖时的安装提示、超时的重试建议都在错误里；修复后重新运行同一命令即可继续同一审阅（失败尝试不写 `review.json`）。已登记 V1 的审阅再用工程目录进入会明确拒绝，重建用 `--rebuild`。
+- 单元测试用 `tests/fixtures/video/` 的合成工程骨架与假引擎命令验证 argv、路径边界、超时与失败恢复；实机双引擎演示（真实渲染）归 #198 / PR review。MP4 先批后绑的既有路径保持可用。
+
 ## PPTX（直接审阅与白名单回写）
 
 `--report` 直接接受 `.pptx`；一张幻灯片生成一页对照页，页面保留原始尺寸、方向与顺序。幻灯片按本机 LibreOffice（`soffice`）+ Poppler（`pdftoppm`）渲染成图：macOS 安装 LibreOffice.app、Linux 安装 `libreoffice` 与 `poppler-utils`、Windows 将 LibreOffice（探测 `PATH` 与常见 `Program Files` / `LocalAppData\Programs` 位置）与 Poppler（`PATH` 或常见 Poppler 安装目录的 `bin`）配置好后即可构建；工具缺失、转换失败、页数不符或输出为空时构建明确报错，不自动下载安装，也不把文字预览冒充视觉审阅（可选渲染工具缺失不影响基础 HTML 与 DOCX 审阅）。旧版二进制 `.ppt`（以及 `.pptm`、`.potx`、`.ppsx`）不受支持，先在 PowerPoint/WPS 中另存为 `.pptx`。字体核查在转换前后各做一次：PPTX 转图前先运行 `python3 $S/check_pptx_fonts.py 原始.pptx`，转出 PDF 后再加 `--pdf 转换后.pdf` 对照字体证据；逐页视觉核验仍不可省略，字体名称一致也不能证明逐字形渲染正确，且不宣称已验证所有 Office/WPS 版本或所有字体布局。
