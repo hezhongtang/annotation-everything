@@ -895,7 +895,7 @@ class VideoComparePageTests(unittest.TestCase):
           const makeVideo = id => {
             const listeners = {};
             const el = {
-              id, src: "", currentTime: 0, muted: true, paused: true, readyState: 2,
+              id, src: "", currentTime: 0, muted: true, paused: true, readyState: 2, controls: true,
               videoWidth: 640, videoHeight: 360, style: {}, calls: [],
               getAttribute(k){ return k === "src" ? this.src : null },
               setAttribute(k, v){ if (k === "src") this.src = v; },
@@ -951,6 +951,7 @@ class VideoComparePageTests(unittest.TestCase):
           setVideoServerFeatures({ features: ["video", "video-receipt", "video-compare", "video-relocate"] });
           videoCompareOpen(notes[0], false);
           const bEl = getEl("videoCompareBefore"), aEl = getEl("videoCompareAfter");
+          const rangeControls = [bEl.controls, aEl.controls];
           await videoComparePlay("before");
           const bPlaying = { muted: bEl.muted, time: bEl.currentTime, src: bEl.src, aPaused: aEl.paused };
           bEl.currentTime = 6.0;
@@ -997,10 +998,18 @@ class VideoComparePageTests(unittest.TestCase):
           getEl("videoRelocateFrame").value = "108";
 
           await videoRelocateSave();
-          return { bPlaying, bStopped, aPlaying, aStopped, capturedFrame, pollPreserved, legacyErr, offlineErr, oobErr, apiCalls, applyLen: applyCalls.length, stateAfter: getEl("videoCompareState").textContent };
+          const frameControls = [bEl.controls, aEl.controls];
+          videoRelocatePopulate(videoComparePairState, true);
+          const scrubControls = [bEl.controls, aEl.controls];
+          videoRelocatePopulate(videoComparePairState, false);
+          return { rangeControls, frameControls, scrubControls, afterScrub: aEl.controls, bPlaying, bStopped, aPlaying, aStopped, capturedFrame, pollPreserved, legacyErr, offlineErr, oobErr, apiCalls, applyLen: applyCalls.length, stateAfter: getEl("videoCompareState").textContent };
         """,
             locale="zh-CN",
         )
+        self.assertEqual(actual["rangeControls"], [True, True])
+        self.assertEqual(actual["frameControls"], [False, False])
+        self.assertEqual(actual["scrubControls"], [False, True])
+        self.assertFalse(actual["afterScrub"])
         self.assertFalse(actual["bPlaying"]["muted"])
         self.assertAlmostEqual(actual["bPlaying"]["time"], 4.0)
         self.assertEqual(actual["bPlaying"]["src"], "/api/video/versions/V1/media")

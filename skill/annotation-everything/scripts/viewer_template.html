@@ -2233,12 +2233,13 @@ function videoCompareRenderLabels(){
     kindSel.options[1].textContent=tMsg("viewer.video.relocate.kindRange");
     kindSel.options[2].textContent=tMsg("viewer.video.relocate.kindCut")}
 }
-function videoCompareLoadSide(el,url,seekTime,onReady){
+function videoCompareLoadSide(el,url,spec,onReady){
   if(!el)return;
+  el.controls=!spec||spec.kind!=="frame";
   if(!url){el.pause();if(el.getAttribute("src")){el.removeAttribute("src");el.load()}if(onReady)onReady();return}
   const changed=el.getAttribute("src")!==url;
   if(changed){el.src=url;el.load()}
-  const apply=()=>{el.pause();el.muted=false;if(seekTime!=null)el.currentTime=seekTime;if(onReady)onReady()};
+  const apply=()=>{el.pause();el.muted=false;el.currentTime=spec?spec.seekTime:0;if(onReady)onReady()};
   if(el.readyState>=1)apply();
   else el.addEventListener("loadedmetadata",apply,{once:true})}
 function videoRelocateKindSync(){
@@ -2248,6 +2249,8 @@ function videoRelocateKindSync(){
   sr.getElementById("videoRelocateCutCtxWrap").hidden=kind!=="cut"}
 function videoRelocatePopulate(pair,showForm){
   videoRelocateOpen=!!showForm&&!!(pair&&pair.canRelocate);
+  const after=videoCompareEl("after");
+  if(after&&pair)after.controls=videoRelocateOpen||!pair.after.spec||pair.after.spec.kind!=="frame";
   const box=sr.getElementById("videoCompareRelocate"),err=sr.getElementById("videoRelocateErr");
   if(err){err.hidden=true;err.textContent=""}
   if(!box)return;
@@ -2328,9 +2331,8 @@ function videoCompareOpen(note,openRelocate=false){
     reasonEl.hidden=!notesOut.length;reasonEl.textContent=notesOut.join(" · ")}
   const histEl=sr.getElementById("videoCompareHistory");
   if(histEl){const items=pair.after.history||[];histEl.hidden=!items.length;histEl.textContent=items.map(h=>h.text).join(" | ")}
-  videoCompareLoadSide(videoCompareEl("before"),pair.before.url,pair.before.spec?pair.before.spec.seekTime:0,()=>videoCompareLayoutSide("before"));
-  const afterSeek=pair.after.spec?pair.after.spec.seekTime:0;
-  videoCompareLoadSide(videoCompareEl("after"),pair.after.url,afterSeek,()=>videoCompareLayoutSide("after"));
+  videoCompareLoadSide(videoCompareEl("before"),pair.before.url,pair.before.spec,()=>videoCompareLayoutSide("before"));
+  videoCompareLoadSide(videoCompareEl("after"),pair.after.url,pair.after.spec,()=>videoCompareLayoutSide("after"));
   videoRelocatePopulate(pair,openRelocate||pair.state==="needs_relocate"||pair.state==="missing_evidence");
   videoCompareLayout()}
 function videoCompareClose(){
@@ -2435,7 +2437,7 @@ function videoCompareInit(){
   if(bEl){bEl.addEventListener("timeupdate",()=>videoCompareTick("before"));bEl.addEventListener("loadedmetadata",()=>videoCompareLayoutSide("before"))}
   if(aEl){aEl.addEventListener("timeupdate",()=>videoCompareTick("after"));aEl.addEventListener("loadedmetadata",()=>videoCompareLayoutSide("after"))}
   const kindSel=sr.getElementById("videoRelocateKind");if(kindSel)kindSel.onchange=()=>videoRelocateKindSync();
-  const verSel=sr.getElementById("videoRelocateVersion");if(verSel)verSel.onchange=()=>{const ver=videoFindVersion(verSel.value);if(ver&&ver.url)videoCompareLoadSide(aEl,ver.url,0,()=>videoCompareLayoutSide("after"))};
+  const verSel=sr.getElementById("videoRelocateVersion");if(verSel)verSel.onchange=()=>{const ver=videoFindVersion(verSel.value);if(ver&&ver.url)videoCompareLoadSide(aEl,ver.url,null,()=>videoCompareLayoutSide("after"))};
   const useF=sr.getElementById("videoRelocateUseFrame");if(useF)useF.onclick=()=>videoRelocateUseFrame();
   const setS=sr.getElementById("videoRelocateSetStart");if(setS)setS.onclick=()=>{sr.getElementById("videoRelocateStart").value=videoCompareAfterCurrentFrame()};
   const setE=sr.getElementById("videoRelocateSetEnd");if(setE)setE.onclick=()=>{sr.getElementById("videoRelocateEnd").value=videoCompareAfterCurrentFrame()+1};
