@@ -1980,7 +1980,7 @@ def handoff_state(review_dir: Path, *, full: bool = True, handoff: Any = None, n
     for pos in range(last, (0 if full else max(last, 0)) - 1, -1):
         it = items[pos]
         next_start = items[pos + 1].get("claimedAt") if pos < last else None
-        h = {k: v for k, v in it.items() if k != "openIds"}
+        h = {k: v for k, v in it.items() if k not in ("openIds", "videoSubmission")}
         h["userMessage"] = handoff_user_message(it)
         if it.get("status") in ("claimed", "drafted", "review", "reviewing"):
             h.update(_batch_stats(notes, it, None, next_start, open_now, in_flight=in_flight_set), live=True)
@@ -2086,7 +2086,7 @@ def handoff_submit(
     full_check：处理后是否检查整份材料的前后一致性；缺省时保留待接收批次的原选项。
     note_ids：选择性提交（视频审阅）只交所选批注，缺省仍是全部未处理批注（文档审阅沿用）；
     submit_id：这一次提交操作的幂等键——网络重试带同一键时，等待中的批次照常合并刷新，
-    已被接收或收尾的批次原样返回（merged=True，不写任何更改），不产生新批次。"""
+    已被接收或收尾的批次原样返回。视频每次显式提交固定一批，所有重试都返回原批次。"""
     if note_ids is not None and (not isinstance(note_ids, list) or not all(isinstance(x, str) and x for x in note_ids)):
         raise HandoffError("note_ids 须为批注 id 列表", code="bad-note-ids")
     if submit_id is not None and (not isinstance(submit_id, str) or not 1 <= len(submit_id) <= 64):
@@ -2100,14 +2100,22 @@ def handoff_submit(
         notes = load(review_dir)["notes"]
         doc = handoff_load(review_dir)
         items = doc["items"]
+        manifest = ledger.read_manifest(review_dir)
+        video = manifest.get("video") if _is_video_review(manifest) else None
         existing = next((i for i in items if submit_id is not None and i.get("submitId") == submit_id), None)
-        if existing is not None and existing.get("status") != "pending":
-            # 陈旧提交的重试：批次已被接收或收尾，按原样返回，不新增也不改写。
+        if existing is not None and (video is not None or existing.get("status") != "pending"):
             return doc, existing, True
         latest = items[-1] if items else None
-        merge_into = (
-            existing if existing is not None else latest if latest and latest.get("status") == "pending" else None
-        )
+        merge_into = latest if video is None and latest and latest.get("status") == "pending" else None
+        if video is not None:
+            target = "review"
+            pending = _in_flight_ids(items, notes)
+            if note_ids is not None:
+                overlap = next((nid for nid in note_ids if nid in pending), None)
+                if overlap:
+                    raise HandoffError(f"批注 {overlap} 已提交", code="note-in-flight", id=overlap)
+            else:
+                notes = [n for n in notes if n.get("id") not in pending]
         full_check_value = (
             merge_into.get("fullCheck") is True
             if merge_into and merge_into.get("status") == "pending" and full_check is None
@@ -2126,6 +2134,9 @@ def handoff_submit(
             "alwaysSkills": always_skills(review_dir),
             **(_selected_snapshot(notes, note_ids) if note_ids is not None else _open_snapshot(notes)),
         }
+        if video is not None:
+            by_id = {n["id"]: n for n in notes}
+            snap["videoSubmission"] = {"notes": [by_id[nid] for nid in snap["openIds"]], "video": video}
         if submit_id is not None:
             snap["submitId"] = submit_id
         if merge_into is not None:

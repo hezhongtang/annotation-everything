@@ -125,7 +125,7 @@ class VideoPagePureTests(unittest.TestCase):
         self.assertIn("Video location: ", actual[1]["line"])
 
     def test_selective_handoff_range_defaults_to_all_and_keeps_order(self):
-        """5 条选 3：默认全选走整批（null），取消 2 条后只交所选 3 条，全不选停在空数组由入口拦住。"""
+        """全选也固定提交范围，保存后新增的批注不进入本次提交。"""
         actual = run_video(
             "const avail=['n1','n2','n3','n4','n5'];"
             "return {untouched:handoffNoteIds(avail,null),"
@@ -133,8 +133,8 @@ class VideoPagePureTests(unittest.TestCase):
             "three:handoffNoteIds(avail,new Set(['n4','n1','n5'])),"
             "none:handoffNoteIds(avail,new Set())};"
         )
-        self.assertIsNone(actual["untouched"])
-        self.assertIsNone(actual["allTicked"])
+        self.assertEqual(actual["untouched"], [])
+        self.assertEqual(actual["allTicked"], ["n1", "n2", "n3", "n4", "n5"])
         self.assertEqual(actual["three"], ["n1", "n4", "n5"])
         self.assertEqual(actual["none"], [])
 

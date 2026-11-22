@@ -728,6 +728,8 @@ def assert_claim_owner(
     """binding / manifest：调用方已读好的接收方绑定与绑定校验用的 review.json
     （一次请求里只读一次时传入，见 serve.py 的请求快照）；都不传就自己读，降级结果与原来一致。"""
     binding = store.pre_read(binding, _ANY_BINDING, lambda: load_binding(review, manifest=manifest))
+    if not binding and (manifest if manifest is not None else ledger.read_manifest(review)).get("format", {}).get("report") == "video":
+        raise ValueError("video-receiver-required: bind this review to a receiver session before claiming")
     if expected_binding is not _ANY_BINDING and (binding or {}).get("bindingId") != expected_binding:
         raise ValueError("agent-binding-changed: restart the waiter in the bound session")
     if binding and caller_identity(harness, session) != binding_identity(binding):

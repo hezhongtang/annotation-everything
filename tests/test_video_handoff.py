@@ -125,8 +125,20 @@ class SelectiveSubmitTests(VideoHandoffBase):
         _doc, again, merged = store.handoff_submit(self.d, "改了附言", note_ids=["n1", "n2", "n3"], submit_id="op-1")
         self.assertTrue(merged)
         self.assertEqual(again["seq"], first["seq"], "重试同一次提交不新增批次")
-        self.assertEqual(again["openIds"], ["n1", "n2", "n3"], "等待中的批次按最新选择刷新快照")
+        self.assertEqual(again["openIds"], ["n1", "n2"], "同一次提交保留原快照")
+        self.assertEqual(again["userMessage"], "第一次")
         self.assertEqual(len(store.handoff_load(self.d)["items"]), 1)
+
+    def test_distinct_video_submissions_remain_independently_claimable(self):
+        store.handoff_submit(self.d, "第一批", note_ids=["n1"], submit_id="first")
+        store.handoff_submit(self.d, "第二批", note_ids=["n2"], submit_id="second")
+        first = store.handoff_claim(self.d)
+        _doc, replay, _merged = store.handoff_submit(self.d, note_ids=["n1"], submit_id="first")
+        second = store.handoff_claim(self.d)
+        self.assertEqual((first["seq"], first["openIds"], first["userMessage"]), (1, ["n1"], "第一批"))
+        self.assertEqual((replay["seq"], replay["status"]), (1, "claimed"))
+        self.assertEqual((second["seq"], second["openIds"]), (2, ["n2"]))
+        self.assertIsNone(store.handoff_claim(self.d))
 
     def test_stale_submit_id_returns_existing_batch_without_new_one(self):
         _doc, first, _m = store.handoff_submit(self.d, note_ids=["n1"], submit_id="op-1")
@@ -336,6 +348,17 @@ class ClaimPayloadTests(VideoHandoffBase):
         self.assertEqual(media["url"], "/api/video/versions/V1/media")
         self.assertEqual(media["path"], "media/v1.mp4")
 
+    def test_claim_uses_notes_and_source_from_the_time_of_submission(self):
+        store.handoff_submit(self.d, "首批", note_ids=["n2", "n1"], submit_id="snapshot")
+        store.update(self.d, "n1", {"text": "提交后编辑"})
+        store.delete(self.d, "n2")
+        self.link_source(root=str(self.root / "second-project"))
+        code, payload = self.run_claim()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["sourceProject"]["root"], str(self.root / "project"))
+        self.assertEqual([(m["noteId"], m["text"]) for m in payload["materials"]], [("n2","音乐太响"), ("n1","字幕遮挡图标")])
+        self.assertEqual(payload["materials"][0]["video"]["startFrame"], 120)
+
     def test_wait_output_lists_only_selected_notes_with_source_line(self):
         store.handoff_submit(self.d, "只交两条", note_ids=["n1", "n2"])
         env = {k: v for k, v in os.environ.items()}
@@ -365,6 +388,7 @@ class ServeHandoffTests(VideoHandoffBase):
         import serve
 
         self.add_notes(video_note("n1", frame=96), video_note("n2", frame=120), video_note("n3", frame=30))
+        self.binding = wakeup.bind_wait(self.d, "Claude Code", "http-session")
         self.server = serve.ReviewServer(self.d, 0, log_to_file=False)
         import threading
 
@@ -385,7 +409,7 @@ class ServeHandoffTests(VideoHandoffBase):
             "Origin": f"http://127.0.0.1:{self.server.port}",
             "Content-Type": "application/json",
         }
-        return serve._req(self.server.port, "POST", path, headers, body)
+        return serve._req(self.server.port, "POST", path, headers, {"receiverBindingId": self.binding["bindingId"], **body})
 
     def get(self, path: str):
         serve = sys.modules["serve"]
@@ -466,6 +490,13 @@ class ServeSourceProjectTests(VideoHandoffBase):
         serve = sys.modules["serve"]
         headers = {"Host": f"127.0.0.1:{self.server.port}"}
         return serve._req(self.server.port, "GET", path, headers)
+
+    def test_unbound_video_submission_retains_the_selected_annotations(self):
+        self.link_source()
+        self.add_notes(video_note("only", frame=22))
+        code, _headers, data = self.post("/api/handoff", {"noteIds":["only"], "submitId":"unbound"})
+        self.assertEqual((code, json.loads(data)["code"]), (409, "receiver-required"))
+        self.assertEqual(store.handoff_load(self.d)["items"], [])
 
     def test_get_before_link_reports_no_source_project(self):
         code, _h, body = self.get("/api/video/source-project")

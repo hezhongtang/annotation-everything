@@ -101,6 +101,7 @@ FEATURES = [
     "pptx",
     "video",
     "selective-handoff",
+    "video-handoff-snapshot",
     "video-source",
     "video-receipt",
     "video-compare",
@@ -962,7 +963,7 @@ class Handler(BaseHTTPRequestHandler):
             raise Reject(409, "review-stop-busy", self._t("serve.err.reviewLifecycleBusy")) from None
         self._json(200, {"app": APP, "reviewId": self.server.review_id()})
 
-    def _check_receiver(self, body: dict[str, Any]) -> None:
+    def _check_receiver(self, body: dict[str, Any], *, required: bool = False) -> None:
         # Called inside the batch lock: stop gating, transfer and submission share one authorization point.
         if not review_stop.accepts_work(self.server.review_dir):
             raise Reject(409, "review-stopped", self._t("serve.err.reviewStopped"))
@@ -971,6 +972,8 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, ValueError, KeyError):
             raise Reject(409, "receiver-invalid", self._t("serve.err.receiverInvalid"))
         current = (binding or {}).get("bindingId")
+        if required and not current:
+            raise Reject(409, "receiver-required", self._t("viewer.hand.videoReceiver"))
         if current != (self.server.agent_binding or {}).get("bindingId"):
             raise Reject(409, "receiver-restart", self._t("serve.err.receiverRestart"))
         if body.get("receiverBindingId") != current:
@@ -1343,27 +1346,33 @@ class Handler(BaseHTTPRequestHandler):
             submit_id = body.get("submitId")
             if submit_id is not None and (not isinstance(submit_id, str) or not 1 <= len(submit_id) <= 64):
                 raise Reject(400, "bad-submit-id", self._t("serve.err.submitId"))
-            # 视频审阅的提交就是改源提交：没有已确认的源工程关联时保留批注与选择，提示先关联。
-            manifest = self.server.manifest()
-            if isinstance(manifest.get("format"), dict) and manifest["format"].get("report") == "video":
-                if not video_source.linked(manifest.get("video") or {}):
-                    raise Reject(400, "video-source-required", self._t("serve.err.videoSourceRequired"))
-            message = (
-                body["userMessage"]
-                if body.get("fullCheck") is True and "userMessage" in body
-                else str(body.get("message") or "")
-            )
-            _h, item, merged = store.handoff_submit(
-                d,
-                message,
-                by="page",
-                target=str(body.get("target") or "final"),
-                allow_subagents=body.get("allowSubagents") is True,
-                full_check=body.get("fullCheck"),
-                authorize=lambda: self._check_receiver(body),
-                note_ids=note_ids,
-                submit_id=submit_id,
-            )
+            # 元数据与提交使用同一份源工程关联，写入期间其他页面不能换绑。
+            with ledger.metadata_lock(d, exclusive=False):
+                manifest = ledger.read_manifest(d)
+                video = manifest.get("video")
+                if isinstance(video, dict):
+                    if not video_source.linked(video):
+                        raise Reject(400, "video-source-required", self._t("serve.err.videoSourceRequired"))
+                    if not note_ids or not submit_id:
+                        raise Reject(400, "video-selection-required", self._t("viewer.hand.oldSelect"))
+                    if "sourceProject" in body and body["sourceProject"] != video_source.agent_brief(video):
+                        raise Reject(409, "video-source-changed", self._t("viewer.hand.sourceChanged"))
+                message = (
+                    body["userMessage"]
+                    if body.get("fullCheck") is True and "userMessage" in body
+                    else str(body.get("message") or "")
+                )
+                _h, item, merged = store.handoff_submit(
+                    d,
+                    message,
+                    by="page",
+                    target=str(body.get("target") or "final"),
+                    allow_subagents=body.get("allowSubagents") is True,
+                    full_check=body.get("fullCheck"),
+                    authorize=lambda: self._check_receiver(body, required=isinstance(video, dict)),
+                    note_ids=note_ids,
+                    submit_id=submit_id,
+                )
             self.server.log(
                 "info", f"handoff seq={item['seq']} open={item['openCount']} merged={merged} target={item['target']}"
             )

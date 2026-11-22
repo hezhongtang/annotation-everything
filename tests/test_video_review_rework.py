@@ -1212,7 +1212,7 @@ class VideoPageReworkUITests(unittest.TestCase):
             [(self.PURE_START, self.PURE_END), (self.PICK_START, self.PICK_END)],
             pick_setup,
             """
-            // Fresh V1: defaults to all open selected, handoffNoteIds returns null
+            // Fresh V1: defaults to all open selected, with an explicit ID snapshot
             renderHandPick();
             const v1Sel = [...handPickSel];
             const v1Ids = handoffNoteIds(submittableNotes().map(x=>x.id), handPickSel);
@@ -1235,7 +1235,7 @@ class VideoPageReworkUITests(unittest.TestCase):
             locale="zh-CN",
         )
         self.assertEqual(pick_actual["v1Sel"], ["f1"])
-        self.assertIsNone(pick_actual["v1Ids"])
+        self.assertEqual(pick_actual["v1Ids"], ["f1"])
         self.assertEqual(pick_actual["reworkInitial"], [])
         self.assertNotIn("N1", pick_actual["reworkHtml"])
         self.assertIn("仍然盖过人声", pick_actual["reworkHtml"])

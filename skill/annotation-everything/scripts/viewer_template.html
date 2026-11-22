@@ -1496,6 +1496,7 @@ function send(op,fullCheckSupported=true,saveRequest=null){
   if(op.kind==="handoff"){const message=op.message||"",body={message,target:op.target||"final",allowSubagents:!!op.allowSubagents};
     if(op.noteIds)body.noteIds=op.noteIds;   // 视频审阅的选择性提交：范围与幂等键跟着同一次操作重试
     if(op.submitId)body.submitId=op.submitId;
+    if(op.sourceProject)body.sourceProject=op.sourceProject;
     body.receiverBindingId=op.receiverBindingId??null;
     if(op.fullCheck===true){body.userMessage=message;body.message=FULL_CHECK_COMPAT+(message?"\n\n"+message:"")}
     if("fullCheck" in op&&fullCheckSupported)body.fullCheck=op.fullCheck===true;return api("POST","/api/handoff",body)}}
@@ -1527,6 +1528,7 @@ function onSent(op,r){
 function onRejected(op,e){   // 服务明确不接受（4xx）：不重试；返回补传结束时显示的提示。
   saveFailures++;LS.set(K.rejected,newId());   // 其他标签页等待补传锁时也能看到保存被拒
   if(op.kind==="handoff"){handQueued=pend.get().some(o=>o.kind==="handoff");renderHand();
+    if(VIDEO&&op.noteIds){handPickSel=new Set(op.noteIds);$("handMsg").value=op.message||"";saveHandSelection()}
     if(e.code&&e.code.startsWith("receiver-")){failed.push(op,e.message);if(!$("handMsg").value.trim())$("handMsg").value=op.message||""}
     return ()=>toast(e.status===404||e.status===405?tMsg("viewer.hand.toast.legacy"):tMsg("viewer.hand.toast.failed",{message:e.message}),6000)}
   if(op.kind==="add"&&!editOf(op.note)&&op.note.page===P[i].n&&!$("ntext").value.trim()){   // 把内容放回输入框
@@ -1558,7 +1560,10 @@ async function doFlush(saveRequest=null){   // 按顺序补传；多个标签页
         if(!videoOk){const d=await getNotes();srvNoVideo=!hasFeature(d,"video");   // 视频定位同样先确认能力：旧服务不补传、不静默丢 video 字段
           if(srvNoVideo){mode="server";successful=false;problem=()=>toast(tMsg("viewer.video.oldService"),9000);return false}videoOk=true}
         const hasFullCheck=op.kind==="handoff"&&"fullCheck" in op;let fullCheckSupported=true;
-        if(hasFullCheck){const d=await getNotes();fullCheckSupported=hasFeature(d,"full-check");srvNoFullCheck=!fullCheckSupported;
+        if(hasFullCheck||VIDEO&&op.kind==="handoff"){const d=await getNotes();
+          if(VIDEO&&(!supportsVideoHandoff(d)||!op.noteIds?.length||!op.submitId)){
+            problem=()=>toast(tMsg("viewer.hand.oldSelect"),9000);return false}
+          fullCheckSupported=hasFeature(d,"full-check");srvNoFullCheck=!fullCheckSupported;
           const latest=d.handoff&&d.handoff.latest,pendingCheck=latest&&latest.status==="pending"&&latest.fullCheck===true;
           if(!fullCheckSupported&&(op.fullCheck===true||pendingCheck)){
             problem=()=>toast(tMsg("viewer.hand.toast.fullCheckStashed"),6000);return false}}
@@ -1649,6 +1654,8 @@ const supportsReviewStop=d=>["stop-review","stop-review-status","stop-save-prote
 function handPollKeyOf(d){const h=d&&d.handoff||null;
   return JSON.stringify([h&&h.latest||null,h?h.total:null,h&&Array.isArray(h.inFlightIds)?h.inFlightIds:[],
     h&&h.finalizable||null,d&&d.agentDelivery||null])}
+function supportsVideoHandoff(d){return hasFeature(d,"selective-handoff")&&hasFeature(d,"video-handoff-snapshot")
+  &&hasFeature(d,"video-source")&&hasFeature(d,"video-receipt")&&hasFeature(d,"video-decisions")}
 function applyServer(d,quietHand){
   agentDelivery=d.agentDelivery||null;
   receiver=d.receiver||null;
@@ -1665,7 +1672,7 @@ function applyServer(d,quietHand){
     else if(["legacy","offline","mismatch"].includes(stopProblem))stopProblem=""
   }
   finalizeAllSupported=hasFeature(d,"finalize-all");srvNoDocx=!!DOCX&&!hasFeature(d,"docx");srvNoPptx=!!PPTX&&!hasFeature(d,"pptx");srvNoVideo=!!VIDEO&&!hasFeature(d,"video");updateMode();renderDocxBlock();renderPptxBlock();renderVideoBlock();
-  srvNoSelect=!hasFeature(d,"selective-handoff");srvNoVideoSource=!!VIDEO&&!hasFeature(d,"video-source");   // 选择性提交与源工程关联都按服务声明的能力走，旧服务不误发
+  srvNoSelect=!supportsVideoHandoff(d);srvNoVideoSource=!!VIDEO&&!hasFeature(d,"video-source");   // 选择性提交与源工程关联都按服务声明的能力走，旧服务不误发
   if(typeof setVideoServerFeatures==="function")setVideoServerFeatures(d);
   if(VIDEO&&mode==="server"&&!videoSourceLoaded){videoSourceLoaded=true;loadVideoSource()}
   if(VIDEO&&d.video){const sig=JSON.stringify(d.video);liveVideo=d.video;const cur=d.video.currentVersionId||null;
@@ -1900,11 +1907,7 @@ function videoLocText(anchor){const clk=videoVersionClock(anchor);if(!anchor||an
   const rt=videoRangeTimes(anchor,anchor);
   return tMsg("viewer.video.rangeLocation",{version:anchor.versionId,start:rt.startTime.toFixed(3),end:rt.endTime.toFixed(3),fps})}
 function handoffNoteIds(avail,sel){
-  // 视频审阅的选择性提交范围：null = 没勾选过或又全选了，沿用整批语义（不带 noteIds）；
-  // 部分选择返回所选 id（按列表顺序，可为空数组，由提交入口拦住）。
-  if(!sel)return null;
-  const picked=avail.filter(id=>sel.has(id));
-  return picked.length===avail.length?null:picked}
+  return avail.filter(id=>sel&&sel.has(id))}
 function videoNoteState(note){
   if(!note||typeof note!=="object")return"unsubmitted";
   if(note.status==="resolved")return"approved";
@@ -3093,9 +3096,10 @@ function renderHandDrafts(){const ds=handMode?[]:draftedBatches();
 // 弹窗里的文字单独重画：切语言时按当前语言再写一遍，不重新提交、不改选项、不请求新接口
 function paintHand(){
   $("handReceiver").textContent=handReceiverText();
+  $("handHelp").textContent=tMsg(VIDEO?"viewer.hand.videoHelp":"viewer.hand.help");
   $("handTitle").textContent=handMode?tMsg("viewer.hand.reviewTitle",{seq:handMode.seq}):tMsg("viewer.hand.title");
   $("doHandLabel").textContent=handMode?tMsg("viewer.hand.requestReview"):tMsg("viewer.hand.submit");
-  $("hTargetRow").style.display=handMode||srvNoStages?"none":"";$("hSubRow").style.display=srvNoStages?"none":"";
+  $("hTargetRow").style.display=VIDEO||handMode||srvNoStages?"none":"";$("hSubRow").style.display=srvNoStages?"none":"";
   $("hFullRow").style.display=handMode?"none":"";
   $("hFullOld").style.display=!handMode&&srvNoFullCheck&&mode==="server"?"":"none";
   $("hOld").style.display=srvNoStages&&mode==="server"?"":"none";
@@ -3118,7 +3122,8 @@ function openHand(review){
   if(FILE){copyAll(tMsg("viewer.hand.toast.fileMode"));return}
   handDestination=receiver?{...receiver}:null;
   handMode=review&&review.seq?{seq:+review.seq}:null;
-  if(!handMode)handPickSel=null;   // 每次打开新的提交弹窗都从「默认全选」开始；只改勾选不动附言
+  if(VIDEO&&!handMode){const saved=LS.get(HOPT+".selection",null);
+    if(saved){handPickSel=new Set(saved.ids);$("handMsg").value=saved.message}}
   const o=LS.get(HOPT,{})||{};document.querySelectorAll('input[name="htarget"]').forEach(r=>r.checked=r.value===(o.target==="review"?"review":"final"));
   $("hSub").checked=!!o.sub;
   $("hFullCheck").checked=!!o.fullCheck;
@@ -3449,7 +3454,7 @@ function renderBatches(){
             +(h.doneAt?tMsg("viewer.batch.submittedDone",{at:escH(fmtIso(h.doneAt))}):"")})}</div>`
       +(handUserMessage(h)?`<div class="bm">${tMsg("viewer.batch.userMessage",{message:escH(handUserMessage(h))})}</div>`:"")
       +("target" in h?`<div class="bt">${tMsg("viewer.batch.requirement",
-          {target:h.target==="review"?tMsg("viewer.batch.reqReview"):tMsg("viewer.batch.reqFinal"),
+          {target:VIDEO?tMsg("viewer.video.state.pending_review"):h.target==="review"?tMsg("viewer.batch.reqReview"):tMsg("viewer.batch.reqFinal"),
            sub:h.allowSubagents?tMsg("viewer.batch.reqSub"):tMsg("viewer.batch.reqNoSub"),
            full:h.fullCheck?tMsg("viewer.batch.reqFull"):""})}</div>`:"")
       +(Array.isArray(h.stages)?h.stages.filter(e=>e&&typeof e==="object").map(e=>{const two=h.target==="review"||!!h.allowSubagents,nm=stageName(e.stage,two);return e.stage==="accept"
@@ -3484,27 +3489,30 @@ $("batchList").addEventListener("click",e=>{
   setTimeout(()=>{flashCard(x.id);flash(pinEl(x.id))},80)});
 $("handMsg").addEventListener("keydown",e=>{if(!e.isComposing&&e.key==="Enter"&&(e.metaKey||e.ctrlKey))$("doHand").click();else if(e.key==="Escape")$("hand").classList.remove("on")});
 $("doHand").onclick=()=>{const message=$("handMsg").value.trim(),sub=$("hSub").checked,fullCheck=$("hFullCheck").checked,
-    target=(document.querySelector('input[name="htarget"]:checked')||{}).value==="review"?"review":"final";
+    target=VIDEO||(document.querySelector('input[name="htarget"]:checked')||{}).value==="review"?"review":"final";
   if(stopSnapshot&&stopSnapshot.state!=="active"){toast(tMsg("viewer.stop.workBlocked"),6000);return}
   if((handDestination&&handDestination.bindingId)!==(receiver&&receiver.bindingId)||receiver&&["error","restart-required"].includes(receiver.state)){
     toast(tMsg("viewer.receiver.changed"),6000);return}
   if(!handMode&&fullCheck&&mode==="server"&&srvNoFullCheck){toast(tMsg("viewer.hand.toast.fullCheckOld"),6000);return}
   let noteIds=null;
   if(!handMode&&VIDEO){   // 视频审阅：先过源工程这一关，再带上勾选的范围
-    if(videoSourceInfo&&videoSourceInfo.status!=="linked"){toast(tMsg(videoSourceInfo.status==="pending"?"viewer.hand.sourcePending":"viewer.hand.sourceMissing"),7000);return}
-    if(srvNoVideoSource){toast(tMsg("viewer.video.sourceHint"),7000);return}
-    const avail=notes.filter(x=>x.status==="open"&&!flight.has(x.id)).map(x=>x.id);
-    const picked=handoffNoteIds(avail,handPickSel);
-    if(picked!==null){
-      if(!picked.length){toast(tMsg("viewer.hand.infoNone"),6000);return}
-      if(mode==="server"&&srvNoSelect){toast(tMsg("viewer.hand.oldSelect"),9000);return}   // 旧服务只认整批：保留勾选，先提示能力
-      noteIds=picked}}
+    if(mode!=="server"||srvNoSelect||srvNoVideoSource){toast(tMsg("viewer.hand.oldSelect"),9000);return}
+    if(videoSourceInfo?.status!=="linked"){toast(tMsg(videoSourceInfo?.status==="pending"?"viewer.hand.sourcePending":"viewer.hand.sourceMissing"),7000);return}
+    if(!handDestination?.bindingId){toast(tMsg("viewer.hand.videoReceiver"),7000);return}
+    const avail=submittableNotes().map(x=>x.id);
+    noteIds=handoffNoteIds(avail,handPickSel);
+    if(!noteIds.length){toast(tMsg("viewer.hand.infoNone"),6000);return}
+    if(noteIds.length!==handPickSel.size){handPickSel=new Set(noteIds);saveHandSelection();renderHandPick();toast(tMsg("viewer.hand.selectionChanged"),7000);return}}
+  const sourceProject=VIDEO&&videoSourceInfo?Object.fromEntries(["engine","root","entry","versionId"].map(k=>[k,videoSourceInfo[k]])):null;
+  if(noteIds){handPickSel=null;LS.del(HOPT+".selection")}
   LS.set(HOPT,{target,sub,fullCheck});$("hand").classList.remove("on");$("handMsg").value="";
   if(handMode){requestReview(handMode.seq,message,sub);return}
   mutate({kind:"handoff",message,target,allowSubagents:sub,fullCheck,receiverBindingId:handDestination&&handDestination.bindingId,
-    noteIds,submitId:noteIds?"hs-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,10):null})};
+    noteIds,sourceProject,submitId:noteIds?newId():null})};
 
 // ---------- 提交弹窗的可勾选列表与源工程关联（仅视频审阅；文档审阅整批提交沿用旧路径） ----------
+function saveHandSelection(){if(VIDEO&&handPickSel)LS.set(HOPT+".selection",{ids:[...handPickSel],message:$("handMsg").value})}
+$("handMsg").addEventListener("input",saveHandSelection);
 function submittableNotes(){return VIDEO?notes.filter(x=>x.status==="open"&&!flight.has(x.id)):[]}
 function handPickNoteTag(x){
   const vr=x&&x.videoReview&&typeof x.videoReview==="object"?x.videoReview:null,st=videoNoteState(x);
@@ -3540,9 +3548,9 @@ $("handPick").addEventListener("click",e=>{
     handPickSel=btn.dataset.pick==="all"?new Set(open.map(x=>x.id))
       :btn.dataset.pick==="returned"?new Set(open.filter(x=>videoNoteState(x)==="returned").map(x=>x.id))
       :new Set();
-    renderHandPick();return}
+    saveHandSelection();renderHandPick();return}
   const cb=e.target.closest('input[type="checkbox"][data-noteid]');
-  if(cb&&handPickSel){cb.checked?handPickSel.add(cb.dataset.noteid):handPickSel.delete(cb.dataset.noteid);
+  if(cb&&handPickSel){cb.checked?handPickSel.add(cb.dataset.noteid):handPickSel.delete(cb.dataset.noteid);saveHandSelection();
     const count=submittableNotes().reduce((n,x)=>n+(handPickSel.has(x.id)?1:0),0);
     const hint=$("handPick").querySelector(".hp-head .hint");
     if(hint)hint.textContent=tMsg("viewer.hand.pickCount",{n:count,m:submittableNotes().length})}});

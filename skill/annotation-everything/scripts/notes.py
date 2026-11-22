@@ -147,17 +147,19 @@ def handoff_claim_payload(d: Path, item: dict[str, Any], manifest: dict[str, Any
     私有路径）；视频审阅已绑定源工程时另带引擎、工程根、入口与对准的成片版本。
     """
     manifest = manifest if manifest is not None else load_manifest(d)
-    out = {k: v for k, v in item.items() if k != "openIds"}
+    out = {k: v for k, v in item.items() if k not in ("openIds", "videoSubmission")}
+    submitted = item.get("videoSubmission") or {}
     out["noteIds"] = list(item.get("openIds") or [])
     out["reviewId"] = manifest.get("reviewId")
-    video = manifest.get("video") if isinstance(manifest.get("video"), dict) else None
-    if video is None:
+    video = submitted.get("video", manifest.get("video"))
+    if not isinstance(video, dict):
         return out
     out["video"] = video_review.public_manifest({"video": video})
     brief = video_source.agent_brief(video)
     if brief is not None:
         out["sourceProject"] = brief
-    by_id = {n.get("id"): n for n in store.load(d)["notes"]}
+    notes = submitted["notes"] if submitted else store.load(d)["notes"]
+    by_id = {n.get("id"): n for n in notes}
     materials = []
     for nid in out["noteIds"]:
         note = by_id.get(nid)
@@ -2898,6 +2900,9 @@ def wait(
         return 0
     pages = sep.join(str(p) for p in item.get("pages") or []) or t("cli.hand.noPages")
     print(t("cli.hand.head", seq=item["seq"], at=item.get("at")))
+    submitted = item.get("videoSubmission") or {}
+    if submitted:
+        manifest = {**manifest, "video": submitted["video"]}
     source = video_source.agent_brief(manifest.get("video") or {})
     if source:  # 视频审阅已绑定源工程：改稿对准的引擎、入口与原成片版本一次说清
         print(
@@ -2923,7 +2928,7 @@ def wait(
     alw = store.always_skills(d)
     if alw:
         print(t("cli.hand.alwaysLine", list=always_text(t, alw)))
-    doc = store.load(d)
+    doc = {"notes": submitted["notes"]} if submitted else store.load(d)
     open_ids = set(item.get("openIds") or [])
     mine = {n["id"] for n in doc["notes"] if n.get("id") in open_ids and n.get("status", "open") == "open"}
     needed_notes = (n for n in doc["notes"] if n.get("status", "open") == "open" and (not video or n["id"] in mine))
