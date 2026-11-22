@@ -138,6 +138,28 @@ class VideoReviewReworkBase(unittest.TestCase):
 
 
 class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
+    def test_original_range_needs_a_playable_target_for_approval(self):
+        store.handoff_submit(self.review, "音乐", note_ids=["n2"])
+        store.handoff_claim(self.review, by="claude", seq=1)
+        frame = {"kind": "frame", "frame": 132}
+        store.video_receipt(
+            self.review,
+            seq=1,
+            receipt_id="first-frame-only",
+            movie=self._movie(self.v2_bytes, "v2.mp4"),
+            receipt={"notes": [{"noteId": "n2", "outcome": "fixed", "summary": "已压低音乐", "target": frame}]},
+        )
+        self.assertEqual(self._note("n2")["videoReview"]["state"], "missing_evidence")
+        with self.assertRaises(store.HandoffError):
+            store.video_decision(self.review, "n2", action="approve")
+        with self.assertRaises(store.HandoffError):
+            store.relocate_video_note(self.review, "n2", target=frame, version_id="V2")
+        store.relocate_video_note(
+            self.review, "n2", target={"kind": "range", "startFrame": 132, "endFrame": 192}, version_id="V2"
+        )
+        store.video_decision(self.review, "n2", action="approve")
+        self.assertEqual(self._note("n2")["status"], "resolved")
+
     def test_single_approval_records_human_decision_history_and_batch_stats(self):
         self._deliver_v2_mixed_batch()
         res = store.video_decision(
@@ -351,7 +373,12 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
             movie=self._movie(self.v3_bytes, "replacement.mp4"),
             receipt={
                 "notes": [
-                    {"noteId": "n2", "outcome": "fixed", "summary": "新成片", "target": {"kind": "frame", "frame": 65}}
+                    {
+                        "noteId": "n2",
+                        "outcome": "fixed",
+                        "summary": "新版音乐片段",
+                        "target": {"kind": "range", "startFrame": 132, "endFrame": 192},
+                    }
                 ]
             },
         )
@@ -518,6 +545,25 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
 
 
 class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
+    def test_late_return_or_reply_cannot_restore_an_older_decision(self):
+        self._deliver_v2_mixed_batch()
+        for nid, action, field in (("n2", "return", "reason"), ("n3", "reply", "reply")):
+            with self.subTest(action=action):
+                original = self._note(nid)["videoReview"]["evidenceRevision"]
+                first = {"action": action, field: "第一稿", "expected_evidence": original}
+                result = store.video_decision(self.review, nid, **first)
+                current = result["note"]["videoReview"]["evidenceRevision"]
+                self.assertNotEqual(current, original)
+                self.assertTrue(store.video_decision(self.review, nid, **first)["replayed"])
+                store.video_decision(
+                    self.review, nid, **{"action": action, field: "第二稿", "expected_evidence": current}
+                )
+                latest = self._note(nid)["videoReview"]
+                with self.assertRaises(store.HandoffError) as stale:
+                    store.video_decision(self.review, nid, **first)
+                self.assertEqual(stale.exception.code, "stale-decision")
+                self.assertEqual(self._note(nid)["videoReview"], latest)
+
     def _run_cli(self, argv: list[str], *, env_extra: dict[str, str] | None = None):
         old_env = dict(os.environ)
         os.environ["AE_HARNESS"] = "Claude Code"

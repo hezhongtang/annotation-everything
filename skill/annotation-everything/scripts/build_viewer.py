@@ -991,8 +991,15 @@ def build(
     movie_for_v1: Path | None = None
     engine_result: dict | None = None
     engine_cleanup: Path | None = None
-    video_default_title = report.stem
-    if script is not None and (video_review.is_mp4(report) or report.is_dir()):
+    video_input = video_review.is_mp4(report) or report.is_dir()
+
+    def check_review_type(existing):
+        if existing and (ledger.report_format(existing)[0] == "video") != video_input:
+            raise BuildError(diag(locale_choice, "build.video.separateReview", path=out))
+
+    check_review_type(preview)
+    video_default_title = (preview.get("title") if preview.get("video") else None) or report.stem
+    if script is not None and video_input:
         raise BuildError(diag(locale_choice, "build.video.scriptUnsupported", path=script))
     if video_review.is_mp4(report):
         movie_for_v1 = report
@@ -1000,6 +1007,13 @@ def build(
         # 从 Remotion / HyperFrames 源工程直接开始：引擎解析起始成片（复用或渲染）
         import video_engines
 
+        project_root, destination = report.resolve(), out.resolve()
+        if destination == project_root or (
+            project_root in destination.parents
+            and not preview.get("video")
+            and any((destination / name).exists() for name in ("index.html", "review.json"))
+        ):
+            raise BuildError(diag(locale_choice, "build.video.projectOutput", path=out))
         try:
             resolved = video_engines.resolve_source(
                 report,
@@ -1033,7 +1047,13 @@ def build(
                         "sourceFingerprint": engine_result.get("sourceFingerprint"),
                         "reuse": str(reuse_movie.resolve()) if reuse_movie else None,
                     }
-                video_meta = video_review.prepare(movie_for_v1, out, preview, origin=origin)
+                video_meta = video_review.prepare(
+                    movie_for_v1,
+                    out,
+                    preview,
+                    origin=origin,
+                    expected_sha256=engine_result["movieSha256"] if engine_result else None,
+                )
             finally:
                 if engine_cleanup is not None:
                     _remove_render_staging(engine_cleanup)
@@ -1338,12 +1358,16 @@ def build(
     if video_meta is not None:
         manifest["format"] = {"report": "video", "version": video_review.FORMAT_VERSION}
         manifest["video"] = video_meta
+        if preview.get("video"):
+            for key in ("sources", "sourcesAbs"):
+                if key in preview:
+                    manifest[key] = preview[key]
     if locale_choice is not None:
         manifest["locale"] = locale_choice
         manifest["build"]["locale"] = locale_choice
     with ledger.metadata_lock(out, exclusive=True):
-        if video_meta is not None:
-            current = ledger.read_manifest(out)
+        current = ledger.read_manifest(out)
+        check_review_type(current)
         if video_meta is not None and not preview.get("video") and current.get("video"):
             raise BuildError(diag(locale_choice, "build.video.error", path=out, reason="review.json changed"))
         if video_meta is not None and preview.get("video"):

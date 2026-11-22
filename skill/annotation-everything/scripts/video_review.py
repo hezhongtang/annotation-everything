@@ -37,6 +37,13 @@ class VideoError(ValueError):
     """MP4 无法识别、版本未登记或私有媒体路径不安全。"""
 
 
+class StaleRenderBase(VideoError):
+    def __init__(self, expected: str, current: str):
+        self.expected = expected
+        self.current = current
+        super().__init__(f"成片基于 {expected}，当前版本为 {current}")
+
+
 def is_mp4(path: Path) -> bool:
     return path.suffix.lower() == ".mp4"
 
@@ -267,14 +274,25 @@ def _video_track(data: bytes, start: int, end: int, media: list[tuple[int, int]]
     }
 
 
-def probe(path: Path) -> dict[str, Any]:
+def probe(path: Path, *, with_digest: bool = False) -> dict[str, Any]:
     """读取 MP4 元数据；无法确认精确帧定位时明确拒绝，不猜测帧率。"""
     try:
         with path.open("rb") as source:
-            if not os.fstat(source.fileno()).st_size:
+            before = os.fstat(source.fileno())
+            if not before.st_size:
                 raise VideoError("MP4 文件为空")
             with mmap.mmap(source.fileno(), 0, access=mmap.ACCESS_READ) as data:
-                return _probe_container(data)
+                metadata = _probe_container(data)
+            if with_digest:
+                metadata["sha256"] = _stream_digest(source)
+                after = os.fstat(source.fileno())
+                if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                ):
+                    raise VideoError("核对时成片已更改，请重新选择成片")
+            return metadata
     except OSError as exc:
         raise VideoError(f"无法读取 MP4：{exc}") from exc
 
@@ -346,12 +364,16 @@ def media_path(review_dir: Path, manifest: dict[str, Any], version_id: str) -> P
     return resolved
 
 
-def file_digest(path: Path) -> str:
+def _stream_digest(source) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
+    for block in iter(lambda: source.read(1024 * 1024), b""):
+        digest.update(block)
     return digest.hexdigest()
+
+
+def file_digest(path: Path) -> str:
+    with path.open("rb") as source:
+        return _stream_digest(source)
 
 
 def _now_iso() -> str:
@@ -438,7 +460,12 @@ def _next_version_number(video: dict[str, Any]) -> int:
 
 
 def prepare(
-    source: Path, review_dir: Path, existing: dict[str, Any] | None = None, *, origin: dict | None = None
+    source: Path,
+    review_dir: Path,
+    existing: dict[str, Any] | None = None,
+    *,
+    origin: dict | None = None,
+    expected_sha256: str | None = None,
 ) -> dict[str, Any]:
     """登记 V1。重建时从私有副本读取，绝不回头采用可能已被覆盖的原文件。"""
     existing = existing or {}
@@ -468,12 +495,14 @@ def prepare(
             if (
                 file_digest(private) != version["sha256"]
                 or not identity.get("sourceFingerprint")
-                and file_digest(source) != version["sha256"]
+                and (expected_sha256 or file_digest(source)) != version["sha256"]
             ):
                 raise VideoError("已有 V1 与此来源的 SHA-256 不符")
         else:
 
             def save_intent(entry):
+                if expected_sha256 is not None and entry["sha256"] != expected_sha256:
+                    raise VideoError("核对后成片已更改，请重新确认来源并重试构建")
                 _write_manifest(journal, {"origin": identity, "version": entry})
 
             version = _stage_and_probe_mp4(source, review_dir, 1, save_intent)
@@ -489,6 +518,7 @@ def register_version(
     review_id: str | None = None,
     receipt_id: str | None = None,
     await_receipt: bool = False,
+    base_version_id: str | None = None,
 ) -> dict[str, Any]:
     """在元数据锁内登记新版成片（V2/V3…），绝不覆盖旧版，也不写入本机源输出路径。"""
     if isinstance(batch, bool) or not isinstance(batch, int) or batch < 1:
@@ -523,8 +553,9 @@ def register_version(
                 if file_digest(published) != entry["sha256"]:
                     raise VideoError("待恢复的视频内容与登记信息不匹配")
                 video["versions"].append(entry)
-                video["currentVersionId"] = entry["versionId"]
-                video.pop("lastFailure", None)
+                if entry.get("baseVersionId", video["currentVersionId"]) == video["currentVersionId"]:
+                    video["currentVersionId"] = entry["versionId"]
+                    video.pop("lastFailure", None)
                 _write_manifest(manifest_path, manifest)
                 journal.unlink()
                 if entry.get("receiptId") == rid_key and entry["batch"] == batch:
@@ -532,8 +563,12 @@ def register_version(
             else:
                 journal.unlink()
 
+        current = video["currentVersionId"]
+        if base_version_id is not None and base_version_id != current:
+            raise StaleRenderBase(base_version_id, current)
+
         def save_intent(entry):
-            entry.update(batch=batch, by=actor, at=_now_iso())
+            entry.update(batch=batch, by=actor, at=_now_iso(), baseVersionId=current)
             if rid_key:
                 entry["receiptId"] = rid_key
             _write_manifest(
@@ -552,14 +587,20 @@ def register_version(
 
 
 def finish_receipt_version(review_dir: Path, pending: dict, *, accepted: bool) -> None:
-    """回执记录落盘后发布成片。未获接收的暂存版本只清理自己的文件。"""
+    """批次落盘后发布相应成片或失败记录，中断后以同一份回执重放。"""
     with ledger.metadata_lock(review_dir, exclusive=True):
         journal = review_dir / ".video-registration.json"
         if json.loads(fsutil.read_private_text(journal, max_bytes=32 * 1024)) != pending:
             raise VideoError("暂存的视频版本已改变")
         manifest_path, manifest = _read_video_manifest(review_dir, review_id=pending["reviewId"])
-        version = pending["version"]
         video = manifest["video"]
+        if failure := pending.get("failure"):
+            if accepted and failure not in video.get("failures", []):
+                _append_failure(video, failure)
+                _write_manifest(manifest_path, manifest)
+            journal.unlink()
+            return
+        version = pending["version"]
         if version not in video["versions"]:
             number = _next_version_number(video)
             if version.get("versionId") != f"V{number}" or version.get("path") != f"media/v{number}.mp4":
@@ -571,8 +612,10 @@ def finish_receipt_version(review_dir: Path, pending: dict, *, accepted: bool) -
                     raise VideoError("暂存的视频内容与登记信息不匹配")
                 if accepted:
                     video["versions"].append(version)
-                    video["currentVersionId"] = version["versionId"]
-                    video.pop("lastFailure", None)
+                    # 旧写入方可能在中断期间切换过默认播放版本。保留已接收的证据及当前成片。
+                    if version.get("baseVersionId", video["currentVersionId"]) == video["currentVersionId"]:
+                        video["currentVersionId"] = version["versionId"]
+                        video.pop("lastFailure", None)
                     _write_manifest(manifest_path, manifest)
                 else:
                     staged.unlink()
@@ -622,6 +665,12 @@ def finish_decode_recovery(review_dir: Path, review_id: str, failures: list[dict
             _write_manifest(path, manifest)
 
 
+def _append_failure(video: dict, failure: dict) -> None:
+    failures = video.get("failures") if isinstance(video.get("failures"), list) else []
+    video["failures"] = [*failures, failure][-FAILURES_KEEP:]
+    video["lastFailure"] = failure
+
+
 def record_failure(
     review_dir: Path,
     *,
@@ -631,6 +680,7 @@ def record_failure(
     review_id: str | None = None,
     receipt_id: str | None = None,
     stage: str = "render",
+    await_receipt: bool = False,
 ) -> dict[str, Any]:
     """在元数据锁内记录渲染或产物不可播放失败，保留上一有效版与已有版本不变。"""
     if isinstance(batch, bool) or not isinstance(batch, int) or batch < 1:
@@ -661,10 +711,14 @@ def record_failure(
         }
         if rid_key:
             failure["receiptId"] = rid_key
-        failures.append(failure)
-        video["failures"] = failures[-FAILURES_KEEP:]
-        video["lastFailure"] = failure
-        _write_manifest(manifest_path, manifest)
+        if await_receipt:
+            journal = Path(review_dir) / ".video-registration.json"
+            if journal.exists():
+                raise VideoError("上一份视频回执仍在提交，请重试")
+            _write_manifest(journal, {"reviewId": manifest["reviewId"], "failure": failure, "awaitReceipt": True})
+        else:
+            _append_failure(video, failure)
+            _write_manifest(manifest_path, manifest)
         return json.loads(json.dumps(failure))
 
 
@@ -935,6 +989,10 @@ def _verified_local_media(path: Path, digest: str, identity: tuple[int, ...]) ->
     return file_digest(path) == digest
 
 
+def target_covers_interval(note: dict, target: dict) -> bool:
+    return "startFrame" not in (note.get("video") or {}) or target["kind"] in ("range", "cut")
+
+
 def review_readiness(
     note: dict[str, Any], manifest: dict[str, Any], *, review_dir: Path | None = None
 ) -> tuple[bool, str]:
@@ -971,7 +1029,8 @@ def review_readiness(
     if not isinstance(target, dict) or vr.get("outcome") == "deleted" and target.get("kind") != "cut":
         return False, "missing-target"
     try:
-        clean_receipt_target(target, version_meta)
+        if not target_covers_interval(note, clean_receipt_target(target, version_meta)):
+            return False, "invalid-target"
     except VideoError:
         return False, "invalid-target"
     base_dir = review_dir

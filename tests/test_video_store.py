@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
@@ -55,6 +57,40 @@ def review_dir() -> Path:
 
 
 class VideoStoreTests(unittest.TestCase):
+    def test_interrupted_commit_recovers_all_accepted_notes_above_16_mib(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            anchor = video_frame()
+            version = {
+                "versionId": "V1",
+                "frames": 180,
+                "fps": 30,
+                "timebase": anchor["timebase"],
+                "width": 640,
+                "height": 360,
+            }
+            (directory / "review.json").write_text(
+                json.dumps({"reviewId": "ab" * 8, "video": {"currentVersionId": "V1", "versions": [version]}}),
+                encoding="utf-8",
+            )
+            notes = [
+                {"id": f"n{i}", "page": 1, "text": f"{i} " + "合成意见" * 4800, "video": anchor} for i in range(300)
+            ]
+            doc, added, _, _ = store.import_notes(directory, notes)
+            self.assertEqual(added, len(notes))
+            handoff = {"seq": 1, "items": [{"seq": 1, "status": "drafted", "openIds": ["n0"]}]}
+            with mock.patch.object(store, "_publish_video_commit", side_effect=OSError("interrupted")):
+                with self.assertRaises(OSError):
+                    store._commit_video_pair(directory, doc, handoff, {"op": "video-receipt"}, {"op": "handoff-draft"})
+            journal = directory / store.VIDEO_COMMIT_FILE
+            self.assertGreater(journal.stat().st_size, 16 * 1024 * 1024)
+            with self.assertRaisesRegex(ValueError, "file-too-large"):
+                store.fsutil.read_private_text(journal, max_bytes=32 * 1024)
+            with store.locked(directory):
+                self.assertEqual(store.load(directory), doc)
+                self.assertEqual(store.handoff_load(directory), handoff)
+            self.assertFalse(journal.exists())
+
     def test_frame_and_range_keep_original_version_time_and_normalized_mark(self):
         directory = review_dir()
         _doc, frame = store.add(

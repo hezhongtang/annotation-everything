@@ -181,6 +181,22 @@ class VideoBuildTests(unittest.TestCase):
         manifest = json.loads((self.out / "review.json").read_text(encoding="utf-8"))
         private = self.out / manifest["video"]["versions"][0]["path"]
         self.assertEqual(private.read_bytes(), self.media)
+        self.assertEqual((manifest["title"], manifest["name"]), ("synthetic", "synthetic"))
+
+    def test_reusing_a_review_directory_cannot_change_its_video_material_type(self):
+        report = self.root / "report.html"
+        report.write_text('<section class="page" data-page="1" data-key="one"><h1>Page</h1></section>')
+        document = self.root / "document-review"
+        build_viewer.build(report, None, document, no_scan_skills=True)
+        self.build()
+        for source, destination in ((self.source, document), (report, self.out)):
+            with self.subTest(destination=destination):
+                files = [destination / name for name in ("review.json", "index.html")]
+                before = [path.read_bytes() for path in files]
+                with self.assertRaisesRegex(build_viewer.BuildError, "其他类型"):
+                    build_viewer.build(source, None, destination, no_scan_skills=True, locale="zh-CN")
+                self.assertEqual([path.read_bytes() for path in files], before)
+        self.assertFalse((document / "media").exists())
 
     def test_cut_with_metadata_but_no_media_samples_cannot_be_registered(self):
         self.source.write_bytes(self.media.replace(b"mdat", b"free", 1))

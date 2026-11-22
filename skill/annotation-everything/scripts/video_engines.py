@@ -154,6 +154,8 @@ def scan_html_compositions(root: Path) -> list[dict[str, Any]]:
             rel = path.relative_to(root)
             if any(part.startswith(".") or part == "node_modules" for part in rel.parts):
                 continue
+            if path.parent != root and _inside(root, path.parent) and _is_review_directory(path.parent):
+                continue
             htmls.append(path)
     htmls = sorted(dict.fromkeys(htmls), key=lambda p: p.relative_to(root).as_posix())[:HTML_CAP]
     compositions: list[dict[str, Any]] = []
@@ -416,55 +418,138 @@ def _mtime(path: Path) -> float:
         return 0.0
 
 
-def freshness_sources(info: dict[str, Any]) -> list[Path]:
-    """根目录中的 MP4 可能是工程引用的素材，随其他输入参与新鲜度与内容校验。"""
+def _is_review_directory(directory: Path) -> bool:
+    import fsutil
+    import ledger
+
+    try:
+        for name in ("review.json", "index.html"):
+            info = (directory / name).lstat()
+            if not stat.S_ISREG(info.st_mode) or fsutil._is_reparse_or_symlink(info):
+                return False
+    except OSError:
+        return False
+    return ledger.read_manifest(directory).get("app") == "annotation-everything"
+
+
+def _project_inputs(info: dict[str, Any], staging_dir: Path | None = None) -> tuple[list[Path], dict[Path, Path], bool]:
+    """只遍历工程内的真实目录。链接可参与凭据的前提是其目标也在扫描范围内。"""
+    import fsutil
+    import ledger
+
     root = info["root"]
-    sources = []
-    for directory, dirs, files in os.walk(root):
-        here = Path(directory)
-        dirs[:] = sorted(
-            d
-            for d in dirs
-            if not d.startswith(".")
-            and d not in {"node_modules", "out", "dist", "build"}
-            and not (here / d).is_symlink()
-            and _inside(root, here / d)
+    excluded = {ledger.home(), staging_dir}
+    if info["engine"] == ENGINE_HYPERFRAMES:
+        # 本地渲染器在渲染过程中维护历史和输出清单；同目录的其他文件仍可作为素材。
+        state_dir = root / ".hyperframes"
+        excluded.update(
+            state_dir / name
+            for name in (
+                "history-id",
+                "video-state.json",
+                "video-state-lock",
+                "render-outputs.json",
+                "render-outputs-lock",
+            )
         )
-        if here != root and "review.json" in files and "index.html" in files:
+    files_seen: list[Path] = []
+    directories_seen: set[Path] = set()
+    links: list[Path] = []
+    complete = True
+
+    def unreadable(_error):
+        nonlocal complete
+        complete = False
+
+    for directory, dirs, files in os.walk(root, onerror=unreadable):
+        here = Path(directory)
+        if here != root and "review.json" in files and "index.html" in files and _is_review_directory(here):
             dirs.clear()
             continue
-        for name in sorted(files):
+        directories_seen.add(here)
+        children = sorted((*dirs, *files))
+        dirs.clear()
+        for name in children:
             path = here / name
-            if name.startswith(".") or path.is_symlink() or not _inside(root, path):
+            if name in {".git", "node_modules"} or path in excluded:
                 continue
-            sources.append(path)
-    return sources
+            # out/*.mp4 是约定的成片输出。根 MP4 及各目录下的源码、隐藏配置与素材均可被引擎读取。
+            if here == root / "out" and name.endswith(".mp4"):
+                continue
+            try:
+                info_stat = path.lstat()
+            except OSError:
+                complete = False
+                continue
+            if fsutil._is_reparse_or_symlink(info_stat):
+                links.append(path)
+            elif stat.S_ISDIR(info_stat.st_mode):
+                dirs.append(name)
+            elif stat.S_ISREG(info_stat.st_mode):
+                files_seen.append(path)
+            else:
+                complete = False
+
+    covered = directories_seen.union(files_seen)
+    internal_links = {}
+    for link in links:
+        try:
+            target = link.resolve(strict=True)
+            if target in covered:
+                internal_links[link] = target
+                continue
+        except (OSError, RuntimeError):
+            pass
+        complete = False
+    return files_seen, internal_links, complete
 
 
-def source_fingerprint(info: dict[str, Any]) -> str:
+def freshness_sources(info: dict[str, Any], *, staging_dir: Path | None = None) -> list[Path]:
+    files, links, _complete = _project_inputs(info, staging_dir)
+    return [*files, *links]
+
+
+def source_fingerprint(info: dict[str, Any], *, staging_dir: Path | None = None) -> str | None:
     import video_review
 
-    digest = hashlib.sha256()
+    files, links, complete = _project_inputs(info, staging_dir)
+    if not complete:
+        return None
+    # 旧算法未记录隐藏素材与链接目标，它签发的凭据不再自动复用。
+    digest = hashlib.sha256(b"ae-video-project-inputs/2\0")
     root = info["root"]
-    for path in freshness_sources(info):
-        if path.is_symlink() or not _inside(root, path) or not path.is_file():
-            raise EngineError("movieUnreadable", str(path))
-        name = path.relative_to(root).as_posix().encode("utf-8")
+
+    def add_path(path):
+        name = os.fsencode(path.relative_to(root).as_posix())
         digest.update(len(name).to_bytes(8, "big") + name)
-        digest.update(bytes.fromhex(video_review.file_digest(path)))
+
+    try:
+        for path in files:
+            if path.resolve(strict=True) != path or not stat.S_ISREG(path.lstat().st_mode):
+                return None
+            digest.update(b"F")
+            add_path(path)
+            digest.update(bytes.fromhex(video_review.file_digest(path)))
+        for link, target in links.items():
+            if link.resolve(strict=True) != target:
+                return None
+            digest.update(b"L")
+            add_path(link)
+            add_path(target)
+    except (OSError, RuntimeError):
+        return None
     return digest.hexdigest()
 
 
-def _render_evidence(info, chosen, source_hash, movie):
+def _render_evidence(info, chosen, source_hash, movie_sha256):
     import ledger
-    import video_review
 
     evidence = {
         "root": str(info["root"]),
         "engine": info["engine"],
         "entry": chosen["id"],
         "inputs": source_hash,
-        "sha256": video_review.file_digest(movie),
+        "sha256": movie_sha256,
     }
     key = hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest()
     return ledger.home() / ledger.VIDEO_RENDERS_DIR / (key + ".json"), evidence
@@ -487,8 +572,10 @@ def _private_evidence_directory(directory, *, create):
         raise EngineError("stagingExists", str(directory))
 
 
-def _known_render(info, chosen, source_hash, movie):
-    path, evidence = _render_evidence(info, chosen, source_hash, movie)
+def known_render(info, chosen, source_hash: str | None, movie_sha256: str) -> bool:
+    if source_hash is None:
+        return False
+    path, evidence = _render_evidence(info, chosen, source_hash, movie_sha256)
     try:
         import fsutil
 
@@ -627,6 +714,8 @@ def resolve_source(
     declaration}；cleanup 只在渲染路径给出（调用方登记 V1 后负责删除暂存），
     root / entry / declaration 供调用方写入 #193 的 video.sourceProject 关联。
     """
+    import video_review
+
     existing = existing or {}
     if existing.get("format", {}).get("report") == "video":
         raise EngineError("alreadyRegistered", str(review_dir / "review.json"))
@@ -638,18 +727,17 @@ def resolve_source(
     compositions = list_compositions(info)
     chosen = choose_composition(compositions, composition, engine, info["root"])
     warnings: list[str] = []
-    source_hash = source_fingerprint(info)
-    sources = freshness_sources(info)
+    staging_dir = Path(review_dir).resolve() / ".render"
+    source_hash = source_fingerprint(info, staging_dir=staging_dir)
+    sources = freshness_sources(info, staging_dir=staging_dir)
     source_mtime = max((_mtime(p) for p in sources), default=0.0)
 
     if reuse_movie is not None:
         movie = Path(reuse_movie).expanduser()
         if not movie.is_file():
             raise EngineError("movieUnreadable", str(movie))
-        import video_review
-
         try:
-            meta = video_review.probe(movie)
+            meta = video_review.probe(movie, with_digest=True)
         except video_review.VideoError as exc:
             raise EngineError("movieUnreadable", str(exc)) from exc
         if not _matches(meta, chosen):
@@ -660,6 +748,7 @@ def resolve_source(
         return {
             "action": "reused",
             "source": movie.resolve(),
+            "movieSha256": meta["sha256"],
             "cleanup": None,
             "composition": chosen,
             "engine": engine,
@@ -671,13 +760,22 @@ def resolve_source(
     matching = [m for m in movies if m["meta"] and _matches(m["meta"], chosen)]
     fresh = [m for m in matching if m["mtime"] >= source_mtime]
     if not no_reuse and fresh:
-        known = [m for m in fresh if _known_render(info, chosen, source_hash, m["path"])]
+        known = []
+        if source_hash is not None:
+            for candidate in fresh:
+                try:
+                    digest = video_review.file_digest(candidate["path"])
+                except OSError as exc:
+                    raise EngineError("movieUnreadable", str(candidate["path"])) from exc
+                if known_render(info, chosen, source_hash, digest):
+                    known.append((candidate, digest))
         if len(known) == 1:
-            picked = known[0]
+            picked, digest = known[0]
             warnings.append(_warn(locale, "engine.warn.reused", path=str(picked["path"]), composition=chosen["id"]))
             return {
                 "action": "reused",
                 "source": picked["path"].resolve(),
+                "movieSha256": digest,
                 "cleanup": None,
                 "composition": chosen,
                 "engine": engine,
@@ -697,10 +795,10 @@ def resolve_source(
         )
 
     result = _render(info, chosen, review_dir, timeout, locale, warnings)
-    if source_hash == source_fingerprint(info):
+    if source_hash is not None and source_hash == source_fingerprint(info, staging_dir=staging_dir):
         import fsutil
 
-        record, evidence = _render_evidence(info, chosen, source_hash, result["source"])
+        record, evidence = _render_evidence(info, chosen, source_hash, result["movieSha256"])
         _private_evidence_directory(record.parent, create=True)
         if record.exists() or record.is_symlink():
             fsutil.check_private_regular_file(record, max_bytes=32 * 1024)
@@ -747,7 +845,7 @@ def _render(
         if staging.is_symlink() or not staging.is_file():
             raise EngineError("renderNoOutput", str(staging))
         try:
-            meta = video_review.probe(staging)
+            meta = video_review.probe(staging, with_digest=True)
         except video_review.VideoError as exc:
             raise EngineError("renderInvalid", str(exc)) from exc
     except BaseException:
@@ -777,6 +875,7 @@ def _render(
     return {
         "action": "rendered",
         "source": staging,
+        "movieSha256": meta["sha256"],
         "cleanup": staging,
         "composition": chosen,
         "engine": engine,

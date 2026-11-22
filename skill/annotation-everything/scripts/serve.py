@@ -106,6 +106,7 @@ FEATURES = [
     "video-receipt",
     "video-compare",
     "video-relocate",
+    "video-relocate-revision",
     "video-decisions",
     "video-evidence-revision",
     "video-feedback-revision",
@@ -1703,7 +1704,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"doc": {**doc, **self._ident()}})
         elif relocate_match and cmd == "POST":
             body = self._expect_obj(self._body())
-            if set(body) - {"versionId", "target", "summary", "reason"}:
+            if set(body) - {"versionId", "target", "summary", "reason", "expectedEvidence"}:
                 raise Reject(400, "bad-request", self._t("serve.err.videoRelocateBody"))
             for text_key in ("summary", "reason"):
                 if body.get(text_key) is not None and not isinstance(body.get(text_key), str):
@@ -1714,6 +1715,7 @@ class Handler(BaseHTTPRequestHandler):
                 nid,
                 target=body.get("target"),
                 version_id=body.get("versionId"),
+                expected_evidence=body.get("expectedEvidence") or "",
                 summary=body.get("summary"),
                 reason=body.get("reason"),
                 by="page",

@@ -284,6 +284,7 @@ class VideoPagePureTests(unittest.TestCase):
                 "return {"
                 "states:notes.map(videoNoteState),"
                 "ready:notes.map(n=>videoReceiptReady(n,manifest)),"
+                "rangeWithFrame:videoReceiptReady({...notes[0],video:{startFrame:120,endFrame:180,versionId:'V1'}},manifest),"
                 "oobReady:videoReceiptReady({...notes[0],videoReview:{...notes[0].videoReview,target:{kind:'frame',versionId:'V2',frame:192}}},manifest),"
                 "noVerReady:videoReceiptReady({...notes[0],videoReview:{...notes[0].videoReview,versionId:'V9',target:{kind:'frame',versionId:'V9',frame:1}}},manifest),"
                 "counts:videoStatusCounts(notes),"
@@ -307,6 +308,7 @@ class VideoPagePureTests(unittest.TestCase):
             )
             self.assertEqual(actual["ready"], [True, False, False, False, False, False, False, True])
             self.assertFalse(actual["oobReady"])
+            self.assertFalse(actual["rangeWithFrame"])
             self.assertFalse(actual["noVerReady"])
             self.assertEqual(
                 actual["counts"],

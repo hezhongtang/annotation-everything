@@ -127,7 +127,7 @@ python "$S\serve.py" "$env:TEMP\ae-demo" --locale en
 - **Report**: one HTML file in which every page is a `<section class="page" data-page="N" data-key="unique-key">` element.
 - **Speaker notes (optional)**: one Markdown file split into pages by `### 第 N 页｜标题` headings ("page N | title"), giving the duration, talking points, transition and likely questions for each page. English notes use `### Page N｜Title` with `**Duration**`, `**Talking points**`, `**Transition**` and `**Likely questions**` instead. Both forms may be mixed in one file, and which form is recognized does not depend on the interface language: a Chinese interface reviews English notes and an English interface reviews Chinese notes, with titles and body text kept exactly as written. When a heading cannot be recognized, a page number repeats or a field repeats, the builder reports the line number and the expected form in the current language instead of treating the input as an empty script.
 
-- **Video**. Give the agent a local MP4 and ask it to review a frame or a sound cue. To request source changes, link the project and composition on the page. With a source project in hand, start directly from its directory. [Try the two synthetic projects](fixtures/video/README.md).
+- **Video**. Give the agent a local MP4 and ask it to review a frame or a sound cue. To request source changes, link the project and composition on the page. When starting from a source project, pass its directory as `--report` and choose a separate review directory for `--out`. [Try the two synthetic projects](fixtures/video/README.md).
 
 See the [English format reference](skill/annotation-everything/references/formats.en.md) for the full input and output formats.
 

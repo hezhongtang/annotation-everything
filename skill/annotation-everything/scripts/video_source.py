@@ -141,6 +141,25 @@ def _source_project(video: dict[str, Any]) -> dict[str, Any]:
     return sp
 
 
+def _verified_project_cut(info: dict[str, Any], entry: dict[str, Any], version: dict[str, Any]) -> bool:
+    movies = video_engines.scan_movies(info["root"])
+    if len(movies) != 1:
+        return False
+    movie = movies[0]
+    if not movie["meta"] or _differences(version, movie["meta"]):
+        return False
+    source_time = max((video_engines._mtime(p) for p in video_engines.freshness_sources(info)), default=0.0)
+    if movie["mtime"] < source_time:
+        return False
+    try:
+        digest = video_review.file_digest(movie["path"])
+        if digest != version["sha256"]:
+            return False
+        return video_engines.known_render(info, entry, video_engines.source_fingerprint(info), digest)
+    except (OSError, video_engines.EngineError):
+        return False
+
+
 def link(
     video: dict[str, Any],
     *,
@@ -254,21 +273,15 @@ def local_project_link(video: dict[str, Any], **payload) -> dict[str, Any]:
     declared = selected["media"] if selected else {}
     if not payload.get("media") and declared:
         payload["media"] = declared
-    verified = False
-    if engine == "hyperframes" and len(discovered) == 1 and selected and not _differences(version, declared):
-        source_time = max((video_engines._mtime(p) for p in video_engines.freshness_sources(info)), default=0.0)
-        movies = video_engines.scan_movies(root)
-        if len(movies) == 1:
-            movie = movies[0]
-            verified = bool(
-                movie["meta"]
-                and movie["mtime"] >= source_time
-                and not _differences(version, movie["meta"])
-                and video_review.file_digest(movie["path"]) == version["sha256"]
-            )
+    verified = bool(
+        len(discovered) == 1
+        and selected
+        and not _differences(version, declared)
+        and _verified_project_cut(info, entry, version)
+    )
     updated = link(video, **payload, verified_source=verified)
     sp = updated["sourceProject"]
-    if verified:
+    if sp.get("match") == "verified":
         sp["basis"].update(kind="sha256", sha256=version["sha256"])
     else:
         for diff in _differences(version, declared):

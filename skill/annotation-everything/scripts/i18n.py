@@ -615,6 +615,8 @@ HANDOFF_ERROR_KEYS: dict[str, str] = {
     "note-not-in-batch": "cli.hand.error.noteNotInBatch",
     "note-already-decided": "cli.hand.error.noteAlreadyDecided",
     "stale-receipt": "cli.hand.error.staleReceipt",
+    "stale-render-base": "cli.hand.error.staleRenderBase",
+    "video-repair-owner": "cli.hand.error.videoRepairOwner",
     "invalid-receipt-target": "cli.hand.error.invalidReceiptTarget",
     "video-unplayable": "cli.hand.error.videoUnplayable",
     "receipt-conflict": "cli.hand.error.receiptConflict",

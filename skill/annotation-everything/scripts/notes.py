@@ -2134,7 +2134,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
                     "cli.videoReceipt.failureRecorded",
                     seq=result["seq"],
                     reason=result["failure"].get("reason") or "",
-                    version=result.get("currentVersionId") or "V1",
+                    version=result["currentVersionId"],
                 )
             )
         else:
@@ -2143,7 +2143,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
                     "cli.videoReceipt.ok",
                     seq=result["seq"],
                     status=label(t, STATUS_KEY.get(result.get("status"), ""), result.get("status")),
-                    version=(result.get("version") or {}).get("versionId") or result.get("currentVersionId") or "V1",
+                    version=(result.get("version") or {}).get("versionId") or result["currentVersionId"],
                     count=len(result.get("notes") or []),
                 )
             )

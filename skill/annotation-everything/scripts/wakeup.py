@@ -238,13 +238,31 @@ def binding_identity(binding):
     )
 
 
+def _batch_in_progress(review, resumable=None):
+    return any(
+        item.get("status") in ("claimed", "reviewing") and item.get("seq") not in (resumable or {})
+        for item in store.handoff_load(review)["items"]
+    )
+
+
+def _delivery_in_progress(review, resumable=None):
+    return any(
+        item.get("cancelState") != "confirmed"
+        and not (
+            item["event"] == "handoff"
+            and resumable is not None
+            and item["seq"] in resumable
+            and resumable.get(item["seq"]) == item.get("bindingId")
+        )
+        for item in _active_deliveries(review)
+    )
+
+
 # 改绑 / 解除接收方前的「处理中」检查来源：批次、分析轮次。任一来源判定在处理中就拒绝转移或解除。
 TRANSFER_BLOCKS = (
     (
         "batch-in-progress: finish the current batch before transferring or unbinding",
-        lambda review: any(
-            item.get("status") in ("claimed", "reviewing") for item in store.handoff_load(review)["items"]
-        ),
+        _batch_in_progress,
     ),
     (
         "analysis-in-progress: finish the claimed analysis round before transferring or unbinding",
@@ -252,15 +270,30 @@ TRANSFER_BLOCKS = (
     ),
     (
         "delivery-in-progress: stop the review and confirm cancellation before transferring or unbinding",
-        lambda review: any(item.get("cancelState") != "confirmed" for item in _active_deliveries(review)),
+        _delivery_in_progress,
     ),
 )
 
 
-def assert_transferable(review):
+def assert_transferable(review, *, resume_receiver=None):
     """Call under the annotation lock so a concurrent claim cannot race a transfer."""
+    resumable = {}
+    if resume_receiver is not None:
+        for item in store.handoff_load(review)["items"]:
+            owner = (item.get("videoSubmission") or {}).get("claimedReceiver") or {}
+            if (
+                item.get("status") == "claimed"
+                and (item.get("videoFailure") or {}).get("stage") == "decode"
+                and owner.get("identity") == resume_receiver
+                and owner.get("bindingId")
+            ):
+                resumable[item["seq"]] = owner["bindingId"]
     for reason, in_progress in TRANSFER_BLOCKS:
-        if in_progress(review):
+        if resumable and in_progress in (_batch_in_progress, _delivery_in_progress):
+            blocked = in_progress(review, resumable)
+        else:
+            blocked = in_progress(review)
+        if blocked:
             raise ValueError(reason)
 
 
@@ -281,7 +314,7 @@ def bind_wait(review, harness, session, replace=False):
             return previous
         if previous and not replace:
             raise ValueError("already-bound: explicit --replace required")
-        assert_transferable(review)
+        assert_transferable(review, resume_receiver=receiver)
         binding = {
             "version": SCHEMA,
             "adapter": "wait",
@@ -322,7 +355,7 @@ def bind(review, thread, socket_path=None, replace=False):
             return previous
         if previous and not replace:
             raise ValueError("already-bound: explicit --replace required")
-        assert_transferable(review)
+        assert_transferable(review, resume_receiver=identity("Codex", thread))
         binding = {
             "version": SCHEMA,
             "adapter": "codex-desktop",

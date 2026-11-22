@@ -1936,6 +1936,7 @@ function videoReceiptReady(note,manifest){
   if(!vr)return false;
   if(typeof videoFailedVersions!=="undefined"&&(videoFailedVersions.has(vr.versionId)||videoFailedVersions.has(note.video?.versionId)))return false;
   if(typeof vr!=="object"||vr.state!=="pending_review"||vr.outcome==="deleted"&&vr.target?.kind!=="cut")return false;
+  if(Number.isInteger(note.video?.startFrame)&&!["range","cut"].includes(vr.target?.kind))return false;
   if(typeof vr.summary!=="string"||!vr.summary.trim())return false;
   const verId=vr.versionId;if(typeof verId!=="string"||!/^V[1-9][0-9]*$/.test(verId))return false;
   const versions=(manifest&&Array.isArray(manifest.versions))?manifest.versions:[];
@@ -2433,6 +2434,7 @@ function videoCompareRefreshLocale(){
   const note=notes.find(n=>n.id===videoCompareNoteId);
   const pair=note?videoComparePair(note,videoManifest()):videoComparePairState;
   if(!pair)return;
+  if(note&&videoComparePairState?.evidence!==pair.evidence){videoCompareOpen(note,videoRelocateOpen);return}
   videoComparePairState=pair;
   videoCompareRenderLabels();
   const stEl=sr.getElementById("videoCompareState");
@@ -2518,11 +2520,12 @@ async function videoRelocateSave(){
   if(!videoCompareNoteId)return null;
   if(mode!=="server"){setErr(tMsg("viewer.video.relocate.needServer"));return null}
   if(!serverSupports("video-relocate")){setErr(tMsg("viewer.video.relocate.oldService"));return null}
+  if(!serverSupports("video-relocate-revision")){setErr(tMsg("viewer.video.revisionOldService"));return null}
   const ver=videoCompareAfterVersion(),target=videoRelocateReadTarget(ver);
   if(!ver||!target){setErr(tMsg("viewer.video.relocate.badTarget"));return null}
   const summary=String((sr.getElementById("videoRelocateSummary")||{}).value||"").trim();
   const reason=String((sr.getElementById("videoRelocateReason")||{}).value||"").trim();
-  const body={versionId:ver.versionId,target};
+  const body={versionId:ver.versionId,target,expectedEvidence:videoComparePairState.evidence};
   if(summary)body.summary=summary;
   if(reason)body.reason=reason;
   try{

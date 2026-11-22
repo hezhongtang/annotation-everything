@@ -29,7 +29,7 @@ import build_viewer  # noqa: E402
 import video_engines  # noqa: E402
 
 
-from tests.test_video_review import synthetic_mp4  # noqa: E402
+from tests.test_video_review import box, synthetic_mp4  # noqa: E402
 
 
 # ── 假引擎 bin：只实现 AE 会用到的固定 argv 模板 ──────────────────────────────
@@ -425,6 +425,89 @@ class ReuseTests(EngineEnvMixin):
             self.resolve()
         self.assertEqual(uncertain.exception.code, "movieConfirm")
 
+    def test_hidden_assets_and_config_invalidate_automatic_reuse(self):
+        project = self.copy_fixture("hyperframes")
+        (project / "index.html").write_text(
+            '<html data-fps="30"><link rel="stylesheet" href=".theme.css"><img src=".assets/card.svg"></html>'
+        )
+        assets = project / ".assets"
+        assets.mkdir()
+        image, style = assets / "card.svg", project / ".theme.css"
+        image.write_text('<svg fill="red"/>')
+        style.write_text("body {color: red}")
+        self.arm_render(project, "hyperframes", MAIN_MOVIE)
+
+        def resolve(**options):
+            return video_engines.resolve_source(project, self.review, {}, composition="index.html", **options)
+
+        render = resolve(no_reuse=True)
+        movie = project / "out" / "cut.mp4"
+        movie.parent.mkdir()
+        shutil.copyfile(render["source"], movie)
+        self.assertEqual(resolve()["action"], "reused")
+        for asset in (image, style):
+            with self.subTest(asset=asset.name):
+                original = asset.read_text()
+                stamp = asset.stat().st_mtime_ns
+                asset.write_text(original.replace("red", "blue"))
+                os.utime(asset, ns=(stamp, stamp))
+                with self.assertRaises(video_engines.EngineError) as changed:
+                    resolve()
+                self.assertEqual(changed.exception.code, "movieConfirm")
+                asset.write_text(original)
+                os.utime(asset, ns=(stamp, stamp))
+
+    def test_hyperframes_render_history_is_not_a_source_change(self):
+        project = self.copy_fixture("hyperframes")
+        info = video_engines.detect_project(project)
+        before = video_engines.source_fingerprint(info)
+        state_dir = project / ".hyperframes"
+        state_dir.mkdir()
+        for name in ("history-id", "video-state.json", "render-outputs.json"):
+            (state_dir / name).write_text("synthetic render history")
+        (state_dir / "video-state-lock").mkdir()
+        self.assertEqual(video_engines.source_fingerprint(info), before)
+        (state_dir / "caption.svg").write_text("<svg/>")
+        self.assertNotEqual(video_engines.source_fingerprint(info), before)
+
+    def test_retargeting_an_internal_asset_link_invalidates_automatic_reuse(self):
+        assets = self.project / "public"
+        assets.mkdir()
+        red, blue = assets / "red", assets / "blue"
+        for directory in (red, blue):
+            directory.mkdir()
+            (directory / "title.svg").write_text(f'<svg fill="{directory.name}"/>')
+        self.arm_render(self.project, "remotion", MAIN_MOVIE)
+        movie = self.project / "out" / "Main.mp4"
+        for link, first, second in (
+            (assets / "active.svg", red / "title.svg", blue / "title.svg"),
+            (assets / "theme", red, blue),
+        ):
+            with self.subTest(link=link.name):
+                link.symlink_to(first, target_is_directory=first.is_dir())
+                self.resolve(no_reuse=True)
+                self.make_movie(movie)
+                self.assertEqual(self.resolve()["action"], "reused")
+                link.unlink()
+                link.symlink_to(second, target_is_directory=second.is_dir())
+                with self.assertRaises(video_engines.EngineError) as changed:
+                    self.resolve()
+                self.assertEqual(changed.exception.code, "movieConfirm")
+                link.unlink()
+
+    def test_external_assets_cannot_receive_or_reuse_a_render_receipt(self):
+        external = self.root / "outside.svg"
+        external.write_text('<svg fill="red"/>')
+        (self.project / "icon.svg").symlink_to(external)
+        self.arm_render(self.project, "remotion", MAIN_MOVIE)
+        render = self.resolve(no_reuse=True)
+        self.assertNotIn("sourceFingerprint", render)
+        self.assertTrue(render["sourceChanged"])
+        self.make_movie(self.project / "out" / "Main.mp4")
+        with self.assertRaises(video_engines.EngineError) as uncertain:
+            self.resolve()
+        self.assertEqual(uncertain.exception.code, "movieConfirm")
+
     def test_root_mp4_input_change_invalidates_render_with_preserved_mtime(self):
         project = self.copy_fixture("hyperframes")
         entry = project / "index.html"
@@ -699,6 +782,73 @@ class BuildIntegrationTests(EngineEnvMixin):
     def build(self, report, out, **kwargs):
         return build_viewer.build(report, None, out, no_scan_skills=True, locale="zh-CN", **kwargs)
 
+    def test_replaced_output_is_rejected_before_v1_publication_and_can_be_retried(self):
+        import video_review
+
+        project = self.copy_fixture("remotion")
+        self.set_env(AE_FAKE_COMPOSITIONS=json.dumps([MAIN_COMP]))
+        output = project / "out" / "Main.mp4"
+        self.arm_render(project, "remotion", self.make_movie(output))
+        self.build(project, self.root / "seed", no_reuse=True)
+        prepare = video_review.prepare
+
+        def finish_another_export(source, *args, **options):
+            replacement = self.root / "new-export.mp4"
+            replacement.write_bytes(MAIN_MOVIE + box(b"free", b"different export"))
+            replacement.replace(source)
+            return prepare(source, *args, **options)
+
+        for kind, options in (("auto", {}), ("confirmed", {"reuse_movie": output}), ("rendered", {"no_reuse": True})):
+            with self.subTest(kind=kind):
+                review = self.root / kind
+                with mock.patch.object(video_review, "prepare", side_effect=finish_another_export):
+                    with self.assertRaisesRegex(build_viewer.BuildError, "成片已更改"):
+                        self.build(project, review, **options)
+                for relative in ("review.json", ".video-first-build.json", "media/v1.mp4"):
+                    self.assertFalse((review / relative).exists())
+                self.assertEqual(list((review / "media").iterdir()), [])
+                output.write_bytes(MAIN_MOVIE)
+                self.build(project, review, **options)
+                self.assertEqual((review / "media/v1.mp4").read_bytes(), MAIN_MOVIE)
+
+    def test_interrupted_explicit_reuse_recovers_only_the_selected_digest(self):
+        project = self.copy_fixture("remotion")
+        self.set_env(AE_FAKE_COMPOSITIONS=json.dumps([MAIN_COMP]))
+        movie = project / "out" / "Main.mp4"
+        self.arm_render(project, "remotion", self.make_movie(movie))
+        review = self.root / "interrupted"
+        with self.assertRaises(SystemExit):
+            self.build(project, review, reuse_movie=movie, sections_arg="invalid")
+        private = review / "media/v1.mp4"
+        inode = private.stat().st_ino
+        movie.write_bytes(MAIN_MOVIE + box(b"free", b"different export"))
+        with self.assertRaises(build_viewer.BuildError):
+            self.build(project, review, reuse_movie=movie)
+        self.assertFalse((review / "review.json").exists())
+        movie.write_bytes(MAIN_MOVIE)
+        self.build(project, review, reuse_movie=movie)
+        self.assertEqual(private.stat().st_ino, inode)
+        self.assertEqual(private.read_bytes(), MAIN_MOVIE)
+
+    def test_nested_review_is_neither_a_source_asset_nor_a_composition(self):
+        project = self.copy_fixture("hyperframes")
+        (project / "compositions" / "scene-b.html").unlink()
+        (project / "index.html").write_text('<html data-fps="30"></html>')
+        self.arm_render(project, "hyperframes", MAIN_MOVIE)
+        first = project / "first-review"
+        self.build(project, first)
+        sp = json.loads((first / "review.json").read_text())["video"]["sourceProject"]
+        self.assertEqual(sp["match"], "verified")
+        movie = project / "out" / "cut.mp4"
+        movie.parent.mkdir()
+        shutil.copyfile(first / "media" / "v1.mp4", movie)
+        git_dir = project / ".git"
+        git_dir.mkdir()
+        (git_dir / "HEAD").write_text("synthetic")
+        result = video_engines.resolve_source(project, self.root / "second-review", {})
+        self.assertEqual(result["action"], "reused")
+        self.assertEqual(result["composition"]["id"], "index.html")
+
     def test_project_build_reuses_matching_movie_and_registers_v1(self):
         project = self.copy_fixture("remotion")
         media = self.make_movie(project / "out" / "Main.mp4")
@@ -755,6 +905,22 @@ class BuildIntegrationTests(EngineEnvMixin):
             build_viewer.build(project, script, self.root / "review", no_scan_skills=True, locale="zh-CN")
         self.assertEqual(self.read_bin_log(), [])
         self.assertFalse((self.root / "review" / ".render").exists())
+
+    def test_project_output_cannot_overwrite_source_pages(self):
+        project = self.copy_fixture("hyperframes")
+        nested = project / "compositions"
+        (nested / "index.html").write_text("<html>nested source</html>")
+        for out in (project, nested):
+            with self.subTest(out=out):
+                source = (out / "index.html").read_bytes()
+                with self.assertRaisesRegex(build_viewer.BuildError, "覆盖工程文件"):
+                    self.build(project, out, video_composition="index.html")
+                self.assertEqual((out / "index.html").read_bytes(), source)
+                self.assertFalse((out / "review.json").exists())
+                self.assertFalse((out / ".render").exists())
+        self.arm_render(project, "hyperframes", synthetic_mp4(fps=24))
+        self.build(project, project / "review", video_composition="index.html")
+        self.assertTrue((project / "review" / "review.json").exists())
 
 
 class SourceProjectLinkTests(EngineEnvMixin):
@@ -844,8 +1010,11 @@ class SourceProjectLinkTests(EngineEnvMixin):
         out = self.root / "review"
         self.build_from_project(project, self.root / "seed", no_reuse=True)
         self.build_from_project(project, out)
+        previous = json.loads((out / "review.json").read_text(encoding="utf-8"))
         self.assertEqual(build_viewer.main(["--rebuild", str(out)]), 0)
         manifest = json.loads((out / "review.json").read_text(encoding="utf-8"))
+        for field in ("title", "name", "namespace", "sources", "sourcesAbs"):
+            self.assertEqual(manifest[field], previous[field], field)
         sp = manifest["video"]["sourceProject"]
         self.assertEqual(sp["status"], "linked")
         self.assertEqual(sp["match"], "verified")
@@ -883,8 +1052,7 @@ class SourceProjectLinkTests(EngineEnvMixin):
         names = {p.name for p in video_engines.freshness_sources(info)}
         self.assertNotIn("ext.txt", names)
         self.assertNotIn("dangling.mp4", names)
-        fp = video_engines.source_fingerprint(info)
-        self.assertEqual(len(fp), 64)
+        self.assertIsNone(video_engines.source_fingerprint(info))
 
 
 if __name__ == "__main__":

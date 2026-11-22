@@ -30,6 +30,7 @@ os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-video-handoff-home-")
 import build_viewer  # noqa: E402
 import notes as notes_cli  # noqa: E402
 import notes_store as store  # noqa: E402
+import video_engines  # noqa: E402
 import video_source  # noqa: E402
 import wakeup  # noqa: E402
 
@@ -594,26 +595,74 @@ class ServeSourceProjectTests(VideoHandoffBase):
         self.assertIsNone(sp.get("match"))
         self.assertEqual(self.manifest()["video"]["sourceProject"]["entry"]["id"], "Main")
 
-    def test_unique_project_cut_and_entry_link_by_actual_bytes(self):
+    def test_foreign_cut_copied_into_single_entry_project_requires_confirmation(self):
         project = self.root / "hf"
         (project / "compositions" / "scene-b.html").unlink()
         (project / "index.html").write_text('<html data-fps="30"></html>')
         (project / "out").mkdir()
         (project / "out" / "cut.mp4").write_bytes(self.source.read_bytes())
+        self.add_notes(video_note("original", frame=96))
         code, _, body = self.post(
             "/api/video/source-project",
             {"engine": "hyperframes", "root": str(project), "entry": {"kind": "scene", "id": "index.html"}},
         )
         self.assertEqual(code, 200, body)
-        self.assertEqual(json.loads(body)["sourceProject"]["match"], "verified")
-        self.assertEqual(json.loads(body)["sourceProject"]["basis"]["kind"], "sha256")
-        (project / "out" / "alternate.mp4").write_bytes(self.source.read_bytes())
+        proposal = json.loads(body)["sourceProject"]
+        self.assertEqual(proposal["status"], "pending")
         code, _, body = self.post(
-            "/api/video/source-project",
-            {"engine": "hyperframes", "root": str(project), "entry": {"kind": "scene", "id": "index.html"}},
+            "/api/video/source-project/confirm", {"proposalRevision": proposal["proposalRevision"]}
         )
         self.assertEqual(code, 200, body)
-        self.assertEqual(json.loads(body)["sourceProject"]["status"], "pending")
+        self.assertEqual(json.loads(body)["sourceProject"]["match"], "confirmed")
+        self.assertEqual(store.load(self.d)["notes"][0]["video"]["versionId"], "V1")
+
+    def test_mp4_first_links_only_the_recorded_render_with_current_inputs(self):
+        hf = self.root / "hf"
+        (hf / "compositions" / "scene-b.html").unlink()
+        (hf / "index.html").write_text('<html data-fps="30"></html>')
+        remotion = self.root / "project"
+        index = remotion / "src" / "index.tsx"
+        lines = index.read_text().splitlines(keepends=True)
+        index.write_text("".join(line for line in lines if '<Composition id="Intro"' not in line))
+        for project, engine, entry in ((hf, "hyperframes", "index.html"), (remotion, "remotion", "Main")):
+            with self.subTest(engine=engine):
+                source_asset = project / "music.txt"
+                source_asset.write_text("music A")
+                # 代替引擎输出；渲染凭据使用工程入口自身的生产写入路径。
+                with (
+                    mock.patch.object(video_engines, "list_compositions", return_value=[{"id": entry, **V1_MEDIA}]),
+                    mock.patch.object(
+                        video_engines,
+                        "_render",
+                        return_value={
+                            "source": self.source,
+                            "movieSha256": self.manifest()["video"]["versions"][0]["sha256"],
+                        },
+                    ),
+                ):
+                    video_engines.resolve_source(project, self.root / "seed", {}, composition=entry)
+                out = project / "out"
+                out.mkdir()
+                (out / "cut.mp4").write_bytes(self.source.read_bytes())
+                payload = {"engine": engine, "root": str(project), "entry": {"id": entry}}
+                code, _, body = self.post("/api/video/source-project", payload)
+                self.assertEqual(code, 200, body)
+                verified = json.loads(body)["sourceProject"]
+                self.assertEqual((verified["match"], verified["basis"]["kind"]), ("verified", "sha256"))
+
+                alternate = out / "alternate.mp4"
+                alternate.write_bytes(self.source.read_bytes())
+                code, _, body = self.post("/api/video/source-project", payload)
+                self.assertEqual(code, 200, body)
+                self.assertEqual(json.loads(body)["sourceProject"]["status"], "pending")
+                alternate.unlink()
+
+                times = source_asset.stat()
+                source_asset.write_text("music B")
+                os.utime(source_asset, ns=(times.st_atime_ns, times.st_mtime_ns))
+                code, _, body = self.post("/api/video/source-project", payload)
+                self.assertEqual(code, 200, body)
+                self.assertEqual(json.loads(body)["sourceProject"]["status"], "pending")
 
     def test_post_with_differences_returns_pending_then_confirm_links(self):
         code, _h, body = self.post(

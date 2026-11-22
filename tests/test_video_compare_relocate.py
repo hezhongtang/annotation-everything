@@ -479,6 +479,7 @@ class VideoRelocateServerAndCliTests(unittest.TestCase):
         features = json.loads(h_body)["features"]
         self.assertIn("video-compare", features)
         self.assertIn("video-relocate", features)
+        self.assertIn("video-relocate-revision", features)
         self.assertNotIn("Access-Control-Allow-Origin", h_hdr)
 
         # 安全底线：Host / Origin / Content-Type / ReviewMismatch / 404 / 越界
@@ -536,12 +537,20 @@ class VideoRelocateServerAndCliTests(unittest.TestCase):
         )
         self.assertEqual(missing_note, 404)
 
+        revision = next(n for n in store.load(self.review)["notes"] if n["id"] == "n3")["videoReview"][
+            "evidenceRevision"
+        ]
         oob_code, _, oob_body = serve._req(
             server.port,
             "POST",
             "/api/notes/n3/video-relocate",
             headers,
-            {"versionId": "V2", "target": {"kind": "frame", "frame": 192}, "summary": "越界"},
+            {
+                "expectedEvidence": revision,
+                "versionId": "V2",
+                "target": {"kind": "frame", "frame": 192},
+                "summary": "越界",
+            },
         )
         self.assertEqual(oob_code, 400)
         self.assertEqual(json.loads(oob_body)["code"], "invalid-receipt-target")
@@ -553,6 +562,7 @@ class VideoRelocateServerAndCliTests(unittest.TestCase):
             "/api/notes/n3/video-relocate",
             headers,
             {
+                "expectedEvidence": revision,
                 "versionId": "V2",
                 "target": {"kind": "frame", "frame": 24},
                 "summary": "定位到 V2 第 24 帧并确认片头节奏",
@@ -565,6 +575,16 @@ class VideoRelocateServerAndCliTests(unittest.TestCase):
         self.assertEqual(payload["note"]["videoReview"]["state"], "pending_review")
         self.assertEqual(payload["note"]["videoReview"]["target"]["frame"], 24)
         self.assertEqual(payload["handoff"]["latest"]["videoStats"]["pendingReviewCount"], 1)
+        for expected in (revision, ""):
+            stale, _, raw = serve._req(
+                server.port,
+                "POST",
+                "/api/notes/n3/video-relocate",
+                headers,
+                {"expectedEvidence": expected, "versionId": "V2", "target": {"kind": "frame", "frame": 25}},
+            )
+            self.assertEqual((stale, json.loads(raw)["code"]), (400, "stale-decision"))
+        self.assertEqual(next(n for n in store.load(self.review)["notes"] if n["id"] == "n3"), payload["note"])
 
         # CLI show 中英文都能展示重定位记录
         for lang, expected in (
@@ -907,7 +927,7 @@ class VideoComparePageTests(unittest.TestCase):
           let liveVideo = VIDEO, mode = "server", notes = __NOTES__, videoActiveVersionId = "V2", videoLatestId = "V2";
           let videoRangeEnd = null, videoSelectedId = null, videoShowingTarget = false, videoPendingMark = null;
           let markMode = false;
-          const serverFeatures = new Set(["video", "video-receipt", "video-compare", "video-relocate"]);
+          const serverFeatures = new Set(["video", "video-receipt", "video-compare", "video-relocate", "video-relocate-revision"]);
           const hasFeature = (d, n) => Array.isArray(d.features) && d.features.includes(n);
           const srNodes = new Map();
           const makeVideo = id => {
@@ -966,7 +986,7 @@ class VideoComparePageTests(unittest.TestCase):
             [(PURE_START, PURE_END), (COMPARE_START, COMPARE_END)],
             setup,
             """
-          setVideoServerFeatures({ features: ["video", "video-receipt", "video-compare", "video-relocate"] });
+          setVideoServerFeatures({ features: ["video", "video-receipt", "video-compare", "video-relocate", "video-relocate-revision"] });
           videoCompareOpen(notes[0], false);
           const bEl = getEl("videoCompareBefore"), aEl = getEl("videoCompareAfter");
           const rangeControls = [bEl.controls, aEl.controls];
@@ -1003,7 +1023,7 @@ class VideoComparePageTests(unittest.TestCase):
           setVideoServerFeatures({ features: ["video", "video-receipt"] });
           await videoRelocateSave();
           const legacyErr = getEl("videoRelocateErr").textContent;
-          setVideoServerFeatures({ features: ["video", "video-receipt", "video-compare", "video-relocate"] });
+          setVideoServerFeatures({ features: ["video", "video-receipt", "video-compare", "video-relocate", "video-relocate-revision"] });
           mode = "offline";
           await videoRelocateSave();
           const offlineErr = getEl("videoRelocateErr").textContent;
@@ -1053,6 +1073,7 @@ class VideoComparePageTests(unittest.TestCase):
         self.assertEqual(actual["apiCalls"][0]["method"], "POST")
         self.assertEqual(actual["apiCalls"][0]["path"], "/api/notes/n4/video-relocate")
         self.assertEqual(actual["apiCalls"][0]["body"]["target"], {"kind": "frame", "frame": 108})
+        self.assertEqual(actual["apiCalls"][0]["body"]["expectedEvidence"], "legacy")
         self.assertEqual(actual["applyLen"], 1)
 
     def test_compare_and_relocate_dom_wiring_exists_in_template(self):

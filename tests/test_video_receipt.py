@@ -646,6 +646,126 @@ class VideoReceiptStoreTests(unittest.TestCase):
             store.video_receipt(self.review, seq=1, movie=movie, receipt=[fixed])["version"]["versionId"], "V2"
         )
 
+    def test_failed_receipt_conflict_does_not_publish_a_failure(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        store.handoff_claim(self.review)
+        record_failure = video_review.record_failure
+        bad_movie = self._v2_movie(b"invalid mp4", name="invalid.mp4")
+        for other, arguments in (("n3", {"render_error": "render stopped"}), ("n4", {"movie": bad_movie})):
+            with self.subTest(arguments=arguments):
+
+                def submit_another_batch(*args, **kwargs):
+                    failure = record_failure(*args, **kwargs)
+                    self.assertNotIn("lastFailure", ledger.read_manifest(self.review)["video"])
+                    store.handoff_submit(self.review, note_ids=[other])
+                    return failure
+
+                with (
+                    patch.object(video_review, "record_failure", submit_another_batch),
+                    self.assertRaises(store.HandoffError) as raised,
+                ):
+                    store.video_receipt(self.review, seq=1, receipt_id="failed", **arguments)
+                self.assertEqual(raised.exception.code, "receipt-conflict")
+                video = ledger.read_manifest(self.review)["video"]
+                self.assertNotIn("lastFailure", video)
+                self.assertNotIn("failures", video)
+                self.assertNotIn("videoReceipts", store.handoff_load(self.review)["items"][0])
+                self.assertFalse((self.review / ".video-registration.json").exists())
+
+    def test_failure_publication_recovers_the_committed_receipt(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        store.handoff_claim(self.review)
+        with (
+            patch.object(video_review, "finish_receipt_version", side_effect=OSError("interrupted")),
+            self.assertRaises(OSError),
+        ):
+            store.video_receipt(self.review, seq=1, receipt_id="retry", render_error="original error")
+        committed = store.handoff_load(self.review)["items"][0]["videoFailure"]
+        self.assertNotIn("lastFailure", ledger.read_manifest(self.review)["video"])
+        replay = store.video_receipt(self.review, seq=1, receipt_id="retry", render_error="different error")
+        self.assertTrue(replay["replayed"])
+        self.assertEqual(replay["failure"], committed)
+        video = ledger.read_manifest(self.review)["video"]
+        self.assertEqual(video["lastFailure"], committed)
+        self.assertEqual(video["failures"], [committed])
+
+    def test_historical_decode_retry_requires_the_current_render_base(self):
+        wakeup.bind_wait(self.review, "Claude Code", "session-a")
+
+        def fixed(nid, frame):
+            return {
+                "noteId": nid,
+                "outcome": "fixed",
+                "summary": "修改画面",
+                "target": {"kind": "frame", "frame": frame},
+            }
+
+        original_fix = [fixed("n1", 96)]
+        store.handoff_submit(self.review, note_ids=["n1"])
+        self.assertEqual(notes_cli.claim_next(self.review, by="agent")[1]["seq"], 1)
+        first = store.video_receipt(
+            self.review, seq=1, receipt_id="first", movie=self._v2_movie(), receipt=original_fix
+        )
+        token = first["notes"][0]["videoReview"]["evidenceRevision"]
+        store.handoff_submit(self.review, note_ids=["n3"])
+        self.assertEqual(notes_cli.claim_next(self.review, by="agent")[1]["seq"], 2)
+        second = store.video_receipt(
+            self.review,
+            seq=2,
+            receipt_id="second",
+            movie=self._v2_movie(self.v3_bytes, "second.mp4"),
+            receipt=[fixed("n3", 12)],
+        )
+        self.assertEqual(second["currentVersionId"], "V3")
+        approved = store.video_decision(self.review, "n3", action="approve")["note"]
+        store.video_decode_failed(
+            self.review,
+            note_id="n1",
+            version_id="V2",
+            seq=1,
+            expected_evidence=token,
+            review_id=self.rid,
+            reason="decoder rejected V2",
+        )
+        failed_notes = store.load(self.review)
+        before = ledger.read_manifest(self.review)["video"]
+        with self.assertRaises(store.HandoffError) as stale:
+            store.video_receipt(self.review, seq=1, receipt_id="late", movie=self._v2_movie(), receipt=original_fix)
+        self.assertEqual(stale.exception.code, "stale-render-base")
+        self.assertEqual(stale.exception.params["current"], "V3")
+        self.assertEqual(ledger.read_manifest(self.review)["video"], before)
+        self.assertEqual(store.load(self.review), failed_notes)
+        self.assertFalse((self.review / "media" / "v4.mp4").exists())
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "claimed")
+        rebased_movie = self._v2_movie(synthetic_mp4(frames=200, fps=30, width=640, height=360), "rebased.mp4")
+        result = store.video_receipt(
+            self.review,
+            seq=1,
+            receipt_id="rebased",
+            movie=rebased_movie,
+            receipt={"baseVersionId": "V3", "notes": original_fix},
+        )
+        self.assertEqual((result["version"]["baseVersionId"], result["currentVersionId"]), ("V3", "V4"))
+        self.assertEqual(next(n for n in store.load(self.review)["notes"] if n["id"] == "n3"), approved)
+        replay = store.video_receipt(
+            self.review, seq=1, receipt_id="first", movie=self._v2_movie(), receipt=original_fix
+        )
+        self.assertTrue(replay["replayed"])
+        self.assertEqual((replay["version"]["versionId"], replay["currentVersionId"]), ("V2", "V4"))
+
+    def test_legacy_batches_use_only_versions_known_before_submission(self):
+        video = {
+            "currentVersionId": "V3",
+            "versions": [
+                {"versionId": "V1"},
+                {"versionId": "V2", "at": "2026-01-01T12:00:59Z"},
+                {"versionId": "V3", "at": "2026-01-01T12:01:00Z"},
+            ],
+        }
+        self.assertEqual(store._receipt_render_base({"at": "2026-01-01T20:01:00+08:00"}, video), "V2")
+        self.assertEqual(store._receipt_render_base({}, video), "V1")
+        self.assertEqual(store._receipt_render_base({"videoVersionId": "V3"}, video), "V3")
+
     def test_committed_receipt_resumes_interrupted_version_publication(self):
         store.handoff_submit(self.review, note_ids=["n1"])
         store.handoff_claim(self.review)
@@ -967,6 +1087,157 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
             os.environ.clear()
             os.environ.update(old_env)
         return code, out.getvalue(), err.getvalue()
+
+    def _receipt_for_decode_recovery(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        store.handoff_claim(self.review, by="shared display name")
+        result = store.video_receipt(
+            self.review,
+            seq=1,
+            movie=self.v1_path,
+            receipt_id="original",
+            receipt=[{"noteId": "n1", "outcome": "fixed", "summary": "字幕", "target": {"frame": 96}}],
+        )
+        return dict(
+            note_id="n1",
+            version_id="V2",
+            seq=1,
+            review_id=self.rid,
+            expected_evidence=result["notes"][0]["videoReview"]["evidenceRevision"],
+            reason="decoder rejected V2",
+        )
+
+    def test_unbound_receiver_can_restore_only_its_own_decode_repair(self):
+        failure = self._receipt_for_decode_recovery()
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(wakeup.main(["unbind", str(self.review)]), 0)
+        store.video_decode_failed(self.review, **failure)
+        self.assertIsNone(wakeup.load_binding(self.review))
+        with self.assertRaisesRegex(ValueError, "batch-in-progress"):
+            wakeup.bind_wait(self.review, "Claude Code", "session-b")
+        wakeup.bind_wait(self.review, "Claude Code", "session-a")
+        repair = [{"noteId": "n1", "outcome": "fixed", "summary": "重渲染字幕", "target": {"frame": 96}}]
+        code, output, error = self.run_cli(
+            [
+                "video-receipt",
+                str(self.review),
+                "--seq",
+                "1",
+                "--receipt-id",
+                "repair",
+                "--receipt",
+                "-",
+                "--movie",
+                str(self.v1_path),
+                "--json",
+            ],
+            stdin_text=json.dumps(repair),
+        )
+        self.assertEqual(code, 0, error)
+        self.assertEqual(json.loads(output)["currentVersionId"], "V3")
+
+    def test_changed_receiver_cannot_close_or_submit_the_original_decode_repair(self):
+        failure = self._receipt_for_decode_recovery()
+        wakeup.bind_wait(self.review, "Claude Code", "session-b", replace=True)
+        store.handoff_submit(self.review, note_ids=["n3"])
+        store.handoff_claim(self.review, by="shared display name")
+        store.video_decode_failed(self.review, **failure)
+        other = {"AE_SESSION_ID": "session-b"}
+        code, _, error = self.run_cli(
+            ["video-receipt", str(self.review), "--seq", "1", "--render-error", "failed", "--locale", "en"],
+            env_extra=other,
+        )
+        self.assertNotEqual(code, 0)
+        self.assertIn("original receiver", error)
+        code, _, error = self.run_cli(["done", str(self.review), "--seq", "1", "--locale", "en"], env_extra=other)
+        self.assertNotEqual(code, 0)
+        self.assertIn("original receiver", error)
+        with self.assertRaisesRegex(ValueError, "batch-in-progress"):
+            wakeup.bind_wait(self.review, "Claude Code", "session-a", replace=True)
+        store.video_receipt(self.review, seq=2, receipt=[{"noteId": "n3", "outcome": "question", "question": "配音？"}])
+        wakeup.bind_wait(self.review, "Claude Code", "session-a", replace=True)
+        self.assertEqual([i["status"] for i in store.handoff_load(self.review)["items"]], ["claimed", "done"])
+
+    def test_unattributable_legacy_decode_repair_requires_explicit_resubmission(self):
+        failure = self._receipt_for_decode_recovery()
+        handoff = store.handoff_load(self.review)
+        handoff["items"][0]["videoSubmission"].pop("claimedReceiver")
+        (self.review / store.HANDOFF_FILE).write_text(json.dumps(handoff))
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(wakeup.main(["unbind", str(self.review)]), 0)
+        store.video_decode_failed(self.review, **failure)
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "done")
+        self.assertEqual(
+            next(n for n in store.load(self.review)["notes"] if n["id"] == "n1")["videoReview"]["state"], "failed"
+        )
+        wakeup.bind_wait(self.review, "Claude Code", "session-b")
+        with self.assertRaises(store.HandoffError):
+            store.video_receipt(self.review, seq=1, receipt_id="wrong-session", render_error="wrong")
+        store.handoff_submit(self.review, note_ids=["n1"])
+        self.assertEqual(store.handoff_claim(self.review)["seq"], 2)
+
+    def test_desktop_receiver_can_restore_its_acknowledged_decode_repair(self):
+        original = "d2bce608-0b30-42b2-94d2-c1296c3079ae"
+        other = "f5a5b85d-a352-470e-9701-11e461771fe7"
+        socket = self.root / "synthetic.sock"
+        with patch.object(wakeup, "DesktopIPC"):
+            binding = wakeup.bind(self.review, original, socket, replace=True)
+            failure = self._receipt_for_decode_recovery()
+            wakeup._write(
+                self.review / wakeup.DELIVERY_FILE,
+                {
+                    "version": 1,
+                    "items": {
+                        "original": {
+                            "bindingId": binding["bindingId"],
+                            "seq": 1,
+                            "event": "handoff",
+                            "state": "received",
+                        }
+                    },
+                },
+            )
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(wakeup.main(["unbind", str(self.review)]), 0)
+            store.video_decode_failed(self.review, **failure)
+            with self.assertRaisesRegex(ValueError, "batch-in-progress"):
+                wakeup.bind(self.review, other, socket)
+            restored = wakeup.bind(self.review, original, socket)
+        self.assertEqual(wakeup.binding_identity(restored), {"harness": "Codex", "sessionId": original})
+        self.assertNotEqual(restored["bindingId"], binding["bindingId"])
+
+    def test_second_submission_uses_its_frozen_base_and_cli_reports_the_retained_version(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        store.handoff_submit(self.review, note_ids=["n3"])
+        self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
+        cut = self.root / "second.mp4"
+        cut.write_bytes(self.v2_bytes)
+        store.video_receipt(
+            self.review,
+            seq=1,
+            receipt_id="first",
+            movie=cut,
+            receipt=[
+                {"noteId": "n1", "outcome": "fixed", "summary": "修正字幕", "target": {"kind": "frame", "frame": 96}}
+            ],
+        )
+        claim, data, _ = self.run_cli(["claim", str(self.review)])
+        self.assertEqual(claim, 0)
+        self.assertEqual(json.loads(data)["video"]["currentVersionId"], "V1")
+        command = ["video-receipt", str(self.review), "--seq", "2", "--locale", "en"]
+        code, _, error = self.run_cli([*command, "--movie", str(cut)])
+        self.assertEqual(code, 1)
+        self.assertIn("baseVersionId", error)
+        self.assertFalse((self.review / "media" / "v3.mp4").exists())
+        code, output, _ = self.run_cli([*command, "--render-error", "renderer stopped"])
+        self.assertEqual(code, 0)
+        self.assertIn("V2", output)
+        code, output, _ = self.run_cli(
+            [*command, "--receipt", "-"],
+            stdin_text=json.dumps([{"noteId": "n3", "outcome": "question", "question": "保留片头吗？"}]),
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("V2", output)
 
     def test_agent_display_name_cannot_authorize_a_reviewer_decision(self):
         store.handoff_submit(self.review, note_ids=["n1"])

@@ -127,7 +127,7 @@ python "$S\serve.py" "$env:TEMP\ae-demo"
 - **报告**：一份 HTML 文件，每一页是一个 `<section class="page" data-page="N" data-key="唯一键">` 元素。
 - **讲稿（可选）**：一份 Markdown 文件，中文用 `### 第 N 页｜标题` 分页，每页写明时长、讲法、过渡和可能被问到的问题；英文讲稿写 `### Page N｜Title` 加 `**Duration**` / `**Talking points**` / `**Transition**` / `**Likely questions**`。两种写法可以在同一份讲稿里混用，认哪种写法与界面语言无关：中文界面能审阅英文讲稿，英文界面能审阅中文讲稿，标题和正文按原文保留、不翻译。页头认不出来、页码重复或字段重复时，生成器按当前语言给出行号与期望写法，不把错输入当成空讲稿。
 
-- **视频**。把本地 MP4 交给 Agent，指出要审阅的画面或声音。需要改源时，在对照页关联工程和合成入口。已有源工程时也可以直接从工程目录开始。[试用两个合成工程](fixtures/video/README.md)。
+- **视频**。把本地 MP4 交给 Agent，指出要审阅的画面或声音。需要改源时，在对照页关联工程和合成入口。已有源工程时，把工程目录传给 `--report`，用 `--out` 指定独立的审阅目录。[试用两个合成工程](fixtures/video/README.md)。
 
 完整格式见 [references/formats.md](skill/annotation-everything/references/formats.md)。
 
