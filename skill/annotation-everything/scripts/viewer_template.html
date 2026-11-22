@@ -227,6 +227,16 @@ body.focus-mode.focus-composer #focusHint{display:none}
 .note textarea{width:100%;font:inherit;font-size:var(--ae-body);min-height:60px;border:1px solid var(--ae-line);border-radius:var(--ae-radius);padding:var(--ae-gap-6) var(--ae-space)}
 .chip{display:inline-block;font-size:var(--ae-badge);border-radius:var(--ae-radius-xs);padding:0 var(--ae-gap-5);margin-left:var(--ae-gap-6);background:var(--ae-success-bg);color:var(--ae-green)}
 .chip.dr{background:var(--ae-warm);color:var(--ae-amber)}.chip.fl{background:var(--ae-selected);color:var(--ae-accent)}
+.vr-box{margin-top:var(--ae-gap-5);padding:var(--ae-gap-5) var(--ae-gap-8);border-radius:var(--ae-radius-sm);background:var(--ae-bg);font-size:var(--ae-text);display:flex;flex-direction:column;gap:var(--ae-gap-3)}
+.vr-box .vr-chip{margin-left:0;align-self:flex-start}
+.vr-chip.vr-pending_review{background:var(--ae-warm);color:var(--ae-amber)}
+.vr-chip.vr-needs_reply,.vr-chip.vr-needs_relocate{background:var(--ae-selected);color:var(--ae-accent)}
+.vr-chip.vr-missing_evidence,.vr-chip.vr-failed,.vr-chip.vr-returned{background:var(--ae-danger-bg);color:var(--ae-warning)}
+.vr-chip.vr-unsubmitted{background:var(--ae-panel);color:var(--ae-mut);border:1px solid var(--ae-line)}
+.vr-chip.vr-approved{background:var(--ae-success-bg);color:var(--ae-green)}
+.vr-row{display:flex;align-items:center;justify-content:space-between;gap:var(--ae-gap-6);flex-wrap:wrap;color:var(--ae-mut);font-size:var(--ae-small)}
+.vr-jump{font:inherit;font-size:var(--ae-small);border:1px solid var(--ae-line);background:var(--ae-panel);color:var(--ae-navy);border-radius:var(--ae-radius-xs);padding:1px var(--ae-gap-6);cursor:pointer}
+.vr-sum{color:var(--ae-green)}.vr-q{color:var(--ae-accent)}.vr-err{color:var(--ae-warning)}
 .note.drafted{border-color:var(--ae-warm-line)}.note .trail{font-size:var(--ae-small);color:var(--ae-mut);margin-top:var(--ae-gap-3)}
 .note .trail b{font-weight:600;color:var(--ae-amber)}
 .form{display:flex;flex-direction:column;gap:var(--ae-gap-6);margin-top:var(--ae-space)}
@@ -652,6 +662,7 @@ const DOCX=__DOCX__;
 const PPTX=__PPTX__;
 // 视频审阅：V1 媒体清单由构建器注入；旧文档审阅固定为 null
 const VIDEO=__VIDEO__;
+let liveVideo=VIDEO,videoActiveVersionId=VIDEO&&VIDEO.currentVersionId||null,videoLatestId=VIDEO&&VIDEO.currentVersionId||null,lastVideoSig="",videoShowingTarget=false;
 // 总览首页宿主（null 表示对照页）：这个页面由台账目录的服务提供，只服务总览视图，没有批注与对照页
 const OVERVIEW_HOME=__OVERVIEW_HOME__;
 function pageSize(k){const p=P[k]||{};return{w:+p.w>0?+p.w:1280,h:+p.h>0?+p.h:720}}
@@ -800,6 +811,8 @@ function applyLocale(){
   if(typeof updateMode==="function") updateMode();
   if(typeof renderDocx==="function") renderDocx();
   if(typeof renderPptx==="function") renderPptx();
+  if(VIDEO&&typeof renderVideoVersions==="function") renderVideoVersions();
+  if(VIDEO&&typeof renderVideoFailure==="function") renderVideoFailure();
   if(typeof showQuote==="function") showQuote();
   updatePageStat();
   updatePairText();
@@ -876,10 +889,12 @@ const isDraft=x=>x.status==="drafted";   // 两段流程：初改完成、等复
 let flight=new Set();                    // 已交给 Agent、还在路上（等待接收 / 处理中 / 等待复核 / 复核中）的批注
 const inFlight=x=>!isDone(x)&&!isDraft(x)&&flight.has(x.id);
 const TRAIL_ACTION={drafted:"viewer.batch.trail.action.drafted",resolved:"viewer.batch.trail.action.resolved",finalized:"viewer.batch.trail.action.finalized",approved:"viewer.batch.trail.action.approved",revised:"viewer.batch.trail.action.revised",returned:"viewer.batch.trail.action.returned",reopened:"viewer.batch.trail.action.reopened",accepted:"viewer.batch.trail.action.accepted"};
+const videoTrailAction={missing_evidence:"viewer.batch.trail.action.missingEvidence",question:"viewer.batch.trail.action.question",relocate:"viewer.batch.trail.action.relocate",failed:"viewer.batch.trail.action.failed"};
 // 痕迹动作名与「第 N 批」按当前语言，执行者名称和理由保持原文
 function trailText(x,last){const t=Array.isArray(x.trail)?x.trail.slice(-(last||4)):[];
   return t.filter(e=>e&&typeof e==="object").map(e=>{const who=e.by==="page"?tMsg("viewer.batch.trail.whoPage"):e.by==="claude"?"Claude":String(e.by||"");
-    const lab=TRAIL_ACTION[e.action]?tMsg(TRAIL_ACTION[e.action]):String(e.action||"");
+    const actionKey=TRAIL_ACTION[e.action]||videoTrailAction[e.action];
+    const lab=actionKey?tMsg(actionKey):String(e.action||"");
     const batch=e.batch?tMsg("viewer.batch.trail.batch",{batch:+e.batch}):"";
     const note=e.note?tMsg("viewer.batch.trail.note",{note:clip(String(e.note),90)}):"";
     const shown=e.action==="returned"?`<b>${escH(lab)}</b>`:escH(lab);
@@ -1013,11 +1028,14 @@ ${RCSS}
 #handPick .hp-item{display:flex;gap:8px;align-items:baseline;margin:2px 0;font-size:12px}
 #handPick .hp-loc{white-space:nowrap;color:var(--ae-dim,#888)}
 #handPick .hp-text{overflow:hidden;text-overflow:ellipsis}
-#videoError{margin:4px 8px;color:#ffb4a8;font:12px/1.4 sans-serif}
+#videoError,#videoFailureBanner{margin:4px 8px;color:#ffb4a8;font:12px/1.4 sans-serif}
+#videoFailureBanner{padding:4px 8px;background:rgba(160,40,30,.35);border:1px solid #d9776c;border-radius:4px}
+#videoVersionPick{font:inherit;background:#2b3038;color:#fff;border:1px solid #484f5b;border-radius:4px;padding:1px 6px}
 </style><div class="ae-frame" id="ae-frame"><div id="ae-stage"><section id="videoStage" hidden>
 <div id="videoViewport"><video id="videoPlayer" controls playsinline preload="metadata"></video><div id="videoMarkLayer"></div></div>
 <div id="videoError" role="alert" hidden></div>
-<div id="videoControls"><span id="videoVersion"></span><button id="videoPrevFrame" type="button">−1</button><input id="videoFrame" type="number" min="0" step="1" value="0" aria-label="Frame"><button id="videoNextFrame" type="button">+1</button><button id="videoSetStart" type="button">[</button><button id="videoSetEnd" type="button">]</button><button id="videoPlayRange" type="button">▶</button><span id="videoRange"></span><button id="videoSourceBtn" type="button"></button><span id="videoSourceHint"></span></div>
+<div id="videoFailureBanner" role="alert" hidden></div>
+<div id="videoControls"><span id="videoVersion"></span><select id="videoVersionPick" hidden aria-label="Video version"></select><button id="videoPrevFrame" type="button">−1</button><input id="videoFrame" type="number" min="0" step="1" value="0" aria-label="Frame"><button id="videoNextFrame" type="button">+1</button><button id="videoSetStart" type="button">[</button><button id="videoSetEnd" type="button">]</button><button id="videoPlayRange" type="button">▶</button><span id="videoRange"></span><button id="videoSourceBtn" type="button"></button><span id="videoSourceHint"></span></div>
 </section></div></div>`;
 const stage=sr.getElementById("ae-stage"), frame=sr.getElementById("ae-frame");
 function fit(){const slide=$("slide"),style=getComputedStyle(slide),b=slide.getBoundingClientRect();
@@ -1583,6 +1601,14 @@ function applyServer(d,quietHand){
   finalizeAllSupported=hasFeature(d,"finalize-all");srvNoDocx=!!DOCX&&!hasFeature(d,"docx");srvNoPptx=!!PPTX&&!hasFeature(d,"pptx");srvNoVideo=!!VIDEO&&!hasFeature(d,"video");updateMode();renderDocxBlock();renderPptxBlock();renderVideoBlock();
   srvNoSelect=!hasFeature(d,"selective-handoff");srvNoVideoSource=!!VIDEO&&!hasFeature(d,"video-source");   // 选择性提交与源工程关联都按服务声明的能力走，旧服务不误发
   if(VIDEO&&mode==="server"&&!videoSourceLoaded){videoSourceLoaded=true;loadVideoSource()}
+  if(VIDEO&&d.video){const sig=JSON.stringify(d.video);liveVideo=d.video;const cur=d.video.currentVersionId||null;
+    if(cur&&cur!==videoLatestId){videoLatestId=cur;videoActiveVersionId=cur}
+    if(typeof renderVideoVersions==="function")renderVideoVersions();
+    if(typeof renderVideoFailure==="function")renderVideoFailure();
+    if(sig!==lastVideoSig){lastVideoSig=sig;
+      if(typeof videoSelectVersion==="function"&&videoActiveVersionId)videoSelectVersion(videoActiveVersionId,false);
+      if(typeof refreshList==="function")refreshList(true);
+      if(typeof updatePageStat==="function")updatePageStat()}}
   if(Array.isArray(d.skillCatalog)){skillCatalog=d.skillCatalog;renderSkillList()}
   if(Array.isArray(d.alwaysSkills)){const sg=JSON.stringify(d.alwaysSkills);if(sg!==alwaysSig){alwaysSig=sg;alwaysSkills=d.alwaysSkills;updateAlwaysBtn();refreshList()}}
   if(!pend.get().some(op=>op.kind==="handoff"))handQueued=false;
@@ -1750,7 +1776,7 @@ function cleanVideo(value){
 }
 function videoKey(value){const sorted=v=>Array.isArray(v)?v.map(sorted):v&&typeof v==="object"?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;
   return value&&typeof value==="object"?JSON.stringify(sorted(value)):""}
-function videoMakeAnchor(manifest,temporal,mark){const version=(manifest.versions||[]).find(v=>v.versionId===manifest.currentVersionId);if(!version)throw new Error("missing-video-version");
+function videoMakeAnchor(manifest,temporal,mark,versionId){const targetVer=versionId||manifest.currentVersionId;const version=(manifest.versions||[]).find(v=>v.versionId===targetVer);if(!version)throw new Error("missing-video-version");
   return cleanVideo({v:1,versionId:version.versionId,fps:version.fps,timebase:version.timebase,frames:version.frames,
     videoWidth:version.width,videoHeight:version.height,...temporal,...(mark?{mark}:{})})}
 function videoContentRect(viewportWidth,viewportHeight,videoWidth,videoHeight){const scale=Math.min(viewportWidth/videoWidth,viewportHeight/videoHeight),width=videoWidth*scale,height=videoHeight*scale;
@@ -1773,10 +1799,82 @@ function handoffNoteIds(avail,sel){
   if(!sel)return null;
   const picked=avail.filter(id=>sel.has(id));
   return picked.length===avail.length?null:picked}
+function videoNoteState(note){
+  if(!note||typeof note!=="object")return"unsubmitted";
+  if(note.status==="resolved")return"approved";
+  const vr=note.videoReview;
+  if(vr&&typeof vr==="object")return String(vr.state||(note.status==="drafted"?"pending_review":"unsubmitted"));
+  if(note.status==="drafted")return"missing_evidence";
+  return"unsubmitted"}
+function videoTargetValid(target,version){
+  if(!target||typeof target!=="object"||!version||!Number.isInteger(version.frames)||version.frames<1)return false;
+  if(target.kind==="frame")return Number.isInteger(target.frame)&&target.frame>=0&&target.frame<version.frames;
+  if(target.kind==="range")return Number.isInteger(target.startFrame)&&Number.isInteger(target.endFrame)&&target.startFrame>=0&&target.startFrame<target.endFrame&&target.endFrame<=version.frames;
+  if(target.kind==="cut"){if(!Number.isInteger(target.frame)||target.frame<0||target.frame>version.frames)return false;
+    const hasStart=target.contextStart!=null,hasEnd=target.contextEnd!=null;
+    if(hasStart!==hasEnd)return false;
+    if(hasStart&&(!Number.isInteger(target.contextStart)||!Number.isInteger(target.contextEnd)||target.contextStart<0||target.contextStart>=target.contextEnd||target.contextEnd>version.frames||target.frame<target.contextStart||target.frame>target.contextEnd))return false;
+    return true}
+  return false}
+function videoReceiptReady(note,manifest){
+  if(!note||typeof note!=="object")return false;
+  const vr=note.videoReview;
+  if(!vr)return note.status!=="drafted";
+  if(typeof vr!=="object"||vr.state!=="pending_review")return false;
+  if(typeof vr.summary!=="string"||!vr.summary.trim())return false;
+  const verId=vr.versionId;if(typeof verId!=="string"||!/^V[1-9][0-9]*$/.test(verId))return false;
+  const versions=(manifest&&Array.isArray(manifest.versions))?manifest.versions:[];
+  const version=versions.find(v=>v&&v.versionId===verId);if(!version)return false;
+  return videoTargetValid(vr.target,version)}
+function videoTargetText(target,fallbackVersionId){
+  if(!target||typeof target!=="object")return"";
+  const ver=String(target.versionId||fallbackVersionId||"");
+  if(target.kind==="frame")return tMsg("viewer.video.targetFrame",{version:ver,frame:target.frame});
+  if(target.kind==="range")return tMsg("viewer.video.targetRange",{version:ver,start:target.startFrame,end:target.endFrame});
+  if(target.kind==="cut"){if(Number.isInteger(target.contextStart)&&Number.isInteger(target.contextEnd))
+      return tMsg("viewer.video.targetCutContext",{version:ver,frame:target.frame,start:target.contextStart,end:target.contextEnd});
+    return tMsg("viewer.video.targetCut",{version:ver,frame:target.frame})}
+  return""}
+function videoStatusCounts(list){
+  const out={pending_review:0,needs_reply:0,needs_relocate:0,missing_evidence:0,failed:0,returned:0,unsubmitted:0,approved:0};
+  (list||[]).forEach(n=>{const s=videoNoteState(n);if(Object.prototype.hasOwnProperty.call(out,s))out[s]++});
+  return out}
+function videoReceiptCardHtml(note){
+  if(!note||typeof note!=="object")return"";
+  const eid=escH(note.id||""),st=videoNoteState(note),vr=note.videoReview&&typeof note.videoReview==="object"?note.videoReview:null;
+  const stateText=tMsg("viewer.video.state."+st),verTag=vr&&vr.versionId?" · "+escH(vr.versionId):"";
+  const parts=[`<div class="vr-box"><span class="chip vr-chip vr-${escH(st)}">${escH(stateText)}${verTag}</span>`];
+  if(note.video){parts.push(`<div class="vr-row"><span>${escH(tMsg("viewer.video.originalLoc",{loc:videoLocText(note.video)}))}</span><button type="button" class="vr-jump" data-act="video-jump-orig" data-id="${eid}">${escH(tMsg("viewer.video.jumpOriginal"))}</button></div>`)}
+  if(vr){
+    if(vr.target){const nt=videoTargetText(vr.target,vr.versionId);
+      if(nt)parts.push(`<div class="vr-row"><span>${escH(tMsg("viewer.video.newLoc",{loc:nt}))}</span><button type="button" class="vr-jump" data-act="video-jump-target" data-id="${eid}">${escH(tMsg("viewer.video.jumpNew"))}</button></div>`)}
+    if(vr.summary)parts.push(`<div class="vr-sum">${escH(tMsg("viewer.video.changeSummary",{version:vr.versionId||"—",summary:vr.summary})).replace(/\n/g,"<br>")}</div>`);
+    if(vr.question)parts.push(`<div class="vr-q">${escH(tMsg("viewer.video.questionLabel",{question:vr.question}))}</div>`);
+    if(vr.relocateReason)parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.relocateLabel",{reason:vr.relocateReason}))}</div>`);
+    if(vr.failure)parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.failureLabel",{reason:vr.failure}))}</div>`);
+    if(vr.returnReason)parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.returnLabel",{reason:vr.returnReason}))}</div>`);
+    if(st==="missing_evidence")parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.missingEvidenceHint"))}</div>`)}
+  parts.push("</div>");return parts.join("")}
 // ---------- 视频审阅 DOM ----------
 let videoDraft=null,videoRangeStart=null,videoRangeEnd=null,videoSelectedId=null,videoPointerStart=null,videoPendingMark=null;
 const videoEl=()=>sr.getElementById("videoPlayer"),videoLayer=()=>sr.getElementById("videoMarkLayer");
-function videoCurrentVersion(){return VIDEO&&(VIDEO.versions||[]).find(v=>v.versionId===VIDEO.currentVersionId)||null}
+const videoManifest=()=>liveVideo||VIDEO;
+function videoFindVersion(versionId){const m=videoManifest();if(!m)return null;const targetId=versionId||videoActiveVersionId||m.currentVersionId;
+  return (m.versions||[]).find(v=>v.versionId===targetId)||(m.versions||[])[0]||null}
+function videoCurrentVersion(){return videoFindVersion(videoActiveVersionId)}
+function renderVideoFailure(){const m=videoManifest(),banner=sr&&sr.getElementById("videoFailureBanner");if(!banner||!m)return;
+  const lf=m.lastFailure;if(!lf||!lf.reason){banner.hidden=true;banner.textContent="";return}
+  banner.hidden=false;banner.textContent=tMsg("viewer.video.failureBanner",{batch:lf.batch||"—",reason:lf.reason,version:m.currentVersionId||"V1"})}
+function renderVideoVersions(){const m=videoManifest(),pick=sr&&sr.getElementById("videoVersionPick"),verEl=sr&&sr.getElementById("videoVersion");if(!m)return;
+  const vers=Array.isArray(m.versions)?m.versions:[];const active=videoCurrentVersion(),activeId=active?active.versionId:(m.currentVersionId||"V1");
+  videoActiveVersionId=activeId;if(verEl)verEl.textContent=activeId;if(!pick)return;
+  pick.innerHTML=vers.map(v=>`<option value="${escH(v.versionId)}"${v.versionId===activeId?" selected":""}>${escH(v.versionId===m.currentVersionId?tMsg("viewer.video.versionOption",{version:v.versionId}):v.versionId)}</option>`).join("");
+  pick.hidden=vers.length<=1;pick.value=activeId}
+function videoSelectVersion(versionId,resetTime=true){const version=videoFindVersion(versionId),player=videoEl();if(!version||!player)return;
+  videoActiveVersionId=version.versionId;renderVideoVersions();
+  if(player.getAttribute("src")!==version.url){const t=resetTime?0:player.currentTime;player.src=version.url;player.load();
+    if(t>0)player.addEventListener("loadedmetadata",()=>{player.currentTime=Math.min(t,version.duration||t)},{once:true})}
+  videoLayout()}
 function videoCurrentFrame(){const version=videoCurrentVersion(),player=videoEl();return version?Math.max(0,Math.min(version.frames-1,Math.floor(player.currentTime*version.fps+1e-6))):0}
 function videoLayout(){if(!VIDEO)return;const viewport=sr.getElementById("videoViewport"),player=videoEl(),layer=videoLayer(),version=videoCurrentVersion();if(!viewport||!player||!layer||!version)return;
   const rect=videoContentRect(viewport.clientWidth,viewport.clientHeight,player.videoWidth||version.width,player.videoHeight||version.height);   // 标记相对实际解码画面，不信登记尺寸
@@ -1787,30 +1885,44 @@ function videoMarkElements(mark,cls=""){const layer=videoLayer();if(!layer||!mar
   else Object.assign(el.style,{left:mark.x*100+"%",top:mark.y*100+"%",width:mark.width*100+"%",height:mark.height*100+"%"});
   layer.appendChild(el)}
 function videoDrawMarks(){const layer=videoLayer();if(!VIDEO||!layer)return;layer.innerHTML="";
-  const frame=videoCurrentFrame(),shown=new Set;
-  notes.forEach(x=>{const a=x.video;if(!a||!a.mark||shown.has(x.id))return;
-    const hit=Number.isInteger(a.frame)?a.frame===frame:a.startFrame<=frame&&frame<a.endFrame;   // 当前帧能看到的画面标记都显示
-    if(x.id===videoSelectedId||hit){shown.add(x.id);videoMarkElements(a.mark,isDone(x)?"done":"")}});
+  const frame=videoCurrentFrame(),curVer=(videoCurrentVersion()||{}).versionId,shown=new Set;
+  notes.forEach(x=>{const cls=isDone(x)?"done":"";const a=x.video;
+    if(a&&a.mark&&a.versionId===curVer&&!shown.has("o:"+x.id)){
+      const hit=Number.isInteger(a.frame)?a.frame===frame:a.startFrame<=frame&&frame<a.endFrame;
+      if((x.id===videoSelectedId&&!videoShowingTarget)||hit){shown.add("o:"+x.id);videoMarkElements(a.mark,cls)}}
+    const vr=x.videoReview,tgt=vr&&vr.target;
+    if(tgt&&tgt.mark&&(tgt.versionId||vr.versionId)===curVer&&!shown.has("t:"+x.id)){
+      const hit=Number.isInteger(tgt.frame)?tgt.frame===frame:(Number.isInteger(tgt.startFrame)&&tgt.startFrame<=frame&&frame<tgt.endFrame);
+      if((x.id===videoSelectedId&&videoShowingTarget)||hit){shown.add("t:"+x.id);videoMarkElements(tgt.mark,cls)}}});
   if(videoPendingMark)videoMarkElements(videoPendingMark)}
 function videoUpdateRange(){const label=sr.getElementById("videoRange");if(label)label.textContent=videoRangeStart==null?"":`${videoRangeStart} → ${videoDraft&&Number.isInteger(videoDraft.endFrame)?videoDraft.endFrame:"?"}`}
-function videoDraftAt(mark=videoPendingMark){const version=videoCurrentVersion();if(!version)return null;const frame=videoCurrentFrame();
-  if(videoRangeStart!=null){const start=videoRangeStart,end=Math.max(frame+1,start+1);return videoMakeAnchor(VIDEO,{startFrame:start,endFrame:Math.min(end,version.frames)},mark)}
-  return videoMakeAnchor(VIDEO,{frame},mark)}
+function videoDraftAt(mark=videoPendingMark){const m=videoManifest(),version=videoCurrentVersion();if(!m||!version)return null;const frame=videoCurrentFrame();
+  if(videoRangeStart!=null){const start=videoRangeStart,end=Math.max(frame+1,start+1);return videoMakeAnchor(m,{startFrame:start,endFrame:Math.min(end,version.frames)},mark,version.versionId)}
+  return videoMakeAnchor(m,{frame},mark,version.versionId)}
 function videoSeekDraftFrame(frame){const version=videoCurrentVersion();if(!version)return;videoSeekFrame(videoEl(),Math.max(0,Math.min(version.frames-1,frame)),version.fps);videoRangeEnd=null;
   sr.getElementById("videoFrame").value=videoCurrentFrame();videoDrawMarks()}
-function videoShowNote(note){if(!VIDEO||!note||!note.video)return;const anchor=note.video,version=(VIDEO.versions||[]).find(v=>v.versionId===anchor.versionId),player=videoEl();if(!version||!player)return;
-  videoSelectedId=note.id;videoPendingMark=null;
+function videoJumpPlay(version,temporal){const player=videoEl();if(!version||!player)return;
+  videoActiveVersionId=version.versionId;renderVideoVersions();
   if(player.getAttribute("src")!==version.url){player.src=version.url;player.load()}
-  const frame=Number.isInteger(anchor.frame)?anchor.frame:anchor.startFrame;
-  const seek=()=>{videoSeekFrame(player,frame,anchor.fps);sr.getElementById("videoFrame").value=frame;videoDrawMarks()};
+  const fps=temporal.fps||version.fps;
+  const frame=Number.isInteger(temporal.startFrame)?temporal.startFrame:Number.isInteger(temporal.contextStart)?temporal.contextStart:Math.min(Math.max(0,temporal.frame||0),version.frames-1);
+  const seek=()=>{videoSeekFrame(player,frame,fps);sr.getElementById("videoFrame").value=frame;videoDrawMarks()};
   if(player.readyState>=1)seek();else player.addEventListener("loadedmetadata",seek,{once:true});
-  if(Number.isInteger(anchor.startFrame))videoPlayInterval(player,anchor).catch(()=>{sr.getElementById("videoError").hidden=false;sr.getElementById("videoError").textContent=tMsg("viewer.video.playbackUnavailable")})}
+  const playRange=Number.isInteger(temporal.startFrame)?{startFrame:temporal.startFrame,endFrame:temporal.endFrame,fps}
+    :Number.isInteger(temporal.contextStart)?{startFrame:temporal.contextStart,endFrame:temporal.contextEnd,fps}:null;
+  if(playRange)videoPlayInterval(player,playRange).catch(()=>{sr.getElementById("videoError").hidden=false;sr.getElementById("videoError").textContent=tMsg("viewer.video.playbackUnavailable")})}
+function videoShowNote(note){if(!VIDEO||!note||!note.video)return;const version=videoFindVersion(note.video.versionId);if(!version)return;
+  videoSelectedId=note.id;videoShowingTarget=false;videoPendingMark=null;videoJumpPlay(version,note.video)}
+function videoShowTarget(note){if(!VIDEO||!note||!note.videoReview||!note.videoReview.target)return;
+  const vr=note.videoReview,tgt=vr.target,version=videoFindVersion(tgt.versionId||vr.versionId);if(!version)return;
+  videoSelectedId=note.id;videoShowingTarget=true;videoPendingMark=null;videoJumpPlay(version,tgt)}
 function videoInit(){if(!VIDEO)return;const player=videoEl(),stageEl=sr.getElementById("videoStage"),version=videoCurrentVersion();
   stageEl.hidden=false;$("host").hidden=true;$("scriptPane").hidden=true;$("scriptHandle").hidden=true;
-  sr.getElementById("videoVersion").textContent=version?version.versionId:"";
+  renderVideoVersions();renderVideoFailure();
+  const verPick=sr.getElementById("videoVersionPick");if(verPick)verPick.onchange=e=>{videoShowingTarget=false;videoSelectVersion(e.target.value,false)};
   const sourceBtn=sr.getElementById("videoSourceBtn");if(sourceBtn)sourceBtn.onclick=()=>openVsrc();
   renderVideoSource();
-  if(version){player.src=version.url;player.muted=false;player.addEventListener("loadedmetadata",()=>{if(Math.abs(player.videoWidth-version.width)>0||Math.abs(player.videoHeight-version.height)>0){
+  if(version){player.src=version.url;player.muted=false;player.addEventListener("loadedmetadata",()=>{const cur=videoCurrentVersion()||version;if(Math.abs(player.videoWidth-cur.width)>0||Math.abs(player.videoHeight-cur.height)>0){
       sr.getElementById("videoError").hidden=false;sr.getElementById("videoError").textContent=tMsg("viewer.video.dimensionMismatch")}videoLayout()})}
   player.addEventListener("error",()=>{const box=sr.getElementById("videoError");box.hidden=false;box.textContent=tMsg(FILE?"viewer.video.filePlayback":"viewer.video.playbackUnavailable")});
   player.addEventListener("timeupdate",()=>{videoRangeTick(player);sr.getElementById("videoFrame").value=videoCurrentFrame()});
@@ -1862,9 +1974,10 @@ function noteHtml(x){
   const done=isDone(x), held=isHeld(x), dr=isDraft(x), fl=inFlight(x), id=escH(x.id), qe=editOf(x);
   const changed=held&&x.hold==="结论已变";
   const ed=editingId===x.id&&!changed;
+  const vrReady=!VIDEO||videoReceiptReady(x,videoManifest());
   const acts=changed?(editingId===x.id?`<button data-act="cancel">${tMsg("viewer.cancel")}</button>`:""):ed?`<button data-act="save" data-id="${id}">${tMsg("viewer.save")}</button><button data-act="remark" data-id="${id}" title="${escH(tMsg("viewer.remarkTitle"))}">${tMsg(hasMark(x)?"viewer.remarkAgain":"viewer.remark")}</button>${hasMark(x)?`<button data-act="unpin" data-id="${id}">${tMsg("viewer.unpin")}</button>`:""}<button data-act="cancel">${tMsg("viewer.cancel")}</button>`
-    :`<button data-act="edit" data-id="${id}">${tMsg("viewer.edit")}</button>${dr?`<button data-act="resolve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${tMsg("viewer.finalize")}</button><button data-act="reopen" data-id="${id}">${tMsg("viewer.returnForRedo")}</button>`
-      :held?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
+    :`<button data-act="edit" data-id="${id}">${tMsg("viewer.edit")}</button>${dr?`${vrReady?`<button data-act="resolve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${VIDEO?tMsg("viewer.video.approveBtn"):tMsg("viewer.finalize")}</button>`:""}<button data-act="reopen" data-id="${id}">${tMsg("viewer.returnForRedo")}</button>`
+      :held?"":(!done&&!vrReady?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`)}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
   const analysisLink=x.heldBy||x.analysisId||x.fromAnalysis;
   const analysisActs=analysisSupported&&!FILE?(analysisLink?`<button data-act="analysis-open" data-analysis="${escH(analysisLink)}">${tMsg("viewer.analysis.open")}</button>`:!done&&!held&&!dr?`<button data-act="analysis-start" data-id="${id}">${tMsg("viewer.analysis.start")}</button>`:""):"";
   const sk=Array.isArray(x.skills)?x.skills:[];
@@ -1883,11 +1996,11 @@ function noteHtml(x){
    +(ed?`<div class="anchor">${tMsg("viewer.moveTo")} <select id="epage">${P.map(q=>`<option value="${q.n}"${q.n===(editBuf["pg:"+x.id]??x.page)?" selected":""}>${escH(tMsg("viewer.page",{page:q.n}))}</option>`).join("")}</select></div>`:"")
    +(!ed&&x.anchor?`<div class="anchor">${tMsg("viewer.anchorLabel")}${escH(clip(x.anchor,140))}</div>`:"")
    +(!ed&&x.pptx&&x.pptx.v===1?`<div class="anchor">${escH(pptxLocText(x.pptx))}</div>`:"")
-   +(!ed&&x.video?`<div class="anchor">${escH(videoLocText(x.video))}</div>`:"")
+   +(!ed&&VIDEO&&(x.video||x.videoReview)?videoReceiptCardHtml(x):!ed&&x.video?`<div class="anchor">${escH(videoLocText(x.video))}</div>`:"")
    +(()=>{if(ed)return"";const al=done?[]:alwaysFor(x).filter((a,k,arr)=>!sk.includes(a.name)&&arr.findIndex(b=>b.name===a.name)===k);
       return sk.length||al.length?`<div class="skills">${al.map(a=>`<span class="skill al" title="${escH(tMsg("viewer.skill.alwaysChipTitle",{scope:alwaysLabel(a.scope)}))}">${escH(tMsg("viewer.skill.alwaysChip",{name:a.name}))}</span>`).join("")}${sk.map(n=>`<span class="skill" title="${escH(tMsg("viewer.skill.noteTitle"))}">⚙ ${escH(n)}</span>`).join("")}</div>`:""})()
    +(x.pair&&x.pair.text?`<div class="pair">${escH(tMsg("viewer.pairLine",{side:targetLabel(x.pair.side),match:tMsg(x.pair.match==="exact"?"viewer.pairSame":"viewer.pairSimilar"),text:clip(x.pair.text,120)}))}</div>`:"")
-   +((done||dr)&&x.resolution?`<div class="res">${dr?"初改说明":"处理说明"}：${escH(x.resolution).replace(/\n/g,"<br>")}</div>`:"")
+   +((done||dr)&&x.resolution&&(!VIDEO||!x.videoReview||!x.videoReview.summary)?`<div class="res">${dr?"初改说明":"处理说明"}：${escH(x.resolution).replace(/\n/g,"<br>")}</div>`:"")
    +(!ed&&Array.isArray(x.trail)&&x.trail.length?`<div class="trail">${tMsg("viewer.batch.trailLabel")}${trailText(x)}</div>`:"")+`</div>`}
 // 把正在编辑的那张卡片的内容按它自己的 id 存起来（不能按 editingId：切换编辑对象时它已经变了）
 function stashEdit(){if(!editingId)return;   // 保存或取消后，重绘不能再缓存旧卡片里的草稿
@@ -2103,6 +2216,8 @@ $("bottomPanel").addEventListener("click",e=>{const b=e.target.closest("[data-ac
     case "unpin":stashEdit();mutate({kind:"patch",id,body:{pin:null,region:null,...docxPatch(id,null),...pptxPatch(id,null)}});drawPins();refreshList(true);break;
     case "resolve":mutate({kind:"patch",id,body:{status:"resolved"}});break;
     case "reopen":mutate({kind:"patch",id,body:{status:"open"}});break;
+    case "video-jump-orig":{const x=notes.find(n=>n.id===id);if(VIDEO&&x&&x.video)videoShowNote(x);break}
+    case "video-jump-target":{const x=notes.find(n=>n.id===id);if(VIDEO&&x&&x.videoReview&&x.videoReview.target)videoShowTarget(x);break}
     case "hide":hideDone=!hideDone;LS.set(K.hide,hideDone);refreshList(true);break}});
 function autoGrow(){const t=$("ntext");t.style.height="auto";t.style.height=Math.min(t.scrollHeight+2,innerHeight*.4)+"px"}
 $("ntext").addEventListener("input",()=>{autoGrow();clearTimeout(saveDraft.h);saveDraft.h=setTimeout(saveDraft,400)});
@@ -2127,9 +2242,9 @@ function openPinPop(id,el,repaint=false){const pop=$("pinpop"),r=el.getBoundingC
   if(!id)pop.innerHTML=el.classList.contains("ae-region")
     ?`<div class="pp-t">${escH(tMsg("viewer.markNewRegion"))}</div><div class="pp-a"><button data-pp="unregion">${tMsg("viewer.markRemoveRegion")}</button></div>`
     :`<div class="pp-t">${escH(tMsg("viewer.markNewPin"))}</div><div class="pp-a"><button data-pp="unpend">${tMsg("viewer.markRemovePin")}</button></div>`;
-  else{const x=notes.find(n=>n.id===id);if(!x)return;const eid=escH(id);
+  else{const x=notes.find(n=>n.id===id);if(!x)return;const eid=escH(id),vrReady=!VIDEO||videoReceiptReady(x,videoManifest());
     pop.innerHTML=`<div class="pp-m">${escH(x.target?targetLabel(x.target):tMsg("viewer.popUnset"))}${isDone(x)?` · ${tMsg("viewer.popResolved")}`:""}</div><div class="pp-t">${escH(clip(noteSummary(x),200))}</div>`
-      +`<div class="pp-a"><button data-pp="edit" data-id="${eid}">${tMsg("viewer.edit")}</button><button data-pp="${isDone(x)?"reopen":"resolve"}" data-id="${eid}">${tMsg(isDone(x)?"viewer.reopen":"viewer.resolve")}</button>`
+      +`<div class="pp-a"><button data-pp="edit" data-id="${eid}">${tMsg("viewer.edit")}</button>${isDone(x)||vrReady?`<button data-pp="${isDone(x)?"reopen":"resolve"}" data-id="${eid}">${tMsg(isDone(x)?"viewer.reopen":"viewer.resolve")}</button>`:""}`
       +`${hasMark(x)?`<button data-pp="unpin" data-id="${eid}">${tMsg("viewer.unpin")}</button>`:""}<button data-pp="del" data-id="${eid}">${tMsg("viewer.delete")}</button><button data-pp="close">${tMsg("viewer.popClose")}</button></div>`;
     if(!repaint)flashCard(id)}
   pop.classList.add("on");place(pop,r.left+r.width/2,r.top+r.height/2)}
@@ -2445,9 +2560,10 @@ const handScope=s=>tMsg(HAND_SCOPE[s]||"viewer.hand.scope.all");
 function draftedBatches(){const L=hand&&hand.latest,H=(hand&&hand.history)||[];
   return [...(L?[L]:[]),...H.filter(h=>h&&(!L||h.seq!==L.seq))].filter(h=>h&&(h.status==="drafted"||h.status==="review"))}
 function renderHandDrafts(){const ds=handMode?[]:draftedBatches();
-  $("handDrafts").innerHTML=ds.map(h=>h.status==="review"
-    ?`<div class="hd"><span>${tMsg("viewer.hand.drafts.review",{seq:+h.seq,n:+h.draftedCount||0})}</span><button data-hfinal="${+h.seq}">${tMsg("viewer.hand.drafts.finalize")}</button></div>`
-    :`<div class="hd"><span>${tMsg("viewer.hand.drafts.drafted",{seq:+h.seq,n:+h.draftedCount||0})}</span><button data-hreview="${+h.seq}">${tMsg("viewer.hand.drafts.reviewBtn")}</button><button data-hfinal="${+h.seq}">${tMsg("viewer.hand.drafts.finalize")}</button></div>`).join("")}
+  $("handDrafts").innerHTML=ds.map(h=>{const blocked=VIDEO&&notes.some(n=>isDraft(n)&&n.draftBatch===+h.seq&&!videoReceiptReady(n,videoManifest()));
+    return h.status==="review"
+      ?`<div class="hd"><span>${tMsg("viewer.hand.drafts.review",{seq:+h.seq,n:+h.draftedCount||0})}</span><button data-hfinal="${+h.seq}"${blocked?" disabled":""}>${tMsg("viewer.hand.drafts.finalize")}</button></div>`
+      :`<div class="hd"><span>${tMsg("viewer.hand.drafts.drafted",{seq:+h.seq,n:+h.draftedCount||0})}</span>${VIDEO?"":`<button data-hreview="${+h.seq}">${tMsg("viewer.hand.drafts.reviewBtn")}</button>`}<button data-hfinal="${+h.seq}"${blocked?" disabled":""}>${tMsg("viewer.hand.drafts.finalize")}</button></div>`}).join("")}
 // 弹窗里的文字单独重画：切语言时按当前语言再写一遍，不重新提交、不改选项、不请求新接口
 function paintHand(){
   $("handReceiver").textContent=handReceiverText();
@@ -2494,7 +2610,7 @@ function requestReview(seq,message,sub){return batchAction("/api/handoff/review"
 function finalizeBatch(seq){const dn=notes.filter(x=>isDraft(x)&&x.draftBatch===seq).length;
   if(!confirm(tMsg("viewer.hand.toast.confirmFinalize",{seq,n:dn})))return;
   return batchAction("/api/handoff/finalize",{seq},tMsg("viewer.hand.toast.finalized",{seq}))}
-const FINALIZE_SKIP={claimed:"claimed",reviewing:"reviewing",unavailable:"unavailable",changed:"changed",unconfirmed:"unconfirmed"};
+const FINALIZE_SKIP={claimed:"claimed",reviewing:"reviewing",unavailable:"unavailable",changed:"changed",unconfirmed:"unconfirmed",unready:"unready"};
 function finalizeSkipText(skipped){const counts={};
   for(const entry of skipped||[]){const reason=FINALIZE_SKIP[entry.reason]||"unavailable";counts[reason]=(counts[reason]||0)+1}
   return Object.entries(counts).map(([reason,count])=>tMsg("viewer.finalizeAll.skip."+reason,{count})).join(tMsg("viewer.finalizeAll.separator"))}
@@ -2750,11 +2866,15 @@ function renderBatches(){
                 +(e.stage==="review"&&e.doneAt?tMsg("viewer.batch.stageReviewed",{ok:+e.approved||0,revised:+e.revised||0,returned:+e.returned||0,resolved:+e.resolved||0}):"")})}`
             +(e.summary&&e.summary!==h.summary?`<br>${tMsg("viewer.batch.stageSummary",{stage:escH(nm),summary:escH(e.summary)})}`:"")+`</div>`}).join(""):"")
       +(h.reviewMessage?`<div class="bm">${tMsg("viewer.batch.reviewMessage",{message:escH(h.reviewMessage)})}</div>`:"")
+      +(Array.isArray(h.videoReceipts)?h.videoReceipts.filter(r=>r&&typeof r==="object").map(r=>r.failure
+          ?`<div class="bt">${escH(tMsg("viewer.batch.videoFailureTag",{receiptId:r.receiptId||"",reason:r.failure.reason||""}))}</div>`
+          :r.versionId?`<div class="bt">${escH(tMsg("viewer.batch.videoVersionTag",{receiptId:r.receiptId||"",version:r.versionId,n:(r.items||[]).length}))}</div>`:"").join(""):"")
       +(h.summary?`<div class="bsum">${tMsg("viewer.batch.summary",{summary:escH(h.summary)})}</div>`:h.status==="done"?`<div class="bt">${tMsg("viewer.batch.noSummary")}</div>`:"")
-      +(h.status==="drafted"?`<div class="bact"><button data-breview="${+h.seq}">${tMsg("viewer.hand.drafts.reviewBtn")}</button><button data-bfinal="${+h.seq}">${tMsg("viewer.hand.drafts.finalize")}</button></div>`
+      +(h.status==="drafted"?(()=>{const blocked=VIDEO&&notes.some(n=>isDraft(n)&&n.draftBatch===+h.seq&&!videoReceiptReady(n,videoManifest()));
+        return `<div class="bact">${VIDEO?"":`<button data-breview="${+h.seq}">${tMsg("viewer.hand.drafts.reviewBtn")}</button>`}<button data-bfinal="${+h.seq}"${blocked?` disabled title="${escH(tMsg("viewer.batch.videoUnreadyFinalize"))}"`:""}>${tMsg("viewer.hand.drafts.finalize")}</button></div>`})()
         :h.status==="review"?`<div class="bact"><button data-bfinal="${+h.seq}" title="${tMsg("viewer.batch.finalizeTitle")}">${tMsg("viewer.hand.drafts.finalize")}</button></div>`:"")
       +(Array.isArray(h.draftedIds)&&h.draftedIds.length?`<details data-seq="d${+h.seq}"${(batchOpen?batchOpen.has("d"+(+h.seq)):h.status==="drafted")?" open":""}><summary>${tMsg("viewer.batch.draftedList",{count:h.draftedIds.length})}</summary>${h.draftedIds.map(id=>{const x=byId.get(id);
-        return x?`<div class="bi" data-goto="${escH(id)}">${tMsg("viewer.batch.noteLine",{page:+x.page,summary:escH(clip(noteSummary(x),70))})}${x.resolution?`<span class="br">${tMsg("viewer.batch.draftNote",{text:escH(clip(x.resolution,100))})}</span>`:""}</div>`:""}).join("")}</details>`:"")
+        return x?`<div class="bi" data-goto="${escH(id)}">${tMsg("viewer.batch.noteLine",{page:+x.page,summary:escH(clip(noteSummary(x),70))})}${x.resolution?`<span class="br">${tMsg("viewer.batch.draftNote",{text:escH(clip(x.resolution,100))})}</span>`:""}${VIDEO&&x.videoReview?`<span class="br">${escH(tMsg("viewer.batch.videoNoteState",{state:tMsg("viewer.video.state."+videoNoteState(x))}))}</span>`:""}</div>`:""}).join("")}</details>`:"")
       +(ids.length?`<details data-seq="${+h.seq}"${(batchOpen?batchOpen.has(String(+h.seq)):h===H[0])?" open":""}><summary>${tMsg("viewer.batch.resolvedList",{count:ids.length})}</summary>${ids.map(id=>{const x=byId.get(id);
         return x?`<div class="bi" data-goto="${escH(id)}">${tMsg("viewer.batch.noteLine",{page:+x.page,summary:escH(clip(noteSummary(x),70))})}${isDone(x)?(x.resolution?`<span class="br">${tMsg("viewer.batch.resolutionNote",{text:escH(clip(x.resolution,100))})}</span>`:""):tMsg("viewer.batch.reopened")}</div>`
           :`<div class="bi">${tMsg("viewer.batch.deleted")}</div>`}).join("")}</details>`:"")+`</div></div>`}).join(""):`<p class="empty">${tMsg("viewer.batch.empty")}</p>`}
@@ -3164,7 +3284,10 @@ function loadDraft(){const d=drafts[P[i].n]||{};$("ntext").value=d.text||"";$("n
   quotePptx=dp.quote||null;updatePptxChip();pptxPaintSelection();
   videoDraft=d.video||null;videoPendingMark=videoDraft&&videoDraft.mark||null;videoRangeStart=videoDraft&&Number.isInteger(videoDraft.startFrame)?videoDraft.startFrame:null;videoUpdateRange();videoDrawMarks()}
 function updatePageStat(){if(!P.length)return;const p=P[i];
-  $("stat").textContent=tMsg("viewer.pageStat",{page:p.n,total:P[N-1].n})+(total?` · ${tMsg("viewer.timeStat",{at:mmss(cum[i]),total:mmss(total)})}`:"")}
+  let extra=total?` · ${tMsg("viewer.timeStat",{at:mmss(cum[i]),total:mmss(total)})}`:"";
+  if(VIDEO){const m=videoManifest(),vc=videoStatusCounts(notes);
+    extra+=` · ${tMsg("viewer.video.statLine",{version:m&&m.currentVersionId||"V1",pending:vc.pending_review,reply:vc.needs_reply,relocate:vc.needs_relocate,missing:vc.missing_evidence,failed:vc.failed,unsubmitted:vc.unsubmitted,approved:vc.approved})}`}
+  $("stat").textContent=tMsg("viewer.pageStat",{page:p.n,total:P[N-1].n})+extra}
 function render(){
   const p=P[i], s=secOf(p.n);
   if(VIDEO){fit();videoLayout()}   // 视频舞台是常驻 DOM：不能像报告页那样整段重写

@@ -100,7 +100,11 @@ python3 $S/build_viewer.py --report 成片.mp4 --out 成片-review --name "合�
 - 媒体只经本机服务读取：`GET /api/video/versions` 与 `GET /api/video/versions/<versionId>` 返回登记元数据（不含私有路径），`GET/HEAD /api/video/versions/<versionId>/media` 返回该版本字节并支持单个 `Range: bytes=…`。未登记版本、任意 path 参数、跨审阅路径、`..`、绝对路径或 `media/` 内符号链接一律 404；Host、同源 Origin、无 CORS 与「只暴露 index.html 及 /api/*」边界不变。
 - 源工程关联是改源提交的前提：审阅人在对照页「关联源工程」，提供引擎（`remotion` / `hyperframes`）、本机工程根与 composition / scene 入口，可选提供工程侧成片特征（帧数、时长、fps、宽、高）。特征与登记版本完全一致时直接绑定（`match: verified`）；有差异、只有文件名或列出多个候选时停在待确认（`status: pending`），页面给出差异对照（原片 ↔ 工程）与候选清单，审阅人确认后才绑定（`match: confirmed`）。仅文件名相同不构成匹配依据。关联记录在 `review.json` 的 `video.sourceProject`，原批注始终指向原成片版本，关联与确认都不改 `notes.json`。服务端点：`GET/POST /api/video/source-project`、`POST /api/video/source-project/confirm`（写要求同源 Origin 与 JSON Content-Type）。本版不读工程文件、不调用渲染器；工程探测与渲染由后续版本接入 `video_source` 的同一套确认流程。
 - 选择性提交：视频审阅的「交给 Agent」弹窗默认全选、可取消部分；提交带 `noteIds`（所选批注 id，按勾选顺序）与 `submitId`（这一次提交操作的幂等键）。批次快照只固定所选批注并记 `selected: true`；未选中的保持未处理，留待以后提交。等待接收期间重试同一 `submitId` 合并进原批次并刷新快照、附言与选项；批次已被领取或收尾后重试同一 `submitId` 原样返回该批次，不新增批次、不改写范围。文档审阅不带 `noteIds`，沿用整批提交。视频审阅未绑定源工程时服务拒绝提交（`video-source-required`），批注与勾选保留。服务声明 `selective-handoff` 与 `video-source` 特性；旧服务不支持时页面保留勾选并提示所缺能力。
-- 领取负载自含范围：绑定会话 `notes.py claim` 的 JSON 带 `reviewId`、`seq`、`noteIds`、`userMessage`，以及每条批注的 `materials[]`（`noteId`、`text`、可选 `quote`、`video` 定位〔版本、帧或半开区间、时间基准、可选点/框〕、`media`〔相对 URL、审阅内私有路径、SHA-256；本机服务在线时另有绝对 URL〕）；已绑定源工程时另有 `sourceProject`（引擎、工程根、入口、对准的成片版本）。`notes.py wait` 的人读输出带同样的源工程行，未选中的批注不出现，不需要再读 `show --batch` 才拿到范围。
+- 领取负载自含范围：绑定会话 `notes.py claim` 的 JSON 带 `reviewId`、`seq`、`noteIds`、`userMessage`，以及每条批注的 `materials[]`（`noteId`、`text`、可选 `quote`、`video` 定位〔版本、帧或半开区间、时间基准、可选点/框〕、`media`〔相对 URL、审阅内私有路径、SHA-256；本机服务在线时另有绝对 URL〕，及已有的 `videoReview` 历史）；已绑定源工程时另有 `sourceProject`（引擎、工程根、入口、对准的成片版本），并带 `video` 公开版本清单。`notes.py wait` 的人读输出带同样的源工程行，未选中的批注不出现，不需要再读 `show --batch` 才拿到范围。
+- 多版本成片、原批注回执与人工验收门禁（#195）：
+  - `notes.py video-receipt 审阅目录 [--seq N] [--review-id ID] [--receipt 文件|-] [--movie 新成片.mp4] [--receipt-id ID] [--render-error 原因] [--summary 说明] [--no-finish] [--by 角色] [--json]` 在原批注下写回本轮回执。新成片在台账元数据锁内先经 0600 临时文件落盘并校验（恒定帧率、单视频轨、有效宽高与时长）再原子移入 `media/v{N}.mp4`，追加进 `review.json` 的 `video.versions[]` 并更新 `currentVersionId` 与清除 `lastFailure`（绝不覆盖已有 `V1` 或泄露本机路径）；渲染失败或新成片不可播放时在 `video.lastFailure` / `video.failures[]` 记账并保留上一有效版本。同批次同一 `(seq, receiptId)` 幂等重放不重复登记版本或历史。
+  - 原批注的 `video` 定位保持不可变，回执写进 `videoReview`（不进 `EDITABLE`，通用 `PATCH /api/notes/<id>` 与导入不得篡改）：`fixed` / `deleted` 带合法 `target`（`frame` / `range` / `cut`，均按对应成片总帧数严格校界）与 `summary` 时记 `status = "drafted"`、`videoReview.state = "pending_review"`；缺目标证据时保留 `open` 与 `missing_evidence`；`question` / `needs_relocate` / `failed` 保持 `open` 并分别记录 `needs_reply`（含提问）、`needs_relocate`（含原因）或 `failed`（含失败原因）。支持 `--no-finish` 分次交回局部结果，未交回完时批次留待补交或结束；每轮结果追加至 `videoReview.history[]`。
+  - 严禁 Agent 越权通过：`handoff_done`（含 `--final`）绝不把视频初改标为 `resolved`；Agent 调用 `resolve` 或 `review --ok/--revise` 一律拒绝（`video-manual-approval-required`）。页面人工通过（`PATCH /api/notes/<id>` / `POST /api/handoff/finalize` / `finalize-all`）前均校 `review_readiness`（须 `pending_review`、带改动说明、合法版本内 `target` 且对应版本媒体可读），不完备批注在 UI 隐藏通过按钮并在服务端拒绝或于 `finalize-all` 列为 `unready` 跳过。服务声明 `video-receipt` 特性并在 `GET /api/notes` 带公开 `video` 清单供对照页热更新版本切换与失败横幅。
 
 ## 从源工程直接开始（Remotion / HyperFrames）
 
@@ -247,6 +251,14 @@ One line per paragraph.
         "fps": 30, "timebase": {"num": 1, "den": 30},   // 主时间基准：帧；timebase 是每帧秒数
         "frames": 180, "videoWidth": 640, "videoHeight": 360,
         "mark": {"kind": "region", "x": 0.1, "y": 0.8, "width": 0.5, "height": 0.1}   // 可选：相对实际视频画面的归一化点 / 区域
+      },
+      "videoReview": {                           // 视频回执受保护字段（不能由通用 PATCH / 导入篡改）
+        "v": 1,
+        "state": "pending_review",               // pending_review / needs_reply / needs_relocate / missing_evidence / failed / returned
+        "batch": 1, "receiptId": "rcpt-1", "outcome": "fixed", "versionId": "V2",
+        "summary": "片头+12帧并上移字幕",
+        "target": {"kind": "frame", "versionId": "V2", "frame": 108},   // 支持 frame / range / cut（可选 contextStart/End）
+        "history": [ …按原批注累计的各轮回执与证据… ]
       }
     }
   ]
@@ -304,7 +316,7 @@ One line per paragraph.
 
 全部定稿仅供审阅人在页面确认，不提供 Agent 或 CLI 入口。服务功能列表中的 `finalize-all` 声明支持；不支持时页面隐藏按钮并提示更新技能、重启服务和刷新。`GET /api/notes` 的 `handoff.finalizable` 与 `GET /api/handoff` 的顶层 `finalizable` 提供 `{count, batches: [{seq, ids}], skipped: [{id, batch, reason}]}`：只把 `drafted` 批注且批次为 `drafted` / `review` 的条目列为可定稿，`claimed` / `reviewing` 的初改列为跳过。
 
-`POST /api/handoff/finalize-all` 的 JSON 请求为 `{batches: [{seq, ids}]}`，使用审阅人确认的快照；批次号为正整数，批注 ID 与批次不能重复，空列表不写入。服务在同一把 `.notes.lock` 内重读并核对批次、状态与归属，只定稿已确认的初改。确认后新出现的批次不顺带定稿；同批新增初改时整批跳过，避免完成的批次中遗留初改。响应包含 `finalizedCount`、`finalizedIds`、完成批次号列表 `batches`、`skippedCount` 和 `skipped`，另带更新后的 `doc` 与 `handoff`。跳过原因：`claimed` 正在初改、`reviewing` 正在复核、`unavailable` 批次不可定稿或不存在、`changed` 状态或批次归属变化、`unconfirmed` 不在本次确认范围。页面以实际结果显示部分成功；取消确认不发写请求，断线时不暂存或乐观定稿。
+`POST /api/handoff/finalize-all` 的 JSON 请求为 `{batches: [{seq, ids}]}`，使用审阅人确认的快照；批次号为正整数，批注 ID 与批次不能重复，空列表不写入。服务在同一把 `.notes.lock` 内重读并核对批次、状态与归属，只定稿已确认的初改。确认后新出现的批次不顺带定稿；同批新增初改时整批跳过，避免完成的批次中遗留初改。响应包含 `finalizedCount`、`finalizedIds`、完成批次号列表 `batches`、`skippedCount` 和 `skipped`，另带更新后的 `doc` 与 `handoff`。跳过原因：`claimed` 正在初改、`reviewing` 正在复核、`unavailable` 批次不可定稿或不存在、`changed` 状态或批次归属变化、`unconfirmed` 不在本次确认范围、`unready` 视频批注缺少有效回执证据或处于未待复核状态。页面以实际结果显示部分成功；取消确认不发写请求，断线时不暂存或乐观定稿。
 
 新增摘要和响应字段可被旧页面忽略，磁盘格式与批次状态机不变；批注沿用 `accepted` 痕迹，批次沿用 `accept` 阶段、`done` 状态及既有逐批日志。旧页面连接新服务仍可用原入口；新页面连接旧服务时先做功能协商。写接口与其他写操作共用 Host 校验、同源 Origin、JSON Content-Type、无 CORS 头的安全门。
 

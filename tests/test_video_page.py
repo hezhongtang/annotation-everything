@@ -131,6 +131,139 @@ class VideoPagePureTests(unittest.TestCase):
         self.assertEqual(actual["three"], ["n1", "n4", "n5"])
         self.assertEqual(actual["none"], [])
 
+    def test_video_receipt_state_readiness_targets_counts_and_card_html(self):
+        manifest = {
+            "currentVersionId": "V2",
+            "versions": [
+                {
+                    "versionId": "V1",
+                    "fps": 30,
+                    "timebase": {"num": 1, "den": 30},
+                    "frames": 180,
+                    "width": 640,
+                    "height": 360,
+                },
+                {
+                    "versionId": "V2",
+                    "fps": 30,
+                    "timebase": {"num": 1, "den": 30},
+                    "frames": 192,
+                    "width": 640,
+                    "height": 360,
+                },
+            ],
+            "lastFailure": {"batch": 1, "reason": "ffmpeg exit 1", "receiptId": "r0"},
+        }
+        notes = [
+            {
+                "id": "n1",
+                "status": "drafted",
+                "video": frame_anchor(),
+                "videoReview": {
+                    "state": "pending_review",
+                    "versionId": "V2",
+                    "summary": "片头+12帧并上移字幕",
+                    "target": {"kind": "frame", "versionId": "V2", "frame": 108},
+                },
+            },
+            {
+                "id": "n2",
+                "status": "open",
+                "video": frame_anchor(),
+                "videoReview": {"state": "needs_reply", "question": "要降噪还是换音乐？"},
+            },
+            {
+                "id": "n3",
+                "status": "open",
+                "video": frame_anchor(),
+                "videoReview": {"state": "needs_relocate", "relocateReason": "原片段已被整段剪掉"},
+            },
+            {
+                "id": "n4",
+                "status": "drafted",
+                "video": frame_anchor(),
+                "videoReview": {"state": "missing_evidence", "versionId": "V2", "summary": "缺 target"},
+            },
+            {
+                "id": "n5",
+                "status": "open",
+                "video": frame_anchor(),
+                "videoReview": {"state": "failed", "failure": "字号超出边界"},
+            },
+            {"id": "n6", "status": "open", "video": frame_anchor()},
+            {"id": "n7", "status": "resolved", "video": frame_anchor()},
+            {
+                "id": "n8",
+                "status": "drafted",
+                "video": frame_anchor(),
+                "videoReview": {
+                    "state": "pending_review",
+                    "versionId": "V2",
+                    "summary": "补剪口上下文",
+                    "target": {"kind": "cut", "versionId": "V2", "frame": 120, "contextStart": 108, "contextEnd": 132},
+                },
+            },
+        ]
+        for lang in ("zh-CN", "en"):
+            actual = interaction_program(
+                [(START, END)],
+                "let videoRangeEnd=null;",
+                "const manifest="
+                + json.dumps(manifest, ensure_ascii=False)
+                + ",notes="
+                + json.dumps(notes, ensure_ascii=False)
+                + ";"
+                "return {"
+                "states:notes.map(videoNoteState),"
+                "ready:notes.map(n=>videoReceiptReady(n,manifest)),"
+                "oobReady:videoReceiptReady({...notes[0],videoReview:{...notes[0].videoReview,target:{kind:'frame',versionId:'V2',frame:192}}},manifest),"
+                "noVerReady:videoReceiptReady({...notes[0],videoReview:{...notes[0].videoReview,versionId:'V9',target:{kind:'frame',versionId:'V9',frame:1}}},manifest),"
+                "counts:videoStatusCounts(notes),"
+                "cutText:videoTargetText(notes[7].videoReview.target,'V2',manifest),"
+                "cards:notes.map(n=>videoReceiptCardHtml(n,manifest))"
+                "};",
+                locale=lang,
+            )
+            self.assertEqual(
+                actual["states"],
+                [
+                    "pending_review",
+                    "needs_reply",
+                    "needs_relocate",
+                    "missing_evidence",
+                    "failed",
+                    "unsubmitted",
+                    "approved",
+                    "pending_review",
+                ],
+            )
+            self.assertEqual(actual["ready"], [True, False, False, False, False, True, True, True])
+            self.assertFalse(actual["oobReady"])
+            self.assertFalse(actual["noVerReady"])
+            self.assertEqual(
+                actual["counts"],
+                {
+                    "pending_review": 2,
+                    "needs_reply": 1,
+                    "needs_relocate": 1,
+                    "missing_evidence": 1,
+                    "failed": 1,
+                    "returned": 0,
+                    "unsubmitted": 1,
+                    "approved": 1,
+                },
+            )
+            self.assertIn("120", actual["cutText"])
+            self.assertIn("108", actual["cutText"])
+            self.assertIn("132", actual["cutText"])
+            self.assertIn('data-act="video-jump-orig"', actual["cards"][0])
+            self.assertIn('data-act="video-jump-target"', actual["cards"][0])
+            self.assertIn("片头+12帧并上移字幕", actual["cards"][0])
+            self.assertIn("V2", actual["cards"][0])
+            self.assertIn("要降噪还是换音乐？", actual["cards"][1])
+            self.assertIn("原片段已被整段剪掉", actual["cards"][2])
+            self.assertIn("字号超出边界", actual["cards"][4])
+
 
 class VideoPageWiringTests(unittest.TestCase):
     @classmethod
@@ -185,6 +318,25 @@ class VideoPageWiringTests(unittest.TestCase):
             '"/api/video/source-project/confirm"',
             "body.noteIds=op.noteIds",
             "body.submitId=op.submitId",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, self.source)
+
+    def test_video_receipt_versions_failures_and_card_controls_are_wired(self):
+        for fragment in (
+            'id="videoVersionPick"',
+            'id="videoFailureBanner"',
+            "let liveVideo=VIDEO",
+            "if(VIDEO&&d.video)",
+            "renderVideoVersions()",
+            "renderVideoFailure()",
+            "videoShowTarget(",
+            "videoReceiptCardHtml(",
+            "videoStatusCounts(",
+            'unready:"unready"',
+            'data-act="video-jump-orig"',
+            'data-act="video-jump-target"',
+            "videoReceiptReady(x,videoManifest())",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.source)

@@ -102,6 +102,7 @@ FEATURES = [
     "video",
     "selective-handoff",
     "video-source",
+    "video-receipt",
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
@@ -343,7 +344,7 @@ class ReviewServer(ThreadingHTTPServer):
         self._stop_reply_count = 0
         self.log_to_file = log_to_file
         self._log_lock = threading.Lock()
-        self._cache: dict[str, tuple[float, Any]] = {}
+        self._cache: dict[str, tuple[tuple[int, int, int], Any]] = {}
         super().__init__((HOST, port), Handler)
         self.port = self.server_address[1]
         self.allowed_hosts = {f"127.0.0.1:{self.port}", f"localhost:{self.port}"}
@@ -366,14 +367,15 @@ class ReviewServer(ThreadingHTTPServer):
     def _cached(self, name: str, build: Any) -> Any:
         f = (ledger.home() / OVERVIEW_PAGE_FILE) if self.home_id is not None else (self.review_dir / name)
         try:
-            mtime = f.stat().st_mtime
+            st = f.stat()
         except OSError:
             return build(None)
+        stamp = (st.st_mtime_ns, st.st_ino, st.st_size)
         hit = self._cache.get(name)
-        if hit and hit[0] == mtime:
+        if hit and hit[0] == stamp:
             return hit[1]
         val = build(f)
-        self._cache[name] = (mtime, val)
+        self._cache[name] = (stamp, val)
         return val
 
     def run_hook(self, item: dict[str, Any], merged: bool, event: str = "handoff") -> None:
@@ -748,12 +750,17 @@ class Handler(BaseHTTPRequestHandler):
         except Reject as e:
             self._reject(e)
         except (store.NoteError, UnicodeEncodeError) as e:  # 由请求内容引起的错误一律 4xx，页面不会反复重试
-            detail = {
+            detail: dict[str, Any] = {
                 "error": str(e) if isinstance(e, store.NoteError) else self._t("serve.err.badCharacters"),
                 "code": "bad-note",
                 "app": APP,
             }
-            if isinstance(e, store.TextLimitError):
+            if isinstance(e, store.HandoffError):
+                detail["code"] = e.code
+                detail["error"] = self._handoff_error_text(e)
+                if e.params:
+                    detail["params"] = e.params
+            elif isinstance(e, store.TextLimitError):
                 params = {"field": e.field, "limit": e.limit}
                 detail.update(error=self._t("serve.err.textTooLong", **params), reason="text-too-long", params=params)
             self._json(400, detail)
@@ -969,6 +976,14 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(round_no, int) or isinstance(round_no, bool):
             raise Reject(400, "bad-request", self._t("serve.err.noRound"))
         return round_no
+
+    def _handoff_error_text(self, error: store.HandoffError) -> str:
+        if self.server.locale == "en" and error.code in i18n.HANDOFF_ERROR_KEYS:
+            try:
+                return self._t(i18n.HANDOFF_ERROR_KEYS[error.code], **error.params)
+            except (KeyError, i18n.MissingMessageError):
+                pass
+        return str(error)
 
     def _analysis_error_text(self, error: store.HandoffError) -> str:
         messages = {
@@ -1281,6 +1296,12 @@ class Handler(BaseHTTPRequestHandler):
                     doc["stop"] = review_stop.public_status(d, manifest=self.server.manifest())
                 except (OSError, ValueError):
                     pass  # Keep annotations readable if lifecycle state cannot be read.
+            manifest = self.server.manifest()
+            if isinstance(manifest.get("video"), dict):
+                try:
+                    doc["video"] = video_review.public_manifest(manifest)
+                except video_review.VideoError:
+                    pass
             self._json(200, {**doc, **self._ident()})
         elif path == "/api/handoff" and cmd == "GET":
             self._json(200, {**self._handoff_state(full=True), **self._ident()})
