@@ -55,6 +55,7 @@ uv run --no-project --with playwright python tests/e2e_browser.py --skills-only 
 | `review_overview_stop_scope_checks`（#145 总览按范围批量停止、固定目标、部分完成和失败重试） | `review-overview-stop-scope` | — |
 | `overview_home_checks`（#160 总览首页：零运行审阅直接打开、默认与 `--under` 范围、按组排序、无返回与顶栏停止、视图内双语、失效清理命令、新标签页打开对照页、接收提示与可复制等待命令、桌面事件绑定展示、过滤后的批量停止与全部回收） | `overview-home` | — |
 | `docx_review_checks`（#135：DOCX 原分页、限制清单、点 / 框与只读提示；#136：段落定位、文本反查、保存重试、同文异段导入、旧服务阻断；#137：可回写提示及选区不可读时的只读结构提示） | `docx-review` | — |
+| `video_review_checks`（#198：从工程或 MP4 进入，逐帧框选、音段对照、选择性领取、删镜剪口、人工重定位与同一批注三版返工） | `video-review` | — |
 | main() 内联段 3–8（服务模式全流程、断线补传、写入失败、服务卡死、同一端口换审阅、恶意网页与导入） | `server-mode` | — |
 | `poll_repaint_checks`（#93 新增：轮询数据不变时不重画，其他触发点照旧立即更新） | `poll-repaint` | — |
 
@@ -70,6 +71,12 @@ uv run --no-project --with playwright python tests/e2e_browser.py --skills-only 
   `locale-live-controls` 再判断参数；现在别名只执行原定目标场景，目标行为本身不变。
 - #53 改造保留原有检查；后续新增的 `current-task-controls` 在全量模式中执行，也可通过 `--only current-task-controls` 单独运行。不能用通过数下降证明性能。
 - `overview-home`（#160）随总览首页功能加入：临时台账（入口的临时 `AE_HOME`）加七份合成审阅（运行中、两份已停、归档、失效、桌面事件绑定与 `--under` 范围外），首页由 `serve.py overview` 真实子进程提供，默认与 `--under` 各启一次；场景结束回收首页与全部审阅服务（含代启动的）。该场景可在总览首页工单的验证交付里单独运行（`--only overview-home`），等待全部基于可观察状态。
+
+## 视频场景的媒体与证据
+
+`video-review` 需要本机 Chrome 和带 H.264、AAC 编码器的 FFmpeg。它从 `fixtures/video/make_demos.py` 生成的原图与 PCM 现场编码 V1（180 帧）、V2 与 V3（各 192 帧）。项目直入的一份审阅演示歧义、确认复用、剪口和人工重定位。另一份从 MP4 开始，先写五条批注再关联工程，实际提交三条，收回 V2、通过字幕、退回音量，随后只将音量重交至 V3。
+
+浏览器分别核对字幕区域的解码像素、前后播放器的定位和 AAC 解码、区间末端停止、原批注上的回执及人工决定。设置 `AE_DELIVERY_ARTIFACTS` 后，`video-review/video-mp4-review/` 下会保留字幕和音频对照截图、领取数据与最终批注历史。双引擎实际改源、使用各自引擎渲染及接收会话的交付记录见 [视频验收说明](../video-acceptance.zh-CN.md)。
 
 ## 新增场景的接入规则
 

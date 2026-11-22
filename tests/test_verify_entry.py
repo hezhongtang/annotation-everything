@@ -3417,6 +3417,26 @@ class SelectionBuiltinMapTests(unittest.TestCase):
         problems = vs.validate_builtin_map(repo_root=ROOT)
         self.assertEqual(problems, [], "内置映射的选择器与场景必须在真实仓库里全部可解析")
 
+    def test_video_sources_and_fixtures_select_all_video_tests_and_playback(self):
+        repo = self.builtin_repo("verify-video-review-")
+        paths = [
+            f"skill/annotation-everything/scripts/{name}.py"
+            for name in ("video_review", "video_source", "video_engines")
+        ]
+        paths.append("fixtures/video/make_demos.py")
+        for path in paths:
+            repo.write(path, "# synthetic video change\n")
+        result = repo.run_verify("plan", "--phase", "development", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        selection = json.loads(result.stdout)["selection"]
+        self.assertEqual(selection["fallback"]["kind"], "shared_resource")
+        plan = next(rule for rule in selection["matched_rules"] if rule["id"] == "video-review")
+        self.assertEqual(set(plan["paths"]), set(paths))
+        self.assertEqual(selection["suggested"]["scenarios"], ["video-review"])
+        self.assertTrue(selection["suggested"]["serve_check"])
+        expected = {path.relative_to(ROOT).as_posix() for path in (ROOT / "tests").glob("test_video_*.py")}
+        self.assertEqual(set(plan["selectors"]), expected)
+
     def test_glossary_and_adrs_have_consumers_and_are_no_longer_doc_exempt(self):
         """GLOSSARY 与 ADR 自 #162 起被文档契约测试消费，差异被保守回退（未分类/防护文档），不再豁免。"""
         repo = self.builtin_repo("verify-doc-consumers-")

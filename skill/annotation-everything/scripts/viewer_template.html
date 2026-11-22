@@ -1883,7 +1883,10 @@ function videoCutContext(target,version,padSeconds=1){
   const pad=clk?Math.max(1,Math.round((padSeconds*clk.den)/clk.num)):30;
   const start=Math.max(0,Math.min(total-1,cutFrame-pad)),end=Math.min(total,Math.max(start+1,cutFrame+pad));
   return{frame:cutFrame,contextStart:start,contextEnd:end,time:videoFrameTime(cutFrame,clk),startTime:videoFrameTime(start,clk),endTime:videoFrameTime(end,clk),explicit:false}}
-function videoSeekFrame(player,frame,clockOrFps){player.pause();player.muted=false;player.currentTime=videoFrameTime(frame,clockOrFps);return player.currentTime}
+function videoSeekTime(player,seconds){
+  // 解码器只接收整微秒。定位到帧内的第一个可表示时刻，避免截断后显示上一帧。
+  player.currentTime=Math.ceil(seconds*1e6)/1e6}
+function videoSeekFrame(player,frame,clockOrFps){player.pause();player.muted=false;videoSeekTime(player,videoFrameTime(frame,clockOrFps));return player.currentTime}
 async function videoPlayInterval(player,anchor,version){const times=videoRangeTimes(anchor,version||anchor);
   videoSeekFrame(player,times.startFrame,version||anchor);videoRangeEnd=times.endTime;player.muted=false;await player.play()}
 function videoRangeTick(player){if(videoRangeEnd==null||player.currentTime+1e-6<videoRangeEnd)return;
@@ -2239,7 +2242,7 @@ function videoCompareLoadSide(el,url,spec,onReady){
   if(!url){el.pause();if(el.getAttribute("src")){el.removeAttribute("src");el.load()}if(onReady)onReady();return}
   const changed=el.getAttribute("src")!==url;
   if(changed){el.src=url;el.load()}
-  const apply=()=>{el.pause();el.muted=false;el.currentTime=spec?spec.seekTime:0;if(onReady)onReady()};
+  const apply=()=>{el.pause();el.muted=false;videoSeekTime(el,spec?spec.seekTime:0);if(onReady)onReady()};
   if(el.readyState>=1)apply();
   else el.addEventListener("loadedmetadata",apply,{once:true})}
 function videoRelocateKindSync(){
@@ -2360,9 +2363,9 @@ async function videoComparePlay(side){
   const startPlay=()=>{
     el.muted=false;
     if(spec&&spec.playRange){
-      el.pause();el.currentTime=spec.playRange.startTime;videoCompareEnds[side]=spec.playRange.endTime;
+      el.pause();videoSeekTime(el,spec.playRange.startTime);videoCompareEnds[side]=spec.playRange.endTime;
     }else if(spec){
-      el.pause();el.currentTime=spec.seekTime;videoCompareEnds[side]=null;
+      el.pause();videoSeekTime(el,spec.seekTime);videoCompareEnds[side]=null;
     }else if(ver){
       videoCompareEnds[side]=null;
     }
