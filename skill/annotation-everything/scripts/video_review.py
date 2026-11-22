@@ -27,7 +27,7 @@ import ledger  # noqa: E402
 
 FORMAT_VERSION = 1
 VERSION_ID = re.compile(r"^V[1-9][0-9]*$")
-CONTAINERS = {b"moov", b"trak", b"mdia", b"minf", b"stbl"}
+CONTAINERS = {b"moov", b"trak", b"mdia", b"minf", b"stbl", b"edts"}
 RECEIPT_TARGET_KINDS = ("frame", "range", "cut")
 FAILURES_KEEP = 50
 MANIFEST_FILE = "review.json"
@@ -142,7 +142,65 @@ def _check_samples(data: bytes, tables: dict, media: list[tuple[int, int]], fram
         raise VideoError("MP4 视频分块未覆盖所有样本")
 
 
-def _video_track(data: bytes, start: int, end: int, media: list[tuple[int, int]]) -> dict[str, Any]:
+def _composition_start(data: bytes, ctts: tuple[int, int] | None, frames: int, delta: int) -> int:
+    """编辑列表的起点采用呈现时钟，含 B 帧的成片可有非零起始偏移。"""
+    if ctts is None:
+        return 0
+    start, end = ctts
+    if end - start < 8 or data[start] not in (0, 1):
+        raise VideoError("MP4 呈现时间表无效")
+    runs = struct.unpack_from(">I", data, start + 4)[0]
+    if not runs or end - start - 8 != runs * 8:
+        raise VideoError("MP4 呈现时间表长度无效")
+    fmt = ">II" if data[start] == 0 else ">Ii"
+    first_pts = None
+    samples = 0
+    for pos in range(start + 8, end, 8):
+        count, offset = struct.unpack_from(fmt, data, pos)
+        if not count:
+            raise VideoError("MP4 呈现时间表包含空区间")
+        pts = samples * delta + offset
+        first_pts = pts if first_pts is None else min(first_pts, pts)
+        samples += count
+    if samples != frames or first_pts is None:
+        raise VideoError("MP4 呈现时间表与样本数不符")
+    return first_pts
+
+
+def _edited_timeline(
+    data: bytes,
+    edit: tuple[int, int],
+    movie_header: tuple[int, int] | None,
+    ctts: tuple[int, int] | None,
+    scale: int,
+    delta: int,
+    frames: int,
+) -> tuple[Fraction, int]:
+    start, end = edit
+    if end - start < 8 or data[start] not in (0, 1) or movie_header is None:
+        raise VideoError("MP4 编辑列表缺少有效的时间基准")
+    fmt = ">Iihh" if data[start] == 0 else ">Qqhh"
+    count = struct.unpack_from(">I", data, start + 4)[0]
+    if count != 1 or end - start != 8 + struct.calcsize(fmt):
+        raise VideoError("MP4 视频只支持单段等速编辑列表")
+    length, media_start, rate, fraction = struct.unpack_from(fmt, data, start + 8)
+    if not length or media_start < 0 or (rate, fraction) != (1, 0):
+        raise VideoError("MP4 视频编辑列表含空片段、停帧或变速")
+    first_pts = _composition_start(data, ctts, frames, delta)
+    skipped, remainder = divmod(media_start - first_pts, delta)
+    if remainder or not 0 <= skipped < frames:
+        raise VideoError("MP4 视频编辑起点不在可定位的呈现帧上")
+    movie_scale, _ = _media_time(data, *movie_header, b"mvhd")
+    seconds = Fraction(length, movie_scale)
+    frame_count = seconds * scale / delta
+    # movie timescale 可能比媒体时钟粗。末帧能因换算多出不足一个 movie tick。
+    remaining = frames - skipped
+    if frame_count > remaining and seconds - Fraction(remaining * delta, scale) >= Fraction(1, movie_scale):
+        raise VideoError("MP4 视频编辑区间超出样本范围")
+    return seconds, min(math.ceil(frame_count), remaining)
+
+
+def _video_track(data: bytes, start: int, end: int, media: list[tuple[int, int]], movie_header) -> dict[str, Any]:
     scale = duration = None
     frames = delta = width = height = None
     variable = False
@@ -150,7 +208,9 @@ def _video_track(data: bytes, start: int, end: int, media: list[tuple[int, int]]
     pending = list(_children(data, start, end))
     while pending:
         kind, child_start, child_end = pending.pop(0)
-        if kind in (b"stsz", b"stz2", b"stsc", b"stco", b"co64"):
+        if kind == b"elst" and kind in tables:
+            raise VideoError("MP4 视频轨含多份编辑列表")
+        if kind in (b"stsz", b"stz2", b"stsc", b"stco", b"co64", b"ctts", b"elst"):
             tables[kind] = (child_start, child_end)
         if kind in CONTAINERS:
             pending[0:0] = list(_children(data, child_start, child_end))
@@ -193,6 +253,10 @@ def _video_track(data: bytes, start: int, end: int, media: list[tuple[int, int]]
     frame_clock = Fraction(delta, scale)
     fps = 1 / frame_clock
     seconds = Fraction(duration, scale)
+    if b"elst" in tables:
+        seconds, frames = _edited_timeline(
+            data, tables[b"elst"], movie_header, tables.get(b"ctts"), scale, delta, frames
+        )
     return {
         "width": width,
         "height": height,
@@ -241,7 +305,8 @@ def _probe_container(data: mmap.mmap) -> dict[str, Any]:
             tracks.append((start, end))
     if len(tracks) != 1:
         raise VideoError("MP4 必须恰好包含一条可批注的视频轨")
-    return _video_track(data, *tracks[0], media)
+    movie_header = next(((s, e) for k, s, e in _boxes(data, *moov) if k == b"mvhd"), None)
+    return _video_track(data, *tracks[0], media, movie_header)
 
 
 def registered_version(manifest: dict[str, Any], version_id: str) -> dict[str, Any]:
@@ -423,6 +488,7 @@ def register_version(
     by: str,
     review_id: str | None = None,
     receipt_id: str | None = None,
+    await_receipt: bool = False,
 ) -> dict[str, Any]:
     """在元数据锁内登记新版成片（V2/V3…），绝不覆盖旧版，也不写入本机源输出路径。"""
     if isinstance(batch, bool) or not isinstance(batch, int) or batch < 1:
@@ -447,6 +513,8 @@ def register_version(
             pending = json.loads(fsutil.read_private_text(journal, max_bytes=32 * 1024))
             if pending["reviewId"] != manifest["reviewId"]:
                 raise VideoError("待恢复的视频版本与审阅标识不匹配")
+            if pending.get("awaitReceipt"):
+                raise VideoError("上一份视频回执仍在提交，请重试")
             entry = pending["version"]
             expected = f"media/v{_next_version_number(video)}.mp4"
             if entry.get("path") == expected and (Path(review_dir) / expected).exists():
@@ -468,15 +536,47 @@ def register_version(
             entry.update(batch=batch, by=actor, at=_now_iso())
             if rid_key:
                 entry["receiptId"] = rid_key
-            _write_manifest(journal, {"reviewId": manifest["reviewId"], "version": entry})
+            _write_manifest(
+                journal, {"reviewId": manifest["reviewId"], "version": entry, "awaitReceipt": await_receipt}
+            )
 
         version = _stage_and_probe_mp4(Path(source_mp4), Path(review_dir), _next_version_number(video), save_intent)
+        if await_receipt:
+            return version
         video["versions"].append(version)
         video["currentVersionId"] = version["versionId"]
         video.pop("lastFailure", None)
         _write_manifest(manifest_path, manifest)
         journal.unlink()
         return json.loads(json.dumps(version))
+
+
+def finish_receipt_version(review_dir: Path, pending: dict, *, accepted: bool) -> None:
+    """回执记录落盘后发布成片。未获接收的暂存版本只清理自己的文件。"""
+    with ledger.metadata_lock(review_dir, exclusive=True):
+        journal = review_dir / ".video-registration.json"
+        if json.loads(fsutil.read_private_text(journal, max_bytes=32 * 1024)) != pending:
+            raise VideoError("暂存的视频版本已改变")
+        manifest_path, manifest = _read_video_manifest(review_dir, review_id=pending["reviewId"])
+        version = pending["version"]
+        video = manifest["video"]
+        if version not in video["versions"]:
+            number = _next_version_number(video)
+            if version.get("versionId") != f"V{number}" or version.get("path") != f"media/v{number}.mp4":
+                raise VideoError("暂存的视频版本与版本清单不匹配")
+            if accepted or (review_dir / version["path"]).exists():
+                candidate = {**manifest, "video": {**video, "versions": [*video["versions"], version]}}
+                staged = media_path(review_dir, candidate, version["versionId"])
+                if file_digest(staged) != version["sha256"]:
+                    raise VideoError("暂存的视频内容与登记信息不匹配")
+                if accepted:
+                    video["versions"].append(version)
+                    video["currentVersionId"] = version["versionId"]
+                    video.pop("lastFailure", None)
+                    _write_manifest(manifest_path, manifest)
+                else:
+                    staged.unlink()
+        journal.unlink()
 
 
 def reject_decoded_version(review_dir: Path, version_id: str, batch: int, review_id: str, reason: str) -> dict:
@@ -896,11 +996,15 @@ def review_readiness(
     return True, "ok"
 
 
+def media_url(review_id: str, version_id: str) -> str:
+    return f"/api/video/{review_id}/versions/{version_id}/media"
+
+
 def public_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     """浏览器只获得版本身份、时间基准与受控 URL，不获得任意本机读取路径。"""
     video = manifest.get("video")
-    if not isinstance(video, dict):
-        raise VideoError("这份审阅没有视频")
+    if not isinstance(video, dict) or not ledger.RID.fullmatch(str(manifest.get("reviewId", ""))):
+        raise VideoError("这份审阅没有有效的视频或审阅标识")
     versions = []
     for item in video.get("versions", []):
         version_id = item.get("versionId") if isinstance(item, dict) else None
@@ -926,7 +1030,7 @@ def public_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
                     "by",
                 )
             }
-            | {"url": f"/api/video/versions/{version_id}/media"}
+            | {"url": media_url(manifest["reviewId"], version_id)}
         )
     out: dict[str, Any] = {
         "formatVersion": video.get("formatVersion", FORMAT_VERSION),

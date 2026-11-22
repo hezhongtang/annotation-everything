@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import fsutil
 import os
@@ -322,7 +324,11 @@ def public(video: dict[str, Any]) -> dict[str, Any] | None:
         "confirmedAt",
         "confirmedChoice",
     )
-    return {k: sp[k] for k in keys if sp.get(k) is not None}
+    result = {k: sp[k] for k in keys if sp.get(k) is not None}
+    if sp.get("status") == "pending":
+        proposal = json.dumps(sp, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        result["proposalRevision"] = hashlib.sha256(proposal.encode("utf-8")).hexdigest()
+    return result
 
 
 def agent_brief(video: dict[str, Any]) -> dict[str, Any] | None:

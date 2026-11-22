@@ -17,6 +17,7 @@ import textwrap
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
@@ -233,6 +234,46 @@ class DetectionTests(EngineEnvMixin):
                 comp = next(c for c in video_engines.detect_project(project)["compositions"] if c["id"] == "index.html")
                 self.assertEqual((comp["fps"], comp["fpsDeclared"]), (expected, True))
 
+    def test_single_hyperframes_entry_must_stay_in_project_at_scan_and_selection(self):
+        project = self.copy_fixture("hyperframes")
+        scene = project / "index.html"
+        (project / "compositions" / "scene-b.html").unlink()
+        candidates = video_engines.scan_html_compositions(project)
+        outside = self.root / "other-scene.html"
+        scene.rename(outside)
+        scene.symlink_to(outside)
+        with self.assertRaises(video_engines.EngineError) as scan:
+            video_engines.detect_project(project)
+        self.assertEqual(scan.exception.code, "compositionOutside")
+        with self.assertRaises(video_engines.EngineError) as choice:
+            video_engines.choose_composition(candidates, None, "hyperframes", project)
+        self.assertEqual(choice.exception.code, "compositionOutside")
+
+    def test_windows_npm_launches_installed_entry_through_node(self):
+        for engine, package in (("remotion", "@remotion/cli"), ("hyperframes", "hyperframes")):
+            with self.subTest(engine=engine):
+                project = self.copy_fixture(engine)
+                modules = project / "node_modules"
+                wrapper = modules / ".bin" / (engine + ".cmd")
+                wrapper.parent.mkdir(parents=True)
+                wrapper.touch()
+                installed = modules / package
+                installed.mkdir(parents=True)
+                entry = installed / "run cli.js"
+                entry.touch()
+                (installed / "package.json").write_text(json.dumps({"bin": {engine: entry.name}}))
+                with (
+                    mock.patch.object(sys, "platform", "win32"),
+                    mock.patch.object(shutil, "which", return_value="C:/Program Files/nodejs/node.exe"),
+                ):
+                    launcher = video_engines.detect_project(project)["bin"]
+                    self.assertEqual(launcher, wrapper.resolve())
+                    expected = ["C:/Program Files/nodejs/node.exe", str(entry.resolve())]
+                    args = video_engines.render_argv(engine, launcher, project, "Scene & A", self.root / "out.mp4")
+                    self.assertEqual(args[:3], [*expected, "render"])
+                    if engine == "remotion":
+                        self.assertEqual(video_engines.compositions_argv(launcher, entry)[:2], expected)
+
     def test_project_with_both_engine_indicators_is_ambiguous(self):
         project = self.copy_fixture("remotion")
         pkg = json.loads((project / "package.json").read_text(encoding="utf-8"))
@@ -384,6 +425,29 @@ class ReuseTests(EngineEnvMixin):
             self.resolve()
         self.assertEqual(uncertain.exception.code, "movieConfirm")
 
+    def test_root_mp4_input_change_invalidates_render_with_preserved_mtime(self):
+        project = self.copy_fixture("hyperframes")
+        entry = project / "index.html"
+        entry.write_text('<html data-fps="24"><video src="clip.mp4"></video></html>')
+        asset = project / "clip.mp4"
+        self.make_movie(asset, fps=30)
+        original = asset.stat()
+        self.arm_render(project, "hyperframes", synthetic_mp4(fps=24))
+
+        def resolve(**kwargs):
+            return video_engines.resolve_source(project, self.review, {}, composition="index.html", **kwargs)
+
+        render = resolve(no_reuse=True)
+        output = project / "out" / "cut.mp4"
+        output.parent.mkdir()
+        shutil.copyfile(render["source"], output)
+        self.assertEqual(resolve()["source"], output.resolve())
+        self.make_movie(asset, frames=120, fps=30)
+        os.utime(asset, ns=(original.st_atime_ns, original.st_mtime_ns))
+        with self.assertRaises(video_engines.EngineError) as changed:
+            resolve()
+        self.assertEqual(changed.exception.code, "movieConfirm")
+
     def test_changed_project_asset_prevents_automatic_reuse(self):
         movie = self.project / "out" / "Main.mp4"
         self.make_movie(movie)
@@ -423,8 +487,8 @@ class ReuseTests(EngineEnvMixin):
         self.assertEqual(result["action"], "rendered")
 
     def test_multiple_fresh_matches_are_ambiguous(self):
-        media = self.make_movie(self.project / "out" / "Main.mp4")
         self.make_movie(self.project / "take2.mp4")
+        media = self.make_movie(self.project / "out" / "Main.mp4")
         self.arm_render(self.project, "remotion", media)
         with self.assertRaises(video_engines.EngineError) as ctx:
             self.resolve()
@@ -684,11 +748,13 @@ class BuildIntegrationTests(EngineEnvMixin):
     def test_project_build_rejects_script_input(self):
         project = self.copy_fixture("remotion")
         self.arm_render(project, "remotion", MAIN_MOVIE)
-        self.set_env(AE_FAKE_COMPOSITIONS=json.dumps([MAIN_COMP]))
+        self.set_env(AE_FAKE_COMPOSITIONS=json.dumps([MAIN_COMP]), AE_FAKE_BIN_LOG=str(self.root / "binlog"))
         script = self.root / "notes.md"
         script.write_text("### 第 1 页｜x\n", encoding="utf-8")
         with self.assertRaises(build_viewer.BuildError):
             build_viewer.build(project, script, self.root / "review", no_scan_skills=True, locale="zh-CN")
+        self.assertEqual(self.read_bin_log(), [])
+        self.assertFalse((self.root / "review" / ".render").exists())
 
 
 class SourceProjectLinkTests(EngineEnvMixin):

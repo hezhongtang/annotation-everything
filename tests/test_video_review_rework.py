@@ -955,12 +955,33 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
             self.assertEqual(c1r, 200, raw1r)
             self.assertTrue(json.loads(raw1r)["replayed"])
 
+            for nid, body in (
+                ("n2", {"action": "return", "reason": "旧位置"}),
+                ("n3", {"action": "reply", "reply": "旧问题"}),
+            ):
+                doc = self._note(nid)
+                stale, _, response = serve._req(
+                    server.port,
+                    "POST",
+                    f"/api/notes/{nid}/video-decision",
+                    headers,
+                    {**body, "expectedBatch": 1, "expectedVersion": "V2", "expectedEvidence": "old-receipt"},
+                )
+                self.assertEqual((stale, json.loads(response)["code"]), (400, "stale-decision"))
+                self.assertEqual(self._note(nid), doc)
+
             c2, _, raw2 = serve._req(
                 server.port,
                 "POST",
                 "/api/notes/n2/video-decision",
                 headers,
-                {"action": "return", "reason": "人声被背景音盖住", "expectedBatch": 1, "expectedVersion": "V2"},
+                {
+                    "action": "return",
+                    "reason": "人声被背景音盖住",
+                    "expectedBatch": 1,
+                    "expectedVersion": "V2",
+                    "expectedEvidence": self._note("n2")["videoReview"]["evidenceRevision"],
+                },
             )
             self.assertEqual(c2, 200, raw2)
             self.assertEqual(json.loads(raw2)["note"]["videoReview"]["state"], "returned")
@@ -970,7 +991,13 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
                 "POST",
                 "/api/notes/n3/video-decision",
                 headers,
-                {"action": "reply", "reply": "保留原片头并渐隐", "expectedBatch": 1, "expectedVersion": "V2"},
+                {
+                    "action": "reply",
+                    "reply": "保留原片头并渐隐",
+                    "expectedBatch": 1,
+                    "expectedVersion": "V2",
+                    "expectedEvidence": self._note("n3")["videoReview"]["evidenceRevision"],
+                },
             )
             self.assertEqual(c3, 200, raw3)
             self.assertEqual(json.loads(raw3)["note"]["videoReview"]["reply"], "保留原片头并渐隐")
@@ -1548,7 +1575,9 @@ class VideoPageReworkUITests(unittest.TestCase):
             [(self.PURE_START, self.PURE_END), (self.COMPARE_START, self.COMPARE_END)],
             cmp_setup,
             """
-            setVideoServerFeatures({ features: ["video", "video-receipt", "video-compare", "video-relocate", "video-decisions", "video-evidence-revision"] });
+            setVideoServerFeatures({ features: ["video-decisions", "video-evidence-revision"] });
+            await submitVideoDecision("n2","return",{reason:"旧服务不能校验证据"});
+            setVideoServerFeatures({ features: ["video", "video-receipt", "video-compare", "video-relocate", "video-decisions", "video-evidence-revision", "video-feedback-revision"] });
             videoCompareOpen(notes[0], false);
             await videoCompareDecision("approve");
             const blockedCount=apiCalls.length;
@@ -1581,13 +1610,20 @@ class VideoPageReworkUITests(unittest.TestCase):
         )
         self.assertEqual(
             cmp_actual["apiCalls"][1]["body"],
-            {"action": "return", "reason": "再轻 3dB", "expectedBatch": 2, "expectedVersion": "V2"},
+            {
+                "action": "return",
+                "reason": "再轻 3dB",
+                "expectedBatch": 2,
+                "expectedVersion": "V2",
+                "expectedEvidence": "legacy",
+            },
         )
         self.assertTrue(cmp_actual["appHiddenOnReply"])
         self.assertFalse(cmp_actual["replyBoxHidden"])
         self.assertEqual(cmp_actual["apiCalls"][2]["path"], "/api/notes/n3/video-decision")
         self.assertEqual(
-            cmp_actual["apiCalls"][2]["body"], {"action": "reply", "reply": "换成轻快的纯音乐", "expectedBatch": 2}
+            cmp_actual["apiCalls"][2]["body"],
+            {"action": "reply", "reply": "换成轻快的纯音乐", "expectedBatch": 2, "expectedEvidence": "legacy"},
         )
 
     def test_rework_dom_wiring_exists_in_template(self):

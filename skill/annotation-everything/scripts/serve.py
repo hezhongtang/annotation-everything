@@ -108,6 +108,7 @@ FEATURES = [
     "video-relocate",
     "video-decisions",
     "video-evidence-revision",
+    "video-feedback-revision",
     "video-decode-feedback",
 ]
 
@@ -197,7 +198,7 @@ HOST = "127.0.0.1"
 NOTE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})$")
 NOTE_VIDEO_RELOCATE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})/video-relocate$")
 NOTE_VIDEO_DECISION_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})/video-decision$")
-VIDEO_MEDIA_PATH = re.compile(r"^/api/video/versions/(V[1-9][0-9]*)/media$")
+VIDEO_MEDIA_PATH = re.compile(r"^/api/video/([0-9a-f]{16})/versions/(V[1-9][0-9]*)/media$")
 VIDEO_VERSION_PATH = re.compile(r"^/api/video/versions/(V[1-9][0-9]*)$")
 SAFE_CHARS = re.compile(r"[^A-Za-z0-9._:/?=&%+@-]")
 # 总览首页宿主：页面、运行状态、日志与启动锁都在台账目录，不写进任何审阅目录（文件名只在 ledger 定义一次）
@@ -1142,9 +1143,12 @@ class Handler(BaseHTTPRequestHandler):
         ).encode("utf-8")
         self._send(416, body, "application/json; charset=utf-8", {"Content-Range": f"bytes */{size}"})
 
-    def _video_media(self, version_id: str) -> None:
+    def _video_media(self, review_id: str, version_id: str) -> None:
+        manifest = self.server.manifest()
+        if manifest.get("reviewId") != review_id:
+            raise Reject(404, "no-video", self._t("serve.err.noApi"))
         try:
-            path = video_review.media_path(self.server.review_dir, self.server.manifest(), version_id)
+            path = video_review.media_path(self.server.review_dir, manifest, version_id)
             media = path.open("rb")
         except (OSError, video_review.VideoError):
             raise Reject(404, "no-video", self._t("serve.err.noApi")) from None
@@ -1239,11 +1243,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def _confirm_source_project(self, body: dict[str, Any]) -> None:
         choice = body.get("choice")
-        if choice is not None and not isinstance(choice, str):
+        revision = body.get("proposalRevision")
+        if not isinstance(revision, str) or not revision or (choice is not None and not isinstance(choice, str)):
             raise Reject(400, "bad-request", self._t("serve.err.sourceProjectBody"))
-        manifest = self._update_video_source(
-            lambda m: {**m, "video": video_source.confirm(m["video"], choice=choice, by="page")}
-        )
+
+        def confirm(manifest):
+            proposal = video_source.public(manifest["video"])
+            if not proposal or revision != proposal.get("proposalRevision"):
+                raise Reject(409, "stale-source-project", self._t("serve.err.staleSourceProject"))
+            return {**manifest, "video": video_source.confirm(manifest["video"], choice=choice, by="page")}
+
+        manifest = self._update_video_source(confirm)
         sp = video_source.public(manifest["video"]) or {}
         self.server.log("info", f"video source-project confirmed engine={clean(sp.get('engine'))}")
         self._json(200, {"sourceProject": sp, **self._ident()})
@@ -1291,7 +1301,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise Reject(404, "no-video", self._t("serve.err.noApi")) from None
             self._json(200, {"videoVersion": version, **self._ident()})
         elif video_media is not None and cmd == "GET":
-            self._video_media(video_media.group(1))
+            self._video_media(*video_media.groups())
         elif path == "/api/video/playback-failure" and cmd == "POST":
             body = self._expect_obj(self._body())
             if (
@@ -1751,7 +1761,7 @@ class Handler(BaseHTTPRequestHandler):
                 reply=body.get("reply") or "",
                 expected_batch=expected_batch,
                 expected_version=expected_version,
-                expected_evidence=(body.get("expectedEvidence") or "") if action == "approve" else None,
+                expected_evidence=body.get("expectedEvidence") or "",
                 by="page",
             )
             manifest = self.server.manifest()

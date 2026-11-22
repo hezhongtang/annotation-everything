@@ -112,6 +112,67 @@ class VideoPagePureTests(unittest.TestCase):
         self.assertFalse(actual["muted"])
         self.assertEqual(actual["stoppedAt"], 6)
 
+    def test_main_player_keeps_range_across_preview_and_draws_marks_on_native_seeks(self):
+        actual = interaction_program(
+            [(START, "// ---------- 视频对照与重定位 ----------")],
+            """
+            const versions=["V1","V2"].map(versionId=>({versionId,url:"/"+versionId,fps:30,
+              timebase:{num:1,den:30},frames:180,width:640,height:360}));
+            const VIDEO={versions,currentVersionId:"V2"}, liveVideo=VIDEO;
+            let videoActiveVersionId="V2";
+            const saves=[],messages=[],calls=[],boxes=new Map();
+            const toast=m=>messages.push(m),saveDraft=()=>saves.push(JSON.stringify(videoDraft));
+            class Box extends EventTarget {
+              constructor(){super();this.style={};this.children=[]}
+              set innerHTML(_){this.children=[]}
+              appendChild(el){this.children.push(el)}
+            }
+            const sr={getElementById(id){if(!boxes.has(id))boxes.set(id,new Box());return boxes.get(id)}};
+            const document={createElement:()=>new Box()};
+            const mark={kind:"point",x:.2,y:.3};
+            const notes=[{id:"m",video:{versionId:"V2",frame:30,mark}}];
+            const isDone=()=>false,renderVideoSource=()=>{},videoCompareInit=()=>{};
+            const player=sr.getElementById("videoPlayer");
+            Object.assign(player,{readyState:1,paused:true,currentTime:0,getAttribute(k){return this[k]},
+              load(){this.readyState=0},pause(){this.paused=true;calls.push("pause")},
+              async play(){this.paused=false;calls.push("play")},requestVideoFrameCallback(fn){this.onFrame=fn}});
+            """,
+            """
+            videoInit();
+            const get=id=>sr.getElementById(id);
+            player.currentTime=4;get("videoSetStart").onclick();
+            player.currentTime=179/30;get("videoSetEnd").onclick();
+            player.currentTime=1;player.dispatchEvent(new Event("seeked"));
+            const atMark=get("videoMarkLayer").children.length;
+            const input=get("videoFrame");sr.activeElement=input;input.value="17";
+            player.onFrame(0,{mediaTime:2});
+            const pastMark=get("videoMarkLayer").children.length,editing=input.value;
+            sr.activeElement=null;player.onFrame(0,{mediaTime:1});
+            const playingMark=[get("videoMarkLayer").children.length,input.value];
+            get("videoPlayRange").onclick();
+            const preview=[videoDraft.startFrame,videoDraft.endFrame,player.currentTime,videoRangeEnd];
+            calls.length=0;
+            videoShowNote({id:"old",video:{versionId:"V1",startFrame:15,endFrame:30}});
+            const loading=calls.slice();
+            videoShowNote({id:"latest",video:{versionId:"V1",startFrame:45,endFrame:90}});
+            player.readyState=1;player.dispatchEvent(new Event("loadedmetadata"));
+            const loaded=[...calls,player.currentTime,videoRangeEnd];
+            videoShowNote({id:"missing",video:{versionId:"V3",frame:1}});
+            const missing=videoComparePair({video:{versionId:"V1",frame:0},
+              videoReview:{versionId:"V3",target:{kind:"frame",versionId:"V3",frame:1}}},VIDEO);
+            return {atMark,pastMark,editing,playingMark,preview,loading,loaded,missingUrl:missing.after.url,messages,src:player.src};
+            """,
+        )
+        self.assertEqual((actual["atMark"], actual["pastMark"]), (1, 0))
+        self.assertEqual(actual["editing"], "17")
+        self.assertEqual(actual["playingMark"], [1, 30])
+        self.assertEqual(actual["preview"], [120, 180, 4, 6])
+        self.assertEqual(actual["loading"], [])
+        self.assertEqual(actual["loaded"], ["pause", "play", 1.5, 3])
+        self.assertIsNone(actual["missingUrl"])
+        self.assertIn("V3", actual["messages"][0])
+        self.assertEqual(actual["src"], "/V1")
+
     def test_markdown_line_round_trip_keeps_video_json(self):
         anchor = frame_anchor()
         actual = run_video(

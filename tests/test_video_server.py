@@ -36,6 +36,8 @@ class VideoServerTests(unittest.TestCase):
         self.source.write_bytes(self.media)
         self.review = self.root / "review"
         build_viewer.build(self.source, None, self.review, no_scan_skills=True, locale="zh-CN")
+        self.rid = json.loads((self.review / "review.json").read_text())["reviewId"]
+        self.media_url = f"/api/video/{self.rid}/versions/V1/media"
         self.server = serve.ReviewServer(self.review, 0, log_to_file=False)
         self.worker = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self.worker.start()
@@ -63,7 +65,7 @@ class VideoServerTests(unittest.TestCase):
         self.assertEqual(data["video"]["currentVersionId"], "V1")
         version = data["video"]["versions"][0]
         self.assertNotIn("path", version)
-        self.assertEqual(version["url"], "/api/video/versions/V1/media")
+        self.assertEqual(version["url"], self.media_url)
         self.assertEqual(version["fps"], 30)
         self.assertNotIn("Access-Control-Allow-Origin", response.headers)
 
@@ -77,13 +79,13 @@ class VideoServerTests(unittest.TestCase):
         self.assertIn("video", json.loads(body)["features"])
 
     def test_get_head_and_single_ranges_return_the_private_v1_bytes(self):
-        response, body = self.request("GET", "/api/video/versions/V1/media")
+        response, body = self.request("GET", self.media_url)
         self.assertEqual(response.status, 200)
         self.assertEqual(response.headers["Content-Type"], "video/mp4")
         self.assertEqual(response.headers["Accept-Ranges"], "bytes")
         self.assertEqual(body, self.media)
 
-        response, body = self.request("HEAD", "/api/video/versions/V1/media")
+        response, body = self.request("HEAD", self.media_url)
         self.assertEqual(response.status, 200)
         self.assertEqual(int(response.headers["Content-Length"]), len(self.media))
         self.assertEqual(body, b"")
@@ -94,7 +96,7 @@ class VideoServerTests(unittest.TestCase):
             ("bytes=-11", self.media[-11:], f"bytes {len(self.media) - 11}-{len(self.media) - 1}/{len(self.media)}"),
         ):
             with self.subTest(header=header):
-                response, body = self.request("GET", "/api/video/versions/V1/media", {"Range": header})
+                response, body = self.request("GET", self.media_url, {"Range": header})
                 self.assertEqual(response.status, 206)
                 self.assertEqual(response.headers["Content-Range"], content_range)
                 self.assertEqual(body, expected)
@@ -102,11 +104,11 @@ class VideoServerTests(unittest.TestCase):
     def test_invalid_ranges_and_unregistered_or_arbitrary_sources_are_rejected(self):
         for header in ("bytes=999999-", "bytes=20-10", "bytes=1-2,4-5", "items=1-2"):
             with self.subTest(header=header):
-                response, _body = self.request("GET", "/api/video/versions/V1/media", {"Range": header})
+                response, _body = self.request("GET", self.media_url, {"Range": header})
                 self.assertEqual(response.status, 416)
                 self.assertEqual(response.headers["Content-Range"], f"bytes */{len(self.media)}")
         for path in (
-            "/api/video/versions/V2/media",
+            f"/api/video/{self.rid}/versions/V2/media",
             "/api/video/media?path=/etc/passwd",
             "/media/v1.mp4",
             "/api/video/versions/V1/media/extra",
@@ -114,6 +116,17 @@ class VideoServerTests(unittest.TestCase):
             with self.subTest(path=path):
                 response, _body = self.request("GET", path)
                 self.assertEqual(response.status, 404)
+
+    def test_saved_media_urls_cannot_read_a_different_review_on_the_same_port(self):
+        other_review = self.root / "second-review"
+        result = build_viewer.build(self.source, None, other_review, no_scan_skills=True)
+        other_url = result["video"]["versions"][0]["url"]
+        for url in (other_url, "/api/video/versions/V1/media"):
+            for method in ("GET", "HEAD"):
+                with self.subTest(url=url, method=method):
+                    response, _ = self.request(method, url, {"Range": "bytes=0-3"})
+                    self.assertEqual(response.status, 404)
+                    self.assertNotEqual(response.headers["Content-Type"], "video/mp4")
 
     def test_manifest_cannot_escape_review_or_follow_a_media_symlink(self):
         outside = self.root / "other-review.mp4"
@@ -128,7 +141,7 @@ class VideoServerTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             self.server._cache.clear()
             with self.subTest(path=path):
-                response, _body = self.request("GET", "/api/video/versions/V1/media")
+                response, _body = self.request("GET", self.media_url)
                 self.assertEqual(response.status, 404)
         manifest["video"]["versions"][0]["path"] = original
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")

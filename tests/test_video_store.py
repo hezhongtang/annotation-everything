@@ -127,6 +127,17 @@ class VideoStoreTests(unittest.TestCase):
             parsed, _always = export_format.parse_markdown(text)
             self.assertEqual([item["video"] for item in parsed], [video_frame(), video_range()])
 
+    def test_unrelated_video_import_does_not_block_document_finalize(self):
+        directory = review_dir()
+        store.add(directory, {"id": "doc", "page": 1, "text": "普通文档批注"})
+        store.handoff_submit(directory, target="review")
+        store.handoff_claim(directory)
+        store.set_status(directory, "doc", "resolved", seq=1, by="agent")
+        store.handoff_done(directory, seq=1)
+        store.import_notes(directory, [{"page": 1, "text": "视频批注", "video": video_frame()}])
+        result = store.handoff_finalize_all(directory, {1: {"doc"}}, evidence={})
+        self.assertEqual(result["finalizedIds"], ["doc"])
+
     def test_newer_location_version_survives_without_being_used_as_v1(self):
         future = {"v": 2, "versionId": "V9", "future": {"opaque": [1, 2, 3]}}
         _doc, note = store.add(review_dir(), {"page": 1, "text": "未来格式", "video": future})

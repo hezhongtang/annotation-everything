@@ -94,12 +94,14 @@ python3 $S/build_viewer.py --report 成片.mp4 --out 成片-review --name "合�
 ```
 
 - 构建只读标准库能确认的 MP4 元数据：恰好一条视频轨、实际画面宽高、恒定帧率、媒体时长与样本表。缺少这些证据、可变帧时长或认不出容器时明确报错，不猜测帧率，也不把文本预览冒充视频审阅。
+- 带编辑列表的 MP4 按实际播放区间登记时长和帧数。支持从呈现帧边界开始的单段原速剪辑。多段、空片段、停帧、变速或越界的剪辑会在登记前报错。
 - 首版登记 `V1`：原文件按字节复制为审阅内私有 `media/v1.mp4`（0600），清单记录 SHA-256、宽高、时长、fps 与帧时间基准。此后原输出文件被覆盖不影响已登记版本；`--rebuild` 只读私有副本，不迁移或改写视频批注。
 - `review.json` 写 `format: {"report": "video", "version": 1}` 与 `video.currentVersionId` / `versions[]`。版本高于当前安装能处理的版本时，各入口明确报错。
 - 视频批注的兼容 `page` 固定为 1；真实位置在 `notes.json` 的 `video` 字段（见下文）。尚未关联源工程时，对照页说明先批成片，改源提交要等后续关联 Remotion / HyperFrames 工程。
-- 媒体只经本机服务读取：`GET /api/video/versions` 与 `GET /api/video/versions/<versionId>` 返回登记元数据（不含私有路径），`GET/HEAD /api/video/versions/<versionId>/media` 返回该版本字节并支持单个 `Range: bytes=…`。未登记版本、任意 path 参数、跨审阅路径、`..`、绝对路径或 `media/` 内符号链接一律 404；Host、同源 Origin、无 CORS 与「只暴露 index.html 及 /api/*」边界不变。
+- 媒体只经本机服务读取：`GET /api/video/versions` 与 `GET /api/video/versions/<versionId>` 返回登记元数据（不含私有路径），`GET/HEAD /api/video/<reviewId>/versions/<versionId>/media` 返回该版本字节并支持单个 `Range: bytes=…`。未登记版本、任意 path 参数、跨审阅路径、`..`、绝对路径或 `media/` 内符号链接一律 404；Host、同源 Origin、无 CORS 与「只暴露 index.html 及 /api/*」边界不变。
+- 页面和接收端使用版本元数据中的 `url` 读取成片。升级前保存的无审阅标识媒体链接会返回 404。可重新打开审阅获取新链接，旧版静态页面可用 `--rebuild` 更新。
 - 先批 MP4 时，在「关联源工程」填写引擎、本机工程根目录和入口。服务静态读取源文件和已有成片。HyperFrames 的静态入口和工程内的候选成片都唯一、成片与登记版本 SHA-256 相同、媒体参数相符，而且成片至少与工程源码和素材一样新时，可直接关联（`match=verified`）。
-- 有多个入口或证据不足时，页面列出找到的候选及可比对的差异。审阅人选择并确认后记为 `match=confirmed`。Remotion 后绑时由审阅人确认入口。动态生成的合成可先在工程环境运行 `video_engines.py inspect PROJECT` 核对。关联保存在 `review.json` 的 `video.sourceProject`，原批注可继续回看原版。接口为 `GET/POST /api/video/source-project` 与 `POST /api/video/source-project/confirm`。
+- 有多个入口或证据不足时，页面列出找到的候选及可比对的差异。审阅人选择并确认后记为 `match=confirmed`。Remotion 后绑时由审阅人确认入口。动态生成的合成可先在工程环境运行 `video_engines.py inspect PROJECT` 核对。关联保存在 `review.json` 的 `video.sourceProject`，原批注可继续回看原版。接口为 `GET/POST /api/video/source-project` 与 `POST /api/video/source-project/confirm`。确认请求须携带所见提议的 `proposalRevision`，服务在提议已更改时返回 409。
 - 视频首次提交时，弹窗默认勾选可提交的批注。每次提交都带显式的 `noteIds` 和唯一的操作标识 `submitId`。服务需要已确认的源工程和有效的接收会话绑定。页面会说明缺少的条件，并保留勾选。
 - 提交时固定所选批注的原话、位置、版本证据、既有复核记录、工程入口和批次附言。同一 `submitId` 重试会返回原批次。另一次显式提交可交付其他批注，仍在途的条目须先完成当前批次。服务通过 `video-handoff-snapshot` 声明支持这份快照。旧服务仍可按原约定办理文档批次。
 - 领取负载自含范围：绑定会话 `notes.py claim` 的 JSON 带 `reviewId`、`seq`、`noteIds`、`userMessage`，以及每条批注的 `materials[]`（`noteId`、`text`、可选 `quote`、`video` 定位〔版本、帧或半开区间、时间基准、可选点/框〕、`media`〔相对 URL、审阅内私有路径、SHA-256；本机服务在线时另有绝对 URL〕，及已有的 `videoReview` 历史）；已绑定源工程时另有 `sourceProject`（引擎、工程根、入口、对准的成片版本），并带 `video` 公开版本清单。`notes.py wait` 的人读输出带同样的源工程行，未选中的批注不出现，不需要再读 `show --batch` 才拿到范围。
@@ -111,7 +113,7 @@ python3 $S/build_viewer.py --report 成片.mp4 --out 成片-review --name "合�
   - 对照页提供并排的原版 / 改后独立 `<video>` 对照舞台（`video-compare` 特性）：按各自登记版本的 `timebase`（`num/den`）与 `fps` 换算帧与半开区间，画面意见各自停到对应帧并叠加对应 `mark`，时序/声音意见可分别点击播放各自不静音（`muted = false`）的区间且互不抢音轨，删除镜头（`outcome: "deleted"`，`target.kind: "cut"`）展示删除说明与剪口并按显式或有界上下文窗口播放新版上下文，同时保留原片可回看。
   - 审阅人可在未定稿条目的对照舞台或卡片打开人工重定位（`POST /api/notes/<id>/video-relocate`，声明 `video-relocate` 特性；沿用 Host、同源 `Origin`、JSON `Content-Type`、`X-AE-Review` 与停审门禁）：从 `needs_relocate`、`missing_evidence`、`pending_review` 或已有未补全位置的新版条目补齐或校正 `versionId`、`target`（严格校界，越界/未登记版本拒绝）与可选 `summary`/`reason`，将此前位置/原因归档进 `videoReview.relocatedFrom` 并追加 `videoReview.history[]` 与 `trail`（不改原 `video` 与正文，后续 `video-receipt` 也不抹除重定位追溯）；缺改动说明时仍保持 `missing_evidence`，不能进入可验收。
 - 人工逐条 / 选择性批量通过、退回与原 ID 下再交（#197）：
-  - 服务声明 `video-decisions`，页面使用 `POST /api/notes/<id>/video-decision` 发出 `approve`、`return` 或 `reply`。请求可以带 `expectedBatch`、`expectedVersion`。单条通过还要带与页面所见 `videoReview.evidenceRevision` 对应的 `expectedEvidence`。没有修订标识的旧回执使用 `legacy`。新回执或位置校正会更新修订标识。
+  - 服务声明 `video-decisions`，页面使用 `POST /api/notes/<id>/video-decision` 发出 `approve`、`return` 或 `reply`。请求可以带 `expectedBatch`、`expectedVersion`。退回与答复需要服务支持 `video-feedback-revision`。三种决定都要带与页面所见 `videoReview.evidenceRevision` 对应的 `expectedEvidence`。没有修订标识的旧回执使用 `legacy`。新回执或位置校正会更新修订标识。
     - `approve` 将符合条件的条目标为 `approved`，记录决定者、时间、批次和历史，同时更新批次统计。
     - `return`（必填非空 `reason`）：仅保存在原批注与 `notes.json`（设 `status = "open"`、`videoReview.state = "returned"`、`decision = "returned"`、`returnReason`、`decisionBatch`、`decidedAt`、`decidedBy`，清 `draft*`/`resolved*` 与在途占用并写入历史与 `returned` 痕迹），**绝不自动创建待处理批次**。
     - `reply`（必填非空 `reply`，且非 `drafted`/`pending_review`）：在原批注保存 `reply`、`repliedAt`、`repliedBy`、`decision = "replied"`、`decisionBatch` 与 `replied` 痕迹，同样不自动提交。

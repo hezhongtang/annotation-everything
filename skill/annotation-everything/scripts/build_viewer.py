@@ -992,6 +992,8 @@ def build(
     engine_result: dict | None = None
     engine_cleanup: Path | None = None
     video_default_title = report.stem
+    if script is not None and (video_review.is_mp4(report) or report.is_dir()):
+        raise BuildError(diag(locale_choice, "build.video.scriptUnsupported", path=script))
     if video_review.is_mp4(report):
         movie_for_v1 = report
     elif report.is_dir():
@@ -1020,8 +1022,6 @@ def build(
         for warning in resolved.get("warnings", []):
             assets.warn(warning)
     if movie_for_v1 is not None:
-        if script is not None:
-            raise BuildError(diag(locale_choice, "build.video.scriptUnsupported", path=script))
         try:
             try:
                 origin = None
@@ -1259,7 +1259,9 @@ def build(
         "REPORT_LANG": _js(report_language),
         "DOCX": _js(docx_view(docx_meta)),
         "PPTX": _js(pptx_view(pptx_meta)),
-        "VIDEO": _js(video_review.public_manifest({"video": video_meta}) if video_meta is not None else None),
+        "VIDEO": _js(
+            video_review.public_manifest({"reviewId": rid, "video": video_meta}) if video_meta is not None else None
+        ),
         "OVERVIEW_HOME": _js(None),
     }  # 对照页不是总览首页宿主；总览视图按 hash 路由照旧
     # 一次性替换，避免内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
@@ -1349,7 +1351,7 @@ def build(
                 raise BuildError(diag(locale_choice, "build.video.error", path=out, reason="review.json changed"))
             if current["video"] != video_meta:
                 video_meta = current["video"]
-                values["VIDEO"] = _js(video_review.public_manifest(current))
+                values["VIDEO"] = _js(video_review.public_manifest({**current, "reviewId": rid}))
                 page_html = render_page()
                 manifest["video"] = video_meta
         write_private(out / "index.html", page_html)
@@ -1436,7 +1438,9 @@ def build(
         "remap": remap,
         "locale": locale_choice,
         "docx": docx_meta,
-        "video": video_review.public_manifest({"video": video_meta}) if video_meta is not None else None,
+        "video": video_review.public_manifest({"reviewId": rid, "video": video_meta})
+        if video_meta is not None
+        else None,
     }
 
 

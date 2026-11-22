@@ -16,6 +16,7 @@ import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
@@ -90,7 +91,7 @@ class VideoVersionRegistryTests(unittest.TestCase):
         self.assertEqual(pub["currentVersionId"], "V2")
         self.assertEqual(len(pub["versions"]), 2)
         pub_v2 = pub["versions"][1]
-        self.assertEqual(pub_v2["url"], "/api/video/versions/V2/media")
+        self.assertEqual(pub_v2["url"], f"/api/video/{self.rid}/versions/V2/media")
         self.assertEqual(pub_v2["batch"], 1)
         self.assertEqual(pub_v2["by"], "claude")
         self.assertEqual(pub_v2["at"], v2["at"])
@@ -615,6 +616,63 @@ class VideoReceiptStoreTests(unittest.TestCase):
         self.assertGreaterEqual(len(by_id3["n1"]["videoReview"]["history"]), 2)
         self.assertEqual(by_id3["n1"]["videoReview"]["state"], "pending_review")
 
+    def test_rejected_and_conflicting_receipts_discard_staged_version(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        store.handoff_claim(self.review)
+        movie = self._v2_movie()
+        fixed = {"noteId": "n1", "outcome": "fixed", "summary": "改字幕"}
+        with self.assertRaises(store.HandoffError) as invalid:
+            store.video_receipt(self.review, seq=1, movie=movie, receipt=[{**fixed, "versionId": "V999"}])
+        self.assertEqual(invalid.exception.code, "invalid-receipt-target")
+        register = video_review.register_version
+
+        def concurrent_edit(*args, **kwargs):
+            version = register(*args, **kwargs)
+            self.assertEqual(ledger.read_manifest(self.review)["video"]["currentVersionId"], "V1")
+            store.update(self.review, "n1", {"text": "并发编辑"})
+            return version
+
+        with (
+            patch.object(video_review, "register_version", concurrent_edit),
+            self.assertRaises(store.HandoffError) as conflict,
+        ):
+            store.video_receipt(self.review, seq=1, movie=movie, receipt=[fixed])
+        self.assertEqual(conflict.exception.code, "receipt-conflict")
+        self.assertEqual([v["versionId"] for v in ledger.read_manifest(self.review)["video"]["versions"]], ["V1"])
+        self.assertFalse((self.review / "media" / "v2.mp4").exists())
+        self.assertFalse((self.review / ".video-registration.json").exists())
+        self.assertNotIn("videoReceipts", store.handoff_load(self.review)["items"][0])
+        self.assertEqual(
+            store.video_receipt(self.review, seq=1, movie=movie, receipt=[fixed])["version"]["versionId"], "V2"
+        )
+
+    def test_committed_receipt_resumes_interrupted_version_publication(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        store.handoff_claim(self.review)
+        receipt = [{"noteId": "n1", "outcome": "fixed", "summary": "改字幕", "target": {"frame": 12}}]
+        with (
+            patch.object(video_review, "finish_receipt_version", side_effect=OSError("interrupted")),
+            self.assertRaises(OSError),
+        ):
+            store.video_receipt(self.review, seq=1, receipt_id="receipt", movie=self._v2_movie(), receipt=receipt)
+        self.assertEqual(ledger.read_manifest(self.review)["video"]["currentVersionId"], "V1")
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["videoReceipts"][0]["versionId"], "V2")
+        replay = store.video_receipt(self.review, seq=1, receipt_id="receipt", receipt=receipt)
+        self.assertTrue(replay["replayed"])
+        self.assertEqual(replay["version"]["versionId"], "V2")
+        self.assertEqual(ledger.read_manifest(self.review)["video"]["currentVersionId"], "V2")
+
+    def test_import_and_add_check_registered_anchor(self):
+        for fields in ({"versionId": "V3"}, {"frames": 200, "frame": 193}, {"videoWidth": 320}):
+            note = video_note("bad", "错误定位", frame=0)
+            note["video"].update(fields)
+            with self.subTest(fields=fields):
+                with self.assertRaises(store.NoteError):
+                    store.import_notes(self.review, [note])
+                with self.assertRaises(store.NoteError):
+                    store.add(self.review, note)
+                self.assertNotIn("bad", [n["id"] for n in store.load(self.review)["notes"]])
+
     def test_received_fix_requires_a_render_from_the_claimed_batch(self):
         store.handoff_submit(self.review, note_ids=["n1"])
         store.handoff_claim(self.review)
@@ -1066,6 +1124,13 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
         c2_data = json.loads(c2_out)
         self.assertEqual(c2_data["video"]["currentVersionId"], "V2")
         self.assertEqual(c2_data["materials"][0]["videoReview"]["question"], "片头保留吗？")
+        code, scoped, errors = self.run_cli(["show", str(self.review), "--batch", "2", "--json"])
+        self.assertEqual(code, 0, errors)
+        exported = json.loads(scoped)
+        self.assertEqual([item["seq"] for item in exported["handoff"]["history"]], [2])
+        self.assertEqual(exported["handoff"]["latest"]["seq"], 2)
+        self.assertNotIn("片头+12帧并上移字幕", scoped)
+        self.assertEqual([n["id"] for n in exported["notes"]], ["n3"])
 
     def test_server_exposes_video_receipt_versions_and_enforces_gates(self):
         store.handoff_submit(self.review, "提交三条", note_ids=["n1", "n2", "n3"])
@@ -1121,8 +1186,8 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
         self.assertNotIn("path", notes_doc["video"]["versions"][1])
         self.assertNotIn(str(v2_file), notes_body.decode("utf-8"))
 
-        c1, _, b1 = serve._req(server.port, "GET", "/api/video/versions/V1/media", {"Host": headers["Host"]})
-        c2, _, b2 = serve._req(server.port, "GET", "/api/video/versions/V2/media", {"Host": headers["Host"]})
+        c1, _, b1 = serve._req(server.port, "GET", notes_doc["video"]["versions"][0]["url"], {"Host": headers["Host"]})
+        c2, _, b2 = serve._req(server.port, "GET", notes_doc["video"]["versions"][1]["url"], {"Host": headers["Host"]})
         self.assertEqual((c1, b1), (200, self.v1_bytes))
         self.assertEqual((c2, b2), (200, self.v2_bytes))
 

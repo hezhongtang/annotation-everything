@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
@@ -364,7 +365,7 @@ class ClaimPayloadTests(VideoHandoffBase):
         span = materials["n2"]["video"]
         self.assertEqual([span["startFrame"], span["endFrame"]], [120, 180])
         media = materials["n1"]["media"]
-        self.assertEqual(media["url"], "/api/video/versions/V1/media")
+        self.assertEqual(media["url"], f"/api/video/{payload['reviewId']}/versions/V1/media")
         self.assertEqual(media["path"], "media/v1.mp4")
 
     def test_claim_uses_notes_and_source_from_the_time_of_submission(self):
@@ -409,6 +410,19 @@ class ClaimPayloadTests(VideoHandoffBase):
         self.assertNotIn("notes.py resolve", text)
         self.assertIn(str(self.root / "project"), text)
         self.assertIn("Main", text)
+
+    def test_text_handoff_never_reads_movie_as_text(self):
+        store.handoff_submit(self.d, "", note_ids=["n1"])
+        read_text = Path.read_text
+
+        def read_document(path, *args, **kwargs):
+            self.assertNotEqual(path.suffix.lower(), ".mp4")
+            return read_text(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", read_document):
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(notes_cli.main(["show", str(self.d)]), 0)
+            self.assertIn("n1", self.wait_text())
 
     def test_wait_omits_unrecorded_revision_for_legacy_video_snapshot(self):
         store.handoff_submit(self.d, "", note_ids=["n1"])
@@ -617,12 +631,35 @@ class ServeSourceProjectTests(VideoHandoffBase):
 
         code, _h, body = self.post(
             "/api/video/source-project/confirm",
-            {"choice": next(c["id"] for c in sp["candidates"] if c["entry"]["id"] == "index.html")},
+            {
+                "proposalRevision": sp["proposalRevision"],
+                "choice": next(c["id"] for c in sp["candidates"] if c["entry"]["id"] == "index.html"),
+            },
         )
         self.assertEqual(code, 200, body)
         sp2 = json.loads(body)["sourceProject"]
         self.assertEqual(sp2["status"], "linked")
         self.assertEqual(self.manifest()["video"]["sourceProject"]["status"], "linked")
+
+    def test_confirm_rejects_replaced_single_candidate_proposal(self):
+        first = self.root / "hf"
+        (first / "compositions" / "scene-b.html").unlink()
+        second = self.root / "second"
+        shutil.copytree(first, second)
+        payload = {"engine": "hyperframes", "root": str(first), "entry": {"id": "index.html"}}
+        code, _, body = self.post("/api/video/source-project", payload)
+        self.assertEqual(code, 200, body)
+        original = json.loads(body)["sourceProject"]
+        code, _, body = self.post("/api/video/source-project", {**payload, "root": str(second)})
+        self.assertEqual(code, 200, body)
+        current = json.loads(body)["sourceProject"]
+        self.assertNotEqual(original["proposalRevision"], current["proposalRevision"])
+        path = "/api/video/source-project/confirm"
+        code, _, body = self.post(path, {"proposalRevision": original["proposalRevision"]})
+        self.assertEqual((code, json.loads(body)["code"]), (409, "stale-source-project"))
+        self.assertEqual(self.manifest()["video"]["sourceProject"]["status"], "pending")
+        code, _, body = self.post(path, {"proposalRevision": current["proposalRevision"]})
+        self.assertEqual((code, json.loads(body)["sourceProject"]["root"]), (200, str(second)))
 
     def test_post_validates_payload(self):
         code, _h, body = self.post(
@@ -645,7 +682,10 @@ class ServeSourceProjectTests(VideoHandoffBase):
             },
         )
         self.assertEqual(code, 200)
-        code, _h, _body = self.post("/api/video/source-project/confirm", {"choice": "ghost"})
+        code, _h, _body = self.post(
+            "/api/video/source-project/confirm",
+            {"choice": "ghost", "proposalRevision": json.loads(body)["sourceProject"]["proposalRevision"]},
+        )
         self.assertEqual(code, 400)
 
 

@@ -154,7 +154,7 @@ def handoff_claim_payload(d: Path, item: dict[str, Any], manifest: dict[str, Any
     video = submitted.get("video", manifest.get("video"))
     if not isinstance(video, dict):
         return out
-    out["video"] = video_review.public_manifest({"video": video})
+    out["video"] = video_review.public_manifest({**manifest, "video": video})
     brief = video_source.agent_brief(video)
     if brief is not None:
         out["sourceProject"] = brief
@@ -188,15 +188,16 @@ def handoff_claim_payload(d: Path, item: dict[str, Any], manifest: dict[str, Any
                 version = video_review.registered_version({"video": video}, version_id)
             except video_review.VideoError:
                 version = {}
-            media: dict[str, Any] = {"url": f"/api/video/versions/{version_id}/media"}
-            if version.get("path"):
-                media["path"] = version["path"]
-            if version.get("sha256"):
-                media["sha256"] = version["sha256"]
-            absolute = _serving_url(d, media["url"])
-            if absolute:
-                media["absoluteUrl"] = absolute
-            material["media"] = media
+            if version:
+                media: dict[str, Any] = {"url": video_review.media_url(manifest["reviewId"], version_id)}
+                if version.get("path"):
+                    media["path"] = version["path"]
+                if version.get("sha256"):
+                    media["sha256"] = version["sha256"]
+                absolute = _serving_url(d, media["url"])
+                if absolute:
+                    media["absoluteUrl"] = absolute
+                material["media"] = media
         if isinstance(note.get("videoReview"), dict):
             material["videoReview"] = note["videoReview"]
         materials.append(material)
@@ -629,7 +630,7 @@ def side_texts(sources: dict[str, Path | None] | None) -> dict[str, dict[int, st
     if not sources:
         return out
     try:  # 报告与讲稿分开容错：一侧读不了，另一侧照样给出对应句
-        if sources.get("report"):
+        if sources.get("report") and not video_review.is_mp4(sources["report"]):
             import docx_review
             import pptx_report
 
@@ -1503,14 +1504,16 @@ def _main_locked(argv: list[str] | None = None) -> int:
             notes = [
                 n
                 for n in doc["notes"]
-                if (a.all or n.get("status") != "resolved")
+                if (a.all or a.batch or n.get("status") != "resolved")
                 and (a.page is None or n.get("page") == a.page)
                 and (only is None or n.get("id") in only)
             ]
             payload: dict[str, Any] = {
                 **doc,
                 "notes": notes,
-                "handoff": store.handoff_state(d),
+                "handoff": store.handoff_state(
+                    d, batch=a.batch, notes=notes if a.batch else doc["notes"], manifest=manifest
+                ),
                 "alwaysSkills": store.always_skills(d),
             }
             if isinstance(manifest.get("video"), dict):

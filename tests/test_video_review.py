@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPTS))
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-video-test-home-")
 
 import build_viewer  # noqa: E402
+import video_review  # noqa: E402
 
 
 def box(kind: bytes, payload: bytes) -> bytes:
@@ -27,7 +28,15 @@ def full_box(kind: bytes, version: int, flags: int, payload: bytes) -> bytes:
     return box(kind, bytes((version,)) + flags.to_bytes(3, "big") + payload)
 
 
-def synthetic_mp4(*, frames: int = 180, fps: int = 30, width: int = 640, height: int = 360) -> bytes:
+def synthetic_mp4(
+    *,
+    frames: int = 180,
+    fps: int = 30,
+    width: int = 640,
+    height: int = 360,
+    edits: bytes = b"",
+    composition: bytes = b"",
+) -> bytes:
     """只含合成元数据与占位媒体字节的 MP4；构建和 API 测试不依赖本机编解码器。"""
     duration = frames
     mvhd = full_box(
@@ -45,7 +54,7 @@ def synthetic_mp4(*, frames: int = 180, fps: int = 30, width: int = 640, height:
     stsc = full_box(b"stsc", 0, 0, struct.pack(">IIII", 1, 1, frames, 1))
     stsz = full_box(b"stsz", 0, 0, struct.pack(">II", 1, frames))
     stco = full_box(b"stco", 0, 0, struct.pack(">II", 1, len(header) + 8))
-    stbl = box(b"stbl", stsd + stts + stsc + stsz + stco)
+    stbl = box(b"stbl", stsd + stts + stsc + stsz + stco + composition)
     minf = box(b"minf", stbl)
     hdlr = full_box("hdlr".encode(), 0, 0, b"\0" * 4 + b"vide" + b"\0" * 12 + b"Synthetic video\0")
     mdia = box(b"mdia", mdhd + hdlr + minf)
@@ -55,7 +64,7 @@ def synthetic_mp4(*, frames: int = 180, fps: int = 30, width: int = 640, height:
         3,
         struct.pack(">IIIII", 0, 0, 1, 0, duration) + b"\0" * 52 + struct.pack(">II", width << 16, height << 16),
     )
-    trak = box(b"trak", tkhd + mdia)
+    trak = box(b"trak", tkhd + edits + mdia)
     moov = box(b"moov", mvhd + trak)
     return header + media + moov
 
@@ -96,6 +105,28 @@ class VideoBuildTests(unittest.TestCase):
         page = (self.out / "index.html").read_text(encoding="utf-8")
         self.assertIn('id="videoPlayer"', page)
         self.assertIn('"versionId": "V1"', page)
+
+    def test_edit_list_uses_playback_timeline_and_distinct_movie_clock(self):
+        for version, fmt in ((0, ">Iihh"), (1, ">Qqhh")):
+            with self.subTest(version=version):
+                # 120 帧等于 4000 个 movie ticks。前两帧的呈现偏移来自 ctts。
+                edit = full_box(b"elst", version, 0, struct.pack(">I", 1) + struct.pack(fmt, 4000, 62, 1, 0))
+                composition = full_box(b"ctts", 0, 0, struct.pack(">III", 1, 180, 2))
+                data = bytearray(synthetic_mp4(edits=box(b"edts", edit), composition=composition))
+                struct.pack_into(">II", data, data.index(b"mvhd") + 16, 1000, 4000)
+                self.source.write_bytes(data)
+                meta = video_review.probe(self.source)
+                self.assertEqual((meta["duration"], meta["frames"], meta["fps"]), (4, 120, 30))
+
+    def test_unrepresentable_edit_lists_are_rejected_before_registration(self):
+        for count, start, rate, length in ((2, 0, 1, 60), (1, -1, 1, 120), (1, 0, 2, 120), (1, 100, 1, 120)):
+            with self.subTest(count=count, start=start, rate=rate):
+                entries = struct.pack(">Iihh", length, start, rate, 0) * count
+                edit = full_box(b"elst", 0, 0, struct.pack(">I", count) + entries)
+                self.source.write_bytes(synthetic_mp4(edits=box(b"edts", edit)))
+                with self.assertRaisesRegex(build_viewer.BuildError, "编辑"):
+                    self.build()
+                self.assertFalse((self.out / "media/v1.mp4").exists())
 
     def test_interrupted_first_build_recovers_only_its_own_original(self):
         with self.assertRaises(SystemExit):
@@ -165,7 +196,6 @@ class VideoBuildTests(unittest.TestCase):
 
     def test_rebuild_preserves_a_version_published_during_page_generation(self):
         from unittest.mock import patch
-        import video_review
 
         self.build()
         v2 = self.root / "revision.mp4"

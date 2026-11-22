@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -148,8 +149,11 @@ def scan_html_compositions(root: Path) -> list[dict[str, Any]]:
     htmls = sorted(dict.fromkeys(htmls), key=lambda p: p.relative_to(root).as_posix())[:HTML_CAP]
     compositions: list[dict[str, Any]] = []
     for path in htmls:
+        if not _inside(root, path):
+            raise EngineError("compositionOutside", str(path))
         try:
-            head = path.read_text(encoding="utf-8", errors="replace")[:65536]
+            with path.open(encoding="utf-8", errors="replace") as source:
+                head = source.read(65536)
         except OSError:
             continue
         parser = _RootTagParser()
@@ -185,8 +189,10 @@ def detect_project(root: Path) -> dict[str, Any]:
         raise EngineError("notProject", str(root))
     root = root.resolve()
     package, deps = _package_deps(root)
-    remotion_bin = root / "node_modules" / ".bin" / "remotion"
-    hyperframes_bin = root / "node_modules" / ".bin" / "hyperframes"
+    suffix = ".cmd" if sys.platform == "win32" else ""
+    bin_dir = root / "node_modules" / ".bin"
+    remotion_bin = bin_dir / ("remotion" + suffix)
+    hyperframes_bin = bin_dir / ("hyperframes" + suffix)
     remotion_hit = "remotion" in deps or remotion_bin.is_file()
     hyperframes_hit = "hyperframes" in deps or hyperframes_bin.is_file()
     if remotion_hit and hyperframes_hit:
@@ -218,15 +224,40 @@ def detect_project(root: Path) -> dict[str, Any]:
 # ── 固定 argv 模板与输出解析 ─────────────────────────────────────────────────
 
 
+def _engine_command(bin_path: Path) -> list[str]:
+    if bin_path.suffix != ".cmd":
+        return [str(bin_path)]
+    # npm 在 Windows 上安装的是批处理启动器。直接用 Node 运行包声明的入口，
+    # 让工程路径、合成名等参数在整个调用链中都不经过 cmd.exe。
+    engine = bin_path.stem
+    package = bin_path.parent.parent / ("@remotion/cli" if engine == ENGINE_REMOTION else engine)
+    manifest = package / "package.json"
+    try:
+        entry = json.loads(manifest.read_text(encoding="utf-8"))["bin"]
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise EngineError("depsMissing", str(manifest)) from exc
+    if isinstance(entry, dict):
+        entry = entry.get(engine)
+    if not isinstance(entry, str) or Path(entry).is_absolute() or not _inside(package, package / entry):
+        raise EngineError("depsMissing", str(manifest))
+    script = package / entry
+    if not script.is_file():
+        raise EngineError("depsMissing", str(script))
+    node = shutil.which("node.exe")
+    if node is None:
+        raise EngineError("depsMissing", "node.exe")
+    return [node, str(script)]
+
+
 def compositions_argv(bin_path: Path, entry: Path) -> list[str]:
-    return [str(bin_path), "compositions", str(entry)]
+    return [*_engine_command(bin_path), "compositions", str(entry)]
 
 
 def render_argv(engine: str, bin_path: Path, entry_or_root: Path, composition_id: str, output: Path) -> list[str]:
     """渲染命令的固定模板；调用方保证各路径已在工程或审阅目录内。"""
     if engine == ENGINE_REMOTION:
         return [
-            str(bin_path),
+            *_engine_command(bin_path),
             "render",
             str(entry_or_root),
             str(composition_id),
@@ -235,7 +266,7 @@ def render_argv(engine: str, bin_path: Path, entry_or_root: Path, composition_id
             "--overwrite=false",
         ]
     return [
-        str(bin_path),
+        *_engine_command(bin_path),
         "render",
         ".",
         "--format",
@@ -325,9 +356,9 @@ def choose_composition(
     compositions: list[dict[str, Any]], wanted: str | None, engine: str, root: Path
 ) -> dict[str, Any]:
     if wanted is None:
-        if len(compositions) == 1:
-            return compositions[0]
-        raise EngineError("compositionAmbiguous", "\n".join(_composition_line(c) for c in compositions))
+        if len(compositions) != 1:
+            raise EngineError("compositionAmbiguous", "\n".join(_composition_line(c) for c in compositions))
+        wanted = compositions[0]["id"]
     if engine == ENGINE_HYPERFRAMES:
         candidate = root / wanted
         if Path(wanted).is_absolute() or not _inside(root, candidate):
@@ -377,7 +408,7 @@ def _mtime(path: Path) -> float:
 
 
 def freshness_sources(info: dict[str, Any]) -> list[Path]:
-    """包含工程源码和静态素材；项目根或 out 中供复用的导出物不算输入。"""
+    """根目录中的 MP4 可能是工程引用的素材，随其他输入参与新鲜度与内容校验。"""
     root = info["root"]
     sources = []
     for directory, dirs, files in os.walk(root):
@@ -388,7 +419,7 @@ def freshness_sources(info: dict[str, Any]) -> list[Path]:
             continue
         for name in sorted(files):
             path = here / name
-            if not name.startswith(".") and not (here == root and path.suffix.lower() == ".mp4"):
+            if not name.startswith("."):
                 sources.append(path)
     return sources
 
@@ -676,8 +707,8 @@ def _render(
         raise EngineError("stagingExists", str(staging_dir))
     staging_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(dir=staging_dir)) / "v1.mp4"
-    argv = render_argv(engine, bin_path, info.get("entry") or info["root"], chosen["id"], staging)
     try:
+        argv = render_argv(engine, bin_path, info.get("entry") or info["root"], chosen["id"], staging)
         code, _out, err = _run(argv, cwd=info["root"], timeout=timeout, timeout_code="renderTimeout")
         if code != 0:
             raise EngineError("renderFailed", f"exit={code} {_tail(err)}")

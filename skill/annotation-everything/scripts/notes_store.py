@@ -1041,6 +1041,20 @@ def _clean_video(value: Any) -> dict[str, Any] | None:
     return out
 
 
+def _check_registered_anchor(anchor: Any, manifest: dict) -> None:
+    if not isinstance(anchor, dict) or anchor.get("v") != 1 or not _is_video_review(manifest):
+        return
+    try:
+        version = video_review.registered_version(manifest, anchor["versionId"])
+        target = video_review.clean_receipt_target(anchor, version)
+    except video_review.VideoError as exc:
+        raise NoteError(f"视频批注与登记成片不匹配：{exc}") from None
+    if any(anchor[key] != target[key] for key in ("frames", "videoWidth", "videoHeight")) or not math.isclose(
+        anchor["fps"], target["fps"], rel_tol=1e-9, abs_tol=1e-9
+    ):
+        raise NoteError("视频批注的帧率、帧数或画面尺寸与登记成片不匹配")
+
+
 def _clean_time(v: Any) -> str | None:
     if isinstance(v, str) and 0 < len(v) <= 64:
         return v
@@ -1218,6 +1232,8 @@ def add(review_dir: Path, data: dict[str, Any], *, by: str = "page") -> tuple[di
                     return doc, n
         else:
             nid = new_id()
+        if fields.get("video"):
+            _check_registered_anchor(fields["video"], ledger.read_manifest(review_dir))
         note = _new_note({"at": data.get("at")}, fields, nid)
         doc["notes"].append(note)
         return _commit(review_dir, doc, {"op": "add", "by": by, "id": nid, "note": note}), note
@@ -1766,7 +1782,8 @@ def import_notes(
         raise NoteError("导入内容须为批注列表")
     with locked(review_dir):
         doc = load(review_dir)
-        is_video = _is_video_review(ledger.read_manifest(review_dir))
+        manifest = ledger.read_manifest(review_dir)
+        is_video = _is_video_review(manifest)
         by_id = {n.get("id"): n for n in doc["notes"]}
         keys = {dedup_key(n) for n in doc["notes"]}
         added = skipped = updated = 0
@@ -1775,6 +1792,7 @@ def import_notes(
                 raise NoteError("导入项须为对象")
             _reconcile_edit(raw)
             fields = _clean_fields(raw, partial=False)
+            _check_registered_anchor(fields.get("video"), manifest)
             nid = raw.get("id") if valid_id(raw.get("id")) else None
             if nid and nid in by_id:
                 cur = by_id[nid]
@@ -2028,6 +2046,7 @@ def handoff_state(
     review_dir: Path,
     *,
     full: bool = True,
+    batch: int | None = None,
     handoff: Any = None,
     notes: Any = None,
     manifest: dict[str, Any] | None = None,
@@ -2045,7 +2064,7 @@ def handoff_state(
         doc = pre_read(handoff, None, lambda: handoff_load(review_dir))
     except ValueError:
         return {"error": "handoff.json 无法解析"}
-    items = doc["items"]
+    items = doc["items"] if batch is None else [item for item in doc["items"] if item["seq"] == batch]
     try:
         notes = pre_read(notes, None, lambda: load(review_dir)["notes"])
     except (OSError, ValueError):
@@ -2678,16 +2697,19 @@ def handoff_finalize_all(
         skipped = {entry["id"]: entry for entry in snapshot["skipped"]}
         notes = {note["id"]: note for note in ndoc["notes"]}
         items = {item["seq"]: item for item in doc["items"]}
-        is_video = _is_video_review(manifest) or any(_is_video_review(manifest, n) for n in ndoc["notes"])
         finalized, batches = [], []
         for group in snapshot["batches"]:
             seq, ids = group["seq"], group["ids"]
             confirmed = selections.get(seq, set())
-            if is_video:
+            if _is_video_review(manifest) or any(_is_video_review(note=notes[nid]) for nid in ids if nid in confirmed):
                 picked = []
                 for nid in ids:
                     if nid in confirmed:
-                        if evidence is not None and evidence.get(nid) != _video_evidence(notes[nid]):
+                        if (
+                            _is_video_review(manifest, notes[nid])
+                            and evidence is not None
+                            and evidence.get(nid) != _video_evidence(notes[nid])
+                        ):
                             skipped[nid] = {"id": nid, "batch": seq, "reason": "changed"}
                         else:
                             picked.append(nid)
@@ -2730,7 +2752,7 @@ def handoff_finalize_all(
                     note = notes.get(nid)
                     vr = (note or {}).get("videoReview") or {}
                     if (
-                        is_video
+                        _is_video_review(manifest, note)
                         and evidence is not None
                         and note
                         and note.get("status") == "resolved"
@@ -2747,12 +2769,7 @@ def handoff_finalize_all(
                         if seq not in batches:
                             batches.append(seq)
                         continue
-                    if (
-                        is_video
-                        and note is not None
-                        and _is_video_review(manifest, note)
-                        and note.get("status") != "resolved"
-                    ):
+                    if note is not None and _is_video_review(manifest, note) and note.get("status") != "resolved":
                         ready, detail = video_review.review_readiness(note, manifest, review_dir=review_dir)
                         if not ready:
                             skipped[nid] = {"id": nid, "batch": seq, "reason": "unready", "detail": detail}
@@ -3187,6 +3204,9 @@ def recover_video_decode_failures(review_dir: Path, manifest: dict) -> None:
     video = manifest.get("video")
     if not isinstance(video, dict):
         return
+    if (review_dir / ".video-registration.json").exists():
+        with fsutil.flocked(review_dir / ".video-receipt.lock", exclusive=True):
+            _settle_receipt_version(review_dir)
     pending = [
         v["playbackFailure"]
         for v in video.get("versions", [])
@@ -3271,7 +3291,7 @@ def video_receipt(
     by: str = "agent",
     authorize: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    """视频审阅回执：不嵌套文件锁，先校验批注与批次，再在 metadata_lock 登记新版/失败，最后写回批注与批次。"""
+    """按批次接收回执，只有已完成批注与批次提交的回执可以发布成片。"""
     actor = str(by or "").strip()[:200] or "agent"
     spec = _normalize_video_receipt(
         receipt,
@@ -3282,6 +3302,34 @@ def video_receipt(
         render_error=render_error,
         summary=summary,
     )
+    recover_video_decode_failures(review_dir, ledger.read_manifest(review_dir))
+    with fsutil.flocked(review_dir / ".video-receipt.lock", exclusive=True):
+        _settle_receipt_version(review_dir)
+        try:
+            return _apply_receipt(review_dir, spec, actor, finish, authorize)
+        finally:
+            _settle_receipt_version(review_dir)
+
+
+def _settle_receipt_version(review_dir: Path) -> None:
+    """在回执锁内重放已提交的批次，再决定是否发布暂存成片。批注锁和元数据锁分开获取。"""
+    journal = review_dir / ".video-registration.json"
+    try:
+        pending = json.loads(fsutil.read_private_text(journal, max_bytes=32 * 1024))
+    except FileNotFoundError:
+        return
+    if not pending.get("awaitReceipt"):
+        return
+    version = pending["version"]
+    with locked(review_dir):
+        item = next((it for it in handoff_load(review_dir)["items"] if it["seq"] == version["batch"]), {})
+        receipt = _find_receipt_replay(item, version["receiptId"])
+    video_review.finish_receipt_version(
+        review_dir, pending, accepted=bool(receipt and receipt.get("versionId") == version["versionId"])
+    )
+
+
+def _apply_receipt(review_dir, spec, actor, finish, authorize):
     req_seq = spec["seq"]
     req_rid = spec["reviewId"]
     rid_key = spec["receiptId"]
@@ -3290,10 +3338,7 @@ def video_receipt(
     req_summary = spec["summary"]
     entries = spec["entries"]
 
-    recover_video_decode_failures(review_dir, ledger.read_manifest(review_dir))
-
-    # Phase 1: 在 .notes.lock 下预检批次、权限、幂等、目标批注与（可选）源位置范围
-    probed_meta: dict[str, Any] | None = None
+    # 在批注锁内确认接收权限、批次状态和目标批注。
     probe_error: video_review.VideoError | None = None
     with locked(review_dir):
         if authorize is not None:
@@ -3326,44 +3371,12 @@ def video_receipt(
             if nid not in by_id:
                 raise NotFound(nid)
             _validate_receipt_note(by_id[nid], nid, item, n_seq)
-            if entry["outcome"] == "deleted" and entry["target"] is not None and entry["target"].get("kind") != "cut":
+            if (
+                entry["outcome"] == "deleted"
+                and entry["target"] is not None
+                and (not isinstance(entry["target"], dict) or entry["target"].get("kind") != "cut")
+            ):
                 raise HandoffError("删镜回执须指明剪口和上下文", code="invalid-receipt-target", id=nid)
-
-        # 预检新版成片与目标帧范围，避免提交了无效坐标后还要写半截状态
-        if req_movie is not None:
-            try:
-                probed_meta = video_review.probe(req_movie)
-            except video_review.VideoError as exc:
-                probe_error = exc
-            else:
-                next_vid = f"V{video_review._next_version_number(manifest['video'])}"
-                candidate_meta = {**probed_meta, "versionId": next_vid}
-                for entry in entries:
-                    if entry["outcome"] in ("fixed", "deleted") and entry["target"] is not None:
-                        target_vid = entry.get("versionId") or entry["target"].get("versionId") or next_vid
-                        try:
-                            target_meta = (
-                                candidate_meta
-                                if target_vid == next_vid
-                                else _batch_render(manifest, str(target_vid), n_seq)
-                            )
-                            video_review.clean_receipt_target(entry["target"], target_meta)
-                        except video_review.VideoError as exc:
-                            raise HandoffError(str(exc), code="invalid-receipt-target", id=entry["noteId"]) from None
-        elif not req_render_err:
-            for entry in entries:
-                if entry["outcome"] in ("fixed", "deleted") and entry["target"] is not None:
-                    target_vid = (
-                        entry.get("versionId")
-                        or (entry["target"].get("versionId") if isinstance(entry["target"], dict) else None)
-                        or item.get("videoVersionId")
-                    )
-                    if target_vid:
-                        try:
-                            target_meta = _batch_render(manifest, str(target_vid), n_seq)
-                            video_review.clean_receipt_target(entry["target"], target_meta)
-                        except video_review.VideoError as exc:
-                            raise HandoffError(str(exc), code="invalid-receipt-target", id=entry["noteId"]) from None
 
         lock_token = (
             int(ndoc.get("rev", 0)),
@@ -3374,7 +3387,7 @@ def video_receipt(
             len(doc["items"]),
         )
 
-    # Phase 2: 释放 .notes.lock 后，在 metadata_lock 下登记新版或记录失败
+    # 探测实际暂存的私有副本。成片在回执获接收之前不进入版本清单。
     registered_version: dict[str, Any] | None = None
     recorded_failure: dict[str, Any] | None = None
     if req_render_err:
@@ -3387,21 +3400,12 @@ def video_receipt(
             receipt_id=rid_key,
             stage="render",
         )
-    elif probe_error is not None:
-        recorded_failure = video_review.record_failure(
-            review_dir,
-            batch=n_seq,
-            by=actor,
-            reason=str(probe_error),
-            review_id=req_rid,
-            receipt_id=rid_key,
-            stage="probe",
-        )
     elif req_movie is not None:
         try:
             registered_version = video_review.register_version(
                 review_dir,
                 req_movie,
+                await_receipt=True,
                 batch=n_seq,
                 by=actor,
                 review_id=req_rid,
@@ -3419,7 +3423,7 @@ def video_receipt(
                 stage="probe",
             )
 
-    # Phase 3: 重取 .notes.lock 二次核验无并发篡改后写回 notes.json 与 handoff.json
+    # 重新取得批注锁。期间有编辑或移交时，拒绝提交并清理暂存成片。
     with locked(review_dir):
         if authorize is not None:
             authorize()
@@ -3822,6 +3826,7 @@ def video_decision(
                 "handoff": handoff_state(review_dir, full=False, handoff=handoff_doc, notes=ndoc["notes"]),
             }
 
+        _check_video_evidence(note, expected_evidence)
         if action == "return":
             if (
                 vr.get("state") == "returned"
