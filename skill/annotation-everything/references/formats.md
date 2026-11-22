@@ -85,6 +85,59 @@ python3 $S/build_viewer.py --report 合同.docx --out 合同-review --name "采�
 
 `review.json` 里 `format` 为 `{"report": "docx", "version": 1}`。版本高于当前安装能处理的版本时，`--rebuild`、`serve.py` 和 `notes.py` 都会明确报错，不按普通文本读取。旧审阅没有 `format` 字段，仍按逐页 HTML 处理。
 
+## 视频 MP4 与成片版本
+
+`--report` 直接接受本地 `.mp4`（不接受讲稿输入）：
+
+```bash
+python3 $S/build_viewer.py --report 成片.mp4 --out 成片-review --name "合成短片"
+```
+
+- 构建只读标准库能确认的 MP4 元数据：恰好一条视频轨、实际画面宽高、恒定帧率、媒体时长与样本表。缺少这些证据、可变帧时长或认不出容器时明确报错，不猜测帧率，也不把文本预览冒充视频审阅。
+- 带编辑列表的 MP4 按实际播放区间登记时长和帧数。支持从呈现帧边界开始的单段原速剪辑。多段、空片段、停帧、变速或越界的剪辑会在登记前报错。
+- 首版登记 `V1`：原文件按字节复制为审阅内私有 `media/v1.mp4`（0600），清单记录 SHA-256、宽高、时长、fps 与帧时间基准。此后原输出文件被覆盖不影响已登记版本；`--rebuild` 只读私有副本，不迁移或改写视频批注。
+- `review.json` 写 `format: {"report": "video", "version": 1}` 与 `video.currentVersionId` / `versions[]`。版本高于当前安装能处理的版本时，各入口明确报错。
+- 视频批注的兼容 `page` 固定为 1；真实位置在 `notes.json` 的 `video` 字段（见下文）。尚未关联源工程时，对照页说明先批成片，改源提交要等后续关联 Remotion / HyperFrames 工程。
+- 媒体只经本机服务读取：`GET /api/video/versions` 与 `GET /api/video/versions/<versionId>` 返回登记元数据（不含私有路径），`GET/HEAD /api/video/<reviewId>/versions/<versionId>/media` 返回该版本字节并支持单个 `Range: bytes=…`。未登记版本、任意 path 参数、跨审阅路径、`..`、绝对路径或 `media/` 内符号链接一律 404；Host、同源 Origin、无 CORS 与「只暴露 index.html 及 /api/*」边界不变。
+- 页面和接收端使用版本元数据中的 `url` 读取成片。升级前保存的无审阅标识媒体链接会返回 404。可重新打开审阅获取新链接，旧版静态页面可用 `--rebuild` 更新。
+- 先批 MP4 时，在「关联源工程」填写引擎、本机工程根目录和入口。对于 Remotion 和 HyperFrames，服务先静态核对入口和候选成片。只有一个可识别的入口和一份候选成片时，服务检查成片的媒体参数、SHA-256 和修改时间，再从本机台账核对该工程、入口、当前源输入和成片的渲染凭据。全部相符后，页面直接关联工程（`match=verified`）。
+- 有多个候选、只有成片副本或缺少渲染凭据时，页面列出找到的入口及可比对的差异。审阅人选择并确认后记为 `match=confirmed`。动态生成的 Remotion 合成可先在工程环境运行 `video_engines.py inspect PROJECT` 核对。关联保存在 `review.json` 的 `video.sourceProject`，原批注可继续回看原版。接口为 `GET/POST /api/video/source-project` 与 `POST /api/video/source-project/confirm`。确认请求须携带所见提议的 `proposalRevision`，服务在提议已更改时返回 409。
+- 视频首次提交时，弹窗默认勾选可提交的批注。每次提交都带显式的 `noteIds` 和唯一的操作标识 `submitId`。服务需要已确认的源工程和有效的接收会话绑定。页面会说明缺少的条件，并保留勾选。
+- 提交时固定所选批注的原话、位置、版本证据、既有复核记录、工程入口和批次附言。同一 `submitId` 重试会返回原批次。另一次显式提交可交付其他批注，仍在途的条目须先完成当前批次。服务通过 `video-handoff-snapshot` 声明支持这份快照。旧服务仍可按原约定办理文档批次。
+- 领取负载自含范围：绑定会话 `notes.py claim` 的 JSON 带 `reviewId`、`seq`、`noteIds`、`userMessage`，以及每条批注的 `materials[]`（`noteId`、`text`、可选 `quote`、`video` 定位〔版本、帧或半开区间、时间基准、可选点/框〕、`media`〔相对 URL、审阅内私有路径、SHA-256；本机服务在线时另有绝对 URL〕，及已有的 `videoReview` 历史）；已绑定源工程时另有 `sourceProject`（引擎、工程根、入口、对准的成片版本），并带 `video` 公开版本清单。`notes.py wait` 的人读输出带同样的源工程行，未选中的批注不出现，不需要再读 `show --batch` 才拿到范围。
+- 多版本成片、原批注回执与人工验收门禁（#195）：
+  - `notes.py video-receipt 审阅目录 [--seq N] [--review-id ID] [--receipt 文件|-] [--movie 新成片.mp4] [--receipt-id ID] [--render-error 原因] [--summary 说明] [--no-finish] [--by 角色] [--json]` 在原批注下写回本轮回执。新成片在台账元数据锁内先经 0600 临时文件落盘并校验（恒定帧率、单视频轨、有效宽高与时长）再原子移入 `media/v{N}.mp4`，追加进 `review.json` 的 `video.versions[]` 并更新 `currentVersionId` 与清除 `lastFailure`（绝不覆盖已有 `V1` 或泄露本机路径）；渲染失败或新成片不可播放时在 `video.lastFailure` / `video.failures[]` 记账并保留上一有效版本。同批次同一 `(seq, receiptId)` 幂等重放不重复登记版本或历史。
+  - 交回新成片时，默认沿用提交快照中的当前版，或同批上一次可用的成片。若另一批已发布新版，接收方须在当前版上重新渲染，再用新的 `receiptId` 补交，并在回执 JSON 对象顶层填写 `baseVersionId`，例如 `"baseVersionId": "V3"`。渲染或探测失败只在批次接受回执后记入失败历史。
+  - 原定位保存在 `video`，每轮回执追加到 `videoReview.history[]`。`fixed` 和 `deleted` 要进入 `pending_review`，须提供本批成功登记的改后版本、改动说明，以及该版本范围内的目标位置。原批注是时间段时，新位置须给出可播放区间或剪口上下文。仅回报一帧会标为缺证据，审阅人可补齐范围。删除镜头需要带前后文的 `cut`。分次交回时可用 `--no-finish` 留下已登记版本，随后用同一批次补交其余结果。缺目标、提问、待定位和渲染失败分别显示为 `missing_evidence`、`needs_reply`、`needs_relocate` 和 `failed`。
+  - 接收会话通过 `video-receipt` 交回证据。页面单条或成组通过前，浏览器按各条批注的原位置和新版目标位置实际解码，服务核对所见证据修订、批次、说明和登记媒体。旧证据须重新打开。若浏览器报告新版解码失败或格式不支持，带 `video-decode-feedback` 能力的服务通过同源 `POST /api/video/playback-failure` 保存批注、批次、版本、证据修订和媒体错误码。页面可继续打开上一有效版，绑定会话可在原批次用新回执交回修好的成片。
+  - 如果等待复核时已解绑，先重新绑定最初领取该批次的宿主和会话，再用 `video-receipt` 补交。若还有其他处理中批次、分析或投递，先完成这些工作再改绑。对于缺少领取身份且无法确认原会话的旧批次，审阅人可在页面重新勾选解码失败的条目并提交。
+- 前后对照、删镜剪口与人工重定位（#196）：
+  - 对照页提供并排的原版 / 改后独立 `<video>` 对照舞台（`video-compare` 特性）：按各自登记版本的 `timebase`（`num/den`）与 `fps` 换算帧与半开区间，画面意见各自停到对应帧并叠加对应 `mark`，时序/声音意见可分别点击播放各自不静音（`muted = false`）的区间且互不抢音轨，删除镜头（`outcome: "deleted"`，`target.kind: "cut"`）展示删除说明与剪口并按显式或有界上下文窗口播放新版上下文，同时保留原片可回看。
+  - 审阅人可在未定稿条目的对照舞台或卡片打开人工重定位（`POST /api/notes/<id>/video-relocate`，声明 `video-relocate` 特性；沿用 Host、同源 `Origin`、JSON `Content-Type`、`X-AE-Review` 与停审门禁）：从 `needs_relocate`、`missing_evidence`、`pending_review` 或已有未补全位置的新版条目补齐或校正 `versionId`、`target`（严格校界，越界/未登记版本拒绝）与可选 `summary`/`reason`，将此前位置/原因归档进 `videoReview.relocatedFrom` 并追加 `videoReview.history[]` 与 `trail`（不改原 `video` 与正文，后续 `video-receipt` 也不抹除重定位追溯）；缺改动说明时仍保持 `missing_evidence`，不能进入可验收。
+- 人工逐条 / 选择性批量通过、退回与原 ID 下再交（#197）：
+  - 服务声明 `video-decisions`，页面使用 `POST /api/notes/<id>/video-decision` 发出 `approve`、`return` 或 `reply`。请求可以带 `expectedBatch`、`expectedVersion`。退回与答复需要服务支持 `video-feedback-revision`。三种决定都要带与页面所见 `videoReview.evidenceRevision` 对应的 `expectedEvidence`。没有修订标识的旧回执使用 `legacy`。新回执、位置校正、退回和答复都会更新修订标识。提交位置校正同样需要所见修订和服务的 `video-relocate-revision` 能力。
+    - `approve` 将符合条件的条目标为 `approved`，记录决定者、时间、批次和历史，同时更新批次统计。
+    - `return`（必填非空 `reason`）：仅保存在原批注与 `notes.json`（设 `status = "open"`、`videoReview.state = "returned"`、`decision = "returned"`、`returnReason`、`decisionBatch`、`decidedAt`、`decidedBy`，清 `draft*`/`resolved*` 与在途占用并写入历史与 `returned` 痕迹），**绝不自动创建待处理批次**。
+    - `reply`（必填非空 `reply`，且非 `drafted`/`pending_review`）：在原批注保存 `reply`、`repliedAt`、`repliedBy`、`decision = "replied"`、`decisionBatch` 与 `replied` 痕迹，同样不自动提交。
+  - `POST /api/handoff/finalize-all` 接收明确勾选的批次、批注 ID 和 `evidence` 映射（每个 ID 对应所见修订）。服务只通过仍就绪且修订匹配的条目。返回的 `skipped` 列出已变更或缺证据的项，供审阅人重新打开。文档审阅沿用整批定稿。
+  - 选择性重交与防陈旧 / 防改写：返工交接弹窗若已有往轮回执则默认空选、提供「只选退回项」与状态标签，使只选退回条目的新批次仅在 `claim` / `wait` / `show --batch` 交付所选批注及上轮 `videoReview` 上下文（不混入已通过或未提交的答复条目）。重复确认、`approve` 后重放、`set_status("open")` 或陈旧回执（已 `approved` 一律拒绝 `note-already-decided`，已 `returned`/`replied` 于第 `k` 批则拒绝同批或更早批次 `<= k` 的陈旧回执 `stale-receipt`）均不能覆盖已记录的人工决定；新提交的第 `m > k` 返工批次在同一批注 ID 下交回 V3 回执时，保留完整 V1→V2→V3 历史。
+
+## 从源工程直接开始（Remotion / HyperFrames）
+
+`--report` 也接受本地源工程目录（同样不接受讲稿输入），产出的审阅与 MP4 入口同一形态（同一 `format: video` 清单、V1 私有副本、SHA-256、批注与交接流程）：
+
+```bash
+python3 $S/build_viewer.py --report 源工程目录 --out 工程-review --name "短片审阅"
+python3 $S/video_engines.py inspect 源工程目录        # 只读巡检：引擎、候选、成片证据（JSON）
+```
+
+- **AE 根据工程文件识别引擎。列出 Remotion 合成时会运行工程本地 CLI 并加载入口。**Remotion：`package.json` 依赖含 `remotion`（或工程内有 `node_modules/.bin/remotion`），入口取 `remotion.config.ts` 的 `setEntryPoint`，否则按 `src/index.tsx/.ts/.jsx/.js` 顺序；合成清单由工程内 `node_modules/.bin/remotion compositions <入口>` 列出，支持带表头的列表和 Remotion 4 的 `ID FPS 宽x高 帧数 (秒数)` 格式。HyperFrames：依赖含 `hyperframes`（或有对应 bin），候选为工程根与一层子目录的 HTML（排除 `node_modules` 与隐藏目录），帧率优先取 `<html data-fps>`，其次取带 `data-composition-id` 的元素，均未声明时按 30 fps 处理，宽高与时长以实际渲染结果为准。两种引擎标志同时出现时明确报错。入口或 composition 路径解析后越出工程一律拒绝。
+- AE 用本机 Remotion 或 HyperFrames 工程成功渲染后，在该 `AE_HOME` 的私有台账记录工程根、所选合成、源码与静态素材的内容指纹，以及成片 SHA-256。再次构建时，只有凭据相符、成片新鲜且候选唯一才能自动复用。外部导出、同规格参考片、陈旧成片或多个候选都须核对。`video_engines.py inspect PROJECT` 列出候选，`--reuse-movie PATH` 确认复用，`--no-reuse` 重新渲染。输入指纹涵盖隐藏素材和工程内可核实的链接目标。含工程外、断裂或无法核实的输入时须人工确认。升级后，使用旧指纹的成片可以手动确认，也可重新渲染以建立新凭据。
+- 工程入口构建成功后，清单的 `video.sourceProject` 记录引擎、所选入口与 V1 的对应关系。工程渲染或自动复用的成片与入口声明相符时记为 `match=verified`。显式使用 `--reuse-movie` 确认的成片记为 `match=confirmed`。声明与实际成片有差异时先保留 `pending`，在页面查看差异后确认。可用 `--video-composition` 指定巡检发现的合成。
+- **渲染在工程环境调用其引擎**：cwd 为工程根，`shell=False` 固定 argv——Remotion `render <入口> <合成ID> <输出> --codec=h264 --overwrite=false`，HyperFrames `render . --format mp4 -o <输出> -c <composition HTML>`；只用工程内 `node_modules/.bin`，缺失时明确报错并提示先在工程内安装依赖，AE 不安装依赖、不联网、不隐式 `npx`。输出写入审阅目录 `.render/` 暂存（新路径预先检查不存在），登记 V1 后删除。超时由 `--render-timeout` 控制（默认 1800 秒，也可用环境变量 `AE_VIDEO_RENDER_TIMEOUT`），超时终止整个进程组。渲染产物仍须通过 MP4 探测（恒定帧率、单视频轨），否则明确拒绝。
+- **失败给可执行的恢复信息**：引擎退出码与 stderr 摘录、缺依赖时的安装提示、超时的重试建议都在错误里；修复后重新运行同一命令即可继续同一审阅（失败尝试不写 `review.json`）。已登记 V1 的审阅再用工程目录进入会明确拒绝，重建用 `--rebuild`。
+- 单元测试用 `tests/fixtures/video/` 的合成工程骨架与假引擎命令验证 argv、路径边界、超时与失败恢复。真实渲染所用的两个工程由仓库里的 `fixtures/video/make_demos.py` 生成。
+
 ## PPTX（直接审阅与白名单回写）
 
 `--report` 直接接受 `.pptx`；一张幻灯片生成一页对照页，页面保留原始尺寸、方向与顺序。幻灯片按本机 LibreOffice（`soffice`）+ Poppler（`pdftoppm`）渲染成图：macOS 安装 LibreOffice.app、Linux 安装 `libreoffice` 与 `poppler-utils`、Windows 将 LibreOffice（探测 `PATH` 与常见 `Program Files` / `LocalAppData\Programs` 位置）与 Poppler（`PATH` 或常见 Poppler 安装目录的 `bin`）配置好后即可构建；工具缺失、转换失败、页数不符或输出为空时构建明确报错，不自动下载安装，也不把文字预览冒充视觉审阅（可选渲染工具缺失不影响基础 HTML 与 DOCX 审阅）。旧版二进制 `.ppt`（以及 `.pptm`、`.potx`、`.ppsx`）不受支持，先在 PowerPoint/WPS 中另存为 `.pptx`。字体核查在转换前后各做一次：PPTX 转图前先运行 `python3 $S/check_pptx_fonts.py 原始.pptx`，转出 PDF 后再加 `--pdf 转换后.pdf` 对照字体证据；逐页视觉核验仍不可省略，字体名称一致也不能证明逐字形渲染正确，且不宣称已验证所有 Office/WPS 版本或所有字体布局。
@@ -206,6 +259,25 @@ One line per paragraph.
         "endPara": {"id": null, "n": 7, "digest": "…"},   // 选区或框跨段落时的最后一段；此时 end 是它里面的偏移
         "run": 1,                                // 文字运行序号，只作提示
         "changed": true                          // 重建后段落还在但文字已变：偏移与摘要对应旧版本，fp 不更新
+      },
+      "video": {                                 // 视频审阅的定位（其他审阅没有）；写入后不可变
+        "v": 1,
+        "versionId": "V1",                        // 定位绑定的成片版本
+        "startFrame": 120, "endFrame": 180,       // 半开区间 [startFrame,endFrame)；30 fps 下即 4–6 秒。单帧定位改写 "frame": 96（从 0 计）
+        "fps": 30, "timebase": {"num": 1, "den": 30},   // 主时间基准：帧；timebase 是每帧秒数
+        "frames": 180, "videoWidth": 640, "videoHeight": 360,
+        "mark": {"kind": "region", "x": 0.1, "y": 0.8, "width": 0.5, "height": 0.1}   // 可选：相对实际视频画面的归一化点 / 区域
+      },
+      "videoReview": {                           // 视频回执受保护字段（不能由通用 PATCH / 导入篡改）
+        "v": 1,
+        "state": "pending_review",               // pending_review / needs_reply / needs_relocate / missing_evidence / failed / returned / approved
+        "batch": 1, "receiptId": "rcpt-1", "outcome": "fixed", "versionId": "V2",
+        "summary": "片头+12帧并上移字幕",
+        "target": {"kind": "frame", "versionId": "V2", "frame": 108},   // 支持 frame / range / cut（可选 contextStart/End）
+        "decision": "approved", "decisionBatch": 1, "decidedAt": "…", "decidedBy": "page",   // 可选：approve/return/reply 人工决定
+        "returnReason": "…", "reply": "…", "repliedAt": "…", "repliedBy": "page",
+        "relocatedFrom": { …人工重定位前最早位置/原因快照（如有）… },
+        "history": [ …按原批注累计的各轮回执、人工决定与重定位证据… ]
       }
     }
   ]
@@ -217,13 +289,14 @@ One line per paragraph.
 - 快捷修改的 `text` 是固定说法（「删除引用的这段文字」「改为：…」），`quote` 等于 `edit.from`，旧工具照样能看懂。
 - 生成对照页时若审阅目录里已有批注：没有 `key` 的按上一版 review.json 的页码补上，再按 `key` 把 `page` 改成新版的页码；`key` 在新版里找不到的标 `orphan`。所以 `data-key` 要稳定、唯一（重复的键不做校正）。DOCX 审阅里带 `docx` 定位的批注先按段落校正，不走页面键，规则见上文「批注定位」。
 - `docx.v` 高于当前安装支持的版本时，字段原样保留（上限 4000 字符），不用于重建定位；`notes.py show` 会标明不可用于回写。没有 `docx` 字段的旧批注按原规则读取。
+- `video.v` 为 1 时必须恰好带 `frame` 或 `startFrame`/`endFrame` 之一；帧从 0 计，区间为 `[start,end)`，`fps` 与 `timebase` 是主时间基准，`mark` 相对实际视频画面归一化（点 `{kind,x,y}` 或区域 `{kind,x,y,width,height}`）。同一批注的 `video` 定位写入后不可变：编辑正文、状态或导入都不能改版本、帧、区间或标记，避免原证据被覆盖。`video.v` 高于当前安装支持的版本时原样保留（上限 4000 字符），`notes.py show` 标明不可用于定位。视频审阅的页面要求服务声明 `video` 特性；旧服务会丢字段，页面阻断写入并提示重启新版服务。Markdown 导出用 `视频定位：{…}` / `Video location: {…}` 整行 JSON 往返。
 - 风格优化的 `target` 固定为报告；`text` 是用户写的方向，没写时为「风格优化：整页 / 框选处 / 标点处」。
 - 0.3 及更早只有风格优化能框选，框存在 `style.region` 里；读入时自动挪到顶层 `region`（下次写盘落成新格式），原来的风格范围和点都保留——所以旧批注可能点和框并存、或「整页」风格优化带一个点。0.3 页面发来的 `{style:{region}}` 改动按顶层 `region` 处理。
 - 批注归哪一批：`resolve` / `review` 不带 `--seq` 时按批注归属找（待复核的初改 → 它的初改批次；提交时包含它的在途批次，复核中优先、同级取最早），不再取「最新一批」；同时有几批处理中时 `done` 必须带 `--seq`。别的批次还在等复核的初改，不能在另一批里处理。
 - 页面新建和「重新标注」时 `pin`、`region` 一起发（另一个为 `null`），所以新批注只有一种标注；拖动只发被拖的那一个，另一个不动。改动动了标注时，风格范围跟着标注走（只拖动、原范围是整页的保持整页）。
-- 页面轮询的 `GET /api/notes` 只带最新一批（`handoff.latest`、计数、`total`）；完整处理记录 `history` 由 `GET /api/handoff` 和 `notes.py batches` 提供。服务响应里带 `version` 与 `features`（含 `marks`、`batches`），页面据此识别旧版服务。DOCX 审阅的页面要求服务声明 `docx` 特性：没有声明这项特性的旧版服务会丢弃 `docx` 字段，页面连上这样的服务时显示阻断提示并停止写入，重启新版服务并刷新后恢复。
+- 页面轮询的 `GET /api/notes` 只带最新一批（`handoff.latest`、计数、`total`）；完整处理记录 `history` 由 `GET /api/handoff` 和 `notes.py batches` 提供。服务响应里带 `version` 与 `features`（含 `marks`、`batches`），页面据此识别旧版服务。DOCX 审阅的页面要求服务声明 `docx` 特性：没有声明这项特性的旧版服务会丢弃 `docx` 字段，页面连上这样的服务时显示阻断提示并停止写入，重启新版服务并刷新后恢复。视频审阅同理要求 `video` 特性；媒体与元数据 API 见上文「视频 MP4」。
 
-`notes.jsonl` 每行一条操作：`{"ts","rev","op":"add|update|resolve|draft|reopen|review|finalize|delete|import|handoff|handoff-update|handoff-claim|handoff-done|handoff-review|handoff-finalize","by":…,"id"|"seq",…}`。
+`notes.jsonl` 每行一条操作：`{"ts","rev","op":"add|update|resolve|draft|reopen|review|finalize|video-decision|delete|import|handoff|handoff-update|handoff-claim|handoff-done|handoff-review|handoff-finalize","by":…,"id"|"seq",…}`。
 
 ## handoff.json（「交给 Agent」的提交）
 
@@ -262,7 +335,7 @@ One line per paragraph.
 
 全部定稿仅供审阅人在页面确认，不提供 Agent 或 CLI 入口。服务功能列表中的 `finalize-all` 声明支持；不支持时页面隐藏按钮并提示更新技能、重启服务和刷新。`GET /api/notes` 的 `handoff.finalizable` 与 `GET /api/handoff` 的顶层 `finalizable` 提供 `{count, batches: [{seq, ids}], skipped: [{id, batch, reason}]}`：只把 `drafted` 批注且批次为 `drafted` / `review` 的条目列为可定稿，`claimed` / `reviewing` 的初改列为跳过。
 
-`POST /api/handoff/finalize-all` 的 JSON 请求为 `{batches: [{seq, ids}]}`，使用审阅人确认的快照；批次号为正整数，批注 ID 与批次不能重复，空列表不写入。服务在同一把 `.notes.lock` 内重读并核对批次、状态与归属，只定稿已确认的初改。确认后新出现的批次不顺带定稿；同批新增初改时整批跳过，避免完成的批次中遗留初改。响应包含 `finalizedCount`、`finalizedIds`、完成批次号列表 `batches`、`skippedCount` 和 `skipped`，另带更新后的 `doc` 与 `handoff`。跳过原因：`claimed` 正在初改、`reviewing` 正在复核、`unavailable` 批次不可定稿或不存在、`changed` 状态或批次归属变化、`unconfirmed` 不在本次确认范围。页面以实际结果显示部分成功；取消确认不发写请求，断线时不暂存或乐观定稿。
+`POST /api/handoff/finalize-all` 的 JSON 请求为 `{batches: [{seq, ids}]}`，使用审阅人确认的快照；批次号为正整数，批注 ID 与批次不能重复，空列表不写入。服务在同一把 `.notes.lock` 内重读并核对批次、状态与归属：非视频审阅保持整批通过语义（同批新增或漏选即整批跳过）；**视频审阅**则只对本次显式选定且仍满足 `review_readiness` 的 `pending_review` 条目记为人工通过（`decision: "approved"`、`decidedAt`、`decidedBy`、`history`），同批未勾选的就绪条目留在 `drafted`，非完备条目按实际状态列入 `skipped`。确认后新出现的批次不顺带定稿。响应包含 `finalizedCount`、`finalizedIds`、完成批次号列表 `batches`、`skippedCount` 和 `skipped`，另带更新后的 `doc` 与 `handoff`。跳过原因：`claimed` 正在初改、`reviewing` 正在复核、`unavailable` 批次不可定稿或不存在、`changed` 状态或批次归属变化、`unconfirmed` 不在本次确认范围、`unready` 视频批注缺少有效回执证据或处于未待复核状态。页面以实际结果显示部分成功；取消确认不发写请求，断线时不暂存或乐观定稿。
 
 新增摘要和响应字段可被旧页面忽略，磁盘格式与批次状态机不变；批注沿用 `accepted` 痕迹，批次沿用 `accept` 阶段、`done` 状态及既有逐批日志。旧页面连接新服务仍可用原入口；新页面连接旧服务时先做功能协商。写接口与其他写操作共用 Host 校验、同源 Origin、JSON Content-Type、无 CORS 头的安全门。
 

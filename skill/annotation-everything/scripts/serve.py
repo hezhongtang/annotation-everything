@@ -70,6 +70,8 @@ import notes_store as store  # noqa: E402
 import review_overview  # noqa: E402
 import review_save  # noqa: E402
 import review_stop  # noqa: E402
+import video_review  # noqa: E402
+import video_source  # noqa: E402
 import wakeup  # noqa: E402
 
 APP = "annotation-everything"
@@ -97,6 +99,18 @@ FEATURES = [
     "finalize-all",
     "docx",
     "pptx",
+    "video",
+    "selective-handoff",
+    "video-handoff-snapshot",
+    "video-source",
+    "video-receipt",
+    "video-compare",
+    "video-relocate",
+    "video-relocate-revision",
+    "video-decisions",
+    "video-evidence-revision",
+    "video-feedback-revision",
+    "video-decode-feedback",
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
@@ -183,6 +197,10 @@ MANIFEST = "review.json"
 MAX_BODY = 2 * 1024 * 1024
 HOST = "127.0.0.1"
 NOTE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})$")
+NOTE_VIDEO_RELOCATE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})/video-relocate$")
+NOTE_VIDEO_DECISION_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})/video-decision$")
+VIDEO_MEDIA_PATH = re.compile(r"^/api/video/([0-9a-f]{16})/versions/(V[1-9][0-9]*)/media$")
+VIDEO_VERSION_PATH = re.compile(r"^/api/video/versions/(V[1-9][0-9]*)$")
 SAFE_CHARS = re.compile(r"[^A-Za-z0-9._:/?=&%+@-]")
 # 总览首页宿主：页面、运行状态、日志与启动锁都在台账目录，不写进任何审阅目录（文件名只在 ledger 定义一次）
 HOST_KIND_OVERVIEW = ledger.HOST_KIND_OVERVIEW  # /api/health 的宿主种类；审阅宿主不带宿主种类字段（行为不变）
@@ -197,7 +215,7 @@ def csp_for(html_text: str) -> str:
     hashes = fsutil.script_hashes(html_text)
     return (
         f"default-src 'none'; script-src {hashes or chr(39) + 'none' + chr(39)}; style-src 'unsafe-inline'; "
-        "img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'self'; "
+        "img-src data: blob:; font-src data:; media-src 'self' data: blob:; connect-src 'self'; "
         "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
     )
 
@@ -336,7 +354,7 @@ class ReviewServer(ThreadingHTTPServer):
         self._stop_reply_count = 0
         self.log_to_file = log_to_file
         self._log_lock = threading.Lock()
-        self._cache: dict[str, tuple[float, Any]] = {}
+        self._cache: dict[str, tuple[tuple[int, int, int], Any]] = {}
         super().__init__((HOST, port), Handler)
         self.port = self.server_address[1]
         self.allowed_hosts = {f"127.0.0.1:{self.port}", f"localhost:{self.port}"}
@@ -359,14 +377,15 @@ class ReviewServer(ThreadingHTTPServer):
     def _cached(self, name: str, build: Any) -> Any:
         f = (ledger.home() / OVERVIEW_PAGE_FILE) if self.home_id is not None else (self.review_dir / name)
         try:
-            mtime = f.stat().st_mtime
+            st = f.stat()
         except OSError:
             return build(None)
+        stamp = (st.st_mtime_ns, st.st_ino, st.st_size)
         hit = self._cache.get(name)
-        if hit and hit[0] == mtime:
+        if hit and hit[0] == stamp:
             return hit[1]
         val = build(f)
-        self._cache[name] = (mtime, val)
+        self._cache[name] = (stamp, val)
         return val
 
     def run_hook(self, item: dict[str, Any], merged: bool, event: str = "handoff") -> None:
@@ -741,12 +760,17 @@ class Handler(BaseHTTPRequestHandler):
         except Reject as e:
             self._reject(e)
         except (store.NoteError, UnicodeEncodeError) as e:  # 由请求内容引起的错误一律 4xx，页面不会反复重试
-            detail = {
+            detail: dict[str, Any] = {
                 "error": str(e) if isinstance(e, store.NoteError) else self._t("serve.err.badCharacters"),
                 "code": "bad-note",
                 "app": APP,
             }
-            if isinstance(e, store.TextLimitError):
+            if isinstance(e, store.HandoffError):
+                detail["code"] = e.code
+                detail["error"] = self._handoff_error_text(e)
+                if e.params:
+                    detail["params"] = e.params
+            elif isinstance(e, store.TextLimitError):
                 params = {"field": e.field, "limit": e.limit}
                 detail.update(error=self._t("serve.err.textTooLong", **params), reason="text-too-long", params=params)
             self._json(400, detail)
@@ -805,7 +829,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handoff_state(self, *, full: bool) -> dict[str, Any]:
         reads = self._request_reads()
-        return store.handoff_state(self.server.review_dir, full=full, handoff=reads.handoff(), notes=reads.notes_list())
+        return store.handoff_state(
+            self.server.review_dir,
+            full=full,
+            handoff=reads.handoff(),
+            notes=reads.notes_list(),
+            manifest=self.server.manifest(),
+        )
 
     def _notes_doc(self) -> dict[str, Any]:
         return self._request_reads().notes_doc()
@@ -943,7 +973,7 @@ class Handler(BaseHTTPRequestHandler):
             raise Reject(409, "review-stop-busy", self._t("serve.err.reviewLifecycleBusy")) from None
         self._json(200, {"app": APP, "reviewId": self.server.review_id()})
 
-    def _check_receiver(self, body: dict[str, Any]) -> None:
+    def _check_receiver(self, body: dict[str, Any], *, required: bool = False) -> None:
         # Called inside the batch lock: stop gating, transfer and submission share one authorization point.
         if not review_stop.accepts_work(self.server.review_dir):
             raise Reject(409, "review-stopped", self._t("serve.err.reviewStopped"))
@@ -952,6 +982,8 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, ValueError, KeyError):
             raise Reject(409, "receiver-invalid", self._t("serve.err.receiverInvalid"))
         current = (binding or {}).get("bindingId")
+        if required and not current:
+            raise Reject(409, "receiver-required", self._t("viewer.hand.videoReceiver"))
         if current != (self.server.agent_binding or {}).get("bindingId"):
             raise Reject(409, "receiver-restart", self._t("serve.err.receiverRestart"))
         if body.get("receiverBindingId") != current:
@@ -962,6 +994,14 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(round_no, int) or isinstance(round_no, bool):
             raise Reject(400, "bad-request", self._t("serve.err.noRound"))
         return round_no
+
+    def _handoff_error_text(self, error: store.HandoffError) -> str:
+        if self.server.locale == "en" and error.code in i18n.HANDOFF_ERROR_KEYS:
+            try:
+                return self._t(i18n.HANDOFF_ERROR_KEYS[error.code], **error.params)
+            except (KeyError, i18n.MissingMessageError):
+                pass
+        return str(error)
 
     def _analysis_error_text(self, error: store.HandoffError) -> str:
         messages = {
@@ -1098,12 +1138,145 @@ class Handler(BaseHTTPRequestHandler):
             raise Reject(400, e.code, self._analysis_error_text(e), params=params)
         raise Reject(400, "bad-request", self._t("serve.err.noAnalysis"))  # 未覆盖的 op，不可达
 
+    def _range_reject(self, size: int) -> None:
+        body = json.dumps(
+            {"error": self._t("serve.err.badRange"), "code": "bad-range", "app": APP}, ensure_ascii=False
+        ).encode("utf-8")
+        self._send(416, body, "application/json; charset=utf-8", {"Content-Range": f"bytes */{size}"})
+
+    def _video_media(self, review_id: str, version_id: str) -> None:
+        manifest = self.server.manifest()
+        if manifest.get("reviewId") != review_id:
+            raise Reject(404, "no-video", self._t("serve.err.noApi"))
+        try:
+            path = video_review.media_path(self.server.review_dir, manifest, version_id)
+            media = path.open("rb")
+        except (OSError, video_review.VideoError):
+            raise Reject(404, "no-video", self._t("serve.err.noApi")) from None
+        with media:
+            size = media.seek(0, os.SEEK_END)
+            start, end, status = 0, size - 1, 200
+            value = self.headers.get("Range")
+            if value is not None:
+                matched = re.fullmatch(r"bytes=([0-9]*)-([0-9]*)", value.strip())
+                if matched is None or not any(matched.groups()):
+                    self._range_reject(size)
+                    return
+                first, last = matched.groups()
+                if not first:
+                    suffix = int(last)
+                    if suffix <= 0:
+                        self._range_reject(size)
+                        return
+                    start = max(0, size - suffix)
+                else:
+                    start = int(first)
+                    if last:
+                        end = int(last)
+                if start >= size or end < start:
+                    self._range_reject(size)
+                    return
+                end = min(end, size - 1)
+                status = 206
+            length = max(0, end - start + 1)
+            self.send_response(status)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", str(length))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Accept-Ranges", "bytes")
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            media.seek(start)
+            remaining = length
+            while remaining:
+                chunk = media.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise ConnectionError("registered video changed during response")
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+
+    def _update_video_source(self, change: Any) -> dict[str, Any]:
+        """在台账元数据锁内改写 review.json 的 video.sourceProject，返回更新后的清单。
+
+        只在视频审阅上可用；其他格式（含旧审阅）在 change 前就拒绝，不碰清单。"""
+        with ledger.metadata_lock(self.server.review_dir, exclusive=True):
+            manifest_path = self.server.review_dir / MANIFEST
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                raise Reject(400, "no-video", self._t("serve.err.noApi")) from None
+            if not isinstance(manifest, dict) or not isinstance(manifest.get("video"), dict):
+                raise Reject(400, "no-video", self._t("serve.err.noApi"))
+            try:
+                updated = change(manifest)
+            except video_source.SourceError as error:
+                raise Reject(
+                    400,
+                    "bad-source-project",
+                    self._t("serve.err.sourceProject", reason=error.localized(self.server.locale)),
+                ) from None
+            fsutil.atomic_write(
+                manifest_path,
+                json.dumps(updated, ensure_ascii=False, indent=2) + "\n",
+                prefix="." + MANIFEST + "-",
+            )
+            return updated
+
+    def _public_video_extra(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        if isinstance(manifest.get("video"), dict):
+            try:
+                return {"video": video_review.public_manifest(manifest)}
+            except video_review.VideoError:
+                pass
+        return {}
+
+    def _link_source_project(self, body: dict[str, Any]) -> None:
+        entry = body.get("entry")
+        payload = {"engine": body.get("engine"), "root": body.get("root"), "entry": entry}
+        for key in ("media", "filename", "candidates"):
+            if body.get(key) is not None:
+                payload[key] = body[key]
+        manifest = self._update_video_source(
+            lambda m: {**m, "video": video_source.local_project_link(m["video"], by="page", **payload)}
+        )
+        sp = video_source.public(manifest["video"]) or {}
+        self.server.log("info", f"video source-project status={sp.get('status')} engine={clean(sp.get('engine'))}")
+        self._json(200, {"sourceProject": sp, **self._ident()})
+
+    def _confirm_source_project(self, body: dict[str, Any]) -> None:
+        choice = body.get("choice")
+        revision = body.get("proposalRevision")
+        if not isinstance(revision, str) or not revision or (choice is not None and not isinstance(choice, str)):
+            raise Reject(400, "bad-request", self._t("serve.err.sourceProjectBody"))
+
+        def confirm(manifest):
+            proposal = video_source.public(manifest["video"])
+            if not proposal or revision != proposal.get("proposalRevision"):
+                raise Reject(409, "stale-source-project", self._t("serve.err.staleSourceProject"))
+            return {**manifest, "video": video_source.confirm(manifest["video"], choice=choice, by="page")}
+
+        manifest = self._update_video_source(confirm)
+        sp = video_source.public(manifest["video"]) or {}
+        self.server.log("info", f"video source-project confirmed engine={clean(sp.get('engine'))}")
+        self._json(200, {"sourceProject": sp, **self._ident()})
+
     def _api(self, path: str) -> None:
         cmd = "GET" if self.command == "HEAD" else self.command
         if self.server.home_id is not None:
             self._api_home(path, cmd)
             return
         d, m = self.server.review_dir, NOTE_PATH.match(path)
+        relocate_match = NOTE_VIDEO_RELOCATE_PATH.fullmatch(path)
+        decision_match = NOTE_VIDEO_DECISION_PATH.fullmatch(path)
+        video_media = VIDEO_MEDIA_PATH.fullmatch(path)
+        video_version = VIDEO_VERSION_PATH.fullmatch(path)
         # 页面带上自己的审阅标识：端口上换成了另一份审阅的服务时，先拒绝，绝不写进别人的 notes.json
         claimed = self.headers.get("X-AE-Review")
         if claimed is not None and path != "/api/health":
@@ -1123,7 +1296,73 @@ class Handler(BaseHTTPRequestHandler):
                     "agentDelivery": self._public_status(),
                 },
             )
+        elif path == "/api/video/versions" and cmd == "GET":
+            try:
+                video = video_review.public_manifest(self.server.manifest())
+            except video_review.VideoError:
+                raise Reject(404, "no-video", self._t("serve.err.noApi")) from None
+            self._json(200, {"video": video, **self._ident()})
+        elif video_version is not None and cmd == "GET":
+            try:
+                video = video_review.public_manifest(self.server.manifest())
+                version = next(item for item in video["versions"] if item["versionId"] == video_version.group(1))
+            except (StopIteration, video_review.VideoError):
+                raise Reject(404, "no-video", self._t("serve.err.noApi")) from None
+            self._json(200, {"videoVersion": version, **self._ident()})
+        elif video_media is not None and cmd == "GET":
+            self._video_media(*video_media.groups())
+        elif path == "/api/video/playback-failure" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            if (
+                not claimed
+                or not isinstance(body.get("batch"), int)
+                or isinstance(body["batch"], bool)
+                or body["batch"] < 1
+                or not isinstance(body.get("versionId"), str)
+                or not video_review.VERSION_ID.fullmatch(body["versionId"])
+                or not store.valid_id(body.get("noteId"))
+                or not isinstance(body.get("expectedEvidence"), str)
+                or type(body.get("mediaError")) is not int
+                or body["mediaError"] not in (3, 4)
+            ):
+                raise Reject(400, "bad-request", self._t("serve.err.noApi"))
+            store.video_decode_failed(
+                d,
+                note_id=body["noteId"],
+                version_id=body["versionId"],
+                seq=body["batch"],
+                expected_evidence=body["expectedEvidence"],
+                review_id=claimed,
+                reason=self._t("viewer.video.playbackUnavailable") + f" (MediaError {body['mediaError']})",
+            )
+            self._json(
+                200,
+                {
+                    "doc": {
+                        **self._notes_doc(),
+                        **self._ident(),
+                        "video": video_review.public_manifest(self.server.manifest()),
+                    },
+                    "handoff": self._handoff_state(full=False),
+                },
+            )
+        elif path == "/api/video/source-project" and cmd == "GET":
+            video = self.server.manifest().get("video")
+            self._json(
+                200,
+                {"sourceProject": video_source.public(video) if isinstance(video, dict) else None, **self._ident()},
+            )
+        elif path == "/api/video/source-project" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            self._link_source_project(body)
+        elif path == "/api/video/source-project/confirm" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            self._confirm_source_project(body)
         elif path == "/api/notes" and cmd == "GET":
+            if (d / store.VIDEO_COMMIT_FILE).exists():
+                with store.locked(d):
+                    pass  # 服务重启后首次轮询即可读到已提交的批次与逐条记录。
+            store.recover_video_decode_failures(d, self.server.manifest())
             doc = self._notes_doc()
             idx = d / "index.html"
             doc["indexMtime"] = idx.stat().st_mtime if idx.exists() else None  # 页面据此提示「已重建，请刷新」
@@ -1137,6 +1376,7 @@ class Handler(BaseHTTPRequestHandler):
                     doc["stop"] = review_stop.public_status(d, manifest=self.server.manifest())
                 except (OSError, ValueError):
                     pass  # Keep annotations readable if lifecycle state cannot be read.
+            doc.update(self._public_video_extra(self.server.manifest()))
             self._json(200, {**doc, **self._ident()})
         elif path == "/api/handoff" and cmd == "GET":
             self._json(200, {**self._handoff_state(full=True), **self._ident()})
@@ -1163,11 +1403,31 @@ class Handler(BaseHTTPRequestHandler):
                 raise Reject(400, "bad-request", self._t("serve.err.fullCheck"))
             if "userMessage" in body and not isinstance(body["userMessage"], str):
                 raise Reject(400, "bad-request", self._t("serve.err.userMessage"))
+            note_ids = body.get("noteIds")
+            if note_ids is not None and (
+                not isinstance(note_ids, list) or not all(isinstance(x, str) and x for x in note_ids)
+            ):
+                raise Reject(400, "bad-note-ids", self._t("serve.err.noteIds"))
+            submit_id = body.get("submitId")
+            if submit_id is not None and (not isinstance(submit_id, str) or not 1 <= len(submit_id) <= 64):
+                raise Reject(400, "bad-submit-id", self._t("serve.err.submitId"))
+
+            def validate_submission(manifest):
+                video = manifest.get("video")
+                if isinstance(video, dict):
+                    if not video_source.linked(video):
+                        raise Reject(400, "video-source-required", self._t("serve.err.videoSourceRequired"))
+                    if not note_ids or not submit_id:
+                        raise Reject(400, "video-selection-required", self._t("viewer.hand.oldSelect"))
+                    if "sourceProject" in body and body["sourceProject"] != video_source.agent_brief(video):
+                        raise Reject(409, "video-source-changed", self._t("viewer.hand.sourceChanged"))
+
             message = (
                 body["userMessage"]
                 if body.get("fullCheck") is True and "userMessage" in body
                 else str(body.get("message") or "")
             )
+            is_video = isinstance(self.server.manifest().get("video"), dict)
             _h, item, merged = store.handoff_submit(
                 d,
                 message,
@@ -1175,7 +1435,10 @@ class Handler(BaseHTTPRequestHandler):
                 target=str(body.get("target") or "final"),
                 allow_subagents=body.get("allowSubagents") is True,
                 full_check=body.get("fullCheck"),
-                authorize=lambda: self._check_receiver(body),
+                authorize=lambda: self._check_receiver(body, required=is_video),
+                validate_submission=validate_submission,
+                note_ids=note_ids,
+                submit_id=submit_id,
             )
             self.server.log(
                 "info", f"handoff seq={item['seq']} open={item['openCount']} merged={merged} target={item['target']}"
@@ -1359,7 +1622,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise Reject(400, "bad-request", self._t("serve.err.badFinalizeSelection"))
                 selections[seq] = set(ids)
                 seen.update(ids)
-            result = store.handoff_finalize_all(d, selections)
+            evidence = body.get("evidence", {})
+            if not isinstance(evidence, dict) or any(not isinstance(v, str) or len(v) > 128 for v in evidence.values()):
+                raise Reject(400, "bad-request", self._t("serve.err.badFinalizeSelection"))
+            result = store.handoff_finalize_all(d, selections, evidence=evidence)
             self.server.log("info", f"finalize-all count={result['finalizedCount']} skipped={result['skippedCount']}")
             self._json(
                 200,
@@ -1387,6 +1653,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.log("info", f"handoff-review seq={seq}")
                 self.server.run_hook(item, False, event="review")
             else:
+                if self.server.manifest().get("format", {}).get("report") == "video":
+                    raise Reject(
+                        400, "video-selection-required", self._t("viewer.video.batchSelectionHint", selected=0, ready=0)
+                    )
                 item = store.handoff_finalize(d, seq, by="page")
                 self.server.log("info", f"handoff-finalize seq={seq}")
             self._json(
@@ -1412,7 +1682,13 @@ class Handler(BaseHTTPRequestHandler):
             body = self._expect_obj(self._body())
             if "status" in body:
                 doc, note = store.set_status(
-                    d, m.group(1), str(body["status"]), resolution=str(body.get("resolution") or ""), by="page"
+                    d,
+                    m.group(1),
+                    str(body["status"]),
+                    resolution=str(body.get("resolution") or ""),
+                    by="page",
+                    reviewer=True,
+                    expected_evidence=body.get("expectedEvidence") or "",
                 )
             else:
                 doc, note = store.update(d, m.group(1), body, by="page")
@@ -1426,6 +1702,78 @@ class Handler(BaseHTTPRequestHandler):
             doc = store.delete(d, m.group(1), by="page")
             self.server.log("info", f"delete {m.group(1)}")
             self._json(200, {"doc": {**doc, **self._ident()}})
+        elif relocate_match and cmd == "POST":
+            body = self._expect_obj(self._body())
+            if set(body) - {"versionId", "target", "summary", "reason", "expectedEvidence"}:
+                raise Reject(400, "bad-request", self._t("serve.err.videoRelocateBody"))
+            for text_key in ("summary", "reason"):
+                if body.get(text_key) is not None and not isinstance(body.get(text_key), str):
+                    raise Reject(400, "bad-request", self._t("serve.err.videoRelocateBody"))
+            nid = relocate_match.group(1)
+            doc, note, handoff_doc = store.relocate_video_note(
+                d,
+                nid,
+                target=body.get("target"),
+                version_id=body.get("versionId"),
+                expected_evidence=body.get("expectedEvidence") or "",
+                summary=body.get("summary"),
+                reason=body.get("reason"),
+                by="page",
+            )
+            extra_video = self._public_video_extra(self.server.manifest())
+            vr_after = note.get("videoReview") if isinstance(note.get("videoReview"), dict) else {}
+            self.server.log("info", f"video-relocate {nid} version={vr_after.get('versionId', '-')}")
+            self._json(
+                200,
+                {
+                    "doc": {**doc, **self._ident(), **extra_video},
+                    "note": note,
+                    "handoff": store.handoff_state(d, full=False, handoff=handoff_doc, notes=doc["notes"]),
+                },
+            )
+        elif decision_match and cmd == "POST":
+            body = self._expect_obj(self._body())
+            if set(body) - {"action", "reason", "reply", "expectedVersion", "expectedBatch", "expectedEvidence"}:
+                raise Reject(400, "bad-request", self._t("serve.err.videoDecisionBody"))
+            action = body.get("action")
+            if not isinstance(action, str) or action not in store.VIDEO_DECISION_ACTIONS:
+                raise Reject(400, "bad-request", self._t("serve.err.videoDecisionBody"))
+            for text_key in ("reason", "reply"):
+                if body.get(text_key) is not None and not isinstance(body.get(text_key), str):
+                    raise Reject(400, "bad-request", self._t("serve.err.videoDecisionBody"))
+            expected_batch = body.get("expectedBatch")
+            if expected_batch is not None and (
+                isinstance(expected_batch, bool) or not isinstance(expected_batch, int) or expected_batch < 1
+            ):
+                raise Reject(400, "bad-request", self._t("serve.err.videoDecisionBody"))
+            expected_version = body.get("expectedVersion")
+            if expected_version is not None and (
+                not isinstance(expected_version, str) or not video_review.VERSION_ID.fullmatch(expected_version)
+            ):
+                raise Reject(400, "bad-request", self._t("serve.err.videoDecisionBody"))
+            nid = decision_match.group(1)
+            result = store.video_decision(
+                d,
+                nid,
+                action=action,
+                reason=body.get("reason") or "",
+                reply=body.get("reply") or "",
+                expected_batch=expected_batch,
+                expected_version=expected_version,
+                expected_evidence=body.get("expectedEvidence") or "",
+                by="page",
+            )
+            extra_video = self._public_video_extra(self.server.manifest())
+            self.server.log("info", f"video-decision {nid} action={action} replayed={result['replayed']}")
+            self._json(
+                200,
+                {
+                    "doc": {**result["doc"], **self._ident(), **extra_video},
+                    "note": result["note"],
+                    "handoff": result["handoff"],
+                    "replayed": result["replayed"],
+                },
+            )
         elif path == "/api/overview" and cmd == "GET":
             scopes = parse_qs(self.path.partition("?")[2], keep_blank_values=True).get("scope", ["workspace"])
             if len(scopes) != 1 or scopes[0] not in ("workspace", "all"):
@@ -3392,6 +3740,129 @@ def check(locale: str | None = None) -> int:
             if home_srv is not None:
                 home_srv.shutdown()
                 home_srv.server_close()
+
+        # ---------- 视频审阅路由：媒体范围、Host/Origin/Content-Type/同审阅标识与无 CORS ----------
+        video_srv = None
+        try:
+            import struct
+
+            def _box(kind: bytes, payload: bytes) -> bytes:
+                return struct.pack(">I4s", len(payload) + 8, kind) + payload
+
+            def _fbox(kind: bytes, ver: int, flg: int, payload: bytes) -> bytes:
+                return _box(kind, bytes((ver,)) + flg.to_bytes(3, "big") + payload)
+
+            frames, fps, width, height = 60, 30, 320, 180
+            mvhd = _fbox(b"mvhd", 0, 0, struct.pack(">IIIIII", 0, 0, fps, frames, 0x00010000, 0x01000000) + b"\0" * 80)
+            mdhd = _fbox(b"mdhd", 0, 0, struct.pack(">IIIIHH", 0, 0, fps, frames, 0x55C4, 0))
+            stts = _fbox(b"stts", 0, 0, struct.pack(">III", 1, frames, 1))
+            avc1 = b"\0" * 6 + struct.pack(">H", 1) + b"\0" * 16 + struct.pack(">HH", width, height) + b"\0" * 50
+            stsd = _fbox(b"stsd", 0, 0, struct.pack(">I", 1) + _box(b"avc1", avc1))
+            ftyp = _box(b"ftyp", b"isom" + bytes(4) + b"isomiso2avc1mp41")
+            mdat = _box(b"mdat", bytes((42,)) * frames)
+            stsc = _fbox(b"stsc", 0, 0, struct.pack(">IIII", 1, 1, frames, 1))
+            stsz = _fbox(b"stsz", 0, 0, struct.pack(">II", 1, frames))
+            stco = _fbox(b"stco", 0, 0, struct.pack(">II", 1, len(ftyp) + 8))
+            stbl = _box(b"stbl", stsd + stts + stsc + stsz + stco)
+            minf = _box(b"minf", stbl)
+            hdlr = _fbox(b"hdlr", 0, 0, b"\0" * 4 + b"vide" + b"\0" * 12 + b"Check video\0")
+            mdia = _box(b"mdia", mdhd + hdlr + minf)
+            tkhd = _fbox(
+                b"tkhd",
+                0,
+                3,
+                struct.pack(">IIIII", 0, 0, 1, 0, frames) + b"\0" * 52 + struct.pack(">II", width << 16, height << 16),
+            )
+            trak = _box(b"trak", tkhd + mdia)
+            mp4_bytes = ftyp + mdat + _box(b"moov", mvhd + trak)
+
+            video_src = tmp / "check.mp4"
+            video_src.write_bytes(mp4_bytes)
+            video_dir = tmp / "video-review"
+            built = build_viewer.build(video_src, None, video_dir, no_scan_skills=True, locale=i18n.current_locale())
+            vrid = built["reviewId"]
+            video_srv = ReviewServer(video_dir, 0, log_to_file=False, locale=i18n.current_locale())
+            vport = video_srv.port
+            vt = threading.Thread(target=video_srv.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
+            vt.start()
+            ok(
+                video_srv.server_address[0] == "127.0.0.1",
+                T("serve.check.videoLoopback", host=video_srv.server_address[0]),
+            )
+            vg = {"Host": f"127.0.0.1:{vport}"}
+            media_path = f"/api/video/{vrid}/versions/V1/media"
+            s_ver, h_ver, _ = _req(vport, "GET", "/api/video/versions", vg)
+            s_one, h_one, _ = _req(vport, "GET", "/api/video/versions/V1", vg)
+            s_src, h_src, _ = _req(vport, "GET", "/api/video/source-project", vg)
+            s_med, h_med, b_med = _req(vport, "GET", media_path, {**vg, "Range": "bytes=0-7"})
+            s_head, h_head, _ = _req(vport, "HEAD", media_path, vg)
+            no_cors = all("access-control-allow-origin" not in hdr for hdr in (h_ver, h_one, h_src, h_med, h_head))
+            ok(
+                s_ver == 200
+                and s_one == 200
+                and s_src == 200
+                and s_med == 206
+                and b_med == mp4_bytes[:8]
+                and s_head == 200
+                and no_cors,
+                T("serve.check.videoRead"),
+            )
+            bad_host_codes = [
+                _req(vport, "GET", p, {"Host": f"evil.example:{vport}"})[0]
+                for p in ("/api/video/versions", "/api/video/source-project", media_path)
+            ]
+            ok(all(code == 421 for code in bad_host_codes), T("serve.check.videoBadHost", status=bad_host_codes[-1]))
+            scope_codes = [
+                _req(vport, "GET", p, vg)[0]
+                for p in (
+                    f"/api/video/{'0' * 16}/versions/V1/media",
+                    "/api/video/versions/V1/media",
+                    f"/api/video/{vrid}/versions/V2/media",
+                )
+            ]
+            ok(all(code == 404 for code in scope_codes), T("serve.check.videoMediaScope", status=scope_codes[-1]))
+            v_same = {
+                **vg,
+                "Origin": f"http://127.0.0.1:{vport}",
+                "Content-Type": "application/json",
+                "X-AE-Review": vrid,
+            }
+            v_paths = [video_dir / MANIFEST, video_dir / store.NOTES_FILE]
+            v_before = [p.read_bytes() if p.exists() else None for p in v_paths]
+            v_write_routes = (
+                ("/api/video/source-project", {"engine": "remotion", "root": str(tmp), "entry": {"id": "Main"}}),
+                ("/api/video/source-project/confirm", {"proposalRevision": "0" * 64}),
+                (
+                    "/api/video/playback-failure",
+                    {"batch": 1, "versionId": "V1", "noteId": "n1", "expectedEvidence": "x", "mediaError": 3},
+                ),
+                ("/api/notes/n1/video-relocate", {"versionId": "V1", "target": {"kind": "frame", "frame": 0}}),
+                ("/api/notes/n1/video-decision", {"action": "approve"}),
+            )
+            v_guards = [
+                ({"Host": f"evil.example:{vport}"}, 421, "Host"),
+                ({**v_same, "Origin": "http://evil.example"}, 403, "Origin"),
+                ({k: v for k, v in v_same.items() if k != "Origin"}, 403, "NoOrigin"),
+                ({**v_same, "Content-Type": "text/plain"}, 415, "ContentType"),
+                ({**v_same, "Sec-Fetch-Site": "cross-site"}, 403, "SecFetchSite"),
+                ({**v_same, "X-AE-Review": "otherreview"}, 409, "ReviewId"),
+            ]
+            for headers, expected, guard in v_guards:
+                outcomes = [_req(vport, "POST", p, headers, body) for p, body in v_write_routes]
+                ok(
+                    all(code == expected and "access-control-allow-origin" not in hdr for code, hdr, _ in outcomes),
+                    T("serve.check.videoWriteGuard", guard=guard, status=outcomes[-1][0]),
+                )
+            ok(
+                [p.read_bytes() if p.exists() else None for p in v_paths] == v_before,
+                T("serve.check.videoUnchanged"),
+            )
+        except Exception as e:
+            results.append((False, T("serve.check.videoCrashed", type=type(e).__name__, detail=e)))
+        finally:
+            if video_srv is not None:
+                video_srv.shutdown()
+                video_srv.server_close()
 
         log_text = (tmp / LOG_FILE).read_text(encoding="utf-8")
         ok(log_text.count("[reject]") >= 10, T("serve.check.rejectsLogged", count=log_text.count("[reject]")))

@@ -283,6 +283,12 @@ SCENARIOS: list[Scenario] = [
         "再服务模式（服务用后回收）",
     ),
     Scenario(
+        id="video-review",
+        title="视频直接审阅与事后关联源工程，帧框和有声区间对照，选择性交接、剪口、人工重定位与原批注返工",
+        fixture="fixtures/video 双引擎样例与 FFmpeg 现场生成的三版 H.264/AAC 成片，接收方经真实 CLI 领取和交回",
+        isolation="独立临时工程、两份审阅、接收会话、回环端口与浏览器上下文；服务用后回收",
+    ),
+    Scenario(
         parallel_safe=True,
         id="server-mode",
         title="服务模式全流程：落盘与编辑、标点 / 区域交互、快捷删除与改写、风格优化、常驻技能、轮询不打断草稿、交给 Agent 唤醒等待命令，随后断线补传、写入失败、服务卡死、同一端口换审阅、恶意网页与恶意导入",

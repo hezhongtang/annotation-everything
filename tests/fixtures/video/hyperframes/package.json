@@ -1,0 +1,9 @@
+{
+  "name": "synthetic-hyperframes-project",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Synthetic HyperFrames project skeleton for AE unit tests; no node_modules, no media.",
+  "dependencies": {
+    "hyperframes": "0.9.77"
+  }
+}

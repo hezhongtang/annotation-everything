@@ -692,7 +692,7 @@ def page_csp(page_html: str) -> str:
     hashes = fsutil.script_hashes(page_html)
     return (
         f"default-src 'none'; script-src {hashes}; style-src 'unsafe-inline'; img-src data: blob:; "
-        "font-src data:; media-src data: blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
+        "font-src data:; media-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
         "object-src 'none'"
     )
 
@@ -728,6 +728,14 @@ def resolve_sources(
     problem = ledger.unsupported_format(m)
     if problem:  # 更高版本写下的报告格式：明确拒绝，不按普通文本读
         raise BuildError(problem)
+    if m.get("format", {}).get("report") == "video":
+        import video_review
+
+        try:
+            version_id = str(m.get("video", {}).get("currentVersionId") or "V1")
+            return {"report": video_review.media_path(review_dir, m, version_id), "script": None}
+        except video_review.VideoError as exc:
+            raise BuildError(diag(locale, "build.video.error", path=review_dir, reason=str(exc))) from exc
     if "sourcesRel" in m:  # 0.1 版格式：sources 是绝对路径
         rel, absolute = m.get("sourcesRel") or {}, m.get("sources") or {}
     else:
@@ -924,6 +932,17 @@ def _reject_unc_path(path: Path | None) -> None:
         raise BuildError(f"Unsupported UNC or device path: {path}")
 
 
+def _remove_render_staging(path: Path) -> None:
+    """V1 已登记（或登记失败）后清掉引擎渲染暂存；清不掉只警告，不阻塞审阅。"""
+    try:
+        path.unlink()
+        path.parent.rmdir()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"warning: cannot remove render staging {path}: {exc}", file=sys.stderr)
+
+
 def build(
     report: Path,
     script: Path | None,
@@ -937,8 +956,12 @@ def build(
     skills_from: list[Path] | None = None,
     no_scan_skills: bool = False,
     locale: str | None = None,
+    video_composition: str | None = None,
+    reuse_movie: Path | None = None,
+    no_reuse: bool = False,
+    render_timeout: float | None = None,
 ) -> dict:
-    for item in (report, script, out, asset_root, *(skills_from or ())):
+    for item in (report, script, out, asset_root, reuse_movie, *(skills_from or ())):
         _reject_unc_path(item)
     import i18n
     import ledger
@@ -962,7 +985,107 @@ def build(
     docx_paragraphs: list[dict] = []
     docx_lang = ""
     pptx_meta: dict | None = None
-    if pptx_report.is_pptx(report):
+    video_meta: dict | None = None
+    import video_review
+
+    movie_for_v1: Path | None = None
+    engine_result: dict | None = None
+    engine_cleanup: Path | None = None
+    video_input = video_review.is_mp4(report) or report.is_dir()
+
+    def check_review_type(existing):
+        if existing and (ledger.report_format(existing)[0] == "video") != video_input:
+            raise BuildError(diag(locale_choice, "build.video.separateReview", path=out))
+
+    check_review_type(preview)
+    video_default_title = (preview.get("title") if preview.get("video") else None) or report.stem
+    if script is not None and video_input:
+        raise BuildError(diag(locale_choice, "build.video.scriptUnsupported", path=script))
+    if video_review.is_mp4(report):
+        movie_for_v1 = report
+    elif report.is_dir():
+        # 从 Remotion / HyperFrames 源工程直接开始：引擎解析起始成片（复用或渲染）
+        import video_engines
+
+        project_root, destination = report.resolve(), out.resolve()
+        if destination == project_root or (
+            project_root in destination.parents
+            and not preview.get("video")
+            and any((destination / name).exists() for name in ("index.html", "review.json"))
+        ):
+            raise BuildError(diag(locale_choice, "build.video.projectOutput", path=out))
+        try:
+            resolved = video_engines.resolve_source(
+                report,
+                out,
+                preview,
+                composition=video_composition,
+                reuse_movie=reuse_movie,
+                no_reuse=no_reuse,
+                render_timeout=render_timeout,
+                locale=locale_choice,
+            )
+        except video_engines.EngineError as exc:
+            raise BuildError(
+                diag(locale_choice, f"build.video.{exc.code}", path=report, detail=exc.detail or "-")
+            ) from exc
+        engine_result = resolved
+        movie_for_v1 = resolved["source"]
+        engine_cleanup = resolved.get("cleanup")
+        video_default_title = str(resolved["composition"]["id"])
+        for warning in resolved.get("warnings", []):
+            assets.warn(warning)
+    if movie_for_v1 is not None:
+        try:
+            try:
+                origin = None
+                if engine_result:
+                    origin = {
+                        "root": engine_result["root"],
+                        "entry": engine_result["entry"],
+                        "engine": engine_result["engine"],
+                        "sourceFingerprint": engine_result.get("sourceFingerprint"),
+                        "reuse": str(reuse_movie.resolve()) if reuse_movie else None,
+                    }
+                video_meta = video_review.prepare(
+                    movie_for_v1,
+                    out,
+                    preview,
+                    origin=origin,
+                    expected_sha256=engine_result["movieSha256"] if engine_result else None,
+                )
+            finally:
+                if engine_cleanup is not None:
+                    _remove_render_staging(engine_cleanup)
+        except video_review.VideoError as exc:
+            raise BuildError(diag(locale_choice, "build.video.error", path=report, reason=str(exc))) from exc
+        version = video_review.registered_version({"video": video_meta}, video_meta["currentVersionId"])
+        if engine_result is not None:
+            # #193 契约：直接入口把引擎证据写进 video.sourceProject。声明与登记 V1
+            # 一致时自动 linked/verified；渲染结果与声明有差异时 pending，差异证据
+            # 留给审阅人在页面按 /api/video/source-project/confirm 确认。
+            import video_source
+
+            try:
+                video_meta = video_source.link(
+                    video_meta,
+                    engine=engine_result["engine"],
+                    root=engine_result["root"],
+                    entry=engine_result["entry"],
+                    media=engine_result["declaration"],
+                    by="build",
+                    verified_source=reuse_movie is None and not engine_result.get("sourceChanged"),
+                )
+                if reuse_movie is not None and not video_meta["sourceProject"]["differences"]:
+                    video_meta = video_source.confirm(video_meta, by="cli")
+            except video_source.SourceError as exc:
+                raise BuildError(
+                    diag(locale_choice, "build.video.error", path=report, reason=exc.localized(locale_choice))
+                ) from exc
+        doc = ""
+        rtitle, rcss = "", ""
+        sects = [{"n": 1, "key": "video-v1", "stable": True, "title": esc(video_default_title), "html": ""}]
+    elif pptx_report.is_pptx(report):
         # PPTX 直接审阅：渲染图负责视觉、结构化元素模型负责定位；不按 UTF-8 文本读
         doc = ""
         rtitle, rcss, sects, pptx_meta = pptx_parts(report, locale_choice)
@@ -1057,16 +1180,18 @@ def build(
             pg.update(w=s["w"], h=s["h"], label=s["label"], orient=s["orient"])
         if pptx_meta is not None:  # PPT 页同样按幻灯片原始尺寸与方向显示
             pg.update(w=s["w"], h=s["h"], orient=s["orient"])
+        if video_meta is not None:
+            pg.update(w=version["width"], h=version["height"], orient="landscape")
         pages.append(pg)
     if no_sections:
         sections: list[list] = []
     elif sections_arg:
         sections = parse_sections_arg(sections_arg, locale=locale_choice)
-    elif docx_meta is not None or pptx_meta is not None:
+    elif docx_meta is not None or pptx_meta is not None or video_meta is not None:
         sections = []
     else:
         sections = infer_sections(doc, sects)
-    final_title = title or rtitle or h1 or report.stem
+    final_title = title or rtitle or h1 or (video_default_title if video_meta is not None else report.stem)
     if not intro:
         # 讲稿没有前言时用系统默认简介：句子走词典，页面切语言时由 applyLocale 重写
         intro = (
@@ -1118,7 +1243,9 @@ def build(
     skill_context = {
         "report": report.name,
         "script": script.name if script else "",
-        "kind": "PPT 幻灯片"
+        "kind": "视频成片"
+        if video_meta is not None
+        else "PPT 幻灯片"
         if pptx_meta is not None
         else "Word 文档"
         if docx_meta is not None
@@ -1152,16 +1279,24 @@ def build(
         "REPORT_LANG": _js(report_language),
         "DOCX": _js(docx_view(docx_meta)),
         "PPTX": _js(pptx_view(pptx_meta)),
+        "VIDEO": _js(
+            video_review.public_manifest({"reviewId": rid, "video": video_meta}) if video_meta is not None else None
+        ),
         "OVERVIEW_HOME": _js(None),
     }  # 对照页不是总览首页宿主；总览视图按 hash 路由照旧
     # 一次性替换，避免内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
-    page_html = re.sub(
-        r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX|PPTX|OVERVIEW_HOME)__",
-        lambda m: values[m.group(1)],
-        TEMPLATE.read_text(encoding="utf-8"),
-    )
-    page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
-    write_private(out / "index.html", page_html)
+    template = TEMPLATE.read_text(encoding="utf-8")
+
+    def render_page():
+        page_html = re.sub(
+            r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX|PPTX|VIDEO|OVERVIEW_HOME)__",
+            lambda m: values[m.group(1)],
+            template,
+        )
+        page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
+        return page_html
+
+    page_html = render_page()
     rr, rs = report.resolve(), (script.resolve() if script else None)
     out_resolved = out.resolve()
 
@@ -1220,11 +1355,33 @@ def build(
     if pptx_meta is not None:
         manifest["format"] = {"report": "pptx", "version": pptx_report.FORMAT_VERSION}
         manifest["pptx"] = pptx_meta
+    if video_meta is not None:
+        manifest["format"] = {"report": "video", "version": video_review.FORMAT_VERSION}
+        manifest["video"] = video_meta
+        if preview.get("video"):
+            for key in ("sources", "sourcesAbs"):
+                if key in preview:
+                    manifest[key] = preview[key]
     if locale_choice is not None:
         manifest["locale"] = locale_choice
         manifest["build"]["locale"] = locale_choice
     with ledger.metadata_lock(out, exclusive=True):
+        current = ledger.read_manifest(out)
+        check_review_type(current)
+        if video_meta is not None and not preview.get("video") and current.get("video"):
+            raise BuildError(diag(locale_choice, "build.video.error", path=out, reason="review.json changed"))
+        if video_meta is not None and preview.get("video"):
+            if current.get("reviewId") != preview.get("reviewId") or not isinstance(current.get("video"), dict):
+                raise BuildError(diag(locale_choice, "build.video.error", path=out, reason="review.json changed"))
+            if current["video"] != video_meta:
+                video_meta = current["video"]
+                values["VIDEO"] = _js(video_review.public_manifest({**current, "reviewId": rid}))
+                page_html = render_page()
+                manifest["video"] = video_meta
+        write_private(out / "index.html", page_html)
         write_private(out / "review.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+        if video_meta:
+            (out / ".video-first-build.json").unlink(missing_ok=True)
     # 已有批注：按页面键校正页码（重排、增删页之后批注跟着原来的页走）
     key_count: dict[str, int] = {}
     for pg in pages:
@@ -1236,7 +1393,7 @@ def build(
     if unstable:
         assets.warn(diag(locale_choice, "build.key.unstable", n=len(unstable), pages=unstable[:5]))
     remap = {"moved": [], "orphans": [], "keyed": 0}
-    if (out / "notes.json").exists():
+    if (out / "notes.json").exists() and video_meta is None:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import notes_store
 
@@ -1305,6 +1462,9 @@ def build(
         "remap": remap,
         "locale": locale_choice,
         "docx": docx_meta,
+        "video": video_review.public_manifest({"reviewId": rid, "video": video_meta})
+        if video_meta is not None
+        else None,
     }
 
 
@@ -1346,10 +1506,11 @@ def build_overview_home(out: Path, *, host_id: str, locale: str | None = None) -
         "REPORT_LANG": _js(""),
         "DOCX": _js(None),
         "PPTX": _js(None),
+        "VIDEO": _js(None),
     }
     # 一次性替换，避免注入内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
     page_html = re.sub(
-        r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX|PPTX|OVERVIEW_HOME)__",
+        r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX|PPTX|VIDEO|OVERVIEW_HOME)__",
         lambda m: values[m.group(1)],
         TEMPLATE.read_text(encoding="utf-8"),
     )
@@ -1452,6 +1613,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--no-scan-skills", action="store_true", help=t("build.cli.noScan"))
     ap.add_argument("--locale", help=t("build.cli.locale"))
+    ap.add_argument(
+        "--video-composition", metavar=t("build.cli.videoComposition"), help=t("build.cli.videoComposition")
+    )
+    ap.add_argument("--reuse-movie", type=Path, metavar=t("build.cli.reuseMovie"), help=t("build.cli.reuseMovie"))
+    ap.add_argument("--no-reuse", action="store_true", help=t("build.cli.noReuse"))
+    ap.add_argument(
+        "--render-timeout", type=float, metavar=t("build.cli.renderTimeout"), help=t("build.cli.renderTimeout")
+    )
     a = ap.parse_args(argv)
     if a.rebuild:
         m = ledger.read_manifest(a.rebuild)
@@ -1472,6 +1641,8 @@ def main(argv: list[str] | None = None) -> int:
             a.no_scan_skills = a.no_scan_skills or bool(opt.get("noScanSkills"))
     elif not (a.report and a.out):
         ap.error(t("build.cli.missingArgs"))
+    if a.reuse_movie is not None and a.no_reuse:
+        ap.error(t("build.cli.reuseConflict"))
     r = build(
         a.report,
         a.script,
@@ -1485,6 +1656,10 @@ def main(argv: list[str] | None = None) -> int:
         skills_from=a.skills_from,
         no_scan_skills=a.no_scan_skills,
         locale=a.locale,
+        video_composition=a.video_composition,
+        reuse_movie=a.reuse_movie,
+        no_reuse=a.no_reuse,
+        render_timeout=a.render_timeout,
     )
     for w in r["warnings"]:
         print(t("cli.notes.warning", reason=w), file=sys.stderr)

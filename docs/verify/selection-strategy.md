@@ -93,6 +93,8 @@ cat .verify/runs/<run ID>/shadow.json
 
 策略 v18（issue #183）随 lint 组接入更新两条既有规则：`exec-config` 增加 `pyproject.toml`——它锁定 lint 组实际执行的 ruff 版本与规则（`required-version`、`select`），属于执行配置，差异按 `strategy_change` 回退完整检查；`guarded-docs` 增加 `.git-blame-ignore-revs`——它不是允许列表内的说明文档，差异按 `guarded_doc` 回退。版本不一致的旧验证记录不参与复用。
 
+策略 v19–v20（issue #191）新增 `video-review` 规则并覆盖视频共享边界：`video_review.py` / `video_source.py` / `video_engines.py` / `fixtures/video/` 以及承载视频状态机、接口、投递、对照页与词典的 `notes.py` / `notes_store.py` / `serve.py` / `viewer_template.html` / `build_viewer.py` / `wakeup.py` / `i18n.py` / `locales/` 共同映射到全部 `tests/test_video_*.py`、`video-review` 浏览器场景与 `serve-check`。与既有规则取并集，不缩小完整 PR 门禁。
+
 
 ## 文档允许列表核实（策略 v11，issue #117；策略 v16 起 GLOSSARY 与 ADR 撤销豁免，#162）
 

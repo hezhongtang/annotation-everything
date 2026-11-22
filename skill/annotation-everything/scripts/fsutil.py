@@ -287,6 +287,20 @@ def check_private_regular_file(
     return info
 
 
+def read_private_text(path: Path, *, max_bytes: int | None) -> str:
+    """核实本机私有普通文件的身份和权限，按调用方的大小约束读取。"""
+    info = check_private_regular_file(path, max_bytes=max_bytes)
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(fd, "rb") as src:
+        opened = os.fstat(src.fileno())
+        if not os.path.samestat(info, opened) or not stat.S_ISREG(opened.st_mode):
+            raise ValueError("private-file-required")
+        data = src.read() if max_bytes is None else src.read(max_bytes + 1)
+        if max_bytes is not None and len(data) > max_bytes:
+            raise ValueError("file-too-large")
+    return data.decode("utf-8")
+
+
 @contextlib.contextmanager
 def flocked(
     path: Path,

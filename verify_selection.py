@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 18
+STRATEGY_VERSION = 20
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -259,6 +259,38 @@ SELECTION_RULES = (
         scenarios=("pptx-review",),
         why="PPTX 读取、构建、回写与合成样例：包读取、能力矩阵、渲染诊断、幻灯片定位、重映射与白名单回写由 PPT 用例覆盖；"
         "浏览器场景钉住直接审阅、元素/文本/区域批注、只读元素、旧服务阻断与改后重建（服务安全自检由 pr 门禁覆盖）",
+    ),
+    SelectionRule(
+        rid="video-review",
+        prefixes=(
+            "skill/annotation-everything/scripts/video_review.py",
+            "skill/annotation-everything/scripts/video_source.py",
+            "skill/annotation-everything/scripts/video_engines.py",
+            "skill/annotation-everything/scripts/notes.py",
+            "skill/annotation-everything/scripts/notes_store.py",
+            "skill/annotation-everything/scripts/serve.py",
+            "skill/annotation-everything/scripts/viewer_template.html",
+            "skill/annotation-everything/scripts/build_viewer.py",
+            "skill/annotation-everything/scripts/wakeup.py",
+            "skill/annotation-everything/scripts/i18n.py",
+            "skill/annotation-everything/locales/",
+            "fixtures/video/",
+        ),
+        selectors=(
+            "tests/test_video_compare_relocate.py",
+            "tests/test_video_demo_fixtures.py",
+            "tests/test_video_engines.py",
+            "tests/test_video_handoff.py",
+            "tests/test_video_page.py",
+            "tests/test_video_receipt.py",
+            "tests/test_video_review.py",
+            "tests/test_video_review_rework.py",
+            "tests/test_video_server.py",
+            "tests/test_video_store.py",
+        ),
+        scenarios=("video-review",),
+        serve_check=True,
+        why="视频版本、引擎入口、协议存储、服务页面与合成样例共享媒体服务、帧和区间定位、验收与返工交接边界",
     ),
     SelectionRule(
         rid="pptx-generation",

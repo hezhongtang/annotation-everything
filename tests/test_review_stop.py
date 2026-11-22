@@ -941,9 +941,29 @@ class ReviewStopTests(unittest.TestCase):
             code, _, stopped = retry.result()
             self.assertEqual((code, stopped["state"]), (200, "stopped"), stopped)
 
+        def stop_restarted_target():
+            stopped = self.cli("serve.py", "stop", target_rid, "--timeout", "3")
+            self.assertEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
+            self.assertEqual(json.loads(stopped.stdout)["components"]["hooks"]["workers"], [])
+
+        def close_restarted_page():
+            info = serve.read_status(target)
+            if info is not None:
+                code, _, result = self.request(info, "POST", save_path, {**page, "closing": True}, target_rid)
+                self.assertEqual(code, 200, result)
+
+        # Cleanup runs in reverse order, including when startup or the page's closing request raises.
+        self.addCleanup(stop_restarted_target)
+        self.addCleanup(close_restarted_page)
+        desktop.start_hold = threading.Event()
+        self.addCleanup(desktop.start_hold.set)
         restarted, _ = self.start_server(target)
         code, _, doc = self.request(restarted, "GET", "/api/notes", rid=target_rid)
         self.assertEqual((code, [note["text"] for note in doc["notes"]]), (200, [annotation["text"]]))
+        self.assertTrue(
+            self.wait_until(lambda: sum(r["method"] == "thread-follower-start-turn" for r in desktop.requests) == 2),
+            "the restart should dispatch the pending analysis again",
+        )
 
     @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_concurrent_stops_share_a_single_cancellation(self):

@@ -56,6 +56,7 @@ OVERVIEW_PAGE_FILE = ".overview-home.html"  # 仅总览视图的首页页面（b
 OVERVIEW_LOG_FILE = "overview-home.log"  # 首页服务日志
 OVERVIEW_STATUS_FILE = ".overview-home-status.json"  # 首页运行状态（pid/端口/宿主标识），退出时删除
 OVERVIEW_START_LOCK_FILE = ".overview-home-start.lock"  # 并发首次启动的串行化锁
+VIDEO_RENDERS_DIR = "video-renders"  # 引擎渲染来源凭据目录（仅存 {root,engine,entry,inputs,sha256}，不算审阅业务数据）
 
 
 def overview_port_file() -> Path:
@@ -1030,7 +1031,7 @@ def read_manifest(review_dir: Path) -> dict[str, Any]:
 
 
 # 报告格式 → 本版本支持到的元数据版本。review.json 没有 format 时是逐页 HTML 报告（旧审阅都是这样）。
-REPORT_FORMATS = {"html": 0, "docx": 1, "pptx": 1}
+REPORT_FORMATS = {"html": 0, "docx": 1, "pptx": 1, "video": 1}
 
 
 def report_format(manifest: dict[str, Any]) -> tuple[str, int]:

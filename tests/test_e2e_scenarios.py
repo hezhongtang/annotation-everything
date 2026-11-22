@@ -62,6 +62,7 @@ FULL_ORDER = (
     "css-fidelity",
     "pptx-review",
     "docx-review",
+    "video-review",
     "server-mode",
     "poll-repaint",
     "overview-home",

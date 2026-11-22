@@ -92,6 +92,11 @@ GROUP_RESOURCES = {
 # require_for_module 取锁，直接跑 unittest discover 时同样受协议保护。
 # e2e_browser.py 不进 discover，单独在文件头接入。
 MODULE_RESOURCES = {
+    "tests.test_video_compare_relocate": ("host-state",),
+    "tests.test_video_handoff": ("host-state",),
+    "tests.test_video_receipt": ("host-state",),
+    "tests.test_video_review_rework": ("host-state",),
+    "tests.test_video_server": ("host-state",),
     "tests.test_agent_delivery": ("host-state",),  # 普通 CLI 重启的合成服务
     "tests.test_ae_checks_runtime": ("host-state",),  # 真实 probe_port / ps 枚举 + 真实 serve.py
     "tests.test_ae_cli": ("host-state",),  # doctor / uninstall 真实子进程读全机视图
